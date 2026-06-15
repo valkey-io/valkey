@@ -57,6 +57,7 @@ typedef enum {
 #define CMD_MODULE_GETCHANNELS (1ULL << 27) /* Use the modules getchannels interface. */
 #define CMD_TOUCHES_ARBITRARY_KEYS (1ULL << 28)
 #define CMD_ALL_DBS (1ULL << 29)
+#define CMD_KEYSPACE_INFORMATIONAL (1ULL << 30) /* Read-only keyspace-introspection command (KEYS, SCAN, EXISTS, ...). Used by reply-blocking. */
 /* Command flags. Please don't forget to add command flag documentation in struct
  * serverCommand in server.h file. */
 

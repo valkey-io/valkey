@@ -136,7 +136,7 @@ void notifyKeyspaceEvent(int type, char *event, robj *key, int dbid) {
                     (void *)(long)dbid);
             }
 
-            /* At this point (ZDL branch), we have notified modules, or queued a task.
+            /* At this point (reply-blocking branch), we have notified modules, or queued a task.
              * For clients, there is never a direct notification (either queue the
              * notification or nothing). */
             return;

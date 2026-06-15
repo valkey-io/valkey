@@ -583,7 +583,7 @@ static void replyBlockingSetClientCmdFlags(client *c) {
 /*=========================== Command hook functions ======================= */
 
 // Record the starting replication offset of the command about to be executed.
-void beforeCommandTrackReplOffset(struct client *c) {
+void recordReplOffsetBaseline(struct client *c) {
     if (!isPrimaryReplyBlockingEnabled()) return;
 
     replyBlockingSetClientCmdFlags(c);
@@ -602,8 +602,8 @@ static bool isClientBlockedByModule(struct client *c) {
 
 /* After processing a command, track the replication offset and update
  * the blocking offset for the command block. */
-void afterCommandTrackReplOffset(client *c) {
-    serverLog(LL_DEBUG, "afterCommandTrackReplOffset entered for command '%s'", c->cmd->declared_name);
+void computeCommandBlockingOffset(client *c) {
+    serverLog(LL_DEBUG, "computeCommandBlockingOffset entered for command '%s'", c->cmd->declared_name);
     if (!isPrimaryReplyBlockingEnabled() || (c->flag.blocked && !isClientBlockedByModule(c)))
         return;
 
@@ -618,13 +618,13 @@ void afterCommandTrackReplOffset(client *c) {
     handleDatabaseModification(c);
 }
 
-char *preScriptCmd(client *c) {
+char *validateScriptForReplyBlocking(client *c) {
     UNUSED(c);
     return NULL;
 }
 
 // Perform pre-processing before command execution for a given client.
-int preCommandExec(client *c) {
+int beginCommandReplyBlocking(client *c) {
     c->reply_blocking_state.reply_blocking_flags = 0;
     c->reply_blocking_state.current_command_repl_offset = -1;
     c->reply_blocking_state.module_cmd_blocking_offset = -1;
@@ -648,7 +648,7 @@ int preCommandExec(client *c) {
 }
 
 // Perform post-processing after command execution for a given client.
-void postCommandExec(client *c) {
+void finalizeCommandReplyBlocking(client *c) {
     if (!isPrimaryReplyBlockingEnabled() || c->cmd == NULL || c->flag.multi) {
         return;
     }

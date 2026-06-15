@@ -1180,7 +1180,7 @@ static void processAofBioFlushResult(void) {
         server.aof_last_incr_fsync_offset = server.aof_last_incr_size;
         server.aof_last_fsync = server.mstime;
         atomic_store_explicit(&server.aof_bio_flush_state, AOF_BIO_FLUSH_IDLE, memory_order_release);
-        notifyDurabilityProgress();
+        notifyReplyBlockingProgress();
         return;
     }
 

@@ -6924,7 +6924,7 @@ static void moduleCallCommandHelper(ValkeyModuleCtx *ctx, client *c, robj **argv
     }
 
     /* Reject execution if the command accesses uncommitted (dirty) keys. */
-    char *pre_script_err = preScriptCmd(c);
+    char *pre_script_err = validateScriptForReplyBlocking(c);
     if (pre_script_err != NULL) {
         if (error_as_call_replies) {
             reply_error_msg = sdsnew(pre_script_err);

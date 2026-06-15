@@ -9,8 +9,8 @@
 #include <cstring>
 
 extern "C" {
-#include "server.h"
 #include "reply_blocking.h"
+#include "server.h"
 #include "uncommitted_keys.h"
 
 /* Forward declarations used by tests */
@@ -205,12 +205,14 @@ TEST_F(SyncReplicationTest, ClientInitAndReset) {
     c->reply_blocking_state.current_command_repl_offset = 0;
 
     /* Disabled — should be a no-op */
-    server.aof_state = AOF_OFF; server.aof_fsync = AOF_FSYNC_EVERYSEC;
+    server.aof_state = AOF_OFF;
+    server.aof_fsync = AOF_FSYNC_EVERYSEC;
     replyBlockingClientInit(c);
     ASSERT_EQ(c->reply_blocking_state.blocked_responses, nullptr);
 
     /* Enabled — should initialize */
-    server.aof_state = AOF_ON; server.aof_fsync = AOF_FSYNC_ALWAYS;
+    server.aof_state = AOF_ON;
+    server.aof_fsync = AOF_FSYNC_ALWAYS;
     replyBlockingClientInit(c);
     ASSERT_NE(c->reply_blocking_state.blocked_responses, nullptr);
     ASSERT_EQ(listLength(c->reply_blocking_state.blocked_responses), 0u);
@@ -225,7 +227,8 @@ TEST_F(SyncReplicationTest, ClientInitAndReset) {
     ASSERT_FALSE(c->reply_blocking_state.offset.recorded);
     ASSERT_EQ(c->reply_blocking_state.current_command_repl_offset, -1);
 
-    server.aof_state = AOF_OFF; server.aof_fsync = AOF_FSYNC_EVERYSEC;
+    server.aof_state = AOF_OFF;
+    server.aof_fsync = AOF_FSYNC_EVERYSEC;
     zfree(c);
     cleanupReplyBlockingForTest();
 }
@@ -619,7 +622,8 @@ TEST_F(SyncReplicationTest, FunctionStoreUncommittedTracking) {
 /* ========================= INFO String Test ========================= */
 
 TEST_F(SyncReplicationTest, GenInfoStringDisabled) {
-    server.aof_state = AOF_OFF; server.aof_fsync = AOF_FSYNC_EVERYSEC;
+    server.aof_state = AOF_OFF;
+    server.aof_fsync = AOF_FSYNC_EVERYSEC;
     sds info = sdsempty();
     info = genReplyBlockingInfoString(info);
     ASSERT_NE(strstr(info, "reply_blocking_enabled:0"), nullptr);
@@ -628,7 +632,8 @@ TEST_F(SyncReplicationTest, GenInfoStringDisabled) {
 
 TEST_F(SyncReplicationTest, GenInfoStringEnabled) {
     initReplyBlockingForTest();
-    server.aof_state = AOF_ON; server.aof_fsync = AOF_FSYNC_ALWAYS;
+    server.aof_state = AOF_ON;
+    server.aof_fsync = AOF_FSYNC_ALWAYS;
     server.reply_blocking.read_responses_blocked = 5;
     server.reply_blocking.write_responses_blocked = 3;
     server.reply_blocking.previous_acked_offset = 42;
@@ -643,7 +648,8 @@ TEST_F(SyncReplicationTest, GenInfoStringEnabled) {
     ASSERT_NE(strstr(info, "reply_blocking_primary_repl_offset:100"), nullptr);
 
     sdsfree(info);
-    server.aof_state = AOF_OFF; server.aof_fsync = AOF_FSYNC_EVERYSEC;
+    server.aof_state = AOF_OFF;
+    server.aof_fsync = AOF_FSYNC_EVERYSEC;
     cleanupReplyBlockingForTest();
 }
 
@@ -692,7 +698,8 @@ class FullReplyBlockingTest : public ::testing::Test {
         server.db[0] = (serverDb *)zcalloc(sizeof(serverDb));
         replyBlockingInitDatabase(server.db[0]);
 
-        server.aof_state = AOF_ON; server.aof_fsync = AOF_FSYNC_ALWAYS;
+        server.aof_state = AOF_ON;
+        server.aof_fsync = AOF_FSYNC_ALWAYS;
         replyBlockingInit();
     }
 
@@ -738,7 +745,7 @@ TEST_F(SyncReplicationTest, SyncReplicationInitSetsDefaults) {
     cleanupReplyBlockingForTest();
 }
 
-/* Migrated from test_beforeCommandTrackReplOffset */
+/* Migrated from test_recordReplOffsetBaseline */
 TEST_F(FullReplyBlockingTest, BeforeCommandTrackReplOffset) {
     client *c = (client *)zcalloc(sizeof(client));
     replyBlockingClientInit(c);
@@ -747,7 +754,7 @@ TEST_F(FullReplyBlockingTest, BeforeCommandTrackReplOffset) {
     c->cmd = &readonly_cmd;
 
     server.primary_repl_offset = 500;
-    beforeCommandTrackReplOffset(c);
+    recordReplOffsetBaseline(c);
 
     /* pre_call_replication_offset should be snapshotted */
     ASSERT_EQ(server.reply_blocking.pre_call_replication_offset, 500);
@@ -756,22 +763,23 @@ TEST_F(FullReplyBlockingTest, BeforeCommandTrackReplOffset) {
     zfree(c);
 }
 
-/* Migrated from test_preCommandExec — Case 1: reply-blocking disabled */
+/* Migrated from test_beginCommandReplyBlocking — Case 1: reply-blocking disabled */
 TEST_F(SyncReplicationTest, PreCommandExecReplyBlockingDisabled) {
     struct serverCommand readonly_cmd = {.declared_name = "get", .flags = CMD_READONLY};
 
-    /* preCommandExec always accesses server.monitors via isCommandReplicatedToMonitors() */
+    /* beginCommandReplyBlocking always accesses server.monitors via isCommandReplicatedToMonitors() */
     list *old_monitors = server.monitors;
     server.monitors = listCreate();
 
     client *c = (client *)zcalloc(sizeof(client));
     c->cmd = &readonly_cmd;
     c->reply_blocking_state.current_command_repl_offset = 123;
-    server.aof_state = AOF_OFF; server.aof_fsync = AOF_FSYNC_EVERYSEC;
+    server.aof_state = AOF_OFF;
+    server.aof_fsync = AOF_FSYNC_EVERYSEC;
     server.primary_repl_offset = 555;
 
-    ASSERT_EQ(preCommandExec(c), CMD_FILTER_ALLOW);
-    /* preCommandExec always resets current_command_repl_offset to -1 */
+    ASSERT_EQ(beginCommandReplyBlocking(c), CMD_FILTER_ALLOW);
+    /* beginCommandReplyBlocking always resets current_command_repl_offset to -1 */
     ASSERT_EQ(c->reply_blocking_state.current_command_repl_offset, -1);
     /* pre_command_replication_offset is always snapshotted */
     ASSERT_EQ(server.reply_blocking.pre_command_replication_offset, 555);
@@ -781,7 +789,7 @@ TEST_F(SyncReplicationTest, PreCommandExecReplyBlockingDisabled) {
     server.monitors = old_monitors;
 }
 
-/* Migrated from test_preCommandExec — Case 2: reply-blocking enabled on primary */
+/* Migrated from test_beginCommandReplyBlocking — Case 2: reply-blocking enabled on primary */
 TEST_F(FullReplyBlockingTest, PreCommandExecReplyBlockingEnabledOnPrimary) {
     struct serverCommand readonly_cmd = {.declared_name = "get", .flags = CMD_READONLY};
 
@@ -792,7 +800,7 @@ TEST_F(FullReplyBlockingTest, PreCommandExecReplyBlockingEnabledOnPrimary) {
     c->reply_blocking_state.current_command_repl_offset = 88;
     server.primary_repl_offset = 1234;
 
-    ASSERT_EQ(preCommandExec(c), CMD_FILTER_ALLOW);
+    ASSERT_EQ(beginCommandReplyBlocking(c), CMD_FILTER_ALLOW);
     /* current_command_repl_offset should be reset to -1 */
     ASSERT_EQ(c->reply_blocking_state.current_command_repl_offset, -1);
     /* Pre-execution position should be tracked */
@@ -821,7 +829,7 @@ TEST_F(FullReplyBlockingTest, MultiExecDefersDirtyKeys) {
     ASSERT_EQ(hashtableSize(server.db[0]->uncommitted_keys), 1u);
     ASSERT_EQ(getUncommittedKeyOffset((sds)objectGetVal(key_obj), server.db[0], server.reply_blocking.previous_acked_offset), LLONG_MAX);
 
-    /* After EXEC completes: postCommandExec commits deferred keys */
+    /* After EXEC completes: finalizeCommandReplyBlocking commits deferred keys */
     c->flag.multi = 0;
     struct serverCommand exec_cmd = {.declared_name = "exec", .proc = execCommand, .flags = 0};
     c->cmd = &exec_cmd;
@@ -829,7 +837,7 @@ TEST_F(FullReplyBlockingTest, MultiExecDefersDirtyKeys) {
     server.primary_repl_offset = 100;
     server.reply_blocking.pre_command_replication_offset = 100;
     server.reply_blocking.previous_acked_offset = 0;
-    postCommandExec(c);
+    finalizeCommandReplyBlocking(c);
 
     ASSERT_EQ(hashtableSize(server.db[0]->uncommitted_keys), 1u);
     ASSERT_EQ(getUncommittedKeyOffset((sds)objectGetVal(key_obj), server.db[0], server.reply_blocking.previous_acked_offset), 100);
@@ -888,7 +896,8 @@ TEST_F(SyncReplicationTest, HandleUncommittedFunctionStoreInsideTransaction) {
 
 /* Test notifyReplyBlockingProgress when sync replication is disabled */
 TEST_F(SyncReplicationTest, NotifyReplyBlockingProgressNoOpWhenDisabled) {
-    server.aof_state = AOF_OFF; server.aof_fsync = AOF_FSYNC_EVERYSEC;
+    server.aof_state = AOF_OFF;
+    server.aof_fsync = AOF_FSYNC_EVERYSEC;
     server.primary_host = nullptr;
     long long old_offset = server.reply_blocking.previous_acked_offset;
     notifyReplyBlockingProgress();
@@ -898,14 +907,16 @@ TEST_F(SyncReplicationTest, NotifyReplyBlockingProgressNoOpWhenDisabled) {
 
 /* Test notifyReplyBlockingProgress when server is a replica */
 TEST_F(SyncReplicationTest, NotifyReplyBlockingProgressNoOpWhenReplica) {
-    server.aof_state = AOF_ON; server.aof_fsync = AOF_FSYNC_ALWAYS;
+    server.aof_state = AOF_ON;
+    server.aof_fsync = AOF_FSYNC_ALWAYS;
     server.primary_host = sdsnew("127.0.0.1");
     long long old_offset = server.reply_blocking.previous_acked_offset;
     notifyReplyBlockingProgress();
     ASSERT_EQ(server.reply_blocking.previous_acked_offset, old_offset);
     sdsfree(server.primary_host);
     server.primary_host = nullptr;
-    server.aof_state = AOF_OFF; server.aof_fsync = AOF_FSYNC_EVERYSEC;
+    server.aof_state = AOF_OFF;
+    server.aof_fsync = AOF_FSYNC_EVERYSEC;
 }
 
 
@@ -923,10 +934,10 @@ TEST_F(FullReplyBlockingTest, KeyspaceNotifyTaskCopiesEventString) {
     server.primary_repl_offset = 100;
     bool registered = replyBlockingRegisterPostCommitTask(
         POST_COMMIT_KEYSPACE_NOTIFY_TASK,
-        (void *)(long long)0,   /* type */
-        (void *)event,          /* event string — will be freed below */
-        (void *)key_obj,        /* key */
-        (void *)(long long)0    /* dbid */
+        (void *)(long long)0, /* type */
+        (void *)event,        /* event string — will be freed below */
+        (void *)key_obj,      /* key */
+        (void *)(long long)0  /* dbid */
     );
     ASSERT_TRUE(registered);
 
@@ -961,7 +972,8 @@ TEST_F(FullReplyBlockingTest, RegisterPostCommitTaskRejectsInvalidType) {
 /* Test replyBlockingClientInit is idempotent */
 TEST_F(SyncReplicationTest, ClientInitIdempotent) {
     initReplyBlockingForTest();
-    server.aof_state = AOF_ON; server.aof_fsync = AOF_FSYNC_ALWAYS;
+    server.aof_state = AOF_ON;
+    server.aof_fsync = AOF_FSYNC_ALWAYS;
 
     client *c = (client *)zcalloc(sizeof(client));
     c->reply_blocking_state.blocked_responses = nullptr;
@@ -975,7 +987,8 @@ TEST_F(SyncReplicationTest, ClientInitIdempotent) {
     ASSERT_EQ(c->reply_blocking_state.blocked_responses, first_list);
 
     replyBlockingClientReset(c);
-    server.aof_state = AOF_OFF; server.aof_fsync = AOF_FSYNC_EVERYSEC;
+    server.aof_state = AOF_OFF;
+    server.aof_fsync = AOF_FSYNC_EVERYSEC;
     zfree(c);
     cleanupReplyBlockingForTest();
 }

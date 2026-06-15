@@ -3888,7 +3888,7 @@ void call(client *c, int flags) {
     struct ClientFlags client_old_flags = c->flag;
 
     struct serverCommand *real_cmd = c->realcmd;
-    if (server.bio_aof_offload_enabled) beforeCommandTrackReplOffset(c);
+    if (server.bio_aof_offload_enabled) recordReplOffsetBaseline(c);
     client *prev_client = server.executing_client;
     server.executing_client = c;
 
@@ -4135,7 +4135,7 @@ void call(client *c, int flags) {
      * here rather than inside afterCommand() because afterCommand() is
      * also invoked from nested call() contexts (e.g. propagatePendingCommands)
      * where the client argv may no longer be valid. */
-    if (server.bio_aof_offload_enabled) afterCommandTrackReplOffset(c);
+    if (server.bio_aof_offload_enabled) computeCommandBlockingOffset(c);
 
     /* Remember the replication offset of the client, right after its last
      * command that resulted in propagation. */
@@ -4696,12 +4696,12 @@ int processCommand(client *c) {
         queueMultiCommand(c, cmd_flags);
         addReply(c, shared.queued);
     } else {
-        if (server.bio_aof_offload_enabled && preCommandExec(c) == CMD_FILTER_REJECT) {
+        if (server.bio_aof_offload_enabled && beginCommandReplyBlocking(c) == CMD_FILTER_REJECT) {
             return C_OK;
         }
         int flags = CMD_CALL_FULL;
         call(c, flags);
-        if (server.bio_aof_offload_enabled) postCommandExec(c);
+        if (server.bio_aof_offload_enabled) finalizeCommandReplyBlocking(c);
         if (listLength(server.ready_keys) && !isInsideYieldingLongCommand()) handleClientsBlockedOnKeys();
     }
     return C_OK;
@@ -7253,8 +7253,8 @@ void dismissMemoryInChild(void) {
     /* madvise(MADV_DONTNEED) may not work if Transparent Huge Pages is enabled. */
     if (server.thp_enabled) return;
 
-    /* Currently we use zmadvise_dontneed only when we use jemalloc with Linux.
-     * so we avoid these pointless loops when they're not going to do anything. */
+        /* Currently we use zmadvise_dontneed only when we use jemalloc with Linux.
+         * so we avoid these pointless loops when they're not going to do anything. */
 #if defined(USE_JEMALLOC) && defined(__linux__)
     listIter li;
     listNode *ln;

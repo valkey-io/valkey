@@ -3316,7 +3316,6 @@ int handleClientsWithPendingWrites(void) {
     int pending_writes = listLength(server.clients_pending_write);
     if (pending_writes == 0) return processed; /* Return ASAP if there are no clients. */
 
-
     listIter li;
     listNode *ln;
     listRewind(server.clients_pending_write, &li);

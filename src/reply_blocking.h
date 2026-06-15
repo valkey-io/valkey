@@ -14,28 +14,26 @@
 #include "uncommitted_keys.h"
 #include "post_commit_task.h"
 
-// Command filter codes that are used in pre execution stage of a command.
+/* Command filter codes that are used in pre execution stage of a command. */
 #define CMD_FILTER_ALLOW 0
 #define CMD_FILTER_REJECT 1
-// Returns true if the cmd is a script command that never replicates.
+/* Returns true if the cmd is a script command that never replicates. */
 #define IS_SCRIPT_CALL_READONLY_CMD(cmd) ((cmd) && (((cmd)->proc == fcallroCommand) || ((cmd)->proc == evalRoCommand) || ((cmd)->proc == evalShaRoCommand)))
 
 /* Returns true if the cmd is a script command
  * (EVAL/EVAL_RO/EVALSHA/EVALSHA_RO/FCALL/FCALL_RO). */
 #define IS_SCRIPT_CALL_CMD(cmd) ((cmd) && (((cmd)->proc == fcallCommand) || ((cmd)->proc == fcallroCommand) || ((cmd)->proc == evalCommand) || ((cmd)->proc == evalRoCommand) || ((cmd)->proc == evalShaCommand) || ((cmd)->proc == evalShaRoCommand)))
 
-/* Returns true if the cmd is a keyspace informational command — a command that is
- * related to the keyspace (ACL_CATEGORY_KEYSPACE) but does not mutate it (not CMD_WRITE).
- * These commands provide information about the keyspace and need to be tracked for
- * reply-blocking even when they are admin or non-read/non-write commands. */
-#define IS_KEYSPACE_INFORMATIONAL(cmd) ((cmd) && ((cmd)->acl_categories & ACL_CATEGORY_KEYSPACE) && !((cmd)->flags & CMD_WRITE))
+/* Returns true if the cmd is a keyspace informational command — a read-only
+ * keyspace-introspection command (KEYS, SCAN, EXISTS, etc.) that needs to be
+ * tracked for reply-blocking. Classified via CMD_KEYSPACE_INFORMATIONAL flag
+ * set in the command JSON specs. */
+#define IS_KEYSPACE_INFORMATIONAL(cmd) ((cmd) && ((cmd)->flags & CMD_KEYSPACE_INFORMATIONAL))
 
 /* Flags below help in correctly classifying transactions as
  * either read/write commands or non-keyspace commands. */
-// Indicates the client's last command was a mutative command.
-#define REPLY_BLOCKING_CLIENT_LAST_CMD_WRITE (1ULL << 20)
-// Indicates the client's last command was read-only command.
-#define REPLY_BLOCKING_CLIENT_LAST_CMD_READONLY (1ULL << 21)
+#define REPLY_BLOCKING_CLIENT_LAST_CMD_WRITE (1ULL << 0)
+#define REPLY_BLOCKING_CLIENT_LAST_CMD_READONLY (1ULL << 1)
 
 struct client;
 struct serverObject;
@@ -45,15 +43,12 @@ struct listNode;
 
 typedef long long mstime_t;
 
-/* Indicate this type of notification is called inside of a post-commit task,
- * which is used by the reply-blocking feature to defer notifications. */
-#define NOTIFY_IN_POST_COMMIT_TASK (1 << 30)
-// Reply-blocking state container.
+/* Reply-blocking state container. */
 typedef struct reply_blocking_t {
-    // Clients waiting for the durably-committed offset to advance
+    /* Clients waiting for the durably-committed offset to advance */
     struct list *clients_waiting_ack;
 
-    // Deferred tasks waiting for the durably-committed offset to advance
+    /* Deferred tasks waiting for the durably-committed offset to advance */
     struct list *tasks_waiting_ack[POST_COMMIT_TASK_TYPE_MAX];
 
     /* Pending lists of tasks waiting for reply-blocking ack. This list is populated
@@ -65,28 +60,28 @@ typedef struct reply_blocking_t {
      */
     struct list *pending_tasks_waiting_ack[POST_COMMIT_TASK_TYPE_MAX];
 
-    // Previously acknowledged durably-committed replication offset
+    /* Previously acknowledged durably-committed replication offset */
     long long previous_acked_offset;
 
-    // Track the replication offset prior to executing a single command in call()
+    /* Track the replication offset prior to executing a single command in call() */
     long long pre_call_replication_offset;
 
     /* Track the replication offset prior to executing a command block
      including single command and multi-command transactions */
     long long pre_command_replication_offset;
 
-    // Track the number of commands awaiting propagation prior to executing a single command in call()
+    /* Track the number of commands awaiting propagation prior to executing a single command in call() */
     int pre_call_num_ops_pending_propagation;
 
-    // Counters for stats / info
+    /* Counters for stats / info */
 
-    // Counter of how many clients are reply-blocked
+    /* Counter of how many clients are reply-blocked */
     unsigned long long clients_blocked;
-    // Counter of how many clients are reply-unblocked
+    /* Counter of how many clients are reply-unblocked */
     unsigned long long clients_unblocked;
-    // Counter of how many clients are disconnected before being reply-unblocked
+    /* Counter of how many clients are disconnected before being reply-unblocked */
     unsigned long long clients_disconnected_before_unblocking;
-    // Counter of how many responses are blocked/unblocked by type
+    /* Counter of how many responses are blocked/unblocked by type */
     unsigned long long read_responses_blocked;
     unsigned long long write_responses_blocked;
     unsigned long long other_responses_blocked;
@@ -94,7 +89,7 @@ typedef struct reply_blocking_t {
     unsigned long long write_responses_unblocked;
     unsigned long long other_responses_unblocked;
 
-    // Cumulative times for all the blocked responses
+    /* Cumulative times for all the blocked responses */
     unsigned long long read_responses_blocked_cumulative_time_us;
     unsigned long long write_responses_blocked_cumulative_time_us;
     unsigned long long other_responses_blocked_cumulative_time_us;
@@ -117,7 +112,7 @@ typedef struct reply_blocking_t {
     long long aof_paused_offset;
 } reply_blocking_t;
 
-// Define the type of command being blocked
+/* Define the type of command being blocked */
 typedef enum {
     REPLY_BLOCKED_CMD_OTHER = 0,
     REPLY_BLOCKED_CMD_WRITE,
@@ -130,51 +125,51 @@ typedef struct blockedResponse {
     /* Pointer to the client's reply node where the blocked response starts.
      * NULL if the blocked response starts from the 16KB initial buffer */
     struct listNode *disallowed_reply_block;
-    // The boundary in the reply buffer where the blocked response starts.
+    /* The boundary in the reply buffer where the blocked response starts. */
     size_t disallowed_byte_offset;
-    // The replication offset to wait for the durably-committed offset to reach
+    /* The replication offset to wait for the durably-committed offset to reach */
     long long primary_repl_offset;
 
-    // Enum to store the type of blocked command
+    /* Enum to store the type of blocked command */
     replyBlockedCmdType cmd_type;
-    // Timer for blocked command
+    /* Timer for blocked command */
     monotime blocked_command_timer;
 } blockedResponse;
 
-// Describes a pre-execution COB offset for a client
+/* Describes a pre-execution COB offset for a client */
 typedef struct preExecutionOffsetPosition {
-    // True if the pre execution offset/reply block are initialized
+    /* True if the pre execution offset/reply block are initialized */
     bool recorded;
-    // Track initial client COB position for client blocking
+    /* Track initial client COB position for client blocking */
     struct listNode *reply_block;
-    // Byte position boundary within the pre-execution reply block
+    /* Byte position boundary within the pre-execution reply block */
     size_t byte_offset;
 } preExecutionOffsetPosition;
 
 typedef struct clientReplyBlockingState {
-    // Blocked client responses list for reply-blocking
+    /* Blocked client responses list for reply-blocking */
     struct list *blocked_responses;
 
     /* Pre-execution data recorded before a command is executed
      * to record the boundaries of the COB. */
     preExecutionOffsetPosition offset;
 
-    // Replication offset to block this current command response
+    /* Replication offset to block this current command response */
     long long current_command_repl_offset;
 
-    // The list of async notification tasks that reference this client
+    /* The list of async notification tasks that reference this client */
     struct list *pending_notify_tasks;
 
     /* This client is waiting for reply-blocking providers to acknowledge
      * the write before its response can be sent. */
     uint64_t reply_blocked : 1;
-    // Modules can set the blocking offset for read cmds
+    /* Modules can set the blocking offset for read cmds */
     long long module_cmd_blocking_offset;
 
     uint64_t reply_blocking_flags;
 } clientReplyBlockingState;
 
-// Init / Lifecycle
+/* Init / Lifecycle */
 void replyBlockingInit(void);
 void replyBlockingCleanup(void);
 void replyBlockingReset(void);
@@ -182,19 +177,19 @@ void replyBlockingClientInit(struct client *c);
 void replyBlockingClientReset(struct client *c);
 void replyBlockingClearPrimaryState(void);
 
-// Command processing hooks for offset and COB tracking
-void beforeCommandTrackReplOffset(client *c);
-void afterCommandTrackReplOffset(client *c);
-int preCommandExec(client *c);
-char *preScriptCmd(client *c);
-void postCommandExec(client *c);
+/* Command processing hooks for offset and COB tracking */
+void recordReplOffsetBaseline(client *c);
+void computeCommandBlockingOffset(client *c);
+int beginCommandReplyBlocking(client *c);
+char *validateScriptForReplyBlocking(client *c);
+void finalizeCommandReplyBlocking(client *c);
 void notifyReplyBlockingProgress(void);
 
-// Response blocking
+/* Response blocking */
 void blockClientOnReplOffset(client *c, long long blockingReplOffset);
 void unblockResponsesWithAckOffset(const reply_blocking_t *rb_state, long long consensus_ack_offset);
 
-// Utils
+/* Utils */
 int isPrimaryReplyBlockingEnabled(void);
 int isReplyBlockingEnabled(void);
 int isAofReplyBlockingEnabled(void);
@@ -204,7 +199,7 @@ void resumeAofReplyBlocking(void);
 bool isClientReplyBufferLimited(client *c);
 sds genReplyBlockingInfoString(sds info);
 
-// Function store dirty tracking (reply-blocking for function store writes)
+/* Function store dirty tracking (reply-blocking for function store writes) */
 bool isFunctionRWCommand(struct client *c);
 bool isFunctionStoreRWCommand(struct client *c);
 bool isUncommittedFunctionStore(void);

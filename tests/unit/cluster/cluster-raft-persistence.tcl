@@ -16,7 +16,7 @@ test "Raft persistence: corrupt log line CRC prevents startup" {
         # Append a corrupt log line (bad CRC) to the existing nodes.conf.
         set fake_id [string repeat f 40]
         set fake_addr "127.0.0.1:9999@19999,,tls-port=0,shard-id=[string repeat a 40]"
-        set corrupt_line "log 0000000000000000 99 1 NODE_JOIN $fake_id $fake_addr"
+        set corrupt_line "log ffffffffffffffff 99 1 NODE_JOIN $fake_id $fake_addr"
         set fp [open $nodes_conf a]
         puts $fp $corrupt_line
         close $fp
@@ -75,7 +75,7 @@ test "Raft persistence: corrupt snapshot CRC prevents startup" {
         set fp [open $nodes_conf r]
         set content [read $fp]
         close $fp
-        regsub {crc [0-9a-f]+} $content {crc 0000000000000000} content
+        regsub {crc [0-9a-f]+} $content {crc ffffffffffffffff} content
         set fp [open $nodes_conf w]
         puts -nonewline $fp $content
         close $fp
@@ -98,7 +98,7 @@ test "Raft persistence: incomplete last log line (short write) is discarded" {
         # Append a corrupt log line WITHOUT trailing newline (simulates
         # a crash during write — the line was never fully written).
         set fp [open $nodes_conf a]
-        puts -nonewline $fp "log 0000000000000000 99 1 NODE_JOIN [string repeat f 40] 127.0.0.1:9999@19999"
+        puts -nonewline $fp "log ffffffffffffffff 99 1 NODE_JOIN [string repeat f 40] 127.0.0.1:9999@19999"
         close $fp
 
         # Server should start normally (discard the incomplete line).

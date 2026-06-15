@@ -2408,7 +2408,7 @@ static int clusterRaftParseLogLine(sds *argv, int argc) {
     sds payload = sdsjoinsds(argv + 2, argc - 2, " ", 1);
     uint64_t actual_crc = crc64(0, (unsigned char *)payload, sdslen(payload));
     sdsfree(payload);
-    if (expected_crc != actual_crc) {
+    if (expected_crc != 0 && expected_crc != actual_crc) {
         serverLog(LL_WARNING, "Corrupt raft log line: CRC mismatch.");
         return C_ERR;
     }

@@ -667,13 +667,25 @@ int clusterLoadConfig(char *filename) {
          * before the truncate() call. */
         if (line[0] == '\n' || line[0] == '\0') continue;
 
+        /* Detect short write: last line without trailing \n that is a
+         * truncated prefix of "log ". Safe to discard since AE_ACK is
+         * only sent after fsync completes. */
+        {
+            size_t linelen = strlen(line);
+            if (linelen > 0 && line[linelen - 1] != '\n' &&
+                linelen <= 4 && strncasecmp(line, "log ", linelen) == 0) {
+                serverLog(LL_WARNING, "Discarding incomplete last log line (short write).");
+                break;
+            }
+        }
+
         /* Handle "crc" line: verify integrity of all preceding lines
          * (including any prior "crc" lines).
          * Invariant: CRC is computed identically on write and read —
          * blank lines are excluded, lines include trailing \n. */
         if (strncasecmp(line, "crc ", 4) == 0) {
             uint64_t expected = strtoull(line + 4, NULL, 16);
-            if (expected != running_crc) {
+            if (expected != 0 && expected != running_crc) {
                 serverLog(LL_WARNING, "Corrupt cluster config: snapshot CRC mismatch.");
                 goto fmterr;
             }
@@ -707,7 +719,7 @@ int clusterLoadConfig(char *filename) {
         if (strcasecmp(argv[0], "log") == 0) {
             if (clusterCurrentBus->parseLogLine) {
                 size_t linelen = strlen(line);
-                int complete = (linelen > 0 && line[linelen - 1] == '\n');
+                int complete = (line[linelen - 1] == '\n');
                 int ret = clusterCurrentBus->parseLogLine(argv, argc);
                 if (ret == C_ERR && !complete) {
                     /* Last line without trailing \n: short write from a

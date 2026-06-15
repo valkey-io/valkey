@@ -59,9 +59,10 @@ proc raft_recv {fd {timeout 5000}} {
 
 tags {tls:skip external:skip cluster singledb} {
 
-# Listen on a random port, accept one connection, close the listener.
-# Returns the accepted client fd. Sets the listen port in the upvar port_var.
-proc raft_listen_and_accept {port_var {timeout 5000}} {
+# Listen on a random port, run optional setup code, accept one connection, close
+# the listener. Returns the accepted client fd. Sets the listen port in the
+# upvar port_var before running the setup code.
+proc raft_listen_and_accept {port_var {timeout 5000} {before_accept {}}} {
     upvar $port_var listen_port
     set ::_raft_accepted ""
     proc _raft_on_accept {fd addr port} {
@@ -70,6 +71,9 @@ proc raft_listen_and_accept {port_var {timeout 5000}} {
     }
     set listen_fd [socket -server _raft_on_accept -myaddr 127.0.0.1 0]
     set listen_port [lindex [fconfigure $listen_fd -sockname] 2]
+    if {$before_accept ne {}} {
+        uplevel 1 $before_accept
+    }
     set accept_after [after $timeout {set ::_raft_accepted timeout}]
     vwait ::_raft_accepted
     after cancel $accept_after
@@ -196,70 +200,6 @@ test "Raft proto: joiner reverts to leader after timeout" {
 }
 
 
-test "Raft proto: REPL_OFFSETS updates node replication offset" {
-    start_server {overrides {cluster-enabled yes cluster-protocol raft}} {
-        set port [srv 0 port]
-        set cport [expr {$port + 10000}]
-        set node_id [R 0 CLUSTER MYID]
-
-        # Fake node IDs: one for us (the "leader") and one for a "replica".
-        set leader_id [string repeat "a" 40]
-        set replica_id [string repeat "c" 40]
-        set leader_shard [string repeat "b" 40]
-        set leader_addr "127.0.0.1:9999@19999,,tls-port=0,shard-id=$leader_shard"
-        set replica_addr "127.0.0.1:9998@19998,,tls-port=0,shard-id=$leader_shard"
-
-        # Connect and do HELLO/HI handshake.
-        set fd [raft_connect 127.0.0.1 $cport]
-        raft_send $fd "HELLO $leader_id $leader_addr 1 3 2"
-        set reply [raft_recv $fd]
-        assert_match "HI *" $reply
-
-        # Send AE to establish ourselves as leader and add the replica
-        # via NODE_JOIN in the log.
-        # AE <leader-id> <term> <prev-log-idx> <prev-log-term> <commit> <count>
-        # Entry: <term> <type> <data>
-        set ae "AE $leader_id 1 0 0 2 2\n"
-        append ae "1 NODE_JOIN $replica_id $replica_addr\n"
-        append ae "1 SET_REPLICA_OF $replica_id $leader_id $leader_shard"
-        raft_send $fd $ae
-
-        # Read AE_ACK.
-        set reply [raft_recv $fd]
-        assert_match "AE_ACK *" $reply
-
-        # Verify the replica exists in CLUSTER SHARDS.
-        set shards [R 0 CLUSTER SHARDS]
-        set found 0
-        foreach shard $shards {
-            foreach node [dict get $shard nodes] {
-                if {[dict get $node id] eq $replica_id} {
-                    set found 1
-                }
-            }
-        }
-        assert_equal 1 $found "replica should appear in CLUSTER SHARDS"
-
-        # Send REPL_OFFSETS to update the replica's offset.
-        raft_send $fd "REPL_OFFSETS $replica_id 42000"
-
-        # Give it a moment to process.
-        after 100
-
-        # Verify the offset was updated.
-        set shards [R 0 CLUSTER SHARDS]
-        foreach shard $shards {
-            foreach node [dict get $shard nodes] {
-                if {[dict get $node id] eq $replica_id} {
-                    assert_equal 42000 [dict get $node replication-offset]
-                }
-            }
-        }
-
-        close $fd
-    }
-}
-
 test "Raft proto: PRE_VOTE denied while leader lease is active" {
     start_server {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 1000}} {
         set cport [expr {[srv 0 port] + 10000}]
@@ -384,41 +324,30 @@ test "Raft proto: pre-vote timeout does not inflate term without quorum" {
         set node_id [R 0 CLUSTER MYID]
         set fake_id [string repeat "r" 40]
 
-        # Listen for the server's outbound link to the fake peer. Pre-vote and
-        # RequestVote broadcasts use node->link, not the inbound leader link.
-        set ::_raft_accepted ""
-        proc _raft_on_accept_prevote {fd addr port} {
-            fconfigure $fd -translation binary -buffering full
-            set ::_raft_accepted $fd
-        }
-        set listen_fd [socket -server _raft_on_accept_prevote -myaddr 127.0.0.1 0]
-        set fake_cport [lindex [fconfigure $listen_fd -sockname] 2]
-        set fake_port [expr {$fake_cport - 10000}]
-        set fake_addr "127.0.0.1:${fake_port}@${fake_cport},,tls-port=0,shard-id=[string repeat s 40]"
+        # Pre-vote and RequestVote broadcasts use node->link, not the inbound
+        # leader link, so listen for the server's outbound link to the fake peer.
+        set fake_cport 0
+        set fd [raft_listen_and_accept fake_cport 5000 {
+            set fake_port [expr {$fake_cport - 10000}]
+            set fake_addr "127.0.0.1:${fake_port}@${fake_cport},,tls-port=0,shard-id=[string repeat s 40]"
 
-        set leader_fd [raft_connect 127.0.0.1 $cport]
-        raft_send $leader_fd "HELLO $fake_id $fake_addr"
-        set reply [raft_recv $leader_fd]
-        assert_match "HI *" $reply
+            set leader_fd [raft_connect 127.0.0.1 $cport]
+            raft_send $leader_fd "HELLO $fake_id $fake_addr"
+            set reply [raft_recv $leader_fd]
+            assert_match "HI *" $reply
 
-        # Commit both nodes into the fake leader's log. The real node must see
-        # the fake peer as joined, otherwise pre-vote requests are skipped.
-        set ae "AE $fake_id 2 0 0 2 2\n"
-        append ae "2 NODE_JOIN $node_id 127.0.0.1:[srv 0 port]@[expr {[srv 0 port] + 10000}],,tls-port=0,shard-id=[string repeat t 40]\n"
-        append ae "2 NODE_JOIN $fake_id $fake_addr"
-        raft_send $leader_fd $ae
-        set reply [raft_recv $leader_fd]
-        assert_match "AE_ACK 2 1 2 *" $reply
-        assert_equal "follower" [CI 0 cluster_raft_role]
-        assert_equal 2 [CI 0 cluster_raft_current_term]
-        assert_equal 2 [CI 0 cluster_size]
-
-        set accept_after [after 5000 {set ::_raft_accepted timeout}]
-        vwait ::_raft_accepted
-        after cancel $accept_after
-        close $listen_fd
-        assert {$::_raft_accepted ne "timeout"}
-        set fd $::_raft_accepted
+            # Commit both nodes into the fake leader's log. The real node must
+            # see the fake peer as joined, otherwise pre-vote requests are skipped.
+            set ae "AE $fake_id 2 0 0 2 2\n"
+            append ae "2 NODE_JOIN $node_id 127.0.0.1:[srv 0 port]@[expr {[srv 0 port] + 10000}],,tls-port=0,shard-id=[string repeat t 40]\n"
+            append ae "2 NODE_JOIN $fake_id $fake_addr"
+            raft_send $leader_fd $ae
+            set reply [raft_recv $leader_fd]
+            assert_match "AE_ACK 2 1 2 *" $reply
+            assert_equal "follower" [CI 0 cluster_raft_role]
+            assert_equal 2 [CI 0 cluster_raft_current_term]
+            assert_equal 2 [CI 0 cluster_size]
+        }]
 
         set reply [raft_recv $fd]
         assert_match "HELLO *" $reply
@@ -456,6 +385,70 @@ test "Raft proto: pre-vote timeout does not inflate term without quorum" {
     }
 }
 
+test "Raft proto: REPL_OFFSETS updates node replication offset" {
+    start_server {overrides {cluster-enabled yes cluster-protocol raft}} {
+        set port [srv 0 port]
+        set cport [expr {$port + 10000}]
+        set node_id [R 0 CLUSTER MYID]
+
+        # Fake node IDs: one for us (the "leader") and one for a "replica".
+        set leader_id [string repeat "a" 40]
+        set replica_id [string repeat "c" 40]
+        set leader_shard [string repeat "b" 40]
+        set leader_addr "127.0.0.1:9999@19999,,tls-port=0,shard-id=$leader_shard"
+        set replica_addr "127.0.0.1:9998@19998,,tls-port=0,shard-id=$leader_shard"
+
+        # Connect and do HELLO/HI handshake.
+        set fd [raft_connect 127.0.0.1 $cport]
+        raft_send $fd "HELLO $leader_id $leader_addr 1 3 2"
+        set reply [raft_recv $fd]
+        assert_match "HI *" $reply
+
+        # Send AE to establish ourselves as leader and add the replica
+        # via NODE_JOIN in the log.
+        # AE <leader-id> <term> <prev-log-idx> <prev-log-term> <commit> <count>
+        # Entry: <term> <type> <data>
+        set ae "AE $leader_id 1 0 0 2 2\n"
+        append ae "1 NODE_JOIN $replica_id $replica_addr\n"
+        append ae "1 SET_REPLICA_OF $replica_id $leader_id $leader_shard"
+        raft_send $fd $ae
+
+        # Read AE_ACK.
+        set reply [raft_recv $fd]
+        assert_match "AE_ACK *" $reply
+
+        # Verify the replica exists in CLUSTER SHARDS.
+        set shards [R 0 CLUSTER SHARDS]
+        set found 0
+        foreach shard $shards {
+            foreach node [dict get $shard nodes] {
+                if {[dict get $node id] eq $replica_id} {
+                    set found 1
+                }
+            }
+        }
+        assert_equal 1 $found "replica should appear in CLUSTER SHARDS"
+
+        # Send REPL_OFFSETS to update the replica's offset.
+        raft_send $fd "REPL_OFFSETS $replica_id 42000"
+
+        # Give it a moment to process.
+        after 100
+
+        # Verify the offset was updated.
+        set shards [R 0 CLUSTER SHARDS]
+        foreach shard $shards {
+            foreach node [dict get $shard nodes] {
+                if {[dict get $node id] eq $replica_id} {
+                    assert_equal 42000 [dict get $node replication-offset]
+                }
+            }
+        }
+
+        close $fd
+    }
+}
+
 test "Raft proto: leader sends REPL_OFFSETS after follower offset changes" {
     start_server {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 1000}} {
         set port [srv 0 port]
@@ -466,28 +459,15 @@ test "Raft proto: leader sends REPL_OFFSETS after follower offset changes" {
 
         # Start listening before MEET so the leader can connect.
         set cport 0
-        set ::_raft_accepted ""
-        proc _raft_on_accept {fd addr port} {
-            fconfigure $fd -translation binary -buffering full
-            set ::_raft_accepted $fd
-        }
-        set listen_fd [socket -server _raft_on_accept -myaddr 127.0.0.1 0]
-        set cport [lindex [fconfigure $listen_fd -sockname] 2]
-        set fake_port [expr {$cport - 10000}]
-        set fake_addr "127.0.0.1:${fake_port}@${cport},,tls-port=0,shard-id=$fake_shard"
+        set fd [raft_listen_and_accept cport 5000 {
+            set fake_port [expr {$cport - 10000}]
+            set fake_addr "127.0.0.1:${fake_port}@${cport},,tls-port=0,shard-id=$fake_shard"
 
-        # Send CLUSTER MEET without waiting for reply (it blocks until
-        # NODE_JOIN commits, which needs our AE_ACK).
-        set meet_client [valkey_deferring_client]
-        $meet_client CLUSTER MEET 127.0.0.1 $fake_port
-
-        # Wait for the leader to connect.
-        set accept_after [after 5000 {set ::_raft_accepted timeout}]
-        vwait ::_raft_accepted
-        after cancel $accept_after
-        close $listen_fd
-        assert {$::_raft_accepted ne "timeout"}
-        set fd $::_raft_accepted
+            # Send CLUSTER MEET without waiting for reply (it blocks until
+            # NODE_JOIN commits, which needs our AE_ACK).
+            set meet_client [valkey_deferring_client]
+            $meet_client CLUSTER MEET 127.0.0.1 $fake_port
+        }]
 
         # Leader sends HELLO + MEET(singleton).
         set reply [raft_recv $fd 5000]

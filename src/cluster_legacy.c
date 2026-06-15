@@ -4446,7 +4446,9 @@ int clusterProcessPacket(clusterLink *link) {
         if (!n) return 1;                                    /* We don't know the reported node. */
         if (n->configEpoch >= reportedConfigEpoch) return 1; /* Nothing new. */
 
-        serverLog(LL_NOTICE, "Processing UPDATE message received from %.40s (%s) in shard %s about node %.40s (%s) in shard %s. old configEpoch %llu, new configEpoch %llu",
+        serverLog(LL_NOTICE,
+                  "Processing UPDATE message received from %.40s (%s) in shard %.40s about "
+                  "node %.40s (%s) in shard %.40s. old configEpoch %llu, new configEpoch %llu",
                   sender->name, humanNodename(sender), sender->shard_id,
                   n->name, humanNodename(n), n->shard_id,
                   (unsigned long long)n->configEpoch, (unsigned long long)reportedConfigEpoch);
@@ -5672,8 +5674,8 @@ void clusterHandleReplicaFailover(void) {
      * elapsed, we can setup a new one. */
     if (auth_age > auth_retry_time) {
         server.cluster->failover_auth_time = now +
-                                             delay +           /* Fixed delay to let FAIL msg propagate. */
-                                             random() % delay; /* Random delay between 0 and the fixed delay. */
+                                             delay +                         /* Fixed delay to let FAIL msg propagate. */
+                                             (delay ? random() % delay : 0); /* Random delay between 0 and the fixed delay. */
         server.cluster->failover_auth_count = 0;
         server.cluster->failover_auth_sent = 0;
         server.cluster->failover_auth_rank = clusterGetReplicaRank();

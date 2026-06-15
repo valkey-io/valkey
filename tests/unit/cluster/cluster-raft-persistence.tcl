@@ -85,4 +85,30 @@ test "Raft persistence: corrupt snapshot CRC prevents startup" {
         assert_match "*snapshot CRC mismatch*" $output
     }
 }
+
+test "Raft persistence: incomplete last log line (short write) is discarded" {
+    start_server {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 1000}} {
+        set dir [lindex [R 0 CONFIG GET dir] 1]
+        set nodes_conf "$dir/nodes.conf"
+        set port [srv 0 port]
+
+        # Stop server gracefully.
+        catch {R 0 SHUTDOWN NOSAVE}
+
+        # Append a corrupt log line WITHOUT trailing newline (simulates
+        # a crash during write — the line was never fully written).
+        set fp [open $nodes_conf a]
+        puts -nonewline $fp "log 0000000000000000 99 1 NODE_JOIN [string repeat f 40] 127.0.0.1:9999@19999"
+        close $fp
+
+        # Server should start normally (discard the incomplete line).
+        restart_server 0 true true
+
+        # Only myself should be known (the corrupt entry was discarded).
+        assert_equal 1 [CI 0 cluster_known_nodes]
+
+        # Verify the warning was logged.
+        verify_log_message 0 "*Discarding incomplete last log line*" 0
+    }
+}
 } ;# tags

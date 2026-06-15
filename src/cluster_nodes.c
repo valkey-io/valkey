@@ -705,10 +705,22 @@ int clusterLoadConfig(char *filename) {
 
         /* Handle "log" lines (protocol-specific WAL entries). */
         if (strcasecmp(argv[0], "log") == 0) {
-            if (clusterCurrentBus->parseLogLine &&
-                clusterCurrentBus->parseLogLine(argv, argc) == C_ERR) {
-                sdsfreesplitres(argv, argc);
-                goto fmterr;
+            if (clusterCurrentBus->parseLogLine) {
+                size_t linelen = strlen(line);
+                int complete = (linelen > 0 && line[linelen - 1] == '\n');
+                int ret = clusterCurrentBus->parseLogLine(argv, argc);
+                if (ret == C_ERR && !complete) {
+                    /* Last line without trailing \n: short write from a
+                     * crash. Safe to discard since AE_ACK is only sent
+                     * after fsync completes successfully. */
+                    serverLog(LL_WARNING, "Discarding incomplete last log line (short write).");
+                    sdsfreesplitres(argv, argc);
+                    break;
+                } else if (ret == C_ERR) {
+                    /* Complete line that failed validation: corruption. */
+                    sdsfreesplitres(argv, argc);
+                    goto fmterr;
+                }
             }
             sdsfreesplitres(argv, argc);
             continue;

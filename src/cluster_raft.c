@@ -2340,11 +2340,14 @@ static int clusterRaftParseVarsLine(const char *name, const char *value) {
 
 /* Format a single log line with CRC64 checksum. */
 static sds raftLogFormatLine(sds buf, raftLogEntry *e) {
-    sds payload = sdscatprintf(sdsempty(), "%llu %llu %s %s",
+    sds payload = sdscatprintf(sdsempty(), "%llu %llu %s",
                                (unsigned long long)e->index,
                                (unsigned long long)e->term,
-                               raftEntryTypeName(e->type),
-                               e->data);
+                               raftEntryTypeName(e->type));
+    if (sdslen(e->data) > 0) {
+        payload = sdscatlen(payload, " ", 1);
+        payload = sdscatsds(payload, e->data);
+    }
     uint64_t crc = crc64(0, (unsigned char *)payload, sdslen(payload));
     buf = sdscatprintf(buf, "log %016llx %s\n",
                        (unsigned long long)crc, payload);
@@ -2445,8 +2448,9 @@ static void clusterRaftPostLoad(void) {
      * the leader will update it via AE. For now, ensure it's consistent. */
     if (rs->commit_index < rs->last_applied)
         rs->commit_index = rs->last_applied;
-    /* Log entries loaded from disk are already persisted; don't re-write. */
-    rs->todo_persist_log = 0;
+    /* Schedule a full rewrite to produce a clean file (removes any
+     * incomplete trailing line from a short write). */
+    rs->todo_save_config = 1;
     /* Restore cluster size from loaded nodes (NODE_JOIN already applied). */
     dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
     dictEntry *de;

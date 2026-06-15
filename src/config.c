@@ -3748,7 +3748,8 @@ void configHelpCommand(client *c) {
  *----------------------------------------------------------------------------*/
 
 static void addConfigInfoReply(client *c, standardConfig *config) {
-    int fields = 4; /* name, type, flags, alias */
+    int fields = 3; /* name, type, flags */
+    if (config->alias) fields++;
     if (config->type == ENUM_CONFIG || config->type == NUMERIC_CONFIG) fields++;
 
     addReplyMapLen(c, fields);
@@ -3783,8 +3784,10 @@ static void addConfigInfoReply(client *c, standardConfig *config) {
     }
 
     /* Alias */
-    addReplyBulkCString(c, "alias");
-    addReplyBulkCString(c, config->alias ? config->alias : "");
+    if (config->alias) {
+        addReplyBulkCString(c, "alias");
+        addReplyBulkCString(c, config->alias);
+    }
 
     /* Values (enum) or Range (numeric) */
     if (config->type == ENUM_CONFIG) {

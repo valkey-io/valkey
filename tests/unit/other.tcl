@@ -111,12 +111,6 @@ start_server {tags {"other"}} {
         assert {[lsearch [dict get $info flags] "sensitive"] >= 0}
     }
 
-    test {CONFIG INFO includes alias field} {
-        set result [r CONFIG INFO maxmemory]
-        set info [lindex $result 0]
-        assert {[dict exists $info alias]}
-    }
-
     test {CONFIG INFO alias for config with alias} {
         set result [r CONFIG INFO replicaof]
         set info [lindex $result 0]
@@ -131,10 +125,10 @@ start_server {tags {"other"}} {
         assert {[lsearch [dict get $info flags] "alias"] >= 0}
     }
 
-    test {CONFIG INFO config without alias has empty alias field} {
+    test {CONFIG INFO config without alias omits alias field} {
         set result [r CONFIG INFO maxmemory]
         set info [lindex $result 0]
-        assert_equal [dict get $info alias] ""
+        assert {![dict exists $info alias]}
     }
 
     test {CONFIG INFO ordering is consistent across calls} {

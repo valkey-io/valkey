@@ -804,7 +804,7 @@ test {corrupt payload: zset listpack with NAN score} {
     # rejects NAN scores; this covers the listpack format.
     start_server [list overrides [list loglevel verbose use-exit-on-panic yes crash-memcheck-enabled no] ] {
         r debug set-skip-checksum-validation 1
-        catch {r restore _nan_zset_lp 0 "\x11\x19\x19\x00\x00\x00\x04\x00\x82\x6D\x31\x03\x83\x6E\x61\x6E\x04\x82\x6D\x32\x03\x83\x32\x2E\x35\x04\xFF\x50\x00\xC5\x5C\xC6\x0C\x7D\xFF\xB5\x52"} err
+        catch {r restore _nan_zset_lp 0 "\x11\x19\x19\x00\x00\x00\x04\x00\x82\x6D\x31\x03\x83\x6E\x61\x6E\x04\x82\x6D\x32\x03\x83\x32\x2E\x35\x04\xFF\x0B\x00\x00\x00\x00\x00\x00\x00\x00\x00"} err
         assert_match "*Bad data format*" $err
         verify_log_message 0 "*NAN score*" 0
         assert_equal [r ping] "PONG"

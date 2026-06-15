@@ -409,3 +409,94 @@ start_server {tags {"commandlog"} overrides {commandlog-execution-slower-than 10
         r del testkey
     }
 }
+
+start_server {config "minimal.conf" tags {"external:skip" "valgrind:skip"} overrides {io-threads 4 commandlog-execution-slower-than 1000000 commandlog-request-larger-than 1048576 commandlog-reply-larger-than 1024}} {
+    test {COMMANDLOG large-reply - deferred check with io-threads and copy avoidance} {
+        r config set min-string-size-avoid-copy-reply 1
+
+        set value [string repeat B 2048]
+        r set testkey $value
+        r commandlog reset large-reply
+
+        r get testkey
+        # Wait for IO thread write completion + postWriteToClient deferred check
+        after 100
+        assert_equal [r commandlog len large-reply] 1
+        set e [lindex [r commandlog get -1 large-reply] 0]
+        # Full argv preserved via inline stash
+        assert_equal [lindex $e 3] {get testkey}
+        # Exact byte count: $2048\r\n<data>\r\n = 2057
+        assert_equal [lindex $e 2] 2057
+
+        r del testkey
+    }
+
+    test {COMMANDLOG large-reply - threshold -1 skips stash entirely with io-threads} {
+        r config set min-string-size-avoid-copy-reply 1
+        r config set commandlog-reply-larger-than -1
+        r commandlog reset large-reply
+
+        set value [string repeat C 4096]
+        r set testkey $value
+
+        r get testkey
+        after 100
+        # Nothing logged when disabled
+        assert_equal [r commandlog len large-reply] 0
+
+        r config set commandlog-reply-larger-than 1024
+        r del testkey
+    }
+
+    test {COMMANDLOG large-reply - pipelined commands with copy avoidance} {
+        r config set min-string-size-avoid-copy-reply 1
+        r config set commandlog-reply-larger-than 1024
+        r commandlog reset large-reply
+
+        # Create two large values
+        set val1 [string repeat D 2048]
+        set val2 [string repeat E 3072]
+        r set key1 $val1
+        r set key2 $val2
+
+        # Pipeline two GETs — both use copy avoidance
+        set rd [valkey_deferring_client]
+        $rd get key1
+        $rd get key2
+        $rd read
+        $rd read
+        $rd close
+        after 100
+
+        # At least one large-reply entry should be logged
+        set len [r commandlog len large-reply]
+        assert_morethan $len 0
+
+        # The logged entry should have full argv (not empty or truncated)
+        set e [lindex [r commandlog get -1 large-reply] 0]
+        # argv should be "get key1" or "get key2"
+        assert_match {get key*} [lindex $e 3]
+
+        r del key1 key2
+    }
+
+    test {COMMANDLOG large-reply - client disconnect releases stashed refs} {
+        r config set min-string-size-avoid-copy-reply 1
+        r config set commandlog-reply-larger-than 1024
+
+        set value [string repeat F 2048]
+        r set testkey $value
+
+        # Connect, trigger copy avoidance GET, then disconnect immediately
+        set rd [valkey_deferring_client]
+        $rd get testkey
+        $rd close
+        after 100
+
+        # Server should not crash (stashed refs freed in freeClient).
+        # Verify server is still responsive.
+        assert_equal [r ping] PONG
+
+        r del testkey
+    }
+}

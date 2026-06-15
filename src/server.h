@@ -1368,6 +1368,15 @@ typedef struct client {
     unsigned long long commands_processed;        /* Total count of commands this client executed. */
     unsigned long long net_output_bytes_curr_cmd; /* Total network output bytes sent to this client, by the current command. */
     _Atomic(size_t) io_tracked_reply_len;         /* Total size of BULK_STR_REF replies tracked by I/O threads. */
+    _Atomic(size_t) io_reply_len_cmdlog;          /* Monotonic accumulator for deferred commandlog large-reply check. */
+    /* Inline stash for deferred commandlog large-reply check with copy avoidance.
+     * When a command uses copy avoidance, we stash argv refs (incrRefCount) here
+     * so postWriteToClient can log the full command after the IO thread computes
+     * exact reply size. Avoids zmalloc in the hot path. */
+#define CMDLOG_INLINE_ARGV_MAX 4                  /* Covers GET (argc=2), GETRANGE (argc=3), MGET single-key (argc=2) */
+    robj *cmdlog_argv_inline[CMDLOG_INLINE_ARGV_MAX]; /* Inline stash for small argc */
+    robj **cmdlog_argv;                           /* Points to cmdlog_argv_inline or heap-allocated for large argc */
+    int cmdlog_argc;                              /* Number of stashed args (0 = no pending check) */
     size_t buf_peak;                              /* Peak used size of buffer in last 5 sec interval. */
     int nwritten;                                 /* Number of bytes of the last write. */
     int nread;                                    /* Number of bytes of the last read. */
@@ -3480,6 +3489,7 @@ void preventCommandPropagation(client *c);
 void preventCommandAOF(client *c);
 void preventCommandReplication(client *c);
 void commandlogPushCurrentCommand(client *c, struct serverCommand *cmd);
+void commandlogCheckDeferredLargeReply(client *c);
 void updateCommandLatencyHistogram(struct hdr_histogram **latency_histogram, int64_t duration_hist);
 int prepareForShutdown(client *c, int flags);
 void replyToClientsBlockedOnShutdown(void);

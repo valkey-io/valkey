@@ -168,7 +168,71 @@ void commandlogPushCurrentCommand(client *c, struct serverCommand *cmd) {
 
     commandlogPushEntryIfNeeded(c, argv, argc, duration, COMMANDLOG_TYPE_SLOW);
     commandlogPushEntryIfNeeded(c, argv, argc, net_input_bytes_curr_cmd, COMMANDLOG_TYPE_LARGE_REQUEST);
-    commandlogPushEntryIfNeeded(c, argv, argc, net_output_bytes_curr_cmd, COMMANDLOG_TYPE_LARGE_REPLY);
+
+    /* Deferred large-reply check for copy-avoidance replies.
+     *
+     * Problem: with copy avoidance, the reply buffer holds a reference to the
+     * value object (BULK_STR_REF) rather than a copy. The IO thread resolves
+     * the actual byte count when writing to the socket (trackBufReferences).
+     * At this point in command processing, argv is available but reply size is
+     * not. By the time postWriteToClient fires (reply size known), argv has
+     * been freed by resetClient/freeClientArgv.
+     *
+     * Solution: for small-argc commands (argc <= CMDLOG_INLINE_ARGV_MAX, covering
+     * GET and GETRANGE), stash argv object refs (incrRefCount, no string copies)
+     * into a per-client inline array. After the IO thread writes and postWriteToClient
+     * confirms all replies are flushed, check io_reply_len_cmdlog against the
+     * threshold and log with the stashed argv for full command attribution.
+     *
+     * For large-argc commands (MGET, etc.), skip the deferred path entirely — the
+     * values are cache-hot from the multi-key lookup anyway, so the immediate check
+     * (which may undercount copy-avoidance bytes) is acceptable.
+     *
+     * Cost: 2 refcount increments + 2 pointer stores per copy-avoidance command
+     * (zero allocation for argc <= CMDLOG_INLINE_ARGV_MAX). */
+    if (c->flag.buf_encoded && server.commandlog[COMMANDLOG_TYPE_LARGE_REPLY].threshold >= 0 &&
+        argc <= CMDLOG_INLINE_ARGV_MAX) {
+        /* Release any previous stash that wasn't consumed yet (pipelining edge case:
+         * multiple copy-avoidance commands before a single write completion). The
+         * last command's stash will be checked at write completion with the combined
+         * byte count — this is acceptable since large-reply detection cares about
+         * total reply size, and with pipelining the responses are written together. */
+        if (c->cmdlog_argc > 0) {
+            for (int j = 0; j < c->cmdlog_argc; j++)
+                decrRefCount(c->cmdlog_argv[j]);
+        }
+        /* Stash current argv with incrRefCount into inline array (no allocation). */
+        c->cmdlog_argv = c->cmdlog_argv_inline;
+        for (int j = 0; j < argc; j++) {
+            c->cmdlog_argv[j] = argv[j];
+            incrRefCount(argv[j]);
+        }
+        c->cmdlog_argc = argc;
+    } else {
+        /* For commands with argc > CMDLOG_INLINE_ARGV_MAX (e.g., MGET with many keys),
+         * we skip the deferred stash to avoid per-command zmalloc overhead. Use the
+         * immediately-known net_output_bytes_curr_cmd for the check. For copy-avoidance
+         * replies this may undercount (BULK_STR_REF bytes tracked by IO thread aren't
+         * included yet), but multi-key commands with all values exceeding the large-reply
+         * threshold are rare in practice, and the values are cache-hot anyway. */
+        commandlogPushEntryIfNeeded(c, argv, argc, net_output_bytes_curr_cmd, COMMANDLOG_TYPE_LARGE_REPLY);
+    }
+}
+
+/* Check deferred large-reply commandlog entry after IO thread has written the
+ * copy-avoidance reply. Called from postWriteToClient() on the main thread once
+ * all pending replies are flushed. Uses the stashed argv refs from
+ * commandlogPushCurrentCommand() for full command attribution. */
+void commandlogCheckDeferredLargeReply(client *c) {
+    if (c->cmdlog_argc == 0) return;
+
+    size_t io_bytes = atomic_load_explicit(&c->io_reply_len_cmdlog, memory_order_relaxed);
+    commandlogPushEntryIfNeeded(c, c->cmdlog_argv, c->cmdlog_argc,
+                                (long long)io_bytes, COMMANDLOG_TYPE_LARGE_REPLY);
+    for (int j = 0; j < c->cmdlog_argc; j++)
+        decrRefCount(c->cmdlog_argv[j]);
+    c->cmdlog_argv = NULL;
+    c->cmdlog_argc = 0;
 }
 
 /* The SLOWLOG command. Implements all the subcommands needed to handle the

@@ -84,8 +84,8 @@ typedef struct clusterBusType {
     int (*parseVarsLine)(const char *name, const char *value);
 
     /* Parse a "log" line from nodes.conf. argv/argc are the split line
-     * (argv[0] is "log"). */
-    void (*parseLogLine)(sds *argv, int argc);
+     * (argv[0] is "log"). Returns C_OK, or C_ERR if the line is corrupt. */
+    int (*parseLogLine)(sds *argv, int argc);
 
     /* Append "log" lines during a full config rewrite. */
     sds (*appendLogLines)(sds config);

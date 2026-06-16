@@ -1481,11 +1481,20 @@ static int tryAvoidBulkStrCopyToReply(client *c, robj *obj) {
 /* Add an Object as a bulk reply */
 void addReplyBulk(client *c, robj *obj) {
     if (tryAvoidBulkStrCopyToReply(c, obj) == C_OK) {
-        /* Reply size tracking for copy-avoidance replies is handled by the IO
-         * thread in trackBufReferences(), which already computes sdslen() when
-         * writing to the socket. The commandlog check in commandlogPushCurrentCommand()
-         * reads io_tracked_reply_len to account for these bytes. This avoids an
-         * expensive cache-missing sdslen() call here in the main thread hot path. */
+        /* When a previous command's argv is already stashed for deferred commandlog
+         * (pipelining), compute reply size here so this command can be logged
+         * immediately in commandlogPushCurrentCommand. The sdslen is cheap here
+         * because pipelined values are cache-hot from sequential processing.
+         *
+         * When no stash is pending (first/only command), skip sdslen entirely —
+         * the IO thread handles byte tracking via trackBufReferences. */
+        if (c->cmdlog_argc > 0 &&
+            server.commandlog[COMMANDLOG_TYPE_LARGE_REPLY].threshold >= 0) {
+            serverAssert(obj->encoding == OBJ_ENCODING_RAW);
+            size_t str_len = sdslen(objectGetVal(obj));
+            uint32_t num_len = digits10(str_len);
+            c->net_output_bytes_curr_cmd += (num_len + 3) + str_len + 2;
+        }
         return;
     }
     addReplyBulkLen(c, obj);

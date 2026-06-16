@@ -178,36 +178,44 @@ void commandlogPushCurrentCommand(client *c, struct serverCommand *cmd) {
      * not. By the time postWriteToClient fires (reply size known), argv has
      * been freed by resetClient/freeClientArgv.
      *
-     * Solution: for small-argc commands (argc <= CMDLOG_INLINE_ARGV_MAX, covering
-     * GET and GETRANGE), stash argv object refs (incrRefCount, no string copies)
-     * into a per-client inline array. After the IO thread writes and postWriteToClient
-     * confirms all replies are flushed, check io_reply_len_cmdlog against the
-     * threshold and log with the stashed argv for full command attribution.
+     * Solution: stash argv refs for the FIRST command in a pipeline batch and
+     * defer its check to postWriteToClient. For subsequent pipelined commands,
+     * fall back to immediate sdslen (which is cheap — values are cache-hot from
+     * sequential processing). This avoids the cold cache miss that only affects
+     * the first GET in isolation, while preserving per-command commandlog entries
+     * for pipelined workloads.
      *
-     * For large-argc commands (MGET, etc.), skip the deferred path entirely — the
-     * values are cache-hot from the multi-key lookup anyway, so the immediate check
-     * (which may undercount copy-avoidance bytes) is acceptable.
+     * For large-argc commands (MGET, etc.), skip the deferred path entirely.
      *
-     * Cost: 2 refcount increments + 2 pointer stores per copy-avoidance command
-     * (zero allocation for argc <= CMDLOG_INLINE_ARGV_MAX). */
+     * Cost: 2 refcount increments + 2 pointer stores for the first command only
+     * (zero allocation, inline array). */
     if (c->flag.buf_encoded && server.commandlog[COMMANDLOG_TYPE_LARGE_REPLY].threshold >= 0 &&
         argc <= CMDLOG_INLINE_ARGV_MAX) {
-        /* Release any previous stash that wasn't consumed yet (pipelining edge case:
-         * multiple copy-avoidance commands before a single write completion). The
-         * last command's stash will be checked at write completion with the combined
-         * byte count — this is acceptable since large-reply detection cares about
-         * total reply size, and with pipelining the responses are written together. */
         if (c->cmdlog_argc > 0) {
+            /* Pipelining: a previous command's stash hasn't been consumed yet.
+             * Log it now with whatever bytes have been tracked so far (may be 0
+             * if the IO thread hasn't run yet — accepted as under-report for the
+             * first command). Then do the immediate check for this command since
+             * addReplyBulk computed net_output_bytes_curr_cmd for it (values are
+             * cache-hot from sequential pipeline processing). */
+            size_t io_bytes = atomic_load_explicit(&c->io_reply_len_cmdlog, memory_order_relaxed);
+            commandlogPushEntryIfNeeded(c, c->cmdlog_argv, c->cmdlog_argc,
+                                        (long long)io_bytes, COMMANDLOG_TYPE_LARGE_REPLY);
             for (int j = 0; j < c->cmdlog_argc; j++)
                 decrRefCount(c->cmdlog_argv[j]);
+            c->cmdlog_argc = 0;
+            /* Check this command immediately — net_output_bytes_curr_cmd was
+             * populated by addReplyBulk since it detected pipelining (cmdlog_argc > 0). */
+            commandlogPushEntryIfNeeded(c, argv, argc, net_output_bytes_curr_cmd, COMMANDLOG_TYPE_LARGE_REPLY);
+        } else {
+            /* First (or only) command — stash argv for deferred check. */
+            c->cmdlog_argv = c->cmdlog_argv_inline;
+            for (int j = 0; j < argc; j++) {
+                c->cmdlog_argv[j] = argv[j];
+                incrRefCount(argv[j]);
+            }
+            c->cmdlog_argc = argc;
         }
-        /* Stash current argv with incrRefCount into inline array (no allocation). */
-        c->cmdlog_argv = c->cmdlog_argv_inline;
-        for (int j = 0; j < argc; j++) {
-            c->cmdlog_argv[j] = argv[j];
-            incrRefCount(argv[j]);
-        }
-        c->cmdlog_argc = argc;
     } else {
         /* For commands with argc > CMDLOG_INLINE_ARGV_MAX (e.g., MGET with many keys),
          * we skip the deferred stash to avoid per-command zmalloc overhead. Use the

@@ -453,7 +453,7 @@ start_server {config "minimal.conf" tags {"external:skip" "valgrind:skip"} overr
         r config set commandlog-reply-larger-than 1024
         r commandlog reset large-reply
 
-        # Create two large values
+        # Create two large values (both individually exceed 1024 threshold)
         set val1 [string repeat D 2048]
         set val2 [string repeat E 3072]
         r set key1 $val1
@@ -468,14 +468,21 @@ start_server {config "minimal.conf" tags {"external:skip" "valgrind:skip"} overr
         $rd close
         after 100
 
-        # At least one large-reply entry should be logged
+        # Both commands should be logged (not just the last one)
         set len [r commandlog len large-reply]
-        assert_morethan $len 0
+        assert_morethan_equal $len 2
 
-        # The logged entry should have full argv (not empty or truncated)
-        set e [lindex [r commandlog get -1 large-reply] 0]
-        # argv should be "get key1" or "get key2"
-        assert_match {get key*} [lindex $e 3]
+        # Verify both keys appear in the commandlog entries
+        set entries [r commandlog get -1 large-reply]
+        set found_key1 0
+        set found_key2 0
+        foreach e $entries {
+            set cmd [lindex $e 3]
+            if {[string match "*key1*" $cmd]} { set found_key1 1 }
+            if {[string match "*key2*" $cmd]} { set found_key2 1 }
+        }
+        assert_equal $found_key1 1
+        assert_equal $found_key2 1
 
         r del key1 key2
     }

@@ -223,12 +223,15 @@ proc log_crashes {} {
         close $fd
     }
 
-    set logs [glob */err.txt]
-    foreach log $logs {
-        set res [find_valgrind_errors $log true]
-        if {$res != ""} {
-            puts $res
-            incr ::failed
+    # Only scan for valgrind errors when actually running under valgrind.
+    if {$::valgrind} {
+        set logs [glob */err.txt]
+        foreach log $logs {
+            set res [find_valgrind_errors $log true]
+            if {$res != ""} {
+                puts $res
+                incr ::failed
+            }
         }
     }
 

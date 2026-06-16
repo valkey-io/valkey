@@ -52,8 +52,8 @@ static bool isDeleteCmd(struct serverCommand *cmd) {
 static bool onValkeyMainThread(void) {
     /* Modules interact with the main thread using a mutex.  If a module owns the mutex, consider
      *  that equivalent to being on the main thread. */
-    bool inModule = (atomic_load_explicit(&server.module_gil_acquired, memory_order_relaxed) == 0);
-    return (inModule || pthread_equal(server.main_thread_id, pthread_self()) != 0);
+    bool mightBeInModule = (atomic_load_explicit(&server.module_gil_acquired, memory_order_relaxed) == 0);
+    return (mightBeInModule || pthread_equal(server.main_thread_id, pthread_self()) != 0);
 }
 
 
@@ -152,12 +152,12 @@ static bool getParamsForSelect(int argc, robj **argv, client *permission_client,
     return true;
 }
 
-static void pauseReshahForKvsHashtable(kvstore *kvs, int didx) {
+static void pauseRehashForKvsHashtable(kvstore *kvs, int didx) {
     hashtable *ht = kvstoreGetHashtable(kvs, didx);
     if (ht != NULL) hashtablePauseRehashing(ht);
 }
 
-static void resumeReshahForKvsHashtable(kvstore *kvs, int didx) {
+static void resumeRehashForKvsHashtable(kvstore *kvs, int didx) {
     hashtable *ht = kvstoreGetHashtable(kvs, didx);
     if (ht != NULL) hashtableResumeRehashing(ht);
 }
@@ -287,7 +287,7 @@ static int pointerCompare(const void *key1, const void *key2) {
 }
 
 // This dict grows and shrinks constantly during the iteration.  Avoid constant rehashing.
-static int neverShrink(size_t moreMem, double usedRatio) {
+static int onlyAllowExpansion(size_t moreMem, double usedRatio) {
     UNUSED(moreMem);
     return (usedRatio > 0.5); // Return true only if expanding
 }
@@ -296,13 +296,13 @@ static dictType dictEntryPtrDictType = {
     .entryGetKey = dictEntryGetKey,
     .hashFunction = pointerHash,
     .keyCompare = pointerCompare,
-    .resizeAllowed = neverShrink,
+    .resizeAllowed = onlyAllowExpansion,
     .entryDestructor = zfree};
 
 static hashtableType dbEntryPtrHashtableType = {
     .hashFunction = pointerHash,
     .keyCompare = pointerCompare,
-    .resizeAllowed = neverShrink};
+    .resizeAllowed = onlyAllowExpansion};
 
 
 // A free list for bgIteratorItem's - avoids churning zmalloc calls
@@ -529,7 +529,7 @@ struct fullScanIterator {
 
 static void fullScanIteratorRelease(genericIterator *genIt) {
     struct fullScanIterator *it = (struct fullScanIterator *)genIt;
-    if (it->kvs) resumeReshahForKvsHashtable(it->kvs, it->kvs_didx);
+    if (it->kvs) resumeRehashForKvsHashtable(it->kvs, it->kvs_didx);
     zfree(it->orig_to_cur_db);
     zfree(it->cur_to_orig_db);
     zfree(it);
@@ -560,7 +560,7 @@ static fifo *fullScanIteratorGetEntries(genericIterator *genIt, int *orig_dbid, 
                 it->kvs_didx = kvstoreGetFirstNonEmptyHashtableIndex(it->kvs);
                 it->ht_cursor = 0;
                 if (it->kvs_didx == KVSTORE_INDEX_NOT_FOUND) it->kvs = NULL;
-                if (it->kvs != NULL) pauseReshahForKvsHashtable(it->kvs, it->kvs_didx);
+                if (it->kvs != NULL) pauseRehashForKvsHashtable(it->kvs, it->kvs_didx);
             }
         }
 
@@ -573,10 +573,10 @@ static fifo *fullScanIteratorGetEntries(genericIterator *genIt, int *orig_dbid, 
 
         if (it->ht_cursor == 0) {
             /* Done with this hashtable, move to next. */
-            resumeReshahForKvsHashtable(it->kvs, it->kvs_didx);
+            resumeRehashForKvsHashtable(it->kvs, it->kvs_didx);
             it->kvs_didx = kvstoreGetNextNonEmptyHashtableIndex(it->kvs, it->kvs_didx);
             if (it->kvs_didx == KVSTORE_INDEX_NOT_FOUND) it->kvs = NULL;
-            if (it->kvs != NULL) pauseReshahForKvsHashtable(it->kvs, it->kvs_didx);
+            if (it->kvs != NULL) pauseRehashForKvsHashtable(it->kvs, it->kvs_didx);
         }
     }
     *orig_dbid = it->iter_db;
@@ -1107,9 +1107,9 @@ static bool addEarlyIterationKey(bgIterator *it, dbEntry *earlyEntry, int cur_db
     it->dbentries_queued++;
     if (isClonedEntry) it->dbentry_clones_queued++;
 
-    if (it->iteration_flags & BGITERATOR_FLAG_CONSISTENT) { // JHB - can we optimize here in cluster mode (no swap)
+    if (it->iteration_flags & BGITERATOR_FLAG_CONSISTENT || server.cluster_enabled) {
         /* On consistent iteration, SWAPDB events are not provided.  So there is no requirement to
-         * keep items in order or synchronized with SWAPDB. */
+         * keep items in order or synchronized with SWAPDB.  In cluster mode, SWAPDB isn't supported. */
         if (BGITERATION_DEBUG) {
             sds entryString = createEntryString(dbid, item->u.dbe.de);
             debugBuffer = sdscatprintf(debugBuffer, "EARLY_1: %s\n", entryString);
@@ -1984,7 +1984,10 @@ static bool expediteKeysForMultiExec(client *c, hashtable *waitingOnKeys) {
         initGetKeysResult(&result);
         int numkeys = getKeysFromCommand(cmd, argv, argc, &result);
         keyReference *keyrefs = result.keys;
-        if (numkeys == 0) continue; // Write command with no keys - like FLUSHDB
+        if (numkeys == 0) {
+            getKeysFreeResult(&result);
+            continue; // Write command with no keys - like FLUSHDB
+        }
 
         if (expediteKeysForWriteOnAllIterators(
                 cur_to_orig_db ? cur_to_orig_db[curDb] : curDb,
@@ -2331,8 +2334,9 @@ bool bgIteration_blockClientIfRequired(client *c) {
     if (!isWriteCmd(c->cmd)) return false;
 
     if (BGITERATION_DEBUG) {
-        debugBuffer = sdscatprintf(debugBuffer, "BLCK?: (%d)%s\n", c->db->id,
-                                   createSdsFromClientArgv(c->argc, c->argv));
+        sds sdsArgv = createSdsFromClientArgv(c->argc, c->argv);
+        debugBuffer = sdscatprintf(debugBuffer, "BLCK?: (%d)%s\n", c->db->id, sdsArgv);
+        sdsfree(sdsArgv);
     }
 
     /* Before executing a command or atomic transaction, the replication flag is cleared for each
@@ -2380,7 +2384,6 @@ bool bgIteration_blockClientIfRequired(client *c) {
                         c->db->id, c->cmd, c->argc, c->argv, keyrefs, numkeys, waitOnKeys);
                 }
             }
-            getKeysFreeResult(&result);
         } else {
             // WRITE commands with no keys should always be replicated.  SWAPDB, FLUSH, FUNCTION, etc.
             listIter li;
@@ -2391,6 +2394,7 @@ bool bgIteration_blockClientIfRequired(client *c) {
                 it->cur_cmd_may_replicate = true;
             }
         }
+        getKeysFreeResult(&result);
     }
 
     if (mustBlock) {
@@ -2430,8 +2434,9 @@ void bgIteration_handleCommandReplication(int dbid,
     if (BGITERATION_DEBUG) {
         // DEBUG - enable this to capture replication not queued because iteration is inactive
         if (0 && !bgIteration_iterationActive() && (isWriteCmd(cmd) || cmd->proc == multiCommand)) {
-            debugBuffer = sdscatprintf(debugBuffer, "REPL? INACT: (%d)%s\n", dbid,
-                                       createSdsFromClientArgv(argc, argv));
+            sds sdsArgv = createSdsFromClientArgv(argc, argv);
+            debugBuffer = sdscatprintf(debugBuffer, "REPL? INACT: (%d)%s\n", dbid, sdsArgv);
+            sdsfree(sdsArgv);
         }
     }
 
@@ -2443,8 +2448,9 @@ void bgIteration_handleCommandReplication(int dbid,
     if (!isWriteCmd(cmd) && cmd->proc != multiCommand) return;
 
     if (BGITERATION_DEBUG) {
-        debugBuffer = sdscatprintf(debugBuffer, "REPL?: (%d)%s\n", dbid,
-                                   createSdsFromClientArgv(argc, argv));
+        sds sdsArgv = createSdsFromClientArgv(argc, argv);
+        debugBuffer = sdscatprintf(debugBuffer, "REPL?: (%d)%s\n", dbid, sdsArgv);
+        sdsfree(sdsArgv);
     }
 
     if (cmd->proc == swapdbCommand) {

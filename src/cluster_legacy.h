@@ -281,6 +281,7 @@ typedef struct {
                                      replica. */
     uint64_t offset;              /* Primary replication offset if node is a primary or
                                      processed replication offset if node is a replica. */
+    uint64_t ping_echo_time;      /* Used to carry the sender's timestamp for round trip time measurement. */
     char sender[CLUSTER_NAMELEN]; /* Name of the sender node */
     unsigned char myslots[CLUSTER_SLOTS / 8];
     char replicaof[CLUSTER_NAMELEN];
@@ -415,6 +416,7 @@ struct _clusterNode {
     rax *fail_reports;                      /* Radix tree for failure reports with sorted order by timestamp */
     int is_node_healthy;                    /* Boolean indicating the cached node health.
                                                Update with updateAndCountChangedNodeHealth(). */
+    latencyStat latency_stats;              /* Latency statistics for this node. */                        
 };
 
 /* Struct used for storing slot statistics. */
@@ -428,6 +430,11 @@ typedef struct slotRange {
     int start_slot;
     int end_slot;
 } slotRange;
+
+typedef struct latencyStat {
+    uint32_t max_latency;
+    uint32_t avg_latency;
+} latencyStat;
 
 struct clusterState {
     clusterNode *myself; /* This node */

@@ -1826,10 +1826,14 @@ static void clusterRaftSendPreVoteResponse(clusterLink *link, uint64_t term, int
 static int clusterRaftCanGrantVote(clusterRaftState *rs, uint64_t candidate_last_index, uint64_t candidate_last_term) {
     if (rs->role == RAFT_ROLE_JOINER) return 0;
 
-    /* Don't vote while we still consider a leader alive in this term. */
+    /* Deny vote if we recently heard from the leader (leader lease).
+     * Use the base node-timeout, not the randomized election timeout —
+     * the randomization is for staggering elections, not for lease duration. */
     mstime_t now = monotonicMs();
+    mstime_t lease = server.cluster_node_timeout;
+    if (lease < 1000) lease = 1000;
     if (rs->leader[0] != '\0' &&
-        now - rs->last_heartbeat < rs->election_timeout) {
+        now - rs->last_heartbeat < lease) {
         return 0;
     }
 

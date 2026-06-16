@@ -232,6 +232,52 @@ test "Raft proto: PRE_VOTE denied while leader lease is active" {
     }
 }
 
+test "Raft proto: PRE_VOTE granted after node-timeout even with randomized election timeout" {
+    # The leader lease uses the base node-timeout, not the randomized election
+    # timeout. If the lease used the randomized timeout (up to 2x node-timeout),
+    # a voter could incorrectly deny pre-votes from candidates that have
+    # legitimately detected a failed leader.
+    start_server {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 1000}} {
+        set cport [expr {[srv 0 port] + 10000}]
+        set node_id [R 0 CLUSTER MYID]
+        set leader_id [string repeat "d" 40]
+        set leader_addr "127.0.0.1:9995@19995,,tls-port=0,shard-id=[string repeat e 40]"
+
+        # Connect as a fake peer and form a 2-node cluster via MEET.
+        set fd1 [raft_connect 127.0.0.1 $cport]
+        raft_send $fd1 "HELLO $leader_id $leader_addr"
+        set reply [raft_recv $fd1]
+        assert_match "HI *" $reply
+
+        # The real node is a singleton leader. MEET "cluster" makes it
+        # step down to joiner and reply ADD_ME.
+        raft_send $fd1 "MEET cluster"
+        set reply [raft_recv $fd1]
+        assert_match "ADD_ME*" $reply
+
+        # Send AE with NODE_JOIN entries for both nodes to form the cluster.
+        set node_addr "127.0.0.1:[srv 0 port]@$cport,,tls-port=0,shard-id=[string repeat a 40]"
+        set term 1
+        raft_send $fd1 "AE $leader_id $term 0 0 2 2\n1 NODE_JOIN $leader_id $leader_addr\n1 NODE_JOIN $node_id $node_addr"
+        set reply [raft_recv $fd1]
+        assert_match "AE_ACK *" $reply
+        assert_equal "follower" [CI 0 cluster_raft_role]
+        assert_equal $leader_id [CI 0 cluster_raft_leader]
+
+        # Leader goes silent. Wait just over node-timeout for lease to expire.
+        after 1100
+
+        # The old leader comes back as a candidate, sends PRE_VOTE_REQ.
+        # Its log is at least as up-to-date (same 2 entries at term 1).
+        set prevote_term [expr {$term + 1}]
+        raft_send $fd1 "PRE_VOTE_REQ $leader_id $prevote_term 2 1"
+        set reply [raft_recv $fd1]
+        assert_match "PRE_VOTE $prevote_term 1" $reply
+
+        close $fd1
+    }
+}
+
 test "Raft proto: PRE_VOTE granted when no leader lease is active" {
     start_server {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 1000}} {
         set cport [expr {[srv 0 port] + 10000}]

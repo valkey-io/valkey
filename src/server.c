@@ -626,6 +626,15 @@ hashtableType setHashtableType = {
     .keyCompare = dictSdsKeyCompare,
     .entryDestructor = dictSdsDestructor};
 
+/* Extract the element portion of a zset hashtable key as (ptr, len).
+ * Handles both stored OrderedIndex items and plain sds lookup keys.
+ * Currently both are plain sds; the fbtree backend (next PR) extends this
+ * to skip an 8-byte score prefix on packed items using the sds aux bit. */
+static const char *zsetExtractElement(const void *key, size_t *len) {
+    *len = sdslen((const_sds)key);
+    return (const char *)key;
+}
+
 const void *zsetHashtableGetKey(const void *element) {
     const char *ptr;
     size_t len;
@@ -633,11 +642,25 @@ const void *zsetHashtableGetKey(const void *element) {
     return ptr;
 }
 
+static uint64_t zsetHashFunction(const void *key) {
+    size_t len;
+    const char *ptr = zsetExtractElement(key, &len);
+    return genHashFunctionConfigurableSeed(ptr, len);
+}
+
+static int zsetKeyCompare(const void *a, const void *b) {
+    size_t alen, blen;
+    const char *aptr = zsetExtractElement(a, &alen);
+    const char *bptr = zsetExtractElement(b, &blen);
+    if (alen != blen) return 0;
+    return memcmp(aptr, bptr, alen) == 0;
+}
+
 /* Sorted sets hash (an ordered index is used in addition to the hash table) */
 hashtableType zsetHashtableType = {
-    .hashFunction = sdsHashConfigurableSeed,
+    .hashFunction = zsetHashFunction,
     .entryGetKey = zsetHashtableGetKey,
-    .keyCompare = dictSdsKeyCompare,
+    .keyCompare = zsetKeyCompare,
 };
 
 uint64_t hashtableSdsHash(const void *key) {

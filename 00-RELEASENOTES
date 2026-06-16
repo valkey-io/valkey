@@ -1,9 +1,10 @@
 Hello! This file is just a placeholder, since this is the "unstable" branch
 of Valkey, the place where all the development happens.
 
-There is no release notes for this branch, it gets forked into another branch
-every time there is a partial feature freeze in order to eventually create
-a new stable release.
+Release notes for this branch reflect only publicly merged PRs that carry the
+release-notes label; the notes live in the "## Unreleased" block below. This
+file gets forked into another branch every time there is a partial feature
+freeze in order to eventually create a new stable release.
 
 Usually "unstable" is stable enough for you to use it in development environments
 however you should never use it in production environments. It is possible
@@ -14,3 +15,33 @@ to download the latest stable release here:
 More information is available at https://valkey.io
 
 Happy hacking!
+
+## Unreleased
+
+<!--
+Contributors: if your change is user-facing, add the `release-notes` label to your
+PR and append a bullet under the matching category below, in the form:
+
+    * <human-readable description> by @<your-github-handle> (#<PR number>)
+
+If your change is not user-facing, add the `no-release-notes` label instead. A CI
+check requires exactly one of these two labels, and a note here when `release-notes`
+is set. The `.github/workflows/prepare-release.yml` workflow promotes this block into
+a dated release section when a release is cut, so keep entries user-readable.
+-->
+
+### Behavior Changes
+
+### New Features and Enhanced Behavior
+
+### Performance and Efficiency Improvements
+
+### Bug Fixes
+
+### Command and API Updates
+
+### Module API Changes
+
+### Observability and Logging
+
+### Build and Tooling

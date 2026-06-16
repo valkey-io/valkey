@@ -1,7 +1,7 @@
 /*
  * Copyright Valkey Contributors.
  * All rights reserved.
- * SPDX-License-Identifier: BSD 3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause
  */
 
 /* Hashtable

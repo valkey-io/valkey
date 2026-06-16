@@ -2236,6 +2236,29 @@ static void clusterRaftCron(void) {
     clusterRaftState *rs = RAFT_STATE();
     mstime_t now = monotonicMs();
 
+    /* Disconnect dead outbound links. data_received tracks the last time
+     * we got data on our outbound link (HI, AE_ACK, votes).
+     * - No data ever received after node_timeout/2: HI never arrived,
+     *   the peer's kernel accepted our SYN but the process is frozen.
+     * - Leader: no AE_ACK for node_timeout/2. last_ack_time is reset on
+     *   election, giving peers time to respond to the first AE. */
+    {
+        mstime_t stale = server.cluster_node_timeout / 2;
+        dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
+        dictEntry *de;
+        while ((de = dictNext(di)) != NULL) {
+            clusterNode *node = dictGetVal(de);
+            if (node == myself || !node->link) continue;
+            if (node->flags & CLUSTER_NODE_MEET) continue;
+            if ((node->data_received == 0 && now - node->link->ctime > stale) ||
+                (rs->role == RAFT_ROLE_LEADER &&
+                 now - RAFT_NODE(node)->last_ack_time > stale)) {
+                freeClusterLink(node->link);
+            }
+        }
+        dictReleaseIterator(di);
+    }
+
     if (!server.debug_cluster_disable_reconnection) clusterConnectNodes();
 
     /* Joiner timeout: if we stepped down to join a cluster but never
@@ -2623,6 +2646,11 @@ static uint32_t clusterRaftValidateMessageHeader(char *header) {
 
 static int clusterRaftProcessMessage(struct clusterLink *link) {
     RAFT_STATE()->stats_bytes_received += link->rcvbuf_len;
+
+    /* Track data received on outbound links only. Each node manages its own
+     * outbound link; if it goes silent we must detect and reconnect. The
+     * inbound link is the peer's responsibility. */
+    if (link->node && !link->inbound) link->node->data_received = mstime();
 
     /* Parse the text payload after the binary header.
      * Split by \n first (AE messages have entry lines), then split

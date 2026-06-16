@@ -1635,7 +1635,12 @@ static int clusterRaftProcessAppendEntries(clusterLink *link, int argc, sds *arg
     /* Accept heartbeat. */
     if (rs->role != RAFT_ROLE_JOINER) rs->role = RAFT_ROLE_FOLLOWER;
     rs->last_heartbeat = monotonicMs();
-    memcpy(rs->leader, argv[1], CLUSTER_NAMELEN);
+    /* Detect leader change — retry pending proposals to the new leader. */
+    if (memcmp(rs->leader, argv[1], CLUSTER_NAMELEN) != 0) {
+        memcpy(rs->leader, argv[1], CLUSTER_NAMELEN);
+        if (listLength(rs->pending_proposals) > 0)
+            rs->todo_retry_proposals = 1;
+    }
 
     /* Log consistency check: verify prev_log_index/term match. */
     if (prev_log_index > 0 && raftLogTermAt(prev_log_index) != prev_log_term) {
@@ -1952,6 +1957,9 @@ static int clusterRaftProcessRequestVoteResponse(clusterLink *link, int argc, sd
             memcpy(rs->leader, myself->name, CLUSTER_NAMELEN);
             serverLog(LL_NOTICE, "Elected as Raft leader (term %llu, %d votes).",
                       (unsigned long long)rs->current_term, rs->votes_received);
+            /* Append any pending proposals locally now that we're leader. */
+            if (listLength(rs->pending_proposals) > 0)
+                rs->todo_retry_proposals = 1;
             /* Initialize nextIndex for each peer (Raft paper §5.3). */
             uint64_t last = raftLogLastIndex();
             dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
@@ -2027,6 +2035,8 @@ static void clusterRaftStartElection(void) {
         memcpy(rs->leader, myself->name, CLUSTER_NAMELEN);
         serverLog(LL_NOTICE, "Elected as Raft leader (term %llu, %d votes).",
                   (unsigned long long)rs->current_term, rs->votes_received);
+        if (listLength(rs->pending_proposals) > 0)
+            rs->todo_retry_proposals = 1;
     }
 }
 
@@ -2278,9 +2288,6 @@ static void clusterRaftCron(void) {
                 }
             }
         }
-
-        /* Retry proposals when leader link becomes available. */
-        clusterRaftRetryProposals(1);
 
         /* Periodically check if our NODE_INFO diverged from what was last
          * committed (e.g. a CONFIG SET succeeded but the proposal timed

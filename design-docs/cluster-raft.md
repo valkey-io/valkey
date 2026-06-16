@@ -711,10 +711,26 @@ The leader will send AE after reconnection, updating `commit_index`.
 Entries between `lastApplied + 1` and the new `commit_index` are then
 applied.
 
-### Crash detection
+### Integrity checks
 
-Not yet implemented. A future improvement will add per-line checksums
-to detect partial writes and corruption (see Future Work).
+Each log line includes a CRC64 checksum as its first field:
+
+    log <crc64hex> <index> <term> <type> <data...>
+
+The CRC covers the payload (everything after the checksum field). On
+load, each line is validated:
+
+- **CRC matches** → accept the entry (regardless of trailing `\n`)
+- **Invalid + no trailing `\n`** → discard (last line, short write from
+  crash during append; safe because AE_ACK is sent only after fsync)
+- **Invalid + trailing `\n`** → fatal (complete line is corrupted)
+- **Index gap between valid entries** → fatal (missing entry)
+
+The snapshot section (node lines + vars) is protected by a separate
+`crc` line written between vars and log lines.
+
+After loading, a full rewrite is always scheduled to produce a clean
+file (removes any incomplete trailing line).
 
 ### File format
 
@@ -784,5 +800,3 @@ targets.
   atomically or not.
 - `valkey-cli --cluster` tooling compatibility (uses MULTI internally in
   some cases, which doesn't work with blocking admin commands).
-- Checksums for appended log lines to detect partial writes and
-  bit-rot, instead of relying solely on trailing newline detection.

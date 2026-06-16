@@ -2466,6 +2466,23 @@ static int clusterRaftParseVarsLine(const char *name, const char *value) {
     return 0;
 }
 
+/* Format a single log line with CRC64 checksum. */
+static sds raftLogFormatLine(sds buf, raftLogEntry *e) {
+    sds payload = sdscatprintf(sdsempty(), "%llu %llu %s",
+                               (unsigned long long)e->index,
+                               (unsigned long long)e->term,
+                               raftEntryTypeName(e->type));
+    if (sdslen(e->data) > 0) {
+        payload = sdscatlen(payload, " ", 1);
+        payload = sdscatsds(payload, e->data);
+    }
+    uint64_t crc = crc64(0, (unsigned char *)payload, sdslen(payload));
+    buf = sdscatprintf(buf, "log %016llx %s\n",
+                       (unsigned long long)crc, payload);
+    sdsfree(payload);
+    return buf;
+}
+
 /* Append uncommitted log entries (index > last_applied) as "log" lines
  * at the end of nodes.conf during a full rewrite. */
 static sds clusterRaftAppendLogLines(sds config) {
@@ -2473,11 +2490,7 @@ static sds clusterRaftAppendLogLines(sds config) {
     for (uint64_t i = 0; i < rs->log_count; i++) {
         raftLogEntry *e = rs->log[i];
         if (e->index <= rs->last_applied) continue;
-        config = sdscatprintf(config, "log %llu %llu %s %s\n",
-                              (unsigned long long)e->index,
-                              (unsigned long long)e->term,
-                              raftEntryTypeName(e->type),
-                              e->data);
+        config = raftLogFormatLine(config, e);
     }
     return config;
 }
@@ -2490,11 +2503,7 @@ static void clusterRaftPersistNewLogEntries(uint64_t from) {
     for (uint64_t i = 0; i < rs->log_count; i++) {
         raftLogEntry *e = rs->log[i];
         if (e->index < from) continue;
-        buf = sdscatprintf(buf, "log %llu %llu %s %s\n",
-                           (unsigned long long)e->index,
-                           (unsigned long long)e->term,
-                           raftEntryTypeName(e->type),
-                           e->data);
+        buf = raftLogFormatLine(buf, e);
     }
     if (sdslen(buf) == 0) {
         sdsfree(buf);
@@ -2515,23 +2524,50 @@ static void clusterRaftPersistNewLogEntries(uint64_t from) {
 }
 
 
-static void clusterRaftParseLogLine(sds *argv, int argc) {
-    /* Format: log <index> <term> <type> <data...> */
-    if (argc < 5) return;
-    uint64_t index = strtoull(argv[1], NULL, 10);
-    uint64_t term = strtoull(argv[2], NULL, 10);
-    int type = raftEntryTypeByName(argv[3]);
-    if (type < 0) return;
+static int clusterRaftParseLogLine(sds *argv, int argc) {
+    /* Format: log <crc64hex> <index> <term> <type> <data...> */
+    if (argc < 6) {
+        serverLog(LL_WARNING, "Corrupt raft log line: too few fields (%d).", argc);
+        return C_ERR;
+    }
+
+    /* Verify CRC over everything after the checksum field. */
+    uint64_t expected_crc = strtoull(argv[1], NULL, 16);
+    sds payload = sdsjoinsds(argv + 2, argc - 2, " ", 1);
+    uint64_t actual_crc = crc64(0, (unsigned char *)payload, sdslen(payload));
+    sdsfree(payload);
+    if (expected_crc != 0 && expected_crc != actual_crc) {
+        serverLog(LL_WARNING, "Corrupt raft log line: CRC mismatch.");
+        return C_ERR;
+    }
+
+    uint64_t index = strtoull(argv[2], NULL, 10);
+    /* Verify indices are consecutive (catches missing log lines). */
+    clusterRaftState *rs = RAFT_STATE();
+    uint64_t expected_index = raftLogLastIndex() > 0 ? raftLogLastIndex() + 1 : rs->last_applied + 1;
+    if (index != expected_index) {
+        serverLog(LL_WARNING, "Corrupt raft log: index gap (expected %llu, got %llu).",
+                  (unsigned long long)expected_index, (unsigned long long)index);
+        return C_ERR;
+    }
+    uint64_t term = strtoull(argv[3], NULL, 10);
+    int type = raftEntryTypeByName(argv[4]);
+    if (type < 0) {
+        serverLog(LL_WARNING, "Corrupt raft log line at index %llu: unknown type '%s'.",
+                  (unsigned long long)index, argv[4]);
+        return C_ERR;
+    }
 
     /* Reconstruct data from remaining args (space-separated). */
-    sds data = sdsdup(argv[4]);
-    for (int i = 5; i < argc; i++) {
+    sds data = sdsdup(argv[5]);
+    for (int i = 6; i < argc; i++) {
         data = sdscatlen(data, " ", 1);
         data = sdscatsds(data, argv[i]);
     }
 
     raftLogEntry *e = raftLogCreate(term, index, type, data);
     raftLogAppend(e);
+    return C_OK;
 }
 
 static void clusterRaftPostLoad(void) {
@@ -2540,8 +2576,9 @@ static void clusterRaftPostLoad(void) {
      * the leader will update it via AE. For now, ensure it's consistent. */
     if (rs->commit_index < rs->last_applied)
         rs->commit_index = rs->last_applied;
-    /* Log entries loaded from disk are already persisted; don't re-write. */
-    rs->todo_persist_log = 0;
+    /* Schedule a full rewrite to produce a clean file (removes any
+     * incomplete trailing line from a short write). */
+    rs->todo_save_config = 1;
     /* Restore cluster size from loaded nodes (NODE_JOIN already applied). */
     dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
     dictEntry *de;

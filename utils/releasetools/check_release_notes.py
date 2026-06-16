@@ -15,6 +15,10 @@ context directly:
 
     PR_LABELS         JSON array of label names (toJSON(... .labels.*.name))
     BASE_SHA          merge-base SHA to diff 00-RELEASENOTES against (rule 2)
+    PR_NUMBER         this PR's number; used to suggest appending "(#N)" to a
+                      new bullet that lacks a PR reference (optional)
+    PR_AUTHOR         this PR's author login; used to suggest appending
+                      "by @handle" to a new bullet that lacks one (optional)
     RELEASE_NOTES_FILE  path to the notes file (default: 00-RELEASENOTES)
     GITHUB_STEP_SUMMARY path the job-summary markdown is appended to (optional)
 
@@ -25,9 +29,11 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
-from typing import List, Optional, Tuple
+from collections import Counter
+from typing import Dict, List, Optional, Tuple
 
 try:  # Allow both `python -m` and direct-script execution.
     from release_notes import count_bullets, parse_unreleased
@@ -37,6 +43,14 @@ except ImportError:  # pragma: no cover - import shim
 RELEASE_LABEL = "release-notes"
 NO_RELEASE_LABEL = "no-release-notes"
 DEFAULT_FILE = "00-RELEASENOTES"
+
+# Matches a "(#123)" PR reference anywhere in a bullet, so we only suggest
+# appending the number to bullets that do not already carry one.
+_PR_REF_RE = re.compile(r"\(#\d+\)")
+
+# Matches a "by @handle" author attribution anywhere in a bullet, so we only
+# suggest appending one to bullets that do not already carry it.
+_AUTHOR_RE = re.compile(r"by @[\w-]+")
 
 
 def parse_labels(raw: Optional[str]) -> List[str]:
@@ -67,12 +81,99 @@ def _git_show(ref_path: str, repo_dir: str) -> Optional[str]:
         return None
 
 
+def _all_bullets(notes: "Dict[str, List[str]]") -> List[str]:
+    """Flatten a parsed Unreleased map into a single list of bullet strings."""
+    bullets: List[str] = []
+    for category_bullets in notes.values():
+        bullets.extend(category_bullets)
+    return bullets
+
+
+def _new_bullets(head_text: str, base_text: Optional[str]) -> List[str]:
+    """Return bullets present in *head_text* but not in *base_text*.
+
+    Compared as a multiset so an added duplicate still counts as new, while
+    bullets carried over from the base are not re-suggested. When there is no
+    base text (new file or unknown base) every head bullet is considered new.
+    """
+    head = _all_bullets(parse_unreleased(head_text))
+    if base_text is None:
+        return head
+    base_counts = Counter(_all_bullets(parse_unreleased(base_text)))
+    new: List[str] = []
+    for bullet in head:
+        if base_counts.get(bullet, 0) > 0:
+            base_counts[bullet] -= 1
+        else:
+            new.append(bullet)
+    return new
+
+
+def _suggest_pr_refs(new_bullets: List[str], pr_number: Optional[str]) -> List[str]:
+    """Build "suggested edit" lines for new bullets that lack a ``(#N)`` ref.
+
+    Returns markdown lines (possibly empty) prompting the contributor to append
+    this PR's number to each net-new bullet that does not already reference one.
+    """
+    if not pr_number:
+        return []
+    needing = [b for b in new_bullets if not _PR_REF_RE.search(b)]
+    if not needing:
+        return []
+    lines = [
+        "",
+        "ℹ️ Suggested edit: append this PR's number to your new bullet(s) so the "
+        "note links back here. Update {} to:".format(DEFAULT_FILE),
+        "",
+    ]
+    for bullet in needing:
+        lines.append("    {} (#{})".format(bullet.rstrip(), pr_number))
+    return lines
+
+
+def _suggest_authors(new_bullets: List[str], pr_author: Optional[str]) -> List[str]:
+    """Build "suggested edit" lines for new bullets that lack a ``by @handle``.
+
+    Returns markdown lines (possibly empty) prompting the contributor to append
+    this PR author's handle to each net-new bullet that does not already carry
+    an attribution, keeping the canonical ``* ... by @handle`` bullet format.
+    """
+    if not pr_author:
+        return []
+    needing = [b for b in new_bullets if not _AUTHOR_RE.search(b)]
+    if not needing:
+        return []
+    lines = [
+        "",
+        "ℹ️ Suggested edit: append the author handle to your new bullet(s) so the "
+        "note credits the contributor. Update {} to:".format(DEFAULT_FILE),
+        "",
+    ]
+    attribution = "by @{}".format(pr_author)
+    for bullet in needing:
+        text = bullet.rstrip()
+        # Keep the canonical "* description by @handle (#N)" order: when a PR
+        # reference is already present, insert the attribution before it rather
+        # than after.
+        ref_match = _PR_REF_RE.search(text)
+        if ref_match:
+            suggestion = "{} {} {}".format(
+                text[: ref_match.start()].rstrip(), attribution, text[ref_match.start() :]
+            )
+        else:
+            suggestion = "{} {}".format(text, attribution)
+        lines.append("    {}".format(suggestion))
+    return lines
+
+
 def evaluate(
     labels: List[str],
     *,
     base_sha: Optional[str],
     notes_file: str = DEFAULT_FILE,
     repo_dir: str = ".",
+    pr_number: Optional[str] = None,
+    pr_author: Optional[str] = None,
 ) -> Tuple[bool, List[str]]:
     """Apply both rules. Return ``(ok, messages)``.
 
@@ -116,6 +217,7 @@ def evaluate(
 
     head_count = count_bullets(parse_unreleased(head_text))
 
+    base_text: Optional[str] = None
     base_count = 0
     if base_sha:
         base_text = _git_show("{}:{}".format(base_sha, notes_file), repo_dir)
@@ -126,7 +228,8 @@ def evaluate(
         messages.append(
             "❌ PR is labelled `{}` but adds no new entry to the `## Unreleased` block "
             "of {} (found {} bullet(s), base had {}). Add a bullet under the matching "
-            "`### Category`, e.g. `* My change by @handle (#1234)`.".format(
+            "`### Category`, e.g. `* My change by @handle`. Once your PR is open you "
+            "can edit the bullet to add its number, e.g. `(#1234)`.".format(
                 RELEASE_LABEL, notes_file, head_count, base_count
             )
         )
@@ -137,6 +240,9 @@ def evaluate(
             RELEASE_LABEL, head_count - base_count
         )
     )
+    new_bullets = _new_bullets(head_text, base_text)
+    messages.extend(_suggest_pr_refs(new_bullets, pr_number))
+    messages.extend(_suggest_authors(new_bullets, pr_author))
     return True, messages
 
 
@@ -157,9 +263,17 @@ def main(argv=None) -> int:
     labels = parse_labels(os.environ.get("PR_LABELS"))
     base_sha = os.environ.get("BASE_SHA") or None
     notes_file = os.environ.get("RELEASE_NOTES_FILE", DEFAULT_FILE)
+    pr_number = os.environ.get("PR_NUMBER") or None
+    pr_author = os.environ.get("PR_AUTHOR") or None
 
     try:
-        ok, messages = evaluate(labels, base_sha=base_sha, notes_file=notes_file)
+        ok, messages = evaluate(
+            labels,
+            base_sha=base_sha,
+            notes_file=notes_file,
+            pr_number=pr_number,
+            pr_author=pr_author,
+        )
     except Exception as exc:  # noqa: BLE001 - surface any unexpected failure clearly
         print("error: {}".format(exc), file=sys.stderr)
         return 2

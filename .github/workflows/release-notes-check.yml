@@ -25,8 +25,8 @@ permissions:
 jobs:
   check:
     name: Check release-notes label and entry
-    # Only gate PRs targeting unstable; release branches keep a frozen file.
-    if: github.event.pull_request.base.ref == 'unstable'
+    # EDIT FOR PR: (Add back) Only gate PRs targeting unstable; release branches keep a frozen file.
+    # if: github.event.pull_request.base.ref == 'unstable'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout PR head
@@ -40,4 +40,6 @@ jobs:
         env:
           PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
         run: python3 utils/releasetools/check_release_notes.py

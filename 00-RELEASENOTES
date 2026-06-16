@@ -22,12 +22,15 @@ Happy hacking!
 Contributors: if your change is user-facing, add the `release-notes` label to your
 PR and append a bullet under the matching category below, in the form:
 
-    * <human-readable description> by @<your-github-handle> (#<PR number>)
+    * <human-readable description> by @<your-github-handle>
+
+The bullet does not need a PR number to pass the check. Once your PR is open, feel
+free to edit the bullet to add it, e.g. `(#1234)`.
 
 If your change is not user-facing, add the `no-release-notes` label instead. A CI
 check requires exactly one of these two labels, and a note here when `release-notes`
-is set. The `.github/workflows/prepare-release.yml` workflow promotes this block into
-a dated release section when a release is cut, so keep entries user-readable.
+is set. This block is promoted into a dated release section when a release is cut,
+so keep entries user-readable.
 -->
 
 ### Behavior Changes

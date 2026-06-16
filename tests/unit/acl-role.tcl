@@ -276,4 +276,11 @@ start_server [list config_lines $conf_lines tags [list "external:skip"]] {
         set result [r ACL DRYRUN inlineuser SET anykey value]
         assert_match {*no permissions*} $result
     }
+
+    test {CONFIG REWRITE preserves role directives} {
+        r CONFIG REWRITE
+        set cfg [exec cat [srv 0 config_file]]
+        assert_match {*role inlinerole*} $cfg
+        assert_match {*user inlineuser*} $cfg
+    }
 }

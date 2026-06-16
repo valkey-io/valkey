@@ -19,6 +19,10 @@
             [
                 "9.1.0",
                 "Added database permission rules."
+            ],
+            [
+                "10.0.0",
+                "Added role assignment and removal."
             ]
         ],
         "command_flags": [

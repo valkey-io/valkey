@@ -1240,7 +1240,7 @@ struct rewriteConfigState *rewriteConfigReadOldFile(char *path) {
              /* The following is a list of config features that are only supported in
               * config file parsing and are not recognized by lookupConfig */
              strcasecmp(argv[0], "include") && strcasecmp(argv[0], "rename-command") && strcasecmp(argv[0], "user") &&
-             strcasecmp(argv[0], "loadmodule") && strcasecmp(argv[0], "sentinel"))) {
+             strcasecmp(argv[0], "role") && strcasecmp(argv[0], "loadmodule") && strcasecmp(argv[0], "sentinel"))) {
             /* The line is either unparsable for some reason, for
              * instance it may have unbalanced quotes, may contain a
              * config that doesn't exist anymore, for instance a module that got

@@ -480,6 +480,34 @@ user *ACLCreateUnlinkedUser(void) {
     }
 }
 
+/* Remove user from all roles' member lists and release the roles list. */
+static void ACLUserClearRoles(user *u) {
+    if (!u->roles) return;
+    listIter li;
+    listNode *ln;
+    listRewind(u->roles, &li);
+    while ((ln = listNext(&li))) {
+        role *r = listNodeValue(ln);
+        listNode *member_ln = listSearchKey(r->members, u);
+        if (member_ln) listDelNode(r->members, member_ln);
+    }
+    listRelease(u->roles);
+    u->roles = NULL;
+}
+
+/* Copy role assignments from src to dst, registering dst as a member of each role. */
+static void ACLCopyRoles(user *dst, user *src) {
+    if (!src->roles) return;
+    listIter li;
+    listNode *ln;
+    listRewind(src->roles, &li);
+    while ((ln = listNext(&li))) {
+        role *r = listNodeValue(ln);
+        listAddNodeTail(dst->roles, r);
+        listAddNodeTail(r->members, dst);
+    }
+}
+
 /* Release the memory used by the user structure. Note that this function
  * will not remove the user from the Users global radix tree. */
 void ACLFreeUser(user *u) {
@@ -491,18 +519,7 @@ void ACLFreeUser(user *u) {
     listRelease(u->passwords);
     listRelease(u->selectors);
 
-    /* Remove this user from all roles' member lists */
-    if (u->roles) {
-        listIter li;
-        listNode *ln;
-        listRewind(u->roles, &li);
-        while ((ln = listNext(&li))) {
-            role *r = listNodeValue(ln);
-            listNode *member_ln = listSearchKey(r->members, u);
-            if (member_ln) listDelNode(r->members, member_ln);
-        }
-        listRelease(u->roles);
-    }
+    ACLUserClearRoles(u);
     zfree(u);
 }
 
@@ -554,28 +571,9 @@ static void ACLCopyUser(user *dst, user *src) {
         incrRefCount(dst->acl_string);
     }
     /* Clean up dst's existing role memberships, then copy from src. */
-    if (dst->roles) {
-        listIter li;
-        listNode *ln;
-        listRewind(dst->roles, &li);
-        while ((ln = listNext(&li))) {
-            role *r = listNodeValue(ln);
-            listNode *member_ln = listSearchKey(r->members, dst);
-            if (member_ln) listDelNode(r->members, member_ln);
-        }
-        listRelease(dst->roles);
-    }
+    ACLUserClearRoles(dst);
     dst->roles = listCreate();
-    if (src->roles) {
-        listIter li;
-        listNode *ln;
-        listRewind(src->roles, &li);
-        while ((ln = listNext(&li))) {
-            role *r = listNodeValue(ln);
-            listAddNodeTail(dst->roles, r);
-            listAddNodeTail(r->members, dst);
-        }
-    }
+    ACLCopyRoles(dst, src);
 }
 
 /* =============================================================================
@@ -728,10 +726,7 @@ static sds ACLStringSetRole(role *r, sds rolename, sds *argv, int argc) {
     /* Apply changes: if role doesn't exist, create it; otherwise update it */
     if (!r) {
         r = ACLCreateRole(rolename, sdslen(rolename));
-        if (!r) {
-            error = sdsnew("Role already exists");
-            goto cleanup;
-        }
+        serverAssert(r != NULL);
     }
 
     /* Copy selectors from temp role to the actual role.
@@ -1756,18 +1751,9 @@ int ACLSetUser(user *u, const char *op, ssize_t oplen) {
         serverAssert(ACLSetUser(u, "off", -1) == C_OK);
         serverAssert(ACLSetUser(u, "clearselectors", -1) == C_OK);
         serverAssert(ACLSetUser(u, "-@all", -1) == C_OK);
-        /* Clear role memberships on reset */
-        if (u->roles) {
-            listIter li;
-            listNode *ln;
-            listRewind(u->roles, &li);
-            while ((ln = listNext(&li))) {
-                role *r = listNodeValue(ln);
-                listNode *member_ln = listSearchKey(r->members, u);
-                if (member_ln) listDelNode(r->members, member_ln);
-            }
-            listEmpty(u->roles);
-        }
+
+        ACLUserClearRoles(u);
+        u->roles = listCreate();
     } else if (oplen > 7 && !strncasecmp(op, "+@role:", 7)) {
         /* Add user to a role */
         const char *rolename = op + 7;
@@ -1848,7 +1834,7 @@ const char *ACLSetStringError(void) {
         errmsg = "The password hash must be exactly 64 characters and contain "
                  "only lowercase hexadecimal characters";
     else if (errno == EALREADY)
-        errmsg = "Duplicate user found. A user can only be defined once in "
+        errmsg = "Duplicate definition found. A user or role can only be defined once in "
                  "config files";
     else if (errno == ECHILD)
         errmsg = "Allowing first-arg of a subcommand is not supported";
@@ -2437,7 +2423,7 @@ int ACLCheckAllUserCommandPerm(user *u, struct serverCommand *cmd, robj **argv, 
     }
 
     /* Check role selectors */
-    if (u->roles) {
+    if (u->roles && listLength(u->roles) > 0) {
         listIter rli;
         listNode *rln;
         listRewind(u->roles, &rli);
@@ -2896,6 +2882,25 @@ int ACLAppendRoleForLoading(sds *argv, int argc, int *argc_err) {
         return C_ERR;
     }
 
+    /* Try to apply the role rules in a fake role to validate them. */
+    role fakeRole = {0};
+    fakeRole.selectors = listCreate();
+    listSetFreeMethod(fakeRole.selectors, ACLListFreeSelector);
+    aclSelector *s = ACLCreateSelector(SELECTOR_FLAG_ROOT);
+    listAddNodeHead(fakeRole.selectors, s);
+
+    for (int j = 0; j < merged_argc; j++) {
+        if (ACLSetRole(&fakeRole, acl_args[j], sdslen(acl_args[j])) == C_ERR) {
+            listRelease(fakeRole.selectors);
+            if (argc_err) *argc_err = j + 2;
+            for (int i = 0; i < merged_argc; i++) sdsfree(acl_args[i]);
+            zfree(acl_args);
+            return C_ERR;
+        }
+    }
+    listRelease(fakeRole.selectors);
+
+    /* Rules look valid, store for deferred loading. */
     sds *copy = zmalloc(sizeof(sds) * (merged_argc + 2));
     copy[0] = sdsdup(argv[1]);
     for (int j = 0; j < merged_argc; j++) copy[j + 1] = sdsdup(acl_args[j]);
@@ -3356,11 +3361,6 @@ void ACLLoadUsersAtStartup(void) {
 }
 
 /* Also provide a function to load roles at startup from config */
-void ACLLoadRolesAtStartup(void) {
-    /* Roles are already loaded in ACLLoadUsersAtStartup before users.
-     * This function is a no-op placeholder for external callers. */
-}
-
 /* =============================================================================
  * ACL log
  * ==========================================================================*/

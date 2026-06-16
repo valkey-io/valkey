@@ -3408,7 +3408,6 @@ sds genValkeyInfoStringACLStats(sds info);
 void ACLRecomputeCommandBitsFromCommandRulesAllUsers(void);
 role *ACLGetRoleByName(const char *name, size_t namelen);
 int ACLAppendRoleForLoading(sds *argv, int argc, int *argc_err);
-void ACLLoadRolesAtStartup(void);
 
 /* Sorted sets data type */
 

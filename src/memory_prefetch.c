@@ -19,20 +19,6 @@ typedef enum {
     PREFETCH_DONE   /* Indicates that prefetching for this key is complete */
 } PrefetchState;
 
-typedef enum {
-    HASHTABLE_PREFETCH_ENTRY, /* Initial state, prefetch entries associated with the given key's hash */
-    HASHTABLE_PREFETCH_INIT,  /* Initial state, prefetch entries associated with the given key's hash */
-    HASHTABLE_PREFETCH_VALUE, /* prefetch the value object of the entry found in the previous step */
-} HashtablePrefetchState;
-
-typedef struct {
-    HashtablePrefetchState state; /* Current state of the prefetch operation */
-    union {
-        hashtableIncrementalFindState hashtab_state;
-        /* Can add state for SET (TODO) */
-    } data;
-} ValuePrefetchInfo;
-
 typedef struct KeyPrefetchInfo {
     PrefetchState state; /* Current state of the prefetch operation */
     hashtableIncrementalFindState hashtab_state;
@@ -151,35 +137,6 @@ static void prefetchEntry(KeyPrefetchInfo *info) {
     }
 }
 
-static bool prefetchHashObj(KeyPrefetchInfo *info, robj *val) {
-    if (info->client) {
-        if (info->client->parsed_cmd->proc == hsetCommand || info->client->parsed_cmd->proc ==
-                                                                 hgetCommand) {
-            if (info->value_prefetch_info.state == HASHTABLE_PREFETCH_ENTRY) {
-                valkey_prefetch(objectGetVal(val));
-                info->value_prefetch_info.state = HASHTABLE_PREFETCH_INIT;
-                return true;
-            }
-            if (info->value_prefetch_info.state == HASHTABLE_PREFETCH_INIT) {
-                hashtableIncrementalFindInit(&info->value_prefetch_info.data.hashtab_state,
-                                             objectGetVal(val), objectGetVal(info->client->argv[2]));
-                info->value_prefetch_info.state = HASHTABLE_PREFETCH_VALUE;
-                return true;
-            }
-            if (info->value_prefetch_info.state == HASHTABLE_PREFETCH_VALUE) {
-                if (!hashtableIncrementalFindStep(&info->value_prefetch_info.data.hashtab_state)) {
-                    info->state = PREFETCH_DONE;
-                } else {
-                    return true;
-                }
-            }
-        }
-    } else {
-        info->state = PREFETCH_DONE;
-    }
-    return false;
-}
-
 /* Prefetch the entry's value. If the value is found.*/
 static void prefetchValue(KeyPrefetchInfo *info) {
     void *entry;
@@ -187,8 +144,8 @@ static void prefetchValue(KeyPrefetchInfo *info) {
         robj *val = entry;
         if (val->encoding == OBJ_ENCODING_RAW && val->type == OBJ_STRING) {
             valkey_prefetch(objectGetVal(val));
-        } else if (val->encoding == OBJ_ENCODING_HASHTABLE && val->type == OBJ_HASH) {
-            if (prefetchHashObj(info, val)) return;
+        } else if (info->client && info->client->parsed_cmd->prefetch_proc) {
+            if (info->client->parsed_cmd->prefetch_proc(info->client, &info->value_prefetch_info, val)) return;
         }
     }
     markKeyAsdone(info);

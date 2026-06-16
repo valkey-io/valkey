@@ -8,7 +8,12 @@ Runs from .github/workflows/release-notes-check.yml for PRs targeting the
    ``no-release-notes``. Zero labels or both is a failure.
 2. If labelled ``release-notes``, the PR must add at least one new bullet to
    the ``## Unreleased`` block of 00-RELEASENOTES (compared against its merge
-   base), so a user-facing change cannot ship without a note.
+   base), so a user-facing change cannot ship without a note. Conversely, if
+   labelled ``no-release-notes`` it must add *no* new bullet, since the label
+   claims there is nothing to release-note yet prepare-release.yml would still
+   promote any bullet it finds. (The net-new check needs a base to diff
+   against, so it is only enforced when BASE_SHA is supplied, as it always is
+   in CI.)
 
 Inputs come from the environment so the workflow can pass GitHub Actions
 context directly:
@@ -201,13 +206,17 @@ def evaluate(
         )
         return False, messages
 
-    if has_no_release:
+    # A `no-release-notes` PR with no base to diff against can't be attributed
+    # any bullets (the Unreleased block already carries earlier PRs' entries),
+    # so there is nothing to enforce -- pass without reading the file.
+    if has_no_release and not base_sha:
         messages.append(
             "✅ PR is labelled `{}`; no release note required.".format(NO_RELEASE_LABEL)
         )
         return True, messages
 
-    # Rule 2: release-notes label requires a new Unreleased bullet.
+    # Both remaining rules need to know what this PR added to the Unreleased
+    # block, so read the file and diff bullets against the base once, up front.
     try:
         with open(os.path.join(repo_dir, notes_file), "r", encoding="utf-8") as fh:
             head_text = fh.read()
@@ -224,6 +233,24 @@ def evaluate(
         if base_text is not None:
             base_count = count_bullets(parse_unreleased(base_text))
 
+    if has_no_release:
+        # The label says there is nothing to note, but prepare-release.yml would
+        # still promote any new entry, so a net-new bullet contradicts the label.
+        if head_count > base_count:
+            messages.append(
+                "❌ PR is labelled `{}` but adds {} new entry/entries to the "
+                "`## Unreleased` block of {}. Either drop the new bullet(s) or "
+                "switch to the `{}` label.".format(
+                    NO_RELEASE_LABEL, head_count - base_count, notes_file, RELEASE_LABEL
+                )
+            )
+            return False, messages
+        messages.append(
+            "✅ PR is labelled `{}`; no release note required.".format(NO_RELEASE_LABEL)
+        )
+        return True, messages
+
+    # Rule 2: release-notes label requires a new Unreleased bullet.
     if head_count <= base_count:
         messages.append(
             "❌ PR is labelled `{}` but adds no new entry to the `## Unreleased` block "

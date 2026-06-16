@@ -79,6 +79,28 @@ def test_no_release_notes_label_passes(tmp_path):
     assert any("no release note required" in m for m in messages)
 
 
+def test_no_release_notes_with_net_new_bullet_fails(tmp_path, monkeypatch):
+    # Label claims no note, but the PR adds a bullet the base did not have.
+    _write(tmp_path, NOTES_WITH_BULLET)
+    monkeypatch.setattr(crn, "_git_show", lambda ref, repo_dir: NOTES_EMPTY)
+    ok, messages = crn.evaluate(
+        ["no-release-notes"], base_sha="abc123", repo_dir=str(tmp_path)
+    )
+    assert not ok
+    assert any("adds 1 new entry" in m for m in messages)
+
+
+def test_no_release_notes_with_carried_over_bullet_passes(tmp_path, monkeypatch):
+    # The bullet was already in the base, so this PR added nothing -> pass.
+    _write(tmp_path, NOTES_WITH_BULLET)
+    monkeypatch.setattr(crn, "_git_show", lambda ref, repo_dir: NOTES_WITH_BULLET)
+    ok, messages = crn.evaluate(
+        ["no-release-notes"], base_sha="abc123", repo_dir=str(tmp_path)
+    )
+    assert ok
+    assert any("no release note required" in m for m in messages)
+
+
 def test_release_notes_label_with_bullet_passes(tmp_path):
     _write(tmp_path, NOTES_WITH_BULLET)
     ok, messages = crn.evaluate(["release-notes"], base_sha=None, repo_dir=str(tmp_path))

@@ -542,7 +542,7 @@ proc get_cluster_info_field {client field} {
     return ""
 }
 
-start_multiple_servers 2 {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 2000}} {
+start_multiple_servers 2 {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 2000 loglevel debug}} {
     # Shared setup: form cluster and assign slots.
     set r0 [srv 0 client]
     set r1 [srv -1 client]
@@ -606,9 +606,9 @@ start_multiple_servers 2 {overrides {cluster-enabled yes cluster-protocol raft c
         lassign $case entry_type propose_msg state_check
 
         test "Raft shard epoch: stale $entry_type is rejected (pre-validation, no log append)" {
-            # Record commit index and rejection counter before injection.
+            # Record commit index before injection.
             set commit_before [get_cluster_info_field $r0 cluster_raft_commit_index]
-            set rejected_before [get_cluster_info_field $r0 cluster_stats_proposals_rejected_prevalidation]
+            set loglines [count_log_lines 0]
 
             # Connect and inject stale PROPOSE.
             set fd [raft_connect_fake_node 127.0.0.1 $cport $fake_id $fake_addr]
@@ -618,9 +618,8 @@ start_multiple_servers 2 {overrides {cluster-enabled yes cluster-protocol raft c
             set reply [raft_recv $fd 2000]
             assert_match "REJECT *" $reply
 
-            # Verify rejection counter increased.
-            set rejected_after [get_cluster_info_field $r0 cluster_stats_proposals_rejected_prevalidation]
-            assert {$rejected_after > $rejected_before}
+            # Verify rejection logged.
+            wait_for_log_messages 0 {"*Leader pre-validation: rejecting*"} $loglines 1000 10
 
             # Verify log index unchanged (rejected at pre-validation).
             set commit_after [get_cluster_info_field $r0 cluster_raft_commit_index]
@@ -650,7 +649,7 @@ start_multiple_servers 2 {overrides {cluster-enabled yes cluster-protocol raft c
 
         test "Raft shard epoch: $label is rejected (pre-validation, no log append)" {
             set commit_before [get_cluster_info_field $r0 cluster_raft_commit_index]
-            set rejected_before [get_cluster_info_field $r0 cluster_stats_proposals_rejected_prevalidation]
+            set loglines [count_log_lines 0]
 
             set fd [raft_connect_fake_node 127.0.0.1 $cport $fake_id $fake_addr]
             raft_send $fd $propose_msg
@@ -659,9 +658,8 @@ start_multiple_servers 2 {overrides {cluster-enabled yes cluster-protocol raft c
             set reply [raft_recv $fd 2000]
             assert_match "REJECT *" $reply
 
-            # Verify rejection counter increased.
-            set rejected_after [get_cluster_info_field $r0 cluster_stats_proposals_rejected_prevalidation]
-            assert {$rejected_after > $rejected_before}
+            # Verify rejection logged.
+            wait_for_log_messages 0 {"*Leader pre-validation: rejecting*"} $loglines 1000 10
 
             # Verify log index unchanged (rejected at pre-validation).
             set commit_after [get_cluster_info_field $r0 cluster_raft_commit_index]
@@ -688,7 +686,7 @@ start_multiple_servers 2 {overrides {cluster-enabled yes cluster-protocol raft c
 
         test "Raft shard epoch: $entry_type with wrong shard-id is rejected at pre-validation" {
             set commit_before [get_cluster_info_field $r0 cluster_raft_commit_index]
-            set rejected_before [get_cluster_info_field $r0 cluster_stats_proposals_rejected_prevalidation]
+            set loglines [count_log_lines 0]
 
             set fd [raft_connect_fake_node 127.0.0.1 $cport $fake_id $fake_addr]
             raft_send $fd $propose_msg
@@ -697,9 +695,8 @@ start_multiple_servers 2 {overrides {cluster-enabled yes cluster-protocol raft c
             set reply [raft_recv $fd 2000]
             assert_match "REJECT *" $reply
 
-            # Verify rejection counter increased.
-            set rejected_after [get_cluster_info_field $r0 cluster_stats_proposals_rejected_prevalidation]
-            assert {$rejected_after > $rejected_before}
+            # Verify rejection logged.
+            wait_for_log_messages 0 {"*Leader pre-validation: rejecting*"} $loglines 1000 10
 
             # Verify log index unchanged (rejected at pre-validation, epoch not bumped).
             set commit_after [get_cluster_info_field $r0 cluster_raft_commit_index]
@@ -716,8 +713,7 @@ start_multiple_servers 2 {overrides {cluster-enabled yes cluster-protocol raft c
     # --------------------------------------------------------------------------
 
     test "Raft shard epoch: duplicate FAILOVER from follower - second client gets rejection" {
-        set prevalidation_before [get_cluster_info_field $r0 cluster_stats_proposals_rejected_prevalidation]
-        set apply_before [get_cluster_info_field $r0 cluster_stats_proposals_rejected_apply]
+        set loglines [count_log_lines 0]
 
         # Two deferred clients on r1 (the follower/replica).
         set c1 [valkey_deferring_client -1]
@@ -727,13 +723,8 @@ start_multiple_servers 2 {overrides {cluster-enabled yes cluster-protocol raft c
         $c1 CLUSTER FAILOVER FORCE
         $c2 CLUSTER FAILOVER FORCE
 
-        # Wait for one of the rejection counters to increase.
-        wait_for_condition 50 100 {
-            [get_cluster_info_field $r0 cluster_stats_proposals_rejected_prevalidation] > $prevalidation_before ||
-            [get_cluster_info_field $r0 cluster_stats_proposals_rejected_apply] > $apply_before
-        } else {
-            fail "Second FAILOVER was not rejected"
-        }
+        # Wait for a rejection to be logged (either at pre-validation or apply).
+        wait_for_log_messages 0 {"*rejecting*proposal*" "*Proposal rejected at apply*"} $loglines 1000 10
 
         # Read both replies. One should succeed (OK), the other should
         # get a rejection error. Neither should hang.
@@ -751,7 +742,7 @@ start_multiple_servers 2 {overrides {cluster-enabled yes cluster-protocol raft c
         foreach reply [list $reply1 $reply2] {
             if {$reply eq "OK"} {
                 incr ok_count
-            } elseif {[string match "*proposal rejected by raft leader*" $reply]} {
+            } elseif {[string match "*proposal rejected*" $reply]} {
                 incr err_count
             }
         }

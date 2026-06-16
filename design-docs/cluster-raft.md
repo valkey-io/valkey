@@ -139,7 +139,7 @@ NODE_JOIN <node-id> <address>
     when the entry is committed.
 
 NODE_FORGET <node-id> <shard-epoch>
-    Remove a node from the cluster (CLUSTER FORGET). Not yet implemented.
+    Remove a node from the cluster (CLUSTER FORGET).
 
 SLOT_CHANGE <source-node-id-or-dash> <source-epoch> <target-node-id-or-dash> <target-epoch> <range> [<range> ...]
     Assign or remove slot ownership. A dash means "no owner" (delete

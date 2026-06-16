@@ -43,6 +43,7 @@
 
 /* Generic error message returned to clients when a proposal is rejected. */
 #define GENERIC_PROPOSAL_REJECTION_MSG "proposal rejected by raft leader"
+#define STALE_SHARD_EPOCH_REJECTION_MSG "proposal rejected due to stale shard epoch"
 
 /* From module.c */
 void moduleCallClusterReceivers(const char *sender_id, uint64_t module_id, uint8_t type, const unsigned char *payload, uint32_t len);
@@ -188,8 +189,6 @@ typedef struct {
     uint64_t stats_pubsub_bytes_received;
     uint64_t stats_module_bytes_sent;
     uint64_t stats_module_bytes_received;
-    uint64_t stats_proposals_rejected_prevalidation;
-    uint64_t stats_proposals_rejected_apply;
 
     /* Shard epoch tracking (per-shard monotonic counter for stale proposal detection). */
     dict *shard_epochs;
@@ -441,7 +440,7 @@ static void clusterRaftSelfJoin(void) {
     if (sdslen(slots) > 0) {
         entry = sdsnew("SLOT_CHANGE - 0 ");
         entry = sdscatlen(entry, myself->name, CLUSTER_NAMELEN);
-        entry = sdscatfmt(entry, " %U", (unsigned long long)0);
+        entry = sdscat(entry, " 0");
         entry = sdscatsds(entry, slots);
         clusterRaftPropose(entry, NULL, NULL);
         sdsfree(entry);
@@ -788,7 +787,7 @@ static void clusterRaftPropose(sds entry, void *ctx, void (*callback)(void *ctx,
     if (rs->role == RAFT_ROLE_LEADER) {
         /* Pre-validate epoch on the leader to reject obviously stale proposals. */
         if (!clusterRaftPreValidateEpoch(type, data)) {
-            if (callback) callback(ctx, GENERIC_PROPOSAL_REJECTION_MSG);
+            if (callback) callback(ctx, STALE_SHARD_EPOCH_REJECTION_MSG);
             sdsfree(data);
             return;
         }
@@ -879,34 +878,33 @@ typedef struct {
     uint64_t source_epoch;
     uint64_t target_epoch;
     int range_end; /* Index in argv where ranges begin (first range element). */
-    int valid;     /* 1 if parsing succeeded, 0 otherwise. */
 } slotChangeEpochInfo;
 
 /* Parse fields from a SLOT_CHANGE entry's split argv.
  * Format: "<source-id-or-dash> <source-epoch> <target-id-or-dash> <target-epoch> <ranges...>"
- * Caller must have verified argc >= 5. */
-static slotChangeEpochInfo parseSlotChangeEpochs(sds *argv, int argc) {
-    slotChangeEpochInfo info = {0};
+ * Caller must have verified argc >= 5.
+ * Returns true if parsing succeeded, false otherwise. */
+static bool parseSlotChangeEpochs(sds *argv, int argc, slotChangeEpochInfo *info) {
+    memset(info, 0, sizeof(*info));
 
     /* argv[0] = source-id-or-dash */
-    info.source_owner = (sdslen(argv[0]) == CLUSTER_NAMELEN)
-                            ? clusterLookupNode(argv[0], CLUSTER_NAMELEN)
-                            : NULL;
+    info->source_owner = (sdslen(argv[0]) == CLUSTER_NAMELEN)
+                             ? clusterLookupNode(argv[0], CLUSTER_NAMELEN)
+                             : NULL;
     /* argv[1] = source-epoch */
-    info.source_epoch = strtoull(argv[1], NULL, 10);
+    info->source_epoch = strtoull(argv[1], NULL, 10);
     /* argv[2] = target-id-or-dash */
-    info.target = (sdslen(argv[2]) == CLUSTER_NAMELEN)
-                      ? clusterLookupNode(argv[2], CLUSTER_NAMELEN)
-                      : NULL;
+    info->target = (sdslen(argv[2]) == CLUSTER_NAMELEN)
+                       ? clusterLookupNode(argv[2], CLUSTER_NAMELEN)
+                       : NULL;
     /* argv[3] = target-epoch */
-    info.target_epoch = strtoull(argv[3], NULL, 10);
+    info->target_epoch = strtoull(argv[3], NULL, 10);
     /* argv[4..argc-1] = ranges */
-    info.range_end = 4;
+    info->range_end = 4;
 
-    info.source_shard_id = info.source_owner ? info.source_owner->shard_id : NULL;
-    info.target_shard_id = info.target ? info.target->shard_id : NULL;
-    info.valid = (argc > 4);
-    return info;
+    info->source_shard_id = info->source_owner ? info->source_owner->shard_id : NULL;
+    info->target_shard_id = info->target ? info->target->shard_id : NULL;
+    return (argc > 4);
 }
 
 /* Pre-validate shard epoch on the leader before appending to the log.
@@ -964,8 +962,8 @@ static int clusterRaftPreValidateEpoch(int type, sds data) {
         if (argc < 5) {
             ok = 0;
         } else {
-            slotChangeEpochInfo info = parseSlotChangeEpochs(argv, argc);
-            if (info.valid) {
+            slotChangeEpochInfo info;
+            if (parseSlotChangeEpochs(argv, argc, &info)) {
                 if (info.source_shard_id) {
                     ok = isShardEpochCurrent(info.source_shard_id, info.source_epoch);
                 }
@@ -995,8 +993,7 @@ static int clusterRaftPreValidateEpoch(int type, sds data) {
 
     sdsfreesplitres(argv, argc);
     if (!ok) {
-        RAFT_STATE()->stats_proposals_rejected_prevalidation++;
-        serverLog(LL_NOTICE, "Leader pre-validation: rejecting %s proposal (missing or stale epoch).",
+        serverLog(LL_DEBUG, "Leader pre-validation: rejecting %s proposal (missing or stale epoch).",
                   raftEntryTypeName(type));
     }
     return ok;
@@ -1321,7 +1318,7 @@ static void raftLogApply(raftLogEntry *e) {
                     if (count > 0) {
                         sds entry = sdsnew("SLOT_CHANGE - 0 ");
                         entry = sdscatlen(entry, myself->name, CLUSTER_NAMELEN);
-                        entry = sdscatfmt(entry, " %U", (unsigned long long)0);
+                        entry = sdscat(entry, " 0");
                         entry = sdscatsds(entry, slot_range);
                         clusterRaftPropose(entry, NULL, NULL);
                         sdsfree(entry);
@@ -1380,10 +1377,14 @@ static void raftLogApply(raftLogEntry *e) {
         }
         clusterNode *node = clusterLookupNode(argv[0], sdslen(argv[0]));
         if (node && node != myself) {
-            /* Epoch validation (no bump yet). */
             uint64_t epoch = strtoull(argv[1], NULL, 10);
             if (!isShardEpochCurrent(node->shard_id, epoch)) {
-                entry_error = GENERIC_PROPOSAL_REJECTION_MSG;
+                entry_error = STALE_SHARD_EPOCH_REJECTION_MSG;
+                sdsfreesplitres(argv, argc);
+                break;
+            }
+            if (nodeIsPrimary(node) && (node->num_replicas > 0 || node->numslots > 0)) {
+                entry_error = "Can't forget a primary with replicas or assigned slots.";
                 sdsfreesplitres(argv, argc);
                 break;
             }
@@ -1496,7 +1497,8 @@ static void raftLogApply(raftLogEntry *e) {
     }
 
     if (entry_error) {
-        rs->stats_proposals_rejected_apply++;
+        serverLog(LL_DEBUG, "Proposal rejected at apply: %s (type %s, index %llu).",
+                  entry_error, raftEntryTypeName(e->type), (unsigned long long)e->index);
     }
 
     /* Check pending proposals for a match and remove it. */
@@ -2140,6 +2142,9 @@ static void clusterRaftRetryProposals(void) {
             }
             serverLog(LL_NOTICE, "Forwarded %lu deferred proposals to leader.",
                       listLength(rs->pending_proposals));
+        } else {
+            /* Leader link not available yet — retry on next cycle. */
+            rs->todo_retry_proposals = 1;
         }
     }
 }
@@ -2954,8 +2959,6 @@ static void clusterRaftResetStats(void) {
     rs->stats_pubsub_bytes_received = 0;
     rs->stats_module_bytes_sent = 0;
     rs->stats_module_bytes_received = 0;
-    rs->stats_proposals_rejected_prevalidation = 0;
-    rs->stats_proposals_rejected_apply = 0;
 }
 
 static sds clusterRaftAppendInfoFields(sds info) {
@@ -3010,8 +3013,6 @@ static sds clusterRaftAppendInfoFields(sds info) {
                         "cluster_stats_pubsub_bytes_received:%llu\r\n"
                         "cluster_stats_module_bytes_sent:%llu\r\n"
                         "cluster_stats_module_bytes_received:%llu\r\n"
-                        "cluster_stats_proposals_rejected_prevalidation:%llu\r\n"
-                        "cluster_stats_proposals_rejected_apply:%llu\r\n"
                         "total_cluster_links_buffer_limit_exceeded:%llu\r\n",
                         role_str, (unsigned long long)rs->current_term,
                         (unsigned long long)rs->commit_index, (unsigned long long)rs->last_applied,
@@ -3024,8 +3025,6 @@ static sds clusterRaftAppendInfoFields(sds info) {
                         (unsigned long long)rs->stats_pubsub_bytes_received,
                         (unsigned long long)rs->stats_module_bytes_sent,
                         (unsigned long long)rs->stats_module_bytes_received,
-                        (unsigned long long)rs->stats_proposals_rejected_prevalidation,
-                        (unsigned long long)rs->stats_proposals_rejected_apply,
                         (unsigned long long)server.cluster->stat_cluster_links_buffer_limit_exceeded);
     return info;
 }
@@ -3127,7 +3126,8 @@ static void clusterRaftSlotChange(slotRange *ranges, int numranges, clusterNode 
 }
 
 /* Apply a SLOT_CHANGE entry. Format: "<source-id-or-dash> <source-epoch> <target-id-or-dash> <target-epoch> <ranges...>"
- * Ranges use the same format as nodes.conf: "0-5460" or "5461". */
+ * Ranges use the same format as nodes.conf: "0-5460" or "5461".
+ * Returns NULL on success, or a error string describing the failure. */
 static const char *clusterRaftApplySlotChange(sds data) {
     const char *error = NULL;
     int argc;
@@ -3135,12 +3135,13 @@ static const char *clusterRaftApplySlotChange(sds data) {
     /* Need at least: source + source_epoch + target + target_epoch + one_range = 5 */
     if (!argv || argc < 5) goto reject;
 
-    slotChangeEpochInfo info = parseSlotChangeEpochs(argv, argc);
-    if (!info.valid) goto reject;
+    slotChangeEpochInfo info;
+    if (!parseSlotChangeEpochs(argv, argc, &info)) goto reject;
 
     /* Epoch validation: validate both source and target epochs. */
     if (!clusterValidateShardEpochPair(info.source_shard_id, info.source_epoch,
                                        info.target_shard_id, info.target_epoch)) {
+        error = STALE_SHARD_EPOCH_REJECTION_MSG;
         goto reject;
     }
 
@@ -3185,7 +3186,8 @@ done:
 }
 
 /* Apply a SET_REPLICA_OF entry.
- * Format: "<replica-id> <source-shard> <source-epoch> <primary-id-or-dash> <target-shard> <target-epoch>" */
+ * Format: "<replica-id> <source-shard> <source-epoch> <primary-id-or-dash> <target-shard> <target-epoch>"
+ * Returns NULL on success, or a error string describing the failure. */
 static const char *clusterRaftApplySetReplica(sds data) {
     clusterRaftState *rs = RAFT_STATE();
     const char *error = NULL;
@@ -3196,8 +3198,6 @@ static const char *clusterRaftApplySetReplica(sds data) {
     clusterNode *replica = clusterLookupNode(argv[0], sdslen(argv[0]));
     if (!replica) goto reject;
 
-    char *shard_id = argv[2];
-    uint64_t epoch = strtoull(argv[3], NULL, 10);
     char *source_shard = argv[1];
     uint64_t source_epoch = strtoull(argv[2], NULL, 10);
     char *target_shard = argv[4];
@@ -3206,6 +3206,7 @@ static const char *clusterRaftApplySetReplica(sds data) {
     /* Validate both shard epochs without bumping. */
     if (!clusterValidateShardEpochPair(source_shard, source_epoch,
                                        target_shard, target_epoch)) {
+        error = STALE_SHARD_EPOCH_REJECTION_MSG;
         goto reject;
     }
 
@@ -3266,7 +3267,8 @@ done:
 
 /* Apply a FAILOVER entry. Format: "<replica-id> <primary-id> <shard-id> <shard-epoch>"
  * The replica takes over the primary's slots and becomes primary.
- * The old primary becomes a replica of the new primary. */
+ * The old primary becomes a replica of the new primary.
+ * Returns NULL on success, or a error string describing the failure. */
 static const char *clusterRaftApplyFailover(sds data) {
     clusterRaftState *rs = RAFT_STATE();
     const char *error = NULL;
@@ -3288,6 +3290,7 @@ static const char *clusterRaftApplyFailover(sds data) {
     /* Epoch validation: validate against the shard-id from the entry (no bump yet). */
     uint64_t shard_epoch = strtoull(argv[3], NULL, 10);
     if (!isShardEpochCurrent(argv[2], shard_epoch)) {
+        error = STALE_SHARD_EPOCH_REJECTION_MSG;
         goto reject;
     }
 

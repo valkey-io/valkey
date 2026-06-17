@@ -68,7 +68,7 @@ def set_version(version_h_text: str, version: str, stage: str) -> str:
             ("VALKEY_VERSION_NUM", n2),
             ("VALKEY_RELEASE_STAGE", n3),
         )
-        if count == 0
+        if count == 1
     ]
     if missing:
         raise ValueError(

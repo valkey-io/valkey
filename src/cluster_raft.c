@@ -955,7 +955,11 @@ static uint64_t raftLogLastTerm(void) {
 
 static uint64_t raftLogTermAt(uint64_t index) {
     raftLogEntry *e = raftLogGet(index);
-    return e ? e->term : 0;
+    if (e) return e->term;
+    /* Entry not in log — if it's at the snapshot boundary, use snapshot_term. */
+    clusterRaftState *rs = RAFT_STATE();
+    if (index == rs->last_applied) return rs->snapshot_term;
+    return 0;
 }
 
 /* Apply a committed log entry. */

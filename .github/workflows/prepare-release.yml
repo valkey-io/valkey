@@ -55,7 +55,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          # Full history + tags so the contributor range (last tag..HEAD) works.
           fetch-depth: 0
           fetch-tags: true
           persist-credentials: false
@@ -74,12 +73,14 @@ jobs:
       - name: Prepare release notes and version bump
         env:
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+          VERSION: ${{ inputs.version }}
+          STAGE: ${{ inputs.release_stage }}
         run: |
           set -euo pipefail
           args=(
             utils/releasetools/prepare_release.py
-            --version "${{ inputs.version }}"
-            --stage "${{ inputs.release_stage }}"
+            --version "${VERSION}"
+            --stage "${STAGE}"
             --urgency "${{ inputs.urgency }}"
             --repo "${{ github.repository }}"
           )

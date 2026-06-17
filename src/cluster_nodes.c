@@ -44,16 +44,13 @@
 #include "server.h"
 #include "cluster.h"
 #include "cluster_bus.h"
+#include "cluster_nodes.h"
 #include "cluster_state.h"
 #include "cluster_slot_stats.h"
 
 #include <arpa/inet.h>
 #include <sys/file.h>
 #include <sys/stat.h>
-
-/* Forward declarations. */
-void clusterGenNodesSlotsInfo(int filter);
-void clusterFreeNodesSlotsInfo(clusterNode *n);
 
 /* -----------------------------------------------------------------------------
  * Nodes to string representation functions.
@@ -659,8 +656,6 @@ int clusterLoadConfig(char *filename) {
     while (fgets(line, maxline, fp) != NULL) {
         int argc;
         sds *argv;
-        clusterNode *n, *primary;
-        char *p, *s;
 
         /* Skip blank lines, they can be created either by users manually
          * editing nodes.conf or by the config writing process if stopped
@@ -738,37 +733,67 @@ int clusterLoadConfig(char *filename) {
             continue;
         }
 
+        if (clusterLoadNodeLine(argv, argc, tmp_cluster_nodes) == C_ERR) {
+            sdsfreesplitres(argv, argc);
+            goto fmterr;
+        }
+        sdsfreesplitres(argv, argc);
+    }
+    /* Config sanity check */
+    if (server.cluster->myself == NULL) goto fmterr;
+
+    zfree(line);
+    fclose(fp);
+    serverAssert(tmp_cluster_nodes != NULL);
+    dictRelease(tmp_cluster_nodes);
+
+    serverLog(LL_NOTICE, "Node configuration loaded, I'm %.40s", server.cluster->myself->name);
+
+    /* Post-load fixups (e.g. ensuring currentEpoch >= max configEpoch). */
+    if (clusterCurrentBus->postLoad) clusterCurrentBus->postLoad();
+    return C_OK;
+
+fmterr:
+    serverPanic("Unrecoverable error: corrupted cluster config file \"%s\".", line);
+}
+
+/* Parse a single node description line (same format as CLUSTER NODES output).
+ * Creates or updates the node in the cluster state. argv/argc are the
+ * space-split fields of the line. If nodes_seen is non-NULL, checks for
+ * duplicate node IDs and records each parsed ID. Returns C_OK/C_ERR. */
+int clusterLoadNodeLine(sds *argv, int argc, dict *nodes_seen) {
+    clusterNode *n, *primary;
+    char *p, *s;
+    int j;
+    {
         /* Regular config lines have at least eight fields */
         if (argc < 8) {
-            sdsfreesplitres(argv, argc);
             goto fmterr;
         }
 
         /* Create this node if it does not exist */
         if (verifyClusterNodeId(argv[0], sdslen(argv[0])) == C_ERR) {
-            sdsfreesplitres(argv, argc);
             goto fmterr;
         }
         n = clusterLookupNode(argv[0], sdslen(argv[0]));
         if (!n) {
             n = createClusterNode(argv[0], 0);
             clusterAddNode(n);
-            dictAdd(tmp_cluster_nodes, sdsnewlen(argv[0], sdslen(argv[0])), NULL);
-        } else {
+        }
+        if (nodes_seen) {
             /* Check if the node (nodeid) has already been loaded. The nodeid is used to
              * identify every node across the entire cluster, we do not expect to find
              * duplicate nodeids in nodes.conf. */
-            dictEntry *de = dictFind(tmp_cluster_nodes, argv[0]);
+            dictEntry *de = dictFind(nodes_seen, argv[0]);
             if (de != NULL) {
                 serverLog(LL_WARNING, "Duplicate nodeid detected: %s", argv[0]);
-                sdsfreesplitres(argv, argc);
                 goto fmterr;
             }
+            dictAdd(nodes_seen, sdsnewlen(argv[0], sdslen(argv[0])), NULL);
         }
         /* Format for the node address and auxiliary argument information:
          * ip:port[@cport][,hostname][,aux=val]*] */
         if (clusterNodeParseAddressString(n, argv[1]) == C_ERR) {
-            sdsfreesplitres(argv, argc);
             goto fmterr;
         }
 
@@ -809,7 +834,6 @@ int clusterLoadConfig(char *filename) {
          * replica list. */
         if (argv[3][0] != '-') {
             if (verifyClusterNodeId(argv[3], sdslen(argv[3])) == C_ERR) {
-                sdsfreesplitres(argv, argc);
                 goto fmterr;
             }
             primary = clusterLookupNode(argv[3], sdslen(argv[3]));
@@ -870,7 +894,6 @@ int clusterLoadConfig(char *filename) {
                 direction = p[1]; /* Either '>' or '<' */
                 slot = atoi(argv[j] + 1);
                 if (slot < 0 || slot >= CLUSTER_SLOTS) {
-                    sdsfreesplitres(argv, argc);
                     goto fmterr;
                 }
                 p += 3;
@@ -878,7 +901,6 @@ int clusterLoadConfig(char *filename) {
                 char *pr = strchr(p, ']');
                 size_t node_len = pr - p;
                 if (pr == NULL || verifyClusterNodeId(p, node_len) == C_ERR) {
-                    sdsfreesplitres(argv, argc);
                     goto fmterr;
                 }
                 cn = clusterLookupNode(p, CLUSTER_NAMELEN);
@@ -900,30 +922,14 @@ int clusterLoadConfig(char *filename) {
                 start = stop = atoi(argv[j]);
             }
             if (start < 0 || start >= CLUSTER_SLOTS || stop < 0 || stop >= CLUSTER_SLOTS) {
-                sdsfreesplitres(argv, argc);
                 goto fmterr;
             }
             while (start <= stop) clusterAddSlot(n, start++);
         }
-
-        sdsfreesplitres(argv, argc);
     }
-    /* Config sanity check */
-    if (server.cluster->myself == NULL) goto fmterr;
-
-    zfree(line);
-    fclose(fp);
-    serverAssert(tmp_cluster_nodes != NULL);
-    dictRelease(tmp_cluster_nodes);
-
-    serverLog(LL_NOTICE, "Node configuration loaded, I'm %.40s", server.cluster->myself->name);
-
-    /* Post-load fixups (e.g. ensuring currentEpoch >= max configEpoch). */
-    if (clusterCurrentBus->postLoad) clusterCurrentBus->postLoad();
     return C_OK;
-
 fmterr:
-    serverPanic("Unrecoverable error: corrupted cluster config file \"%s\".", line);
+    return C_ERR;
 }
 
 /* Cluster node configuration is exactly the same as CLUSTER NODES output.

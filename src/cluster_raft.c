@@ -105,7 +105,7 @@ typedef struct {
  * -------------------------------------------------------------------------- */
 
 typedef struct {
-    /* Persistent Raft state (saved in nodes.conf vars line) */
+    /* Persistent Raft state */
     uint64_t current_term;
     uint64_t last_applied;
     uint64_t snapshot_term;          /* Term of the entry at last_applied */
@@ -857,6 +857,7 @@ static int clusterRaftProcessPropose(clusterLink *link, int argc, sds *argv) {
 /* Forward declarations for pre-vote handlers. */
 static int clusterRaftProcessPreVoteRequest(clusterLink *link, int argc, sds *argv);
 static int clusterRaftProcessPreVoteResponse(clusterLink *link, int argc, sds *argv);
+static int clusterRaftProcessInstallSnapshot(clusterLink *link, int argc, sds *argv, sds *config_lines, int config_line_count);
 static void clusterRaftStartPreVote(void);
 
 /* Defer pending proposals for retry after a leader change. The proposals
@@ -924,10 +925,8 @@ static void raftLogAppend(raftLogEntry *e) {
 /* O(1) lookup by index. Returns NULL if out of range. Indices start at 1. */
 static raftLogEntry *raftLogGet(uint64_t index) {
     clusterRaftState *rs = RAFT_STATE();
-    if (index == 0 || index > raftLogLastIndex()) return NULL;
-    /* Entries are stored sequentially; first entry's index may not be 1
-     * after future log compaction. For now, base is always 1. */
-    uint64_t base = rs->log_count > 0 ? rs->log[0]->index : 1;
+    if (rs->log_count == 0 || index == 0 || index > raftLogLastIndex()) return NULL;
+    uint64_t base = rs->log[0]->index;
     if (index < base) return NULL;
     return rs->log[index - base];
 }
@@ -964,12 +963,12 @@ static void raftLogTrimApplied(void) {
 
 static uint64_t raftLogLastIndex(void) {
     clusterRaftState *rs = RAFT_STATE();
-    return rs->log_count > 0 ? rs->log[rs->log_count - 1]->index : 0;
+    return rs->log_count > 0 ? rs->log[rs->log_count - 1]->index : rs->last_applied;
 }
 
 static uint64_t raftLogLastTerm(void) {
     clusterRaftState *rs = RAFT_STATE();
-    return rs->log_count > 0 ? rs->log[rs->log_count - 1]->term : 0;
+    return rs->log_count > 0 ? rs->log[rs->log_count - 1]->term : rs->snapshot_term;
 }
 
 static uint64_t raftLogTermAt(uint64_t index) {
@@ -1246,11 +1245,47 @@ static void raftApplyCommitted(void) {
  * Entry lines: <term> <type> <data>
  * -------------------------------------------------------------------------- */
 
+/* Send a snapshot to a follower whose next_index is behind the trimmed log.
+ * Format: INSTALL_SNAPSHOT <leader-id> <term> <last-index> <last-term>\n<config> */
+static void clusterRaftSendInstallSnapshot(clusterLink *link, clusterNode *node) {
+    clusterRaftState *rs = RAFT_STATE();
+    /* Strip MYSELF flag so the receiver doesn't adopt our identity. */
+    myself->flags &= ~CLUSTER_NODE_MYSELF;
+    sds config = clusterGenNodesDescription(NULL, CLUSTER_NODE_HANDSHAKE, 0);
+    myself->flags |= CLUSTER_NODE_MYSELF;
+    sds msg = wireNewMsg("INSTALL_SNAPSHOT");
+    msg = sdscatlen(msg, " ", 1);
+    msg = sdscatlen(msg, myself->name, CLUSTER_NAMELEN);
+    msg = sdscatfmt(msg, " %U %U %U\n",
+                    (unsigned long long)rs->current_term,
+                    (unsigned long long)rs->last_applied,
+                    (unsigned long long)rs->snapshot_term);
+    msg = sdscatsds(msg, config);
+    sdsfree(config);
+    msg = wireFinishMsg(msg);
+    clusterRaftSendMsg(link, msg);
+    serverLog(LL_NOTICE, "Sent INSTALL_SNAPSHOT to %.40s (last_applied=%llu, term=%llu).",
+              node->name, (unsigned long long)rs->last_applied,
+              (unsigned long long)rs->snapshot_term);
+    /* Set next_index past the snapshot so we don't re-send on next heartbeat.
+     * If the snapshot is lost, the follower won't ACK, eventually the link
+     * goes stale, and we'll retry after reconnection. */
+    RAFT_NODE(node)->next_index = rs->last_applied + 1;
+}
+
 static void clusterRaftSendAppendEntries(clusterLink *link, clusterNode *node) {
     clusterRaftState *rs = RAFT_STATE();
     clusterNodeRaftData *rd = RAFT_NODE(node);
 
     uint64_t next = rd->next_index;
+
+    /* If the follower needs entries we've already trimmed, send a snapshot. */
+    uint64_t first_available = rs->log_count > 0 ? rs->log[0]->index : rs->last_applied + 1;
+    if (next < first_available) {
+        clusterRaftSendInstallSnapshot(link, node);
+        return;
+    }
+
     uint64_t prev_index = next > 0 ? next - 1 : 0;
     uint64_t prev_term = raftLogTermAt(prev_index);
 
@@ -1468,6 +1503,114 @@ static int clusterRaftProcessAppendEntriesResponse(clusterLink *link, int argc, 
         if (rd->next_index > 1) rd->next_index--;
         clusterRaftSendAppendEntries(node->link, node);
     }
+    return 1;
+}
+
+/* INSTALL_SNAPSHOT <leader-id> <term> <last-index> <last-term>\n<node lines> */
+static int clusterRaftProcessInstallSnapshot(clusterLink *link, int argc, sds *argv, sds *config_lines, int config_line_count) {
+    UNUSED(link);
+    if (argc < 5) return 1;
+    if (sdslen(argv[1]) != CLUSTER_NAMELEN) return 1;
+
+    clusterRaftState *rs = RAFT_STATE();
+    uint64_t msg_term = strtoull(argv[2], NULL, 10);
+    uint64_t snap_index = strtoull(argv[3], NULL, 10);
+    uint64_t snap_term = strtoull(argv[4], NULL, 10);
+
+    if (msg_term < rs->current_term) return 1;
+    clusterRaftMaybeStepDown(msg_term);
+    if (rs->role != RAFT_ROLE_JOINER) rs->role = RAFT_ROLE_FOLLOWER;
+    rs->last_heartbeat = monotonicMs();
+    memcpy(rs->leader, argv[1], CLUSTER_NAMELEN);
+
+    /* If we're already past the snapshot, ignore. */
+    if (snap_index <= rs->last_applied) {
+        rs->todo_send_ae_ack = 1;
+        return 1;
+    }
+
+    /* Clear slots and shards — snapshot will re-assign them. */
+    for (int j = 0; j < CLUSTER_SLOTS; j++) clusterDelSlot(j);
+    dictEmpty(server.cluster->shards, NULL);
+
+    /* Clear raft log. */
+    for (uint64_t i = 0; i < rs->log_count; i++) raftLogFree(rs->log[i]);
+    rs->log_count = 0;
+
+    /* Parse snapshot node lines — updates existing nodes, creates new ones. */
+    dict *snapshot_nodes = dictCreate(&clusterNodesDictType);
+    for (int i = 0; i < config_line_count; i++) {
+        if (sdslen(config_lines[i]) == 0) continue;
+        int largc;
+        sds *largv = sdssplitargs(config_lines[i], &largc);
+        if (!largv || largc < 8) {
+            if (largv) sdsfreesplitres(largv, largc);
+            continue;
+        }
+        if (clusterLoadNodeLine(largv, largc, snapshot_nodes) == C_ERR) {
+            serverPanic("Corrupt INSTALL_SNAPSHOT: failed to load node line.");
+        }
+        sdsfreesplitres(largv, largc);
+    }
+
+    /* Remove nodes not present in the snapshot. */
+    {
+        dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
+        dictEntry *de;
+        while ((de = dictNext(di)) != NULL) {
+            clusterNode *node = dictGetVal(de);
+            if (node == myself) continue;
+            if (dictFind(snapshot_nodes, node->name)) continue;
+            if (node->link) {
+                node->link->node = NULL;
+                node->link = NULL;
+            }
+            if (node->inbound_link) {
+                node->inbound_link->node = NULL;
+                node->inbound_link = NULL;
+            }
+            clusterDelNode(node);
+        }
+        dictReleaseIterator(di);
+    }
+    /* If we were a joiner and the snapshot includes us (our NODE_JOIN was
+     * committed), promote to follower — same as raftLogApply(NODE_JOIN). */
+    if (rs->role == RAFT_ROLE_JOINER) {
+        sds mykey = sdsnewlen(myself->name, CLUSTER_NAMELEN);
+        int found = dictFind(snapshot_nodes, mykey) != NULL;
+        sdsfree(mykey);
+        if (found) {
+            myself->flags &= ~CLUSTER_NODE_MEET;
+            rs->role = RAFT_ROLE_FOLLOWER;
+            serverLog(LL_NOTICE, "Promoted from joiner to follower (via snapshot).");
+        }
+    }
+    dictRelease(snapshot_nodes);
+
+    /* Update raft state to the snapshot point. */
+    rs->last_applied = snap_index;
+    rs->commit_index = snap_index;
+    rs->snapshot_term = snap_term;
+
+    serverLog(LL_NOTICE, "Installed snapshot from %.40s (index=%llu, term=%llu).",
+              argv[1], (unsigned long long)snap_index, (unsigned long long)snap_term);
+
+    /* Recompute cluster size (number of voters) from the loaded snapshot. */
+    server.cluster->size = 0;
+    {
+        dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
+        dictEntry *de;
+        while ((de = dictNext(di)) != NULL) {
+            clusterNode *node = dictGetVal(de);
+            if (!(node->flags & CLUSTER_NODE_MEET)) server.cluster->size++;
+        }
+        dictReleaseIterator(di);
+    }
+
+    rs->todo_save_config = 1;
+    rs->todo_connect_nodes = 1;
+    rs->todo_send_ae_ack = 1;
+    rs->todo_update_replication = 1;
     return 1;
 }
 
@@ -2286,6 +2429,8 @@ static int clusterRaftProcessMessage(struct clusterLink *link) {
         ret = clusterRaftProcessPropose(link, argc, argv);
     } else if (!strcasecmp(argv[0], "AE")) {
         ret = clusterRaftProcessAppendEntries(link, argc, argv, lines + 1, line_count - 1);
+    } else if (!strcasecmp(argv[0], "INSTALL_SNAPSHOT")) {
+        ret = clusterRaftProcessInstallSnapshot(link, argc, argv, lines + 1, line_count - 1);
     } else if (!strcasecmp(argv[0], "AE_ACK")) {
         ret = clusterRaftProcessAppendEntriesResponse(link, argc, argv);
     } else if (!strcasecmp(argv[0], "PRE_VOTE_REQ")) {

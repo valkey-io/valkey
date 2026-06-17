@@ -584,6 +584,43 @@ start_cluster 3 2 {tags {external:skip cluster}} {
     }
 }
 
+start_cluster 3 1 {tags {external:skip cluster} overrides {cluster-ping-interval 1000 cluster-node-timeout 5000}} {
+    # This test verifies - When a failover is already in progress,
+    # a second failover is a no-op — it does not reset the in-progress election.
+    test "Duplicate CLUSTER FAILOVER is idempotent and does not reset election" {
+        # Make the primary unreachable.
+        R 0 deferred 1
+        R 0 DEBUG SLEEP 5
+
+        set loglines_replica [count_log_lines -3]
+
+        # Send the first CLUSTER FAILOVER FORCE to the replica.
+        R 3 cluster failover force
+
+        # Wait until the replica has actually started the election.
+        wait_for_log_messages -3 {"*Starting a failover election for epoch*"} $loglines_replica 1000 10
+        set loglines_after_first_election [count_log_lines -3]
+
+        # Send a second CLUSTER FAILOVER FORCE to the same replica,
+        # simulating the race where an operator and the dying primary
+        # both trigger failover on the same replica.
+        R 3 cluster failover force
+
+        # Verify the duplicate was ignored (no election reset).
+        verify_log_message -3 "*Failover already in progress, ignoring duplicate request*" $loglines_after_first_election
+
+        # The election should NOT be reset — no new election started.
+        verify_no_log_message -3 "*Resetting the election*" $loglines_after_first_election
+
+        # The failover should complete quickly without any unnecessary delay.
+        wait_for_condition 1000 50 {
+            [s -3 role] == "master"
+        } else {
+            fail "Failover did not complete after duplicate FORCE commands"
+        }
+    }
+} ;# start_cluster
+
 # Disable this test case due to #2441.
 if {false} {
 start_cluster 3 2 {tags {external:skip cluster}} {

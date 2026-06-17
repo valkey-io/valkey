@@ -8201,6 +8201,18 @@ int clusterCommandSpecial(client *c) {
             addReplyError(c, "Master is down or failed, please use CLUSTER FAILOVER FORCE");
             return 1;
         }
+        /* If a failover is already in progress and the election is authorized,
+         * a failover should be a no-op. This avoids resetting an in-progress
+         * election which would waste the votes already cast and delay the
+         * failover. */
+        if (!takeover && server.cluster->mf_end != 0 && server.cluster->mf_can_start) {
+            sds client = catClientInfoShortString(sdsempty(), c, server.hide_user_data_from_log);
+            serverLog(LL_NOTICE, "Failover already in progress, ignoring duplicate request (from '%s').", client);
+            sdsfree(client);
+            addReply(c, shared.ok);
+            return 1;
+        }
+
         resetManualFailover();
         server.cluster->mf_end = mstime() + server.cluster_mf_timeout;
         sds client = catClientInfoShortString(sdsempty(), c, server.hide_user_data_from_log);

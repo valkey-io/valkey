@@ -32,8 +32,6 @@ jobs:
       - name: Checkout PR head
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          # Fetch the merge-base so the check can diff 00-RELEASENOTES against
-          # the PR base and require a *net-new* Unreleased entry.
           fetch-depth: 0
 
       - name: Enforce release-notes policy

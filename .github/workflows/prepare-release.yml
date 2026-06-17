@@ -48,8 +48,8 @@ permissions:
 jobs:
   prepare:
     name: Prepare release ${{ inputs.version }}
-    # Guard against forks running the release machinery with org secrets.
-    if: github.repository == 'valkey-io/valkey'
+    # EDIT BEFORE PR: Guard against forks running the release machinery with org secrets.
+    # if: github.repository == 'valkey-io/valkey'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

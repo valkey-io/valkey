@@ -65,7 +65,7 @@ start_cluster 3 4 {tags {external:skip cluster} overrides {cluster-ping-interval
 } ;# start_cluster
 
 # Needs to run in the body of
-# start_cluster 7 3 {tags {external:skip cluster} overrides {cluster-ping-interval 1000}}
+# start_cluster 7 3 {tags {external:skip cluster} overrides {cluster-ping-interval 1000 cluster-node-timeout 15000}}
 proc test_same_epoch {delay} {
     test "Primaries will not time out then they are elected in the same epoch - delay $delay" {
         # Since we have the delay time, so these node may not initiate the

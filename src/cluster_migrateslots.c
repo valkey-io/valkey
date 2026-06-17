@@ -1,7 +1,7 @@
 /*
  * Copyright Valkey Contributors.
  * All rights reserved.
- * SPDX-License-Identifier: BSD 3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause
  */
 
 #include "cluster_migrateslots.h"
@@ -835,6 +835,9 @@ slotMigrationJob *createSlotImportJob(client *c,
     if (!job->client->querybuf) {
         job->client->querybuf = generateSyncSlotsEstablishCommand(job);
         job->client->qb_pos = sdslen(job->client->querybuf);
+        /* The backfilled ESTABLISH command is already applied, so qb_applied
+         * must match qb_pos for commandProcessed() to advance reploff. */
+        job->client->qb_applied = job->client->qb_pos;
     }
     job->client->repl_data->read_reploff = sdslen(job->client->querybuf);
 

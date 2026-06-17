@@ -705,53 +705,6 @@ start_multiple_servers 2 {overrides {cluster-enabled yes cluster-protocol raft c
             close $fd
         }
     }
-
-    # --------------------------------------------------------------------------
-    # Duplicate FAILOVER: two clients on the follower both send FAILOVER FORCE
-    # simultaneously. The first succeeds, the second is rejected at apply time
-    # (epoch bumped by the first). Neither client should hang.
-    # --------------------------------------------------------------------------
-
-    test "Raft shard epoch: duplicate FAILOVER from follower - second client gets rejection" {
-        set loglines [count_log_lines 0]
-
-        # Two deferred clients on r1 (the follower/replica).
-        set c1 [valkey_deferring_client -1]
-        set c2 [valkey_deferring_client -1]
-
-        # Both issue CLUSTER FAILOVER FORCE concurrently.
-        $c1 CLUSTER FAILOVER FORCE
-        $c2 CLUSTER FAILOVER FORCE
-
-        # Wait for a rejection to be logged (either at pre-validation or apply).
-        wait_for_log_messages 0 {"*rejecting*proposal*" "*Proposal rejected at apply*"} $loglines 1000 10
-
-        # Read both replies. One should succeed (OK), the other should
-        # get a rejection error. Neither should hang.
-        # Use catch because error replies throw in the deferring client.
-        if {[catch {set reply1 [$c1 read]} err1]} {
-            set reply1 $err1
-        }
-        if {[catch {set reply2 [$c2 read]} err2]} {
-            set reply2 $err2
-        }
-
-        # Exactly one should be OK and the other should be rejected.
-        set ok_count 0
-        set err_count 0
-        foreach reply [list $reply1 $reply2] {
-            if {$reply eq "OK"} {
-                incr ok_count
-            } elseif {[string match "*proposal rejected*" $reply]} {
-                incr err_count
-            }
-        }
-        assert_equal 1 $ok_count
-        assert_equal 1 $err_count
-
-        $c1 close
-        $c2 close
-    }
 }
 
 } ;# tags

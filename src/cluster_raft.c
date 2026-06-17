@@ -216,6 +216,7 @@ typedef struct {
 #define RAFT_HDR_SIZE 8
 #define REPL_OFFSETS_BROADCAST_PERIOD_MS 10000
 #define RAFT_LOG_REWRITE_THRESHOLD 100
+#define PROPOSAL_MAX_RETRIES 5
 
 /* Monotonic millisecond clock for timeouts and failure detection.
  * Unlike gettimeofday(), this is not affected by system clock adjustments. */
@@ -325,6 +326,8 @@ static void clusterRaftPropose(sds entry, void *ctx, void (*callback)(void *ctx,
 static void clusterRaftDeferPendingProposals(void);
 static void clusterRaftCompletePendingProposal(int type, sds data, const char *error);
 static int clusterRaftPreValidateEpoch(int type, sds data);
+static void clusterRaftAutoFailoverCallback(void *ctx, const char *error);
+static void clusterRaftSlotChange(slotRange *ranges, int numranges, clusterNode *target, void *ctx, void (*callback)(void *ctx, const char *error));
 static void clusterRaftUpdateMyself(int old_flags);
 static sds clusterRaftBuildMyNodeInfo(void);
 static void clusterRaftCheckSlotCoverage(void);
@@ -993,14 +996,13 @@ static int clusterRaftPreValidateEpoch(int type, sds data) {
 
     sdsfreesplitres(argv, argc);
     if (!ok) {
-        serverLog(LL_DEBUG, "Leader pre-validation: rejecting %s proposal (missing or stale epoch).",
+        serverLog(LL_DEBUG, "Leader pre-validation: rejecting %s proposal (stale epoch).",
                   raftEntryTypeName(type));
     }
     return ok;
 }
 
 static int clusterRaftProcessPropose(clusterLink *link, int argc, sds *argv) {
-    UNUSED(link);
     clusterRaftState *rs = RAFT_STATE();
 
     /* argv[0]="PROPOSE", argv[1..] is the entry (type + data). */
@@ -1020,11 +1022,13 @@ static int clusterRaftProcessPropose(clusterLink *link, int argc, sds *argv) {
 
     /* Pre-validate epoch on the leader to reject obviously stale proposals. */
     if (!clusterRaftPreValidateEpoch(type, data)) {
-        /* Send REJECT back to the proposing follower so it can unblock the client. */
+        /* Send REJECT back to the proposing follower so it can unblock the client.
+         * Append "retry" hint so the follower knows it can retry with a fresh epoch. */
         if (link) {
             sds msg = wireNewMsg("REJECT");
             msg = sdscatlen(msg, " ", 1);
             msg = sdscatlen(msg, entry, sdslen(entry));
+            msg = sdscat(msg, " retry");
             msg = wireFinishMsg(msg);
             clusterRaftSendMsg(link, msg);
         }
@@ -1049,21 +1053,28 @@ static int clusterRaftProcessPropose(clusterLink *link, int argc, sds *argv) {
 }
 
 /* Handle a REJECT message from the leader. The leader sends this when it
- * rejects a forwarded PROPOSE at pre-validation. We match it against our
+ * rejects a forwarded PROPOSE. We match it against our
  * pending_proposals and fire the callback with an error so the client
  * gets an immediate reply instead of hanging until timeout.
- * Format: "REJECT <type> <data...>" (echoes back the original entry). */
+ * Format: "REJECT <type> <data...> [retry]" (echoes back the original entry).
+ * If the last token is "retry", the rejection is retryable. */
 static int clusterRaftProcessReject(clusterLink *link, int argc, sds *argv) {
     UNUSED(link);
 
-    /* argv[0]="REJECT", argv[1]=type, argv[2..]=data */
+    /* argv[0]="REJECT", argv[1]=type, argv[2..]=data, optional last="retry" */
     if (argc < 2) return 1;
 
     int type = raftEntryTypeByName(argv[1]);
     if (type < 0) return 1;
 
-    sds data = (argc >= 3) ? sdsjoinsds(argv + 2, argc - 2, " ", 1) : sdsempty();
-    clusterRaftCompletePendingProposal(type, data, GENERIC_PROPOSAL_REJECTION_MSG);
+    /* Check if the last token is the "retry" hint. */
+    int retryable = (argc >= 3 && sdslen(argv[argc - 1]) == 5 &&
+                     memcmp(argv[argc - 1], "retry", 5) == 0);
+    int data_argc = retryable ? argc - 3 : argc - 2;
+
+    sds data = (data_argc > 0) ? sdsjoinsds(argv + 2, data_argc, " ", 1) : sdsempty();
+    const char *error = retryable ? STALE_SHARD_EPOCH_REJECTION_MSG : GENERIC_PROPOSAL_REJECTION_MSG;
+    clusterRaftCompletePendingProposal(type, data, error);
     sdsfree(data);
     return 1;
 }
@@ -1235,8 +1246,6 @@ static void raftLogApply(raftLogEntry *e) {
         sds *argv = sdssplitlen(e->data, sdslen(e->data), " ", 1, &argc);
         if (argv && argc >= 2 && sdslen(argv[0]) == CLUSTER_NAMELEN) {
             clusterNode *existing = clusterLookupNode(argv[0], CLUSTER_NAMELEN);
-            /* For new nodes (existing == NULL), epoch should be 0 — no validation needed. */
-
             if (!existing) {
                 clusterNode *n = createClusterNode(argv[0], CLUSTER_NODE_PRIMARY);
                 if (clusterNodeParseAddressString(n, argv[1]) == C_OK) {
@@ -2307,7 +2316,7 @@ static void clusterRaftCron(void) {
             entry = sdscatlen(entry, primary->shard_id, CLUSTER_NAMELEN);
             uint64_t epoch = clusterGetShardEpoch(primary->shard_id);
             entry = sdscatfmt(entry, " %U", (unsigned long long)epoch);
-            clusterRaftPropose(entry, NULL, NULL);
+            clusterRaftPropose(entry, NULL, clusterRaftAutoFailoverCallback);
             sdsfree(entry);
         }
     }
@@ -2762,7 +2771,10 @@ static void clusterRaftGetNodePingPongEpoch(clusterNode *node, long long *ping_s
 static void clusterRaftSetNodePingPongEpoch(clusterNode *node, int ping_active, int pong_active, uint64_t shard_epoch) {
     UNUSED(ping_active);
     UNUSED(pong_active);
-    clusterSetShardEpoch(node->shard_id, shard_epoch);
+    uint64_t current = clusterGetShardEpoch(node->shard_id);
+    if (shard_epoch > current) {
+        clusterSetShardEpoch(node->shard_id, shard_epoch);
+    }
 }
 
 static sds clusterRaftAppendVarsLine(sds config) {
@@ -3060,15 +3072,28 @@ typedef struct {
     void *orig_ctx;
     void (*orig_callback)(void *orig_ctx, const char *error);
     clusterNode *target;
+    slotRange *ranges;
+    int numranges;
+    int retries;
 } slotChangeCallbackCtx;
 
 static void clusterRaftSlotChangeApplyCallback(void *ctx, const char *error) {
     slotChangeCallbackCtx *sc = (slotChangeCallbackCtx *)ctx;
-    if (clusterNodeGetPrimary(myself)->numslots == 0 && sc->target && !error) {
+    if (!error && clusterNodeGetPrimary(myself)->numslots == 0 && sc->target) {
         clusterHandleLostLastSlot(sc->target);
     }
+    if (error && strcmp(error, STALE_SHARD_EPOCH_REJECTION_MSG) == 0 && sc->retries > 0) {
+        sc->retries--;
+        /* Retry: re-invoke slot change with fresh epochs. */
+        clusterRaftSlotChange(sc->ranges, sc->numranges, sc->target,
+                              sc->orig_ctx, sc->orig_callback);
+        zfree(sc->ranges);
+        zfree(sc);
+        return;
+    }
     if (sc->orig_callback) sc->orig_callback(sc->orig_ctx, error);
-    zfree(ctx);
+    zfree(sc->ranges);
+    zfree(sc);
 }
 
 /* Invoked for slot assignments and slot migrations (ADDSLOTS, SETSLOT, etc.) */
@@ -3121,6 +3146,10 @@ static void clusterRaftSlotChange(slotRange *ranges, int numranges, clusterNode 
     sc->orig_ctx = ctx;
     sc->orig_callback = callback;
     sc->target = target;
+    sc->ranges = zmalloc(sizeof(slotRange) * numranges);
+    memcpy(sc->ranges, ranges, sizeof(slotRange) * numranges);
+    sc->numranges = numranges;
+    sc->retries = PROPOSAL_MAX_RETRIES;
     clusterRaftPropose(entry, sc, &clusterRaftSlotChangeApplyCallback);
     sdsfree(entry);
 }
@@ -3352,14 +3381,162 @@ done:
     return error;
 }
 
+/* --------------------------------------------------------------------------
+ * Proposal retry on stale shard epoch
+ *
+ * REPLICATE and FORGET operations can be safely retried when rejected due to
+ * a stale shard epoch (a concurrent operation bumped the epoch). The retry
+ * rebuilds the proposal with a fresh epoch. Max retries: 5.
+ * -------------------------------------------------------------------------- */
+typedef struct {
+    void *client_ctx;                              /* Original blocked client handle. */
+    void (*client_callback)(void *, const char *); /* Original completion callback. */
+    int retries;                                   /* Remaining retry attempts. */
+    /* FORGET-specific fields. */
+    char node_id[CLUSTER_NAMELEN];
+    /* SET_REPLICA_OF-specific fields. */
+    char primary_name[CLUSTER_NAMELEN]; /* Primary node name (or "-" if promotion). */
+    int has_primary;                    /* 1 if replicating, 0 if promoting. */
+} proposalRetryCtx;
+
+/* Callback for automatic failover proposals. On rejection (stale epoch or any
+ * reason), re-schedule the failover if the primary is still failed. The next
+ * attempt will rebuild the proposal with a fresh shard epoch. */
+static void clusterRaftAutoFailoverCallback(void *ctx, const char *error) {
+    UNUSED(ctx);
+    if (!error) return; /* Success — nothing to do. */
+
+    clusterNode *myself = getMyClusterNode();
+    if (nodeIsReplica(myself) && myself->replicaof &&
+        nodeFailed(myself->replicaof) && !nodeCantFailover(myself)) {
+        RAFT_STATE()->todo_schedule_failover = 1;
+        serverLog(LL_NOTICE, "Automatic failover proposal rejected (%s), re-scheduling.", error);
+    }
+}
+
+static void clusterRaftForgetNodeRetryCallback(void *ctx, const char *error) {
+    proposalRetryCtx *rc = (proposalRetryCtx *)ctx;
+    if (error && strcmp(error, STALE_SHARD_EPOCH_REJECTION_MSG) == 0 && rc->retries > 0) {
+        rc->retries--;
+        /* Rebuild proposal with fresh epoch. */
+        clusterNode *node = clusterLookupNode(rc->node_id, CLUSTER_NAMELEN);
+        if (!node) {
+            /* Node already gone — treat as success. */
+            if (rc->client_callback) rc->client_callback(rc->client_ctx, NULL);
+            zfree(rc);
+            return;
+        }
+        sds entry = sdsnew("NODE_FORGET ");
+        entry = sdscatlen(entry, rc->node_id, CLUSTER_NAMELEN);
+        uint64_t epoch = clusterGetShardEpoch(node->shard_id);
+        entry = sdscatfmt(entry, " %U", (unsigned long long)epoch);
+        clusterRaftPropose(entry, rc, clusterRaftForgetNodeRetryCallback);
+        sdsfree(entry);
+        return;
+    }
+    /* No retry — forward result to the original callback. */
+    if (rc->client_callback) rc->client_callback(rc->client_ctx, error);
+    zfree(rc);
+}
+
+static void clusterRaftSetReplicaOfRetryCallback(void *ctx, const char *error) {
+    proposalRetryCtx *rc = (proposalRetryCtx *)ctx;
+    if (error && strcmp(error, STALE_SHARD_EPOCH_REJECTION_MSG) == 0 && rc->retries > 0) {
+        rc->retries--;
+        /* Rebuild proposal with fresh epochs. */
+        clusterNode *primary = rc->has_primary
+                                   ? clusterLookupNode(rc->primary_name, CLUSTER_NAMELEN)
+                                   : NULL;
+        if (rc->has_primary && !primary) {
+            if (rc->client_callback) rc->client_callback(rc->client_ctx, "target primary no longer exists");
+            zfree(rc);
+            return;
+        }
+        uint64_t source_epoch = clusterGetShardEpoch(myself->shard_id);
+        char target_shard[CLUSTER_NAMELEN];
+        uint64_t target_epoch;
+        if (primary) {
+            memcpy(target_shard, primary->shard_id, CLUSTER_NAMELEN);
+            target_epoch = clusterGetShardEpoch(primary->shard_id);
+        } else {
+            getRandomHexChars(target_shard, CLUSTER_NAMELEN);
+            target_epoch = 0;
+        }
+        sds entry = sdsnew("SET_REPLICA_OF ");
+        entry = sdscatlen(entry, myself->name, CLUSTER_NAMELEN);
+        entry = sdscatlen(entry, " ", 1);
+        entry = sdscatlen(entry, myself->shard_id, CLUSTER_NAMELEN);
+        entry = sdscatfmt(entry, " %U ", (unsigned long long)source_epoch);
+        entry = sdscatlen(entry, primary ? primary->name : "-", primary ? CLUSTER_NAMELEN : 1);
+        entry = sdscatlen(entry, " ", 1);
+        entry = sdscatlen(entry, target_shard, CLUSTER_NAMELEN);
+        entry = sdscatfmt(entry, " %U", (unsigned long long)target_epoch);
+        clusterRaftPropose(entry, rc, clusterRaftSetReplicaOfRetryCallback);
+        sdsfree(entry);
+        return;
+    }
+    /* No retry — forward result to the original callback. */
+    if (rc->client_callback) rc->client_callback(rc->client_ctx, error);
+    zfree(rc);
+}
+
+static void clusterRaftFailoverRetryCallback(void *ctx, const char *error) {
+    proposalRetryCtx *rc = (proposalRetryCtx *)ctx;
+    if (error && strcmp(error, STALE_SHARD_EPOCH_REJECTION_MSG) == 0 && rc->retries > 0) {
+        rc->retries--;
+        /* Rebuild proposal with fresh epoch. */
+        clusterNode *primary = myself->replicaof;
+        if (!primary) {
+            if (rc->client_callback) rc->client_callback(rc->client_ctx, "no primary to fail over");
+            zfree(rc);
+            return;
+        }
+        sds entry = sdsnew("FAILOVER ");
+        entry = sdscatlen(entry, myself->name, CLUSTER_NAMELEN);
+        entry = sdscatlen(entry, " ", 1);
+        entry = sdscatlen(entry, primary->name, CLUSTER_NAMELEN);
+        entry = sdscatlen(entry, " ", 1);
+        entry = sdscatlen(entry, primary->shard_id, CLUSTER_NAMELEN);
+        uint64_t epoch = clusterGetShardEpoch(primary->shard_id);
+        entry = sdscatfmt(entry, " %U", (unsigned long long)epoch);
+        clusterRaftPropose(entry, rc, clusterRaftFailoverRetryCallback);
+        sdsfree(entry);
+        return;
+    }
+    /* No retry — forward result to the original callback. */
+    if (rc->client_callback) rc->client_callback(rc->client_ctx, error);
+    zfree(rc);
+}
+
 static void clusterRaftForgetNode(const char *node_id, size_t id_len, void *ctx, void (*callback)(void *ctx, const char *error)) {
+    /* Reject forgetting the raft leader — it would crash the cluster.
+     * The admin should transfer leadership first. Only block if the leader
+     * node is still a known, non-failed member. */
+    clusterRaftState *rs = RAFT_STATE();
+    if (id_len == CLUSTER_NAMELEN && memcmp(node_id, rs->leader, CLUSTER_NAMELEN) == 0) {
+        clusterNode *leader_node = clusterLookupNode(node_id, id_len);
+        if (leader_node && !nodeFailed(leader_node)) {
+            if (callback) callback(ctx, "Can't forget the raft leader. Transfer leadership first.");
+            return;
+        }
+    }
+
+    /* Wrap with retry context for stale epoch recovery. */
+    proposalRetryCtx *rc = zmalloc(sizeof(*rc));
+    rc->client_ctx = ctx;
+    rc->client_callback = callback;
+    rc->retries = PROPOSAL_MAX_RETRIES;
+    memset(rc->node_id, 0, CLUSTER_NAMELEN);
+    memcpy(rc->node_id, node_id, id_len < CLUSTER_NAMELEN ? id_len : CLUSTER_NAMELEN);
+    rc->has_primary = 0;
+
     sds entry = sdsnew("NODE_FORGET ");
     entry = sdscatlen(entry, node_id, id_len);
     /* Append departing node's shard epoch. */
     clusterNode *node = clusterLookupNode(node_id, id_len);
     uint64_t epoch = node ? clusterGetShardEpoch(node->shard_id) : 0;
     entry = sdscatfmt(entry, " %U", (unsigned long long)epoch);
-    clusterRaftPropose(entry, ctx, callback);
+    clusterRaftPropose(entry, rc, clusterRaftForgetNodeRetryCallback);
     sdsfree(entry);
 }
 
@@ -3368,6 +3545,18 @@ static void clusterRaftSetReplicaOf(clusterNode *primary, void *ctx, void (*call
      * "<replica-id> <source-shard> <source-epoch> <primary-id-or-dash> <target-shard> <target-epoch>"
      * Source is myself's current shard. Target is the primary's shard (for assignment)
      * or a new random shard (for promotion to primary). */
+
+    /* Wrap with retry context for stale epoch recovery. */
+    proposalRetryCtx *rc = zmalloc(sizeof(*rc));
+    rc->client_ctx = ctx;
+    rc->client_callback = callback;
+    rc->retries = PROPOSAL_MAX_RETRIES;
+    memset(rc->node_id, 0, CLUSTER_NAMELEN);
+    rc->has_primary = (primary != NULL);
+    if (primary) {
+        memcpy(rc->primary_name, primary->name, CLUSTER_NAMELEN);
+    }
+
     uint64_t source_epoch = clusterGetShardEpoch(myself->shard_id);
 
     char target_shard[CLUSTER_NAMELEN];
@@ -3387,7 +3576,7 @@ static void clusterRaftSetReplicaOf(clusterNode *primary, void *ctx, void (*call
     entry = sdscatlen(entry, " ", 1);
     entry = sdscatlen(entry, target_shard, CLUSTER_NAMELEN);
     entry = sdscatfmt(entry, " %U", (unsigned long long)target_epoch);
-    clusterRaftPropose(entry, ctx, callback);
+    clusterRaftPropose(entry, rc, clusterRaftSetReplicaOfRetryCallback);
     sdsfree(entry);
 }
 
@@ -3401,6 +3590,14 @@ static void clusterRaftFailover(int force, int takeover, void *ctx, void (*callb
 
     if (force) {
         /* FORCE/TAKEOVER: propose immediately without coordination. */
+        /* Wrap with retry context for stale epoch recovery. */
+        proposalRetryCtx *rc = zmalloc(sizeof(*rc));
+        rc->client_ctx = ctx;
+        rc->client_callback = callback;
+        rc->retries = PROPOSAL_MAX_RETRIES;
+        memset(rc->node_id, 0, CLUSTER_NAMELEN);
+        rc->has_primary = 0;
+
         sds entry = sdsnew("FAILOVER ");
         entry = sdscatlen(entry, myself->name, CLUSTER_NAMELEN);
         entry = sdscatlen(entry, " ", 1);
@@ -3409,7 +3606,7 @@ static void clusterRaftFailover(int force, int takeover, void *ctx, void (*callb
         entry = sdscatlen(entry, primary->shard_id, CLUSTER_NAMELEN);
         uint64_t epoch = clusterGetShardEpoch(primary->shard_id);
         entry = sdscatfmt(entry, " %U", (unsigned long long)epoch);
-        clusterRaftPropose(entry, ctx, callback);
+        clusterRaftPropose(entry, rc, clusterRaftFailoverRetryCallback);
         sdsfree(entry);
     } else {
         /* Coordinated failover: ask primary to pause writes, then wait

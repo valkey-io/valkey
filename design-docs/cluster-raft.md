@@ -786,6 +786,26 @@ Epoch validation happens at two points:
    and the entry is applied. On mismatch, the entry is a no-op and
    the error is propagated to the caller's callback.
 
+### Retry on stale epoch
+
+Proposals rejected due to a stale shard epoch are automatically retried
+with a fresh epoch (up to 5 attempts):
+
+- **SET_REPLICA_OF / NODE_FORGET / FAILOVER (force) / SLOT_CHANGE** —
+  the proposal is rebuilt with current epoch(s) and re-submitted.
+
+- **Automatic failover** — if the FAILOVER proposal is rejected, the
+  failover is re-scheduled (via `todo_schedule_failover`) as long as
+  the primary is still failed. The next attempt uses the current epoch.
+  For automatic failover, no cap on retry attempt to avoid leaderless shard.
+
+Only `STALE_SHARD_EPOCH_REJECTION_MSG` triggers retry. Other errors
+(format errors, invalid state) are forwarded to the client immediately.
+
+When the leader rejects a forwarded proposal at pre-validation, it sends
+a `REJECT <type> <data> retry` message back. The `retry` suffix signals
+the follower that the rejection is epoch-related and eligible for retry.
+
 ### Entries that don't carry an epoch
 
 - NODE_FAIL / NODE_RECOVER 

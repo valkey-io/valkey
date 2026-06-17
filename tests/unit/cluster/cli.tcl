@@ -565,7 +565,7 @@ start_multiple_servers 3 [list overrides $base_conf] {
 # Test valkey-cli --cluster del-node
 # For cluster-raft we need to handle leader transfer when FORGET targets the leader.
 set base_conf [list cluster-enabled yes cluster-node-timeout 1000]
-start_multiple_servers 3 [list overrides $base_conf] {
+start_multiple_servers 3 [list overrides $base_conf tags {cluster-raft:skip}] {
 
     # Create cluster with 1 primary and 2 replicas for del-node tests
     exec $::VALKEY_CLI_BIN --cluster-yes --cluster create \

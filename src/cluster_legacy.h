@@ -146,7 +146,6 @@ typedef struct {
 
 typedef struct {
     uint8_t reason;
-    char notused1[24];
 } clusterMsgDataFailoverNack;
 
 typedef struct {

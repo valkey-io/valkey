@@ -1648,12 +1648,14 @@ INSTANTIATE_TEST_SUITE_P(AllImplementations,
 /* ========== On-Delete Callback Tests ========== */
 
 struct OnDeleteRecord {
+    OrderedIndexTestApi *api;
     int count;
     int capacity;
     sds *elements; /* Fixed-size array allocated at init */
 };
 
-static void initOnDeleteRecord(OnDeleteRecord *rec, int capacity) {
+static void initOnDeleteRecord(OnDeleteRecord *rec, OrderedIndexTestApi *api, int capacity) {
+    rec->api = api;
     rec->count = 0;
     rec->capacity = capacity;
     rec->elements = (sds *)zmalloc(sizeof(sds) * capacity);
@@ -1668,31 +1670,31 @@ static void testOnDeleteCallback(OrderedIndexItem *item, void *ctx) {
     OnDeleteRecord *rec = (OnDeleteRecord *)ctx;
     const char *ptr;
     size_t len;
-    skiplistGetElementRaw(item, &ptr, &len);
+    rec->api->getElementRaw(item, &ptr, &len);
     rec->elements[rec->count] = sdsnewlen(ptr, len);
     rec->count++;
     /* Item is freed by the index after this callback returns. */
 }
 
-class OnDeleteCallbackTest : public ::testing::Test {
+class OnDeleteCallbackTest : public ::testing::TestWithParam<OrderedIndexTestApi *> {
   protected:
-    SkiplistOrderedIndex api;
+    OrderedIndexTestApi *api = GetParam();
     OrderedIndex *oi = nullptr;
 
     void SetUp() override {
-        oi = api.create();
+        oi = api->create();
     }
     void TearDown() override {
-        if (oi) api.free(oi);
+        if (oi) api->free(oi);
     }
 
     void verifyOI() {
         char errmsg[256];
-        ASSERT_TRUE(api.verifyIntegrity(oi, errmsg, sizeof(errmsg))) << errmsg;
+        ASSERT_TRUE(api->verifyIntegrity(oi, errmsg, sizeof(errmsg))) << errmsg;
     }
 
     void insert(double score, const char *ele) {
-        api.insert(oi, score, ele, strlen(ele));
+        api->insert(oi, score, ele, strlen(ele));
     }
 
     void insertN(int n) {
@@ -1711,40 +1713,40 @@ class OnDeleteCallbackTest : public ::testing::Test {
 
     /* Collect elements into caller-owned sds array. Caller must freeSdsArray(). */
     sds *collectElements(OrderedIndex *idx, size_t *out_n) {
-        return collectIndexToSds(api, idx, out_n);
+        return collectIndexToSds(*api, idx, out_n);
     }
 };
 
 /* DeleteRangeByScore */
 
-TEST_F(OnDeleteCallbackTest, DeleteRangeByScore_EmptyAndNoMatch) {
+TEST_P(OnDeleteCallbackTest, DeleteRangeByScore_EmptyAndNoMatch) {
     OnDeleteRecord rec;
-    initOnDeleteRecord(&rec, 10);
+    initOnDeleteRecord(&rec, api, 10);
 
-    unsigned long deleted = api.deleteRangeByScore(oi, 0.0, 10.0, 0, 0, testOnDeleteCallback, &rec);
+    unsigned long deleted = api->deleteRangeByScore(oi, 0.0, 10.0, 0, 0, testOnDeleteCallback, &rec);
     ASSERT_EQ(deleted, 0UL);
     ASSERT_EQ(rec.count, 0);
-    api.free(oi);
+    api->free(oi);
 
-    oi = api.create();
+    oi = api->create();
     insertN(5);
     rec.count = 0;
-    deleted = api.deleteRangeByScore(oi, 10.0, 20.0, 0, 0, testOnDeleteCallback, &rec);
+    deleted = api->deleteRangeByScore(oi, 10.0, 20.0, 0, 0, testOnDeleteCallback, &rec);
     ASSERT_EQ(deleted, 0UL);
     ASSERT_EQ(rec.count, 0);
-    ASSERT_EQ(api.length(oi), 5UL);
+    ASSERT_EQ(api->length(oi), 5UL);
     freeOnDeleteRecord(&rec);
 }
 
-TEST_F(OnDeleteCallbackTest, DeleteRangeByScore_Subset) {
+TEST_P(OnDeleteCallbackTest, DeleteRangeByScore_Subset) {
     insertN(10);
 
     OnDeleteRecord rec;
-    initOnDeleteRecord(&rec, 10);
-    unsigned long deleted = api.deleteRangeByScore(oi, 3.0, 6.0, 0, 0, testOnDeleteCallback, &rec);
+    initOnDeleteRecord(&rec, api, 10);
+    unsigned long deleted = api->deleteRangeByScore(oi, 3.0, 6.0, 0, 0, testOnDeleteCallback, &rec);
     ASSERT_EQ(deleted, 4UL);
     ASSERT_EQ(rec.count, 4);
-    ASSERT_EQ(api.length(oi), 6UL);
+    ASSERT_EQ(api->length(oi), 6UL);
     verifyOI();
 
     sortSdsArray(rec.elements, rec.count);
@@ -1759,84 +1761,84 @@ TEST_F(OnDeleteCallbackTest, DeleteRangeByScore_Subset) {
     freeOnDeleteRecord(&rec);
 }
 
-TEST_F(OnDeleteCallbackTest, DeleteRangeByScore_All) {
+TEST_P(OnDeleteCallbackTest, DeleteRangeByScore_All) {
     insertN(5);
 
     OnDeleteRecord rec;
-    initOnDeleteRecord(&rec, 10);
-    unsigned long deleted = api.deleteRangeByScore(oi, NEG_INF, POS_INF, 0, 0, testOnDeleteCallback, &rec);
+    initOnDeleteRecord(&rec, api, 10);
+    unsigned long deleted = api->deleteRangeByScore(oi, NEG_INF, POS_INF, 0, 0, testOnDeleteCallback, &rec);
     ASSERT_EQ(deleted, 5UL);
     ASSERT_EQ(rec.count, 5);
-    ASSERT_EQ(api.length(oi), 0UL);
+    ASSERT_EQ(api->length(oi), 0UL);
     verifyOI();
     freeOnDeleteRecord(&rec);
 }
 
-TEST_F(OnDeleteCallbackTest, DeleteRangeByScore_NullCallback) {
+TEST_P(OnDeleteCallbackTest, DeleteRangeByScore_NullCallback) {
     insertN(5);
 
-    unsigned long deleted = api.deleteRangeByScore(oi, 1.0, 3.0, 0, 0, NULL, NULL);
+    unsigned long deleted = api->deleteRangeByScore(oi, 1.0, 3.0, 0, 0, NULL, NULL);
     ASSERT_EQ(deleted, 3UL);
-    ASSERT_EQ(api.length(oi), 2UL);
+    ASSERT_EQ(api->length(oi), 2UL);
 }
 
-TEST_F(OnDeleteCallbackTest, DeleteRangeByScore_ExclusiveBounds) {
+TEST_P(OnDeleteCallbackTest, DeleteRangeByScore_ExclusiveBounds) {
     insertN(10);
 
     OnDeleteRecord rec;
-    initOnDeleteRecord(&rec, 10);
-    unsigned long deleted = api.deleteRangeByScore(oi, 3.0, 7.0, 1, 1, testOnDeleteCallback, &rec);
+    initOnDeleteRecord(&rec, api, 10);
+    unsigned long deleted = api->deleteRangeByScore(oi, 3.0, 7.0, 1, 1, testOnDeleteCallback, &rec);
     ASSERT_EQ(deleted, 3UL);
     ASSERT_EQ(rec.count, 3);
     sortSdsArray(rec.elements, rec.count);
     ASSERT_SDS_ARRAY_EQ(rec.elements, rec.count, "key4", "key5", "key6");
-    ASSERT_EQ(api.length(oi), 7UL);
+    ASSERT_EQ(api->length(oi), 7UL);
     freeOnDeleteRecord(&rec);
 }
 
-TEST_F(OnDeleteCallbackTest, DeleteRangeByScore_SingleElement) {
+TEST_P(OnDeleteCallbackTest, DeleteRangeByScore_SingleElement) {
     insertN(5);
 
     OnDeleteRecord rec;
-    initOnDeleteRecord(&rec, 10);
-    unsigned long deleted = api.deleteRangeByScore(oi, 2.0, 2.0, 0, 0, testOnDeleteCallback, &rec);
+    initOnDeleteRecord(&rec, api, 10);
+    unsigned long deleted = api->deleteRangeByScore(oi, 2.0, 2.0, 0, 0, testOnDeleteCallback, &rec);
     ASSERT_EQ(deleted, 1UL);
     ASSERT_EQ(rec.count, 1);
     ASSERT_STREQ(rec.elements[0], "key2");
-    ASSERT_EQ(api.length(oi), 4UL);
+    ASSERT_EQ(api->length(oi), 4UL);
     freeOnDeleteRecord(&rec);
 }
 
 /* DeleteRangeByIndex */
 
-TEST_F(OnDeleteCallbackTest, DeleteRangeByIndex_EmptyAndNoMatch) {
+TEST_P(OnDeleteCallbackTest, DeleteRangeByIndex_EmptyAndNoMatch) {
     OnDeleteRecord rec;
-    initOnDeleteRecord(&rec, 10);
+    initOnDeleteRecord(&rec, api, 10);
 
-    unsigned long deleted = api.deleteRangeByIndex(oi, 0, 4, testOnDeleteCallback, &rec);
+    unsigned long deleted = api->deleteRangeByIndex(oi, 0, 4, testOnDeleteCallback, &rec);
     ASSERT_EQ(deleted, 0UL);
     ASSERT_EQ(rec.count, 0);
-    api.free(oi);
+    api->free(oi);
 
-    oi = api.create();
+    oi = api->create();
     insertN(3);
     rec.count = 0;
-    deleted = api.deleteRangeByIndex(oi, 10, 20, testOnDeleteCallback, &rec);
+    deleted = api->deleteRangeByIndex(oi, 10, 20, testOnDeleteCallback, &rec);
     ASSERT_EQ(deleted, 0UL);
     ASSERT_EQ(rec.count, 0);
-    ASSERT_EQ(api.length(oi), 3UL);
+    ASSERT_EQ(api->length(oi), 3UL);
     freeOnDeleteRecord(&rec);
 }
 
-TEST_F(OnDeleteCallbackTest, DeleteRangeByIndex_Subset) {
+TEST_P(OnDeleteCallbackTest, DeleteRangeByIndex_Subset) {
     insertN(10);
 
     OnDeleteRecord rec;
-    initOnDeleteRecord(&rec, 10);
-    unsigned long deleted = api.deleteRangeByIndex(oi, 2, 4, testOnDeleteCallback, &rec);
+    initOnDeleteRecord(&rec, api, 10);
+    unsigned long deleted = api->deleteRangeByIndex(oi, 2, 4, testOnDeleteCallback, &rec);
     ASSERT_EQ(deleted, 3UL);
     ASSERT_EQ(rec.count, 3);
-    ASSERT_EQ(api.length(oi), 7UL);
+    ASSERT_EQ(api->length(oi), 7UL);
 
     sortSdsArray(rec.elements, rec.count);
     ASSERT_SDS_ARRAY_EQ(rec.elements, rec.count, "key2", "key3", "key4");
@@ -1850,32 +1852,32 @@ TEST_F(OnDeleteCallbackTest, DeleteRangeByIndex_Subset) {
     freeOnDeleteRecord(&rec);
 }
 
-TEST_F(OnDeleteCallbackTest, DeleteRangeByIndex_All) {
+TEST_P(OnDeleteCallbackTest, DeleteRangeByIndex_All) {
     insertN(5);
 
     OnDeleteRecord rec;
-    initOnDeleteRecord(&rec, 10);
-    unsigned long deleted = api.deleteRangeByIndex(oi, 0, 4, testOnDeleteCallback, &rec);
+    initOnDeleteRecord(&rec, api, 10);
+    unsigned long deleted = api->deleteRangeByIndex(oi, 0, 4, testOnDeleteCallback, &rec);
     ASSERT_EQ(deleted, 5UL);
     ASSERT_EQ(rec.count, 5);
-    ASSERT_EQ(api.length(oi), 0UL);
+    ASSERT_EQ(api->length(oi), 0UL);
     freeOnDeleteRecord(&rec);
 }
 
-TEST_F(OnDeleteCallbackTest, DeleteRangeByIndex_NullCallback) {
+TEST_P(OnDeleteCallbackTest, DeleteRangeByIndex_NullCallback) {
     insertN(5);
 
-    unsigned long deleted = api.deleteRangeByIndex(oi, 2, 4, NULL, NULL);
+    unsigned long deleted = api->deleteRangeByIndex(oi, 2, 4, NULL, NULL);
     ASSERT_EQ(deleted, 3UL);
-    ASSERT_EQ(api.length(oi), 2UL);
+    ASSERT_EQ(api->length(oi), 2UL);
 }
 
-TEST_F(OnDeleteCallbackTest, DeleteRangeByIndex_ExclusiveBounds) {
+TEST_P(OnDeleteCallbackTest, DeleteRangeByIndex_ExclusiveBounds) {
     insertN(5);
 
     OnDeleteRecord rec;
-    initOnDeleteRecord(&rec, 10);
-    unsigned long deleted = api.deleteRangeByIndex(oi, 2, 2, testOnDeleteCallback, &rec);
+    initOnDeleteRecord(&rec, api, 10);
+    unsigned long deleted = api->deleteRangeByIndex(oi, 2, 2, testOnDeleteCallback, &rec);
     ASSERT_EQ(deleted, 1UL);
     ASSERT_EQ(rec.count, 1);
     ASSERT_STREQ(rec.elements[0], "key2");
@@ -1889,35 +1891,35 @@ TEST_F(OnDeleteCallbackTest, DeleteRangeByIndex_ExclusiveBounds) {
     freeOnDeleteRecord(&rec);
 }
 
-TEST_F(OnDeleteCallbackTest, DeleteRangeByIndex_SingleElement) {
+TEST_P(OnDeleteCallbackTest, DeleteRangeByIndex_SingleElement) {
     insertN(5);
 
     OnDeleteRecord rec;
-    initOnDeleteRecord(&rec, 10);
-    unsigned long deleted = api.deleteRangeByIndex(oi, 0, 0, testOnDeleteCallback, &rec);
+    initOnDeleteRecord(&rec, api, 10);
+    unsigned long deleted = api->deleteRangeByIndex(oi, 0, 0, testOnDeleteCallback, &rec);
     ASSERT_EQ(deleted, 1UL);
     ASSERT_EQ(rec.count, 1);
     ASSERT_STREQ(rec.elements[0], "key0");
-    ASSERT_EQ(api.length(oi), 4UL);
+    ASSERT_EQ(api->length(oi), 4UL);
     freeOnDeleteRecord(&rec);
 }
 
 /* DeleteRangeByLex */
 
-TEST_F(OnDeleteCallbackTest, DeleteRangeByLex_EmptyAndNoMatch) {
+TEST_P(OnDeleteCallbackTest, DeleteRangeByLex_EmptyAndNoMatch) {
     OnDeleteRecord rec;
-    initOnDeleteRecord(&rec, 10);
+    initOnDeleteRecord(&rec, api, 10);
 
     sds min = sdsnew("a");
     sds max = sdsnew("z");
-    unsigned long deleted = api.deleteRangeByLex(oi, min, max, 0, 0, testOnDeleteCallback, &rec);
+    unsigned long deleted = api->deleteRangeByLex(oi, min, max, 0, 0, testOnDeleteCallback, &rec);
     ASSERT_EQ(deleted, 0UL);
     ASSERT_EQ(rec.count, 0);
     sdsfree(min);
     sdsfree(max);
-    api.free(oi);
+    api->free(oi);
 
-    oi = api.create();
+    oi = api->create();
     {
         const char *_l[] = {"apple", "banana", "cherry"};
         insertLex(_l, 3);
@@ -1925,29 +1927,29 @@ TEST_F(OnDeleteCallbackTest, DeleteRangeByLex_EmptyAndNoMatch) {
     rec.count = 0;
     min = sdsnew("x");
     max = sdsnew("z");
-    deleted = api.deleteRangeByLex(oi, min, max, 0, 0, testOnDeleteCallback, &rec);
+    deleted = api->deleteRangeByLex(oi, min, max, 0, 0, testOnDeleteCallback, &rec);
     ASSERT_EQ(deleted, 0UL);
     ASSERT_EQ(rec.count, 0);
-    ASSERT_EQ(api.length(oi), 3UL);
+    ASSERT_EQ(api->length(oi), 3UL);
     sdsfree(min);
     sdsfree(max);
     freeOnDeleteRecord(&rec);
 }
 
-TEST_F(OnDeleteCallbackTest, DeleteRangeByLex_Subset) {
+TEST_P(OnDeleteCallbackTest, DeleteRangeByLex_Subset) {
     {
         const char *_l[] = {"apple", "banana", "cherry", "date", "elderberry"};
         insertLex(_l, 5);
     }
 
     OnDeleteRecord rec;
-    initOnDeleteRecord(&rec, 10);
+    initOnDeleteRecord(&rec, api, 10);
     sds min = sdsnew("banana");
     sds max = sdsnew("date");
-    unsigned long deleted = api.deleteRangeByLex(oi, min, max, 0, 0, testOnDeleteCallback, &rec);
+    unsigned long deleted = api->deleteRangeByLex(oi, min, max, 0, 0, testOnDeleteCallback, &rec);
     ASSERT_EQ(deleted, 3UL);
     ASSERT_EQ(rec.count, 3);
-    ASSERT_EQ(api.length(oi), 2UL);
+    ASSERT_EQ(api->length(oi), 2UL);
 
     sortSdsArray(rec.elements, rec.count);
     ASSERT_SDS_ARRAY_EQ(rec.elements, rec.count, "banana", "cherry", "date");
@@ -1964,27 +1966,27 @@ TEST_F(OnDeleteCallbackTest, DeleteRangeByLex_Subset) {
     freeOnDeleteRecord(&rec);
 }
 
-TEST_F(OnDeleteCallbackTest, DeleteRangeByLex_All) {
+TEST_P(OnDeleteCallbackTest, DeleteRangeByLex_All) {
     {
         const char *_l[] = {"apple", "banana", "cherry"};
         insertLex(_l, 3);
     }
 
     OnDeleteRecord rec;
-    initOnDeleteRecord(&rec, 10);
+    initOnDeleteRecord(&rec, api, 10);
     sds min = sdsnew("a");
     sds max = sdsnew("z");
-    unsigned long deleted = api.deleteRangeByLex(oi, min, max, 0, 0, testOnDeleteCallback, &rec);
+    unsigned long deleted = api->deleteRangeByLex(oi, min, max, 0, 0, testOnDeleteCallback, &rec);
     ASSERT_EQ(deleted, 3UL);
     ASSERT_EQ(rec.count, 3);
-    ASSERT_EQ(api.length(oi), 0UL);
+    ASSERT_EQ(api->length(oi), 0UL);
 
     sdsfree(min);
     sdsfree(max);
     freeOnDeleteRecord(&rec);
 }
 
-TEST_F(OnDeleteCallbackTest, DeleteRangeByLex_NullCallback) {
+TEST_P(OnDeleteCallbackTest, DeleteRangeByLex_NullCallback) {
     {
         const char *_l[] = {"apple", "banana", "cherry", "date"};
         insertLex(_l, 4);
@@ -1992,9 +1994,9 @@ TEST_F(OnDeleteCallbackTest, DeleteRangeByLex_NullCallback) {
 
     sds min = sdsnew("banana");
     sds max = sdsnew("cherry");
-    unsigned long deleted = api.deleteRangeByLex(oi, min, max, 0, 0, NULL, NULL);
+    unsigned long deleted = api->deleteRangeByLex(oi, min, max, 0, 0, NULL, NULL);
     ASSERT_EQ(deleted, 2UL);
-    ASSERT_EQ(api.length(oi), 2UL);
+    ASSERT_EQ(api->length(oi), 2UL);
 
     {
         size_t _rn;
@@ -2007,21 +2009,21 @@ TEST_F(OnDeleteCallbackTest, DeleteRangeByLex_NullCallback) {
     sdsfree(max);
 }
 
-TEST_F(OnDeleteCallbackTest, DeleteRangeByLex_ExclusiveBounds) {
+TEST_P(OnDeleteCallbackTest, DeleteRangeByLex_ExclusiveBounds) {
     {
         const char *_l[] = {"apple", "banana", "cherry", "date", "elderberry"};
         insertLex(_l, 5);
     }
 
     OnDeleteRecord rec;
-    initOnDeleteRecord(&rec, 10);
+    initOnDeleteRecord(&rec, api, 10);
     sds min = sdsnew("banana");
     sds max = sdsnew("date");
-    unsigned long deleted = api.deleteRangeByLex(oi, min, max, 1, 1, testOnDeleteCallback, &rec);
+    unsigned long deleted = api->deleteRangeByLex(oi, min, max, 1, 1, testOnDeleteCallback, &rec);
     ASSERT_EQ(deleted, 1UL);
     ASSERT_EQ(rec.count, 1);
     ASSERT_STREQ(rec.elements[0], "cherry");
-    ASSERT_EQ(api.length(oi), 4UL);
+    ASSERT_EQ(api->length(oi), 4UL);
 
     {
         size_t _rn;
@@ -2035,21 +2037,21 @@ TEST_F(OnDeleteCallbackTest, DeleteRangeByLex_ExclusiveBounds) {
     freeOnDeleteRecord(&rec);
 }
 
-TEST_F(OnDeleteCallbackTest, DeleteRangeByLex_SingleElement) {
+TEST_P(OnDeleteCallbackTest, DeleteRangeByLex_SingleElement) {
     {
         const char *_l[] = {"apple", "banana", "cherry"};
         insertLex(_l, 3);
     }
 
     OnDeleteRecord rec;
-    initOnDeleteRecord(&rec, 10);
+    initOnDeleteRecord(&rec, api, 10);
     sds min = sdsnew("banana");
     sds max = sdsnew("banana");
-    unsigned long deleted = api.deleteRangeByLex(oi, min, max, 0, 0, testOnDeleteCallback, &rec);
+    unsigned long deleted = api->deleteRangeByLex(oi, min, max, 0, 0, testOnDeleteCallback, &rec);
     ASSERT_EQ(deleted, 1UL);
     ASSERT_EQ(rec.count, 1);
     ASSERT_STREQ(rec.elements[0], "banana");
-    ASSERT_EQ(api.length(oi), 2UL);
+    ASSERT_EQ(api->length(oi), 2UL);
 
     {
         size_t _rn;
@@ -2102,28 +2104,31 @@ static void simHtSort(SimHt *ht) {
 }
 
 static void hashtableConsistencyOnDelete(OrderedIndexItem *item, void *ctx) {
-    SimHt *ht = (SimHt *)ctx;
+    /* ctx is a two-element array: [0]=SimHt*, [1]=OrderedIndexTestApi* */
+    void **args = (void **)ctx;
+    SimHt *ht = (SimHt *)args[0];
+    OrderedIndexTestApi *api = (OrderedIndexTestApi *)args[1];
     const char *ptr;
     size_t len;
-    skiplistGetElementRaw(item, &ptr, &len);
+    api->getElementRaw(item, &ptr, &len);
     simHtRemove(ht, ptr, len);
     /* Item is freed by the index after this callback returns. */
 }
 
-class RangeDeleteHashtableConsistencyTest : public ::testing::Test {
+class RangeDeleteHashtableConsistencyTest : public ::testing::TestWithParam<OrderedIndexTestApi *> {
   protected:
-    SkiplistOrderedIndex api;
+    OrderedIndexTestApi *api = GetParam();
     OrderedIndex *oi = nullptr;
 
     void SetUp() override {
-        oi = api.create();
+        oi = api->create();
     }
     void TearDown() override {
-        if (oi) api.free(oi);
+        if (oi) api->free(oi);
     }
 
     void insert(double score, const char *ele) {
-        api.insert(oi, score, ele, strlen(ele));
+        api->insert(oi, score, ele, strlen(ele));
     }
 
     void insertN(SimHt &ht, int n) {
@@ -2144,7 +2149,7 @@ class RangeDeleteHashtableConsistencyTest : public ::testing::Test {
 
     void assertHtMatchesIndex(SimHt &ht) {
         size_t idx_n;
-        sds *idx_elems = collectIndexToSds(api, oi, &idx_n);
+        sds *idx_elems = collectIndexToSds(*api, oi, &idx_n);
         sortSdsArray(idx_elems, idx_n);
         simHtSort(&ht);
         ASSERT_EQ(idx_n, (size_t)ht.count);
@@ -2157,34 +2162,37 @@ class RangeDeleteHashtableConsistencyTest : public ::testing::Test {
 
 /* ByScore */
 
-TEST_F(RangeDeleteHashtableConsistencyTest, ByScore_PartialDelete) {
+TEST_P(RangeDeleteHashtableConsistencyTest, ByScore_PartialDelete) {
     SimHt simulatedHt;
     simHtInit(&simulatedHt, 20);
+    void *cbCtx[] = {&simulatedHt, api};
     insertN(simulatedHt, 10);
 
-    api.deleteRangeByScore(oi, 3.0, 6.0, 0, 0, hashtableConsistencyOnDelete, &simulatedHt);
+    api->deleteRangeByScore(oi, 3.0, 6.0, 0, 0, hashtableConsistencyOnDelete, cbCtx);
 
     assertHtMatchesIndex(simulatedHt);
     simHtFree(&simulatedHt);
 }
 
-TEST_F(RangeDeleteHashtableConsistencyTest, ByScore_FullDelete) {
+TEST_P(RangeDeleteHashtableConsistencyTest, ByScore_FullDelete) {
     SimHt simulatedHt;
     simHtInit(&simulatedHt, 20);
+    void *cbCtx[] = {&simulatedHt, api};
     insertN(simulatedHt, 10);
 
-    api.deleteRangeByScore(oi, NEG_INF, POS_INF, 0, 0, hashtableConsistencyOnDelete, &simulatedHt);
+    api->deleteRangeByScore(oi, NEG_INF, POS_INF, 0, 0, hashtableConsistencyOnDelete, cbCtx);
 
     assertHtMatchesIndex(simulatedHt);
     simHtFree(&simulatedHt);
 }
 
-TEST_F(RangeDeleteHashtableConsistencyTest, ByScore_EmptyRange) {
+TEST_P(RangeDeleteHashtableConsistencyTest, ByScore_EmptyRange) {
     SimHt simulatedHt;
     simHtInit(&simulatedHt, 20);
+    void *cbCtx[] = {&simulatedHt, api};
     insertN(simulatedHt, 10);
 
-    api.deleteRangeByScore(oi, 20.0, 30.0, 0, 0, hashtableConsistencyOnDelete, &simulatedHt);
+    api->deleteRangeByScore(oi, 20.0, 30.0, 0, 0, hashtableConsistencyOnDelete, cbCtx);
 
     assertHtMatchesIndex(simulatedHt);
     simHtFree(&simulatedHt);
@@ -2192,34 +2200,37 @@ TEST_F(RangeDeleteHashtableConsistencyTest, ByScore_EmptyRange) {
 
 /* ByIndex */
 
-TEST_F(RangeDeleteHashtableConsistencyTest, ByIndex_PartialDelete) {
+TEST_P(RangeDeleteHashtableConsistencyTest, ByIndex_PartialDelete) {
     SimHt simulatedHt;
     simHtInit(&simulatedHt, 20);
+    void *cbCtx[] = {&simulatedHt, api};
     insertN(simulatedHt, 10);
 
-    api.deleteRangeByIndex(oi, 2, 4, hashtableConsistencyOnDelete, &simulatedHt);
+    api->deleteRangeByIndex(oi, 2, 4, hashtableConsistencyOnDelete, cbCtx);
 
     assertHtMatchesIndex(simulatedHt);
     simHtFree(&simulatedHt);
 }
 
-TEST_F(RangeDeleteHashtableConsistencyTest, ByIndex_FullDelete) {
+TEST_P(RangeDeleteHashtableConsistencyTest, ByIndex_FullDelete) {
     SimHt simulatedHt;
     simHtInit(&simulatedHt, 20);
+    void *cbCtx[] = {&simulatedHt, api};
     insertN(simulatedHt, 10);
 
-    api.deleteRangeByIndex(oi, 0, 9, hashtableConsistencyOnDelete, &simulatedHt);
+    api->deleteRangeByIndex(oi, 0, 9, hashtableConsistencyOnDelete, cbCtx);
 
     assertHtMatchesIndex(simulatedHt);
     simHtFree(&simulatedHt);
 }
 
-TEST_F(RangeDeleteHashtableConsistencyTest, ByIndex_EmptyRange) {
+TEST_P(RangeDeleteHashtableConsistencyTest, ByIndex_EmptyRange) {
     SimHt simulatedHt;
     simHtInit(&simulatedHt, 20);
+    void *cbCtx[] = {&simulatedHt, api};
     insertN(simulatedHt, 10);
 
-    api.deleteRangeByIndex(oi, 20, 30, hashtableConsistencyOnDelete, &simulatedHt);
+    api->deleteRangeByIndex(oi, 20, 30, hashtableConsistencyOnDelete, cbCtx);
 
     assertHtMatchesIndex(simulatedHt);
     simHtFree(&simulatedHt);
@@ -2227,9 +2238,10 @@ TEST_F(RangeDeleteHashtableConsistencyTest, ByIndex_EmptyRange) {
 
 /* ByLex */
 
-TEST_F(RangeDeleteHashtableConsistencyTest, ByLex_PartialDelete) {
+TEST_P(RangeDeleteHashtableConsistencyTest, ByLex_PartialDelete) {
     SimHt simulatedHt;
     simHtInit(&simulatedHt, 20);
+    void *cbCtx[] = {&simulatedHt, api};
     {
         const char *_l[] = {"apple", "banana", "cherry", "date", "elderberry"};
         insertLex(simulatedHt, _l, 5);
@@ -2237,7 +2249,7 @@ TEST_F(RangeDeleteHashtableConsistencyTest, ByLex_PartialDelete) {
 
     sds min = sdsnew("banana");
     sds max = sdsnew("date");
-    api.deleteRangeByLex(oi, min, max, 0, 0, hashtableConsistencyOnDelete, &simulatedHt);
+    api->deleteRangeByLex(oi, min, max, 0, 0, hashtableConsistencyOnDelete, cbCtx);
 
     assertHtMatchesIndex(simulatedHt);
 
@@ -2246,9 +2258,10 @@ TEST_F(RangeDeleteHashtableConsistencyTest, ByLex_PartialDelete) {
     simHtFree(&simulatedHt);
 }
 
-TEST_F(RangeDeleteHashtableConsistencyTest, ByLex_FullDelete) {
+TEST_P(RangeDeleteHashtableConsistencyTest, ByLex_FullDelete) {
     SimHt simulatedHt;
     simHtInit(&simulatedHt, 20);
+    void *cbCtx[] = {&simulatedHt, api};
     {
         const char *_l[] = {"apple", "banana", "cherry", "date", "elderberry"};
         insertLex(simulatedHt, _l, 5);
@@ -2256,7 +2269,7 @@ TEST_F(RangeDeleteHashtableConsistencyTest, ByLex_FullDelete) {
 
     sds min = sdsnew("a");
     sds max = sdsnew("z");
-    api.deleteRangeByLex(oi, min, max, 0, 0, hashtableConsistencyOnDelete, &simulatedHt);
+    api->deleteRangeByLex(oi, min, max, 0, 0, hashtableConsistencyOnDelete, cbCtx);
 
     assertHtMatchesIndex(simulatedHt);
 
@@ -2265,9 +2278,10 @@ TEST_F(RangeDeleteHashtableConsistencyTest, ByLex_FullDelete) {
     simHtFree(&simulatedHt);
 }
 
-TEST_F(RangeDeleteHashtableConsistencyTest, ByLex_EmptyRange) {
+TEST_P(RangeDeleteHashtableConsistencyTest, ByLex_EmptyRange) {
     SimHt simulatedHt;
     simHtInit(&simulatedHt, 20);
+    void *cbCtx[] = {&simulatedHt, api};
     {
         const char *_l[] = {"apple", "banana", "cherry", "date", "elderberry"};
         insertLex(simulatedHt, _l, 5);
@@ -2275,7 +2289,7 @@ TEST_F(RangeDeleteHashtableConsistencyTest, ByLex_EmptyRange) {
 
     sds min = sdsnew("zzz");
     sds max = sdsnew("zzzz");
-    api.deleteRangeByLex(oi, min, max, 0, 0, hashtableConsistencyOnDelete, &simulatedHt);
+    api->deleteRangeByLex(oi, min, max, 0, 0, hashtableConsistencyOnDelete, cbCtx);
 
     assertHtMatchesIndex(simulatedHt);
 
@@ -2283,3 +2297,13 @@ TEST_F(RangeDeleteHashtableConsistencyTest, ByLex_EmptyRange) {
     sdsfree(max);
     simHtFree(&simulatedHt);
 }
+
+INSTANTIATE_TEST_SUITE_P(AllImplementations,
+                         OnDeleteCallbackTest,
+                         ::testing::Values(&skiplistImpl),
+                         orderedIndexTestName);
+
+INSTANTIATE_TEST_SUITE_P(AllImplementations,
+                         RangeDeleteHashtableConsistencyTest,
+                         ::testing::Values(&skiplistImpl),
+                         orderedIndexTestName);

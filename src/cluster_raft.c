@@ -105,14 +105,15 @@ typedef struct {
  * -------------------------------------------------------------------------- */
 
 typedef struct {
-    /* Persistent Raft state */
+    /* Persistent Raft state (saved in nodes.conf vars line) */
     uint64_t current_term;
+    uint64_t last_applied;
+    uint64_t snapshot_term;          /* Term of the entry at last_applied */
     char voted_for[CLUSTER_NAMELEN]; /* All zeros = none */
 
     /* Volatile Raft state */
     enum raftRole role;
     uint64_t commit_index;
-    uint64_t last_applied;
 
     /* Log */
     raftLogEntry **log;
@@ -1201,6 +1202,19 @@ static void raftLogApply(raftLogEntry *e) {
     }
 }
 
+/* Apply all committed but unapplied log entries. */
+static void raftApplyCommitted(void) {
+    clusterRaftState *rs = RAFT_STATE();
+    while (rs->last_applied < rs->commit_index) {
+        rs->last_applied++;
+        raftLogEntry *e = raftLogGet(rs->last_applied);
+        if (e) {
+            rs->snapshot_term = e->term;
+            raftLogApply(e);
+        }
+    }
+}
+
 /* --------------------------------------------------------------------------
  * AE (AppendEntries) message
  *
@@ -1336,11 +1350,7 @@ static int clusterRaftProcessAppendEntries(clusterLink *link, int argc, sds *arg
         rs->commit_index = leader_commit;
         if (rs->commit_index > raftLogLastIndex()) rs->commit_index = raftLogLastIndex();
     }
-    while (rs->last_applied < rs->commit_index) {
-        rs->last_applied++;
-        raftLogEntry *e = raftLogGet(rs->last_applied);
-        if (e) raftLogApply(e);
-    }
+    raftApplyCommitted();
 
     /* Defer AE_ACK until after persistence in beforeSleep. This ensures
      * entries are on stable storage before the leader counts our ACK. */
@@ -1419,11 +1429,7 @@ static int clusterRaftProcessAppendEntriesResponse(clusterLink *link, int argc, 
 
         /* Apply newly committed entries. */
         uint64_t prev_commit = rs->last_applied;
-        while (rs->last_applied < rs->commit_index) {
-            rs->last_applied++;
-            raftLogEntry *e = raftLogGet(rs->last_applied);
-            if (e) raftLogApply(e);
-        }
+        raftApplyCommitted();
         /* If the node we were talking to was forgotten, bail out. */
         if (!link->node) {
             freeClusterLink(link);
@@ -2036,11 +2042,7 @@ static void clusterRaftBeforeSleep(bool blocked) {
     if (rs->role == RAFT_ROLE_LEADER && server.cluster->size <= 1 &&
         raftLogLastIndex() > rs->commit_index) {
         rs->commit_index = raftLogLastIndex();
-        while (rs->last_applied < rs->commit_index) {
-            rs->last_applied++;
-            raftLogEntry *e = raftLogGet(rs->last_applied);
-            if (e) raftLogApply(e);
-        }
+        raftApplyCommitted();
         /* If we just grew beyond singleton, replicate to the new peer. */
         if (server.cluster->size > 1) rs->todo_broadcast_ae = 1;
     }
@@ -2432,9 +2434,10 @@ static void clusterRaftFreeNodeData(clusterNode *node) {
 
 static sds clusterRaftAppendVarsLine(sds config) {
     clusterRaftState *rs = RAFT_STATE();
-    config = sdscatprintf(config, "vars currentTerm %llu lastApplied %llu",
+    config = sdscatprintf(config, "vars currentTerm %llu lastApplied %llu snapshotTerm %llu",
                           (unsigned long long)rs->current_term,
-                          (unsigned long long)rs->last_applied);
+                          (unsigned long long)rs->last_applied,
+                          (unsigned long long)rs->snapshot_term);
     if (rs->voted_for[0]) {
         config = sdscat(config, " votedFor ");
         config = sdscatlen(config, rs->voted_for, CLUSTER_NAMELEN);
@@ -2455,6 +2458,9 @@ static int clusterRaftParseVarsLine(const char *name, const char *value) {
     } else if (!strcasecmp(name, "lastApplied")) {
         rs->last_applied = strtoull(value, NULL, 10);
         rs->commit_index = rs->last_applied;
+        return 1;
+    } else if (!strcasecmp(name, "snapshotTerm")) {
+        rs->snapshot_term = strtoull(value, NULL, 10);
         return 1;
     } else if (!strcasecmp(name, "votedFor")) {
         memcpy(rs->voted_for, value, CLUSTER_NAMELEN);

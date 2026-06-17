@@ -943,6 +943,25 @@ static void raftLogTruncateFrom(uint64_t index) {
     rs->todo_save_config = 1;
 }
 
+/* Trim applied entries from the front of the log. Called after applying
+ * entries; trims only when the number of applied entries in the log exceeds
+ * twice the keep threshold, so trimming happens in infrequent batches. */
+#define RAFT_LOG_TRIM_KEEP 64
+static void raftLogTrimApplied(void) {
+    clusterRaftState *rs = RAFT_STATE();
+    if (rs->log_count == 0) return;
+    uint64_t base = rs->log[0]->index;
+    if (rs->last_applied < base) return;
+    uint64_t applied_in_log = rs->last_applied - base + 1;
+    if (applied_in_log <= RAFT_LOG_TRIM_KEEP * 2) return;
+    uint64_t trim_count = applied_in_log - RAFT_LOG_TRIM_KEEP;
+    for (uint64_t i = 0; i < trim_count; i++) {
+        raftLogFree(rs->log[i]);
+    }
+    rs->log_count -= trim_count;
+    memmove(rs->log, rs->log + trim_count, rs->log_count * sizeof(raftLogEntry *));
+}
+
 static uint64_t raftLogLastIndex(void) {
     clusterRaftState *rs = RAFT_STATE();
     return rs->log_count > 0 ? rs->log[rs->log_count - 1]->index : 0;
@@ -1217,6 +1236,7 @@ static void raftApplyCommitted(void) {
             raftLogApply(e);
         }
     }
+    raftLogTrimApplied();
 }
 
 /* --------------------------------------------------------------------------

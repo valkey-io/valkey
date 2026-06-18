@@ -659,7 +659,8 @@ Raft state is persisted in `nodes.conf`. The file has three sections:
 
 1. **Node lines** — the cluster state snapshot (nodes, slots, replication
    topology) as of `lastApplied`.
-2. **Vars line** — `currentTerm`, `lastApplied`, `votedFor`, `raftLeader`.
+2. **Vars line** — `currentTerm`, `lastApplied`, `snapshotTerm`,
+   `votedFor`, `raftLeader`.
 3. **Log lines** — entries with index > `lastApplied` appended at the end.
 
 Only `currentTerm`, `votedFor`, and the log require persistence for
@@ -738,6 +739,76 @@ The node lines share the same format as the gossip protocol (code
 reuse), but the vars and log lines are raft-specific. The file is not
 compatible between protocols — switching from gossip to raft (or vice
 versa) requires removing nodes.conf.
+
+## Log compaction and snapshots
+
+### Conceptual model
+
+The `nodes.conf` file IS the snapshot. The node lines represent the
+fully applied cluster state at `lastApplied`. Entries at or before
+`lastApplied` are not stored — only their cumulative effect (the cluster
+state) is retained. Entries after `lastApplied` (uncommitted tail) are
+stored as log lines.
+
+This corresponds to the Raft paper's snapshot mechanism (§7), where:
+
+- **`lastApplied`** = `lastIncludedIndex` (last entry in the snapshot)
+- **`snapshotTerm`** = `lastIncludedTerm` (term of that entry)
+
+`snapshotTerm` is needed because the entry at `lastApplied` is no longer
+in the log. When the leader sends AE with `prev_log_index = lastApplied`,
+the follower must verify `prev_log_term` against `snapshotTerm` rather
+than looking up a log entry that no longer exists.
+
+Note: the standard Raft paper persists the full log (or log from the
+snapshot point). We don't — we only persist uncommitted entries. This
+is why `snapshotTerm` must be explicitly stored in the vars line,
+whereas in a textbook implementation it could be read from the log.
+
+### In-memory log trimming
+
+The leader trims committed entries from the in-memory log to bound
+memory usage. The trim keeps a fixed number of recent committed entries
+(currently 64) for slow followers to catch up via normal AE. Trimming
+happens in batches (triggered when applied entries exceed 2× the keep
+threshold).
+
+### InstallSnapshot
+
+When a follower's `next_index` falls behind the leader's first available
+log entry (entries have been trimmed), the leader sends `INSTALL_SNAPSHOT`
+instead of AE. The message contains:
+
+    INSTALL_SNAPSHOT <leader-id> <term> <last-index> <last-term>
+    <node line 1>
+    <node line 2>
+    ...
+
+The follower processes the snapshot by:
+
+1. Parsing node lines to create/update cluster state.
+2. Removing nodes not present in the snapshot.
+3. Promoting from joiner to follower if its own NODE_JOIN is included.
+4. Setting `lastApplied`, `commitIndex`, and `snapshotTerm` to the
+   snapshot's values.
+5. Recomputing `cluster->size` (quorum).
+6. Clearing the in-memory log (all entries are superseded).
+
+After sending a snapshot, the leader advances `next_index` for that peer
+to `lastApplied + 1` to avoid re-sending on the next heartbeat. The
+follower's AE_ACK confirms or corrects this.
+
+### No-op entry on election
+
+When a new leader is elected, it appends a no-op entry in its own term.
+This serves two purposes (Raft paper §5.4.2, §8):
+
+1. **Commit previous-term entries**: A leader cannot commit entries from
+   prior terms by replica counting alone. The no-op in the current term
+   carries older entries to commitment.
+2. **Establish the new term in the log**: After the no-op is committed,
+   `snapshotTerm` equals `currentTerm` in steady state, simplifying
+   reasoning about the compaction boundary.
 
 ## Shard Epoch (not yet implemented)
 

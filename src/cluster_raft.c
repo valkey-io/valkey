@@ -102,6 +102,7 @@ enum raftEntryType {
     RAFT_ENTRY_NODE_INFO = 6,      /* IP, port, hostname, etc. */
     RAFT_ENTRY_NODE_FAIL = 7,      /* Node failure detected */
     RAFT_ENTRY_NODE_RECOVER = 8,   /* Node recovery detected */
+    RAFT_ENTRY_NOOP = 9,           /* No-op (leader term establishment) */
 };
 
 typedef struct {
@@ -788,6 +789,7 @@ static int raftEntryTypeByName(const char *name) {
     if (!strcasecmp(name, "NODE_INFO")) return RAFT_ENTRY_NODE_INFO;
     if (!strcasecmp(name, "NODE_FAIL")) return RAFT_ENTRY_NODE_FAIL;
     if (!strcasecmp(name, "NODE_RECOVER")) return RAFT_ENTRY_NODE_RECOVER;
+    if (!strcasecmp(name, "NOOP")) return RAFT_ENTRY_NOOP;
     return -1;
 }
 
@@ -801,6 +803,7 @@ static const char *raftEntryTypeName(uint8_t type) {
     case RAFT_ENTRY_NODE_INFO: return "NODE_INFO";
     case RAFT_ENTRY_NODE_FAIL: return "NODE_FAIL";
     case RAFT_ENTRY_NODE_RECOVER: return "NODE_RECOVER";
+    case RAFT_ENTRY_NOOP: return "NOOP";
     default: return "UNKNOWN";
     }
 }
@@ -1530,6 +1533,9 @@ static void raftLogApply(raftLogEntry *e) {
         serverLog(LL_NOTICE, "Applied NODE_INFO (index %llu).", (unsigned long long)e->index);
         break;
     }
+    case RAFT_ENTRY_NOOP:
+        /* No-op: nothing to apply. */
+        break;
     default:
         serverLog(LL_NOTICE, "Applied log entry type %d (index %llu).", e->type,
                   (unsigned long long)e->index);
@@ -1980,6 +1986,10 @@ static int clusterRaftProcessRequestVoteResponse(clusterLink *link, int argc, sd
                 }
             }
             dictReleaseIterator(di);
+            /* Append a no-op entry to commit prior-term entries (§5.4.2)
+             * and establish the new term in the log. */
+            uint64_t noop_idx = raftLogLastIndex() + 1;
+            raftLogAppend(raftLogCreate(rs->current_term, noop_idx, RAFT_ENTRY_NOOP, sdsempty()));
             /* Immediate heartbeat to assert leadership. */
             clusterRaftBroadcastAppendEntries();
         }
@@ -2974,8 +2984,8 @@ static void clusterRaftPersistNewLogEntries(uint64_t from) {
 
 
 static int clusterRaftParseLogLine(sds *argv, int argc) {
-    /* Format: log <crc64hex> <index> <term> <type> <data...> */
-    if (argc < 6) {
+    /* Format: log <crc64hex> <index> <term> <type> [<data...>] */
+    if (argc < 5) {
         serverLog(LL_WARNING, "Corrupt raft log line: too few fields (%d).", argc);
         return C_ERR;
     }
@@ -3008,9 +3018,9 @@ static int clusterRaftParseLogLine(sds *argv, int argc) {
     }
 
     /* Reconstruct data from remaining args (space-separated). */
-    sds data = sdsdup(argv[5]);
-    for (int i = 6; i < argc; i++) {
-        data = sdscatlen(data, " ", 1);
+    sds data = sdsempty();
+    for (int i = 5; i < argc; i++) {
+        if (i > 5) data = sdscatlen(data, " ", 1);
         data = sdscatsds(data, argv[i]);
     }
 

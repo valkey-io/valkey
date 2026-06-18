@@ -36,6 +36,7 @@
 #include "rio.h"
 #include "commands.h"
 #include "allocator_defrag.h"
+#include "qos.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -1206,6 +1207,7 @@ typedef struct ClientFlags {
     uint64_t keyspace_notified : 1;        /* Indicates that a keyspace notification was triggered during the execution of the
                                               current command. */
     uint64_t argv_borrowed : 1;            /* The argv array and its elements are borrowed from the caller (VM_CallArgv) and must not be freed. */
+    uint64_t prioritized : 1;              /* This client has high Quality of Service (QoS) priority */
 } ClientFlags;
 /* Ensure ClientFlags never silently grows beyond two uint64_t words.
  * If this fires, move a flag to a separate field or widen the limit. */
@@ -1909,6 +1911,9 @@ struct valkeyServer {
     double stat_fork_rate;                         /* Fork rate in GB/sec. */
     long long stat_total_forks;                    /* Total count of fork. */
     long long stat_rejected_conn;                  /* Clients rejected because of maxclients */
+    long long stat_rejected_priority_conn;         /* Prioritized clients rejected because of priority_maxclients */
+    long long stat_num_active_clients_prioritized; /* Number of active prioritized clients */
+    long long stat_num_active_clients_normal;      /* Number of active normal clients */
     long long stat_sync_full;                      /* Number of full resyncs with replicas. */
     long long stat_sync_partial_ok;                /* Number of accepted PSYNC requests. */
     long long stat_sync_partial_err;               /* Number of unaccepted PSYNC requests. */
@@ -2220,6 +2225,11 @@ struct valkeyServer {
     int get_ack_from_replicas;  /* If true we send REPLCONF GETACK. */
     /* Limits */
     unsigned int maxclients;                    /* Max number of simultaneous clients */
+    char *priority_net_sources_raw;             /* Raw priority-net-sources string config */
+    qosSubnet *priority_net_sources;            /* Array of compiled priority subnets */
+    int priority_net_sources_count;             /* Count of priority subnets */
+    unsigned int priority_maxclients;           /* Max prioritized connections allowed */
+    int prioritize_unixsocket;                  /* Flag to prioritize unix socket connections */
     unsigned long long maxmemory;               /* Max number of memory bytes to use */
     ssize_t maxmemory_clients;                  /* Memory limit for total client buffers */
     int maxmemory_policy;                       /* Policy for key eviction */
@@ -2873,6 +2883,7 @@ extern list *modules;
 void populateCommandLegacyRangeSpec(struct serverCommand *c);
 
 /* Utils */
+unsigned int getEffectivePriorityMaxclients(void);
 mstime_t commandTimeSnapshot(void);
 uint64_t crc64(uint64_t crc, const unsigned char *s, uint64_t l);
 void exitFromChild(int retcode);
@@ -2928,7 +2939,7 @@ void dictVanillaFree(void *val);
 #define WRITE_FLAGS_WRITE_ERROR (1 << 0)
 #define WRITE_FLAGS_IS_REPLICA (1 << 1)
 
-client *createClient(connection *conn);
+client *createClient(connection *conn, int priority);
 int freeClient(client *c);
 void freeClientAsync(client *c);
 void freeClientOrCloseLater(client *c, int async);

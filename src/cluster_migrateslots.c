@@ -1407,7 +1407,7 @@ void slotMigrationJobSendAuth(slotMigrationJob *job) {
  * connected, authenticated, and established. */
 void initSlotExportJobClient(slotMigrationJob *job) {
     serverAssert(job->type == SLOT_MIGRATION_EXPORT);
-    job->client = createClient(job->conn);
+    job->client = createClient(job->conn, 1);
     job->conn = NULL;
     clientSetUser(job->client, NULL, 1);
     job->client->slot_migration_job = job;

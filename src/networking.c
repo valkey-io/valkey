@@ -233,6 +233,14 @@ void linkClient(client *c) {
     c->client_list_node = listLast(server.clients);
     uint64_t id = htonu64(c->id);
     raxInsert(server.clients_index, (unsigned char *)&id, sizeof(id), c, NULL);
+
+    /* Increment active client counters. These counters are paired with decrements
+     * in unlinkClient() and track connected clients in the global active clients list. */
+    if (c->flag.prioritized) {
+        server.stat_num_active_clients_prioritized++;
+    } else {
+        server.stat_num_active_clients_normal++;
+    }
 }
 
 /* Initialize client authentication state. */
@@ -316,7 +324,39 @@ static int isCopyAvoidPreferred(client *c, robj *obj) {
     return server.min_string_size_copy_avoid_threaded && sdslen(objectGetVal(obj)) >= (size_t)server.min_string_size_copy_avoid_threaded;
 }
 
-client *createClient(connection *conn) {
+/* Helper to check if a connection is classified as high-priority.
+ * A connection is prioritized if:
+ * 1. It is a local Unix domain socket and prioritize-unixsocket is enabled.
+ * 2. Its source IP matches one of the subnets defined in priority-net-sources. */
+int isConnectionPrioritized(connection *conn, const char *ip) {
+    if (!conn) return 0;
+    if (connGetType(conn) == CONN_TYPE_UNIX && server.prioritize_unixsocket) return 1;
+    if (matchIpAgainstSubnets(ip, server.priority_net_sources, server.priority_net_sources_count)) return 1;
+    return 0;
+}
+
+/* Admission control:
+ * - Normal clients are rejected if the total number of active clients reaches maxclients.
+ * - Prioritized clients are allowed to use the extra headroom (priority_maxclients)
+ *   and are only rejected if the total reaches maxclients + priority_maxclients. */
+int hasMaxClientsLimitReached(int is_prioritized) {
+    /* Calculate total active clients including both normal and prioritized clients,
+     * as well as cluster connections. We must use the total count to ensure we
+     * do not exceed the file descriptor limit set for the server. */
+    long long total_active_clients = server.stat_num_active_clients_normal +
+                                     server.stat_num_active_clients_prioritized +
+                                     (long long)getClusterConnectionsCount();
+
+    /* Using '>=' because this check is performed before the new connection is
+     * accepted and added to the active clients count. */
+    if (is_prioritized) {
+        return total_active_clients >= server.maxclients + server.priority_maxclients;
+    } else {
+        return total_active_clients >= server.maxclients;
+    }
+}
+
+client *createClient(connection *conn, int priority) {
     client *c = zmalloc(sizeof(client));
 
     /* passing NULL as conn it is possible to create a non connected client.
@@ -400,6 +440,7 @@ client *createClient(connection *conn) {
     listInitNode(&c->clients_pending_write_node, c);
     c->mem_usage_bucket = NULL;
     c->mem_usage_bucket_node = NULL;
+    c->flag.prioritized = priority;
     if (conn) linkClient(c);
     c->net_input_bytes = 0;
     c->net_input_bytes_curr_cmd = 0;
@@ -536,7 +577,7 @@ sds aggregateClientOutputBuffer(client *c) {
  *
  * It needs be paired with `deleteCachedResponseClient` function to stop caching. */
 client *createCachedResponseClient(int resp) {
-    struct client *recording_client = createClient(NULL);
+    struct client *recording_client = createClient(NULL, 0);
     /* It is a fake client but with a connection, setting a special client id,
      * so we can identify it's a fake cached response client. */
     recording_client->id = CLIENT_ID_CACHED_RESPONSE;
@@ -1880,7 +1921,6 @@ void clientAcceptHandler(connection *conn) {
 
 void acceptCommonHandler(connection *conn, struct ClientFlags flags, char *ip) {
     client *c;
-    UNUSED(ip);
 
     char addr[CONN_ADDR_STR_LEN] = {0};
     char laddr[CONN_ADDR_STR_LEN] = {0};
@@ -1899,13 +1939,17 @@ void acceptCommonHandler(connection *conn, struct ClientFlags flags, char *ip) {
      * Admission control will happen before a client is created and connAccept()
      * called, because we don't want to even start transport-level negotiation
      * if rejected. */
-    if (listLength(server.clients) + getClusterConnectionsCount() >= server.maxclients) {
+    int is_prioritized = isConnectionPrioritized(conn, ip);
+    if (hasMaxClientsLimitReached(is_prioritized)) {
         char *err;
-        if (server.cluster_enabled)
+        if (is_prioritized) {
+            err = "-ERR max number of priority clients reached\r\n";
+        } else if (server.cluster_enabled) {
             err = "-ERR max number of clients + cluster "
                   "connections reached\r\n";
-        else
+        } else {
             err = "-ERR max number of clients reached\r\n";
+        }
 
         /* That's a best effort error message, don't check write errors.
          * Note that for TLS connections, no handshake was done yet so nothing
@@ -1913,13 +1957,16 @@ void acceptCommonHandler(connection *conn, struct ClientFlags flags, char *ip) {
         if (connWrite(conn, err, strlen(err)) == -1) {
             /* Nothing to do, Just to avoid the warning... */
         }
-        server.stat_rejected_conn++;
+        if (is_prioritized)
+            server.stat_rejected_priority_conn++;
+        else
+            server.stat_rejected_conn++;
         connClose(conn);
         return;
     }
 
     /* Create connection and client */
-    if ((c = createClient(conn)) == NULL) {
+    if ((c = createClient(conn, is_prioritized)) == NULL) {
         serverLog(LL_WARNING, "Error registering fd event for the new client connection: %s (addr=%s laddr=%s)",
                   connGetLastError(conn), addr, laddr);
         connClose(conn); /* May be already closed, just ignore errors */
@@ -2021,6 +2068,15 @@ void unlinkClient(client *c) {
             raxRemove(server.clients_index, (unsigned char *)&id, sizeof(id), NULL);
             listDelNode(server.clients, c->client_list_node);
             c->client_list_node = NULL;
+
+            /* Decrement active client counters. Fake clients (where c->conn is NULL)
+             * and unlinked clients (c->client_list_node is NULL) do not increment these
+             * counters on creation, so we only decrement here for linked, active connections. */
+            if (c->flag.prioritized) {
+                server.stat_num_active_clients_prioritized--;
+            } else {
+                server.stat_num_active_clients_normal--;
+            }
         }
         removeClientFromPendingCommandsBatch(c);
 
@@ -4546,6 +4602,7 @@ sds catClientInfoString(sds s, client *client, int hide_user_data) {
             " age=%I", (long long)(commandTimeSnapshot() / 1000 - client->ctime),
             " idle=%I", (long long)(server.unixtime - client->last_interaction),
             " flags=%s", flags,
+            " qos=%s", client->flag.prioritized ? "prioritized" : "normal",
             " capa=%s", capa,
             " db=%i", client->db->id,
             " sub=%i", client->pubsub_data ? (int)hashtableSize(client->pubsub_data->pubsub_channels) : 0,

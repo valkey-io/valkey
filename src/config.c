@@ -2555,6 +2555,79 @@ static int isValidAnnouncedIp(char *val, const char **err) {
     return 1;
 }
 
+static int isValidPriorityNetSources(char *val, const char **err) {
+    qosSubnet *subnets = NULL;
+    int count = 0;
+    if (parseSubnetList(val, &subnets, &count) < 0) {
+        *err = "Invalid IP address or CIDR subnet in priority-net-sources";
+        return 0;
+    }
+    if (subnets) zfree(subnets);
+    return 1;
+}
+
+static int applyMaxclientsLimits(const char **err) {
+    unsigned int new_maxclients = server.maxclients;
+    unsigned int new_priority_maxclients = server.priority_maxclients;
+    adjustOpenFilesLimit();
+    if (server.maxclients != new_maxclients) {
+        static char msg[128];
+        snprintf(msg, sizeof(msg),
+                 "The operating system is not able to handle the specified number of max clients, try with %d",
+                 server.maxclients);
+        *err = msg;
+        return 0;
+    }
+    if (server.priority_maxclients != new_priority_maxclients) {
+        static char msg[128];
+        snprintf(msg, sizeof(msg),
+                 "The operating system is not able to handle the specified number of priority clients, try with %d",
+                 server.priority_maxclients);
+        *err = msg;
+        return 0;
+    }
+    unsigned int qos_maxclients = getEffectivePriorityMaxclients();
+    if ((unsigned int)aeGetSetSize(server.el) < server.maxclients + qos_maxclients + CONFIG_FDSET_INCR) {
+        if (aeResizeSetSize(server.el, server.maxclients + qos_maxclients + CONFIG_FDSET_INCR) == AE_ERR) {
+            if (err) *err = "The event loop API is not able to handle the specified number of clients";
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static int updatePrioritizeUnixsocket(const char **err) {
+    return applyMaxclientsLimits(err);
+}
+
+static int updatePriorityNetSources(const char **err) {
+    qosSubnet *old_subnets = server.priority_net_sources;
+    int old_count = server.priority_net_sources_count;
+
+    qosSubnet *new_subnets = NULL;
+    int new_count = 0;
+
+    char *raw_sources = server.priority_net_sources_raw;
+    if (parseSubnetList(raw_sources, &new_subnets, &new_count) < 0) {
+        if (err) *err = "Invalid IP address or CIDR subnet in priority-net-sources";
+        return 0;
+    }
+
+    server.priority_net_sources = new_subnets;
+    server.priority_net_sources_count = new_count;
+
+    if (!applyMaxclientsLimits(err)) {
+        // Rollback if applying limits fails
+        server.priority_net_sources = old_subnets;
+        server.priority_net_sources_count = old_count;
+        if (new_subnets) zfree(new_subnets);
+        return 0;
+    }
+
+    if (old_subnets) zfree(old_subnets);
+    return 1;
+}
+
 static int isValidAnnouncedHostname(char *val, const char **err) {
     if (strlen(val) >= NET_HOST_STR_LEN) {
         *err = "Hostnames must be less than " STRINGIFY(NET_HOST_STR_LEN) " characters";
@@ -2729,24 +2802,12 @@ static int updateSighandlerEnabled(const char **err) {
     return 1;
 }
 
+static int updatePriorityMaxclients(const char **err) {
+    return applyMaxclientsLimits(err);
+}
+
 static int updateMaxclients(const char **err) {
-    unsigned int new_maxclients = server.maxclients;
-    adjustOpenFilesLimit();
-    if (server.maxclients != new_maxclients) {
-        static char msg[128];
-        snprintf(msg, sizeof(msg),
-                 "The operating system is not able to handle the specified number of clients, try with %d",
-                 server.maxclients);
-        *err = msg;
-        return 0;
-    }
-    if ((unsigned int)aeGetSetSize(server.el) < server.maxclients + CONFIG_FDSET_INCR) {
-        if (aeResizeSetSize(server.el, server.maxclients + CONFIG_FDSET_INCR) == AE_ERR) {
-            *err = "The event loop API is not able to handle the specified number of clients";
-            return 0;
-        }
-    }
-    return 1;
+    return applyMaxclientsLimits(err);
 }
 
 static int updateOOMScoreAdj(const char **err) {
@@ -3402,6 +3463,7 @@ standardConfig static_configs[] = {
     createBoolConfig("lua-enable-insecure-api", "lua-enable-deprecated-api", MODIFIABLE_CONFIG | HIDDEN_CONFIG | PROTECTED_CONFIG, server.lua_enable_insecure_api, 0, NULL, updateLuaEnableInsecureApi),
     createBoolConfig("import-mode", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, server.import_mode, 0, NULL, NULL),
     createBoolConfig("io-threads-always-active", NULL, MODIFIABLE_CONFIG | HIDDEN_CONFIG, server.io_threads_always_active, 0, NULL, NULL),
+    createBoolConfig("prioritize-unixsocket", NULL, MODIFIABLE_CONFIG, server.prioritize_unixsocket, 0, NULL, updatePrioritizeUnixsocket),
 
     /* String Configs */
     createStringConfig("aclfile", NULL, IMMUTABLE_CONFIG, ALLOW_EMPTY_STRING, server.acl_filename, "", NULL, NULL),
@@ -3428,6 +3490,8 @@ standardConfig static_configs[] = {
     createStringConfig("proc-title-template", NULL, MODIFIABLE_CONFIG, ALLOW_EMPTY_STRING, server.proc_title_template, CONFIG_DEFAULT_PROC_TITLE_TEMPLATE, isValidProcTitleTemplate, updateProcTitleTemplate),
     createStringConfig("bind-source-addr", NULL, MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, server.bind_source_addr, NULL, NULL, NULL),
     createStringConfig("logfile", NULL, IMMUTABLE_CONFIG, ALLOW_EMPTY_STRING, server.logfile, "", NULL, NULL),
+    createStringConfig("priority-net-sources", NULL, MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, server.priority_net_sources_raw, NULL, isValidPriorityNetSources, updatePriorityNetSources),
+
 #ifdef LOG_REQ_RES
     createStringConfig("req-res-logfile", NULL, IMMUTABLE_CONFIG | HIDDEN_CONFIG, EMPTY_STRING_IS_NULL, server.req_res_logfile, NULL, NULL, NULL),
 #endif
@@ -3514,8 +3578,10 @@ standardConfig static_configs[] = {
     createIntConfig("rdma-completion-vector", NULL, IMMUTABLE_CONFIG, -1, 1024, server.rdma_ctx_config.completion_vector, -1, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("cluster-message-gossip-perc", NULL, MODIFIABLE_CONFIG | HIDDEN_CONFIG, 1, 100, server.cluster_message_gossip_perc, 10, INTEGER_CONFIG, NULL, NULL),
 
+
     /* Unsigned int configs */
     createUIntConfig("maxclients", NULL, MODIFIABLE_CONFIG, 1, UINT_MAX, server.maxclients, 10000, INTEGER_CONFIG, NULL, updateMaxclients),
+    createUIntConfig("priority-maxclients", NULL, MODIFIABLE_CONFIG, 0, UINT_MAX, server.priority_maxclients, 128, INTEGER_CONFIG, NULL, updatePriorityMaxclients),
     createUIntConfig("unixsocketperm", NULL, IMMUTABLE_CONFIG, 0, 0777, server.unix_ctx_config.perm, 0, OCTAL_CONFIG, NULL, NULL),
     createUIntConfig("socket-mark-id", NULL, IMMUTABLE_CONFIG, 0, UINT_MAX, server.socket_mark_id, 0, INTEGER_CONFIG, NULL, NULL),
     createUIntConfig("max-new-connections-per-cycle", NULL, MODIFIABLE_CONFIG, 1, 1000, server.max_new_conns_per_cycle, 10, INTEGER_CONFIG, NULL, NULL),

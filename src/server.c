@@ -2468,6 +2468,12 @@ void initServerConfig(void) {
 
     /* Debugging */
     server.watchdog_period = 0;
+
+    /* QoS Initialization */
+    server.priority_net_sources = NULL;
+    server.priority_net_sources_count = 0;
+    server.stat_num_active_clients_prioritized = 0;
+    server.stat_num_active_clients_normal = 0;
 }
 
 extern char **environ;
@@ -2517,7 +2523,7 @@ int restartServer(client *c, int flags, mstime_t delay) {
 
     /* Close all file descriptors, with the exception of stdin, stdout, stderr
      * which are useful if we restart a server which is not daemonized. */
-    for (j = 3; j < (int)server.maxclients + 1024; j++) {
+    for (j = 3; j < (int)(server.maxclients + getEffectivePriorityMaxclients()) + 1024; j++) {
         /* Test the descriptor validity before closing it, otherwise
          * Valgrind issues a warning on close(). */
         if (fcntl(j, F_GETFD) != -1) close(j);
@@ -2603,6 +2609,10 @@ int setOOMScoreAdj(int process_class) {
 #endif
 }
 
+unsigned int getEffectivePriorityMaxclients(void) {
+    return (server.priority_net_sources_count > 0 || server.prioritize_unixsocket) ? server.priority_maxclients : 0;
+}
+
 /* This function will try to raise the max number of open files accordingly to
  * the configured max number of clients. It also reserves a number of file
  * descriptors (CONFIG_MIN_RESERVED_FDS) for extra operations of
@@ -2612,15 +2622,17 @@ int setOOMScoreAdj(int process_class) {
  * max number of clients, the function will do the reverse setting
  * server.maxclients to the value that we can actually handle. */
 void adjustOpenFilesLimit(void) {
-    rlim_t maxfiles = server.maxclients + CONFIG_MIN_RESERVED_FDS;
+    rlim_t maxfiles = server.maxclients + getEffectivePriorityMaxclients() + CONFIG_MIN_RESERVED_FDS;
     struct rlimit limit;
 
     if (getrlimit(RLIMIT_NOFILE, &limit) == -1) {
         serverLog(LL_WARNING,
-                  "Unable to obtain the current NOFILE limit (%s), assuming 1024 and setting the max clients "
-                  "configuration accordingly.",
+                  "Unable to obtain the current NOFILE limit (%s), assuming 1024 setting for max clients and "
+                  "zero for priority max clients.",
                   strerror(errno));
         server.maxclients = 1024 - CONFIG_MIN_RESERVED_FDS;
+        /* Disabling priority headroom when ulimit is not enough to support the priority clients. */
+        server.priority_maxclients = 0;
     } else {
         rlim_t oldlimit = limit.rlim_cur;
 
@@ -2656,33 +2668,65 @@ void adjustOpenFilesLimit(void) {
 
             if (bestlimit < maxfiles) {
                 unsigned int old_maxclients = server.maxclients;
-                server.maxclients = bestlimit - CONFIG_MIN_RESERVED_FDS;
-                /* maxclients is unsigned so may overflow: in order
-                 * to check if maxclients is now logically less than 1
-                 * we test indirectly via bestlimit. */
-                if (bestlimit <= CONFIG_MIN_RESERVED_FDS) {
+                unsigned int old_priority_maxclients = server.priority_maxclients;
+
+                if (server.maxclients + CONFIG_MIN_RESERVED_FDS > bestlimit) {
+                    server.maxclients = bestlimit - CONFIG_MIN_RESERVED_FDS;
+                    /* maxclients is unsigned so may overflow: in order
+                     * to check if maxclients is now logically less than 1
+                     * we test indirectly via bestlimit. */
+                    if (bestlimit <= CONFIG_MIN_RESERVED_FDS) {
+                        serverLog(LL_WARNING,
+                                  "Your current 'ulimit -n' "
+                                  "of %llu is not enough for the server to start. "
+                                  "Please increase your open file limit to at least "
+                                  "%llu. Exiting.",
+                                  (unsigned long long)oldlimit, (unsigned long long)maxfiles);
+                        exit(1);
+                    }
+                    if (getEffectivePriorityMaxclients() != 0) {
+                        serverLog(LL_WARNING,
+                                  "You requested priority-maxclients of %d "
+                                  "requiring at least %llu max file descriptors.",
+                                  old_priority_maxclients, (unsigned long long)maxfiles);
+                        /* Disabling priority headroom when ulimit is not enough to support the priority clients. */
+                        server.priority_maxclients = 0;
+                    }
                     serverLog(LL_WARNING,
-                              "Your current 'ulimit -n' "
-                              "of %llu is not enough for the server to start. "
-                              "Please increase your open file limit to at least "
-                              "%llu. Exiting.",
-                              (unsigned long long)oldlimit, (unsigned long long)maxfiles);
-                    exit(1);
+                              "You requested maxclients of %d "
+                              "requiring at least %llu max file descriptors.",
+                              old_maxclients, (unsigned long long)maxfiles);
+                    serverLog(LL_WARNING,
+                              "Server can't set maximum open files "
+                              "to %llu because of OS error: %s.",
+                              (unsigned long long)maxfiles, strerror(setrlimit_error));
+                    serverLog(LL_WARNING,
+                              "Current maximum open files is %llu. "
+                              "maxclients has been reduced to %d to compensate for "
+                              "low ulimit. "
+                              "If you need higher maxclients increase 'ulimit -n'.",
+                              (unsigned long long)bestlimit, server.maxclients);
+                } else {
+                    if (getEffectivePriorityMaxclients() != 0) {
+                        /* Reducing priority headroom when ulimit is not enough to support the priority clients. */
+                        server.priority_maxclients = bestlimit - server.maxclients - CONFIG_MIN_RESERVED_FDS;
+                        serverLog(LL_WARNING,
+                                  "You requested priority-maxclients of %d "
+                                  "requiring at least %llu max file descriptors.",
+                                  old_priority_maxclients, (unsigned long long)maxfiles);
+
+                        serverLog(LL_WARNING,
+                                  "Server can't set maximum open files "
+                                  "to %llu because of OS error: %s.",
+                                  (unsigned long long)maxfiles, strerror(setrlimit_error));
+                        serverLog(LL_WARNING,
+                                  "Current maximum open files is %llu. "
+                                  "priority-maxclients has been reduced to %d to compensate for "
+                                  "low ulimit. "
+                                  "If you need higher priority-maxclients increase 'ulimit -n'.",
+                                  (unsigned long long)bestlimit, server.priority_maxclients);
+                    }
                 }
-                serverLog(LL_WARNING,
-                          "You requested maxclients of %d "
-                          "requiring at least %llu max file descriptors.",
-                          old_maxclients, (unsigned long long)maxfiles);
-                serverLog(LL_WARNING,
-                          "Server can't set maximum open files "
-                          "to %llu because of OS error: %s.",
-                          (unsigned long long)maxfiles, strerror(setrlimit_error));
-                serverLog(LL_WARNING,
-                          "Current maximum open files is %llu. "
-                          "maxclients has been reduced to %d to compensate for "
-                          "low ulimit. "
-                          "If you need higher maxclients increase 'ulimit -n'.",
-                          (unsigned long long)bestlimit, server.maxclients);
             } else {
                 serverLog(LL_NOTICE,
                           "Increased maximum number of open files "
@@ -2857,6 +2901,7 @@ void resetServerStats(void) {
     server.stat_fork_rate = 0;
     server.stat_total_forks = 0;
     server.stat_rejected_conn = 0;
+    server.stat_rejected_priority_conn = 0;
     server.stat_sync_full = 0;
     server.stat_sync_partial_ok = 0;
     server.stat_sync_partial_err = 0;
@@ -3039,7 +3084,7 @@ void initServer(void) {
     adjustOpenFilesLimit();
     const char *clk_msg = monotonicInit();
     serverLog(LL_NOTICE, "monotonic clock: %s", clk_msg);
-    server.el = aeCreateEventLoop(server.maxclients + CONFIG_FDSET_INCR);
+    server.el = aeCreateEventLoop(server.maxclients + getEffectivePriorityMaxclients() + CONFIG_FDSET_INCR);
     if (server.el == NULL) {
         serverLog(LL_WARNING, "Failed creating the event loop. Error message: '%s'", strerror(errno));
         exit(1);
@@ -6317,6 +6362,9 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "connected_clients:%lu\r\n", listLength(server.clients) - listLength(server.replicas),
                 "cluster_connections:%lu\r\n", getClusterConnectionsCount(),
                 "maxclients:%u\r\n", server.maxclients,
+                "priority_maxclients:%u\r\n", server.priority_maxclients,
+                "connected_clients_prioritized:%lld\r\n", server.stat_num_active_clients_prioritized,
+                "connected_clients_normal:%lld\r\n", server.stat_num_active_clients_normal,
                 "client_recent_max_input_buffer:%zu\r\n", maxin,
                 "client_recent_max_output_buffer:%zu\r\n", maxout,
                 "blocked_clients:%d\r\n", server.blocked_clients,
@@ -6550,6 +6598,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "instantaneous_input_repl_kbps:%.2f\r\n", (float)getInstantaneousMetric(STATS_METRIC_NET_INPUT_REPLICATION) / 1024,
                 "instantaneous_output_repl_kbps:%.2f\r\n", (float)getInstantaneousMetric(STATS_METRIC_NET_OUTPUT_REPLICATION) / 1024,
                 "rejected_connections:%lld\r\n", server.stat_rejected_conn,
+                "rejected_priority_connections:%lld\r\n", server.stat_rejected_priority_conn,
                 "sync_full:%lld\r\n", server.stat_sync_full,
                 "sync_partial_ok:%lld\r\n", server.stat_sync_partial_ok,
                 "sync_partial_err:%lld\r\n", server.stat_sync_partial_err,

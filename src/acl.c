@@ -1812,6 +1812,14 @@ static inline int ACLSelectorCanAccessDb(aclSelector *selector, long long dbid) 
     return intsetFind(selector->dbs, dbid);
 }
 
+#define SELECTOR_FLAG_ALL_ACCESS \
+    (SELECTOR_FLAG_ALLKEYS | SELECTOR_FLAG_ALLCOMMANDS | SELECTOR_FLAG_ALLCHANNELS | SELECTOR_FLAG_ALLDBS)
+
+/* Check that given selector allows full access to all dbs, keys, cmds, channels */
+static inline int ACLSelectorHasAllAccess(aclSelector *selector) {
+    return (selector->flags & SELECTOR_FLAG_ALL_ACCESS) == SELECTOR_FLAG_ALL_ACCESS;
+}
+
 /* To prevent duplicate calls to getKeysResult, a cache is maintained
  * in between calls to the various selectors. */
 typedef struct {
@@ -2060,6 +2068,9 @@ int ACLCheckAllUserCommandPerm(user *u, struct serverCommand *cmd, robj **argv, 
 
     /* If there is no associated user, the connection can run anything. */
     if (u == NULL) return ACL_OK;
+
+    /* Fast path for the common case where root selector grants unrestricted access. */
+    if (ACLSelectorHasAllAccess(ACLUserGetRootSelector(u))) return ACL_OK;
 
     /* We have to pick a single error to log, the logic for picking is as follows:
      * 1) Prefer higher priority errors: DB < CMD < KEY < CHANNEL

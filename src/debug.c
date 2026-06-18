@@ -1056,11 +1056,11 @@ void debugCommand(client *c) {
     } else if (!strcasecmp(c->argv[1]->ptr, "client-enforce-reply-list") && c->argc == 3) {
         server.debug_client_enforce_reply_list = atoi(c->argv[2]->ptr);
         addReply(c, shared.ok);
-    } else if (!strcasecmp(objectGetVal(c->argv[1]), "protect-client") && c->argc == 3) {
+    } else if (!strcasecmp(c->argv[1]->ptr, "protect-client") && c->argc == 3) {
         char *endptr;
         errno = 0;
-        uint64_t id = strtoull(objectGetVal(c->argv[2]), &endptr, 10);
-        if (errno == ERANGE || endptr == objectGetVal(c->argv[2]) || *endptr != '\0') {
+        uint64_t id = strtoull(c->argv[2]->ptr, &endptr, 10);
+        if (errno == ERANGE || endptr == c->argv[2]->ptr || *endptr != '\0') {
             addReplyError(c, "Invalid client id");
             return;
         }

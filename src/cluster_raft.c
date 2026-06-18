@@ -2746,7 +2746,8 @@ static int clusterRaftProcessMessage(struct clusterLink *link) {
         char *buf = link->rcvbuf + RAFT_HDR_SIZE;
         size_t buf_len = link->rcvbuf_len - RAFT_HDR_SIZE;
         char *nl = memchr(buf, '\n', buf_len);
-        if (nl && (size_t)(buf + buf_len - nl - 1) >= chan_len + msg_len) {
+        if (nl && chan_len + msg_len >= chan_len &&
+            (size_t)(buf + buf_len - nl - 1) >= chan_len + msg_len) {
             char *payload = nl + 1;
             robj *chan = createStringObject(payload, chan_len);
             robj *pmsg = createStringObject(payload + chan_len, msg_len);

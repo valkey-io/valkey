@@ -457,6 +457,7 @@ struct clusterState {
     int fail_reason;        /* Why the cluster state changes to fail. */
     int safe_to_join;       /* Can the restarted node safely join the cluster? */
     int size;               /* Num of primary nodes with at least one slot */
+    int size_fail;          /* Num of voting primaries currently in FAIL state (subset of size). */
     dict *nodes;            /* Hash table of name -> clusterNode structures */
     dict *shards;           /* Hash table of shard_id -> list (of nodes) structures */
     dict *nodes_black_list; /* Nodes we don't re-add for a few seconds. */

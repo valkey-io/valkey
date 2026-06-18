@@ -1451,6 +1451,7 @@ void clusterInit(void) {
     server.cluster->fail_reason = CLUSTER_FAIL_NONE;
     server.cluster->safe_to_join = 0;
     server.cluster->size = 0;
+    server.cluster->size_fail = 0;
     server.cluster->todo_before_sleep = 0;
     server.cluster->nodes = dictCreate(&clusterNodesDictType);
     server.cluster->shards = dictCreate(&clusterSdsToListType);
@@ -4430,6 +4431,9 @@ int clusterProcessPacket(clusterLink *link) {
          * equal to epoch where this node started the election. */
         if (clusterNodeIsVotingPrimary(sender) && sender_claimed_current_epoch >= server.cluster->failover_auth_epoch) {
             server.cluster->failover_auth_count++;
+            serverLog(LL_NOTICE, "Failover auth ACK from %.40s (%s) for epoch %llu (ACKs %d, quorum %d)",
+                      sender->name, humanNodename(sender), (unsigned long long)server.cluster->failover_auth_epoch,
+                      server.cluster->failover_auth_count, (server.cluster->size / 2) + 1);
             /* Maybe we reached a quorum here, set a flag to make sure
              * we check ASAP. */
             clusterDoBeforeSleep(CLUSTER_TODO_HANDLE_FAILOVER);
@@ -5454,28 +5458,25 @@ void clusterSendFailoverAuthIfNeeded(clusterNode *node, clusterMsg *request) {
 
 /* Handle a FAILOVER_AUTH_NACK from a voter. */
 void clusterProcessFailoverAuthNack(clusterNode *sender, clusterMsg *request) {
-    /* The reason is bracketed up front so operators can quickly grep
-     * for a specific cause; the trailing NACKs k/N gives at-a-glance
-     * progress towards the fast-fail threshold. */
     server.cluster->failover_auth_nack_count++;
-    serverLog(LL_NOTICE,
-              "Failover auth NACK [%s] from %.40s (%s) for epoch %llu (NACKs %d/%d)",
+
+    /* A voter that NACKed us in this epoch will not change its mind, so the
+     * upper bound on the votes we can still collect is the voters that have
+     * not NACKed, minus FAIL voters that will never reply (they count towards
+     * size but neither ACK nor NACK). Fast-fail once that bound drops below
+     * the quorum we need to win.. */
+    int needed_quorum = (server.cluster->size / 2) + 1;
+    int max_possible_acks = server.cluster->size - server.cluster->size_fail - server.cluster->failover_auth_nack_count;
+    serverLog(LL_NOTICE, "Failover auth NACK [%s] from %.40s (%s) for epoch %llu (NACKs %d, quorum %d)",
               clusterNackReasonString(request->data.failover_nack.nack.reason), sender->name,
               humanNodename(sender), (unsigned long long)server.cluster->failover_auth_epoch,
-              server.cluster->failover_auth_nack_count, server.cluster->size);
-
-    /* A voter that NACKed us in this epoch will not change its mind, so
-     * the upper bound on the votes we can ever collect is the voters that
-     * have not (yet) NACKed. Fast-fail once that bound drops below the
-     * quorum we need to win. */
-    int needed_quorum = (server.cluster->size / 2) + 1;
-    int max_possible_acks = server.cluster->size - server.cluster->failover_auth_nack_count;
+              server.cluster->failover_auth_nack_count, needed_quorum);
     if (max_possible_acks < needed_quorum) {
         serverLog(LL_NOTICE,
-                  "Failover election for epoch %llu cannot reach quorum %d (NACKs %d/%d). "
+                  "Failover election for epoch %llu cannot reach quorum %d (NACKs %d, dead voters %d). "
                   "Resetting the election since we cannot win an election without quorum.",
                   (unsigned long long)server.cluster->failover_auth_epoch, needed_quorum,
-                  server.cluster->failover_auth_nack_count, server.cluster->size);
+                  server.cluster->failover_auth_nack_count, server.cluster->size_fail);
         server.cluster->failover_auth_time = 0;
         /* Maybe we could start a new election, set a flag here to make sure
          * we check as soon as possible, instead of waiting for a cron. */
@@ -5887,7 +5888,17 @@ void clusterHandleReplicaFailover(void) {
 
     /* Ask for votes if needed. */
     if (server.cluster->failover_auth_sent == 0) {
-        server.cluster->currentEpoch++;
+        if (server.debug_cluster_failover_epoch >= 0) {
+            /* Testing only: force this election to run in a specific epoch so
+             * that several replicas can be made to contend in the very same
+             * epoch, deterministically reproducing a split vote. Consumed
+             * once; subsequent retries fall back to the normal currentEpoch++
+             * so the replicas can eventually win in distinct epochs. */
+            server.cluster->currentEpoch = server.debug_cluster_failover_epoch;
+            server.debug_cluster_failover_epoch = -1;
+        } else {
+            server.cluster->currentEpoch++;
+        }
         server.cluster->failover_auth_epoch = server.cluster->currentEpoch;
         serverLog(LL_NOTICE, "Starting a failover election for epoch %llu, node config epoch is %llu",
                   (unsigned long long)server.cluster->currentEpoch, (unsigned long long)nodeEpoch(myself));
@@ -6754,12 +6765,14 @@ void clusterUpdateState(void) {
         dictEntry *de;
 
         server.cluster->size = 0;
+        server.cluster->size_fail = 0;
         di = dictGetSafeIterator(server.cluster->nodes);
         while ((de = dictNext(di)) != NULL) {
             clusterNode *node = dictGetVal(de);
 
             if (clusterNodeIsVotingPrimary(node)) {
                 server.cluster->size++;
+                if (node->flags & CLUSTER_NODE_FAIL) server.cluster->size_fail++;
                 if ((node->flags & (CLUSTER_NODE_FAIL | CLUSTER_NODE_PFAIL)) == 0) reachable_primaries++;
             }
         }

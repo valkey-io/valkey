@@ -88,10 +88,27 @@ proc test_same_epoch {delay} {
             fail "Voters did not mark all paused primaries as fail"
         }
 
+        # Force the three replicas to start their election in the very same
+        # epoch, so the same-epoch split vote is reproduced deterministically
+        # rather than depending on the timing of the (possibly zero) delay.
+        if {$delay == 0} {
+            set epoch [expr [CI 3 cluster_current_epoch] + 1]
+            R 7 DEBUG CLUSTER-FAILOVER-EPOCH $epoch
+            R 8 DEBUG CLUSTER-FAILOVER-EPOCH $epoch
+            R 9 DEBUG CLUSTER-FAILOVER-EPOCH $epoch
+        }
+
         # Now let the replicas proceed with the election.
         R 7 CONFIG SET cluster-replica-no-failover no
         R 8 CONFIG SET cluster-replica-no-failover no
         R 9 CONFIG SET cluster-replica-no-failover no
+
+        # All three must have contended in the very same (forced) epoch.
+        if {$delay == 0} {
+            wait_for_log_messages -7 [list "*Starting a failover election for epoch $epoch*"] 0 1000 50
+            wait_for_log_messages -8 [list "*Starting a failover election for epoch $epoch*"] 0 1000 50
+            wait_for_log_messages -9 [list "*Starting a failover election for epoch $epoch*"] 0 1000 50
+        }
 
         # Wait for the failover
         wait_for_condition 1000 50 {

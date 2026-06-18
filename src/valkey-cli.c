@@ -91,6 +91,8 @@
 #define CLI_RCFILE_DEFAULT ".valkeyclirc"
 #define CLI_AUTH_ENV "VALKEYCLI_AUTH"
 #define OLD_CLI_AUTH_ENV "REDISCLI_AUTH"
+#define CLI_HOST_ENV "VALKEYCLI_HOST"
+#define CLI_PORT_ENV "VALKEYCLI_PORT"
 #define CLI_CLUSTER_YES_ENV "VALKEYCLI_CLUSTER_YES"
 #define OLD_CLI_CLUSTER_YES_ENV "REDISCLI_CLUSTER_YES"
 
@@ -190,8 +192,6 @@ static struct termios orig_termios; /* To restore terminal at exit.*/
 /* Dict Helpers */
 static uint64_t dictSdsHash(const void *key);
 static int dictSdsKeyCompare(const void *key1, const void *key2);
-static void dictSdsDestructor(void *val);
-static void dictListDestructor(void *val);
 
 /* Cluster Manager Command Info */
 typedef struct clusterManagerCommand {
@@ -379,7 +379,7 @@ static sds getDotfilePath(char *envoverride, char *envoverride_old, char *dotfil
 }
 
 static uint64_t dictSdsHash(const void *key) {
-    return dictGenHashFunction((unsigned char *)key, sdslen((char *)key));
+    return dictGenHashFunction(key, sdslen(key));
 }
 
 static int dictSdsKeyCompare(const void *key1, const void *key2) {
@@ -390,12 +390,23 @@ static int dictSdsKeyCompare(const void *key1, const void *key2) {
     return memcmp(key1, key2, l1) == 0;
 }
 
-static void dictSdsDestructor(void *val) {
-    sdsfree(val);
+static void dictEntryDestructorSdsKeyNoVal(void *entry) {
+    dictEntry *de = entry;
+    sdsfree(dictGetKey(de));
+    zfree(de);
 }
 
-void dictListDestructor(void *val) {
-    listRelease((list *)val);
+static void dictEntryDestructorSdsVal(void *entry) {
+    dictEntry *de = entry;
+    sdsfree(dictGetVal(de));
+    zfree(de);
+}
+
+static void dictEntryDestructorSdsKeyListVal(void *entry) {
+    dictEntry *de = entry;
+    sdsfree(dictGetKey(de));
+    listRelease(dictGetVal(de));
+    zfree(de);
 }
 
 /*------------------------------------------------------------------------------
@@ -890,12 +901,10 @@ static void cliLegacyInitHelp(dict *groups) {
 static void cliInitHelp(void) {
     /* Dict type for a set of strings, used to collect names of command groups. */
     dictType groupsdt = {
-        dictSdsHash,       /* hash function */
-        NULL,              /* key dup */
-        dictSdsKeyCompare, /* key compare */
-        dictSdsDestructor, /* key destructor */
-        NULL,              /* val destructor */
-        NULL               /* allow to expand */
+        .entryGetKey = dictEntryGetKey,
+        .hashFunction = dictSdsHash,
+        .keyCompare = dictSdsKeyCompare,
+        .entryDestructor = dictEntryDestructorSdsKeyNoVal,
     };
     valkeyReply *commandTable;
     dict *groups;
@@ -2922,14 +2931,22 @@ static int parseOptions(int argc, char **argv) {
     return i;
 }
 
+/* Reads environment variables and overrides the global configuration */
 static void parseEnv(void) {
-    /* Set auth from env, but do not overwrite CLI arguments if passed */
     char *auth = getenv(CLI_AUTH_ENV);
     if (auth == NULL) {
         auth = getenv(OLD_CLI_AUTH_ENV);
     }
-    if (auth != NULL && config.conn_info.auth == NULL) {
+    if (auth != NULL) {
         config.conn_info.auth = auth;
+    }
+    char *host = getenv(CLI_HOST_ENV);
+    if (host != NULL) {
+        config.conn_info.hostip = sdsnew(host);
+    }
+    char *port = getenv(CLI_PORT_ENV);
+    if (port != NULL) {
+        config.conn_info.hostport = atoi(port);
     }
 
     /* Check for cluster yes flag with fallback to legacy env variable */
@@ -2978,8 +2995,10 @@ static void usage(int err) {
             "valkey-cli %s\n"
             "\n"
             "Usage: valkey-cli [OPTIONS] [cmd [arg [arg ...]]]\n"
-            "  -h <hostname>      Server hostname (default: 127.0.0.1).\n"
-            "  -p <port>          Server port (default: 6379).\n"
+            "  -h <hostname>      Server hostname. Default is 127.0.0.1, you can also use the\n"
+            "                     " CLI_HOST_ENV " environment variable.\n"
+            "  -p <port>          Server port. Default is 6379, you can also use the\n"
+            "                     " CLI_PORT_ENV " environment variable.\n"
             "  -t <timeout>       Server connection timeout in seconds (decimals allowed).\n"
             "                     Default timeout is 0, meaning no limit, depending on the OS.\n"
             "  -s <socket>        Server socket (overrides hostname and port).\n"
@@ -3661,21 +3680,17 @@ typedef struct clusterManagerLink {
 } clusterManagerLink;
 
 static dictType clusterManagerDictType = {
-    dictSdsHash,       /* hash function */
-    NULL,              /* key dup */
-    dictSdsKeyCompare, /* key compare */
-    NULL,              /* key destructor */
-    dictSdsDestructor, /* val destructor */
-    NULL               /* allow to expand */
+    .entryGetKey = dictEntryGetKey,
+    .hashFunction = dictSdsHash,
+    .keyCompare = dictSdsKeyCompare,
+    .entryDestructor = dictEntryDestructorSdsVal,
 };
 
 static dictType clusterManagerLinkDictType = {
-    dictSdsHash,        /* hash function */
-    NULL,               /* key dup */
-    dictSdsKeyCompare,  /* key compare */
-    dictSdsDestructor,  /* key destructor */
-    dictListDestructor, /* val destructor */
-    NULL                /* allow to expand */
+    .entryGetKey = dictEntryGetKey,
+    .hashFunction = dictSdsHash,
+    .keyCompare = dictSdsKeyCompare,
+    .entryDestructor = dictEntryDestructorSdsKeyListVal,
 };
 
 typedef int clusterManagerCommandProc(int argc, char **argv);
@@ -4285,7 +4300,6 @@ static void clusterManagerOptimizeAntiAffinity(clusterManagerNodeArray *ipnodes,
                           "for anti-affinity\n");
     int node_len = cluster_manager.nodes->len;
     int maxiter = 500 * node_len; // Effort is proportional to cluster size...
-    srand(time(NULL));
     while (maxiter > 0) {
         int offending_len = 0;
         if (offenders != NULL) {
@@ -5657,22 +5671,39 @@ static int clusterManagerNodeLoadInfo(clusterManagerNode *node, int opts, char *
             node->flags |= CLUSTER_MANAGER_FLAG_MYSELF;
             currentNode = node;
             clusterManagerNodeResetSlots(node);
-            if (i == 8) {
-                int remaining = strlen(line);
-                while (remaining > 0) {
-                    p = strchr(line, ' ');
-                    if (p == NULL) p = line + remaining;
-                    remaining -= (p - line);
+        } else if (!getfriends) {
+            if (!(node->flags & CLUSTER_MANAGER_FLAG_MYSELF))
+                continue;
+            else
+                break;
+        } else {
+            currentNode = clusterManagerNewNode(sdsnew(ip), port, bus_port);
+            currentNode->flags |= CLUSTER_MANAGER_FLAG_FRIEND;
+            if (node->friends == NULL) node->friends = listCreate();
+            listAddNodeTail(node->friends, currentNode);
+        }
+        /* Parse slot definitions for both myself and friend nodes.
+         * For unreachable friends, this gossip data is the only source
+         * of slot ownership info. For reachable friends, this will be
+         * overwritten when their own CLUSTER NODES is queried directly. */
+        if (i == 8) {
+            int remaining = strlen(line);
+            while (remaining > 0) {
+                p = strchr(line, ' ');
+                if (p == NULL) p = line + remaining;
+                remaining -= (p - line);
 
-                    char *slotsdef = line;
-                    *p = '\0';
-                    if (remaining) {
-                        line = p + 1;
-                        remaining--;
-                    } else
-                        line = p;
-                    char *dash = NULL;
-                    if (slotsdef[0] == '[') {
+                char *slotsdef = line;
+                *p = '\0';
+                if (remaining) {
+                    line = p + 1;
+                    remaining--;
+                } else
+                    line = p;
+                char *dash = NULL;
+                if (slotsdef[0] == '[') {
+                    /* Migrating/importing only applies to the local node. */
+                    if (myself) {
                         slotsdef++;
                         if ((p = strstr(slotsdef, "->-"))) { // Migrating
                             *p = '\0';
@@ -5697,32 +5728,22 @@ static int clusterManagerNodeLoadInfo(clusterManagerNode *node, int opts, char *
                             node->importing[node->importing_count - 2] = slot;
                             node->importing[node->importing_count - 1] = src;
                         }
-                    } else if ((dash = strchr(slotsdef, '-')) != NULL) {
-                        p = dash;
-                        int start, stop;
-                        *p = '\0';
-                        start = atoi(slotsdef);
-                        stop = atoi(p + 1);
-                        node->slots_count += (stop - (start - 1));
-                        while (start <= stop) node->slots[start++] = 1;
-                    } else if (p > slotsdef) {
-                        node->slots[atoi(slotsdef)] = 1;
-                        node->slots_count++;
                     }
+                } else if ((dash = strchr(slotsdef, '-')) != NULL) {
+                    p = dash;
+                    int start, stop;
+                    *p = '\0';
+                    start = atoi(slotsdef);
+                    stop = atoi(p + 1);
+                    currentNode->slots_count += (stop - (start - 1));
+                    while (start <= stop) currentNode->slots[start++] = 1;
+                } else if (p > slotsdef) {
+                    currentNode->slots[atoi(slotsdef)] = 1;
+                    currentNode->slots_count++;
                 }
             }
-            node->dirty = 0;
-        } else if (!getfriends) {
-            if (!(node->flags & CLUSTER_MANAGER_FLAG_MYSELF))
-                continue;
-            else
-                break;
-        } else {
-            currentNode = clusterManagerNewNode(sdsnew(ip), port, bus_port);
-            currentNode->flags |= CLUSTER_MANAGER_FLAG_FRIEND;
-            if (node->friends == NULL) node->friends = listCreate();
-            listAddNodeTail(node->friends, currentNode);
         }
+        if (myself) node->dirty = 0;
         if (name != NULL) {
             if (currentNode->name) sdsfree(currentNode->name);
             currentNode->name = sdsnew(name);
@@ -5766,11 +5787,11 @@ cleanup:
     return success;
 }
 
-/* Retrieves info about the cluster using argument 'node' as the starting
- * point. All nodes will be loaded inside the cluster_manager.nodes list.
- * Warning: if something goes wrong, it will free the starting node before
- * returning 0. */
-static int clusterManagerLoadInfoFromNode(clusterManagerNode *node) {
+/* Common helper function to load cluster info from the starting node.
+ * If include_unreachable is true, all nodes from gossip are added to the list.
+ * If include_unreachable is false, only healthy reachable nodes are added.
+ * Returns 1 on success, 0 on failure and frees the starting node. */
+static int clusterManagerLoadInfoCommon(clusterManagerNode *node, int include_unreachable) {
     if (node->context == NULL && !clusterManagerNodeConnect(node)) {
         freeClusterManagerNode(node);
         return 0;
@@ -5821,8 +5842,14 @@ static int clusterManagerLoadInfoFromNode(clusterManagerNode *node) {
             }
             continue;
         invalid_friend:
-            if (!(friend->flags & CLUSTER_MANAGER_FLAG_REPLICA)) cluster_manager.unreachable_primaries++;
-            freeClusterManagerNode(friend);
+            if (!(friend->flags & CLUSTER_MANAGER_FLAG_REPLICA)) {
+                cluster_manager.unreachable_primaries++;
+            }
+            if (include_unreachable) {
+                listAddNodeTail(cluster_manager.nodes, friend);
+            } else {
+                freeClusterManagerNode(friend);
+            }
         }
         listRelease(node->friends);
         node->friends = NULL;
@@ -5842,6 +5869,20 @@ static int clusterManagerLoadInfoFromNode(clusterManagerNode *node) {
         }
     }
     return 1;
+}
+
+/* Retrieves info about the cluster using argument 'node' as the starting
+ * point. Only reachable healthy nodes will be loaded.
+ * Returns 1 on success, 0 on failure. */
+static int clusterManagerLoadInfoFromNode(clusterManagerNode *node) {
+    return clusterManagerLoadInfoCommon(node, 0);
+}
+
+/* Retrieves info about the cluster using argument 'node' as the starting
+ * point. Loads all nodes from gossip regardless of their health status.
+ * Returns 1 on success, 0 on failure. */
+static int clusterManagerLoadAllInfoFromNode(clusterManagerNode *node) {
+    return clusterManagerLoadInfoCommon(node, 1);
 }
 
 /* Compare functions used by various sorting operations. */
@@ -6153,6 +6194,7 @@ static clusterManagerNode *clusterManagerNodeWithLeastReplicas(void) {
     while ((ln = listNext(&li)) != NULL) {
         clusterManagerNode *n = ln->value;
         if (n->flags & CLUSTER_MANAGER_FLAG_REPLICA) continue;
+        if (!n->context) continue; /* Skip unreachable primaries */
         if (node == NULL || n->replicas_count < lowest_count) {
             node = n;
             lowest_count = n->replicas_count;
@@ -6176,7 +6218,6 @@ static clusterManagerNode *clusterManagerNodePrimaryRandom(void) {
     }
 
     assert(primary_count > 0);
-    srand(time(NULL));
     idx = rand() % primary_count;
     listRewind(cluster_manager.nodes, &li);
     while ((ln = listNext(&li)) != NULL) {
@@ -7416,7 +7457,10 @@ static int clusterManagerCommandAddNode(int argc, char **argv) {
             }
         } else {
             primary_node = clusterManagerNodeWithLeastReplicas();
-            assert(primary_node != NULL);
+            if (primary_node == NULL) {
+                clusterManagerLogErr("[ERR] Could not find a reachable primary node.\n");
+                return 0;
+            }
             printf("Automatically selected primary %s:%d\n", primary_node->ip, primary_node->port);
         }
     }
@@ -7551,7 +7595,7 @@ static int clusterManagerCommandDeleteNode(int argc, char **argv) {
     clusterManagerNode *node = NULL;
 
     // Load cluster information
-    if (!clusterManagerLoadInfoFromNode(ref_node)) return 0;
+    if (!clusterManagerLoadAllInfoFromNode(ref_node)) return 0;
 
     // Check if the node exists and is not empty
     node = clusterManagerNodeByName(node_id);
@@ -7575,10 +7619,25 @@ static int clusterManagerCommandDeleteNode(int argc, char **argv) {
     while ((ln = listNext(&li)) != NULL) {
         clusterManagerNode *n = ln->value;
         if (n == node) continue;
+
+        /* Skip nodes without a valid connection. */
+        if (!n->context) {
+            clusterManagerLogWarn(">>> Skipping unreachable node %s:%d. "
+                                  "It may need manual reconfiguration "
+                                  "when it comes back online.\n",
+                                  n->ip, n->port);
+            continue;
+        }
+
         if (n->replicate && !strcasecmp(n->replicate, node_id)) {
             // Reconfigure the replica to replicate with some other node
             clusterManagerNode *primary = clusterManagerNodeWithLeastReplicas();
-            assert(primary != NULL);
+            if (primary == NULL) {
+                clusterManagerLogErr("[ERR] Could not find a reachable primary node "
+                                     "to reassign replica %s:%d.\n",
+                                     n->ip, n->port);
+                return 0;
+            }
             clusterManagerLogInfo(">>> %s:%d as replica of %s:%d\n", n->ip, n->port, primary->ip, primary->port);
             valkeyReply *r = CLUSTER_MANAGER_COMMAND(n, "CLUSTER REPLICATE %s", primary->name);
             success = clusterManagerCheckValkeyReply(n, r, NULL);
@@ -7591,12 +7650,20 @@ static int clusterManagerCommandDeleteNode(int argc, char **argv) {
         if (!success) return 0;
     }
 
-    /* Finally send CLUSTER RESET to the node. */
-    clusterManagerLogInfo(">>> Sending CLUSTER RESET SOFT to the "
-                          "deleted node.\n");
-    valkeyReply *r = valkeyCommand(node->context, "CLUSTER RESET %s", "SOFT");
-    success = clusterManagerCheckValkeyReply(node, r, NULL);
-    if (r) freeReplyObject(r);
+    /* Finally send CLUSTER RESET to the node if we have a connection. */
+    if (node->context != NULL) {
+        clusterManagerLogInfo(">>> Sending CLUSTER RESET SOFT to the "
+                              "deleted node.\n");
+        valkeyReply *r = valkeyCommand(node->context, "CLUSTER RESET %s", "SOFT");
+        success = clusterManagerCheckValkeyReply(node, r, NULL);
+        if (r) freeReplyObject(r);
+        if (!success) return 0;
+    } else {
+        clusterManagerLogWarn(">>> WARNING: Could not connect to node %s:%d, "
+                              "unable to send CLUSTER RESET.\n",
+                              node->ip ? node->ip : "(null)", node->port);
+    }
+    clusterManagerLogOk("[OK] Node %s removed from the cluster.\n", node_id);
     return success;
 invalid_args:
     fprintf(stderr, CLUSTER_MANAGER_INVALID_HOST_ARG);
@@ -8872,8 +8939,10 @@ static void getRDB(clusterManagerNode *node) {
     }
     if (usemark) {
         payload = ULLONG_MAX - payload - RDB_EOF_MARK_SIZE;
-        if (!write_to_stdout && ftruncate(fd, payload) == -1)
+        if (!write_to_stdout && ftruncate(fd, payload) == -1) {
             fprintf(stderr, "ftruncate failed: %s.\n", strerror(errno));
+            exit(1);
+        }
         fprintf(stderr, "Transfer finished with success after %llu bytes\n", payload);
     } else {
         fprintf(stderr, "Transfer finished with success.\n");
@@ -8906,8 +8975,6 @@ static void pipeMode(void) {
     int done = 0;
     char magic[20]; /* Special reply we recognize. */
     time_t last_read_time = time(NULL);
-
-    srand(time(NULL));
 
     /* Use non blocking I/O. */
     if (anetNonBlock(aneterr, context->fd) == ANET_ERR) {
@@ -9163,13 +9230,17 @@ void type_free(void *val) {
     zfree(info);
 }
 
+static void dictEntryDestructorTypeinfoVal(void *entry) {
+    dictEntry *de = entry;
+    type_free(dictGetVal(de));
+    zfree(de);
+}
+
 static dictType typeinfoDictType = {
-    dictSdsHash,       /* hash function */
-    NULL,              /* key dup */
-    dictSdsKeyCompare, /* key compare */
-    NULL,              /* key destructor (owned by the value)*/
-    type_free,         /* val destructor */
-    NULL               /* allow to expand */
+    .entryGetKey = dictEntryGetKey,
+    .hashFunction = dictSdsHash,
+    .keyCompare = dictSdsKeyCompare,
+    .entryDestructor = dictEntryDestructorTypeinfoVal,
 };
 
 static void getKeyTypes(dict *types_dict, valkeyReply *keys, typeinfo **types) {
@@ -9762,7 +9833,6 @@ static void LRUTestMode(void) {
     long long start_cycle;
     int j;
 
-    srand(time(NULL) ^ getpid());
     while (1) {
         /* Perform cycles of 1 second with 50% writes and 50% reads.
          * We use pipelining batching writes / reads N times per cycle in order
@@ -9982,6 +10052,9 @@ int main(int argc, char **argv) {
     int firstarg;
     struct timeval tv;
 
+    srand(time(NULL) ^ getpid());
+
+    /* Valkey defaults */
     memset(&config.sslconfig, 0, sizeof(config.sslconfig));
     config.ct = VALKEY_CONN_TCP;
     config.conn_info.hostip = sdsnew("127.0.0.1");
@@ -10073,11 +10146,13 @@ int main(int argc, char **argv) {
     config.mb_delim = sdsnew("\n");
     config.cmd_delim = sdsnew("\n");
 
+    /* Override configuration based on environment variables */
+    parseEnv();
+
+    /* Override configuration based on explicit command-line arguments */
     firstarg = parseOptions(argc, argv);
     argc -= firstarg;
     argv += firstarg;
-
-    parseEnv();
 
     if (config.askpass) {
         config.conn_info.auth = askPassword("Please input password: ");

@@ -1395,6 +1395,11 @@ start_server {tags {"hashexpire"}} {
 
     #################### HPERSIST ##################
 
+    test {HPERSIST - wrong type key returns error} {
+        r SET mystr hello
+        assert_error {*WRONGTYPE*} {r HPERSIST mystr FIELDS 1 f1}
+    }
+
     test "HPERSIST - field does not exist" {
         r FLUSHALL
         r hset myhash field1 value1

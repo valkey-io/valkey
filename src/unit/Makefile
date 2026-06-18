@@ -217,8 +217,9 @@ endif
 all: valkey-unit-gtests
 
 .PHONY: test-unit
+TEST_ARGS = $(if $(accurate),--accurate) $(if $(large_memory),--large-memory) $(if $(valgrind),--valgrind) $(if $(seed),--seed $(seed))
 test-unit: valkey-unit-gtests
-	python3 ../../deps/gtest-parallel/gtest_parallel.py ./valkey-unit-gtests
+	python3 ../../deps/gtest-parallel/gtest_parallel.py ./valkey-unit-gtests --gtest_filter=$(UNIT_TEST_PATTERN)* -- $(TEST_ARGS)
 	@printf '\033[32mAll UNIT TESTS PASSED!\033[0m\n'
 
 .PHONY: valgrind

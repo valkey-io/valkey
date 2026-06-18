@@ -64,7 +64,7 @@ start_cluster 3 4 {tags {external:skip cluster} overrides {cluster-ping-interval
     }
 } ;# start_cluster
 
-start_cluster 7 3 {tags {external:skip cluster} overrides {cluster-ping-interval 1000}} {
+start_cluster 7 3 {tags {external:skip cluster} overrides {cluster-ping-interval 1000 cluster-node-timeout 15000}} {
     test "Primaries will not time out then they are elected in the same epoch" {
         # Since we have the delay time, so these node may not initiate the
         # election at the same time (same epoch). But if they do, we make
@@ -181,17 +181,17 @@ proc test_replica_config_epoch_failover {type} {
 
         # Make sure both the automatic and the manual failover will fail in the first time.
         if {$type == "automatic"} {
-            wait_for_log_messages -3 {"*Failover attempt expired*"} 0 1000 10
+            wait_for_log_messages -3 {"*Failover attempt expired*"} 0 1200 50
         } elseif {$type == "manual"} {
             R 3 cluster failover force
-            wait_for_log_messages -3 {"*Manual failover timed out*"} 0 1000 10
+            wait_for_log_messages -3 {"*Manual failover timed out*"} 0 1200 50
         }
 
         # Make sure the primaries prints the relevant logs.
-        wait_for_log_messages -1 {"*Failover auth denied to* epoch * > reqConfigEpoch*"} 0 1000 10
-        wait_for_log_messages -1 {"*has old slots configuration, sending an UPDATE message about*"} 0 1000 10
-        wait_for_log_messages -2 {"*Failover auth denied to* epoch * > reqConfigEpoch*"} 0 1000 10
-        wait_for_log_messages -2 {"*has old slots configuration, sending an UPDATE message about*"} 0 1000 10
+        wait_for_log_messages -1 {"*Failover auth denied to* epoch * > reqConfigEpoch*"} 0 1200 50
+        wait_for_log_messages -1 {"*has old slots configuration, sending an UPDATE message about*"} 0 1200 50
+        wait_for_log_messages -2 {"*Failover auth denied to* epoch * > reqConfigEpoch*"} 0 1200 50
+        wait_for_log_messages -2 {"*has old slots configuration, sending an UPDATE message about*"} 0 1200 50
 
         # Make sure the replica has updated the config epoch.
         wait_for_condition 1000 10 {

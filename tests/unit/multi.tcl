@@ -370,6 +370,66 @@ start_server {tags {"multi"}} {
         r exec
     } {}
 
+    test {WATCH same key multiple times should be fine} {
+        r set x 10
+        r watch x
+        r watch x x
+        r watch x x x
+        assert_equal 1 [get_field_in_client_info [r client info] "watch"]
+        r multi
+        r incr x
+        r exec
+        assert_equal {11} [r get x]
+        assert_equal 0 [get_field_in_client_info [r client info] "watch"]
+    }
+
+    test {WATCH same key name in different DBs} {
+        set rd0 [valkey_client]
+        set rd1 [valkey_client]
+
+        # Set up two keys with the same name in different DBs
+        r select 0
+        r set key value
+        r select 1
+        r set key value
+
+        # rd0 and rd1 are watching the same key in different DBs
+        $rd0 select 0
+        $rd0 watch key
+        $rd0 multi
+        $rd1 select 1
+        $rd1 watch key
+        $rd1 multi
+
+        # Modify key in DB 0, should only affect DB 0's watch, that is, only affect rd0
+        r select 0
+        r set key modified
+
+        # Transaction should fail because key in DB 0 was touched
+        $rd0 set key new_value
+        assert_equal {} [$rd0 exec]
+
+        # Transaction should succeed because key in DB 1 was not touched
+        $rd1 set key new_value
+        assert_equal {OK} [$rd1 exec]
+
+        $rd0 close
+        $rd1 close
+    } {0} {singledb:skip}
+
+    test {WATCH with large number of keys} {
+        set elements {}
+        for {set i 0} {$i < 50000} {incr i} {
+            lappend elements key{t}-$i
+        }
+        r watch {*}$elements
+        r watch {*}$elements
+        assert_equal 50000 [get_field_in_client_info [r client info] "watch"]
+
+        r unwatch
+        assert_equal 0 [get_field_in_client_info [r client info] "watch"]
+    }
+
     test {DISCARD should clear the WATCH dirty flag on the client} {
         r watch x
         r set x 10

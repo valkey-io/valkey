@@ -95,6 +95,35 @@ static bool hashtable_can_abort_shrink = true;
 #define MIN_FILL_PERCENT_SOFT 13
 #define MIN_FILL_PERCENT_HARD 3
 
+/* --- Cursor encoding for randomized scan starts ---
+ *
+ * To defeat the cursor=0 restart bias (see comment in hashtableScanDefrag),
+ * we randomize the starting bucket on a fresh iteration and encode the
+ * start position in the high bits of the returned cursor so subsequent
+ * calls can detect when the iteration has completed (position cycled back
+ * to start).
+ *
+ * Layout:
+ *   bit 63               : sign bit
+ *   bit 62               : flag set on cursor we returned that has randomized start
+ *   bits 56..61 (6 bits) : reserved for future cursor-encoding extensions
+ *   bits 32..55 (24 bits): start position
+ *   bits 0..31  (32 bits): current scan position
+ *
+ * 24-bit start covers tables up to 2^24 buckets (~110M entries). Tables
+ * larger than that fall back to legacy non-randomized iteration. 32-bit
+ * position is unchanged — does not constrain max table size.
+ *
+ * This encoding occupies bits 0..62, which conflicts with the 14-bit
+ * left-shift kvstore applies when adding a slot index to the cursor for
+ * top-level SCAN. Callers that go through that shift (kvstoreScan) must
+ * pass HASHTABLE_SCAN_NO_RANDOMIZE_START to opt out of randomization;
+ * the legacy non-randomized iteration is used in that case. */
+#define HASHTABLE_SCAN_RANDOMIZED (1ULL << 62)
+#define HASHTABLE_SCAN_START_SHIFT 32
+#define HASHTABLE_SCAN_START_MASK ((1ULL << 24) - 1)
+#define HASHTABLE_SCAN_POSITION_MASK ((1ULL << 32) - 1)
+
 /* --- Rehash policy --- */
 
 /* We reduce memory access time during rehashing (in the scenario of expansion)
@@ -2063,6 +2092,73 @@ bool hashtableScanHasPassedKey(hashtable *ht, const void *key, size_t cursor) {
     return rev(bucket_idx) < rev(cursor_idx);
 }
 
+/* Returns the mask that the cursor is iterating over for the duration of one
+ * scan call. During rehash we use the larger of the two table sizes so the
+ * cursor cycle covers all positions in both tables. */
+static size_t currentScanMask(hashtable *ht) {
+    if (!hashtableIsRehashing(ht)) {
+        return expToMask(ht->bucket_exp[0]);
+    }
+    int8_t larger_exp = ht->bucket_exp[0] >= ht->bucket_exp[1] ? ht->bucket_exp[0] : ht->bucket_exp[1];
+    return expToMask(larger_exp);
+}
+
+/* Decodes an input cursor into (start, position) for hashtableScanDefrag.
+ *
+ * On a fresh iteration (cursor=0, randomization not opted out) we pick a
+ * random start that fits in the current mask AND in the cursor's start
+ * field; otherwise we fall back to legacy iteration with start=0.
+ *
+ * On a continuation cursor with the magic bit set, we extract start and
+ * position. If the table has shrunk since the cursor was issued and start
+ * no longer fits in the current mask, the encoded start would never be
+ * reached by cursor advancement (`nextCursor` only produces values within
+ * mask), and the iteration would never terminate. In that case we fall
+ * back to start=0 (legacy termination at cursor=0).
+ *
+ * Otherwise (continuation cursor without the magic bit), start=0
+ * and the input cursor is the position. */
+static void decodeScanCursor(hashtable *ht, int flags, size_t *cursor_io, size_t *start_out) {
+    size_t cursor = *cursor_io;
+    if (cursor == 0 && !(flags & HASHTABLE_SCAN_NO_RANDOMIZE_START)) {
+        size_t mask = currentScanMask(ht);
+        if (mask <= HASHTABLE_SCAN_START_MASK) {
+            size_t start = randomSizeT() & mask;
+            *start_out = start;
+            *cursor_io = start;
+            return;
+        }
+        /* Table too large to encode start; fall back to legacy. */
+        *start_out = 0;
+        return;
+    }
+    if (cursor & HASHTABLE_SCAN_RANDOMIZED) {
+        size_t start = (cursor >> HASHTABLE_SCAN_START_SHIFT) & HASHTABLE_SCAN_START_MASK;
+        if (start > currentScanMask(ht)) {
+            /* Table shrunk between calls — encoded start unreachable in
+             * the current mask. Fall back to legacy termination. */
+            start = 0;
+        }
+        *start_out = start;
+        *cursor_io = cursor & HASHTABLE_SCAN_POSITION_MASK;
+        return;
+    }
+    *start_out = 0;
+}
+
+/* Encodes (cursor, start) into the value returned to a randomized-iteration
+ * caller. Only called when start != 0 (the legacy case returns the raw
+ * cursor without encoding — see hashtableScanDefrag).
+ *
+ * When the position has cycled back to start, iteration is complete and
+ * we return 0. Otherwise we encode the cursor with the magic bit and
+ * start position in the high bits. */
+static size_t encodeScanCursor(size_t cursor, size_t start) {
+    assert(start != 0);
+    if (cursor == start) return 0;
+    return cursor | ((size_t)start << HASHTABLE_SCAN_START_SHIFT) | HASHTABLE_SCAN_RANDOMIZED;
+}
+
 /* Like hashtableScan, but additionally reallocates the memory used by the dict
  * entries using the provided allocation function. This feature was added for
  * the active defrag feature.
@@ -2090,6 +2186,21 @@ size_t hashtableScanDefrag(hashtable *ht, size_t cursor, hashtableScanFunction f
 
     /* Flags. */
     int emit_ref = (flags & HASHTABLE_SCAN_EMIT_REF);
+
+    /* Cursor encoding to defeat the cursor=0 restart bias.
+     *
+     * When the caller passes cursor=0 we pick a random starting position
+     * and encode it in the high bits of the cursor we return. Subsequent
+     * calls thread the start through the cursor; iteration ends (returns
+     * cursor=0) when the position cycles back to where we started.
+     *
+     * Applications that always restart SCAN at cursor=0 between batches
+     * systematically protect the buckets at the tail of the deterministic
+     * bit-reverse scan order — uniform random inserts keep landing there
+     * but they never get drained. Randomizing the start distributes the
+     * workload's drain uniformly across the table. */
+    size_t start;
+    decodeScanCursor(ht, flags, &cursor, &start);
 
     if (!hashtableIsRehashing(ht)) {
         /* Emit entries at the cursor index. */
@@ -2193,12 +2304,18 @@ size_t hashtableScanDefrag(hashtable *ht, size_t cursor, hashtableScanFunction f
 
             /* Increment the reverse cursor not covered by the smaller mask. */
             cursor = nextCursor(cursor, mask_large);
+            if (cursor == start) break;
 
             /* Continue while bits covered by mask difference is non-zero. */
         } while (cursor & (mask_small ^ mask_large));
     }
     hashtableResumeRehashing(ht);
-    return cursor;
+    /* main hashtable iteration: return the raw cursor without encoding */
+    if (start == 0) {
+        return cursor;
+    } else {
+        return encodeScanCursor(cursor, start);
+    }
 }
 
 /* --- Iterator --- */

@@ -96,6 +96,7 @@ typedef void (*hashtableScanFunction)(void *privdata, void *entry);
 
 /* Scan flags */
 #define HASHTABLE_SCAN_EMIT_REF (1 << 0)
+#define HASHTABLE_SCAN_NO_RANDOMIZE_START (1 << 1)
 
 /* Iterator flags */
 #define HASHTABLE_ITER_SAFE (1 << 0)

@@ -1211,3 +1211,45 @@ if {[lindex [r config get proto-max-bulk-len] 1] == 10000000000} {
 } ;# skip 32bit builds
 }
 } ;# run_solo
+
+start_server [list overrides [list save "" lua-time-limit 30000] tags {"set external:skip"}] {
+    # Regression test for valkey-io/valkey#3955.
+    # An app doing SSCAN-from-cursor-0 + SREM in a loop, with concurrent
+    # uniform random SADDs, systematically protects buckets at the tail of
+    # bit-reverse scan order from drainage — those buckets accumulate
+    # entries and one of their chains can grow unbounded. Without
+    # the scan-start randomization in hashtableScanDefrag this drives max
+    # chain length past 100 in a few seconds.
+    test {Set hashtable: chain bounded under SSCAN+SREM cursor=0 restart} {
+        r del test
+        set script {
+            math.randomseed(tonumber(ARGV[1]))
+            local function batch(cmd, args)
+                for i = 1, #args, 4096 do
+                    local b = {}
+                    for j = i, math.min(i + 4095, #args) do
+                        b[#b + 1] = args[j]
+                    end
+                    server.call(cmd, 'test', unpack(b))
+                end
+            end
+            for round = 1, 30 do
+                local needed = 100000 - server.call('scard', 'test')
+                if needed > 0 then
+                    local a = {}
+                    for i = 1, needed do a[i] = tostring(math.random(2147483647)) end
+                    batch('sadd', a)
+                end
+                for d = 1, 10 do
+                    local _, m = unpack(server.call('sscan', 'test', '0', 'count', 4096))
+                    if #m > 0 then batch('srem', m) end
+                end
+            end
+        }
+        for {set seed 1} {$seed <= 8} {incr seed} {
+            r eval $script 0 $seed
+        }
+        regexp {max chain length: (\d+)} [r debug htstats-key test full] -> max_chain
+        assert_lessthan $max_chain 50
+    } {} {needs:debug valgrind:skip}
+}

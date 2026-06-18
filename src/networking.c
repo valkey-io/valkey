@@ -1763,8 +1763,19 @@ int clientHasPendingReplies(client *c) {
         const blockedResponse *n = listNodeValue(listFirst(c->reply_blocking_state.blocked_responses));
         if ((c->bufpos && n->disallowed_reply_block == NULL) ||
             (c->bufpos == 0 && n->disallowed_reply_block != NULL && listFirst(c->reply) == n->disallowed_reply_block)) {
+            /* The comparison is only valid when the write cursor (io_last_written)
+             * and the boundary are measured against the same buffer. That holds
+             * because: (a) the static buf only fills while c->reply is empty, (b)
+             * _postWriteToClient zeroes bufpos once a write passes the static buf,
+             * and (c) it frees every reply block before io_last_written.buf. Assert
+             * it so a future change that breaks these invariants fails tests rather
+             * than silently comparing offsets across different buffers. */
+            debugServerAssert(c->io_last_written.buf == NULL ||
+                              c->io_last_written.buf == (n->disallowed_reply_block == NULL
+                                                             ? c->buf
+                                                             : ((clientReplyBlock *)listNodeValue(n->disallowed_reply_block))->buf));
             /* Both positions are pointing both at the initial 16KB buffer or the
-             * first reply block, compare the sentlen with the last allowed byte offset */
+             * first reply block, compare the sentlen with the last allowed byte offset. */
             return c->io_last_written.bufpos < n->disallowed_byte_offset;
         }
     }

@@ -224,6 +224,36 @@ foreach provider_mode {aof} {
                 $rd close
             }
 
+            test "($provider_mode) Sync replication blocks reply held in the reply list until provider acks" {
+                # Force the reply into the c->reply overflow list (not the static
+                # buf) and use a ~100KB allowed prefix so it spans multiple blocks.
+                set bigval [string repeat A 100000]
+                $primary debug client-enforce-reply-list 1
+                $primary set durable:committed2 $bigval
+                unblock_with_provider
+                pause_provider
+
+                set rd [valkey_deferring_client -1]
+                $rd get durable:committed2
+                $rd set durable:pending2 y
+
+                # Allowed prefix (the multi-block GET reply) must be released in full.
+                assert_equal $bigval [$rd read]
+
+                # Blocked suffix (SET reply) must still be withheld.
+                set fd [$rd channel]
+                fconfigure $fd -blocking 0
+                set early_reply [read $fd]
+                fconfigure $fd -blocking 1
+                assert_equal "" $early_reply
+
+                unblock_with_provider
+
+                assert_equal "OK" [$rd read]
+                $rd close
+                $primary debug client-enforce-reply-list 0
+            }
+
             # ==================== Non-blocking tests ====================
 
             test "($provider_mode) EVAL_RO should not block replies" {

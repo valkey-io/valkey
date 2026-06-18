@@ -591,6 +591,7 @@ ENGINE_SERVER_OBJ = \
     zipmap.o \
     zmalloc.o \
     queues.o \
+    qos.o \
     throttle_token_bucket.o \
     stat_calc.o \
     throttle_repl.o \

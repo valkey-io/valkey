@@ -64,6 +64,8 @@ void sendNextCommand(evutil_socket_t, short, void *);
 void printReply(const valkeyReply *reply) {
     switch (reply->type) {
     case VALKEY_REPLY_ERROR:
+        printf("Error: %s\n", reply->str);
+        break;
     case VALKEY_REPLY_STATUS:
     case VALKEY_REPLY_STRING:
     case VALKEY_REPLY_VERB:

@@ -1655,5 +1655,5 @@ void sscanCommand(client *c) {
 
     if (parseScanCursorOrReply(c, objectGetVal(c->argv[2]), &cursor) == C_ERR) return;
     if ((set = lookupKeyReadOrReply(c, c->argv[1], shared.emptyscan)) == NULL || checkType(c, set, OBJ_SET)) return;
-    scanGenericCommand(c, set, cursor, -1, NULL, NULL);
+    scanGenericCommand(c, set, cursor);
 }

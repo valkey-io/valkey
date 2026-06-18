@@ -24,6 +24,8 @@ set ::pause_on_error 0
 set ::dont_clean 0
 set ::simulate_error 0
 set ::failed 0
+set ::failed_tests {}
+set ::failures_output_file ""
 set ::sentinel_instances {}
 set ::valkey_instances {}
 set ::global_config {}
@@ -38,6 +40,10 @@ set ::run_matching {} ; # If non empty, only tests matching pattern are run.
 set ::exit_on_failure 0
 set ::stop_on_failure 0
 set ::loop 0
+
+# Save project root before cd'ing into tmp.
+# At this point we're in tests/<suite>/ (e.g., tests/sentinel/).
+set ::project_root [file normalize "../.."]
 
 if {[catch {cd tmp}]} {
     puts "tmp directory not found."
@@ -67,12 +73,14 @@ proc exec_instance {type dirname cfgfile} {
 
 # Spawn a server or sentinel instance, depending on 'type'.
 proc spawn_instance {type base_port count {conf {}} {base_conf_file ""}} {
+    set current_instances_count [llength [set ::${type}_instances]]
     for {set j 0} {$j < $count} {incr j} {
+        set instance_id [expr $current_instances_count + $j]
         set port [find_available_port $base_port $::valkey_port_count]
         # plaintext port (only used for TLS cluster)
         set pport 0
         # Create a directory for this instance.
-        set dirname "${type}_${j}"
+        set dirname "${type}_${instance_id}"
         lappend ::dirs $dirname
         catch {exec rm -rf $dirname}
         file mkdir $dirname
@@ -142,7 +150,7 @@ proc spawn_instance {type base_port count {conf {}} {base_conf_file ""}} {
 
             # Check availability
             if {[server_is_up 127.0.0.1 $port 100] == 0} {
-                puts "Starting $type #$j at port $port failed, try another"
+                puts "Starting $type #$instance_id at port $port failed, try another"
                 incr retry -1
                 set port [find_available_port $base_port $::valkey_port_count]
                 set cfg [open $cfgfile a+]
@@ -155,7 +163,7 @@ proc spawn_instance {type base_port count {conf {}} {base_conf_file ""}} {
                 }
                 close $cfg
             } else {
-                puts "Starting $type #$j at port $port"
+                puts "Starting $type #$instance_id at port $port"
                 lappend ::pids $pid
                 break
             }
@@ -165,13 +173,14 @@ proc spawn_instance {type base_port count {conf {}} {base_conf_file ""}} {
         if {[server_is_up $::host $port 100] == 0} {
             set logfile [file join $dirname log.txt]
             puts [exec tail $logfile]
-            abort_sentinel_test "Problems starting $type #$j: ping timeout, maybe server start failed, check $logfile"
+            abort_sentinel_test "Problems starting $type #$instance_id: ping timeout, maybe server start failed, check $logfile"
         }
 
         # Push the instance into the right list
         set link [valkey $::host $port 0 $::tls]
         $link reconnect 1
         lappend ::${type}_instances [list \
+            instance_id $instance_id \
             pid $pid \
             host $::host \
             port $port \
@@ -179,6 +188,23 @@ proc spawn_instance {type base_port count {conf {}} {base_conf_file ""}} {
             link $link \
         ]
     }
+}
+
+proc remove_valkey_instance { ids } {
+    set ids [lsort -unique $ids]
+    set new {}
+    foreach instance $::valkey_instances {
+        # Treats the flat list entry {pid 93770 host 127.0.0.1 port 30000 ...}
+        # as alternating key/value pairs.
+        array set inst $instance
+        # Found the target instance
+        if { [lsearch -exact $ids $inst(instance_id)] >= 0} {
+            kill_instance "valkey" $inst(instance_id)
+        } else {
+            lappend new $instance
+        }
+    }
+    set ::valkey_instances $new
 }
 
 proc log_crashes {} {
@@ -197,12 +223,15 @@ proc log_crashes {} {
         close $fd
     }
 
-    set logs [glob */err.txt]
-    foreach log $logs {
-        set res [find_valgrind_errors $log true]
-        if {$res != ""} {
-            puts $res
-            incr ::failed
+    # Only scan for valgrind errors when actually running under valgrind.
+    if {$::valgrind} {
+        set logs [glob */err.txt]
+        foreach log $logs {
+            set res [find_valgrind_errors $log true]
+            if {$res != ""} {
+                puts $res
+                incr ::failed
+            }
         }
     }
 
@@ -259,9 +288,9 @@ proc cleanup {} {
     if {$::dont_clean} {
         return
     }
-    foreach dir $::dirs {
-        catch {exec rm -rf $dir}
-    }
+    # Don't clean up the log files. We often need to examine the
+    # logs regardless of whether the test fail or not.
+    # The logs will be cleaned up in run.tcl prior to running tests
 }
 
 proc abort_sentinel_test msg {
@@ -315,6 +344,9 @@ proc parse_options {} {
             set ::stop_on_failure 1
         } elseif {$opt eq {--loop}} {
             set ::loop 1
+        } elseif {$opt eq {--failures-output}} {
+            set ::failures_output_file [file normalize [file join $::project_root $val]]
+            incr j
         } elseif {$opt eq {--log-req-res}} {
             set ::log_req_res 1
         } elseif {$opt eq {--force-resp3}} {
@@ -334,6 +366,7 @@ proc parse_options {} {
             puts "--fast-fail             Exit immediately once the first test fails."
             puts "--stop                  Blocks once the first test fails."
             puts "--loop                  Execute the specified set of tests forever."
+            puts "--failures-output <path>  Write test failures to the specified JSON file."
             puts "--help                  Shows this help."
             exit 0
         } else {
@@ -432,8 +465,9 @@ proc test {descr code} {
     if {[catch {set retval [uplevel 1 $code]} error]} {
         incr ::failed
         if {[string match "assertion:*" $error]} {
-            set msg "FAILED: [string range $error 10 end]"
-            puts [colorstr red $msg]
+            set msg [string range $error 10 end]
+            puts [colorstr red "FAILED: $msg"]
+            lappend ::failed_tests [list $descr $::cur_test_file $msg]
             if {$::pause_on_error} pause_on_error
             puts [colorstr red "(Jumping to next unit after error)"]
             return -code continue
@@ -449,7 +483,8 @@ proc test {descr code} {
 # Check memory leaks when running on macOS using the "leaks" utility.
 proc check_leaks instance_types {
     if {$::leaks && [string match {*Darwin*} [exec uname -a]]} {
-        puts -nonewline "Testing for memory leaks..."; flush stdout
+        set ts [clock format [clock seconds] -format %H:%M:%S]
+        puts -nonewline "$ts> Testing for memory leaks..."; flush stdout
         foreach type $instance_types {
             foreach_instance_id [set ::${type}_instances] id {
                 if {[instance_is_killed $type $id]} continue
@@ -492,6 +527,14 @@ while 1 {
             continue
         }
         if {[file isdirectory $test]} continue
+        # Convert relative path (../tests/...) to project-relative path (tests/<suite>/tests/...)
+        set normalized [file normalize $test]
+        set project_root [file normalize "../../.."]
+        if {[string match "${project_root}/*" $normalized]} {
+            set ::cur_test_file [string range $normalized [expr {[string length $project_root] + 1}] end]
+        } else {
+            set ::cur_test_file $test
+        }
         puts [colorstr yellow "Testing unit: [lindex [file split $test] end]"]
         if {[catch { source $test } err]} {
             puts "FAILED: caught an error in the test $err"
@@ -524,8 +567,39 @@ while 1 {
 } ;# while 1
 }
 
-# Print a message and exists with 0 / 1 according to zero or more failures.
+proc write_test_failures {} {
+    if {$::failures_output_file eq ""} {
+        return
+    }
+
+    set failures {}
+    foreach entry $::failed_tests {
+        set test_name [lindex $entry 0]
+        set test_file [lindex $entry 1]
+        set error_msg [lindex $entry 2]
+
+        set test_name [string map {"\\" "\\\\" "\"" "\\\"" "\n" "\\n" "\r" "\\r" "\t" "\\t" "\b" "\\b" "\f" "\\f"} $test_name]
+        set test_file [string map {"\\" "\\\\" "\"" "\\\"" "\n" "\\n" "\r" "\\r" "\t" "\\t" "\b" "\\b" "\f" "\\f"} $test_file]
+        set error_msg [string map {"\\" "\\\\" "\"" "\\\"" "\n" "\\n" "\r" "\\r" "\t" "\\t" "\b" "\\b" "\f" "\\f"} $error_msg]
+
+        lappend failures "\{\"test_name\":\"$test_name\",\"test_file\":\"$test_file\",\"status\":\"err\",\"error\":\"$error_msg\"\}"
+    }
+
+    set outdir [file dirname $::failures_output_file]
+    if {$outdir ne "."} {
+        file mkdir $outdir
+    }
+    set fp [open $::failures_output_file w]
+    puts $fp "\[[join $failures ","]\]"
+    close $fp
+}
+
+# Print a message and exits with 0 / 1 according to zero or more failures.
 proc end_tests {} {
+    if {[catch {write_test_failures} err]} {
+        puts "Warning: Failed to write test failures: $err"
+    }
+
     if {$::failed == 0 } {
         puts [colorstr green "GOOD! No errors."]
         exit 0
@@ -625,29 +699,26 @@ proc set_instance_attrib {type id attrib newval} {
     lset ::${type}_instances $id $d
 }
 
-# Create a master-slave cluster of the given number of total instances.
-# The first instance "0" is the master, all others are configured as
-# slaves.
-proc create_valkey_master_slave_cluster n {
-    foreach_valkey_id id {
-        if {$id == 0} {
-            # Our master.
+# Create a primary-replica cluster of the given number of total instances.
+# The first instance (ID 0) is the primary, all others are configured as
+# replicas.
+proc create_valkey_primary_replica_cluster { n primary_id } {
+    for {set id $primary_id} {$id < [expr $primary_id + $n]} {incr id} {
+        if {$id == $primary_id} {
             R $id slaveof no one
             R $id flushall
-        } elseif {$id < $n} {
-            R $id slaveof [get_instance_attrib valkey 0 host] \
-                          [get_instance_attrib valkey 0 port]
         } else {
-            # Instances not part of the cluster.
-            R $id slaveof no one
+            R $id slaveof [get_instance_attrib valkey $primary_id host] [get_instance_attrib valkey $primary_id port]
         }
     }
-    # Wait for all the slaves to sync.
+    # Wait for all the replicas to sync.
     wait_for_condition 1000 50 {
-        [RI 0 connected_slaves] == ($n-1)
+        [RI $primary_id connected_slaves] == ($n-1)
     } else {
-        fail "Unable to create a master-slaves cluster."
+        fail "Unable to create a primary-replica cluster. Connected [RI $primary_id connected_slaves] \
+              replicas but expected [expr $n-1]"
     }
+    puts "Successfully created a primary-replica cluster of $n instances with primary ID $primary_id"
 }
 
 proc get_instance_id_by_port {type port} {

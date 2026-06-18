@@ -265,6 +265,34 @@ start_server {tags {"introspection"}} {
         assert_equal {{}} [r command info config|get|key]
     }
 
+    test {COMMAND INFO subcommands field uses array not set type in RESP3 for commands with no subcommands} {
+        r hello 3
+        r readraw 1
+        r deferred 1
+        r command info ping
+        assert_equal [r read] {*1}   ;# outer array: 1 command
+        assert_equal [r read] {*10}  ;# command info: 10 fields
+        assert_equal [r read] {$4}   ;# name (bulk string type)
+        assert_equal [r read] {ping} ;# name value
+        assert_equal [r read] {:-1}  ;# arity
+        set flags_hdr [r read]       ;# flags (~N set)
+        for {set i 0} {$i < [string range $flags_hdr 1 end]} {incr i} { r read }
+        assert_equal [r read] {:0}   ;# first_key
+        assert_equal [r read] {:0}   ;# last_key
+        assert_equal [r read] {:0}   ;# step
+        set acl_hdr [r read]         ;# acl_categories (~N set)
+        for {set i 0} {$i < [string range $acl_hdr 1 end]} {incr i} { r read }
+        set tips_hdr [r read]        ;# tips (~N set)
+        set tips_count [string range $tips_hdr 1 end]
+        for {set i 0} {$i < $tips_count} {incr i} { r read ; r read }
+        assert_equal [r read] {~0}   ;# key_specs: correctly a Set
+        set subcommands_hdr [r read] ;# subcommands: should be Array not Set
+        r readraw 0
+        r deferred 0
+        r hello 2
+        assert_equal {*0} $subcommands_hdr
+    } {} {resp3}
+
     foreach cmd {SET GET MSET BITFIELD LMOVE LPOP BLPOP PING MEMORY MEMORY|USAGE RENAME GEORADIUS_RO} {
         test "$cmd command will not be marked with movablekeys" {
             set info [lindex [r command info $cmd] 0]

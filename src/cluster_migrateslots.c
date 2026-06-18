@@ -1,7 +1,7 @@
 /*
  * Copyright Valkey Contributors.
  * All rights reserved.
- * SPDX-License-Identifier: BSD 3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause
  */
 
 #include "cluster_migrateslots.h"
@@ -764,7 +764,6 @@ void clusterCommandSyncSlotsFinish(client *c) {
         return;
     }
 
-    addReply(c, shared.ok);
     slotMigrationJob *job = clusterLookupMigrationJob(name);
     if (!job) {
         addReplyError(c, "No such slot migration job");
@@ -781,6 +780,7 @@ void clusterCommandSyncSlotsFinish(client *c) {
         return;
     }
 
+    addReply(c, shared.ok);
     forceCommandPropagation(c, PROPAGATE_REPL | PROPAGATE_AOF);
     finishSlotMigrationJob(job, target_state, message);
 }
@@ -835,6 +835,9 @@ slotMigrationJob *createSlotImportJob(client *c,
     if (!job->client->querybuf) {
         job->client->querybuf = generateSyncSlotsEstablishCommand(job);
         job->client->qb_pos = sdslen(job->client->querybuf);
+        /* The backfilled ESTABLISH command is already applied, so qb_applied
+         * must match qb_pos for commandProcessed() to advance reploff. */
+        job->client->qb_applied = job->client->qb_pos;
     }
     job->client->repl_data->read_reploff = sdslen(job->client->querybuf);
 
@@ -939,9 +942,10 @@ void clusterUpdateSlotImportsOnOwnershipChange(void) {
             finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_FAILED,
                                    "Slots were unexpectedly assigned to myself "
                                    "during import");
+        } else {
+            finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_FAILED,
+                                   "Slots are no longer owned by source node");
         }
-        finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_FAILED,
-                               "Slots are no longer owned by source node");
     }
 }
 

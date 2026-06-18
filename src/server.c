@@ -4660,7 +4660,7 @@ int processCommand(client *c) {
             sdsmapchars(busy_err, "\r\n", "  ", 2);
             rejectCommandSds(c, busy_err, 1);
         } else if (server.busy_module_yield_flags) {
-            rejectCommand(c, shared.slowmoduleerr);
+            rejectCommand(c, shared.slowmoduleerr, 1);
         } else {
             /* For long-running scripts, defer command execution instead of rejecting */
             blockPostponeClient(c);

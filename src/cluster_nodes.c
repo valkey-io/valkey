@@ -964,8 +964,11 @@ int clusterSaveConfig(int do_fsync) {
     int retval = C_ERR;
     mstime_t latency;
 
-    /* Get the nodes description and concatenate protocol-specific vars. */
-    ci = clusterGenNodesDescription(NULL, CLUSTER_NODE_HANDSHAKE, 0);
+    /* Get the nodes description and concatenate protocol-specific vars.
+     * Filter HANDSHAKE (unidentified) and MEET (uncommitted/uncontacted)
+     * nodes — both represent incomplete join attempts that should not
+     * persist across restarts. */
+    ci = clusterGenNodesDescription(NULL, CLUSTER_NODE_HANDSHAKE | CLUSTER_NODE_MEET, 0);
     if (clusterCurrentBus->appendVarsLine)
         ci = clusterCurrentBus->appendVarsLine(ci);
     /* CRC over snapshot (node lines + vars), before log lines. */

@@ -1249,9 +1249,10 @@ static void raftApplyCommitted(void) {
  * Format: INSTALL_SNAPSHOT <leader-id> <term> <last-index> <last-term>\n<config> */
 static void clusterRaftSendInstallSnapshot(clusterLink *link, clusterNode *node) {
     clusterRaftState *rs = RAFT_STATE();
-    /* Strip MYSELF flag so the receiver doesn't adopt our identity. */
+    /* Strip MYSELF flag so the receiver doesn't adopt our identity.
+     * Filter MEET-flagged nodes (NODE_JOIN not yet committed). */
     myself->flags &= ~CLUSTER_NODE_MYSELF;
-    sds config = clusterGenNodesDescription(NULL, CLUSTER_NODE_HANDSHAKE, 0);
+    sds config = clusterGenNodesDescription(NULL, CLUSTER_NODE_MEET | CLUSTER_NODE_HANDSHAKE, 0);
     myself->flags |= CLUSTER_NODE_MYSELF;
     sds msg = wireNewMsg("INSTALL_SNAPSHOT");
     msg = sdscatlen(msg, " ", 1);

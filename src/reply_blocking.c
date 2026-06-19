@@ -467,7 +467,7 @@ static long long getSingleCommandBlockingOffsetForReplicatingCommand(client *c) 
         if (numkeys > 0) {
             if (c->cmd->proc == moveCommand) {
                 int dest_dbid = -1;
-                if (getIntFromObject(c->argv[2], &dest_dbid) == C_ERR) {
+                if (getIntFromObject(c->argv[2], &dest_dbid) == C_ERR || dest_dbid < 0 || dest_dbid >= server.dbnum) {
                     getKeysFreeResult(&result);
                     return -1;
                 }
@@ -525,7 +525,8 @@ static long long getSingleCommandBlockingOffsetForNonReplicatingCommand(client *
         // COPY/MOVE may target a different DB; check the destination key there too.
         if (c->cmd->proc == moveCommand) {
             int dest_dbid = -1;
-            if (getIntFromObject(c->argv[2], &dest_dbid) == C_OK && dest_dbid != c->db->id) {
+            if (getIntFromObject(c->argv[2], &dest_dbid) == C_OK && dest_dbid >= 0 && dest_dbid < server.dbnum &&
+                dest_dbid != c->db->id) {
                 long long offset = getUncommittedKeyOffset(objectGetVal(c->argv[1]), server.db[dest_dbid], server.reply_blocking.previous_acked_offset);
                 if (offset > blocking_repl_offset) blocking_repl_offset = offset;
             }

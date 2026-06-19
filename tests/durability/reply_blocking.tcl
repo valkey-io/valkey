@@ -583,6 +583,27 @@ foreach provider_mode {aof} {
                 $rd close
             }
 
+            test "($provider_mode) MOVE/COPY to out-of-range destination DB does not crash" {
+                # MOVE/COPY to an out-of-range DB is rejected but still reaches the
+                # reply-blocking offset path; dbnum and -1 hit ASan's server.db redzone.
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
+
+                set dbnum [lindex [$primary config get databases] 1]
+                $primary select 9
+                assert_equal "OK" [$primary set durable:oob-move-key v]
+
+                foreach idx [list $dbnum -1 100000] {
+                    assert_error "*out of range*" {$primary move durable:oob-move-key $idx}
+                    assert_equal "PONG" [$primary ping]
+                    assert_error "*out of range*" {$primary copy durable:oob-move-key dst db $idx}
+                    assert_equal "PONG" [$primary ping]
+                }
+
+                # Key untouched in its original DB after all rejected MOVEs/COPYs.
+                assert_equal "v" [$primary get durable:oob-move-key]
+                $primary del durable:oob-move-key
+            }
+
             test "($provider_mode) MULTI/EXEC with SELECT writes to multiple databases blocks" {
                 assert_equal "always" [lindex [$primary config get appendfsync] 1]
 

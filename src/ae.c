@@ -92,6 +92,7 @@ aeEventLoop *aeCreateEventLoop(int setsize) {
     eventLoop->aftersleep = NULL;
     eventLoop->custompoll = NULL;
     eventLoop->flags = 0;
+    eventLoop->currWakeTime = 0;
     /* Initialize the eventloop mutex with PTHREAD_MUTEX_ERRORCHECK type */
     pthread_mutexattr_t attr;
     pthread_mutexattr_init(&attr);
@@ -449,6 +450,10 @@ int aeProcessEvents(aeEventLoop *eventLoop, int flags) {
             numevents = aeApiPoll(eventLoop, tvp);
         }
 
+        /* Record event-loop wake time for service time tracking.
+         * AE_DONT_WAIT prevents resetting during recursive aeProcessEvents calls. */
+        if (!(flags & AE_DONT_WAIT)) eventLoop->currWakeTime = getMonotonicUs();
+
         /* Don't process file events if not requested. */
         if (!(flags & AE_FILE_EVENTS)) {
             numevents = 0;
@@ -568,4 +573,8 @@ void aeSetPollProtect(aeEventLoop *eventLoop, int protect) {
     } else {
         eventLoop->flags &= ~AE_PROTECT_POLL;
     }
+}
+
+monotime aeGetWakeTime(aeEventLoop *eventLoop) {
+    return eventLoop->currWakeTime;
 }

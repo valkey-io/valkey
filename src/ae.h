@@ -115,6 +115,7 @@ typedef struct aeEventLoop {
     aeCustomPollProc *custompoll;
     pthread_mutex_t poll_mutex;
     int flags;
+    monotime currWakeTime; /* Timestamp of last event-loop wake from poll, for service time tracking. */
 } aeEventLoop;
 
 /* Prototypes */
@@ -143,5 +144,6 @@ int aePoll(aeEventLoop *eventLoop, struct timeval *tvp);
 int aeGetSetSize(aeEventLoop *eventLoop);
 int aeResizeSetSize(aeEventLoop *eventLoop, int setsize);
 void aeSetDontWait(aeEventLoop *eventLoop, int noWait);
+monotime aeGetWakeTime(aeEventLoop *eventLoop);
 
 #endif

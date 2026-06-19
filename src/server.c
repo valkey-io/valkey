@@ -40,6 +40,7 @@
 #include "commandlog.h"
 #include "bio.h"
 #include "latency.h"
+#include "service_time.h"
 #include "mt19937-64.h"
 #include "functions.h"
 #include "hdr_histogram.h"
@@ -3359,6 +3360,7 @@ int populateCommandStructure(struct serverCommand *c) {
     /* We start with an unallocated histogram and only allocate memory when a command
      * has been issued for the first time */
     c->latency_histogram = NULL;
+    c->service_time_histogram = NULL;
 
     /* Initialize command info cache */
     for (int i = 0; i < RESP_CACHE_INDEX_MAX; i++) {
@@ -3425,6 +3427,10 @@ void resetCommandTableStats(hashtable *commands) {
         if (c->latency_histogram) {
             hdr_close(c->latency_histogram);
             c->latency_histogram = NULL;
+        }
+        if (c->service_time_histogram) {
+            hdr_close(c->service_time_histogram);
+            c->service_time_histogram = NULL;
         }
         if (c->subcommands_ht) resetCommandTableStats(c->subcommands_ht);
     }
@@ -3893,6 +3899,8 @@ void call(client *c, int flags) {
      * as an entry point is if a module triggers RM_Call outside of call()
      * context (for example, in a timer).
      * In that case, the module is in charge of propagation. */
+
+    serviceTime_startTimer(c);
 
     /* Call the command. */
     dirty = server.dirty;

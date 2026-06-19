@@ -41,6 +41,7 @@ typedef struct clusterLink {
     clusterNode *node;                     /* Node related to this link. Initialized to NULL when unknown */
     int inbound;                           /* 1 if this link is an inbound link accepted from the related node */
     int flags;                             /* CLUSTER_LINK_... */
+    mstime_t ping_echo_time;               /* The ping echo time received from the remote node, in milliseconds.*/
 } clusterLink;
 
 /* Cluster link flags and macros. */
@@ -173,6 +174,7 @@ typedef enum {
     CLUSTERMSG_EXT_TYPE_CLIENT_PORT,
     CLUSTERMSG_EXT_TYPE_CLIENT_TLS_PORT,
     CLUSTERMSG_EXT_TYPE_AVAILABILITY_ZONE,
+    CLUSTERMSG_EXT_TYPE_PING_ECHO_TIME
 } clusterMsgPingtypes;
 
 /* Helper function for making sure extensions are eight byte aligned. */
@@ -189,6 +191,10 @@ typedef struct {
 typedef struct {
     char availability_zone[1]; /* The availability zone, ends with \0. */
 } clusterMsgPingExtAvailabilityZone;
+
+typedef struct {
+    uint64_t ping_echo_time; /* The ping echo time, in milliseconds. */
+} clusterMsgPingExtPingEchoTime;
 
 typedef struct {
     char name[CLUSTER_NAMELEN]; /* Node name. */
@@ -218,6 +224,10 @@ typedef struct {
 } clusterMsgPingExtClientTlsPort;
 
 typedef struct {
+    uint64_t ping_echo_time; /* The ping echo time, in milliseconds. */
+} clusterMsgPingExtEchoTime;
+
+typedef struct {
     uint32_t length; /* Total length of this extension message (including this header) */
     uint16_t type;   /* Type of this extension message (see clusterMsgPingtypes) */
     uint16_t unused; /* 16 bits of padding to make this structure 8 byte aligned. */
@@ -231,6 +241,7 @@ typedef struct {
         clusterMsgPingExtClientPort announce_client_port;
         clusterMsgPingExtClientTlsPort announce_client_tls_port;
         clusterMsgPingExtAvailabilityZone availability_zone;
+        clusterMsgPingExtEchoTime ping_echo_time;
     } ext[]; /* Actual extension information, formatted so that the data is 8
               * byte aligned, regardless of its content. */
 } clusterMsgPingExt;
@@ -416,7 +427,8 @@ struct _clusterNode {
     rax *fail_reports;                      /* Radix tree for failure reports with sorted order by timestamp */
     int is_node_healthy;                    /* Boolean indicating the cached node health.
                                                Update with updateAndCountChangedNodeHealth(). */
-    latencyStat latency_stats;              /* Latency statistics for this node. */                        
+    uint32_t max_round_trip_time;           /* The maximum round trip time (in milliseconds) measured for this node. */
+    uint32_t avg_round_trip_time;           /* The average round trip time (in milliseconds) measured for this node. */
 };
 
 /* Struct used for storing slot statistics. */
@@ -430,11 +442,6 @@ typedef struct slotRange {
     int start_slot;
     int end_slot;
 } slotRange;
-
-typedef struct latencyStat {
-    uint32_t max_latency;
-    uint32_t avg_latency;
-} latencyStat;
 
 struct clusterState {
     clusterNode *myself; /* This node */

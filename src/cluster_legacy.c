@@ -1363,6 +1363,18 @@ static void updateAnnouncedClientTlsPort(clusterNode *node, int value) {
     clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG);
 }
 
+static void updateCommandLatencyStats(clusterNode *node, uint32_t current_rtt){
+    node -> max_round_trip_time = max(node -> max_round_trip_time, current_rtt);
+
+    if(node -> avg_round_trip_time == 0) {
+        node -> avg_round_trip_time = current_rtt;
+    } else {
+        // TODO - hard codedf window length & weightage for exponential moving average, replace with configurable values
+        node -> avg_round_trip_time = (node -> avg_round_trip_time * 8 + current_rtt) / 10 ;
+    }
+    clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG);
+}
+
 static void updateShardId(clusterNode *node, const char *shard_id) {
     /* Ensure replica shard IDs match their primary's to maintain cluster consistency.
      *
@@ -3409,6 +3421,20 @@ writePortPingExtIfNonzero(uint32_t *totlen_ptr, clusterMsgPingExt **cursor_ptr, 
     return 1;
 }
 
+static uint32_t
+writePingTimeExtIfNonzero(uint32_t *totlen_ptr, clusterMsgPingExt **cursor_ptr, clusterMsgPingtypes type, uint64_t value) {
+    if (value == 0) return 0;
+    size_t size = getAlignedPingExtSize(sizeof(clusterMsgPingExtEchoTime));
+    if (*cursor_ptr != NULL) {
+        void *ext = preparePingExt(*cursor_ptr, type, size);
+        value = htonu64(value);
+        memcpy(ext, &value, sizeof(value));
+        *cursor_ptr = getNextPingExt(*cursor_ptr);
+    }
+    *totlen_ptr += size;
+    return 1;
+}
+
 /* 1. If a NULL hdr is provided, compute the extension size;
  * 2. If a non-NULL hdr is provided, write the ping
  *    extensions at the start of the cursor. This function
@@ -3439,6 +3465,14 @@ static uint32_t writePingExtensions(clusterMsg *hdr, int gossipcount) {
     extensions +=
         writeSdsPingExtIfNonempty(&totlen, &cursor, CLUSTERMSG_EXT_TYPE_AVAILABILITY_ZONE, myself->availability_zone);
 
+    uint16_t msg_type = ntohs(hdr->type);
+    if(msg_type == CLUSTERMSG_TYPE_PING || msg_type == CLUSTERMSG_TYPE_MEET) {
+        uint64_t current_time = mstime();
+        writePingTimeExtIfNonzero(&totlen, &cursor, CLUSTERMSG_EXT_TYPE_PING_ECHO_TIME, current_time);
+    }
+    else if(msg_type == CLUSTERMSG_TYPE_PONG) {
+        
+    }
 
     /* Gossip forgotten nodes */
     if (dictSize(server.cluster->nodes_black_list) > 0) {
@@ -3494,6 +3528,9 @@ void clusterProcessPingExtensions(clusterMsg *hdr, clusterLink *link) {
     int ext_clientport = 0;
     int ext_clienttlsport = 0;
     char *ext_shardid = NULL;
+    uint32_t round_trip_time = 0;
+
+
     uint16_t extensions = ntohs(hdr->extensions);
     /* Loop through all the extensions and process them */
     clusterMsgPingExt *ext = getInitialPingExt(hdr, ntohs(hdr->count));
@@ -3544,7 +3581,21 @@ void clusterProcessPingExtensions(clusterMsg *hdr, clusterLink *link) {
             clusterMsgPingExtAvailabilityZone *availability_zone_ext =
                 (clusterMsgPingExtAvailabilityZone *)&(ext->ext[0].availability_zone);
             ext_availability_zone = availability_zone_ext->availability_zone;
-        } else {
+        } else if (type == CLUSTERMSG_EXT_TYPE_PING_ECHO_TIME) {
+            clusterMsgPingExtEchoTime *ping_echo_time_ext =
+                (clusterMsgPingExtEchoTime *)&(ext->ext[0].ping_echo_time);
+            uint64_t ping_echo_time = ntohu64(ping_echo_time_ext->ping_echo_time);
+            uint16_t message_type = ntohs(hdr->type);
+            if(message_type == CLUSTERMSG_TYPE_PING || message_type == CLUSTERMSG_TYPE_MEET) {
+                link->ping_echo_time = ping_echo_time;  //set as it is when its ping type, coming to receiver               
+            }
+            else if(message_type == CLUSTERMSG_TYPE_PONG) { //got message back
+                round_trip_time = mstime() - ping_echo_time;
+                link->ping_echo_time = 0;
+                updateCommandLatencyStats(sender, round_trip_time); //rtt updated for sender node when it receives back pong
+            }
+        }
+         else {
             /* Unknown type, we will ignore it but log what happened. */
             serverLog(LL_WARNING, "Received unknown extension type %d", type);
         }

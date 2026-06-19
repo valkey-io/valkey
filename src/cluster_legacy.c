@@ -7319,6 +7319,19 @@ void addNodeDetailsToShardReply(client *c, clusterNode *node) {
         reply_count++;
     }
 
+    if(server.cluster_nodes_latency_stats_enabled) {
+        if (node->max_round_trip_time) {
+            addReplyBulkCString(c, "max-round-trip-time");
+            addReplyLongLong(c, node->max_round_trip_time);
+            reply_count++;
+        }
+        if (node->avg_round_trip_time) {
+            addReplyBulkCString(c, "avg-round-trip-time");
+            addReplyLongLong(c, node->avg_round_trip_time);
+            reply_count++;
+        }
+    }
+
     setDeferredMapLen(c, node_replylen, reply_count);
 }
 

@@ -292,7 +292,6 @@ typedef struct {
                                      replica. */
     uint64_t offset;              /* Primary replication offset if node is a primary or
                                      processed replication offset if node is a replica. */
-    uint64_t ping_echo_time;      /* Used to carry the sender's timestamp for round trip time measurement. */
     char sender[CLUSTER_NAMELEN]; /* Name of the sender node */
     unsigned char myslots[CLUSTER_SLOTS / 8];
     char replicaof[CLUSTER_NAMELEN];

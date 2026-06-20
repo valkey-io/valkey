@@ -3102,7 +3102,7 @@ static int containsControlChars(const char *s, size_t len) {
  * Returns C_OK if all arguments are clean, or C_ERR after sending an error reply. */
 static int sentinelValidateArgs(client *c, int first_arg, const char *cmd) {
     for (int i = first_arg; i < c->argc; i++) {
-        sds arg = objectGetVal(c->argv[i]);
+        sds arg = c->argv[i]->ptr;
         if (containsControlChars(arg, sdslen(arg))) {
             addReplyErrorFormat(c, "Invalid argument at index %d for %s: control characters are not allowed", i, cmd);
             return C_ERR;

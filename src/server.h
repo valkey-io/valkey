@@ -2127,8 +2127,6 @@ struct valkeyServer {
     int cluster_syncing_from_sibling;              /* Transient sync-from-replica is in progress. */
     long long cluster_sync_sibling_initial_offset; /* Sibling offset recorded after RDB load. */
     long long cluster_sync_sibling_target_offset;  /* Highest primary offset observed during sibling sync. */
-    long long cluster_sync_sibling_last_offset;    /* Last applied sibling offset seen by the switch guard. */
-    mstime_t cluster_sync_sibling_last_progress;   /* Last time the sibling stream advanced. */
     _Atomic(int) replica_bio_disk_save_state;      /* Flag set by the bio thread to indicate that the
                                                     * RDB save to disk has completed, or failed */
     _Atomic(bool) replica_bio_abort_save;          /* Flag set by main thread, used to signal to replica's

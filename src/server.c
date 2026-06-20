@@ -2387,8 +2387,6 @@ void initServerConfig(void) {
     server.cluster_syncing_from_sibling = 0;
     server.cluster_sync_sibling_initial_offset = -1;
     server.cluster_sync_sibling_target_offset = -1;
-    server.cluster_sync_sibling_last_offset = -1;
-    server.cluster_sync_sibling_last_progress = 0;
     server.repl_transfer_tmpfile = NULL;
     server.repl_transfer_fd = -1;
     server.repl_transfer_s = NULL;

@@ -520,6 +520,62 @@ start_cluster 2 2 {tags {external:skip cluster} overrides {cluster-node-timeout 
         }
     }
 
+    test "WRITES DURING SYNC - busy primary traffic does not block switch" {
+        if {![is_sync_from_replica_implemented]} {
+            skip "repl-prefer-sync-from-replica config is unavailable"
+        }
+
+        set old_delay [lindex [R 2 config get rdb-key-save-delay] 1]
+        set load_handle ""
+        try {
+            wait_node_synced 2
+            set p0_sync_full_before [get_info 0 sync_full]
+            set s2_sync_full_before [get_info 2 sync_full]
+
+            detach_node3
+            R 3 config set repl-prefer-sync-from-replica yes
+            R 2 config set rdb-key-save-delay 500
+
+            set primary0_id [R 0 cluster myid]
+            R 3 cluster replicate $primary0_id
+            wait_sync_from_replica_started 3
+            wait_for_condition 100 100 {
+                [get_info 2 rdb_bgsave_in_progress] == 1
+            } else {
+                fail "Sibling did not start BGSAVE for busy traffic test"
+            }
+
+            set load_handle [start_one_key_write_load [srv 0 host] [srv 0 port] 15 "{tag0}busy-liveness"]
+            wait_for_condition 100 100 {
+                [string match {*name=LOAD_HANDLER*} [R 0 client list]] &&
+                [R 0 exists "{tag0}busy-liveness"] == 1 &&
+                [get_info 3 sync_from_replica_in_progress] == 1
+            } else {
+                fail "Busy traffic did not overlap with sibling sync"
+            }
+            R 2 config set rdb-key-save-delay $old_delay
+
+            wait_replica_of 3 $primary0_id 500 100
+            wait_sync_from_replica_done 3 100 100
+            wait_node_synced 3 500 100
+            assert_equal $p0_sync_full_before [get_info 0 sync_full] \
+                "Busy traffic: primary sync_full should not increase"
+            assert {[get_info 2 sync_full] > $s2_sync_full_before}
+            assert_equal [srv 0 port] [get_info 3 master_port]
+            assert_equal 0 [get_info 3 sync_from_replica_in_progress]
+        } finally {
+            if {$load_handle ne ""} {
+                stop_write_load $load_handle
+                wait_for_condition 50 100 {
+                    ![string match {*name=LOAD_HANDLER*} [R 0 client list]]
+                } else {
+                    fail "load handler still connected after busy switch test"
+                }
+            }
+            catch {R 2 config set rdb-key-save-delay $old_delay}
+        }
+    }
+
     # ===== CONCURRENT WRITES - before, during, and after sync =====
 
     test "CONCURRENT WRITES - before, during, and after sync all present" {

@@ -8200,8 +8200,6 @@ int clusterCommandSpecial(client *c) {
                 server.cluster_syncing_from_sibling = 1;
                 server.cluster_sync_sibling_initial_offset = -1;
                 server.cluster_sync_sibling_target_offset = -1;
-                server.cluster_sync_sibling_last_offset = -1;
-                server.cluster_sync_sibling_last_progress = 0;
                 serverLog(LL_NOTICE,
                           "Sync-from-replica: redirecting replication to sibling %s:%d",
                           best_sibling->ip, sibling_port);

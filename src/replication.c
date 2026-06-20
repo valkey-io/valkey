@@ -3022,14 +3022,10 @@ void replicationAbortDualChannelSyncTransfer(void) {
  * S's replid is P's replid, so P recognizes the PSYNC.
  * --------------------------------------------------------------------------- */
 
-#define SYNC_FROM_REPLICA_DRAIN_GRACE_MS 100
-
 static void replicationClearSiblingSyncState(void) {
     server.cluster_syncing_from_sibling = 0;
     server.cluster_sync_sibling_initial_offset = -1;
     server.cluster_sync_sibling_target_offset = -1;
-    server.cluster_sync_sibling_last_offset = -1;
-    server.cluster_sync_sibling_last_progress = 0;
 }
 
 /* Cancel an in-progress sibling sync and redirect primary_host back to the
@@ -3080,8 +3076,6 @@ static void replicationArmSwitchToPrimaryAfterSiblingSync(void) {
     if (pn && pn->repl_offset > server.cluster_sync_sibling_target_offset) {
         server.cluster_sync_sibling_target_offset = pn->repl_offset;
     }
-    server.cluster_sync_sibling_last_offset = server.cluster_sync_sibling_initial_offset;
-    server.cluster_sync_sibling_last_progress = server.mstime;
     if (clientHasPendingReplies(server.primary) &&
         writeToClient(server.primary) == C_ERR) {
         replicationAbortSiblingSync();
@@ -3090,13 +3084,13 @@ static void replicationArmSwitchToPrimaryAfterSiblingSync(void) {
     readQueryFromClient(server.primary->conn);
 }
 
-static int primaryInputBufferDrained(client *c) {
+static int primaryAtAppliedCommandBoundary(client *c) {
     if (c == NULL || c->flag.close_asap || c->flag.blocked) return 0;
-    /* Queued commands, a parsed command, or unread query buffer bytes all mean
-     * S may still have post-RDB stream data pending on N. */
+    /* Queued commands or a parsed command mean S still has post-RDB stream
+     * data pending on N. Unread query buffer bytes are past reploff and can be
+     * replayed by PSYNC from the real primary. */
     if (c->cmd_queue.off < c->cmd_queue.len) return 0;
-    if (c->argc != 0) return 0;
-    if (c->querybuf && c->qb_pos < sdslen(c->querybuf)) return 0;
+    if (c->argc != 0 || c->flag.pending_command) return 0;
     return 1;
 }
 
@@ -3108,11 +3102,6 @@ void replicationMaybeSwitchToPrimaryAfterSiblingSync(void) {
         return;
 
     long long sibling_offset = server.primary->repl_data->reploff;
-    if (sibling_offset != server.cluster_sync_sibling_last_offset) {
-        server.cluster_sync_sibling_last_offset = sibling_offset;
-        server.cluster_sync_sibling_last_progress = server.mstime;
-    }
-
     if (server.cluster_sync_sibling_initial_offset == -1 ||
         sibling_offset <= server.cluster_sync_sibling_initial_offset)
         return;
@@ -3125,15 +3114,13 @@ void replicationMaybeSwitchToPrimaryAfterSiblingSync(void) {
         return;
     }
 
-    if (sibling_offset < server.cluster_sync_sibling_target_offset) return;
-    if (!primaryInputBufferDrained(server.primary)) return;
-    /* On an idle shard there may be no application write after S's RDB offset.
-     * In that case we intentionally wait until P's next periodic replication
-     * ping reaches S, so the handoff happens after S has observed N's ACK and
-     * resumed its normal command stream. */
-    if (server.cluster_sync_sibling_last_progress &&
-        server.mstime - server.cluster_sync_sibling_last_progress < SYNC_FROM_REPLICA_DRAIN_GRACE_MS)
+    /* replicationCron() can reach here while an I/O thread owns the primary
+     * client's input buffers, so only inspect and cache the client when idle. */
+    if (server.primary->io_read_state != CLIENT_IDLE ||
+        server.primary->io_write_state != CLIENT_IDLE)
         return;
+    if (sibling_offset < server.cluster_sync_sibling_target_offset) return;
+    if (!primaryAtAppliedCommandBoundary(server.primary)) return;
 
     serverLog(LL_NOTICE,
               "Sync-from-replica: sibling stream drained (replid=%s offset=%lld), "
@@ -3456,9 +3443,6 @@ int readIntoReplDataBlock(connection *conn, replDataBufBlock *data_block, size_t
 void bufferReplData(connection *conn) {
     size_t readlen = PROTO_IOBUF_LEN;
     int remaining_bytes = 0;
-
-    /* Keep transfer timeout from firing while we're actively buffering. */
-    server.repl_transfer_lastio = server.unixtime;
 
     while (readlen > 0) {
         listNode *ln = listLast(server.pending_repl_data.blocks);

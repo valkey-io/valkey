@@ -2,37 +2,39 @@
 
 ## Goal
 
-Track the logical data size consumed by each hash slot in a Valkey cluster,
-broken down by object type (string, list, set, zset, hash, stream, module).
-The metric is exposed via `CLUSTER SLOT-STATS` and is always-on when cluster
-mode is enabled.
+Track the allocated memory consumed by each hash slot in a Valkey cluster.
+The metric is a single per-slot total, summed across all keys in the slot
+regardless of object type (string, list, set, zset, hash, stream, module).
+The metric is exposed via `CLUSTER SLOT-STATS` as `memory-bytes` and is
+always-on when cluster mode is enabled.
 
-## Definition of "logical size"
+## Definition of "memory size"
 
-For each key in a slot, the contribution to the slot's `data_bytes[type]`
-counter is:
+The metric reflects the *allocated* footprint of an entry (matching
+`objectComputeSize()`, which backs `MEMORY USAGE`), not a logical byte count.
+For each key in a slot, the contribution to the slot's `memory_bytes` counter
+is computed by `slotStatsObjectSize()` as:
 
 ```
-sdslen(key) + type_specific_value_size(val)
+zmalloc_size(val) + <key, if not embedded> + <type-specific external allocations>
 ```
 
-Where `type_specific_value_size` depends on the object type:
+- `zmalloc_size(val)` is the actual allocation of the value object, including
+  allocator rounding. Because keyspace objects embed the key inside the value
+  object (`hasembkey`), this already accounts for the key sds and the expire
+  field. The key is added explicitly only for the (rare) non-embedded case.
+- The type-specific term adds allocations that live *outside* the value robj:
 
-| Type | Value size function | Notes |
+| Type | External allocation | Notes |
 |------|-------------------|-------|
-| String | `stringObjectLen(val)` | Digit count for INT-encoded, sdslen for RAW/EMBSTR |
-| Stream | `stream->tracked_data_bytes` | Σ lpBytes of all listpacks in the stream's rax |
-| List | `quicklist->tracked_data_bytes` | Σ node entry bytes (raw or compressed) |
-| Hash (listpack) | `lpBytes(val->ptr)` | Single listpack encoding |
-| Hash (hashtable) | Σ (field_len + value_len) per entry | Requires incremental tracking |
-| Set (listpack) | `lpBytes(val->ptr)` | Single listpack encoding |
-| Set (hashtable) | Σ member_len per entry | Requires incremental tracking |
-| ZSet (listpack) | `lpBytes(val->ptr)` | Single listpack encoding |
-| ZSet (skiplist) | Σ (member_len + 8) per entry | 8 bytes for the score double |
-| Module | Module-reported size | Via module type API callback |
+| String (EMBSTR/INT) | none | value bytes are inside the robj, already in `zmalloc_size(val)` |
+| String (RAW) | `sdsAllocSize(val->ptr)` | separate sds allocation |
+| Stream | `streamMemUsage(s)` | stream struct + data rax (`raxAllocSize`) + listpacks (`tracked_memory_bytes`) |
+| List / Hash / Set / ZSet / Module | (not yet wired) | future: add a `case` to `slotStatsObjectSize()` |
 
 Adding support for a new type requires:
-1. A single `case` in `slotStatsObjectSize()` returning the value size.
+1. A single `case` in `slotStatsObjectSize()` returning its allocated size
+   (base `zmalloc_size(val)` plus the type's external allocations).
 2. If the type mutates in-place (bypassing `dbSetValue`), ensuring
    `signalModifiedKey` is called after the mutation so the delta is captured.
 
@@ -52,7 +54,7 @@ All key lifecycle events funnel through a small set of functions in `db.c`:
 | `dbSetValue` | Key overwritten | `-= size(key, old)`, `+= size(key, new)`, refresh key's snapshot |
 | `dbGenericDeleteWithDictIndex` | Key deleted | `-= size(key, val)`, drop key's snapshot entry |
 | `dbAddRDBLoad` | Key loaded from RDB | `+= size(key, val)` |
-| `emptyDbStructure` | FLUSHDB / FLUSHALL | Reset all `data_bytes` to 0 |
+| `emptyDbStructure` | FLUSHDB / FLUSHALL | Reset `memory_bytes` to 0 |
 
 These hooks cover: SET, DEL, UNLINK, RENAME, COPY, RESTORE, MIGRATE,
 eviction, expiration, replication apply, RDB load, AOF replay, and any
@@ -72,7 +74,7 @@ lookupKeyWrite(db, key)
 
 signalModifiedKey(c, db, key)
   → finds this key's snapshot entry, looks up current val, computes size_after
-  → applies delta: slot_stats[slot].data_bytes[type] += (after - before)
+  → applies delta: slot_stats[slot].memory_bytes += (after - before)
   → removes that key's entry
 ```
 
@@ -86,20 +88,20 @@ the snapshot so the second key's delta is lost. The accounting would be
 corrupted by an arbitrary amount.
 
 So the snapshot is a **small per-key set** on the client
-(`client.slot_data_bytes`, type `slotDataBytesSnapshot`):
+(`client.slot_data_bytes`, type `slotMemoryBytesSnapshot`):
 
 ```c
-typedef struct slotDataBytesSnap {
+typedef struct slotMemoryBytesSnap {
     robj *key;        /* the modified key (incref'd while snapshotted) */
     uint64_t before;  /* size at lookup / last db-hook refresh */
-} slotDataBytesSnap;
+} slotMemoryBytesSnap;
 
-typedef struct slotDataBytesSnapshot {
-    slotDataBytesSnap inlined[2]; /* inline fast path, no allocation */
+typedef struct slotMemoryBytesSnapshot {
+    slotMemoryBytesSnap inlined[2]; /* inline fast path, no allocation */
     int count;                    /* valid inline entries; 0 once spilled */
     int slot;                     /* shared slot for the command, -1 = none */
     list *overflow;               /* NULL until >2 keys; then holds ALL entries */
-} slotDataBytesSnapshot;
+} slotMemoryBytesSnapshot;
 ```
 
 This is a small-vector optimization. Two entries are stored **inline**, which
@@ -180,12 +182,11 @@ returns false immediately. No function calls, no branches taken.
 
 ### RDB load
 
-- `dbAddRDBLoad` calls `clusterSlotStatsAddObject` after inserting each key.
-- For streams, `tracked_data_bytes` is maintained during RDB load by
-  incrementing at each `raxTryInsert` of a listpack.
-- For quicklists (lists), `tracked_data_bytes` is maintained by the
-  quicklist's own `quicklistAppendListpack` / `quicklistAppendPlainNode`
-  functions called during RDB load.
+- `dbAddRDBLoad` calls `clusterSlotStatsAddMemorySdsKey` after inserting each
+  key (the `SdsKey` variant, since at that point the value is already embedded
+  with its key and the caller holds only an `sds` key).
+- For streams, `tracked_memory_bytes` is maintained during RDB load by adding
+  `zmalloc_size(lp)` at each `raxTryInsert` of a listpack.
 
 ### Replication apply (replica receiving writes from primary)
 
@@ -195,21 +196,21 @@ returns false immediately. No function calls, no branches taken.
 
 ### FLUSHDB / FLUSHALL
 
-- `emptyDbStructure` calls `clusterSlotStatsResetDataBytesAll()` which
-  zeroes all `data_bytes` counters across all slots.
+- `emptyDbStructure` calls `clusterSlotStatsResetMemoryBytesAll()` which
+  zeroes all `memory_bytes` counters across all slots.
 - This runs regardless of sync/async flush — the counters are cleared
   immediately even if the actual memory is freed in the background.
 
 ### CONFIG RESETSTAT
 
-- `data_bytes` is a **state metric** (reflects current data), not a
+- `memory_bytes` is a **state metric** (reflects current data), not a
   cumulative counter. `CONFIG RESETSTAT` preserves it.
 - Only the cumulative metrics (cpu_usec, network_bytes_in/out) are reset.
 
 ### Slot ownership changes (CLUSTER ADDSLOTS / DELSLOTS)
 
 - `clusterSlotStatReset(slot)` zeroes the entire `slotStat` struct including
-  `data_bytes`. This is correct because keys migrate with the slot — the new
+  `memory_bytes`. This is correct because keys migrate with the slot — the new
   owner will rebuild the counters as keys arrive via RESTORE/MIGRATE.
 
 ### Module API (RM_StreamAppendItem, RM_StringSet, RM_HashSet, etc.)
@@ -255,14 +256,19 @@ typedef struct slotStat {
     uint64_t cpu_usec;
     uint64_t network_bytes_in;
     uint64_t network_bytes_out;
-    uint64_t data_bytes[OBJ_TYPE_MAX];  /* per-type byte accounting */
+    uint64_t memory_bytes;  /* per-slot allocated-byte accounting */
 } slotStat;
 ```
 
-Total slot-stats memory overhead: `7 types × 8 bytes × 16384 slots` ≈ 900 KB.
+Total memory-bytes overhead: `8 bytes × 16384 slots` ≈ 128 KB.
+
+For streams, the per-slot counter draws on `stream->tracked_memory_bytes`, a
+counter maintained incrementally in `t_stream.c` that holds the summed
+`zmalloc_size` of all listpacks in the stream's data rax. See
+[Stream accounting](#stream-accounting) below.
 
 The in-place mutation snapshot lives on the client
-(`client.slot_data_bytes`, type `slotDataBytesSnapshot`; see
+(`client.slot_data_bytes`, type `slotMemoryBytesSnapshot`; see
 [Snapshot + signalModifiedKey](#2-snapshot--signalmodifiedkey-in-place-mutations)).
 It is two inline entries plus a lazily-allocated overflow list, so the common
 case adds a fixed handful of bytes per client and **zero** per-command
@@ -276,46 +282,73 @@ released in `freeClient`.
 
 ### CLUSTER SLOT-STATS reply
 
-The `data-bytes` field is a nested map of type-name → bytes:
+The `memory-bytes` field is a single integer: the total allocated footprint of
+all keys in the slot.
 
 ```
 CLUSTER SLOT-STATS SLOTSRANGE 0 0
 1) 1) (integer) 0
    2) 1) "key-count"
       2) (integer) 5
-      3) "data-bytes"
-      4) 1) "string"  2) (integer) 1024
-         3) "list"    4) (integer) 512
-         5) "set"     6) (integer) 0
-         7) "zset"    8) (integer) 0
-         9) "hash"    10) (integer) 256
-         11) "module" 12) (integer) 0
-         13) "stream" 14) (integer) 2048
+      3) "memory-bytes"
+      4) (integer) 3840
       5) "cpu-usec"
       ...
 ```
 
-### ORDERBY data-bytes
+### ORDERBY memory-bytes
 
-`CLUSTER SLOT-STATS ORDERBY data-bytes [LIMIT n] [ASC|DESC]`
+`CLUSTER SLOT-STATS ORDERBY memory-bytes [LIMIT n] [ASC|DESC]`
 
-Sorts by the sum of all `data_bytes[type]` for each slot. Available without
-`cluster-slot-stats-enabled` (since data-bytes is a state metric, not a
+Sorts by each slot's `memory_bytes` total. Available without
+`cluster-slot-stats-enabled` (since memory-bytes is a state metric, not a
 cumulative counter that requires additional overhead).
 
 ---
 
 ## Adding a new type — checklist
 
-1. Implement a value-size function (or maintain a `tracked_data_bytes` field
-   on the type's struct if it uses in-place mutations that change container
-   sizes).
+1. Implement a size function that returns the type's allocated footprint (or
+   maintain a `tracked_memory_bytes`-style counter on the type's struct if it
+   uses in-place mutations that change container sizes; see the stream example).
 2. Add a `case OBJ_<TYPE>:` to `slotStatsObjectSize()` in
-   `cluster_slot_stats.c`.
+   `cluster_slot_stats.c`, adding the type's external allocations on top of the
+   base `zmalloc_size(val)`.
 3. Ensure the type's mutation commands call `signalModifiedKey` after
    modifying the value (most already do).
 4. If the type is loaded from RDB via a non-standard path (not
-   `dbAddRDBLoad`), ensure `tracked_data_bytes` is maintained during load.
-5. Add integration tests in `tests/unit/cluster/slot-stats-data-bytes-<type>.tcl`.
+   `dbAddRDBLoad`), ensure any incremental counter is maintained during load.
+5. Add integration tests in `tests/unit/cluster/slot-stats-memory-bytes-<type>.tcl`.
+   Prefer exact assertions against `MEMORY USAGE <key> SAMPLES 0` (see the
+   `assert_slot_bytes_match_memory_usage` helper) over hardcoded byte counts,
+   which are allocator-dependent.
+
+---
+
+## Stream accounting
+
+Streams need incremental tracking because their bytes live in listpacks that
+are mutated in place (XADD appends, XDEL/XTRIM mark-delete or free nodes).
+
+- `stream->tracked_memory_bytes` holds the summed **allocated** size
+  (`zmalloc_size`, not `lpBytes`) of all listpacks in the stream's data rax.
+  Allocated size matters because stream nodes are over-allocated on creation
+  and only shrunk to fit when sealed; using logical `lpBytes` would undercount
+  the active tail node by up to its preallocation slack.
+- It is maintained by three helpers in `t_stream.c`: `streamTrackLpAdd`,
+  `streamTrackLpRemove` (call before `lpFree`), and `streamShrinkLpToFit`
+  (shrink + account + return the reallocated listpack). All XADD/XTRIM/XDEL/dup/
+  RDB-load sites go through these or bracket an in-place mutation with a
+  `zmalloc_size` read before and after.
+- `streamMemUsage(s)` returns the stream's footprint as
+  `sizeof(*s) + raxAllocSize(s->rax) + s->tracked_memory_bytes`, all O(1).
+  `slotStatsObjectSize()` adds this to `zmalloc_size(val)` for OBJ_STREAM.
+
+**Not yet counted:** consumer group memory (`s->cgroups`: groups, consumers,
+PELs, NACKs). For a stream with consumer groups, `memory-bytes` is therefore
+lower than `MEMORY USAGE`, which does count it. Consumer-group tracking is
+deferred to a follow-up (it needs a dedicated incremental counter, because the
+per-slot metric is consulted on every in-place mutation and an O(groups +
+consumers) walk on that hot path would be too costly).
 
 No changes to `db.c`, `networking.c`, or command dispatch are needed.

@@ -1297,7 +1297,7 @@ typedef struct slotMigrationJob slotMigrationJob;
 
 /* Per-key "before" size snapshot used to account in-place value mutations
  * (APPEND, INCR, XADD on an existing stream, ...) for the CLUSTER SLOT-STATS
- * data-bytes metric. lookupKeyWrite records each modified key's size here;
+ * memory-bytes metric. lookupKeyWrite records each modified key's size here;
  * signalModifiedKey later computes the new size and applies the delta.
  *
  * A single command may mutate several keys in place (e.g. SMOVE, LMOVE), so
@@ -1305,17 +1305,17 @@ typedef struct slotMigrationJob slotMigrationJob;
  * stored inline -- covering single-key commands and the common two-key movers
  * -- and anything beyond that spills to a list. Cluster rejects cross-slot
  * commands, so every key touched by a command shares one slot, stored once. */
-typedef struct slotDataBytesSnap {
+typedef struct slotMemoryBytesSnap {
     robj *key;       /* The modified key (incref'd while snapshotted). */
-    uint64_t before; /* Logical size captured at lookup / last db-hook refresh. */
-} slotDataBytesSnap;
+    uint64_t before; /* Allocated size captured at lookup / last db-hook refresh. */
+} slotMemoryBytesSnap;
 
-typedef struct slotDataBytesSnapshot {
-    slotDataBytesSnap inlined[2]; /* Inline fast path (no allocation). */
-    int inlined_count;            /* Valid inline entries; 0 once spilled. */
-    int slot;                     /* Shared slot for the command, -1 = none captured. */
-    list *overflow;               /* NULL until >2 keys; then holds ALL entries. */
-} slotDataBytesSnapshot;
+typedef struct slotMemoryBytesSnapshot {
+    slotMemoryBytesSnap inlined[2]; /* Inline fast path (no allocation). */
+    int inlined_count;              /* Valid inline entries; 0 once spilled. */
+    int slot;                       /* Shared slot for the command, -1 = none captured. */
+    list *overflow;                 /* NULL until >2 keys; then holds ALL entries. */
+} slotMemoryBytesSnapshot;
 
 typedef struct client {
     /* Basic client information and connection. */
@@ -1395,7 +1395,7 @@ typedef struct client {
     int nread;                                    /* Number of bytes of the last read. */
     int read_flags;                               /* Client Read flags - used to communicate the client read state. */
     int slot;                                     /* The slot the client is executing against. Set to -1 if no slot is being used */
-    slotDataBytesSnapshot slot_data_bytes;        /* Per-key data-bytes "before" snapshots for in-place mutations. */
+    slotMemoryBytesSnapshot slot_memory_bytes;    /* Per-key memory-bytes "before" snapshots for in-place mutations. */
     listNode *mem_usage_bucket_node;
     clientMemUsageBucket *mem_usage_bucket;
     /* In updateClientMemoryUsage() we track the memory usage of

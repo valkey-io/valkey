@@ -4180,7 +4180,7 @@ void afterCommand(client *c) {
 
     clusterSlotStatsAddNetworkBytesOutForUserClient(c);
 
-    /* Clear any data-bytes snapshots left by this command so nothing leaks into
+    /* Clear any memory-bytes snapshots left by this command so nothing leaks into
      * the next command. afterCommand runs at every command boundary (including
      * EXEC sub-commands and scripted calls), which guarantees a snapshot never
      * spans a SELECT and lets the snapshot stay db-id-agnostic. */

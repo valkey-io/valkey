@@ -123,7 +123,7 @@ robj *lookupKey(serverDb *db, robj *key, int flags) {
         /* TODO: Use separate misses stats and notify event for WRITE */
     }
 
-    /* Snapshot data-bytes for in-place mutation tracking. When a command does
+    /* Snapshot memory-bytes for in-place mutation tracking. When a command does
      * lookupKeyWrite followed by an in-place mutation and then signalModifiedKey,
      * the delta is computed from this snapshot. The snapshot is per-key, so a
      * command may safely look up several keys for write (e.g. SMOVE). */
@@ -229,7 +229,7 @@ static void dbAddInternal(serverDb *db, robj *key, robj **valref, int update_if_
     dbTrackKeyWithVolatileItems(db, val);
     initObjectLRUOrLFU(val);
     kvstoreHashtableAdd(db->keys, dict_index, val);
-    clusterSlotStatsAddMemory(dict_index, objectGetVal(key), val);
+    clusterSlotStatsAddMemory(dict_index, key, val);
     clusterSlotStatsRefreshKey(server.current_client, key, val);
     signalKeyAsReady(db, key, val->type);
     notifyKeyspaceEvent(NOTIFY_NEW, "new", key, db->id);
@@ -297,7 +297,7 @@ int dbAddRDBLoad(serverDb *db, sds key, robj **valref) {
     kvstoreHashtableInsertAtPosition(db->keys, dict_index, val, &pos);
     initObjectLRUOrLFU(val);
 
-    clusterSlotStatsAddMemory(dict_index, key, val);
+    clusterSlotStatsAddMemorySdsKey(dict_index, key, val);
 
     /* Track hash objects containing volatile items, created by rdbLoadObject (which lacks DB context). */
     dbTrackKeyWithVolatileItems(db, val);
@@ -339,7 +339,7 @@ static void dbSetValue(serverDb *db, robj *key, robj **valref, int overwrite, vo
     robj *old = *oldref;
     robj *new;
 
-    clusterSlotStatsSubMemory(dict_index, objectGetVal(key), old);
+    clusterSlotStatsSubMemory(dict_index, key, old);
 
     if (overwrite) {
         /* VM_StringDMA may call dbUnshareStringValue which may free val, so we
@@ -404,7 +404,7 @@ static void dbSetValue(serverDb *db, robj *key, robj **valref, int overwrite, vo
     } else {
         decrRefCount(old);
     }
-    clusterSlotStatsAddMemory(dict_index, objectGetVal(key), new);
+    clusterSlotStatsAddMemory(dict_index, key, new);
     /* Refresh snapshot so signalModifiedKey computes a zero delta instead of
      * double counting an overwrite the caller may follow with an in-place
      * mutation (e.g. dbUnshareStringValue before APPEND). */
@@ -507,7 +507,7 @@ int dbGenericDeleteWithDictIndex(serverDb *db, robj *key, int async, int flags, 
         decrRefCount(val);
         /* Because of dbUnshareStringValue, the val in de may change. */
         val = *ref;
-        clusterSlotStatsSubMemory(dict_index, objectGetVal(key), val);
+        clusterSlotStatsSubMemory(dict_index, key, val);
         clusterSlotStatsForgetKey(server.current_client, key);
 
         /* Delete from keys and expires tables. This will not free the object.
@@ -657,9 +657,9 @@ long long emptyDbStructure(serverDb **dbarray, int dbnum, int async, void(callba
         resetDbExpiryState(dbarray[j]);
     }
 
-    /* Only reset data_bytes for the real server DBs, not temp DBs. */
+    /* Only reset memory_bytes for the real server DBs, not temp DBs. */
     if (dbarray == server.db) {
-        clusterSlotStatsResetDataBytesAll();
+        clusterSlotStatsResetMemoryBytesAll();
     }
 
     return removed;
@@ -783,7 +783,7 @@ void signalModifiedKey(client *c, serverDb *db, robj *key) {
     touchWatchedKey(db, key);
     trackingInvalidateKey(c, key, 1);
 
-    /* Per-slot data-bytes: apply the delta for this key from the snapshot taken
+    /* Per-slot memory-bytes: apply the delta for this key from the snapshot taken
      * at lookupKeyWrite. This covers in-place mutations (APPEND, INCR, XADD on
      * an existing stream, ...) that don't go through dbSetValue. The snapshot is
      * keyed per-key, so multi-key in-place commands (e.g. SMOVE) are accounted

@@ -2164,6 +2164,114 @@ size_t hashtableScanDefrag(hashtable *ht, size_t cursor, hashtableScanFunction f
     return cursor;
 }
 
+/* --- Randomized running-start scan --- */
+
+/* The running-start scan starts a new scan from a random bucket position instead
+ * of bucket zero, while preserving the full-scan guarantees of the underlying
+ * reverse-bit scan. The scan state is encoded in an opaque non-negative cursor
+ * with the following layout (most-significant bit first):
+ *
+ *   [0??????? ???????? ffffffff fffffffw cccccccc cccccccc cccccccc cccccccc]
+ *
+ *   0: bit 63 is always zero so the cursor fits in signed integer replies.
+ *   ?: 15-bit reserved for future use.
+ *   f: 15-bit random running start.
+ *   w: 1-bit wrapped flag, set after the scan reaches cursor zero after starting.
+ *   c: 32-bit internal hashtable scan cursor, masked by HASHTABLE_SCAN_CURSOR_MASK.
+ */
+#define HASHTABLE_SCAN_CURSOR_MASK 0xffffffffULL
+#define HASHTABLE_SCAN_WRAPPED_SHIFT 32
+#define HASHTABLE_SCAN_WRAPPED_FLAG (1ULL << HASHTABLE_SCAN_WRAPPED_SHIFT)
+#define HASHTABLE_SCAN_RSTART_SHIFT 33
+#define HASHTABLE_SCAN_RSTART_BITS 15
+#define HASHTABLE_SCAN_RSTART_MASK ((1ULL << HASHTABLE_SCAN_RSTART_BITS) - 1)
+
+/* Encode the running-start scan state into an opaque cursor. */
+static inline uint64_t encodeRunningStartCursor(unsigned running_start, int wrapped, size_t cursor) {
+    return (((uint64_t)running_start & HASHTABLE_SCAN_RSTART_MASK) << HASHTABLE_SCAN_RSTART_SHIFT) |
+           ((uint64_t)(wrapped != 0) << HASHTABLE_SCAN_WRAPPED_SHIFT) |
+           ((uint64_t)cursor & HASHTABLE_SCAN_CURSOR_MASK);
+}
+
+/* Decode an opaque running-start cursor into its components. */
+static inline void decodeRunningStartCursor(uint64_t opaque, unsigned *running_start, int *wrapped, size_t *cursor) {
+    *running_start = (opaque >> HASHTABLE_SCAN_RSTART_SHIFT) & HASHTABLE_SCAN_RSTART_MASK;
+    *wrapped = (opaque & HASHTABLE_SCAN_WRAPPED_FLAG) != 0;
+    *cursor = (size_t)(opaque & HASHTABLE_SCAN_CURSOR_MASK);
+}
+
+/* Scan-order (reverse-bit) position of the random running start fraction. */
+static inline size_t runningStartScanPosition(unsigned running_start) {
+    return ((size_t)(running_start & HASHTABLE_SCAN_RSTART_MASK)) << (CHAR_BIT * sizeof(size_t) - HASHTABLE_SCAN_RSTART_BITS);
+}
+
+/* Internal hashtable scan cursor corresponding to the random running start position. */
+static inline size_t runningStartToScanCursor(unsigned running_start) {
+    return rev(runningStartScanPosition(running_start)) & HASHTABLE_SCAN_CURSOR_MASK;
+}
+
+/* Like hashtableScanRunningStart, but when 'use_custom_start' is non-zero the fresh
+ * scan starts from 'custom_start' instead of a random position. Exposed (without
+ * a header prototype) for deterministic unit testing. */
+uint64_t hashtableScanRunningStartWithCustomStart(hashtable *ht, uint64_t cursor, hashtableScanFunction fn, void *privdata, int use_custom_start, unsigned custom_start) {
+    if (hashtableSize(ht) == 0) {
+        return 0;
+    }
+
+    unsigned running_start;
+    int wrapped;
+    size_t ht_cursor;
+    if (cursor == 0) {
+        /* Fresh scan: pick a random (or caller-provided) running start position. */
+        running_start = use_custom_start ? (custom_start & HASHTABLE_SCAN_RSTART_MASK) : (unsigned)(randomSizeT() & HASHTABLE_SCAN_RSTART_MASK);
+        wrapped = 0;
+        ht_cursor = runningStartToScanCursor(running_start);
+    } else {
+        decodeRunningStartCursor(cursor, &running_start, &wrapped, &ht_cursor);
+    }
+
+    /* Perform one step of the underlying reverse-bit scan. */
+    size_t next_ht_cursor = hashtableScan(ht, ht_cursor, fn, privdata);
+
+    /* The internal scan cursor must fit in the 32 bits reserved for it. */
+    assert((next_ht_cursor & ~(size_t)HASHTABLE_SCAN_CURSOR_MASK) == 0);
+
+    if (next_ht_cursor == 0) {
+        /* The underlying scan wrapped through zero. A second wrap (we had
+         * already wrapped once) means a full cycle has been scanned back to the
+         * start region. This is the termination safety net: it guarantees the
+         * scan ends even while a paused shrink rehash keeps the returned cursor
+         * at a coarser resolution than the start position, which would
+         * otherwise prevent the boundary check below from ever matching. */
+        if (wrapped) {
+            return 0;
+        }
+        wrapped = 1;
+    }
+
+    if (wrapped) {
+        if ((next_ht_cursor & HASHTABLE_SCAN_CURSOR_MASK) == (ht_cursor & HASHTABLE_SCAN_CURSOR_MASK)) {
+            return 0;
+        }
+        size_t mask = expToMask(ht->bucket_exp[0]) | expToMask(ht->bucket_exp[1]);
+        size_t start_pos = rev(runningStartToScanCursor(running_start) & mask);
+        size_t next_pos = rev(next_ht_cursor & mask);
+        if (next_pos >= start_pos) {
+            return 0;
+        }
+    }
+
+    return encodeRunningStartCursor(running_start, wrapped, next_ht_cursor);
+}
+
+/* Randomized running-start variant of hashtableScan for object scans. A fresh
+ * scan (cursor == 0) starts at a random bucket position and returns an opaque
+ * cursor encoding the scan state. The scan is complete when this function
+ * returns 0. */
+uint64_t hashtableScanRunningStart(hashtable *ht, uint64_t cursor, hashtableScanFunction fn, void *privdata) {
+    return hashtableScanRunningStartWithCustomStart(ht, cursor, fn, privdata, 0, 0);
+}
+
 /* --- Iterator --- */
 
 /* Initialize an iterator for a hashtable.

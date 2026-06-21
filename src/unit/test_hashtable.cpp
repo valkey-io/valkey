@@ -101,6 +101,8 @@ void hashtableDump(hashtable *ht);
 void hashtableHistogram(hashtable *ht);
 int hashtableLongestBucketChain(hashtable *ht);
 size_t nextCursor(size_t v, size_t mask);
+/* Deterministic running-start scan helper (not exposed in hashtable.h). */
+uint64_t hashtableScanRunningStartWithCustomStart(hashtable *ht, uint64_t cursor, hashtableScanFunction fn, void *privdata, int use_fixed, unsigned fixed_start);
 }
 
 class HashtableTest : public ::testing::Test {
@@ -618,6 +620,220 @@ TEST_F(HashtableTest, scan) {
         hashtableRelease(ht);
         free(data);
     }
+}
+
+/* Scans 'ht' to completion using the randomized running-start scan, recording
+ * per-entry emission counts (indexed by the small integer entry value) into
+ * 'seen'. When 'use_fixed' is non-zero the scan starts deterministically from
+ * 'fixed_start'. Returns the total number of emitted entries. */
+static long runningStartScanAll(hashtable *ht, long count, uint8_t *seen, int use_fixed, unsigned fixed_start) {
+    scandata *data = (scandata *)calloc(1, sizeof(scandata) + count);
+    long total = 0;
+    uint64_t cursor = 0;
+    long calls = 0;
+    long max_calls = (count + 16) * 100;
+    do {
+        data->count = 0;
+        if (use_fixed) {
+            cursor = hashtableScanRunningStartWithCustomStart(ht, cursor, scanfn, data, 1, fixed_start);
+        } else {
+            cursor = hashtableScanRunningStart(ht, cursor, scanfn, data);
+        }
+        total += data->count;
+    } while (cursor != 0 && ++calls < max_calls);
+    EXPECT_LT(calls, max_calls) << "running-start scan did not terminate";
+    for (long j = 0; j < count; j++) seen[j] = data->entry_seen[j];
+    free(data);
+    return total;
+}
+
+/* Populates 'ht' with the integers [0, count) and finishes any ongoing
+ * rehashing so the table is stable for deterministic exactly-once assertions. */
+static void populateStable(hashtable *ht, long count) {
+    for (long j = 0; j < count; j++) {
+        ASSERT_TRUE(hashtableAdd(ht, (void *)j));
+    }
+    /* Adding the already-present entry 0 advances rehashing without resizing. */
+    while (hashtableIsRehashing(ht)) {
+        ASSERT_FALSE(hashtableAdd(ht, (void *)0));
+    }
+}
+
+TEST_F(HashtableTest, scan_running_start) {
+    long count = 2000;
+    int num_rounds = accurate ? 50 : 10;
+    hashtableType type = {};
+
+    for (int round = 0; round < num_rounds; round++) {
+        randomSeed();
+        hashtable *ht = hashtableCreate(&type);
+        populateStable(ht, count);
+
+        uint8_t *seen = (uint8_t *)calloc(count, 1);
+        long total = runningStartScanAll(ht, count, seen, 0, 0);
+
+        /* A stable table is visited exactly once per bucket, so every entry is
+         * emitted exactly once with no duplicates. */
+        ASSERT_EQ(total, count);
+        for (long j = 0; j < count; j++) {
+            ASSERT_EQ(seen[j], 1u) << "round=" << round << " j=" << j;
+        }
+        free(seen);
+        hashtableRelease(ht);
+    }
+}
+
+TEST_F(HashtableTest, scan_running_start_edge_starts) {
+    long count = 1000;
+    hashtableType type = {};
+    /* Zero, first nonzero and the maximum 15-bit fixed fraction. */
+    unsigned starts[] = {0u, 1u, 0x7fffu};
+
+    randomSeed();
+    for (unsigned s = 0; s < sizeof(starts) / sizeof(starts[0]); s++) {
+        hashtable *ht = hashtableCreate(&type);
+        populateStable(ht, count);
+
+        uint8_t *seen = (uint8_t *)calloc(count, 1);
+        long total = runningStartScanAll(ht, count, seen, 1, starts[s]);
+
+        ASSERT_EQ(total, count) << "start=" << starts[s];
+        for (long j = 0; j < count; j++) {
+            ASSERT_EQ(seen[j], 1u) << "start=" << starts[s] << " j=" << j;
+        }
+        free(seen);
+        hashtableRelease(ht);
+    }
+}
+
+TEST_F(HashtableTest, scan_running_start_one_bucket) {
+    hashtableType type = {};
+    /* Few enough entries to remain within a single bucket. */
+    long count = 3;
+    unsigned starts[] = {0u, 1u, 0x7fffu};
+
+    randomSeed();
+    for (unsigned s = 0; s < sizeof(starts) / sizeof(starts[0]); s++) {
+        hashtable *ht = hashtableCreate(&type);
+        for (long j = 0; j < count; j++) {
+            ASSERT_TRUE(hashtableAdd(ht, (void *)j));
+        }
+        ASSERT_FALSE(hashtableIsRehashing(ht));
+        ASSERT_EQ(hashtableBuckets(ht), 1u);
+
+        uint8_t *seen = (uint8_t *)calloc(count, 1);
+        long total = runningStartScanAll(ht, count, seen, 1, starts[s]);
+
+        /* A single-bucket table must terminate without re-emitting the bucket. */
+        ASSERT_EQ(total, count) << "start=" << starts[s];
+        for (long j = 0; j < count; j++) {
+            ASSERT_EQ(seen[j], 1u) << "start=" << starts[s] << " j=" << j;
+        }
+        free(seen);
+        hashtableRelease(ht);
+    }
+}
+
+TEST_F(HashtableTest, scan_running_start_post_wrap) {
+    hashtableType type = {};
+    long count = 500;
+
+    randomSeed();
+    hashtable *ht = hashtableCreate(&type);
+    populateStable(ht, count);
+
+    /* Sweep fixed starts across the whole 15-bit range. Each scan wraps through
+     * zero and must terminate before re-emitting the start bucket, so every
+     * entry is still emitted exactly once. */
+    for (unsigned f = 0; f < 0x8000u; f += 0x800u) {
+        uint8_t *seen = (uint8_t *)calloc(count, 1);
+        long total = runningStartScanAll(ht, count, seen, 1, f);
+        ASSERT_EQ(total, count) << "f=" << f;
+        for (long j = 0; j < count; j++) {
+            ASSERT_EQ(seen[j], 1u) << "f=" << f << " j=" << j;
+        }
+        free(seen);
+    }
+    hashtableRelease(ht);
+}
+
+TEST_F(HashtableTest, scan_running_start_expand) {
+    hashtableType type = {};
+    long count = 1000;
+    long total_keys = count * 10;
+
+    randomSeed();
+    hashtable *ht = hashtableCreate(&type);
+    populateStable(ht, count);
+
+    scandata *data = (scandata *)calloc(1, sizeof(scandata) + total_keys);
+    uint64_t cursor = 0;
+    int added = 0;
+    long calls = 0;
+    long max_calls = total_keys * 100;
+    do {
+        cursor = hashtableScanRunningStart(ht, cursor, scanfn, data);
+        if (!added && cursor != 0) {
+            /* Force expansion (and rehashing) in the middle of the scan. */
+            for (long j = count; j < total_keys; j++) {
+                ASSERT_TRUE(hashtableAdd(ht, (void *)j));
+            }
+            added = 1;
+        }
+    } while (cursor != 0 && ++calls < max_calls);
+    ASSERT_LT(calls, max_calls);
+
+    /* Entries present for the entire scan must be emitted at least once (and at
+     * most twice per the scan guarantees). */
+    for (long j = 0; j < count; j++) {
+        ASSERT_GE(data->entry_seen[j], 1u) << "j=" << j;
+        ASSERT_LE(data->entry_seen[j], 2u) << "j=" << j;
+    }
+    free(data);
+    hashtableRelease(ht);
+}
+
+TEST_F(HashtableTest, scan_running_start_shrink) {
+    hashtableType type = {};
+    long count = 2000;
+    long keep = 16;
+
+    randomSeed();
+    hashtable *ht = hashtableCreate(&type);
+    populateStable(ht, count);
+    size_t buckets_before = hashtableBuckets(ht);
+
+    scandata *data = (scandata *)calloc(1, sizeof(scandata) + count);
+    uint64_t cursor = 0;
+    int deleted = 0;
+    long calls = 0;
+    long hard_cap = (long)buckets_before * 100;
+    do {
+        cursor = hashtableScanRunningStart(ht, cursor, scanfn, data);
+        if (!deleted && cursor != 0) {
+            /* Delete most entries to trigger shrink rehashing mid-scan. */
+            for (long j = keep; j < count; j++) {
+                hashtableDelete(ht, (void *)j);
+            }
+            deleted = 1;
+        }
+    } while (cursor != 0 && ++calls < hard_cap);
+    ASSERT_LT(calls, hard_cap) << "running-start scan did not terminate after shrink";
+
+    size_t buckets_after = hashtableBuckets(ht);
+
+    /* Each call advances the underlying cursor by one bucket. A correct scan does
+     * at most one pass over the large table plus one over the shrunk table; an
+     * unnecessary full second pass would roughly double this. */
+    ASSERT_LE((size_t)calls, buckets_before + buckets_after + 64)
+        << "shrink triggered an unnecessary full second pass";
+
+    /* Entries kept for the whole scan must be emitted at least once. */
+    for (long j = 0; j < keep; j++) {
+        ASSERT_GE(data->entry_seen[j], 1u) << "j=" << j;
+    }
+    free(data);
+    hashtableRelease(ht);
 }
 
 /* Helper types for mock hash entry tests */

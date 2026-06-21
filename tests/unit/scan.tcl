@@ -459,6 +459,113 @@ proc test_scan {type} {
         set keys [lsort -unique $keys]
         assert_equal 100 [llength $keys]
     }
+
+    test "{$type} running-start object scans return exact items without duplicates" {
+        set count 500
+
+        # Force hashtable/skiplist encodings regardless of the configured
+        # listpack limits.
+        set saved_hash [lindex [r config get hash-max-listpack-entries] 1]
+        set saved_set [lindex [r config get set-max-listpack-entries] 1]
+        set saved_zset [lindex [r config get zset-max-listpack-entries] 1]
+        r config set hash-max-listpack-entries 16
+        r config set set-max-listpack-entries 16
+        r config set zset-max-listpack-entries 16
+
+        # String members force the set into hashtable encoding (not intset or
+        # listpack).
+        r del rset
+        for {set j 0} {$j < $count} {incr j} { r sadd rset "m:$j" }
+        assert_encoding hashtable rset
+
+        # Above the listpack limit forces hashtable encoding.
+        r del rhash
+        for {set j 0} {$j < $count} {incr j} { r hset rhash "f:$j" $j }
+        assert_encoding hashtable rhash
+
+        # Above the listpack limit forces skiplist encoding.
+        r del rzset
+        for {set j 0} {$j < $count} {incr j} { r zadd rzset $j "z:$j" }
+        assert_encoding skiplist rzset
+
+        # Finish any incremental rehashing so a stable table is scanned without
+        # duplicates (reads advance rehashing when the resize policy is ALLOW).
+        for {set j 0} {$j < $count} {incr j} {
+            r sismember rset "m:$j"
+            r hget rhash "f:$j"
+            r zscore rzset "z:$j"
+        }
+
+        # Each running-start scan begins at a random bucket position, so repeat
+        # several rounds to exercise different start positions.
+        for {set round 0} {$round < 10} {incr round} {
+            # SSCAN: every member exactly once.
+            set cur 0; set items {}
+            while 1 {
+                set res [r sscan rset $cur]
+                set cur [lindex $res 0]
+                lappend items {*}[lindex $res 1]
+                if {$cur == 0} break
+            }
+            assert_equal $count [llength $items]
+            assert_equal $count [llength [lsort -unique $items]]
+
+            # HSCAN: every field/value pair exactly once.
+            set cur 0; set pairs {}
+            while 1 {
+                set res [r hscan rhash $cur]
+                set cur [lindex $res 0]
+                lappend pairs {*}[lindex $res 1]
+                if {$cur == 0} break
+            }
+            assert_equal [expr {$count * 2}] [llength $pairs]
+            set hkeys {}
+            foreach {k v} $pairs {
+                assert_equal $v [string range $k 2 end]
+                lappend hkeys $k
+            }
+            assert_equal $count [llength [lsort -unique $hkeys]]
+
+            # HSCAN NOVALUES: every field exactly once.
+            set cur 0; set hkeys2 {}
+            while 1 {
+                set res [r hscan rhash $cur novalues]
+                set cur [lindex $res 0]
+                lappend hkeys2 {*}[lindex $res 1]
+                if {$cur == 0} break
+            }
+            assert_equal $count [llength $hkeys2]
+            assert_equal $count [llength [lsort -unique $hkeys2]]
+
+            # ZSCAN: every member/score pair exactly once.
+            set cur 0; set zpairs {}
+            while 1 {
+                set res [r zscan rzset $cur]
+                set cur [lindex $res 0]
+                lappend zpairs {*}[lindex $res 1]
+                if {$cur == 0} break
+            }
+            assert_equal [expr {$count * 2}] [llength $zpairs]
+            set zmembers {}
+            foreach {m s} $zpairs { lappend zmembers $m }
+            assert_equal $count [llength [lsort -unique $zmembers]]
+
+            # ZSCAN NOSCORES: every member exactly once.
+            set cur 0; set zmembers2 {}
+            while 1 {
+                set res [r zscan rzset $cur noscores]
+                set cur [lindex $res 0]
+                lappend zmembers2 {*}[lindex $res 1]
+                if {$cur == 0} break
+            }
+            assert_equal $count [llength $zmembers2]
+            assert_equal $count [llength [lsort -unique $zmembers2]]
+        }
+
+        r config set hash-max-listpack-entries $saved_hash
+        r config set set-max-listpack-entries $saved_set
+        r config set zset-max-listpack-entries $saved_zset
+    }
 }
 
 start_server {tags {"scan network standalone"}} {

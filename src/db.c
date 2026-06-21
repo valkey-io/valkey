@@ -1310,7 +1310,12 @@ void scanGenericCommandWithOptions(client *c, robj *o, unsigned long long cursor
             if (o == NULL) {
                 cursor = kvstoreScan(c->db->keys, cursor, slot, final_slot, keysScanCallback, NULL, &data);
             } else {
-                cursor = hashtableScan(ht, cursor, hashtableScanCallback, &data);
+                /* Object scans use a randomized running-start scan so that
+                 * iteration begins at a random bucket position instead of
+                 * bucket zero, while preserving full-scan guarantees. The
+                 * returned cursor is opaque and carries the running start
+                 * position. */
+                cursor = hashtableScanRunningStart(ht, cursor, hashtableScanCallback, &data);
             }
         } while (cursor && maxiterations-- && data.sampled < opts->count);
     } else if (o->type == OBJ_SET) {

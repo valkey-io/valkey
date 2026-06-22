@@ -3118,36 +3118,82 @@ void zcardCommand(client *c) {
     addReplyLongLong(c, zsetLength(zobj));
 }
 
-void zscoreCommand(client *c) {
-    robj *key = c->argv[1];
-    robj *zobj;
+static void zscoreReply(client *c, robj *zobj, robj *member) {
     double score;
 
-    if ((zobj = lookupKeyReadOrReply(c, key, shared.null[c->resp])) == NULL || checkType(c, zobj, OBJ_ZSET)) return;
-
-    if (zsetScore(zobj, objectGetVal(c->argv[2]), &score) == C_ERR) {
+    if (zsetScore(zobj, objectGetVal(member), &score) == C_ERR) {
         addReplyNull(c);
     } else {
         addReplyDouble(c, score);
     }
 }
 
+void zscoreCommand(client *c) {
+    robj *key = c->argv[1];
+    robj *zobj;
+
+    if ((zobj = lookupKeyReadOrReply(c, key, shared.null[c->resp])) == NULL || checkType(c, zobj, OBJ_ZSET)) return;
+
+    zscoreReply(c, zobj, c->argv[2]);
+}
+
+#define ZMSCORE_FIND_BATCH_SIZE 16
+
+static void zmscoreReplyWithHashtable(client *c, hashtable *ht, robj **members, size_t count) {
+    hashtableFindBatchItem items[ZMSCORE_FIND_BATCH_SIZE];
+    while (count) {
+        size_t batch = count > ZMSCORE_FIND_BATCH_SIZE ? ZMSCORE_FIND_BATCH_SIZE : count;
+
+        for (size_t i = 0; i < batch; i++) {
+            items[i].key = objectGetVal(members[i]);
+        }
+
+        hashtableFindBatch(ht, items, batch);
+
+        for (size_t i = 0; i < batch; i++) {
+            if (items[i].found) {
+                zskiplistNode *node = items[i].entry;
+                addReplyDouble(c, node->score);
+            } else {
+                addReplyNull(c);
+            }
+        }
+
+        members += batch;
+        count -= batch;
+    }
+}
+
+static void zmscoreReply(client *c, robj *zobj, robj **members, size_t count) {
+    addReplyArrayLen(c, count);
+
+    /* Prefer hashtable batch lookup to improve performance. */
+    if (zobj->encoding == OBJ_ENCODING_SKIPLIST && count > 1) {
+        zset *zs = objectGetVal(zobj);
+        zmscoreReplyWithHashtable(c, zs->ht, members, count);
+        return;
+    }
+
+    for (size_t i = 0; i < count; i++) {
+        zscoreReply(c, zobj, members[i]);
+    }
+}
+
 void zmscoreCommand(client *c) {
     robj *key = c->argv[1];
     robj *zobj;
-    double score;
+
     zobj = lookupKeyRead(c->db, key);
+    if (zobj == NULL) {
+        addReplyArrayLen(c, c->argc - 2);
+        for (int j = 2; j < c->argc; j++) {
+            addReplyNull(c);
+        }
+        return;
+    }
     if (checkType(c, zobj, OBJ_ZSET)) return;
 
-    addReplyArrayLen(c, c->argc - 2);
-    for (int j = 2; j < c->argc; j++) {
-        /* Treat a missing set the same way as an empty set */
-        if (zobj == NULL || zsetScore(zobj, objectGetVal(c->argv[j]), &score) == C_ERR) {
-            addReplyNull(c);
-        } else {
-            addReplyDouble(c, score);
-        }
-    }
+    zmscoreReply(c, zobj, c->argv + 2, c->argc - 2);
 }
 
 void zrankGenericCommand(client *c, int reverse) {

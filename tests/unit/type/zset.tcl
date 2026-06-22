@@ -1755,6 +1755,30 @@ start_server {tags {"zset"}} {
         r zmscore zmscoretest x
     } {10}
 
+    test {ZMSCORE uses hashtable batch lookup} {
+        set original_max [lindex [r config get zset-max-listpack-entries] 1]
+        r config set zset-max-listpack-entries 0
+
+        r del zmscoretest
+        for {set i 1} {$i <= 128} {incr i} {
+            r zadd zmscoretest $i [format "m%02d" $i]
+        }
+
+        assert_encoding skiplist zmscoretest
+        assert_equal {1} [r zmscore zmscoretest m01]
+        assert_equal {1 {} 1 4} [r zmscore zmscoretest m01 missing m01 m04]
+
+        set members {missing}
+        set expected [list {}]
+        for {set i 1} {$i <= 19} {incr i} {
+            lappend members [format "m%02d" $i]
+            lappend expected $i
+        }
+        assert_equal $expected [r zmscore zmscoretest {*}$members]
+
+        r config set zset-max-listpack-entries $original_max
+    }
+
     test {ZMSCORE retrieve requires one or more members} {
         r del zmscoretest
         r zadd zmscoretest 10 x

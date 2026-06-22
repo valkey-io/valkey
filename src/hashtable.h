@@ -91,6 +91,12 @@ typedef enum {
 
 typedef void (*hashtableScanFunction)(void *privdata, void *entry);
 
+typedef struct {
+    const void *key;
+    void *entry;
+    bool found;
+} hashtableFindBatchItem;
+
 /* Constants */
 #define HASHTABLE_BUCKET_SIZE 64 /* bytes, the most common cache line size */
 
@@ -157,6 +163,7 @@ bool hashtableReplaceReallocatedEntry(hashtable *ht, const void *old_entry, void
 void hashtableIncrementalFindInit(hashtableIncrementalFindState *state, hashtable *ht, const void *key);
 bool hashtableIncrementalFindStep(hashtableIncrementalFindState *state);
 bool hashtableIncrementalFindGetResult(hashtableIncrementalFindState *state, void **found);
+void hashtableFindBatch(hashtable *ht, hashtableFindBatchItem *items, size_t count);
 
 /* Iteration & scan */
 size_t hashtableScan(hashtable *ht, size_t cursor, hashtableScanFunction fn, void *privdata);

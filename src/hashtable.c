@@ -1908,7 +1908,7 @@ bool hashtableIncrementalFindStep(hashtableIncrementalFindState *state) {
             hashtable *ht = data->hashtable;
             void *entry = data->bucket->entries[data->pos];
             const void *elem_key = entryGetKey(ht, entry);
-            if (compareKeys(ht, data->key, elem_key)) {
+            if (compareKeys(ht, data->key, elem_key) && validateElementIfNeeded(ht, entry)) {
                 /* It's a match. */
                 data->state = HASHTABLE_FOUND;
                 return false;
@@ -1987,6 +1987,39 @@ bool hashtableIncrementalFindGetResult(hashtableIncrementalFindState *state, voi
     } else {
         assert(data->state == HASHTABLE_NOT_FOUND);
         return false;
+    }
+}
+
+#define HASHTABLE_FIND_BATCH_SIZE 16
+
+/* Provides batch lookup. Compared with serial single-key lookups, it can improve
+ * performance by parallelizing memory accesses. */
+void hashtableFindBatch(hashtable *ht, hashtableFindBatchItem *items, size_t count) {
+    if (count == 0) return;
+
+    rehashStepOnReadIfNeeded(ht);
+
+    hashtableIncrementalFindState states[HASHTABLE_FIND_BATCH_SIZE];
+    for (size_t base = 0; base < count; base += HASHTABLE_FIND_BATCH_SIZE) {
+        size_t batch = count - base;
+        if (batch > HASHTABLE_FIND_BATCH_SIZE) batch = HASHTABLE_FIND_BATCH_SIZE;
+
+        for (size_t i = 0; i < batch; i++) {
+            hashtableIncrementalFindInit(&states[i], ht, items[base + i].key);
+        }
+
+        size_t incomplete;
+        do {
+            incomplete = 0;
+            for (size_t i = 0; i < batch; i++) {
+                incomplete += hashtableIncrementalFindStep(&states[i]);
+            }
+        } while (incomplete != 0);
+
+        for (size_t i = 0; i < batch; i++) {
+            items[base + i].entry = NULL;
+            items[base + i].found = hashtableIncrementalFindGetResult(&states[i], &items[base + i].entry);
+        }
     }
 }
 

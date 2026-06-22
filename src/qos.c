@@ -64,10 +64,10 @@ int parseSubnet(const char *token, qosSubnet *subnet) {
 
 /* parseSubnetList parses a string containing a list of subnets separated by spaces, tabs, or commas.
  * On success, it allocates an array of qosSubnet, populates it, and sets *subnets and *count.
- * Returns 0 on success (even if list is empty, setting *subnets to NULL and *count to 0),
- * and -1 on any parsing or allocation error.
+ * Returns 0 on success, and -1 on any parsing or allocation error.
  * Caller is responsible for freeing *subnets using zfree() if it is non-NULL. */
 int parseSubnetList(const char *raw_sources, qosSubnet **subnets, int *count) {
+    if (!subnets || !count) return -1;
     *subnets = NULL;
     *count = 0;
 

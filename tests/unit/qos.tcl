@@ -37,6 +37,21 @@ start_server {tags {"qos"}} {
         }
     }
 
+    # Helper to check if a client has expected QoS
+    proc assert_client_qos {client_id expected_qos} {
+        set client_list [r client list]
+        set found 0
+        foreach line [split $client_list "\n"] {
+            if {$line == ""} continue
+            if {[regexp "id=$client_id " $line]} {
+                set found 1
+                assert {[regexp "qos=$expected_qos" $line]}
+                break
+            }
+        }
+        assert_equal 1 $found "Client ID $client_id not found in client list"
+    }
+
     # Save original configs for global restoration
     set global_old_maxclients [lindex [r config get maxclients] 1]
     set global_old_priority_maxclients [lindex [r config get priority-maxclients] 1]
@@ -92,7 +107,11 @@ start_server {tags {"qos"}} {
 
         # Connect 2 normal clients
         set c1 [valkey_deferring_client]
+        $c1 client id
+        set c1_id [$c1 read]
         set c2 [valkey_deferring_client]
+        $c2 client id
+        set c2_id [$c2 read]
 
         # 3rd normal client should fail (total normal clients = 4: r + c1 + c2 + c3)
         if {$::tls} {
@@ -113,11 +132,15 @@ start_server {tags {"qos"}} {
 
         # Now connect a prioritized client - it should succeed!
         set p1 [valkey_deferring_client]
+        $p1 client id
+        set p1_id [$p1 read]
         $p1 ping
         assert_equal {PONG} [$p1 read]
 
         # Connect another prioritized client - should succeed
         set p2 [valkey_deferring_client]
+        $p2 client id
+        set p2_id [$p2 read]
         $p2 ping
         assert_equal {PONG} [$p2 read]
 
@@ -128,8 +151,13 @@ start_server {tags {"qos"}} {
         assert_match "*priority_maxclients:5*" $info_clients
 
         # Verify CLIENT LIST output contains qos=prioritized for p1/p2 and qos=normal for others
+        assert_client_qos $p1_id "prioritized"
+        assert_client_qos $p2_id "prioritized"
+        assert_client_qos $c1_id "normal"
+        assert_client_qos $c2_id "normal"
+        assert_client_qos [r client id] "normal"
+
         set client_list [r client list]
-        
         set qos_prioritized_count 0
         set qos_normal_count 0
         foreach line [split $client_list "\n"] {
@@ -203,18 +231,12 @@ start_server {tags {"qos"}} {
         r config set priority-net-sources "$client_ip_mask,1.1.1.1/32"
         
         set p1 [valkey_deferring_client]
+        $p1 client id
+        set p1_id [$p1 read]
         $p1 ping
         assert_equal {PONG} [$p1 read]
         
-        set client_list [r client list]
-        set found_prioritized 0
-        foreach line [split $client_list "\n"] {
-            if {$line == ""} continue
-            if {[regexp {qos=prioritized} $line]} {
-                set found_prioritized 1
-            }
-        }
-        assert_equal 1 $found_prioritized
+        assert_client_qos $p1_id "prioritized"
 
         catch {$p1 close}
         
@@ -222,18 +244,12 @@ start_server {tags {"qos"}} {
         r config set priority-net-sources "$client_ip_mask, 1.1.1.1/32"
         
         set p2 [valkey_deferring_client]
+        $p2 client id
+        set p2_id [$p2 read]
         $p2 ping
         assert_equal {PONG} [$p2 read]
         
-        set client_list [r client list]
-        set found_prioritized 0
-        foreach line [split $client_list "\n"] {
-            if {$line == ""} continue
-            if {[regexp {qos=prioritized} $line]} {
-                set found_prioritized 1
-            }
-        }
-        assert_equal 1 $found_prioritized
+        assert_client_qos $p2_id "prioritized"
         
         catch {$p2 close}
     }
@@ -244,18 +260,12 @@ start_server {tags {"qos"}} {
         r config set priority-net-sources "[get_current_client_ip] 1.1.1.1"
         
         set p1 [valkey_deferring_client]
+        $p1 client id
+        set p1_id [$p1 read]
         $p1 ping
         assert_equal {PONG} [$p1 read]
         
-        set client_list [r client list]
-        set found_prioritized 0
-        foreach line [split $client_list "\n"] {
-            if {$line == ""} continue
-            if {[regexp {qos=prioritized} $line]} {
-                set found_prioritized 1
-            }
-        }
-        assert_equal 1 $found_prioritized
+        assert_client_qos $p1_id "prioritized"
 
         catch {$p1 close}
     }

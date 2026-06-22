@@ -1371,7 +1371,12 @@ static int clusterRaftProcessAppendEntries(clusterLink *link, int argc, sds *arg
     /* Accept heartbeat. */
     if (rs->role != RAFT_ROLE_JOINER) rs->role = RAFT_ROLE_FOLLOWER;
     rs->last_heartbeat = monotonicMs();
-    memcpy(rs->leader, argv[1], CLUSTER_NAMELEN);
+    /* Detect leader change — retry pending proposals to the new leader. */
+    if (memcmp(rs->leader, argv[1], CLUSTER_NAMELEN) != 0) {
+        memcpy(rs->leader, argv[1], CLUSTER_NAMELEN);
+        if (listLength(rs->pending_proposals) > 0)
+            rs->todo_retry_proposals = 1;
+    }
 
     /* Log consistency check: verify prev_log_index/term match. */
     if (prev_log_index > 0 && raftLogTermAt(prev_log_index) != prev_log_term) {
@@ -1662,10 +1667,14 @@ static void clusterRaftSendPreVoteResponse(clusterLink *link, uint64_t term, int
 static int clusterRaftCanGrantVote(clusterRaftState *rs, uint64_t candidate_last_index, uint64_t candidate_last_term) {
     if (rs->role == RAFT_ROLE_JOINER) return 0;
 
-    /* Don't vote while we still consider a leader alive in this term. */
+    /* Deny vote if we recently heard from the leader (leader lease).
+     * Use the base node-timeout, not the randomized election timeout —
+     * the randomization is for staggering elections, not for lease duration. */
     mstime_t now = monotonicMs();
+    mstime_t lease = server.cluster_node_timeout;
+    if (lease < 1000) lease = 1000;
     if (rs->leader[0] != '\0' &&
-        now - rs->last_heartbeat < rs->election_timeout) {
+        now - rs->last_heartbeat < lease) {
         return 0;
     }
 
@@ -1784,6 +1793,9 @@ static int clusterRaftProcessRequestVoteResponse(clusterLink *link, int argc, sd
             memcpy(rs->leader, myself->name, CLUSTER_NAMELEN);
             serverLog(LL_NOTICE, "Elected as Raft leader (term %llu, %d votes).",
                       (unsigned long long)rs->current_term, rs->votes_received);
+            /* Append any pending proposals locally now that we're leader. */
+            if (listLength(rs->pending_proposals) > 0)
+                rs->todo_retry_proposals = 1;
             /* Initialize nextIndex for each peer (Raft paper §5.3). */
             uint64_t last = raftLogLastIndex();
             dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
@@ -1863,6 +1875,8 @@ static void clusterRaftStartElection(void) {
         memcpy(rs->leader, myself->name, CLUSTER_NAMELEN);
         serverLog(LL_NOTICE, "Elected as Raft leader (term %llu, %d votes).",
                   (unsigned long long)rs->current_term, rs->votes_received);
+        if (listLength(rs->pending_proposals) > 0)
+            rs->todo_retry_proposals = 1;
     }
 }
 
@@ -2030,6 +2044,29 @@ static void clusterRaftCron(void) {
     clusterRaftState *rs = RAFT_STATE();
     mstime_t now = monotonicMs();
 
+    /* Disconnect dead outbound links. data_received tracks the last time
+     * we got data on our outbound link (HI, AE_ACK, votes).
+     * - No data ever received after node_timeout/2: HI never arrived,
+     *   the peer's kernel accepted our SYN but the process is frozen.
+     * - Leader: no AE_ACK for node_timeout/2. last_ack_time is reset on
+     *   election, giving peers time to respond to the first AE. */
+    {
+        mstime_t stale = server.cluster_node_timeout / 2;
+        dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
+        dictEntry *de;
+        while ((de = dictNext(di)) != NULL) {
+            clusterNode *node = dictGetVal(de);
+            if (node == myself || !node->link) continue;
+            if (node->flags & CLUSTER_NODE_MEET) continue;
+            if ((node->data_received == 0 && now - node->link->ctime > stale) ||
+                (rs->role == RAFT_ROLE_LEADER &&
+                 now - RAFT_NODE(node)->last_ack_time > stale)) {
+                freeClusterLink(node->link);
+            }
+        }
+        dictReleaseIterator(di);
+    }
+
     if (!server.debug_cluster_disable_reconnection) clusterConnectNodes();
 
     /* Joiner timeout: if we stepped down to join a cluster but never
@@ -2082,9 +2119,6 @@ static void clusterRaftCron(void) {
                 }
             }
         }
-
-        /* Retry deferred proposals when leader link becomes available. */
-        clusterRaftRetryProposals();
 
         /* Periodically check if our NODE_INFO diverged from what was last
          * committed (e.g. a CONFIG SET succeeded but the proposal timed
@@ -2406,6 +2440,11 @@ static uint32_t clusterRaftValidateMessageHeader(char *header) {
 static int clusterRaftProcessMessage(struct clusterLink *link) {
     RAFT_STATE()->stats_bytes_received += link->rcvbuf_len;
 
+    /* Track data received on outbound links only. Each node manages its own
+     * outbound link; if it goes silent we must detect and reconnect. The
+     * inbound link is the peer's responsibility. */
+    if (link->node && !link->inbound) link->node->data_received = mstime();
+
     /* Parse the text payload after the binary header.
      * Split by \n first (AE messages have entry lines), then split
      * the first line by space for the header fields. */
@@ -2500,7 +2539,8 @@ static int clusterRaftProcessMessage(struct clusterLink *link) {
         char *buf = link->rcvbuf + RAFT_HDR_SIZE;
         size_t buf_len = link->rcvbuf_len - RAFT_HDR_SIZE;
         char *nl = memchr(buf, '\n', buf_len);
-        if (nl && (size_t)(buf + buf_len - nl - 1) >= chan_len + msg_len) {
+        if (nl && chan_len + msg_len >= chan_len &&
+            (size_t)(buf + buf_len - nl - 1) >= chan_len + msg_len) {
             char *payload = nl + 1;
             robj *chan = createStringObject(payload, chan_len);
             robj *pmsg = createStringObject(payload + chan_len, msg_len);

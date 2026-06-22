@@ -831,7 +831,7 @@ void set_jemalloc_bg_thread(int enable) {
 
 #endif
 
-int zmallocTrim(void) {
+int zmalloc_purge(void) {
     int ret = 0;
 #if defined(USE_JEMALLOC)
     /* Return all unused (reserved) jemalloc pages to the OS. */
@@ -848,13 +848,10 @@ int zmallocTrim(void) {
     return ret;
 }
 
-/* Trim free pages of the libc main arena back to the OS via malloc_trim(3).
- *
- * Even when jemalloc is in use, libc-internal allocations - from
- * getaddrinfo(3), NSS lookups, pthread internals, stdio buffers or any
- * module that calls malloc() directly - are served by libc malloc and
- * live in the [heap] segment grown via sbrk(2). That memory is invisible
- * to jemalloc and is rarely returned to the OS automatically. */
+/* Release free pages of the libc main arena back to the OS via malloc_trim(3).
+ * Even with jemalloc, libc-internal allocations (getaddrinfo(3), NSS, pthread,
+ * stdio, or modules calling malloc() directly) live in the [heap] segment and
+ * are otherwise rarely returned to the OS. */
 void zlibc_trim(void) {
 #if defined(__GLIBC__) && !defined(USE_LIBC)
     malloc_trim(0);

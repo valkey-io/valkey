@@ -91,6 +91,8 @@ TEST_F(QosTest, ParseSubnetList) {
     int count = 0;
 
     // Empty or NULL input
+    EXPECT_EQ(parseSubnetList(NULL, NULL, &count), -1);
+    EXPECT_EQ(parseSubnetList(NULL, NULL, NULL), -1);
     EXPECT_EQ(parseSubnetList(NULL, &subnets, &count), 0);
     EXPECT_EQ(subnets, nullptr);
     EXPECT_EQ(count, 0);

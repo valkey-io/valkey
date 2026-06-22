@@ -1879,11 +1879,12 @@ static void clusterRaftInit(void) {
 static void clusterRaftInitLast(void) {
     clusterListenerInit();
 
-    /* On fresh start (size == 0), mark myself as not yet in the raft log.
-     * Cleared when our own NODE_JOIN is applied. On restart, size is
-     * restored by postLoad so we skip this. */
-    if (server.cluster->size == 0) {
+    /* A singleton (no peers) is not yet in the raft log — mark with MEET
+     * to prevent it from committing entries before joining a cluster.
+     * Cleared when our own NODE_JOIN is applied (in a multi-node cluster). */
+    if (dictSize(server.cluster->nodes) <= 1) {
         myself->flags |= CLUSTER_NODE_MEET;
+        server.cluster->size = 0;
     }
 
     /* Fresh single-node cluster: become leader immediately. */

@@ -557,7 +557,7 @@ sds clusterGenNodesDescription(client *c, int filter, int tls_primary) {
     while ((de = dictNext(di)) != NULL) {
         clusterNode *node = dictGetVal(de);
 
-        if (node->flags & filter) continue;
+        if (node != myself && (node->flags & filter)) continue;
         ni = clusterGenNodeDescription(c, node, tls_primary);
         ci = sdscatsds(ci, ni);
         sdsfree(ni);

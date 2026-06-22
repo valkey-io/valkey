@@ -737,7 +737,7 @@ inconsistencies — such as moving a slot to a node that no longer owns
 the corresponding keys.
 
 A shard-epoch is a per-shard monotonically increasing counter stored
-in `server.cluster->shard_epochs`. It is bumped each time membership or
+in the raft protocol state. It is bumped each time membership or
 leadership of the shard changes. Such entries include the shard's
 current epoch at proposal time. Epoch is validated at prepare time
 and at apply time. If the epoch has advanced past the value in the entry,
@@ -803,8 +803,8 @@ Only `STALE_SHARD_EPOCH_REJECTION_MSG` triggers retry. Other errors
 (format errors, invalid state) are forwarded to the client immediately.
 
 When the leader rejects a forwarded proposal at pre-validation, it sends
-a `REJECT <type> <data> retry` message back. The `retry` suffix signals
-the follower that the rejection is epoch-related and eligible for retry.
+a `REJECT <reason> <type> <data...>` message back. The reason is a token:
+`conflict` (stale epoch, retryable) or `syntax` (permanent error).
 
 ### Entries that don't carry an epoch
 

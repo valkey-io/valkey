@@ -185,44 +185,13 @@ proc cluster_allocate_slots {masters replicas} {
     }
 }
 
-# Issue CLUSTER REPLICATE with retry on epoch rejection. In raft mode,
-# concurrent REPLICATE commands for the same shard may race with shard
-# epoch bumps, causing transient "proposal rejected" errors.
-proc cluster_replicate_with_retry {node_id target_id {max_retries 5}} {
-    for {set attempt 0} {$attempt < $max_retries} {incr attempt} {
-        if {[catch {R $node_id cluster replicate $target_id} err]} {
-            if {$attempt < $max_retries - 1 && [string match "*proposal rejected*" $err]} {
-                after 100
-                continue
-            }
-            error $err
-        }
-        return
-    }
-}
-
-# Same as above but takes a client object instead of a node index.
-# Returns the result on success.
-proc cluster_client_replicate_with_retry {client target_id {max_retries 5}} {
-    for {set attempt 0} {$attempt < $max_retries} {incr attempt} {
-        if {[catch {$client cluster replicate $target_id} result]} {
-            if {$attempt < $max_retries - 1 && [string match "*proposal rejected*" $result]} {
-                after 100
-                continue
-            }
-            error $result
-        }
-        return $result
-    }
-}
-
 proc default_replica_allocation {masters replicas} {
     # Setup master/replica relationships
     set node_count [expr $masters + $replicas]
     for {set i 0} {$i < $masters} {incr i} {
         set nodeid [R $i CLUSTER MYID]
         for {set j [expr $i + $masters]} {$j < $node_count} {incr j $masters} {
-            cluster_replicate_with_retry $j $nodeid
+            R $j cluster replicate $nodeid
         }
     }
 }
@@ -235,7 +204,7 @@ proc cluster_allocate_replicas {masters replicas} {
         set master_id [expr {$j % $masters}]
         set replica_id [cluster_find_available_replica $masters]
         set master_myself [cluster_get_myself $master_id]
-        cluster_replicate_with_retry $replica_id [dict get $master_myself id]
+        R $replica_id cluster replicate [dict get $master_myself id]
     }
 }
 

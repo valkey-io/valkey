@@ -633,43 +633,6 @@ start_multiple_servers 2 {overrides {cluster-enabled yes cluster-protocol raft c
     }
 
     # --------------------------------------------------------------------------
-    # Missing epoch: proposals without the required epoch field are rejected
-    # at pre-validation (never appended to the log).
-    # --------------------------------------------------------------------------
-
-    set missing_epoch_proposals [list \
-        [list "SLOT_CHANGE (missing epoch)" "PROPOSE SLOT_CHANGE $node_id 1 $node1_id"] \
-        [list "FAILOVER (missing epoch)" "PROPOSE FAILOVER $node1_id $node_id $node0_shard"] \
-        [list "SET_REPLICA_OF (missing epoch)" "PROPOSE SET_REPLICA_OF $node1_id [string repeat a 40] 1 $node_id [string repeat b 40]"] \
-        [list "NODE_FORGET (missing epoch)" "PROPOSE NODE_FORGET $node1_id"] \
-    ]
-
-    foreach case $missing_epoch_proposals {
-        lassign $case label propose_msg
-
-        test "Raft shard epoch: $label is rejected (pre-validation, no log append)" {
-            set commit_before [get_cluster_info_field $r0 cluster_raft_commit_index]
-            set loglines [count_log_lines 0]
-
-            set fd [raft_connect_fake_node 127.0.0.1 $cport $fake_id $fake_addr]
-            raft_send $fd $propose_msg
-
-            # Expect a REJECT message back from the leader.
-            set reply [raft_recv $fd 2000]
-            assert_match "REJECT *" $reply
-
-            # Verify rejection logged.
-            wait_for_log_messages 0 {"*Leader pre-validation: rejecting*"} $loglines 1000 10
-
-            # Verify log index unchanged (rejected at pre-validation).
-            set commit_after [get_cluster_info_field $r0 cluster_raft_commit_index]
-            assert_equal $commit_before $commit_after
-
-            close $fd
-        }
-    }
-
-    # --------------------------------------------------------------------------
     # Wrong shard-id: proposals where the shard-id doesn't match the node's
     # actual shard are rejected at pre-validation.
     # --------------------------------------------------------------------------

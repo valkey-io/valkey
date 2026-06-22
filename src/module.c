@@ -419,8 +419,8 @@ typedef struct ValkeyModuleEventListener {
 } ValkeyModuleEventListener;
 
 list *ValkeyModule_EventListeners;                /* Global list of all the active events. */
-static int commandResultSuccessListeners = 0;     /* Count of modules listening for command result success. */
-static int commandResultFailureListeners = 0;     /* Count of modules listening for command result failure. */
+int commandResultSuccessListeners = 0;            /* Count of modules listening for command result success. */
+int commandResultFailureListeners = 0;            /* Count of modules listening for command result failure. */
 static int commandResultRejectedListeners = 0;    /* Count of modules listening for command result rejected. */
 static int commandResultACLRejectedListeners = 0; /* Count of modules listening for command result ACL rejected. */
 

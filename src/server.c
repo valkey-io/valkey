@@ -4693,8 +4693,89 @@ int processCommand(client *c) {
         queueMultiCommand(c, cmd_flags);
         addReply(c, shared.queued);
     } else {
-        int flags = CMD_CALL_FULL;
-        call(c, flags);
+        /* Fast-path for simple read-only commands: bypass call() overhead with
+         * sampled timing (1/64 commands timed, extrapolated for stats accuracy).
+         * Eligible when:
+         * - Command is read-only and O(1)/O(log N) (CMD_READONLY | CMD_FAST)
+         * - No module result event listeners (nothing to notify)
+         * - No MONITOR clients (nothing to feed)
+         * - Client-side caching tracking inactive (no keys to remember)
+         * - Not in nested execution (top-level only)
+         *
+         * Skips on non-sampled commands: timing, commandlog, latency histogram,
+         *   zmalloc peak check, afterCommand.
+         * Always preserves: cmd->calls, stat_numcommands, failed_calls.
+         * Sampled commands (1/64): full timing, commandlog threshold, histogram,
+         *   zmalloc check, afterCommand — with microseconds extrapolated ×64. */
+        if ((c->cmd->flags & (CMD_READONLY | CMD_FAST)) == (CMD_READONLY | CMD_FAST) &&
+            !commandResultSuccessListeners &&
+            !commandResultFailureListeners &&
+            !listLength(server.monitors) &&
+            !(c->flag.tracking) &&
+            server.execution_nesting == 0) {
+            struct serverCommand *real_cmd = c->cmd->parent ? c->cmd->parent : c->cmd;
+            client *prev_client = server.executing_client;
+            server.executing_client = c;
+
+            /* Determine if this is a sampled command (1 in 64).
+             * Uses per-command call count so the FIRST call of each command type
+             * is always sampled (ensures latency histogram has data immediately). */
+            int sample = (real_cmd->calls & 63) == 0;
+            ustime_t call_timer = 0;
+
+            if (sample) {
+                call_timer = ustime();
+                enterExecutionUnit(1, call_timer);
+            }
+
+            c->flag.executing_command = 1;
+            c->flag.buffered_reply = 0;
+            c->flag.keyspace_notified = 0;
+
+            /* Execute the command */
+            c->cmd->proc(c);
+
+            if (sample) {
+                exitExecutionUnit();
+            }
+            if (!c->flag.blocked) c->flag.executing_command = 0;
+
+            /* Stats — always updated */
+            real_cmd->calls++;
+            server.stat_numcommands++;
+            if (c->deferred_reply_errors) real_cmd->failed_calls++;
+
+            /* Commandlog — always check (large-reply threshold needs every command) */
+            if (!c->flag.blocked) commandlogPushCurrentCommand(c, real_cmd);
+
+            if (sample) {
+                /* Sampled path: full timing + telemetry */
+                ustime_t duration = ustime() - call_timer;
+                c->duration = duration;
+
+                /* Extrapolate microseconds: this sample represents ~64 commands */
+                real_cmd->microseconds += duration * 64;
+
+                /* Latency histogram: feed real duration (not extrapolated) */
+                if (server.latency_tracking_enabled && !c->flag.blocked)
+                    updateCommandLatencyHistogram(&(real_cmd->latency_histogram), duration * 1000);
+
+                c->duration = 0;
+
+                /* Peak memory check */
+                size_t zmalloc_used = zmalloc_used_memory();
+                if (zmalloc_used > server.stat_peak_memory)
+                    server.stat_peak_memory = zmalloc_used;
+
+                /* Full cleanup on sampled commands */
+                afterCommand(c);
+            }
+
+            server.executing_client = prev_client;
+        } else {
+            int flags = CMD_CALL_FULL;
+            call(c, flags);
+        }
         if (listLength(server.ready_keys) && !isInsideYieldingLongCommand()) handleClientsBlockedOnKeys();
     }
     return C_OK;

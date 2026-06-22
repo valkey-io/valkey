@@ -241,14 +241,14 @@ bool replyBlockingSignalModifiedKey(struct client *c, struct serverDb *db, struc
     UNUSED(db);
     // Defer key invalidation messages until the reply-blocking providers acknowledge.
     return replyBlockingRegisterPostCommitTask(POST_COMMIT_KEY_INVALIDATION_TASK,
-                                          (void *)c, (void *)key);
+                                               (void *)c, (void *)key);
 }
 
 
 bool replyBlockingSignalFlushedDb(int dbid) {
     // Defer flush invalidation messages until the reply-blocking providers acknowledge.
     return replyBlockingRegisterPostCommitTask(POST_COMMIT_FLUSH_INVALIDATION_TASK,
-                                          (void *)(intptr_t)(dbid == -1));
+                                               (void *)(intptr_t)(dbid == -1));
 }
 
 /*================================= Task Execution =========================== */
@@ -290,13 +290,6 @@ void certifyPendingDeferredTasks(void) {
             taskWaitingAck *task = listNodeValue(ln);
             serverAssert(task->offset == 0);
             task->offset = server.primary_repl_offset;
-            if (task->type == POST_COMMIT_KEYSPACE_NOTIFY_TASK) {
-                moduleNotifyKeyspaceEvent(
-                    /*type*/ (intptr_t)task->argv[0],
-                    /*event*/ (char *)task->argv[1],
-                    /*key*/ (robj *)task->argv[2],
-                    /*dbid*/ (intptr_t)task->argv[3]);
-            }
         }
         listJoin(server.reply_blocking.tasks_waiting_ack[i], &local);
     }

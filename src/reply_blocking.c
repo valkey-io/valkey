@@ -151,6 +151,7 @@ void replyBlockingClientInit(client *c) {
         resetPreExecutionOffset(c);
         c->reply_blocking_state.current_command_repl_offset = -1;
         c->reply_blocking_state.module_cmd_blocking_offset = -1;
+        c->reply_blocking_state.deferred_block_offset = -1;
         c->reply_blocking_state.pending_notify_tasks = listCreate();
     }
 }
@@ -338,10 +339,8 @@ static inline int isCommandReplicatedToMonitors(void) {
     return listLength(server.monitors) && !server.loading;
 }
 
-// Block a client and all connected MONITOR clients on the specified replication offset.
-static void blockClientAndMonitorsOnReplOffset(client *c, long long blockingReplOffset) {
-    blockClientOnReplOffset(c, blockingReplOffset);
-
+// Block all connected MONITOR clients on the specified replication offset.
+static void blockMonitorsOnReplOffset(long long blockingReplOffset) {
     if (isCommandReplicatedToMonitors()) {
         listNode *ln;
         listIter li;
@@ -350,6 +349,41 @@ static void blockClientAndMonitorsOnReplOffset(client *c, long long blockingRepl
             client *monitor = ln->value;
             blockClientOnReplOffset(monitor, blockingReplOffset);
         }
+    }
+}
+
+// Block a client and all connected MONITOR clients on the specified replication offset.
+static void blockClientAndMonitorsOnReplOffset(client *c, long long blockingReplOffset) {
+    blockClientOnReplOffset(c, blockingReplOffset);
+    blockMonitorsOnReplOffset(blockingReplOffset);
+}
+
+/* Snapshot the COB tail just before a parked deferred reply is committed, so the
+ * durability boundary lands on the bytes about to be appended. Snapshotting here
+ * (rather than reusing the pre-execution snapshot) keeps the raw reply-list pointer
+ * from dangling across the module-blocked window. */
+void replyBlockingSnapshotBeforeDeferredReplyCommit(client *c) {
+    if (!isPrimaryReplyBlockingEnabled()) return;
+    if (c->reply_blocking_state.deferred_block_offset == -1) return;
+    trackCommandPreExecutionPosition(c);
+}
+
+/* Apply the stashed durability boundary over the deferred reply just committed
+ * into the COB (paired with the snapshot above). */
+void replyBlockingApplyDeferredReplyBoundary(client *c) {
+    if (c->reply_blocking_state.deferred_block_offset == -1) return;
+    long long offset = c->reply_blocking_state.deferred_block_offset;
+    c->reply_blocking_state.deferred_block_offset = -1;
+    if (!isPrimaryReplyBlockingEnabled()) {
+        resetPreExecutionOffset(c);
+        return;
+    }
+    /* Already durable (module held the client past the ack): send now, no boundary.
+     * Otherwise hold the reply until the ack advances the consensus offset. */
+    if (getDurablyCommittedOffset() >= offset) {
+        resetPreExecutionOffset(c);
+    } else {
+        blockClientOnReplOffset(c, offset);
     }
 }
 
@@ -629,6 +663,7 @@ int beginCommandReplyBlocking(client *c) {
     c->reply_blocking_state.reply_blocking_flags = 0;
     c->reply_blocking_state.current_command_repl_offset = -1;
     c->reply_blocking_state.module_cmd_blocking_offset = -1;
+    c->reply_blocking_state.deferred_block_offset = -1;
 
     if (iAmPrimary() && clientEligibleForResponseTracking(c)) {
         trackCommandPreExecutionPosition(c);
@@ -667,7 +702,16 @@ void finalizeCommandReplyBlocking(client *c) {
     processPendingUncommittedData(server.primary_repl_offset);
     updateFuncStoreBlockingOffsetForWrite(server.primary_repl_offset);
 
-    blockClientAndMonitorsOnReplOffset(c, blocking_repl_offset);
+    if (c->flag.blocked && isDeferredReplyEnabled(c) && listLength(c->deferred_reply) > 0) {
+        /* A module blocked the client on its KSN callback, so the reply is parked in the
+         * deferred buffer, not the COB. Stash the offset and apply the boundary when the
+         * reply is committed (commitDeferredReplyBuffer); block monitors now (not deferred). */
+        resetPreExecutionOffset(c);
+        c->reply_blocking_state.deferred_block_offset = blocking_repl_offset;
+        blockMonitorsOnReplOffset(blocking_repl_offset);
+    } else {
+        blockClientAndMonitorsOnReplOffset(c, blocking_repl_offset);
+    }
 
     certifyPendingDeferredTasks();
 }

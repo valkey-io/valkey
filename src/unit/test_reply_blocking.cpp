@@ -930,14 +930,15 @@ TEST_F(FullReplyBlockingTest, KeyspaceNotifyTaskCopiesEventString) {
     robj *key_obj = createStringObject("mykey", 5);
 
     /* Register the task — this should copy the event string */
-    server.current_client = nullptr; /* simulate background task */
+    server.current_client = nullptr;   /* simulate background task */
+    server.executing_client = nullptr; /* ack-time execution has no running command */
     server.primary_repl_offset = 100;
     bool registered = replyBlockingRegisterPostCommitTask(
         POST_COMMIT_KEYSPACE_NOTIFY_TASK,
-        (void *)(long long)0, /* type */
-        (void *)event,        /* event string — will be freed below */
-        (void *)key_obj,      /* key */
-        (void *)(long long)0  /* dbid */
+        (void *)(long long)NOTIFY_IN_POST_COMMIT_TASK, /* type, as production defers it */
+        (void *)event,                                 /* event string — will be freed below */
+        (void *)key_obj,                               /* key */
+        (void *)(long long)0                           /* dbid */
     );
     ASSERT_TRUE(registered);
 

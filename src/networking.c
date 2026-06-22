@@ -1675,10 +1675,12 @@ void commitDeferredReplyBuffer(client *c, int skip_if_blocked) {
         return;
     }
 
+    replyBlockingSnapshotBeforeDeferredReplyCommit(c);
     listJoin(c->reply, c->deferred_reply);
     c->reply_bytes += c->deferred_reply_bytes;
 
     resetDeferredReplyBuffer(c);
+    replyBlockingApplyDeferredReplyBoundary(c);
     if (prepareClientToWrite(c) != C_OK) {
         return;
     }

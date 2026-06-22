@@ -120,14 +120,22 @@ void notifyKeyspaceEvent(int type, char *event, robj *key, int dbid) {
                       getClientType(c) != CLIENT_TYPE_NORMAL);
 
     if (!(type & NOTIFY_IN_POST_COMMIT_TASK)) {
-        if (isPrimaryReplyBlockingEnabled()) {
-            bool shouldSendDelayedNotificationToClients = (server.notify_keyspace_events & type);
+        /* Notify modules inline, at the time the keyspace change occurs (bypassing
+         * notify-keyspace-events; the module engine filters by each subscriber's event mask).
+         * Doing it here rather than from the deferred task ensures subscribers are notified for
+         * every write regardless of config or origin, and lets a module that blocks the client
+         * from its callback engage the deferred-reply buffer before the reply is committed. */
+        moduleNotifyKeyspaceEvent(type, event, key, dbid);
+        if (c) {
+            c->flag.keyspace_notified = 1;
+            commitDeferredReplyBuffer(c, 1);
+        }
 
-            /* Defer client notifications until reply-blocking providers acknowledge the write. */
-            if (shouldSendDelayedNotificationToClients) {
+        if (isPrimaryReplyBlockingEnabled()) {
+            /* Defer only the client (pub/sub) notification until the write is acknowledged.
+             * The task re-enters with NOTIFY_IN_POST_COMMIT_TASK set, which skips modules. */
+            if (server.notify_keyspace_events & type) {
                 type = type | NOTIFY_IN_POST_COMMIT_TASK;
-                /* Register deferred task, executed when offset is acknowledged
-                 * by reply-blocking providers */
                 replyBlockingRegisterPostCommitTask(
                     POST_COMMIT_KEYSPACE_NOTIFY_TASK,
                     (void *)(long)type,
@@ -135,17 +143,7 @@ void notifyKeyspaceEvent(int type, char *event, robj *key, int dbid) {
                     (void *)key,
                     (void *)(long)dbid);
             }
-
-            /* At this point (reply-blocking branch), we have notified modules, or queued a task.
-             * For clients, there is never a direct notification (either queue the
-             * notification or nothing). */
             return;
-        }
-        moduleNotifyKeyspaceEvent(type, event, key, dbid);
-    } else {
-        if (c) {
-            c->flag.keyspace_notified = 1;
-            commitDeferredReplyBuffer(c, 1);
         }
     }
 

@@ -157,6 +157,11 @@ typedef struct clientReplyBlockingState {
     /* Replication offset to block this current command response */
     long long current_command_repl_offset;
 
+    /* Durability blocking offset for a reply parked in the deferred-reply buffer by a
+     * module that blocked the client on its KSN callback; applied when the reply is
+     * committed into the COB. -1 when not deferred. */
+    long long deferred_block_offset;
+
     /* The list of async notification tasks that reference this client */
     struct list *pending_notify_tasks;
 
@@ -188,6 +193,11 @@ void notifyReplyBlockingProgress(void);
 /* Response blocking */
 void blockClientOnReplOffset(client *c, long long blockingReplOffset);
 void unblockResponsesWithAckOffset(const reply_blocking_t *rb_state, long long consensus_ack_offset);
+
+/* Deferred-reply (module client-blocking) durability hooks, called from
+ * commitDeferredReplyBuffer around the move of a parked reply into the COB. */
+void replyBlockingSnapshotBeforeDeferredReplyCommit(client *c);
+void replyBlockingApplyDeferredReplyBoundary(client *c);
 
 /* Utils */
 int isPrimaryReplyBlockingEnabled(void);

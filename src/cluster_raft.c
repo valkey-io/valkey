@@ -57,6 +57,7 @@ enum raftEntryType {
     RAFT_ENTRY_NODE_INFO = 6,      /* IP, port, hostname, etc. */
     RAFT_ENTRY_NODE_FAIL = 7,      /* Node failure detected */
     RAFT_ENTRY_NODE_RECOVER = 8,   /* Node recovery detected */
+    RAFT_ENTRY_NOOP = 9,           /* No-op (leader term establishment) */
 };
 
 typedef struct {
@@ -107,12 +108,13 @@ typedef struct {
 typedef struct {
     /* Persistent Raft state */
     uint64_t current_term;
+    uint64_t last_applied;
+    uint64_t snapshot_term;          /* Term of the entry at last_applied */
     char voted_for[CLUSTER_NAMELEN]; /* All zeros = none */
 
     /* Volatile Raft state */
     enum raftRole role;
     uint64_t commit_index;
-    uint64_t last_applied;
 
     /* Log */
     raftLogEntry **log;
@@ -730,6 +732,7 @@ static int raftEntryTypeByName(const char *name) {
     if (!strcasecmp(name, "NODE_INFO")) return RAFT_ENTRY_NODE_INFO;
     if (!strcasecmp(name, "NODE_FAIL")) return RAFT_ENTRY_NODE_FAIL;
     if (!strcasecmp(name, "NODE_RECOVER")) return RAFT_ENTRY_NODE_RECOVER;
+    if (!strcasecmp(name, "NOOP")) return RAFT_ENTRY_NOOP;
     return -1;
 }
 
@@ -743,6 +746,7 @@ static const char *raftEntryTypeName(uint8_t type) {
     case RAFT_ENTRY_NODE_INFO: return "NODE_INFO";
     case RAFT_ENTRY_NODE_FAIL: return "NODE_FAIL";
     case RAFT_ENTRY_NODE_RECOVER: return "NODE_RECOVER";
+    case RAFT_ENTRY_NOOP: return "NOOP";
     default: return "UNKNOWN";
     }
 }
@@ -856,6 +860,7 @@ static int clusterRaftProcessPropose(clusterLink *link, int argc, sds *argv) {
 /* Forward declarations for pre-vote handlers. */
 static int clusterRaftProcessPreVoteRequest(clusterLink *link, int argc, sds *argv);
 static int clusterRaftProcessPreVoteResponse(clusterLink *link, int argc, sds *argv);
+static int clusterRaftProcessInstallSnapshot(clusterLink *link, int argc, sds *argv, sds *config_lines, int config_line_count);
 static void clusterRaftStartPreVote(void);
 
 /* Defer pending proposals for retry after a leader change. The proposals
@@ -923,10 +928,8 @@ static void raftLogAppend(raftLogEntry *e) {
 /* O(1) lookup by index. Returns NULL if out of range. Indices start at 1. */
 static raftLogEntry *raftLogGet(uint64_t index) {
     clusterRaftState *rs = RAFT_STATE();
-    if (index == 0 || index > raftLogLastIndex()) return NULL;
-    /* Entries are stored sequentially; first entry's index may not be 1
-     * after future log compaction. For now, base is always 1. */
-    uint64_t base = rs->log_count > 0 ? rs->log[0]->index : 1;
+    if (rs->log_count == 0 || index == 0 || index > raftLogLastIndex()) return NULL;
+    uint64_t base = rs->log[0]->index;
     if (index < base) return NULL;
     return rs->log[index - base];
 }
@@ -942,19 +945,42 @@ static void raftLogTruncateFrom(uint64_t index) {
     rs->todo_save_config = 1;
 }
 
+/* Trim applied entries from the front of the log. Called after applying
+ * entries; trims only when the number of applied entries in the log exceeds
+ * twice the keep threshold, so trimming happens in infrequent batches. */
+#define RAFT_LOG_TRIM_KEEP 64
+static void raftLogTrimApplied(void) {
+    clusterRaftState *rs = RAFT_STATE();
+    if (rs->log_count == 0) return;
+    uint64_t base = rs->log[0]->index;
+    if (rs->last_applied < base) return;
+    uint64_t applied_in_log = rs->last_applied - base + 1;
+    if (applied_in_log <= RAFT_LOG_TRIM_KEEP * 2) return;
+    uint64_t trim_count = applied_in_log - RAFT_LOG_TRIM_KEEP;
+    for (uint64_t i = 0; i < trim_count; i++) {
+        raftLogFree(rs->log[i]);
+    }
+    rs->log_count -= trim_count;
+    memmove(rs->log, rs->log + trim_count, rs->log_count * sizeof(raftLogEntry *));
+}
+
 static uint64_t raftLogLastIndex(void) {
     clusterRaftState *rs = RAFT_STATE();
-    return rs->log_count > 0 ? rs->log[rs->log_count - 1]->index : 0;
+    return rs->log_count > 0 ? rs->log[rs->log_count - 1]->index : rs->last_applied;
 }
 
 static uint64_t raftLogLastTerm(void) {
     clusterRaftState *rs = RAFT_STATE();
-    return rs->log_count > 0 ? rs->log[rs->log_count - 1]->term : 0;
+    return rs->log_count > 0 ? rs->log[rs->log_count - 1]->term : rs->snapshot_term;
 }
 
 static uint64_t raftLogTermAt(uint64_t index) {
     raftLogEntry *e = raftLogGet(index);
-    return e ? e->term : 0;
+    if (e) return e->term;
+    /* Entry not in log — if it's at the snapshot boundary, use snapshot_term. */
+    clusterRaftState *rs = RAFT_STATE();
+    if (index == rs->last_applied) return rs->snapshot_term;
+    return 0;
 }
 
 /* Apply a committed log entry. */
@@ -1177,6 +1203,9 @@ static void raftLogApply(raftLogEntry *e) {
         serverLog(LL_NOTICE, "Applied NODE_INFO (index %llu).", (unsigned long long)e->index);
         break;
     }
+    case RAFT_ENTRY_NOOP:
+        /* No-op: nothing to apply. */
+        break;
     default:
         serverLog(LL_NOTICE, "Applied log entry type %d (index %llu).", e->type,
                   (unsigned long long)e->index);
@@ -1201,6 +1230,20 @@ static void raftLogApply(raftLogEntry *e) {
     }
 }
 
+/* Apply all committed but unapplied log entries. */
+static void raftApplyCommitted(void) {
+    clusterRaftState *rs = RAFT_STATE();
+    while (rs->last_applied < rs->commit_index) {
+        rs->last_applied++;
+        raftLogEntry *e = raftLogGet(rs->last_applied);
+        if (e) {
+            rs->snapshot_term = e->term;
+            raftLogApply(e);
+        }
+    }
+    raftLogTrimApplied();
+}
+
 /* --------------------------------------------------------------------------
  * AE (AppendEntries) message
  *
@@ -1208,11 +1251,48 @@ static void raftLogApply(raftLogEntry *e) {
  * Entry lines: <term> <type> <data>
  * -------------------------------------------------------------------------- */
 
+/* Send a snapshot to a follower whose next_index is behind the trimmed log.
+ * Format: INSTALL_SNAPSHOT <leader-id> <term> <last-index> <last-term>\n<config> */
+static void clusterRaftSendInstallSnapshot(clusterLink *link, clusterNode *node) {
+    clusterRaftState *rs = RAFT_STATE();
+    /* Strip MYSELF flag so the receiver doesn't adopt our identity.
+     * Filter MEET-flagged nodes (NODE_JOIN not yet committed). */
+    myself->flags &= ~CLUSTER_NODE_MYSELF;
+    sds config = clusterGenNodesDescription(NULL, CLUSTER_NODE_MEET | CLUSTER_NODE_HANDSHAKE, 0);
+    myself->flags |= CLUSTER_NODE_MYSELF;
+    sds msg = wireNewMsg("INSTALL_SNAPSHOT");
+    msg = sdscatlen(msg, " ", 1);
+    msg = sdscatlen(msg, myself->name, CLUSTER_NAMELEN);
+    msg = sdscatfmt(msg, " %U %U %U\n",
+                    (unsigned long long)rs->current_term,
+                    (unsigned long long)rs->last_applied,
+                    (unsigned long long)rs->snapshot_term);
+    msg = sdscatsds(msg, config);
+    sdsfree(config);
+    msg = wireFinishMsg(msg);
+    clusterRaftSendMsg(link, msg);
+    serverLog(LL_NOTICE, "Sent INSTALL_SNAPSHOT to %.40s (last_applied=%llu, term=%llu).",
+              node->name, (unsigned long long)rs->last_applied,
+              (unsigned long long)rs->snapshot_term);
+    /* Set next_index past the snapshot so we don't re-send on next heartbeat.
+     * If the snapshot is lost, the follower won't ACK, eventually the link
+     * goes stale, and we'll retry after reconnection. */
+    RAFT_NODE(node)->next_index = rs->last_applied + 1;
+}
+
 static void clusterRaftSendAppendEntries(clusterLink *link, clusterNode *node) {
     clusterRaftState *rs = RAFT_STATE();
     clusterNodeRaftData *rd = RAFT_NODE(node);
 
     uint64_t next = rd->next_index;
+
+    /* If the follower needs entries we've already trimmed, send a snapshot. */
+    uint64_t first_available = rs->log_count > 0 ? rs->log[0]->index : rs->last_applied + 1;
+    if (next < first_available) {
+        clusterRaftSendInstallSnapshot(link, node);
+        return;
+    }
+
     uint64_t prev_index = next > 0 ? next - 1 : 0;
     uint64_t prev_term = raftLogTermAt(prev_index);
 
@@ -1291,7 +1371,12 @@ static int clusterRaftProcessAppendEntries(clusterLink *link, int argc, sds *arg
     /* Accept heartbeat. */
     if (rs->role != RAFT_ROLE_JOINER) rs->role = RAFT_ROLE_FOLLOWER;
     rs->last_heartbeat = monotonicMs();
-    memcpy(rs->leader, argv[1], CLUSTER_NAMELEN);
+    /* Detect leader change — retry pending proposals to the new leader. */
+    if (memcmp(rs->leader, argv[1], CLUSTER_NAMELEN) != 0) {
+        memcpy(rs->leader, argv[1], CLUSTER_NAMELEN);
+        if (listLength(rs->pending_proposals) > 0)
+            rs->todo_retry_proposals = 1;
+    }
 
     /* Log consistency check: verify prev_log_index/term match. */
     if (prev_log_index > 0 && raftLogTermAt(prev_log_index) != prev_log_term) {
@@ -1336,11 +1421,7 @@ static int clusterRaftProcessAppendEntries(clusterLink *link, int argc, sds *arg
         rs->commit_index = leader_commit;
         if (rs->commit_index > raftLogLastIndex()) rs->commit_index = raftLogLastIndex();
     }
-    while (rs->last_applied < rs->commit_index) {
-        rs->last_applied++;
-        raftLogEntry *e = raftLogGet(rs->last_applied);
-        if (e) raftLogApply(e);
-    }
+    raftApplyCommitted();
 
     /* Defer AE_ACK until after persistence in beforeSleep. This ensures
      * entries are on stable storage before the leader counts our ACK. */
@@ -1419,11 +1500,7 @@ static int clusterRaftProcessAppendEntriesResponse(clusterLink *link, int argc, 
 
         /* Apply newly committed entries. */
         uint64_t prev_commit = rs->last_applied;
-        while (rs->last_applied < rs->commit_index) {
-            rs->last_applied++;
-            raftLogEntry *e = raftLogGet(rs->last_applied);
-            if (e) raftLogApply(e);
-        }
+        raftApplyCommitted();
         /* If the node we were talking to was forgotten, bail out. */
         if (!link->node) {
             freeClusterLink(link);
@@ -1438,6 +1515,114 @@ static int clusterRaftProcessAppendEntriesResponse(clusterLink *link, int argc, 
         if (rd->next_index > 1) rd->next_index--;
         clusterRaftSendAppendEntries(node->link, node);
     }
+    return 1;
+}
+
+/* INSTALL_SNAPSHOT <leader-id> <term> <last-index> <last-term>\n<node lines> */
+static int clusterRaftProcessInstallSnapshot(clusterLink *link, int argc, sds *argv, sds *config_lines, int config_line_count) {
+    UNUSED(link);
+    if (argc < 5) return 1;
+    if (sdslen(argv[1]) != CLUSTER_NAMELEN) return 1;
+
+    clusterRaftState *rs = RAFT_STATE();
+    uint64_t msg_term = strtoull(argv[2], NULL, 10);
+    uint64_t snap_index = strtoull(argv[3], NULL, 10);
+    uint64_t snap_term = strtoull(argv[4], NULL, 10);
+
+    if (msg_term < rs->current_term) return 1;
+    clusterRaftMaybeStepDown(msg_term);
+    if (rs->role != RAFT_ROLE_JOINER) rs->role = RAFT_ROLE_FOLLOWER;
+    rs->last_heartbeat = monotonicMs();
+    memcpy(rs->leader, argv[1], CLUSTER_NAMELEN);
+
+    /* If we're already past the snapshot, ignore. */
+    if (snap_index <= rs->last_applied) {
+        rs->todo_send_ae_ack = 1;
+        return 1;
+    }
+
+    /* Clear slots and shards — snapshot will re-assign them. */
+    for (int j = 0; j < CLUSTER_SLOTS; j++) clusterDelSlot(j);
+    dictEmpty(server.cluster->shards, NULL);
+
+    /* Clear raft log. */
+    for (uint64_t i = 0; i < rs->log_count; i++) raftLogFree(rs->log[i]);
+    rs->log_count = 0;
+
+    /* Parse snapshot node lines — updates existing nodes, creates new ones. */
+    dict *snapshot_nodes = dictCreate(&clusterNodesDictType);
+    for (int i = 0; i < config_line_count; i++) {
+        if (sdslen(config_lines[i]) == 0) continue;
+        int largc;
+        sds *largv = sdssplitargs(config_lines[i], &largc);
+        if (!largv || largc < 8) {
+            if (largv) sdsfreesplitres(largv, largc);
+            continue;
+        }
+        if (clusterLoadNodeLine(largv, largc, snapshot_nodes) == C_ERR) {
+            serverPanic("Corrupt INSTALL_SNAPSHOT: failed to load node line.");
+        }
+        sdsfreesplitres(largv, largc);
+    }
+
+    /* Remove nodes not present in the snapshot. */
+    {
+        dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
+        dictEntry *de;
+        while ((de = dictNext(di)) != NULL) {
+            clusterNode *node = dictGetVal(de);
+            if (node == myself) continue;
+            if (dictFind(snapshot_nodes, node->name)) continue;
+            if (node->link) {
+                node->link->node = NULL;
+                node->link = NULL;
+            }
+            if (node->inbound_link) {
+                node->inbound_link->node = NULL;
+                node->inbound_link = NULL;
+            }
+            clusterDelNode(node);
+        }
+        dictReleaseIterator(di);
+    }
+    /* If we were a joiner and the snapshot includes us (our NODE_JOIN was
+     * committed), promote to follower — same as raftLogApply(NODE_JOIN). */
+    if (rs->role == RAFT_ROLE_JOINER) {
+        sds mykey = sdsnewlen(myself->name, CLUSTER_NAMELEN);
+        int found = dictFind(snapshot_nodes, mykey) != NULL;
+        sdsfree(mykey);
+        if (found) {
+            myself->flags &= ~CLUSTER_NODE_MEET;
+            rs->role = RAFT_ROLE_FOLLOWER;
+            serverLog(LL_NOTICE, "Promoted from joiner to follower (via snapshot).");
+        }
+    }
+    dictRelease(snapshot_nodes);
+
+    /* Update raft state to the snapshot point. */
+    rs->last_applied = snap_index;
+    rs->commit_index = snap_index;
+    rs->snapshot_term = snap_term;
+
+    serverLog(LL_NOTICE, "Installed snapshot from %.40s (index=%llu, term=%llu).",
+              argv[1], (unsigned long long)snap_index, (unsigned long long)snap_term);
+
+    /* Recompute cluster size (number of voters) from the loaded snapshot. */
+    server.cluster->size = 0;
+    {
+        dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
+        dictEntry *de;
+        while ((de = dictNext(di)) != NULL) {
+            clusterNode *node = dictGetVal(de);
+            if (!(node->flags & CLUSTER_NODE_MEET)) server.cluster->size++;
+        }
+        dictReleaseIterator(di);
+    }
+
+    rs->todo_save_config = 1;
+    rs->todo_connect_nodes = 1;
+    rs->todo_send_ae_ack = 1;
+    rs->todo_update_replication = 1;
     return 1;
 }
 
@@ -1482,10 +1667,14 @@ static void clusterRaftSendPreVoteResponse(clusterLink *link, uint64_t term, int
 static int clusterRaftCanGrantVote(clusterRaftState *rs, uint64_t candidate_last_index, uint64_t candidate_last_term) {
     if (rs->role == RAFT_ROLE_JOINER) return 0;
 
-    /* Don't vote while we still consider a leader alive in this term. */
+    /* Deny vote if we recently heard from the leader (leader lease).
+     * Use the base node-timeout, not the randomized election timeout —
+     * the randomization is for staggering elections, not for lease duration. */
     mstime_t now = monotonicMs();
+    mstime_t lease = server.cluster_node_timeout;
+    if (lease < 1000) lease = 1000;
     if (rs->leader[0] != '\0' &&
-        now - rs->last_heartbeat < rs->election_timeout) {
+        now - rs->last_heartbeat < lease) {
         return 0;
     }
 
@@ -1604,6 +1793,9 @@ static int clusterRaftProcessRequestVoteResponse(clusterLink *link, int argc, sd
             memcpy(rs->leader, myself->name, CLUSTER_NAMELEN);
             serverLog(LL_NOTICE, "Elected as Raft leader (term %llu, %d votes).",
                       (unsigned long long)rs->current_term, rs->votes_received);
+            /* Append any pending proposals locally now that we're leader. */
+            if (listLength(rs->pending_proposals) > 0)
+                rs->todo_retry_proposals = 1;
             /* Initialize nextIndex for each peer (Raft paper §5.3). */
             uint64_t last = raftLogLastIndex();
             dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
@@ -1624,6 +1816,10 @@ static int clusterRaftProcessRequestVoteResponse(clusterLink *link, int argc, sd
                 }
             }
             dictReleaseIterator(di);
+            /* Append a no-op entry to commit prior-term entries (§5.4.2)
+             * and establish the new term in the log. */
+            uint64_t noop_idx = raftLogLastIndex() + 1;
+            raftLogAppend(raftLogCreate(rs->current_term, noop_idx, RAFT_ENTRY_NOOP, sdsempty()));
             /* Immediate heartbeat to assert leadership. */
             clusterRaftBroadcastAppendEntries();
         }
@@ -1679,6 +1875,8 @@ static void clusterRaftStartElection(void) {
         memcpy(rs->leader, myself->name, CLUSTER_NAMELEN);
         serverLog(LL_NOTICE, "Elected as Raft leader (term %llu, %d votes).",
                   (unsigned long long)rs->current_term, rs->votes_received);
+        if (listLength(rs->pending_proposals) > 0)
+            rs->todo_retry_proposals = 1;
     }
 }
 
@@ -1705,11 +1903,12 @@ static void clusterRaftInit(void) {
 static void clusterRaftInitLast(void) {
     clusterListenerInit();
 
-    /* On fresh start (size == 0), mark myself as not yet in the raft log.
-     * Cleared when our own NODE_JOIN is applied. On restart, size is
-     * restored by postLoad so we skip this. */
-    if (server.cluster->size == 0) {
+    /* A singleton (no peers) is not yet in the raft log — mark with MEET
+     * to prevent it from committing entries before joining a cluster.
+     * Cleared when our own NODE_JOIN is applied (in a multi-node cluster). */
+    if (dictSize(server.cluster->nodes) <= 1) {
         myself->flags |= CLUSTER_NODE_MEET;
+        server.cluster->size = 0;
     }
 
     /* Fresh single-node cluster: become leader immediately. */
@@ -1845,6 +2044,29 @@ static void clusterRaftCron(void) {
     clusterRaftState *rs = RAFT_STATE();
     mstime_t now = monotonicMs();
 
+    /* Disconnect dead outbound links. data_received tracks the last time
+     * we got data on our outbound link (HI, AE_ACK, votes).
+     * - No data ever received after node_timeout/2: HI never arrived,
+     *   the peer's kernel accepted our SYN but the process is frozen.
+     * - Leader: no AE_ACK for node_timeout/2. last_ack_time is reset on
+     *   election, giving peers time to respond to the first AE. */
+    {
+        mstime_t stale = server.cluster_node_timeout / 2;
+        dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
+        dictEntry *de;
+        while ((de = dictNext(di)) != NULL) {
+            clusterNode *node = dictGetVal(de);
+            if (node == myself || !node->link) continue;
+            if (node->flags & CLUSTER_NODE_MEET) continue;
+            if ((node->data_received == 0 && now - node->link->ctime > stale) ||
+                (rs->role == RAFT_ROLE_LEADER &&
+                 now - RAFT_NODE(node)->last_ack_time > stale)) {
+                freeClusterLink(node->link);
+            }
+        }
+        dictReleaseIterator(di);
+    }
+
     if (!server.debug_cluster_disable_reconnection) clusterConnectNodes();
 
     /* Joiner timeout: if we stepped down to join a cluster but never
@@ -1897,9 +2119,6 @@ static void clusterRaftCron(void) {
                 }
             }
         }
-
-        /* Retry deferred proposals when leader link becomes available. */
-        clusterRaftRetryProposals();
 
         /* Periodically check if our NODE_INFO diverged from what was last
          * committed (e.g. a CONFIG SET succeeded but the proposal timed
@@ -2036,11 +2255,7 @@ static void clusterRaftBeforeSleep(bool blocked) {
     if (rs->role == RAFT_ROLE_LEADER && server.cluster->size <= 1 &&
         raftLogLastIndex() > rs->commit_index) {
         rs->commit_index = raftLogLastIndex();
-        while (rs->last_applied < rs->commit_index) {
-            rs->last_applied++;
-            raftLogEntry *e = raftLogGet(rs->last_applied);
-            if (e) raftLogApply(e);
-        }
+        raftApplyCommitted();
         /* If we just grew beyond singleton, replicate to the new peer. */
         if (server.cluster->size > 1) rs->todo_broadcast_ae = 1;
     }
@@ -2225,6 +2440,11 @@ static uint32_t clusterRaftValidateMessageHeader(char *header) {
 static int clusterRaftProcessMessage(struct clusterLink *link) {
     RAFT_STATE()->stats_bytes_received += link->rcvbuf_len;
 
+    /* Track data received on outbound links only. Each node manages its own
+     * outbound link; if it goes silent we must detect and reconnect. The
+     * inbound link is the peer's responsibility. */
+    if (link->node && !link->inbound) link->node->data_received = mstime();
+
     /* Parse the text payload after the binary header.
      * Split by \n first (AE messages have entry lines), then split
      * the first line by space for the header fields. */
@@ -2260,6 +2480,8 @@ static int clusterRaftProcessMessage(struct clusterLink *link) {
         ret = clusterRaftProcessPropose(link, argc, argv);
     } else if (!strcasecmp(argv[0], "AE")) {
         ret = clusterRaftProcessAppendEntries(link, argc, argv, lines + 1, line_count - 1);
+    } else if (!strcasecmp(argv[0], "INSTALL_SNAPSHOT")) {
+        ret = clusterRaftProcessInstallSnapshot(link, argc, argv, lines + 1, line_count - 1);
     } else if (!strcasecmp(argv[0], "AE_ACK")) {
         ret = clusterRaftProcessAppendEntriesResponse(link, argc, argv);
     } else if (!strcasecmp(argv[0], "PRE_VOTE_REQ")) {
@@ -2317,7 +2539,8 @@ static int clusterRaftProcessMessage(struct clusterLink *link) {
         char *buf = link->rcvbuf + RAFT_HDR_SIZE;
         size_t buf_len = link->rcvbuf_len - RAFT_HDR_SIZE;
         char *nl = memchr(buf, '\n', buf_len);
-        if (nl && (size_t)(buf + buf_len - nl - 1) >= chan_len + msg_len) {
+        if (nl && chan_len + msg_len >= chan_len &&
+            (size_t)(buf + buf_len - nl - 1) >= chan_len + msg_len) {
             char *payload = nl + 1;
             robj *chan = createStringObject(payload, chan_len);
             robj *pmsg = createStringObject(payload + chan_len, msg_len);
@@ -2432,9 +2655,10 @@ static void clusterRaftFreeNodeData(clusterNode *node) {
 
 static sds clusterRaftAppendVarsLine(sds config) {
     clusterRaftState *rs = RAFT_STATE();
-    config = sdscatprintf(config, "vars currentTerm %llu lastApplied %llu",
+    config = sdscatprintf(config, "vars currentTerm %llu lastApplied %llu snapshotTerm %llu",
                           (unsigned long long)rs->current_term,
-                          (unsigned long long)rs->last_applied);
+                          (unsigned long long)rs->last_applied,
+                          (unsigned long long)rs->snapshot_term);
     if (rs->voted_for[0]) {
         config = sdscat(config, " votedFor ");
         config = sdscatlen(config, rs->voted_for, CLUSTER_NAMELEN);
@@ -2455,6 +2679,9 @@ static int clusterRaftParseVarsLine(const char *name, const char *value) {
     } else if (!strcasecmp(name, "lastApplied")) {
         rs->last_applied = strtoull(value, NULL, 10);
         rs->commit_index = rs->last_applied;
+        return 1;
+    } else if (!strcasecmp(name, "snapshotTerm")) {
+        rs->snapshot_term = strtoull(value, NULL, 10);
         return 1;
     } else if (!strcasecmp(name, "votedFor")) {
         memcpy(rs->voted_for, value, CLUSTER_NAMELEN);
@@ -2525,8 +2752,8 @@ static void clusterRaftPersistNewLogEntries(uint64_t from) {
 
 
 static int clusterRaftParseLogLine(sds *argv, int argc) {
-    /* Format: log <crc64hex> <index> <term> <type> <data...> */
-    if (argc < 6) {
+    /* Format: log <crc64hex> <index> <term> <type> [<data...>] */
+    if (argc < 5) {
         serverLog(LL_WARNING, "Corrupt raft log line: too few fields (%d).", argc);
         return C_ERR;
     }
@@ -2559,9 +2786,9 @@ static int clusterRaftParseLogLine(sds *argv, int argc) {
     }
 
     /* Reconstruct data from remaining args (space-separated). */
-    sds data = sdsdup(argv[5]);
-    for (int i = 6; i < argc; i++) {
-        data = sdscatlen(data, " ", 1);
+    sds data = sdsempty();
+    for (int i = 5; i < argc; i++) {
+        if (i > 5) data = sdscatlen(data, " ", 1);
         data = sdscatsds(data, argv[i]);
     }
 

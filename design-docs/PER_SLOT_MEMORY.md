@@ -8,6 +8,12 @@ regardless of object type (string, list, set, zset, hash, stream, module).
 The metric is exposed via `CLUSTER SLOT-STATS` as `memory-bytes` and is
 always-on when cluster mode is enabled.
 
+As part of this work we plan to provide an O(1) size function for every data
+type, so the per-key size lookup — and therefore the accounting on every write
+path — stays O(1) regardless of value size. Streams are the first type wired
+this way (see [Stream accounting](#stream-accounting)); the remaining types
+follow the same pattern.
+
 ## Definition of "memory size"
 
 The metric reflects the *allocated* footprint of an entry (matching
@@ -37,6 +43,16 @@ Adding support for a new type requires:
    (base `zmalloc_size(val)` plus the type's external allocations).
 2. If the type mutates in-place (bypassing `dbSetValue`), ensuring
    `signalModifiedKey` is called after the mutation so the delta is captured.
+
+## Scope: a slot is cluster-wide, not per-DB
+
+The counter is stored in a single global array, `server.cluster->slot_stats[CLUSTER_SLOTS]`,
+indexed only by slot number (`crc16(key) % 16384`) — there is no DB dimension.
+When `cluster-databases > 1`, keys for the same slot in different DBs all
+contribute to the *same* `memory_bytes` counter, so the reported value is the
+sum across all DBs for that slot.
+
+This is intentional and matches the other `CLUSTER SLOT-STATS` fields.
 
 ---
 
@@ -300,9 +316,11 @@ CLUSTER SLOT-STATS SLOTSRANGE 0 0
 
 `CLUSTER SLOT-STATS ORDERBY memory-bytes [LIMIT n] [ASC|DESC]`
 
-Sorts by each slot's `memory_bytes` total. Available without
-`cluster-slot-stats-enabled` (since memory-bytes is a state metric, not a
-cumulative counter that requires additional overhead).
+Sorts by each slot's `memory_bytes` total. It is available even when
+`cluster-slot-stats-enabled` is off (and gated only on `cluster_enabled`)
+because, unlike the cumulative metrics that can start counting from zero on
+enable, this state metric cannot be reconstructed after the fact without an
+O(N) rescan of the slot's keys, so it must be maintained continuously.
 
 ---
 

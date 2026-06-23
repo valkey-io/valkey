@@ -1364,6 +1364,7 @@ static void updateAnnouncedClientTlsPort(clusterNode *node, int value) {
 }
 
 static void updateCommandLatencyStats(clusterNode *node, uint32_t current_rtt){
+    printf("while updating latency stats for node %s, current_rtt is %u\n", node->name, current_rtt);
     node -> max_round_trip_time = max(node -> max_round_trip_time, current_rtt);
 
     if(node -> avg_round_trip_time == 0) {
@@ -1789,6 +1790,7 @@ clusterLink *createClusterLink(clusterNode *node) {
         node->link = link;
     }
     link->flags = 0;
+    link->ping_echo_time = mstime(); 
     return link;
 }
 
@@ -1986,6 +1988,8 @@ clusterNode *createClusterNode(char *nodename, int flags) {
     node->orphaned_time = 0;
     node->repl_offset = 0;
     node->is_node_healthy = 0;
+    node->max_round_trip_time = 0;
+    node->avg_round_trip_time = 0;
     return node;
 }
 
@@ -3465,14 +3469,18 @@ static uint32_t writePingExtensions(clusterMsg *hdr, int gossipcount) {
     extensions +=
         writeSdsPingExtIfNonempty(&totlen, &cursor, CLUSTERMSG_EXT_TYPE_AVAILABILITY_ZONE, myself->availability_zone);
 
+        
+    // printf("writePingExtensions: msg_type=%d, CLUSTERMSG_TYPE_PING=%d, CLUSTERMSG_TYPE_MEET=%d\n", msg_type, CLUSTERMSG_TYPE_PING, CLUSTERMSG_TYPE_MEET);
+    // fprintf(stderr, "messhshhdf : %d", hdr==NULL);   ///check hy it not printing
+    if (hdr != NULL && server.cluster_nodes_latency_stats_enabled) {
     uint16_t msg_type = ntohs(hdr->type);
+    
     if(msg_type == CLUSTERMSG_TYPE_PING || msg_type == CLUSTERMSG_TYPE_MEET) {
         uint64_t current_time = mstime();
-        writePingTimeExtIfNonzero(&totlen, &cursor, CLUSTERMSG_EXT_TYPE_PING_ECHO_TIME, current_time);
+        extensions += writePingTimeExtIfNonzero(&totlen, &cursor, CLUSTERMSG_EXT_TYPE_PING_ECHO_TIME, current_time);
     }
-    else if(msg_type == CLUSTERMSG_TYPE_PONG) {
-        
     }
+    // above code is hanging !!! in other tests, check todo
 
     /* Gossip forgotten nodes */
     if (dictSize(server.cluster->nodes_black_list) > 0) {
@@ -3582,6 +3590,7 @@ void clusterProcessPingExtensions(clusterMsg *hdr, clusterLink *link) {
                 (clusterMsgPingExtAvailabilityZone *)&(ext->ext[0].availability_zone);
             ext_availability_zone = availability_zone_ext->availability_zone;
         } else if (type == CLUSTERMSG_EXT_TYPE_PING_ECHO_TIME) {
+            // printf("Received ping echo time extension for setting value %llu\n", ntohu64(((clusterMsgPingExtEchoTime *)&(ext->ext[0].ping_echo_time))->ping_echo_time));
             clusterMsgPingExtEchoTime *ping_echo_time_ext =
                 (clusterMsgPingExtEchoTime *)&(ext->ext[0].ping_echo_time);
             uint64_t ping_echo_time = ntohu64(ping_echo_time_ext->ping_echo_time);

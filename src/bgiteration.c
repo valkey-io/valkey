@@ -2067,7 +2067,7 @@ static bgIterator *bgIteratorCreate(const char *name,
 
     if (bgIterator_timeproc_id <= 0) {
         // If iteration is not currently active, start the feeding task.  (Runs in main thread.)
-        bgIterator_timeproc_id = aeCreateTimeEvent(server.el, 1, bgIteration_feedIterators_task, NULL, NULL);
+        bgIterator_timeproc_id = aeCreateTimeEvent(server.el, 0, bgIteration_feedIterators_task, NULL, NULL);
         serverAssert(bgIterator_timeproc_id != AE_ERR);
     }
 

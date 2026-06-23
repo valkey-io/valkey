@@ -466,6 +466,10 @@ static int tlsPasswordCallback(char *buf, int size, int rwflag, void *u) {
 /* Check a single X509 certificate validity */
 static bool isCertValid(X509 *cert) {
     if (!cert) return false;
+#if OPENSSL_VERSION_NUMBER >= 0x40000000L
+    /* X509_cmp_current_time() is deprecated in OpenSSL 4.0. */
+    return X509_check_certificate_times(NULL, cert, NULL) == 1;
+#else
     const ASN1_TIME *not_before = X509_get0_notBefore(cert);
     const ASN1_TIME *not_after = X509_get0_notAfter(cert);
     if (!not_before || !not_after) return false;
@@ -474,6 +478,7 @@ static bool isCertValid(X509 *cert) {
         return false;
     }
     return true;
+#endif
 }
 
 /* Load all certificates from a directory into the X509_STORE
@@ -1291,10 +1296,32 @@ static int getCertSubjectFieldByName(X509 *cert, const char *field, char *out, s
 
     if (nid == -1) return 0;
 
-    X509_NAME *subject = X509_get_subject_name(cert);
+    const X509_NAME *subject = X509_get_subject_name(cert);
     if (!subject) return 0;
 
-    return X509_NAME_get_text_by_NID(subject, nid, out, outlen) > 0;
+#if OPENSSL_VERSION_NUMBER >= 0x40000000L
+    /* X509_NAME_get_text_by_NID() is deprecated in OpenSSL 4.0. */
+    int idx = X509_NAME_get_index_by_NID(subject, nid, -1);
+    if (idx < 0) return 0;
+
+    const X509_NAME_ENTRY *entry = X509_NAME_get_entry(subject, idx);
+    if (!entry) return 0;
+
+    const ASN1_STRING *data = X509_NAME_ENTRY_get_data(entry);
+    if (!data) return 0;
+
+    const unsigned char *raw = ASN1_STRING_get0_data(data);
+    int raw_len = ASN1_STRING_length(data);
+    if (!raw || raw_len <= 0 || outlen == 0) return 0;
+
+    size_t copy_len = (size_t)raw_len < outlen ? (size_t)raw_len : outlen - 1;
+    memcpy(out, raw, copy_len);
+    out[copy_len] = '\0';
+    return copy_len > 0;
+#else
+    /* Older OpenSSL versions expose this API without const-correctness. */
+    return X509_NAME_get_text_by_NID((X509_NAME *)subject, nid, out, outlen) > 0;
+#endif
 }
 
 /* Extract URI from Subject Alternative Name extension and return the first

@@ -9,7 +9,6 @@
 #include "throttle.h"
 #include "throttle_stat_calc.h"
 
-/* Configuration constants. */
 #define RATE_INCREASE_MULTIPLIER 1.05
 #define RATE_DECREASE_MULTIPLIER 0.95
 #define COB_TREND_WINDOW_SECS 2
@@ -77,8 +76,8 @@ static void adjustThrottleRate(bool reduceTrafficRate) {
 /* Evaluate whether steady-state throttling is needed.
  * Uses short-term COB trend to extrapolate future COB size. */
 static bool evaluateSteadyState(client *c, uint64_t cob_size) {
-    unsigned long cob_target = throttleRepl_getCobTargetSize(); // 50 % of target cob
-    uint64_t min_throttle = cob_target / 2;                     // Begin throttling at half the target, 25 % of max cob
+    unsigned long cob_target = throttleRepl_getCobTargetSize();
+    uint64_t min_throttle = cob_target / 2; // 25 % of the cob limit
 
     if (cob_size < min_throttle) return false;
 
@@ -98,8 +97,9 @@ bool throttleRepl_isClientExempt(client *c) {
     if (!iAmPrimary()) return false;
     if (!c->flag.replica) return false;
     if (!isThrottleActive()) return false;
-    /* Throttle is actively working -- protect this replica from COB
-     * disconnect if its COB is above target (throttle needs time). */
+
+    /* Throttle is actively working, protect this replica from COB
+     * disconnect if its COB is above target. */
     unsigned long cob = getClientOutputBufferMemoryUsage(c);
     if (cob < throttleRepl_getCobTargetSize()) return false;
 
@@ -122,7 +122,7 @@ unsigned long throttleRepl_getCobTargetSize(void) {
 
 void throttleRepl_adjustThrottling(void) {
     if (!iAmPrimary()) {
-        // Failover happened
+        /* Failover could happen before. */
         if (isThrottleActive()) removeThrottler();
         return;
     }
@@ -142,7 +142,7 @@ void throttleRepl_adjustThrottling(void) {
 
         unsigned long cob_size = getClientOutputBufferMemoryUsage(c);
 
-        /* Record trend per-replica. */
+        /* Record trend per replica. */
         if (c->cob_trend == NULL) c->cob_trend = newTrendCalc(COB_TREND_WINDOW_SECS);
         trendCalc_recordMetric(c->cob_trend, cob_size);
 

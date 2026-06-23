@@ -352,6 +352,10 @@ client *createClient(connection *conn) {
     listSetFreeMethod(c->reply, freeClientReplyValue);
     listSetDupMethod(c->reply, dupClientReplyValue);
     c->repl_data = NULL;
+    c->throttler = NULL;
+    c->throttle_node = NULL;
+    c->throttle_start_us = 0;
+    c->cob_trend = NULL;
     c->bstate = NULL;
     c->pubsub_data = NULL;
     c->module_data = NULL;
@@ -2022,7 +2026,6 @@ void unlinkClient(client *c) {
         c->conn = NULL;
     }
 
-    /* Remove from throttle queue if needed. */
     throttle_removeClient(c);
 
     /* Remove from the list of pending writes if needed. */

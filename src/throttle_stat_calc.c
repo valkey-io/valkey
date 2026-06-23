@@ -9,6 +9,7 @@
 
 #define ONE_SECOND_IN_MICROS 1000000
 
+/* ------------- TPS Calculator ------------- */
 struct tpsCalculator {
     double window_secs;
     double window_us;
@@ -42,8 +43,7 @@ void tpsCalculator_record(tpsCalculator *calc, unsigned long transactions) {
     long elapsed_us = now - calc->last_update;
 
     if (elapsed_us < calc->update_freq_us) {
-        /* Accumulate until the update frequency is hit — updating too often
-         * increases metric lag. */
+        /* Accumulate until the update frequency is hit */
         calc->uncounted_trans += transactions;
         return;
     }
@@ -53,11 +53,10 @@ void tpsCalculator_record(tpsCalculator *calc, unsigned long transactions) {
     calc->last_update = now;
 
     if (elapsed_us >= calc->window_us || calc->is_new) {
-        /* Elapsed >= window or first update: base entirely on this sample. */
         calc->trans_per_window = total * calc->window_us / elapsed_us;
         calc->is_new = false;
     } else {
-        /* Blend: decay existing by fraction of window elapsed, add new. */
+        /* Decay existing by fraction of window elapsed, add new. */
         calc->trans_per_window =
             (calc->trans_per_window * (calc->window_us - elapsed_us) / calc->window_us) + total;
     }
@@ -69,7 +68,9 @@ double tpsCalculator_averageTps(tpsCalculator *calc) {
     return calc->trans_per_window / calc->window_secs;
 }
 
-#define DATA_POINTS 10 // Code assumes an even number
+/* ------------- Trend Calculator ------------- */
+
+#define DATA_POINTS 10
 struct trendCalculator {
     int windowSec;
     monotime lastUpdate;
@@ -127,6 +128,7 @@ void trendCalc_recordMetric(trendCalculator *calc, long metricValue) {
         //  points... this is the measured delta.  But, the time is from the center of each half,
         //  resulting in half the window size (secs).  So the formula is:
         //     (AveNewer - AveOlder) / (WindowSec/2)
+
         double olderAvg = (double)olderTotal / (DATA_POINTS / 2);
         double newerAvg = (double)newerTotal / (DATA_POINTS / 2);
         double timeBetweenCenters = (double)calc->windowSec / 2.0;

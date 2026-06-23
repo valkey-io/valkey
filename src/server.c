@@ -4710,7 +4710,6 @@ int processCommand(client *c) {
         return C_OK;
     }
 
-    /* Throttle framework: defer command if rate-limited. */
     if (throttle_deferCommand(c)) return C_OK;
 
     /* Exec the command */

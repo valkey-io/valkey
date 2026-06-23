@@ -23,7 +23,6 @@
 #define MIN_ADJUST_AFTER_DISABLE 100.0
 
 /* === Internal metrics (shared by name via hashtable) === */
-
 typedef struct throttleInternalMetrics {
     sds name;
     int num_clients;
@@ -50,8 +49,6 @@ static hashtableType metricsHashtableType = {
     .entryDestructor = metricsDestructor,
 };
 
-/* === Throttler instance === */
-
 static int nextThrottlerId = 1;
 static list *throttlerList = NULL;
 static hashtable *metricsTable = NULL;
@@ -69,19 +66,17 @@ typedef struct throttler {
 } throttler;
 
 static int listMatchThrottler(void *ptr, void *id) {
-    return ((throttler *)ptr)->id == (long long)id;
+    return ((throttler *)ptr)->id == (long)id;
 }
 
-/* === Lookup === */
 static throttler *findThrottler(int id) {
-    listNode *ln = listSearchKey(throttlerList, (void *)(long long)id);
+    listNode *ln = listSearchKey(throttlerList, (void *)(long)id);
     serverAssert(ln != NULL);
     throttler *t = ln->value;
     serverAssert(t->ln == ln);
     return t;
 }
 
-/* === Bucket sizing === */
 static double computeBucketSize(double tokens_per_sec, double burst_time_sec) {
     return (tokens_per_sec < EPSILON) ? 0.0
                                       : 2.0 + tokens_per_sec * burst_time_sec;
@@ -111,11 +106,9 @@ static void freeThrottler(throttler *t) {
     listDelNode(throttlerList, t->ln);
     listRelease(t->client_queue);
     tokenBucket_free(t->bucket);
-    /* metrics is shared — We do not free here */
+    /* metrics is shared and do not free here */
     zfree(t);
 }
-
-/* === Rate setting (with guardrail tracking) === */
 
 static void setRate(throttler *t, double new_rate) {
     if (new_rate < EPSILON) {
@@ -141,8 +134,6 @@ static void validateAlphaNumeric(const char *s) {
     }
 }
 
-/* === Metrics lookup/create === */
-
 static throttleInternalMetrics *findMetrics(const char *name) {
     sds key = sdsnew(name);
     void *found = NULL;
@@ -157,6 +148,87 @@ static throttleInternalMetrics *findMetrics(const char *name) {
     m->incoming_tps = tpsCalculator_create(TPS_WINDOW_SEC);
     hashtableAdd(metricsTable, m);
     return m;
+}
+
+static void consumeOtherThrottlers(client *c, throttler *except) {
+    listNode *ln;
+    listIter li;
+    listRewind(throttlerList, &li);
+    while ((ln = listNext(&li))) {
+        throttler *t = ln->value;
+        if (t->id == THROTTLE_CLEANUP_ID) continue;
+        if (t == except) continue;
+        if (t->criteria_proc(c, t->priv_data)) {
+            tokenBucket_consume(t->bucket, 1.0);
+        }
+    }
+}
+
+static void processUnthrottledClient(client *c) {
+    serverAssert(c->argc > 0 && c->flag.pending_command && !c->flag.throttled);
+    if (c->conn && !connHasReadHandler(c->conn)) {
+        if (connSetReadHandler(c->conn, readQueryFromClient) == C_ERR) {
+            freeClient(c);
+            return;
+        }
+    }
+    if (processPendingCommandAndInputBuffer(c) == C_OK) beforeNextClient(c);
+}
+
+static long long throttlerTimeProc(struct aeEventLoop *eventLoop, long long id, void *clientData) {
+    UNUSED(eventLoop);
+    UNUSED(id);
+    if (isPausedActionsWithUpdate(PAUSE_ACTIONS_CLIENT_ALL_SET)) return 1;
+
+    throttler *t = (throttler *)clientData;
+    replenishTokens(t);
+
+    monotime work_start;
+    elapsedStart(&work_start);
+
+    while (tokenBucket_canConsume(t->bucket, 1.0) &&
+           listLength(t->client_queue) > 0 &&
+           elapsedMs(work_start) < MAX_UNTHROTTLE_PROCESSING_TIME_MS) {
+        tokenBucket_consume(t->bucket, 1.0);
+        client *c = listNodeValue(listFirst(t->client_queue));
+        throttle_removeClient(c);
+        if (c->flag.throttle_multi) {
+            c->flag.throttle_multi = 0;
+            consumeOtherThrottlers(c, t);
+        }
+        processUnthrottledClient(c);
+    }
+
+    if (listLength(t->client_queue) == 0) {
+        serverAssert(t->time_event_id == AE_DELETED_EVENT_ID); // Already set in throttle_removeClient
+        if (t->id == THROTTLE_CLEANUP_ID) freeThrottler(t);
+        return AE_NOMORE;
+    }
+    return waitTimeMs(t);
+}
+
+static void throttlerAddClient(throttler *t, client *c) {
+    serverAssert(c->throttler == NULL);
+    serverAssert(!c->flag.throttled);
+    elapsedStart(&c->throttle_start_us);
+    c->flag.throttled = 1;
+    listAddNodeTail(t->client_queue, c);
+
+    if (c->conn) connSetReadHandler(c->conn, NULL);
+
+    t->metrics->num_clients++;
+    t->metrics->total_throttled_commands++;
+    server.total_throttled_commands++;
+    c->throttler = t;
+    c->throttle_node = listLast(t->client_queue);
+
+    if (listLength(t->client_queue) == 1) {
+        serverAssert(t->time_event_id == AE_DELETED_EVENT_ID);
+        t->time_event_id = aeCreateTimeEvent(server.el,
+                                             waitTimeMs(t),
+                                             throttlerTimeProc,
+                                             t, NULL);
+    }
 }
 
 /* === Public API === */
@@ -279,93 +351,6 @@ const throttleMetrics *throttle_getMetrics(const char *metrics_name) {
     return &result;
 }
 
-/* === Multi-throttler token accounting === */
-
-static void consumeOtherThrottlers(client *c, throttler *except) {
-    listNode *ln;
-    listIter li;
-    listRewind(throttlerList, &li);
-    while ((ln = listNext(&li))) {
-        throttler *t = ln->value;
-        if (t->id == THROTTLE_CLEANUP_ID) continue;
-        if (t == except) continue;
-        if (t->criteria_proc(c, t->priv_data)) {
-            tokenBucket_consume(t->bucket, 1.0);
-        }
-    }
-}
-
-/* === Timer: drain the queue when tokens become available === */
-
-static void processUnthrottledClient(client *c) {
-    serverAssert(c->argc > 0 && c->flag.pending_command && !c->flag.throttled);
-    if (c->conn && !connHasReadHandler(c->conn)) {
-        if (connSetReadHandler(c->conn, readQueryFromClient) == C_ERR) {
-            freeClient(c);
-            return;
-        }
-    }
-    if (processPendingCommandAndInputBuffer(c) == C_OK) beforeNextClient(c);
-}
-
-static long long throttlerTimeProc(struct aeEventLoop *eventLoop, long long id, void *clientData) {
-    UNUSED(eventLoop);
-    UNUSED(id);
-    if (isPausedActionsWithUpdate(PAUSE_ACTIONS_CLIENT_ALL_SET)) return 1;
-
-    throttler *t = (throttler *)clientData;
-    replenishTokens(t);
-
-    monotime work_start;
-    elapsedStart(&work_start);
-
-    while (tokenBucket_canConsume(t->bucket, 1.0) &&
-           listLength(t->client_queue) > 0 &&
-           elapsedMs(work_start) < MAX_UNTHROTTLE_PROCESSING_TIME_MS) {
-        tokenBucket_consume(t->bucket, 1.0);
-        client *c = listNodeValue(listFirst(t->client_queue));
-        throttle_removeClient(c);
-        if (c->flag.throttle_multi) {
-            c->flag.throttle_multi = 0;
-            consumeOtherThrottlers(c, t);
-        }
-        processUnthrottledClient(c);
-    }
-
-    if (listLength(t->client_queue) == 0) {
-        serverAssert(t->time_event_id == AE_DELETED_EVENT_ID); // Already set in throttle_removeClient
-        if (t->id == THROTTLE_CLEANUP_ID) freeThrottler(t);
-        return AE_NOMORE;
-    }
-    return waitTimeMs(t);
-}
-
-/* === Queue management === */
-
-static void throttlerAddClient(throttler *t, client *c) {
-    serverAssert(c->throttler == NULL);
-    serverAssert(!c->flag.throttled);
-    elapsedStart(&c->throttle_start_us);
-    c->flag.throttled = 1;
-    listAddNodeTail(t->client_queue, c);
-
-    if (c->conn) connSetReadHandler(c->conn, NULL);
-
-    t->metrics->num_clients++;
-    t->metrics->total_throttled_commands++;
-    server.total_throttled_commands++;
-    c->throttler = t;
-    c->throttle_node = listLast(t->client_queue);
-
-    if (listLength(t->client_queue) == 1) {
-        serverAssert(t->time_event_id == AE_DELETED_EVENT_ID);
-        t->time_event_id = aeCreateTimeEvent(server.el,
-                                             waitTimeMs(t),
-                                             throttlerTimeProc,
-                                             t, NULL);
-    }
-}
-
 void throttle_removeClient(client *c) {
     if (!c->flag.throttled) return;
 
@@ -385,8 +370,6 @@ void throttle_removeClient(client *c) {
     c->throttle_node = NULL;
     c->throttle_start_us = 0;
 }
-
-/* === Per-command entry point === */
 
 bool throttle_deferCommand(client *c) {
     if (throttlerList == NULL || listLength(throttlerList) == 0) return false;
@@ -417,7 +400,6 @@ bool throttle_deferCommand(client *c) {
 
     if (strictest == NULL) return false;
 
-    /* Fast path: queue empty AND a token is available. */
     if (listLength(strictest->client_queue) == 0) {
         replenishTokens(strictest);
         if (tokenBucket_canConsume(strictest->bucket, 1.0)) {
@@ -433,7 +415,6 @@ bool throttle_deferCommand(client *c) {
 }
 
 /* === INFO output === */
-// Harry TODO: Should we do the info based on overall metrics or single throttler
 sds throttle_sdscatMetrics(sds info) {
     listNode *ln;
     listIter li;

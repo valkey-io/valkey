@@ -43,4 +43,4 @@ sds throttle_sdscatMetrics(sds info);
 
 long throttle_getGuardrailSecs(int id);
 
-#endif /* THROTTLE_H */
+#endif

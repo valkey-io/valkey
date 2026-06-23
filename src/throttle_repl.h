@@ -25,4 +25,4 @@ void throttleRepl_adjustThrottling(void);
 /* Add repl throttle metrics to INFO string. */
 sds throttleRepl_sdscatMetrics(sds info);
 
-#endif /* THROTTLE_REPL_H */
+#endif

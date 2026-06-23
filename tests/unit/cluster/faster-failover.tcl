@@ -40,8 +40,8 @@ start_cluster 3 1 {overrides {cluster-ping-interval 1000 cluster-node-timeout 50
 # R3 and R4 are both replicas of R0.
 proc single_primary_replica_allocation {masters replicas} {
     set master0_id [R 0 CLUSTER MYID]
-    R 3 cluster replicate $master0_id
-    R 4 cluster replicate $master0_id
+    R 3 CLUSTER REPLICATE $master0_id
+    R 4 CLUSTER REPLICATE $master0_id
 }
 
 # Test 1: Single primary failure.

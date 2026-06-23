@@ -191,7 +191,7 @@ proc default_replica_allocation {masters replicas} {
     for {set i 0} {$i < $masters} {incr i} {
         set nodeid [R $i CLUSTER MYID]
         for {set j [expr $i + $masters]} {$j < $node_count} {incr j $masters} {
-            R $j cluster replicate $nodeid
+            R $j CLUSTER REPLICATE $nodeid
         }
     }
 }

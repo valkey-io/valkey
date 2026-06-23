@@ -7968,6 +7968,10 @@ int clusterCommandSpecial(client *c) {
     } else if ((!strcasecmp(objectGetVal(c->argv[1]), "addslots") || !strcasecmp(objectGetVal(c->argv[1]), "delslots")) && c->argc >= 3) {
         /* CLUSTER ADDSLOTS <slot> [slot] ... */
         /* CLUSTER DELSLOTS <slot> [slot] ... */
+        if (nodeIsReplica(myself)) {
+            addReplyErrorFormat(c, "Please use %s only with primaries.", (char *)objectGetVal(c->argv[1]));
+            return 1;
+        }
         int j, slot;
         unsigned char *slots = zmalloc(CLUSTER_SLOTS);
         int del = !strcasecmp(objectGetVal(c->argv[1]), "delslots");
@@ -8000,6 +8004,10 @@ int clusterCommandSpecial(client *c) {
         }
         /* CLUSTER ADDSLOTSRANGE <start slot> <end slot> [<start slot> <end slot> ...] */
         /* CLUSTER DELSLOTSRANGE <start slot> <end slot> [<start slot> <end slot> ...] */
+        if (nodeIsReplica(myself)) {
+            addReplyErrorFormat(c, "Please use %s only with primaries.", (char *)objectGetVal(c->argv[1]));
+            return 1;
+        }
         int j, startslot, endslot;
         unsigned char *slots = zmalloc(CLUSTER_SLOTS);
         int del = !strcasecmp(objectGetVal(c->argv[1]), "delslotsrange");

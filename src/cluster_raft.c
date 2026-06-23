@@ -105,9 +105,9 @@ typedef struct {
     sds data;     /* Expected entry data (for matching) */
     void *ctx;    /* Client context */
     void (*callback)(void *ctx, const char *error);
-    mstime_t ctime;            /* Creation time for expiry */
-    int retries;  /* Remaining epoch-retry attempts */
-    int deferred; /* Waiting for epoch advance before re-propose */
+    mstime_t ctime; /* Creation time for expiry */
+    int retries;    /* Remaining epoch-retry attempts */
+    int deferred;   /* Waiting for epoch advance before re-propose */
 } raftPendingProposal;
 
 /* A pending meet tracks a CLUSTER MEET client waiting for the NODE_JOIN
@@ -931,14 +931,16 @@ static sds raftUpdateEpochInData(int type, sds data) {
         /* Format: <source-id-or-dash> <source-epoch> <target-id-or-dash> <target-epoch> <ranges...> */
         if (argc >= 5) {
             clusterNode *source = (sdslen(argv[0]) == CLUSTER_NAMELEN)
-                                      ? clusterLookupNode(argv[0], CLUSTER_NAMELEN) : NULL;
+                                      ? clusterLookupNode(argv[0], CLUSTER_NAMELEN)
+                                      : NULL;
             if (source) {
                 uint64_t epoch = clusterGetShardEpoch(source->shard_id);
                 sdsfree(argv[1]);
                 argv[1] = sdsfromlonglong(epoch);
             }
             clusterNode *target = (sdslen(argv[2]) == CLUSTER_NAMELEN)
-                                      ? clusterLookupNode(argv[2], CLUSTER_NAMELEN) : NULL;
+                                      ? clusterLookupNode(argv[2], CLUSTER_NAMELEN)
+                                      : NULL;
             if (target) {
                 uint64_t epoch = clusterGetShardEpoch(target->shard_id);
                 sdsfree(argv[3]);
@@ -1002,9 +1004,11 @@ static int proposalEpochAdvanced(int type, sds data) {
         /* Format: <source-id-or-dash> <source-epoch> <target-id-or-dash> <target-epoch> <ranges...> */
         if (argc >= 5) {
             clusterNode *source = (sdslen(argv[0]) == CLUSTER_NAMELEN)
-                                      ? clusterLookupNode(argv[0], CLUSTER_NAMELEN) : NULL;
+                                      ? clusterLookupNode(argv[0], CLUSTER_NAMELEN)
+                                      : NULL;
             clusterNode *target = (sdslen(argv[2]) == CLUSTER_NAMELEN)
-                                      ? clusterLookupNode(argv[2], CLUSTER_NAMELEN) : NULL;
+                                      ? clusterLookupNode(argv[2], CLUSTER_NAMELEN)
+                                      : NULL;
             if (source) {
                 uint64_t entry_epoch = strtoull(argv[1], NULL, 10);
                 advanced = clusterGetShardEpoch(source->shard_id) > entry_epoch;

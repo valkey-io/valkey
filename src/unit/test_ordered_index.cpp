@@ -8,17 +8,15 @@
 
 extern "C" {
 #include "server.h"
+#include "ordered_index.h"
 }
 
 /* Undefine min/max macros from server.h to avoid conflicts */
 #undef min
 #undef max
 
-#include "ordered_index_test.h"
-
 #include <cmath>
 #include <cstring>
-#include <string> /* only for GTest name generator */
 
 /* Clean up shared lex sentinels allocated by OrderedIndexTest::SetUp(). */
 static void cleanupSharedSentinels(void) __attribute__((destructor));
@@ -38,23 +36,23 @@ static void cleanupSharedSentinels(void) {
 #define TEST_MIN(a, b) ((a) < (b) ? (a) : (b))
 #define TEST_MAX(a, b) ((a) > (b) ? (a) : (b))
 
-/* Collect all elements from an ordered index into a pre-allocated sds array.
- * Caller must free each sds and the array itself. */
-static sds *collectIndexToSds(OrderedIndexTestApi &api, OrderedIndex *oi, size_t *out_n) {
-    size_t n = api.length(oi);
+/* Collect all elements from an ordered index into a pre-allocated sds array. */
+/* Collect all elements from an ordered index into a pre-allocated sds array. */
+static sds *collectIndexToSds(OrderedIndex *oi, size_t *out_n) {
+    size_t n = orderedIndexLength(oi);
     *out_n = n;
     if (n == 0) return NULL;
     sds *arr = (sds *)zmalloc(sizeof(sds) * n);
     OrderedIndexIterator iter;
-    api.initIterator(&iter, oi);
+    orderedIndexInitIterator(&iter, oi);
     for (size_t i = 0; i < n; i++) {
-        OrderedIndexItem *pos = api.next(&iter);
+        OrderedIndexItem *pos = orderedIndexNext(&iter);
         const char *ptr;
         size_t len;
-        api.getElementRaw(pos, &ptr, &len);
+        orderedIndexGetElementRaw(pos, &ptr, &len);
         arr[i] = sdsnewlen(ptr, len);
     }
-    api.resetIterator(&iter);
+    orderedIndexResetIterator(&iter);
     return arr;
 }
 
@@ -91,14 +89,14 @@ static void reverseDoubleArray(double *arr, size_t n) {
 }
 
 /* Verify structural integrity of the ordered index after mutations. */
-static ::testing::AssertionResult verifyIntegrity(OrderedIndexTestApi &api, OrderedIndex *oi) {
+static ::testing::AssertionResult verifyIntegrity(OrderedIndex *oi) {
     char errmsg[256];
-    if (api.verifyIntegrity(oi, errmsg, sizeof(errmsg)))
+    if (orderedIndexVerifyIntegrity(oi, errmsg, sizeof(errmsg)))
         return ::testing::AssertionResult(true);
     return ::testing::AssertionFailure() << errmsg;
 }
 
-#define VERIFY_INTEGRITY(api_ref, idx_ptr) ASSERT_TRUE(verifyIntegrity(api_ref, idx_ptr))
+#define VERIFY_INTEGRITY(idx_ptr) ASSERT_TRUE(verifyIntegrity(idx_ptr))
 
 /* Use double infinity to avoid -Wdouble-promotion on macOS where INFINITY is float */
 static const double POS_INF = (double)INFINITY;
@@ -111,27 +109,27 @@ static const int FRUITS_COUNT = 5;
 static const char *NATO[] = {"alpha", "bravo", "charlie", "delta", "echo", "foxtrot"};
 static const int NATO_COUNT = 6;
 
-/* ========== Parameterized test fixture ========== */
+/* ========== Test fixture ========== */
 
-class OrderedIndexTest : public ::testing::TestWithParam<OrderedIndexTestApi *> {
+/* ========== Test fixture ========== */
+class OrderedIndexTest : public ::testing::Test {
   protected:
-    OrderedIndexTestApi &api = *GetParam();
     OrderedIndex *oi = nullptr;
 
     void SetUp() override {
         /* Ensure shared lex sentinels are initialized (normally done by createSharedObjects) */
         if (!shared.minstring) shared.minstring = sdsnew("minstring");
         if (!shared.maxstring) shared.maxstring = sdsnew("maxstring");
-        oi = api.create();
+        oi = orderedIndexCreate();
     }
     void TearDown() override {
-        if (oi) api.free(oi);
+        if (oi) orderedIndexFree(oi);
     }
 
     /* Insert a string literal at given score. */
     OrderedIndexItem *insert(double score, const char *ele) {
         sds s = sdsnew(ele);
-        OrderedIndexItem *node = api.insertSds(oi, score, s);
+        OrderedIndexItem *node = orderedIndexInsert(oi, score, s, sdslen(s));
         sdsfree(s);
         return node;
     }
@@ -147,20 +145,20 @@ class OrderedIndexTest : public ::testing::TestWithParam<OrderedIndexTestApi *> 
 
     /* Assert next iterator element has expected score. */
     OrderedIndexItem *assertNextScore(OrderedIndexIterator *iter, double expected) {
-        OrderedIndexItem *pos = api.next(iter);
+        OrderedIndexItem *pos = orderedIndexNext(iter);
         EXPECT_NE(pos, nullptr);
         if (pos) {
-            EXPECT_DOUBLE_EQ(api.getScore(pos), expected);
+            EXPECT_DOUBLE_EQ(orderedIndexGetScore(pos), expected);
         }
         return pos;
     }
 
     /* Assert prev iterator element has expected score. */
     OrderedIndexItem *assertPrevScore(OrderedIndexIterator *iter, double expected) {
-        OrderedIndexItem *pos = api.prev(iter);
+        OrderedIndexItem *pos = orderedIndexPrev(iter);
         EXPECT_NE(pos, nullptr);
         if (pos) {
-            EXPECT_DOUBLE_EQ(api.getScore(pos), expected);
+            EXPECT_DOUBLE_EQ(orderedIndexGetScore(pos), expected);
         }
         return pos;
     }
@@ -169,21 +167,21 @@ class OrderedIndexTest : public ::testing::TestWithParam<OrderedIndexTestApi *> 
     void assertElement(OrderedIndexItem *node, const char *expected) {
         const char *ptr;
         size_t len;
-        api.getElementRaw(node, &ptr, &len);
+        orderedIndexGetElementRaw(node, &ptr, &len);
         ASSERT_EQ(len, strlen(expected));
         ASSERT_EQ(memcmp(ptr, expected, len), 0);
     }
 
     /* Assert node has expected score. */
     void assertScore(OrderedIndexItem *node, double expected) {
-        ASSERT_DOUBLE_EQ(api.getScore(node), expected);
+        ASSERT_DOUBLE_EQ(orderedIndexGetScore(node), expected);
     }
 
     /* Delete lex range using const char* (handles sds lifecycle). */
     unsigned long deleteLexRange(const char *min_str, const char *max_str, int min_ex, int max_ex, OrderedIndexOnDelete cb, void *ctx) {
         sds min = sdsnew(min_str);
         sds max = sdsnew(max_str);
-        unsigned long deleted = api.deleteRangeByLex(oi, min, max, min_ex, max_ex, cb, ctx);
+        unsigned long deleted = orderedIndexDeleteRangeByLex(oi, min, max, min_ex, max_ex, cb, ctx);
         sdsfree(min);
         sdsfree(max);
         return deleted;
@@ -193,7 +191,7 @@ class OrderedIndexTest : public ::testing::TestWithParam<OrderedIndexTestApi *> 
     unsigned long countLexRange(const char *min_str, const char *max_str, int min_ex, int max_ex) {
         sds min = sdsnew(min_str);
         sds max = sdsnew(max_str);
-        unsigned long count = api.countLexRange(oi, min, max, min_ex, max_ex);
+        unsigned long count = orderedIndexCountLexRange(oi, min, max, min_ex, max_ex);
         sdsfree(min);
         sdsfree(max);
         return count;
@@ -203,7 +201,7 @@ class OrderedIndexTest : public ::testing::TestWithParam<OrderedIndexTestApi *> 
     void seekToLexRange(OrderedIndexIterator *it, const char *min_str, const char *max_str, int min_ex, int max_ex, long offset) {
         sds min = sdsnew(min_str);
         sds max = sdsnew(max_str);
-        api.seekToLexRange(it, min, max, min_ex, max_ex, offset);
+        orderedIndexSeekToLexRange(it, min, max, min_ex, max_ex, offset);
         sdsfree(min);
         sdsfree(max);
     }
@@ -211,21 +209,21 @@ class OrderedIndexTest : public ::testing::TestWithParam<OrderedIndexTestApi *> 
     /* Assert full forward traversal matches expected element names. */
     void assertAllElements(const char *expected[], size_t count) {
         OrderedIndexIterator it;
-        api.initIterator(&it, oi);
+        orderedIndexInitIterator(&it, oi);
         OrderedIndexItem *pos;
         size_t i = 0;
-        while ((pos = api.next(&it)) != NULL) {
+        while ((pos = orderedIndexNext(&it)) != NULL) {
             ASSERT_LT(i, count) << "More elements than expected";
             assertElement(pos, expected[i]);
             i++;
         }
-        api.resetIterator(&it);
+        orderedIndexResetIterator(&it);
         ASSERT_EQ(i, count) << "Fewer elements than expected";
     }
 
     /* Verify structural integrity. */
     void verifyOI() {
-        ASSERT_TRUE(verifyIntegrity(api, oi));
+        ASSERT_TRUE(verifyIntegrity(oi));
     }
 };
 
@@ -238,84 +236,87 @@ class OrderedIndexTest : public ::testing::TestWithParam<OrderedIndexTestApi *> 
 
 /* ========== Basic tests ========== */
 
-TEST_P(OrderedIndexTest, CreateFree) {
+TEST_F(OrderedIndexTest, CreateFree) {
     ASSERT_NE(oi, nullptr);
-    ASSERT_EQ(api.length(oi), 0UL);
+    ASSERT_EQ(orderedIndexLength(oi), 0UL);
     verifyOI();
 
     OrderedIndexIterator iter;
-    api.initIterator(&iter, oi);
-    ASSERT_EQ(api.next(&iter), nullptr);
-    api.resetIterator(&iter);
+    orderedIndexInitIterator(&iter, oi);
+    ASSERT_EQ(orderedIndexNext(&iter), nullptr);
+    orderedIndexResetIterator(&iter);
 }
 
-TEST_P(OrderedIndexTest, InsertSingle) {
+TEST_F(OrderedIndexTest, InsertSingle) {
     OrderedIndexItem *node = insert(1.0, "test");
     verifyOI();
 
     ASSERT_NE(node, nullptr);
-    ASSERT_EQ(api.length(oi), 1UL);
+    ASSERT_EQ(orderedIndexLength(oi), 1UL);
     assertScore(node, 1.0);
     assertElement(node, "test");
 
     OrderedIndexIterator iter;
-    api.initIterator(&iter, oi);
-    ASSERT_EQ(api.next(&iter), node);
-    ASSERT_EQ(api.next(&iter), nullptr);
-    api.resetIterator(&iter);
+    orderedIndexInitIterator(&iter, oi);
+    ASSERT_EQ(orderedIndexNext(&iter), node);
+    ASSERT_EQ(orderedIndexNext(&iter), nullptr);
+    orderedIndexResetIterator(&iter);
 }
 
-TEST_P(OrderedIndexTest, InsertMultipleOrdered) {
+TEST_F(OrderedIndexTest, InsertMultipleOrdered) {
     populateSequential(10);
 
-    ASSERT_EQ(api.length(oi), 10UL);
+    ASSERT_EQ(orderedIndexLength(oi), 10UL);
     verifyOI();
 
-    /* Verify forward traversal */
     OrderedIndexIterator iter;
     OrderedIndexItem *pos;
-    api.initIterator(&iter, oi);
+
+    /* Verify forward traversal */
+    orderedIndexInitIterator(&iter, oi);
     for (int i = 0; i < 10; i++) {
-        ASSERT_NE((pos = api.next(&iter)), nullptr);
-        ASSERT_DOUBLE_EQ(api.getScore(pos), (double)i);
+        ASSERT_NE((pos = orderedIndexNext(&iter)), nullptr);
+        ASSERT_DOUBLE_EQ(orderedIndexGetScore(pos), (double)i);
     }
-    ASSERT_EQ(api.next(&iter), nullptr);
-    api.resetIterator(&iter);
+    ASSERT_EQ(orderedIndexNext(&iter), nullptr);
+    orderedIndexResetIterator(&iter);
+
 
     /* Verify backward traversal */
-    api.initIterator(&iter, oi);
+    orderedIndexInitIterator(&iter, oi);
     for (int i = 9; i >= 0; i--) {
-        ASSERT_NE((pos = api.prev(&iter)), nullptr);
-        ASSERT_DOUBLE_EQ(api.getScore(pos), (double)i);
+        ASSERT_NE((pos = orderedIndexPrev(&iter)), nullptr);
+        ASSERT_DOUBLE_EQ(orderedIndexGetScore(pos), (double)i);
     }
-    ASSERT_EQ(api.prev(&iter), nullptr);
-    api.resetIterator(&iter);
+    ASSERT_EQ(orderedIndexPrev(&iter), nullptr);
+    orderedIndexResetIterator(&iter);
 }
 
-TEST_P(OrderedIndexTest, DuplicateScores) {
+TEST_F(OrderedIndexTest, DuplicateScores) {
     for (int i = 0; i < 5; i++) {
         char buf[32];
         snprintf(buf, sizeof(buf), "key%d", i);
         insert(1.0, buf);
     }
 
-    ASSERT_EQ(api.length(oi), 5UL);
+    ASSERT_EQ(orderedIndexLength(oi), 5UL);
     verifyOI();
 
-    /* Verify lexicographic ordering for same scores */
     OrderedIndexIterator iter;
     OrderedIndexItem *pos;
-    api.initIterator(&iter, oi);
+
+    /* Verify lexicographic ordering for same scores */
+    orderedIndexInitIterator(&iter, oi);
     for (int i = 0; i < 5; i++) {
         char buf[32];
         snprintf(buf, sizeof(buf), "key%d", i);
         pos = assertNextScore(&iter, 1.0);
         assertElement(pos, buf);
     }
-    api.resetIterator(&iter);
+    orderedIndexResetIterator(&iter);
 }
 
-TEST_P(OrderedIndexTest, IndexOperations) {
+TEST_F(OrderedIndexTest, IndexOperations) {
     OrderedIndexItem *nodes[10];
 
     for (int i = 0; i < 10; i++) {
@@ -326,175 +327,180 @@ TEST_P(OrderedIndexTest, IndexOperations) {
     verifyOI();
 
     for (int i = 0; i < 10; i++) {
-        unsigned long idx = api.getIndex(oi, nodes[i]);
+        unsigned long idx = orderedIndexGetIndex(oi, nodes[i]);
         ASSERT_EQ(idx, (unsigned long)i);
     }
 
     for (int i = 0; i < 10; i++) {
-        OrderedIndexItem *node = api.getByIndex(oi, i);
+        OrderedIndexItem *node = orderedIndexGetByIndex(oi, i);
         ASSERT_EQ(node, nodes[i]);
     }
 }
 
-TEST_P(OrderedIndexTest, Delete) {
+TEST_F(OrderedIndexTest, Delete) {
     OrderedIndexItem *nodes[5];
     for (int i = 0; i < 5; i++) {
         char buf[32];
         snprintf(buf, sizeof(buf), "key%d", i);
         nodes[i] = insert((double)i, buf);
     }
-    ASSERT_EQ(api.length(oi), 5UL);
+    ASSERT_EQ(orderedIndexLength(oi), 5UL);
 
-    api.deleteItem(oi, nodes[2]);
-    ASSERT_EQ(api.length(oi), 4UL);
+    orderedIndexDelete(oi, nodes[2]);
+    ASSERT_EQ(orderedIndexLength(oi), 4UL);
     verifyOI();
 
     OrderedIndexIterator iter;
-    api.initIterator(&iter, oi);
+    orderedIndexInitIterator(&iter, oi);
     assertNextScore(&iter, 0.0);
     assertNextScore(&iter, 1.0);
     assertNextScore(&iter, 3.0); /* Skipped 2.0 */
     assertNextScore(&iter, 4.0);
-    api.resetIterator(&iter);
+    orderedIndexResetIterator(&iter);
 }
 
-TEST_P(OrderedIndexTest, PopFirst) {
-    ASSERT_EQ(api.popFirst(oi), nullptr);
+TEST_F(OrderedIndexTest, PopFirst) {
+    ASSERT_EQ(orderedIndexPopFirst(oi), nullptr);
 
     populateSequential(5);
-    ASSERT_EQ(api.length(oi), 5UL);
+    ASSERT_EQ(orderedIndexLength(oi), 5UL);
 
-    OrderedIndexItem *item = api.popFirst(oi);
+    OrderedIndexItem *item = orderedIndexPopFirst(oi);
     ASSERT_NE(item, nullptr);
     assertScore(item, 0.0);
     assertElement(item, "key0");
-    api.freeItem(item);
-    ASSERT_EQ(api.length(oi), 4UL);
+    orderedIndexFreeItem(item);
+    ASSERT_EQ(orderedIndexLength(oi), 4UL);
     verifyOI();
 
-    item = api.popFirst(oi);
+    item = orderedIndexPopFirst(oi);
     assertScore(item, 1.0);
-    api.freeItem(item);
-    ASSERT_EQ(api.length(oi), 3UL);
+    orderedIndexFreeItem(item);
+    ASSERT_EQ(orderedIndexLength(oi), 3UL);
     verifyOI();
 }
 
-TEST_P(OrderedIndexTest, PopLast) {
-    ASSERT_EQ(api.popLast(oi), nullptr);
+TEST_F(OrderedIndexTest, PopLast) {
+    ASSERT_EQ(orderedIndexPopLast(oi), nullptr);
 
     populateSequential(5);
-    ASSERT_EQ(api.length(oi), 5UL);
+    ASSERT_EQ(orderedIndexLength(oi), 5UL);
 
-    OrderedIndexItem *item = api.popLast(oi);
+    OrderedIndexItem *item = orderedIndexPopLast(oi);
     ASSERT_NE(item, nullptr);
     assertScore(item, 4.0);
     assertElement(item, "key4");
-    api.freeItem(item);
-    ASSERT_EQ(api.length(oi), 4UL);
+    orderedIndexFreeItem(item);
+    ASSERT_EQ(orderedIndexLength(oi), 4UL);
     verifyOI();
 
-    item = api.popLast(oi);
+    item = orderedIndexPopLast(oi);
     assertScore(item, 3.0);
-    api.freeItem(item);
-    ASSERT_EQ(api.length(oi), 3UL);
+    orderedIndexFreeItem(item);
+    ASSERT_EQ(orderedIndexLength(oi), 3UL);
     verifyOI();
 }
 
-TEST_P(OrderedIndexTest, GetFirstAndLast) {
+TEST_F(OrderedIndexTest, GetFirstAndLast) {
     /* Empty index returns NULL */
-    ASSERT_EQ(api.getFirst(oi), nullptr);
-    ASSERT_EQ(api.getLast(oi), nullptr);
+    ASSERT_EQ(orderedIndexGetFirst(oi), nullptr);
+    ASSERT_EQ(orderedIndexGetLast(oi), nullptr);
 
     insert(2.0, "bravo");
     insert(1.0, "alpha");
     insert(3.0, "charlie");
 
-    assertElement(api.getFirst(oi), "alpha");
-    assertScore(api.getFirst(oi), 1.0);
-    assertElement(api.getLast(oi), "charlie");
-    assertScore(api.getLast(oi), 3.0);
+    assertElement(orderedIndexGetFirst(oi), "alpha");
+    assertScore(orderedIndexGetFirst(oi), 1.0);
+    assertElement(orderedIndexGetLast(oi), "charlie");
+    assertScore(orderedIndexGetLast(oi), 3.0);
+
 
     /* Single element: first == last */
-    api.deleteItem(oi, api.getFirst(oi));
-    api.deleteItem(oi, api.getLast(oi));
-    ASSERT_EQ(api.length(oi), 1UL);
-    assertElement(api.getFirst(oi), "bravo");
-    assertElement(api.getLast(oi), "bravo");
+    orderedIndexDelete(oi, orderedIndexGetFirst(oi));
+    orderedIndexDelete(oi, orderedIndexGetLast(oi));
+    ASSERT_EQ(orderedIndexLength(oi), 1UL);
+    assertElement(orderedIndexGetFirst(oi), "bravo");
+    assertElement(orderedIndexGetLast(oi), "bravo");
 }
 
-TEST_P(OrderedIndexTest, UpdateScore) {
+TEST_F(OrderedIndexTest, UpdateScore) {
     OrderedIndexItem *node1 = insert(1.0, "key1");
     OrderedIndexItem *node2 = insert(2.0, "key2");
     insert(3.0, "key3");
 
-    OrderedIndexItem *updated = api.updateScore(oi, node2, 4.0);
+    OrderedIndexItem *updated = orderedIndexUpdateScore(oi, node2, 4.0);
     ASSERT_NE(updated, nullptr);
     assertScore(updated, 4.0);
     verifyOI();
     assertElement(updated, "key2");
 
-    /* Verify order: key1(1.0), key3(3.0), key2(4.0) */
     OrderedIndexIterator iter;
     OrderedIndexItem *pos;
-    api.initIterator(&iter, oi);
+    orderedIndexInitIterator(&iter, oi);
     assertNextScore(&iter, 1.0);
     assertNextScore(&iter, 3.0);
     pos = assertNextScore(&iter, 4.0);
     assertElement(pos, "key2");
-    api.resetIterator(&iter);
+    orderedIndexResetIterator(&iter);
+
 
     /* Update to same score (no-op) */
-    updated = api.updateScore(oi, node1, 1.0);
+    updated = orderedIndexUpdateScore(oi, node1, 1.0);
     assertScore(updated, 1.0);
     verifyOI();
 }
 
-TEST_P(OrderedIndexTest, DeleteRangeByScore) {
+TEST_F(OrderedIndexTest, DeleteRangeByScore) {
     populateSequential(10);
 
+
     /* Delete range [3, 6] inclusive */
-    unsigned long deleted = api.deleteRangeByScore(oi, 3.0, 6.0, 0, 0, NULL, NULL);
+    unsigned long deleted = orderedIndexDeleteRangeByScore(oi, 3.0, 6.0, 0, 0, NULL, NULL);
     ASSERT_EQ(deleted, 4UL);
-    ASSERT_EQ(api.length(oi), 6UL);
+    ASSERT_EQ(orderedIndexLength(oi), 6UL);
     verifyOI();
 
     OrderedIndexIterator iter;
-    api.initIterator(&iter, oi);
+    orderedIndexInitIterator(&iter, oi);
     for (int i = 0; i < 3; i++) {
         assertNextScore(&iter, (double)i);
     }
     for (int i = 7; i < 10; i++) {
         assertNextScore(&iter, (double)i);
     }
-    api.resetIterator(&iter);
+    orderedIndexResetIterator(&iter);
+
 
     /* Delete with exclusive bounds (2, 8) - should delete 7 */
-    deleted = api.deleteRangeByScore(oi, 2.0, 8.0, 1, 1, NULL, NULL);
+    deleted = orderedIndexDeleteRangeByScore(oi, 2.0, 8.0, 1, 1, NULL, NULL);
     ASSERT_EQ(deleted, 1UL);
-    ASSERT_EQ(api.length(oi), 5UL);
+    ASSERT_EQ(orderedIndexLength(oi), 5UL);
     verifyOI();
 }
 
-TEST_P(OrderedIndexTest, DeleteRangeByIndex) {
+TEST_F(OrderedIndexTest, DeleteRangeByIndex) {
     populateSequential(10);
 
+
     /* Delete indices 2-4 (elements at scores 2,3,4) */
-    unsigned long deleted = api.deleteRangeByIndex(oi, 2, 4, NULL, NULL);
+    unsigned long deleted = orderedIndexDeleteRangeByIndex(oi, 2, 4, NULL, NULL);
     ASSERT_EQ(deleted, 3UL);
-    ASSERT_EQ(api.length(oi), 7UL);
+    ASSERT_EQ(orderedIndexLength(oi), 7UL);
     verifyOI();
 
     OrderedIndexIterator iter;
-    api.initIterator(&iter, oi);
+    orderedIndexInitIterator(&iter, oi);
     assertNextScore(&iter, 0.0);
-    api.resetIterator(&iter);
+    orderedIndexResetIterator(&iter);
+
 
     /* Verify index 2 is now score 5 (was index 5) */
-    OrderedIndexItem *node = api.getByIndex(oi, 2);
+    OrderedIndexItem *node = orderedIndexGetByIndex(oi, 2);
     assertScore(node, 5.0);
 }
 
-TEST_P(OrderedIndexTest, MixedOperationsIndexIntegrity) {
+TEST_F(OrderedIndexTest, MixedOperationsIndexIntegrity) {
     OrderedIndexItem *nodes[100];
 
     for (int i = 0; i < 100; i++) {
@@ -504,29 +510,30 @@ TEST_P(OrderedIndexTest, MixedOperationsIndexIntegrity) {
     }
 
     for (int i = 2; i < 100; i += 3) {
-        api.deleteItem(oi, nodes[i]);
+        orderedIndexDelete(oi, nodes[i]);
         nodes[i] = NULL;
     }
     verifyOI();
 
+
     /* Update scores of surviving nodes (indices not ≡ 2 mod 3) */
-    nodes[10] = api.updateScore(oi, nodes[10], 150.0);
-    nodes[19] = api.updateScore(oi, nodes[19], 160.0);
+    nodes[10] = orderedIndexUpdateScore(oi, nodes[10], 150.0);
+    nodes[19] = orderedIndexUpdateScore(oi, nodes[19], 160.0);
     verifyOI();
 
     OrderedIndexIterator iter;
     OrderedIndexItem *pos;
-    api.initIterator(&iter, oi);
+    orderedIndexInitIterator(&iter, oi);
     unsigned long expectedIdx = 0;
-    while (((pos = api.next(&iter)) != NULL)) {
-        unsigned long actualIdx = api.getIndex(oi, pos);
+    while (((pos = orderedIndexNext(&iter)) != NULL)) {
+        unsigned long actualIdx = orderedIndexGetIndex(oi, pos);
         ASSERT_EQ(actualIdx, expectedIdx);
         expectedIdx++;
     }
-    api.resetIterator(&iter);
+    orderedIndexResetIterator(&iter);
 }
 
-TEST_P(OrderedIndexTest, BackwardTraversalAfterDeletions) {
+TEST_F(OrderedIndexTest, BackwardTraversalAfterDeletions) {
     OrderedIndexItem *nodes[20];
 
     for (int i = 0; i < 20; i++) {
@@ -535,57 +542,55 @@ TEST_P(OrderedIndexTest, BackwardTraversalAfterDeletions) {
         nodes[i] = insert((double)i, buf);
     }
 
-    api.deleteItem(oi, nodes[5]);
-    api.deleteItem(oi, nodes[10]);
-    api.deleteItem(oi, nodes[15]);
+    orderedIndexDelete(oi, nodes[5]);
+    orderedIndexDelete(oi, nodes[10]);
+    orderedIndexDelete(oi, nodes[15]);
     verifyOI();
 
     OrderedIndexIterator iter;
-    api.initIterator(&iter, oi);
+    orderedIndexInitIterator(&iter, oi);
     int expected_scores[] = {19, 18, 17, 16, 14, 13, 12, 11, 9, 8, 7, 6, 4, 3, 2, 1, 0};
 
     for (int i = 0; i < 17; i++) {
         assertPrevScore(&iter, (double)expected_scores[i]);
     }
-    ASSERT_EQ(api.prev(&iter), nullptr);
-    api.resetIterator(&iter);
+    ASSERT_EQ(orderedIndexPrev(&iter), nullptr);
+    orderedIndexResetIterator(&iter);
 }
 
-TEST_P(OrderedIndexTest, LexicographicEdgeCases) {
+TEST_F(OrderedIndexTest, LexicographicEdgeCases) {
     insert(1.0, "z");
     insert(1.0, "");
     insert(1.0, "a");
 
-    /* Verify lexicographic order: "", "a", "z" */
     OrderedIndexIterator iter;
     OrderedIndexItem *pos;
-    api.initIterator(&iter, oi);
+    orderedIndexInitIterator(&iter, oi);
     pos = assertNextScore(&iter, 1.0);
     assertElement(pos, "");
     pos = assertNextScore(&iter, 1.0);
     assertElement(pos, "a");
     pos = assertNextScore(&iter, 1.0);
     assertElement(pos, "z");
-    api.resetIterator(&iter);
-    api.free(oi);
+    orderedIndexResetIterator(&iter);
+    orderedIndexFree(oi);
 
-    /* Test very long string (1KB) */
-    oi = api.create();
+    oi = orderedIndexCreate();
     char long_buf[1024];
     memset(long_buf, 'x', 1023);
     long_buf[1023] = '\0';
     insert(1.0, long_buf);
     insert(1.0, "short");
 
-    api.initIterator(&iter, oi);
+    orderedIndexInitIterator(&iter, oi);
     pos = assertNextScore(&iter, 1.0);
     assertElement(pos, "short");
     pos = assertNextScore(&iter, 1.0);
     assertElement(pos, long_buf);
-    api.resetIterator(&iter);
+    orderedIndexResetIterator(&iter);
 }
 
-TEST_P(OrderedIndexTest, RangeBoundaryPrecision) {
+TEST_F(OrderedIndexTest, RangeBoundaryPrecision) {
     double base = 1.0;
     double epsilon = 1e-10;
 
@@ -593,215 +598,223 @@ TEST_P(OrderedIndexTest, RangeBoundaryPrecision) {
     insert(base + epsilon, "at_base_plus_epsilon");
     insert(base + 2 * epsilon, "at_base_plus_2epsilon");
 
-    unsigned long deleted = api.deleteRangeByScore(oi, base, base + 2 * epsilon, 1, 1, NULL, NULL);
+    unsigned long deleted = orderedIndexDeleteRangeByScore(oi, base, base + 2 * epsilon, 1, 1, NULL, NULL);
     ASSERT_EQ(deleted, 1UL);
-    ASSERT_EQ(api.length(oi), 2UL);
+    ASSERT_EQ(orderedIndexLength(oi), 2UL);
 
     OrderedIndexIterator iter;
-    api.initIterator(&iter, oi);
+    orderedIndexInitIterator(&iter, oi);
     assertNextScore(&iter, base);
     assertNextScore(&iter, base + 2 * epsilon);
-    api.resetIterator(&iter);
+    orderedIndexResetIterator(&iter);
 }
 
-TEST_P(OrderedIndexTest, SpecialDoubleValues) {
+TEST_F(OrderedIndexTest, SpecialDoubleValues) {
     insert(NEG_INF, "neg_inf");
     insert(POS_INF, "pos_inf");
     insert(0.0, "zero");
     insert(1.0, "one");
 
-    /* Verify ordering: -inf, 0, 1, +inf */
     OrderedIndexIterator iter;
     OrderedIndexItem *pos;
-    api.initIterator(&iter, oi);
+    orderedIndexInitIterator(&iter, oi);
     assertNextScore(&iter, NEG_INF);
     assertNextScore(&iter, 0.0);
     assertNextScore(&iter, 1.0);
     assertNextScore(&iter, POS_INF);
-    api.resetIterator(&iter);
-    api.free(oi);
+    orderedIndexResetIterator(&iter);
+    orderedIndexFree(oi);
+
+    oi = orderedIndexCreate();
 
     /* Test +0.0 vs -0.0 */
-    oi = api.create();
     insert(0.0, "pos_zero");
     insert(-0.0, "neg_zero");
 
     /* Both should be in the list, ordered lexicographically since scores are equal */
-    ASSERT_EQ(api.length(oi), 2UL);
-    api.initIterator(&iter, oi);
+    ASSERT_EQ(orderedIndexLength(oi), 2UL);
+    orderedIndexInitIterator(&iter, oi);
     pos = assertNextScore(&iter, 0.0);
     assertElement(pos, "neg_zero");
     pos = assertNextScore(&iter, 0.0);
     assertElement(pos, "pos_zero");
-    api.resetIterator(&iter);
-    api.free(oi);
+    orderedIndexResetIterator(&iter);
+    orderedIndexFree(oi);
+
+    oi = orderedIndexCreate();
 
     /* Test denormalized double */
-    oi = api.create();
-    double denorm = 1e-320; /* Denormalized double */
+    double denorm = 1e-320;
     insert(denorm, "denorm");
     insert(1.0, "normal");
 
-    ASSERT_EQ(api.length(oi), 2UL);
-    api.initIterator(&iter, oi);
+    ASSERT_EQ(orderedIndexLength(oi), 2UL);
+    orderedIndexInitIterator(&iter, oi);
     pos = assertNextScore(&iter, denorm);
-    ASSERT_TRUE(api.getScore(pos) < 1.0);
-    api.resetIterator(&iter);
+    ASSERT_TRUE(orderedIndexGetScore(pos) < 1.0);
+    orderedIndexResetIterator(&iter);
 }
 
-TEST_P(OrderedIndexTest, EmptyIndexOperations) {
-    ASSERT_EQ(api.length(oi), 0UL);
+TEST_F(OrderedIndexTest, EmptyIndexOperations) {
+    ASSERT_EQ(orderedIndexLength(oi), 0UL);
     OrderedIndexIterator iter;
-    api.initIterator(&iter, oi);
-    ASSERT_EQ(api.next(&iter), nullptr);
-    ASSERT_EQ(api.prev(&iter), nullptr);
-    api.resetIterator(&iter);
-    ASSERT_EQ(api.getByIndex(oi, 0), nullptr);
+    orderedIndexInitIterator(&iter, oi);
+    ASSERT_EQ(orderedIndexNext(&iter), nullptr);
+    ASSERT_EQ(orderedIndexPrev(&iter), nullptr);
+    orderedIndexResetIterator(&iter);
+    ASSERT_EQ(orderedIndexGetByIndex(oi, 0), nullptr);
 }
 
-TEST_P(OrderedIndexTest, DeleteEdgeCases) {
+TEST_F(OrderedIndexTest, DeleteEdgeCases) {
     /* Delete only element */
     OrderedIndexItem *node = insert(1.0, "only");
-    api.deleteItem(oi, node);
-    ASSERT_EQ(api.length(oi), 0UL);
+    orderedIndexDelete(oi, node);
+    ASSERT_EQ(orderedIndexLength(oi), 0UL);
     verifyOI();
     OrderedIndexIterator iter;
-    api.initIterator(&iter, oi);
-    ASSERT_EQ(api.next(&iter), nullptr);
-    api.resetIterator(&iter);
+    orderedIndexInitIterator(&iter, oi);
+    ASSERT_EQ(orderedIndexNext(&iter), nullptr);
+    orderedIndexResetIterator(&iter);
 
-    /* Delete first element */
     OrderedIndexItem *nodes[3];
     for (int i = 0; i < 3; i++) {
         char buf[32];
         snprintf(buf, sizeof(buf), "key%d", i);
         nodes[i] = insert((double)i, buf);
     }
-    api.deleteItem(oi, nodes[0]);
-    ASSERT_EQ(api.length(oi), 2UL);
+    orderedIndexDelete(oi, nodes[0]);
+    ASSERT_EQ(orderedIndexLength(oi), 2UL);
     verifyOI();
-    api.initIterator(&iter, oi);
+    orderedIndexInitIterator(&iter, oi);
     assertNextScore(&iter, 1.0);
-    api.resetIterator(&iter);
+    orderedIndexResetIterator(&iter);
+
 
     /* Delete last element */
-    api.deleteItem(oi, nodes[2]);
-    ASSERT_EQ(api.length(oi), 1UL);
+    orderedIndexDelete(oi, nodes[2]);
+    ASSERT_EQ(orderedIndexLength(oi), 1UL);
     verifyOI();
-    api.initIterator(&iter, oi);
+    orderedIndexInitIterator(&iter, oi);
     assertPrevScore(&iter, 1.0);
-    api.resetIterator(&iter);
+    orderedIndexResetIterator(&iter);
 }
 
-TEST_P(OrderedIndexTest, IndexEdgeCases) {
+TEST_F(OrderedIndexTest, IndexEdgeCases) {
     populateSequential(5);
 
-    ASSERT_EQ(api.getByIndex(oi, 5), nullptr);
-    ASSERT_EQ(api.getByIndex(oi, 99), nullptr);
-    ASSERT_NE(api.getByIndex(oi, 0), nullptr);
-    ASSERT_NE(api.getByIndex(oi, 4), nullptr);
+    ASSERT_EQ(orderedIndexGetByIndex(oi, 5), nullptr);
+    ASSERT_EQ(orderedIndexGetByIndex(oi, 99), nullptr);
+    ASSERT_NE(orderedIndexGetByIndex(oi, 0), nullptr);
+    ASSERT_NE(orderedIndexGetByIndex(oi, 4), nullptr);
 }
 
-TEST_P(OrderedIndexTest, DuplicateInsert) {
+TEST_F(OrderedIndexTest, DuplicateInsert) {
     OrderedIndexItem *node1 = insert(1.0, "duplicate");
     OrderedIndexItem *node2 = insert(1.0, "duplicate");
 
     /* Should have 2 nodes (duplicates allowed) */
-    ASSERT_EQ(api.length(oi), 2UL);
+    ASSERT_EQ(orderedIndexLength(oi), 2UL);
     ASSERT_NE(node1, node2);
 }
 
-TEST_P(OrderedIndexTest, UpdateScoreEdgeCases) {
-    populateSequential(5); /* scores: 0, 1, 2, 3, 4 */
+TEST_F(OrderedIndexTest, UpdateScoreEdgeCases) {
+    populateSequential(5);
 
-    /* Move first element to last position */
-    OrderedIndexItem *first = api.getByIndex(oi, 0);
-    OrderedIndexItem *updated = api.updateScore(oi, first, 10.0);
+    OrderedIndexItem *first = orderedIndexGetByIndex(oi, 0);
+    OrderedIndexItem *updated = orderedIndexUpdateScore(oi, first, 10.0);
     assertScore(updated, 10.0);
     verifyOI();
     OrderedIndexIterator iter;
-    api.initIterator(&iter, oi);
-    ASSERT_EQ(api.prev(&iter), updated); /* now last */
-    api.resetIterator(&iter);
+    orderedIndexInitIterator(&iter, oi);
+    ASSERT_EQ(orderedIndexPrev(&iter), updated);
+    orderedIndexResetIterator(&iter);
+
 
     /* Move last element to first position */
-    OrderedIndexItem *last = api.getByIndex(oi, api.length(oi) - 1);
-    updated = api.updateScore(oi, last, -1.0);
+    OrderedIndexItem *last = orderedIndexGetByIndex(oi, orderedIndexLength(oi) - 1);
+    updated = orderedIndexUpdateScore(oi, last, -1.0);
     assertScore(updated, -1.0);
     verifyOI();
-    api.initIterator(&iter, oi);
-    ASSERT_EQ(api.next(&iter), updated); /* now first */
-    api.resetIterator(&iter);
+    orderedIndexInitIterator(&iter, oi);
+    ASSERT_EQ(orderedIndexNext(&iter), updated);
+    orderedIndexResetIterator(&iter);
+
 
     /* Move middle element backward past multiple */
-    OrderedIndexItem *middle = api.getByIndex(oi, 2);
-    updated = api.updateScore(oi, middle, 0.5);
+    OrderedIndexItem *middle = orderedIndexGetByIndex(oi, 2);
+    updated = orderedIndexUpdateScore(oi, middle, 0.5);
     assertScore(updated, 0.5);
     verifyOI();
-    ASSERT_EQ(api.getIndex(oi, updated), 1UL); /* moved from index 2 to 1 */
+    ASSERT_EQ(orderedIndexGetIndex(oi, updated), 1UL);
+
 
     /* Update score without changing position (stays between neighbors) */
-    OrderedIndexItem *node = api.getByIndex(oi, 3);
-    unsigned long idx_before = api.getIndex(oi, node);
-    updated = api.updateScore(oi, node, api.getScore(node) + 0.1);
-    ASSERT_EQ(api.getIndex(oi, updated), idx_before);
+    OrderedIndexItem *n = orderedIndexGetByIndex(oi, 3);
+    unsigned long idx_before = orderedIndexGetIndex(oi, n);
+    updated = orderedIndexUpdateScore(oi, n, orderedIndexGetScore(n) + 0.1);
+    ASSERT_EQ(orderedIndexGetIndex(oi, updated), idx_before);
     verifyOI();
 }
 
-TEST_P(OrderedIndexTest, RangeDeleteEdgeCases) {
+TEST_F(OrderedIndexTest, RangeDeleteEdgeCases) {
     populateSequential(10);
 
+
     /* Delete empty range (min > max) */
-    unsigned long deleted = api.deleteRangeByScore(oi, 5.0, 4.0, 0, 0, NULL, NULL);
+    unsigned long deleted = orderedIndexDeleteRangeByScore(oi, 5.0, 4.0, 0, 0, NULL, NULL);
     ASSERT_EQ(deleted, 0UL);
-    ASSERT_EQ(api.length(oi), 10UL);
+    ASSERT_EQ(orderedIndexLength(oi), 10UL);
+
 
     /* Delete range with no matches */
-    deleted = api.deleteRangeByScore(oi, 10.5, 11.5, 0, 0, NULL, NULL);
+    deleted = orderedIndexDeleteRangeByScore(oi, 10.5, 11.5, 0, 0, NULL, NULL);
     ASSERT_EQ(deleted, 0UL);
-    ASSERT_EQ(api.length(oi), 10UL);
+    ASSERT_EQ(orderedIndexLength(oi), 10UL);
+
 
     /* Delete first elements by index */
-    deleted = api.deleteRangeByIndex(oi, 0, 1, NULL, NULL);
+    deleted = orderedIndexDeleteRangeByIndex(oi, 0, 1, NULL, NULL);
     ASSERT_EQ(deleted, 2UL);
     verifyOI();
     OrderedIndexIterator iter;
-    api.initIterator(&iter, oi);
+    orderedIndexInitIterator(&iter, oi);
     assertNextScore(&iter, 2.0);
-    api.resetIterator(&iter);
+    orderedIndexResetIterator(&iter);
+
+    unsigned long len = orderedIndexLength(oi);
 
     /* Delete last elements by index */
-    unsigned long len = api.length(oi);
-    deleted = api.deleteRangeByIndex(oi, len - 2, len - 1, NULL, NULL);
+    deleted = orderedIndexDeleteRangeByIndex(oi, len - 2, len - 1, NULL, NULL);
     ASSERT_EQ(deleted, 2UL);
     verifyOI();
-    api.initIterator(&iter, oi);
+    orderedIndexInitIterator(&iter, oi);
     assertPrevScore(&iter, 7.0);
-    api.resetIterator(&iter);
+    orderedIndexResetIterator(&iter);
+
 
     /* Delete entire remaining index by score */
-    deleted = api.deleteRangeByScore(oi, -100.0, 100.0, 0, 0, NULL, NULL);
+    deleted = orderedIndexDeleteRangeByScore(oi, -100.0, 100.0, 0, 0, NULL, NULL);
     ASSERT_EQ(deleted, 6UL);
-    ASSERT_EQ(api.length(oi), 0UL);
+    ASSERT_EQ(orderedIndexLength(oi), 0UL);
     verifyOI();
 }
 
-TEST_P(OrderedIndexTest, TraversalEdgeCases) {
+TEST_F(OrderedIndexTest, TraversalEdgeCases) {
     insert(1.0, "single");
 
     OrderedIndexIterator iter;
-    api.initIterator(&iter, oi);
+    orderedIndexInitIterator(&iter, oi);
     assertNextScore(&iter, 1.0);
-    ASSERT_EQ(api.next(&iter), nullptr);
-    api.resetIterator(&iter);
+    ASSERT_EQ(orderedIndexNext(&iter), nullptr);
+    orderedIndexResetIterator(&iter);
 
-    api.initIterator(&iter, oi);
+    orderedIndexInitIterator(&iter, oi);
     assertPrevScore(&iter, 1.0);
-    ASSERT_EQ(api.prev(&iter), nullptr);
-    api.resetIterator(&iter);
+    ASSERT_EQ(orderedIndexPrev(&iter), nullptr);
+    orderedIndexResetIterator(&iter);
 }
 
-TEST_P(OrderedIndexTest, SeekToIndex) {
+TEST_F(OrderedIndexTest, SeekToIndex) {
     for (int i = 1; i <= 5; i++) {
         char buf[32];
         snprintf(buf, sizeof(buf), "key%d", i);
@@ -810,52 +823,64 @@ TEST_P(OrderedIndexTest, SeekToIndex) {
 
     OrderedIndexIterator iter;
 
-    /* Seek to index 0 (first element) */
-    api.initIterator(&iter, oi);
-    api.seekToIndex(&iter, 0);
-    assertNextScore(&iter, 2.0); /* next after first = second */
-    api.resetIterator(&iter);
+    orderedIndexInitIterator(&iter, oi);
 
-    api.initIterator(&iter, oi);
-    api.seekToIndex(&iter, 0);
-    assertPrevScore(&iter, 1.0); /* prev at first = first itself */
-    api.resetIterator(&iter);
+    /* Seek to index 0 (first element) */
+    orderedIndexSeekToIndex(&iter, 0);
+    assertNextScore(&iter, 2.0);
+    orderedIndexResetIterator(&iter);
+
+    orderedIndexInitIterator(&iter, oi);
+
+    /* Seek to index 0 (first element) */
+    orderedIndexSeekToIndex(&iter, 0);
+    assertPrevScore(&iter, 1.0);
+    orderedIndexResetIterator(&iter);
+
+    orderedIndexInitIterator(&iter, oi);
 
     /* Seek to index 1 (second element) */
-    api.initIterator(&iter, oi);
-    api.seekToIndex(&iter, 1);
+    orderedIndexSeekToIndex(&iter, 1);
     assertNextScore(&iter, 3.0);
-    api.resetIterator(&iter);
+    orderedIndexResetIterator(&iter);
 
-    api.initIterator(&iter, oi);
-    api.seekToIndex(&iter, 1);
+    orderedIndexInitIterator(&iter, oi);
+
+    /* Seek to index 1 (second element) */
+    orderedIndexSeekToIndex(&iter, 1);
     assertPrevScore(&iter, 2.0);
-    api.resetIterator(&iter);
+    orderedIndexResetIterator(&iter);
+
+    orderedIndexInitIterator(&iter, oi);
 
     /* Seek to index 2 (middle) */
-    api.initIterator(&iter, oi);
-    api.seekToIndex(&iter, 2);
+    orderedIndexSeekToIndex(&iter, 2);
     assertNextScore(&iter, 4.0);
-    api.resetIterator(&iter);
+    orderedIndexResetIterator(&iter);
 
-    api.initIterator(&iter, oi);
-    api.seekToIndex(&iter, 2);
+    orderedIndexInitIterator(&iter, oi);
+
+    /* Seek to index 2 (middle) */
+    orderedIndexSeekToIndex(&iter, 2);
     assertPrevScore(&iter, 3.0);
-    api.resetIterator(&iter);
+    orderedIndexResetIterator(&iter);
+
+    orderedIndexInitIterator(&iter, oi);
 
     /* Seek to index 4 (last) */
-    api.initIterator(&iter, oi);
-    api.seekToIndex(&iter, 4);
-    ASSERT_EQ(api.next(&iter), nullptr);
-    api.resetIterator(&iter);
+    orderedIndexSeekToIndex(&iter, 4);
+    ASSERT_EQ(orderedIndexNext(&iter), nullptr);
+    orderedIndexResetIterator(&iter);
 
-    api.initIterator(&iter, oi);
-    api.seekToIndex(&iter, 4);
+    orderedIndexInitIterator(&iter, oi);
+
+    /* Seek to index 4 (last) */
+    orderedIndexSeekToIndex(&iter, 4);
     assertPrevScore(&iter, 5.0);
-    api.resetIterator(&iter);
+    orderedIndexResetIterator(&iter);
 }
 
-TEST_P(OrderedIndexTest, ReverseIteration) {
+TEST_F(OrderedIndexTest, ReverseIteration) {
     for (int i = 1; i <= 5; i++) {
         char buf[32];
         snprintf(buf, sizeof(buf), "key%d", i);
@@ -865,143 +890,154 @@ TEST_P(OrderedIndexTest, ReverseIteration) {
     OrderedIndexIterator iter;
     OrderedIndexItem *pos;
 
-    /* Full reverse traversal */
-    api.initIterator(&iter, oi);
+    orderedIndexInitIterator(&iter, oi);
     int count = 0;
     double expected = 5.0;
-    while (((pos = api.prev(&iter)) != NULL)) {
+    while (((pos = orderedIndexPrev(&iter)) != NULL)) {
         assertScore(pos, expected);
         expected -= 1.0;
         count++;
     }
     ASSERT_EQ(count, 5);
-    api.resetIterator(&iter);
+    orderedIndexResetIterator(&iter);
 
-    /* Reverse then forward */
-    api.initIterator(&iter, oi);
+    orderedIndexInitIterator(&iter, oi);
     assertPrevScore(&iter, 5.0);
     assertNextScore(&iter, 5.0);
-    api.resetIterator(&iter);
+    orderedIndexResetIterator(&iter);
 
-    /* Forward then reverse */
-    api.initIterator(&iter, oi);
+    orderedIndexInitIterator(&iter, oi);
     assertNextScore(&iter, 1.0);
     assertPrevScore(&iter, 1.0);
-    api.resetIterator(&iter);
+    orderedIndexResetIterator(&iter);
 }
 
-TEST_P(OrderedIndexTest, SeekToScoreRange) {
-    /* Insert elements with scores 0,2,4,6,8 */
+TEST_F(OrderedIndexTest, SeekToScoreRange) {
     for (int i = 0; i < 5; i++) {
         char buf[32];
         snprintf(buf, sizeof(buf), "key%d", i);
+
+    /* Insert elements with scores 0,2,4,6,8 */
         insert((double)(i * 2), buf);
     }
 
     OrderedIndexIterator iter;
 
+    orderedIndexInitIterator(&iter, oi);
+
     /* Seek to first in range [2, 6] with offset 0 */
-    api.initIterator(&iter, oi);
-    api.seekToScoreRange(&iter, 2.0, 6.0, 0, 0, 0);
+    orderedIndexSeekToScoreRange(&iter, 2.0, 6.0, 0, 0, 0);
     assertNextScore(&iter, 2.0);
-    api.resetIterator(&iter);
+    orderedIndexResetIterator(&iter);
+
+    orderedIndexInitIterator(&iter, oi);
 
     /* Seek to second in range [2, 6] with offset 1 */
-    api.initIterator(&iter, oi);
-    api.seekToScoreRange(&iter, 2.0, 6.0, 0, 0, 1);
+    orderedIndexSeekToScoreRange(&iter, 2.0, 6.0, 0, 0, 1);
     assertNextScore(&iter, 4.0);
-    api.resetIterator(&iter);
+    orderedIndexResetIterator(&iter);
+
+    orderedIndexInitIterator(&iter, oi);
 
     /* Seek to last in range [2, 6] with offset -1, positioned for prev() */
-    api.initIterator(&iter, oi);
-    api.seekToScoreRange(&iter, 2.0, 6.0, 0, 0, -1);
+    orderedIndexSeekToScoreRange(&iter, 2.0, 6.0, 0, 0, -1);
     assertPrevScore(&iter, 6.0);
-    api.resetIterator(&iter);
+    orderedIndexResetIterator(&iter);
+
+    orderedIndexInitIterator(&iter, oi);
 
     /* Seek with exclusive bounds (2, 6) - should start at 4 */
-    api.initIterator(&iter, oi);
-    api.seekToScoreRange(&iter, 2.0, 6.0, 1, 1, 0);
+    orderedIndexSeekToScoreRange(&iter, 2.0, 6.0, 1, 1, 0);
     assertNextScore(&iter, 4.0);
-    api.resetIterator(&iter);
+    orderedIndexResetIterator(&iter);
+
+    orderedIndexInitIterator(&iter, oi);
 
     /* Seek to empty range above all elements */
-    api.initIterator(&iter, oi);
-    api.seekToScoreRange(&iter, 10.0, 20.0, 0, 0, 0);
-    ASSERT_EQ(api.next(&iter), nullptr);
-    api.resetIterator(&iter);
+    orderedIndexSeekToScoreRange(&iter, 10.0, 20.0, 0, 0, 0);
+    ASSERT_EQ(orderedIndexNext(&iter), nullptr);
+    orderedIndexResetIterator(&iter);
+
+    orderedIndexInitIterator(&iter, oi);
 
     /* Seek to empty range below all elements */
-    api.initIterator(&iter, oi);
-    api.seekToScoreRange(&iter, -20.0, -10.0, 0, 0, 0);
-    ASSERT_EQ(api.next(&iter), nullptr);
-    api.resetIterator(&iter);
+    orderedIndexSeekToScoreRange(&iter, -20.0, -10.0, 0, 0, 0);
+    ASSERT_EQ(orderedIndexNext(&iter), nullptr);
+    orderedIndexResetIterator(&iter);
+
+    orderedIndexInitIterator(&iter, oi);
 
     /* Out of range positive offset */
-    api.initIterator(&iter, oi);
-    api.seekToScoreRange(&iter, 2.0, 6.0, 0, 0, 10);
-    ASSERT_EQ(api.next(&iter), nullptr);
-    api.resetIterator(&iter);
+    orderedIndexSeekToScoreRange(&iter, 2.0, 6.0, 0, 0, 10);
+    ASSERT_EQ(orderedIndexNext(&iter), nullptr);
+    orderedIndexResetIterator(&iter);
+
+    orderedIndexInitIterator(&iter, oi);
 
     /* Negative offset beyond range */
-    api.initIterator(&iter, oi);
-    api.seekToScoreRange(&iter, 2.0, 6.0, 0, 0, -10);
-    ASSERT_EQ(api.prev(&iter), nullptr);
-    api.resetIterator(&iter);
+    orderedIndexSeekToScoreRange(&iter, 2.0, 6.0, 0, 0, -10);
+    ASSERT_EQ(orderedIndexPrev(&iter), nullptr);
+    orderedIndexResetIterator(&iter);
+
+    orderedIndexInitIterator(&iter, oi);
 
     /* Second from last with offset -2, positioned for prev() */
-    api.initIterator(&iter, oi);
-    api.seekToScoreRange(&iter, 2.0, 6.0, 0, 0, -2);
+    orderedIndexSeekToScoreRange(&iter, 2.0, 6.0, 0, 0, -2);
     assertPrevScore(&iter, 4.0);
-    api.resetIterator(&iter);
+    orderedIndexResetIterator(&iter);
+
+    orderedIndexInitIterator(&iter, oi);
 
     /* Empty range where min > max */
-    api.initIterator(&iter, oi);
-    api.seekToScoreRange(&iter, 6.0, 2.0, 0, 0, 0);
-    ASSERT_EQ(api.next(&iter), nullptr);
-    api.resetIterator(&iter);
+    orderedIndexSeekToScoreRange(&iter, 6.0, 2.0, 0, 0, 0);
+    ASSERT_EQ(orderedIndexNext(&iter), nullptr);
+    orderedIndexResetIterator(&iter);
 }
 
-TEST_P(OrderedIndexTest, SeekToScoreRangeIteration) {
+TEST_F(OrderedIndexTest, SeekToScoreRangeIteration) {
     populateSequential(10);
 
     OrderedIndexIterator iter;
     OrderedIndexItem *pos;
 
+    orderedIndexInitIterator(&iter, oi);
+
     /* Seek to range [3, 7] and iterate forward */
-    api.initIterator(&iter, oi);
-    api.seekToScoreRange(&iter, 3.0, 7.0, 0, 0, 0);
+    orderedIndexSeekToScoreRange(&iter, 3.0, 7.0, 0, 0, 0);
     int count = 0;
     double expected = 3.0;
-    while (((pos = api.next(&iter)) != NULL) && api.getScore(pos) <= 7.0) {
+    while (((pos = orderedIndexNext(&iter)) != NULL) && orderedIndexGetScore(pos) <= 7.0) {
         assertScore(pos, expected);
         expected += 1.0;
         count++;
     }
     ASSERT_EQ(count, 5);
-    api.resetIterator(&iter);
+    orderedIndexResetIterator(&iter);
+
+    orderedIndexInitIterator(&iter, oi);
 
     /* Seek to last in range and iterate backward */
-    api.initIterator(&iter, oi);
-    api.seekToScoreRange(&iter, 3.0, 7.0, 0, 0, -1);
+    orderedIndexSeekToScoreRange(&iter, 3.0, 7.0, 0, 0, -1);
     count = 0;
     expected = 7.0;
-    while (((pos = api.prev(&iter)) != NULL) && api.getScore(pos) >= 3.0) {
+    while (((pos = orderedIndexPrev(&iter)) != NULL) && orderedIndexGetScore(pos) >= 3.0) {
         assertScore(pos, expected);
         expected -= 1.0;
         count++;
     }
     ASSERT_EQ(count, 5);
-    api.resetIterator(&iter);
+    orderedIndexResetIterator(&iter);
+
+    orderedIndexInitIterator(&iter, oi);
 
     /* Seek with offset and continue iteration */
-    api.initIterator(&iter, oi);
-    api.seekToScoreRange(&iter, 2.0, 8.0, 0, 0, 2);
+    orderedIndexSeekToScoreRange(&iter, 2.0, 8.0, 0, 0, 2);
     assertNextScore(&iter, 4.0);
     assertNextScore(&iter, 5.0);
-    api.resetIterator(&iter);
+    orderedIndexResetIterator(&iter);
 }
 
-TEST_P(OrderedIndexTest, SeekInfReverseIteration) {
+TEST_F(OrderedIndexTest, SeekInfReverseIteration) {
     for (int i = 1; i <= 5; i++) {
         char buf[32];
         snprintf(buf, sizeof(buf), "key%d", i);
@@ -1011,20 +1047,20 @@ TEST_P(OrderedIndexTest, SeekInfReverseIteration) {
     OrderedIndexIterator iter;
     OrderedIndexItem *pos;
 
-    api.initIterator(&iter, oi);
-    api.seekToScoreRange(&iter, NEG_INF, POS_INF, 0, 0, -1);
+    orderedIndexInitIterator(&iter, oi);
+    orderedIndexSeekToScoreRange(&iter, NEG_INF, POS_INF, 0, 0, -1);
     int count = 0;
     double expected = 5.0;
-    while (((pos = api.prev(&iter)) != NULL)) {
+    while (((pos = orderedIndexPrev(&iter)) != NULL)) {
         assertScore(pos, expected);
         expected -= 1.0;
         count++;
     }
     ASSERT_EQ(count, 5);
-    api.resetIterator(&iter);
+    orderedIndexResetIterator(&iter);
 }
 
-TEST_P(OrderedIndexTest, SeekInfForwardIteration) {
+TEST_F(OrderedIndexTest, SeekInfForwardIteration) {
     for (int i = 1; i <= 5; i++) {
         char buf[32];
         snprintf(buf, sizeof(buf), "key%d", i);
@@ -1034,131 +1070,134 @@ TEST_P(OrderedIndexTest, SeekInfForwardIteration) {
     OrderedIndexIterator iter;
     OrderedIndexItem *pos;
 
-    api.initIterator(&iter, oi);
-    api.seekToScoreRange(&iter, NEG_INF, POS_INF, 0, 0, 0);
+    orderedIndexInitIterator(&iter, oi);
+    orderedIndexSeekToScoreRange(&iter, NEG_INF, POS_INF, 0, 0, 0);
     int count = 0;
     double expected = 1.0;
-    while (((pos = api.next(&iter)) != NULL)) {
+    while (((pos = orderedIndexNext(&iter)) != NULL)) {
         assertScore(pos, expected);
         expected += 1.0;
         count++;
     }
     ASSERT_EQ(count, 5);
-    api.resetIterator(&iter);
+    orderedIndexResetIterator(&iter);
 }
 
-TEST_P(OrderedIndexTest, SeekToLexRange) {
+TEST_F(OrderedIndexTest, SeekToLexRange) {
     for (int i = 0; i < FRUITS_COUNT; i++) insert(1.0, FRUITS[i]);
 
     OrderedIndexIterator it;
     OrderedIndexItem *pos;
 
+    orderedIndexInitIterator(&it, oi);
+
     /* Seek to first in lex range [banana, date] with offset 0 */
-    api.initIterator(&it, oi);
     seekToLexRange(&it, "banana", "date", 0, 0, 0);
-    ASSERT_NE((pos = api.next(&it)), nullptr);
+    ASSERT_NE((pos = orderedIndexNext(&it)), nullptr);
     assertElement(pos, "banana");
-    api.resetIterator(&it);
+    orderedIndexResetIterator(&it);
+
+    orderedIndexInitIterator(&it, oi);
 
     /* Seek to second in lex range with offset 1 */
-    api.initIterator(&it, oi);
     seekToLexRange(&it, "banana", "date", 0, 0, 1);
-    ASSERT_NE((pos = api.next(&it)), nullptr);
+    ASSERT_NE((pos = orderedIndexNext(&it)), nullptr);
     assertElement(pos, "cherry");
-    api.resetIterator(&it);
+    orderedIndexResetIterator(&it);
+
+    orderedIndexInitIterator(&it, oi);
 
     /* Seek to last in lex range with offset -1, positioned for prev() */
-    api.initIterator(&it, oi);
     seekToLexRange(&it, "banana", "date", 0, 0, -1);
-    ASSERT_NE((pos = api.prev(&it)), nullptr);
+    ASSERT_NE((pos = orderedIndexPrev(&it)), nullptr);
     assertElement(pos, "date");
-    api.resetIterator(&it);
+    orderedIndexResetIterator(&it);
+
+    orderedIndexInitIterator(&it, oi);
 
     /* Seek with exclusive bounds (banana, date) - should start at cherry */
-    api.initIterator(&it, oi);
     seekToLexRange(&it, "banana", "date", 1, 1, 0);
-    ASSERT_NE((pos = api.next(&it)), nullptr);
+    ASSERT_NE((pos = orderedIndexNext(&it)), nullptr);
     assertElement(pos, "cherry");
-    api.resetIterator(&it);
+    orderedIndexResetIterator(&it);
+
+    orderedIndexInitIterator(&it, oi);
 
     /* Seek to empty lex range */
-    api.initIterator(&it, oi);
     seekToLexRange(&it, "zzz", "zzzz", 0, 0, 0);
-    ASSERT_EQ(api.next(&it), nullptr);
-    api.resetIterator(&it);
+    ASSERT_EQ(orderedIndexNext(&it), nullptr);
+    orderedIndexResetIterator(&it);
+
+    orderedIndexInitIterator(&it, oi);
 
     /* Out of range positive offset */
-    api.initIterator(&it, oi);
     seekToLexRange(&it, "banana", "date", 0, 0, 10);
-    ASSERT_EQ(api.next(&it), nullptr);
-    api.resetIterator(&it);
+    ASSERT_EQ(orderedIndexNext(&it), nullptr);
+    orderedIndexResetIterator(&it);
 }
 
-TEST_P(OrderedIndexTest, DeleteRangeByLexInclusive) {
+TEST_F(OrderedIndexTest, DeleteRangeByLexInclusive) {
     for (int i = 0; i < FRUITS_COUNT; i++) insert(1.0, FRUITS[i]);
 
     ASSERT_EQ(deleteLexRange("banana", "date", 0, 0, NULL, NULL), 3UL);
-    ASSERT_EQ(api.length(oi), 2UL);
+    ASSERT_EQ(orderedIndexLength(oi), 2UL);
     verifyOI();
     ASSERT_ALL_ELEMENTS("apple", "elderberry");
 }
 
-TEST_P(OrderedIndexTest, DeleteRangeByLexExclusive) {
+TEST_F(OrderedIndexTest, DeleteRangeByLexExclusive) {
     for (int i = 0; i < FRUITS_COUNT; i++) insert(1.0, FRUITS[i]);
 
     ASSERT_EQ(deleteLexRange("banana", "date", 1, 1, NULL, NULL), 1UL);
-    ASSERT_EQ(api.length(oi), 4UL);
+    ASSERT_EQ(orderedIndexLength(oi), 4UL);
     ASSERT_ALL_ELEMENTS("apple", "banana", "date", "elderberry");
 }
 
-TEST_P(OrderedIndexTest, DeleteRangeByLex_EmptyRange) {
+TEST_F(OrderedIndexTest, DeleteRangeByLex_EmptyRange) {
     for (int i = 0; i < 3; i++) insert(1.0, FRUITS[i]);
 
     ASSERT_EQ(deleteLexRange("zzz", "aaa", 0, 0, NULL, NULL), 0UL);
-    ASSERT_EQ(api.length(oi), 3UL);
+    ASSERT_EQ(orderedIndexLength(oi), 3UL);
 }
 
-TEST_P(OrderedIndexTest, DeleteRangeByLex_All) {
+TEST_F(OrderedIndexTest, DeleteRangeByLex_All) {
     for (int i = 0; i < 3; i++) insert(1.0, FRUITS[i]);
 
     ASSERT_EQ(deleteLexRange("a", "z", 0, 0, NULL, NULL), 3UL);
-    ASSERT_EQ(api.length(oi), 0UL);
+    ASSERT_EQ(orderedIndexLength(oi), 0UL);
 }
 
-TEST_P(OrderedIndexTest, DeleteRangeByLex_SingleElement) {
+TEST_F(OrderedIndexTest, DeleteRangeByLex_SingleElement) {
     for (int i = 0; i < 3; i++) insert(1.0, FRUITS[i]);
 
     ASSERT_EQ(deleteLexRange("banana", "banana", 0, 0, NULL, NULL), 1UL);
-    ASSERT_EQ(api.length(oi), 2UL);
+    ASSERT_EQ(orderedIndexLength(oi), 2UL);
     ASSERT_ALL_ELEMENTS("apple", "cherry");
 }
 
-TEST_P(OrderedIndexTest, DeleteRangeByLexPreservesOutside) {
+TEST_F(OrderedIndexTest, DeleteRangeByLexPreservesOutside) {
     for (int i = 0; i < NATO_COUNT; i++) insert(1.0, NATO[i]);
 
     ASSERT_EQ(deleteLexRange("charlie", "delta", 0, 0, NULL, NULL), 2UL);
-    ASSERT_EQ(api.length(oi), 4UL);
+    ASSERT_EQ(orderedIndexLength(oi), 4UL);
     ASSERT_ALL_ELEMENTS("alpha", "bravo", "echo", "foxtrot");
 
-    /* Verify scores are preserved */
     OrderedIndexIterator it;
-    api.initIterator(&it, oi);
+    orderedIndexInitIterator(&it, oi);
     OrderedIndexItem *pos;
-    while ((pos = api.next(&it)) != NULL) {
+    while ((pos = orderedIndexNext(&it)) != NULL) {
         assertScore(pos, 1.0);
     }
-    api.resetIterator(&it);
+    orderedIndexResetIterator(&it);
 
-    /* Verify indices are correct after deletion */
     for (unsigned long r = 0; r < 4; r++) {
-        OrderedIndexItem *node = api.getByIndex(oi, r);
+        OrderedIndexItem *node = orderedIndexGetByIndex(oi, r);
         ASSERT_NE(node, nullptr);
-        ASSERT_EQ(api.getIndex(oi, node), r);
+        ASSERT_EQ(orderedIndexGetIndex(oi, node), r);
     }
 }
 
-TEST_P(OrderedIndexTest, LexRangeSentinels) {
-    /* Insert 5 elements at the same score (lex ordering) */
+TEST_F(OrderedIndexTest, LexRangeSentinels) {
     insert(0.0, "alpha");
     insert(0.0, "bravo");
     insert(0.0, "charlie");
@@ -1167,36 +1206,38 @@ TEST_P(OrderedIndexTest, LexRangeSentinels) {
 
     sds charlie = sdsnew("charlie");
 
-    /* Count with sentinels */
     ASSERT_EQ(countLexRange("minstring", "maxstring", 0, 0), 0UL); /* literal strings, not sentinels */
-    ASSERT_EQ(api.countLexRange(oi, shared.minstring, shared.maxstring, 0, 0), 5UL);
-    ASSERT_EQ(api.countLexRange(oi, shared.minstring, charlie, 0, 0), 3UL);
-    ASSERT_EQ(api.countLexRange(oi, charlie, shared.maxstring, 0, 0), 3UL);
+    ASSERT_EQ(orderedIndexCountLexRange(oi, shared.minstring, shared.maxstring, 0, 0), 5UL);
+    ASSERT_EQ(orderedIndexCountLexRange(oi, shared.minstring, charlie, 0, 0), 3UL);
+    ASSERT_EQ(orderedIndexCountLexRange(oi, charlie, shared.maxstring, 0, 0), 3UL);
+
 
     /* Inverted range (max < min sentinel) should return 0 */
-    ASSERT_EQ(api.countLexRange(oi, shared.maxstring, shared.minstring, 0, 0), 0UL);
-    ASSERT_EQ(api.countLexRange(oi, charlie, shared.minstring, 0, 0), 0UL);
+    ASSERT_EQ(orderedIndexCountLexRange(oi, shared.maxstring, shared.minstring, 0, 0), 0UL);
+    ASSERT_EQ(orderedIndexCountLexRange(oi, charlie, shared.minstring, 0, 0), 0UL);
 
-    /* Seek with sentinels - iterate all */
     OrderedIndexIterator it;
-    api.initIterator(&it, oi);
-    api.seekToLexRange(&it, shared.minstring, shared.maxstring, 0, 0, 0);
+    orderedIndexInitIterator(&it, oi);
+    /* Seek with sentinels - iterate all */
+    orderedIndexSeekToLexRange(&it, shared.minstring, shared.maxstring, 0, 0, 0);
     assertNextScore(&it, 0.0); /* alpha */
     assertNextScore(&it, 0.0); /* bravo */
     assertNextScore(&it, 0.0); /* charlie */
     assertNextScore(&it, 0.0); /* delta */
     assertNextScore(&it, 0.0); /* echo */
-    ASSERT_EQ(api.next(&it), nullptr);
-    api.resetIterator(&it);
+    ASSERT_EQ(orderedIndexNext(&it), nullptr);
+    orderedIndexResetIterator(&it);
+
 
     /* Delete with sentinels - delete all */
-    ASSERT_EQ(api.deleteRangeByLex(oi, shared.minstring, shared.maxstring, 0, 0, NULL, NULL), 5UL);
-    ASSERT_EQ(api.length(oi), 0UL);
+    ASSERT_EQ(orderedIndexDeleteRangeByLex(oi, shared.minstring, shared.maxstring, 0, 0, NULL, NULL), 5UL);
+    ASSERT_EQ(orderedIndexLength(oi), 0UL);
 
     sdsfree(charlie);
 }
 
 /* ========== Randomized property tests ========== */
+
 
 /* Default fuzz seed — overridden by --seed flag if provided. */
 extern char *seed;
@@ -1239,14 +1280,13 @@ static double test_random_score(uint32_t *state) {
     return test_rand_double(state, -1e6, 1e6);
 }
 
-static RandomIndexEntry *test_build_random_index(OrderedIndexTestApi &api, OrderedIndex *oi, uint32_t *state, int count) {
+static RandomIndexEntry *test_build_random_index(OrderedIndex *oi, uint32_t *state, int count) {
     RandomIndexEntry *entries = (RandomIndexEntry *)zmalloc(sizeof(RandomIndexEntry) * count);
     for (int i = 0; i < count; i++) {
         double score = test_random_score(state);
         sds elem = test_random_element(state, 16);
-        /* Append index to ensure uniqueness */
-        elem = sdscatfmt(elem, "%i", i);
-        OrderedIndexItem *node = api.insert(oi, score, elem, sdslen(elem));
+        elem = sdscatfmt(elem, "%i", i); /* Append index to ensure uniqueness */
+        OrderedIndexItem *node = orderedIndexInsert(oi, score, elem, sdslen(elem));
         entries[i] = {node, score, elem};
     }
     return entries;
@@ -1257,225 +1297,225 @@ static void freeRandomEntries(RandomIndexEntry *entries, int count) {
     zfree(entries);
 }
 
-TEST_P(OrderedIndexTest, RandomizedInsertAndTraversal) {
+TEST_F(OrderedIndexTest, RandomizedInsertAndTraversal) {
     uint32_t rng = test_fuzz_seed();
     for (int trial = 0; trial < 20; trial++) {
         int n = test_rand_range(&rng, 1, 50);
 
         {
-            RandomIndexEntry *_e = test_build_random_index(api, oi, &rng, n);
+            RandomIndexEntry *_e = test_build_random_index(oi, &rng, n);
             freeRandomEntries(_e, n);
         }
 
-        ASSERT_EQ(api.length(oi), (unsigned long)n);
+        ASSERT_EQ(orderedIndexLength(oi), (unsigned long)n);
         verifyOI();
 
         OrderedIndexIterator iter;
         OrderedIndexItem *pos;
-        api.initIterator(&iter, oi);
+        orderedIndexInitIterator(&iter, oi);
         int count = 0;
         double prevScore = NEG_INF;
-        while (((pos = api.next(&iter)) != NULL)) {
-            double s = api.getScore(pos);
+        while (((pos = orderedIndexNext(&iter)) != NULL)) {
+            double s = orderedIndexGetScore(pos);
             ASSERT_GE(s, prevScore);
             prevScore = s;
             count++;
         }
         ASSERT_EQ(count, n);
-        api.resetIterator(&iter);
-        api.free(oi);
-        oi = api.create();
+        orderedIndexResetIterator(&iter);
+        orderedIndexFree(oi);
+        oi = orderedIndexCreate();
     }
 }
 
-TEST_P(OrderedIndexTest, RandomizedBackwardTraversal) {
+TEST_F(OrderedIndexTest, RandomizedBackwardTraversal) {
     uint32_t rng = test_fuzz_seed();
     for (int trial = 0; trial < 20; trial++) {
         int n = test_rand_range(&rng, 1, 50);
 
         {
-            RandomIndexEntry *_e = test_build_random_index(api, oi, &rng, n);
+            RandomIndexEntry *_e = test_build_random_index(oi, &rng, n);
             freeRandomEntries(_e, n);
         }
 
         OrderedIndexIterator iter;
         OrderedIndexItem *pos;
-        api.initIterator(&iter, oi);
+        orderedIndexInitIterator(&iter, oi);
         int count = 0;
         double prevScore = POS_INF;
-        while (((pos = api.prev(&iter)) != NULL)) {
-            double s = api.getScore(pos);
+        while (((pos = orderedIndexPrev(&iter)) != NULL)) {
+            double s = orderedIndexGetScore(pos);
             ASSERT_LE(s, prevScore);
             prevScore = s;
             count++;
         }
         ASSERT_EQ(count, n);
-        api.resetIterator(&iter);
-        api.free(oi);
-        oi = api.create();
+        orderedIndexResetIterator(&iter);
+        orderedIndexFree(oi);
+        oi = orderedIndexCreate();
     }
 }
 
-TEST_P(OrderedIndexTest, RandomizedScoreRetrieval) {
+TEST_F(OrderedIndexTest, RandomizedScoreRetrieval) {
     uint32_t rng = test_fuzz_seed();
     for (int trial = 0; trial < 20; trial++) {
         int n = test_rand_range(&rng, 1, 50);
 
-        RandomIndexEntry *entries = test_build_random_index(api, oi, &rng, n);
+        RandomIndexEntry *entries = test_build_random_index(oi, &rng, n);
 
         for (int i = 0; i < n; i++) {
             assertScore(entries[i].node, entries[i].score);
         }
         freeRandomEntries(entries, n);
-        api.free(oi);
-        oi = api.create();
+        orderedIndexFree(oi);
+        oi = orderedIndexCreate();
     }
 }
 
-TEST_P(OrderedIndexTest, RandomizedIndexConsistency) {
+TEST_F(OrderedIndexTest, RandomizedIndexConsistency) {
     uint32_t rng = test_fuzz_seed();
     for (int trial = 0; trial < 20; trial++) {
         int n = test_rand_range(&rng, 1, 50);
 
         {
-            RandomIndexEntry *_e = test_build_random_index(api, oi, &rng, n);
+            RandomIndexEntry *_e = test_build_random_index(oi, &rng, n);
             freeRandomEntries(_e, n);
         }
 
         OrderedIndexIterator iter;
         OrderedIndexItem *pos;
-        api.initIterator(&iter, oi);
+        orderedIndexInitIterator(&iter, oi);
         unsigned long expectedIdx = 0;
-        while (((pos = api.next(&iter)) != NULL)) {
-            unsigned long idx = api.getIndex(oi, pos);
+        while (((pos = orderedIndexNext(&iter)) != NULL)) {
+            unsigned long idx = orderedIndexGetIndex(oi, pos);
             ASSERT_EQ(idx, expectedIdx);
-            OrderedIndexItem *byIdx = api.getByIndex(oi, expectedIdx);
+            OrderedIndexItem *byIdx = orderedIndexGetByIndex(oi, expectedIdx);
             ASSERT_EQ(byIdx, pos);
             expectedIdx++;
         }
         ASSERT_EQ(expectedIdx, (unsigned long)n);
-        api.resetIterator(&iter);
-        api.free(oi);
-        oi = api.create();
+        orderedIndexResetIterator(&iter);
+        orderedIndexFree(oi);
+        oi = orderedIndexCreate();
     }
 }
 
-TEST_P(OrderedIndexTest, RandomizedDelete) {
+TEST_F(OrderedIndexTest, RandomizedDelete) {
     uint32_t rng = test_fuzz_seed();
     for (int trial = 0; trial < 20; trial++) {
         int n = test_rand_range(&rng, 2, 30);
 
-        RandomIndexEntry *entries = test_build_random_index(api, oi, &rng, n);
+        RandomIndexEntry *entries = test_build_random_index(oi, &rng, n);
 
         int delIdx = test_rand_range(&rng, 0, n - 1);
-        api.deleteItem(oi, entries[delIdx].node);
+        orderedIndexDelete(oi, entries[delIdx].node);
 
-        ASSERT_EQ(api.length(oi), (unsigned long)(n - 1));
+        ASSERT_EQ(orderedIndexLength(oi), (unsigned long)(n - 1));
         verifyOI();
 
         OrderedIndexIterator iter;
         OrderedIndexItem *pos;
-        api.initIterator(&iter, oi);
+        orderedIndexInitIterator(&iter, oi);
         int count = 0;
         double prevScore = NEG_INF;
-        while (((pos = api.next(&iter)) != NULL)) {
-            ASSERT_GE(api.getScore(pos), prevScore);
-            prevScore = api.getScore(pos);
+        while (((pos = orderedIndexNext(&iter)) != NULL)) {
+            ASSERT_GE(orderedIndexGetScore(pos), prevScore);
+            prevScore = orderedIndexGetScore(pos);
             count++;
         }
         ASSERT_EQ(count, n - 1);
-        api.resetIterator(&iter);
+        orderedIndexResetIterator(&iter);
         freeRandomEntries(entries, n);
-        api.free(oi);
-        oi = api.create();
+        orderedIndexFree(oi);
+        oi = orderedIndexCreate();
     }
 }
 
-TEST_P(OrderedIndexTest, RandomizedUpdateScore) {
+TEST_F(OrderedIndexTest, RandomizedUpdateScore) {
     uint32_t rng = test_fuzz_seed();
     for (int trial = 0; trial < 20; trial++) {
         int n = test_rand_range(&rng, 2, 30);
 
-        RandomIndexEntry *entries = test_build_random_index(api, oi, &rng, n);
+        RandomIndexEntry *entries = test_build_random_index(oi, &rng, n);
 
         int updIdx = test_rand_range(&rng, 0, n - 1);
         double newScore = test_random_score(&rng);
 
-        OrderedIndexItem *updated = api.updateScore(oi, entries[updIdx].node, newScore);
+        OrderedIndexItem *updated = orderedIndexUpdateScore(oi, entries[updIdx].node, newScore);
         ASSERT_NE(updated, nullptr);
         assertScore(updated, newScore);
-        ASSERT_EQ(api.length(oi), (unsigned long)n);
+        ASSERT_EQ(orderedIndexLength(oi), (unsigned long)n);
         verifyOI();
 
         OrderedIndexIterator iter;
         OrderedIndexItem *pos;
-        api.initIterator(&iter, oi);
+        orderedIndexInitIterator(&iter, oi);
         double prevScore = NEG_INF;
-        while (((pos = api.next(&iter)) != NULL)) {
-            ASSERT_GE(api.getScore(pos), prevScore);
-            prevScore = api.getScore(pos);
+        while (((pos = orderedIndexNext(&iter)) != NULL)) {
+            ASSERT_GE(orderedIndexGetScore(pos), prevScore);
+            prevScore = orderedIndexGetScore(pos);
         }
-        api.resetIterator(&iter);
-        api.free(oi);
+        orderedIndexResetIterator(&iter);
+        orderedIndexFree(oi);
         freeRandomEntries(entries, n);
-        oi = api.create();
+        oi = orderedIndexCreate();
     }
 }
 
-TEST_P(OrderedIndexTest, RandomizedPop) {
+TEST_F(OrderedIndexTest, RandomizedPop) {
     uint32_t rng = test_fuzz_seed();
     for (int trial = 0; trial < 10; trial++) {
         int n = test_rand_range(&rng, 3, 30);
 
         {
-            RandomIndexEntry *_e = test_build_random_index(api, oi, &rng, n);
+            RandomIndexEntry *_e = test_build_random_index(oi, &rng, n);
             freeRandomEntries(_e, n);
         }
 
         OrderedIndexIterator iter;
         OrderedIndexItem *pos;
-        api.initIterator(&iter, oi);
-        ASSERT_NE((pos = api.next(&iter)), nullptr);
-        double minScore = api.getScore(pos);
-        api.resetIterator(&iter);
+        orderedIndexInitIterator(&iter, oi);
+        ASSERT_NE((pos = orderedIndexNext(&iter)), nullptr);
+        double minScore = orderedIndexGetScore(pos);
+        orderedIndexResetIterator(&iter);
 
-        api.initIterator(&iter, oi);
-        ASSERT_NE((pos = api.prev(&iter)), nullptr);
-        double maxScore = api.getScore(pos);
-        api.resetIterator(&iter);
+        orderedIndexInitIterator(&iter, oi);
+        ASSERT_NE((pos = orderedIndexPrev(&iter)), nullptr);
+        double maxScore = orderedIndexGetScore(pos);
+        orderedIndexResetIterator(&iter);
 
-        OrderedIndexItem *first = api.popFirst(oi);
+        OrderedIndexItem *first = orderedIndexPopFirst(oi);
         ASSERT_NE(first, nullptr);
         assertScore(first, minScore);
-        ASSERT_EQ(api.length(oi), (unsigned long)(n - 1));
-        api.freeItem(first);
+        ASSERT_EQ(orderedIndexLength(oi), (unsigned long)(n - 1));
+        orderedIndexFreeItem(first);
         verifyOI();
 
-        OrderedIndexItem *last = api.popLast(oi);
+        OrderedIndexItem *last = orderedIndexPopLast(oi);
         ASSERT_NE(last, nullptr);
         assertScore(last, maxScore);
-        ASSERT_EQ(api.length(oi), (unsigned long)(n - 2));
-        api.freeItem(last);
+        ASSERT_EQ(orderedIndexLength(oi), (unsigned long)(n - 2));
+        orderedIndexFreeItem(last);
         verifyOI();
 
-        api.initIterator(&iter, oi);
+        orderedIndexInitIterator(&iter, oi);
         double prevScore = NEG_INF;
-        while (((pos = api.next(&iter)) != NULL)) {
-            ASSERT_GE(api.getScore(pos), prevScore);
-            prevScore = api.getScore(pos);
+        while (((pos = orderedIndexNext(&iter)) != NULL)) {
+            ASSERT_GE(orderedIndexGetScore(pos), prevScore);
+            prevScore = orderedIndexGetScore(pos);
         }
-        api.resetIterator(&iter);
-        api.free(oi);
-        oi = api.create();
+        orderedIndexResetIterator(&iter);
+        orderedIndexFree(oi);
+        oi = orderedIndexCreate();
     }
 }
 
-TEST_P(OrderedIndexTest, RandomizedDeleteRangeByScore) {
+TEST_F(OrderedIndexTest, RandomizedDeleteRangeByScore) {
     uint32_t rng = test_fuzz_seed();
     for (int trial = 0; trial < 20; trial++) {
         int n = test_rand_range(&rng, 5, 40);
 
-        RandomIndexEntry *entries = test_build_random_index(api, oi, &rng, n);
+        RandomIndexEntry *entries = test_build_random_index(oi, &rng, n);
 
         double s1 = test_random_score(&rng), s2 = test_random_score(&rng);
         double lo = TEST_MIN(s1, s2), hi = TEST_MAX(s1, s2);
@@ -1485,35 +1525,35 @@ TEST_P(OrderedIndexTest, RandomizedDeleteRangeByScore) {
             if (entries[i].score >= lo && entries[i].score <= hi) expectedDeleted++;
         }
 
-        unsigned long deleted = api.deleteRangeByScore(oi, lo, hi, 0, 0, NULL, NULL);
+        unsigned long deleted = orderedIndexDeleteRangeByScore(oi, lo, hi, 0, 0, NULL, NULL);
         ASSERT_EQ(deleted, (unsigned long)expectedDeleted);
-        ASSERT_EQ(api.length(oi), (unsigned long)(n - expectedDeleted));
+        ASSERT_EQ(orderedIndexLength(oi), (unsigned long)(n - expectedDeleted));
         verifyOI();
 
         OrderedIndexIterator iter;
         OrderedIndexItem *pos;
-        api.initIterator(&iter, oi);
+        orderedIndexInitIterator(&iter, oi);
         double prevScore = NEG_INF;
-        while (((pos = api.next(&iter)) != NULL)) {
-            double s = api.getScore(pos);
+        while (((pos = orderedIndexNext(&iter)) != NULL)) {
+            double s = orderedIndexGetScore(pos);
             ASSERT_TRUE(s < lo || s > hi);
             ASSERT_GE(s, prevScore);
             prevScore = s;
         }
-        api.resetIterator(&iter);
-        api.free(oi);
+        orderedIndexResetIterator(&iter);
+        orderedIndexFree(oi);
         freeRandomEntries(entries, n);
-        oi = api.create();
+        oi = orderedIndexCreate();
     }
 }
 
-TEST_P(OrderedIndexTest, RandomizedDeleteRangeByIndex) {
+TEST_F(OrderedIndexTest, RandomizedDeleteRangeByIndex) {
     uint32_t rng = test_fuzz_seed();
     for (int trial = 0; trial < 20; trial++) {
         int n = test_rand_range(&rng, 5, 40);
 
         {
-            RandomIndexEntry *_e = test_build_random_index(api, oi, &rng, n);
+            RandomIndexEntry *_e = test_build_random_index(oi, &rng, n);
             freeRandomEntries(_e, n);
         }
 
@@ -1522,35 +1562,35 @@ TEST_P(OrderedIndexTest, RandomizedDeleteRangeByIndex) {
         unsigned long end = (unsigned long)TEST_MAX(r1, r2);
         unsigned long expectedDeleted = end - start + 1;
 
-        unsigned long deleted = api.deleteRangeByIndex(oi, start, end, NULL, NULL);
+        unsigned long deleted = orderedIndexDeleteRangeByIndex(oi, start, end, NULL, NULL);
         ASSERT_EQ(deleted, expectedDeleted);
-        ASSERT_EQ(api.length(oi), (unsigned long)(n)-expectedDeleted);
+        ASSERT_EQ(orderedIndexLength(oi), (unsigned long)(n)-expectedDeleted);
         verifyOI();
 
         OrderedIndexIterator iter;
         OrderedIndexItem *pos;
-        api.initIterator(&iter, oi);
+        orderedIndexInitIterator(&iter, oi);
         int remaining = 0;
         double prevScore = NEG_INF;
-        while (((pos = api.next(&iter)) != NULL)) {
-            ASSERT_GE(api.getScore(pos), prevScore);
-            prevScore = api.getScore(pos);
+        while (((pos = orderedIndexNext(&iter)) != NULL)) {
+            ASSERT_GE(orderedIndexGetScore(pos), prevScore);
+            prevScore = orderedIndexGetScore(pos);
             remaining++;
         }
         ASSERT_EQ(remaining, n - (int)expectedDeleted);
-        api.resetIterator(&iter);
-        api.free(oi);
-        oi = api.create();
+        orderedIndexResetIterator(&iter);
+        orderedIndexFree(oi);
+        oi = orderedIndexCreate();
     }
 }
 
-TEST_P(OrderedIndexTest, RandomizedForwardBackwardMirror) {
+TEST_F(OrderedIndexTest, RandomizedForwardBackwardMirror) {
     uint32_t rng = test_fuzz_seed();
     for (int trial = 0; trial < 20; trial++) {
         int n = test_rand_range(&rng, 1, 50);
 
         {
-            RandomIndexEntry *_e = test_build_random_index(api, oi, &rng, n);
+            RandomIndexEntry *_e = test_build_random_index(oi, &rng, n);
             freeRandomEntries(_e, n);
         }
 
@@ -1558,19 +1598,19 @@ TEST_P(OrderedIndexTest, RandomizedForwardBackwardMirror) {
         OrderedIndexIterator iter;
         OrderedIndexItem *pos;
         int fi = 0;
-        api.initIterator(&iter, oi);
-        while (((pos = api.next(&iter)) != NULL)) {
-            forwardScores[fi++] = api.getScore(pos);
+        orderedIndexInitIterator(&iter, oi);
+        while (((pos = orderedIndexNext(&iter)) != NULL)) {
+            forwardScores[fi++] = orderedIndexGetScore(pos);
         }
-        api.resetIterator(&iter);
+        orderedIndexResetIterator(&iter);
 
         double *backwardScores = (double *)zmalloc(sizeof(double) * n);
         int bi = 0;
-        api.initIterator(&iter, oi);
-        while (((pos = api.prev(&iter)) != NULL)) {
-            backwardScores[bi++] = api.getScore(pos);
+        orderedIndexInitIterator(&iter, oi);
+        while (((pos = orderedIndexPrev(&iter)) != NULL)) {
+            backwardScores[bi++] = orderedIndexGetScore(pos);
         }
-        api.resetIterator(&iter);
+        orderedIndexResetIterator(&iter);
 
         ASSERT_EQ(fi, bi);
         reverseDoubleArray(backwardScores, bi);
@@ -1579,52 +1619,52 @@ TEST_P(OrderedIndexTest, RandomizedForwardBackwardMirror) {
         }
         zfree(forwardScores);
         zfree(backwardScores);
-        api.free(oi);
-        oi = api.create();
+        orderedIndexFree(oi);
+        oi = orderedIndexCreate();
     }
 }
 
 /* ========== Count range tests ========== */
 
-TEST_P(OrderedIndexTest, CountScoreRange) {
+TEST_F(OrderedIndexTest, CountScoreRange) {
     populateSequential(10);
 
     /* Full range */
-    ASSERT_EQ(api.countScoreRange(oi, NEG_INF, POS_INF, 0, 0), 10UL);
+    ASSERT_EQ(orderedIndexCountScoreRange(oi, NEG_INF, POS_INF, 0, 0), 10UL);
 
     /* Inclusive [3, 6] */
-    ASSERT_EQ(api.countScoreRange(oi, 3.0, 6.0, 0, 0), 4UL);
+    ASSERT_EQ(orderedIndexCountScoreRange(oi, 3.0, 6.0, 0, 0), 4UL);
 
     /* Exclusive (3, 6) */
-    ASSERT_EQ(api.countScoreRange(oi, 3.0, 6.0, 1, 1), 2UL);
+    ASSERT_EQ(orderedIndexCountScoreRange(oi, 3.0, 6.0, 1, 1), 2UL);
 
     /* Single element [5, 5] */
-    ASSERT_EQ(api.countScoreRange(oi, 5.0, 5.0, 0, 0), 1UL);
+    ASSERT_EQ(orderedIndexCountScoreRange(oi, 5.0, 5.0, 0, 0), 1UL);
 
     /* Empty exclusive (5, 5) */
-    ASSERT_EQ(api.countScoreRange(oi, 5.0, 5.0, 1, 0), 0UL);
+    ASSERT_EQ(orderedIndexCountScoreRange(oi, 5.0, 5.0, 1, 0), 0UL);
 
     /* No match above */
-    ASSERT_EQ(api.countScoreRange(oi, 10.0, 20.0, 0, 0), 0UL);
+    ASSERT_EQ(orderedIndexCountScoreRange(oi, 10.0, 20.0, 0, 0), 0UL);
 
     /* No match below */
-    ASSERT_EQ(api.countScoreRange(oi, -20.0, -10.0, 0, 0), 0UL);
+    ASSERT_EQ(orderedIndexCountScoreRange(oi, -20.0, -10.0, 0, 0), 0UL);
 
     /* Min > max */
-    ASSERT_EQ(api.countScoreRange(oi, 6.0, 3.0, 0, 0), 0UL);
+    ASSERT_EQ(orderedIndexCountScoreRange(oi, 6.0, 3.0, 0, 0), 0UL);
 
     /* First element only [0, 0] */
-    ASSERT_EQ(api.countScoreRange(oi, 0.0, 0.0, 0, 0), 1UL);
+    ASSERT_EQ(orderedIndexCountScoreRange(oi, 0.0, 0.0, 0, 0), 1UL);
 
     /* Last element only [9, 9] */
-    ASSERT_EQ(api.countScoreRange(oi, 9.0, 9.0, 0, 0), 1UL);
+    ASSERT_EQ(orderedIndexCountScoreRange(oi, 9.0, 9.0, 0, 0), 1UL);
 }
 
-TEST_P(OrderedIndexTest, CountScoreRangeEmpty) {
-    ASSERT_EQ(api.countScoreRange(oi, NEG_INF, POS_INF, 0, 0), 0UL);
+TEST_F(OrderedIndexTest, CountScoreRangeEmpty) {
+    ASSERT_EQ(orderedIndexCountScoreRange(oi, NEG_INF, POS_INF, 0, 0), 0UL);
 }
 
-TEST_P(OrderedIndexTest, CountLexRange) {
+TEST_F(OrderedIndexTest, CountLexRange) {
     for (int i = 0; i < FRUITS_COUNT; i++) insert(1.0, FRUITS[i]);
 
     ASSERT_EQ(countLexRange("banana", "date", 0, 0), 3UL);   /* Inclusive [banana, date] */
@@ -1634,28 +1674,19 @@ TEST_P(OrderedIndexTest, CountLexRange) {
     ASSERT_EQ(countLexRange("a", "z", 0, 0), 5UL);           /* All elements */
 }
 
-TEST_P(OrderedIndexTest, CountLexRangeEmpty) {
+TEST_F(OrderedIndexTest, CountLexRangeEmpty) {
     ASSERT_EQ(countLexRange("a", "z", 0, 0), 0UL);
 }
-
-/* ========== Instantiate parameterized tests for all implementations ========== */
-
-INSTANTIATE_TEST_SUITE_P(AllImplementations,
-                         OrderedIndexTest,
-                         ::testing::Values(&skiplistImpl),
-                         orderedIndexTestName);
 
 /* ========== On-Delete Callback Tests ========== */
 
 struct OnDeleteRecord {
-    OrderedIndexTestApi *api;
     int count;
     int capacity;
-    sds *elements; /* Fixed-size array allocated at init */
+    sds *elements;
 };
 
-static void initOnDeleteRecord(OnDeleteRecord *rec, OrderedIndexTestApi *api, int capacity) {
-    rec->api = api;
+static void initOnDeleteRecord(OnDeleteRecord *rec, int capacity) {
     rec->count = 0;
     rec->capacity = capacity;
     rec->elements = (sds *)zmalloc(sizeof(sds) * capacity);
@@ -1670,31 +1701,31 @@ static void testOnDeleteCallback(OrderedIndexItem *item, void *ctx) {
     OnDeleteRecord *rec = (OnDeleteRecord *)ctx;
     const char *ptr;
     size_t len;
-    rec->api->getElementRaw(item, &ptr, &len);
+    orderedIndexGetElementRaw(item, &ptr, &len);
     rec->elements[rec->count] = sdsnewlen(ptr, len);
     rec->count++;
     /* Item is freed by the index after this callback returns. */
 }
 
-class OnDeleteCallbackTest : public ::testing::TestWithParam<OrderedIndexTestApi *> {
+class OnDeleteCallbackTest : public ::testing::Test {
   protected:
-    OrderedIndexTestApi *api = GetParam();
     OrderedIndex *oi = nullptr;
 
     void SetUp() override {
-        oi = api->create();
+        oi = orderedIndexCreate();
     }
     void TearDown() override {
-        if (oi) api->free(oi);
+        if (oi) orderedIndexFree(oi);
     }
 
+    /* Verify structural integrity. */
     void verifyOI() {
         char errmsg[256];
-        ASSERT_TRUE(api->verifyIntegrity(oi, errmsg, sizeof(errmsg))) << errmsg;
+        ASSERT_TRUE(orderedIndexVerifyIntegrity(oi, errmsg, sizeof(errmsg))) << errmsg;
     }
 
     void insert(double score, const char *ele) {
-        api->insert(oi, score, ele, strlen(ele));
+        orderedIndexInsert(oi, score, ele, strlen(ele));
     }
 
     void insertN(int n) {
@@ -1711,42 +1742,41 @@ class OnDeleteCallbackTest : public ::testing::TestWithParam<OrderedIndexTestApi
         }
     }
 
-    /* Collect elements into caller-owned sds array. Caller must freeSdsArray(). */
     sds *collectElements(OrderedIndex *idx, size_t *out_n) {
-        return collectIndexToSds(*api, idx, out_n);
+        return collectIndexToSds(idx, out_n);
     }
 };
 
 /* DeleteRangeByScore */
 
-TEST_P(OnDeleteCallbackTest, DeleteRangeByScore_EmptyAndNoMatch) {
+TEST_F(OnDeleteCallbackTest, DeleteRangeByScore_EmptyAndNoMatch) {
     OnDeleteRecord rec;
-    initOnDeleteRecord(&rec, api, 10);
+    initOnDeleteRecord(&rec, 10);
 
-    unsigned long deleted = api->deleteRangeByScore(oi, 0.0, 10.0, 0, 0, testOnDeleteCallback, &rec);
+    unsigned long deleted = orderedIndexDeleteRangeByScore(oi, 0.0, 10.0, 0, 0, testOnDeleteCallback, &rec);
     ASSERT_EQ(deleted, 0UL);
     ASSERT_EQ(rec.count, 0);
-    api->free(oi);
+    orderedIndexFree(oi);
 
-    oi = api->create();
+    oi = orderedIndexCreate();
     insertN(5);
     rec.count = 0;
-    deleted = api->deleteRangeByScore(oi, 10.0, 20.0, 0, 0, testOnDeleteCallback, &rec);
+    deleted = orderedIndexDeleteRangeByScore(oi, 10.0, 20.0, 0, 0, testOnDeleteCallback, &rec);
     ASSERT_EQ(deleted, 0UL);
     ASSERT_EQ(rec.count, 0);
-    ASSERT_EQ(api->length(oi), 5UL);
+    ASSERT_EQ(orderedIndexLength(oi), 5UL);
     freeOnDeleteRecord(&rec);
 }
 
-TEST_P(OnDeleteCallbackTest, DeleteRangeByScore_Subset) {
+TEST_F(OnDeleteCallbackTest, DeleteRangeByScore_Subset) {
     insertN(10);
 
     OnDeleteRecord rec;
-    initOnDeleteRecord(&rec, api, 10);
-    unsigned long deleted = api->deleteRangeByScore(oi, 3.0, 6.0, 0, 0, testOnDeleteCallback, &rec);
+    initOnDeleteRecord(&rec, 10);
+    unsigned long deleted = orderedIndexDeleteRangeByScore(oi, 3.0, 6.0, 0, 0, testOnDeleteCallback, &rec);
     ASSERT_EQ(deleted, 4UL);
     ASSERT_EQ(rec.count, 4);
-    ASSERT_EQ(api->length(oi), 6UL);
+    ASSERT_EQ(orderedIndexLength(oi), 6UL);
     verifyOI();
 
     sortSdsArray(rec.elements, rec.count);
@@ -1761,84 +1791,84 @@ TEST_P(OnDeleteCallbackTest, DeleteRangeByScore_Subset) {
     freeOnDeleteRecord(&rec);
 }
 
-TEST_P(OnDeleteCallbackTest, DeleteRangeByScore_All) {
+TEST_F(OnDeleteCallbackTest, DeleteRangeByScore_All) {
     insertN(5);
 
     OnDeleteRecord rec;
-    initOnDeleteRecord(&rec, api, 10);
-    unsigned long deleted = api->deleteRangeByScore(oi, NEG_INF, POS_INF, 0, 0, testOnDeleteCallback, &rec);
+    initOnDeleteRecord(&rec, 10);
+    unsigned long deleted = orderedIndexDeleteRangeByScore(oi, NEG_INF, POS_INF, 0, 0, testOnDeleteCallback, &rec);
     ASSERT_EQ(deleted, 5UL);
     ASSERT_EQ(rec.count, 5);
-    ASSERT_EQ(api->length(oi), 0UL);
+    ASSERT_EQ(orderedIndexLength(oi), 0UL);
     verifyOI();
     freeOnDeleteRecord(&rec);
 }
 
-TEST_P(OnDeleteCallbackTest, DeleteRangeByScore_NullCallback) {
+TEST_F(OnDeleteCallbackTest, DeleteRangeByScore_NullCallback) {
     insertN(5);
 
-    unsigned long deleted = api->deleteRangeByScore(oi, 1.0, 3.0, 0, 0, NULL, NULL);
+    unsigned long deleted = orderedIndexDeleteRangeByScore(oi, 1.0, 3.0, 0, 0, NULL, NULL);
     ASSERT_EQ(deleted, 3UL);
-    ASSERT_EQ(api->length(oi), 2UL);
+    ASSERT_EQ(orderedIndexLength(oi), 2UL);
 }
 
-TEST_P(OnDeleteCallbackTest, DeleteRangeByScore_ExclusiveBounds) {
+TEST_F(OnDeleteCallbackTest, DeleteRangeByScore_ExclusiveBounds) {
     insertN(10);
 
     OnDeleteRecord rec;
-    initOnDeleteRecord(&rec, api, 10);
-    unsigned long deleted = api->deleteRangeByScore(oi, 3.0, 7.0, 1, 1, testOnDeleteCallback, &rec);
+    initOnDeleteRecord(&rec, 10);
+    unsigned long deleted = orderedIndexDeleteRangeByScore(oi, 3.0, 7.0, 1, 1, testOnDeleteCallback, &rec);
     ASSERT_EQ(deleted, 3UL);
     ASSERT_EQ(rec.count, 3);
     sortSdsArray(rec.elements, rec.count);
     ASSERT_SDS_ARRAY_EQ(rec.elements, rec.count, "key4", "key5", "key6");
-    ASSERT_EQ(api->length(oi), 7UL);
+    ASSERT_EQ(orderedIndexLength(oi), 7UL);
     freeOnDeleteRecord(&rec);
 }
 
-TEST_P(OnDeleteCallbackTest, DeleteRangeByScore_SingleElement) {
+TEST_F(OnDeleteCallbackTest, DeleteRangeByScore_SingleElement) {
     insertN(5);
 
     OnDeleteRecord rec;
-    initOnDeleteRecord(&rec, api, 10);
-    unsigned long deleted = api->deleteRangeByScore(oi, 2.0, 2.0, 0, 0, testOnDeleteCallback, &rec);
+    initOnDeleteRecord(&rec, 10);
+    unsigned long deleted = orderedIndexDeleteRangeByScore(oi, 2.0, 2.0, 0, 0, testOnDeleteCallback, &rec);
     ASSERT_EQ(deleted, 1UL);
     ASSERT_EQ(rec.count, 1);
     ASSERT_STREQ(rec.elements[0], "key2");
-    ASSERT_EQ(api->length(oi), 4UL);
+    ASSERT_EQ(orderedIndexLength(oi), 4UL);
     freeOnDeleteRecord(&rec);
 }
 
 /* DeleteRangeByIndex */
 
-TEST_P(OnDeleteCallbackTest, DeleteRangeByIndex_EmptyAndNoMatch) {
+TEST_F(OnDeleteCallbackTest, DeleteRangeByIndex_EmptyAndNoMatch) {
     OnDeleteRecord rec;
-    initOnDeleteRecord(&rec, api, 10);
+    initOnDeleteRecord(&rec, 10);
 
-    unsigned long deleted = api->deleteRangeByIndex(oi, 0, 4, testOnDeleteCallback, &rec);
+    unsigned long deleted = orderedIndexDeleteRangeByIndex(oi, 0, 4, testOnDeleteCallback, &rec);
     ASSERT_EQ(deleted, 0UL);
     ASSERT_EQ(rec.count, 0);
-    api->free(oi);
+    orderedIndexFree(oi);
 
-    oi = api->create();
+    oi = orderedIndexCreate();
     insertN(3);
     rec.count = 0;
-    deleted = api->deleteRangeByIndex(oi, 10, 20, testOnDeleteCallback, &rec);
+    deleted = orderedIndexDeleteRangeByIndex(oi, 10, 20, testOnDeleteCallback, &rec);
     ASSERT_EQ(deleted, 0UL);
     ASSERT_EQ(rec.count, 0);
-    ASSERT_EQ(api->length(oi), 3UL);
+    ASSERT_EQ(orderedIndexLength(oi), 3UL);
     freeOnDeleteRecord(&rec);
 }
 
-TEST_P(OnDeleteCallbackTest, DeleteRangeByIndex_Subset) {
+TEST_F(OnDeleteCallbackTest, DeleteRangeByIndex_Subset) {
     insertN(10);
 
     OnDeleteRecord rec;
-    initOnDeleteRecord(&rec, api, 10);
-    unsigned long deleted = api->deleteRangeByIndex(oi, 2, 4, testOnDeleteCallback, &rec);
+    initOnDeleteRecord(&rec, 10);
+    unsigned long deleted = orderedIndexDeleteRangeByIndex(oi, 2, 4, testOnDeleteCallback, &rec);
     ASSERT_EQ(deleted, 3UL);
     ASSERT_EQ(rec.count, 3);
-    ASSERT_EQ(api->length(oi), 7UL);
+    ASSERT_EQ(orderedIndexLength(oi), 7UL);
 
     sortSdsArray(rec.elements, rec.count);
     ASSERT_SDS_ARRAY_EQ(rec.elements, rec.count, "key2", "key3", "key4");
@@ -1852,32 +1882,32 @@ TEST_P(OnDeleteCallbackTest, DeleteRangeByIndex_Subset) {
     freeOnDeleteRecord(&rec);
 }
 
-TEST_P(OnDeleteCallbackTest, DeleteRangeByIndex_All) {
+TEST_F(OnDeleteCallbackTest, DeleteRangeByIndex_All) {
     insertN(5);
 
     OnDeleteRecord rec;
-    initOnDeleteRecord(&rec, api, 10);
-    unsigned long deleted = api->deleteRangeByIndex(oi, 0, 4, testOnDeleteCallback, &rec);
+    initOnDeleteRecord(&rec, 10);
+    unsigned long deleted = orderedIndexDeleteRangeByIndex(oi, 0, 4, testOnDeleteCallback, &rec);
     ASSERT_EQ(deleted, 5UL);
     ASSERT_EQ(rec.count, 5);
-    ASSERT_EQ(api->length(oi), 0UL);
+    ASSERT_EQ(orderedIndexLength(oi), 0UL);
     freeOnDeleteRecord(&rec);
 }
 
-TEST_P(OnDeleteCallbackTest, DeleteRangeByIndex_NullCallback) {
+TEST_F(OnDeleteCallbackTest, DeleteRangeByIndex_NullCallback) {
     insertN(5);
 
-    unsigned long deleted = api->deleteRangeByIndex(oi, 2, 4, NULL, NULL);
+    unsigned long deleted = orderedIndexDeleteRangeByIndex(oi, 2, 4, NULL, NULL);
     ASSERT_EQ(deleted, 3UL);
-    ASSERT_EQ(api->length(oi), 2UL);
+    ASSERT_EQ(orderedIndexLength(oi), 2UL);
 }
 
-TEST_P(OnDeleteCallbackTest, DeleteRangeByIndex_ExclusiveBounds) {
+TEST_F(OnDeleteCallbackTest, DeleteRangeByIndex_ExclusiveBounds) {
     insertN(5);
 
     OnDeleteRecord rec;
-    initOnDeleteRecord(&rec, api, 10);
-    unsigned long deleted = api->deleteRangeByIndex(oi, 2, 2, testOnDeleteCallback, &rec);
+    initOnDeleteRecord(&rec, 10);
+    unsigned long deleted = orderedIndexDeleteRangeByIndex(oi, 2, 2, testOnDeleteCallback, &rec);
     ASSERT_EQ(deleted, 1UL);
     ASSERT_EQ(rec.count, 1);
     ASSERT_STREQ(rec.elements[0], "key2");
@@ -1891,35 +1921,35 @@ TEST_P(OnDeleteCallbackTest, DeleteRangeByIndex_ExclusiveBounds) {
     freeOnDeleteRecord(&rec);
 }
 
-TEST_P(OnDeleteCallbackTest, DeleteRangeByIndex_SingleElement) {
+TEST_F(OnDeleteCallbackTest, DeleteRangeByIndex_SingleElement) {
     insertN(5);
 
     OnDeleteRecord rec;
-    initOnDeleteRecord(&rec, api, 10);
-    unsigned long deleted = api->deleteRangeByIndex(oi, 0, 0, testOnDeleteCallback, &rec);
+    initOnDeleteRecord(&rec, 10);
+    unsigned long deleted = orderedIndexDeleteRangeByIndex(oi, 0, 0, testOnDeleteCallback, &rec);
     ASSERT_EQ(deleted, 1UL);
     ASSERT_EQ(rec.count, 1);
     ASSERT_STREQ(rec.elements[0], "key0");
-    ASSERT_EQ(api->length(oi), 4UL);
+    ASSERT_EQ(orderedIndexLength(oi), 4UL);
     freeOnDeleteRecord(&rec);
 }
 
 /* DeleteRangeByLex */
 
-TEST_P(OnDeleteCallbackTest, DeleteRangeByLex_EmptyAndNoMatch) {
+TEST_F(OnDeleteCallbackTest, DeleteRangeByLex_EmptyAndNoMatch) {
     OnDeleteRecord rec;
-    initOnDeleteRecord(&rec, api, 10);
+    initOnDeleteRecord(&rec, 10);
 
     sds min = sdsnew("a");
     sds max = sdsnew("z");
-    unsigned long deleted = api->deleteRangeByLex(oi, min, max, 0, 0, testOnDeleteCallback, &rec);
+    unsigned long deleted = orderedIndexDeleteRangeByLex(oi, min, max, 0, 0, testOnDeleteCallback, &rec);
     ASSERT_EQ(deleted, 0UL);
     ASSERT_EQ(rec.count, 0);
     sdsfree(min);
     sdsfree(max);
-    api->free(oi);
+    orderedIndexFree(oi);
 
-    oi = api->create();
+    oi = orderedIndexCreate();
     {
         const char *_l[] = {"apple", "banana", "cherry"};
         insertLex(_l, 3);
@@ -1927,29 +1957,29 @@ TEST_P(OnDeleteCallbackTest, DeleteRangeByLex_EmptyAndNoMatch) {
     rec.count = 0;
     min = sdsnew("x");
     max = sdsnew("z");
-    deleted = api->deleteRangeByLex(oi, min, max, 0, 0, testOnDeleteCallback, &rec);
+    deleted = orderedIndexDeleteRangeByLex(oi, min, max, 0, 0, testOnDeleteCallback, &rec);
     ASSERT_EQ(deleted, 0UL);
     ASSERT_EQ(rec.count, 0);
-    ASSERT_EQ(api->length(oi), 3UL);
+    ASSERT_EQ(orderedIndexLength(oi), 3UL);
     sdsfree(min);
     sdsfree(max);
     freeOnDeleteRecord(&rec);
 }
 
-TEST_P(OnDeleteCallbackTest, DeleteRangeByLex_Subset) {
+TEST_F(OnDeleteCallbackTest, DeleteRangeByLex_Subset) {
     {
         const char *_l[] = {"apple", "banana", "cherry", "date", "elderberry"};
         insertLex(_l, 5);
     }
 
     OnDeleteRecord rec;
-    initOnDeleteRecord(&rec, api, 10);
+    initOnDeleteRecord(&rec, 10);
     sds min = sdsnew("banana");
     sds max = sdsnew("date");
-    unsigned long deleted = api->deleteRangeByLex(oi, min, max, 0, 0, testOnDeleteCallback, &rec);
+    unsigned long deleted = orderedIndexDeleteRangeByLex(oi, min, max, 0, 0, testOnDeleteCallback, &rec);
     ASSERT_EQ(deleted, 3UL);
     ASSERT_EQ(rec.count, 3);
-    ASSERT_EQ(api->length(oi), 2UL);
+    ASSERT_EQ(orderedIndexLength(oi), 2UL);
 
     sortSdsArray(rec.elements, rec.count);
     ASSERT_SDS_ARRAY_EQ(rec.elements, rec.count, "banana", "cherry", "date");
@@ -1966,27 +1996,27 @@ TEST_P(OnDeleteCallbackTest, DeleteRangeByLex_Subset) {
     freeOnDeleteRecord(&rec);
 }
 
-TEST_P(OnDeleteCallbackTest, DeleteRangeByLex_All) {
+TEST_F(OnDeleteCallbackTest, DeleteRangeByLex_All) {
     {
         const char *_l[] = {"apple", "banana", "cherry"};
         insertLex(_l, 3);
     }
 
     OnDeleteRecord rec;
-    initOnDeleteRecord(&rec, api, 10);
+    initOnDeleteRecord(&rec, 10);
     sds min = sdsnew("a");
     sds max = sdsnew("z");
-    unsigned long deleted = api->deleteRangeByLex(oi, min, max, 0, 0, testOnDeleteCallback, &rec);
+    unsigned long deleted = orderedIndexDeleteRangeByLex(oi, min, max, 0, 0, testOnDeleteCallback, &rec);
     ASSERT_EQ(deleted, 3UL);
     ASSERT_EQ(rec.count, 3);
-    ASSERT_EQ(api->length(oi), 0UL);
+    ASSERT_EQ(orderedIndexLength(oi), 0UL);
 
     sdsfree(min);
     sdsfree(max);
     freeOnDeleteRecord(&rec);
 }
 
-TEST_P(OnDeleteCallbackTest, DeleteRangeByLex_NullCallback) {
+TEST_F(OnDeleteCallbackTest, DeleteRangeByLex_NullCallback) {
     {
         const char *_l[] = {"apple", "banana", "cherry", "date"};
         insertLex(_l, 4);
@@ -1994,9 +2024,9 @@ TEST_P(OnDeleteCallbackTest, DeleteRangeByLex_NullCallback) {
 
     sds min = sdsnew("banana");
     sds max = sdsnew("cherry");
-    unsigned long deleted = api->deleteRangeByLex(oi, min, max, 0, 0, NULL, NULL);
+    unsigned long deleted = orderedIndexDeleteRangeByLex(oi, min, max, 0, 0, NULL, NULL);
     ASSERT_EQ(deleted, 2UL);
-    ASSERT_EQ(api->length(oi), 2UL);
+    ASSERT_EQ(orderedIndexLength(oi), 2UL);
 
     {
         size_t _rn;
@@ -2009,21 +2039,21 @@ TEST_P(OnDeleteCallbackTest, DeleteRangeByLex_NullCallback) {
     sdsfree(max);
 }
 
-TEST_P(OnDeleteCallbackTest, DeleteRangeByLex_ExclusiveBounds) {
+TEST_F(OnDeleteCallbackTest, DeleteRangeByLex_ExclusiveBounds) {
     {
         const char *_l[] = {"apple", "banana", "cherry", "date", "elderberry"};
         insertLex(_l, 5);
     }
 
     OnDeleteRecord rec;
-    initOnDeleteRecord(&rec, api, 10);
+    initOnDeleteRecord(&rec, 10);
     sds min = sdsnew("banana");
     sds max = sdsnew("date");
-    unsigned long deleted = api->deleteRangeByLex(oi, min, max, 1, 1, testOnDeleteCallback, &rec);
+    unsigned long deleted = orderedIndexDeleteRangeByLex(oi, min, max, 1, 1, testOnDeleteCallback, &rec);
     ASSERT_EQ(deleted, 1UL);
     ASSERT_EQ(rec.count, 1);
     ASSERT_STREQ(rec.elements[0], "cherry");
-    ASSERT_EQ(api->length(oi), 4UL);
+    ASSERT_EQ(orderedIndexLength(oi), 4UL);
 
     {
         size_t _rn;
@@ -2037,21 +2067,21 @@ TEST_P(OnDeleteCallbackTest, DeleteRangeByLex_ExclusiveBounds) {
     freeOnDeleteRecord(&rec);
 }
 
-TEST_P(OnDeleteCallbackTest, DeleteRangeByLex_SingleElement) {
+TEST_F(OnDeleteCallbackTest, DeleteRangeByLex_SingleElement) {
     {
         const char *_l[] = {"apple", "banana", "cherry"};
         insertLex(_l, 3);
     }
 
     OnDeleteRecord rec;
-    initOnDeleteRecord(&rec, api, 10);
+    initOnDeleteRecord(&rec, 10);
     sds min = sdsnew("banana");
     sds max = sdsnew("banana");
-    unsigned long deleted = api->deleteRangeByLex(oi, min, max, 0, 0, testOnDeleteCallback, &rec);
+    unsigned long deleted = orderedIndexDeleteRangeByLex(oi, min, max, 0, 0, testOnDeleteCallback, &rec);
     ASSERT_EQ(deleted, 1UL);
     ASSERT_EQ(rec.count, 1);
     ASSERT_STREQ(rec.elements[0], "banana");
-    ASSERT_EQ(api->length(oi), 2UL);
+    ASSERT_EQ(orderedIndexLength(oi), 2UL);
 
     {
         size_t _rn;
@@ -2104,31 +2134,26 @@ static void simHtSort(SimHt *ht) {
 }
 
 static void hashtableConsistencyOnDelete(OrderedIndexItem *item, void *ctx) {
-    /* ctx is a two-element array: [0]=SimHt*, [1]=OrderedIndexTestApi* */
-    void **args = (void **)ctx;
-    SimHt *ht = (SimHt *)args[0];
-    OrderedIndexTestApi *api = (OrderedIndexTestApi *)args[1];
+    SimHt *ht = (SimHt *)ctx;
     const char *ptr;
     size_t len;
-    api->getElementRaw(item, &ptr, &len);
+    orderedIndexGetElementRaw(item, &ptr, &len);
     simHtRemove(ht, ptr, len);
-    /* Item is freed by the index after this callback returns. */
 }
 
-class RangeDeleteHashtableConsistencyTest : public ::testing::TestWithParam<OrderedIndexTestApi *> {
+class RangeDeleteHashtableConsistencyTest : public ::testing::Test {
   protected:
-    OrderedIndexTestApi *api = GetParam();
     OrderedIndex *oi = nullptr;
 
     void SetUp() override {
-        oi = api->create();
+        oi = orderedIndexCreate();
     }
     void TearDown() override {
-        if (oi) api->free(oi);
+        if (oi) orderedIndexFree(oi);
     }
 
     void insert(double score, const char *ele) {
-        api->insert(oi, score, ele, strlen(ele));
+        orderedIndexInsert(oi, score, ele, strlen(ele));
     }
 
     void insertN(SimHt &ht, int n) {
@@ -2149,7 +2174,7 @@ class RangeDeleteHashtableConsistencyTest : public ::testing::TestWithParam<Orde
 
     void assertHtMatchesIndex(SimHt &ht) {
         size_t idx_n;
-        sds *idx_elems = collectIndexToSds(*api, oi, &idx_n);
+        sds *idx_elems = collectIndexToSds(oi, &idx_n);
         sortSdsArray(idx_elems, idx_n);
         simHtSort(&ht);
         ASSERT_EQ(idx_n, (size_t)ht.count);
@@ -2162,37 +2187,34 @@ class RangeDeleteHashtableConsistencyTest : public ::testing::TestWithParam<Orde
 
 /* ByScore */
 
-TEST_P(RangeDeleteHashtableConsistencyTest, ByScore_PartialDelete) {
+TEST_F(RangeDeleteHashtableConsistencyTest, ByScore_PartialDelete) {
     SimHt simulatedHt;
     simHtInit(&simulatedHt, 20);
-    void *cbCtx[] = {&simulatedHt, api};
     insertN(simulatedHt, 10);
 
-    api->deleteRangeByScore(oi, 3.0, 6.0, 0, 0, hashtableConsistencyOnDelete, cbCtx);
+    orderedIndexDeleteRangeByScore(oi, 3.0, 6.0, 0, 0, hashtableConsistencyOnDelete, &simulatedHt);
 
     assertHtMatchesIndex(simulatedHt);
     simHtFree(&simulatedHt);
 }
 
-TEST_P(RangeDeleteHashtableConsistencyTest, ByScore_FullDelete) {
+TEST_F(RangeDeleteHashtableConsistencyTest, ByScore_FullDelete) {
     SimHt simulatedHt;
     simHtInit(&simulatedHt, 20);
-    void *cbCtx[] = {&simulatedHt, api};
     insertN(simulatedHt, 10);
 
-    api->deleteRangeByScore(oi, NEG_INF, POS_INF, 0, 0, hashtableConsistencyOnDelete, cbCtx);
+    orderedIndexDeleteRangeByScore(oi, NEG_INF, POS_INF, 0, 0, hashtableConsistencyOnDelete, &simulatedHt);
 
     assertHtMatchesIndex(simulatedHt);
     simHtFree(&simulatedHt);
 }
 
-TEST_P(RangeDeleteHashtableConsistencyTest, ByScore_EmptyRange) {
+TEST_F(RangeDeleteHashtableConsistencyTest, ByScore_EmptyRange) {
     SimHt simulatedHt;
     simHtInit(&simulatedHt, 20);
-    void *cbCtx[] = {&simulatedHt, api};
     insertN(simulatedHt, 10);
 
-    api->deleteRangeByScore(oi, 20.0, 30.0, 0, 0, hashtableConsistencyOnDelete, cbCtx);
+    orderedIndexDeleteRangeByScore(oi, 20.0, 30.0, 0, 0, hashtableConsistencyOnDelete, &simulatedHt);
 
     assertHtMatchesIndex(simulatedHt);
     simHtFree(&simulatedHt);
@@ -2200,37 +2222,34 @@ TEST_P(RangeDeleteHashtableConsistencyTest, ByScore_EmptyRange) {
 
 /* ByIndex */
 
-TEST_P(RangeDeleteHashtableConsistencyTest, ByIndex_PartialDelete) {
+TEST_F(RangeDeleteHashtableConsistencyTest, ByIndex_PartialDelete) {
     SimHt simulatedHt;
     simHtInit(&simulatedHt, 20);
-    void *cbCtx[] = {&simulatedHt, api};
     insertN(simulatedHt, 10);
 
-    api->deleteRangeByIndex(oi, 2, 4, hashtableConsistencyOnDelete, cbCtx);
+    orderedIndexDeleteRangeByIndex(oi, 2, 4, hashtableConsistencyOnDelete, &simulatedHt);
 
     assertHtMatchesIndex(simulatedHt);
     simHtFree(&simulatedHt);
 }
 
-TEST_P(RangeDeleteHashtableConsistencyTest, ByIndex_FullDelete) {
+TEST_F(RangeDeleteHashtableConsistencyTest, ByIndex_FullDelete) {
     SimHt simulatedHt;
     simHtInit(&simulatedHt, 20);
-    void *cbCtx[] = {&simulatedHt, api};
     insertN(simulatedHt, 10);
 
-    api->deleteRangeByIndex(oi, 0, 9, hashtableConsistencyOnDelete, cbCtx);
+    orderedIndexDeleteRangeByIndex(oi, 0, 9, hashtableConsistencyOnDelete, &simulatedHt);
 
     assertHtMatchesIndex(simulatedHt);
     simHtFree(&simulatedHt);
 }
 
-TEST_P(RangeDeleteHashtableConsistencyTest, ByIndex_EmptyRange) {
+TEST_F(RangeDeleteHashtableConsistencyTest, ByIndex_EmptyRange) {
     SimHt simulatedHt;
     simHtInit(&simulatedHt, 20);
-    void *cbCtx[] = {&simulatedHt, api};
     insertN(simulatedHt, 10);
 
-    api->deleteRangeByIndex(oi, 20, 30, hashtableConsistencyOnDelete, cbCtx);
+    orderedIndexDeleteRangeByIndex(oi, 20, 30, hashtableConsistencyOnDelete, &simulatedHt);
 
     assertHtMatchesIndex(simulatedHt);
     simHtFree(&simulatedHt);
@@ -2238,10 +2257,9 @@ TEST_P(RangeDeleteHashtableConsistencyTest, ByIndex_EmptyRange) {
 
 /* ByLex */
 
-TEST_P(RangeDeleteHashtableConsistencyTest, ByLex_PartialDelete) {
+TEST_F(RangeDeleteHashtableConsistencyTest, ByLex_PartialDelete) {
     SimHt simulatedHt;
     simHtInit(&simulatedHt, 20);
-    void *cbCtx[] = {&simulatedHt, api};
     {
         const char *_l[] = {"apple", "banana", "cherry", "date", "elderberry"};
         insertLex(simulatedHt, _l, 5);
@@ -2249,7 +2267,7 @@ TEST_P(RangeDeleteHashtableConsistencyTest, ByLex_PartialDelete) {
 
     sds min = sdsnew("banana");
     sds max = sdsnew("date");
-    api->deleteRangeByLex(oi, min, max, 0, 0, hashtableConsistencyOnDelete, cbCtx);
+    orderedIndexDeleteRangeByLex(oi, min, max, 0, 0, hashtableConsistencyOnDelete, &simulatedHt);
 
     assertHtMatchesIndex(simulatedHt);
 
@@ -2258,10 +2276,9 @@ TEST_P(RangeDeleteHashtableConsistencyTest, ByLex_PartialDelete) {
     simHtFree(&simulatedHt);
 }
 
-TEST_P(RangeDeleteHashtableConsistencyTest, ByLex_FullDelete) {
+TEST_F(RangeDeleteHashtableConsistencyTest, ByLex_FullDelete) {
     SimHt simulatedHt;
     simHtInit(&simulatedHt, 20);
-    void *cbCtx[] = {&simulatedHt, api};
     {
         const char *_l[] = {"apple", "banana", "cherry", "date", "elderberry"};
         insertLex(simulatedHt, _l, 5);
@@ -2269,7 +2286,7 @@ TEST_P(RangeDeleteHashtableConsistencyTest, ByLex_FullDelete) {
 
     sds min = sdsnew("a");
     sds max = sdsnew("z");
-    api->deleteRangeByLex(oi, min, max, 0, 0, hashtableConsistencyOnDelete, cbCtx);
+    orderedIndexDeleteRangeByLex(oi, min, max, 0, 0, hashtableConsistencyOnDelete, &simulatedHt);
 
     assertHtMatchesIndex(simulatedHt);
 
@@ -2278,10 +2295,9 @@ TEST_P(RangeDeleteHashtableConsistencyTest, ByLex_FullDelete) {
     simHtFree(&simulatedHt);
 }
 
-TEST_P(RangeDeleteHashtableConsistencyTest, ByLex_EmptyRange) {
+TEST_F(RangeDeleteHashtableConsistencyTest, ByLex_EmptyRange) {
     SimHt simulatedHt;
     simHtInit(&simulatedHt, 20);
-    void *cbCtx[] = {&simulatedHt, api};
     {
         const char *_l[] = {"apple", "banana", "cherry", "date", "elderberry"};
         insertLex(simulatedHt, _l, 5);
@@ -2289,7 +2305,7 @@ TEST_P(RangeDeleteHashtableConsistencyTest, ByLex_EmptyRange) {
 
     sds min = sdsnew("zzz");
     sds max = sdsnew("zzzz");
-    api->deleteRangeByLex(oi, min, max, 0, 0, hashtableConsistencyOnDelete, cbCtx);
+    orderedIndexDeleteRangeByLex(oi, min, max, 0, 0, hashtableConsistencyOnDelete, &simulatedHt);
 
     assertHtMatchesIndex(simulatedHt);
 
@@ -2297,13 +2313,3 @@ TEST_P(RangeDeleteHashtableConsistencyTest, ByLex_EmptyRange) {
     sdsfree(max);
     simHtFree(&simulatedHt);
 }
-
-INSTANTIATE_TEST_SUITE_P(AllImplementations,
-                         OnDeleteCallbackTest,
-                         ::testing::Values(&skiplistImpl),
-                         orderedIndexTestName);
-
-INSTANTIATE_TEST_SUITE_P(AllImplementations,
-                         RangeDeleteHashtableConsistencyTest,
-                         ::testing::Values(&skiplistImpl),
-                         orderedIndexTestName);

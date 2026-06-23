@@ -21,9 +21,7 @@
  * responsible for checking the hashtable before inserting.
  *
  * The interface is implementation-agnostic. Currently implemented as a skiplist
- * (see skiplist_ordered_index.c). A B+ tree implementation is planned. Implementation
- * selection is resolved at link time — all orderedIndex* functions are
- * implemented in ordered_index.c which delegates to the active implementation. */
+ * (see ordered_index.c). A B+ tree implementation is planned. */
 
 #include "sds.h"
 #include <stddef.h>
@@ -182,5 +180,16 @@ OrderedIndex *orderedIndexDefragInternals(OrderedIndex *oi, void *(*defragfn)(vo
  * When an item is reallocated, callback is invoked to update external refs.
  * Returns next cursor, or 0 when complete. */
 unsigned long orderedIndexScanDefrag(OrderedIndex *oi, unsigned long cursor, OrderedIndexDefragCallback callback, void *ctx, void *(*defragfn)(void *));
+
+/* ============================================================
+ * Debug / Verification
+ * ============================================================ */
+
+/* Return the internal height of the data structure (skiplist levels). */
+int orderedIndexGetHeight(OrderedIndex *oi);
+
+/* Verify structural integrity. Returns 1 if valid, 0 if corrupt.
+ * On failure, a description is written to errmsg. */
+int orderedIndexVerifyIntegrity(OrderedIndex *oi, char *errmsg, size_t errmsg_len);
 
 #endif /* ORDERED_INDEX_H */

@@ -975,7 +975,7 @@ static sds createEntryString(int dbid, dbEntry *de) {
 static void feedIterator(bgIterator *it, monotime end_time_us) {
     unsigned int initial_queue_len = mutexQueueLength(it->items_for_iterator);
 
-    /* The queue size dynamically adjusts using an AIMD approach.  If we have left ofter stuff from
+    /* The queue size dynamically adjusts using an AIMD approach.  If we have left over stuff from
      * the prior call to feedIterator, reduce by half the remaining size.  If the queue ran dry
      * and we have time left (at the end of this function), additively increase the queue length. */
     if (initial_queue_len > 2 && it->item_count_target >= initial_queue_len) {

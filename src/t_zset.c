@@ -1319,7 +1319,7 @@ typedef enum {
 
 /* Callback for orderedIndexDeleteRangeBy* — removes the item from the hashtable
  * and frees it. The callback receives ownership per the API contract. */
-static void zsetIndexDeleteCallback(OrderedIndexItem *item, void *ctx) {
+static void zsetIndexDeleteCallback(const OrderedIndexItem *item, void *ctx) {
     hashtable *ht = ctx;
     const char *ptr;
     size_t len;

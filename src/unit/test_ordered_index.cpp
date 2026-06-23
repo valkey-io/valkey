@@ -1697,7 +1697,7 @@ static void freeOnDeleteRecord(OnDeleteRecord *rec) {
     zfree(rec->elements);
 }
 
-static void testOnDeleteCallback(OrderedIndexItem *item, void *ctx) {
+static void testOnDeleteCallback(const OrderedIndexItem *item, void *ctx) {
     OnDeleteRecord *rec = (OnDeleteRecord *)ctx;
     const char *ptr;
     size_t len;
@@ -2133,7 +2133,7 @@ static void simHtSort(SimHt *ht) {
     sortSdsArray(ht->elems, ht->count);
 }
 
-static void hashtableConsistencyOnDelete(OrderedIndexItem *item, void *ctx) {
+static void hashtableConsistencyOnDelete(const OrderedIndexItem *item, void *ctx) {
     SimHt *ht = (SimHt *)ctx;
     const char *ptr;
     size_t len;

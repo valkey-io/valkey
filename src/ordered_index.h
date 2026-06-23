@@ -35,7 +35,7 @@ typedef uint64_t OrderedIndexIterator[2];
  * The item pointer is valid for the duration of the callback but will be
  * freed by the index immediately after the callback returns. Do NOT free
  * the item or store the pointer beyond the callback's scope. */
-typedef void (*OrderedIndexOnDelete)(OrderedIndexItem *item, void *ctx);
+typedef void (*OrderedIndexOnDelete)(const OrderedIndexItem *item, void *ctx);
 
 /* Callback invoked during defrag when an item is reallocated. Allows the
  * caller to update external references (e.g. hashtable pointers). */
@@ -108,19 +108,19 @@ unsigned long orderedIndexDeleteRangeByLex(OrderedIndex *oi, const_sds min, cons
  * ============================================================ */
 
 /* Return the number of items in the index. */
-unsigned long orderedIndexLength(OrderedIndex *oi);
+unsigned long orderedIndexLength(const OrderedIndex *oi);
 
 /* Return the item at the given 0-based index, or NULL if out of range. */
-OrderedIndexItem *orderedIndexGetByIndex(OrderedIndex *oi, unsigned long index);
+OrderedIndexItem *orderedIndexGetByIndex(const OrderedIndex *oi, unsigned long index);
 
 /* Return the first (lowest) item, or NULL if empty. O(1). */
-OrderedIndexItem *orderedIndexGetFirst(OrderedIndex *oi);
+OrderedIndexItem *orderedIndexGetFirst(const OrderedIndex *oi);
 
 /* Return the last (highest) item, or NULL if empty. O(1). */
-OrderedIndexItem *orderedIndexGetLast(OrderedIndex *oi);
+OrderedIndexItem *orderedIndexGetLast(const OrderedIndex *oi);
 
 /* Return the 0-based index of an item. The item must be in the index. */
-unsigned long orderedIndexGetIndex(OrderedIndex *oi, const OrderedIndexItem *item);
+unsigned long orderedIndexGetIndex(const OrderedIndex *oi, const OrderedIndexItem *item);
 
 /* Get the element data from an item as a raw pointer + length. */
 void orderedIndexGetElementRaw(const OrderedIndexItem *item, const char **ptr, size_t *len);
@@ -129,10 +129,10 @@ void orderedIndexGetElementRaw(const OrderedIndexItem *item, const char **ptr, s
 double orderedIndexGetScore(const OrderedIndexItem *item);
 
 /* Count items with score in [min, max]. If min_ex is set, min is exclusive; if max_ex is set, max is exclusive. */
-unsigned long orderedIndexCountScoreRange(OrderedIndex *oi, double min, double max, int min_ex, int max_ex);
+unsigned long orderedIndexCountScoreRange(const OrderedIndex *oi, double min, double max, int min_ex, int max_ex);
 
 /* Count items with element in lex range [min, max]. If min_ex is set, min is exclusive; if max_ex is set, max is exclusive. */
-unsigned long orderedIndexCountLexRange(OrderedIndex *oi, const_sds min, const_sds max, int min_ex, int max_ex);
+unsigned long orderedIndexCountLexRange(const OrderedIndex *oi, const_sds min, const_sds max, int min_ex, int max_ex);
 
 /* ============================================================
  * Iterator
@@ -141,7 +141,7 @@ unsigned long orderedIndexCountLexRange(OrderedIndex *oi, const_sds min, const_s
 /* Initialize a stack-allocated iterator. If no seek function is called,
  * next() starts from the beginning and prev() starts from the end.
  * Use orderedIndexSeekToIndex/ScoreRange/LexRange to start elsewhere. */
-void orderedIndexInitIterator(OrderedIndexIterator *iter, OrderedIndex *oi);
+void orderedIndexInitIterator(OrderedIndexIterator *iter, const OrderedIndex *oi);
 
 /* Reset iterator position (keeps the index association). */
 void orderedIndexResetIterator(OrderedIndexIterator *iter);
@@ -171,7 +171,7 @@ void orderedIndexSeekToLexRange(OrderedIndexIterator *iter, const_sds min, const
 void orderedIndexDismissMemory(OrderedIndex *oi);
 
 /* Estimate total memory usage by averaging the specified number of sample elements. */
-size_t orderedIndexEstimateMemory(OrderedIndex *oi, size_t sample_size);
+size_t orderedIndexEstimateMemory(const OrderedIndex *oi, size_t sample_size);
 
 /* Defrag data structure internals. Returns new pointer if reallocated. */
 OrderedIndex *orderedIndexDefragInternals(OrderedIndex *oi, void *(*defragfn)(void *));
@@ -186,10 +186,10 @@ unsigned long orderedIndexScanDefrag(OrderedIndex *oi, unsigned long cursor, Ord
  * ============================================================ */
 
 /* Return the internal height of the data structure (skiplist levels). */
-int orderedIndexGetHeight(OrderedIndex *oi);
+int orderedIndexGetHeight(const OrderedIndex *oi);
 
 /* Verify structural integrity. Returns 1 if valid, 0 if corrupt.
  * On failure, a description is written to errmsg. */
-int orderedIndexVerifyIntegrity(OrderedIndex *oi, char *errmsg, size_t errmsg_len);
+int orderedIndexVerifyIntegrity(const OrderedIndex *oi, char *errmsg, size_t errmsg_len);
 
 #endif /* ORDERED_INDEX_H */

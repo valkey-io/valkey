@@ -16,6 +16,7 @@
 static_assert(sizeof(OrderedIndexIterator) >= sizeof(zslIter),
               "OrderedIndexIterator must be large enough to hold zslIter");
 
+
 /*-----------------------------------------------------------------------------
  * Lifecycle
  *---------------------------------------------------------------------------*/
@@ -184,23 +185,23 @@ unsigned long orderedIndexDeleteRangeByLex(OrderedIndex *oi, const_sds min, cons
  * Query
  *---------------------------------------------------------------------------*/
 
-unsigned long orderedIndexLength(OrderedIndex *oi) {
+unsigned long orderedIndexLength(const OrderedIndex *oi) {
     return zslGetLength((zskiplist *)oi);
 }
 
-OrderedIndexItem *orderedIndexGetByIndex(OrderedIndex *oi, unsigned long index) {
+OrderedIndexItem *orderedIndexGetByIndex(const OrderedIndex *oi, unsigned long index) {
     return (OrderedIndexItem *)zslGetElementByRank((zskiplist *)oi, index + 1);
 }
 
-OrderedIndexItem *orderedIndexGetFirst(OrderedIndex *oi) {
+OrderedIndexItem *orderedIndexGetFirst(const OrderedIndex *oi) {
     return (OrderedIndexItem *)zslGetFirst((const zskiplist *)oi);
 }
 
-OrderedIndexItem *orderedIndexGetLast(OrderedIndex *oi) {
+OrderedIndexItem *orderedIndexGetLast(const OrderedIndex *oi) {
     return (OrderedIndexItem *)zslGetTail((const zskiplist *)oi);
 }
 
-unsigned long orderedIndexGetIndex(OrderedIndex *oi, const OrderedIndexItem *node) {
+unsigned long orderedIndexGetIndex(const OrderedIndex *oi, const OrderedIndexItem *node) {
     return zslGetRank((zskiplist *)oi, (const zskiplistNode *)node) - 1;
 }
 
@@ -215,7 +216,7 @@ double orderedIndexGetScore(const OrderedIndexItem *node) {
     return zslGetScore((const zskiplistNode *)node);
 }
 
-unsigned long orderedIndexCountScoreRange(OrderedIndex *oi, double min, double max, int min_ex, int max_ex) {
+unsigned long orderedIndexCountScoreRange(const OrderedIndex *oi, double min, double max, int min_ex, int max_ex) {
     zskiplist *zsl = (zskiplist *)oi;
     zrangespec range = {.min = min, .max = max, .minex = min_ex, .maxex = max_ex};
     long first_rank, last_rank;
@@ -231,7 +232,7 @@ unsigned long orderedIndexCountScoreRange(OrderedIndex *oi, double min, double m
     return (unsigned long)(last_rank - first_rank + 1);
 }
 
-unsigned long orderedIndexCountLexRange(OrderedIndex *oi, const_sds min, const_sds max, int min_ex, int max_ex) {
+unsigned long orderedIndexCountLexRange(const OrderedIndex *oi, const_sds min, const_sds max, int min_ex, int max_ex) {
     zskiplist *zsl = (zskiplist *)oi;
     zlexrangespec range = {.min = (sds)min, .max = (sds)max, .minex = min_ex, .maxex = max_ex};
 
@@ -252,7 +253,7 @@ unsigned long orderedIndexCountLexRange(OrderedIndex *oi, const_sds min, const_s
  * Iterator
  *---------------------------------------------------------------------------*/
 
-void orderedIndexInitIterator(OrderedIndexIterator *iter, OrderedIndex *oi) {
+void orderedIndexInitIterator(OrderedIndexIterator *iter, const OrderedIndex *oi) {
     zslInitIterator((zslIter *)iter, (zskiplist *)oi);
 }
 
@@ -294,7 +295,7 @@ void orderedIndexDismissMemory(OrderedIndex *oi) {
     }
 }
 
-size_t orderedIndexEstimateMemory(OrderedIndex *oi, size_t sample_size) {
+size_t orderedIndexEstimateMemory(const OrderedIndex *oi, size_t sample_size) {
     zskiplist *zsl = (zskiplist *)oi;
     unsigned long length = zslGetLength(zsl);
     size_t asize = zslGetAllocSize();
@@ -388,11 +389,11 @@ unsigned long orderedIndexScanDefrag(OrderedIndex *oi, unsigned long cursor, Ord
  * Debug / Verification (used by unit tests and DEBUG command)
  *---------------------------------------------------------------------------*/
 
-int orderedIndexGetHeight(OrderedIndex *oi) {
+int orderedIndexGetHeight(const OrderedIndex *oi) {
     return zslGetHeight((zskiplist *)oi);
 }
 
-int orderedIndexVerifyIntegrity(OrderedIndex *oi, char *errmsg, size_t errmsg_len) {
+int orderedIndexVerifyIntegrity(const OrderedIndex *oi, char *errmsg, size_t errmsg_len) {
     zskiplist *zsl = (zskiplist *)oi;
     zskiplistNode *header = zslGetHeader(zsl);
     int height = zslGetHeight(zsl);

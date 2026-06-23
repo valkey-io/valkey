@@ -20,6 +20,7 @@
 #define DEFAULT_DATASIZE 256
 #define MAX_KEY_LEN 128
 
+/* Global CLI parameters shared read-only by all worker threads. */
 typedef struct test_config {
   const char *host;
   int port;
@@ -31,6 +32,7 @@ typedef struct test_config {
   char *value;
 } test_config;
 
+/* Per-pthread slice: owns clients [first_client, last_client). */
 typedef struct worker_config {
   const test_config *cfg;
   int thread_id;
@@ -38,11 +40,13 @@ typedef struct worker_config {
   int last_client;
 } worker_config;
 
+/* One RDMA connection; processed counts completed cmds, pending is current
+ * batch. */
 typedef struct client_state {
   int client_id;
-  long long requests;
-  long long processed;
-  int pending;
+  long long requests;  /* total SET or GET cmds for this connection */
+  long long processed; /* completed so far in the current phase */
+  int pending;         /* cmds appended but not yet drained this batch */
   valkeyContext *context;
 } client_state;
 
@@ -188,6 +192,7 @@ static int drain_reply(client_state *state, const test_config *cfg, int is_get,
   return ret;
 }
 
+/* Run SET (is_get=0) or GET (is_get=1) for every connection in this worker. */
 static int run_phase(client_state *states, int state_count,
                      const test_config *cfg, int is_get) {
   int remaining_clients = state_count;
@@ -195,6 +200,7 @@ static int run_phase(client_state *states, int state_count,
   while (remaining_clients) {
     remaining_clients = 0;
 
+    /* Step 1: append up to pipeline commands into each context's obuf. */
     for (int i = 0; i < state_count; i++) {
       client_state *state = &states[i];
       int batch;
@@ -221,12 +227,14 @@ static int run_phase(client_state *states, int state_count,
       state->pending = batch;
     }
 
+    /* Step 2: flush obuf over RDMA (may require multiple valkeyBufferWrite). */
     for (int i = 0; i < state_count; i++) {
       if (states[i].pending &&
           flush_context(states[i].context, states[i].client_id) != 0)
         return -1;
     }
 
+    /* Step 3: read replies in append order and validate OK or value bytes. */
     for (int i = 0; i < state_count; i++) {
       client_state *state = &states[i];
 
@@ -242,6 +250,8 @@ static int run_phase(client_state *states, int state_count,
   return 0;
 }
 
+/* Each worker thread: own a client slice, one RDMA conn per client, SET then
+ * GET. */
 static void *worker_main(void *arg) {
   worker_config *worker = arg;
   const test_config *cfg = worker->cfg;
@@ -256,6 +266,8 @@ static void *worker_main(void *arg) {
     return (void *)(long)1;
   }
 
+  /* One valkeyContext (RDMA QP) per client_id in [first_client, last_client).
+   */
   for (int i = 0; i < state_count; i++) {
     int client_id = worker->first_client + i;
 
@@ -266,6 +278,8 @@ static void *worker_main(void *arg) {
       goto cleanup;
   }
 
+  /* Phase 1: write all keys; phase 2: read them back on the same connections.
+   */
   if (run_phase(states, state_count, cfg, 0) != 0)
     goto cleanup;
   for (int i = 0; i < state_count; i++)

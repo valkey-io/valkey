@@ -50,6 +50,7 @@ redis.code-workspace
 nodes*.conf
 tests/cluster/tmp/*
 tests/rdma/rdma-test
+tests/rdma/libvalkey-test
 tags
 build/
 build-debug/

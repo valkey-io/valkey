@@ -167,6 +167,11 @@ configEnum propagation_error_behavior_enum[] = {
 
 configEnum log_format_enum[] = {{"legacy", LOG_FORMAT_LEGACY}, {"logfmt", LOG_FORMAT_LOGFMT}, {"json", LOG_FORMAT_JSON}, {NULL, 0}};
 
+configEnum commandlog_retention_policy_enum[] = {
+    {"recency", COMMANDLOG_RETENTION_RECENCY},
+    {"magnitude", COMMANDLOG_RETENTION_MAGNITUDE},
+    {NULL, 0}};
+
 configEnum log_timestamp_format_enum[] = {{"legacy", LOG_TIMESTAMP_LEGACY},
                                           {"iso8601", LOG_TIMESTAMP_ISO8601},
                                           {"milliseconds", LOG_TIMESTAMP_MILLISECONDS},
@@ -3378,6 +3383,9 @@ standardConfig static_configs[] = {
     createEnumConfig("shutdown-on-sigterm", NULL, MODIFIABLE_CONFIG | MULTI_ARG_CONFIG, shutdown_on_sig_enum, server.shutdown_on_sigterm, 0, isValidShutdownOnSigFlags, NULL),
     createEnumConfig("log-format", NULL, MODIFIABLE_CONFIG, log_format_enum, server.log_format, LOG_FORMAT_LEGACY, NULL, NULL),
     createEnumConfig("log-timestamp-format", NULL, MODIFIABLE_CONFIG, log_timestamp_format_enum, server.log_timestamp_format, LOG_TIMESTAMP_LEGACY, NULL, NULL),
+    createEnumConfig("commandlog-slow-retention-policy", NULL, MODIFIABLE_CONFIG, commandlog_retention_policy_enum, server.commandlog[COMMANDLOG_TYPE_SLOW].retention_policy, COMMANDLOG_RETENTION_RECENCY, NULL, NULL),
+    createEnumConfig("commandlog-large-request-retention-policy", NULL, MODIFIABLE_CONFIG, commandlog_retention_policy_enum, server.commandlog[COMMANDLOG_TYPE_LARGE_REQUEST].retention_policy, COMMANDLOG_RETENTION_RECENCY, NULL, NULL),
+    createEnumConfig("commandlog-large-reply-retention-policy", NULL, MODIFIABLE_CONFIG, commandlog_retention_policy_enum, server.commandlog[COMMANDLOG_TYPE_LARGE_REPLY].retention_policy, COMMANDLOG_RETENTION_RECENCY, NULL, NULL),
     createEnumConfig("rdb-version-check", NULL, MODIFIABLE_CONFIG, rdb_version_check_enum, server.rdb_version_check, RDB_VERSION_CHECK_STRICT, NULL, NULL),
 
     /* Integer configs */

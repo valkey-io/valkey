@@ -23,6 +23,7 @@
  */
 
 #include "commandlog.h"
+#include "minheap.h"
 #include "script.h"
 
 /* Create a new commandlog entry.
@@ -95,6 +96,7 @@ void commandlogInit(void) {
     for (int i = 0; i < COMMANDLOG_TYPE_NUM; i++) {
         server.commandlog[i].entries = listCreate();
         server.commandlog[i].entry_id = 0;
+        server.commandlog[i].heap = minheapCreate();
         listSetFreeMethod(server.commandlog[i].entries, commandlogFreeEntry);
     }
 }
@@ -103,43 +105,96 @@ void commandlogInit(void) {
  * This function will make sure to trim the command log accordingly to the
  * configured max length. */
 static void commandlogPushEntryIfNeeded(client *c, robj **argv, int argc, long long value, int type) {
-    if (server.commandlog[type].threshold < 0 || server.commandlog[type].max_len == 0) return; /* The corresponding commandlog disabled */
-    if (value >= server.commandlog[type].threshold)
-        listAddNodeHead(server.commandlog[type].entries, commandlogCreateEntry(c, argv, argc, value, type));
+    commandlog *cl = &server.commandlog[type];
+    if (cl->threshold < 0 || cl->max_len == 0) return;
+    if (value < cl->threshold) return;
 
-    /* Remove old entries if needed. */
-    while (listLength(server.commandlog[type].entries) > server.commandlog[type].max_len) listDelNode(server.commandlog[type].entries, listLast(server.commandlog[type].entries));
+    if (cl->retention_policy == COMMANDLOG_RETENTION_MAGNITUDE) {
+        /* Magnitude mode: keep the N highest-value entries. */
+        minheap *heap = cl->heap;
+        if (minheapLen(heap) < cl->max_len) {
+            minheapInsert(heap, value, commandlogCreateEntry(c, argv, argc, value, type));
+        } else {
+            if (value <= minheapPeekMinKey(heap)) return;
+            commandlogFreeEntry(minheapExtractMin(heap));
+            minheapInsert(heap, value, commandlogCreateEntry(c, argv, argc, value, type));
+        }
+    } else {
+        /* Recency mode (default): keep the most recent entries. */
+        listAddNodeHead(cl->entries, commandlogCreateEntry(c, argv, argc, value, type));
+        while (listLength(cl->entries) > cl->max_len)
+            listDelNode(cl->entries, listLast(cl->entries));
+    }
 }
 
 /* Remove all the entries from the current command log of the specified type. */
 static void commandlogReset(int type) {
-    while (listLength(server.commandlog[type].entries) > 0) listDelNode(server.commandlog[type].entries, listLast(server.commandlog[type].entries));
+    commandlog *cl = &server.commandlog[type];
+    while (minheapLen(cl->heap) > 0) {
+        commandlogFreeEntry(minheapExtractMin(cl->heap));
+    }
+    while (listLength(cl->entries) > 0) {
+        listDelNode(cl->entries, listLast(cl->entries));
+    }
+}
+
+static unsigned long commandlogLength(int type) {
+    commandlog *cl = &server.commandlog[type];
+    if (cl->retention_policy == COMMANDLOG_RETENTION_MAGNITUDE) {
+        return minheapLen(cl->heap);
+    }
+    return listLength(cl->entries);
+}
+
+static void commandlogReplyWithEntry(client *c, commandlogEntry *ce) {
+    addReplyArrayLen(c, 6);
+    addReplyLongLong(c, ce->id);
+    addReplyLongLong(c, ce->time);
+    addReplyLongLong(c, ce->value);
+    addReplyArrayLen(c, ce->argc);
+    for (int j = 0; j < ce->argc; j++) addReplyBulk(c, ce->argv[j]);
+    addReplyBulkCBuffer(c, ce->peerid, sdslen(ce->peerid));
+    addReplyBulkCBuffer(c, ce->cname, sdslen(ce->cname));
+}
+
+static int commandlogEntryCompareDesc(const void *a, const void *b) {
+    const commandlogEntry *ea = *(const commandlogEntry **)a;
+    const commandlogEntry *eb = *(const commandlogEntry **)b;
+    if (eb->value > ea->value) return 1;
+    if (eb->value < ea->value) return -1;
+    return 0;
 }
 
 /* Reply command logs to client. */
 static void commandlogGetReply(client *c, int type, long count) {
-    listIter li;
-    listNode *ln;
-    commandlogEntry *ce;
+    commandlog *cl = &server.commandlog[type];
+    if (cl->retention_policy == COMMANDLOG_RETENTION_MAGNITUDE) {
+        unsigned long total = minheapLen(cl->heap);
+        if (count > (long)total) count = total;
+        /* Sort entries by value descending for display. */
+        commandlogEntry **sorted = zmalloc(sizeof(commandlogEntry *) * total);
+        for (unsigned long i = 0; i < total; i++) {
+            sorted[i] = minheapGet(cl->heap, i);
+        }
+        qsort(sorted, total, sizeof(commandlogEntry *), commandlogEntryCompareDesc);
+        addReplyArrayLen(c, count);
+        for (long i = 0; i < count; i++) {
+            commandlogReplyWithEntry(c, sorted[i]);
+        }
+        zfree(sorted);
+    } else {
+        listIter li;
+        listNode *ln;
 
-    if (count > (long)listLength(server.commandlog[type].entries)) {
-        count = listLength(server.commandlog[type].entries);
-    }
-    addReplyArrayLen(c, count);
-    listRewind(server.commandlog[type].entries, &li);
-    while (count--) {
-        int j;
-
-        ln = listNext(&li);
-        ce = ln->value;
-        addReplyArrayLen(c, 6);
-        addReplyLongLong(c, ce->id);
-        addReplyLongLong(c, ce->time);
-        addReplyLongLong(c, ce->value);
-        addReplyArrayLen(c, ce->argc);
-        for (j = 0; j < ce->argc; j++) addReplyBulk(c, ce->argv[j]);
-        addReplyBulkCBuffer(c, ce->peerid, sdslen(ce->peerid));
-        addReplyBulkCBuffer(c, ce->cname, sdslen(ce->cname));
+        if (count > (long)listLength(cl->entries)) {
+            count = listLength(cl->entries);
+        }
+        addReplyArrayLen(c, count);
+        listRewind(cl->entries, &li);
+        while (count--) {
+            ln = listNext(&li);
+            commandlogReplyWithEntry(c, ln->value);
+        }
     }
 }
 
@@ -192,7 +247,7 @@ void slowlogCommand(client *c) {
         commandlogReset(COMMANDLOG_TYPE_SLOW);
         addReply(c, shared.ok);
     } else if (c->argc == 2 && !strcasecmp(objectGetVal(c->argv[1]), "len")) {
-        addReplyLongLong(c, listLength(server.commandlog[COMMANDLOG_TYPE_SLOW].entries));
+        addReplyLongLong(c, commandlogLength(COMMANDLOG_TYPE_SLOW));
     } else if ((c->argc == 2 || c->argc == 3) && !strcasecmp(objectGetVal(c->argv[1]), "get")) {
         long count = 10;
 
@@ -205,7 +260,7 @@ void slowlogCommand(client *c) {
             if (count == -1) {
                 /* We treat -1 as a special value, which means to get all slow logs.
                  * Simply set count to the length of server.commandlog. */
-                count = listLength(server.commandlog[COMMANDLOG_TYPE_SLOW].entries);
+                count = commandlogLength(COMMANDLOG_TYPE_SLOW);
             }
         }
 
@@ -251,7 +306,7 @@ void commandlogCommand(client *c) {
         addReply(c, shared.ok);
     } else if (c->argc == 3 && !strcasecmp(objectGetVal(c->argv[1]), "len")) {
         if ((type = commandlogGetTypeOrReply(c, c->argv[2])) == -1) return;
-        addReplyLongLong(c, listLength(server.commandlog[type].entries));
+        addReplyLongLong(c, commandlogLength(type));
     } else if (c->argc == 4 && !strcasecmp(objectGetVal(c->argv[1]), "get")) {
         long count;
 
@@ -263,9 +318,7 @@ void commandlogCommand(client *c) {
         if ((type = commandlogGetTypeOrReply(c, c->argv[3])) == -1) return;
 
         if (count == -1) {
-            /* We treat -1 as a special value, which means to get all command logs.
-             * Simply set count to the length of server.commandlog. */
-            count = listLength(server.commandlog[type].entries);
+            count = commandlogLength(type);
         }
 
         commandlogGetReply(c, type, count);

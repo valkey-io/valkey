@@ -164,9 +164,9 @@ static void engineLibraryDispose(void *obj) {
 }
 
 /* Clear all the functions from the given library ctx */
-void functionsLibCtxClear(functionsLibCtx *lib_ctx, void(callback)(dict *)) {
-    dictEmpty(lib_ctx->functions, callback);
-    dictEmpty(lib_ctx->libraries, callback);
+void functionsLibCtxClear(functionsLibCtx *lib_ctx) {
+    dictEmpty(lib_ctx->functions, NULL);
+    dictEmpty(lib_ctx->libraries, NULL);
     dictIterator *iter = dictGetIterator(lib_ctx->engines_stats);
     dictEntry *entry = NULL;
     while ((entry = dictNext(iter))) {
@@ -188,13 +188,13 @@ static void resetEngineOrCollectResetCallbacks(scriptingEngine *engine, void *co
     }
 }
 
-void functionsLibCtxReleaseCurrent(int async, void(callback)(dict *)) {
+static void functionsLibCtxReleaseCurrent(int async) {
     if (async) {
         list *engine_callbacks = listCreate();
         scriptingEngineManagerForEachEngine(resetEngineOrCollectResetCallbacks, engine_callbacks);
         freeFunctionsAsync(curr_functions_lib_ctx, engine_callbacks);
     } else {
-        functionsLibCtxFree(curr_functions_lib_ctx, callback, NULL);
+        functionsLibCtxFree(curr_functions_lib_ctx, NULL);
         scriptingEngineManagerForEachEngine(resetEngineOrCollectResetCallbacks, NULL);
     }
 }
@@ -204,18 +204,18 @@ static void functionsLibCtxFreeGeneric(functionsLibCtx *functions_lib_ctx, int a
     if (async) {
         freeFunctionsAsync(functions_lib_ctx, NULL);
     } else {
-        functionsLibCtxFree(functions_lib_ctx, NULL, NULL);
+        functionsLibCtxFree(functions_lib_ctx, NULL);
     }
 }
 
-void functionReset(int async, void(callback)(dict *)) {
-    functionsLibCtxReleaseCurrent(async, callback);
+void functionReset(int async) {
+    functionsLibCtxReleaseCurrent(async);
     functionsInit();
 }
 
 /* Free the given functions ctx */
-void functionsLibCtxFree(functionsLibCtx *functions_lib_ctx, void(callback)(dict *), list *engine_callbacks) {
-    functionsLibCtxClear(functions_lib_ctx, callback);
+void functionsLibCtxFree(functionsLibCtx *functions_lib_ctx, list *engine_callbacks) {
+    functionsLibCtxClear(functions_lib_ctx);
     dictRelease(functions_lib_ctx->functions);
     dictRelease(functions_lib_ctx->libraries);
     dictRelease(functions_lib_ctx->engines_stats);
@@ -433,7 +433,7 @@ libraryJoin(functionsLibCtx *functions_lib_ctx_dst, functionsLibCtx *functions_l
     dictReleaseIterator(iter);
     iter = NULL;
 
-    functionsLibCtxClear(functions_lib_ctx_src, NULL);
+    functionsLibCtxClear(functions_lib_ctx_src);
     if (old_libraries_list) {
         listRelease(old_libraries_list);
         old_libraries_list = NULL;
@@ -867,7 +867,7 @@ void functionFlushCommand(client *c) {
         return;
     }
 
-    functionReset(async, NULL);
+    functionReset(async);
 
     /* Indicate that the command changed the data so it will be replicated and
      * counted as a data change (for persistence configuration) */

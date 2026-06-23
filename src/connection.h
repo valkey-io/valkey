@@ -153,7 +153,8 @@ typedef struct ConnectionType {
     struct user *(*get_peer_user)(connection *conn, sds *cert_username);
 
     /* Miscellaneous */
-    int (*connIntegrityChecked)(void); // return 1 if connection type has built-in integrity checks
+    int (*connIntegrityChecked)(void);   // return 1 if connection type has built-in integrity checks
+    int (*is_closing)(connection *conn); // return 1 if connection is closed
 } ConnectionType;
 
 struct connection {
@@ -389,6 +390,15 @@ static inline int connHasWriteHandler(connection *conn) {
 static inline int connHasReadHandler(connection *conn) {
     return conn->read_handler != NULL;
 }
+
+/* Check if the remote side has closed the connection. */
+static inline int connIsClosing(connection *conn) {
+    if (!conn->type->is_closing) return 0;
+    return conn->type->is_closing(conn);
+}
+
+/* Shared is_closing implementation for socket-based connections. */
+int connSocketIsClosing(connection *conn);
 
 /* Associate a private data pointer with the connection */
 static inline void connSetPrivateData(connection *conn, void *data) {

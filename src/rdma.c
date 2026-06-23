@@ -1863,6 +1863,7 @@ static ConnectionType CT_RDMA = {
 
     /* Miscellaneous */
     .connIntegrityChecked = NULL,
+    .is_closing = NULL,
 };
 
 ConnectionType *connectionTypeRdma(void) {

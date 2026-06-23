@@ -5381,7 +5381,10 @@ void addReplyCommandSubCommands(client *c,
                                 void (*reply_function)(client *, struct serverCommand *),
                                 int use_map) {
     if (!cmd->subcommands_ht) {
-        addReplySetLen(c, 0);
+        if (use_map)
+            addReplyMapLen(c, 0);
+        else
+            addReplyArrayLen(c, 0);
         return;
     }
 
@@ -6586,8 +6589,8 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                     "replicas_repl_buffer_peak:%zu\r\n", server.pending_repl_data.peak));
 
             if (server.repl_state == REPL_STATE_TRANSFER) {
-                int repl_transfer_size_stat;
-                int repl_transfer_read_stat;
+                off_t repl_transfer_size_stat;
+                off_t repl_transfer_read_stat;
                 if (atomic_load_explicit(&server.replica_bio_disk_save_state, memory_order_acquire) != REPL_BIO_DISK_SAVE_STATE_NONE) {
                     repl_transfer_size_stat = server.bio_repl_transfer_size;
                     repl_transfer_read_stat = server.bio_repl_transfer_read;

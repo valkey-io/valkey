@@ -23,12 +23,6 @@ robj *createStringObjectWithKeyAndExpire(const char *ptr, size_t len, const sds 
 static bool receiveItemsBackFromOneIterator(bgIterator *it);
 
 
-// Future extendability
-static bool ignoreKeyForSave(const_sds key) {
-    UNUSED(key);
-    return false;
-}
-
 // Returns true if the cmd is a script command that may replicate.
 static bool isScriptCallWriteCmd(struct serverCommand *cmd) {
     return ((cmd->proc == fcallCommand) || (cmd->proc == evalCommand) || (cmd->proc == evalShaCommand));
@@ -198,6 +192,7 @@ enum {
     BGITER_MAX_CLONE_ITEM_BYTES = 512,               // Max size item to clone
     BGITER_MAX_CLONE_POOL_BYTES = (1 * 1024 * 1024), // Total limit for all cloned items
     BGITER_QUEUE_INCREASE_INCR = 100,                // Step size when increasing queue target
+    BGITER_QUEUE_MAX_LENGTH = 10000,                 // Max length for the dynamic queue
     BGITER_CYCLE_DELAY_MS = 2,                       // Delay between calls on bgIteration timer
     BGITER_CYCLE_BUDGET_MS = 1,                      // Normal time limit for timer processing
     BGITER_CYCLE_BUDGET_MAX_MS = 10                  // Maximum time limit when starvation seen
@@ -401,7 +396,7 @@ struct bgIterator {
 
     mutexQueue *items_for_iterator; // Created/Destroyed in main thread, used in both (threadsafe)
 
-    mutexQueue *return_to_valkey; // Queue of items to be returned to the Valkey main thread (threadsafe)
+    mutexQueue *return_to_main_thread; // Queue of items to be returned to the Valkey main thread (threadsafe)
 
     unsigned int item_count_target; // Used only by main thread
 
@@ -539,7 +534,6 @@ static void fullScanIteratorRelease(genericIterator *genIt) {
 static void fullScanIteratorScanCallback(void *privdata, void *entry) {
     fifo *dbEntryFifo = (fifo *)privdata;
     dbEntry *de = (dbEntry *)entry;
-    if (ignoreKeyForSave(objectGetKey(de))) return; // slot migration: keys being purged
     fifoPush(dbEntryFifo, de);
 }
 
@@ -625,7 +619,6 @@ static bool fullScanIteratorHasPassedItem(genericIterator *genIt, const_sds key,
     hashtable *ht = kvstoreGetHashtable(it->kvs, keySlot);
     if (hashtableScanHasPassedKey(ht, key, it->ht_cursor)) return true;
 
-    if (ignoreKeyForSave(key)) return true; // if slot being purged, pretend we have passed it
     return false;
 }
 
@@ -892,19 +885,19 @@ static void returnCurrentItemToValkey(bgIterator *it) {
     case BGITERATOR_ITEM_DBENTRY:
         it->dbentries_processed++;
         if (item->u.dbe.is_cloned) it->dbentry_clones_processed++;
-        mutexQueueAdd(it->return_to_valkey, item);
+        mutexQueueAdd(it->return_to_main_thread, item);
         break;
     case BGITERATOR_ITEM_REPLICATION:
         it->replication_processed++;
-        mutexQueueAdd(it->return_to_valkey, item);
+        mutexQueueAdd(it->return_to_main_thread, item);
         break;
     case BGITERATOR_ITEM_SWAPDB:
         it->swapdb_processed++;
-        mutexQueueAdd(it->return_to_valkey, item);
+        mutexQueueAdd(it->return_to_main_thread, item);
         break;
     case BGITERATOR_ITEM_FLUSHDB:
         it->flushdb_processed++;
-        mutexQueueAdd(it->return_to_valkey, item);
+        mutexQueueAdd(it->return_to_main_thread, item);
         break;
 
     case BGITERATOR_ITEM_COMPLETE:
@@ -917,8 +910,8 @@ static void returnCurrentItemToValkey(bgIterator *it) {
         serverAssert(false);
     }
 
-    /* Do this AFTER placing into return_to_valkey.  This is volatile and snooped when there is a
-     *  flushall event.  Don't want an item to be missed. */
+    /* Do this AFTER placing into return_to_main_thread.  This is volatile and snooped when there is
+     * a flushall event.  Don't want an item to be missed. */
     it->current_item = NULL;
 }
 
@@ -931,7 +924,7 @@ static void bgIteratorRelease(bgIterator *it) {
     serverAssert(onValkeyMainThread());
     serverAssert(it->current_item == NULL);
     serverAssert(mutexQueueLength(it->items_for_iterator) == 0);
-    serverAssert(mutexQueueLength(it->return_to_valkey) == 0);
+    serverAssert(mutexQueueLength(it->return_to_main_thread) == 0);
 
     dictDelete(nameToIterator, it->name);
     listDelNode(allIterators, listSearchKey(allIterators, it));
@@ -939,8 +932,8 @@ static void bgIteratorRelease(bgIterator *it) {
     mutexQueueRelease(it->items_for_iterator);
     it->items_for_iterator = NULL;
 
-    mutexQueueRelease(it->return_to_valkey);
-    it->return_to_valkey = NULL;
+    mutexQueueRelease(it->return_to_main_thread);
+    it->return_to_main_thread = NULL;
 
     it->keyset_iter->release(it->keyset_iter);
     it->keyset_iter = NULL;
@@ -980,9 +973,11 @@ static sds createEntryString(int dbid, dbEntry *de) {
 
 
 static void feedIterator(bgIterator *it, monotime end_time_us) {
-    // Smart logic to dynamically adjust the size of the queue
     unsigned int initial_queue_len = mutexQueueLength(it->items_for_iterator);
 
+    /* The queue size dynamically adjusts using an AIMD approach.  If we have left ofter stuff from
+     * the prior call to feedIterator, reduce by half the remaining size.  If the queue ran dry
+     * and we have time left (at the end of this function), additively increase the queue length. */
     if (initial_queue_len > 2 && it->item_count_target >= initial_queue_len) {
         it->item_count_target -= initial_queue_len / 2;
     }
@@ -1007,10 +1002,9 @@ static void feedIterator(bgIterator *it, monotime end_time_us) {
 
             if (it->iteration_flags & BGITERATOR_FLAG_REPLICATION) {
                 if (!it->client_is_active || (it->dbentries_queued > it->dbentries_processed)) {
-                    /* We are done feeding dict entries to the iterator, but before ending the
-                     * replication processing make sure that the iterator has become active (has
-                     * started reading) and make sure that all of the dict entries have been
-                     * processed by the client. */
+                    /* Even though we have sent all of the dbEntries, we continue sending
+                     * replication until the iterator has consumed all of the dbEntries.
+                     * client_is_active prevents race conditions in the case of an empty DB. */
                     break;
                 }
                 if (it->repldone) {
@@ -1086,7 +1080,7 @@ static void feedIterator(bgIterator *it, monotime end_time_us) {
     }
 
     // Smart logic to dynamically adjust the size of the queue
-    if (initial_queue_len == 0 && have_time) {
+    if (initial_queue_len == 0 && have_time && it->item_count_target < BGITER_QUEUE_MAX_LENGTH) {
         it->item_count_target += BGITER_QUEUE_INCREASE_INCR;
     }
 }
@@ -1453,7 +1447,7 @@ static void returnAllItemsToValkey(bgIterator *it) {
 
     // Now release items all at once...
     if (fifoLength(itemsToReturn) > 0) {
-        mutexQueueAddMultiple(it->return_to_valkey, itemsToReturn);
+        mutexQueueAddMultiple(it->return_to_main_thread, itemsToReturn);
     }
     fifoRelease(itemsToReturn);
 }
@@ -1579,11 +1573,11 @@ static void prepareAndProcessReturnedItems(int n, bgIteratorItem **items, bgIter
 
 #define PREFETCH_BATCH_SIZE 16
 
-// Returns true if we process at least one item from a given iterator's return_to_valkey queue.
+// Returns true if we process at least one item from a given iterator's return_to_main_thread queue.
 static bool receiveItemsBackFromOneIterator(bgIterator *it) {
     bgIteratorItem *batchPool[PREFETCH_BATCH_SIZE];
     int n = 0;
-    fifo *poppedFifo = mutexQueuePopAll(it->return_to_valkey, false);
+    fifo *poppedFifo = mutexQueuePopAll(it->return_to_main_thread, false);
     if (poppedFifo != NULL) {
         while (fifoLength(poppedFifo) > 0) {
             fifoPop(poppedFifo, (void **)&batchPool[n++]);
@@ -1601,7 +1595,7 @@ static bool receiveItemsBackFromOneIterator(bgIterator *it) {
     return false;
 }
 
-/* Process each iterator's return_to_valkey queue
+/* Process each iterator's return_to_main_thread queue
  * If `blocking` is true, continue reading until at least one queue was not empty. */
 static void receiveItemsBackFromIterators(bool blocking) {
     serverAssert(onValkeyMainThread());
@@ -2037,7 +2031,7 @@ static bgIterator *bgIteratorCreate(const char *name,
     it->cleanup = cleanup;
     it->privdata = privdata;
     it->items_for_iterator = mutexQueueCreate();
-    it->return_to_valkey = mutexQueueCreate();
+    it->return_to_main_thread = mutexQueueCreate();
 
     // Floor queue size to bgiteration_queue_increase_incr or use last queue size value
     if (last_item_count_target < BGITER_QUEUE_INCREASE_INCR) {
@@ -2237,7 +2231,7 @@ void bgIteratorClose(bgIterator *it) {
     bgIteratorItemExtClose *itemClose = zmalloc(sizeof(bgIteratorItemExtClose));
     itemClose->type = BGITERATOR_ITEMEXT_ITER_CLOSED;
     itemClose->iter = it;
-    mutexQueueAdd(it->return_to_valkey, itemClose);
+    mutexQueueAdd(it->return_to_main_thread, itemClose);
 }
 
 

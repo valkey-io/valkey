@@ -375,12 +375,20 @@ typedef enum {
     COMMANDLOG_TYPE_NUM
 } commandlog_type;
 
+/* Retention policy for commandlog */
+#define COMMANDLOG_RETENTION_RECENCY 0
+#define COMMANDLOG_RETENTION_MAGNITUDE 1
+
+struct minheap;
+
 /* Configuration and entry list of different types of command logs */
 typedef struct commandlog {
-    list *entries;
+    list *entries;        /* Used in recency mode. */
+    struct minheap *heap; /* Used in magnitude mode. */
     long long entry_id;
     long long threshold;
     unsigned long max_len;
+    int retention_policy;
 } commandlog;
 
 /* Replica replication state. Used in server.repl_state for replicas to remember

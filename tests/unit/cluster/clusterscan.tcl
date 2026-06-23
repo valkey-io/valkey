@@ -621,10 +621,20 @@ start_cluster 3 0 {tags {external:skip cluster}} {
         # With full-coverage=yes the cluster enters FAIL state.
         # Cursors for slot 0 should get "Hash slot not served".
         # Cursors for assigned but remote slots should get "cluster is down".
-        R 0 CLUSTER DELSLOTS 0
-        catch {R 1 CLUSTER DELSLOTS 0}
-        catch {R 2 CLUSTER DELSLOTS 0}
-        wait_for_cluster_state fail
+        #
+        # Retry DELSLOTS in a loop: R0's old stale packet can rebind slot 0
+        # to R0 on R1/R2 and undoing the DELSLOTS. Loop until all nodes converge
+        # to FAIL with slot 0 unassigned.
+        wait_for_condition 1000 50 {
+            [catch {R 0 CLUSTER DELSLOTS 0}] >= 0 &&
+            [catch {R 1 CLUSTER DELSLOTS 0}] >= 0 &&
+            [catch {R 2 CLUSTER DELSLOTS 0}] >= 0 &&
+            [CI 0 cluster_state] eq "fail" &&
+            [CI 1 cluster_state] eq "fail" &&
+            [CI 2 cluster_state] eq "fail"
+        } else {
+            fail "Cluster did not converge to FAIL after DELSLOTS"
+        }
 
         # Unassigned slot -> specific error.
         assert_error {CLUSTERDOWN Hash slot not served} {R 0 clusterscan "0-{06S}-0"}

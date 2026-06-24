@@ -13,9 +13,7 @@ extern "C" {
 #include "bgiteration.h"
 #include "server.h"
 #include "stdlib.h"
-#define using usingvar // compile hack
-#include "module.h"    // uses "using" keyword
-#undef using
+#include "module.h"
 extern hashtableType commandSetType;
 extern dictType keylistDictType;
 void bgIteration_feedIterators(void);

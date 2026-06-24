@@ -2420,7 +2420,7 @@ void VM_SetModuleAttribs(ValkeyModuleCtx *ctx, const char *name, int ver, int ap
     module->apiver = apiver;
     module->types = listCreate();
     module->usedby = listCreate();
-    module->using = listCreate();
+    module->uses = listCreate();
     module->filters = listCreate();
     module->module_configs = listCreate();
     listSetMatchMethod(module->module_configs, moduleListConfigMatch);
@@ -11144,7 +11144,7 @@ void *VM_GetSharedAPI(ValkeyModuleCtx *ctx, const char *apiname) {
     ValkeyModuleSharedAPI *sapi = dictGetVal(de);
     if (listSearchKey(sapi->module->usedby, ctx->module) == NULL) {
         listAddNodeTail(sapi->module->usedby, ctx->module);
-        listAddNodeTail(ctx->module->using, sapi->module);
+        listAddNodeTail(ctx->module->uses, sapi->module);
     }
     return sapi->func;
 }
@@ -11181,7 +11181,7 @@ int moduleUnregisterUsedAPI(ValkeyModule *module) {
     listNode *ln;
     int count = 0;
 
-    listRewind(module->using, &li);
+    listRewind(module->uses, &li);
     while ((ln = listNext(&li))) {
         ValkeyModule *used = ln->value;
         listNode *ln = listSearchKey(used->usedby, module);
@@ -12660,7 +12660,7 @@ void moduleFreeModuleStructure(struct ValkeyModule *module) {
     listRelease(module->types);
     listRelease(module->filters);
     listRelease(module->usedby);
-    listRelease(module->using);
+    listRelease(module->uses);
     listRelease(module->module_configs);
     sdsfree(module->name);
     moduleLoadQueueEntryFree(module->loadmod);
@@ -13148,7 +13148,7 @@ sds genModulesInfoString(sds info) {
         struct ValkeyModule *module = dictGetVal(de);
 
         sds usedby = genModulesInfoStringRenderModulesList(module->usedby);
-        sds using = genModulesInfoStringRenderModulesList(module->using);
+        sds using = genModulesInfoStringRenderModulesList(module->uses);
         sds options = genModulesInfoStringRenderModuleOptions(module);
         info = sdscatfmt(info,
                          "module:name=%S,ver=%i,api=%i,filters=%i,"

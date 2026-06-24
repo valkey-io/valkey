@@ -729,6 +729,43 @@ TEST_F(OrderedIndexTest, DuplicateInsert) {
     ASSERT_NE(node1, node2);
 }
 
+TEST_F(OrderedIndexTest, DuplicateInsert_EachHasDistinctRank) {
+    OrderedIndexItem *node1 = insert(1.0, "dup");
+    OrderedIndexItem *node2 = insert(1.0, "dup");
+
+    unsigned long r1 = orderedIndexGetIndex(oi, node1);
+    unsigned long r2 = orderedIndexGetIndex(oi, node2);
+    ASSERT_NE(r1, r2);
+    ASSERT_EQ(r1 + r2, 1UL); /* ranks 0 and 1 */
+}
+
+TEST_F(OrderedIndexTest, DuplicateInsert_DeleteOne) {
+    OrderedIndexItem *node1 = insert(1.0, "dup");
+    OrderedIndexItem *node2 = insert(1.0, "dup");
+
+    /* Delete one copy — the other remains */
+    orderedIndexDelete(oi, node1);
+    ASSERT_EQ(orderedIndexLength(oi), 1UL);
+    assertElement(node2, "dup");
+    assertScore(node2, 1.0);
+    verifyOI();
+}
+
+TEST_F(OrderedIndexTest, DuplicateInsert_PopRemovesOne) {
+    insert(1.0, "dup");
+    insert(1.0, "dup");
+    insert(2.0, "other");
+
+    OrderedIndexItem *popped = orderedIndexPopFirst(oi);
+    assertElement(popped, "dup");
+    orderedIndexFreeItem(popped);
+
+    /* One "dup" remains plus "other" */
+    ASSERT_EQ(orderedIndexLength(oi), 2UL);
+    assertElement(orderedIndexGetFirst(oi), "dup");
+    verifyOI();
+}
+
 TEST_F(OrderedIndexTest, UpdateScoreEdgeCases) {
     populateSequential(5);
 

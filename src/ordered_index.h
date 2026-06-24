@@ -7,7 +7,7 @@
 #ifndef ORDERED_INDEX_H
 #define ORDERED_INDEX_H
 
-/* OrderedIndex — a secondary data structure providing ordered access to
+/* OrderedIndex  -- a secondary data structure providing ordered access to
  * (score, element) pairs.
  *
  * An OrderedIndex stores items ordered primarily by a double-precision score,
@@ -15,10 +15,10 @@
  * supports O(log N) insertion, deletion, score update, rank lookup, and
  * range queries by score, rank, or lexicographic bounds.
  *
- * IMPORTANT: An OrderedIndex does NOT enforce element uniqueness. It is
+ * IMPORTANT: An OrderedIndex does NOT enforce element uniqueness --
+ * duplicate (score, element) pairs are stored as separate items. It is
  * designed to be used alongside a companion hashtable that provides O(1)
- * membership testing and prevents duplicate insertions. The caller is
- * responsible for checking the hashtable before inserting.
+ * membership testing when uniqueness is required (as in Valkey's ZSET).
  *
  * The interface is implementation-agnostic. Currently implemented as a skiplist
  * (see ordered_index.c). A B+ tree implementation is planned. */
@@ -57,15 +57,18 @@ void orderedIndexFree(OrderedIndex *oi);
  * ============================================================ */
 
 /* Insert a new item with the given score and element (copied).
- * Returns a pointer to the inserted item (for storing in a companion HT).
- * The caller must ensure the element is not already present. */
+ * Returns a pointer to the inserted item.
+ * Duplicates are allowed -- inserting the same (score, element) pair multiple
+ * times results in multiple distinct items stored adjacently. Callers that
+ * require uniqueness (e.g. ZSET) enforce it externally via a companion
+ * hashtable. */
 OrderedIndexItem *orderedIndexInsert(OrderedIndex *oi, double score, const char *ele, size_t len);
 
 /* Remove an item from the index and free it. */
 void orderedIndexDelete(OrderedIndex *oi, OrderedIndexItem *item);
 
 /* Update the score of an existing item. May reposition it in the index.
- * Returns the (possibly new) item pointer — the old pointer may be invalid
+ * Returns the (possibly new) item pointer  -- the old pointer may be invalid
  * if the item was repositioned. Always returns a valid pointer; callers can
  * compare old vs returned to detect whether the item moved. */
 OrderedIndexItem *orderedIndexUpdateScore(OrderedIndex *oi, OrderedIndexItem *item, double newscore);
@@ -85,23 +88,29 @@ void orderedIndexFreeItem(OrderedIndexItem *item);
 OrderedIndexItem *orderedIndexCreateDetached(double score, const char *ele, size_t len);
 
 /* Set the score on a detached item. Do NOT use on items that are currently
- * in an index — that would corrupt sort order. Use orderedIndexUpdateScore
+ * in an index  -- that would corrupt sort order. Use orderedIndexUpdateScore
  * for items that are in an index. */
 void orderedIndexDetachedSetScore(OrderedIndexItem *item, double score);
 
-/* Insert a previously-detached item into the index. The index takes ownership. */
+/* Insert a previously-detached item into the index. The index takes ownership.
+ * Returns the item pointer (same as input  -- provided for API consistency with
+ * orderedIndexInsert so callers can use either path uniformly). */
 OrderedIndexItem *orderedIndexInsertDetached(OrderedIndex *oi, OrderedIndexItem *item);
 
-/* Delete all items with score in [min, max]. If min_ex is set, min is exclusive; if max_ex is set, max is exclusive.
- * Calls on_delete for each removed item. Returns count of items removed. */
+/* Delete all items with score in [min, max] (or exclusive if min_ex/max_ex).
+ * For each removed item, on_delete is called (if non-NULL) with the item and
+ * ctx before the item is freed. Returns count of items removed. */
 unsigned long orderedIndexDeleteRangeByScore(OrderedIndex *oi, double min, double max, bool min_ex, bool max_ex, OrderedIndexOnDelete on_delete, void *ctx);
 
-/* Delete all items with index in [start, end] (0-based, inclusive).
- * Calls on_delete for each removed item. Returns count of items removed. */
+/* Delete all items with rank in [start, end] (0-based, inclusive).
+ * For each removed item, on_delete is called (if non-NULL) with the item and
+ * ctx before the item is freed. Returns count of items removed. */
 unsigned long orderedIndexDeleteRangeByIndex(OrderedIndex *oi, unsigned long start, unsigned long end, OrderedIndexOnDelete on_delete, void *ctx);
 
-/* Delete all items with element in lex range [min, max]. If min_ex is set, min is exclusive; if max_ex is set, max is exclusive.
- * Calls on_delete for each removed item. Returns count of items removed. */
+/* Delete all items with element in lex range [min, max] (or exclusive if
+ * min_ex/max_ex). Only meaningful when all items share the same score (as in
+ * ZRANGEBYLEX). For each removed item, on_delete is called (if non-NULL) with
+ * the item and ctx before the item is freed. Returns count of items removed. */
 unsigned long orderedIndexDeleteRangeByLex(OrderedIndex *oi, const_sds min, const_sds max, bool min_ex, bool max_ex, OrderedIndexOnDelete on_delete, void *ctx);
 
 /* ============================================================
@@ -120,7 +129,8 @@ OrderedIndexItem *orderedIndexGetFirst(const OrderedIndex *oi);
 /* Return the last (highest) item, or NULL if empty. O(1). */
 OrderedIndexItem *orderedIndexGetLast(const OrderedIndex *oi);
 
-/* Return the 0-based index of an item. The item must be in the index. */
+/* Return the 0-based rank of an item. The item must be in the index;
+ * behavior is undefined otherwise. */
 unsigned long orderedIndexGetIndex(const OrderedIndex *oi, const OrderedIndexItem *item);
 
 /* Get the element data from an item as a raw pointer + length. */
@@ -129,10 +139,11 @@ void orderedIndexGetElementRaw(const OrderedIndexItem *item, const char **ptr, s
 /* Get the score of an item. */
 double orderedIndexGetScore(const OrderedIndexItem *item);
 
-/* Count items with score in [min, max]. If min_ex is set, min is exclusive; if max_ex is set, max is exclusive. */
+/* Count items with score in [min, max] (or exclusive if min_ex/max_ex). */
 unsigned long orderedIndexCountScoreRange(const OrderedIndex *oi, double min, double max, bool min_ex, bool max_ex);
 
-/* Count items with element in lex range [min, max]. If min_ex is set, min is exclusive; if max_ex is set, max is exclusive. */
+/* Count items with element in lex range [min, max] (or exclusive if
+ * min_ex/max_ex). Only meaningful when all items share the same score. */
 unsigned long orderedIndexCountLexRange(const OrderedIndex *oi, const_sds min, const_sds max, bool min_ex, bool max_ex);
 
 /* ============================================================
@@ -144,7 +155,8 @@ unsigned long orderedIndexCountLexRange(const OrderedIndex *oi, const_sds min, c
  * Use orderedIndexSeekToIndex/ScoreRange/LexRange to start elsewhere. */
 void orderedIndexInitIterator(OrderedIndexIterator *iter, const OrderedIndex *oi);
 
-/* Reset iterator position (keeps the index association). */
+/* Reset iterator to the initial unseeked state: next() will return the first
+ * item and prev() will return the last item. Keeps the index association. */
 void orderedIndexResetIterator(OrderedIndexIterator *iter);
 
 /* Advance iterator forward. Returns the next item, or NULL at end. */
@@ -161,14 +173,17 @@ void orderedIndexSeekToIndex(OrderedIndexIterator *iter, unsigned long index);
  * offset < 0:  prev() returns the (-offset-1)th element from end of range. */
 void orderedIndexSeekToScoreRange(OrderedIndexIterator *iter, double min, double max, bool min_ex, bool max_ex, long offset);
 
-/* Position iterator within a lex range. Offset semantics same as score range. */
+/* Position iterator within a lex range. Offset semantics same as score range.
+ * Only meaningful when all items in the range share the same score. */
 void orderedIndexSeekToLexRange(OrderedIndexIterator *iter, const_sds min, const_sds max, bool min_ex, bool max_ex, long offset);
 
 /* ============================================================
  * Memory
  * ============================================================ */
 
-/* Hint to the OS that the index memory can be reclaimed (e.g. via madvise). */
+/* Hint to the OS that the index's memory pages can be reclaimed (madvise
+ * DONTNEED). The index remains valid and usable  -- pages are faulted back in
+ * on next access. Used during lazy-free to reduce RSS without blocking. */
 void orderedIndexDismissMemory(OrderedIndex *oi);
 
 /* Estimate total memory usage by averaging the specified number of sample elements. */

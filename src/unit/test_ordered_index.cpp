@@ -18,18 +18,7 @@ extern "C" {
 #include <cmath>
 #include <cstring>
 
-/* Clean up shared lex sentinels allocated by OrderedIndexTest::SetUp(). */
-static void cleanupSharedSentinels(void) __attribute__((destructor));
-static void cleanupSharedSentinels(void) {
-    if (shared.minstring) {
-        sdsfree(shared.minstring);
-        shared.minstring = NULL;
-    }
-    if (shared.maxstring) {
-        sdsfree(shared.maxstring);
-        shared.maxstring = NULL;
-    }
-}
+
 
 /* ---- C-style test helpers ---- */
 
@@ -111,15 +100,21 @@ static const int NATO_COUNT = 6;
 
 /* ========== Test fixture ========== */
 
-/* ========== Test fixture ========== */
 class OrderedIndexTest : public ::testing::Test {
   protected:
     OrderedIndex *oi = nullptr;
 
+    static void SetUpTestSuite() {
+        shared.minstring = sdsnew("minstring");
+        shared.maxstring = sdsnew("maxstring");
+    }
+
+    static void TearDownTestSuite() {
+        sdsfree(shared.minstring); shared.minstring = NULL;
+        sdsfree(shared.maxstring); shared.maxstring = NULL;
+    }
+
     void SetUp() override {
-        /* Ensure shared lex sentinels are initialized (normally done by createSharedObjects) */
-        if (!shared.minstring) shared.minstring = sdsnew("minstring");
-        if (!shared.maxstring) shared.maxstring = sdsnew("maxstring");
         oi = orderedIndexCreate();
     }
     void TearDown() override {
@@ -219,6 +214,22 @@ class OrderedIndexTest : public ::testing::Test {
         }
         orderedIndexResetIterator(&it);
         ASSERT_EQ(i, count) << "Fewer elements than expected";
+    }
+
+    /* Insert N sequential elements ("key0"..."keyN-1") at scores 0..N-1 (no return). */
+    void insertN(int n) {
+        for (int i = 0; i < n; i++) {
+            char buf[32];
+            snprintf(buf, sizeof(buf), "key%d", i);
+            orderedIndexInsert(oi, (double)i, buf, strlen(buf));
+        }
+    }
+
+    /* Insert elements at the same score (lex ordering). */
+    void insertLex(const char *elems[], int count, double score = 1.0) {
+        for (int i = 0; i < count; i++) {
+            orderedIndexInsert(oi, score, elems[i], strlen(elems[i]));
+        }
     }
 
     /* Verify structural integrity. */
@@ -1707,49 +1718,11 @@ static void testOnDeleteCallback(const OrderedIndexItem *item, void *ctx) {
     /* Item is freed by the index after this callback returns. */
 }
 
-class OnDeleteCallbackTest : public ::testing::Test {
-  protected:
-    OrderedIndex *oi = nullptr;
 
-    void SetUp() override {
-        oi = orderedIndexCreate();
-    }
-    void TearDown() override {
-        if (oi) orderedIndexFree(oi);
-    }
-
-    /* Verify structural integrity. */
-    void verifyOI() {
-        char errmsg[256];
-        ASSERT_TRUE(orderedIndexVerifyIntegrity(oi, errmsg, sizeof(errmsg))) << errmsg;
-    }
-
-    void insert(double score, const char *ele) {
-        orderedIndexInsert(oi, score, ele, strlen(ele));
-    }
-
-    void insertN(int n) {
-        for (int i = 0; i < n; i++) {
-            char buf[32];
-            snprintf(buf, sizeof(buf), "key%d", i);
-            insert((double)i, buf);
-        }
-    }
-
-    void insertLex(const char *elems[], int count, double score = 1.0) {
-        for (int i = 0; i < count; i++) {
-            insert(score, elems[i]);
-        }
-    }
-
-    sds *collectElements(OrderedIndex *idx, size_t *out_n) {
-        return collectIndexToSds(idx, out_n);
-    }
-};
 
 /* DeleteRangeByScore */
 
-TEST_F(OnDeleteCallbackTest, DeleteRangeByScore_EmptyAndNoMatch) {
+TEST_F(OrderedIndexTest, OnDelete_DeleteRangeByScore_EmptyAndNoMatch) {
     OnDeleteRecord rec;
     initOnDeleteRecord(&rec, 10);
 
@@ -1768,7 +1741,7 @@ TEST_F(OnDeleteCallbackTest, DeleteRangeByScore_EmptyAndNoMatch) {
     freeOnDeleteRecord(&rec);
 }
 
-TEST_F(OnDeleteCallbackTest, DeleteRangeByScore_Subset) {
+TEST_F(OrderedIndexTest, OnDelete_DeleteRangeByScore_Subset) {
     insertN(10);
 
     OnDeleteRecord rec;
@@ -1784,14 +1757,14 @@ TEST_F(OnDeleteCallbackTest, DeleteRangeByScore_Subset) {
 
     {
         size_t _rn;
-        sds *_r = collectElements(oi, &_rn);
+        sds *_r = collectIndexToSds(oi, &_rn);
         ASSERT_SDS_ARRAY_EQ(_r, _rn, "key0", "key1", "key2", "key7", "key8", "key9");
         freeSdsArray(_r, _rn);
     }
     freeOnDeleteRecord(&rec);
 }
 
-TEST_F(OnDeleteCallbackTest, DeleteRangeByScore_All) {
+TEST_F(OrderedIndexTest, OnDelete_DeleteRangeByScore_All) {
     insertN(5);
 
     OnDeleteRecord rec;
@@ -1804,7 +1777,7 @@ TEST_F(OnDeleteCallbackTest, DeleteRangeByScore_All) {
     freeOnDeleteRecord(&rec);
 }
 
-TEST_F(OnDeleteCallbackTest, DeleteRangeByScore_NullCallback) {
+TEST_F(OrderedIndexTest, OnDelete_DeleteRangeByScore_NullCallback) {
     insertN(5);
 
     unsigned long deleted = orderedIndexDeleteRangeByScore(oi, 1.0, 3.0, 0, 0, NULL, NULL);
@@ -1812,7 +1785,7 @@ TEST_F(OnDeleteCallbackTest, DeleteRangeByScore_NullCallback) {
     ASSERT_EQ(orderedIndexLength(oi), 2UL);
 }
 
-TEST_F(OnDeleteCallbackTest, DeleteRangeByScore_ExclusiveBounds) {
+TEST_F(OrderedIndexTest, OnDelete_DeleteRangeByScore_ExclusiveBounds) {
     insertN(10);
 
     OnDeleteRecord rec;
@@ -1826,7 +1799,7 @@ TEST_F(OnDeleteCallbackTest, DeleteRangeByScore_ExclusiveBounds) {
     freeOnDeleteRecord(&rec);
 }
 
-TEST_F(OnDeleteCallbackTest, DeleteRangeByScore_SingleElement) {
+TEST_F(OrderedIndexTest, OnDelete_DeleteRangeByScore_SingleElement) {
     insertN(5);
 
     OnDeleteRecord rec;
@@ -1841,7 +1814,7 @@ TEST_F(OnDeleteCallbackTest, DeleteRangeByScore_SingleElement) {
 
 /* DeleteRangeByIndex */
 
-TEST_F(OnDeleteCallbackTest, DeleteRangeByIndex_EmptyAndNoMatch) {
+TEST_F(OrderedIndexTest, OnDelete_DeleteRangeByIndex_EmptyAndNoMatch) {
     OnDeleteRecord rec;
     initOnDeleteRecord(&rec, 10);
 
@@ -1860,7 +1833,7 @@ TEST_F(OnDeleteCallbackTest, DeleteRangeByIndex_EmptyAndNoMatch) {
     freeOnDeleteRecord(&rec);
 }
 
-TEST_F(OnDeleteCallbackTest, DeleteRangeByIndex_Subset) {
+TEST_F(OrderedIndexTest, OnDelete_DeleteRangeByIndex_Subset) {
     insertN(10);
 
     OnDeleteRecord rec;
@@ -1875,14 +1848,14 @@ TEST_F(OnDeleteCallbackTest, DeleteRangeByIndex_Subset) {
 
     {
         size_t _rn;
-        sds *_r = collectElements(oi, &_rn);
+        sds *_r = collectIndexToSds(oi, &_rn);
         ASSERT_SDS_ARRAY_EQ(_r, _rn, "key0", "key1", "key5", "key6", "key7", "key8", "key9");
         freeSdsArray(_r, _rn);
     }
     freeOnDeleteRecord(&rec);
 }
 
-TEST_F(OnDeleteCallbackTest, DeleteRangeByIndex_All) {
+TEST_F(OrderedIndexTest, OnDelete_DeleteRangeByIndex_All) {
     insertN(5);
 
     OnDeleteRecord rec;
@@ -1894,7 +1867,7 @@ TEST_F(OnDeleteCallbackTest, DeleteRangeByIndex_All) {
     freeOnDeleteRecord(&rec);
 }
 
-TEST_F(OnDeleteCallbackTest, DeleteRangeByIndex_NullCallback) {
+TEST_F(OrderedIndexTest, OnDelete_DeleteRangeByIndex_NullCallback) {
     insertN(5);
 
     unsigned long deleted = orderedIndexDeleteRangeByIndex(oi, 2, 4, NULL, NULL);
@@ -1902,7 +1875,7 @@ TEST_F(OnDeleteCallbackTest, DeleteRangeByIndex_NullCallback) {
     ASSERT_EQ(orderedIndexLength(oi), 2UL);
 }
 
-TEST_F(OnDeleteCallbackTest, DeleteRangeByIndex_ExclusiveBounds) {
+TEST_F(OrderedIndexTest, OnDelete_DeleteRangeByIndex_ExclusiveBounds) {
     insertN(5);
 
     OnDeleteRecord rec;
@@ -1914,14 +1887,14 @@ TEST_F(OnDeleteCallbackTest, DeleteRangeByIndex_ExclusiveBounds) {
 
     {
         size_t _rn;
-        sds *_r = collectElements(oi, &_rn);
+        sds *_r = collectIndexToSds(oi, &_rn);
         ASSERT_SDS_ARRAY_EQ(_r, _rn, "key0", "key1", "key3", "key4");
         freeSdsArray(_r, _rn);
     }
     freeOnDeleteRecord(&rec);
 }
 
-TEST_F(OnDeleteCallbackTest, DeleteRangeByIndex_SingleElement) {
+TEST_F(OrderedIndexTest, OnDelete_DeleteRangeByIndex_SingleElement) {
     insertN(5);
 
     OnDeleteRecord rec;
@@ -1936,7 +1909,7 @@ TEST_F(OnDeleteCallbackTest, DeleteRangeByIndex_SingleElement) {
 
 /* DeleteRangeByLex */
 
-TEST_F(OnDeleteCallbackTest, DeleteRangeByLex_EmptyAndNoMatch) {
+TEST_F(OrderedIndexTest, OnDelete_DeleteRangeByLex_EmptyAndNoMatch) {
     OnDeleteRecord rec;
     initOnDeleteRecord(&rec, 10);
 
@@ -1966,7 +1939,7 @@ TEST_F(OnDeleteCallbackTest, DeleteRangeByLex_EmptyAndNoMatch) {
     freeOnDeleteRecord(&rec);
 }
 
-TEST_F(OnDeleteCallbackTest, DeleteRangeByLex_Subset) {
+TEST_F(OrderedIndexTest, OnDelete_DeleteRangeByLex_Subset) {
     {
         const char *_l[] = {"apple", "banana", "cherry", "date", "elderberry"};
         insertLex(_l, 5);
@@ -1986,7 +1959,7 @@ TEST_F(OnDeleteCallbackTest, DeleteRangeByLex_Subset) {
 
     {
         size_t _rn;
-        sds *_r = collectElements(oi, &_rn);
+        sds *_r = collectIndexToSds(oi, &_rn);
         ASSERT_SDS_ARRAY_EQ(_r, _rn, "apple", "elderberry");
         freeSdsArray(_r, _rn);
     }
@@ -1996,7 +1969,7 @@ TEST_F(OnDeleteCallbackTest, DeleteRangeByLex_Subset) {
     freeOnDeleteRecord(&rec);
 }
 
-TEST_F(OnDeleteCallbackTest, DeleteRangeByLex_All) {
+TEST_F(OrderedIndexTest, OnDelete_DeleteRangeByLex_All) {
     {
         const char *_l[] = {"apple", "banana", "cherry"};
         insertLex(_l, 3);
@@ -2016,7 +1989,7 @@ TEST_F(OnDeleteCallbackTest, DeleteRangeByLex_All) {
     freeOnDeleteRecord(&rec);
 }
 
-TEST_F(OnDeleteCallbackTest, DeleteRangeByLex_NullCallback) {
+TEST_F(OrderedIndexTest, OnDelete_DeleteRangeByLex_NullCallback) {
     {
         const char *_l[] = {"apple", "banana", "cherry", "date"};
         insertLex(_l, 4);
@@ -2030,7 +2003,7 @@ TEST_F(OnDeleteCallbackTest, DeleteRangeByLex_NullCallback) {
 
     {
         size_t _rn;
-        sds *_r = collectElements(oi, &_rn);
+        sds *_r = collectIndexToSds(oi, &_rn);
         ASSERT_SDS_ARRAY_EQ(_r, _rn, "apple", "date");
         freeSdsArray(_r, _rn);
     }
@@ -2039,7 +2012,7 @@ TEST_F(OnDeleteCallbackTest, DeleteRangeByLex_NullCallback) {
     sdsfree(max);
 }
 
-TEST_F(OnDeleteCallbackTest, DeleteRangeByLex_ExclusiveBounds) {
+TEST_F(OrderedIndexTest, OnDelete_DeleteRangeByLex_ExclusiveBounds) {
     {
         const char *_l[] = {"apple", "banana", "cherry", "date", "elderberry"};
         insertLex(_l, 5);
@@ -2057,7 +2030,7 @@ TEST_F(OnDeleteCallbackTest, DeleteRangeByLex_ExclusiveBounds) {
 
     {
         size_t _rn;
-        sds *_r = collectElements(oi, &_rn);
+        sds *_r = collectIndexToSds(oi, &_rn);
         ASSERT_SDS_ARRAY_EQ(_r, _rn, "apple", "banana", "date", "elderberry");
         freeSdsArray(_r, _rn);
     }
@@ -2067,7 +2040,7 @@ TEST_F(OnDeleteCallbackTest, DeleteRangeByLex_ExclusiveBounds) {
     freeOnDeleteRecord(&rec);
 }
 
-TEST_F(OnDeleteCallbackTest, DeleteRangeByLex_SingleElement) {
+TEST_F(OrderedIndexTest, OnDelete_DeleteRangeByLex_SingleElement) {
     {
         const char *_l[] = {"apple", "banana", "cherry"};
         insertLex(_l, 3);
@@ -2085,7 +2058,7 @@ TEST_F(OnDeleteCallbackTest, DeleteRangeByLex_SingleElement) {
 
     {
         size_t _rn;
-        sds *_r = collectElements(oi, &_rn);
+        sds *_r = collectIndexToSds(oi, &_rn);
         ASSERT_SDS_ARRAY_EQ(_r, _rn, "apple", "cherry");
         freeSdsArray(_r, _rn);
     }
@@ -2141,173 +2114,162 @@ static void hashtableConsistencyOnDelete(const OrderedIndexItem *item, void *ctx
     simHtRemove(ht, ptr, len);
 }
 
-class RangeDeleteHashtableConsistencyTest : public ::testing::Test {
-  protected:
-    OrderedIndex *oi = nullptr;
 
-    void SetUp() override {
-        oi = orderedIndexCreate();
-    }
-    void TearDown() override {
-        if (oi) orderedIndexFree(oi);
-    }
 
-    void insert(double score, const char *ele) {
-        orderedIndexInsert(oi, score, ele, strlen(ele));
+/* Helper: populate index + SimHt with N sequential elements. */
+static void populateIndexAndHt(OrderedIndex *oi, SimHt *ht, int n) {
+    for (int i = 0; i < n; i++) {
+        char buf[32];
+        snprintf(buf, sizeof(buf), "key%d", i);
+        orderedIndexInsert(oi, (double)i, buf, strlen(buf));
+        simHtAdd(ht, buf, strlen(buf));
     }
+}
 
-    void insertN(SimHt &ht, int n) {
-        for (int i = 0; i < n; i++) {
-            char buf[32];
-            snprintf(buf, sizeof(buf), "key%d", i);
-            insert((double)i, buf);
-            simHtAdd(&ht, buf, strlen(buf));
-        }
+/* Helper: populate index + SimHt with lex elements at same score. */
+static void populateIndexAndHtLex(OrderedIndex *oi, SimHt *ht, const char *elems[], int count, double score) {
+    for (int i = 0; i < count; i++) {
+        orderedIndexInsert(oi, score, elems[i], strlen(elems[i]));
+        simHtAdd(ht, elems[i], strlen(elems[i]));
     }
+}
 
-    void insertLex(SimHt &ht, const char *elems[], int count, double score = 1.0) {
-        for (int i = 0; i < count; i++) {
-            insert(score, elems[i]);
-            simHtAdd(&ht, elems[i], strlen(elems[i]));
-        }
+/* Helper: assert SimHt contents match index contents. */
+static void assertHtMatchesIndex(OrderedIndex *oi, SimHt *ht) {
+    size_t idx_n;
+    sds *idx_elems = collectIndexToSds(oi, &idx_n);
+    sortSdsArray(idx_elems, idx_n);
+    simHtSort(ht);
+    ASSERT_EQ(idx_n, (size_t)ht->count);
+    for (size_t i = 0; i < idx_n; i++) {
+        ASSERT_STREQ(idx_elems[i], ht->elems[i]);
     }
-
-    void assertHtMatchesIndex(SimHt &ht) {
-        size_t idx_n;
-        sds *idx_elems = collectIndexToSds(oi, &idx_n);
-        sortSdsArray(idx_elems, idx_n);
-        simHtSort(&ht);
-        ASSERT_EQ(idx_n, (size_t)ht.count);
-        for (size_t i = 0; i < idx_n; i++) {
-            ASSERT_STREQ(idx_elems[i], ht.elems[i]);
-        }
-        freeSdsArray(idx_elems, idx_n);
-    }
-};
+    freeSdsArray(idx_elems, idx_n);
+}
 
 /* ByScore */
 
-TEST_F(RangeDeleteHashtableConsistencyTest, ByScore_PartialDelete) {
+TEST_F(OrderedIndexTest, HtConsistency_ByScore_PartialDelete) {
     SimHt simulatedHt;
     simHtInit(&simulatedHt, 20);
-    insertN(simulatedHt, 10);
+    populateIndexAndHt(oi, &simulatedHt, 10);
 
     orderedIndexDeleteRangeByScore(oi, 3.0, 6.0, 0, 0, hashtableConsistencyOnDelete, &simulatedHt);
 
-    assertHtMatchesIndex(simulatedHt);
+    assertHtMatchesIndex(oi, &simulatedHt);
     simHtFree(&simulatedHt);
 }
 
-TEST_F(RangeDeleteHashtableConsistencyTest, ByScore_FullDelete) {
+TEST_F(OrderedIndexTest, HtConsistency_ByScore_FullDelete) {
     SimHt simulatedHt;
     simHtInit(&simulatedHt, 20);
-    insertN(simulatedHt, 10);
+    populateIndexAndHt(oi, &simulatedHt, 10);
 
     orderedIndexDeleteRangeByScore(oi, NEG_INF, POS_INF, 0, 0, hashtableConsistencyOnDelete, &simulatedHt);
 
-    assertHtMatchesIndex(simulatedHt);
+    assertHtMatchesIndex(oi, &simulatedHt);
     simHtFree(&simulatedHt);
 }
 
-TEST_F(RangeDeleteHashtableConsistencyTest, ByScore_EmptyRange) {
+TEST_F(OrderedIndexTest, HtConsistency_ByScore_EmptyRange) {
     SimHt simulatedHt;
     simHtInit(&simulatedHt, 20);
-    insertN(simulatedHt, 10);
+    populateIndexAndHt(oi, &simulatedHt, 10);
 
     orderedIndexDeleteRangeByScore(oi, 20.0, 30.0, 0, 0, hashtableConsistencyOnDelete, &simulatedHt);
 
-    assertHtMatchesIndex(simulatedHt);
+    assertHtMatchesIndex(oi, &simulatedHt);
     simHtFree(&simulatedHt);
 }
 
 /* ByIndex */
 
-TEST_F(RangeDeleteHashtableConsistencyTest, ByIndex_PartialDelete) {
+TEST_F(OrderedIndexTest, HtConsistency_ByIndex_PartialDelete) {
     SimHt simulatedHt;
     simHtInit(&simulatedHt, 20);
-    insertN(simulatedHt, 10);
+    populateIndexAndHt(oi, &simulatedHt, 10);
 
     orderedIndexDeleteRangeByIndex(oi, 2, 4, hashtableConsistencyOnDelete, &simulatedHt);
 
-    assertHtMatchesIndex(simulatedHt);
+    assertHtMatchesIndex(oi, &simulatedHt);
     simHtFree(&simulatedHt);
 }
 
-TEST_F(RangeDeleteHashtableConsistencyTest, ByIndex_FullDelete) {
+TEST_F(OrderedIndexTest, HtConsistency_ByIndex_FullDelete) {
     SimHt simulatedHt;
     simHtInit(&simulatedHt, 20);
-    insertN(simulatedHt, 10);
+    populateIndexAndHt(oi, &simulatedHt, 10);
 
     orderedIndexDeleteRangeByIndex(oi, 0, 9, hashtableConsistencyOnDelete, &simulatedHt);
 
-    assertHtMatchesIndex(simulatedHt);
+    assertHtMatchesIndex(oi, &simulatedHt);
     simHtFree(&simulatedHt);
 }
 
-TEST_F(RangeDeleteHashtableConsistencyTest, ByIndex_EmptyRange) {
+TEST_F(OrderedIndexTest, HtConsistency_ByIndex_EmptyRange) {
     SimHt simulatedHt;
     simHtInit(&simulatedHt, 20);
-    insertN(simulatedHt, 10);
+    populateIndexAndHt(oi, &simulatedHt, 10);
 
     orderedIndexDeleteRangeByIndex(oi, 20, 30, hashtableConsistencyOnDelete, &simulatedHt);
 
-    assertHtMatchesIndex(simulatedHt);
+    assertHtMatchesIndex(oi, &simulatedHt);
     simHtFree(&simulatedHt);
 }
 
 /* ByLex */
 
-TEST_F(RangeDeleteHashtableConsistencyTest, ByLex_PartialDelete) {
+TEST_F(OrderedIndexTest, HtConsistency_ByLex_PartialDelete) {
     SimHt simulatedHt;
     simHtInit(&simulatedHt, 20);
     {
         const char *_l[] = {"apple", "banana", "cherry", "date", "elderberry"};
-        insertLex(simulatedHt, _l, 5);
+        populateIndexAndHtLex(oi, &simulatedHt, _l, 5, 1.0);
     }
 
     sds min = sdsnew("banana");
     sds max = sdsnew("date");
     orderedIndexDeleteRangeByLex(oi, min, max, 0, 0, hashtableConsistencyOnDelete, &simulatedHt);
 
-    assertHtMatchesIndex(simulatedHt);
+    assertHtMatchesIndex(oi, &simulatedHt);
 
     sdsfree(min);
     sdsfree(max);
     simHtFree(&simulatedHt);
 }
 
-TEST_F(RangeDeleteHashtableConsistencyTest, ByLex_FullDelete) {
+TEST_F(OrderedIndexTest, HtConsistency_ByLex_FullDelete) {
     SimHt simulatedHt;
     simHtInit(&simulatedHt, 20);
     {
         const char *_l[] = {"apple", "banana", "cherry", "date", "elderberry"};
-        insertLex(simulatedHt, _l, 5);
+        populateIndexAndHtLex(oi, &simulatedHt, _l, 5, 1.0);
     }
 
     sds min = sdsnew("a");
     sds max = sdsnew("z");
     orderedIndexDeleteRangeByLex(oi, min, max, 0, 0, hashtableConsistencyOnDelete, &simulatedHt);
 
-    assertHtMatchesIndex(simulatedHt);
+    assertHtMatchesIndex(oi, &simulatedHt);
 
     sdsfree(min);
     sdsfree(max);
     simHtFree(&simulatedHt);
 }
 
-TEST_F(RangeDeleteHashtableConsistencyTest, ByLex_EmptyRange) {
+TEST_F(OrderedIndexTest, HtConsistency_ByLex_EmptyRange) {
     SimHt simulatedHt;
     simHtInit(&simulatedHt, 20);
     {
         const char *_l[] = {"apple", "banana", "cherry", "date", "elderberry"};
-        insertLex(simulatedHt, _l, 5);
+        populateIndexAndHtLex(oi, &simulatedHt, _l, 5, 1.0);
     }
 
     sds min = sdsnew("zzz");
     sds max = sdsnew("zzzz");
     orderedIndexDeleteRangeByLex(oi, min, max, 0, 0, hashtableConsistencyOnDelete, &simulatedHt);
 
-    assertHtMatchesIndex(simulatedHt);
+    assertHtMatchesIndex(oi, &simulatedHt);
 
     sdsfree(min);
     sdsfree(max);

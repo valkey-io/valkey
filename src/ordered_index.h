@@ -79,7 +79,8 @@ OrderedIndexItem *orderedIndexPopFirst(OrderedIndex *oi);
 /* Remove and return the last (highest-score) item without freeing it. */
 OrderedIndexItem *orderedIndexPopLast(OrderedIndex *oi);
 
-/* Free a detached item (one that is not in any index). */
+/* Free a detached item (one that is not in any index). Typically used after
+ * orderedIndexPopFirst/PopLast which return items removed from the index. */
 void orderedIndexItemFree(OrderedIndexItem *item);
 
 /* Create an item not yet inserted into any index.

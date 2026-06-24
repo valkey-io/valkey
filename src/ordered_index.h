@@ -80,22 +80,30 @@ OrderedIndexItem *orderedIndexPopFirst(OrderedIndex *oi);
 OrderedIndexItem *orderedIndexPopLast(OrderedIndex *oi);
 
 /* Free a detached item (one that is not in any index). */
-void orderedIndexFreeItem(OrderedIndexItem *item);
+void orderedIndexItemFree(OrderedIndexItem *item);
 
-/* Create an item that is not inserted into any index. Used for multi-set
- * operations (e.g. ZUNIONSTORE) where scores are accumulated in a hashtable
- * before final insertion, avoiding repeated delete+reinsert costs. */
-OrderedIndexItem *orderedIndexCreateDetached(double score, const char *ele, size_t len);
+/* Create an item not yet inserted into any index.
+ *
+ * Used for batch-insert workflows (e.g. ZUNIONSTORE): create items, store
+ * them in a hashtable keyed by element, update scores with ItemSetScore as
+ * duplicates are encountered, then bulk-insert all items at the end via
+ * orderedIndexInsertItem. This avoids O(log N) repositioning per score
+ * update during the aggregation phase. */
+OrderedIndexItem *orderedIndexItemCreate(double score, const char *ele, size_t len);
 
-/* Set the score on a detached item. Do NOT use on items that are currently
- * in an index  -- that would corrupt sort order. Use orderedIndexUpdateScore
- * for items that are in an index. */
-void orderedIndexDetachedSetScore(OrderedIndexItem *item, double score);
+/* Set the score on an item that is NOT in any index. This is O(1) because
+ * no repositioning is needed -- the item has no position yet.
+ *
+ * Do NOT use on items currently in an index; that would silently corrupt
+ * sort order. Use orderedIndexUpdateScore for in-index items (which handles
+ * repositioning). */
+void orderedIndexItemSetScore(OrderedIndexItem *item, double score);
 
-/* Insert a previously-detached item into the index. The index takes ownership.
- * Returns the item pointer (same as input  -- provided for API consistency with
+/* Insert a pre-created item into the index (the final step of the
+ * batch-insert workflow). The index takes ownership of the item.
+ * Returns the item pointer (same as input -- for API consistency with
  * orderedIndexInsert so callers can use either path uniformly). */
-OrderedIndexItem *orderedIndexInsertDetached(OrderedIndex *oi, OrderedIndexItem *item);
+OrderedIndexItem *orderedIndexInsertItem(OrderedIndex *oi, OrderedIndexItem *item);
 
 /* Delete all items with score in [min, max] (or exclusive if min_ex/max_ex).
  * For each removed item, on_delete is called (if non-NULL) with the item and
@@ -134,10 +142,10 @@ OrderedIndexItem *orderedIndexGetLast(const OrderedIndex *oi);
 unsigned long orderedIndexGetIndex(const OrderedIndex *oi, const OrderedIndexItem *item);
 
 /* Get the element data from an item as a raw pointer + length. */
-void orderedIndexGetElementRaw(const OrderedIndexItem *item, const char **ptr, size_t *len);
+void orderedIndexItemGetElement(const OrderedIndexItem *item, const char **ptr, size_t *len);
 
 /* Get the score of an item. */
-double orderedIndexGetScore(const OrderedIndexItem *item);
+double orderedIndexItemGetScore(const OrderedIndexItem *item);
 
 /* Count items with score in [min, max] (or exclusive if min_ex/max_ex). */
 unsigned long orderedIndexCountScoreRange(const OrderedIndex *oi, double min, double max, bool min_ex, bool max_ex);

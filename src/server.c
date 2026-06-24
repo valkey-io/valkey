@@ -638,7 +638,7 @@ static const char *zsetExtractElement(const void *key, size_t *len) {
 const void *zsetHashtableGetKey(const void *element) {
     const char *ptr;
     size_t len;
-    orderedIndexGetElementRaw((const OrderedIndexItem *)element, &ptr, &len);
+    orderedIndexItemGetElement((const OrderedIndexItem *)element, &ptr, &len);
     return ptr;
 }
 

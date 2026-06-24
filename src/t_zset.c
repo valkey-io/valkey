@@ -46,7 +46,7 @@
  *
  * Note that the element string is shared between the hash table and the
  * ordered index in order to save memory. The element is freed only in
- * orderedIndexFreeItem(). The hash table has no value free method set.
+ * orderedIndexItemFree(). The hash table has no value free method set.
  * So we should always remove an element from the hash table, and later from
  * the ordered index. */
 
@@ -728,9 +728,9 @@ void zsetConvertAndExpand(robj *zobj, int encoding, unsigned long cap) {
         while ((node = orderedIndexPopFirst(zs->oi)) != NULL) {
             const char *ele_ptr;
             size_t ele_len;
-            orderedIndexGetElementRaw(node, &ele_ptr, &ele_len);
-            zl = zzlInsertAt(zl, NULL, ele_ptr, ele_len, orderedIndexGetScore(node));
-            orderedIndexFreeItem(node);
+            orderedIndexItemGetElement(node, &ele_ptr, &ele_len);
+            zl = zzlInsertAt(zl, NULL, ele_ptr, ele_len, orderedIndexItemGetScore(node));
+            orderedIndexItemFree(node);
         }
         orderedIndexFree(zs->oi);
 
@@ -769,7 +769,7 @@ int zsetScore(robj *zobj, sds member, double *score) {
         void *entry;
         if (!hashtableFind(zs->ht, member, &entry)) return C_ERR;
         OrderedIndexItem *setElement = entry;
-        *score = orderedIndexGetScore(setElement);
+        *score = orderedIndexItemGetScore(setElement);
     } else {
         serverPanic("Unknown sorted set encoding");
     }
@@ -904,7 +904,7 @@ int zsetAdd(robj *zobj, double score, sds ele, int in_flags, int *out_flags, dou
             }
 
             OrderedIndexItem *old_node = *node_ref_in_hashtable;
-            curscore = orderedIndexGetScore(old_node);
+            curscore = orderedIndexItemGetScore(old_node);
 
             /* Prepare the score for the increment if needed. */
             if (incr) {
@@ -1034,7 +1034,7 @@ static long zsetRank(robj *zobj, sds ele, int reverse, double *output_score) {
         OrderedIndexItem *node = entry;
 
         rank = orderedIndexGetIndex(zs->oi, node);
-        if (output_score) *output_score = orderedIndexGetScore(node);
+        if (output_score) *output_score = orderedIndexItemGetScore(node);
         if (reverse)
             return llen - rank - 1;
         else
@@ -1080,8 +1080,8 @@ robj *zsetDup(robj *o) {
         while ((ln = orderedIndexPrev(&iter)) != NULL) {
             const char *ele_ptr;
             size_t ele_len;
-            orderedIndexGetElementRaw(ln, &ele_ptr, &ele_len);
-            OrderedIndexItem *znode = orderedIndexInsert(new_zs->oi, orderedIndexGetScore(ln), ele_ptr, ele_len);
+            orderedIndexItemGetElement(ln, &ele_ptr, &ele_len);
+            OrderedIndexItem *znode = orderedIndexInsert(new_zs->oi, orderedIndexItemGetScore(ln), ele_ptr, ele_len);
             hashtableAdd(new_zs->ht, znode);
         }
     } else {
@@ -1116,10 +1116,10 @@ static void zsetTypeRandomElement(robj *zsetobj, unsigned long zsetsize, listpac
         OrderedIndexItem *node = entry;
         const char *ele_ptr_tmp;
         size_t ele_len_tmp;
-        orderedIndexGetElementRaw(node, &ele_ptr_tmp, &ele_len_tmp);
+        orderedIndexItemGetElement(node, &ele_ptr_tmp, &ele_len_tmp);
         key->sval = (unsigned char *)ele_ptr_tmp;
         key->slen = ele_len_tmp;
-        if (score) *score = orderedIndexGetScore(node);
+        if (score) *score = orderedIndexItemGetScore(node);
     } else if (zsetobj->encoding == OBJ_ENCODING_LISTPACK) {
         listpackEntry val;
         lpRandomPair(objectGetVal(zsetobj), zsetsize, key, &val);
@@ -1323,7 +1323,7 @@ static void zsetIndexDeleteCallback(const OrderedIndexItem *item, void *privdata
     hashtable *ht = privdata;
     const char *ptr;
     size_t len;
-    orderedIndexGetElementRaw(item, &ptr, &len);
+    orderedIndexItemGetElement(item, &ptr, &len);
     hashtableDelete(ht, (sds)ptr);
 }
 
@@ -1642,10 +1642,10 @@ static int zuiNext(zsetopsrc *op, zsetopval *val) {
             if (it->sl.node == NULL) return 0;
             const char *val_ele_ptr;
             size_t val_ele_len;
-            orderedIndexGetElementRaw(it->sl.node, &val_ele_ptr, &val_ele_len);
+            orderedIndexItemGetElement(it->sl.node, &val_ele_ptr, &val_ele_len);
             val->estr = (unsigned char *)val_ele_ptr;
             val->elen = val_ele_len;
-            val->score = orderedIndexGetScore(it->sl.node);
+            val->score = orderedIndexItemGetScore(it->sl.node);
         } else {
             serverPanic("Unknown sorted set encoding");
         }
@@ -1714,7 +1714,7 @@ static int zuiFind(zsetopsrc *op, zsetopval *val, double *score) {
             void *entry;
             if (hashtableFind(zs->ht, val->ele, &entry)) {
                 OrderedIndexItem *node = entry;
-                *score = orderedIndexGetScore(node);
+                *score = orderedIndexItemGetScore(node);
                 return 1;
             } else {
                 return 0;
@@ -1771,7 +1771,7 @@ static size_t zsetHashtableGetMaxElementLength(hashtable *ht, size_t *totallen) 
         OrderedIndexItem *node = next;
         const char *ele_ptr_tmp;
         size_t ele_len_tmp;
-        orderedIndexGetElementRaw(node, &ele_ptr_tmp, &ele_len_tmp);
+        orderedIndexItemGetElement(node, &ele_ptr_tmp, &ele_len_tmp);
         if (ele_len_tmp > maxelelen) maxelelen = ele_len_tmp;
         if (totallen) (*totallen) += ele_len_tmp;
     }
@@ -2157,7 +2157,7 @@ static void zunionInterDiffGenericCommand(client *c, robj *dstkey, int numkeysIn
                 void *existing;
                 if (hashtableFindPositionForInsert(dstzset->ht, sdsval, &position, &existing)) {
                     sds tmp_ele = zuiNewSdsFromValue(&zval);
-                    OrderedIndexItem *new_node = orderedIndexCreateDetached(score, tmp_ele, sdslen(tmp_ele));
+                    OrderedIndexItem *new_node = orderedIndexItemCreate(score, tmp_ele, sdslen(tmp_ele));
                     sdsfree(tmp_ele);
                     hashtableInsertAtPosition(dstzset->ht, new_node, &position);
                     /* Remember the longest single element encountered,
@@ -2165,7 +2165,7 @@ static void zunionInterDiffGenericCommand(client *c, robj *dstkey, int numkeysIn
                      * at the end. */
                     const char *ele_ptr_tmp;
                     size_t ele_len_tmp;
-                    orderedIndexGetElementRaw(new_node, &ele_ptr_tmp, &ele_len_tmp);
+                    orderedIndexItemGetElement(new_node, &ele_ptr_tmp, &ele_len_tmp);
                     totelelen += ele_len_tmp;
                     if (ele_len_tmp > maxelelen) {
                         maxelelen = ele_len_tmp;
@@ -2174,9 +2174,9 @@ static void zunionInterDiffGenericCommand(client *c, robj *dstkey, int numkeysIn
                     /* Update the score with the score of the new instance
                      * of the element found in the current sorted set. */
                     OrderedIndexItem *node = existing;
-                    double cur = orderedIndexGetScore(node);
+                    double cur = orderedIndexItemGetScore(node);
                     zunionInterAggregate(&cur, score, aggregate);
-                    orderedIndexDetachedSetScore(node, cur);
+                    orderedIndexItemSetScore(node, cur);
                 }
             }
             zuiClearIterator(&src[i]);
@@ -2189,7 +2189,7 @@ static void zunionInterDiffGenericCommand(client *c, robj *dstkey, int numkeysIn
         void *next;
         while (hashtableNext(&iter, &next)) {
             OrderedIndexItem *node = next;
-            orderedIndexInsertDetached(dstzset->oi, node);
+            orderedIndexInsertItem(dstzset->oi, node);
         }
         hashtableCleanupIterator(&iter);
     } else if (op == SET_OP_DIFF) {
@@ -2235,9 +2235,9 @@ static void zunionInterDiffGenericCommand(client *c, robj *dstkey, int numkeysIn
             if (withscores && c->resp > 2) addReplyArrayLen(c, 2);
             const char *ele_ptr;
             size_t ele_len;
-            orderedIndexGetElementRaw(zn, &ele_ptr, &ele_len);
+            orderedIndexItemGetElement(zn, &ele_ptr, &ele_len);
             addReplyBulkCBuffer(c, ele_ptr, ele_len);
-            if (withscores) addReplyDouble(c, orderedIndexGetScore(zn));
+            if (withscores) addReplyDouble(c, orderedIndexItemGetScore(zn));
         }
         server.lazyfree_lazy_server_del ? freeObjAsync(NULL, dstobj, -1) : decrRefCount(dstobj);
     }
@@ -2540,8 +2540,8 @@ void genericZrangebyrankCommand(zrange_result_handler *handler,
             serverAssertWithInfo(c, zobj, ln != NULL);
             const char *ele_ptr;
             size_t ele_len;
-            orderedIndexGetElementRaw(ln, &ele_ptr, &ele_len);
-            handler->emitResultFromCBuffer(handler, ele_ptr, ele_len, orderedIndexGetScore(ln));
+            orderedIndexItemGetElement(ln, &ele_ptr, &ele_len);
+            handler->emitResultFromCBuffer(handler, ele_ptr, ele_len, orderedIndexItemGetScore(ln));
         }
     } else {
         serverPanic("Unknown sorted set encoding");
@@ -2657,16 +2657,16 @@ void genericZrangebyscoreCommand(zrange_result_handler *handler,
             if (ln == NULL) break;
             /* Abort when the node is no longer in range. */
             if (reverse) {
-                if (!zsetScoreGteMin(orderedIndexGetScore(ln), range)) break;
+                if (!zsetScoreGteMin(orderedIndexItemGetScore(ln), range)) break;
             } else {
-                if (!zsetScoreLteMax(orderedIndexGetScore(ln), range)) break;
+                if (!zsetScoreLteMax(orderedIndexItemGetScore(ln), range)) break;
             }
 
             rangelen++;
             const char *ele_ptr;
             size_t ele_len;
-            orderedIndexGetElementRaw(ln, &ele_ptr, &ele_len);
-            handler->emitResultFromCBuffer(handler, ele_ptr, ele_len, orderedIndexGetScore(ln));
+            orderedIndexItemGetElement(ln, &ele_ptr, &ele_len);
+            handler->emitResultFromCBuffer(handler, ele_ptr, ele_len, orderedIndexItemGetScore(ln));
         }
     } else {
         serverPanic("Unknown sorted set encoding");
@@ -2888,7 +2888,7 @@ void genericZrangebylexCommand(zrange_result_handler *handler,
             /* Abort when the node is no longer in range. */
             const char *ele_ptr;
             size_t ele_len;
-            orderedIndexGetElementRaw(ln, &ele_ptr, &ele_len);
+            orderedIndexItemGetElement(ln, &ele_ptr, &ele_len);
             if (reverse) {
                 if (!zsetLexGteMin(ele_ptr, ele_len, range)) break;
             } else {
@@ -2896,7 +2896,7 @@ void genericZrangebylexCommand(zrange_result_handler *handler,
             }
 
             rangelen++;
-            handler->emitResultFromCBuffer(handler, ele_ptr, ele_len, orderedIndexGetScore(ln));
+            handler->emitResultFromCBuffer(handler, ele_ptr, ele_len, orderedIndexItemGetScore(ln));
         }
     } else {
         serverPanic("Unknown sorted set encoding");
@@ -3293,9 +3293,9 @@ void genericZpopCommand(client *c,
             serverAssertWithInfo(c, zobj, zln != NULL);
             const char *ele_ptr;
             size_t ele_len;
-            orderedIndexGetElementRaw(zln, &ele_ptr, &ele_len);
+            orderedIndexItemGetElement(zln, &ele_ptr, &ele_len);
             ele = sdsnewlen(ele_ptr, ele_len);
-            score = orderedIndexGetScore(zln);
+            score = orderedIndexItemGetScore(zln);
         } else {
             serverPanic("Unknown sorted set encoding");
         }
@@ -3506,9 +3506,9 @@ void zrandmemberWithCountCommand(client *c, long l, int withscores) {
                 if (withscores && c->resp > 2) addReplyArrayLen(c, 2);
                 const char *ele_ptr_tmp;
                 size_t ele_len_tmp;
-                orderedIndexGetElementRaw(node, &ele_ptr_tmp, &ele_len_tmp);
+                orderedIndexItemGetElement(node, &ele_ptr_tmp, &ele_len_tmp);
                 addReplyBulkCBuffer(c, ele_ptr_tmp, ele_len_tmp);
-                if (withscores) addReplyDouble(c, orderedIndexGetScore(node));
+                if (withscores) addReplyDouble(c, orderedIndexItemGetScore(node));
                 if (c->flag.close_asap) break;
             }
         } else if (zsetobj->encoding == OBJ_ENCODING_LISTPACK) {
@@ -3608,7 +3608,7 @@ void zrandmemberWithCountCommand(client *c, long l, int withscores) {
             hashtableFairRandomEntry(ht, &element);
             const char *del_ele_ptr;
             size_t del_ele_len;
-            orderedIndexGetElementRaw((OrderedIndexItem *)element, &del_ele_ptr, &del_ele_len);
+            orderedIndexItemGetElement((OrderedIndexItem *)element, &del_ele_ptr, &del_ele_len);
             hashtableDelete(ht, (sds)del_ele_ptr);
             size--;
         }
@@ -3621,10 +3621,10 @@ void zrandmemberWithCountCommand(client *c, long l, int withscores) {
             OrderedIndexItem *node = (OrderedIndexItem *)next;
             const char *key_ptr_tmp;
             size_t key_len_tmp;
-            orderedIndexGetElementRaw(node, &key_ptr_tmp, &key_len_tmp);
+            orderedIndexItemGetElement(node, &key_ptr_tmp, &key_len_tmp);
             if (withscores && c->resp > 2) addReplyArrayLen(c, 2);
             addReplyBulkCBuffer(c, key_ptr_tmp, key_len_tmp);
-            if (withscores) addReplyDouble(c, orderedIndexGetScore(node));
+            if (withscores) addReplyDouble(c, orderedIndexItemGetScore(node));
         }
 
         hashtableCleanupIterator(&iter);

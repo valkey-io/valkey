@@ -438,7 +438,7 @@ void sortCommandGeneric(client *c, int readonly) {
             serverAssertWithInfo(c, sortval, ln != NULL);
             const char *ele;
             size_t ele_len;
-            orderedIndexGetElementRaw(ln, &ele, &ele_len);
+            orderedIndexItemGetElement(ln, &ele, &ele_len);
             vector[j].obj = createStringObject(ele, ele_len);
             vector[j].u.score = 0;
             vector[j].u.cmpobj = NULL;
@@ -456,7 +456,7 @@ void sortCommandGeneric(client *c, int readonly) {
         while (hashtableNext(&iter, &next)) {
             const char *ele;
             size_t ele_len;
-            orderedIndexGetElementRaw((const OrderedIndexItem *)next, &ele, &ele_len);
+            orderedIndexItemGetElement((const OrderedIndexItem *)next, &ele, &ele_len);
             vector[j].obj = createStringObject(ele, ele_len);
             vector[j].u.score = 0;
             vector[j].u.cmpobj = NULL;

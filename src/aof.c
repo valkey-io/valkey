@@ -2039,8 +2039,8 @@ int rewriteSortedSetObject(rio *r, robj *key, robj *o) {
             }
             const char *ele;
             size_t ele_len;
-            orderedIndexGetElementRaw(node, &ele, &ele_len);
-            if (!rioWriteBulkDouble(r, orderedIndexGetScore(node)) || !rioWriteBulkString(r, ele, ele_len)) {
+            orderedIndexItemGetElement(node, &ele, &ele_len);
+            if (!rioWriteBulkDouble(r, orderedIndexItemGetScore(node)) || !rioWriteBulkString(r, ele, ele_len)) {
                 hashtableCleanupIterator(&iter);
                 return 0;
             }

@@ -328,9 +328,9 @@ void computeDatasetProfile(int dbid, robj *keyobj, robj *o, long long expiretime
                 size_t eleLen = 0;
                 const char *ele;
                 size_t ele_len;
-                orderedIndexGetElementRaw(node, &ele, &ele_len);
+                orderedIndexItemGetElement(node, &ele, &ele_len);
 
-                const int len = fpconv_dtoa(orderedIndexGetScore(node), buf);
+                const int len = fpconv_dtoa(orderedIndexItemGetScore(node), buf);
                 buf[len] = '\0';
                 eleLen += ele_len + strlen(buf);
                 statsRecordElementSize(eleLen, 1, stats);

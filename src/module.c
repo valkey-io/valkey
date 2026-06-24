@@ -5251,10 +5251,10 @@ ValkeyModuleString *VM_ZsetRangeCurrentElement(ValkeyModuleKey *key, double *sco
         str = createObject(OBJ_STRING, ele);
     } else if (key->value->encoding == OBJ_ENCODING_SKIPLIST) {
         const OrderedIndexItem *ln = key->u.zset.current;
-        if (score) *score = orderedIndexGetScore(ln);
+        if (score) *score = orderedIndexItemGetScore(ln);
         const char *ele;
         size_t ele_len;
-        orderedIndexGetElementRaw(ln, &ele, &ele_len);
+        orderedIndexItemGetElement(ln, &ele, &ele_len);
         str = createStringObject(ele, ele_len);
     } else {
         serverPanic("Unsupported zset encoding");
@@ -5308,13 +5308,13 @@ int VM_ZsetRangeNext(ValkeyModuleKey *key) {
             return 0;
         } else {
             /* Are we still within the range? */
-            if (key->u.zset.type == VALKEYMODULE_ZSET_RANGE_SCORE && !zsetScoreLteMax(orderedIndexGetScore(next), &key->u.zset.rs)) {
+            if (key->u.zset.type == VALKEYMODULE_ZSET_RANGE_SCORE && !zsetScoreLteMax(orderedIndexItemGetScore(next), &key->u.zset.rs)) {
                 key->u.zset.er = 1;
                 return 0;
             } else if (key->u.zset.type == VALKEYMODULE_ZSET_RANGE_LEX) {
                 const char *ele;
                 size_t ele_len;
-                orderedIndexGetElementRaw(next, &ele, &ele_len);
+                orderedIndexItemGetElement(next, &ele, &ele_len);
                 if (!zsetLexLteMax(ele, ele_len, &key->u.zset.lrs)) {
                     key->u.zset.er = 1;
                     return 0;
@@ -5373,13 +5373,13 @@ int VM_ZsetRangePrev(ValkeyModuleKey *key) {
             return 0;
         } else {
             /* Are we still within the range? */
-            if (key->u.zset.type == VALKEYMODULE_ZSET_RANGE_SCORE && !zsetScoreGteMin(orderedIndexGetScore(prev), &key->u.zset.rs)) {
+            if (key->u.zset.type == VALKEYMODULE_ZSET_RANGE_SCORE && !zsetScoreGteMin(orderedIndexItemGetScore(prev), &key->u.zset.rs)) {
                 key->u.zset.er = 1;
                 return 0;
             } else if (key->u.zset.type == VALKEYMODULE_ZSET_RANGE_LEX) {
                 const char *ele;
                 size_t ele_len;
-                orderedIndexGetElementRaw(prev, &ele, &ele_len);
+                orderedIndexItemGetElement(prev, &ele, &ele_len);
                 if (!zsetLexGteMin(ele, ele_len, &key->u.zset.lrs)) {
                     key->u.zset.er = 1;
                     return 0;
@@ -12023,8 +12023,8 @@ static void moduleScanKeyHashtableCallback(void *privdata, void *entry) {
         key_len = sdslen(entry);
         /* no value */
     } else if (o->type == OBJ_ZSET) {
-        orderedIndexGetElementRaw((const OrderedIndexItem *)entry, &key_ptr, &key_len);
-        value = createStringObjectFromLongDouble(orderedIndexGetScore((const OrderedIndexItem *)entry), 0);
+        orderedIndexItemGetElement((const OrderedIndexItem *)entry, &key_ptr, &key_len);
+        value = createStringObjectFromLongDouble(orderedIndexItemGetScore((const OrderedIndexItem *)entry), 0);
     } else if (o->type == OBJ_HASH) {
         key_ptr = entryGetField(entry);
         key_len = sdslen(entryGetField(entry));

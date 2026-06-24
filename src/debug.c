@@ -220,8 +220,8 @@ void xorObjectDigest(serverDb *db, robj *keyobj, unsigned char *digest, robj *o)
                 OrderedIndexItem *node = next;
                 const char *ele;
                 size_t ele_len;
-                orderedIndexGetElementRaw(node, &ele, &ele_len);
-                const int len = fpconv_dtoa(orderedIndexGetScore(node), buf);
+                orderedIndexItemGetElement(node, &ele, &ele_len);
+                const int len = fpconv_dtoa(orderedIndexItemGetScore(node), buf);
                 buf[len] = '\0';
                 memset(eledigest, 0, 20);
                 mixDigest(eledigest, ele, ele_len);

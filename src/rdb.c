@@ -973,12 +973,12 @@ ssize_t rdbSaveObject(rio *rdb, robj *o, robj *key, int dbid, unsigned char rdbt
             while ((item = orderedIndexPrev(&iter)) != NULL) {
                 const char *ele;
                 size_t ele_len;
-                orderedIndexGetElementRaw(item, &ele, &ele_len);
+                orderedIndexItemGetElement(item, &ele, &ele_len);
                 if ((n = rdbSaveRawString(rdb, (unsigned char *)ele, ele_len)) == -1) {
                     return -1;
                 }
                 nwritten += n;
-                if ((n = rdbSaveBinaryDoubleValue(rdb, orderedIndexGetScore(item))) == -1) return -1;
+                if ((n = rdbSaveBinaryDoubleValue(rdb, orderedIndexItemGetScore(item))) == -1) return -1;
                 nwritten += n;
             }
         } else {

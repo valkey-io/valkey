@@ -64,20 +64,20 @@ OrderedIndexItem *orderedIndexPopLast(OrderedIndex *oi) {
     return (OrderedIndexItem *)last;
 }
 
-void orderedIndexFreeItem(OrderedIndexItem *item) {
+void orderedIndexItemFree(OrderedIndexItem *item) {
     zslFreeNode((zskiplistNode *)item);
 }
 
-OrderedIndexItem *orderedIndexCreateDetached(double score, const char *ele, size_t len) {
+OrderedIndexItem *orderedIndexItemCreate(double score, const char *ele, size_t len) {
     zskiplistNode *node = zslCreateNode(zslRandomLevel(), score, ele, len);
     return (OrderedIndexItem *)node;
 }
 
-void orderedIndexDetachedSetScore(OrderedIndexItem *item, double score) {
+void orderedIndexItemSetScore(OrderedIndexItem *item, double score) {
     ((zskiplistNode *)item)->score = score;
 }
 
-OrderedIndexItem *orderedIndexInsertDetached(OrderedIndex *oi, OrderedIndexItem *item) {
+OrderedIndexItem *orderedIndexInsertItem(OrderedIndex *oi, OrderedIndexItem *item) {
     zskiplistNode *node = zslInsertNode((zskiplist *)oi, (zskiplistNode *)item);
     return (OrderedIndexItem *)node;
 }
@@ -205,14 +205,14 @@ unsigned long orderedIndexGetIndex(const OrderedIndex *oi, const OrderedIndexIte
     return zslGetRank((zskiplist *)oi, (const zskiplistNode *)node) - 1;
 }
 
-void orderedIndexGetElementRaw(const OrderedIndexItem *node, const char **ptr, size_t *len) {
+void orderedIndexItemGetElement(const OrderedIndexItem *node, const char **ptr, size_t *len) {
     const zskiplistNode *znode = (const zskiplistNode *)node;
     sds ele = zslGetNodeElement(znode);
     *ptr = ele;
     *len = sdslen(ele);
 }
 
-double orderedIndexGetScore(const OrderedIndexItem *node) {
+double orderedIndexItemGetScore(const OrderedIndexItem *node) {
     return zslGetScore((const zskiplistNode *)node);
 }
 

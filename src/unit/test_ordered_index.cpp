@@ -37,7 +37,7 @@ static sds *collectIndexToSds(OrderedIndex *oi, size_t *out_n) {
         OrderedIndexItem *pos = orderedIndexNext(&iter);
         const char *ptr;
         size_t len;
-        orderedIndexGetElementRaw(pos, &ptr, &len);
+        orderedIndexItemGetElement(pos, &ptr, &len);
         arr[i] = sdsnewlen(ptr, len);
     }
     orderedIndexResetIterator(&iter);
@@ -144,7 +144,7 @@ class OrderedIndexTest : public ::testing::Test {
         OrderedIndexItem *pos = orderedIndexNext(iter);
         EXPECT_NE(pos, nullptr);
         if (pos) {
-            EXPECT_DOUBLE_EQ(orderedIndexGetScore(pos), expected);
+            EXPECT_DOUBLE_EQ(orderedIndexItemGetScore(pos), expected);
         }
         return pos;
     }
@@ -154,7 +154,7 @@ class OrderedIndexTest : public ::testing::Test {
         OrderedIndexItem *pos = orderedIndexPrev(iter);
         EXPECT_NE(pos, nullptr);
         if (pos) {
-            EXPECT_DOUBLE_EQ(orderedIndexGetScore(pos), expected);
+            EXPECT_DOUBLE_EQ(orderedIndexItemGetScore(pos), expected);
         }
         return pos;
     }
@@ -163,14 +163,14 @@ class OrderedIndexTest : public ::testing::Test {
     void assertElement(OrderedIndexItem *node, const char *expected) {
         const char *ptr;
         size_t len;
-        orderedIndexGetElementRaw(node, &ptr, &len);
+        orderedIndexItemGetElement(node, &ptr, &len);
         ASSERT_EQ(len, strlen(expected));
         ASSERT_EQ(memcmp(ptr, expected, len), 0);
     }
 
     /* Assert node has expected score. */
     void assertScore(OrderedIndexItem *node, double expected) {
-        ASSERT_DOUBLE_EQ(orderedIndexGetScore(node), expected);
+        ASSERT_DOUBLE_EQ(orderedIndexItemGetScore(node), expected);
     }
 
     /* Delete lex range using const char* (handles sds lifecycle). */
@@ -288,7 +288,7 @@ TEST_F(OrderedIndexTest, InsertMultipleOrdered) {
     orderedIndexInitIterator(&iter, oi);
     for (int i = 0; i < 10; i++) {
         ASSERT_NE((pos = orderedIndexNext(&iter)), nullptr);
-        ASSERT_DOUBLE_EQ(orderedIndexGetScore(pos), (double)i);
+        ASSERT_DOUBLE_EQ(orderedIndexItemGetScore(pos), (double)i);
     }
     ASSERT_EQ(orderedIndexNext(&iter), nullptr);
     orderedIndexResetIterator(&iter);
@@ -298,7 +298,7 @@ TEST_F(OrderedIndexTest, InsertMultipleOrdered) {
     orderedIndexInitIterator(&iter, oi);
     for (int i = 9; i >= 0; i--) {
         ASSERT_NE((pos = orderedIndexPrev(&iter)), nullptr);
-        ASSERT_DOUBLE_EQ(orderedIndexGetScore(pos), (double)i);
+        ASSERT_DOUBLE_EQ(orderedIndexItemGetScore(pos), (double)i);
     }
     ASSERT_EQ(orderedIndexPrev(&iter), nullptr);
     orderedIndexResetIterator(&iter);
@@ -381,13 +381,13 @@ TEST_F(OrderedIndexTest, PopFirst) {
     ASSERT_NE(item, nullptr);
     assertScore(item, 0.0);
     assertElement(item, "key0");
-    orderedIndexFreeItem(item);
+    orderedIndexItemFree(item);
     ASSERT_EQ(orderedIndexLength(oi), 4UL);
     verifyOI();
 
     item = orderedIndexPopFirst(oi);
     assertScore(item, 1.0);
-    orderedIndexFreeItem(item);
+    orderedIndexItemFree(item);
     ASSERT_EQ(orderedIndexLength(oi), 3UL);
     verifyOI();
 }
@@ -402,13 +402,13 @@ TEST_F(OrderedIndexTest, PopLast) {
     ASSERT_NE(item, nullptr);
     assertScore(item, 4.0);
     assertElement(item, "key4");
-    orderedIndexFreeItem(item);
+    orderedIndexItemFree(item);
     ASSERT_EQ(orderedIndexLength(oi), 4UL);
     verifyOI();
 
     item = orderedIndexPopLast(oi);
     assertScore(item, 3.0);
-    orderedIndexFreeItem(item);
+    orderedIndexItemFree(item);
     ASSERT_EQ(orderedIndexLength(oi), 3UL);
     verifyOI();
 }
@@ -663,7 +663,7 @@ TEST_F(OrderedIndexTest, SpecialDoubleValues) {
     ASSERT_EQ(orderedIndexLength(oi), 2UL);
     orderedIndexInitIterator(&iter, oi);
     pos = assertNextScore(&iter, denorm);
-    ASSERT_TRUE(orderedIndexGetScore(pos) < 1.0);
+    ASSERT_TRUE(orderedIndexItemGetScore(pos) < 1.0);
     orderedIndexResetIterator(&iter);
 }
 
@@ -758,7 +758,7 @@ TEST_F(OrderedIndexTest, DuplicateInsert_PopRemovesOne) {
 
     OrderedIndexItem *popped = orderedIndexPopFirst(oi);
     assertElement(popped, "dup");
-    orderedIndexFreeItem(popped);
+    orderedIndexItemFree(popped);
 
     /* One "dup" remains plus "other" */
     ASSERT_EQ(orderedIndexLength(oi), 2UL);
@@ -800,7 +800,7 @@ TEST_F(OrderedIndexTest, UpdateScoreEdgeCases) {
     /* Update score without changing position (stays between neighbors) */
     OrderedIndexItem *n = orderedIndexGetByIndex(oi, 3);
     unsigned long idx_before = orderedIndexGetIndex(oi, n);
-    updated = orderedIndexUpdateScore(oi, n, orderedIndexGetScore(n) + 0.1);
+    updated = orderedIndexUpdateScore(oi, n, orderedIndexItemGetScore(n) + 0.1);
     ASSERT_EQ(orderedIndexGetIndex(oi, updated), idx_before);
     verifyOI();
 }
@@ -1055,7 +1055,7 @@ TEST_F(OrderedIndexTest, SeekToScoreRangeIteration) {
     orderedIndexSeekToScoreRange(&iter, 3.0, 7.0, 0, 0, 0);
     int count = 0;
     double expected = 3.0;
-    while (((pos = orderedIndexNext(&iter)) != NULL) && orderedIndexGetScore(pos) <= 7.0) {
+    while (((pos = orderedIndexNext(&iter)) != NULL) && orderedIndexItemGetScore(pos) <= 7.0) {
         assertScore(pos, expected);
         expected += 1.0;
         count++;
@@ -1069,7 +1069,7 @@ TEST_F(OrderedIndexTest, SeekToScoreRangeIteration) {
     orderedIndexSeekToScoreRange(&iter, 3.0, 7.0, 0, 0, -1);
     count = 0;
     expected = 7.0;
-    while (((pos = orderedIndexPrev(&iter)) != NULL) && orderedIndexGetScore(pos) >= 3.0) {
+    while (((pos = orderedIndexPrev(&iter)) != NULL) && orderedIndexItemGetScore(pos) >= 3.0) {
         assertScore(pos, expected);
         expected -= 1.0;
         count++;
@@ -1365,7 +1365,7 @@ TEST_F(OrderedIndexTest, RandomizedInsertAndTraversal) {
         int count = 0;
         double prevScore = NEG_INF;
         while (((pos = orderedIndexNext(&iter)) != NULL)) {
-            double s = orderedIndexGetScore(pos);
+            double s = orderedIndexItemGetScore(pos);
             ASSERT_GE(s, prevScore);
             prevScore = s;
             count++;
@@ -1393,7 +1393,7 @@ TEST_F(OrderedIndexTest, RandomizedBackwardTraversal) {
         int count = 0;
         double prevScore = POS_INF;
         while (((pos = orderedIndexPrev(&iter)) != NULL)) {
-            double s = orderedIndexGetScore(pos);
+            double s = orderedIndexItemGetScore(pos);
             ASSERT_LE(s, prevScore);
             prevScore = s;
             count++;
@@ -1468,8 +1468,8 @@ TEST_F(OrderedIndexTest, RandomizedDelete) {
         int count = 0;
         double prevScore = NEG_INF;
         while (((pos = orderedIndexNext(&iter)) != NULL)) {
-            ASSERT_GE(orderedIndexGetScore(pos), prevScore);
-            prevScore = orderedIndexGetScore(pos);
+            ASSERT_GE(orderedIndexItemGetScore(pos), prevScore);
+            prevScore = orderedIndexItemGetScore(pos);
             count++;
         }
         ASSERT_EQ(count, n - 1);
@@ -1501,8 +1501,8 @@ TEST_F(OrderedIndexTest, RandomizedUpdateScore) {
         orderedIndexInitIterator(&iter, oi);
         double prevScore = NEG_INF;
         while (((pos = orderedIndexNext(&iter)) != NULL)) {
-            ASSERT_GE(orderedIndexGetScore(pos), prevScore);
-            prevScore = orderedIndexGetScore(pos);
+            ASSERT_GE(orderedIndexItemGetScore(pos), prevScore);
+            prevScore = orderedIndexItemGetScore(pos);
         }
         orderedIndexResetIterator(&iter);
         orderedIndexFree(oi);
@@ -1525,33 +1525,33 @@ TEST_F(OrderedIndexTest, RandomizedPop) {
         OrderedIndexItem *pos;
         orderedIndexInitIterator(&iter, oi);
         ASSERT_NE((pos = orderedIndexNext(&iter)), nullptr);
-        double minScore = orderedIndexGetScore(pos);
+        double minScore = orderedIndexItemGetScore(pos);
         orderedIndexResetIterator(&iter);
 
         orderedIndexInitIterator(&iter, oi);
         ASSERT_NE((pos = orderedIndexPrev(&iter)), nullptr);
-        double maxScore = orderedIndexGetScore(pos);
+        double maxScore = orderedIndexItemGetScore(pos);
         orderedIndexResetIterator(&iter);
 
         OrderedIndexItem *first = orderedIndexPopFirst(oi);
         ASSERT_NE(first, nullptr);
         assertScore(first, minScore);
         ASSERT_EQ(orderedIndexLength(oi), (unsigned long)(n - 1));
-        orderedIndexFreeItem(first);
+        orderedIndexItemFree(first);
         verifyOI();
 
         OrderedIndexItem *last = orderedIndexPopLast(oi);
         ASSERT_NE(last, nullptr);
         assertScore(last, maxScore);
         ASSERT_EQ(orderedIndexLength(oi), (unsigned long)(n - 2));
-        orderedIndexFreeItem(last);
+        orderedIndexItemFree(last);
         verifyOI();
 
         orderedIndexInitIterator(&iter, oi);
         double prevScore = NEG_INF;
         while (((pos = orderedIndexNext(&iter)) != NULL)) {
-            ASSERT_GE(orderedIndexGetScore(pos), prevScore);
-            prevScore = orderedIndexGetScore(pos);
+            ASSERT_GE(orderedIndexItemGetScore(pos), prevScore);
+            prevScore = orderedIndexItemGetScore(pos);
         }
         orderedIndexResetIterator(&iter);
         orderedIndexFree(oi);
@@ -1584,7 +1584,7 @@ TEST_F(OrderedIndexTest, RandomizedDeleteRangeByScore) {
         orderedIndexInitIterator(&iter, oi);
         double prevScore = NEG_INF;
         while (((pos = orderedIndexNext(&iter)) != NULL)) {
-            double s = orderedIndexGetScore(pos);
+            double s = orderedIndexItemGetScore(pos);
             ASSERT_TRUE(s < lo || s > hi);
             ASSERT_GE(s, prevScore);
             prevScore = s;
@@ -1622,8 +1622,8 @@ TEST_F(OrderedIndexTest, RandomizedDeleteRangeByIndex) {
         int remaining = 0;
         double prevScore = NEG_INF;
         while (((pos = orderedIndexNext(&iter)) != NULL)) {
-            ASSERT_GE(orderedIndexGetScore(pos), prevScore);
-            prevScore = orderedIndexGetScore(pos);
+            ASSERT_GE(orderedIndexItemGetScore(pos), prevScore);
+            prevScore = orderedIndexItemGetScore(pos);
             remaining++;
         }
         ASSERT_EQ(remaining, n - (int)expectedDeleted);
@@ -1649,7 +1649,7 @@ TEST_F(OrderedIndexTest, RandomizedForwardBackwardMirror) {
         int fi = 0;
         orderedIndexInitIterator(&iter, oi);
         while (((pos = orderedIndexNext(&iter)) != NULL)) {
-            forwardScores[fi++] = orderedIndexGetScore(pos);
+            forwardScores[fi++] = orderedIndexItemGetScore(pos);
         }
         orderedIndexResetIterator(&iter);
 
@@ -1657,7 +1657,7 @@ TEST_F(OrderedIndexTest, RandomizedForwardBackwardMirror) {
         int bi = 0;
         orderedIndexInitIterator(&iter, oi);
         while (((pos = orderedIndexPrev(&iter)) != NULL)) {
-            backwardScores[bi++] = orderedIndexGetScore(pos);
+            backwardScores[bi++] = orderedIndexItemGetScore(pos);
         }
         orderedIndexResetIterator(&iter);
 
@@ -1750,7 +1750,7 @@ static void testOnDeleteCallback(const OrderedIndexItem *item, void *ctx) {
     OnDeleteRecord *rec = (OnDeleteRecord *)ctx;
     const char *ptr;
     size_t len;
-    orderedIndexGetElementRaw(item, &ptr, &len);
+    orderedIndexItemGetElement(item, &ptr, &len);
     rec->elements[rec->count] = sdsnewlen(ptr, len);
     rec->count++;
     /* Item is freed by the index after this callback returns. */
@@ -2147,7 +2147,7 @@ static void hashtableConsistencyOnDelete(const OrderedIndexItem *item, void *ctx
     SimHt *ht = (SimHt *)ctx;
     const char *ptr;
     size_t len;
-    orderedIndexGetElementRaw(item, &ptr, &len);
+    orderedIndexItemGetElement(item, &ptr, &len);
     simHtRemove(ht, ptr, len);
 }
 

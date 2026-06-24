@@ -2463,7 +2463,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error) {
                 rdbReportCorruptRDB("Zset ziplist with NAN score detected");
                 zfree(lp);
                 zfree(encoded);
-                objectSetVal(o, NULL);
+                o->ptr = NULL;
                 decrRefCount(o);
                 return NULL;
             }
@@ -2499,7 +2499,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error) {
             if (!zzlValidateScores(encoded)) {
                 rdbReportCorruptRDB("Zset listpack with NAN score detected");
                 zfree(encoded);
-                objectSetVal(o, NULL);
+                o->ptr = NULL;
                 decrRefCount(o);
                 return NULL;
             }

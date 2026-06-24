@@ -864,67 +864,64 @@ TEST_F(OrderedIndexTest, TraversalEdgeCases) {
 }
 
 TEST_F(OrderedIndexTest, SeekToIndex) {
+    /* Elements at ranks 0..4 with scores 1.0..5.0 */
     for (int i = 1; i <= 5; i++) {
         char buf[32];
         snprintf(buf, sizeof(buf), "key%d", i);
         insert((double)i, buf);
     }
 
+    /* See ordered_index.h for cursor-between-items model diagram.
+     * SeekToIndex(N) places cursor at position N: next() returns rank N,
+     * prev() returns rank N-1. */
+
     OrderedIndexIterator iter;
 
+    /* Seek to index 0: next() returns rank 0 (first element) */
     orderedIndexInitIterator(&iter, oi);
-
-    /* Seek to index 0 (first element) */
     orderedIndexSeekToIndex(&iter, 0);
+    assertNextScore(&iter, 1.0);
+    orderedIndexResetIterator(&iter);
+
+    /* Seek to index 0: prev() returns NULL (nothing before first) */
+    orderedIndexInitIterator(&iter, oi);
+    orderedIndexSeekToIndex(&iter, 0);
+    ASSERT_EQ(orderedIndexPrev(&iter), nullptr);
+    orderedIndexResetIterator(&iter);
+
+    /* Seek to index 1: next() returns rank 1 */
+    orderedIndexInitIterator(&iter, oi);
+    orderedIndexSeekToIndex(&iter, 1);
     assertNextScore(&iter, 2.0);
     orderedIndexResetIterator(&iter);
 
+    /* Seek to index 1: prev() returns rank 0 */
     orderedIndexInitIterator(&iter, oi);
-
-    /* Seek to index 0 (first element) */
-    orderedIndexSeekToIndex(&iter, 0);
+    orderedIndexSeekToIndex(&iter, 1);
     assertPrevScore(&iter, 1.0);
     orderedIndexResetIterator(&iter);
 
+    /* Seek to index 2 (middle): next() returns rank 2 */
     orderedIndexInitIterator(&iter, oi);
-
-    /* Seek to index 1 (second element) */
-    orderedIndexSeekToIndex(&iter, 1);
+    orderedIndexSeekToIndex(&iter, 2);
     assertNextScore(&iter, 3.0);
     orderedIndexResetIterator(&iter);
 
+    /* Seek to index 2 (middle): prev() returns rank 1 */
     orderedIndexInitIterator(&iter, oi);
-
-    /* Seek to index 1 (second element) */
-    orderedIndexSeekToIndex(&iter, 1);
+    orderedIndexSeekToIndex(&iter, 2);
     assertPrevScore(&iter, 2.0);
     orderedIndexResetIterator(&iter);
 
+    /* Seek to index 5 (past end): next() returns NULL */
     orderedIndexInitIterator(&iter, oi);
-
-    /* Seek to index 2 (middle) */
-    orderedIndexSeekToIndex(&iter, 2);
-    assertNextScore(&iter, 4.0);
-    orderedIndexResetIterator(&iter);
-
-    orderedIndexInitIterator(&iter, oi);
-
-    /* Seek to index 2 (middle) */
-    orderedIndexSeekToIndex(&iter, 2);
-    assertPrevScore(&iter, 3.0);
-    orderedIndexResetIterator(&iter);
-
-    orderedIndexInitIterator(&iter, oi);
-
-    /* Seek to index 4 (last) */
-    orderedIndexSeekToIndex(&iter, 4);
+    orderedIndexSeekToIndex(&iter, 5);
     ASSERT_EQ(orderedIndexNext(&iter), nullptr);
     orderedIndexResetIterator(&iter);
 
+    /* Seek to index 5 (past end): prev() returns last element */
     orderedIndexInitIterator(&iter, oi);
-
-    /* Seek to index 4 (last) */
-    orderedIndexSeekToIndex(&iter, 4);
+    orderedIndexSeekToIndex(&iter, 5);
     assertPrevScore(&iter, 5.0);
     orderedIndexResetIterator(&iter);
 }
@@ -939,6 +936,8 @@ TEST_F(OrderedIndexTest, ReverseIteration) {
     OrderedIndexIterator iter;
     OrderedIndexItem *pos;
 
+    /* Unseeked iterator: cursor starts at position 5 (past end) for prev(),
+     * or position 0 (before start) for next(). */
     orderedIndexInitIterator(&iter, oi);
     int count = 0;
     double expected = 5.0;
@@ -969,6 +968,10 @@ TEST_F(OrderedIndexTest, SeekToScoreRange) {
         /* Insert elements with scores 0,2,4,6,8 */
         insert((double)(i * 2), buf);
     }
+
+    /* SeekToScoreRange uses the same cursor-between-items model:
+     * offset >= 0 places cursor before the offset'th item in range (next returns it).
+     * offset < 0 places cursor after the (-offset-1)'th item from end (prev returns it). */
 
     OrderedIndexIterator iter;
 

@@ -2529,10 +2529,10 @@ void genericZrangebyrankCommand(zrange_result_handler *handler,
 
         /* Seek to starting position */
         if (reverse) {
-            unsigned long seek_idx = (start > 0) ? (unsigned long)(llen - start - 1) : orderedIndexLength(oi) - 1;
+            unsigned long seek_idx = (start > 0) ? (unsigned long)(llen - start) : orderedIndexLength(oi);
             orderedIndexSeekToIndex(&iter, seek_idx);
         } else {
-            if (start > 0) orderedIndexSeekToIndex(&iter, (unsigned long)(start - 1));
+            if (start > 0) orderedIndexSeekToIndex(&iter, (unsigned long)start);
         }
 
         while (rangelen--) {

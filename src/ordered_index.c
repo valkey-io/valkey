@@ -270,7 +270,7 @@ OrderedIndexItem *orderedIndexPrev(OrderedIndexIterator *iter) {
 }
 
 void orderedIndexSeekToIndex(OrderedIndexIterator *iter, unsigned long index) {
-    zslSeekToRank((zslIter *)iter, index + 1);
+    zslSeekToRank((zslIter *)iter, index);
 }
 
 void orderedIndexSeekToScoreRange(OrderedIndexIterator *iter, double min, double max, bool min_ex, bool max_ex, long offset) {

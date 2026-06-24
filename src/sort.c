@@ -425,11 +425,11 @@ void sortCommandGeneric(client *c, int readonly) {
         /* Check if starting point is trivial, before doing log(N) lookup. */
         if (desc) {
             long zsetlen = hashtableSize(((zset *)objectGetVal(sortval))->ht);
-            orderedIndexSeekToIndex(&iter, zsetlen - 1 - start);
+            orderedIndexSeekToIndex(&iter, zsetlen - start);
             ln = orderedIndexPrev(&iter);
         } else {
             if (start > 0) {
-                orderedIndexSeekToIndex(&iter, start - 1);
+                orderedIndexSeekToIndex(&iter, start);
             }
             ln = orderedIndexNext(&iter);
         }

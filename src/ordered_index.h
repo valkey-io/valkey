@@ -156,6 +156,16 @@ unsigned long orderedIndexCountLexRange(const OrderedIndex *oi, const_sds min, c
 
 /* ============================================================
  * Iterator
+ *
+ * The iterator uses a cursor-between-items model (Java ListIterator
+ * semantics). The cursor is positioned between elements, not on them:
+ *
+ *   Elements:  [A] [B] [C] [D] [E]
+ *   Cursor:   ^   ^   ^   ^   ^   ^
+ *   Position: 0   1   2   3   4   5
+ *
+ * next() returns the element to the right of the cursor and advances it.
+ * prev() returns the element to the left of the cursor and moves it back.
  * ============================================================ */
 
 /* Initialize a stack-allocated iterator. If no seek function is called,
@@ -173,11 +183,10 @@ OrderedIndexItem *orderedIndexNext(OrderedIndexIterator *iter);
 /* Advance iterator backward. Returns the previous item, or NULL at start. */
 OrderedIndexItem *orderedIndexPrev(OrderedIndexIterator *iter);
 
-/* Position the cursor between rank-1 and rank. After seeking:
- * - next() returns the item at rank+1 (or NULL if rank is the last).
- * - prev() returns the item at rank (the seeked-to item itself).
- * If rank is out of range, the cursor is positioned at the end (next returns
- * NULL) or beginning (prev returns NULL) respectively. */
+/* Position the cursor before rank N (Java ListIterator semantics). After
+ * seeking:
+ * - next() returns the item at rank N (or NULL if N >= length).
+ * - prev() returns the item at rank N-1 (or NULL if N == 0). */
 void orderedIndexSeekToIndex(OrderedIndexIterator *iter, unsigned long index);
 
 /* Position the cursor within a score range. The offset selects which item

@@ -173,16 +173,24 @@ OrderedIndexItem *orderedIndexNext(OrderedIndexIterator *iter);
 /* Advance iterator backward. Returns the previous item, or NULL at start. */
 OrderedIndexItem *orderedIndexPrev(OrderedIndexIterator *iter);
 
-/* Position iterator at the given 0-based index. next() returns index+1, prev() returns index. */
+/* Position the cursor between rank-1 and rank. After seeking:
+ * - next() returns the item at rank+1 (or NULL if rank is the last).
+ * - prev() returns the item at rank (the seeked-to item itself).
+ * If rank is out of range, the cursor is positioned at the end (next returns
+ * NULL) or beginning (prev returns NULL) respectively. */
 void orderedIndexSeekToIndex(OrderedIndexIterator *iter, unsigned long index);
 
-/* Position iterator within a score range.
- * offset >= 0: next() returns the (offset)th element in range.
- * offset < 0:  prev() returns the (-offset-1)th element from end of range. */
+/* Position the cursor within a score range. The offset selects which item
+ * in the range the cursor is placed before/after:
+ * - offset >= 0: cursor is before the (offset)th item in range; next()
+ *   returns that item. If offset exceeds the range, next() returns NULL.
+ * - offset < 0: cursor is after the (-offset-1)th item from the end of
+ *   range; prev() returns that item. If offset exceeds the range, prev()
+ *   returns NULL. */
 void orderedIndexSeekToScoreRange(OrderedIndexIterator *iter, double min, double max, bool min_ex, bool max_ex, long offset);
 
-/* Position iterator within a lex range. Offset semantics same as score range.
- * Only meaningful when all items in the range share the same score. */
+/* Position the cursor within a lex range. Offset semantics same as score
+ * range. Only meaningful when all items in the range share the same score. */
 void orderedIndexSeekToLexRange(OrderedIndexIterator *iter, const_sds min, const_sds max, bool min_ex, bool max_ex, long offset);
 
 /* ============================================================

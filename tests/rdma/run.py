@@ -135,26 +135,49 @@ def build_server_cmd(svrpath, tmpdir, ipaddr, args, io_threads):
     return cmd
 
 
-def start_server(cmd):
-    svr = subprocess.Popen(cmd, shell=False, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
+def print_server_log(logpath, label):
+    try:
+        with open(logpath, "r") as fp:
+            content = fp.read()
+    except OSError:
+        return
+
+    if not content:
+        return
+
+    print("Valkey Over RDMA valkey-server " + label + " log:")
+    print("---------------\n" + content + "---------------\n")
+
+
+def start_server(cmd, logpath):
+    logfile = open(logpath, "w", buffering=1)
+    svr = subprocess.Popen(cmd, shell=False, stdout=logfile, stderr=subprocess.STDOUT)
     try:
         if svr.wait(1):
+            logfile.close()
             print("Valkey Over RDMA valkey-server runs less than 1s [FAILED]")
+            print_server_log(logpath, "startup")
             return None
     except subprocess.TimeoutExpired:
         print("Valkey Over RDMA valkey-server start [OK]")
-        return svr
+        return (svr, logfile, logpath)
 
+    logfile.close()
     svr.kill()
     svr.wait()
     return None
 
 
-def stop_server(svr):
-    if svr is not None and svr.poll() is None:
+def stop_server(svr_state):
+    if svr_state is None:
+        return
+
+    svr, logfile, _logpath = svr_state
+    if svr.poll() is None:
         svr.kill()
-    if svr is not None:
-        svr.wait()
+    svr.wait()
+    logfile.flush()
+    logfile.close()
 
 
 def test_rdma(ipaddr, args):
@@ -168,7 +191,8 @@ def test_rdma(ipaddr, args):
     svr = None
     try:
         # step 2, rdma-test uses the original server config (RDMA only, no IO threads)
-        svr = start_server(build_server_cmd(svrpath, tmpdir, ipaddr, args, io_threads=False))
+        svr_log = tmpdir + "/server-rdma-test.log"
+        svr = start_server(build_server_cmd(svrpath, tmpdir, ipaddr, args, io_threads=False), svr_log)
         if svr is None:
             return 1
 
@@ -176,11 +200,16 @@ def test_rdma(ipaddr, args):
         clicmd = [clipath, "--thread", "4", "-h", ipaddr, "-p", str(args.rdma_port)]
         retval = run_test_client("rdma-test", clicmd, 60)
         if retval:
+            stop_server(svr)
+            svr = None
+            print_server_log(svr_log, "rdma-test")
             return retval
+        stop_server(svr)
+        svr = None
 
         # step 3, libvalkey-test restarts server with IO threads for the regression case
-        stop_server(svr)
-        svr = start_server(build_server_cmd(svrpath, tmpdir, ipaddr, args, io_threads=True))
+        svr_log = tmpdir + "/server-libvalkey-test.log"
+        svr = start_server(build_server_cmd(svrpath, tmpdir, ipaddr, args, io_threads=True), svr_log)
         if svr is None:
             return 1
 
@@ -188,7 +217,15 @@ def test_rdma(ipaddr, args):
         clicmd = [clipath, "--threads", str(args.threads), "--clients", str(args.clients),
                   "--pipeline", str(args.pipeline), "--requests", str(args.requests),
                   "--datasize", str(args.datasize), "-h", ipaddr, "-p", str(args.rdma_port)]
-        return run_test_client("libvalkey-test", clicmd, args.timeout)
+        retval = run_test_client("libvalkey-test", clicmd, args.timeout)
+        if retval:
+            stop_server(svr)
+            svr = None
+            print_server_log(svr_log, "libvalkey-test")
+            return retval
+        stop_server(svr)
+        svr = None
+        return 0
     finally:
         stop_server(svr)
         subprocess.Popen("rm -rf " + tmpdir, shell=True).wait()

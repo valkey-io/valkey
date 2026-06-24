@@ -11,9 +11,9 @@ using namespace ::testing;
 
 extern "C" {
 #include "bgiteration.h"
+#include "module.h"
 #include "server.h"
 #include "stdlib.h"
-#include "module.h"
 extern hashtableType commandSetType;
 extern dictType keylistDictType;
 void bgIteration_feedIterators(void);

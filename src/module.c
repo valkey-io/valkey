@@ -2867,6 +2867,23 @@ ValkeyModuleString *VM_CreateStringFromStreamID(ValkeyModuleCtx *ctx, const Valk
     return o;
 }
 
+/* Creates a string reference from a key. The returned string must be released
+ * with ValkeyModule_FreeString(). See also, ValkeyModule_HoldString.
+ *
+ * This function shares the underlying buffer of the key's value when possible.
+ *
+ * Returns NULL if the key is empty or does not hold a string. */
+ValkeyModuleString *VM_CreateStringReferenceFromKey(ValkeyModuleKey *key) {
+    if (key->value == NULL) return NULL;
+    if (key->value->type != OBJ_STRING) return NULL;
+
+    if (key->value->encoding != OBJ_ENCODING_RAW)
+        key->value = dbUnshareStringValue(key->db, key->key, key->value);
+
+    incrRefCount(key->value);
+    return key->value;
+}
+
 /* Free a module string object obtained with one of the module API calls
  * that return new string objects.
  *
@@ -15214,6 +15231,7 @@ void moduleRegisterCoreAPI(void) {
     REGISTER_API(CreateStringFromString);
     REGISTER_API(CreateStringFromStreamID);
     REGISTER_API(CreateStringPrintf);
+    REGISTER_API(CreateStringReferenceFromKey);
     REGISTER_API(FreeString);
     REGISTER_API(StringPtrLen);
     REGISTER_API(AutoMemory);

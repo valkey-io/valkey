@@ -50,7 +50,7 @@ def find_default_iface():
     return None
 
 
-def find_rdma_ip_from_sysfs():
+def find_rdma_ip_from_sysfs(rxe_only=False):
     # Ex, /sys/class/infiniband/mlx5_0
     # Ex, /sys/class/infiniband/rxe_eth0
     # Ex, /sys/class/infiniband/siw_eth0
@@ -60,7 +60,11 @@ def find_rdma_ip_from_sysfs():
     except OSError:
         return None
 
-    for dev in sorted(devices):
+    candidates = sorted(devices)
+    if rxe_only:
+        candidates = [dev for dev in candidates if dev.startswith("rxe_")]
+
+    for dev in candidates:
         # Ex, /sys/class/infiniband/rxe_eth0/ports/1/gid_attrs/ndevs/0
         netdev = ibclass + dev + "/ports/1/gid_attrs/ndevs/0"
         try:
@@ -87,7 +91,9 @@ def find_rdma_dev(install_rxe=False):
     # instant and find runs too early unless we retry.
     retries = 10 if install_rxe else 1
     for attempt in range(retries):
-        ipaddr = find_rdma_ip_from_sysfs()
+        # With --install-rxe, ignore host RDMA NICs (e.g. GitHub Actions mana_0).
+        # They share the same IP but rdma_resolve_addr() fails for local tests.
+        ipaddr = find_rdma_ip_from_sysfs(rxe_only=install_rxe)
         if ipaddr is not None:
             return ipaddr
         if attempt + 1 < retries:

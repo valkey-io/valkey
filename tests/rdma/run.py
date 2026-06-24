@@ -159,17 +159,15 @@ def start_server(cmd, logpath):
     logfile = open(logpath, "w", buffering=1)
     svr = subprocess.Popen(cmd, shell=False, stdout=logfile, stderr=subprocess.STDOUT)
     try:
-        if svr.wait(1):
-            logfile.close()
-            print("Valkey Over RDMA valkey-server runs less than 1s [FAILED]")
-            print_server_log(logpath, "startup")
-            return None
+        svr.wait(1)
     except subprocess.TimeoutExpired:
         print("Valkey Over RDMA valkey-server start [OK]")
         return (svr, logfile, logpath)
 
+    logfile.flush()
     logfile.close()
-    svr.kill()
+    print("Valkey Over RDMA valkey-server exited within 1s [FAILED]")
+    print_server_log(logpath, "startup")
     svr.wait()
     return None
 

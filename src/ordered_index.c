@@ -82,7 +82,7 @@ OrderedIndexItem *orderedIndexInsertDetached(OrderedIndex *oi, OrderedIndexItem 
     return (OrderedIndexItem *)node;
 }
 
-unsigned long orderedIndexDeleteRangeByScore(OrderedIndex *oi, double min, double max, bool min_ex, bool max_ex, OrderedIndexOnDelete on_delete, void *ctx) {
+unsigned long orderedIndexDeleteRangeByScore(OrderedIndex *oi, double min, double max, bool min_ex, bool max_ex, OrderedIndexOnDelete on_delete, void *privdata) {
     zskiplist *zsl = (zskiplist *)oi;
     zrangespec range = {.min = min, .max = max, .minex = min_ex, .maxex = max_ex};
     zskiplistNode *update[ZSKIPLIST_MAXLEVEL], *x;
@@ -103,7 +103,7 @@ unsigned long orderedIndexDeleteRangeByScore(OrderedIndex *oi, double min, doubl
     while (x && zsetScoreLteMax(x->score, &range)) {
         zskiplistNode *next = x->level[0].forward;
         zslUnlinkNode(zsl, x, update);
-        if (on_delete) on_delete((OrderedIndexItem *)x, ctx);
+        if (on_delete) on_delete((OrderedIndexItem *)x, privdata);
         zslFreeNode(x);
 
         removed++;
@@ -112,7 +112,7 @@ unsigned long orderedIndexDeleteRangeByScore(OrderedIndex *oi, double min, doubl
     return removed;
 }
 
-unsigned long orderedIndexDeleteRangeByIndex(OrderedIndex *oi, unsigned long start, unsigned long end, OrderedIndexOnDelete on_delete, void *ctx) {
+unsigned long orderedIndexDeleteRangeByIndex(OrderedIndex *oi, unsigned long start, unsigned long end, OrderedIndexOnDelete on_delete, void *privdata) {
     zskiplist *zsl = (zskiplist *)oi;
     zskiplistNode *update[ZSKIPLIST_MAXLEVEL], *x;
     unsigned long traversed = 0, removed = 0;
@@ -136,7 +136,7 @@ unsigned long orderedIndexDeleteRangeByIndex(OrderedIndex *oi, unsigned long sta
     while (x && traversed <= end) {
         zskiplistNode *next = x->level[0].forward;
         zslUnlinkNode(zsl, x, update);
-        if (on_delete) on_delete((OrderedIndexItem *)x, ctx);
+        if (on_delete) on_delete((OrderedIndexItem *)x, privdata);
         zslFreeNode(x);
 
         removed++;
@@ -146,7 +146,7 @@ unsigned long orderedIndexDeleteRangeByIndex(OrderedIndex *oi, unsigned long sta
     return removed;
 }
 
-unsigned long orderedIndexDeleteRangeByLex(OrderedIndex *oi, const_sds min, const_sds max, bool min_ex, bool max_ex, OrderedIndexOnDelete on_delete, void *ctx) {
+unsigned long orderedIndexDeleteRangeByLex(OrderedIndex *oi, const_sds min, const_sds max, bool min_ex, bool max_ex, OrderedIndexOnDelete on_delete, void *privdata) {
     zskiplist *zsl = (zskiplist *)oi;
     zlexrangespec range = {.min = (sds)min, .max = (sds)max, .minex = min_ex, .maxex = max_ex};
     zskiplistNode *update[ZSKIPLIST_MAXLEVEL], *x;
@@ -172,7 +172,7 @@ unsigned long orderedIndexDeleteRangeByLex(OrderedIndex *oi, const_sds min, cons
         if (!zsetLexLteMax(ele, sdslen(ele), &range)) break;
         zskiplistNode *next = x->level[0].forward;
         zslUnlinkNode(zsl, x, update);
-        if (on_delete) on_delete((OrderedIndexItem *)x, ctx);
+        if (on_delete) on_delete((OrderedIndexItem *)x, privdata);
         zslFreeNode(x);
 
         removed++;
@@ -337,7 +337,7 @@ static void patchNodePointers(zskiplist *zsl, zskiplistNode *oldnode, zskiplistN
     }
 }
 
-unsigned long orderedIndexScanDefrag(OrderedIndex *oi, unsigned long cursor, OrderedIndexDefragCallback callback, void *ctx, void *(*defragfn)(void *)) {
+unsigned long orderedIndexScanDefrag(OrderedIndex *oi, unsigned long cursor, OrderedIndexDefragCallback callback, void *privdata, void *(*defragfn)(void *)) {
     zskiplist *zsl = (zskiplist *)oi;
     zskiplistNode *header = zslGetHeader(zsl);
 
@@ -374,7 +374,7 @@ unsigned long orderedIndexScanDefrag(OrderedIndex *oi, unsigned long cursor, Ord
                 update[i] = x;
             }
             patchNodePointers(zsl, node, newnode, update);
-            callback((OrderedIndexItem *)node, (OrderedIndexItem *)newnode, ctx);
+            callback((OrderedIndexItem *)node, (OrderedIndexItem *)newnode, privdata);
         }
 
         node = next;

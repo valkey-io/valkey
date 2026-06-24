@@ -36,11 +36,11 @@ typedef uint64_t OrderedIndexIterator[2];
  * The item pointer is valid for the duration of the callback but will be
  * freed by the index immediately after the callback returns. Do NOT free
  * the item or store the pointer beyond the callback's scope. */
-typedef void (*OrderedIndexOnDelete)(const OrderedIndexItem *item, void *ctx);
+typedef void (*OrderedIndexOnDelete)(const OrderedIndexItem *item, void *privdata);
 
 /* Callback invoked during defrag when an item is reallocated. Allows the
  * caller to update external references (e.g. hashtable pointers). */
-typedef void (*OrderedIndexDefragCallback)(OrderedIndexItem *old_item, OrderedIndexItem *new_item, void *ctx);
+typedef void (*OrderedIndexDefragCallback)(OrderedIndexItem *old_item, OrderedIndexItem *new_item, void *privdata);
 
 /* ============================================================
  * Lifecycle
@@ -99,19 +99,19 @@ OrderedIndexItem *orderedIndexInsertDetached(OrderedIndex *oi, OrderedIndexItem 
 
 /* Delete all items with score in [min, max] (or exclusive if min_ex/max_ex).
  * For each removed item, on_delete is called (if non-NULL) with the item and
- * ctx before the item is freed. Returns count of items removed. */
-unsigned long orderedIndexDeleteRangeByScore(OrderedIndex *oi, double min, double max, bool min_ex, bool max_ex, OrderedIndexOnDelete on_delete, void *ctx);
+ * privdata before the item is freed. Returns count of items removed. */
+unsigned long orderedIndexDeleteRangeByScore(OrderedIndex *oi, double min, double max, bool min_ex, bool max_ex, OrderedIndexOnDelete on_delete, void *privdata);
 
 /* Delete all items with rank in [start, end] (0-based, inclusive).
  * For each removed item, on_delete is called (if non-NULL) with the item and
- * ctx before the item is freed. Returns count of items removed. */
-unsigned long orderedIndexDeleteRangeByIndex(OrderedIndex *oi, unsigned long start, unsigned long end, OrderedIndexOnDelete on_delete, void *ctx);
+ * privdata before the item is freed. Returns count of items removed. */
+unsigned long orderedIndexDeleteRangeByIndex(OrderedIndex *oi, unsigned long start, unsigned long end, OrderedIndexOnDelete on_delete, void *privdata);
 
 /* Delete all items with element in lex range [min, max] (or exclusive if
  * min_ex/max_ex). Only meaningful when all items share the same score (as in
  * ZRANGEBYLEX). For each removed item, on_delete is called (if non-NULL) with
- * the item and ctx before the item is freed. Returns count of items removed. */
-unsigned long orderedIndexDeleteRangeByLex(OrderedIndex *oi, const_sds min, const_sds max, bool min_ex, bool max_ex, OrderedIndexOnDelete on_delete, void *ctx);
+ * the item and privdata before the item is freed. Returns count of items removed. */
+unsigned long orderedIndexDeleteRangeByLex(OrderedIndex *oi, const_sds min, const_sds max, bool min_ex, bool max_ex, OrderedIndexOnDelete on_delete, void *privdata);
 
 /* ============================================================
  * Query
@@ -195,7 +195,7 @@ OrderedIndex *orderedIndexDefragInternals(OrderedIndex *oi, void *(*defragfn)(vo
 /* Incremental defrag scan. Walks items in batches, calling defragfn on each.
  * When an item is reallocated, callback is invoked to update external refs.
  * Returns next cursor, or 0 when complete. */
-unsigned long orderedIndexScanDefrag(OrderedIndex *oi, unsigned long cursor, OrderedIndexDefragCallback callback, void *ctx, void *(*defragfn)(void *));
+unsigned long orderedIndexScanDefrag(OrderedIndex *oi, unsigned long cursor, OrderedIndexDefragCallback callback, void *privdata, void *(*defragfn)(void *));
 
 /* ============================================================
  * Debug / Verification

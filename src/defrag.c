@@ -239,8 +239,8 @@ robj *activeDefragStringOb(robj *ob) {
 
 /* Callback for orderedIndexScanDefrag — when a node is reallocated, update
  * the hashtable's pointer to it. */
-static void defragZsetNodeCallback(OrderedIndexItem *old_item, OrderedIndexItem *new_item, void *ctx) {
-    hashtable *ht = ctx;
+static void defragZsetNodeCallback(OrderedIndexItem *old_item, OrderedIndexItem *new_item, void *privdata) {
+    hashtable *ht = privdata;
     bool replaced = hashtableReplaceReallocatedEntry(ht, old_item, new_item);
     serverAssert(replaced);
     server.stat_active_defrag_scanned++;

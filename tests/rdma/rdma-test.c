@@ -964,7 +964,7 @@ void usage(char *proc) {
     printf("%s usage:\n", proc);
     rdmaTestPrintCommonUsage();
     printf("\t--maxkeys/-M MAXKEYS\n");
-    printf("\t--minkeys/-M MINKEYS\n");
+    printf("\t--minkeys/-m MINKEYS\n");
 }
 
 int main(int argc, char *argv[])
@@ -977,6 +977,7 @@ int main(int argc, char *argv[])
         RDMA_TEST_COMMON_OPTIONS,
         { "maxkeys", required_argument, NULL, 'M' },
         { "minkeys", required_argument, NULL, 'm' },
+        { NULL, 0, NULL, 0 },
     };
     static char *short_opts = RDMA_TEST_COMMON_SHORT_OPTS "M:m:";
 

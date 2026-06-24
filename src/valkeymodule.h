@@ -1664,6 +1664,7 @@ VALKEYMODULE_API ValkeyModuleString *(
     *ValkeyModule_CreateStringFromString)(ValkeyModuleCtx *ctx, const ValkeyModuleString *str)VALKEYMODULE_ATTR;
 VALKEYMODULE_API ValkeyModuleString *(
     *ValkeyModule_CreateStringFromStreamID)(ValkeyModuleCtx *ctx, const ValkeyModuleStreamID *id)VALKEYMODULE_ATTR;
+VALKEYMODULE_API ValkeyModuleString *(*ValkeyModule_CreateStringReferenceFromKey)(ValkeyModuleKey *key)VALKEYMODULE_ATTR;
 VALKEYMODULE_API ValkeyModuleString *(*ValkeyModule_CreateStringPrintf)(ValkeyModuleCtx *ctx, const char *fmt, ...)
     VALKEYMODULE_ATTR_PRINTF(2, 3) VALKEYMODULE_ATTR;
 VALKEYMODULE_API void (*ValkeyModule_FreeString)(ValkeyModuleCtx *ctx, ValkeyModuleString *str) VALKEYMODULE_ATTR;
@@ -2416,6 +2417,7 @@ static int ValkeyModule_Init(ValkeyModuleCtx *ctx, const char *name, int ver, in
     VALKEYMODULE_GET_API(CreateStringFromLongDouble);
     VALKEYMODULE_GET_API(CreateStringFromString);
     VALKEYMODULE_GET_API(CreateStringFromStreamID);
+    VALKEYMODULE_GET_API(CreateStringReferenceFromKey);
     VALKEYMODULE_GET_API(CreateStringPrintf);
     VALKEYMODULE_GET_API(FreeString);
     VALKEYMODULE_GET_API(StringPtrLen);

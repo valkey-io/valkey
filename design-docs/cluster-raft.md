@@ -766,8 +766,14 @@ SLOT_CHANGE <source-node-id-or-dash> <source-epoch> <target-node-id-or-dash> <ta
 NODE_FORGET <node-id> <epoch>
 ```
 
-SLOT_CHANGE carries two epochs because it involves two shards (source
-and target). NODE_FORGET carries the epoch of the departing node's
+SLOT_CHANGE and SET_REPLICA_OF carries two epochs because it involves two shards (source
+and target). Shard epoch are not bumped for SLOT_CHANGE as it only moves slots
+— it doesn't change shard membership or leadership. Two slot migrations touching the
+same shard are safe to apply concurrently (they affect different slots).
+Bumping would serialize them unnecessarily. But validating is still needed to catch
+the case where a slot migration races against a failover that invalidated the shard's topology.
+
+NODE_FORGET carries the epoch of the departing node's
 shard to guard against removing a node whose role changed (e.g.,
 promoted to primary via a concurrent FAILOVER).
 

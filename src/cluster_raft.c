@@ -118,7 +118,6 @@ typedef struct {
     void (*callback)(void *ctx, const char *error);
 } raftPendingMeet;
 
-
 /* --------------------------------------------------------------------------
  * Protocol-specific state (stored in clusterState.protocol_data)
  * -------------------------------------------------------------------------- */
@@ -151,7 +150,7 @@ typedef struct {
     unsigned int todo_connect_nodes : 1;
     unsigned int todo_broadcast_ae : 1;
     unsigned int todo_retry_proposals : 1;
-    unsigned int todo_retry_deferred : 1;
+    unsigned int todo_retry_deferred : 1; /* For proposals that need rebasing of new epoch */
     unsigned int todo_schedule_failover : 1;
     unsigned int todo_update_replication : 1;
     unsigned int todo_persist_log : 1;
@@ -896,34 +895,42 @@ static int isShardEpochCurrent(const char *shard_id, uint64_t entry_epoch) {
     return (current == 0 || entry_epoch == current);
 }
 
-/* Update the epoch field(s) in an entry's data string with current values.
- * This is used when retrying a proposal rejected due to stale epoch —
- * only the epoch is stale, so we swap it in-place rather than rebuilding.
- * The leader's pre-validation will catch if anything else is invalid. */
-static sds raftUpdateEpochInData(int type, sds data) {
+/* Check if the shard epoch has advanced past what's in the proposal's data.
+ * If so, update the epoch fields in-place and return 1. Otherwise return 0. */
+static int raftRefreshEpochInData(int type, sds *data) {
     int argc;
-    sds *argv = sdssplitlen(data, sdslen(data), " ", 1, &argc);
-    if (!argv) return data;
+    sds *argv = sdssplitlen(*data, sdslen(*data), " ", 1, &argc);
+    if (!argv) return 0;
 
+    int advanced = 0;
     switch (type) {
     case RAFT_ENTRY_FAILOVER: {
         /* Format: <replica-id> <primary-id> <shard-id> <shard-epoch> */
         if (argc >= 4) {
-            uint64_t epoch = clusterGetShardEpoch(argv[2]);
-            sdsfree(argv[3]);
-            argv[3] = sdsfromlonglong(epoch);
+            uint64_t entry_epoch = strtoull(argv[3], NULL, 10);
+            uint64_t current = clusterGetShardEpoch(argv[2]);
+            if (current > entry_epoch) {
+                advanced = 1;
+                sdsfree(argv[3]);
+                argv[3] = sdsfromlonglong(current);
+            }
         }
         break;
     }
     case RAFT_ENTRY_SET_REPLICA_OF: {
         /* Format: <replica-id> <source-shard> <source-epoch> <primary-id-or-dash> <target-shard> <target-epoch> */
         if (argc >= 6) {
-            uint64_t source_epoch = clusterGetShardEpoch(argv[1]);
-            sdsfree(argv[2]);
-            argv[2] = sdsfromlonglong(source_epoch);
-            uint64_t target_epoch = clusterGetShardEpoch(argv[4]);
-            sdsfree(argv[5]);
-            argv[5] = sdsfromlonglong(target_epoch);
+            uint64_t src_epoch = strtoull(argv[2], NULL, 10);
+            uint64_t src_current = clusterGetShardEpoch(argv[1]);
+            uint64_t tgt_epoch = strtoull(argv[5], NULL, 10);
+            uint64_t tgt_current = clusterGetShardEpoch(argv[4]);
+            if (src_current > src_epoch || tgt_current > tgt_epoch) {
+                advanced = 1;
+                sdsfree(argv[2]);
+                argv[2] = sdsfromlonglong(src_current);
+                sdsfree(argv[5]);
+                argv[5] = sdsfromlonglong(tgt_current);
+            }
         }
         break;
     }
@@ -933,18 +940,22 @@ static sds raftUpdateEpochInData(int type, sds data) {
             clusterNode *source = (sdslen(argv[0]) == CLUSTER_NAMELEN)
                                       ? clusterLookupNode(argv[0], CLUSTER_NAMELEN)
                                       : NULL;
-            if (source) {
-                uint64_t epoch = clusterGetShardEpoch(source->shard_id);
-                sdsfree(argv[1]);
-                argv[1] = sdsfromlonglong(epoch);
-            }
             clusterNode *target = (sdslen(argv[2]) == CLUSTER_NAMELEN)
                                       ? clusterLookupNode(argv[2], CLUSTER_NAMELEN)
                                       : NULL;
-            if (target) {
-                uint64_t epoch = clusterGetShardEpoch(target->shard_id);
-                sdsfree(argv[3]);
-                argv[3] = sdsfromlonglong(epoch);
+            if (source && clusterGetShardEpoch(source->shard_id) > strtoull(argv[1], NULL, 10))
+                advanced = 1;
+            if (target && clusterGetShardEpoch(target->shard_id) > strtoull(argv[3], NULL, 10))
+                advanced = 1;
+            if (advanced) {
+                if (source) {
+                    sdsfree(argv[1]);
+                    argv[1] = sdsfromlonglong(clusterGetShardEpoch(source->shard_id));
+                }
+                if (target) {
+                    sdsfree(argv[3]);
+                    argv[3] = sdsfromlonglong(clusterGetShardEpoch(target->shard_id));
+                }
             }
         }
         break;
@@ -954,9 +965,13 @@ static sds raftUpdateEpochInData(int type, sds data) {
         if (argc >= 2) {
             clusterNode *node = clusterLookupNode(argv[0], sdslen(argv[0]));
             if (node) {
-                uint64_t epoch = clusterGetShardEpoch(node->shard_id);
-                sdsfree(argv[1]);
-                argv[1] = sdsfromlonglong(epoch);
+                uint64_t entry_epoch = strtoull(argv[1], NULL, 10);
+                uint64_t current = clusterGetShardEpoch(node->shard_id);
+                if (current > entry_epoch) {
+                    advanced = 1;
+                    sdsfree(argv[1]);
+                    argv[1] = sdsfromlonglong(current);
+                }
             }
         }
         break;
@@ -965,74 +980,10 @@ static sds raftUpdateEpochInData(int type, sds data) {
         break;
     }
 
-    /* Rebuild data from argv. */
-    sdsfree(data);
-    sds result = sdsjoinsds(argv, argc, " ", 1);
-    sdsfreesplitres(argv, argc);
-    return result;
-}
-
-/* Check if the shard epoch has advanced past what's stored in the proposal's
- * data string. Used to gate deferred retry — only retry when the conflicting
- * entry has been applied and bumped the epoch. */
-static int proposalEpochAdvanced(int type, sds data) {
-    int argc;
-    sds *argv = sdssplitlen(data, sdslen(data), " ", 1, &argc);
-    if (!argv) return 0;
-
-    int advanced = 0;
-    switch (type) {
-    case RAFT_ENTRY_FAILOVER:
-        /* Format: <replica-id> <primary-id> <shard-id> <shard-epoch> */
-        if (argc >= 4) {
-            uint64_t entry_epoch = strtoull(argv[3], NULL, 10);
-            uint64_t current = clusterGetShardEpoch(argv[2]);
-            advanced = (current > entry_epoch);
-        }
-        break;
-    case RAFT_ENTRY_SET_REPLICA_OF:
-        /* Format: <replica-id> <source-shard> <source-epoch> <primary-id-or-dash> <target-shard> <target-epoch> */
-        if (argc >= 6) {
-            uint64_t src_epoch = strtoull(argv[2], NULL, 10);
-            uint64_t src_current = clusterGetShardEpoch(argv[1]);
-            uint64_t tgt_epoch = strtoull(argv[5], NULL, 10);
-            uint64_t tgt_current = clusterGetShardEpoch(argv[4]);
-            advanced = (src_current > src_epoch) || (tgt_current > tgt_epoch);
-        }
-        break;
-    case RAFT_ENTRY_SLOT_CHANGE:
-        /* Format: <source-id-or-dash> <source-epoch> <target-id-or-dash> <target-epoch> <ranges...> */
-        if (argc >= 5) {
-            clusterNode *source = (sdslen(argv[0]) == CLUSTER_NAMELEN)
-                                      ? clusterLookupNode(argv[0], CLUSTER_NAMELEN)
-                                      : NULL;
-            clusterNode *target = (sdslen(argv[2]) == CLUSTER_NAMELEN)
-                                      ? clusterLookupNode(argv[2], CLUSTER_NAMELEN)
-                                      : NULL;
-            if (source) {
-                uint64_t entry_epoch = strtoull(argv[1], NULL, 10);
-                advanced = clusterGetShardEpoch(source->shard_id) > entry_epoch;
-            }
-            if (!advanced && target) {
-                uint64_t entry_epoch = strtoull(argv[3], NULL, 10);
-                advanced = clusterGetShardEpoch(target->shard_id) > entry_epoch;
-            }
-        }
-        break;
-    case RAFT_ENTRY_NODE_FORGET:
-        /* Format: <node-id> <epoch> */
-        if (argc >= 2) {
-            clusterNode *node = clusterLookupNode(argv[0], sdslen(argv[0]));
-            if (node) {
-                uint64_t entry_epoch = strtoull(argv[1], NULL, 10);
-                advanced = clusterGetShardEpoch(node->shard_id) > entry_epoch;
-            }
-        }
-        break;
-    default:
-        break;
+    if (advanced) {
+        sdsfree(*data);
+        *data = sdsjoinsds(argv, argc, " ", 1);
     }
-
     sdsfreesplitres(argv, argc);
     return advanced;
 }
@@ -1338,7 +1289,7 @@ static void clusterRaftCompletePendingProposal(int type, sds data, const char *e
         if (pp->type == type && !sdscmp(pp->data, data)) {
             /* On stale epoch with retries remaining: mark deferred.
              * The epoch update happens at retry time when the epoch has
-             * actually advanced (checked by proposalEpochAdvanced). */
+             * actually advanced (checked by raftRefreshEpochInData). */
             if (error && strcmp(error, STALE_SHARD_EPOCH_REJECTION_MSG) == 0 && pp->retries > 0) {
                 pp->retries--;
                 pp->deferred = 1;
@@ -1545,7 +1496,7 @@ static void raftLogApply(raftLogEntry *e) {
          * managed by NODE_JOIN and SET_REPLICA_OF entries. */
         int argc;
         sds *argv = sdssplitlen(e->data, sdslen(e->data), " ", 1, &argc);
-        if (argv && argc >= 3 && sdslen(argv[0]) == CLUSTER_NAMELEN) {
+        if (argv && argc >= 2 && sdslen(argv[0]) == CLUSTER_NAMELEN) {
             clusterNode *node = clusterLookupNode(argv[0], CLUSTER_NAMELEN);
 
             if (node && node != myself) {
@@ -2224,7 +2175,7 @@ static void clusterRaftSendProposal(raftPendingProposal *pp, clusterLink *leader
 
 /* Retry proposals from the pending list.
  * Deferred proposals (waiting for epoch advance) are always included — they
- * self-guard via proposalEpochAdvanced() and are skipped if not ready.
+ * self-guard via raftRefreshEpochInData() and are skipped if not ready.
  * include_pending: if set, also retry pending proposals (leader-change replay). */
 static void clusterRaftRetryProposals(int include_pending) {
     clusterRaftState *rs = RAFT_STATE();
@@ -2249,10 +2200,9 @@ static void clusterRaftRetryProposals(int include_pending) {
 
         /* For deferred entries, update to latest shard epoch */
         if (pp->deferred) {
-            if (!proposalEpochAdvanced(pp->type, pp->data)) continue;
+            if (!raftRefreshEpochInData(pp->type, &pp->data)) continue;
 
             pp->deferred = 0;
-            pp->data = raftUpdateEpochInData(pp->type, pp->data);
 
             if (rs->role == RAFT_ROLE_LEADER) {
                 const char *pre_error = clusterRaftPreValidate(pp->type, pp->data);

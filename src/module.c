@@ -5302,7 +5302,7 @@ int VM_ZsetRangeNext(ValkeyModuleKey *key) {
             return 1;
         }
     } else if (key->value->encoding == OBJ_ENCODING_SKIPLIST) {
-        const OrderedIndexItem *next = orderedIndexNext(&key->u.zset.oi);
+        OrderedIndexItem *next = orderedIndexNext(&key->u.zset.oi);
         if (next == NULL) {
             key->u.zset.er = 1;
             return 0;
@@ -5367,7 +5367,7 @@ int VM_ZsetRangePrev(ValkeyModuleKey *key) {
             return 1;
         }
     } else if (key->value->encoding == OBJ_ENCODING_SKIPLIST) {
-        const OrderedIndexItem *prev = orderedIndexPrev(&key->u.zset.oi);
+        OrderedIndexItem *prev = orderedIndexPrev(&key->u.zset.oi);
         if (prev == NULL) {
             key->u.zset.er = 1;
             return 0;

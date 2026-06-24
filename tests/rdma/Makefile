@@ -18,7 +18,7 @@ rdma-test: rdma-test.c
 	@echo "\t~# rdma res show"
 	@echo "\n      Then launch valkey-server with RDMA support, Run ./rdma-test to test ..."
 
-$(LIBVALKEY_LIB) $(LIBVALKEY_RDMA_LIB):
+$(LIBVALKEY_LIB) $(LIBVALKEY_RDMA_LIB) &:
 	@$(MAKE) -C $(LIBVALKEY_DIR) static USE_RDMA=1
 
 libvalkey-test: libvalkey-test.c $(LIBVALKEY_LIB) $(LIBVALKEY_RDMA_LIB) $(LIBVALKEY_SDS)

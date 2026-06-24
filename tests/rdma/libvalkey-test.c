@@ -9,6 +9,7 @@
 #include <string.h>
 #include <sys/time.h>
 
+#include "test.h"
 #include "valkey/rdma.h"
 #include "valkey/valkey.h"
 
@@ -52,14 +53,11 @@ typedef struct client_state {
 
 static void usage(const char *proc) {
   printf("%s usage:\n", proc);
-  printf("\t--host/-h HOSTADDR\n");
-  printf("\t--port/-p PORT\n");
-  printf("\t--threads/-t THREADS\n");
+  rdmaTestPrintCommonUsage();
   printf("\t--clients/-c CLIENTS\n");
   printf("\t--pipeline/-P PIPELINE\n");
   printf("\t--requests/-n REQUESTS\n");
   printf("\t--datasize/-d DATASIZE\n");
-  printf("\t--help/-H\n");
 }
 
 static void make_key(char *buf, size_t len, int client_id, long long seq) {
@@ -333,10 +331,7 @@ static long long parse_positive_ll(const char *name, const char *value) {
 
 static void parse_args(int argc, char **argv, test_config *cfg) {
   static struct option long_opts[] = {
-      {"help", no_argument, NULL, 'H'},
-      {"host", required_argument, NULL, 'h'},
-      {"port", required_argument, NULL, 'p'},
-      {"threads", required_argument, NULL, 't'},
+      RDMA_TEST_COMMON_OPTIONS,
       {"clients", required_argument, NULL, 'c'},
       {"pipeline", required_argument, NULL, 'P'},
       {"requests", required_argument, NULL, 'n'},
@@ -345,8 +340,8 @@ static void parse_args(int argc, char **argv, test_config *cfg) {
   };
   int opt;
 
-  while ((opt = getopt_long(argc, argv, "Hh:p:t:c:P:n:d:", long_opts, NULL)) !=
-         -1) {
+  while ((opt = getopt_long(argc, argv, RDMA_TEST_COMMON_SHORT_OPTS "c:P:n:d:",
+                            long_opts, NULL)) != -1) {
     switch (opt) {
     case 'h':
       cfg->host = optarg;
@@ -359,7 +354,7 @@ static void parse_args(int argc, char **argv, test_config *cfg) {
       }
       break;
     case 't':
-      cfg->threads = parse_positive_int("--threads", optarg);
+      cfg->threads = parse_positive_int("--thread", optarg);
       break;
     case 'c':
       cfg->clients = parse_positive_int("--clients", optarg);

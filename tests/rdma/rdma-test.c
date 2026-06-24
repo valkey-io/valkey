@@ -33,6 +33,8 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#include "test.h"
+
 typedef struct valkeyRdmaFeature {
     /* defined as following Opcodes */
     uint16_t opcode;
@@ -960,12 +962,9 @@ static void *test_routine(void *arg) {
 
 void usage(char *proc) {
     printf("%s usage:\n", proc);
-    printf("\t--help/-H\n");
-    printf("\t--host/-h HOSTADDR\n");
-    printf("\t--port/-p PORT\n");
+    rdmaTestPrintCommonUsage();
     printf("\t--maxkeys/-M MAXKEYS\n");
     printf("\t--minkeys/-M MINKEYS\n");
-    printf("\t--thread/-t THREADS\n");
 }
 
 int main(int argc, char *argv[])
@@ -975,14 +974,11 @@ int main(int argc, char *argv[])
     pthread_t threads[MAX_THREADS];
 
     static struct option long_opts[] = {
-        { "help", no_argument, NULL, 'H' },
-        { "host", required_argument, NULL, 'h' },
-        { "port", required_argument, NULL, 'p' },
+        RDMA_TEST_COMMON_OPTIONS,
         { "maxkeys", required_argument, NULL, 'M' },
         { "minkeys", required_argument, NULL, 'm' },
-        { "thread", required_argument, NULL, 't' },
     };
-    static char *short_opts = "Hh:p:t:M:m:";
+    static char *short_opts = RDMA_TEST_COMMON_SHORT_OPTS "M:m:";
 
     while (1) {
         c = getopt_long(argc, argv, short_opts, long_opts, &args);
@@ -1004,7 +1000,7 @@ int main(int argc, char *argv[])
         case 't':
             nr_threads = atoi(optarg);
             if (nr_threads < 0 || nr_threads > MAX_THREADS) {
-                rdmaFatal("--threads/-t is expected as [0, 32]");
+                rdmaFatal("--thread/-t is expected as [0, 32]");
             }
             break;
 

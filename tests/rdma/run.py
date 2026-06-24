@@ -218,7 +218,7 @@ def test_rdma(ipaddr, args):
             return 1
 
         clipath = valkeydir + "/tests/rdma/libvalkey-test"
-        clicmd = [clipath, "--threads", str(args.threads), "--clients", str(args.clients),
+        clicmd = [clipath, "--thread", str(args.threads), "--clients", str(args.clients),
                   "--pipeline", str(args.pipeline), "--requests", str(args.requests),
                   "--datasize", str(args.datasize), "-h", ipaddr, "-p", str(args.rdma_port)]
         retval = run_test_client("libvalkey-test", clicmd, args.timeout)
@@ -278,7 +278,7 @@ if __name__ == "__main__":
         help="RDMA port to listen on")
     parser.add_argument("--io-threads", type=int, default=4,
         help="server IO threads for libvalkey-test")
-    parser.add_argument("-t", "--threads", type=int, default=16,
+    parser.add_argument("-t", "--thread", dest="threads", type=int, default=16,
         help="libvalkey-test worker threads")
     parser.add_argument("-c", "--clients", type=int, default=128,
         help="libvalkey-test client connections")

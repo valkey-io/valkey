@@ -1,0 +1,41 @@
+# Enforce that every pull request carries exactly one release-notes decision
+# label: `release-notes` (the change is user-facing and needs a note) or
+# `no-release-notes` (it does not). This requirement makes the release-notes
+# decision an explicit, reviewable step rather than something determined at
+# release time.
+#
+# The check reads the labels straight from the pull_request event payload, so
+# it needs no checkout, no token, and no write access. It re-runs whenever a
+# label is added or removed so the status reflects the current labels.
+name: Release Notes Label
+
+on:
+  pull_request:
+    types: [opened, reopened, labeled, unlabeled, synchronize]
+
+concurrency:
+  group: release-notes-label-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  check-label:
+    name: Require release-notes label
+    runs-on: ubuntu-latest
+    if: github.repository == 'valkey-io/valkey'
+    steps:
+      - name: Require exactly one of release-notes / no-release-notes
+        env:
+          HAS_RELEASE_NOTES: ${{ contains(github.event.pull_request.labels.*.name, 'release-notes') }}
+          HAS_NO_RELEASE_NOTES: ${{ contains(github.event.pull_request.labels.*.name, 'no-release-notes') }}
+        run: |
+          if [ "$HAS_RELEASE_NOTES" = "true" ] && [ "$HAS_NO_RELEASE_NOTES" = "true" ]; then
+            echo "::error::This PR has both 'release-notes' and 'no-release-notes'. Apply exactly one."
+            exit 1
+          fi
+          if [ "$HAS_RELEASE_NOTES" != "true" ] && [ "$HAS_NO_RELEASE_NOTES" != "true" ]; then
+            echo "::error::This PR must carry exactly one label: 'release-notes' if the change is user-facing, or 'no-release-notes' if it is not."
+            exit 1
+          fi
+          echo "Release-notes label check passed."

@@ -21,8 +21,8 @@ def build_program():
     valkeydir = os.path.dirname(os.path.abspath(__file__)) + "/../.."
     cmd = "make -C " + valkeydir + "/tests/rdma"
     p = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-    if p.wait():
-        outs, _ = p.communicate()
+    outs, _ = p.communicate()
+    if p.returncode:
         print("---------------\n" + outs.decode() + "---------------\n")
         print("Valkey Over RDMA build test programs [FAILED]")
         return 1
@@ -31,28 +31,75 @@ def build_program():
     return 0
 
 
-# iterate /sys/class/infiniband, find any usable RDMA device, and return IPv4/IPV6 address
-def find_rdma_dev():
+def ipaddr_from_iface(iface):
+    addrs = netifaces.ifaddresses(iface)
+    if netifaces.AF_INET in addrs:
+        return addrs[netifaces.AF_INET][0]["addr"]
+    if netifaces.AF_INET6 in addrs:
+        return addrs[netifaces.AF_INET6][0]["addr"]
+    return None
+
+
+def find_default_iface():
+    for interface in netifaces.interfaces():
+        if interface == "lo":
+            continue
+        addrs = netifaces.ifaddresses(interface)
+        if netifaces.AF_INET in addrs:
+            return interface
+    return None
+
+
+def find_rdma_ip_from_sysfs():
     # Ex, /sys/class/infiniband/mlx5_0
     # Ex, /sys/class/infiniband/rxe_eth0
     # Ex, /sys/class/infiniband/siw_eth0
     ibclass = "/sys/class/infiniband/"
     try:
-        for dev in os.listdir(ibclass):
-            # Ex, /sys/class/infiniband/rxe_eth0/ports/1/gid_attrs/ndevs/0
-            netdev = ibclass + dev + "/ports/1/gid_attrs/ndevs/0"
-            with open(netdev) as fp:
-                addrs = netifaces.ifaddresses(fp.readline().strip("\n"))
-                if netifaces.AF_INET in addrs:
-                    ipaddr = addrs[netifaces.AF_INET][0]["addr"]
-                elif netifaces.AF_INET6 in addrs:
-                    ipaddr = addrs[netifaces.AF_INET6][0]["addr"]
-                else:
-                    continue
-                print("Valkey Over RDMA test prepare " + dev + " <" + ipaddr  + "> [OK]")
-                return ipaddr
-    except os.error:
+        devices = os.listdir(ibclass)
+    except OSError:
         return None
+
+    for dev in sorted(devices):
+        # Ex, /sys/class/infiniband/rxe_eth0/ports/1/gid_attrs/ndevs/0
+        netdev = ibclass + dev + "/ports/1/gid_attrs/ndevs/0"
+        try:
+            with open(netdev) as fp:
+                iface = fp.readline().strip()
+            if not iface:
+                continue
+            ipaddr = ipaddr_from_iface(iface)
+            if ipaddr is None:
+                continue
+            print("Valkey Over RDMA test prepare " + dev + " <" + ipaddr + "> [OK]")
+            return ipaddr
+        except (OSError, ValueError):
+            continue
+
+    return None
+
+
+# iterate /sys/class/infiniband, find any usable RDMA device, and return IPv4/IPV6 address
+def find_rdma_dev(install_rxe=False):
+    # After rdma link add, gid_attrs/ndevs can lag behind the device node. Unstable
+    # usually hid this because rdma-test.c compilation took long enough; on CI the
+    # main BUILD_RDMA=yes step pre-builds libvalkey, so this script's make is often
+    # instant and find runs too early unless we retry.
+    retries = 10 if install_rxe else 1
+    for attempt in range(retries):
+        ipaddr = find_rdma_ip_from_sysfs()
+        if ipaddr is not None:
+            return ipaddr
+        if attempt + 1 < retries:
+            time.sleep(0.2)
+
+    if install_rxe:
+        iface = find_default_iface()
+        if iface is not None:
+            ipaddr = ipaddr_from_iface(iface)
+            if ipaddr is not None:
+                print("Valkey Over RDMA test prepare rxe_" + iface + " <" + ipaddr + "> [OK]")
+                return ipaddr
 
     return None
 
@@ -214,20 +261,19 @@ if __name__ == "__main__":
 
             rdma_env_py = os.path.dirname(os.path.abspath(__file__)) + "/rdma_env.py"
             cmd = rdma_env_py + " -o setup -d rxe"
-            p = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE)
-            if p.wait():
+            if subprocess.call(cmd, shell=True):
                 print("Valkey Over RDMA setup RXE [FAILED]")
                 test_exit(1, args.install_rxe)
 
         # build C client into binary
         retval = build_program()
         if retval:
-            test_exit(1, args.install_rxe)
+            test_exit(retval, args.install_rxe)
 
-        ipaddr = find_rdma_dev()
+        ipaddr = find_rdma_dev(args.install_rxe)
         if ipaddr is None:
-            # not fatal error, continue to create software version: RXE and SIW
             print("Valkey Over RDMA test detect existing RDMA device [FAILED]")
+            retval = 1
         else:
             retval = test_rdma(ipaddr, args)
             if not retval:
@@ -236,4 +282,4 @@ if __name__ == "__main__":
         print("\nValkey Over RDMA test interrupted [FAILED]")
         retval = 1
     finally:
-        test_exit(0, args.install_rxe)
+        test_exit(retval, args.install_rxe)

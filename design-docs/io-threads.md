@@ -1,6 +1,6 @@
 # Design Document: I/O Threads
 
-## 1. Overview
+## Overview
 
 Valkey uses a fixed pool of worker threads to move expensive socket and
 memory-management work off the main thread. The main thread owns all data
@@ -13,7 +13,7 @@ job lifecycle, draining and backpressure, and the rules a feature must follow
 to add itself as a consumer. Feature-specific consumers (client I/O, cluster
 bus I/O) are documented separately and reference this skeleton.
 
-## 2. Threading Model
+## Threading Model
 
 - **Thread 0 is the main thread.** It runs the event loop and owns all server
   state. Workers must not touch shared state outside the data their job
@@ -28,9 +28,9 @@ bus I/O) are documented separately and reference this skeleton.
 
 The thread count is controlled by `io-threads`. Live updates go through
 `updateIOThreads()`, which drains in-flight jobs before changing the active
-count. See [Live reconfiguration](#7-live-reconfiguration).
+count. See [Live reconfiguration](#live-reconfiguration).
 
-## 3. Queue Topology
+## Queue Topology
 
 Three queue primitives connect the main thread and workers. All three live in
 `src/queues.{c,h}`.
@@ -49,8 +49,22 @@ Three queue primitives connect the main thread and workers. All three live in
 | Queue | Kind | Direction | Purpose |
 |---|---|---|---|
 | `io_shared_inbox` | SPMC | main → any worker | Default request channel. Any worker pulls the next job. |
-| `io_private_inbox[i]` | SPSC | main → worker `i` | Targeted request channel for jobs that must run on a specific worker (e.g. argv frees pinned by `cur_tid`, poll jobs at high thread counts). |
+| `io_private_inbox[i]` | SPSC | main → worker `i` | Targeted request channel for jobs that must run on a specific worker. |
 | `io_shared_outbox` | MPSC | any worker → main | Single response channel. |
+
+A job uses the private inbox (instead of the shared one) when its execution
+must be pinned to a specific worker. Two reasons drive this today:
+
+- **Thread-affinity invariants.** `FREE_ARGV` is enqueued on the worker whose
+  thread id (`cur_tid`) is recorded on the argv batch — so the same thread
+  that built it tears it down. This avoids cross-thread free contention on the
+  per-thread argv allocator.
+- **Avoiding shared-queue contention at high thread counts.** `POLL` jobs are
+  steered to a specific worker once thread counts are large enough that
+  contention on the SPMC head would dominate the work itself.
+
+When dispatch is non-pinned, the main thread pushes onto `io_shared_inbox` and
+lets any idle worker claim the job.
 
 Worker priority: a worker drains its private SPSC inbox in batches before it
 checks the shared SPMC inbox. SPSC enqueues may be batched by the producer
@@ -64,7 +78,7 @@ Jobs are passed as tagged pointers — the low 3 bits encode a `JobRequest` or
 pointers to be 8-byte aligned (always true for `zmalloc`-allocated objects).
 Helpers `tagJob()` and `untagJob()` enforce this in `io_threads.c`.
 
-## 4. Job Kinds
+## Job Kinds
 
 Request kinds (main → worker) and result kinds (worker → main) are defined in
 `io_threads.h`:
@@ -82,7 +96,23 @@ A new consumer adds:
 - a worker handler invoked from the dispatch loop in `IOThreadMain`
 - a completion handler invoked from `processIOThreadsResponses()`
 
-## 5. Job Lifecycle
+The dispatch helper is also where eligibility is checked — i.e. whether the
+job is safe to hand off at all. Common gates used today:
+
+- **Workers are available.** `server.active_io_threads_num <= 1` means the
+  main thread is the only worker; offload returns `C_ERR`.
+- **Per-client state.** Read offload skips clients that are already in flight
+  (`c->io_read_state != CLIENT_IDLE`), blocked, marked `close_asap`, or have
+  no relevant work pending (e.g. write offload requires `clientHasPendingReplies`).
+- **Per-job preconditions.** `ACCEPT` only offloads when the connection
+  carries `CONN_FLAG_ALLOW_ACCEPT_OFFLOAD`; `POLL` only runs on a worker if
+  there are pending IO responses to interleave with the wait.
+
+When a check fails the helper returns `C_ERR` and the caller runs the work
+inline on the main thread — offload is best-effort, never required for
+correctness.
+
+## Job Lifecycle
 
 ```text
 [MAIN] try*ToIOThreads()
@@ -117,7 +147,7 @@ Counters:
 owe a response on the outbox (separate from `io_jobs_finished`, which marks
 worker-side completion).
 
-## 6. Draining and Backpressure
+## Draining and Backpressure
 
 ### Outbox backpressure
 
@@ -147,7 +177,7 @@ needs a single client's I/O to settle (e.g. before freeing it). It spins on
 the per-client `io_read_state` / `io_write_state` rather than the global
 counter.
 
-## 7. Live Reconfiguration
+## Live Reconfiguration
 
 `updateIOThreads()` handles `CONFIG SET io-threads`:
 
@@ -166,7 +196,7 @@ policy: ignite when main-thread active time crosses
 non-empty, scale down after `IO_COOLDOWN_MS` of idle. `io-threads-always-active`
 disables the policy and keeps all configured workers awake.
 
-## 8. Relevant Code
+## Relevant Code
 
 - `src/io_threads.{c,h}` — main thread dispatch helpers, worker loop,
   scaling policy.

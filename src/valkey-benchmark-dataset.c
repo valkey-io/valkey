@@ -146,6 +146,9 @@ bool datasetBuildFieldMap(dataset *ds, sds *template_argv, int template_argc) {
             if (!field_end) break;
 
             size_t field_name_len = field_end - field_start;
+            if (field_name_len > 7 && !memcmp(field_start + field_name_len - 7, ":base64", 7)) {
+                field_name_len -= 7;
+            }
             sds field_name = sdsnewlen(field_start, field_name_len);
 
             int field_idx = -1;

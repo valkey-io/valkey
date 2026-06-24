@@ -142,12 +142,6 @@ configEnum acl_pubsub_default_enum[] = {
     {"resetchannels", 0},
     {NULL, 0}};
 
-configEnum sanitize_dump_payload_enum[] = {
-    {"no", SANITIZE_DUMP_NO},
-    {"yes", SANITIZE_DUMP_YES},
-    {"clients", SANITIZE_DUMP_CLIENTS},
-    {NULL, 0}};
-
 configEnum protected_action_enum[] = {
     {"no", PROTECTED_ACTION_ALLOWED_NO},
     {"yes", PROTECTED_ACTION_ALLOWED_YES},
@@ -464,6 +458,7 @@ void loadServerConfigFromString(sds config) {
         {"io-threads-do-reads", 2, 2},
         {"dynamic-hz", 2, 2},
         {"events-per-io-thread", 2, 2},
+        {"sanitize-dump-payload", 2, 2},
         {NULL, 0},
     };
     char buf[1024];
@@ -2755,6 +2750,12 @@ static int applyBind(const char **err) {
     return 1;
 }
 
+static int updateClusterState(const char **err) {
+    UNUSED(err);
+    if (server.cluster_enabled) clusterDoBeforeSleep(CLUSTER_TODO_UPDATE_STATE);
+    return 1;
+}
+
 int updateClusterFlags(const char **err) {
     UNUSED(err);
     clusterUpdateMyselfFlags();
@@ -3287,7 +3288,7 @@ standardConfig static_configs[] = {
     createBoolConfig("dual-channel-replication-enabled", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, server.dual_channel_replication, 0, NULL, NULL),
     createBoolConfig("aof-rewrite-incremental-fsync", NULL, MODIFIABLE_CONFIG, server.aof_rewrite_incremental_fsync, 1, NULL, NULL),
     createBoolConfig("no-appendfsync-on-rewrite", NULL, MODIFIABLE_CONFIG, server.aof_no_fsync_on_rewrite, 0, NULL, NULL),
-    createBoolConfig("cluster-require-full-coverage", NULL, MODIFIABLE_CONFIG, server.cluster_require_full_coverage, 1, NULL, NULL),
+    createBoolConfig("cluster-require-full-coverage", NULL, MODIFIABLE_CONFIG, server.cluster_require_full_coverage, 1, NULL, updateClusterState),
     createBoolConfig("rdb-save-incremental-fsync", NULL, MODIFIABLE_CONFIG, server.rdb_save_incremental_fsync, 1, NULL, NULL),
     createBoolConfig("aof-load-truncated", NULL, MODIFIABLE_CONFIG, server.aof_load_truncated, 1, NULL, NULL),
     createBoolConfig("aof-use-rdb-preamble", NULL, MODIFIABLE_CONFIG, server.aof_use_rdb_preamble, 1, NULL, NULL),
@@ -3368,7 +3369,6 @@ standardConfig static_configs[] = {
     createEnumConfig("appendfsync", NULL, MODIFIABLE_CONFIG, aof_fsync_enum, server.aof_fsync, AOF_FSYNC_EVERYSEC, NULL, updateAppendFsync),
     createEnumConfig("oom-score-adj", NULL, MODIFIABLE_CONFIG, oom_score_adj_enum, server.oom_score_adj, OOM_SCORE_ADJ_NO, NULL, updateOOMScoreAdj),
     createEnumConfig("acl-pubsub-default", NULL, MODIFIABLE_CONFIG, acl_pubsub_default_enum, server.acl_pubsub_default, 0, NULL, NULL),
-    createEnumConfig("sanitize-dump-payload", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, sanitize_dump_payload_enum, server.sanitize_dump_payload, SANITIZE_DUMP_NO, NULL, NULL),
     createEnumConfig("enable-protected-configs", NULL, IMMUTABLE_CONFIG, protected_action_enum, server.enable_protected_configs, PROTECTED_ACTION_ALLOWED_NO, NULL, NULL),
     createEnumConfig("enable-debug-command", NULL, IMMUTABLE_CONFIG, protected_action_enum, server.enable_debug_cmd, PROTECTED_ACTION_ALLOWED_NO, NULL, NULL),
     createEnumConfig("enable-module-command", NULL, IMMUTABLE_CONFIG, protected_action_enum, server.enable_module_cmd, PROTECTED_ACTION_ALLOWED_NO, NULL, NULL),

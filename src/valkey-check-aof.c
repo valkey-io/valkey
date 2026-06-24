@@ -34,7 +34,7 @@
 #include <sys/types.h>
 #include <regex.h>
 #include <libgen.h>
-
+#include <stdint.h>
 #define AOF_CHECK_OK 0
 #define AOF_CHECK_EMPTY 1
 #define AOF_CHECK_TRUNCATED 2
@@ -193,14 +193,14 @@ int processAnnotations(FILE *fp, char *filename, int last_file) {
         }
         if (ts <= to_timestamp) return 1;
         if (epos == 0) {
-            printf("AOF %s has nothing before timestamp %ld, "
+            printf("AOF %s has nothing before timestamp %jd, "
                    "aborting...\n",
-                   filename, to_timestamp);
+                   filename, (intmax_t)to_timestamp);
             exit(1);
         }
         if (!last_file) {
-            printf("Failed to truncate AOF %s to timestamp %ld to offset %ld because it is not the last file.\n",
-                   filename, to_timestamp, (long int)epos);
+            printf("Failed to truncate AOF %s to timestamp %jd to offset %lld because it is not the last file.\n",
+                   filename, (intmax_t)to_timestamp, (long long)epos);
             printf(
                 "If you insist, please delete all files after this file according to the manifest "
                 "file and delete the corresponding records in manifest file manually. Then re-run valkey-check-aof.\n");
@@ -208,7 +208,7 @@ int processAnnotations(FILE *fp, char *filename, int last_file) {
         }
         /* Truncate remaining AOF if exceeding 'to_timestamp' */
         if (ftruncate(fileno(fp), epos) == -1) {
-            printf("Failed to truncate AOF %s to timestamp %ld\n", filename, to_timestamp);
+            printf("Failed to truncate AOF %s to timestamp %jd\n", filename, (intmax_t)to_timestamp);
             exit(1);
         } else {
             return 0;
@@ -296,7 +296,7 @@ int checkSingleAof(char *aof_filename, char *aof_filepath, int last_file, int fi
 
     /* In truncate-to-timestamp mode, just exit if there is nothing to truncate. */
     if (diff == 0 && to_timestamp) {
-        printf("Truncate nothing in AOF %s to timestamp %ld\n", aof_filename, to_timestamp);
+        printf("Truncate nothing in AOF %s to timestamp %jd\n", aof_filename, (intmax_t)to_timestamp);
         fclose(fp);
         return AOF_CHECK_OK;
     }
@@ -446,7 +446,7 @@ void printAofStyle(int ret, char *aofFileName, char *aofType) {
     } else if (ret == AOF_CHECK_EMPTY) {
         printf("%s %s is empty\n", aofType, aofFileName);
     } else if (ret == AOF_CHECK_TIMESTAMP_TRUNCATED) {
-        printf("Successfully truncated AOF %s to timestamp %ld\n", aofFileName, to_timestamp);
+        printf("Successfully truncated AOF %s to timestamp %jd\n", aofFileName, (intmax_t)to_timestamp);
     } else if (ret == AOF_CHECK_TRUNCATED) {
         printf("Successfully truncated AOF %s\n", aofFileName);
     }

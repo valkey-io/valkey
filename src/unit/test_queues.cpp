@@ -22,7 +22,6 @@ extern "C" {
 class SpscQueueTest : public ::testing::Test {
   protected:
     spscQueue q;
-    static constexpr size_t SPSC_QUEUE_SIZE = 4096;
 
     struct ConsumerArg {
         spscQueue *q;
@@ -30,7 +29,7 @@ class SpscQueueTest : public ::testing::Test {
     };
 
     void SetUp() override {
-        spscInit(&q, SPSC_QUEUE_SIZE);
+        spscInit(&q);
     }
 
     void TearDown() override {
@@ -140,7 +139,6 @@ TEST_F(SpscQueueTest, TestSpscConcurrent) {
 class SpmcQueueTest : public ::testing::Test {
   protected:
     spmcQueue q;
-    static constexpr size_t SPMC_QUEUE_SIZE = 4096;
 
     struct ConsumerArg {
         spmcQueue *q;
@@ -149,7 +147,7 @@ class SpmcQueueTest : public ::testing::Test {
     };
 
     void SetUp() override {
-        spmcInit(&q, SPMC_QUEUE_SIZE);
+        spmcInit(&q);
         ASSERT_NE(q.buffer, nullptr);
         EXPECT_EQ(reinterpret_cast<uintptr_t>(q.buffer) % CACHE_LINE_SIZE, 0u);
     }
@@ -253,7 +251,6 @@ TEST_F(SpmcQueueTest, TestSpmcConcurrent) {
 class MpscQueueTest : public ::testing::Test {
   protected:
     mpscQueue q;
-    static constexpr size_t MPSC_QUEUE_SIZE = 16384;
 
     struct ProducerArg {
         mpscQueue *q;
@@ -262,7 +259,7 @@ class MpscQueueTest : public ::testing::Test {
     };
 
     void SetUp() override {
-        mpscInit(&q, MPSC_QUEUE_SIZE);
+        mpscInit(&q);
     }
 
     void TearDown() override {

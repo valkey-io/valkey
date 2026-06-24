@@ -3,6 +3,7 @@
 # more information.
 
 set tcl_precision 17
+source tests/support/stacktrace.tcl
 source tests/support/valkey.tcl
 source tests/support/aofmanifest.tcl
 source tests/support/server.tcl
@@ -1124,7 +1125,14 @@ proc is_a_slow_computer {} {
 
 if {$::client} {
     if {[catch { test_client_main $::test_server_port } err]} {
-        set estr "Executing test client: $err.\n$::errorInfo"
+        if {$::stacktrace ne "" && $::stacktrace_err eq $err} {
+            # Pretty stacktraces from our stacktrace.tcl
+            set stacktrace $::stacktrace
+        } else {
+            # Fallback for Tcl builtin errors not raised via return or error.
+            set stacktrace $::errorInfo
+        }
+        set estr "Executing test client: $err.\n$stacktrace"
         if {[catch {send_data_packet $::test_server_fd exception $estr}]} {
             puts $estr
         }

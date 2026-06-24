@@ -2133,6 +2133,14 @@ int freeClient(client *c) {
         return 0;
     }
 
+    /* Debug: force async free for the primary client to deterministically
+     * reproduce the deferred-free replication state clobber race. */
+    if (server.debug_force_free_primary_async && c->flag.primary) {
+        server.debug_force_free_primary_async = 0;
+        freeClientAsync(c);
+        return 0;
+    }
+
     /* For connected clients, call the disconnection event of modules hooks. */
     if (c->conn) {
         moduleFireServerEvent(VALKEYMODULE_EVENT_CLIENT_CHANGE, VALKEYMODULE_SUBEVENT_CLIENT_CHANGE_DISCONNECTED, c);
@@ -3136,9 +3144,13 @@ void sendReplyToClient(connection *conn) {
 
 void handleQbLimitReached(client *c) {
     sds ci = catClientInfoString(sdsempty(), c, server.hide_user_data_from_log), bytes = sdsempty();
-    bytes = sdscatrepr(bytes, c->querybuf, 64);
-    serverLog(LL_WARNING, "Closing client that reached max query buffer length: %s (qbuf initial bytes: %s)", ci,
-              bytes);
+    if (server.hide_user_data_from_log) {
+        serverLog(LL_WARNING, "Closing client that reached max query buffer length: %s", ci);
+    } else {
+        bytes = sdscatrepr(bytes, c->querybuf, 64);
+        serverLog(LL_WARNING, "Closing client that reached max query buffer length: %s (qbuf initial bytes: %s)", ci,
+                  bytes);
+    }
     sdsfree(ci);
     sdsfree(bytes);
     freeClientAsync(c);
@@ -5168,7 +5180,7 @@ void clientHelpCommand(client *c) {
         "CAPA <option> [options...]",
         "    The client claims its some capability options. Options are:",
         "    * REDIRECT",
-        "      The client can handle redirection during primary and replica failover in standalone mode.",
+        "      The client can handle redirection (standalone failover and keyless commands on replicas).",
         "GETREDIR",
         "    Return the client ID we are redirecting to when tracking is enabled.",
         "GETNAME",
@@ -6584,16 +6596,31 @@ void evictClients(void) {
     size_t client_eviction_limit = getClientEvictionLimit();
     if (client_eviction_limit == 0) return;
 
+    /* Variable to track memory of clients marked for close but not yet freed */
+    size_t pending_freed = 0;
+
     while (server.stat_clients_type_memory[CLIENT_TYPE_NORMAL] +
-               server.stat_clients_type_memory[CLIENT_TYPE_PUBSUB] >
+               server.stat_clients_type_memory[CLIENT_TYPE_PUBSUB] -
+               pending_freed >
            client_eviction_limit) {
         listNode *ln = listNext(&bucket_iter);
         if (ln) {
             client *c = ln->value;
+            if (c->flag.close_asap) {
+                /* Already scheduled to close. Count memory as freed and skip. */
+                pending_freed += getClientMemoryUsage(c, NULL);
+                continue;
+            }
             sds ci = catClientInfoString(sdsempty(), c, server.hide_user_data_from_log);
             serverLog(LL_NOTICE, "Evicting client: %s", ci);
-            if (freeClient(c)) server.stat_evictedclients++;
             sdsfree(ci);
+            server.stat_evictedclients++;
+
+            if (freeClient(c) == 0) {
+                /* Protected client (async close). Count memory as freed and skip. */
+                pending_freed += getClientMemoryUsage(c, NULL);
+                continue;
+            }
         } else {
             curr_bucket--;
             if (curr_bucket < 0) {

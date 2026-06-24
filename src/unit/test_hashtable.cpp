@@ -680,8 +680,8 @@ TEST_F(HashtableTest, iterator) {
 
 TEST_F(HashtableTest, safe_iterator) {
     size_t count = 1000;
-    uint8_t *entry_counts = (uint8_t *)malloc(count * 2);
-    memset(entry_counts, 0, count * 2);
+    uint8_t *entry_counts = (uint8_t *)malloc(count);
+    memset(entry_counts, 0, count);
 
     /* A set of pointers into the uint8_t array. */
     hashtableType type = {};
@@ -692,7 +692,7 @@ TEST_F(HashtableTest, safe_iterator) {
         ASSERT_TRUE(hashtableAdd(ht, entry_counts + j));
     }
 
-    /* Iterate */
+    /* Iterate with deletes (the supported safe iterator contract) */
     size_t num_returned = 0;
     hashtableIterator iter;
     void *next;
@@ -702,33 +702,24 @@ TEST_F(HashtableTest, safe_iterator) {
         size_t index = entry - entry_counts;
         num_returned++;
         ASSERT_GE(entry, entry_counts);
-        ASSERT_LT(entry, entry_counts + count * 2);
+        ASSERT_LT(entry, entry_counts + count);
         /* increment entry at this position as a counter */
         (*entry)++;
+        /* Delete every 4th entry after returning it */
         if (index % 4 == 0) {
             ASSERT_TRUE(hashtableDelete(ht, entry));
-        }
-        /* Add new item each time we see one of the original items */
-        if (index < count) {
-            ASSERT_TRUE(hashtableAdd(ht, entry + count));
         }
     }
     hashtableCleanupIterator(&iter);
 
-    /* Check that all entries present during the whole iteration were returned
-     * exactly once. (Some are deleted after being returned.) */
-    ASSERT_GE(num_returned, count);
+    /* All entries must be returned exactly once */
+    ASSERT_EQ(num_returned, count);
     for (size_t j = 0; j < count; j++) {
         ASSERT_EQ(entry_counts[j], 1u) << "Entry " << j << " returned " << (int)entry_counts[j] << " times";
     }
-    /* Check that entries inserted during the iteration were returned at most
-     * once. */
-    unsigned long num_optional_returned = 0;
-    for (size_t j = count; j < count * 2; j++) {
-        ASSERT_LE(entry_counts[j], 1u);
-        num_optional_returned += entry_counts[j];
-    }
-    printf("Safe iterator returned %lu of the %zu entries inserted while iterating.\n", num_optional_returned, count);
+
+    /* Verify correct number of entries remain */
+    ASSERT_EQ(hashtableSize(ht), count - count / 4);
 
     hashtableRelease(ht);
     free(entry_counts);

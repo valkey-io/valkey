@@ -8,10 +8,6 @@
 #include "queues.h"
 #include <sys/resource.h>
 
-#define IO_MPSC_QUEUE_SIZE 16384
-#define IO_SPMC_QUEUE_SIZE 4096
-#define IO_SPSC_QUEUE_SIZE 4096
-
 static _Thread_local int thread_id = 0;
 static _Thread_local mpscTicket io_thread_ticket = {0};
 /* Backlog of responses when io_shared_outbox is full. Should be rare. */
@@ -48,8 +44,8 @@ static inline void untagJob(void *tagged_ptr, void **ptr, int *type) {
 /* Handler prototypes */
 void ioThreadReadQueryFromClient(client *c);
 void ioThreadWriteToClient(client *c);
-void ioThreadFreeArgv(robj **argv);
-void ioThreadPoll(aeEventLoop *el);
+void IOThreadFreeArgv(robj **argv);
+void IOThreadPoll(aeEventLoop *el);
 static void ioThreadAccept(client *c);
 
 int inMainThread(void) {
@@ -111,6 +107,9 @@ void waitForClientIO(client *c) {
 }
 
 void IOThreadsBeforeSleep(long long current_time) {
+#ifndef RUSAGE_THREAD
+    UNUSED(current_time);
+#endif
     if (server.io_threads_num == 1) return;
     serverAssert(inMainThread());
 
@@ -127,23 +126,29 @@ void IOThreadsBeforeSleep(long long current_time) {
         }
     }
 
-    /* If threads are not active, track main-thread active time for ignition decision */
+#ifdef RUSAGE_THREAD
+    /* If threads are not active track main thread CPU time for ignition decision */
     if (server.active_io_threads_num == 1) {
         static long long last_measurement_time = 0;
         if (current_time - last_measurement_time < 50000) return; /* Sample once in 50ms */
         last_measurement_time = current_time;
-        trackInstantaneousMetric(STATS_METRIC_MAIN_THREAD_ACTIVE_TIME, server.stat_active_time, current_time, 1000000);
+        struct rusage ru;
+        if (getrusage(RUSAGE_THREAD, &ru) == 0) {
+            long long sys_time_us = ru.ru_stime.tv_sec * 1000000LL + ru.ru_stime.tv_usec;
+            long long user_time_us = ru.ru_utime.tv_sec * 1000000LL + ru.ru_utime.tv_usec;
+            trackInstantaneousMetric(STATS_METRIC_MAIN_THREAD_CPU_SYS, sys_time_us, current_time, 1000000);
+            trackInstantaneousMetric(STATS_METRIC_MAIN_THREAD_CPU_USER, user_time_us, current_time, 1000000);
+        }
     }
+#endif
 }
 
 #define IO_COOLDOWN_MS 1000
 #define IO_SAMPLE_RATE_MS 10
 #define IO_IGNITION_EVENTS 4
-/* Start using I/O threads when the main thread is active for more than the below
- * defined percentage of the time. This number is picked somewhat arbitrarily but
- * needed to be low enough to make sure we start the next thread quickly while not
- * starting too many threads unnecessarily to avoid contention. */
-#define IO_IGNITION_MAIN_THREAD_ACTIVE_PERCENT 30
+#define IO_IGNITION_CPU_SYS 30.0
+#define IO_IGNITION_CPU_SYS_LOW 5.0
+#define IO_IGNITION_CPU_USER 50.0
 #define BATCH_SIZE 32
 
 void IOThreadsAfterSleep(int numevents) {
@@ -166,9 +171,15 @@ void IOThreadsAfterSleep(int numevents) {
     /* Ignition Policy */
     if (server.active_io_threads_num == 1) {
         int should_ignite = 0;
-        float main_thread_active_time = (float)getInstantaneousMetric(STATS_METRIC_MAIN_THREAD_ACTIVE_TIME) / 10000.0;
-        /* Ignite IO threads when main-thread active time exceeds the threshold (30%) */
-        should_ignite = (main_thread_active_time > (float)IO_IGNITION_MAIN_THREAD_ACTIVE_PERCENT);
+#ifdef RUSAGE_THREAD
+        float cpu_sys = (float)getInstantaneousMetric(STATS_METRIC_MAIN_THREAD_CPU_SYS) / 10000.0;
+        float cpu_user = (float)getInstantaneousMetric(STATS_METRIC_MAIN_THREAD_CPU_USER) / 10000.0;
+        /* Ignite IO threads if sys CPU > 30%, or if sys CPU > 5% and user CPU > 50% */
+        should_ignite = (cpu_sys > IO_IGNITION_CPU_SYS) ||
+                        (cpu_sys > IO_IGNITION_CPU_SYS_LOW && cpu_user > IO_IGNITION_CPU_USER);
+#else
+        should_ignite = (numevents >= IO_IGNITION_EVENTS);
+#endif
         if (should_ignite) {
             pthread_mutex_unlock(&io_threads_mutex[1]);
             server.active_io_threads_num++;
@@ -232,7 +243,7 @@ void IOThreadsAfterSleep(int numevents) {
 
 /* This function performs polling on the given event loop and updates the server's
  * IO fired events count and poll state. */
-void ioThreadPoll(aeEventLoop *el) {
+void IOThreadPoll(aeEventLoop *el) {
     struct timeval tvp = {0, 0};
     int num_events = aePoll(el, &tvp);
     server.io_ae_fired_events = num_events;
@@ -315,10 +326,10 @@ static void *IOThreadMain(void *myid) {
 
                 switch (type) {
                 case JOB_REQ_FREE_ARGV:
-                    ioThreadFreeArgv((robj **)data);
+                    IOThreadFreeArgv((robj **)data);
                     break;
                 case JOB_REQ_POLL:
-                    ioThreadPoll((aeEventLoop *)data);
+                    IOThreadPoll((aeEventLoop *)data);
                     break;
                 default:
                     serverPanic("Invalid SPSC job type: %d", type);
@@ -327,8 +338,10 @@ static void *IOThreadMain(void *myid) {
             processed += batch_count;
         }
 
-        /* PRIORITY 2: Shared Global Queue (SPMC)
-         * Only checked after SPSC is drained. */
+        /*
+         * PRIORITY 2: Shared Global Queue (SPMC)
+         * Only checked after SPSC is drained.
+         */
         void *tagged_job = spmcDequeue(&io_shared_inbox);
         if (tagged_job) {
             void *data;
@@ -343,13 +356,13 @@ static void *IOThreadMain(void *myid) {
                 ioThreadWriteToClient((client *)data);
                 break;
             case JOB_REQ_FREE_OBJ:
-                zfree(data);
+                decrRefCount(data);
                 break;
             case JOB_REQ_ACCEPT:
                 ioThreadAccept((client *)data);
                 break;
             case JOB_REQ_POLL:
-                ioThreadPoll((aeEventLoop *)data);
+                IOThreadPoll((aeEventLoop *)data);
                 break;
             default:
                 serverPanic("Invalid SPMC job type: %d", type);
@@ -385,7 +398,7 @@ static void createIOThread(int id) {
     serverAssert(id > 0 && id < server.io_threads_num);
 
     /* Initialize the private SPSC queue for this thread */
-    spscInit(&io_private_inbox[id], IO_SPSC_QUEUE_SIZE);
+    spscInit(&io_private_inbox[id]);
 
     pthread_t tid;
     pthread_mutex_init(&io_threads_mutex[id], NULL);
@@ -445,7 +458,7 @@ int updateIOThreads(const char **err) {
      * in that state, we will deadlock (Main thread waits for worker, Worker waits for queue space). */
     size_t pending = getPendingIOResponsesCount();
 
-    if (pending > io_shared_outbox.queue_size) {
+    if (pending > MPSC_QUEUE_SIZE) {
         if (err) *err = "Can't update IO threads under load, try again later";
         return 0;
     }
@@ -484,8 +497,8 @@ void initIOThreads(int prev_threads_num) {
         server.active_io_threads_num = 1; /* We start with threads not active. */
         server.io_poll_state = AE_IO_STATE_NONE;
         server.io_ae_fired_events = 0;
-        spmcInit(&io_shared_inbox, IO_SPMC_QUEUE_SIZE);
-        mpscInit(&io_shared_outbox, IO_MPSC_QUEUE_SIZE);
+        spmcInit(&io_shared_inbox);
+        mpscInit(&io_shared_outbox);
         io_jobs_submitted = 0;
         atomic_init(&io_jobs_finished, 0);
         prefetchCommandsBatchInit();
@@ -547,7 +560,6 @@ int trySendWriteToIOThreads(client *c) {
     if (c->flag.lua_debug) return C_ERR;
 
     int is_replica = getClientType(c) == CLIENT_TYPE_REPLICA;
-    clientReplyBlock *block = NULL;
     if (is_replica) {
         c->io_last_reply_block = listLast(server.repl_buffer_blocks);
         replBufBlock *o = listNodeValue(c->io_last_reply_block);
@@ -559,10 +571,14 @@ int trySendWriteToIOThreads(client *c) {
          * threads from reading data that might be invalid in their local CPU cache. */
         c->io_last_reply_block = listLast(c->reply);
         if (c->io_last_reply_block) {
-            block = (clientReplyBlock *)listNodeValue(c->io_last_reply_block);
+            clientReplyBlock *block = (clientReplyBlock *)listNodeValue(c->io_last_reply_block);
             c->io_last_bufpos = block->used;
+            /* If buffer is encoded force new header */
+            if (block->flag.buf_encoded) block->last_header = NULL;
         } else {
             c->io_last_bufpos = (size_t)c->bufpos;
+            /* If buffer is encoded force new header */
+            if (c->flag.buf_encoded) c->last_header = NULL;
         }
     }
 
@@ -581,15 +597,7 @@ int trySendWriteToIOThreads(client *c) {
         c->io_last_bufpos = 0;
         return C_ERR;
     }
-    /* Force new header after successful enqueue so the main thread doesn't
-     * extend a header the I/O thread is currently reading. */
-    if (!is_replica) {
-        if (block) {
-            if (block->flag.buf_encoded) block->last_header = NULL;
-        } else {
-            if (c->flag.buf_encoded) c->last_header = NULL;
-        }
-    }
+
     if (c->flag.pending_write) {
         listUnlinkNode(server.clients_pending_write, &c->clients_pending_write_node);
         c->flag.pending_write = 0;
@@ -601,7 +609,7 @@ int trySendWriteToIOThreads(client *c) {
 }
 
 /* Internal function to free the client's argv in an IO thread. */
-void ioThreadFreeArgv(robj **argv) {
+void IOThreadFreeArgv(robj **argv) {
     int last_arg = 0;
     for (int i = 0;; i++) {
         robj *o = argv[i];
@@ -689,12 +697,8 @@ int tryOffloadFreeObjToIOThreads(robj *obj) {
 
     if (obj->encoding != OBJ_ENCODING_RAW || obj->type != OBJ_STRING) return C_ERR;
 
-    /* We offload only the free of the ptr that may be allocated by the I/O thread.
-     * The object itself was allocated by the main thread and will be freed by the main thread. */
-    void *job = tagJob(sdsAllocPtr(objectGetVal(obj)), JOB_REQ_FREE_OBJ);
+    void *job = tagJob(obj, JOB_REQ_FREE_OBJ);
     if (unlikely(spmcEnqueue(&io_shared_inbox, job) == false)) return C_ERR;
-    objectSetVal(obj, NULL);
-    decrRefCount(obj);
     io_jobs_submitted++;
     server.stat_io_freed_objects++;
     return C_OK;

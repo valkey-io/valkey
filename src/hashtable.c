@@ -1090,6 +1090,7 @@ static bucket *findBucketForInsert(hashtable *ht, uint64_t hash, int *pos_in_buc
 /* Helper to insert an entry. Doesn't check if an entry with a matching key
  * already exists. This must be ensured by the caller. */
 static void insert(hashtable *ht, uint64_t hash, void *entry) {
+    assert(ht->safe_iterators == NULL);
     hashtableExpandIfNeeded(ht);
     rehashStepOnWriteIfNeeded(ht);
     int pos_in_bucket;
@@ -2184,13 +2185,14 @@ size_t hashtableScanDefrag(hashtable *ht, size_t cursor, hashtableScanFunction f
  * is returned exactly once.
  *
  * For a safe iterator (when HASHTABLE_ITER_SAFE is set):
- * It is allowed to modify the hash table while iterating. It pauses incremental
- * rehashing to prevent entries from moving around. It's allowed to insert and
- * replace entries. Deleting entries is only allowed for the entry that was just
- * returned by hashtableNext. Deleting other entries is possible, but doing so
- * can cause internal fragmentation, so don't. The hash table itself can be
- * safely deleted while safe iterators exist - they will be invalidated and
- * subsequent calls to hashtableNext will return false.
+ * It is allowed to delete and replace entries while iterating. It pauses
+ * incremental rehashing to prevent entries from moving around. Inserting new
+ * entries during safe iteration is NOT supported.
+ * Deleting entries is only allowed for the entry that was just returned by
+ * hashtableNext. Deleting other entries is possible, but doing so can cause
+ * internal fragmentation, so don't. The hash table itself can be safely deleted
+ * while safe iterators exist - they will be invalidated and subsequent calls to
+ * hashtableNext will return false.
  *
  * Guarantees for safe iterators:
  *
@@ -2202,9 +2204,6 @@ size_t hashtableScanDefrag(hashtable *ht, size_t cursor, hashtableScanFunction f
  *
  * - Entries that are replaced before they've been returned by the iterator will
  *   be returned.
- *
- * - Entries that are inserted during the iteration may or may not be returned
- *   by the iterator.
  *
  * Call hashtableNext to fetch each entry. You must call hashtableCleanupIterator
  * when you are done with the iterator.

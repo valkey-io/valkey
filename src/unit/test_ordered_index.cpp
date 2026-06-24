@@ -7,8 +7,8 @@
 #include "generated_wrappers.hpp"
 
 extern "C" {
-#include "server.h"
 #include "ordered_index.h"
+#include "server.h"
 }
 
 /* Undefine min/max macros from server.h to avoid conflicts */
@@ -17,7 +17,6 @@ extern "C" {
 
 #include <cmath>
 #include <cstring>
-
 
 
 /* ---- C-style test helpers ---- */
@@ -110,8 +109,10 @@ class OrderedIndexTest : public ::testing::Test {
     }
 
     static void TearDownTestSuite() {
-        sdsfree(shared.minstring); shared.minstring = NULL;
-        sdsfree(shared.maxstring); shared.maxstring = NULL;
+        sdsfree(shared.minstring);
+        shared.minstring = NULL;
+        sdsfree(shared.maxstring);
+        shared.maxstring = NULL;
     }
 
     void SetUp() override {
@@ -928,7 +929,7 @@ TEST_F(OrderedIndexTest, SeekToScoreRange) {
         char buf[32];
         snprintf(buf, sizeof(buf), "key%d", i);
 
-    /* Insert elements with scores 0,2,4,6,8 */
+        /* Insert elements with scores 0,2,4,6,8 */
         insert((double)(i * 2), buf);
     }
 
@@ -1719,7 +1720,6 @@ static void testOnDeleteCallback(const OrderedIndexItem *item, void *ctx) {
 }
 
 
-
 /* DeleteRangeByScore */
 
 TEST_F(OrderedIndexTest, OnDelete_DeleteRangeByScore_EmptyAndNoMatch) {
@@ -2113,7 +2113,6 @@ static void hashtableConsistencyOnDelete(const OrderedIndexItem *item, void *ctx
     orderedIndexGetElementRaw(item, &ptr, &len);
     simHtRemove(ht, ptr, len);
 }
-
 
 
 /* Helper: populate index + SimHt with N sequential elements. */

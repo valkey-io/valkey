@@ -24,6 +24,7 @@
  * (see ordered_index.c). A B+ tree implementation is planned. */
 
 #include "sds.h"
+#include <stdbool.h>
 #include <stddef.h>
 
 /* Opaque types. The concrete definitions are backend-specific. */
@@ -93,7 +94,7 @@ OrderedIndexItem *orderedIndexInsertDetached(OrderedIndex *oi, OrderedIndexItem 
 
 /* Delete all items with score in [min, max]. If min_ex is set, min is exclusive; if max_ex is set, max is exclusive.
  * Calls on_delete for each removed item. Returns count of items removed. */
-unsigned long orderedIndexDeleteRangeByScore(OrderedIndex *oi, double min, double max, int min_ex, int max_ex, OrderedIndexOnDelete on_delete, void *ctx);
+unsigned long orderedIndexDeleteRangeByScore(OrderedIndex *oi, double min, double max, bool min_ex, bool max_ex, OrderedIndexOnDelete on_delete, void *ctx);
 
 /* Delete all items with index in [start, end] (0-based, inclusive).
  * Calls on_delete for each removed item. Returns count of items removed. */
@@ -101,7 +102,7 @@ unsigned long orderedIndexDeleteRangeByIndex(OrderedIndex *oi, unsigned long sta
 
 /* Delete all items with element in lex range [min, max]. If min_ex is set, min is exclusive; if max_ex is set, max is exclusive.
  * Calls on_delete for each removed item. Returns count of items removed. */
-unsigned long orderedIndexDeleteRangeByLex(OrderedIndex *oi, const_sds min, const_sds max, int min_ex, int max_ex, OrderedIndexOnDelete on_delete, void *ctx);
+unsigned long orderedIndexDeleteRangeByLex(OrderedIndex *oi, const_sds min, const_sds max, bool min_ex, bool max_ex, OrderedIndexOnDelete on_delete, void *ctx);
 
 /* ============================================================
  * Query
@@ -129,10 +130,10 @@ void orderedIndexGetElementRaw(const OrderedIndexItem *item, const char **ptr, s
 double orderedIndexGetScore(const OrderedIndexItem *item);
 
 /* Count items with score in [min, max]. If min_ex is set, min is exclusive; if max_ex is set, max is exclusive. */
-unsigned long orderedIndexCountScoreRange(const OrderedIndex *oi, double min, double max, int min_ex, int max_ex);
+unsigned long orderedIndexCountScoreRange(const OrderedIndex *oi, double min, double max, bool min_ex, bool max_ex);
 
 /* Count items with element in lex range [min, max]. If min_ex is set, min is exclusive; if max_ex is set, max is exclusive. */
-unsigned long orderedIndexCountLexRange(const OrderedIndex *oi, const_sds min, const_sds max, int min_ex, int max_ex);
+unsigned long orderedIndexCountLexRange(const OrderedIndex *oi, const_sds min, const_sds max, bool min_ex, bool max_ex);
 
 /* ============================================================
  * Iterator
@@ -158,10 +159,10 @@ void orderedIndexSeekToIndex(OrderedIndexIterator *iter, unsigned long index);
 /* Position iterator within a score range.
  * offset >= 0: next() returns the (offset)th element in range.
  * offset < 0:  prev() returns the (-offset-1)th element from end of range. */
-void orderedIndexSeekToScoreRange(OrderedIndexIterator *iter, double min, double max, int min_ex, int max_ex, long offset);
+void orderedIndexSeekToScoreRange(OrderedIndexIterator *iter, double min, double max, bool min_ex, bool max_ex, long offset);
 
 /* Position iterator within a lex range. Offset semantics same as score range. */
-void orderedIndexSeekToLexRange(OrderedIndexIterator *iter, const_sds min, const_sds max, int min_ex, int max_ex, long offset);
+void orderedIndexSeekToLexRange(OrderedIndexIterator *iter, const_sds min, const_sds max, bool min_ex, bool max_ex, long offset);
 
 /* ============================================================
  * Memory

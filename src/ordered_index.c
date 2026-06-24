@@ -82,7 +82,7 @@ OrderedIndexItem *orderedIndexInsertDetached(OrderedIndex *oi, OrderedIndexItem 
     return (OrderedIndexItem *)node;
 }
 
-unsigned long orderedIndexDeleteRangeByScore(OrderedIndex *oi, double min, double max, int min_ex, int max_ex, OrderedIndexOnDelete on_delete, void *ctx) {
+unsigned long orderedIndexDeleteRangeByScore(OrderedIndex *oi, double min, double max, bool min_ex, bool max_ex, OrderedIndexOnDelete on_delete, void *ctx) {
     zskiplist *zsl = (zskiplist *)oi;
     zrangespec range = {.min = min, .max = max, .minex = min_ex, .maxex = max_ex};
     zskiplistNode *update[ZSKIPLIST_MAXLEVEL], *x;
@@ -146,7 +146,7 @@ unsigned long orderedIndexDeleteRangeByIndex(OrderedIndex *oi, unsigned long sta
     return removed;
 }
 
-unsigned long orderedIndexDeleteRangeByLex(OrderedIndex *oi, const_sds min, const_sds max, int min_ex, int max_ex, OrderedIndexOnDelete on_delete, void *ctx) {
+unsigned long orderedIndexDeleteRangeByLex(OrderedIndex *oi, const_sds min, const_sds max, bool min_ex, bool max_ex, OrderedIndexOnDelete on_delete, void *ctx) {
     zskiplist *zsl = (zskiplist *)oi;
     zlexrangespec range = {.min = (sds)min, .max = (sds)max, .minex = min_ex, .maxex = max_ex};
     zskiplistNode *update[ZSKIPLIST_MAXLEVEL], *x;
@@ -216,7 +216,7 @@ double orderedIndexGetScore(const OrderedIndexItem *node) {
     return zslGetScore((const zskiplistNode *)node);
 }
 
-unsigned long orderedIndexCountScoreRange(const OrderedIndex *oi, double min, double max, int min_ex, int max_ex) {
+unsigned long orderedIndexCountScoreRange(const OrderedIndex *oi, double min, double max, bool min_ex, bool max_ex) {
     zskiplist *zsl = (zskiplist *)oi;
     zrangespec range = {.min = min, .max = max, .minex = min_ex, .maxex = max_ex};
     long first_rank, last_rank;
@@ -232,7 +232,7 @@ unsigned long orderedIndexCountScoreRange(const OrderedIndex *oi, double min, do
     return (unsigned long)(last_rank - first_rank + 1);
 }
 
-unsigned long orderedIndexCountLexRange(const OrderedIndex *oi, const_sds min, const_sds max, int min_ex, int max_ex) {
+unsigned long orderedIndexCountLexRange(const OrderedIndex *oi, const_sds min, const_sds max, bool min_ex, bool max_ex) {
     zskiplist *zsl = (zskiplist *)oi;
     zlexrangespec range = {.min = (sds)min, .max = (sds)max, .minex = min_ex, .maxex = max_ex};
 
@@ -273,11 +273,11 @@ void orderedIndexSeekToIndex(OrderedIndexIterator *iter, unsigned long index) {
     zslSeekToRank((zslIter *)iter, index + 1);
 }
 
-void orderedIndexSeekToScoreRange(OrderedIndexIterator *iter, double min, double max, int min_ex, int max_ex, long offset) {
+void orderedIndexSeekToScoreRange(OrderedIndexIterator *iter, double min, double max, bool min_ex, bool max_ex, long offset) {
     zslSeekToScoreRange((zslIter *)iter, min, max, min_ex, max_ex, offset);
 }
 
-void orderedIndexSeekToLexRange(OrderedIndexIterator *iter, const_sds min, const_sds max, int min_ex, int max_ex, long offset) {
+void orderedIndexSeekToLexRange(OrderedIndexIterator *iter, const_sds min, const_sds max, bool min_ex, bool max_ex, long offset) {
     zslSeekToLexRange((zslIter *)iter, min, max, min_ex, max_ex, offset);
 }
 

@@ -907,11 +907,9 @@ static void *test_routine(void *arg) {
 
     for (int i = 0; i < keys; i++) {
         kv_pair = &kv_pairs[i];
-        snprintf(kv_pair->key, sizeof(kv_pair->key) - 1, "THREAD%02d-%06d", tid, i);
+        rdmaTestFormatThreadKey(kv_pair->key, sizeof(kv_pair->key), tid, i);
         kv_pair->value = calloc(keysize, 1);
-        for (int k = 0; k < keysize - 1; k++) {
-            kv_pair->value[k] = 'A' + random() % 26; /* generate upper case string */
-        }
+        rdmaTestFillRandomUppercase(kv_pair->value, keysize - 1);
     }
     printf("Valkey Over RDMA test thread[%d] prepare %d KVs [OK]\n", tid, keys);
 

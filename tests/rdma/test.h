@@ -70,4 +70,29 @@ static inline int rdmaTestParsePort(const char *value) {
   return rdmaTestParseIntRange("--port", value, 1, 65535);
 }
 
+/* Key formatting & value-fill helpers shared by the RDMA test clients.
+ * Only the text generation is shared; each test keeps its own KV lifecycle
+ * (struct layout, RESP encoding, reply validation). */
+static inline void rdmaTestFormatThreadKey(char *buf, size_t len, int tid,
+                                           int index) {
+  snprintf(buf, len, "THREAD%02d-%06d", tid, index);
+}
+
+static inline void rdmaTestFormatClientSeqKey(char *buf, size_t len, int client,
+                                              long long seq) {
+  snprintf(buf, len, "rdma:%04d:%012lld", client, seq);
+}
+
+/* Deterministic A-Z pattern, for values that must be reproducible on read. */
+static inline void rdmaTestFillPattern(char *buf, size_t len) {
+  for (size_t i = 0; i < len; i++)
+    buf[i] = 'A' + (i % 26);
+}
+
+/* Random uppercase A-Z, for values that only need to be non-trivial. */
+static inline void rdmaTestFillRandomUppercase(char *buf, size_t len) {
+  for (size_t i = 0; i < len; i++)
+    buf[i] = 'A' + random() % 26;
+}
+
 #endif /* VALKEY_RDMA_TEST_H */

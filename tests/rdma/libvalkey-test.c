@@ -56,10 +56,6 @@ static void usage(const char *proc) {
   printf("\t--datasize/-d DATASIZE\n");
 }
 
-static void make_key(char *buf, size_t len, int client_id, long long seq) {
-  snprintf(buf, len, "rdma:%04d:%012lld", client_id, seq);
-}
-
 static long long requests_for_client(const test_config *cfg, int client_id) {
   long long base = cfg->requests / cfg->clients;
   long long extra = client_id < (cfg->requests % cfg->clients) ? 1 : 0;
@@ -144,7 +140,7 @@ static int append_set(client_state *state, const test_config *cfg,
                       long long seq) {
   char key[MAX_KEY_LEN];
 
-  make_key(key, sizeof(key), state->client_id, seq);
+  rdmaTestFormatClientSeqKey(key, sizeof(key), state->client_id, seq);
   if (valkeyAppendCommand(state->context, "SET %s %b", key, cfg->value,
                           cfg->datasize) != VALKEY_OK) {
     fprintf(stderr, "client %d append SET error: %s\n", state->client_id,
@@ -158,7 +154,7 @@ static int append_set(client_state *state, const test_config *cfg,
 static int append_get(client_state *state, long long seq) {
   char key[MAX_KEY_LEN];
 
-  make_key(key, sizeof(key), state->client_id, seq);
+  rdmaTestFormatClientSeqKey(key, sizeof(key), state->client_id, seq);
   if (valkeyAppendCommand(state->context, "GET %s", key) != VALKEY_OK) {
     fprintf(stderr, "client %d append GET error: %s\n", state->client_id,
             state->context->errstr);
@@ -357,8 +353,7 @@ static void init_value(test_config *cfg) {
     exit(1);
   }
 
-  for (size_t i = 0; i < cfg->datasize; i++)
-    cfg->value[i] = 'A' + (i % 26);
+  rdmaTestFillPattern(cfg->value, cfg->datasize);
 }
 
 int main(int argc, char **argv) {

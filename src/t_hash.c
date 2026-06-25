@@ -1162,7 +1162,7 @@ void hgetdelCommand(client *c) {
     long long num_fields = 0;
     bool keyremoved = false;
 
-    if (strcasecmp(objectGetVal(c->argv[2]),"fields")) {
+    if (strcasecmp(objectGetVal(c->argv[fields_index - 2]), "fields")) {
         addReplyErrorObject(c, shared.syntaxerr);
         return;
     }

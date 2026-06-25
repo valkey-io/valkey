@@ -1014,7 +1014,7 @@ start_server {
         assert_equal 1 [llength $ids]
         assert_equal 1 [lindex $ids 0]
 
-        # PEL must be cleared despite the -1 response code
+        # Check that XACKDEL ACKED removes the dangling PEL entry left after XDEL
         set pend [r XPENDING testxadstream testxadgrp1]
         assert_equal 0 [lindex $pend 0]
     }

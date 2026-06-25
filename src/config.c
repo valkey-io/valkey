@@ -2468,6 +2468,13 @@ static int isValidAnnouncedIp(char *val, const char **err) {
         *err = "cluster-announce-ip contains invalid character";
         return 0;
     }
+    if (val[0] != '\0') {
+        char dst[sizeof(struct in6_addr)];
+        if (inet_pton(AF_INET, val, dst) != 1 && inet_pton(AF_INET6, val, dst) != 1) {
+            *err = "cluster-announce-ip is not a valid IPv4 or IPv6 address";
+            return 0;
+        }
+    }
     return 1;
 }
 

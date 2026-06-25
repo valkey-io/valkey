@@ -3636,10 +3636,15 @@ void xdelexCommand(client *c) {
         for (int i = 0; i < id_count; i++) {
             addReplyLongLong(c, -1);
         }
-        return;
+        goto cleanup;
     }
 
     stream *s = objectGetVal(o);
+
+    /* True if DELREF removed any PEL references. PEL-only changes still modify
+     * the stream metadata, so they should signal WATCH/tracking and emit a
+     * keyspace event just like a stream-entry deletion (see issue #3429). */
+    bool pel_modified = 0;
 
     /* For ACKED and DELREF modes: loop over consumer groups (outer) then messages
      * (inner). This opens the iterator once instead of once per message, and
@@ -3681,6 +3686,7 @@ void xdelexCommand(client *c) {
                         raxRemove(nack->consumer->pel, buf, sizeof(buf), NULL);
                         streamFreeNACK(nack);
                         server.dirty++;
+                        pel_modified = 1;
                     } else {
                         /* ACKED: still pending in this group, cannot delete. */
                         resps[j] = 2;
@@ -3733,8 +3739,10 @@ void xdelexCommand(client *c) {
         }
     }
 
-    /* Propagate the write if needed. */
-    if (deleted) {
+    /* Either deleting entries or a PEL-only change mutate consumer-group state
+     * on this key, so we need to signal in either case to WATCH-ers & keyspace
+     * subscribers (see issue #3429). */
+    if (deleted || pel_modified) {
         signalModifiedKey(c, c->db, c->argv[1]);
         notifyKeyspaceEvent(NOTIFY_STREAM, "xdel", c->argv[1], c->db->id);
         server.dirty += deleted;

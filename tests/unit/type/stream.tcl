@@ -699,7 +699,7 @@ start_server {
         assert_equal 1 [ r XLEN teststream ]
     }
 
-    test {XDELEX w/ DELREF deletes all but keeps refs in consumer group PELs} {
+    test {XDELEX w/ DELREF deletes entries and clears consumer group PEL refs} {
         r DEL teststream
         r XADD teststream 1 msg helllo
         r XADD teststream 2 msg helllo
@@ -717,6 +717,63 @@ start_server {
         assert_equal {0 {} {} {}} [r XPENDING teststream testgrp1]
 
         assert_equal 1 [ r XLEN teststream ]
+    }
+
+    test {XDELEX DELREF signals WATCH when removing an orphaned PEL ref} {
+        r DEL teststream
+        r XADD teststream 1-0 msg hello
+        r XGROUP CREATE teststream grp1 0
+        r XREADGROUP GROUP grp1 consumer COUNT 1 STREAMS teststream >
+
+        # Delete the entry but keep its (now orphaned) PEL reference.
+        r XDELEX teststream KEEPREF IDS 1 1-0
+        assert_equal 0 [r XLEN teststream]
+        assert_equal {1 1-0 1-0 {{consumer 1}}} [r XPENDING teststream grp1]
+
+        # DELREF clearing the orphaned NACK modifies the key even though no
+        # stream entry is deleted, so the pending MULTI/EXEC must abort and
+        # return the empty reply.
+        r WATCH teststream
+        r XDELEX teststream DELREF IDS 1 1-0
+        r MULTI
+        r ping
+        assert_equal {} [r EXEC]
+
+        assert_equal {0 {} {} {}} [r XPENDING teststream grp1]
+    }
+
+    test {XDELEX DELREF removing an orphaned PEL ref emits an xdel keyspace event} {
+        r DEL teststream
+        r XADD teststream 1-0 msg hello
+        r XGROUP CREATE teststream grp1 0
+        r XREADGROUP GROUP grp1 consumer COUNT 1 STREAMS teststream >
+        r XDELEX teststream KEEPREF IDS 1 1-0
+        assert_equal {1 1-0 1-0 {{consumer 1}}} [r XPENDING teststream grp1]
+
+        # Enable keyspace notifications: K = keyspace events on __keyspace@<db>:<key>,
+        # t = stream events (so xdel/XPENDING PEL mutations surface as 'xdel').
+        r config set notify-keyspace-events Kt
+
+        # Subscribe with a glob so the channel matches regardless of which DB
+        # tests are running under. The keyspace channel is __keyspace@<db>:<key>
+        # so * matches all db numbers.
+        set rd1 [valkey_deferring_client]
+        set subpat __keyspace@*:teststream
+        assert_equal {1} [psubscribe $rd1 $subpat]
+
+        # No stream entry is deleted here, but the PEL change still notifies.
+        r XDELEX teststream DELREF IDS 1 1-0
+
+        # The pmessage reply is: pmessage <subscribed-pattern> <channel> <event>.
+        # Here, <event> is the xdel event we're looking for. The subscribed
+        # pattern is the glob from above, and the channel is also wildcarded by
+        # assert_match to avoid failing depending on the DB number in use for
+        # tests.
+        assert_match "pmessage $subpat __keyspace@*:teststream xdel" [$rd1 read]
+
+        $rd1 close
+        assert_equal {0 {} {} {}} [r XPENDING teststream grp1]
+        r config set notify-keyspace-events {}
     }
 
     test {XDELEX on already-deleted ID returns -1} {

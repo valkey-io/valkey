@@ -106,3 +106,32 @@ start_cluster 1 1 {tags {external:skip cluster} overrides {cluster-config-save-b
         assert_equal [count_log_message -1 "Cluster config updated even though writing the cluster config file to disk failed"] 1
     }
 }
+
+# Test that changing cluster-require-full-coverage triggers an immediate
+# cluster state update. Use 3 primaries with no replicas so that pausing
+# one primary leaves a slot range uncovered without automatic failover.
+start_cluster 3 0 {tags {external:skip cluster} overrides {cluster-require-full-coverage yes}} {
+    test "Cluster state transitions when toggling cluster-require-full-coverage" {
+        # Pause one primary so part of the slots is uncovered.
+        pause_process [srv 0 pid]
+        wait_for_cluster_state fail
+
+        # With cluster-require-full-coverage set to no, the R1 should
+        # stay in the OK state even though some slots are uncovered.
+        R 1 config set cluster-require-full-coverage no
+        assert_equal [CI 1 cluster_state] "ok"
+        assert_equal [CI 2 cluster_state] "fail"
+
+        # Now change cluster-require-full-coverage back to yes. The R1
+        # should immediately transition to FAIL because slots are uncovered.
+        # Without the fix, the cluster would remain stuck in OK because
+        # clusterUpdateState was only called when cluster is FAIL in clusterCron.
+        R 1 config set cluster-require-full-coverage yes
+        assert_equal [CI 1 cluster_state] "fail"
+        assert_equal [CI 2 cluster_state] "fail"
+
+        # Resume the paused primary to bring the cluster back to OK.
+        resume_process [srv 0 pid]
+        wait_for_cluster_state ok
+    }
+}

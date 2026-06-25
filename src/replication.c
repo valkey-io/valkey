@@ -4560,15 +4560,32 @@ void replicationHandlePrimaryDisconnection(void) {
         moduleFireServerEvent(VALKEYMODULE_EVENT_PRIMARY_LINK_CHANGE, VALKEYMODULE_SUBEVENT_PRIMARY_LINK_DOWN, NULL);
 
     server.primary = NULL;
-    server.repl_state = REPL_STATE_CONNECT;
-    server.repl_down_since = server.unixtime;
+
+    /* freeClient(primary) can be deferred via freeClientAsync when the client
+     * has pending IO. By the time we run in that deferred context,
+     * replicationUnsetPrimary()/replicationSetPrimary() may have already
+     * finalized replication state. Only transition to REPL_STATE_CONNECT if
+     * we were genuinely connected (REPL_STATE_CONNECTED) and primary_host is
+     * still set. Otherwise this is a stale deferred free and we must not
+     * clobber the current state. */
+    if (server.repl_state == REPL_STATE_CONNECTED && server.primary_host) {
+        server.repl_state = REPL_STATE_CONNECT;
+        server.repl_down_since = server.unixtime;
+    } else if (server.repl_state == REPL_STATE_CONNECTED) {
+        /* primary_host is NULL: deliberate unset in progress. */
+        server.repl_state = REPL_STATE_NONE;
+        server.repl_down_since = server.unixtime;
+    }
+    /* Any other repl_state means the state machine already moved on
+     * (e.g. REPL_STATE_CONNECT, CONNECTING, NONE) — leave it untouched. */
+
     /* We lost connection with our primary, don't disconnect replicas yet,
      * maybe we'll be able to PSYNC with our primary later. We'll disconnect
      * the replicas only if we'll have to do a full resync with our primary. */
 
     /* Try to re-connect immediately rather than wait for replicationCron
      * waiting 1 second may risk backlog being recycled. */
-    if (server.primary_host) {
+    if (server.repl_state == REPL_STATE_CONNECT && server.primary_host) {
         serverLog(LL_NOTICE, "Reconnecting to PRIMARY %s:%d", server.primary_host, server.primary_port);
         connectWithPrimary();
     }
@@ -4747,6 +4764,7 @@ void replicationCachePrimary(client *c) {
      * pending outputs to the primary. */
     sdsclear(server.primary->querybuf);
     server.primary->qb_pos = 0;
+    server.primary->qb_applied = 0;
     server.primary->repl_data->repl_applied = 0;
     server.primary->repl_data->read_reploff = server.primary->repl_data->reploff;
     if (c->flag.multi) discardTransaction(c);
@@ -5019,7 +5037,7 @@ void waitCommand(client *c) {
     }
 
     /* Argument parsing. */
-    if (getLongFromObjectOrReply(c, c->argv[1], &numreplicas, NULL) != C_OK) return;
+    if (getRangeLongFromObjectOrReply(c, c->argv[1], 0, INT_MAX, &numreplicas, NULL) != C_OK) return;
     if (getTimeoutFromObjectOrReply(c, c->argv[2], &timeout, UNIT_MILLISECONDS) != C_OK) return;
 
     /* First try without blocking at all. */
@@ -5046,7 +5064,7 @@ void waitaofCommand(client *c) {
 
     /* Argument parsing. */
     if (getRangeLongFromObjectOrReply(c, c->argv[1], 0, 1, &numlocal, NULL) != C_OK) return;
-    if (getPositiveLongFromObjectOrReply(c, c->argv[2], &numreplicas, NULL) != C_OK) return;
+    if (getRangeLongFromObjectOrReply(c, c->argv[2], 0, INT_MAX, &numreplicas, NULL) != C_OK) return;
     if (getTimeoutFromObjectOrReply(c, c->argv[3], &timeout, UNIT_MILLISECONDS) != C_OK) return;
 
     if (server.primary_host) {
@@ -5203,8 +5221,8 @@ void handleBioThreadFinishedRDBDownload(void) {
     debugServerAssert(bio_save_state == REPL_BIO_DISK_SAVE_STATE_FINISHED);
 
     /* Bio termination detected - we can get rid of the state vars */
-    int bio_repl_transfer_size = server.bio_repl_transfer_size;
-    int bio_repl_transfer_read = server.bio_repl_transfer_read;
+    off_t bio_repl_transfer_size = server.bio_repl_transfer_size;
+    off_t bio_repl_transfer_read = server.bio_repl_transfer_read;
     resetBioRDBSaveState();
 
     serverLog(LL_NOTICE, "Replica main thread detected RDB download completion in Bio thread");

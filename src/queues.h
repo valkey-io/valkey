@@ -1,4 +1,8 @@
 /*
+ * Copyright (c) Valkey Contributors
+ * All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Implements different types of queues
  *
  * 1. SPMC - Single Producer Multi Consumer

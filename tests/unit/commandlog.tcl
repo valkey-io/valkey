@@ -408,4 +408,40 @@ start_server {tags {"commandlog"} overrides {commandlog-execution-slower-than 10
         r config set min-string-size-avoid-copy-reply $copy_avoid
         r del testkey
     }
+
+    test {COMMANDLOG - memory config with set / get / rewrite} {
+        r config set commandlog-request-larger-than 10mb
+        r config set commandlog-reply-larger-than 10mb
+        assert_equal [r config get commandlog-request-larger-than] {commandlog-request-larger-than 10485760}
+        assert_equal [r config get commandlog-reply-larger-than] {commandlog-reply-larger-than 10485760}
+
+        r config rewrite
+        restart_server 0 true false
+        assert_equal [lindex [r config get commandlog-request-larger-than] 1] 10485760
+        assert_equal [lindex [r config get commandlog-reply-larger-than] 1] 10485760
+    } {} {external:skip}
+
+    test {COMMANDLOG - special number -1 disables the command logging} {
+        r config set commandlog-execution-slower-than -1
+        r config set commandlog-request-larger-than -1
+        r config set commandlog-reply-larger-than -1
+        assert_error {*argument must be between -1 and *} {r config set commandlog-execution-slower-than -2}
+        assert_error {*argument must be between -1 and *} {r config set commandlog-request-larger-than -2}
+        assert_error {*argument must be between -1 and *} {r config set commandlog-reply-larger-than -2}
+
+        r commandlog reset slow
+        r commandlog reset large-request
+        r commandlog reset large-reply
+
+        r ping
+        assert_equal [r commandlog len slow] 0
+        assert_equal [r commandlog len large-request] 0
+        assert_equal [r commandlog len large-reply] 0
+
+        r config rewrite
+        restart_server 0 true false
+        assert_equal [lindex [r config get commandlog-execution-slower-than] 1] -1
+        assert_equal [lindex [r config get commandlog-request-larger-than] 1] -1
+        assert_equal [lindex [r config get commandlog-reply-larger-than] 1] -1
+    } {} {external:skip}
 }

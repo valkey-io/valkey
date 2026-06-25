@@ -1,7 +1,6 @@
 #ifdef __linux__ /* currently RDMA is only supported on Linux */
 
 #define _GNU_SOURCE
-#include <errno.h>
 #include <getopt.h>
 #include <pthread.h>
 #include <stdio.h>
@@ -13,7 +12,6 @@
 #include "valkey/rdma.h"
 #include "valkey/valkey.h"
 
-#define DEFAULT_PORT 6379
 #define DEFAULT_THREADS 16
 #define DEFAULT_CLIENTS 128
 #define DEFAULT_PIPELINE 384
@@ -23,9 +21,7 @@
 
 /* Global CLI parameters shared read-only by all worker threads. */
 typedef struct test_config {
-  const char *host;
-  int port;
-  int threads;
+  rdma_test_config rdma;
   int clients;
   int pipeline;
   long long requests;
@@ -106,7 +102,7 @@ static valkeyContext *connect_rdma(const test_config *cfg, int client_id) {
   valkeyContext *context;
   valkeyReply *reply;
 
-  VALKEY_OPTIONS_SET_RDMA(&options, cfg->host, cfg->port);
+  VALKEY_OPTIONS_SET_RDMA(&options, cfg->rdma.host, cfg->rdma.port);
   context = valkeyConnectWithOptions(&options);
   if (!context) {
     fprintf(stderr, "client %d failed to allocate valkey context\n", client_id);
@@ -301,34 +297,6 @@ cleanup:
   return (void *)(long)ret;
 }
 
-static int parse_positive_int(const char *name, const char *value) {
-  char *end = NULL;
-  long val;
-
-  errno = 0;
-  val = strtol(value, &end, 10);
-  if (errno || !end || *end || val <= 0 || val > 2147483647L) {
-    fprintf(stderr, "%s must be a positive integer\n", name);
-    exit(1);
-  }
-
-  return (int)val;
-}
-
-static long long parse_positive_ll(const char *name, const char *value) {
-  char *end = NULL;
-  long long val;
-
-  errno = 0;
-  val = strtoll(value, &end, 10);
-  if (errno || !end || *end || val <= 0) {
-    fprintf(stderr, "%s must be a positive integer\n", name);
-    exit(1);
-  }
-
-  return val;
-}
-
 static void parse_args(int argc, char **argv, test_config *cfg) {
   static struct option long_opts[] = {
       RDMA_TEST_COMMON_OPTIONS,
@@ -336,7 +304,7 @@ static void parse_args(int argc, char **argv, test_config *cfg) {
       {"pipeline", required_argument, NULL, 'P'},
       {"requests", required_argument, NULL, 'n'},
       {"datasize", required_argument, NULL, 'd'},
-      {NULL, 0, NULL, 0},
+      RDMA_TEST_OPTIONS_END,
   };
   int opt;
 
@@ -344,29 +312,25 @@ static void parse_args(int argc, char **argv, test_config *cfg) {
                             long_opts, NULL)) != -1) {
     switch (opt) {
     case 'h':
-      cfg->host = optarg;
+      cfg->rdma.host = optarg;
       break;
     case 'p':
-      cfg->port = parse_positive_int("--port", optarg);
-      if (cfg->port > 65535) {
-        fprintf(stderr, "--port must be in [1, 65535]\n");
-        exit(1);
-      }
+      cfg->rdma.port = rdmaTestParsePort(optarg);
       break;
     case 't':
-      cfg->threads = parse_positive_int("--thread", optarg);
+      cfg->rdma.threads = rdmaTestParsePositiveInt("--thread", optarg);
       break;
     case 'c':
-      cfg->clients = parse_positive_int("--clients", optarg);
+      cfg->clients = rdmaTestParsePositiveInt("--clients", optarg);
       break;
     case 'P':
-      cfg->pipeline = parse_positive_int("--pipeline", optarg);
+      cfg->pipeline = rdmaTestParsePositiveInt("--pipeline", optarg);
       break;
     case 'n':
-      cfg->requests = parse_positive_ll("--requests", optarg);
+      cfg->requests = rdmaTestParsePositiveLongLong("--requests", optarg);
       break;
     case 'd':
-      cfg->datasize = parse_positive_int("--datasize", optarg);
+      cfg->datasize = rdmaTestParsePositiveInt("--datasize", optarg);
       break;
     case 'H':
       usage(argv[0]);
@@ -377,13 +341,13 @@ static void parse_args(int argc, char **argv, test_config *cfg) {
     }
   }
 
-  if (!cfg->host) {
+  if (!cfg->rdma.host) {
     fprintf(stderr, "missing --host/-h\n");
     usage(argv[0]);
     exit(1);
   }
-  if (cfg->threads > cfg->clients)
-    cfg->threads = cfg->clients;
+  if (cfg->rdma.threads > cfg->clients)
+    cfg->rdma.threads = cfg->clients;
 }
 
 static void init_value(test_config *cfg) {
@@ -399,8 +363,11 @@ static void init_value(test_config *cfg) {
 
 int main(int argc, char **argv) {
   test_config cfg = {
-      .port = DEFAULT_PORT,
-      .threads = DEFAULT_THREADS,
+      .rdma =
+          {
+              .port = RDMA_TEST_DEFAULT_PORT,
+              .threads = DEFAULT_THREADS,
+          },
       .clients = DEFAULT_CLIENTS,
       .pipeline = DEFAULT_PIPELINE,
       .requests = DEFAULT_REQUESTS,
@@ -419,8 +386,8 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  threads = calloc(cfg.threads, sizeof(*threads));
-  workers = calloc(cfg.threads, sizeof(*workers));
+  threads = calloc(cfg.rdma.threads, sizeof(*threads));
+  workers = calloc(cfg.rdma.threads, sizeof(*workers));
   if (!threads || !workers) {
     fprintf(stderr, "failed to allocate worker metadata\n");
     free(threads);
@@ -431,23 +398,23 @@ int main(int argc, char **argv) {
 
   printf("Valkey Over RDMA libvalkey test host=%s port=%d threads=%d "
          "clients=%d pipeline=%d requests=%lld datasize=%zu\n",
-         cfg.host, cfg.port, cfg.threads, cfg.clients, cfg.pipeline,
-         cfg.requests, cfg.datasize);
+         cfg.rdma.host, cfg.rdma.port, cfg.rdma.threads, cfg.clients,
+         cfg.pipeline, cfg.requests, cfg.datasize);
 
-  for (int i = 0; i < cfg.threads; i++) {
+  for (int i = 0; i < cfg.rdma.threads; i++) {
     workers[i].cfg = &cfg;
     workers[i].thread_id = i;
-    workers[i].first_client = (cfg.clients * i) / cfg.threads;
-    workers[i].last_client = (cfg.clients * (i + 1)) / cfg.threads;
+    workers[i].first_client = (cfg.clients * i) / cfg.rdma.threads;
+    workers[i].last_client = (cfg.clients * (i + 1)) / cfg.rdma.threads;
     if (pthread_create(&threads[i], NULL, worker_main, &workers[i])) {
       fprintf(stderr, "failed to create thread %d\n", i);
       ret = 1;
-      cfg.threads = i;
+      cfg.rdma.threads = i;
       break;
     }
   }
 
-  for (int i = 0; i < cfg.threads; i++) {
+  for (int i = 0; i < cfg.rdma.threads; i++) {
     void *thread_ret = NULL;
 
     pthread_join(threads[i], &thread_ret);

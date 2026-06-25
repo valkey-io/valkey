@@ -864,8 +864,9 @@ end:
     return ctx;
 }
 
-static int port = 6379;
-static char *host = NULL;
+static rdma_test_config config = {
+    .port = RDMA_TEST_DEFAULT_PORT,
+};
 static int minkeys = 128;
 static int maxkeys = 8192;
 static int keysize = 1024 + 1; /* for '\0' terminator */
@@ -881,7 +882,7 @@ static void *test_routine(void *arg) {
     struct test_kv_pair *kv_pairs = NULL, *kv_pair;
     int keys;
 
-    ctx = valkeyContextConnectRdma(host, port, 1000);
+    ctx = valkeyContextConnectRdma(config.host, config.port, 1000);
     if (!ctx) {
          rdmaFatal("RDMA connect failed");
     }
@@ -970,14 +971,13 @@ void usage(char *proc) {
 int main(int argc, char *argv[])
 {
     int c, args;
-    int nr_threads = 0;
     pthread_t threads[MAX_THREADS];
 
     static struct option long_opts[] = {
         RDMA_TEST_COMMON_OPTIONS,
         { "maxkeys", required_argument, NULL, 'M' },
         { "minkeys", required_argument, NULL, 'm' },
-        { NULL, 0, NULL, 0 },
+        RDMA_TEST_OPTIONS_END,
     };
     static char *short_opts = RDMA_TEST_COMMON_SHORT_OPTS "M:m:";
 
@@ -988,29 +988,24 @@ int main(int argc, char *argv[])
         }
         switch (c) {
         case 'h':
-            host = optarg;
+            config.host = optarg;
             break;
 
         case 'p':
-            port = atoi(optarg);
-            if (port <= 0 || port > 65535) {
-                rdmaFatal("invalid port");
-            }
+            config.port = rdmaTestParsePort(optarg);
             break;
 
         case 't':
-            nr_threads = atoi(optarg);
-            if (nr_threads < 0 || nr_threads > MAX_THREADS) {
-                rdmaFatal("--thread/-t is expected as [0, 32]");
-            }
+            config.threads =
+                rdmaTestParseIntRange("--thread", optarg, 0, MAX_THREADS);
             break;
 
         case 'M':
-            maxkeys = atoi(optarg);
+            maxkeys = rdmaTestParsePositiveInt("--maxkeys", optarg);
             break;
 
         case 'm':
-            minkeys = atoi(optarg);
+            minkeys = rdmaTestParsePositiveInt("--minkeys", optarg);
             break;
 
         case 'H':
@@ -1023,8 +1018,8 @@ int main(int argc, char *argv[])
         }
     }
 
-    if (!host) {
-         rdmaFatal("missing --host/-H");
+    if (!config.host) {
+         rdmaFatal("missing --host/-h");
     }
 
     if (minkeys > maxkeys) {
@@ -1035,7 +1030,7 @@ int main(int argc, char *argv[])
     srandom(time(NULL) ^ getpid());
 
     /* main thread mode */
-    if (!nr_threads) {
+    if (!config.threads) {
         printf("Test a single client in main thread ...\n");
         test_routine(NULL);
 
@@ -1043,11 +1038,11 @@ int main(int argc, char *argv[])
     }
 
     /* multi threads mode */
-    for (int i = 0; i < nr_threads; i++) {
+    for (int i = 0; i < config.threads; i++) {
         assert(!pthread_create(&threads[i], NULL, test_routine, NULL));
     }
 
-    for (int i = 0; i < nr_threads; i++) {
+    for (int i = 0; i < config.threads; i++) {
         pthread_join(threads[i], NULL);
     }
 

@@ -613,7 +613,9 @@ start_server {tags {"zset"}} {
             assert_error "*not*float*" {r zrangebyscore fooz ( +inf}
             assert_error "*not*float*" {r zrangebyscore fooz -inf (}
             assert_error "*not*float*" {r zrangebyscore fooz {} +inf}
+            assert_error "*not*float*" {r zrangebyscore fooz -inf {}}
             assert_error "*not*float*" {r zcount fooz ( +inf}
+            assert_error "*not*float*" {r zrangestore dest fooz ( +inf BYSCORE}
         }
 
         proc create_default_lex_zset {} {

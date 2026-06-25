@@ -2504,9 +2504,13 @@ int getKeysFromCommandWithSpecs(struct serverCommand *cmd,
 
 /* This function returns a sanity check if the command may have keys. */
 int doesCommandHaveKeys(struct serverCommand *cmd) {
-    return cmd->getkeys_proc ||                             /* has getkeys_proc (non modules) */
-           (cmd->flags & CMD_MODULE_GETKEYS) ||             /* module with GETKEYS */
-           (getAllKeySpecsFlags(cmd, 1) & CMD_KEY_NOT_KEY); /* has at least one key-spec not marked as NOT_KEY */
+    /* At least one key-spec not marked as NOT_KEY means the command has real keys. */
+    if (getAllKeySpecsFlags(cmd, 1) & CMD_KEY_NOT_KEY) return 1;
+    /* If the command has getkeys_proc but all its key-specs are NOT_KEY,
+     * the proc is only used for slot routing, not for real key arguments. */
+    if (cmd->getkeys_proc && cmd->key_specs_num > 0) return 0;
+    return cmd->getkeys_proc ||               /* has getkeys_proc (non modules) */
+           (cmd->flags & CMD_MODULE_GETKEYS); /* module with GETKEYS */
 }
 
 /* A simplified channel spec table that contains all of the commands

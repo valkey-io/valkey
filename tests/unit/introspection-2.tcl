@@ -205,6 +205,22 @@ start_server {tags {"introspection"}} {
         assert_equal {{key1{t} {OW update}} {key2{t} {OW update}}} [r command getkeysandflags msetex 2 key1{t} val1 key2{t} val2 nx]
     }
 
+    test {COMMAND GETKEYS* NOT_KEY commands should report no key arguments} {
+        # Shard pub/sub - shard channel is NOT_KEY
+        assert_error {ERR The command has no key arguments} {r command getkeys ssubscribe mychannel}
+        assert_error {ERR The command has no key arguments} {r command getkeys sunsubscribe mychannel}
+        assert_error {ERR The command has no key arguments} {r command getkeys spublish mychannel mymessage}
+        assert_error {ERR The command has no key arguments} {r command getkeysandflags ssubscribe mychannel}
+        assert_error {ERR The command has no key arguments} {r command getkeysandflags sunsubscribe mychannel}
+        assert_error {ERR The command has no key arguments} {r command getkeysandflags spublish mychannel mymessage}
+
+        # CLUSTERSCAN - cursor is a routing token, not a key
+        assert_error {ERR The command has no key arguments} {r command getkeys clusterscan 0}
+        assert_error {ERR The command has no key arguments} {r command getkeys clusterscan 0-{06S}-0}
+        assert_error {ERR The command has no key arguments} {r command getkeysandflags clusterscan 0}
+        assert_error {ERR The command has no key arguments} {r command getkeysandflags clusterscan 0-{06S}-0}
+    }
+
     test "COMMAND LIST syntax error" {
         assert_error "ERR syntax error*" {r command list bad_arg}
         assert_error "ERR syntax error*" {r command list filterby bad_arg}

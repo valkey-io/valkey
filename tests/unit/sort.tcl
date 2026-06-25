@@ -179,7 +179,7 @@ foreach command {SORT SORT_RO} {
             r zadd zset 2 c
             r zadd zset 10 d
             r zadd zset 3 e
-            assert_encoding skiplist zset
+            assert_encoding btree zset
             assert_equal [r sort zset by nosort asc] {a c e b d}
             assert_equal [r sort zset by nosort desc] {d b e c a}
         }
@@ -193,7 +193,7 @@ foreach command {SORT SORT_RO} {
             r zadd zset 2 c
             r zadd zset 10 d
             r zadd zset 3 e
-            assert_encoding skiplist zset
+            assert_encoding btree zset
             assert_equal [r sort zset by nosort asc limit 0 1] {a}
             assert_equal [r sort zset by nosort desc limit 0 1] {d}
             assert_equal [r sort zset by nosort asc limit 0 2] {a c}
@@ -211,7 +211,7 @@ foreach command {SORT SORT_RO} {
             r zadd zset 2 c
             r zadd zset 10 d
             r zadd zset 3 e
-            assert_encoding skiplist zset
+            assert_encoding btree zset
             assert_equal [r sort zset alpha desc] {e d c b a}
         }
     }

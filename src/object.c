@@ -528,7 +528,7 @@ robj *createZsetObject(void) {
     zs->ht = hashtableCreate(&zsetHashtableType);
     zs->oi = orderedIndexCreate();
     o = createObject(OBJ_ZSET, zs);
-    o->encoding = OBJ_ENCODING_SKIPLIST;
+    o->encoding = OBJ_ENCODING_BTREE;
     return o;
 }
 
@@ -581,7 +581,7 @@ void freeSetObject(robj *o) {
 void freeZsetObject(robj *o) {
     zset *zs;
     switch (o->encoding) {
-    case OBJ_ENCODING_SKIPLIST:
+    case OBJ_ENCODING_BTREE:
         zs = objectGetVal(o);
         hashtableRelease(zs->ht);
         orderedIndexFree(zs->oi);
@@ -718,7 +718,7 @@ void dismissSetObject(robj *o, size_t size_hint) {
 
 /* See dismissObject() */
 void dismissZsetObject(robj *o, size_t size_hint) {
-    if (o->encoding == OBJ_ENCODING_SKIPLIST) {
+    if (o->encoding == OBJ_ENCODING_BTREE) {
         zset *zs = objectGetVal(o);
         unsigned long len = orderedIndexLength(zs->oi);
         serverAssert(len != 0);
@@ -1172,7 +1172,7 @@ char *strEncoding(int encoding) {
     case OBJ_ENCODING_QUICKLIST: return "quicklist";
     case OBJ_ENCODING_LISTPACK: return "listpack";
     case OBJ_ENCODING_INTSET: return "intset";
-    case OBJ_ENCODING_SKIPLIST: return "skiplist";
+    case OBJ_ENCODING_BTREE: return "btree";
     case OBJ_ENCODING_EMBSTR: return "embstr";
     case OBJ_ENCODING_STREAM: return "stream";
     default: return "unknown";
@@ -1237,7 +1237,7 @@ size_t objectComputeSize(robj *key, robj *o, size_t sample_size, int dbid) {
     } else if (o->type == OBJ_ZSET) {
         if (o->encoding == OBJ_ENCODING_LISTPACK) {
             asize += zmalloc_size(objectGetVal(o));
-        } else if (o->encoding == OBJ_ENCODING_SKIPLIST) {
+        } else if (o->encoding == OBJ_ENCODING_BTREE) {
             hashtable *ht = ((zset *)objectGetVal(o))->ht;
             OrderedIndex *oi = ((zset *)objectGetVal(o))->oi;
             asize += sizeof(zset) + orderedIndexEstimateMemory(oi, sample_size) + hashtableMemUsage(ht);

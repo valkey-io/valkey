@@ -305,7 +305,7 @@ int geoGetPointsInRange(robj *zobj, double min, double max, GeoShape *shape, geo
             if (ga->used && limit && ga->used >= limit) break;
             zzlNext(zl, &eptr, &sptr);
         }
-    } else if (zobj->encoding == OBJ_ENCODING_SKIPLIST) {
+    } else if (zobj->encoding == OBJ_ENCODING_BTREE) {
         zset *zs = objectGetVal(zobj);
         OrderedIndexIterator iter;
         orderedIndexInitIterator(&iter, zs->oi);

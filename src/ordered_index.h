@@ -30,7 +30,7 @@
 /* Opaque types. The concrete definitions are backend-specific. */
 typedef struct OrderedIndex OrderedIndex;
 typedef struct OrderedIndexItem OrderedIndexItem;
-typedef uint64_t OrderedIndexIterator[2];
+typedef uint64_t OrderedIndexIterator[3];
 
 /* Callback invoked for each item removed during a range-delete operation.
  * The item pointer is valid for the duration of the callback but will be

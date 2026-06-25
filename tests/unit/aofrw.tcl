@@ -169,7 +169,7 @@ start_server {tags {"aofrw external:skip"} overrides {aof-use-rdb-preamble no}} 
     }
 
     foreach d {string int} {
-        foreach e {listpack skiplist} {
+        foreach e {listpack btree} {
             test "AOF rewrite of zset with $e encoding, $d data" {
                 r flushall
                 if {$e eq {listpack}} {set len 10} else {set len 1000}

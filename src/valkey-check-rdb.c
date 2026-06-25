@@ -317,7 +317,7 @@ void computeDatasetProfile(int dbid, robj *keyobj, robj *o, long long expiretime
                 zzlNext(zl, &eptr, &sptr);
             }
             statsRecordCount(lpLength(objectGetVal(o)), stats);
-        } else if (o->encoding == OBJ_ENCODING_SKIPLIST) {
+        } else if (o->encoding == OBJ_ENCODING_BTREE) {
             zset *zs = objectGetVal(o);
             hashtableIterator iter;
             hashtableInitIterator(&iter, zs->ht, 0);

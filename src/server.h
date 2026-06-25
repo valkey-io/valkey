@@ -769,7 +769,7 @@ typedef struct ValkeyModuleType moduleType;
 #define OBJ_ENCODING_LINKEDLIST 4 /* No longer used: old list encoding. */
 #define OBJ_ENCODING_ZIPLIST 5    /* No longer used: old list/hash/zset encoding. */
 #define OBJ_ENCODING_INTSET 6     /* Encoded as intset */
-#define OBJ_ENCODING_SKIPLIST 7   /* Encoded as skiplist */
+#define OBJ_ENCODING_BTREE 7      /* Encoded as B+tree (fbtree) */
 #define OBJ_ENCODING_EMBSTR 8     /* Embedded sds string encoding */
 #define OBJ_ENCODING_QUICKLIST 9  /* Encoded as linked list of listpacks */
 #define OBJ_ENCODING_STREAM 10    /* Encoded as a radix tree of listpacks */
@@ -1495,6 +1495,29 @@ typedef struct zset {
     hashtable *ht;
     OrderedIndex *oi;
 } zset;
+
+/* Lookup-key marking for fbtree hashtable disambiguation.
+ * Packed fbtree items ([score][ele]) are stored in the hashtable. When doing
+ * a lookup with a plain sds key, we mark it so the hash/compare callbacks
+ * can distinguish it from a packed stored item. */
+#define ZSET_LOOKUP_TYPE5_MARKER 6
+static inline void zsetMarkLookupKey(sds s) {
+    if (sdsType(s) == SDS_TYPE_5)
+        s[-1] = (s[-1] & ~SDS_TYPE_MASK) | ZSET_LOOKUP_TYPE5_MARKER;
+    else
+        sdsSetAuxBit(s, 0, 1);
+}
+static inline void zsetUnmarkLookupKey(sds s) {
+    unsigned char type = s[-1] & SDS_TYPE_MASK;
+    if (type == ZSET_LOOKUP_TYPE5_MARKER)
+        s[-1] = (s[-1] & ~SDS_TYPE_MASK) | SDS_TYPE_5;
+    else
+        sdsSetAuxBit(s, 0, 0);
+}
+static inline int zsetIsLookupKey(const_sds s) {
+    unsigned char type = s[-1] & SDS_TYPE_MASK;
+    return type == ZSET_LOOKUP_TYPE5_MARKER || sdsGetAuxBit(s, 0);
+}
 
 typedef struct clientBufferLimitsConfig {
     unsigned long long hard_limit_bytes;

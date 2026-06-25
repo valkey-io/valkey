@@ -102,7 +102,7 @@ start_server {tags {"zset"}} {
         if {$encoding == "listpack"} {
             r config set zset-max-ziplist-entries 128
             r config set zset-max-ziplist-value 64
-        } elseif {$encoding == "skiplist"} {
+        } elseif {$encoding == "btree"} {
             r config set zset-max-ziplist-entries 0
             r config set zset-max-ziplist-value 0
         } else {
@@ -1255,7 +1255,7 @@ start_server {tags {"zset"}} {
     }
 
     basics listpack
-    basics skiplist
+    basics btree
 
     test "ZPOP/ZMPOP against wrong type" {
         r set foo{t} bar
@@ -1617,7 +1617,7 @@ start_server {tags {"zset"}} {
             r config set zset-max-ziplist-entries 256
             r config set zset-max-ziplist-value 64
             set elements 128
-        } elseif {$encoding == "skiplist"} {
+        } elseif {$encoding == "btree"} {
             r config set zset-max-ziplist-entries 0
             r config set zset-max-ziplist-value 0
             if {$::accurate} {set elements 1000} else {set elements 100}
@@ -1913,7 +1913,7 @@ start_server {tags {"zset"}} {
             }
         }
 
-        test "ZSETs skiplist implementation backlink consistency test - $encoding" {
+        test "ZSETs btree implementation backlink consistency test - $encoding" {
             set diff 0
             for {set j 0} {$j < $elements} {incr j} {
                 r zadd myzset [expr rand()] "Element-$j"
@@ -2100,7 +2100,7 @@ start_server {tags {"zset"}} {
 
     tags {"slow"} {
         stressers listpack
-        stressers skiplist
+        stressers btree
     }
 
     test "BZPOP/BZMPOP against wrong type" {
@@ -2248,7 +2248,7 @@ start_server {tags {"zset"}} {
         $rd2 close
     } {0} {cluster:skip}
 
-    test {ZSET skiplist order consistency when elements are moved} {
+    test {ZSET btree order consistency when elements are moved} {
         with_config zset-max-ziplist-entries 0 {
             for {set times 0} {$times < 10} {incr times} {
                 r del zset
@@ -2375,13 +2375,13 @@ start_server {tags {"zset"}} {
         r config set zset-max-listpack-entries 0
         r del z1{t} z2{t}
         r zadd z1{t} 1 a
-        assert_encoding skiplist z1{t}
+        assert_encoding btree z1{t}
         assert_equal 1 [r zrangestore z2{t} z1{t} 0 -1]
-        assert_encoding skiplist z2{t}
+        assert_encoding btree z2{t}
         r config set zset-max-listpack-entries $original_max
     }
 
-    test {ZRANGESTORE with zset-max-listpack-entries 1 dst key should use skiplist encoding} {
+    test {ZRANGESTORE with zset-max-listpack-entries 1 dst key should use btree encoding} {
         set original_max [lindex [r config get zset-max-listpack-entries] 1]
         r config set zset-max-listpack-entries 1
         r del z1{t} z2{t} z3{t}
@@ -2389,7 +2389,7 @@ start_server {tags {"zset"}} {
         assert_equal 1 [r zrangestore z2{t} z1{t} 0 0]
         assert_encoding listpack z2{t}
         assert_equal 2 [r zrangestore z3{t} z1{t} 0 1]
-        assert_encoding skiplist z3{t}
+        assert_encoding btree z3{t}
         r config set zset-max-listpack-entries $original_max
     }
 
@@ -2426,7 +2426,7 @@ start_server {tags {"zset"}} {
         }
     }
 
-    foreach {type contents} "listpack {1 a 2 b 3 c} skiplist {1 a 2 b 3 [randstring 70 90 alpha]}" {
+    foreach {type contents} "listpack {1 a 2 b 3 c} btree {1 a 2 b 3 [randstring 70 90 alpha]}" {
         set original_max_value [lindex [r config get zset-max-ziplist-value] 1]
         r config set zset-max-ziplist-value 10
         create_zset myzset $contents
@@ -2485,7 +2485,7 @@ start_server {tags {"zset"}} {
     r readraw 0
 
     foreach {type contents} "
-        skiplist {1 a 2 b 3 c 4 d 5 e 6 f 7 g 7 h 9 i 10 [randstring 70 90 alpha]}
+        btree {1 a 2 b 3 c 4 d 5 e 6 f 7 g 7 h 9 i 10 [randstring 70 90 alpha]}
         listpack {1 a 2 b 3 c 4 d 5 e 6 f 7 g 7 h 9 i 10 j} " {
         test "ZRANDMEMBER with <count> - $type" {
             set original_max_value [lindex [r config get zset-max-ziplist-value] 1]
@@ -2662,7 +2662,7 @@ start_server {tags {"zset"}} {
                 assert_encoding hashtable set_big{t}
             }
 
-            foreach zset_type {listpack skiplist} {
+            foreach zset_type {listpack btree} {
                 r del zset_small{t} zset_big{t}
 
                 if {$zset_type == "listpack"} {
@@ -2670,12 +2670,12 @@ start_server {tags {"zset"}} {
                     r zadd zset_big{t} 1 1 2 2 3 3 4 4 5 5
                     assert_encoding listpack zset_small{t}
                     assert_encoding listpack zset_big{t}
-                } elseif {$zset_type == "skiplist"} {
+                } elseif {$zset_type == "btree"} {
                     r config set zset-max-listpack-entries 0
                     r zadd zset_small{t} 1 1 2 2 3 3
                     r zadd zset_big{t} 1 1 2 2 3 3 4 4 5 5
-                    assert_encoding skiplist zset_small{t}
-                    assert_encoding skiplist zset_big{t}
+                    assert_encoding btree zset_small{t}
+                    assert_encoding btree zset_big{t}
                 }
 
                 # Test one key is big and one key is small separately.
@@ -2736,7 +2736,7 @@ start_server {tags {"zset"}} {
             assert_encoding listpack myzset
             assert_equal $max_entries [r zcard myzset]
             assert_equal 1 [r zadd myzset 1 b]
-            assert_encoding skiplist myzset
+            assert_encoding btree myzset
 
             r config set zset-max-listpack-entries $original_max
         }
@@ -2764,7 +2764,7 @@ start_server [list overrides [list save ""] tags {"zset needs:debug external:ski
         # We deleted all elements except for one so there are a lot of empty buckets.
         r zremrangebyrank myzset 1 -1
         assert_equal 1 [r zcard myzset]
-        assert_encoding skiplist myzset
+        assert_encoding btree myzset
 
         # Since we deleted the elements and only left one element, there is a resize operation.
         # So ht0 will contain a large number of empty buckets, while ht1 will be a minimal hashtable.
@@ -2829,7 +2829,7 @@ start_server [list overrides [list save ""] tags {"zset needs:debug external:ski
             # We deleted all elements except for one so there ht0 is quite empty.
             r zremrangebyrank myzset 1 -1
             assert_equal 1 [r zcard myzset]
-            assert_encoding skiplist myzset
+            assert_encoding btree myzset
 
             # Since we deleted the elements and only left one element, there is a resize operation.
             # So ht0 will contain a large number of empty buckets, while ht1 will be a minimal hashtable.
@@ -2951,71 +2951,71 @@ start_server [list overrides [list save ""] tags {"zset needs:debug external:ski
 }
 
 start_server {tags {"zset" "cluster:skip"}} {
-    test {ZUNIONSTORE with skiplist-encoded inputs} {
+    test {ZUNIONSTORE with btree-encoded inputs} {
         with_config zset-max-ziplist-entries 0 {
 
             r del src1 src2 dst
             r zadd src1 1 a 2 b 3 c
             r zadd src2 2 b 4 d 5 e
-            assert_encoding skiplist src1
-            assert_encoding skiplist src2
+            assert_encoding btree src1
+            assert_encoding btree src2
 
             assert_equal 5 [r zunionstore dst 2 src1 src2]
-            assert_encoding skiplist dst
+            assert_encoding btree dst
             assert_equal {a 1 c 3 b 4 d 4 e 5} [r zrange dst 0 -1 WITHSCORES]
         }
     }
 
-    test {ZUNIONSTORE with skiplist-encoded inputs and WEIGHTS} {
+    test {ZUNIONSTORE with btree-encoded inputs and WEIGHTS} {
         with_config zset-max-ziplist-entries 0 {
 
             r del src1 src2 dst
             r zadd src1 1 a 2 b
             r zadd src2 3 b 4 c
-            assert_encoding skiplist src1
-            assert_encoding skiplist src2
+            assert_encoding btree src1
+            assert_encoding btree src2
 
             assert_equal 3 [r zunionstore dst 2 src1 src2 WEIGHTS 2 1]
             assert_equal {a 2 c 4 b 7} [r zrange dst 0 -1 WITHSCORES]
         }
     }
 
-    test {ZINTERSTORE with skiplist-encoded inputs} {
+    test {ZINTERSTORE with btree-encoded inputs} {
         with_config zset-max-ziplist-entries 0 {
 
             r del src1 src2 dst
             r zadd src1 1 a 2 b 3 c
             r zadd src2 10 b 20 c 30 d
-            assert_encoding skiplist src1
-            assert_encoding skiplist src2
+            assert_encoding btree src1
+            assert_encoding btree src2
 
             assert_equal 2 [r zinterstore dst 2 src1 src2]
             assert_equal {b 12 c 23} [r zrange dst 0 -1 WITHSCORES]
         }
     }
 
-    test {ZINTERSTORE with skiplist-encoded inputs and AGGREGATE MIN} {
+    test {ZINTERSTORE with btree-encoded inputs and AGGREGATE MIN} {
         with_config zset-max-ziplist-entries 0 {
 
             r del src1 src2 dst
             r zadd src1 5 a 10 b
             r zadd src2 1 a 20 b
-            assert_encoding skiplist src1
-            assert_encoding skiplist src2
+            assert_encoding btree src1
+            assert_encoding btree src2
 
             assert_equal 2 [r zinterstore dst 2 src1 src2 AGGREGATE MIN]
             assert_equal {a 1 b 10} [r zrange dst 0 -1 WITHSCORES]
         }
     }
 
-    test {ZRANGEBYSCORE with LIMIT on skiplist-encoded set} {
+    test {ZRANGEBYSCORE with LIMIT on btree-encoded set} {
         with_config zset-max-ziplist-entries 0 {
 
             r del zset
             for {set i 0} {$i < 20} {incr i} {
                 r zadd zset $i "key:$i"
             }
-            assert_encoding skiplist zset
+            assert_encoding btree zset
 
             # Forward with offset and count
             assert_equal {key:5 key:6 key:7} [r zrangebyscore zset 0 19 LIMIT 5 3]
@@ -3028,14 +3028,14 @@ start_server {tags {"zset" "cluster:skip"}} {
         }
     }
 
-    test {ZRANGEBYLEX with LIMIT on skiplist-encoded set} {
+    test {ZRANGEBYLEX with LIMIT on btree-encoded set} {
         with_config zset-max-ziplist-entries 0 {
 
             r del zset
             foreach elem {a b c d e f g h i j} {
                 r zadd zset 0 $elem
             }
-            assert_encoding skiplist zset
+            assert_encoding btree zset
 
             # Forward with offset and count
             assert_equal {d e f} [r zrangebylex zset "\[a" "\[j" LIMIT 3 3]
@@ -3046,12 +3046,12 @@ start_server {tags {"zset" "cluster:skip"}} {
         }
     }
 
-    test {ZPOPMIN on skiplist-encoded set} {
+    test {ZPOPMIN on btree-encoded set} {
         with_config zset-max-ziplist-entries 0 {
 
             r del zset
             r zadd zset 3 c 1 a 2 b 5 e 4 d
-            assert_encoding skiplist zset
+            assert_encoding btree zset
 
             assert_equal {a 1} [r zpopmin zset]
             assert_equal {b 2} [r zpopmin zset]
@@ -3063,12 +3063,12 @@ start_server {tags {"zset" "cluster:skip"}} {
         }
     }
 
-    test {ZPOPMAX on skiplist-encoded set} {
+    test {ZPOPMAX on btree-encoded set} {
         with_config zset-max-ziplist-entries 0 {
 
             r del zset
             r zadd zset 3 c 1 a 2 b 5 e 4 d
-            assert_encoding skiplist zset
+            assert_encoding btree zset
 
             assert_equal {e 5} [r zpopmax zset]
             assert_equal {d 4} [r zpopmax zset]
@@ -3080,7 +3080,7 @@ start_server {tags {"zset" "cluster:skip"}} {
         }
     }
 
-    test {ZPOPMIN/ZPOPMAX empty skiplist-encoded set} {
+    test {ZPOPMIN/ZPOPMAX empty btree-encoded set} {
         with_config zset-max-ziplist-entries 0 {
 
             r del zset
@@ -3090,14 +3090,14 @@ start_server {tags {"zset" "cluster:skip"}} {
         }
     }
 
-    test {ZCOUNT on skiplist-encoded set} {
+    test {ZCOUNT on btree-encoded set} {
         with_config zset-max-ziplist-entries 0 {
 
             r del zset
             for {set i 0} {$i < 10} {incr i} {
                 r zadd zset $i "key:$i"
             }
-            assert_encoding skiplist zset
+            assert_encoding btree zset
 
             assert_equal 10 [r zcount zset -inf +inf]
             assert_equal 4 [r zcount zset 3 6]
@@ -3106,14 +3106,14 @@ start_server {tags {"zset" "cluster:skip"}} {
         }
     }
 
-    test {ZLEXCOUNT on skiplist-encoded set} {
+    test {ZLEXCOUNT on btree-encoded set} {
         with_config zset-max-ziplist-entries 0 {
 
             r del zset
             foreach elem {a b c d e f} {
                 r zadd zset 0 $elem
             }
-            assert_encoding skiplist zset
+            assert_encoding btree zset
 
             assert_equal 6 [r zlexcount zset - +]
             assert_equal 3 [r zlexcount zset "\[b" "\[d"]

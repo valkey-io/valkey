@@ -30,7 +30,6 @@
 
 
 #include "server.h"
-#include "skiplist.h"
 #include "pqsort.h" /* Partial qsort for SORT+LIMIT */
 #include <math.h>   /* isnan() */
 #include "cluster.h"
@@ -325,7 +324,7 @@ void sortCommandGeneric(client *c, int readonly) {
     }
 
     /* Destructively convert encoded sorted sets for SORT. */
-    if (sortval->type == OBJ_ZSET) zsetConvert(sortval, OBJ_ENCODING_SKIPLIST);
+    if (sortval->type == OBJ_ZSET) zsetConvert(sortval, OBJ_ENCODING_BTREE);
 
     /* Obtain the length of the object to sort. */
     switch (sortval->type) {

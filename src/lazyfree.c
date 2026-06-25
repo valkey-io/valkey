@@ -142,7 +142,7 @@ size_t lazyfreeGetFreeEffort(robj *key, robj *obj, int dbid) {
     } else if (obj->type == OBJ_SET && obj->encoding == OBJ_ENCODING_HASHTABLE) {
         hashtable *ht = objectGetVal(obj);
         return hashtableSize(ht);
-    } else if (obj->type == OBJ_ZSET && obj->encoding == OBJ_ENCODING_SKIPLIST) {
+    } else if (obj->type == OBJ_ZSET && obj->encoding == OBJ_ENCODING_BTREE) {
         zset *zs = objectGetVal(obj);
         return orderedIndexLength(zs->oi);
     } else if (obj->type == OBJ_HASH && obj->encoding == OBJ_ENCODING_HASHTABLE) {

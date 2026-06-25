@@ -74,6 +74,7 @@ start_cluster 1 0 {tags {external:skip cluster}} {
     }
 
     test "cluster-announce-ip accepts empty string to reset" {
+        R 0 CONFIG SET cluster-announce-ip "192.168.1.100"
         R 0 CONFIG SET cluster-announce-ip ""
         assert_equal "" [lindex [R 0 CONFIG GET cluster-announce-ip] 1]
     }

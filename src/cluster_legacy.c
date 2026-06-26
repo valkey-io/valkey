@@ -4422,7 +4422,15 @@ int clusterProcessPacket(clusterLink *link) {
     } else if (type == CLUSTERMSG_TYPE_MFSTART) {
         /* This message is acceptable only if I'm a primary and the sender
          * is one of my replicas. */
-        if (!sender || sender->replicaof != myself) return 1;
+        if (!sender) {
+            serverLog(LL_NOTICE, "Ignoring MFSTART message from unknown node %.40s.", msg->sender);
+            return 1;
+        }
+        if (sender->replicaof != myself) {
+            serverLog(LL_NOTICE, "Ignoring MFSTART message from node %.40s (%s) that is not my replica.",
+                      sender->name, humanNodename(sender));
+            return 1;
+        }
         /* Manual failover requested from replicas. Initialize the state
          * accordingly. */
         resetManualFailover();

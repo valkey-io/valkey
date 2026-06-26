@@ -262,7 +262,7 @@ From the weekly meeting discussion on issue #2767:
 
 **Answer:** We stream from **the replica (S)**. N does standard chain replication from S. S already reads P's stream (normal replication) and forwards it to N. This is the simplest approach: no new protocol, no cross-server dual-channel, and no buffering on N. Validated on EKS: chain causes zero backpressure on P when pods are on isolated infrastructure.
 
-> 2. How to integrate this into the cluster mode. It can either be a first class component of the topology or it can just be a transient step.
+> 2. How to integrate this into the cluster mode. It can either be a first-class component of the topology or it can just be a transient step.
 
 **Answer:** Transient step. The cluster topology always shows N->P. The sibling connection is invisible to gossip. No new topology concepts or permanent chain replication are introduced. After sync, N is a normal replica of P.
 

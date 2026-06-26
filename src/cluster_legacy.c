@@ -6810,6 +6810,20 @@ static inline void removeAllNotOwnedShardChannelSubscriptions(void) {
  * REPLICA nodes handling
  * -------------------------------------------------------------------------- */
 
+/* Abort a transient sync-from-replica sibling sync when this node leaves replica
+ * mode. Invoked from both the cluster reconfiguration path (clusterSetPrimary)
+ * and the CLUSTER REPLICATE NO ONE promotion path, so the sibling target is
+ * always cleared and replication is redirected back to the real primary (or
+ * torn down). This avoids relying on replicationUnsetPrimary()'s internal
+ * cleanup, which does not clear the guard flag in every replication state (e.g.
+ * REPL_STATE_CONNECT). Safe to call when no sibling sync is in progress. */
+static void clusterAbortSiblingSyncIfActive(void) {
+    if (server.cluster_syncing_from_sibling) {
+        serverLog(LL_NOTICE, "Sync-from-replica: aborting sibling sync because this node is leaving replica mode");
+        replicationAbortSiblingSync();
+    }
+}
+
 /* Set the specified node 'n' as primary for this node.
  * If this node is currently a primary, it is turned into a replica. */
 static void clusterSetPrimary(clusterNode *n, int closeSlots, int full_sync_required) {
@@ -6817,10 +6831,7 @@ static void clusterSetPrimary(clusterNode *n, int closeSlots, int full_sync_requ
     serverAssert(myself->numslots == 0);
 
     /* Topology changes supersede the transient sibling sync target. */
-    if (server.cluster_syncing_from_sibling) {
-        serverLog(LL_NOTICE, "Sync-from-replica: aborting sibling sync due to cluster reconfiguration");
-        replicationAbortSiblingSync();
-    }
+    clusterAbortSiblingSyncIfActive();
 
     if (clusterNodeIsPrimary(myself)) {
         myself->flags &= ~(CLUSTER_NODE_PRIMARY | CLUSTER_NODE_MIGRATE_TO);
@@ -8103,6 +8114,12 @@ int clusterCommandSpecial(client *c) {
             sds client = catClientInfoShortString(sdsempty(), c, server.hide_user_data_from_log);
             serverLog(LL_NOTICE, "Stop replication and turning myself into empty primary (request from '%s').", client);
             sdsfree(client);
+            /* Leaving replica mode: clear any transient sibling sync target.
+             * Unlike clusterSetPrimary(), this promotion path does not go
+             * through replicationSetPrimary(), and replicationUnsetPrimary()
+             * does not clear the guard flag in every replication state (e.g.
+             * REPL_STATE_CONNECT), so abort the sibling sync explicitly here. */
+            clusterAbortSiblingSyncIfActive();
             clusterSetNodeAsPrimary(myself);
             flushAllDataAndResetRDB(server.repl_replica_lazy_flush ? EMPTYDB_ASYNC : EMPTYDB_NO_FLAGS);
             verifyClusterConfigWithData();

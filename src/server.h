@@ -1301,6 +1301,10 @@ typedef struct client {
     /* Input buffer and command parsing fields */
     sds querybuf;        /* Buffer we use to accumulate client queries. */
     size_t qb_pos;       /* The position we have read in querybuf. */
+    size_t qb_applied;   /* Right boundary of the *current* command in querybuf.
+                          * qb_pos may run ahead due to multi-command parsing, so
+                          * we use qb_applied (replicated clients only) to advance
+                          * reploff by exactly this command's bytes. */
     robj **argv;         /* Arguments of current command. */
     int argc;            /* Num of arguments of current command. */
     int argv_len;        /* Size of argv array (may be more than argc) */

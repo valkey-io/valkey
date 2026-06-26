@@ -5458,6 +5458,13 @@ void clusterSendFailoverAuthIfNeeded(clusterNode *node, clusterMsg *request) {
 
 /* Handle a FAILOVER_AUTH_NACK from a voter. */
 void clusterProcessFailoverAuthNack(clusterNode *sender, clusterMsg *request) {
+    /* Ignore NACKs from FAIL nodes to avoid double-counting: FAIL nodes are
+     * already accounted for in size_fail, and they will never ACK, so including
+     * their NACK would undercount achievable votes. */
+    if (nodeFailed(sender)) {
+        return;
+    }
+
     server.cluster->failover_auth_nack_count++;
 
     /* A voter that NACKed us in this epoch will not change its mind, so the

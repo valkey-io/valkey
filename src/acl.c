@@ -33,6 +33,7 @@
 #include "intset.h"
 #include <fcntl.h>
 #include <ctype.h>
+#include <sys/stat.h>
 
 #include "script.h"
 
@@ -2680,6 +2681,30 @@ static sds ACLLoadFromFile(const char *filename) {
     }
 }
 
+/* Check whether an existing ACL file can be written directly by this process.
+ * If the file does not exist, keep the existing ACL SAVE behavior and let the
+ * normal temp-file creation path handle it. */
+static int ACLCheckExistingFileWritableForSave(const char *filename) {
+    struct stat st;
+    int fd = -1;
+
+    if (stat(filename, &st) == -1) {
+        if (errno == ENOENT) return C_OK;
+
+        serverLog(LL_WARNING, "Checking ACL file for ACL SAVE: %s", strerror(errno));
+        return C_ERR;
+    }
+
+    fd = open(filename, O_WRONLY);
+    if (fd == -1) {
+        serverLog(LL_WARNING, "Existing ACL file is not writable for ACL SAVE: %s", strerror(errno));
+        return C_ERR;
+    }
+
+    close(fd);
+    return C_OK;
+}
+
 /* Generate a copy of the ACLs currently in memory in the specified filename.
  * Returns C_OK on success or C_ERR if there was an error during the I/O.
  * When C_ERR is returned a log is produced with hints about the issue. */
@@ -2688,6 +2713,8 @@ static int ACLSaveToFile(const char *filename) {
     int fd = -1;
     sds tmpfilename = NULL;
     int retval = C_ERR;
+
+    if (ACLCheckExistingFileWritableForSave(filename) == C_ERR) goto cleanup;
 
     /* Let's generate an SDS string containing the new version of the
      * ACL file. */

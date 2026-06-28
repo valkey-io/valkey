@@ -370,3 +370,49 @@ per-slot metric is consulted on every in-place mutation and an O(groups +
 consumers) walk on that hot path would be too costly).
 
 No changes to `db.c`, `networking.c`, or command dispatch are needed.
+
+---
+
+## Module types
+
+Modules expose only an approximate memory-usage callback today (used by
+`MEMORY USAGE`), which cannot be trivially reused for exact,
+incrementally-maintained per-slot accounting. Our approach does **not** rely on
+that callback. Instead, modules participate through a **delta API**: the module
+reports `+n`/`-n` against the per-slot counter on its own allocations and
+frees — the same incremental mechanism the built-in types use, so a
+participating module is accounted with the same fidelity as a native type.
+
+Support policy, by module category:
+
+- **Old (legacy) modules** — not supported; their keys do not contribute to
+  `memory-bytes`.
+- **Official modules** (Valkey Search, Valkey Bloom, Valkey JSON, ...) — we
+  provide the delta API and do the wiring ourselves. These will be exact.
+- **New modules** — opt-in via the delta API; using it correctly is the
+  module's responsibility.
+
+Shared/common (non-per-key) module memory (e.g. JSON's shared structures) is
+excluded, since it cannot be attributed to any single slot.
+
+A slot containing keys from a non-participating module will be under-counted.
+This is made *visible* (tracked scope is observable) rather than silently
+presented as authoritative for data the metric cannot see.
+
+---
+
+## Design decisions
+
+Resolved during design review (2026-06-23).
+
+- **Expiry metadata.** Included. Since the metric reflects actual allocated
+  memory, expiry information should be counted as part of the key's footprint
+  for as long as the key exists. The embedded expire field is already covered
+  by `zmalloc_size(val)` (it lives inside the value robj); if additional
+  per-key expiry structures are added in the future they should be included
+  too. The memory is only released (and subtracted from the counter) when the
+  key is actually evicted or expired.
+- **Always-on vs. configurable.** Whether accounting is unconditional or gated
+  behind a config will be decided based on measured performance. We are
+  comfortable always paying the small extra memory cost for the large
+  data-representation counters.

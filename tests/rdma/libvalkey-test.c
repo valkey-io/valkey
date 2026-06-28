@@ -16,7 +16,6 @@
 #define DEFAULT_CLIENTS 128
 #define DEFAULT_PIPELINE 384
 #define DEFAULT_REQUESTS 200000
-#define DEFAULT_DATASIZE 256
 #define MAX_KEY_LEN 128
 
 /* Global CLI parameters shared read-only by all worker threads. */
@@ -46,15 +45,6 @@ typedef struct client_state {
   int pending;         /* cmds appended but not yet drained this batch */
   valkeyContext *context;
 } client_state;
-
-static void usage(const char *proc) {
-  printf("%s usage:\n", proc);
-  rdmaTestPrintCommonUsage();
-  printf("\t--clients/-c CLIENTS\n");
-  printf("\t--pipeline/-P PIPELINE\n");
-  printf("\t--requests/-n REQUESTS\n");
-  printf("\t--datasize/-d DATASIZE\n");
-}
 
 static long long requests_for_client(const test_config *cfg, int client_id) {
   long long base = cfg->requests / cfg->clients;
@@ -299,7 +289,6 @@ static void parse_args(int argc, char **argv, test_config *cfg) {
       {"clients", required_argument, NULL, 'c'},
       {"pipeline", required_argument, NULL, 'P'},
       {"requests", required_argument, NULL, 'n'},
-      {"datasize", required_argument, NULL, 'd'},
       RDMA_TEST_OPTIONS_END,
   };
   int opt;
@@ -326,7 +315,7 @@ static void parse_args(int argc, char **argv, test_config *cfg) {
       cfg->requests = rdmaTestParsePositiveLongLong("--requests", optarg);
       break;
     case 'd':
-      cfg->datasize = rdmaTestParsePositiveInt("--datasize", optarg);
+      cfg->datasize = rdmaTestParseDatasize(optarg);
       break;
     case 'H':
       usage(argv[0]);
@@ -366,7 +355,7 @@ int main(int argc, char **argv) {
       .clients = DEFAULT_CLIENTS,
       .pipeline = DEFAULT_PIPELINE,
       .requests = DEFAULT_REQUESTS,
-      .datasize = DEFAULT_DATASIZE,
+      .datasize = RDMA_TEST_DEFAULT_DATASIZE_LIBVALKEY_TEST,
   };
   pthread_t *threads;
   worker_config *workers;

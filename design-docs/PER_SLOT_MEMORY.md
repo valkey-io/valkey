@@ -416,3 +416,27 @@ Resolved during design review (2026-06-23).
   behind a config will be decided based on measured performance. We are
   comfortable always paying the small extra memory cost for the large
   data-representation counters.
+
+---
+
+## Benchmark results
+
+Measured on the same EC2 instance, 1M operations, 50 clients. Baseline is
+upstream `unstable` at commit `aaa859d5` (2026-06-26); "With tracking" is the
+`per-slot-memory` branch with stream `tracked_memory_bytes` accounting active
+(cluster mode enabled).
+
+### Stream operations
+
+| Command | Baseline (ops/s) | With tracking (ops/s) | Δ% | p50 base (ms) | p50 track (ms) | p99 base (ms) | p99 track (ms) |
+|---|---|---|---|---|---|---|---|
+| XADD (small) | 97,456 | 96,217 | −1.3% | 0.479 | 0.487 | 0.735 | 0.756 |
+| XADD (512B) | 91,583 | 93,519 | +2.1% | 0.511 | 0.500 | 0.783 | 0.791 |
+| XTRIM MAXLEN | 96,805 | 98,954 | +2.2% | 0.479 | 0.471 | 0.743 | 0.743 |
+
+Each result is the average of 3 runs (1M ops, 50 clients per run).
+
+**Summary:** all stream operations are within noise of the baseline (±2%,
+well within run-to-run variance). The per-slot accounting overhead — a single
+`zmalloc_size` read before/after each listpack mutation — has no measurable
+throughput or latency impact.

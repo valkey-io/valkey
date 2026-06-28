@@ -19,13 +19,18 @@
       {"datasize", required_argument, NULL, 'd'}
 
 #define RDMA_TEST_OPTIONS_END {NULL, 0, NULL, 0}
-#define RDMA_TEST_COMMON_SHORT_OPTS "Hh:p:t:"
+#define RDMA_TEST_COMMON_SHORT_OPTS "Hh:p:t:d"
 
-typedef struct rdma_test_config {
+typedef struct {
   const char *host;
   int port;
   int threads;
   size_t datasize;
+  int minkeys;
+  int maxkeys;
+  int clients;
+  int pipeline;
+  long long requests;
 } rdma_test_config;
 
 static inline void usage(const char *proc) {

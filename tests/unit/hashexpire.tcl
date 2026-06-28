@@ -4874,6 +4874,55 @@ start_server {} {
     } {OK} {needs:debug}
 }}}
 
+
+start_server {tags {"hashexpire external:skip"}} {
+    test {Assertion check pass when tracking volatile fields object with a valid key} {
+        r del target_hash
+        
+        r hset valid_test_hash field1 "data"
+        r hexpire valid_test_hash 60 FIELDS 1 field1
+
+        set status [catch {
+            r hset valid_test_hash field1 "updated_data"
+        } err]
+
+        assert_equal 0 $status
+    }
+
+    test {Assertion check failure when tracking volatile fields object without a valid key} {
+    r del target_hash
+
+        # 1. Create a tiny hash (this forces Valkey to use Listpack encoding)
+        r hset target_hash field1 "short_value"
+        
+        # 2. Set a 1-second expiration on that field
+        r hexpire target_hash 1 FIELDS 1 field1
+
+        # 3. Wait out the 1-second window so the field is logically expired
+        after 1100
+
+        # 4. TRIGGER THE NULL KEY PATH:
+        # We push a massive 5000-character string into a NEW field.
+        # This syntax is perfect, and the key is a Hash, so NO early errors can happen.
+        # 
+        # Inside the C Engine:
+        # - Valkey sees the huge string and says: "This hash is too big for a Listpack! 
+        #   I must convert it to a Hashtable right now."
+        # - During hashTypeConvert(), it copies old elements. It hits 'field1', realizes 
+        #   it is expired, drops it, and invokes dbUntrackKeyWithVolatileItems().
+        # - Because this happens inside a transient conversion object before it is 
+        #   linked back to "target_hash", the key context lookup yields NULL.
+        set catch_status [catch {
+            r hset target_hash field2 [string repeat "A" 5000]
+        } catch_err]
+
+        # 5. Validation:
+        # Your server_assert(key != NULL) will catch this mid-conversion ghost state,
+        # crash the server instantly, and return a 1 with a network I/O error.
+        assert_equal 1 $catch_status
+    }
+}
+
 start_server {tags {"hashexpire"}} {
     test {Hash is skipped when all fields are expired during RDB load on primary} {
         r FLUSHALL

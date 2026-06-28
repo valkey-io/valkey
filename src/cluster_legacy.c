@@ -1370,8 +1370,7 @@ static void updateCommandLatencyStats(clusterNode *node, uint32_t current_rtt){
     if(node -> avg_round_trip_time == 0) {
         node -> avg_round_trip_time = current_rtt;
     } else {
-        // TODO - hard codedf window length & weightage for exponential moving average, replace with configurable values
-        node -> avg_round_trip_time = (node -> avg_round_trip_time * 8 + current_rtt) / 10 ;
+        node -> avg_round_trip_time = (node -> avg_round_trip_time * server.load_factor_historic_rtt_latency + current_rtt) / server.sliding_window_length_rtt_latency_stats ;
     }
     clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG);
 }
@@ -3589,7 +3588,7 @@ void clusterProcessPingExtensions(clusterMsg *hdr, clusterLink *link) {
             clusterMsgPingExtAvailabilityZone *availability_zone_ext =
                 (clusterMsgPingExtAvailabilityZone *)&(ext->ext[0].availability_zone);
             ext_availability_zone = availability_zone_ext->availability_zone;
-        } else if (type == CLUSTERMSG_EXT_TYPE_PING_ECHO_TIME) {
+        } else if (link!=NULL && type == CLUSTERMSG_EXT_TYPE_PING_ECHO_TIME) {
             // printf("Received ping echo time extension for setting value %llu\n", ntohu64(((clusterMsgPingExtEchoTime *)&(ext->ext[0].ping_echo_time))->ping_echo_time));
             clusterMsgPingExtEchoTime *ping_echo_time_ext =
                 (clusterMsgPingExtEchoTime *)&(ext->ext[0].ping_echo_time);
@@ -7329,16 +7328,16 @@ void addNodeDetailsToShardReply(client *c, clusterNode *node) {
     }
 
     if(server.cluster_nodes_latency_stats_enabled) {
-        if (node->max_round_trip_time) {
+        // if (node->max_round_trip_time) {
             addReplyBulkCString(c, "max-round-trip-time");
             addReplyLongLong(c, node->max_round_trip_time);
             reply_count++;
-        }
-        if (node->avg_round_trip_time) {
+        // }
+        // if (node->avg_round_trip_time) {
             addReplyBulkCString(c, "avg-round-trip-time");
             addReplyLongLong(c, node->avg_round_trip_time);
             reply_count++;
-        }
+        // }
     }
 
     setDeferredMapLen(c, node_replylen, reply_count);

@@ -69,6 +69,30 @@ int streamParseIDOrReply(client *c, robj *o, streamID *id, uint64_t missing_seq)
  * Low level stream encoding: a radix tree of listpacks.
  * ----------------------------------------------------------------------- */
 
+/* Helpers to keep stream->tracked_memory_bytes in sync with the *allocated*
+ * size of the listpacks in the rax. We use zmalloc_size(lp) (not lpBytes),
+ * because stream nodes are over-allocated on creation and only shrunk to fit
+ * when they are sealed (see streamShrinkLpToFit), so the allocated size is the
+ * real memory footprint. Callers that mutate a listpack in place should
+ * instead bracket the change with a zmalloc_size() read before and after. */
+static void streamTrackLpAdd(stream *s, unsigned char *lp) {
+    s->tracked_memory_bytes += zmalloc_size(lp);
+}
+
+/* Account for a listpack about to be removed. Must be called *before* lpFree. */
+static void streamTrackLpRemove(stream *s, unsigned char *lp) {
+    s->tracked_memory_bytes -= zmalloc_size(lp);
+}
+
+/* Shrink `lp` to fit and account the reclaimed bytes against the stream's
+ * tracked_memory_bytes. Returns the (possibly reallocated) listpack. */
+static unsigned char *streamShrinkLpToFit(stream *s, unsigned char *lp) {
+    size_t before = zmalloc_size(lp);
+    lp = lpShrinkToFit(lp);
+    s->tracked_memory_bytes += zmalloc_size(lp) - before; /* delta is <= 0 */
+    return lp;
+}
+
 /* Create a new stream data structure. */
 stream *streamNew(void) {
     stream *s = zmalloc(sizeof(*s));
@@ -81,6 +105,7 @@ stream *streamNew(void) {
     s->max_deleted_entry_id.seq = 0;
     s->max_deleted_entry_id.ms = 0;
     s->entries_added = 0;
+    s->tracked_memory_bytes = 0;
     s->cgroups = NULL; /* Created on demand to save memory when not used. */
     return s;
 }
@@ -90,6 +115,14 @@ void freeStream(stream *s) {
     raxFreeWithCallback(s->rax, lpFreeVoid);
     if (s->cgroups) raxFreeWithCallback(s->cgroups, streamFreeCGVoid);
     zfree(s);
+}
+
+/* Return the approximate memory footprint of the stream in bytes: the stream
+ * struct, the data radix tree (its struct and nodes), and the listpacks held
+ * in that tree (tracked incrementally in tracked_memory_bytes). All terms are
+ * O(1). Consumer group memory (s->cgroups) is not yet included. */
+size_t streamMemUsage(const stream *s) {
+    return sizeof(*s) + raxAllocSize(s->rax) + s->tracked_memory_bytes;
 }
 
 /* Return the length of a stream. */
@@ -187,6 +220,10 @@ robj *streamDup(robj *o) {
         memcpy(new_lp, lp, lp_bytes);
         memcpy(rax_key, ri.key, sizeof(rax_key));
         raxInsert(new_s->rax, (unsigned char *)&rax_key, sizeof(rax_key), new_lp, NULL);
+        /* The copy is allocated exact-fit, which may differ from the source
+         * node's allocated size, so account each new node individually rather
+         * than copying s->tracked_memory_bytes verbatim. */
+        streamTrackLpAdd(new_s, new_lp);
     }
     new_s->length = s->length;
     new_s->first_id = s->first_id;
@@ -475,13 +512,15 @@ int streamAppendItem(stream *s, robj **argv, int64_t numfields, streamID *added_
     raxStart(&ri, s->rax);
     raxSeek(&ri, "$", NULL, 0);
 
-    size_t lp_bytes = 0;      /* Total bytes in the tail listpack. */
-    unsigned char *lp = NULL; /* Tail listpack pointer. */
+    size_t lp_bytes = 0;        /* Logical bytes in the tail listpack (for the node-full check). */
+    size_t lp_alloc_before = 0; /* Allocated bytes of the tail listpack, for memory tracking. */
+    unsigned char *lp = NULL;   /* Tail listpack pointer. */
 
     if (!raxEOF(&ri)) {
         /* Get a reference to the tail node listpack. */
         lp = ri.data;
         lp_bytes = lpBytes(lp);
+        lp_alloc_before = zmalloc_size(lp);
     }
     raxStop(&ri);
 
@@ -540,8 +579,8 @@ int streamAppendItem(stream *s, robj **argv, int64_t numfields, streamID *added_
         }
 
         if (new_node) {
-            /* Shrink extra pre-allocated memory */
-            lp = lpShrinkToFit(lp);
+            /* Shrink extra pre-allocated memory, accounting the reclaimed bytes. */
+            lp = streamShrinkLpToFit(s, lp);
             if (ri.data != lp) raxInsert(s->rax, ri.key, ri.key_len, lp, NULL);
             lp = NULL;
         }
@@ -549,6 +588,9 @@ int streamAppendItem(stream *s, robj **argv, int64_t numfields, streamID *added_
 
     int flags = STREAM_ITEM_FLAG_NONE;
     if (lp == NULL) {
+        /* New listpack — the (now sealed) old node was already accounted by
+         * streamShrinkLpToFit above, so this XADD's tracking baseline is 0. */
+        lp_alloc_before = 0;
         primary_id = id;
         streamEncodeID(rax_key, &id);
         /* Create the listpack having the primary entry ID and fields.
@@ -654,6 +696,7 @@ int streamAppendItem(stream *s, robj **argv, int64_t numfields, streamID *added_
     if (ri.data != lp) raxInsert(s->rax, (unsigned char *)&rax_key, sizeof(rax_key), lp, NULL);
     s->length++;
     s->entries_added++;
+    s->tracked_memory_bytes += zmalloc_size(lp) - lp_alloc_before;
     s->last_id = id;
     if (s->length == 1) s->first_id = id;
     if (added_id) *added_id = id;
@@ -749,6 +792,7 @@ int64_t streamTrim(stream *s, streamAddTrimArgs *args) {
         }
 
         if (remove_node) {
+            streamTrackLpRemove(s, lp);
             lpFree(lp);
             raxRemove(s->rax, ri.key, ri.key_len, NULL);
             raxSeek(&ri, ">=", ri.key, ri.key_len);
@@ -762,6 +806,7 @@ int64_t streamTrim(stream *s, streamAddTrimArgs *args) {
         if (approx) break;
 
         /* Now we have to trim entries from within 'lp' */
+        size_t lp_alloc_before_trim = zmalloc_size(lp);
         int64_t deleted_from_lp = 0;
 
         p = lpNext(lp, p); /* Skip deleted field. */
@@ -846,6 +891,7 @@ int64_t streamTrim(stream *s, streamAddTrimArgs *args) {
         }
 
         /* Update the listpack with the new pointer. */
+        s->tracked_memory_bytes += zmalloc_size(lp) - lp_alloc_before_trim;
         raxInsert(s->rax, ri.key, ri.key_len, lp, NULL);
 
         break; /* If we are here, there was enough to delete in the current
@@ -1264,6 +1310,9 @@ void streamIteratorRemoveEntry(streamIterator *si, streamID *current) {
      * We start flagging: */
     int64_t flags = lpGetInteger(si->lp_flags);
     flags |= STREAM_ITEM_FLAG_DELETED;
+    /* Allocated size already reflected in tracked_memory_bytes (captured before
+     * the lpReplaceInteger below, which may reallocate). */
+    size_t lp_alloc_before = zmalloc_size(lp);
     lp = lpReplaceInteger(lp, &si->lp_flags, flags);
 
     /* Change the valid/deleted entries count in the primary entry. */
@@ -1273,6 +1322,7 @@ void streamIteratorRemoveEntry(streamIterator *si, streamID *current) {
     if (aux == 1) {
         /* If this is the last element in the listpack, we can remove the whole
          * node. */
+        si->stream->tracked_memory_bytes -= lp_alloc_before;
         lpFree(lp);
         raxRemove(si->stream->rax, si->ri.key, si->ri.key_len, NULL);
     } else {
@@ -1283,6 +1333,7 @@ void streamIteratorRemoveEntry(streamIterator *si, streamID *current) {
         lp = lpReplaceInteger(lp, &p, aux + 1);
 
         /* Update the listpack with the new pointer. */
+        si->stream->tracked_memory_bytes += zmalloc_size(lp) - lp_alloc_before;
         if (si->lp != lp) raxInsert(si->stream->rax, si->ri.key, si->ri.key_len, lp, NULL);
     }
 

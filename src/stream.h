@@ -21,6 +21,7 @@ typedef struct stream {
     streamID first_id;             /* The first non-tombstone entry, zero if empty. */
     streamID max_deleted_entry_id; /* The maximal ID that was deleted. */
     uint64_t entries_added;        /* All time count of elements added. */
+    size_t tracked_memory_bytes;   /* Sum of allocated bytes (zmalloc_size) of all listpacks in the rax. */
 } stream;
 
 /* We define an iterator to iterate stream items in an abstract way, without
@@ -115,6 +116,7 @@ struct client;
 
 stream *streamNew(void);
 void freeStream(stream *s);
+size_t streamMemUsage(const stream *s);
 unsigned long streamLength(const robj *subject);
 size_t streamReplyWithRange(client *c,
                             stream *s,

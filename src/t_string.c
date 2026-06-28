@@ -456,6 +456,7 @@ void setrangeCommand(client *c) {
 
         o = createObject(OBJ_STRING, sdsnewlen(NULL, offset + sdslen(value)));
         dbAdd(c->db, c->argv[1], &o);
+        memcpy((char *)objectGetVal(o) + offset, value, sdslen(value));
     } else {
         size_t olen;
 
@@ -476,10 +477,9 @@ void setrangeCommand(client *c) {
 
         /* Create a copy when the object is shared or encoded. */
         o = dbUnshareStringValue(c->db, c->argv[1], o);
+        objectSetVal(o, sdsgrowzero(objectGetVal(o), offset + sdslen(value)));
+        memcpy((char *)objectGetVal(o) + offset, value, sdslen(value));
     }
-
-    objectSetVal(o, sdsgrowzero(objectGetVal(o), offset + sdslen(value)));
-    memcpy((char *)objectGetVal(o) + offset, value, sdslen(value));
     signalModifiedKey(c, c->db, c->argv[1]);
     notifyKeyspaceEvent(NOTIFY_STRING, "setrange", c->argv[1], c->db->id);
     server.dirty++;
@@ -713,6 +713,7 @@ void incrDecrCommand(client *c, long long incr) {
     if (o && o->refcount == 1 && o->encoding == OBJ_ENCODING_INT &&
         value >= LONG_MIN && value <= LONG_MAX) {
         new = o;
+        /* In-place INT mutation; digit count may change. */
         objectSetVal(o, (void *)((long)value));
     } else {
         new = createStringObjectFromLongLongForValue(value);

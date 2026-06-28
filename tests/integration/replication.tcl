@@ -987,17 +987,16 @@ start_server {tags {"repl external:skip"} overrides {save ""}} {
                         # surfaces on the (streaming sync) path instead. Both
                         # are legitimate timeout-driven disconnects.
                         $master config set repl-timeout 2
-                        if {[catch {
-                            wait_for_log_messages -2 {"*Disconnecting timedout replica (full sync)*"} $loglines 100 100
-                        }]} {
-                            wait_for_log_messages -2 {"*Disconnecting timedout replica (streaming sync)*"} $loglines 100 100
-                        }
+                        wait_for_log_messages -2 {
+                            "*Disconnecting timedout replica (full sync)*"
+                            "*Disconnecting timedout replica (streaming sync)*"
+                        } $loglines 100 100
+                        $master config set repl-timeout 60
                         # Guard against silently broadening the assertion: the
                         # slow replica must time out exactly once across both
                         # branches in this subcase.
                         assert_equal 1 [count_log_message -2 "Disconnecting timedout replica"] \
                             "expected exactly one 'Disconnecting timedout replica' log entry (full sync or streaming sync) for the slow replica"
-                        $master config set repl-timeout 60
                     }
 
                     # Use a single generous budget for all subcases; successful

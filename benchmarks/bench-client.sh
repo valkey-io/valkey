@@ -136,7 +136,7 @@ echo "============================================================"
 echo ""
 
 # --- XADD (small entries) ---
-echo "[1/4] XADD (small entries) — $ITERATIONS iterations..."
+echo "[1/4] XADD (3B value) — $ITERATIONS iterations..."
 BENCH_SETUP_FN=""
 read ops1 p50_1 p99_1 <<< $(run_bench "xadd_small" -t xadd)
 
@@ -181,7 +181,7 @@ echo "============================================================"
 echo ""
 printf "%-25s  %12s  %8s  %8s\n" "Command" "ops/sec" "p50(ms)" "p99(ms)"
 printf "%-25s  %12s  %8s  %8s\n" "-------" "-------" "-------" "-------"
-printf "%-25s  %12s  %8s  %8s\n" "XADD (small)"  "$ops1" "$p50_1" "$p99_1"
+printf "%-25s  %12s  %8s  %8s\n" "XADD (3B)"     "$ops1" "$p50_1" "$p99_1"
 printf "%-25s  %12s  %8s  %8s\n" "XADD (512B)"   "$ops2" "$p50_2" "$p99_2"
 printf "%-25s  %12s  %8s  %8s\n" "XTRIM MAXLEN"  "$ops3" "$p50_3" "$p99_3"
 printf "%-25s  %12s  %8s  %8s\n" "XDEL"          "$ops4" "$p50_4" "$p99_4"

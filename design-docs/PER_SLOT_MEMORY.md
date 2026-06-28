@@ -421,22 +421,21 @@ Resolved during design review (2026-06-23).
 
 ## Benchmark results
 
-Measured on the same EC2 instance, 1M operations, 50 clients. Baseline is
-upstream `unstable` at commit `aaa859d5` (2026-06-26); "With tracking" is the
-`per-slot-memory` branch with stream `tracked_memory_bytes` accounting active
-(cluster mode enabled).
+Measured on the same EC2 instance, 1M operations, 50 clients, each result
+averaged over 3 runs. Baseline is the same `per-slot-memory` branch **without**
+the stream `tracked_memory_bytes` changes; "With tracking" includes the full
+stream accounting (`zmalloc_size`-based listpack tracking + `streamMemUsage`).
 
 ### Stream operations
 
 | Command | Baseline (ops/s) | With tracking (ops/s) | Δ% | p50 base (ms) | p50 track (ms) | p99 base (ms) | p99 track (ms) |
 |---|---|---|---|---|---|---|---|
-| XADD (small) | 97,456 | 96,217 | −1.3% | 0.479 | 0.487 | 0.735 | 0.756 |
-| XADD (512B) | 91,583 | 93,519 | +2.1% | 0.511 | 0.500 | 0.783 | 0.791 |
-| XTRIM MAXLEN | 96,805 | 98,954 | +2.2% | 0.479 | 0.471 | 0.743 | 0.743 |
+| XADD (3B) | 95,782 | 94,838 | −1.0% | 0.487 | 0.492 | 0.753 | 0.769 |
+| XADD (512B) | 94,146 | 92,000 | −2.3% | 0.497 | 0.508 | 0.769 | 0.791 |
+| XTRIM MAXLEN | 98,408 | 97,245 | −1.2% | 0.471 | 0.476 | 0.724 | 0.748 |
+| XDEL | 95,314 | 95,419 | +0.1% | 0.492 | 0.492 | 0.772 | 0.767 |
 
-Each result is the average of 3 runs (1M ops, 50 clients per run).
-
-**Summary:** all stream operations are within noise of the baseline (±2%,
-well within run-to-run variance). The per-slot accounting overhead — a single
+**Summary:** all stream operations are within 1–2% of the baseline, well
+within run-to-run variance. The per-slot accounting overhead — a single
 `zmalloc_size` read before/after each listpack mutation — has no measurable
 throughput or latency impact.

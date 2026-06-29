@@ -171,7 +171,7 @@ unsigned long orderedIndexDeleteRangeByLex(OrderedIndex *oi, const_sds min, cons
     if (fbtreeLength(fbt) == 0) return 0;
     if (max == shared.minstring || min == shared.maxstring) return 0;
 
-    const_sds first = fbtreeGetAtRank(fbt, 0);
+    const_sds first = fbtreePeekMin(fbt);
     if (!first) return 0;
     uint64_t score_prefix;
     memcpy(&score_prefix, first, SCORE_SIZE);
@@ -285,7 +285,7 @@ unsigned long orderedIndexCountLexRange(const OrderedIndex *oi, const_sds min, c
     if (min == shared.minstring && max == shared.maxstring) return len;
     if (max == shared.minstring || min == shared.maxstring) return 0;
 
-    const_sds first = fbtreeGetAtRank(fbt, 0);
+    const_sds first = fbtreePeekMin(fbt);
     if (!first) return 0;
     uint64_t score_prefix;
     memcpy(&score_prefix, first, SCORE_SIZE);
@@ -485,7 +485,7 @@ void orderedIndexSeekToLexRange(OrderedIndexIterator *iter, const_sds min, const
     if (!fbt || fbtreeLength(fbt) == 0) return;
 
     /* Get score prefix from first element (all share same score in lex zsets) */
-    const_sds first = fbtreeGetAtRank(fbt, 0);
+    const_sds first = fbtreePeekMin(fbt);
     if (!first) return;
     uint64_t score_prefix;
     memcpy(&score_prefix, first, SCORE_SIZE);

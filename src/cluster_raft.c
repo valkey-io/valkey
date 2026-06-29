@@ -41,13 +41,42 @@
 
 #include <arpa/inet.h>
 
-/* Generic error message returned to clients when a proposal is rejected. */
+/* Result codes for proposal pre-validation and apply-time validation.
+ * Used for control flow instead of comparing human-readable error strings. */
+typedef enum {
+    RAFT_RESULT_OK = 0,      /* Proposal is valid / applied successfully. */
+    RAFT_RESULT_STALE_EPOCH, /* Rejected due to stale shard epoch (retryable). */
+    RAFT_RESULT_REJECTED,    /* Rejected for other reasons (terminal). */
+} RaftProposalResult;
+
+/* Human-readable error messages returned to clients via callbacks. */
 #define GENERIC_PROPOSAL_REJECTION_MSG "proposal rejected by raft leader"
 #define STALE_SHARD_EPOCH_REJECTION_MSG "proposal rejected due to stale shard epoch"
 
-/* REJECT message reason constants. */
-#define REJECT_REASON_CONFLICT "conflict" /* Retryable due to stale epoch */
-#define REJECT_REASON_SYNTAX "syntax"
+/* Wire-protocol tokens used in REJECT proposal between leader -> follower. */
+#define REJECT_WIRE_CONFLICT "conflict" /* for stale shard epoch validation fail. */
+#define REJECT_WIRE_REJECTED "rejected" /* for any other validation fail. */
+
+/* Map a RaftProposalResult to a human-readable error string for client replies.
+ * Returns NULL for RAFT_RESULT_OK (no error). */
+static inline const char *raftProposalResultMsg(RaftProposalResult result) {
+    switch (result) {
+    case RAFT_RESULT_OK: return NULL;
+    case RAFT_RESULT_STALE_EPOCH: return STALE_SHARD_EPOCH_REJECTION_MSG;
+    case RAFT_RESULT_REJECTED: return GENERIC_PROPOSAL_REJECTION_MSG;
+    }
+    return GENERIC_PROPOSAL_REJECTION_MSG;
+}
+
+/* Map a RaftProposalResult to a wire-protocol token for REJECT messages. */
+static inline const char *raftProposalResultWireReason(RaftProposalResult result) {
+    return (result == RAFT_RESULT_STALE_EPOCH) ? REJECT_WIRE_CONFLICT : REJECT_WIRE_REJECTED;
+}
+
+/* Parse a wire-protocol REJECT reason token back to a RaftProposalResult. */
+static inline RaftProposalResult raftProposalResultFromWire(const char *reason) {
+    return (!strcasecmp(reason, REJECT_WIRE_CONFLICT)) ? RAFT_RESULT_STALE_EPOCH : RAFT_RESULT_REJECTED;
+}
 
 /* From module.c */
 void moduleCallClusterReceivers(const char *sender_id, uint64_t module_id, uint8_t type, const unsigned char *payload, uint32_t len);
@@ -223,7 +252,7 @@ typedef struct {
 #define RAFT_HDR_SIZE 8
 #define REPL_OFFSETS_BROADCAST_PERIOD_MS 10000
 #define RAFT_LOG_REWRITE_THRESHOLD 100
-#define PROPOSAL_MAX_RETRIES 5
+#define PROPOSAL_MAX_RETRIES 10
 
 /* Monotonic millisecond clock for timeouts and failure detection.
  * Unlike gettimeofday(), this is not affected by system clock adjustments. */
@@ -331,8 +360,8 @@ static clusterMsgSendBlock *clusterRaftBuildAllOffsetsMsg(void) {
 
 static void clusterRaftPropose(sds entry, void *ctx, void (*callback)(void *ctx, const char *error));
 static void clusterRaftDeferPendingProposals(void);
-static void clusterRaftCompletePendingProposal(int type, sds data, const char *error);
-static const char *clusterRaftPreValidate(int type, sds data);
+static void clusterRaftCompletePendingProposal(int type, sds data, RaftProposalResult result);
+static RaftProposalResult clusterRaftPreValidate(int type, sds data);
 static void clusterRaftAutoFailoverCallback(void *ctx, const char *error);
 static void clusterRaftSlotChange(slotRange *ranges, int numranges, clusterNode *target, void *ctx, void (*callback)(void *ctx, const char *error));
 static void clusterRaftUpdateMyself(int old_flags);
@@ -342,10 +371,10 @@ static void clusterRaftBroadcastAppendEntries(void);
 static void clusterRaftSendAppendEntries(clusterLink *link, clusterNode *node);
 static void clusterRaftSendPreVoteRequest(clusterLink *link, uint64_t term);
 static void clusterRaftUnblockMeet(clusterNode *node);
-static const char *clusterRaftApplySlotChange(sds data, int validate_only);
-static const char *clusterRaftApplySetReplica(sds data, int validate_only);
-static const char *clusterRaftApplyFailover(sds data, int validate_only);
-static const char *clusterRaftApplyNodeForget(sds data, int validate_only);
+static RaftProposalResult clusterRaftApplySlotChange(sds data, int validate_only);
+static RaftProposalResult clusterRaftApplySetReplica(sds data, int validate_only);
+static RaftProposalResult clusterRaftApplyFailover(sds data, int validate_only);
+static RaftProposalResult clusterRaftApplyNodeForget(sds data, int validate_only);
 static void raftLogApply(raftLogEntry *e);
 static raftLogEntry *raftLogCreate(uint64_t term, uint64_t index, uint8_t type, sds data);
 static void raftLogAppend(raftLogEntry *e);
@@ -797,9 +826,9 @@ static void clusterRaftPropose(sds entry, void *ctx, void (*callback)(void *ctx,
 
     if (rs->role == RAFT_ROLE_LEADER) {
         /* Pre-validate on the leader to reject obviously stale/invalid proposals. */
-        const char *pre_error = clusterRaftPreValidate(type, data);
-        if (pre_error) {
-            if (callback) callback(ctx, pre_error);
+        RaftProposalResult pre_result = clusterRaftPreValidate(type, data);
+        if (pre_result != RAFT_RESULT_OK) {
+            if (callback) callback(ctx, raftProposalResultMsg(pre_result));
             sdsfree(data);
             return;
         }
@@ -996,13 +1025,13 @@ static int raftRefreshEpochInData(int type, sds *data) {
 /* Parsed fields from a SLOT_CHANGE entry's epoch-related data.
  * Format: "<source-id-or-dash> <source-epoch> <target-id-or-dash> <target-epoch> <ranges...>" */
 typedef struct {
-    clusterNode *target_node;   /* NULL if dash */
-    clusterNode *source_node;   /* NULL if dash */
-    const char *source_shard_id; /* source_owner->shard_id or NULL. */
-    const char *target_shard_id; /* target->shard_id or NULL. */
+    clusterNode *target_node;    /* NULL if dash */
+    clusterNode *source_node;    /* NULL if dash */
+    const char *source_shard_id; /* source_node->shard_id or NULL. */
+    const char *target_shard_id; /* target_node->shard_id or NULL. */
     uint64_t source_epoch;
     uint64_t target_epoch;
-    int range_end; /* Index in argv where ranges begin (first range element). */
+    int range_start_arg; /* Index in argv where ranges begin (first range element). */
 } slotChangeEpochInfo;
 
 /* Parse fields from a SLOT_CHANGE entry's split argv.
@@ -1014,18 +1043,18 @@ static bool parseSlotChangeEpochs(sds *argv, int argc, slotChangeEpochInfo *info
 
     /* argv[0] = source-id-or-dash */
     info->source_node = (sdslen(argv[0]) == CLUSTER_NAMELEN)
-                             ? clusterLookupNode(argv[0], CLUSTER_NAMELEN)
-                             : NULL;
+                            ? clusterLookupNode(argv[0], CLUSTER_NAMELEN)
+                            : NULL;
     /* argv[1] = source-epoch */
     info->source_epoch = strtoull(argv[1], NULL, 10);
     /* argv[2] = target-id-or-dash */
     info->target_node = (sdslen(argv[2]) == CLUSTER_NAMELEN)
-                       ? clusterLookupNode(argv[2], CLUSTER_NAMELEN)
-                       : NULL;
+                            ? clusterLookupNode(argv[2], CLUSTER_NAMELEN)
+                            : NULL;
     /* argv[3] = target-epoch */
     info->target_epoch = strtoull(argv[3], NULL, 10);
     /* argv[4..argc-1] = ranges */
-    info->range_end = 4;
+    info->range_start_arg = 4;
 
     info->source_shard_id = info->source_node ? info->source_node->shard_id : NULL;
     info->target_shard_id = info->target_node ? info->target_node->shard_id : NULL;
@@ -1034,31 +1063,31 @@ static bool parseSlotChangeEpochs(sds *argv, int argc, slotChangeEpochInfo *info
 
 /* Pre-validate a proposal on the leader before appending to the log.
  * Reuses the apply functions in validate_only mode.
- * Returns NULL if valid, or an error string (STALE_SHARD_EPOCH_REJECTION_MSG
- * or GENERIC_PROPOSAL_REJECTION_MSG) describing why it failed. */
-static const char *clusterRaftPreValidate(int type, sds data) {
-    const char *error = NULL;
+ * Returns RAFT_RESULT_OK if valid, or RAFT_RESULT_STALE_EPOCH /
+ * RAFT_RESULT_REJECTED describing why it failed. */
+static RaftProposalResult clusterRaftPreValidate(int type, sds data) {
+    RaftProposalResult result = RAFT_RESULT_OK;
     switch (type) {
     case RAFT_ENTRY_FAILOVER:
-        error = clusterRaftApplyFailover(data, 1);
+        result = clusterRaftApplyFailover(data, 1);
         break;
     case RAFT_ENTRY_SET_REPLICA_OF:
-        error = clusterRaftApplySetReplica(data, 1);
+        result = clusterRaftApplySetReplica(data, 1);
         break;
     case RAFT_ENTRY_SLOT_CHANGE:
-        error = clusterRaftApplySlotChange(data, 1);
+        result = clusterRaftApplySlotChange(data, 1);
         break;
     case RAFT_ENTRY_NODE_FORGET:
-        error = clusterRaftApplyNodeForget(data, 1);
+        result = clusterRaftApplyNodeForget(data, 1);
         break;
     default:
         break;
     }
-    if (error) {
+    if (result != RAFT_RESULT_OK) {
         serverLog(LL_NOTICE, "Leader pre-validation: rejecting %s proposal (%s). data: %s",
-                  raftEntryTypeName(type), error, data);
+                  raftEntryTypeName(type), raftProposalResultMsg(result), data);
     }
-    return error;
+    return result;
 }
 
 static int clusterRaftProcessPropose(clusterLink *link, int argc, sds *argv) {
@@ -1080,16 +1109,12 @@ static int clusterRaftProcessPropose(clusterLink *link, int argc, sds *argv) {
     sds data = (argc >= 3) ? sdsjoinsds(argv + 2, argc - 2, " ", 1) : sdsempty();
 
     /* Pre-validate on the leader to reject stale/invalid proposals. */
-    const char *pre_error = clusterRaftPreValidate(type, data);
-    if (pre_error) {
-        /* Send REJECT back to the proposing follower so it can unblock the client.
-         * Reason "conflict" signals a retryable epoch conflict; "syntax" is terminal. */
+    RaftProposalResult pre_result = clusterRaftPreValidate(type, data);
+    if (pre_result != RAFT_RESULT_OK) {
+        /* Send REJECT back to the proposing follower so it can unblock the client. */
         if (link) {
-            const char *reason = (strcmp(pre_error, STALE_SHARD_EPOCH_REJECTION_MSG) == 0)
-                                     ? REJECT_REASON_CONFLICT
-                                     : REJECT_REASON_SYNTAX;
             sds msg = wireNewMsg("REJECT");
-            msg = sdscatfmt(msg, " %s ", reason);
+            msg = sdscatfmt(msg, " %s ", raftProposalResultWireReason(pre_result));
             msg = sdscatlen(msg, entry, sdslen(entry));
             msg = wireFinishMsg(msg);
             clusterRaftSendMsg(link, msg);
@@ -1119,7 +1144,7 @@ static int clusterRaftProcessPropose(clusterLink *link, int argc, sds *argv) {
  * pending_proposals and fire the callback with an error so the client
  * gets an immediate reply instead of hanging until timeout.
  * Format: "REJECT <reason> <type> <data...>"
- * <reason> is a single word: "conflict" (retryable epoch), "syntax", etc. */
+ * <reason> is a single word: "conflict" (retryable epoch), "rejected" (terminal), etc. */
 static int clusterRaftProcessReject(clusterLink *link, int argc, sds *argv) {
     UNUSED(link);
 
@@ -1133,14 +1158,9 @@ static int clusterRaftProcessReject(clusterLink *link, int argc, sds *argv) {
     int data_argc = argc - 3;
     sds data = (data_argc > 0) ? sdsjoinsds(argv + 3, data_argc, " ", 1) : sdsempty();
 
-    const char *error;
-    if (!strcasecmp(reason, REJECT_REASON_CONFLICT)) {
-        error = STALE_SHARD_EPOCH_REJECTION_MSG;
-    } else {
-        error = GENERIC_PROPOSAL_REJECTION_MSG;
-    }
+    RaftProposalResult result = raftProposalResultFromWire(reason);
 
-    clusterRaftCompletePendingProposal(type, data, error);
+    clusterRaftCompletePendingProposal(type, data, result);
     sdsfree(data);
     return 1;
 }
@@ -1256,7 +1276,7 @@ static uint64_t raftLogTermAt(uint64_t index) {
 /* Find a pending proposal matching type+data, fire its callback, and remove it.
  * Called both when an entry is applied (from raftLogApply) and when the leader
  * sends a REJECT for a forwarded proposal. */
-static void clusterRaftCompletePendingProposal(int type, sds data, const char *error) {
+static void clusterRaftCompletePendingProposal(int type, sds data, RaftProposalResult result) {
     clusterRaftState *rs = RAFT_STATE();
     if (listLength(rs->pending_proposals) == 0) return;
 
@@ -1269,12 +1289,12 @@ static void clusterRaftCompletePendingProposal(int type, sds data, const char *e
             /* On stale epoch with retries remaining: mark deferred.
              * The epoch update happens at retry time when the epoch has
              * actually advanced (checked by raftRefreshEpochInData). */
-            if (error && strcmp(error, STALE_SHARD_EPOCH_REJECTION_MSG) == 0 && pp->retries > 0) {
+            if (result == RAFT_RESULT_STALE_EPOCH && pp->retries > 0) {
                 pp->retries--;
                 pp->deferred = 1;
                 return;
             }
-            if (pp->callback) pp->callback(pp->ctx, error);
+            if (pp->callback) pp->callback(pp->ctx, raftProposalResultMsg(result));
             sdsfree(pp->data);
             zfree(pp);
             listDelNode(rs->pending_proposals, ln);
@@ -1286,7 +1306,7 @@ static void clusterRaftCompletePendingProposal(int type, sds data, const char *e
 /* Apply a committed log entry. */
 static void raftLogApply(raftLogEntry *e) {
     clusterRaftState *rs = RAFT_STATE();
-    const char *entry_error = NULL;
+    RaftProposalResult entry_result = RAFT_RESULT_OK;
     switch (e->type) {
     case RAFT_ENTRY_NODE_JOIN: {
         /* data: "<node-id> <address>" */
@@ -1397,38 +1417,38 @@ static void raftLogApply(raftLogEntry *e) {
         break;
     }
     case RAFT_ENTRY_SLOT_CHANGE: {
-        entry_error = clusterRaftApplySlotChange(e->data, 0);
-        if (!entry_error) {
+        entry_result = clusterRaftApplySlotChange(e->data, 0);
+        if (entry_result == RAFT_RESULT_OK) {
             rs->todo_update_slot_coverage = 1;
             rs->todo_invalidate_slots_cache = 1;
         }
         serverLog(LL_NOTICE, "%s SLOT_CHANGE (index %llu).",
-                  entry_error ? "Skipped" : "Applied", (unsigned long long)e->index);
+                  entry_result != RAFT_RESULT_OK ? "Skipped" : "Applied", (unsigned long long)e->index);
         break;
     }
     case RAFT_ENTRY_SET_REPLICA_OF: {
-        entry_error = clusterRaftApplySetReplica(e->data, 0);
-        if (!entry_error) {
+        entry_result = clusterRaftApplySetReplica(e->data, 0);
+        if (entry_result == RAFT_RESULT_OK) {
             rs->todo_invalidate_slots_cache = 1;
         }
         serverLog(LL_NOTICE, "%s SET_REPLICA_OF (index %llu).",
-                  entry_error ? "Skipped" : "Applied", (unsigned long long)e->index);
+                  entry_result != RAFT_RESULT_OK ? "Skipped" : "Applied", (unsigned long long)e->index);
         break;
     }
     case RAFT_ENTRY_FAILOVER: {
-        entry_error = clusterRaftApplyFailover(e->data, 0);
-        if (!entry_error) {
+        entry_result = clusterRaftApplyFailover(e->data, 0);
+        if (entry_result == RAFT_RESULT_OK) {
             rs->todo_update_slot_coverage = 1;
             rs->todo_invalidate_slots_cache = 1;
         }
         serverLog(LL_NOTICE, "%s FAILOVER (index %llu).",
-                  entry_error ? "Skipped" : "Applied", (unsigned long long)e->index);
+                  entry_result != RAFT_RESULT_OK ? "Skipped" : "Applied", (unsigned long long)e->index);
         break;
     }
     case RAFT_ENTRY_NODE_FORGET: {
-        entry_error = clusterRaftApplyNodeForget(e->data, 0);
+        entry_result = clusterRaftApplyNodeForget(e->data, 0);
         serverLog(LL_NOTICE, "%s NODE_FORGET (index %llu).",
-                  entry_error ? "Skipped" : "Applied", (unsigned long long)e->index);
+                  entry_result != RAFT_RESULT_OK ? "Skipped" : "Applied", (unsigned long long)e->index);
         break;
     }
     case RAFT_ENTRY_NODE_FAIL: {
@@ -1516,13 +1536,13 @@ static void raftLogApply(raftLogEntry *e) {
         break;
     }
 
-    if (entry_error) {
+    if (entry_result != RAFT_RESULT_OK) {
         serverLog(LL_DEBUG, "Proposal rejected at apply: %s (type %s, index %llu).",
-                  entry_error, raftEntryTypeName(e->type), (unsigned long long)e->index);
+                  raftProposalResultMsg(entry_result), raftEntryTypeName(e->type), (unsigned long long)e->index);
     }
 
     /* Check pending proposals for a match and remove it. */
-    clusterRaftCompletePendingProposal(e->type, e->data, entry_error);
+    clusterRaftCompletePendingProposal(e->type, e->data, entry_result);
 }
 
 /* --------------------------------------------------------------------------
@@ -2181,9 +2201,9 @@ static void clusterRaftRetryProposals(int include_pending) {
             pp->deferred = 0;
 
             if (rs->role == RAFT_ROLE_LEADER) {
-                const char *pre_error = clusterRaftPreValidate(pp->type, pp->data);
-                if (pre_error) {
-                    if (pp->callback) pp->callback(pp->ctx, pre_error);
+                RaftProposalResult pre_result = clusterRaftPreValidate(pp->type, pp->data);
+                if (pre_result != RAFT_RESULT_OK) {
+                    if (pp->callback) pp->callback(pp->ctx, raftProposalResultMsg(pre_result));
                     sdsfree(pp->data);
                     zfree(pp);
                     listDelNode(rs->pending_proposals, ln);
@@ -3183,9 +3203,10 @@ static void clusterRaftSlotChange(slotRange *ranges, int numranges, clusterNode 
  * Format: "<source-id-or-dash> <source-epoch> <target-id-or-dash> <target-epoch> <ranges...>"
  * Ranges use the same format as nodes.conf: "0-5460" or "5461".
  * When validate_only is set, only validation is performed (no state mutation).
- * Returns NULL on success, or an error string describing the failure. */
-static const char *clusterRaftApplySlotChange(sds data, int validate_only) {
-    const char *error = NULL;
+ * Returns RAFT_RESULT_OK on success, or RAFT_RESULT_STALE_EPOCH /
+ * RAFT_RESULT_REJECTED describing the failure. */
+static RaftProposalResult clusterRaftApplySlotChange(sds data, int validate_only) {
+    RaftProposalResult result = RAFT_RESULT_OK;
     int argc;
     sds *argv = sdssplitlen(data, sdslen(data), " ", 1, &argc);
     /* Need at least: source + source_epoch + target + target_epoch + one_range = 5 */
@@ -3197,14 +3218,14 @@ static const char *clusterRaftApplySlotChange(sds data, int validate_only) {
     /* Epoch validation: validate both source and target epochs. */
     if (!clusterValidateShardEpoch(info.source_shard_id, info.source_epoch) ||
         !clusterValidateShardEpoch(info.target_shard_id, info.target_epoch)) {
-        error = STALE_SHARD_EPOCH_REJECTION_MSG;
+        result = RAFT_RESULT_STALE_EPOCH;
         goto reject;
     }
 
     if (validate_only) goto done;
 
-    /* Range fields are argv[range_end] through argv[argc-1]. */
-    for (int i = info.range_end; i < argc; i++) {
+    /* Range fields are argv[range_start_arg] through argv[argc-1]. */
+    for (int i = info.range_start_arg; i < argc; i++) {
         int start, end;
         char *p = strchr(argv[i], '-');
         if (p) {
@@ -3236,19 +3257,21 @@ static const char *clusterRaftApplySlotChange(sds data, int validate_only) {
     goto done;
 
 reject:
-    if (!error) error = GENERIC_PROPOSAL_REJECTION_MSG;
+    /* Default to generic rejection; stale-epoch callers set result before jumping here. */
+    if (result == RAFT_RESULT_OK) result = RAFT_RESULT_REJECTED;
 done:
     if (argv) sdsfreesplitres(argv, argc);
-    return error;
+    return result;
 }
 
 /* Apply (or validate) a SET_REPLICA_OF entry.
  * Format: "<replica-id> <source-shard> <source-epoch> <primary-id-or-dash> <target-shard> <target-epoch>"
  * When validate_only is set, only validation is performed (no state mutation).
- * Returns NULL on success, or an error string describing the failure. */
-static const char *clusterRaftApplySetReplica(sds data, int validate_only) {
+ * Returns RAFT_RESULT_OK on success, or RAFT_RESULT_STALE_EPOCH /
+ * RAFT_RESULT_REJECTED describing the failure. */
+static RaftProposalResult clusterRaftApplySetReplica(sds data, int validate_only) {
     clusterRaftState *rs = RAFT_STATE();
-    const char *error = NULL;
+    RaftProposalResult result = RAFT_RESULT_OK;
     int argc;
     sds *argv = sdssplitlen(data, sdslen(data), " ", 1, &argc);
     if (!argv || argc != 6) goto reject;
@@ -3264,7 +3287,7 @@ static const char *clusterRaftApplySetReplica(sds data, int validate_only) {
     /* Validate both shard epochs without bumping. */
     if (!clusterValidateShardEpoch(source_shard, source_epoch) ||
         !clusterValidateShardEpoch(target_shard, target_epoch)) {
-        error = STALE_SHARD_EPOCH_REJECTION_MSG;
+        result = RAFT_RESULT_STALE_EPOCH;
         goto reject;
     }
 
@@ -3322,10 +3345,11 @@ static const char *clusterRaftApplySetReplica(sds data, int validate_only) {
     goto done;
 
 reject:
-    if (!error) error = GENERIC_PROPOSAL_REJECTION_MSG;
+    /* Default to generic rejection; stale-epoch callers set result before jumping here. */
+    if (result == RAFT_RESULT_OK) result = RAFT_RESULT_REJECTED;
 done:
     if (argv) sdsfreesplitres(argv, argc);
-    return error;
+    return result;
 }
 
 /* Apply (or validate) a FAILOVER entry.
@@ -3333,10 +3357,11 @@ done:
  * The replica takes over the primary's slots and becomes primary.
  * The old primary becomes a replica of the new primary.
  * When validate_only is set, only validation is performed (no state mutation).
- * Returns NULL on success, or an error string describing the failure. */
-static const char *clusterRaftApplyFailover(sds data, int validate_only) {
+ * Returns RAFT_RESULT_OK on success, or RAFT_RESULT_STALE_EPOCH /
+ * RAFT_RESULT_REJECTED describing the failure. */
+static RaftProposalResult clusterRaftApplyFailover(sds data, int validate_only) {
     clusterRaftState *rs = RAFT_STATE();
-    const char *error = NULL;
+    RaftProposalResult result = RAFT_RESULT_OK;
     int argc;
     sds *argv = sdssplitlen(data, sdslen(data), " ", 1, &argc);
     if (!argv || argc != 4) goto reject;
@@ -3355,7 +3380,7 @@ static const char *clusterRaftApplyFailover(sds data, int validate_only) {
     /* Epoch validation: validate against the shard-id from the entry (no bump yet). */
     uint64_t shard_epoch = strtoull(argv[3], NULL, 10);
     if (!clusterValidateShardEpoch(argv[2], shard_epoch)) {
-        error = STALE_SHARD_EPOCH_REJECTION_MSG;
+        result = RAFT_RESULT_STALE_EPOCH;
         goto reject;
     }
 
@@ -3413,18 +3438,20 @@ static const char *clusterRaftApplyFailover(sds data, int validate_only) {
     goto done;
 
 reject:
-    if (!error) error = GENERIC_PROPOSAL_REJECTION_MSG;
+    /* Default to generic rejection; stale-epoch callers set result before jumping here. */
+    if (result == RAFT_RESULT_OK) result = RAFT_RESULT_REJECTED;
 done:
     if (argv) sdsfreesplitres(argv, argc);
-    return error;
+    return result;
 }
 
 /* Apply (or validate) a NODE_FORGET entry. Format: "<node-id> <shard-epoch>"
  * When validate_only is set, only validation is performed (no state mutation).
- * Returns NULL on success, or an error string describing the failure. */
-static const char *clusterRaftApplyNodeForget(sds data, int validate_only) {
+ * Returns RAFT_RESULT_OK on success, or RAFT_RESULT_STALE_EPOCH /
+ * RAFT_RESULT_REJECTED describing the failure. */
+static RaftProposalResult clusterRaftApplyNodeForget(sds data, int validate_only) {
     clusterRaftState *rs = RAFT_STATE();
-    const char *error = NULL;
+    RaftProposalResult result = RAFT_RESULT_OK;
     int argc;
     sds *argv = sdssplitlen(data, sdslen(data), " ", 1, &argc);
     if (!argv || argc < 2) goto reject;
@@ -3434,12 +3461,12 @@ static const char *clusterRaftApplyNodeForget(sds data, int validate_only) {
 
     uint64_t epoch = strtoull(argv[1], NULL, 10);
     if (!clusterValidateShardEpoch(node->shard_id, epoch)) {
-        error = STALE_SHARD_EPOCH_REJECTION_MSG;
+        result = RAFT_RESULT_STALE_EPOCH;
         goto reject;
     }
 
     if (nodeIsPrimary(node) && (node->num_replicas > 0 || node->numslots > 0)) {
-        error = "Can't forget a primary with replicas or assigned slots.";
+        serverLog(LL_WARNING, "NODE_FORGET rejected: can't forget a primary with replicas or assigned slots.");
         goto reject;
     }
 
@@ -3465,10 +3492,11 @@ static const char *clusterRaftApplyNodeForget(sds data, int validate_only) {
     goto done;
 
 reject:
-    if (!error) error = GENERIC_PROPOSAL_REJECTION_MSG;
+    /* Default to generic rejection; stale-epoch callers set result before jumping here. */
+    if (result == RAFT_RESULT_OK) result = RAFT_RESULT_REJECTED;
 done:
     if (argv) sdsfreesplitres(argv, argc);
-    return error;
+    return result;
 }
 
 
@@ -3488,14 +3516,12 @@ static void clusterRaftAutoFailoverCallback(void *ctx, const char *error) {
 }
 
 static void clusterRaftForgetNode(const char *node_id, size_t id_len, void *ctx, void (*callback)(void *ctx, const char *error)) {
-    /* Reject forgetting the raft leader — it would crash the cluster.
-     * The admin should transfer leadership first. */
+    /* TODO: Leadership transfer will be taken care as part of issue#4069 */
     clusterRaftState *rs = RAFT_STATE();
     if (id_len == CLUSTER_NAMELEN && memcmp(node_id, rs->leader, CLUSTER_NAMELEN) == 0) {
         clusterNode *leader_node = clusterLookupNode(node_id, id_len);
         if (leader_node && !nodeFailed(leader_node)) {
-            if (callback) callback(ctx, "Can't forget the raft leader. Transfer leadership first.");
-            return;
+            serverLog(LL_WARNING, "Attempting to forget raft leader.");
         }
     }
 

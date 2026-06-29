@@ -241,29 +241,40 @@ double orderedIndexItemGetScore(const OrderedIndexItem *item) {
 }
 
 unsigned long orderedIndexCountScoreRange(const OrderedIndex *oi, double min, double max, bool min_ex, bool max_ex) {
+    fbtreeIndex *fbt = (fbtreeIndex *)oi;
     fbtreeIterator iter;
-    fbtreeInitIterator(&iter, (fbtreeIndex *)oi);
-    uint64_t min_sortable = scoreToSortable(min);
-    if (min_ex) {
-        /* Advance to the next representable score value. scoreToSortable maps
-         * doubles to uint64 preserving order, so +1 in sortable space is
-         * equivalent to nextafter(score, +inf) in double space. We operate on
-         * the sortable representation because it's big-endian and the increment
-         * must happen in native byte order. */
-        uint64_t native = ntohu64(min_sortable);
-        native++;
-        min_sortable = htonu64(native);
-    }
-    fbtreeSeekToScore((const char *)&min_sortable, &iter);
+    fbtreeInitIterator(&iter, fbt);
 
-    unsigned long count = 0;
-    const_sds pos;
-    while (fbtreeNext(&iter, &pos)) {
-        double score = unpackScore(pos);
-        if (max_ex ? score >= max : score > max) break;
-        count++;
+    /* Count via rank arithmetic: count = end_rank - start_rank, where each
+     * rank is an O(log N) tree descent. fbtreeSeekToScore returns the rank of
+     * the first item whose score is >= the seek key (i.e. the number of items
+     * with score strictly less than it). scoreToSortable is order-preserving,
+     * so +1 in sortable space is the next representable score (nextafter toward
+     * +inf); the increment is done in native byte order since sortable is BE. */
+
+    /* Lower bound: rank of the first in-range item.
+     * Inclusive min -> first item with score >= min.
+     * Exclusive min -> first item with score > min (seek to min+1). */
+    uint64_t lo = scoreToSortable(min);
+    if (min_ex) {
+        uint64_t native = ntohu64(lo);
+        native++;
+        lo = htonu64(native);
     }
-    return count;
+    long start_rank = fbtreeSeekToScore((const char *)&lo, &iter);
+
+    /* Upper bound: rank of the first item past the range.
+     * Exclusive max -> first item with score >= max (seek to max).
+     * Inclusive max -> first item with score > max (seek to max+1). */
+    uint64_t hi = scoreToSortable(max);
+    if (!max_ex) {
+        uint64_t native = ntohu64(hi);
+        native++;
+        hi = htonu64(native);
+    }
+    long end_rank = fbtreeSeekToScore((const char *)&hi, &iter);
+
+    return (end_rank > start_rank) ? (unsigned long)(end_rank - start_rank) : 0;
 }
 
 unsigned long orderedIndexCountLexRange(const OrderedIndex *oi, const_sds min, const_sds max, bool min_ex, bool max_ex) {

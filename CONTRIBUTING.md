@@ -107,6 +107,8 @@ which includes documentation about various best practices for writing Valkey cod
 To link a pull request to an existing issue, please write "Fixes #xyz" somewhere
 in the pull request description, where xyz is the issue number.
 
+Every pull request must carry exactly one of the `release-notes` or `no-release-notes` labels (a CI check enforces this); use `release-notes` if the change is user-facing.
+
 ## Code formatting with clang-format
 
 Valkey enforces code formatting using `clang-format-18`. A CI check runs on

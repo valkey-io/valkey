@@ -349,8 +349,8 @@ static void seekForBound(fbtreeIterator *fbt_iter, sds packed, int reverse, int 
 
     if (!reverse && !inclusive) {
         /* Forward + exclusive: if positioned at exact match, advance past it. */
-        const_sds pos;
-        if (fbtreeNext(fbt_iter, &pos)) {
+        const_sds pos = fbtreeNext(fbt_iter);
+        if (pos != NULL) {
             if (sdscmp(pos, packed) != 0) {
                 /* First element > bound -- re-seek so next() returns it. */
                 fbtreeSeekToValue(pos, fbt_iter);
@@ -361,8 +361,8 @@ static void seekForBound(fbtreeIterator *fbt_iter, sds packed, int reverse, int 
         /* Reverse + inclusive: seek is at first >= bound.
          * If bound exists, advance past so prev() returns bound.
          * If not, re-seek to first > bound so prev() returns last < bound. */
-        const_sds pos;
-        if (fbtreeNext(fbt_iter, &pos)) {
+        const_sds pos = fbtreeNext(fbt_iter);
+        if (pos != NULL) {
             if (sdscmp(pos, packed) != 0) {
                 /* Not exact match -- re-seek so prev() returns last < bound */
                 fbtreeSeekToValue(pos, fbt_iter);
@@ -376,12 +376,11 @@ static void seekForBound(fbtreeIterator *fbt_iter, sds packed, int reverse, int 
 
 /* Skip N elements in the given direction. */
 static void skipElements(fbtreeIterator *fbt_iter, long count, int reverse) {
-    const_sds pos;
     for (long i = 0; i < count; i++) {
         if (reverse) {
-            if (!fbtreePrev(fbt_iter, &pos)) return;
+            if (fbtreePrev(fbt_iter) == NULL) return;
         } else {
-            if (!fbtreeNext(fbt_iter, &pos)) return;
+            if (fbtreeNext(fbt_iter) == NULL) return;
         }
     }
 }
@@ -408,19 +407,11 @@ void orderedIndexResetIterator(OrderedIndexIterator *iter) {
 }
 
 OrderedIndexItem *orderedIndexNext(OrderedIndexIterator *iter) {
-    const_sds pos;
-    if (fbtreeNext((fbtreeIterator *)iter, &pos)) {
-        return (OrderedIndexItem *)pos;
-    }
-    return NULL;
+    return (OrderedIndexItem *)fbtreeNext((fbtreeIterator *)iter);
 }
 
 OrderedIndexItem *orderedIndexPrev(OrderedIndexIterator *iter) {
-    const_sds pos;
-    if (fbtreePrev((fbtreeIterator *)iter, &pos)) {
-        return (OrderedIndexItem *)pos;
-    }
-    return NULL;
+    return (OrderedIndexItem *)fbtreePrev((fbtreeIterator *)iter);
 }
 
 void orderedIndexSeekToIndex(OrderedIndexIterator *iter, unsigned long index) {

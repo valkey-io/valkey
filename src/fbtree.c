@@ -22,8 +22,8 @@
 
 typedef enum {
     ITER_AT_POSITION,  /* Positioned at a valid element */
-    ITER_BEFORE_START, /* Positioned before first element (fbtreePrev fails, fbtreeNext works) */
-    ITER_PAST_END,     /* Positioned past last element (fbtreeNext fails, fbtreePrev works) */
+    ITER_BEFORE_START, /* Positioned before first element (fbtreePrev returns NULL, fbtreeNext works) */
+    ITER_PAST_END,     /* Positioned past last element (fbtreeNext returns NULL, fbtreePrev works) */
 } IterState;
 
 typedef struct {
@@ -1183,10 +1183,10 @@ fbtreeIndex *fbtreeIteratorGetIndex(fbtreeIterator *iterator) {
     return iteratorFromOpaque(iterator)->fbt;
 }
 
-bool fbtreeNext(fbtreeIterator *iterator, const_sds *pos) {
+const_sds fbtreeNext(fbtreeIterator *iterator) {
     iter *it = iteratorFromOpaque(iterator);
-    if (!it->fbt) return false;
-    if (it->state == ITER_PAST_END) return false;
+    if (!it->fbt) return NULL;
+    if (it->state == ITER_PAST_END) return NULL;
 
     if (!it->current_leaf) {
         /* First call - use cached leftmost leaf for O(1) start */
@@ -1198,21 +1198,20 @@ bool fbtreeNext(fbtreeIterator *iterator, const_sds *pos) {
 
     while (it->current_leaf) {
         if (it->current_index < it->leaf_count) {
-            *pos = it->current_leaf->values[it->current_index++];
-            return true;
+            return it->current_leaf->values[it->current_index++];
         }
         it->current_leaf = it->current_leaf->next;
         it->current_index = 0;
         it->leaf_count = it->current_leaf ? it->current_leaf->header.num_items : 0;
     }
     it->state = ITER_PAST_END;
-    return false;
+    return NULL;
 }
 
-bool fbtreePrev(fbtreeIterator *iterator, const_sds *pos) {
+const_sds fbtreePrev(fbtreeIterator *iterator) {
     iter *it = iteratorFromOpaque(iterator);
-    if (!it->fbt) return false;
-    if (it->state == ITER_BEFORE_START) return false;
+    if (!it->fbt) return NULL;
+    if (it->state == ITER_BEFORE_START) return NULL;
 
     if (!it->current_leaf) {
         /* First call - use cached rightmost leaf for O(1) start */
@@ -1224,15 +1223,14 @@ bool fbtreePrev(fbtreeIterator *iterator, const_sds *pos) {
 
     while (it->current_leaf) {
         if (it->current_index > 0) {
-            *pos = it->current_leaf->values[--it->current_index];
-            return true;
+            return it->current_leaf->values[--it->current_index];
         }
         it->current_leaf = it->current_leaf->prev;
         it->leaf_count = it->current_leaf ? it->current_leaf->header.num_items : 0;
         it->current_index = it->leaf_count;
     }
     it->state = ITER_BEFORE_START;
-    return false;
+    return NULL;
 }
 
 void fbtreeSeekToRank(fbtreeIterator *iterator, unsigned long rank) {
@@ -1324,8 +1322,8 @@ static int leafNodeBinarySearchByScore(leafNode *leaf, const char *score) {
 }
 
 /* Seek to first element with score >= given score. Always positions iterator.
- * If score > all elements, positions past end (fbtreeNext fails, fbtreePrev works).
- * If score < all elements, positions at start (fbtreePrev fails, fbtreeNext works).
+ * If score > all elements, positions past end (fbtreeNext returns NULL, fbtreePrev works).
+ * If score < all elements, positions at start (fbtreePrev returns NULL, fbtreeNext works).
  * Returns the rank (0-indexed) of the position. If positioned past end, returns
  * the tree length (one past the last valid rank). Returns 0 for an empty tree. */
 long fbtreeSeekToScore(const char *score, fbtreeIterator *iterator) {
@@ -1377,8 +1375,8 @@ long fbtreeSeekToScore(const char *score, fbtreeIterator *iterator) {
 }
 
 /* Seek to first element with value >= given value using full sds comparison.
- * If value > all elements, positions past end (fbtreeNext fails, fbtreePrev works).
- * If value < all elements, positions at start (fbtreePrev fails, fbtreeNext works). */
+ * If value > all elements, positions past end (fbtreeNext returns NULL, fbtreePrev works).
+ * If value < all elements, positions at start (fbtreePrev returns NULL, fbtreeNext works). */
 long fbtreeSeekToValue(const_sds value, fbtreeIterator *iterator) {
     iter *it = iteratorFromOpaque(iterator);
     fbtreeIndex *fbt = it->fbt;

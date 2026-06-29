@@ -28,8 +28,10 @@ unsigned long fbtreeLength(fbtreeIndex *fbt);
 void fbtreeInitIterator(fbtreeIterator *iterator, fbtreeIndex *fbt);
 void fbtreeResetIterator(fbtreeIterator *iterator);
 fbtreeIndex *fbtreeIteratorGetIndex(fbtreeIterator *iterator);
-bool fbtreeNext(fbtreeIterator *iterator, const_sds *pos);
-bool fbtreePrev(fbtreeIterator *iterator, const_sds *pos);
+/* Advance/retreat the iterator one position, returning the element at the new
+ * position, or NULL when there are no more elements in that direction. */
+const_sds fbtreeNext(fbtreeIterator *iterator);
+const_sds fbtreePrev(fbtreeIterator *iterator);
 
 void fbtreeSeekToRank(fbtreeIterator *iterator, unsigned long rank);
 const_sds fbtreeGetAtRank(fbtreeIndex *fbt, unsigned long rank);

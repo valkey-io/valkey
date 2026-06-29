@@ -9645,7 +9645,7 @@ void VM_RegisterClusterMessageReceiver(ValkeyModuleCtx *ctx,
                 if (prev)
                     prev->next = r->next;
                 else
-                    clusterReceivers[type]->next = r->next;
+                    clusterReceivers[type] = r->next;
                 zfree(r);
             }
             return;

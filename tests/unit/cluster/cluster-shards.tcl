@@ -84,7 +84,12 @@ proc cluster_ensure_master {id} {
 }
 
 # start_cluster 4 masters + 5 nodes (4 replicas + 1 standalone R8)
-start_cluster 4 5 {tags {external:skip cluster}} {
+# Disable automatic replica migration: this block manually attaches an extra
+# replica (R8) to a primary, which would otherwise let a replica migrate to a
+# transiently-orphaned primary during the cluster restart test and change its
+# shard id. Migration semantics are not under test here (CLUSTER REPLICATE is
+# manual and unaffected).
+start_cluster 4 5 {tags {external:skip cluster} overrides {cluster-allow-replica-migration no}} {
 
 # cluster_master_nodes and cluster_replica_nodes refer to the active cluster members.
 set ::cluster_master_nodes 4
@@ -285,6 +290,7 @@ test "CLUSTER MYSHARDID reports same shard id after shard restart" {
     set node_ids {}
     for {set i 0} {$i < 8} {incr i 4} {
         dict set node_ids $i [R $i cluster myshardid]
+        R $i cluster saveconfig
         pause_process [srv [expr -1*$i] pid]
     }
     for {set i 0} {$i < 8} {incr i 4} {
@@ -300,6 +306,9 @@ test "CLUSTER MYSHARDID reports same shard id after cluster restart" {
     set node_ids {}
     for {set i 0} {$i < 8} {incr i} {
         dict set node_ids $i [R $i cluster myshardid]
+    }
+    for {set i 0} {$i < 8} {incr i} {
+        R $i cluster saveconfig
     }
     for {set i 0} {$i < 8} {incr i} {
         pause_process [srv [expr -1*$i] pid]

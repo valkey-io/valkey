@@ -2459,6 +2459,18 @@ static int isValidAnnouncedNodename(char *val, const char **err) {
     return 1;
 }
 
+static int isValidAnnouncedIp(char *val, const char **err) {
+    if (sdslen(val) >= NET_IP_STR_LEN) {
+        *err = "cluster-announce-ip is too long";
+        return 0;
+    }
+    if (!(isValidAuxString(val, sdslen(val)))) {
+        *err = "cluster-announce-ip contains invalid character";
+        return 0;
+    }
+    return 1;
+}
+
 static int isValidAnnouncedHostname(char *val, const char **err) {
     if (strlen(val) >= NET_HOST_STR_LEN) {
         *err = "Hostnames must be less than " STRINGIFY(NET_HOST_STR_LEN) " characters";
@@ -3317,7 +3329,7 @@ standardConfig static_configs[] = {
     createStringConfig("pidfile", NULL, IMMUTABLE_CONFIG, EMPTY_STRING_IS_NULL, server.pidfile, NULL, NULL, NULL),
     createStringConfig("replica-announce-ip", "slave-announce-ip", MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, server.replica_announce_ip, NULL, NULL, NULL),
     createStringConfig("primaryuser", "masteruser", MODIFIABLE_CONFIG | SENSITIVE_CONFIG, EMPTY_STRING_IS_NULL, server.primary_user, NULL, NULL, NULL),
-    createStringConfig("cluster-announce-ip", NULL, MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, server.cluster_announce_ip, NULL, NULL, updateClusterIp),
+    createStringConfig("cluster-announce-ip", NULL, MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, server.cluster_announce_ip, NULL, isValidAnnouncedIp, updateClusterIp),
     createStringConfig("cluster-announce-client-ipv4", NULL, MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, server.cluster_announce_client_ipv4, NULL, isValidIpV4, updateClusterClientIpV4),
     createStringConfig("cluster-announce-client-ipv6", NULL, MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, server.cluster_announce_client_ipv6, NULL, isValidIpV6, updateClusterClientIpV6),
     createStringConfig("cluster-config-file", NULL, IMMUTABLE_CONFIG, ALLOW_EMPTY_STRING, server.cluster_configfile, "nodes.conf", isValidClusterConfigFile, NULL),
@@ -3445,8 +3457,8 @@ standardConfig static_configs[] = {
     createLongLongConfig("cluster-node-timeout", NULL, MODIFIABLE_CONFIG, 0, LLONG_MAX, server.cluster_node_timeout, 15000, INTEGER_CONFIG, NULL, NULL),
     createLongLongConfig("cluster-ping-interval", NULL, MODIFIABLE_CONFIG | HIDDEN_CONFIG, 0, LLONG_MAX, server.cluster_ping_interval, 0, INTEGER_CONFIG, NULL, NULL),
     createLongLongConfig("commandlog-execution-slower-than", "slowlog-log-slower-than", MODIFIABLE_CONFIG, -1, LLONG_MAX, server.commandlog[COMMANDLOG_TYPE_SLOW].threshold, 10000, INTEGER_CONFIG, NULL, NULL),
-    createLongLongConfig("commandlog-request-larger-than", NULL, MODIFIABLE_CONFIG, -1, LLONG_MAX, server.commandlog[COMMANDLOG_TYPE_LARGE_REQUEST].threshold, 1024 * 1024, INTEGER_CONFIG, NULL, NULL),
-    createLongLongConfig("commandlog-reply-larger-than", NULL, MODIFIABLE_CONFIG, -1, LLONG_MAX, server.commandlog[COMMANDLOG_TYPE_LARGE_REPLY].threshold, 1024 * 1024, INTEGER_CONFIG, NULL, NULL),
+    createLongLongConfig("commandlog-request-larger-than", NULL, MODIFIABLE_CONFIG, -1, LLONG_MAX, server.commandlog[COMMANDLOG_TYPE_LARGE_REQUEST].threshold, 1024 * 1024, MEMORY_CONFIG | SIGNED_MEMORY_CONFIG, NULL, NULL),
+    createLongLongConfig("commandlog-reply-larger-than", NULL, MODIFIABLE_CONFIG, -1, LLONG_MAX, server.commandlog[COMMANDLOG_TYPE_LARGE_REPLY].threshold, 1024 * 1024, MEMORY_CONFIG | SIGNED_MEMORY_CONFIG, NULL, NULL),
     createLongLongConfig("latency-monitor-threshold", NULL, MODIFIABLE_CONFIG, 0, LLONG_MAX, server.latency_monitor_threshold, 0, INTEGER_CONFIG, NULL, NULL),
     createLongLongConfig("proto-max-bulk-len", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, 1024 * 1024, LONG_MAX, server.proto_max_bulk_len, 512ll * 1024 * 1024, MEMORY_CONFIG, NULL, NULL), /* Bulk request max size */
     createLongLongConfig("stream-node-max-entries", NULL, MODIFIABLE_CONFIG, 0, LLONG_MAX, server.stream_node_max_entries, 100, INTEGER_CONFIG, NULL, NULL),

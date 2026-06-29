@@ -20,11 +20,10 @@
 #define DEFAULT_MINKEYS 1024
 #define MAX_KEY_LEN 128
 
-/* Per-pthread slice: owns clients [first_client, last_client). cfg and value
- * are shared read-only by all worker threads. */
+/* Per-pthread slice: owns clients [first_client, last_client). cfg is shared
+ * read-only by all worker threads. */
 typedef struct worker_config {
   const rdma_test_config *cfg;
-  const char *value;
   int thread_id;
   int first_client;
   int last_client;
@@ -37,6 +36,7 @@ typedef struct client_state {
   long long requests;  /* total SET or GET cmds for this connection */
   long long processed; /* completed so far in the current phase */
   int pending;         /* cmds appended but not yet drained this batch */
+  char **values;       /* per-seq random values [0,requests) for SET/GET */
   valkeyContext *context;
 } client_state;
 
@@ -57,8 +57,8 @@ static int check_status_reply(valkeyReply *reply, const char *expected,
 
 static int check_string_reply(valkeyReply *reply, const char *value,
                               size_t datasize, int client_id, long long seq) {
-  if (!reply || reply->type != VALKEY_REPLY_STRING || reply->len != datasize ||
-      memcmp(reply->str, value, datasize) != 0) {
+  if (!reply || reply->type != VALKEY_REPLY_STRING ||
+      !rdmaTestValueEquals(reply->str, reply->len, value, datasize)) {
     fprintf(stderr, "client %d request %lld expected %zu-byte string\n",
             client_id, seq, datasize);
     if (reply)
@@ -161,8 +161,7 @@ static int drain_reply(client_state *state, const char *value, size_t datasize,
 
 /* Run SET (is_get=0) or GET (is_get=1) for every connection in this worker. */
 static int run_phase(client_state *states, int state_count,
-                     const rdma_test_config *cfg, const char *value,
-                     int is_get) {
+                     const rdma_test_config *cfg, int is_get) {
   int remaining_clients = state_count;
 
   while (remaining_clients) {
@@ -188,7 +187,7 @@ static int run_phase(client_state *states, int state_count,
           if (append_get(state, seq) != 0)
             return -1;
         } else {
-          if (append_set(state, value, cfg->datasize, seq) != 0)
+          if (append_set(state, state->values[seq], cfg->datasize, seq) != 0)
             return -1;
         }
       }
@@ -208,7 +207,8 @@ static int run_phase(client_state *states, int state_count,
 
       for (int j = 0; j < state->pending; j++) {
         long long seq = state->processed + j;
-        if (drain_reply(state, value, cfg->datasize, is_get, seq) != 0)
+        if (drain_reply(state, state->values[seq], cfg->datasize, is_get,
+                        seq) != 0)
           return -1;
       }
       state->processed += state->pending;
@@ -223,7 +223,6 @@ static int run_phase(client_state *states, int state_count,
 static void *worker_main(void *arg) {
   worker_config *worker = arg;
   const rdma_test_config *cfg = worker->cfg;
-  const char *value = worker->value;
   int state_count = worker->last_client - worker->first_client;
   client_state *states;
   int ret = 1;
@@ -242,6 +241,14 @@ static void *worker_main(void *arg) {
 
     states[i].client_id = client_id;
     states[i].requests = rdmaTestRandCount(cfg->minkeys, cfg->maxkeys);
+    states[i].values = calloc((size_t)states[i].requests, sizeof(char *));
+    if (!states[i].values)
+      goto cleanup;
+    for (long long s = 0; s < states[i].requests; s++) {
+      states[i].values[s] = rdmaTestNewValue(cfg->datasize);
+      if (!states[i].values[s])
+        goto cleanup;
+    }
     states[i].context = connect_rdma(cfg, client_id);
     if (!states[i].context)
       goto cleanup;
@@ -249,11 +256,11 @@ static void *worker_main(void *arg) {
 
   /* Phase 1: write all keys; phase 2: read them back on the same connections.
    */
-  if (run_phase(states, state_count, cfg, value, 0) != 0)
+  if (run_phase(states, state_count, cfg, 0) != 0)
     goto cleanup;
   for (int i = 0; i < state_count; i++)
     states[i].processed = 0;
-  if (run_phase(states, state_count, cfg, value, 1) != 0)
+  if (run_phase(states, state_count, cfg, 1) != 0)
     goto cleanup;
 
   long long total = 0;
@@ -267,23 +274,17 @@ static void *worker_main(void *arg) {
 
 cleanup:
   for (int i = 0; i < state_count; i++) {
+    if (states[i].values) {
+      for (long long s = 0; s < states[i].requests; s++)
+        free(states[i].values[s]);
+      free(states[i].values);
+    }
     if (states[i].context)
       valkeyFree(states[i].context);
   }
   free(states);
 
   return (void *)(long)ret;
-}
-
-static char *init_value(size_t datasize) {
-  char *value = malloc(datasize);
-  if (!value) {
-    fprintf(stderr, "failed to allocate value buffer\n");
-    exit(1);
-  }
-
-  rdmaTestFillPattern(value, datasize);
-  return value;
 }
 
 int main(int argc, char **argv) {
@@ -312,11 +313,8 @@ int main(int argc, char **argv) {
   /* Seed the per-connection command-count RNG (see rdmaTestRandCount). */
   srandom(time(NULL) ^ getpid());
 
-  char *value = init_value(cfg.datasize);
-
   if (valkeyInitiateRdma() != VALKEY_OK) {
     fprintf(stderr, "failed to initialize libvalkey RDMA support\n");
-    free(value);
     return 1;
   }
 
@@ -326,7 +324,6 @@ int main(int argc, char **argv) {
     fprintf(stderr, "failed to allocate worker metadata\n");
     free(threads);
     free(workers);
-    free(value);
     return 1;
   }
 
@@ -337,7 +334,6 @@ int main(int argc, char **argv) {
 
   for (int i = 0; i < cfg.threads; i++) {
     workers[i].cfg = &cfg;
-    workers[i].value = value;
     workers[i].thread_id = i;
     workers[i].first_client = (cfg.clients * i) / cfg.threads;
     workers[i].last_client = (cfg.clients * (i + 1)) / cfg.threads;
@@ -362,7 +358,6 @@ int main(int argc, char **argv) {
 
   free(threads);
   free(workers);
-  free(value);
 
   return ret;
 }

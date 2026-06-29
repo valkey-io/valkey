@@ -919,8 +919,9 @@ static void *test_routine(void *arg) {
   for (int i = 0; i < keys; i++) {
     kv_pair = &kv_pairs[i];
     rdmaTestFormatThreadKey(kv_pair->key, sizeof(kv_pair->key), tid, i);
-    kv_pair->value = calloc(rdmaTestValueBufSize(config.datasize), 1);
-    rdmaTestFillRandomUppercase(kv_pair->value, config.datasize);
+    kv_pair->value = rdmaTestNewValue(config.datasize);
+    if (!kv_pair->value)
+      rdmaFatal("RDMA: alloc value failed");
   }
   printf("Valkey Over RDMA test thread[%d] prepare %d KVs [OK]\n", tid, keys);
 
@@ -967,7 +968,8 @@ static void *test_routine(void *arg) {
     inbytes =
         valkeyRdmaReadFull(ctx, inbuf, getrespprexlen + config.datasize + 2);
     assert(!strncmp(getrespprex, inbuf, getrespprexlen));
-    assert(!strncmp(kv_pair->value, inbuf + getrespprexlen, config.datasize));
+    assert(rdmaTestValueEquals(inbuf + getrespprexlen, config.datasize,
+                               kv_pair->value, config.datasize));
   }
   printf("Valkey Over RDMA test thread[%d] GET %d KVs [OK]\n", tid, keys);
 

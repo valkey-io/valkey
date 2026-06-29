@@ -6,6 +6,7 @@
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #define RDMA_TEST_DEFAULT_PORT 6379
 
@@ -154,12 +155,6 @@ static inline void rdmaTestFormatClientSeqKey(char *buf, size_t len, int client,
   snprintf(buf, len, "rdma:%04d:%012lld", client, seq);
 }
 
-/* Deterministic A-Z pattern, for values that must be reproducible on read. */
-static inline void rdmaTestFillPattern(char *buf, size_t len) {
-  for (size_t i = 0; i < len; i++)
-    buf[i] = 'A' + (i % 26);
-}
-
 /* Random uppercase A-Z, for values that only need to be non-trivial. */
 static inline void rdmaTestFillRandomUppercase(char *buf, size_t len) {
   for (size_t i = 0; i < len; i++)
@@ -170,6 +165,23 @@ static inline void rdmaTestFillRandomUppercase(char *buf, size_t len) {
  * a connection's command batch (libvalkey-test). Requires min < max. */
 static inline int rdmaTestRandCount(int minkeys, int maxkeys) {
   return random() % (maxkeys - minkeys) + minkeys;
+}
+
+/* Allocate a NUL-terminated buffer of `datasize` random uppercase bytes; the
+ * trailing byte stays NUL for C-string based clients. Returns NULL on OOM;
+ * caller frees. */
+static inline char *rdmaTestNewValue(size_t datasize) {
+  char *v = calloc(rdmaTestValueBufSize(datasize), 1);
+  if (v)
+    rdmaTestFillRandomUppercase(v, datasize);
+  return v;
+}
+
+/* Byte-equality check shared by both tests' GET verification. */
+static inline int rdmaTestValueEquals(const char *got, size_t gotlen,
+                                      const char *expected,
+                                      size_t expectedlen) {
+  return gotlen == expectedlen && memcmp(got, expected, expectedlen) == 0;
 }
 
 #endif /* VALKEY_RDMA_TEST_H */

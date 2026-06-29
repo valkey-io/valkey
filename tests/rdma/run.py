@@ -132,13 +132,18 @@ def run_test_client(name, cmd, timeout):
     return 0
 
 
-def build_server_cmd(svrpath, tmpdir, ipaddr, args, io_threads):
+def build_server_cmd(svrpath, tmpdir, ipaddr, rdma_port, io_threads):
     cmd = [svrpath, "--port", "0", "--loglevel", "verbose", "--protected-mode", "yes",
            "--appendonly", "no", "--daemonize", "no", "--dir", tmpdir,
-           "--rdma-port", str(args.rdma_port), "--rdma-bind", ipaddr]
+           "--rdma-port", str(rdma_port), "--rdma-bind", ipaddr]
     if io_threads:
-        cmd.extend(["--io-threads", str(args.io_threads), "--io-threads-always-active", "yes"])
+        cmd.extend(["--io-threads", str(io_threads), "--io-threads-always-active", "yes"])
     return cmd
+
+
+def build_test_client_cmd(clipath, ipaddr, rdma_port):
+    """Only pass connection info; workload defaults live in each C test binary."""
+    return [clipath, "-h", ipaddr, "-p", str(rdma_port)]
 
 
 def print_server_log(logpath, label):
@@ -184,7 +189,7 @@ def stop_server(svr_state):
     logfile.close()
 
 
-def test_rdma(ipaddr, args):
+def test_rdma(ipaddr, rdma_port, io_threads, libvalkey_timeout):
     valkeydir = os.path.dirname(os.path.abspath(__file__)) + "/../.."
 
     # step 1, prepare test directory
@@ -196,12 +201,13 @@ def test_rdma(ipaddr, args):
     try:
         # step 2, rdma-test uses the original server config (RDMA only, no IO threads)
         svr_log = tmpdir + "/server-rdma-test.log"
-        svr = start_server(build_server_cmd(svrpath, tmpdir, ipaddr, args, io_threads=False), svr_log)
+        svr = start_server(build_server_cmd(svrpath, tmpdir, ipaddr, rdma_port, io_threads=0),
+                           svr_log)
         if svr is None:
             return 1
 
         clipath = valkeydir + "/tests/rdma/rdma-test"
-        clicmd = [clipath, "--thread", "4", "-h", ipaddr, "-p", str(args.rdma_port)]
+        clicmd = build_test_client_cmd(clipath, ipaddr, rdma_port)
         retval = run_test_client("rdma-test", clicmd, 60)
         if retval:
             stop_server(svr)
@@ -213,15 +219,14 @@ def test_rdma(ipaddr, args):
 
         # step 3, libvalkey-test restarts server with IO threads for the regression case
         svr_log = tmpdir + "/server-libvalkey-test.log"
-        svr = start_server(build_server_cmd(svrpath, tmpdir, ipaddr, args, io_threads=True), svr_log)
+        svr = start_server(build_server_cmd(svrpath, tmpdir, ipaddr, rdma_port, io_threads),
+                           svr_log)
         if svr is None:
             return 1
 
         clipath = valkeydir + "/tests/rdma/libvalkey-test"
-        clicmd = [clipath, "--thread", str(args.threads), "--clients", str(args.clients),
-                  "--pipeline", str(args.pipeline), "--requests", str(args.requests),
-                  "--datasize", str(args.datasize), "-h", ipaddr, "-p", str(args.rdma_port)]
-        retval = run_test_client("libvalkey-test", clicmd, args.timeout)
+        clicmd = build_test_client_cmd(clipath, ipaddr, rdma_port)
+        retval = run_test_client("libvalkey-test", clicmd, libvalkey_timeout)
         if retval:
             stop_server(svr)
             svr = None
@@ -275,21 +280,11 @@ if __name__ == "__main__":
     parser.add_argument("-r", "--install-rxe", action='store_true',
         help="install RXE driver and setup RXE device")
     parser.add_argument("--rdma-port", type=int, default=6379,
-        help="RDMA port to listen on")
+        help="RDMA port for valkey-server and test clients")
     parser.add_argument("--io-threads", type=int, default=4,
-        help="server IO threads for libvalkey-test")
-    parser.add_argument("-t", "--thread", dest="threads", type=int, default=16,
-        help="libvalkey-test worker threads")
-    parser.add_argument("-c", "--clients", type=int, default=128,
-        help="libvalkey-test client connections")
-    parser.add_argument("-P", "--pipeline", type=int, default=384,
-        help="libvalkey-test pipeline depth")
-    parser.add_argument("-n", "--requests", type=int, default=200000,
-        help="libvalkey-test total SET requests and total GET requests")
-    parser.add_argument("-d", "--datasize", type=int, default=256,
-        help="libvalkey-test value size in bytes")
+        help="valkey-server IO threads during libvalkey-test")
     parser.add_argument("--timeout", type=int, default=120,
-        help="libvalkey-test timeout in seconds")
+        help="libvalkey-test client timeout in seconds")
     args = parser.parse_args()
     install_signal_handlers()
 
@@ -316,7 +311,7 @@ if __name__ == "__main__":
             print("Valkey Over RDMA test detect existing RDMA device [FAILED]")
             retval = 1
         else:
-            retval = test_rdma(ipaddr, args)
+            retval = test_rdma(ipaddr, args.rdma_port, args.io_threads, args.timeout)
             if not retval:
                 print("Valkey Over RDMA test over " + ipaddr + " [OK]")
     except KeyboardInterrupt:

@@ -139,22 +139,31 @@ NODE_JOIN <node-id> <address>
     when the entry is committed.
 
 NODE_FORGET <node-id> <shard-epoch>
-    Remove a node from the cluster (CLUSTER FORGET).
+    Remove a node from the cluster (CLUSTER FORGET). The epoch refers to
+    leaving node's shard and guards against removing a node whose
+    role changed (e.g., promoted to primary via a concurrent FAILOVER).
 
 SLOT_CHANGE <source-node-id-or-dash> <source-epoch> <target-node-id-or-dash> <target-epoch> <range> [<range> ...]
     Assign or remove slot ownership. A dash means "no owner" (delete
     slots). Ranges use the nodes.conf format: "0-5460" or "5461".
+    Carries two epochs (source and target shard). Shard epoch is not
+    bumped because SLOT_CHANGE only moves slots, it doesn't change shard
+    membership or leadership. Two slot migrations touching the same
+    shard are safe to apply concurrently (they affect different slots).
+    Bumping would serialize them unnecessarily. But validating is still
+    needed to catch the case where a slot migration races against a
+    failover that invalidated the shard's topology.
 
 SET_REPLICA_OF <replica-id> <source-shard> <source-epoch> <primary-id-or-dash> <target-shard> <target-epoch>
     Set a node as replica of a primary (CLUSTER REPLICATE). A dash as
-    primary means promote to primary. Both source and target shard epochs
-    are validated to guard against concurrent shard changes.
-    for promotion, a new random id; for assignment, the primary's
-    current shard-id (used as a guard against concurrent changes).
+    primary means promote to primary. Carries two epochs because it
+    involves two shards (source and target). Bumps the epoch of both
+    shards on apply.
 
 FAILOVER <replica-id> <primary-id> <shard-id> <shard-epoch>
     The replica takes over the primary's slots and becomes primary.
-    The old primary becomes a replica of the new primary.
+    The old primary becomes a replica of the new primary. Bumps the
+    shard epoch on apply.
 
 NODE_INFO <node-id> <address-string> <flags>
     Update node address and self-set flags. The address-string uses
@@ -756,26 +765,6 @@ the entry is stale and is ignored.
 6. With shard-epoch: FAILOVER bumped shard A's epoch. SLOT_CHANGE
    carries the old epoch, so it's a no-op. Slot stays on shard A.
 ```
-
-### Entry formats with epoch
-
-```
-FAILOVER <replica-id> <primary-id> <shard-id> <shard-epoch>
-SET_REPLICA_OF <replica-id> <source-shard> <source-epoch> <primary-id-or-dash> <target-shard> <target-epoch>
-SLOT_CHANGE <source-node-id-or-dash> <source-epoch> <target-node-id-or-dash> <target-epoch> <ranges...>
-NODE_FORGET <node-id> <epoch>
-```
-
-SLOT_CHANGE and SET_REPLICA_OF carries two epochs because it involves two shards (source
-and target). Shard epoch are not bumped for SLOT_CHANGE as it only moves slots
-— it doesn't change shard membership or leadership. Two slot migrations touching the
-same shard are safe to apply concurrently (they affect different slots).
-Bumping would serialize them unnecessarily. But validating is still needed to catch
-the case where a slot migration races against a failover that invalidated the shard's topology.
-
-NODE_FORGET carries the epoch of the departing node's
-shard to guard against removing a node whose role changed (e.g.,
-promoted to primary via a concurrent FAILOVER).
 
 ### Validation
 

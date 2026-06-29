@@ -890,9 +890,14 @@ static void clusterSetShardEpoch(const char *shard_id, uint64_t epoch) {
     rs->todo_retry_deferred = 1;
 }
 
-static int isShardEpochCurrent(const char *shard_id, uint64_t entry_epoch) {
+/* Validate a shard epoch.
+ * Returns 1 if it's current, 0 if it's stale.
+ * Shard_id may be NULL (skipped). Does not bump. */
+static int clusterValidateShardEpoch(const char *shard_id, uint64_t epoch) {
+    if (!shard_id) return 1;
     uint64_t current = clusterGetShardEpoch(shard_id);
-    return (current == 0 || entry_epoch == current);
+    if (current > 0 && epoch != current) return 0;
+    return 1;
 }
 
 /* Check if the shard epoch has advanced past what's in the proposal's data.
@@ -991,8 +996,8 @@ static int raftRefreshEpochInData(int type, sds *data) {
 /* Parsed fields from a SLOT_CHANGE entry's epoch-related data.
  * Format: "<source-id-or-dash> <source-epoch> <target-id-or-dash> <target-epoch> <ranges...>" */
 typedef struct {
-    clusterNode *target;         /* Target node (NULL if dash). */
-    clusterNode *source_owner;   /* Source node (NULL if dash). */
+    clusterNode *target_node;   /* NULL if dash */
+    clusterNode *source_node;   /* NULL if dash */
     const char *source_shard_id; /* source_owner->shard_id or NULL. */
     const char *target_shard_id; /* target->shard_id or NULL. */
     uint64_t source_epoch;
@@ -1008,13 +1013,13 @@ static bool parseSlotChangeEpochs(sds *argv, int argc, slotChangeEpochInfo *info
     memset(info, 0, sizeof(*info));
 
     /* argv[0] = source-id-or-dash */
-    info->source_owner = (sdslen(argv[0]) == CLUSTER_NAMELEN)
+    info->source_node = (sdslen(argv[0]) == CLUSTER_NAMELEN)
                              ? clusterLookupNode(argv[0], CLUSTER_NAMELEN)
                              : NULL;
     /* argv[1] = source-epoch */
     info->source_epoch = strtoull(argv[1], NULL, 10);
     /* argv[2] = target-id-or-dash */
-    info->target = (sdslen(argv[2]) == CLUSTER_NAMELEN)
+    info->target_node = (sdslen(argv[2]) == CLUSTER_NAMELEN)
                        ? clusterLookupNode(argv[2], CLUSTER_NAMELEN)
                        : NULL;
     /* argv[3] = target-epoch */
@@ -1022,8 +1027,8 @@ static bool parseSlotChangeEpochs(sds *argv, int argc, slotChangeEpochInfo *info
     /* argv[4..argc-1] = ranges */
     info->range_end = 4;
 
-    info->source_shard_id = info->source_owner ? info->source_owner->shard_id : NULL;
-    info->target_shard_id = info->target ? info->target->shard_id : NULL;
+    info->source_shard_id = info->source_node ? info->source_node->shard_id : NULL;
+    info->target_shard_id = info->target_node ? info->target_node->shard_id : NULL;
     return (argc > 4);
 }
 
@@ -1248,32 +1253,6 @@ static uint64_t raftLogTermAt(uint64_t index) {
     return e ? e->term : 0;
 }
 
-/* --------------------------------------------------------------------------
- * Shard epoch validation helpers
- * -------------------------------------------------------------------------- */
-
-/* Validate a pair of shard epochs (source and target).
- * Returns 1 if both are current, 0 if either is stale.
- * Either shard_id may be NULL (skipped). Does not bump. */
-static int clusterValidateShardEpochPair(const char *source_shard_id,
-                                         uint64_t source_epoch,
-                                         const char *target_shard_id,
-                                         uint64_t target_epoch) {
-    uint64_t src_current = source_shard_id ? clusterGetShardEpoch(source_shard_id) : 0;
-    uint64_t tgt_current = target_shard_id ? clusterGetShardEpoch(target_shard_id) : 0;
-
-    /* Check source. */
-    if (source_shard_id && src_current > 0 && source_epoch != src_current) {
-        return 0;
-    }
-    /* Check target. */
-    if (target_shard_id && tgt_current > 0 && target_epoch != tgt_current) {
-        return 0;
-    }
-
-    return 1;
-}
-
 /* Find a pending proposal matching type+data, fire its callback, and remove it.
  * Called both when an entry is applied (from raftLogApply) and when the leader
  * sends a REJECT for a forwarded proposal. */
@@ -1423,8 +1402,8 @@ static void raftLogApply(raftLogEntry *e) {
             rs->todo_update_slot_coverage = 1;
             rs->todo_invalidate_slots_cache = 1;
         }
-        serverLog(LL_NOTICE, "Applied SLOT_CHANGE (index %llu)%s.", (unsigned long long)e->index,
-                  entry_error ? " [stale]" : "");
+        serverLog(LL_NOTICE, "%s SLOT_CHANGE (index %llu).",
+                  entry_error ? "Skipped" : "Applied", (unsigned long long)e->index);
         break;
     }
     case RAFT_ENTRY_SET_REPLICA_OF: {
@@ -1432,8 +1411,8 @@ static void raftLogApply(raftLogEntry *e) {
         if (!entry_error) {
             rs->todo_invalidate_slots_cache = 1;
         }
-        serverLog(LL_NOTICE, "Applied SET_REPLICA_OF (index %llu)%s.", (unsigned long long)e->index,
-                  entry_error ? " [stale]" : "");
+        serverLog(LL_NOTICE, "%s SET_REPLICA_OF (index %llu).",
+                  entry_error ? "Skipped" : "Applied", (unsigned long long)e->index);
         break;
     }
     case RAFT_ENTRY_FAILOVER: {
@@ -1442,14 +1421,14 @@ static void raftLogApply(raftLogEntry *e) {
             rs->todo_update_slot_coverage = 1;
             rs->todo_invalidate_slots_cache = 1;
         }
-        serverLog(LL_NOTICE, "Applied FAILOVER (index %llu)%s.", (unsigned long long)e->index,
-                  entry_error ? " [stale]" : "");
+        serverLog(LL_NOTICE, "%s FAILOVER (index %llu).",
+                  entry_error ? "Skipped" : "Applied", (unsigned long long)e->index);
         break;
     }
     case RAFT_ENTRY_NODE_FORGET: {
         entry_error = clusterRaftApplyNodeForget(e->data, 0);
-        serverLog(LL_NOTICE, "Applied NODE_FORGET (index %llu)%s.", (unsigned long long)e->index,
-                  entry_error ? " [stale]" : "");
+        serverLog(LL_NOTICE, "%s NODE_FORGET (index %llu).",
+                  entry_error ? "Skipped" : "Applied", (unsigned long long)e->index);
         break;
     }
     case RAFT_ENTRY_NODE_FAIL: {
@@ -2147,11 +2126,8 @@ static void clusterRaftDetectFailures(mstime_t now) {
     dictReleaseIterator(di);
 }
 
-/* Retry deferred proposals: forward to leader or append locally. */
-/* Re-propose a single pending proposal to the leader (or append locally).
- * Returns 1 if successfully sent/appended, 0 if leader unreachable. */
-/* Send a proposal to the leader or append locally. Caller must ensure
- * leader link is available (for followers) before calling. */
+/* Forward a pending proposal to the leader or append locally if we are
+ * the leader. Caller must ensure leader link is available for followers. */
 static void clusterRaftSendProposal(raftPendingProposal *pp, clusterLink *leader_link) {
     clusterRaftState *rs = RAFT_STATE();
 
@@ -3219,8 +3195,8 @@ static const char *clusterRaftApplySlotChange(sds data, int validate_only) {
     if (!parseSlotChangeEpochs(argv, argc, &info)) goto reject;
 
     /* Epoch validation: validate both source and target epochs. */
-    if (!clusterValidateShardEpochPair(info.source_shard_id, info.source_epoch,
-                                       info.target_shard_id, info.target_epoch)) {
+    if (!clusterValidateShardEpoch(info.source_shard_id, info.source_epoch) ||
+        !clusterValidateShardEpoch(info.target_shard_id, info.target_epoch)) {
         error = STALE_SHARD_EPOCH_REJECTION_MSG;
         goto reject;
     }
@@ -3239,16 +3215,16 @@ static const char *clusterRaftApplySlotChange(sds data, int validate_only) {
             start = end = atoi(argv[i]);
         }
         for (int j = start; j <= end; j++) {
-            if (info.target == myself || server.cluster->slots[j] == myself)
+            if (info.target_node == myself || server.cluster->slots[j] == myself)
                 RAFT_STATE()->todo_save_config = 1;
-            if (info.target) {
-                if (server.cluster->slots[j] == myself && info.target != myself) {
+            if (info.target_node) {
+                if (server.cluster->slots[j] == myself && info.target_node != myself) {
                     serverLog(LL_NOTICE, "Deleting keys in dirty slot %d on node %.40s",
                               j, myself->name);
                     delKeysInSlot(j, server.lazyfree_lazy_server_del, true, false);
                 }
                 if (server.cluster->slots[j]) clusterDelSlot(j);
-                clusterAddSlot(info.target, j);
+                clusterAddSlot(info.target_node, j);
             } else {
                 if (server.cluster->slots[j] == myself) {
                     delKeysInSlot(j, server.lazyfree_lazy_server_del, true, false);
@@ -3286,8 +3262,8 @@ static const char *clusterRaftApplySetReplica(sds data, int validate_only) {
     uint64_t target_epoch = strtoull(argv[5], NULL, 10);
 
     /* Validate both shard epochs without bumping. */
-    if (!clusterValidateShardEpochPair(source_shard, source_epoch,
-                                       target_shard, target_epoch)) {
+    if (!clusterValidateShardEpoch(source_shard, source_epoch) ||
+        !clusterValidateShardEpoch(target_shard, target_epoch)) {
         error = STALE_SHARD_EPOCH_REJECTION_MSG;
         goto reject;
     }
@@ -3378,7 +3354,7 @@ static const char *clusterRaftApplyFailover(sds data, int validate_only) {
 
     /* Epoch validation: validate against the shard-id from the entry (no bump yet). */
     uint64_t shard_epoch = strtoull(argv[3], NULL, 10);
-    if (!isShardEpochCurrent(argv[2], shard_epoch)) {
+    if (!clusterValidateShardEpoch(argv[2], shard_epoch)) {
         error = STALE_SHARD_EPOCH_REJECTION_MSG;
         goto reject;
     }
@@ -3457,7 +3433,7 @@ static const char *clusterRaftApplyNodeForget(sds data, int validate_only) {
     if (!node || node == myself) goto reject;
 
     uint64_t epoch = strtoull(argv[1], NULL, 10);
-    if (!isShardEpochCurrent(node->shard_id, epoch)) {
+    if (!clusterValidateShardEpoch(node->shard_id, epoch)) {
         error = STALE_SHARD_EPOCH_REJECTION_MSG;
         goto reject;
     }

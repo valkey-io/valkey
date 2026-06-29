@@ -12,14 +12,7 @@
 #define RDMA_TEST_DEFAULT_DATASIZE_RDMA_TEST 1024
 #define RDMA_TEST_DEFAULT_DATASIZE_LIBVALKEY_TEST 256
 
-#define RDMA_TEST_COMMON_OPTIONS                                               \
-  {"help", no_argument, NULL, 'H'}, {"host", required_argument, NULL, 'h'},    \
-      {"port", required_argument, NULL, 'p'},                                  \
-      {"thread", required_argument, NULL, 't'},                                \
-      {"datasize", required_argument, NULL, 'd'}
-
-#define RDMA_TEST_OPTIONS_END {NULL, 0, NULL, 0}
-#define RDMA_TEST_COMMON_SHORT_OPTS "Hh:p:t:d"
+#define RDMA_TEST_MAX_THREADS 32
 
 typedef struct {
   const char *host;
@@ -88,6 +81,75 @@ static inline int rdmaTestParsePort(const char *value) {
 
 static inline size_t rdmaTestParseDatasize(const char *value) {
   return (size_t)rdmaTestParsePositiveInt("--datasize", value);
+}
+
+/* Parse every RDMA test CLI option into cfg. The caller seeds cfg with its own
+ * defaults first; this only overrides fields supplied on the command line, so
+ * options a test does not care about stay at their (zero) default. Exits on
+ * --help, an unknown option, or a missing --host. */
+static inline void rdmaTestParseArgs(int argc, char **argv,
+                                     rdma_test_config *cfg) {
+  static struct option long_opts[] = {
+      {"help", no_argument, NULL, 'H'},
+      {"host", required_argument, NULL, 'h'},
+      {"port", required_argument, NULL, 'p'},
+      {"thread", required_argument, NULL, 't'},
+      {"datasize", required_argument, NULL, 'd'},
+      {"minkeys", required_argument, NULL, 'm'},
+      {"maxkeys", required_argument, NULL, 'M'},
+      {"clients", required_argument, NULL, 'c'},
+      {"pipeline", required_argument, NULL, 'P'},
+      {"requests", required_argument, NULL, 'n'},
+      {NULL, 0, NULL, 0},
+  };
+  static const char short_opts[] = "Hh:p:t:d:m:M:c:P:n:";
+  int opt;
+
+  while ((opt = getopt_long(argc, argv, short_opts, long_opts, NULL)) != -1) {
+    switch (opt) {
+    case 'h':
+      cfg->host = optarg;
+      break;
+    case 'p':
+      cfg->port = rdmaTestParsePort(optarg);
+      break;
+    case 't':
+      cfg->threads =
+          rdmaTestParseIntRange("--thread", optarg, 0, RDMA_TEST_MAX_THREADS);
+      break;
+    case 'd':
+      cfg->datasize = rdmaTestParseDatasize(optarg);
+      break;
+    case 'm':
+      cfg->minkeys = rdmaTestParsePositiveInt("--minkeys", optarg);
+      break;
+    case 'M':
+      cfg->maxkeys = rdmaTestParsePositiveInt("--maxkeys", optarg);
+      break;
+    case 'c':
+      cfg->clients = rdmaTestParsePositiveInt("--clients", optarg);
+      break;
+    case 'P':
+      cfg->pipeline = rdmaTestParsePositiveInt("--pipeline", optarg);
+      break;
+    case 'n':
+      cfg->requests = rdmaTestParsePositiveLongLong("--requests", optarg);
+      break;
+    case 'H':
+      usage(argv[0]);
+      exit(0);
+    default:
+      usage(argv[0]);
+      exit(1);
+    }
+  }
+
+  /* host is required by every RDMA test; enforce it once here. */
+  if (!cfg->host) {
+    fprintf(stderr, "missing --host/-h\n");
+    usage(argv[0]);
+    exit(1);
+  }
 }
 
 static inline size_t rdmaTestValueBufSize(size_t datasize) {

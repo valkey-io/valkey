@@ -78,7 +78,6 @@ typedef enum valkeyRdmaOpcode {
   RegisterXferMemory = 3,
 } valkeyRdmaOpcode;
 
-#define MAX_THREADS 32
 #define UNUSED(x) (void)(x)
 #define MIN(a, b) (a) < (b) ? a : b
 #define VALKEY_RDMA_MAX_WQE 1024
@@ -877,10 +876,11 @@ end:
 
 static rdma_test_config config = {
     .port = RDMA_TEST_DEFAULT_PORT,
+    .threads = 0, /* single-threaded main mode by default */
+    .minkeys = 128,
+    .maxkeys = 8192,
+    .datasize = RDMA_TEST_DEFAULT_DATASIZE_RDMA_TEST,
 };
-static int minkeys = 128;
-static int maxkeys = 8192;
-static size_t datasize = RDMA_TEST_DEFAULT_DATASIZE_RDMA_TEST;
 
 struct test_kv_pair {
   char key[32]; /* "THREAD01-000001" */
@@ -898,7 +898,7 @@ static void *test_routine(void *arg) {
     rdmaFatal("RDMA connect failed");
   }
 
-  int bufsize = datasize + 128;
+  int bufsize = config.datasize + 128;
   char *inbuf = malloc(bufsize);
   char *outbuf = malloc(bufsize);
   int inbytes, outbytes;
@@ -913,14 +913,14 @@ static void *test_routine(void *arg) {
   printf("Valkey Over RDMA test thread[%d] PING/PONG [OK]\n", tid);
 
   /* prepare random KV for SET/GET */
-  keys = random() % (maxkeys - minkeys) + minkeys;
+  keys = random() % (config.maxkeys - config.minkeys) + config.minkeys;
   kv_pairs = calloc(sizeof(struct test_kv_pair), keys);
 
   for (int i = 0; i < keys; i++) {
     kv_pair = &kv_pairs[i];
     rdmaTestFormatThreadKey(kv_pair->key, sizeof(kv_pair->key), tid, i);
-    kv_pair->value = calloc(rdmaTestValueBufSize(datasize), 1);
-    rdmaTestFillRandomUppercase(kv_pair->value, datasize);
+    kv_pair->value = calloc(rdmaTestValueBufSize(config.datasize), 1);
+    rdmaTestFillRandomUppercase(kv_pair->value, config.datasize);
   }
   printf("Valkey Over RDMA test thread[%d] prepare %d KVs [OK]\n", tid, keys);
 
@@ -932,8 +932,8 @@ static void *test_routine(void *arg) {
     /* build SET command */
     outbytes =
         sprintf(outbuf, "*3\r\n$3\r\nSET\r\n$%ld\r\n%s\r\n$%zu\r\n%.*s\r\n",
-                strlen(kv_pair->key), kv_pair->key, datasize, (int)datasize,
-                kv_pair->value);
+                strlen(kv_pair->key), kv_pair->key, config.datasize,
+                (int)config.datasize, kv_pair->value);
     valkeyRdmaWrite(ctx, outbuf, outbytes);
     inbytes = valkeyRdmaReadFull(ctx, inbuf, strlen(okresp));
     assert(!strncmp("+OK\r\n", inbuf, inbytes));
@@ -956,7 +956,7 @@ static void *test_routine(void *arg) {
   /* # round 4, test GET. also verify all the value already set */
   char getrespprex[32];
   int getrespprexlen =
-      snprintf(getrespprex, sizeof(getrespprex), "$%zu\r\n", datasize);
+      snprintf(getrespprex, sizeof(getrespprex), "$%zu\r\n", config.datasize);
 
   for (int i = 0; i < keys; i++) {
     kv_pair = &kv_pairs[i];
@@ -964,9 +964,10 @@ static void *test_routine(void *arg) {
     outbytes = sprintf(outbuf, "*2\r\n$3\r\nGET\r\n$%ld\r\n%s\r\n",
                        strlen(kv_pair->key), kv_pair->key);
     valkeyRdmaWrite(ctx, outbuf, outbytes);
-    inbytes = valkeyRdmaReadFull(ctx, inbuf, getrespprexlen + datasize + 2);
+    inbytes =
+        valkeyRdmaReadFull(ctx, inbuf, getrespprexlen + config.datasize + 2);
     assert(!strncmp(getrespprex, inbuf, getrespprexlen));
-    assert(!strncmp(kv_pair->value, inbuf + getrespprexlen, datasize));
+    assert(!strncmp(kv_pair->value, inbuf + getrespprexlen, config.datasize));
   }
   printf("Valkey Over RDMA test thread[%d] GET %d KVs [OK]\n", tid, keys);
 
@@ -974,65 +975,13 @@ static void *test_routine(void *arg) {
 }
 
 int main(int argc, char *argv[]) {
-  int c, args;
-  pthread_t threads[MAX_THREADS];
+  pthread_t threads[RDMA_TEST_MAX_THREADS];
 
-  static struct option long_opts[] = {
-      RDMA_TEST_COMMON_OPTIONS,
-      {"maxkeys", required_argument, NULL, 'M'},
-      {"minkeys", required_argument, NULL, 'm'},
-      RDMA_TEST_OPTIONS_END,
-  };
-  static char *short_opts = RDMA_TEST_COMMON_SHORT_OPTS "M:m:d:";
+  rdmaTestParseArgs(argc, argv, &config);
 
-  while (1) {
-    c = getopt_long(argc, argv, short_opts, long_opts, &args);
-    if (c == -1) {
-      break;
-    }
-    switch (c) {
-    case 'h':
-      config.host = optarg;
-      break;
-
-    case 'p':
-      config.port = rdmaTestParsePort(optarg);
-      break;
-
-    case 't':
-      config.threads =
-          rdmaTestParseIntRange("--thread", optarg, 0, MAX_THREADS);
-      break;
-
-    case 'M':
-      maxkeys = rdmaTestParsePositiveInt("--maxkeys", optarg);
-      break;
-
-    case 'm':
-      minkeys = rdmaTestParsePositiveInt("--minkeys", optarg);
-      break;
-
-    case 'd':
-      datasize = rdmaTestParseDatasize(optarg);
-      break;
-
-    case 'H':
-      usage(argv[0]);
-      exit(0);
-
-    default:
-      usage(argv[0]);
-      exit(-1); /* this is not considered as success, to avoid auto-test
-                   workaround */
-    }
-  }
-
-  if (!config.host) {
-    rdmaFatal("missing --host/-h");
-  }
-
-  if (minkeys > maxkeys) {
-    rdmaFatal("minkeys should less than maxkeys");
+  if (config.minkeys > config.maxkeys) {
+    fprintf(stderr, "minkeys should be less than maxkeys\n");
+    exit(1);
   }
 
   /* To make the test randomly */

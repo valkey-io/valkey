@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/time.h>
+#include <unistd.h>
 
 #include "test.h"
 #include "valkey/rdma.h"
@@ -15,7 +16,8 @@
 #define DEFAULT_THREADS 16
 #define DEFAULT_CLIENTS 128
 #define DEFAULT_PIPELINE 384
-#define DEFAULT_REQUESTS 200000
+#define DEFAULT_MAXKEYS 2048
+#define DEFAULT_MINKEYS 1024
 #define MAX_KEY_LEN 128
 
 /* Per-pthread slice: owns clients [first_client, last_client). cfg and value
@@ -37,14 +39,6 @@ typedef struct client_state {
   int pending;         /* cmds appended but not yet drained this batch */
   valkeyContext *context;
 } client_state;
-
-static long long requests_for_client(const rdma_test_config *cfg,
-                                     int client_id) {
-  long long base = cfg->requests / cfg->clients;
-  long long extra = client_id < (cfg->requests % cfg->clients) ? 1 : 0;
-
-  return base + extra;
-}
 
 static int check_status_reply(valkeyReply *reply, const char *expected,
                               int client_id, long long seq) {
@@ -247,7 +241,7 @@ static void *worker_main(void *arg) {
     int client_id = worker->first_client + i;
 
     states[i].client_id = client_id;
-    states[i].requests = requests_for_client(cfg, client_id);
+    states[i].requests = rdmaTestRandCount(cfg->minkeys, cfg->maxkeys);
     states[i].context = connect_rdma(cfg, client_id);
     if (!states[i].context)
       goto cleanup;
@@ -262,10 +256,13 @@ static void *worker_main(void *arg) {
   if (run_phase(states, state_count, cfg, value, 1) != 0)
     goto cleanup;
 
+  long long total = 0;
+  for (int i = 0; i < state_count; i++)
+    total += states[i].requests;
   printf("Valkey Over RDMA libvalkey thread[%d] clients %d-%d SET/GET %lld "
          "requests [OK]\n",
          worker->thread_id, worker->first_client, worker->last_client - 1,
-         cfg->requests);
+         total);
   ret = 0;
 
 cleanup:
@@ -295,7 +292,8 @@ int main(int argc, char **argv) {
       .threads = DEFAULT_THREADS,
       .clients = DEFAULT_CLIENTS,
       .pipeline = DEFAULT_PIPELINE,
-      .requests = DEFAULT_REQUESTS,
+      .minkeys = DEFAULT_MINKEYS,
+      .maxkeys = DEFAULT_MAXKEYS,
       .datasize = RDMA_TEST_DEFAULT_DATASIZE_LIBVALKEY_TEST,
   };
   pthread_t *threads;
@@ -310,6 +308,9 @@ int main(int argc, char **argv) {
     fprintf(stderr, "--thread/-t must be >= 1 for libvalkey-test\n");
     return 1;
   }
+
+  /* Seed the per-connection command-count RNG (see rdmaTestRandCount). */
+  srandom(time(NULL) ^ getpid());
 
   char *value = init_value(cfg.datasize);
 
@@ -330,9 +331,9 @@ int main(int argc, char **argv) {
   }
 
   printf("Valkey Over RDMA libvalkey test host=%s port=%d threads=%d "
-         "clients=%d pipeline=%d requests=%lld datasize=%zu\n",
+         "clients=%d pipeline=%d minkeys=%d maxkeys=%d datasize=%zu\n",
          cfg.host, cfg.port, cfg.threads, cfg.clients, cfg.pipeline,
-         cfg.requests, cfg.datasize);
+         cfg.minkeys, cfg.maxkeys, cfg.datasize);
 
   for (int i = 0; i < cfg.threads; i++) {
     workers[i].cfg = &cfg;

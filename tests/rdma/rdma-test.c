@@ -913,7 +913,7 @@ static void *test_routine(void *arg) {
   printf("Valkey Over RDMA test thread[%d] PING/PONG [OK]\n", tid);
 
   /* prepare random KV for SET/GET */
-  keys = random() % (config.maxkeys - config.minkeys) + config.minkeys;
+  keys = rdmaTestRandCount(config.minkeys, config.maxkeys);
   kv_pairs = calloc(sizeof(struct test_kv_pair), keys);
 
   for (int i = 0; i < keys; i++) {
@@ -978,11 +978,6 @@ int main(int argc, char *argv[]) {
   pthread_t threads[RDMA_TEST_MAX_THREADS];
 
   rdmaTestParseArgs(argc, argv, &config);
-
-  if (config.minkeys > config.maxkeys) {
-    fprintf(stderr, "minkeys should be less than maxkeys\n");
-    exit(1);
-  }
 
   /* To make the test randomly */
   srandom(time(NULL) ^ getpid());

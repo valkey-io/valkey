@@ -23,7 +23,6 @@ typedef struct {
   int maxkeys;
   int clients;
   int pipeline;
-  long long requests;
 } rdma_test_config;
 
 static inline void usage(const char *proc) {
@@ -37,7 +36,6 @@ static inline void usage(const char *proc) {
   printf("\t--minkeys/-m MINKEYS\n");
   printf("\t--clients/-c CLIENTS\n");
   printf("\t--pipeline/-P PIPELINE\n");
-  printf("\t--requests/-n REQUESTS\n");
 }
 
 static inline int rdmaTestParseIntRange(const char *name, const char *value,
@@ -58,21 +56,6 @@ static inline int rdmaTestParseIntRange(const char *name, const char *value,
 static inline int rdmaTestParsePositiveInt(const char *name,
                                            const char *value) {
   return rdmaTestParseIntRange(name, value, 1, INT_MAX);
-}
-
-static inline long long rdmaTestParsePositiveLongLong(const char *name,
-                                                      const char *value) {
-  char *end = NULL;
-  long long val;
-
-  errno = 0;
-  val = strtoll(value, &end, 10);
-  if (errno || !end || *end || val <= 0) {
-    fprintf(stderr, "%s must be a positive integer\n", name);
-    exit(1);
-  }
-
-  return val;
 }
 
 static inline int rdmaTestParsePort(const char *value) {
@@ -99,10 +82,9 @@ static inline void rdmaTestParseArgs(int argc, char **argv,
       {"maxkeys", required_argument, NULL, 'M'},
       {"clients", required_argument, NULL, 'c'},
       {"pipeline", required_argument, NULL, 'P'},
-      {"requests", required_argument, NULL, 'n'},
       {NULL, 0, NULL, 0},
   };
-  static const char short_opts[] = "Hh:p:t:d:m:M:c:P:n:";
+  static const char short_opts[] = "Hh:p:t:d:m:M:c:P:";
   int opt;
 
   while ((opt = getopt_long(argc, argv, short_opts, long_opts, NULL)) != -1) {
@@ -132,9 +114,6 @@ static inline void rdmaTestParseArgs(int argc, char **argv,
     case 'P':
       cfg->pipeline = rdmaTestParsePositiveInt("--pipeline", optarg);
       break;
-    case 'n':
-      cfg->requests = rdmaTestParsePositiveLongLong("--requests", optarg);
-      break;
     case 'H':
       usage(argv[0]);
       exit(0);
@@ -147,6 +126,12 @@ static inline void rdmaTestParseArgs(int argc, char **argv,
   /* host is required by every RDMA test; enforce it once here. */
   if (!cfg->host) {
     fprintf(stderr, "missing --host/-h\n");
+    usage(argv[0]);
+    exit(1);
+  }
+
+  if (cfg->minkeys >= cfg->maxkeys) {
+    fprintf(stderr, "--minkeys must be less than --maxkeys\n");
     usage(argv[0]);
     exit(1);
   }
@@ -179,6 +164,12 @@ static inline void rdmaTestFillPattern(char *buf, size_t len) {
 static inline void rdmaTestFillRandomUppercase(char *buf, size_t len) {
   for (size_t i = 0; i < len; i++)
     buf[i] = 'A' + random() % 26;
+}
+
+/* Random count in [minkeys, maxkeys): sizes a thread's key batch (rdma-test) or
+ * a connection's command batch (libvalkey-test). Requires min < max. */
+static inline int rdmaTestRandCount(int minkeys, int maxkeys) {
+  return random() % (maxkeys - minkeys) + minkeys;
 }
 
 #endif /* VALKEY_RDMA_TEST_H */

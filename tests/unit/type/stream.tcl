@@ -908,12 +908,12 @@ start_server {tags {"stream needs:debug"} overrides {appendonly yes stream-node-
         r XADD mystream * xitem v
         incr j
         assert {[r xlen mystream] == 91}
+        r flushall
     }
-}
 
-start_server {tags {"stream"} overrides {appendonly yes appendfsync always stream-node-max-entries 10}} {
     test {XADD/XTRIM strip redundant LIMIT when rewriting for propagation} {
         set aof [get_last_incr_aof_path r]
+        r config set stream-node-max-entries 10
 
         for {set j 0} {$j < 100} {incr j} {
             r XADD mystream * xitem v

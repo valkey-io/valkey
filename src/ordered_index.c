@@ -293,30 +293,43 @@ unsigned long orderedIndexCountLexRange(const OrderedIndex *oi, const_sds min, c
     fbtreeIterator iter;
     fbtreeInitIterator(&iter, fbt);
 
-    /* Seek to min bound */
+    /* Count via rank arithmetic: count = end_rank - start_rank. fbtreeSeekToValue
+     * returns the rank of the first item whose packed value is >= the bound.
+     * Unlike scores, lex elements are variable-length with no "next representable"
+     * value, so inclusive/exclusive boundaries are resolved by probing whether the
+     * bound itself is present (packed (score,element) values are unique). */
+
+    /* Lower bound: rank of the first in-range item. */
+    long start_rank;
     if (min == shared.minstring) {
-        fbtreeSeekToRank(&iter, 0);
+        start_rank = 0;
     } else {
-        sds packed = sdsnewlen(NULL, SCORE_SIZE + sdslen(min));
-        memcpy(packed, &score_prefix, SCORE_SIZE);
-        memcpy(packed + SCORE_SIZE, min, sdslen(min));
-        seekForBound(&iter, packed, 0, !min_ex);
+        sds packed = packLexBound(score_prefix, min);
+        start_rank = fbtreeSeekToValue(packed, &iter);
+        if (min_ex) {
+            /* Exclusive min: skip the bound itself if present. */
+            const_sds at = fbtreeGetAtRank(fbt, (unsigned long)start_rank);
+            if (at && sdscmp(at, packed) == 0) start_rank++;
+        }
         sdsfree(packed);
     }
 
-    unsigned long count = 0;
-    const_sds pos;
-    while (fbtreeNext(&iter, &pos)) {
-        if (max != shared.maxstring) {
-            size_t ele_len;
-            const char *ele = unpackElement(pos, &ele_len);
-            int cmp = memcmp(ele, max, ele_len < sdslen(max) ? ele_len : sdslen(max));
-            if (cmp == 0) cmp = (int)ele_len - (int)sdslen(max);
-            if (max_ex ? cmp >= 0 : cmp > 0) break;
+    /* Upper bound: rank of the first item past the range. */
+    long end_rank;
+    if (max == shared.maxstring) {
+        end_rank = (long)len;
+    } else {
+        sds packed = packLexBound(score_prefix, max);
+        end_rank = fbtreeSeekToValue(packed, &iter);
+        if (!max_ex) {
+            /* Inclusive max: include the bound itself if present. */
+            const_sds at = fbtreeGetAtRank(fbt, (unsigned long)end_rank);
+            if (at && sdscmp(at, packed) == 0) end_rank++;
         }
-        count++;
+        sdsfree(packed);
     }
-    return count;
+
+    return (end_rank > start_rank) ? (unsigned long)(end_rank - start_rank) : 0;
 }
 
 /* ==========================================================================

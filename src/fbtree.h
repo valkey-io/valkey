@@ -46,8 +46,11 @@ long fbtreeSeekToScore(const char *score, fbtreeIterator *iterator);
 /* Value seek - positions iterator at first element with value >= given value.
  * Uses full sds comparison (not just score prefix).
  * Always positions the iterator (even if no exact match). Use fbtreeNext to get elements.
- * If all elements have value < given value, iterator is positioned past end. */
-void fbtreeSeekToValue(const_sds value, fbtreeIterator *iterator);
+ * If all elements have value < given value, iterator is positioned past end.
+ * Returns the rank (0-indexed) of the position. If positioned past end,
+ * returns the tree length (one past the last valid rank). Returns 0 for
+ * an empty tree. */
+long fbtreeSeekToValue(const_sds value, fbtreeIterator *iterator);
 
 /* Optional callback invoked for each item being deleted, before sdsfree.
  * Pass NULL for callback/callback_ctx to skip. */

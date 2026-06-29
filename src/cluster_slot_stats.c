@@ -141,7 +141,10 @@ void clusterSlotStatsAddNetworkBytesOutForSlot(int slot, unsigned long long net_
 
 /* Accumulates egress bytes upon sending RESP responses back to user clients. */
 void clusterSlotStatsAddNetworkBytesOutForUserClient(client *c) {
-    clusterSlotStatsAddNetworkBytesOutForSlot(c->slot, c->net_output_bytes_curr_cmd);
+    /* FIX: Cast the size_t net_output_bytes_curr_cmd to uint64_t to prevent 
+     * 32-bit compilation failures when interfacing with 64-bit slot telemetry structures. */
+    uint64_t out_bytes = (uint64_t)c->net_output_bytes_curr_cmd;
+    clusterSlotStatsAddNetworkBytesOutForSlot(c->slot, out_bytes);
 }
 
 /* Accumulates egress bytes upon sending replication stream. This only applies for primary nodes. */
@@ -181,7 +184,11 @@ void clusterSlotStatsAddNetworkBytesOutForShardedPubSubInternalPropagation(clien
     if (!clusterSlotStatsEnabled(slot)) return;
 
     serverAssert(slot >= 0 && slot < CLUSTER_SLOTS);
-    server.cluster->slot_stats[slot].network_bytes_out += c->net_output_bytes_curr_cmd;
+    
+    /* FIX: Cast the size_t net_output_bytes_curr_cmd to uint64_t for strict
+     * 32-bit architecture type-matching when adding to the 64-bit cluster stats accumulator. */
+    uint64_t out_bytes = (uint64_t)c->net_output_bytes_curr_cmd;
+    server.cluster->slot_stats[slot].network_bytes_out += out_bytes;
 
     /* For sharded pubsub, the client's network bytes metrics must be reset here,
      * as resetClient() is not called until subscription ends. */

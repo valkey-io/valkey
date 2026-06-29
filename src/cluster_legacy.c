@@ -3671,7 +3671,10 @@ int clusterIsValidPacket(clusterLink *link) {
 
     if (type < CLUSTERMSG_TYPE_COUNT) {
         server.cluster->stats_bus_messages_received[type]++;
-        clusterBusAddNetworkBytesByType(type, totlen, 0);
+        /* FIX: Explicitly cast 32-bit unsigned totlen to uint64_t to satisfy 
+         * strict C11 _Generic atomic macro typing on 32-bit architectures. */
+        uint64_t bytes_received = (uint64_t)totlen;
+        clusterBusAddNetworkBytesByType(type, bytes_received, 0);
     }
 
     if (is_light && !messageTypeSupportsLightHdr(type)) {
@@ -4510,7 +4513,11 @@ void clusterWriteHandler(connection *conn) {
             handleLinkIOError(link);
             return;
         }
-        clusterBusAddNetworkBytesByType(ntohs(msg->type) & ~CLUSTERMSG_MODIFIER_MASK, nwritten, 1);
+        
+        /* FIX: Explicitly cast the ssize_t nwritten payload length to uint64_t 
+         * before passing into the strictly-typed cluster telemetry pipeline. */
+        uint64_t bytes_written = (uint64_t)nwritten;
+        clusterBusAddNetworkBytesByType(ntohs(msg->type) & ~CLUSTERMSG_MODIFIER_MASK, bytes_written, 1);
         if (msg_offset + nwritten < msg_len) {
             /* If full message wasn't written, record the offset
              * and continue sending from this point next time */

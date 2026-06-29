@@ -105,10 +105,10 @@ test "Verify latency metrics are present per node in CLUSTER SHARDS output" {
 
         set shards [R $i CLUSTER SHARDS]
 
-#        # Print the raw structure to your terminal log
-#        puts "=== NODE $i CLUSTER SHARDS OUTPUT ==="
-#        puts $shards
-#        puts "====================================="
+        # Print the raw structure to your terminal log
+        puts "=== NODE $i CLUSTER SHARDS OUTPUT ==="
+        puts $shards
+        puts "====================================="
 
         foreach shard $shards {
         
@@ -119,8 +119,8 @@ test "Verify latency metrics are present per node in CLUSTER SHARDS output" {
 
         foreach node_data $nodes_list {
             set node_dict [dict create {*}$node_data]
-            assert {[dict exists $node_dict "max-round-trip-time1"]}
-            assert {[dict exists $node_dict "avg-round-trip-time1"]} 
+            assert {[dict exists $node_dict "max-round-trip-time"]}
+            assert {[dict exists $node_dict "avg-round-trip-time"]} 
         }
         }
     }

@@ -670,6 +670,9 @@ typedef struct {
     /* XADD + XTRIM common options */
     int trim_strategy;         /* TRIM_STRATEGY_* */
     int trim_strategy_arg_idx; /* Index of the count in MAXLEN/MINID, for rewriting. */
+    int limit_arg_idx;         /* Index of the LIMIT token in argv if it was given,
+                                * 0 otherwise. Used to strip the redundant LIMIT
+                                * option when rewriting the command for propagation. */
     int approx_trim;           /* If 1 only delete whole radix tree nodes, so
                                 * the trim argument is not applied verbatim. */
     long long limit;           /* Maximum amount of entries to trim. If 0, no limitation
@@ -960,6 +963,8 @@ static int streamParseAddOrTrimArgsOrReply(client *c, streamAddTrimArgs *args, i
                 return -1;
             }
             limit_given = 1;
+            args->limit_arg_idx = i; /* Remember LIMIT position so the rewrite path
+                                      * can drop the two-arg LIMIT option entirely. */
             i++;
         } else if (xadd && !strcasecmp(opt, "nomkstream")) {
             args->no_mkstream = 1;
@@ -1999,6 +2004,40 @@ void streamRewriteTrimArgument(client *c, stream *s, int trim_strategy, int idx)
     decrRefCount(arg);
 }
 
+/* Drop the two-argument "LIMIT <count>" option from the rewritten command.
+ *
+ * Once we have rewritten "MAXLEN ~ N" to "MAXLEN = <resulting-len>",
+ * the trim that will run on the replay side is fully deterministic
+ * and the LIMIT cap can no longer fire.
+ * More critically, when the migration tool sends the rewritten command
+ * without marking it as 'mustObeyClient', the destination DB will return an error.*/
+void streamRewriteStripLimit(client *c, int limit_idx) {
+    /* limit_idx points at the "LIMIT" token; limit_idx + 1 is the count. */
+    serverAssert(limit_idx > 0 && limit_idx + 1 < c->argc);
+    serverAssert(c->argv != c->original_argv);
+
+    robj *limit_tok = c->argv[limit_idx];
+    robj *limit_val = c->argv[limit_idx + 1];
+
+    c->argv_len_sum -= stringObjectLen(limit_tok);
+    c->argv_len_sum -= stringObjectLen(limit_val);
+
+    /* Shift the tail (everything after "LIMIT <count>") two slots left. */
+    int tail = c->argc - (limit_idx + 2);
+    if (tail > 0) {
+        memmove(&c->argv[limit_idx],
+                &c->argv[limit_idx + 2],
+                sizeof(robj *) * tail);
+    }
+
+    c->argc -= 2;
+    c->argv[c->argc] = NULL;
+    c->argv[c->argc + 1] = NULL;
+
+    decrRefCount(limit_tok);
+    decrRefCount(limit_val);
+}
+
 /* XADD key [(MAXLEN [~|=] <count> | MINID [~|=] <id>) [LIMIT <entries>]] [NOMKSTREAM] <ID or *> [field value] [field
  * value] ... */
 void xaddCommand(client *c) {
@@ -2067,6 +2106,12 @@ void xaddCommand(client *c) {
              * way LIMIT is given without the ~ option. */
             streamRewriteApproxSpecifier(c, parsed_args.trim_strategy_arg_idx - 1);
             streamRewriteTrimArgument(c, s, parsed_args.trim_strategy, parsed_args.trim_strategy_arg_idx);
+
+            if (parsed_args.limit_arg_idx) {
+                serverAssert(parsed_args.limit_arg_idx < idpos);
+                streamRewriteStripLimit(c, parsed_args.limit_arg_idx);
+                idpos -= 2;
+            }
         }
     }
 
@@ -3606,6 +3651,10 @@ void xtrimCommand(client *c) {
              * way LIMIT is given without the ~ option. */
             streamRewriteApproxSpecifier(c, parsed_args.trim_strategy_arg_idx - 1);
             streamRewriteTrimArgument(c, s, parsed_args.trim_strategy, parsed_args.trim_strategy_arg_idx);
+
+            if (parsed_args.limit_arg_idx) {
+                streamRewriteStripLimit(c, parsed_args.limit_arg_idx);
+            }
         }
 
         /* Propagate the write. */

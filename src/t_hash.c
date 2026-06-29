@@ -1162,6 +1162,11 @@ void hgetdelCommand(client *c) {
     long long num_fields = 0;
     bool keyremoved = false;
 
+    if (strcasecmp(objectGetVal(c->argv[fields_index - 2]), "fields")) {
+        addReplyErrorObject(c, shared.syntaxerr);
+        return;
+    }
+
     if (getLongLongFromObjectOrReply(c, c->argv[fields_index - 1], &num_fields, NULL) != C_OK) return;
 
     /* Check that the parsed fields number matches the real provided number of fields */
@@ -1460,7 +1465,6 @@ void hsetexCommand(client *c) {
     if (set_expired) {
         new_argv = zmalloc(sizeof(robj *) * (num_fields + 2));
         new_argv[new_argc++] = shared.hdel;
-        incrRefCount(shared.hdel);
         new_argv[new_argc++] = c->argv[1];
         incrRefCount(c->argv[1]);
     } else if (need_rewrite_argv) {
@@ -1934,9 +1938,8 @@ void hexpireGenericCommand(client *c, mstime_t basetime, int unit) {
         else if (result == EXPIRATION_MODIFICATION_EXPIRE_ASAP) {
             /* In case we are expiring all the elements prepare a new argv since we are going to delete all the expired fields. */
             if (new_argv == NULL) {
-                new_argv = zmalloc(sizeof(robj *) * (num_fields + 3));
+                new_argv = zmalloc(sizeof(robj *) * (num_fields + 2));
                 new_argv[new_argc++] = shared.hdel;
-                incrRefCount(shared.hdel);
                 new_argv[new_argc++] = c->argv[1];
                 incrRefCount(c->argv[1]);
             }

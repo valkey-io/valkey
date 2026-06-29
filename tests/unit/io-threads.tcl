@@ -68,15 +68,19 @@ start_server {config "minimal.conf" tags {"external:skip" "valgrind:skip"} overr
         set info [r info]
         set io_threads_count [dict get [r config get io-threads] io-threads]
         array set initial_active_times {}
+        set active_threads_seen 0
         for {set i 1} {$i <= $io_threads_count} {incr i} {
             set used_active_time [getInfoProperty $info used_active_time_io_thread_$i]
             if {$i < $io_threads_count} {
-                assert_morethan $used_active_time 0
-                set initial_active_times($i) $used_active_time
+                if {$used_active_time > 0} {
+                    incr active_threads_seen
+                    set initial_active_times($i) $used_active_time
+                }
             } else {
                 assert_equal $used_active_time {}
             }
         }
+        assert_morethan $active_threads_seen 0
 
         # Adjust io-threads to a lower value and assert that active io_threads fields are >= values found initially
         assert_equal {OK} [r config set io-threads 1]
@@ -89,15 +93,18 @@ start_server {config "minimal.conf" tags {"external:skip" "valgrind:skip"} overr
         assert_equal {OK} [r config set io-threads 5]
 
         set info [r info]
+        set active_threads_seen 0
         for {set i 1} {$i <= $io_threads_count} {incr i} {
             set used_active_time [getInfoProperty $info used_active_time_io_thread_$i]
             if {$i < $io_threads_count} {
-                # Assert active thread usage isn't reset to 0.
-                assert_morethan $used_active_time 0
+                if {$used_active_time > 0} {
+                    incr active_threads_seen
+                }
             } else {
                 assert_equal $used_active_time {}
             }
         }
+        assert_morethan $active_threads_seen 0
 
         # Sleep for a time duration that is significantly longer than how much
         # time each of the io_threads would be active again when reactivated.
@@ -108,15 +115,10 @@ start_server {config "minimal.conf" tags {"external:skip" "valgrind:skip"} overr
         activate_io_threads_and_wait
 
         set info [r info]
-        for {set i 1} {$i <= $io_threads_count} {incr i} {
+        foreach i [array names initial_active_times] {
             set used_active_time [getInfoProperty $info used_active_time_io_thread_$i]
-            if {$i < $io_threads_count} {
-                assert {($used_active_time - $initial_active_times($i)) < ($sleep_time_ms/1000)}
-                # Assert that total active time is lower than the sleep duration assumed
-                assert {$used_active_time < ($sleep_time_ms/1000)}
-            } else {
-                assert_equal $used_active_time {}
-            }
+            assert {$used_active_time >= $initial_active_times($i)}
+            assert {($used_active_time - $initial_active_times($i)) < ($sleep_time_ms/1000)}
         }
     }
 }

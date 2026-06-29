@@ -196,6 +196,34 @@ policy: ignite when main-thread active time crosses
 non-empty, scale down after `IO_COOLDOWN_MS` of idle. `io-threads-always-active`
 disables the policy and keeps all configured workers awake.
 
+## Cluster Bus I/O
+
+Cluster bus reads, writes, and TLS accepts run on the same worker pool as
+client I/O. The main thread alone applies cluster packets and mutates
+cluster state; workers do transport work only.
+
+Key design decisions:
+
+- **Read snapshot boundary.** Workers read into `clusterLink->rcvbuf`, scan
+  the prefix of complete packets, and publish `io_rcvbuf_snapshot_len` /
+  `io_rcvbuf_snapshot_packets`. The main thread drains exactly that prefix
+  on completion.
+- **Write snapshot boundary.** A single canonical `send_msg_queue` is shared
+  with the worker via `io_last_send_block` + `io_head_offset`. New messages
+  enqueued while a write is in flight are picked up by the next dispatch.
+- **Read and write are mutually exclusive per link.**
+- **Deferred teardown.** `freeClusterLink()` defers final free via
+  `io_refs > 0` + `async_close = 1`; the last completion drops the ref and
+  frees the link.
+- **Accept serialization.** `CONN_FLAG_ACCEPT_OFFLOAD_PENDING` ensures only
+  one accept job is in flight per connection across TLS retries. The
+  generic accept path uses `ConnectionOwnerKind` to route cluster-owned
+  connections back to the cluster dispatcher.
+- **Fallback.** If dispatch returns `C_ERR`, the caller runs the I/O on
+  the main thread and increments `cluster_io_main_thread_fallbacks`.
+
+Counters live in `CLUSTER INFO`.
+
 ## Relevant Code
 
 - `src/io_threads.{c,h}` — main thread dispatch helpers, worker loop,

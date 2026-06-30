@@ -138,32 +138,43 @@ NODE_JOIN <node-id> <address>
     via MEET. The node starts as a learner and is promoted to follower
     when the entry is committed.
 
-NODE_FORGET <node-id>
-    Remove a node from the cluster (CLUSTER FORGET). Not yet implemented.
+NODE_FORGET <node-id> <shard-epoch>
+    Remove a node from the cluster (CLUSTER FORGET). The epoch refers to
+    leaving node's shard and guards against removing a node whose
+    role changed (e.g., promoted to primary via a concurrent FAILOVER).
 
-SLOT_CHANGE <node-id-or-dash> <range> [<range> ...]
+SLOT_CHANGE <source-node-id-or-dash> <source-epoch> <target-node-id-or-dash> <target-epoch> <range> [<range> ...]
     Assign or remove slot ownership. A dash means "no owner" (delete
     slots). Ranges use the nodes.conf format: "0-5460" or "5461".
+    Carries two epochs (source and target shard). Shard epoch is not
+    bumped because SLOT_CHANGE only moves slots, it doesn't change shard
+    membership or leadership. Two slot migrations touching the same
+    shard are safe to apply concurrently as they affect different slots.
+    Bumping would serialize them unnecessarily. But validating is still
+    needed to catch the case where a slot migration races against a
+    failover that invalidated the shard's topology.
 
-SET_REPLICA_OF <replica-id> <primary-id-or-dash> <shard-id>
+SET_REPLICA_OF <replica-id> <source-shard> <source-epoch> <primary-id-or-dash> <target-shard> <target-epoch>
     Set a node as replica of a primary (CLUSTER REPLICATE). A dash as
-    primary means promote to primary. The shard-id is the target shard:
-    for promotion, a new random id; for assignment, the primary's
-    current shard-id (used as a guard against concurrent changes).
+    primary means promote to primary. It carries two epochs because it
+    involves two shards (source and target) and bumps the epoch of both
+    shards on apply.
 
-FAILOVER <replica-id> <primary-id>
+FAILOVER <replica-id> <primary-id> <shard-id> <shard-epoch>
     The replica takes over the primary's slots and becomes primary.
-    The old primary becomes a replica of the new primary.
+    The old primary becomes a replica of the new primary. This bumps the
+    shard epoch on apply.
 
 NODE_INFO <node-id> <address-string> <flags>
     Update node address and self-set flags. The address-string uses
     the nodes.conf format but excludes shard-id, which is not a
     property of the node but of the shard and is managed by NODE_JOIN
-    and SET_REPLICA_OF. Flags is "nofailover" or "noflags".
+    and SET_REPLICA_OF. Flags is "nofailover" or "noflags". No shard epoch required here
+    as it does not create any mutations.
 
 NODE_FAIL <node-id>
     Mark a node as failed. Proposed by the leader when a peer exceeds
-    the node timeout without responding to heartbeats.
+    the node timeout without responding to heartbeats. No shard epoch here as it does not change cluster membership or leadership.
 
 NODE_RECOVER <node-id>
     Clear the FAIL flag. Proposed by the leader when it receives
@@ -171,7 +182,7 @@ NODE_RECOVER <node-id>
 ```
 
 Ranges in SLOT_CHANGE use the same format as nodes.conf: `0-5460` or
-`5461`. A dash as node-id means "no owner" (delete slots) or "no
+`5461`. A dash as source/target-id means "no owner" (delete slots) or "no
 primary" (promote to primary).
 
 ### Why typed entries instead of a key-value store?
@@ -212,9 +223,9 @@ changes are infrequent.
 ## PROPOSE and Leader Validation
 
 Followers forward proposals to the leader using the PROPOSE message,
-sent on the outbound link to the leader. The leader always accepts
-proposals without validation — it appends them to the log and
-replicates them. Validation happens at apply time, where the apply
+sent on the outbound link to the leader. The leader accepts
+proposals with best effort pre-validations — it appends them to the log and
+replicates them. Authoritative validation happens at apply time, where the apply
 function can detect conflicts and treat them as no-ops.
 
 This design simplifies the leader: it doesn't need to understand the
@@ -739,21 +750,29 @@ reuse), but the vars and log lines are raft-specific. The file is not
 compatible between protocols — switching from gossip to raft (or vice
 versa) requires removing nodes.conf.
 
-## Shard Epoch (not yet implemented)
+## Shard Epoch
 
-A shard-epoch is a per-shard monotonically increasing counter, bumped
-on topology changes within the shard (FAILOVER, SET_REPLICA_OF,
-SLOT_CHANGE). Entries that modify shard topology include the current
-shard-epoch at proposal time. On apply, if the shard-epoch has
-advanced, the entry is stale and becomes a no-op.
+Raft ensures entries are applied in a total order, but ordering alone
+is not sufficient to prevent stale mutations from corrupting cluster
+state. When concurrent operations target the same shard (e.g., a slot
+migration racing with a failover), a committed entry may carry
+assumptions about shard topology that are no longer true by the time
+it is applied. Without additional application-level state to fence
+against these stale updates, the apply logic can produce
+inconsistencies — such as moving a slot to a node that no longer owns
+the corresponding keys.
 
-This prevents stale entries from causing inconsistencies when
-concurrent operations race in the log. Example:
+A shard-epoch is a per-shard monotonically increasing counter stored
+in the raft protocol state. It is bumped each time membership or
+leadership of the shard changes. Such entries include the shard's
+current epoch at proposal time. Epoch is validated at prepare time
+and at apply time. If the epoch has advanced past the value in the entry,
+the entry is stale and is ignored.
+
+### Example: slot migration racing with failover
 
 ```
-Slot migration racing with failover:
-
-1. Atomic slot migration starts: keys transferred from shard A to B.
+1. Slot migration starts: keys transferred from shard A to shard B.
 2. Primary of shard A fails. FAILOVER entry is proposed.
 3. Migration is rolled back (keys stay on shard A's new primary).
 4. SLOT_CHANGE entry (assigning slot to shard B) was proposed before
@@ -764,14 +783,45 @@ Slot migration racing with failover:
    carries the old epoch, so it's a no-op. Slot stays on shard A.
 ```
 
-Entries that should carry a shard-epoch:
-- FAILOVER (bumps epoch of the shard)
-- SET_REPLICA_OF (bumps epoch when changing shard membership)
-- SLOT_CHANGE (checked against source and target shard epochs)
+### Validation
 
-Entries that don't need a shard-epoch:
-- NODE_FAIL / NODE_RECOVER (liveness, not topology)
-- NODE_INFO / NODE_JOIN / NODE_FORGET (node-level, not shard-level)
+Epoch validation happens at two points:
+
+1. **Pre-validation on the leader** — before appending to the log.
+   This is a best-effort optimization that rejects obviously stale
+   proposals early, saving log space and replication bandwidth. It
+   performs a read-only check without bumping the epoch.
+
+2. **Apply-time validation** — the authoritative check. Each apply
+   function validates the entry's epoch against the current shard
+   epoch. On match (or epoch 0 for a new shard), the epoch is bumped
+   and the entry is applied. On mismatch, the entry is a no-op and
+   the error is propagated to the caller's callback.
+
+### Retry on stale epoch
+
+Proposals rejected due to a stale shard epoch are automatically retried
+with a fresh epoch (up to 5 attempts):
+
+- **SET_REPLICA_OF / NODE_FORGET / FAILOVER (force) / SLOT_CHANGE** —
+  the proposal is rebuilt with current epoch(s) and re-submitted.
+
+- **Automatic failover** — if the FAILOVER proposal is rejected, the
+  failover is re-scheduled (via `todo_schedule_failover`) as long as
+  the primary is still failed. The next attempt uses the current epoch.
+  For automatic failover, no cap on retry attempt to avoid leaderless shard.
+
+Only `STALE_SHARD_EPOCH_REJECTION_MSG` triggers retry. Other errors
+(format errors, invalid state) are forwarded to the client immediately.
+
+When the leader rejects a forwarded proposal at pre-validation, it sends
+a `REJECT <reason> <type> <data...>` message back. The reason is a token:
+`conflict` (stale epoch, retryable) or `syntax` (permanent error).
+
+### Entries that don't carry an epoch
+
+- NODE_FAIL / NODE_RECOVER 
+- NODE_INFO, NODE_JOIN
 
 ## Leader Transfer
 

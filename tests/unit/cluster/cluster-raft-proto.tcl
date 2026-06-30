@@ -84,6 +84,16 @@ proc raft_listen_and_accept {port_var {timeout 5000} {before_accept {}}} {
     return $::_raft_accepted
 }
 
+# Connect a fake node to a cluster bus port and complete HELLO handshake.
+# Returns the connected fd.
+proc raft_connect_fake_node {host cport fake_id fake_addr} {
+    set fd [raft_connect $host $cport]
+    raft_send $fd "HELLO $fake_id $fake_addr"
+    set reply [raft_recv $fd]
+    assert_match "HI *" $reply
+    return $fd
+}
+
 # Parse an AE message and reply with AE_ACK.
 # Returns the last log index after applying the entries.
 proc raft_reply_ae_ack {fd ae_msg repl_offset} {
@@ -512,6 +522,137 @@ test "Raft proto: leader sends REPL_OFFSETS after follower offset changes" {
         assert_equal 1 $found "leader should send REPL_OFFSETS with offset 5000"
 
         close $fd
+    }
+}
+
+# --------------------------------------------------------------------------
+# Shard epoch: stale proposal rejection tests (parameterized).
+# These verify that the leader rejects stale proposals BEFORE appending
+# to the raft log (commit index unchanged, cluster state unchanged).
+# --------------------------------------------------------------------------
+
+start_multiple_servers 2 {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 2000 loglevel debug}} {
+    # Shared setup: form cluster and assign slots.
+    R 0 CLUSTER MEET [srv -1 host] [srv -1 port]
+
+    wait_for_condition 50 100 {
+        [CI 0 cluster_size] == 2 &&
+        [CI 1 cluster_size] == 2
+    } else {
+        fail "Cluster did not form"
+    }
+
+    R 0 CLUSTER ADDSLOTSRANGE 0 16383
+
+    wait_for_condition 50 100 {
+        [CI 0 cluster_slots_assigned] == 16384 &&
+        [CI 1 cluster_slots_assigned] == 16384
+    } else {
+        fail "Slots not assigned"
+    }
+
+    set node_id [R 0 CLUSTER MYID]
+    set node1_id [R 1 CLUSTER MYID]
+
+    # Make r1 a replica of r0. This commits a SET_REPLICA_OF entry
+    # which bumps the shard epoch from 0 to 1.
+    R 1 CLUSTER REPLICATE $node_id
+
+    set port [srv 0 port]
+    set cport [expr {$port + 10000}]
+
+    # Extract shard-id of r0 from CLUSTER SHARDS output.
+    set node0_shard ""
+    set shards [R 0 CLUSTER SHARDS]
+    foreach shard $shards {
+        foreach node [dict get $shard nodes] {
+            if {[dict get $node id] eq $node_id} {
+                set node0_shard [dict get $shard id]
+            }
+        }
+    }
+    assert {$node0_shard ne ""}
+
+    set fake_id [string repeat "f" 40]
+    set fake_addr "127.0.0.1:9999@19999,,tls-port=0,shard-id=[string repeat e 40]"
+
+    # Each entry: {entry_type propose_msg state_check}
+    set stale_proposals [list \
+        [list "SLOT_CHANGE" "PROPOSE SLOT_CHANGE $node_id 50 $node1_id 0 0-100" {
+            assert_equal 16384 [CI 0 cluster_slots_assigned]
+        }] \
+        [list "FAILOVER" "PROPOSE FAILOVER $node1_id $node_id $node0_shard 50" {
+            set nodes [R 0 CLUSTER NODES]
+            assert_match "*$node_id*myself,master*" $nodes
+            assert_equal 16384 [CI 0 cluster_slots_assigned]
+        }] \
+    ]
+
+    foreach case $stale_proposals {
+        lassign $case entry_type propose_msg state_check
+
+        test "Raft shard epoch: stale $entry_type is rejected (pre-validation, no log append)" {
+            # Record commit index before injection.
+            set commit_before [CI 0 cluster_raft_commit_index]
+            set loglines [count_log_lines 0]
+
+            # Connect and inject stale PROPOSE.
+            set fd [raft_connect_fake_node 127.0.0.1 $cport $fake_id $fake_addr]
+            raft_send $fd $propose_msg
+
+            # Expect a REJECT message back from the leader.
+            set reply [raft_recv $fd 2000]
+            assert_match "REJECT *" $reply
+
+            # Verify rejection logged.
+            wait_for_log_messages 0 {"*Leader pre-validation: rejecting*"} $loglines 1000 10
+
+            # Verify log index unchanged (rejected at pre-validation).
+            set commit_after [CI 0 cluster_raft_commit_index]
+            assert_equal $commit_before $commit_after
+
+            # Verify cluster state unchanged (stale proposal had no effect).
+            eval $state_check
+
+            close $fd
+        }
+    }
+
+    # --------------------------------------------------------------------------
+    # Wrong shard-id: proposals where the shard-id doesn't match the node's
+    # actual shard are rejected at pre-validation.
+    # --------------------------------------------------------------------------
+
+    set wrong_shard [string repeat "1" 40]
+
+    set wrong_shard_proposals [list \
+        [list "FAILOVER" "PROPOSE FAILOVER $node1_id $node_id $wrong_shard 0"] \
+        [list "SET_REPLICA_OF" "PROPOSE SET_REPLICA_OF $node1_id $node0_shard 1 $node_id $wrong_shard 0"] \
+    ]
+
+    foreach case $wrong_shard_proposals {
+        lassign $case entry_type propose_msg
+
+        test "Raft shard epoch: $entry_type with wrong shard-id is rejected at pre-validation" {
+            set commit_before [CI 0 cluster_raft_commit_index]
+            set loglines [count_log_lines 0]
+
+            set fd [raft_connect_fake_node 127.0.0.1 $cport $fake_id $fake_addr]
+            raft_send $fd $propose_msg
+
+            # Expect a REJECT message back from the leader.
+            set reply [raft_recv $fd 2000]
+            assert_match "REJECT *" $reply
+
+            # Verify rejection logged.
+            wait_for_log_messages 0 {"*Leader pre-validation: rejecting*"} $loglines 1000 10
+
+            # Verify log index unchanged (rejected at pre-validation, epoch not bumped).
+            set commit_after [CI 0 cluster_raft_commit_index]
+            assert_equal $commit_before $commit_after
+
+            close $fd
+        }
     }
 }
 

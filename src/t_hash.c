@@ -2313,10 +2313,11 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
     else {
         /* Hashtable encoding (generic implementation) */
         unsigned long added = 0;
+        unsigned long maxtries = (count > ULONG_MAX / 10) ? ULONG_MAX : count * 10;
         listpackEntry field, value;
         hashtable *ht = hashtableCreate(&setHashtableType);
         hashtableExpand(ht, count);
-        while (added < count) {
+        while (added < count && maxtries--) {
             /* In case we were unable to locate random element, it is probably because there is no such element
              * since all elements are expired. */
             if (hashTypeRandomElement(hash, size, &field, withvalues ? &value : NULL) != C_OK)

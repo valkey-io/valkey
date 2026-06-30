@@ -8,7 +8,7 @@
  * ==========================================================================
  */
 
-#ifndef __linux__    /* currently RDMA is only supported on Linux */
+#ifndef __linux__ /* currently RDMA is only supported on Linux */
 
 #error "BUILD ERROR: RDMA is only supported on Linux"
 
@@ -55,9 +55,9 @@ typedef struct valkeyRdmaMemory {
     /* defined as following Opcodes */
     uint16_t opcode;
     uint8_t rsvd[14];
-  /* address of a transfer buffer which is used to receive remote streaming
-   * data, aka 'RX buffer address'. The remote side should use this as 'TX
-   * buffer address' */
+    /* address of a transfer buffer which is used to receive remote streaming
+     * data, aka 'RX buffer address'. The remote side should use this as 'TX
+     * buffer address' */
     uint64_t addr;
     /* length of the 'RX buffer' */
     uint32_t length;
@@ -81,7 +81,7 @@ typedef enum valkeyRdmaOpcode {
 #define UNUSED(x) (void)(x)
 #define MIN(a, b) (a) < (b) ? a : b
 #define VALKEY_RDMA_MAX_WQE 1024
-#define VALKEY_RDMA_DEFAULT_RX_LEN  (1024*1024)
+#define VALKEY_RDMA_DEFAULT_RX_LEN (1024 * 1024)
 #define VALKEY_RDMA_INVALID_OPCODE 0xffff
 
 typedef struct RdmaContext {
@@ -141,13 +141,12 @@ static inline long valkeyNowMs(void) {
     struct timeval tv;
 
     if (gettimeofday(&tv, NULL) < 0)
-            return -1;
+        return -1;
 
     return tv.tv_sec * 1000 + tv.tv_usec / 1000;
 }
 
-static int rdmaPostRecv(RdmaContext *ctx, struct rdma_cm_id *cm_id,
-                        valkeyRdmaCmd *cmd) {
+static int rdmaPostRecv(RdmaContext *ctx, struct rdma_cm_id *cm_id, valkeyRdmaCmd *cmd) {
     struct ibv_sge sge;
     size_t length = sizeof(valkeyRdmaCmd);
     struct ibv_recv_wr recv_wr, *bad_wr;
@@ -223,8 +222,7 @@ static int rdmaSetupIoBuf(RdmaContext *ctx, struct rdma_cm_id *cm_id) {
     }
 
     /* setup recv buf & MR */
-  access =
-      IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_WRITE;
+    access = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_WRITE;
     length = VALKEY_RDMA_DEFAULT_RX_LEN;
     ctx->recv_buf = calloc(length, 1);
     ctx->recv_length = length;
@@ -242,8 +240,7 @@ destroy_iobuf:
 }
 
 static int rdmaAdjustSendbuf(RdmaContext *ctx, unsigned int length) {
-  int access =
-      IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_WRITE;
+    int access = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_WRITE;
 
     if (length == ctx->send_length) {
         return 0;
@@ -271,8 +268,7 @@ static int rdmaAdjustSendbuf(RdmaContext *ctx, unsigned int length) {
     return 0;
 }
 
-static int rdmaSendCommand(RdmaContext *ctx, struct rdma_cm_id *cm_id,
-                           valkeyRdmaCmd *cmd) {
+static int rdmaSendCommand(RdmaContext *ctx, struct rdma_cm_id *cm_id, valkeyRdmaCmd *cmd) {
     struct ibv_send_wr send_wr, *bad_wr;
     struct ibv_sge sge;
     valkeyRdmaCmd *_cmd;
@@ -309,7 +305,7 @@ static int rdmaSendCommand(RdmaContext *ctx, struct rdma_cm_id *cm_id,
 }
 
 static int connRdmaRegisterRx(RdmaContext *ctx, struct rdma_cm_id *cm_id) {
-    valkeyRdmaCmd cmd = { 0 };
+    valkeyRdmaCmd cmd = {0};
 
     cmd.memory.opcode = htons(RegisterXferMemory);
     cmd.memory.addr = htobe64((uint64_t)(uintptr_t)ctx->recv_buf);
@@ -322,8 +318,7 @@ static int connRdmaRegisterRx(RdmaContext *ctx, struct rdma_cm_id *cm_id) {
     return rdmaSendCommand(ctx, cm_id, &cmd);
 }
 
-static int connRdmaHandleRecv(RdmaContext *ctx, struct rdma_cm_id *cm_id,
-                              valkeyRdmaCmd *cmd, uint32_t byte_len) {
+static int connRdmaHandleRecv(RdmaContext *ctx, struct rdma_cm_id *cm_id, valkeyRdmaCmd *cmd, uint32_t byte_len) {
     if (byte_len != sizeof(valkeyRdmaCmd)) {
         rdmaFatal("RDMA: FATAL error, recv corrupted cmd");
         return -1;
@@ -349,8 +344,7 @@ static int connRdmaHandleRecv(RdmaContext *ctx, struct rdma_cm_id *cm_id,
     return rdmaPostRecv(ctx, cm_id, cmd);
 }
 
-static int connRdmaHandleRecvImm(RdmaContext *ctx, struct rdma_cm_id *cm_id,
-                                 valkeyRdmaCmd *cmd, uint32_t byte_len) {
+static int connRdmaHandleRecvImm(RdmaContext *ctx, struct rdma_cm_id *cm_id, valkeyRdmaCmd *cmd, uint32_t byte_len) {
     assert(byte_len + ctx->rx_offset <= ctx->recv_length);
     ctx->rx_offset += byte_len;
 
@@ -495,8 +489,7 @@ pollcq:
     return -1;
 }
 
-static ssize_t valkeyRdmaReadFull(RdmaContext *ctx, char *buf,
-                                  size_t data_len) {
+static ssize_t valkeyRdmaReadFull(RdmaContext *ctx, char *buf, size_t data_len) {
     size_t inbytes = 0;
 
     do {
@@ -506,8 +499,7 @@ static ssize_t valkeyRdmaReadFull(RdmaContext *ctx, char *buf,
     return data_len;
 }
 
-static size_t connRdmaSend(RdmaContext *ctx, struct rdma_cm_id *cm_id,
-                           const void *data, size_t data_len) {
+static size_t connRdmaSend(RdmaContext *ctx, struct rdma_cm_id *cm_id, const void *data, size_t data_len) {
     struct ibv_send_wr send_wr, *bad_wr;
     struct ibv_sge sge;
     uint32_t off = ctx->tx_offset;
@@ -525,8 +517,7 @@ static size_t connRdmaSend(RdmaContext *ctx, struct rdma_cm_id *cm_id,
     send_wr.sg_list = &sge;
     send_wr.num_sge = 1;
     send_wr.opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
-  send_wr.send_flags =
-      (++ctx->send_ops % VALKEY_RDMA_MAX_WQE) ? 0 : IBV_SEND_SIGNALED;
+    send_wr.send_flags = (++ctx->send_ops % VALKEY_RDMA_MAX_WQE) ? 0 : IBV_SEND_SIGNALED;
     send_wr.imm_data = htonl(data_len);
     send_wr.wr.rdma.remote_addr = (uint64_t)(uintptr_t)remote_addr;
     send_wr.wr.rdma.rkey = ctx->tx_key;
@@ -637,8 +628,7 @@ static int valkeyRdmaConnect(RdmaContext *ctx, struct rdma_cm_id *cm_id) {
         goto error;
     }
 
-  cq = ibv_create_cq(cm_id->verbs, VALKEY_RDMA_MAX_WQE * 2, ctx, comp_channel,
-                     0);
+    cq = ibv_create_cq(cm_id->verbs, VALKEY_RDMA_MAX_WQE * 2, ctx, comp_channel, 0);
     if (!cq) {
         rdmaFatal("RDMA: create send cq failed");
         goto error;
@@ -698,7 +688,6 @@ error:
 }
 
 static int valkeyRdmaEstablished(RdmaContext *ctx, struct rdma_cm_id *cm_id) {
-
     /* it's time to tell redis we have already connected */
     ctx->connected = true;
 
@@ -739,8 +728,7 @@ static int valkeyRdmaCM(RdmaContext *ctx, int timeout) {
         case RDMA_CM_EVENT_DISCONNECTED:
         case RDMA_CM_EVENT_ADDR_CHANGE:
         default:
-      snprintf(errorstr, sizeof(errorstr), "RDMA: connect failed - %s",
-               rdma_event_str(event->event));
+            snprintf(errorstr, sizeof(errorstr), "RDMA: connect failed - %s", rdma_event_str(event->event));
             rdmaFatal(errorstr);
             ret = -1;
             break;
@@ -782,10 +770,9 @@ static int valkeyRdmaWaitConn(RdmaContext *ctx, long timeout) {
     return -1;
 }
 
-static RdmaContext *valkeyContextConnectRdma(const char *addr, int port,
-                                             int timeout) {
+static RdmaContext *valkeyContextConnectRdma(const char *addr, int port, int timeout) {
     int ret;
-    char _port[6];  /* strlen("65535"); */
+    char _port[6]; /* strlen("65535"); */
     struct addrinfo hints, *servinfo = NULL, *p;
     RdmaContext *ctx = NULL;
     struct sockaddr_storage saddr;
@@ -797,8 +784,8 @@ static RdmaContext *valkeyContextConnectRdma(const char *addr, int port,
     hints.ai_socktype = SOCK_STREAM;
 
     if ((ret = getaddrinfo(addr, _port, &hints, &servinfo)) != 0) {
-         hints.ai_family = AF_INET6;
-         if ((ret = getaddrinfo(addr, _port, &hints, &servinfo)) != 0) {
+        hints.ai_family = AF_INET6;
+        if ((ret = getaddrinfo(addr, _port, &hints, &servinfo)) != 0) {
             rdmaFatal(gai_strerror(ret));
             return NULL;
         }
@@ -828,11 +815,11 @@ static RdmaContext *valkeyContextConnectRdma(const char *addr, int port,
 
     for (p = servinfo; p != NULL; p = p->ai_next) {
         if (p->ai_family == PF_INET) {
-                memcpy(&saddr, p->ai_addr, sizeof(struct sockaddr_in));
-                ((struct sockaddr_in *)&saddr)->sin_port = htons(port);
+            memcpy(&saddr, p->ai_addr, sizeof(struct sockaddr_in));
+            ((struct sockaddr_in *)&saddr)->sin_port = htons(port);
         } else if (p->ai_family == PF_INET6) {
-                memcpy(&saddr, p->ai_addr, sizeof(struct sockaddr_in6));
-                ((struct sockaddr_in6 *)&saddr)->sin6_port = htons(port);
+            memcpy(&saddr, p->ai_addr, sizeof(struct sockaddr_in6));
+            ((struct sockaddr_in6 *)&saddr)->sin6_port = htons(port);
         } else {
             rdmaFatal("RDMA: unsupported family");
             goto free_rdma;
@@ -867,7 +854,7 @@ free_rdma:
     }
 
 end:
-    if(servinfo) {
+    if (servinfo) {
         freeaddrinfo(servinfo);
     }
 
@@ -893,12 +880,12 @@ static void *test_routine(void *arg) {
     struct test_kv_pair *kv_pairs = NULL, *kv_pair;
     int keys;
 
-  ctx = valkeyContextConnectRdma(config.host, config.port, 1000);
+    ctx = valkeyContextConnectRdma(config.host, config.port, 1000);
     if (!ctx) {
-         rdmaFatal("RDMA connect failed");
+        rdmaFatal("RDMA connect failed");
     }
 
-  int bufsize = config.datasize + 128;
+    int bufsize = config.datasize + 128;
     char *inbuf = malloc(bufsize);
     char *outbuf = malloc(bufsize);
     int inbytes, outbytes;
@@ -913,15 +900,15 @@ static void *test_routine(void *arg) {
     printf("Valkey Over RDMA test thread[%d] PING/PONG [OK]\n", tid);
 
     /* prepare random KV for SET/GET */
-  keys = rdmaTestRandCount(config.minkeys, config.maxkeys);
+    keys = rdmaTestRandCount(config.minkeys, config.maxkeys);
     kv_pairs = calloc(sizeof(struct test_kv_pair), keys);
 
     for (int i = 0; i < keys; i++) {
         kv_pair = &kv_pairs[i];
-    rdmaTestFormatThreadKey(kv_pair->key, sizeof(kv_pair->key), tid, i);
-    kv_pair->value = rdmaTestNewValue(config.datasize);
-    if (!kv_pair->value)
-      rdmaFatal("RDMA: alloc value failed");
+        rdmaTestFormatThreadKey(kv_pair->key, sizeof(kv_pair->key), tid, i);
+        kv_pair->value = rdmaTestNewValue(config.datasize);
+        if (!kv_pair->value)
+            rdmaFatal("RDMA: alloc value failed");
     }
     printf("Valkey Over RDMA test thread[%d] prepare %d KVs [OK]\n", tid, keys);
 
@@ -931,18 +918,18 @@ static void *test_routine(void *arg) {
     for (int i = 0; i < keys; i++) {
         kv_pair = &kv_pairs[i];
         /* build SET command */
-    outbytes =
-        sprintf(outbuf, "*3\r\n$3\r\nSET\r\n$%ld\r\n%s\r\n$%zu\r\n%.*s\r\n",
-                strlen(kv_pair->key), kv_pair->key, config.datasize,
-                (int)config.datasize, kv_pair->value);
+        outbytes =
+            sprintf(outbuf, "*3\r\n$3\r\nSET\r\n$%ld\r\n%s\r\n$%zu\r\n%.*s\r\n",
+                    strlen(kv_pair->key), kv_pair->key, config.datasize,
+                    (int)config.datasize, kv_pair->value);
         valkeyRdmaWrite(ctx, outbuf, outbytes);
         inbytes = valkeyRdmaReadFull(ctx, inbuf, strlen(okresp));
         assert(!strncmp("+OK\r\n", inbuf, inbytes));
     }
     printf("Valkey Over RDMA test thread[%d] SET %d KVs [OK]\n", tid, keys);
 
-  /* # round 3, test BGSAVE, to avoid "-ERR Background save already", run BGSAVE
-   * only once */
+    /* # round 3, test BGSAVE, to avoid "-ERR Background save already", run BGSAVE
+     * only once */
     char *bgsavecmd = "*1\r\n$6\r\nBGSAVE\r\n";
     char *bgsaveresp = "+Background saving started\r\n";
     static int bgsaved;
@@ -955,9 +942,9 @@ static void *test_routine(void *arg) {
     }
 
     /* # round 4, test GET. also verify all the value already set */
-  char getrespprex[32];
-  int getrespprexlen =
-      snprintf(getrespprex, sizeof(getrespprex), "$%zu\r\n", config.datasize);
+    char getrespprex[32];
+    int getrespprexlen =
+        snprintf(getrespprex, sizeof(getrespprex), "$%zu\r\n", config.datasize);
 
     for (int i = 0; i < keys; i++) {
         kv_pair = &kv_pairs[i];
@@ -965,11 +952,11 @@ static void *test_routine(void *arg) {
         outbytes = sprintf(outbuf, "*2\r\n$3\r\nGET\r\n$%ld\r\n%s\r\n",
                            strlen(kv_pair->key), kv_pair->key);
         valkeyRdmaWrite(ctx, outbuf, outbytes);
-    inbytes =
-        valkeyRdmaReadFull(ctx, inbuf, getrespprexlen + config.datasize + 2);
+        inbytes =
+            valkeyRdmaReadFull(ctx, inbuf, getrespprexlen + config.datasize + 2);
         assert(!strncmp(getrespprex, inbuf, getrespprexlen));
-    assert(rdmaTestValueEquals(inbuf + getrespprexlen, config.datasize,
-                               kv_pair->value, config.datasize));
+        assert(rdmaTestValueEquals(inbuf + getrespprexlen, config.datasize,
+                                   kv_pair->value, config.datasize));
     }
     printf("Valkey Over RDMA test thread[%d] GET %d KVs [OK]\n", tid, keys);
 
@@ -977,15 +964,15 @@ static void *test_routine(void *arg) {
 }
 
 int main(int argc, char *argv[]) {
-  pthread_t threads[RDMA_TEST_MAX_THREADS];
+    pthread_t threads[RDMA_TEST_MAX_THREADS];
 
-  rdmaTestParseArgs(argc, argv, &config);
+    rdmaTestParseArgs(argc, argv, &config);
 
     /* To make the test randomly */
     srandom(time(NULL) ^ getpid());
 
     /* main thread mode */
-  if (!config.threads) {
+    if (!config.threads) {
         printf("Test a single client in main thread ...\n");
         test_routine(NULL);
 
@@ -993,11 +980,11 @@ int main(int argc, char *argv[]) {
     }
 
     /* multi threads mode */
-  for (int i = 0; i < config.threads; i++) {
+    for (int i = 0; i < config.threads; i++) {
         assert(!pthread_create(&threads[i], NULL, test_routine, NULL));
     }
 
-  for (int i = 0; i < config.threads; i++) {
+    for (int i = 0; i < config.threads; i++) {
         pthread_join(threads[i], NULL);
     }
 
@@ -1006,4 +993,4 @@ int main(int argc, char *argv[]) {
     return 0;
 }
 
-#endif   /* __linux__ */
+#endif /* __linux__ */

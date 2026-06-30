@@ -322,7 +322,7 @@ int pubsubSubscribeChannel(client *c, robj *channel, pubsubtype type) {
         serverAssert(hashtableAdd(clients, c));
         hashtableInsertAtPosition(type.clientPubSubChannels(c), channel, &position);
         incrRefCount(channel);
-        c->pubsub_data->pubsub_object_mem += sizeof(robj) + sdsAllocSize(objectGetVal(channel));
+        c->pubsub_data->pubsub_object_mem += getStringObjectMemory(channel);
     }
     /* Notify the client */
     addReplyPubsubSubscribed(c, channel, type);
@@ -358,7 +358,7 @@ int pubsubUnsubscribeChannel(client *c, robj *channel, int notify, pubsubtype ty
              * PUBSUB creating millions of channels. */
             kvstoreHashtableDelete(*type.serverPubSubChannels, slot, channel);
         }
-        c->pubsub_data->pubsub_object_mem -= sizeof(robj) + sdsAllocSize(objectGetVal(channel));
+        c->pubsub_data->pubsub_object_mem -= getStringObjectMemory(channel);
     }
     /* Notify the client */
     if (notify) {
@@ -391,6 +391,7 @@ void pubsubShardUnsubscribeAllChannelsInSlot(unsigned int slot) {
             if (clientTotalPubSubSubscriptionCount(c) == 0) {
                 unmarkClientAsPubSub(c);
             }
+            c->pubsub_data->pubsub_object_mem -= getStringObjectMemory(channel);
         }
         hashtableCleanupIterator(&client_iter);
         kvstoreHashtableDelete(server.pubsubshard_channels, slot, channel);
@@ -416,7 +417,7 @@ bool pubsubSubscribePattern(client *c, robj *pattern) {
             clients = dictGetVal(de);
         }
         serverAssert(hashtableAdd(clients, c));
-        c->pubsub_data->pubsub_object_mem += sizeof(robj) + sdsAllocSize(objectGetVal(pattern));
+        c->pubsub_data->pubsub_object_mem += getStringObjectMemory(pattern);
     }
     /* Notify the client */
     addReplyPubsubPatSubscribed(c, pattern);
@@ -440,7 +441,7 @@ int pubsubUnsubscribePattern(client *c, robj *pattern, int notify) {
             /* Free the clients hashtable if this was the last client. */
             dictDelete(server.pubsub_patterns, pattern);
         }
-        c->pubsub_data->pubsub_object_mem -= sizeof(robj) + sdsAllocSize(objectGetVal(pattern));
+        c->pubsub_data->pubsub_object_mem -= getStringObjectMemory(pattern);
     }
     /* Notify the client */
     if (notify) addReplyPubsubPatUnsubscribed(c, pattern);

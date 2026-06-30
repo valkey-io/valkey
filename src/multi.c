@@ -391,7 +391,7 @@ void watchForKey(client *c, robj *key) {
     incrRefCount(key);
     listAddNodeTail(&c->mstate->watched_keys, wk);
     watchedKeyLinkToClients(clients, wk);
-    c->mstate->watched_keys_mem += sizeof(robj) + sdsAllocSize(objectGetVal(key));
+    c->mstate->watched_keys_mem += getStringObjectMemory(key);
 
     /* Add the new key to the per-db hashtable for O(1) lookup. */
     hashtableAdd(c->mstate->watched_keys_by_db[c->db->id], wk);
@@ -418,7 +418,7 @@ void unwatchAllKeys(client *c) {
         if (listLength(clients) == 0) dictDelete(wk->db->watched_keys, wk->key);
         /* Remove this watched key from the client->watched list */
         listDelNode(&c->mstate->watched_keys, ln);
-        c->mstate->watched_keys_mem -= sizeof(robj) + sdsAllocSize(objectGetVal(wk->key));
+        c->mstate->watched_keys_mem -= getStringObjectMemory(wk->key);
         decrRefCount(wk->key);
         zfree(wk);
     }

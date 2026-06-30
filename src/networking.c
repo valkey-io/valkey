@@ -171,6 +171,12 @@ size_t getStringObjectSdsUsedMemory(robj *o) {
     return 0;
 }
 
+/* Return the total memory used by a string object, including the robj
+ * structure and the sds string overhead (internal fragmentation). */
+size_t getStringObjectMemory(robj *o) {
+    return sizeof(robj) + getStringObjectSdsUsedMemory(o);
+}
+
 /* Return the length of a string object.
  * This does NOT include internal fragmentation or sds unused space. */
 size_t getStringObjectLen(robj *o) {

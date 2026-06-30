@@ -37,21 +37,19 @@
 #include "hdr_histogram.h"
 
 /* Dictionary type for latency events. */
-int dictStringKeyCompare(const void *key1, const void *key2) {
-    return strcmp(key1, key2) == 0;
-}
 
-uint64_t dictStringHash(const void *key) {
-    return dictGenHashFunction(key, strlen(key));
+static void dictEntryDestructorHeapKeyValue(void *entry) {
+    dictEntry *de = entry;
+    zfree(dictGetKey(de));
+    zfree(dictGetVal(de));
+    zfree(de);
 }
 
 dictType latencyTimeSeriesDictType = {
-    dictStringHash,       /* hash function */
-    NULL,                 /* key dup */
-    dictStringKeyCompare, /* key compare */
-    dictVanillaFree,      /* key destructor */
-    dictVanillaFree,      /* val destructor */
-    NULL                  /* allow to expand */
+    .entryGetKey = dictEntryGetKey,
+    .hashFunction = dictCStrHash,
+    .keyCompare = dictCStrKeyCompare,
+    .entryDestructor = dictEntryDestructorHeapKeyValue,
 };
 
 /* ------------------------- Utility functions ------------------------------ */
@@ -486,11 +484,11 @@ sds createLatencyReport(void) {
             report =
                 sdscat(report, "- I detected a non zero amount of anonymous huge pages used by your process. This "
                                "creates very serious latency events in different conditions, especially when "
-                               "Valkey is persisting on disk. To disable THP support use the command 'echo never > "
+                               "Valkey is persisting on disk. To disable THP support use the command 'echo madvise > "
                                "/sys/kernel/mm/transparent_hugepage/enabled', make sure to also add it into "
                                "/etc/rc.local so that the command will be executed again after a reboot. Note "
-                               "that even if you have already disabled THP, you still need to restart the Valkey "
-                               "process to get rid of the huge pages already created.\n");
+                               "that even if you have already disabled THP (set to 'madvise' or 'never'), you still "
+                               "need to restart the Valkey process to get rid of the huge pages already created.\n");
         }
     }
 

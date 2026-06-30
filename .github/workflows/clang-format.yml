@@ -30,7 +30,6 @@ jobs:
       - name: Set up Clang
         run: |
           sudo apt-get update -y
-          sudo apt-get upgrade -y
           sudo apt-get install software-properties-common -y
           wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | gpg --dearmor | sudo tee /usr/share/keyrings/llvm-toolchain.gpg > /dev/null
           echo "deb [signed-by=/usr/share/keyrings/llvm-toolchain.gpg] http://apt.llvm.org/$(lsb_release -cs)/ llvm-toolchain-$(lsb_release -cs)-18 main" | sudo tee /etc/apt/sources.list.d/llvm.list

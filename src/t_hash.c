@@ -790,7 +790,10 @@ void hashTypeConvertListpack(robj *o, int enc) {
             if (!hashtableAdd(ht, entry)) {
                 entryFree(entry);
                 hashTypeResetIterator(&hi); /* Needed for gcc ASAN */
-                serverLogHexDump(LL_WARNING, "listpack with dup elements dump", objectGetVal(o), lpBytes(objectGetVal(o)));
+                if (!server.hide_user_data_from_log) {
+                    serverLogHexDump(LL_WARNING, "listpack with dup elements dump", objectGetVal(o),
+                                     lpBytes(objectGetVal(o)));
+                }
                 serverPanic("Listpack corruption detected");
             }
         }
@@ -1159,6 +1162,11 @@ void hgetdelCommand(client *c) {
     long long num_fields = 0;
     bool keyremoved = false;
 
+    if (strcasecmp(objectGetVal(c->argv[fields_index - 2]), "fields")) {
+        addReplyErrorObject(c, shared.syntaxerr);
+        return;
+    }
+
     if (getLongLongFromObjectOrReply(c, c->argv[fields_index - 1], &num_fields, NULL) != C_OK) return;
 
     /* Check that the parsed fields number matches the real provided number of fields */
@@ -1173,6 +1181,9 @@ void hgetdelCommand(client *c) {
     if (checkType(c, o, OBJ_HASH)) return;
 
     bool hash_volatile_items = hashTypeHasVolatileFields(o);
+    if (o && o->encoding == OBJ_ENCODING_HASHTABLE) hashtablePauseAutoShrink(objectGetVal(o));
+
+    initDeferredReplyBuffer(c);
 
     /* Reply with array of values and delete at the same time */
     addReplyArrayLen(c, num_fields);
@@ -1191,6 +1202,7 @@ void hgetdelCommand(client *c) {
             }
         }
     }
+    if (!keyremoved && o && o->encoding == OBJ_ENCODING_HASHTABLE) hashtableResumeAutoShrink(objectGetVal(o));
 
     if (deleted) {
         if (!keyremoved && hash_volatile_items != hashTypeHasVolatileFields(o)) {
@@ -1201,6 +1213,8 @@ void hgetdelCommand(client *c) {
         if (keyremoved) notifyKeyspaceEvent(NOTIFY_GENERIC, "del", c->argv[1], c->db->id);
         server.dirty += deleted;
     }
+
+    commitDeferredReplyBuffer(c, 1);
 }
 
 void hlenCommand(client *c) {
@@ -1451,7 +1465,6 @@ void hsetexCommand(client *c) {
     if (set_expired) {
         new_argv = zmalloc(sizeof(robj *) * (num_fields + 2));
         new_argv[new_argc++] = shared.hdel;
-        incrRefCount(shared.hdel);
         new_argv[new_argc++] = c->argv[1];
         incrRefCount(c->argv[1]);
     } else if (need_rewrite_argv) {
@@ -1790,8 +1803,7 @@ void genericHgetallCommand(client *c, int flags) {
     hashTypeResetIterator(&hi);
     /* Make sure we returned the right number of elements. */
     if (flags & OBJ_HASH_FIELD && flags & OBJ_HASH_VALUE) {
-        setDeferredMapLen(c, replylen, count /= 2);
-        count /= 2;
+        setDeferredMapLen(c, replylen, count / 2);
     } else {
         setDeferredArrayLen(c, replylen, count);
     }
@@ -1821,7 +1833,7 @@ void hscanCommand(client *c) {
 
     if (parseScanCursorOrReply(c, objectGetVal(c->argv[2]), &cursor) == C_ERR) return;
     if ((o = lookupKeyReadOrReply(c, c->argv[1], shared.emptyscan)) == NULL || checkType(c, o, OBJ_HASH)) return;
-    scanGenericCommand(c, o, cursor, -1, NULL, NULL);
+    scanGenericCommand(c, o, cursor);
 }
 
 static void hrandfieldReplyWithListpack(writePreparedClient *wpc, unsigned int count, listpackEntry *fields, listpackEntry *vals) {
@@ -1914,6 +1926,8 @@ void hexpireGenericCommand(client *c, mstime_t basetime, int unit) {
 
     bool has_volatile_fields = hashTypeHasVolatileFields(obj);
 
+    initDeferredReplyBuffer(c);
+
     /* From this point we would return array reply */
     addReplyArrayLen(c, num_fields);
 
@@ -1924,9 +1938,8 @@ void hexpireGenericCommand(client *c, mstime_t basetime, int unit) {
         else if (result == EXPIRATION_MODIFICATION_EXPIRE_ASAP) {
             /* In case we are expiring all the elements prepare a new argv since we are going to delete all the expired fields. */
             if (new_argv == NULL) {
-                new_argv = zmalloc(sizeof(robj *) * (num_fields + 3));
+                new_argv = zmalloc(sizeof(robj *) * (num_fields + 2));
                 new_argv[new_argc++] = shared.hdel;
-                incrRefCount(shared.hdel);
                 new_argv[new_argc++] = c->argv[1];
                 incrRefCount(c->argv[1]);
             }
@@ -1971,6 +1984,8 @@ void hexpireGenericCommand(client *c, mstime_t basetime, int unit) {
             notifyKeyspaceEvent(NOTIFY_GENERIC, "del", c->argv[1], c->db->id);
         }
     }
+
+    commitDeferredReplyBuffer(c, 1);
 }
 
 void hexpireCommand(client *c) {
@@ -2018,12 +2033,14 @@ void hpersistCommand(client *c) {
         return;
     }
 
-    /* From this point we would return array reply */
-    addReplyArrayLen(c, num_fields);
-
     robj *hash = lookupKeyWrite(c->db, c->argv[1]);
     if (checkType(c, hash, OBJ_HASH))
         return;
+
+    initDeferredReplyBuffer(c);
+
+    /* From this point we would return array reply */
+    addReplyArrayLen(c, num_fields);
 
     bool has_volatile_fields = hashTypeHasVolatileFields(hash);
 
@@ -2042,6 +2059,8 @@ void hpersistCommand(client *c) {
         notifyKeyspaceEvent(NOTIFY_HASH, "hpersist", c->argv[1], c->db->id);
         signalModifiedKey(c, c->db, c->argv[1]);
     }
+
+    commitDeferredReplyBuffer(c, 1);
 }
 
 /* High-Level Algorithm of HTTL / HPTTL / HEXPIRETIME / HPEXPIRETIME Commands:
@@ -2294,10 +2313,11 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
     else {
         /* Hashtable encoding (generic implementation) */
         unsigned long added = 0;
+        unsigned long maxtries = (count > ULONG_MAX / 10) ? ULONG_MAX : count * 10;
         listpackEntry field, value;
         hashtable *ht = hashtableCreate(&setHashtableType);
         hashtableExpand(ht, count);
-        while (added < count) {
+        while (added < count && maxtries--) {
             /* In case we were unable to locate random element, it is probably because there is no such element
              * since all elements are expired. */
             if (hashTypeRandomElement(hash, size, &field, withvalues ? &value : NULL) != C_OK)

@@ -71,18 +71,20 @@ static void dictScriptDestructor(void *val) {
     zfree(es);
 }
 
-static uint64_t dictStrCaseHash(const void *key) {
-    return dictGenCaseHashFunction((unsigned char *)key, strlen((char *)key));
+/* Helper functions for eval.c */
+static void dictEntryDestructorSdsKeyScriptValue(void *entry) {
+    dictEntry *de = entry;
+    dictSdsDestructor(dictGetKey(de));
+    dictScriptDestructor(dictGetVal(de));
+    zfree(de);
 }
 
 /* evalCtx.scripts sha (as sds string) -> scripts (as evalScript) cache. */
 dictType shaScriptObjectDictType = {
-    dictStrCaseHash,       /* hash function */
-    NULL,                  /* key dup */
-    dictSdsKeyCaseCompare, /* key compare */
-    dictSdsDestructor,     /* key destructor */
-    dictScriptDestructor,  /* val destructor */
-    NULL                   /* allow to expand */
+    .entryGetKey = dictEntryGetKey,
+    .hashFunction = dictCStrCaseHash,
+    .keyCompare = dictSdsKeyCaseCompare,
+    .entryDestructor = dictEntryDestructorSdsKeyScriptValue,
 };
 
 /* Eval context */
@@ -179,6 +181,25 @@ void evalRelease(int async) {
     }
 }
 
+/* Remove all cached eval scripts associated with the given scripting engine.
+ * Called when a scripting engine is unregistered to avoid dangling engine
+ * pointers in the eval script cache. */
+void evalRemoveScriptsFromEngine(scriptingEngine *engine) {
+    dictIterator *iter = dictGetSafeIterator(evalCtx.scripts);
+    dictEntry *entry;
+    while ((entry = dictNext(iter))) {
+        evalScript *es = dictGetVal(entry);
+        if (es->engine == engine) {
+            sds sha = dictGetKey(entry);
+            evalCtx.scripts_mem -= sdsAllocSize(sha) + getStringObjectSdsUsedMemory(es->body);
+            if (es->node) {
+                listDelNode(evalCtx.scripts_lru_list, es->node);
+            }
+            dictDelete(evalCtx.scripts, sha);
+        }
+    }
+    dictReleaseIterator(iter);
+}
 
 void evalReset(int async) {
     evalRelease(async);
@@ -238,7 +259,9 @@ int evalExtractShebangFlags(sds body,
         }
 
         if (out_engine) {
-            size_t engine_name_len = sdslen(parts[0]) - 2;
+            size_t part0_len = sdslen(parts[0]);
+            serverAssert(part0_len >= 2);
+            size_t engine_name_len = part0_len - 2;
             *out_engine = zcalloc(engine_name_len + 1);
             valkey_strlcpy(*out_engine, parts[0] + 2, engine_name_len + 1);
         }

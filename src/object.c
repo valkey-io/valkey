@@ -237,7 +237,7 @@ static bool shouldEmbedStringObject(size_t val_len, const_sds key, long long exp
     }
     size += (expire != EXPIRY_NONE) * sizeof(long long);
     size += sdsReqSize(val_len, SDS_TYPE_8);
-    return size <= 64;
+    return size <= 128;
 }
 
 /* Create a string object with EMBSTR encoding if it is small, otherwise RAW encoding */
@@ -274,7 +274,6 @@ void *objectGetVal(const robj *o) {
             data += 1 + hdr_size;                /* +1 for header size byte */
             data += sdslen((const_sds)data) + 1; /* +1 for null terminator */
         }
-        assert(o->encoding == OBJ_ENCODING_EMBSTR);
         return data + sdsHdrSize(SDS_TYPE_8);
     } else {
         return o->val_ptr;
@@ -1610,7 +1609,9 @@ sds getMemoryDoctorReport(void) {
             s = sdscatprintf(
                 s, " * High process RSS overhead: This instance has non-allocator RSS memory overhead is greater than "
                    "1.1 (this means that the Resident Set Size of the Valkey process is much larger than the RSS the "
-                   "allocator holds). This problem may be due to Lua scripts or Modules.\n\n");
+                   "allocator holds). This problem may be due to Lua scripts, Modules, or, on glibc systems, memory "
+                   "retained in the libc main arena (the [heap] segment) by libc-internal allocations such as "
+                   "getaddrinfo(3), pthread internals or NSS. Try the MEMORY PURGE command to reclaim it.\n\n");
         }
         if (big_replica_buf) {
             s = sdscat(s,
@@ -1754,7 +1755,9 @@ void memoryCommand(client *c) {
             "MALLOC-STATS",
             "    Return internal statistics report from the memory allocator.",
             "PURGE",
-            "    Attempt to purge dirty pages for reclamation by the allocator.",
+            "    Attempt to purge dirty pages so they can be reclaimed by the allocator.",
+            "    On glibc systems this also releases free pages from the libc main arena",
+            "    (the process [heap] segment) back to the OS via malloc_trim(3).",
             "STATS",
             "    Return information about the memory usage of the server.",
             "USAGE <key> [SAMPLES <count>]",
@@ -1921,7 +1924,7 @@ void memoryCommand(client *c) {
         addReplyVerbatim(c, report, sdslen(report), "txt");
         sdsfree(report);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "purge") && c->argc == 2) {
-        if (jemalloc_purge() == 0)
+        if (zmalloc_purge() == 0)
             addReply(c, shared.ok);
         else
             addReplyError(c, "Error purging dirty pages");

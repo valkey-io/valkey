@@ -9494,6 +9494,14 @@ void moduleNotifyKeyspaceEvent(int type, const char *event, robj *key, int dbid)
     /* Remove irrelevant flags from the type mask */
     type &= ~(NOTIFY_KEYEVENT | NOTIFY_KEYSPACE);
 
+    /* When notifying via the executing client, the callbacks below select
+     * 'dbid' on its context. 'dbid' may differ from the client's currently
+     * selected DB (e.g. MOVE/COPY notify on the destination DB), so save the
+     * original DB and restore it afterwards to avoid leaving the client on the
+     * wrong DB for subsequent commands. */
+    client *executing_client = server.executing_client;
+    int origin_dbid = (executing_client != NULL) ? executing_client->db->id : -1;
+
     while ((ln = listNext(&li))) {
         ValkeyModuleKeyspaceSubscriber *sub = ln->value;
         /* Only notify subscribers on events matching the registration,
@@ -9522,6 +9530,9 @@ void moduleNotifyKeyspaceEvent(int type, const char *event, robj *key, int dbid)
             moduleFreeContext(&ctx);
         }
     }
+
+    /* Restore the executing client's originally selected DB. */
+    if (executing_client != NULL) selectDb(executing_client, origin_dbid);
 
     exitExecutionUnit();
 }

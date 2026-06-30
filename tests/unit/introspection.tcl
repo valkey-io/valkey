@@ -39,6 +39,32 @@ start_server {tags {"introspection"}} {
         assert_morethan_equal [expr $mem2 - $mem3] 10000
     }
 
+    test {Multiple clients WATCH same key share robj memory} {
+        set big_string [string repeat "x" 50000]
+        r set $big_string myvalue
+
+        set rd1 [valkey_client]
+        set rd2 [valkey_client]
+
+        set mem_before [s used_memory]
+        $rd1 watch $big_string
+        set delta_first [expr {[s used_memory] - $mem_before}]
+
+        $rd2 watch $big_string
+        set delta_second [expr {[s used_memory] - $mem_before - $delta_first}]
+
+        # The second WATCH should use much less server memory
+        # because it shares the same key robj as the first.
+        assert_morethan $delta_first 0
+        assert_lessthan $delta_second $delta_first
+
+        $rd1 unwatch
+        $rd2 unwatch
+        $rd1 close
+        $rd2 close
+        r del $big_string
+    }
+
     foreach {subscribe unsubscribe} {subscribe unsubscribe psubscribe punsubscribe ssubscribe sunsubscribe} {
         test "CLIENT INFO tot-mem includes pubsub channel/pattern memory - $subscribe $unsubscribe" {
             set rd [valkey_deferring_client]
@@ -61,6 +87,36 @@ start_server {tags {"introspection"}} {
             assert_morethan_equal [expr $mem2 - $mem3] 10000
 
             $rd close
+        }
+    }
+
+    foreach {subscribe unsubscribe} {subscribe unsubscribe psubscribe punsubscribe ssubscribe sunsubscribe} {
+        test "Multiple clients $subscribe to same name share robj memory" {
+            set big_string [string repeat "x" 50000]
+
+            set rd1 [valkey_deferring_client]
+            set rd2 [valkey_deferring_client]
+
+            set mem_before [s used_memory]
+            $rd1 $subscribe $big_string
+            $rd1 read
+            set delta_first [expr {[s used_memory] - $mem_before}]
+
+            $rd2 $subscribe $big_string
+            $rd2 read
+            set delta_second [expr {[s used_memory] - $mem_before - $delta_first}]
+
+            # The second subscriber should use much less server memory
+            # because it shares the same robj as the first.
+            assert_morethan $delta_first 0
+            assert_lessthan $delta_second $delta_first
+
+            $rd1 $unsubscribe
+            $rd1 read
+            $rd2 $unsubscribe
+            $rd2 read
+            $rd1 close
+            $rd2 close
         }
     }
 

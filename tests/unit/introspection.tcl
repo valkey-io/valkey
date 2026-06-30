@@ -19,6 +19,62 @@ start_server {tags {"introspection"}} {
         r client info
     } {id=* addr=*:* laddr=*:* fd=* name=* age=* idle=* flags=N capa= db=* sub=0 psub=0 ssub=0 multi=-1 watch=0 qbuf=0 qbuf-free=* argv-mem=* multi-mem=0 rbs=* rbp=* obl=0 oll=0 omem=0 tot-mem=* events=r cmd=client|info user=* redir=-1 resp=* lib-name=* lib-ver=* tot-net-in=* tot-net-out=* tot-cmds=*}
 
+    test {Multiple clients WATCH same key share robj memory} {
+        set big_string [string repeat "x" 5000000]
+        r set $big_string myvalue
+
+        set rd1 [valkey_client]
+        set rd2 [valkey_client]
+
+        set mem_before [s used_memory]
+        $rd1 watch $big_string
+        set delta_first [expr {[s used_memory] - $mem_before}]
+
+        $rd2 watch $big_string
+        set delta_second [expr {[s used_memory] - $mem_before - $delta_first}]
+
+        # The second WATCH should use much less server memory
+        # because it shares the same key robj as the first.
+        assert_morethan $delta_first 0
+        assert_lessthan $delta_second $delta_first
+
+        $rd1 unwatch
+        $rd2 unwatch
+        $rd1 close
+        $rd2 close
+        r del $big_string
+    }
+
+    foreach {subscribe unsubscribe} {subscribe unsubscribe psubscribe punsubscribe ssubscribe sunsubscribe} {
+        test "Multiple clients $subscribe to same name share robj memory" {
+            set big_string [string repeat "x" 5000000]
+
+            set rd1 [valkey_deferring_client]
+            set rd2 [valkey_deferring_client]
+
+            set mem_before [s used_memory]
+            $rd1 $subscribe $big_string
+            $rd1 read
+            set delta_first [expr {[s used_memory] - $mem_before}]
+
+            $rd2 $subscribe $big_string
+            $rd2 read
+            set delta_second [expr {[s used_memory] - $mem_before - $delta_first}]
+
+            # The second subscriber should use much less server memory
+            # because it shares the same robj as the first.
+            assert_morethan $delta_first 0
+            assert_lessthan $delta_second $delta_first
+
+            $rd1 $unsubscribe
+            $rd1 read
+            $rd2 $unsubscribe
+            $rd2 read
+            $rd1 close
+            $rd2 close
+        }
+    }
+
     test {CLIENT LIST with ADDR filter} {
         set client_info [r client info]
         regexp {addr=([^ ]+)} $client_info match myaddr

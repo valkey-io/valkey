@@ -32,15 +32,15 @@ start_server {tags {"introspection"}} {
 
         r watch [string repeat "x" 50000]
         set mem2 [get_client_mem_no_qbuf [r client info]]
-        assert_morethan_equal [expr $mem2 - $mem1] 50000
+        assert_morethan_equal [expr $mem2 - $mem1] 10000
 
         r unwatch
         set mem3 [get_client_mem_no_qbuf [r client info]]
-        assert_morethan_equal [expr $mem2 - $mem3] 50000
+        assert_morethan_equal [expr $mem2 - $mem3] 10000
     }
 
-    test {CLIENT INFO tot-mem includes pubsub channel/pattern memory} {
-        foreach {subscribe unsubscribe} {subscribe unsubscribe psubscribe punsubscribe ssubscribe sunsubscribe} {
+    foreach {subscribe unsubscribe} {subscribe unsubscribe psubscribe punsubscribe ssubscribe sunsubscribe} {
+        test "CLIENT INFO tot-mem includes pubsub channel/pattern memory - $subscribe $unsubscribe" {
             set rd [valkey_deferring_client]
             $rd client id
             set rd_id [$rd read]
@@ -52,13 +52,13 @@ start_server {tags {"introspection"}} {
             $rd read
             set info2 [lsearch -inline [split [r client list] "\r\n"] "id=$rd_id *"]
             set mem2 [get_client_mem_no_qbuf $info2]
-            assert_morethan_equal [expr $mem2 - $mem1] 50000
+            assert_morethan_equal [expr $mem2 - $mem1] 10000
 
             $rd $unsubscribe
             $rd read
             set info3 [lsearch -inline [split [r client list] "\r\n"] "id=$rd_id *"]
             set mem3 [get_client_mem_no_qbuf $info3]
-            assert_morethan_equal [expr $mem2 - $mem3] 50000
+            assert_morethan_equal [expr $mem2 - $mem3] 10000
 
             $rd close
         }

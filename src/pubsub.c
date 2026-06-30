@@ -339,7 +339,8 @@ int pubsubUnsubscribeChannel(client *c, robj *channel, int notify, pubsubtype ty
     /* Remove the channel from the client -> channels hash table */
     incrRefCount(channel); /* channel may be just a pointer to the same object
                             we have in the hash tables. Protect it... */
-    if (hashtableDelete(type.clientPubSubChannels(c), channel)) {
+    void *popped = NULL;
+    if (hashtablePop(type.clientPubSubChannels(c), channel, &popped)) {
         retval = 1;
         /* Remove the client from the channel -> clients list hash table */
         if (server.cluster_enabled && type.shard) {
@@ -358,7 +359,8 @@ int pubsubUnsubscribeChannel(client *c, robj *channel, int notify, pubsubtype ty
              * PUBSUB creating millions of channels. */
             kvstoreHashtableDelete(*type.serverPubSubChannels, slot, channel);
         }
-        c->pubsub_data->pubsub_object_mem -= getStringObjectMemory(channel);
+        c->pubsub_data->pubsub_object_mem -= getStringObjectMemory(popped);
+        decrRefCount(popped);
     }
     /* Notify the client */
     if (notify) {
@@ -430,7 +432,8 @@ int pubsubUnsubscribePattern(client *c, robj *pattern, int notify) {
     if (!c->pubsub_data) initClientPubSubData(c);
 
     incrRefCount(pattern); /* Protect the object. May be the same we remove */
-    int pattern_deleted = hashtableDelete(c->pubsub_data->pubsub_patterns, pattern);
+    void *popped = NULL;
+    int pattern_deleted = hashtablePop(c->pubsub_data->pubsub_patterns, pattern, &popped);
     if (pattern_deleted) {
         /* Remove the client from the pattern -> clients list hash table */
         dictEntry *de = dictFind(server.pubsub_patterns, pattern);
@@ -441,7 +444,8 @@ int pubsubUnsubscribePattern(client *c, robj *pattern, int notify) {
             /* Free the clients hashtable if this was the last client. */
             dictDelete(server.pubsub_patterns, pattern);
         }
-        c->pubsub_data->pubsub_object_mem -= getStringObjectMemory(pattern);
+        c->pubsub_data->pubsub_object_mem -= getStringObjectMemory(popped);
+        decrRefCount(popped);
     }
     /* Notify the client */
     if (notify) addReplyPubsubPatUnsubscribed(c, pattern);
@@ -793,8 +797,10 @@ size_t pubsubMemOverhead(client *c) {
     mem += hashtableMemUsage(c->pubsub_data->pubsub_channels);
     /* Sharded PubSub channels */
     mem += hashtableMemUsage(c->pubsub_data->pubsubshard_channels);
-    /* We take into account the channel/pattern name themselvesm, because each
-     * client has its own copy, it is a client level memory usage. */
+    /* Account for channel/pattern name objects. A channel name robj
+     * is shared (via refcount) by all its subscribers, but we attribute
+     * it to each subscribing client so it stays visible to CLIENT INFO
+     * and maxmemory-clients. */
     mem += c->pubsub_data->pubsub_object_mem;
     return mem;
 }

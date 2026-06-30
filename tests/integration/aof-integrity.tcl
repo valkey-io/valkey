@@ -172,6 +172,20 @@ tags {"aof-integrity external:skip"} {
             
             $rd config set aof-integrity-check yes
             $rd set c 3
+            
+            # Wait for the write to hit disk
+            wait_for_condition 50 100 {
+                [file size $ai_path] > 100
+            } else {
+                fail "AOF file not updated after re-enabling"
+            }
+            
+            set fp [open $ai_path r]
+            set content [read $fp]
+            close $fp
+            
+            # Verify that a new #HDR:v1 appears after #INTEGRITY_OFF
+            assert_match {*#INTEGRITY_OFF*#HDR:v1;*set*c*} $content
         }
         
         start_server [list overrides [list dir $sp_actual appendonly yes aof-integrity-check yes]] {
@@ -243,11 +257,30 @@ tags {"aof-integrity external:skip"} {
         set fp [open $::ai6_path a]
         fconfigure $fp -translation binary
         # We use a wrong checksum value here to simulate an integrity failure.
-        puts -nonewline $fp "#HDR:v1;len:22;checksum:123456789\r\n*3\r\n\$3\r\nSET\r\n\$1\r\nc\r\n\$1\r\n3\r\n"
+        # Note the ';' before '\r\n' to ensure the header is well-formed but has a bad checksum.
+        puts -nonewline $fp "#HDR:v1;len:22;checksum:123456789;\r\n*3\r\n\$3\r\nSET\r\n\$1\r\nc\r\n\$1\r\n3\r\n"
         close $fp
         
         catch {exec ./src/valkey-check-aof $::am6_path} output
         assert_match {*AOF checksum mismatch*} $output
+        
+        # Test case for missing header
+        set sp7 [tmpdir server.aof-integrity-tool-missing-hdr]
+        start_server [list overrides [list dir $sp7 appendonly yes appendfsync always aof-integrity-check yes aof-use-rdb-preamble yes] keep_persistence true] {
+            set rd [valkey [srv host] [srv port] 0 $::tls]
+            set am_path [file join [dict get [srv config] dir] "appendonlydir" "appendonly.aof.manifest"]
+            $rd set a 1
+            set incr_path [get_last_incr_aof_path $rd]
+        }
+        
+        # Append a raw RESP command without #HDR
+        set fp [open $incr_path a]
+        fconfigure $fp -translation binary
+        puts -nonewline $fp "*3\r\n\$3\r\nSET\r\n\$1\r\nb\r\n\$1\r\n2\r\n"
+        close $fp
+        
+        catch {exec ./src/valkey-check-aof $am_path} output
+        assert_match {*lacks an integrity header*} $output
     }
 
     test "AOF manifest contains checksums when integrity check is enabled" {

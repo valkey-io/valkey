@@ -156,24 +156,26 @@ SLOT_CHANGE <source-node-id-or-dash> <source-epoch> <target-node-id-or-dash> <ta
 
 SET_REPLICA_OF <replica-id> <source-shard> <source-epoch> <primary-id-or-dash> <target-shard> <target-epoch>
     Set a node as replica of a primary (CLUSTER REPLICATE). A dash as
-    primary means promote to primary. Carries two epochs because it
-    involves two shards (source and target). Bumps the epoch of both
+    primary means promote to primary. It carries two epochs because it
+    involves two shards (source and target) and bumps the epoch of both
     shards on apply.
 
 FAILOVER <replica-id> <primary-id> <shard-id> <shard-epoch>
     The replica takes over the primary's slots and becomes primary.
-    The old primary becomes a replica of the new primary. Bumps the
+    The old primary becomes a replica of the new primary. This bumps the
     shard epoch on apply.
 
 NODE_INFO <node-id> <address-string> <flags>
     Update node address and self-set flags. The address-string uses
     the nodes.conf format but excludes shard-id, which is not a
     property of the node but of the shard and is managed by NODE_JOIN
-    and SET_REPLICA_OF. Flags is "nofailover" or "noflags".
+    and SET_REPLICA_OF. Flags is "nofailover" or "noflags". No shard epoch required here
+    as it does not create any mutations.
 
 NODE_FAIL <node-id>
     Mark a node as failed. Proposed by the leader when a peer exceeds
-    the node timeout without responding to heartbeats.
+    the node timeout without responding to heartbeats. No shard epoch here as it does not
+    change cluster memebership or leadership.
 
 NODE_RECOVER <node-id>
     Clear the FAIL flag. Proposed by the leader when it receives

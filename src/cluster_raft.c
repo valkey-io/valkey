@@ -41,8 +41,53 @@
 
 #include <arpa/inet.h>
 
+/* Result codes for proposal pre-validation and apply-time validation.
+ * Used for control flow instead of comparing human-readable error strings. */
+typedef enum {
+    RAFT_RESULT_OK = 0,      /* Proposal is valid / applied successfully. */
+    RAFT_RESULT_STALE_EPOCH, /* Rejected due to stale shard epoch (retryable). */
+    RAFT_RESULT_REJECTED,    /* Rejected for other reasons (terminal). */
+} RaftProposalResult;
+
+/* Human-readable error messages returned to clients via callbacks. */
+#define GENERIC_PROPOSAL_REJECTION_MSG "proposal rejected by raft leader"
+#define STALE_SHARD_EPOCH_REJECTION_MSG "proposal rejected due to stale shard epoch"
+
+/* Wire-protocol tokens used in REJECT proposal between leader -> follower. */
+#define REJECT_WIRE_CONFLICT "conflict" /* for stale shard epoch validation fail. */
+#define REJECT_WIRE_REJECTED "rejected" /* for any other validation fail. */
+
+/* Map a RaftProposalResult to a human-readable error string for client replies.
+ * Returns NULL for RAFT_RESULT_OK (no error). */
+static inline const char *raftProposalResultMsg(RaftProposalResult result) {
+    switch (result) {
+    case RAFT_RESULT_OK: return NULL;
+    case RAFT_RESULT_STALE_EPOCH: return STALE_SHARD_EPOCH_REJECTION_MSG;
+    case RAFT_RESULT_REJECTED: return GENERIC_PROPOSAL_REJECTION_MSG;
+    }
+    return GENERIC_PROPOSAL_REJECTION_MSG;
+}
+
+/* Map a RaftProposalResult to a wire-protocol token for REJECT messages. */
+static inline const char *raftProposalResultWireReason(RaftProposalResult result) {
+    return (result == RAFT_RESULT_STALE_EPOCH) ? REJECT_WIRE_CONFLICT : REJECT_WIRE_REJECTED;
+}
+
+/* Parse a wire-protocol REJECT reason token back to a RaftProposalResult. */
+static inline RaftProposalResult raftProposalResultFromWire(const char *reason) {
+    return (!strcasecmp(reason, REJECT_WIRE_CONFLICT)) ? RAFT_RESULT_STALE_EPOCH : RAFT_RESULT_REJECTED;
+}
+
 /* From module.c */
 void moduleCallClusterReceivers(const char *sender_id, uint64_t module_id, uint8_t type, const unsigned char *payload, uint32_t len);
+
+/* Shard epoch dict type, mapping shard_id to epoch. */
+static dictType raftShardEpochDictType = {
+    .entryGetKey = dictEntryGetKey,
+    .hashFunction = dictSdsHash,
+    .keyCompare = dictSdsKeyCompare,
+    .entryDestructor = dictEntryDestructorSdsKey,
+};
 
 /* --------------------------------------------------------------------------
  * Raft log entry types — what gets replicated
@@ -90,6 +135,8 @@ typedef struct {
     void *ctx;    /* Client context */
     void (*callback)(void *ctx, const char *error);
     mstime_t ctime; /* Creation time for expiry */
+    int retries;    /* Remaining epoch-retry attempts */
+    int deferred;   /* Waiting for epoch advance before re-propose */
 } raftPendingProposal;
 
 /* A pending meet tracks a CLUSTER MEET client waiting for the NODE_JOIN
@@ -132,6 +179,7 @@ typedef struct {
     unsigned int todo_connect_nodes : 1;
     unsigned int todo_broadcast_ae : 1;
     unsigned int todo_retry_proposals : 1;
+    unsigned int todo_retry_deferred : 1; /* For proposals that need rebasing of new epoch */
     unsigned int todo_schedule_failover : 1;
     unsigned int todo_update_replication : 1;
     unsigned int todo_persist_log : 1;
@@ -177,6 +225,9 @@ typedef struct {
     uint64_t stats_pubsub_bytes_received;
     uint64_t stats_module_bytes_sent;
     uint64_t stats_module_bytes_received;
+
+    /* Shard epoch tracking (per-shard monotonic counter for stale proposal detection). */
+    dict *shard_epochs;
 } clusterRaftState;
 
 #define RAFT_STATE() ((clusterRaftState *)server.cluster->protocol_data)
@@ -201,6 +252,7 @@ typedef struct {
 #define RAFT_HDR_SIZE 8
 #define REPL_OFFSETS_BROADCAST_PERIOD_MS 10000
 #define RAFT_LOG_REWRITE_THRESHOLD 100
+#define PROPOSAL_MAX_RETRIES 10
 
 /* Monotonic millisecond clock for timeouts and failure detection.
  * Unlike gettimeofday(), this is not affected by system clock adjustments. */
@@ -308,6 +360,10 @@ static clusterMsgSendBlock *clusterRaftBuildAllOffsetsMsg(void) {
 
 static void clusterRaftPropose(sds entry, void *ctx, void (*callback)(void *ctx, const char *error));
 static void clusterRaftDeferPendingProposals(void);
+static void clusterRaftCompletePendingProposal(int type, sds data, RaftProposalResult result);
+static RaftProposalResult clusterRaftPreValidate(int type, sds data);
+static void clusterRaftAutoFailoverCallback(void *ctx, const char *error);
+static void clusterRaftSlotChange(slotRange *ranges, int numranges, clusterNode *target, void *ctx, void (*callback)(void *ctx, const char *error));
 static void clusterRaftUpdateMyself(int old_flags);
 static sds clusterRaftBuildMyNodeInfo(void);
 static void clusterRaftCheckSlotCoverage(void);
@@ -315,9 +371,10 @@ static void clusterRaftBroadcastAppendEntries(void);
 static void clusterRaftSendAppendEntries(clusterLink *link, clusterNode *node);
 static void clusterRaftSendPreVoteRequest(clusterLink *link, uint64_t term);
 static void clusterRaftUnblockMeet(clusterNode *node);
-static void clusterRaftApplySlotChange(sds data);
-static void clusterRaftApplySetReplica(sds data);
-static void clusterRaftApplyFailover(sds data);
+static RaftProposalResult clusterRaftApplySlotChange(sds data, int validate_only);
+static RaftProposalResult clusterRaftApplySetReplica(sds data, int validate_only);
+static RaftProposalResult clusterRaftApplyFailover(sds data, int validate_only);
+static RaftProposalResult clusterRaftApplyNodeForget(sds data, int validate_only);
 static void raftLogApply(raftLogEntry *e);
 static raftLogEntry *raftLogCreate(uint64_t term, uint64_t index, uint8_t type, sds data);
 static void raftLogAppend(raftLogEntry *e);
@@ -421,8 +478,9 @@ static void clusterRaftSelfJoin(void) {
             slots = sdscatfmt(slots, " %i-%i", start, j);
     }
     if (sdslen(slots) > 0) {
-        entry = sdsnew("SLOT_CHANGE ");
+        entry = sdsnew("SLOT_CHANGE - 0 ");
         entry = sdscatlen(entry, myself->name, CLUSTER_NAMELEN);
+        entry = sdscat(entry, " 0");
         entry = sdscatsds(entry, slots);
         clusterRaftPropose(entry, NULL, NULL);
         sdsfree(entry);
@@ -719,7 +777,7 @@ static int clusterRaftProcessMeetRejected(clusterLink *link, int argc, sds *argv
  *
  * Examples:
  *   PROPOSE NODE_JOIN <node-id> <address>
- *   PROPOSE SLOT_CHANGE <node-id-or-dash> <range> [<range> ...]
+ *   PROPOSE SLOT_CHANGE <source-id-or-dash> <source-epoch> <target-id-or-dash> <target-epoch> <range> [<range> ...]
  * -------------------------------------------------------------------------- */
 static int raftEntryTypeByName(const char *name) {
     if (!strcasecmp(name, "NODE_JOIN")) return RAFT_ENTRY_NODE_JOIN;
@@ -749,7 +807,7 @@ static const char *raftEntryTypeName(uint8_t type) {
 
 /* Propose a log entry. The entry is an sds containing the type name
  * followed by the data, e.g. "NODE_JOIN <id> <addr>" or
- * "SLOT_CHANGE <id> 0-5460". On the leader, it's appended directly
+ * "SLOT_CHANGE <src-id> <src-epoch> <target-id> <target-epoch> 0-5460". On the leader, it's appended directly
  * to the log. On followers, it's forwarded to the leader. */
 static void clusterRaftPropose(sds entry, void *ctx, void (*callback)(void *ctx, const char *error)) {
     clusterRaftState *rs = RAFT_STATE();
@@ -766,6 +824,16 @@ static void clusterRaftPropose(sds entry, void *ctx, void (*callback)(void *ctx,
 
     sds data = sp ? sdsnew(sp + 1) : sdsempty();
 
+    if (rs->role == RAFT_ROLE_LEADER) {
+        /* Pre-validate on the leader to reject obviously stale/invalid proposals. */
+        RaftProposalResult pre_result = clusterRaftPreValidate(type, data);
+        if (pre_result != RAFT_RESULT_OK) {
+            if (callback) callback(ctx, raftProposalResultMsg(pre_result));
+            sdsfree(data);
+            return;
+        }
+    }
+
     /* Track pending proposal for retry on leader change. */
     {
         raftPendingProposal *pp = zmalloc(sizeof(*pp));
@@ -774,6 +842,19 @@ static void clusterRaftPropose(sds entry, void *ctx, void (*callback)(void *ctx,
         pp->ctx = ctx;
         pp->callback = callback;
         pp->ctime = monotonicMs();
+        pp->deferred = 0;
+        /* Entry types carrying shard epochs get automatic retry. */
+        switch (type) {
+        case RAFT_ENTRY_FAILOVER:
+        case RAFT_ENTRY_SET_REPLICA_OF:
+        case RAFT_ENTRY_SLOT_CHANGE:
+        case RAFT_ENTRY_NODE_FORGET:
+            pp->retries = PROPOSAL_MAX_RETRIES;
+            break;
+        default:
+            pp->retries = 0;
+            break;
+        }
         listAddNodeTail(rs->pending_proposals, pp);
     }
 
@@ -786,7 +867,6 @@ static void clusterRaftPropose(sds entry, void *ctx, void (*callback)(void *ctx,
               memcmp(data, myself->name, CLUSTER_NAMELEN) == 0)) {
             clusterRaftSelfJoin();
         }
-
         uint64_t idx = raftLogLastIndex() + 1;
         raftLogAppend(raftLogCreate(rs->current_term, idx, type, data));
         serverLog(LL_NOTICE, "Leader appended %s (index %llu).",
@@ -815,8 +895,202 @@ static void clusterRaftPropose(sds entry, void *ctx, void (*callback)(void *ctx,
     }
 }
 
+/* --------------------------------------------------------------------------
+ * Shard epoch helpers
+ * -------------------------------------------------------------------------- */
+
+static uint64_t clusterGetShardEpoch(const char *shard_id) {
+    clusterRaftState *rs = RAFT_STATE();
+    sds s = sdsnewlen(shard_id, CLUSTER_NAMELEN);
+    dictEntry *de = dictFind(rs->shard_epochs, s);
+    sdsfree(s);
+    return de ? dictGetUnsignedIntegerVal(de) : 0;
+}
+
+static void clusterSetShardEpoch(const char *shard_id, uint64_t epoch) {
+    clusterRaftState *rs = RAFT_STATE();
+    sds s = sdsnewlen(shard_id, CLUSTER_NAMELEN);
+    dictEntry *de = dictAddOrFind(rs->shard_epochs, s);
+    if (dictGetKey(de) != s) {
+        sdsfree(s);
+    }
+    dictSetUnsignedIntegerVal(de, epoch);
+    /* Wake up any deferred proposals waiting on epoch advance. */
+    rs->todo_retry_deferred = 1;
+}
+
+/* Validate a shard epoch.
+ * Returns 1 if it's current, 0 if it's stale.
+ * Shard_id may be NULL (skipped). Does not bump. */
+static int clusterValidateShardEpoch(const char *shard_id, uint64_t epoch) {
+    if (!shard_id) return 1;
+    uint64_t current = clusterGetShardEpoch(shard_id);
+    if (current > 0 && epoch != current) return 0;
+    return 1;
+}
+
+/* Check if the shard epoch has advanced past what's in the proposal's data.
+ * If so, update the epoch fields in-place and return 1. Otherwise return 0. */
+static int raftRefreshEpochInData(int type, sds *data) {
+    int argc;
+    sds *argv = sdssplitlen(*data, sdslen(*data), " ", 1, &argc);
+    if (!argv) return 0;
+
+    int advanced = 0;
+    switch (type) {
+    case RAFT_ENTRY_FAILOVER: {
+        /* Format: <replica-id> <primary-id> <shard-id> <shard-epoch> */
+        if (argc >= 4) {
+            uint64_t entry_epoch = strtoull(argv[3], NULL, 10);
+            uint64_t current = clusterGetShardEpoch(argv[2]);
+            if (current > entry_epoch) {
+                advanced = 1;
+                sdsfree(argv[3]);
+                argv[3] = sdsfromlonglong(current);
+            }
+        }
+        break;
+    }
+    case RAFT_ENTRY_SET_REPLICA_OF: {
+        /* Format: <replica-id> <source-shard> <source-epoch> <primary-id-or-dash> <target-shard> <target-epoch> */
+        if (argc >= 6) {
+            uint64_t src_epoch = strtoull(argv[2], NULL, 10);
+            uint64_t src_current = clusterGetShardEpoch(argv[1]);
+            uint64_t tgt_epoch = strtoull(argv[5], NULL, 10);
+            uint64_t tgt_current = clusterGetShardEpoch(argv[4]);
+            if (src_current > src_epoch || tgt_current > tgt_epoch) {
+                advanced = 1;
+                sdsfree(argv[2]);
+                argv[2] = sdsfromlonglong(src_current);
+                sdsfree(argv[5]);
+                argv[5] = sdsfromlonglong(tgt_current);
+            }
+        }
+        break;
+    }
+    case RAFT_ENTRY_SLOT_CHANGE: {
+        /* Format: <source-id-or-dash> <source-epoch> <target-id-or-dash> <target-epoch> <ranges...> */
+        if (argc >= 5) {
+            clusterNode *source = (sdslen(argv[0]) == CLUSTER_NAMELEN)
+                                      ? clusterLookupNode(argv[0], CLUSTER_NAMELEN)
+                                      : NULL;
+            clusterNode *target = (sdslen(argv[2]) == CLUSTER_NAMELEN)
+                                      ? clusterLookupNode(argv[2], CLUSTER_NAMELEN)
+                                      : NULL;
+            if (source && clusterGetShardEpoch(source->shard_id) > strtoull(argv[1], NULL, 10))
+                advanced = 1;
+            if (target && clusterGetShardEpoch(target->shard_id) > strtoull(argv[3], NULL, 10))
+                advanced = 1;
+            if (advanced) {
+                if (source) {
+                    sdsfree(argv[1]);
+                    argv[1] = sdsfromlonglong(clusterGetShardEpoch(source->shard_id));
+                }
+                if (target) {
+                    sdsfree(argv[3]);
+                    argv[3] = sdsfromlonglong(clusterGetShardEpoch(target->shard_id));
+                }
+            }
+        }
+        break;
+    }
+    case RAFT_ENTRY_NODE_FORGET: {
+        /* Format: <node-id> <epoch> */
+        if (argc >= 2) {
+            clusterNode *node = clusterLookupNode(argv[0], sdslen(argv[0]));
+            if (node) {
+                uint64_t entry_epoch = strtoull(argv[1], NULL, 10);
+                uint64_t current = clusterGetShardEpoch(node->shard_id);
+                if (current > entry_epoch) {
+                    advanced = 1;
+                    sdsfree(argv[1]);
+                    argv[1] = sdsfromlonglong(current);
+                }
+            }
+        }
+        break;
+    }
+    default:
+        break;
+    }
+
+    if (advanced) {
+        sdsfree(*data);
+        *data = sdsjoinsds(argv, argc, " ", 1);
+    }
+    sdsfreesplitres(argv, argc);
+    return advanced;
+}
+
+/* Parsed fields from a SLOT_CHANGE entry's epoch-related data.
+ * Format: "<source-id-or-dash> <source-epoch> <target-id-or-dash> <target-epoch> <ranges...>" */
+typedef struct {
+    clusterNode *target_node;    /* NULL if dash */
+    clusterNode *source_node;    /* NULL if dash */
+    const char *source_shard_id; /* source_node->shard_id or NULL. */
+    const char *target_shard_id; /* target_node->shard_id or NULL. */
+    uint64_t source_epoch;
+    uint64_t target_epoch;
+    int range_start_arg; /* Index in argv where ranges begin (first range element). */
+} slotChangeEpochInfo;
+
+/* Parse fields from a SLOT_CHANGE entry's split argv.
+ * Format: "<source-id-or-dash> <source-epoch> <target-id-or-dash> <target-epoch> <ranges...>"
+ * Caller must have verified argc >= 5.
+ * Returns true if parsing succeeded, false otherwise. */
+static bool parseSlotChangeEpochs(sds *argv, int argc, slotChangeEpochInfo *info) {
+    memset(info, 0, sizeof(*info));
+
+    /* argv[0] = source-id-or-dash */
+    info->source_node = (sdslen(argv[0]) == CLUSTER_NAMELEN)
+                            ? clusterLookupNode(argv[0], CLUSTER_NAMELEN)
+                            : NULL;
+    /* argv[1] = source-epoch */
+    info->source_epoch = strtoull(argv[1], NULL, 10);
+    /* argv[2] = target-id-or-dash */
+    info->target_node = (sdslen(argv[2]) == CLUSTER_NAMELEN)
+                            ? clusterLookupNode(argv[2], CLUSTER_NAMELEN)
+                            : NULL;
+    /* argv[3] = target-epoch */
+    info->target_epoch = strtoull(argv[3], NULL, 10);
+    /* argv[4..argc-1] = ranges */
+    info->range_start_arg = 4;
+
+    info->source_shard_id = info->source_node ? info->source_node->shard_id : NULL;
+    info->target_shard_id = info->target_node ? info->target_node->shard_id : NULL;
+    return (argc > 4);
+}
+
+/* Pre-validate a proposal on the leader before appending to the log.
+ * Reuses the apply functions in validate_only mode.
+ * Returns RAFT_RESULT_OK if valid, or RAFT_RESULT_STALE_EPOCH /
+ * RAFT_RESULT_REJECTED describing why it failed. */
+static RaftProposalResult clusterRaftPreValidate(int type, sds data) {
+    RaftProposalResult result = RAFT_RESULT_OK;
+    switch (type) {
+    case RAFT_ENTRY_FAILOVER:
+        result = clusterRaftApplyFailover(data, 1);
+        break;
+    case RAFT_ENTRY_SET_REPLICA_OF:
+        result = clusterRaftApplySetReplica(data, 1);
+        break;
+    case RAFT_ENTRY_SLOT_CHANGE:
+        result = clusterRaftApplySlotChange(data, 1);
+        break;
+    case RAFT_ENTRY_NODE_FORGET:
+        result = clusterRaftApplyNodeForget(data, 1);
+        break;
+    default:
+        break;
+    }
+    if (result != RAFT_RESULT_OK) {
+        serverLog(LL_NOTICE, "Leader pre-validation: rejecting %s proposal (%s). data: %s",
+                  raftEntryTypeName(type), raftProposalResultMsg(result), data);
+    }
+    return result;
+}
+
 static int clusterRaftProcessPropose(clusterLink *link, int argc, sds *argv) {
-    UNUSED(link);
     clusterRaftState *rs = RAFT_STATE();
 
     /* argv[0]="PROPOSE", argv[1..] is the entry (type + data). */
@@ -834,6 +1108,22 @@ static int clusterRaftProcessPropose(clusterLink *link, int argc, sds *argv) {
     /* Data is everything after the type name. */
     sds data = (argc >= 3) ? sdsjoinsds(argv + 2, argc - 2, " ", 1) : sdsempty();
 
+    /* Pre-validate on the leader to reject stale/invalid proposals. */
+    RaftProposalResult pre_result = clusterRaftPreValidate(type, data);
+    if (pre_result != RAFT_RESULT_OK) {
+        /* Send REJECT back to the proposing follower so it can unblock the client. */
+        if (link) {
+            sds msg = wireNewMsg("REJECT");
+            msg = sdscatfmt(msg, " %s ", raftProposalResultWireReason(pre_result));
+            msg = sdscatlen(msg, entry, sdslen(entry));
+            msg = wireFinishMsg(msg);
+            clusterRaftSendMsg(link, msg);
+        }
+        sdsfree(data);
+        sdsfree(entry);
+        return 1;
+    }
+
     uint64_t idx = raftLogLastIndex() + 1;
     raftLogAppend(raftLogCreate(rs->current_term, idx, type, data));
     serverLog(LL_NOTICE, "Leader appended proposed %s (index %llu).",
@@ -846,6 +1136,32 @@ static int clusterRaftProcessPropose(clusterLink *link, int argc, sds *argv) {
     }
 
     sdsfree(entry);
+    return 1;
+}
+
+/* Handle a REJECT message from the leader. The leader sends this when it
+ * rejects a forwarded PROPOSE. We match it against our
+ * pending_proposals and fire the callback with an error so the client
+ * gets an immediate reply instead of hanging until timeout.
+ * Format: "REJECT <reason> <type> <data...>"
+ * <reason> is a single word: "conflict" (retryable epoch), "rejected" (terminal), etc. */
+static int clusterRaftProcessReject(clusterLink *link, int argc, sds *argv) {
+    UNUSED(link);
+
+    /* argv[0]="REJECT", argv[1]=reason, argv[2]=type, argv[3..]=data */
+    if (argc < 3) return 1;
+
+    const char *reason = argv[1];
+    int type = raftEntryTypeByName(argv[2]);
+    if (type < 0) return 1;
+
+    int data_argc = argc - 3;
+    sds data = (data_argc > 0) ? sdsjoinsds(argv + 3, data_argc, " ", 1) : sdsempty();
+
+    RaftProposalResult result = raftProposalResultFromWire(reason);
+
+    clusterRaftCompletePendingProposal(type, data, result);
+    sdsfree(data);
     return 1;
 }
 
@@ -957,9 +1273,40 @@ static uint64_t raftLogTermAt(uint64_t index) {
     return e ? e->term : 0;
 }
 
+/* Find a pending proposal matching type+data, fire its callback, and remove it.
+ * Called both when an entry is applied (from raftLogApply) and when the leader
+ * sends a REJECT for a forwarded proposal. */
+static void clusterRaftCompletePendingProposal(int type, sds data, RaftProposalResult result) {
+    clusterRaftState *rs = RAFT_STATE();
+    if (listLength(rs->pending_proposals) == 0) return;
+
+    listIter li;
+    listNode *ln;
+    listRewind(rs->pending_proposals, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        raftPendingProposal *pp = listNodeValue(ln);
+        if (pp->type == type && !sdscmp(pp->data, data)) {
+            /* On stale epoch with retries remaining: mark deferred.
+             * The epoch update happens at retry time when the epoch has
+             * actually advanced (checked by raftRefreshEpochInData). */
+            if (result == RAFT_RESULT_STALE_EPOCH && pp->retries > 0) {
+                pp->retries--;
+                pp->deferred = 1;
+                return;
+            }
+            if (pp->callback) pp->callback(pp->ctx, raftProposalResultMsg(result));
+            sdsfree(pp->data);
+            zfree(pp);
+            listDelNode(rs->pending_proposals, ln);
+            break;
+        }
+    }
+}
+
 /* Apply a committed log entry. */
 static void raftLogApply(raftLogEntry *e) {
     clusterRaftState *rs = RAFT_STATE();
+    RaftProposalResult entry_result = RAFT_RESULT_OK;
     switch (e->type) {
     case RAFT_ENTRY_NODE_JOIN: {
         /* data: "<node-id> <address>" */
@@ -1033,23 +1380,27 @@ static void raftLogApply(raftLogEntry *e) {
 
                     /* Propose SLOT_CHANGE for slots assigned before joining
                      * the cluster (from our singleton state). */
-                    sds entry = sdsnew("SLOT_CHANGE ");
-                    entry = sdscatlen(entry, myself->name, CLUSTER_NAMELEN);
                     int count = 0;
+                    sds slot_range = sdsempty();
                     for (int j = 0; j < CLUSTER_SLOTS; j++) {
                         if (server.cluster->slots[j] != myself) continue;
                         int start = j;
                         while (j + 1 < CLUSTER_SLOTS && server.cluster->slots[j + 1] == myself) j++;
                         if (j == start)
-                            entry = sdscatfmt(entry, " %i", start);
+                            slot_range = sdscatfmt(slot_range, " %i", start);
                         else
-                            entry = sdscatfmt(entry, " %i-%i", start, j);
+                            slot_range = sdscatfmt(slot_range, " %i-%i", start, j);
                         count++;
                     }
                     if (count > 0) {
+                        sds entry = sdsnew("SLOT_CHANGE - 0 ");
+                        entry = sdscatlen(entry, myself->name, CLUSTER_NAMELEN);
+                        entry = sdscat(entry, " 0");
+                        entry = sdscatsds(entry, slot_range);
                         clusterRaftPropose(entry, NULL, NULL);
+                        sdsfree(entry);
                     }
-                    sdsfree(entry);
+                    sdsfree(slot_range);
                 }
             }
 
@@ -1065,38 +1416,39 @@ static void raftLogApply(raftLogEntry *e) {
         if (argv) sdsfreesplitres(argv, argc);
         break;
     }
-    case RAFT_ENTRY_SLOT_CHANGE:
-        clusterRaftApplySlotChange(e->data);
-        rs->todo_update_slot_coverage = 1;
-        rs->todo_invalidate_slots_cache = 1;
-        serverLog(LL_NOTICE, "Applied SLOT_CHANGE (index %llu).", (unsigned long long)e->index);
-        break;
-    case RAFT_ENTRY_SET_REPLICA_OF:
-        clusterRaftApplySetReplica(e->data);
-        rs->todo_invalidate_slots_cache = 1;
-        serverLog(LL_NOTICE, "Applied SET_REPLICA_OF (index %llu).", (unsigned long long)e->index);
-        break;
-    case RAFT_ENTRY_FAILOVER:
-        clusterRaftApplyFailover(e->data);
-        rs->todo_update_slot_coverage = 1;
-        rs->todo_invalidate_slots_cache = 1;
-        serverLog(LL_NOTICE, "Applied FAILOVER (index %llu).", (unsigned long long)e->index);
-        break;
-    case RAFT_ENTRY_NODE_FORGET: {
-        clusterNode *node = clusterLookupNode(e->data, sdslen(e->data));
-        if (node && node != myself) {
-            /* Detach link before deleting so clusterReadHandler can detect
-             * that the node it was talking to is gone. */
-            if (node->link) {
-                node->link->node = NULL;
-                node->link = NULL;
-            }
-            clusterDelNode(node);
+    case RAFT_ENTRY_SLOT_CHANGE: {
+        entry_result = clusterRaftApplySlotChange(e->data, 0);
+        if (entry_result == RAFT_RESULT_OK) {
             rs->todo_update_slot_coverage = 1;
             rs->todo_invalidate_slots_cache = 1;
         }
-        serverLog(LL_NOTICE, "Applied NODE_FORGET %.40s (index %llu).",
-                  e->data, (unsigned long long)e->index);
+        serverLog(LL_NOTICE, "%s SLOT_CHANGE (index %llu).",
+                  entry_result != RAFT_RESULT_OK ? "Skipped" : "Applied", (unsigned long long)e->index);
+        break;
+    }
+    case RAFT_ENTRY_SET_REPLICA_OF: {
+        entry_result = clusterRaftApplySetReplica(e->data, 0);
+        if (entry_result == RAFT_RESULT_OK) {
+            rs->todo_invalidate_slots_cache = 1;
+        }
+        serverLog(LL_NOTICE, "%s SET_REPLICA_OF (index %llu).",
+                  entry_result != RAFT_RESULT_OK ? "Skipped" : "Applied", (unsigned long long)e->index);
+        break;
+    }
+    case RAFT_ENTRY_FAILOVER: {
+        entry_result = clusterRaftApplyFailover(e->data, 0);
+        if (entry_result == RAFT_RESULT_OK) {
+            rs->todo_update_slot_coverage = 1;
+            rs->todo_invalidate_slots_cache = 1;
+        }
+        serverLog(LL_NOTICE, "%s FAILOVER (index %llu).",
+                  entry_result != RAFT_RESULT_OK ? "Skipped" : "Applied", (unsigned long long)e->index);
+        break;
+    }
+    case RAFT_ENTRY_NODE_FORGET: {
+        entry_result = clusterRaftApplyNodeForget(e->data, 0);
+        serverLog(LL_NOTICE, "%s NODE_FORGET (index %llu).",
+                  entry_result != RAFT_RESULT_OK ? "Skipped" : "Applied", (unsigned long long)e->index);
         break;
     }
     case RAFT_ENTRY_NODE_FAIL: {
@@ -1145,6 +1497,7 @@ static void raftLogApply(raftLogEntry *e) {
         sds *argv = sdssplitlen(e->data, sdslen(e->data), " ", 1, &argc);
         if (argv && argc >= 2 && sdslen(argv[0]) == CLUSTER_NAMELEN) {
             clusterNode *node = clusterLookupNode(argv[0], CLUSTER_NAMELEN);
+
             if (node && node != myself) {
                 /* Reset optional fields so absent aux fields get cleared. */
                 node->announce_client_tcp_port = 0;
@@ -1183,22 +1536,13 @@ static void raftLogApply(raftLogEntry *e) {
         break;
     }
 
-    /* Check pending proposals for a match and remove it. */
-    if (listLength(rs->pending_proposals) > 0) {
-        listIter li;
-        listNode *ln;
-        listRewind(rs->pending_proposals, &li);
-        while ((ln = listNext(&li)) != NULL) {
-            raftPendingProposal *pp = listNodeValue(ln);
-            if (pp->type == e->type && !sdscmp(pp->data, e->data)) {
-                if (pp->callback) pp->callback(pp->ctx, NULL);
-                sdsfree(pp->data);
-                zfree(pp);
-                listDelNode(rs->pending_proposals, ln);
-                break;
-            }
-        }
+    if (entry_result != RAFT_RESULT_OK) {
+        serverLog(LL_DEBUG, "Proposal rejected at apply: %s (type %s, index %llu).",
+                  raftProposalResultMsg(entry_result), raftEntryTypeName(e->type), (unsigned long long)e->index);
     }
+
+    /* Check pending proposals for a match and remove it. */
+    clusterRaftCompletePendingProposal(e->type, e->data, entry_result);
 }
 
 /* --------------------------------------------------------------------------
@@ -1699,6 +2043,7 @@ static void clusterRaftInit(void) {
     rs->last_node_info_check = monotonicMs();
     rs->last_repl_offsets_broadcast = monotonicMs();
     rs->todo_update_slot_coverage = 1;
+    rs->shard_epochs = dictCreate(&raftShardEpochDictType);
     server.cluster->size = 0; /* Incremented by NODE_JOIN apply */
 }
 
@@ -1801,43 +2146,75 @@ static void clusterRaftDetectFailures(mstime_t now) {
     dictReleaseIterator(di);
 }
 
-/* Retry deferred proposals: forward to leader or append locally. */
-static void clusterRaftRetryProposals(void) {
+/* Forward a pending proposal to the leader or append locally if we are
+ * the leader. Caller must ensure leader link is available for followers. */
+static void clusterRaftSendProposal(raftPendingProposal *pp, clusterLink *leader_link) {
+    clusterRaftState *rs = RAFT_STATE();
+
+    if (rs->role == RAFT_ROLE_LEADER) {
+        uint64_t idx = raftLogLastIndex() + 1;
+        raftLogAppend(raftLogCreate(rs->current_term, idx, pp->type, sdsdup(pp->data)));
+        serverLog(LL_NOTICE, "Leader appended retried %s (index %llu).",
+                  raftEntryTypeName(pp->type), (unsigned long long)idx);
+        rs->todo_broadcast_ae = 1;
+    } else {
+        sds entry = sdscatfmt(sdsempty(), "%s %S",
+                              raftEntryTypeName(pp->type), pp->data);
+        sds msg = wireNewMsg("PROPOSE");
+        msg = sdscatlen(msg, " ", 1);
+        msg = sdscatlen(msg, entry, sdslen(entry));
+        msg = wireFinishMsg(msg);
+        clusterRaftSendMsg(leader_link, msg);
+        sdsfree(entry);
+    }
+}
+
+/* Retry proposals from the pending list.
+ * Deferred proposals (waiting for epoch advance) are always included — they
+ * self-guard via raftRefreshEpochInData() and are skipped if not ready.
+ * include_pending: if set, also retry pending proposals (leader-change replay). */
+static void clusterRaftRetryProposals(int include_pending) {
     clusterRaftState *rs = RAFT_STATE();
     if (listLength(rs->pending_proposals) == 0) return;
 
-    if (rs->role == RAFT_ROLE_LEADER) {
-        listIter li;
-        listNode *ln;
-        listRewind(rs->pending_proposals, &li);
-        while ((ln = listNext(&li)) != NULL) {
-            raftPendingProposal *pp = listNodeValue(ln);
-            uint64_t idx = raftLogLastIndex() + 1;
-            raftLogAppend(raftLogCreate(rs->current_term, idx, pp->type, sdsdup(pp->data)));
-            serverLog(LL_NOTICE, "Leader appended deferred %s (index %llu).",
-                      raftEntryTypeName(pp->type), (unsigned long long)idx);
-        }
-        rs->todo_broadcast_ae = 1;
-    } else if (rs->role == RAFT_ROLE_FOLLOWER) {
+    /* For followers, check leader link once — it's the same for all entries. */
+    clusterLink *leader_link = NULL;
+    if (rs->role == RAFT_ROLE_FOLLOWER) {
         clusterNode *leader = clusterLookupNode(rs->leader, CLUSTER_NAMELEN);
-        if (leader && leader->link) {
-            listIter li;
-            listNode *ln;
-            listRewind(rs->pending_proposals, &li);
-            while ((ln = listNext(&li)) != NULL) {
-                raftPendingProposal *pp = listNodeValue(ln);
-                sds entry = sdscatfmt(sdsempty(), "%s %S",
-                                      raftEntryTypeName(pp->type), pp->data);
-                sds msg = wireNewMsg("PROPOSE");
-                msg = sdscatlen(msg, " ", 1);
-                msg = sdscatlen(msg, entry, sdslen(entry));
-                msg = wireFinishMsg(msg);
-                clusterRaftSendMsg(leader->link, msg);
-                sdsfree(entry);
-            }
-            serverLog(LL_NOTICE, "Forwarded %lu deferred proposals to leader.",
-                      listLength(rs->pending_proposals));
+        if (!leader || !leader->link) {
+            rs->todo_retry_proposals = 1;
+            return;
         }
+        leader_link = leader->link;
+    }
+
+    listIter li;
+    listNode *ln;
+    listRewind(rs->pending_proposals, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        raftPendingProposal *pp = listNodeValue(ln);
+
+        /* For deferred entries, update to latest shard epoch */
+        if (pp->deferred) {
+            if (!raftRefreshEpochInData(pp->type, &pp->data)) continue;
+
+            pp->deferred = 0;
+
+            if (rs->role == RAFT_ROLE_LEADER) {
+                RaftProposalResult pre_result = clusterRaftPreValidate(pp->type, pp->data);
+                if (pre_result != RAFT_RESULT_OK) {
+                    if (pp->callback) pp->callback(pp->ctx, raftProposalResultMsg(pre_result));
+                    sdsfree(pp->data);
+                    zfree(pp);
+                    listDelNode(rs->pending_proposals, ln);
+                    continue;
+                }
+            }
+        } else {
+            if (!include_pending) continue;
+        }
+
+        clusterRaftSendProposal(pp, leader_link);
     }
 }
 
@@ -1898,8 +2275,8 @@ static void clusterRaftCron(void) {
             }
         }
 
-        /* Retry deferred proposals when leader link becomes available. */
-        clusterRaftRetryProposals();
+        /* Retry proposals when leader link becomes available. */
+        clusterRaftRetryProposals(1);
 
         /* Periodically check if our NODE_INFO diverged from what was last
          * committed (e.g. a CONFIG SET succeeded but the proposal timed
@@ -1966,12 +2343,15 @@ static void clusterRaftCron(void) {
         } else if (nodeIsReplica(myself) && myself->replicaof &&
                    replicationGetReplicaOffset() == server.primary_repl_offset &&
                    server.primary_repl_offset > 0) {
-            /* Caught up — propose FAILOVER. */
             clusterNode *primary = myself->replicaof;
+            uint64_t epoch = clusterGetShardEpoch(primary->shard_id);
             sds entry = sdsnew("FAILOVER ");
             entry = sdscatlen(entry, myself->name, CLUSTER_NAMELEN);
             entry = sdscatlen(entry, " ", 1);
             entry = sdscatlen(entry, primary->name, CLUSTER_NAMELEN);
+            entry = sdscatlen(entry, " ", 1);
+            entry = sdscatlen(entry, primary->shard_id, CLUSTER_NAMELEN);
+            entry = sdscatfmt(entry, " %U", (unsigned long long)epoch);
             clusterRaftPropose(entry, rs->mf_ctx, rs->mf_callback);
             sdsfree(entry);
             rs->mf_end = 0;
@@ -1986,12 +2366,17 @@ static void clusterRaftCron(void) {
         if (nodeIsReplica(myself) && myself->replicaof && nodeFailed(myself->replicaof)) {
             rs->failover_time = 0;
             clusterNode *primary = myself->replicaof;
-            serverLog(LL_NOTICE, "Automatic failover: proposing FAILOVER for primary %.40s.", primary->name);
+            serverLog(LL_NOTICE, "Automatic failover: proposing FAILOVER for primary %.40s.",
+                      primary->name);
+            uint64_t epoch = clusterGetShardEpoch(primary->shard_id);
             sds entry = sdsnew("FAILOVER ");
             entry = sdscatlen(entry, myself->name, CLUSTER_NAMELEN);
             entry = sdscatlen(entry, " ", 1);
             entry = sdscatlen(entry, primary->name, CLUSTER_NAMELEN);
-            clusterRaftPropose(entry, NULL, NULL);
+            entry = sdscatlen(entry, " ", 1);
+            entry = sdscatlen(entry, primary->shard_id, CLUSTER_NAMELEN);
+            entry = sdscatfmt(entry, " %U", (unsigned long long)epoch);
+            clusterRaftPropose(entry, NULL, clusterRaftAutoFailoverCallback);
             sdsfree(entry);
         }
     }
@@ -2083,9 +2468,11 @@ static void clusterRaftBeforeSleep(bool blocked) {
         if (rs->role == RAFT_ROLE_LEADER) clusterRaftBroadcastAppendEntries();
     }
 
-    if (rs->todo_retry_proposals) {
+    if (rs->todo_retry_deferred || rs->todo_retry_proposals) {
+        int include_pending = rs->todo_retry_proposals;
+        rs->todo_retry_deferred = 0;
         rs->todo_retry_proposals = 0;
-        clusterRaftRetryProposals();
+        clusterRaftRetryProposals(include_pending);
     }
 
     if (rs->todo_update_slot_coverage) {
@@ -2205,6 +2592,7 @@ static void clusterRaftHandleServerShutdown(void) {
     }
     zfree(rs->log);
     sdsfree(rs->my_last_committed_info);
+    dictRelease(rs->shard_epochs);
     zfree(rs);
     server.cluster->protocol_data = NULL;
 }
@@ -2258,6 +2646,8 @@ static int clusterRaftProcessMessage(struct clusterLink *link) {
         ret = clusterRaftProcessMeetRejected(link, argc, argv);
     } else if (!strcasecmp(argv[0], "PROPOSE")) {
         ret = clusterRaftProcessPropose(link, argc, argv);
+    } else if (!strcasecmp(argv[0], "REJECT")) {
+        ret = clusterRaftProcessReject(link, argc, argv);
     } else if (!strcasecmp(argv[0], "AE")) {
         ret = clusterRaftProcessAppendEntries(link, argc, argv, lines + 1, line_count - 1);
     } else if (!strcasecmp(argv[0], "AE_ACK")) {
@@ -2428,6 +2818,25 @@ static void clusterRaftInitNodeData(clusterNode *node) {
 
 static void clusterRaftFreeNodeData(clusterNode *node) {
     zfree(node->protocol_data);
+}
+
+/* For raft, the config_epoch field in nodes.conf stores the shard epoch.
+ * ping_sent and pong_received have no meaning in raft (no gossip). */
+static void clusterRaftGetNodePingPongEpoch(clusterNode *node, long long *ping_sent, long long *pong_received, uint64_t *config_epoch) {
+    *ping_sent = 0;
+    *pong_received = 0;
+    *config_epoch = clusterGetShardEpoch(node->shard_id);
+}
+
+/* On load, the config_epoch field is the shard epoch for this node's shard.
+ * We use it to restore the shard_epochs dict. ping/pong are ignored. */
+static void clusterRaftSetNodePingPongEpoch(clusterNode *node, int ping_active, int pong_active, uint64_t shard_epoch) {
+    UNUSED(ping_active);
+    UNUSED(pong_active);
+    uint64_t current = clusterGetShardEpoch(node->shard_id);
+    if (shard_epoch > current) {
+        clusterSetShardEpoch(node->shard_id, shard_epoch);
+    }
 }
 
 static sds clusterRaftAppendVarsLine(sds config) {
@@ -2766,11 +3175,11 @@ typedef struct {
 
 static void clusterRaftSlotChangeApplyCallback(void *ctx, const char *error) {
     slotChangeCallbackCtx *sc = (slotChangeCallbackCtx *)ctx;
-    if (clusterNodeGetPrimary(myself)->numslots == 0 && sc->target && !error) {
+    if (!error && clusterNodeGetPrimary(myself)->numslots == 0 && sc->target) {
         clusterHandleLostLastSlot(sc->target);
     }
     if (sc->orig_callback) sc->orig_callback(sc->orig_ctx, error);
-    zfree(ctx);
+    zfree(sc);
 }
 
 /* Invoked for slot assignments and slot migrations (ADDSLOTS, SETSLOT, etc.) */
@@ -2797,9 +3206,17 @@ static void clusterRaftSlotChange(slotRange *ranges, int numranges, clusterNode 
         return;
     }
 
-    /* Build entry: "SLOT_CHANGE <node-id-or-dash> <ranges...>" */
+    /* Build entry: "SLOT_CHANGE <source-id-or-dash> <source-epoch> <target-id-or-dash> <target-epoch> <ranges...>" */
+    clusterNode *source_owner = server.cluster->slots[ranges[0].start_slot];
+    serverAssert(source_owner || target); /* At least one side must be set. */
+    uint64_t source_epoch = (source_owner) ? clusterGetShardEpoch(source_owner->shard_id) : 0;
+    uint64_t target_epoch = target ? clusterGetShardEpoch(target->shard_id) : 0;
+
     sds entry = sdsnew("SLOT_CHANGE ");
+    entry = sdscatlen(entry, source_owner ? source_owner->name : "-", source_owner ? CLUSTER_NAMELEN : 1);
+    entry = sdscatfmt(entry, " %U ", (unsigned long long)source_epoch);
     entry = sdscatlen(entry, target ? target->name : "-", target ? CLUSTER_NAMELEN : 1);
+    entry = sdscatfmt(entry, " %U", (unsigned long long)target_epoch);
     for (int i = 0; i < numranges; i++) {
         if (ranges[i].start_slot == ranges[i].end_slot)
             entry = sdscatfmt(entry, " %i", ranges[i].start_slot);
@@ -2819,18 +3236,33 @@ static void clusterRaftSlotChange(slotRange *ranges, int numranges, clusterNode 
     sdsfree(entry);
 }
 
-/* Apply a SLOT_CHANGE entry. Format: "<node-id-or-dash> <range> [<range> ...]"
- * Ranges use the same format as nodes.conf: "0-5460" or "5461". */
-static void clusterRaftApplySlotChange(sds data) {
+/* Apply (or validate) a SLOT_CHANGE entry.
+ * Format: "<source-id-or-dash> <source-epoch> <target-id-or-dash> <target-epoch> <ranges...>"
+ * Ranges use the same format as nodes.conf: "0-5460" or "5461".
+ * When validate_only is set, only validation is performed (no state mutation).
+ * Returns RAFT_RESULT_OK on success, or RAFT_RESULT_STALE_EPOCH /
+ * RAFT_RESULT_REJECTED describing the failure. */
+static RaftProposalResult clusterRaftApplySlotChange(sds data, int validate_only) {
+    RaftProposalResult result = RAFT_RESULT_OK;
     int argc;
     sds *argv = sdssplitlen(data, sdslen(data), " ", 1, &argc);
-    if (!argv || argc < 2) goto done;
+    /* Need at least: source + source_epoch + target + target_epoch + one_range = 5 */
+    if (!argv || argc < 5) goto reject;
 
-    clusterNode *target = (sdslen(argv[0]) == CLUSTER_NAMELEN)
-                              ? clusterLookupNode(argv[0], CLUSTER_NAMELEN)
-                              : NULL;
+    slotChangeEpochInfo info;
+    if (!parseSlotChangeEpochs(argv, argc, &info)) goto reject;
 
-    for (int i = 1; i < argc; i++) {
+    /* Epoch validation: validate both source and target epochs. */
+    if (!clusterValidateShardEpoch(info.source_shard_id, info.source_epoch) ||
+        !clusterValidateShardEpoch(info.target_shard_id, info.target_epoch)) {
+        result = RAFT_RESULT_STALE_EPOCH;
+        goto reject;
+    }
+
+    if (validate_only) goto done;
+
+    /* Range fields are argv[range_start_arg] through argv[argc-1]. */
+    for (int i = info.range_start_arg; i < argc; i++) {
         int start, end;
         char *p = strchr(argv[i], '-');
         if (p) {
@@ -2841,17 +3273,16 @@ static void clusterRaftApplySlotChange(sds data) {
             start = end = atoi(argv[i]);
         }
         for (int j = start; j <= end; j++) {
-            if (target == myself || server.cluster->slots[j] == myself)
+            if (info.target_node == myself || server.cluster->slots[j] == myself)
                 RAFT_STATE()->todo_save_config = 1;
-            if (target) {
-                /* If this slot is moving away from myself, delete keys. */
-                if (server.cluster->slots[j] == myself && target != myself) {
+            if (info.target_node) {
+                if (server.cluster->slots[j] == myself && info.target_node != myself) {
                     serverLog(LL_NOTICE, "Deleting keys in dirty slot %d on node %.40s",
                               j, myself->name);
                     delKeysInSlot(j, server.lazyfree_lazy_server_del, true, false);
                 }
                 if (server.cluster->slots[j]) clusterDelSlot(j);
-                clusterAddSlot(target, j);
+                clusterAddSlot(info.target_node, j);
             } else {
                 if (server.cluster->slots[j] == myself) {
                     delKeysInSlot(j, server.lazyfree_lazy_server_del, true, false);
@@ -2860,27 +3291,55 @@ static void clusterRaftApplySlotChange(sds data) {
             }
         }
     }
+    goto done;
+
+reject:
+    /* Default to generic rejection; stale-epoch callers set result before jumping here. */
+    if (result == RAFT_RESULT_OK) result = RAFT_RESULT_REJECTED;
 done:
     if (argv) sdsfreesplitres(argv, argc);
+    return result;
 }
 
-/* Apply a SET_REPLICA_OF entry.
- * Format: "<replica-id> <primary-id-or-dash> <shard-id>" */
-static void clusterRaftApplySetReplica(sds data) {
+/* Apply (or validate) a SET_REPLICA_OF entry.
+ * Format: "<replica-id> <source-shard> <source-epoch> <primary-id-or-dash> <target-shard> <target-epoch>"
+ * When validate_only is set, only validation is performed (no state mutation).
+ * Returns RAFT_RESULT_OK on success, or RAFT_RESULT_STALE_EPOCH /
+ * RAFT_RESULT_REJECTED describing the failure. */
+static RaftProposalResult clusterRaftApplySetReplica(sds data, int validate_only) {
     clusterRaftState *rs = RAFT_STATE();
+    RaftProposalResult result = RAFT_RESULT_OK;
     int argc;
     sds *argv = sdssplitlen(data, sdslen(data), " ", 1, &argc);
-    if (!argv || argc != 3) goto done;
+    if (!argv || argc != 6) goto reject;
 
     clusterNode *replica = clusterLookupNode(argv[0], sdslen(argv[0]));
-    if (!replica) goto done;
+    if (!replica) goto reject;
+
+    char *source_shard = argv[1];
+    uint64_t source_epoch = strtoull(argv[2], NULL, 10);
+    char *target_shard = argv[4];
+    uint64_t target_epoch = strtoull(argv[5], NULL, 10);
+
+    /* Validate both shard epochs without bumping. */
+    if (!clusterValidateShardEpoch(source_shard, source_epoch) ||
+        !clusterValidateShardEpoch(target_shard, target_epoch)) {
+        result = RAFT_RESULT_STALE_EPOCH;
+        goto reject;
+    }
+
+    /* Guard: if a primary is specified, its shard must match target-shard. */
+    if (sdslen(argv[3]) == CLUSTER_NAMELEN) {
+        clusterNode *primary = clusterLookupNode(argv[3], sdslen(argv[3]));
+        if (primary && memcmp(primary->shard_id, target_shard, CLUSTER_NAMELEN) != 0) goto reject;
+    }
+
+    if (validate_only) goto done;
 
     if (replica == myself) rs->todo_save_config = 1;
 
-    char *shard_id = argv[2];
-
-    if (sdslen(argv[1]) == 1 && argv[1][0] == '-') {
-        /* Promote to primary with the shard-id from the entry. */
+    if (sdslen(argv[3]) == 1 && argv[3][0] == '-') {
+        /* Promote to primary with the target-shard from the entry. */
         if (nodeIsReplica(replica)) {
             if (replica->replicaof) clusterNodeRemoveReplica(replica->replicaof, replica);
             replica->flags &= ~CLUSTER_NODE_REPLICA;
@@ -2889,15 +3348,13 @@ static void clusterRaftApplySetReplica(sds data) {
             if (replica == myself) rs->todo_update_replication = 1;
         }
         clusterRemoveNodeFromShard(replica);
-        memcpy(replica->shard_id, shard_id, CLUSTER_NAMELEN);
-        clusterAddNodeToShard(shard_id, replica);
+        memcpy(replica->shard_id, target_shard, CLUSTER_NAMELEN);
+        clusterAddNodeToShard(target_shard, replica);
     } else {
-        clusterNode *primary = clusterLookupNode(argv[1], sdslen(argv[1]));
-        if (!primary) goto done;
-        /* Guard: skip if the primary's shard-id has changed. */
-        if (memcmp(primary->shard_id, shard_id, CLUSTER_NAMELEN) != 0) goto done;
+        clusterNode *primary = clusterLookupNode(argv[3], sdslen(argv[3]));
+        if (!primary) goto reject;
+        if (memcmp(primary->shard_id, target_shard, CLUSTER_NAMELEN) != 0) goto reject;
         if (replica == myself) {
-            /* Update cluster state; actual replication change deferred to beforeSleep. */
             if (myself->replicaof) clusterNodeRemoveReplica(myself->replicaof, myself);
             myself->flags &= ~CLUSTER_NODE_PRIMARY;
             myself->flags |= CLUSTER_NODE_REPLICA;
@@ -2913,29 +3370,60 @@ static void clusterRaftApplySetReplica(sds data) {
             replica->flags |= CLUSTER_NODE_REPLICA;
             replica->replicaof = primary;
             clusterNodeAddReplica(primary, replica);
-            /* Move replica to primary's shard. */
             clusterRemoveNodeFromShard(replica);
             memcpy(replica->shard_id, primary->shard_id, CLUSTER_NAMELEN);
             clusterAddNodeToShard(primary->shard_id, replica);
         }
     }
+
+    /* Bump both shard epochs after successful apply. */
+    clusterSetShardEpoch(source_shard, source_epoch + 1);
+    clusterSetShardEpoch(target_shard, target_epoch + 1);
+    goto done;
+
+reject:
+    /* Default to generic rejection; stale-epoch callers set result before jumping here. */
+    if (result == RAFT_RESULT_OK) result = RAFT_RESULT_REJECTED;
 done:
     if (argv) sdsfreesplitres(argv, argc);
+    return result;
 }
 
-/* Apply a FAILOVER entry. Format: "<replica-id> <primary-id>"
+/* Apply (or validate) a FAILOVER entry.
+ * Format: "<replica-id> <primary-id> <shard-id> <shard-epoch>"
  * The replica takes over the primary's slots and becomes primary.
- * The old primary becomes a replica of the new primary. */
-static void clusterRaftApplyFailover(sds data) {
+ * The old primary becomes a replica of the new primary.
+ * When validate_only is set, only validation is performed (no state mutation).
+ * Returns RAFT_RESULT_OK on success, or RAFT_RESULT_STALE_EPOCH /
+ * RAFT_RESULT_REJECTED describing the failure. */
+static RaftProposalResult clusterRaftApplyFailover(sds data, int validate_only) {
     clusterRaftState *rs = RAFT_STATE();
+    RaftProposalResult result = RAFT_RESULT_OK;
     int argc;
     sds *argv = sdssplitlen(data, sdslen(data), " ", 1, &argc);
-    if (!argv || argc != 2) goto done;
+    if (!argv || argc != 4) goto reject;
 
     clusterNode *replica = clusterLookupNode(argv[0], sdslen(argv[0]));
     clusterNode *primary = clusterLookupNode(argv[1], sdslen(argv[1]));
-    if (!replica || !primary) goto done;
-    if (!nodeIsReplica(replica) || nodeIsReplica(primary) || replica->replicaof != primary) goto done;
+    if (!replica || !primary) goto reject;
+
+    /* Validate that the primary still belongs to the shard claimed in the entry. */
+    if (memcmp(primary->shard_id, argv[2], CLUSTER_NAMELEN) != 0) {
+        serverLog(LL_WARNING, "FAILOVER rejected: primary %.40s shard mismatch (expected %.40s, got %.40s).",
+                  primary->name, argv[2], primary->shard_id);
+        goto reject;
+    }
+
+    /* Epoch validation: validate against the shard-id from the entry (no bump yet). */
+    uint64_t shard_epoch = strtoull(argv[3], NULL, 10);
+    if (!clusterValidateShardEpoch(argv[2], shard_epoch)) {
+        result = RAFT_RESULT_STALE_EPOCH;
+        goto reject;
+    }
+
+    if (!nodeIsReplica(replica) || nodeIsReplica(primary) || replica->replicaof != primary) goto reject;
+
+    if (validate_only) goto done;
 
     /* Transfer slots from old primary to new primary. */
     for (int j = 0; j < CLUSTER_SLOTS; j++) {
@@ -2981,34 +3469,137 @@ static void clusterRaftApplyFailover(sds data) {
         rs->todo_update_replication = 1;
         rs->todo_save_config = 1;
     }
+
+    /* Bump shard epoch after successful apply. */
+    clusterSetShardEpoch(argv[2], shard_epoch + 1);
+    goto done;
+
+reject:
+    /* Default to generic rejection; stale-epoch callers set result before jumping here. */
+    if (result == RAFT_RESULT_OK) result = RAFT_RESULT_REJECTED;
 done:
     if (argv) sdsfreesplitres(argv, argc);
+    return result;
+}
+
+/* Apply (or validate) a NODE_FORGET entry. Format: "<node-id> <shard-epoch>"
+ * When validate_only is set, only validation is performed (no state mutation).
+ * Returns RAFT_RESULT_OK on success, or RAFT_RESULT_STALE_EPOCH /
+ * RAFT_RESULT_REJECTED describing the failure. */
+static RaftProposalResult clusterRaftApplyNodeForget(sds data, int validate_only) {
+    clusterRaftState *rs = RAFT_STATE();
+    RaftProposalResult result = RAFT_RESULT_OK;
+    int argc;
+    sds *argv = sdssplitlen(data, sdslen(data), " ", 1, &argc);
+    if (!argv || argc < 2) goto reject;
+
+    clusterNode *node = clusterLookupNode(argv[0], sdslen(argv[0]));
+    if (!node || node == myself) goto reject;
+
+    uint64_t epoch = strtoull(argv[1], NULL, 10);
+    if (!clusterValidateShardEpoch(node->shard_id, epoch)) {
+        result = RAFT_RESULT_STALE_EPOCH;
+        goto reject;
+    }
+
+    if (nodeIsPrimary(node) && (node->num_replicas > 0 || node->numslots > 0)) {
+        serverLog(LL_WARNING, "NODE_FORGET rejected: can't forget a primary with replicas or assigned slots.");
+        goto reject;
+    }
+
+    if (validate_only) goto done;
+
+    /* Save shard_id before deleting the node. */
+    char shard_id[CLUSTER_NAMELEN];
+    memcpy(shard_id, node->shard_id, CLUSTER_NAMELEN);
+
+    /* Detach link before deleting so clusterReadHandler can detect
+     * that the node it was talking to is gone. */
+    if (node->link) {
+        node->link->node = NULL;
+        node->link = NULL;
+    }
+    clusterDelNode(node);
+    rs->todo_update_slot_coverage = 1;
+    rs->todo_invalidate_slots_cache = 1;
+
+    /* Bump shard epoch after successful delete. */
+    uint64_t current = clusterGetShardEpoch(shard_id);
+    clusterSetShardEpoch(shard_id, current == 0 ? 1 : current + 1);
+    goto done;
+
+reject:
+    /* Default to generic rejection; stale-epoch callers set result before jumping here. */
+    if (result == RAFT_RESULT_OK) result = RAFT_RESULT_REJECTED;
+done:
+    if (argv) sdsfreesplitres(argv, argc);
+    return result;
+}
+
+
+/* Callback for automatic failover proposals. On rejection (stale epoch or any
+ * reason), re-schedule the failover if the primary is still failed. The next
+ * attempt will rebuild the proposal with a fresh shard epoch. */
+static void clusterRaftAutoFailoverCallback(void *ctx, const char *error) {
+    UNUSED(ctx);
+    if (!error) return; /* Success — nothing to do. */
+
+    clusterNode *myself = getMyClusterNode();
+    if (nodeIsReplica(myself) && myself->replicaof &&
+        nodeFailed(myself->replicaof) && !nodeCantFailover(myself)) {
+        RAFT_STATE()->todo_schedule_failover = 1;
+        serverLog(LL_NOTICE, "Automatic failover proposal rejected (%s), re-scheduling.", error);
+    }
 }
 
 static void clusterRaftForgetNode(const char *node_id, size_t id_len, void *ctx, void (*callback)(void *ctx, const char *error)) {
+    /* TODO: Leadership transfer will be taken care as part of issue#4069 */
+    clusterRaftState *rs = RAFT_STATE();
+    if (id_len == CLUSTER_NAMELEN && memcmp(node_id, rs->leader, CLUSTER_NAMELEN) == 0) {
+        clusterNode *leader_node = clusterLookupNode(node_id, id_len);
+        if (leader_node && !nodeFailed(leader_node)) {
+            serverLog(LL_WARNING, "Attempting to forget raft leader.");
+        }
+    }
+
+    clusterNode *node = clusterLookupNode(node_id, id_len < CLUSTER_NAMELEN ? id_len : CLUSTER_NAMELEN);
+    if (!node) {
+        if (callback) callback(ctx, NULL);
+        return;
+    }
+    uint64_t epoch = clusterGetShardEpoch(node->shard_id);
     sds entry = sdsnew("NODE_FORGET ");
-    entry = sdscatlen(entry, node_id, id_len);
+    entry = sdscatlen(entry, node_id, CLUSTER_NAMELEN);
+    entry = sdscatfmt(entry, " %U", (unsigned long long)epoch);
     clusterRaftPropose(entry, ctx, callback);
     sdsfree(entry);
 }
 
 static void clusterRaftSetReplicaOf(clusterNode *primary, void *ctx, void (*callback)(void *ctx, const char *error)) {
-    /* Propose SET_REPLICA_OF: "<myself-id> <primary-id-or-dash> <shard-id>"
-     * For promotion (dash): shard-id is a new random id.
-     * For assignment: shard-id is the primary's current shard-id, used
-     * as a guard against concurrent shard changes. */
+    /* Propose SET_REPLICA_OF:
+     * "<replica-id> <source-shard> <source-epoch> <primary-id-or-dash> <target-shard> <target-epoch>"
+     * Source is myself's current shard. Target is the primary's shard (for assignment)
+     * or a new random shard (for promotion to primary). */
+    uint64_t source_epoch = clusterGetShardEpoch(myself->shard_id);
+    char target_shard[CLUSTER_NAMELEN];
+    uint64_t target_epoch;
+    if (primary) {
+        memcpy(target_shard, primary->shard_id, CLUSTER_NAMELEN);
+        target_epoch = clusterGetShardEpoch(primary->shard_id);
+    } else {
+        getRandomHexChars(target_shard, CLUSTER_NAMELEN);
+        target_epoch = 0;
+    }
+
     sds entry = sdsnew("SET_REPLICA_OF ");
     entry = sdscatlen(entry, myself->name, CLUSTER_NAMELEN);
     entry = sdscatlen(entry, " ", 1);
+    entry = sdscatlen(entry, myself->shard_id, CLUSTER_NAMELEN);
+    entry = sdscatfmt(entry, " %U ", (unsigned long long)source_epoch);
     entry = sdscatlen(entry, primary ? primary->name : "-", primary ? CLUSTER_NAMELEN : 1);
     entry = sdscatlen(entry, " ", 1);
-    if (primary) {
-        entry = sdscatlen(entry, primary->shard_id, CLUSTER_NAMELEN);
-    } else {
-        char new_shard_id[CLUSTER_NAMELEN];
-        getRandomHexChars(new_shard_id, CLUSTER_NAMELEN);
-        entry = sdscatlen(entry, new_shard_id, CLUSTER_NAMELEN);
-    }
+    entry = sdscatlen(entry, target_shard, CLUSTER_NAMELEN);
+    entry = sdscatfmt(entry, " %U", (unsigned long long)target_epoch);
     clusterRaftPropose(entry, ctx, callback);
     sdsfree(entry);
 }
@@ -3023,10 +3614,14 @@ static void clusterRaftFailover(int force, int takeover, void *ctx, void (*callb
 
     if (force) {
         /* FORCE/TAKEOVER: propose immediately without coordination. */
+        uint64_t epoch = clusterGetShardEpoch(primary->shard_id);
         sds entry = sdsnew("FAILOVER ");
         entry = sdscatlen(entry, myself->name, CLUSTER_NAMELEN);
         entry = sdscatlen(entry, " ", 1);
         entry = sdscatlen(entry, primary->name, CLUSTER_NAMELEN);
+        entry = sdscatlen(entry, " ", 1);
+        entry = sdscatlen(entry, primary->shard_id, CLUSTER_NAMELEN);
+        entry = sdscatfmt(entry, " %U", (unsigned long long)epoch);
         clusterRaftPropose(entry, ctx, callback);
         sdsfree(entry);
     } else {
@@ -3122,6 +3717,7 @@ static void clusterRaftResetCluster(int hard) {
 
     /* Recreate shards dict. */
     dictEmpty(server.cluster->shards, NULL);
+    dictEmpty(rs->shard_epochs, NULL);
 
     /* Forget all nodes except myself. */
     dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
@@ -3234,8 +3830,8 @@ clusterBusType clusterRaftBus = {
     .resetStats = clusterRaftResetStats,
     .appendInfoFields = clusterRaftAppendInfoFields,
     .getFailureReportsCount = clusterRaftGetFailureReportsCount,
-    .getNodePingPongEpoch = NULL,
-    .setNodePingPongEpoch = NULL,
+    .getNodePingPongEpoch = clusterRaftGetNodePingPongEpoch,
+    .setNodePingPongEpoch = clusterRaftSetNodePingPongEpoch,
     .setNodeFailed = NULL,
     .appendVarsLine = clusterRaftAppendVarsLine,
     .parseVarsLine = clusterRaftParseVarsLine,

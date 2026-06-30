@@ -2809,7 +2809,23 @@ static int updateAofAutoGCEnabled(const char **err) {
     if (!server.aof_disable_auto_gc) {
         aofDelHistoryFiles();
     }
+    return 1;
+}
 
+/* Support for dynamic toggling of aof-integrity-check.
+ * If disabled at runtime, we inject a marker into the AOF to signal the loader. */
+static int updateAofIntegrityCheck(const char **err) {
+    UNUSED(err);
+    if (!server.aof_integrity_check) {
+        serverLog(LL_NOTICE, "AOF integrity check disabled, resetting running checksum");
+        server.aof_running_checksum = 0;
+        if (server.aof_state == AOF_ON) {
+            sds new_buf = sdsnew(AOF_INTEGRITY_OFF_MARKER);
+            new_buf = sdscatsds(new_buf, server.aof_buf);
+            sdsfree(server.aof_buf);
+            server.aof_buf = new_buf;
+        }
+    }
     return 1;
 }
 
@@ -3480,6 +3496,7 @@ standardConfig static_configs[] = {
     createBoolConfig("aof-load-truncated", NULL, MODIFIABLE_CONFIG, server.aof_load_truncated, 1, NULL, NULL),
     createBoolConfig("aof-use-rdb-preamble", NULL, MODIFIABLE_CONFIG, server.aof_use_rdb_preamble, 1, NULL, NULL),
     createBoolConfig("aof-timestamp-enabled", NULL, MODIFIABLE_CONFIG, server.aof_timestamp_enabled, 0, NULL, NULL),
+    createBoolConfig("aof-integrity-check", NULL, MODIFIABLE_CONFIG, server.aof_integrity_check, 0, NULL, updateAofIntegrityCheck),
     createBoolConfig("replica-lazy-flush", "slave-lazy-flush", MODIFIABLE_CONFIG, server.repl_replica_lazy_flush, 1, NULL, NULL),
     createBoolConfig("replica-serve-stale-data", "slave-serve-stale-data", MODIFIABLE_CONFIG, server.repl_serve_stale_data, 1, NULL, NULL),
     createBoolConfig("replica-read-only", "slave-read-only", DEBUG_CONFIG | MODIFIABLE_CONFIG, server.repl_replica_ro, 1, NULL, NULL),

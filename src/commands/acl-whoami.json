@@ -8,6 +8,7 @@
         "container": "ACL",
         "function": "aclCommand",
         "command_flags": [
+            "FAST",
             "NOSCRIPT",
             "LOADING",
             "STALE",
@@ -18,7 +19,7 @@
             "description": "The username of the current connection."
         },
         "acl_categories": [
-            "SLOW"
+            "FAST"
         ]
     }
 }

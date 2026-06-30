@@ -7,6 +7,7 @@
         "arity": -1,
         "function": "unsubscribeCommand",
         "command_flags": [
+            "FAST",
             "PUBSUB",
             "NOSCRIPT",
             "LOADING",
@@ -22,8 +23,8 @@
             }
         ],
         "acl_categories": [
-            "PUBSUB",
-            "SLOW"
+            "FAST",
+            "PUBSUB"
         ]
     }
 }

@@ -8,12 +8,13 @@
         "container": "OBJECT",
         "function": "objectCommand",
         "command_flags": [
+            "FAST",
             "LOADING",
             "STALE"
         ],
         "acl_categories": [
-            "KEYSPACE",
-            "SLOW"
+            "FAST",
+            "KEYSPACE"
         ],
         "reply_schema": {
             "type": "array",

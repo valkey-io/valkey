@@ -8,11 +8,12 @@
         "container": "XINFO",
         "function": "xinfoCommand",
         "command_flags": [
+            "FAST",
             "LOADING",
             "STALE"
         ],
         "acl_categories": [
-            "SLOW",
+            "FAST",
             "STREAM"
         ],
         "reply_schema": {

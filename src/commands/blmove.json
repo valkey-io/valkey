@@ -8,13 +8,14 @@
         "function": "blmoveCommand",
         "command_flags": [
             "WRITE",
+            "FAST",
             "DENYOOM",
             "BLOCKING"
         ],
         "acl_categories": [
             "BLOCKING",
             "LIST",
-            "SLOW",
+            "FAST",
             "WRITE"
         ],
         "key_specs": [

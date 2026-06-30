@@ -7,11 +7,12 @@
         "arity": -2,
         "function": "zrandmemberCommand",
         "command_flags": [
+            "FAST",
             "READONLY"
         ],
         "acl_categories": [
+            "FAST",
             "READ",
-            "SLOW",
             "SORTEDSET"
         ],
         "command_tips": [

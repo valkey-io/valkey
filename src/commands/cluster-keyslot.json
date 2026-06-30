@@ -1,13 +1,14 @@
 {
     "KEYSLOT": {
         "summary": "Returns the hash slot for a key.",
-        "complexity": "O(N) where N is the number of bytes in the key",
+        "complexity": "O(1)",
         "group": "cluster",
         "since": "3.0.0",
         "arity": 3,
         "container": "CLUSTER",
         "function": "clusterKeySlotCommand",
         "command_flags": [
+            "FAST",
             "STALE"
         ],
         "arguments": [
@@ -22,7 +23,7 @@
             "minimum": 0
         },
         "acl_categories": [
-            "SLOW"
+            "FAST"
         ]
     }
 }

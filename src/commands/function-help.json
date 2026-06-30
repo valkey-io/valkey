@@ -8,12 +8,13 @@
         "container": "FUNCTION",
         "function": "functionHelpCommand",
         "command_flags": [
+            "FAST",
             "LOADING",
             "STALE"
         ],
         "acl_categories": [
-            "SCRIPTING",
-            "SLOW"
+            "FAST",
+            "SCRIPTING"
         ],
         "reply_schema": {
             "type": "array",

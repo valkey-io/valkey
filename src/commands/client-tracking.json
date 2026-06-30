@@ -8,6 +8,7 @@
         "container": "CLIENT",
         "function": "clientTrackingCommand",
         "command_flags": [
+            "FAST",
             "NOSCRIPT",
             "LOADING",
             "STALE",
@@ -15,7 +16,7 @@
         ],
         "acl_categories": [
             "CONNECTION",
-            "SLOW"
+            "FAST"
         ],
         "arguments": [
             {

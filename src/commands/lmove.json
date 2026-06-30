@@ -7,12 +7,13 @@
         "arity": 5,
         "function": "lmoveCommand",
         "command_flags": [
+            "FAST",
             "WRITE",
             "DENYOOM"
         ],
         "acl_categories": [
+            "FAST",
             "LIST",
-            "SLOW",
             "WRITE"
         ],
         "key_specs": [

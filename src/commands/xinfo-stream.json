@@ -22,11 +22,12 @@
         ],
         "function": "xinfoCommand",
         "command_flags": [
+            "FAST",
             "READONLY"
         ],
         "acl_categories": [
+            "FAST",
             "READ",
-            "SLOW",
             "STREAM"
         ],
         "key_specs": [

@@ -8,12 +8,13 @@
         "function": "bitfieldCommand",
         "get_keys_function": "bitfieldGetKeys",
         "command_flags": [
+            "FAST",
             "WRITE",
             "DENYOOM"
         ],
         "acl_categories": [
             "BITMAP",
-            "SLOW",
+            "FAST",
             "WRITE"
         ],
         "key_specs": [

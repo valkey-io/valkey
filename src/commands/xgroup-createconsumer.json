@@ -8,11 +8,12 @@
         "container": "XGROUP",
         "function": "xgroupCommand",
         "command_flags": [
+            "FAST",
             "WRITE",
             "DENYOOM"
         ],
         "acl_categories": [
-            "SLOW",
+            "FAST",
             "STREAM",
             "WRITE"
         ],

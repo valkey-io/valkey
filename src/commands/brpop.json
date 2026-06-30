@@ -14,12 +14,13 @@
         ],
         "command_flags": [
             "WRITE",
+            "FAST",
             "BLOCKING"
         ],
         "acl_categories": [
             "BLOCKING",
             "LIST",
-            "SLOW",
+            "FAST",
             "WRITE"
         ],
         "key_specs": [

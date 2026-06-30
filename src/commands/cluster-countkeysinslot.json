@@ -8,6 +8,7 @@
         "container": "CLUSTER",
         "function": "clusterCommand",
         "command_flags": [
+            "FAST",
             "STALE"
         ],
         "arguments": [
@@ -22,7 +23,7 @@
             "minimum": 0
         },
         "acl_categories": [
-            "SLOW"
+            "FAST"
         ]
     }
 }

@@ -7,12 +7,13 @@
         "arity": -2,
         "function": "geohashCommand",
         "command_flags": [
+            "FAST",
             "READONLY"
         ],
         "acl_categories": [
+            "FAST",
             "GEO",
-            "READ",
-            "SLOW"
+            "READ"
         ],
         "key_specs": [
             {

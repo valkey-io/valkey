@@ -9,11 +9,12 @@
         "get_keys_function": "bzmpopGetKeys",
         "command_flags": [
             "WRITE",
+            "FAST",
             "BLOCKING"
         ],
         "acl_categories": [
             "BLOCKING",
-            "SLOW",
+            "FAST",
             "SORTEDSET",
             "WRITE"
         ],

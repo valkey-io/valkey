@@ -8,6 +8,7 @@
         "container": "SENTINEL",
         "function": "sentinelCommand",
         "command_flags": [
+            "FAST",
             "LOADING",
             "STALE",
             "SENTINEL",
@@ -21,7 +22,7 @@
             }
         },
         "acl_categories": [
-            "SLOW"
+            "FAST"
         ]
     }
 }

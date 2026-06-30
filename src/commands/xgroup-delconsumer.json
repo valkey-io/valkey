@@ -8,10 +8,11 @@
         "container": "XGROUP",
         "function": "xgroupCommand",
         "command_flags": [
+            "FAST",
             "WRITE"
         ],
         "acl_categories": [
-            "SLOW",
+            "FAST",
             "STREAM",
             "WRITE"
         ],

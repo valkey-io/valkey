@@ -2872,6 +2872,12 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
                     /* Set the NACK consumer, that was left to NULL when
                      * loading the global PEL. Then set the same shared
                      * NACK structure also in the consumer-specific PEL. */
+                    if (nack->consumer && nack->consumer != consumer) {
+                        rdbReportCorruptRDB("NACK already assigned to a different consumer, "
+                                            "shared NACKs across consumers are not valid");
+                        decrRefCount(o);
+                        return NULL;
+                    }
                     nack->consumer = consumer;
                     if (!raxTryInsert(consumer->pel, rawid, sizeof(rawid), nack, NULL)) {
                         rdbReportCorruptRDB("Duplicated consumer PEL entry "

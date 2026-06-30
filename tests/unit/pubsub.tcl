@@ -450,6 +450,16 @@ start_server {tags {"pubsub network"}} {
         r config set maxmemory-policy noeviction
     } {OK} {needs:config-maxmemory}
 
+    test "SUBSCRIBE, PSUBSCRIBE and SSUBSCRIBE are denied under OOM" {
+        r flushdb
+        r config set maxmemory-policy noeviction
+        r config set maxmemory 1
+        assert_error {OOM command not allowed*} {r subscribe ch}
+        assert_error {OOM command not allowed*} {r psubscribe ch*}
+        assert_error {OOM command not allowed*} {r ssubscribe ch}
+        r config set maxmemory 0
+    } {OK} {needs:config-maxmemory}
+
     test "Keyspace notifications: test CONFIG GET/SET of event flags" {
         r config set notify-keyspace-events gKE
         assert_equal {gKE} [lindex [r config get notify-keyspace-events] 1]

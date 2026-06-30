@@ -531,53 +531,39 @@ test "Raft proto: leader sends REPL_OFFSETS after follower offset changes" {
 # to the raft log (commit index unchanged, cluster state unchanged).
 # --------------------------------------------------------------------------
 
-proc get_cluster_info_field {client field} {
-    set info [$client CLUSTER INFO]
-    foreach line [split $info "\n"] {
-        set line [string trim $line "\r"]
-        if {[string match "${field}:*" $line]} {
-            return [lindex [split $line ":"] 1]
-        }
-    }
-    return ""
-}
-
 start_multiple_servers 2 {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 2000 loglevel debug}} {
     # Shared setup: form cluster and assign slots.
-    set r0 [srv 0 client]
-    set r1 [srv -1 client]
-
-    $r0 CLUSTER MEET [srv -1 host] [srv -1 port]
+    R 0 CLUSTER MEET [srv -1 host] [srv -1 port]
 
     wait_for_condition 50 100 {
-        [get_cluster_info_field $r0 cluster_size] == 2 &&
-        [get_cluster_info_field $r1 cluster_size] == 2
+        [CI 0 cluster_size] == 2 &&
+        [CI 1 cluster_size] == 2
     } else {
         fail "Cluster did not form"
     }
 
-    $r0 CLUSTER ADDSLOTSRANGE 0 16383
+    R 0 CLUSTER ADDSLOTSRANGE 0 16383
 
     wait_for_condition 50 100 {
-        [get_cluster_info_field $r0 cluster_slots_assigned] == 16384 &&
-        [get_cluster_info_field $r1 cluster_slots_assigned] == 16384
+        [CI 0 cluster_slots_assigned] == 16384 &&
+        [CI 1 cluster_slots_assigned] == 16384
     } else {
         fail "Slots not assigned"
     }
 
-    set node_id [$r0 CLUSTER MYID]
-    set node1_id [$r1 CLUSTER MYID]
+    set node_id [R 0 CLUSTER MYID]
+    set node1_id [R 1 CLUSTER MYID]
 
     # Make r1 a replica of r0. This commits a SET_REPLICA_OF entry
     # which bumps the shard epoch from 0 to 1.
-    $r1 CLUSTER REPLICATE $node_id
+    R 1 CLUSTER REPLICATE $node_id
 
     set port [srv 0 port]
     set cport [expr {$port + 10000}]
 
     # Extract shard-id of r0 from CLUSTER SHARDS output.
     set node0_shard ""
-    set shards [$r0 CLUSTER SHARDS]
+    set shards [R 0 CLUSTER SHARDS]
     foreach shard $shards {
         foreach node [dict get $shard nodes] {
             if {[dict get $node id] eq $node_id} {
@@ -593,12 +579,12 @@ start_multiple_servers 2 {overrides {cluster-enabled yes cluster-protocol raft c
     # Each entry: {entry_type propose_msg state_check}
     set stale_proposals [list \
         [list "SLOT_CHANGE" "PROPOSE SLOT_CHANGE $node_id 50 $node1_id 0 0-100" {
-            assert_equal 16384 [get_cluster_info_field $r0 cluster_slots_assigned]
+            assert_equal 16384 [CI 0 cluster_slots_assigned]
         }] \
         [list "FAILOVER" "PROPOSE FAILOVER $node1_id $node_id $node0_shard 50" {
-            set nodes [$r0 CLUSTER NODES]
+            set nodes [R 0 CLUSTER NODES]
             assert_match "*$node_id*myself,master*" $nodes
-            assert_equal 16384 [get_cluster_info_field $r0 cluster_slots_assigned]
+            assert_equal 16384 [CI 0 cluster_slots_assigned]
         }] \
     ]
 
@@ -607,7 +593,7 @@ start_multiple_servers 2 {overrides {cluster-enabled yes cluster-protocol raft c
 
         test "Raft shard epoch: stale $entry_type is rejected (pre-validation, no log append)" {
             # Record commit index before injection.
-            set commit_before [get_cluster_info_field $r0 cluster_raft_commit_index]
+            set commit_before [CI 0 cluster_raft_commit_index]
             set loglines [count_log_lines 0]
 
             # Connect and inject stale PROPOSE.
@@ -622,7 +608,7 @@ start_multiple_servers 2 {overrides {cluster-enabled yes cluster-protocol raft c
             wait_for_log_messages 0 {"*Leader pre-validation: rejecting*"} $loglines 1000 10
 
             # Verify log index unchanged (rejected at pre-validation).
-            set commit_after [get_cluster_info_field $r0 cluster_raft_commit_index]
+            set commit_after [CI 0 cluster_raft_commit_index]
             assert_equal $commit_before $commit_after
 
             # Verify cluster state unchanged (stale proposal had no effect).
@@ -648,7 +634,7 @@ start_multiple_servers 2 {overrides {cluster-enabled yes cluster-protocol raft c
         lassign $case entry_type propose_msg
 
         test "Raft shard epoch: $entry_type with wrong shard-id is rejected at pre-validation" {
-            set commit_before [get_cluster_info_field $r0 cluster_raft_commit_index]
+            set commit_before [CI 0 cluster_raft_commit_index]
             set loglines [count_log_lines 0]
 
             set fd [raft_connect_fake_node 127.0.0.1 $cport $fake_id $fake_addr]
@@ -662,7 +648,7 @@ start_multiple_servers 2 {overrides {cluster-enabled yes cluster-protocol raft c
             wait_for_log_messages 0 {"*Leader pre-validation: rejecting*"} $loglines 1000 10
 
             # Verify log index unchanged (rejected at pre-validation, epoch not bumped).
-            set commit_after [get_cluster_info_field $r0 cluster_raft_commit_index]
+            set commit_after [CI 0 cluster_raft_commit_index]
             assert_equal $commit_before $commit_after
 
             close $fd

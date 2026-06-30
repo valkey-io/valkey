@@ -149,7 +149,7 @@ SLOT_CHANGE <source-node-id-or-dash> <source-epoch> <target-node-id-or-dash> <ta
     Carries two epochs (source and target shard). Shard epoch is not
     bumped because SLOT_CHANGE only moves slots, it doesn't change shard
     membership or leadership. Two slot migrations touching the same
-    shard are safe to apply concurrently (they affect different slots).
+    shard are safe to apply concurrently as they affect different slots.
     Bumping would serialize them unnecessarily. But validating is still
     needed to catch the case where a slot migration races against a
     failover that invalidated the shard's topology.
@@ -174,8 +174,7 @@ NODE_INFO <node-id> <address-string> <flags>
 
 NODE_FAIL <node-id>
     Mark a node as failed. Proposed by the leader when a peer exceeds
-    the node timeout without responding to heartbeats. No shard epoch here as it does not
-    change cluster memebership or leadership.
+    the node timeout without responding to heartbeats. No shard epoch here as it does not change cluster membership or leadership.
 
 NODE_RECOVER <node-id>
     Clear the FAIL flag. Proposed by the leader when it receives

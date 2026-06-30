@@ -14,6 +14,10 @@
             [
                 "8.1.0",
                 "Added the `CANCEL` option."
+            ],
+            [
+                "8.2.0",
+                "Added the `STAT_MEMORY` option."
             ]
         ],
         "command_flags": [
@@ -32,6 +36,12 @@
                         "token": "SCHEDULE",
                         "type": "pure-token",
                         "since": "3.2.2"
+                    },
+                    {
+                        "name": "stat-memory",
+                        "token": "STAT_MEMORY",
+                        "type": "pure-token",
+                        "since": "8.2.0"
                     },
                     {
                         "name": "cancel",

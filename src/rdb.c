@@ -46,6 +46,7 @@
 #include "module.h"
 #include "cluster.h"
 #include "cluster_migrateslots.h"
+#include "commandlog.h"
 
 #include <math.h>
 #include <fcntl.h>
@@ -76,6 +77,8 @@ void rdbCheckError(const char *fmt, ...);
 void rdbCheckSetError(const char *fmt, ...);
 int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadingCtx *rdb_loading_ctx);
 void replicationEmptyDbCallback(hashtable *ht);
+
+static void (*rdb_key_mem_stat_fn)(int obj_type, size_t mem_used, int count) = NULL;
 
 /* Returns true if the RDB version is valid and accepted, false otherwise. This
  * function takes configuration into account. The parameter `is_valkey_magic`
@@ -863,6 +866,10 @@ ssize_t rdbSaveStreamConsumers(rio *rdb, streamCG *cg) {
             return -1;
         }
         nwritten += n;
+
+        if (rdb_key_mem_stat_fn) {
+            rdb_key_mem_stat_fn(OBJ_STREAM, zmalloc_size(consumer) + sdsAllocSize(consumer->name) + raxAllocSize(consumer->pel), 0);
+        }
     }
     raxStop(&ri);
     return nwritten;
@@ -872,10 +879,17 @@ ssize_t rdbSaveStreamConsumers(rio *rdb, streamCG *cg) {
  * Returns -1 on error, number of bytes written on success. */
 ssize_t rdbSaveObject(rio *rdb, robj *o, robj *key, int dbid, unsigned char rdbtype) {
     ssize_t n = 0, nwritten = 0;
+    size_t mem = 0;
+    if (rdb_key_mem_stat_fn) {
+        rdb_key_mem_stat_fn(o->type, zmalloc_size((void *)o), 1);
+    }
     if (o->type == OBJ_STRING) {
         /* Save a string value */
         if ((n = rdbSaveStringObject(rdb, o)) == -1) return -1;
         nwritten += n;
+        if (rdb_key_mem_stat_fn && o->encoding == OBJ_ENCODING_RAW) {
+            mem += sdsAllocSize(objectGetVal(o));
+        }
     } else if (o->type == OBJ_LIST) {
         /* Save a list value */
         if (o->encoding == OBJ_ENCODING_QUICKLIST) {
@@ -884,6 +898,7 @@ ssize_t rdbSaveObject(rio *rdb, robj *o, robj *key, int dbid, unsigned char rdbt
 
             if ((n = rdbSaveLen(rdb, ql->len)) == -1) return -1;
             nwritten += n;
+            if (rdb_key_mem_stat_fn) mem += sizeof(quicklist);
 
             while (node) {
                 if ((n = rdbSaveLen(rdb, node->container)) == -1) return -1;
@@ -898,6 +913,7 @@ ssize_t rdbSaveObject(rio *rdb, robj *o, robj *key, int dbid, unsigned char rdbt
                     if ((n = rdbSaveRawString(rdb, node->entry, node->sz)) == -1) return -1;
                     nwritten += n;
                 }
+                if (rdb_key_mem_stat_fn) mem += sizeof(quicklistNode) + zmalloc_size(node->entry);
                 node = node->next;
             }
         } else if (o->encoding == OBJ_ENCODING_LISTPACK) {
@@ -910,6 +926,7 @@ ssize_t rdbSaveObject(rio *rdb, robj *o, robj *key, int dbid, unsigned char rdbt
             nwritten += n;
             if ((n = rdbSaveRawString(rdb, lp, lpBytes(lp))) == -1) return -1;
             nwritten += n;
+            if (rdb_key_mem_stat_fn) mem += zmalloc_size(lp);
         } else {
             serverPanic("Unknown list encoding");
         }
@@ -922,6 +939,7 @@ ssize_t rdbSaveObject(rio *rdb, robj *o, robj *key, int dbid, unsigned char rdbt
                 return -1;
             }
             nwritten += n;
+            if (rdb_key_mem_stat_fn) mem += hashtableMemUsage(set);
 
             hashtableIterator iterator;
             hashtableInitIterator(&iterator, set, 0);
@@ -933,6 +951,7 @@ ssize_t rdbSaveObject(rio *rdb, robj *o, robj *key, int dbid, unsigned char rdbt
                     return -1;
                 }
                 nwritten += n;
+                if (rdb_key_mem_stat_fn) mem += sdsAllocSize(ele);
             }
             hashtableCleanupIterator(&iterator);
         } else if (o->encoding == OBJ_ENCODING_INTSET) {
@@ -940,10 +959,12 @@ ssize_t rdbSaveObject(rio *rdb, robj *o, robj *key, int dbid, unsigned char rdbt
 
             if ((n = rdbSaveRawString(rdb, objectGetVal(o), l)) == -1) return -1;
             nwritten += n;
+            if (rdb_key_mem_stat_fn) mem += zmalloc_size(objectGetVal(o));
         } else if (o->encoding == OBJ_ENCODING_LISTPACK) {
             size_t l = lpBytes((unsigned char *)objectGetVal(o));
             if ((n = rdbSaveRawString(rdb, objectGetVal(o), l)) == -1) return -1;
             nwritten += n;
+            if (rdb_key_mem_stat_fn) mem += zmalloc_size(objectGetVal(o));
         } else {
             serverPanic("Unknown set encoding");
         }
@@ -954,12 +975,14 @@ ssize_t rdbSaveObject(rio *rdb, robj *o, robj *key, int dbid, unsigned char rdbt
 
             if ((n = rdbSaveRawString(rdb, objectGetVal(o), l)) == -1) return -1;
             nwritten += n;
+            if (rdb_key_mem_stat_fn) mem += zmalloc_size(objectGetVal(o));
         } else if (o->encoding == OBJ_ENCODING_SKIPLIST) {
             zset *zs = objectGetVal(o);
             zskiplist *zsl = zs->zsl;
 
             if ((n = rdbSaveLen(rdb, zslGetLength(zsl))) == -1) return -1;
             nwritten += n;
+            if (rdb_key_mem_stat_fn) mem += sizeof(zset) + zslGetAllocSize() + hashtableMemUsage(zs->ht);
 
             /* We save the skiplist elements from the greatest to the smallest
              * (that's trivial since the elements are already ordered in the
@@ -976,6 +999,7 @@ ssize_t rdbSaveObject(rio *rdb, robj *o, robj *key, int dbid, unsigned char rdbt
                 nwritten += n;
                 if ((n = rdbSaveBinaryDoubleValue(rdb, zn->score)) == -1) return -1;
                 nwritten += n;
+                if (rdb_key_mem_stat_fn) mem += zmalloc_size(zn);
                 zn = zn->backward;
             }
         } else {
@@ -988,6 +1012,7 @@ ssize_t rdbSaveObject(rio *rdb, robj *o, robj *key, int dbid, unsigned char rdbt
 
             if ((n = rdbSaveRawString(rdb, objectGetVal(o), l)) == -1) return -1;
             nwritten += n;
+            if (rdb_key_mem_stat_fn) mem += zmalloc_size(objectGetVal(o));
         } else if (o->encoding == OBJ_ENCODING_HASHTABLE) {
             serverAssert(rdbtype == RDB_TYPE_HASH || rdbtype == RDB_TYPE_HASH_2);
             hashtable *ht = objectGetVal(o);
@@ -996,6 +1021,11 @@ ssize_t rdbSaveObject(rio *rdb, robj *o, robj *key, int dbid, unsigned char rdbt
                 return -1;
             }
             nwritten += n;
+            if (rdb_key_mem_stat_fn) {
+                mem += hashtableMemUsage(ht);
+                vset *volatile_fields = hashtableMetadata(ht);
+                if (vsetIsValid(volatile_fields)) mem += vsetMemUsage(volatile_fields);
+            }
             /* check if need to add expired time for the hash fields */
             bool add_expiry = (rdbtype == RDB_TYPE_HASH_2);
             hashtableIterator iter;
@@ -1024,6 +1054,7 @@ ssize_t rdbSaveObject(rio *rdb, robj *o, robj *key, int dbid, unsigned char rdbt
                     }
                     nwritten += n;
                 }
+                if (rdb_key_mem_stat_fn) mem += entryMemUsage(next);
             }
             hashtableCleanupIterator(&iter);
 
@@ -1036,6 +1067,7 @@ ssize_t rdbSaveObject(rio *rdb, robj *o, robj *key, int dbid, unsigned char rdbt
         rax *rax = s->rax;
         if ((n = rdbSaveLen(rdb, raxSize(rax))) == -1) return -1;
         nwritten += n;
+        if (rdb_key_mem_stat_fn) mem += sizeof(*s) + raxAllocSize(rax);
 
         /* Serialize all the listpacks inside the radix tree as they are,
          * when loading back, we'll use the first entry of each listpack
@@ -1056,6 +1088,7 @@ ssize_t rdbSaveObject(rio *rdb, robj *o, robj *key, int dbid, unsigned char rdbt
                 return -1;
             }
             nwritten += n;
+            if (rdb_key_mem_stat_fn) mem += zmalloc_size(lp);
         }
         raxStop(&ri);
 
@@ -1137,8 +1170,13 @@ ssize_t rdbSaveObject(rio *rdb, robj *o, robj *key, int dbid, unsigned char rdbt
                     return -1;
                 }
                 nwritten += n;
+                if (rdb_key_mem_stat_fn) {
+                    mem += zmalloc_size(cg) + raxAllocSize(cg->pel) +
+                           sizeof(streamNACK) * raxSize(cg->pel) + raxAllocSize(cg->consumers);
+                }
             }
             raxStop(&ri);
+            if (rdb_key_mem_stat_fn) mem += raxAllocSize(s->cgroups);
         }
     } else if (o->type == OBJ_MODULE) {
         /* Save a module-specific value. */
@@ -1165,10 +1203,17 @@ ssize_t rdbSaveObject(rio *rdb, robj *o, robj *key, int dbid, unsigned char rdbt
             moduleFreeContext(io.ctx);
             zfree(io.ctx);
         }
+        if (rdb_key_mem_stat_fn) {
+            /* Modules don't expose an exact iteration helper here; fall back to
+             * the same sampled estimate used by MEMORY USAGE. */
+            mem += moduleGetMemUsage(key, o, 5, dbid);
+        }
+        if (rdb_key_mem_stat_fn) rdb_key_mem_stat_fn(o->type, mem, 0);
         return io.error ? -1 : (ssize_t)io.bytes;
     } else {
         serverPanic("Unknown object type");
     }
+    if (rdb_key_mem_stat_fn) rdb_key_mem_stat_fn(o->type, mem, 0);
     return nwritten;
 }
 
@@ -1387,6 +1432,19 @@ werr:
     return -1;
 }
 
+/* Callback used during RDB save to accumulate per-key memory into the
+ * file-static rdbObjectStats tracked by rdbSaveRio(). */
+static rdbObjectStats *rdb_save_stats = NULL;
+
+static void rdbAccumulateKeyMemStat(int obj_type, size_t mem_used, int count) {
+    if ((unsigned)obj_type < OBJ_TYPE_MAX) {
+        rdb_save_stats->count[obj_type] += count;
+        rdb_save_stats->bytes[obj_type] += mem_used;
+        rdb_save_stats->total_count += count;
+        rdb_save_stats->total_bytes += mem_used;
+    }
+}
+
 ssize_t rdbSaveDb(rio *rdb, int dbid, int rdbflags, int rdbver, long *key_counter) {
     ssize_t written = 0;
     ssize_t res;
@@ -1470,6 +1528,49 @@ werr:
     return -1;
 }
 
+/* Fill the memory-breakdown fields of rdbObjectStats. Called from the RDB
+ * save child process so all reads are on the COW snapshot taken at fork.
+ * Only categories with an existing *MemUsage / *AllocSize accessor are
+ * sampled; subsystems that would require approximation (command tables,
+ * pubsub patterns dict, tracking rax tables, latency events dict) are
+ * intentionally omitted. */
+static void rdbCollectMemBreakdown(rdbObjectStats *s) {
+    /* Key-value data memory. */
+    s->mem_kv_user_data = s->total_bytes;
+
+    for (int j = 0; j < server.dbnum; j++) {
+        serverDb *db = server.db[j];
+        if (!db) continue;
+        s->mem_kv_expiration += kvstoreMemUsage(db->expires);
+        if (db->keys_with_volatile_items)
+            s->mem_kv_hash_metadata += kvstoreMemUsage(db->keys_with_volatile_items);
+        size_t kvs = kvstoreMemUsage(db->keys);
+        size_t robj_part = kvstoreSize(db->keys) * sizeof(robj);
+        s->mem_um_kvstore += (kvs > robj_part) ? (kvs - robj_part) : 0;
+    }
+
+    /* User metadata - client I/O buffers (NORMAL+PUBSUB+PRIMARY). */
+    s->mem_um_clients_io = (uint64_t)server.stat_clients_type_memory[CLIENT_TYPE_NORMAL] +
+                           server.stat_clients_type_memory[CLIENT_TYPE_PUBSUB] +
+                           server.stat_clients_type_memory[CLIENT_TYPE_PRIMARY];
+
+    /* System operational memory. */
+    if (server.aof_state != AOF_OFF && server.aof_buf) s->mem_sys_aof_buffer = sdsAllocSize(server.aof_buf);
+
+    /* Replication backlog/buffer split, mirroring object.c
+     * getMemoryOverheadData(). */
+    if (listLength(server.replicas) && (long long)server.repl_buffer_mem > server.repl_backlog_size) {
+        s->mem_sys_repl_buffer = server.repl_buffer_mem - server.repl_backlog_size;
+        s->mem_sys_repl_backlog = server.repl_backlog_size;
+    } else {
+        s->mem_sys_repl_buffer = 0;
+        s->mem_sys_repl_backlog = server.repl_buffer_mem;
+    }
+    if (server.repl_backlog) {
+        s->mem_sys_repl_backlog += raxAllocSize(server.repl_backlog->blocks_index);
+    }
+}
+
 /* Produces a dump of the database in RDB format sending it to the specified
  * I/O channel. On success C_OK is returned, otherwise C_ERR
  * is returned and part of the output, or all the output, can be
@@ -1483,6 +1584,14 @@ int rdbSaveRio(int req, int rdbver, rio *rdb, int *error, int rdbflags, rdbSaveI
     uint64_t cksum;
     long key_counter = 0;
     int j;
+    rdbObjectStats stats;
+
+    /* Per-type object stats are only collected when the operator opted in. */
+    if (rdbflags & RDBFLAGS_STAT_MEMORY) {
+        memset(&stats, 0, sizeof(stats));
+        rdb_save_stats = &stats;
+        rdb_key_mem_stat_fn = rdbAccumulateKeyMemStat;
+    }
 
     if (server.rdb_checksum) rdb->update_cksum = rioGenericUpdateChecksum;
     const char *magic_prefix = rdbUseValkeyMagic(rdbver) ? "VALKEY" : "REDIS0";
@@ -1515,6 +1624,17 @@ int rdbSaveRio(int req, int rdbver, rio *rdb, int *error, int rdbflags, rdbSaveI
     cksum = rdb->cksum;
     memrev64ifbe(&cksum);
     if (rioWrite(rdb, &cksum, 8) == 0) goto werr;
+
+    /* Report per-type object stats to the parent so that it can log a summary
+     * once the child exits. Best-effort: failures inside sendChildInfoRdbObjectStats
+     * already cause the child to bail out. */
+    if (rdb_key_mem_stat_fn) {
+        rdb_key_mem_stat_fn = NULL;
+        rdb_save_stats = NULL;
+        rdbCollectMemBreakdown(&stats);
+        sendChildInfoRdbObjectStats(&stats);
+    }
+
     return C_OK;
 
 werr:
@@ -3664,9 +3784,52 @@ static void backgroundSaveDoneHandlerDisk(int exitcode, int bysignal, time_t sav
         server.dirty = server.dirty - server.dirty_before_bgsave;
         server.lastsave = save_end;
         server.lastbgsave_status = C_OK;
+
+        /* If the child reported per-type object stats
+         * (RDBFLAGS_STAT_MEMORY was set), log a single summary line in
+         * the main thread. We only print non-empty buckets to keep the line
+         * compact. */
+        if (server.stat_rdb_last_object_stats_valid) {
+            const rdbObjectStats *s = &server.stat_rdb_last_object_stats;
+            static const char *type_name[OBJ_TYPE_MAX] = {
+                [OBJ_STRING] = "string",
+                [OBJ_LIST] = "list",
+                [OBJ_SET] = "set",
+                [OBJ_ZSET] = "zset",
+                [OBJ_HASH] = "hash",
+                [OBJ_MODULE] = "module",
+                [OBJ_STREAM] = "stream",
+            };
+            sds line = sdsempty();
+            for (int t = 0; t < OBJ_TYPE_MAX; t++) {
+                if (s->count[t] == 0 && s->bytes[t] == 0) continue;
+                line = sdscatfmt(line, " %s=%U/%UB", type_name[t] ? type_name[t] : "?",
+                                 (unsigned long long)s->count[t],
+                                 (unsigned long long)s->bytes[t]);
+            }
+            serverLog(LL_NOTICE, "RDB object stats: total keys=%llu mem_bytes=%llu |%s",
+                      (unsigned long long)s->total_count, (unsigned long long)s->total_bytes,
+                      sdslen(line) ? line : " (empty)");
+            sdsfree(line);
+            serverLog(LL_NOTICE,
+                      "RDB memory breakdown: "
+                      "kv[user=%lluB expire=%lluB hash_meta=%lluB] "
+                      "user_meta[kvstore=%lluB clients=%lluB] "
+                      "sys[aof_buf=%lluB repl_buf=%lluB repl_backlog=%lluB]",
+                      (unsigned long long)s->mem_kv_user_data,
+                      (unsigned long long)s->mem_kv_expiration,
+                      (unsigned long long)s->mem_kv_hash_metadata,
+                      (unsigned long long)s->mem_um_kvstore,
+                      (unsigned long long)s->mem_um_clients_io,
+                      (unsigned long long)s->mem_sys_aof_buffer,
+                      (unsigned long long)s->mem_sys_repl_buffer,
+                      (unsigned long long)s->mem_sys_repl_backlog);
+            server.stat_rdb_last_object_stats_valid = 0;
+        }
     } else if (!bysignal && exitcode != 0) {
         serverLog(LL_WARNING, "Background saving error");
         server.lastbgsave_status = C_ERR;
+        server.stat_rdb_last_object_stats_valid = 0;
     } else {
         mstime_t latency;
 
@@ -3679,6 +3842,7 @@ static void backgroundSaveDoneHandlerDisk(int exitcode, int bysignal, time_t sav
         /* SIGUSR1 is whitelisted, so we have a way to kill a child without
          * triggering an error condition. */
         if (bysignal != SIGUSR1) server.lastbgsave_status = C_ERR;
+        server.stat_rdb_last_object_stats_valid = 0;
     }
 }
 
@@ -3941,15 +4105,18 @@ void saveCommand(client *c) {
     }
 }
 
-/* BGSAVE [SCHEDULE] */
+/* BGSAVE [SCHEDULE | STAT_MEMORY | CANCEL] */
 void bgsaveCommand(client *c) {
     int schedule = 0;
+    int rdbflags = RDBFLAGS_NONE;
 
     /* The SCHEDULE option changes the behavior of BGSAVE when an AOF rewrite
      * is in progress. Instead of returning an error a BGSAVE gets scheduled. */
     if (c->argc > 1) {
         if (c->argc == 2 && !strcasecmp(objectGetVal(c->argv[1]), "schedule")) {
             schedule = 1;
+        } else if (c->argc == 2 && !strcasecmp(objectGetVal(c->argv[1]), "stat_memory")) {
+            rdbflags |= RDBFLAGS_STAT_MEMORY;
         } else if (c->argc == 2 && !strcasecmp(objectGetVal(c->argv[1]), "cancel")) {
             /* Terminates an in progress BGSAVE */
             if (server.child_type == CHILD_TYPE_RDB) {
@@ -3990,7 +4157,7 @@ void bgsaveCommand(client *c) {
                              "Use BGSAVE SCHEDULE in order to schedule a BGSAVE whenever "
                              "possible.");
         }
-    } else if (rdbSaveBackground(REPLICA_REQ_NONE, server.rdb_filename, rsiptr, RDBFLAGS_NONE) == C_OK) {
+    } else if (rdbSaveBackground(REPLICA_REQ_NONE, server.rdb_filename, rsiptr, rdbflags) == C_OK) {
         addReplyStatus(c, "Background saving started");
     } else {
         addReplyErrorObject(c, shared.err);

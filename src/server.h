@@ -770,6 +770,7 @@ typedef struct ValkeyModuleType moduleType;
 #define OBJ_ENCODING_QUICKLIST 9  /* Encoded as linked list of listpacks */
 #define OBJ_ENCODING_STREAM 10    /* Encoded as a radix tree of listpacks */
 #define OBJ_ENCODING_LISTPACK 11  /* Encoded as a listpack */
+#define OBJ_ENCODING_MAX 12       /* Upper bound of OBJ_ENCODING_* values. */
 
 #define OBJ_REFCOUNT_BITS 29
 #define OBJ_SHARED_REFCOUNT ((1 << OBJ_REFCOUNT_BITS) - 1) /* Global object never destroyed. */
@@ -1738,8 +1739,36 @@ typedef enum childInfoType {
     CHILD_INFO_TYPE_RDB_COW_SIZE,
     CHILD_INFO_TYPE_MODULE_COW_SIZE,
     CHILD_INFO_TYPE_SLOT_MIGRATION_COW_SIZE,
-    CHILD_INFO_TYPE_REPL_OUTPUT_BYTES
+    CHILD_INFO_TYPE_REPL_OUTPUT_BYTES,
+    CHILD_INFO_TYPE_RDB_OBJECT_STATS
 } childInfoType;
+
+/* Per-type object statistics + per-category memory breakdown collected
+ * during RDB save (in the child process) and reported back to the parent
+ * via the child info pipe. The breakdown is sampled at the end of
+ * rdbSaveRio() in the child, reflecting the COW snapshot of server state.
+ * The per-type vector is sparse in practice; the parent prints only
+ * non-empty entries. */
+typedef struct {
+    uint64_t count[OBJ_TYPE_MAX]; /* key count per type */
+    uint64_t bytes[OBJ_TYPE_MAX]; /* allocated bytes per type */
+    uint64_t total_count;
+    uint64_t total_bytes;
+
+    /* Memory breakdown - Key-value data memory. */
+    uint64_t mem_kv_user_data;     /* robj/sds bytes (mirrors total_bytes) */
+    uint64_t mem_kv_expiration;    /* sum kvstoreMemUsage(db->expires) */
+    uint64_t mem_kv_hash_metadata; /* sum kvstoreMemUsage(db->keys_with_volatile_items) */
+
+    /* Memory breakdown - User metadata. */
+    uint64_t mem_um_kvstore;    /* db->keys overhead minus robj headers */
+    uint64_t mem_um_clients_io; /* client buffers (NORMAL+PUBSUB+PRIMARY) */
+
+    /* Memory breakdown - System operational memory. */
+    uint64_t mem_sys_aof_buffer;   /* sdsAllocSize(server.aof_buf) */
+    uint64_t mem_sys_repl_buffer;  /* global repl buffer minus backlog */
+    uint64_t mem_sys_repl_backlog; /* repl_backlog_size + rax index */
+} rdbObjectStats;
 
 struct valkeyServer {
     /* General */
@@ -1911,6 +1940,8 @@ struct valkeyServer {
     size_t stat_current_save_keys_processed;            /* Processed keys while child is active. */
     size_t stat_current_save_keys_total;                /* Number of keys when child started. */
     size_t stat_rdb_cow_bytes;                          /* Copy on write bytes during RDB saving. */
+    rdbObjectStats stat_rdb_last_object_stats;          /* Per-type object stats from last RDB save. */
+    int stat_rdb_last_object_stats_valid;               /* Whether stat_rdb_last_object_stats has fresh data. */
     size_t stat_aof_cow_bytes;                          /* Copy on write bytes during AOF rewrite. */
     size_t stat_module_cow_bytes;                       /* Copy on write bytes during module fork. */
     size_t stat_slot_migration_cow_bytes;               /* Copy on write bytes during slot migration fork. */
@@ -3301,6 +3332,7 @@ void closeChildInfoPipe(void);
 void sendChildInfoGeneric(childInfoType info_type, size_t keys, size_t repl_output_bytes, double progress, char *pname);
 void sendChildCowInfo(childInfoType info_type, char *pname);
 void sendChildInfo(childInfoType info_type, size_t keys, char *pname);
+void sendChildInfoRdbObjectStats(const rdbObjectStats *stats);
 void receiveChildInfo(void);
 
 /* Fork helpers */

@@ -131,7 +131,7 @@ sds aofInfoFormat(sds buf, aofInfo *ai) {
     sds ret = sdscatprintf(buf, "%s %s %s %lld %s %c", AOF_MANIFEST_KEY_FILE_NAME,
                            filename_repr ? filename_repr : ai->file_name, AOF_MANIFEST_KEY_FILE_SEQ, ai->file_seq,
                            AOF_MANIFEST_KEY_FILE_TYPE, ai->file_type);
-    
+
     if (server.aof_integrity_check) {
         ret = sdscatprintf(ret, " %s %llu", AOF_MANIFEST_KEY_FILE_CHECKSUM, (unsigned long long)ai->last_checksum);
     }
@@ -291,6 +291,8 @@ aofManifest *aofLoadManifestFromFile(sds am_filepath) {
     sds line = NULL;
     int linenum = 0;
     uint64_t calculated_checksum = 0;
+    int saw_file_checksum = 0;
+    int saw_manifest_checksum = 0;
 
     while (1) {
         if (fgets(buf, MANIFEST_MAX_LINE + 1, fp) == NULL) {
@@ -310,6 +312,7 @@ aofManifest *aofLoadManifestFromFile(sds am_filepath) {
         linenum++;
 
         if (server.aof_integrity_check && strncmp(buf, "# manifest-checksum: ", 21) == 0) {
+            saw_manifest_checksum = 1;
             uint64_t file_checksum = strtoull(buf + 21, NULL, 10);
             if (calculated_checksum != file_checksum) {
                 serverLog(LL_WARNING, "\n*** FATAL AOF MANIFEST FILE ERROR ***\n");
@@ -360,6 +363,7 @@ aofManifest *aofLoadManifestFromFile(sds am_filepath) {
                 ai->file_type = (argv[i + 1])[0];
             } else if (!strcasecmp(argv[i], AOF_MANIFEST_KEY_FILE_CHECKSUM)) {
                 ai->last_checksum = strtoull(argv[i + 1], NULL, 10);
+                saw_file_checksum = 1;
             }
             /* else if (!strcasecmp(argv[i], AOF_MANIFEST_KEY_OTHER)) {} */
         }
@@ -398,6 +402,11 @@ aofManifest *aofLoadManifestFromFile(sds am_filepath) {
         sdsfree(line);
         line = NULL;
         ai = NULL;
+    }
+
+    if (server.aof_integrity_check && saw_file_checksum && !saw_manifest_checksum) {
+        err = "Missing AOF manifest checksum";
+        goto loaderr;
     }
 
     fclose(fp);
@@ -824,7 +833,7 @@ int openNewIncrAofForAppend(void) {
     } else {
         /* Dup a temp aof_manifest to modify. */
         temp_am = aofManifestDup(server.aof_manifest);
-        
+
         /* Update the checksum of the current INCR file before opening a new one. */
         if (server.aof_integrity_check) {
             listNode *last_node = listLast(temp_am->incr_aof_list);
@@ -833,7 +842,7 @@ int openNewIncrAofForAppend(void) {
                 last_ai->last_checksum = server.aof_running_checksum;
             }
         }
-        
+
         new_aof_name = sdsdup(getNewIncrAofName(temp_am));
     }
     sds new_aof_filepath = makePath(server.aof_dirname, new_aof_name);
@@ -1203,7 +1212,13 @@ ssize_t aofWrite(int fd, const char *buf, size_t len) {
     return totwritten;
 }
 
-/* Wrapper for writev that handles short writes and EINTR. */
+/**
+ * Write the given iovec array to the AOF file descriptor.
+ * Handles short writes by advancing the iovec array and retrying,
+ * and handles EINTR by retrying the write.
+ *
+ * Returns the total number of bytes written, or -1 on error.
+ */
 ssize_t aofWritev(int fd, struct iovec *iov, int iovcnt) {
     ssize_t nwritten = 0, totwritten = 0;
 
@@ -1216,14 +1231,14 @@ ssize_t aofWritev(int fd, struct iovec *iov, int iovcnt) {
         }
 
         totwritten += nwritten;
-        
+
         /* Advance the iovec array to account for written bytes */
         while (iovcnt > 0 && nwritten >= (ssize_t)iov[0].iov_len) {
             nwritten -= iov[0].iov_len;
             iov++;
             iovcnt--;
         }
-        
+
         /* If a short write happened in the middle of an iovec, adjust it */
         if (nwritten > 0) {
             iov[0].iov_base = (char *)iov[0].iov_base + nwritten;
@@ -1327,13 +1342,13 @@ void flushAppendOnlyFile(int force) {
         latencyStartMonitor(latency);
         nwritten = aofWrite(server.aof_fd, server.aof_retry_buf, sdslen(server.aof_retry_buf));
         latencyEndMonitor(latency);
-        
+
         if (nwritten > 0) {
             server.aof_current_size += nwritten;
             server.aof_last_incr_size += nwritten;
             sdsrange(server.aof_retry_buf, nwritten, -1);
         }
-        
+
         if (sdslen(server.aof_retry_buf) > 0) {
             /* Still have data in retry buffer, means write failed or was short.
              * We can't proceed with aof_buf. */
@@ -1352,14 +1367,14 @@ void flushAppendOnlyFile(int force) {
         char hdr_prefix[64];
         int prefix_len = snprintf(hdr_prefix, sizeof(hdr_prefix), "#HDR:v1;len:%zu;", sdslen(server.aof_buf));
         serverAssert(prefix_len < (int)sizeof(hdr_prefix));
-        
+
         checksum = crc64(server.aof_running_checksum, (unsigned char *)hdr_prefix, prefix_len);
         checksum = crc64(checksum, (unsigned char *)server.aof_buf, sdslen(server.aof_buf));
-        
+
         hdr_len = snprintf(hdr, sizeof(hdr), "%schecksum:%llu;\r\n", hdr_prefix, (unsigned long long)checksum);
         serverAssert(hdr_len < (int)sizeof(hdr));
         expected_len += hdr_len;
-        
+
         server.aof_running_checksum = checksum;
 
         struct iovec iov[2];
@@ -1410,6 +1425,9 @@ void flushAppendOnlyFile(int force) {
                 serverLog(LL_WARNING, "Error writing to the AOF file: %s", strerror(errno));
             }
             server.aof_last_write_errno = errno;
+            if (server.aof_integrity_check) {
+                server.aof_running_checksum = old_checksum;
+            }
         } else {
             if (can_log) {
                 serverLog(LL_WARNING,
@@ -1460,7 +1478,7 @@ void flushAppendOnlyFile(int force) {
             if (nwritten > 0) {
                 server.aof_current_size += nwritten;
                 server.aof_last_incr_size += nwritten;
-                
+
                 if (server.aof_integrity_check) {
                     if ((size_t)nwritten < (size_t)hdr_len) {
                         /* Failed during header write. Save remaining header and all data. */
@@ -2806,6 +2824,11 @@ int rewriteAppendOnlyFileBackground(void) {
      * feedAppendOnlyFile() to issue a SELECT command. */
     server.aof_selected_db = -1;
     flushAppendOnlyFile(1);
+    if (server.aof_last_write_status == C_ERR || sdslen(server.aof_retry_buf) > 0 || sdslen(server.aof_buf) > 0) {
+        serverLog(LL_WARNING, "Can't start AOF rewrite while pending AOF data could not be flushed");
+        server.aof_lastbgrewrite_status = C_ERR;
+        return C_ERR;
+    }
     if (openNewIncrAofForAppend() != C_OK) {
         server.aof_lastbgrewrite_status = C_ERR;
         return C_ERR;
@@ -2826,7 +2849,7 @@ int rewriteAppendOnlyFileBackground(void) {
     }
 
     server.stat_aof_rewrites++;
-    
+
     if (server.aof_integrity_check) {
         server.aof_rewrite_base_checksum = server.aof_running_checksum;
     }

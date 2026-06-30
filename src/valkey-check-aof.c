@@ -186,12 +186,25 @@ int processAnnotations(FILE *fp, char *filename, int last_file) {
         exit(1);
     }
 
-    if (!strncmp(buf, "#HDR:v1;", 8)) {
-        size_t hdr_len = 0;
-        uint64_t hdr_checksum = 0;
-        char *field;
-        if ((field = strstr(buf, "len:")) != NULL) hdr_len = strtoull(field + 4, NULL, 10);
-        if ((field = strstr(buf, "checksum:")) != NULL) hdr_checksum = strtoull(field + 9, NULL, 10);
+    if (!strncmp(buf, "#HDR:v1;len:", 12)) {
+        char *ptr = buf + 12;
+        char *endptr;
+        errno = 0;
+        unsigned long long len = strtoull(ptr, &endptr, 10);
+        if (endptr == ptr || errno == ERANGE || strncmp(endptr, ";checksum:", 10) != 0) {
+            ERROR("Malformed AOF integrity header (invalid len)");
+            printf("%s\n", error);
+            exit(1);
+        }
+        ptr = endptr + 10;
+        unsigned long long checksum = strtoull(ptr, &endptr, 10);
+        if (endptr == ptr || errno == ERANGE || (strcmp(endptr, ";\r\n") != 0 && strcmp(endptr, ";\n") != 0)) {
+            ERROR("Malformed AOF integrity header (invalid checksum)");
+            printf("%s\n", error);
+            exit(1);
+        }
+        size_t hdr_len = len;
+        uint64_t hdr_checksum = checksum;
 
         /* Check data integrity */
         char *checksum_tag = strstr(buf, "checksum:");

@@ -50,6 +50,15 @@ def find_default_iface():
     return None
 
 
+def is_rxe_device(ibclass, dev):
+    # RXE driver sets node_desc to "rxe" (see kernel drivers/infiniband/sw/rxe/rxe_verbs.c).
+    try:
+        with open(os.path.join(ibclass, dev, "node_desc")) as fp:
+            return fp.read().strip() == "rxe"
+    except OSError:
+        return False
+
+
 def find_rdma_ip_from_sysfs(rxe_only=False):
     # Ex, /sys/class/infiniband/mlx5_0
     # Ex, /sys/class/infiniband/rxe_eth0
@@ -62,7 +71,7 @@ def find_rdma_ip_from_sysfs(rxe_only=False):
 
     candidates = sorted(devices)
     if rxe_only:
-        candidates = [dev for dev in candidates if dev.startswith("rxe_")]
+        candidates = [dev for dev in candidates if is_rxe_device(ibclass, dev)]
 
     for dev in candidates:
         # Ex, /sys/class/infiniband/rxe_eth0/ports/1/gid_attrs/ndevs/0

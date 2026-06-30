@@ -44,11 +44,19 @@ proc get_cur_base_aof_name {manifest_filepath} {
         return ""
     }
 
-    set first_line [lindex $lines 0]
-    set aofname [lindex [split $first_line " "] 1]
-    set aoftype [lindex [split $first_line " "] 5]
-    if { $aoftype eq "b" } {
-        return $aofname
+    foreach line $lines {
+        if {[string match "#*" $line]} {
+            continue
+        }
+        set parts [split $line " "]
+        if {[llength $parts] < 6} {
+            continue
+        }
+        set aofname [lindex $parts 1]
+        set aoftype [lindex $parts 5]
+        if { $aoftype eq "b" } {
+            return $aofname
+        }
     }
 
     return ""
@@ -71,12 +79,21 @@ proc get_last_incr_aof_name {manifest_filepath} {
         return ""
     }
 
-    set len [llength $lines]
-    set last_line [lindex $lines [expr $len - 1]]
-    set aofname [lindex [split $last_line " "] 1]
-    set aoftype [lindex [split $last_line " "] 5]
-    if { $aoftype eq "i" } {
-        return $aofname
+    # Iterate backwards to find the last incr file, ignoring comments
+    for {set i [expr [llength $lines] - 1]} {$i >= 0} {incr i -1} {
+        set line [lindex $lines $i]
+        if {[string match "#*" $line]} {
+            continue
+        }
+        set parts [split $line " "]
+        if {[llength $parts] < 6} {
+            continue
+        }
+        set aofname [lindex $parts 1]
+        set aoftype [lindex $parts 5]
+        if { $aoftype eq "i" } {
+            return $aofname
+        }
     }
 
     return ""

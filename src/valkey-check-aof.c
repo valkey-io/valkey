@@ -29,6 +29,7 @@
  */
 
 #include "server.h"
+#include "crc64.h"
 
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -61,6 +62,9 @@ static char error[1044];
 static off_t epos;
 static long long line = 1;
 static time_t to_timestamp = 0;
+static uint64_t expected_running_checksum = 0;
+static int integrity_chain_active = 0;
+static off_t integrity_validated_until = 0;
 
 int consumeNewline(char *buf) {
     if (buf[0] != '\r' || buf[1] != '\n') {
@@ -166,8 +170,7 @@ int processRESP(FILE *fp, char *filename, int *out_multi) {
 }
 
 /* Used to parse an annotation in the AOF file, the annotation starts with '#'
- * in AOF. Currently AOF only contains timestamp annotations, but this function
- * can easily be extended to handle other annotations.
+ * in AOF.
  *
  * The processing rule of time annotation is that once the timestamp is found to
  * be greater than 'to_timestamp', the AOF after the annotation is truncated.
@@ -181,6 +184,55 @@ int processAnnotations(FILE *fp, char *filename, int last_file) {
     if (fgets(buf, sizeof(buf), fp) == NULL) {
         printf("Failed to read annotations from AOF %s, aborting...\n", filename);
         exit(1);
+    }
+
+    if (!strncmp(buf, "#HDR:v1;", 8)) {
+        size_t hdr_len = 0;
+        uint64_t hdr_checksum = 0;
+        char *field;
+        if ((field = strstr(buf, "len:")) != NULL) hdr_len = strtoull(field + 4, NULL, 10);
+        if ((field = strstr(buf, "checksum:")) != NULL) hdr_checksum = strtoull(field + 9, NULL, 10);
+
+        /* Check data integrity */
+        char *checksum_tag = strstr(buf, "checksum:");
+        if (!checksum_tag) {
+            ERROR("AOF integrity header lacks a checksum");
+            printf("%s\n", error);
+            exit(1);
+        }
+        uint64_t computed_checksum = crc64(expected_running_checksum, (unsigned char *)buf, checksum_tag - buf);
+        off_t current_pos = ftello(fp);
+
+        size_t remaining = hdr_len;
+        unsigned char check_buf[16 * 1024];
+        while (remaining > 0) {
+            size_t to_read = remaining > sizeof(check_buf) ? sizeof(check_buf) : remaining;
+            if (fread(check_buf, to_read, 1, fp) != 1) {
+                ERROR("AOF short read detected. Expected %zu more bytes", remaining);
+                printf("%s\n", error);
+                exit(1);
+            }
+            computed_checksum = crc64(computed_checksum, check_buf, to_read);
+            remaining -= to_read;
+        }
+
+        if (computed_checksum != hdr_checksum) {
+            ERROR("AOF checksum mismatch. Calculated %llu, got %llu", (unsigned long long)computed_checksum,
+                  (unsigned long long)hdr_checksum);
+            printf("%s\n", error);
+            exit(1);
+        }
+        if (fseek(fp, current_pos, SEEK_SET) == -1) {
+            printf("Error seeking in AOF file %s: %s\n", filename, strerror(errno));
+            exit(1);
+        }
+        integrity_validated_until = current_pos + hdr_len;
+
+        expected_running_checksum = computed_checksum;
+        integrity_chain_active = 1;
+    } else if (!strncmp(buf, AOF_INTEGRITY_OFF_MARKER, strlen(AOF_INTEGRITY_OFF_MARKER))) {
+        expected_running_checksum = 0;
+        integrity_chain_active = 0;
     }
 
     if (to_timestamp && strncmp(buf, "#TS:", 4) == 0) {
@@ -226,6 +278,10 @@ int checkSingleAof(char *aof_filename, char *aof_filepath, int last_file, int fi
     off_t pos = 0, diff;
     int multi = 0;
     char buf[2];
+
+    /* If expected_running_checksum is already set (e.g. from previous file in manifest), keep it.
+     * Otherwise, processAnnotations will initialize it from first #HDR. */
+    integrity_validated_until = 0;
 
     FILE *fp = fopen(aof_filepath, "r+");
     if (fp == NULL) {
@@ -277,6 +333,10 @@ int checkSingleAof(char *aof_filename, char *aof_filepath, int last_file, int fi
                 return AOF_CHECK_TIMESTAMP_TRUNCATED;
             }
         } else if (buf[0] == '*') {
+            if (integrity_chain_active && ftello(fp) >= integrity_validated_until) {
+                ERROR("AOF command at offset %lld lacks an integrity header", (long long)ftello(fp));
+                break;
+            }
             if (!processRESP(fp, aof_filepath, &multi)) break;
         } else {
             printf("AOF %s format error\n", aof_filename);
@@ -358,10 +418,9 @@ int fileIsRDB(char *filepath) {
         return 0;
     }
 
-    if (size >= 8) { /* There must be at least room for the RDB header. */
-        char sig[5];
-        int rdb_file = fread(sig, sizeof(sig), 1, fp) == 1 && memcmp(sig, "REDIS", sizeof(sig)) == 0;
-        if (rdb_file) {
+    if (size >= 9) { /* There must be at least room for the RDB header. */
+        char sig[6];
+        if (fread(sig, 1, 6, fp) == 6 && (memcmp(sig, "REDIS", 5) == 0 || memcmp(sig, "VALKEY", 6) == 0)) {
             fclose(fp);
             return 1;
         }
@@ -481,6 +540,12 @@ void checkMultiPartAof(char *dirpath, char *manifest_filepath, int fix) {
 
         printf("Start to check BASE AOF (%s format).\n", aof_preamble ? "RDB" : "RESP");
         ret = checkSingleAof(aof_filename, aof_filepath, last_file, fix, aof_preamble);
+        if (aof_preamble && ret == AOF_CHECK_OK) {
+            if (am->base_aof_info && am->base_aof_info->last_checksum) {
+                expected_running_checksum = am->base_aof_info->last_checksum;
+                integrity_chain_active = 1;
+            }
+        }
         printAofStyle(ret, aof_filename, (char *)"BASE AOF");
         sdsfree(aof_filepath);
     }

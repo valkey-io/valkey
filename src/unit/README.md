@@ -162,11 +162,11 @@ TEST_F(ZsetTest, RangeQuery) {
         orderedIndexGetElementRaw(item, &ele, &len);
         results[count++] = sdsnewlen(ele, len);
     }
-    ASSERT_EQ(count, 3);
+    EXPECT_EQ(count, 3);
     /* sort and verify */
     qsort(results, count, sizeof(sds), sdscmpptr);
-    ASSERT_STREQ(results[0], "alpha");
-    /* cleanup */
+    EXPECT_STREQ(results[0], "alpha");
+    /* EXPECT (not ASSERT) so cleanup below still runs on failure */
     for (int i = 0; i < count; i++) sdsfree(results[i]);
 }
 ```

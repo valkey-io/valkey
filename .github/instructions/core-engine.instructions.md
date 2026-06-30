@@ -1,6 +1,6 @@
 ---
 applyTo:
-  - "src/**/*.{c,h}"
+  - "src/**/*.{c,h,cpp,hpp}"
   - "valkey.conf"
 ---
 

@@ -453,10 +453,18 @@ start_server {tags {"pubsub network"}} {
     test "SUBSCRIBE, PSUBSCRIBE and SSUBSCRIBE are denied under OOM" {
         r flushdb
         r config set maxmemory-policy noeviction
+
+        set rd [valkey_deferring_client]
+        assert_equal {1} [subscribe $rd {chan}]
+
         r config set maxmemory 1
         assert_error {OOM command not allowed*} {r subscribe ch}
         assert_error {OOM command not allowed*} {r psubscribe ch*}
         assert_error {OOM command not allowed*} {r ssubscribe ch}
+        # UNSUBSCRIBE has no DENYOOM flag, so it still works under OOM
+        assert_equal {0} [unsubscribe $rd {chan}]
+        $rd close
+
         r config set maxmemory 0
     } {OK} {needs:config-maxmemory}
 

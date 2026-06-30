@@ -6862,12 +6862,10 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "eventloop_cmd_per_cycle_max:%lld\r\n", server.el_cmd_cnt_max,
                 "io_threaded_reads_pending:%lld\r\n", server.stat_io_reads_pending,
                 "io_threaded_writes_pending:%lld\r\n", server.stat_io_writes_pending));
-    }
 
-    /* Sync replication / reply-blocking stats */
-    if (all_sections || (dictFind(section_dict, "reply_blocking") != NULL)) {
-        if (sections++) info = sdscat(info, "\r\n");
-        info = sdscatprintf(info, "# Reply_blocking\r\n");
+        /* Reply-blocking only exposes internal observability for now, so its
+         * fields are reported under the hidden Debug section instead of a
+         * customer-facing INFO section until the field set is finalized. */
         info = genReplyBlockingInfoString(info);
     }
 

@@ -766,7 +766,7 @@ foreach provider_mode {aof} {
 
                 after 200
 
-                set info [$primary info all]
+                set info [$primary info debug]
                 assert_match "*reply_blocking_clients_waiting_ack:0*" $info
 
                 # Resume the provider so subsequent tests aren't affected
@@ -833,7 +833,7 @@ foreach provider_mode {aof} {
             }
 
             test "($provider_mode) INFO reports sync replication stats" {
-                set info [$primary info all]
+                set info [$primary info debug]
                 assert_match "*reply_blocking_enabled:1*" $info
                 assert_match "*reply_blocking_primary_repl_offset:*" $info
                 assert_match "*reply_blocking_previous_acked_offset:*" $info

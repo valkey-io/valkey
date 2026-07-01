@@ -144,9 +144,14 @@ static void textFieldDouble(infoEmitter *e, const char *key, double v, int prec,
     memcpy(p, key, klen);
     p += klen;
     *p++ = ':';
-    /* INFO_UNIT_PERCENT reproduces the legacy "%.2f%%" (trailing literal '%'). */
+    /* INFO_UNIT_PERCENT reproduces the legacy "%.2f%%" (trailing literal '%');
+     * prec == INFO_PREC_FULL reproduces the module API's "%.17g". These are
+     * mutually exclusive: INFO_PREC_FULL takes precedence (no current caller
+     * combines them). */
     int n;
-    if (unit == INFO_UNIT_PERCENT)
+    if (prec < 0)
+        n = snprintf(p, INFO_EMIT_NUMBUF, "%.17g", v);
+    else if (unit == INFO_UNIT_PERCENT)
         n = snprintf(p, INFO_EMIT_NUMBUF, "%.*f%%", prec, v);
     else
         n = snprintf(p, INFO_EMIT_NUMBUF, "%.*f", prec, v);
@@ -158,9 +163,8 @@ static void textFieldDouble(infoEmitter *e, const char *key, double v, int prec,
     ie_commit(t, (size_t)(p - p0));
 }
 
-static void textFieldStr(infoEmitter *e, const char *key, const char *v) {
-    infoEmitterText *t = textOf(e);
-    size_t klen = strlen(key), vlen = strlen(v);
+static void textEmitScalarStr(infoEmitterText *t, const char *key, const char *v, size_t vlen) {
+    size_t klen = strlen(key);
     char *p0 = ie_reserve(t, klen + 1 + vlen + 2);
     char *p = p0;
     memcpy(p, key, klen);
@@ -171,6 +175,14 @@ static void textFieldStr(infoEmitter *e, const char *key, const char *v) {
     *p++ = '\r';
     *p++ = '\n';
     ie_commit(t, (size_t)(p - p0));
+}
+
+static void textFieldStr(infoEmitter *e, const char *key, const char *v) {
+    textEmitScalarStr(textOf(e), key, v, strlen(v));
+}
+
+static void textFieldStrn(infoEmitter *e, const char *key, const char *v, size_t vlen) {
+    textEmitScalarStr(textOf(e), key, v, vlen);
 }
 
 static void textFieldUsec(infoEmitter *e, const char *key, long long usec, infoKind kind) {
@@ -223,28 +235,48 @@ static void textDictLL(infoEmitter *e, const char *sub, long long v, infoKind ki
     ie_commit(t, (size_t)(p - p0));
 }
 
-static void textDictDouble(infoEmitter *e, const char *sub, double v, int prec, infoKind kind, infoUnit unit) {
+static void textDictULL(infoEmitter *e, const char *sub, unsigned long long v, infoKind kind, infoUnit unit) {
     (void)kind;
     (void)unit;
     infoEmitterText *t = textOf(e);
     size_t slen = strlen(sub);
-    char *p0 = ie_reserve(t, 1 + slen + 1 + INFO_EMIT_NUMBUF);
+    char *p0 = ie_reserve(t, 1 + slen + 1 + LONG_STR_SIZE);
     char *p = textDictSub(t, p0, sub, slen);
-    int n = snprintf(p, INFO_EMIT_NUMBUF, "%.*f", prec, v);
+    p += ull2string(p, LONG_STR_SIZE, v);
+    ie_commit(t, (size_t)(p - p0));
+}
+
+static void textDictDouble(infoEmitter *e, const char *sub, double v, int prec, infoKind kind, infoUnit unit) {
+    (void)kind;
+    (void)unit;
+    infoEmitterText *t = textOf(e);
+    char *p0 = ie_reserve(t, 1 + strlen(sub) + 1 + INFO_EMIT_NUMBUF);
+    char *p = textDictSub(t, p0, sub, strlen(sub));
+    int n;
+    if (prec < 0)
+        n = snprintf(p, INFO_EMIT_NUMBUF, "%.17g", v);
+    else
+        n = snprintf(p, INFO_EMIT_NUMBUF, "%.*f", prec, v);
     if (n < 0) n = 0;
     if (n >= INFO_EMIT_NUMBUF) n = INFO_EMIT_NUMBUF - 1;
     p += n;
     ie_commit(t, (size_t)(p - p0));
 }
 
-static void textDictStr(infoEmitter *e, const char *sub, const char *v) {
-    infoEmitterText *t = textOf(e);
-    size_t slen = strlen(sub), vlen = strlen(v);
-    char *p0 = ie_reserve(t, 1 + slen + 1 + vlen);
-    char *p = textDictSub(t, p0, sub, slen);
+static void textEmitDictStr(infoEmitterText *t, const char *sub, const char *v, size_t vlen) {
+    char *p0 = ie_reserve(t, 1 + strlen(sub) + 1 + vlen);
+    char *p = textDictSub(t, p0, sub, strlen(sub));
     memcpy(p, v, vlen);
     p += vlen;
     ie_commit(t, (size_t)(p - p0));
+}
+
+static void textDictStr(infoEmitter *e, const char *sub, const char *v) {
+    textEmitDictStr(textOf(e), sub, v, strlen(v));
+}
+
+static void textDictStrn(infoEmitter *e, const char *sub, const char *v, size_t vlen) {
+    textEmitDictStr(textOf(e), sub, v, vlen);
 }
 
 static void textEndDict(infoEmitter *e) {
@@ -264,11 +296,14 @@ static const infoEmitterOps textOps = {
     .field_ull = textFieldULL,
     .field_double = textFieldDouble,
     .field_str = textFieldStr,
+    .field_strn = textFieldStrn,
     .field_usec = textFieldUsec,
     .begin_dict = textBeginDict,
     .dict_ll = textDictLL,
+    .dict_ull = textDictULL,
     .dict_double = textDictDouble,
     .dict_str = textDictStr,
+    .dict_strn = textDictStrn,
     .end_dict = textEndDict,
     .raw = textRaw,
 };

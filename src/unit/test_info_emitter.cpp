@@ -126,6 +126,57 @@ TEST_F(InfoEmitterTextTest, DictSingleField) {
               "d:name=x\r\n");
 }
 
+TEST_F(InfoEmitterTextTest, DictULL) {
+    /* Unsigned dict values (module VM_InfoAddFieldULongLong in a dict). */
+    EXPECT_EQ(emit([](infoEmitter *e) {
+                  infoEmitBeginDict(e, "d");
+                  infoEmitDictULL(e, "u", 18446744073709551614ULL);
+                  infoEmitEndDict(e);
+              }),
+              "d:u=18446744073709551614\r\n");
+}
+
+TEST_F(InfoEmitterTextTest, DoubleFullPrecision) {
+    /* prec == INFO_PREC_FULL renders "%.17g" (module VM_InfoAddFieldDouble). */
+    EXPECT_EQ(emit([](infoEmitter *e) { infoEmitFieldDouble(e, "val", 3.3, INFO_PREC_FULL); }),
+              "val:3.2999999999999998\r\n");
+    EXPECT_EQ(emit([](infoEmitter *e) {
+                  infoEmitBeginDict(e, "d");
+                  infoEmitDictDouble(e, "x", 3.3, INFO_PREC_FULL);
+                  infoEmitEndDict(e);
+              }),
+              "d:x=3.2999999999999998\r\n");
+}
+
+TEST_F(InfoEmitterTextTest, StrnPreservesLength) {
+    /* field_strn/dict_strn use an explicit length (matching sds %S), so values
+     * with embedded NULs are reproduced in full rather than truncated. */
+    std::string val("ab\0cd", 5);
+    EXPECT_EQ(emit([&](infoEmitter *e) { infoEmitFieldStrn(e, "k", val.data(), val.size()); }),
+              std::string("k:ab\0cd\r\n", 9));
+    EXPECT_EQ(emit([&](infoEmitter *e) {
+                  infoEmitBeginDict(e, "d");
+                  infoEmitDictStrn(e, "s", val.data(), val.size());
+                  infoEmitEndDict(e);
+              }),
+              std::string("d:s=ab\0cd\r\n", 11));
+}
+
+TEST_F(InfoEmitterTextTest, BufferGrowExactBytes) {
+    /* Force the reply sds to grow well past SDS_MAX_PREALLOC (via a large value)
+     * and across thousands of fields, exercising the ie_reserve ->
+     * sdsMakeRoomFor realloc path, then assert the output is exactly correct. */
+    std::string big(200000, 'x'); /* single 200KB field value */
+    std::string out = emit([&](infoEmitter *e) {
+        infoEmitBeginSection(e, "Big");
+        infoEmitFieldStrn(e, "blob", big.data(), big.size());
+        for (long long i = 0; i < 5000; i++) infoEmitFieldLL(e, "n", i);
+    });
+    std::string expected = "# Big\r\nblob:" + big + "\r\n";
+    for (long long i = 0; i < 5000; i++) expected += "n:" + std::to_string(i) + "\r\n";
+    EXPECT_EQ(out, expected);
+}
+
 TEST_F(InfoEmitterTextTest, Raw) {
     EXPECT_EQ(emit([](infoEmitter *e) { infoEmitRaw(e, "custom:%d\r\n", 7); }), "custom:7\r\n");
 }

@@ -47,6 +47,11 @@ typedef enum {
     INFO_UNIT_PERCENT, /* Text backend appends '%' to reproduce "%.2f%%". */
 } infoUnit;
 
+/* Precision sentinel for the double field/dict calls: prec >= 0 renders "%.*f";
+ * INFO_PREC_FULL renders "%.17g" (full round-trippable form, used by the module
+ * INFO API's VM_InfoAddFieldDouble). */
+#define INFO_PREC_FULL (-1)
+
 typedef struct infoEmitter infoEmitter;
 
 /* Backend operations. Numeric fields carry (kind, unit) metadata; the text
@@ -61,16 +66,23 @@ typedef struct infoEmitterOps {
     void (*field_ull)(infoEmitter *e, const char *key, unsigned long long v, infoKind kind, infoUnit unit);
     /* `prec` preserves per-field precision (e.g. 2 for %.2f, 6 for %.6f). */
     void (*field_double)(infoEmitter *e, const char *key, double v, int prec, infoKind kind, infoUnit unit);
-    /* Strings are identity/metadata, not metrics: no kind/unit. */
+    /* Strings are identity/metadata, not metrics: no kind/unit. field_strn takes
+     * an explicit length to reproduce sds-length semantics (%S) exactly, even
+     * for values containing embedded NULs. */
     void (*field_str)(infoEmitter *e, const char *key, const char *v);
+    void (*field_strn)(infoEmitter *e, const char *key, const char *v, size_t vlen);
     /* Fixed-point seconds.microseconds (%lld.%06lld); `usec` is total us. */
     void (*field_usec)(infoEmitter *e, const char *key, long long usec, infoKind kind);
 
     /* Composite ("dict") lines: key:sub1=v1,sub2=v2\r\n */
     void (*begin_dict)(infoEmitter *e, const char *key);
     void (*dict_ll)(infoEmitter *e, const char *sub, long long v, infoKind kind, infoUnit unit);
+    void (*dict_ull)(infoEmitter *e, const char *sub, unsigned long long v, infoKind kind, infoUnit unit);
+    /* prec >= 0 renders "%.*f"; prec == INFO_PREC_FULL renders "%.17g" (the
+     * full round-trippable form used by the module INFO API). */
     void (*dict_double)(infoEmitter *e, const char *sub, double v, int prec, infoKind kind, infoUnit unit);
     void (*dict_str)(infoEmitter *e, const char *sub, const char *v);
+    void (*dict_strn)(infoEmitter *e, const char *sub, const char *v, size_t vlen);
     void (*end_dict)(infoEmitter *e);
 
     /* Escape hatch for irregular lines that do not map to a typed field. The
@@ -136,6 +148,9 @@ static inline void infoEmitCounterULL(infoEmitter *e, const char *k, unsigned lo
 static inline void infoEmitFieldStr(infoEmitter *e, const char *k, const char *v) {
     e->ops->field_str(e, k, v);
 }
+static inline void infoEmitFieldStrn(infoEmitter *e, const char *k, const char *v, size_t vlen) {
+    e->ops->field_strn(e, k, v, vlen);
+}
 /* CPU times are cumulative (counter); current_* durations are gauges. */
 static inline void infoEmitFieldUsec(infoEmitter *e, const char *k, long long usec) {
     e->ops->field_usec(e, k, usec, INFO_KIND_COUNTER);
@@ -155,11 +170,20 @@ static inline void infoEmitDictCounterLL(infoEmitter *e, const char *sub, long l
 static inline void infoEmitDictMetricLL(infoEmitter *e, const char *sub, long long v, infoKind kind, infoUnit unit) {
     e->ops->dict_ll(e, sub, v, kind, unit);
 }
+static inline void infoEmitDictULL(infoEmitter *e, const char *sub, unsigned long long v) {
+    e->ops->dict_ull(e, sub, v, INFO_KIND_GAUGE, INFO_UNIT_NONE);
+}
+static inline void infoEmitDictMetricULL(infoEmitter *e, const char *sub, unsigned long long v, infoKind kind, infoUnit unit) {
+    e->ops->dict_ull(e, sub, v, kind, unit);
+}
 static inline void infoEmitDictDouble(infoEmitter *e, const char *sub, double v, int prec) {
     e->ops->dict_double(e, sub, v, prec, INFO_KIND_GAUGE, INFO_UNIT_NONE);
 }
 static inline void infoEmitDictStr(infoEmitter *e, const char *sub, const char *v) {
     e->ops->dict_str(e, sub, v);
+}
+static inline void infoEmitDictStrn(infoEmitter *e, const char *sub, const char *v, size_t vlen) {
+    e->ops->dict_strn(e, sub, v, vlen);
 }
 static inline void infoEmitEndDict(infoEmitter *e) {
     e->ops->end_dict(e);

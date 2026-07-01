@@ -1924,6 +1924,8 @@ void acceptCommonHandler(connection *conn, struct ClientFlags flags, char *ip) {
         connClose(conn);
         return;
     }
+    /* Default priority is normal */
+    connSetPriority(conn, CONN_PRIORITY_NORMAL);
 
     /* Create connection and client */
     if ((c = createClient(conn)) == NULL) {
@@ -4511,7 +4513,7 @@ int isClientConnIpV6(client *c) {
  * readable format, into the sds string 's'. */
 sds catClientInfoString(sds s, client *client, int hide_user_data) {
     if (!server.crashed) waitForClientIO(client);
-    char flags[18], events[3], capa[9], conninfo[CONN_INFO_LEN], *p;
+    char flags[32], events[3], capa[9], conninfo[CONN_INFO_LEN], *p;
 
     p = flags;
     if (client->flag.replica) {
@@ -4540,6 +4542,7 @@ sds catClientInfoString(sds s, client *client, int hide_user_data) {
     if (client->flag.import_source) *p++ = 'I';
     if (client->slot_migration_job && isImportSlotMigrationJob(client->slot_migration_job)) *p++ = 'i';
     if (client->slot_migration_job && !isImportSlotMigrationJob(client->slot_migration_job)) *p++ = 'E';
+    if (client->conn && connGetPriority(client->conn) == CONN_PRIORITY_HIGH) *p++ = 'H';
     if (p == flags) *p++ = 'N';
     *p++ = '\0';
 
@@ -4702,6 +4705,13 @@ int clientSetName(client *c, robj *name, const char **err) {
     if (c->name) decrRefCount(c->name);
     c->name = name;
     incrRefCount(name);
+
+    if (name && len >= 9 && strncmp(objectGetVal(name), "sentinel-", 9) == 0) {
+        if (c->conn) {
+            /* Upgrade connection priority to high for sentinel */
+            connUpgradePriority(c->conn, CONN_PRIORITY_HIGH);
+        }
+    }
     return C_OK;
 }
 
@@ -5067,6 +5077,7 @@ static int validateClientFlagFilter(sds flag_filter) {
         case 'I':
         case 'i':
         case 'E':
+        case 'H':
         case 'N':
             /* Valid flag, do nothing. */
             break;
@@ -5230,6 +5241,9 @@ static int clientMatchesFlagFilter(client *c, sds flag_filter) {
         case 'E': /* Slot migration export flag */
             if (!c->slot_migration_job || isImportSlotMigrationJob(c->slot_migration_job)) return 0;
             break;
+        case 'H': /* High priority connection */
+            if (!c->conn || connGetPriority(c->conn) != CONN_PRIORITY_HIGH) return 0;
+            break;
         case 'N': /* Check for no flags */
             if (c->flag.replica || c->flag.primary || c->flag.pubsub ||
                 c->flag.multi || c->flag.blocked || c->flag.tracking ||
@@ -5238,7 +5252,8 @@ static int clientMatchesFlagFilter(client *c, sds flag_filter) {
                 c->flag.unblocked || c->flag.close_asap ||
                 c->flag.unix_socket || c->flag.readonly ||
                 c->flag.no_evict || c->flag.no_touch || c->flag.throttled ||
-                c->flag.import_source || c->slot_migration_job) {
+                c->flag.import_source || c->slot_migration_job ||
+                (c->conn && connGetPriority(c->conn) == CONN_PRIORITY_HIGH)) {
                 return 0;
             }
             break;

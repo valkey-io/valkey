@@ -33,6 +33,7 @@
 #include "ae.h"
 #include "anet.h"
 #include "serverassert.h"
+#include "monotonic.h"
 
 #include <stdio.h>
 #include <sys/time.h>
@@ -77,6 +78,14 @@
  * implementations are AE_READABLE & AE_WRITABLE. */
 #define BACKEND_MASK(mask) ((mask) & (AE_READABLE | AE_WRITABLE))
 
+/* High priority event loop periodic preemptive poll interval in microseconds.*/
+#define AE_HP_EVENT_PREEMPTIVE_CHECK_INTERVAL_US 1000
+/* High priority event loop periodic preemptive poll mask.*/
+#define AE_HP_EVENT_PREEMPTIVE_CHECK_MASK 3
+
+/* last time high priority event loop was polled */
+static long long hp_event_loop_last_poll_us = 0;
+
 aeEventLoop *aeCreateEventLoop(int setsize) {
     aeEventLoop *eventLoop;
     int i;
@@ -96,6 +105,7 @@ aeEventLoop *aeCreateEventLoop(int setsize) {
     eventLoop->aftersleep = NULL;
     eventLoop->custompoll = NULL;
     eventLoop->flags = 0;
+    eventLoop->hp_event_loop = NULL;
     /* Initialize the eventloop mutex with PTHREAD_MUTEX_ERRORCHECK type */
     pthread_mutexattr_t attr;
     pthread_mutexattr_init(&attr);
@@ -167,6 +177,9 @@ done:
 }
 
 void aeDeleteEventLoop(aeEventLoop *eventLoop) {
+    if (eventLoop->hp_event_loop) {
+        aeDeleteEventLoop(eventLoop->hp_event_loop);
+    }
     aeApiFree(eventLoop->apidata);
     zfree(eventLoop->events);
     zfree(eventLoop->fired);
@@ -187,6 +200,12 @@ void aeStop(aeEventLoop *eventLoop) {
 }
 
 int aeCreateFileEvent(aeEventLoop *eventLoop, int fd, int mask, aeFileProc *proc, void *clientData) {
+    if (mask & AE_HIGH_PRIORITY) {
+        if (eventLoop->hp_event_loop) {
+            /* Register events on to high priority event loop */
+            return aeCreateFileEvent(eventLoop->hp_event_loop, fd, mask & ~AE_HIGH_PRIORITY, proc, clientData);
+        }
+    }
     AE_LOCK(eventLoop);
     int ret = AE_ERR;
 
@@ -214,7 +233,16 @@ done:
 }
 
 void aeDeleteFileEvent(aeEventLoop *eventLoop, int fd, int mask) {
+    if (eventLoop->hp_event_loop) {
+        /* Check if the event exists in HP loop first */
+        int hp_mask = aeGetFileEvents(eventLoop->hp_event_loop, fd);
+        if (hp_mask != AE_NONE) {
+            aeDeleteFileEvent(eventLoop->hp_event_loop, fd, mask);
+            return;
+        }
+    }
     AE_LOCK(eventLoop);
+    mask &= ~AE_HIGH_PRIORITY;
     if (fd >= eventLoop->setsize) goto done;
 
     aeFileEvent *fe = &eventLoop->events[fd];
@@ -251,6 +279,12 @@ done:
 }
 
 void *aeGetFileClientData(aeEventLoop *eventLoop, int fd) {
+    if (eventLoop->hp_event_loop) {
+        int mask = aeGetFileEvents(eventLoop->hp_event_loop, fd);
+        if (mask != AE_NONE) {
+            return aeGetFileClientData(eventLoop->hp_event_loop, fd);
+        }
+    }
     if (fd >= eventLoop->setsize) return NULL;
     aeFileEvent *fe = &eventLoop->events[fd];
     if (fe->mask == AE_NONE) return NULL;
@@ -259,6 +293,12 @@ void *aeGetFileClientData(aeEventLoop *eventLoop, int fd) {
 }
 
 int aeGetFileEvents(aeEventLoop *eventLoop, int fd) {
+    if (eventLoop->hp_event_loop) {
+        int mask = aeGetFileEvents(eventLoop->hp_event_loop, fd);
+        if (mask != AE_NONE) {
+            return mask | AE_HIGH_PRIORITY;
+        }
+    }
     if (fd >= eventLoop->setsize) return 0;
     aeFileEvent *fe = &eventLoop->events[fd];
 
@@ -403,6 +443,31 @@ int aePoll(aeEventLoop *eventLoop, struct timeval *tvp) {
     return ret;
 }
 
+/* Process all high priority events immediately */
+static int aeProcessHPEventsNow(aeEventLoop *eventLoop) {
+    int processed = 0;
+    if (eventLoop->hp_event_loop != NULL) {
+        processed = aeProcessEvents(eventLoop->hp_event_loop, AE_ALL_EVENTS | AE_DONT_WAIT);
+        hp_event_loop_last_poll_us = getMonotonicUs();
+    }
+    return processed;
+}
+
+/*
+ * Preemptively processes high priority events if the elapsed time since the last poll
+ * exceeds the AE_HP_EVENT_PREEMPTIVE_CHECK_INTERVAL_US threshold and iter count
+ * is a multiple of AE_HP_EVENT_PREEMPTIVE_CHECK_MASK.
+ */
+int aeProcessHPEventsPreemptively(aeEventLoop *eventLoop, int iter_count) {
+    if (eventLoop->hp_event_loop == NULL) return 0;
+    if ((iter_count & AE_HP_EVENT_PREEMPTIVE_CHECK_MASK) == 0) {
+        if (elapsedUs(hp_event_loop_last_poll_us) >= AE_HP_EVENT_PREEMPTIVE_CHECK_INTERVAL_US) {
+            return aeProcessHPEventsNow(eventLoop);
+        }
+    }
+    return 0;
+}
+
 /* Process every pending file event, then every pending time event
  * (that may be registered by file event callbacks just processed).
  * Without special flags the function sleeps until some file event
@@ -467,8 +532,35 @@ int aeProcessEvents(aeEventLoop *eventLoop, int flags) {
         /* After sleep callback. */
         if (eventLoop->aftersleep != NULL && flags & AE_CALL_AFTER_SLEEP) eventLoop->aftersleep(eventLoop, numevents);
 
+        /* Process all high-priority events before we start processing the normal events
+         * if the high-priority event loop's FD (`hp_fd`) was fired.*/
+        int hp_fd = -1;
+        if (eventLoop->hp_event_loop != NULL) {
+            hp_fd = aeApiGetPollFd(eventLoop->hp_event_loop);
+        }
+        int hp_fired = 0;
+        if (hp_fd != -1) {
+            for (j = 0; j < numevents; j++) {
+                if (eventLoop->fired[j].fd == hp_fd) {
+                    hp_fired = 1;
+                    break;
+                }
+            }
+        }
+        if (hp_fired) {
+            processed += aeProcessHPEventsNow(eventLoop);
+        }
+
         for (j = 0; j < numevents; j++) {
+            /* Periodic Preemptive Poll:
+             * If processing normal events is taking more than AE_HP_EVENT_PREEMPTIVE_CHECK_INTERVAL_US, check for new HP events.
+             * Batch AE_HP_EVENT_PREEMPTIVE_CHECK_MASK checks to minimize monotonic clock call overhead. */
+            processed += aeProcessHPEventsPreemptively(eventLoop, j);
+
             int fd = eventLoop->fired[j].fd;
+            /* Skip processing HP events here again as they were already processed above */
+            if (hp_fired && fd == hp_fd) continue;
+
             aeFileEvent *fe = &eventLoop->events[fd];
             int mask = eventLoop->fired[j].mask;
             int fired = 0; /* Number of events fired for current fd. */
@@ -578,4 +670,21 @@ void aeSetPollProtect(aeEventLoop *eventLoop, int protect) {
     } else {
         eventLoop->flags &= ~AE_PROTECT_POLL;
     }
+}
+
+/* Event handler for the nested high-priority event loop poll,
+ * which will immediately process high priority events registered on the high-priority event loop file descriptor.*/
+static void hpEventLoopHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
+    AE_NOTUSED(fd);
+    AE_NOTUSED(privdata);
+    AE_NOTUSED(mask);
+    aeProcessHPEventsNow(el);
+}
+
+/* Register a high-priority event loop file descriptor in the main event loop,
+ * which will awake main eventloop when the high-priority event loop file descriptor is fired. */
+void aeLinkHighPriorityEventLoop(aeEventLoop *eventLoop, aeEventLoop *hp_event_loop) {
+    eventLoop->hp_event_loop = hp_event_loop;
+    int hp_fd = aeApiGetPollFd(hp_event_loop);
+    if (hp_fd != -1) aeCreateFileEvent(eventLoop, hp_fd, AE_READABLE, hpEventLoopHandler, hp_event_loop);
 }

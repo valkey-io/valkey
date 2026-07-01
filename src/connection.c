@@ -168,3 +168,55 @@ sds getListensInfoString(sds info) {
 
     return info;
 }
+/* Upgrade connection priority */
+void connUpgradePriority(connection *conn, int priority) {
+    serverAssert(conn != NULL);
+    if (conn->priority == priority) return;
+
+    int old_priority = conn->priority;
+    conn->priority = priority;
+
+    if (conn->fd != -1) {
+        int mask = aeGetFileEvents(server.el, conn->fd);
+        if (mask != AE_NONE) {
+            /* Delete from wherever it is (AE will route delete correctly) */
+            aeDeleteFileEvent(server.el, conn->fd, AE_READABLE | AE_WRITABLE);
+
+            /* Re-create with new priority flag */
+            int hp_flag = connGetAEPriorityFlag(conn);
+            if (mask & AE_READABLE)
+                aeCreateFileEvent(server.el, conn->fd, AE_READABLE | hp_flag, conn->type->ae_handler, conn);
+            if (mask & AE_WRITABLE)
+                aeCreateFileEvent(server.el, conn->fd, AE_WRITABLE | hp_flag, conn->type->ae_handler, conn);
+        }
+    }
+
+    serverLog(LL_DEBUG, "Connection fd %d qos upgraded from %s to %s", conn->fd, getConnectionPriorityName(old_priority), getConnectionPriorityName(priority));
+}
+
+/* Set connection priority */
+void connSetPriority(connection *conn, int priority) {
+    serverAssert(conn != NULL);
+    if (conn->priority == priority) return;
+    conn->priority = priority;
+}
+
+/* Get connection priority */
+int connGetPriority(connection *conn) {
+    /* Always return CONN_PRIORITY_NORMAL if conn is NULL.*/
+    return conn ? conn->priority : CONN_PRIORITY_NORMAL;
+}
+
+/* Get AE priority flag for a connection */
+int connGetAEPriorityFlag(connection *conn) {
+    return (conn && conn->priority == CONN_PRIORITY_HIGH) ? AE_HIGH_PRIORITY : 0;
+}
+
+/* Get connection priority name from priority value. */
+const char *getConnectionPriorityName(int priority) {
+    switch (priority) {
+    case CONN_PRIORITY_NORMAL: return "normal";
+    case CONN_PRIORITY_HIGH: return "prioritized";
+    default: return "normal";
+    }
+}

@@ -1198,14 +1198,15 @@ static int updateStateAfterSSLIO(tls_connection *conn, int ret_value, int update
 }
 
 static void registerSSLEvent(tls_connection *conn) {
+    int priority_flag = connGetAEPriorityFlag(&conn->c);
     int mask = aeGetFileEvents(server.el, conn->c.fd);
 
     if (conn->flags & TLS_CONN_FLAG_WRITE_WANT_READ) {
         if (mask & AE_WRITABLE) aeDeleteFileEvent(server.el, conn->c.fd, AE_WRITABLE);
-        if (!(mask & AE_READABLE)) aeCreateFileEvent(server.el, conn->c.fd, AE_READABLE, tlsEventHandler, conn);
+        if (!(mask & AE_READABLE)) aeCreateFileEvent(server.el, conn->c.fd, AE_READABLE | priority_flag, tlsEventHandler, conn);
     } else if (conn->flags & TLS_CONN_FLAG_READ_WANT_WRITE) {
         if (mask & AE_READABLE) aeDeleteFileEvent(server.el, conn->c.fd, AE_READABLE);
-        if (!(mask & AE_WRITABLE)) aeCreateFileEvent(server.el, conn->c.fd, AE_WRITABLE, tlsEventHandler, conn);
+        if (!(mask & AE_WRITABLE)) aeCreateFileEvent(server.el, conn->c.fd, AE_WRITABLE | priority_flag, tlsEventHandler, conn);
     } else {
         serverAssert(0);
     }
@@ -1247,16 +1248,15 @@ void updateSSLPendingFlag(tls_connection *conn) {
 static void updateSSLEvent(tls_connection *conn) {
     if (conn->flags & TLS_CONN_FLAG_POSTPONE_UPDATE_STATE) return;
 
+    int priority_flag = connGetAEPriorityFlag(&conn->c);
     int mask = aeGetFileEvents(server.el, conn->c.fd);
     int need_read = conn->c.read_handler || (conn->c.write_handler && (conn->flags & TLS_CONN_FLAG_WRITE_WANT_READ));
     int need_write = conn->c.write_handler || (conn->c.read_handler && (conn->flags & TLS_CONN_FLAG_READ_WANT_WRITE));
 
-    if (need_read && !(mask & AE_READABLE))
-        aeCreateFileEvent(server.el, conn->c.fd, AE_READABLE, tlsEventHandler, conn);
+    if (need_read && !(mask & AE_READABLE)) aeCreateFileEvent(server.el, conn->c.fd, AE_READABLE | priority_flag, tlsEventHandler, conn);
     if (!need_read && (mask & AE_READABLE)) aeDeleteFileEvent(server.el, conn->c.fd, AE_READABLE);
 
-    if (need_write && !(mask & AE_WRITABLE))
-        aeCreateFileEvent(server.el, conn->c.fd, AE_WRITABLE, tlsEventHandler, conn);
+    if (need_write && !(mask & AE_WRITABLE)) aeCreateFileEvent(server.el, conn->c.fd, AE_WRITABLE | priority_flag, tlsEventHandler, conn);
     if (!need_write && (mask & AE_WRITABLE)) aeDeleteFileEvent(server.el, conn->c.fd, AE_WRITABLE);
 }
 

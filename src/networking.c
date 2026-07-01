@@ -172,7 +172,7 @@ typedef enum {
  * for a string object. This includes internal fragmentation. */
 size_t getStringObjectSdsUsedMemory(robj *o) {
     serverAssertWithInfo(NULL, o, o->type == OBJ_STRING);
-    if (o->encoding != OBJ_ENCODING_INT) {
+    if (objectGetEncoding(o) != OBJ_ENCODING_INT) {
         return sdsAllocSize(objectGetVal(o));
     }
     return 0;
@@ -182,7 +182,7 @@ size_t getStringObjectSdsUsedMemory(robj *o) {
  * This does NOT include internal fragmentation or sds unused space. */
 size_t getStringObjectLen(robj *o) {
     serverAssertWithInfo(NULL, o, o->type == OBJ_STRING);
-    switch (o->encoding) {
+    switch (objectGetEncoding(o)) {
     case OBJ_ENCODING_RAW: return sdslen(objectGetVal(o));
     case OBJ_ENCODING_EMBSTR: return sdslen(objectGetVal(o));
     default: return 0; /* Just integer encoding for now. */

@@ -3184,7 +3184,7 @@ int compareStringObjects(const robj *a, const robj *b);
 int collateStringObjects(const robj *a, const robj *b);
 int equalStringObjects(robj *a, robj *b);
 void trimStringObjectIfNeeded(robj *o, int trim_small_values);
-#define sdsEncodedObject(objptr) (objptr->encoding == OBJ_ENCODING_RAW || objptr->encoding == OBJ_ENCODING_EMBSTR)
+#define sdsEncodedObject(objptr) (objectGetEncoding(objptr) == OBJ_ENCODING_RAW || objectGetEncoding(objptr) == OBJ_ENCODING_EMBSTR)
 
 /* Objects with val and/or key embedded */
 robj *objectSetKeyAndExpire(robj *o, const_sds key, long long expire);
@@ -3197,6 +3197,16 @@ mstime_t objectGetExpire(const robj *o);
 uint8_t objectGetLFUFrequency(robj *o);
 uint32_t objectGetLRUIdleSecs(robj *o);
 uint32_t objectGetIdleness(robj *o);
+
+/* Accessor functions for serverObject fields.
+ * Use these instead of direct field access for encapsulation. */
+int objectGetType(const robj *o);
+void objectSetType(robj *o, int type);
+int objectGetEncoding(const robj *o);
+void objectSetEncoding(robj *o, int encoding);
+unsigned int objectGetRefcount(const robj *o);
+unsigned int objectGetLRU(const robj *o);
+void objectSetLRU(robj *o, unsigned int lru);
 
 /* Synchronous I/O with timeout */
 ssize_t syncWrite(int fd, char *ptr, ssize_t size, long long timeout);

@@ -673,7 +673,7 @@ unsigned char *getObjectReadOnlyString(robj *o, long *len, char *llbuf) {
 
     /* Set the 'p' pointer to the string, that can be just a stack allocated
      * array if our string was integer encoded. */
-    if (o && o->encoding == OBJ_ENCODING_INT) {
+    if (o && objectGetEncoding(o) == OBJ_ENCODING_INT) {
         p = (unsigned char *)llbuf;
         if (len) *len = ll2string(llbuf, LONG_STR_SIZE, (long)objectGetVal(o));
     } else if (o) {

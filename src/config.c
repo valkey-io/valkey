@@ -2459,6 +2459,18 @@ static int isValidAnnouncedNodename(char *val, const char **err) {
     return 1;
 }
 
+/* Validates the character set of a hostname (alphanumeric, hyphens and dots),
+ * without checking the length. Returns 1 if valid, 0 otherwise. */
+static int isValidHostname(const char *val) {
+    for (int i = 0; val[i]; i++) {
+        char c = val[i];
+        if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || (c == '-') || (c == '.'))) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
 static int isValidAnnouncedIp(char *val, const char **err) {
     if (sdslen(val) >= NET_IP_STR_LEN) {
         *err = "cluster-announce-ip is too long";
@@ -2468,12 +2480,12 @@ static int isValidAnnouncedIp(char *val, const char **err) {
         *err = "cluster-announce-ip contains invalid character";
         return 0;
     }
-    if (val[0] != '\0') {
-        char dst[sizeof(struct in6_addr)];
-        if (inet_pton(AF_INET, val, dst) != 1 && inet_pton(AF_INET6, val, dst) != 1) {
-            *err = "cluster-announce-ip is not a valid IPv4 or IPv6 address";
-            return 0;
-        }
+    /* Empty resets the announced ip. Otherwise accept a literal IPv4/IPv6, or a
+     * hostname, since some users set a hostname here before
+     * cluster-announce-hostname existed. */
+    if (val[0] != '\0' && anetResolve(NULL, val, NULL, 0, ANET_IP_ONLY) != ANET_OK && !isValidHostname(val)) {
+        *err = "cluster-announce-ip is not a valid IP address or hostname";
+        return 0;
     }
     return 1;
 }
@@ -2483,18 +2495,10 @@ static int isValidAnnouncedHostname(char *val, const char **err) {
         *err = "Hostnames must be less than " STRINGIFY(NET_HOST_STR_LEN) " characters";
         return 0;
     }
-
-    int i = 0;
-    char c;
-    while ((c = val[i])) {
-        /* We just validate the character set to make sure that everything
-         * is parsed and handled correctly. */
-        if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || (c == '-') || (c == '.'))) {
-            *err = "Hostnames may only contain alphanumeric characters, "
-                   "hyphens or dots";
-            return 0;
-        }
-        c = val[i++];
+    if (!isValidHostname(val)) {
+        *err = "Hostnames may only contain alphanumeric characters, "
+               "hyphens or dots";
+        return 0;
     }
     return 1;
 }

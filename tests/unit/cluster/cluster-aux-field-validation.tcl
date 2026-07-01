@@ -79,15 +79,20 @@ start_cluster 1 0 {tags {external:skip cluster}} {
         assert_equal "" [lindex [R 0 CONFIG GET cluster-announce-ip] 1]
     }
 
+    test "cluster-announce-ip accepts a hostname" {
+        R 0 CONFIG SET cluster-announce-ip "my-node.example.com"
+        assert_equal "my-node.example.com" [lindex [R 0 CONFIG GET cluster-announce-ip] 1]
+    }
+
     test "cluster-announce-ip rejects IP with port" {
         assert_error "ERR CONFIG SET failed*cluster-announce-ip*not a valid*" {
             R 0 CONFIG SET cluster-announce-ip "10.1.131.239:6380"
         }
     }
 
-    test "cluster-announce-ip rejects non-IP string" {
+    test "cluster-announce-ip rejects value that is neither IP nor hostname" {
         assert_error "ERR CONFIG SET failed*cluster-announce-ip*not a valid*" {
-            R 0 CONFIG SET cluster-announce-ip "NotIPv4NorIPv6"
+            R 0 CONFIG SET cluster-announce-ip "under_score"
         }
     }
 

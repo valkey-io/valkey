@@ -665,10 +665,10 @@ void debugCommand(client *c) {
             addReplyErrorObject(c, shared.nokeyerr);
             return;
         }
-        strenc = strEncoding(val->encoding);
+        strenc = strEncoding(objectGetEncoding(val));
 
         char extra[138] = {0};
-        if (val->encoding == OBJ_ENCODING_QUICKLIST) {
+        if (objectGetEncoding(val) == OBJ_ENCODING_QUICKLIST) {
             char *nextra = extra;
             int remaining = sizeof(extra);
             quicklist *ql = objectGetVal(val);
@@ -703,13 +703,13 @@ void debugCommand(client *c) {
         }
 
         sds s = sdsempty();
-        s = sdscatprintf(s, "Value at:%p refcount:%d encoding:%s", (void *)val, val->refcount, strenc);
+        s = sdscatprintf(s, "Value at:%p refcount:%d encoding:%s", (void *)val, objectGetRefcount(val), strenc);
         if (!fast) s = sdscatprintf(s, " serializedlength:%zu", rdbSavedObjectLen(val, c->argv[2], c->db->id));
         /* Either lru or lfu field could work correctly which depends on server.maxmemory_policy. */
         if (lrulfu_isUsingLFU()) {
-            s = sdscatprintf(s, " lfu_freq:%u lfu_access_time_minutes:%u", objectGetLFUFrequency(val), val->lru >> 8);
+            s = sdscatprintf(s, " lfu_freq:%u lfu_access_time_minutes:%u", objectGetLFUFrequency(val), objectGetLRU(val) >> 8);
         } else {
-            s = sdscatprintf(s, " lru:%d lru_seconds_idle:%u", val->lru, lru_getIdleSecs(val->lru));
+            s = sdscatprintf(s, " lru:%d lru_seconds_idle:%u", objectGetLRU(val), lru_getIdleSecs(objectGetLRU(val)));
         }
         s = sdscatprintf(s, "%s", extra);
         addReplyStatusLength(c, s, sdslen(s));
@@ -724,13 +724,13 @@ void debugCommand(client *c) {
         }
         key = objectGetKey(val);
 
-        if (val->type != OBJ_STRING || !sdsEncodedObject(val)) {
+        if (objectGetType(val) != OBJ_STRING || !sdsEncodedObject(val)) {
             addReplyError(c, "Not an sds encoded string.");
         } else {
             /* Report the complete robj allocation size as the key's allocation
              * size. Report 0 as allocation size for embedded values. */
             size_t obj_alloc = zmalloc_usable_size(val);
-            size_t val_alloc = val->encoding == OBJ_ENCODING_RAW ? sdsAllocSize(objectGetVal(val)) : 0;
+            size_t val_alloc = objectGetEncoding(val) == OBJ_ENCODING_RAW ? sdsAllocSize(objectGetVal(val)) : 0;
             addReplyStatusFormat(c,
                                  "key_sds_len:%lld key_sds_avail:%lld obj_alloc:%lld "
                                  "val_sds_len:%lld val_sds_avail:%lld val_alloc:%lld",
@@ -928,7 +928,7 @@ void debugCommand(client *c) {
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "structsize") && c->argc == 2) {
         sds sizes = sdsempty();
         sizes = sdscatprintf(sizes, "bits:%d ", (sizeof(void *) == 8) ? 64 : 32);
-        sizes = sdscatprintf(sizes, "robj:%d ", (int)sizeof(robj));
+        sizes = sdscatprintf(sizes, "robj:%d ", (int)objectGetStructSize());
         sizes = sdscatprintf(sizes, "dictentry:%d ", (int)dictEntryMemUsage(NULL));
         sizes = sdscatprintf(sizes, "sdshdr5:%d ", (int)sizeof(struct sdshdr5));
         sizes = sdscatprintf(sizes, "sdshdr8:%d ", (int)sizeof(struct sdshdr8));
@@ -1154,7 +1154,7 @@ void _serverAssertPrintClientInfo(const client *c) {
             continue;
         }
         sds repr = getArgvReprString(c->argv[j]);
-        serverLog(LL_WARNING, "client->argv[%d] = %s (refcount: %d)", j, repr, c->argv[j]->refcount);
+        serverLog(LL_WARNING, "client->argv[%d] = %s (refcount: %d)", j, repr, objectGetRefcount(c->argv[j]));
         sdsfree(repr);
         if (!strcasecmp(objectGetVal(c->argv[j]), "auth") || !strcasecmp(objectGetVal(c->argv[j]), "auth2")) {
             break;

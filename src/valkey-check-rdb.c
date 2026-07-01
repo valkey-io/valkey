@@ -251,7 +251,7 @@ void computeDatasetProfile(int dbid, robj *keyobj, robj *o, long long expiretime
     UNUSED(keyobj);
     char buf[128];
 
-    rdbStats *stats = rdbstate.stats[o->type + dbid * OBJ_TYPE_MAX];
+    rdbStats *stats = rdbstate.stats[objectGetType(o) + dbid * OBJ_TYPE_MAX];
 
     stats->all_key_size += sdslen(objectGetVal(keyobj));
     stats->keys++;
@@ -263,9 +263,9 @@ void computeDatasetProfile(int dbid, robj *keyobj, robj *o, long long expiretime
         stats->expires++;
 
     /* Save the key and associated value */
-    if (o->type == OBJ_STRING) {
+    if (objectGetType(o) == OBJ_STRING) {
         statsRecordSimple(stringObjectLen(o), 1, stats);
-    } else if (o->type == OBJ_LIST) {
+    } else if (objectGetType(o) == OBJ_LIST) {
         listTypeIterator *li = listTypeInitIterator(o, 0, LIST_TAIL);
         listTypeEntry entry;
         while (listTypeNext(li, &entry)) {
@@ -275,7 +275,7 @@ void computeDatasetProfile(int dbid, robj *keyobj, robj *o, long long expiretime
         }
         listTypeReleaseIterator(li);
         statsRecordCount(listTypeLength(o), stats);
-    } else if (o->type == OBJ_SET) {
+    } else if (objectGetType(o) == OBJ_SET) {
         setTypeIterator *si = setTypeInitIterator(o);
         sds sdsele;
         while ((sdsele = setTypeNextObject(si)) != NULL) {
@@ -284,8 +284,8 @@ void computeDatasetProfile(int dbid, robj *keyobj, robj *o, long long expiretime
         }
         setTypeReleaseIterator(si);
         statsRecordCount(setTypeSize(o), stats);
-    } else if (o->type == OBJ_ZSET) {
-        if (o->encoding == OBJ_ENCODING_LISTPACK) {
+    } else if (objectGetType(o) == OBJ_ZSET) {
+        if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) {
             unsigned char *zl = objectGetVal(o);
             unsigned char *eptr, *sptr;
             unsigned char *vstr;
@@ -317,7 +317,7 @@ void computeDatasetProfile(int dbid, robj *keyobj, robj *o, long long expiretime
                 zzlNext(zl, &eptr, &sptr);
             }
             statsRecordCount(lpLength(objectGetVal(o)), stats);
-        } else if (o->encoding == OBJ_ENCODING_SKIPLIST) {
+        } else if (objectGetEncoding(o) == OBJ_ENCODING_SKIPLIST) {
             zset *zs = objectGetVal(o);
             hashtableIterator iter;
             hashtableInitIterator(&iter, zs->ht, 0);
@@ -338,7 +338,7 @@ void computeDatasetProfile(int dbid, robj *keyobj, robj *o, long long expiretime
         } else {
             serverPanic("Unknown sorted set encoding");
         }
-    } else if (o->type == OBJ_HASH) {
+    } else if (objectGetType(o) == OBJ_HASH) {
         hashTypeIterator hi;
         hashTypeInitIterator(o, &hi);
         while (hashTypeNext(&hi) != C_ERR) {
@@ -356,7 +356,7 @@ void computeDatasetProfile(int dbid, robj *keyobj, robj *o, long long expiretime
         }
         hashTypeResetIterator(&hi);
         statsRecordCount(hashTypeLength(o), stats);
-    } else if (o->type == OBJ_STREAM) {
+    } else if (objectGetType(o) == OBJ_STREAM) {
         streamIterator si;
         streamIteratorStart(&si, objectGetVal(o), NULL, NULL, 0);
         streamID id;
@@ -372,7 +372,7 @@ void computeDatasetProfile(int dbid, robj *keyobj, robj *o, long long expiretime
         }
         streamIteratorStop(&si);
         statsRecordCount(streamLength(o), stats);
-    } else if (o->type == OBJ_MODULE) {
+    } else if (objectGetType(o) == OBJ_MODULE) {
         statsRecordCount(1, stats);
     } else {
         serverPanic("Unknown object type");

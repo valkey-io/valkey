@@ -552,7 +552,7 @@ ssize_t rdbSaveLongLongAsStringObject(rio *rdb, long long value) {
 ssize_t rdbSaveStringObject(rio *rdb, robj *obj) {
     /* Avoid to decode the object, then encode it again, if the
      * object is already integer encoded. */
-    if (obj->encoding == OBJ_ENCODING_INT) {
+    if (objectGetEncoding(obj) == OBJ_ENCODING_INT) {
         return rdbSaveLongLongAsStringObject(rdb, (long)objectGetVal(obj));
     } else {
         serverAssertWithInfo(NULL, obj, sdsEncodedObject(obj));
@@ -1436,13 +1436,13 @@ ssize_t rdbSaveDb(rio *rdb, int dbid, int rdbflags, int rdbver, long *key_counte
             sdsfree(slot_info);
         }
         sds keystr = objectGetKey(o);
-        robj key;
+        robjStatic key_buf;
         long long expire;
         size_t rdb_bytes_before_key = rdb->processed_bytes;
 
-        initStaticStringObject(key, keystr);
+        robj *key = initStaticStringObject(&key_buf, keystr);
         expire = objectGetExpire(o);
-        if ((res = rdbSaveKeyValuePair(rdb, &key, o, expire, dbid, rdbver)) < 0) goto werr;
+        if ((res = rdbSaveKeyValuePair(rdb, key, o, expire, dbid, rdbver)) < 0) goto werr;
         written += res;
 
         /* In fork child process, we can try to release memory back to the
@@ -2245,13 +2245,13 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
                 itemexpiry != EXPIRY_NONE && itemexpiry < now) {
                 /* Emit HDEL to replicas. */
                 if ((rdbflags & RDBFLAGS_FEED_REPL) && server.repl_backlog) {
-                    robj keyobj, fieldobj;
-                    initStaticStringObject(keyobj, key);
-                    initStaticStringObject(fieldobj, field);
+                    robjStatic keyobj_buf, fieldobj_buf;
+                    robj *keyobj = initStaticStringObject(&keyobj_buf, key);
+                    robj *fieldobj = initStaticStringObject(&fieldobj_buf, field);
                     robj *argv[3];
                     argv[0] = shared.hdel;
-                    argv[1] = &keyobj;
-                    argv[2] = &fieldobj;
+                    argv[1] = keyobj;
+                    argv[2] = fieldobj;
                     replicationFeedReplicas(dbid, argv, 3);
                 }
                 sdsfree(field);
@@ -2928,9 +2928,9 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
             return NULL;
         }
         ValkeyModuleIO io;
-        robj keyobj;
-        initStaticStringObject(keyobj, key);
-        moduleInitIOContext(&io, mt, rdb, &keyobj, dbid);
+        robjStatic keyobj_buf;
+        robj *keyobj = initStaticStringObject(&keyobj_buf, key);
+        moduleInitIOContext(&io, mt, rdb, keyobj, dbid);
         /* Call the rdb_load method of the module providing the 10 bit
          * encoding version in the lower 10 bits of the module ID. */
         void *ptr = mt->rdb_load(&io, moduleid & 1023);
@@ -3520,19 +3520,19 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
                  * and now this path only works when rebooting,
                  * so we don't have replicas yet. */
                 serverAssert(server.repl_backlog != NULL && listLength(server.replicas) == 0);
-                robj keyobj;
-                initStaticStringObject(keyobj, key);
+                robjStatic keyobj_buf;
+                robj *keyobj = initStaticStringObject(&keyobj_buf, key);
                 robj *argv[2];
                 argv[0] = server.lazyfree_lazy_expire ? shared.unlink : shared.del;
-                argv[1] = &keyobj;
+                argv[1] = keyobj;
                 replicationFeedReplicas(dbid, argv, 2);
             }
             sdsfree(key);
             decrRefCount(val);
             server.rdb_last_load_keys_expired++;
         } else {
-            robj keyobj;
-            initStaticStringObject(keyobj, key);
+            robjStatic keyobj_buf;
+            robj *keyobj = initStaticStringObject(&keyobj_buf, key);
 
             /* Add the new object in the hash table */
             int added = dbAddRDBLoad(db, key, &val);
@@ -3542,7 +3542,7 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
                     /* This flag is useful for DEBUG RELOAD special modes.
                      * When it's set we allow new keys to replace the current
                      * keys with the same name. */
-                    dbSyncDelete(db, &keyobj);
+                    dbSyncDelete(db, keyobj);
                     added = dbAddRDBLoad(db, key, &val);
                     serverAssert(added);
                 } else {
@@ -3557,14 +3557,14 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
 
             /* Set the expire time if needed */
             if (expiretime != -1) {
-                val = setExpire(NULL, db, &keyobj, expiretime);
+                val = setExpire(NULL, db, keyobj, expiretime);
             }
 
             /* Set usage information (for eviction). */
             objectSetLRUOrLFU(val, lfu_freq, lru_idle);
 
             /* call key space notification on key loaded for modules only */
-            moduleNotifyKeyspaceEvent(NOTIFY_LOADED, "loaded", &keyobj, db->id);
+            moduleNotifyKeyspaceEvent(NOTIFY_LOADED, "loaded", keyobj, db->id);
 
             /* Release key (sds), dictEntry stores a copy of it in embedded data */
             sdsfree(key);

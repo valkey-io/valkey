@@ -776,74 +776,28 @@ typedef struct ValkeyModuleType moduleType;
 #define OBJ_STATIC_REFCOUNT ((1 << OBJ_REFCOUNT_BITS) - 2) /* Object allocated in the stack. */
 #define OBJ_FIRST_SPECIAL_REFCOUNT OBJ_STATIC_REFCOUNT
 
-/* The serverObject struct is variable in size. It has several static fields that are always present,
- * followed by several optional variable-sized fields. The static fields are `type` through `refcount`
- * in the struct-defined order:
- *
- *    +------+----------+-----+-----------+-----------+-----------+----------+----
- *    | type | encoding | lru | hasexpire | hasembkey | hasembval | refcount | ...
- *    +------+----------+-----+-----------+-----------+-----------+----------+----
- *
- * The optional variable-sized embedded data has 2 possible layouts. If value is embedded (hasembval == 1)
- *  the `val_ptr` pointer is not used - instead the val data is embedded:
- *
- *    +------+----------+-----+------------+----------+--------+-----------------+---------+------------+
- *    | type | encoding | lru | has* flags | refcount | expire | key_header_size | key sds | value data |
- *    +------+----------+-----+------------+----------+--------+-----------------+---------+------------+
- *                                                      ^        ^                 ^         ^
- *                                                      |        |                 |         |
- *                                                      |        |                 |         +--- present because hasembval == 1
- *                                                      |        |                 |
- *                                                      |        +-----------------+--- present if hasembkey == 1
- *                                                      |
- *                                                      +--- present if hasexpire == 1
- *
- * Otherwise value is not embedded and we use the `val_ptr` pointer:
- *
- *    +------+----------+-----+------------+----------+---------+--------+-----------------+---------+
- *    | type | encoding | lru | has* flags | refcount | val_ptr | expire | key_header_size | key sds |
- *    +------+----------+-----+------------+----------+---------+--------+-----------------+---------+
- *                                                      ^         ^        ^                 ^
- *                                                      |         |        |                 |
- *                                                      |         |        +-----------------+--- present if hasembkey == 1
- *                                                      |         |
- *                                                      |         +--- present if hasexpire == 1
- *                                                      |
- *                                                      +--- present because hasembval == 0
- */
+/* The serverObject struct definition is in object_internals.h.
+ * Only files that need direct field access should include it.
+ * All other code should use the accessor functions below. */
 
-struct serverObject {
-    unsigned type : 4;
-    unsigned encoding : 4;
-    unsigned lru : LRULFU_BITS;
-    unsigned hasexpire : 1;
-    unsigned hasembkey : 1;
-    unsigned hasembval : 1;
-    unsigned refcount : OBJ_REFCOUNT_BITS;
-    void *val_ptr; /* Not always present. Use objectGetVal(obj) and
-                    * objectSetVal(obj, val) instead. */
-};
-static_assert(sizeof(struct serverObject) <= 8 + sizeof(void *), "unexpected size - verify struct is packed correctly");
+/* Opaque stack-allocatable robj. Use initStaticStringObject() to initialize.
+ * 8 bytes bitfields + sizeof(void*) for val_ptr. */
+#define ROBJ_STATIC_SIZE (8 + sizeof(void *))
+typedef union {
+    void *_align; /* ensure pointer alignment */
+    char _opaque[ROBJ_STATIC_SIZE];
+} robjStatic;
 
 /* The string name for an object's type as listed above
  * Native types are checked against the OBJ_STRING, OBJ_LIST, OBJ_* defines,
  * and Module types have their registered name returned. */
 char *getObjectTypeName(robj *);
 
-/* Macro used to initialize an Object allocated on the stack.
- * Note that this macro is taken near the structure definition to make sure
- * we'll update it when the structure is changed, to avoid bugs like
- * bug #85 introduced exactly in this way. */
-#define initStaticStringObject(_var, _ptr)   \
-    do {                                     \
-        _var.refcount = OBJ_STATIC_REFCOUNT; \
-        _var.type = OBJ_STRING;              \
-        _var.encoding = OBJ_ENCODING_RAW;    \
-        _var.hasexpire = 0;                  \
-        _var.hasembkey = 0;                  \
-        _var.hasembval = 0;                  \
-        _var.val_ptr = _ptr;                 \
-    } while (0)
+/* Initialize a stack-allocated robjStatic as a static raw string and return
+ * a pointer usable as robj*. The cast through robjStatic is aliasing-safe
+ * because initStaticStringObject writes the memory through the correct type
+ * internally (struct serverObject* in object.c). */
+robj *initStaticStringObject(robjStatic *buf, void *ptr);
 
 struct evictionPoolEntry; /* Defined in evict.c */
 
@@ -3205,6 +3159,8 @@ void objectSetEncoding(robj *o, int encoding);
 unsigned int objectGetRefcount(const robj *o);
 unsigned int objectGetLRU(const robj *o);
 void objectSetLRU(robj *o, unsigned int lru);
+size_t objectGetStructSize(void);
+int objectHasEmbeddedKey(const robj *o);
 
 /* Synchronous I/O with timeout */
 ssize_t syncWrite(int fd, char *ptr, ssize_t size, long long timeout);

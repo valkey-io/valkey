@@ -1060,7 +1060,7 @@ void ValkeyModuleCommandDispatcher(client *c) {
     for (int i = 0; i < c->argc; i++) {
         /* Only do the work if the module took ownership of the object:
          * in that case the refcount is no longer 1. */
-        if (c->argv[i]->refcount > 1) trimStringObjectIfNeeded(c->argv[i], 0);
+        if (objectGetRefcount(c->argv[i]) > 1) trimStringObjectIfNeeded(c->argv[i], 0);
     }
 }
 
@@ -2968,7 +2968,7 @@ void VM_RetainString(ValkeyModuleCtx *ctx, ValkeyModuleString *str) {
  * This API is not thread safe, access to these retained strings (if they originated
  * from a client command arguments) must be done with GIL locked. */
 ValkeyModuleString *VM_HoldString(ValkeyModuleCtx *ctx, ValkeyModuleString *str) {
-    if (str->refcount == OBJ_STATIC_REFCOUNT) {
+    if (objectGetRefcount(str) == OBJ_STATIC_REFCOUNT) {
         return VM_CreateStringFromString(ctx, str);
     }
 
@@ -3081,20 +3081,20 @@ int VM_StringCompare(const ValkeyModuleString *a, const ValkeyModuleString *b) {
 /* Return the (possibly modified in encoding) input 'str' object if
  * the string is unshared, otherwise NULL is returned. */
 static ValkeyModuleString *moduleAssertUnsharedString(ValkeyModuleString *str) {
-    if (str->refcount != 1) {
+    if (objectGetRefcount(str) != 1) {
         serverLog(LL_WARNING, "Module attempted to use an in-place string modify operation "
                               "with a string referenced multiple times. Please check the code "
                               "for API usage correctness.");
         return NULL;
     }
-    if (str->encoding == OBJ_ENCODING_EMBSTR) {
+    if (objectGetEncoding(str) == OBJ_ENCODING_EMBSTR) {
         /* Note: here we "leak" the additional allocation that was
          * used in order to store the embedded string in the object. */
         objectUnembedVal(str);
-    } else if (str->encoding == OBJ_ENCODING_INT) {
+    } else if (objectGetEncoding(str) == OBJ_ENCODING_INT) {
         /* Convert the string from integer to raw encoding. */
         objectSetVal(str, sdsfromlonglong((long)objectGetVal(str)));
-        str->encoding = OBJ_ENCODING_RAW;
+        objectSetEncoding(str, OBJ_ENCODING_RAW);
     }
     return str;
 }
@@ -6376,7 +6376,7 @@ robj **moduleCreateArgvFromUserFormat(const char *cmdname, const char *fmt, int 
             argv[argc++] = createStringObject(cstr, strlen(cstr));
         } else if (*p == 's') {
             robj *obj = va_arg(ap, void *);
-            if (obj->refcount == OBJ_STATIC_REFCOUNT)
+            if (objectGetRefcount(obj) == OBJ_STATIC_REFCOUNT)
                 obj = createStringObject(objectGetVal(obj), sdslen(objectGetVal(obj)));
             else
                 incrRefCount(obj);
@@ -11733,7 +11733,7 @@ void moduleFireCommandResultEvent(client *c,
     int needs_decode = 0;
 
     for (int i = 0; i < argc; i++) {
-        if (argv[i]->encoding == OBJ_ENCODING_INT) {
+        if (objectGetEncoding(argv[i]) == OBJ_ENCODING_INT) {
             needs_decode = 1;
             break;
         }
@@ -11809,7 +11809,7 @@ void moduleFireCommandACLRejectedEvent(client *c, uint64_t subevent, int errpos)
     if ((subevent == VALKEYMODULE_ACL_LOG_KEY || subevent == VALKEYMODULE_ACL_LOG_CHANNEL) &&
         errpos >= 0 && errpos < c->argc) {
         robj *key_obj = c->argv[errpos];
-        if (key_obj->encoding == OBJ_ENCODING_INT) {
+        if (objectGetEncoding(key_obj) == OBJ_ENCODING_INT) {
             ll2string(int_key_buf, sizeof(int_key_buf), (long)objectGetVal(key_obj));
             rejection_context = int_key_buf;
         } else {
@@ -11854,8 +11854,8 @@ size_t VM_MallocUsableSize(void *ptr) {
 /* Same as VM_MallocSize, except it works on ValkeyModuleString pointers.
  */
 size_t VM_MallocSizeString(ValkeyModuleString *str) {
-    serverAssert(str->type == OBJ_STRING);
-    return sizeof(*str) + getStringObjectSdsUsedMemory(str);
+    serverAssert(objectGetType(str) == OBJ_STRING);
+    return objectGetStructSize() + getStringObjectSdsUsedMemory(str);
 }
 
 /* Same as VM_MallocSize, except it works on ValkeyModuleDict pointers.
@@ -12954,7 +12954,7 @@ void moduleNotifyKeyUnlink(robj *key, robj *val, int dbid, int flags) {
     KeyInfo info = {dbid, key, val, VALKEYMODULE_READ};
     moduleFireServerEvent(VALKEYMODULE_EVENT_KEY, subevent, &info);
 
-    if (val->type == OBJ_MODULE) {
+    if (objectGetType(val) == OBJ_MODULE) {
         moduleValue *mv = objectGetVal(val);
         moduleType *mt = mv->type;
         /* We prefer to use the enhanced version. */

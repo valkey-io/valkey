@@ -297,7 +297,7 @@ void sortCommandGeneric(client *c, int readonly) {
 
     /* Lookup the key to sort. It must be of the right types */
     sortval = lookupKeyRead(c->db, c->argv[1]);
-    if (sortval && sortval->type != OBJ_SET && sortval->type != OBJ_LIST && sortval->type != OBJ_ZSET) {
+    if (sortval && objectGetType(sortval) != OBJ_SET && objectGetType(sortval) != OBJ_LIST && objectGetType(sortval) != OBJ_ZSET) {
         listRelease(operations);
         addReplyErrorObject(c, shared.wrongtypeerr);
         return;
@@ -317,7 +317,7 @@ void sortCommandGeneric(client *c, int readonly) {
      * The other types (list, sorted set) will retain their native order
      * even if no sort order is requested, so they remain stable across
      * scripting and replication. */
-    if (dontsort && sortval->type == OBJ_SET && (storekey || c->flag.script)) {
+    if (dontsort && objectGetType(sortval) == OBJ_SET && (storekey || c->flag.script)) {
         /* Force ALPHA sorting */
         dontsort = 0;
         alpha = 1;
@@ -325,10 +325,10 @@ void sortCommandGeneric(client *c, int readonly) {
     }
 
     /* Destructively convert encoded sorted sets for SORT. */
-    if (sortval->type == OBJ_ZSET) zsetConvert(sortval, OBJ_ENCODING_SKIPLIST);
+    if (objectGetType(sortval) == OBJ_ZSET) zsetConvert(sortval, OBJ_ENCODING_SKIPLIST);
 
     /* Obtain the length of the object to sort. */
-    switch (sortval->type) {
+    switch (objectGetType(sortval)) {
     case OBJ_LIST: vectorlen = listTypeLength(sortval); break;
     case OBJ_SET: vectorlen = setTypeSize(sortval); break;
     case OBJ_ZSET: vectorlen = hashtableSize(((zset *)objectGetVal(sortval))->ht); break;
@@ -356,7 +356,7 @@ void sortCommandGeneric(client *c, int readonly) {
      * the number of elements to fetch, we also optimize to just load the
      * range we are interested in and allocating a vector that is big enough
      * for the selected range length. */
-    if ((sortval->type == OBJ_ZSET || sortval->type == OBJ_LIST) && dontsort && (start != 0 || end != vectorlen - 1)) {
+    if ((objectGetType(sortval) == OBJ_ZSET || objectGetType(sortval) == OBJ_LIST) && dontsort && (start != 0 || end != vectorlen - 1)) {
         vectorlen = end - start + 1;
     }
 
@@ -364,7 +364,7 @@ void sortCommandGeneric(client *c, int readonly) {
     vector = zmalloc(sizeof(serverSortObject) * vectorlen);
     j = 0;
 
-    if (sortval->type == OBJ_LIST && dontsort) {
+    if (objectGetType(sortval) == OBJ_LIST && dontsort) {
         /* Special handling for a list, if 'dontsort' is true.
          * This makes sure we return elements in the list original
          * ordering, accordingly to DESC / ASC options.
@@ -388,7 +388,7 @@ void sortCommandGeneric(client *c, int readonly) {
             end -= start;
             start = 0;
         }
-    } else if (sortval->type == OBJ_LIST) {
+    } else if (objectGetType(sortval) == OBJ_LIST) {
         listTypeIterator *li = listTypeInitIterator(sortval, 0, LIST_TAIL);
         listTypeEntry entry;
         while (listTypeNext(li, &entry)) {
@@ -398,7 +398,7 @@ void sortCommandGeneric(client *c, int readonly) {
             j++;
         }
         listTypeReleaseIterator(li);
-    } else if (sortval->type == OBJ_SET) {
+    } else if (objectGetType(sortval) == OBJ_SET) {
         setTypeIterator *si = setTypeInitIterator(sortval);
         sds sdsele;
         while ((sdsele = setTypeNextObject(si)) != NULL) {
@@ -408,7 +408,7 @@ void sortCommandGeneric(client *c, int readonly) {
             j++;
         }
         setTypeReleaseIterator(si);
-    } else if (sortval->type == OBJ_ZSET && dontsort) {
+    } else if (objectGetType(sortval) == OBJ_ZSET && dontsort) {
         /* Special handling for a sorted set, if 'dontsort' is true.
          * This makes sure we return elements in the sorted set original
          * ordering, accordingly to DESC / ASC options.
@@ -446,7 +446,7 @@ void sortCommandGeneric(client *c, int readonly) {
         /* Fix start/end: output code is not aware of this optimization. */
         end -= start;
         start = 0;
-    } else if (sortval->type == OBJ_ZSET) {
+    } else if (objectGetType(sortval) == OBJ_ZSET) {
         hashtable *ht = ((zset *)objectGetVal(sortval))->ht;
         hashtableIterator iter;
         hashtableInitIterator(&iter, ht, 0);
@@ -488,7 +488,7 @@ void sortCommandGeneric(client *c, int readonly) {
                     if (eptr[0] != '\0' || errno == ERANGE || errno == EINVAL || isnan(vector[j].u.score)) {
                         int_conversion_error = 1;
                     }
-                } else if (byval->encoding == OBJ_ENCODING_INT) {
+                } else if (objectGetEncoding(byval) == OBJ_ENCODING_INT) {
                     /* Don't need to decode the object if it's
                      * integer-encoded (the only encoding supported) so
                      * far. We can just cast it */

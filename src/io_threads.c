@@ -6,6 +6,7 @@
 
 #include "io_threads.h"
 #include "cluster_migrateslots.h"
+#include "object_internals.h"
 #include "queues.h"
 #include <sys/resource.h>
 
@@ -618,7 +619,7 @@ void ioThreadFreeArgv(robj **argv) {
         /* The main-thread set the refcount to 0 to indicate that this is the last argument to free */
         if (objectGetRefcount(o) == 0) {
             last_arg = 1;
-            o->refcount = 1;
+            objectSetRefcount(o, 1);
         }
 
         decrRefCount(o);
@@ -652,7 +653,7 @@ int tryOffloadFreeArgvToIOThreads(client *c, int argc, robj **argv) {
 
     /* Prepare the argv */
     for (int j = 0; j < argc; j++) {
-        if (argv[j]->refcount > 1) {
+        if (objectGetRefcount(argv[j]) > 1) {
             decrRefCount(argv[j]);
             /* Set argv[j] to NULL to avoid double free */
             argv[j] = NULL;
@@ -670,7 +671,7 @@ int tryOffloadFreeArgvToIOThreads(client *c, int argc, robj **argv) {
     /* We set the refcount of the last arg to free to 0 to indicate that
      * this is the last argument to free. With this approach, we don't need to
      * send the argc to the IO thread and we can send just the argv ptr. */
-    argv[last_arg_to_free]->refcount = 0;
+    objectSetRefcount(argv[last_arg_to_free], 0);
     void *job = tagJob(argv, JOB_REQ_FREE_ARGV);
     /* We pass false to enqueue the job without committing the queue index immediately.
      * This allows us to batch multiple free jobs together and
@@ -691,9 +692,9 @@ int tryOffloadFreeObjToIOThreads(robj *obj) {
         return C_ERR;
     }
 
-    if (obj->refcount > 1) return C_ERR;
+    if (objectGetRefcount(obj) > 1) return C_ERR;
 
-    if (obj->encoding != OBJ_ENCODING_RAW || obj->type != OBJ_STRING) return C_ERR;
+    if (objectGetEncoding(obj) != OBJ_ENCODING_RAW || objectGetType(obj) != OBJ_STRING) return C_ERR;
 
     void *job = tagJob(obj, JOB_REQ_FREE_OBJ);
     if (unlikely(spmcEnqueue(&io_shared_inbox, job) == false)) return C_ERR;

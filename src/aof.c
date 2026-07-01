@@ -1903,7 +1903,7 @@ cleanup:
 int rioWriteBulkObject(rio *r, robj *obj) {
     /* Avoid using getDecodedObject to help copy-on-write (we are often
      * in a child process when this function is called). */
-    if (obj->encoding == OBJ_ENCODING_INT) {
+    if (objectGetEncoding(obj) == OBJ_ENCODING_INT) {
         return rioWriteBulkLongLong(r, (long)objectGetVal(obj));
     } else if (sdsEncodedObject(obj)) {
         return rioWriteBulkString(r, objectGetVal(obj), sdslen(objectGetVal(obj)));
@@ -2356,11 +2356,11 @@ int rewriteSelectDbRio(rio *aof, int db_num) {
 int rewriteObjectRio(rio *aof, robj *o, int db_num) {
     size_t aof_bytes_before_key = aof->processed_bytes;
     sds keystr;
-    robj key;
+    robjStatic key_buf;
     long long expiretime;
 
     keystr = objectGetKey(o);
-    initStaticStringObject(key, keystr);
+    robj *key = initStaticStringObject(&key_buf, keystr);
 
     expiretime = objectGetExpire(o);
 
@@ -2370,20 +2370,20 @@ int rewriteObjectRio(rio *aof, robj *o, int db_num) {
         char cmd[] = "*3\r\n$3\r\nSET\r\n";
         if (rioWrite(aof, cmd, sizeof(cmd) - 1) == 0) return C_ERR;
         /* Key and value */
-        if (rioWriteBulkObject(aof, &key) == 0) return C_ERR;
+        if (rioWriteBulkObject(aof, key) == 0) return C_ERR;
         if (rioWriteBulkObject(aof, o) == 0) return C_ERR;
     } else if (objectGetType(o) == OBJ_LIST) {
-        if (rewriteListObject(aof, &key, o) == 0) return C_ERR;
+        if (rewriteListObject(aof, key, o) == 0) return C_ERR;
     } else if (objectGetType(o) == OBJ_SET) {
-        if (rewriteSetObject(aof, &key, o) == 0) return C_ERR;
+        if (rewriteSetObject(aof, key, o) == 0) return C_ERR;
     } else if (objectGetType(o) == OBJ_ZSET) {
-        if (rewriteSortedSetObject(aof, &key, o) == 0) return C_ERR;
+        if (rewriteSortedSetObject(aof, key, o) == 0) return C_ERR;
     } else if (objectGetType(o) == OBJ_HASH) {
-        if (rewriteHashObject(aof, &key, o) == 0) return C_ERR;
+        if (rewriteHashObject(aof, key, o) == 0) return C_ERR;
     } else if (objectGetType(o) == OBJ_STREAM) {
-        if (rewriteStreamObject(aof, &key, o) == 0) return C_ERR;
+        if (rewriteStreamObject(aof, key, o) == 0) return C_ERR;
     } else if (objectGetType(o) == OBJ_MODULE) {
-        if (rewriteModuleObject(aof, &key, o, db_num) == 0) return C_ERR;
+        if (rewriteModuleObject(aof, key, o, db_num) == 0) return C_ERR;
     } else {
         serverPanic("Unknown object type");
     }
@@ -2398,7 +2398,7 @@ int rewriteObjectRio(rio *aof, robj *o, int db_num) {
     if (expiretime != -1) {
         char cmd[] = "*3\r\n$9\r\nPEXPIREAT\r\n";
         if (rioWrite(aof, cmd, sizeof(cmd) - 1) == 0) return C_ERR;
-        if (rioWriteBulkObject(aof, &key) == 0) return C_ERR;
+        if (rioWriteBulkObject(aof, key) == 0) return C_ERR;
         if (rioWriteBulkLongLong(aof, expiretime) == 0) return C_ERR;
     }
 

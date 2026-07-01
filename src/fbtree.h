@@ -37,7 +37,7 @@ double fbtreeLoadFactor(fbtreeIndex *fbt);
  * when the sweep is complete. Only ever reduces leaf count (never splits) and
  * is idempotent. Only sds pointers move -- items are not reallocated, so
  * companion-hashtable references stay valid. */
-unsigned long fbtreeCompactStep(fbtreeIndex *fbt, unsigned long cursor, unsigned int target, unsigned long budget);
+unsigned long fbtreeCompactStep(fbtreeIndex *fbt, unsigned long cursor, unsigned int limit, unsigned long budget);
 /* Maximum items a leaf can hold (the fanout). Lets callers express a compaction
  * target as a fill fraction of leaf capacity. */
 unsigned int fbtreeLeafCapacity(void);

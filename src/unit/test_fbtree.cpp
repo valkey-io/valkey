@@ -5513,17 +5513,54 @@ TEST_F(FbtreeTest, CompactAlreadyPackedNoop) {
     EXPECT_LE(fbtreeNumLeaves(fbt), leaves_before);
 }
 
+/* Compaction lands at (just under) the requested limit fill, never above it,
+ * and is monotonic in the limit -- while conserving items and staying valid.
+ * This pins the "desired load factor" contract, not just "load factor rose". */
+TEST_F(FbtreeTest, CompactLandsNearLimit) {
+    const double cap = (double)NODE_SIZE;
+    buildSparseTree(fbt, (size_t)TEST_TWO_LEVEL_ITEMS + 500);
+    std::vector<std::string> before = collectForward();
+    ASSERT_LT(fbtreeLoadFactor(fbt), 0.6); /* starts sparse */
+
+    /* Increasing limits on the same tree: compaction only ever reduces leaf
+     * count, so each pass packs at least as tightly as the last. */
+    const unsigned int limits[] = {(unsigned int)(cap * 0.60), (unsigned int)(cap * 0.75),
+                                    (unsigned int)(cap * 0.90)};
+    double prev_lf = 0.0;
+    for (unsigned int limit : limits) {
+        unsigned long cursor = 0;
+        int guard = 0;
+        do {
+            cursor = fbtreeCompactStep(fbt, cursor, limit, 1000000UL);
+            ASSERT_LT(guard++, 1000000) << "compaction did not terminate";
+        } while (cursor != 0);
+
+        expectValid();
+        EXPECT_EQ(collectForward(), before); /* items + order conserved every pass */
+
+        double expected = (double)limit / cap;
+        double lf = fbtreeLoadFactor(fbt);
+        /* Never packs beyond the requested fill (leaves have headroom), and lands
+         * within one partial boundary-leaf-per-bottom-node of it below. */
+        EXPECT_LE(lf, expected + 0.02) << "limit=" << limit << " lf=" << lf;
+        EXPECT_GE(lf, expected - 0.15) << "limit=" << limit << " lf=" << lf;
+        /* Monotonic: a higher limit yields at least as high a load factor. */
+        EXPECT_GE(lf, prev_lf - 1e-9) << "limit=" << limit << " lf=" << lf;
+        prev_lf = lf;
+    }
+}
+
 /* ========== Load-Factor Benchmark (DISABLED: run on demand) ==========
  * Reproduces a 50/50 add/delete steady state (no-merge baseline), then sweeps
- * the compaction target to report the achievable load factor + leaf reduction.
+ * the compaction limit to report the achievable load factor + leaf reduction.
  * Run with: --gtest_also_run_disabled_tests --gtest_filter=*CompactionLoadFactorSweep
  */
 TEST_F(FbtreeTest, DISABLED_CompactionLoadFactorSweep) {
     const int LIVE = 8000;
     const int CHURN = 40000; /* enough to reach no-merge steady state */
-    const int targets_pct[] = {70, 80, 90};
+    const int limits_pct[] = {70, 80, 90};
 
-    for (size_t ti = 0; ti < sizeof(targets_pct) / sizeof(targets_pct[0]); ti++) {
+    for (size_t ti = 0; ti < sizeof(limits_pct) / sizeof(limits_pct[0]); ti++) {
         fbtreeEmpty(fbt);
 
         /* Seed LIVE distinct keys, tracking the stored item pointers. */
@@ -5537,7 +5574,7 @@ TEST_F(FbtreeTest, DISABLED_CompactionLoadFactorSweep) {
         }
 
         /* 50/50 churn: delete a pseudo-random live key, insert a fresh one. */
-        unsigned long rng = 0x9e3779b97f4a7c15ULL;
+        unsigned long long rng = 0x9e3779b97f4a7c15ULL;
         for (int i = 0; i < CHURN; i++) {
             rng = rng * 6364136223846793005ULL + 1442695040888963407ULL;
             int idx = (int)((rng >> 33) % (unsigned)LIVE);
@@ -5551,18 +5588,18 @@ TEST_F(FbtreeTest, DISABLED_CompactionLoadFactorSweep) {
         unsigned long leaves_before = fbtreeNumLeaves(fbt);
         unsigned long len_before = fbtreeLength(fbt);
 
-        unsigned int target_items = (unsigned int)(targets_pct[ti] / 100.0 * NODE_SIZE);
+        unsigned int limit_items = (unsigned int)(limits_pct[ti] / 100.0 * NODE_SIZE);
         unsigned long cursor = 0;
         do {
-            cursor = fbtreeCompactStep(fbt, cursor, target_items, 1000000UL);
+            cursor = fbtreeCompactStep(fbt, cursor, limit_items, 1000000UL);
         } while (cursor != 0);
 
         double after_lf = fbtreeLoadFactor(fbt);
         unsigned long leaves_after = fbtreeNumLeaves(fbt);
 
         fprintf(stderr,
-                "[sweep] target=%d%% (%u/leaf)  items=%lu  leaves %lu->%lu  LF %.3f -> %.3f\n",
-                targets_pct[ti], target_items, len_before, leaves_before, leaves_after, baseline_lf,
+                "[sweep] limit=%d%% (%u/leaf)  items=%lu  leaves %lu->%lu  LF %.3f -> %.3f\n",
+                limits_pct[ti], limit_items, len_before, leaves_before, leaves_after, baseline_lf,
                 after_lf);
 
         EXPECT_EQ(fbtreeLength(fbt), len_before); /* count conserved */

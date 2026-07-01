@@ -196,7 +196,13 @@ start_server {tags {"repl external:skip"}} {
         }
         
         test {Replica output bytes metric} {
-            # reset stats 
+            # Disable periodic replication pings and drain any already-queued
+            # replication stream, so no ping (the 14-byte RESP *1\r\n$4\r\nping\r\n
+            # frame) can land between resetstat and the info read below and make
+            # total_net_repl_output_bytes non-zero (see #3930).
+            $A config set repl-ping-replica-period 3600
+            wait_for_ofs_sync $A $B
+
             $A config resetstat
             
             set info [$A info stats]

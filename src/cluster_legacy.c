@@ -1789,7 +1789,7 @@ clusterLink *createClusterLink(clusterNode *node) {
         node->link = link;
     }
     link->flags = 0;
-    link->ping_echo_time = mstime(); 
+    link->ping_echo_time = 0; 
     return link;
 }
 
@@ -3595,11 +3595,11 @@ void clusterProcessPingExtensions(clusterMsg *hdr, clusterLink *link) {
             uint64_t ping_echo_time = ntohu64(ping_echo_time_ext->ping_echo_time);
             uint16_t message_type = ntohs(hdr->type);
             if(message_type == CLUSTERMSG_TYPE_PING || message_type == CLUSTERMSG_TYPE_MEET) {
-                link->ping_echo_time = ping_echo_time;  //set as it is when its ping type, coming to receiver               
+                // link->ping_echo_time = ping_echo_time;  //set as it is when its ping type, coming to receiver               
             }
             else if(message_type == CLUSTERMSG_TYPE_PONG) { //got message back
                 round_trip_time = mstime() - ping_echo_time;
-                link->ping_echo_time = 0;
+                // link->ping_echo_time = 0;
                 updateCommandLatencyStats(sender, round_trip_time); //rtt updated for sender node when it receives back pong
             }
         }

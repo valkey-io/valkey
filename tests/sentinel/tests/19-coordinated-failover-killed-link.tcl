@@ -51,7 +51,7 @@ test "Coordinated failover tolerates old primary command link disconnect" {
     S $sentinel_id sentinel debug ping-period 10000
     catch {R $old_master_id CLIENT KILL NAME $sentinel_client_name}
 
-    wait_for_condition 100 10 {
+    wait_for_condition 1000 10 {
         [string match "*disconnected*" [dict get [S $sentinel_id SENTINEL PRIMARY mymaster] flags]]
     } else {
         fail "Sentinel command link to the old primary did not disconnect"

@@ -64,6 +64,11 @@ struct fbtreeIndex {
     leafNode *leftmost_leaf;  /* Cache for fast-path prepend */
     leafNode *rightmost_leaf; /* Cache for fast-path append */
     size_t num_leaves;        /* Cached count of leaf nodes, for load-factor tracking */
+    /* Compaction watermark: the (length, num_leaves) at which the last full
+     * compaction sweep freed nothing. Zero when unset. See
+     * fbtreeCompactSweepDone / fbtreeCompactWorthwhile. */
+    size_t compact_wm_length;
+    size_t compact_wm_leaves;
 };
 
 /* Architecture-specific size assertions */

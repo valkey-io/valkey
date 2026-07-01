@@ -52,6 +52,8 @@
 
 #include "server.h"
 #include "ordered_index.h"
+#include "fifo.h"
+#include "bgiteration.h"
 #include "intset.h" /* Compact integer set structure */
 #include "mt19937-64.h"
 #include <math.h>
@@ -1363,6 +1365,182 @@ void zincrbyCommand(client *c) {
     zaddGenericCommand(c, ZADD_IN_INCR);
 }
 
+/* ===== Background load-factor compaction ===== */
+
+/* A pending compaction candidate, identified by (db, key name). The queue holds
+ * key NAMES, never object pointers: the key is looked up afresh at drain time,
+ * so a candidate that was deleted, renamed, moved, or re-encoded before it
+ * drains is simply dropped. De-duplication uses the same (db, key) identity, in
+ * a companion set, rather than a flag on the value: a relocated key (RENAME,
+ * MOVE, SWAPDB) leaves at most one stale entry behind and stays eligible under
+ * its new name, and the zset struct carries no extra state. */
+typedef struct zsetCompactCandidate {
+    int dbid;
+    sds key; /* owned copy of the key name */
+} zsetCompactCandidate;
+
+static uint64_t zsetCompactCandidateHash(const void *entry) {
+    const zsetCompactCandidate *cand = entry;
+    return dictSdsHash(cand->key) ^ ((uint64_t)cand->dbid * 0x9E3779B97F4A7C15ULL);
+}
+
+/* hashtableType.keyCompare returns nonzero when the keys are equal. */
+static int zsetCompactCandidateCompare(const void *a, const void *b) {
+    const zsetCompactCandidate *ca = a, *cb = b;
+    if (ca->dbid != cb->dbid) return 0;
+    return dictSdsKeyCompare(ca->key, cb->key);
+}
+
+static void zsetCompactCandidateFree(void *entry) {
+    zsetCompactCandidate *cand = entry;
+    sdsfree(cand->key);
+    zfree(cand);
+}
+
+static hashtableType zsetCompactCandidateSetType = {
+    .hashFunction = zsetCompactCandidateHash,
+    .keyCompare = zsetCompactCandidateCompare,
+    .entryDestructor = zsetCompactCandidateFree,
+};
+
+/* Background compaction state. `pending` owns the candidates and is the
+ * de-dup set; `queue` orders the same candidates FIFO. A candidate stays in
+ * `pending` while it is `current`, so a key is not re-enqueued mid-sweep. */
+static struct {
+    hashtable *pending;            /* set of queued candidates, keyed by (db, key) */
+    fifo *queue;                   /* the same candidates, in enqueue order */
+    zsetCompactCandidate *current; /* candidate being compacted across ticks, or NULL */
+    unsigned long cursor;          /* resume cursor into current's index */
+    unsigned long leaves_freed;    /* leaves freed so far by current's sweep */
+} zsetCompaction;
+
+/* Upper bound on stale candidates (key gone or no longer B+tree-encoded)
+ * dropped per cron tick, so a mass delete cannot turn one tick into a long
+ * stall of keyspace lookups. Each drop costs one lookup. */
+#define ZSET_COMPACTION_MAX_STALE_PER_TICK 128
+
+/* A B+tree set is worth enqueuing when it holds at least min-length items and
+ * its load factor has fallen below the configured trigger fraction.
+ *
+ * Guard against a churning misconfiguration: if the target fill is not strictly
+ * above the trigger, a set compacted to ~limit would still sit at/under the
+ * trigger and be re-enqueued on the next delete. Rather than cross-validate two
+ * independent config knobs, we simply treat limit <= trigger as "off". */
+static int zsetShouldQueueCompaction(zset *zs) {
+    if (server.zset_compaction_limit_pct <= server.zset_compaction_trigger_pct) return 0;
+    if (orderedIndexLength(zs->oi) < (unsigned long)server.zset_compaction_min_length) return 0;
+    if (orderedIndexLoadFactor(zs->oi) >= server.zset_compaction_trigger_pct / 100.0) return 0;
+    /* Below the trigger, but skip a tree that a previous sweep could not
+     * improve and that has not changed enough since (see the watermark notes
+     * in fbtree.c): re-sweeping it would walk the whole index for nothing. */
+    return orderedIndexCompactWorthwhile(zs->oi);
+}
+
+/* After a delete shrinks a B+tree-encoded sorted set, enqueue it for background
+ * compaction if its load factor has dropped below the configured trigger. */
+void zsetMaybeQueueCompaction(serverDb *db, robj *key, robj *zobj) {
+    if (!server.zset_compaction_enabled) return;
+    if (zobj->encoding != OBJ_ENCODING_BTREE) return;
+    if (!zsetShouldQueueCompaction(objectGetVal(zobj))) return;
+
+    if (!zsetCompaction.queue) {
+        zsetCompaction.queue = fifoCreate();
+        zsetCompaction.pending = hashtableCreate(&zsetCompactCandidateSetType);
+    }
+    zsetCompactCandidate probe = {.dbid = db->id, .key = objectGetVal(key)};
+    if (hashtableFind(zsetCompaction.pending, &probe, NULL)) return; /* queued or in progress */
+
+    zsetCompactCandidate *cand = zmalloc(sizeof(*cand));
+    cand->dbid = db->id;
+    cand->key = sdsdup(probe.key);
+    int added = hashtableAdd(zsetCompaction.pending, cand);
+    serverAssert(added);
+    fifoPush(zsetCompaction.queue, cand);
+}
+
+/* Drop the current candidate: it either finished or turned out stale. */
+static void zsetCompactionFinishCurrent(void) {
+    hashtableDelete(zsetCompaction.pending, zsetCompaction.current); /* frees it */
+    zsetCompaction.current = NULL;
+    zsetCompaction.cursor = 0;
+}
+
+/* Drain one throttled compaction step from serverCron. Resumes an in-progress
+ * candidate, else pops the next live one, and runs orderedIndexCompactStep
+ * with a bounded budget. A refilled set self-heals: compaction never expands,
+ * so an already-packed tree finishes in one no-op step. */
+void zsetCompactionCron(void) {
+    if (!zsetCompaction.queue) return;
+
+    /* Compaction rewrites and frees tree nodes. While a fork child shares our
+     * pages that is pure copy-on-write cost, so wait it out, like the hashtable
+     * resize and active-defrag paths do. */
+    if (hasActiveChildProcess()) return;
+
+    /* Find a live candidate, dropping stale ones (bounded per tick). */
+    robj *zobj = NULL;
+    int dropped = 0;
+    while (1) {
+        if (zsetCompaction.current == NULL) {
+            void *item;
+            if (!fifoPop(zsetCompaction.queue, &item)) return; /* queue empty */
+            zsetCompaction.current = item;
+            zsetCompaction.cursor = 0;
+            zsetCompaction.leaves_freed = 0;
+        }
+        zsetCompactCandidate *cand = zsetCompaction.current;
+        robj *keyobj = createStringObject(cand->key, sdslen(cand->key));
+        /* Internal lookup: no keyspace stats, LRU touch, keymiss event, hot-key
+         * sample or lazy expire. An expired key reads as absent and is dropped. */
+        zobj = lookupKeyReadWithFlags(server.db[cand->dbid], keyobj, LOOKUP_NOEFFECTS);
+        decrRefCount(keyobj);
+        if (zobj && zobj->encoding == OBJ_ENCODING_BTREE) break;
+        zsetCompactionFinishCurrent();
+        if (++dropped >= ZSET_COMPACTION_MAX_STALE_PER_TICK) return;
+    }
+
+    /* A background iterator (forkless save / replication) may be reading this
+     * value from another thread. Writes to such keys are blocked at the command
+     * layer; this cron path must yield the same way. Leave the candidate as
+     * current and retry next tick. */
+    if (bgIteration_isEntryInuse(zobj)) return;
+
+    zset *zs = objectGetVal(zobj);
+    double limit = server.zset_compaction_limit_pct / 100.0;
+    unsigned long budget = (unsigned long)server.zset_compaction_cycle_elements;
+    /* One step runs to completion on this thread, so the leaf-count delta
+     * across it is exactly what the step freed. */
+    unsigned long leaves_before = orderedIndexNumLeaves(zs->oi);
+    unsigned long next = orderedIndexCompactStep(zs->oi, zsetCompaction.cursor, limit, budget);
+    zsetCompaction.leaves_freed += leaves_before - orderedIndexNumLeaves(zs->oi);
+    if (next != 0) {
+        zsetCompaction.cursor = next; /* more to do next tick */
+    } else {
+        /* Finished. Tell the index what the sweep achieved so a tree that
+         * cannot be improved is not re-enqueued on its next delete. */
+        orderedIndexCompactSweepDone(zs->oi, zsetCompaction.leaves_freed);
+        zsetCompactionFinishCurrent(); /* allow future re-enqueue */
+    }
+}
+
+/* Number of sorted sets queued for (or in the middle of) background compaction.
+ * Exposed via INFO so a growing queue is observable. */
+size_t zsetCompactionPendingCount(void) {
+    return zsetCompaction.pending ? hashtableSize(zsetCompaction.pending) : 0;
+}
+
+/* Release the compaction queue and any in-progress candidate. Called on
+ * shutdown so a leak sanitizer sees a clean teardown. */
+void zsetCompactionCleanup(void) {
+    if (!zsetCompaction.queue) return;
+    fifoRelease(zsetCompaction.queue);        /* candidates are owned by `pending` */
+    hashtableRelease(zsetCompaction.pending); /* entryDestructor frees each candidate */
+    zsetCompaction.queue = NULL;
+    zsetCompaction.pending = NULL;
+    zsetCompaction.current = NULL;
+    zsetCompaction.cursor = 0;
+}
+
 void zremCommand(client *c) {
     robj *key = c->argv[1];
     robj *zobj;
@@ -1386,6 +1564,7 @@ void zremCommand(client *c) {
         if (keyremoved) notifyKeyspaceEvent(NOTIFY_GENERIC, "del", key, c->db->id);
         signalModifiedKey(c, c->db, key);
         server.dirty += deleted;
+        if (!keyremoved) zsetMaybeQueueCompaction(c->db, key, zobj);
     }
     addReplyLongLong(c, deleted);
 }
@@ -1494,6 +1673,7 @@ void zremrangeGenericCommand(client *c, zrange_type rangetype) {
         notifyKeyspaceEvent(NOTIFY_ZSET, notify_type, key, c->db->id);
         if (keyremoved) notifyKeyspaceEvent(NOTIFY_GENERIC, "del", key, c->db->id);
         server.dirty += deleted;
+        if (!keyremoved) zsetMaybeQueueCompaction(c->db, key, zobj);
     }
     addReplyLongLong(c, deleted);
 
@@ -3466,12 +3646,15 @@ void genericZpopCommand(client *c,
         ++result_count;
     } while (--rangelen);
 
-    /* Remove the key, if indeed needed. */
+    /* Remove the key, if indeed needed; otherwise the surviving B+tree zset just
+     * shrank, so consider it for background load-factor compaction. */
     if (zsetLength(zobj) == 0) {
         if (deleted) *deleted = 1;
 
         dbDelete(c->db, key);
         notifyKeyspaceEvent(NOTIFY_GENERIC, "del", key, c->db->id);
+    } else {
+        zsetMaybeQueueCompaction(c->db, key, zobj);
     }
     signalModifiedKey(c, c->db, key);
 

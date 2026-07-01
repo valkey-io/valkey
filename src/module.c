@@ -5130,7 +5130,7 @@ int VM_ZsetRem(ValkeyModuleKey *key, ValkeyModuleString *ele, int *deleted) {
     if (key->value && objectGetType(key->value) != OBJ_ZSET) return VALKEYMODULE_ERR;
     if (key->value != NULL && zsetDel(key->value, objectGetVal(ele))) {
         if (deleted) *deleted = 1;
-        moduleDelKeyIfEmpty(key);
+        if (!moduleDelKeyIfEmpty(key)) zsetMaybeQueueCompaction(key->db, key->key, key->value);
     } else {
         if (deleted) *deleted = 0;
     }

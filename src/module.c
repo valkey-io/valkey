@@ -7195,6 +7195,8 @@ uint64_t moduleTypeEncodeId(const char *name, int encver) {
  * a type with the same name as the one given. Returns the moduleType
  * structure pointer if such a module is found, or NULL otherwise. */
 moduleType *moduleTypeLookupModuleByNameInternal(const char *name, int ignore_case) {
+    if (dictSize(modules) == 0) return NULL;
+
     dictIterator *di = dictGetIterator(modules);
     dictEntry *de;
 
@@ -7232,6 +7234,8 @@ moduleType *moduleTypeLookupModuleByNameIgnoreCase(const char *name) {
 #define MODULE_LOOKUP_CACHE_SIZE 3
 
 moduleType *moduleTypeLookupModuleByID(uint64_t id) {
+    if (dictSize(modules) == 0) return NULL;
+
     static struct {
         uint64_t id;
         moduleType *mt;
@@ -7589,6 +7593,8 @@ void moduleRDBLoadError(ValkeyModuleIO *io) {
  * VALKEYMODULE_OPTIONS_HANDLE_IO_ERRORS, in which case diskless loading should
  * be avoided since it could cause data loss. */
 int moduleAllDatatypesHandleErrors(void) {
+    if (dictSize(modules) == 0) return 1;
+
     dictIterator *di = dictGetIterator(modules);
     dictEntry *de;
 
@@ -7607,6 +7613,8 @@ int moduleAllDatatypesHandleErrors(void) {
  * diskless async loading should be avoided because module doesn't know there can be traffic during
  * database full resynchronization. */
 int moduleAllModulesHandleReplAsyncLoad(void) {
+    if (dictSize(modules) == 0) return 1;
+
     dictIterator *di = dictGetIterator(modules);
     dictEntry *de;
 
@@ -7622,6 +7630,8 @@ int moduleAllModulesHandleReplAsyncLoad(void) {
 }
 
 int moduleVerifyAllAllowAtomicSlotMigrationOrReply(client *c) {
+    if (dictSize(modules) == 0) return C_OK;
+
     dictIterator *di = dictGetIterator(modules);
     dictEntry *de;
 
@@ -7897,6 +7907,8 @@ long double VM_LoadLongDouble(ValkeyModuleIO *io) {
 /* Iterate over modules, and trigger rdb aux saving for the ones modules types
  * who asked for it. */
 ssize_t rdbSaveModulesAux(rio *rdb, int when) {
+    if (dictSize(modules) == 0) return 0;
+
     size_t total_written = 0;
     dictIterator *di = dictGetIterator(modules);
     dictEntry *de;
@@ -11164,6 +11176,8 @@ int VM_RegisterInfoFunc(ValkeyModuleCtx *ctx, ValkeyModuleInfoFunc cb) {
 }
 
 sds modulesCollectInfo(sds info, dict *sections_dict, int for_crash_report, int sections) {
+    if (dictSize(modules) == 0) return info;
+
     dictIterator *di = dictGetIterator(modules);
     dictEntry *de;
 
@@ -13660,6 +13674,8 @@ int moduleUnload(sds name, const char **errmsg) {
  * by module unload failures.
  */
 void moduleUnloadAllModules(void) {
+    if (dictSize(modules) == 0) return;
+
     dictIterator *di = dictGetSafeIterator(modules);
     dictEntry *de;
 
@@ -13690,6 +13706,11 @@ void modulePipeReadable(aeEventLoop *el, int fd, void *privdata, int mask) {
 /* Helper function for the MODULE and HELLO command: send the list of the
  * loaded modules to the client. */
 void addReplyLoadedModules(client *c) {
+    if (dictSize(modules) == 0) {
+        addReplyArrayLen(c, 0);
+        return;
+    }
+
     dictIterator *di = dictGetIterator(modules);
     dictEntry *de;
 
@@ -13753,6 +13774,8 @@ sds genModulesInfoStringRenderModuleOptions(struct ValkeyModule *module) {
  *
  * references must be substituted with the new pointer returned by the call. */
 sds genModulesInfoString(sds info) {
+    if (dictSize(modules) == 0) return info;
+
     dictIterator *di = dictGetIterator(modules);
     dictEntry *de;
 
@@ -15030,6 +15053,8 @@ int moduleDefragValue(robj *key, robj *value, int dbid) {
 
 /* Call registered module API defrag functions */
 void moduleDefragGlobals(void) {
+    if (dictSize(modules) == 0) return;
+
     dictIterator *di = dictGetIterator(modules);
     dictEntry *de;
 

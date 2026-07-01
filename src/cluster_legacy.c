@@ -7966,6 +7966,10 @@ int clusterCommandSpecial(client *c) {
         }
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "flushslots") && c->argc == 2) {
         /* CLUSTER FLUSHSLOTS */
+        if (nodeIsReplica(myself)) {
+            addReplyError(c, "Please use FLUSHSLOTS only with primaries.");
+            return 1;
+        }
         if (!dbsHaveNoKeys()) {
             addReplyError(c, "DB must be empty to perform CLUSTER FLUSHSLOTS.");
             return 1;
@@ -7976,6 +7980,10 @@ int clusterCommandSpecial(client *c) {
     } else if ((!strcasecmp(objectGetVal(c->argv[1]), "addslots") || !strcasecmp(objectGetVal(c->argv[1]), "delslots")) && c->argc >= 3) {
         /* CLUSTER ADDSLOTS <slot> [slot] ... */
         /* CLUSTER DELSLOTS <slot> [slot] ... */
+        if (nodeIsReplica(myself)) {
+            addReplyError(c, "Please use ADDSLOTS/DELSLOTS only with primaries.");
+            return 1;
+        }
         int j, slot;
         unsigned char *slots = zmalloc(CLUSTER_SLOTS);
         int del = !strcasecmp(objectGetVal(c->argv[1]), "delslots");
@@ -8008,6 +8016,10 @@ int clusterCommandSpecial(client *c) {
         }
         /* CLUSTER ADDSLOTSRANGE <start slot> <end slot> [<start slot> <end slot> ...] */
         /* CLUSTER DELSLOTSRANGE <start slot> <end slot> [<start slot> <end slot> ...] */
+        if (nodeIsReplica(myself)) {
+            addReplyError(c, "Please use ADDSLOTSRANGE/DELSLOTSRANGE only with primaries.");
+            return 1;
+        }
         int j, startslot, endslot;
         unsigned char *slots = zmalloc(CLUSTER_SLOTS);
         int del = !strcasecmp(objectGetVal(c->argv[1]), "delslotsrange");

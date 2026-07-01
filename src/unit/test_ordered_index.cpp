@@ -2735,3 +2735,46 @@ TEST_F(OrderedIndexTest, HtConsistency_ByLex_EmptyRange) {
     sdsfree(max);
     simHtFree(&simulatedHt);
 }
+
+/* ========== Load-Factor / Compaction API ========== */
+
+TEST_F(OrderedIndexTest, LoadFactorRange) {
+    EXPECT_DOUBLE_EQ(orderedIndexLoadFactor(oi), 1.0); /* empty: no slack */
+    for (int i = 0; i < 1000; i++) {
+        char b[32];
+        int n = snprintf(b, sizeof(b), "e%06d", i);
+        orderedIndexInsert(oi, (double)i, b, (size_t)n);
+    }
+    double lf = orderedIndexLoadFactor(oi);
+    EXPECT_GT(lf, 0.0);
+    EXPECT_LE(lf, 1.0);
+}
+
+TEST_F(OrderedIndexTest, CompactStepImprovesLoadFactor) {
+    const int N = 2000;
+    OrderedIndexItem **items = (OrderedIndexItem **)zmalloc(sizeof(OrderedIndexItem *) * N);
+    for (int i = 0; i < N; i++) {
+        char b[32];
+        int n = snprintf(b, sizeof(b), "e%06d", i);
+        items[i] = orderedIndexInsert(oi, (double)i, b, (size_t)n);
+    }
+    /* Delete every other element -> sparse, low-load-factor index. */
+    for (int i = 0; i < N; i += 2) orderedIndexDelete(oi, items[i]);
+    zfree(items);
+
+    unsigned long len_before = orderedIndexLength(oi);
+    double lf_before = orderedIndexLoadFactor(oi);
+    EXPECT_LT(lf_before, 0.75);
+
+    /* Compact toward 75% fill. */
+    unsigned long cursor = 0;
+    int guard = 0;
+    do {
+        cursor = orderedIndexCompactStep(oi, cursor, 0.75, 1000000UL);
+        ASSERT_LT(guard++, 100000) << "compaction did not terminate";
+    } while (cursor != 0);
+
+    EXPECT_TRUE(verifyIntegrity(oi));
+    EXPECT_EQ(orderedIndexLength(oi), len_before);    /* element count conserved */
+    EXPECT_GT(orderedIndexLoadFactor(oi), lf_before); /* load factor improved */
+}

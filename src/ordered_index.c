@@ -227,6 +227,19 @@ unsigned long orderedIndexLength(const OrderedIndex *oi) {
     return fbtreeLength((fbtreeIndex *)oi);
 }
 
+double orderedIndexLoadFactor(const OrderedIndex *oi) {
+    return fbtreeLoadFactor((fbtreeIndex *)oi);
+}
+
+unsigned long orderedIndexCompactStep(OrderedIndex *oi, unsigned long cursor, double target_load, unsigned long budget) {
+    /* Convert the backend-agnostic fill fraction to fbtree's items-per-leaf. */
+    unsigned int cap = fbtreeLeafCapacity();
+    unsigned int target = (unsigned int)(target_load * cap);
+    if (target < 1) target = 1;
+    if (target > cap) target = cap;
+    return fbtreeCompactStep((fbtreeIndex *)oi, cursor, target, budget);
+}
+
 OrderedIndexItem *orderedIndexGetByIndex(const OrderedIndex *oi, unsigned long index) {
     return (OrderedIndexItem *)fbtreeGetAtRank((fbtreeIndex *)oi, index);
 }

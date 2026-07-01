@@ -149,6 +149,8 @@ fbtreeIndex *fbtreeCreate(void) {
     fbt->leftmost_leaf = NULL;
     fbt->rightmost_leaf = NULL;
     fbt->num_leaves = 0;
+    fbt->compact_wm_length = 0;
+    fbt->compact_wm_leaves = 0;
     return fbt;
 }
 
@@ -196,6 +198,8 @@ static void fbtreeDeleteAll(fbtreeIndex *fbt, fbtreeItemCallback callback, void 
 
 void fbtreeEmpty(fbtreeIndex *fbt) {
     fbtreeDeleteAll(fbt, NULL, NULL);
+    fbt->compact_wm_length = 0;
+    fbt->compact_wm_leaves = 0;
 }
 
 void fbtreeFree(fbtreeIndex *fbt) {
@@ -1245,32 +1249,88 @@ double fbtreeLoadFactor(fbtreeIndex *fbt) {
 /* ============================================================
  * Load-factor compaction
  *
- * Re-packs the leaves under a single "bottom" inner node (one whose children
- * are leaves) to an even fill of `target` items per leaf, freeing the surplus
- * leaves. Because items are conserved and kept in order, the node's own subtree
- * size and high-key anchor are unchanged, so NO fixup is required above the
- * node -- the operation is entirely local to one inner node.
+ * Background reclamation of the leaf slack left by the no-merge delete path: on
+ * a churn / delete-heavy workload leaves drift under-full and the tree holds far
+ * more leaves than its item count needs. Compaction re-packs them, out of band.
  *
- * Only the sds POINTERS move between leaves; the items themselves are never
- * reallocated, so companion-hashtable entries that point at them stay valid.
+ * UNIT OF WORK. Each step operates on one "bottom" inner node `p` -- an inner
+ * node whose children are all leaves -- and re-packs only the leaves directly
+ * under `p`. Items never cross between different bottom inner nodes; this
+ * locality is what keeps the upward fixup cheap (see PROPAGATION below).
  *
- * Guarded to only ever reduce leaf count (skips when the node is already packed
- * at or tighter than `target`), so it never splits and is idempotent.
+ * WHAT MOVES, AND WHERE. Let `p` have `k` leaves holding `total` items.
+ *   1. Gather: all `total` item pointers are collected in order from p's k
+ *      leaves into a scratch buffer.
+ *   2. Scatter: they are written back into the FIRST `needed` leaves at even
+ *      fill (needed = ceil(total / target); each of the needed leaves gets
+ *      total/needed items, and the first total%needed of them get one extra).
+ *      Items thus flow leftward, from the trailing leaves into the leading
+ *      leaves under the same `p`.
+ *   Only the sds POINTERS in values[] move -- items are never copied or
+ *   reallocated, so companion-hashtable entries that point at them stay valid.
+ *   This external-item layout is the property that makes background compaction
+ *   cheap; embedding items in the leaf would force a hashtable update per move.
+ *
+ * WHICH LEAVES ARE DELETED. children[0 .. needed-1] survive and are refilled;
+ * the surplus children[needed .. k-1] are freed with freeNode() (which also
+ * maintains num_leaves). The items were already relocated, so freeing the leaf
+ * NODES frees no item. The doubly-linked leaf list is spliced around the freed
+ * run in one step: last_survivor->next = (old last leaf)->next, the reverse
+ * link is repaired, and the rightmost_leaf cache is updated if it pointed into
+ * the freed run.
+ *
+ * GUARD / IDEMPOTENCE. Runs only when needed < k, i.e. only when it strictly
+ * reduces the leaf count. So it never splits or expands, and a second pass on
+ * an already-packed node is a no-op -- which makes the incremental sweep safe
+ * to re-run and safe to abandon partway.
+ *
+ * PROPAGATION -- how far up the tree changes reach:
+ *   - At `p`: a full local rewrite. Drop the dead child slots
+ *     (innerNodeRemoveChildrenRange), refresh each survivor's cached metadata in
+ *     p (child_sizes, child_num_items, anchor, feature bytes) via
+ *     innerNodeRefreshChildMeta, and recompute p's common prefix. p->num_items
+ *     shrinks k -> needed.
+ *   - At p's PARENT: exactly ONE field -- parent->child_num_items[child_idx] --
+ *     is refreshed to p's new direct child count. This is done in
+ *     fbtreeCompactStep, which threads the parent + child index out of the rank
+ *     descent for exactly this purpose.
+ *   - Nowhere else. Items are CONSERVED, so p's total subtree size (the parent's
+ *     child_sizes[child_idx]) is unchanged; the globally-largest item under p is
+ *     preserved -- it lands in the last survivor leaf -- so p's high-key ANCHOR,
+ *     and hence the parent's anchor and feature bytes, are unchanged; and p is
+ *     still a single child of its parent, so the parent's own child count (and
+ *     therefore everything above the parent) is untouched.
+ *   The only quantity that is NOT self-conserving is p's DIRECT CHILD COUNT,
+ *   cached one level up as child_num_items -- so that lone field is the entire
+ *   upward fixup. (Contrast the split and range-delete paths, which must
+ *   propagate size and anchor changes all the way to the root along recorded
+ *   boundary paths; compaction avoids that by conserving both the item count and
+ *   the subtree's high-key boundary.)
+ *
+ * THE SWEEP (fbtreeCompactStep). Walks bottom inner nodes by global rank:
+ * bottomInnerAtRank(cursor) descends root -> bottom to the node containing rank
+ * `cursor` (returning its parent + child index for the one-field fixup),
+ * compacts it, then advances cursor += node_items. Because items are conserved,
+ * node_items (captured BEFORE compaction) still spans [start, start+node_items)
+ * in rank space afterward, so the next bottom node begins exactly there no
+ * matter how many leaves merged -- which is why the cursor stays valid across a
+ * partial, budgeted, resumable sweep (roughly `budget` items per call; returns
+ * the next cursor, or 0 once the whole tree has been swept).
  * ============================================================ */
 
-/* Compact the leaves under bottom inner node `p` to an even fill of `target`
+/* Compact the leaves under bottom inner node `p` to an even fill of `limit`
  * items per leaf. Returns true if the layout changed (surplus leaves freed). */
-static bool compactBottomInnerLeaves(fbtreeIndex *fbt, innerNode *p, unsigned int target) {
+static bool compactBottomInnerLeaves(fbtreeIndex *fbt, innerNode *p, unsigned int limit) {
     int k = p->header.num_items;
     assert(k > 0 && p->children[0]->is_leaf);
 
     size_t total = getSubtreeSize((node *)p);
     if (total == 0) return false;
 
-    /* Leaves needed to hold `total` items at `target` per leaf. Only compact
+    /* Leaves needed to hold `total` items at `limit` per leaf. Only compact
      * when this strictly reduces the leaf count; otherwise the node is already
-     * at least as tight as the target (this also makes the op idempotent). */
-    size_t needed = (total + target - 1) / target;
+     * at least as tight as the limit (this also makes the op idempotent). */
+    size_t needed = (total + limit - 1) / limit;
     if (needed >= (size_t)k) return false;
 
     /* Gather all item pointers in order. Only pointers move -- no item is
@@ -1349,9 +1409,9 @@ static innerNode *bottomInnerAtRank(fbtreeIndex *fbt, unsigned long rank, unsign
     return inner;
 }
 
-unsigned long fbtreeCompactStep(fbtreeIndex *fbt, unsigned long cursor, unsigned int target, unsigned long budget) {
-    if (target == 0) target = 1;
-    if (target > (unsigned)NODE_SIZE) target = (unsigned)NODE_SIZE;
+unsigned long fbtreeCompactStep(fbtreeIndex *fbt, unsigned long cursor, unsigned int limit, unsigned long budget) {
+    if (limit == 0) limit = 1;
+    if (limit > (unsigned)NODE_SIZE) limit = (unsigned)NODE_SIZE;
 
     unsigned long length = fbtreeLength(fbt);
     if (cursor >= length) return 0;
@@ -1367,7 +1427,7 @@ unsigned long fbtreeCompactStep(fbtreeIndex *fbt, unsigned long cursor, unsigned
         /* Items are conserved by compaction, so the next bottom inner node
          * always begins at start + node_items. */
         size_t node_items = getSubtreeSize((node *)p);
-        if (compactBottomInnerLeaves(fbt, p, target) && parent) {
+        if (compactBottomInnerLeaves(fbt, p, limit) && parent) {
             /* Compaction reduced p's direct child count. Its subtree size and
              * high-key anchor are unchanged (so child_sizes/anchors/features
              * above stay valid), but the parent's cached direct child count must
@@ -1380,6 +1440,49 @@ unsigned long fbtreeCompactStep(fbtreeIndex *fbt, unsigned long cursor, unsigned
         processed += node_items;
     }
     return (cursor >= length) ? 0 : cursor;
+}
+
+/* ------------------------------------------------------------
+ * Compaction watermark
+ *
+ * Compaction has a floor: it packs the leaves under one bottom inner node but
+ * never merges bottom inner nodes, and the delete path frees only EMPTY leaves
+ * and inner nodes. So a tree whose bottom inner nodes each hold fewer than
+ * trigger*NODE_SIZE items (a large set whittled down by scattered deletes)
+ * stays below the caller's trigger no matter how often it is swept: every
+ * sweep walks the whole tree and frees nothing.
+ *
+ * The watermark breaks that loop. When a full sweep frees no leaves the caller
+ * records the tree's (length, num_leaves); fbtreeCompactWorthwhile then answers
+ * false until the tree has changed enough that a sweep could plausibly do
+ * work: its leaf count changed (an insert split a leaf or a delete freed one),
+ * or its length fell by at least COMPACT_REARM_SHRINK_PCT. A sweep that DOES
+ * free leaves clears the watermark, since the tree it measured is gone.
+ *
+ * This is a heuristic. The exact condition (some bottom node's item count
+ * crossed down through a multiple of the target fill) is per-node state the
+ * tree does not keep. The cost of the approximation is a delayed re-sweep,
+ * bounded by the shrink percentage; the benefit is that a stuck tree costs one
+ * no-op sweep per 10% shrink instead of one per delete.
+ * ------------------------------------------------------------ */
+
+#define COMPACT_REARM_SHRINK_PCT 10
+
+void fbtreeCompactSweepDone(fbtreeIndex *fbt, unsigned long leaves_freed) {
+    if (leaves_freed == 0) {
+        fbt->compact_wm_length = fbtreeLength(fbt);
+        fbt->compact_wm_leaves = fbt->num_leaves;
+    } else {
+        fbt->compact_wm_length = 0;
+        fbt->compact_wm_leaves = 0;
+    }
+}
+
+bool fbtreeCompactWorthwhile(fbtreeIndex *fbt) {
+    if (fbt->compact_wm_leaves == 0) return true; /* no watermark */
+    if (fbt->num_leaves != fbt->compact_wm_leaves) return true;
+    /* Re-armed once length <= wm_length * (1 - pct/100), in integer form. */
+    return fbtreeLength(fbt) * 100 <= fbt->compact_wm_length * (100 - COMPACT_REARM_SHRINK_PCT);
 }
 
 void fbtreeResetIterator(fbtreeIterator *iterator) {

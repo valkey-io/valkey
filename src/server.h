@@ -3368,7 +3368,8 @@ void ACLFreeUserAndKillClients(user *u);
 void addACLLogEntry(client *c, int reason, int context, int argpos, sds username, sds object);
 sds getAclErrorMessage(int acl_res, user *user, struct serverCommand *cmd, sds errored_val, int verbose);
 void ACLUpdateDefaultUserPassword(sds password);
-sds genValkeyInfoStringACLStats(sds info);
+typedef struct infoEmitter infoEmitter;
+void genValkeyInfoStringACLStats(infoEmitter *e);
 void ACLRecomputeCommandBitsFromCommandRulesAllUsers(void);
 
 /* Sorted sets data type */

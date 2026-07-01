@@ -509,6 +509,7 @@ ENGINE_SERVER_OBJ = \
     geohash_helper.o \
     hashtable.o \
     hyperloglog.o \
+    info_emitter.o \
     intset.o \
     io_threads.o \
     kvstore.o \

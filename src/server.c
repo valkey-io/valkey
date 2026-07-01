@@ -1754,6 +1754,11 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
         }
     }
 
+    /* Background fbtree ZSET load-factor compaction: drain one throttled step. */
+    run_with_period(100) {
+        if (server.zset_compaction_enabled) zsetCompactionCron();
+    }
+
     /* Clear the paused actions state if needed. */
     updatePausedActions();
 
@@ -5307,6 +5312,9 @@ int finishShutdown(void) {
     /* Free the AOF manifest. */
     if (server.aof_manifest) aofManifestFree(server.aof_manifest);
 
+    /* Free the background zset compaction queue. */
+    zsetCompactionCleanup();
+
     /* Fire the shutdown modules event. */
     moduleFireServerEvent(VALKEYMODULE_EVENT_SHUTDOWN, 0, NULL);
 
@@ -6714,7 +6722,8 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "mem_overhead_db_hashtable_rehashing:%zu\r\n", mh->overhead_db_hashtable_rehashing,
                 "active_defrag_running:%d\r\n", server.active_defrag_cpu_percent,
                 "lazyfree_pending_objects:%zu\r\n", lazyfreeGetPendingObjectsCount(),
-                "lazyfreed_objects:%zu\r\n", lazyfreeGetFreedObjectsCount()));
+                "lazyfreed_objects:%zu\r\n", lazyfreeGetFreedObjectsCount(),
+                "zset_compaction_pending_keys:%zu\r\n", zsetCompactionPendingCount()));
         freeMemoryOverheadData(mh);
     }
 

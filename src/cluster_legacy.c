@@ -2904,6 +2904,7 @@ int clusterProcessGossipSection(clusterMsg *hdr, clusterLink *link) {
         /* Next node */
         g++;
     }
+    return 1;
 }
 
 /* IP -> string conversion. 'buf' is supposed to at least be 46 bytes.

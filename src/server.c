@@ -3040,11 +3040,14 @@ void initServer(void) {
     const char *clk_msg = monotonicInit();
     serverLog(LL_NOTICE, "monotonic clock: %s", clk_msg);
     server.el = aeCreateEventLoop(server.maxclients + CONFIG_FDSET_INCR);
-    if (server.el == NULL) {
+    /*Create high priority event loop*/
+    aeEventLoop *hp_el = aeCreateEventLoop(server.maxclients + CONFIG_FDSET_INCR);
+    if (server.el == NULL || hp_el == NULL) {
         serverLog(LL_WARNING, "Failed creating the event loop. Error message: '%s'", strerror(errno));
         exit(1);
     }
-
+    /*Link high priority event loop with main event loop*/
+    aeLinkHighPriorityEventLoop(server.el, hp_el);
     server.dbnum = server.cluster_enabled ? server.config_databases_cluster : server.config_databases;
     server.db = zcalloc(sizeof(serverDb *) * server.dbnum);
     createDatabaseIfNeeded(0); /* The default database should always exist */

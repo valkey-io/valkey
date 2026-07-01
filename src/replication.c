@@ -1169,6 +1169,10 @@ void syncCommand(client *c) {
     }
 
     serverLog(LL_NOTICE, "Replica %s asks for synchronization", replicationGetReplicaName(c));
+    if (c->conn) {
+        /* Upgrade replica connection to high priority */
+        connUpgradePriority(c->conn, CONN_PRIORITY_HIGH);
+    }
 
     /* Try a partial resynchronization if this is a PSYNC command.
      * If it fails, we continue with usual full resynchronization, however
@@ -4379,6 +4383,8 @@ void syncWithPrimary(connection *conn) {
     if (psync_result == PSYNC_FULLRESYNC_DUAL_CHANNEL) {
         /* Create RDB connection */
         server.repl_rdb_transfer_s = connCreate(connTypeOfReplication());
+        /* Set connection to high priority */
+        connSetPriority(server.repl_rdb_transfer_s, CONN_PRIORITY_HIGH);
         if (connConnect(server.repl_rdb_transfer_s, server.primary_host, server.primary_port, server.bind_source_addr,
                         server.repl_mptcp, dualChannelFullSyncWithPrimary) == C_ERR) {
             dualChannelServerLog(LL_WARNING, "Unable to connect to Primary: %s",
@@ -4429,6 +4435,8 @@ void syncWithPrimary(connection *conn) {
 
 int connectWithPrimary(void) {
     server.repl_transfer_s = connCreate(connTypeOfReplication());
+    /* Set connection to high priority */
+    connSetPriority(server.repl_transfer_s, CONN_PRIORITY_HIGH);
     if (connConnect(server.repl_transfer_s, server.primary_host, server.primary_port, server.bind_source_addr,
                     server.repl_mptcp, syncWithPrimary) == C_ERR) {
         serverLog(LL_WARNING, "Unable to connect to PRIMARY: %s", connGetLastError(server.repl_transfer_s));

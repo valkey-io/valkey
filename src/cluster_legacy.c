@@ -1951,6 +1951,8 @@ void clusterAcceptHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
         }
 
         connection *conn = connCreateAccepted(connTypeOfCluster(), cfd, &require_auth);
+        /* Set connection to high priority */
+        connSetPriority(conn, CONN_PRIORITY_HIGH);
 
         /* Make sure connection is not in an error state */
         if (connGetState(conn) != CONN_STATE_ACCEPTING) {
@@ -6314,6 +6316,8 @@ static int clusterNodeCronHandleReconnect(clusterNode *node, mstime_t now, long 
         (*cluster_conn_attempts)--;
         clusterLink *link = createClusterLink(node);
         link->conn = connCreate(connTypeOfCluster());
+        /* Set connection to high priority */
+        connSetPriority(link->conn, CONN_PRIORITY_HIGH);
         connSetPrivateData(link->conn, link);
         if (connConnect(link->conn, node->ip, node->cport, server.bind_source_addr, 0, clusterLinkConnectHandler) ==
             C_ERR) {
@@ -7290,7 +7294,7 @@ sds clusterGenNodesDescription(client *c, int filter, int tls_primary) {
 /* Add to the output buffer of the given client the description of the given cluster link.
  * The description is a map with each entry being an attribute of the link. */
 void addReplyClusterLinkDescription(client *c, clusterLink *link) {
-    addReplyMapLen(c, 6);
+    addReplyMapLen(c, 7);
 
     addReplyBulkCString(c, "direction");
     addReplyBulkCString(c, link->inbound ? "from" : "to");
@@ -7322,6 +7326,9 @@ void addReplyClusterLinkDescription(client *c, clusterLink *link) {
 
     addReplyBulkCString(c, "send-buffer-used");
     addReplyLongLong(c, link->send_msg_queue_mem);
+
+    addReplyBulkCString(c, "qos");
+    addReplyBulkCString(c, getConnectionPriorityName(connGetPriority(link->conn)));
 }
 
 /* Add to the output buffer of the given client an array of cluster link descriptions,

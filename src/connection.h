@@ -163,6 +163,26 @@ typedef struct ConnectionType {
     int (*connIntegrityChecked)(void); // return 1 if connection type has built-in integrity checks
 } ConnectionType;
 
+/* Connection scheduling priority levels.
+ *
+ * High-priority connections receive preferential treatment across two subsystems:
+ * 1. HP Event loop (ae): Connections that are registered with hp_event_loop are
+ * processed ahead of normal priority events in the event polling loop.
+ * 2. I/O threads: Read and write tasks are dispatched to dedicated
+ * high-priority queues (io_shared_inbox[CONN_PRIORITY_HIGH] and io_shared_outbox[CONN_PRIORITY_HIGH]),
+ * are processed ahead of normal priority queues (io_shared_inbox[CONN_PRIORITY_NORMAL]
+ * and io_shared_outbox[CONN_PRIORITY_NORMAL]), when IO threads are enabled.
+ */
+typedef enum {
+    /* Normal priority connections - used for normal client connections */
+    CONN_PRIORITY_NORMAL = 0,
+    /* High priority connections - used for critical internal communication such as
+     * cluster bus messages, slot migration, and replication streams */
+    CONN_PRIORITY_HIGH,
+    /* Number of priority levels */
+    CONN_PRIORITY_COUNT
+} connPriority;
+
 struct connection {
     ConnectionType *type;
     ConnectionState state;
@@ -175,6 +195,7 @@ struct connection {
     ConnectionCallbackFunc conn_handler;
     ConnectionCallbackFunc write_handler;
     ConnectionCallbackFunc read_handler;
+    int priority; /* connPriority value */
 };
 
 #define CONFIG_BINDADDR_MAX 16
@@ -272,8 +293,7 @@ static inline int connWritev(connection *conn, const struct iovec *iov, int iovc
  * connGetState() to see if the connection state is still CONN_STATE_CONNECTED.
  */
 static inline int connRead(connection *conn, void *buf, size_t buf_len) {
-    int ret = conn->type->read(conn, buf, buf_len);
-    return ret;
+    return conn->type->read(conn, buf, buf_len);
 }
 
 /* Register a write handler, to be called when the connection is writable.
@@ -508,6 +528,12 @@ static inline aeFileProc *connAcceptHandler(ConnectionType *ct) {
 /* Get Listeners information, note that caller should free the non-empty string */
 sds getListensInfoString(sds info);
 
+/* Connection qos(see connPriority enum). */
+void connSetPriority(connection *conn, int priority);
+void connUpgradePriority(connection *conn, int priority);
+int connGetPriority(connection *conn);
+const char *getConnectionPriorityName(int priority);
+int connGetAEPriorityFlag(connection *conn);
 int RedisRegisterConnectionTypeSocket(void);
 int RedisRegisterConnectionTypeUnix(void);
 int RedisRegisterConnectionTypeTLS(void);

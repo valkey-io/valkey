@@ -43,6 +43,10 @@
             [
                 "9.0.0",
                 "Added filters NAME, IDLE, FLAGS, LIB-NAME, LIB-VER, DB, CAPA, and IP. And negative filters NOT-ID, NOT-TYPE, NOT-ADDR, NOT-LADDR, NOT-USER, NOT-FLAGS, NOT-NAME, NOT-LIB-NAME, NOT-LIB-VER, NOT-DB, NOT-CAPA, NOT-IP."
+            ],
+            [
+                "10.0.0",
+                "Added `H` flag to indicate high priority clients."
             ]
         ],
         "command_flags": [

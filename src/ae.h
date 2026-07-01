@@ -39,14 +39,15 @@
 #define AE_OK 0
 #define AE_ERR -1
 
-#define AE_NONE 0     /* No events registered. */
-#define AE_READABLE 1 /* Fire when descriptor is readable. */
-#define AE_WRITABLE 2 /* Fire when descriptor is writable. */
-#define AE_BARRIER 4  /* With WRITABLE, never fire the event if the      \
-                         READABLE event already fired in the same event  \
-                         loop iteration. Useful when you want to persist \
-                         things to disk before sending replies, and want \
-                         to do that in a group fashion. */
+#define AE_NONE 0          /* No events registered. */
+#define AE_READABLE 1      /* Fire when descriptor is readable. */
+#define AE_WRITABLE 2      /* Fire when descriptor is writable. */
+#define AE_BARRIER 4       /* With WRITABLE, never fire the event if the      \
+                              READABLE event already fired in the same event  \
+                              loop iteration. Useful when you want to persist \
+                              things to disk before sending replies, and want \
+                              to do that in a group fashion. */
+#define AE_HIGH_PRIORITY 8 /* Route to high-priority nested loop */
 
 #define AE_FILE_EVENTS (1 << 0)
 #define AE_TIME_EVENTS (1 << 1)
@@ -123,6 +124,9 @@ typedef struct aeEventLoop {
     aeCustomPollProc *custompoll;
     pthread_mutex_t poll_mutex;
     int flags;
+
+    /* QoS */
+    struct aeEventLoop *hp_event_loop;
 } aeEventLoop;
 
 /* Prototypes */
@@ -151,5 +155,9 @@ int aePoll(aeEventLoop *eventLoop, struct timeval *tvp);
 int aeGetSetSize(aeEventLoop *eventLoop);
 int aeResizeSetSize(aeEventLoop *eventLoop, int setsize);
 void aeSetDontWait(aeEventLoop *eventLoop, int noWait);
+/* Process high priority events preemptively. */
+int aeProcessHPEventsPreemptively(aeEventLoop *eventLoop, int iter_count);
+/* Link a high-priority event loop to a main event loop for nested polling. */
+void aeLinkHighPriorityEventLoop(aeEventLoop *eventLoop, aeEventLoop *hp_event_loop);
 
 #endif

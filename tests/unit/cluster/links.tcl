@@ -163,13 +163,14 @@ start_cluster 3 0 {tags {external:skip cluster}} {
         set lines [R 0 cluster links]
         foreach l $lines {
             if {$l eq {}} continue
-            assert_equal [llength $l] 12
+            assert_equal [llength $l] 14
             assert_equal 1 [dict exists $l "direction"]
             assert_equal 1 [dict exists $l "node"]
             assert_equal 1 [dict exists $l "create-time"]
             assert_equal 1 [dict exists $l "events"]
             assert_equal 1 [dict exists $l "send-buffer-allocated"]
             assert_equal 1 [dict exists $l "send-buffer-used"]
+            assert_equal 1 [dict exists $l "qos"]
         }
     }
 

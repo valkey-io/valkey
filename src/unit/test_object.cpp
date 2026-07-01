@@ -5,6 +5,7 @@
  */
 
 #include "generated_wrappers.hpp"
+#include "object_internals.h"
 
 #include <climits>
 #include <cmath>

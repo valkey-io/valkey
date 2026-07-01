@@ -3483,8 +3483,9 @@ static uint32_t writePingExtensions(clusterMsg *hdr, int gossipcount) {
 }
 
 /* We previously validated the extensions, so this function just needs to
- * handle the extensions. */
-void clusterProcessPingExtensions(clusterMsg *hdr, clusterLink *link) {
+ * handle the extensions. Returns 1 if the link is still valid after
+ * processing, or 0 if the link was freed due to invalid data. */
+int clusterProcessPingExtensions(clusterMsg *hdr, clusterLink *link) {
     clusterNode *sender = link->node ? link->node : clusterLookupNode(hdr->sender, CLUSTER_NAMELEN);
     char *ext_hostname = NULL;
     char *ext_humannodename = NULL;
@@ -3574,7 +3575,20 @@ void clusterProcessPingExtensions(clusterMsg *hdr, clusterLink *link) {
      * Otherwise, we'll set it now. */
     if (ext_shardid == NULL) ext_shardid = clusterNodeGetPrimary(sender)->shard_id;
 
+    /* Validate the shard_id received from the network before applying it.
+     * A corrupted shard_id indicates either memory corruption or a bug on
+     * the sender side, so we drop the link to protect cluster state. */
+    if (ext_shardid && verifyClusterNodeId(ext_shardid, CLUSTER_NAMELEN) != C_OK) {
+        serverLog(LL_WARNING,
+                  "Received invalid shard_id from node %.40s (%s) via ping extension. "
+                  "Dropping the link to protect cluster state.",
+                  sender->name, humanNodename(sender));
+        freeClusterLink(link);
+        return 0;
+    }
+
     updateShardId(sender, ext_shardid);
+    return 1;
 }
 
 static clusterNode *getNodeFromLinkAndMsg(clusterLink *link, clusterMsg *hdr) {
@@ -4089,7 +4103,18 @@ int clusterProcessPacket(clusterLink *link) {
                 }
 
                 /* First thing to do is replacing the random name with the
-                 * right node name if this was a handshake stage. */
+                 * right node name if this was a handshake stage.
+                 *
+                 * Validate the shard_id received from the network before renaming it.
+                 * A corrupted shard_id indicates either memory corruption or a bug on
+                 * the sender side, so we drop the link to protect cluster state. */
+                if (verifyClusterNodeId(msg->sender, CLUSTER_NAMELEN) != C_OK) {
+                    serverLog(LL_WARNING,
+                              "Received PONG with invalid sender node ID during handshake. "
+                              "Dropping the link to protect cluster state.");
+                    freeClusterLink(link);
+                    return 0;
+                }
                 clusterRenameNode(link->node, msg->sender);
                 serverLog(LL_DEBUG, "Handshake with node %.40s (%s) completed.", link->node->name, humanNodename(link->node));
                 link->node->flags &= ~CLUSTER_NODE_HANDSHAKE;
@@ -4386,7 +4411,7 @@ int clusterProcessPacket(clusterLink *link) {
         /* Get info from the gossip section */
         if (sender) {
             clusterProcessGossipSection(msg, link);
-            clusterProcessPingExtensions(msg, link);
+            if (!clusterProcessPingExtensions(msg, link)) return 0;
         }
     } else if (type == CLUSTERMSG_TYPE_FAIL) {
         clusterNode *failing;

@@ -2107,14 +2107,6 @@ static void clusterRaftDetectFailures(mstime_t now) {
         clusterNode *node = dictGetVal(de);
         if (node == myself) continue;
 
-        /* Disconnect outbound links with no AE_ACK for node_timeout/2.
-         * Detects half-open connections to frozen/dead peers so
-         * clusterConnectNodes can re-establish them. */
-        if (node->link && !(node->flags & CLUSTER_NODE_MEET) &&
-            now - RAFT_NODE(node)->last_ack_time > node_timeout / 2) {
-            freeClusterLink(node->link);
-        }
-
         if (nodeFailed(node)) {
             /* For failed nodes, drop stale links periodically so
              * clusterConnectNodes can establish a fresh connection.
@@ -2258,9 +2250,12 @@ static void clusterRaftCron(void) {
     clusterRaftState *rs = RAFT_STATE();
     mstime_t now = monotonicMs();
 
-    /* Disconnect dead outbound links where no data has been received on
-     * the current connection (HI never arrived). The peer's kernel
-     * accepted our SYN but the process is frozen. Applies to all roles. */
+    /* Disconnect dead outbound links after node_timeout/2. data_received tracks
+     * the last time we got data on our outbound link (HI, AE_ACK, votes).
+     * - All roles: no data received on the current connection (HI never
+     *   arrived). The peer's kernel accepted our SYN but the process is frozen.
+     * - Leader: no AE_ACK. last_ack_time is reset on election, giving peers
+     *   time to respond to the first AE. */
     {
         mstime_t stale = server.cluster_node_timeout / 2;
         dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
@@ -2269,7 +2264,8 @@ static void clusterRaftCron(void) {
             clusterNode *node = dictGetVal(de);
             if (node == myself || !node->link) continue;
             if (node->flags & CLUSTER_NODE_MEET) continue;
-            if (node->data_received < node->link->ctime && now - node->link->ctime > stale) {
+            if ((node->data_received < node->link->ctime && now - node->link->ctime > stale) ||
+                (rs->role == RAFT_ROLE_LEADER && now - RAFT_NODE(node)->last_ack_time > stale)) {
                 freeClusterLink(node->link);
             }
         }

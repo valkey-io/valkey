@@ -1939,6 +1939,49 @@ static int clusterRaftProcessRequestVote(clusterLink *link, int argc, sds *argv)
     return 1;
 }
 
+/* Promote to leader after winning an election (quorum reached). */
+static void clusterRaftBecomeLeader(void) {
+    clusterRaftState *rs = RAFT_STATE();
+    char old_leader[CLUSTER_NAMELEN];
+    memcpy(old_leader, rs->leader, CLUSTER_NAMELEN);
+    rs->role = RAFT_ROLE_LEADER;
+    memcpy(rs->leader, myself->name, CLUSTER_NAMELEN);
+    serverLog(LL_NOTICE, "Elected as Raft leader (term %llu, %d votes).",
+              (unsigned long long)rs->current_term, rs->votes_received);
+
+    if (listLength(rs->pending_proposals) > 0)
+        rs->todo_retry_proposals = 1;
+
+    if (server.cluster->size <= 1) return;
+
+    /* Initialize nextIndex for each peer (Raft paper §5.3). */
+    uint64_t last = raftLogLastIndex();
+    dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
+    dictEntry *de;
+    while ((de = dictNext(di)) != NULL) {
+        clusterNode *peer = dictGetVal(de);
+        if (peer == myself) continue;
+        RAFT_NODE(peer)->next_index = last + 1;
+        RAFT_NODE(peer)->match_index = 0;
+        RAFT_NODE(peer)->pending_fail_change = 0;
+        /* For the old leader, backdate last_ack_time to when we last
+         * heard from it, so failure detection kicks in faster. This
+         * matters if the old leader is also a primary. */
+        if (memcmp(peer->name, old_leader, CLUSTER_NAMELEN) == 0) {
+            RAFT_NODE(peer)->last_ack_time = rs->last_heartbeat;
+        } else {
+            RAFT_NODE(peer)->last_ack_time = monotonicMs();
+        }
+    }
+    dictReleaseIterator(di);
+    /* Append a no-op entry to commit prior-term entries (§5.4.2)
+     * and establish the new term in the log. */
+    uint64_t noop_idx = raftLogLastIndex() + 1;
+    raftLogAppend(raftLogCreate(rs->current_term, noop_idx, RAFT_ENTRY_NOOP, sdsempty()));
+    /* Immediate heartbeat to assert leadership. */
+    clusterRaftBroadcastAppendEntries();
+}
+
 static int clusterRaftProcessRequestVoteResponse(clusterLink *link, int argc, sds *argv) {
     UNUSED(link);
     /* argv: VOTE <term> <granted> */
@@ -1957,41 +2000,7 @@ static int clusterRaftProcessRequestVoteResponse(clusterLink *link, int argc, sd
         rs->votes_received++;
         int quorum = clusterRaftQuorum();
         if (rs->votes_received >= quorum) {
-            char old_leader[CLUSTER_NAMELEN];
-            memcpy(old_leader, rs->leader, CLUSTER_NAMELEN);
-            rs->role = RAFT_ROLE_LEADER;
-            memcpy(rs->leader, myself->name, CLUSTER_NAMELEN);
-            serverLog(LL_NOTICE, "Elected as Raft leader (term %llu, %d votes).",
-                      (unsigned long long)rs->current_term, rs->votes_received);
-            /* Append any pending proposals locally now that we're leader. */
-            if (listLength(rs->pending_proposals) > 0)
-                rs->todo_retry_proposals = 1;
-            /* Initialize nextIndex for each peer (Raft paper §5.3). */
-            uint64_t last = raftLogLastIndex();
-            dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
-            dictEntry *de;
-            while ((de = dictNext(di)) != NULL) {
-                clusterNode *peer = dictGetVal(de);
-                if (peer == myself) continue;
-                RAFT_NODE(peer)->next_index = last + 1;
-                RAFT_NODE(peer)->match_index = 0;
-                RAFT_NODE(peer)->pending_fail_change = 0;
-                /* For the old leader, backdate last_ack_time to when we last
-                 * heard from it, so failure detection kicks in faster. This
-                 * matters if the old leader is also a primary. */
-                if (memcmp(peer->name, old_leader, CLUSTER_NAMELEN) == 0) {
-                    RAFT_NODE(peer)->last_ack_time = rs->last_heartbeat;
-                } else {
-                    RAFT_NODE(peer)->last_ack_time = monotonicMs();
-                }
-            }
-            dictReleaseIterator(di);
-            /* Append a no-op entry to commit prior-term entries (§5.4.2)
-             * and establish the new term in the log. */
-            uint64_t noop_idx = raftLogLastIndex() + 1;
-            raftLogAppend(raftLogCreate(rs->current_term, noop_idx, RAFT_ENTRY_NOOP, sdsempty()));
-            /* Immediate heartbeat to assert leadership. */
-            clusterRaftBroadcastAppendEntries();
+            clusterRaftBecomeLeader();
         }
     }
     return 1;
@@ -2041,12 +2050,7 @@ static void clusterRaftStartElection(void) {
     /* Single-node: already have quorum. */
     int quorum = clusterRaftQuorum();
     if (rs->votes_received >= quorum) {
-        rs->role = RAFT_ROLE_LEADER;
-        memcpy(rs->leader, myself->name, CLUSTER_NAMELEN);
-        serverLog(LL_NOTICE, "Elected as Raft leader (term %llu, %d votes).",
-                  (unsigned long long)rs->current_term, rs->votes_received);
-        if (listLength(rs->pending_proposals) > 0)
-            rs->todo_retry_proposals = 1;
+        clusterRaftBecomeLeader();
     }
 }
 
@@ -2102,6 +2106,14 @@ static void clusterRaftDetectFailures(mstime_t now) {
     while ((de = dictNext(di)) != NULL) {
         clusterNode *node = dictGetVal(de);
         if (node == myself) continue;
+
+        /* Disconnect outbound links with no AE_ACK for node_timeout/2.
+         * Detects half-open connections to frozen/dead peers so
+         * clusterConnectNodes can re-establish them. */
+        if (node->link && !(node->flags & CLUSTER_NODE_MEET) &&
+            now - RAFT_NODE(node)->last_ack_time > node_timeout / 2) {
+            freeClusterLink(node->link);
+        }
 
         if (nodeFailed(node)) {
             /* For failed nodes, drop stale links periodically so
@@ -2246,12 +2258,9 @@ static void clusterRaftCron(void) {
     clusterRaftState *rs = RAFT_STATE();
     mstime_t now = monotonicMs();
 
-    /* Disconnect dead outbound links. data_received tracks the last time
-     * we got data on our outbound link (HI, AE_ACK, votes).
-     * - No data ever received after node_timeout/2: HI never arrived,
-     *   the peer's kernel accepted our SYN but the process is frozen.
-     * - Leader: no AE_ACK for node_timeout/2. last_ack_time is reset on
-     *   election, giving peers time to respond to the first AE. */
+    /* Disconnect dead outbound links where no data has been received on
+     * the current connection (HI never arrived). The peer's kernel
+     * accepted our SYN but the process is frozen. Applies to all roles. */
     {
         mstime_t stale = server.cluster_node_timeout / 2;
         dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
@@ -2260,9 +2269,7 @@ static void clusterRaftCron(void) {
             clusterNode *node = dictGetVal(de);
             if (node == myself || !node->link) continue;
             if (node->flags & CLUSTER_NODE_MEET) continue;
-            if ((node->data_received == 0 && now - node->link->ctime > stale) ||
-                (rs->role == RAFT_ROLE_LEADER &&
-                 now - RAFT_NODE(node)->last_ack_time > stale)) {
+            if (node->data_received < node->link->ctime && now - node->link->ctime > stale) {
                 freeClusterLink(node->link);
             }
         }

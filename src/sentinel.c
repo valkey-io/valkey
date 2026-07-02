@@ -4810,6 +4810,8 @@ int sentinelFailoverTo(sentinelValkeyInstance *ri, const sentinelAddr *addr, mst
 int sentinelKillClients(sentinelValkeyInstance *ri) {
     int retval;
 
+    if (ri->link->cc == NULL) return C_ERR;
+
     /* 1) Rewrite the configuration (the instance just switched roles)
      * 2) Disconnect all clients (but this one sending the command) in order
      *    to trigger the ask-master-on-reconnection protocol for connected

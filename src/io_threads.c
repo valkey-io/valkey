@@ -610,7 +610,7 @@ void ioThreadFreeArgv(robj **argv) {
         }
 
         /* The main-thread set the refcount to 0 to indicate that this is the last argument to free */
-        if (o->refcount == 0) {
+        if (objectGetRefcount(o) == 0) {
             last_arg = 1;
             o->refcount = 1;
         }

@@ -1716,17 +1716,17 @@ robj *zsetDup(robj *o) {
     zset *zs;
     zset *new_zs;
 
-    serverAssert(o->type == OBJ_ZSET);
+    serverAssert(objectGetType(o) == OBJ_ZSET);
 
     /* Create a new sorted set object that have the same encoding as the original object's encoding */
-    if (o->encoding == OBJ_ENCODING_LISTPACK) {
+    if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) {
         unsigned char *zl = objectGetVal(o);
         size_t sz = lpBytes(zl);
         unsigned char *new_zl = zmalloc(sz);
         memcpy(new_zl, zl, sz);
         zobj = createObject(OBJ_ZSET, new_zl);
         zobj->encoding = OBJ_ENCODING_LISTPACK;
-    } else if (o->encoding == OBJ_ENCODING_SKIPLIST) {
+    } else if (objectGetEncoding(o) == OBJ_ENCODING_SKIPLIST) {
         zobj = createZsetObject();
         zs = objectGetVal(o);
         new_zs = objectGetVal(zobj);

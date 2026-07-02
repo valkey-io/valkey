@@ -356,7 +356,7 @@ void feedReplicationBufferWithObject(robj *o) {
     void *p;
     size_t len;
 
-    if (o->encoding == OBJ_ENCODING_INT) {
+    if (objectGetEncoding(o) == OBJ_ENCODING_INT) {
         len = ll2string(llstr, sizeof(llstr), (long)objectGetVal(o));
         p = llstr;
     } else {

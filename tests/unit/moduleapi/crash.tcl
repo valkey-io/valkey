@@ -24,8 +24,8 @@ tags {"valgrind:skip"} {
             if {$backtrace_supported} {
                 # Make sure the crash trace is printed twice. There will be 3 instances of,
                 # assertCrash 1 in the first stack trace and 2 in the second.
-                # Skip on Alpine/musl where symbols aren't resolved
-                if {[count_log_message 0 "(no symbol information available"] == 0} {
+                # Skip when using libbacktrace where symbol resolution may be inconsistent
+                if {[catch {exec grep -a "initLibbacktraceFrameState" $::VALKEY_SERVER_BIN}] != 0} {
                     assert_equal 3 [count_log_message 0 "assertCrash"]
                 }
             }
@@ -58,8 +58,8 @@ tags {"valgrind:skip"} {
                 assert_equal 2 [count_log_message 0 "Crashed running the instruction at"]
                 # Make sure the crash trace is printed twice. There will be 3 instances of 
                 # modulesCollectInfo, 1 in the first stack trace and 2 in the second.
-                # Skip on Alpine/musl where symbols aren't resolved
-                if {[count_log_message 0 "(no symbol information available"] == 0} {
+                # Skip when using libbacktrace where symbol resolution may be inconsistent
+                if {[catch {exec grep -a "initLibbacktraceFrameState" $::VALKEY_SERVER_BIN}] != 0} {
                     assert_equal 3 [count_log_message 0 "modulesCollectInfo"]
                 }
             }

@@ -87,6 +87,11 @@ REPL_OFFSETS <node-id> <offset> [<node-id> <offset> ...]
     Recipients update node->repl_offset for CLUSTER SLOTS/SHARDS
     health reporting.
 
+TRANSFER_LEADER <term>
+    Sent by a follower to ask the current leader to hand off leadership.
+    Used when an administrative operation, such as forgetting the leader,
+    needs a different node to become leader first.
+
 TIMEOUT_NOW <term>
     Sent by the leader to a follower to trigger immediate election
     (leader transfer). The recipient starts an election without
@@ -843,7 +848,6 @@ targets.
 - Log compaction / snapshotting for lagging followers.
 - Learners (non-voting members): reduces the risk for split-vote for
   leader election in large clusters and reduces commit overhead.
-- Leader transfer on CLUSTER FORGET where the target is the leader.
 - Safety regarding membership changes (use new quorum).
 - Cluster merging via MEET: when two independently configured clusters
   are joined via CLUSTER MEET, the clusters should merge, either

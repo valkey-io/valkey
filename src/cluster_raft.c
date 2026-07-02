@@ -137,6 +137,7 @@ typedef struct {
     mstime_t ctime; /* Creation time for expiry */
     int retries;    /* Remaining epoch-retry attempts */
     int deferred;   /* Waiting for epoch advance before re-propose */
+    char blocked_leader[CLUSTER_NAMELEN]; /* Wait until this leader changes. */
 } raftPendingProposal;
 
 /* A pending meet tracks a CLUSTER MEET client waiting for the NODE_JOIN
@@ -363,6 +364,9 @@ static void clusterRaftDeferPendingProposals(void);
 static void clusterRaftCompletePendingProposal(int type, sds data, RaftProposalResult result);
 static RaftProposalResult clusterRaftPreValidate(int type, sds data);
 static void clusterRaftAutoFailoverCallback(void *ctx, const char *error);
+static void clusterRaftQueuePendingProposal(int type, sds data, void *ctx,
+                                            void (*callback)(void *ctx, const char *error),
+                                            const char *blocked_leader);
 static void clusterRaftSlotChange(slotRange *ranges, int numranges, clusterNode *target, void *ctx, void (*callback)(void *ctx, const char *error));
 static void clusterRaftUpdateMyself(int old_flags);
 static sds clusterRaftBuildMyNodeInfo(void);
@@ -386,6 +390,8 @@ static void clusterRaftPersistNewLogEntries(uint64_t from);
 static uint64_t raftLogLastTerm(void);
 static int clusterRaftCanGrantVote(clusterRaftState *rs, uint64_t candidate_last_index, uint64_t candidate_last_term);
 static void clusterRaftStartElection(void);
+static clusterNode *clusterRaftSelectTransferTarget(void);
+static int clusterRaftRequestLeaderTransfer(void);
 
 static void clusterRaftRandomizeElectionTimeout(void) {
     mstime_t base = server.cluster_node_timeout;
@@ -834,29 +840,7 @@ static void clusterRaftPropose(sds entry, void *ctx, void (*callback)(void *ctx,
         }
     }
 
-    /* Track pending proposal for retry on leader change. */
-    {
-        raftPendingProposal *pp = zmalloc(sizeof(*pp));
-        pp->type = type;
-        pp->data = sdsdup(data);
-        pp->ctx = ctx;
-        pp->callback = callback;
-        pp->ctime = monotonicMs();
-        pp->deferred = 0;
-        /* Entry types carrying shard epochs get automatic retry. */
-        switch (type) {
-        case RAFT_ENTRY_FAILOVER:
-        case RAFT_ENTRY_SET_REPLICA_OF:
-        case RAFT_ENTRY_SLOT_CHANGE:
-        case RAFT_ENTRY_NODE_FORGET:
-            pp->retries = PROPOSAL_MAX_RETRIES;
-            break;
-        default:
-            pp->retries = 0;
-            break;
-        }
-        listAddNodeTail(rs->pending_proposals, pp);
-    }
+    clusterRaftQueuePendingProposal(type, data, ctx, callback, NULL);
 
     if (rs->role == RAFT_ROLE_LEADER) {
         /* If we're a singleton leader with an empty log that hasn't committed
@@ -893,6 +877,35 @@ static void clusterRaftPropose(sds entry, void *ctx, void (*callback)(void *ctx,
         msg = wireFinishMsg(msg);
         clusterRaftSendMsg(leader->link, msg);
     }
+}
+
+static void clusterRaftQueuePendingProposal(int type, sds data, void *ctx,
+                                            void (*callback)(void *ctx, const char *error),
+                                            const char *blocked_leader) {
+    clusterRaftState *rs = RAFT_STATE();
+    raftPendingProposal *pp = zmalloc(sizeof(*pp));
+    pp->type = type;
+    pp->data = sdsdup(data);
+    pp->ctx = ctx;
+    pp->callback = callback;
+    pp->ctime = monotonicMs();
+    pp->deferred = 0;
+    memset(pp->blocked_leader, 0, CLUSTER_NAMELEN);
+    if (blocked_leader) memcpy(pp->blocked_leader, blocked_leader, CLUSTER_NAMELEN);
+
+    /* Entry types carrying shard epochs get automatic retry. */
+    switch (type) {
+    case RAFT_ENTRY_FAILOVER:
+    case RAFT_ENTRY_SET_REPLICA_OF:
+    case RAFT_ENTRY_SLOT_CHANGE:
+    case RAFT_ENTRY_NODE_FORGET:
+        pp->retries = PROPOSAL_MAX_RETRIES;
+        break;
+    default:
+        pp->retries = 0;
+        break;
+    }
+    listAddNodeTail(rs->pending_proposals, pp);
 }
 
 /* --------------------------------------------------------------------------
@@ -1202,6 +1215,61 @@ static int clusterRaftMaybeStepDown(uint64_t term) {
 static int clusterRaftIsVotedForNone(void) {
     char zero[CLUSTER_NAMELEN] = {0};
     return memcmp(RAFT_STATE()->voted_for, zero, CLUSTER_NAMELEN) == 0;
+}
+
+static clusterNode *clusterRaftSelectTransferTarget(void) {
+    clusterNode *best = NULL;
+    uint64_t best_match = 0;
+    dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
+    dictEntry *de;
+    while ((de = dictNext(di)) != NULL) {
+        clusterNode *node = dictGetVal(de);
+        if (node == myself || !node->link) continue;
+        if (nodeFailed(node)) continue;
+        if (node->flags & (CLUSTER_NODE_MEET | CLUSTER_NODE_HANDSHAKE)) continue;
+        uint64_t mi = RAFT_NODE(node)->match_index;
+        if (!best || mi > best_match) {
+            best = node;
+            best_match = mi;
+        }
+    }
+    dictReleaseIterator(di);
+    return best;
+}
+
+static int clusterRaftRequestLeaderTransfer(void) {
+    clusterRaftState *rs = RAFT_STATE();
+
+    if (server.cluster->size <= 1) return 0;
+
+    if (rs->role == RAFT_ROLE_LEADER) {
+        clusterNode *best = clusterRaftSelectTransferTarget();
+        if (!best) return 0;
+
+        sds msg = wireNewMsg("TIMEOUT_NOW");
+        msg = sdscatfmt(msg, " %U", (unsigned long long)rs->current_term);
+        msg = wireFinishMsg(msg);
+        clusterRaftSendMsg(best->link, msg);
+        serverLog(LL_NOTICE, "Leadership transfer: sent TIMEOUT_NOW to %.40s.", best->name);
+        return 1;
+    }
+
+    if (rs->role == RAFT_ROLE_FOLLOWER) {
+        clusterNode *leader = clusterLookupNode(rs->leader, CLUSTER_NAMELEN);
+        if (!leader || !leader->link || nodeFailed(leader)) {
+            rs->todo_connect_nodes = 1;
+            return 0;
+        }
+
+        sds msg = wireNewMsg("TRANSFER_LEADER");
+        msg = sdscatfmt(msg, " %U", (unsigned long long)rs->current_term);
+        msg = wireFinishMsg(msg);
+        clusterRaftSendMsg(leader->link, msg);
+        serverLog(LL_NOTICE, "Requested leadership transfer from %.40s.", leader->name);
+        return 1;
+    }
+
+    return 0;
 }
 
 /* --------------------------------------------------------------------------
@@ -2176,6 +2244,7 @@ static void clusterRaftSendProposal(raftPendingProposal *pp, clusterLink *leader
 static void clusterRaftRetryProposals(int include_pending) {
     clusterRaftState *rs = RAFT_STATE();
     if (listLength(rs->pending_proposals) == 0) return;
+    if (rs->role != RAFT_ROLE_LEADER && rs->role != RAFT_ROLE_FOLLOWER) return;
 
     /* For followers, check leader link once — it's the same for all entries. */
     clusterLink *leader_link = NULL;
@@ -2193,6 +2262,14 @@ static void clusterRaftRetryProposals(int include_pending) {
     listRewind(rs->pending_proposals, &li);
     while ((ln = listNext(&li)) != NULL) {
         raftPendingProposal *pp = listNodeValue(ln);
+
+        if (pp->blocked_leader[0] != '\0') {
+            if (memcmp(rs->leader, pp->blocked_leader, CLUSTER_NAMELEN) == 0) {
+                clusterRaftRequestLeaderTransfer();
+                continue;
+            }
+            memset(pp->blocked_leader, 0, CLUSTER_NAMELEN);
+        }
 
         /* For deferred entries, update to latest shard epoch */
         if (pp->deferred) {
@@ -2532,23 +2609,7 @@ static void clusterRaftPrepareShutdown(void) {
     clusterRaftState *rs = RAFT_STATE();
     if (rs->role != RAFT_ROLE_LEADER || server.cluster->size <= 1) return;
 
-    /* Find the follower with the highest match_index. */
-    clusterNode *best = NULL;
-    uint64_t best_match = 0;
-    dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
-    dictEntry *de;
-    while ((de = dictNext(di)) != NULL) {
-        clusterNode *node = dictGetVal(de);
-        if (node == myself || !node->link) continue;
-        if (nodeFailed(node)) continue;
-        if (node->flags & (CLUSTER_NODE_MEET | CLUSTER_NODE_HANDSHAKE)) continue;
-        uint64_t mi = RAFT_NODE(node)->match_index;
-        if (!best || mi > best_match) {
-            best = node;
-            best_match = mi;
-        }
-    }
-    dictReleaseIterator(di);
+    clusterNode *best = clusterRaftSelectTransferTarget();
     if (best) {
         sds msg = wireNewMsg("TIMEOUT_NOW");
         msg = sdscatfmt(msg, " %U", (unsigned long long)rs->current_term);
@@ -2660,6 +2721,14 @@ static int clusterRaftProcessMessage(struct clusterLink *link) {
         ret = clusterRaftProcessRequestVote(link, argc, argv);
     } else if (!strcasecmp(argv[0], "VOTE")) {
         ret = clusterRaftProcessRequestVoteResponse(link, argc, argv);
+    } else if (!strcasecmp(argv[0], "TRANSFER_LEADER") && argc >= 2) {
+        uint64_t term = strtoull(argv[1], NULL, 10);
+        clusterRaftState *rs = RAFT_STATE();
+        if (rs->role == RAFT_ROLE_LEADER && term == rs->current_term) {
+            serverLog(LL_NOTICE, "Received TRANSFER_LEADER request in term %llu.",
+                      (unsigned long long)rs->current_term);
+            clusterRaftRequestLeaderTransfer();
+        }
     } else if (!strcasecmp(argv[0], "TIMEOUT_NOW") && argc >= 2) {
         /* Leader transfer: immediately start an election. */
         uint64_t term = strtoull(argv[1], NULL, 10);
@@ -3494,7 +3563,11 @@ static RaftProposalResult clusterRaftApplyNodeForget(sds data, int validate_only
     if (!argv || argc < 2) goto reject;
 
     clusterNode *node = clusterLookupNode(argv[0], sdslen(argv[0]));
-    if (!node || node == myself) goto reject;
+    if (!node) goto done;
+    if (node == myself) {
+        if (validate_only) goto reject;
+        goto done;
+    }
 
     uint64_t epoch = strtoull(argv[1], NULL, 10);
     if (!clusterValidateShardEpoch(node->shard_id, epoch)) {
@@ -3553,12 +3626,23 @@ static void clusterRaftAutoFailoverCallback(void *ctx, const char *error) {
 }
 
 static void clusterRaftForgetNode(const char *node_id, size_t id_len, void *ctx, void (*callback)(void *ctx, const char *error)) {
-    /* TODO: Leadership transfer will be taken care as part of issue#4069 */
     clusterRaftState *rs = RAFT_STATE();
     if (id_len == CLUSTER_NAMELEN && memcmp(node_id, rs->leader, CLUSTER_NAMELEN) == 0) {
         clusterNode *leader_node = clusterLookupNode(node_id, id_len);
         if (leader_node && !nodeFailed(leader_node)) {
-            serverLog(LL_WARNING, "Attempting to forget raft leader.");
+            clusterNode *node = clusterLookupNode(node_id, CLUSTER_NAMELEN);
+            if (!node) {
+                if (callback) callback(ctx, NULL);
+                return;
+            }
+
+            uint64_t epoch = clusterGetShardEpoch(node->shard_id);
+            sds data = sdsnewlen(node_id, CLUSTER_NAMELEN);
+            data = sdscatfmt(data, " %U", (unsigned long long)epoch);
+            clusterRaftQueuePendingProposal(RAFT_ENTRY_NODE_FORGET, data, ctx, callback, node_id);
+            sdsfree(data);
+            clusterRaftRequestLeaderTransfer();
+            return;
         }
     }
 

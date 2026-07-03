@@ -2878,6 +2878,8 @@ int clusterProcessGossipSection(clusterMsg *hdr, clusterLink *link) {
                  * replicationSetPrimary and update the primary host. */
                 if (nodeIsReplica(myself) && myself->replicaof == node)
                     replicationSetPrimary(node->ip, getNodeDefaultReplicationPort(node), 0, false);
+
+                clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE);
             }
         } else if (!node) {
             /* If it's not in NOADDR state and we don't have it, we

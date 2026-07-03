@@ -3469,17 +3469,41 @@ static uint32_t writePingExtensions(clusterMsg *hdr, int gossipcount) {
         writeSdsPingExtIfNonempty(&totlen, &cursor, CLUSTERMSG_EXT_TYPE_AVAILABILITY_ZONE, myself->availability_zone);
 
         
-    // printf("writePingExtensions: msg_type=%d, CLUSTERMSG_TYPE_PING=%d, CLUSTERMSG_TYPE_MEET=%d\n", msg_type, CLUSTERMSG_TYPE_PING, CLUSTERMSG_TYPE_MEET);
-    // fprintf(stderr, "messhshhdf : %d", hdr==NULL);   ///check hy it not printing
-    if (hdr != NULL && server.cluster_nodes_latency_stats_enabled) {
+    if (server.cluster_nodes_latency_stats_enabled) {
+    if (hdr == NULL) {
+            totlen += sizeof(clusterMsgPingExt) + sizeof(clusterMsgPingExtEchoTime);
+            extensions++;
+        }
+    else{        
     uint16_t msg_type = ntohs(hdr->type);
     
     if(msg_type == CLUSTERMSG_TYPE_PING || msg_type == CLUSTERMSG_TYPE_MEET) {
+        //pass on fresh ts
         uint64_t current_time = mstime();
         extensions += writePingTimeExtIfNonzero(&totlen, &cursor, CLUSTERMSG_EXT_TYPE_PING_ECHO_TIME, current_time);
     }
+    else if(msg_type == CLUSTERMSG_TYPE_PONG) {
+        //process extesnsion message to extract & pass on the ts
+        uint64_t extracted_echo_time = 0;
+        uint16_t incoming_extensions_count = ntohs(hdr->extensions);
+        clusterMsgPingExt *search_ext = getInitialPingExt(hdr, gossipcount);
+
+            while (incoming_extensions_count--) {
+                if (ntohs(search_ext->type) == CLUSTERMSG_EXT_TYPE_PING_ECHO_TIME) {
+                clusterMsgPingExtEchoTime *ping_echo_time_ext =
+                (clusterMsgPingExtEchoTime *)&(search_ext->ext[0].ping_echo_time);
+                    extracted_echo_time = ping_echo_time_ext -> ping_echo_time; /* Keep raw network byte order bits */
+                    break;
+                }
+                search_ext = getNextPingExt(search_ext);
+            }
+
+            /* Write back passed ts in ping extension into the active outbound cursor slot */
+            if (extracted_echo_time != 0) {
+                extensions += writePingTimeExtIfNonzero(&totlen, &cursor, CLUSTERMSG_EXT_TYPE_PING_ECHO_TIME, extracted_echo_time);
+            }
+    }}
     }
-    // above code is hanging !!! in other tests, check todo
 
     /* Gossip forgotten nodes */
     if (dictSize(server.cluster->nodes_black_list) > 0) {
@@ -3537,6 +3561,7 @@ int clusterProcessPingExtensions(clusterMsg *hdr, clusterLink *link) {
     int ext_clienttlsport = 0;
     char *ext_shardid = NULL;
     uint32_t round_trip_time = 0;
+    uint64_t ping_echo_time = 0;
 
 
     uint16_t extensions = ntohs(hdr->extensions);
@@ -3589,20 +3614,22 @@ int clusterProcessPingExtensions(clusterMsg *hdr, clusterLink *link) {
             clusterMsgPingExtAvailabilityZone *availability_zone_ext =
                 (clusterMsgPingExtAvailabilityZone *)&(ext->ext[0].availability_zone);
             ext_availability_zone = availability_zone_ext->availability_zone;
-        } else if (link!=NULL && type == CLUSTERMSG_EXT_TYPE_PING_ECHO_TIME) {
+        } else if (type == CLUSTERMSG_EXT_TYPE_PING_ECHO_TIME) {
             // printf("Received ping echo time extension for setting value %llu\n", ntohu64(((clusterMsgPingExtEchoTime *)&(ext->ext[0].ping_echo_time))->ping_echo_time));
             clusterMsgPingExtEchoTime *ping_echo_time_ext =
                 (clusterMsgPingExtEchoTime *)&(ext->ext[0].ping_echo_time);
-            uint64_t ping_echo_time = ntohu64(ping_echo_time_ext->ping_echo_time);
-            uint16_t message_type = ntohs(hdr->type);
-            if(message_type == CLUSTERMSG_TYPE_PING || message_type == CLUSTERMSG_TYPE_MEET) {
-                // link->ping_echo_time = ping_echo_time;  //set as it is when its ping type, coming to receiver               
-            }
-            else if(message_type == CLUSTERMSG_TYPE_PONG) { //got message back
-                round_trip_time = mstime() - ping_echo_time;
-                // link->ping_echo_time = 0;
-                updateCommandLatencyStats(sender, round_trip_time); //rtt updated for sender node when it receives back pong
-            }
+            link -> ping_echo_time = ping_echo_time_ext->ping_echo_time;
+            break;
+            // ping_echo_time = ntohu64(ping_echo_time_ext->ping_echo_time);
+            // uint16_t message_type = ntohs(hdr->type);
+            // if(message_type == CLUSTERMSG_TYPE_PING || message_type == CLUSTERMSG_TYPE_MEET) {
+            //     // link->ping_echo_time = ping_echo_time;  //set as it is when its ping type, coming to receiver               
+            // }
+            // else if(message_type == CLUSTERMSG_TYPE_PONG) { //got message back
+            //     round_trip_time = mstime() - ping_echo_time;
+            //     // link->ping_echo_time = 0;
+            //     updateCommandLatencyStats(sender, round_trip_time); //rtt updated for sender node when it receives back pong
+            // }
         }
          else {
             /* Unknown type, we will ignore it but log what happened. */
@@ -4472,6 +4499,16 @@ int clusterProcessPacket(clusterLink *link) {
             clusterProcessGossipSection(msg, link);
             if (!clusterProcessPingExtensions(msg, link)) return 0;
         }
+
+        if (type == CLUSTERMSG_TYPE_PONG && link && link->ping_echo_time != 0) {
+            mstime_t current_rtt = mstime() - link->ping_echo_time;
+            if (link->node) {
+                updateCommandLatencyStats(link->node, current_rtt);
+            }
+            link->ping_echo_time = 0; /* Clear immediately */
+        }
+
+
     } else if (type == CLUSTERMSG_TYPE_FAIL) {
         clusterNode *failing;
 

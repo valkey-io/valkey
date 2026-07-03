@@ -4204,6 +4204,7 @@ int clusterProcessPacket(clusterLink *link) {
         /* Check for role switch: replica -> primary or primary -> replica. */
         if (sender) {
             if (sender_claims_to_be_primary) {
+                /* Node is a primary. */
                 if (sender_last_reported_as_replica) {
                     serverLog(LL_DEBUG, "Node %.40s (%s) announces that it is a primary in shard %.40s",
                               sender->name, humanNodename(sender), sender->shard_id);
@@ -4220,8 +4221,8 @@ int clusterProcessPacket(clusterLink *link) {
                 clusterNode *sender_claimed_primary = clusterLookupNode(msg->replicaof, CLUSTER_NAMELEN);
 
                 if (sender_last_reported_as_primary) {
-                    serverLog(LL_DEBUG, "Node %.40s (%s) announces that it is a replica in shard %.40s", sender->name,
-                              humanNodename(sender), sender->shard_id);
+                    serverLog(LL_DEBUG, "Node %.40s (%s) announces that it is a replica in shard %.40s",
+                              sender->name, humanNodename(sender), sender->shard_id);
 
                     /* Primary turned into a replica! Reconfigure the node. */
                     if (sender_claimed_primary && areInSameShard(sender_claimed_primary, sender)) {

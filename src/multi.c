@@ -577,8 +577,10 @@ void unwatchCommand(client *c) {
 size_t multiStateMemOverhead(client *c) {
     if (!c->mstate) return 0;
     size_t mem = c->mstate->argv_len_sums;
-    /* Add watched keys overhead. We take into account the watched keys themselves,
-     * because each client has its own copy, it is a client level memory usage. */
+    /* Add watched keys overhead. We take into account the watched keys themselves.
+     * A watched key robj is shared (via refcount) by all clients watching the
+     * same key, but we attribute it to each watching client so it stays visible
+     * to CLIENT INFO and maxmemory-clients. */
     mem += listLength(&c->mstate->watched_keys) * (sizeof(listNode) + sizeof(watchedKey));
     mem += c->mstate->watched_keys_mem;
     /* Add per-db watched keys hashtable overhead. */

@@ -469,10 +469,11 @@ static bool isCertValid(X509 *cert) {
 #if OPENSSL_VERSION_NUMBER >= 0x40000000L
     int error = 0;
     if (X509_check_certificate_times(NULL, cert, &error) != 1) {
-        return false;
-    }
-    if (error > 0) {
-        serverLog(LL_WARNING, "X509_check_certificate_times() returned error %d", error);
+        if (error == X509_V_ERR_ERROR_IN_CERT_NOT_BEFORE_FIELD) {
+            serverLog(LL_WARNING, "Certificate has an invalid notBefore field");
+        } else if (error == X509_V_ERR_ERROR_IN_CERT_NOT_AFTER_FIELD) {
+            serverLog(LL_WARNING, "Certificate has an invalid notAfter field");
+        }
         return false;
     }
 #else

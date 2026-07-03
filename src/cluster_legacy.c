@@ -3960,6 +3960,15 @@ int clusterProcessPacket(clusterLink *link) {
 
     /* Initial processing of PING and MEET requests replying with a PONG. */
     if (type == CLUSTERMSG_TYPE_PING || type == CLUSTERMSG_TYPE_MEET) {
+        if (type == CLUSTERMSG_TYPE_MEET && !sender && clusterBlacklistExists(msg->sender, CLUSTER_NAMELEN)) {
+            /* The sender was removed with CLUSTER FORGET and is still in the
+             * blacklist. Ignore its MEET packet before any side effects, or
+             * it would add itself back to the cluster. */
+            serverLog(LL_NOTICE, "Ignoring MEET packet from blacklisted node %.40s", msg->sender);
+            freeClusterLink(link);
+            return 0;
+        }
+
         /* We use incoming MEET messages in order to set the address
          * for 'myself', since only other cluster nodes will send us
          * MEET messages on handshakes, when the cluster joins, or
@@ -3983,14 +3992,6 @@ int clusterProcessPacket(clusterLink *link) {
 
         if (type == CLUSTERMSG_TYPE_MEET) {
             if (!sender) {
-                if (clusterBlacklistExists(msg->sender, CLUSTER_NAMELEN)) {
-                    /* The sender was removed with CLUSTER FORGET and is still
-                     * in the blacklist. Ignore its MEET packet, or it would
-                     * add itself back to the cluster. */
-                    serverLog(LL_NOTICE, "Ignoring MEET packet from blacklisted node %.40s", msg->sender);
-                    freeClusterLink(link);
-                    return 0;
-                }
                 if (!link->node) {
                     char ip[NET_IP_STR_LEN] = {0};
                     if (nodeIp2String(ip, link, msg->myip) != C_OK) {

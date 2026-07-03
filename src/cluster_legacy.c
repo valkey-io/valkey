@@ -2778,8 +2778,9 @@ int verifyGossipSectionNodeIds(clusterMsgDataGossip *g, uint16_t count) {
 /* Process the gossip section of PING or PONG packets.
  * Note that this function assumes that the packet is already sanity-checked
  * by the caller, not in the content of the gossip section, but in the
- * length. */
-void clusterProcessGossipSection(clusterMsg *hdr, clusterLink *link) {
+ * length. Returns 1 if the link is still valid after processing, or 0 if
+ * the link was freed due to invalid data. */
+int clusterProcessGossipSection(clusterMsg *hdr, clusterLink *link) {
     uint16_t count = ntohs(hdr->count);
     clusterMsgDataGossip *g = (clusterMsgDataGossip *)hdr->data.ping.gossip;
     clusterNode *sender = link->node ? link->node : clusterLookupNode(hdr->sender, CLUSTER_NAMELEN);
@@ -2789,12 +2790,18 @@ void clusterProcessGossipSection(clusterMsg *hdr, clusterLink *link) {
     int invalid_ids = verifyGossipSectionNodeIds(g, count);
     if (invalid_ids) {
         if (sender) {
-            serverLog(LL_WARNING, "Node %.40s (%s) gossiped %d nodes with invalid IDs.", sender->name,
-                      humanNodename(sender), invalid_ids);
+            serverLog(LL_WARNING,
+                      "Node %.40s (%s) gossiped %d nodes with invalid IDs. "
+                      "Dropping the link to protect cluster state.",
+                      sender->name, humanNodename(sender), invalid_ids);
         } else {
-            serverLog(LL_WARNING, "Unknown node gossiped %d nodes with invalid IDs.", invalid_ids);
+            serverLog(LL_WARNING,
+                      "Unknown node gossiped %d nodes with invalid IDs. "
+                      "Dropping the link to protect cluster state.",
+                      invalid_ids);
         }
-        return;
+        freeClusterLink(link);
+        return 0;
     }
 
     while (count--) {
@@ -2912,6 +2919,7 @@ void clusterProcessGossipSection(clusterMsg *hdr, clusterLink *link) {
         /* Next node */
         g++;
     }
+    return 1;
 }
 
 /* IP -> string conversion. 'buf' is supposed to at least be 46 bytes.
@@ -4125,7 +4133,7 @@ int clusterProcessPacket(clusterLink *link) {
                 /* If this is a MEET packet from an unknown node, we still process
                  * the gossip section here since we have to trust the sender because
                  * of the message type. */
-                clusterProcessGossipSection(msg, link);
+                if (!clusterProcessGossipSection(msg, link)) return 0;
             } else if (sender->link && nodeExceedsHandshakeTimeout(sender, now)) {
                 /* The MEET packet is from a known node, after the handshake timeout, so the sender
                  * thinks that I do not know it.
@@ -4496,7 +4504,7 @@ int clusterProcessPacket(clusterLink *link) {
 
         /* Get info from the gossip section */
         if (sender) {
-            clusterProcessGossipSection(msg, link);
+            if (!clusterProcessGossipSection(msg, link)) return 0;
             if (!clusterProcessPingExtensions(msg, link)) return 0;
         }
 

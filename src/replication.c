@@ -551,6 +551,25 @@ void feedReplicationBuffer(char *s, size_t len) {
     }
 }
 
+/* Bulk values larger than this threshold bypass the staging buffer in
+ * replicationFeedReplicas() and are handed to feedReplicationBuffer() directly.
+ * Below it, the extra memcpy through the staging buffer is cheaper than the
+ * fixed per-call cost of feedReplicationBuffer (replica-list walk, slot stats
+ * accounting, backlog tail lookup, output-buffer-limit checks). */
+#define REPL_BULK_INLINE_THRESHOLD 256
+
+/* Append the RESP bulk-length prefix `$<len>\r\n` for a payload of `len` bytes.
+ * Uses ll2string explicitly so 64-bit lengths are encoded correctly regardless
+ * of sdscatfmt's specifier choice. */
+static sds catReplicationBulkLen(sds frame, size_t len) {
+    char aux[LONG_STR_SIZE + 3];
+    aux[0] = '$';
+    int n = ll2string(aux + 1, sizeof(aux) - 1, (long long)len);
+    aux[n + 1] = '\r';
+    aux[n + 2] = '\n';
+    return sdscatlen(frame, aux, n + 3);
+}
+
 /* Propagate write commands to replication stream.
  *
  * This function is used if the instance is a primary: we use the commands
@@ -558,8 +577,6 @@ void feedReplicationBuffer(char *s, size_t len) {
  * Instead if the instance is a replica and has sub-replicas attached, we use
  * replicationFeedStreamFromPrimaryStream() */
 void replicationFeedReplicas(int dictid, robj **argv, int argc) {
-    int j, len;
-
     /* In case we propagate a command that doesn't touch keys (PING, REPLCONF) we
      * pass dbid=-1 that indicate there is no need to replicate `select` command. */
     serverAssert(dictid == -1 || (dictid >= 0 && dictid < server.dbnum));
@@ -603,30 +620,44 @@ void replicationFeedReplicas(int dictid, robj **argv, int argc) {
         server.replicas_eldb = dictid;
     }
 
-    /* Write the command to the replication buffer if any. */
-    char aux[LONG_STR_SIZE + 3];
-
+    /* Build the RESP frame for this command in a staging buffer, then push it
+     * to feedReplicationBuffer in as few calls as possible. Collapses the
+     * fragmented calls to feedReplicationBuffer into one call
+     * for typical commands.
+     *
+     * For bulks larger than REPL_BULK_INLINE_THRESHOLD we flush the staging
+     * buffer and feed the bulk bytes directly, avoiding an extra full-buffer
+     * memcpy. */
+    sds frame = sdsempty();
     /* Add the multi bulk reply length. */
-    aux[0] = '*';
-    len = ll2string(aux + 1, sizeof(aux) - 1, argc);
-    aux[len + 1] = '\r';
-    aux[len + 2] = '\n';
-    feedReplicationBuffer(aux, len + 3);
+    frame = sdscatfmt(frame, "*%i\r\n", argc);
 
-    for (j = 0; j < argc; j++) {
-        long objlen = stringObjectLen(argv[j]);
-
-        /* We need to feed the buffer with the object as a bulk reply
-         * not just as a plain string, so create the $..CRLF payload len
-         * and add the final CRLF */
-        aux[0] = '$';
-        len = ll2string(aux + 1, sizeof(aux) - 1, objlen);
-        aux[len + 1] = '\r';
-        aux[len + 2] = '\n';
-        feedReplicationBuffer(aux, len + 3);
-        feedReplicationBufferWithObject(argv[j]);
-        feedReplicationBuffer(aux + len + 1, 2);
+    for (int j = 0; j < argc; j++) {
+        robj *o = argv[j];
+        if (o->encoding == OBJ_ENCODING_INT) {
+            char aux[LONG_STR_SIZE];
+            size_t dlen = ll2string(aux, sizeof(aux), (long)objectGetVal(o));
+            frame = catReplicationBulkLen(frame, dlen);
+            frame = sdscatlen(frame, aux, dlen);
+            frame = sdscatlen(frame, "\r\n", 2);
+        } else {
+            size_t objlen = stringObjectLen(o);
+            frame = catReplicationBulkLen(frame, objlen);
+            if (objlen > REPL_BULK_INLINE_THRESHOLD) {
+                /* Zero-copy path: flush header bytes accumulated so far,
+                 * then feed the bulk payload straight from the object. */
+                feedReplicationBuffer(frame, sdslen(frame));
+                sdsclear(frame);
+                feedReplicationBuffer(objectGetVal(o), objlen);
+                frame = sdscatlen(frame, "\r\n", 2);
+            } else {
+                frame = sdscatlen(frame, objectGetVal(o), objlen);
+                frame = sdscatlen(frame, "\r\n", 2);
+            }
+        }
     }
+    feedReplicationBuffer(frame, sdslen(frame));
+    sdsfree(frame);
 }
 
 /* This is a debugging function that gets called when we detect something

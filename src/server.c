@@ -1806,6 +1806,9 @@ void whileBlockedCron(void) {
 
     defragWhileBlocked();
 
+    /* serverCron() doesn't run while blocked, so refresh the cached daylight-saving info here. */
+    updateCachedTime(1);
+
     /* Update memory stats during loading (excluding blocked scripts) */
     if (server.loading) cronUpdateMemoryStats();
 

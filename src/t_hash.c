@@ -1096,6 +1096,61 @@ static void addHashFieldToReply(client *c, robj *o, sds field) {
     }
 }
 
+#define HMGET_FIND_BATCH_SIZE 16
+
+static void addHashEntryToReply(client *c, void *hash_entry) {
+    if (hash_entry == NULL) {
+        addReplyNull(c);
+        return;
+    }
+
+    size_t len = 0;
+    char *value = entryGetValue(hash_entry, &len);
+    serverAssert(value != NULL);
+    addReplyBulkCBuffer(c, value, len);
+}
+
+static void hmgetReplyWithHashtable(client *c, hashtable *ht, robj **fields, size_t count) {
+    hashtableFindBatchItem items[HMGET_FIND_BATCH_SIZE];
+    while (count) {
+        size_t batch = count > HMGET_FIND_BATCH_SIZE ? HMGET_FIND_BATCH_SIZE : count;
+
+        for (size_t i = 0; i < batch; i++) {
+            items[i].key = objectGetVal(fields[i]);
+        }
+
+        hashtableFindBatch(ht, items, batch);
+
+        for (size_t i = 0; i < batch; i++) {
+            addHashEntryToReply(c, items[i].found ? items[i].entry : NULL);
+        }
+
+        fields += batch;
+        count -= batch;
+    }
+}
+
+static void hmgetReply(client *c, robj *o, robj **fields, size_t count) {
+    addReplyArrayLen(c, count);
+
+    if (o == NULL) {
+        for (size_t i = 0; i < count; i++) {
+            addReplyNull(c);
+        }
+        return;
+    }
+
+    /* Prefer hashtable batch lookup to improve performance. */
+    if (o->encoding == OBJ_ENCODING_HASHTABLE && count > 1) {
+        hmgetReplyWithHashtable(c, objectGetVal(o), fields, count);
+        return;
+    }
+
+    for (size_t i = 0; i < count; i++) {
+        addHashFieldToReply(c, o, objectGetVal(fields[i]));
+    }
+}
+
 void hgetCommand(client *c) {
     robj *o;
 
@@ -1105,7 +1160,6 @@ void hgetCommand(client *c) {
 
 void hmgetCommand(client *c) {
     robj *o;
-    int i;
 
     /* Don't abort when the key cannot be found. Non-existing keys are empty
      * hashes, where HMGET should respond with a series of null bulks. */
@@ -1113,13 +1167,7 @@ void hmgetCommand(client *c) {
 
     if (checkType(c, o, OBJ_HASH)) return;
 
-    addReplyArrayLen(c, c->argc - 2);
-    for (i = 2; i < c->argc; i++) {
-        addHashFieldToReply(c, o, objectGetVal(c->argv[i]));
-    }
-    if (o && hashTypeLength(o) == 0) {
-        dbDelete(c->db, c->argv[1]);
-    }
+    hmgetReply(c, o, c->argv + 2, c->argc - 2);
 }
 
 void hdelCommand(client *c) {

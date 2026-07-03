@@ -402,6 +402,30 @@ start_server {tags {"hash"}} {
         set _ $err
     } {}
 
+    test {HMGET uses hashtable batch lookup} {
+        set original_max [lindex [r config get hash-max-listpack-entries] 1]
+        r config set hash-max-listpack-entries 0
+
+        r del hmgetbatchtest
+        for {set i 1} {$i <= 128} {incr i} {
+            r hset hmgetbatchtest [format "f%02d" $i] [format "v%02d" $i]
+        }
+
+        assert_encoding hashtable hmgetbatchtest
+        assert_equal {v01} [r hmget hmgetbatchtest f01]
+        assert_equal {v01 {} v01 v04} [r hmget hmgetbatchtest f01 missing f01 f04]
+
+        set fields {missing}
+        set expected [list {}]
+        for {set i 1} {$i <= 19} {incr i} {
+            lappend fields [format "f%02d" $i]
+            lappend expected [format "v%02d" $i]
+        }
+        assert_equal $expected [r hmget hmgetbatchtest {*}$fields]
+
+        r config set hash-max-listpack-entries $original_max
+    }
+
     test {HKEYS - small hash} {
         lsort [r hkeys smallhash]
     } [lsort [array names smallhash *]]

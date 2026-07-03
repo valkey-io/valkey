@@ -1829,6 +1829,8 @@ void setClusterNodeToInboundClusterLink(clusterNode *node, clusterLink *link) {
     serverAssert(!node->inbound_link);
     node->inbound_link = link;
     link->node = node;
+    /* The node knows us now, so the MEET retry budget starts over. */
+    node->meet_attempts = 0;
     if (server.verbosity <= LL_VERBOSE) {
         char ip[NET_IP_STR_LEN];
         int port;
@@ -1955,6 +1957,7 @@ clusterNode *createClusterNode(char *nodename, int flags) {
     node->outbound_link_attempt_time = 0;
     node->data_received = 0;
     node->meet_sent = 0;
+    node->meet_attempts = 0;
     node->fail_time = 0;
     node->link = NULL;
     node->inbound_link = NULL;
@@ -3980,6 +3983,14 @@ int clusterProcessPacket(clusterLink *link) {
 
         if (type == CLUSTERMSG_TYPE_MEET) {
             if (!sender) {
+                if (clusterBlacklistExists(msg->sender, CLUSTER_NAMELEN)) {
+                    /* The sender was removed with CLUSTER FORGET and is still
+                     * in the blacklist. Ignore its MEET packet, or it would
+                     * add itself back to the cluster. */
+                    serverLog(LL_NOTICE, "Ignoring MEET packet from blacklisted node %.40s", msg->sender);
+                    freeClusterLink(link);
+                    return 0;
+                }
                 if (!link->node) {
                     char ip[NET_IP_STR_LEN] = {0};
                     if (nodeIp2String(ip, link, msg->myip) != C_OK) {
@@ -4547,9 +4558,20 @@ void clusterLinkConnectHandler(connection *conn) {
      *
      * If the node is flagged as MEET, we send a MEET message instead
      * of a PING one, to force the receiver to add us in its node
-     * table. */
+     * table. For a known node (not in handshake) the MEET retry budget
+     * applies: a node that keeps refusing our MEET packets has probably
+     * deliberately forgotten us, so we stop insisting (see #2788). */
+    int send_meet = nodeInMeetState(node);
+    if (send_meet && !nodeInHandshake(node)) {
+        if (node->meet_attempts >= CLUSTER_MEET_MAX_ATTEMPTS) {
+            node->flags &= ~CLUSTER_NODE_MEET;
+            send_meet = 0;
+        } else {
+            node->meet_attempts++;
+        }
+    }
     mstime_t old_ping_sent = node->ping_sent;
-    clusterSendPing(link, nodeInMeetState(node) ? CLUSTERMSG_TYPE_MEET : CLUSTERMSG_TYPE_PING);
+    clusterSendPing(link, send_meet ? CLUSTERMSG_TYPE_MEET : CLUSTERMSG_TYPE_PING);
     if (old_ping_sent) {
         /* If there was an active ping before the link was
          * disconnected, we want to restore the ping time, otherwise
@@ -6068,11 +6090,17 @@ static int clusterNodeCronHandleReconnect(clusterNode *node, mstime_t now, long 
          * This probably means this node does not know us yet, whereas we know it.
          * So we send it a MEET packet to do a handshake with it and correct the inconsistent cluster view.
          * We make sure to not re-send a MEET packet more than once every handshake timeout period, so as to
-         * leave the other node time to complete the handshake. */
-        node->flags |= CLUSTER_NODE_MEET;
-        serverLog(LL_NOTICE, "Sending MEET packet to node %.40s (%s) because there is no inbound link for it",
-                  node->name, humanNodename(node));
-        clusterSendPing(node->link, CLUSTERMSG_TYPE_MEET);
+         * leave the other node time to complete the handshake.
+         * The number of attempts is bounded: a node that keeps refusing our MEET
+         * packets has probably removed us with CLUSTER FORGET, and insisting
+         * forever would reintroduce us after its blacklist expired (see #2788). */
+        if (node->meet_attempts < CLUSTER_MEET_MAX_ATTEMPTS) {
+            node->meet_attempts++;
+            node->flags |= CLUSTER_NODE_MEET;
+            serverLog(LL_NOTICE, "Sending MEET packet to node %.40s (%s) because there is no inbound link for it",
+                      node->name, humanNodename(node));
+            clusterSendPing(node->link, CLUSTERMSG_TYPE_MEET);
+        }
     }
 
     if (node->link == NULL) {

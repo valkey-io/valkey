@@ -1026,8 +1026,9 @@ int clusterLoadConfig(char *filename) {
     /* Something that should never happen: currentEpoch smaller than
      * the max epoch found in the nodes configuration. However we handle this
      * as some form of protection against manual editing of critical files. */
-    if (clusterGetMaxEpoch() > server.cluster->currentEpoch) {
-        server.cluster->currentEpoch = clusterGetMaxEpoch();
+    uint64_t maxEpoch = clusterGetMaxEpoch();
+    if (maxEpoch > server.cluster->currentEpoch) {
+        server.cluster->currentEpoch = maxEpoch;
     }
     return C_OK;
 
@@ -2368,6 +2369,11 @@ uint64_t clusterGetMaxEpoch(void) {
  * otherwise C_ERR is returned (since the node has already the greatest
  * configuration around) and no operation is performed.
  *
+ * This function bumps unless our configEpoch is already strictly greater
+ * than every other node's. This handles the case where a dead/unreachable
+ * node holds an abnormally high configEpoch that currentEpoch never caught
+ * up with via PING/PONG.
+ *
  * Important note: this function violates the principle that config epochs
  * should be generated with consensus and should be unique across the cluster.
  * However the cluster uses this auto-generated new config epochs in two
@@ -2386,9 +2392,29 @@ uint64_t clusterGetMaxEpoch(void) {
  * config epochs. However using this function may violate the "last failover
  * wins" rule, so should only be used with care. */
 int clusterBumpConfigEpochWithoutConsensus(void) {
-    uint64_t maxEpoch = clusterGetMaxEpoch();
+    uint64_t maxEpoch = 0;
+    dictIterator *di;
+    dictEntry *de;
 
-    if (myself->configEpoch == 0 || myself->configEpoch != maxEpoch) {
+    /* Find the highest configEpoch held by any node other than ourselves. */
+    di = dictGetSafeIterator(server.cluster->nodes);
+    while ((de = dictNext(di)) != NULL) {
+        clusterNode *node = dictGetVal(de);
+        if (node != myself && node->configEpoch > maxEpoch) maxEpoch = node->configEpoch;
+    }
+    dictReleaseIterator(di);
+
+    /* Something that should never happen: currentEpoch smaller than
+     * the max epoch found in the nodes configuration. However we handle this
+     * as some form of protection against a stale, abnormally high configEpoch
+     * held by a dead/unreachable node that currentEpoch never caught up with
+     * via PING/PONG. */
+    if (maxEpoch > server.cluster->currentEpoch) {
+        server.cluster->currentEpoch = maxEpoch;
+    }
+
+    /* Bump unless we are already strictly greater than every other node. */
+    if (myself->configEpoch == 0 || myself->configEpoch <= maxEpoch) {
         server.cluster->currentEpoch++;
         myself->configEpoch = server.cluster->currentEpoch;
         clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_FSYNC_CONFIG | CLUSTER_TODO_BROADCAST_ALL);

@@ -381,11 +381,14 @@ void watchForKey(client *c, robj *key) {
     }
 
     /* This key is not already watched in this DB. Let's add it */
-    clients = dictFetchValue(c->db->watched_keys, key);
-    if (!clients) {
+    dictEntry *de = dictFind(c->db->watched_keys, key);
+    if (de == NULL) {
         clients = listCreate();
         dictAdd(c->db->watched_keys, key, clients);
         incrRefCount(key);
+    } else {
+        key = dictGetKey(de);
+        clients = dictGetVal(de);
     }
 
     /* Add the new key to the list of keys watched by this client */

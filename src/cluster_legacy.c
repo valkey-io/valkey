@@ -4204,10 +4204,15 @@ int clusterProcessPacket(clusterLink *link) {
         /* Check for role switch: replica -> primary or primary -> replica. */
         if (sender) {
             if (sender_claims_to_be_primary) {
-                /* Node is a primary. */
                 if (sender_last_reported_as_replica) {
-                    serverLog(LL_DEBUG, "node %.40s (%s) announces that it is a %s in shard %.40s", sender->name,
-                              humanNodename(sender), sender_claims_to_be_primary ? "primary" : "replica", sender->shard_id);
+                    serverLog(LL_DEBUG, "Node %.40s (%s) announces that it is a primary in shard %.40s",
+                              sender->name, humanNodename(sender), sender->shard_id);
+                    clusterSetNodeAsPrimary(sender);
+                } else if (!nodeIsPrimary(sender)) {
+                    /* Sender has no role locally yet (e.g. created with noflags
+                     * from nodes.conf). Adopt the advertised primary role. */
+                    serverLog(LL_NOTICE, "Node %.40s (%s) had no role and now announces as a primary in shard %.40s",
+                              sender->name, humanNodename(sender), sender->shard_id);
                     clusterSetNodeAsPrimary(sender);
                 }
             } else {
@@ -4215,8 +4220,8 @@ int clusterProcessPacket(clusterLink *link) {
                 clusterNode *sender_claimed_primary = clusterLookupNode(msg->replicaof, CLUSTER_NAMELEN);
 
                 if (sender_last_reported_as_primary) {
-                    serverLog(LL_DEBUG, "node %.40s (%s) announces that it is a %s in shard %.40s", sender->name,
-                              humanNodename(sender), sender_claims_to_be_primary ? "primary" : "replica", sender->shard_id);
+                    serverLog(LL_DEBUG, "Node %.40s (%s) announces that it is a replica in shard %.40s", sender->name,
+                              humanNodename(sender), sender->shard_id);
 
                     /* Primary turned into a replica! Reconfigure the node. */
                     if (sender_claimed_primary && areInSameShard(sender_claimed_primary, sender)) {
@@ -4286,6 +4291,14 @@ int clusterProcessPacket(clusterLink *link) {
 
                     /* Update config and state. */
                     clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_FSYNC_CONFIG);
+                } else if (!nodeIsReplica(sender)) {
+                    /* Sender has no role locally yet (e.g. created with noflags
+                     * from nodes.conf). Adopt the advertised replica role. */
+                    serverLog(LL_NOTICE, "Node %.40s (%s) had no role and now announces as a replica in shard %.40s",
+                              sender->name, humanNodename(sender), sender->shard_id);
+                    sender->flags &= ~(CLUSTER_NODE_PRIMARY | CLUSTER_NODE_MIGRATE_TO);
+                    sender->flags |= CLUSTER_NODE_REPLICA;
+                    clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE);
                 }
 
                 /* Primary node changed for this replica? */

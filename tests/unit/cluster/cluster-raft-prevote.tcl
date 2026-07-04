@@ -1,9 +1,23 @@
 # Test pre-vote behavior in real raft clusters.
 
+source tests/support/cluster_raft.tcl
+
 tags {external:skip cluster singledb} {
 
 start_cluster 3 0 {overrides {cluster-protocol raft cluster-node-timeout 500}} {
     test "Raft Cluster: leader failure, successful pre-vote and election" {
+        set r0 [srv 0 client]
+        raft_add_voter $r0 [[srv -1 client] CLUSTER MYID]
+        raft_add_voter $r0 [[srv -2 client] CLUSTER MYID]
+
+        wait_for_condition 50 100 {
+            [CI 0 cluster_size] == 3 &&
+            [CI 1 cluster_size] == 3 &&
+            [CI 2 cluster_size] == 3
+        } else {
+            fail "Cluster did not form: sizes=[CI 0 cluster_size],[CI 1 cluster_size],[CI 2 cluster_size]"
+        }
+
         assert_equal "leader" [CI 0 cluster_raft_role]
 
         set old_term [CI 0 cluster_raft_current_term]

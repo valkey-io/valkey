@@ -11,9 +11,10 @@
  * independent of the data primary/replica role.
  *
  * Invariants:
- * - server.cluster->size counts nodes with a committed NODE_JOIN entry.
- *   Initialized to 0; incremented by NODE_JOIN apply, decremented by
- *   NODE_FORGET apply. (This is used for computing the quorum.)
+ * - server.cluster->size counts committed voting members. It is initialized
+ *   to 0, incremented by NODE_JOIN/ADD_VOTER apply, and decremented by
+ *   NODE_FORGET/DEL_VOTER apply when the affected node is a voter. (This is
+ *   used for computing the quorum.)
  * - The first log entry referencing any node is its NODE_JOIN. Other
  *   entry types (SLOT_CHANGE, SET_REPLICA_OF, etc.) are only proposed
  *   after the node's NODE_JOIN is in the log.
@@ -22,7 +23,8 @@
  *
  * Constraints:
  * - AE, PRE_VOTE_REQ, and VOTE_REQ are never sent to nodes with CLUSTER_NODE_MEET.
- *   This prevents AE from arriving before MEET on the same link.
+ *   This prevents AE from arriving before MEET on the same link. Learners receive
+ *   AE but are excluded from PRE_VOTE_REQ, VOTE_REQ, and quorum accounting.
  * - Configuration (quorum) takes effect on apply, not on append.
  *   This allows multiple NODE_JOINs in flight simultaneously.
  * - A singleton leader keeps its log empty until it proposes its first
@@ -102,6 +104,8 @@ enum raftEntryType {
     RAFT_ENTRY_NODE_INFO = 6,      /* IP, port, hostname, etc. */
     RAFT_ENTRY_NODE_FAIL = 7,      /* Node failure detected */
     RAFT_ENTRY_NODE_RECOVER = 8,   /* Node recovery detected */
+    RAFT_ENTRY_ADD_VOTER = 9,      /* Promote learner to voting member */
+    RAFT_ENTRY_DEL_VOTER = 10,     /* Demote voting member to learner */
 };
 
 typedef struct {
@@ -375,6 +379,8 @@ static RaftProposalResult clusterRaftApplySlotChange(sds data, int validate_only
 static RaftProposalResult clusterRaftApplySetReplica(sds data, int validate_only);
 static RaftProposalResult clusterRaftApplyFailover(sds data, int validate_only);
 static RaftProposalResult clusterRaftApplyNodeForget(sds data, int validate_only);
+static RaftProposalResult clusterRaftApplyAddVoter(sds data, int validate_only);
+static RaftProposalResult clusterRaftApplyDelVoter(sds data, int validate_only);
 static void raftLogApply(raftLogEntry *e);
 static raftLogEntry *raftLogCreate(uint64_t term, uint64_t index, uint8_t type, sds data);
 static void raftLogAppend(raftLogEntry *e);
@@ -395,6 +401,24 @@ static void clusterRaftRandomizeElectionTimeout(void) {
 
 static int clusterRaftQuorum(void) {
     return server.cluster->size / 2 + 1;
+}
+
+static int clusterRaftHasPeerMembers(void) {
+    dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
+    dictEntry *de;
+    while ((de = dictNext(di)) != NULL) {
+        clusterNode *node = dictGetVal(de);
+        if (node != myself && !(node->flags & CLUSTER_NODE_MEET)) {
+            dictReleaseIterator(di);
+            return 1;
+        }
+    }
+    dictReleaseIterator(di);
+    return 0;
+}
+
+static int clusterRaftIsNonSingleton(void) {
+    return server.cluster->size > 1 || clusterRaftHasPeerMembers();
 }
 
 /* Leader step-down to follower. */
@@ -424,7 +448,7 @@ static int clusterRaftLeaderHasFreshQuorum(mstime_t now) {
     while ((de = dictNext(di)) != NULL) {
         clusterNode *node = dictGetVal(de);
         if (node == myself) continue;
-        if (node->flags & CLUSTER_NODE_MEET) continue;
+        if (!nodeIsVoter(node)) continue;
         clusterNodeRaftData *rd = RAFT_NODE(node);
         if (rd->last_ack_time > 0 &&
             now - rd->last_ack_time <= server.cluster_node_timeout) {
@@ -463,6 +487,7 @@ static void clusterRaftSelfJoin(void) {
     entry = sdscatlen(entry, myself->name, CLUSTER_NAMELEN);
     entry = sdscat(entry, " ");
     entry = clusterNodeAppendAddressString(entry, myself, server.tls_cluster);
+    entry = sdscat(entry, " voter");
     clusterRaftPropose(entry, NULL, NULL);
     sdsfree(entry);
 
@@ -505,6 +530,7 @@ static void clusterRaftInvitePeer(clusterNode *node) {
     entry = sdscatlen(entry, node->name, CLUSTER_NAMELEN);
     entry = sdscatlen(entry, " ", 1);
     entry = clusterNodeAppendAddressString(entry, node, server.tls_cluster);
+    entry = sdscat(entry, " learner");
 
     clusterRaftPropose(entry, NULL, NULL);
     sdsfree(entry);
@@ -554,7 +580,7 @@ static void clusterRaftSendGreeting(clusterLink *link, const char *verb) {
 
 /* Send MEET with singleton|cluster flag. */
 static void clusterRaftSendMeet(clusterLink *link) {
-    const char *flag = (server.cluster->size > 1) ? "cluster" : "singleton";
+    const char *flag = clusterRaftIsNonSingleton() ? "cluster" : "singleton";
     sds msg = wireNewMsg("MEET");
     msg = sdscatfmt(msg, " %s", flag);
     msg = wireFinishMsg(msg);
@@ -669,12 +695,12 @@ static int clusterRaftProcessMeet(clusterLink *link, int argc, sds *argv) {
 
     clusterRaftState *rs = RAFT_STATE();
 
-    if (server.cluster->size > 1 && !sender_is_singleton) {
+    if (clusterRaftIsNonSingleton() && !sender_is_singleton) {
         /* Both sides are in a cluster — reject. Merging non-singleton
          * clusters is not supported. */
         serverLog(LL_WARNING, "Rejecting MEET from %.40s: both sides are in a cluster.", sender->name);
         clusterRaftSendBare(link, "MEET_REJECTED");
-    } else if (server.cluster->size > 1) {
+    } else if (clusterRaftIsNonSingleton()) {
         /* I'm in a cluster, sender is a singleton — reply WELCOME and
          * invite the sender. WELCOME tells the sender to step down. */
         clusterRaftSendBare(link, "WELCOME");
@@ -725,7 +751,7 @@ static int clusterRaftProcessWelcome(clusterLink *link, int argc, sds *argv) {
     serverLog(LL_NOTICE, "Received WELCOME from %.40s, stepping down.", sender->name);
 
     clusterRaftState *rs = RAFT_STATE();
-    if (rs->role == RAFT_ROLE_LEADER && server.cluster->size <= 1) {
+    if (rs->role == RAFT_ROLE_LEADER && !clusterRaftIsNonSingleton()) {
         clusterRaftSingletonStepDown();
     }
 
@@ -788,6 +814,8 @@ static int raftEntryTypeByName(const char *name) {
     if (!strcasecmp(name, "NODE_INFO")) return RAFT_ENTRY_NODE_INFO;
     if (!strcasecmp(name, "NODE_FAIL")) return RAFT_ENTRY_NODE_FAIL;
     if (!strcasecmp(name, "NODE_RECOVER")) return RAFT_ENTRY_NODE_RECOVER;
+    if (!strcasecmp(name, "ADD_VOTER")) return RAFT_ENTRY_ADD_VOTER;
+    if (!strcasecmp(name, "DEL_VOTER")) return RAFT_ENTRY_DEL_VOTER;
     return -1;
 }
 
@@ -801,6 +829,8 @@ static const char *raftEntryTypeName(uint8_t type) {
     case RAFT_ENTRY_NODE_INFO: return "NODE_INFO";
     case RAFT_ENTRY_NODE_FAIL: return "NODE_FAIL";
     case RAFT_ENTRY_NODE_RECOVER: return "NODE_RECOVER";
+    case RAFT_ENTRY_ADD_VOTER: return "ADD_VOTER";
+    case RAFT_ENTRY_DEL_VOTER: return "DEL_VOTER";
     default: return "UNKNOWN";
     }
 }
@@ -874,7 +904,7 @@ static void clusterRaftPropose(sds entry, void *ctx, void (*callback)(void *ctx,
 
         /* Multi-node: replicate to followers. Single-node: commit is
          * deferred to beforeSleep after persistence. */
-        if (server.cluster->size > 1) {
+        if (clusterRaftHasPeerMembers()) {
             rs->todo_broadcast_ae = 1;
         }
     } else {
@@ -1080,6 +1110,12 @@ static RaftProposalResult clusterRaftPreValidate(int type, sds data) {
     case RAFT_ENTRY_NODE_FORGET:
         result = clusterRaftApplyNodeForget(data, 1);
         break;
+    case RAFT_ENTRY_ADD_VOTER:
+        result = clusterRaftApplyAddVoter(data, 1);
+        break;
+    case RAFT_ENTRY_DEL_VOTER:
+        result = clusterRaftApplyDelVoter(data, 1);
+        break;
     default:
         break;
     }
@@ -1131,7 +1167,7 @@ static int clusterRaftProcessPropose(clusterLink *link, int argc, sds *argv) {
 
     /* Multi-node: replicate to followers. Single-node: commit is
      * deferred to beforeSleep after persistence. */
-    if (server.cluster->size > 1) {
+    if (clusterRaftHasPeerMembers()) {
         rs->todo_broadcast_ae = 1;
     }
 
@@ -1309,10 +1345,22 @@ static void raftLogApply(raftLogEntry *e) {
     RaftProposalResult entry_result = RAFT_RESULT_OK;
     switch (e->type) {
     case RAFT_ENTRY_NODE_JOIN: {
-        /* data: "<node-id> <address>" */
+        /* data: "<node-id> <address> [learner|voter]" */
         int argc;
         sds *argv = sdssplitlen(e->data, sdslen(e->data), " ", 1, &argc);
         if (argv && argc >= 2 && sdslen(argv[0]) == CLUSTER_NAMELEN) {
+            int learner = 0;
+            if (argc >= 3) {
+                if (!strcasecmp(argv[2], "learner")) {
+                    learner = 1;
+                } else if (!strcasecmp(argv[2], "voter")) {
+                    learner = 0;
+                } else {
+                    serverLog(LL_WARNING, "NODE_JOIN rejected: unknown membership mode '%s'.", argv[2]);
+                    if (argv) sdsfreesplitres(argv, argc);
+                    break;
+                }
+            }
             clusterNode *existing = clusterLookupNode(argv[0], CLUSTER_NAMELEN);
             if (!existing) {
                 clusterNode *n = createClusterNode(argv[0], CLUSTER_NODE_PRIMARY);
@@ -1327,18 +1375,24 @@ static void raftLogApply(raftLogEntry *e) {
                 /* Update address for existing node. */
                 clusterNodeParseAddressString(existing, argv[1]);
             }
-            /* Increment size on first official join. Nodes created from MEET
-             * handshake have CLUSTER_NODE_MEET set; clear it now. Nodes created
-             * fresh (on followers) don't exist yet. Either way, count once. */
+            /* On first official join, clear MEET and mark whether the node
+             * participates in quorum. Old NODE_JOIN entries without a mode are
+             * treated as voters for compatibility. */
             clusterNode *joined = existing ? existing : clusterLookupNode(argv[0], CLUSTER_NAMELEN);
             if (joined) {
                 if (!existing || (joined->flags & CLUSTER_NODE_MEET)) {
                     joined->flags &= ~CLUSTER_NODE_MEET;
-                    server.cluster->size++;
+                    if (learner) {
+                        joined->flags |= CLUSTER_NODE_LEARNER;
+                    } else {
+                        joined->flags &= ~CLUSTER_NODE_LEARNER;
+                        server.cluster->size++;
+                    }
                     clusterAddNodeToShard(joined->shard_id, joined);
+                    rs->todo_save_config = 1;
 
                     /* Process deferred MEET messages now that we're in a cluster. */
-                    if (server.cluster->size > 1 && listLength(rs->deferred_meets) > 0) {
+                    if (server.cluster->size > 0 && listLength(rs->deferred_meets) > 0) {
                         listIter dli;
                         listNode *dln;
                         listRewind(rs->deferred_meets, &dli);
@@ -1355,8 +1409,8 @@ static void raftLogApply(raftLogEntry *e) {
             }
             rs->todo_invalidate_slots_cache = 1;
             rs->todo_connect_nodes = 1;
-            serverLog(LL_NOTICE, "Applied NODE_JOIN for %.40s addr=%s (size=%d).",
-                      argv[0], argc >= 2 ? argv[1] : "?", server.cluster->size);
+            serverLog(LL_NOTICE, "Applied NODE_JOIN for %.40s addr=%s mode=%s (voters=%d).",
+                      argv[0], argc >= 2 ? argv[1] : "?", learner ? "learner" : "voter", server.cluster->size);
 
             /* Leader: initialize replication state for the new peer. */
             if (rs->role == RAFT_ROLE_LEADER) {
@@ -1376,7 +1430,7 @@ static void raftLogApply(raftLogEntry *e) {
                 if (rs->role == RAFT_ROLE_JOINER) {
                     rs->role = RAFT_ROLE_FOLLOWER;
                     rs->todo_save_config = 1;
-                    serverLog(LL_NOTICE, "Promoted from joiner to follower.");
+                    serverLog(LL_NOTICE, "Promoted from joiner to %s.", learner ? "learner" : "follower");
 
                     /* Propose SLOT_CHANGE for slots assigned before joining
                      * the cluster (from our singleton state). */
@@ -1448,6 +1502,18 @@ static void raftLogApply(raftLogEntry *e) {
     case RAFT_ENTRY_NODE_FORGET: {
         entry_result = clusterRaftApplyNodeForget(e->data, 0);
         serverLog(LL_NOTICE, "%s NODE_FORGET (index %llu).",
+                  entry_result != RAFT_RESULT_OK ? "Skipped" : "Applied", (unsigned long long)e->index);
+        break;
+    }
+    case RAFT_ENTRY_ADD_VOTER: {
+        entry_result = clusterRaftApplyAddVoter(e->data, 0);
+        serverLog(LL_NOTICE, "%s ADD_VOTER (index %llu).",
+                  entry_result != RAFT_RESULT_OK ? "Skipped" : "Applied", (unsigned long long)e->index);
+        break;
+    }
+    case RAFT_ENTRY_DEL_VOTER: {
+        entry_result = clusterRaftApplyDelVoter(e->data, 0);
+        serverLog(LL_NOTICE, "%s DEL_VOTER (index %llu).",
                   entry_result != RAFT_RESULT_OK ? "Skipped" : "Applied", (unsigned long long)e->index);
         break;
     }
@@ -1744,12 +1810,13 @@ static int clusterRaftProcessAppendEntriesResponse(clusterLink *link, int argc, 
             if (idx <= rs->commit_index) break;
             if (rs->log[i - 1]->term != rs->current_term) continue;
 
-            int matches = 1; /* Self */
+            int matches = nodeIsVoter(myself) ? 1 : 0; /* Self, if voting. */
             dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
             dictEntry *de;
             while ((de = dictNext(di)) != NULL) {
                 clusterNode *peer = dictGetVal(de);
                 if (peer == myself) continue;
+                if (!nodeIsVoter(peer)) continue;
                 if (RAFT_NODE(peer)->match_index >= idx) matches++;
             }
             dictReleaseIterator(di);
@@ -1825,6 +1892,7 @@ static void clusterRaftSendPreVoteResponse(clusterLink *link, uint64_t term, int
 
 static int clusterRaftCanGrantVote(clusterRaftState *rs, uint64_t candidate_last_index, uint64_t candidate_last_term) {
     if (rs->role == RAFT_ROLE_JOINER) return 0;
+    if (nodeIsLearner(myself)) return 0;
 
     /* Don't vote while we still consider a leader alive in this term. */
     mstime_t now = monotonicMs();
@@ -1852,8 +1920,11 @@ static int clusterRaftProcessPreVoteRequest(clusterLink *link, int argc, sds *ar
     uint64_t candidate_last_term = strtoull(argv[4], NULL, 10);
     int granted = 0;
 
-    if (msg_term > rs->current_term &&
-        clusterRaftCanGrantVote(rs, candidate_last_index, candidate_last_term)) {
+    clusterNode *candidate = clusterLookupNode(argv[1], CLUSTER_NAMELEN);
+    if (candidate && nodeIsLearner(candidate)) {
+        granted = 0;
+    } else if (msg_term > rs->current_term &&
+               clusterRaftCanGrantVote(rs, candidate_last_index, candidate_last_term)) {
         granted = 1;
     }
 
@@ -1862,7 +1933,6 @@ static int clusterRaftProcessPreVoteRequest(clusterLink *link, int argc, sds *ar
 }
 
 static int clusterRaftProcessPreVoteResponse(clusterLink *link, int argc, sds *argv) {
-    UNUSED(link);
     /* argv: PRE_VOTE <term> <granted> */
     if (argc < 3) return 1;
 
@@ -1880,9 +1950,9 @@ static int clusterRaftProcessPreVoteResponse(clusterLink *link, int argc, sds *a
     if (rs->role != RAFT_ROLE_PRE_CANDIDATE) return 1;
     if (msg_term != rs->current_term + 1) return 1;
 
-    if (granted) {
+    if (granted && link->node && nodeIsVoter(link->node)) {
         rs->pre_votes_received++;
-        int quorum = server.cluster->size / 2 + 1;
+        int quorum = clusterRaftQuorum();
         if (rs->pre_votes_received >= quorum) {
             clusterRaftStartElection();
         }
@@ -1905,13 +1975,18 @@ static int clusterRaftProcessRequestVote(clusterLink *link, int argc, sds *argv)
 
     if (msg_term < rs->current_term) {
         /* Stale term. */
-    } else if ((clusterRaftIsVotedForNone() || memcmp(rs->voted_for, argv[1], CLUSTER_NAMELEN) == 0) &&
-               clusterRaftCanGrantVote(rs, candidate_last_index, candidate_last_term)) {
-        granted = 1;
-        memcpy(rs->voted_for, argv[1], CLUSTER_NAMELEN);
-        rs->last_heartbeat = monotonicMs(); /* Reset election timer */
-        rs->todo_save_config = 1;
-        serverLog(LL_NOTICE, "Voted for %.40s in term %llu.", argv[1], (unsigned long long)msg_term);
+    } else {
+        clusterNode *candidate = clusterLookupNode(argv[1], CLUSTER_NAMELEN);
+        if (candidate && nodeIsLearner(candidate)) {
+            /* Learners are replicated to but cannot become Raft leaders. */
+        } else if ((clusterRaftIsVotedForNone() || memcmp(rs->voted_for, argv[1], CLUSTER_NAMELEN) == 0) &&
+                   clusterRaftCanGrantVote(rs, candidate_last_index, candidate_last_term)) {
+            granted = 1;
+            memcpy(rs->voted_for, argv[1], CLUSTER_NAMELEN);
+            rs->last_heartbeat = monotonicMs(); /* Reset election timer */
+            rs->todo_save_config = 1;
+            serverLog(LL_NOTICE, "Voted for %.40s in term %llu.", argv[1], (unsigned long long)msg_term);
+        }
     }
 
     if (granted) {
@@ -1925,7 +2000,6 @@ static int clusterRaftProcessRequestVote(clusterLink *link, int argc, sds *argv)
 }
 
 static int clusterRaftProcessRequestVoteResponse(clusterLink *link, int argc, sds *argv) {
-    UNUSED(link);
     /* argv: VOTE <term> <granted> */
     if (argc < 3) return 1;
 
@@ -1938,7 +2012,7 @@ static int clusterRaftProcessRequestVoteResponse(clusterLink *link, int argc, sd
     if (rs->role != RAFT_ROLE_CANDIDATE) return 1;
     if (msg_term != rs->current_term) return 1;
 
-    if (granted) {
+    if (granted && link->node && nodeIsVoter(link->node)) {
         rs->votes_received++;
         int quorum = clusterRaftQuorum();
         if (rs->votes_received >= quorum) {
@@ -1977,6 +2051,7 @@ static int clusterRaftProcessRequestVoteResponse(clusterLink *link, int argc, sd
 
 static void clusterRaftStartPreVote(void) {
     clusterRaftState *rs = RAFT_STATE();
+    if (!nodeIsVoter(myself)) return;
     rs->role = RAFT_ROLE_PRE_CANDIDATE;
     rs->pre_votes_received = 1; /* Self pre-vote */
     rs->pre_vote_started = monotonicMs();
@@ -1990,12 +2065,12 @@ static void clusterRaftStartPreVote(void) {
     while ((de = dictNext(di)) != NULL) {
         clusterNode *node = dictGetVal(de);
         if (node == myself || !node->link) continue;
-        if (node->flags & CLUSTER_NODE_MEET) continue;
+        if (!nodeIsVoter(node)) continue;
         clusterRaftSendPreVoteRequest(node->link, candidate_term);
     }
     dictReleaseIterator(di);
 
-    int quorum = server.cluster->size / 2 + 1;
+    int quorum = clusterRaftQuorum();
     if (rs->pre_votes_received >= quorum) {
         clusterRaftStartElection();
     }
@@ -2003,6 +2078,7 @@ static void clusterRaftStartPreVote(void) {
 
 static void clusterRaftStartElection(void) {
     clusterRaftState *rs = RAFT_STATE();
+    if (!nodeIsVoter(myself)) return;
     rs->current_term++;
     rs->role = RAFT_ROLE_CANDIDATE;
     memcpy(rs->voted_for, myself->name, CLUSTER_NAMELEN);
@@ -2053,7 +2129,7 @@ static void clusterRaftInitLast(void) {
     /* On fresh start (size == 0), mark myself as not yet in the raft log.
      * Cleared when our own NODE_JOIN is applied. On restart, size is
      * restored by postLoad so we skip this. */
-    if (server.cluster->size == 0) {
+    if (dictSize(server.cluster->nodes) == 1 && server.cluster->size == 0) {
         myself->flags |= CLUSTER_NODE_MEET;
     }
 
@@ -2237,7 +2313,8 @@ static void clusterRaftCron(void) {
 
     if (dictSize(server.cluster->nodes) > 1) {
         /* Follower/candidate: check election timeout. */
-        if ((rs->role == RAFT_ROLE_FOLLOWER || rs->role == RAFT_ROLE_CANDIDATE) &&
+        if (nodeIsVoter(myself) &&
+            (rs->role == RAFT_ROLE_FOLLOWER || rs->role == RAFT_ROLE_CANDIDATE) &&
             now - rs->last_heartbeat > rs->election_timeout) {
             clusterRaftStartPreVote();
         }
@@ -2426,8 +2503,8 @@ static void clusterRaftBeforeSleep(bool blocked) {
             raftLogEntry *e = raftLogGet(rs->last_applied);
             if (e) raftLogApply(e);
         }
-        /* If we just grew beyond singleton, replicate to the new peer. */
-        if (server.cluster->size > 1) rs->todo_broadcast_ae = 1;
+        /* If we have any peer member (voter or learner), replicate the new commit index. */
+        if (clusterRaftHasPeerMembers()) rs->todo_broadcast_ae = 1;
     }
 
     if (rs->todo_send_ae_ack) {
@@ -2457,7 +2534,7 @@ static void clusterRaftBeforeSleep(bool blocked) {
         while ((de = dictNext(di)) != NULL) {
             clusterNode *node = dictGetVal(de);
             if (node == myself || !node->link) continue;
-            if (node->flags & CLUSTER_NODE_MEET) continue;
+            if (!nodeIsVoter(node)) continue;
             clusterRaftSendRequestVote(node->link);
         }
         dictReleaseIterator(di);
@@ -2541,7 +2618,7 @@ static void clusterRaftPrepareShutdown(void) {
         clusterNode *node = dictGetVal(de);
         if (node == myself || !node->link) continue;
         if (nodeFailed(node)) continue;
-        if (node->flags & (CLUSTER_NODE_MEET | CLUSTER_NODE_HANDSHAKE)) continue;
+        if (node->flags & (CLUSTER_NODE_MEET | CLUSTER_NODE_HANDSHAKE | CLUSTER_NODE_LEARNER)) continue;
         uint64_t mi = RAFT_NODE(node)->match_index;
         if (!best || mi > best_match) {
             best = node;
@@ -2664,7 +2741,7 @@ static int clusterRaftProcessMessage(struct clusterLink *link) {
         /* Leader transfer: immediately start an election. */
         uint64_t term = strtoull(argv[1], NULL, 10);
         clusterRaftState *rs = RAFT_STATE();
-        if (term >= rs->current_term && rs->role == RAFT_ROLE_FOLLOWER) {
+        if (nodeIsVoter(myself) && term >= rs->current_term && rs->role == RAFT_ROLE_FOLLOWER) {
             serverLog(LL_NOTICE, "Received TIMEOUT_NOW (term %llu), starting election.",
                       (unsigned long long)term);
             clusterRaftStartElection();
@@ -2993,7 +3070,7 @@ static void clusterRaftPostLoad(void) {
     dictEntry *de;
     while ((de = dictNext(di)) != NULL) {
         clusterNode *node = dictGetVal(de);
-        if (!(node->flags & CLUSTER_NODE_MEET)) server.cluster->size++;
+        if (nodeIsVoter(node)) server.cluster->size++;
     }
     dictReleaseIterator(di);
     /* If we're a replica, start replication. */
@@ -3102,7 +3179,8 @@ static sds clusterRaftAppendInfoFields(sds info) {
                      server.cluster->size);
 
     /* Raft-specific fields. */
-    const char *role_str = rs->role == RAFT_ROLE_LEADER          ? "leader"
+    const char *role_str = nodeIsLearner(myself)                 ? "learner"
+                           : rs->role == RAFT_ROLE_LEADER        ? "leader"
                            : rs->role == RAFT_ROLE_CANDIDATE     ? "candidate"
                            : rs->role == RAFT_ROLE_PRE_CANDIDATE ? "pre-candidate"
                            : rs->role == RAFT_ROLE_JOINER        ? "joiner"
@@ -3482,6 +3560,69 @@ done:
     return result;
 }
 
+/* Apply (or validate) an ADD_VOTER entry. Format: "<node-id>" */
+static RaftProposalResult clusterRaftApplyAddVoter(sds data, int validate_only) {
+    clusterRaftState *rs = RAFT_STATE();
+    int argc;
+    sds *argv = sdssplitlen(data, sdslen(data), " ", 1, &argc);
+    if (!argv || argc < 1 || sdslen(argv[0]) != CLUSTER_NAMELEN) {
+        if (argv) sdsfreesplitres(argv, argc);
+        return RAFT_RESULT_REJECTED;
+    }
+
+    clusterNode *node = clusterLookupNode(argv[0], CLUSTER_NAMELEN);
+    if (!node || (node->flags & CLUSTER_NODE_MEET) || !nodeIsLearner(node)) {
+        sdsfreesplitres(argv, argc);
+        return RAFT_RESULT_REJECTED;
+    }
+
+    if (validate_only) {
+        clusterNodeRaftData *rd = RAFT_NODE(node);
+        if (node != myself && (!node->link || rd->match_index < raftLogLastIndex())) {
+            sdsfreesplitres(argv, argc);
+            return RAFT_RESULT_REJECTED;
+        }
+        sdsfreesplitres(argv, argc);
+        return RAFT_RESULT_OK;
+    }
+
+    node->flags &= ~CLUSTER_NODE_LEARNER;
+    server.cluster->size++;
+    rs->todo_save_config = 1;
+    sdsfreesplitres(argv, argc);
+    return RAFT_RESULT_OK;
+}
+
+/* Apply (or validate) a DEL_VOTER entry. Format: "<node-id>" */
+static RaftProposalResult clusterRaftApplyDelVoter(sds data, int validate_only) {
+    clusterRaftState *rs = RAFT_STATE();
+    int argc;
+    sds *argv = sdssplitlen(data, sdslen(data), " ", 1, &argc);
+    if (!argv || argc < 1 || sdslen(argv[0]) != CLUSTER_NAMELEN) {
+        if (argv) sdsfreesplitres(argv, argc);
+        return RAFT_RESULT_REJECTED;
+    }
+
+    clusterNode *node = clusterLookupNode(argv[0], CLUSTER_NAMELEN);
+    if (!node || (node->flags & CLUSTER_NODE_MEET) || nodeIsLearner(node) ||
+        server.cluster->size <= 1 ||
+        memcmp(node->name, rs->leader, CLUSTER_NAMELEN) == 0) {
+        sdsfreesplitres(argv, argc);
+        return RAFT_RESULT_REJECTED;
+    }
+
+    if (validate_only) {
+        sdsfreesplitres(argv, argc);
+        return RAFT_RESULT_OK;
+    }
+
+    node->flags |= CLUSTER_NODE_LEARNER;
+    server.cluster->size--;
+    rs->todo_save_config = 1;
+    sdsfreesplitres(argv, argc);
+    return RAFT_RESULT_OK;
+}
+
 /* Apply (or validate) a NODE_FORGET entry. Format: "<node-id> <shard-epoch>"
  * When validate_only is set, only validation is performed (no state mutation).
  * Returns RAFT_RESULT_OK on success, or RAFT_RESULT_STALE_EPOCH /
@@ -3512,6 +3653,7 @@ static RaftProposalResult clusterRaftApplyNodeForget(sds data, int validate_only
     /* Save shard_id before deleting the node. */
     char shard_id[CLUSTER_NAMELEN];
     memcpy(shard_id, node->shard_id, CLUSTER_NAMELEN);
+    int was_voter = nodeIsVoter(node);
 
     /* Detach link before deleting so clusterReadHandler can detect
      * that the node it was talking to is gone. */
@@ -3520,8 +3662,10 @@ static RaftProposalResult clusterRaftApplyNodeForget(sds data, int validate_only
         node->link = NULL;
     }
     clusterDelNode(node);
+    if (was_voter && server.cluster->size > 0) server.cluster->size--;
     rs->todo_update_slot_coverage = 1;
     rs->todo_invalidate_slots_cache = 1;
+    rs->todo_save_config = 1;
 
     /* Bump shard epoch after successful delete. */
     uint64_t current = clusterGetShardEpoch(shard_id);
@@ -3550,6 +3694,30 @@ static void clusterRaftAutoFailoverCallback(void *ctx, const char *error) {
         RAFT_STATE()->todo_schedule_failover = 1;
         serverLog(LL_NOTICE, "Automatic failover proposal rejected (%s), re-scheduling.", error);
     }
+}
+
+static void clusterRaftCommandCompletion(void *ctx, const char *error) {
+    client *c = consumeBlockedClientAsyncHandle((blockedAsyncHandle *)ctx);
+    if (!c) return;
+    if (error) {
+        addReplyError(c, error);
+    } else {
+        addReply(c, shared.ok);
+    }
+    unblockClientAsync(c);
+}
+
+static void clusterRaftProposeVoterChange(const char *entry_name, const char *node_id, size_t id_len, void *ctx, void (*callback)(void *ctx, const char *error)) {
+    if (id_len != CLUSTER_NAMELEN) {
+        if (callback) callback(ctx, "invalid node id");
+        return;
+    }
+
+    sds entry = sdsnew(entry_name);
+    entry = sdscatlen(entry, " ", 1);
+    entry = sdscatlen(entry, node_id, CLUSTER_NAMELEN);
+    clusterRaftPropose(entry, ctx, callback);
+    sdsfree(entry);
 }
 
 static void clusterRaftForgetNode(const char *node_id, size_t id_len, void *ctx, void (*callback)(void *ctx, const char *error)) {
@@ -3766,6 +3934,7 @@ static void clusterRaftResetCluster(int hard) {
     rs->mf_end = 0;
     server.cluster->size = 0;
     myself->flags |= CLUSTER_NODE_MEET;
+    myself->flags &= ~CLUSTER_NODE_LEARNER;
 
     /* Hard reset: change node ID. */
     if (hard) {
@@ -3804,6 +3973,28 @@ static int clusterRaftSpecialCommand(client *c) {
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "bumpepoch") && c->argc == 2) {
         addReply(c, shared.ok);
         return 1;
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "addvoter") && c->argc == 3) {
+        void *h = blockClientAsync(c);
+        clusterRaftProposeVoterChange("ADD_VOTER", objectGetVal(c->argv[2]),
+                                      sdslen(objectGetVal(c->argv[2])), h, clusterRaftCommandCompletion);
+        return 1;
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "delvoter") && c->argc == 3) {
+        void *h = blockClientAsync(c);
+        clusterRaftProposeVoterChange("DEL_VOTER", objectGetVal(c->argv[2]),
+                                      sdslen(objectGetVal(c->argv[2])), h, clusterRaftCommandCompletion);
+        return 1;
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "raft") && c->argc == 4) {
+        if (!strcasecmp(objectGetVal(c->argv[2]), "add-voter")) {
+            void *h = blockClientAsync(c);
+            clusterRaftProposeVoterChange("ADD_VOTER", objectGetVal(c->argv[3]),
+                                          sdslen(objectGetVal(c->argv[3])), h, clusterRaftCommandCompletion);
+            return 1;
+        } else if (!strcasecmp(objectGetVal(c->argv[2]), "del-voter")) {
+            void *h = blockClientAsync(c);
+            clusterRaftProposeVoterChange("DEL_VOTER", objectGetVal(c->argv[3]),
+                                          sdslen(objectGetVal(c->argv[3])), h, clusterRaftCommandCompletion);
+            return 1;
+        }
     }
     return 0;
 }

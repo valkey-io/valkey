@@ -23,6 +23,7 @@ extern dictType clusterSlotDictType;
 #define CLUSTER_NODE_MEET (1 << 7)       /* Send a MEET message to this node */
 #define CLUSTER_NODE_MIGRATE_TO (1 << 8) /* Primary eligible for replica migration. */
 #define CLUSTER_NODE_NOFAILOVER (1 << 9) /* Replica will not try to failover. */
+#define CLUSTER_NODE_LEARNER (1 << 14)   /* Raft non-voting member. */
 
 #define nodeIsPrimary(n) ((n)->flags & CLUSTER_NODE_PRIMARY)
 #define nodeIsReplica(n) ((n)->flags & CLUSTER_NODE_REPLICA)
@@ -31,6 +32,8 @@ extern dictType clusterSlotDictType;
 #define nodeTimedOut(n) ((n)->flags & CLUSTER_NODE_PFAIL)
 #define nodeFailed(n) ((n)->flags & CLUSTER_NODE_FAIL)
 #define nodeCantFailover(n) ((n)->flags & CLUSTER_NODE_NOFAILOVER)
+#define nodeIsLearner(n) ((n)->flags & CLUSTER_NODE_LEARNER)
+#define nodeIsVoter(n) (!((n)->flags & (CLUSTER_NODE_MEET | CLUSTER_NODE_LEARNER)))
 
 struct clusterNode {
     mstime_t ctime;                         /* Node object creation time. */

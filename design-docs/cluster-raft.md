@@ -115,8 +115,11 @@ cluster with only one member. Singleton means that it's alone.
   Cannot vote, propose, or form a cluster. Waits for AE from the
   leader to receive its NODE_JOIN entry. Reverts to singleton leader
   after 4× cluster-node-timeout if no AE arrives.
+- **Learner**: A non-voting member that receives and applies the Raft
+  log but is not counted for elections or commit quorum. Learners can
+  own slots and act as data primaries or replicas.
 - **Follower**: Participates in elections and counts for quorum.
-  Promoted from joiner when the node's NODE_JOIN entry is applied.
+  Promoted from learner by ADD_VOTER after catching up with the log.
 - **Pre-candidate**: Runs a pre-vote round without incrementing term.
   Reverts to follower if no quorum is reached within one election timeout
   (see [Election timeout](#election-timeout)).
@@ -133,10 +136,18 @@ Each log entry has a type and a text data field. The entry types and
 their data formats:
 
 ```
-NODE_JOIN <node-id> <address>
+NODE_JOIN <node-id> <address> [learner|voter]
     Add a node to the cluster. Applied when a new node is discovered
-    via MEET. The node starts as a learner and is promoted to follower
-    when the entry is committed.
+    via MEET. New peers join as learners by default, so this entry does
+    not change quorum. The local singleton self-join uses voter mode.
+
+ADD_VOTER <node-id>
+    Promote a learner to a voting follower after it has caught up with
+    the leader's log. This increments the voting cluster size.
+
+DEL_VOTER <node-id>
+    Demote a voting follower to learner. The node stays in the cluster
+    and continues receiving AE, but no longer counts for quorum.
 
 NODE_FORGET <node-id> <shard-epoch>
     Remove a node from the cluster (CLUSTER FORGET). The epoch refers to
@@ -373,95 +384,22 @@ down prematurely and defer the MEET.
 
 ### Membership changes
 
-Nodes are added and removed using NODE_JOIN and NODE_FORGET log
-entries.
+Membership and voting rights are separate. `NODE_JOIN` adds a node to
+the replicated topology as a learner; `ADD_VOTER` and `DEL_VOTER`
+change the voting set. `NODE_FORGET` removes either a learner or a
+voter. When the removed node is a voter, the voting size is decremented
+on apply.
 
-**Config takes effect on apply, not on append.** Quorum is computed
-from `server.cluster->size`, which is updated when NODE_JOIN is
-applied (after commit). This differs from Ongaro's single-server
-approach (§4.1) where the new configuration takes effect when the
-entry is appended to the log.
+`server.cluster->size` is the number of voters only. Learners remain in
+`server.cluster->nodes` so they can receive AE, apply topology entries,
+own slots, and act as data primaries or replicas, but they are ignored
+for elections, commit quorum, and leader freshness checks.
 
-**Implications of config-on-apply:**
-
-1. Multiple NODE_JOINs can be in flight simultaneously. The leader
-   does not need to wait for one to commit before proposing the next.
-   This enables fast cluster formation (all nodes invited in one
-   batch).
-
-2. NODE_JOIN is committed using the **old** quorum (the cluster size
-   before the new node is added). For example, adding D to {A,B,C}
-   requires 2 ACKs (majority of 3), not 3 ACKs (majority of 4).
-
-3. If a leader election truncates uncommitted NODE_JOINs, no
-   configuration rollback is needed — the config never took effect.
-   Affected nodes time out as joiners and revert to singleton leaders.
-
-4. Joint consensus is not needed. The quorum transitions atomically
-   at apply time in a single step.
-
-**Comparison to config-on-append (Ongaro §4.1):**
-
-With config-on-append, the new quorum is used to commit the
-membership entry itself. This guarantees the new node has the entry
-before it takes effect, eliminating any window of reduced redundancy.
-However, it adds complexity:
-
-- Only one membership change can be in flight at a time (the leader
-  must wait for commit before proposing the next change).
-- If the entry is truncated after append but before commit, nodes
-  must roll back to the previous configuration.
-- The new node must be caught up before the entry is proposed
-  (otherwise it can't ACK in time, stalling the commit).
-
-**Safety of committing with old quorum — known limitation:**
-
-After committing NODE_JOIN(F) to {A,B,C,D,E} with old quorum
-(3 ACKs), the nodes that have the entry operate at size=6
-(quorum=4), while nodes that don't have it still believe size=5
-(quorum=3). This split in quorum views can violate safety:
-
-Example (size 5→6): 3 nodes have the entry (size=6 view). The
-other 3 nodes don't have it (size=5 view, quorum=3). If 2 of the
-3 nodes with the entry crash, the 3 nodes without it can elect a
-leader among themselves (they have quorum=3 under their view). That
-leader overwrites the entry via log truncation. The committed
-NODE_JOIN is lost.
-
-For size 3→4: 2 nodes have the entry (size=4 view). The other 2
-don't (size=3 view, quorum=2). If 1 node with the entry crashes,
-the 2 without can elect a leader (quorum=2 under their view).
-
-The root cause: nodes disagree on cluster size, leading to two
-different quorum calculations coexisting. This is exactly what
-Ongaro's config-on-append prevents — by making all nodes adopt the
-new config immediately on append, they all agree on quorum.
-
-In practice, this requires crashes within the brief window between
-commit and AE delivery. The leader sends AE immediately after
-commit, so the window is one network round-trip. Once AE is
-delivered, all nodes agree on the new size and the split disappears.
-
-**Worst case if this occurs:** The new node is orphaned — it stepped
-down to joiner but its NODE_JOIN was lost. It reverts to singleton
-leader after timeout. The CLUSTER MEET client already returned OK,
-so the admin believes the node joined. No data loss or split brain
-occurs (the node never had slots). The admin can detect the issue
-via CLUSTER NODES and retry CLUSTER MEET.
-
-**Accepted tradeoff:** We accept this limitation because:
-- The window is extremely brief (one AE round-trip after commit).
-- It enables fast cluster formation (multiple NODE_JOINs in flight,
-  no need to catch up the new node before committing).
-- It avoids the complexity of config-on-append or joint consensus.
-- Kafka's KRaft uses the same approach.
-
-**Future fix:** To eliminate this window entirely, use either
-config-on-append (Ongaro §4.1, where the new configuration takes
-effect on append and its quorum is used for commit) or joint
-consensus (§4.3). Both require the new node to receive AE as a
-non-voting member before its NODE_JOIN is committed, adding
-complexity to the leader's replication logic.
+New nodes join as learners by default, following Ongaro §4.2.1 and the
+etcd learner design: the leader replicates log entries to the new node
+without increasing the majority required to commit. Once the learner has
+caught up to the leader's log, the leader can append `ADD_VOTER` to
+promote it to a voting follower.
 
 ## Failure Detection
 
@@ -841,8 +779,7 @@ targets.
   entries, especially don't trigger primary/replica failovers in a
   minority partition).
 - Log compaction / snapshotting for lagging followers.
-- Learners (non-voting members): reduces the risk for split-vote for
-  leader election in large clusters and reduces commit overhead.
+- Automatic learner promotion and chained learner replication.
 - Leader transfer on CLUSTER FORGET where the target is the leader.
 - Safety regarding membership changes (use new quorum).
 - Cluster merging via MEET: when two independently configured clusters

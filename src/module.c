@@ -11189,13 +11189,11 @@ int VM_RegisterInfoFunc(ValkeyModuleCtx *ctx, ValkeyModuleInfoFunc cb) {
     return VALKEYMODULE_OK;
 }
 
-sds modulesCollectInfo(sds info, dict *sections_dict, int for_crash_report, int sections) {
-    if (dictSize(modules) == 0) return info;
-
-    /* One emitter for the whole pass; its section counter continues from the
-     * core sections already emitted so the inter-section separator is correct. */
-    infoEmitterText te;
-    infoEmitterTextInit(&te, info, &sections);
+/* Drive every loaded module's INFO callback through the given emitter, so both
+ * the text backend and structured backends (OTLP) receive module-provided
+ * fields as typed values. */
+void modulesCollectInfoToEmitter(infoEmitter *e, dict *sections_dict, int for_crash_report) {
+    if (dictSize(modules) == 0) return;
 
     dictIterator *di = dictGetIterator(modules);
     dictEntry *de;
@@ -11204,12 +11202,19 @@ sds modulesCollectInfo(sds info, dict *sections_dict, int for_crash_report, int 
         struct ValkeyModule *module = dictGetVal(de);
         if (!module->info_cb) continue;
         ValkeyModuleInfoCtx info_ctx = {
-            .module = module, .requested_sections = sections_dict, .emitter = &te.e, .in_section = 0, .in_dict_field = 0};
+            .module = module, .requested_sections = sections_dict, .emitter = e, .in_section = 0, .in_dict_field = 0};
         module->info_cb(&info_ctx, for_crash_report);
         /* Implicitly end dicts (no way to handle errors, and we must add the newline). */
         if (info_ctx.in_dict_field) VM_InfoEndDictField(&info_ctx);
     }
     dictReleaseIterator(di);
+}
+
+/* Backward-compatible text wrapper (see modulesCollectInfoToEmitter). */
+sds modulesCollectInfo(sds info, dict *sections_dict, int for_crash_report, int sections) {
+    infoEmitterText te;
+    infoEmitterTextInit(&te, info, &sections);
+    modulesCollectInfoToEmitter(&te.e, sections_dict, for_crash_report);
     return infoEmitterTextResult(&te);
 }
 

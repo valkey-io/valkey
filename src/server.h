@@ -4265,6 +4265,8 @@ const char *getSafeInfoString(const char *s, size_t len, char **tmp);
 dict *genInfoSectionDict(robj **argv, int argc, char **defaults, int *out_all, int *out_everything);
 void releaseInfoSectionDict(dict *sec);
 sds genValkeyInfoString(dict *section_dict, int all_sections, int everything);
+void genValkeyInfoToEmitter(infoEmitter *e, int *section_counter, dict *section_dict, int all_sections, int everything);
+void modulesCollectInfoToEmitter(infoEmitter *e, dict *sections_dict, int for_crash_report);
 sds genModulesInfoString(sds info);
 void applyWatchdogPeriod(void);
 void watchdogScheduleSignal(int period);

@@ -6132,11 +6132,21 @@ void totalNumberOfStatefulKeys(unsigned long *blocking_keys,
 /* Create the string returned by the INFO command. This is decoupled
  * by the INFO command itself as we need to report the same information
  * on memory corruption problems. */
-sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
-    sds info = sdsempty();
+/* Emit an sds's contents through the emitter's raw hook, then free the sds.
+ * Used for legacy helpers that still build INFO text directly (listeners,
+ * cluster info, the module version list). Structured backends skip raw output.
+ * The sds is passed as an argument to "%s", so any '%' in it stays literal. */
+static void infoEmitRawSds(infoEmitter *e, sds s) {
+    infoEmitRaw(e, "%s", s);
+    sdsfree(s);
+}
+
+/* Drive INFO generation into an arbitrary emitter backend. 'section_counter' is
+ * shared with the backend (which owns the inter-section separator) and is read
+ * here to decide whether module info collection is needed. */
+void genValkeyInfoToEmitter(infoEmitter *e, int *section_counter, dict *section_dict, int all_sections, int everything) {
     time_t uptime = server.unixtime - server.stat_starttime;
     int j;
-    int sections = 0;
     if (everything) all_sections = 1;
 
     /* Server */
@@ -6179,9 +6189,6 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
         char os_buf[sizeof(name.sysname) + sizeof(name.release) + sizeof(name.machine) + 3];
         snprintf(os_buf, sizeof(os_buf), "%s %s %s", name.sysname, name.release, name.machine);
 
-        infoEmitterText te;
-        infoEmitterTextInit(&te, info, &sections);
-        infoEmitter *e = &te.e;
         infoEmitBeginSection(e, "Server");
         infoEmitFieldStr(e, "redis_version", REDIS_VERSION);
         infoEmitFieldStr(e, "server_name", SERVER_NAME);
@@ -6211,16 +6218,16 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
         infoEmitFieldStr(e, "config_file", server.configfile ? server.configfile : "");
         infoEmitFieldLL(e, "io_threads_active", server.active_io_threads_num > 1);
         infoEmitFieldStr(e, "availability_zone", server.availability_zone);
-        info = infoEmitterTextResult(&te);
 
         /* Conditional properties */
         if (isShutdownInitiated()) {
-            info = sdscatfmt(info, "shutdown_in_milliseconds:%I\r\n",
-                             (int64_t)(server.shutdown_mstime - commandTimeSnapshot()));
+            infoEmitMetricLL(e, "shutdown_in_milliseconds",
+                             (long long)(server.shutdown_mstime - commandTimeSnapshot()), INFO_KIND_GAUGE,
+                             INFO_UNIT_MILLISECONDS);
         }
 
-        /* get all the listeners information */
-        info = getListensInfoString(info);
+        /* get all the listeners information (raw text; skipped by structured backends) */
+        infoEmitRawSds(e, getListensInfoString(sdsempty()));
     }
 
     /* TLS */
@@ -6240,9 +6247,6 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
             tls_ca_seconds_remaining = server.tls_ca_cert_expire_time - (long long)server.unixtime;
             if (tls_ca_seconds_remaining < 0) tls_ca_seconds_remaining = 0;
         }
-        infoEmitterText te;
-        infoEmitterTextInit(&te, info, &sections);
-        infoEmitter *e = &te.e;
         infoEmitBeginSection(e, "TLS");
         infoEmitFieldStr(e, "tls_server_cert_serial",
                          server.tls_server_cert_serial ? server.tls_server_cert_serial : "none");
@@ -6255,7 +6259,6 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
         infoEmitFieldStr(e, "tls_ca_cert_serial", server.tls_ca_cert_serial ? server.tls_ca_cert_serial : "none");
         infoEmitMetricLL(e, "tls_ca_cert_expires_in_seconds", tls_ca_seconds_remaining, INFO_KIND_GAUGE,
                          INFO_UNIT_SECONDS);
-        info = infoEmitterTextResult(&te);
     }
 
     /* Clients */
@@ -6279,9 +6282,6 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
             paused_reason = getPausedReason(purpose);
         }
 
-        infoEmitterText te;
-        infoEmitterTextInit(&te, info, &sections);
-        infoEmitter *e = &te.e;
         infoEmitBeginSection(e, "Clients");
         infoEmitFieldULL(e, "connected_clients", listLength(server.clients) - listLength(server.replicas));
         infoEmitFieldULL(e, "cluster_connections", getClusterConnectionsCount());
@@ -6299,7 +6299,6 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
         infoEmitFieldStr(e, "paused_reason", paused_reason);
         infoEmitFieldStr(e, "paused_actions", paused_actions);
         infoEmitMetricLL(e, "paused_timeout_milliseconds", paused_timeout, INFO_KIND_GAUGE, INFO_UNIT_MILLISECONDS);
-        info = infoEmitterTextResult(&te);
     }
 
     /* Memory */
@@ -6334,9 +6333,6 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
         bytesToHuman(used_memory_rss_hmem, sizeof(used_memory_rss_hmem), server.cron_malloc_stats.process_rss);
         bytesToHuman(maxmemory_hmem, sizeof(maxmemory_hmem), server.maxmemory);
 
-        infoEmitterText te;
-        infoEmitterTextInit(&te, info, &sections);
-        infoEmitter *e = &te.e;
         infoEmitBeginSection(e, "Memory");
         infoEmitMetricULL(e, "used_memory", zmalloc_used, INFO_KIND_GAUGE, INFO_UNIT_BYTES);
         infoEmitFieldStr(e, "used_memory_human", hmem);
@@ -6412,7 +6408,6 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
         infoEmitFieldLL(e, "active_defrag_running", server.active_defrag_cpu_percent);
         infoEmitFieldULL(e, "lazyfree_pending_objects", lazyfreeGetPendingObjectsCount());
         infoEmitFieldULL(e, "lazyfreed_objects", lazyfreeGetFreedObjectsCount());
-        info = infoEmitterTextResult(&te);
         freeMemoryOverheadData(mh);
     }
 
@@ -6426,9 +6421,6 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
         }
         int aof_bio_fsync_status = atomic_load_explicit(&server.aof_bio_fsync_status, memory_order_relaxed);
 
-        infoEmitterText te;
-        infoEmitterTextInit(&te, info, &sections);
-        infoEmitter *e = &te.e;
         infoEmitBeginSection(e, "Persistence");
         infoEmitFieldLL(e, "loading", (int)(server.loading && !server.async_loading));
         infoEmitFieldLL(e, "async_loading", (int)server.async_loading);
@@ -6517,7 +6509,6 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
             infoEmitFieldDouble(e, "loading_loaded_perc", perc, 2);
             infoEmitMetricLL(e, "loading_eta_seconds", (long long)eta, INFO_KIND_GAUGE, INFO_UNIT_SECONDS);
         }
-        info = infoEmitterTextResult(&te);
     }
 
     /* Stats */
@@ -6527,9 +6518,6 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
         ustime_t current_active_defrag_time =
             server.stat_last_active_defrag_time ? (ustime_t)elapsedUs(server.stat_last_active_defrag_time) : 0;
 
-        infoEmitterText te;
-        infoEmitterTextInit(&te, info, &sections);
-        infoEmitter *e = &te.e;
         infoEmitBeginSection(e, "Stats");
         infoEmitCounterLL(e, "total_connections_received", server.stat_numconnections);
         infoEmitCounterLL(e, "total_commands_processed", server.stat_numcommands);
@@ -6629,14 +6617,10 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
         infoEmitFieldULL(e, "instantaneous_eventloop_duration_usec",
                          (unsigned long long)getInstantaneousMetric(STATS_METRIC_EL_DURATION));
         genValkeyInfoStringACLStats(e);
-        info = infoEmitterTextResult(&te);
     }
 
     /* Replication */
     if (all_sections || (dictFind(section_dict, "replication") != NULL)) {
-        infoEmitterText te;
-        infoEmitterTextInit(&te, info, &sections);
-        infoEmitter *e = &te.e;
         infoEmitBeginSection(e, "Replication");
         infoEmitFieldStr(e, "role", server.primary_host == NULL ? "master" : "slave");
         if (server.primary_host) {
@@ -6760,7 +6744,6 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
         infoEmitFieldLL(e, "repl_backlog_first_byte_offset", server.repl_backlog ? server.repl_backlog->offset : 0);
         infoEmitMetricLL(e, "repl_backlog_histlen", server.repl_backlog ? server.repl_backlog->histlen : 0,
                          INFO_KIND_GAUGE, INFO_UNIT_BYTES);
-        info = infoEmitterTextResult(&te);
     }
 
     /* CPU */
@@ -6773,9 +6756,6 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
          * microseconds and renders "sec.usec", reproducing the legacy
          * "%ld.%06ld" / "%lld.%06lld" formatting byte-for-byte. begin_section
          * owns the inter-section separator via the shared counter. */
-        infoEmitterText te;
-        infoEmitterTextInit(&te, info, &sections);
-        infoEmitter *e = &te.e;
         infoEmitBeginSection(e, "CPU");
         infoEmitFieldUsec(e, "used_cpu_sys", (long long)self_ru.ru_stime.tv_sec * 1000000 + self_ru.ru_stime.tv_usec);
         infoEmitFieldUsec(e, "used_cpu_user", (long long)self_ru.ru_utime.tv_sec * 1000000 + self_ru.ru_utime.tv_usec);
@@ -6796,37 +6776,25 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
             snprintf(key, sizeof(key), "used_active_time_io_thread_%d", i);
             infoEmitFieldUsec(e, key, getIOThreadActiveTimeMicroseconds(i));
         }
-        info = infoEmitterTextResult(&te);
     }
 
     /* Modules */
     if (all_sections || (dictFind(section_dict, "module_list") != NULL) ||
         (dictFind(section_dict, "modules") != NULL)) {
-        infoEmitterText te;
-        infoEmitterTextInit(&te, info, &sections);
-        infoEmitBeginSection(&te.e, "Modules");
-        info = infoEmitterTextResult(&te);
-        /* Module-provided fields are still built by the module INFO callbacks
-         * (VM_InfoAddField*); routing that API through the emitter is a
-         * follow-up. The section header is emitted via the emitter above. */
-        info = genModulesInfoString(info);
+        infoEmitBeginSection(e, "Modules");
+        /* The module version list is legacy raw text; module-provided INFO
+         * fields are emitted (typed) via modulesCollectInfoToEmitter() below. */
+        infoEmitRawSds(e, genModulesInfoString(sdsempty()));
     }
 
     /* Command statistics */
     if (all_sections || (dictFind(section_dict, "commandstats") != NULL)) {
-        infoEmitterText te;
-        infoEmitterTextInit(&te, info, &sections);
-        infoEmitter *e = &te.e;
         infoEmitBeginSection(e, "Commandstats");
         genValkeyInfoStringCommandStats(e, server.commands);
-        info = infoEmitterTextResult(&te);
     }
 
     /* Error statistics */
     if (all_sections || (dictFind(section_dict, "errorstats") != NULL)) {
-        infoEmitterText te;
-        infoEmitterTextInit(&te, info, &sections);
-        infoEmitter *e = &te.e;
         infoEmitBeginSection(e, "Errorstats");
         raxIterator ri;
         raxStart(&ri, server.errors);
@@ -6844,53 +6812,35 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
             infoEmitEndDict(e);
         }
         raxStop(&ri);
-        info = infoEmitterTextResult(&te);
     }
 
     /* Latency by percentile distribution per command */
     if (all_sections || (dictFind(section_dict, "latencystats") != NULL)) {
-        infoEmitterText te;
-        infoEmitterTextInit(&te, info, &sections);
-        infoEmitter *e = &te.e;
         infoEmitBeginSection(e, "Latencystats");
         if (server.latency_tracking_enabled) {
             genValkeyInfoStringLatencyStats(e, server.commands);
         }
-        info = infoEmitterTextResult(&te);
     }
 
     /* Cluster */
     if (all_sections || (dictFind(section_dict, "cluster") != NULL)) {
-        infoEmitterText te;
-        infoEmitterTextInit(&te, info, &sections);
-        infoEmitter *e = &te.e;
         infoEmitBeginSection(e, "Cluster");
         infoEmitFieldLL(e, "cluster_enabled", server.cluster_enabled);
-        info = infoEmitterTextResult(&te);
     }
 
     /* Cluster Info */
     if (all_sections || (dictFind(section_dict, "cluster_info") != NULL)) {
-        infoEmitterText te;
-        infoEmitterTextInit(&te, info, &sections);
-        infoEmitBeginSection(&te.e, "Cluster Info");
-        info = infoEmitterTextResult(&te);
-        if (server.cluster_enabled) info = genClusterInfoString(info);
+        infoEmitBeginSection(e, "Cluster Info");
+        if (server.cluster_enabled) infoEmitRawSds(e, genClusterInfoString(sdsempty()));
     }
 
     /* Scripting engines */
     if (all_sections || (dictFind(section_dict, "scriptingengines") != NULL)) {
-        infoEmitterText te;
-        infoEmitterTextInit(&te, info, &sections);
-        genValkeyInfoStringScriptingEngines(&te.e);
-        info = infoEmitterTextResult(&te);
+        genValkeyInfoStringScriptingEngines(e);
     }
 
     /* Key space */
     if (all_sections || (dictFind(section_dict, "keyspace") != NULL)) {
-        infoEmitterText te;
-        infoEmitterTextInit(&te, info, &sections);
-        infoEmitter *e = &te.e;
         infoEmitBeginSection(e, "Keyspace");
         for (j = 0; j < server.dbnum; j++) {
             serverDb *db = server.db[j];
@@ -6912,7 +6862,6 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 infoEmitEndDict(e);
             }
         }
-        info = infoEmitterTextResult(&te);
     }
 
     /* Get info from modules.
@@ -6920,17 +6869,13 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
      * We're not aware of the module section names here, and we rather avoid the search when we can.
      * so we proceed if there's a requested section name that's not found yet, or when the user asked
      * for "all" with any additional section names. */
-    if (everything || dictFind(section_dict, "modules") != NULL || sections < (int)dictSize(section_dict) ||
+    if (everything || dictFind(section_dict, "modules") != NULL || *section_counter < (int)dictSize(section_dict) ||
         (all_sections && dictSize(section_dict))) {
-        info = modulesCollectInfo(info, everything || dictFind(section_dict, "modules") != NULL ? NULL : section_dict,
-                                  0, /* not a crash report */
-                                  sections);
+        modulesCollectInfoToEmitter(e, everything || dictFind(section_dict, "modules") != NULL ? NULL : section_dict,
+                                    0 /* not a crash report */);
     }
 
     if (dictFind(section_dict, "debug") != NULL) {
-        infoEmitterText te;
-        infoEmitterTextInit(&te, info, &sections);
-        infoEmitter *e = &te.e;
         infoEmitBeginSection(e, "Debug");
         infoEmitMetricULL(e, "eventloop_duration_aof_sum", server.duration_stats[EL_DURATION_TYPE_AOF].sum,
                           INFO_KIND_COUNTER, INFO_UNIT_MICROSECONDS);
@@ -6941,10 +6886,20 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
         infoEmitFieldLL(e, "eventloop_cmd_per_cycle_max", server.el_cmd_cnt_max);
         infoEmitFieldLL(e, "io_threaded_reads_pending", server.stat_io_reads_pending);
         infoEmitFieldLL(e, "io_threaded_writes_pending", server.stat_io_writes_pending);
-        info = infoEmitterTextResult(&te);
     }
 
-    return info;
+    return;
+}
+
+/* Backward-compatible wrapper: render INFO to a text sds using the text
+ * backend, preserving the exact legacy output byte-for-byte. */
+sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
+    sds info = sdsempty();
+    int sections = 0;
+    infoEmitterText te;
+    infoEmitterTextInit(&te, info, &sections);
+    genValkeyInfoToEmitter(&te.e, &sections, section_dict, all_sections, everything);
+    return infoEmitterTextResult(&te);
 }
 
 /* INFO [<section> [<section> ...]] */

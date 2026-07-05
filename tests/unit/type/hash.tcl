@@ -426,6 +426,24 @@ start_server {tags {"hash"}} {
         r config set hash-max-listpack-entries $original_max
     }
 
+    test {HMGET batch lookup skips expired hash fields} {
+        set original_max [lindex [r config get hash-max-listpack-entries] 1]
+        r config set hash-max-listpack-entries 0
+        r DEBUG SET-ACTIVE-EXPIRE 0
+
+        r del hmgetbatchhfetest
+        r hset hmgetbatchhfetest alive value expired stale
+        assert_encoding hashtable hmgetbatchhfetest
+        assert_equal {1} [r hpexpire hmgetbatchhfetest 1 fields 1 expired]
+        after 2
+
+        assert_equal {value {} {}} [r hmget hmgetbatchhfetest alive expired missing]
+        assert_equal {} [r hget hmgetbatchhfetest expired]
+
+        r DEBUG SET-ACTIVE-EXPIRE 1
+        r config set hash-max-listpack-entries $original_max
+    } {OK} {needs:debug}
+
     test {HKEYS - small hash} {
         lsort [r hkeys smallhash]
     } [lsort [array names smallhash *]]

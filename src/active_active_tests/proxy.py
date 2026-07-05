@@ -6,7 +6,7 @@ import os
 import sys
 
 # Directory where control files will be placed
-CONTROL_DIR = "/google/src/cloud/nandihalli/research-active-active-support/google3/valkey_git/src/active_active_tests"
+CONTROL_DIR = os.path.dirname(os.path.abspath(__file__))
 
 def should_block(port):
     return os.path.exists(os.path.join(CONTROL_DIR, f"block_{port}"))

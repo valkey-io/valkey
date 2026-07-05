@@ -5,12 +5,13 @@ import os
 import signal
 import socket
 
-VALKEY_SERVER_PATH = "/google/src/cloud/nandihalli/research-active-active-support/google3/valkey_git/src/valkey-server"
-VALKEY_CLI_PATH = "/google/src/cloud/nandihalli/research-active-active-support/google3/valkey_git/src/valkey-cli"
-TEST_DIR = "/google/src/cloud/nandihalli/research-active-active-support/google3/valkey_git/src/active_active_tests"
+TEST_DIR = os.path.dirname(os.path.abspath(__file__))
+SRC_DIR = os.path.dirname(TEST_DIR)
+VALKEY_SERVER_PATH = os.path.join(SRC_DIR, "valkey-server")
+VALKEY_CLI_PATH = os.path.join(SRC_DIR, "valkey-cli")
 PROXY_PATH = os.path.join(TEST_DIR, "proxy.py")
 
-REPORT_PATH = "/usr/local/google/home/nandihalli/.gemini/jetski/brain/2e6fdf7f-9948-49a8-bd1c-bf0d99e27986/active_active_test_report.md"
+REPORT_PATH = os.environ.get("VALKEY_TEST_REPORT_PATH", os.path.join(TEST_DIR, "active_active_test_report.md"))
 
 def cleanup_processes():
     print("Cleaning up old valkey and proxy processes...")
@@ -47,13 +48,15 @@ def main():
     # 1. Start Node A and Node B
     print("Starting Node A...")
     node_a_proc = subprocess.Popen(
-        [VALKEY_SERVER_PATH, os.path.join(TEST_DIR, "node_a.conf")],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        [VALKEY_SERVER_PATH, "node_a.conf"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        cwd=TEST_DIR
     )
     print("Starting Node B...")
     node_b_proc = subprocess.Popen(
-        [VALKEY_SERVER_PATH, os.path.join(TEST_DIR, "node_b.conf")],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        [VALKEY_SERVER_PATH, "node_b.conf"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        cwd=TEST_DIR
     )
     
     print("Starting Proxy A...")

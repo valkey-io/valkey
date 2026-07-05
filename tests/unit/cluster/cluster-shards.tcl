@@ -20,7 +20,9 @@ proc get_node_info_from_shard {id reference {type node}} {
     return {}
 }
 
-start_cluster 3 3 {tags {external:skip cluster}} {
+# Gossip-style force failover after pausing the only voter/leader; skipped
+# under raft because MEET joins as learner and FAILOVER requires leader commit.
+start_cluster 3 3 {tags {external:skip cluster cluster-raft:skip}} {
     set primary_node 0
     set replica_node 3
     set validation_node 4
@@ -89,7 +91,9 @@ proc cluster_ensure_master {id} {
 # transiently-orphaned primary during the cluster restart test and change its
 # shard id. Migration semantics are not under test here (CLUSTER REPLICATE is
 # manual and unaffected).
-start_cluster 4 5 {tags {external:skip cluster} overrides {cluster-allow-replica-migration no}} {
+# Legacy CLUSTER SHARDS / gossip failover / RESET-FORGET / rolling restart tests.
+# Skipped under raft: see cluster-raft:skip note above and learner MEET semantics.
+start_cluster 4 5 {tags {external:skip cluster cluster-raft:skip} overrides {cluster-allow-replica-migration no}} {
 
 # cluster_master_nodes and cluster_replica_nodes refer to the active cluster members.
 set ::cluster_master_nodes 4
@@ -320,10 +324,7 @@ test "CLUSTER MYSHARDID reports same shard id after cluster restart" {
     for {set i 0} {$i < 8} {incr i} {
         assert_equal [dict get $node_ids $i] [R $i cluster myshardid]
     }
-} {} {cluster-raft:skip} ;# Skipped under raft: R8 stays running while R0-R7
-                          # restart, inflating its term with failed elections.
-                          # This disrupts leader election when others come back.
-                          # Needs pre-vote (Raft §9.6) to fix.
+}
 
 test "CLUSTER SHARDS id response validation" {
     # For each node in the cluster

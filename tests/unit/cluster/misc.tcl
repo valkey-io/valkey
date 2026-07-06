@@ -13,6 +13,14 @@ start_cluster 2 2 {tags {external:skip cluster}} {
         R 0 ping
     } {PONG}
 
+    test "Replica should reject slot-management commands" {
+        assert_error {ERR Please use ADDSLOTS/DELSLOTS only with primaries*} {R 2 CLUSTER ADDSLOTS 100}
+        assert_error {ERR Please use ADDSLOTS/DELSLOTS only with primaries*} {R 3 CLUSTER DELSLOTS 100}
+        assert_error {ERR Please use ADDSLOTSRANGE/DELSLOTSRANGE only with primaries*} {R 2 CLUSTER ADDSLOTSRANGE 100 200}
+        assert_error {ERR Please use ADDSLOTSRANGE/DELSLOTSRANGE only with primaries*} {R 3 CLUSTER DELSLOTSRANGE 100 200}
+        assert_error {ERR Please use FLUSHSLOTS only with primaries*} {R 2 CLUSTER FLUSHSLOTS}
+    }
+
     test "Coverage: Basic cluster commands" {
         assert_equal {OK} [R 0 CLUSTER saveconfig]
 

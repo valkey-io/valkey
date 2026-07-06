@@ -981,8 +981,12 @@ int clusterLoadConfig(char *filename) {
                 p += 3;
 
                 char *pr = strchr(p, ']');
+                if (pr == NULL) {
+                    sdsfreesplitres(argv, argc);
+                    goto fmterr;
+                }
                 size_t node_len = pr - p;
-                if (pr == NULL || verifyClusterNodeId(p, node_len) == C_ERR) {
+                if (verifyClusterNodeId(p, node_len) == C_ERR) {
                     sdsfreesplitres(argv, argc);
                     goto fmterr;
                 }

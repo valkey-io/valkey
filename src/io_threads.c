@@ -388,8 +388,10 @@ static void createIOThread(int id) {
     spscInit(&io_private_inbox[id], IO_SPSC_QUEUE_SIZE);
 
     pthread_t tid;
-    pthread_mutex_init(&io_threads_mutex[id], NULL);
-    pthread_mutex_lock(&io_threads_mutex[id]); /* Thread will be stopped. */
+    int ret = pthread_mutex_init(&io_threads_mutex[id], NULL);
+    serverAssert(ret == 0);
+    ret = pthread_mutex_lock(&io_threads_mutex[id]); /* Thread will be stopped. */
+    serverAssert(ret == 0);
     int err = pthread_create(&tid, NULL, IOThreadMain, (void *)(long)id);
     if (err) {
         serverLog(LL_WARNING, "Fatal: Can't initialize IO thread, pthread_create failed with: %s", strerror(err));

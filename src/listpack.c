@@ -136,8 +136,6 @@
         assert((p) >= (lp) + LP_HDR_SIZE && (p) + (len) < (lp) + lpGetTotalBytes((lp))); \
     } while (0)
 
-static inline void lpAssertValidEntry(unsigned char *lp, size_t lpbytes, unsigned char *p);
-
 /* Don't let listpacks grow over 1GB in any case, don't wanna risk overflow in
  * Total Bytes header field */
 #define LISTPACK_MAX_SAFETY_SIZE (1 << 30)
@@ -396,13 +394,12 @@ unsigned char *lpSkip(unsigned char *p) {
 unsigned char *lpNext(unsigned char *lp, unsigned char *p) {
     assert(p);
     p = lpSkip(p);
-    size_t bytes = lpBytes(lp);
     if (unlikely(p[0] == LP_EOF)) {
+        size_t bytes = lpBytes(lp);
         /* EOF must only appear at the end of a listpack. */
         assert(p + 1 == lp + bytes);
         return NULL;
     }
-    lpAssertValidEntry(lp, bytes, p);
     return p;
 }
 
@@ -416,7 +413,6 @@ unsigned char *lpPrev(unsigned char *lp, unsigned char *p) {
     uint64_t prevlen = lpDecodeBacklen(p);
     prevlen += lpEncodeBacklen(NULL, prevlen);
     p -= prevlen - 1; /* Seek the first byte of the previous entry. */
-    lpAssertValidEntry(lp, lpBytes(lp), p);
     return p;
 }
 
@@ -424,13 +420,12 @@ unsigned char *lpPrev(unsigned char *lp, unsigned char *p) {
  * listpack has no elements. */
 unsigned char *lpFirst(unsigned char *lp) {
     unsigned char *p = lp + LP_HDR_SIZE; /* Skip the header. */
-    size_t bytes = lpBytes(lp);
     if (unlikely(p[0] == LP_EOF)) {
+        size_t bytes = lpBytes(lp);
         /* EOF must only appear at the end of a listpack. */
         assert(p + 1 == lp + bytes);
         return NULL;
     }
-    lpAssertValidEntry(lp, bytes, p);
     return p;
 }
 
@@ -652,17 +647,11 @@ unsigned char *lpFind(unsigned char *lp, unsigned char *p, unsigned char *s, uin
             /* Skip entry */
             skipcnt--;
 
-            /* Move to next entry, avoid use `lpNext` due to `lpAssertValidEntry` in
-             * `lpNext` will call `lpBytes`, will cause performance degradation */
+            /* Move to next entry. */
             p = lpSkip(p);
         }
 
-        /* The next call to lpGetWithSize could read at most 8 bytes past `p`
-         * We use the slower validation call only when necessary. */
-        if (p + 8 >= lp + lp_bytes)
-            lpAssertValidEntry(lp, lp_bytes, p);
-        else
-            assert(p >= lp + LP_HDR_SIZE && p < lp + lp_bytes);
+        assert(p >= lp + LP_HDR_SIZE && p < lp + lp_bytes);
         if (unlikely(p[0] == LP_EOF)) {
             /* EOF must only appear at the end of a listpack. */
             assert(p + 1 == lp + lp_bytes);
@@ -940,7 +929,6 @@ unsigned char *lpDeleteRangeWithEntry(unsigned char *lp, unsigned char **p, unsi
             assert(tail + 1 == lp + bytes);
             break;
         }
-        lpAssertValidEntry(lp, bytes, tail);
     }
 
     /* Store the offset of the element 'first', so that we can obtain its
@@ -1251,15 +1239,9 @@ int lpValidateNext(unsigned char *lp, unsigned char **pp, size_t lpbytes) {
 #undef OUT_OF_RANGE
 }
 
-/* Validate that the entry doesn't reach outside the listpack allocation. */
-static inline void lpAssertValidEntry(unsigned char *lp, size_t lpbytes, unsigned char *p) {
-    assert(lpValidateNext(lp, &p, lpbytes));
-}
-
 /* Validate the integrity of the data structure.
- * when `deep` is 0, only the integrity of the header is validated.
- * when `deep` is 1, we scan all the entries one by one. */
-int lpValidateIntegrity(unsigned char *lp, size_t size, int deep, listpackValidateEntryCB entry_cb, void *cb_userdata) {
+ * Validates the header and scans all entries one by one. */
+int lpValidateIntegrity(unsigned char *lp, size_t size, listpackValidateEntryCB entry_cb, void *cb_userdata) {
     /* Check that we can actually read the header. (and EOF) */
     if (size < LP_HDR_SIZE + 1) return 0;
 
@@ -1269,8 +1251,6 @@ int lpValidateIntegrity(unsigned char *lp, size_t size, int deep, listpackValida
 
     /* The last byte must be the terminator. */
     if (lp[size - 1] != LP_EOF) return 0;
-
-    if (!deep) return 1;
 
     /* Validate the individual entries. */
     uint32_t count = 0;

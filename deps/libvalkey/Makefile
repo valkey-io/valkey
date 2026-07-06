@@ -18,7 +18,7 @@ TEST_BINS = $(patsubst $(TEST_DIR)/%.c,$(TEST_DIR)/%,$(TEST_SRCS))
 SOURCES = $(filter-out $(SRC_DIR)/tls.c $(SRC_DIR)/rdma.c, $(wildcard $(SRC_DIR)/*.c))
 HEADERS = $(filter-out $(INCLUDE_DIR)/tls.h $(INCLUDE_DIR)/rdma.h, $(wildcard $(INCLUDE_DIR)/*.h))
 
-# Allow the libvalkey provided sds and dict types to be replaced by
+# Allow the libvalkey provided sds type to be replaced by
 # compatible implementations (like Valkey's).
 # A replaced type is not included in a built archive or shared library.
 SDS_INCLUDE_DIR ?= $(SRC_DIR)

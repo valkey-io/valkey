@@ -229,7 +229,7 @@ void trackingRememberKeys(client *tracking, client *executing) {
 
     getKeysResult result;
     initGetKeysResult(&result);
-    int numkeys = getKeysFromCommand(executing->cmd, executing->argv, executing->argc, &result);
+    int numkeys = getKeysFromCommandWithSpecs(executing->cmd, executing->argv, executing->argc, GET_KEYSPEC_DEFAULT, &result);
     if (!numkeys) {
         getKeysFreeResult(&result);
         return;

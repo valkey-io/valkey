@@ -1996,6 +1996,87 @@ jobs:
         uses: ./.github/actions/upload-test-failures
         with:
           job-name: ${{ github.job }}
+  test-alpine-32bit:
+    runs-on: ubuntu-latest
+    if: |
+      (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
+        (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
+        (github.event_name == 'pull_request' &&
+          (github.event.pull_request.base.ref != 'unstable' ||
+            contains(github.event.pull_request.labels.*.name, 'run-extra-tests')) &&
+          (github.event.action != 'labeled' ||
+            (github.event.pull_request.base.ref == 'unstable' && github.event.label.name == 'run-extra-tests'))
+        )) &&
+      !contains(github.event.inputs.skipjobs, 'alpine') &&
+      !contains(github.event.inputs.skipjobs, '32bit')
+    steps:
+      - name: prep
+        if: github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call'
+        run: |
+          echo "GITHUB_REPOSITORY=${{inputs.use_repo || github.event.inputs.use_repo}}" >> $GITHUB_ENV
+          echo "GITHUB_HEAD_REF=${{inputs.use_git_ref || github.event.inputs.use_git_ref}}" >> $GITHUB_ENV
+          echo "skipjobs: ${{github.event.inputs.skipjobs}}"
+          echo "skiptests: ${{github.event.inputs.skiptests}}"
+          echo "test_args: ${{github.event.inputs.test_args}}"
+          echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
+          ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
+      - name: Run 32-bit Alpine tests
+        env:
+          RUN_ACCURATE: ${{ github.event_name != 'pull_request' && '--accurate' || '' }}
+          SKIPTESTS: ${{ github.event.inputs.skiptests }}
+          TEST_ARGS: ${{ github.event.inputs.test_args }}
+          CLUSTER_TEST_ARGS: ${{ github.event.inputs.cluster_test_args }}
+        run: |
+          docker run --rm \
+            --platform linux/386 \
+            -v "$PWD:/src" \
+            -w /src \
+            -e RUN_ACCURATE \
+            -e SKIPTESTS \
+            -e TEST_ARGS \
+            -e CLUSTER_TEST_ARGS \
+            i386/alpine:latest \
+            sh -euxc '
+              apk add --no-cache bash build-base git gtest-dev linux-headers procps python3 tcl tclx
+
+              rm -rf libbacktrace
+              git clone https://github.com/ianlancetaylor/libbacktrace.git libbacktrace
+              cd libbacktrace
+              git checkout b9e40069c0b47a722286b94eb5231f7f05c08713
+              ./configure
+              make -j$(nproc)
+              make install
+              cd /src
+
+              make SERVER_CFLAGS="-Werror" USE_LIBBACKTRACE=yes 32bit
+
+              case "${SKIPTESTS:-}" in
+                *valkey*) ;;
+                *) ./runtest ${RUN_ACCURATE:-} --failures-output test-failures/valkey.json --verbose --dump-logs ${TEST_ARGS:-} ;;
+              esac
+
+              case "${SKIPTESTS:-}" in
+                *modules*) ;;
+                *)
+                  make -C tests/modules 32bit
+                  CFLAGS="-Werror" ./runtest-moduleapi --failures-output test-failures/moduleapi.json --verbose --dump-logs ${TEST_ARGS:-}
+                  ;;
+              esac
+
+              case "${SKIPTESTS:-}" in
+                *sentinel*) ;;
+                *) ./runtest-sentinel --failures-output test-failures/sentinel.json ${CLUSTER_TEST_ARGS:-} ;;
+              esac
+            '
+      - name: Upload test failures
+        if: always()
+        uses: ./.github/actions/upload-test-failures
+        with:
+          job-name: ${{ github.job }}
+
   reply-schemas-validator:
     runs-on: ubuntu-latest
     timeout-minutes: 1440
@@ -2092,6 +2173,7 @@ jobs:
       - test-freebsd
       - test-alpine-jemalloc
       - test-alpine-libc-malloc
+      - test-alpine-32bit
       - reply-schemas-validator
     steps:
       - name: Download all failures
@@ -2195,6 +2277,7 @@ jobs:
       - test-freebsd
       - test-alpine-jemalloc
       - test-alpine-libc-malloc
+      - test-alpine-32bit
       - reply-schemas-validator
     steps:
       - name: Collect job status

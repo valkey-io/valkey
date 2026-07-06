@@ -499,7 +499,7 @@ void getrangeCommand(client *c) {
     if ((o = lookupKeyReadOrReply(c, c->argv[1], shared.emptybulk)) == NULL ||
         checkType(c, o, OBJ_STRING)) return;
 
-    if (o->encoding == OBJ_ENCODING_INT) {
+    if (objectGetEncoding(o) == OBJ_ENCODING_INT) {
         str = llbuf;
         strlen = ll2string(llbuf, sizeof(llbuf), (long)objectGetVal(o));
     } else {
@@ -710,7 +710,7 @@ void incrDecrCommand(client *c, long long incr) {
     }
     value += incr;
 
-    if (o && o->refcount == 1 && o->encoding == OBJ_ENCODING_INT &&
+    if (o && o->refcount == 1 && objectGetEncoding(o) == OBJ_ENCODING_INT &&
         value >= LONG_MIN && value <= LONG_MAX) {
         new = o;
         objectSetVal(o, (void *)((long)value));

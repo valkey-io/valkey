@@ -773,16 +773,15 @@ int verifyClusterNodeId(const char *name, int length) {
     return C_OK;
 }
 
-int isValidAuxChar(int c) {
-    /* Return true if the character is alphanumeric */
-    if (isalnum(c)) {
-        return 1;
-    }
+static int isValidAuxChar(unsigned char c) {
+    /* Reject everything up through ',' (0x2C) inclusive: control characters
+     * (0x00-0x1F), space !"#$%&'()*+, (0x20-0x2C), and DEL (0x7F). */
+    if (c <= ',' || c == 0x7F) return 0;
 
-    /* List of invalid characters */
-    static const char *invalid_charset = "!#$%&()*+;<>?@[]^{|}~";
+    /* Reject additional characters above 0x2C (comma) that are format-significant in
+     * nodes.conf or otherwise unsafe. */
+    static const char *invalid_charset = ";<=>?@[]^{|}~\\";
 
-    /* Return true if the character is NOT in the invalid charset */
     return strchr(invalid_charset, c) == NULL;
 }
 
@@ -1661,7 +1660,7 @@ void clusterCommandFlushslot(client *c) {
  * but additional factors (e.g., hash table type) can be mixed in later.
  *
  * Fingerprint is encoded using consecutive ASCII values starting from '0'
- * (48 to 111), each represenenting 6 bits. This encoding avoids '-', '{', '}'
+ * (48 to 111), each representing 6 bits. This encoding avoids '-', '{', '}'
  * which are part of the cursor.
  *
  * Returns a non zero 32-bit fingerprint. 0 is reserved for cross-node cursor */
@@ -1669,7 +1668,10 @@ static const char *clusterscanFingerprint(void) {
     static char cached_fp[7];
     if (cached_fp[0]) return cached_fp;
 
-    uint64_t *seed = (uint64_t *)hashtableGetHashFunctionSeed();
+    /* Use configurable_hash_seed (derived from hash-seed config) so that nodes
+     * sharing the same hash-seed produce the same fingerprint, allowing cursors
+     * to survive failover without restarting the scan. */
+    uint64_t *seed = (uint64_t *)getConfigurableHashSeed();
     uint64_t hash = wangHash64(seed[0] ^ seed[1]);
 
     /* Truncating to 32 bit instead of 64 bit */

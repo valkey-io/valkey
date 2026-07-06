@@ -50,6 +50,11 @@
 
 #define UNUSED(V) ((void)V)
 
+/* The main kvstore uses up to 16k hashtables (corresponding to slots).  This
+ * requires 14 bits.  We can't increase past 16 as we reserve 48 bits in the
+ * 64-bit kvstore cursor to be used for the hashtable cursor. */
+#define MAX_HASHTABLES_BITS 16
+
 static hashtable *kvstoreIteratorNextHashtable(kvstoreIterator *kvs_it);
 
 struct _kvstore {
@@ -132,18 +137,15 @@ static unsigned long long cumulativeKeyCountRead(kvstore *kvs, int didx) {
     return sum;
 }
 
-static void addHashtableIndexToCursor(kvstore *kvs, int didx, unsigned long long *cursor) {
-    if (kvs->num_hashtables == 1) return;
-    /* didx can be KVSTORE_INDEX_NOT_FOUND when iteration is over and there are no more hashtables to visit. */
-    if (didx == KVSTORE_INDEX_NOT_FOUND) return;
-    *cursor = (*cursor << kvs->num_hashtables_bits) | didx;
+/* Build a kvstore cursor from a hashtable cursor and didx. */
+static unsigned long long hashtableCursorToKvstoreCursor(kvstore *kvs, unsigned long long ht_cursor, int didx) {
+    return (ht_cursor << kvs->num_hashtables_bits) | didx;
 }
 
-static int getAndClearHashtableIndexFromCursor(kvstore *kvs, unsigned long long *cursor) {
-    if (kvs->num_hashtables == 1) return 0;
-    int didx = (int)(*cursor & (kvs->num_hashtables - 1));
-    *cursor = *cursor >> kvs->num_hashtables_bits;
-    return didx;
+/* Extract a hashtable cursor from a kvstore cursor (optionally returning the didx). */
+static unsigned long long kvstoreCursorToHashtableCursor(kvstore *kvs, unsigned long long kvs_cursor, int *didx) {
+    if (didx) *didx = kvs_cursor & ((1uLL << kvs->num_hashtables_bits) - 1);
+    return (kvs_cursor >> kvs->num_hashtables_bits);
 }
 
 int kvstoreIsImporting(kvstore *kvs, int didx) {
@@ -284,9 +286,7 @@ size_t kvstoreHashtableMetadataSize(void) {
  * 3 for 8 hashtables, etc.)
  */
 kvstore *kvstoreCreate(hashtableType *type, int num_hashtables_bits, int flags) {
-    /* We can't support more than 2^16 hashtables because we want to save 48 bits
-     * for the hashtable cursor, see kvstoreScan */
-    assert(num_hashtables_bits <= 16);
+    assert(num_hashtables_bits <= MAX_HASHTABLES_BITS);
 
     /* The hashtableType of kvstore needs to use the specific callbacks.
      * If there are any changes in the future, it will need to be modified. */
@@ -419,19 +419,18 @@ unsigned long long kvstoreScan(kvstore *kvs,
                                kvstoreScanFunction scan_cb,
                                kvstoreScanShouldSkipHashtable *skip_cb,
                                void *privdata) {
-    unsigned long long next_cursor = 0;
-    /* During hash table traversal, 48 upper bits in the cursor are used for positioning in the HT.
-     * Following lower bits are used for the hashtable index number, ranging from 0 to 2^num_hashtables_bits-1.
-     * Hashtable index is always 0 at the start of iteration and can be incremented only if there are
-     * multiple hashtables. */
-    int didx = getAndClearHashtableIndexFromCursor(kvs, &cursor);
+    /* Split the kvs cursor into the ht_cursor and the hashtable index.  Hashtable index is always
+     * 0 at the start of iteration and can be incremented only if there are multiple hashtables. */
+    int didx;
+    unsigned long long ht_cursor = kvstoreCursorToHashtableCursor(kvs, cursor, &didx);
+
     if (first_idx >= 0) {
         assert(last_idx >= first_idx);
         assert(last_idx < kvs->num_hashtables);
         if (didx < first_idx) {
             /* Fast-forward to first_idx. */
             didx = first_idx;
-            cursor = 0;
+            ht_cursor = 0;
         } else if (didx > last_idx) {
             /* The cursor is already past last_idx. */
             return 0;
@@ -443,28 +442,24 @@ unsigned long long kvstoreScan(kvstore *kvs,
 
     int skip = !ht || (skip_cb && skip_cb(ht)) || kvstoreIsImporting(kvs, didx);
     if (!skip) {
-        next_cursor = hashtableScan(ht, cursor, hashtableScanToKvstoreScanCallback, &cb_data);
+        ht_cursor = hashtableScan(ht, ht_cursor, hashtableScanToKvstoreScanCallback, &cb_data);
         /* In hashtableScan, scan_cb may delete entries (e.g., in active expire case). */
         freeHashtableIfNeeded(kvs, didx);
     }
     /* scanning done for the current hash table or if the scanning wasn't possible, move to the next hashtable index. */
-    if (next_cursor == 0 || skip) {
+    if (ht_cursor == 0 || skip) {
         if (first_idx >= 0 && didx >= last_idx) {
             /* Range exhausted; no need to look up the next hashtable. */
             return 0;
         }
-        int nextdidx = kvstoreGetNextNonEmptyHashtableIndex(kvs, didx);
-        if (first_idx >= 0 && nextdidx > last_idx) {
+        didx = kvstoreGetNextNonEmptyHashtableIndex(kvs, didx);
+        if (didx == KVSTORE_INDEX_NOT_FOUND) return 0;
+        if (first_idx >= 0 && didx > last_idx) {
             /* Range exhausted. */
             return 0;
         }
-        didx = nextdidx;
     }
-    if (didx == KVSTORE_INDEX_NOT_FOUND) {
-        return 0;
-    }
-    addHashtableIndexToCursor(kvs, didx, &next_cursor);
-    return next_cursor;
+    return hashtableCursorToKvstoreCursor(kvs, ht_cursor, didx);
 }
 
 /*

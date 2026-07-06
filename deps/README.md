@@ -15,34 +15,16 @@ How to upgrade the above dependencies
 Jemalloc
 ---
 
-Jemalloc is modified with changes that allow us to implement the Valkey
-active defragmentation logic. However this feature of Valkey is not mandatory
-and Valkey is able to understand if the Jemalloc version it is compiled
-against supports such Valkey-specific modifications. So in theory, if you
-are not interested in the active defragmentation, you can replace Jemalloc
-just following these steps:
+Jemalloc is used mostly unmodified from upstream. Active defragmentation relies
+on jemalloc's native API rather than custom source patches (those were removed).
+The only source-level modification is in `include/jemalloc/jemalloc.sh`, which
+defines the `VALKEY_VENDORED_JEMALLOC` macro so Valkey can detect the vendored
+copy at build time. A `CMakeLists.txt` is added for the Valkey build system.
 
-1. Remove the jemalloc directory.
-2. Substitute it with the new jemalloc source tree.
-3. Edit the Makefile located in the same directory as the README you are
-   reading, and change the --with-version in the Jemalloc configure script
-   options with the version you are using. This is required because otherwise
-   Jemalloc configuration script is broken and will not work nested in another
-   git repository.
-
-However note that we change Jemalloc settings via the `configure` script of Jemalloc using the `--with-lg-quantum` option, setting it to the value of 3 instead of 4. This provides us with more size classes that better suit the Valkey data structures, in order to gain memory efficiency.
-
-If you want to upgrade Jemalloc while also providing support for
-active defragmentation, in addition to the above steps you need to perform
-the following additional steps:
-
-5. In Jemalloc tree, file `include/jemalloc/jemalloc_macros.h.in`, make sure
-   to add `#define JEMALLOC_FRAG_HINT`.
-6. Implement the function `je_get_defrag_hint()` inside `src/jemalloc.c`. You
-   can see how it is implemented in the current Jemalloc source tree shipped
-   with Valkey, and rewrite it according to the new Jemalloc internals, if they
-   changed, otherwise you could just copy the old implementation if you are
-   upgrading just to a similar version of Jemalloc.
+We change Jemalloc settings via the `configure` script using the
+`--with-lg-quantum` option, setting it to the value of 3 instead of 4. This
+provides us with more size classes that better suit the Valkey data structures,
+in order to gain memory efficiency.
 
 #### Updating/upgrading jemalloc
 
@@ -50,7 +32,7 @@ The jemalloc directory is pulled as a subtree from the upstream jemalloc github 
 
 1. `git subtree pull --prefix deps/jemalloc https://github.com/jemalloc/jemalloc.git <version-tag> --squash`<br>
 This should hopefully merge the local changes into the new version.
-2. In case any conflicts arise (due to our changes) you'll need to resolve them and commit.
+2. In case any conflicts arise you'll need to resolve them and commit.
 3. Reconfigure jemalloc:<br>
 ```sh
 rm deps/jemalloc/VERSION deps/jemalloc/configure
@@ -94,10 +76,13 @@ manual procedure performed by taking a diff between the different versions.
 Currently we have at least the following differences between official Lua 5.1
 and our version:
 
-1. Makefile is modified to allow a different compiler than GCC.
+1. Makefile and CMakeLists.txt are modified for the Valkey build system.
 2. We have the implementation source code, and directly link to the following external libraries: `lua_cjson.o`, `lua_struct.o`, `lua_cmsgpack.o` and `lua_bit.o`.
-3. There is a security fix in `ldo.c`, line 498: The check for `LUA_SIGNATURE[0]` is removed in order to avoid direct bytecode execution.
-4. In `lstring.c`, the luaS_newlstr function's hash calculation has been upgraded from a simple hash function to MurmurHash3, implemented within the same file, to enhance performance, particularly for operations involving large strings.
+3. There is a security fix in `ldo.c`: The check for `LUA_SIGNATURE[0]` is removed in order to avoid direct bytecode execution.
+4. In `lstring.c`, the `luaS_newlstr` function's hash calculation has been upgraded from a simple hash function to MurmurHash3, to enhance performance particularly for large strings.
+5. Support for readonly tables (`lua_enablereadonlytable` API) is added across `lapi.c`, `lvm.c`, `lobject.h`, and `ltable.c`.
+6. Protection of tables reachable from globals, with a globals whitelist.
+7. Multiple CVE security patches (CVE-2022-24834, CVE-2024-31449, CVE-2024-31227, CVE-2024-31228) in cjson, cmsgpack, and the parser.
 
 Hdr_Histogram
 ---

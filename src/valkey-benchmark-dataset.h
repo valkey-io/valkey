@@ -2,7 +2,7 @@
  *
  * Copyright Valkey Contributors.
  * All rights reserved.
- * SPDX-License-Identifier: BSD 3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause
  */
 
 #ifndef VALKEY_BENCHMARK_DATASET_H

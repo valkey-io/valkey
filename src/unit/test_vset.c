@@ -134,7 +134,8 @@ int test_vset_large_batch_update_entry_same_expiry(int argc, char **argv, int fl
     const long long expiry_time = 1000LL;
     const unsigned int total_entries = 1000;
 
-    mock_entry *entries[total_entries];
+    mock_entry **entries = zmalloc(sizeof(mock_entry *) * total_entries);
+    TEST_ASSERT(entries != NULL);
 
     for (unsigned int i = 0; i < total_entries; i++) {
         char key_buf[32];
@@ -163,6 +164,7 @@ int test_vset_large_batch_update_entry_same_expiry(int argc, char **argv, int fl
     for (unsigned int i = 0; i < total_entries; i++) {
         mockFreeEntry(entries[i]);
     }
+    zfree(entries);
 
     TEST_PRINT_INFO("Inserted, updated and deleted %d entries with same expiry", total_entries);
     return 0;
@@ -178,7 +180,8 @@ int test_vset_large_batch_update_entry_multiple_expiries(int argc, char **argv, 
     vsetInit(&set);
 
     // Prepare entries with mixed expiry times, some duplicates
-    mock_entry *entries[total_entries];
+    mock_entry **entries = zmalloc(sizeof(mock_entry *) * total_entries);
+    TEST_ASSERT(entries != NULL);
 
     // Initialize keys
     for (unsigned int i = 0; i < total_entries; i++) {
@@ -211,6 +214,7 @@ int test_vset_large_batch_update_entry_multiple_expiries(int argc, char **argv, 
     for (unsigned int i = 0; i < total_entries; i++) {
         mockFreeEntry(entries[i]);
     }
+    zfree(entries);
 
     TEST_PRINT_INFO("Inserted, updated and deleted %d entries with different expiry", total_entries);
     return 0;
@@ -226,7 +230,8 @@ int test_vset_iterate_multiple_expiries(int argc, char **argv, int flags) {
     vsetInit(&set);
 
     // Prepare entries with mixed expiry times, some duplicates
-    mock_entry *entries[total_entries];
+    mock_entry **entries = zmalloc(sizeof(mock_entry *) * total_entries);
+    TEST_ASSERT(entries != NULL);
 
     // Initialize keys
     for (unsigned int i = 0; i < total_entries; i++) {
@@ -267,6 +272,7 @@ int test_vset_iterate_multiple_expiries(int argc, char **argv, int flags) {
     vsetResetIterator(&it);
     vsetRelease(&set);
     for (int i = 0; i < 5; i++) mockFreeEntry(entries[i]);
+    zfree(entries);
 
     TEST_PRINT_INFO("Iterated all %d mixed expiry entries successfully", total);
     return 0;
@@ -281,7 +287,8 @@ int test_vset_add_and_remove_all(int argc, char **argv, int flags) {
     vsetInit(&set);
 
     const int total_entries = 130;
-    mock_entry *entries[total_entries];
+    mock_entry **entries = zmalloc(sizeof(mock_entry *) * total_entries);
+    TEST_ASSERT(entries != NULL);
     long long expiry = 5000;
 
     for (int i = 0; i < total_entries; i++) {
@@ -295,6 +302,7 @@ int test_vset_add_and_remove_all(int argc, char **argv, int flags) {
         TEST_ASSERT(vsetRemoveEntry(&set, mockGetExpiry, entries[i]));
         mockFreeEntry(entries[i]);
     }
+    zfree(entries);
 
     TEST_ASSERT(vsetIsEmpty(&set));
     vsetRelease(&set);

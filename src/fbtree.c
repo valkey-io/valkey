@@ -1198,6 +1198,10 @@ const_sds fbtreeNext(fbtreeIterator *iterator) {
 
     while (it->current_leaf) {
         if (it->current_index < it->leaf_count) {
+            /* Returning a valid element: clear any BEFORE_START state left by a
+             * seek that landed at rank 0, so a subsequent fbtreePrev() yields
+             * this element instead of early-returning NULL. */
+            it->state = ITER_AT_POSITION;
             return it->current_leaf->values[it->current_index++];
         }
         it->current_leaf = it->current_leaf->next;
@@ -1223,6 +1227,10 @@ const_sds fbtreePrev(fbtreeIterator *iterator) {
 
     while (it->current_leaf) {
         if (it->current_index > 0) {
+            /* Returning a valid element: clear any PAST_END state left by a seek
+             * that landed past the last element, so a subsequent fbtreeNext()
+             * yields this element instead of early-returning NULL. */
+            it->state = ITER_AT_POSITION;
             return it->current_leaf->values[--it->current_index];
         }
         it->current_leaf = it->current_leaf->prev;

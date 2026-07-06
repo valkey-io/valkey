@@ -1665,6 +1665,100 @@ TEST_F(FbtreeTest, SeekToScoreEmpty) {
     EXPECT_EQ(pos = fbtreeNext(&it), nullptr);
 }
 
+/* ========== Seek-then-reverse boundary state transitions ==========
+ * A seek that lands on the first element leaves the iterator in BEFORE_START;
+ * fbtreeNext() must clear that state so a following fbtreePrev() returns the
+ * element rather than early-returning NULL. Symmetric for PAST_END with
+ * Prev-then-Next. These cover the ZREVRANGEBYLEX-of-the-smallest-element bug. */
+
+TEST_F(FbtreeTest, SeekToScoreRank0NextThenPrev) {
+    fbtreeInsert(fbt, createString("AAAAAAAAelem_0"));
+    fbtreeInsert(fbt, createString("BBBBBBBBelem_1"));
+    fbtreeInsert(fbt, createString("CCCCCCCCelem_2"));
+
+    fbtreeIterator it;
+    fbtreeInitIterator(&it, fbt);
+    fbtreeSeekToScore("AAAAAAAA", &it); /* exact rank-0 element -> BEFORE_START */
+
+    const_sds pos;
+    ASSERT_NE(pos = fbtreeNext(&it), nullptr);
+    EXPECT_EQ(memcmp(pos, "AAAAAAAA", 8), 0);
+    /* Next consumed rank 0; Prev must return it, not NULL. */
+    ASSERT_NE(pos = fbtreePrev(&it), nullptr);
+    EXPECT_EQ(memcmp(pos, "AAAAAAAA", 8), 0);
+    /* Now genuinely before the start. */
+    EXPECT_EQ(pos = fbtreePrev(&it), nullptr);
+}
+
+TEST_F(FbtreeTest, SeekToScoreBelowAllNextThenPrev) {
+    fbtreeInsert(fbt, createString("MMMMMMMMelem_0"));
+    fbtreeInsert(fbt, createString("NNNNNNNNelem_1"));
+
+    fbtreeIterator it;
+    fbtreeInitIterator(&it, fbt);
+    fbtreeSeekToScore("AAAAAAAA", &it); /* below all -> rank 0 / BEFORE_START */
+
+    const_sds pos;
+    ASSERT_NE(pos = fbtreeNext(&it), nullptr);
+    EXPECT_EQ(memcmp(pos, "MMMMMMMM", 8), 0);
+    ASSERT_NE(pos = fbtreePrev(&it), nullptr);
+    EXPECT_EQ(memcmp(pos, "MMMMMMMM", 8), 0);
+    EXPECT_EQ(pos = fbtreePrev(&it), nullptr);
+}
+
+TEST_F(FbtreeTest, SeekToScoreSingleElementRank0Reverse) {
+    fbtreeInsert(fbt, createString("KKKKKKKKonly"));
+
+    fbtreeIterator it;
+    fbtreeInitIterator(&it, fbt);
+    fbtreeSeekToScore("KKKKKKKK", &it); /* sole element, rank 0 */
+
+    const_sds pos;
+    ASSERT_NE(pos = fbtreeNext(&it), nullptr);
+    EXPECT_EQ(memcmp(pos, "KKKKKKKK", 8), 0);
+    /* The reported ZREVRANGEBYLEX-of-smallest bug: Prev must return it. */
+    ASSERT_NE(pos = fbtreePrev(&it), nullptr);
+    EXPECT_EQ(memcmp(pos, "KKKKKKKK", 8), 0);
+    EXPECT_EQ(pos = fbtreePrev(&it), nullptr);
+}
+
+TEST_F(FbtreeTest, SeekToScorePastEndPrevThenNext) {
+    fbtreeInsert(fbt, createString("AAAAAAAAelem_0"));
+    fbtreeInsert(fbt, createString("BBBBBBBBelem_1"));
+    fbtreeInsert(fbt, createString("CCCCCCCCelem_2"));
+
+    fbtreeIterator it;
+    fbtreeInitIterator(&it, fbt);
+    fbtreeSeekToScore("ZZZZZZZZ", &it); /* past end -> PAST_END */
+
+    const_sds pos;
+    ASSERT_NE(pos = fbtreePrev(&it), nullptr);
+    EXPECT_EQ(memcmp(pos, "CCCCCCCC", 8), 0);
+    /* Prev consumed the last element; Next must return it, not NULL. */
+    ASSERT_NE(pos = fbtreeNext(&it), nullptr);
+    EXPECT_EQ(memcmp(pos, "CCCCCCCC", 8), 0);
+    EXPECT_EQ(pos = fbtreeNext(&it), nullptr);
+}
+
+TEST_F(FbtreeTest, SeekToValueRank0NextThenPrev) {
+    /* Value-level analog of the ZREVRANGEBYLEX rank-0 bug (same score prefix,
+     * distinct elements; seek to the exact smallest packed value). */
+    sds a = createString("AAAAAAAAaaa");
+    fbtreeInsert(fbt, a);
+    fbtreeInsert(fbt, createString("AAAAAAAAbbb"));
+
+    fbtreeIterator it;
+    fbtreeInitIterator(&it, fbt);
+    fbtreeSeekToValue(a, &it); /* exact rank-0 value */
+
+    const_sds pos;
+    ASSERT_NE(pos = fbtreeNext(&it), nullptr);
+    EXPECT_EQ(sdscmp(pos, a), 0);
+    ASSERT_NE(pos = fbtreePrev(&it), nullptr);
+    EXPECT_EQ(sdscmp(pos, a), 0);
+    EXPECT_EQ(pos = fbtreePrev(&it), nullptr);
+}
+
 /* Seek to exact score match then prev - verifies prev returns element before the match. */
 TEST_F(FbtreeTest, SeekToScoreExactThenPrev) {
     fbtreeInsert(fbt, createString("AAAAAAAAelem_0"));

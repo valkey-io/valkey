@@ -97,39 +97,44 @@ start_server {config "minimal.conf" tags {"external:skip" "valgrind:skip"} overr
             }
         }
 
-        # The used_active_time_io_thread counter accumulates the wall-clock time
-        # each worker spends between processing iterations (see src/io_threads.c),
-        # so it must not keep growing while the workers are idle. Verify that by
-        # parking the workers and checking the counter stays flat across an idle
-        # window that is much longer than any single reactivation would take.
+        # Verify idle time is never attributed to used_active_time_io_thread:
+        # the counter must stay flat while the workers are parked, and
+        # reactivating them must not absorb the parked interval retroactively.
         set sleep_time_ms 1000
-        # Disable the always-active policy for this window. With it enabled,
-        # periodic serverCron events reactivate the workers in afterSleep(), so
-        # the counter would keep advancing during the "idle" sleep and the delta
-        # below would approach the sleep duration and flake under sanitizer/CPU
-        # stress. See #3509.
+        # Park the workers for the idle window. With io-threads-always-active
+        # enabled, the INFO reads below would wake them in afterSleep() (see
+        # #3509), so disable it while sampling.
         assert_equal {OK} [r config set io-threads-always-active no]
         wait_for_io_threads_to_go_idle
         array set pre_sleep_active_times {}
+        set idle_start_ms [clock milliseconds]
         set info [r info]
         for {set i 1} {$i < $io_threads_count} {incr i} {
             set pre_sleep_active_times($i) [getInfoProperty $info used_active_time_io_thread_$i]
         }
         after $sleep_time_ms
 
-        # With the workers parked, INFO polling does not wake them (see #3509),
-        # so the counter must not advance while they sleep.
+        # Step 1: parked workers must not accumulate active time (#3727).
         set info [r info]
         for {set i 1} {$i <= $io_threads_count} {incr i} {
             set used_active_time [getInfoProperty $info used_active_time_io_thread_$i]
             if {$i < $io_threads_count} {
-                # Idle time must not be counted as active time (#3727).
                 assert {($used_active_time - $pre_sleep_active_times($i)) < ($sleep_time_ms/1000.0)}
             } else {
                 assert_equal $used_active_time {}
             }
         }
-        # Restore the policy the surrounding test forced on.
+
+        # Step 2: reactivate the workers and verify wakeup did not count the
+        # parked interval. Bound the delta by measured wall-clock time minus
+        # the parked window, so slow runs (sanitizer) inflate both sides.
         assert_equal {OK} [r config set io-threads-always-active yes]
+        activate_io_threads_and_wait
+        set info [r info]
+        set elapsed_sec [expr {([clock milliseconds] - $idle_start_ms) / 1000.0}]
+        for {set i 1} {$i < $io_threads_count} {incr i} {
+            set used_active_time [getInfoProperty $info used_active_time_io_thread_$i]
+            assert {($used_active_time - $pre_sleep_active_times($i)) < ($elapsed_sec - $sleep_time_ms/1000.0)}
+        }
     }
 }

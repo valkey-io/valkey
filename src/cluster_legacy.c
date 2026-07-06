@@ -8537,7 +8537,6 @@ int clusterDecodeOpenSlotsAuxField(int rdbflags, sds s) {
         /* Ensure the delimiter is found. */
         if (*s != ',') return C_ERR;
 
-
         /* Move to the next slot */
         s++;
 

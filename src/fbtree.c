@@ -1543,6 +1543,142 @@ static int resolveEndIdx(const leafNode *leaf, const void *key, int exclusive, l
     return lo - 1;
 }
 
+/* Resolve the start index in start_leaf and the end index in end_leaf when the
+ * two boundaries fall in DIFFERENT leaves, software-pipelining the two binary
+ * searches so both leaves' cache misses are outstanding at once (memory-level
+ * parallelism). Each `values[mid]` is a pointer to a separately-allocated sds,
+ * so every probe is a cache miss; interleaving the two independent searches and
+ * prefetching both probe payloads per step lets the out-of-order core overlap
+ * them instead of serializing ~2x log2(leaf) misses. Semantics match
+ * resolveStartIdx (start) and resolveEndIdx (end). Same-leaf callers should use
+ * those helpers directly -- there is only one leaf to search, so there is no
+ * independent second stream to overlap. */
+static void resolveBothIdxPrefetch(const leafNode *start_leaf, const void *min_key, int min_ex, const leafNode *end_leaf, const void *max_key, int max_ex, leafCmpFn cmp, int *out_start_idx, int *out_end_idx) {
+    /* Two independent lower-bound searches (first element >= key) stepped in
+     * lockstep. Prefetch both probe payloads before either compare so the misses
+     * overlap in the load/fill buffers. */
+    int slo = 0, shi = start_leaf->header.num_items;
+    int elo = 0, ehi = end_leaf->header.num_items;
+    while (slo < shi || elo < ehi) {
+        int smid = (slo + shi) / 2;
+        int emid = (elo + ehi) / 2;
+        if (slo < shi) __builtin_prefetch(start_leaf->values[smid]);
+        if (elo < ehi) __builtin_prefetch(end_leaf->values[emid]);
+        if (slo < shi) {
+            if (cmp(start_leaf->values[smid], min_key) < 0)
+                slo = smid + 1;
+            else
+                shi = smid;
+        }
+        if (elo < ehi) {
+            if (cmp(end_leaf->values[emid], max_key) < 0)
+                elo = emid + 1;
+            else
+                ehi = emid;
+        }
+    }
+
+    /* start_idx: first element >= min; skip equals when the bound is exclusive. */
+    int start_idx = slo;
+    if (min_ex) {
+        while (start_idx < start_leaf->header.num_items && cmp(start_leaf->values[start_idx], min_key) == 0) start_idx++;
+    }
+
+    /* end_idx: last element <= max (inclusive) or < max (exclusive). */
+    int end_idx = elo;
+    if (!max_ex) {
+        while (end_idx < end_leaf->header.num_items && cmp(end_leaf->values[end_idx], max_key) == 0) end_idx++;
+    }
+    end_idx -= 1;
+
+    *out_start_idx = start_idx;
+    *out_end_idx = end_idx;
+}
+
+
+/* Descend the tree once for a [min_key, max_key] range, recording the shared
+ * root->split path and the two sub-paths down to the start/end leaves in `bp`.
+ * `findChild` selects score-prefix vs full-value comparison, so this is shared
+ * by range-delete and range-count. This only LOCATES the boundary leaves and
+ * records the paths; the caller resolves the leaf-local start_idx/end_idx (which
+ * lets range-count fuse the two leaf searches). Returns true if both boundaries
+ * land in the same leaf (no split), false if the paths diverge at a split node.
+ * Callers must first handle the empty-tree, whole-tree, and empty-range
+ * short-circuits. */
+static bool buildBoundaryPaths(fbtreeIndex *fbt,
+                               BoundaryPaths *bp,
+                               const void *min_key,
+                               const void *max_key,
+                               findChildFn findChild) {
+    memset(bp, 0, sizeof(*bp));
+
+    node *current = fbt->root;
+    int depth = 0;
+
+    while (!current->is_leaf) {
+        innerNode *inner = (innerNode *)current;
+        bp->shared_path[depth] = current;
+
+        int li = findChild(inner, min_key);
+        if (li >= inner->header.num_items) li = inner->header.num_items - 1;
+        int ri = findChild(inner, max_key);
+        if (ri >= inner->header.num_items) ri = inner->header.num_items - 1;
+
+        bp->shared_left_idx[depth] = li;
+        bp->shared_right_idx[depth] = ri;
+        depth++;
+
+        if (li == ri) {
+            current = inner->children[li];
+        } else {
+            bp->shared_depth = depth;
+
+            /* Descend left sub-path */
+            bp->start_leaf = descendSubPath(
+                inner->children[li], findChild, min_key,
+                bp->left_sub_path, bp->left_sub_idx, &bp->left_sub_depth);
+
+            /* Descend right sub-path */
+            bp->end_leaf = descendSubPath(
+                inner->children[ri], findChild, max_key,
+                bp->right_sub_path, bp->right_sub_idx, &bp->right_sub_depth);
+
+            return false; /* split */
+        }
+    }
+
+    /* Both boundaries in the same leaf */
+    bp->shared_depth = depth;
+    bp->start_leaf = (leafNode *)current;
+    bp->end_leaf = (leafNode *)current;
+    return true; /* same leaf */
+}
+
+/* Compute the global 0-indexed rank of a boundary position recorded in `bp`.
+ * `use_right` selects the right (max) boundary indices and sub-path; otherwise
+ * the left (min) boundary. `leaf_idx` is the leaf-local offset to add (the
+ * boundary's index within its leaf). Rank is the count of elements strictly
+ * before the position: sum of child_sizes left of the chosen child index at
+ * every level of the shared path and the sub-path, plus leaf_idx. */
+static unsigned long rankFromBoundaryPath(const BoundaryPaths *bp, bool use_right, int leaf_idx) {
+    unsigned long rank = 0;
+
+    for (int d = 0; d < bp->shared_depth; d++) {
+        const innerNode *inner = (const innerNode *)bp->shared_path[d];
+        int ci = use_right ? bp->shared_right_idx[d] : bp->shared_left_idx[d];
+        for (int i = 0; i < ci; i++) rank += inner->child_sizes[i];
+    }
+
+    int sub_depth = use_right ? bp->right_sub_depth : bp->left_sub_depth;
+    for (int d = 0; d < sub_depth; d++) {
+        const innerNode *inner = use_right ? (const innerNode *)bp->right_sub_path[d]
+                                           : (const innerNode *)bp->left_sub_path[d];
+        int ci = use_right ? bp->right_sub_idx[d] : bp->left_sub_idx[d];
+        for (int i = 0; i < ci; i++) rank += inner->child_sizes[i];
+    }
+
+    return rank + (unsigned long)leaf_idx;
+}
 
 /* Delete a range within a single leaf. The shared_path records the path from
  * root to the leaf's parent for inner node fixup after removal.
@@ -1944,54 +2080,13 @@ unsigned long fbtreeDeleteRangeByScore(fbtreeIndex *fbt,
     int range_cmp = memcmp(min_score, max_score, SCORE_SIZE);
     if (range_cmp > 0 || (range_cmp == 0 && (min_ex || max_ex))) return 0;
 
-    /* Build boundary paths by descending the tree using score prefix comparison */
+    /* Descend once to build the boundary paths, then delete. */
     BoundaryPaths bp;
-    memset(&bp, 0, sizeof(bp));
-
-    node *current = fbt->root;
-    int depth = 0;
-
-    while (!current->is_leaf) {
-        innerNode *inner = (innerNode *)current;
-        bp.shared_path[depth] = current;
-
-        int li = findChildIndexByScore(inner, min_score);
-        if (li >= inner->header.num_items) li = inner->header.num_items - 1;
-        int ri = findChildIndexByScore(inner, max_score);
-        if (ri >= inner->header.num_items) ri = inner->header.num_items - 1;
-
-        bp.shared_left_idx[depth] = li;
-        bp.shared_right_idx[depth] = ri;
-        depth++;
-
-        if (li == ri) {
-            current = inner->children[li];
-        } else {
-            bp.shared_depth = depth;
-
-            /* Descend left sub-path */
-            bp.start_leaf = descendSubPath(
-                inner->children[li], findChildByScoreWrapper, min_score,
-                bp.left_sub_path, bp.left_sub_idx, &bp.left_sub_depth);
-            bp.start_idx = resolveStartIdx(bp.start_leaf, min_score, min_ex, leafCmpByScore);
-
-            /* Descend right sub-path */
-            bp.end_leaf = descendSubPath(
-                inner->children[ri], findChildByScoreWrapper, max_score,
-                bp.right_sub_path, bp.right_sub_idx, &bp.right_sub_depth);
-            bp.end_idx = resolveEndIdx(bp.end_leaf, max_score, max_ex, leafCmpByScore);
-
-            return deleteRangeCore(fbt, &bp, callback, callback_ctx);
-        }
-    }
-
-    /* Both boundaries in the same leaf */
-    bp.shared_depth = depth;
-    bp.start_leaf = (leafNode *)current;
-    bp.end_leaf = (leafNode *)current;
+    bool same_leaf = buildBoundaryPaths(fbt, &bp, min_score, max_score, findChildByScoreWrapper);
     bp.start_idx = resolveStartIdx(bp.start_leaf, min_score, min_ex, leafCmpByScore);
     bp.end_idx = resolveEndIdx(bp.end_leaf, max_score, max_ex, leafCmpByScore);
-    return deleteRangeSameLeaf(fbt, &bp, callback, callback_ctx);
+    return same_leaf ? deleteRangeSameLeaf(fbt, &bp, callback, callback_ctx)
+                     : deleteRangeCore(fbt, &bp, callback, callback_ctx);
 }
 
 /* Delete elements with value in [min_val, max_val] using full sds comparison.
@@ -2022,54 +2117,92 @@ unsigned long fbtreeDeleteRangeByValue(fbtreeIndex *fbt,
     int range_cmp = sdscmp(min_val, max_val);
     if (range_cmp > 0 || (range_cmp == 0 && (min_ex || max_ex))) return 0;
 
-    /* Build boundary paths by descending the tree using full sds comparison */
+    /* Descend once to build the boundary paths, then delete. */
     BoundaryPaths bp;
-    memset(&bp, 0, sizeof(bp));
-
-    node *current = fbt->root;
-    int depth = 0;
-
-    while (!current->is_leaf) {
-        innerNode *inner = (innerNode *)current;
-        bp.shared_path[depth] = current;
-
-        int li = findChildIndex(inner, min_val);
-        if (li >= inner->header.num_items) li = inner->header.num_items - 1;
-        int ri = findChildIndex(inner, max_val);
-        if (ri >= inner->header.num_items) ri = inner->header.num_items - 1;
-
-        bp.shared_left_idx[depth] = li;
-        bp.shared_right_idx[depth] = ri;
-        depth++;
-
-        if (li == ri) {
-            current = inner->children[li];
-        } else {
-            bp.shared_depth = depth;
-
-            /* Descend left sub-path */
-            bp.start_leaf = descendSubPath(
-                inner->children[li], findChildByValueWrapper, min_val,
-                bp.left_sub_path, bp.left_sub_idx, &bp.left_sub_depth);
-            bp.start_idx = resolveStartIdx(bp.start_leaf, min_val, min_ex, leafCmpByValue);
-
-            /* Descend right sub-path */
-            bp.end_leaf = descendSubPath(
-                inner->children[ri], findChildByValueWrapper, max_val,
-                bp.right_sub_path, bp.right_sub_idx, &bp.right_sub_depth);
-            bp.end_idx = resolveEndIdx(bp.end_leaf, max_val, max_ex, leafCmpByValue);
-
-            return deleteRangeCore(fbt, &bp, callback, callback_ctx);
-        }
-    }
-
-    /* Both boundaries in the same leaf */
-    bp.shared_depth = depth;
-    bp.start_leaf = (leafNode *)current;
-    bp.end_leaf = (leafNode *)current;
+    bool same_leaf = buildBoundaryPaths(fbt, &bp, min_val, max_val, findChildByValueWrapper);
     bp.start_idx = resolveStartIdx(bp.start_leaf, min_val, min_ex, leafCmpByValue);
     bp.end_idx = resolveEndIdx(bp.end_leaf, max_val, max_ex, leafCmpByValue);
-    return deleteRangeSameLeaf(fbt, &bp, callback, callback_ctx);
+    return same_leaf ? deleteRangeSameLeaf(fbt, &bp, callback, callback_ctx)
+                     : deleteRangeCore(fbt, &bp, callback, callback_ctx);
+}
+
+/* Count elements with score prefix in [min_score, max_score] via a single
+ * shared descent (see buildBoundaryPaths), then rank arithmetic:
+ * count = end_rank - start_rank. min_ex/max_ex mark the corresponding bound
+ * exclusive. Score is an 8-byte big-endian normalized prefix (as stored). */
+unsigned long fbtreeCountRangeByScore(fbtreeIndex *fbt,
+                                      const char *min_score,
+                                      const char *max_score,
+                                      int min_ex,
+                                      int max_ex) {
+    if (!fbt->root) return 0;
+
+    /* Whole-tree short-circuit */
+    sds first = leafNodeLowKey(fbt->leftmost_leaf);
+    sds last = leafNodeHighKey(fbt->rightmost_leaf);
+    int min_covers = min_ex ? memcmp(min_score, first, SCORE_SIZE) < 0 : memcmp(min_score, first, SCORE_SIZE) <= 0;
+    int max_covers = max_ex ? memcmp(max_score, last, SCORE_SIZE) > 0 : memcmp(max_score, last, SCORE_SIZE) >= 0;
+    if (min_covers && max_covers) return fbtreeLength(fbt);
+
+    /* Empty range */
+    int range_cmp = memcmp(min_score, max_score, SCORE_SIZE);
+    if (range_cmp > 0 || (range_cmp == 0 && (min_ex || max_ex))) return 0;
+
+    BoundaryPaths bp;
+    bool same_leaf = buildBoundaryPaths(fbt, &bp, min_score, max_score, findChildByScoreWrapper);
+    if (same_leaf) {
+        /* One leaf: nothing to overlap, resolve directly. */
+        bp.start_idx = resolveStartIdx(bp.start_leaf, min_score, min_ex, leafCmpByScore);
+        bp.end_idx = resolveEndIdx(bp.end_leaf, max_score, max_ex, leafCmpByScore);
+    } else {
+        /* Two leaves: software-pipeline the searches so both misses overlap. */
+        resolveBothIdxPrefetch(bp.start_leaf, min_score, min_ex, bp.end_leaf, max_score, max_ex,
+                               leafCmpByScore, &bp.start_idx, &bp.end_idx);
+    }
+
+    /* start_idx is the first in-range element; end_idx is the last in-range
+     * element (inclusive), so its one-past position is end_idx + 1. */
+    unsigned long start_rank = rankFromBoundaryPath(&bp, false, bp.start_idx);
+    unsigned long end_rank = rankFromBoundaryPath(&bp, true, bp.end_idx + 1);
+    return end_rank > start_rank ? end_rank - start_rank : 0;
+}
+
+/* Count elements with packed value in [min_val, max_val] via a single shared
+ * descent (see buildBoundaryPaths), then rank arithmetic. min_ex/max_ex mark the
+ * corresponding bound exclusive. Values are full packed [score][element] sds. */
+unsigned long fbtreeCountRangeByValue(fbtreeIndex *fbt,
+                                      const_sds min_val,
+                                      const_sds max_val,
+                                      int min_ex,
+                                      int max_ex) {
+    if (!fbt->root) return 0;
+
+    /* Whole-tree short-circuit */
+    sds first = leafNodeLowKey(fbt->leftmost_leaf);
+    sds last = leafNodeHighKey(fbt->rightmost_leaf);
+    int min_covers = min_ex ? sdscmp(min_val, first) < 0 : sdscmp(min_val, first) <= 0;
+    int max_covers = max_ex ? sdscmp(max_val, last) > 0 : sdscmp(max_val, last) >= 0;
+    if (min_covers && max_covers) return fbtreeLength(fbt);
+
+    /* Empty range */
+    int range_cmp = sdscmp(min_val, max_val);
+    if (range_cmp > 0 || (range_cmp == 0 && (min_ex || max_ex))) return 0;
+
+    BoundaryPaths bp;
+    bool same_leaf = buildBoundaryPaths(fbt, &bp, min_val, max_val, findChildByValueWrapper);
+    if (same_leaf) {
+        /* One leaf: nothing to overlap, resolve directly. */
+        bp.start_idx = resolveStartIdx(bp.start_leaf, min_val, min_ex, leafCmpByValue);
+        bp.end_idx = resolveEndIdx(bp.end_leaf, max_val, max_ex, leafCmpByValue);
+    } else {
+        /* Two leaves: software-pipeline the searches so both misses overlap. */
+        resolveBothIdxPrefetch(bp.start_leaf, min_val, min_ex, bp.end_leaf, max_val, max_ex,
+                               leafCmpByValue, &bp.start_idx, &bp.end_idx);
+    }
+
+    unsigned long start_rank = rankFromBoundaryPath(&bp, false, bp.start_idx);
+    unsigned long end_rank = rankFromBoundaryPath(&bp, true, bp.end_idx + 1);
+    return end_rank > start_rank ? end_rank - start_rank : 0;
 }
 
 /* ========== Debug Functions ========== */

@@ -8534,6 +8534,9 @@ int clusterDecodeOpenSlotsAuxField(int rdbflags, sds s) {
         /* Ensure the node name is of the correct length */
         if (k != CLUSTER_NAMELEN || *s != ',') return C_ERR;
 
+        /* Reject an invalid node ID instead of creating an illegal node. */
+        if (verifyClusterNodeId(node_name, CLUSTER_NAMELEN) != C_OK) return C_ERR;
+
         /* Move to the next slot */
         s++;
 

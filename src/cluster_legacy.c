@@ -2749,7 +2749,7 @@ int verifyGossipSectionNodeIds(clusterMsgDataGossip *g, uint16_t count) {
         const char *nodename = g[i].nodename;
         if (verifyClusterNodeId(nodename, CLUSTER_NAMELEN) != C_OK) {
             invalid_ids++;
-            char *raw_node_id = getCorruptedNodeIdByteString(g);
+            char *raw_node_id = getCorruptedNodeIdByteString(g + i);
             serverLog(LL_WARNING,
                       "Received gossip about a node with invalid ID %.40s. For debugging purposes, "
                       "the 48 bytes including the invalid ID and 8 trailing bytes are: %s",

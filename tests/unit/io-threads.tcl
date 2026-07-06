@@ -97,12 +97,19 @@ start_server {config "minimal.conf" tags {"external:skip" "valgrind:skip"} overr
             }
         }
 
-        # Sleep for a time duration that is significantly longer than how much
-        # time each of the io_threads would be active again when reactivated.
+        # The used_active_time_io_thread counter accumulates the wall-clock time
+        # each worker spends between processing iterations (see src/io_threads.c),
+        # so it must not keep growing while the workers are idle. Verify that by
+        # parking the workers and checking the counter stays flat across an idle
+        # window that is much longer than any single reactivation would take.
         set sleep_time_ms 1000
-        # Snapshot per-thread active times immediately before the sleep so the
-        # post-sleep bound measures only this reactivation. The counter at
-        # src/io_threads.c is monotonic across the server lifetime.
+        # Disable the always-active policy for this window. With it enabled,
+        # periodic serverCron events reactivate the workers in afterSleep(), so
+        # the counter would keep advancing during the "idle" sleep and the delta
+        # below would approach the sleep duration and flake under sanitizer/CPU
+        # stress. See #3509.
+        assert_equal {OK} [r config set io-threads-always-active no]
+        wait_for_io_threads_to_go_idle
         array set pre_sleep_active_times {}
         set info [r info]
         for {set i 1} {$i < $io_threads_count} {incr i} {
@@ -110,19 +117,19 @@ start_server {config "minimal.conf" tags {"external:skip" "valgrind:skip"} overr
         }
         after $sleep_time_ms
 
-        # Reactivate io-threads and wait for execution
-        activate_io_threads_and_wait
-
+        # With the workers parked, INFO polling does not wake them (see #3509),
+        # so the counter must not advance while they sleep.
         set info [r info]
         for {set i 1} {$i <= $io_threads_count} {incr i} {
             set used_active_time [getInfoProperty $info used_active_time_io_thread_$i]
             if {$i < $io_threads_count} {
-                # Bound activity attributable to this reactivation only; the
-                # counter is monotonic across the server lifetime (#3727).
+                # Idle time must not be counted as active time (#3727).
                 assert {($used_active_time - $pre_sleep_active_times($i)) < ($sleep_time_ms/1000.0)}
             } else {
                 assert_equal $used_active_time {}
             }
         }
+        # Restore the policy the surrounding test forced on.
+        assert_equal {OK} [r config set io-threads-always-active yes]
     }
 }

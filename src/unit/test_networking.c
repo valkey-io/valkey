@@ -630,7 +630,7 @@ int test_addBufferToReplyIOV(int argc, char **argv, int flags) {
 
     const char *expected_reply = "$5\r\nhello\r\n";
     ssize_t total_len = strlen(expected_reply);
-    const int iovmax = 16;
+    enum { iovmax = 16 };
     char crlf[2] = {'\r', '\n'};
 
     /* Test 1: 1st writevToclient invocation */

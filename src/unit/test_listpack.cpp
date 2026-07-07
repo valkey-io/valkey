@@ -185,7 +185,7 @@ static unsigned char *createListWithMetadata(void) {
     uint64_t enclen;
     lpEncodeIntegerGetType(1234567890, intenc, &enclen);
     unsigned char *eofptr = lp + lpGetTotalBytes(lp) - 1;
-    lp = lpInsertMetadata(lp, NULL, intenc, enclen, eofptr, LP_BEFORE, NULL);
+    lp = lpInsertMetadata(lp, intenc, enclen, eofptr, LP_BEFORE, NULL);
 
     lp = lpAppend(lp, (unsigned char *)"field2", 6);
     lp = lpAppend(lp, (unsigned char *)"value2", 6);
@@ -204,7 +204,7 @@ static unsigned char *createListWithAllMetadata(void) {
     uint64_t enclen;
     lpEncodeIntegerGetType(1234567890, intenc, &enclen);
     unsigned char *eofptr = lp + lpGetTotalBytes(lp) - 1;
-    lp = lpInsertMetadata(lp, NULL, intenc, enclen, eofptr, LP_BEFORE, NULL);
+    lp = lpInsertMetadata(lp, intenc, enclen, eofptr, LP_BEFORE, NULL);
 
     lp = lpAppend(lp, (unsigned char *)"field2", 6);
     lp = lpAppend(lp, (unsigned char *)"value2", 6);
@@ -214,7 +214,7 @@ static unsigned char *createListWithAllMetadata(void) {
     uint64_t enclen2;
     lpEncodeIntegerGetType(1234567890, intenc2, &enclen2);
     unsigned char *eofptr2 = lp + lpGetTotalBytes(lp) - 1;
-    lp = lpInsertMetadata(lp, NULL, intenc2, enclen2, eofptr2, LP_BEFORE, NULL);
+    lp = lpInsertMetadata(lp, intenc2, enclen2, eofptr2, LP_BEFORE, NULL);
 
     return lp;
 }

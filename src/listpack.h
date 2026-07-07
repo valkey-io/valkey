@@ -72,7 +72,7 @@ unsigned char *lpAppend(unsigned char *lp, unsigned char *s, uint32_t slen);
 unsigned char *lpAppendInteger(unsigned char *lp, long long lval);
 long long lpGetMetadataValue(unsigned char *p);
 unsigned char *
-lpInsertMetadata(unsigned char *lp, unsigned char *elestr, unsigned char *eleint, uint32_t size, unsigned char *p, int where, unsigned char **newp);
+lpInsertMetadata(unsigned char *lp, unsigned char *eleint, uint32_t size, unsigned char *p, int where, unsigned char **newp);
 unsigned char *lpReplace(unsigned char *lp, unsigned char **p, unsigned char *s, uint32_t slen);
 unsigned char *lpReplaceInteger(unsigned char *lp, unsigned char **p, long long lval);
 unsigned char *lpDelete(unsigned char *lp, unsigned char *p, unsigned char **newp);

@@ -457,7 +457,7 @@ int hashTypeSet(robj *o, sds field, sds value, mstime_t expiry, int flags, bool 
                 /* Re-find field and value since listpack may have reallocated */
                 fptr = lpFind(zl, lpFirst(zl), (unsigned char *)field, sdslen(field), 1);
                 vptr = lpNext(zl, fptr);
-                zl = lpInsertMetadata(zl, NULL, intenc, enclen, vptr, LP_AFTER, NULL);
+                zl = lpInsertMetadata(zl, intenc, enclen, vptr, LP_AFTER, NULL);
             }
             update = is_expired ? 0 : 1;
         } else {
@@ -469,7 +469,7 @@ int hashTypeSet(robj *o, sds field, sds value, mstime_t expiry, int flags, bool 
                 uint64_t enclen;
                 lpEncodeIntegerGetType(expiry, intenc, &enclen);
                 unsigned char *eofptr = zl + lpGetTotalBytes(zl) - 1;
-                zl = lpInsertMetadata(zl, NULL, intenc, enclen, eofptr, LP_BEFORE, NULL);
+                zl = lpInsertMetadata(zl, intenc, enclen, eofptr, LP_BEFORE, NULL);
             }
         }
 
@@ -604,7 +604,7 @@ static expiryModificationResult hashTypeSetExpire(robj *o, sds field, mstime_t e
             fptr = lpFind(zl, lpFirst(zl), (unsigned char *)field, sdslen(field), 1);
             value_ptr = lpNext(zl, fptr);
         }
-        zl = lpInsertMetadata(zl, NULL, intenc, enclen, value_ptr, LP_AFTER, NULL);
+        zl = lpInsertMetadata(zl, intenc, enclen, value_ptr, LP_AFTER, NULL);
 
         objectSetVal(o, zl);
         return EXPIRATION_MODIFICATION_SUCCESSFUL;

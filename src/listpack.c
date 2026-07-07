@@ -94,6 +94,13 @@
 #define LP_ENCODING_32BIT_STR_MASK 0xFF
 #define LP_ENCODING_IS_32BIT_STR(byte) (((byte) & LP_ENCODING_32BIT_STR_MASK) == LP_ENCODING_32BIT_STR)
 
+/* Tagged (metadata) entry marker. The value is picked from the reserved
+ * single-byte sub-encoding band 0xF1-0xFE, which is unused by every existing
+ * encoding (7bit uint 0xxxxxxx, 6bit str 10xxxxxx, 13bit int 110xxxxx,
+ * multi-byte 1110xxxx/0xF0 and EOF 0xFF), so a tag byte can never be
+ * confused with the first byte of a regular element. The tag is an addition
+ * to, not a replacement of, the inner element's own encoding, which follows
+ * at p+1. */
 #define LP_ENCODING_TAGGED 0xF5
 #define LP_ENCODING_TAGGED_MASK 0xFF
 #define LP_ENCODING_IS_TAGGED(byte) (((byte) & LP_ENCODING_TAGGED_MASK) == LP_ENCODING_TAGGED)
@@ -756,14 +763,19 @@ unsigned char *lpFind(unsigned char *lp, unsigned char *p, unsigned char *s, uin
  * For deletion operations (both 'elestr' and 'eleint' set to NULL) 'newp' is
  * set to the next element, on the right of the deleted one, or to NULL if the
  * deleted element was the last one. */
-unsigned char *lpInsert(unsigned char *lp,
-                        unsigned char *elestr,
-                        unsigned char *eleint,
-                        uint32_t size,
-                        unsigned char *p,
-                        int where,
-                        unsigned char **newp,
-                        bool tagged) {
+/* What kind of entry an insertion produces. LP_ENTRY_METADATA entries carry
+ * the LP_ENCODING_TAGGED marker, are skipped by the logical iterators and are
+ * not counted in the header numele field. */
+typedef enum { LP_ENTRY_DATA = 0, LP_ENTRY_METADATA } lpEntryType;
+
+static unsigned char *lpInsertImpl(unsigned char *lp,
+                                   unsigned char *elestr,
+                                   unsigned char *eleint,
+                                   uint32_t size,
+                                   unsigned char *p,
+                                   int where,
+                                   unsigned char **newp,
+                                   lpEntryType type) {
     unsigned char intenc[LP_MAX_INT_ENCODING_LEN];
     unsigned char backlen[LP_MAX_BACKLEN_SIZE];
 
@@ -778,7 +790,7 @@ unsigned char *lpInsert(unsigned char *lp,
     /* Metadata (tagged) entries are not counted in the header numele field,
      * which only tracks real elements. Determine before any memory movement
      * whether this operation adds/removes a metadata entry. */
-    int ele_is_meta = del_ele ? LP_ENCODING_IS_TAGGED(p[0]) : (int)tagged;
+    int ele_is_meta = del_ele ? LP_ENCODING_IS_TAGGED(p[0]) : (type == LP_ENTRY_METADATA);
 
     /* If we need to insert after the current element, we just jump to the
      * next element (that could be the EOF one) and handle the case of
@@ -795,7 +807,7 @@ unsigned char *lpInsert(unsigned char *lp,
     unsigned long poff = p - lp;
 
     int enctype;
-    if (tagged) {
+    if (type == LP_ENTRY_METADATA) {
         enctype = LP_ENCODING_TAGGED;
         enclen = size + 1; /* size is the encoded value +1 for the prefixed tag */
     } else if (elestr) {
@@ -921,22 +933,32 @@ unsigned char *lpInsert(unsigned char *lp,
     return lp;
 }
 
-/* Just a wrapper for lpInsert() to insert a provided element with the metadata tag */
+/* Public lpInsert(), inserting a regular (data) element. See lpInsertImpl()
+ * for the full contract. */
+unsigned char *lpInsert(unsigned char *lp,
+                        unsigned char *elestr,
+                        unsigned char *eleint,
+                        uint32_t size,
+                        unsigned char *p,
+                        int where,
+                        unsigned char **newp) {
+    return lpInsertImpl(lp, elestr, eleint, size, p, where, newp, LP_ENTRY_DATA);
+}
+
+/* Insert a metadata (tagged) entry holding the integer payload 'eleint' of
+ * length 'size' (as produced by lpEncodeIntegerGetType()). Metadata payloads
+ * are integer-only: the accessor lpGetMetadataValue() has no way to return a
+ * string. */
 unsigned char *
-lpInsertMetadata(unsigned char *lp,
-                 unsigned char *elestr,
-                 unsigned char *eleint,
-                 uint32_t size,
-                 unsigned char *p,
-                 int where,
-                 unsigned char **newp) {
-    return lpInsert(lp, elestr, eleint, size, p, where, newp, true);
+lpInsertMetadata(unsigned char *lp, unsigned char *eleint, uint32_t size, unsigned char *p, int where, unsigned char **newp) {
+    assert(eleint != NULL);
+    return lpInsertImpl(lp, NULL, eleint, size, p, where, newp, LP_ENTRY_METADATA);
 }
 
 /* This is just a wrapper for lpInsert() to directly use a string. */
 unsigned char *
 lpInsertString(unsigned char *lp, unsigned char *s, uint32_t slen, unsigned char *p, int where, unsigned char **newp) {
-    return lpInsert(lp, s, NULL, slen, p, where, newp, false);
+    return lpInsert(lp, s, NULL, slen, p, where, newp);
 }
 
 /* This is just a wrapper for lpInsert() to directly use a 64 bit integer
@@ -946,14 +968,14 @@ unsigned char *lpInsertInteger(unsigned char *lp, long long lval, unsigned char 
     unsigned char intenc[LP_MAX_INT_ENCODING_LEN];
 
     lpEncodeIntegerGetType(lval, intenc, &enclen);
-    return lpInsert(lp, NULL, intenc, enclen, p, where, newp, false);
+    return lpInsert(lp, NULL, intenc, enclen, p, where, newp);
 }
 
 /* Append the specified element 's' of length 'slen' at the head of the listpack. */
 unsigned char *lpPrepend(unsigned char *lp, unsigned char *s, uint32_t slen) {
     unsigned char *p = lpFirst(lp);
     if (!p) return lpAppend(lp, s, slen);
-    return lpInsert(lp, s, NULL, slen, p, LP_BEFORE, NULL, false);
+    return lpInsert(lp, s, NULL, slen, p, LP_BEFORE, NULL);
 }
 
 /* Append the specified integer element 'lval' at the head of the listpack. */
@@ -969,7 +991,7 @@ unsigned char *lpPrependInteger(unsigned char *lp, long long lval) {
 unsigned char *lpAppend(unsigned char *lp, unsigned char *ele, uint32_t size) {
     uint64_t listpack_bytes = lpGetTotalBytes(lp);
     unsigned char *eofptr = lp + listpack_bytes - 1;
-    return lpInsert(lp, ele, NULL, size, eofptr, LP_BEFORE, NULL, false);
+    return lpInsert(lp, ele, NULL, size, eofptr, LP_BEFORE, NULL);
 }
 
 /* Append the specified integer element 'lval' at the end of the listpack. */
@@ -983,7 +1005,7 @@ unsigned char *lpAppendInteger(unsigned char *lp, long long lval) {
  * the current element. The function returns the new listpack as return
  * value, and also updates the current cursor by updating '*p'. */
 unsigned char *lpReplace(unsigned char *lp, unsigned char **p, unsigned char *s, uint32_t slen) {
-    return lpInsert(lp, s, NULL, slen, *p, LP_REPLACE, p, false);
+    return lpInsert(lp, s, NULL, slen, *p, LP_REPLACE, p);
 }
 
 /* This is just a wrapper for lpInsertInteger() to directly use a 64 bit integer
@@ -999,7 +1021,7 @@ unsigned char *lpReplaceInteger(unsigned char *lp, unsigned char **p, long long 
  * deleted one) is returned by reference. If the deleted element was the
  * last one, '*newp' is set to NULL. */
 unsigned char *lpDelete(unsigned char *lp, unsigned char *p, unsigned char **newp) {
-    return lpInsert(lp, NULL, NULL, 0, p, LP_REPLACE, newp, false);
+    return lpInsert(lp, NULL, NULL, 0, p, LP_REPLACE, newp);
 }
 
 /* Delete a range of entries from the listpack start with the element pointed by 'p'. */

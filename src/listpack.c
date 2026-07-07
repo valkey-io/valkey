@@ -1277,6 +1277,19 @@ int lpValidateNext(unsigned char *lp, unsigned char **pp, size_t lpbytes) {
     /* make sure the encoded entry length doesn't reach outside the edge of the listpack */
     if (OUT_OF_RANGE(p + lenbytes)) return 0;
 
+    /* For tagged (metadata) entries the size header lives in the inner
+     * element: lenbytes above only covers the tag byte, so before
+     * lpCurrentEncodedSizeUnsafe() recurses into the inner header we must
+     * validate that header's bytes are in range as well. Nested tags are
+     * invalid. */
+    if (LP_ENCODING_IS_TAGGED(p[0])) {
+        unsigned char *inner = p + 1;
+        if (LP_ENCODING_IS_TAGGED(inner[0])) return 0;
+        uint32_t inner_lenbytes = lpCurrentEncodedSizeBytes(inner);
+        if (!inner_lenbytes) return 0;
+        if (OUT_OF_RANGE(inner + inner_lenbytes)) return 0;
+    }
+
     /* get the entry length and encoded backlen. */
     unsigned long entrylen = lpCurrentEncodedSizeUnsafe(p);
     unsigned long encodedBacklen = lpEncodeBacklen(NULL, entrylen);

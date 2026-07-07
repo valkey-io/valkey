@@ -684,6 +684,13 @@ static expiryModificationResult hashTypePersist(robj *o, sds field) {
             /* Check if the field has an expiration set, if not we fail */
             unsigned char *metadata_ptr = lpNext(zl, vptr);
             if (metadata_ptr == NULL || !lpIsMetadata(metadata_ptr)) return EXPIRATION_MODIFICATION_FAILED;
+            /* A lazily-expired field is logically gone: report it as missing
+             * instead of resurrecting it, and leave the reaping (and its HDEL
+             * propagation) to the active-expiry cycle, mirroring the hashtable
+             * encoding behavior. */
+            long long entry_expiry = lpGetMetadataValue(metadata_ptr);
+            /* compare with pure time otherwise different behavior across replica and primary */
+            if (entry_expiry != EXPIRY_NONE && entry_expiry <= commandTimeSnapshot()) return EXPIRATION_MODIFICATION_NOT_EXIST;
             /* Remove the metadata pointer, if metadata is set we know for sure
              * that a value exists */
             zl = lpDelete(zl, metadata_ptr, NULL);

@@ -866,7 +866,7 @@ static sds ACLDescribeSelector(aclSelector *selector) {
 
     /* Database permissions. */
     if (selector->flags & SELECTOR_FLAG_ALLDBS) {
-        res = sdscatlen(res, "alldbs ", 7);
+        /* alldbs is default, avoid emitting it in ACL strings for compatibility. */
     } else if (intsetLen(selector->dbs) == 0) {
         res = sdscatlen(res, "resetdbs ", 9);
     } else {
@@ -1718,6 +1718,10 @@ user *ACLGetUserByName(const char *name, size_t namelen) {
 static int ACLSelectorCheckKey(aclSelector *selector, const char *key, int keylen, int keyspec_flags, bool is_prefix) {
     /* The selector can access any key */
     if (selector->flags & SELECTOR_FLAG_ALLKEYS) return ACL_OK;
+
+    /* NOT_KEY entries are routing-only tokens, not real user keys.
+     * Bypass key-pattern ACL checks, consistent with how keyspecs skip them. */
+    if (keyspec_flags & CMD_KEY_NOT_KEY) return ACL_OK;
 
     listIter li;
     listNode *ln;

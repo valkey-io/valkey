@@ -161,7 +161,7 @@ void streamNextID(streamID *last_id, streamID *new_id) {
 robj *streamDup(robj *o) {
     robj *sobj;
 
-    serverAssert(o->type == OBJ_STREAM);
+    serverAssert(objectGetType(o) == OBJ_STREAM);
 
     switch (o->encoding) {
     case OBJ_ENCODING_STREAM: sobj = createStreamObject(); break;

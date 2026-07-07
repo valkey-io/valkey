@@ -512,7 +512,7 @@ start_server {tags {"hash"}} {
     }
 
     test {HGETDEL - check for syntax and type errors} {
-        assert_error "*value is not an integer or out of range" {r hgetdel myhash a b c}
+        assert_error "*ERR syntax error" {r hgetdel myhash a 1 c}
         assert_error "*value is not an integer or out of range" {r hgetdel myhash FIELDS a b c}
         assert_error "*numfields should be greater than 0 and match the provided number of fields" {r hgetdel myhash FIELDS 2 a b c}
         assert_error "*numfields should be greater than 0 and match the provided number of fields" {r hgetdel myhash FIELDS 4 a b c}

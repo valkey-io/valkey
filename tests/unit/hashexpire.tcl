@@ -1540,6 +1540,29 @@ start_server {tags {"hashexpire"}} {
         }
     }
 
+    test "HRANDFIELD - CASE 4: does not loop forever when valid fields fewer than count" {
+        r FLUSHALL
+        r DEBUG SET-ACTIVE-EXPIRE 0
+
+        # 71 expired fields + 29 valid fields = 100 total
+        # count=30, count*3=90 < 100 -> CASE 4
+        for {set i 1} {$i <= 71} {incr i} {
+            r HSETEX myhash PX 1 FIELDS 1 f$i v$i
+        }
+        for {set i 72} {$i <= 100} {incr i} {
+            r HSET myhash f$i v$i
+        }
+
+        # Wait for fields to expire
+        after 100
+        assert_equal 100 [r HLEN myhash]
+
+        # Should return at most 29 valid fields without
+        assert_lessthan_equal [llength $result] 29
+
+        r DEBUG SET-ACTIVE-EXPIRE 1
+    } {OK} {needs:debug}
+
     test "HRANDFIELD - returns null response when all fields are expired" {
         r FLUSHALL
         r DEBUG SET-ACTIVE-EXPIRE 0

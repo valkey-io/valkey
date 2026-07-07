@@ -179,7 +179,7 @@ start_server {tags {"acl external:skip"}} {
         set curruser "hpuser"
         foreach user [lshuffle $users] {
             if {[string first $curruser $user] != -1} {
-                assert_equal {user hpuser on nopass resetchannels &foo alldbs +@all} $user
+                assert_equal {user hpuser on nopass resetchannels &foo +@all} $user
             }
         }
 
@@ -1145,8 +1145,15 @@ start_server [list overrides [list "dir" $server_path "acl-pubsub-default" "allc
     } {} {needs:debug}
 
     test {ACL load and save} {
-        r ACL setuser eve +get allkeys >eve on
+        r ACL setuser eve +get allkeys >eve on alldbs
         r ACL save
+
+        # ACL SAVE uses the same serialization as ACL LIST,
+        # verify that ACL file omits the implicit alldbs rule.
+        set aclfile [file join \
+            [lindex [r CONFIG GET dir] 1] \
+            [lindex [r CONFIG GET aclfile] 1]]
+        assert_equal 0 [count_message_lines $aclfile alldbs]
 
         r ACL load
 
@@ -1357,6 +1364,12 @@ start_server {overrides {user "default on nopass ~* +@all -flushdb"} tags {acl e
     test {ACL from config file and config rewrite} {
         assert_error {NOPERM *} {r flushdb}
         r config rewrite
+
+        # CONFIG REWRITE persists ACL users through the ACL string
+        # serializer, and should not have the implicit alldbs rule.
+        set config_file [srv 0 config_file]
+        assert_equal 0 [count_message_lines $config_file alldbs]
+
         restart_server 0 true false
         assert_error {NOPERM *} {r flushdb}
     }

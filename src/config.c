@@ -1608,6 +1608,11 @@ static void rewriteConfigSocketBindOption(standardConfig *config, const char *na
 
 /* Rewrite the loadmodule option. */
 void rewriteConfigLoadmoduleOption(struct rewriteConfigState *state) {
+    if (dictSize(modules) == 0) {
+        rewriteConfigMarkAsProcessed(state, "loadmodule");
+        return;
+    }
+
     sds line;
 
     dictIterator *di = dictGetIterator(modules);
@@ -2459,6 +2464,18 @@ static int isValidAnnouncedNodename(char *val, const char **err) {
     return 1;
 }
 
+/* Validates the character set of a hostname (alphanumeric, hyphens and dots),
+ * without checking the length. Returns 1 if valid, 0 otherwise. */
+static int isValidHostname(const char *val) {
+    for (int i = 0; val[i]; i++) {
+        char c = val[i];
+        if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || (c == '-') || (c == '.'))) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
 static int isValidAnnouncedIp(char *val, const char **err) {
     if (sdslen(val) >= NET_IP_STR_LEN) {
         *err = "cluster-announce-ip is too long";
@@ -2466,6 +2483,13 @@ static int isValidAnnouncedIp(char *val, const char **err) {
     }
     if (!(isValidAuxString(val, sdslen(val)))) {
         *err = "cluster-announce-ip contains invalid character";
+        return 0;
+    }
+    /* Empty resets the announced ip. Otherwise accept a literal IPv4/IPv6, or a
+     * hostname, since some users set a hostname here before
+     * cluster-announce-hostname existed. */
+    if (val[0] != '\0' && anetResolve(NULL, val, NULL, 0, ANET_IP_ONLY) != ANET_OK && !isValidHostname(val)) {
+        *err = "cluster-announce-ip is not a valid IP address or hostname";
         return 0;
     }
     return 1;
@@ -2476,18 +2500,10 @@ static int isValidAnnouncedHostname(char *val, const char **err) {
         *err = "Hostnames must be less than " STRINGIFY(NET_HOST_STR_LEN) " characters";
         return 0;
     }
-
-    int i = 0;
-    char c;
-    while ((c = val[i])) {
-        /* We just validate the character set to make sure that everything
-         * is parsed and handled correctly. */
-        if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || (c == '-') || (c == '.'))) {
-            *err = "Hostnames may only contain alphanumeric characters, "
-                   "hyphens or dots";
-            return 0;
-        }
-        c = val[i++];
+    if (!isValidHostname(val)) {
+        *err = "Hostnames may only contain alphanumeric characters, "
+               "hyphens or dots";
+        return 0;
     }
     return 1;
 }
@@ -3457,8 +3473,8 @@ standardConfig static_configs[] = {
     createLongLongConfig("cluster-node-timeout", NULL, MODIFIABLE_CONFIG, 0, LLONG_MAX, server.cluster_node_timeout, 15000, INTEGER_CONFIG, NULL, NULL),
     createLongLongConfig("cluster-ping-interval", NULL, MODIFIABLE_CONFIG | HIDDEN_CONFIG, 0, LLONG_MAX, server.cluster_ping_interval, 0, INTEGER_CONFIG, NULL, NULL),
     createLongLongConfig("commandlog-execution-slower-than", "slowlog-log-slower-than", MODIFIABLE_CONFIG, -1, LLONG_MAX, server.commandlog[COMMANDLOG_TYPE_SLOW].threshold, 10000, INTEGER_CONFIG, NULL, NULL),
-    createLongLongConfig("commandlog-request-larger-than", NULL, MODIFIABLE_CONFIG, -1, LLONG_MAX, server.commandlog[COMMANDLOG_TYPE_LARGE_REQUEST].threshold, 1024 * 1024, INTEGER_CONFIG, NULL, NULL),
-    createLongLongConfig("commandlog-reply-larger-than", NULL, MODIFIABLE_CONFIG, -1, LLONG_MAX, server.commandlog[COMMANDLOG_TYPE_LARGE_REPLY].threshold, 1024 * 1024, INTEGER_CONFIG, NULL, NULL),
+    createLongLongConfig("commandlog-request-larger-than", NULL, MODIFIABLE_CONFIG, -1, LLONG_MAX, server.commandlog[COMMANDLOG_TYPE_LARGE_REQUEST].threshold, 1024 * 1024, MEMORY_CONFIG | SIGNED_MEMORY_CONFIG, NULL, NULL),
+    createLongLongConfig("commandlog-reply-larger-than", NULL, MODIFIABLE_CONFIG, -1, LLONG_MAX, server.commandlog[COMMANDLOG_TYPE_LARGE_REPLY].threshold, 1024 * 1024, MEMORY_CONFIG | SIGNED_MEMORY_CONFIG, NULL, NULL),
     createLongLongConfig("latency-monitor-threshold", NULL, MODIFIABLE_CONFIG, 0, LLONG_MAX, server.latency_monitor_threshold, 0, INTEGER_CONFIG, NULL, NULL),
     createLongLongConfig("proto-max-bulk-len", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, 1024 * 1024, LONG_MAX, server.proto_max_bulk_len, 512ll * 1024 * 1024, MEMORY_CONFIG, NULL, NULL), /* Bulk request max size */
     createLongLongConfig("stream-node-max-entries", NULL, MODIFIABLE_CONFIG, 0, LLONG_MAX, server.stream_node_max_entries, 100, INTEGER_CONFIG, NULL, NULL),

@@ -740,9 +740,18 @@ int rdbGetObjectType(robj *o, int rdbver) {
         else
             serverPanic("Unknown sorted set encoding");
     case OBJ_HASH:
-        if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK)
+        if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) {
+            if (hashTypeHasVolatileFields(o)) {
+                /* Tagged (0xF5) metadata entries are not understood by older
+                 * versions, so a listpack carrying field TTLs needs its own
+                 * RDB type, mirroring RDB_TYPE_HASH_2. */
+                if (rdbver >= 81)
+                    return RDB_TYPE_HASH_LISTPACK_2;
+                else
+                    return -1; /* can't be stored in old RDB */
+            }
             return RDB_TYPE_HASH_LISTPACK;
-        else if (objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE)
+        } else if (objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE)
             if (hashTypeHasVolatileFields(o))
                 if (rdbver >= 80)
                     return RDB_TYPE_HASH_2;
@@ -2368,7 +2377,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
     } else if (rdbtype == RDB_TYPE_HASH_ZIPMAP || rdbtype == RDB_TYPE_LIST_ZIPLIST || rdbtype == RDB_TYPE_SET_INTSET ||
                rdbtype == RDB_TYPE_SET_LISTPACK || rdbtype == RDB_TYPE_ZSET_ZIPLIST ||
                rdbtype == RDB_TYPE_ZSET_LISTPACK || rdbtype == RDB_TYPE_HASH_ZIPLIST ||
-               rdbtype == RDB_TYPE_HASH_LISTPACK) {
+               rdbtype == RDB_TYPE_HASH_LISTPACK || rdbtype == RDB_TYPE_HASH_LISTPACK_2) {
         size_t encoded_len;
         unsigned char *encoded = rdbGenericLoadStringObject(rdb, RDB_LOAD_PLAIN, &encoded_len);
         if (encoded == NULL) return NULL;
@@ -2588,8 +2597,12 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
             break;
         }
         case RDB_TYPE_HASH_LISTPACK:
+        case RDB_TYPE_HASH_LISTPACK_2: {
+            /* Tagged metadata (field TTLs) is only legal in the _2 variant;
+             * in the legacy type it indicates corruption. */
+            int allow_metadata = (rdbtype == RDB_TYPE_HASH_LISTPACK_2);
             server.stat_dump_payload_sanitizations++;
-            if (!lpValidateIntegrityAndDups(encoded, encoded_len, 1, 1)) {
+            if (!lpValidateIntegrityAndDups(encoded, encoded_len, 1, allow_metadata)) {
                 rdbReportCorruptRDB("Hash listpack integrity check failed.");
                 zfree(encoded);
                 objectSetVal(o, NULL);
@@ -2639,6 +2652,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
 
             if (hashTypeLength(o) > server.hash_max_listpack_entries) hashTypeConvert(o, OBJ_ENCODING_HASHTABLE);
             break;
+        }
         default:
             /* totally unreachable */
             rdbReportCorruptRDB("Unknown RDB encoding type %d", rdbtype);

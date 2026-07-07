@@ -2104,8 +2104,8 @@ int rewriteHashObject(rio *r, robj *key, robj *o) {
                 unsigned char *value = lpGet(vptr, &vlen, value_intbuf);
 
                 /* Get metadata */
-                unsigned char *meta = lpNext(zl, vptr);
-                if (meta && lpIsMetadata(meta)) {
+                unsigned char *meta = lpGetMetadata(zl, vptr);
+                if (meta) {
                     mstime_t expiry = lpGetMetadataValue(meta);
                     /* Write if not expired */
                     if (expiry != EXPIRY_NONE && expiry > commandTimeSnapshot()) {
@@ -2120,10 +2120,8 @@ int rewriteHashObject(rio *r, robj *key, robj *o) {
                         if (rioWriteBulkString(r, (char *)value, vlen) == 0) return 0;
                         volatile_items++;
                     }
-                    p = lpNext(zl, meta);
-                } else {
-                    p = meta;
                 }
+                p = lpNext(zl, vptr);
             }
         } else {
             hashTypeInitVolatileIterator(o, &hi);
@@ -2160,13 +2158,8 @@ int rewriteHashObject(rio *r, robj *key, robj *o) {
         while (p) {
             unsigned char *vptr = lpNext(zl, p);
             if (!vptr) break;
-            unsigned char *meta = lpNext(zl, vptr);
-            if (meta && lpIsMetadata(meta)) {
-                p = lpNext(zl, meta);
-                continue;
-            }
-            non_volatile_items++;
-            p = meta;
+            if (!lpGetMetadata(zl, vptr)) non_volatile_items++;
+            p = lpNext(zl, vptr);
         }
 
         p = lpFirst(zl);
@@ -2176,10 +2169,9 @@ int rewriteHashObject(rio *r, robj *key, robj *o) {
             unsigned char *vptr = lpNext(zl, p);
             if (!vptr) break;
             unsigned char *value = lpGet(vptr, &vlen, value_intbuf);
-            /* Check for metadata */
-            unsigned char *meta = lpNext(zl, vptr);
-            if (meta && lpIsMetadata(meta)) {
-                p = lpNext(zl, meta);
+            /* Skip volatile fields, they were serialized above */
+            if (lpGetMetadata(zl, vptr)) {
+                p = lpNext(zl, vptr);
                 continue;
             }
             /* Write as part of HMSET */
@@ -2198,7 +2190,7 @@ int rewriteHashObject(rio *r, robj *key, robj *o) {
             if (rioWriteBulkString(r, (char *)value, vlen) == 0) return 0;
             if (++count == AOF_REWRITE_ITEMS_PER_CMD) count = 0;
             non_volatile_items--;
-            p = meta;
+            p = lpNext(zl, vptr);
         }
     } else {
         non_volatile_items = hashTypeLength(o) - volatile_items;

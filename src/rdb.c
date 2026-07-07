@@ -1922,7 +1922,7 @@ int lpValidateIntegrityAndDups(unsigned char *lp, size_t size, int pairs, int al
         hashtable *fields; /* Initialisation at the first callback. */
     } data = {pairs, allow_metadata, 0, NULL};
 
-    int ret = lpValidateIntegrity(lp, size, _lpEntryValidation, &data);
+    int ret = lpValidateIntegrity(lp, size, _lpEntryValidation, &data, allow_metadata);
 
     /* make sure we have an even number of records. */
     if (pairs && data.count & 1) ret = 0;
@@ -2331,7 +2331,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
             if (rdbtype == RDB_TYPE_LIST_QUICKLIST_2) {
                 lp = data;
                 server.stat_dump_payload_sanitizations++;
-                if (!lpValidateIntegrity(lp, encoded_len, NULL, NULL)) {
+                if (!lpValidateIntegrity(lp, encoded_len, NULL, NULL, 0)) {
                     rdbReportCorruptRDB("Listpack integrity check failed.");
                     decrRefCount(o);
                     zfree(lp);

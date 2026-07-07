@@ -76,11 +76,8 @@ bool hashTypeHasVolatileFields(robj *o) {
 
     if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) {
         unsigned char *zl = objectGetVal(o);
-        unsigned char *p = lpFirst(zl);
-        while (p) {
-            if (lpIsMetadata(p)) return true;
-            p = lpNext(zl, p);
-        }
+        for (unsigned char *p = lpFirst(zl); p; p = lpNext(zl, p))
+            if (lpGetMetadata(zl, p)) return true;
     }
 
     if (objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE) {
@@ -221,10 +218,10 @@ int hashTypeGetFromListpack(robj *o, sds field, unsigned char **vstr, unsigned i
             /* Grab pointer to the value (fptr points to the field) */
             vptr = lpNext(zl, fptr);
             serverAssert(vptr != NULL);
-            meta_ptr = lpNext(zl, vptr);
+            meta_ptr = lpGetMetadata(zl, vptr);
             /* Check if the metadata pointer exists, if it exists we need
              * to check if this field is already expired */
-            if (meta_ptr != NULL && lpIsMetadata(meta_ptr)) {
+            if (meta_ptr != NULL) {
                 long long entry_expiry = lpGetMetadataValue(meta_ptr);
                 /* compare with pure time otherwise different behavior across replica and primary */
                 if (entry_expiry != EXPIRY_NONE && entry_expiry <= commandTimeSnapshot()) {
@@ -255,8 +252,8 @@ int hashTypeGetExpiry(robj *o, sds field, mstime_t *expiry) {
         /* Get the expiry from the metadata, if the next field isn't an expiry it means
          * the expiry is forever we'll return EXPIRY_NONE */
         unsigned char *value_ptr = lpNext(zl, fptr);
-        unsigned char *next_val = lpNext(zl, value_ptr);
-        bool has_expiry = (next_val && lpIsMetadata(next_val));
+        unsigned char *next_val = lpGetMetadata(zl, value_ptr);
+        bool has_expiry = (next_val != NULL);
         if (has_expiry) {
             mstime_t field_expiry = lpGetMetadataValue(next_val);
             if (field_expiry != EXPIRY_NONE && field_expiry <= commandTimeSnapshot()) {
@@ -433,8 +430,8 @@ int hashTypeSet(robj *o, sds field, sds value, mstime_t expiry, int flags, bool 
             vptr = lpNext(zl, fptr);
             serverAssert(vptr != NULL);
             /* Get pointer to the metadata field */
-            unsigned char *meta_ptr = lpNext(zl, vptr);
-            has_expiry = (meta_ptr && lpIsMetadata(meta_ptr));
+            unsigned char *meta_ptr = lpGetMetadata(zl, vptr);
+            has_expiry = (meta_ptr != NULL);
             /* if we have a metadata expiry attached */
             if (has_expiry) {
                 long long entry_expiry = lpGetMetadataValue(meta_ptr);
@@ -453,7 +450,7 @@ int hashTypeSet(robj *o, sds field, sds value, mstime_t expiry, int flags, bool 
             lpEncodeIntegerGetType(expiry, intenc, &enclen);
             /* we need to delete and insert the metadata pointer */
             if (has_expiry) {
-                meta_ptr = lpNext(zl, vptr);
+                meta_ptr = lpGetMetadata(zl, vptr);
                 zl = lpDelete(zl, meta_ptr, NULL);
             }
             if (expiry != EXPIRY_NONE) {
@@ -566,8 +563,8 @@ static expiryModificationResult hashTypeSetExpire(robj *o, sds field, mstime_t e
         if (!fptr) return EXPIRATION_MODIFICATION_NOT_EXIST;
         /* Check if the next value is already an expiry */
         unsigned char *value_ptr = lpNext(zl, fptr);
-        unsigned char *next_val = lpNext(zl, value_ptr);
-        bool has_expiry = (next_val && lpIsMetadata(next_val));
+        unsigned char *next_val = lpGetMetadata(zl, value_ptr);
+        bool has_expiry = (next_val != NULL);
         long long current_expire = EXPIRY_NONE;
         if (has_expiry) {
             current_expire = lpGetMetadataValue(next_val);
@@ -682,8 +679,8 @@ static expiryModificationResult hashTypePersist(robj *o, sds field) {
             unsigned char *vptr = lpNext(zl, fptr);
             serverAssert(vptr != NULL);
             /* Check if the field has an expiration set, if not we fail */
-            unsigned char *metadata_ptr = lpNext(zl, vptr);
-            if (metadata_ptr == NULL || !lpIsMetadata(metadata_ptr)) return EXPIRATION_MODIFICATION_FAILED;
+            unsigned char *metadata_ptr = lpGetMetadata(zl, vptr);
+            if (metadata_ptr == NULL) return EXPIRATION_MODIFICATION_FAILED;
             /* A lazily-expired field is logically gone: report it as missing
              * instead of resurrecting it, and leave the reaping (and its HDEL
              * propagation) to the active-expiry cycle, mirroring the hashtable
@@ -729,15 +726,9 @@ bool hashTypeDelete(robj *o, sds field) {
         if (fptr != NULL) {
             fptr = lpFind(zl, fptr, (unsigned char *)field, sdslen(field), 1);
             if (fptr != NULL) {
-                unsigned char *value_ptr = lpNext(zl, fptr);
-                unsigned char *meta_ptr = lpNext(zl, value_ptr);
-                if (meta_ptr != NULL && lpIsMetadata(meta_ptr)) {
-                    /* Delete field, value, and metadata. */
-                    zl = lpDeleteRangeWithEntry(zl, &fptr, 3);
-                } else {
-                    /* Delete both field and value. */
-                    zl = lpDeleteRangeWithEntry(zl, &fptr, 2);
-                }
+                /* Delete field and value; metadata entries trailing the pair
+                 * are deleted along with it. */
+                zl = lpDeleteRangeWithEntry(zl, &fptr, 2);
 
                 objectSetVal(o, zl);
                 deleted = true;
@@ -760,16 +751,8 @@ bool hashTypeDelete(robj *o, sds field) {
 /* Return the number of elements in a hash. */
 unsigned long hashTypeLength(const robj *o) {
     switch (objectGetEncoding(o)) {
-    case OBJ_ENCODING_LISTPACK: {
-        unsigned char *zl = objectGetVal(o);
-        unsigned char *p = lpFirst(zl);
-        unsigned long count = 0;
-        while (p) {
-            if (!lpIsMetadata(p)) count++;
-            p = lpNext(zl, p);
-        }
-        return count / 2;
-    }
+    case OBJ_ENCODING_LISTPACK:
+        return lpLength(objectGetVal(o)) / 2;
     case OBJ_ENCODING_HASHTABLE:
         return hashtableSize((const hashtable *)objectGetVal(o));
     default:
@@ -836,13 +819,9 @@ int hashTypeNext(hashTypeIterator *hi) {
                 serverAssert(vptr == NULL);
                 fptr = lpFirst(zl);
             } else {
-                /* Advance cursor */
+                /* Advance cursor (lpNext transparently skips metadata) */
                 serverAssert(vptr != NULL);
                 fptr = lpNext(zl, vptr);
-                /* On next we can land on a metadata if so we skip once more */
-                if (fptr != NULL && lpIsMetadata(fptr)) {
-                    fptr = lpNext(zl, fptr);
-                }
             }
             if (fptr == NULL) return C_ERR;
 
@@ -850,13 +829,13 @@ int hashTypeNext(hashTypeIterator *hi) {
             vptr = lpNext(zl, fptr);
             serverAssert(vptr != NULL);
 
-            /* Check if the fields are expired */
-            unsigned char *meta = lpNext(zl, vptr);
-            if (meta != NULL && lpIsMetadata(meta)) {
+            /* Skip lazily-expired fields */
+            unsigned char *meta = lpGetMetadata(zl, vptr);
+            if (meta != NULL) {
                 int64_t expiry = lpGetMetadataValue(meta);
                 if (expiry != EXPIRY_NONE && expiry <= commandTimeSnapshot()) {
-                    hi->fptr = vptr;
-                    hi->vptr = meta;
+                    hi->fptr = fptr;
+                    hi->vptr = vptr;
                     continue;
                 }
             }
@@ -943,8 +922,8 @@ long long hashTypeCurrentExpiry(robj *o, hashTypeIterator *hi) {
 
     long long expiry = EXPIRY_NONE;
     unsigned char *vptr = hi->vptr;
-    unsigned char *meta = lpNext(objectGetVal(o), vptr);
-    if (meta != NULL && lpIsMetadata(meta)) {
+    unsigned char *meta = lpGetMetadata(objectGetVal(o), vptr);
+    if (meta != NULL) {
         expiry = lpGetMetadataValue(meta);
     }
     return expiry;
@@ -2665,18 +2644,18 @@ size_t hashTypeDeleteExpiredFields(robj *o, mstime_t now, unsigned long max_fiel
             unsigned char *vptr = lpNext(zl, fptr);
             if (!vptr) break;
 
-            unsigned char *meta = lpNext(zl, vptr);
-            if (meta && lpIsMetadata(meta)) {
+            unsigned char *meta = lpGetMetadata(zl, vptr);
+            if (meta) {
                 mstime_t expiry = lpGetMetadataValue(meta);
                 if (expiry != EXPIRY_NONE && expiry <= now) {
                     if (out_entries) {
                         out_entries[expired_count] = createStringObject((char *)field, flen);
                     }
-                    /* Delete field + value + metadata (3 elements). fptr is
-                     * updated to the entry following the deleted range (NULL at
-                     * EOF), so we can resume the scan from there instead of
-                     * restarting, keeping the reap linear. */
-                    zl = lpDeleteRangeWithEntry(zl, &fptr, 3);
+                    /* Delete the field/value pair (trailing metadata goes with
+                     * it). fptr is updated to the entry following the deleted
+                     * range (NULL at EOF), so we resume the scan from there
+                     * instead of restarting, keeping the reap linear. */
+                    zl = lpDeleteRangeWithEntry(zl, &fptr, 2);
                     objectSetVal(o, zl);
                     server.stat_expiredfields++;
                     expired_count++;
@@ -2686,9 +2665,6 @@ size_t hashTypeDeleteExpiredFields(robj *o, mstime_t now, unsigned long max_fiel
             }
 
             p = lpNext(zl, vptr);
-            if (p && lpIsMetadata(p)) {
-                p = lpNext(zl, p);
-            }
         }
 
         return expired_count;

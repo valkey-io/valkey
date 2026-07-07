@@ -1345,17 +1345,15 @@ void scanGenericCommandWithOptions(client *c, robj *o, unsigned long long cursor
             p = lpNext(objectGetVal(o), p);
             unsigned char *vptr = p;
             /* Check if this f/v pair is expired */
-            unsigned char *next = lpNext(zl, vptr);
+            unsigned char *meta = lpGetMetadata(zl, vptr);
             int is_expired = 0;
-            if (next && lpIsMetadata(next)) {
-                long long expiry = lpGetMetadataValue(next);
+            if (meta) {
+                long long expiry = lpGetMetadataValue(meta);
                 if (expiry != EXPIRY_NONE && expiry <= commandTimeSnapshot()) {
                     is_expired = 1;
                 }
-                p = lpNext(zl, next);
-            } else {
-                p = next;
             }
+            p = lpNext(zl, vptr);
             if (is_expired) continue;
             if (opts->use_pattern && !stringmatchlen(opts->pat, opts->patlen, (char *)str, len, 0)) {
                 continue;

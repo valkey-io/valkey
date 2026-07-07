@@ -2390,9 +2390,6 @@ struct valkeyServer {
     /* Local environment */
     char *locale_collate;
     char *debug_context; /* A free-form string that has no impact on server except being included in a crash report. */
-    /* Throttling */
-    long long total_throttled_commands; /* Total commands deferred by the throttle framework */
-    int repl_throttle;                  /* Enable replication throttle */
 };
 
 #define MAX_KEYS_BUFFER 256

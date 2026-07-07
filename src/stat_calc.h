@@ -1,5 +1,11 @@
-#ifndef THROTTLE_STAT_CALC_H
-#define THROTTLE_STAT_CALC_H
+/*
+ * Copyright (c) Valkey Contributors
+ * All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause
+ */
+
+#ifndef STAT_CALC_H
+#define STAT_CALC_H
 
 /* Rolling-average TPS calculator over a configurable time window.
  *

@@ -6199,7 +6199,7 @@ int checkClientOutputBufferLimits(client *c) {
     } else {
         c->obuf_soft_limit_reached_time = 0;
     }
-    if ((soft || hard) && throttleRepl_isClientExempt(c)) return 0;
+    if ((soft || hard) && throttleRepl_isClientExemptFromCobLimits(c)) return 0;
     return soft || hard;
 }
 

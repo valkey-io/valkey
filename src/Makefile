@@ -583,7 +583,7 @@ ENGINE_SERVER_OBJ = \
     zmalloc.o \
 	queues.o \
 	throttle_token_bucket.o \
-	throttle_stat_calc.o \
+	stat_calc.o \
 	throttle_repl.o \
 	throttle.o
 ENGINE_SERVER_OBJ+=$(ENGINE_TRACE_OBJ)

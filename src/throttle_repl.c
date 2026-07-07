@@ -7,7 +7,10 @@
 #include "server.h"
 #include "throttle_repl.h"
 #include "throttle.h"
-#include "throttle_stat_calc.h"
+#include "stat_calc.h"
+
+/* Configuration instance. */
+struct throttle_repl_config throttle_repl_config;
 
 #define RATE_INCREASE_MULTIPLIER 1.05
 #define RATE_DECREASE_MULTIPLIER 0.95
@@ -42,7 +45,7 @@ static bool criteriaProc(client *c, void *priv_data) {
 
 static void installThrottler(void) {
     serverAssert(!isThrottleActive());
-    throttle_id = throttle_register(criteriaProc, NULL, METRICS_NAME, THROTTLE_UNLIMITED_RATE);
+    throttle_id = throttle_register(criteriaProc, NULL, METRICS_NAME);
     metrics.is_throttler_active = true;
     metrics.current_throttle_rate = THROTTLE_UNLIMITED_RATE;
     metrics.throttle_activation_events++;
@@ -73,6 +76,17 @@ static void adjustThrottleRate(bool reduceTrafficRate) {
     }
 }
 
+static unsigned long throttleRepl_getCobTargetSize(void) {
+    int64_t cob_target = server.client_obuf_limits[CLIENT_TYPE_REPLICA].soft_limit_bytes;
+    if (cob_target == 0) cob_target = server.client_obuf_limits[CLIENT_TYPE_REPLICA].hard_limit_bytes;
+
+    cob_target /= 2; /* Target is half the limit. */
+
+    if (cob_target == 0 || cob_target > MAX_COB_TARGET) cob_target = MAX_COB_TARGET;
+
+    return (unsigned long)cob_target;
+}
+
 /* Evaluate whether steady-state throttling is needed.
  * Uses short-term COB trend to extrapolate future COB size. */
 static bool evaluateSteadyState(client *c, uint64_t cob_size) {
@@ -89,11 +103,7 @@ static bool evaluateSteadyState(client *c, uint64_t cob_size) {
 
 /* --- Public API --- */
 
-bool throttleRepl_isEnabled(void) {
-    return server.repl_throttle;
-}
-
-bool throttleRepl_isClientExempt(client *c) {
+bool throttleRepl_isClientExemptFromCobLimits(client *c) {
     if (!iAmPrimary()) return false;
     if (!c->flag.replica) return false;
     if (!isThrottleActive()) return false;
@@ -109,24 +119,13 @@ bool throttleRepl_isClientExempt(client *c) {
     return true;
 }
 
-unsigned long throttleRepl_getCobTargetSize(void) {
-    int64_t cob_target = server.client_obuf_limits[CLIENT_TYPE_REPLICA].soft_limit_bytes;
-    if (cob_target == 0) cob_target = server.client_obuf_limits[CLIENT_TYPE_REPLICA].hard_limit_bytes;
-
-    cob_target /= 2; /* Target is half the limit. */
-
-    if (cob_target == 0 || cob_target > MAX_COB_TARGET) cob_target = MAX_COB_TARGET;
-
-    return (unsigned long)cob_target;
-}
-
 void throttleRepl_adjustThrottling(void) {
     if (!iAmPrimary()) {
         /* Failover could happen before. */
         if (isThrottleActive()) removeThrottler();
         return;
     }
-    if (!throttleRepl_isEnabled() && !isThrottleActive()) return;
+    if (!throttle_repl_config.steady_state_repl_throttle_enabled && !isThrottleActive()) return;
 
     bool reduce = false;
     client *measured_replica = NULL;

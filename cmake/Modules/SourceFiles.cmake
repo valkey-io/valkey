@@ -123,7 +123,7 @@ set(VALKEY_SERVER_SRCS
     ${CMAKE_SOURCE_DIR}/src/mutexqueue.c
     ${CMAKE_SOURCE_DIR}/src/queues.c
     ${CMAKE_SOURCE_DIR}/src/throttle_token_bucket.c
-    ${CMAKE_SOURCE_DIR}/src/throttle_stat_calc.c
+    ${CMAKE_SOURCE_DIR}/src/stat_calc.c
     ${CMAKE_SOURCE_DIR}/src/throttle_repl.c
     ${CMAKE_SOURCE_DIR}/src/throttle.c)
 

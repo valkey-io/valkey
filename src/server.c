@@ -6835,7 +6835,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
         info = sdscat(info, "# Throttle\r\n");
         info = sdscatprintf(info,
                             "throttle_total_throttled_commands:%lld\r\n",
-                            server.total_throttled_commands);
+                            throttle_framework_metrics.total_throttled_commands);
         info = throttle_sdscatMetrics(info);
         info = throttleRepl_sdscatMetrics(info);
     }

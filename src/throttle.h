@@ -1,3 +1,9 @@
+/*
+ * Copyright (c) Valkey Contributors
+ * All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause
+ */
+
 #ifndef THROTTLE_H
 #define THROTTLE_H
 
@@ -17,17 +23,20 @@ typedef struct {
     long oldest_client_delay_us;
 } throttleMetrics;
 
+/* Framework-level metrics */
+struct throttle_framework_metrics {
+    long long total_throttled_commands;
+};
+extern struct throttle_framework_metrics throttle_framework_metrics;
+
 /* Public API */
 void throttle_init(void);
 
 int throttle_register(throttleCriteriaProc *criteria_proc,
                       void *priv_data,
-                      const char *metrics_name,
-                      double ops_per_sec);
+                      const char *metrics_name);
 
 void throttle_deregister(int id);
-
-void *throttle_setPrivData(int id, void *new_priv_data);
 
 void throttle_setRate(int id, double ops_per_sec);
 

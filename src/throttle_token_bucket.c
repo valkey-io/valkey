@@ -12,31 +12,39 @@ struct tokenBucket {
     double max_burst_time_secs;
     double token_count;
     monotime last_time_check;
-    bucketSizeFunc *bucket_size_func;
 };
 
-static double calcBucketSize(double tokens_per_sec, double max_burst_time_secs) {
-    return tokens_per_sec * max_burst_time_secs;
+#define BUCKET_EPSILON 0.0001
+
+static double getBucketSize(tokenBucket *bucket) {
+    return (bucket->tokens_per_sec < BUCKET_EPSILON) ? 0.0
+        : 2.0 + bucket->tokens_per_sec * bucket->max_burst_time_secs;
 }
 
-static double trimTokenBucket(tokenBucket *bucket) {
-    double unused_tokens = 0;
-    double bucket_size = bucket->bucket_size_func(bucket->tokens_per_sec, bucket->max_burst_time_secs);
-    if (bucket->token_count > bucket_size) {
-        unused_tokens = bucket->token_count - bucket_size;
-        bucket->token_count = bucket_size;
+static void trimTokenBucket(tokenBucket *bucket) {
+    double bucket_size = getBucketSize(bucket);
+    if (bucket->token_count > bucket_size) bucket->token_count = bucket_size;
+    if (bucket->token_count < -bucket_size) bucket->token_count = -bucket_size;
+}
+
+static void tokenBucket_replenish(tokenBucket *bucket) {
+    monotime now = getMonotonicUs();
+    uint64_t delta_us = now - bucket->last_time_check;
+    double tokens_to_add = delta_us * bucket->tokens_per_sec / 1000000.0;
+    if (tokens_to_add > 0) {
+        bucket->token_count += tokens_to_add;
+        trimTokenBucket(bucket);
     }
-    return unused_tokens;
+    bucket->last_time_check = now;
 }
 
-tokenBucket *tokenBucket_create(double tokens_per_sec, double max_burst_time_secs, bucketSizeFunc *bucket_size_func) {
+tokenBucket *tokenBucket_create(double tokens_per_sec, double max_burst_time_secs) {
     serverAssert(tokens_per_sec >= 0);
     serverAssert(max_burst_time_secs >= 0);
     tokenBucket *bucket = zmalloc(sizeof(tokenBucket));
     bucket->tokens_per_sec = tokens_per_sec;
     bucket->max_burst_time_secs = max_burst_time_secs;
-    bucket->bucket_size_func = bucket_size_func == NULL ? calcBucketSize : bucket_size_func;
-    bucket->token_count = bucket->bucket_size_func(bucket->tokens_per_sec, bucket->max_burst_time_secs);
+    bucket->token_count = getBucketSize(bucket);
     bucket->last_time_check = getMonotonicUs();
     return bucket;
 }
@@ -45,59 +53,21 @@ void tokenBucket_free(tokenBucket *bucket) {
     zfree(bucket);
 }
 
-double tokenBucket_getTokenCount(tokenBucket *bucket) {
-    return bucket->token_count;
-}
-
-double tokenBucket_getTokensPerSec(tokenBucket *bucket) {
+double tokenBucket_getRate(tokenBucket *bucket) {
     return bucket->tokens_per_sec;
 }
 
-double tokenBucket_getBucketSize(tokenBucket *bucket) {
-    return bucket->bucket_size_func(bucket->tokens_per_sec, bucket->max_burst_time_secs);
-}
-
-double tokenBucket_getMaxBurstTime(tokenBucket *bucket) {
-    return bucket->max_burst_time_secs;
-}
-
-void tokenBucket_setTokensPerSec(tokenBucket *bucket, double tokens_per_sec) {
-    serverAssert(tokens_per_sec >= 0);
-    bucket->tokens_per_sec = tokens_per_sec;
+void tokenBucket_setRate(tokenBucket *bucket, double new_rate) {
+    serverAssert(new_rate >= 0);
+    bucket->tokens_per_sec = new_rate;
     trimTokenBucket(bucket);
 }
 
-void tokenBucket_setMaxBurstSec(tokenBucket *bucket, double max_burst_time_secs) {
-    serverAssert(max_burst_time_secs >= 0);
-    bucket->max_burst_time_secs = max_burst_time_secs;
-    trimTokenBucket(bucket);
-}
-
-void tokenBucket_capDebt(tokenBucket *bucket, double max_debt) {
-    serverAssert(max_debt >= 0);
-    if (bucket->token_count < -max_debt) {
-        bucket->token_count = -max_debt;
-    }
-}
-
-double tokenBucket_add(tokenBucket *bucket, double tokens) {
-    bucket->token_count += tokens;
-    return trimTokenBucket(bucket);
-}
-
-double tokenBucket_replenish(tokenBucket *bucket) {
-    monotime now = getMonotonicUs();
-    uint64_t delta_us = now - bucket->last_time_check;
-    bucket->last_time_check = now;
-    return tokenBucket_add(bucket, delta_us * bucket->tokens_per_sec / 1000000.0);
-}
-
-void tokenBucket_consume(tokenBucket *bucket, double tokens) {
+bool tokenBucket_tryConsume(tokenBucket *bucket, double tokens, bool force_consume) {
+    tokenBucket_replenish(bucket);
+    if (!force_consume && bucket->token_count < tokens) return false;
     bucket->token_count -= tokens;
-}
-
-bool tokenBucket_canConsume(tokenBucket *bucket, double tokens) {
-    return bucket->token_count >= tokens;
+    return true;
 }
 
 double tokenBucket_msUntilAvailable(tokenBucket *bucket, double target_tokens) {
@@ -107,7 +77,3 @@ double tokenBucket_msUntilAvailable(tokenBucket *bucket, double target_tokens) {
     return needed / bucket->tokens_per_sec * 1000.0;
 }
 
-void tokenBucket_halt(tokenBucket *bucket) {
-    bucket->token_count = 0;
-    bucket->tokens_per_sec = 0;
-}

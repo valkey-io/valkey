@@ -6,7 +6,7 @@
 
 #include "throttle.h"
 #include "throttle_token_bucket.h"
-#include "throttle_stat_calc.h"
+#include "stat_calc.h"
 #include "hashtable.h"
 #include "monotonic.h"
 
@@ -21,6 +21,9 @@
 #define EPSILON 0.0001
 #define TOKENS_BURST_RATE_SEC 0.1
 #define MIN_ADJUST_AFTER_DISABLE 100.0
+
+/* Framework-level metrics */
+struct throttle_framework_metrics throttle_framework_metrics;
 
 /* === Internal metrics (shared by name via hashtable) === */
 typedef struct throttleInternalMetrics {
@@ -65,8 +68,8 @@ typedef struct throttler {
     throttleInternalMetrics *metrics;
 } throttler;
 
-static int listMatchThrottler(void *ptr, void *id) {
-    return ((throttler *)ptr)->id == (long)id;
+static int listMatchThrottler(void *throttler_ptr, void *id) {
+    return ((throttler *)throttler_ptr)->id == (long)id;
 }
 
 static throttler *findThrottler(int id) {
@@ -77,19 +80,10 @@ static throttler *findThrottler(int id) {
     return t;
 }
 
-static double computeBucketSize(double tokens_per_sec, double burst_time_sec) {
-    return (tokens_per_sec < EPSILON) ? 0.0
-                                      : 2.0 + tokens_per_sec * burst_time_sec;
-}
-
 static void replenishTokens(throttler *t) {
     if (t->id == THROTTLE_CLEANUP_ID) {
-        tokenBucket_setTokensPerSec(t->bucket, THROTTLE_UNLIMITED_RATE);
-        tokenBucket_add(t->bucket, THROTTLE_UNLIMITED_RATE);
-        return;
+        tokenBucket_setRate(t->bucket, THROTTLE_UNLIMITED_RATE);
     }
-    tokenBucket_replenish(t->bucket);
-    tokenBucket_capDebt(t->bucket, tokenBucket_getBucketSize(t->bucket));
 }
 
 static int waitTimeMs(throttler *t) {
@@ -112,13 +106,13 @@ static void freeThrottler(throttler *t) {
 
 static void setRate(throttler *t, double new_rate) {
     if (new_rate < EPSILON) {
-        tokenBucket_halt(t->bucket);
+        tokenBucket_setRate(t->bucket, 0);
     } else {
         if (new_rate > THROTTLE_UNLIMITED_RATE) new_rate = THROTTLE_UNLIMITED_RATE;
-        tokenBucket_setTokensPerSec(t->bucket, new_rate);
+        tokenBucket_setRate(t->bucket, new_rate);
     }
 
-    double rate_per_min = tokenBucket_getTokensPerSec(t->bucket) * 60.0;
+    double rate_per_min = tokenBucket_getRate(t->bucket) * 60.0;
     if (rate_per_min <= THROTTLE_OPS_PER_MIN_GUARDRAIL) {
         if (t->rate_below_guardrail_since == 0) {
             elapsedStart(&t->rate_below_guardrail_since);
@@ -159,7 +153,7 @@ static void consumeOtherThrottlers(client *c, throttler *except) {
         if (t->id == THROTTLE_CLEANUP_ID) continue;
         if (t == except) continue;
         if (t->criteria_proc(c, t->priv_data)) {
-            tokenBucket_consume(t->bucket, 1.0);
+            tokenBucket_tryConsume(t->bucket, 1.0, true);
         }
     }
 }
@@ -186,10 +180,9 @@ static long long throttlerTimeProc(struct aeEventLoop *eventLoop, long long id, 
     monotime work_start;
     elapsedStart(&work_start);
 
-    while (tokenBucket_canConsume(t->bucket, 1.0) &&
-           listLength(t->client_queue) > 0 &&
-           elapsedMs(work_start) < MAX_UNTHROTTLE_PROCESSING_TIME_MS) {
-        tokenBucket_consume(t->bucket, 1.0);
+    while (listLength(t->client_queue) > 0 &&
+           elapsedMs(work_start) < MAX_UNTHROTTLE_PROCESSING_TIME_MS &&
+           tokenBucket_tryConsume(t->bucket, 1.0, false)) {
         client *c = listNodeValue(listFirst(t->client_queue));
         throttle_removeClient(c);
         if (c->flag.throttle_multi) {
@@ -218,7 +211,7 @@ static void throttlerAddClient(throttler *t, client *c) {
 
     t->metrics->num_clients++;
     t->metrics->total_throttled_commands++;
-    server.total_throttled_commands++;
+    throttle_framework_metrics.total_throttled_commands++;
     c->throttler = t;
     c->throttle_node = listLast(t->client_queue);
 
@@ -245,11 +238,9 @@ void throttle_init(void) {
 
 int throttle_register(throttleCriteriaProc *criteria_proc,
                       void *priv_data,
-                      const char *metrics_name,
-                      double ops_per_sec) {
+                      const char *metrics_name) {
     serverAssert(criteria_proc != NULL);
     serverAssert(metrics_name != NULL);
-    serverAssert(ops_per_sec >= 0);
     validateAlphaNumeric(metrics_name);
     serverAssert(nextThrottlerId > 0);
 
@@ -258,11 +249,11 @@ int throttle_register(throttleCriteriaProc *criteria_proc,
     t->criteria_proc = criteria_proc;
     t->time_event_id = AE_DELETED_EVENT_ID;
     t->priv_data = priv_data;
-    t->bucket = tokenBucket_create(ops_per_sec, TOKENS_BURST_RATE_SEC, computeBucketSize);
+    t->bucket = tokenBucket_create(THROTTLE_UNLIMITED_RATE, TOKENS_BURST_RATE_SEC);
     t->metrics = findMetrics(metrics_name);
     t->client_queue = listCreate();
     t->rate_below_guardrail_since = 0;
-    setRate(t, ops_per_sec);
+    setRate(t, THROTTLE_UNLIMITED_RATE);
 
     listAddNodeTail(throttlerList, t);
     t->ln = listLast(throttlerList);
@@ -280,13 +271,6 @@ void throttle_deregister(int id) {
     }
 }
 
-void *throttle_setPrivData(int id, void *new_priv_data) {
-    throttler *t = findThrottler(id);
-    void *old = t->priv_data;
-    t->priv_data = new_priv_data;
-    return old;
-}
-
 void throttle_setRate(int id, double ops_per_sec) {
     serverAssert(ops_per_sec >= 0);
     throttler *t = findThrottler(id);
@@ -296,30 +280,34 @@ void throttle_setRate(int id, double ops_per_sec) {
 double throttle_adjustRate(int id, double multiplier) {
     serverAssert(multiplier >= 0.0 && multiplier <= 3.0);
     throttler *t = findThrottler(id);
+    double current = tokenBucket_getRate(t->bucket);
 
-    double throttle_rate = tokenBucket_getTokensPerSec(t->bucket);
+    /* No change needed if already unlimited and trying to increase. */
+    if (multiplier > 1.0 && current == THROTTLE_UNLIMITED_RATE) {
+        return current;
+    }
+
     double new_rate;
 
     if (multiplier <= 1.0) {
-        new_rate = throttle_rate * multiplier;
-        double incoming_rate = tpsCalculator_averageTps(t->metrics->incoming_tps);
-        if (incoming_rate > EPSILON && new_rate < incoming_rate) {
-            new_rate = incoming_rate;
+        /* Decrease: plain multiply, but never drop below incoming TPS. */
+        new_rate = current * multiplier;
+        double incoming = tpsCalculator_averageTps(t->metrics->incoming_tps);
+        if (incoming > EPSILON && new_rate < incoming) {
+            new_rate = incoming;
         }
+    } else if (current < EPSILON) {
+        /* Coming back from halted: jump to a sensible starting rate. */
+        new_rate = MIN_ADJUST_AFTER_DISABLE;
     } else {
-        if (throttle_rate == THROTTLE_UNLIMITED_RATE) {
-            new_rate = throttle_rate;
-        } else if (throttle_rate < EPSILON) {
-            new_rate = MIN_ADJUST_AFTER_DISABLE;
-        } else {
-            double delta = throttle_rate * (multiplier - 1.0);
-            if (delta < 1.0) delta = 1.0;
-            new_rate = throttle_rate + delta;
-        }
+        /* Increase: proportional with minimum step of 1 ops/sec. */
+        double delta = current * (multiplier - 1.0);
+        if (delta < 1.0) delta = 1.0;
+        new_rate = current + delta;
     }
 
-    if (new_rate != throttle_rate) setRate(t, new_rate);
-    return tokenBucket_getTokensPerSec(t->bucket);
+    if (new_rate != current) setRate(t, new_rate);
+    return tokenBucket_getRate(t->bucket);
 }
 
 const throttleMetrics *throttle_getMetrics(const char *metrics_name) {
@@ -339,7 +327,7 @@ const throttleMetrics *throttle_getMetrics(const char *metrics_name) {
     while ((ln = listNext(&li))) {
         throttler *t = ln->value;
         if (t->metrics != m) continue;
-        result.ops_per_sec += tokenBucket_getTokensPerSec(t->bucket);
+        result.ops_per_sec += tokenBucket_getRate(t->bucket);
         if (listLength(t->client_queue) > 0) {
             client *oldest = listNodeValue(listFirst(t->client_queue));
             long delay_us = elapsedUs(oldest->throttle_start_us);
@@ -392,7 +380,7 @@ bool throttle_deferCommand(client *c) {
             match_count++;
             tpsCalculator_record(t->metrics->incoming_tps, 1);
             if (strictest == NULL ||
-                tokenBucket_getTokensPerSec(t->bucket) < tokenBucket_getTokensPerSec(strictest->bucket)) {
+                tokenBucket_getRate(t->bucket) < tokenBucket_getRate(strictest->bucket)) {
                 strictest = t;
             }
         }
@@ -401,10 +389,8 @@ bool throttle_deferCommand(client *c) {
     if (strictest == NULL) return false;
 
     if (listLength(strictest->client_queue) == 0) {
-        replenishTokens(strictest);
-        if (tokenBucket_canConsume(strictest->bucket, 1.0)) {
+        if (tokenBucket_tryConsume(strictest->bucket, 1.0, false)) {
             if (match_count > 1) consumeOtherThrottlers(c, strictest);
-            tokenBucket_consume(strictest->bucket, 1.0);
             return false;
         }
     }

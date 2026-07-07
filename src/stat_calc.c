@@ -3,7 +3,7 @@
  * All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  */
-#include "throttle_stat_calc.h"
+#include "stat_calc.h"
 #include "server.h"
 #include "monotonic.h"
 

@@ -1365,14 +1365,29 @@ void flushAppendOnlyFile(int force) {
     if (server.aof_integrity_check) {
         uint64_t checksum = 0;
         char hdr_prefix[64];
-        int prefix_len = snprintf(hdr_prefix, sizeof(hdr_prefix), "#HDR:v1;len:%zu;", sdslen(server.aof_buf));
-        serverAssert(prefix_len < (int)sizeof(hdr_prefix));
+        char *p = hdr_prefix;
+        memcpy(p, "#HDR:v1;len:", 12);
+        p += 12;
+        int len_str_len = ull2string(p, sizeof(hdr_prefix) - (p - hdr_prefix), (unsigned long long)sdslen(server.aof_buf));
+        p += len_str_len;
+        *p++ = ';';
+        *p = '\0';
+        int prefix_len = p - hdr_prefix;
 
         checksum = crc64(server.aof_running_checksum, (unsigned char *)hdr_prefix, prefix_len);
         checksum = crc64(checksum, (unsigned char *)server.aof_buf, sdslen(server.aof_buf));
 
-        hdr_len = snprintf(hdr, sizeof(hdr), "%schecksum:%llu;\r\n", hdr_prefix, (unsigned long long)checksum);
-        serverAssert(hdr_len < (int)sizeof(hdr));
+        char *hp = hdr;
+        memcpy(hp, hdr_prefix, prefix_len);
+        hp += prefix_len;
+        memcpy(hp, "checksum:", 9);
+        hp += 9;
+        int checksum_len = ull2string(hp, sizeof(hdr) - (hp - hdr), (unsigned long long)checksum);
+        hp += checksum_len;
+        memcpy(hp, ";\r\n", 3);
+        hp += 3;
+        *hp = '\0';
+        hdr_len = hp - hdr;
         expected_len += hdr_len;
 
         server.aof_running_checksum = checksum;

@@ -527,7 +527,7 @@ TEST_F(ListpackTest, listpackBatchDelete) {
     lp = lpBatchDelete(lp, ps, 3);
     ASSERT_EQ(lpLength(lp), 1u);
     verifyEntry(lpFirst(lp), (unsigned char *)mixlist[2], strlen(mixlist[2]));
-    ASSERT_EQ(lpValidateIntegrity(lp, lpBytes(lp), nullptr, nullptr), 1);
+    ASSERT_EQ(lpValidateIntegrity(lp, lpBytes(lp), nullptr, nullptr, 0), 1);
     lpFree(lp);
 }
 
@@ -1009,13 +1009,72 @@ TEST_F(ListpackTest, listpackLpFindWithAllMetadata) {
     lpFree(lp);
 }
 
+TEST_F(ListpackTest, listpackMetadataInvisibleToIterators) {
+    /* Metadata entries are skipped by logical iteration and excluded from
+     * numele; they are reachable only through lpGetMetadata(). */
+    unsigned char *lp = createListWithAllMetadata();
+
+    /* 2 fields + 2 values; the 2 metadata entries are not counted */
+    ASSERT_EQ(lpLength(lp), 4u);
+
+    unsigned char *p = lpFirst(lp);
+    int seen = 0;
+    while (p) {
+        ASSERT_EQ(lpIsMetadata(p), 0);
+        seen++;
+        p = lpNext(lp, p);
+    }
+    ASSERT_EQ(seen, 4);
+
+    /* Values carry metadata, fields do not */
+    unsigned char *field1 = lpFirst(lp);
+    unsigned char *value1 = lpNext(lp, field1);
+    ASSERT_EQ(lpGetMetadata(lp, field1), nullptr);
+    unsigned char *meta = lpGetMetadata(lp, value1);
+    ASSERT_NE(meta, nullptr);
+    ASSERT_EQ(lpGetMetadataValue(meta), 1234567890);
+
+    /* Backward iteration skips metadata too */
+    unsigned char *last = lpLast(lp);
+    ASSERT_EQ(lpIsMetadata(last), 0);
+    seen = 0;
+    while (last) {
+        seen++;
+        last = lpPrev(lp, last);
+    }
+    ASSERT_EQ(seen, 4);
+    lpFree(lp);
+}
+
+TEST_F(ListpackTest, listpackMetadataDeletedWithElement) {
+    /* Deleting a pair also deletes the metadata trailing it */
+    unsigned char *lp = createListWithMetadata();
+    ASSERT_EQ(lpLength(lp), 4u);
+
+    unsigned char *field1 = lpFirst(lp);
+    lp = lpDeleteRangeWithEntry(lp, &field1, 2);
+    ASSERT_EQ(lpLength(lp), 2u);
+    ASSERT_NE(lpFind(lp, lpFirst(lp), (unsigned char *)"field2", 6, 1), nullptr);
+    ASSERT_EQ(lpFind(lp, lpFirst(lp), (unsigned char *)"field1", 6, 1), nullptr);
+    ASSERT_EQ(lpValidateIntegrity(lp, lpBytes(lp), nullptr, nullptr, 1), 1);
+    lpFree(lp);
+}
+
+TEST_F(ListpackTest, listpackValidateIntegrityMetadataGate) {
+    /* Metadata is only valid when the caller allows it */
+    unsigned char *lp = createListWithAllMetadata();
+    ASSERT_EQ(lpValidateIntegrity(lp, lpBytes(lp), nullptr, nullptr, 1), 1);
+    ASSERT_EQ(lpValidateIntegrity(lp, lpBytes(lp), nullptr, nullptr, 0), 0);
+    lpFree(lp);
+}
+
 TEST_F(ListpackTest, listpackLpValidateIntegrity) {
     /* Test lpValidateIntegrity */
     unsigned char *lp;
 
     lp = createList();
     long count = 0;
-    ASSERT_EQ(lpValidateIntegrity(lp, lpBytes(lp), lpValidation, &count), 1);
+    ASSERT_EQ(lpValidateIntegrity(lp, lpBytes(lp), lpValidation, &count, 0), 1);
     lpFree(lp);
 }
 
@@ -1200,7 +1259,7 @@ TEST_F(ListpackBenchmark, DISABLED_listpackBenchmarkLpValidateIntegrity) {
     /* Benchmark lpValidateIntegrity */
     unsigned long long start = usec();
     for (int i = 0; i < 2000; i++) {
-        lpValidateIntegrity(lp, lpBytes(lp), nullptr, nullptr);
+        lpValidateIntegrity(lp, lpBytes(lp), nullptr, nullptr, 0);
     }
     printf("Done. usec=%lld\n", usec() - start);
 }

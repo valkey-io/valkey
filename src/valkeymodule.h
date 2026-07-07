@@ -1651,6 +1651,8 @@ VALKEYMODULE_API ValkeyModuleCallReply *(*ValkeyModule_CallReplyArrayElement)(Va
 VALKEYMODULE_API ValkeyModuleString *(*ValkeyModule_CreateString)(ValkeyModuleCtx *ctx,
                                                                   const char *ptr,
                                                                   size_t len)VALKEYMODULE_ATTR;
+VALKEYMODULE_API ValkeyModuleString *(*ValkeyModule_CreateStringUninitialized)(ValkeyModuleCtx *ctx,
+                                                                               size_t len)VALKEYMODULE_ATTR;
 VALKEYMODULE_API ValkeyModuleString *(*ValkeyModule_CreateStringFromLongLong)(ValkeyModuleCtx *ctx,
                                                                               long long ll)VALKEYMODULE_ATTR;
 VALKEYMODULE_API ValkeyModuleString *(*ValkeyModule_CreateStringFromULongLong)(ValkeyModuleCtx *ctx,
@@ -1725,6 +1727,7 @@ VALKEYMODULE_API ValkeyModuleString *(*ValkeyModule_CreateStringFromCallReply)(V
 VALKEYMODULE_API int (*ValkeyModule_DeleteKey)(ValkeyModuleKey *key) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_UnlinkKey)(ValkeyModuleKey *key) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_StringSet)(ValkeyModuleKey *key, ValkeyModuleString *str) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_StringSetMove)(ValkeyModuleKey *key, ValkeyModuleString *str) VALKEYMODULE_ATTR;
 VALKEYMODULE_API char *(*ValkeyModule_StringDMA)(ValkeyModuleKey *key, size_t *len, int mode)VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_StringTruncate)(ValkeyModuleKey *key, size_t newlen) VALKEYMODULE_ATTR;
 VALKEYMODULE_API mstime_t (*ValkeyModule_GetExpire)(ValkeyModuleKey *key) VALKEYMODULE_ATTR;
@@ -2411,6 +2414,7 @@ static int ValkeyModule_Init(ValkeyModuleCtx *ctx, const char *name, int ver, in
     VALKEYMODULE_GET_API(CallReplyStringPtr);
     VALKEYMODULE_GET_API(CreateStringFromCallReply);
     VALKEYMODULE_GET_API(CreateString);
+    VALKEYMODULE_GET_API(CreateStringUninitialized);
     VALKEYMODULE_GET_API(CreateStringFromLongLong);
     VALKEYMODULE_GET_API(CreateStringFromULongLong);
     VALKEYMODULE_GET_API(CreateStringFromDouble);
@@ -2427,6 +2431,7 @@ static int ValkeyModule_Init(ValkeyModuleCtx *ctx, const char *name, int ver, in
     VALKEYMODULE_GET_API(DeleteKey);
     VALKEYMODULE_GET_API(UnlinkKey);
     VALKEYMODULE_GET_API(StringSet);
+    VALKEYMODULE_GET_API(StringSetMove);
     VALKEYMODULE_GET_API(StringDMA);
     VALKEYMODULE_GET_API(StringTruncate);
     VALKEYMODULE_GET_API(GetExpire);

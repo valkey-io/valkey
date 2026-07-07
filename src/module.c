@@ -2765,6 +2765,20 @@ ValkeyModuleString *VM_CreateString(ValkeyModuleCtx *ctx, const char *ptr, size_
     return o;
 }
 
+/* Create a new module string object whose contents are left UNINITIALIZED, rather than
+ * zeroed as ValkeyModule_CreateString would.
+ *
+ * The returned string must be treated as uninitialized memory. It must not be read before
+ * being completely written to.
+ *
+ * The module context 'ctx' is optional  and may be NULL with the same memory-management
+ * semantics as ValkeyModule_CreateString. */
+ValkeyModuleString *VM_CreateStringUninitialized(ValkeyModuleCtx *ctx, size_t len) {
+    ValkeyModuleString *o = createObject(OBJ_STRING, sdsnewlen(SDS_NOINIT, len));
+    if (ctx != NULL) autoMemoryAdd(ctx, VALKEYMODULE_AM_STRING, o);
+    return o;
+}
+
 /* Create a new module string object from a printf format and arguments.
  * The returned string must be freed with ValkeyModule_FreeString(), unless
  * automatic memory is enabled.
@@ -4558,6 +4572,25 @@ int VM_StringSet(ValkeyModuleKey *key, ValkeyModuleString *str) {
     incrRefCount(str);
     setKey(key->ctx->client, key->db, key->key, &str, SETKEY_NO_SIGNAL | SETKEY_DOESNT_EXIST);
     key->value = str;
+    return VALKEYMODULE_OK;
+}
+
+/* Move the string `str` into `key` without copying, transferring ownership.
+ *
+ * Unlike ValkeyModule_StringSet, this consumes the caller's reference. On success `str` is
+ * moved into the keyspace, in similar spirit to `std::move`. The caller MUST treat the
+ * `str` pointer as having been moved. It must not be referenced or freed again.
+ *
+ * The caller retains its reference in case of error. Returns VALKEYMODULE_ERR:
+ * * If `str->refcount != 1`
+ * * If the key is not open for writing there is an active iterator. */
+int VM_StringSetMove(ValkeyModuleKey *key, ValkeyModuleString *str) {
+    if (!(key->mode & VALKEYMODULE_WRITE) || key->iter) return VALKEYMODULE_ERR;
+    if (str->refcount != 1) return VALKEYMODULE_ERR;
+    VM_DeleteKey(key);
+    robj *val = str; /* sole reference moved in — setKey reuses the sds, no copy */
+    setKey(key->ctx->client, key->db, key->key, &val, SETKEY_NO_SIGNAL | SETKEY_DOESNT_EXIST);
+    key->value = val;
     return VALKEYMODULE_OK;
 }
 
@@ -15224,6 +15257,7 @@ void moduleRegisterCoreAPI(void) {
     REGISTER_API(CallReplyStringPtr);
     REGISTER_API(CreateStringFromCallReply);
     REGISTER_API(CreateString);
+    REGISTER_API(CreateStringUninitialized);
     REGISTER_API(CreateStringFromLongLong);
     REGISTER_API(CreateStringFromULongLong);
     REGISTER_API(CreateStringFromDouble);
@@ -15240,6 +15274,7 @@ void moduleRegisterCoreAPI(void) {
     REGISTER_API(DeleteKey);
     REGISTER_API(UnlinkKey);
     REGISTER_API(StringSet);
+    REGISTER_API(StringSetMove);
     REGISTER_API(StringDMA);
     REGISTER_API(StringTruncate);
     REGISTER_API(SetExpire);

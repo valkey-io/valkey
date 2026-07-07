@@ -72,7 +72,7 @@ typedef struct clusterLink {
 #define CLUSTER_NODE_HIGHEST CLUSTER_NODE_MY_PRIMARY_FAIL                         /* Highest flag, bump when adding a flag. */
 
 /* Ensure cluster node flags never silently grow beyond 16 bits.
- * The flags in clusterMsgHeader and clusterMsgDataGossip are uint16_t. */
+ * The flags in clusterMsg and clusterMsgDataGossip are uint16_t. */
 static_assert(CLUSTER_NODE_HIGHEST <= UINT16_MAX, "cluster node flags must fit in 16 bits");
 
 #define CLUSTER_NODE_NULL_NAME                                                                                         \

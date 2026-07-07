@@ -2665,12 +2665,15 @@ size_t hashTypeDeleteExpiredFields(robj *o, mstime_t now, unsigned long max_fiel
                     if (out_entries) {
                         out_entries[expired_count] = createStringObject((char *)field, flen);
                     }
-                    /* Delete field + value + metadata (3 elements) */
+                    /* Delete field + value + metadata (3 elements). fptr is
+                     * updated to the entry following the deleted range (NULL at
+                     * EOF), so we can resume the scan from there instead of
+                     * restarting, keeping the reap linear. */
                     zl = lpDeleteRangeWithEntry(zl, &fptr, 3);
                     objectSetVal(o, zl);
                     server.stat_expiredfields++;
                     expired_count++;
-                    p = lpFirst(zl);
+                    p = fptr;
                     continue;
                 }
             }

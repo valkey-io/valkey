@@ -744,9 +744,14 @@ int rdbGetObjectType(robj *o, int rdbver) {
             if (hashTypeHasVolatileFields(o)) {
                 /* Tagged (0xF5) metadata entries are not understood by older
                  * versions, so a listpack carrying field TTLs needs its own
-                 * RDB type, mirroring RDB_TYPE_HASH_2. */
+                 * RDB type, mirroring RDB_TYPE_HASH_2. For RDB 80 targets
+                 * (9.0, which understands field TTLs but not tagged
+                 * listpacks) the hash is serialized in the HASH_2 triplet
+                 * format instead. */
                 if (rdbver >= 81)
                     return RDB_TYPE_HASH_LISTPACK_2;
+                else if (rdbver >= 80)
+                    return RDB_TYPE_HASH_2;
                 else
                     return -1; /* can't be stored in old RDB */
             }
@@ -992,7 +997,37 @@ ssize_t rdbSaveObject(rio *rdb, robj *o, robj *key, int dbid, unsigned char rdbt
         }
     } else if (objectGetType(o) == OBJ_HASH) {
         /* Save a hash value */
-        if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) {
+        if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK && rdbtype == RDB_TYPE_HASH_2) {
+            /* A listpack hash with field TTLs serialized for a target that
+             * understands HASH_2 but not RDB_TYPE_HASH_LISTPACK_2: write the
+             * field/value/expiry triplet format without converting the
+             * in-memory object. */
+            unsigned char *zl = objectGetVal(o);
+            unsigned char field_intbuf[LP_INTBUF_SIZE], value_intbuf[LP_INTBUF_SIZE];
+
+            if ((n = rdbSaveLen(rdb, hashTypeLength(o))) == -1) return -1;
+            nwritten += n;
+
+            unsigned char *p = lpFirst(zl);
+            while (p) {
+                int64_t flen, vlen;
+                unsigned char *field = lpGet(p, &flen, field_intbuf);
+                unsigned char *vptr = lpNext(zl, p);
+                serverAssert(vptr != NULL);
+                unsigned char *value = lpGet(vptr, &vlen, value_intbuf);
+                unsigned char *meta = lpGetMetadata(zl, vptr);
+                long long expiry = meta ? lpGetMetadataValue(meta) : EXPIRY_NONE;
+
+                if ((n = rdbSaveRawString(rdb, field, flen)) == -1) return -1;
+                nwritten += n;
+                if ((n = rdbSaveRawString(rdb, value, vlen)) == -1) return -1;
+                nwritten += n;
+                if ((n = rdbSaveMillisecondTime(rdb, expiry)) == -1) return -1;
+                nwritten += n;
+
+                p = lpNext(zl, vptr);
+            }
+        } else if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) {
             size_t l = lpBytes((unsigned char *)objectGetVal(o));
 
             if ((n = rdbSaveRawString(rdb, objectGetVal(o), l)) == -1) return -1;

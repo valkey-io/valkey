@@ -1872,12 +1872,15 @@ static int _listZiplistEntryConvertAndValidate(unsigned char *p, unsigned int he
 static int _lpEntryValidation(unsigned char *p, unsigned int head_count, void *userdata) {
     struct {
         int pairs;
+        int allow_metadata;
         long count;
         hashtable *fields;
     } *data = userdata;
 
-    /* Metadata entries are not real field/value records */
-    if (lpIsMetadata(p)) return 1;
+    /* Metadata (tagged) entries are only legal in hash listpacks. When allowed,
+     * skip them (they're not real field/value records); otherwise reject the
+     * listpack, since their presence in a set/zset payload indicates corruption. */
+    if (lpIsMetadata(p)) return data->allow_metadata ? 1 : 0;
 
     if (data->fields == NULL) {
         data->fields = hashtableCreate(&setHashtableType);
@@ -1906,14 +1909,18 @@ static int _lpEntryValidation(unsigned char *p, unsigned int head_count, void *u
 
 /* Validate the integrity of the listpack structure and check for duplicates.
  * when `pairs` is 0, all elements need to be unique (it's a set)
- * when `pairs` is 1, odd elements need to be unique (it's a key-value map) */
-int lpValidateIntegrityAndDups(unsigned char *lp, size_t size, int pairs) {
+ * when `pairs` is 1, odd elements need to be unique (it's a key-value map)
+ * `allow_metadata` must only be set for hash listpacks, which may carry tagged
+ * metadata (field expiration) entries; for sets/zsets it stays 0 so that such
+ * entries are treated as corruption. */
+int lpValidateIntegrityAndDups(unsigned char *lp, size_t size, int pairs, int allow_metadata) {
     /* Keep track of the field names to locate duplicate ones */
     struct {
         int pairs;
+        int allow_metadata;
         long count;
         hashtable *fields; /* Initialisation at the first callback. */
-    } data = {pairs, 0, NULL};
+    } data = {pairs, allow_metadata, 0, NULL};
 
     int ret = lpValidateIntegrity(lp, size, _lpEntryValidation, &data);
 
@@ -2469,7 +2476,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
             break;
         case RDB_TYPE_SET_LISTPACK:
             server.stat_dump_payload_sanitizations++;
-            if (!lpValidateIntegrityAndDups(encoded, encoded_len, 0)) {
+            if (!lpValidateIntegrityAndDups(encoded, encoded_len, 0, 0)) {
                 rdbReportCorruptRDB("Set listpack integrity check failed.");
                 zfree(encoded);
                 objectSetVal(o, NULL);
@@ -2515,7 +2522,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
         }
         case RDB_TYPE_ZSET_LISTPACK:
             server.stat_dump_payload_sanitizations++;
-            if (!lpValidateIntegrityAndDups(encoded, encoded_len, 1)) {
+            if (!lpValidateIntegrityAndDups(encoded, encoded_len, 1, 0)) {
                 rdbReportCorruptRDB("Zset listpack integrity check failed.");
                 zfree(encoded);
                 objectSetVal(o, NULL);
@@ -2559,7 +2566,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
         }
         case RDB_TYPE_HASH_LISTPACK:
             server.stat_dump_payload_sanitizations++;
-            if (!lpValidateIntegrityAndDups(encoded, encoded_len, 1)) {
+            if (!lpValidateIntegrityAndDups(encoded, encoded_len, 1, 1)) {
                 rdbReportCorruptRDB("Hash listpack integrity check failed.");
                 zfree(encoded);
                 objectSetVal(o, NULL);

@@ -2643,11 +2643,12 @@ size_t hashTypeDeleteExpiredFields(robj *o, mstime_t now, unsigned long max_fiel
         unsigned char *zl = objectGetVal(o);
         unsigned char *p = lpFirst(zl);
         size_t expired_count = 0;
+        unsigned char field_intbuf[LP_INTBUF_SIZE];
 
         while (p && expired_count < max_fields) {
             unsigned char *fptr = p;
             int64_t flen;
-            unsigned char *field = lpGet(fptr, &flen, NULL);
+            unsigned char *field = lpGet(fptr, &flen, field_intbuf);
             unsigned char *vptr = lpNext(zl, fptr);
             if (!vptr) break;
 

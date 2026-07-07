@@ -10,8 +10,7 @@
 #define CLUSTER_FAIL_UNDO_TIME_MULT 2        /* Undo fail if primary is back. */
 #define CLUSTER_MF_PAUSE_MULT 2              /* Primary pause manual failover mult. */
 #define CLUSTER_REPLICA_MIGRATION_DELAY 5000 /* Delay for replica migration. */
-#define CLUSTER_MEET_MAX_ATTEMPTS 5          /* Max MEET packets sent to a known node
-                                                that has no inbound link to us. */
+#define CLUSTER_MEET_MAX_ATTEMPTS 5          /* Max MEETs sent to a known node with no inbound link to us. */
 
 /* Reasons why a replica is not able to failover. */
 #define CLUSTER_CANT_FAILOVER_NONE 0

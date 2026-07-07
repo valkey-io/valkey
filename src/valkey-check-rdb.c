@@ -1023,4 +1023,3 @@ int redis_check_rdb_main(int argc, char **argv, FILE *fp) {
     freeRdbProfile(rdbstate.stats, rdbstate.stats_num);
     exit(retval);
 }
-

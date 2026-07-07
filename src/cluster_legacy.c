@@ -970,9 +970,20 @@ int clusterLoadConfig(char *filename) {
                 clusterNode *cn;
 
                 p = strchr(argv[j], '-');
-                serverAssert(p != NULL);
+                if (p == NULL) {
+                    sdsfreesplitres(argv, argc);
+                    goto fmterr;
+                }
                 *p = '\0';
                 direction = p[1]; /* Either '>' or '<' */
+                if (direction != '>' && direction != '<') {
+                    sdsfreesplitres(argv, argc);
+                    goto fmterr;
+                }
+                if (p[2] != '-') {
+                    sdsfreesplitres(argv, argc);
+                    goto fmterr;
+                }
                 slot = atoi(argv[j] + 1);
                 if (slot < 0 || slot >= CLUSTER_SLOTS) {
                     sdsfreesplitres(argv, argc);
@@ -981,8 +992,12 @@ int clusterLoadConfig(char *filename) {
                 p += 3;
 
                 char *pr = strchr(p, ']');
+                if (pr == NULL) {
+                    sdsfreesplitres(argv, argc);
+                    goto fmterr;
+                }
                 size_t node_len = pr - p;
-                if (pr == NULL || verifyClusterNodeId(p, node_len) == C_ERR) {
+                if (verifyClusterNodeId(p, node_len) == C_ERR) {
                     sdsfreesplitres(argv, argc);
                     goto fmterr;
                 }

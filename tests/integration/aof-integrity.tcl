@@ -250,7 +250,7 @@ tags {"aof-integrity external:skip"} {
             set ::ai6_path [get_last_incr_aof_path $rd]
         }
         
-        catch {exec ./src/valkey-check-aof $::am6_path} output
+        catch {exec $::VALKEY_CHECK_AOF_BIN $::am6_path} output
         assert_match {*All AOF files and manifest are valid*} $output
         
         # Corrupt the NEWEST increment file by appending a manual entry with a wrong checksum.
@@ -261,7 +261,7 @@ tags {"aof-integrity external:skip"} {
         puts -nonewline $fp "#HDR:v1;len:22;checksum:123456789;\r\n*3\r\n\$3\r\nSET\r\n\$1\r\nc\r\n\$1\r\n3\r\n"
         close $fp
         
-        catch {exec ./src/valkey-check-aof $::am6_path} output
+        catch {exec $::VALKEY_CHECK_AOF_BIN $::am6_path} output
         assert_match {*AOF checksum mismatch*} $output
         
         # Test case for missing header
@@ -279,7 +279,7 @@ tags {"aof-integrity external:skip"} {
         puts -nonewline $fp "*3\r\n\$3\r\nSET\r\n\$1\r\nb\r\n\$1\r\n2\r\n"
         close $fp
         
-        catch {exec ./src/valkey-check-aof $am_path} output
+        catch {exec $::VALKEY_CHECK_AOF_BIN $am_path} output
         assert_match {*lacks an integrity header*} $output
     }
 

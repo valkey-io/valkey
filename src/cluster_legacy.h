@@ -69,6 +69,11 @@ typedef struct clusterLink {
                                                                                    * myself will gossip this flag to other replica in the   \
                                                                                    * shard so that the replicas can make a better ranking   \
                                                                                    * decisions to help with the failover. */
+#define CLUSTER_NODE_HIGHEST CLUSTER_NODE_MY_PRIMARY_FAIL                         /* Highest flag, bump when adding a flag. */
+
+/* Ensure cluster node flags never silently grow beyond 16 bits.
+ * The flags in clusterMsgHeader and clusterMsgDataGossip are uint16_t. */
+static_assert(CLUSTER_NODE_HIGHEST <= UINT16_MAX, "cluster node flags must fit in 16 bits");
 
 #define CLUSTER_NODE_NULL_NAME                                                                                         \
     "\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000" \

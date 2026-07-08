@@ -2445,7 +2445,7 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster aofrw} overrides {
     }
 }
 
-start_cluster 3 0 {tags {logreqres:skip external:skip cluster} overrides {cluster-require-full-coverage no slot-migration-max-failover-repl-bytes 0}} {
+start_cluster 3 0 {tags {logreqres:skip external:skip cluster} overrides {cluster-require-full-coverage no slot-migration-max-failover-repl-bytes 0 repl-timeout 3600}} {
     test "Slot migration remaining_repl_size on the source node" {
         set 16383_slot_tag "{6ZJ}"
         set_debug_prevent_pause 1
@@ -2465,7 +2465,7 @@ start_cluster 3 0 {tags {logreqres:skip external:skip cluster} overrides {cluste
         pause_process [srv 0 pid]
         set bigstr [string repeat x 1024000]
         for {set j 0} {$j < 50} {incr j} {
-            R 2 set "$16383_slot_tag:key:" $bigstr
+            R 2 set "$16383_slot_tag:key" $bigstr
         }
 
         # Check R0 remaining repl size is OK.
@@ -2488,7 +2488,7 @@ start_cluster 3 0 {tags {logreqres:skip external:skip cluster} overrides {cluste
     }
 }
 
-start_cluster 3 0 {tags {logreqres:skip external:skip cluster} overrides {cluster-require-full-coverage no slot-migration-max-failover-repl-bytes -1}} {
+start_cluster 3 0 {tags {logreqres:skip external:skip cluster} overrides {cluster-require-full-coverage no slot-migration-max-failover-repl-bytes -1 repl-timeout 3600}} {
     test "slot-migration-max-failover-repl-bytes -1 disables repl bytes limit" {
         set 16383_slot_tag "{6ZJ}"
 
@@ -2506,7 +2506,7 @@ start_cluster 3 0 {tags {logreqres:skip external:skip cluster} overrides {cluste
         pause_process [srv 0 pid]
         set bigstr [string repeat x 1024000]
         for {set j 0} {$j < 50} {incr j} {
-            R 2 set "$16383_slot_tag:key:$j" $bigstr
+            R 2 set "$16383_slot_tag:key" $bigstr
         }
 
         # Confirm the replication buffer has accumulated data.
@@ -2518,9 +2518,14 @@ start_cluster 3 0 {tags {logreqres:skip external:skip cluster} overrides {cluste
         # With slot-migration-max-failover-repl-bytes -1, the source (R2) should proceed
         # to pause writes regardless of the large remaining_repl_size.
         R 2 DEBUG SLOTMIGRATION PREVENT-PAUSE 0
-        wait_for_log_messages -2 {"*Pausing writes*"} 0 1000 10
-        set pattern "*Pausing writes (remaining_repl_size is $remaining_repl_size) to allow slot migration*"
-        verify_log_message -2 $pattern 0
+        # The logged remaining_repl_size is racy: the migration cron appends
+        # SYNCSLOTS ACKs to the same job->client buffer and R0 is paused so it
+        # never drains. Assert a lower bound against the snapshot.
+        set log_line [lindex [wait_for_log_messages -2 {"*Pausing writes*"} 0 1000 10] 0]
+        if {![regexp {remaining_repl_size is (\d+)} $log_line _ actual_repl_size]} {
+            fail "could not parse remaining_repl_size from log line: $log_line"
+        }
+        assert_morethan_equal $actual_repl_size $remaining_repl_size
 
         # Resume R0 and wait for R0 to finish the migration.
         resume_process [srv 0 pid]

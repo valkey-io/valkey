@@ -115,11 +115,17 @@ void queueMultiCommand(client *c, uint64_t cmd_flags) {
     mc->slot = c->slot;
 
     if (mc->cmd->get_dbid_args && mc->cmd->proc == selectCommand) {
-        int count;
-        int *dbids = mc->cmd->get_dbid_args(mc->argv, mc->argc, &count);
-        if (dbids && count > 0) {
-            c->mstate->transaction_db_id = dbids[0];
-            zfree(dbids);
+        int count = 0;
+        int *positions = mc->cmd->get_dbid_args(mc->argv, mc->argc, &count);
+        if (positions) {
+            if (count > 0) {
+                long long dbid;
+                /* The helper has already validated argv[positions[i]] as a
+                 * valid in-range dbid, so this should never fail. */
+                serverAssert(getLongLongFromObject(mc->argv[positions[0]], &dbid) == C_OK);
+                c->mstate->transaction_db_id = (int)dbid;
+            }
+            zfree(positions);
         }
     }
 
@@ -375,11 +381,14 @@ void watchForKey(client *c, robj *key) {
     }
 
     /* This key is not already watched in this DB. Let's add it */
-    clients = dictFetchValue(c->db->watched_keys, key);
-    if (!clients) {
+    dictEntry *de = dictFind(c->db->watched_keys, key);
+    if (de == NULL) {
         clients = listCreate();
         dictAdd(c->db->watched_keys, key, clients);
         incrRefCount(key);
+    } else {
+        key = dictGetKey(de);
+        clients = dictGetVal(de);
     }
 
     /* Add the new key to the list of keys watched by this client */

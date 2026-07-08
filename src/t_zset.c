@@ -867,6 +867,25 @@ double zzlGetScore(unsigned char *sptr) {
     return score;
 }
 
+/* Validate that none of the scores in a listpack-encoded sorted set is NAN.
+ * The structural layout (member, score, member, score, ...) must already have
+ * been validated by lpValidateIntegrityAndDups. Returns 1 if all scores are
+ * valid, 0 if a NAN score is found. This guards against crafted RESTORE
+ * payloads: zslInsertNode() asserts the score is not NAN, so a NAN score in a
+ * listpack zset would crash the server when it is later converted to a
+ * skiplist. The skiplist RDB format rejects NAN scores at load time; this is
+ * the equivalent check for the listpack format. */
+int zzlValidateScores(unsigned char *zl) {
+    unsigned char *eptr = lpSeek(zl, 0), *sptr;
+    while (eptr != NULL) {
+        sptr = lpNext(zl, eptr);
+        if (sptr == NULL) return 0; /* odd number of elements */
+        if (isnan(zzlGetScore(sptr))) return 0;
+        eptr = lpNext(zl, sptr);
+    }
+    return 1;
+}
+
 /* Return a listpack element as an SDS string. */
 sds lpGetObject(unsigned char *sptr) {
     unsigned char *vstr;
@@ -1697,17 +1716,17 @@ robj *zsetDup(robj *o) {
     zset *zs;
     zset *new_zs;
 
-    serverAssert(o->type == OBJ_ZSET);
+    serverAssert(objectGetType(o) == OBJ_ZSET);
 
     /* Create a new sorted set object that have the same encoding as the original object's encoding */
-    if (o->encoding == OBJ_ENCODING_LISTPACK) {
+    if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) {
         unsigned char *zl = objectGetVal(o);
         size_t sz = lpBytes(zl);
         unsigned char *new_zl = zmalloc(sz);
         memcpy(new_zl, zl, sz);
         zobj = createObject(OBJ_ZSET, new_zl);
         zobj->encoding = OBJ_ENCODING_LISTPACK;
-    } else if (o->encoding == OBJ_ENCODING_SKIPLIST) {
+    } else if (objectGetEncoding(o) == OBJ_ENCODING_SKIPLIST) {
         zobj = createZsetObject();
         zs = objectGetVal(o);
         new_zs = objectGetVal(zobj);
@@ -3831,7 +3850,7 @@ void zscanCommand(client *c) {
 
     if (parseScanCursorOrReply(c, objectGetVal(c->argv[2]), &cursor) == C_ERR) return;
     if ((o = lookupKeyReadOrReply(c, c->argv[1], shared.emptyscan)) == NULL || checkType(c, o, OBJ_ZSET)) return;
-    scanGenericCommand(c, o, cursor, -1, NULL, NULL);
+    scanGenericCommand(c, o, cursor);
 }
 
 void addZpopInitialReply(client *c, int emitkey, int use_nested_array, long rangelen, robj *key) {

@@ -135,13 +135,14 @@ void zmalloc_set_oom_handler(void (*oom_handler)(size_t));
 size_t zmalloc_get_rss(void);
 int zmalloc_get_allocator_info(size_t *allocated, size_t *active, size_t *resident, size_t *retained, size_t *muzzy);
 void set_jemalloc_bg_thread(int enable);
-int jemalloc_purge(void);
+int zmalloc_purge(void);
 size_t zmalloc_get_private_dirty(long pid);
 size_t zmalloc_get_smap_bytes_by_field(char *field, long pid);
 size_t zmalloc_get_memory_size(void);
 void zlibc_free(void *ptr);
 void zlibc_trim(void);
 void zmadvise_dontneed(void *ptr, size_t size_hint);
+void zmadvise_dontneed_range(void *ptr, size_t size);
 
 #ifndef HAVE_MALLOC_SIZE
 size_t zmalloc_size(void *ptr);

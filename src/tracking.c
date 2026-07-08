@@ -143,7 +143,7 @@ int checkPrefixCollisionsOrReply(client *c, robj **prefixes, size_t numprefix) {
                                     "Prefix '%s' overlaps with another provided prefix '%s'. "
                                     "Prefixes for a single client must not overlap.",
                                     (unsigned char *)objectGetVal(prefixes[i]), (unsigned char *)objectGetVal(prefixes[j]));
-                return i;
+                return 0;
             }
         }
     }
@@ -229,7 +229,7 @@ void trackingRememberKeys(client *tracking, client *executing) {
 
     getKeysResult result;
     initGetKeysResult(&result);
-    int numkeys = getKeysFromCommand(executing->cmd, executing->argv, executing->argc, &result);
+    int numkeys = getKeysFromCommandWithSpecs(executing->cmd, executing->argv, executing->argc, GET_KEYSPEC_DEFAULT, &result);
     if (!numkeys) {
         getKeysFreeResult(&result);
         return;

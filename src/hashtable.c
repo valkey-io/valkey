@@ -1,7 +1,7 @@
 /*
  * Copyright Valkey Contributors.
  * All rights reserved.
- * SPDX-License-Identifier: BSD 3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause
  */
 
 /* Hashtable
@@ -565,6 +565,31 @@ static void rehashEntry(hashtable *ht, void *entry, uint64_t hash, uint8_t h2) {
     ht->used[1]++;
 }
 
+/* Release memory pages of rehashed buckets back to the OS incrementally.
+ * This function is called after each bucket is rehashed. When an entire range
+ * worth of buckets has been processed, it advises the OS that the pages
+ * are no longer needed (MADV_DONTNEED). This spreads the memory release over
+ * the entire rehashing process, avoiding a latency spike that would occur if
+ * we released all the old table's memory at once when rehashing completes. */
+static void dismissRehashedBucketsIfNeeded(hashtable *ht) {
+    static size_t page_size = 0;
+    if (page_size == 0) page_size = sysconf(_SC_PAGESIZE);
+
+    size_t buckets_per_page = page_size / sizeof(bucket);
+    const size_t pages_per_dismiss = 16;
+    size_t buckets_per_dismiss = buckets_per_page * pages_per_dismiss;
+    if (ht->rehash_idx % buckets_per_dismiss != 0) {
+        return;
+    }
+
+    bucket *ptr = ht->tables[0] + ht->rehash_idx - buckets_per_dismiss;
+    ptr = (bucket *)((size_t)ptr & ~(page_size - 1));
+    if (ptr < ht->tables[0]) {
+        return;
+    }
+    zmadvise_dontneed_range(ptr, pages_per_dismiss * page_size);
+}
+
 /* After migrating entries in a bucket chain from the old table
  * to the new one, this function should be called immediately to
  * handle the cleanup of old buckets, such as clearing presence bits. */
@@ -587,6 +612,9 @@ static void rehashStepFinalize(hashtable *ht) {
 
     /* Advance to the next bucket. */
     ht->rehash_idx++;
+
+    /* Release page back to OS incrementally. */
+    dismissRehashedBucketsIfNeeded(ht);
 
     /* Check if we already rehashed the whole table. */
     if (ht->used[0] == 0 && ht->child_buckets[0] == 0) {
@@ -1062,6 +1090,7 @@ static bucket *findBucketForInsert(hashtable *ht, uint64_t hash, int *pos_in_buc
 /* Helper to insert an entry. Doesn't check if an entry with a matching key
  * already exists. This must be ensured by the caller. */
 static void insert(hashtable *ht, uint64_t hash, void *entry) {
+    assert(ht->safe_iterators == NULL);
     hashtableExpandIfNeeded(ht);
     rehashStepOnWriteIfNeeded(ht);
     int pos_in_bucket;
@@ -1984,6 +2013,22 @@ bool hashtableIncrementalFindGetResult(hashtableIncrementalFindState *state, voi
  * - An entry that is inserted or deleted during a full scan may or may not be
  *   returned during the scan.
  *
+ * Additional guarantees when shrinking is blocked for the duration of the scan
+ * (e.g. by calling hashtablePauseAutoShrink before starting and
+ * hashtableResumeAutoShrink after finishing):
+ *
+ * - An entry will never be returned more than once.
+ *
+ * - An entry that exists throughout the entire scan is guaranteed to be
+ *   returned.
+ *
+ * - An entry that is created, destroyed, or re-created during the scan may or
+ *   may not be returned, but will never be returned more than once.
+ *
+ * Expansion and rehashing may occur freely without breaking these guarantees.
+ * Only a shrink is problematic: it introduces a smaller table whose bucket
+ * boundaries don't align with the existing cursor position.
+ *
  * Scan callback rules:
  *
  * - The scan callback may delete the entry that was passed to it.
@@ -1995,6 +2040,27 @@ bool hashtableIncrementalFindGetResult(hashtableIncrementalFindState *state, voi
  */
 size_t hashtableScan(hashtable *ht, size_t cursor, hashtableScanFunction fn, void *privdata) {
     return hashtableScanDefrag(ht, cursor, fn, privdata, NULL, 0);
+}
+
+/* Given a scan cursor, determines whether a key's hashtable position has
+ * already been visited by the scan. Returns true if the position has been
+ * passed (i.e. the key would have been emitted already), false if not yet
+ * visited.
+ *
+ * The result is exact when shrinking is blocked (see scan guarantees above).
+ * If a shrink has been initiated since the cursor was obtained, the result is
+ * best-effort and not guaranteed to be correct.
+ *
+ * A cursor of 0 means the scan has not started, so no keys have been passed. */
+bool hashtableScanHasPassedKey(hashtable *ht, const void *key, size_t cursor) {
+    if (cursor == 0) return false;
+    size_t mask = expToMask(ht->bucket_exp[0]);
+    uint64_t hash = hashKey(ht, key);
+    size_t bucket_idx = hash & mask;
+    size_t cursor_idx = cursor & mask;
+    /* In reverse-bit-increment order, a bucket has been visited if its
+     * reversed index is less than the reversed cursor index. */
+    return rev(bucket_idx) < rev(cursor_idx);
 }
 
 /* Like hashtableScan, but additionally reallocates the memory used by the dict
@@ -2156,13 +2222,14 @@ size_t hashtableScanDefrag(hashtable *ht, size_t cursor, hashtableScanFunction f
  * is returned exactly once.
  *
  * For a safe iterator (when HASHTABLE_ITER_SAFE is set):
- * It is allowed to modify the hash table while iterating. It pauses incremental
- * rehashing to prevent entries from moving around. It's allowed to insert and
- * replace entries. Deleting entries is only allowed for the entry that was just
- * returned by hashtableNext. Deleting other entries is possible, but doing so
- * can cause internal fragmentation, so don't. The hash table itself can be
- * safely deleted while safe iterators exist - they will be invalidated and
- * subsequent calls to hashtableNext will return false.
+ * It is allowed to delete and replace entries while iterating. It pauses
+ * incremental rehashing to prevent entries from moving around. Inserting new
+ * entries during safe iteration is NOT supported.
+ * Deleting entries is only allowed for the entry that was just returned by
+ * hashtableNext. Deleting other entries is possible, but doing so can cause
+ * internal fragmentation, so don't. The hash table itself can be safely deleted
+ * while safe iterators exist - they will be invalidated and subsequent calls to
+ * hashtableNext will return false.
  *
  * Guarantees for safe iterators:
  *
@@ -2174,9 +2241,6 @@ size_t hashtableScanDefrag(hashtable *ht, size_t cursor, hashtableScanFunction f
  *
  * - Entries that are replaced before they've been returned by the iterator will
  *   be returned.
- *
- * - Entries that are inserted during the iteration may or may not be returned
- *   by the iterator.
  *
  * Call hashtableNext to fetch each entry. You must call hashtableCleanupIterator
  * when you are done with the iterator.

@@ -126,7 +126,7 @@ proc cluster_size_consistent {cluster_size} {
 
 # Wait for cluster configuration to propagate and be consistent across nodes.
 proc wait_for_cluster_propagation {} {
-    wait_for_condition 1000 50 {
+    wait_for_condition 1200 50 {
         [cluster_config_consistent] eq 1
     } else {
         for {set j 0} {$j < [llength $::servers]} {incr j} {
@@ -210,7 +210,7 @@ proc cluster_allocate_replicas {masters replicas} {
 
 # Setup method to be executed to configure the cluster before the
 # tests run.
-proc cluster_setup {masters replicas node_count slot_allocator replica_allocator code options} {
+proc cluster_setup {masters replicas node_count slot_allocator replica_allocator options} {
     # Make it easier to understand how a particular server interacts
     # with other nodes when reading the server logs by assigning human
     # nodenames R0, R1, R2 etc.
@@ -261,8 +261,6 @@ proc cluster_setup {masters replicas node_count slot_allocator replica_allocator
 
     wait_for_cluster_propagation
     wait_for_cluster_state "ok"
-
-    uplevel 1 $code
 }
 
 # Start a cluster with the given number of masters and replicas. Replicas
@@ -271,7 +269,9 @@ proc start_cluster {masters replicas options code {slot_allocator continuous_slo
     set node_count [expr $masters + $replicas]
 
     # Set the final code to be the tests + cluster setup
-    set code [list cluster_setup $masters $replicas $node_count $slot_allocator $replica_allocator $code $options]
+    set setup_code [list cluster_setup $masters $replicas $node_count $slot_allocator $replica_allocator $options]
+    set teardown_code {}
+    set code [list test_fixture "start_cluster" $setup_code $teardown_code $code]
 
     # Configure the starting of multiple servers. Set cluster node timeout
     # aggressively since many tests depend on ping/pong messages.

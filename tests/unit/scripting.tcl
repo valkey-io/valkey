@@ -1025,6 +1025,33 @@ start_server {tags {"scripting"}} {
         assert_error "ERR Wrong number of args calling command from script*" {run_script "redis.call('incr')" 0}
     }
 
+    test {Lua-emitted errors carry the ERR prefix (issue #3663)} {
+        # All errors raised from the Lua engine should be tagged with an
+        # error code so clients that switch on `-ERR ...` keep working.
+        # redis.call() bubbles the error up as the reply; pcall variants
+        # surface it as an err-table string starting with the error code.
+        assert_error "ERR Please specify at least one argument*" {
+            run_script "return redis.call()" 0
+        }
+        assert_match "ERR RESP version must be 2 or 3.*" \
+            [run_script "local ok, err = pcall(redis.setresp, 4); return err" 0]
+        assert_match "ERR *server.log() requires two arguments or more.*" \
+            [run_script "local ok, err = pcall(redis.log, 1); return err" 0]
+        assert_match "ERR Invalid log level.*" \
+            [run_script "local ok, err = pcall(redis.log, 10, 'msg'); return err" 0]
+        assert_match "ERR *server.set_repl() requires one argument.*" \
+            [run_script "local ok, err = pcall(redis.set_repl); return err" 0]
+
+        # Errors that already carry their own code (e.g. WRONGTYPE) must not
+        # be wrapped with a second "ERR " prefix. Set a string and call a
+        # hash command on it through Lua; the error should keep its code.
+        r set scriptkey:wt "string"
+        assert_error "WRONGTYPE *" {
+            run_script "return redis.call('HGET','scriptkey:wt','f')" 1 scriptkey:wt
+        }
+        r del scriptkey:wt
+    }
+
     test {Correct handling of reused argv (issue #1939)} {
         run_script {
               for i = 0, 10 do

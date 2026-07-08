@@ -161,7 +161,7 @@ void streamNextID(streamID *last_id, streamID *new_id) {
 robj *streamDup(robj *o) {
     robj *sobj;
 
-    serverAssert(o->type == OBJ_STREAM);
+    serverAssert(objectGetType(o) == OBJ_STREAM);
 
     switch (o->encoding) {
     case OBJ_ENCODING_STREAM: sobj = createStreamObject(); break;
@@ -3929,16 +3929,12 @@ void xinfoCommand(client *c) {
 /* Validate the integrity stream listpack entries structure. Both in term of a
  * valid listpack, but also that the structure of the entries matches a valid
  * stream. return 1 if valid 0 if not valid. */
-int streamValidateListpackIntegrity(unsigned char *lp, size_t size, int deep) {
+int streamValidateListpackIntegrity(unsigned char *lp, size_t size) {
     int valid_record;
     unsigned char *p, *next;
 
-    /* Since we don't want to run validation of all records twice, we'll
-     * run the listpack validation of just the header and do the rest here. */
-    if (!lpValidateIntegrity(lp, size, 0, NULL, NULL)) return 0;
-
-    /* In non-deep mode we just validated the listpack header (encoded size) */
-    if (!deep) return 1;
+    /* Validate the listpack structure (header + all entries). */
+    if (!lpValidateIntegrity(lp, size, NULL, NULL)) return 0;
 
     next = p = lpValidateFirst(lp);
     if (!lpValidateNext(lp, &next, size)) return 0;

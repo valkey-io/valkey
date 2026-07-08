@@ -425,6 +425,10 @@ void setConfigurableHashSeed(uint8_t *seed) {
     memcpy(configurable_hash_seed, seed, sizeof(configurable_hash_seed));
 }
 
+uint8_t *getConfigurableHashSeed(void) {
+    return configurable_hash_seed;
+}
+
 uint64_t genHashFunctionConfigurableSeed(const char *buf, size_t len) {
     return siphash((const uint8_t *)buf, len, configurable_hash_seed);
 }
@@ -490,7 +494,7 @@ uint64_t dictEncObjHash(const void *key) {
 
     if (sdsEncodedObject(o)) {
         return dictGenHashFunction(objectGetVal(o), sdslen((sds)objectGetVal(o)));
-    } else if (o->encoding == OBJ_ENCODING_INT) {
+    } else if (objectGetEncoding(o) == OBJ_ENCODING_INT) {
         char buf[32];
         int len;
 
@@ -1566,6 +1570,11 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
 
     cronUpdateMemoryStats();
 
+    /* Refresh the cached daylight-saving info periodically every 1 second.
+     * This is only used to render log timestamps, so it doesn't need to be
+     * updated on every event-loop wakeup. */
+    run_with_period(1000) updateCachedTime(1);
+
     /* We received a SIGTERM or SIGINT, shutting down here in a safe way, as it is
      * not ok doing so inside the signal handler. */
     if (server.shutdown_asap && !isShutdownInitiated()) {
@@ -1796,6 +1805,9 @@ void whileBlockedCron(void) {
     latencyStartMonitor(latency);
 
     defragWhileBlocked();
+
+    /* serverCron() doesn't run while blocked, so refresh the cached daylight-saving info here. */
+    updateCachedTime(1);
 
     /* Update memory stats during loading (excluding blocked scripts) */
     if (server.loading) cronUpdateMemoryStats();
@@ -2067,8 +2079,9 @@ void afterSleep(struct aeEventLoop *eventLoop, int numevents) {
         server.el_cmd_cnt_start = server.stat_numcommands;
     }
 
-    /* Update the time cache. */
-    updateCachedTime(1);
+    /* Update the time cache. Skip the (relatively expensive) daylight-saving
+     * refresh here since afterSleep() runs on every event-loop wakeup. */
+    updateCachedTime(0);
 
     /* Update command time snapshot in case it'll be required without a command
      * e.g. somehow used by module timers. Don't update it while yielding to a
@@ -2911,6 +2924,9 @@ serverDb *createDatabaseIfNeeded(int id) {
 void initServer(void) {
     signal(SIGHUP, SIG_IGN);
     signal(SIGPIPE, SIG_IGN);
+#ifdef USE_LIBBACKTRACE
+    initLibbacktraceFrameState();
+#endif
     setupSignalHandlers();
     ThreadsManager_init();
     makeThreadKillable();
@@ -2963,6 +2979,7 @@ void initServer(void) {
     server.reply_buffer_resizing_enabled = 1;
     server.client_mem_usage_buckets = NULL;
     server.debug_client_enforce_reply_list = 0;
+    server.debug_force_free_primary_async = 0;
     resetReplicationBuffer();
 
     /* Make sure the locale is set on startup based on the config file. */
@@ -4434,8 +4451,8 @@ int processCommand(client *c) {
      * However we don't perform the redirection if:
      * 1) The sender of this command is our primary.
      * 2) The command has no key arguments. */
-    if (server.cluster_enabled && !obey_client &&
-        !(!(c->cmd->flags & CMD_MOVABLE_KEYS) && c->cmd->key_specs_num == 0 && c->cmd->proc != execCommand)) {
+    int is_keyless = (c->read_flags & READ_FLAGS_NO_KEYS) && c->cmd->proc != execCommand;
+    if (server.cluster_enabled && !obey_client && !is_keyless) {
         int error_code;
         clusterNode *n = getNodeByQuery(c, &error_code);
         if (n == NULL || !clusterNodeIsMyself(n)) {
@@ -4448,6 +4465,32 @@ int processCommand(client *c) {
             c->duration = 0;
             c->cmd->rejected_calls++;
             moduleFireCommandRejectedEvent(c, NULL);
+            return C_OK;
+        }
+    }
+
+    /* If the client has the redirect capability, redirect keyless
+     * commands to the primary when this is a replica and the client
+     * has not opted into replica reads with READONLY. EXEC with all-keyless
+     * queued commands is also considered keyless (c->slot remains -1 as set
+     * by prepareCommand when no keys are found). */
+    int is_keyless_exec = is_exec && c->slot == -1;
+    if (server.cluster_enabled && !obey_client && (is_keyless || is_keyless_exec) && (is_read_command || is_write_command) &&
+        (c->capa & CLIENT_CAPA_REDIRECT) && !c->flag.readonly) {
+        clusterNode *myself = getMyClusterNode();
+        if (clusterNodeIsReplica(myself)) {
+            clusterNode *primary = clusterNodeGetPrimary(myself);
+            if (is_keyless_exec) {
+                discardTransaction(c);
+            } else {
+                flagTransaction(c);
+            }
+            int port = clusterNodeClientPort(primary, connIsTLS(c->conn), c);
+            addReplyErrorSds(c, sdscatprintf(sdsempty(), "-REDIRECT %s:%d",
+                                             clusterNodePreferredEndpoint(primary, c), port));
+            c->duration = 0;
+            c->cmd->rejected_calls++;
+            moduleFireCommandRejectedEvent(c, "-REDIRECT");
             return C_OK;
         }
     }
@@ -5350,7 +5393,10 @@ void addReplyCommandSubCommands(client *c,
                                 void (*reply_function)(client *, struct serverCommand *),
                                 int use_map) {
     if (!cmd->subcommands_ht) {
-        addReplySetLen(c, 0);
+        if (use_map)
+            addReplyMapLen(c, 0);
+        else
+            addReplyArrayLen(c, 0);
         return;
     }
 
@@ -6160,7 +6206,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "hz:%i\r\n", server.hz,
                 "configured_hz:%i\r\n", server.hz,
                 "clients_hz:%i\r\n", server.clients_hz,
-                "lru_clock:%u\r\n", server.unixtime & ((1 << LRULFU_BITS) - 1),
+                "lru_clock:%u\r\n", (unsigned int)(server.unixtime & ((1 << LRULFU_BITS) - 1)),
                 "executable:%s\r\n", server.executable ? server.executable : "",
                 "config_file:%s\r\n", server.configfile ? server.configfile : "",
                 "io_threads_active:%i\r\n", server.active_io_threads_num > 1,
@@ -6555,8 +6601,8 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                     "replicas_repl_buffer_peak:%zu\r\n", server.pending_repl_data.peak));
 
             if (server.repl_state == REPL_STATE_TRANSFER) {
-                int repl_transfer_size_stat;
-                int repl_transfer_read_stat;
+                off_t repl_transfer_size_stat;
+                off_t repl_transfer_read_stat;
                 if (atomic_load_explicit(&server.replica_bio_disk_save_state, memory_order_acquire) != REPL_BIO_DISK_SAVE_STATE_NONE) {
                     repl_transfer_size_stat = server.bio_repl_transfer_size;
                     repl_transfer_read_stat = server.bio_repl_transfer_read;
@@ -7654,7 +7700,7 @@ __attribute__((weak)) int main(int argc, char **argv) {
      * hashes) or use the random seed if not configured. */
     if (server.hash_seed) {
         uint8_t seed[16] = {0};
-        getHashSeedFromString(seed, sizeof(seed), server.hash_seed);
+        getHashSeedFromString(seed, sizeof(seed), server.hash_seed, sdslen(server.hash_seed));
         setConfigurableHashSeed(seed);
     } else {
         setConfigurableHashSeed(hashtableGetHashFunctionSeed());

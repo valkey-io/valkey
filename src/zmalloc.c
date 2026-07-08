@@ -569,6 +569,22 @@ void zmadvise_dontneed(void *ptr, size_t size_hint) {
 #endif
 }
 
+/* Release pages back to the OS using MADV_DONTNEED for a specific address range.
+ * Unlike zmadvise_dontneed(), this function does not query the allocator for
+ * the allocation size, and does not perform any pointer alignment. The caller
+ * must ensure that 'ptr' is page-aligned and 'size' is a multiple of page size.
+ * This is useful when we want to release a portion of a larger allocation that
+ * is no longer needed. */
+void zmadvise_dontneed_range(void *ptr, size_t size) {
+#if defined(USE_JEMALLOC) && defined(__linux__)
+    if (ptr == NULL || size == 0) return;
+    madvise(ptr, size, MADV_DONTNEED);
+#else
+    (void)(ptr);
+    (void)(size);
+#endif
+}
+
 /* Get the RSS information in an OS-specific way.
  *
  * WARNING: the function zmalloc_get_rss() is not designed to be fast
@@ -800,18 +816,6 @@ void set_jemalloc_bg_thread(int enable) {
     je_mallctl("background_thread", NULL, 0, &val, 1);
 }
 
-int jemalloc_purge(void) {
-    /* return all unused (reserved) pages to the OS */
-    char tmp[32];
-    unsigned narenas = 0;
-    size_t sz = sizeof(unsigned);
-    if (!je_mallctl("arenas.narenas", &narenas, &sz, NULL, 0)) {
-        snprintf(tmp, sizeof(tmp), "arena.%d.purge", narenas);
-        if (!je_mallctl(tmp, NULL, 0, NULL, 0)) return 0;
-    }
-    return -1;
-}
-
 #else
 
 int zmalloc_get_allocator_info(size_t *allocated, size_t *active, size_t *resident, size_t *retained, size_t *muzzy) {
@@ -825,13 +829,29 @@ void set_jemalloc_bg_thread(int enable) {
     ((void)(enable));
 }
 
-int jemalloc_purge(void) {
-    return 0;
-}
-
 #endif
 
-/* This function provides us access to the libc malloc_trim(). */
+int zmalloc_purge(void) {
+    int ret = 0;
+#if defined(USE_JEMALLOC)
+    /* Return all unused (reserved) jemalloc pages to the OS. */
+    char tmp[32];
+    unsigned narenas = 0;
+    size_t sz = sizeof(unsigned);
+    ret = -1;
+    if (!je_mallctl("arenas.narenas", &narenas, &sz, NULL, 0)) {
+        snprintf(tmp, sizeof(tmp), "arena.%d.purge", narenas);
+        if (!je_mallctl(tmp, NULL, 0, NULL, 0)) ret = 0;
+    }
+#endif
+    zlibc_trim();
+    return ret;
+}
+
+/* Release free pages of the libc main arena back to the OS via malloc_trim(3).
+ * Even with jemalloc, libc-internal allocations (getaddrinfo(3), NSS, pthread,
+ * stdio, or modules calling malloc() directly) live in the [heap] segment and
+ * are otherwise rarely returned to the OS. */
 void zlibc_trim(void) {
 #if defined(__GLIBC__) && !defined(USE_LIBC)
     malloc_trim(0);

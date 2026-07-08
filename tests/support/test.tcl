@@ -317,3 +317,50 @@ proc test {name code {okpattern undefined} {tags {}}} {
     set ::singledb $old_singledb
     set ::cur_test $prev_test
 }
+
+# Similar to 'test', but used for running setup and teardown blocks in fixtures.
+# Returns 1 on success and 0 if an assertion was caught within the code.
+proc test_block {name code} {
+    if {$::verbose > 1} {
+        puts "starting $name"
+    }
+    incr ::num_tests
+    set details {}
+    lappend details "$name in $::curfile"
+    send_data_packet $::test_server_fd testing $name
+    set test_start_time [clock milliseconds]
+    if {[catch {set retval [uplevel 1 $code]} error]} {
+        # Catch asserts and wait_for_condition.
+        if {[string match "assertion:*" $error]} {
+            set msg [string range $error 10 end]
+            lappend details $msg
+            lappend ::tests_failed $details
+            incr ::num_failed
+            send_data_packet $::test_server_fd err [join $details "\n"]
+            return 0
+        } else {
+            # Re-raise, let handler up the stack take care of this.
+            error $error $::errorInfo
+        }
+    } else {
+        # Succeeded
+        incr ::num_passed
+        set elapsed [expr {[clock milliseconds] - $test_start_time}]
+        send_data_packet $::test_server_fd ok $name $elapsed
+        return 1
+    }
+}
+
+proc test_fixture {name setup teardown code} {
+    if {$setup ne {}} {
+        set setup_ok [test_block "Setup $name" $setup]
+    } else {
+        set setup_ok 1
+    }
+    if {$setup_ok} {
+        uplevel 1 $code
+    }
+    if {$teardown ne {}} {
+        test_block "Teardown $name" $teardown
+    }
+}

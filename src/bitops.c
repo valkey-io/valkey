@@ -1304,6 +1304,11 @@ void bitfieldGeneric(client *c, int flags) {
             zfree(ops);
             return;
         }
+        /* Creating or growing the key is itself a modification, so count it once
+         * here. Otherwise a command whose ops all OVERFLOW FAIL would leave
+         * changes == 0 and the create/resize would never be propagated to
+         * replicas or the AOF, diverging the primary from its replicas. */
+        changes = dirty;
     }
 
     initDeferredReplyBuffer(c);
@@ -1345,7 +1350,7 @@ void bitfieldGeneric(client *c, int flags) {
                     addReplyLongLong(c, retval);
                     setSignedBitfield(objectGetVal(o), thisop->offset, thisop->bits, newval);
 
-                    if (dirty || (oldval != newval)) changes++;
+                    if (oldval != newval) changes++;
                 } else {
                     addReplyNull(c);
                 }
@@ -1375,7 +1380,7 @@ void bitfieldGeneric(client *c, int flags) {
                     addReplyLongLong(c, retval);
                     setUnsignedBitfield(objectGetVal(o), thisop->offset, thisop->bits, newval);
 
-                    if (dirty || (oldval != newval)) changes++;
+                    if (oldval != newval) changes++;
                 } else {
                     addReplyNull(c);
                 }

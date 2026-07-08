@@ -143,6 +143,8 @@ static void commandlogGetReply(client *c, int type, long count) {
     }
 }
 
+static void commandlogEnqueueDeferred(client *c, robj **argv, int argc, size_t plain_bytes);
+
 /* Log the last command a client executed into the commandlog. */
 void commandlogPushCurrentCommand(client *c, struct serverCommand *cmd) {
     /* Some commands may contain sensitive data that should not be available in the commandlog.
@@ -169,80 +171,96 @@ void commandlogPushCurrentCommand(client *c, struct serverCommand *cmd) {
     commandlogPushEntryIfNeeded(c, argv, argc, duration, COMMANDLOG_TYPE_SLOW);
     commandlogPushEntryIfNeeded(c, argv, argc, net_input_bytes_curr_cmd, COMMANDLOG_TYPE_LARGE_REQUEST);
 
-    /* Deferred large-reply check for copy-avoidance replies.
+    /* Large-reply check.
      *
-     * Problem: with copy avoidance, the reply buffer holds a reference to the
-     * value object (BULK_STR_REF) rather than a copy. The IO thread resolves
-     * the actual byte count when writing to the socket (trackBufReferences).
-     * At this point in command processing, argv is available but reply size is
-     * not. By the time postWriteToClient fires (reply size known), argv has
-     * been freed by resetClient/freeClientArgv.
+     * With copy avoidance the reply buffer holds a reference to the value object
+     * (BULK_STR_REF) instead of a copy, so the exact reply size is only known
+     * once the IO thread writes it (trackBufReferences). At this point argv is
+     * available but the size is not; by the time the reply is flushed, argv has
+     * been freed. To avoid dereferencing the value's sds header on the main
+     * thread (a guaranteed cache miss — the original regression), we stash argv
+     * refs into a per-command FIFO and defer the threshold check until the reply
+     * bytes have been attributed at buffer-release time.
      *
-     * Solution: stash argv refs for the FIRST command in a pipeline batch and
-     * defer its check to postWriteToClient. For subsequent pipelined commands,
-     * fall back to immediate sdslen (which is cheap — values are cache-hot from
-     * sequential processing). This avoids the cold cache miss that only affects
-     * the first GET in isolation, while preserving per-command commandlog entries
-     * for pipelined workloads.
-     *
-     * For large-argc commands (MGET, etc.), skip the deferred path entirely.
-     *
-     * Cost: 2 refcount increments + 2 pointer stores for the first command only
-     * (zero allocation, inline array). */
-    if (c->flag.buf_encoded && server.commandlog[COMMANDLOG_TYPE_LARGE_REPLY].threshold >= 0 &&
-        argc <= CMDLOG_INLINE_ARGV_MAX) {
-        if (c->cmdlog_argc > 0) {
-            /* Pipelining: a previous command's stash hasn't been consumed yet.
-             * Log it now with whatever bytes have been tracked so far (may be 0
-             * if the IO thread hasn't run yet — accepted as under-report for the
-             * first command). Then do the immediate check for this command since
-             * addReplyBulk computed net_output_bytes_curr_cmd for it (values are
-             * cache-hot from sequential pipeline processing). */
-            size_t io_bytes = atomic_load_explicit(&c->io_reply_len_cmdlog, memory_order_relaxed);
-            commandlogPushEntryIfNeeded(c, c->cmdlog_argv, c->cmdlog_argc,
-                                        (long long)io_bytes, COMMANDLOG_TYPE_LARGE_REPLY);
-            for (int j = 0; j < c->cmdlog_argc; j++)
-                decrRefCount(c->cmdlog_argv[j]);
-            c->cmdlog_argc = 0;
-            /* Check this command immediately — net_output_bytes_curr_cmd was
-             * populated by addReplyBulk since it detected pipelining (cmdlog_argc > 0). */
-            commandlogPushEntryIfNeeded(c, argv, argc, net_output_bytes_curr_cmd, COMMANDLOG_TYPE_LARGE_REPLY);
-        } else {
-            /* First (or only) command — stash argv for deferred check. */
-            c->cmdlog_argv = c->cmdlog_argv_inline;
-            for (int j = 0; j < argc; j++) {
-                c->cmdlog_argv[j] = argv[j];
-                incrRefCount(argv[j]);
-            }
-            c->cmdlog_argc = argc;
-        }
+     * Non-copy-avoidance replies already have their size tracked synchronously
+     * in net_output_bytes_curr_cmd, so they are checked immediately as before. */
+    if (c->flag.buf_encoded && server.commandlog[COMMANDLOG_TYPE_LARGE_REPLY].threshold >= 0) {
+        commandlogEnqueueDeferred(c, argv, argc, net_output_bytes_curr_cmd);
     } else {
-        /* For commands with argc > CMDLOG_INLINE_ARGV_MAX (e.g., MGET with many keys),
-         * we skip the deferred stash to avoid per-command zmalloc overhead. Use the
-         * immediately-known net_output_bytes_curr_cmd for the check. For copy-avoidance
-         * replies this may undercount (BULK_STR_REF bytes tracked by IO thread aren't
-         * included yet), but multi-key commands with all values exceeding the large-reply
-         * threshold are rare in practice, and the values are cache-hot anyway. */
         commandlogPushEntryIfNeeded(c, argv, argc, net_output_bytes_curr_cmd, COMMANDLOG_TYPE_LARGE_REPLY);
     }
 }
 
-/* Check deferred large-reply commandlog entry after IO thread has written the
- * copy-avoidance reply. Called from postWriteToClient() on the main thread once
- * all pending replies are flushed. Uses the stashed argv refs from
- * commandlogPushCurrentCommand() for full command attribution. */
-void commandlogCheckDeferredLargeReply(client *c) {
-    if (c->cmdlog_argc == 0) return;
+/* Stash a copy-avoidance command's argv (and the plain-reply bytes already
+ * counted on the main thread) into the per-client deferred FIFO. The exact
+ * reply size is filled in later at buffer-release time. The FIFO is lazily
+ * allocated and grown geometrically, then reused for the client's lifetime. */
+static void commandlogEnqueueDeferred(client *c, robj **argv, int argc, size_t plain_bytes) {
+    if (c->cmdlog_deferred_len == c->cmdlog_deferred_cap) {
+        int newcap = c->cmdlog_deferred_cap ? c->cmdlog_deferred_cap * 2 : 8;
+        c->cmdlog_deferred = zrealloc(c->cmdlog_deferred, (size_t)newcap * sizeof(cmdlogDeferredReply));
+        c->cmdlog_deferred_cap = newcap;
+    }
 
-    size_t io_bytes = atomic_load_explicit(&c->io_reply_len_cmdlog, memory_order_relaxed);
-    commandlogPushEntryIfNeeded(c, c->cmdlog_argv, c->cmdlog_argc,
-                                (long long)io_bytes, COMMANDLOG_TYPE_LARGE_REPLY);
-    for (int j = 0; j < c->cmdlog_argc; j++)
-        decrRefCount(c->cmdlog_argv[j]);
-    c->cmdlog_argv = NULL;
-    c->cmdlog_argc = 0;
+    cmdlogDeferredReply *e = &c->cmdlog_deferred[c->cmdlog_deferred_len++];
+    if (argc <= CMDLOG_INLINE_ARGV_MAX) {
+        e->argv = e->argv_inline;
+    } else {
+        e->argv = zmalloc((size_t)argc * sizeof(robj *));
+    }
+    for (int j = 0; j < argc; j++) {
+        e->argv[j] = argv[j];
+        incrRefCount(argv[j]);
+    }
+    e->argc = argc;
+    e->plain_bytes = plain_bytes;
+    e->bulk_bytes = 0;
+
+    /* The next command's first BULK_STR_REF header starts a new command. */
+    c->cmdlog_bulk_boundary = 1;
 }
 
+/* Attribute one BULK_STR_REF header's exact reply size (as computed by the IO
+ * thread) to the correct deferred command. Called in buffer order from
+ * releaseBufReferences() on the main thread; a cmd_start header advances to the
+ * next queued command. */
+void commandlogAccumulateDeferredBytes(client *c, size_t reply_len, int cmd_start) {
+    if (cmd_start) c->cmdlog_deferred_cursor++;
+    if (c->cmdlog_deferred_cursor < 0 || c->cmdlog_deferred_cursor >= c->cmdlog_deferred_len) return;
+    c->cmdlog_deferred[c->cmdlog_deferred_cursor].bulk_bytes += reply_len;
+}
+
+/* Run the deferred large-reply threshold checks once all of a client's replies
+ * have been flushed and their exact sizes attributed. Called from
+ * postWriteToClient() on the main thread. */
+void commandlogFinalizeDeferred(client *c) {
+    for (int i = 0; i < c->cmdlog_deferred_len; i++) {
+        cmdlogDeferredReply *e = &c->cmdlog_deferred[i];
+        long long total = (long long)(e->plain_bytes + e->bulk_bytes);
+        commandlogPushEntryIfNeeded(c, e->argv, e->argc, total, COMMANDLOG_TYPE_LARGE_REPLY);
+        for (int j = 0; j < e->argc; j++) decrRefCount(e->argv[j]);
+        if (e->argv != e->argv_inline) zfree(e->argv);
+    }
+    c->cmdlog_deferred_len = 0;
+    c->cmdlog_deferred_cursor = -1;
+    /* Ready the boundary marker for the next command's first reply. */
+    c->cmdlog_bulk_boundary = 1;
+}
+
+/* Release any queued deferred entries without logging (e.g. on client free).
+ * Frees stashed argv refs and the FIFO backing array. */
+void commandlogFreeDeferred(client *c) {
+    for (int i = 0; i < c->cmdlog_deferred_len; i++) {
+        cmdlogDeferredReply *e = &c->cmdlog_deferred[i];
+        for (int j = 0; j < e->argc; j++) decrRefCount(e->argv[j]);
+        if (e->argv != e->argv_inline) zfree(e->argv);
+    }
+    zfree(c->cmdlog_deferred);
+    c->cmdlog_deferred = NULL;
+    c->cmdlog_deferred_len = 0;
+    c->cmdlog_deferred_cap = 0;
+    c->cmdlog_deferred_cursor = -1;
+}
 /* The SLOWLOG command. Implements all the subcommands needed to handle the
  * slow log. */
 void slowlogCommand(client *c) {

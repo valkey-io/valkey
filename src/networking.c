@@ -119,7 +119,9 @@ typedef struct __attribute__((__packed__)) payloadHeader {
     int16_t slot;             /* to report network-bytes-out for BULK_STR_REF chunks */
     uint8_t payload_type : 1; /* one of payloadType */
     uint8_t track_bytes : 1;  /* 1 if net bytes tracking was enabled when reply was added */
-    uint8_t reserved : 6;     /* reserved */
+    uint8_t cmd_start : 1;    /* 1 if this BULK_STR_REF header is the first of a command's reply
+                               * (used to attribute deferred commandlog reply bytes per command) */
+    uint8_t reserved : 5;     /* reserved */
     /* tracked_for_cob is placed after the bitfield byte so it is byte aligned.
      * _Atomic(uint8_t) has alignment 1, this is safe inside __packed__
      * because the compiler will not insert padding before it */
@@ -371,9 +373,11 @@ client *createClient(connection *conn) {
     c->net_output_bytes = 0;
     c->net_output_bytes_curr_cmd = 0;
     c->io_tracked_reply_len = 0;
-    c->io_reply_len_cmdlog = 0;
-    c->cmdlog_argv = NULL;
-    c->cmdlog_argc = 0;
+    c->cmdlog_deferred = NULL;
+    c->cmdlog_deferred_len = 0;
+    c->cmdlog_deferred_cap = 0;
+    c->cmdlog_deferred_cursor = -1;
+    c->cmdlog_bulk_boundary = 1;
     c->commands_processed = 0;
     c->io_last_reply_block = NULL;
     c->io_last_bufpos = 0;
@@ -582,6 +586,7 @@ static size_t upsertPayloadHeader(char *buf,
     (*last_header)->reply_len = 0;
     (*last_header)->track_bytes = track_bytes;
     (*last_header)->tracked_for_cob = 0;
+    (*last_header)->cmd_start = 0;
     (*last_header)->reserved = 0;
 
     *bufpos += sizeof(payloadHeader);
@@ -611,7 +616,17 @@ static size_t _addReplyPayloadToBuffer(client *c, const void *payload, size_t le
          * main thread. For PLAIN_REPLY, track in main thread as before. */
         int track_bytes = (payload_type != BULK_STR_REF &&
                            server.commandlog[COMMANDLOG_TYPE_LARGE_REPLY].threshold != -1);
+        /* Mark the first BULK_STR_REF header of a command so its reply bytes can
+         * be attributed per-command at release time. Force a fresh header (no
+         * coalescing) so a command boundary never shares a header. */
+        int mark_cmd_start = (payload_type == BULK_STR_REF && c->cmdlog_bulk_boundary &&
+                              server.commandlog[COMMANDLOG_TYPE_LARGE_REPLY].threshold >= 0);
+        if (mark_cmd_start) c->last_header = NULL;
         reply_len = upsertPayloadHeader(c->buf, &c->bufpos, &c->last_header, payload_type, len, c->slot, track_bytes, available);
+        if (mark_cmd_start && reply_len) {
+            c->last_header->cmd_start = 1;
+            c->cmdlog_bulk_boundary = 0;
+        }
     }
     if (!reply_len) return 0;
 
@@ -663,7 +678,14 @@ static void _addReplyPayloadToList(client *c, list *reply_list, const char *payl
         if (tail->flag.buf_encoded) {
             int track_bytes = (payload_type != BULK_STR_REF &&
                                server.commandlog[COMMANDLOG_TYPE_LARGE_REPLY].threshold != -1);
+            int mark_cmd_start = (payload_type == BULK_STR_REF && c->cmdlog_bulk_boundary &&
+                                  server.commandlog[COMMANDLOG_TYPE_LARGE_REPLY].threshold >= 0);
+            if (mark_cmd_start) tail->last_header = NULL;
             copy = upsertPayloadHeader(tail->buf, &tail->used, &tail->last_header, payload_type, len, c->slot, track_bytes, avail);
+            if (mark_cmd_start && copy) {
+                tail->last_header->cmd_start = 1;
+                c->cmdlog_bulk_boundary = 0;
+            }
         } else if (encoded) {
             /* If encoded buffer is required but tail is unencoded then pretend nothing can be added to it
              * and, as consequence, cause addition of a new tail */
@@ -693,7 +715,13 @@ static void _addReplyPayloadToList(client *c, list *reply_list, const char *payl
         if (tail->flag.buf_encoded) {
             int track_bytes = (payload_type != BULK_STR_REF &&
                                server.commandlog[COMMANDLOG_TYPE_LARGE_REPLY].threshold != -1);
+            int mark_cmd_start = (payload_type == BULK_STR_REF && c->cmdlog_bulk_boundary &&
+                                  server.commandlog[COMMANDLOG_TYPE_LARGE_REPLY].threshold >= 0);
             upsertPayloadHeader(tail->buf, &tail->used, &tail->last_header, payload_type, len, c->slot, track_bytes, tail->size);
+            if (mark_cmd_start && tail->last_header) {
+                tail->last_header->cmd_start = 1;
+                c->cmdlog_bulk_boundary = 0;
+            }
         }
         memcpy(tail->buf + tail->used, payload, len);
         tail->used += len;
@@ -1481,20 +1509,12 @@ static int tryAvoidBulkStrCopyToReply(client *c, robj *obj) {
 /* Add an Object as a bulk reply */
 void addReplyBulk(client *c, robj *obj) {
     if (tryAvoidBulkStrCopyToReply(c, obj) == C_OK) {
-        /* When a previous command's argv is already stashed for deferred commandlog
-         * (pipelining), compute reply size here so this command can be logged
-         * immediately in commandlogPushCurrentCommand. The sdslen is cheap here
-         * because pipelined values are cache-hot from sequential processing.
-         *
-         * When no stash is pending (first/only command), skip sdslen entirely —
-         * the IO thread handles byte tracking via trackBufReferences. */
-        if (c->cmdlog_argc > 0 &&
-            server.commandlog[COMMANDLOG_TYPE_LARGE_REPLY].threshold >= 0) {
-            serverAssert(obj->encoding == OBJ_ENCODING_RAW);
-            size_t str_len = sdslen(objectGetVal(obj));
-            uint32_t num_len = digits10(str_len);
-            c->net_output_bytes_curr_cmd += (num_len + 3) + str_len + 2;
-        }
+        /* Copy avoidance: the value bytes are never read on the main thread.
+         * The IO thread computes the exact reply size in trackBufReferences,
+         * which is later attributed per-command for the deferred commandlog
+         * large-reply check (see commandlog.c). Deliberately no sdslen() here —
+         * dereferencing the value's sds header would be a guaranteed L2/L3 cache
+         * miss on the hot path, which is exactly the regression being fixed. */
         return;
     }
     addReplyBulkLen(c, obj);
@@ -2195,10 +2215,7 @@ int freeClient(client *c) {
 
     freeClientArgv(c);
     freeClientOriginalArgv(c);
-    if (c->cmdlog_argc > 0) {
-        for (int j = 0; j < c->cmdlog_argc; j++)
-            decrRefCount(c->cmdlog_argv[j]);
-    }
+    commandlogFreeDeferred(c);
     discardCommandQueue(c);
     if (c->deferred_reply_errors) listRelease(c->deferred_reply_errors);
     c->deferred_reply_errors = NULL;
@@ -2911,7 +2928,6 @@ static void trackBufReferences(char *buf, size_t bufpos, client *c) {
                  * headers after write boundary */
                 header->reply_len = total_reply_len;
                 atomic_fetch_add_explicit(&c->io_tracked_reply_len, total_reply_len, memory_order_relaxed);
-                atomic_fetch_add_explicit(&c->io_reply_len_cmdlog, total_reply_len, memory_order_relaxed);
             }
         }
 
@@ -2928,6 +2944,13 @@ static void releaseBufReferences(char *buf, size_t bufpos, client *c) {
         ptr += sizeof(payloadHeader);
 
         if (header->payload_type == BULK_STR_REF) {
+            /* Attribute this reply's exact size (computed by the IO thread) to the
+             * command that produced it, for the deferred commandlog large-reply
+             * check. Headers are walked in command order; a cmd_start header marks
+             * the start of the next command's reply. */
+            if (c && c->cmdlog_deferred_len > 0)
+                commandlogAccumulateDeferredBytes(c, header->reply_len, header->cmd_start);
+
             /* Decrement tracked reply size only if it was previously tracked.
              * Use atomic exchange to ensure we only decrement once. */
             if (c && atomic_exchange_explicit(&header->tracked_for_cob, 0, memory_order_acq_rel)) {
@@ -3053,12 +3076,10 @@ int postWriteToClient(client *c) {
     }
     if (!clientHasPendingReplies(c)) {
         resetLastWrittenBuf(c);
-        /* All replies written — check deferred commandlog large-reply entry now
-         * that the IO thread has computed exact reply sizes. */
-        commandlogCheckDeferredLargeReply(c);
-        /* Reset IO-tracked cmdlog bytes regardless of whether a stash was pending,
-         * to avoid stale accumulation across unrelated commands. */
-        atomic_store_explicit(&c->io_reply_len_cmdlog, 0, memory_order_relaxed);
+        /* All replies flushed — the IO thread has computed exact reply sizes and
+         * releaseBufReferences has attributed them per command. Run the deferred
+         * commandlog large-reply checks now, then clear the FIFO. */
+        commandlogFinalizeDeferred(c);
         if (connHasWriteHandler(c->conn)) {
             connSetWriteHandler(c->conn, NULL);
         }

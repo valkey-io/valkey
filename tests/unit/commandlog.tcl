@@ -468,23 +468,54 @@ start_server {config "minimal.conf" tags {"external:skip" "valgrind:skip"} overr
         $rd close
         after 100
 
-        # Both commands should be logged (not just the last one)
-        set len [r commandlog len large-reply]
-        assert_morethan_equal $len 2
-
-        # Verify both keys appear in the commandlog entries
+        # Exactly two entries, each attributed to its own command with the
+        # exact per-command reply size (not summed, not under-reported).
+        # RESP bulk size = len + digits10(len) + 5 (for $<len>\r\n...\r\n).
+        assert_equal [r commandlog len large-reply] 2
         set entries [r commandlog get -1 large-reply]
-        set found_key1 0
-        set found_key2 0
+        array set bytes {}
         foreach e $entries {
             set cmd [lindex $e 3]
-            if {[string match "*key1*" $cmd]} { set found_key1 1 }
-            if {[string match "*key2*" $cmd]} { set found_key2 1 }
+            set key [lindex $cmd 1]
+            set bytes($key) [lindex $e 2]
         }
-        assert_equal $found_key1 1
-        assert_equal $found_key2 1
+        assert_equal $bytes(key1) 2057
+        assert_equal $bytes(key2) 3081
 
         r del key1 key2
+    }
+
+    test {COMMANDLOG large-reply - pipeline mixes above/below threshold correctly} {
+        r config set min-string-size-avoid-copy-reply 1
+        r config set commandlog-reply-larger-than 1024
+        r commandlog reset large-reply
+
+        # smallval uses copy avoidance (>= min-string-size-avoid-copy-reply) but
+        # its reply is BELOW the 1024 large-reply threshold; bigval is ABOVE it.
+        set smallval [string repeat S 100]
+        set bigval [string repeat L 2048]
+        r set small $smallval
+        r set big $bigval
+
+        # Pipeline small, big, small — only 'big' should be logged. This catches
+        # both the old "sum multiple commands together" bug (which would push a
+        # small reply over threshold) and the "under-report first command" bug.
+        set rd [valkey_deferring_client]
+        $rd get small
+        $rd get big
+        $rd get small
+        $rd read
+        $rd read
+        $rd read
+        $rd close
+        after 100
+
+        assert_equal [r commandlog len large-reply] 1
+        set e [lindex [r commandlog get -1 large-reply] 0]
+        assert_equal [lindex $e 3] {get big}
+        assert_equal [lindex $e 2] 2057
+
+        r del small big
     }
 
     test {COMMANDLOG large-reply - client disconnect releases stashed refs} {

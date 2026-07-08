@@ -203,13 +203,16 @@ static void commandlogEnqueueDeferred(client *c, robj **argv, int argc, size_t p
     }
 
     cmdlogDeferredReply *e = &c->cmdlog_deferred[c->cmdlog_deferred_len++];
+    robj **dst;
     if (argc <= CMDLOG_INLINE_ARGV_MAX) {
-        e->argv = e->argv_inline;
+        e->argv_heap = NULL;
+        dst = e->argv_inline;
     } else {
-        e->argv = zmalloc((size_t)argc * sizeof(robj *));
+        e->argv_heap = zmalloc((size_t)argc * sizeof(robj *));
+        dst = e->argv_heap;
     }
     for (int j = 0; j < argc; j++) {
-        e->argv[j] = argv[j];
+        dst[j] = argv[j];
         incrRefCount(argv[j]);
     }
     e->argc = argc;
@@ -236,10 +239,11 @@ void commandlogAccumulateDeferredBytes(client *c, size_t reply_len, int cmd_star
 void commandlogFinalizeDeferred(client *c) {
     for (int i = 0; i < c->cmdlog_deferred_len; i++) {
         cmdlogDeferredReply *e = &c->cmdlog_deferred[i];
+        robj **argv = e->argv_heap ? e->argv_heap : e->argv_inline;
         long long total = (long long)(e->plain_bytes + e->bulk_bytes);
-        commandlogPushEntryIfNeeded(c, e->argv, e->argc, total, COMMANDLOG_TYPE_LARGE_REPLY);
-        for (int j = 0; j < e->argc; j++) decrRefCount(e->argv[j]);
-        if (e->argv != e->argv_inline) zfree(e->argv);
+        commandlogPushEntryIfNeeded(c, argv, e->argc, total, COMMANDLOG_TYPE_LARGE_REPLY);
+        for (int j = 0; j < e->argc; j++) decrRefCount(argv[j]);
+        if (e->argv_heap) zfree(e->argv_heap);
     }
     c->cmdlog_deferred_len = 0;
     c->cmdlog_deferred_cursor = -1;
@@ -252,8 +256,9 @@ void commandlogFinalizeDeferred(client *c) {
 void commandlogFreeDeferred(client *c) {
     for (int i = 0; i < c->cmdlog_deferred_len; i++) {
         cmdlogDeferredReply *e = &c->cmdlog_deferred[i];
-        for (int j = 0; j < e->argc; j++) decrRefCount(e->argv[j]);
-        if (e->argv != e->argv_inline) zfree(e->argv);
+        robj **argv = e->argv_heap ? e->argv_heap : e->argv_inline;
+        for (int j = 0; j < e->argc; j++) decrRefCount(argv[j]);
+        if (e->argv_heap) zfree(e->argv_heap);
     }
     zfree(c->cmdlog_deferred);
     c->cmdlog_deferred = NULL;

@@ -518,6 +518,33 @@ start_server {config "minimal.conf" tags {"external:skip" "valgrind:skip"} overr
         r del small big
     }
 
+    test {COMMANDLOG large-reply - deep pipeline grows FIFO past initial capacity} {
+        r config set min-string-size-avoid-copy-reply 1
+        r config set commandlog-reply-larger-than 1024
+        r commandlog reset large-reply
+
+        # 20 distinct large values, pipelined in one batch. This forces the
+        # deferred FIFO to grow past its initial capacity (8) via realloc, which
+        # previously left dangling argv pointers into the moved array and crashed
+        # at finalize. All 20 must be logged with their exact per-command sizes.
+        set n 20
+        set rd [valkey_deferring_client]
+        for {set i 0} {$i < $n} {incr i} {
+            r set dpkey$i [string repeat X 2048]
+        }
+        for {set i 0} {$i < $n} {incr i} { $rd get dpkey$i }
+        for {set i 0} {$i < $n} {incr i} { $rd read }
+        $rd close
+        after 150
+
+        assert_equal [r commandlog len large-reply] $n
+        foreach e [r commandlog get -1 large-reply] {
+            assert_equal [lindex $e 2] 2057
+        }
+
+        for {set i 0} {$i < $n} {incr i} { r del dpkey$i }
+    }
+
     test {COMMANDLOG large-reply - client disconnect releases stashed refs} {
         r config set min-string-size-avoid-copy-reply 1
         r config set commandlog-reply-larger-than 1024

@@ -1305,7 +1305,10 @@ typedef struct slotMigrationJob slotMigrationJob;
  * payloadHeader->reply_len, then compared against the large-reply threshold. */
 typedef struct cmdlogDeferredReply {
     robj *argv_inline[CMDLOG_INLINE_ARGV_MAX]; /* Inline argv stash for small argc (no allocation). */
-    robj **argv;                               /* Points to argv_inline, or heap-allocated for large argc. */
+    robj **argv_heap;                          /* Heap-allocated argv array when argc > CMDLOG_INLINE_ARGV_MAX, else NULL.
+                                                * Never store a pointer to argv_inline here: the entry lives in a
+                                                * reallocatable array, so the active argv is computed from the current
+                                                * entry address (argv_heap ? argv_heap : argv_inline). */
     int argc;                                  /* Number of stashed args. */
     size_t plain_bytes;                        /* PLAIN_REPLY bytes for this command, counted on the main thread. */
     size_t bulk_bytes;                         /* BULK_STR_REF bytes for this command, accumulated at release time. */

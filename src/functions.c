@@ -840,7 +840,7 @@ void functionRestoreCommand(client *c) {
 
 load_error:
     if (err) {
-        addReplyErrorSds(c, err);
+        addReplyErrorSdsSafe(c, err);
     } else {
         addReply(c, shared.ok);
     }
@@ -1151,7 +1151,7 @@ void functionLoadCommand(client *c) {
     }
     if (!(library_name = functionsCreateWithLibraryCtx(objectGetVal(code), replace, &err, curr_functions_lib_ctx, timeout))) {
         serverAssert(err != NULL);
-        addReplyErrorSds(c, err);
+        addReplyErrorSdsSafe(c, err);
         return;
     }
     /* Indicate that the command changed the data so it will be replicated and

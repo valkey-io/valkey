@@ -260,13 +260,14 @@ start_server {tags {"repl external:skip"}} {
             assert_match {*ERR BITFIELD_RO only supports the GET subcommand*} $err
         }
 
-        test {BITFIELD OVERFLOW FAIL on new key creates key on primary but is not propagated} {
+        test {BITFIELD OVERFLOW FAIL on new key creates key on primary and is propagated} {
             # u8 max is 255; SET u8 300 overflows. With OVERFLOW FAIL the write is
             # skipped and nil is returned, but lookupStringForBitCommand has already
-            # created the (zero-padded) key on the primary.
+            # created the (zero-padded) key on the primary. That create is a
+            # modification and must be propagated, or the replica never sees the key.
             assert_equal {{}} [$master bitfield k OVERFLOW FAIL SET u8 0 300]
 
-            # Key exists on the master...
+            # Key exists on the master and is replicated.
             assert_equal 1 [$master exists k]
             wait_for_ofs_sync $master $slave
             assert_equal 1 [$slave exists k]

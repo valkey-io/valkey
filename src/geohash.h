@@ -97,7 +97,7 @@ typedef struct {
 #define PATH_TYPE 4
 
 /* Distance type for PATH searches */
-#define GEO_DIST_NEAREST 0 /* cross-track distance (default) */
+#define GEO_DIST_NEAREST 0  /* cross-track distance (default) */
 #define GEO_DIST_PATHDIST 1 /* along-path distance from first vertex */
 
 typedef struct {

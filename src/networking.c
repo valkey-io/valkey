@@ -1942,7 +1942,13 @@ void acceptCommonHandler(connection *conn, struct ClientFlags flags, char *ip) {
      * if rejected. */
     unsigned int total_connected = listLength(server.clients) + getClusterConnectionsCount();
     if (is_trusted) {
-        if (total_connected >= server.maxclients) {
+        /* Trusted clients are bounded by two limits: their own reserved
+         * pool (trusted-maxclients), and the overall maxclients ceiling that
+         * the OS file-descriptor limit and event loop were sized for. Both
+         * must hold. Without the trusted_maxclients check a flood of trusted
+         * connections could consume the entire maxclients pool, starving the
+         * normal clients that the reservation was meant to leave room for. */
+        if (server.trusted_clients >= server.trusted_maxclients || total_connected >= server.maxclients) {
             char *err = "-ERR max number of trusted clients reached\r\n";
 
             if (connWrite(conn, err, strlen(err)) == -1) {

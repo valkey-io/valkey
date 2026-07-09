@@ -2559,8 +2559,14 @@ static int isValidTrustedSources(sds val, const char **err) {
             memcpy(addr, token, len);
             addr[len] = '\0';
             char *endptr;
+            errno = 0;
             long parsed = strtol(slash + 1, &endptr, 10);
-            if (endptr == slash + 1 || *endptr != '\0' || parsed < 0) {
+            /* Reject empty, trailing garbage, negative, out-of-range
+             * (ERANGE), or any value beyond the widest possible prefix (128
+             * for IPv6) before narrowing to int -- otherwise a huge value
+             * could wrap on the cast and slip past the per-family checks
+             * below. */
+            if (endptr == slash + 1 || *endptr != '\0' || parsed < 0 || errno == ERANGE || parsed > 128) {
                 *err = "Invalid CIDR prefix in trusted-sources";
                 ret = 0;
                 break;

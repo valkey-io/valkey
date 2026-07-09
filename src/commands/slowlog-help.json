@@ -8,6 +8,7 @@
         "container": "SLOWLOG",
         "function": "slowlogCommand",
         "command_flags": [
+            "FAST",
             "LOADING",
             "STALE"
         ],
@@ -19,7 +20,7 @@
             }
         },
         "acl_categories": [
-            "SLOW"
+            "FAST"
         ]
     }
 }

@@ -8,12 +8,13 @@
         "container": "FUNCTION",
         "function": "functionDeleteCommand",
         "command_flags": [
+            "FAST",
             "NOSCRIPT",
             "WRITE"
         ],
         "acl_categories": [
+            "FAST",
             "SCRIPTING",
-            "SLOW",
             "WRITE"
         ],
         "command_tips": [

@@ -8,6 +8,7 @@
         "container": "CLIENT",
         "function": "clientReplyCommand",
         "command_flags": [
+            "FAST",
             "ALLOW_BUSY",
             "NOSCRIPT",
             "NO_MULTI",
@@ -17,7 +18,7 @@
         ],
         "acl_categories": [
             "CONNECTION",
-            "SLOW"
+            "FAST"
         ],
         "reply_schema": {
             "const": "OK",

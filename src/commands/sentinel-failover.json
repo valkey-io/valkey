@@ -1,6 +1,7 @@
 {
     "FAILOVER": {
         "summary": "Forces a Sentinel failover.",
+        "complexity": "O(1)",
         "group": "sentinel",
         "since": "2.8.4",
         "arity": -3,

@@ -7,13 +7,14 @@
         "arity": 1,
         "function": "randomkeyCommand",
         "command_flags": [
+            "FAST",
             "READONLY",
             "TOUCHES_ARBITRARY_KEYS"
         ],
         "acl_categories": [
+            "FAST",
             "KEYSPACE",
-            "READ",
-            "SLOW"
+            "READ"
         ],
         "command_tips": [
             "REQUEST_POLICY:ALL_SHARDS",

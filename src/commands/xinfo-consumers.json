@@ -1,7 +1,7 @@
 {
     "CONSUMERS": {
         "summary": "Returns a list of the consumers in a consumer group.",
-        "complexity": "O(1)",
+        "complexity": "O(N)",
         "group": "stream",
         "since": "5.0.0",
         "arity": 4,

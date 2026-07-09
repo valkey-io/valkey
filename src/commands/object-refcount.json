@@ -8,12 +8,13 @@
         "container": "OBJECT",
         "function": "objectCommand",
         "command_flags": [
+            "FAST",
             "READONLY"
         ],
         "acl_categories": [
+            "FAST",
             "KEYSPACE",
-            "READ",
-            "SLOW"
+            "READ"
         ],
         "command_tips": [
             "NONDETERMINISTIC_OUTPUT"

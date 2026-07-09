@@ -7,6 +7,9 @@
         "arity": 2,
         "container": "MEMORY",
         "function": "memoryCommand",
+        "command_flags": [
+            "FAST"
+        ],
         "command_tips": [
             "NONDETERMINISTIC_OUTPUT",
             "REQUEST_POLICY:ALL_SHARDS",
@@ -17,7 +20,7 @@
             "type": "string"
         },
         "acl_categories": [
-            "SLOW"
+            "FAST"
         ]
     }
 }

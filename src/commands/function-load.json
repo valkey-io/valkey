@@ -8,13 +8,14 @@
         "container": "FUNCTION",
         "function": "functionLoadCommand",
         "command_flags": [
+            "FAST",
             "NOSCRIPT",
             "WRITE",
             "DENYOOM"
         ],
         "acl_categories": [
+            "FAST",
             "SCRIPTING",
-            "SLOW",
             "WRITE"
         ],
         "command_tips": [

@@ -8,6 +8,7 @@
         "container": "PUBSUB",
         "function": "pubsubCommand",
         "command_flags": [
+            "FAST",
             "PUBSUB",
             "LOADING",
             "STALE"
@@ -18,8 +19,8 @@
             "minimum": 0
         },
         "acl_categories": [
-            "PUBSUB",
-            "SLOW"
+            "FAST",
+            "PUBSUB"
         ]
     }
 }

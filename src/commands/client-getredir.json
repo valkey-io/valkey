@@ -8,6 +8,7 @@
         "container": "CLIENT",
         "function": "clientGetredirCommand",
         "command_flags": [
+            "FAST",
             "ALLOW_BUSY",
             "NOSCRIPT",
             "LOADING",
@@ -16,7 +17,7 @@
         ],
         "acl_categories": [
             "CONNECTION",
-            "SLOW"
+            "FAST"
         ],
         "reply_schema": {
             "oneOf": [

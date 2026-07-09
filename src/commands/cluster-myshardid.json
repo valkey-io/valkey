@@ -8,6 +8,7 @@
         "container": "CLUSTER",
         "function": "clusterCommand",
         "command_flags": [
+            "FAST",
             "LOADING",
             "STALE"
         ],
@@ -19,7 +20,7 @@
             "type": "string"
         },
         "acl_categories": [
-            "SLOW"
+            "FAST"
         ]
     }
 }

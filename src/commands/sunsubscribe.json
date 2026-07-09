@@ -7,6 +7,7 @@
         "arity": -1,
         "function": "sunsubscribeCommand",
         "command_flags": [
+            "FAST",
             "PUBSUB",
             "NOSCRIPT",
             "LOADING",
@@ -40,8 +41,8 @@
             }
         ],
         "acl_categories": [
-            "PUBSUB",
-            "SLOW"
+            "FAST",
+            "PUBSUB"
         ]
     }
 }

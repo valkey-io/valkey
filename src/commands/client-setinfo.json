@@ -8,6 +8,7 @@
         "container": "CLIENT",
         "function": "clientSetinfoCommand",
         "command_flags": [
+            "FAST",
             "ALLOW_BUSY",
             "NOSCRIPT",
             "LOADING",
@@ -20,7 +21,7 @@
         ],
         "acl_categories": [
             "CONNECTION",
-            "SLOW"
+            "FAST"
         ],
         "reply_schema": {
             "const": "OK"

@@ -8,13 +8,14 @@
         "container": "COMMAND",
         "function": "commandHelpCommand",
         "command_flags": [
+            "FAST",
             "LOADING",
             "STALE",
             "SENTINEL"
         ],
         "acl_categories": [
             "CONNECTION",
-            "SLOW"
+            "FAST"
         ],
         "reply_schema": {
             "type": "array",

@@ -8,6 +8,7 @@
         "container": "COMMANDLOG",
         "function": "commandlogCommand",
         "command_flags": [
+            "FAST",
             "LOADING",
             "STALE"
         ],
@@ -19,7 +20,7 @@
             }
         },
         "acl_categories": [
-            "SLOW"
+            "FAST"
         ]
     }
 }

@@ -13,12 +13,13 @@
             ]
         ],
         "command_flags": [
+            "FAST",
             "READONLY"
         ],
         "acl_categories": [
+            "FAST",
             "READ",
-            "SET",
-            "SLOW"
+            "SET"
         ],
         "command_tips": [
             "NONDETERMINISTIC_OUTPUT"

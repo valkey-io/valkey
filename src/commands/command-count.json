@@ -8,13 +8,14 @@
         "container": "COMMAND",
         "function": "commandCountCommand",
         "command_flags": [
+            "FAST",
             "LOADING",
             "STALE",
             "SENTINEL"
         ],
         "acl_categories": [
             "CONNECTION",
-            "SLOW"
+            "FAST"
         ],
         "reply_schema": {
             "description": "Number of total commands in this server.",

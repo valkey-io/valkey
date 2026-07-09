@@ -8,12 +8,13 @@
         "container": "FUNCTION",
         "function": "functionStatsCommand",
         "command_flags": [
+            "FAST",
             "NOSCRIPT",
             "ALLOW_BUSY"
         ],
         "acl_categories": [
-            "SCRIPTING",
-            "SLOW"
+            "FAST",
+            "SCRIPTING"
         ],
         "command_tips": [
             "NONDETERMINISTIC_OUTPUT",

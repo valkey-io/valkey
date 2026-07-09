@@ -8,6 +8,7 @@
         "container": "ACL",
         "function": "aclCommand",
         "command_flags": [
+            "FAST",
             "NOSCRIPT",
             "LOADING",
             "STALE",
@@ -25,7 +26,7 @@
             }
         ],
         "acl_categories": [
-            "SLOW"
+            "FAST"
         ]
     }
 }

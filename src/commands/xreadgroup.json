@@ -8,12 +8,13 @@
         "function": "xreadCommand",
         "get_keys_function": "xreadGetKeys",
         "command_flags": [
+            "FAST",
             "BLOCKING",
             "WRITE"
         ],
         "acl_categories": [
             "BLOCKING",
-            "SLOW",
+            "FAST",
             "STREAM",
             "WRITE"
         ],

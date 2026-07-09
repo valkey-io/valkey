@@ -4138,6 +4138,7 @@ void configGetCommand(client *c);
 void configResetStatCommand(client *c);
 void configRewriteCommand(client *c);
 void configHelpCommand(client *c);
+void configInfoCommand(client *c);
 void hincrbyCommand(client *c);
 void hincrbyfloatCommand(client *c);
 void subscribeCommand(client *c);

@@ -1956,9 +1956,12 @@ void acceptCommonHandler(connection *conn, struct ClientFlags flags, char *ip) {
         /* Non-trusted connections may not use the slots reserved for trusted
          * connections, even if trusted clients aren't currently using them --
          * otherwise a burst of normal traffic could starve out the admin/
-         * monitoring path this feature exists to protect. */
+         * monitoring path this feature exists to protect. The reservation is
+         * clamped to leave at least one slot for normal clients, so an
+         * over-large trusted-maxclients can never lock everyone out. */
         unsigned int reserved_for_trusted = server.trusted_maxclients;
-        if (reserved_for_trusted > server.maxclients) reserved_for_trusted = server.maxclients;
+        if (reserved_for_trusted >= server.maxclients)
+            reserved_for_trusted = server.maxclients - 1;
         unsigned int normal_maxclients = server.maxclients - reserved_for_trusted;
 
         if (total_connected >= normal_maxclients) {

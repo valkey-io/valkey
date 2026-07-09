@@ -107,3 +107,20 @@ start_server {tags {"trusted-clients network external:skip"}} {
         r config set trusted-sources ""
     } {OK}
 }
+
+start_server {tags {"trusted-clients network external:skip"} overrides {maxclients 10}} {
+    test {default trusted-maxclients (0) leaves maxclients fully usable} {
+        # Regression guard: a non-zero default here would silently reserve
+        # slots out of small maxclients values and lock everyone out.
+        assert_equal {0} [lindex [r config get trusted-maxclients] 1]
+        assert_equal {PONG} [r ping]
+    }
+
+    test {an over-large trusted-maxclients still leaves one normal slot} {
+        # Even if misconfigured close to maxclients, normal clients keep at
+        # least one slot rather than being fully starved.
+        r config set trusted-maxclients 9
+        assert_equal {PONG} [r ping]
+        r config set trusted-maxclients 0
+    }
+}

@@ -13,12 +13,6 @@
 #include "mutexqueue.h"
 #include "server.h"
 
-int getFlushCommandFlags(client *c, int *flags);                                                        // in db.c
-uint64_t dictObjHash(const void *key);                                                                  // in server.c
-int dictObjKeyCompare(const void *key1, const void *key2);                                              // in server.c
-size_t objectComputeSize(robj *key, robj *o, size_t sample_size, int dbid);                             // in object.c
-robj *createStringObjectWithKeyAndExpire(const char *ptr, size_t len, const sds key, long long expire); // in object.c
-
 
 static bool receiveItemsBackFromOneIterator(bgIterator *it);
 

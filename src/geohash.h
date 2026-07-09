@@ -50,6 +50,8 @@ extern "C" {
 #define GEO_LAT_MAX 85.05112878
 #define GEO_LONG_MIN -180
 #define GEO_LONG_MAX 180
+#define GEO_PATH_MIN_POINTS 2
+#define GEO_PATH_MAX_POINTS 256
 
 typedef enum {
     GEOHASH_NORTH = 0,
@@ -95,12 +97,12 @@ typedef struct {
 #define PATH_TYPE 4
 
 /* Distance type for PATH searches */
-#define GEO_DIST_BUFFDIST 0 /* cross-track distance (default) */
+#define GEO_DIST_NEAREST 0 /* cross-track distance (default) */
 #define GEO_DIST_PATHDIST 1 /* along-path distance from first vertex */
 
 typedef struct {
     int type;          /* search type */
-    int dist_type;     /* GEO_DIST_BUFFDIST or GEO_DIST_PATHDIST (PATH_TYPE only) */
+    int dist_type;     /* GEO_DIST_NEAREST or GEO_DIST_PATHDIST (PATH_TYPE only) */
     double xy[2];      /* search center point, xy[0]: lon, xy[1]: lat */
     double conversion; /* km: 1000 */
     double bounds[4];  /* bounds[0]: min_lon, bounds[1]: min_lat
@@ -122,7 +124,7 @@ typedef struct {
         struct {
             int num_points;      /* number of waypoints in the path */
             double (*points)[2]; /* array of [lon, lat] waypoints */
-            double radius;       /* buffer distance in the unit before conversion */
+            double width;        /* corridor half-width: max perpendicular distance from path */
         } path;
     } t;
 } GeoShape;

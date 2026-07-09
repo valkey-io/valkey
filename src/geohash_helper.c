@@ -168,7 +168,7 @@ int geohashBoundingBox(GeoShape *shape, double *bounds) {
     } else if (shape->type == POLYGON_TYPE) {
         return computeBoundingBoxAndCentroid(shape->t.polygon.points, shape->t.polygon.num_vertices, 0, shape, bounds);
     } else if (shape->type == PATH_TYPE) {
-        double buffer_m = shape->conversion * shape->t.path.radius;
+        double buffer_m = shape->conversion * shape->t.path.width;
         return computeBoundingBoxAndCentroid(shape->t.path.points, shape->t.path.num_points, buffer_m, shape, bounds);
     }
     double longitude = shape->xy[0];
@@ -395,22 +395,24 @@ int geohashGetDistanceIfInPolygon(double centroidLon, double centroidLat, double
     return inside;
 }
 
-/* Check if a point is within a given buffer distance of a polyline (path).
- * The algorithm computes the minimum distance from the point to any segment
- * of the path. If that distance is <= radius_m, the point is considered
- * within the path corridor.
+/* Check if a point is within a given distance of a polyline (path).
+ * The algorithm computes the minimum perpendicular distance from the point
+ * to any segment of the path. If that distance is <= max_dist_m, the point
+ * is considered within the path corridor.
  *
  * For each segment A->B, we project the point P onto the line and clamp
  * the parameter t to [0,1] to find the closest point on the segment.
  * We then use Haversine to compute the great-circle distance.
  *
- * Returns 1 if the point is within the path buffer, 0 otherwise.
- * When dist_type == GEO_DIST_PATHDIST, sets *distance to the along-track distance
- * from the first vertex. Otherwise sets *distance to the cross-track (buffer) distance. */
+ * Returns 1 if the point is within the path corridor, 0 otherwise.
+ * When dist_type == GEO_DIST_PATHDIST, sets *distance to the along-path
+ * distance from the first vertex to the nearest projection point.
+ * When dist_type == GEO_DIST_NEAREST, sets *distance to the perpendicular
+ * distance from the point to the nearest segment. */
 int geohashGetDistanceIfInPath(double *point,
                                double (*pathPoints)[2],
                                int num_points,
-                               double radius_m,
+                               double max_dist_m,
                                int dist_type,
                                double *distance) {
     double min_dist = INFINITY;
@@ -465,7 +467,7 @@ int geohashGetDistanceIfInPath(double *point,
          * correctly handle antimeridian crossing. */
         double cx = ax + t * raw_dx;
         /* Wrap cx back into [-180, 180] range. */
-        if (cx > 180.0) cx -= 360.0;
+        if (cx >= 180.0) cx -= 360.0;
         if (cx < -180.0) cx += 360.0;
         double cy = ay + t * (by - ay);
 
@@ -478,7 +480,7 @@ int geohashGetDistanceIfInPath(double *point,
         cumulative_len += seg_len;
     }
 
-    if (min_dist <= radius_m) {
+    if (min_dist <= max_dist_m) {
         *distance = (dist_type == GEO_DIST_PATHDIST) ? along_path_at_min : min_dist;
         return 1;
     }

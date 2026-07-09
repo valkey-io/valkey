@@ -258,7 +258,7 @@ int geoWithinShape(GeoShape *shape, double score, double *xy, double *distance) 
         }
     } else if (shape->type == PATH_TYPE) {
         if (!geohashGetDistanceIfInPath(xy, shape->t.path.points,
-                                        shape->t.path.num_points, shape->t.path.radius * shape->conversion,
+                                        shape->t.path.num_points, shape->t.path.width * shape->conversion,
                                         shape->dist_type, distance)) {
             return C_ERR;
         }
@@ -703,14 +703,14 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
                     return;
                 }
                 /* Need at least 2 points to form a path segment. */
-                if (num_points < 2) {
-                    addReplyError(c, "GEOSEARCH BYPATH must have at least 2 points");
+                if (num_points < GEO_PATH_MIN_POINTS) {
+                    addReplyErrorFormat(c, "GEOSEARCH BYPATH must have at least %d points", GEO_PATH_MIN_POINTS);
                     geoVerticesFree(&shape);
                     return;
                 }
                 /* Cap the number of waypoints to limit per-candidate cost. */
-                if (num_points > 256) {
-                    addReplyError(c, "GEOSEARCH BYPATH supports at most 256 points");
+                if (num_points > GEO_PATH_MAX_POINTS) {
+                    addReplyErrorFormat(c, "GEOSEARCH BYPATH supports at most %d points", GEO_PATH_MAX_POINTS);
                     geoVerticesFree(&shape);
                     return;
                 }
@@ -733,7 +733,7 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
                 }
                 /* After the coordinates, extract distance and unit directly. */
                 int dist_idx = i + 2 + num_points * 2;
-                if (extractDistanceOrReply(c, c->argv + base_args + dist_idx, &shape.conversion, &shape.t.path.radius) != C_OK) {
+                if (extractDistanceOrReply(c, c->argv + base_args + dist_idx, &shape.conversion, &shape.t.path.width) != C_OK) {
                     geoVerticesFree(&shape);
                     return;
                 }
@@ -857,9 +857,7 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
 
         /* Our options are self-contained nested multibulk replies, so we
          * only need to track how many of those nested replies we return. */
-        if (withdist) option_length++;
-
-        if (withpathdist) option_length++;
+        if (withdist || withpathdist) option_length++;
 
         if (withcoords) option_length++;
 
@@ -885,9 +883,7 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
             addReplyBulkSds(c, gp->member);
             gp->member = NULL;
 
-            if (withdist) addReplyDoubleDistance(c, gp->dist);
-
-            if (withpathdist) addReplyDoubleDistance(c, gp->dist);
+            if (withdist || withpathdist) addReplyDoubleDistance(c, gp->dist);
 
             if (withhash) addReplyLongLong(c, gp->score);
 

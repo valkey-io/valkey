@@ -662,11 +662,11 @@ start_server {tags {"geo"}} {
         catch {r GEOSEARCH pathtest BYPATH 257 500 m} e
         assert_match {*ERR*} $e
 
-        # Error: missing DIST keyword (not enough args since DIST token is missing)
+        # Error: missing unit (only distance provided, no m/km/ft/mi)
         catch {r GEOSEARCH pathtest BYPATH 2 -73.9857 40.7484 -73.9712 40.7614 500} e
         assert_match {*ERR*} $e
 
-        # Error: invalid distance value
+        # Error: invalid token where distance is expected
         catch {r GEOSEARCH pathtest BYPATH 2 -73.9857 40.7484 -73.9712 40.7614 RADIUS 500 m} e
         assert_match {*ERR*} $e
 

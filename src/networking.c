@@ -1929,11 +1929,20 @@ void acceptCommonHandler(connection *conn, struct ClientFlags flags, char *ip) {
 
     /* Limit the number of connections we take at the same time.
      *
+     * trusted-maxclients reserves capacity for trusted connections *out of*
+     * maxclients rather than adding to it -- the total number of connections
+     * Valkey will ever admit is still bounded by maxclients (and therefore by
+     * whatever the OS file-descriptor limit / event loop were sized for at
+     * startup). Non-trusted connections can only use the unreserved portion
+     * of that pool, so operators only ever need to size maxclients, not
+     * maxclients + trusted-maxclients.
+     *
      * Admission control will happen before a client is created and connAccept()
      * called, because we don't want to even start transport-level negotiation
      * if rejected. */
+    unsigned int total_connected = listLength(server.clients) + getClusterConnectionsCount();
     if (is_trusted) {
-        if (server.trusted_clients >= server.trusted_maxclients) {
+        if (total_connected >= server.maxclients) {
             char *err = "-ERR max number of trusted clients reached\r\n";
 
             if (connWrite(conn, err, strlen(err)) == -1) {
@@ -1944,7 +1953,15 @@ void acceptCommonHandler(connection *conn, struct ClientFlags flags, char *ip) {
             return;
         }
     } else {
-        if (listLength(server.clients) + getClusterConnectionsCount() >= server.maxclients) {
+        /* Non-trusted connections may not use the slots reserved for trusted
+         * connections, even if trusted clients aren't currently using them --
+         * otherwise a burst of normal traffic could starve out the admin/
+         * monitoring path this feature exists to protect. */
+        unsigned int reserved_for_trusted = server.trusted_maxclients;
+        if (reserved_for_trusted > server.maxclients) reserved_for_trusted = server.maxclients;
+        unsigned int normal_maxclients = server.maxclients - reserved_for_trusted;
+
+        if (total_connected >= normal_maxclients) {
             char *err;
             if (server.cluster_enabled)
                 err = "-ERR max number of clients + cluster "

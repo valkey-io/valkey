@@ -2202,7 +2202,7 @@ struct valkeyServer {
     int get_ack_from_replicas;  /* If true we send REPLCONF GETACK. */
     /* Limits */
     unsigned int maxclients;                    /* Max number of simultaneous clients */
-    unsigned int trusted_maxclients;            /* Max number of trusted clients beyond maxclients */
+    unsigned int trusted_maxclients;            /* Slots reserved out of maxclients for trusted clients */
     unsigned int trusted_clients;               /* Current count of trusted clients */
     int trust_unix_sockets;                     /* Whether to trust Unix socket connections */
     sds trusted_sources;                        /* Space-separated list of trusted IPs/CIDRs */

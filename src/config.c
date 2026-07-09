@@ -2682,6 +2682,23 @@ static int updateMaxmemory(const char **err) {
     return 1;
 }
 
+/* trusted-maxclients now reserves capacity out of maxclients instead of
+ * adding to it, so it must always leave room for at least one non-trusted
+ * connection. Called both when trusted-maxclients changes and when
+ * maxclients changes, since either can invalidate the relationship. */
+static int updateTrustedMaxclients(const char **err) {
+    if (server.trusted_maxclients >= server.maxclients) {
+        static char msg[160];
+        snprintf(msg, sizeof(msg),
+                 "trusted-maxclients (%u) must be less than maxclients (%u), "
+                 "since it reserves capacity out of maxclients rather than adding to it",
+                 server.trusted_maxclients, server.maxclients);
+        *err = msg;
+        return 0;
+    }
+    return 1;
+}
+
 static int updateGoodReplicas(const char **err) {
     UNUSED(err);
     refreshGoodReplicasCount();
@@ -2747,7 +2764,9 @@ static int updateMaxclients(const char **err) {
             return 0;
         }
     }
-    return 1;
+    /* maxclients may have been lowered below trusted-maxclients; re-validate
+     * since trusted-maxclients reserves capacity out of maxclients. */
+    return updateTrustedMaxclients(err);
 }
 
 static int updateOOMScoreAdj(const char **err) {
@@ -3513,7 +3532,7 @@ standardConfig static_configs[] = {
 
     /* Unsigned int configs */
     createUIntConfig("maxclients", NULL, MODIFIABLE_CONFIG, 1, UINT_MAX, server.maxclients, 10000, INTEGER_CONFIG, NULL, updateMaxclients),
-    createUIntConfig("trusted-maxclients", NULL, MODIFIABLE_CONFIG, 0, UINT_MAX, server.trusted_maxclients, 64, INTEGER_CONFIG, NULL, NULL),
+    createUIntConfig("trusted-maxclients", NULL, MODIFIABLE_CONFIG, 0, UINT_MAX, server.trusted_maxclients, 64, INTEGER_CONFIG, NULL, updateTrustedMaxclients),
     createUIntConfig("unixsocketperm", NULL, IMMUTABLE_CONFIG, 0, 0777, server.unix_ctx_config.perm, 0, OCTAL_CONFIG, NULL, NULL),
     createUIntConfig("socket-mark-id", NULL, IMMUTABLE_CONFIG, 0, UINT_MAX, server.socket_mark_id, 0, INTEGER_CONFIG, NULL, NULL),
     createUIntConfig("max-new-connections-per-cycle", NULL, MODIFIABLE_CONFIG, 1, 1000, server.max_new_conns_per_cycle, 10, INTEGER_CONFIG, NULL, NULL),

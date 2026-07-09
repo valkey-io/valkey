@@ -174,7 +174,7 @@ robj *lookupKeyWriteOrReply(client *c, robj *key, robj *reply) {
 /* For hash keys, checks if they contain volatile items and updates tracking accordingly.
  * Always accesses the tracking kvstore, even if the tracking state doesn't change. */
 void dbUpdateObjectWithVolatileItemsTracking(serverDb *db, robj *o) {
-    if (o->type == OBJ_HASH) {
+    if (objectGetType(o) == OBJ_HASH) {
         if (hashTypeHasVolatileFields(o)) {
             dbTrackKeyWithVolatileItems(db, o);
         } else {
@@ -359,7 +359,7 @@ static void dbSetValue(serverDb *db, robj *key, robj **valref, int overwrite, vo
         old = val;
     } else {
         /* Replace the old value at its location in the key space. */
-        val->lru = old->lru;
+        objectSetLRU(val, objectGetLRU(old));
         long long expire = objectGetExpire(old);
         new = objectSetKeyAndExpire(val, objectGetVal(key), expire);
         *oldref = new;
@@ -500,7 +500,7 @@ int dbGenericDeleteWithDictIndex(serverDb *db, robj *key, int async, int flags, 
         }
 
         /* If deleting a hash object, un-track it from the volatile items tracking if it contains volatile items.*/
-        if (val->type == OBJ_HASH && hashTypeHasVolatileFields(val)) {
+        if (objectGetType(val) == OBJ_HASH && hashTypeHasVolatileFields(val)) {
             dbUntrackKeyWithVolatileItems(db, val);
         }
 
@@ -525,7 +525,7 @@ int dbGenericDelete(serverDb *db, robj *key, int async, int flags) {
 /* Add a key with volatile items to the tracking kvstore. */
 void dbTrackKeyWithVolatileItems(serverDb *db, robj *o) {
     serverAssert(objectGetKey(o));
-    if (o->type == OBJ_HASH && hashTypeHasVolatileFields(o)) {
+    if (objectGetType(o) == OBJ_HASH && hashTypeHasVolatileFields(o)) {
         int dict_index = getKVStoreIndexForKey(objectGetKey(o));
         kvstoreHashtableAdd(db->keys_with_volatile_items, dict_index, o);
     }
@@ -583,7 +583,7 @@ int dbDelete(serverDb *db, robj *key) {
  * using an sdscat() call to append some data, or anything else.
  */
 robj *dbUnshareStringValue(serverDb *db, robj *key, robj *o) {
-    serverAssert(o->type == OBJ_STRING);
+    serverAssert(objectGetType(o) == OBJ_STRING);
     if (o->refcount != 1 || o->encoding != OBJ_ENCODING_RAW) {
         robj *decoded = getDecodedObject(o);
         o = createRawStringObject(objectGetVal(decoded), sdslen(objectGetVal(decoded)));
@@ -1067,7 +1067,7 @@ void hashtableScanCallback(void *privdata, void *entry) {
         zskiplistNode *node = (zskiplistNode *)entry;
         key = zslGetNodeElement(node);
         /* zset data is copied after filtering by key */
-    } else if (o->type == OBJ_HASH) {
+    } else if (objectGetType(o) == OBJ_HASH) {
         key = entryGetField(entry);
         if (!data->only_keys) {
             val.buf = entryGetValue(entry, &val.len);
@@ -1230,7 +1230,7 @@ void scanGenericCommandWithOptions(client *c, robj *o, unsigned long long cursor
 
     /* Object must be NULL (to iterate keys names), or the type of the object
      * must be Set, Sorted Set, or Hash. */
-    serverAssert(o == NULL || o->type == OBJ_SET || o->type == OBJ_HASH || o->type == OBJ_ZSET);
+    serverAssert(o == NULL || o->type == OBJ_SET || objectGetType(o) == OBJ_HASH || o->type == OBJ_ZSET);
 
     /* Iterate the collection.
      *
@@ -1251,7 +1251,7 @@ void scanGenericCommandWithOptions(client *c, robj *o, unsigned long long cursor
     } else if (o->type == OBJ_SET && o->encoding == OBJ_ENCODING_HASHTABLE) {
         ht = objectGetVal(o);
         free_callback = NULL;
-    } else if (o->type == OBJ_HASH && o->encoding == OBJ_ENCODING_HASHTABLE) {
+    } else if (objectGetType(o) == OBJ_HASH && o->encoding == OBJ_ENCODING_HASHTABLE) {
         ht = objectGetVal(o);
         free_callback = NULL;
     } else if (o->type == OBJ_ZSET && o->encoding == OBJ_ENCODING_SKIPLIST) {
@@ -1331,7 +1331,7 @@ void scanGenericCommandWithOptions(client *c, robj *o, unsigned long long cursor
         }
         setTypeReleaseIterator(si);
         cursor = 0;
-    } else if ((o->type == OBJ_HASH || o->type == OBJ_ZSET) && o->encoding == OBJ_ENCODING_LISTPACK) {
+    } else if ((objectGetType(o) == OBJ_HASH || o->type == OBJ_ZSET) && o->encoding == OBJ_ENCODING_LISTPACK) {
         unsigned char *p = lpFirst(objectGetVal(o));
         unsigned char *str;
         int64_t len;
@@ -1923,7 +1923,7 @@ robj *setExpire(client *c, serverDb *db, robj *key, long long when) {
     long long old_when = objectGetExpire(val);
 
     robj *newval = objectSetExpire(val, when);
-    if (newval->type == OBJ_HASH && hashTypeHasVolatileFields(newval)) {
+    if (objectGetType(newval) == OBJ_HASH && hashTypeHasVolatileFields(newval)) {
         /* Replace the pointer in the keys_with_volatile_items table without accessing the old pointer. */
         int dict_index = getKVStoreIndexForKey(objectGetKey(newval));
         hashtable *volatile_items_ht = kvstoreGetHashtable(db->keys_with_volatile_items, dict_index);
@@ -2504,9 +2504,13 @@ int getKeysFromCommandWithSpecs(struct serverCommand *cmd,
 
 /* This function returns a sanity check if the command may have keys. */
 int doesCommandHaveKeys(struct serverCommand *cmd) {
-    return cmd->getkeys_proc ||                             /* has getkeys_proc (non modules) */
-           (cmd->flags & CMD_MODULE_GETKEYS) ||             /* module with GETKEYS */
-           (getAllKeySpecsFlags(cmd, 1) & CMD_KEY_NOT_KEY); /* has at least one key-spec not marked as NOT_KEY */
+    /* At least one key-spec not marked as NOT_KEY means the command has real keys. */
+    if (getAllKeySpecsFlags(cmd, 1) & CMD_KEY_NOT_KEY) return 1;
+    /* If the command has getkeys_proc but all its key-specs are NOT_KEY,
+     * the proc is only used for slot routing, not for real key arguments. */
+    if (cmd->getkeys_proc && cmd->key_specs_num > 0) return 0;
+    return cmd->getkeys_proc ||               /* has getkeys_proc (non modules) */
+           (cmd->flags & CMD_MODULE_GETKEYS); /* module with GETKEYS */
 }
 
 /* A simplified channel spec table that contains all of the commands

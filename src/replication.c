@@ -356,7 +356,7 @@ void feedReplicationBufferWithObject(robj *o) {
     void *p;
     size_t len;
 
-    if (o->encoding == OBJ_ENCODING_INT) {
+    if (objectGetEncoding(o) == OBJ_ENCODING_INT) {
         len = ll2string(llstr, sizeof(llstr), (long)objectGetVal(o));
         p = llstr;
     } else {
@@ -551,6 +551,25 @@ void feedReplicationBuffer(char *s, size_t len) {
     }
 }
 
+/* Bulk values larger than this threshold bypass the staging buffer in
+ * replicationFeedReplicas() and are handed to feedReplicationBuffer() directly.
+ * Below it, the extra memcpy through the staging buffer is cheaper than the
+ * fixed per-call cost of feedReplicationBuffer (replica-list walk, slot stats
+ * accounting, backlog tail lookup, output-buffer-limit checks). */
+#define REPL_BULK_INLINE_THRESHOLD 256
+
+/* Append the RESP bulk-length prefix `$<len>\r\n` for a payload of `len` bytes.
+ * Uses ll2string explicitly so 64-bit lengths are encoded correctly regardless
+ * of sdscatfmt's specifier choice. */
+static sds catReplicationBulkLen(sds frame, size_t len) {
+    char aux[LONG_STR_SIZE + 3];
+    aux[0] = '$';
+    int n = ll2string(aux + 1, sizeof(aux) - 1, (long long)len);
+    aux[n + 1] = '\r';
+    aux[n + 2] = '\n';
+    return sdscatlen(frame, aux, n + 3);
+}
+
 /* Propagate write commands to replication stream.
  *
  * This function is used if the instance is a primary: we use the commands
@@ -558,8 +577,6 @@ void feedReplicationBuffer(char *s, size_t len) {
  * Instead if the instance is a replica and has sub-replicas attached, we use
  * replicationFeedStreamFromPrimaryStream() */
 void replicationFeedReplicas(int dictid, robj **argv, int argc) {
-    int j, len;
-
     /* In case we propagate a command that doesn't touch keys (PING, REPLCONF) we
      * pass dbid=-1 that indicate there is no need to replicate `select` command. */
     serverAssert(dictid == -1 || (dictid >= 0 && dictid < server.dbnum));
@@ -603,30 +620,44 @@ void replicationFeedReplicas(int dictid, robj **argv, int argc) {
         server.replicas_eldb = dictid;
     }
 
-    /* Write the command to the replication buffer if any. */
-    char aux[LONG_STR_SIZE + 3];
-
+    /* Build the RESP frame for this command in a staging buffer, then push it
+     * to feedReplicationBuffer in as few calls as possible. Collapses the
+     * fragmented calls to feedReplicationBuffer into one call
+     * for typical commands.
+     *
+     * For bulks larger than REPL_BULK_INLINE_THRESHOLD we flush the staging
+     * buffer and feed the bulk bytes directly, avoiding an extra full-buffer
+     * memcpy. */
+    sds frame = sdsempty();
     /* Add the multi bulk reply length. */
-    aux[0] = '*';
-    len = ll2string(aux + 1, sizeof(aux) - 1, argc);
-    aux[len + 1] = '\r';
-    aux[len + 2] = '\n';
-    feedReplicationBuffer(aux, len + 3);
+    frame = sdscatfmt(frame, "*%i\r\n", argc);
 
-    for (j = 0; j < argc; j++) {
-        long objlen = stringObjectLen(argv[j]);
-
-        /* We need to feed the buffer with the object as a bulk reply
-         * not just as a plain string, so create the $..CRLF payload len
-         * and add the final CRLF */
-        aux[0] = '$';
-        len = ll2string(aux + 1, sizeof(aux) - 1, objlen);
-        aux[len + 1] = '\r';
-        aux[len + 2] = '\n';
-        feedReplicationBuffer(aux, len + 3);
-        feedReplicationBufferWithObject(argv[j]);
-        feedReplicationBuffer(aux + len + 1, 2);
+    for (int j = 0; j < argc; j++) {
+        robj *o = argv[j];
+        if (o->encoding == OBJ_ENCODING_INT) {
+            char aux[LONG_STR_SIZE];
+            size_t dlen = ll2string(aux, sizeof(aux), (long)objectGetVal(o));
+            frame = catReplicationBulkLen(frame, dlen);
+            frame = sdscatlen(frame, aux, dlen);
+            frame = sdscatlen(frame, "\r\n", 2);
+        } else {
+            size_t objlen = stringObjectLen(o);
+            frame = catReplicationBulkLen(frame, objlen);
+            if (objlen > REPL_BULK_INLINE_THRESHOLD) {
+                /* Zero-copy path: flush header bytes accumulated so far,
+                 * then feed the bulk payload straight from the object. */
+                feedReplicationBuffer(frame, sdslen(frame));
+                sdsclear(frame);
+                feedReplicationBuffer(objectGetVal(o), objlen);
+                frame = sdscatlen(frame, "\r\n", 2);
+            } else {
+                frame = sdscatlen(frame, objectGetVal(o), objlen);
+                frame = sdscatlen(frame, "\r\n", 2);
+            }
+        }
     }
+    feedReplicationBuffer(frame, sdslen(frame));
+    sdsfree(frame);
 }
 
 /* This is a debugging function that gets called when we detect something
@@ -1722,8 +1753,16 @@ void sendBulkToReplica(connection *conn) {
         }
     }
 
-    /* If the preamble was already transferred, send the RDB bulk data. */
-    lseek(replica->repl_data->repldbfd, replica->repl_data->repldboff, SEEK_SET);
+    /* If the preamble was already transferred, send the RDB bulk data.
+     *
+     * Each replica holds its own private fd (opened independently via open()),
+     * so in the normal case (full write succeeds) read() advances the file
+     * offset by exactly buflen and repldboff is incremented by the same amount,
+     * keeping them in sync without needing lseek().
+     *
+     * We only need to lseek() on the retry paths where the file offset has
+     * drifted ahead of repldboff (EAGAIN or short write). Error paths that
+     * call freeClient() don't need recovery since the fd will be closed. */
     buflen = read(replica->repl_data->repldbfd, buf, PROTO_IOBUF_LEN);
     if (buflen <= 0) {
         serverLog(LL_WARNING, "Read error sending DB to replica: %s",
@@ -1735,11 +1774,30 @@ void sendBulkToReplica(connection *conn) {
         if (connGetState(conn) != CONN_STATE_CONNECTED) {
             serverLog(LL_WARNING, "Write error sending DB to replica: %s", connGetLastError(conn));
             freeClient(replica);
+        } else {
+            /* EAGAIN: write blocked, but read() already advanced the file
+             * offset by buflen. Seek back to repldboff so the next invocation
+             * re-reads the same chunk. */
+            if (lseek(replica->repl_data->repldbfd, replica->repl_data->repldboff, SEEK_SET) == -1) {
+                serverLog(LL_WARNING, "Seek error sending DB to replica: %s", strerror(errno));
+                freeClient(replica);
+                return;
+            }
         }
         return;
     }
     replica->repl_data->repldboff += nwritten;
     server.stat_net_repl_output_bytes += nwritten;
+    if (nwritten < buflen) {
+        /* Short write: only part of the data was sent. The file offset is
+         * now at repldboff_old + buflen, but we need it at the new repldboff
+         * (repldboff_old + nwritten) for the next read. Seek back. */
+        if (lseek(replica->repl_data->repldbfd, replica->repl_data->repldboff, SEEK_SET) == -1) {
+            serverLog(LL_WARNING, "Seek error sending DB to replica: %s", strerror(errno));
+            freeClient(replica);
+            return;
+        }
+    }
     if (replica->repl_data->repldboff == replica->repl_data->repldbsize) {
         closeRepldbfd(replica);
         connSetWriteHandler(replica->conn, NULL);
@@ -3054,8 +3112,9 @@ static int dualChannelReplHandleHandshake(connection *conn, sds *err) {
     }
     /* Send replica listening port to primary for clarification */
     sds portstr = getReplicaPortString();
+    /* Also inform the primary of our (replica) version */
     *err = sendCommand(conn, "REPLCONF", "capa", "eof", "rdb-only", "1", "rdb-channel", "1", "listening-port", portstr,
-                       NULL);
+                       "version", VALKEY_VERSION, NULL);
     sdsfree(portstr);
     if (*err) {
         dualChannelServerLog(LL_WARNING, "Sending command to primary in dual channel replication handshake: %s", *err);

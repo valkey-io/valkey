@@ -399,9 +399,11 @@ void pubsubShardUnsubscribeAllChannelsInSlot(unsigned int slot) {
  * or false if the client was already subscribed to that pattern. */
 bool pubsubSubscribePattern(client *c, robj *pattern) {
     if (!c->pubsub_data) initClientPubSubData(c);
-    bool pattern_added = hashtableAdd(c->pubsub_data->pubsub_patterns, pattern);
+
+    /* Add the pattern to the client -> patterns hash table */
+    hashtablePosition position;
+    bool pattern_added = hashtableFindPositionForInsert(c->pubsub_data->pubsub_patterns, pattern, &position, NULL);
     if (pattern_added) {
-        incrRefCount(pattern);
         /* Add the client to the pattern -> list of clients hash table */
         hashtable *clients;
         dictEntry *de = dictFind(server.pubsub_patterns, pattern);
@@ -410,9 +412,12 @@ bool pubsubSubscribePattern(client *c, robj *pattern) {
             dictAdd(server.pubsub_patterns, pattern, clients);
             incrRefCount(pattern);
         } else {
+            pattern = dictGetKey(de);
             clients = dictGetVal(de);
         }
         serverAssert(hashtableAdd(clients, c));
+        hashtableInsertAtPosition(c->pubsub_data->pubsub_patterns, pattern, &position);
+        incrRefCount(pattern);
     }
     /* Notify the client */
     addReplyPubsubPatSubscribed(c, pattern);

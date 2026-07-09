@@ -9,6 +9,7 @@
         "function": "configInfoCommand",
         "command_flags": [
             "ADMIN",
+            "NOSCRIPT",
             "LOADING",
             "STALE"
         ],

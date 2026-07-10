@@ -5,17 +5,8 @@ start_server {tags {"trusted-clients network external:skip"} overrides {maxclien
         set expected_code "*ERR max*reached*"
     }
 
-    set cli_path [file normalize "src/valkey-cli"]
-
-    # Runs `valkey-cli -s <unixsocket> ping` in the background and returns the
-    # exec token (a list you can pass to close_unix_client). Used because the
-    # Tcl test client library has no Unix-socket connector.
-    proc open_unix_client {} {
-        set sock [srv 0 "unixsocket"]
-        set path [file normalize "src/valkey-cli"]
-        set fd [open "|$path -s $sock ping" "r"]
-        return $fd
-    }
+    # Use harness-resolved path: works for Make (src/) and CMake (build-release/bin/)
+    set cli_path $::VALKEY_CLI_BIN
 
     test {trusted-maxclients reserves capacity out of maxclients, not beyond it} {
         # maxclients 10, trusted-maxclients 4 => only 6 slots for normal clients.

@@ -968,7 +968,10 @@ static doneStatus defragModuleGlobals(monotime endtime, void *target, void *priv
     UNUSED(target);
     UNUSED(privdata);
     if (endtime == 0) return DEFRAG_NOT_DONE; // required initialization
-    moduleDefragGlobals();
+    moduleDefragGlobals(endtime);
+    /* If we ran out of time, a module may still have queued work. Re-run this
+     * stage on the next cycle so modules can resume from their saved cursor. */
+    if (getMonotonicUs() >= endtime) return DEFRAG_NOT_DONE;
     return DEFRAG_DONE;
 }
 

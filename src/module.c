@@ -2449,6 +2449,7 @@ void VM_SetModuleAttribs(ValkeyModuleCtx *ctx, const char *name, int ver, int ap
     module->options = 0;
     module->info_cb = 0;
     module->defrag_cb = 0;
+    module->defrag_cursor = 0;
     module->loadmod = NULL;
     module->num_commands_with_acl_categories = 0;
     module->onload = 1;
@@ -15145,8 +15146,14 @@ int moduleDefragValue(robj *key, robj *value, int dbid) {
     return 1;
 }
 
-/* Call registered module API defrag functions */
-void moduleDefragGlobals(void) {
+/* Call registered module API defrag functions.
+ *
+ * endtime is the monotonic deadline for this invocation, forwarded to each
+ * module's callback via the ctx so VM_DefragShouldStop() works for global
+ * defrag. Each module gets a persistent cursor (module->defrag_cursor) so it
+ * can save progress with VM_DefragCursorSet() and resume on the next cycle.
+ */
+void moduleDefragGlobals(monotime endtime) {
     if (listLength(modules) == 0) return;
 
     listIter li;
@@ -15156,8 +15163,9 @@ void moduleDefragGlobals(void) {
     while ((ln = listNext(&li)) != NULL) {
         struct ValkeyModule *module = listNodeValue(ln);
         if (!module->defrag_cb) continue;
-        ValkeyModuleDefragCtx defrag_ctx = {0, NULL, NULL, -1};
+        ValkeyModuleDefragCtx defrag_ctx = {endtime, &module->defrag_cursor, NULL, -1};
         module->defrag_cb(&defrag_ctx);
+        if (endtime != 0 && getMonotonicUs() >= endtime) break;
     }
 }
 

@@ -2141,6 +2141,11 @@ struct valkeyServer {
                                                  * to establish psync. */
     int debug_pause_after_fork;                 /* Debug param that pauses the main process
                                                  * after a replication fork() (for bgsave). */
+    int debug_repl_pause_before_psync;          /* Replica pauses (SIGSTOP) right before
+                                                 * sending PSYNC to its primary. */
+    int debug_repl_pause_before_sync;           /* Replica pauses (SIGSTOP) right before
+                                                 * falling back to the legacy SYNC command
+                                                 * after a failed PSYNC. */
     size_t repl_buffer_mem;                     /* The memory of replication buffer. */
     list *repl_buffer_blocks;                   /* Replication buffers blocks list
                                                  * (serving replica clients and repl backlog) */

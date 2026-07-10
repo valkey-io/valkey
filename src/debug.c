@@ -1063,6 +1063,12 @@ void debugCommand(client *c) {
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "pause-after-fork") && c->argc == 3) {
         server.debug_pause_after_fork = atoi(objectGetVal(c->argv[2]));
         addReply(c, shared.ok);
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "repl-pause-before-psync") && c->argc == 3) {
+        server.debug_repl_pause_before_psync = atoi(objectGetVal(c->argv[2]));
+        addReply(c, shared.ok);
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "repl-pause-before-sync") && c->argc == 3) {
+        server.debug_repl_pause_before_sync = atoi(objectGetVal(c->argv[2]));
+        addReply(c, shared.ok);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "delay-rdb-client-free-seconds") && c->argc == 3) {
         server.wait_before_rdb_client_free = atoi(objectGetVal(c->argv[2]));
         addReply(c, shared.ok);

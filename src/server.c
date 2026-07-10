@@ -3025,6 +3025,8 @@ void initServer(void) {
     server.in_exec = 0;
     server.busy_module_yield_flags = BUSY_MODULE_YIELD_NONE;
     server.busy_module_yield_reply = NULL;
+    server.debug_repl_pause_before_psync = 0;
+    server.debug_repl_pause_before_sync = 0;
     server.client_pause_in_transaction = 0;
     server.child_pid = -1;
     server.child_type = CHILD_TYPE_NONE;

@@ -2,6 +2,19 @@
  * Copyright (c) Valkey Contributors
  * All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
+ *
+ * The Token Bucket Algorithm is a traffic control method where tokens are added to a bucket at a fixed rate (up to a
+ * maximum capacity), and commands can be processed only if enough tokens are available.
+ *
+ * Terminology:
+ * Token: A permission unit required to process commands; a command can be processed only if enough tokens are available.
+ * Bucket: A logical storage that holds tokens until they are used.
+ *
+ * Working:
+ * 1. Tokens are added to the bucket at a constant rate and stored up to the maximum capacity.
+ * 2. When a command arrives, the system checks whether enough tokens are available in the bucket.
+ * 3. If enough tokens are available, the required number of tokens is removed from the bucket, and the command is processed.
+ * 4. If tokens are unavailable, the command is queued until new tokens are generated.
  */
 
 #ifndef THROTTLE_TOKEN_BUCKET_H
@@ -11,13 +24,25 @@
 
 typedef struct tokenBucket tokenBucket;
 
+/* Create a token bucket that starts full.
+ * max_burst_time_secs controls how many seconds of idle accumulation are
+ * allowed before the bucket is considered full. A larger value permits
+ * bigger bursts after idle periods. */
 tokenBucket *tokenBucket_create(double tokens_per_sec, double max_burst_time_secs);
+
 void tokenBucket_free(tokenBucket *bucket);
 
 double tokenBucket_getRate(tokenBucket *bucket);
+
 void tokenBucket_setRate(tokenBucket *bucket, double new_rate);
 
+/* Attempt to consume tokens. Returns true if tokens were deducted.
+ * force_consume=false: only deducts if enough tokens are available.
+ * force_consume=true: always deducts (may drive count negative). */
 bool tokenBucket_tryConsume(tokenBucket *bucket, double tokens, bool force_consume);
+
+/* Estimate milliseconds until the requested tokens become available.
+ * Returns 0 if already available, or -1 if rate is 0 (never reached). */
 double tokenBucket_msUntilAvailable(tokenBucket *bucket, double tokens);
 
 #endif

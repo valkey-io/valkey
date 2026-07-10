@@ -11,36 +11,47 @@
 #include "monotonic.h"
 
 #include <math.h>
-#include <ctype.h>
 
-#define MAX_WAIT_TIME_MS 100
-#define MAX_UNTHROTTLE_PROCESSING_TIME_MS 10
-#define THROTTLE_CLEANUP_ID (-1)
-#define THROTTLE_OPS_PER_MIN_GUARDRAIL 6
-#define TPS_WINDOW_SEC 5
-#define EPSILON 0.0001
-#define TOKENS_BURST_RATE_SEC 0.1
-#define MIN_ADJUST_AFTER_DISABLE 100.0
+#define MAX_WAIT_TIME_MS 100                 /* max ms before rescheduling timer */
+#define MAX_UNTHROTTLE_PROCESSING_TIME_MS 10 /* max ms spent unthrottling per timer fire */
+#define THROTTLE_CLEANUP_ID (-1)             /* sentinel: throttler deregistered, draining queue */
+#define THROTTLE_OPS_PER_MIN_GUARDRAIL 6     /* 0.1 TPS - report when rate stays below this */
+#define TPS_WINDOW_SEC 5                     /* rolling window for incoming TPS measurement */
+#define EPSILON 0.0001                       /* values below this are treated as zero */
+#define TOKENS_BURST_RATE_SEC 0.1            /* burst capacity in seconds of sustained rate */
+#define MIN_ADJUST_AFTER_DISABLE 100.0       /* initial rate when recovering from halted state */
 
-/* Framework-level metrics */
-struct throttle_framework_metrics throttle_framework_metrics;
+static int nextThrottlerId = 1;
+static hashtable *metricsTable = NULL;
+static list *throttlerList = NULL;
 
-/* === Internal metrics (shared by name via hashtable) === */
-typedef struct throttleInternalMetrics {
-    sds name;
-    int num_clients;
-    int total_throttled_commands;
+typedef struct metricsEntry {
+    sds throttler_type;
+    int num_clients_throttled;
+    int num_throttled_commands;
     tpsCalculator *incoming_tps;
-} throttleInternalMetrics;
+} metricsEntry;
+
+typedef struct throttler {
+    int id;
+    throttleCriteriaProc *criteria_proc; /* callback defining throttling criteria */
+    long long time_event_id;             /* timer event id for throttlerTimeProc */
+    void *priv_data;                     /* private data for use by the criteria_proc */
+    tokenBucket *bucket;                 /* token bucket: 1 token = 1 operation */
+    list *client_queue;                  /* clients currently queued for throttling */
+    listNode *ln;                        /* my node in throttlerList */
+    monotime rate_below_guardrail_since; /* timestamp when rate dropped below guardrail, or 0 */
+    metricsEntry *metrics;               /* reference to the named metrics object */
+} throttler;
 
 /* Metrics hashtable callbacks. */
 static const void *metricsGetKey(const void *entry) {
-    return ((throttleInternalMetrics *)entry)->name;
+    return ((metricsEntry *)entry)->throttler_type;
 }
 
 static void metricsDestructor(void *entry) {
-    throttleInternalMetrics *m = entry;
-    sdsfree(m->name);
+    metricsEntry *m = entry;
+    sdsfree(m->throttler_type);
     tpsCalculator_free(m->incoming_tps);
     zfree(m);
 }
@@ -52,21 +63,24 @@ static hashtableType metricsHashtableType = {
     .entryDestructor = metricsDestructor,
 };
 
-static int nextThrottlerId = 1;
-static list *throttlerList = NULL;
-static hashtable *metricsTable = NULL;
+static metricsEntry *findMetrics(const char *name) {
+    sds key = sdsnew(name);
+    void *found = NULL;
+    if (hashtableFind(metricsTable, key, &found)) {
+        sdsfree(key);
+        return (metricsEntry *)found;
+    }
+    metricsEntry *m = zmalloc(sizeof(metricsEntry));
+    m->throttler_type = key;
+    m->num_clients_throttled = 0;
+    m->num_throttled_commands = 0;
+    m->incoming_tps = tpsCalculator_create(TPS_WINDOW_SEC);
+    hashtableAdd(metricsTable, m);
+    return m;
+}
 
-typedef struct throttler {
-    int id;
-    throttleCriteriaProc *criteria_proc;
-    long long time_event_id;
-    void *priv_data;
-    tokenBucket *bucket;
-    list *client_queue;
-    listNode *ln; /* my node in throttlerList */
-    monotime rate_below_guardrail_since;
-    throttleInternalMetrics *metrics;
-} throttler;
+/* Framework-level metrics */
+static long long total_throttled_commands;
 
 static int listMatchThrottler(void *throttler_ptr, void *id) {
     return ((throttler *)throttler_ptr)->id == (long)id;
@@ -80,19 +94,15 @@ static throttler *findThrottler(int id) {
     return t;
 }
 
-static void replenishTokens(throttler *t) {
-    if (t->id == THROTTLE_CLEANUP_ID) {
-        tokenBucket_setRate(t->bucket, THROTTLE_UNLIMITED_RATE);
-    }
-}
-
+/* Compute how long to wait before the next token becomes available. */
 static int waitTimeMs(throttler *t) {
     serverAssert(listLength(t->client_queue) > 0);
     double ms = tokenBucket_msUntilAvailable(t->bucket, 1.0);
-    if (ms < 0) return MAX_WAIT_TIME_MS;
-    return MIN(MAX_WAIT_TIME_MS, (int)ceil(ms));
+    if (ms < 0 || ms >= MAX_WAIT_TIME_MS) return MAX_WAIT_TIME_MS;
+    return (int)ceil(ms);
 }
 
+/* Release throttler resources. Only called when client queue is fully drained. */
 static void freeThrottler(throttler *t) {
     serverAssert(listLength(t->client_queue) == 0);
     serverAssert(t->time_event_id == AE_DELETED_EVENT_ID);
@@ -104,45 +114,6 @@ static void freeThrottler(throttler *t) {
     zfree(t);
 }
 
-static void setRate(throttler *t, double new_rate) {
-    if (new_rate < EPSILON) {
-        tokenBucket_setRate(t->bucket, 0);
-    } else {
-        if (new_rate > THROTTLE_UNLIMITED_RATE) new_rate = THROTTLE_UNLIMITED_RATE;
-        tokenBucket_setRate(t->bucket, new_rate);
-    }
-
-    double rate_per_min = tokenBucket_getRate(t->bucket) * 60.0;
-    if (rate_per_min <= THROTTLE_OPS_PER_MIN_GUARDRAIL) {
-        if (t->rate_below_guardrail_since == 0) {
-            elapsedStart(&t->rate_below_guardrail_since);
-        }
-    } else {
-        t->rate_below_guardrail_since = 0;
-    }
-}
-
-static void validateAlphaNumeric(const char *s) {
-    for (; *s; s++) {
-        serverAssert(isalnum(*s) || (*s == '_') || (*s == '-'));
-    }
-}
-
-static throttleInternalMetrics *findMetrics(const char *name) {
-    sds key = sdsnew(name);
-    void *found = NULL;
-    if (hashtableFind(metricsTable, key, &found)) {
-        sdsfree(key);
-        return (throttleInternalMetrics *)found;
-    }
-    throttleInternalMetrics *m = zmalloc(sizeof(throttleInternalMetrics));
-    m->name = key;
-    m->num_clients = 0;
-    m->total_throttled_commands = 0;
-    m->incoming_tps = tpsCalculator_create(TPS_WINDOW_SEC);
-    hashtableAdd(metricsTable, m);
-    return m;
-}
 
 static void consumeOtherThrottlers(client *c, throttler *except) {
     listNode *ln;
@@ -150,14 +121,13 @@ static void consumeOtherThrottlers(client *c, throttler *except) {
     listRewind(throttlerList, &li);
     while ((ln = listNext(&li))) {
         throttler *t = ln->value;
-        if (t->id == THROTTLE_CLEANUP_ID) continue;
-        if (t == except) continue;
-        if (t->criteria_proc(c, t->priv_data)) {
-            tokenBucket_tryConsume(t->bucket, 1.0, true);
-        }
+        if (t->id == THROTTLE_CLEANUP_ID || t == except) continue;
+        if (t->criteria_proc(c, t->priv_data)) tokenBucket_tryConsume(t->bucket, 1.0, true);
     }
 }
 
+/* Re-execute a client's deferred command after throttle release.
+ * Restores the read handler and processes the pending command and input buffer. */
 static void processUnthrottledClient(client *c) {
     serverAssert(c->argc > 0 && c->flag.pending_command && !c->flag.throttled);
     if (c->conn && !connHasReadHandler(c->conn)) {
@@ -169,13 +139,15 @@ static void processUnthrottledClient(client *c) {
     if (processPendingCommandAndInputBuffer(c) == C_OK) beforeNextClient(c);
 }
 
+/* Timer event handler: releases queued clients at the token bucket rate.
+ * Processes clients until tokens are exhausted or time budget is spent. */
 static long long throttlerTimeProc(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     UNUSED(eventLoop);
     UNUSED(id);
+    // if the clients are paused, then return 1 ms so we wake up every ms
     if (isPausedActionsWithUpdate(PAUSE_ACTIONS_CLIENT_ALL_SET)) return 1;
 
     throttler *t = (throttler *)clientData;
-    replenishTokens(t);
 
     monotime work_start;
     elapsedStart(&work_start);
@@ -209,9 +181,9 @@ static void throttlerAddClient(throttler *t, client *c) {
 
     if (c->conn) connSetReadHandler(c->conn, NULL);
 
-    t->metrics->num_clients++;
-    t->metrics->total_throttled_commands++;
-    throttle_framework_metrics.total_throttled_commands++;
+    t->metrics->num_clients_throttled++;
+    t->metrics->num_throttled_commands++;
+    total_throttled_commands++;
     c->throttler = t;
     c->throttle_node = listLast(t->client_queue);
 
@@ -236,12 +208,15 @@ void throttle_init(void) {
     }
 }
 
+/* In most cases, each throttler should have its own independent metrics_name. When the same
+ * throttler is instantiated multiple times (with different priv_data), they may share a single
+ * metrics object by using the same name. This allows statistics to be aggregated across related
+ * throttler instances. */
 int throttle_register(throttleCriteriaProc *criteria_proc,
                       void *priv_data,
                       const char *metrics_name) {
     serverAssert(criteria_proc != NULL);
     serverAssert(metrics_name != NULL);
-    validateAlphaNumeric(metrics_name);
     serverAssert(nextThrottlerId > 0);
 
     throttler *t = zmalloc(sizeof(throttler));
@@ -253,7 +228,7 @@ int throttle_register(throttleCriteriaProc *criteria_proc,
     t->metrics = findMetrics(metrics_name);
     t->client_queue = listCreate();
     t->rate_below_guardrail_since = 0;
-    setRate(t, THROTTLE_UNLIMITED_RATE);
+    throttle_setRate(t->id, THROTTLE_UNLIMITED_RATE);
 
     listAddNodeTail(throttlerList, t);
     t->ln = listLast(throttlerList);
@@ -268,13 +243,29 @@ void throttle_deregister(int id) {
         freeThrottler(t);
     } else {
         t->id = THROTTLE_CLEANUP_ID;
+        tokenBucket_setRate(t->bucket, THROTTLE_UNLIMITED_RATE);
     }
 }
 
 void throttle_setRate(int id, double ops_per_sec) {
     serverAssert(ops_per_sec >= 0);
     throttler *t = findThrottler(id);
-    setRate(t, ops_per_sec);
+
+    if (ops_per_sec < EPSILON) {
+        ops_per_sec = 0;
+    } else if (ops_per_sec > THROTTLE_UNLIMITED_RATE) {
+        ops_per_sec = THROTTLE_UNLIMITED_RATE;
+    }
+    tokenBucket_setRate(t->bucket, ops_per_sec);
+
+    double rate_per_min = ops_per_sec * 60.0;
+    if (rate_per_min <= THROTTLE_OPS_PER_MIN_GUARDRAIL) {
+        if (t->rate_below_guardrail_since == 0) {
+            elapsedStart(&t->rate_below_guardrail_since);
+        }
+    } else {
+        t->rate_below_guardrail_since = 0;
+    }
 }
 
 double throttle_adjustRate(int id, double multiplier) {
@@ -293,9 +284,7 @@ double throttle_adjustRate(int id, double multiplier) {
         /* Decrease: plain multiply, but never drop below incoming TPS. */
         new_rate = current * multiplier;
         double incoming = tpsCalculator_averageTps(t->metrics->incoming_tps);
-        if (incoming > EPSILON && new_rate < incoming) {
-            new_rate = incoming;
-        }
+        if (incoming > EPSILON && new_rate < incoming) new_rate = incoming;
     } else if (current < EPSILON) {
         /* Coming back from halted: jump to a sensible starting rate. */
         new_rate = MIN_ADJUST_AFTER_DISABLE;
@@ -306,16 +295,87 @@ double throttle_adjustRate(int id, double multiplier) {
         new_rate = current + delta;
     }
 
-    if (new_rate != current) setRate(t, new_rate);
+    if (new_rate != current) throttle_setRate(t->id, new_rate);
     return tokenBucket_getRate(t->bucket);
+}
+
+void throttle_removeClient(client *c) {
+    if (!c->flag.throttled) return;
+
+    c->flag.throttled = 0;
+    throttler *t = c->throttler;
+    serverAssert(t != NULL);
+
+    listDelNode(t->client_queue, c->throttle_node);
+
+    t->metrics->num_clients_throttled--;
+
+    if (listLength(t->client_queue) == 0) {
+        serverAssert(t->time_event_id != AE_DELETED_EVENT_ID);
+        aeDeleteTimeEvent(server.el, t->time_event_id);
+        t->time_event_id = AE_DELETED_EVENT_ID;
+        if (t->id == THROTTLE_CLEANUP_ID) freeThrottler(t);
+    }
+    c->throttler = NULL;
+    c->throttle_node = NULL;
+    c->throttle_start_us = 0;
+}
+
+bool throttleClientIfNeeded(client *c) {
+    if (throttlerList == NULL || listLength(throttlerList) == 0) return false;
+
+    /* Skip internal clients and clients already checked for this command.
+     * Prevents re-throttling after unblocking. */
+    if (!c->conn || c->flag.throttle_checked) return false;
+    c->flag.throttle_checked = 1;
+
+    bool need_throttle = false;
+    int match_count = 0;
+    /* Strictest throttler is the applicable throttler with the lowest rate.
+     * It is the most restrictive throttler the client needs to throttle at.
+     */
+    throttler *strictest = NULL;
+    listNode *ln;
+    listIter li;
+    listRewind(throttlerList, &li);
+    while ((ln = listNext(&li))) {
+        throttler *t = ln->value;
+        if (t->id == THROTTLE_CLEANUP_ID) continue;
+
+        if (t->criteria_proc(c, t->priv_data)) {
+            match_count++;
+            tpsCalculator_record(t->metrics->incoming_tps, 1);
+            if (strictest == NULL || tokenBucket_getRate(t->bucket) < tokenBucket_getRate(strictest->bucket)) strictest = t;
+        }
+    }
+
+    if (strictest != NULL) {
+        if (listLength(strictest->client_queue) == 0 &&
+            tokenBucket_tryConsume(strictest->bucket, 1.0, false)) {
+            /* token available, consume and let command proceed. */
+            if (match_count > 1) consumeOtherThrottlers(c, strictest);
+        } else {
+            /* no token available, defer the command. */
+            if (match_count > 1) c->flag.throttle_multi = 1;
+            throttlerAddClient(strictest, c);
+            need_throttle = true;
+        }
+    }
+
+    return need_throttle;
+}
+
+/* === INFO metrics output === */
+long long throttle_getTotalThrottledCommands(void) {
+    return total_throttled_commands;
 }
 
 const throttleMetrics *throttle_getMetrics(const char *metrics_name) {
     static throttleMetrics result;
-    throttleInternalMetrics *m = findMetrics(metrics_name);
+    metricsEntry *m = findMetrics(metrics_name);
 
-    result.num_clients = m->num_clients;
-    result.total_throttled_commands = m->total_throttled_commands;
+    result.num_clients_throttled = m->num_clients_throttled;
+    result.num_throttled_commands = m->num_throttled_commands;
     result.incoming_tps = tpsCalculator_averageTps(m->incoming_tps);
     result.ops_per_sec = 0.0;
     result.oldest_client_delay_us = 0;
@@ -331,77 +391,14 @@ const throttleMetrics *throttle_getMetrics(const char *metrics_name) {
         if (listLength(t->client_queue) > 0) {
             client *oldest = listNodeValue(listFirst(t->client_queue));
             long delay_us = elapsedUs(oldest->throttle_start_us);
-            if (result.oldest_client_delay_us < delay_us) {
-                result.oldest_client_delay_us = delay_us;
-            }
+            result.oldest_client_delay_us = MAX(result.oldest_client_delay_us, delay_us);
         }
     }
     return &result;
 }
 
-void throttle_removeClient(client *c) {
-    if (!c->flag.throttled) return;
-
-    c->flag.throttled = 0;
-    throttler *t = c->throttler;
-    serverAssert(t != NULL);
-
-    listDelNode(t->client_queue, c->throttle_node);
-
-    if (listLength(t->client_queue) == 0) {
-        serverAssert(t->time_event_id != AE_DELETED_EVENT_ID);
-        aeDeleteTimeEvent(server.el, t->time_event_id);
-        t->time_event_id = AE_DELETED_EVENT_ID;
-    }
-    t->metrics->num_clients--;
-    c->throttler = NULL;
-    c->throttle_node = NULL;
-    c->throttle_start_us = 0;
-}
-
-bool throttle_deferCommand(client *c) {
-    if (throttlerList == NULL || listLength(throttlerList) == 0) return false;
-    // Exempt all internal commands that has no connection from throttling.
-    if (!c->conn) return false;
-    if (c->flag.throttle_checked) return false;
-    c->flag.throttle_checked = 1;
-
-    int match_count = 0;
-    throttler *strictest = NULL;
-
-    listNode *ln;
-    listIter li;
-    listRewind(throttlerList, &li);
-    while ((ln = listNext(&li))) {
-        throttler *t = ln->value;
-        if (t->id == THROTTLE_CLEANUP_ID) continue;
-
-        if (t->criteria_proc(c, t->priv_data)) {
-            match_count++;
-            tpsCalculator_record(t->metrics->incoming_tps, 1);
-            if (strictest == NULL ||
-                tokenBucket_getRate(t->bucket) < tokenBucket_getRate(strictest->bucket)) {
-                strictest = t;
-            }
-        }
-    }
-
-    if (strictest == NULL) return false;
-
-    if (listLength(strictest->client_queue) == 0) {
-        if (tokenBucket_tryConsume(strictest->bucket, 1.0, false)) {
-            if (match_count > 1) consumeOtherThrottlers(c, strictest);
-            return false;
-        }
-    }
-
-    if (match_count > 1) c->flag.throttle_multi = 1;
-    throttlerAddClient(strictest, c);
-    return true;
-}
-
-/* === INFO output === */
-sds throttle_sdscatMetrics(sds info) {
+sds throttle_sdscatInfoMetrics(sds info) {
+    // Check for any throttlers which are below guardrail.  Report only offending throttlers.
     listNode *ln;
     listIter li;
     listRewind(throttlerList, &li);
@@ -412,7 +409,7 @@ sds throttle_sdscatMetrics(sds info) {
             if (secs > 0) {
                 info = sdscatprintf(info,
                                     "throttle_%s_guardrail_secs:%d\r\n",
-                                    t->metrics->name, secs);
+                                    t->metrics->throttler_type, secs);
             }
         }
     }

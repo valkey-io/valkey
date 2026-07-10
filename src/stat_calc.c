@@ -92,53 +92,58 @@ trendCalculator *newTrendCalc(int windowSecs) {
     return calc;
 }
 
+void trendCalc_free(trendCalculator *calc) {
+    zfree(calc);
+}
+
 void trendCalc_recordMetric(trendCalculator *calc, long metricValue) {
     monotime now = getMonotonicUs();
     long elapsedUs = now - calc->lastUpdate;
 
-    // When called more than updateFreqUs, just save values for later averaging.
     calc->uncountedTotal += metricValue;
     calc->uncountedSamples++;
 
-    if (elapsedUs >= calc->updateFreqUs) {
-        long newValue = calc->uncountedTotal / calc->uncountedSamples;
-        calc->uncountedTotal = 0;
-        calc->uncountedSamples = 0;
-        calc->lastUpdate = now;
+    if (elapsedUs < calc->updateFreqUs) return;
 
-        if (calc->newCalculator) {
-            for (int i = 0; i < DATA_POINTS; i++) calc->metrics[i] = newValue;
-            calc->newCalculator = false;
-        }
+    long newValue = calc->uncountedTotal / calc->uncountedSamples;
+    calc->uncountedTotal = 0;
+    calc->uncountedSamples = 0;
+    calc->lastUpdate = now;
 
-        long olderTotal = 0;
-        for (int i = 0; i < DATA_POINTS / 2; i++) {
-            calc->metrics[i] = calc->metrics[i + 1];
-            olderTotal += calc->metrics[i];
-        }
-        long newerTotal = 0;
-        for (int i = DATA_POINTS / 2; i < DATA_POINTS - 1; i++) {
-            calc->metrics[i] = calc->metrics[i + 1];
-            newerTotal += calc->metrics[i];
-        }
-        calc->metrics[DATA_POINTS - 1] = newValue;
-        newerTotal += newValue;
-
-        // Formula is the average of the newer data points, less the average of the older data
-        //  points... this is the measured delta.  But, the time is from the center of each half,
-        //  resulting in half the window size (secs).  So the formula is:
-        //     (AveNewer - AveOlder) / (WindowSec/2)
-
-        double olderAvg = (double)olderTotal / (DATA_POINTS / 2);
-        double newerAvg = (double)newerTotal / (DATA_POINTS / 2);
-        double timeBetweenCenters = (double)calc->windowSec / 2.0;
-        calc->trend = (newerAvg - olderAvg) / timeBetweenCenters;
-
-        // Compute short-term change-per-sec using the last 2 datapoints
-        long deltaShort = calc->metrics[DATA_POINTS - 1] - calc->metrics[DATA_POINTS - 2];
-        double timeBetweenSlots = (double)calc->windowSec / DATA_POINTS;
-        calc->trendShort = deltaShort / timeBetweenSlots;
+    if (calc->newCalculator) {
+        for (int i = 0; i < DATA_POINTS; i++) calc->metrics[i] = newValue;
+        calc->newCalculator = false;
     }
+
+    long olderTotal = 0;
+    for (int i = 0; i < DATA_POINTS / 2; i++) {
+        calc->metrics[i] = calc->metrics[i + 1];
+        olderTotal += calc->metrics[i];
+    }
+    long newerTotal = 0;
+    for (int i = DATA_POINTS / 2; i < DATA_POINTS - 1; i++) {
+        calc->metrics[i] = calc->metrics[i + 1];
+        newerTotal += calc->metrics[i];
+    }
+    calc->metrics[DATA_POINTS - 1] = newValue;
+    newerTotal += newValue;
+
+    /* Formula is the average of the newer data points, less the average of the older data
+     * points. The time is from the center of each half,
+     * resulting in half the window size (secs). So the formula is:
+     *     (AveNewer - AveOlder) / (WindowSec/2)
+     * Where:
+     *     AveNewer = newerTotal / (DATA_POINTS/2)
+     *     AveOlder = olderTotal / (DATA_POINTS/2) */
+    double olderAvg = (double)olderTotal / (DATA_POINTS / 2);
+    double newerAvg = (double)newerTotal / (DATA_POINTS / 2);
+    double timeBetweenCenters = (double)calc->windowSec / 2.0;
+    calc->trend = (newerAvg - olderAvg) / timeBetweenCenters;
+
+    /* Short-term: rate of change between last 2 datapoints. */
+    long deltaShort = calc->metrics[DATA_POINTS - 1] - calc->metrics[DATA_POINTS - 2];
+    double timeBetweenSlots = (double)calc->windowSec / DATA_POINTS;
+    calc->trendShort = deltaShort / timeBetweenSlots;
 }
 
 double trendCalc_changePerSec(trendCalculator *calc) {

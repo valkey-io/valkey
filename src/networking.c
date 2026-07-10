@@ -39,6 +39,7 @@
 #include "io_threads.h"
 #include "throttle.h"
 #include "throttle_repl.h"
+#include "stat_calc.h"
 #include "module.h"
 #include "connection.h"
 #include "zmalloc.h"
@@ -2222,7 +2223,7 @@ int freeClient(client *c) {
     if (c->lib_name) decrRefCount(c->lib_name);
     if (c->lib_ver) decrRefCount(c->lib_ver);
     freeClientMultiState(c);
-    if (c->cob_trend) zfree(c->cob_trend);
+    if (c->cob_trend) trendCalc_free(c->cob_trend);
     sdsfree(c->peerid);
     sdsfree(c->sockname);
     zfree(c);

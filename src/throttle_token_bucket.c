@@ -3,24 +3,30 @@
  * All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  */
+
 #include "throttle_token_bucket.h"
 #include "server.h"
 #include "monotonic.h"
 
 struct tokenBucket {
-    double tokens_per_sec;
-    double max_burst_time_secs;
-    double token_count;
-    monotime last_time_check;
+    double tokens_per_sec;      // Rate at which tokens are added to the bucket (tokens per second)
+    double max_burst_time_secs; // Maximum time for which tokens can accumulate in the bucket
+    double token_count;         // Current number of tokens in the bucket (can be negative if force-consumed)
+    monotime last_time_check;   // Last time the bucket was replenished (in microseconds)
 };
 
 #define BUCKET_EPSILON 0.0001
 
+/* Bucket capacity scales with rate: higher rates allow larger bursts.
+ * The +2 guarantees the bucket can always hold at least 2 tokens, preventing
+ * permanent starvation at very low rates where rate * burst_time < 1.
+ * Returns 0 when rate is effectively zero. */
 static double getBucketSize(tokenBucket *bucket) {
     return (bucket->tokens_per_sec < BUCKET_EPSILON) ? 0.0
-        : 2.0 + bucket->tokens_per_sec * bucket->max_burst_time_secs;
+                                                     : 2.0 + bucket->tokens_per_sec * bucket->max_burst_time_secs;
 }
 
+/* Clamp token count to valid range [-bucket_size, bucket_size]. */
 static void trimTokenBucket(tokenBucket *bucket) {
     double bucket_size = getBucketSize(bucket);
     if (bucket->token_count > bucket_size) bucket->token_count = bucket_size;
@@ -76,4 +82,3 @@ double tokenBucket_msUntilAvailable(tokenBucket *bucket, double target_tokens) {
     double needed = target_tokens - bucket->token_count;
     return needed / bucket->tokens_per_sec * 1000.0;
 }
-

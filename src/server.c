@@ -4722,7 +4722,7 @@ int processCommand(client *c) {
         return C_OK;
     }
 
-    if (throttle_deferCommand(c)) return C_OK;
+    if (throttleClientIfNeeded(c)) return C_OK;
 
     /* Exec the command */
     if (c->flag.multi && c->cmd->proc != execCommand && c->cmd->proc != discardCommand &&
@@ -6847,9 +6847,9 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
         info = sdscat(info, "# Throttle\r\n");
         info = sdscatprintf(info,
                             "throttle_total_throttled_commands:%lld\r\n",
-                            throttle_framework_metrics.total_throttled_commands);
-        info = throttle_sdscatMetrics(info);
-        info = throttleRepl_sdscatMetrics(info);
+                            throttle_getTotalThrottledCommands());
+        info = throttle_sdscatInfoMetrics(info);
+        info = throttleRepl_sdscatInfoMetrics(info);
     }
 
     /* Get info from modules.

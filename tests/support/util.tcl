@@ -712,6 +712,7 @@ proc process_is_paused pid {
     return [string match {*T*} [lindex [exec ps j $pid] 16]]
 }
 
+# Wait until the process enters a paused state.
 proc wait_process_paused pid {
     wait_for_condition 50 100 {
         [process_is_paused $pid]

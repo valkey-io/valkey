@@ -45,7 +45,7 @@ start_server {tags {"replication" "external:skip"}} {
             # Take the primary out of the BUSY state.
             $primary script kill
 
-            # Resume the replica: it sends SYNC
+            # The replica will retry PSYNC and succeed.
             wait_for_sync $replica2
             wait_for_ofs_sync $primary $replica1
             wait_for_ofs_sync $primary $replica2

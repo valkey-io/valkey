@@ -3706,7 +3706,7 @@ int replicaProcessPsyncReply(connection *conn) {
      * of falling back to the legacy SYNC command, because a SYNC full resync
      * does not carry the +FULLRESYNC offset baseline, which would leave the
      * replica in pre_psync mode (no ACKs, breaking WAIT / psync / failover). */
-    if (!strncmp(reply, "-NOMASTERLINK", 13) || !strncmp(reply, "-LOADING", 8) || !strncmp(reply, "-BUSY", 5) ) {
+    if (!strncmp(reply, "-NOMASTERLINK", 13) || !strncmp(reply, "-LOADING", 8) || !strncmp(reply, "-BUSY", 5)) {
         serverLog(LL_NOTICE,
                   "Primary is currently unable to PSYNC "
                   "but should be in the future: %s",

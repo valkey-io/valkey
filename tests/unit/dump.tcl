@@ -470,4 +470,38 @@ start_server {tags {"dump"}} {
         r debug set-skip-checksum-validation 0
         assert_match {*Bad data format*} $err
     } {} {needs:debug}
+
+    test {RESTORE rejects stream with shared NACK across consumers} {
+        # Create a valid stream with consumer group and two consumers
+        r DEL mystream
+        r XADD mystream 1-1 f v
+        r XADD mystream 2-1 f v
+        r XGROUP CREATE mystream grp 0
+        r XREADGROUP GROUP grp consumer1 COUNT 1 STREAMS mystream ">"
+        r XREADGROUP GROUP grp consumer2 COUNT 1 STREAMS mystream ">"
+
+        set dump [r DUMP mystream]
+        r DEL mystream
+
+        # In the dump, consumer2's PEL entry contains message ID 2-1.
+        # Replace it with 1-1 (same as consumer1's) to create a shared NACK.
+        # Message ID 2-1 in big-endian: \x00\x00\x00\x00\x00\x00\x00\x02\x00\x00\x00\x00\x00\x00\x00\x01
+        # Message ID 1-1 in big-endian: \x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x01
+        # Find the last occurrence of ID 2-1 (in consumer2's PEL) and replace with 1-1
+        set id_2_1 "\x00\x00\x00\x00\x00\x00\x00\x02\x00\x00\x00\x00\x00\x00\x00\x01"
+        set id_1_1 "\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x01"
+
+        # Find the last occurrence (consumer2's PEL entry, not the global PEL)
+        set last_pos [string last $id_2_1 $dump]
+        if {$last_pos == -1} {
+            fail "Could not find message ID 2-1 in dump"
+        }
+        set corrupt_dump [string replace $dump $last_pos [expr {$last_pos + 15}] $id_1_1]
+
+        # Skip CRC validation since we modified the payload
+        r debug set-skip-checksum-validation 1
+        catch {r RESTORE mystream 0 $corrupt_dump} err
+        r debug set-skip-checksum-validation 0
+        assert_match {*Bad data format*} $err
+    } {} {needs:debug}
 }

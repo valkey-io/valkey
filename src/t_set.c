@@ -559,24 +559,24 @@ robj *setTypeDup(robj *o) {
     robj *set;
     setTypeIterator *si;
 
-    serverAssert(o->type == OBJ_SET);
+    serverAssert(objectGetType(o) == OBJ_SET);
 
     /* Create a new set object that have the same encoding as the original object's encoding */
-    if (o->encoding == OBJ_ENCODING_INTSET) {
+    if (objectGetEncoding(o) == OBJ_ENCODING_INTSET) {
         intset *is = objectGetVal(o);
         size_t size = intsetBlobLen(is);
         intset *newis = zmalloc(size);
         memcpy(newis, is, size);
         set = createObject(OBJ_SET, newis);
         set->encoding = OBJ_ENCODING_INTSET;
-    } else if (o->encoding == OBJ_ENCODING_LISTPACK) {
+    } else if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) {
         unsigned char *lp = objectGetVal(o);
         size_t sz = lpBytes(lp);
         unsigned char *new_lp = zmalloc(sz);
         memcpy(new_lp, lp, sz);
         set = createObject(OBJ_SET, new_lp);
         set->encoding = OBJ_ENCODING_LISTPACK;
-    } else if (o->encoding == OBJ_ENCODING_HASHTABLE) {
+    } else if (objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE) {
         set = createSetObject();
         hashtable *ht = objectGetVal(o);
         hashtableExpand(objectGetVal(set), hashtableSize(ht));

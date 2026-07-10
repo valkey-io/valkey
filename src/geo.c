@@ -93,6 +93,8 @@ void geoVerticesFree(GeoShape *shape) {
         zfree(shape->t.polygon.points);
     } else if (shape->type == PATH_TYPE && shape->t.path.points != NULL) {
         zfree(shape->t.path.points);
+        zfree(shape->t.path.seg_bboxes);
+        zfree(shape->t.path.seg_lengths);
     }
 }
 
@@ -259,7 +261,8 @@ int geoWithinShape(GeoShape *shape, double score, double *xy, double *distance) 
     } else if (shape->type == PATH_TYPE) {
         if (!geohashGetDistanceIfInPath(xy, shape->t.path.points,
                                         shape->t.path.num_points, shape->t.path.width * shape->conversion,
-                                        shape->dist_type, distance)) {
+                                        shape->dist_type, shape->t.path.seg_bboxes,
+                                        shape->t.path.seg_lengths, distance)) {
             return C_ERR;
         }
     }
@@ -738,6 +741,13 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
                     return;
                 }
                 bypath = 1;
+                /* Pre-compute per-segment bounding boxes and lengths for fast pruning. */
+                int num_segs = num_points - 1;
+                shape.t.path.seg_bboxes = zmalloc(num_segs * sizeof(double[4]));
+                shape.t.path.seg_lengths = zmalloc(num_segs * sizeof(double));
+                geohashPrecomputePathSegments(shape.t.path.points, num_points,
+                                              shape.t.path.width * shape.conversion,
+                                              shape.t.path.seg_bboxes, shape.t.path.seg_lengths);
                 i += (1 + num_points * 2 + 2); /* num_points_arg + coords + distance + unit */
             } else {
                 addReplyErrorObject(c, shared.syntaxerr);
@@ -770,8 +780,11 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
     }
 
     /* Set the distance type on the shape so geohashGetDistanceIfInPath knows
-     * which metric to compute. */
-    if (withpathdist) shape.dist_type = GEO_DIST_PATHDIST;
+     * which metric to compute. GEO_DIST_NONE enables early exit. */
+    if (withpathdist)
+        shape.dist_type = GEO_DIST_PATHDIST;
+    else if (withdist)
+        shape.dist_type = GEO_DIST_NEAREST;
 
     if ((flags & GEOSEARCH) && !(frommember || fromloc) && !bypolygon && !bypath) {
         addReplyErrorFormat(c, "exactly one of FROMMEMBER or FROMLONLAT can be specified for %s",

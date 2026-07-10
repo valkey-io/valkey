@@ -804,6 +804,44 @@ start_server {tags {"geo"}} {
         assert_match {*only valid with BYPATH*} $e
     }
 
+    test {GEOSEARCH BYPATH distance correctness} {
+        r del routes
+        r geoadd routes -73.9857 40.7484 "EmpireState"
+        r geoadd routes -73.9712 40.7614 "Rockefeller"
+        r geoadd routes -73.9855 40.7580 "TimesSquare"
+        r geoadd routes -73.9934 40.7505 "PennStation"
+
+        # WITHDIST: verify perpendicular distances with ±5m tolerance
+        set result [r GEOSEARCH routes BYPATH 2 -73.9857 40.7484 -73.9712 40.7614 1500 m WITHDIST ASC]
+        # EmpireState is on the path endpoint -> ~0m
+        assert_lessthan [lindex [lindex $result 0] 1] 1.0
+        # Rockefeller is on the other endpoint -> ~0m
+        assert_lessthan [lindex [lindex $result 1] 1] 1.0
+        # TimesSquare is ~676m perpendicular from path
+        set ts_dist [lindex [lindex $result 2] 1]
+        assert_morethan $ts_dist 670
+        assert_lessthan $ts_dist 685
+        # PennStation is ~690m perpendicular from path
+        set ps_dist [lindex [lindex $result 3] 1]
+        assert_morethan $ps_dist 684
+        assert_lessthan $ps_dist 695
+
+        # WITHPATHDIST: verify along-path distances with ±5m tolerance
+        set result [r GEOSEARCH routes BYPATH 2 -73.9857 40.7484 -73.9712 40.7614 1500 m WITHPATHDIST ASC]
+        # EmpireState is at path start -> pathdist 0
+        assert_lessthan [lindex [lindex $result 0] 1] 1.0
+        # PennStation projects near the start -> pathdist ~0
+        assert_lessthan [lindex [lindex $result 1] 1] 1.0
+        # TimesSquare is ~827m along path
+        set ts_pathdist [lindex [lindex $result 2] 1]
+        assert_morethan $ts_pathdist 820
+        assert_lessthan $ts_pathdist 835
+        # Rockefeller is at the end -> pathdist ~1893m
+        set rock_pathdist [lindex [lindex $result 3] 1]
+        assert_morethan $rock_pathdist 1888
+        assert_lessthan $rock_pathdist 1898
+    }
+
     test {GEOSEARCH BYPATH with empty key} {
         r del emptykey
         set result [r GEOSEARCH emptykey BYPATH 2 -73.9857 40.7484 -73.9712 40.7614 500 m]

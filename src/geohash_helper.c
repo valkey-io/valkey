@@ -85,9 +85,9 @@ uint8_t geohashEstimateStepsByRadius(double range_meters, double lat) {
 }
 
 /* Compute the bounding box and centroid for a set of points.
- * If buffer_m > 0, the bounding box is expanded by that distance in all directions (used for bypath).
+ * If max_dist_m > 0, the bounding box is expanded by that distance in all directions (used for bypath).
  * The centroid is stored in shape->xy[] and the bounding box in bounds[]. */
-static int computeBoundingBoxAndCentroid(double (*points)[2], int count, double buffer_m, GeoShape *shape, double *bounds) {
+static int computeBoundingBoxAndCentroid(double (*points)[2], int count, double max_dist_m, GeoShape *shape, double *bounds) {
     double x = 0.0, y = 0.0, z = 0.0;
     double min_lon = GEO_LONG_MAX, max_lon = GEO_LONG_MIN;
     double min_lat = GEO_LAT_MAX, max_lat = GEO_LAT_MIN;
@@ -107,16 +107,16 @@ static int computeBoundingBoxAndCentroid(double (*points)[2], int count, double 
         y += cos(lat_rad) * sin(lon_rad);
         z += sin(lat_rad);
     }
-    if (buffer_m > 0) {
-        /* Expand bounding box by the buffer distance. Use the latitude with
+    if (max_dist_m > 0) {
+        /* This applies to bypath and expands bounding box by the buffer distance. Use the latitude with
          * the smallest cosine (highest absolute value) to ensure the longitude
          * expansion is never underestimated. */
-        double lat_delta = rad_deg(buffer_m / EARTH_RADIUS_IN_METERS);
+        double lat_delta = rad_deg(max_dist_m / EARTH_RADIUS_IN_METERS);
         double extreme_lat = fabs(min_lat) > fabs(max_lat) ? min_lat : max_lat;
         double adjusted_extreme_lat = extreme_lat + (extreme_lat > 0 ? lat_delta : -lat_delta);
         if (adjusted_extreme_lat > GEO_LAT_MAX) adjusted_extreme_lat = GEO_LAT_MAX;
         if (adjusted_extreme_lat < -GEO_LAT_MAX) adjusted_extreme_lat = -GEO_LAT_MAX;
-        double lon_delta = rad_deg(buffer_m / EARTH_RADIUS_IN_METERS / cos(deg_rad(adjusted_extreme_lat)));
+        double lon_delta = rad_deg(max_dist_m / EARTH_RADIUS_IN_METERS / cos(deg_rad(adjusted_extreme_lat)));
         min_lon -= lon_delta;
         min_lat -= lat_delta;
         max_lon += lon_delta;
@@ -168,8 +168,8 @@ int geohashBoundingBox(GeoShape *shape, double *bounds) {
     } else if (shape->type == POLYGON_TYPE) {
         return computeBoundingBoxAndCentroid(shape->t.polygon.points, shape->t.polygon.num_vertices, 0, shape, bounds);
     } else if (shape->type == PATH_TYPE) {
-        double buffer_m = shape->conversion * shape->t.path.width;
-        return computeBoundingBoxAndCentroid(shape->t.path.points, shape->t.path.num_points, buffer_m, shape, bounds);
+        double max_dist_m = shape->conversion * shape->t.path.width;
+        return computeBoundingBoxAndCentroid(shape->t.path.points, shape->t.path.num_points, max_dist_m, shape, bounds);
     }
     double longitude = shape->xy[0];
     double latitude = shape->xy[1];
@@ -395,6 +395,57 @@ int geohashGetDistanceIfInPolygon(double centroidLon, double centroidLat, double
     return inside;
 }
 
+/* Pre-compute per-segment bounding boxes and Haversine lengths.
+ * Called once per BYPATH command before iterating over candidates.
+ *
+ * Unlike computeBoundingBoxAndCentroid (which produces one bbox for the whole
+ * path to select geohash cells), this produces one bbox per segment to skip
+ * distant segments during the per-candidate distance check.
+ *
+ * For each segment, we compute an axis-aligned bounding box expanded by the
+ * buffer distance in all directions. During the search, a candidate point
+ * that falls outside a segment's bbox cannot be within max_dist_m of that
+ * segment, so the expensive projection + Haversine can be skipped (4 double
+ * comparisons vs ~8 trig ops).
+ *
+ * The latitude expansion (lat_delta) is constant everywhere. The longitude
+ * expansion (lon_delta) is computed at the segment's most extreme latitude
+ * (pushed outward by lat_delta) to ensure the bbox is never too narrow.
+ *
+ * seg_lengths[] stores pre-computed Haversine segment lengths to avoid
+ * redundant computation in WITHPATHDIST mode (which accumulates along-path
+ * distance). */
+void geohashPrecomputePathSegments(double (*points)[2], int num_points, double max_dist_m, double (*seg_bboxes)[4], double *seg_lengths) {
+    double lat_delta = rad_deg(max_dist_m / EARTH_RADIUS_IN_METERS);
+    for (int s = 0; s < num_points - 1; s++) {
+        double lon0 = points[s][0], lat0 = points[s][1];
+        double lon1 = points[s + 1][0], lat1 = points[s + 1][1];
+
+        /* Tight bbox around the segment endpoints. */
+        double smin_lon = lon0 < lon1 ? lon0 : lon1;
+        double smax_lon = lon0 > lon1 ? lon0 : lon1;
+        double smin_lat = lat0 < lat1 ? lat0 : lat1;
+        double smax_lat = lat0 > lat1 ? lat0 : lat1;
+
+        /* Compute lon_delta at the latitude farthest from the equator
+         * (after expansion) to ensure the bbox is conservative. */
+        double extreme_lat = fabs(smin_lat) > fabs(smax_lat) ? smin_lat : smax_lat;
+        double adj_lat = extreme_lat + (extreme_lat > 0 ? lat_delta : -lat_delta);
+        if (adj_lat > GEO_LAT_MAX) adj_lat = GEO_LAT_MAX;
+        if (adj_lat < -GEO_LAT_MAX) adj_lat = -GEO_LAT_MAX;
+        double lon_delta = rad_deg(max_dist_m / EARTH_RADIUS_IN_METERS / cos(deg_rad(adj_lat)));
+
+        /* Expand bbox by buffer distance. */
+        seg_bboxes[s][0] = smin_lon - lon_delta;
+        seg_bboxes[s][1] = smin_lat - lat_delta;
+        seg_bboxes[s][2] = smax_lon + lon_delta;
+        seg_bboxes[s][3] = smax_lat + lat_delta;
+
+        /* Pre-compute segment length (Haversine) for along-path accumulation. */
+        seg_lengths[s] = geohashGetDistance(lon0, lat0, lon1, lat1);
+    }
+}
+
 /* Check if a point is within a given distance of a polyline (path).
  * The algorithm computes the minimum perpendicular distance from the point
  * to any segment of the path. If that distance is <= max_dist_m, the point
@@ -404,7 +455,20 @@ int geohashGetDistanceIfInPolygon(double centroidLon, double centroidLat, double
  * the parameter t to [0,1] to find the closest point on the segment.
  * We then use Haversine to compute the great-circle distance.
  *
+ * Optimization: per-segment bounding box pruning. Each segment has a
+ * pre-computed bbox (geohashPrecomputePathSegments) expanded by the buffer distance.
+ *
+ *   bbox[0]       bbox[1]       bbox[2]       bbox[3]       bbox[4]
+ *   +-------+    +-------+    +-------+    +-------+    +-------+
+ *   | seg 0 |    | seg 1 |    | seg 2 |    | seg 3 |    | seg 4 |
+ *   |  A->B |    |  B->C |    |  C->D |    |  D->E |    |  E->F |
+ *   |       |    |   P   |    |       |    |       |    |       |
+ *   +-------+    +-------+    +-------+    +-------+    +-------+
+ *
+ *   If P is inside bbox[1] only, then full calculation for seg 1 and skip rest.
+ *
  * Returns 1 if the point is within the path corridor, 0 otherwise.
+ * When dist_type == GEO_DIST_NONE, sets no distance and exit early.
  * When dist_type == GEO_DIST_PATHDIST, sets *distance to the along-path
  * distance from the first vertex to the nearest projection point.
  * When dist_type == GEO_DIST_NEAREST, sets *distance to the perpendicular
@@ -414,6 +478,8 @@ int geohashGetDistanceIfInPath(double *point,
                                int num_points,
                                double max_dist_m,
                                int dist_type,
+                               double (*seg_bboxes)[4],
+                               double *seg_lengths,
                                double *distance) {
     double min_dist = INFINITY;
     double along_path_at_min = 0.0; /* Along-path distance from first vertex to the
@@ -421,15 +487,20 @@ int geohashGetDistanceIfInPath(double *point,
     double cumulative_len = 0.0;
 
     for (int i = 0; i < num_points - 1; i++) {
+        double seg_len = seg_lengths ? seg_lengths[i] : 0.0;
+
+        /* Fast bbox rejection: skip segments whose expanded bbox doesn't contain the point. */
+        if (seg_bboxes) {
+            double *bb = seg_bboxes[i];
+            if (point[0] < bb[0] || point[0] > bb[2] ||
+                point[1] < bb[1] || point[1] > bb[3]) {
+                cumulative_len += seg_len;
+                continue;
+            }
+        }
+
         double ax = pathPoints[i][0], ay = pathPoints[i][1];
         double bx = pathPoints[i + 1][0], by = pathPoints[i + 1][1];
-
-        /* Compute the full segment length via Haversine for along-path distance.
-         * Only needed when pathdist is requested. */
-        double seg_len = 0.0;
-        if (dist_type == GEO_DIST_PATHDIST) {
-            seg_len = geohashGetDistance(ax, ay, bx, by);
-        }
 
         /* Project point onto the segment using equirectangular approximation.
          * Scale longitude differences by cos(latitude) to account for the
@@ -475,6 +546,9 @@ int geohashGetDistanceIfInPath(double *point,
         double dist = geohashGetDistance(point[0], point[1], cx, cy);
         if (dist < min_dist) {
             min_dist = dist;
+            if (dist_type == GEO_DIST_NONE && min_dist <= max_dist_m) {
+                return 1;
+            }
             along_path_at_min = cumulative_len + t * seg_len;
         }
         cumulative_len += seg_len;

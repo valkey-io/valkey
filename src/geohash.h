@@ -97,8 +97,9 @@ typedef struct {
 #define PATH_TYPE 4
 
 /* Distance type for PATH searches */
-#define GEO_DIST_NEAREST 0  /* cross-track distance (default) */
-#define GEO_DIST_PATHDIST 1 /* along-path distance from first vertex */
+#define GEO_DIST_NONE 0     /* no distance needed, enables early exit */
+#define GEO_DIST_NEAREST 1  /* perpendicular distance to nearest segment */
+#define GEO_DIST_PATHDIST 2 /* along-path distance from first vertex */
 
 typedef struct {
     int type;          /* search type */
@@ -122,9 +123,11 @@ typedef struct {
         } polygon;
         /* PATH_TYPE */
         struct {
-            int num_points;      /* number of waypoints in the path */
-            double (*points)[2]; /* array of [lon, lat] waypoints */
-            double width;        /* corridor half-width: max perpendicular distance from path */
+            int num_points;          /* number of waypoints in the path */
+            double (*points)[2];     /* array of [lon, lat] waypoints */
+            double width;            /* corridor half-width: max perpendicular distance from path */
+            double (*seg_bboxes)[4]; /* per-segment expanded bboxes [min_lon, min_lat, max_lon, max_lat] */
+            double *seg_lengths;     /* pre-computed Haversine length per segment (for WITHPATHDIST) */
         } path;
     } t;
 } GeoShape;

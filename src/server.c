@@ -2980,6 +2980,7 @@ void initServer(void) {
     server.client_mem_usage_buckets = NULL;
     server.debug_client_enforce_reply_list = 0;
     server.debug_force_free_primary_async = 0;
+    server.debug_pause_before_psync = 0;
     resetReplicationBuffer();
 
     /* Make sure the locale is set on startup based on the config file. */
@@ -3025,8 +3026,6 @@ void initServer(void) {
     server.in_exec = 0;
     server.busy_module_yield_flags = BUSY_MODULE_YIELD_NONE;
     server.busy_module_yield_reply = NULL;
-    server.debug_repl_pause_before_psync = 0;
-    server.debug_repl_pause_before_sync = 0;
     server.client_pause_in_transaction = 0;
     server.child_pid = -1;
     server.child_type = CHILD_TYPE_NONE;

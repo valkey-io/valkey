@@ -3701,7 +3701,12 @@ int replicaProcessPsyncReply(connection *conn) {
      * Return PSYNC_NOT_SUPPORTED on errors we don't understand, otherwise
      * return PSYNC_TRY_LATER if we believe this is a transient error. */
 
-    if (!strncmp(reply, "-NOMASTERLINK", 13) || !strncmp(reply, "-LOADING", 8)) {
+    /* The primary replied with a transient error: it cannot serve a PSYNC
+     * right now, but will be able to in the future. Retry PSYNC later instead
+     * of falling back to the legacy SYNC command, because a SYNC full resync
+     * does not carry the +FULLRESYNC offset baseline, which would leave the
+     * replica in pre_psync mode (no ACKs, breaking WAIT / psync / failover). */
+    if (!strncmp(reply, "-NOMASTERLINK", 13) || !strncmp(reply, "-LOADING", 8) || !strncmp(reply, "-BUSY", 5) ) {
         serverLog(LL_NOTICE,
                   "Primary is currently unable to PSYNC "
                   "but should be in the future: %s",
@@ -4049,11 +4054,11 @@ int syncWithPrimaryHandleSendPsyncState(connection *conn) {
     /* Debug hook: pause the replica right before it sends PSYNC to its
      * primary, so a test can put the primary into a transient (e.g. BUSY)
      * state and deterministically reproduce the PSYNC -> SYNC downgrade race. */
-    if (server.debug_repl_pause_before_psync) {
-        server.debug_repl_pause_before_psync = 0;
-        serverLog(LL_NOTICE, "Debug: pausing replica before sending PSYNC");
+    if (server.debug_pause_before_psync) {
+        server.debug_pause_before_psync = 0;
         debugPauseProcess();
     }
+
     if (replicaSendPsyncCommand(conn) == PSYNC_WRITE_ERROR) {
         sds err = sdsnew("Write error sending the PSYNC command.");
         abortFailover(err);
@@ -4317,16 +4322,7 @@ void syncWithPrimary(connection *conn) {
      * and the server.primary_replid and primary_initial_offset are
      * already populated. */
     if (psync_result == PSYNC_NOT_SUPPORTED) {
-        /* Debug hook: pause the replica right before falling back to the
-         * legacy SYNC command, so a test can take the primary out of its
-         * transient (e.g. BUSY) state first and observe the resulting
-         * pre_psync (no initial offset) replica. */
         serverLog(LL_NOTICE, "Retrying with SYNC...");
-        if (server.debug_repl_pause_before_sync) {
-            server.debug_repl_pause_before_sync = 0;
-            serverLog(LL_NOTICE, "Debug: pausing replica before sending SYNC");
-            debugPauseProcess();
-        }
         if (connSyncWrite(conn, "SYNC\r\n", 6, server.repl_syncio_timeout * 1000) == -1) {
             serverLog(LL_WARNING, "I/O error writing to PRIMARY: %s", connGetLastError(conn));
             syncWithPrimaryHandleError(&conn);

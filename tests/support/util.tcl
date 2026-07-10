@@ -714,7 +714,7 @@ proc process_is_paused pid {
 
 proc wait_process_paused pid {
     wait_for_condition 50 100 {
-        [string match {*T*} [lindex [exec ps j $pid] 16]]
+        [process_is_paused $pid]
     } else {
         puts [exec ps j $pid]
         fail "process didn't stop"

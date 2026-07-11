@@ -1918,13 +1918,28 @@ static int _lpEntryValidation(unsigned char *p, unsigned int head_count, void *u
         int pairs;
         int allow_metadata;
         long count;
+        long entries_seen;
+        long long expected_volatile;
+        long long seen_volatile;
         hashtable *fields;
     } *data = userdata;
 
     /* Metadata (tagged) entries are only legal in hash listpacks. When allowed,
      * skip them (they're not real field/value records); otherwise reject the
-     * listpack, since their presence in a set/zset payload indicates corruption. */
-    if (lpIsMetadata(p)) return data->allow_metadata ? 1 : 0;
+     * listpack, since their presence in a set/zset payload indicates corruption.
+     * A tagged entry in the leading position is the aggregate header carrying
+     * the volatile-field count; every other one is a per-field expiry, tallied
+     * so the caller can cross-check the header. */
+    if (lpIsMetadata(p)) {
+        if (!data->allow_metadata) return 0;
+        if (data->entries_seen == 0)
+            data->expected_volatile = lpGetMetadataValue(p);
+        else
+            data->seen_volatile++;
+        data->entries_seen++;
+        return 1;
+    }
+    data->entries_seen++;
 
     if (data->fields == NULL) {
         data->fields = hashtableCreate(&setHashtableType);
@@ -1963,13 +1978,24 @@ int lpValidateIntegrityAndDups(unsigned char *lp, size_t size, int pairs, int al
         int pairs;
         int allow_metadata;
         long count;
+        long entries_seen;
+        long long expected_volatile; /* -1: no aggregate header present. */
+        long long seen_volatile;
         hashtable *fields; /* Initialisation at the first callback. */
-    } data = {pairs, allow_metadata, 0, NULL};
+    } data = {pairs, allow_metadata, 0, 0, -1, 0, NULL};
 
     int ret = lpValidateIntegrity(lp, size, _lpEntryValidation, &data, allow_metadata);
 
     /* make sure we have an even number of records. */
     if (pairs && data.count & 1) ret = 0;
+
+    /* Cross-check the aggregate volatile-count header against the per-field
+     * expiry entries actually present: a mismatch (or per-field entries with
+     * no header at all) indicates corruption. */
+    if (ret && allow_metadata) {
+        long long expected = (data.expected_volatile == -1) ? 0 : data.expected_volatile;
+        if (expected != data.seen_volatile) ret = 0;
+    }
 
     if (data.fields) hashtableRelease(data.fields);
     return ret;

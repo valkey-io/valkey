@@ -70,14 +70,53 @@ static vset *hashTypeGetVolatileSet(robj *o) {
     return vsetIsValid(set) ? set : NULL;
 }
 
+/* Maintain the aggregate volatile-count header of a listpack-encoded hash.
+ *
+ * The header is a single tagged entry leading the listpack (see
+ * lpPeekLeadingMetadata()) whose integer payload is the number of fields
+ * carrying an expiry. It exists only while that count is > 0: created on the
+ * 0->1 transition, updated in place, and deleted on the 1->0 transition, so
+ * hashes without field TTLs pay nothing. All semantics live here; the
+ * listpack layer only provides the positional primitive.
+ *
+ * Must be called after the mutation it accounts for; it may reallocate the
+ * listpack, so callers must not reuse element pointers taken before it. */
+static void hashTypeUpdateVolatileCount(robj *o, long delta) {
+    if (delta == 0) return;
+    serverAssert(objectGetEncoding(o) == OBJ_ENCODING_LISTPACK);
+    unsigned char *zl = objectGetVal(o);
+    unsigned char *head = lpPeekLeadingMetadata(zl);
+    long long count = head ? lpGetMetadataValue(head) : 0;
+    count += delta;
+    serverAssert(count >= 0);
+
+    if (count == 0) {
+        if (head) zl = lpDelete(zl, head, NULL);
+    } else {
+        unsigned char intenc[LP_MAX_INT_ENCODING_LEN];
+        uint64_t enclen;
+        lpEncodeIntegerGetType(count, intenc, &enclen);
+        if (head) {
+            zl = lpInsertMetadata(zl, intenc, enclen, head, LP_REPLACE, NULL);
+        } else {
+            /* Create the header before the first physical entry (or before
+             * EOF if the listpack is empty). */
+            unsigned char *first = lpFirst(zl);
+            if (first == NULL) first = zl + lpGetTotalBytes(zl) - 1;
+            zl = lpInsertMetadata(zl, intenc, enclen, first, LP_BEFORE, NULL);
+        }
+    }
+    objectSetVal(o, zl);
+}
+
 bool hashTypeHasVolatileFields(robj *o) {
     if (o == NULL) return false;
     serverAssert(objectGetType(o) == OBJ_HASH);
 
     if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) {
-        unsigned char *zl = objectGetVal(o);
-        for (unsigned char *p = lpFirst(zl); p; p = lpNext(zl, p))
-            if (lpGetMetadata(zl, p)) return true;
+        /* O(1): the aggregate header exists iff at least one field carries
+         * an expiry. */
+        return lpPeekLeadingMetadata(objectGetVal(o)) != NULL;
     }
 
     if (objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE) {
@@ -417,6 +456,7 @@ int hashTypeSet(robj *o, sds field, sds value, mstime_t expiry, int flags, bool 
     if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) {
         unsigned char *zl, *fptr, *vptr;
         bool has_expiry = false;
+        int volatile_delta = 0;
 
         zl = objectGetVal(o);
         fptr = lpFirst(zl);
@@ -459,6 +499,7 @@ int hashTypeSet(robj *o, sds field, sds value, mstime_t expiry, int flags, bool 
                 vptr = lpNext(zl, fptr);
                 zl = lpInsertMetadata(zl, intenc, enclen, vptr, LP_AFTER, NULL);
             }
+            volatile_delta = (expiry != EXPIRY_NONE ? 1 : 0) - (has_expiry ? 1 : 0);
             update = is_expired ? 0 : 1;
         } else {
             /* Push new field/value pair onto the tail of the listpack */
@@ -470,10 +511,12 @@ int hashTypeSet(robj *o, sds field, sds value, mstime_t expiry, int flags, bool 
                 lpEncodeIntegerGetType(expiry, intenc, &enclen);
                 unsigned char *eofptr = zl + lpGetTotalBytes(zl) - 1;
                 zl = lpInsertMetadata(zl, intenc, enclen, eofptr, LP_BEFORE, NULL);
+                volatile_delta = 1;
             }
         }
 
         objectSetVal(o, zl);
+        hashTypeUpdateVolatileCount(o, volatile_delta);
 
         /* Check if the listpack needs to be converted to a hash table */
         if (hashTypeLength(o) > server.hash_max_listpack_entries) hashTypeConvert(o, OBJ_ENCODING_HASHTABLE);
@@ -607,6 +650,7 @@ static expiryModificationResult hashTypeSetExpire(robj *o, sds field, mstime_t e
         zl = lpInsertMetadata(zl, intenc, enclen, value_ptr, LP_AFTER, NULL);
 
         objectSetVal(o, zl);
+        if (!has_expiry) hashTypeUpdateVolatileCount(o, 1);
         return EXPIRATION_MODIFICATION_SUCCESSFUL;
     }
 
@@ -692,6 +736,7 @@ static expiryModificationResult hashTypePersist(robj *o, sds field) {
              * that a value exists */
             zl = lpDelete(zl, metadata_ptr, NULL);
             objectSetVal(o, zl);
+            hashTypeUpdateVolatileCount(o, -1);
             return EXPIRATION_MODIFICATION_SUCCESSFUL;
         } else {
             return EXPIRATION_MODIFICATION_NOT_EXIST; // Did not find any element return -2
@@ -726,11 +771,14 @@ bool hashTypeDelete(robj *o, sds field) {
         if (fptr != NULL) {
             fptr = lpFind(zl, fptr, (unsigned char *)field, sdslen(field), 1);
             if (fptr != NULL) {
+                unsigned char *value_ptr = lpNext(zl, fptr);
+                bool was_volatile = (value_ptr && lpGetMetadata(zl, value_ptr) != NULL);
                 /* Delete field and value; metadata entries trailing the pair
                  * are deleted along with it. */
                 zl = lpDeleteRangeWithEntry(zl, &fptr, 2);
 
                 objectSetVal(o, zl);
+                if (was_volatile) hashTypeUpdateVolatileCount(o, -1);
                 deleted = true;
             }
         }
@@ -2666,6 +2714,10 @@ size_t hashTypeDeleteExpiredFields(robj *o, mstime_t now, unsigned long max_fiel
 
             p = lpNext(zl, vptr);
         }
+
+        /* Bulk-update the aggregate header once: doing it per deletion would
+         * reallocate the listpack under the scan cursor. */
+        hashTypeUpdateVolatileCount(o, -(long)expired_count);
 
         return expired_count;
     }

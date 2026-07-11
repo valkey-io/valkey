@@ -1308,8 +1308,8 @@ TEST_F(QuicklistTest, quicklistReplaceAggregateOverflowUsesEncodedSizeBoundary) 
     ASSERT_NE(ql->head, nullptr);
     ASSERT_NE(ql->tail, nullptr);
     ASSERT_NE(ql->head, ql->tail);
-    EXPECT_EQ(ql->head->container, QUICKLIST_NODE_CONTAINER_PACKED);
-    EXPECT_EQ(ql->tail->container, QUICKLIST_NODE_CONTAINER_PACKED);
+    EXPECT_EQ(ql->head->container, static_cast<unsigned int>(QUICKLIST_NODE_CONTAINER_PACKED));
+    EXPECT_EQ(ql->tail->container, static_cast<unsigned int>(QUICKLIST_NODE_CONTAINER_PACKED));
     EXPECT_EQ(ql->head->count, 1u);
     EXPECT_EQ(ql->tail->count, 1u);
     EXPECT_EQ(ql->head->sz, lpBytes(ql->head->entry));

@@ -1662,6 +1662,7 @@ static void rewriteConfigSocketBindOption(standardConfig *config, const char *na
 
 /* Rewrite the loadmodule option. */
 void rewriteConfigLoadmoduleOption(struct rewriteConfigState *state) {
+    serverAssert(listLength(server.module_load_order) == dictSize(modules));
     if (dictSize(modules) == 0) {
         rewriteConfigMarkAsProcessed(state, "loadmodule");
         return;

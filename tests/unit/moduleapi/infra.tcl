@@ -42,10 +42,8 @@ test {modules config rewrite preserves load order} {
         r config rewrite
 
         set lines [loadmodule_lines_from_config]
-        # Static-module filter check: zero `loadmodule lua` lines should appear in the
-        # rewritten conf. This guards the rewritten-line SHAPE after is_static_module
-        # filter at src/config.c:1622 — not the NULL-deref path at module.c:702
-        # (a filter regression would crash `r config rewrite` before reaching here).
+        # Static module omission: CONFIG REWRITE should not emit a loadmodule
+        # directive for the built-in lua module.
         foreach line $lines {
             assert {![regexp {^\s*loadmodule\s+lua(\s|$)} $line]}
         }
@@ -53,6 +51,17 @@ test {modules config rewrite preserves load order} {
         set idx_data [lsearch -regexp $lines {datatype}]
         assert {$idx_info >= 0 && $idx_data >= 0}
         assert {$idx_info < $idx_data}
+
+        assert_error {*the module exports one or more module-side data types, can't unload*} {
+            r module unload datatype
+        }
+        r config rewrite
+        set lines [loadmodule_lines_from_config]
+        set info_lines [lsearch -all -regexp $lines {infotest}]
+        set data_lines [lsearch -all -regexp $lines {datatype}]
+        assert_equal 1 [llength $info_lines]
+        assert_equal 1 [llength $data_lines]
+        assert {[lindex $info_lines 0] < [lindex $data_lines 0]}
 
         # Reload infotest — it should move to the tail of module_load_order.
         assert_equal {OK} [r module unload infotest]

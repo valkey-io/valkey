@@ -662,6 +662,50 @@ unsigned char *lpFind(unsigned char *lp, unsigned char *p, unsigned char *s, uin
     return NULL;
 }
 
+typedef struct {
+    unsigned char intenc[LP_MAX_INT_ENCODING_LEN];
+    unsigned char backlen[LP_MAX_BACKLEN_SIZE];
+    uint64_t enclen;
+    unsigned long backlen_size;
+    uint32_t replaced_len;
+    int enctype;
+} lpInsertEncoding;
+
+static uint64_t lpInsertEncodedSize(unsigned char *lp,
+                                    unsigned char *elestr,
+                                    unsigned char *eleint,
+                                    uint32_t size,
+                                    unsigned char *p,
+                                    int where,
+                                    lpInsertEncoding *encoding) {
+    int del_ele = (elestr == NULL && eleint == NULL);
+
+    if (elestr) {
+        encoding->enctype = lpEncodeGetType(elestr, size, encoding->intenc, &encoding->enclen);
+    } else if (eleint) {
+        encoding->enctype = LP_ENCODING_INT;
+        encoding->enclen = size;
+    } else {
+        encoding->enctype = -1;
+        encoding->enclen = 0;
+    }
+
+    encoding->backlen_size = !del_ele ? lpEncodeBacklen(encoding->backlen, encoding->enclen) : 0;
+    encoding->replaced_len = 0;
+    if (where == LP_REPLACE) {
+        encoding->replaced_len = lpCurrentEncodedSizeUnsafe(p);
+        encoding->replaced_len += lpEncodeBacklen(NULL, encoding->replaced_len);
+        ASSERT_INTEGRITY_LEN(lp, p, encoding->replaced_len);
+    }
+
+    return lpGetTotalBytes(lp) + encoding->enclen + encoding->backlen_size - encoding->replaced_len;
+}
+
+uint64_t lpEstimateReplacementBytes(unsigned char *lp, unsigned char *p, unsigned char *s, uint32_t slen) {
+    lpInsertEncoding encoding;
+    return lpInsertEncodedSize(lp, s, NULL, slen, p, LP_REPLACE, &encoding);
+}
+
 /* Insert, delete or replace the specified string element 'elestr' of length
  * 'size' or integer element 'eleint' at the specified position 'p', with 'p'
  * being a listpack element pointer obtained with lpFirst(), lpLast(), lpNext(),
@@ -697,10 +741,6 @@ unsigned char *lpInsert(unsigned char *lp,
                         unsigned char *p,
                         int where,
                         unsigned char **newp) {
-    unsigned char intenc[LP_MAX_INT_ENCODING_LEN];
-    unsigned char backlen[LP_MAX_BACKLEN_SIZE];
-
-    uint64_t enclen; /* The length of the encoded element. */
     int del_ele = (elestr == NULL && eleint == NULL);
 
     /* when deletion, it is conceptually replacing the element with a
@@ -722,39 +762,10 @@ unsigned char *lpInsert(unsigned char *lp,
      * address again after a reallocation. */
     unsigned long poff = p - lp;
 
-    int enctype;
-    if (elestr) {
-        /* Calling lpEncodeGetType() results into the encoded version of the
-         * element to be stored into 'intenc' in case it is representable as
-         * an integer: in that case, the function returns LP_ENCODING_INT.
-         * Otherwise if LP_ENCODING_STR is returned, we'll have to call
-         * lpEncodeString() to actually write the encoded string on place later.
-         *
-         * Whatever the returned encoding is, 'enclen' is populated with the
-         * length of the encoded element. */
-        enctype = lpEncodeGetType(elestr, size, intenc, &enclen);
-        if (enctype == LP_ENCODING_INT) eleint = intenc;
-    } else if (eleint) {
-        enctype = LP_ENCODING_INT;
-        enclen = size; /* 'size' is the length of the encoded integer element. */
-    } else {
-        enctype = -1;
-        enclen = 0;
-    }
-
-    /* We need to also encode the backward-parsable length of the element
-     * and append it to the end: this allows to traverse the listpack from
-     * the end to the start. */
-    unsigned long backlen_size = (!del_ele) ? lpEncodeBacklen(backlen, enclen) : 0;
+    lpInsertEncoding encoding;
     uint64_t old_listpack_bytes = lpGetTotalBytes(lp);
-    uint32_t replaced_len = 0;
-    if (where == LP_REPLACE) {
-        replaced_len = lpCurrentEncodedSizeUnsafe(p);
-        replaced_len += lpEncodeBacklen(NULL, replaced_len);
-        ASSERT_INTEGRITY_LEN(lp, p, replaced_len);
-    }
-
-    uint64_t new_listpack_bytes = old_listpack_bytes + enclen + backlen_size - replaced_len;
+    uint64_t new_listpack_bytes = lpInsertEncodedSize(lp, elestr, eleint, size, p, where, &encoding);
+    if (encoding.enctype == LP_ENCODING_INT && elestr) eleint = encoding.intenc;
     if (new_listpack_bytes > UINT32_MAX) return NULL;
 
     /* We now need to reallocate in order to make space or shrink the
@@ -774,9 +785,9 @@ unsigned char *lpInsert(unsigned char *lp,
     /* Setup the listpack relocating the elements to make the exact room
      * we need to store the new one. */
     if (where == LP_BEFORE) {
-        memmove(dst + enclen + backlen_size, dst, old_listpack_bytes - poff);
+        memmove(dst + encoding.enclen + encoding.backlen_size, dst, old_listpack_bytes - poff);
     } else { /* LP_REPLACE. */
-        memmove(dst + enclen + backlen_size, dst + replaced_len, old_listpack_bytes - poff - replaced_len);
+        memmove(dst + encoding.enclen + encoding.backlen_size, dst + encoding.replaced_len, old_listpack_bytes - poff - encoding.replaced_len);
     }
 
     /* Realloc after: we need to free space. */
@@ -793,16 +804,16 @@ unsigned char *lpInsert(unsigned char *lp,
         if (del_ele && dst[0] == LP_EOF) *newp = NULL;
     }
     if (!del_ele) {
-        if (enctype == LP_ENCODING_INT) {
-            memcpy(dst, eleint, enclen);
+        if (encoding.enctype == LP_ENCODING_INT) {
+            memcpy(dst, eleint, encoding.enclen);
         } else if (elestr) {
             lpEncodeString(dst, elestr, size);
         } else {
             valkey_unreachable();
         }
-        dst += enclen;
-        memcpy(dst, backlen, backlen_size);
-        dst += backlen_size;
+        dst += encoding.enclen;
+        memcpy(dst, encoding.backlen, encoding.backlen_size);
+        dst += encoding.backlen_size;
     }
 
     /* Update header. */

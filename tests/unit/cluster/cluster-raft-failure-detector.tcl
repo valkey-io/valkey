@@ -127,4 +127,46 @@ start_cluster 3 2 {tags {external:skip cluster cluster-raft:only}} {
         }
     }
 
+    test "Whole-shard-down fallback uses AE_ACK-based detection" {
+        # Kill both primary and replica of a multi-node shard. The raft
+        # leader (outside the shard) should detect via AE_ACK fallback.
+        # Skip if leader is in the same shard as the multi-node pair.
+        if {$::leader_idx == $::multi_node_primary || $::leader_idx == $::multi_node_replica} {
+            puts "SKIP: leader is in the target shard"
+            return
+        }
+
+        set loglines [count_log_lines [expr -1*$::leader_idx]]
+        set primary_id [R $::multi_node_primary CLUSTER MYID]
+        set replica_id [R $::multi_node_replica CLUSTER MYID]
+
+        # Kill both shard members.
+        pause_process [srv [expr -1*$::multi_node_primary] pid]
+        pause_process [srv [expr -1*$::multi_node_replica] pid]
+
+        # Wait for the AE_ACK-based detection log on the raft leader.
+        wait_for_log_messages [expr -1*$::leader_idx] \
+            {"*AE_ACK timeout, proposing NODE_FAIL*"} \
+            $loglines 2000 50
+
+        # Verify both nodes are marked FAIL.
+        wait_for_condition 1000 50 {
+            [string match "*$primary_id*fail*" [R $::leader_idx CLUSTER NODES]] &&
+            [string match "*$replica_id*fail*" [R $::leader_idx CLUSTER NODES]]
+        } else {
+            fail "Whole-shard-down: not all members marked FAIL"
+        }
+
+        resume_process [srv [expr -1*$::multi_node_primary] pid]
+        resume_process [srv [expr -1*$::multi_node_replica] pid]
+
+        # Wait for recovery.
+        wait_for_condition 1000 50 {
+            ![string match "*$primary_id*fail*" [R $::leader_idx CLUSTER NODES]] &&
+            ![string match "*$replica_id*fail*" [R $::leader_idx CLUSTER NODES]]
+        } else {
+            fail "Whole-shard-down: members did not recover"
+        }
+    }
+
 } ;# start_cluster

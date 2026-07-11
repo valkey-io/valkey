@@ -59,14 +59,12 @@ typedef enum {
 #define REPL_CONNECT_GRACE_PERIOD_MS 5000
 
 
-/* Primary-side timeout (seconds) for detecting a silent connected replica.
- * Uses cluster-node-timeout converted to seconds. */
+/* Primary-side timeout (seconds) for detecting replica failure. */
 static inline time_t raftPrimarySideTimeout(void) {
     return (time_t)(server.cluster_node_timeout / 1000);
 }
 
-/* Replica-side timeout (seconds) for detecting a silent/down primary.
- * 1.5× cluster-node-timeout to let the primary propose first. */
+/* Replica-side timeout (seconds) for detecting primary failure. */
 static inline time_t raftReplicaSideTimeout(void) {
     time_t t = (time_t)(server.cluster_node_timeout / 1000) * 3 / 2;
     return t < 1 ? 1 : t;
@@ -1343,6 +1341,8 @@ static int raftValidateFailRecoverEntry(sds data, clusterNode **target, clusterN
         int primary_and_replica = (same_shard && !nodeIsReplica(*proposer) && nodeIsReplica(*target));
         int replica_and_primary = (same_shard && nodeIsReplica(*proposer) && !nodeIsReplica(*target));
         if (nodeFailed(*proposer)) return 0;
+        /* Valid if: raft leader, or primary proposing for its replica,
+         * or replica proposing for its primary. */
         if (!is_leader && !primary_and_replica && !replica_and_primary) return 0;
     }
     return 1;
@@ -2219,10 +2219,7 @@ static void clusterRaftProposeNodeFail(clusterNode *node, const char *reason) {
 /* Leader: periodically drop stale links to failed nodes so that
  * clusterConnectNodes can establish a fresh connection. This allows
  * the leader to detect recovery when the node comes back and sends
- * an AE_ACK on the new link.
- *
- * Periodically drops stale links so clusterConnectNodes can establish
- * a fresh connection for recovery detection. */
+ * an AE_ACK on the new link. */
 static void clusterRaftRecycleFailedNodeLinks(mstime_t now) {
     mstime_t node_timeout = server.cluster_node_timeout;
 
@@ -2257,8 +2254,7 @@ static void clusterRaftDetectFailures(mstime_t now) {
     dictEntry *de;
     while ((de = dictNext(di)) != NULL) {
         clusterNode *node = dictGetVal(de);
-        if (node == myself) continue;
-        if (nodeFailed(node)) continue;
+        if (node == myself || nodeFailed(node)) continue;
 
         clusterNodeRaftData *rd = RAFT_NODE(node);
         if (rd->pending_fail_change) continue;
@@ -2270,7 +2266,9 @@ static void clusterRaftDetectFailures(mstime_t now) {
          * it will handle detection via the replication stream. */
         if (nodeIsReplica(node) || clusterNodeNumReplicas(node) > 0) {
             clusterNode *primary = nodeIsReplica(node) ? node->replicaof : node;
-            if (!primary) continue;
+            /* Orphaned replica with no primary — no replication stream
+             * exists to monitor it. */
+            if (!primary) goto propose_fail;
             int all_timed_out = 1;
 
             /* If the leader is itself in this shard, it's a responsive
@@ -2279,14 +2277,17 @@ static void clusterRaftDetectFailures(mstime_t now) {
                 all_timed_out = 0;
             }
 
-            /* Check the primary (if it's not the node we're evaluating). */
+            /* Check the primary: if it's still responsive, it can detect
+             * the failed replica via replication-stream — no need for
+             * AE_ACK fallback. */
             if (all_timed_out && primary != node && !nodeFailed(primary)) {
                 clusterNodeRaftData *prd = RAFT_NODE(primary);
                 if (!(prd->last_ack_time > 0 && now - prd->last_ack_time > node_timeout)) {
                     all_timed_out = 0;
                 }
             }
-            /* Check all replicas. */
+            /* Check all replicas: if any replica is still responsive,
+             * it can detect the failed primary via replication-stream. */
             if (all_timed_out) {
                 int num_replicas = clusterNodeNumReplicas(primary);
                 for (int i = 0; i < num_replicas; i++) {
@@ -2302,13 +2303,11 @@ static void clusterRaftDetectFailures(mstime_t now) {
             if (!all_timed_out) continue;
         }
 
+    propose_fail:
         clusterRaftProposeNodeFail(node, "AE_ACK timeout");
     }
     dictReleaseIterator(di);
 }
-
-/* Find a client in server.replicas matching the given cluster node ID.
- * Returns the client if found, NULL otherwise. */
 
 /* Detect failures via the replication stream. Active only in raft mode.
  *
@@ -2361,7 +2360,7 @@ static void clusterRaftDetectReplStreamFailures(mstime_t now) {
     }
 
     /* Replica side: check our primary from cluster state.
-     * Timeout = 1.5T to let the primary (or the raft leader) propose first. */
+     * Timeout = 1.5T to let the primary propose first. */
     if (nodeIsReplica(myself) && myself->replicaof &&
         !nodeFailed(myself->replicaof) &&
         !RAFT_NODE(myself->replicaof)->pending_fail_change) {
@@ -2406,16 +2405,11 @@ static void clusterRaftProposeReplStreamNodeRecover(clusterNode *node) {
     rd->pending_fail_change = 1;
 }
 
-/* Detect data-path recovery via the replication stream for multi-node shards.
- *
- * Primary side: a FAIL'd replica is now ACKing again within the timeout.
- * Replica side: primary marked FAIL but replication link is back and active. */
+/* Detect data-path recovery via the replication stream for multi-node shards. */
 static void clusterRaftDetectReplStreamRecovery(mstime_t now) {
     if (server.loading || nodeFailed(myself)) return;
 
-    /* Primary side: check if a FAIL marked replica has reconnected (appeared
-     * back in server.replicas). This is the inverse of the failure path:
-     * when the replica's client reappears, the data path is restored. */
+    /* Primary side: check if a FAIL marked replica is active again. */
     if (nodeIsPrimary(myself) && clusterNodeNumReplicas(myself) > 0) {
         int num_replicas = clusterNodeNumReplicas(myself);
         for (int i = 0; i < num_replicas; i++) {
@@ -2423,9 +2417,17 @@ static void clusterRaftDetectReplStreamRecovery(mstime_t now) {
             if (!node || !nodeFailed(node)) continue;
             if (RAFT_NODE(node)->pending_fail_change) continue;
 
-            if (clusterRaftFindReplicaClient(node)) {
+            client *replica_client = clusterRaftFindReplicaClient(node);
+            if (replica_client) {
                 RAFT_NODE(node)->repl_unconnected_since = 0;
-                clusterRaftProposeReplStreamNodeRecover(node);
+                /* Only propose recovery if the replica is ONLINE and
+                 * actively ACKing. */
+                if (replica_client->repl_data->repl_state == REPLICA_STATE_ONLINE) {
+                    time_t ack_age = server.unixtime - replica_client->repl_data->repl_ack_time;
+                    if (ack_age <= raftPrimarySideTimeout()) {
+                        clusterRaftProposeReplStreamNodeRecover(node);
+                    }
+                }
             }
         }
     }

@@ -2183,6 +2183,39 @@ static void clusterRaftInitLast(void) {
     }
 }
 
+/* Find a client in server.replicas matching the given cluster node ID.
+ * Returns the client if found, NULL otherwise. */
+static client *clusterRaftFindReplicaClient(clusterNode *node) {
+    listIter li;
+    listNode *ln;
+    listRewind(server.replicas, &li);
+    while ((ln = listNext(&li))) {
+        client *c = listNodeValue(ln);
+        if (c->repl_data->replica_nodeid && sdslen(c->repl_data->replica_nodeid) == CLUSTER_NAMELEN &&
+            memcmp(c->repl_data->replica_nodeid, node->name, CLUSTER_NAMELEN) == 0) {
+            return c;
+        }
+    }
+    return NULL;
+}
+
+/* Propose NODE_FAIL for a given node.
+ * Format: "NODE_FAIL <target-node-id> <proposer-node-id>" */
+static void clusterRaftProposeNodeFail(clusterNode *node, const char *reason) {
+    clusterNodeRaftData *rd = RAFT_NODE(node);
+    if (nodeFailed(node) || rd->pending_fail_change) return;
+
+    serverLog(LL_NOTICE, "%.40s %s, proposing NODE_FAIL.", node->name, reason);
+
+    sds entry = sdsnew("NODE_FAIL ");
+    entry = sdscatlen(entry, node->name, CLUSTER_NAMELEN);
+    entry = sdscatlen(entry, " ", 1);
+    entry = sdscatlen(entry, myself->name, CLUSTER_NAMELEN);
+    clusterRaftPropose(entry, NULL, NULL);
+    sdsfree(entry);
+    rd->pending_fail_change = 1;
+}
+
 /* Leader: periodically drop stale links to failed nodes so that
  * clusterConnectNodes can establish a fresh connection. This allows
  * the leader to detect recovery when the node comes back and sends
@@ -2269,38 +2302,13 @@ static void clusterRaftDetectFailures(mstime_t now) {
             if (!all_timed_out) continue;
         }
 
-        serverLog(LL_NOTICE, "Node %.40s not responding (AE_ACK), proposing NODE_FAIL.", node->name);
-
-        sds entry = sdsnew("NODE_FAIL ");
-        entry = sdscatlen(entry, node->name, CLUSTER_NAMELEN);
-        entry = sdscatlen(entry, " ", 1);
-        entry = sdscatlen(entry, myself->name, CLUSTER_NAMELEN);
-        clusterRaftPropose(entry, NULL, NULL);
-        sdsfree(entry);
-        rd->pending_fail_change = 1;
+        clusterRaftProposeNodeFail(node, "AE_ACK timeout");
     }
     dictReleaseIterator(di);
 }
 
-/* Propose NODE_FAIL for a given node via the replication stream failure
- * detector. Used by both primary-side and replica-side detection paths.
- * Format: "NODE_FAIL <target-node-id> <proposer-node-id>" */
-static void clusterRaftProposeReplStreamNodeFail(clusterNode *node) {
-    clusterNodeRaftData *rd = RAFT_NODE(node);
-    if (nodeFailed(node) || rd->pending_fail_change) return;
-
-    serverLog(LL_NOTICE,
-              "Replication stream timeout: proposing NODE_FAIL for %.40s.",
-              node->name);
-
-    sds entry = sdsnew("NODE_FAIL ");
-    entry = sdscatlen(entry, node->name, CLUSTER_NAMELEN);
-    entry = sdscatlen(entry, " ", 1);
-    entry = sdscatlen(entry, myself->name, CLUSTER_NAMELEN);
-    clusterRaftPropose(entry, NULL, NULL);
-    sdsfree(entry);
-    rd->pending_fail_change = 1;
-}
+/* Find a client in server.replicas matching the given cluster node ID.
+ * Returns the client if found, NULL otherwise. */
 
 /* Detect failures via the replication stream. Active only in raft mode.
  *
@@ -2325,20 +2333,7 @@ static void clusterRaftDetectReplStreamFailures(mstime_t now) {
             if (!node || nodeFailed(node)) continue;
             if (RAFT_NODE(node)->pending_fail_change) continue;
 
-            /* Find matching client in server.replicas. */
-            client *replica_client = NULL;
-            listIter li2;
-            listNode *ln2;
-            listRewind(server.replicas, &li2);
-            while ((ln2 = listNext(&li2))) {
-                client *c = listNodeValue(ln2);
-                if (c->repl_data->replica_nodeid &&
-                    sdslen(c->repl_data->replica_nodeid) == CLUSTER_NAMELEN &&
-                    memcmp(c->repl_data->replica_nodeid, node->name, CLUSTER_NAMELEN) == 0) {
-                    replica_client = c;
-                    break;
-                }
-            }
+            client *replica_client = clusterRaftFindReplicaClient(node);
 
             if (replica_client) {
                 /* Replica is connected — reset disconnect tracker. */
@@ -2348,7 +2343,7 @@ static void clusterRaftDetectReplStreamFailures(mstime_t now) {
                 if (replica_client->repl_data->repl_state == REPLICA_STATE_ONLINE) {
                     time_t ack_age = server.unixtime - replica_client->repl_data->repl_ack_time;
                     if (ack_age > timeout_sec) {
-                        clusterRaftProposeReplStreamNodeFail(node);
+                        clusterRaftProposeNodeFail(node, "replication stream timeout");
                     }
                 }
             } else {
@@ -2359,7 +2354,7 @@ static void clusterRaftDetectReplStreamFailures(mstime_t now) {
                 if (rd->repl_unconnected_since == 0) {
                     rd->repl_unconnected_since = now;
                 } else if (now - rd->repl_unconnected_since > REPL_CONNECT_GRACE_PERIOD_MS) {
-                    clusterRaftProposeReplStreamNodeFail(node);
+                    clusterRaftProposeNodeFail(node, "replication stream timeout");
                 }
             }
         }
@@ -2385,7 +2380,7 @@ static void clusterRaftDetectReplStreamFailures(mstime_t now) {
         }
 
         if (should_propose) {
-            clusterRaftProposeReplStreamNodeFail(my_primary);
+            clusterRaftProposeNodeFail(my_primary, "replication stream timeout");
         }
     }
 
@@ -2428,20 +2423,7 @@ static void clusterRaftDetectReplStreamRecovery(mstime_t now) {
             if (!node || !nodeFailed(node)) continue;
             if (RAFT_NODE(node)->pending_fail_change) continue;
 
-            int found = 0;
-            listIter li;
-            listNode *ln;
-            listRewind(server.replicas, &li);
-            while ((ln = listNext(&li))) {
-                client *c = listNodeValue(ln);
-                if (c->repl_data->replica_nodeid &&
-                    sdslen(c->repl_data->replica_nodeid) == CLUSTER_NAMELEN &&
-                    memcmp(c->repl_data->replica_nodeid, node->name, CLUSTER_NAMELEN) == 0) {
-                    found = 1;
-                    break;
-                }
-            }
-            if (found) {
+            if (clusterRaftFindReplicaClient(node)) {
                 RAFT_NODE(node)->repl_unconnected_since = 0;
                 clusterRaftProposeReplStreamNodeRecover(node);
             }

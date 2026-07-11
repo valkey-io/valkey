@@ -77,7 +77,7 @@ start_cluster 3 2 {tags {external:skip cluster cluster-raft:only}} {
 
         # Wait for the AE_ACK-based detection log on the raft leader.
         wait_for_log_messages [expr -1*$::leader_idx] \
-            {"*not responding (AE_ACK), proposing NODE_FAIL*"} \
+            {"*AE_ACK timeout, proposing NODE_FAIL*"} \
             $loglines 2000 50
 
         # Verify NODE_FAIL is applied — node shows fail flag in CLUSTER NODES.
@@ -107,7 +107,7 @@ start_cluster 3 2 {tags {external:skip cluster cluster-raft:only}} {
 
         # Wait for the replication-stream detection log on the replica.
         wait_for_log_messages [expr -1*$::multi_node_replica] \
-            {"*Replication stream timeout: proposing NODE_FAIL*"} \
+            {"*replication stream timeout, proposing NODE_FAIL*"} \
             $loglines 2000 50
 
         # Verify failover completes.

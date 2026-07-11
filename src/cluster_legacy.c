@@ -1387,7 +1387,6 @@ static void updateCommandLatencyStats(clusterNode *node, uint32_t current_rtt){
     } else {
         node -> avg_round_trip_time = (node -> avg_round_trip_time * server.load_factor_historic_rtt_latency + current_rtt) / server.sliding_window_length_rtt_latency_stats ;
     }
-    clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG);
 }
 
 static void updateShardId(clusterNode *node, const char *shard_id) {
@@ -3533,25 +3532,26 @@ static uint32_t writePingExtensions(clusterMsg *hdr, int gossipcount) {
         extensions += writePingTimeExtIfNonzero(&totlen, &cursor, CLUSTERMSG_EXT_TYPE_PING_ECHO_TIME, current_time);
     }
     else if(msg_type == CLUSTERMSG_TYPE_PONG) {
-        //process extesnsion message to extract & pass on the ts
-        uint64_t extracted_echo_time = 0;
-        uint16_t incoming_extensions_count = ntohs(hdr->extensions);
-        clusterMsgPingExt *search_ext = getInitialPingExt(hdr, gossipcount);
 
-            while (incoming_extensions_count--) {
-                if (ntohs(search_ext->type) == CLUSTERMSG_EXT_TYPE_PING_ECHO_TIME) {
-                clusterMsgPingExtEchoTime *ping_echo_time_ext =
-                (clusterMsgPingExtEchoTime *)&(search_ext->ext[0].ping_echo_time);
-                    extracted_echo_time = ping_echo_time_ext -> ping_echo_time; /* Keep raw network byte order bits */
-                    break;
-                }
-                search_ext = getNextPingExt(search_ext);
+        clusterNode *node = clusterLookupNode(hdr->sender, CLUSTER_NAMELEN);
+        if (node) {
+            uint64_t extracted_echo_time = 0;
+            clusterLink *active_link = NULL;
+
+            if (node -> inbound_link && node -> inbound_link -> ping_echo_time != 0) {
+                active_link = node -> inbound_link;
+                extracted_echo_time = node -> inbound_link -> ping_echo_time;
+            }
+            else if (node -> link && node -> link -> ping_echo_time != 0) {
+                active_link = node -> link;
+                extracted_echo_time = node -> link -> ping_echo_time;
             }
 
-            /* Write back passed ts in ping extension into the active outbound cursor slot */
-            if (extracted_echo_time != 0) {
+            if(extracted_echo_time != 0) {
                 extensions += writePingTimeExtIfNonzero(&totlen, &cursor, CLUSTERMSG_EXT_TYPE_PING_ECHO_TIME, extracted_echo_time);
+                active_link -> ping_echo_time = 0; //reset the echo time after sending it in PONG
             }
+        }
     }}
     }
 
@@ -3667,18 +3667,8 @@ int clusterProcessPingExtensions(clusterMsg *hdr, clusterLink *link) {
         } else if (type == CLUSTERMSG_EXT_TYPE_PING_ECHO_TIME) {
             clusterMsgPingExtEchoTime *ping_echo_time_ext =
                 (clusterMsgPingExtEchoTime *)&(ext->ext[0].ping_echo_time);
-            link -> ping_echo_time = ping_echo_time_ext->ping_echo_time;
-            break;
-            // ping_echo_time = ntohu64(ping_echo_time_ext->ping_echo_time);
-            // uint16_t message_type = ntohs(hdr->type);
-            // if(message_type == CLUSTERMSG_TYPE_PING || message_type == CLUSTERMSG_TYPE_MEET) {
-            //     // link->ping_echo_time = ping_echo_time;  //set as it is when its ping type, coming to receiver               
-            // }
-            // else if(message_type == CLUSTERMSG_TYPE_PONG) { //got message back
-            //     round_trip_time = mstime() - ping_echo_time;
-            //     // link->ping_echo_time = 0;
-            //     updateCommandLatencyStats(sender, round_trip_time); //rtt updated for sender node when it receives back pong
-            // }
+            if(link) 
+                link -> ping_echo_time = ping_echo_time_ext->ping_echo_time;
         }
          else {
             /* Unknown type, we will ignore it but log what happened. */
@@ -4550,7 +4540,8 @@ int clusterProcessPacket(clusterLink *link) {
         }
 
         if (type == CLUSTERMSG_TYPE_PONG && link && link->ping_echo_time != 0) {
-            mstime_t current_rtt = mstime() - link->ping_echo_time;
+            uint64_t echo_time_bytes = ntohu64(link->ping_echo_time);
+            mstime_t current_rtt = mstime() - (mstime_t)echo_time_bytes;
             if (link->node) {
                 updateCommandLatencyStats(link->node, current_rtt);
             }

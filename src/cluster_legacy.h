@@ -41,7 +41,7 @@ typedef struct clusterLink {
     clusterNode *node;                     /* Node related to this link. Initialized to NULL when unknown */
     int inbound;                           /* 1 if this link is an inbound link accepted from the related node */
     int flags;                             /* CLUSTER_LINK_... */
-    mstime_t ping_echo_time;               /* The ping echo time received from the remote node, in milliseconds.*/
+    uint64_t ping_echo_time;               /* The ping echo time received from the remote node, in milliseconds.*/
 } clusterLink;
 
 /* Cluster link flags and macros. */

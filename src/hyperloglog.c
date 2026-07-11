@@ -521,7 +521,7 @@ int hllPatLen(unsigned char *ele, size_t elesize, long *regp) {
  * additional byte on the right. This requirement is met by sds strings
  * automatically since they are implicitly null terminated.
  *
- * The function always succeed, however if as a result of the operation
+ * The function always succeeds, however if as a result of the operation
  * the approximated cardinality changed, 1 is returned. Otherwise 0
  * is returned. */
 int hllDenseSet(uint8_t *registers, long index, uint8_t count) {

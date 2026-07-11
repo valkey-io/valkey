@@ -4068,7 +4068,7 @@ void discardCommandQueue(client *c) {
     queue->off = queue->len = queue->cap = 0;
 }
 
-/* Returns the number of keys in the the incr_states array after adding keys. */
+/* Returns the number of keys in the incr_states array after adding keys. */
 static int addKeysToIncrFindBatch(client *c,
                                   struct serverCommand *cmd,
                                   robj **argv,
@@ -6359,7 +6359,7 @@ static void pauseClientsByClient(mstime_t endTime, int isPauseClientAll) {
  * This function is also internally used by Cluster for the manual
  * failover procedure implemented by CLUSTER FAILOVER.
  *
- * The function always succeed, even if there is already a pause in progress.
+ * The function always succeeds, even if there is already a pause in progress.
  * The new paused_actions of a given 'purpose' will override the old ones and
  * end time will be updated if new end time is bigger than currently configured */
 void pauseActions(pause_purpose purpose, mstime_t end, uint32_t actions) {

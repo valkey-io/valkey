@@ -1380,7 +1380,6 @@ static void updateAnnouncedClientTlsPort(clusterNode *node, int value) {
 }
 
 static void updateCommandLatencyStats(clusterNode *node, uint32_t current_rtt){
-    printf("while updating latency stats for node %s, current_rtt is %u\n", node->name, current_rtt);
     node -> max_round_trip_time = max(node -> max_round_trip_time, current_rtt);
 
     if(node -> avg_round_trip_time == 0) {
@@ -3666,7 +3665,6 @@ int clusterProcessPingExtensions(clusterMsg *hdr, clusterLink *link) {
                 (clusterMsgPingExtAvailabilityZone *)&(ext->ext[0].availability_zone);
             ext_availability_zone = availability_zone_ext->availability_zone;
         } else if (type == CLUSTERMSG_EXT_TYPE_PING_ECHO_TIME) {
-            // printf("Received ping echo time extension for setting value %llu\n", ntohu64(((clusterMsgPingExtEchoTime *)&(ext->ext[0].ping_echo_time))->ping_echo_time));
             clusterMsgPingExtEchoTime *ping_echo_time_ext =
                 (clusterMsgPingExtEchoTime *)&(ext->ext[0].ping_echo_time);
             link -> ping_echo_time = ping_echo_time_ext->ping_echo_time;

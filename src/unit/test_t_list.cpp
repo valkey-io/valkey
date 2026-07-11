@@ -91,7 +91,7 @@ TEST_F(ListObjectTest, LargeReplacementUsesPlainNode) {
     ASSERT_EQ(ql->count, 1u);
     ASSERT_EQ(ql->len, 1u);
     ASSERT_NE(ql->head, nullptr);
-    EXPECT_EQ(ql->head->container, QUICKLIST_NODE_CONTAINER_PLAIN);
+    EXPECT_EQ(ql->head->container, static_cast<unsigned int>(QUICKLIST_NODE_CONTAINER_PLAIN));
     EXPECT_EQ(ql->head->sz, large.size());
     EXPECT_EQ(memcmp(ql->head->entry, large.data(), large.size()), 0);
 
@@ -114,9 +114,9 @@ TEST_F(ListObjectTest, LargeMiddleReplacementPreservesLayoutAndOrder) {
     ASSERT_NE(ql->head, nullptr);
     ASSERT_NE(ql->head->next, nullptr);
     ASSERT_NE(ql->tail, nullptr);
-    EXPECT_EQ(ql->head->container, QUICKLIST_NODE_CONTAINER_PACKED);
-    EXPECT_EQ(ql->head->next->container, QUICKLIST_NODE_CONTAINER_PLAIN);
-    EXPECT_EQ(ql->tail->container, QUICKLIST_NODE_CONTAINER_PACKED);
+    EXPECT_EQ(ql->head->container, static_cast<unsigned int>(QUICKLIST_NODE_CONTAINER_PACKED));
+    EXPECT_EQ(ql->head->next->container, static_cast<unsigned int>(QUICKLIST_NODE_CONTAINER_PLAIN));
+    EXPECT_EQ(ql->tail->container, static_cast<unsigned int>(QUICKLIST_NODE_CONTAINER_PACKED));
     EXPECT_EQ(ql->head->count, 1u);
     EXPECT_EQ(ql->head->next->count, 1u);
     EXPECT_EQ(ql->tail->count, 1u);

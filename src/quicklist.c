@@ -784,7 +784,7 @@ void quicklistReplaceEntry(quicklistIter *iter, quicklistEntry *entry, void *dat
              * use quicklistCompress() for compression, which checks if node is within compress
              * depth before compressing. */
             quicklistCompress(quicklist, new_node);
-            quicklistCompress(quicklist, new_node->prev);
+            if (new_node->prev) quicklistCompress(quicklist, new_node->prev);
             if (new_node->next) quicklistCompress(quicklist, new_node->next);
         }
     }

@@ -1331,6 +1331,33 @@ TEST_F(QuicklistTest, quicklistReplaceAggregateOverflowUsesEncodedSizeBoundary) 
     quicklistRelease(ql);
 }
 
+TEST_F(QuicklistTest, quicklistReplaceSplitMergeAtHeadDoesNotCompressNullPreviousNode) {
+    const int fill = -2;
+    std::string original(1800, 'a');
+    std::string replacement(3000, 'x');
+
+    quicklist *ql = quicklistNew(fill, 1);
+    for (char suffix : {'a', 'b', 'c', 'd'}) {
+        original.back() = suffix;
+        quicklistPushTail(ql, original.data(), original.size());
+    }
+    ASSERT_EQ(ql->len, 1u);
+
+    ASSERT_TRUE(quicklistReplaceAtIndex(ql, 1, replacement.data(), replacement.size()));
+    ASSERT_EQ(ql->count, 4u);
+    ASSERT_EQ(ql->len, 2u);
+    ASSERT_EQ(ql->head->prev, nullptr);
+
+    quicklistEntry entry;
+    quicklistIter *iter = quicklistGetIteratorEntryAtIdx(ql, 1, &entry);
+    ASSERT_NE(iter, nullptr);
+    ASSERT_EQ(entry.sz, replacement.size());
+    EXPECT_EQ(memcmp(entry.value, replacement.data(), replacement.size()), 0);
+    ql_release_iterator(iter);
+
+    quicklistRelease(ql);
+}
+
 TEST_F(QuicklistTest, quicklistLremTestAtCompress) {
     quicklistIter *iter;
     for (int _i = 0; _i < option_count; _i++) {

@@ -50,7 +50,9 @@
 #include "valkey_strtod.h"
 
 #ifdef HAVE_BACKTRACE
+#ifdef HAVE_EXECINFO
 #include <execinfo.h>
+#endif
 #ifndef __OpenBSD__
 #include <ucontext.h>
 #else
@@ -484,6 +486,10 @@ void debugCommand(client *c) {
             "    Setting it to 0 disables expiring keys in background when they are not",
             "    accessed (otherwise the behavior). Setting it to 1 reenables back the",
             "    default.",
+            "SET-DISABLE-DENY-SCRIPTS <0|1>",
+            "    Setting it to 1 allows scripts to run commands marked with the NOSCRIPT",
+            "    flag, which are normally not allowed from scripts. Setting it to 0",
+            "    restores the default behavior.",
             "QUICKLIST-PACKED-THRESHOLD <size>",
             "    Sets the threshold for elements to be inserted as plain vs packed nodes",
             "    Default value is 1GB, allows values up to 4GB. Setting to 0 restores to default.",
@@ -512,7 +518,7 @@ void debugCommand(client *c) {
             "    Enable or disable the reply buffer resize cron job",
             "PAUSE-AFTER-FORK <0|1>",
             "    Stop the server's main process after fork.",
-            "DELAY-RDB-CLIENT-FREE-SECOND <seconds>",
+            "DELAY-RDB-CLIENT-FREE-SECONDS <seconds>",
             "    Grace period in seconds for replica main channel to establish psync.",
             "DICT-RESIZING <0|1>",
             "    Enable or disable the main dict and expire dict resizing.",
@@ -1739,6 +1745,47 @@ static void setupStacktracePipe(void) { /* we don't need a pipe to write the sta
 #define BACKTRACE_MAX_SIZE 100
 
 #ifdef USE_LIBBACKTRACE
+/* On systems without execinfo.h (e.g. musl/Alpine), use libbacktrace's
+ * backtrace_simple() to collect stack frame addresses. */
+struct bt_collect_data {
+    void **trace;
+    int max_size;
+    int count;
+};
+
+static int bt_simple_collect_cb(void *data, uintptr_t pc) {
+    struct bt_collect_data *d = (struct bt_collect_data *)data;
+    if (d->count < d->max_size) {
+        d->trace[d->count++] = (void *)pc;
+    }
+    return 0;
+}
+
+static void bt_simple_error_cb(void *data, const char *msg, int errnum) {
+    (void)data;
+    (void)msg;
+    (void)errnum;
+}
+
+static struct backtrace_state *bt_frame_state = NULL;
+
+/* Preallocate at startup: backtrace_create_state() calls malloc, which is not
+ * async-signal-safe and could deadlock if called from a crash signal handler. */
+void initLibbacktraceFrameState(void) {
+    bt_frame_state = backtrace_create_state(NULL, 1, bt_simple_error_cb, NULL);
+}
+
+static int valkey_backtrace(void **trace, int max_size) {
+    if (!bt_frame_state) return 0;
+    struct bt_collect_data data = {trace, max_size, 0};
+    backtrace_simple(bt_frame_state, 0, bt_simple_collect_cb, bt_simple_error_cb, &data);
+    return data.count;
+}
+
+#define backtrace(trace, size) valkey_backtrace(trace, size)
+#endif /* USE_LIBBACKTRACE */
+
+#ifdef USE_LIBBACKTRACE
 /* Callback data for libbacktrace */
 typedef struct {
     int fd;
@@ -1798,14 +1845,26 @@ static void symbolizeWithLibbacktrace(void **trace, int trace_size, int fd, int 
             }
             /* If libbacktrace produced no frames or no useful function names, fall back to standard backtrace */
             if (cb_data.count == 0 || !cb_data.found_symbols) {
+#ifdef HAVE_EXECINFO
                 char *msg = "\n(libbacktrace failed to resolve symbols, falling back to standard backtrace)\n";
                 if (write(fd, msg, strlen(msg)) == -1) { /* Avoid warning. */
                 }
                 backtrace_symbols_fd(trace + uplevel, trace_size - uplevel, fd);
+#else
+                char *msg = "\n(no symbol information available for these frames)\n";
+                if (write(fd, msg, strlen(msg)) == -1) { /* Avoid warning. */
+                }
+#endif
             }
         } else {
             /* Fallback if state creation fails */
+#ifdef HAVE_EXECINFO
             backtrace_symbols_fd(trace + uplevel, trace_size - uplevel, fd);
+#else
+            char *msg = "(libbacktrace state creation failed, no fallback available)\n";
+            if (write(fd, msg, strlen(msg)) == -1) { /* Avoid warning. */
+            }
+#endif
         }
         _exit(0);
     } else if (pid > 0) {
@@ -1827,7 +1886,13 @@ static void symbolizeWithLibbacktrace(void **trace, int trace_size, int fd, int 
         }
     } else {
         /* Fork failed, fall back to backtrace_symbols_fd */
+#ifdef HAVE_EXECINFO
         backtrace_symbols_fd(trace + uplevel, trace_size - uplevel, fd);
+#else
+        char *msg = "(fork failed, no fallback available)\n";
+        if (write(fd, msg, strlen(msg)) == -1) { /* Avoid warning. */
+        }
+#endif
     }
 }
 #endif /* USE_LIBBACKTRACE */
@@ -1969,7 +2034,11 @@ __attribute__((noinline)) void logStackTrace(void *eip, int uplevel, int current
         msg = "EIP:\n";
         if (write(fd, msg, strlen(msg)) == -1) { /* Avoid warning. */
         };
+#ifdef USE_LIBBACKTRACE
+        symbolizeWithLibbacktrace(&eip, 1, fd, 0);
+#elif defined(HAVE_EXECINFO)
         backtrace_symbols_fd(&eip, 1, fd);
+#endif
     }
 
     /* Write symbols to log file */

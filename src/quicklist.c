@@ -525,10 +525,11 @@ static quicklistNode *__quicklistCreateNode(int container, void *value, size_t s
     if (container == QUICKLIST_NODE_CONTAINER_PLAIN) {
         new_node->entry = zmalloc(sz);
         memcpy(new_node->entry, value, sz);
+        new_node->sz = sz;
     } else {
         new_node->entry = lpPrepend(lpNew(0), value, sz);
+        new_node->sz = lpBytes(new_node->entry);
     }
-    new_node->sz = sz;
     new_node->count++;
     return new_node;
 }
@@ -728,14 +729,21 @@ void quicklistReplaceEntry(quicklistIter *iter, quicklistEntry *entry, void *dat
     quicklist *quicklist = iter->quicklist;
     quicklistNode *node = entry->node;
     unsigned char *newentry;
+    int replace_in_place = 0;
 
-    if (likely(!QL_NODE_IS_PLAIN(entry->node) && !isLargeElement(sz, quicklist->fill) &&
-               (newentry = lpReplace(entry->node->entry, &entry->zi, data, sz)) != NULL)) {
-        entry->node->entry = newentry;
-        quicklistNodeUpdateSz(entry->node);
+    if (likely(!QL_NODE_IS_PLAIN(node) && sz <= UINT32_MAX && !isLargeElement(sz, quicklist->fill))) {
+        uint64_t projected =
+            lpEstimateReplacementBytes(node->entry, entry->zi, (unsigned char *)data, (uint32_t)sz);
+        replace_in_place = projected <= SIZE_MAX &&
+                           !quicklistNodeExceedsLimit(quicklist->fill, (size_t)projected, node->count);
+    }
+
+    if (likely(replace_in_place && (newentry = lpReplace(node->entry, &entry->zi, data, sz)) != NULL)) {
+        node->entry = newentry;
+        quicklistNodeUpdateSz(node);
         /* quicklistNext() and quicklistGetIteratorEntryAtIdx() provide an uncompressed node */
-        quicklistCompress(quicklist, entry->node);
-    } else if (QL_NODE_IS_PLAIN(entry->node)) {
+        quicklistCompress(quicklist, node);
+    } else if (QL_NODE_IS_PLAIN(node)) {
         if (isLargeElement(sz, quicklist->fill)) {
             zfree(entry->node->entry);
             entry->node->entry = zmalloc(sz);

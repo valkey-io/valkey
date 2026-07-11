@@ -985,6 +985,7 @@ void hashTypeConvertListpack(robj *o, int enc) {
 
     } else if (enc == OBJ_ENCODING_HASHTABLE) {
         hashTypeIterator hi;
+        bool has_volatile = hashTypeHasVolatileFields(o);
 
         hashtable *ht = hashtableCreate(&hashHashtableType);
 
@@ -1013,6 +1014,22 @@ void hashTypeConvertListpack(robj *o, int enc) {
         zfree(objectGetVal(o));
         objectSetEncoding(o, OBJ_ENCODING_HASHTABLE);
         objectSetVal(o, ht);
+
+        /* Register entries carrying an expiry in the volatile set. This must
+         * happen after the object points at the new hashtable (the set lives
+         * in the hashtable metadata). Without it the fields would neither be
+         * actively reaped nor lazily hidden after conversion, and the
+         * db-level volatile-keys tracking would go stale, leaving a dangling
+         * object pointer for the active-expire cron. */
+        if (has_volatile) {
+            hashtableIterator iter;
+            hashtableInitIterator(&iter, ht, 0);
+            void *next;
+            while (hashtableNext(&iter, &next)) {
+                if (entryGetExpiry(next) != EXPIRY_NONE) hashTypeTrackEntry(o, next);
+            }
+            hashtableCleanupIterator(&iter);
+        }
     } else {
         serverPanic("Unknown hash encoding");
     }

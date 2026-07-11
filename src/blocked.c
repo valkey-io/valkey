@@ -645,7 +645,7 @@ static void handleClientsBlockedOnKey(readyList *rl) {
              *    module is trying to accomplish right now.
              * 3. In case of XREADGROUP call we will want to unblock on any change in object type
              *    or in case the key was deleted, since the group is no longer valid. */
-            if ((o != NULL && (receiver->bstate->btype == getBlockedTypeByType(o->type))) ||
+            if ((o != NULL && (receiver->bstate->btype == getBlockedTypeByType(objectGetType(o)))) ||
                 (o != NULL && (receiver->bstate->btype == BLOCKED_MODULE)) || (receiver->bstate->unblock_on_nokey)) {
                 if (receiver->bstate->btype != BLOCKED_MODULE)
                     unblockClientOnKey(receiver, rl->key);

@@ -33,6 +33,21 @@
  * List API
  *----------------------------------------------------------------------------*/
 
+/* Convert a listpack to a quicklist without applying size or length limits. */
+static void listTypeConvertListpackToQuicklist(robj *o) {
+    serverAssert(objectGetEncoding(o) == OBJ_ENCODING_LISTPACK);
+
+    quicklist *ql = quicklistNew(server.list_max_listpack_size, server.list_compress_depth);
+
+    /* Append listpack to quicklist if it's not empty, otherwise release it. */
+    if (lpLength(objectGetVal(o)))
+        quicklistAppendListpack(ql, objectGetVal(o));
+    else
+        lpFree(objectGetVal(o));
+    objectSetVal(o, ql);
+    objectSetEncoding(o, OBJ_ENCODING_QUICKLIST);
+}
+
 /* Check the length and size of a number of objects that will be added to list to see
  * if we need to convert a listpack to a quicklist. Note that we only check string
  * encoded objects as their string length can be queried in constant time.
@@ -58,15 +73,7 @@ static void listTypeTryConvertListpack(robj *o, robj **argv, int start, int end,
         /* Invoke callback before conversion. */
         if (fn) fn(data);
 
-        quicklist *ql = quicklistNew(server.list_max_listpack_size, server.list_compress_depth);
-
-        /* Append listpack to quicklist if it's not empty, otherwise release it. */
-        if (lpLength(objectGetVal(o)))
-            quicklistAppendListpack(ql, objectGetVal(o));
-        else
-            lpFree(objectGetVal(o));
-        objectSetVal(o, ql);
-        objectSetEncoding(o, OBJ_ENCODING_QUICKLIST);
+        listTypeConvertListpackToQuicklist(o);
     }
 }
 
@@ -375,10 +382,24 @@ int listTypeReplaceAtIndex(robj *o, int index, robj *value) {
         quicklist *ql = objectGetVal(o);
         replaced = quicklistReplaceAtIndex(ql, index, vstr, vlen);
     } else if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) {
-        unsigned char *p = lpSeek(objectGetVal(o), index);
+        unsigned char *lp = objectGetVal(o);
+        unsigned char *p = lpSeek(lp, index);
         if (p) {
-            objectSetVal(o, lpReplace(objectGetVal(o), &p, (unsigned char *)vstr, vlen));
-            replaced = 1;
+            int convert = vlen > UINT32_MAX;
+            if (!convert) {
+                uint64_t projected = lpEstimateReplacementBytes(lp, p, (unsigned char *)vstr, vlen);
+                convert = projected > SIZE_MAX ||
+                          quicklistNodeExceedsLimit(server.list_max_listpack_size, (size_t)projected, lpLength(lp));
+            }
+
+            if (convert) {
+                listTypeConvertListpackToQuicklist(o);
+                replaced = quicklistReplaceAtIndex(objectGetVal(o), index, vstr, vlen);
+                serverAssert(replaced);
+            } else {
+                objectSetVal(o, lpReplace(lp, &p, (unsigned char *)vstr, vlen));
+                replaced = 1;
+            }
         }
     } else {
         serverPanic("Unknown list encoding");
@@ -604,16 +625,8 @@ void lsetCommand(client *c) {
 
     if ((getLongFromObjectOrReply(c, c->argv[2], &index, NULL) != C_OK)) return;
 
-    int old_encoding = o->encoding;
     if (listTypeReplaceAtIndex(o, index, value)) {
-        /* LSET replaces an existing element, so conversion decisions must be
-         * based on the final list state rather than treating the new value as
-         * an appended element. A listpack may need to grow into a quicklist,
-         * while a quicklist may shrink into a listpack. */
-        if (old_encoding == OBJ_ENCODING_LISTPACK)
-            listTypeTryConversion(o, LIST_CONV_GROWING, NULL, NULL);
-        else
-            listTypeTryConversion(o, LIST_CONV_SHRINKING, NULL, NULL);
+        listTypeTryConversion(o, LIST_CONV_SHRINKING, NULL, NULL);
         signalModifiedKey(c, c->db, c->argv[1]);
         notifyKeyspaceEvent(NOTIFY_LIST, "lset", c->argv[1], c->db->id);
         server.dirty++;

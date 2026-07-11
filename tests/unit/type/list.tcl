@@ -1969,7 +1969,18 @@ foreach {type large} [array get largevalue] {
         }
 
         test "LSET out of range index - $type" {
+            set before [r lrange mylist 0 -1]
+            set before_encoding [r object encoding mylist]
+            set before_dirty [s rdb_changes_since_last_save]
             assert_error ERR*range* {r lset mylist 10 foo}
+            assert_equal $before [r lrange mylist 0 -1]
+            assert_equal $before_encoding [r object encoding mylist]
+            assert_equal $before_dirty [s rdb_changes_since_last_save]
+
+            assert_error ERR*range* {r lset mylist -10 foo}
+            assert_equal $before [r lrange mylist 0 -1]
+            assert_equal $before_encoding [r object encoding mylist]
+            assert_equal $before_dirty [s rdb_changes_since_last_save]
         }
     }
 

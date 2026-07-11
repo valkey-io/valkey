@@ -1068,6 +1068,66 @@ TEST_F(ListpackTest, listpackValidateIntegrityMetadataGate) {
     lpFree(lp);
 }
 
+TEST_F(ListpackTest, listpackLeadingMetadataHeader) {
+    /* A single tagged entry may lead the listpack as an aggregate header:
+     * reachable only via lpPeekLeadingMetadata, invisible to iterators and
+     * numele, and accepted by the validator when metadata is allowed. */
+    unsigned char *lp = createListWithMetadata(); /* f1,v1(+meta),f2,v2 */
+    ASSERT_EQ(lpPeekLeadingMetadata(lp), nullptr);
+
+    /* Prepend the aggregate header carrying the count (1). */
+    unsigned char intenc[LP_MAX_INT_ENCODING_LEN];
+    uint64_t enclen;
+    lpEncodeIntegerGetType(1, intenc, &enclen);
+    lp = lpInsertMetadata(lp, intenc, enclen, lpFirst(lp), LP_BEFORE, NULL);
+
+    unsigned char *head = lpPeekLeadingMetadata(lp);
+    ASSERT_NE(head, nullptr);
+    ASSERT_EQ(lpGetMetadataValue(head), 1);
+
+    /* Invisible to logical iteration and numele. */
+    ASSERT_EQ(lpLength(lp), 4u);
+    verifyEntry(lpFirst(lp), (unsigned char *)"field1", 6);
+    int seen = 0;
+    for (unsigned char *p = lpFirst(lp); p; p = lpNext(lp, p)) {
+        ASSERT_EQ(lpIsMetadata(p), 0);
+        seen++;
+    }
+    ASSERT_EQ(seen, 4);
+
+    /* Valid with metadata allowed, corrupt otherwise. */
+    ASSERT_EQ(lpValidateIntegrity(lp, lpBytes(lp), nullptr, nullptr, 1), 1);
+    ASSERT_EQ(lpValidateIntegrity(lp, lpBytes(lp), nullptr, nullptr, 0), 0);
+
+    /* In-place replace of the header value. */
+    lpEncodeIntegerGetType(2, intenc, &enclen);
+    lp = lpInsertMetadata(lp, intenc, enclen, lpPeekLeadingMetadata(lp), LP_REPLACE, NULL);
+    ASSERT_EQ(lpGetMetadataValue(lpPeekLeadingMetadata(lp)), 2);
+    ASSERT_EQ(lpLength(lp), 4u);
+
+    /* A second leading tagged entry is corruption. */
+    lpEncodeIntegerGetType(7, intenc, &enclen);
+    lp = lpInsertMetadata(lp, intenc, enclen, lpPeekLeadingMetadata(lp), LP_AFTER, NULL);
+    ASSERT_EQ(lpValidateIntegrity(lp, lpBytes(lp), nullptr, nullptr, 1), 0);
+    lpFree(lp);
+}
+
+TEST_F(ListpackTest, listpackLeadingMetadataDeletion) {
+    /* Deleting the header restores a plain listpack. */
+    unsigned char *lp = createListWithMetadata();
+    unsigned char intenc[LP_MAX_INT_ENCODING_LEN];
+    uint64_t enclen;
+    lpEncodeIntegerGetType(1, intenc, &enclen);
+    lp = lpInsertMetadata(lp, intenc, enclen, lpFirst(lp), LP_BEFORE, NULL);
+    ASSERT_NE(lpPeekLeadingMetadata(lp), nullptr);
+
+    lp = lpDelete(lp, lpPeekLeadingMetadata(lp), NULL);
+    ASSERT_EQ(lpPeekLeadingMetadata(lp), nullptr);
+    ASSERT_EQ(lpLength(lp), 4u);
+    ASSERT_EQ(lpValidateIntegrity(lp, lpBytes(lp), nullptr, nullptr, 1), 1);
+    lpFree(lp);
+}
+
 TEST_F(ListpackTest, listpackLpValidateIntegrity) {
     /* Test lpValidateIntegrity */
     unsigned char *lp;

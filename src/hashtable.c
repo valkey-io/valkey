@@ -1,7 +1,7 @@
 /*
  * Copyright Valkey Contributors.
  * All rights reserved.
- * SPDX-License-Identifier: BSD 3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause
  */
 
 /* Hashtable
@@ -2013,6 +2013,22 @@ bool hashtableIncrementalFindGetResult(hashtableIncrementalFindState *state, voi
  * - An entry that is inserted or deleted during a full scan may or may not be
  *   returned during the scan.
  *
+ * Additional guarantees when shrinking is blocked for the duration of the scan
+ * (e.g. by calling hashtablePauseAutoShrink before starting and
+ * hashtableResumeAutoShrink after finishing):
+ *
+ * - An entry will never be returned more than once.
+ *
+ * - An entry that exists throughout the entire scan is guaranteed to be
+ *   returned.
+ *
+ * - An entry that is created, destroyed, or re-created during the scan may or
+ *   may not be returned, but will never be returned more than once.
+ *
+ * Expansion and rehashing may occur freely without breaking these guarantees.
+ * Only a shrink is problematic: it introduces a smaller table whose bucket
+ * boundaries don't align with the existing cursor position.
+ *
  * Scan callback rules:
  *
  * - The scan callback may delete the entry that was passed to it.
@@ -2024,6 +2040,27 @@ bool hashtableIncrementalFindGetResult(hashtableIncrementalFindState *state, voi
  */
 size_t hashtableScan(hashtable *ht, size_t cursor, hashtableScanFunction fn, void *privdata) {
     return hashtableScanDefrag(ht, cursor, fn, privdata, NULL, 0);
+}
+
+/* Given a scan cursor, determines whether a key's hashtable position has
+ * already been visited by the scan. Returns true if the position has been
+ * passed (i.e. the key would have been emitted already), false if not yet
+ * visited.
+ *
+ * The result is exact when shrinking is blocked (see scan guarantees above).
+ * If a shrink has been initiated since the cursor was obtained, the result is
+ * best-effort and not guaranteed to be correct.
+ *
+ * A cursor of 0 means the scan has not started, so no keys have been passed. */
+bool hashtableScanHasPassedKey(hashtable *ht, const void *key, size_t cursor) {
+    if (cursor == 0) return false;
+    size_t mask = expToMask(ht->bucket_exp[0]);
+    uint64_t hash = hashKey(ht, key);
+    size_t bucket_idx = hash & mask;
+    size_t cursor_idx = cursor & mask;
+    /* In reverse-bit-increment order, a bucket has been visited if its
+     * reversed index is less than the reversed cursor index. */
+    return rev(bucket_idx) < rev(cursor_idx);
 }
 
 /* Like hashtableScan, but additionally reallocates the memory used by the dict

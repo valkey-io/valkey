@@ -62,15 +62,15 @@ static mstime_t entryGetExpiryVsetFunc(const void *e) {
  *----------------------------------------------------------------------------*/
 
 static vset *hashTypeGetVolatileSet(robj *o) {
-    serverAssert(o->encoding == OBJ_ENCODING_HASHTABLE);
+    serverAssert(objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE);
     vset *set = (vset *)hashtableMetadata(objectGetVal(o));
     return vsetIsValid(set) ? set : NULL;
 }
 
 bool hashTypeHasVolatileFields(robj *o) {
     if (o == NULL) return false;
-    serverAssert(o->type == OBJ_HASH);
-    if (o->encoding == OBJ_ENCODING_HASHTABLE) {
+    serverAssert(objectGetType(o) == OBJ_HASH);
+    if (objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE) {
         vset *set = hashTypeGetVolatileSet(o);
         if (set && !vsetIsEmpty(set))
             return true;
@@ -81,7 +81,7 @@ bool hashTypeHasVolatileFields(robj *o) {
 /* make any access to the hash object elements ignore the specific elements expiration.
  * This is mainly in order to be able to access hash elements which are already expired. */
 static inline void hashTypeIgnoreTTL(robj *o, bool ignore) {
-    if (o->encoding == OBJ_ENCODING_HASHTABLE) {
+    if (objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE) {
         /* prevent placing access function if not needed */
         if (!ignore && hashTypeGetVolatileSet(o) == NULL) {
             ignore = true;
@@ -91,7 +91,7 @@ static inline void hashTypeIgnoreTTL(robj *o, bool ignore) {
 }
 
 static vset *hashTypeGetOrcreateVolatileSet(robj *o) {
-    serverAssert(o->encoding == OBJ_ENCODING_HASHTABLE);
+    serverAssert(objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE);
     vset *set = (vset *)hashtableMetadata(objectGetVal(o));
     if (!vsetIsValid(set)) {
         vsetInit(set);
@@ -198,7 +198,7 @@ void hashTypeTryConversion(robj *o, robj **argv, int start, int end) {
 int hashTypeGetFromListpack(robj *o, sds field, unsigned char **vstr, unsigned int *vlen, long long *vll) {
     unsigned char *zl, *fptr = NULL, *vptr = NULL;
 
-    serverAssert(o->encoding == OBJ_ENCODING_LISTPACK);
+    serverAssert(objectGetEncoding(o) == OBJ_ENCODING_LISTPACK);
 
     zl = objectGetVal(o);
     fptr = lpFirst(zl);
@@ -232,13 +232,13 @@ int hashTypeGetFromListpack(robj *o, sds field, unsigned char **vstr, unsigned i
  * If *expiry is populated than the function will also provide the current field expiration time
  * or EXPIRY_NONE in case the field has no expiration time defined. */
 int hashTypeGetValue(robj *o, sds field, unsigned char **vstr, unsigned int *vlen, long long *vll, mstime_t *expiry) {
-    if (o->encoding == OBJ_ENCODING_LISTPACK) {
+    if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) {
         *vstr = NULL;
         if (hashTypeGetFromListpack(o, field, vstr, vlen, vll) == 0) {
             if (expiry) *expiry = EXPIRY_NONE;
             return C_OK;
         }
-    } else if (o->encoding == OBJ_ENCODING_HASHTABLE) {
+    } else if (objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE) {
         void *entry = NULL;
         hashtableFind(objectGetVal(o), field, &entry);
         if (entry) {
@@ -261,12 +261,12 @@ int hashTypeGetValue(robj *o, sds field, unsigned char **vstr, unsigned int *vle
  * The matching item expiration time is assigned to `expiry` memory location, if specified.
  * In case the item has no assigned expiration time, -1 is returned. */
 int hashTypeGetExpiry(robj *o, sds field, mstime_t *expiry) {
-    if (o->encoding == OBJ_ENCODING_LISTPACK) {
+    if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) {
         if (hashTypeExists(o, field)) {
             if (expiry) *expiry = EXPIRY_NONE;
             return C_OK;
         }
-    } else if (o->encoding == OBJ_ENCODING_HASHTABLE) {
+    } else if (objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE) {
         void *found_element = NULL;
         if (hashtableFind(objectGetVal(o), field, &found_element)) {
             if (expiry) *expiry = entryGetExpiry(found_element);
@@ -319,7 +319,7 @@ int hashTypeExists(robj *o, sds field) {
 }
 
 bool hashTypeHasStringRef(robj *o, sds field) {
-    if (o->encoding == OBJ_ENCODING_LISTPACK) return false;
+    if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) return false;
     hashtable *ht = objectGetVal(o);
     void **entry_ref = hashtableFindRef(ht, field);
     return (entryHasStringRef(*entry_ref));
@@ -334,7 +334,7 @@ int hashTypeUpdateAsStringRef(robj *o, sds field, const char *buf, size_t len) {
 
     if (hashTypeGetValue(o, field, &vstr, &vlen, &vll, NULL) != C_OK) return C_ERR;
     // require HASHTABLE encoding due to aux bits and pointer storage.
-    if (o->encoding == OBJ_ENCODING_LISTPACK) hashTypeConvert(o, OBJ_ENCODING_HASHTABLE);
+    if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) hashTypeConvert(o, OBJ_ENCODING_HASHTABLE);
 
     hashtable *ht = objectGetVal(o);
     void **entry_ref = hashtableFindRef(ht, field);
@@ -371,12 +371,12 @@ int hashTypeSet(robj *o, sds field, sds value, mstime_t expiry, int flags, bool 
     /* Check if the field is too long for listpack, and convert before adding the item.
      * This is needed for HINCRBY* case since in other commands this is handled early by
      * hashTypeTryConversion, so this check will be a NOP. */
-    if (o->encoding == OBJ_ENCODING_LISTPACK) {
+    if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) {
         if (expiry != EXPIRY_NONE || sdslen(field) > server.hash_max_listpack_value || sdslen(value) > server.hash_max_listpack_value)
             hashTypeConvert(o, OBJ_ENCODING_HASHTABLE);
     }
 
-    if (o->encoding == OBJ_ENCODING_LISTPACK) {
+    if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) {
         unsigned char *zl, *fptr, *vptr;
 
         zl = objectGetVal(o);
@@ -403,7 +403,7 @@ int hashTypeSet(robj *o, sds field, sds value, mstime_t expiry, int flags, bool 
 
         /* Check if the listpack needs to be converted to a hash table */
         if (hashTypeLength(o) > server.hash_max_listpack_entries) hashTypeConvert(o, OBJ_ENCODING_HASHTABLE);
-    } else if (o->encoding == OBJ_ENCODING_HASHTABLE) {
+    } else if (objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE) {
         hashtable *ht = objectGetVal(o);
 
         sds v;
@@ -473,7 +473,7 @@ static expiryModificationResult hashTypeSetExpire(robj *o, sds field, mstime_t e
     if (o == NULL) return EXPIRATION_MODIFICATION_NOT_EXIST;
 
     bool time_is_expired = checkAlreadyExpired(expiry);
-    if (o->encoding == OBJ_ENCODING_LISTPACK) {
+    if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) {
         unsigned char *vstr;
         unsigned int vlen;
         long long vll;
@@ -497,7 +497,7 @@ static expiryModificationResult hashTypeSetExpire(robj *o, sds field, mstime_t e
     }
 
     /* we must be hashtable encoded */
-    serverAssert(o->encoding == OBJ_ENCODING_HASHTABLE);
+    serverAssert(objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE);
 
     hashtable *ht = objectGetVal(o);
     void **entry_ref = NULL;
@@ -553,9 +553,9 @@ static expiryModificationResult hashTypeSetExpire(robj *o, sds field, mstime_t e
 
 static expiryModificationResult hashTypePersist(robj *o, sds field) {
     /* NULL object returns -2 */
-    if (o == NULL || o->type != OBJ_HASH) return EXPIRATION_MODIFICATION_NOT_EXIST;
+    if (o == NULL || objectGetType(o) != OBJ_HASH) return EXPIRATION_MODIFICATION_NOT_EXIST;
 
-    if (o->encoding == OBJ_ENCODING_LISTPACK) {
+    if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) {
         if (hashTypeExists(o, field))
             /* When listpack representation is used, All items are without expiry */
             return EXPIRATION_MODIFICATION_FAILED;
@@ -582,8 +582,8 @@ static expiryModificationResult hashTypePersist(robj *o, sds field) {
  * Return true on deleted and false on not found. */
 bool hashTypeDelete(robj *o, sds field) {
     bool deleted = false;
-    serverAssert(o && o->type == OBJ_HASH);
-    if (o->encoding == OBJ_ENCODING_LISTPACK) {
+    serverAssert(o && objectGetType(o) == OBJ_HASH);
+    if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) {
         unsigned char *zl, *fptr;
 
         zl = objectGetVal(o);
@@ -597,7 +597,7 @@ bool hashTypeDelete(robj *o, sds field) {
                 deleted = true;
             }
         }
-    } else if (o->encoding == OBJ_ENCODING_HASHTABLE) {
+    } else if (objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE) {
         hashtable *ht = objectGetVal(o);
         void *entry = NULL;
         deleted = hashtablePop(ht, field, &entry);
@@ -613,7 +613,7 @@ bool hashTypeDelete(robj *o, sds field) {
 
 /* Return the number of elements in a hash. */
 unsigned long hashTypeLength(const robj *o) {
-    switch (o->encoding) {
+    switch (objectGetEncoding(o)) {
     case OBJ_ENCODING_LISTPACK:
         return lpLength(objectGetVal(o)) / 2;
     case OBJ_ENCODING_HASHTABLE:
@@ -768,7 +768,7 @@ robj *hashTypeLookupWriteOrCreate(client *c, robj *key) {
 
 
 void hashTypeConvertListpack(robj *o, int enc) {
-    serverAssert(o->encoding == OBJ_ENCODING_LISTPACK);
+    serverAssert(objectGetEncoding(o) == OBJ_ENCODING_LISTPACK);
 
     if (enc == OBJ_ENCODING_LISTPACK) {
         /* Nothing to do... */
@@ -799,7 +799,7 @@ void hashTypeConvertListpack(robj *o, int enc) {
         }
         hashTypeResetIterator(&hi);
         zfree(objectGetVal(o));
-        o->encoding = OBJ_ENCODING_HASHTABLE;
+        objectSetEncoding(o, OBJ_ENCODING_HASHTABLE);
         objectSetVal(o, ht);
     } else {
         serverPanic("Unknown hash encoding");
@@ -807,9 +807,9 @@ void hashTypeConvertListpack(robj *o, int enc) {
 }
 
 void hashTypeConvert(robj *o, int enc) {
-    if (o->encoding == OBJ_ENCODING_LISTPACK) {
+    if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) {
         hashTypeConvertListpack(o, enc);
-    } else if (o->encoding == OBJ_ENCODING_HASHTABLE) {
+    } else if (objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE) {
         serverPanic("Not implemented");
     } else {
         serverPanic("Unknown hash encoding");
@@ -825,16 +825,16 @@ robj *hashTypeDup(robj *o) {
     robj *hobj;
     hashTypeIterator hi;
 
-    serverAssert(o->type == OBJ_HASH);
+    serverAssert(objectGetType(o) == OBJ_HASH);
 
-    if (o->encoding == OBJ_ENCODING_LISTPACK) {
+    if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) {
         unsigned char *zl = objectGetVal(o);
         size_t sz = lpBytes(zl);
         unsigned char *new_zl = zmalloc(sz);
         memcpy(new_zl, zl, sz);
         hobj = createObject(OBJ_HASH, new_zl);
         hobj->encoding = OBJ_ENCODING_LISTPACK;
-    } else if (o->encoding == OBJ_ENCODING_HASHTABLE) {
+    } else if (objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE) {
         hashtable *ht = hashtableCreate(&hashHashtableType);
         hashtableExpand(ht, hashtableSize((const hashtable *)objectGetVal(o)));
         hobj = createObject(OBJ_HASH, ht);
@@ -1162,6 +1162,11 @@ void hgetdelCommand(client *c) {
     long long num_fields = 0;
     bool keyremoved = false;
 
+    if (strcasecmp(objectGetVal(c->argv[fields_index - 2]), "fields")) {
+        addReplyErrorObject(c, shared.syntaxerr);
+        return;
+    }
+
     if (getLongLongFromObjectOrReply(c, c->argv[fields_index - 1], &num_fields, NULL) != C_OK) return;
 
     /* Check that the parsed fields number matches the real provided number of fields */
@@ -1460,7 +1465,6 @@ void hsetexCommand(client *c) {
     if (set_expired) {
         new_argv = zmalloc(sizeof(robj *) * (num_fields + 2));
         new_argv[new_argc++] = shared.hdel;
-        incrRefCount(shared.hdel);
         new_argv[new_argc++] = c->argv[1];
         incrRefCount(c->argv[1]);
     } else if (need_rewrite_argv) {
@@ -1934,9 +1938,8 @@ void hexpireGenericCommand(client *c, mstime_t basetime, int unit) {
         else if (result == EXPIRATION_MODIFICATION_EXPIRE_ASAP) {
             /* In case we are expiring all the elements prepare a new argv since we are going to delete all the expired fields. */
             if (new_argv == NULL) {
-                new_argv = zmalloc(sizeof(robj *) * (num_fields + 3));
+                new_argv = zmalloc(sizeof(robj *) * (num_fields + 2));
                 new_argv[new_argc++] = shared.hdel;
-                incrRefCount(shared.hdel);
                 new_argv[new_argc++] = c->argv[1];
                 incrRefCount(c->argv[1]);
             }
@@ -2310,10 +2313,11 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
     else {
         /* Hashtable encoding (generic implementation) */
         unsigned long added = 0;
+        unsigned long maxtries = (count > ULONG_MAX / 10) ? ULONG_MAX : count * 10;
         listpackEntry field, value;
         hashtable *ht = hashtableCreate(&setHashtableType);
         hashtableExpand(ht, count);
-        while (added < count) {
+        while (added < count && maxtries--) {
             /* In case we were unable to locate random element, it is probably because there is no such element
              * since all elements are expired. */
             if (hashTypeRandomElement(hash, size, &field, withvalues ? &value : NULL) != C_OK)
@@ -2395,7 +2399,7 @@ typedef struct {
 static int hashTypeExpireEntry(void *entry, void *c) {
     expiryContext *ctx = c;
     robj *o = ctx->key;
-    serverAssert(o->encoding == OBJ_ENCODING_HASHTABLE && hashtableSize(objectGetVal(o)) > 0);
+    serverAssert(objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE && hashtableSize(objectGetVal(o)) > 0);
     hashtable *ht = objectGetVal(o);
     void *entry_ptr = NULL;
     bool deleted = hashtablePop(ht, entry, &entry_ptr);
@@ -2412,7 +2416,7 @@ static int hashTypeExpireEntry(void *entry, void *c) {
 /* Extract expired entries from a hash object's volatile set.
  * Returns number of expired entries, populates `out_entries`. */
 size_t hashTypeDeleteExpiredFields(robj *o, mstime_t now, unsigned long max_fields, robj **out_entries) {
-    serverAssert(o->encoding == OBJ_ENCODING_HASHTABLE);
+    serverAssert(objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE);
 
     vset *vset = hashTypeGetVolatileSet(o);
     if (!vset) {

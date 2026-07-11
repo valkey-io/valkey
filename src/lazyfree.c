@@ -68,7 +68,7 @@ void lazyFreeFunctionsCtx(void *args[]) {
     functionsLibCtx *functions_lib_ctx = args[0];
     list *engine_callbacks = args[1];
     size_t len = functionsLibCtxFunctionsLen(functions_lib_ctx);
-    functionsLibCtxFree(functions_lib_ctx, NULL, engine_callbacks);
+    functionsLibCtxFree(functions_lib_ctx, engine_callbacks);
     atomic_fetch_sub_explicit(&lazyfree_objects, len, memory_order_relaxed);
     atomic_fetch_add_explicit(&lazyfreed_objects, len, memory_order_relaxed);
 }
@@ -264,7 +264,7 @@ void freeFunctionsAsync(functionsLibCtx *functions_lib_ctx, list *engine_callbac
                                   memory_order_relaxed);
         bioCreateLazyFreeJob(lazyFreeFunctionsCtx, 2, functions_lib_ctx, engine_callbacks);
     } else {
-        functionsLibCtxFree(functions_lib_ctx, NULL, engine_callbacks);
+        functionsLibCtxFree(functions_lib_ctx, engine_callbacks);
     }
 }
 

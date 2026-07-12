@@ -157,22 +157,26 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
     }
 
     test "Replica redirects key access in migrating slots" {
-        # Validate initial states
-        assert_equal [get_open_slots 0] "\[609->-$R1_id\]"
-        assert_equal [get_open_slots 1] "\[609-<-$R0_id\]"
-        assert_equal [get_open_slots 3] "\[609->-$R1_id\]"
-        assert_equal [get_open_slots 4] "\[609-<-$R0_id\]"
+        # Validate initial states. Use wait_for_slot_state since the replicas
+        # (R3/R4) learn the migration state via gossip, which may still be
+        # propagating when this test starts.
+        wait_for_slot_state 0 "\[609->-$R1_id\]"
+        wait_for_slot_state 1 "\[609-<-$R0_id\]"
+        wait_for_slot_state 3 "\[609->-$R1_id\]"
+        wait_for_slot_state 4 "\[609-<-$R0_id\]"
         catch {[R 3 get aga]} e
         set port0 [srv 0 port]
         assert_equal "MOVED 609 127.0.0.1:$port0" $e
     }
 
     test "Replica of migrating node returns ASK redirect after READONLY" {
-        # Validate initial states
-        assert_equal [get_open_slots 0] "\[609->-$R1_id\]"
-        assert_equal [get_open_slots 1] "\[609-<-$R0_id\]"
-        assert_equal [get_open_slots 3] "\[609->-$R1_id\]"
-        assert_equal [get_open_slots 4] "\[609-<-$R0_id\]"
+        # Validate initial states. Use wait_for_slot_state since the replicas
+        # (R3/R4) learn the migration state via gossip, which may still be
+        # propagating when this test starts.
+        wait_for_slot_state 0 "\[609->-$R1_id\]"
+        wait_for_slot_state 1 "\[609-<-$R0_id\]"
+        wait_for_slot_state 3 "\[609->-$R1_id\]"
+        wait_for_slot_state 4 "\[609-<-$R0_id\]"
         # Read missing key in readonly replica in migrating state.
         assert_equal OK [R 3 READONLY]
         set port1 [srv -1 port]
@@ -182,11 +186,13 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
     }
 
     test "Replica of migrating node returns TRYAGAIN after READONLY" {
-        # Validate initial states
-        assert_equal [get_open_slots 0] "\[609->-$R1_id\]"
-        assert_equal [get_open_slots 1] "\[609-<-$R0_id\]"
-        assert_equal [get_open_slots 3] "\[609->-$R1_id\]"
-        assert_equal [get_open_slots 4] "\[609-<-$R0_id\]"
+        # Validate initial states. Use wait_for_slot_state since the replicas
+        # (R3/R4) learn the migration state via gossip, which may still be
+        # propagating when this test starts.
+        wait_for_slot_state 0 "\[609->-$R1_id\]"
+        wait_for_slot_state 1 "\[609-<-$R0_id\]"
+        wait_for_slot_state 3 "\[609->-$R1_id\]"
+        wait_for_slot_state 4 "\[609-<-$R0_id\]"
         # Read some existing and some missing keys in readonly replica in
         # migrating state results in TRYAGAIN, just like its primary would do.
         assert_equal OK [R 3 READONLY]
@@ -196,11 +202,13 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
     }
 
     test "Replica of importing node returns TRYAGAIN after READONLY and ASKING" {
-        # Validate initial states
-        assert_equal [get_open_slots 0] "\[609->-$R1_id\]"
-        assert_equal [get_open_slots 1] "\[609-<-$R0_id\]"
-        assert_equal [get_open_slots 3] "\[609->-$R1_id\]"
-        assert_equal [get_open_slots 4] "\[609-<-$R0_id\]"
+        # Validate initial states. Use wait_for_slot_state since the replicas
+        # (R3/R4) learn the migration state via gossip, which may still be
+        # propagating when this test starts.
+        wait_for_slot_state 0 "\[609->-$R1_id\]"
+        wait_for_slot_state 1 "\[609-<-$R0_id\]"
+        wait_for_slot_state 3 "\[609->-$R1_id\]"
+        wait_for_slot_state 4 "\[609-<-$R0_id\]"
         # A client follows an ASK redirect to a primary, but wants to read from a replica.
         # The replica returns TRYAGAIN just like a primary would do for two missing keys.
         assert_equal OK [R 4 READONLY]

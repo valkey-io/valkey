@@ -40,10 +40,15 @@ proc get_short_expire_value {command} {
     expr {
         ($command eq "HEXPIRE" || $command eq "EX") ? 1 :
         ($command eq "HPEXPIRE" || $command eq "PX") ? 1000 :
-        ($command eq "HEXPIREAT" || $command eq "EXAT") ? [clock seconds] + 1 :
+        ($command eq "HEXPIREAT" || $command eq "EXAT") ? [clock seconds] + 2 :
         [clock milliseconds] + 1000
     }
 }
+# Note: the EXAT margin is +2 (not +1) because [clock seconds] truncates: at
+# X.99s a +1 timestamp is only ~10ms in the future, and any scheduling stall
+# makes it already-past by the time the server executes the command. That
+# takes the immediate-expiry path, which emits hexpired without a preceding
+# hexpire notification and breaks notification-ordering assertions.
 
 proc get_long_expire_value {command} {
     expr {

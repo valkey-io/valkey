@@ -78,6 +78,61 @@ start_server {tags {"hash"}} {
         assert_error {*value is out of range*} {r hrandfield myhash -9223372036854775808}
     } {}
 
+    test "HRANDFIELD with a negative count whose reply would exceed rand-max-reply-size" {
+        r del myhash
+        r hmset myhash a 1 b 2
+        # An element replies as "$1\r\na\r\n", 7 bytes, so a 1kb budget serves
+        # about 146 duplicated elements and nothing close to a huge count.
+        r config set rand-max-reply-size 1kb
+        assert_equal 100 [llength [r hrandfield myhash -100]]
+        assert_error {*count is too large*} {r hrandfield myhash -1000}
+        assert_error {*count is too large*} {r hrandfield myhash -9223372036854775807}
+        assert_error {*count is too large*} {r hrandfield myhash -4611686018427387903}
+
+        # A positive count is bounded by the size of the hash, so it is served.
+        assert_equal {a b} [lsort [r hrandfield myhash 9223372036854775807]]
+
+        # The check is opt-out.
+        r config set rand-max-reply-size 0
+        assert_equal 1000 [llength [r hrandfield myhash -1000]]
+        r config set rand-max-reply-size 512mb
+        r del myhash
+    }
+
+    test "HRANDFIELD stops a reply that grows past rand-max-reply-size" {
+        r del myhash
+        # 999 fields with a tiny name and one with a 100kb name. Sampling the hash
+        # to estimate the reply size almost always misses the large field, so a
+        # count of 100000 is estimated at well under the 1mb limit and accepted.
+        # The elements actually drawn take the reply to roughly 10mb, so it has to
+        # be stopped while it is being built.
+        for {set i 0} {$i < 999} {incr i} { r hset myhash f$i v }
+        r hset myhash [string repeat x 100000] v
+        r config set rand-max-reply-size 1mb
+
+        set orig_mem [s used_memory]
+        set rd [valkey_deferring_client]
+        $rd client setname randbig
+        assert_equal OK [$rd read]
+        $rd hrandfield myhash -100000
+        $rd flush
+        after 100
+
+        # Before we read the reply, the server has closed this client, and the
+        # reply it was building never grew far past the limit.
+        assert_no_match "*name=randbig*" [r client list]
+        assert {[s used_memory] < $orig_mem + 5000000}
+        assert_equal {} [$rd rawread]
+        $rd close
+
+        # The server logs the overrun, as it does for an output buffer overrun.
+        verify_log_message 0 "*grew past the 'rand-max-reply-size' limit*" 0
+        assert_equal PONG [r ping]
+
+        r del myhash
+        r config set rand-max-reply-size 512mb
+    } {OK} {external:skip}
+
     test "HRANDFIELD with <count> against non existing key" {
         r hrandfield nonexisting_key 100
     } {}

@@ -1002,6 +1002,22 @@ void spopCommand(client *c) {
  * the number of randoms per time. */
 #define SRANDFIELD_RANDOM_SAMPLE_LIMIT 1000
 
+/* Estimate the average size of one element of the reply of SRANDMEMBER, by
+ * sampling the set. Returns 0 if no element could be sampled. */
+static size_t srandmemberElementReplySize(robj *set, unsigned long size) {
+    size_t total = 0;
+
+    if (size == 0) return 0;
+    for (int i = 0; i < RAND_REPLY_SIZE_SAMPLES; i++) {
+        char *str;
+        size_t len;
+        int64_t llele;
+        setTypeRandomElement(set, &str, &len, &llele);
+        total += bulkReplySize(str ? len : sdigits10(llele));
+    }
+    return total / RAND_REPLY_SIZE_SAMPLES;
+}
+
 void srandmemberWithCountCommand(client *c) {
     long l;
     unsigned long count, size;
@@ -1030,12 +1046,19 @@ void srandmemberWithCountCommand(client *c) {
         return;
     }
 
+    /* A negative count returns duplicates, so the caller alone decides how large
+     * the reply is. Refuse counts whose reply would not fit in memory. */
+    if (!uniq && randCountReplyTooLarge(c, count, srandmemberElementReplySize(set, size))) return;
+
     /* CASE 1: The count was negative, so the extraction method is just:
      * "return N random elements" sampling the whole set every time.
      * This case is trivial and can be served without auxiliary data
      * structures. This case is the only one that also needs to return the
      * elements in random order. */
     if (!uniq || count == 1) {
+        /* Bytes of reply emitted so far, to enforce 'rand-max-reply-size'. */
+        size_t emitted = 0;
+
         addReplyArrayLen(c, count);
 
         if (set->encoding == OBJ_ENCODING_LISTPACK && count > 1) {
@@ -1052,8 +1075,9 @@ void srandmemberWithCountCommand(client *c) {
                         addReplyBulkCBuffer(c, entries[i].sval, entries[i].slen);
                     else
                         addReplyBulkLongLong(c, entries[i].lval);
+                    emitted += listpackEntryReplySize(&entries[i]);
                 }
-                if (c->flag.close_asap) break;
+                if (randReplyLimitReached(c, emitted)) break;
             }
             zfree(entries);
             return;
@@ -1066,7 +1090,8 @@ void srandmemberWithCountCommand(client *c) {
             } else {
                 addReplyBulkCBuffer(c, str, len);
             }
-            if (c->flag.close_asap) break;
+            emitted += bulkReplySize(str ? len : sdigits10(llele));
+            if (randReplyLimitReached(c, emitted)) break;
         }
         return;
     }

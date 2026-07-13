@@ -2149,6 +2149,22 @@ void hpexpiretimeCommand(client *c) {
  * the number of randoms per time. */
 #define HRANDFIELD_RANDOM_SAMPLE_LIMIT 1000
 
+/* Estimate the average size of one element of the reply of HRANDFIELD, by
+ * sampling the hash. Returns 0 if no element could be sampled. */
+static size_t hrandfieldElementReplySize(robj *hash, unsigned long size, int withvalues) {
+    size_t total = 0;
+    int samples = 0;
+
+    for (int i = 0; i < RAND_REPLY_SIZE_SAMPLES; i++) {
+        listpackEntry field, value;
+        if (hashTypeRandomElement(hash, size, &field, &value) != C_OK) break;
+        total += listpackEntryReplySize(&field);
+        if (withvalues) total += listpackEntryReplySize(&value);
+        samples++;
+    }
+    return samples ? total / samples : 0;
+}
+
 void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
     unsigned long count, size;
     int uniq = 1;
@@ -2170,6 +2186,10 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
         return;
     }
 
+    /* A negative count returns duplicates, so the caller alone decides how large
+     * the reply is. Refuse counts whose reply would not fit in memory. */
+    if (!uniq && randCountReplyTooLarge(c, count, hrandfieldElementReplySize(hash, size, withvalues))) return;
+
     writePreparedClient *wpc = prepareClientForFutureWrites(c);
     if (!wpc) return;
 
@@ -2182,6 +2202,9 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
      * structures. This case is the only one that also needs to return the
      * elements in random order. */
     if (!uniq || count == 1) {
+        /* Bytes of reply emitted so far, to enforce 'rand-max-reply-size'. */
+        size_t emitted = 0;
+
         if (hash->encoding == OBJ_ENCODING_HASHTABLE) {
             while (count--) {
                 listpackEntry field, value;
@@ -2194,7 +2217,9 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
                 if (withvalues && c->resp > 2) addWritePreparedReplyArrayLen(wpc, 2);
                 addWritePreparedReplyBulkCBuffer(wpc, field.sval, field.slen);
                 if (withvalues) addWritePreparedReplyBulkCBuffer(wpc, value.sval, value.slen);
-                if (c->flag.close_asap) break;
+                emitted += listpackEntryReplySize(&field);
+                if (withvalues) emitted += listpackEntryReplySize(&value);
+                if (randReplyLimitReached(c, emitted)) break;
                 reply_size++;
             }
         } else if (hash->encoding == OBJ_ENCODING_LISTPACK) {
@@ -2210,7 +2235,11 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
                 reply_size += sample_count;
                 lpRandomPairs(objectGetVal(hash), sample_count, fields, vals);
                 hrandfieldReplyWithListpack(wpc, sample_count, fields, vals);
-                if (c->flag.close_asap) break;
+                for (unsigned long i = 0; i < sample_count; i++) {
+                    emitted += listpackEntryReplySize(&fields[i]);
+                    if (withvalues) emitted += listpackEntryReplySize(&vals[i]);
+                }
+                if (randReplyLimitReached(c, emitted)) break;
             }
             zfree(fields);
             zfree(vals);
@@ -2366,6 +2395,8 @@ void hrandfieldCommand(client *c) {
             return;
         } else if (c->argc == 4) {
             withvalues = 1;
+            /* The RESP2 reply holds two entries per element, so the array length
+             * we emit must not overflow. */
             if (l < -LONG_MAX / 2 || l > LONG_MAX / 2) {
                 addReplyError(c, "value is out of range");
                 return;

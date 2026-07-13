@@ -2206,6 +2206,8 @@ struct valkeyServer {
     int maxmemory_samples;                      /* Precision of random sampling */
     int maxmemory_eviction_tenacity;            /* Aggressiveness of eviction processing */
     long long proto_max_bulk_len;               /* Protocol bulk length maximum size. */
+    size_t rand_max_reply_size;                 /* Max reply size of a *RAND* command asking for
+                                                   duplicates, 0 means no limit. */
     int oom_score_adj_values[CONFIG_OOM_COUNT]; /* Linux oom_score_adj configuration */
     int oom_score_adj;                          /* If true, oom_score_adj is managed */
     int disable_thp;                            /* If true, disable THP by syscall */
@@ -2962,6 +2964,12 @@ void addReplyErrorSdsSafe(client *c, sds err);
 void addReplyError(client *c, const char *err);
 void addReplyErrorArity(client *c);
 void addReplyErrorExpireTime(client *c);
+size_t bulkReplySize(size_t payload_len);
+size_t listpackEntryReplySize(listpackEntry *e);
+int randCountReplyTooLarge(client *c, unsigned long count, size_t element_size);
+int randReplyLimitReached(client *c, size_t emitted);
+/* Elements sampled to estimate the average reply size of one element. */
+#define RAND_REPLY_SIZE_SAMPLES 16
 void addReplyStatus(client *c, const char *status);
 void addReplyDouble(client *c, double d);
 void addReplyBigNum(client *c, const char *num, size_t len);

@@ -827,6 +827,25 @@ foreach type {single multiple single_multiple} {
         assert_error {*value is out of range*} {r srandmember myset -9223372036854775808}
     } {}
 
+    test "SRANDMEMBER with a negative count whose reply would exceed rand-max-reply-size" {
+        r del myset
+        r sadd myset a b
+        r config set rand-max-reply-size 1kb
+        assert_equal 100 [llength [r srandmember myset -100]]
+        assert_error {*count is too large*} {r srandmember myset -1000}
+        assert_error {*count is too large*} {r srandmember myset -9223372036854775807}
+
+        # A positive count is bounded by the size of the set, so it is served.
+        assert_equal {a b} [lsort [r srandmember myset 9223372036854775807]]
+
+        # The check is opt-out.
+        r config set rand-max-reply-size 0
+        assert_equal 1000 [llength [r srandmember myset -1000]]
+
+        r config set rand-max-reply-size 512mb
+        r del myset
+    }
+
     # Make sure we can distinguish between an empty array and a null response
     r readraw 1
 

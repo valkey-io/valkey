@@ -1057,6 +1057,73 @@ void addReplyErrorExpireTime(client *c) {
     addReplyErrorFormat(c, "invalid expire time in '%s' command", c->cmd->fullname);
 }
 
+/* Number of bytes a payload of the given length occupies once emitted as a RESP
+ * bulk string: "$<len>\r\n<payload>\r\n". */
+size_t bulkReplySize(size_t payload_len) {
+    return 1 + digits10(payload_len) + 2 + payload_len + 2;
+}
+
+/* Size of a listpack entry once emitted as a RESP bulk string. */
+size_t listpackEntryReplySize(listpackEntry *e) {
+    return bulkReplySize(e->sval ? e->slen : sdigits10(e->lval));
+}
+
+/* The commands returning random elements with a negative count (HRANDFIELD,
+ * ZRANDMEMBER, SRANDMEMBER) return duplicates, so the size of the reply is
+ * bounded by the count the caller asks for rather than by the size of the key.
+ * The whole reply is materialized in the output buffer before a single byte of
+ * it is written to the socket, so an unbounded count lets one command exhaust
+ * the server's memory.
+ *
+ * Estimate the reply size from 'element_size', the average size of one element
+ * of the reply, and reject counts that would not fit in 'rand-max-reply-size'.
+ * Returns 1 and replies with an error if the count is too large, 0 otherwise.
+ *
+ * This is the estimate, not the guarantee: it assumes the sampled elements are
+ * representative of the key. The limit is also enforced against the reply as it
+ * is built, see randReplyLimitReached(). */
+int randCountReplyTooLarge(client *c, unsigned long count, size_t element_size) {
+    size_t limit = server.rand_max_reply_size;
+
+    /* No limit configured, or nothing to sample so the reply stays empty. */
+    if (limit == 0 || element_size == 0) return 0;
+    if (count <= limit / element_size) return 0;
+
+    addReplyErrorFormat(c, "count is too large, the reply would exceed the 'rand-max-reply-size' limit of %llu bytes",
+                        (unsigned long long)limit);
+    return 1;
+}
+
+/* Return 1 if the reply of duplicated random elements being built for 'c' must
+ * stop growing, either because the client is already scheduled to be closed or
+ * because the 'emitted' bytes of reply produced so far have grown past
+ * 'rand-max-reply-size'.
+ *
+ * A key whose elements differ wildly in size can defeat the estimate made by
+ * randCountReplyTooLarge() before the reply was started, so the limit is also
+ * enforced here, against the bytes the reply is actually made of. Those bytes
+ * are counted by the caller rather than read back from the output buffer, whose
+ * accounting rounds up to whole reply blocks and would make a limit smaller than
+ * one block reject replies that do fit in it.
+ *
+ * By this point half of the reply is serialized and cannot be replaced with an
+ * error, so the client is closed, exactly as it is when it overruns its output
+ * buffer limit. */
+int randReplyLimitReached(client *c, size_t emitted) {
+    size_t limit = server.rand_max_reply_size;
+
+    if (c->flag.close_asap) return 1;
+    if (limit == 0 || emitted <= limit) return 0;
+
+    sds client_info = catClientInfoString(sdsempty(), c, 0);
+    serverLog(LL_WARNING,
+              "Client %s scheduled to be closed ASAP: the reply of '%s' grew past the 'rand-max-reply-size' limit of %llu bytes.",
+              client_info, c->cmd->fullname, (unsigned long long)limit);
+    sdsfree(client_info);
+    freeClientAsync(c);
+    return 1;
+}
+
 void addReplyStatusLength(client *c, const char *s, size_t len) {
     addReplyProto(c, "+", 1);
     addReplyProto(c, s, len);

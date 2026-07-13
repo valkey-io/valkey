@@ -220,7 +220,10 @@ start_server {tags {"obuf-limits external:skip logreqres:skip"}} {
     test "Obuf limit, HRANDFIELD with huge count stopped mid-run" {
         r config set client-output-buffer-limit {normal 1000000 0 0}
         r hset myhash a b
-        catch {r hrandfield myhash -999999999} e
+        # The count has to be one that 'rand-max-reply-size' accepts, otherwise
+        # HRANDFIELD is rejected before it emits anything and the output buffer
+        # limit, which is what this test is about, is never reached.
+        catch {r hrandfield myhash -10000000} e
         assert_match "*I/O error*" $e
         reconnect
     }

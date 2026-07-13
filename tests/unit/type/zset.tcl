@@ -2471,6 +2471,22 @@ start_server {tags {"zset"}} {
         assert_error {*value is out of range*} {r zrandmember myzset -9223372036854775808}
     } {}
 
+    test "ZRANDMEMBER with a negative count whose reply would exceed rand-max-reply-size" {
+        r del myzset
+        r zadd myzset 0 a 1 b
+        r config set rand-max-reply-size 1kb
+        assert_equal 100 [llength [r zrandmember myzset -100]]
+        assert_error {*count is too large*} {r zrandmember myzset -1000}
+        assert_error {*count is too large*} {r zrandmember myzset -9223372036854775807}
+        assert_error {*count is too large*} {r zrandmember myzset -4611686018427387903}
+
+        # A positive count is bounded by the size of the sorted set, so it is served.
+        assert_equal {a b} [lsort [r zrandmember myzset 9223372036854775807]]
+
+        r config set rand-max-reply-size 512mb
+        r del myzset
+    }
+
     # Make sure we can distinguish between an empty array and a null response
     r readraw 1
 

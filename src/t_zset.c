@@ -4147,6 +4147,30 @@ static void zrandmemberReplyWithListpack(client *c, unsigned int count, listpack
  * the number of randoms per time. */
 #define ZRANDMEMBER_RANDOM_SAMPLE_LIMIT 1000
 
+/* Size of a score once emitted by addReplyDouble(). RESP3 frames it as
+ * ",<digits>\r\n" and RESP2 as a bulk string, so charging the bulk framing
+ * covers both. */
+static size_t scoreReplySize(double score) {
+    char buf[MAX_D2STRING_CHARS];
+    return bulkReplySize(d2string(buf, sizeof(buf), score));
+}
+
+/* Estimate the average size of one element of the reply of ZRANDMEMBER, by
+ * sampling the sorted set. Returns 0 if no element could be sampled. */
+static size_t zrandmemberElementReplySize(robj *zsetobj, unsigned long size, int withscores) {
+    size_t total = 0;
+
+    if (size == 0) return 0;
+    for (int i = 0; i < RAND_REPLY_SIZE_SAMPLES; i++) {
+        listpackEntry key;
+        double score;
+        zsetTypeRandomElement(zsetobj, size, &key, &score);
+        total += bulkReplySize(key.sval ? key.slen : sdigits10(key.lval));
+        if (withscores) total += scoreReplySize(score);
+    }
+    return total / RAND_REPLY_SIZE_SAMPLES;
+}
+
 void zrandmemberWithCountCommand(client *c, long l, int withscores) {
     unsigned long count, size;
     int uniq = 1;
@@ -4169,12 +4193,19 @@ void zrandmemberWithCountCommand(client *c, long l, int withscores) {
         return;
     }
 
+    /* A negative count returns duplicates, so the caller alone decides how large
+     * the reply is. Refuse counts whose reply would not fit in memory. */
+    if (!uniq && randCountReplyTooLarge(c, count, zrandmemberElementReplySize(zsetobj, size, withscores))) return;
+
     /* CASE 1: The count was negative, so the extraction method is just:
      * "return N random elements" sampling the whole set every time.
      * This case is trivial and can be served without auxiliary data
      * structures. This case is the only one that also needs to return the
      * elements in random order. */
     if (!uniq || count == 1) {
+        /* Bytes of reply emitted so far, to enforce 'rand-max-reply-size'. */
+        size_t emitted = 0;
+
         if (withscores && c->resp == 2)
             addReplyArrayLen(c, count * 2);
         else
@@ -4189,7 +4220,9 @@ void zrandmemberWithCountCommand(client *c, long l, int withscores) {
                 sds ele = zslGetNodeElement(node);
                 addReplyBulkCBuffer(c, ele, sdslen(ele));
                 if (withscores) addReplyDouble(c, node->score);
-                if (c->flag.close_asap) break;
+                emitted += bulkReplySize(sdslen(ele));
+                if (withscores) emitted += scoreReplySize(node->score);
+                if (randReplyLimitReached(c, emitted)) break;
             }
         } else if (zsetobj->encoding == OBJ_ENCODING_LISTPACK) {
             listpackEntry *keys, *vals = NULL;
@@ -4202,7 +4235,11 @@ void zrandmemberWithCountCommand(client *c, long l, int withscores) {
                 count -= sample_count;
                 lpRandomPairs(objectGetVal(zsetobj), sample_count, keys, vals);
                 zrandmemberReplyWithListpack(c, sample_count, keys, vals);
-                if (c->flag.close_asap) break;
+                for (unsigned long i = 0; i < sample_count; i++) {
+                    emitted += listpackEntryReplySize(&keys[i]);
+                    if (withscores) emitted += listpackEntryReplySize(&vals[i]);
+                }
+                if (randReplyLimitReached(c, emitted)) break;
             }
             zfree(keys);
             zfree(vals);
@@ -4356,6 +4393,8 @@ void zrandmemberCommand(client *c) {
             return;
         } else if (c->argc == 4) {
             withscores = 1;
+            /* The RESP2 reply holds two entries per element, so the array length
+             * we emit must not overflow. */
             if (l < -LONG_MAX / 2 || l > LONG_MAX / 2) {
                 addReplyError(c, "value is out of range");
                 return;

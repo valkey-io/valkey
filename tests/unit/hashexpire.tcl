@@ -1557,7 +1557,8 @@ start_server {tags {"hashexpire"}} {
         after 100
         assert_equal 100 [r HLEN myhash]
 
-        # Should return at most 29 valid fields without
+        # Should return at most 29 valid fields without looping forever
+        set result [r HRANDFIELD myhash 30]
         assert_lessthan_equal [llength $result] 29
 
         r DEBUG SET-ACTIVE-EXPIRE 1

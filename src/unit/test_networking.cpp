@@ -807,7 +807,7 @@ TEST_F(NetworkingTest, TestTrimReplyGuardsIoLastWritten) {
         testOnlyTrimReplyUnusedTailSpace(c);
 
         clientReplyBlock *after = (clientReplyBlock *)listNodeValue(listLast(c->reply));
-        ASSERT_EQ(after->size, alloc_size);          /* not reallocated */
+        ASSERT_EQ(after->size, alloc_size);            /* not reallocated */
         ASSERT_EQ(c->io_last_written.buf, after->buf); /* bookmark still valid */
         freeReplyOffloadClient(c);
     }
@@ -884,7 +884,7 @@ TEST_F(NetworkingTest, TestTrimReplyRefusedWhilePendingIO) {
     listAddNodeTail(c->reply, blk);
     c->reply_bytes = alloc_size;
 
-    resetLastWrittenBuf(c);              /* no bookmark on the tail */
+    resetLastWrittenBuf(c);                /* no bookmark on the tail */
     c->io_write_state = CLIENT_PENDING_IO; /* IO thread actively writing */
 
     testOnlyTrimReplyUnusedTailSpace(c);

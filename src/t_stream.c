@@ -2019,10 +2019,11 @@ void streamRewriteStripLimit(client *c, int limit_idx) {
     robj *limit_tok = c->argv[limit_idx];
     robj *limit_val = c->argv[limit_idx + 1];
 
-    c->argv_len_sum -= stringObjectLen(limit_tok);
-    c->argv_len_sum -= stringObjectLen(limit_val);
+    c->argv_len_sum -= getStringObjectLen(limit_tok);
+    c->argv_len_sum -= getStringObjectLen(limit_val);
 
-    /* Shift the tail (everything after "LIMIT <count>") two slots left. */
+    /* Intentionally shrink the argv vector by dropping the two "LIMIT <count>" slots,
+     * shifting the tail (everything after them) two slots left. */
     int tail = c->argc - (limit_idx + 2);
     if (tail > 0) {
         memmove(&c->argv[limit_idx],

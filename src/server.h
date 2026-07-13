@@ -3471,6 +3471,9 @@ int processCommand(client *c);
 int processPendingCommandAndInputBuffer(client *c);
 int processCommandAndResetClient(client *c);
 void setupSignalHandlers(void);
+#ifdef USE_LIBBACKTRACE
+void initLibbacktraceFrameState(void);
+#endif
 int createSocketAcceptHandler(connListener *sfd, aeFileProc *accept_handler);
 connListener *listenerByType(int type);
 int changeListener(connListener *listener);
@@ -4135,6 +4138,7 @@ void configGetCommand(client *c);
 void configResetStatCommand(client *c);
 void configRewriteCommand(client *c);
 void configHelpCommand(client *c);
+void configInfoCommand(client *c);
 void hincrbyCommand(client *c);
 void hincrbyfloatCommand(client *c);
 void subscribeCommand(client *c);

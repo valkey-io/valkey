@@ -3112,8 +3112,9 @@ static int dualChannelReplHandleHandshake(connection *conn, sds *err) {
     }
     /* Send replica listening port to primary for clarification */
     sds portstr = getReplicaPortString();
+    /* Also inform the primary of our (replica) version */
     *err = sendCommand(conn, "REPLCONF", "capa", "eof", "rdb-only", "1", "rdb-channel", "1", "listening-port", portstr,
-                       NULL);
+                       "version", VALKEY_VERSION, NULL);
     sdsfree(portstr);
     if (*err) {
         dualChannelServerLog(LL_WARNING, "Sending command to primary in dual channel replication handshake: %s", *err);

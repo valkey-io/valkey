@@ -357,23 +357,30 @@ unsigned long orderedIndexScanDefrag(OrderedIndex *oi, unsigned long cursor, Ord
 
     while (node != NULL && count < 16) {
         zskiplistNode *next = node->level[0].forward;
+
+        /* Find the predecessors of node at every level while the node is
+         * still valid; defragfn may free it, after which stale forward
+         * pointers to it must not be dereferenced. The identity check stops
+         * the walk at the node's immediate predecessor, correct even when
+         * equal (score, element) duplicates are present. */
+        zskiplistNode *update[ZSKIPLIST_MAXLEVEL];
+        zskiplistNode *x = header;
+        double score = node->score;
+        sds ele = zslGetNodeElement(node);
+        for (int i = zslGetHeight(zsl) - 1; i >= 0; i--) {
+            while (x->level[i].forward && x->level[i].forward != node &&
+                   (x->level[i].forward->score < score ||
+                    (x->level[i].forward->score == score &&
+                     sdscmp(zslGetNodeElement(x->level[i].forward), ele) <= 0))) {
+                x = x->level[i].forward;
+            }
+            update[i] = x;
+        }
+
         zskiplistNode *newnode = defragfn(node);
 
         if (newnode) {
-            /* Node was reallocated. Find predecessors and patch pointers. */
-            zskiplistNode *update[ZSKIPLIST_MAXLEVEL];
-            zskiplistNode *x = header;
-            double score = newnode->score;
-            sds ele = zslGetNodeElement(newnode);
-            for (int i = zslGetHeight(zsl) - 1; i >= 0; i--) {
-                while (x->level[i].forward &&
-                       (x->level[i].forward->score < score ||
-                        (x->level[i].forward->score == score &&
-                         sdscmp(zslGetNodeElement(x->level[i].forward), ele) < 0))) {
-                    x = x->level[i].forward;
-                }
-                update[i] = x;
-            }
+            /* Node was reallocated. Patch the stale forward pointers. */
             patchNodePointers(zsl, node, newnode, update);
             callback((OrderedIndexItem *)node, (OrderedIndexItem *)newnode, privdata);
         }

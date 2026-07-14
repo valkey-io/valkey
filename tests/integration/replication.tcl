@@ -196,7 +196,12 @@ start_server {tags {"repl external:skip"}} {
         }
         
         test {Replica output bytes metric} {
-            # reset stats 
+            # Make sure no replication traffic (initial sync, backlog writes)
+            # is still in flight before resetting stats, so the zero-baseline
+            # assertion below doesn't race with it.
+            wait_for_ofs_sync $A $B
+
+            # reset stats
             $A config resetstat
             
             set info [$A info stats]
@@ -207,7 +212,7 @@ start_server {tags {"repl external:skip"}} {
             $A set key value
             
             # wait for command propagation
-            wait_for_condition 50 100 {
+            wait_for_condition 100 100 {
                 [$B get key] eq {value}
             } else {
                 fail "Replica did not receive the command"

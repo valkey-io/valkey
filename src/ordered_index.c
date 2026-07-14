@@ -190,6 +190,7 @@ unsigned long orderedIndexLength(const OrderedIndex *oi) {
 }
 
 OrderedIndexItem *orderedIndexGetByIndex(const OrderedIndex *oi, unsigned long index) {
+    if (index >= orderedIndexLength(oi)) return NULL;
     return (OrderedIndexItem *)zslGetElementByRank((zskiplist *)oi, index + 1);
 }
 

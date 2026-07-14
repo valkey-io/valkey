@@ -2685,7 +2685,10 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
              * path above. Replicas and AOF-preamble loads keep them and wait
              * for an explicit HDEL/DEL from the primary. 'now' is 0 in the
              * RESTORE path, so expired fields are preserved there as expected. */
-            if (iAmPrimary() && !(rdbflags & RDBFLAGS_AOF_PREAMBLE) && now != 0) {
+            if (iAmPrimary() && !(rdbflags & RDBFLAGS_AOF_PREAMBLE) && now != 0 &&
+                hashTypeHasVolatileFields(o)) { /* O(1) header peek: skip the reap scan
+                                                 * (and its allocation) for the common
+                                                 * no-TTL hash. */
                 unsigned long nfields = hashTypeLength(o);
                 robj **expired_fields = zmalloc(sizeof(robj *) * nfields);
                 size_t nexpired = hashTypeDeleteExpiredFields(o, now, nfields, expired_fields);

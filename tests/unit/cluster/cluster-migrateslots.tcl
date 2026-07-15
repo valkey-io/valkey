@@ -172,6 +172,48 @@ proc do_node_restart {idx} {
     }
 }
 
+proc has_active_slot_migration {node_idx} {
+    foreach migration [R $node_idx CLUSTER GETSLOTMIGRATIONS] {
+        if {[dict get $migration state] ni {success cancelled failed}} {
+            return 1
+        }
+    }
+    return 0
+}
+
+# Recovery barrier for tests that start slot migrations. When such a test
+# fails an assertion mid-flight, it leaks state: an in-flight migration,
+# DEBUG SLOTMIGRATION PREVENT-* flags, and config tweaks. The next test to
+# call CLUSTER MIGRATESLOTS then hits a non-assertion error such as
+# "ERR I am already migrating slot", which aborts the whole test client and
+# discards the rest of the run. Calling this barrier after a
+# migration-starting test contains a failure to that single test. Restoring
+# slot ownership is intentionally out of scope; tests use ensure_slot_on_node
+# for that. All steps are best-effort so the barrier itself cannot abort the
+# client from block level.
+proc recover_slot_migration_state {} {
+    catch {set_debug_prevent_pause 0}
+    catch {set_debug_prevent_failover 0}
+    for {set i 0} {$i < [llength $::servers]} {incr i} {
+        catch {R $i CONFIG SET rdb-key-save-delay 0}
+        catch {R $i CONFIG SET repl-timeout 60}
+    }
+    foreach n {0 1 2} {
+        catch {R $n CLUSTER CANCELSLOTMIGRATIONS}
+    }
+    catch {
+        foreach n {0 1 2} {
+            wait_for_condition 100 100 {
+                ![has_active_slot_migration $n]
+            } else {
+                fail "Node $n still has an active slot migration after recovery"
+            }
+        }
+        wait_for_cluster_propagation
+    }
+}
+
+
 # Disable replica migration to prevent empty nodes from joining other shards.
 start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {cluster-allow-replica-migration no cluster-node-timeout 15000 cluster-databases 16}} {
 
@@ -649,6 +691,7 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {cluste
             wait_for_migration 2 16383
         }
     }
+    recover_slot_migration_state
 
     test "Import with hz set to 1" {
         assert_does_not_resync {
@@ -684,6 +727,7 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {cluste
             R 2 CONFIG SET hz $old_hz
         }
     }
+    recover_slot_migration_state
 
     # Catch-all test for covering commands sent during incremental replication
     test "Single source import - Incremental Command Coverage" {
@@ -1153,6 +1197,7 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {cluste
             assert_match "OK" [R 2 FLUSHDB SYNC]
         }
     }
+    recover_slot_migration_state
 
     test "Partial data removed on cancel" {
         assert_does_not_resync {
@@ -1544,6 +1589,7 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {cluste
             set_debug_prevent_pause 0
         }
     }
+    recover_slot_migration_state
 
     test "FLUSH on target during import" {
         assert_does_not_resync {
@@ -1878,6 +1924,7 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {cluste
             wait_for_migration 2 16383
         }
     }
+    recover_slot_migration_state
 
     test "Export client buffer excluded from maxmemory" {
         assert_does_not_resync {
@@ -1975,6 +2022,7 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {cluste
             R 2 CONFIG SET rdb-key-save-delay 0
         }
     }
+    recover_slot_migration_state
 
     foreach testcase [list \
         [list 0 0 1] \
@@ -2135,6 +2183,7 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {cluste
             # Since we are restarting primaries, we need to ensure the cluster becomes stable
             wait_for_cluster_state ok
         }
+        recover_slot_migration_state
     }
 }
 

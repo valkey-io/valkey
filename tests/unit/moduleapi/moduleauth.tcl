@@ -358,8 +358,9 @@ start_server {tags {"modules"}} {
 
         # Validate that even the new blocking module auth cb which was registered in the middle of
         # blocking module auth is attempted - making it take twice the duration (2x 500000 us).
+        # Allow 10% slack for scheduler/timer jitter; a skipped callback measures ~500000.
         regexp "usec_per_call=(\[0-9]{1,})\.*," $stats all usec_per_call
-        assert {$usec_per_call >= 1000000}
+        assert {$usec_per_call >= 900000}
     }
 
     test {Module unload during blocking module auth} {

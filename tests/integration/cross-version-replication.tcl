@@ -11,7 +11,7 @@ proc server_name_and_version {} {
     return "$server_name $server_version"
 }
 
-start_server {tags {"repl needs:other-server external:skip"} start-other-server 1 config "minimal.conf"} {
+start_server {tags {"repl needs:other-server external:skip compatible-redis"} start-other-server 1 config "minimal.conf"} {
     set primary_name_and_version [server_name_and_version]
     r set foo bar
 

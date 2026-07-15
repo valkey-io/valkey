@@ -61,7 +61,7 @@ start_cluster 3 0 {tags {external:skip cluster} overrides {cluster-node-timeout 
             [CI 0 total_cluster_links_established_outbound] >= 2 &&
             [CI 1 total_cluster_links_established_inbound] >= 2 &&
             [CI 1 total_cluster_links_established_outbound] >= 2 &&
-            [CI 2 total_cluster_links_established_outbound] >= 2 &&
+            [CI 2 total_cluster_links_established_inbound] >= 2 &&
             [CI 2 total_cluster_links_established_outbound] >= 2
         } else {
             fail "Cluster established links counters are not as expected"

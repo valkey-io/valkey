@@ -2379,7 +2379,7 @@ bool bgIteration_blockClientIfRequired(client *c) {
                 blocked_count++;
                 if (server.mstime - last_log > SYNC_BLOCKING_LOG_INTERVAL) {
                     serverLog(LL_WARNING,
-                              "bgIteration syncronously blocked %d times for scripts with undeclared keys",
+                              "bgIteration synchronously blocked %d times for scripts with undeclared keys",
                               blocked_count);
                     last_log = server.mstime;
                     blocked_count = 0;

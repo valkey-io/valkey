@@ -4309,3 +4309,33 @@ TEST_F(FbtreeTest, PropertySeekCorrectAfterRangeDelete) {
         fbtreeFree(tree);
     }
 }
+
+TEST_F(FbtreeTest, Height) {
+    char buf[16];
+
+    /* Empty tree has no root: height 0. */
+    EXPECT_EQ(fbtreeHeight(fbt), 0u);
+
+    /* Single element lives in a single leaf root: height 1. */
+    insert("k00000");
+    EXPECT_EQ(fbtreeHeight(fbt), 1u);
+
+    /* Fill that leaf to capacity (NODE_SIZE items): still a single leaf. */
+    for (int i = 1; i < NODE_SIZE; i++) {
+        snprintf(buf, sizeof(buf), "k%05d", i);
+        insert(buf);
+    }
+    EXPECT_EQ(fbtreeHeight(fbt), 1u);
+
+    /* One more item overflows the leaf and forces an inner root: height 2. */
+    snprintf(buf, sizeof(buf), "k%05d", NODE_SIZE);
+    insert(buf);
+    EXPECT_EQ(fbtreeHeight(fbt), 2u);
+
+    /* Enough items to fill a two-level tree and force a third level. */
+    for (int i = NODE_SIZE + 1; i <= TEST_TWO_LEVEL_ITEMS + 1; i++) {
+        snprintf(buf, sizeof(buf), "k%05d", i);
+        insert(buf);
+    }
+    EXPECT_GT(fbtreeHeight(fbt), 2u);
+}

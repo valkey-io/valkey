@@ -1161,6 +1161,21 @@ unsigned long fbtreeLength(fbtreeIndex *fbt) {
     return fbt->root ? getSubtreeSize(fbt->root) : 0;
 }
 
+/* Return the height of the tree: the number of levels from the root down to a
+ * leaf. An empty tree (no root) has height 0, a single leaf root has height 1,
+ * and each additional inner level adds 1. All root-to-leaf paths in a B+tree
+ * are the same length, so this descends the leftmost spine in O(height). */
+unsigned long fbtreeHeight(const fbtreeIndex *fbt) {
+    if (!fbt || !fbt->root) return 0;
+    unsigned long height = 1;
+    const node *n = fbt->root;
+    while (!n->is_leaf) {
+        n = ((const innerNode *)n)->children[0];
+        height++;
+    }
+    return height;
+}
+
 void fbtreeResetIterator(fbtreeIterator *iterator) {
     iter *it = iteratorFromOpaque(iterator);
     it->fbt = NULL;

@@ -514,8 +514,7 @@ unsigned long orderedIndexScanDefrag(OrderedIndex *oi, unsigned long cursor, Ord
  * ========================================================================== */
 
 int orderedIndexGetHeight(const OrderedIndex *oi) {
-    UNUSED(oi);
-    return 0; /* B+tree doesn't expose height in debug context */
+    return (int)fbtreeHeight((const fbtreeIndex *)oi);
 }
 
 int orderedIndexVerifyIntegrity(const OrderedIndex *oi, char *errmsg, size_t errmsg_len) {

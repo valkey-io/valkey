@@ -1907,6 +1907,8 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
      * later in this function, must be done before blockedBeforeSleep. */
     if (server.cluster_enabled) clusterBeforeSleep();
 
+    /* Release keys from bgIteration before processing unblocked clients. */
+    bgIteration_beforeSleep();
     /* Handle blocked clients.
      * must be done before flushAppendOnlyFile, in case of appendfsync=always,
      * since the unblocked clients may write data. */

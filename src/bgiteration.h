@@ -284,6 +284,11 @@ void bgIteration_init(void);
 bool bgIteration_iterationActive(void);
 
 
+/* Called as a beforeSleep action, receives items back from bgIteration.  This is just a little
+ * quicker than waiting for bgIteration's internal timer. */
+void bgIteration_beforeSleep(void);
+
+
 /* Notify bgIteration that a key is being deleted.  In Valkey, key deletion can occur in a READ
  * command if the key is expired.  Note that this notification is more about status than memory.
  * Since the dbEntry is a reference counted object, the dbEntry can't be physically deleted if

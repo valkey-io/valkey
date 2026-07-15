@@ -2269,6 +2269,13 @@ bool bgIteration_iterationActive(void) {
 
 
 // PUBLIC API
+void bgIteration_beforeSleep(void) {
+    if (!bgIteration_iterationActive()) return;
+    receiveItemsBackFromIterators(false);
+}
+
+
+// PUBLIC API
 void bgIteration_keyDelete(int dbid, const_sds key) {
     if (!bgIteration_iterationActive()) return;
     serverAssert(onValkeyMainThread());

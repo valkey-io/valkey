@@ -629,7 +629,7 @@ start_cluster 3 3 {tags {external:skip cluster} } {
 start_cluster 3 3 {tags {external:skip cluster} } {
     test "Cross-DB COPY command should not be allow during slot migration" {
         set primary_id_src 0
-        set primary_id_src_nodeid [R $primary_id_src CLUSTER MYID]    
+        set primary_id_src_nodeid [R $primary_id_src CLUSTER MYID]
         set primary_id_target 1
         set primary_id_target_nodeid [R $primary_id_target CLUSTER MYID]
 
@@ -637,13 +637,13 @@ start_cluster 3 3 {tags {external:skip cluster} } {
         R $primary_id_src set "{3560}key1" "value1_db1"
         R $primary_id_src set "{3560}key2" "value2_db1"
 
-    
+
         set slot [R $primary_id_src cluster keyslot "{3560}key1"]
 
         R $primary_id_target cluster setslot $slot importing $primary_id_src_nodeid
         R $primary_id_src cluster setslot $slot migrating $primary_id_target_nodeid
-        
-        # Cross slot should still fail                
+
+        # Cross slot should still fail
         set result [catch {assert_error [R $primary_id_src COPY "{3560}key1" "{3561}key1"]} err]
         assert_match "CROSSSLOT Keys in request don't hash to the same slot" $err
 
@@ -655,7 +655,7 @@ start_cluster 3 3 {tags {external:skip cluster} } {
         set result [catch {assert_error [R $primary_id_src COPY "{3560}key1" "{3560}key1" DB 7 REPLACE]} err]
         assert_match "TRYAGAIN Multiple keys request during rehashing of slot" $err
 
-        # Both keys exist, should work, but both keys must exist. 
+        # Both keys exist, should work, but both keys must exist.
         R $primary_id_src COPY "{3560}key1" "{3560}key2"
         # And it should work if DB param is provided, as long as it matches the selected DB
         R $primary_id_src COPY "{3560}key1" "{3560}key2" DB 0 REPLACE
@@ -663,3 +663,5 @@ start_cluster 3 3 {tags {external:skip cluster} } {
     }
 
 }
+
+

@@ -2363,7 +2363,8 @@ bool bgIteration_blockClientIfRequired(client *c) {
         if (numkeys > 0) {
             mustBlock = expediteKeysForWriteOnAllIterators(
                 c->db->id, c->cmd, c->argc, c->argv, keyrefs, numkeys, waitOnKeys);
-            serverAssert(!(mustBlock && (c->flag.multi) && !(c->flag.script)));
+            // We shouldn't need to block on a command within a multi (that's not a script)
+            serverAssert(!(mustBlock && c->flag.multi && !c->flag.script));
 
             if (mustBlock && (c->flag.script)) {
                 /* For scripts, we will block for keys declared in EVAL/EVALSHA/FCALL.
@@ -2372,6 +2373,18 @@ bool bgIteration_blockClientIfRequired(client *c) {
                  *  a key we haven't blocked for.  In this case, there is no option but to execute a
                  *  synchronous block and wait for the iterator(s) to be done with the key(s).
                  *  (Yuck.)  */
+                static const mstime_t SYNC_BLOCKING_LOG_INTERVAL = 60000;
+                static mstime_t last_log = 0; // STATIC: persists to prevent log spamming
+                static int blocked_count = 0; // STATIC: persistent count since last log
+                blocked_count++;
+                if (server.mstime - last_log > SYNC_BLOCKING_LOG_INTERVAL) {
+                    serverLog(LL_WARNING,
+                              "bgIteration syncronously blocked %d times for scripts with undeclared keys",
+                              blocked_count);
+                    last_log = server.mstime;
+                    blocked_count = 0;
+                }
+
                 while (mustBlock) {
                     receiveItemsBackFromIterators(true); // Blocking
                     hashtableEmpty(waitOnKeys, NULL);

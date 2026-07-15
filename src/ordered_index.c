@@ -295,42 +295,44 @@ unsigned long orderedIndexCountLexRange(const OrderedIndex *oi, const_sds min, c
  * Range Seek Helpers
  * ========================================================================== */
 
-/* Unified seek helper: position iterator at a range boundary.
+/* Unified seek helper: position the iterator at a range boundary so the first
+ * subsequent step in the iteration direction yields the first in-range element.
  *
- * After return, the iterator is positioned such that:
- *   - Forward (reverse=0): fbtreeNext() returns the first in-range element
- *   - Reverse (reverse=1): fbtreePrev() returns the last in-range element
+ *   - Forward (reverse=0): after return, fbtreeNext() yields the first element
+ *     that is in range (>= min, honoring inclusive/exclusive).
+ *   - Reverse (reverse=1): after return, fbtreePrev() yields the last element
+ *     that is in range (<= max, honoring inclusive/exclusive).
  *
- * 'packed' is the [score][element] boundary value to seek to.
- * 'inclusive' means the boundary element itself is in-range. */
+ * 'packed' is the [score][element] boundary to seek to; 'inclusive' means the
+ * boundary element itself is in range.
+ *
+ * fbtreeSeekToValue lands the cursor on the first element >= packed, i.e. the
+ * element fbtreeNext() would return. Two of the four (direction, inclusivity)
+ * cases need a one-element nudge from there; the other two are already correct.
+ * The nudge peeks the boundary element with fbtreeNext, then either keeps it
+ * consumed (exact match) or steps back O(1) with fbtreePrev (no re-seek). */
 static void seekForBound(fbtreeIterator *fbt_iter, sds packed, int reverse, int inclusive) {
     fbtreeSeekToValue(packed, fbt_iter);
 
     if (!reverse && !inclusive) {
-        /* Forward + exclusive: if positioned at exact match, advance past it. */
+        /* Forward + exclusive: peek the first element >= bound. If it IS the
+         * bound, leave it consumed so fbtreeNext() returns the element after it
+         * (the bound is excluded). If it is already past the bound, step back so
+         * fbtreeNext() returns it. */
         const_sds pos = fbtreeNext(fbt_iter);
-        if (pos != NULL) {
-            if (sdscmp(pos, packed) != 0) {
-                /* First element > bound -- re-seek so next() returns it. */
-                fbtreeSeekToValue(pos, fbt_iter);
-            }
-            /* Else: was exact match, consumed it. next() returns next element. */
-        }
+        if (pos != NULL && sdscmp(pos, packed) != 0) fbtreePrev(fbt_iter);
     } else if (reverse && inclusive) {
-        /* Reverse + inclusive: seek is at first >= bound.
-         * If bound exists, advance past so prev() returns bound.
-         * If not, re-seek to first > bound so prev() returns last < bound. */
+        /* Reverse + inclusive: peek the first element >= bound. If it IS the
+         * bound, leave it consumed so fbtreePrev() returns the bound. If it is
+         * past the bound (bound absent), step back so fbtreePrev() returns the
+         * last element < bound. */
         const_sds pos = fbtreeNext(fbt_iter);
-        if (pos != NULL) {
-            if (sdscmp(pos, packed) != 0) {
-                /* Not exact match -- re-seek so prev() returns last < bound */
-                fbtreeSeekToValue(pos, fbt_iter);
-            }
-            /* Else: exact match consumed, prev() now returns bound. */
-        }
+        if (pos != NULL && sdscmp(pos, packed) != 0) fbtreePrev(fbt_iter);
     }
-    /* Forward + inclusive: seek already at first >= bound. next() returns it. */
-    /* Reverse + exclusive: seek at first >= bound. prev() returns last < bound. */
+    /* Forward + inclusive: cursor already on the first element >= bound, which is
+     * exactly what fbtreeNext() should return. No adjustment needed. */
+    /* Reverse + exclusive: cursor on the first element >= bound, so fbtreePrev()
+     * returns the element just before it -- the last element < bound. No adjustment. */
 }
 
 /* Skip N elements in the given direction. */
@@ -377,6 +379,17 @@ void orderedIndexSeekToIndex(OrderedIndexIterator *iter, unsigned long index) {
     fbtreeSeekToRank((fbtreeIterator *)iter, index);
 }
 
+/* Position the iterator to begin a score-range scan.
+ *
+ * 'offset' encodes both direction and how many in-range elements to skip:
+ *   - offset >= 0: forward. Seek to the min bound, skip 'offset' elements, then
+ *     the caller steps with orderedIndexNext().
+ *   - offset <  0: reverse. Seek to the max bound, skip (-offset - 1) elements
+ *     downward, then the caller steps with orderedIndexPrev(). Thus offset == -1
+ *     starts at the max element, -2 at the one below it, and so on. (Callers map
+ *     a reverse LIMIT offset N to -N - 1.)
+ * If the resulting position is outside [min, max] or the index bounds, the
+ * iterator is reset (empty result). */
 void orderedIndexSeekToScoreRange(OrderedIndexIterator *iter, double min, double max, bool min_ex, bool max_ex, long offset) {
     fbtreeIterator *fbt_iter = (fbtreeIterator *)iter;
     fbtreeIndex *fbt = fbtreeIteratorGetIndex(fbt_iter);
@@ -430,6 +443,10 @@ void orderedIndexSeekToScoreRange(OrderedIndexIterator *iter, double min, double
     fbtreeSeekToRank(fbt_iter, (unsigned long)target + (offset < 0 ? 1 : 0));
 }
 
+/* Position the iterator to begin a lex-range scan. 'offset' follows the same
+ * convention as orderedIndexSeekToScoreRange: offset >= 0 iterates forward from
+ * the min bound (skipping 'offset' elements), offset < 0 iterates in reverse
+ * from the max bound (skipping -offset - 1 elements down, so -1 starts at max). */
 void orderedIndexSeekToLexRange(OrderedIndexIterator *iter, const_sds min, const_sds max, bool min_ex, bool max_ex, long offset) {
     fbtreeIterator *fbt_iter = (fbtreeIterator *)iter;
     fbtreeIndex *fbt = fbtreeIteratorGetIndex(fbt_iter);

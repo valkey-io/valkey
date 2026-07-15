@@ -40,6 +40,21 @@ start_server {tags {"modules"}} {
         assert_equal 0 [r exists k]
     }
 
+    test {StringSetMove does not bypass key opened as READ} {
+        r set k "set value"
+        assert_error "REFUSED" {r stringops.setmove_on_readonly_key k "will not set"}
+        # Key must not be created by READ access
+        assert_equal "set value" [r get k]
+    }
+
+    test {StringSetMove un-sets ttl} {
+        r set k "set value" ex 10
+        assert_equal 10 [r ttl k]
+        assert_equal "OK" [r stringops.setmove k "new value"]
+        assert_equal "new value" [r get k]
+        assert_equal -1 [r ttl k]
+    }
+
     test {CreateStringReferenceFromKey returns the string value} {
         r set k "reference me"
         assert_equal "reference me" [r stringops.getref k]

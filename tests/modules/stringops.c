@@ -64,6 +64,31 @@ int set_move(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     return ValkeyModule_ReplyWithSimpleString(ctx, "OK");
 }
 
+/* STRINGOPS.SETMOVE_READONLY key value
+ *
+ * Creates an uninitialized string, fills it with 'value', and attempts to store
+ * it in 'key' with a memory-moving StringSetMove.
+ * `key` is opened as read though.
+ * */
+int set_move_on_readonly_key(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    if (argc != 3) return ValkeyModule_WrongArity(ctx);
+    ValkeyModule_AutoMemory(ctx);
+
+    ValkeyModuleKey *key = ValkeyModule_OpenKey(ctx, argv[1], VALKEYMODULE_READ);
+    size_t len;
+    const char *value = ValkeyModule_StringPtrLen(argv[2], &len);
+
+    ValkeyModuleString *str = ValkeyModule_CreateStringUninitialized(ctx, len);
+    size_t str_len;
+    char *buf = (char *)ValkeyModule_StringPtrLen(str, &str_len);
+    if (str_len != len) return ValkeyModule_ReplyWithError(ctx, "ERR CreateStringUninitialized allocated the wrong length");
+    memcpy(buf, value, len);
+
+    if (ValkeyModule_StringSetMove(key, str) != VALKEYMODULE_OK)
+        return ValkeyModule_ReplyWithError(ctx, "REFUSED");
+    return ValkeyModule_ReplyWithSimpleString(ctx, "ERR StringSetMove worked against a key opened as READ");
+}
+
 /* STRINGOPS.SETMOVE_FAIL key
  *
  * Attempts to move a string whose refcount is > 1 into 'key'. StringSetMove
@@ -150,6 +175,7 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
 
     if (ValkeyModule_CreateCommand(ctx, "stringops.create_uninit_string_set", create_uninit_string_set, "write", 1, 1, 1) == VALKEYMODULE_OK &&
         ValkeyModule_CreateCommand(ctx, "stringops.setmove", set_move, "write", 1, 1, 1) == VALKEYMODULE_OK &&
+        ValkeyModule_CreateCommand(ctx, "stringops.setmove_on_readonly_key", set_move_on_readonly_key, "readonly", 1, 1, 1) == VALKEYMODULE_OK &&
         ValkeyModule_CreateCommand(ctx, "stringops.setmove_fail", setmove_fail, "write", 1, 1, 1) == VALKEYMODULE_OK &&
         ValkeyModule_CreateCommand(ctx, "stringops.getref", get_ref, "readonly", 1, 1, 1) == VALKEYMODULE_OK &&
         ValkeyModule_CreateCommand(ctx, "stringops.ref_capture", ref_capture, "readonly", 1, 1, 1) == VALKEYMODULE_OK &&

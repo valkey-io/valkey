@@ -2888,7 +2888,7 @@ ValkeyModuleString *VM_CreateStringFromStreamID(ValkeyModuleCtx *ctx, const Valk
  *
  * Returns NULL if the key is empty or does not hold a string. */
 ValkeyModuleString *VM_CreateStringReferenceFromKey(ValkeyModuleKey *key) {
-    if (key->value == NULL) return NULL;
+    if (key == NULL || key->value == NULL) return NULL;
     if (key->value->type != OBJ_STRING) return NULL;
 
     if (key->value->encoding != OBJ_ENCODING_RAW)
@@ -4588,7 +4588,9 @@ int VM_StringSetMove(ValkeyModuleKey *key, ValkeyModuleString *str) {
     if (!(key->mode & VALKEYMODULE_WRITE) || key->iter) return VALKEYMODULE_ERR;
     if (str->refcount != 1) return VALKEYMODULE_ERR;
     VM_DeleteKey(key);
-    robj *val = str; /* sole reference moved in — setKey reuses the sds, no copy */
+    /* if auto-memory was used for this string, mark it as externally managed now */
+    autoMemoryFreed(key->ctx, VALKEYMODULE_AM_STRING, str);
+    robj *val = str; /* refcount 1, owned by this pointer — setKey uses this robj directly in the keyspace */
     setKey(key->ctx->client, key->db, key->key, &val, SETKEY_NO_SIGNAL | SETKEY_DOESNT_EXIST);
     key->value = val;
     return VALKEYMODULE_OK;

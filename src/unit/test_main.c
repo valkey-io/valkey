@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: BSD-3-Clause
  */
 
+#include "../fmacros.h"
 #include <strings.h>
 #include <string.h>
 #include <stdio.h>

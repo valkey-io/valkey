@@ -2087,7 +2087,7 @@ static int rioWriteHashIteratorCursor(rio *r, hashTypeIterator *hi, int what) {
  * The function returns 0 on error, 1 on success. */
 int rewriteHashObject(rio *r, robj *key, robj *o) {
     hashTypeIterator hi;
-    long long count = 0, volatile_items = 0, non_volatile_items;
+    long long count = 0, non_volatile_items;
     sds field, value;
 
     /* First serialize volatile items if exist */
@@ -2107,7 +2107,6 @@ int rewriteHashObject(rio *r, robj *key, robj *o) {
                 if (rioWriteBulkLongLong(r, 1) == 0) goto werr;
                 if (rioWriteBulkString(r, field, sdslen(field)) == 0) goto werr;
                 if (rioWriteBulkString(r, value, sdslen(value)) == 0) goto werr;
-                volatile_items++;
             }
             sdsfree(field);
             sdsfree(value);
@@ -2115,22 +2114,14 @@ int rewriteHashObject(rio *r, robj *key, robj *o) {
         hashTypeResetIterator(&hi);
     }
 
-    /* Write as HMSET */
+    /* Write the persistent (no-TTL) fields as HMSET batches. The batch
+     * header needs the count of fields the persistent iterator will emit:
+     * total fields minus ALL volatile ones (expired-unreaped included,
+     * since the iterator skips those too). */
+    non_volatile_items = hashTypeLength(o) - hashTypeVolatileCount(o);
+
     hashTypeInitPersistentIterator(o, &hi);
     while (hashTypeNext(&hi) != C_ERR) {
-        if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) {
-            /* volatile_items only tracks the non-expired ones however listpack maintains
-             * a count in the header which can be used instead */
-            unsigned char *header = lpPeekLeadingMetadata(objectGetVal(o));
-            long long vitems = header ? lpGetMetadataValue(header) : 0;
-            non_volatile_items = hashTypeLength(o) - vitems;
-        } else if (objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE) {
-            /* FIXME: volatile_items are inclusive of expired ghost elements */
-            non_volatile_items = hashTypeLength(o) - volatile_items;
-        } else {
-            serverPanic("Unknown object encoding");
-        }
-
         /* If new vector write the HMSET command first */
         if (count == 0) {
             int cmd_items = (non_volatile_items > AOF_REWRITE_ITEMS_PER_CMD) ? AOF_REWRITE_ITEMS_PER_CMD : non_volatile_items;

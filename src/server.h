@@ -3595,6 +3595,7 @@ robj *setTypeDup(robj *o);
 #define HASH_SET_COPY 0
 
 
+long long hashTypeVolatileCount(robj *o);      /* total volatile fields, incl. expired-unreaped */
 void hashTypeFreeVolatileSet(robj *o);          /* needed only for freeHashObject */
 void hashTypeTrackEntry(robj *o, entry *entry); /* needed only for rdbLoadObject */
 size_t hashTypeScanDefrag(robj *ob, size_t cursor, void *(*defragAlloc)(void *));

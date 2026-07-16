@@ -109,6 +109,22 @@ static void hashTypeUpdateVolatileCount(robj *o, long delta) {
     objectSetVal(o, zl);
 }
 
+/* Return the number of fields carrying an expiry, INCLUDING expired fields
+ * that have not been reaped yet. O(1) for listpack (aggregate header peek);
+ * O(buckets) for hashtable (vset walk). Returns 0 when none. */
+long long hashTypeVolatileCount(robj *o) {
+    serverAssert(objectGetType(o) == OBJ_HASH);
+
+    if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) {
+        unsigned char *header = lpPeekLeadingMetadata(objectGetVal(o));
+        return header ? lpGetMetadataValue(header) : 0;
+    } else if (objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE) {
+        vset *set = hashTypeGetVolatileSet(o);
+        return set ? (long long)vsetSize(set) : 0;
+    }
+    serverPanic("Unknown hash encoding");
+}
+
 bool hashTypeHasVolatileFields(robj *o) {
     if (o == NULL) return false;
     serverAssert(objectGetType(o) == OBJ_HASH);

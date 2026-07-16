@@ -259,7 +259,14 @@ jobs:
             apt-get update
             apt-get install -y build-essential pkg-config libgtest-dev libgmock-dev python3
             make all-with-unit-tests SERVER_CFLAGS='-Werror'
-            ./src/unit/valkey-unit-gtests
+            if [ -f ./src/unit/valkey-unit-gtests ]; then
+              make test-unit
+            elif [ -f ./src/valkey-unit-tests ]; then
+              ./src/valkey-unit-tests
+            else
+              echo "No unit-test binary was produced"
+              exit 1
+            fi
   test-ubuntu-jemalloc-fortify:
     runs-on: ubuntu-latest
     if: |

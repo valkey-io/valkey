@@ -614,7 +614,7 @@ int test_vset_fuzzer(int argc, char **argv, int flags) {
         }
     }
     /* now expire all the entries and check that we have no entries left */
-    expire_mock_entries(&set, LONG_LONG_MAX);
+    expire_mock_entries(&set, LLONG_MAX);
     TEST_ASSERT(vsetIsEmpty(&set) && mock_entry_count == 0);
     vsetRelease(&set);
     free_mock_entries(); /* Just in case */

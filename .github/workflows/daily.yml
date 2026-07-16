@@ -1607,6 +1607,7 @@ jobs:
       - test-freebsd
       - test-alpine-jemalloc
       - test-alpine-libc-malloc
+      - test-alpine-32bit
       - reply-schemas-validator
     steps:
       - name: Collect job status

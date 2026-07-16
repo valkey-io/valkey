@@ -336,9 +336,9 @@ start_cluster 3 0 [list config_lines $modules] {
     }
 }
 
-set testmodule [file normalize tests/modules/basics.so]
 start_cluster 2 0 {overrides {cluster-node-timeout 1000}} {
     test "MODULE LOAD is blocked during atomic slot migration" {
+        set testmodule [file normalize tests/modules/basics.so]
         set node0_id [R 0 CLUSTER MYID]
         set node1_id [R 1 CLUSTER MYID]
 

@@ -41,6 +41,7 @@ set ::all_tests {
     unit/latency-monitor
     integration/block-repl
     integration/replication
+    integration/cross-version-replication
     integration/replication-2
     integration/replication-3
     integration/replication-4
@@ -129,6 +130,7 @@ set ::single_tests {}
 set ::run_solo_tests {}
 set ::skip_till ""
 set ::external 0; # If "1" this means, we are running against external instance
+set ::other_server_path {}; # Used in upgrade and inter-version tests
 set ::file ""; # If set, runs only the tests in this comma separated list
 set ::curfile ""; # Hold the filename of the current suite
 set ::accurate 0; # If true runs fuzz tests with more iterations
@@ -684,10 +686,13 @@ proc print_help_screen {} {
         "--stack-logging    Enable OSX leaks/malloc stack logging."
         "--accurate         Run slow randomized tests for more iterations."
         "--quiet            Don't show individual tests."
-        "--single <unit>    Just execute the specified unit (see next option). This option can be repeated."
+        "--single <unit>    Just execute the specified unit (see next option). This"
+        "                   option can be repeated."
         "--verbose          Increases verbosity."
         "--list-tests       List all the available test units."
-        "--only <test>      Just execute the specified test by test name or tests that match <test> regexp (if <test> starts with '/'). This option can be repeated."
+        "--only <test>      Just execute the specified test by test name or tests that"
+        "                   match <test> regexp (if <test> starts with '/'). This option"
+        "                   can be repeated."
         "--skip-till <unit> Skip all units until (and including) the specified one."
         "--skipunit <unit>  Skip one unit."
         "--clients <num>    Number of test clients (default 16)."
@@ -706,12 +711,15 @@ proc print_help_screen {} {
         "--stop             Blocks once the first test fails."
         "--loop             Execute the specified set of tests forever."
         "--loops <count>    Execute the specified set of tests several times."
-        "--wait-server      Wait after server is started (so that you can attach a debugger)."
+        "--wait-server      Wait after server is started (so that you can attach a"
+        "                   debugger)."
         "--dump-logs        Dump server log on test failure."
         "--tls              Run tests in TLS mode."
         "--tls-module       Run tests in TLS mode with Redis module."
         "--host <addr>      Run tests against an external host."
         "--port <port>      TCP port to use against external host."
+        "--other-server-path <path>"
+        "                   Path to another version of valkey-server, used for inter-version compatibility testing."
         "--baseport <port>  Initial port number for spawned redis servers."
         "--portcount <num>  Port range for spawned redis servers."
         "--singledb         Use a single database, avoid SELECT."
@@ -781,6 +789,9 @@ for {set j 0} {$j < [llength $argv]} {incr j} {
         incr j
     } elseif {$opt eq {--port}} {
         set ::port $arg
+        incr j
+    } elseif {$opt eq {--other-server-path}} {
+        set ::other_server_path $arg
         incr j
     } elseif {$opt eq {--baseport}} {
         set ::baseport $arg

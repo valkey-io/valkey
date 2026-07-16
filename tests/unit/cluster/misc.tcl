@@ -163,10 +163,13 @@ start_cluster 2 0 {tags {cluster external:skip needs:debug}} {
             fail "R0 did not mark R1 as PFAIL"
         }
 
+        # Remember some information after the PFAIL.
+        set R0_ping_sent [dict get [cluster_get_node_by_id 0 $R1_nodeid] ping_sent]
+        set R0_ping_received [CI 0 cluster_stats_messages_ping_received]
+
         # Restore the DEBUG setting on R0, but exclude MEET first to avoid
         # multiple MEET reconnections. We will restore it after R0 receives
         # the PING and refreshes data_received.
-        set R0_ping_received [CI 0 cluster_stats_messages_ping_received]
         R 0 debug drop-cluster-packet-filter $CLUSTER_PACKET_TYPE_MEET
         wait_for_condition 1000 50 {
            [CI 0 cluster_stats_messages_ping_received] > $R0_ping_received
@@ -175,6 +178,13 @@ start_cluster 2 0 {tags {cluster external:skip needs:debug}} {
         }
         R 0 debug drop-cluster-packet-filter $CLUSTER_PACKET_TYPE_NONE
 
+        # Ensure ping_sent does not get stuck and R0 can send PINGs.
+        wait_for_condition 1000 50 {
+           [dict get [cluster_get_node_by_id 0 $R1_nodeid] ping_sent] > $R0_ping_sent
+        } else {
+            fail "R0 did not send the PING"
+        }
+
         # All packets are being sent and received normally, and R0 should be
         # able to remove the PFAIL flag.
         wait_for_condition 1000 50 {
@@ -182,5 +192,6 @@ start_cluster 2 0 {tags {cluster external:skip needs:debug}} {
         } else {
             fail "R0 did not remove the PFAIL flag"
         }
+        wait_for_cluster_state ok
     }
 }

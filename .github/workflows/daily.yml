@@ -321,6 +321,69 @@ jobs:
         if: true && !contains(github.event.inputs.skiptests, 'unittest')
         run: ./src/valkey-unit-tests --accurate
 
+  test-alpine-32bit:
+    runs-on: ubuntu-latest
+    if: |
+      (github.event_name == 'workflow_dispatch' ||
+        (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
+        (github.event_name == 'pull_request' && (contains(github.event.pull_request.labels.*.name, 'run-extra-tests') || github.event.pull_request.base.ref != 'unstable'))) &&
+      !contains(github.event.inputs.skipjobs, 'alpine') &&
+      !contains(github.event.inputs.skipjobs, '32bit')
+    timeout-minutes: 1440
+    steps:
+      - name: prep
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          echo "GITHUB_REPOSITORY=${{github.event.inputs.use_repo}}" >> $GITHUB_ENV
+          echo "GITHUB_HEAD_REF=${{github.event.inputs.use_git_ref}}" >> $GITHUB_ENV
+          echo "skipjobs: ${{github.event.inputs.skipjobs}}"
+          echo "skiptests: ${{github.event.inputs.skiptests}}"
+          echo "test_args: ${{github.event.inputs.test_args}}"
+          echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ${{ env.GITHUB_REPOSITORY }}
+          ref: ${{ env.GITHUB_HEAD_REF }}
+      - name: Run 32-bit Alpine tests
+        env:
+          RUN_ACCURATE: ${{ github.event_name != 'pull_request' && '--accurate' || '' }}
+          SKIPTESTS: ${{ github.event.inputs.skiptests }}
+          TEST_ARGS: ${{ github.event.inputs.test_args }}
+          CLUSTER_TEST_ARGS: ${{ github.event.inputs.cluster_test_args }}
+        run: |
+          docker run --rm \
+            --platform linux/386 \
+            -v "$PWD:/src" \
+            -w /src \
+            -e RUN_ACCURATE \
+            -e SKIPTESTS \
+            -e TEST_ARGS \
+            -e CLUSTER_TEST_ARGS \
+            i386/alpine:latest \
+            sh -euxc '
+              apk add --no-cache bash build-base git gtest-dev linux-headers procps python3 tcl tclx
+
+              make SERVER_CFLAGS="-Werror" 32bit
+
+              case "${SKIPTESTS:-}" in
+                *valkey*) ;;
+                *) ./runtest ${RUN_ACCURATE:-} --verbose --dump-logs ${TEST_ARGS:-} ;;
+              esac
+
+              case "${SKIPTESTS:-}" in
+                *modules*) ;;
+                *)
+                  make -C tests/modules 32bit
+                  CFLAGS="-Werror" ./runtest-moduleapi --verbose --dump-logs ${TEST_ARGS:-}
+                  ;;
+              esac
+
+              case "${SKIPTESTS:-}" in
+                *sentinel*) ;;
+                *) ./runtest-sentinel ${CLUSTER_TEST_ARGS:-} ;;
+              esac
+            '
+
   test-ubuntu-tls:
     runs-on: ubuntu-latest
     if: |

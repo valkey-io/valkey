@@ -1026,6 +1026,9 @@ typedef struct readyList {
                                         no AUTH is needed, and every         \
                                         connection is immediately            \
                                         authenticated. */
+#define USER_FLAG_ROLE (1 << 3)      /* This user entry represents a role, \
+                                        not a regular user. Stored in the  \
+                                        Roles rax instead of Users. */
 
 #define SELECTOR_FLAG_ROOT (1 << 0)        /* This is the root user permission \
                                             * selector. */
@@ -1036,21 +1039,15 @@ typedef struct readyList {
 #define SELECTOR_FLAG_ALLDBS (1 << 4)      /* Allow all databases */
 
 
-typedef struct role {
-    sds name;         /* Role name */
-    list *selectors;  /* List of selectors (same structure as user selectors) */
-    list *members;    /* List of user pointers */
-    robj *acl_string; /* Cached ACL string representation */
-} role;
-
 typedef struct user {
     sds name;         /* The username as an SDS string. */
     uint32_t flags;   /* See USER_FLAG_* */
-    list *passwords;  /* A list of SDS valid passwords for this user. */
+    list *passwords;  /* A list of SDS valid passwords for this user (NULL for roles). */
     list *selectors;  /* A list of selectors this user validates commands
                          against. This list will always contain at least
                          one selector for backwards compatibility. */
-    list *roles;      /* A list of roles assigned to this user. */
+    list *roles;      /* For users: assigned role pointers (NULL for roles). */
+    list *members;    /* For roles: member user pointers (NULL for users). */
     robj *acl_string; /* cached string represent of ACLs */
 } user;
 
@@ -3406,7 +3403,7 @@ sds getAclErrorMessage(int acl_res, user *user, struct serverCommand *cmd, sds e
 void ACLUpdateDefaultUserPassword(sds password);
 sds genValkeyInfoStringACLStats(sds info);
 void ACLRecomputeCommandBitsFromCommandRulesAllUsers(void);
-role *ACLGetRoleByName(const char *name, size_t namelen);
+user *ACLGetRoleByName(const char *name, size_t namelen);
 int ACLAppendRoleForLoading(sds *argv, int argc, int *argc_err);
 
 /* Sorted sets data type */

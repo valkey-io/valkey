@@ -2779,6 +2779,13 @@ typedef struct {
     unsigned char *lpi; /* listpack iterator */
 } setTypeIterator;
 
+/* Enum for the available hashTypeIterator's */
+typedef enum {
+    HASH_ITER_ALL = 0,    /* Iterate all fields */
+    HASH_ITER_VOLATILE,   /* Iterate only fields which carry a ttl */
+    HASH_ITER_PERSISTENT, /* Iterate only fields which do not carry a ttl */
+} hashIteratorType;
+
 /* Structure to hold hash iteration abstraction. Note that iteration over
  * hashes involves both fields and values. Because it is possible that
  * not both are required, store pointers in the iterator to avoid
@@ -2786,7 +2793,7 @@ typedef struct {
 typedef struct {
     robj *subject;
     int encoding;
-    bool volatile_items_iter;
+    hashIteratorType iterator_type;
     unsigned char *fptr, *vptr;
 
     hashtableIterator iter;
@@ -3600,6 +3607,7 @@ bool hashTypeDelete(robj *o, sds key);
 unsigned long hashTypeLength(const robj *o);
 void hashTypeInitIterator(robj *subject, hashTypeIterator *hi);
 void hashTypeInitVolatileIterator(robj *subject, hashTypeIterator *hi);
+void hashTypeInitPersistentIterator(robj *subject, hashTypeIterator *hi);
 void hashTypeResetIterator(hashTypeIterator *hi);
 int hashTypeNext(hashTypeIterator *hi);
 void hashTypeCurrentFromListpack(hashTypeIterator *hi,

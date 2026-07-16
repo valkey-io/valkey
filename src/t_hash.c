@@ -812,7 +812,7 @@ unsigned long hashTypeLength(const robj *o) {
 void hashTypeInitIterator(robj *subject, hashTypeIterator *hi) {
     hi->subject = subject;
     hi->encoding = subject->encoding;
-    hi->volatile_items_iter = false;
+    hi->iterator_type = HASH_ITER_ALL;
 
     if (hi->encoding == OBJ_ENCODING_LISTPACK) {
         hi->fptr = NULL;
@@ -824,13 +824,16 @@ void hashTypeInitIterator(robj *subject, hashTypeIterator *hi) {
     }
 }
 
+/* Initialize a hashTypeIterator for iterating over volatile items
+ * NOTE:  For a hashTable the caller MUST make sure volatile items exist */
 void hashTypeInitVolatileIterator(robj *subject, hashTypeIterator *hi) {
     hi->subject = subject;
     hi->encoding = subject->encoding;
-    hi->volatile_items_iter = true;
+    hi->iterator_type = HASH_ITER_VOLATILE;
 
     if (hi->encoding == OBJ_ENCODING_LISTPACK) {
-        return;
+        hi->fptr = NULL;
+        hi->vptr = NULL;
     } else if (hi->encoding == OBJ_ENCODING_HASHTABLE) {
         vsetInitIterator(hashTypeGetVolatileSet(subject), &hi->viter);
     } else {
@@ -838,12 +841,28 @@ void hashTypeInitVolatileIterator(robj *subject, hashTypeIterator *hi) {
     }
 }
 
+void hashTypeInitPersistentIterator(robj *subject, hashTypeIterator *hi) {
+    hi->subject = subject;
+    hi->encoding = subject->encoding;
+    hi->iterator_type = HASH_ITER_PERSISTENT;
+
+    if (hi->encoding == OBJ_ENCODING_LISTPACK) {
+        hi->fptr = NULL;
+        hi->vptr = NULL;
+    } else if (hi->encoding == OBJ_ENCODING_HASHTABLE) {
+        hashtableInitIterator(&hi->iter, objectGetVal(subject), 0);
+    } else {
+        serverPanic("Unknown hash encoding");
+    }
+}
+
 void hashTypeResetIterator(hashTypeIterator *hi) {
     if (hi->encoding == OBJ_ENCODING_HASHTABLE) {
-        if (!hi->volatile_items_iter)
+        if (hi->iterator_type == HASH_ITER_ALL || hi->iterator_type == HASH_ITER_PERSISTENT) {
             hashtableCleanupIterator(&hi->iter);
-        else
+        } else {
             vsetResetIterator(&hi->viter);
+        }
     }
 }
 
@@ -854,9 +873,6 @@ int hashTypeNext(hashTypeIterator *hi) {
         while (1) {
             unsigned char *zl;
             unsigned char *fptr, *vptr;
-
-            /* listpack encoding does not have volatile items, so return as iteration end */
-            if (hi->volatile_items_iter) return C_ERR;
 
             zl = objectGetVal(hi->subject);
             fptr = hi->fptr;
@@ -877,8 +893,24 @@ int hashTypeNext(hashTypeIterator *hi) {
             vptr = lpNext(zl, fptr);
             serverAssert(vptr != NULL);
 
-            /* Skip lazily-expired fields */
             unsigned char *metadata_ptr = lpGetMetadata(zl, vptr);
+            if (hi->iterator_type == HASH_ITER_VOLATILE) {
+                /* VOLATILE skips pairs with no metadata */
+                if (metadata_ptr == NULL) {
+                    hi->fptr = fptr;
+                    hi->vptr = vptr;
+                    continue;
+                }
+            } else if (hi->iterator_type == HASH_ITER_PERSISTENT) {
+                /* PERSISTENT skips pairs with metadata */
+                if (metadata_ptr != NULL) {
+                    hi->fptr = fptr;
+                    hi->vptr = vptr;
+                    continue;
+                }
+            }
+
+            /* Skip lazily-expired fields */
             if (metadata_ptr != NULL) {
                 int64_t expiry = lpGetMetadataValue(metadata_ptr);
                 if (expiry != EXPIRY_NONE && expiry <= commandTimeSnapshot()) {
@@ -894,9 +926,19 @@ int hashTypeNext(hashTypeIterator *hi) {
             break;
         }
     } else if (hi->encoding == OBJ_ENCODING_HASHTABLE) {
-        if (!hi->volatile_items_iter) {
-            if (!hashtableNext(&hi->iter, &hi->next)) return C_ERR;
+        if (hi->iterator_type == HASH_ITER_ALL || hi->iterator_type == HASH_ITER_PERSISTENT) {
+            /* on a persistent iterator skip entries with expiry */
+            if (hi->iterator_type == HASH_ITER_PERSISTENT) {
+                do {
+                    if (!hashtableNext(&hi->iter, &hi->next)) return C_ERR;
+                } while (entryHasExpiry(hi->next));
+            } else {
+                if (!hashtableNext(&hi->iter, &hi->next)) return C_ERR;
+            }
         } else {
+            /* TODO: Listpack iteration yields ONLY live fields, if the
+             * field is not reaped this may yield expired entries - fix
+             * should be a simple `do {vsetNext} while(entryIsExpired(hi->next))` */
             if (!vsetNext(&hi->viter, &hi->next)) return C_ERR;
         }
     } else {
@@ -966,15 +1008,19 @@ robj *hashTypeLookupWriteOrCreate(client *c, robj *key) {
 }
 
 long long hashTypeCurrentExpiry(robj *o, hashTypeIterator *hi) {
-    serverAssert(o->encoding == OBJ_ENCODING_LISTPACK);
-
-    long long expiry = EXPIRY_NONE;
-    unsigned char *vptr = hi->vptr;
-    unsigned char *metadata_ptr = lpGetMetadata(objectGetVal(o), vptr);
-    if (metadata_ptr != NULL) {
-        expiry = lpGetMetadataValue(metadata_ptr);
+    if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) {
+        long long expiry = EXPIRY_NONE;
+        unsigned char *vptr = hi->vptr;
+        unsigned char *metadata_ptr = lpGetMetadata(objectGetVal(o), vptr);
+        if (metadata_ptr != NULL) {
+            expiry = lpGetMetadataValue(metadata_ptr);
+        }
+        return expiry;
+    } else if (objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE) {
+        return entryGetExpiry(hi->next);
     }
-    return expiry;
+
+    serverPanic("Unknown encoding type");
 }
 
 void hashTypeConvertListpack(robj *o, int enc) {

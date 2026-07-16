@@ -2104,9 +2104,9 @@ int rewriteHashObject(rio *r, robj *key, robj *o) {
                 unsigned char *value = lpGet(vptr, &vlen, value_intbuf);
 
                 /* Get metadata */
-                unsigned char *meta = lpGetMetadata(zl, vptr);
-                if (meta) {
-                    mstime_t expiry = lpGetMetadataValue(meta);
+                unsigned char *metadata_ptr = lpGetMetadata(zl, vptr);
+                if (metadata_ptr) {
+                    mstime_t expiry = lpGetMetadataValue(metadata_ptr);
                     /* Write if not expired */
                     if (expiry != EXPIRY_NONE && expiry > commandTimeSnapshot()) {
                         if (rioWriteBulkCount(r, '*', 8) == 0) return 0;

@@ -27,8 +27,10 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include "entry.h"
 #include "expire.h"
 #include "listpack.h"
+#include "sds.h"
 #include "server.h"
 #include "bio.h"
 #include "rio.h"
@@ -2091,45 +2093,12 @@ int rewriteHashObject(rio *r, robj *key, robj *o) {
 
     /* First serialize volatile items if exist */
     if (hashTypeHasVolatileFields(o)) {
-        if (o->encoding == OBJ_ENCODING_LISTPACK) {
-            unsigned char *zl = objectGetVal(o);
-            unsigned char *p = lpFirst(zl);
-
-            while (p) {
-                int64_t flen;
-                unsigned char *field = lpGet(p, &flen, field_intbuf);
-                unsigned char *vptr = lpNext(zl, p);
-                if (!vptr) break;
-                int64_t vlen;
-                unsigned char *value = lpGet(vptr, &vlen, value_intbuf);
-
-                /* Get metadata */
-                unsigned char *metadata_ptr = lpGetMetadata(zl, vptr);
-                if (metadata_ptr) {
-                    mstime_t expiry = lpGetMetadataValue(metadata_ptr);
-                    /* Write if not expired */
-                    if (expiry != EXPIRY_NONE && expiry > commandTimeSnapshot()) {
-                        if (rioWriteBulkCount(r, '*', 8) == 0) return 0;
-                        if (rioWriteBulkString(r, "HSETEX", 6) == 0) return 0;
-                        if (rioWriteBulkObject(r, key) == 0) return 0;
-                        if (rioWriteBulkString(r, "PXAT", 4) == 0) return 0;
-                        if (rioWriteBulkLongLong(r, expiry) == 0) return 0;
-                        if (rioWriteBulkString(r, "FIELDS", 6) == 0) return 0;
-                        if (rioWriteBulkLongLong(r, 1) == 0) return 0;
-                        if (rioWriteBulkString(r, (char *)field, flen) == 0) return 0;
-                        if (rioWriteBulkString(r, (char *)value, vlen) == 0) return 0;
-                        volatile_items++;
-                    }
-                }
-                p = lpNext(zl, vptr);
-            }
-        } else {
-            hashTypeInitVolatileIterator(o, &hi);
-            while (hashTypeNext(&hi) != C_ERR) {
-                long long expiry = entryGetExpiry(hi.next);
-                sds field = entryGetField(hi.next);
-                size_t value_len;
-                char *value = entryGetValue(hi.next, &value_len);
+        hashTypeInitVolatileIterator(o, &hi);
+        while (hashTypeNext(&hi) != C_ERR) {
+            long long expiry = hashTypeCurrentExpiry(o, &hi);
+            sds field = hashTypeCurrentObjectNewSds(&hi, OBJ_HASH_FIELD);
+            sds value = hashTypeCurrentObjectNewSds(&hi, OBJ_HASH_VALUE);
+            if (expiry > commandTimeSnapshot()) {
                 if (rioWriteBulkCount(r, '*', 8) == 0) return 0;
                 if (rioWriteBulkString(r, "HSETEX", 6) == 0) return 0;
                 if (rioWriteBulkObject(r, key) == 0) return 0;
@@ -2138,10 +2107,12 @@ int rewriteHashObject(rio *r, robj *key, robj *o) {
                 if (rioWriteBulkString(r, "FIELDS", 6) == 0) return 0;
                 if (rioWriteBulkLongLong(r, 1) == 0) return 0;
                 if (rioWriteBulkString(r, field, sdslen(field)) == 0) return 0;
-                if (rioWriteBulkString(r, value, value_len) == 0) return 0;
+                if (rioWriteBulkString(r, value, sdslen(value)) == 0) return 0;
                 volatile_items++;
             }
-            hashTypeResetIterator(&hi);
+
+            sdsfree(field);
+            sdsfree(value);
         }
     }
 

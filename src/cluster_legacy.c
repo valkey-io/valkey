@@ -3372,7 +3372,7 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
         for (int j = 0; j < dirty_slots_count; j++) {
             serverLog(LL_NOTICE, "Deleting keys in dirty slot %d on node %.40s (%s) in shard %.40s", dirty_slots[j],
                       myself->name, humanNodename(myself), myself->shard_id);
-            delKeysInSlot(dirty_slots[j], server.lazyfree_lazy_server_del, true, false);
+            delKeysInSlot(dirty_slots[j], server.lazyfree_lazy_server_del, true, false, false);
         }
     }
 }
@@ -6865,7 +6865,7 @@ int verifyClusterConfigWithData(void) {
                           in->name, humanNodename(in), in->shard_id, j,
                           slot_owner->name, humanNodename(slot_owner), slot_owner->shard_id);
             }
-            delKeysInSlot(j, server.lazyfree_lazy_server_del, true, false);
+            delKeysInSlot(j, server.lazyfree_lazy_server_del, true, false, false);
         }
     }
     if (update_config) clusterSaveConfigOrDie(1);
@@ -7508,9 +7508,29 @@ void removeChannelsInSlot(unsigned int slot) {
     pubsubShardUnsubscribeAllChannelsInSlot(slot);
 }
 
+/* Helper function to propagate the CLUSTER FLUSHSLOT command to replicas and AOF during ASM. */
+void propagateAsmFlushSlot(unsigned int hashslot, int lazy) {
+    robj *argv[4];
+    int argc = 3;
+    argv[0] = shared.cluster;
+    argv[1] = createStringObject("FLUSHSLOT", 9);
+    argv[2] = createStringObjectFromLongLong(hashslot);
+    if (lazy) {
+        argv[3] = createStringObject("ASYNC", 5);
+        argc = 4;
+    }
+    enterExecutionUnit(1, 0);
+    alsoPropagate(0, argv, argc, PROPAGATE_REPL | PROPAGATE_AOF, hashslot);
+    exitExecutionUnit();
+    postExecutionUnitOperations();
+    decrRefCount(argv[1]);
+    decrRefCount(argv[2]);
+    if (lazy) decrRefCount(argv[3]);
+}
+
 /* Remove all the keys in the specified hash slot.
  * The number of removed items is returned. */
-unsigned int delKeysInSlot(unsigned int hashslot, int lazy, bool propagate_del, bool send_del_event) {
+unsigned int delKeysInSlot(unsigned int hashslot, int lazy, bool propagate_del, bool send_del_event, bool is_asm_path) {
     if (!countKeysInSlot(hashslot)) return 0;
 
     /* We may lose a slot during the pause. We need to track this
@@ -7536,7 +7556,7 @@ unsigned int delKeysInSlot(unsigned int hashslot, int lazy, bool propagate_del, 
                 dbSyncDelete(db, key);
             }
             // if is command, skip del propagate
-            if (propagate_del) propagateDeletion(db, key, lazy, hashslot);
+            if (propagate_del && !is_asm_path) propagateDeletion(db, key, lazy, hashslot);
             signalModifiedKey(NULL, db, key);
             if (send_del_event) {
                 /* In the `cluster flushslot` scenario, the keys are actually deleted so notify everyone. */
@@ -7554,6 +7574,10 @@ unsigned int delKeysInSlot(unsigned int hashslot, int lazy, bool propagate_del, 
             server.dirty++;
         }
         kvstoreReleaseHashtableIterator(kvs_di);
+    }
+
+    if (propagate_del && is_asm_path) {
+        propagateAsmFlushSlot(hashslot, lazy);
     }
 
     server.server_del_keys_in_slot = 0;

@@ -370,9 +370,15 @@ foreach mdl {no yes} {
                             # Make sure no more commands processed
                             wait_load_handlers_disconnected -3
 
-                            wait_for_ofs_sync $master [lindex $slaves 0]
-                            wait_for_ofs_sync $master [lindex $slaves 1]
-                            wait_for_ofs_sync $master [lindex $slaves 2]
+                            # Slower libc runners can take more than the generic
+                            # five-second offset-sync timeout to drain this load.
+                            wait_for_condition 500 100 {
+                                [status $master master_repl_offset] eq [status [lindex $slaves 0] master_repl_offset] &&
+                                [status $master master_repl_offset] eq [status [lindex $slaves 1] master_repl_offset] &&
+                                [status $master master_repl_offset] eq [status [lindex $slaves 2] master_repl_offset]
+                            } else {
+                                fail "replica offsets didn't match in time"
+                            }
 
                             # Check digests
                             set digest [$master debug digest]

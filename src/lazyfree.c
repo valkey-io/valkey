@@ -63,8 +63,9 @@ void lazyFreeLuaScripts(void *args[]) {
 /* Release the functions ctx. */
 void lazyFreeFunctionsCtx(void *args[]) {
     functionsLibCtx *functions_lib_ctx = args[0];
+    list *engine_callbacks = args[1];
     size_t len = functionsLibCtxFunctionsLen(functions_lib_ctx);
-    functionsLibCtxFree(functions_lib_ctx);
+    functionsLibCtxFree(functions_lib_ctx, engine_callbacks);
     atomic_fetch_sub_explicit(&lazyfree_objects, len, memory_order_relaxed);
     atomic_fetch_add_explicit(&lazyfreed_objects, len, memory_order_relaxed);
 }
@@ -234,13 +235,13 @@ void freeLuaScriptsAsync(dict *lua_scripts, list *lua_scripts_lru_list, lua_Stat
 }
 
 /* Free functions ctx, if the functions ctx contains enough functions, free it in async way. */
-void freeFunctionsAsync(functionsLibCtx *functions_lib_ctx) {
+void freeFunctionsAsync(functionsLibCtx *functions_lib_ctx, list *engine_callbacks) {
     if (functionsLibCtxFunctionsLen(functions_lib_ctx) > LAZYFREE_THRESHOLD) {
         atomic_fetch_add_explicit(&lazyfree_objects, functionsLibCtxFunctionsLen(functions_lib_ctx),
                                   memory_order_relaxed);
-        bioCreateLazyFreeJob(lazyFreeFunctionsCtx, 1, functions_lib_ctx);
+        bioCreateLazyFreeJob(lazyFreeFunctionsCtx, 2, functions_lib_ctx, engine_callbacks);
     } else {
-        functionsLibCtxFree(functions_lib_ctx);
+        functionsLibCtxFree(functions_lib_ctx, engine_callbacks);
     }
 }
 

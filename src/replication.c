@@ -2408,6 +2408,14 @@ void replicaBeforeLoadPrimaryRDB(connection *conn, int use_diskless_load) {
     connSetReadHandler(conn, NULL);
 }
 
+/* Helper function to update the full sync duration metric for both single/dual channel replication. */
+static void replicationUpdateFullSyncDuration(void) {
+    if (server.repl_full_sync_start_time) {
+        server.repl_full_sync_duration_ms = elapsedMs(server.repl_full_sync_start_time);
+        server.repl_full_sync_start_time = 0;
+    }
+}
+
 void replicaAfterLoadPrimaryRDB(connection *conn, rdbSaveInfo *rsi, int disk_based_sync) {
     /* Final setup of the connected replica <- primary link */
     if (conn == server.repl_rdb_transfer_s) {
@@ -2418,6 +2426,8 @@ void replicaAfterLoadPrimaryRDB(connection *conn, rdbSaveInfo *rsi, int disk_bas
         server.repl_down_since = 0;
         /* Send the initial ACK immediately to put this replica in online state. */
         replicationSendAck();
+        /* Update the full sync duration metric for single channel replication. */
+        replicationUpdateFullSyncDuration();
     }
 
     /* Fire the primary link modules event. */
@@ -2437,10 +2447,6 @@ void replicaAfterLoadPrimaryRDB(connection *conn, rdbSaveInfo *rsi, int disk_bas
      * primaries after a failover. */
     if (server.repl_backlog == NULL) createReplicationBacklog();
     serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Finished with success");
-    if (server.repl_full_sync_start_time) {
-        server.repl_full_sync_duration_ms = elapsedMs(server.repl_full_sync_start_time);
-        server.repl_full_sync_start_time = 0;
-    }
 
     if (server.supervised_mode == SUPERVISED_SYSTEMD) {
         serverCommunicateSystemd("STATUS=PRIMARY <-> REPLICA sync: Finished with success. Ready to accept connections "
@@ -3476,6 +3482,8 @@ void dualChannelSyncSuccess(void) {
     /* We can resume reading from the primary connection once the local replication buffer has been loaded. */
     replicationSteadyStateInit();
     replicationSendAck(); /* Send ACK to notify primary that replica is synced */
+    /* Update the full sync duration metric for dual channel replication. */
+    replicationUpdateFullSyncDuration();
     server.rdb_client_id = -1;
     server.repl_rdb_channel_state = REPL_DUAL_CHANNEL_STATE_NONE;
 }

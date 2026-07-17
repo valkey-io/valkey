@@ -3806,6 +3806,7 @@ int clusterIsValidPacket(clusterLink *link) {
     uint32_t totlen = ntohl(hdr->totlen);
     int is_light = IS_LIGHT_MESSAGE(ntohs(hdr->type));
     uint16_t type = ntohs(hdr->type) & ~CLUSTERMSG_MODIFIER_MASK;
+    int known_type = 1;
 
     if (type < CLUSTERMSG_TYPE_COUNT) {
         server.cluster->stats_bus_messages_received[type]++;
@@ -3924,8 +3925,11 @@ int clusterIsValidPacket(clusterLink *link) {
             explen += sizeof(clusterMsgModule) - 3 + ntohl(msg->data.module.msg.len);
         }
     } else {
-        /* We don't know this type of packet, so we assume it's well formed. */
+        /* We don't know this type of packet, so we assume it's well formed.
+         * CRC verification is skipped for unrecognized types for the same
+         * reason: we don't validate them, so we don't verify their integrity. */
         explen = totlen;
+        known_type = 0;
     }
 
     if (totlen != explen) {
@@ -3938,7 +3942,7 @@ int clusterIsValidPacket(clusterLink *link) {
      * use a compact header without a CRC field and are skipped. A CRC mismatch
      * means the packet is corrupted (e.g. a network bit-flip) and must be
      * treated as invalid so the packet is dropped to protect cluster state. */
-    if (!is_light && server.cluster_crc_enabled) {
+    if (known_type && !is_light && server.cluster_crc_enabled) {
         clusterMsg *msg = toClusterMsg(link->rcvbuf);
         if (!clusterMsgVerifyCRC(msg, totlen)) {
             if (server.mstime - crc_mismatch_last_log >= CLUSTER_CRC_MISMATCH_LOG_INTERVAL) {

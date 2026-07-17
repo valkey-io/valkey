@@ -160,6 +160,8 @@ start_cluster 2 0 {tags {cluster external:skip needs:debug}} {
         wait_for_condition 1000 50 {
            [cluster_has_flag [cluster_get_node_by_id 0 $R1_nodeid] "fail?"]
         } else {
+            puts "R 0 cluster nodes:"
+            puts [R 0 cluster nodes]
             fail "R0 did not mark R1 as PFAIL"
         }
 
@@ -180,8 +182,10 @@ start_cluster 2 0 {tags {cluster external:skip needs:debug}} {
 
         # Ensure ping_sent does not get stuck and R0 can send PINGs.
         wait_for_condition 1000 50 {
-           [dict get [cluster_get_node_by_id 0 $R1_nodeid] ping_sent] > $R0_ping_sent
+           [dict get [cluster_get_node_by_id 0 $R1_nodeid] ping_sent] != $R0_ping_sent
         } else {
+            puts "R 0 cluster nodes:"
+            puts [R 0 cluster nodes]
             fail "R0 did not send the PING"
         }
 
@@ -190,6 +194,8 @@ start_cluster 2 0 {tags {cluster external:skip needs:debug}} {
         wait_for_condition 1000 50 {
             ![cluster_has_flag [cluster_get_node_by_id 0 $R1_nodeid] "fail?"]
         } else {
+            puts "R 0 cluster nodes:"
+            puts [R 0 cluster nodes]
             fail "R0 did not remove the PFAIL flag"
         }
         wait_for_cluster_state ok

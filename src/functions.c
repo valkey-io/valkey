@@ -191,29 +191,60 @@ void functionsLibCtxClear(functionsLibCtx *lib_ctx) {
     curr_functions_lib_ctx->cache_memory = 0;
 }
 
+static list *functionsResetEngines(int async) {
+    list *callbacks = async ? listCreate() : NULL;
+    dictIterator *iter = dictGetIterator(engines);
+    dictEntry *entry = NULL;
+    while ((entry = dictNext(iter))) {
+        engineInfo *ei = dictGetVal(entry);
+        engineResetCallback *callback = ei->engine->reset(ei->engine->engine_ctx, async);
+        if (async) {
+            listAddNodeTail(callbacks, callback);
+        }
+    }
+    dictReleaseIterator(iter);
+    return callbacks;
+}
+
 void functionsLibCtxClearCurrent(int async) {
     if (async) {
         functionsLibCtx *old_l_ctx = curr_functions_lib_ctx;
         curr_functions_lib_ctx = functionsLibCtxCreate();
-        freeFunctionsAsync(old_l_ctx);
+        list *engine_callbacks = functionsResetEngines(1);
+        freeFunctionsAsync(old_l_ctx, engine_callbacks);
     } else {
         functionsLibCtxClear(curr_functions_lib_ctx);
+        functionsResetEngines(0);
     }
 }
 
 /* Free the given functions ctx */
-void functionsLibCtxFree(functionsLibCtx *functions_lib_ctx) {
+void functionsLibCtxFree(functionsLibCtx *functions_lib_ctx, list *engine_callbacks) {
     functionsLibCtxClear(functions_lib_ctx);
     dictRelease(functions_lib_ctx->functions);
     dictRelease(functions_lib_ctx->libraries);
     dictRelease(functions_lib_ctx->engines_stats);
     zfree(functions_lib_ctx);
+
+    if (engine_callbacks) {
+        listIter *iter = listGetIterator(engine_callbacks, AL_START_HEAD);
+        listNode *node = NULL;
+        while ((node = listNext(iter))) {
+            engineResetCallback *callback = listNodeValue(node);
+            if (callback) {
+                callback->callback(callback->context);
+                zfree(callback);
+            }
+        }
+        listReleaseIterator(iter);
+        listRelease(engine_callbacks);
+    }
 }
 
 /* Swap the current functions ctx with the given one.
  * Free the old functions ctx. */
 void functionsLibCtxSwapWithCurrent(functionsLibCtx *new_lib_ctx) {
-    functionsLibCtxFree(curr_functions_lib_ctx);
+    functionsLibCtxFree(curr_functions_lib_ctx, NULL);
     curr_functions_lib_ctx = new_lib_ctx;
 }
 
@@ -803,7 +834,7 @@ load_error:
         addReply(c, shared.ok);
     }
     if (functions_lib_ctx) {
-        functionsLibCtxFree(functions_lib_ctx);
+        functionsLibCtxFree(functions_lib_ctx, NULL);
     }
 }
 

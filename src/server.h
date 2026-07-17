@@ -3653,7 +3653,7 @@ void luaLdbLineHook(lua_State *lua, lua_Debug *ar);
 void freeLuaScriptsSync(dict *lua_scripts, list *lua_scripts_lru_list, lua_State *lua);
 void freeLuaScriptsAsync(dict *lua_scripts, list *lua_scripts_lru_list, lua_State *lua);
 void scriptingReset(int async);
-void freeFunctionsAsync(functionsLibCtx *lib_ctx);
+void freeFunctionsAsync(functionsLibCtx *lib_ctx, list *engine_callbacks);
 int ldbIsEnabled(void);
 void ldbLog(sds entry);
 void ldbLogRespReply(char *reply);

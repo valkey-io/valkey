@@ -59,6 +59,7 @@ typedef struct luaEngineCtx {
 
 /* Lua function ctx */
 typedef struct luaFunctionCtx {
+    lua_State *lua;
     /* Special ID that allows getting the Lua function object from the Lua registry */
     int lua_function_ref;
 } luaFunctionCtx;
@@ -199,7 +200,9 @@ static void luaEngineFreeFunction(void *engine_ctx, void *compiled_function) {
     luaEngineCtx *lua_engine_ctx = engine_ctx;
     lua_State *lua = lua_engine_ctx->lua;
     luaFunctionCtx *f_ctx = compiled_function;
-    lua_unref(lua, f_ctx->lua_function_ref);
+    if (lua == f_ctx->lua) {
+        lua_unref(lua, f_ctx->lua_function_ref);
+    }
     zfree(f_ctx);
 }
 
@@ -418,9 +421,7 @@ static int luaRegisterFunction(lua_State *lua) {
     return 0;
 }
 
-/* Initialize Lua engine, should be called once on start. */
-int luaEngineInitEngine(void) {
-    luaEngineCtx *lua_engine_ctx = zmalloc(sizeof(*lua_engine_ctx));
+static void luaEngineInitializeLuaState(luaEngineCtx *lua_engine_ctx) {
     lua_engine_ctx->lua = lua_open();
 
     luaRegisterServerAPI(lua_engine_ctx->lua);
@@ -495,6 +496,42 @@ int luaEngineInitEngine(void) {
     lua_replace(lua_engine_ctx->lua, LUA_GLOBALSINDEX);  /* set new global table as the new globals */
     /* Set metatables of basic types (string, number, nil etc.) readonly. */
     luaSetTableProtectionForBasicTypes(lua_engine_ctx->lua);
+}
+
+static void luaEngineFreeLuaState(void *context) {
+    lua_State *lua = context;
+    lua_gc(lua, LUA_GCCOLLECT, 0);
+    lua_close(lua);
+
+#if !defined(USE_LIBC)
+    /* Lua uses libc and may otherwise retain its freed pages for a while. */
+    zlibc_trim();
+#endif
+}
+
+static engineResetCallback *luaEngineReset(void *engine_ctx, int async) {
+    luaEngineCtx *lua_engine_ctx = engine_ctx;
+    lua_State *old_lua = lua_engine_ctx->lua;
+    engineResetCallback *callback = NULL;
+
+    if (async) {
+        callback = zmalloc(sizeof(*callback));
+        *callback = (engineResetCallback){
+            .context = old_lua,
+            .callback = luaEngineFreeLuaState,
+        };
+    } else {
+        luaEngineFreeLuaState(old_lua);
+    }
+
+    luaEngineInitializeLuaState(lua_engine_ctx);
+    return callback;
+}
+
+/* Initialize Lua engine, should be called once on start. */
+int luaEngineInitEngine(void) {
+    luaEngineCtx *lua_engine_ctx = zmalloc(sizeof(*lua_engine_ctx));
+    luaEngineInitializeLuaState(lua_engine_ctx);
 
     engine *lua_engine = zmalloc(sizeof(*lua_engine));
     *lua_engine = (engine){
@@ -505,6 +542,7 @@ int luaEngineInitEngine(void) {
         .get_function_memory_overhead = luaEngineFunctionMemoryOverhead,
         .get_engine_memory_overhead = luaEngineMemoryOverhead,
         .free_function = luaEngineFreeFunction,
+        .reset = luaEngineReset,
     };
     return functionsRegisterEngine(LUA_ENGINE_NAME, lua_engine);
 }

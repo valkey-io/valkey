@@ -54,6 +54,11 @@
 
 typedef struct functionLibInfo functionLibInfo;
 
+typedef struct engineResetCallback {
+    void *context;
+    void (*callback)(void *context);
+} engineResetCallback;
+
 typedef struct engine {
     /* engine specific context */
     void *engine_ctx;
@@ -93,6 +98,10 @@ typedef struct engine {
 
     /* free the given function */
     void (*free_function)(void *engine_ctx, void *compiled_function);
+
+    /* Reset the engine's function runtime. If async is set, return a
+     * callback that releases the old runtime after its functions are freed. */
+    engineResetCallback *(*reset)(void *engine_ctx, int async);
 } engine;
 
 /* Hold information about an engine.
@@ -134,7 +143,7 @@ size_t functionsLibCtxFunctionsLen(functionsLibCtx *functions_ctx);
 functionsLibCtx *functionsLibCtxGetCurrent(void);
 functionsLibCtx *functionsLibCtxCreate(void);
 void functionsLibCtxClearCurrent(int async);
-void functionsLibCtxFree(functionsLibCtx *lib_ctx);
+void functionsLibCtxFree(functionsLibCtx *lib_ctx, list *engine_callbacks);
 void functionsLibCtxClear(functionsLibCtx *lib_ctx);
 void functionsLibCtxSwapWithCurrent(functionsLibCtx *lib_ctx);
 

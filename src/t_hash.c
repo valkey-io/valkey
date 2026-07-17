@@ -72,12 +72,11 @@ static vset *hashTypeGetVolatileSet(robj *o) {
 
 /* Maintain the aggregate volatile-count header of a listpack-encoded hash.
  *
- * The header is a single tagged entry leading the listpack (see
- * lpPeekLeadingMetadata()) whose integer payload is the number of fields
- * carrying an expiry. It exists only while that count is > 0: created on the
- * 0->1 transition, updated in place, and deleted on the 1->0 transition, so
- * hashes without field TTLs pay nothing. All semantics live here; the
- * listpack layer only provides the positional primitive.
+ * The header is a single tagged entry leading the listpack whose integer payload
+ * is the number of fields carrying an expiry. It exists only while that
+ * count is > 0: created on the 0->1 transition, updated in place, and deleted
+ * on the 1->0 transition, so hashes without field TTLs pay nothing. All semantics
+ * live here; the listpack layer only provides the positional primitive.
  *
  * Must be called after the mutation it accounts for; it may reallocate the
  * listpack, so callers must not reuse element pointers taken before it. */
@@ -85,7 +84,8 @@ static void hashTypeUpdateVolatileCount(robj *o, long delta) {
     if (delta == 0) return;
     serverAssert(objectGetEncoding(o) == OBJ_ENCODING_LISTPACK);
     unsigned char *zl = objectGetVal(o);
-    unsigned char *head = lpPeekLeadingMetadata(zl);
+    unsigned char *p = lpStart(zl);
+    unsigned char *head = lpIsMetadata(p) ? p : NULL;
     long long count = head ? lpGetMetadataValue(head) : 0;
     count += delta;
     serverAssert(count >= 0);
@@ -116,7 +116,8 @@ long long hashTypeVolatileCount(robj *o) {
     serverAssert(objectGetType(o) == OBJ_HASH);
 
     if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) {
-        unsigned char *header = lpPeekLeadingMetadata(objectGetVal(o));
+        unsigned char *p = lpStart(objectGetVal(o));
+        unsigned char *header = lpIsMetadata(p) ? p : NULL;
         return header ? lpGetMetadataValue(header) : 0;
     } else if (objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE) {
         vset *set = hashTypeGetVolatileSet(o);
@@ -132,7 +133,7 @@ bool hashTypeHasVolatileFields(robj *o) {
     if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) {
         /* O(1): the aggregate header exists iff at least one field carries
          * an expiry. */
-        return lpPeekLeadingMetadata(objectGetVal(o)) != NULL;
+        return lpIsMetadata(lpStart(objectGetVal(o)));
     }
 
     if (objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE) {

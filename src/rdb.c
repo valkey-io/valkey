@@ -32,6 +32,7 @@
  * SPDX-License-Identifier: BSD-3-Clause
  */
 
+#include "rdb.h"
 #include "hashtable.h"
 #include "server.h"
 #include "lzf.h" /* LZF compression library */
@@ -740,32 +741,19 @@ int rdbGetObjectType(robj *o, int rdbver) {
         else
             serverPanic("Unknown sorted set encoding");
     case OBJ_HASH:
-        if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) {
-            if (hashTypeHasVolatileFields(o)) {
-                /* Tagged (0xF5) metadata entries are not understood by older
-                 * versions, so a listpack carrying field TTLs needs its own
-                 * RDB type, mirroring RDB_TYPE_HASH_2. For RDB 80 targets
-                 * (9.0, which understands field TTLs but not tagged
-                 * listpacks) the hash is serialized in the HASH_2 triplet
-                 * format instead. */
-                if (rdbver >= 81)
-                    return RDB_TYPE_HASH_LISTPACK_2;
-                else if (rdbver >= 80)
-                    return RDB_TYPE_HASH_2;
-                else
-                    return -1; /* can't be stored in old RDB */
+        if (hashTypeHasVolatileFields(o)) {
+            /* Field TTL need a TTL-capable RDB type. Only new targets can take the
+             * raw tagged listpack; RDB 80 (9.0) targets get HASH_2 triplets
+             * regardless of encoding; older targets can't store it */
+            if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK && rdbver >= 81) {
+                return RDB_TYPE_HASH_LISTPACK_2;
             }
-            return RDB_TYPE_HASH_LISTPACK;
-        } else if (objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE)
-            if (hashTypeHasVolatileFields(o))
-                if (rdbver >= 80)
-                    return RDB_TYPE_HASH_2;
-                else
-                    return -1; /* can't be stored in old RDB */
-            else
-                return RDB_TYPE_HASH;
-        else
-            serverPanic("Unknown hash encoding");
+            if (rdbver >= 80) return RDB_TYPE_HASH_2;
+            return -1; /* can't be stored in old RDB */
+        }
+        if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) return RDB_TYPE_SET_LISTPACK;
+        if (objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE) return RDB_TYPE_HASH;
+        serverPanic("Unknown hash encoding");
     case OBJ_STREAM: return RDB_TYPE_STREAM_LISTPACKS_3;
     case OBJ_MODULE: return RDB_TYPE_MODULE_2;
     default: serverPanic("Unknown object type");

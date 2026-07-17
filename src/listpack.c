@@ -521,16 +521,12 @@ unsigned char *lpGetMetadata(unsigned char *lp, unsigned char *p) {
     return LP_ENCODING_IS_TAGGED(p[0]) ? p : NULL;
 }
 
-/* If the listpack starts with a tagged (metadata) entry, return a pointer to
- * it, otherwise NULL. This is the one permitted exception to the "metadata
- * always trails a real element" rule: a single leading tagged entry may be
- * used by the owning type as an aggregate header (the listpack itself
- * attaches no meaning to it). Like all metadata it is invisible to the
- * logical iterators and does not count towards numele. */
-unsigned char *lpPeekLeadingMetadata(unsigned char *lp) {
-    unsigned char *p = lp + LP_HDR_SIZE;
-    if (p[0] == LP_EOF) return NULL;
-    return LP_ENCODING_IS_TAGGED(p[0]) ? p : NULL;
+/* Pointer to the first physical entry (after the header). May point at a
+ * real element, a leading metadata entry, or the EOF terminator on an empty
+ * listpack. Unlike lpFirst() it does not skip metadata; use only with
+ * EOF/metadata-aware accessors. */
+unsigned char *lpStart(unsigned char *lp) {
+    return lp + LP_HDR_SIZE;
 }
 
 /* Return the listpack element pointed by 'p'.
@@ -1414,11 +1410,10 @@ int lpValidateIntegrity(unsigned char *lp, size_t size, listpackValidateEntryCB 
         /* Metadata (tagged) entries are only legal where the caller allows
          * them (hash listpacks) and are not counted in numele. They must
          * trail a real element, with one exception: a single tagged entry may
-         * lead the listpack as the owning type's aggregate header (see
-         * lpPeekLeadingMetadata()). */
+         * lead the listpack as the owning type's aggregate header. */
         if (lpIsMetadata(prev)) {
             if (!allow_metadata) return 0;
-            if (!seen_real && !(prev == lp + LP_HDR_SIZE)) return 0;
+            if (!seen_real && !(prev == lpStart(lp))) return 0;
         } else {
             count++;
             seen_real = 1;

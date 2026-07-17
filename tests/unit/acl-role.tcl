@@ -125,6 +125,14 @@ start_server {tags {"acl external:skip"}} {
         assert_match {*role does not exist*} $err
     }
 
+    test {ACL SETUSER - empty role name fails} {
+        catch {r ACL SETUSER alice +@role:} err
+        assert_match {*Error*} $err
+
+        catch {r ACL SETUSER alice -@role:} err
+        assert_match {*Error*} $err
+    }
+
     # --- ACL GETUSER ---
 
     test {ACL GETUSER - shows role membership} {

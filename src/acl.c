@@ -117,6 +117,8 @@ static size_t nextCommandCategory = 0; /* Index of the next command category to 
  */
 int ACLAddCommandCategory(const char *name, uint64_t flag) {
     if (nextCommandCategory >= ACL_MAX_CATEGORIES) return 0;
+    /* "role" is reserved for the +@role:<name> syntax. */
+    if (!strcasecmp(name, "role")) return 0;
     ACLCommandCategories[nextCommandCategory].name = zstrdup(name);
     ACLCommandCategories[nextCommandCategory].flag = flag != 0 ? flag : (1ULL << nextCommandCategory);
     nextCommandCategory++;
@@ -1641,7 +1643,7 @@ int ACLSetUser(user *u, const char *op, ssize_t oplen) {
             return C_ERR;
         }
         /* Roles cannot have roles */
-        if (oplen > 7 && (!strncasecmp(op, "+@role:", 7) || !strncasecmp(op, "-@role:", 7))) {
+        if (oplen >= 7 && (!strncasecmp(op, "+@role:", 7) || !strncasecmp(op, "-@role:", 7))) {
             errno = EINVAL;
             return C_ERR;
         }
@@ -1732,7 +1734,7 @@ int ACLSetUser(user *u, const char *op, ssize_t oplen) {
 
         ACLUserClearRoles(u);
         u->roles = listCreate();
-    } else if (oplen > 7 && !strncasecmp(op, "+@role:", 7)) {
+    } else if (oplen >= 7 && !strncasecmp(op, "+@role:", 7)) {
         /* Add user to a role */
         const char *rolename = op + 7;
         size_t rolenamelen = oplen - 7;
@@ -1756,7 +1758,7 @@ int ACLSetUser(user *u, const char *op, ssize_t oplen) {
             listAddNodeTail(u->roles, r);
             listAddNodeTail(r->members, u);
         }
-    } else if (oplen > 7 && !strncasecmp(op, "-@role:", 7)) {
+    } else if (oplen >= 7 && !strncasecmp(op, "-@role:", 7)) {
         /* Remove user from a role */
         const char *rolename = op + 7;
         size_t rolenamelen = oplen - 7;

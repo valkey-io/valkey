@@ -168,10 +168,7 @@ static int free_mock_entries(void) {
 class VsetTest : public ::testing::Test {
   protected:
     static void SetUpTestSuite() {
-        /* allocatorDefragInit() may only be called once per process (it asserts on a second
-         * call). Route through the shared once-only helper so any combination of suites that
-         * need allocator-defrag support can run in one process. */
-        (void)defragTestSupported();
+        testAllocatorDefragInitOnce();
     }
 
     void TearDown() override {

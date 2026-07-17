@@ -35,12 +35,12 @@ void evalInit(void);
  * defrag_supported assertion. Sentinel 1 = not yet initialized (allocatorDefragInit returns 0/-1). */
 static int g_defrag_init_rc = 1;
 
-static void ensureDefragInit(void) {
+void testAllocatorDefragInitOnce(void) {
     if (g_defrag_init_rc == 1) g_defrag_init_rc = allocatorDefragInit();
 }
 
 bool defragTestSupported(void) {
-    ensureDefragInit();
+    testAllocatorDefragInitOnce();
     return g_defrag_init_rc == 0;
 }
 
@@ -49,7 +49,7 @@ void testServerInitMinimal(int dbnum) {
     if (!process_inited) {
         testLsanDisable();
         /* Enable activeDefragAlloc(): allocatorShouldDefrag() asserts defrag_supported. */
-        ensureDefragInit();
+        testAllocatorDefragInitOnce();
         /* Populate all config defaults, including active_defrag_* and maxmemory_policy. */
         initServerConfig();
         /* Initialize the modules subsystem: dbAdd() -> notifyKeyspaceEvent() unconditionally calls

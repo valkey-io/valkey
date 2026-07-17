@@ -40,10 +40,13 @@ void testServerAddStringKey(int dbid, const char *key, const char *val);
  * case for these tests). Call between tests to avoid cross-test contamination. */
 void testServerEmptyAllDbs(void);
 
-/* True if active defrag is available (allocator has defrag support, i.e. jemalloc). Also serves
- * as the process-wide once-only gate for allocatorDefragInit(), which asserts if called twice --
- * ALL test suites needing allocator-defrag support must init through this, never directly.
- * Sanitizer and macOS builds use libc malloc, where the defrag scan would hit
+/* Initialize allocator-defrag support, once per process (idempotent). allocatorDefragInit()
+ * asserts if called twice, so ALL test suites needing it must init through this -- never call
+ * allocatorDefragInit() directly. Safe to call from any suite's SetUpTestSuite(). */
+void testAllocatorDefragInitOnce(void);
+
+/* True if active defrag is available (allocator has defrag support, i.e. jemalloc); initializes
+ * on first use. Sanitizer and macOS builds use libc malloc, where the defrag scan would hit
  * allocatorShouldDefrag()'s defrag_supported assertion -- defrag-exercising tests should
  * GTEST_SKIP() when this is false. */
 bool defragTestSupported(void);

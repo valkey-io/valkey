@@ -309,7 +309,10 @@ static int luaRegisterFunctionReadNamedArgs(lua_State *lua, registerFunctionArgs
             int lua_function_ref = luaL_ref(lua, LUA_REGISTRYINDEX);
 
             lua_f_ctx = zmalloc(sizeof(*lua_f_ctx));
-            lua_f_ctx->lua_function_ref = lua_function_ref;
+            *lua_f_ctx = (luaFunctionCtx){
+                .lua = lua,
+                .lua_function_ref = lua_function_ref,
+            };
             continue; /* value was already popped, so no need to pop it out. */
         } else if (!strcasecmp(key, "flags")) {
             if (!lua_istable(lua, -1)) {
@@ -370,7 +373,10 @@ static int luaRegisterFunctionReadPositionalArgs(lua_State *lua, registerFunctio
     int lua_function_ref = luaL_ref(lua, LUA_REGISTRYINDEX);
 
     lua_f_ctx = zmalloc(sizeof(*lua_f_ctx));
-    lua_f_ctx->lua_function_ref = lua_function_ref;
+    *lua_f_ctx = (luaFunctionCtx){
+        .lua = lua,
+        .lua_function_ref = lua_function_ref,
+    };
 
     luaRegisterFunctionArgsInitialize(register_f_args, name, NULL, lua_f_ctx, 0);
 

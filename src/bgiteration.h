@@ -227,6 +227,7 @@ typedef struct {
     struct serverCommand *cmd;
     robj **argv;
     int argc;
+    size_t replication_size;
 } replicationData;
 
 typedef struct {

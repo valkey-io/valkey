@@ -66,9 +66,9 @@ static bool getTargetDbIdForCopyCommand(int argc, robj **argv, int selected_dbid
         if (!strcasecmp((char *)objectGetVal(argv[i]), "replace")) {
             continue;
         } else if (!strcasecmp((char *)objectGetVal(argv[i]), "db") && (i + 1 < argc)) {
-            /* Note the parsing here needs to perfectly match what we have in Valkey OSS for COPY.
-             * The following command is considered OK by Valkey 8.1 so we can't return here, but
-             * must continue to parse till the last db which is the one that's effectively used.
+            /* Note the parsing here needs to perfectly match what we have in copyCommand.  The
+             * following command is considered OK so we can't return here, but must continue to
+             * parse till the last db which is the one that's effectively used.
              *    COPY key1 key2 db 1 db 2 db 3    (This will use db 3) */
             if (!getDbIdFromRobj(argv[i + 1], target_dbid)) {
                 return false; // parse failure
@@ -243,19 +243,16 @@ typedef enum {
     BGITERATOR_ITEMEXT_ITER_CLOSED = 10
 } bgIteratorItemTypeExtended;
 
-/* Item for bgIteratorItemTypeExtended.BGITERATOR_ITEMEXT_ITER_CLOSED.  Used to pass a bgIterator
- * back to the Valkey main thread for cleanup/release. */
-typedef struct {
-    bgIteratorItemTypeExtended type;
-    bgIterator *iter;
-} bgIteratorItemExtClose;
+// Static bgIterator items for items which carry no data
+static const bgIteratorItem STATIC_ITEM_TERMINATED = {.type = BGITERATOR_ITEM_TERMINATED};
+static const bgIteratorItem STATIC_ITEM_ITER_CLOSED = {.type = BGITERATOR_ITEMEXT_ITER_CLOSED};
 
 
 /* A dictionary with a pointer (itself) as a key (the address pointed to is NOT referenced).
  * Nothing is duplicated, this is a very fast dictionary, but potentially unsafe if the original
  * items are deleted or moved.
  * WARNING:  This needs to maintain safety with things that may move the object.
- *   + In db.c, if the object is reallocatd, bgIteration_updateDbEntryPtr() is called.
+ *   + In db.c, if the object is reallocated, bgIteration_updateDbEntryPtr() is called.
  *   + In defrag.c, we don't defrag if there are multiple references (and we incr the refcount). */
 
 // Thomas Wang's 64-bit mix
@@ -394,12 +391,7 @@ struct bgIterator {
 
     unsigned int item_count_target; // Used only by main thread
 
-    /* current_item is normally only used in the iteration client.  It's marked volatile here only
-     * to support snooping from the main thread when handling a FLUSHDB command.  This prevents the
-     * compiler from generating code which might read the pointer multiple times (when it's coded to
-     * read only once).
-     * (A volatile POINTER to a non-volatile item.) */
-    bgIteratorItem *volatile current_item;
+    bgIteratorItem *current_item; // Used in client thread, validated in main after iterator complete
 
     bool client_is_active; // Set to true when client performs 1st read
 
@@ -871,7 +863,7 @@ static void freeRobjArray(int argc, robj **argv) {
 
 
 // Called by iterator thread to release an item.
-static void returnCurrentItemToValkey(bgIterator *it) {
+static void returnCurrentItemToMainThread(bgIterator *it) {
     bgIteratorItem *item = it->current_item;
     if (item == NULL) return;
 
@@ -904,8 +896,6 @@ static void returnCurrentItemToValkey(bgIterator *it) {
         serverAssert(false);
     }
 
-    /* Do this AFTER placing into return_to_main_thread.  This is volatile and snooped when there is
-     * a flushall event.  Don't want an item to be missed. */
     it->current_item = NULL;
 }
 
@@ -1199,17 +1189,16 @@ static bool expediteKeysForCopy(bgIterator *it,
 /* There are several cases where a client must be blocked on write operations.  (Clients never need
  * to be blocked for read operations.)
  *
- * Note:  An Amazon extension to the Valkey command structure allows us to identify commands where
- *        the first key is for write and the rest are for read.  This allows us to make the
- *        following optimizations:
- *   - for keys which are read only, there's no need to block if the key is in-use by an iterator
- *   - without replication, there's no need to immediately queue read keys on a consistent iteration
+ * Note:  The CMD_WRITE_FIRSTKEY_ONLY flag allows us to identify commands where the first key is for
+ *        write and the rest are for read.  This allows us to make the following optimizations:
+ *   - For keys which are read only, there's no need to block if the key is in-use by an iterator
+ *   - Without replication, there's no need to immediately queue read keys on a consistent iteration
  *
  * Iterator:  CONSISTENT = NO,  REPLICATION = NO
- *   - Block if any write-key is in use by an the iterator
+ *   - Block if any write-key is in use by an iterator
  *
  * Iterator:  CONSISTENT = NO,  REPLICATION = YES
- *   - Block if any write-key is in use by an the iterator
+ *   - Block if any write-key is in use by an iterator
  *   - If ANY key has already been iterated (but some keys have not), then
  *       - Block and immediately queue any key (read or write) that has not
  *         already been iterated
@@ -1220,12 +1209,12 @@ static bool expediteKeysForCopy(bgIterator *it,
  *           these need to be iterated and the client blocked.
  *
  * Iterator:  CONSISTENT = YES, REPLICATION = NO
- *   - Block if any write-key is in use by an the iterator
+ *   - Block if any write-key is in use by an iterator
  *   - Block and immediately queue any WRITE-key that has not already been iterated
  *
  * Iterator:  CONSISTENT = YES, REPLICATION = YES
  *   (Combination only valid in cluster mode - no SWAPDB possible)
- *   - Block if any write-key is in use by an the iterator
+ *   - Block if any write-key is in use by an iterator
  *   - Block and immediately queue any key (read or write) that has not already been iterated */
 static bool expediteKeysForWrite(bgIterator *it,
                                  int dbid,
@@ -1247,8 +1236,6 @@ static bool expediteKeysForWrite(bgIterator *it,
      * anything with this command. */
     if (!it->keyset_iter->isKeyInScope(it->keyset_iter, key)) return false;
 
-    /* Note: performance optimization for commands which only modify the first key.  If this flag
-     * is not available, we can safely remove this `if` statement. */
     if ((cmd->flags & CMD_WRITE_FIRSTKEY_ONLY) &&
         !(it->iteration_flags & BGITERATOR_FLAG_REPLICATION)) {
         /* If this write command only modifies the 1st key, we don't need to expedite others
@@ -1391,8 +1378,8 @@ static bool expediteKeysForWrite(bgIterator *it,
 
 
 /* Called when an iterator is terminated.  Pulls everything out of the queue
- * and returns the items to Valkey (before they hit the iterator). */
-static void returnAllItemsToValkey(bgIterator *it) {
+ * and returns the items to the main thread (before they hit the iterator). */
+static void returnAllItemsToMainThread(bgIterator *it) {
     serverAssert(onValkeyMainThread());
 
     fifo *poppedFifo = mutexQueuePopAll(it->items_for_iterator, false);
@@ -1428,7 +1415,7 @@ static void returnAllItemsToValkey(bgIterator *it) {
         case BGITERATOR_ITEM_TERMINATED:
             /* This can only happen if there is a race when terminating between
              *  the iteration client and main thread. */
-            itemFreeList_returnItemBackToFreeList(item);
+            serverAssert(item == &STATIC_ITEM_TERMINATED);
             continue; // Skip pushing this onto itemsToReturn
 
         default:
@@ -1460,11 +1447,11 @@ static size_t replicationItemSize(bgIteratorItem *item) {
     return itemSize;
 }
 
-static void processReturnOfItemToValkey(bgIteratorItem *item, bgIterator *iter) {
+static void processReturnOfItemToMainThread(bgIterator *it, bgIteratorItem *item) {
     serverAssert(onValkeyMainThread());
     switch ((int)item->type) {
     case BGITERATOR_ITEM_REPLICATION:
-        bufferedReplicationBytes -= replicationItemSize(item);
+        bufferedReplicationBytes -= item->u.repl.replication_size;
         freeRobjArray(item->u.repl.argc, item->u.repl.argv);
         break;
 
@@ -1491,20 +1478,21 @@ static void processReturnOfItemToValkey(bgIteratorItem *item, bgIterator *iter) 
         break;
 
     case BGITERATOR_ITEMEXT_ITER_CLOSED: {
-        bgIterator *it = ((bgIteratorItemExtClose *)item)->iter;
-        serverAssert(it == iter);
         if (it->terminated) {
             /* Abnormal termination
              * Normally the item is TERMINATED, but might be COMPLETE in race */
             serverAssert(it->current_item->type == BGITERATOR_ITEM_TERMINATED ||
                          it->current_item->type == BGITERATOR_ITEM_COMPLETE);
             // Release any items stranded on the iterator after early termination
-            returnAllItemsToValkey(it);
+            returnAllItemsToMainThread(it);
             receiveItemsBackFromOneIterator(it);
         } else {
             // Normal completion
             serverAssert(it->current_item->type == BGITERATOR_ITEM_COMPLETE);
         }
+        if (it->current_item != &STATIC_ITEM_TERMINATED) itemFreeList_returnItemBackToFreeList(it->current_item);
+        it->current_item = NULL;
+
         serverAssert(mutexQueueLength(it->items_for_iterator) == 0);
         serverAssert(it->dbentries_queued == it->dbentries_processed);
         serverAssert(it->replication_queued == it->replication_processed);
@@ -1513,9 +1501,6 @@ static void processReturnOfItemToValkey(bgIteratorItem *item, bgIterator *iter) 
         serverAssert(it->dbentry_clones_queued >= it->dbentry_clones_processed);
 
         listEmpty(curCmdMissingKeys); // Just in case any remain
-
-        itemFreeList_returnItemBackToFreeList(it->current_item);
-        it->current_item = NULL;
 
         bool terminated = it->terminated;
         void *privdata = it->privdata;
@@ -1538,21 +1523,17 @@ static void processReturnOfItemToValkey(bgIteratorItem *item, bgIterator *iter) 
         }
 
         if (cleanup) cleanup(terminated, privdata);
+        item = NULL; // Prevent return of static item to free list
     } break;
 
     default:
         serverAssert(false); // Not expecting any other type of item!
     }
 
-    // We don't allocate extension items from the pool so we manually free them
-    if ((int)item->type == BGITERATOR_ITEMEXT_ITER_CLOSED) {
-        zfree(item);
-    } else {
-        itemFreeList_returnItemBackToFreeList(item);
-    }
+    if (item) itemFreeList_returnItemBackToFreeList(item);
 }
 
-static void prepareAndProcessReturnedItems(int n, bgIteratorItem **items, bgIterator *iter) {
+static void prepareAndProcessReturnedItems(bgIterator *it, int n, bgIteratorItem **items) {
     for (int i = 0; i < n; i++) valkey_prefetch(items[i]);
     for (int i = 0; i < n; i++) {
         if (items[i]->type != BGITERATOR_ITEM_DBENTRY) continue;
@@ -1562,7 +1543,7 @@ static void prepareAndProcessReturnedItems(int n, bgIteratorItem **items, bgIter
         if (items[i]->type != BGITERATOR_ITEM_DBENTRY) continue;
         valkey_prefetch(objectGetKey(items[i]->u.dbe.de));
     }
-    for (int i = 0; i < n; i++) processReturnOfItemToValkey(items[i], iter);
+    for (int i = 0; i < n; i++) processReturnOfItemToMainThread(it, items[i]);
 }
 
 #define PREFETCH_BATCH_SIZE 16
@@ -1576,12 +1557,12 @@ static bool receiveItemsBackFromOneIterator(bgIterator *it) {
         while (fifoLength(poppedFifo) > 0) {
             fifoPop(poppedFifo, (void **)&batchPool[n++]);
             if (n == PREFETCH_BATCH_SIZE) {
-                prepareAndProcessReturnedItems(n, batchPool, it);
+                prepareAndProcessReturnedItems(it, n, batchPool);
                 n = 0;
             }
         }
         if (n > 0) {
-            prepareAndProcessReturnedItems(n, batchPool, it);
+            prepareAndProcessReturnedItems(it, n, batchPool);
         }
         fifoRelease(poppedFifo);
         return true;
@@ -2006,6 +1987,7 @@ static bgIterator *bgIteratorCreate(const char *name,
                                     void *privdata,
                                     bgIterationType iter_type,
                                     genericIterator *keyset_iter) {
+    serverAssert(server.forkless_options_supported);
     serverAssert(onValkeyMainThread());
     serverAssert(server.cluster_enabled || iter_type == BGITERATION_TYPE_FULLSCAN);
 
@@ -2152,16 +2134,14 @@ void bgIteratorTerminate(bgIterator *it) {
     serverAssert(onValkeyMainThread());
 
     // Remove any items in the queue, but doesn't affect the 1 item that's being processed.
-    returnAllItemsToValkey(it);
+    returnAllItemsToMainThread(it);
 
     // We have to add an item, just in case the READER is waiting on the mutex.
     if (BGITERATION_DEBUG) {
         debugBuffer = sdscat(debugBuffer, "SENDING TERMINATE\n");
     }
 
-    bgIteratorItem *terminationItem = itemFreeList_getElementOrAllocate();
-    *terminationItem = (bgIteratorItem){.type = BGITERATOR_ITEM_TERMINATED};
-    mutexQueueAdd(it->items_for_iterator, terminationItem);
+    mutexQueueAdd(it->items_for_iterator, (void *)&STATIC_ITEM_TERMINATED);
 
     it->terminated = true;
 }
@@ -2181,7 +2161,7 @@ bgIteratorItem *bgIteratorRead(bgIterator *it) {
 
     // First, clean up the previous item read
     if (it->current_item != NULL) {
-        returnCurrentItemToValkey(it);
+        returnCurrentItemToMainThread(it);
 
         /* To support unit tests.  Normal clients call bgIteratorRead from an alternate thread.
          * Without this, a unit test could get stuck waiting on the completion event because
@@ -2209,23 +2189,17 @@ void bgIteratorClose(bgIterator *it) {
         } else {
             // Client is initiating the termination
             it->terminated = true;
-            returnCurrentItemToValkey(it);
+            returnCurrentItemToMainThread(it);
 
-            it->current_item = itemFreeList_getElementOrAllocate();
-            *(it->current_item) = (bgIteratorItem){.type = BGITERATOR_ITEM_TERMINATED};
+            it->current_item = (bgIteratorItem *)&STATIC_ITEM_TERMINATED;
         }
     } else {
         // terminated before first item read
         it->terminated = true;
-        it->current_item = itemFreeList_getElementOrAllocate();
-        *(it->current_item) = (bgIteratorItem){.type = BGITERATOR_ITEM_TERMINATED};
+        it->current_item = (bgIteratorItem *)&STATIC_ITEM_TERMINATED;
     }
 
-    // We don't allocate extension items from the free list
-    bgIteratorItemExtClose *itemClose = zmalloc(sizeof(bgIteratorItemExtClose));
-    itemClose->type = BGITERATOR_ITEMEXT_ITER_CLOSED;
-    itemClose->iter = it;
-    mutexQueueAdd(it->return_to_main_thread, itemClose);
+    mutexQueueAdd(it->return_to_main_thread, (void *)&STATIC_ITEM_ITER_CLOSED);
 }
 
 
@@ -2379,7 +2353,7 @@ bool bgIteration_blockClientIfRequired(client *c) {
                 blocked_count++;
                 if (server.mstime - last_log > SYNC_BLOCKING_LOG_INTERVAL) {
                     serverLog(LL_WARNING,
-                              "bgIteration synchronously blocked %d times for scripts with undeclared keys",
+                              "Forkless operation synchronously blocked %d times for scripts with undeclared keys",
                               blocked_count);
                     last_log = server.mstime;
                     blocked_count = 0;
@@ -2644,7 +2618,8 @@ void bgIteration_handleCommandReplication(int dbid,
             item->u.repl.cmd = cmd;
             item->u.repl.argv = cloneRobjArray(argc, argv);
             item->u.repl.argc = argc;
-            bufferedReplicationBytes += replicationItemSize(item);
+            item->u.repl.replication_size = replicationItemSize(item);
+            bufferedReplicationBytes += item->u.repl.replication_size;
             it->replication_queued++;
             mutexQueueAdd(it->items_for_iterator, item);
         }

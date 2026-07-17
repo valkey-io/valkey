@@ -303,7 +303,7 @@ int hashTypeGetExpiry(robj *o, sds field, mstime_t *expiry) {
         if (!fptr) return C_ERR;
 
         long long field_expiry = hashTypeListpackGetExpiry(zl, lpNext(zl, fptr));
-        /* A lazily-expired field is logically gone. Pure-time comparision so primary
+        /* A lazily-expired field is logically gone. Pure-time comparison so primary
          * and replica agree. */
         if (field_expiry != EXPIRY_NONE && field_expiry <= commandTimeSnapshot()) return C_ERR;
         if (expiry) *expiry = field_expiry;

@@ -3595,10 +3595,10 @@ robj *setTypeDup(robj *o);
 #define HASH_SET_COPY 0
 
 
-long long hashTypeVolatileCount(robj *o);       /* total volatile fields, incl. expired-unreaped */
+long long hashTypeVolatileCount(robj *o);                                    /* total volatile fields, incl. expired-unreaped */
 long long hashTypeListpackGetExpiry(unsigned char *zl, unsigned char *vptr); /* expiry of the pair whose value entry is vptr, or EXPIRY_NONE */
-void hashTypeFreeVolatileSet(robj *o);          /* needed only for freeHashObject */
-void hashTypeTrackEntry(robj *o, entry *entry); /* needed only for rdbLoadObject */
+void hashTypeFreeVolatileSet(robj *o);                                       /* needed only for freeHashObject */
+void hashTypeTrackEntry(robj *o, entry *entry);                              /* needed only for rdbLoadObject */
 size_t hashTypeScanDefrag(robj *ob, size_t cursor, void *(*defragAlloc)(void *));
 size_t hashTypeDeleteExpiredFields(robj *o, mstime_t now, unsigned long max_fields, robj **out_fields);
 

@@ -84,27 +84,19 @@ static void hashTypeUpdateVolatileCount(robj *o, long delta) {
     if (delta == 0) return;
     serverAssert(objectGetEncoding(o) == OBJ_ENCODING_LISTPACK);
     unsigned char *zl = objectGetVal(o);
-    unsigned char *p = lpStart(zl);
-    unsigned char *head = lpIsMetadata(p) ? p : NULL;
-    long long count = head ? lpGetMetadataValue(head) : 0;
-    count += delta;
+    unsigned char *head = lpStart(zl);
+    int has_head = lpIsMetadata(head);
+    long long count = (has_head ? lpGetMetadataValue(head) : 0) + delta;
     serverAssert(count >= 0);
-
     if (count == 0) {
-        if (head) zl = lpDelete(zl, head, NULL);
+        if (has_head) zl = lpDelete(zl, head, NULL);
     } else {
         unsigned char intenc[LP_MAX_INT_ENCODING_LEN];
         uint64_t enclen;
         lpEncodeIntegerGetType(count, intenc, &enclen);
-        if (head) {
-            zl = lpInsertMetadata(zl, intenc, enclen, head, LP_REPLACE, NULL);
-        } else {
-            /* Create the header before the first physical entry (or before
-             * EOF if the listpack is empty). */
-            unsigned char *first = lpFirst(zl);
-            if (first == NULL) first = zl + lpGetTotalBytes(zl) - 1;
-            zl = lpInsertMetadata(zl, intenc, enclen, first, LP_BEFORE, NULL);
-        }
+        /* head == lpStart(zl): replace the existing header in place, or insert
+         * a new one before the first physical entry / EOF. */
+        zl = lpInsertMetadata(zl, intenc, enclen, head, has_head ? LP_REPLACE : LP_BEFORE, NULL);
     }
     objectSetVal(o, zl);
 }
@@ -262,7 +254,7 @@ void hashTypeTryConversion(robj *o, robj **argv, int start, int end) {
 /* Get the value from a listpack encoded hash, identified by field.
  * Returns -1 when the field cannot be found. */
 int hashTypeGetFromListpack(robj *o, sds field, unsigned char **vstr, unsigned int *vlen, long long *vll) {
-    unsigned char *zl, *fptr = NULL, *vptr = NULL, *metadata_ptr = NULL;
+    unsigned char *zl, *fptr = NULL, *vptr = NULL;
 
     serverAssert(objectGetEncoding(o) == OBJ_ENCODING_LISTPACK);
 
@@ -274,15 +266,10 @@ int hashTypeGetFromListpack(robj *o, sds field, unsigned char **vstr, unsigned i
             /* Grab pointer to the value (fptr points to the field) */
             vptr = lpNext(zl, fptr);
             serverAssert(vptr != NULL);
-            metadata_ptr = lpGetMetadata(zl, vptr);
-            /* Check if the metadata pointer exists, if it exists we need
-             * to check if this field is already expired */
-            if (metadata_ptr != NULL) {
-                long long entry_expiry = lpGetMetadataValue(metadata_ptr);
-                /* compare with pure time otherwise different behavior across replica and primary */
-                if (entry_expiry != EXPIRY_NONE && entry_expiry <= commandTimeSnapshot()) {
-                    return -1;
-                }
+            long long entry_expiry = hashTypeListpackGetExpiry(zl, vptr);
+            /* compare with pure time otherwise different behavior across replica and primary */
+            if (entry_expiry != EXPIRY_NONE && entry_expiry <= commandTimeSnapshot()) {
+                return -1;
             }
         }
     }
@@ -295,6 +282,15 @@ int hashTypeGetFromListpack(robj *o, sds field, unsigned char **vstr, unsigned i
     return -1;
 }
 
+/* Expiry of the listpack field whose value entry is 'vptr': the integer
+ * payload of the pair's trailing metadata entry, or EXPIRY_NONE when the
+ * pair carries none. Purely a read of what is stored; callers decide how
+ * to treat expired-but-unreaped fields (and against which clock). */
+long long hashTypeListpackGetExpiry(unsigned char *zl, unsigned char *vptr) {
+    unsigned char *metadata_ptr = lpGetMetadata(zl, vptr);
+    return metadata_ptr ? lpGetMetadataValue(metadata_ptr) : EXPIRY_NONE;
+}
+
 /* Returns the expiration time associated with the specified field.
  * If the field is found C_OK is returned, otherwise C_ERR.
  * The matching item expiration time is assigned to `expiry` memory location, if specified.
@@ -305,21 +301,12 @@ int hashTypeGetExpiry(robj *o, sds field, mstime_t *expiry) {
         unsigned char *p = lpFirst(zl);
         unsigned char *fptr = lpFind(zl, p, (unsigned char *)field, sdslen(field), 1);
         if (!fptr) return C_ERR;
-        /* Get the expiry from the metadata, if the next field isn't an expiry it means
-         * the expiry is forever we'll return EXPIRY_NONE */
-        unsigned char *value_ptr = lpNext(zl, fptr);
-        unsigned char *metadata_ptr = lpGetMetadata(zl, value_ptr);
-        bool has_expiry = (metadata_ptr != NULL);
-        if (has_expiry) {
-            mstime_t field_expiry = lpGetMetadataValue(metadata_ptr);
-            if (field_expiry != EXPIRY_NONE && field_expiry <= commandTimeSnapshot()) {
-                /* Return C_ERR if the field is expired */
-                return C_ERR;
-            }
-            if (expiry) *expiry = field_expiry;
-        } else {
-            if (expiry) *expiry = EXPIRY_NONE;
-        }
+
+        long long field_expiry = hashTypeListpackGetExpiry(zl, lpNext(zl, fptr));
+        /* A lazily-expired field is logically gone. Pure-time comparision so primary
+         * and replica agree. */
+        if (field_expiry != EXPIRY_NONE && field_expiry <= commandTimeSnapshot()) return C_ERR;
+        if (expiry) *expiry = field_expiry;
         return C_OK;
     } else if (objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE) {
         void *found_element = NULL;
@@ -1024,13 +1011,7 @@ robj *hashTypeLookupWriteOrCreate(client *c, robj *key) {
 
 long long hashTypeCurrentExpiry(robj *o, hashTypeIterator *hi) {
     if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) {
-        long long expiry = EXPIRY_NONE;
-        unsigned char *vptr = hi->vptr;
-        unsigned char *metadata_ptr = lpGetMetadata(objectGetVal(o), vptr);
-        if (metadata_ptr != NULL) {
-            expiry = lpGetMetadataValue(metadata_ptr);
-        }
-        return expiry;
+        return hashTypeListpackGetExpiry(objectGetVal(o), hi->vptr);
     } else if (objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE) {
         return entryGetExpiry(hi->next);
     }
@@ -2770,24 +2751,21 @@ size_t hashTypeDeleteExpiredFields(robj *o, mstime_t now, unsigned long max_fiel
             unsigned char *vptr = lpNext(zl, fptr);
             if (!vptr) break;
 
-            unsigned char *metadata_ptr = lpGetMetadata(zl, vptr);
-            if (metadata_ptr) {
-                mstime_t expiry = lpGetMetadataValue(metadata_ptr);
-                if (expiry != EXPIRY_NONE && expiry <= now) {
-                    if (out_entries) {
-                        out_entries[expired_count] = createStringObject((char *)field, flen);
-                    }
-                    /* Delete the field/value pair (trailing metadata goes with
-                     * it). fptr is updated to the entry following the deleted
-                     * range (NULL at EOF), so we resume the scan from there
-                     * instead of restarting, keeping the reap linear. */
-                    zl = lpDeleteRangeWithEntry(zl, &fptr, 2);
-                    objectSetVal(o, zl);
-                    server.stat_expiredfields++;
-                    expired_count++;
-                    p = fptr;
-                    continue;
+            mstime_t expiry = hashTypeListpackGetExpiry(zl, vptr);
+            if (expiry != EXPIRY_NONE && expiry <= now) {
+                if (out_entries) {
+                    out_entries[expired_count] = createStringObject((char *)field, flen);
                 }
+                /* Delete the field/value pair (trailing metadata goes with
+                 * it). fptr is updated to the entry following the deleted
+                 * range (NULL at EOF), so we resume the scan from there
+                 * instead of restarting, keeping the reap linear. */
+                zl = lpDeleteRangeWithEntry(zl, &fptr, 2);
+                objectSetVal(o, zl);
+                server.stat_expiredfields++;
+                expired_count++;
+                p = fptr;
+                continue;
             }
 
             p = lpNext(zl, vptr);

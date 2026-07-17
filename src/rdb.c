@@ -1002,8 +1002,7 @@ ssize_t rdbSaveObject(rio *rdb, robj *o, robj *key, int dbid, unsigned char rdbt
                 unsigned char *vptr = lpNext(zl, p);
                 serverAssert(vptr != NULL);
                 unsigned char *value = lpGet(vptr, &vlen, value_intbuf);
-                unsigned char *metadata_ptr = lpGetMetadata(zl, vptr);
-                long long expiry = metadata_ptr ? lpGetMetadataValue(metadata_ptr) : EXPIRY_NONE;
+                long long expiry = hashTypeListpackGetExpiry(zl, vptr);
 
                 if ((n = rdbSaveRawString(rdb, field, flen)) == -1) return -1;
                 nwritten += n;

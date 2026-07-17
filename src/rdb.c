@@ -32,7 +32,6 @@
  * SPDX-License-Identifier: BSD-3-Clause
  */
 
-#include "rdb.h"
 #include "hashtable.h"
 #include "server.h"
 #include "lzf.h" /* LZF compression library */

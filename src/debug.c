@@ -450,6 +450,14 @@ void debugCommand(client *c) {
             "    Disable sending cluster ping to a random node every second.",
             "DISABLE-CLUSTER-RECONNECTION <0|1>",
             "    Disable cluster reconnection of cluster nodes.",
+            "CLUSTER-CRC-FLIP-BIT <byte-offset>",
+            "    Flip a single bit in the next outgoing cluster message at <byte-offset> to",
+            "    simulate network corruption and exercise the receiver-side CRC check.",
+            "    Set to -1 to disable.",
+            "CLUSTER-CRC-FLIP-TIME <seconds>",
+            "    Randomly flip a bit in every outgoing full-header cluster message for the",
+            "    given number of <seconds> to simulate sustained network corruption.",
+            "    Set to 0 to disable.",
             "OOM",
             "    Crash the server simulating an out-of-memory error.",
             "PANIC",
@@ -643,6 +651,15 @@ void debugCommand(client *c) {
         addReply(c, shared.ok);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "disable-cluster-reconnection") && c->argc == 3) {
         server.debug_cluster_disable_reconnection = atoi(objectGetVal(c->argv[2]));
+        addReply(c, shared.ok);
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "cluster-crc-flip-bit") && c->argc == 3) {
+        server.debug_cluster_crc_flip_bit = atoi(objectGetVal(c->argv[2]));
+        addReply(c, shared.ok);
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "cluster-crc-flip-time") && c->argc == 3) {
+        long seconds;
+        if (getLongFromObjectOrReply(c, c->argv[2], &seconds, NULL) != C_OK) return;
+        if (seconds < 0) seconds = 0;
+        server.debug_cluster_crc_flip_until = seconds > 0 ? mstime() + (long long)seconds * 1000 : 0;
         addReply(c, shared.ok);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "slotmigration")) {
         if (!strcasecmp(objectGetVal(c->argv[2]), "prevent-pause")) {

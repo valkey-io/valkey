@@ -200,6 +200,7 @@ static sds ACLDescribeSelector(aclSelector *selector);
 static aclSelector *aclCreateSelectorFromOpSet(const char *opset, size_t opsetlen);
 static sds *ACLMergeSelectorArguments(sds *argv, int argc, int *merged_argc, int *invalid_idx);
 static int ACLStringHasSpaces(const char *s, size_t len);
+static int ACLRoleNameConflicts(const char *name);
 
 /* The length of the string representation of a hashed password. */
 #define HASH_PASSWORD_LEN (SHA256_BLOCK_SIZE * 2)
@@ -272,6 +273,13 @@ static int ACLStringHasSpaces(const char *s, size_t len) {
     for (size_t i = 0; i < len; i++) {
         if (isspace(s[i]) || s[i] == 0) return 1;
     }
+    return 0;
+}
+
+/* Return 1 if the role name conflicts with a command or category name. */
+static int ACLRoleNameConflicts(const char *name) {
+    if (ACLGetCommandCategoryFlagByName(name)) return 1;
+    if (ACLLookupCommand(name)) return 1;
     return 0;
 }
 
@@ -621,6 +629,11 @@ user *ACLGetRoleByName(const char *name, size_t namelen) {
  * Returns NULL on success, or an SDS error string on failure. */
 static sds ACLStringSetRole(user *r, sds rolename, sds *argv, int argc) {
     sds error = NULL;
+
+    /* Reject role names that conflict with command or category names. */
+    if (!r && ACLRoleNameConflicts(rolename)) {
+        return sdscatfmt(sdsempty(), "Role name '%s' conflicts with a command or category name", rolename);
+    }
 
     /* Create a temporary role-flagged user to validate all changes */
     user *tempr = zmalloc(sizeof(*tempr));
@@ -1776,6 +1789,8 @@ const char *ACLSetStringError(void) {
         errmsg = "The provided database ID is out of range";
     else if (errno == ESRCH)
         errmsg = "The specified ACL role does not exist";
+    else if (errno == EDOM)
+        errmsg = "Role name conflicts with a command or category name";
     return errmsg;
 }
 
@@ -2805,6 +2820,12 @@ int ACLAppendRoleForLoading(sds *argv, int argc, int *argc_err) {
     if (listSearchKey(RolesToLoad, argv[1])) {
         if (argc_err) *argc_err = 1;
         errno = EALREADY;
+        return C_ERR;
+    }
+
+    if (ACLRoleNameConflicts(argv[1])) {
+        if (argc_err) *argc_err = 1;
+        errno = EDOM;
         return C_ERR;
     }
 

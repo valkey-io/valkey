@@ -56,6 +56,25 @@ start_server {tags {"acl external:skip"}} {
         assert_match {*can't contain spaces*} $err
     }
 
+    test {ACL SETROLE - rejects role name that conflicts with category} {
+        catch {r ACL SETROLE read +@all} err
+        assert_match {*conflicts with a command or category*} $err
+
+        catch {r ACL SETROLE write +@all} err
+        assert_match {*conflicts with a command or category*} $err
+    }
+
+    test {ACL SETROLE - rejects role name that conflicts with command} {
+        catch {r ACL SETROLE get +@all} err
+        assert_match {*conflicts with a command or category*} $err
+
+        catch {r ACL SETROLE set +@all} err
+        assert_match {*conflicts with a command or category*} $err
+
+        catch {r ACL SETROLE acl +@all} err
+        assert_match {*conflicts with a command or category*} $err
+    }
+
     # --- ACL GETROLE ---
 
     test {ACL GETROLE - returns role info} {
@@ -292,7 +311,7 @@ start_server [list overrides [list "dir" $server_path "aclfile" "role.acl"] tags
 
     test {Roles loaded from ACL file} {
         lsort [r ACL ROLES]
-    } {customer readonly}
+    } {customer viewer}
 
     test {Users loaded with role assignments from ACL file} {
         set info [r ACL GETUSER alice]
@@ -319,7 +338,7 @@ start_server [list overrides [list "dir" $server_path "aclfile" "role.acl"] tags
         r ACL SAVE
         r ACL LOAD
         lsort [r ACL ROLES]
-    } {customer readonly}
+    } {customer viewer}
 }
 
 # Test ACL file error paths for roles
@@ -388,4 +407,23 @@ test {Invalid role rule in config on startup fails} {
     close $fd
     catch {exec $::VALKEY_SERVER_BIN "$tmpdir/valkey.conf"} err
     assert_match {*Error in role declaration*} $err
+} {} {external:skip}
+
+# Test role name conflicting with category/command in config on startup
+test {Role name conflicting with category in config on startup fails} {
+    set tmpdir [tmpdir "role-category-conflict.conf"]
+    set fd [open "$tmpdir/valkey.conf" w]
+    puts $fd "role read +@all"
+    close $fd
+    catch {exec $::VALKEY_SERVER_BIN "$tmpdir/valkey.conf"} err
+    assert_match {*conflicts with a command or category*} $err
+} {} {external:skip}
+
+test {Role name conflicting with command in config on startup fails} {
+    set tmpdir [tmpdir "role-command-conflict.conf"]
+    set fd [open "$tmpdir/valkey.conf" w]
+    puts $fd "role get +@all"
+    close $fd
+    catch {exec $::VALKEY_SERVER_BIN "$tmpdir/valkey.conf"} err
+    assert_match {*conflicts with a command or category*} $err
 } {} {external:skip}

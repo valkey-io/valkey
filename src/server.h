@@ -1488,12 +1488,12 @@ struct sharedObjectsStruct {
     sds minstring, maxstring;
 };
 
-/* Skiplist types - full definitions in skiplist.h */
-struct zskiplist;
+/* OrderedIndex - full definition in ordered_index.h */
+typedef struct OrderedIndex OrderedIndex;
 
 typedef struct zset {
     hashtable *ht;
-    struct zskiplist *zsl;
+    OrderedIndex *oi;
 } zset;
 
 typedef struct clientBufferLimitsConfig {
@@ -3365,6 +3365,13 @@ typedef struct {
     sds min, max;     /* May be set to shared.(minstring|maxstring) */
     int minex, maxex; /* are min or max exclusive? */
 } zlexrangespec;
+
+/* Zset range comparison utilities (used by both listpack and ordered index encodings) */
+int zsetScoreGteMin(double value, zrangespec *spec);
+int zsetScoreLteMax(double value, zrangespec *spec);
+int zsetLexCompare(const char *a, size_t alen, sds b);
+int zsetLexGteMin(const char *value, size_t len, zlexrangespec *spec);
+int zsetLexLteMax(const char *value, size_t len, zlexrangespec *spec);
 
 /* flags for incrCommandFailedCalls */
 #define ERROR_COMMAND_REJECTED (1 << 0) /* Indicate to update the command rejected stats */

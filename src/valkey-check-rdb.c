@@ -29,7 +29,7 @@
 
 #include "mt19937-64.h"
 #include "server.h"
-#include "skiplist.h"
+#include "ordered_index.h"
 #include "rdb.h"
 #include "module.h"
 #include "hdr_histogram.h"
@@ -324,13 +324,15 @@ void computeDatasetProfile(int dbid, robj *keyobj, robj *o, long long expiretime
 
             void *next;
             while (hashtableNext(&iter, &next)) {
-                zskiplistNode *node = next;
+                OrderedIndexItem *node = next;
                 size_t eleLen = 0;
+                const char *ele;
+                size_t ele_len;
+                orderedIndexItemGetElement(node, &ele, &ele_len);
 
-                const int len = fpconv_dtoa(node->score, buf);
+                const int len = fpconv_dtoa(orderedIndexItemGetScore(node), buf);
                 buf[len] = '\0';
-                sds ele = zslGetNodeElement(node);
-                eleLen += sdslen(ele) + strlen(buf);
+                eleLen += ele_len + strlen(buf);
                 statsRecordElementSize(eleLen, 1, stats);
             }
             hashtableCleanupIterator(&iter);

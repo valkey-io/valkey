@@ -2249,29 +2249,29 @@ start_server {tags {"zset"}} {
     } {0} {cluster:skip}
 
     test {ZSET skiplist order consistency when elements are moved} {
-        set original_max [lindex [r config get zset-max-ziplist-entries] 1]
-        r config set zset-max-ziplist-entries 0
-        for {set times 0} {$times < 10} {incr times} {
-            r del zset
-            for {set j 0} {$j < 1000} {incr j} {
-                r zadd zset [randomInt 50] ele-[randomInt 10]
+        with_config zset-max-ziplist-entries 0 {
+            for {set times 0} {$times < 10} {incr times} {
+                r del zset
+                for {set j 0} {$j < 1000} {incr j} {
+                    r zadd zset [randomInt 50] ele-[randomInt 10]
+                }
+
+                # Make sure that element ordering is correct
+                set prev_element {}
+                set prev_score -1
+                foreach {element score} [r zrange zset 0 -1 WITHSCORES] {
+                    # Assert that elements are in increasing ordering
+                    assert {
+                        $prev_score < $score ||
+                        ($prev_score == $score &&
+                         [string compare $prev_element $element] == -1)
+                    }
+                    set prev_element $element
+                    set prev_score $score
+                }
             }
 
-            # Make sure that element ordering is correct
-            set prev_element {}
-            set prev_score -1
-            foreach {element score} [r zrange zset 0 -1 WITHSCORES] {
-                # Assert that elements are in increasing ordering
-                assert {
-                    $prev_score < $score ||
-                    ($prev_score == $score &&
-                     [string compare $prev_element $element] == -1)
-                }
-                set prev_element $element
-                set prev_score $score
-            }
         }
-        r config set zset-max-ziplist-entries $original_max
     }
 
     test {ZRANGESTORE basic} {
@@ -2947,5 +2947,178 @@ start_server [list overrides [list save ""] tags {"zset needs:debug external:ski
             puts "shrink rehashing can be abort if the new hashtable is too full test total attempts: $j"
         }
         assert_equal 1 $can_break
+    }
+}
+
+start_server {tags {"zset" "cluster:skip"}} {
+    test {ZUNIONSTORE with skiplist-encoded inputs} {
+        with_config zset-max-ziplist-entries 0 {
+
+            r del src1 src2 dst
+            r zadd src1 1 a 2 b 3 c
+            r zadd src2 2 b 4 d 5 e
+            assert_encoding skiplist src1
+            assert_encoding skiplist src2
+
+            assert_equal 5 [r zunionstore dst 2 src1 src2]
+            assert_encoding skiplist dst
+            assert_equal {a 1 c 3 b 4 d 4 e 5} [r zrange dst 0 -1 WITHSCORES]
+        }
+    }
+
+    test {ZUNIONSTORE with skiplist-encoded inputs and WEIGHTS} {
+        with_config zset-max-ziplist-entries 0 {
+
+            r del src1 src2 dst
+            r zadd src1 1 a 2 b
+            r zadd src2 3 b 4 c
+            assert_encoding skiplist src1
+            assert_encoding skiplist src2
+
+            assert_equal 3 [r zunionstore dst 2 src1 src2 WEIGHTS 2 1]
+            assert_equal {a 2 c 4 b 7} [r zrange dst 0 -1 WITHSCORES]
+        }
+    }
+
+    test {ZINTERSTORE with skiplist-encoded inputs} {
+        with_config zset-max-ziplist-entries 0 {
+
+            r del src1 src2 dst
+            r zadd src1 1 a 2 b 3 c
+            r zadd src2 10 b 20 c 30 d
+            assert_encoding skiplist src1
+            assert_encoding skiplist src2
+
+            assert_equal 2 [r zinterstore dst 2 src1 src2]
+            assert_equal {b 12 c 23} [r zrange dst 0 -1 WITHSCORES]
+        }
+    }
+
+    test {ZINTERSTORE with skiplist-encoded inputs and AGGREGATE MIN} {
+        with_config zset-max-ziplist-entries 0 {
+
+            r del src1 src2 dst
+            r zadd src1 5 a 10 b
+            r zadd src2 1 a 20 b
+            assert_encoding skiplist src1
+            assert_encoding skiplist src2
+
+            assert_equal 2 [r zinterstore dst 2 src1 src2 AGGREGATE MIN]
+            assert_equal {a 1 b 10} [r zrange dst 0 -1 WITHSCORES]
+        }
+    }
+
+    test {ZRANGEBYSCORE with LIMIT on skiplist-encoded set} {
+        with_config zset-max-ziplist-entries 0 {
+
+            r del zset
+            for {set i 0} {$i < 20} {incr i} {
+                r zadd zset $i "key:$i"
+            }
+            assert_encoding skiplist zset
+
+            # Forward with offset and count
+            assert_equal {key:5 key:6 key:7} [r zrangebyscore zset 0 19 LIMIT 5 3]
+            # Reverse with offset and count
+            assert_equal {key:14 key:13 key:12} [r zrevrangebyscore zset 19 0 LIMIT 5 3]
+            # Offset past end
+            assert_equal {} [r zrangebyscore zset 0 19 LIMIT 25 5]
+            # Count of 0
+            assert_equal {} [r zrangebyscore zset 0 19 LIMIT 0 0]
+        }
+    }
+
+    test {ZRANGEBYLEX with LIMIT on skiplist-encoded set} {
+        with_config zset-max-ziplist-entries 0 {
+
+            r del zset
+            foreach elem {a b c d e f g h i j} {
+                r zadd zset 0 $elem
+            }
+            assert_encoding skiplist zset
+
+            # Forward with offset and count
+            assert_equal {d e f} [r zrangebylex zset "\[a" "\[j" LIMIT 3 3]
+            # Reverse with offset and count
+            assert_equal {g f e} [r zrevrangebylex zset "\[j" "\[a" LIMIT 3 3]
+            # Offset past end
+            assert_equal {} [r zrangebylex zset "\[a" "\[j" LIMIT 15 5]
+        }
+    }
+
+    test {ZPOPMIN on skiplist-encoded set} {
+        with_config zset-max-ziplist-entries 0 {
+
+            r del zset
+            r zadd zset 3 c 1 a 2 b 5 e 4 d
+            assert_encoding skiplist zset
+
+            assert_equal {a 1} [r zpopmin zset]
+            assert_equal {b 2} [r zpopmin zset]
+            assert_equal 3 [r zcard zset]
+
+            # Pop multiple
+            assert_equal {c 3 d 4} [r zpopmin zset 2]
+            assert_equal 1 [r zcard zset]
+        }
+    }
+
+    test {ZPOPMAX on skiplist-encoded set} {
+        with_config zset-max-ziplist-entries 0 {
+
+            r del zset
+            r zadd zset 3 c 1 a 2 b 5 e 4 d
+            assert_encoding skiplist zset
+
+            assert_equal {e 5} [r zpopmax zset]
+            assert_equal {d 4} [r zpopmax zset]
+            assert_equal 3 [r zcard zset]
+
+            # Pop multiple
+            assert_equal {c 3 b 2} [r zpopmax zset 2]
+            assert_equal 1 [r zcard zset]
+        }
+    }
+
+    test {ZPOPMIN/ZPOPMAX empty skiplist-encoded set} {
+        with_config zset-max-ziplist-entries 0 {
+
+            r del zset
+            r zadd zset 1 a
+            r zpopmin zset
+            assert_equal 0 [r exists zset]
+        }
+    }
+
+    test {ZCOUNT on skiplist-encoded set} {
+        with_config zset-max-ziplist-entries 0 {
+
+            r del zset
+            for {set i 0} {$i < 10} {incr i} {
+                r zadd zset $i "key:$i"
+            }
+            assert_encoding skiplist zset
+
+            assert_equal 10 [r zcount zset -inf +inf]
+            assert_equal 4 [r zcount zset 3 6]
+            assert_equal 2 [r zcount zset (3 (6]
+            assert_equal 0 [r zcount zset 20 30]
+        }
+    }
+
+    test {ZLEXCOUNT on skiplist-encoded set} {
+        with_config zset-max-ziplist-entries 0 {
+
+            r del zset
+            foreach elem {a b c d e f} {
+                r zadd zset 0 $elem
+            }
+            assert_encoding skiplist zset
+
+            assert_equal 6 [r zlexcount zset - +]
+            assert_equal 3 [r zlexcount zset "\[b" "\[d"]
+            assert_equal 1 [r zlexcount zset "(b" "(d"]
+            assert_equal 0 [r zlexcount zset "\[x" "\[z"]
+        }
     }
 }

@@ -28,7 +28,7 @@
  */
 
 #include "server.h"
-#include "skiplist.h"
+#include "ordered_index.h"
 #include "util.h"
 #include "sha1.h" /* SHA1 is used for DEBUG DIGEST */
 #include "crc64.h"
@@ -217,12 +217,14 @@ void xorObjectDigest(serverDb *db, robj *keyobj, unsigned char *digest, robj *o)
 
             void *next;
             while (hashtableNext(&iter, &next)) {
-                zskiplistNode *node = next;
-                const int len = fpconv_dtoa(node->score, buf);
+                OrderedIndexItem *node = next;
+                const char *ele;
+                size_t ele_len;
+                orderedIndexItemGetElement(node, &ele, &ele_len);
+                const int len = fpconv_dtoa(orderedIndexItemGetScore(node), buf);
                 buf[len] = '\0';
                 memset(eledigest, 0, 20);
-                sds ele = zslGetNodeElement(node);
-                mixDigest(eledigest, ele, sdslen(ele));
+                mixDigest(eledigest, ele, ele_len);
                 mixDigest(eledigest, buf, strlen(buf));
                 xorDigest(digest, eledigest, 20);
             }
@@ -1184,8 +1186,11 @@ void serverLogObjectDebugInfo(const robj *o) {
         serverLog(LL_WARNING, "Hash size: %d", (int)hashTypeLength(o));
     } else if (o->type == OBJ_ZSET) {
         serverLog(LL_WARNING, "Sorted set size: %d", (int)zsetLength(o));
-        if (o->encoding == OBJ_ENCODING_SKIPLIST)
-            serverLog(LL_WARNING, "Skiplist level: %d", (int)((const zset *)o->ptr)->zsl->level);
+        if (o->encoding == OBJ_ENCODING_SKIPLIST) {
+            /* Not declared in ordered_index.h — debug-only introspection. */
+            extern int orderedIndexGetHeight(const OrderedIndex *oi);
+            serverLog(LL_WARNING, "Index height: %d", orderedIndexGetHeight(((const zset *)o->ptr)->oi));
+        }
     } else if (o->type == OBJ_STREAM) {
         serverLog(LL_WARNING, "Stream size: %d", (int)streamLength(o));
     }

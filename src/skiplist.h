@@ -131,13 +131,13 @@ zskiplistNode *zslGetHeader(zskiplist *zsl);
 sds zslGetNodeElement(const zskiplistNode *x);
 
 /* Insertion */
-zskiplistNode *zslCreateNode(int height, double score, const_sds ele);
+zskiplistNode *zslCreateNode(int height, double score, const char *ele, size_t ele_len);
 int zslRandomLevel(void);
 zskiplistNode *zslInsertNode(zskiplist *zsl, zskiplistNode *node);
 zskiplistNode *zslInsert(zskiplist *zsl, double score, const_sds ele);
 
 /* Deletion */
-void zslDeleteNode(zskiplist *zsl, zskiplistNode *x, zskiplistNode **update);
+void zslUnlinkNode(zskiplist *zsl, zskiplistNode *x, zskiplistNode **update);
 void zslDelete(zskiplist *zsl, zskiplistNode *node);
 void zslFreeNode(zskiplistNode *node);
 unsigned long zslDeleteRangeByScore(zskiplist *zsl, zrangespec *range, hashtable *ht);
@@ -148,17 +148,33 @@ unsigned long zslDeleteRangeByRank(zskiplist *zsl, unsigned int start, unsigned 
 zskiplistNode *zslUpdateScore(zskiplist *zsl, zskiplistNode *node, double newscore);
 
 /* Queries */
-int zslValueGteMin(double value, zrangespec *spec);
-int zslValueLteMax(double value, zrangespec *spec);
 int zslIsInRange(zskiplist *zsl, zrangespec *range);
 zskiplistNode *zslNthInRange(zskiplist *zsl, zrangespec *range, long n, long *rank);
 unsigned long zslGetRank(zskiplist *zsl, const zskiplistNode *node);
 zskiplistNode *zslGetElementByRank(zskiplist *zsl, unsigned long rank);
 
 /* Lex queries */
-int zslLexValueGteMin(sds value, zlexrangespec *spec);
-int zslLexValueLteMax(sds value, zlexrangespec *spec);
-int sdscmplex(sds a, sds b);
 zskiplistNode *zslNthInLexRange(zskiplist *zsl, zlexrangespec *range, long n);
+
+/* Iterator */
+typedef struct {
+    zskiplist *zsl;      /* The skiplist being iterated */
+    zskiplistNode *node; /* Current node (NULL before first call) */
+} zslIter;
+
+void zslInitIterator(zslIter *iter, zskiplist *zsl);
+void zslResetIterator(zslIter *iter);
+zslIter *zslCreateIterator(zskiplist *zsl);
+void zslReleaseIterator(zslIter *iter);
+zskiplistNode *zslNext(zslIter *iter);
+zskiplistNode *zslPrev(zslIter *iter);
+void zslSeekToRank(zslIter *iter, unsigned long rank);
+void zslSeekToScoreRange(zslIter *iter, double min, double max, int min_ex, int max_ex, long offset);
+void zslSeekToLexRange(zslIter *iter, const_sds min, const_sds max, int min_ex, int max_ex, long offset);
+
+/* Additional accessors */
+zskiplistNode *zslGetFirst(const zskiplist *zsl);
+double zslGetScore(const zskiplistNode *node);
+zskiplistNode *zslDetachNode(zskiplist *zsl, zskiplistNode *node);
 
 #endif /* SKIPLIST_H */

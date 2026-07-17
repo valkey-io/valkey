@@ -40,33 +40,58 @@
  * in order to get O(log(N)) INSERT and REMOVE operations into a sorted
  * data structure.
  *
- * The elements are added to a hash table mapping Objects to scores.
- * At the same time the elements are added to a skip list mapping scores
- * to Objects (so objects are sorted by scores in this "view").
+ * The elements are added to a hash table mapping elements to scores.
+ * At the same time the elements are added to an ordered index mapping scores
+ * to elements (so elements are sorted by scores in this "view").
  *
- * Note that the SDS string representing the element is the same in both
- * the hash table and skiplist in order to save memory. What we do in order
- * to manage the shared SDS string more easily is to free the SDS string
- * only in zslFreeNode(). The dictionary has no value free method set.
- * So we should always remove an element from the dictionary, and later from
- * the skiplist.
- *
- * This skiplist implementation is almost a C translation of the original
- * algorithm described by William Pugh in "Skip Lists: A Probabilistic
- * Alternative to Balanced Trees", modified in three ways:
- * a) this implementation allows for repeated scores.
- * b) the comparison is not just by key (our 'score') but by satellite data.
- * c) there is a back pointer, so it's a doubly linked list with the back
- * pointers being only at "level 1". This allows to traverse the list
- * from tail to head, useful for ZREVRANGE. */
+ * Note that the element string is shared between the hash table and the
+ * ordered index in order to save memory. The element is freed only in
+ * orderedIndexItemFree(). The hash table has no value free method set.
+ * So we should always remove an element from the hash table, and later from
+ * the ordered index. */
 
 #include "server.h"
-#include "skiplist.h"
+#include "ordered_index.h"
 #include "intset.h" /* Compact integer set structure */
 #include "mt19937-64.h"
 #include <math.h>
 
 #include "valkey_strtod.h"
+
+/*-----------------------------------------------------------------------------
+ * Zset range comparison utilities
+ *
+ * These are generic range-spec helpers used by both listpack and ordered index
+ * encoded zsets. They have no dependency on any specific data structure.
+ *----------------------------------------------------------------------------*/
+
+int zsetScoreGteMin(double value, zrangespec *spec) {
+    return spec->minex ? (value > spec->min) : (value >= spec->min);
+}
+
+int zsetScoreLteMax(double value, zrangespec *spec) {
+    return spec->maxex ? (value < spec->max) : (value <= spec->max);
+}
+
+/* Compare two sds strings handling shared.minstring/maxstring as -inf/+inf. */
+/* Compare a raw element (ptr+len) against an sds range bound.
+ * Either side may be shared.minstring/maxstring as -inf/+inf sentinels. */
+int zsetLexCompare(const char *a, size_t alen, sds b) {
+    if ((const char *)a == (const char *)b) return 0;
+    if (a == shared.minstring || b == shared.maxstring) return -1;
+    if (a == shared.maxstring || b == shared.minstring) return 1;
+    int cmp = memcmp(a, b, alen < sdslen(b) ? alen : sdslen(b));
+    if (cmp != 0) return cmp;
+    return alen < sdslen(b) ? -1 : (alen > sdslen(b) ? 1 : 0);
+}
+
+int zsetLexGteMin(const char *value, size_t len, zlexrangespec *spec) {
+    return spec->minex ? (zsetLexCompare(value, len, spec->min) > 0) : (zsetLexCompare(value, len, spec->min) >= 0);
+}
+
+int zsetLexLteMax(const char *value, size_t len, zlexrangespec *spec) {
+    return spec->maxex ? (zsetLexCompare(value, len, spec->max) < 0) : (zsetLexCompare(value, len, spec->max) <= 0);
+}
 
 void zsetConvertAndExpand(robj *zobj, int encoding, unsigned long cap);
 
@@ -278,12 +303,12 @@ int zzlIsInRange(unsigned char *zl, zrangespec *range) {
     p = lpSeek(zl, -1);      /* Last score. */
     if (p == NULL) return 0; /* Empty sorted set */
     score = zzlGetScore(p);
-    if (!zslValueGteMin(score, range)) return 0;
+    if (!zsetScoreGteMin(score, range)) return 0;
 
     p = lpSeek(zl, 1); /* First score. */
     serverAssert(p != NULL);
     score = zzlGetScore(p);
-    if (!zslValueLteMax(score, range)) return 0;
+    if (!zsetScoreLteMax(score, range)) return 0;
 
     return 1;
 }
@@ -302,9 +327,9 @@ unsigned char *zzlFirstInRange(unsigned char *zl, zrangespec *range) {
         serverAssert(sptr != NULL);
 
         score = zzlGetScore(sptr);
-        if (zslValueGteMin(score, range)) {
+        if (zsetScoreGteMin(score, range)) {
             /* Check if score <= max. */
-            if (zslValueLteMax(score, range)) return eptr;
+            if (zsetScoreLteMax(score, range)) return eptr;
             return NULL;
         }
 
@@ -329,9 +354,9 @@ unsigned char *zzlLastInRange(unsigned char *zl, zrangespec *range) {
         serverAssert(sptr != NULL);
 
         score = zzlGetScore(sptr);
-        if (zslValueLteMax(score, range)) {
+        if (zsetScoreLteMax(score, range)) {
             /* Check if score >= min. */
-            if (zslValueGteMin(score, range)) return eptr;
+            if (zsetScoreGteMin(score, range)) return eptr;
             return NULL;
         }
 
@@ -348,17 +373,29 @@ unsigned char *zzlLastInRange(unsigned char *zl, zrangespec *range) {
 }
 
 int zzlLexValueGteMin(unsigned char *p, zlexrangespec *spec) {
-    sds value = lpGetObject(p);
-    int res = zslLexValueGteMin(value, spec);
-    sdsfree(value);
-    return res;
+    unsigned int len;
+    long long lval;
+    unsigned char *vstr = lpGetValue(p, &len, &lval);
+    if (vstr) {
+        return zsetLexGteMin((char *)vstr, len, spec);
+    } else {
+        char buf[LONG_STR_SIZE];
+        int blen = ll2string(buf, sizeof(buf), lval);
+        return zsetLexGteMin(buf, blen, spec);
+    }
 }
 
 int zzlLexValueLteMax(unsigned char *p, zlexrangespec *spec) {
-    sds value = lpGetObject(p);
-    int res = zslLexValueLteMax(value, spec);
-    sdsfree(value);
-    return res;
+    unsigned int len;
+    long long lval;
+    unsigned char *vstr = lpGetValue(p, &len, &lval);
+    if (vstr) {
+        return zsetLexLteMax((char *)vstr, len, spec);
+    } else {
+        char buf[LONG_STR_SIZE];
+        int blen = ll2string(buf, sizeof(buf), lval);
+        return zsetLexLteMax(buf, blen, spec);
+    }
 }
 
 /* Returns if there is a part of the zset is in range. Should only be used
@@ -367,7 +404,7 @@ int zzlIsInLexRange(unsigned char *zl, zlexrangespec *range) {
     unsigned char *p;
 
     /* Test for ranges that will always be empty. */
-    int cmp = sdscmplex(range->min, range->max);
+    int cmp = zsetLexCompare(range->min, sdslen(range->min), range->max);
     if (cmp > 0 || (cmp == 0 && (range->minex || range->maxex))) return 0;
 
     p = lpSeek(zl, -2); /* Last element. */
@@ -455,7 +492,7 @@ static unsigned char *zzlDelete(unsigned char *zl, unsigned char *eptr) {
     return lpDeleteRangeWithEntry(zl, &eptr, 2);
 }
 
-static unsigned char *zzlInsertAt(unsigned char *zl, unsigned char *eptr, sds ele, double score) {
+static unsigned char *zzlInsertAt(unsigned char *zl, unsigned char *eptr, const char *ele, size_t ele_len, double score) {
     unsigned char *sptr;
     char scorebuf[MAX_D2STRING_CHARS];
     int scorelen = 0;
@@ -463,14 +500,14 @@ static unsigned char *zzlInsertAt(unsigned char *zl, unsigned char *eptr, sds el
     int score_is_long = double2ll(score, &lscore);
     if (!score_is_long) scorelen = d2string(scorebuf, sizeof(scorebuf), score);
     if (eptr == NULL) {
-        zl = lpAppend(zl, (unsigned char *)ele, sdslen(ele));
+        zl = lpAppend(zl, (unsigned char *)ele, ele_len);
         if (score_is_long)
             zl = lpAppendInteger(zl, lscore);
         else
             zl = lpAppend(zl, (unsigned char *)scorebuf, scorelen);
     } else {
         /* Insert member before the element 'eptr'. */
-        zl = lpInsertString(zl, (unsigned char *)ele, sdslen(ele), eptr, LP_BEFORE, &sptr);
+        zl = lpInsertString(zl, (unsigned char *)ele, ele_len, eptr, LP_BEFORE, &sptr);
 
         /* Insert score after the member. */
         if (score_is_long)
@@ -496,12 +533,12 @@ static unsigned char *zzlInsert(unsigned char *zl, sds ele, double score) {
             /* First element with score larger than score for element to be
              * inserted. This means we should take its spot in the list to
              * maintain ordering. */
-            zl = zzlInsertAt(zl, eptr, ele, score);
+            zl = zzlInsertAt(zl, eptr, ele, sdslen(ele), score);
             break;
         } else if (s == score) {
             /* Ensure lexicographical ordering for elements. */
             if (zzlCompareElements(eptr, (unsigned char *)ele, sdslen(ele)) > 0) {
-                zl = zzlInsertAt(zl, eptr, ele, score);
+                zl = zzlInsertAt(zl, eptr, ele, sdslen(ele), score);
                 break;
             }
         }
@@ -511,7 +548,7 @@ static unsigned char *zzlInsert(unsigned char *zl, sds ele, double score) {
     }
 
     /* Push on tail of list when it was not yet inserted. */
-    if (eptr == NULL) zl = zzlInsertAt(zl, NULL, ele, score);
+    if (eptr == NULL) zl = zzlInsertAt(zl, NULL, ele, sdslen(ele), score);
     return zl;
 }
 
@@ -528,7 +565,7 @@ static unsigned char *zzlDeleteRangeByScore(unsigned char *zl, zrangespec *range
     /* When the tail of the listpack is deleted, eptr will be NULL. */
     while (eptr && (sptr = lpNext(zl, eptr)) != NULL) {
         score = zzlGetScore(sptr);
-        if (zslValueLteMax(score, range)) {
+        if (zsetScoreLteMax(score, range)) {
             /* Delete both the element and the score. */
             zl = lpDeleteRangeWithEntry(zl, &eptr, 2);
             num++;
@@ -567,7 +604,7 @@ static unsigned char *zzlDeleteRangeByLex(unsigned char *zl, zlexrangespec *rang
     return zl;
 }
 
-/* Delete all the elements with rank between start and end from the skiplist.
+/* Delete all the elements with rank between start and end from the listpack.
  * Start and end are inclusive. Note that start and end need to be 1-based */
 unsigned char *zzlDeleteRangeByRank(unsigned char *zl, unsigned int start, unsigned int end, unsigned long *deleted) {
     unsigned int num = (end - start) + 1;
@@ -585,7 +622,7 @@ unsigned long zsetLength(const robj *zobj) {
     if (zobj->encoding == OBJ_ENCODING_LISTPACK) {
         length = zzlLength(objectGetVal(zobj));
     } else if (zobj->encoding == OBJ_ENCODING_SKIPLIST) {
-        length = zslGetLength(((const zset *)objectGetVal(zobj))->zsl);
+        length = orderedIndexLength(((const zset *)objectGetVal(zobj))->oi);
     } else {
         serverPanic("Unknown sorted set encoding");
     }
@@ -620,9 +657,9 @@ void zsetTypeMaybeConvert(robj *zobj, size_t size_hint, size_t value_len_hint) {
     }
 }
 
-/* Convert the zset to specified encoding. The zset dict (when converting
- * to a skiplist) is presized to hold the number of elements in the original
- * zset. */
+/* Convert the zset to specified encoding. The hashtable (when converting
+ * to ordered index encoding) is presized to hold the number of elements in
+ * the original zset. */
 void zsetConvert(robj *zobj, int encoding) {
     zsetConvertAndExpand(zobj, encoding, zsetLength(zobj));
 }
@@ -630,8 +667,7 @@ void zsetConvert(robj *zobj, int encoding) {
 /* Converts a zset to the specified encoding, pre-sizing it for 'cap' elements. */
 void zsetConvertAndExpand(robj *zobj, int encoding, unsigned long cap) {
     zset *zs;
-    zskiplistNode *node, *next;
-    sds ele;
+    OrderedIndexItem *node;
     double score;
 
     if (zobj->encoding == encoding) return;
@@ -646,7 +682,7 @@ void zsetConvertAndExpand(robj *zobj, int encoding, unsigned long cap) {
 
         zs = zmalloc(sizeof(*zs));
         zs->ht = hashtableCreate(&zsetHashtableType);
-        zs->zsl = zslCreate();
+        zs->oi = orderedIndexCreate();
 
         /* Presize the dict to avoid rehashing */
         hashtableExpand(zs->ht, cap);
@@ -660,13 +696,18 @@ void zsetConvertAndExpand(robj *zobj, int encoding, unsigned long cap) {
         while (eptr != NULL) {
             score = zzlGetScore(sptr);
             vstr = lpGetValue(eptr, &vlen, &vlong);
-            if (vstr == NULL)
-                ele = sdsfromlonglong(vlong);
-            else
-                ele = sdsnewlen((char *)vstr, vlen);
+            char buf[LONG_STR_SIZE];
+            const char *ele_ptr;
+            size_t ele_len;
+            if (vstr == NULL) {
+                ele_len = ll2string(buf, sizeof(buf), vlong);
+                ele_ptr = buf;
+            } else {
+                ele_ptr = (char *)vstr;
+                ele_len = vlen;
+            }
 
-            node = zslInsert(zs->zsl, score, ele);
-            sdsfree(ele);
+            node = orderedIndexInsert(zs->oi, score, ele_ptr, ele_len);
             serverAssert(hashtableAdd(zs->ht, node));
             zzlNext(zl, &eptr, &sptr);
         }
@@ -679,20 +720,19 @@ void zsetConvertAndExpand(robj *zobj, int encoding, unsigned long cap) {
 
         if (encoding != OBJ_ENCODING_LISTPACK) serverPanic("Unknown target encoding");
 
-        /* Approach similar to zslFree(), since we want to free the skiplist at
-         * the same time as creating the listpack. */
+        /* Free the ordered index by popping items one at a time into the listpack. */
         zs = objectGetVal(zobj);
         hashtableRelease(zs->ht);
-        zskiplistNode *zheader = zslGetHeader(zs->zsl);
-        node = zheader->level[0].forward;
-        zfree(zs->zsl);
 
-        while (node) {
-            zl = zzlInsertAt(zl, NULL, zslGetNodeElement(node), node->score);
-            next = node->level[0].forward;
-            zslFreeNode(node);
-            node = next;
+        OrderedIndexItem *node;
+        while ((node = orderedIndexPopFirst(zs->oi)) != NULL) {
+            const char *ele_ptr;
+            size_t ele_len;
+            orderedIndexItemGetElement(node, &ele_ptr, &ele_len);
+            zl = zzlInsertAt(zl, NULL, ele_ptr, ele_len, orderedIndexItemGetScore(node));
+            orderedIndexItemFree(node);
         }
+        orderedIndexFree(zs->oi);
 
         zfree(zs);
         objectSetVal(zobj, zl);
@@ -709,7 +749,7 @@ void zsetConvertToListpackIfNeeded(robj *zobj, size_t maxelelen, size_t totelele
     if (zobj->encoding == OBJ_ENCODING_LISTPACK) return;
     zset *zset = objectGetVal(zobj);
 
-    if (zslGetLength(zset->zsl) <= server.zset_max_listpack_entries &&
+    if (orderedIndexLength(zset->oi) <= server.zset_max_listpack_entries &&
         maxelelen <= server.zset_max_listpack_value && lpSafeToAdd(NULL, totelelen)) {
         zsetConvert(zobj, OBJ_ENCODING_LISTPACK);
     }
@@ -728,8 +768,8 @@ int zsetScore(robj *zobj, sds member, double *score) {
         zset *zs = objectGetVal(zobj);
         void *entry;
         if (!hashtableFind(zs->ht, member, &entry)) return C_ERR;
-        zskiplistNode *setElement = entry;
-        *score = setElement->score;
+        OrderedIndexItem *setElement = entry;
+        *score = orderedIndexItemGetScore(setElement);
     } else {
         serverPanic("Unknown sorted set encoding");
     }
@@ -775,7 +815,7 @@ int zsetScore(robj *zobj, sds member, double *score) {
  * start.
  *
  * The command as a side effect of adding a new element may convert the sorted
- * set internal encoding from listpack to hashtable+skiplist.
+ * set internal encoding from listpack to hashtable+ordered index.
  *
  * Memory management of 'ele':
  *
@@ -851,7 +891,7 @@ int zsetAdd(robj *zobj, double score, sds ele, int in_flags, int *out_flags, dou
     }
 
     /* Note that the above block handling listpack would have either returned or
-     * converted the key to skiplist. */
+     * converted the key to ordered index encoding. */
     if (zobj->encoding == OBJ_ENCODING_SKIPLIST) {
         zset *zs = objectGetVal(zobj);
 
@@ -863,8 +903,8 @@ int zsetAdd(robj *zobj, double score, sds ele, int in_flags, int *out_flags, dou
                 return 1;
             }
 
-            zskiplistNode *old_node = *node_ref_in_hashtable;
-            curscore = old_node->score;
+            OrderedIndexItem *old_node = *node_ref_in_hashtable;
+            curscore = orderedIndexItemGetScore(old_node);
 
             /* Prepare the score for the increment if needed. */
             if (incr) {
@@ -885,15 +925,14 @@ int zsetAdd(robj *zobj, double score, sds ele, int in_flags, int *out_flags, dou
 
             /* Remove and re-insert when score changes. */
             if (score != curscore) {
-                zskiplistNode *new_node = zslUpdateScore(zs->zsl, old_node, score);
-                /* Note that this assignment updates the node pointer stored in
-                 * the hashtable */
-                if (new_node) *node_ref_in_hashtable = new_node;
+                OrderedIndexItem *new_node = orderedIndexUpdateScore(zs->oi, old_node, score);
+                /* Update the node pointer stored in the hashtable. */
+                *node_ref_in_hashtable = new_node;
                 *out_flags |= ZADD_OUT_UPDATED;
             }
             return 1;
         } else if (!xx) {
-            zskiplistNode *new_node = zslInsert(zs->zsl, score, ele);
+            OrderedIndexItem *new_node = orderedIndexInsert(zs->oi, score, ele, sdslen(ele));
             serverAssert(hashtableAdd(zs->ht, new_node));
             *out_flags |= ZADD_OUT_ADDED;
             if (newscore) *newscore = score;
@@ -908,18 +947,18 @@ int zsetAdd(robj *zobj, double score, sds ele, int in_flags, int *out_flags, dou
     return 0; /* Never reached. */
 }
 
-/* Deletes the element 'ele' from the sorted set encoded as a skiplist+hashtable,
+/* Deletes the element 'ele' from the sorted set encoded as ordered index+hashtable,
  * returning 1 if the element existed and was deleted, 0 otherwise (the
  * element was not there). */
-static int zsetRemoveFromSkiplist(zset *zs, sds ele) {
+static int zsetRemoveFromIndex(zset *zs, sds ele) {
     void *entry;
     if (!hashtablePop(zs->ht, ele, &entry)) return 0;
-    zskiplistNode *node = entry;
+    OrderedIndexItem *node = entry;
 
-    /* hashtable only contains pointers to skiplist nodes. Nothing to free. */
+    /* hashtable only contains pointers to ordered index items. Nothing to free. */
 
-    /* Delete from skiplist. */
-    zslDelete(zs->zsl, node);
+    /* Delete from ordered index. */
+    orderedIndexDelete(zs->oi, node);
 
     return 1;
 }
@@ -936,7 +975,7 @@ int zsetDel(robj *zobj, sds ele) {
         }
     } else if (zobj->encoding == OBJ_ENCODING_SKIPLIST) {
         zset *zs = objectGetVal(zobj);
-        if (zsetRemoveFromSkiplist(zs, ele)) {
+        if (zsetRemoveFromIndex(zs, ele)) {
             return 1;
         }
     } else {
@@ -992,16 +1031,14 @@ static long zsetRank(robj *zobj, sds ele, int reverse, double *output_score) {
 
         void *entry;
         if (!hashtableFind(zs->ht, ele, &entry)) return -1;
-        zskiplistNode *node = entry;
+        OrderedIndexItem *node = entry;
 
-        rank = zslGetRank(zs->zsl, node);
-        /* Existing elements always have a rank. */
-        serverAssert(rank != 0);
-        if (output_score) *output_score = node->score;
+        rank = orderedIndexGetIndex(zs->oi, node);
+        if (output_score) *output_score = orderedIndexItemGetScore(node);
         if (reverse)
-            return llen - rank;
+            return llen - rank - 1;
         else
-            return rank - 1;
+            return rank;
     } else {
         serverPanic("Unknown sorted set encoding");
     }
@@ -1032,23 +1069,20 @@ robj *zsetDup(robj *o) {
         zs = objectGetVal(o);
         new_zs = objectGetVal(zobj);
         hashtableExpand(new_zs->ht, hashtableSize(zs->ht));
-        zskiplist *zsl = zs->zsl;
-        zskiplistNode *ln;
-        sds ele;
-        long llen = zsetLength(o);
+        OrderedIndex *oi = zs->oi;
+        OrderedIndexItem *ln;
 
-        /* We copy the skiplist elements from the greatest to the
-         * smallest (that's trivial since the elements are already ordered in
-         * the skiplist): this improves the load process, since the next loaded
-         * element will always be the smaller, so adding to the skiplist
-         * will always immediately stop at the head, making the insertion
-         * O(1) instead of O(log(N)). */
-        ln = zslGetTail(zsl);
-        while (llen--) {
-            ele = zslGetNodeElement(ln);
-            zskiplistNode *znode = zslInsert(new_zs->zsl, ln->score, ele);
+        /* We copy elements from the greatest to the smallest (that's trivial
+         * since the elements are already ordered in the index): inserting in
+         * descending order is optimal for the ordered index backend. */
+        OrderedIndexIterator iter;
+        orderedIndexInitIterator(&iter, oi);
+        while ((ln = orderedIndexPrev(&iter)) != NULL) {
+            const char *ele_ptr;
+            size_t ele_len;
+            orderedIndexItemGetElement(ln, &ele_ptr, &ele_len);
+            OrderedIndexItem *znode = orderedIndexInsert(new_zs->oi, orderedIndexItemGetScore(ln), ele_ptr, ele_len);
             hashtableAdd(new_zs->ht, znode);
-            ln = ln->backward;
         }
     } else {
         serverPanic("Unknown sorted set encoding");
@@ -1079,11 +1113,13 @@ static void zsetTypeRandomElement(robj *zsetobj, unsigned long zsetsize, listpac
         zset *zs = objectGetVal(zsetobj);
         void *entry;
         hashtableFairRandomEntry(zs->ht, &entry);
-        zskiplistNode *node = entry;
-        sds ele = zslGetNodeElement(node);
-        key->sval = (unsigned char *)ele;
-        key->slen = sdslen(ele);
-        if (score) *score = node->score;
+        OrderedIndexItem *node = entry;
+        const char *ele_ptr_tmp;
+        size_t ele_len_tmp;
+        orderedIndexItemGetElement(node, &ele_ptr_tmp, &ele_len_tmp);
+        key->sval = (unsigned char *)ele_ptr_tmp;
+        key->slen = ele_len_tmp;
+        if (score) *score = orderedIndexItemGetScore(node);
     } else if (zsetobj->encoding == OBJ_ENCODING_LISTPACK) {
         listpackEntry val;
         lpRandomPair(objectGetVal(zsetobj), zsetsize, key, &val);
@@ -1281,6 +1317,16 @@ typedef enum {
     ZRANGE_LEX,
 } zrange_type;
 
+/* Callback for orderedIndexDeleteRangeBy* — removes the item from the hashtable
+ * and frees it. The callback receives ownership per the API contract. */
+static void zsetIndexDeleteCallback(const OrderedIndexItem *item, void *privdata) {
+    hashtable *ht = privdata;
+    const char *ptr;
+    size_t len;
+    orderedIndexItemGetElement(item, &ptr, &len);
+    hashtableDelete(ht, (sds)ptr);
+}
+
 /* Implements ZREMRANGEBYRANK, ZREMRANGEBYSCORE, ZREMRANGEBYLEX commands. */
 void zremrangeGenericCommand(client *c, zrange_type rangetype) {
     robj *key = c->argv[1];
@@ -1350,9 +1396,9 @@ void zremrangeGenericCommand(client *c, zrange_type rangetype) {
         hashtablePauseAutoShrink(zs->ht);
         switch (rangetype) {
         case ZRANGE_AUTO:
-        case ZRANGE_RANK: deleted = zslDeleteRangeByRank(zs->zsl, start + 1, end + 1, zs->ht); break;
-        case ZRANGE_SCORE: deleted = zslDeleteRangeByScore(zs->zsl, &range, zs->ht); break;
-        case ZRANGE_LEX: deleted = zslDeleteRangeByLex(zs->zsl, &lexrange, zs->ht); break;
+        case ZRANGE_RANK: deleted = orderedIndexDeleteRangeByIndex(zs->oi, start, end, zsetIndexDeleteCallback, zs->ht); break;
+        case ZRANGE_SCORE: deleted = orderedIndexDeleteRangeByScore(zs->oi, range.min, range.max, range.minex, range.maxex, zsetIndexDeleteCallback, zs->ht); break;
+        case ZRANGE_LEX: deleted = orderedIndexDeleteRangeByLex(zs->oi, lexrange.min, lexrange.max, lexrange.minex, lexrange.maxex, zsetIndexDeleteCallback, zs->ht); break;
         }
         hashtableResumeAutoShrink(zs->ht);
         if (hashtableSize(zs->ht) == 0) {
@@ -1418,7 +1464,8 @@ typedef struct {
             } zl;
             struct {
                 zset *zs;
-                zskiplistNode *node;
+                OrderedIndexIterator iter;
+                OrderedIndexItem *node;
             } sl;
         } zset;
     } iter;
@@ -1479,7 +1526,8 @@ static void zuiInitIterator(zsetopsrc *op) {
             }
         } else if (op->encoding == OBJ_ENCODING_SKIPLIST) {
             it->sl.zs = objectGetVal(op->subject);
-            it->sl.node = zslGetTail(it->sl.zs->zsl);
+            orderedIndexInitIterator(&it->sl.iter, it->sl.zs->oi);
+            it->sl.node = NULL;
         } else {
             serverPanic("Unknown sorted set encoding");
         }
@@ -1534,7 +1582,7 @@ static unsigned long zuiLength(zsetopsrc *op) {
             return zzlLength(objectGetVal(op->subject));
         } else if (op->encoding == OBJ_ENCODING_SKIPLIST) {
             zset *zs = objectGetVal(op->subject);
-            return zslGetLength(zs->zsl);
+            return orderedIndexLength(zs->oi);
         } else {
             serverPanic("Unknown sorted set encoding");
         }
@@ -1590,12 +1638,14 @@ static int zuiNext(zsetopsrc *op, zsetopval *val) {
             /* Move to next element (going backwards, see zuiInitIterator). */
             zzlPrev(it->zl.zl, &it->zl.eptr, &it->zl.sptr);
         } else if (op->encoding == OBJ_ENCODING_SKIPLIST) {
+            it->sl.node = orderedIndexPrev(&it->sl.iter);
             if (it->sl.node == NULL) return 0;
-            val->ele = zslGetNodeElement(it->sl.node);
-            val->score = it->sl.node->score;
-
-            /* Move to next element. (going backwards, see zuiInitIterator) */
-            it->sl.node = it->sl.node->backward;
+            const char *val_ele_ptr;
+            size_t val_ele_len;
+            orderedIndexItemGetElement(it->sl.node, &val_ele_ptr, &val_ele_len);
+            val->estr = (unsigned char *)val_ele_ptr;
+            val->elen = val_ele_len;
+            val->score = orderedIndexItemGetScore(it->sl.node);
         } else {
             serverPanic("Unknown sorted set encoding");
         }
@@ -1663,8 +1713,8 @@ static int zuiFind(zsetopsrc *op, zsetopval *val, double *score) {
             zset *zs = objectGetVal(op->subject);
             void *entry;
             if (hashtableFind(zs->ht, val->ele, &entry)) {
-                zskiplistNode *node = entry;
-                *score = node->score;
+                OrderedIndexItem *node = entry;
+                *score = orderedIndexItemGetScore(node);
                 return 1;
             } else {
                 return 0;
@@ -1718,11 +1768,12 @@ static size_t zsetHashtableGetMaxElementLength(hashtable *ht, size_t *totallen) 
     hashtableInitIterator(&iter, ht, 0);
     void *next;
     while (hashtableNext(&iter, &next)) {
-        zskiplistNode *node = next;
-        sds ele = zslGetNodeElement(node);
-        size_t elelen = sdslen(ele);
-        if (elelen > maxelelen) maxelelen = elelen;
-        if (totallen) (*totallen) += elelen;
+        OrderedIndexItem *node = next;
+        const char *ele_ptr_tmp;
+        size_t ele_len_tmp;
+        orderedIndexItemGetElement(node, &ele_ptr_tmp, &ele_len_tmp);
+        if (ele_len_tmp > maxelelen) maxelelen = ele_len_tmp;
+        if (totallen) (*totallen) += ele_len_tmp;
     }
     hashtableCleanupIterator(&iter);
 
@@ -1745,7 +1796,7 @@ static void zdiffAlgorithm1(zsetopsrc *src, long setnum, zset *dstzset, size_t *
      * The final complexity of this algorithm is O(N*M + K*log(K)). */
     int j;
     zsetopval zval;
-    zskiplistNode *znode;
+    OrderedIndexItem *znode;
     sds tmp;
 
     /* With algorithm 1 it is better to order the sets to subtract
@@ -1773,7 +1824,7 @@ static void zdiffAlgorithm1(zsetopsrc *src, long setnum, zset *dstzset, size_t *
 
         if (!exists) {
             tmp = zuiNewSdsFromValue(&zval);
-            znode = zslInsert(dstzset->zsl, zval.score, tmp);
+            znode = orderedIndexInsert(dstzset->oi, zval.score, tmp, sdslen(tmp));
             hashtableAdd(dstzset->ht, znode);
             if (sdslen(tmp) > *maxelelen) *maxelelen = sdslen(tmp);
             (*totelelen) += sdslen(tmp);
@@ -1794,7 +1845,7 @@ static void zdiffAlgorithm2(zsetopsrc *src, long setnum, zset *dstzset, size_t *
      * This is O(L + (N-K)log(N)) where L is the sum of all the elements in every
      * set, N is the size of the first set, and K is the size of the result set.
      *
-     * Note that from the (L-N) dict searches, (N-K) got to the zsetRemoveFromSkiplist
+     * Note that from the (L-N) dict searches, (N-K) got to the zsetRemoveFromIndex
      * which costs log(N)
      *
      * There is also a O(K) cost at the end for finding the largest element
@@ -1803,7 +1854,7 @@ static void zdiffAlgorithm2(zsetopsrc *src, long setnum, zset *dstzset, size_t *
     int j;
     int cardinality = 0;
     zsetopval zval;
-    zskiplistNode *znode;
+    OrderedIndexItem *znode;
     sds tmp;
 
     hashtablePauseAutoShrink(dstzset->ht);
@@ -1815,13 +1866,13 @@ static void zdiffAlgorithm2(zsetopsrc *src, long setnum, zset *dstzset, size_t *
         while (zuiNext(&src[j], &zval)) {
             if (j == 0) {
                 tmp = zuiNewSdsFromValue(&zval);
-                znode = zslInsert(dstzset->zsl, zval.score, tmp);
+                znode = orderedIndexInsert(dstzset->oi, zval.score, tmp, sdslen(tmp));
                 sdsfree(tmp);
                 hashtableAdd(dstzset->ht, znode);
                 cardinality++;
             } else {
                 tmp = zuiSdsFromValue(&zval);
-                if (zsetRemoveFromSkiplist(dstzset, tmp)) {
+                if (zsetRemoveFromIndex(dstzset, tmp)) {
                     cardinality--;
                 }
             }
@@ -2072,7 +2123,7 @@ static void zunionInterDiffGenericCommand(client *c, robj *dstkey, int numkeysIn
                     }
                 } else if (j == setnum) {
                     tmp = zuiNewSdsFromValue(&zval);
-                    zskiplistNode *znode = zslInsert(dstzset->zsl, score, tmp);
+                    OrderedIndexItem *znode = orderedIndexInsert(dstzset->oi, score, tmp, sdslen(tmp));
                     hashtableAdd(dstzset->ht, znode);
                     totelelen += sdslen(tmp);
                     if (sdslen(tmp) > maxelelen) maxelelen = sdslen(tmp);
@@ -2083,8 +2134,8 @@ static void zunionInterDiffGenericCommand(client *c, robj *dstkey, int numkeysIn
         }
     } else if (op == SET_OP_UNION) {
         /* Step 1: Create the hash table first by iterating one sorted set after
-         * the other. We wait to create the skiplist until scores/ordering are
-         * finalized. */
+         * the other. We wait to create the ordered index until scores/ordering
+         * are finalized. */
         if (setnum) {
             /* Our union is at least as large as the largest set.
              * Resize the dictionary ASAP to avoid useless rehashing. */
@@ -2106,35 +2157,39 @@ static void zunionInterDiffGenericCommand(client *c, robj *dstkey, int numkeysIn
                 void *existing;
                 if (hashtableFindPositionForInsert(dstzset->ht, sdsval, &position, &existing)) {
                     sds tmp_ele = zuiNewSdsFromValue(&zval);
-                    zskiplistNode *new_node = zslCreateNode(zslRandomLevel(), score, tmp_ele);
+                    OrderedIndexItem *new_node = orderedIndexItemCreate(score, tmp_ele, sdslen(tmp_ele));
                     sdsfree(tmp_ele);
                     hashtableInsertAtPosition(dstzset->ht, new_node, &position);
                     /* Remember the longest single element encountered,
                      * to understand if it's possible to convert to listpack
                      * at the end. */
-                    sds ele = zslGetNodeElement(new_node);
-                    totelelen += sdslen(ele);
-                    if (sdslen(ele) > maxelelen) {
-                        maxelelen = sdslen(ele);
+                    const char *ele_ptr_tmp;
+                    size_t ele_len_tmp;
+                    orderedIndexItemGetElement(new_node, &ele_ptr_tmp, &ele_len_tmp);
+                    totelelen += ele_len_tmp;
+                    if (ele_len_tmp > maxelelen) {
+                        maxelelen = ele_len_tmp;
                     }
                 } else {
                     /* Update the score with the score of the new instance
                      * of the element found in the current sorted set. */
-                    zskiplistNode *node = existing;
-                    zunionInterAggregate(&node->score, score, aggregate);
+                    OrderedIndexItem *node = existing;
+                    double cur = orderedIndexItemGetScore(node);
+                    zunionInterAggregate(&cur, score, aggregate);
+                    orderedIndexItemSetScore(node, cur);
                 }
             }
             zuiClearIterator(&src[i]);
         }
 
-        /* Step 2: Create the skiplist using final score ordering */
+        /* Step 2: Insert all detached items into the ordered index */
         hashtableIterator iter;
         hashtableInitIterator(&iter, dstzset->ht, 0);
 
         void *next;
         while (hashtableNext(&iter, &next)) {
-            zskiplistNode *node = next;
-            zslInsertNode(dstzset->zsl, node);
+            OrderedIndexItem *node = next;
+            orderedIndexInsertItem(dstzset->oi, node);
         }
         hashtableCleanupIterator(&iter);
     } else if (op == SET_OP_DIFF) {
@@ -2144,7 +2199,7 @@ static void zunionInterDiffGenericCommand(client *c, robj *dstkey, int numkeysIn
     }
 
     if (dstkey) {
-        if (zslGetLength(dstzset->zsl)) {
+        if (orderedIndexLength(dstzset->oi)) {
             zsetConvertToListpackIfNeeded(dstobj, maxelelen, totelelen);
             setKey(c, c->db, dstkey, &dstobj, 0);
             notifyKeyspaceEvent(NOTIFY_ZSET, (op == SET_OP_UNION) ? "zunionstore" : (op == SET_OP_INTER ? "zinterstore" : "zdiffstore"),
@@ -2163,10 +2218,10 @@ static void zunionInterDiffGenericCommand(client *c, robj *dstkey, int numkeysIn
     } else if (cardinality_only) {
         addReplyLongLong(c, cardinality);
     } else {
-        unsigned long length = zslGetLength(dstzset->zsl);
-        zskiplist *zsl = dstzset->zsl;
-        zskiplistNode *zheader = zslGetHeader(zsl);
-        zskiplistNode *zn = zheader->level[0].forward;
+        unsigned long length = orderedIndexLength(dstzset->oi);
+        OrderedIndex *oi = dstzset->oi;
+        OrderedIndexIterator iter;
+        orderedIndexInitIterator(&iter, oi);
         /* In case of WITHSCORES, respond with a single array in RESP2, and
          * nested arrays in RESP3. We can't use a map response type since the
          * client library needs to know to respect the order. */
@@ -2175,12 +2230,14 @@ static void zunionInterDiffGenericCommand(client *c, robj *dstkey, int numkeysIn
         else
             addReplyArrayLen(c, length);
 
-        while (zn != NULL) {
+        OrderedIndexItem *zn;
+        while ((zn = orderedIndexNext(&iter)) != NULL) {
             if (withscores && c->resp > 2) addReplyArrayLen(c, 2);
-            sds ele = zslGetNodeElement(zn);
-            addReplyBulkCBuffer(c, ele, sdslen(ele));
-            if (withscores) addReplyDouble(c, zn->score);
-            zn = zn->level[0].forward;
+            const char *ele_ptr;
+            size_t ele_len;
+            orderedIndexItemGetElement(zn, &ele_ptr, &ele_len);
+            addReplyBulkCBuffer(c, ele_ptr, ele_len);
+            if (withscores) addReplyDouble(c, orderedIndexItemGetScore(zn));
         }
         server.lazyfree_lazy_server_del ? freeObjAsync(NULL, dstobj, -1) : decrRefCount(dstobj);
     }
@@ -2465,24 +2522,26 @@ void genericZrangebyrankCommand(zrange_result_handler *handler,
 
     } else if (zobj->encoding == OBJ_ENCODING_SKIPLIST) {
         zset *zs = objectGetVal(zobj);
-        zskiplist *zsl = zs->zsl;
-        zskiplistNode *ln;
+        OrderedIndex *oi = zs->oi;
+        OrderedIndexItem *ln;
+        OrderedIndexIterator iter;
+        orderedIndexInitIterator(&iter, oi);
 
-        /* Check if starting point is trivial, before doing log(N) lookup. */
+        /* Seek to starting position */
         if (reverse) {
-            ln = zslGetTail(zsl);
-            if (start > 0) ln = zslGetElementByRank(zsl, llen - start);
+            unsigned long seek_idx = (start > 0) ? (unsigned long)(llen - start) : orderedIndexLength(oi);
+            orderedIndexSeekToIndex(&iter, seek_idx);
         } else {
-            zskiplistNode *zheader = zslGetHeader(zsl);
-            ln = zheader->level[0].forward;
-            if (start > 0) ln = zslGetElementByRank(zsl, start + 1);
+            if (start > 0) orderedIndexSeekToIndex(&iter, (unsigned long)start);
         }
 
         while (rangelen--) {
+            ln = reverse ? orderedIndexPrev(&iter) : orderedIndexNext(&iter);
             serverAssertWithInfo(c, zobj, ln != NULL);
-            sds ele = zslGetNodeElement(ln);
-            handler->emitResultFromCBuffer(handler, ele, sdslen(ele), ln->score);
-            ln = reverse ? ln->backward : ln->level[0].forward;
+            const char *ele_ptr;
+            size_t ele_len;
+            orderedIndexItemGetElement(ln, &ele_ptr, &ele_len);
+            handler->emitResultFromCBuffer(handler, ele_ptr, ele_len, orderedIndexItemGetScore(ln));
         }
     } else {
         serverPanic("Unknown sorted set encoding");
@@ -2563,9 +2622,9 @@ void genericZrangebyscoreCommand(zrange_result_handler *handler,
 
             /* Abort when the node is no longer in range. */
             if (reverse) {
-                if (!zslValueGteMin(score, range)) break;
+                if (!zsetScoreGteMin(score, range)) break;
             } else {
-                if (!zslValueLteMax(score, range)) break;
+                if (!zsetScoreLteMax(score, range)) break;
             }
 
             vstr = lpGetValue(eptr, &vlen, &vlong);
@@ -2585,34 +2644,29 @@ void genericZrangebyscoreCommand(zrange_result_handler *handler,
         }
     } else if (zobj->encoding == OBJ_ENCODING_SKIPLIST) {
         zset *zs = objectGetVal(zobj);
-        zskiplist *zsl = zs->zsl;
-        zskiplistNode *ln;
+        OrderedIndex *oi = zs->oi;
+        OrderedIndexItem *ln;
+        OrderedIndexIterator iter;
+        orderedIndexInitIterator(&iter, oi);
 
-        /* If reversed, get the last node in range as starting point. */
-        if (reverse) {
-            ln = zslNthInRange(zsl, range, -offset - 1, NULL);
-        } else {
-            ln = zslNthInRange(zsl, range, offset, NULL);
-        }
+        /* Seek to position within score range */
+        orderedIndexSeekToScoreRange(&iter, range->min, range->max, range->minex, range->maxex, reverse ? -offset - 1 : offset);
 
-        while (ln && limit--) {
+        while (limit--) {
+            ln = reverse ? orderedIndexPrev(&iter) : orderedIndexNext(&iter);
+            if (ln == NULL) break;
             /* Abort when the node is no longer in range. */
             if (reverse) {
-                if (!zslValueGteMin(ln->score, range)) break;
+                if (!zsetScoreGteMin(orderedIndexItemGetScore(ln), range)) break;
             } else {
-                if (!zslValueLteMax(ln->score, range)) break;
+                if (!zsetScoreLteMax(orderedIndexItemGetScore(ln), range)) break;
             }
 
             rangelen++;
-            sds ele = zslGetNodeElement(ln);
-            handler->emitResultFromCBuffer(handler, ele, sdslen(ele), ln->score);
-
-            /* Move to next node */
-            if (reverse) {
-                ln = ln->backward;
-            } else {
-                ln = ln->level[0].forward;
-            }
+            const char *ele_ptr;
+            size_t ele_len;
+            orderedIndexItemGetElement(ln, &ele_ptr, &ele_len);
+            handler->emitResultFromCBuffer(handler, ele_ptr, ele_len, orderedIndexItemGetScore(ln));
         }
     } else {
         serverPanic("Unknown sorted set encoding");
@@ -2667,14 +2721,14 @@ void zcountCommand(client *c) {
         /* First element is in range */
         sptr = lpNext(zl, eptr);
         score = zzlGetScore(sptr);
-        serverAssertWithInfo(c, zobj, zslValueLteMax(score, &range));
+        serverAssertWithInfo(c, zobj, zsetScoreLteMax(score, &range));
 
         /* Iterate over elements in range */
         while (eptr) {
             score = zzlGetScore(sptr);
 
             /* Abort when the node is no longer in range. */
-            if (!zslValueLteMax(score, &range)) {
+            if (!zsetScoreLteMax(score, &range)) {
                 break;
             } else {
                 count++;
@@ -2683,25 +2737,9 @@ void zcountCommand(client *c) {
         }
     } else if (zobj->encoding == OBJ_ENCODING_SKIPLIST) {
         zset *zs = objectGetVal(zobj);
-        zskiplist *zsl = zs->zsl;
-        zskiplistNode *zn;
-        long rank;
+        OrderedIndex *oi = zs->oi;
 
-        /* Find first element in range */
-        zn = zslNthInRange(zsl, &range, 0, &rank);
-
-        /* Use rank of first element, if any, to determine preliminary count */
-        if (zn != NULL) {
-            count = (zslGetLength(zsl) - (rank - 1));
-
-            /* Find last element in range */
-            zn = zslNthInRange(zsl, &range, -1, &rank);
-
-            /* Use rank of last element, if any, to determine the actual count */
-            if (zn != NULL) {
-                count -= (zslGetLength(zsl) - rank);
-            }
-        }
+        count = orderedIndexCountScoreRange(oi, range.min, range.max, range.minex, range.maxex);
     } else {
         serverPanic("Unknown sorted set encoding");
     }
@@ -2757,27 +2795,9 @@ void zlexcountCommand(client *c) {
         }
     } else if (zobj->encoding == OBJ_ENCODING_SKIPLIST) {
         zset *zs = objectGetVal(zobj);
-        zskiplist *zsl = zs->zsl;
-        zskiplistNode *zn;
-        unsigned long rank;
+        OrderedIndex *oi = zs->oi;
 
-        /* Find first element in range */
-        zn = zslNthInLexRange(zsl, &range, 0);
-
-        /* Use rank of first element, if any, to determine preliminary count */
-        if (zn != NULL) {
-            rank = zslGetRank(zsl, zn);
-            count = (zslGetLength(zsl) - (rank - 1));
-
-            /* Find last element in range */
-            zn = zslNthInLexRange(zsl, &range, -1);
-
-            /* Use rank of last element, if any, to determine the actual count */
-            if (zn != NULL) {
-                rank = zslGetRank(zsl, zn);
-                count -= (zslGetLength(zsl) - rank);
-            }
-        }
+        count = orderedIndexCountLexRange(oi, range.min, range.max, range.minex, range.maxex);
     } else {
         serverPanic("Unknown sorted set encoding");
     }
@@ -2854,34 +2874,29 @@ void genericZrangebylexCommand(zrange_result_handler *handler,
         }
     } else if (zobj->encoding == OBJ_ENCODING_SKIPLIST) {
         zset *zs = objectGetVal(zobj);
-        zskiplist *zsl = zs->zsl;
-        zskiplistNode *ln;
+        OrderedIndex *oi = zs->oi;
+        OrderedIndexItem *ln;
+        OrderedIndexIterator iter;
+        orderedIndexInitIterator(&iter, oi);
 
-        /* If reversed, get the last node in range as starting point. */
-        if (reverse) {
-            ln = zslNthInLexRange(zsl, range, -offset - 1);
-        } else {
-            ln = zslNthInLexRange(zsl, range, offset);
-        }
+        /* Seek to position within lex range */
+        orderedIndexSeekToLexRange(&iter, range->min, range->max, range->minex, range->maxex, reverse ? -offset - 1 : offset);
 
-        while (ln && limit--) {
+        while (limit--) {
+            ln = reverse ? orderedIndexPrev(&iter) : orderedIndexNext(&iter);
+            if (ln == NULL) break;
             /* Abort when the node is no longer in range. */
-            sds ele = zslGetNodeElement(ln);
+            const char *ele_ptr;
+            size_t ele_len;
+            orderedIndexItemGetElement(ln, &ele_ptr, &ele_len);
             if (reverse) {
-                if (!zslLexValueGteMin(ele, range)) break;
+                if (!zsetLexGteMin(ele_ptr, ele_len, range)) break;
             } else {
-                if (!zslLexValueLteMax(ele, range)) break;
+                if (!zsetLexLteMax(ele_ptr, ele_len, range)) break;
             }
 
             rangelen++;
-            handler->emitResultFromCBuffer(handler, ele, sdslen(ele), ln->score);
-
-            /* Move to next node */
-            if (reverse) {
-                ln = ln->backward;
-            } else {
-                ln = ln->level[0].forward;
-            }
+            handler->emitResultFromCBuffer(handler, ele_ptr, ele_len, orderedIndexItemGetScore(ln));
         }
     } else {
         serverPanic("Unknown sorted set encoding");
@@ -3268,17 +3283,19 @@ void genericZpopCommand(client *c,
             score = zzlGetScore(sptr);
         } else if (zobj->encoding == OBJ_ENCODING_SKIPLIST) {
             zset *zs = objectGetVal(zobj);
-            zskiplist *zsl = zs->zsl;
-            zskiplistNode *zln;
+            OrderedIndex *oi = zs->oi;
+            OrderedIndexItem *zln;
 
             /* Get the first or last element in the sorted set. */
-            zskiplistNode *zheader = zslGetHeader(zsl);
-            zln = (where == ZSET_MAX ? zslGetTail(zsl) : zheader->level[0].forward);
+            zln = (where == ZSET_MAX ? orderedIndexGetLast(oi) : orderedIndexGetFirst(oi));
 
             /* There must be an element in the sorted set. */
             serverAssertWithInfo(c, zobj, zln != NULL);
-            ele = sdsdup(zslGetNodeElement(zln));
-            score = zln->score;
+            const char *ele_ptr;
+            size_t ele_len;
+            orderedIndexItemGetElement(zln, &ele_ptr, &ele_len);
+            ele = sdsnewlen(ele_ptr, ele_len);
+            score = orderedIndexItemGetScore(zln);
         } else {
             serverPanic("Unknown sorted set encoding");
         }
@@ -3485,11 +3502,13 @@ void zrandmemberWithCountCommand(client *c, long l, int withscores) {
             while (count--) {
                 void *entry;
                 serverAssert(hashtableFairRandomEntry(zs->ht, &entry));
-                zskiplistNode *node = entry;
+                OrderedIndexItem *node = entry;
                 if (withscores && c->resp > 2) addReplyArrayLen(c, 2);
-                sds ele = zslGetNodeElement(node);
-                addReplyBulkCBuffer(c, ele, sdslen(ele));
-                if (withscores) addReplyDouble(c, node->score);
+                const char *ele_ptr_tmp;
+                size_t ele_len_tmp;
+                orderedIndexItemGetElement(node, &ele_ptr_tmp, &ele_len_tmp);
+                addReplyBulkCBuffer(c, ele_ptr_tmp, ele_len_tmp);
+                if (withscores) addReplyDouble(c, orderedIndexItemGetScore(node));
                 if (c->flag.close_asap) break;
             }
         } else if (zsetobj->encoding == OBJ_ENCODING_LISTPACK) {
@@ -3587,7 +3606,10 @@ void zrandmemberWithCountCommand(client *c, long l, int withscores) {
         while (size > count) {
             void *element;
             hashtableFairRandomEntry(ht, &element);
-            hashtableDelete(ht, zslGetNodeElement((zskiplistNode *)element));
+            const char *del_ele_ptr;
+            size_t del_ele_len;
+            orderedIndexItemGetElement((OrderedIndexItem *)element, &del_ele_ptr, &del_ele_len);
+            hashtableDelete(ht, (sds)del_ele_ptr);
             size--;
         }
         hashtableCleanupIterator(&iter);
@@ -3596,11 +3618,13 @@ void zrandmemberWithCountCommand(client *c, long l, int withscores) {
         hashtableInitIterator(&iter, ht, 0);
         void *next;
         while (hashtableNext(&iter, &next)) {
-            zskiplistNode *node = (zskiplistNode *)next;
-            sds key = zslGetNodeElement(node);
+            OrderedIndexItem *node = (OrderedIndexItem *)next;
+            const char *key_ptr_tmp;
+            size_t key_len_tmp;
+            orderedIndexItemGetElement(node, &key_ptr_tmp, &key_len_tmp);
             if (withscores && c->resp > 2) addReplyArrayLen(c, 2);
-            addReplyBulkCBuffer(c, key, sdslen(key));
-            if (withscores) addReplyDouble(c, node->score);
+            addReplyBulkCBuffer(c, key_ptr_tmp, key_len_tmp);
+            if (withscores) addReplyDouble(c, orderedIndexItemGetScore(node));
         }
 
         hashtableCleanupIterator(&iter);
@@ -3619,7 +3643,7 @@ void zrandmemberWithCountCommand(client *c, long l, int withscores) {
 
         while (added < count) {
             listpackEntry key;
-            double score;
+            double score = 0;
             zsetTypeRandomElement(zsetobj, size, &key, withscores ? &score : NULL);
 
             /* Try to add the object to the hashtable. If it already exists

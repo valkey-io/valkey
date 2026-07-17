@@ -28,7 +28,7 @@
  */
 
 #include "server.h"
-#include "skiplist.h"
+#include "ordered_index.h"
 #include "cluster.h"
 #include "cluster_migrateslots.h"
 #include "latency.h"
@@ -1052,6 +1052,8 @@ void hashtableScanCallback(void *privdata, void *entry) {
     scanData *data = (scanData *)privdata;
     stringRef val = {NULL, 0};
     sds key = NULL;
+    const char *zset_ptr = NULL;
+    size_t zset_ele_len = 0;
 
     robj *o = data->o;
     data->sampled++;
@@ -1064,9 +1066,8 @@ void hashtableScanCallback(void *privdata, void *entry) {
     if (o->type == OBJ_SET) {
         key = (sds)entry;
     } else if (o->type == OBJ_ZSET) {
-        zskiplistNode *node = (zskiplistNode *)entry;
-        key = zslGetNodeElement(node);
-        /* zset data is copied after filtering by key */
+        orderedIndexItemGetElement((const OrderedIndexItem *)entry, &zset_ptr, &zset_ele_len);
+        /* zset data is copied after filtering */
     } else if (o->type == OBJ_HASH) {
         key = entryGetField(entry);
         if (!data->only_keys) {
@@ -1078,7 +1079,9 @@ void hashtableScanCallback(void *privdata, void *entry) {
 
     /* Filter element if it does not match the pattern. */
     if (data->pattern) {
-        if (!stringmatchlen(data->pattern, sdslen(data->pattern), key, sdslen(key), 0)) {
+        const char *match_ptr = (o->type == OBJ_ZSET) ? zset_ptr : key;
+        size_t match_len = (o->type == OBJ_ZSET) ? zset_ele_len : sdslen(key);
+        if (!stringmatchlen(data->pattern, sdslen(data->pattern), match_ptr, match_len, 0)) {
             return;
         }
     }
@@ -1087,11 +1090,13 @@ void hashtableScanCallback(void *privdata, void *entry) {
      * allocations. */
     if (o->type == OBJ_ZSET) {
         /* zset data is copied */
-        zskiplistNode *node = (zskiplistNode *)entry;
-        key = sdsdup(zslGetNodeElement(node));
+        const char *ptr;
+        size_t ele_len;
+        orderedIndexItemGetElement((const OrderedIndexItem *)entry, &ptr, &ele_len);
+        key = sdsnewlen(ptr, ele_len);
         if (!data->only_keys) {
             char buf[MAX_LONG_DOUBLE_CHARS];
-            int len = ld2string(buf, sizeof(buf), node->score, LD_STR_AUTO);
+            int len = ld2string(buf, sizeof(buf), orderedIndexItemGetScore((const OrderedIndexItem *)entry), LD_STR_AUTO);
             sds tmp = sdsnewlen(buf, len);
             val.buf = (const char *)tmp;
             val.len = sdslen(tmp);

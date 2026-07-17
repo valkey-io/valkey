@@ -215,6 +215,29 @@ start_cluster 2 2 [list config_lines $modules] {
     }
 }
 
+set testmodule [file normalize tests/modules/cluster.so]
+set modules [list loadmodule $testmodule]
+start_cluster 3 0 [list config_lines $modules] {
+    set node1 [srv 0 client]
+    set node2 [srv -1 client]
+
+    test "VM_RegisterClusterMessageReceiver - unregister head and re-register does not crash" {
+        assert_equal OK [$node1 test.register_receiver]
+        assert_equal OK [$node1 test.unregister_receiver]
+        assert_equal OK [$node1 test.register_receiver]
+
+        R 0 CONFIG RESETSTAT
+        assert_equal OK [$node2 test.send_msg_type3]
+
+        wait_for_condition 50 100 {
+            [CI 0 cluster_stats_messages_module_received] >= 1
+        } else {
+            fail "node1 didn't receive cluster module message after re-registration"
+        }
+        verify_log_message 0 "*DING (type 3) RECEIVED*TestUAF*" 0
+    }
+}
+
 }
 
 set testmodule [file normalize tests/modules/basics.so]

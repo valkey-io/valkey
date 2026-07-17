@@ -1106,6 +1106,17 @@ static bool addEarlyIterationKey(bgIterator *it, dbEntry *earlyEntry, int cur_db
 }
 
 
+static bool iteratorHasPassedKey(bgIterator *it, int dbid, const_sds key, dbEntry *de) {
+    if (it->completed || it->terminated) return true;
+
+    if (it->keyset_iter->hasPassedItem(it->keyset_iter, key, dbid)) return true;
+
+    if (de && hashtableFind(it->early_iterate_entries, de, NULL)) return true;
+
+    return false;
+}
+
+
 // This expedites a single key and doesn't attempt to avoid expediting through optimization.
 static bool expediteSingleKeyWithoutOptimization(bgIterator *it,
                                                  int dbid,
@@ -1113,13 +1124,10 @@ static bool expediteSingleKeyWithoutOptimization(bgIterator *it,
                                                  hashtable *waitingOnKeys) {
     bool mustBlock = false;
 
-    bool iterComplete = it->completed || it->terminated;
-
     sds key = objectGetVal(oKey);
     dbEntry *de = dbFind(server.db[dbid], key);
     if (de != NULL) {
-        if (!(iterComplete || it->keyset_iter->hasPassedItem(it->keyset_iter, key, dbid)) &&
-            !hashtableFind(it->early_iterate_entries, de, NULL)) {
+        if (!iteratorHasPassedKey(it, dbid, key, de)) {
             if (addEarlyIterationKey(it, de, dbid)) {
                 mustBlock = true;
                 hashtableAdd(waitingOnKeys, oKey);
@@ -1253,8 +1261,6 @@ static bool expediteKeysForWrite(bgIterator *it,
         return expediteKeysForCopy(it, dbid, argc, argv, waitingOnKeys);
     }
 
-    bool iterComplete = it->completed || it->terminated;
-
     if (it->iteration_flags & BGITERATOR_FLAG_CONSISTENT) {
         // CONSISTENT = YES, REPLICATION = YES / NO
         for (int i = 0; i < numKeys; i++) {
@@ -1262,8 +1268,7 @@ static bool expediteKeysForWrite(bgIterator *it,
             sds key = objectGetVal(oKey);
             dbEntry *de = dbFind(server.db[dbid], key);
             if (de == NULL) continue; // New key, no need to expedite
-            if (!(iterComplete || it->keyset_iter->hasPassedItem(it->keyset_iter, key, dbid)) &&
-                !hashtableFind(it->early_iterate_entries, de, NULL) &&
+            if (!iteratorHasPassedKey(it, dbid, key, de) &&
                 ((bgIterationEntryMetadata *)objectGetMetadata(de))->iterator_epoch <= it->consistent_modification_id) {
                 if (addEarlyIterationKey(it, de, dbid)) {
                     mustBlock = true;
@@ -1300,9 +1305,7 @@ static bool expediteKeysForWrite(bgIterator *it,
                     }
                     continue;
                 }
-                if (iterComplete ||
-                    it->keyset_iter->hasPassedItem(it->keyset_iter, key, dbid) ||
-                    hashtableFind(it->early_iterate_entries, de, NULL)) {
+                if (iteratorHasPassedKey(it, dbid, key, de)) {
                     someIterated = true;
                 } else {
                     dictAdd(notIteratedKeys, de, oKey);
@@ -2271,8 +2274,7 @@ void bgIteration_keyDelete(int dbid, const_sds key) {
 
         if (it->iteration_flags & BGITERATOR_FLAG_CONSISTENT &&
             ((bgIterationEntryMetadata *)objectGetMetadata(de))->iterator_epoch <= it->consistent_modification_id) {
-            if (!it->keyset_iter->hasPassedItem(it->keyset_iter, key, dbid) &&
-                !hashtableFind(it->early_iterate_entries, de, NULL)) {
+            if (!iteratorHasPassedKey(it, dbid, key, de)) {
                 addEarlyIterationKey(it, de, dbid); // (may also add to inUseEntries)
             }
         }
@@ -2591,8 +2593,7 @@ void bgIteration_handleCommandReplication(int dbid,
                 } else {
                     // Otherwise, it's something like active expiration or eviction (unrelated)
                     dbEntry *de = dbFind(server.db[dbid], key);
-                    if (it->keyset_iter->hasPassedItem(it->keyset_iter, key, dbid) ||
-                        (de && hashtableFind(it->early_iterate_entries, de, NULL))) {
+                    if (iteratorHasPassedKey(it, dbid, key, de)) {
                         shouldReplicateDelCommand = true;
                     }
                 }

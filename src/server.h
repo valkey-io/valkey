@@ -2204,6 +2204,8 @@ struct valkeyServer {
     char primary_replid[CONFIG_RUN_ID_SIZE + 1]; /* Primary PSYNC runid. */
     long long primary_initial_offset;            /* Primary PSYNC offset. */
     int repl_replica_lazy_flush;                 /* Lazy FLUSHALL before loading DB? */
+    monotime repl_full_sync_start_time;          /* Monotonic time when full sync started. */
+    long long repl_full_sync_duration_ms;        /* Duration of the last full sync in ms. */
     /* Import Mode */
     int import_mode; /* If true, server is in import mode and forbid expiration and eviction. */
     /* Synchronous replication. */

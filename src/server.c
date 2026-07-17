@@ -3714,7 +3714,7 @@ static void propagateNow(int dbid, robj **argv, int argc, int target, int slot) 
     if (propagate_to_slot_migration) clusterFeedSlotExportJobs(dbid, argv, argc, slot);
 }
 
-/* BgIteration requires that replicaton is sent after each command, however the
+/* BgIteration requires that replication is sent after each command, however the
  * alsoPropagate mechanism queues replication until the end of the transaction
  * (when propagatePendingCommands is invoked).  Also, the propagation mechanism
  * strips out multi/exec, adding them back during propagatePendingCommands (if

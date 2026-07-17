@@ -252,8 +252,8 @@ typedef struct {
  * iterator, the iteration client's queue may run dry and this call will block until data is
  * available.
  *
- * NOTE: Reading an item returns previously read items to Valkey.  It is unsafe to reference an item
- * previously read.
+ * NOTE: Reading an item returns previously read items to the main thread.  It is unsafe to
+ * reference an item previously read.
  *
  * (All memory management is the responsibility of the bgIterator - not the reader.) */
 bgIteratorItem *bgIteratorRead(bgIterator *iter);

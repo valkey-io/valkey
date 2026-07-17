@@ -244,8 +244,8 @@ typedef enum {
 } bgIteratorItemTypeExtended;
 
 // Static bgIterator items for items which carry no data
-static const bgIteratorItem STATIC_ITEM_TERMINATED = {.type = BGITERATOR_ITEM_TERMINATED};
-static const bgIteratorItem STATIC_ITEM_ITER_CLOSED = {.type = BGITERATOR_ITEMEXT_ITER_CLOSED};
+static const bgIteratorItem STATIC_ITEM_TERMINATED = {.type = (bgIteratorItemType)BGITERATOR_ITEM_TERMINATED};
+static const bgIteratorItem STATIC_ITEM_ITER_CLOSED = {.type = (bgIteratorItemType)BGITERATOR_ITEMEXT_ITER_CLOSED};
 
 
 /* A dictionary with a pointer (itself) as a key (the address pointed to is NOT referenced).

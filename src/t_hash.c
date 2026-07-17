@@ -840,8 +840,6 @@ void hashTypeInitIterator(robj *subject, hashTypeIterator *hi) {
     }
 }
 
-/* Initialize a hashTypeIterator for iterating over volatile items
- * NOTE:  For a hashTable the caller MUST make sure volatile items exist */
 void hashTypeInitVolatileIterator(robj *subject, hashTypeIterator *hi) {
     hi->subject = subject;
     hi->encoding = subject->encoding;
@@ -952,10 +950,10 @@ int hashTypeNext(hashTypeIterator *hi) {
                 if (!hashtableNext(&hi->iter, &hi->next)) return C_ERR;
             }
         } else {
-            /* TODO: Listpack iteration yields ONLY live fields, if the
-             * field is not reaped this may yield expired entries - fix
-             * should be a simple `do {vsetNext} while(entryIsExpired(hi->next))` */
-            if (!vsetNext(&hi->viter, &hi->next)) return C_ERR;
+            do {
+                /* vsetNext can return ghost entries if not reaped */
+                if (!vsetNext(&hi->viter, &hi->next)) return C_ERR;
+            } while (entryIsExpired(hi->next));
         }
     } else {
         serverPanic("Unknown hash encoding");

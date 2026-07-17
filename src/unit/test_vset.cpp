@@ -226,6 +226,10 @@ TEST_F(VsetTest, TestVsetGetSize) {
     ASSERT_FALSE(vsetIsEmpty(&set));
 
     ASSERT_EQ(vsetSize(&set), total_entries);
+
+    vsetRelease(&set);
+    for (size_t i = 0; i < total_entries; i++) mockFreeEntry(entries[i]);
+    zfree(entries);
 }
 
 TEST_F(VsetTest, TestVsetLargeBatchSameExpiry) {

@@ -181,15 +181,86 @@ proc has_active_slot_migration {node_idx} {
     return 0
 }
 
+# Record which primary owns each slot, so a failed test that dies
+# mid-migration can have slot ownership restored by the recovery barrier.
+proc capture_canonical_slot_layout {} {
+    # Node IDs are how CLUSTER SLOTS reports owners, but tests address nodes
+    # by R index -- record the mapping so layouts can be compared later.
+    set ::canonical_node_ids {}
+    foreach n {0 1 2} {
+        dict set ::canonical_node_ids [R $n CLUSTER MYID] $n
+    }
+    # -1 marks slots with no recorded owner; the restore skips them.
+    for {set s 0} {$s < 16384} {incr s} {set ::canonical_slot_owner($s) -1}
+    # Each CLUSTER SLOTS entry is {start end {ip port id ...} ...} with the
+    # owning primary listed first; expand each range into a per-slot owner map.
+    foreach entry [R 0 CLUSTER SLOTS] {
+        set owner_id [lindex [lindex $entry 2] 2]
+        if {![dict exists $::canonical_node_ids $owner_id]} continue
+        set owner_idx [dict get $::canonical_node_ids $owner_id]
+        for {set s [lindex $entry 0]} {$s <= [lindex $entry 1]} {incr s} {
+            set ::canonical_slot_owner($s) $owner_idx
+        }
+    }
+}
+
+# Migrate any slots displaced from the canonical layout back to their
+# canonical owner. Contiguous displaced slots with the same source and
+# destination move as a single range.
+proc restore_canonical_slot_layout {} {
+    if {![info exists ::canonical_slot_owner]} return
+    # Build the current per-slot owner map, same shape as the canonical one.
+    set current {}
+    foreach entry [R 0 CLUSTER SLOTS] {
+        set owner_id [lindex [lindex $entry 2] 2]
+        if {![dict exists $::canonical_node_ids $owner_id]} continue
+        set owner_idx [dict get $::canonical_node_ids $owner_id]
+        for {set s [lindex $entry 0]} {$s <= [lindex $entry 1]} {incr s} {
+            dict set current $s $owner_idx
+        }
+    }
+    # Sweep all slots, run-length grouping consecutive displaced slots that
+    # share the same current and canonical owner, and migrate each group back
+    # as a single range. A run ends when the slot is no longer mismatched or
+    # its source/destination pair changes; the sweep deliberately goes one
+    # past the last slot (16384) so a run ending at slot 16383 is flushed.
+    # Slots with no canonical owner recorded (-1) or currently unserved
+    # (absent from CLUSTER SLOTS) are never treated as mismatched.
+    set run_start -1
+    for {set s 0} {$s <= 16384} {incr s} {
+        set mismatch 0
+        if {$s < 16384 && [dict exists $current $s]} {
+            set want $::canonical_slot_owner($s)
+            set have [dict get $current $s]
+            if {$want >= 0 && $have != $want} {set mismatch 1}
+        }
+        if {$mismatch && $run_start == -1} {
+            set run_start $s
+            set run_have $have
+            set run_want $want
+        } elseif {$run_start != -1 && (!$mismatch || $have != $run_have || $want != $run_want)} {
+            set want_id [R $run_want CLUSTER MYID]
+            # Best-effort: the barrier must never raise from block level.
+            catch {
+                assert_match "OK" [R $run_have CLUSTER MIGRATESLOTS SLOTSRANGE $run_start [expr {$s - 1}] NODE $want_id]
+                wait_for_migration $run_want $run_start
+            }
+            set run_start [expr {$mismatch ? $s : -1}]
+            if {$mismatch} {set run_have $have; set run_want $want}
+        }
+    }
+}
+
 # Recovery barrier for tests that start slot migrations. When such a test
 # fails an assertion mid-flight, it leaks state: an in-flight migration,
 # DEBUG SLOTMIGRATION PREVENT-* flags, and config tweaks. The next test to
 # call CLUSTER MIGRATESLOTS then hits a non-assertion error such as
 # "ERR I am already migrating slot", which aborts the whole test client and
 # discards the rest of the run. Calling this barrier after a
-# migration-starting test contains a failure to that single test. Restoring
-# slot ownership is intentionally out of scope; tests use ensure_slot_on_node
-# for that. All steps are best-effort so the barrier itself cannot abort the
+# migration-starting test contains a failure to that single test. After
+# migrations drain, slot ownership displaced by the failed test is migrated
+# back to the canonical layout captured at cluster setup. All steps are
+# best-effort so the barrier itself cannot abort the
 # client from block level.
 proc recover_slot_migration_state {} {
     catch {set_debug_prevent_pause 0}
@@ -209,6 +280,7 @@ proc recover_slot_migration_state {} {
                 fail "Node $n still has an active slot migration after recovery"
             }
         }
+        restore_canonical_slot_layout
         wait_for_cluster_propagation
     }
 }
@@ -221,6 +293,7 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {cluste
     set node1_id [R 1 CLUSTER MYID]
     set node2_id [R 2 CLUSTER MYID]
     set fake_jobname "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    capture_canonical_slot_layout
 
     test "General command interface" {
         assert_error "*wrong number of arguments*" {R 0 CLUSTER MIGRATESLOTS}

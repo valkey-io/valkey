@@ -751,7 +751,7 @@ int rdbGetObjectType(robj *o, int rdbver) {
             if (rdbver >= 80) return RDB_TYPE_HASH_2;
             return -1; /* can't be stored in old RDB */
         }
-        if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) return RDB_TYPE_SET_LISTPACK;
+        if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) return RDB_TYPE_HASH_LISTPACK;
         if (objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE) return RDB_TYPE_HASH;
         serverPanic("Unknown hash encoding");
     case OBJ_STREAM: return RDB_TYPE_STREAM_LISTPACKS_3;

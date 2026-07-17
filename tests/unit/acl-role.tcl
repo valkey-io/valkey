@@ -276,6 +276,44 @@ start_server {tags {"acl external:skip"}} {
         assert_match "role *" [lindex $list 0]
     }
 
+    # --- Pubsub client disconnection ---
+
+    test {SETROLE restricting channels kills pubsub clients} {
+        r ACL SETROLE pubrole +subscribe &news:* ~*
+        r ACL SETUSER pubuser on >pubpass +@role:pubrole
+        set rd [valkey_deferring_client]
+        $rd AUTH pubuser pubpass
+        $rd read
+        $rd SUBSCRIBE news:sports
+        assert_match {subscribe news:sports 1} [$rd read]
+
+        # Restrict the role's channels
+        r ACL SETROLE pubrole resetchannels +subscribe &alerts:* ~*
+
+        # Client should be disconnected
+        catch {$rd read} err
+        catch {$rd close}
+        assert_match {*I/O error*} $err
+    }
+
+    test {SETUSER removing role kills pubsub clients using role channels} {
+        r ACL SETROLE subrole +subscribe &events:* ~*
+        r ACL SETUSER subuser on >subpass +@role:subrole
+        set rd [valkey_deferring_client]
+        $rd AUTH subuser subpass
+        $rd read
+        $rd SUBSCRIBE events:live
+        assert_match {subscribe events:live 1} [$rd read]
+
+        # Remove user from the role
+        r ACL SETUSER subuser -@role:subrole
+
+        # Client should be disconnected
+        catch {$rd read} err
+        catch {$rd close}
+        assert_match {*I/O error*} $err
+    }
+
     # --- User reset ---
 
     test {User reset clears role memberships} {

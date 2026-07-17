@@ -201,6 +201,9 @@ static aclSelector *aclCreateSelectorFromOpSet(const char *opset, size_t opsetle
 static sds *ACLMergeSelectorArguments(sds *argv, int argc, int *merged_argc, int *invalid_idx);
 static int ACLStringHasSpaces(const char *s, size_t len);
 static int ACLRoleNameConflicts(const char *name);
+static int ACLUserHasAllChannels(user *u);
+static list *ACLUserGetChannels(user *u);
+static int ACLShouldKillPubsubClient(client *c, list *upcoming);
 
 /* The length of the string representation of a hashed password. */
 #define HASH_PASSWORD_LEN (SHA256_BLOCK_SIZE * 2)
@@ -679,15 +682,43 @@ static sds ACLStringSetRole(user *r, sds rolename, sds *argv, int argc) {
         serverAssert(r != NULL);
     }
 
-    /* Copy selectors from temp role to the actual role.
-     * Since users hold pointers to the role, updating the role's selectors
-     * in-place makes the change immediately visible to all members. */
+    /* Save old selectors before updating. */
+    list *old_selectors = r->selectors;
+    r->selectors = listDup(tempr->selectors);
+
+    /* Kill pubsub clients of member users whose channel access was revoked.
+     * Since the role's selectors are already updated, the member's effective
+     * permissions reflect the new state. We build the new channel list from
+     * the member's effective permissions and check each client against it. */
+    if (pubsubTotalSubscriptions() > 0 && listLength(r->members) > 0) {
+        listIter mli;
+        listNode *mln;
+        listRewind(r->members, &mli);
+        while ((mln = listNext(&mli))) {
+            user *member = listNodeValue(mln);
+            if (ACLUserHasAllChannels(member)) continue;
+
+            list *upcoming = ACLUserGetChannels(member);
+            listIter cli;
+            listNode *cln;
+            listRewind(server.clients, &cli);
+            while ((cln = listNext(&cli))) {
+                client *c = listNodeValue(cln);
+                if (c->user != member) continue;
+                if (ACLShouldKillPubsubClient(c, upcoming)) {
+                    freeClientOrCloseLater(c, 0);
+                }
+            }
+            listRelease(upcoming);
+        }
+    }
+
+    listRelease(old_selectors);
+
     if (r->acl_string) {
         decrRefCount(r->acl_string);
         r->acl_string = NULL;
     }
-    listRelease(r->selectors);
-    r->selectors = listDup(tempr->selectors);
 
     /* Invalidate acl_string cache for all member users */
     {
@@ -2407,56 +2438,49 @@ int ACLCheckAllPerm(client *c, int *idxptr) {
     return ACLCheckAllUserCommandPerm(c->user, c->cmd, c->argv, c->argc, dbid, idxptr);
 }
 
-/* If 'new' can access all channels 'original' could then return NULL;
-   Otherwise, return a list of channels that the new user can access */
-static list *getUpcomingChannelList(user *new, user *original) {
-    listIter li, lpi;
-    listNode *ln, *lpn;
-
-    /* Optimization: we check if any selector has all channel permissions. */
-    listRewind(new->selectors, &li);
+/* Check if user has allchannels permission from own or role selectors. */
+static int ACLUserHasAllChannels(user *u) {
+    listIter li;
+    listNode *ln;
+    listRewind(u->selectors, &li);
     while ((ln = listNext(&li))) {
         aclSelector *s = (aclSelector *)listNodeValue(ln);
-        if (s->flags & SELECTOR_FLAG_ALLCHANNELS) return NULL;
+        if (s->flags & SELECTOR_FLAG_ALLCHANNELS) return 1;
     }
-    /* Also check role selectors */
-    if (new->roles) {
-        listIter rli;
-        listNode *rln;
-        listRewind(new->roles, &rli);
-        while ((rln = listNext(&rli))) {
-            user *r = (user *)listNodeValue(rln);
+    if (u->roles) {
+        listRewind(u->roles, &li);
+        while ((ln = listNext(&li))) {
+            user *r = (user *)listNodeValue(ln);
             listIter sli;
             listNode *sln;
             listRewind(r->selectors, &sli);
             while ((sln = listNext(&sli))) {
                 aclSelector *s = (aclSelector *)listNodeValue(sln);
-                if (s->flags & SELECTOR_FLAG_ALLCHANNELS) return NULL;
+                if (s->flags & SELECTOR_FLAG_ALLCHANNELS) return 1;
             }
         }
     }
+    return 0;
+}
 
-    /* Next, check if the new list of channels
-     * is a strict superset of the original. This is done by
-     * created an "upcoming" list of all channels that are in
-     * the new user and checking each of the existing channels
-     * against it.  */
-    list *upcoming = listCreate();
-    listRewind(new->selectors, &li);
+/* Build a list of all channel patterns accessible by user (own + role selectors).
+ * Caller must listRelease() the returned list. */
+static list *ACLUserGetChannels(user *u) {
+    list *channels = listCreate();
+    listIter li, lpi;
+    listNode *ln, *lpn;
+    listRewind(u->selectors, &li);
     while ((ln = listNext(&li))) {
         aclSelector *s = (aclSelector *)listNodeValue(ln);
         listRewind(s->channels, &lpi);
         while ((lpn = listNext(&lpi))) {
-            listAddNodeTail(upcoming, listNodeValue(lpn));
+            listAddNodeTail(channels, listNodeValue(lpn));
         }
     }
-    /* Also collect channels from role selectors */
-    if (new->roles) {
-        listIter rli;
-        listNode *rln;
-        listRewind(new->roles, &rli);
-        while ((rln = listNext(&rli))) {
-            user *r = (user *)listNodeValue(rln);
+    if (u->roles) {
+        listRewind(u->roles, &li);
+        while ((ln = listNext(&li))) {
+            user *r = (user *)listNodeValue(ln);
             listIter sli;
             listNode *sln;
             listRewind(r->selectors, &sli);
@@ -2464,11 +2488,25 @@ static list *getUpcomingChannelList(user *new, user *original) {
                 aclSelector *s = (aclSelector *)listNodeValue(sln);
                 listRewind(s->channels, &lpi);
                 while ((lpn = listNext(&lpi))) {
-                    listAddNodeTail(upcoming, listNodeValue(lpn));
+                    listAddNodeTail(channels, listNodeValue(lpn));
                 }
             }
         }
     }
+    return channels;
+}
+
+/* If 'new' can access all channels 'original' could then return NULL;
+   Otherwise, return a list of channels that the new user can access */
+static list *getUpcomingChannelList(user *new, user *original) {
+    listIter li, lpi;
+    listNode *ln, *lpn;
+
+    /* Optimization: if new user has allchannels, no kill needed. */
+    if (ACLUserHasAllChannels(new)) return NULL;
+
+    /* Build the list of channels the new user can access. */
+    list *upcoming = ACLUserGetChannels(new);
 
     int match = 1;
     listRewind(original->selectors, &li);
@@ -2486,6 +2524,32 @@ static list *getUpcomingChannelList(user *new, user *original) {
             if (!listSearchKey(upcoming, listNodeValue(lpn))) {
                 match = 0;
                 break;
+            }
+        }
+    }
+    /* Also check channels from original's role selectors */
+    if (match && original->roles) {
+        listIter rli;
+        listNode *rln;
+        listRewind(original->roles, &rli);
+        while ((rln = listNext(&rli)) && match) {
+            user *r = (user *)listNodeValue(rln);
+            listIter sli;
+            listNode *sln;
+            listRewind(r->selectors, &sli);
+            while ((sln = listNext(&sli)) && match) {
+                aclSelector *s = (aclSelector *)listNodeValue(sln);
+                if (s->flags & SELECTOR_FLAG_ALLCHANNELS) {
+                    match = 0;
+                    break;
+                }
+                listRewind(s->channels, &lpi);
+                while ((lpn = listNext(&lpi)) && match) {
+                    if (!listSearchKey(upcoming, listNodeValue(lpn))) {
+                        match = 0;
+                        break;
+                    }
+                }
             }
         }
     }

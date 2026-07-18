@@ -52,55 +52,72 @@ jobs:
               labels: AUTO_LABEL,
               per_page: 100,
             });
+            const failedCandidates = [];
 
             for (const candidate of candidates) {
-              const labeledAt = await getLatestAutoLabelTime(candidate.number);
-              if (!labeledAt || labeledAt > cutoff) {
-                core.info(`#${candidate.number} is not eligible for auto-approval yet.`);
-                continue;
-              }
-
-              // Re-read the labels in case they changed while this workflow was running.
-              const { data: issue } = await github.rest.issues.get({
-                owner,
-                repo,
-                issue_number: candidate.number,
-              });
-              const labels = new Set(issue.labels.map(label => label.name ?? label));
-              if (!labels.has(AUTO_LABEL)) {
-                core.info(`#${candidate.number} no longer has ${AUTO_LABEL}; skipping it.`);
-                continue;
-              }
-
-              const currentLabeledAt = await getLatestAutoLabelTime(candidate.number);
-              if (!currentLabeledAt || currentLabeledAt > cutoff) {
-                core.info(`#${candidate.number} is not eligible after re-checking ${AUTO_LABEL}.`);
-                continue;
-              }
-
-              await github.rest.issues.addLabels({
-                owner,
-                repo,
-                issue_number: candidate.number,
-                labels: ['major-decision-approved'],
-              });
-
-              const removeLabel = async label => {
-                if (!labels.has(label)) return;
-                try {
-                  await github.rest.issues.removeLabel({
-                    owner,
-                    repo,
-                    issue_number: candidate.number,
-                    name: label,
-                  });
-                } catch (error) {
-                  if (error.status !== 404) throw error;
+              try {
+                const labeledAt = await getLatestAutoLabelTime(candidate.number);
+                if (!labeledAt || labeledAt > cutoff) {
+                  core.info(`#${candidate.number} is not eligible for auto-approval yet.`);
+                  continue;
                 }
-              };
 
-              await removeLabel('major-decision-pending');
-              await removeLabel(AUTO_LABEL);
+                // Re-read the state and labels in case they changed while this workflow was running.
+                const { data: issue } = await github.rest.issues.get({
+                  owner,
+                  repo,
+                  issue_number: candidate.number,
+                });
+                if (issue.state !== 'open') {
+                  core.info(`#${candidate.number} is no longer open; skipping it.`);
+                  continue;
+                }
 
-              core.info(`Approved major decision for #${candidate.number}.`);
+                const labels = new Set(issue.labels.map(label => label.name ?? label));
+                if (!labels.has(AUTO_LABEL)) {
+                  core.info(`#${candidate.number} no longer has ${AUTO_LABEL}; skipping it.`);
+                  continue;
+                }
+
+                const currentLabeledAt = await getLatestAutoLabelTime(candidate.number);
+                if (!currentLabeledAt || currentLabeledAt > cutoff) {
+                  core.info(`#${candidate.number} is not eligible after re-checking ${AUTO_LABEL}.`);
+                  continue;
+                }
+
+                await github.rest.issues.addLabels({
+                  owner,
+                  repo,
+                  issue_number: candidate.number,
+                  labels: ['major-decision-approved'],
+                });
+
+                const removeLabel = async label => {
+                  if (!labels.has(label)) return;
+                  try {
+                    await github.rest.issues.removeLabel({
+                      owner,
+                      repo,
+                      issue_number: candidate.number,
+                      name: label,
+                    });
+                  } catch (error) {
+                    if (error.status !== 404) throw error;
+                  }
+                };
+
+                await removeLabel('major-decision-pending');
+                await removeLabel(AUTO_LABEL);
+
+                core.info(`Approved major decision for #${candidate.number}.`);
+              } catch (error) {
+                failedCandidates.push(candidate.number);
+                const message = error instanceof Error ? error.message : String(error);
+                core.error(`Failed to process #${candidate.number}: ${message}`);
+              }
+            }
+
+            if (failedCandidates.length > 0) {
+              const failedList = failedCandidates.map(number => `#${number}`).join(', ');
+              core.setFailed(`Failed to process candidates: ${failedList}`);
             }

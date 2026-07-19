@@ -1,6 +1,11 @@
 
 #include "valkeymodule.h"
 
+typedef struct {
+    ValkeyModuleTimerID id;
+    ValkeyModuleString *keyname;
+} selfstopTimerData;
+
 static void timer_callback(ValkeyModuleCtx *ctx, void *data)
 {
     ValkeyModuleString *keyname = data;
@@ -10,6 +15,25 @@ static void timer_callback(ValkeyModuleCtx *ctx, void *data)
     if (reply != NULL)
         ValkeyModule_FreeCallReply(reply);
     ValkeyModule_FreeString(ctx, keyname);
+}
+
+/* Stops the currently firing timer from inside its own callback.
+ * This used to double-free the ValkeyModuleTimer in moduleTimerHandler(). */
+static void selfstop_timer_callback(ValkeyModuleCtx *ctx, void *data)
+{
+    selfstopTimerData *d = data;
+    ValkeyModuleCallReply *reply;
+    void *timer_data = NULL;
+
+    if (ValkeyModule_StopTimer(ctx, d->id, &timer_data) == VALKEYMODULE_OK) {
+        /* timer_data should be our private data; ownership stays with us. */
+    }
+
+    reply = ValkeyModule_Call(ctx, "INCR", "s", d->keyname);
+    if (reply != NULL)
+        ValkeyModule_FreeCallReply(reply);
+    ValkeyModule_FreeString(ctx, d->keyname);
+    ValkeyModule_Free(d);
 }
 
 int test_createtimer(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc)
@@ -84,6 +108,30 @@ int test_stoptimer(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc)
     return VALKEYMODULE_OK;
 }
 
+int test_selfstoptimer(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc)
+{
+    if (argc != 3) {
+        ValkeyModule_WrongArity(ctx);
+        return VALKEYMODULE_OK;
+    }
+
+    long long period;
+    if (ValkeyModule_StringToLongLong(argv[1], &period) == VALKEYMODULE_ERR) {
+        ValkeyModule_ReplyWithError(ctx, "Invalid time specified.");
+        return VALKEYMODULE_OK;
+    }
+
+    ValkeyModuleString *keyname = argv[2];
+    ValkeyModule_RetainString(ctx, keyname);
+
+    selfstopTimerData *d = ValkeyModule_Alloc(sizeof(*d));
+    d->keyname = keyname;
+    d->id = ValkeyModule_CreateTimer(ctx, period, selfstop_timer_callback, d);
+    ValkeyModule_ReplyWithLongLong(ctx, d->id);
+
+    return VALKEYMODULE_OK;
+}
+
 
 int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     VALKEYMODULE_NOT_USED(argv);
@@ -96,6 +144,8 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
     if (ValkeyModule_CreateCommand(ctx,"test.gettimer", test_gettimer,"",0,0,0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
     if (ValkeyModule_CreateCommand(ctx,"test.stoptimer", test_stoptimer,"",0,0,0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx,"test.selfstoptimer", test_selfstoptimer,"",0,0,0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
     return VALKEYMODULE_OK;

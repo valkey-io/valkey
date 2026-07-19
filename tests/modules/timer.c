@@ -25,9 +25,8 @@ static void selfstop_timer_callback(ValkeyModuleCtx *ctx, void *data)
     ValkeyModuleCallReply *reply;
     void *timer_data = NULL;
 
-    if (ValkeyModule_StopTimer(ctx, d->id, &timer_data) == VALKEYMODULE_OK) {
-        /* timer_data should be our private data; ownership stays with us. */
-    }
+    ValkeyModule_Assert(ValkeyModule_StopTimer(ctx, d->id, &timer_data) == VALKEYMODULE_OK);
+    ValkeyModule_Assert(timer_data == d);
 
     reply = ValkeyModule_Call(ctx, "INCR", "s", d->keyname);
     if (reply != NULL)

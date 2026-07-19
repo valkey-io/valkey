@@ -7257,7 +7257,7 @@ moduleType *moduleTypeLookupModuleByID(uint64_t id) {
     listNode *module_node;
 
     listRewind(modules, &modules_iter);
-    while ((module_node = listNext(&modules_iter)) != NULL && mt == NULL) {
+    while (mt == NULL && (module_node = listNext(&modules_iter)) != NULL) {
         struct ValkeyModule *module = listNodeValue(module_node);
         listIter li;
         listNode *ln;
@@ -13679,7 +13679,7 @@ void moduleUnloadAllModules(void) {
     listIter li;
     listNode *ln;
 
-    listRewind(modules, &li);
+    listRewindTail(modules, &li);
     while ((ln = listNext(&li)) != NULL) {
         struct ValkeyModule *module = listNodeValue(ln);
 

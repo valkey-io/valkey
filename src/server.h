@@ -1782,17 +1782,12 @@ struct valkeyServer {
     int thp_enabled;                     /* If true, THP is enabled. */
     size_t page_size;                    /* The page size of OS. */
     /* Modules */
-    dict *moduleapi;            /* Exported core APIs dictionary for modules. */
-    dict *sharedapi;            /* Like moduleapi but containing the APIs that
-                                   modules share with each other. */
-    dict *module_configs_queue; /* Dict that stores module configurations from .conf file until after modules are loaded
-                                   during startup or arguments to loadex. */
-    list *loadmodule_queue;     /* List of modules to load at startup. */
-    /* Modules in load order, used by CONFIG REWRITE to emit loadmodule
-     * lines in deterministic order. Holds non-owning ValkeyModule* values;
-     * lifetime is managed explicitly by moduleFreeModuleStructure() in
-     * moduleUnloadInternal(). */
-    list *module_load_order;
+    dict *moduleapi;                   /* Exported core APIs dictionary for modules. */
+    dict *sharedapi;                   /* Like moduleapi but containing the APIs that
+                                          modules share with each other. */
+    dict *module_configs_queue;        /* Dict that stores module configurations from .conf file until after modules are loaded
+                                          during startup or arguments to loadex. */
+    list *loadmodule_queue;            /* List of modules to load at startup. */
     int module_pipe[2];                /* Pipe used to awake the event loop by module threads. */
     pid_t child_pid;                   /* PID of current child */
     int child_type;                    /* Type of current child */
@@ -2843,10 +2838,9 @@ extern dictType externalStringType;
 extern dictType sdsHashDictType;
 extern hashtableType clientHashtableType;
 extern hashtableType kvstoreChannelHashtableType;
-extern dictType modulesDictType;
 extern hashtableType sdsReplyHashtableType;
 extern dictType keylistDictType;
-extern dict *modules;
+extern list *modules;
 
 /*-----------------------------------------------------------------------------
  * Functions prototypes

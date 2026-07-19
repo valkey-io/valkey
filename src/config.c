@@ -1662,8 +1662,7 @@ static void rewriteConfigSocketBindOption(standardConfig *config, const char *na
 
 /* Rewrite the loadmodule option. */
 void rewriteConfigLoadmoduleOption(struct rewriteConfigState *state) {
-    serverAssert(listLength(server.module_load_order) == dictSize(modules));
-    if (dictSize(modules) == 0) {
+    if (listLength(modules) == 0) {
         rewriteConfigMarkAsProcessed(state, "loadmodule");
         return;
     }
@@ -1672,7 +1671,7 @@ void rewriteConfigLoadmoduleOption(struct rewriteConfigState *state) {
     listIter li;
     listNode *ln;
 
-    listRewind(server.module_load_order, &li);
+    listRewind(modules, &li);
     while ((ln = listNext(&li)) != NULL) {
         struct ValkeyModule *module = listNodeValue(ln);
         if (module->is_static_module) continue;

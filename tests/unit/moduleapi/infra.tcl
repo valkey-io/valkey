@@ -63,7 +63,7 @@ test {modules config rewrite preserves load order} {
         assert_equal 1 [llength $data_lines]
         assert {[lindex $info_lines 0] < [lindex $data_lines 0]}
 
-        # Reload infotest — it should move to the tail of module_load_order.
+        # Reload infotest — it should move to the tail of the modules list.
         assert_equal {OK} [r module unload infotest]
         r module load $m1
         r config rewrite
@@ -74,8 +74,7 @@ test {modules config rewrite preserves load order} {
         assert {$idx_data < $idx_info}
 
         # Secondary smoke check (not an order assertion): the new server starts cleanly
-        # with the rewritten conf. Do NOT use MODULE LIST for order assertions —
-        # addReplyLoadedModules iterates the modules dict which is hash-seed-random.
+        # with the rewritten conf.
         restart_server 0 true false
         set names [lmap x [r module list] {dict get $x name}]
         assert_not_equal [lsearch $names infotest] -1

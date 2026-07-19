@@ -2,8 +2,9 @@
  * RDB Downgrade Compatibility Implementation
  *
  * This module provides compatibility functions to enable Redis 6.0
- * to load RDB files from newer versions (Redis 7.x RDB v10 and Valkey 8.x RDB v11)
- * that use listpack encoding instead of ziplist encoding.
+ * to load compatible RDB files from newer versions (Redis 7.x RDB v10/v11 and
+ * Valkey 8.x/9.x RDB v11/v80) that use supported object types and listpack
+ * encoding instead of ziplist encoding.
  *
  */
 
@@ -115,6 +116,33 @@ int requiresListpackConversion(int rdbtype, int rdbver) {
         default:
             return 0;
     }
+}
+
+/* Return an explanation for newer data that cannot be represented by Redis
+ * 6.0 without losing semantics. */
+const char *rdbDowngradeUnsupportedTypeReason(int type) {
+    switch (type) {
+        case RDB_TYPE_HASH_2:
+            return "hash-field expiration data";
+        case RDB_OPCODE_SLOT_IMPORT:
+            return "active atomic slot migration state";
+        case RDB_OPCODE_FUNCTION2:
+        case RDB_OPCODE_FUNCTION_PRE_GA:
+            return "function library data";
+        default:
+            return NULL;
+    }
+}
+
+/* RDB_OPCODE_SLOT_INFO contains optional allocation hints. Redis 6.0 does
+ * not use them, but consuming the three lengths keeps the stream aligned. */
+int rdbLoadSlotInfoCompat(rio *rdb) {
+    if (rdbLoadLen(rdb, NULL) == RDB_LENERR ||
+        rdbLoadLen(rdb, NULL) == RDB_LENERR ||
+        rdbLoadLen(rdb, NULL) == RDB_LENERR) {
+        return C_ERR;
+    }
+    return C_OK;
 }
 
 /* Enhanced listpack detection specifically for RDB v11 compatibility */
@@ -322,12 +350,12 @@ robj *rdbLoadObjectCompat(int rdbtype, rio *rdb, sds key, int *error, int rdbver
         return rdbLoadObject(rdbtype, rdb, key);
     }
     
-    /* Handle RDB v11 stream type 21 (RDB_TYPE_STREAM_LISTPACKS_3) with active_time support */
-    if (rdbtype == RDB_TYPE_STREAM_LISTPACKS_3) {
-        serverLog(LL_VERBOSE, "RDB compatibility: Processing RDB_TYPE_STREAM_LISTPACKS_3 (type 21) for key=%s", key);
-        
-        /* Load stream as RDB_TYPE_STREAM_LISTPACKS but handle extra active_time fields */
-        return rdbLoadStreamWithActiveTime(rdb, key, error, rdbver);
+    /* Newer stream encodings add metadata that Redis 6.0 cannot store but can
+     * safely consume and discard. */
+    if (rdbtype == RDB_TYPE_STREAM_LISTPACKS_2 ||
+        rdbtype == RDB_TYPE_STREAM_LISTPACKS_3) {
+        serverLog(LL_VERBOSE, "RDB compatibility: Processing stream type %d for key=%s", rdbtype, key);
+        return rdbLoadStreamCompat(rdb, key, error, rdbtype);
     }
     
     /* Initialize variables */
@@ -404,10 +432,11 @@ robj *rdbLoadObjectCompat(int rdbtype, rio *rdb, sds key, int *error, int rdbver
                 } else { /* QUICKLIST_NODE_CONTAINER_PACKED */
                     zl = ziplistNew();
                     if (!quicklistConvertAndValidateIntegrity(node_encoded, &zl)) {
-                        serverLog(LL_WARNING, "RDB compatibility: listpack to ziplist conversion failed for quicklist node key=%s, skipping node", key);
+                        serverLog(LL_WARNING, "RDB compatibility: listpack to ziplist conversion failed for quicklist node key=%s", key);
                         zfree(node_encoded);
                         zfree(zl);
-                        continue; /* Skip this node instead of failing completely */
+                        decrRefCount(o);
+                        goto error_cleanup;
                     }
                     zfree(node_encoded);
                     node_encoded = NULL;
@@ -654,12 +683,14 @@ error_cleanup:
     return NULL;
 }
 
-/* Load stream with active_time support for RDB v11 compatibility */
-robj *rdbLoadStreamWithActiveTime(rio *rdb, sds key, int *error, int rdbver) {
+/* Load RDB stream types 19 and 21. Redis 6.0 keeps the stream entries, group
+ * IDs and pending-entry ownership, while newer informational metadata is
+ * consumed and discarded because the older stream structs cannot store it. */
+robj *rdbLoadStreamCompat(rio *rdb, sds key, int *error, int rdbtype) {
     robj *o = NULL;
     stream *s = NULL;
     
-    serverLog(LL_VERBOSE, "RDB compatibility: Loading stream with active_time support for key=%s (RDB v%d)", key, rdbver);
+    serverLog(LL_VERBOSE, "RDB compatibility: Loading stream type %d for key=%s", rdbtype, key);
     
     if (error) *error = RDB_LOAD_ERR_OTHER;
     
@@ -734,6 +765,20 @@ robj *rdbLoadStreamWithActiveTime(rio *rdb, sds key, int *error, int rdbver) {
     s->length = rdbLoadLen(rdb, NULL);
     s->last_id.ms = rdbLoadLen(rdb, NULL);
     s->last_id.seq = rdbLoadLen(rdb, NULL);
+
+    /* Stream type 19 added first ID, maximal deleted ID, and entries-added.
+     * Redis 6.0 has no matching fields, so consume the values to preserve
+     * alignment and retain the representable stream state. */
+    if (rdbtype == RDB_TYPE_STREAM_LISTPACKS_2 ||
+        rdbtype == RDB_TYPE_STREAM_LISTPACKS_3) {
+        for (int i = 0; i < 5; i++) {
+            if (rdbLoadLen(rdb, NULL) == RDB_LENERR) {
+                serverLog(LL_WARNING, "RDB compatibility: Failed to load extended stream metadata for key=%s", key);
+                decrRefCount(o);
+                return NULL;
+            }
+        }
+    }
     
     if (rioGetReadError(rdb)) {
         serverLog(LL_WARNING, "RDB compatibility: Failed to load stream metadata for key=%s", key);
@@ -766,6 +811,17 @@ robj *rdbLoadStreamWithActiveTime(rio *rdb, sds key, int *error, int rdbver) {
             sdsfree(cgname);
             decrRefCount(o);
             return NULL;
+        }
+
+        /* Stream type 19 added the consumer group's entries-read counter. */
+        if (rdbtype == RDB_TYPE_STREAM_LISTPACKS_2 ||
+            rdbtype == RDB_TYPE_STREAM_LISTPACKS_3) {
+            if (rdbLoadLen(rdb, NULL) == RDB_LENERR) {
+                serverLog(LL_WARNING, "RDB compatibility: Failed to load consumer group offset for stream key=%s", key);
+                sdsfree(cgname);
+                decrRefCount(o);
+                return NULL;
+            }
         }
         
         /* Create consumer group */
@@ -839,9 +895,9 @@ robj *rdbLoadStreamWithActiveTime(rio *rdb, sds key, int *error, int rdbver) {
                 return NULL;
             }
             
-            /* CRITICAL: Handle RDB v11 active_time field */
-            if (rdbver >= RDB_VERSION_VALKEY_80) {
-                /* RDB v11 has active_time field - read and discard it, set active_time = seen_time */
+            /* Stream type 21 added active_time. Redis 6.0 only stores
+             * seen_time, so consume and discard the additional timestamp. */
+            if (rdbtype == RDB_TYPE_STREAM_LISTPACKS_3) {
                 long long active_time = rdbLoadMillisecondTime(rdb, RDB_VERSION);
                 if (rioGetReadError(rdb)) {
                     serverLog(LL_WARNING, "RDB compatibility: Failed to load consumer active_time for stream key=%s", key);
@@ -849,8 +905,6 @@ robj *rdbLoadStreamWithActiveTime(rio *rdb, sds key, int *error, int rdbver) {
                     return NULL;
                 }
                 
-                /* For Redis 6.0 compatibility, we don't have active_time field, so we ignore it */
-                /* The consumer struct in Redis 6.0 only has seen_time */
                 serverLog(LL_DEBUG, "RDB compatibility: Read and discarded active_time=%lld for consumer in stream key=%s", active_time, key);
             }
             
@@ -887,7 +941,7 @@ robj *rdbLoadStreamWithActiveTime(rio *rdb, sds key, int *error, int rdbver) {
         }
     }
     
-    serverLog(LL_NOTICE, "RDB compatibility: Successfully loaded stream with active_time compatibility for key=%s", key);
+    serverLog(LL_NOTICE, "RDB compatibility: Successfully loaded stream type %d for key=%s", rdbtype, key);
     
     if (error) *error = 0;
     return o;

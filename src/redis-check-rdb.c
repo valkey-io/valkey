@@ -32,6 +32,7 @@
 #include "rdb.h"
 #include "rdb_downgrade_compat.h"
 
+#include <stdbool.h>
 #include <stdarg.h>
 #include <sys/time.h>
 #include <unistd.h>
@@ -228,6 +229,12 @@ int redis_check_rdb(char *rdbfilename, FILE *fp) {
         rdbstate.doing = RDB_CHECK_DOING_READ_TYPE;
         if ((type = rdbLoadType(&rdb)) == -1) goto eoferr;
 
+        const char *unsupported = rdbDowngradeUnsupportedTypeReason(type);
+        if (unsupported) {
+            rdbCheckError("Cannot downgrade %s to Redis 6.0", unsupported);
+            goto err;
+        }
+
         /* Handle special types. */
         if (type == RDB_OPCODE_EXPIRETIME) {
             rdbstate.doing = RDB_CHECK_DOING_READ_EXPIRE;
@@ -273,6 +280,9 @@ int redis_check_rdb(char *rdbfilename, FILE *fp) {
                 goto eoferr;
             if ((expires_size = rdbLoadLen(&rdb,NULL)) == RDB_LENERR)
                 goto eoferr;
+            continue; /* Read type again. */
+        } else if (type == RDB_OPCODE_SLOT_INFO) {
+            if (rdbLoadSlotInfoCompat(&rdb) == C_ERR) goto eoferr;
             continue; /* Read type again. */
         } else if (type == RDB_OPCODE_AUX) {
             /* AUX: generic string-string fields. Use to add state to RDB

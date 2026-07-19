@@ -2,8 +2,9 @@
  * RDB Downgrade Compatibility Header
  *
  * This header provides compatibility functions to enable Redis 6.x
- * to load RDB files from newer versions (Redis 7.x RDB v10 and Valkey 8.x RDB
- * v11) that use listpack encoding instead of ziplist encoding.
+ * to load compatible RDB files from newer versions (Redis 7.x RDB v10/v11 and
+ * Valkey 8.x/9.x RDB v11/v80) that use supported object types and listpack
+ * encoding instead of ziplist encoding.
  */
 
 #ifndef __RDB_DOWNGRADE_COMPAT_H
@@ -37,11 +38,13 @@ int quicklistConvertAndValidateIntegrity(unsigned char *lp, unsigned char **zl);
 robj *rdbLoadObjectCompat(int rdbtype, rio *rdb, sds key, int *error,
                           int rdbver);
 
-/* Load stream with active_time support (RDB v11) */
-robj *rdbLoadStreamWithActiveTime(rio *rdb, sds key, int *error, int rdbver);
+/* Load newer stream encodings while discarding metadata Redis 6 cannot store. */
+robj *rdbLoadStreamCompat(rio *rdb, sds key, int *error, int rdbtype);
 
 /* Version compatibility checks */
 int requiresListpackConversion(int rdbtype, int rdbver);
+const char *rdbDowngradeUnsupportedTypeReason(int type);
+int rdbLoadSlotInfoCompat(rio *rdb);
 
 /* Production monitoring and statistics */
 struct rdbDowngradeStats {

@@ -41,11 +41,9 @@
  *
  * RDB 11 is the last open-source Redis RDB version, used by Valkey 7.x and 8.x.
  *
- * RDB 12+ are non-open-source Redis formats.
+ * RDB 12-79 are reserved for non-open-source Redis formats.
  *
- * Next time we bump the Valkey RDB version, use much higher version to avoid
- * collisions with non-OSS Redis RDB versions. For example, we could use RDB
- * version 90 for Valkey 9.0.
+ * Valkey 9.x uses RDB version 80 to avoid collisions with those formats.
  *
  * In an RDB file/stream, we also check the magic string REDIS or VALKEY but in
  * the DUMP/RESTORE format, there is only the RDB version number and no magic
@@ -114,12 +112,19 @@
 #define RDB_TYPE_STREAM_LISTPACKS_2 19
 #define RDB_TYPE_SET_LISTPACK  20
 #define RDB_TYPE_STREAM_LISTPACKS_3 21
+#define RDB_TYPE_HASH_2 22 /* Hash with field-level expiration, RDB 80 (9.0). */
 /* NOTE: WHEN ADDING NEW RDB TYPE, UPDATE rdbIsObjectType() BELOW */
 
 /* Test if a type is an object type. */
+/* RDB_TYPE_HASH_2 is intentionally excluded because Redis 6.0 cannot
+ * represent hash-field expiration semantics. */
 #define rdbIsObjectType(t) ((t >= 0 && t <= 7) || (t >= 9 && t <= 21))
 
 /* Special RDB opcodes (saved/loaded with rdbSaveType/rdbLoadType). */
+#define RDB_OPCODE_SLOT_IMPORT 243     /* Slot import state (Valkey 9.0). */
+#define RDB_OPCODE_SLOT_INFO 244       /* Slot size hints, safe to ignore. */
+#define RDB_OPCODE_FUNCTION2 245       /* Function library data. */
+#define RDB_OPCODE_FUNCTION_PRE_GA 246 /* Pre-GA function library data. */
 #define RDB_OPCODE_MODULE_AUX 247   /* Module auxiliary data. */
 #define RDB_OPCODE_IDLE       248   /* LRU idle time. */
 #define RDB_OPCODE_FREQ       249   /* LFU frequency. */

@@ -1249,4 +1249,162 @@ start_server [list overrides [list "dir" $server_path "dbfilename" "dump.rdb"]] 
     }
 }
 
+# Test loading Valkey 9.1.0 no-patch RDB
+set server_path [tmpdir "server.valkey-9.1.0-no-patch"]
+exec cp tests/assets/valkey-9.1.0-no-patch.rdb $server_path/dump.rdb
+start_server [list overrides [list "dir" $server_path "dbfilename" "dump.rdb"]] {
+    test "Load Valkey 9.1.0 no-patch RDB and verify keys" {
+        r select 0
+
+        # Verify string keys
+        assert_equal [r get string] "Hello World"
+        assert_equal [r get number] "10"
+        assert_equal [r get a] "1"
+        set compressible_value [r get compressible]
+        assert_match "a*" $compressible_value
+        assert_equal [string length $compressible_value] 130
+
+        # Verify sorted sets
+        assert_equal [r type zset] "zset"
+        assert_equal [r zcard zset] 12
+        assert_equal [r zscore zset a] "1"
+        assert_equal [r zscore zset aa] "10"
+        assert_equal [r zscore zset aaa] "100"
+        assert_equal [r zscore zset aaaa] "1000"
+        assert_equal [r zscore zset b] "2"
+        assert_equal [r zscore zset bb] "20"
+        assert_equal [r zscore zset bbb] "200"
+        assert_equal [r zscore zset bbbb] "5000000000"
+        assert_equal [r zscore zset c] "3"
+        assert_equal [r zscore zset cc] "30"
+        assert_equal [r zscore zset ccc] "300"
+        assert_equal [r zscore zset cccc] "123456789"
+
+        assert_equal [r type zset_zipped] "zset"
+        assert_equal [r zcard zset_zipped] 3
+        assert_equal [r zscore zset_zipped a] "1"
+        assert_equal [r zscore zset_zipped b] "2"
+        assert_equal [r zscore zset_zipped c] "3"
+
+        # Verify sets
+        assert_equal [r type set_zipped_1] "set"
+        assert_equal [r scard set_zipped_1] 4
+        assert [r sismember set_zipped_1 "1"]
+        assert [r sismember set_zipped_1 "2"]
+        assert [r sismember set_zipped_1 "3"]
+        assert [r sismember set_zipped_1 "4"]
+
+        assert_equal [r type set_zipped_2] "set"
+        assert_equal [r scard set_zipped_2] 6
+        assert [r sismember set_zipped_2 "100000"]
+        assert [r sismember set_zipped_2 "200000"]
+        assert [r sismember set_zipped_2 "300000"]
+        assert [r sismember set_zipped_2 "400000"]
+        assert [r sismember set_zipped_2 "500000"]
+        assert [r sismember set_zipped_2 "600000"]
+
+        assert_equal [r type set_zipped_3] "set"
+        assert_equal [r scard set_zipped_3] 6
+        assert [r sismember set_zipped_3 "1000000000000"]
+        assert [r sismember set_zipped_3 "2000000000000"]
+        assert [r sismember set_zipped_3 "3000000000000"]
+        assert [r sismember set_zipped_3 "4000000000000"]
+        assert [r sismember set_zipped_3 "5000000000000"]
+        assert [r sismember set_zipped_3 "6000000000000"]
+
+        assert_equal [r type set] "set"
+        assert_equal [r scard set] 4
+        assert [r sismember set "6000000000"]
+        assert [r sismember set "a"]
+        assert [r sismember set "b"]
+        assert [r sismember set "c"]
+
+        # Verify lists (LPUSH order is reversed)
+        assert_equal [r type list_zipped] "list"
+        assert_equal [r llen list_zipped] 6
+        assert_equal [r lindex list_zipped 0] "c"
+        assert_equal [r lindex list_zipped 1] "b"
+        assert_equal [r lindex list_zipped 2] "a"
+        assert_equal [r lindex list_zipped 3] "3"
+        assert_equal [r lindex list_zipped 4] "2"
+        assert_equal [r lindex list_zipped 5] "1"
+
+        assert_equal [r type list] "list"
+        assert_equal [r llen list] 7
+        assert_equal [r lindex list 0] "c"
+        assert_equal [r lindex list 1] "b"
+        assert_equal [r lindex list 2] "a"
+        assert_equal [r lindex list 3] "3"
+        assert_equal [r lindex list 4] "2"
+        assert_equal [r lindex list 5] "1"
+        assert_equal [r lindex list 6] "6000000000"
+
+        # Verify hashes
+        assert_equal [r type hash_zipped] "hash"
+        assert_equal [r hlen hash_zipped] 3
+        assert_equal [r hget hash_zipped a] "1"
+        assert_equal [r hget hash_zipped b] "2"
+        assert_equal [r hget hash_zipped c] "3"
+
+        assert_equal [r type hash] "hash"
+        assert_equal [r hlen hash] 10
+        assert_equal [r hget hash a] "10"
+        assert_equal [r hget hash aa] "100"
+        assert_equal [r hget hash b] "2"
+        assert_equal [r hget hash bb] "20"
+        assert_equal [r hget hash bbb] "200"
+        assert_equal [r hget hash c] "3"
+        assert_equal [r hget hash cc] "30"
+        assert_equal [r hget hash ccc] "300"
+        assert_equal [r hget hash ddd] "400"
+        assert_equal [r hget hash eee] "5000000000"
+
+        # Verify total key count
+        assert_equal [r dbsize] 14
+
+        # Verify RDBDowngradeStats (Valkey RDB should trigger downgrade)
+        set info [r info RDBDowngradeStats]
+        assert_match "*rdb_downgrade_keys_attempted:*" $info
+        assert_match "*rdb_downgrade_keys_succeeded:*" $info
+        assert_match "*rdb_downgrade_bytes_converted:*" $info
+    }
+}
+
+# Test loading a Valkey 9.1 stream with extended metadata, a consumer group,
+# and a pending entry.
+set server_path [tmpdir "server.valkey-9.1.0-stream"]
+exec cp tests/assets/valkey-9.1.0-stream.rdb $server_path/dump.rdb
+start_server [list overrides [list "dir" $server_path "dbfilename" "dump.rdb"]] {
+    test "Load Valkey 9.1.0 stream RDB and preserve representable state" {
+        r select 0
+        assert_equal 2 [r xlen mystream]
+
+        set entries [r xrange mystream - +]
+        assert_equal 2 [llength $entries]
+        assert_equal "1-0" [lindex [lindex $entries 0] 0]
+        assert_equal {field value1} [lindex [lindex $entries 0] 1]
+        assert_equal "2-0" [lindex [lindex $entries 1] 0]
+        assert_equal {field value2} [lindex [lindex $entries 1] 1]
+
+        set pending [r xpending mystream mygroup - + 10]
+        assert_equal 1 [llength $pending]
+        assert_equal "1-0" [lindex [lindex $pending 0] 0]
+        assert_equal "Alice" [lindex [lindex $pending 0] 1]
+    }
+}
+
+foreach {feature fixture reason} {
+    "hash-field expiration" "valkey-9.1.0-hfe.rdb" "hash-field expiration data"
+    "function libraries" "valkey-9.1.0-function.rdb" "function library data"
+    "atomic slot migration" "valkey-9.1.0-slot-import.rdb" "active atomic slot migration state"
+} {
+    test "Reject Valkey 9.1.0 $feature with a downgrade compatibility error" {
+        set status [catch {
+            exec src/redis-check-rdb tests/assets/$fixture 2>@1
+        } output]
+        assert_equal 1 $status
+        assert_match "*Cannot downgrade $reason to Redis 6.0*" $output
+    }
+}
+
 } ;# tags

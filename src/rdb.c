@@ -2174,6 +2174,13 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
         /* Read type. */
         if ((type = rdbLoadType(rdb)) == -1) goto eoferr;
 
+        const char *unsupported = rdbDowngradeUnsupportedTypeReason(type);
+        if (unsupported) {
+            serverLog(LL_WARNING, "Cannot downgrade %s to Redis 6.0", unsupported);
+            errno = EINVAL;
+            return C_ERR;
+        }
+
         /* Handle special types. */
         if (type == RDB_OPCODE_EXPIRETIME) {
             /* EXPIRETIME: load an expire associated with the next key
@@ -2226,6 +2233,9 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
                 goto eoferr;
             dictExpand(db->dict,db_size);
             dictExpand(db->expires,expires_size);
+            continue; /* Read next opcode. */
+        } else if (type == RDB_OPCODE_SLOT_INFO) {
+            if (rdbLoadSlotInfoCompat(rdb) == C_ERR) goto eoferr;
             continue; /* Read next opcode. */
         } else if (type == RDB_OPCODE_AUX) {
             /* AUX: generic string-string fields. Use to add state to RDB

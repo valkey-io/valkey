@@ -54,9 +54,19 @@ start_server [list overrides [list "dir" $gen_path "save" "" "dbfilename" "empty
 }
 
 set victim_path [tmpdir "rdb-slot-import-short-name"]
+set victim_rdb [file join $victim_path dump.rdb]
 craft_slot_import_short_job_name_rdb \
     [file join $gen_path empty.rdb] \
-    [file join $victim_path dump.rdb]
+    $victim_rdb
+
+test {valkey-check-rdb rejects short slot-import job_name} {
+    catch {
+        exec $::VALKEY_CHECK_RDB_BIN $victim_rdb
+    } result
+    assert_match {*--- RDB ERROR DETECTED ---*} $result
+    assert_match {*Invalid slot import job name length*} $result
+    assert_no_match {*RDB looks OK*} $result
+}
 
 start_server_and_kill_it [list \
     "dir" $victim_path \

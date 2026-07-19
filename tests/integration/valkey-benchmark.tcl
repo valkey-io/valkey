@@ -116,6 +116,24 @@ tags {"benchmark network external:skip logreqres:skip"} {
             assert_match  {*calls=12,*} [cmdstat incr]
         }
 
+        test {benchmark: empty command sequence errors out cleanly} {
+            # Empty sequences must fail before connecting, so this holds even on
+            # a closed port. "10000 ;" also guards that ';' is not sent as a command.
+            set closed_port [find_available_port [expr {$::baseport - 64}] 32]
+            foreach args {"10000" "10000 ;" ";"} {
+                foreach {desc host port} [list "live server" $master_host $master_port \
+                                               "closed port" 127.0.0.1 $closed_port] {
+                    set cmd [valkeybenchmark $host $port $args]
+                    set code [catch { exec {*}$cmd 2>@1 } output opt]
+                    assert_equal 1 $code "$desc: $args"
+                    set errcode [dict get $opt -errorcode]
+                    assert_equal CHILDSTATUS [lindex $errcode 0] "$desc: $args"
+                    assert_equal 1 [lindex $errcode 2] "$desc: $args"
+                    assert_match "*No command specified: a repeat count must be followed by a command*" $output "$desc: $args"
+                }
+            }
+        }
+
         test {benchmark: arbitrary command with data placeholder} {
             set cmd [valkeybenchmark $master_host $master_port "-n 1 -d 42 -- set k value:__data__"]
             common_bench_setup $cmd

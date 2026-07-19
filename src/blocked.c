@@ -618,6 +618,15 @@ void signalDeletedKeyAsReady(serverDb *db, robj *key, int type) {
     signalKeyAsReadyLogic(db, key, type, 1);
 }
 
+/* Return 1 if client c is still blocked waiting on rl->key in rl->db. */
+static int clientStillBlockedOnReadyKey(client *c, readyList *rl) {
+    if (c == NULL) return 0;
+    if (!c->flag.blocked) return 0;
+    if (c->bstate == NULL || c->bstate->keys == NULL) return 0;
+    if (c->db != rl->db) return 0;
+    return dictFind(c->bstate->keys, rl->key) != NULL;
+}
+
 /* Helper function for handleClientsBlockedOnKeys(). This function is called
  * whenever a key is ready. we iterate over all the clients blocked on this key
  * and try to re-execute the command (in case the key is still available). */
@@ -630,14 +639,34 @@ static void handleClientsBlockedOnKey(readyList *rl) {
         list *clients = dictGetVal(de);
         listNode *ln;
         listIter li;
+        long count = listLength(clients);
+        long snapshot_len = 0;
+        uint64_t *snapshot_ids;
+        long i;
+
+        /* Snapshot stable client IDs before serving anyone. A plain listIter
+         * caches the successor listNode*, but module reply callbacks can
+         * re-enter the server (e.g. CLIENT KILL) and free that successor via
+         * unblockClientWaitingData() / dictEmpty(), causing a use-after-free
+         * on the next listNext(). Client IDs remain valid across reentrancy. */
+        snapshot_ids = zmalloc(sizeof(*snapshot_ids) * count);
         listRewind(clients, &li);
+        while ((ln = listNext(&li)) != NULL && snapshot_len < count) {
+            client *receiver = listNodeValue(ln);
+            snapshot_ids[snapshot_len++] = receiver->id;
+        }
 
         /* Avoid processing more than the initial count so that we're not stuck
          * in an endless loop in case the reprocessing of the command blocks again. */
-        long count = listLength(clients);
-        while ((ln = listNext(&li)) && count--) {
-            client *receiver = listNodeValue(ln);
-            robj *o = lookupKeyReadWithFlags(rl->db, rl->key, LOOKUP_NOEFFECTS);
+        for (i = 0; i < snapshot_len; i++) {
+            client *receiver = lookupClientByID(snapshot_ids[i]);
+            robj *o;
+
+            /* The client may have been killed/freed or may no longer be blocked
+             * on this key by the time we reach it. */
+            if (!clientStillBlockedOnReadyKey(receiver, rl)) continue;
+
+            o = lookupKeyReadWithFlags(rl->db, rl->key, LOOKUP_NOEFFECTS);
             /* 1. In case new key was added/touched we need to verify it satisfy the
              *    blocked type, since we might process the wrong key type.
              * 2. We want to serve clients blocked on module keys
@@ -653,6 +682,7 @@ static void handleClientsBlockedOnKey(readyList *rl) {
                     moduleUnblockClientOnKey(receiver, rl->key);
             }
         }
+        zfree(snapshot_ids);
     }
 }
 

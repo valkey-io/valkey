@@ -431,7 +431,7 @@ robj *rdbLoadObjectCompat(int rdbtype, rio *rdb, sds key, int *error, int rdbver
                     node_encoded = NULL;
                 } else { /* QUICKLIST_NODE_CONTAINER_PACKED */
                     zl = ziplistNew();
-                    if (!quicklistConvertAndValidateIntegrity(node_encoded, &zl)) {
+                    if (!quicklistConvertAndValidateIntegrity(node_encoded, node_encoded_len, &zl)) {
                         serverLog(LL_WARNING, "RDB compatibility: listpack to ziplist conversion failed for quicklist node key=%s", key);
                         zfree(node_encoded);
                         zfree(zl);
@@ -589,21 +589,27 @@ robj *rdbLoadObjectCompat(int rdbtype, rio *rdb, sds key, int *error, int rdbver
                     listTypeConvert(o, OBJ_ENCODING_QUICKLIST);
                     break;
                     
-                case RDB_TYPE_SET_LISTPACK:
+                case RDB_TYPE_SET_LISTPACK: {
                     /* Set with listpack encoding - convert to regular set */
-                    o->type = OBJ_SET;
-                    o->encoding = OBJ_ENCODING_HT;
-                    
                     /* Create hash table and populate from converted ziplist */
+                    unsigned char *zl = (unsigned char *)o->ptr;
                     dict *set_dict = dictCreate(&setDictType, NULL);
                     if (!set_dict) {
                         serverLog(LL_WARNING, "RDB compatibility: Failed to create set dict for key=%s", key);
-                        decrRefCount(o);
+                        zfree(zl);
+                        zfree(o);
+                        o = NULL;
                         goto error_cleanup;
                     }
-                    
+
+                    /* Transfer the object to the destination encoding before
+                     * any error path can decrement its reference count. Keep
+                     * the source ziplist separately until conversion ends. */
+                    o->type = OBJ_SET;
+                    o->encoding = OBJ_ENCODING_HT;
+                    o->ptr = set_dict;
+
                     /* Parse ziplist and add elements to set */
-                    unsigned char *zl = (unsigned char *)o->ptr;
                     unsigned char *p = ziplistIndex(zl, 0);
                     while (p) {
                         unsigned char *vstr;
@@ -621,18 +627,18 @@ robj *rdbLoadObjectCompat(int rdbtype, rio *rdb, sds key, int *error, int rdbver
                             if (dictAdd(set_dict, element, NULL) != DICT_OK) {
                                 serverLog(LL_WARNING, "RDB compatibility: Duplicate set element for key=%s", key);
                                 sdsfree(element);
-                                dictRelease(set_dict);
+                                zfree(zl);
                                 decrRefCount(o);
+                                o = NULL;
                                 goto error_cleanup;
                             }
                         }
                         p = ziplistNext(zl, p);
                     }
                     
-                    /* Replace object pointer with the set dict */
-                    zfree(o->ptr);
-                    o->ptr = set_dict;
+                    zfree(zl);
                     break;
+                }
                     
                 default:
                     serverLog(LL_WARNING, "RDB compatibility: Unexpected RDB type %s for key=%s", getDataStructureType(rdbtype), key);
@@ -965,11 +971,8 @@ static int _listpackEntryConvertAndValidate(unsigned char *p, unsigned int head_
  * ziplist and storing it at 'zl'.
  * The function is safe to call on non-validated listpacks, it returns 0
  * when encounter an integrity validation issue. */
-int quicklistConvertAndValidateIntegrity(unsigned char *lp, unsigned char **zl) {
-    unsigned char *p = lpFirst(lp);
-    while(p) {
-        _listpackEntryConvertAndValidate(p, 0, zl);
-        p = lpNext(lp,p);
-    }
-    return 1;
+int quicklistConvertAndValidateIntegrity(unsigned char *lp, size_t size,
+                                         unsigned char **zl) {
+    return lpValidateIntegrity(lp, size, 1,
+                               _listpackEntryConvertAndValidate, zl);
 }

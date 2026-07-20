@@ -31,6 +31,7 @@
 #include "server.h"
 #include "cluster.h"
 #include "endianconv.h"
+#include "rdb_downgrade_compat.h"
 
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -4971,7 +4972,7 @@ void createDumpPayload(rio *payload, robj *o, robj *key) {
  * instance and that the checksum is ok.
  * If the DUMP payload looks valid C_OK is returned, otherwise C_ERR
  * is returned. */
-int verifyDumpPayload(unsigned char *p, size_t len) {
+int verifyDumpPayload(unsigned char *p, size_t len, int *rdbverptr) {
     unsigned char *footer;
     uint16_t rdbver;
     uint64_t crc;
@@ -4990,7 +4991,10 @@ int verifyDumpPayload(unsigned char *p, size_t len) {
     /* Verify CRC64 */
     crc = crc64(0,p,len-8);
     memrev64ifbe(&crc);
-    return (memcmp(&crc,footer+2,8) == 0) ? C_OK : C_ERR;
+    if (memcmp(&crc,footer+2,8) != 0) return C_ERR;
+
+    if (rdbverptr) *rdbverptr = rdbver;
+    return C_OK;
 }
 
 /* DUMP keyname
@@ -5018,7 +5022,7 @@ void dumpCommand(client *c) {
 void restoreCommand(client *c) {
     long long ttl, lfu_freq = -1, lru_idle = -1, lru_clock = -1;
     rio payload;
-    int j, type, replace = 0, absttl = 0;
+    int j, type, rdbver, replace = 0, absttl = 0;
     robj *obj;
 
     /* Parse additional options */
@@ -5071,7 +5075,7 @@ void restoreCommand(client *c) {
     }
 
     /* Verify RDB version and data checksum. */
-    if (verifyDumpPayload(c->argv[3]->ptr,sdslen(c->argv[3]->ptr)) == C_ERR)
+    if (verifyDumpPayload(c->argv[3]->ptr,sdslen(c->argv[3]->ptr),&rdbver) == C_ERR)
     {
         addReplyError(c,"DUMP payload version or checksum are wrong");
         return;
@@ -5079,7 +5083,7 @@ void restoreCommand(client *c) {
 
     rioInitWithBuffer(&payload,c->argv[3]->ptr);
     if (((type = rdbLoadObjectType(&payload)) == -1) ||
-        ((obj = rdbLoadObject(type,&payload,key->ptr)) == NULL))
+        ((obj = rdbLoadObjectCompat(type,&payload,key->ptr,NULL,rdbver)) == NULL))
     {
         addReplyError(c,"Bad data format");
         return;

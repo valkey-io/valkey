@@ -32,7 +32,8 @@
 /* Listpack to Ziplist conversion functions */
 unsigned char *listpackToZiplist(unsigned char *lp);
 int isListpackEncoded(unsigned char *data, size_t len);
-int quicklistConvertAndValidateIntegrity(unsigned char *lp, unsigned char **zl);
+int quicklistConvertAndValidateIntegrity(unsigned char *lp, size_t size,
+                                         unsigned char **zl);
 
 /* Enhanced object loading with compatibility */
 robj *rdbLoadObjectCompat(int rdbtype, rio *rdb, sds key, int *error,

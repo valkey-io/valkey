@@ -110,6 +110,55 @@ start_server {tags {"dump"}} {
         assert_equal {bar} [r get foo]
     }
 
+    test {RESTORE future listpack encodings with relaxed version check} {
+        r config set rdb-version-check relaxed
+
+        r restore review_hash 0 [binary decode hex \
+            1016160000000600816102010181620202018163020301ff500077b14e27930cd9aa] replace
+        assert_equal 1 [r hget review_hash a]
+        assert_equal 2 [r hget review_hash b]
+        assert_equal 3 [r hget review_hash c]
+
+        r restore review_zset 0 [binary decode hex \
+            1116160000000600816102010181620202018163020301ff5000e131b5549ef85262] replace
+        assert_equal {a 1 b 2 c 3} [r zrange review_zset 0 -1 withscores]
+
+        r restore review_list 0 [binary decode hex \
+            12010210100000000300816102816202816302ff50000732709d0b61356a] replace
+        assert_equal {a b c} [r lrange review_list 0 -1]
+
+        r restore review_set 0 [binary decode hex \
+            141b1b000000030085616c706861068462657461058567616d6d6106ff50009e2fb81907794154] replace
+        assert_equal {alpha beta gamma} [lsort [r smembers review_set]]
+
+        r restore review_stream 0 [binary decode hex \
+            1501100000000000000001000000000000000036360000000f00020100010101856669656c640600010201000100018676616c7565310704010201010100018676616c756532070401ff020200010000000200500032468fb0b472991a] replace
+        assert_equal 2 [r xlen review_stream]
+        assert_equal {field value1} [lindex [lindex [r xrange review_stream - +] 0] 1]
+
+        r config set rdb-version-check strict
+    }
+
+    test {RESTORE rejects corrupt future quicklist listpacks without crashing} {
+        r config set rdb-version-check relaxed
+        assert_error {ERR Bad data format} {
+            r restore corrupt_list 0 [binary decode hex \
+                120102100f0000000300816102816202816302ff50005341f9b674016405] replace
+        }
+        assert_equal PONG [r ping]
+        r config set rdb-version-check strict
+    }
+
+    test {RESTORE rejects duplicate future set elements without crashing} {
+        r config set rdb-version-check relaxed
+        assert_error {ERR Bad data format} {
+            r restore duplicate_set 0 [binary decode hex \
+                141b1b000000030085616c7068610684626574610585616c70686106ff5000c60672c52d24304e] replace
+        }
+        assert_equal PONG [r ping]
+        r config set rdb-version-check strict
+    }
+
     test {DUMP of non existing key returns nil} {
         r dump nonexisting_key
     } {}

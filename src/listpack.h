@@ -35,6 +35,7 @@
 #ifndef __LISTPACK_H
 #define __LISTPACK_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 #define LP_INTBUF_SIZE 21 /* 20 digits of -2^63 + 1 null term = 21. */
@@ -57,5 +58,9 @@ unsigned char *lpNext(unsigned char *lp, unsigned char *p);
 unsigned char *lpPrev(unsigned char *lp, unsigned char *p);
 uint32_t lpBytes(unsigned char *lp);
 unsigned char *lpSeek(unsigned char *lp, long index);
+typedef int (*listpackValidateEntryCB)(unsigned char *p, unsigned int head_count,
+                                      void *userdata);
+int lpValidateIntegrity(unsigned char *lp, size_t size, int deep,
+                        listpackValidateEntryCB entry_cb, void *cb_userdata);
 
 #endif

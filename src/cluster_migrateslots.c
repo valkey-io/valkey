@@ -394,12 +394,8 @@ int clusterRDBLoadSlotImport(rio *rdb) {
     list *slot_ranges = createSlotRangeList();
     uint64_t num_slot_ranges;
     if ((job_name = rdbLoadStringObject(rdb)) == NULL) goto err;
-    /* Slot migration job names are fixed-size cluster identifiers. The command
-     * path already rejects names that are not CLUSTER_NAMELEN; enforce the same
-     * invariant here before createSlotImportJob() copies CLUSTER_NAMELEN bytes. */
     if (sdslen(objectGetVal(job_name)) != CLUSTER_NAMELEN) {
-        serverLog(LL_WARNING, "Invalid slot import job name length in RDB: got %zu, expected %d",
-                  sdslen(objectGetVal(job_name)), CLUSTER_NAMELEN);
+        serverLog(LL_WARNING, "Invalid slot import job name length in RDB");
         goto err;
     }
     if ((num_slot_ranges = rdbLoadLen(rdb, NULL)) == RDB_LENERR) goto err;

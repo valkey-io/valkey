@@ -618,13 +618,22 @@ void signalDeletedKeyAsReady(serverDb *db, robj *key, int type) {
     signalKeyAsReadyLogic(db, key, type, 1);
 }
 
-/* Return 1 if client c is still blocked waiting on rl->key in rl->db. */
-static int clientStillBlockedOnReadyKey(client *c, readyList *rl) {
-    if (c == NULL) return 0;
-    if (!c->flag.blocked) return 0;
-    if (c->bstate == NULL || c->bstate->keys == NULL) return 0;
-    if (c->db != rl->db) return 0;
-    return dictFind(c->bstate->keys, rl->key) != NULL;
+/* Return 1 if client c is still present in the live blocked-clients list for
+ * rl->key. Unlink happens before freeClient()/temp-client release, so a client
+ * that was torn down mid-iteration cannot still appear here. Comparing the
+ * snapshot pointer against live list nodes is therefore safe and does not
+ * dereference a potentially freed client. */
+static int clientStillInBlockingKeysList(readyList *rl, client *c) {
+    dictEntry *de = dictFind(rl->db->blocking_keys, rl->key);
+    listNode *ln;
+    listIter li;
+
+    if (de == NULL) return 0;
+    listRewind(dictGetVal(de), &li);
+    while ((ln = listNext(&li)) != NULL) {
+        if (listNodeValue(ln) == c) return 1;
+    }
+    return 0;
 }
 
 /* Helper function for handleClientsBlockedOnKeys(). This function is called
@@ -641,30 +650,29 @@ static void handleClientsBlockedOnKey(readyList *rl) {
         listIter li;
         long count = listLength(clients);
         long snapshot_len = 0;
-        uint64_t *snapshot_ids;
+        client **snapshot;
         long i;
 
-        /* Snapshot stable client IDs before serving anyone. A plain listIter
-         * caches the successor listNode*, but module reply callbacks can
-         * re-enter the server (e.g. CLIENT KILL) and free that successor via
-         * unblockClientWaitingData() / dictEmpty(), causing a use-after-free
-         * on the next listNext(). Client IDs remain valid across reentrancy. */
-        snapshot_ids = zmalloc(sizeof(*snapshot_ids) * count);
+        /* Snapshot client* (not listNode*): serving one client may re-enter and
+         * free another still queued on this key (CLIENT KILL / evictClients),
+         * invalidating a listIter's cached successor. Re-check live list
+         * membership before serving — also covers RM_Call fake clients that
+         * are absent from clients_index. */
+        snapshot = zmalloc(sizeof(*snapshot) * count);
         listRewind(clients, &li);
         while ((ln = listNext(&li)) != NULL && snapshot_len < count) {
-            client *receiver = listNodeValue(ln);
-            snapshot_ids[snapshot_len++] = receiver->id;
+            snapshot[snapshot_len++] = listNodeValue(ln);
         }
 
         /* Avoid processing more than the initial count so that we're not stuck
          * in an endless loop in case the reprocessing of the command blocks again. */
         for (i = 0; i < snapshot_len; i++) {
-            client *receiver = lookupClientByID(snapshot_ids[i]);
+            client *receiver = snapshot[i];
             robj *o;
 
             /* The client may have been killed/freed or may no longer be blocked
              * on this key by the time we reach it. */
-            if (!clientStillBlockedOnReadyKey(receiver, rl)) continue;
+            if (!clientStillInBlockingKeysList(rl, receiver)) continue;
 
             o = lookupKeyReadWithFlags(rl->db, rl->key, LOOKUP_NOEFFECTS);
             /* 1. In case new key was added/touched we need to verify it satisfy the
@@ -682,7 +690,7 @@ static void handleClientsBlockedOnKey(readyList *rl) {
                     moduleUnblockClientOnKey(receiver, rl->key);
             }
         }
-        zfree(snapshot_ids);
+        zfree(snapshot);
     }
 }
 

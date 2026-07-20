@@ -3,7 +3,7 @@
         "summary": "Returns the ACL rules of an ACL role.",
         "complexity": "O(N). Where N is the number of rules defined for the role.",
         "group": "server",
-        "since": "10.0.0",
+        "since": "9.2.0",
         "arity": 3,
         "container": "ACL",
         "function": "aclCommand",

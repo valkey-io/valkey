@@ -3,7 +3,7 @@
         "summary": "Lists all ACL roles.",
         "complexity": "O(N). Where N is the number of configured roles.",
         "group": "server",
-        "since": "10.0.0",
+        "since": "9.2.0",
         "arity": 2,
         "container": "ACL",
         "function": "aclCommand",

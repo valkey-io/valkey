@@ -3,7 +3,7 @@
         "summary": "Deletes one or more ACL roles. Fails if any role has members.",
         "complexity": "O(N). Where N is the number of roles to delete.",
         "group": "server",
-        "since": "10.0.0",
+        "since": "9.2.0",
         "arity": -3,
         "container": "ACL",
         "function": "aclCommand",

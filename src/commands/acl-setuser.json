@@ -21,7 +21,7 @@
                 "Added database permission rules."
             ],
             [
-                "10.0.0",
+                "9.2.0",
                 "Added role assignment and removal."
             ]
         ],

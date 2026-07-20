@@ -45,6 +45,7 @@ extern "C" {
 
 #include "ae.h"
 #include "server.h"
+#include "throttle.h"
 
 /**
  * The list of wrapper methods defined.  Each wrapper method must
@@ -60,6 +61,19 @@ extern "C" {
  *       Example: serverLog(int level, const char *fmt, ...) should NOT be mocked.
  */
 long long __wrap_aeCreateTimeEvent(aeEventLoop *eventLoop, long long milliseconds, aeTimeProc *proc, void *clientData, aeEventFinalizerProc *finalizerProc);
+size_t __wrap_getClientOutputBufferMemoryUsage(client *c);
+
+/* Throttler mocks */
+int __wrap_throttle_register(throttleCriteriaProc *criteria_proc, void *priv_data, const char *metrics_name);
+void __wrap_throttle_deregister(int id);
+double __wrap_throttle_adjustRate(int id, double multiplier);
+const throttleMetrics *__wrap_throttle_getMetrics(const char *metrics_name);
+long __wrap_throttle_getGuardrailSecs(int id);
+
+/* Statcalc mocks */
+trendCalculator *__wrap_newTrendCalc(int windowSecs);
+void __wrap_trendCalc_recordMetric(trendCalculator *calc, long metricValue);
+double __wrap_trendCalc_changePerSecShortTerm(trendCalculator *calc);
 #undef protected
 #undef _Bool
 #undef typename

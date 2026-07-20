@@ -73,6 +73,7 @@ bool tokenBucket_tryConsume(tokenBucket *bucket, double tokens, bool force_consu
     tokenBucket_replenish(bucket);
     if (!force_consume && bucket->token_count < tokens) return false;
     bucket->token_count -= tokens;
+    trimTokenBucket(bucket); /* bound debt at -bucket_size so recovery time stays bounded */
     return true;
 }
 
@@ -80,5 +81,5 @@ double tokenBucket_msUntilAvailable(tokenBucket *bucket, double target_tokens) {
     if (bucket->token_count >= target_tokens) return 0.0;
     if (bucket->tokens_per_sec <= 0) return -1.0; /* halted — never available */
     double needed = target_tokens - bucket->token_count;
-    return needed / bucket->tokens_per_sec * 1000.0;
+    return needed * 1000.0 / bucket->tokens_per_sec;
 }

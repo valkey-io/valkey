@@ -74,7 +74,7 @@ static metricsEntry *findMetrics(const char *name) {
     m->throttler_type = key;
     m->num_clients_throttled = 0;
     m->num_throttled_commands = 0;
-    m->incoming_tps = tpsCalculator_create(TPS_WINDOW_SEC);
+    m->incoming_tps = newTpsCalc(TPS_WINDOW_SEC);
     hashtableAdd(metricsTable, m);
     return m;
 }
@@ -228,10 +228,9 @@ int throttle_register(throttleCriteriaProc *criteria_proc,
     t->metrics = findMetrics(metrics_name);
     t->client_queue = listCreate();
     t->rate_below_guardrail_since = 0;
-    throttle_setRate(t->id, THROTTLE_UNLIMITED_RATE);
-
     listAddNodeTail(throttlerList, t);
     t->ln = listLast(throttlerList);
+    throttle_setRate(t->id, THROTTLE_UNLIMITED_RATE);
     return t->id;
 }
 

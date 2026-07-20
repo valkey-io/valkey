@@ -20,7 +20,7 @@ struct tpsCalculator {
     bool is_new;
 };
 
-tpsCalculator *tpsCalculator_create(int window_secs) {
+tpsCalculator *newTpsCalc(int window_secs) {
     serverAssert(window_secs > 0);
     tpsCalculator *calc = zmalloc(sizeof(tpsCalculator));
     calc->window_secs = (double)window_secs;

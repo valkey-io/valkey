@@ -19,7 +19,7 @@
 
 typedef struct tpsCalculator tpsCalculator;
 
-tpsCalculator *tpsCalculator_create(int window_secs);
+tpsCalculator *newTpsCalc(int window_secs);
 
 void tpsCalculator_free(tpsCalculator *calc);
 

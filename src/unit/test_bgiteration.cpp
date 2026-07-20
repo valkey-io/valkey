@@ -1569,21 +1569,19 @@ TEST_F(BgIterationTest, modPastFutureItem_eventual) {
     c = getSetGetClient(8, "xxx", 12);
     simulateBlockedWrite(c);
 
-    // Key 12 will be expedited, but not in front of existing items in queue (can only do that for
-    //  consistent iterators)
+    // Key 12 will be expedited, to the front, because there are no barrier items in the queue.
 
-    expectReadKey(it, 10);
     expectReadKey(it, 12); // expedited
 
-    expectReadKeyWithUnblock(it, 11, 12); // 13 is now in queue
+    expectReadKeyWithUnblock(it, 10, 12); // reading key 10 (was in queue already) unblocks 12
 
     simulateUnblockedWriteWithModification(c);
 
     // Continue...
-    expectReadKey(it, 13);
+    expectReadKey(it, 11);
     expectReadReplication(it, c);
 
-    expectReadKeySequence(it, 14, LAST_ITEM);
+    expectReadKeySequence(it, 13, LAST_ITEM);
     expectReadComplete(it);
 }
 
@@ -2041,23 +2039,23 @@ TEST_F(BgIterationTest, writeWith2Keys_eventual_setNewKey_DependantFuture) {
     // This adds key 13 in the queue since the command depends on it.
     simulateBlockedWrite(c);
 
-    // Key 9 was already in the queue
-    expectReadKey(it, 9);
-
-    // Key 13 is processed out of order since the write depends on it
+    // Key 13 is processed out of order since the write depends on it.  It was expedited to the
+    //  front because there are no barrier envents in the queue.
     expectReadKey(it, 13);
 
-    // Reading key 10 will unblock key 13, allowing us to write.
-    expectReadKey(it, 10);
+    // Key 9 was already in the queue.  Reading key 9 will unblock key 13, allowing us to write.
+    expectReadKey(it, 9);
 
     // Now that key 13 was processed and released by the iterator, the write command can be executed.
     simulateUnblockedWriteWithModification(c);
 
-    // Key 11 was queued when we read key 10
-    expectReadKey(it, 11);
+    // Key 10 was queued when we read key 9
+    expectReadKey(it, 10);
 
     // The replication of the write command was enqueued after key 11
     expectReadReplication(it, c);
+
+    expectReadKey(it, 11);
 
     // We shouldn't see key 12 - as that was processed via replication.
     // We shouldn't see key 13 - as that was expedited earlier
@@ -2116,18 +2114,18 @@ TEST_F(BgIterationTest, writeWith3Keys_eventual_setNewKey_1DependantPast1Dependa
     // The write should be blocked, so that item 13 can be processed.
     simulateBlockedWrite(c);
 
-    expectReadKey(it, 10); // 10 was already in queue
-    expectReadKey(it, 13); // 13 was expedited since the write depends on it
+    expectReadKey(it, 13); // 13 was expedited to the front (no barrier events in queue)
+
     EXPECT_CALL(mock, unblockClientsInUseOnKey(robjEqualsStr(keyStr(13)))).Times(1);
-    expectReadKey(it, 11); // Releases 13 so the command can execute
+    expectReadKey(it, 10); // 10 was already in queue (releases 13)
 
     simulateUnblockedWriteWithModification(c);
 
-    expectReadKey(it, 14); // was queued when reading 11 (12 is missing, 13 was expedited)
+    expectReadKey(it, 11);
 
     expectReadReplication(it, c);
 
-    expectReadKey(it, LAST_ITEM);
+    expectReadKeySequence(it, 14, LAST_ITEM);
     expectReadComplete(it);
 }
 
@@ -2149,19 +2147,19 @@ TEST_F(BgIterationTest, writeWith3Keys_eventual_repeatedKey_1DependantPast1Repea
     // This command should block because 12 needs to be expedited.
     simulateBlockedWrite(c);
 
-    expectReadKey(it, 10); // was already in queue
-    expectReadKey(it, 12); // expedited
-    expectReadKey(it, 11); // releases 12 (unblocking the command)
+    expectReadKey(it, 12); // expedited to the front (no barrier events)
+
+    expectReadKey(it, 10); // was already in queue, releases 12 (unblocking the command)
 
     // Now that key 12 was processed and released by the iterator, the write command can be executed.
     simulateUnblockedWriteWithModification(c);
 
-    expectReadKey(it, 13); // queued when we read 11
+    expectReadKey(it, 11); // was already in queue since reading key 10
 
     expectReadReplication(it, c);
 
     // Now resuming processing of dict entries.
-    expectReadKeySequence(it, 14, LAST_ITEM);
+    expectReadKeySequence(it, 13, LAST_ITEM);
     expectReadComplete(it);
 }
 
@@ -2184,25 +2182,22 @@ TEST_F(BgIterationTest, writeWith3Keys_eventual_repeatedKey_1newKey1RepeatedFutu
     // - the command creates a new key (key 3).
     simulateBlockedWrite(c);
 
-    expectReadKeySequence(it, 1, 2); // These were already in queue
-
-    // Key 5 is processed out of order since the write depends on it
+    // Key 5 is expedited to the front because there are no barrier events in queue
     expectReadKey(it, 5);
 
-    // Keys 4 is the next in queue, and releases the expedited key 5
-    expectReadKey(it, 4);
+    expectReadKey(it, 1); // was already in queue - releases the expedited key 5
 
-    // Now that key 4 was processed and released by the iterator, the write command can be executed.
+    // Now that key 5 was processed and released by the iterator, the write command can be executed.
     simulateUnblockedWriteWithModification(c);
 
-    // Key 6 & 7 are next, having been queued after reading key 4.
-    expectReadKeySequence(it, 6, 7);
+    expectReadKey(it, 2); // was already in queue
 
-    // The replication of the write command was enqueued after 5 was released (unblocking the command)
     expectReadReplication(it, c);
 
     // Now resuming processing of dict entries.
-    expectReadKeySequence(it, 8, LAST_ITEM);
+    expectReadKey(it, 4);
+    // Key 5 was handled earlier
+    expectReadKeySequence(it, 6, LAST_ITEM);
     expectReadComplete(it);
 }
 
@@ -2281,7 +2276,7 @@ TEST_F(BgIterationTest, writeWith3Keys_repeatedKey_1repeatedNewKey) {
  *  same key in both DBs.  We make sure that the proper key is created via replication, and
  *  the proper key is created by iteration. */
 TEST_F(BgIterationTest, copyHandlesProperDb_eventual) {
-    // NOTE:  Adding E0 to dict 1.  Now there is a E0 in both dict 0 and dict 1.
+    // NOTE:  Adding H0 to dict 1.  Now there is a H0 in both dict 0 and dict 1.
     addKeyToDb(1, "H0", "H0");
 
     // The test:
@@ -2312,16 +2307,12 @@ TEST_F(BgIterationTest, copyHandlesProperDb_eventual) {
     // This should block on 2 keys.  DB0:B1 is in queue.  DB1:H0 needs to be expedited.
     simulateBlockedWrite(c, 2);
 
-    // These 2 keys were already in queue
-    expectReadKey(it, 1); // DB0:B1
-    expectReadKey(it, 2); // DB0:B2
-
-    // And now we expect to see the expedited DB1:H0
+    // With no barrier events in queue, DB1:H0 gets moved to the front
+    // Queue is now 0:B0 (in progress), 1:H0 (expedited to front), 0:B1 (was in queue), 0:B2 (was in queue)
     expectReadDbKeyValue(it, 1, "H0", "H0");
 
-    expectReadKey(it, 3); // releases DB1:E0
-
-    // Now key 4 is still in the queue
+    expectReadKey(it, 1); // DB0:B1 (was already in queue)
+    expectReadKey(it, 2); // DB0:B2 (was already in queue) - releases B1, unblocking the command (queues key 3 & 4)
 
     simulateUnblockedWrite(c); // We shouldn't be blocked this time
 
@@ -2335,8 +2326,9 @@ TEST_F(BgIterationTest, copyHandlesProperDb_eventual) {
     // And finally the replication (this should queue replication)
     bgIteration_handleCommandReplication(c->db->id, c->cmd, c->argc, c->argv);
 
-    // Now let's read everything...
-    expectReadKey(it, 4);         // (this was previously in queue)
+    expectReadKey(it, 3); 
+    expectReadKey(it, 4); // Queued along with key 3
+
     expectReadReplication(it, c); // This is the new replication (creating DB1:H0)
 
     // The rest should be normal.  We shouldn't see DB1:E0 as it was recreated by replication
@@ -2591,11 +2583,12 @@ TEST_F(BgIterationTest, multiTwoKeysFirstFuture) {
     // The EXEC should block on 2 keys, because H0(5) & R0(11) should be expedited
     simulateBlockedWrite(c, 2);
 
-    expectReadKey(it, 2); // (was already in queue)
-
+    // Since there were no barrier events in the queue, these 2 get moved to the front.
     // Note - it would be logically OK if these 2 were reversed, but this is how the current algorithm works.
     expectReadKey(it, 5);  // Key 5 (H0) was expedited
     expectReadKey(it, 11); // Key 11 (R0) was expedited
+
+    expectReadKey(it, 2); // (was already in queue)
 
     // We don't need to actually simulate the multi.  Just checking that the keys were expedited.
 

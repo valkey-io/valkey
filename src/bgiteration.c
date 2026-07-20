@@ -418,6 +418,12 @@ struct bgIterator {
     unsigned long dbentry_clones_processed; // Updated by client thread
     monotime monotonic_start_time;          // Time iteration started
 
+    /* FLUSHDB and SWAPDB are special in that they affect all keys.  When expediting a key, it's
+     * preferable to put it at the front of the queue.  However, if there is a FLUSHDB or SWAPDB in
+     * the queue, we must maintain strict ordering.
+     * This value is equivalent to (flushdb_queued-flushdb_processed)+(swapdb_queued-swapdb_processed) */
+    int barrier_items;
+
     /* The item start time is set in the iteration client.  It is marked volatile as it can be read
      * from the main thread by bgIteratorGetStatus.  If 0, this indicates that the iteration client
      * is waiting for an item to process. */
@@ -1085,9 +1091,8 @@ static bool addEarlyIterationKey(bgIterator *it, dbEntry *earlyEntry, int cur_db
     it->dbentries_queued++;
     if (isClonedEntry) it->dbentry_clones_queued++;
 
-    if (it->iteration_flags & BGITERATOR_FLAG_CONSISTENT || server.cluster_enabled) {
-        /* On consistent iteration, SWAPDB events are not provided.  So there is no requirement to
-         * keep items in order or synchronized with SWAPDB.  In cluster mode, SWAPDB isn't supported. */
+    if (it->barrier_items == 0) {
+        // If there are no barrier items, we can add the key right to the front of the queue.
         if (BGITERATION_DEBUG) {
             sds entryString = createEntryString(dbid, item->u.dbe.de);
             debugBuffer = sdscatprintf(debugBuffer, "EARLY_1: %s\n", entryString);
@@ -1095,6 +1100,7 @@ static bool addEarlyIterationKey(bgIterator *it, dbEntry *earlyEntry, int cur_db
         }
         mutexQueuePushPriority(it->items_for_iterator, item);
     } else {
+        // With barrier items, the key must be added to the end, and processed in order.
         if (BGITERATION_DEBUG) {
             sds entryString = createEntryString(dbid, item->u.dbe.de);
             debugBuffer = sdscatprintf(debugBuffer, "EARLY: %s\n", entryString);
@@ -1404,9 +1410,11 @@ static void returnAllItemsToMainThread(bgIterator *it) {
             break;
         case BGITERATOR_ITEM_SWAPDB:
             it->swapdb_queued--;
+            it->barrier_items--;
             break;
         case BGITERATOR_ITEM_FLUSHDB:
             it->flushdb_queued--;
+            it->barrier_items--;
             break;
 
         case BGITERATOR_ITEM_COMPLETE:
@@ -1478,6 +1486,7 @@ static void processReturnOfItemToMainThread(bgIterator *it, bgIteratorItem *item
 
     case BGITERATOR_ITEM_SWAPDB:
     case BGITERATOR_ITEM_FLUSHDB:
+        it->barrier_items--;
         break;
 
     case BGITERATOR_ITEMEXT_ITER_CLOSED: {
@@ -1497,11 +1506,12 @@ static void processReturnOfItemToMainThread(bgIterator *it, bgIteratorItem *item
         it->current_item = NULL;
 
         serverAssert(mutexQueueLength(it->items_for_iterator) == 0);
+        serverAssert(it->barrier_items == 0);
         serverAssert(it->dbentries_queued == it->dbentries_processed);
         serverAssert(it->replication_queued == it->replication_processed);
         serverAssert(it->swapdb_queued == it->swapdb_processed);
         serverAssert(it->flushdb_queued == it->flushdb_processed);
-        serverAssert(it->dbentry_clones_queued >= it->dbentry_clones_processed);
+        serverAssert(it->dbentry_clones_queued == it->dbentry_clones_processed);
 
         listEmpty(curCmdMissingKeys); // Just in case any remain
 
@@ -1787,6 +1797,7 @@ static void handleSwapdb(int db1, int db2) {
             item->dbid = db1;
             item->u.dbid2 = db2;
             it->swapdb_queued++;
+            it->barrier_items++;
             mutexQueueAdd(it->items_for_iterator, item);
         }
     }
@@ -1845,6 +1856,7 @@ static void handleFlushdb(int dbid) {
             item->type = BGITERATOR_ITEM_FLUSHDB;
             item->dbid = dbid;
             it->flushdb_queued++;
+            it->barrier_items++;
             mutexQueueAdd(it->items_for_iterator, item);
         }
     }
@@ -2039,6 +2051,8 @@ static bgIterator *bgIteratorCreate(const char *name,
     it->flushdb_processed = 0;
     it->dbentry_clones_queued = 0;
     it->dbentry_clones_processed = 0;
+
+    it->barrier_items = 0;
 
     elapsedStart(&it->monotonic_start_time);
     it->monotonic_item_start_time = 0;

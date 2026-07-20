@@ -3597,6 +3597,7 @@ robj *setTypeDup(robj *o);
 
 long long hashTypeVolatileCount(robj *o);                                    /* total volatile fields, incl. expired-unreaped */
 long long hashTypeListpackGetExpiry(unsigned char *zl, unsigned char *vptr); /* expiry of the pair whose value entry is vptr, or EXPIRY_NONE */
+bool hashTypeListpackFieldIsValid(long long expiry);                         /* listpack mirror of validateEntry: is a field with this expiry visible now */
 void hashTypeFreeVolatileSet(robj *o);                                       /* needed only for freeHashObject */
 void hashTypeTrackEntry(robj *o, entry *entry);                              /* needed only for rdbLoadObject */
 size_t hashTypeScanDefrag(robj *ob, size_t cursor, void *(*defragAlloc)(void *));

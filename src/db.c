@@ -1344,11 +1344,11 @@ void scanGenericCommandWithOptions(client *c, robj *o, unsigned long long cursor
             /* point to the value */
             p = lpNext(objectGetVal(o), p);
             unsigned char *vptr = p;
-            /* Check if this f/v pair is expired */
+            /* Skip fields not visible in the current context */
             long long expiry = hashTypeListpackGetExpiry(zl, vptr);
-            int is_expired = (expiry != EXPIRY_NONE && expiry <= commandTimeSnapshot());
+            int is_valid = hashTypeListpackFieldIsValid(expiry);
             p = lpNext(zl, vptr);
-            if (is_expired) continue;
+            if (!is_valid) continue;
             if (opts->use_pattern && !stringmatchlen(opts->pat, opts->patlen, (char *)str, len, 0)) {
                 continue;
             }

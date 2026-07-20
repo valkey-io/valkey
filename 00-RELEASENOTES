@@ -11,6 +11,57 @@ Upgrade urgency levels:
 | CRITICAL | There is a critical bug affecting MOST USERS. Upgrade ASAP.         |
 | SECURITY | There are security fixes in the release.                            |
 
+Valkey 9.1.1  -  Released Mon 20 July 2026
+------------------------------------------
+
+Upgrade urgency LOW: This is the second stable release of Valkey 9.1.
+
+### Behavior Changes
+* `ACL LIST`, `ACL SAVE` and `CONFIG REWRITE` omit the implicit `alldbs` rule so ACL files stay compatible with older versions by @dvkashapov (#3964)
+
+### Performance and Efficiency Improvements
+* Rework IO threads internals: activate threads based on main-thread active time and fix evicted-client accounting by @akashkgit (#3544)
+* Fix an IO-threads regression from the internal rework that reduced SET throughput by ~20% by @roshkhatri (#3938)
+
+### Bug Fixes
+* Fix a use-after-free crash when `ACL LOAD` deletes a user whose client cannot be freed immediately by @ranshid (#3800)
+* Enforce `db=` ACL permissions on every DB clause of `COPY`, closing a bypass via `REPLACE` or repeated DB arguments by @enjoy-binbin (#3801)
+* `CLUSTER FLUSHSLOT` now requires ACL access to all databases, since it removes the slot's keys from every database by @enjoy-binbin (#3806)
+* `HGETDEL` now returns a syntax error when the `FIELDS` keyword is missing or misspelled by @lcxn123 (#4049)
+* Fix `HRANDFIELD` with a positive count hanging in an infinite loop when non-expired fields are fewer than the count by @cjx-zar (#4047)
+* Fix `MOVE`/`COPY` leaving the client on the wrong database when a module subscribes to keyspace notifications by @enjoy-binbin (#4024)
+* Fix a crash when active hash-field expiration leaves one field in a large expiration bucket and it is later removed by @ranshid (#3950)
+* Fix an assertion failure in HEXPIRE, HGETDEL and HPERSIST when a module blocks the client from a keyspace notification by @enjoy-binbin (#3743)
+* Reject zipmap payloads with overflowing length fields during RDB and RESTORE validation, preventing out-of-bounds access by @madolson (#3920)
+* Reject listpack/ziplist sorted set payloads containing NAN scores on RDB load and RESTORE, preventing a later crash by @madolson (#3921)
+* Reject corrupt stream RDB/RESTORE payloads that share one pending entry across consumers, preventing a use-after-free by @smkher (#4073)
+* Fix a race with IO threads that could drop the leading bytes of a reply, corrupting responses to pipelined clients by @nanyan0312 (#4060)
+
+### Command and API Updates
+* `COMMAND INFO` in RESP3 now returns the subcommands field as an array instead of a set for commands without subcommands by @rickrams (#3939)
+
+### Cluster and Replication
+* Fix a Sentinel crash during coordinated failover when the connection to the old primary is lost by @lukepalmer (#4068)
+* Fix dual-channel replication full sync failing when data requires newer RDB encodings such as hash field TTLs by @hpatro (#4105)
+* Fix duplicate job completion and a stray `+OK` reply in the internal cluster slot-migration finish command by @chx9 (#3723)
+* Reject control characters in `SENTINEL SET` values to prevent Sentinel config file injection by @eifrah-aws (#3847)
+* Validate `cluster-announce-ip` and cluster AUX fields to prevent control-character injection into nodes.conf by @eifrah-aws (#3848)
+* Fix undefined behavior in failover delay calculation when `cluster-node-timeout` is set below 30 by @enjoy-binbin (#3941)
+
+### Module API Changes
+* Fix a use-after-free in `ValkeyModule_RegisterClusterMessageReceiver` when unregistering the first receiver of a message type by @eifrah-aws (#3846)
+
+### Observability and Logging
+* Redact key names and user data from more log messages when `hide-user-data-from-log` is enabled by @zackcam (#3872)
+* `ACL LOG` now reports the exact denied database ID when a `COPY` command is rejected by `db=` permissions by @enjoy-binbin (#3888)
+* Fix possibly garbled shard IDs in the cluster UPDATE message log line by @enjoy-binbin (#3942)
+* Fix negative replication transfer sizes in `INFO` when syncing an RDB larger than 2GB with disk-based sync by @chx9 (#3811)
+* Increase the maximum process title length from 255 to 1024 characters by @pkhartsk (#3843)
+* Fix a crash on 32-bit systems with 64-bit `time_t` (e.g. Alpine) when generating INFO output by @chenshi5012 (#3787)
+
+### Build and Tooling
+* Fix build warnings and deprecated API usage when building with OpenSSL 4.0 by @pkhartsk (#4016)
+
 Valkey 9.1.0 GA - Released Tue May 19 2026
 ---------------------
 
@@ -171,6 +222,7 @@ new features, performance improvements, and bug fixes.
 * Johan Bergström @jbergstroem
 * John @johnufida
 * Joseph Heyburn @jdheyburn
+* Jules Lasarte
 * Jun Yeong Kim @junyeong0619
 * Katie Holly @Fusl
 * Ken @otherscase
@@ -178,7 +230,10 @@ new features, performance improvements, and bug fixes.
 * Kurt McKee @kurtmckee
 * Kyle J. Davis @stockholmux
 * Kyle Kim @kyle-yh-kim
+* lcxn123 @lcxn123
 * Leon Anavi @leon-anavi
+* lovelypiska @chx9
+* Luke Palmer @lukepalmer
 * Madelyn Olson @madolson
 * Mangat Singh Toor @immangat
 * Marc Jakobi @mrcjkb
@@ -186,16 +241,18 @@ new features, performance improvements, and bug fixes.
 * Marvin Rösch @marvinroesch
 * Murad Shahmammadli @MuradSh
 * NAM UK KIM @namuk2004
+* nanyan @nanyan0312
 * Nikhil Manglore @Nikhil-Manglore
 * Ouri Half @ouriamzn
 * Patrik Hermansson @phermansson
 * Ping Xie @PingXie
-* Quanye Yang @Ada-Church-Closure
+* pkhartsk @pkhartsk
 * Quanye Yang @quanyeyang
 * Raghav Muddur @nmvk
 * Rain Valentine @rainsupreme
 * Ran Shidlansik @ranshid
 * Ricardo Dias @rjd15372
+* Rick Ramsay @rickrams
 * Ritoban Dutta @ritoban23
 * Roshan Khatri @roshkhatri
 * ruihong123 @ruihong123
@@ -210,6 +267,8 @@ new features, performance improvements, and bug fixes.
 * skyfirelee @artikell
 * Sourav Singh Rawat @frostzt
 * stydxm @stydxm
+* sushil paneru @sushilpaneru1
+* Taeknology @Taeknology
 * Ted Lyngmo @TedLyngmo
 * Tony Wooster @twooster
 * uriyage @uriyage
@@ -225,6 +284,8 @@ new features, performance improvements, and bug fixes.
 * Yana Molodetsky @yanamolo
 * Yang Zhao @yang-z-o
 * Yiwen Zhang @YiwenZhang12
+* yulazariy @yulazariy
 * yzc-yzc @yzc-yzc
+* zackcam
 * zhaozhao.zz @soloestoy
 * Zhijun Liao @zhijun42

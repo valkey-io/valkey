@@ -2417,6 +2417,9 @@ static void replicationUpdateFullSyncDuration(void) {
 }
 
 void replicaAfterLoadPrimaryRDB(connection *conn, rdbSaveInfo *rsi, int disk_based_sync) {
+    /* Finalize full sync duration here to exclude backlog draining/streaming time for simplicity and consistency. */
+    replicationUpdateFullSyncDuration();
+
     /* Final setup of the connected replica <- primary link */
     if (conn == server.repl_rdb_transfer_s) {
         dualChannelSyncHandleRdbLoadCompletion();
@@ -2426,8 +2429,6 @@ void replicaAfterLoadPrimaryRDB(connection *conn, rdbSaveInfo *rsi, int disk_bas
         server.repl_down_since = 0;
         /* Send the initial ACK immediately to put this replica in online state. */
         replicationSendAck();
-        /* Update the full sync duration metric for single channel replication. */
-        replicationUpdateFullSyncDuration();
     }
 
     /* Fire the primary link modules event. */
@@ -2468,6 +2469,7 @@ void replicaAfterLoadPrimaryRDB(connection *conn, rdbSaveInfo *rsi, int disk_bas
             restartAOFAfterSYNC();
         }
     }
+
 
     /* In case of dual channel replication sync we want to close the RDB connection
      * once the connection is established */
@@ -3482,8 +3484,6 @@ void dualChannelSyncSuccess(void) {
     /* We can resume reading from the primary connection once the local replication buffer has been loaded. */
     replicationSteadyStateInit();
     replicationSendAck(); /* Send ACK to notify primary that replica is synced */
-    /* Update the full sync duration metric for dual channel replication. */
-    replicationUpdateFullSyncDuration();
     server.rdb_client_id = -1;
     server.repl_rdb_channel_state = REPL_DUAL_CHANNEL_STATE_NONE;
 }

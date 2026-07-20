@@ -6632,7 +6632,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                     "master_port:%d\r\n", server.primary_port,
                     "master_link_status:%s\r\n", (server.repl_state == REPL_STATE_CONNECTED) ? "up" : "down",
                     "master_last_io_seconds_ago:%d\r\n", server.primary ? ((int)(server.unixtime - server.primary->last_interaction)) : -1,
-                    "master_last_full_sync_duration_ms:%lld\r\n", server.repl_full_sync_duration_ms,
+                    "primary_last_full_sync_duration_ms:%lld\r\n", server.repl_full_sync_duration_ms,
                     "master_sync_in_progress:%d\r\n", server.repl_state == REPL_STATE_TRANSFER,
                     "slave_read_repl_offset:%lld\r\n", replica_read_repl_offset,
                     "slave_repl_offset:%lld\r\n", replica_repl_offset,

@@ -937,7 +937,16 @@ static deleteResult subtreeDeleteItem(fbtreeIndex *fbt, node *n, const_sds item)
     if (index == inner->header.num_items) return (deleteResult){0};
 
     deleteResult child_result = subtreeDeleteItem(fbt, inner->children[index], item);
-    if (!child_result.delete_executed) return child_result;
+    /* Items are matched by pointer identity inside the leaf, but duplicate
+     * values may span sibling children after splits. While this child's high
+     * key still equals the item value, the pointed-to instance may live in a
+     * later sibling: keep descending rightward. */
+    while (!child_result.delete_executed) {
+        if (sdscmp(inner->anchors[index], (sds)item) != 0) return child_result;
+        index++;
+        if (index == inner->header.num_items) return (deleteResult){0};
+        child_result = subtreeDeleteItem(fbt, inner->children[index], item);
+    }
 
     /* Update child size after delete */
     inner->child_sizes[index]--;
@@ -1127,34 +1136,41 @@ const_sds fbtreeGetAtRank(fbtreeIndex *fbt, unsigned long rank) {
     return leaf->values[remaining];
 }
 
+/* Rank of the pointer-identical item within subtree n, or -1 if absent. */
+static long subtreeGetIndexOfItem(node *n, const_sds item) {
+    if (n->is_leaf) {
+        leafNode *leaf = (leafNode *)n;
+        for (int i = 0; i < leaf->header.num_items; i++) {
+            if (leaf->values[i] == item) return i;
+        }
+        return -1;
+    }
+
+    innerNode *inner = (innerNode *)n;
+    int index = findChildIndex(inner, item);
+    if (index == inner->header.num_items) return -1;
+
+    long rank_base = 0;
+    for (int i = 0; i < index; i++) rank_base += inner->child_sizes[i];
+
+    /* Items are matched by pointer identity inside the leaf, but duplicate
+     * values may span sibling children after splits: while this child's high
+     * key still equals the item value, keep searching rightward. */
+    while (index < inner->header.num_items) {
+        long sub = subtreeGetIndexOfItem(inner->children[index], item);
+        if (sub >= 0) return rank_base + sub;
+        if (sdscmp(inner->anchors[index], (sds)item) != 0) return -1;
+        rank_base += inner->child_sizes[index];
+        index++;
+    }
+    return -1;
+}
+
 /* Get rank of an item given a direct pointer to it (from hashtable lookup).
  * The item pointer must be a valid pointer into a leaf node's values array. */
 long fbtreeGetIndexOfItem(fbtreeIndex *fbt, const_sds item) {
     if (!fbt->root || !item) return -1;
-
-    long rank = 0;
-    node *current = fbt->root;
-
-    while (!current->is_leaf) {
-        innerNode *inner = (innerNode *)current;
-        int child_idx = findChildIndex(inner, item);
-        if (child_idx >= inner->header.num_items) return -1;
-
-        for (int i = 0; i < child_idx; i++) {
-            rank += inner->child_sizes[i];
-        }
-        current = inner->children[child_idx];
-    }
-
-    leafNode *leaf = (leafNode *)current;
-
-    /* Find position by pointer comparison (item is known to be in this leaf) */
-    for (int i = 0; i < leaf->header.num_items; i++) {
-        if (leaf->values[i] == item) {
-            return rank + i;
-        }
-    }
-    return -1; /* Not found */
+    return subtreeGetIndexOfItem(fbt->root, item);
 }
 
 unsigned long fbtreeLength(fbtreeIndex *fbt) {
@@ -2438,6 +2454,13 @@ void fbtreeDismissMemory(fbtreeIndex *fbt) {
     leafNode *leaf = fbt->leftmost_leaf;
     while (leaf) {
         leafNode *next = leaf->next;
+        /* The packed items are allocated separately from the leaf node.
+         * With large members they are the allocations that span whole
+         * pages, so each item is dismissed along with the leaf. */
+        for (int i = 0; i < leaf->header.num_items; i++) {
+            sds v = leaf->values[i];
+            zmadvise_dontneed(sdsAllocPtr(v), sdsAllocSize(v));
+        }
         zmadvise_dontneed(leaf, 0);
         leaf = next;
     }

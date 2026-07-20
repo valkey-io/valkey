@@ -33,6 +33,10 @@ static sds packLexBound(uint64_t score_prefix, const_sds element);
  * ========================================================================== */
 
 static inline uint64_t scoreToSortable(double score) {
+    /* Collapse IEEE negative zero into positive zero: the two compare equal
+     * numerically but differ in bit pattern, and equal scores must map to a
+     * single tree key for score-range comparisons to match. */
+    if (score == 0.0) score = 0.0;
     uint64_t bits;
     memcpy(&bits, &score, sizeof(bits));
     if (bits & (1ULL << 63)) {

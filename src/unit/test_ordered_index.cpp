@@ -667,6 +667,28 @@ TEST_F(OrderedIndexTest, SpecialDoubleValues) {
     orderedIndexResetIterator(&iter);
 }
 
+TEST_F(OrderedIndexTest, SignedZeroScoresShareOneKey) {
+    /* IEEE -0.0 and +0.0 must map to the same tree key so that numeric
+     * score-range semantics hold (as they did with C double comparison). */
+    insert(-0.0, "neg");
+    insert(0.0, "pos");
+
+    ASSERT_EQ(orderedIndexCountScoreRange(oi, 0.0, 0.0, 0, 0), 2UL);
+    ASSERT_EQ(orderedIndexCountScoreRange(oi, -0.0, -0.0, 0, 0), 2UL);
+    ASSERT_EQ(orderedIndexCountScoreRange(oi, -0.0, 0.0, 0, 0), 2UL);
+
+    /* Range iteration over [0, 0] must yield both members. */
+    OrderedIndexIterator iter;
+    orderedIndexInitIterator(&iter, oi);
+    orderedIndexSeekToScoreRange(&iter, 0.0, 0.0, false, false, 0);
+    ASSERT_NE(orderedIndexNext(&iter), nullptr);
+    ASSERT_NE(orderedIndexNext(&iter), nullptr);
+
+    /* Deleting by score range 0..0 must remove members stored with -0. */
+    ASSERT_EQ(orderedIndexDeleteRangeByScore(oi, 0.0, 0.0, false, false, NULL, NULL), 2UL);
+    ASSERT_EQ(orderedIndexLength(oi), 0UL);
+}
+
 TEST_F(OrderedIndexTest, EmptyIndexOperations) {
     ASSERT_EQ(orderedIndexLength(oi), 0UL);
     OrderedIndexIterator iter;
@@ -755,6 +777,35 @@ TEST_F(OrderedIndexTest, DuplicateInsert_DeleteOne) {
     OrderedIndexItem *remaining = orderedIndexGetFirst(oi);
     ASSERT_NE(remaining, nullptr);
     assertScore(remaining, 1.0);
+}
+
+TEST_F(OrderedIndexTest, DuplicateInsert_ManySpanningLeafSplits) {
+    /* Insert enough identical (score, element) pairs to overflow a single
+     * leaf and force splits, so equal values span sibling leaves whose
+     * anchors are identical. Every instance must remain individually
+     * addressable by rank and deletable by pointer, regardless of which
+     * sibling leaf it landed in. */
+    enum { DUP_COUNT = 200 }; /* several leaves worth of duplicates */
+    OrderedIndexItem *items[DUP_COUNT];
+    for (int i = 0; i < DUP_COUNT; i++) items[i] = insert(1.0, "dup");
+    ASSERT_EQ(orderedIndexLength(oi), (unsigned long)DUP_COUNT);
+
+    /* Every instance is findable and each occupies a distinct rank. */
+    bool seen[DUP_COUNT] = {false};
+    for (int i = 0; i < DUP_COUNT; i++) {
+        unsigned long rank = orderedIndexGetIndex(oi, items[i]);
+        ASSERT_LT(rank, (unsigned long)DUP_COUNT) << "instance " << i << " not found by rank lookup";
+        ASSERT_FALSE(seen[rank]) << "instances " << i << " share rank " << rank;
+        seen[rank] = true;
+    }
+
+    /* Delete every instance by pointer, newest first (later instances are
+     * the ones routed past by a leftmost-only descent). */
+    for (int i = DUP_COUNT - 1; i >= 0; i--) {
+        orderedIndexDelete(oi, items[i]);
+        ASSERT_EQ(orderedIndexLength(oi), (unsigned long)i) << "delete of instance " << i << " did not remove it";
+    }
+    verifyOI();
 }
 
 TEST_F(OrderedIndexTest, DuplicateInsert_PopRemovesOne) {
@@ -1734,6 +1785,17 @@ TEST_F(OrderedIndexTest, CountLexRange) {
 
 TEST_F(OrderedIndexTest, CountLexRangeEmpty) {
     ASSERT_EQ(countLexRange("a", "z", 0, 0), 0UL);
+}
+
+/* ========== Memory tests ========== */
+
+TEST_F(OrderedIndexTest, DismissMemoryWalksItems) {
+    /* Smoke test: dismissal must walk populated leaves and their separately
+     * allocated packed items without corrupting the index. */
+    populateSequential(200);
+    orderedIndexDismissMemory(oi);
+    ASSERT_EQ(orderedIndexLength(oi), 200UL);
+    ASSERT_EQ(orderedIndexCountScoreRange(oi, NEG_INF, POS_INF, 0, 0), 200UL);
 }
 
 /* ========== On-Delete Callback Tests ========== */

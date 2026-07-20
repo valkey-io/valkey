@@ -2248,6 +2248,20 @@ start_server {tags {"zset"}} {
         $rd2 close
     } {0} {cluster:skip}
 
+    test {ZSET btree signed zero score matches numeric zero in range ops} {
+        with_config zset-max-ziplist-entries 0 {
+            r del zzero
+            r zadd zzero -0 m1
+            r zadd zzero 0 m2
+            assert_encoding btree zzero
+            assert_equal 2 [r zcount zzero 0 0]
+            assert_equal {m1 m2} [lsort [r zrangebyscore zzero 0 0]]
+            assert_equal 2 [r zcount zzero -1 0]
+            assert_equal 2 [r zremrangebyscore zzero 0 0]
+            assert_equal 0 [r exists zzero]
+        }
+    }
+
     test {ZSET btree order consistency when elements are moved} {
         with_config zset-max-ziplist-entries 0 {
             for {set times 0} {$times < 10} {incr times} {

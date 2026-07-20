@@ -5,6 +5,7 @@
  */
 
 #include "io_threads.h"
+#include "cluster_migrateslots.h"
 
 static _Thread_local int thread_id = 0; /* Thread local var */
 static pthread_t io_threads[IO_THREADS_MAX_NUM] = {0};
@@ -444,6 +445,11 @@ int trySendWriteToIOThreads(client *c) {
     if (getClientType(c) == CLIENT_TYPE_REPLICA && c->repl_data->repl_state != REPLICA_STATE_ONLINE) return C_ERR;
     /* We can't offload debugged clients as the main-thread may read at the same time  */
     if (c->flag.lua_debug) return C_ERR;
+    /* Avoid offloading writes to IO thread for the slot migration export job while snapshotting.
+     * During this phase, replies accumulate in the output buffer but must not be flushed
+     * as concurrent IO thread writes would race with the main thread processing incoming
+     * ACKs on the same client's query buffer. */
+    if (c->slot_migration_job && !clusterSlotMigrationShouldInstallWriteHandler(c)) return C_ERR;
 
     size_t tid = (c->id % (server.active_io_threads_num - 1)) + 1;
     /* Handle case where client has a pending IO read job on a different thread:

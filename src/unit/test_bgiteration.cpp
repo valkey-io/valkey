@@ -2040,7 +2040,7 @@ TEST_F(BgIterationTest, writeWith2Keys_eventual_setNewKey_DependantFuture) {
     simulateBlockedWrite(c);
 
     // Key 13 is processed out of order since the write depends on it.  It was expedited to the
-    //  front because there are no barrier envents in the queue.
+    //  front because there are no barrier events in the queue.
     expectReadKey(it, 13);
 
     // Key 9 was already in the queue.  Reading key 9 will unblock key 13, allowing us to write.

@@ -600,6 +600,65 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {cluste
         }
     }
 
+    test "Slot Migration cleanup propagates CLUSTER FLUSHSLOT" {
+        # Populate data before migration
+        populate 1000 "$16383_slot_tag:" 1000 -2
+
+        # Attach stream listener to Node 2
+        set repl [attach_to_replication_stream_on_connection -2]
+
+        # Perform slot migration
+        assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id]
+        set jobname [get_job_name 2 16383]
+        wait_for_migration 0 16383
+
+        # Keys successfully migrated
+        assert_match "1000" [R 0 CLUSTER COUNTKEYSINSLOT 16383]
+        assert_match "0" [R 2 CLUSTER COUNTKEYSINSLOT 16383]
+
+        # Also eventually reflected in replicas
+        wait_for_countkeysinslot 3 16383 1000
+        wait_for_countkeysinslot 5 16383 0
+
+        # Migration log shows success on both ends
+        assert {[dict get [get_migration_by_name 0 $jobname] state] eq "success"}
+        assert {[dict get [get_migration_by_name 2 $jobname] state] eq "success"}
+
+        # Read stream with 5s timeout for CLUSTER FLUSHSLOT
+        set found_flushslot 0
+        set found_individual_dels 0
+        set empty_count 0
+        while {$empty_count < 50} {
+            set cmd [read_from_replication_stream $repl]
+            if {$cmd eq ""} {
+                incr empty_count
+                after 100
+                continue
+            }
+            set empty_count 0
+            if {[string match -nocase "*flushslot*" $cmd]} {
+                set found_flushslot 1
+                break
+            }
+            if {[string match -nocase "*unlink*" $cmd] || [string match -nocase "*del*" $cmd]} {
+                set found_individual_dels 1
+            }
+        }
+
+        assert_equal 1 $found_flushslot
+        assert_equal 0 $found_individual_dels
+
+        close_replication_stream $repl
+
+        # Cleanup for next test
+        assert_match "OK" [R 0 FLUSHDB SYNC]
+        assert_match "OK" [R 2 FLUSHDB SYNC]
+        assert_match "OK" [R 0 SAVE]
+        assert_match "OK" [R 2 SAVE]
+        assert_match "OK" [R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node2_id]
+        wait_for_migration 2 16383
+    }
+
     proc verify_client_flag {idx flag expected_count} {
         set clients [split [string trim [R $idx client list]] "\r\n"]
         set found 0

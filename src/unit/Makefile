@@ -115,6 +115,15 @@ WRAP_DIR := wrapped
 VALKEY_SERVER_WRAP_LIB := $(WRAP_DIR)/wrappedlibvalkey.a
 ENGINE_SERVER_WRAP_OBJ := $(addprefix $(WRAP_DIR)/, $(ENGINE_SERVER_OBJ))
 
+# Homebrew does not add llvm/bin to PATH by default, so we check the standard
+# Homebrew prefix locations for both Apple Silicon (/opt/homebrew) and Intel (/usr/local).
+BREW_LLVM_BIN := $(firstword $(wildcard /opt/homebrew/opt/llvm/bin /usr/local/opt/llvm/bin))
+ifneq ($(BREW_LLVM_BIN),)
+  export PATH := $(BREW_LLVM_BIN):$(PATH)
+else
+  $(error LLVM tools not found. Install via: brew install llvm)
+endif
+
 $(WRAP_DIR):
 	@mkdir -p $(WRAP_DIR)
 

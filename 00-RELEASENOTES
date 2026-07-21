@@ -14,7 +14,7 @@ Upgrade urgency levels:
 Valkey 7.2.14  -  Released Tue 21 July 2026
 -------------------------------------------
 
-Upgrade urgency SECURITY: This is the 15th stable release of Valkey 7.2.
+Upgrade urgency SECURITY: This release includes security fixes we recommend you apply as soon as possible.
 
 ### Security Fixes
 * CVE-2026-56684: Fix a use-after-free in TLS connection handling that could allow an authenticated client to achieve remote code execution using CLIENT KILL (#4234)

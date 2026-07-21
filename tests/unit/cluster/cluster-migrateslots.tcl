@@ -268,6 +268,7 @@ proc recover_slot_migration_state {} {
     for {set i 0} {$i < [llength $::servers]} {incr i} {
         catch {R $i CONFIG SET rdb-key-save-delay 0}
         catch {R $i CONFIG SET repl-timeout 60}
+        catch {R $i CONFIG SET hz 10}
     }
     foreach n {0 1 2} {
         catch {R $n CLUSTER CANCELSLOTMIGRATIONS}

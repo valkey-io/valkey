@@ -1,17 +1,61 @@
 Valkey 7.2 release notes
 ========================
 
---------------------------------------------------------------------------------
 Upgrade urgency levels:
 
-LOW:      No need to upgrade unless there are new features you want to use.
-MODERATE: Program an upgrade of the server, but it's not urgent.
-HIGH:     There is a critical bug that may affect a subset of users. Upgrade!
-CRITICAL: There is a critical bug affecting MOST USERS. Upgrade ASAP.
-SECURITY: There are security fixes in the release.
---------------------------------------------------------------------------------
+| Level    | Meaning                                                             |
+|----------|---------------------------------------------------------------------|
+| LOW      | No need to upgrade unless there are new features you want to use.   |
+| MODERATE | Program an upgrade of the server, but it's not urgent.              |
+| HIGH     | There is a critical bug that may affect a subset of users. Upgrade! |
+| CRITICAL | There is a critical bug affecting MOST USERS. Upgrade ASAP.         |
+| SECURITY | There are security fixes in the release.                            |
 
-================================================================================
+Valkey 7.2.14  -  Released Tue 21 July 2026
+-------------------------------------------
+
+Upgrade urgency SECURITY: This is the 15th stable release of Valkey 7.2.
+
+### Security Fixes
+* CVE-2026-56684: Fix a use-after-free in TLS connection handling that could allow an authenticated client to crash the server using CLIENT KILL (#4234)
+* CVE-2026-63639: Reject corrupt stream RDB files containing a shared NACK across consumers. Reported by @z0v3r1n and @lifip. (#4073)
+
+### Behavior Changes
+* Strictly check CRLF when parsing requests and reject malformed input as a protocol error instead of misparsing it by @enjoy-binbin (#2872)
+
+### Bug Fixes
+* Fix a memory leak in `ZDIFF` and `ZDIFFSTORE` when the result set becomes empty during computation by @sarthakaggarwal97 (#3342)
+* Fix a double free when loading a stream consumer group from a corrupted RDB or RESTORE payload by @enjoy-binbin (#3498)
+* Fix a potential crash from a NULL pointer dereference when updating the TLS pending-data flag by @zuiderkwast (#3641)
+* Fix a Lua VM crash when loading functions after `FUNCTION FLUSH ASYNC` and ensure flushed scripts' memory is released by @enjoy-binbin (#1826)
+* Fix a use-after-free when a module unregisters and re-registers a cluster message receiver by @eifrah-aws (#3846)
+* Fix a file descriptor leak when a blocking connection attempt times out, e.g. during `MIGRATE` to an unreachable host by @madolson (#3541)
+* Fix a crash in the module API when `VM_GetLRU`, `VM_SetLRU`, `VM_GetLFU`, or `VM_SetLFU` is called with a NULL key by @yaronsananes (#3610)
+* Fix invalid memory access when loading a malformed zipmap payload via `RESTORE` (CVE-2026-25243) by @ranshid (#3619)
+* Reject zipmap payloads whose length fields overflow, which could cause out-of-bounds access on 32-bit platforms via `RESTORE` by @madolson (#3920)
+* Reject NAN scores in listpack and ziplist encoded sorted sets on RDB/`RESTORE` load, preventing a later server crash by @madolson (#3921)
+* Fix a startup crash when generating `INFO` output on 32-bit systems where `time_t` is 64-bit, such as Alpine 3.23 by @chenshi5012 (#3787)
+* Fix use of uninitialized memory when registering Lua functions with `FUNCTION LOAD` by @enjoy-binbin (#2750)
+* Fix listpack corruption and server crash when `XTRIM` marks the last entry in a stream listpack node as deleted by @smkher (#3591)
+
+### Command and API Updates
+* Fix `COMMAND INFO` returning the subcommands field as a RESP3 Set instead of an Array for commands without subcommands by @rickrams (#3939)
+
+### Cluster and Replication
+* Reject control characters in `SENTINEL SET` values and escape them on config rewrite to prevent config-file injection by @eifrah-aws (#3847)
+* Reject control characters and unsafe delimiters in cluster AUX fields and `cluster-announce-ip` to prevent nodes.conf injection by @eifrah-aws (#3848)
+
+### Configuration
+* Fix `lua-enable-insecure-api` having no effect when enabled at startup via the config file or command line by @enjoy-binbin (#3548)
+
+### Observability and Logging
+* Log the real error (e.g. `Connection reset by peer`) instead of the misleading `Success` on replication sync I/O errors by @abmathur-ie (#3580)
+* Increase the maximum process title length from 255 to 1024 characters to avoid truncation with long paths by @pkhartsk (#3843)
+
+### CLI and Tools
+* Fix `valkey-cli --cluster del-node` failing with `No such node ID` when removing unreachable or failed nodes by @yang-z-o (#3209)
+* Fix `valkey-cli --cluster fix` assigning all uncovered slots to the same primary instead of spreading them randomly by @abmathur-ie (#3586)
+
 Valkey 7.2.13  -  Tue 05 May 2026
 ================================================================================
 
@@ -291,3 +335,21 @@ A special thank you for the amount of work put into this release by:
 - Vitah Lin
 - Ziyang Zeng (For creating the logo!)
 - The many other community members who provided their support!
+
+### Contributors
+* abmathur-ie @abmathur-ie
+* Binbin @enjoy-binbin
+* Björn Svensson @bjosv
+* chenshi @chenshi5012
+* eifrah-aws @eifrah-aws
+* jjuleslasarte @jjuleslasarte
+* Madelyn Olson @madolson
+* pkhartsk @pkhartsk
+* Ran Shidlansik @ranshid
+* Rick Ramsay @rickrams
+* Roshan Khatri @roshkhatri
+* sananes @yaronsananes
+* Sarthak Aggarwal @sarthakaggarwal97
+* Saurabh K @smkher
+* Viktor Söderqvist @zuiderkwast
+* Yang Zhao @yang-z-o

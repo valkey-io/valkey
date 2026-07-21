@@ -14,11 +14,11 @@ Upgrade urgency levels:
 Valkey 8.1.9  -  Released Tue 21 July 2026
 ------------------------------------------
 
-Upgrade urgency SECURITY: This is the tenth stable release of Valkey 8.1.
+Upgrade urgency SECURITY: This release includes security fixes we recommend you apply as soon as possible.
 
 ### Security Fixes
-* CVE-2026-56684: Fix a use-after-free in TLS connection handling that could allow an authenticated client to crash the server using CLIENT KILL (#4234)
-* CVE-2026-63639: Reject corrupt stream RDB files containing a shared NACK across consumers. Reported by @z0v3r1n and @lifip. (#4073)
+* CVE-2026-56684: Fix a use-after-free in TLS connection handling that could allow an authenticated client to achieve remote code execution using CLIENT KILL (#4234)
+* CVE-2026-63639: Reject corrupt stream RDB files containing a shared NACK across consumers, which could allow remote code execution. Reported by @z0v3r1n and @lifip. (#4073)
 
 ### Bug Fixes
 * Fix clients being left on the wrong database after module keyspace notifications from commands like `MOVE` and `COPY` by @enjoy-binbin (#4024)
@@ -26,17 +26,9 @@ Upgrade urgency SECURITY: This is the tenth stable release of Valkey 8.1.
 * Reject zipmap `RESTORE` payloads with overflowing length fields that could cause out-of-bounds access on 32-bit builds by @madolson (#3920)
 * Reject NAN scores when loading listpack/ziplist-encoded sorted sets, preventing a crash from crafted `RESTORE` payloads by @madolson (#3921)
 * Fix a startup crash when generating `INFO` output on 32-bit systems where `time_t` is 64-bit (e.g. Alpine time64) by @chenshi5012 (#3787)
-
-### Command and API Updates
 * Fix `COMMAND INFO` in RESP3 to reply with an empty Array instead of a Set for commands without subcommands by @rickrams (#3939)
-
-### Cluster and Replication
 * Reject invalid characters in cluster AUX fields and `cluster-announce-ip` to prevent `nodes.conf` corruption and injection by @eifrah-aws (#3848)
-
-### Configuration
 * Fix `lua-enable-insecure-api` having no effect when enabled at startup via config file or command line by @enjoy-binbin (#3548)
-
-### Observability and Logging
 * Increase the maximum process title length from 255 to 1024 characters to avoid truncation with long installation paths by @pkhartsk (#3843)
 
 Valkey 8.1.8  -  Tue 02 June 2026
@@ -384,29 +376,91 @@ Bug Fixes
 
 We appreciate the efforts of all who contributed code to this release!
 
-
-Alan Scherger (flyinprogrammer), Amit Nagler (naglera), Anastasia Alexandrova (nastena1606), Basel Naamna (xbasel), Ben Totten (bentotten), Benson-li (li-benson), 
-Binbin (enjoy-binbin), Bogdan Petre (bogdanp05), chzhoo, Caiyi Wu (Codebells), Danish Mehmood (danish-mehmood), Eran Ifrah (eifrah-aws), Guillaume Koenig (knggk), 
-Harkrishn Patro (hpatro), Jacob Murphy (murphyjacob4), jeon1226, Jim Brunner (JimB123), Josef Šimánek (simi), Jungwoo Song (bluayer), Karthick Ariyaratnam (karthyuom), 
-Karthik Subbarao (KarthikSubbarao), kronwerk, Lipeng Zhu (lipzhu), Madelyn Olson (madolson), Marek Zoremba (zori-janea), Masahiro Ide (imasahiro), Meinhard Zhou (MeinhardZhou), Melroy van den Berg (melroy89), Mikhail Koviazin (mkmkme), Nadav Gigi (NadavGigi), Nadav Levanoni (nadav-levanoni), Nikhil Manglore (Nikhil-Manglore), Parth Patel (parthpatel), Pierre (pieturin), Ping Xie (PingXie), Qu Chen (QuChen88), Rain Valentine (SoftlyRaining), Ray Cao (RayaCoo), Ran Shidlansik (ranshid), Ray Cao (RayaCoo), Ricardo Dias (rjd15372), Romain Geissler (Romain-Geissler-1A), Roman Gershman (romange), Roshan Khatri (roshkhatri), Rueian (rueian), Sarthak Aggarwal (sarthakaggarwal97), Seungmin Lee (sungming2), 
-Shai Zarka (zarkash-aws), Shivshankar (Shivshankar-Reddy), Simon Baatz (gmbnomis), Sinkevich Artem (ArtSin), Stav Ben-Tov (stav-bentov), Stefan Mueller (muelstefamzn), secwall, 
-Tal Shachar (talxsha), Thalia Archibald (thaliaarchi), Uri Yagelnik (uriyage), Vadym Khoptynets (poiuj), Vanessa Tang (YueTang-Vanessa), Viktor Söderqvist (zuiderkwast), Viktor Szépe (szepeviktor), VoletiRam, 
-Vu Diep (vudiep411), Wen Hui (hwware), WelongZuo, Yanqi Lv (lyq2333), Yury Fridlyand (Yury-Fridlyand), Zvi Schneider (zvi-code), bodong.ybd (yangbodong22011), chx9 (chx9), otheng (otheng03), skyfirelee (artikell), Shawn Wang (xingbowang), Xuyang WANG (Nugine), zhaozhao.zz (soloestoy), zhenwei pi (pizhenwei), zixuan zhao (azuredream), 烈香 (hengyoush), 
-风去幽墨 (fengquyoumo)
-
 ### Contributors
+* Alan Scherger @flyinprogrammer
 * Alina Liu @asagege
+* Amit Nagler @naglera
+* Anastasia Alexandrova @nastena1606
+* Basel Naamna @xbasel
+* Ben Totten @bentotten
+* Benson-li @li-benson
 * Binbin @enjoy-binbin
 * Björn Svensson @bjosv
+* bodong.ybd @yangbodong22011
+* Bogdan Petre @bogdanp05
+* Caiyi Wu @Codebells
 * chenshi @chenshi5012
+* chx9 @chx9
+* chzhoo @chzhoo
+* Danish Mehmood @danish-mehmood
 * eifrah-aws @eifrah-aws
+* Guillaume Koenig @knggk
+* Harkrishn Patro @hpatro
+* Jacob Murphy @murphyjacob4
+* jeon1226 @jeon1226
+* Jim Brunner @JimB123
 * jjuleslasarte @jjuleslasarte
+* Josef Šimánek @simi
+* Jungwoo Song @bluayer
+* Karthick Ariyaratnam @karthyuom
+* Karthik Subbarao @KarthikSubbarao
+* kronwerk @kronwerk
+* Lipeng Zhu @lipzhu
 * Madelyn Olson @madolson
+* Marek Zoremba @zori-janea
+* Masahiro Ide @imasahiro
+* Meinhard Zhou @MeinhardZhou
+* Melroy van den Berg @melroy89
+* Mikhail Koviazin @mkmkme
+* Nadav Gigi @NadavGigi
+* Nadav Levanoni @nadav-levanoni
 * Nikhil Manglore @Nikhil-Manglore
+* otheng @otheng03
+* Parth Patel @parthpatel
+* Pierre @pieturin
+* Ping Xie @PingXie
 * pkhartsk @pkhartsk
+* Qu Chen @QuChen88
 * Rain Valentine @rainsupreme
+* Ran Shidlansik @ranshid
+* Ray Cao @RayaCoo
+* Ricardo Dias @rjd15372
 * Rick Ramsay @rickrams
+* Romain Geissler @Romain-Geissler-1A
+* Roman Gershman @romange
+* Roshan Khatri @roshkhatri
+* Rueian @rueian
 * sananes @yaronsananes
 * Sarthak Aggarwal @sarthakaggarwal97
 * Saurabh K @smkher
+* secwall @secwall
+* Seungmin Lee @sungming2
+* Shai Zarka @zarkash-aws
+* Shawn Wang @xingbowang
+* Shivshankar @Shivshankar-Reddy
+* Simon Baatz @gmbnomis
+* Sinkevich Artem @ArtSin
+* skyfirelee @artikell
+* Stav Ben-Tov @stav-bentov
+* Stefan Mueller @muelstefamzn
 * sushil paneru @sushilpaneru1
+* Tal Shachar @talxsha
+* Thalia Archibald @thaliaarchi
+* Uri Yagelnik @uriyage
+* Vadym Khoptynets @poiuj
+* Vanessa Tang @YueTang-Vanessa
+* Viktor Szépe @szepeviktor
+* Viktor Söderqvist @zuiderkwast
+* VoletiRam @VoletiRam
+* Vu Diep @vudiep411
+* WelongZuo @WelongZuo
+* Wen Hui @hwware
+* Xuyang WANG @Nugine
+* Yanqi Lv @lyq2333
+* Yury Fridlyand @Yury-Fridlyand
+* zhaozhao.zz @soloestoy
+* zhenwei pi @pizhenwei
+* zixuan zhao @azuredream
+* Zvi Schneider @zvi-code
+* 烈香 @hengyoush
+* 风去幽墨 @fengquyoumo

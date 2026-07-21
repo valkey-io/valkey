@@ -14,16 +14,14 @@ Upgrade urgency levels:
 Valkey 8.0.10  -  Released Tue 21 July 2026
 -------------------------------------------
 
-Upgrade urgency SECURITY: This is the eleventh stable release of Valkey 8.0.
+Upgrade urgency SECURITY: This release includes security fixes we recommend you apply as soon as possible.
 
 ### Security Fixes
 * CVE-2026-56684: Fix a use-after-free in TLS connection handling that could allow an authenticated client to crash the server using CLIENT KILL (#4234)
 * CVE-2026-63639: Reject corrupt stream RDB files containing a shared NACK across consumers. Reported by @z0v3r1n and @lifip. (#4073)
 
-### Behavior Changes
-* Strictly validate CRLF line endings when parsing the RESP protocol, rejecting malformed requests as protocol errors by @enjoy-binbin (#2872)
-
 ### Bug Fixes
+* Strictly validate CRLF line endings when parsing the RESP protocol, rejecting malformed requests as protocol errors by @enjoy-binbin (#2872)
 * Fix memory leak in `ZDIFF`/`ZDIFFSTORE` when the result set becomes empty before all input sets are processed by @sarthakaggarwal97 (#3342)
 * Fix crash caused by a race between asynchronous client freeing and IO threads reading from the closing client by @deepakrn (#3458)
 * Fix double free when loading corrupt stream RDB data containing duplicate consumer PEL entries by @enjoy-binbin (#3498)
@@ -40,25 +38,15 @@ Upgrade urgency SECURITY: This is the eleventh stable release of Valkey 8.0.
 * Reject zipmap `RESTORE` payloads with overflowing length fields that could cause out-of-bounds access on 32-bit builds by @madolson (#3920)
 * Reject NAN scores in listpack and ziplist encoded sorted sets on RDB load, preventing a later crash on skiplist conversion by @madolson (#3921)
 * Fix crash on 32-bit systems where time_t is 64-bit (e.g. Alpine with time64) when generating INFO output by @chenshi5012 (#3787)
-
-### Command and API Updates
 * `COMMAND INFO` in RESP3 now returns an empty Array instead of a Set for the subcommands field of commands without subcommands by @rickrams (#3939)
-
-### Cluster and Replication
 * Manual failover votes are no longer restricted by two times the node timeout, preventing manual failover timeouts by @enjoy-binbin (#1305)
 * Automatic failover votes are no longer restricted by two times the node timeout, matching the manual failover change by @enjoy-binbin (#1356)
 * `SENTINEL SET` now rejects values containing control characters and config rewrite escapes them, preventing config injection by @eifrah-aws (#3847)
 * Reject control characters and delimiters in cluster AUX fields and `cluster-announce-ip` to prevent nodes.conf injection by @eifrah-aws (#3848)
-
-### Configuration
 * Fix `lua-enable-insecure-api yes` not taking effect when set at startup via config file or command line by @enjoy-binbin (#3548)
-
-### Observability and Logging
 * Log 'Connection reset by peer' instead of the misleading 'Success' when the connection to the primary closes during sync by @abmathur-ie (#3580)
 * Redact key names and user data from additional server log messages when `hide-user-data-from-log` is enabled by @zackcam (#3872)
 * Increase the maximum process title length from 255 to 1024 characters to avoid truncation with long paths by @pkhartsk (#3843)
-
-### CLI and Tools
 * `valkey-cli --cluster del-node` can now remove unreachable or failed nodes instead of failing with 'No such node ID' by @yang-z-o (#3209)
 * Fix `valkey-cli --cluster` assigning all uncovered slots to the same primary instead of distributing them randomly by @abmathur-ie (#3586)
 
@@ -643,41 +631,127 @@ Experimental
 
 We appreciate the efforts of all who contributed code to this release!
 
-lan Slang, Binbin, Brennan, Chen Tianjie, Cui Fliter, Daniel House, Darren Jiang,
-David Carlier, Debing Sun, Dingrui, Dmitry Polyakovsky, Eran Liberty, Gabi Ganam,
-George Guimares, Guillaume Koenig, Guybe, Harkrishn Patro, Hassaan Khan, Hwang Si Yeon,
-ICHINOSE Shogo, icy17, Ikko Eltociear Ashimine, iKun, Itamar Haber, Jachin, Jacob Murphy,
-Jason Elbaum, Jeff Liu, John Sully, John Vandenberg, Jonathan Wright, Jonghoonpark, Joe Hu,
-Josiah Carlson, Juho Kim, judeng, Jun Luo, K.G. Wang, Karthik Subbarao, Karthick Ariyaratnam,
-kell0gg, Kyle Kim, Leibale Eidelman, LiiNen, Lipeng Zhu, Lior Kogan, Lior Lahav, Madelyn Olson,
-Makdon, Maria Markova, Mason Hall, Matthew Douglass, meiravgri, michalbiesek, Mike Dolan,
-Mikel Olasagasti Uranga, Moshe Kaplan, mwish, naglera, NAM UK KIM, Neal Gompa, nitaicaro,
-Nir Rattner, Oran Agra, Ouri Half, Ozan Tezcan, Parth, PatrickJS, Pengfei Han, Pierre, Ping Xie,
-poiuj, pshankinclarke, ranshid, Ronen Kalish, Roshan Khatri, Samuel Adetunji, Sankar, secwall,
-Sergey Fedorov, Sher_Sun, Shivshankar, skyfirelee, Slava Koyfman, Subhi Al Hasan, sundb,
-Ted Lyngmo, Thomas Fline, tison, Tom Morris, Tyler Bream, uriyage, Viktor Söderqvist, Vitaly,
-Vitah Lin, VoletiRam, w. ian douglas, WangYu, Wen Hui, Wenwen Chen, Yaacov Hazan, Yanqi Lv,
-Yehoshua Hershberg, Yves LeBras, zalj, Zhao Zhao, zhenwei pi, zisong.cw
-
 ### Contributors
 * abmathur-ie @abmathur-ie
+* Amit Nagler @naglera
 * bandalgomsu @bandalgomsu
 * Binbin @enjoy-binbin
 * Björn Svensson @bjosv
+* Brennan @BCathcart
+* Chen Tianjie @CharlesChen888
 * chenshi @chenshi5012
+* Cui Fliter @cuishuang
+* Daniel House @daniel-house
+* Darren Jiang @DarrenJiang13
+* David Carlier @devnexen
+* Debing Sun @sundb
 * Deepak Nandihalli @deepakrn
+* Dingrui @Bannirui
+* Dmitry Polyakovsky @dmitrypol
 * eifrah-aws @eifrah-aws
+* Eran Liberty @eliblight
+* Gabi Ganam @gabiganam
+* George Guimares @georgeanderson
+* Guillaume Koenig @knggk
+* Guybe @guybe7
+* Harkrishn Patro @hpatro
+* Hassaan Khan @hqkhan
+* Hwang Si Yeon @lowgiant
+* Ian Slang
+* ICHINOSE Shogo @shogo82148
+* icy17 @icy17
+* Ikko Eltociear Ashimine @eltociear
+* iKun @xuliang0317
+* Itamar Haber @itamarhaber
+* Jachin @ygcaicn
+* Jacob Murphy @murphyjacob4
+* Jason Elbaum @jhelbaum
+* Jeff Liu @LiuLiujie
 * jjuleslasarte @jjuleslasarte
+* Joe Hu @jowhuw
+* John Sully @JohnSully
+* John Vandenberg @jayvdb
+* Jonathan Wright @jonathanspw
+* Jonghoonpark @dev-jonghoonpark
+* Josiah Carlson @josiahcarlson
+* judeng @judeng
+* Juho Kim @AussieSeaweed
+* Jun Luo @luoos
+* K.G. Wang @wkgcass
+* Karthick Ariyaratnam @karthyuom
+* Karthik Subbarao @KarthikSubbarao
+* kell0gg @kell0gg
+* Kyle Kim @kyle-yh-kim
+* Leibale Eidelman @leibale
+* LiiNen @LiiNen
+* Lior Kogan @LiorKogan
+* Lior Lahav @llahav-amzn
+* Lipeng Zhu @zhulipeng
 * Madelyn Olson @madolson
+* Makdon @MakDon
+* Maria Markova @markovamaria
+* Mason Hall @hallmason17
+* Matthew Douglass @mdouglass
+* meiravgri @meiravgri
+* michalbiesek @michalbiesek
+* Mike Dolan @mkdolan
+* Mikel Olasagasti Uranga @mikelolasagasti
+* Moshe Kaplan @moshekaplan
+* mwish @mapleFU
+* NAM UK KIM @namuk2004
+* Neal Gompa @Conan-Kudo
+* Nir Rattner @nirrattner
+* nitaicaro @nitaicaro
+* Oran Agra @oranagra
+* Ouri Half @ouriamzn
+* Ozan Tezcan @tezc
+* Parth @parthpatel
+* PatrickJS @PatrickJS
+* Pengfei Han @CFlyGoo
+* Pierre @pieturin
+* Ping Xie @PingXie
 * pkhartsk @pkhartsk
+* pshankinclarke @pshankinclarke
 * Ran Shidlansik @ranshid
 * Rick Ramsay @rickrams
+* Ronen Kalish @ronen-kalish
 * Roshan Khatri @roshkhatri
+* Samuel Adetunji @adetunjii
 * sananes @yaronsananes
+* Sankar @srgsanky
 * Sarthak Aggarwal @sarthakaggarwal97
 * Saurabh K @smkher
+* secwall @secwall
+* Sergey Fedorov @barracuda156
+* Sher_Sun @WM0323
+* Shivshankar @Shivshankar-Reddy
+* skyfirelee @artikell
+* Slava Koyfman @slavak
+* Subhi Al Hasan @jodevsa
 * sushil paneru @sushilpaneru1
+* Ted Lyngmo @TedLyngmo
+* Thomas Fline @fengtan
+* tison @tisonkun
+* Tom Morris @tommorris
+* Tyler Bream @tbbream
+* uriyage @uriyage
+* Vadym Khoptynets @poiuj
 * Viktor Söderqvist @zuiderkwast
+* Vitah Lin @vitahlin
+* Vitaly @vitarb
+* VoletiRam @VoletiRam
+* w. ian douglas @iandouglas
+* WangYu @w4096
+* Wen Hui @hwware
+* Wenwen Chen @Wenwen-Chen
 * xbasel @xbasel
+* Yaacov Hazan @YaacovHazan
 * Yang Zhao @yang-z-o
+* Yanqi Lv @lyq2333
+* Yehoshua Hershberg @jhershberg
+* Yves LeBras @yveslb
 * zackcam @zackcam
+* zalj @zalj
+* Zhao Zhao @soloestoy
+* zhenwei pi @pizhenwei
+* zisong.cw @RayaCoo

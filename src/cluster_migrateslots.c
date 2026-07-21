@@ -390,16 +390,25 @@ int clusterRDBSaveSlotImports(rio *rdb, int rdbver) {
 
 /* Load a single slot import from the RDB. */
 int clusterRDBLoadSlotImport(rio *rdb) {
-    robj *job_name;
+    robj *job_name = NULL;
     list *slot_ranges = createSlotRangeList();
     uint64_t num_slot_ranges;
     if ((job_name = rdbLoadStringObject(rdb)) == NULL) goto err;
+    if (sdslen(objectGetVal(job_name)) != CLUSTER_NAMELEN) {
+        serverLog(LL_WARNING, "Invalid slot import job name length in RDB");
+        goto err;
+    }
     if ((num_slot_ranges = rdbLoadLen(rdb, NULL)) == RDB_LENERR) goto err;
     for (uint64_t i = 0; i < num_slot_ranges; i++) {
         uint64_t start_slot;
         uint64_t end_slot;
         if ((start_slot = rdbLoadLen(rdb, NULL)) == RDB_LENERR) goto err;
         if ((end_slot = rdbLoadLen(rdb, NULL)) == RDB_LENERR) goto err;
+        if (start_slot >= CLUSTER_SLOTS || end_slot >= CLUSTER_SLOTS || start_slot > end_slot) {
+            serverLog(LL_WARNING, "Invalid slot import range in RDB: start=%llu end=%llu",
+                      (unsigned long long)start_slot, (unsigned long long)end_slot);
+            goto err;
+        }
 
         slotRange *slot_range = zmalloc(sizeof(slotRange));
         slot_range->start_slot = start_slot;
@@ -1586,6 +1595,15 @@ int childSnapshotForSyncSlot(rio *aof, slotMigrationJob *job) {
 void killSlotMigrationChild(void) {
     /* No slot migration child? return. */
     if (server.child_type != CHILD_TYPE_SLOT_MIGRATION) return;
+
+    /* If we already closed the exit pipe, the child is already exiting.
+     * Sending SIGUSR1 now might cause a race condition/deadlock in the child,
+     * especially when compiled with coverage. */
+    if (server.slot_migration_child_exit_pipe == -1) {
+        serverLog(LL_NOTICE, "Slot migration child %ld is already exiting, not killing.", (long)server.child_pid);
+        return;
+    }
+
     serverLog(LL_NOTICE, "Killing running slot migration child: %ld", (long)server.child_pid);
 
     /* Because we are not using here waitpid (like we have in killAppendOnlyChild
@@ -2054,7 +2072,9 @@ void proceedWithSlotMigration(slotMigrationJob *job) {
              * resulting in premature flush of the output buffer and data
              * consistency issues. To prevent this, we defer snapshot until
              * there are no pending writes. */
-            if (hasActiveChildProcess() || job->client->flag.pending_write) {
+            if (hasActiveChildProcess() || job->client->flag.pending_write ||
+                job->client->io_write_state != CLIENT_IDLE ||
+                job->client->io_read_state != CLIENT_IDLE) {
                 run_with_period(5000) {
                     serverLog(LL_NOTICE,
                               "Slot migration %s waiting before snapshotting "
@@ -2062,7 +2082,9 @@ void proceedWithSlotMigration(slotMigrationJob *job) {
                               job->description,
                               hasActiveChildProcess()
                                   ? "active child process"
-                                  : "pending writes in output buffer");
+                                  : (job->client->flag.pending_write
+                                         ? "pending writes in output buffer"
+                                         : "pending IO operations"));
                 }
                 return;
             }

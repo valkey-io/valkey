@@ -147,7 +147,7 @@ static int getAndClearHashtableIndexFromCursor(kvstore *kvs, unsigned long long 
 }
 
 int kvstoreIsImporting(kvstore *kvs, int didx) {
-    assert(didx < kvs->num_hashtables);
+    assert(didx >= 0 && didx < kvs->num_hashtables);
     return hashtableFind(kvs->importing, (void *)(intptr_t)didx, NULL);
 }
 
@@ -938,7 +938,7 @@ bool kvstoreHashtableDelete(kvstore *kvs, int didx, const void *key) {
  * are not included in hashtable metrics and are excluded from scanning and
  * random key lookup. */
 void kvstoreSetIsImporting(kvstore *kvs, int didx, int is_importing) {
-    assert(didx < kvs->num_hashtables);
+    assert(didx >= 0 && didx < kvs->num_hashtables);
 
     hashtable *ht = kvstoreGetHashtable(kvs, didx);
 

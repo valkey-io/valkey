@@ -470,7 +470,7 @@ static user *ACLCreateUser(const char *name, size_t namelen) {
     aclSelector *s = ACLCreateSelector(SELECTOR_FLAG_ROOT);
     listAddNodeHead(u->selectors, s);
 
-    u->roles = listCreate();
+    u->roles = dictCreate(&stringSetDictType);
     u->members = NULL;
 
     raxInsert(Users, (unsigned char *)name, namelen, u, NULL);
@@ -493,37 +493,37 @@ user *ACLCreateUnlinkedUser(void) {
     }
 }
 
-/* Remove user from all roles' member lists and release the roles list. */
+/* Remove user from all roles' member lists and release the roles dict. */
 static void ACLUserClearRoles(user *u) {
     if (!u->roles) return;
-    listIter li;
-    listNode *ln;
-    listRewind(u->roles, &li);
-    while ((ln = listNext(&li))) {
-        user *r = listNodeValue(ln);
-        listNode *member_ln = listSearchKey(r->members, u);
-        if (member_ln) listDelNode(r->members, member_ln);
+    dictIterator *di = dictGetIterator(u->roles);
+    dictEntry *de;
+    while ((de = dictNext(di))) {
+        user *r = dictGetVal(de);
+        dictDelete(r->members, u->name);
     }
-    listRelease(u->roles);
+    dictReleaseIterator(di);
+    dictRelease(u->roles);
     u->roles = NULL;
 }
 
 /* Copy role assignments from src to dst, registering dst as a member of each role. */
 static void ACLCopyRoles(user *dst, user *src) {
     if (!src->roles) return;
-    listIter li;
-    listNode *ln;
-    listRewind(src->roles, &li);
-    while ((ln = listNext(&li))) {
-        user *r = listNodeValue(ln);
-        listAddNodeTail(dst->roles, r);
-        listAddNodeTail(r->members, dst);
+    dictIterator *di = dictGetIterator(src->roles);
+    dictEntry *de;
+    while ((de = dictNext(di))) {
+        user *r = dictGetVal(de);
+        dictAdd(dst->roles, sdsdup(r->name), r);
+        dictAdd(r->members, sdsdup(dst->name), dst);
     }
+    dictReleaseIterator(di);
 }
 
 /* Release the memory used by the user structure. Note that this function
  * will not remove the user from the Users global radix tree. */
 void ACLFreeUser(user *u) {
+    ACLUserClearRoles(u);
     sdsfree(u->name);
     if (u->acl_string) {
         decrRefCount(u->acl_string);
@@ -531,9 +531,7 @@ void ACLFreeUser(user *u) {
     }
     if (u->passwords) listRelease(u->passwords);
     listRelease(u->selectors);
-    if (u->members) listRelease(u->members);
-
-    ACLUserClearRoles(u);
+    if (u->members) dictRelease(u->members);
     zfree(u);
 }
 
@@ -587,7 +585,7 @@ static void ACLCopyUser(user *dst, user *src) {
     /* Clean up dst's existing role memberships, then copy from src. */
     ACLUserClearRoles(dst);
     if (src->roles) {
-        dst->roles = listCreate();
+        dst->roles = dictCreate(&stringSetDictType);
         ACLCopyRoles(dst, src);
     } else {
         dst->roles = NULL;
@@ -608,7 +606,7 @@ static user *ACLCreateRole(const char *name, size_t namelen) {
     r->name = sdsnewlen(name, namelen);
     r->flags = USER_FLAG_ROLE;
     r->passwords = NULL;
-    r->members = listCreate();
+    r->members = dictCreate(&stringSetDictType);
     r->roles = NULL;
     r->acl_string = NULL;
     r->selectors = listCreate();
@@ -692,12 +690,11 @@ static sds ACLStringSetRole(user *r, sds rolename, sds *argv, int argc) {
      * Since the role's selectors are already updated, the member's effective
      * permissions reflect the new state. We build the new channel list from
      * the member's effective permissions and check each client against it. */
-    if (pubsubTotalSubscriptions() > 0 && listLength(r->members) > 0) {
-        listIter mli;
-        listNode *mln;
-        listRewind(r->members, &mli);
-        while ((mln = listNext(&mli))) {
-            user *member = listNodeValue(mln);
+    if (pubsubTotalSubscriptions() > 0 && dictSize(r->members) > 0) {
+        dictIterator *mdi = dictGetIterator(r->members);
+        dictEntry *mde;
+        while ((mde = dictNext(mdi))) {
+            user *member = dictGetVal(mde);
             if (ACLUserHasAllChannels(member)) continue;
 
             list *upcoming = ACLUserGetChannels(member);
@@ -713,6 +710,7 @@ static sds ACLStringSetRole(user *r, sds rolename, sds *argv, int argc) {
             }
             listRelease(upcoming);
         }
+        dictReleaseIterator(mdi);
     }
 
     listRelease(old_selectors);
@@ -724,16 +722,16 @@ static sds ACLStringSetRole(user *r, sds rolename, sds *argv, int argc) {
 
     /* Invalidate acl_string cache for all member users */
     {
-        listIter li;
-        listNode *ln;
-        listRewind(r->members, &li);
-        while ((ln = listNext(&li))) {
-            user *u = listNodeValue(ln);
+        dictIterator *di = dictGetIterator(r->members);
+        dictEntry *de;
+        while ((de = dictNext(di))) {
+            user *u = dictGetVal(de);
             if (u->acl_string) {
                 decrRefCount(u->acl_string);
                 u->acl_string = NULL;
             }
         }
+        dictReleaseIterator(di);
     }
 
 cleanup:
@@ -1155,12 +1153,14 @@ robj *ACLDescribeUser(user *u) {
     }
 
     /* Role memberships (only for users, not roles) */
-    if (u->roles && listLength(u->roles) > 0) {
-        listRewind(u->roles, &li);
-        while ((ln = listNext(&li))) {
-            user *r = listNodeValue(ln);
+    if (u->roles && dictSize(u->roles) > 0) {
+        dictIterator *di = dictGetIterator(u->roles);
+        dictEntry *de;
+        while ((de = dictNext(di))) {
+            user *r = dictGetVal(de);
             res = sdscatfmt(res, " +@role:%s", r->name);
         }
+        dictReleaseIterator(di);
     }
 
     u->acl_string = createObject(OBJ_STRING, res);
@@ -1733,7 +1733,7 @@ int ACLSetUser(user *u, const char *op, ssize_t oplen) {
         serverAssert(ACLSetUser(u, "-@all", -1) == C_OK);
 
         ACLUserClearRoles(u);
-        u->roles = listCreate();
+        u->roles = dictCreate(&stringSetDictType);
     } else if (oplen >= 7 && !strncasecmp(op, "+@role:", 7)) {
         /* Add user to a role */
         const char *rolename = op + 7;
@@ -1743,20 +1743,9 @@ int ACLSetUser(user *u, const char *op, ssize_t oplen) {
             errno = ESRCH;
             return C_ERR;
         }
-        /* Check if user is already in this role */
-        listIter li;
-        listNode *ln;
-        int already_member = 0;
-        listRewind(u->roles, &li);
-        while ((ln = listNext(&li))) {
-            if (listNodeValue(ln) == r) {
-                already_member = 1;
-                break;
-            }
-        }
-        if (!already_member) {
-            listAddNodeTail(u->roles, r);
-            listAddNodeTail(r->members, u);
+        if (dictFind(u->roles, r->name) == NULL) {
+            dictAdd(u->roles, sdsdup(r->name), r);
+            dictAdd(r->members, sdsdup(u->name), u);
         }
     } else if (oplen >= 7 && !strncasecmp(op, "-@role:", 7)) {
         /* Remove user from a role */
@@ -1767,19 +1756,8 @@ int ACLSetUser(user *u, const char *op, ssize_t oplen) {
             errno = ESRCH;
             return C_ERR;
         }
-        /* Remove role from user's list */
-        listIter li;
-        listNode *ln;
-        listRewind(u->roles, &li);
-        while ((ln = listNext(&li))) {
-            if (listNodeValue(ln) == r) {
-                listDelNode(u->roles, ln);
-                break;
-            }
-        }
-        /* Remove user from role's member list */
-        listNode *member_ln = listSearchKey(r->members, u);
-        if (member_ln) listDelNode(r->members, member_ln);
+        dictDelete(u->roles, r->name);
+        dictDelete(r->members, u->name);
     } else {
         aclSelector *selector = ACLUserGetRootSelector(u);
         if (ACLSetSelector(selector, op, oplen) == C_ERR) {
@@ -2405,12 +2383,11 @@ int ACLCheckAllUserCommandPerm(user *u, struct serverCommand *cmd, robj **argv, 
     }
 
     /* Check role selectors */
-    if (u->roles && listLength(u->roles) > 0) {
-        listIter rli;
-        listNode *rln;
-        listRewind(u->roles, &rli);
-        while ((rln = listNext(&rli))) {
-            user *r = (user *)listNodeValue(rln);
+    if (u->roles && dictSize(u->roles) > 0) {
+        dictIterator *rdi = dictGetIterator(u->roles);
+        dictEntry *rde;
+        while ((rde = dictNext(rdi))) {
+            user *r = (user *)dictGetVal(rde);
             listIter sli;
             listNode *sln;
             listRewind(r->selectors, &sli);
@@ -2419,6 +2396,7 @@ int ACLCheckAllUserCommandPerm(user *u, struct serverCommand *cmd, robj **argv, 
                 int acl_retval = ACLSelectorCheckCmd(s, cmd, argv, argc, &local_idxptr, &cache, dbid);
                 if (acl_retval == ACL_OK) {
                     cleanupACLKeyResultCache(&cache);
+                    dictReleaseIterator(rdi);
                     return ACL_OK;
                 }
                 if (acl_retval > relevant_error || (acl_retval == relevant_error && local_idxptr > last_idx)) {
@@ -2427,6 +2405,7 @@ int ACLCheckAllUserCommandPerm(user *u, struct serverCommand *cmd, robj **argv, 
                 }
             }
         }
+        dictReleaseIterator(rdi);
     }
 
     *idxptr = last_idx;
@@ -2450,17 +2429,22 @@ static int ACLUserHasAllChannels(user *u) {
         if (s->flags & SELECTOR_FLAG_ALLCHANNELS) return 1;
     }
     if (u->roles) {
-        listRewind(u->roles, &li);
-        while ((ln = listNext(&li))) {
-            user *r = (user *)listNodeValue(ln);
+        dictIterator *di = dictGetIterator(u->roles);
+        dictEntry *de;
+        while ((de = dictNext(di))) {
+            user *r = (user *)dictGetVal(de);
             listIter sli;
             listNode *sln;
             listRewind(r->selectors, &sli);
             while ((sln = listNext(&sli))) {
                 aclSelector *s = (aclSelector *)listNodeValue(sln);
-                if (s->flags & SELECTOR_FLAG_ALLCHANNELS) return 1;
+                if (s->flags & SELECTOR_FLAG_ALLCHANNELS) {
+                    dictReleaseIterator(di);
+                    return 1;
+                }
             }
         }
+        dictReleaseIterator(di);
     }
     return 0;
 }
@@ -2480,9 +2464,10 @@ static list *ACLUserGetChannels(user *u) {
         }
     }
     if (u->roles) {
-        listRewind(u->roles, &li);
-        while ((ln = listNext(&li))) {
-            user *r = (user *)listNodeValue(ln);
+        dictIterator *di = dictGetIterator(u->roles);
+        dictEntry *de;
+        while ((de = dictNext(di))) {
+            user *r = (user *)dictGetVal(de);
             listIter sli;
             listNode *sln;
             listRewind(r->selectors, &sli);
@@ -2494,6 +2479,7 @@ static list *ACLUserGetChannels(user *u) {
                 }
             }
         }
+        dictReleaseIterator(di);
     }
     return channels;
 }
@@ -2531,11 +2517,10 @@ static list *getUpcomingChannelList(user *new, user *original) {
     }
     /* Also check channels from original's role selectors */
     if (match && original->roles) {
-        listIter rli;
-        listNode *rln;
-        listRewind(original->roles, &rli);
-        while ((rln = listNext(&rli)) && match) {
-            user *r = (user *)listNodeValue(rln);
+        dictIterator *rdi = dictGetIterator(original->roles);
+        dictEntry *rde;
+        while ((rde = dictNext(rdi)) && match) {
+            user *r = (user *)dictGetVal(rde);
             listIter sli;
             listNode *sln;
             listRewind(r->selectors, &sli);
@@ -2554,6 +2539,7 @@ static list *getUpcomingChannelList(user *new, user *original) {
                 }
             }
         }
+        dictReleaseIterator(rdi);
     }
 
     if (match) {
@@ -3803,14 +3789,16 @@ void aclCommand(client *c) {
 
         /* Roles */
         addReplyBulkCString(c, "roles");
-        addReplyArrayLen(c, u->roles ? listLength(u->roles) : 0);
+        addReplyArrayLen(c, u->roles ? dictSize(u->roles) : 0);
         fields++;
         if (u->roles) {
-            listRewind(u->roles, &li);
-            while ((ln = listNext(&li))) {
-                user *r = listNodeValue(ln);
+            dictIterator *di = dictGetIterator(u->roles);
+            dictEntry *de;
+            while ((de = dictNext(di))) {
+                user *r = dictGetVal(de);
                 addReplyBulkCBuffer(c, r->name, sdslen(r->name));
             }
+            dictReleaseIterator(di);
         }
 
         setDeferredMapLen(c, ufields, fields);
@@ -4020,7 +4008,7 @@ void aclCommand(client *c) {
                 addReplyErrorFormat(c, "Role '%s' not found", rolename);
                 return;
             }
-            if (listLength(r->members) > 0) {
+            if (dictSize(r->members) > 0) {
                 addReplyErrorFormat(c, "Role '%s' has members. Remove all users from the role before deleting it.",
                                     rolename);
                 return;
@@ -4068,12 +4056,16 @@ void aclCommand(client *c) {
 
         /* Members */
         addReplyBulkCString(c, "members");
-        addReplyArrayLen(c, listLength(r->members));
+        addReplyArrayLen(c, dictSize(r->members));
         fields++;
-        listRewind(r->members, &li);
-        while ((ln = listNext(&li))) {
-            user *u = listNodeValue(ln);
-            addReplyBulkCBuffer(c, u->name, sdslen(u->name));
+        {
+            dictIterator *di = dictGetIterator(r->members);
+            dictEntry *de;
+            while ((de = dictNext(di))) {
+                user *u = dictGetVal(de);
+                addReplyBulkCBuffer(c, u->name, sdslen(u->name));
+            }
+            dictReleaseIterator(di);
         }
 
         setDeferredMapLen(c, gfields, fields);

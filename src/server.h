@@ -1046,8 +1046,8 @@ typedef struct user {
     list *selectors;  /* A list of selectors this user validates commands
                          against. This list will always contain at least
                          one selector for backwards compatibility. */
-    list *roles;      /* For users: assigned role pointers (NULL for roles). */
-    list *members;    /* For roles: member user pointers (NULL for users). */
+    dict *roles;      /* For users: dict mapping role name -> role ptr (NULL for roles). */
+    dict *members;    /* For roles: dict mapping user name -> user ptr (NULL for users). */
     robj *acl_string; /* cached string represent of ACLs */
 } user;
 

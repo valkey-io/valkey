@@ -31,6 +31,7 @@
 #include "server.h"
 #include "rdb.h"
 #include "module.h"
+#include "cluster.h"
 #include "hdr_histogram.h"
 #include "fpconv_dtoa.h"
 
@@ -703,6 +704,11 @@ int redis_check_rdb(char *rdbfilename, FILE *fp) {
         } else if (type == RDB_OPCODE_SLOT_IMPORT) {
             robj *job_name;
             if ((job_name = rdbLoadStringObject(&rdb)) == NULL) goto eoferr;
+            if (sdslen(objectGetVal(job_name)) != CLUSTER_NAMELEN) {
+                rdbCheckError("Invalid slot import job name length in RDB");
+                decrRefCount(job_name);
+                goto err;
+            }
             decrRefCount(job_name);
             uint64_t num_slot_ranges;
             if ((num_slot_ranges = rdbLoadLen(&rdb, NULL)) == RDB_LENERR) goto eoferr;

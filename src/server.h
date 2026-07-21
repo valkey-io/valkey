@@ -948,6 +948,7 @@ typedef struct multiState {
     size_t argv_len_sums;           /* mem used by all commands arguments */
     int alloc_count;                /* total number of multiCmd struct memory reserved. */
     list watched_keys;              /* List of watchedKey for iteration and cleanup. */
+    size_t watched_keys_mem;        /* Memory used by watched key robj objects. */
     hashtable **watched_keys_by_db; /* Per-db hashtable for O(1) watched key lookup.
                                        Array of size server.dbnum, lazily allocated.
                                        Each hashtable stores watchedKey* directly. */
@@ -1204,6 +1205,7 @@ typedef struct ClientPubSubData {
     hashtable *pubsub_channels;      /* channels a client is interested in (SUBSCRIBE) */
     hashtable *pubsub_patterns;      /* patterns a client is interested in (PSUBSCRIBE) */
     hashtable *pubsubshard_channels; /* shard level channels a client is interested in (SSUBSCRIBE) */
+    size_t pubsub_object_mem;        /* Memory used by channel/pattern name robj objects. */
     /* If this client is in tracking mode and this field is non zero,
      * invalidation messages for keys fetched by this client will be sent to
      * the specified client ID. */
@@ -2990,6 +2992,7 @@ void copyReplicaOutputBuffer(client *dst, client *src);
 void addListRangeReply(client *c, robj *o, long start, long end, int reverse);
 void deferredAfterErrorReply(client *c, list *errors);
 size_t getStringObjectSdsUsedMemory(robj *o);
+size_t getStringObjectMemory(robj *o);
 void freeClientReplyValue(void *o);
 void *dupClientReplyValue(void *o);
 char *getClientPeerId(client *c);

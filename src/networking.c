@@ -177,6 +177,12 @@ size_t getStringObjectSdsUsedMemory(robj *o) {
     return 0;
 }
 
+/* Return the total memory used by a string object, including the robj
+ * structure and the sds string overhead (internal fragmentation). */
+size_t getStringObjectMemory(robj *o) {
+    return sizeof(robj) + getStringObjectSdsUsedMemory(o);
+}
+
 /* Return the length of a string object.
  * This does NOT include internal fragmentation or sds unused space. */
 size_t getStringObjectLen(robj *o) {
@@ -6122,10 +6128,11 @@ size_t getClientMemoryUsage(client *c, size_t *output_buffer_mem_usage) {
      * i.e. unused sds space and internal fragmentation, just the string length. but this is enough to
      * spot problematic clients. */
     mem += c->argv_len_sum + sizeof(robj *) * c->argc;
+
+    /* Add memory overhead of multi. */
     mem += multiStateMemOverhead(c);
 
-    /* Add memory overhead of pubsub channels and patterns. Note: this is just the overhead of the robj pointers
-     * to the strings themselves because they aren't stored per client. */
+    /* Add memory overhead of pubsub channels and patterns. */
     mem += pubsubMemOverhead(c);
 
     /* Add memory overhead of the tracking prefixes, this is an underestimation so we don't need to traverse the entire

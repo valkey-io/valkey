@@ -118,7 +118,7 @@ static struct config {
     int keysize;
     int datasize;
     int replace_placeholders;
-    int keyspacelen;
+    long long keyspacelen;
     int sequential_replacement;
     int keepalive;
     int pipeline;
@@ -261,7 +261,7 @@ static void freeServerConfig(serverConfig *cfg);
 static int fetchClusterSlotsConfiguration(client c);
 static void updateClusterSlotsConfiguration(void);
 static long long showThroughput(struct aeEventLoop *eventLoop, long long id, void *clientData);
-int runFuzzerClients(const char *host, int port, int max_commands, int parallel_clients, int cluster_mode, int num_keys, cliSSLconfig *ssl_config, const char *log_level, int fuzz_flags);
+int runFuzzerClients(const char *host, int port, int max_commands, int parallel_clients, int cluster_mode, long long num_keys, cliSSLconfig *ssl_config, const char *log_level, int fuzz_flags);
 static int parseCommandTemplate(int argc, char **argv);
 
 /* Dict callbacks */
@@ -487,7 +487,7 @@ static void replacePlaceholder(const size_t *indices, const size_t count, char *
         if (config.sequential_replacement) {
             key = atomic_fetch_add_explicit(key_counter, 1, memory_order_relaxed);
         } else {
-            key = random();
+            key = ((uint64_t)random() << 31) | (uint64_t)random();
         }
         key %= config.keyspacelen;
     }
@@ -1793,14 +1793,20 @@ int parseOptions(int argc, char **argv) {
             if (config.pipeline <= 0) config.pipeline = 1;
         } else if (!strcmp(argv[i], "-r")) {
             if (lastarg) goto invalid;
-            const char *next = argv[++i], *p = next;
-            if (*p == '-') {
-                p++;
-                if (*p < '0' || *p > '9') goto invalid;
+            const char *next = argv[++i];
+            char *endptr;
+            errno = 0;
+            long long val = strtoll(next, &endptr, 10);
+            if (endptr == next || *endptr != '\0') {
+                fprintf(stderr, "Invalid value for -r: '%s' is not a valid number\n", next);
+                exit(1);
+            }
+            if (errno == ERANGE || val < 0 || val > 999999999999LL) {
+                fprintf(stderr, "Invalid value for -r: keyspacelen must be between 0 and 999999999999\n");
+                exit(1);
             }
             config.replace_placeholders = 1;
-            config.keyspacelen = atoi(next);
-            if (config.keyspacelen < 0) config.keyspacelen = 0;
+            config.keyspacelen = val;
         } else if (!strcmp(argv[i], "--sequential")) {
             config.sequential_replacement = 1;
         } else if (!strcmp(argv[i], "-q")) {

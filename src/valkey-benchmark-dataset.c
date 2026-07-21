@@ -33,7 +33,7 @@ static int findFieldIndex(dataset *ds, const char *field_name, size_t field_name
 static const char *extractDatasetFieldValue(dataset *ds, int field_idx, int record_index);
 static sds replaceOccurrence(sds processed_arg, const char *pos, const char *replacement);
 static sds processFieldsInArg(dataset *ds, sds arg, int record_index);
-static sds processRandPlaceholdersForDataSet(sds cmd, _Atomic uint64_t *seq_key, int replace_placeholders, int keyspacelen, int sequential_replacement);
+static sds processRandPlaceholdersForDataSet(sds cmd, _Atomic uint64_t *seq_key, int replace_placeholders, long long keyspacelen, int sequential_replacement);
 
 dataset *datasetInit(const char *filename, int max_documents, int has_field_placeholders, sds *template_argv, int template_argc, int verbose) {
     if (!filename) return NULL;
@@ -160,7 +160,7 @@ size_t datasetGetRecordCount(dataset *ds) {
     return ds ? ds->record_count : 0;
 }
 
-sds datasetGenerateCommand(dataset *ds, int record_index, sds *template_argv, int template_argc, _Atomic uint64_t *seq_key, int replace_placeholders, int keyspacelen, int sequential_replacement) {
+sds datasetGenerateCommand(dataset *ds, int record_index, sds *template_argv, int template_argc, _Atomic uint64_t *seq_key, int replace_placeholders, long long keyspacelen, int sequential_replacement) {
     if (!ds || !template_argv) return NULL;
 
     sds *processed_argv = zmalloc(template_argc * sizeof(sds));
@@ -414,7 +414,7 @@ static sds processFieldsInArg(dataset *ds, sds arg, int record_index) {
     return arg;
 }
 
-static sds processRandPlaceholdersForDataSet(sds cmd, _Atomic uint64_t *seq_key, int replace_placeholders, int keyspacelen, int sequential_replacement) {
+static sds processRandPlaceholdersForDataSet(sds cmd, _Atomic uint64_t *seq_key, int replace_placeholders, long long keyspacelen, int sequential_replacement) {
     if (!replace_placeholders || keyspacelen == 0) return cmd;
 
     for (int ph = 0; ph < PLACEHOLDER_COUNT; ph++) {
@@ -427,7 +427,7 @@ static sds processRandPlaceholdersForDataSet(sds cmd, _Atomic uint64_t *seq_key,
             if (sequential_replacement) {
                 shared_key = atomic_fetch_add_explicit(&seq_key[ph], 1, memory_order_relaxed);
             } else {
-                shared_key = (uint64_t)random();
+                shared_key = ((uint64_t)random() << 31) | (uint64_t)random();
             }
             shared_key %= keyspacelen;
         }
@@ -441,7 +441,7 @@ static sds processRandPlaceholdersForDataSet(sds cmd, _Atomic uint64_t *seq_key,
                 if (sequential_replacement) {
                     key = atomic_fetch_add_explicit(&seq_key[ph], 1, memory_order_relaxed);
                 } else {
-                    key = (uint64_t)random();
+                    key = ((uint64_t)random() << 31) | (uint64_t)random();
                 }
                 key %= keyspacelen;
             }

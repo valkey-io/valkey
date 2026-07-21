@@ -103,7 +103,7 @@ typedef struct {
     dict *configDict;
     sds *aclCategories;
     size_t aclCategoriesCount;
-    int max_keys;
+    long long max_keys;
     int cluster_mode;
 } FuzzerContext;
 
@@ -1047,7 +1047,7 @@ void initializeRandomSeed(void) {
 }
 
 /* Initialize the fuzzer with a connected Valkey context */
-int initFuzzer(valkeyContext *ctx, int num_keys, int cluster_mode, int fuzz_flags) {
+int initFuzzer(valkeyContext *ctx, long long num_keys, int cluster_mode, int fuzz_flags) {
     int ret = -1;
     fuzz_ctx = zmalloc(sizeof(FuzzerContext));
     /* Set global configuration values */
@@ -1190,14 +1190,14 @@ static void addKeysToCommand(FuzzerCommand *cmd, int numkeys, CommandArgument *a
     }
 
     for (int i = 0; i < numkeys; i++) {
-        int keyNumber = rand() % fuzz_ctx->max_keys;
+        long long keyNumber = (long long)(((uint64_t)random() << 31) | (uint64_t)random()) % fuzz_ctx->max_keys;
         sds keyName;
 
         /* In cluster mode, ensure all keys use the same slot tag to map to the same slot */
         if (fuzz_ctx->cluster_mode && client_ctx && client_ctx->current_slot_tag) {
-            keyName = sdscatprintf(sdsempty(), "%s%s:%d", client_ctx->current_slot_tag, keyPrefix, keyNumber);
+            keyName = sdscatprintf(sdsempty(), "%s%s:%lld", client_ctx->current_slot_tag, keyPrefix, keyNumber);
         } else {
-            keyName = sdscatprintf(sdsempty(), "%s:%d", keyPrefix, keyNumber);
+            keyName = sdscatprintf(sdsempty(), "%s:%lld", keyPrefix, keyNumber);
         }
 
         appendArg(cmd, keyName);

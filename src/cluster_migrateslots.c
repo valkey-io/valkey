@@ -396,6 +396,11 @@ int clusterRDBLoadSlotImport(rio *rdb) {
         uint64_t end_slot;
         if ((start_slot = rdbLoadLen(rdb, NULL)) == RDB_LENERR) goto err;
         if ((end_slot = rdbLoadLen(rdb, NULL)) == RDB_LENERR) goto err;
+        if (start_slot >= CLUSTER_SLOTS || end_slot >= CLUSTER_SLOTS || start_slot > end_slot) {
+            serverLog(LL_WARNING, "Invalid slot import range in RDB: start=%llu end=%llu",
+                      (unsigned long long)start_slot, (unsigned long long)end_slot);
+            goto err;
+        }
 
         slotRange *slot_range = zmalloc(sizeof(slotRange));
         slot_range->start_slot = start_slot;

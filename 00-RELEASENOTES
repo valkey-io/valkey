@@ -17,16 +17,12 @@ Valkey 9.1.1  -  Released Tue 21 July 2026
 Upgrade urgency SECURITY: This is the second stable release of Valkey 9.1.
 
 ### Security Fixes
-* CVE-2026-56684: Fix a use-after-free in TLS connection handling that could allow an authenticated client to crash the server using CLIENT KILL (#4234)
-* CVE-2026-63639: Reject corrupt stream RDB files containing a shared NACK across consumers. Reported by @z0v3r1n and @lifip. (#4073)
-
-### Behavior Changes
-* Omit the implicit `alldbs` ACL rule from `ACL LIST`, `ACL SAVE` and `CONFIG REWRITE` so older versions can parse the output by @dvkashapov (#3964)
-
-### Performance and Efficiency Improvements
-* Fix a significant throughput regression when IO threads are enabled by offloading object frees to IO threads by @roshkhatri (#3938)
+* CVE-2026-56684: Fix a use-after-free in TLS connection handling that could allow an authenticated client to achieve remote code execution using CLIENT KILL (#4234)
+* CVE-2026-63639: Reject corrupt stream RDB files containing a shared NACK across consumers, which could allow remote code execution. Reported by @z0v3r1n and @lifip. (#4073)
 
 ### Bug Fixes
+* Omit the implicit `alldbs` ACL rule from `ACL LIST`, `ACL SAVE` and `CONFIG REWRITE` so older versions can parse the output by @dvkashapov (#3964)
+* Improve throughput when IO threads are enabled by offloading object deallocation from the main thread by @roshkhatri (#3938)
 * Fix use-after-free crash when `ACL LOAD` removes a user whose authenticated client has its close deferred by @ranshid (#3800)
 * Enforce `db=` ACL permissions on every DB clause of `COPY`, closing a bypass with `REPLACE` or repeated DB tokens by @enjoy-binbin (#3801)
 * Enforce database-level ACLs for `CLUSTER FLUSHSLOT`, which removes keys from all databases by @enjoy-binbin (#3806)
@@ -41,28 +37,17 @@ Upgrade urgency SECURITY: This is the second stable release of Valkey 9.1.
 * Reject NAN scores in listpack and ziplist encoded sorted sets on RDB/RESTORE load, preventing a crash on skiplist conversion by @madolson (#3921)
 * Fix corrupted replies (dropped leading bytes) caused by a reply buffer race when IO threads are enabled by @nanyan0312 (#4060)
 * Fix startup crash on 32-bit systems where time_t is 64-bit (such as Alpine 3.23) when generating `INFO` output by @chenshi5012 (#3787)
-
-### Command and API Updates
 * `HGETDEL` now returns a syntax error when the `FIELDS` keyword is missing or misplaced by @lcxn123 (#4049)
 * `COMMAND INFO` in RESP3 now returns the subcommands field as an array instead of a set for commands without subcommands by @rickrams (#3939)
-
-### Cluster and Replication
 * Send the replica version on the dual-channel RDB connection so full syncs with newer encodings like hash field TTLs succeed by @hpatro (#4105)
 * Fix duplicate failure handling and an invalid reply sequence in cluster slot migration by @chx9 (#3723)
-
-### Configuration
 * Reject control characters in `SENTINEL SET` values to prevent config-file injection via Sentinel config rewrite by @eifrah-aws (#3847)
 * Reject control characters and delimiters in cluster AUX fields and validate `cluster-announce-ip` to prevent nodes.conf injection by @eifrah-aws (#3848)
-
-### Observability and Logging
 * Redact key names and user data from more server log messages when `hide-user-data-from-log` is enabled by @zackcam (#3872)
 * `ACL LOG` now reports the denied database ID for `COPY` instead of the command name when `db=` access is denied by @enjoy-binbin (#3888)
 * Fix garbled shard IDs in the cluster UPDATE message log line by @enjoy-binbin (#3942)
 * Fix negative `master_sync_total_bytes` in `INFO replication` during disk-based sync when the RDB exceeds 2GB by @chx9 (#3811)
 * Increase the maximum process title length from 255 to 1024 characters to avoid truncation with long paths by @pkhartsk (#3843)
-
-### Build and Tooling
-* Fix build warnings with OpenSSL 4.0 by replacing newly deprecated certificate APIs by @pkhartsk (#4016)
 
 Valkey 9.1.0 GA - Released Tue May 19 2026
 ---------------------

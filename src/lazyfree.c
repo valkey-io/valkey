@@ -34,6 +34,23 @@ void lazyfreeFreeDatabase(void *args[]) {
     atomic_fetch_add_explicit(&lazyfreed_objects, numkeys, memory_order_relaxed);
 }
 
+/* Release a set of hash tables (keys, expires and keys with volatile items)
+ * belonging to a single slot from the lazyfree thread. The hash tables were
+ * detached from their kvstores in the main thread when the slot was logically
+ * deleted. */
+void lazyfreeFreeSlotHashtables(void *args[]) {
+    hashtable *keys = args[0];
+    hashtable *expires = args[1];
+    hashtable *keys_with_volatile_items = args[2];
+
+    size_t numkeys = hashtableSize(keys);
+    hashtableRelease(keys);
+    if (expires) hashtableRelease(expires);
+    if (keys_with_volatile_items) hashtableRelease(keys_with_volatile_items);
+    atomic_fetch_sub_explicit(&lazyfree_objects, numkeys, memory_order_relaxed);
+    atomic_fetch_add_explicit(&lazyfreed_objects, numkeys, memory_order_relaxed);
+}
+
 /* Release the key tracking table. */
 void lazyFreeTrackingTable(void *args[]) {
     rax *rt = args[0];
@@ -219,6 +236,15 @@ void emptyDbAsync(serverDb *db) {
     db->keys_with_volatile_items = kvstoreCreate(&kvstoreExpiresHashtableType, slot_count_bits, flags);
     atomic_fetch_add_explicit(&lazyfree_objects, kvstoreSize(oldkeys), memory_order_relaxed);
     bioCreateLazyFreeJob(lazyfreeFreeDatabase, 3, oldkeys, oldexpires, oldkeyswithexpires);
+}
+
+/* Free the hash tables of a single slot asynchronously. The hash tables must
+ * already be detached from their kvstores (see kvstoreDetachHashtable), so
+ * the main thread no longer references them. 'keys' must not be NULL, while
+ * 'expires' and 'keys_with_volatile_items' may be NULL. */
+void freeSlotHashtablesAsync(hashtable *keys, hashtable *expires, hashtable *keys_with_volatile_items) {
+    atomic_fetch_add_explicit(&lazyfree_objects, hashtableSize(keys), memory_order_relaxed);
+    bioCreateLazyFreeJob(lazyfreeFreeSlotHashtables, 3, keys, expires, keys_with_volatile_items);
 }
 
 /* Free the key tracking table.

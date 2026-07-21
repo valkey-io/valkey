@@ -3803,6 +3803,7 @@ void scanGenericCommandWithOptions(client *c, robj *o, unsigned long long cursor
 int parseScanCursorOrReply(client *c, sds buf, unsigned long long *cursor);
 int dbAsyncDelete(serverDb *db, robj *key);
 void emptyDbAsync(serverDb *db);
+void freeSlotHashtablesAsync(hashtable *keys, hashtable *expires, hashtable *keys_with_volatile_items);
 size_t lazyfreeGetPendingObjectsCount(void);
 size_t lazyfreeGetFreedObjectsCount(void);
 void lazyfreeResetStats(void);

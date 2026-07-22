@@ -1921,6 +1921,22 @@ int lpValidateIntegrityAndDups(unsigned char *lp, size_t size, int pairs) {
     return ret;
 }
 
+/* Check whether a hash listpack contains a field or value that exceeds the
+ * configured listpack value limit. */
+static bool rdbHashListpackExceedsMaxValue(unsigned char *lp) {
+    unsigned char intbuf[LP_INTBUF_SIZE];
+    int64_t len;
+    unsigned char *p = lpFirst(lp);
+
+    while (p) {
+        lpGet(p, &len, intbuf);
+        if (len > server.hash_max_listpack_value) return true;
+        p = lpNext(lp, p);
+    }
+
+    return false;
+}
+
 /* Load an Object of the specified type from the specified file.
  * On success a newly allocated object is returned, otherwise NULL.
  * When the function returns NULL and if 'error' is not NULL, the
@@ -2593,7 +2609,10 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
                 goto emptykey;
             }
 
-            if (hashTypeLength(o) > server.hash_max_listpack_entries) hashTypeConvert(o, OBJ_ENCODING_HASHTABLE);
+            if (hashTypeLength(o) > server.hash_max_listpack_entries ||
+                rdbHashListpackExceedsMaxValue(objectGetVal(o))) {
+                hashTypeConvert(o, OBJ_ENCODING_HASHTABLE);
+            }
             break;
         default:
             /* totally unreachable */

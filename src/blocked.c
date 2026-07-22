@@ -619,8 +619,8 @@ void signalDeletedKeyAsReady(serverDb *db, robj *key, int type) {
 }
 
 /* Return 1 if client c is still present in the live blocked-clients list for
- * rl->key. Safe to call with a possibly stale pointer: unlink happens before
- * free, so a torn-down client cannot appear in the live list. */
+ * rl->key. Pointer match alone is not identity after free/reuse; callers must
+ * also check c->id against the snapshotted id. */
 static int clientStillInBlockingKeysList(readyList *rl, client *c) {
     dictEntry *de = dictFind(rl->db->blocking_keys, rl->key);
     listNode *ln;
@@ -682,11 +682,16 @@ static void handleClientsBlockedOnKey(readyList *rl) {
             client *receiver = snapshot[i].c;
             robj *o;
 
-            /* The client may have been killed/freed or may no longer be blocked
-             * on this key by the time we reach it. */
+            /* Re-validate before serving: real clients via id map; RM_Call fake
+             * clients (absent from clients_index) via list + id + still-blocked.
+             * Check list membership before reading receiver fields so a freed
+             * client is skipped without deref; matching id then rejects a
+             * different client reused at the same address. */
             if (lookupClientByID(snapshot[i].id) == receiver) {
                 if (!clientStillBlockedOnReadyKey(receiver, rl)) continue;
-            } else if (!clientStillInBlockingKeysList(rl, receiver)) {
+            } else if (!clientStillInBlockingKeysList(rl, receiver) ||
+                       receiver->id != snapshot[i].id ||
+                       !clientStillBlockedOnReadyKey(receiver, rl)) {
                 continue;
             }
 

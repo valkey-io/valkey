@@ -2,16 +2,21 @@ start_cluster 3 4 {tags {external:skip cluster} overrides {cluster-ping-interval
     test "Replica can do a better ranking in auto failover based on the priority" {
         # primary R 0, replica1 R 3, replica2 R 6
 
-        # Write some data to primary 0, slot 1, make a small repl_offset.
-        for {set i 0} {$i < 1024} {incr i} {
-            R 0 incr key_991803
-        }
+        # Write a key to primary 0, slot 1, make a small repl_offset.
+        set small_value [string repeat "x" 1024]
+        R 0 set key_991803 [string repeat "x" 1024]
         wait_for_ofs_sync [srv 0 client] [srv -3 client]
         wait_for_ofs_sync [srv 0 client] [srv -6 client]
 
         # Set two different priorities, R 3 will have a better priority.
         R 3 config set cluster-replica-priority 0
         R 6 config set cluster-replica-priority 10
+        wait_for_condition 1000 50 {
+            [R 3 debug cluster-replica-priority [R 6 cluster myid]] == 10 &&
+            [R 6 debug cluster-replica-priority [R 3 cluster myid]] == 0
+        } else {
+            fail "Replica priority did not propagate"
+        }
 
         # R 3 has a better priority and will become the primary.
         pause_process [srv 0 pid]
@@ -35,10 +40,16 @@ start_cluster 3 4 {tags {external:skip cluster} overrides {cluster-ping-interval
             fail "The old primary was not converted into replica"
         }
 
-        # Set two different priorities, R 0 will have a better priority.
+        # Set two different priorities, R 6 will have a better priority.
         # We also modified the priority of R 6 to verify that the propagation was normal.
         R 0 config set cluster-replica-priority 10
-        R 6 config set cluster-replica-priority 0
+        R 6 config set cluster-replica-priority 5
+        wait_for_condition 1000 50 {
+            [R 6 debug cluster-replica-priority [R 0 cluster myid]] == 10 &&
+            [R 0 debug cluster-replica-priority [R 6 cluster myid]] == 5
+        } else {
+            fail "Replica priority did not propagate"
+        }
 
         # R 6 has a better priority and will become the primary.
         pause_process [srv -3 pid]
@@ -51,7 +62,7 @@ start_cluster 3 4 {tags {external:skip cluster} overrides {cluster-ping-interval
 
         # Make sure our rank and priority are correct.
         verify_log_message 0 "*Start of election*rank #1*replica priority 10*" 0
-        verify_log_message -6 "*Start of election*rank #0*replica priority 0*" 0
+        verify_log_message -6 "*Start of election*rank #0*replica priority 5*" 0
 
         resume_process [srv -3 pid]
         wait_for_condition 1000 50 {

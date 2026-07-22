@@ -426,7 +426,7 @@ struct _clusterNode {
     rax *fail_reports;                      /* Radix tree for failure reports with sorted order by timestamp */
     int is_node_healthy;                    /* Boolean indicating the cached node health.
                                                Update with updateAndCountChangedNodeHealth(). */
-    unsigned int replica_priority;          /* xxx */
+    unsigned int replica_priority;          /* Replica priority used for auto failover ranking. */
 };
 
 /* Struct used for storing slot statistics. */

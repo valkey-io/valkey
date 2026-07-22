@@ -512,10 +512,7 @@ void orderedIndexDismissMemory(OrderedIndex *oi) {
 }
 
 size_t orderedIndexEstimateMemory(const OrderedIndex *oi, size_t sample_size) {
-    UNUSED(sample_size);
-    unsigned long len = fbtreeLength((fbtreeIndex *)oi);
-    /* Rough estimate: 64 bytes per item (sds + node slot overhead) */
-    return len * 64;
+    return fbtreeEstimateMemory((fbtreeIndex *)oi, sample_size);
 }
 
 /* ==========================================================================

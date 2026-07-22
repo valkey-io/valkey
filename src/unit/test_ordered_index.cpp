@@ -1871,6 +1871,34 @@ TEST_F(OrderedIndexTest, RangeDeleteCollapsesSpilledPrefixSubtree) {
     sdsfree(max);
 }
 
+TEST_F(OrderedIndexTest, EstimateMemoryScalesWithElementSize) {
+    /* The estimate samples live items, so trees with very different member
+     * sizes must produce estimates that reflect their actual footprint. */
+    enum { N = 200, BIG = 1024 };
+    for (int i = 0; i < N; i++) {
+        char b[16];
+        snprintf(b, sizeof(b), "s%05d", i);
+        orderedIndexInsert(oi, 1.0, b, 6);
+    }
+    size_t small_est = orderedIndexEstimateMemory(oi, 50);
+
+    orderedIndexFree(oi);
+    oi = orderedIndexCreate();
+    static char big[BIG];
+    memset(big, 'b', BIG);
+    for (int i = 0; i < N; i++) {
+        snprintf(big, 8, "%06d", i);
+        big[7] = 'x';
+        orderedIndexInsert(oi, 1.0, big, BIG);
+    }
+    size_t big_est = orderedIndexEstimateMemory(oi, 50);
+
+    /* At minimum the payload bytes; at most a few times that. */
+    ASSERT_GT(big_est, (size_t)N * BIG);
+    ASSERT_LT(big_est, (size_t)N * BIG * 3);
+    ASSERT_GT(big_est, small_est * 10);
+}
+
 TEST_F(OrderedIndexTest, DismissMemoryWalksItems) {
     /* Smoke test: dismissal must walk populated leaves and their separately
      * allocated packed items without corrupting the index. */

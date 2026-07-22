@@ -2478,3 +2478,31 @@ void fbtreeDismissMemory(fbtreeIndex *fbt) {
         leaf = next;
     }
 }
+
+size_t fbtreeEstimateMemory(fbtreeIndex *fbt, size_t sample_size) {
+    unsigned long len = fbtreeLength(fbt);
+    size_t size = sizeof(fbtreeIndex);
+    if (len == 0 || sample_size == 0) return size;
+
+    /* Sample item allocation sizes from the leftmost leaves and
+     * extrapolate, mirroring the sampling MEMORY USAGE requests. */
+    size_t elesize = 0, samples = 0, leaves_seen = 0;
+    leafNode *leaf = fbt->leftmost_leaf;
+    while (leaf && samples < sample_size) {
+        leaves_seen++;
+        for (int i = 0; i < leaf->header.num_items && samples < sample_size; i++) {
+            elesize += sdsAllocSize(leaf->values[i]);
+            samples++;
+        }
+        leaf = leaf->next;
+    }
+    size += (size_t)((double)elesize / samples * len);
+
+    /* Structural overhead: leaf count is exact when the sample covered the
+     * whole chain, otherwise extrapolated from the sampled fill; inner
+     * levels shrink geometrically by the fanout. */
+    size_t est_leaves = (leaf == NULL) ? leaves_seen : (size_t)(len / ((double)samples / leaves_seen)) + 1;
+    size += est_leaves * sizeof(leafNode);
+    size += (est_leaves / (NODE_SIZE - 1) + 1) * sizeof(innerNode);
+    return size;
+}

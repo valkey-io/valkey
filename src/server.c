@@ -40,6 +40,7 @@
 #include "commandlog.h"
 #include "bio.h"
 #include "latency.h"
+#include "info_emitter.h"
 #include "mt19937-64.h"
 #include "functions.h"
 #include "hdr_histogram.h"
@@ -5888,19 +5889,21 @@ void bytesToHuman(char *s, size_t size, unsigned long long n) {
 }
 
 /* Fill percentile distribution of latencies. */
-sds fillPercentileDistributionLatencies(sds info, const char *histogram_name, struct hdr_histogram *histogram) {
-    info = sdscatfmt(info, "latency_percentiles_usec_%s:", histogram_name);
+void fillPercentileDistributionLatencies(infoEmitter *e, const char *histogram_name, struct hdr_histogram *histogram) {
+    sds key = sdscatfmt(sdsempty(), "latency_percentiles_usec_%s", histogram_name);
+    infoEmitBeginDict(e, key);
+    sdsfree(key);
     for (int j = 0; j < server.latency_tracking_info_percentiles_len; j++) {
         char fbuf[128];
         size_t len = snprintf(fbuf, sizeof(fbuf), "%f", server.latency_tracking_info_percentiles[j]);
         trimDoubleString(fbuf, len);
-        info = sdscatprintf(info, "p%s=%.3f", fbuf,
-                            ((double)hdr_value_at_percentile(histogram, server.latency_tracking_info_percentiles[j])) /
-                                1000.0f);
-        if (j != server.latency_tracking_info_percentiles_len - 1) info = sdscatlen(info, ",", 1);
+        char sub[130];
+        snprintf(sub, sizeof(sub), "p%s", fbuf);
+        infoEmitDictDouble(
+            e, sub,
+            ((double)hdr_value_at_percentile(histogram, server.latency_tracking_info_percentiles[j])) / 1000.0f, 3);
     }
-    info = sdscatprintf(info, "\r\n");
-    return info;
+    infoEmitEndDict(e);
 }
 
 const char *replstateToString(int replstate) {
@@ -5932,7 +5935,7 @@ const char *getSafeInfoString(const char *s, size_t len, char **tmp) {
     return memmapchars(new, len, unsafe_info_chars, unsafe_info_chars_substs, sizeof(unsafe_info_chars) - 1);
 }
 
-sds genValkeyInfoStringCommandStats(sds info, hashtable *commands) {
+void genValkeyInfoStringCommandStats(infoEmitter *e, hashtable *commands) {
     hashtableIterator iter;
     void *next;
     hashtableInitIterator(&iter, commands, HASHTABLE_ITER_SAFE);
@@ -5940,39 +5943,36 @@ sds genValkeyInfoStringCommandStats(sds info, hashtable *commands) {
         struct serverCommand *c = next;
         char *tmpsafe;
         if (c->calls || c->failed_calls || c->rejected_calls) {
-            info = sdscatprintf(info,
-                                "cmdstat_%s:calls=%lld,usec=%lld,usec_per_call=%.2f"
-                                ",rejected_calls=%lld,failed_calls=%lld\r\n",
-                                getSafeInfoString(c->fullname, sdslen(c->fullname), &tmpsafe), c->calls,
-                                c->microseconds, (c->calls == 0) ? 0 : ((float)c->microseconds / c->calls),
-                                c->rejected_calls, c->failed_calls);
+            sds key =
+                sdscatprintf(sdsempty(), "cmdstat_%s", getSafeInfoString(c->fullname, sdslen(c->fullname), &tmpsafe));
             if (tmpsafe != NULL) zfree(tmpsafe);
+            infoEmitBeginDict(e, key);
+            sdsfree(key);
+            infoEmitDictCounterLL(e, "calls", c->calls);
+            infoEmitDictMetricLL(e, "usec", c->microseconds, INFO_KIND_COUNTER, INFO_UNIT_MICROSECONDS);
+            infoEmitDictDouble(e, "usec_per_call", (c->calls == 0) ? 0 : ((float)c->microseconds / c->calls), 2);
+            infoEmitDictCounterLL(e, "rejected_calls", c->rejected_calls);
+            infoEmitDictCounterLL(e, "failed_calls", c->failed_calls);
+            infoEmitEndDict(e);
         }
         if (c->subcommands_ht) {
-            info = genValkeyInfoStringCommandStats(info, c->subcommands_ht);
+            genValkeyInfoStringCommandStats(e, c->subcommands_ht);
         }
     }
     hashtableCleanupIterator(&iter);
-
-    return info;
 }
 
 /* Writes the ACL metrics to the info */
-sds genValkeyInfoStringACLStats(sds info) {
-    info = sdscatprintf(info,
-                        "acl_access_denied_auth:%lld\r\n"
-                        "acl_access_denied_cmd:%lld\r\n"
-                        "acl_access_denied_key:%lld\r\n"
-                        "acl_access_denied_channel:%lld\r\n"
-                        "acl_access_denied_tls_cert:%lld\r\n"
-                        "acl_access_denied_db:%lld\r\n",
-                        server.acl_info.user_auth_failures, server.acl_info.invalid_cmd_accesses,
-                        server.acl_info.invalid_key_accesses, server.acl_info.invalid_channel_accesses,
-                        server.acl_info.acl_access_denied_tls_cert, server.acl_info.invalid_db_accesses);
-    return info;
+void genValkeyInfoStringACLStats(infoEmitter *e) {
+    infoEmitCounterLL(e, "acl_access_denied_auth", server.acl_info.user_auth_failures);
+    infoEmitCounterLL(e, "acl_access_denied_cmd", server.acl_info.invalid_cmd_accesses);
+    infoEmitCounterLL(e, "acl_access_denied_key", server.acl_info.invalid_key_accesses);
+    infoEmitCounterLL(e, "acl_access_denied_channel", server.acl_info.invalid_channel_accesses);
+    infoEmitCounterLL(e, "acl_access_denied_tls_cert", server.acl_info.acl_access_denied_tls_cert);
+    infoEmitCounterLL(e, "acl_access_denied_db", server.acl_info.invalid_db_accesses);
 }
 
-sds genValkeyInfoStringLatencyStats(sds info, hashtable *commands) {
+void genValkeyInfoStringLatencyStats(infoEmitter *e, hashtable *commands) {
     hashtableIterator iter;
     void *next;
     hashtableInitIterator(&iter, commands, HASHTABLE_ITER_SAFE);
@@ -5980,17 +5980,15 @@ sds genValkeyInfoStringLatencyStats(sds info, hashtable *commands) {
         struct serverCommand *c = next;
         char *tmpsafe;
         if (c->latency_histogram) {
-            info = fillPercentileDistributionLatencies(
-                info, getSafeInfoString(c->fullname, sdslen(c->fullname), &tmpsafe), c->latency_histogram);
+            fillPercentileDistributionLatencies(
+                e, getSafeInfoString(c->fullname, sdslen(c->fullname), &tmpsafe), c->latency_histogram);
             if (tmpsafe != NULL) zfree(tmpsafe);
         }
         if (c->subcommands_ht) {
-            info = genValkeyInfoStringLatencyStats(info, c->subcommands_ht);
+            genValkeyInfoStringLatencyStats(e, c->subcommands_ht);
         }
     }
     hashtableCleanupIterator(&iter);
-
-    return info;
 }
 
 /* Takes a null terminated sections list, and adds them to the dict. */
@@ -6009,9 +6007,18 @@ void releaseInfoSectionDict(dict *sec) {
     if (sec != cached_default_info_sections) dictRelease(sec);
 }
 
+typedef struct scriptingEngineInfoRecord {
+    sds name;
+    const char *module_name;
+    uint64_t abi_version;
+    size_t used_memory;
+    size_t memory_overhead;
+} scriptingEngineInfoRecord;
+
 typedef struct scriptingEngineInfoCollector {
-    sds info;
-    int total_engines;
+    scriptingEngineInfoRecord *records;
+    int count;
+    int capacity;
     size_t total_used_memory;
     size_t total_overhead;
 } scriptingEngineInfoCollector;
@@ -6019,50 +6026,50 @@ typedef struct scriptingEngineInfoCollector {
 static void collectScriptingEngineInfo(scriptingEngine *engine, void *context) {
     scriptingEngineInfoCollector *collector = (scriptingEngineInfoCollector *)context;
 
-    sds engine_name = scriptingEngineGetName(engine);
-    ValkeyModule *module = scriptingEngineGetModule(engine);
-    uint64_t abi_version = scriptingEngineGetAbiVersion(engine);
-
-    /* Get memory information for the engine */
+    /* Query each engine's memory info exactly once and cache its record, so the
+     * header totals and the per-engine fields come from a single consistent
+     * snapshot (and we emit typed dict fields, not raw text). */
     engineMemoryInfo mem_info = scriptingEngineCallGetMemoryInfo(engine, VMSE_ALL);
+    ValkeyModule *module = scriptingEngineGetModule(engine);
 
-    collector->info = sdscatprintf(collector->info,
-                                   "engine_%d:name=%s,module=%s,abi_version=%lu,used_memory=%zu,memory_overhead=%zu\r\n",
-                                   collector->total_engines,
-                                   engine_name,
-                                   module ? module->name : "built-in",
-                                   (unsigned long)abi_version,
-                                   mem_info.used_memory,
-                                   mem_info.engine_memory_overhead);
+    if (collector->count == collector->capacity) {
+        collector->capacity = collector->capacity ? collector->capacity * 2 : 4;
+        collector->records = zrealloc(collector->records, collector->capacity * sizeof(*collector->records));
+    }
+    scriptingEngineInfoRecord *rec = &collector->records[collector->count++];
+    rec->name = scriptingEngineGetName(engine);
+    rec->module_name = module ? module->name : "built-in";
+    rec->abi_version = scriptingEngineGetAbiVersion(engine);
+    rec->used_memory = mem_info.used_memory;
+    rec->memory_overhead = mem_info.engine_memory_overhead;
 
-    collector->total_engines++;
     collector->total_used_memory += mem_info.used_memory;
     collector->total_overhead += mem_info.engine_memory_overhead;
 }
 
-sds genValkeyInfoStringScriptingEngines(sds info) {
-    scriptingEngineInfoCollector collector = {
-        .info = sdsempty(),
-        .total_engines = 0,
-        .total_used_memory = 0,
-        .total_overhead = 0};
-
-    /* Collect information from all registered engines */
+void genValkeyInfoStringScriptingEngines(infoEmitter *e) {
+    /* Collect all engine records (and totals) in a single pass, then emit the
+     * section header + totals followed by the per-engine dict fields. */
+    scriptingEngineInfoCollector collector = {NULL, 0, 0, 0, 0};
     scriptingEngineManagerForEachEngine(collectScriptingEngineInfo, &collector);
 
-    info = sdscatprintf(info,
-                        "# Scripting Engines\r\n"
-                        "engines_count:%d\r\n"
-                        "engines_total_used_memory:%zu\r\n"
-                        "engines_total_memory_overhead:%zu\r\n"
-                        "%s",
-                        collector.total_engines,
-                        collector.total_used_memory,
-                        collector.total_overhead,
-                        collector.info);
-
-    sdsfree(collector.info);
-    return info;
+    infoEmitBeginSection(e, "Scripting Engines");
+    infoEmitFieldLL(e, "engines_count", collector.count);
+    infoEmitMetricULL(e, "engines_total_used_memory", collector.total_used_memory, INFO_KIND_GAUGE, INFO_UNIT_BYTES);
+    infoEmitMetricULL(e, "engines_total_memory_overhead", collector.total_overhead, INFO_KIND_GAUGE, INFO_UNIT_BYTES);
+    for (int i = 0; i < collector.count; i++) {
+        scriptingEngineInfoRecord *rec = &collector.records[i];
+        char key[32];
+        snprintf(key, sizeof(key), "engine_%d", i);
+        infoEmitBeginDict(e, key);
+        infoEmitDictStr(e, "name", rec->name);
+        infoEmitDictStr(e, "module", rec->module_name);
+        infoEmitDictLL(e, "abi_version", (long long)rec->abi_version);
+        infoEmitDictMetricLL(e, "used_memory", (long long)rec->used_memory, INFO_KIND_GAUGE, INFO_UNIT_BYTES);
+        infoEmitDictMetricLL(e, "memory_overhead", (long long)rec->memory_overhead, INFO_KIND_GAUGE, INFO_UNIT_BYTES);
+        infoEmitEndDict(e);
+    }
+    zfree(collector.records);
 }
 
 /* Create a dictionary with unique section names to be used by genValkeyInfoString.
@@ -6137,11 +6144,21 @@ void totalNumberOfStatefulKeys(unsigned long *blocking_keys,
 /* Create the string returned by the INFO command. This is decoupled
  * by the INFO command itself as we need to report the same information
  * on memory corruption problems. */
-sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
-    sds info = sdsempty();
+/* Emit an sds's contents through the emitter's raw hook, then free the sds.
+ * Used for legacy helpers that still build INFO text directly (listeners,
+ * cluster info, the module version list). Structured backends skip raw output.
+ * The sds is passed as an argument to "%s", so any '%' in it stays literal. */
+static void infoEmitRawSds(infoEmitter *e, sds s) {
+    infoEmitRaw(e, "%s", s);
+    sdsfree(s);
+}
+
+/* Drive INFO generation into an arbitrary emitter backend. 'section_counter' is
+ * shared with the backend (which owns the inter-section separator) and is read
+ * here to decide whether module info collection is needed. */
+void genValkeyInfoToEmitter(infoEmitter *e, int *section_counter, dict *section_dict, int all_sections, int everything) {
     time_t uptime = server.unixtime - server.stat_starttime;
     int j;
-    int sections = 0;
     if (everything) all_sections = 1;
 
     /* Server */
@@ -6169,62 +6186,64 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
             supervised = "no";
         }
 
-        if (sections++) info = sdscat(info, "\r\n");
-
         if (call_uname) {
             /* Uname can be slow and is always the same output. Cache it. */
             uname(&name);
             call_uname = 0;
         }
 
-        info = sdscatfmt(
-            info,
-            "# Server\r\n" FMTARGS(
-                "redis_version:%s\r\n", REDIS_VERSION,
-                "server_name:%s\r\n", SERVER_NAME,
-                "valkey_version:%s\r\n", VALKEY_VERSION,
-                "valkey_release_stage:%s\r\n", VALKEY_RELEASE_STAGE,
-                "redis_git_sha1:%s\r\n", serverGitSHA1(),
-                "redis_git_dirty:%i\r\n", strtol(serverGitDirty(), NULL, 10) > 0,
-                "redis_build_id:%s\r\n", serverBuildIdString(),
-                "%s_mode:", (server.extended_redis_compat ? "redis" : "server"),
-                "%s\r\n", mode,
-                "os:%s", name.sysname,
-                " %s", name.release,
-                " %s\r\n", name.machine,
-                "arch_bits:%i\r\n", server.arch_bits,
-                "monotonic_clock:%s\r\n", monotonicInfoString(),
-                "multiplexing_api:%s\r\n", aeGetApiName(),
-                "gcc_version:%s\r\n", GNUC_VERSION_STR,
-                "process_id:%I\r\n", (int64_t)getpid(),
-                "process_supervised:%s\r\n", supervised,
-                "run_id:%s\r\n", server.runid,
-                "tcp_port:%i\r\n", server.port ? server.port : server.tls_port,
-                "server_time_usec:%I\r\n", (int64_t)server.ustime,
-                "uptime_in_seconds:%I\r\n", (int64_t)uptime,
-                "uptime_in_days:%I\r\n", (int64_t)(uptime / (3600 * 24)),
-                "hz:%i\r\n", server.hz,
-                "configured_hz:%i\r\n", server.hz,
-                "clients_hz:%i\r\n", server.clients_hz,
-                "lru_clock:%u\r\n", (unsigned int)(server.unixtime & ((1 << LRULFU_BITS) - 1)),
-                "executable:%s\r\n", server.executable ? server.executable : "",
-                "config_file:%s\r\n", server.configfile ? server.configfile : "",
-                "io_threads_active:%i\r\n", server.active_io_threads_num > 1,
-                "availability_zone:%s\r\n", server.availability_zone));
+        /* Build the composite "os" value and the dynamic "<server|redis>_mode"
+         * key that the legacy multi-fragment sdscatfmt produced. Buffers are
+         * sized from the source fields so no truncation is possible. */
+        char server_mode_key[32];
+        snprintf(server_mode_key, sizeof(server_mode_key), "%s_mode",
+                 server.extended_redis_compat ? "redis" : "server");
+        char os_buf[sizeof(name.sysname) + sizeof(name.release) + sizeof(name.machine) + 3];
+        snprintf(os_buf, sizeof(os_buf), "%s %s %s", name.sysname, name.release, name.machine);
+
+        infoEmitBeginSection(e, "Server");
+        infoEmitFieldStr(e, "redis_version", REDIS_VERSION);
+        infoEmitFieldStr(e, "server_name", SERVER_NAME);
+        infoEmitFieldStr(e, "valkey_version", VALKEY_VERSION);
+        infoEmitFieldStr(e, "valkey_release_stage", VALKEY_RELEASE_STAGE);
+        infoEmitFieldStr(e, "redis_git_sha1", serverGitSHA1());
+        infoEmitFieldLL(e, "redis_git_dirty", strtol(serverGitDirty(), NULL, 10) > 0);
+        infoEmitFieldStr(e, "redis_build_id", serverBuildIdString());
+        infoEmitFieldStr(e, server_mode_key, mode);
+        infoEmitFieldStr(e, "os", os_buf);
+        infoEmitFieldLL(e, "arch_bits", server.arch_bits);
+        infoEmitFieldStr(e, "monotonic_clock", monotonicInfoString());
+        infoEmitFieldStr(e, "multiplexing_api", aeGetApiName());
+        infoEmitFieldStr(e, "gcc_version", GNUC_VERSION_STR);
+        infoEmitFieldLL(e, "process_id", (int64_t)getpid());
+        infoEmitFieldStr(e, "process_supervised", supervised);
+        infoEmitFieldStr(e, "run_id", server.runid);
+        infoEmitFieldLL(e, "tcp_port", server.port ? server.port : server.tls_port);
+        infoEmitFieldLL(e, "server_time_usec", (int64_t)server.ustime);
+        infoEmitFieldLL(e, "uptime_in_seconds", (int64_t)uptime);
+        infoEmitFieldLL(e, "uptime_in_days", (int64_t)(uptime / (3600 * 24)));
+        infoEmitFieldLL(e, "hz", server.hz);
+        infoEmitFieldLL(e, "configured_hz", server.hz);
+        infoEmitFieldLL(e, "clients_hz", server.clients_hz);
+        infoEmitFieldULL(e, "lru_clock", (unsigned int)(server.unixtime & ((1 << LRULFU_BITS) - 1)));
+        infoEmitFieldStr(e, "executable", server.executable ? server.executable : "");
+        infoEmitFieldStr(e, "config_file", server.configfile ? server.configfile : "");
+        infoEmitFieldLL(e, "io_threads_active", server.active_io_threads_num > 1);
+        infoEmitFieldStr(e, "availability_zone", server.availability_zone);
 
         /* Conditional properties */
         if (isShutdownInitiated()) {
-            info = sdscatfmt(info, "shutdown_in_milliseconds:%I\r\n",
-                             (int64_t)(server.shutdown_mstime - commandTimeSnapshot()));
+            infoEmitMetricLL(e, "shutdown_in_milliseconds",
+                             (long long)(server.shutdown_mstime - commandTimeSnapshot()), INFO_KIND_GAUGE,
+                             INFO_UNIT_MILLISECONDS);
         }
 
-        /* get all the listeners information */
-        info = getListensInfoString(info);
+        /* get all the listeners information (raw text; skipped by structured backends) */
+        infoEmitRawSds(e, getListensInfoString(sdsempty()));
     }
 
     /* TLS */
     if (all_sections || (dictFind(section_dict, "tls") != NULL)) {
-        if (sections++) info = sdscat(info, "\r\n");
         long long tls_server_seconds_remaining = 0;
         if (server.tls_server_cert_expire_time > 0) {
             tls_server_seconds_remaining = server.tls_server_cert_expire_time - (long long)server.unixtime;
@@ -6240,15 +6259,18 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
             tls_ca_seconds_remaining = server.tls_ca_cert_expire_time - (long long)server.unixtime;
             if (tls_ca_seconds_remaining < 0) tls_ca_seconds_remaining = 0;
         }
-        info = sdscatprintf(
-            info,
-            "# TLS\r\n" FMTARGS(
-                "tls_server_cert_serial:%s\r\n", server.tls_server_cert_serial ? server.tls_server_cert_serial : "none",
-                "tls_server_cert_expires_in_seconds:%lld\r\n", tls_server_seconds_remaining,
-                "tls_client_cert_serial:%s\r\n", server.tls_client_cert_serial ? server.tls_client_cert_serial : "none",
-                "tls_client_cert_expires_in_seconds:%lld\r\n", tls_client_seconds_remaining,
-                "tls_ca_cert_serial:%s\r\n", server.tls_ca_cert_serial ? server.tls_ca_cert_serial : "none",
-                "tls_ca_cert_expires_in_seconds:%lld\r\n", tls_ca_seconds_remaining));
+        infoEmitBeginSection(e, "TLS");
+        infoEmitFieldStr(e, "tls_server_cert_serial",
+                         server.tls_server_cert_serial ? server.tls_server_cert_serial : "none");
+        infoEmitMetricLL(e, "tls_server_cert_expires_in_seconds", tls_server_seconds_remaining, INFO_KIND_GAUGE,
+                         INFO_UNIT_SECONDS);
+        infoEmitFieldStr(e, "tls_client_cert_serial",
+                         server.tls_client_cert_serial ? server.tls_client_cert_serial : "none");
+        infoEmitMetricLL(e, "tls_client_cert_expires_in_seconds", tls_client_seconds_remaining, INFO_KIND_GAUGE,
+                         INFO_UNIT_SECONDS);
+        infoEmitFieldStr(e, "tls_ca_cert_serial", server.tls_ca_cert_serial ? server.tls_ca_cert_serial : "none");
+        infoEmitMetricLL(e, "tls_ca_cert_expires_in_seconds", tls_ca_seconds_remaining, INFO_KIND_GAUGE,
+                         INFO_UNIT_SECONDS);
     }
 
     /* Clients */
@@ -6272,26 +6294,23 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
             paused_reason = getPausedReason(purpose);
         }
 
-        if (sections++) info = sdscat(info, "\r\n");
-        info = sdscatprintf(
-            info,
-            "# Clients\r\n" FMTARGS(
-                "connected_clients:%lu\r\n", listLength(server.clients) - listLength(server.replicas),
-                "cluster_connections:%lu\r\n", getClusterConnectionsCount(),
-                "maxclients:%u\r\n", server.maxclients,
-                "client_recent_max_input_buffer:%zu\r\n", maxin,
-                "client_recent_max_output_buffer:%zu\r\n", maxout,
-                "blocked_clients:%d\r\n", server.blocked_clients,
-                "tracking_clients:%d\r\n", server.tracking_clients,
-                "pubsub_clients:%d\r\n", server.pubsub_clients,
-                "watching_clients:%d\r\n", server.watching_clients,
-                "clients_in_timeout_table:%llu\r\n", (unsigned long long)raxSize(server.clients_timeout_table),
-                "total_watched_keys:%lu\r\n", watched_keys,
-                "total_blocking_keys:%lu\r\n", blocking_keys,
-                "total_blocking_keys_on_nokey:%lu\r\n", blocking_keys_on_nokey,
-                "paused_reason:%s\r\n", paused_reason,
-                "paused_actions:%s\r\n", paused_actions,
-                "paused_timeout_milliseconds:%lld\r\n", paused_timeout));
+        infoEmitBeginSection(e, "Clients");
+        infoEmitFieldULL(e, "connected_clients", listLength(server.clients) - listLength(server.replicas));
+        infoEmitFieldULL(e, "cluster_connections", getClusterConnectionsCount());
+        infoEmitFieldULL(e, "maxclients", server.maxclients);
+        infoEmitMetricULL(e, "client_recent_max_input_buffer", maxin, INFO_KIND_GAUGE, INFO_UNIT_BYTES);
+        infoEmitMetricULL(e, "client_recent_max_output_buffer", maxout, INFO_KIND_GAUGE, INFO_UNIT_BYTES);
+        infoEmitFieldLL(e, "blocked_clients", server.blocked_clients);
+        infoEmitFieldLL(e, "tracking_clients", server.tracking_clients);
+        infoEmitFieldLL(e, "pubsub_clients", server.pubsub_clients);
+        infoEmitFieldLL(e, "watching_clients", server.watching_clients);
+        infoEmitFieldULL(e, "clients_in_timeout_table", (unsigned long long)raxSize(server.clients_timeout_table));
+        infoEmitFieldULL(e, "total_watched_keys", watched_keys);
+        infoEmitFieldULL(e, "total_blocking_keys", blocking_keys);
+        infoEmitFieldULL(e, "total_blocking_keys_on_nokey", blocking_keys_on_nokey);
+        infoEmitFieldStr(e, "paused_reason", paused_reason);
+        infoEmitFieldStr(e, "paused_actions", paused_actions);
+        infoEmitMetricLL(e, "paused_timeout_milliseconds", paused_timeout, INFO_KIND_GAUGE, INFO_UNIT_MILLISECONDS);
     }
 
     /* Memory */
@@ -6326,76 +6345,86 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
         bytesToHuman(used_memory_rss_hmem, sizeof(used_memory_rss_hmem), server.cron_malloc_stats.process_rss);
         bytesToHuman(maxmemory_hmem, sizeof(maxmemory_hmem), server.maxmemory);
 
-        if (sections++) info = sdscat(info, "\r\n");
-        info = sdscatprintf(
-            info,
-            "# Memory\r\n" FMTARGS(
-                "used_memory:%zu\r\n", zmalloc_used,
-                "used_memory_human:%s\r\n", hmem,
-                "used_memory_rss:%zu\r\n", server.cron_malloc_stats.process_rss,
-                "used_memory_rss_human:%s\r\n", used_memory_rss_hmem,
-                "used_memory_peak:%zu\r\n", server.stat_peak_memory,
-                "used_memory_peak_human:%s\r\n", peak_hmem,
-                "used_memory_peak_perc:%.2f%%\r\n", mh->peak_perc,
-                "used_memory_overhead:%zu\r\n", mh->overhead_total,
-                "used_memory_startup:%zu\r\n", mh->startup_allocated,
-                "used_memory_dataset:%zu\r\n", mh->dataset,
-                "used_memory_dataset_perc:%.2f%%\r\n", mh->dataset_perc,
-                "allocator_allocated:%zu\r\n", server.cron_malloc_stats.allocator_allocated,
-                "allocator_active:%zu\r\n", server.cron_malloc_stats.allocator_active,
-                "allocator_resident:%zu\r\n", server.cron_malloc_stats.allocator_resident,
-                "allocator_muzzy:%zu\r\n", server.cron_malloc_stats.allocator_muzzy,
-                "total_system_memory:%lu\r\n", (unsigned long)total_system_mem,
-                "total_system_memory_human:%s\r\n", total_system_hmem,
-                "used_memory_lua:%lld\r\n", memory_lua, /* deprecated, renamed to used_memory_vm_eval */
-                "used_memory_vm_eval:%lld\r\n", memory_lua,
-                "used_memory_lua_human:%s\r\n", used_memory_lua_hmem, /* deprecated */
-                "used_memory_scripts_eval:%lld\r\n", (long long)mh->lua_caches,
-                "number_of_cached_scripts:%zu\r\n", dictSize(evalScriptsDict()),
-                "number_of_functions:%lu\r\n", functionsNum(),
-                "number_of_libraries:%lu\r\n", functionsLibNum(),
-                "used_memory_vm_functions:%lld\r\n", memory_functions,
-                "used_memory_vm_total:%lld\r\n", memory_functions + memory_lua,
-                "used_memory_vm_total_human:%s\r\n", used_memory_vm_total_hmem,
-                "used_memory_functions:%lld\r\n", (long long)mh->functions_caches,
-                "used_memory_scripts:%lld\r\n", (long long)mh->lua_caches + (long long)mh->functions_caches,
-                "used_memory_scripts_human:%s\r\n", used_memory_scripts_hmem,
-                "maxmemory:%lld\r\n", server.maxmemory,
-                "maxmemory_human:%s\r\n", maxmemory_hmem,
-                "maxmemory_policy:%s\r\n", evict_policy,
-                "allocator_frag_ratio:%.2f\r\n", mh->allocator_frag,
-                "allocator_frag_bytes:%zu\r\n", mh->allocator_frag_bytes,
-                "allocator_rss_ratio:%.2f\r\n", mh->allocator_rss,
-                "allocator_rss_bytes:%zd\r\n", mh->allocator_rss_bytes,
-                "rss_overhead_ratio:%.2f\r\n", mh->rss_extra,
-                "rss_overhead_bytes:%zd\r\n", mh->rss_extra_bytes,
-                /* The next field (mem_fragmentation_ratio) is the total RSS
-                 * overhead, including fragmentation, but not just it. This field
-                 * (and the next one) is named like that just for backward
-                 * compatibility. */
-                "mem_fragmentation_ratio:%.2f\r\n", mh->total_frag,
-                "mem_fragmentation_bytes:%zd\r\n", mh->total_frag_bytes,
-                "mem_not_counted_for_evict:%zu\r\n", freeMemoryGetNotCountedMemory(),
-                "mem_replication_backlog:%zu\r\n", mh->repl_backlog,
-                "mem_total_replication_buffers:%zu\r\n", server.repl_buffer_mem + server.pending_repl_data.mem,
-                "mem_replicas_repl_buffer:%zu\r\n", server.pending_repl_data.mem,
-                "mem_clients_slaves:%zu\r\n", mh->clients_replicas,
-                "mem_clients_normal:%zu\r\n", mh->clients_normal,
-                "mem_cluster_links:%zu\r\n", mh->cluster_links,
-                "mem_cluster_slot_import:%zu\r\n", mh->cluster_slot_import,
-                "mem_cluster_slot_export:%zu\r\n", mh->cluster_slot_export,
-                "mem_aof_buffer:%zu\r\n", mh->aof_buffer,
-                "mem_allocator:%s\r\n", ZMALLOC_LIB,
-                "mem_overhead_db_hashtable_rehashing:%zu\r\n", mh->overhead_db_hashtable_rehashing,
-                "active_defrag_running:%d\r\n", server.active_defrag_cpu_percent,
-                "lazyfree_pending_objects:%zu\r\n", lazyfreeGetPendingObjectsCount(),
-                "lazyfreed_objects:%zu\r\n", lazyfreeGetFreedObjectsCount()));
+        infoEmitBeginSection(e, "Memory");
+        infoEmitMetricULL(e, "used_memory", zmalloc_used, INFO_KIND_GAUGE, INFO_UNIT_BYTES);
+        infoEmitFieldStr(e, "used_memory_human", hmem);
+        infoEmitMetricULL(e, "used_memory_rss", server.cron_malloc_stats.process_rss, INFO_KIND_GAUGE, INFO_UNIT_BYTES);
+        infoEmitFieldStr(e, "used_memory_rss_human", used_memory_rss_hmem);
+        infoEmitMetricULL(e, "used_memory_peak", server.stat_peak_memory, INFO_KIND_GAUGE, INFO_UNIT_BYTES);
+        infoEmitFieldStr(e, "used_memory_peak_human", peak_hmem);
+        infoEmitMetricDouble(e, "used_memory_peak_perc", mh->peak_perc, 2, INFO_KIND_GAUGE, INFO_UNIT_PERCENT);
+        infoEmitMetricULL(e, "used_memory_overhead", mh->overhead_total, INFO_KIND_GAUGE, INFO_UNIT_BYTES);
+        infoEmitMetricULL(e, "used_memory_startup", mh->startup_allocated, INFO_KIND_GAUGE, INFO_UNIT_BYTES);
+        infoEmitMetricULL(e, "used_memory_dataset", mh->dataset, INFO_KIND_GAUGE, INFO_UNIT_BYTES);
+        infoEmitMetricDouble(e, "used_memory_dataset_perc", mh->dataset_perc, 2, INFO_KIND_GAUGE, INFO_UNIT_PERCENT);
+        infoEmitMetricULL(e, "allocator_allocated", server.cron_malloc_stats.allocator_allocated, INFO_KIND_GAUGE,
+                          INFO_UNIT_BYTES);
+        infoEmitMetricULL(e, "allocator_active", server.cron_malloc_stats.allocator_active, INFO_KIND_GAUGE,
+                          INFO_UNIT_BYTES);
+        infoEmitMetricULL(e, "allocator_resident", server.cron_malloc_stats.allocator_resident, INFO_KIND_GAUGE,
+                          INFO_UNIT_BYTES);
+        infoEmitMetricULL(e, "allocator_muzzy", server.cron_malloc_stats.allocator_muzzy, INFO_KIND_GAUGE,
+                          INFO_UNIT_BYTES);
+        infoEmitMetricULL(e, "total_system_memory", (unsigned long)total_system_mem, INFO_KIND_GAUGE, INFO_UNIT_BYTES);
+        infoEmitFieldStr(e, "total_system_memory_human", total_system_hmem);
+        infoEmitMetricLL(e, "used_memory_lua", memory_lua, INFO_KIND_GAUGE,
+                         INFO_UNIT_BYTES); /* deprecated, renamed to used_memory_vm_eval */
+        infoEmitMetricLL(e, "used_memory_vm_eval", memory_lua, INFO_KIND_GAUGE, INFO_UNIT_BYTES);
+        infoEmitFieldStr(e, "used_memory_lua_human", used_memory_lua_hmem); /* deprecated */
+        infoEmitMetricLL(e, "used_memory_scripts_eval", (long long)mh->lua_caches, INFO_KIND_GAUGE, INFO_UNIT_BYTES);
+        infoEmitFieldULL(e, "number_of_cached_scripts", dictSize(evalScriptsDict()));
+        infoEmitFieldULL(e, "number_of_functions", functionsNum());
+        infoEmitFieldULL(e, "number_of_libraries", functionsLibNum());
+        infoEmitMetricLL(e, "used_memory_vm_functions", memory_functions, INFO_KIND_GAUGE, INFO_UNIT_BYTES);
+        infoEmitMetricLL(e, "used_memory_vm_total", memory_functions + memory_lua, INFO_KIND_GAUGE, INFO_UNIT_BYTES);
+        infoEmitFieldStr(e, "used_memory_vm_total_human", used_memory_vm_total_hmem);
+        infoEmitMetricLL(e, "used_memory_functions", (long long)mh->functions_caches, INFO_KIND_GAUGE, INFO_UNIT_BYTES);
+        infoEmitMetricLL(e, "used_memory_scripts", (long long)mh->lua_caches + (long long)mh->functions_caches,
+                         INFO_KIND_GAUGE, INFO_UNIT_BYTES);
+        infoEmitFieldStr(e, "used_memory_scripts_human", used_memory_scripts_hmem);
+        infoEmitMetricLL(e, "maxmemory", server.maxmemory, INFO_KIND_GAUGE, INFO_UNIT_BYTES);
+        infoEmitFieldStr(e, "maxmemory_human", maxmemory_hmem);
+        infoEmitFieldStr(e, "maxmemory_policy", evict_policy);
+        infoEmitFieldDouble(e, "allocator_frag_ratio", mh->allocator_frag, 2);
+        /* Legacy used %zu on an ssize_t field; reinterpret at size_t width
+         * first so 32-bit output matches byte-for-byte. */
+        infoEmitMetricULL(e, "allocator_frag_bytes", (unsigned long long)(size_t)mh->allocator_frag_bytes,
+                          INFO_KIND_GAUGE, INFO_UNIT_BYTES);
+        infoEmitFieldDouble(e, "allocator_rss_ratio", mh->allocator_rss, 2);
+        infoEmitMetricLL(e, "allocator_rss_bytes", mh->allocator_rss_bytes, INFO_KIND_GAUGE, INFO_UNIT_BYTES);
+        infoEmitFieldDouble(e, "rss_overhead_ratio", mh->rss_extra, 2);
+        /* Legacy used %zd on a size_t field; reinterpret at ssize_t width
+         * first so 32-bit output matches byte-for-byte. */
+        infoEmitMetricLL(e, "rss_overhead_bytes", (long long)(ssize_t)mh->rss_extra_bytes, INFO_KIND_GAUGE,
+                         INFO_UNIT_BYTES);
+        /* The next field (mem_fragmentation_ratio) is the total RSS overhead,
+         * including fragmentation, but not just it. This field (and the next
+         * one) is named like that just for backward compatibility. */
+        infoEmitFieldDouble(e, "mem_fragmentation_ratio", mh->total_frag, 2);
+        infoEmitMetricLL(e, "mem_fragmentation_bytes", mh->total_frag_bytes, INFO_KIND_GAUGE, INFO_UNIT_BYTES);
+        infoEmitMetricULL(e, "mem_not_counted_for_evict", freeMemoryGetNotCountedMemory(), INFO_KIND_GAUGE,
+                          INFO_UNIT_BYTES);
+        infoEmitMetricULL(e, "mem_replication_backlog", mh->repl_backlog, INFO_KIND_GAUGE, INFO_UNIT_BYTES);
+        infoEmitMetricULL(e, "mem_total_replication_buffers", server.repl_buffer_mem + server.pending_repl_data.mem,
+                          INFO_KIND_GAUGE, INFO_UNIT_BYTES);
+        infoEmitMetricULL(e, "mem_replicas_repl_buffer", server.pending_repl_data.mem, INFO_KIND_GAUGE, INFO_UNIT_BYTES);
+        infoEmitMetricULL(e, "mem_clients_slaves", mh->clients_replicas, INFO_KIND_GAUGE, INFO_UNIT_BYTES);
+        infoEmitMetricULL(e, "mem_clients_normal", mh->clients_normal, INFO_KIND_GAUGE, INFO_UNIT_BYTES);
+        infoEmitMetricULL(e, "mem_cluster_links", mh->cluster_links, INFO_KIND_GAUGE, INFO_UNIT_BYTES);
+        infoEmitMetricULL(e, "mem_cluster_slot_import", mh->cluster_slot_import, INFO_KIND_GAUGE, INFO_UNIT_BYTES);
+        infoEmitMetricULL(e, "mem_cluster_slot_export", mh->cluster_slot_export, INFO_KIND_GAUGE, INFO_UNIT_BYTES);
+        infoEmitMetricULL(e, "mem_aof_buffer", mh->aof_buffer, INFO_KIND_GAUGE, INFO_UNIT_BYTES);
+        infoEmitFieldStr(e, "mem_allocator", ZMALLOC_LIB);
+        infoEmitMetricULL(e, "mem_overhead_db_hashtable_rehashing", mh->overhead_db_hashtable_rehashing,
+                          INFO_KIND_GAUGE, INFO_UNIT_BYTES);
+        infoEmitFieldLL(e, "active_defrag_running", server.active_defrag_cpu_percent);
+        infoEmitFieldULL(e, "lazyfree_pending_objects", lazyfreeGetPendingObjectsCount());
+        infoEmitFieldULL(e, "lazyfreed_objects", lazyfreeGetFreedObjectsCount());
         freeMemoryOverheadData(mh);
     }
 
     /* Persistence */
     if (all_sections || (dictFind(section_dict, "persistence") != NULL)) {
-        if (sections++) info = sdscat(info, "\r\n");
         double fork_perc = 0;
         if (server.stat_module_progress) {
             fork_perc = server.stat_module_progress * 100;
@@ -6404,51 +6433,58 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
         }
         int aof_bio_fsync_status = atomic_load_explicit(&server.aof_bio_fsync_status, memory_order_relaxed);
 
-        info = sdscatprintf(
-            info,
-            "# Persistence\r\n" FMTARGS(
-                "loading:%d\r\n", (int)(server.loading && !server.async_loading),
-                "async_loading:%d\r\n", (int)server.async_loading,
-                "current_cow_peak:%zu\r\n", server.stat_current_cow_peak,
-                "current_cow_size:%zu\r\n", server.stat_current_cow_bytes,
-                "current_cow_size_age:%lu\r\n", (server.stat_current_cow_updated ? (unsigned long)elapsedMs(server.stat_current_cow_updated) / 1000 : 0),
-                "current_fork_perc:%.2f\r\n", fork_perc,
-                "current_save_keys_processed:%zu\r\n", server.stat_current_save_keys_processed,
-                "current_save_keys_total:%zu\r\n", server.stat_current_save_keys_total,
-                "rdb_changes_since_last_save:%lld\r\n", server.dirty,
-                "rdb_bgsave_in_progress:%d\r\n", server.child_type == CHILD_TYPE_RDB,
-                "rdb_last_save_time:%jd\r\n", (intmax_t)server.lastsave,
-                "rdb_last_bgsave_status:%s\r\n", (server.lastbgsave_status == C_OK) ? "ok" : "err",
-                "rdb_last_bgsave_time_sec:%jd\r\n", (intmax_t)server.rdb_save_time_last,
-                "rdb_current_bgsave_time_sec:%jd\r\n", (intmax_t)((server.child_type != CHILD_TYPE_RDB) ? -1 : time(NULL) - server.rdb_save_time_start),
-                "rdb_saves:%lld\r\n", server.stat_rdb_saves,
-                "rdb_last_cow_size:%zu\r\n", server.stat_rdb_cow_bytes,
-                "rdb_last_load_keys_expired:%lld\r\n", server.rdb_last_load_keys_expired,
-                "rdb_last_load_keys_loaded:%lld\r\n", server.rdb_last_load_keys_loaded,
-                "aof_enabled:%d\r\n", server.aof_state != AOF_OFF,
-                "aof_rewrite_in_progress:%d\r\n", server.child_type == CHILD_TYPE_AOF,
-                "aof_rewrite_scheduled:%d\r\n", server.aof_rewrite_scheduled,
-                "aof_last_rewrite_time_sec:%jd\r\n", (intmax_t)server.aof_rewrite_time_last,
-                "aof_current_rewrite_time_sec:%jd\r\n", (intmax_t)((server.child_type != CHILD_TYPE_AOF) ? -1 : time(NULL) - server.aof_rewrite_time_start),
-                "aof_last_bgrewrite_status:%s\r\n", (server.aof_lastbgrewrite_status == C_OK ? "ok" : "err"),
-                "aof_rewrites:%lld\r\n", server.stat_aof_rewrites,
-                "aof_rewrites_consecutive_failures:%lld\r\n", server.stat_aofrw_consecutive_failures,
-                "aof_last_write_status:%s\r\n", (server.aof_last_write_status == C_OK && aof_bio_fsync_status == C_OK) ? "ok" : "err",
-                "aof_last_cow_size:%zu\r\n", server.stat_aof_cow_bytes,
-                "module_fork_in_progress:%d\r\n", server.child_type == CHILD_TYPE_MODULE,
-                "module_fork_last_cow_size:%zu\r\n", server.stat_module_cow_bytes,
-                "slot_migration_fork_in_progress:%d\r\n", server.child_type == CHILD_TYPE_SLOT_MIGRATION));
+        infoEmitBeginSection(e, "Persistence");
+        infoEmitFieldLL(e, "loading", (int)(server.loading && !server.async_loading));
+        infoEmitFieldLL(e, "async_loading", (int)server.async_loading);
+        infoEmitMetricULL(e, "current_cow_peak", server.stat_current_cow_peak, INFO_KIND_GAUGE, INFO_UNIT_BYTES);
+        infoEmitMetricULL(e, "current_cow_size", server.stat_current_cow_bytes, INFO_KIND_GAUGE, INFO_UNIT_BYTES);
+        infoEmitMetricULL(e, "current_cow_size_age",
+                          (server.stat_current_cow_updated ? (unsigned long)elapsedMs(server.stat_current_cow_updated) / 1000 : 0),
+                          INFO_KIND_GAUGE, INFO_UNIT_SECONDS);
+        infoEmitFieldDouble(e, "current_fork_perc", fork_perc, 2);
+        infoEmitFieldULL(e, "current_save_keys_processed", server.stat_current_save_keys_processed);
+        infoEmitFieldULL(e, "current_save_keys_total", server.stat_current_save_keys_total);
+        infoEmitFieldLL(e, "rdb_changes_since_last_save", server.dirty);
+        infoEmitFieldLL(e, "rdb_bgsave_in_progress", server.child_type == CHILD_TYPE_RDB);
+        infoEmitFieldLL(e, "rdb_last_save_time", (long long)server.lastsave);
+        infoEmitFieldStr(e, "rdb_last_bgsave_status", (server.lastbgsave_status == C_OK) ? "ok" : "err");
+        infoEmitMetricLL(e, "rdb_last_bgsave_time_sec", (long long)server.rdb_save_time_last, INFO_KIND_GAUGE,
+                         INFO_UNIT_SECONDS);
+        infoEmitMetricLL(e, "rdb_current_bgsave_time_sec",
+                         (long long)((server.child_type != CHILD_TYPE_RDB) ? -1 : time(NULL) - server.rdb_save_time_start),
+                         INFO_KIND_GAUGE, INFO_UNIT_SECONDS);
+        infoEmitCounterLL(e, "rdb_saves", server.stat_rdb_saves);
+        infoEmitMetricULL(e, "rdb_last_cow_size", server.stat_rdb_cow_bytes, INFO_KIND_GAUGE, INFO_UNIT_BYTES);
+        infoEmitCounterLL(e, "rdb_last_load_keys_expired", server.rdb_last_load_keys_expired);
+        infoEmitCounterLL(e, "rdb_last_load_keys_loaded", server.rdb_last_load_keys_loaded);
+        infoEmitFieldLL(e, "aof_enabled", server.aof_state != AOF_OFF);
+        infoEmitFieldLL(e, "aof_rewrite_in_progress", server.child_type == CHILD_TYPE_AOF);
+        infoEmitFieldLL(e, "aof_rewrite_scheduled", server.aof_rewrite_scheduled);
+        infoEmitMetricLL(e, "aof_last_rewrite_time_sec", (long long)server.aof_rewrite_time_last, INFO_KIND_GAUGE,
+                         INFO_UNIT_SECONDS);
+        infoEmitMetricLL(e, "aof_current_rewrite_time_sec",
+                         (long long)((server.child_type != CHILD_TYPE_AOF) ? -1 : time(NULL) - server.aof_rewrite_time_start),
+                         INFO_KIND_GAUGE, INFO_UNIT_SECONDS);
+        infoEmitFieldStr(e, "aof_last_bgrewrite_status", (server.aof_lastbgrewrite_status == C_OK ? "ok" : "err"));
+        infoEmitCounterLL(e, "aof_rewrites", server.stat_aof_rewrites);
+        infoEmitFieldLL(e, "aof_rewrites_consecutive_failures", server.stat_aofrw_consecutive_failures);
+        infoEmitFieldStr(e, "aof_last_write_status",
+                         (server.aof_last_write_status == C_OK && aof_bio_fsync_status == C_OK) ? "ok" : "err");
+        infoEmitMetricULL(e, "aof_last_cow_size", server.stat_aof_cow_bytes, INFO_KIND_GAUGE, INFO_UNIT_BYTES);
+        infoEmitFieldLL(e, "module_fork_in_progress", server.child_type == CHILD_TYPE_MODULE);
+        infoEmitMetricULL(e, "module_fork_last_cow_size", server.stat_module_cow_bytes, INFO_KIND_GAUGE,
+                          INFO_UNIT_BYTES);
+        infoEmitFieldLL(e, "slot_migration_fork_in_progress", server.child_type == CHILD_TYPE_SLOT_MIGRATION);
 
         if (server.aof_enabled) {
-            info = sdscatprintf(
-                info,
-                FMTARGS(
-                    "aof_current_size:%lld\r\n", (long long)server.aof_current_size,
-                    "aof_base_size:%lld\r\n", (long long)server.aof_rewrite_base_size,
-                    "aof_pending_rewrite:%d\r\n", server.aof_rewrite_scheduled,
-                    "aof_buffer_length:%zu\r\n", sdslen(server.aof_buf),
-                    "aof_pending_bio_fsync:%lu\r\n", bioPendingJobsOfType(BIO_AOF_FSYNC),
-                    "aof_delayed_fsync:%lu\r\n", server.aof_delayed_fsync));
+            infoEmitMetricLL(e, "aof_current_size", (long long)server.aof_current_size, INFO_KIND_GAUGE,
+                             INFO_UNIT_BYTES);
+            infoEmitMetricLL(e, "aof_base_size", (long long)server.aof_rewrite_base_size, INFO_KIND_GAUGE,
+                             INFO_UNIT_BYTES);
+            infoEmitFieldLL(e, "aof_pending_rewrite", server.aof_rewrite_scheduled);
+            infoEmitMetricULL(e, "aof_buffer_length", sdslen(server.aof_buf), INFO_KIND_GAUGE, INFO_UNIT_BYTES);
+            infoEmitFieldULL(e, "aof_pending_bio_fsync", bioPendingJobsOfType(BIO_AOF_FSYNC));
+            infoEmitCounterULL(e, "aof_delayed_fsync", server.aof_delayed_fsync);
         }
 
         if (server.loading) {
@@ -6475,15 +6511,15 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 eta = (elapsed * remaining_bytes) / (server.loading_loaded_bytes + 1);
             }
 
-            info = sdscatprintf(
-                info,
-                FMTARGS(
-                    "loading_start_time:%jd\r\n", (intmax_t)server.loading_start_time,
-                    "loading_total_bytes:%llu\r\n", (unsigned long long)server.loading_total_bytes,
-                    "loading_rdb_used_mem:%llu\r\n", (unsigned long long)server.loading_rdb_used_mem,
-                    "loading_loaded_bytes:%llu\r\n", (unsigned long long)server.loading_loaded_bytes,
-                    "loading_loaded_perc:%.2f\r\n", perc,
-                    "loading_eta_seconds:%jd\r\n", (intmax_t)eta));
+            infoEmitFieldLL(e, "loading_start_time", (long long)server.loading_start_time);
+            infoEmitMetricULL(e, "loading_total_bytes", (unsigned long long)server.loading_total_bytes, INFO_KIND_GAUGE,
+                              INFO_UNIT_BYTES);
+            infoEmitMetricULL(e, "loading_rdb_used_mem", (unsigned long long)server.loading_rdb_used_mem,
+                              INFO_KIND_GAUGE, INFO_UNIT_BYTES);
+            infoEmitMetricULL(e, "loading_loaded_bytes", (unsigned long long)server.loading_loaded_bytes,
+                              INFO_KIND_GAUGE, INFO_UNIT_BYTES);
+            infoEmitFieldDouble(e, "loading_loaded_perc", perc, 2);
+            infoEmitMetricLL(e, "loading_eta_seconds", (long long)eta, INFO_KIND_GAUGE, INFO_UNIT_SECONDS);
         }
     }
 
@@ -6494,87 +6530,111 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
         ustime_t current_active_defrag_time =
             server.stat_last_active_defrag_time ? (ustime_t)elapsedUs(server.stat_last_active_defrag_time) : 0;
 
-        if (sections++) info = sdscat(info, "\r\n");
-        info = sdscatprintf(
-            info,
-            "# Stats\r\n" FMTARGS(
-                "total_connections_received:%lld\r\n", server.stat_numconnections,
-                "total_commands_processed:%lld\r\n", server.stat_numcommands,
-                "instantaneous_ops_per_sec:%lld\r\n", getInstantaneousMetric(STATS_METRIC_COMMAND),
-                "total_net_input_bytes:%lld\r\n", server.stat_net_input_bytes + server.stat_net_repl_input_bytes + server.bio_stat_net_repl_input_bytes + server.stat_net_cluster_slot_import_bytes,
-                "total_net_output_bytes:%lld\r\n", server.stat_net_output_bytes + server.stat_net_repl_output_bytes + server.stat_net_cluster_slot_export_bytes,
-                "total_net_repl_input_bytes:%lld\r\n", server.stat_net_repl_input_bytes + server.bio_stat_net_repl_input_bytes,
-                "total_net_repl_output_bytes:%lld\r\n", server.stat_net_repl_output_bytes,
-                "total_net_cluster_slot_import_bytes:%lld\r\n", server.stat_net_cluster_slot_import_bytes,
-                "total_net_cluster_slot_export_bytes:%lld\r\n", server.stat_net_cluster_slot_export_bytes,
-                "instantaneous_input_kbps:%.2f\r\n", (float)getInstantaneousMetric(STATS_METRIC_NET_INPUT) / 1024,
-                "instantaneous_output_kbps:%.2f\r\n", (float)getInstantaneousMetric(STATS_METRIC_NET_OUTPUT) / 1024,
-                "instantaneous_input_repl_kbps:%.2f\r\n", (float)getInstantaneousMetric(STATS_METRIC_NET_INPUT_REPLICATION) / 1024,
-                "instantaneous_output_repl_kbps:%.2f\r\n", (float)getInstantaneousMetric(STATS_METRIC_NET_OUTPUT_REPLICATION) / 1024,
-                "rejected_connections:%lld\r\n", server.stat_rejected_conn,
-                "sync_full:%lld\r\n", server.stat_sync_full,
-                "sync_partial_ok:%lld\r\n", server.stat_sync_partial_ok,
-                "sync_partial_err:%lld\r\n", server.stat_sync_partial_err,
-                "expired_keys:%lld\r\n", server.stat_expiredkeys,
-                "expired_fields:%lld\r\n", server.stat_expiredfields,
-                "expired_stale_perc:%.2f\r\n", server.stat_expired_keys_stale_perc * 100,
-                "expired_keys_with_volatile_items_stale_perc:%.2f\r\n", server.stat_expired_keys_with_vola_stale_perc * 100,
-                "expired_time_cap_reached_count:%lld\r\n", server.stat_expired_time_cap_reached_count,
-                "expire_cycle_cpu_milliseconds:%lld\r\n", server.stat_expire_cycle_time_used / 1000,
-                "evicted_keys:%lld\r\n", server.stat_evictedkeys,
-                "evicted_clients:%lld\r\n", server.stat_evictedclients,
-                "evicted_scripts:%lld\r\n", server.stat_evictedscripts,
-                "total_eviction_exceeded_time:%lld\r\n", (server.stat_total_eviction_exceeded_time + current_eviction_exceeded_time) / 1000,
-                "current_eviction_exceeded_time:%lld\r\n", current_eviction_exceeded_time / 1000,
-                "keyspace_hits:%lld\r\n", server.stat_keyspace_hits,
-                "keyspace_misses:%lld\r\n", server.stat_keyspace_misses,
-                "pubsub_channels:%llu\r\n", kvstoreSize(server.pubsub_channels),
-                "pubsub_patterns:%zu\r\n", dictSize(server.pubsub_patterns),
-                "pubsubshard_channels:%llu\r\n", kvstoreSize(server.pubsubshard_channels),
-                "latest_fork_usec:%lld\r\n", server.stat_fork_time,
-                "total_forks:%lld\r\n", server.stat_total_forks,
-                "migrate_cached_sockets:%zu\r\n", dictSize(server.migrate_cached_sockets),
-                "slave_expires_tracked_keys:%zu\r\n", getReplicaKeyWithExpireCount(),
-                "active_defrag_hits:%lld\r\n", server.stat_active_defrag_hits,
-                "active_defrag_misses:%lld\r\n", server.stat_active_defrag_misses,
-                "active_defrag_key_hits:%lld\r\n", server.stat_active_defrag_key_hits,
-                "active_defrag_key_misses:%lld\r\n", server.stat_active_defrag_key_misses,
-                "total_active_defrag_time:%lld\r\n", (server.stat_total_active_defrag_time + current_active_defrag_time) / 1000,
-                "current_active_defrag_time:%lld\r\n", current_active_defrag_time / 1000,
-                "tracking_total_keys:%lld\r\n", (unsigned long long)trackingGetTotalKeys(),
-                "tracking_total_items:%lld\r\n", (unsigned long long)trackingGetTotalItems(),
-                "tracking_total_prefixes:%lld\r\n", (unsigned long long)trackingGetTotalPrefixes(),
-                "unexpected_error_replies:%lld\r\n", server.stat_unexpected_error_replies,
-                "total_error_replies:%lld\r\n", server.stat_total_error_replies,
-                "dump_payload_sanitizations:%lld\r\n", server.stat_dump_payload_sanitizations,
-                "total_reads_processed:%lld\r\n", server.stat_total_reads_processed,
-                "total_writes_processed:%lld\r\n", server.stat_total_writes_processed,
-                "io_threaded_reads_processed:%lld\r\n", server.stat_io_reads_processed,
-                "io_threaded_writes_processed:%lld\r\n", server.stat_io_writes_processed,
-                "io_threaded_freed_objects:%lld\r\n", server.stat_io_freed_objects,
-                "io_threaded_accept_processed:%lld\r\n", server.stat_io_accept_offloaded,
-                "io_threaded_poll_processed:%lld\r\n", server.stat_poll_processed_by_io_threads,
-                "io_threaded_total_prefetch_batches:%lld\r\n", server.stat_total_prefetch_batches,
-                "io_threaded_total_prefetch_entries:%lld\r\n", server.stat_total_prefetch_entries,
-                "client_query_buffer_limit_disconnections:%lld\r\n", server.stat_client_qbuf_limit_disconnections,
-                "client_output_buffer_limit_disconnections:%lld\r\n", server.stat_client_outbuf_limit_disconnections,
-                "reply_buffer_shrinks:%lld\r\n", server.stat_reply_buffer_shrinks,
-                "reply_buffer_expands:%lld\r\n", server.stat_reply_buffer_expands,
-                "eventloop_cycles:%llu\r\n", server.duration_stats[EL_DURATION_TYPE_EL].cnt,
-                "eventloop_duration_sum:%llu\r\n", server.duration_stats[EL_DURATION_TYPE_EL].sum,
-                "eventloop_duration_cmd_sum:%llu\r\n", server.duration_stats[EL_DURATION_TYPE_CMD].sum,
-                "instantaneous_eventloop_cycles_per_sec:%llu\r\n", getInstantaneousMetric(STATS_METRIC_EL_CYCLE),
-                "instantaneous_eventloop_duration_usec:%llu\r\n", getInstantaneousMetric(STATS_METRIC_EL_DURATION)));
-        info = genValkeyInfoStringACLStats(info);
+        infoEmitBeginSection(e, "Stats");
+        infoEmitCounterLL(e, "total_connections_received", server.stat_numconnections);
+        infoEmitCounterLL(e, "total_commands_processed", server.stat_numcommands);
+        infoEmitFieldLL(e, "instantaneous_ops_per_sec", getInstantaneousMetric(STATS_METRIC_COMMAND));
+        infoEmitMetricLL(e, "total_net_input_bytes",
+                         server.stat_net_input_bytes + server.stat_net_repl_input_bytes +
+                             server.bio_stat_net_repl_input_bytes + server.stat_net_cluster_slot_import_bytes,
+                         INFO_KIND_COUNTER, INFO_UNIT_BYTES);
+        infoEmitMetricLL(e, "total_net_output_bytes",
+                         server.stat_net_output_bytes + server.stat_net_repl_output_bytes +
+                             server.stat_net_cluster_slot_export_bytes,
+                         INFO_KIND_COUNTER, INFO_UNIT_BYTES);
+        infoEmitMetricLL(e, "total_net_repl_input_bytes",
+                         server.stat_net_repl_input_bytes + server.bio_stat_net_repl_input_bytes, INFO_KIND_COUNTER,
+                         INFO_UNIT_BYTES);
+        infoEmitMetricLL(e, "total_net_repl_output_bytes", server.stat_net_repl_output_bytes, INFO_KIND_COUNTER,
+                         INFO_UNIT_BYTES);
+        infoEmitMetricLL(e, "total_net_cluster_slot_import_bytes", server.stat_net_cluster_slot_import_bytes,
+                         INFO_KIND_COUNTER, INFO_UNIT_BYTES);
+        infoEmitMetricLL(e, "total_net_cluster_slot_export_bytes", server.stat_net_cluster_slot_export_bytes,
+                         INFO_KIND_COUNTER, INFO_UNIT_BYTES);
+        infoEmitFieldDouble(e, "instantaneous_input_kbps", (float)getInstantaneousMetric(STATS_METRIC_NET_INPUT) / 1024,
+                            2);
+        infoEmitFieldDouble(e, "instantaneous_output_kbps",
+                            (float)getInstantaneousMetric(STATS_METRIC_NET_OUTPUT) / 1024, 2);
+        infoEmitFieldDouble(e, "instantaneous_input_repl_kbps",
+                            (float)getInstantaneousMetric(STATS_METRIC_NET_INPUT_REPLICATION) / 1024, 2);
+        infoEmitFieldDouble(e, "instantaneous_output_repl_kbps",
+                            (float)getInstantaneousMetric(STATS_METRIC_NET_OUTPUT_REPLICATION) / 1024, 2);
+        infoEmitCounterLL(e, "rejected_connections", server.stat_rejected_conn);
+        infoEmitCounterLL(e, "sync_full", server.stat_sync_full);
+        infoEmitCounterLL(e, "sync_partial_ok", server.stat_sync_partial_ok);
+        infoEmitCounterLL(e, "sync_partial_err", server.stat_sync_partial_err);
+        infoEmitCounterLL(e, "expired_keys", server.stat_expiredkeys);
+        infoEmitCounterLL(e, "expired_fields", server.stat_expiredfields);
+        infoEmitFieldDouble(e, "expired_stale_perc", server.stat_expired_keys_stale_perc * 100, 2);
+        infoEmitFieldDouble(e, "expired_keys_with_volatile_items_stale_perc",
+                            server.stat_expired_keys_with_vola_stale_perc * 100, 2);
+        infoEmitCounterLL(e, "expired_time_cap_reached_count", server.stat_expired_time_cap_reached_count);
+        infoEmitMetricLL(e, "expire_cycle_cpu_milliseconds", server.stat_expire_cycle_time_used / 1000,
+                         INFO_KIND_COUNTER, INFO_UNIT_MILLISECONDS);
+        infoEmitCounterLL(e, "evicted_keys", server.stat_evictedkeys);
+        infoEmitCounterLL(e, "evicted_clients", server.stat_evictedclients);
+        infoEmitCounterLL(e, "evicted_scripts", server.stat_evictedscripts);
+        infoEmitMetricLL(e, "total_eviction_exceeded_time",
+                         (server.stat_total_eviction_exceeded_time + current_eviction_exceeded_time) / 1000,
+                         INFO_KIND_COUNTER, INFO_UNIT_MILLISECONDS);
+        infoEmitMetricLL(e, "current_eviction_exceeded_time", current_eviction_exceeded_time / 1000, INFO_KIND_GAUGE,
+                         INFO_UNIT_MILLISECONDS);
+        infoEmitCounterLL(e, "keyspace_hits", server.stat_keyspace_hits);
+        infoEmitCounterLL(e, "keyspace_misses", server.stat_keyspace_misses);
+        infoEmitFieldULL(e, "pubsub_channels", kvstoreSize(server.pubsub_channels));
+        infoEmitFieldULL(e, "pubsub_patterns", dictSize(server.pubsub_patterns));
+        infoEmitFieldULL(e, "pubsubshard_channels", kvstoreSize(server.pubsubshard_channels));
+        infoEmitMetricLL(e, "latest_fork_usec", server.stat_fork_time, INFO_KIND_GAUGE, INFO_UNIT_MICROSECONDS);
+        infoEmitCounterLL(e, "total_forks", server.stat_total_forks);
+        infoEmitFieldULL(e, "migrate_cached_sockets", dictSize(server.migrate_cached_sockets));
+        infoEmitFieldULL(e, "slave_expires_tracked_keys", getReplicaKeyWithExpireCount());
+        infoEmitCounterLL(e, "active_defrag_hits", server.stat_active_defrag_hits);
+        infoEmitCounterLL(e, "active_defrag_misses", server.stat_active_defrag_misses);
+        infoEmitCounterLL(e, "active_defrag_key_hits", server.stat_active_defrag_key_hits);
+        infoEmitCounterLL(e, "active_defrag_key_misses", server.stat_active_defrag_key_misses);
+        infoEmitMetricLL(e, "total_active_defrag_time",
+                         (server.stat_total_active_defrag_time + current_active_defrag_time) / 1000, INFO_KIND_COUNTER,
+                         INFO_UNIT_MILLISECONDS);
+        infoEmitMetricLL(e, "current_active_defrag_time", current_active_defrag_time / 1000, INFO_KIND_GAUGE,
+                         INFO_UNIT_MILLISECONDS);
+        /* These print an unsigned count through the historical %lld specifier;
+         * reinterpret the same bits as signed to preserve byte-for-byte output. */
+        infoEmitFieldLL(e, "tracking_total_keys", (long long)(unsigned long long)trackingGetTotalKeys());
+        infoEmitFieldLL(e, "tracking_total_items", (long long)(unsigned long long)trackingGetTotalItems());
+        infoEmitFieldLL(e, "tracking_total_prefixes", (long long)(unsigned long long)trackingGetTotalPrefixes());
+        infoEmitCounterLL(e, "unexpected_error_replies", server.stat_unexpected_error_replies);
+        infoEmitCounterLL(e, "total_error_replies", server.stat_total_error_replies);
+        infoEmitCounterLL(e, "dump_payload_sanitizations", server.stat_dump_payload_sanitizations);
+        infoEmitCounterLL(e, "total_reads_processed", server.stat_total_reads_processed);
+        infoEmitCounterLL(e, "total_writes_processed", server.stat_total_writes_processed);
+        infoEmitCounterLL(e, "io_threaded_reads_processed", server.stat_io_reads_processed);
+        infoEmitCounterLL(e, "io_threaded_writes_processed", server.stat_io_writes_processed);
+        infoEmitCounterLL(e, "io_threaded_freed_objects", server.stat_io_freed_objects);
+        infoEmitCounterLL(e, "io_threaded_accept_processed", server.stat_io_accept_offloaded);
+        infoEmitCounterLL(e, "io_threaded_poll_processed", server.stat_poll_processed_by_io_threads);
+        infoEmitCounterLL(e, "io_threaded_total_prefetch_batches", server.stat_total_prefetch_batches);
+        infoEmitCounterLL(e, "io_threaded_total_prefetch_entries", server.stat_total_prefetch_entries);
+        infoEmitCounterLL(e, "client_query_buffer_limit_disconnections", server.stat_client_qbuf_limit_disconnections);
+        infoEmitCounterLL(e, "client_output_buffer_limit_disconnections",
+                          server.stat_client_outbuf_limit_disconnections);
+        infoEmitCounterLL(e, "reply_buffer_shrinks", server.stat_reply_buffer_shrinks);
+        infoEmitCounterLL(e, "reply_buffer_expands", server.stat_reply_buffer_expands);
+        infoEmitCounterULL(e, "eventloop_cycles", server.duration_stats[EL_DURATION_TYPE_EL].cnt);
+        infoEmitMetricULL(e, "eventloop_duration_sum", server.duration_stats[EL_DURATION_TYPE_EL].sum,
+                          INFO_KIND_COUNTER, INFO_UNIT_MICROSECONDS);
+        infoEmitMetricULL(e, "eventloop_duration_cmd_sum", server.duration_stats[EL_DURATION_TYPE_CMD].sum,
+                          INFO_KIND_COUNTER, INFO_UNIT_MICROSECONDS);
+        infoEmitFieldULL(e, "instantaneous_eventloop_cycles_per_sec",
+                         (unsigned long long)getInstantaneousMetric(STATS_METRIC_EL_CYCLE));
+        infoEmitFieldULL(e, "instantaneous_eventloop_duration_usec",
+                         (unsigned long long)getInstantaneousMetric(STATS_METRIC_EL_DURATION));
+        genValkeyInfoStringACLStats(e);
     }
 
     /* Replication */
     if (all_sections || (dictFind(section_dict, "replication") != NULL)) {
-        if (sections++) info = sdscat(info, "\r\n");
-        info = sdscatprintf(info,
-                            "# Replication\r\n"
-                            "role:%s\r\n",
-                            server.primary_host == NULL ? "master" : "slave");
+        infoEmitBeginSection(e, "Replication");
+        infoEmitFieldStr(e, "role", server.primary_host == NULL ? "master" : "slave");
         if (server.primary_host) {
             long long replica_repl_offset = 1;
             long long replica_read_repl_offset = 1;
@@ -6587,23 +6647,25 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 replica_read_repl_offset = server.cached_primary->repl_data->read_reploff;
             }
 
-            info = sdscatprintf(
-                info,
-                FMTARGS(
-                    "master_host:%s\r\n", server.primary_host,
-                    "master_port:%d\r\n", server.primary_port,
-                    "master_link_status:%s\r\n", (server.repl_state == REPL_STATE_CONNECTED) ? "up" : "down",
-                    "master_last_io_seconds_ago:%d\r\n", server.primary ? ((int)(server.unixtime - server.primary->last_interaction)) : -1,
-                    "master_sync_in_progress:%d\r\n", server.repl_state == REPL_STATE_TRANSFER,
-                    "slave_read_repl_offset:%lld\r\n", replica_read_repl_offset,
-                    "slave_repl_offset:%lld\r\n", replica_repl_offset,
-                    "replicas_repl_buffer_size:%zu\r\n", server.pending_repl_data.len,
-                    "replicas_repl_buffer_peak:%zu\r\n", server.pending_repl_data.peak));
+            infoEmitFieldStr(e, "master_host", server.primary_host);
+            infoEmitFieldLL(e, "master_port", server.primary_port);
+            infoEmitFieldStr(e, "master_link_status", (server.repl_state == REPL_STATE_CONNECTED) ? "up" : "down");
+            infoEmitMetricLL(e, "master_last_io_seconds_ago",
+                             server.primary ? ((int)(server.unixtime - server.primary->last_interaction)) : -1,
+                             INFO_KIND_GAUGE, INFO_UNIT_SECONDS);
+            infoEmitFieldLL(e, "master_sync_in_progress", server.repl_state == REPL_STATE_TRANSFER);
+            infoEmitFieldLL(e, "slave_read_repl_offset", replica_read_repl_offset);
+            infoEmitFieldLL(e, "slave_repl_offset", replica_repl_offset);
+            infoEmitMetricULL(e, "replicas_repl_buffer_size", server.pending_repl_data.len, INFO_KIND_GAUGE,
+                              INFO_UNIT_BYTES);
+            infoEmitMetricULL(e, "replicas_repl_buffer_peak", server.pending_repl_data.peak, INFO_KIND_GAUGE,
+                              INFO_UNIT_BYTES);
 
             if (server.repl_state == REPL_STATE_TRANSFER) {
                 off_t repl_transfer_size_stat;
                 off_t repl_transfer_read_stat;
-                if (atomic_load_explicit(&server.replica_bio_disk_save_state, memory_order_acquire) != REPL_BIO_DISK_SAVE_STATE_NONE) {
+                if (atomic_load_explicit(&server.replica_bio_disk_save_state, memory_order_acquire) !=
+                    REPL_BIO_DISK_SAVE_STATE_NONE) {
                     repl_transfer_size_stat = server.bio_repl_transfer_size;
                     repl_transfer_read_stat = server.bio_repl_transfer_read;
                 } else {
@@ -6614,34 +6676,35 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 if (repl_transfer_size_stat) {
                     perc = ((double)repl_transfer_read_stat / repl_transfer_size_stat) * 100;
                 }
-                info = sdscatprintf(
-                    info,
-                    FMTARGS(
-                        "master_sync_total_bytes:%lld\r\n", (long long)repl_transfer_size_stat,
-                        "master_sync_read_bytes:%lld\r\n", (long long)repl_transfer_read_stat,
-                        "master_sync_left_bytes:%lld\r\n", (long long)(repl_transfer_size_stat - repl_transfer_read_stat),
-                        "master_sync_perc:%.2f\r\n", perc,
-                        "master_sync_last_io_seconds_ago:%d\r\n", (int)(server.unixtime - server.repl_transfer_lastio)));
+                infoEmitMetricLL(e, "master_sync_total_bytes", (long long)repl_transfer_size_stat, INFO_KIND_GAUGE,
+                                 INFO_UNIT_BYTES);
+                infoEmitMetricLL(e, "master_sync_read_bytes", (long long)repl_transfer_read_stat, INFO_KIND_GAUGE,
+                                 INFO_UNIT_BYTES);
+                infoEmitMetricLL(e, "master_sync_left_bytes",
+                                 (long long)(repl_transfer_size_stat - repl_transfer_read_stat), INFO_KIND_GAUGE,
+                                 INFO_UNIT_BYTES);
+                infoEmitFieldDouble(e, "master_sync_perc", perc, 2);
+                infoEmitMetricLL(e, "master_sync_last_io_seconds_ago",
+                                 (int)(server.unixtime - server.repl_transfer_lastio), INFO_KIND_GAUGE,
+                                 INFO_UNIT_SECONDS);
             }
 
             if (server.repl_state != REPL_STATE_CONNECTED) {
-                info = sdscatprintf(info, "master_link_down_since_seconds:%jd\r\n",
-                                    server.repl_down_since ? (intmax_t)(server.unixtime - server.repl_down_since) : -1);
+                infoEmitMetricLL(e, "master_link_down_since_seconds",
+                                 server.repl_down_since ? (long long)(server.unixtime - server.repl_down_since) : -1,
+                                 INFO_KIND_GAUGE, INFO_UNIT_SECONDS);
             }
-            info = sdscatprintf(
-                info,
-                FMTARGS(
-                    "slave_priority:%d\r\n", server.replica_priority,
-                    "slave_read_only:%d\r\n", server.repl_replica_ro,
-                    "replica_announced:%d\r\n", server.replica_announced));
+            infoEmitFieldLL(e, "slave_priority", server.replica_priority);
+            infoEmitFieldLL(e, "slave_read_only", server.repl_replica_ro);
+            infoEmitFieldLL(e, "replica_announced", server.replica_announced);
         }
 
-        info = sdscatprintf(info, "connected_slaves:%lu\r\n", listLength(server.replicas));
+        infoEmitFieldULL(e, "connected_slaves", listLength(server.replicas));
 
         /* If min-replicas-to-write is active, write the number of replicas
          * currently considered 'good'. */
         if (server.repl_min_replicas_to_write && server.repl_min_replicas_max_lag) {
-            info = sdscatprintf(info, "min_slaves_good_slaves:%d\r\n", server.repl_good_replicas_count);
+            infoEmitFieldLL(e, "min_slaves_good_slaves", server.repl_good_replicas_count);
         }
 
         if (listLength(server.replicas)) {
@@ -6662,142 +6725,135 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 }
                 const char *state = replstateToString(replica->repl_data->repl_state);
                 if (state[0] == '\0') continue;
-                if (replica->repl_data->repl_state == REPLICA_STATE_ONLINE) lag = time(NULL) - replica->repl_data->repl_ack_time;
+                if (replica->repl_data->repl_state == REPLICA_STATE_ONLINE)
+                    lag = time(NULL) - replica->repl_data->repl_ack_time;
 
-                info = sdscatprintf(info,
-                                    "slave%d:ip=%s,port=%d,state=%s,"
-                                    "offset=%lld,lag=%ld,type=%s\r\n",
-                                    replica_id, replica_ip, replica->repl_data->replica_listening_port, state,
-                                    replica->repl_data->repl_ack_off, lag,
-                                    replica->flag.repl_rdb_channel                                ? "rdb-channel"
-                                    : replica->repl_data->repl_state == REPLICA_STATE_BG_RDB_LOAD ? "main-channel"
-                                                                                                  : "replica");
+                /* Composite per-replica line: slaveN:ip=..,port=..,.. */
+                char replica_key[32];
+                snprintf(replica_key, sizeof(replica_key), "slave%d", replica_id);
+                infoEmitBeginDict(e, replica_key);
+                infoEmitDictStr(e, "ip", replica_ip);
+                infoEmitDictLL(e, "port", replica->repl_data->replica_listening_port);
+                infoEmitDictStr(e, "state", state);
+                infoEmitDictLL(e, "offset", replica->repl_data->repl_ack_off);
+                infoEmitDictLL(e, "lag", lag);
+                infoEmitDictStr(e, "type",
+                                replica->flag.repl_rdb_channel                                ? "rdb-channel"
+                                : replica->repl_data->repl_state == REPLICA_STATE_BG_RDB_LOAD ? "main-channel"
+                                                                                              : "replica");
+                infoEmitEndDict(e);
                 replica_id++;
             }
         }
-        info = sdscatprintf(
-            info,
-            FMTARGS(
-                "replicas_waiting_psync:%llu\r\n", (unsigned long long)raxSize(server.replicas_waiting_psync),
-                "master_failover_state:%s\r\n", getFailoverStateString(),
-                "master_replid:%s\r\n", server.replid,
-                "master_replid2:%s\r\n", server.replid2,
-                "master_repl_offset:%lld\r\n", server.primary_repl_offset,
-                "second_repl_offset:%lld\r\n", server.second_replid_offset,
-                "repl_backlog_active:%d\r\n", server.repl_backlog != NULL,
-                "repl_backlog_size:%lld\r\n", server.repl_backlog_size,
-                "repl_backlog_first_byte_offset:%lld\r\n", server.repl_backlog ? server.repl_backlog->offset : 0,
-                "repl_backlog_histlen:%lld\r\n", server.repl_backlog ? server.repl_backlog->histlen : 0));
+        infoEmitFieldULL(e, "replicas_waiting_psync", (unsigned long long)raxSize(server.replicas_waiting_psync));
+        infoEmitFieldStr(e, "master_failover_state", getFailoverStateString());
+        infoEmitFieldStr(e, "master_replid", server.replid);
+        infoEmitFieldStr(e, "master_replid2", server.replid2);
+        infoEmitFieldLL(e, "master_repl_offset", server.primary_repl_offset);
+        infoEmitFieldLL(e, "second_repl_offset", server.second_replid_offset);
+        infoEmitFieldLL(e, "repl_backlog_active", server.repl_backlog != NULL);
+        infoEmitMetricLL(e, "repl_backlog_size", server.repl_backlog_size, INFO_KIND_GAUGE, INFO_UNIT_BYTES);
+        infoEmitFieldLL(e, "repl_backlog_first_byte_offset", server.repl_backlog ? server.repl_backlog->offset : 0);
+        infoEmitMetricLL(e, "repl_backlog_histlen", server.repl_backlog ? server.repl_backlog->histlen : 0,
+                         INFO_KIND_GAUGE, INFO_UNIT_BYTES);
     }
 
     /* CPU */
     if (all_sections || (dictFind(section_dict, "cpu") != NULL)) {
-        if (sections++) info = sdscat(info, "\r\n");
-
         struct rusage self_ru, c_ru;
         getrusage(RUSAGE_SELF, &self_ru);
         getrusage(RUSAGE_CHILDREN, &c_ru);
-        info = sdscatprintf(info,
-                            "# CPU\r\n"
-                            "used_cpu_sys:%ld.%06ld\r\n"
-                            "used_cpu_user:%ld.%06ld\r\n"
-                            "used_cpu_sys_children:%ld.%06ld\r\n"
-                            "used_cpu_user_children:%ld.%06ld\r\n",
-                            (long)self_ru.ru_stime.tv_sec, (long)self_ru.ru_stime.tv_usec,
-                            (long)self_ru.ru_utime.tv_sec, (long)self_ru.ru_utime.tv_usec, (long)c_ru.ru_stime.tv_sec,
-                            (long)c_ru.ru_stime.tv_usec, (long)c_ru.ru_utime.tv_sec, (long)c_ru.ru_utime.tv_usec);
+
+        /* Emit via the info emitter's text backend. field_usec takes the total
+         * microseconds and renders "sec.usec", reproducing the legacy
+         * "%ld.%06ld" / "%lld.%06lld" formatting byte-for-byte. begin_section
+         * owns the inter-section separator via the shared counter. */
+        infoEmitBeginSection(e, "CPU");
+        infoEmitFieldUsec(e, "used_cpu_sys", (long long)self_ru.ru_stime.tv_sec * 1000000 + self_ru.ru_stime.tv_usec);
+        infoEmitFieldUsec(e, "used_cpu_user", (long long)self_ru.ru_utime.tv_sec * 1000000 + self_ru.ru_utime.tv_usec);
+        infoEmitFieldUsec(e, "used_cpu_sys_children", (long long)c_ru.ru_stime.tv_sec * 1000000 + c_ru.ru_stime.tv_usec);
+        infoEmitFieldUsec(e, "used_cpu_user_children",
+                          (long long)c_ru.ru_utime.tv_sec * 1000000 + c_ru.ru_utime.tv_usec);
 #ifdef RUSAGE_THREAD
         struct rusage m_ru;
         getrusage(RUSAGE_THREAD, &m_ru);
-        info = sdscatprintf(info,
-                            "used_cpu_sys_main_thread:%ld.%06ld\r\n"
-                            "used_cpu_user_main_thread:%ld.%06ld\r\n",
-                            (long)m_ru.ru_stime.tv_sec, (long)m_ru.ru_stime.tv_usec, (long)m_ru.ru_utime.tv_sec,
-                            (long)m_ru.ru_utime.tv_usec);
+        infoEmitFieldUsec(e, "used_cpu_sys_main_thread",
+                          (long long)m_ru.ru_stime.tv_sec * 1000000 + m_ru.ru_stime.tv_usec);
+        infoEmitFieldUsec(e, "used_cpu_user_main_thread",
+                          (long long)m_ru.ru_utime.tv_sec * 1000000 + m_ru.ru_utime.tv_usec);
 #endif /* RUSAGE_THREAD */
-        long long active_seconds = server.stat_active_time / 1000000;
-        ustime_t active_microseconds = server.stat_active_time % 1000000;
-        info = sdscatprintf(info,
-                            "used_active_time_main_thread:%lld.%06lld\r\n",
-                            active_seconds, active_microseconds);
+        infoEmitFieldUsec(e, "used_active_time_main_thread", server.stat_active_time);
         for (int i = 1; i < server.io_threads_num; i++) {
-            ustime_t used_active_time_io_thread = getIOThreadActiveTimeMicroseconds(i);
-            info = sdscatprintf(info,
-                                "used_active_time_io_thread_%d:%lld.%06lld\r\n",
-                                i,
-                                used_active_time_io_thread / 1000000,
-                                used_active_time_io_thread % 1000000);
+            char key[64];
+            snprintf(key, sizeof(key), "used_active_time_io_thread_%d", i);
+            infoEmitFieldUsec(e, key, getIOThreadActiveTimeMicroseconds(i));
         }
     }
 
     /* Modules */
     if (all_sections || (dictFind(section_dict, "module_list") != NULL) ||
         (dictFind(section_dict, "modules") != NULL)) {
-        if (sections++) info = sdscat(info, "\r\n");
-        info = sdscatprintf(info, "# Modules\r\n");
-        info = genModulesInfoString(info);
+        infoEmitBeginSection(e, "Modules");
+        /* The module version list is legacy raw text; module-provided INFO
+         * fields are emitted (typed) via modulesCollectInfoToEmitter() below. */
+        infoEmitRawSds(e, genModulesInfoString(sdsempty()));
     }
 
     /* Command statistics */
     if (all_sections || (dictFind(section_dict, "commandstats") != NULL)) {
-        if (sections++) info = sdscat(info, "\r\n");
-        info = sdscatprintf(info, "# Commandstats\r\n");
-        info = genValkeyInfoStringCommandStats(info, server.commands);
+        infoEmitBeginSection(e, "Commandstats");
+        genValkeyInfoStringCommandStats(e, server.commands);
     }
 
     /* Error statistics */
     if (all_sections || (dictFind(section_dict, "errorstats") != NULL)) {
-        if (sections++) info = sdscat(info, "\r\n");
-        info = sdscat(info, "# Errorstats\r\n");
+        infoEmitBeginSection(e, "Errorstats");
         raxIterator ri;
         raxStart(&ri, server.errors);
         raxSeek(&ri, "^", NULL, 0);
-        struct serverError *e;
+        struct serverError *err;
         while (raxNext(&ri)) {
             char *tmpsafe;
-            e = (struct serverError *)ri.data;
-            info = sdscatprintf(info, "errorstat_%.*s:count=%lld\r\n", (int)ri.key_len,
-                                getSafeInfoString((char *)ri.key, ri.key_len, &tmpsafe), e->count);
+            err = (struct serverError *)ri.data;
+            sds key = sdscatprintf(sdsempty(), "errorstat_%.*s", (int)ri.key_len,
+                                   getSafeInfoString((char *)ri.key, ri.key_len, &tmpsafe));
             if (tmpsafe != NULL) zfree(tmpsafe);
+            infoEmitBeginDict(e, key);
+            sdsfree(key);
+            infoEmitDictCounterLL(e, "count", err->count);
+            infoEmitEndDict(e);
         }
         raxStop(&ri);
     }
 
     /* Latency by percentile distribution per command */
     if (all_sections || (dictFind(section_dict, "latencystats") != NULL)) {
-        if (sections++) info = sdscat(info, "\r\n");
-        info = sdscatprintf(info, "# Latencystats\r\n");
+        infoEmitBeginSection(e, "Latencystats");
         if (server.latency_tracking_enabled) {
-            info = genValkeyInfoStringLatencyStats(info, server.commands);
+            genValkeyInfoStringLatencyStats(e, server.commands);
         }
     }
 
     /* Cluster */
     if (all_sections || (dictFind(section_dict, "cluster") != NULL)) {
-        if (sections++) info = sdscat(info, "\r\n");
-        info = sdscatprintf(info,
-                            "# Cluster\r\n"
-                            "cluster_enabled:%d\r\n",
-                            server.cluster_enabled);
+        infoEmitBeginSection(e, "Cluster");
+        infoEmitFieldLL(e, "cluster_enabled", server.cluster_enabled);
     }
 
     /* Cluster Info */
     if (all_sections || (dictFind(section_dict, "cluster_info") != NULL)) {
-        if (sections++) info = sdscat(info, "\r\n");
-        info = sdscatprintf(info, "# Cluster Info\r\n");
-        if (server.cluster_enabled) info = genClusterInfoString(info);
+        infoEmitBeginSection(e, "Cluster Info");
+        if (server.cluster_enabled) infoEmitRawSds(e, genClusterInfoString(sdsempty()));
     }
 
     /* Scripting engines */
     if (all_sections || (dictFind(section_dict, "scriptingengines") != NULL)) {
-        if (sections++) info = sdscat(info, "\r\n");
-        info = genValkeyInfoStringScriptingEngines(info);
+        genValkeyInfoStringScriptingEngines(e);
     }
 
     /* Key space */
     if (all_sections || (dictFind(section_dict, "keyspace") != NULL)) {
-        if (sections++) info = sdscat(info, "\r\n");
-        info = sdscatprintf(info, "# Keyspace\r\n");
+        infoEmitBeginSection(e, "Keyspace");
         for (j = 0; j < server.dbnum; j++) {
             serverDb *db = server.db[j];
             if (db == NULL) continue;
@@ -6808,8 +6864,14 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
             keysvitems = kvstoreSize(db->keys_with_volatile_items);
 
             if (keys || vkeys) {
-                info = sdscatprintf(info, "db%d:keys=%lld,expires=%lld,avg_ttl=%lld,keys_with_volatile_items=%lld\r\n", j, keys, vkeys,
-                                    db->expiry[KEYS].avg_ttl, keysvitems);
+                char key[32];
+                snprintf(key, sizeof(key), "db%d", j);
+                infoEmitBeginDict(e, key);
+                infoEmitDictLL(e, "keys", keys);
+                infoEmitDictLL(e, "expires", vkeys);
+                infoEmitDictLL(e, "avg_ttl", db->expiry[KEYS].avg_ttl);
+                infoEmitDictLL(e, "keys_with_volatile_items", keysvitems);
+                infoEmitEndDict(e);
             }
         }
     }
@@ -6819,27 +6881,37 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
      * We're not aware of the module section names here, and we rather avoid the search when we can.
      * so we proceed if there's a requested section name that's not found yet, or when the user asked
      * for "all" with any additional section names. */
-    if (everything || dictFind(section_dict, "modules") != NULL || sections < (int)dictSize(section_dict) ||
+    if (everything || dictFind(section_dict, "modules") != NULL || *section_counter < (int)dictSize(section_dict) ||
         (all_sections && dictSize(section_dict))) {
-        info = modulesCollectInfo(info, everything || dictFind(section_dict, "modules") != NULL ? NULL : section_dict,
-                                  0, /* not a crash report */
-                                  sections);
+        modulesCollectInfoToEmitter(e, everything || dictFind(section_dict, "modules") != NULL ? NULL : section_dict,
+                                    0 /* not a crash report */);
     }
 
     if (dictFind(section_dict, "debug") != NULL) {
-        if (sections++) info = sdscat(info, "\r\n");
-        info = sdscatprintf(
-            info,
-            "# Debug\r\n" FMTARGS(
-                "eventloop_duration_aof_sum:%llu\r\n", server.duration_stats[EL_DURATION_TYPE_AOF].sum,
-                "eventloop_duration_cron_sum:%llu\r\n", server.duration_stats[EL_DURATION_TYPE_CRON].sum,
-                "eventloop_duration_max:%llu\r\n", server.duration_stats[EL_DURATION_TYPE_EL].max,
-                "eventloop_cmd_per_cycle_max:%lld\r\n", server.el_cmd_cnt_max,
-                "io_threaded_reads_pending:%lld\r\n", server.stat_io_reads_pending,
-                "io_threaded_writes_pending:%lld\r\n", server.stat_io_writes_pending));
+        infoEmitBeginSection(e, "Debug");
+        infoEmitMetricULL(e, "eventloop_duration_aof_sum", server.duration_stats[EL_DURATION_TYPE_AOF].sum,
+                          INFO_KIND_COUNTER, INFO_UNIT_MICROSECONDS);
+        infoEmitMetricULL(e, "eventloop_duration_cron_sum", server.duration_stats[EL_DURATION_TYPE_CRON].sum,
+                          INFO_KIND_COUNTER, INFO_UNIT_MICROSECONDS);
+        infoEmitMetricULL(e, "eventloop_duration_max", server.duration_stats[EL_DURATION_TYPE_EL].max, INFO_KIND_GAUGE,
+                          INFO_UNIT_MICROSECONDS);
+        infoEmitFieldLL(e, "eventloop_cmd_per_cycle_max", server.el_cmd_cnt_max);
+        infoEmitFieldLL(e, "io_threaded_reads_pending", server.stat_io_reads_pending);
+        infoEmitFieldLL(e, "io_threaded_writes_pending", server.stat_io_writes_pending);
     }
 
-    return info;
+    return;
+}
+
+/* Backward-compatible wrapper: render INFO to a text sds using the text
+ * backend, preserving the exact legacy output byte-for-byte. */
+sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
+    sds info = sdsempty();
+    int sections = 0;
+    infoEmitterText te;
+    infoEmitterTextInit(&te, info, &sections);
+    genValkeyInfoToEmitter(&te.e, &sections, section_dict, all_sections, everything);
+    return infoEmitterTextResult(&te);
 }
 
 /* INFO [<section> [<section> ...]] */

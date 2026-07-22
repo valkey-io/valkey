@@ -56,6 +56,7 @@
  * function names. For details, see the script src/modules/gendoc.rb.
  * -------------------------------------------------------------------------- */
 #include "server.h"
+#include "info_emitter.h"
 #include "cluster.h"
 #include "commandlog.h"
 #include "rdb.h"
@@ -90,10 +91,9 @@ struct moduleLoadQueueEntry {
 struct ValkeyModuleInfoCtx {
     struct ValkeyModule *module;
     dict *requested_sections;
-    sds info;          /* info string we collected so far */
-    int sections;      /* number of sections we collected so far */
-    int in_section;    /* indication if we're in an active section or not */
-    int in_dict_field; /* indication that we're currently appending to a dict */
+    infoEmitter *emitter; /* Backend the info fields are emitted through. */
+    int in_section;       /* indication if we're in an active section or not */
+    int in_dict_field;    /* indication that we're currently appending to a dict */
 };
 
 /* This represents a shared API. Shared APIs will be used to populate
@@ -11077,8 +11077,8 @@ int VM_InfoAddSection(ValkeyModuleInfoCtx *ctx, const char *name) {
             return VALKEYMODULE_ERR;
         }
     }
-    if (ctx->sections++) ctx->info = sdscat(ctx->info, "\r\n");
-    ctx->info = sdscatfmt(ctx->info, "# %S\r\n", full_name);
+    /* begin_section owns the inter-section separator via the shared counter. */
+    infoEmitBeginSection(ctx->emitter, full_name);
     ctx->in_section = 1;
     sdsfree(full_name);
     return VALKEYMODULE_OK;
@@ -11092,11 +11092,13 @@ int VM_InfoBeginDictField(ValkeyModuleInfoCtx *ctx, const char *name) {
     /* Implicitly end dicts, instead of returning an error which is likely un checked. */
     if (ctx->in_dict_field) VM_InfoEndDictField(ctx);
     char *tmpmodname, *tmpname;
-    ctx->info =
-        sdscatfmt(ctx->info, "%s_%s:", getSafeInfoString(ctx->module->name, strlen(ctx->module->name), &tmpmodname),
-                  getSafeInfoString(name, strlen(name), &tmpname));
+    sds key = sdscatfmt(sdsempty(), "%s_%s",
+                        getSafeInfoString(ctx->module->name, strlen(ctx->module->name), &tmpmodname),
+                        getSafeInfoString(name, strlen(name), &tmpname));
     if (tmpmodname != NULL) zfree(tmpmodname);
     if (tmpname != NULL) zfree(tmpname);
+    infoEmitBeginDict(ctx->emitter, key);
+    sdsfree(key);
     ctx->in_dict_field = 1;
     return VALKEYMODULE_OK;
 }
@@ -11104,9 +11106,7 @@ int VM_InfoBeginDictField(ValkeyModuleInfoCtx *ctx, const char *name) {
 /* Ends a dict field, see ValkeyModule_InfoBeginDictField */
 int VM_InfoEndDictField(ValkeyModuleInfoCtx *ctx) {
     if (!ctx->in_dict_field) return VALKEYMODULE_ERR;
-    /* trim the last ',' if found. */
-    if (ctx->info[sdslen(ctx->info) - 1] == ',') sdsIncrLen(ctx->info, -1);
-    ctx->info = sdscat(ctx->info, "\r\n");
+    infoEmitEndDict(ctx->emitter);
     ctx->in_dict_field = 0;
     return VALKEYMODULE_OK;
 }
@@ -11116,11 +11116,16 @@ int VM_InfoEndDictField(ValkeyModuleInfoCtx *ctx) {
  * Field names or values must not include `\r\n` or `:`. */
 int VM_InfoAddFieldString(ValkeyModuleInfoCtx *ctx, const char *field, ValkeyModuleString *value) {
     if (!ctx->in_section) return VALKEYMODULE_ERR;
+    sds val = (sds)objectGetVal(value);
+    /* Use the sds length (matching the legacy %S) so values are reproduced
+     * exactly, including any embedded NULs. */
     if (ctx->in_dict_field) {
-        ctx->info = sdscatfmt(ctx->info, "%s=%S,", field, (sds)objectGetVal(value));
+        infoEmitDictStrn(ctx->emitter, field, val, sdslen(val));
         return VALKEYMODULE_OK;
     }
-    ctx->info = sdscatfmt(ctx->info, "%s_%s:%S\r\n", ctx->module->name, field, (sds)objectGetVal(value));
+    sds key = sdscatfmt(sdsempty(), "%s_%s", ctx->module->name, field);
+    infoEmitFieldStrn(ctx->emitter, key, val, sdslen(val));
+    sdsfree(key);
     return VALKEYMODULE_OK;
 }
 
@@ -11128,21 +11133,26 @@ int VM_InfoAddFieldString(ValkeyModuleInfoCtx *ctx, const char *field, ValkeyMod
 int VM_InfoAddFieldCString(ValkeyModuleInfoCtx *ctx, const char *field, const char *value) {
     if (!ctx->in_section) return VALKEYMODULE_ERR;
     if (ctx->in_dict_field) {
-        ctx->info = sdscatfmt(ctx->info, "%s=%s,", field, value);
+        infoEmitDictStr(ctx->emitter, field, value);
         return VALKEYMODULE_OK;
     }
-    ctx->info = sdscatfmt(ctx->info, "%s_%s:%s\r\n", ctx->module->name, field, value);
+    sds key = sdscatfmt(sdsempty(), "%s_%s", ctx->module->name, field);
+    infoEmitFieldStr(ctx->emitter, key, value);
+    sdsfree(key);
     return VALKEYMODULE_OK;
 }
 
 /* See ValkeyModule_InfoAddFieldString(). */
 int VM_InfoAddFieldDouble(ValkeyModuleInfoCtx *ctx, const char *field, double value) {
     if (!ctx->in_section) return VALKEYMODULE_ERR;
+    /* The module API prints doubles with %.17g (full round-trip precision). */
     if (ctx->in_dict_field) {
-        ctx->info = sdscatprintf(ctx->info, "%s=%.17g,", field, value);
+        infoEmitDictDouble(ctx->emitter, field, value, INFO_PREC_FULL);
         return VALKEYMODULE_OK;
     }
-    ctx->info = sdscatprintf(ctx->info, "%s_%s:%.17g\r\n", ctx->module->name, field, value);
+    sds key = sdscatfmt(sdsempty(), "%s_%s", ctx->module->name, field);
+    infoEmitFieldDouble(ctx->emitter, key, value, INFO_PREC_FULL);
+    sdsfree(key);
     return VALKEYMODULE_OK;
 }
 
@@ -11150,10 +11160,12 @@ int VM_InfoAddFieldDouble(ValkeyModuleInfoCtx *ctx, const char *field, double va
 int VM_InfoAddFieldLongLong(ValkeyModuleInfoCtx *ctx, const char *field, long long value) {
     if (!ctx->in_section) return VALKEYMODULE_ERR;
     if (ctx->in_dict_field) {
-        ctx->info = sdscatfmt(ctx->info, "%s=%I,", field, value);
+        infoEmitDictLL(ctx->emitter, field, value);
         return VALKEYMODULE_OK;
     }
-    ctx->info = sdscatfmt(ctx->info, "%s_%s:%I\r\n", ctx->module->name, field, value);
+    sds key = sdscatfmt(sdsempty(), "%s_%s", ctx->module->name, field);
+    infoEmitFieldLL(ctx->emitter, key, value);
+    sdsfree(key);
     return VALKEYMODULE_OK;
 }
 
@@ -11161,10 +11173,12 @@ int VM_InfoAddFieldLongLong(ValkeyModuleInfoCtx *ctx, const char *field, long lo
 int VM_InfoAddFieldULongLong(ValkeyModuleInfoCtx *ctx, const char *field, unsigned long long value) {
     if (!ctx->in_section) return VALKEYMODULE_ERR;
     if (ctx->in_dict_field) {
-        ctx->info = sdscatfmt(ctx->info, "%s=%U,", field, value);
+        infoEmitDictULL(ctx->emitter, field, value);
         return VALKEYMODULE_OK;
     }
-    ctx->info = sdscatfmt(ctx->info, "%s_%s:%U\r\n", ctx->module->name, field, value);
+    sds key = sdscatfmt(sdsempty(), "%s_%s", ctx->module->name, field);
+    infoEmitFieldULL(ctx->emitter, key, value);
+    sdsfree(key);
     return VALKEYMODULE_OK;
 }
 
@@ -11175,8 +11189,11 @@ int VM_RegisterInfoFunc(ValkeyModuleCtx *ctx, ValkeyModuleInfoFunc cb) {
     return VALKEYMODULE_OK;
 }
 
-sds modulesCollectInfo(sds info, dict *sections_dict, int for_crash_report, int sections) {
-    if (dictSize(modules) == 0) return info;
+/* Drive every loaded module's INFO callback through the given emitter, so both
+ * the text backend and structured backends (OTLP) receive module-provided
+ * fields as typed values. */
+void modulesCollectInfoToEmitter(infoEmitter *e, dict *sections_dict, int for_crash_report) {
+    if (dictSize(modules) == 0) return;
 
     dictIterator *di = dictGetIterator(modules);
     dictEntry *de;
@@ -11184,15 +11201,21 @@ sds modulesCollectInfo(sds info, dict *sections_dict, int for_crash_report, int 
     while ((de = dictNext(di)) != NULL) {
         struct ValkeyModule *module = dictGetVal(de);
         if (!module->info_cb) continue;
-        ValkeyModuleInfoCtx info_ctx = {module, sections_dict, info, sections, 0, 0};
+        ValkeyModuleInfoCtx info_ctx = {
+            .module = module, .requested_sections = sections_dict, .emitter = e, .in_section = 0, .in_dict_field = 0};
         module->info_cb(&info_ctx, for_crash_report);
         /* Implicitly end dicts (no way to handle errors, and we must add the newline). */
         if (info_ctx.in_dict_field) VM_InfoEndDictField(&info_ctx);
-        info = info_ctx.info;
-        sections = info_ctx.sections;
     }
     dictReleaseIterator(di);
-    return info;
+}
+
+/* Backward-compatible text wrapper (see modulesCollectInfoToEmitter). */
+sds modulesCollectInfo(sds info, dict *sections_dict, int for_crash_report, int sections) {
+    infoEmitterText te;
+    infoEmitterTextInit(&te, info, &sections);
+    modulesCollectInfoToEmitter(&te.e, sections_dict, for_crash_report);
+    return infoEmitterTextResult(&te);
 }
 
 /* Get information about the server similar to the one that returns from the

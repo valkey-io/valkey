@@ -1829,6 +1829,48 @@ TEST_F(OrderedIndexTest, LexRangeUnboundedIncludesHighBytes) {
 
 /* ========== Memory tests ========== */
 
+TEST_F(OrderedIndexTest, PointerDeleteCollapsesSpilledPrefixSubtree) {
+    /* Members long enough that inner-node shared prefixes exceed the
+     * embedded capacity and spill to a heap buffer, and enough of them to
+     * build a three-level tree so emptied children include inner nodes.
+     * Deleting every item must release the spilled prefix buffers
+     * (LeakSanitizer verifies). */
+    enum { N = 5000, PREFIX = 300 };
+    static OrderedIndexItem *items[N];
+    char buf[PREFIX + 8];
+    memset(buf, 'p', PREFIX);
+    for (int i = 0; i < N; i++) {
+        snprintf(buf + PREFIX, 8, "%05d", i);
+        items[i] = orderedIndexInsert(oi, 1.0, buf, PREFIX + 5);
+    }
+    ASSERT_EQ(orderedIndexLength(oi), (unsigned long)N);
+
+    for (int i = 0; i < N; i++) orderedIndexDelete(oi, items[i]);
+    ASSERT_EQ(orderedIndexLength(oi), 0UL);
+}
+
+TEST_F(OrderedIndexTest, RangeDeleteCollapsesSpilledPrefixSubtree) {
+    /* Same construction, collapsed through the lex range-delete boundary
+     * paths instead of item-by-item deletion. */
+    enum { N = 5000, PREFIX = 300 };
+    char buf[PREFIX + 8];
+    memset(buf, 'p', PREFIX);
+    for (int i = 0; i < N; i++) {
+        snprintf(buf + PREFIX, 8, "%05d", i);
+        orderedIndexInsert(oi, 1.0, buf, PREFIX + 5);
+    }
+
+    snprintf(buf + PREFIX, 8, "%05d", 500);
+    sds min = sdsnewlen(buf, PREFIX + 5);
+    snprintf(buf + PREFIX, 8, "%05d", 4000);
+    sds max = sdsnewlen(buf, PREFIX + 5);
+    ASSERT_EQ(orderedIndexDeleteRangeByLex(oi, min, max, 0, 0, NULL, NULL), 3501UL);
+    ASSERT_EQ(orderedIndexDeleteRangeByLex(oi, shared.minstring, shared.maxstring, 0, 0, NULL, NULL), (unsigned long)(N - 3501));
+    ASSERT_EQ(orderedIndexLength(oi), 0UL);
+    sdsfree(min);
+    sdsfree(max);
+}
+
 TEST_F(OrderedIndexTest, DismissMemoryWalksItems) {
     /* Smoke test: dismissal must walk populated leaves and their separately
      * allocated packed items without corrupting the index. */

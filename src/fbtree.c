@@ -964,7 +964,10 @@ static deleteResult subtreeDeleteItem(fbtreeIndex *fbt, node *n, const_sds item)
     /* Remove empty child */
     if (inner->child_sizes[index] == 0) {
         node *empty_child = inner->children[index];
-        if (empty_child->is_leaf) unlinkLeaf((leafNode *)empty_child);
+        if (empty_child->is_leaf)
+            unlinkLeaf((leafNode *)empty_child);
+        else
+            innerNodeFreePrefix((innerNode *)empty_child);
         zfree(empty_child);
         innerNodeRemoveChild(inner, index);
         /* Anchor update: if we removed last child, new last child's anchor bubbles up */
@@ -1046,7 +1049,10 @@ static deleteResult subtreePop(fbtreeIndex *fbt, node *n, TraversalHint hint, bo
     /* Remove empty child */
     if (inner->child_sizes[index] == 0) {
         node *empty_child = inner->children[index];
-        if (empty_child->is_leaf) unlinkLeaf((leafNode *)empty_child);
+        if (empty_child->is_leaf)
+            unlinkLeaf((leafNode *)empty_child);
+        else
+            innerNodeFreePrefix((innerNode *)empty_child);
         zfree(empty_child);
         innerNodeRemoveChild(inner, index);
         sds new_anchor = (inner->header.num_items > 0 && index == inner->header.num_items)
@@ -1895,6 +1901,7 @@ static unsigned long deleteRangeCore(fbtreeIndex *fbt, BoundaryPaths *bp, fbtree
 
         /* Update or remove the boundary child */
         if (getSubtreeSize(inner->children[ci]) == 0) {
+            if (!inner->children[ci]->is_leaf) innerNodeFreePrefix((innerNode *)inner->children[ci]);
             zfree(inner->children[ci]);
             inner->header.num_items = ci;
         } else {
@@ -1921,6 +1928,7 @@ static unsigned long deleteRangeCore(fbtreeIndex *fbt, BoundaryPaths *bp, fbtree
         bp->right_sub_idx[d] = 0;
         int new_ci = 0;
         if (getSubtreeSize(inner->children[new_ci]) == 0) {
+            if (!inner->children[new_ci]->is_leaf) innerNodeFreePrefix((innerNode *)inner->children[new_ci]);
             zfree(inner->children[new_ci]);
             innerNodeRemoveChildrenRange(inner, 0, 0);
         } else {
@@ -1972,6 +1980,7 @@ static unsigned long deleteRangeCore(fbtreeIndex *fbt, BoundaryPaths *bp, fbtree
         int ci = bp->shared_left_idx[d];
 
         if (getSubtreeSize(inner->children[ci]) == 0) {
+            if (!inner->children[ci]->is_leaf) innerNodeFreePrefix((innerNode *)inner->children[ci]);
             zfree(inner->children[ci]);
             innerNodeRemoveChild(inner, ci);
         } else {

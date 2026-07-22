@@ -689,6 +689,31 @@ TEST_F(OrderedIndexTest, SignedZeroScoresShareOneKey) {
     ASSERT_EQ(orderedIndexLength(oi), 0UL);
 }
 
+TEST_F(OrderedIndexTest, ScoreDescentWithLongSharedScorePrefix) {
+    /* Adjacent representable doubles differ only in their lowest mantissa
+     * bits, so the packed anchors of an inner node share most of their
+     * 8-byte score prefix. The score-only descent must stay within the
+     * 8-byte key when the shared prefix reaches into its final bytes. */
+    enum { N = 200 };
+    double scores[N];
+    double s = 1.0;
+    for (int i = 0; i < N; i++) {
+        scores[i] = s;
+        insert(s, "e");
+        s = nextafter(s, 2.0);
+    }
+
+    ASSERT_EQ(orderedIndexCountScoreRange(oi, scores[100], scores[100], 0, 0), 1UL);
+    ASSERT_EQ(orderedIndexCountScoreRange(oi, scores[0], scores[99], 0, 0), 100UL);
+
+    OrderedIndexIterator iter;
+    orderedIndexInitIterator(&iter, oi);
+    orderedIndexSeekToScoreRange(&iter, scores[50], scores[50], false, false, 0);
+    OrderedIndexItem *item = orderedIndexNext(&iter);
+    ASSERT_NE(item, nullptr);
+    ASSERT_EQ(orderedIndexItemGetScore(item), scores[50]);
+}
+
 TEST_F(OrderedIndexTest, EmptyIndexOperations) {
     ASSERT_EQ(orderedIndexLength(oi), 0UL);
     OrderedIndexIterator iter;

@@ -1328,10 +1328,14 @@ static int findChildIndexByScore(innerNode *inner, const char *score) {
     /* If node prefix covers entire score, first child has first match */
     if (inner->prefix_len >= SCORE_SIZE) return 0;
 
-    /* Extract feature bytes - no bounds check, score is always 8 bytes */
+    /* Extract feature bytes. The key is exactly SCORE_SIZE bytes; positions
+     * past it read as zero, the minimal continuation, matching how
+     * findChildIndex pads keys shorter than the feature window. */
     unsigned char target[FEATURE_SIZE];
-    for (int j = 0; j < FEATURE_SIZE; j++)
-        target[j] = (unsigned char)score[inner->prefix_len + j];
+    for (int j = 0; j < FEATURE_SIZE; j++) {
+        size_t idx = inner->prefix_len + j;
+        target[j] = idx < SCORE_SIZE ? (unsigned char)score[idx] : 0;
+    }
 
     int left, right;
     featureSearchSIMD(inner->features, inner->header.num_items, target, &left, &right);

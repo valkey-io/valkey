@@ -711,7 +711,7 @@ TEST_F(OrderedIndexTest, ScoreDescentWithLongSharedScorePrefix) {
     orderedIndexSeekToScoreRange(&iter, scores[50], scores[50], false, false, 0);
     OrderedIndexItem *item = orderedIndexNext(&iter);
     ASSERT_NE(item, nullptr);
-    ASSERT_EQ(orderedIndexItemGetScore(item), scores[50]);
+    assertScore(item, scores[50]);
 }
 
 TEST_F(OrderedIndexTest, EmptyIndexOperations) {

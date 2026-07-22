@@ -7680,6 +7680,7 @@ int handleDebugClusterCommand(client *c) {
             if (n->inbound_link) freeClusterLink(n->inbound_link);
         } else {
             addReplyErrorFormat(c, "Unknown direction %s", (char *)objectGetVal(c->argv[3]));
+            return 1;
         }
         addReply(c, shared.ok);
         return 1;

@@ -12,7 +12,9 @@
             "FAST"
         ],
         "acl_categories": [
-            "HYPERLOGLOG"
+            "FAST",
+            "HYPERLOGLOG",
+            "WRITE"
         ],
         "key_specs": [
             {

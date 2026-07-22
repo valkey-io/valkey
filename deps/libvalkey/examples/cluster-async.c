@@ -46,9 +46,7 @@ void disconnectCallback(const valkeyAsyncContext *ac, int status) {
     printf("Disconnected from %s:%d\n", ac->c.tcp.host, ac->c.tcp.port);
 }
 
-int main(int argc, char **argv) {
-    (void)argc;
-    (void)argv;
+int main(void) {
     struct event_base *base = event_base_new();
 
     valkeyClusterOptions options = {0};

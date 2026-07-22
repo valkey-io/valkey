@@ -73,12 +73,9 @@ start_server {tags {"aofrw external:skip"} overrides {aof-use-rdb-preamble no}} 
         r bgrewriteaof
 
         # disable AOF and wait for the child to be killed
+        set loglines [count_log_lines 0]
         r config set appendonly no
-        wait_for_condition 50 100 {
-            [string match {*Killing*AOF*child*} [exec tail -5 < [srv 0 stdout]]]
-        } else {
-            fail "Can't find 'Killing AOF child' into recent logs"
-        }
+        wait_for_log_messages 0 {"*Killing*AOF*child*"} $loglines 100 100
         r config set rdb-key-save-delay 0
     }
 

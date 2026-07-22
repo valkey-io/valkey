@@ -7,5 +7,6 @@ void prefetchCommandsBatchInit(void);
 void processClientsCommandsBatch(void);
 int addCommandToBatchAndProcessIfFull(struct client *c);
 void removeClientFromPendingCommandsBatch(struct client *c);
+int onMaxBatchSizeChange(const char **err);
 
 #endif /* MEMORY_PREFETCH_H */

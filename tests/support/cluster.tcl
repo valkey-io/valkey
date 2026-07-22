@@ -9,7 +9,6 @@
 # $c get foo
 # $c close
 
-package require Tcl 8.5
 package provide valkey_cluster 0.1
 
 namespace eval valkey_cluster {}
@@ -34,7 +33,7 @@ set ::valkey_cluster::plain_commands {
     hgetall hexists hscan incrby decrby incrbyfloat getset move
     expire expireat pexpire pexpireat type ttl pttl persist restore
     dump bitcount bitpos pfadd pfcount cluster ssubscribe spublish
-    sunsubscribe
+    sunsubscribe clusterscan
 }
 
 # Create a cluster client. The nodes are given as a list of host:port. The TLS

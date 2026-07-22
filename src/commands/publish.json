@@ -28,6 +28,10 @@
             "description": "The number of clients that received the message. Note that in a Cluster, only clients that are connected to the same node as the publishing client are included in the count.",
             "type": "integer",
             "minimum": 0
-        }
+        },
+        "acl_categories": [
+            "FAST",
+            "PUBSUB"
+        ]
     }
 }

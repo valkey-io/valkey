@@ -35,6 +35,8 @@
 #ifndef VALKEY_RDMA_H
 #define VALKEY_RDMA_H
 
+#include "visibility.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -58,7 +60,7 @@ extern "C" {
         (opts)->endpoint.tcp.source_addr = source_addr_;                         \
     } while (0)
 
-int valkeyInitiateRdma(void);
+LIBVALKEY_API int valkeyInitiateRdma(void);
 
 #ifdef __cplusplus
 }

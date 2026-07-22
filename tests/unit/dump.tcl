@@ -1,4 +1,6 @@
 start_server {tags {"dump"}} {
+    set db [expr {$::singledb ? 0 : 9}]
+
     test {DUMP / RESTORE are able to serialize / unserialize a simple key} {
         r set foo bar
         set encoded [r dump foo]
@@ -155,14 +157,17 @@ start_server {tags {"dump"}} {
             set second_port [srv 0 port]
 
             assert_match {*migrate_cached_sockets:0*} [r -1 info]
-            r -1 migrate $second_host $second_port key 9 1000
+            r -1 migrate $second_host $second_port key $db 1000
             assert_match {*migrate_cached_sockets:1*} [r -1 info]
         }
     } {} {external:skip}
 
     test {MIGRATE cached connections are released after some time} {
-        after 15000
-        assert_match {*migrate_cached_sockets:0*} [r info]
+        wait_for_condition 20 1000 {
+            [string match {*migrate_cached_sockets:0*} [r info]]
+        } else {
+            fail "MIGRATE cached connections were not released after some time"
+        }
     }
 
     test {MIGRATE is able to migrate a key between two instances} {
@@ -175,7 +180,7 @@ start_server {tags {"dump"}} {
 
             assert {[$first exists key] == 1}
             assert {[$second exists key] == 0}
-            set ret [r -1 migrate $second_host $second_port key 9 5000]
+            set ret [r -1 migrate $second_host $second_port key $db 5000]
             assert {$ret eq {OK}}
             assert {[$first exists key] == 0}
             assert {[$second exists key] == 1}
@@ -195,7 +200,7 @@ start_server {tags {"dump"}} {
 
             assert {[$first exists list] == 1}
             assert {[$second exists list] == 0}
-            set ret [r -1 migrate $second_host $second_port list 9 5000 copy]
+            set ret [r -1 migrate $second_host $second_port list $db 5000 copy]
             assert {$ret eq {OK}}
             assert {[$first exists list] == 1}
             assert {[$second exists list] == 1}
@@ -215,9 +220,9 @@ start_server {tags {"dump"}} {
             assert {[$first exists list] == 1}
             assert {[$second exists list] == 0}
             $second set list somevalue
-            catch {r -1 migrate $second_host $second_port list 9 5000 copy} e
+            catch {r -1 migrate $second_host $second_port list $db 5000 copy} e
             assert_match {ERR*} $e
-            set ret [r -1 migrate $second_host $second_port list 9 5000 copy replace]
+            set ret [r -1 migrate $second_host $second_port list $db 5000 copy replace]
             assert {$ret eq {OK}}
             assert {[$first exists list] == 1}
             assert {[$second exists list] == 1}
@@ -236,7 +241,7 @@ start_server {tags {"dump"}} {
             assert {[$first exists key] == 1}
             assert {[$second exists key] == 0}
             $first expire key 10
-            set ret [r -1 migrate $second_host $second_port key 9 5000]
+            set ret [r -1 migrate $second_host $second_port key $db 5000]
             assert {$ret eq {OK}}
             assert {[$first exists key] == 0}
             assert {[$second exists key] == 1}
@@ -261,7 +266,7 @@ start_server {tags {"dump"}} {
 
             assert {[$first exists key] == 1}
             assert {[$second exists key] == 0}
-            set ret [r -1 migrate $second_host $second_port key 9 10000]
+            set ret [r -1 migrate $second_host $second_port key $db 10000]
             assert {$ret eq {OK}}
             assert {[$first exists key] == 0}
             assert {[$second exists key] == 1}
@@ -282,7 +287,7 @@ start_server {tags {"dump"}} {
 
             assert {[$first exists key] == 1}
             assert {[$second exists key] == 0}
-            set ret [r -1 migrate $second_host $second_port key 9 10000]
+            set ret [r -1 migrate $second_host $second_port key $db 10000]
             assert {$ret eq {OK}}
             assert {[$first exists key] == 0}
             assert {[$second exists key] == 1}
@@ -305,7 +310,7 @@ start_server {tags {"dump"}} {
             $rd debug sleep 1.0 ; # Make second server unable to reply.
             after 100; # wait to make sure DEBUG command was executed.
             set e {}
-            catch {r -1 migrate $second_host $second_port key 9 500} e
+            catch {r -1 migrate $second_host $second_port key $db 500} e
             assert_match {IOERR*} $e
         }
     } {} {external:skip}
@@ -322,7 +327,7 @@ start_server {tags {"dump"}} {
 
             assert {[$first exists key1] == 1}
             assert {[$second exists key1] == 0}
-            set ret [r -1 migrate $second_host $second_port "" 9 5000 keys key1 key2 key3]
+            set ret [r -1 migrate $second_host $second_port "" $db 5000 keys key1 key2 key3]
             assert {$ret eq {OK}}
             assert {[$first exists key1] == 0}
             assert {[$first exists key2] == 0}
@@ -334,7 +339,7 @@ start_server {tags {"dump"}} {
     } {} {external:skip}
 
     test {MIGRATE with multiple keys must have empty key arg} {
-        catch {r MIGRATE 127.0.0.1 6379 NotEmpty 9 5000 keys a b c} e
+        catch {r MIGRATE 127.0.0.1 6379 NotEmpty $db 5000 keys a b c} e
         set e
     } {*empty string*} {external:skip}
 
@@ -348,12 +353,12 @@ start_server {tags {"dump"}} {
             set second_host [srv 0 host]
             set second_port [srv 0 port]
 
-            set ret [r -1 migrate $second_host $second_port "" 9 5000 keys nokey-1 nokey-2 nokey-2]
+            set ret [r -1 migrate $second_host $second_port "" $db 5000 keys nokey-1 nokey-2 nokey-2]
             assert {$ret eq {NOKEY}}
 
             assert {[$first exists key1] == 1}
             assert {[$second exists key1] == 0}
-            set ret [r -1 migrate $second_host $second_port "" 9 5000 keys nokey-1 key1 nokey-2 key2 nokey-3 key3]
+            set ret [r -1 migrate $second_host $second_port "" $db 5000 keys nokey-1 key1 nokey-2 key2 nokey-3 key3]
             assert {$ret eq {OK}}
             assert {[$first exists key1] == 0}
             assert {[$first exists key2] == 0}
@@ -373,7 +378,7 @@ start_server {tags {"dump"}} {
             set second_host [srv 0 host]
             set second_port [srv 0 port]
 
-            set ret [r -1 migrate $second_host $second_port "" 9 5000 keys a b c d e f g h i l m n o p q]
+            set ret [r -1 migrate $second_host $second_port "" $db 5000 keys a b c d e f g h i l m n o p q]
 
             assert {[$first dbsize] == 0}
             assert {[$second dbsize] == 15}
@@ -391,7 +396,7 @@ start_server {tags {"dump"}} {
 
             $second mset c _ d _; # Two busy keys and no REPLACE used
 
-            catch {r -1 migrate $second_host $second_port "" 9 5000 keys a b c d e f g h i l m n o p q} e
+            catch {r -1 migrate $second_host $second_port "" $db 5000 keys a b c d e f g h i l m n o p q} e
 
             assert {[$first dbsize] == 2}
             assert {[$second dbsize] == 15}
@@ -413,15 +418,90 @@ start_server {tags {"dump"}} {
 
             assert {[$first exists list] == 1}
             assert {[$second exists list] == 0}
-            set ret [r -1 migrate $second_host $second_port list 9 5000 AUTH foobar]
+            set ret [r -1 migrate $second_host $second_port list $db 5000 AUTH foobar]
             assert {$ret eq {OK}}
             assert {[$second exists list] == 1}
             assert {[$second lrange list 0 -1] eq {d c b a}}
 
             r -1 lpush list a b c d
             $second config set requirepass foobar2
-            catch {r -1 migrate $second_host $second_port list 9 5000 AUTH foobar} err
+            catch {r -1 migrate $second_host $second_port list $db 5000 AUTH foobar} err
             assert_match {*WRONGPASS*} $err
         }
     } {} {external:skip}
+
+    test {RESTORE rejects zipmap with overlong field length encoding (CVE-2026-25243)} {
+        # Craft a RESTORE payload containing a hash-zipmap (RDB type 9) where
+        # the field-name length is encoded using the 5-byte format (0xfe prefix)
+        # even though the actual length (3) fits in a single byte.
+        #
+        # The bug: zipmapValidateIntegrity() walks the zipmap using the actual
+        # encoded size (5 bytes for 0xfe prefix), but zipmapNext() recalculates
+        # the encoding size via zipmapEncodeLength(NULL, len) which returns 1
+        # for lengths < 254.  This 4-byte mismatch causes zipmapNext() to read
+        # at wrong offsets during the hash conversion loop after validation,
+        # leading to invalid memory access (heap buffer over-read).
+        #
+        # Zipmap layout (2 entries, 24 bytes):
+        #   02              - zmlen (2 entries)
+        #   fe 03000000     - field length = 3, overlong 5-byte encoding
+        #   616263          - "abc"
+        #   03              - value length = 3
+        #   00              - free = 0
+        #   646566          - "def"
+        #   03              - field length = 3 (normal, padding entry)
+        #   676869          - "ghi"
+        #   03              - value length = 3
+        #   00              - free = 0
+        #   6a6b6c          - "jkl"
+        #   ff              - ZIPMAP_END
+        #
+        # Pre-patch: validation passes (overlong encoding walks in-bounds),
+        # then zipmapNext() misaligns by 4 bytes, interpreting 0x61 ('a') as a
+        # 97-byte field length → heap buffer over-read / crash.
+        #
+        # Post-patch: zipmapValidateIntegrity() rejects (l < 254 && s != 1).
+        #
+        # RESTORE payload: <type=09><rdb-string-len=18><zipmap><rdb-ver=5000><crc=0>
+
+        r debug set-skip-checksum-validation 1
+        set payload "\x09\x18\x02\xfe\x03\x00\x00\x00\x61\x62\x63\x03\x00\x64\x65\x66\x03\x67\x68\x69\x03\x00\x6a\x6b\x6c\xff\x50\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+        catch {r restore zipmap_test 0 $payload} err
+        r debug set-skip-checksum-validation 0
+        assert_match {*Bad data format*} $err
+    } {} {needs:debug}
+
+    test {RESTORE rejects stream with shared NACK across consumers} {
+        # Create a valid stream with consumer group and two consumers
+        r DEL mystream
+        r XADD mystream 1-1 f v
+        r XADD mystream 2-1 f v
+        r XGROUP CREATE mystream grp 0
+        r XREADGROUP GROUP grp consumer1 COUNT 1 STREAMS mystream ">"
+        r XREADGROUP GROUP grp consumer2 COUNT 1 STREAMS mystream ">"
+
+        set dump [r DUMP mystream]
+        r DEL mystream
+
+        # In the dump, consumer2's PEL entry contains message ID 2-1.
+        # Replace it with 1-1 (same as consumer1's) to create a shared NACK.
+        # Message ID 2-1 in big-endian: \x00\x00\x00\x00\x00\x00\x00\x02\x00\x00\x00\x00\x00\x00\x00\x01
+        # Message ID 1-1 in big-endian: \x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x01
+        # Find the last occurrence of ID 2-1 (in consumer2's PEL) and replace with 1-1
+        set id_2_1 "\x00\x00\x00\x00\x00\x00\x00\x02\x00\x00\x00\x00\x00\x00\x00\x01"
+        set id_1_1 "\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x01"
+
+        # Find the last occurrence (consumer2's PEL entry, not the global PEL)
+        set last_pos [string last $id_2_1 $dump]
+        if {$last_pos == -1} {
+            fail "Could not find message ID 2-1 in dump"
+        }
+        set corrupt_dump [string replace $dump $last_pos [expr {$last_pos + 15}] $id_1_1]
+
+        # Skip CRC validation since we modified the payload
+        r debug set-skip-checksum-validation 1
+        catch {r RESTORE mystream 0 $corrupt_dump} err
+        r debug set-skip-checksum-validation 0
+        assert_match {*Bad data format*} $err
+    } {} {needs:debug}
 }

@@ -11,11 +11,11 @@ The Valkey project is led by a Technical Steering Committee, whose responsibilit
 
 * Have a question? Ask it on
   [GitHub Discussions](https://github.com/valkey-io/valkey/discussions)
-  or [Valkey's Discord](https://discord.gg/zbcPa5umUB)
   or [Valkey's Matrix](https://matrix.to/#/#valkey:matrix.org)
 * Found a bug? [Report it here](https://github.com/valkey-io/valkey/issues/new?template=bug_report.md&title=%5BBUG%5D)
 * Valkey crashed? [Submit a crash report here](https://github.com/valkey-io/valkey/issues/new?template=crash_report.md&title=%5BCRASH%5D+%3Cshort+description%3E)
 * Suggest a new feature? [Post your detailed feature request here](https://github.com/valkey-io/valkey/issues/new?template=feature_request.md&title=%5BNEW%5D)
+* Report a test failure? [Report it here](https://github.com/valkey-io/valkey/issues/new?template=test-failure.md)
 * Want to help with documentation? [Move on to valkey-doc](https://github.com/valkey-io/valkey-doc)
 * Report a vulnerability? See [SECURITY.md](SECURITY.md)
 
@@ -75,7 +75,7 @@ If you're contributing code to the Valkey project in any other form, including
 sending a code fragment or patch via private email or public discussion groups,
 you need to ensure that the contribution is in accordance with the DCO.
 
-# How to provide a patch or a new feature
+## How to provide a patch or a new feature
 
 1. If it is a major feature or a semantical change, please don't start coding
 straight away: if your feature is not a conceptual fit you'll lose a lot of
@@ -99,9 +99,73 @@ certain issues/PRs over others. If you think your issue/PR is very important
 try to popularize it, have other users commenting and sharing their point of
 view, and so forth. This helps.
 
-4. For minor fixes, open a pull request on GitHub.
+4. While developing code, make sure to refer to our [DEVELOPMENT_GUIDE.md](DEVELOPMENT_GUIDE.md),
+which includes documentation about various best practices for writing Valkey code.
+
+5. For minor fixes, open a pull request on GitHub.
 
 To link a pull request to an existing issue, please write "Fixes #xyz" somewhere
 in the pull request description, where xyz is the issue number.
+
+## Code formatting with clang-format
+
+Valkey enforces code formatting using `clang-format-18`. A CI check runs on
+every pull request and will fail if your code is not formatted correctly.
+
+### Install clang-format-18
+
+**Option A — pip (any platform):**
+
+```bash
+pip install clang-format==18.1.8
+```
+
+**Option B — apt (Debian/Ubuntu):**
+
+```bash
+sudo apt-get install software-properties-common -y
+wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | gpg --dearmor | sudo tee /usr/share/keyrings/llvm-toolchain.gpg > /dev/null
+echo "deb [signed-by=/usr/share/keyrings/llvm-toolchain.gpg] http://apt.llvm.org/$(lsb_release -cs)/ llvm-toolchain-$(lsb_release -cs)-18 main" | sudo tee /etc/apt/sources.list.d/llvm.list
+sudo apt-get update -y
+sudo apt-get install clang-format-18 -y
+```
+
+### Format your changes
+
+Run clang-format on the files you modified:
+
+```bash
+clang-format-18 -i src/file_you_changed.c src/file_you_changed.h
+```
+
+To format all source files at once:
+
+```bash
+clang-format-18 -i src/*.c src/*.h
+```
+
+The formatting configuration lives in `src/.clang-format`. Use version 18
+specifically — different versions may produce different output and cause the
+CI check to fail.
+
+## Running the daily workflow on demand for your branch
+
+Use [`.github/workflows/daily.yml`](.github/workflows/daily.yml) with
+`workflow_dispatch` to run daily tests manually on any branch in your fork.
+
+1. Open your fork on GitHub and go to **Actions** -> **Daily**.
+2. Click **Run workflow**.
+3. In the **Branch** dropdown, select the branch that contains the workflow file you want to use.
+4. In the input fields, set:
+   * `use_repo` to your fork (for example, `your-user/valkey`)
+   * `use_git_ref` to your branch name (or a specific commit SHA)
+5. Optionally set `skipjobs`, `skiptests`, `test_args`, and `cluster_test_args`.
+6. Click **Run workflow**.
+
+Notes:
+* To run the full matrix, set `skipjobs` and `skiptests` to `none`.
+  Do not leave them empty, since the workflow input defaults may be applied.
+* The scheduled part of this workflow is gated to `valkey-io/valkey`, but manual
+  `workflow_dispatch` runs work for forks.
 
 Thanks!

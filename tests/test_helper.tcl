@@ -42,6 +42,7 @@ set ::all_tests {
     integration/replication-3
     integration/replication-4
     integration/replication-psync
+    integration/replication-downgrade-compat
     integration/aof
     integration/rdb
     integration/convert-zipmap-hash-on-load
@@ -50,6 +51,7 @@ set ::all_tests {
     integration/psync2-reg
     integration/psync2-pingoff
     integration/redis-cli
+    integration/rdb-downgrade-integration
     unit/pubsub
     unit/slowlog
     unit/scripting
@@ -70,6 +72,7 @@ set ::all_tests {
     unit/tracking
     unit/oom-score-adj
     unit/shutdown
+    unit/rdb-downgrade-compat
 }
 # Index to the next test to run in the ::all_tests list.
 set ::next_test 0

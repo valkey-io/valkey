@@ -70,18 +70,32 @@ static int checkStringLength(client *c, long long size, long long append) {
 #define OBJ_SET_EX (1<<2)          /* Set if time in seconds is given */
 #define OBJ_SET_PX (1<<3)          /* Set if time in ms in given */
 #define OBJ_SET_KEEPTTL (1<<4)     /* Set and keep the ttl */
+#define OBJ_SET_EXAT (1<<5)        /* Set if absolute time in seconds is given */
+#define OBJ_SET_PXAT (1<<6)        /* Set if absolute time in ms is given */
 
 void setGenericCommand(client *c, int flags, robj *key, robj *val, robj *expire, int unit, robj *ok_reply, robj *abort_reply) {
     long long milliseconds = 0; /* initialized to avoid any harmness warning */
+    long long when = 0;
 
     if (expire) {
         if (getLongLongFromObjectOrReply(c, expire, &milliseconds, NULL) != C_OK)
             return;
-        if (milliseconds <= 0) {
+        if (milliseconds <= 0 ||
+            (unit == UNIT_SECONDS && milliseconds > LLONG_MAX / 1000))
+        {
             addReplyErrorFormat(c,"invalid expire time in %s",c->cmd->name);
             return;
         }
         if (unit == UNIT_SECONDS) milliseconds *= 1000;
+        when = milliseconds;
+        if (!(flags & OBJ_SET_EXAT) && !(flags & OBJ_SET_PXAT)) {
+            long long now = mstime();
+            if (milliseconds > LLONG_MAX - now) {
+                addReplyErrorFormat(c,"invalid expire time in %s",c->cmd->name);
+                return;
+            }
+            when += now;
+        }
     }
 
     if ((flags & OBJ_SET_NX && lookupKeyWrite(c->db,key) != NULL) ||
@@ -92,14 +106,15 @@ void setGenericCommand(client *c, int flags, robj *key, robj *val, robj *expire,
     }
     genericSetKey(c,c->db,key,val,flags & OBJ_SET_KEEPTTL,1);
     server.dirty++;
-    if (expire) setExpire(c,c->db,key,mstime()+milliseconds);
+    if (expire) setExpire(c,c->db,key,when);
     notifyKeyspaceEvent(NOTIFY_STRING,"set",key,c->db->id);
     if (expire) notifyKeyspaceEvent(NOTIFY_GENERIC,
         "expire",key,c->db->id);
     addReply(c, ok_reply ? ok_reply : shared.ok);
 }
 
-/* SET key value [NX] [XX] [KEEPTTL] [EX <seconds>] [PX <milliseconds>] */
+/* SET key value [NX] [XX] [KEEPTTL] [EX <seconds>] [PX <milliseconds>]
+ *     [EXAT <seconds-timestamp>] [PXAT <milliseconds-timestamp>] */
 void setCommand(client *c) {
     int j;
     robj *expire = NULL;
@@ -121,13 +136,16 @@ void setCommand(client *c) {
         {
             flags |= OBJ_SET_XX;
         } else if (!strcasecmp(c->argv[j]->ptr,"KEEPTTL") &&
-                   !(flags & OBJ_SET_EX) && !(flags & OBJ_SET_PX))
+                   !(flags & OBJ_SET_EX) && !(flags & OBJ_SET_PX) &&
+                   !(flags & OBJ_SET_EXAT) && !(flags & OBJ_SET_PXAT))
         {
             flags |= OBJ_SET_KEEPTTL;
         } else if ((a[0] == 'e' || a[0] == 'E') &&
                    (a[1] == 'x' || a[1] == 'X') && a[2] == '\0' &&
                    !(flags & OBJ_SET_KEEPTTL) &&
-                   !(flags & OBJ_SET_PX) && next)
+                   !(flags & OBJ_SET_PX) &&
+                   !(flags & OBJ_SET_EXAT) &&
+                   !(flags & OBJ_SET_PXAT) && next)
         {
             flags |= OBJ_SET_EX;
             unit = UNIT_SECONDS;
@@ -136,9 +154,37 @@ void setCommand(client *c) {
         } else if ((a[0] == 'p' || a[0] == 'P') &&
                    (a[1] == 'x' || a[1] == 'X') && a[2] == '\0' &&
                    !(flags & OBJ_SET_KEEPTTL) &&
-                   !(flags & OBJ_SET_EX) && next)
+                   !(flags & OBJ_SET_EX) &&
+                   !(flags & OBJ_SET_EXAT) &&
+                   !(flags & OBJ_SET_PXAT) && next)
         {
             flags |= OBJ_SET_PX;
+            unit = UNIT_MILLISECONDS;
+            expire = next;
+            j++;
+        } else if ((a[0] == 'e' || a[0] == 'E') &&
+                   (a[1] == 'x' || a[1] == 'X') &&
+                   (a[2] == 'a' || a[2] == 'A') &&
+                   (a[3] == 't' || a[3] == 'T') && a[4] == '\0' &&
+                   !(flags & OBJ_SET_KEEPTTL) &&
+                   !(flags & OBJ_SET_EX) &&
+                   !(flags & OBJ_SET_PX) &&
+                   !(flags & OBJ_SET_PXAT) && next)
+        {
+            flags |= OBJ_SET_EXAT;
+            unit = UNIT_SECONDS;
+            expire = next;
+            j++;
+        } else if ((a[0] == 'p' || a[0] == 'P') &&
+                   (a[1] == 'x' || a[1] == 'X') &&
+                   (a[2] == 'a' || a[2] == 'A') &&
+                   (a[3] == 't' || a[3] == 'T') && a[4] == '\0' &&
+                   !(flags & OBJ_SET_KEEPTTL) &&
+                   !(flags & OBJ_SET_EX) &&
+                   !(flags & OBJ_SET_PX) &&
+                   !(flags & OBJ_SET_EXAT) && next)
+        {
+            flags |= OBJ_SET_PXAT;
             unit = UNIT_MILLISECONDS;
             expire = next;
             j++;
@@ -729,4 +775,3 @@ cleanup:
     if (objb) decrRefCount(objb);
     return;
 }
-

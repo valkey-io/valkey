@@ -408,6 +408,30 @@ start_server {tags {"string"}} {
         assert {$ttl <= 10 && $ttl > 5}
     }
 
+    foreach {option clock_unit} {
+        EXAT seconds
+        PXAT milliseconds
+    } {
+        test "Extended SET $option option" {
+            r del foo
+            set expire_at [expr {[clock $clock_unit] + ($clock_unit eq "seconds" ? 10 : 10000)}]
+            assert_equal OK [r set foo bar $option $expire_at]
+            assert_equal bar [r get foo]
+            assert_range [r pttl foo] 5000 10000
+        }
+    }
+
+    foreach {option expire_at} {
+        EXAT 9223372036854776
+        PX 9223372036854775807
+    } {
+        test "Extended SET $option rejects expiration overflow" {
+            r del foo
+            assert_error {*invalid expire time*} {r set foo bar $option $expire_at}
+            assert_equal 0 [r exists foo]
+        }
+    }
+
     test {Extended SET using multiple options at once} {
         r set foo val
         assert {[r set foo bar xx px 10000] eq {OK}}

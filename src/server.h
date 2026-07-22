@@ -1055,6 +1055,9 @@ typedef struct redisTLSContextConfig {
  * Global server state
  *----------------------------------------------------------------------------*/
 
+typedef enum { RDB_VERSION_CHECK_STRICT = 0,
+    RDB_VERSION_CHECK_RELAXED } rdb_version_check_type;
+
 struct clusterState;
 
 /* AIX defines hz to __hz, we don't use this define and in order to allow
@@ -1197,6 +1200,7 @@ struct redisServer {
     long long stat_io_writes_processed; /* Number of write events processed by IO / Main threads */
     _Atomic long long stat_total_reads_processed; /* Total number of read events processed */
     _Atomic long long stat_total_writes_processed; /* Total number of write events processed */
+    long long stat_dump_payload_sanitizations; /* Number of payload sanitizations on RDB load */
     /* The following two are used to track instantaneous metrics, like
      * number of operations per second, network traffic. */
     struct {
@@ -1213,6 +1217,7 @@ struct redisServer {
     int active_expire_effort;       /* From 1 (default) to 10, active effort. */
     int active_defrag_enabled;
     int jemalloc_bg_thread;         /* Enable jemalloc background thread */
+    int rdb_version_check;          /* Try to load RDB produced by a future version. */
     size_t active_defrag_ignore_bytes; /* minimum amount of fragmentation waste to start active defrag */
     int active_defrag_threshold_lower; /* minimum percentage of fragmentation to start active defrag */
     int active_defrag_threshold_upper; /* maximum percentage of fragmentation at which we use maximum effort */

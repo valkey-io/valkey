@@ -37,8 +37,22 @@
 #include "server.h"
 
 /* The current RDB version. When the format changes in a way that is no longer
- * backward compatible this number gets incremented. */
+ * backward compatible this number gets incremented.
+ *
+ * RDB 11 is the last open-source Redis RDB version, used by Valkey 7.x and 8.x.
+ *
+ * RDB 12-79 are reserved for non-open-source Redis formats.
+ *
+ * Valkey 9.x uses RDB version 80 to avoid collisions with those formats.
+ *
+ * In an RDB file/stream, we also check the magic string REDIS or VALKEY but in
+ * the DUMP/RESTORE format, there is only the RDB version number and no magic
+ * string. */
 #define RDB_VERSION 9
+
+/* Reserved range for foreign (unsupported, non-OSS) RDB format. */
+#define RDB_FOREIGN_VERSION_MIN 12
+#define RDB_FOREIGN_VERSION_MAX 79
 
 /* Defines related to the dump file format. To store 32 bits lengths for short
  * keys requires a lot of space, so we check the most significant 2 bits of
@@ -91,12 +105,26 @@
 #define RDB_TYPE_HASH_ZIPLIST  13
 #define RDB_TYPE_LIST_QUICKLIST 14
 #define RDB_TYPE_STREAM_LISTPACKS 15
+/* RDB 11 types for downgrade compatibility */
+#define RDB_TYPE_HASH_LISTPACK 16
+#define RDB_TYPE_ZSET_LISTPACK 17
+#define RDB_TYPE_LIST_QUICKLIST_2   18
+#define RDB_TYPE_STREAM_LISTPACKS_2 19
+#define RDB_TYPE_SET_LISTPACK  20
+#define RDB_TYPE_STREAM_LISTPACKS_3 21
+#define RDB_TYPE_HASH_2 22 /* Hash with field-level expiration, RDB 80 (9.0). */
 /* NOTE: WHEN ADDING NEW RDB TYPE, UPDATE rdbIsObjectType() BELOW */
 
 /* Test if a type is an object type. */
-#define rdbIsObjectType(t) ((t >= 0 && t <= 7) || (t >= 9 && t <= 15))
+/* RDB_TYPE_HASH_2 is intentionally excluded because Redis 6.0 cannot
+ * represent hash-field expiration semantics. */
+#define rdbIsObjectType(t) ((t >= 0 && t <= 7) || (t >= 9 && t <= 21))
 
 /* Special RDB opcodes (saved/loaded with rdbSaveType/rdbLoadType). */
+#define RDB_OPCODE_SLOT_IMPORT 243     /* Slot import state (Valkey 9.0). */
+#define RDB_OPCODE_SLOT_INFO 244       /* Slot size hints, safe to ignore. */
+#define RDB_OPCODE_FUNCTION2 245       /* Function library data. */
+#define RDB_OPCODE_FUNCTION_PRE_GA 246 /* Pre-GA function library data. */
 #define RDB_OPCODE_MODULE_AUX 247   /* Module auxiliary data. */
 #define RDB_OPCODE_IDLE       248   /* LRU idle time. */
 #define RDB_OPCODE_FREQ       249   /* LFU frequency. */

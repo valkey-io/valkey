@@ -383,6 +383,22 @@ uint32_t lpCurrentEncodedSize(unsigned char *p) {
     return 0;
 }
 
+/* Return the number of bytes needed to encode the type and optional string
+ * length of the listpack element pointed to by 'p'. */
+static uint32_t lpCurrentEncodedSizeBytes(unsigned char *p) {
+    if (LP_ENCODING_IS_7BIT_UINT(p[0])) return 1;
+    if (LP_ENCODING_IS_6BIT_STR(p[0])) return 1;
+    if (LP_ENCODING_IS_13BIT_INT(p[0])) return 1;
+    if (LP_ENCODING_IS_16BIT_INT(p[0])) return 1;
+    if (LP_ENCODING_IS_24BIT_INT(p[0])) return 1;
+    if (LP_ENCODING_IS_32BIT_INT(p[0])) return 1;
+    if (LP_ENCODING_IS_64BIT_INT(p[0])) return 1;
+    if (LP_ENCODING_IS_12BIT_STR(p[0])) return 2;
+    if (LP_ENCODING_IS_32BIT_STR(p[0])) return 5;
+    if (p[0] == LP_EOF) return 1;
+    return 0;
+}
+
 /* Skip the current entry returning the next. It is invalid to call this
  * function if the current element is the EOF element at the end of the
  * listpack, however, while this function is used to implement lpNext(),
@@ -752,6 +768,59 @@ uint32_t lpBytes(unsigned char *lp) {
     return lpGetTotalBytes(lp);
 }
 
+/* Validate a listpack entry and advance 'pp' to the next entry. */
+static int lpValidateNext(unsigned char *lp, unsigned char **pp, size_t lpbytes) {
+    unsigned char *p = *pp;
+    if (!p || p < lp + LP_HDR_SIZE || p > lp + lpbytes - 1) return 0;
+
+    if (*p == LP_EOF) {
+        if (p != lp + lpbytes - 1) return 0;
+        *pp = NULL;
+        return 1;
+    }
+
+    size_t offset = p - lp;
+    uint32_t lenbytes = lpCurrentEncodedSizeBytes(p);
+    if (!lenbytes || lenbytes > lpbytes - offset - 1) return 0;
+
+    unsigned long entrylen = lpCurrentEncodedSize(p);
+    unsigned long encoded_backlen = lpEncodeBacklen(NULL, entrylen);
+    if (entrylen > lpbytes - offset - 1 ||
+        encoded_backlen > lpbytes - offset - entrylen - 1) {
+        return 0;
+    }
+
+    p += entrylen + encoded_backlen;
+    if (lpDecodeBacklen(p - 1) != entrylen) return 0;
+
+    *pp = p;
+    return 1;
+}
+
+/* Validate the listpack header and, when 'deep' is non-zero, every entry.
+ * The callback is invoked only after an entry has passed bounds validation. */
+int lpValidateIntegrity(unsigned char *lp, size_t size, int deep,
+                        listpackValidateEntryCB entry_cb, void *cb_userdata) {
+    if (size < LP_HDR_SIZE + 1) return 0;
+    if (lpGetTotalBytes(lp) != size) return 0;
+    if (lp[size - 1] != LP_EOF) return 0;
+    if (!deep) return 1;
+
+    uint32_t count = 0;
+    uint32_t numele = lpGetNumElements(lp);
+    unsigned char *p = lp + LP_HDR_SIZE;
+    while (p && p[0] != LP_EOF) {
+        unsigned char *entry = p;
+        if (!lpValidateNext(lp, &p, size)) return 0;
+        if (entry_cb && !entry_cb(entry, numele, cb_userdata)) return 0;
+        count++;
+    }
+
+    if (p != lp + size - 1) return 0;
+    if (numele != LP_HDR_NUMELE_UNKNOWN && numele != count) return 0;
+    return 1;
+}
+
 /* Seek the specified element and returns the pointer to the seeked element.
  * Positive indexes specify the zero-based element to seek from the head to
  * the tail, negative indexes specify elements starting from the tail, where
@@ -800,4 +869,3 @@ unsigned char *lpSeek(unsigned char *lp, long index) {
         return ele;
     }
 }
-

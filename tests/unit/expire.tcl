@@ -209,19 +209,17 @@ start_server {tags {"expire"}} {
         set e
     } {*not an integer*}
 
-    test {SET - use EX/PX option, TTL should not be reseted after loadaof} {
+    test {SET - use EX/PX/EXAT/PXAT option, TTL should not be reset after loadaof} {
         r config set appendonly yes
-        r set foo bar EX 100
+        r set foo-ex bar EX 100
+        r set foo-px bar PX 100000
+        r set foo-exat bar EXAT [expr {[clock seconds] + 100}]
+        r set foo-pxat bar PXAT [expr {[clock milliseconds] + 100000}]
         after 2000
         r debug loadaof
-        set ttl [r ttl foo]
-        assert {$ttl <= 98 && $ttl > 90}
-
-        r set foo bar PX 100000
-        after 2000
-        r debug loadaof
-        set ttl [r ttl foo]
-        assert {$ttl <= 98 && $ttl > 90}
+        foreach key {foo-ex foo-px foo-exat foo-pxat} {
+            assert_range [r ttl $key] 90 98
+        }
     }
 
     test {SET command will remove expire} {

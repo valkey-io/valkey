@@ -30,7 +30,9 @@
 #include "mt19937-64.h"
 #include "server.h"
 #include "rdb.h"
+#include "rdb_downgrade_compat.h"
 
+#include <stdbool.h>
 #include <stdarg.h>
 #include <sys/time.h>
 #include <unistd.h>
@@ -187,6 +189,7 @@ int redis_check_rdb(char *rdbfilename, FILE *fp) {
     char buf[1024];
     long long expiretime, now = mstime();
     static rio rdb; /* Pointed by global struct riostate. */
+    bool is_valkey_magic;
 
     int closefile = (fp == NULL);
     if (fp == NULL && (fp = fopen(rdbfilename,"r")) == NULL) return 1;
@@ -196,14 +199,25 @@ int redis_check_rdb(char *rdbfilename, FILE *fp) {
     rdb.update_cksum = rdbLoadProgressCallback;
     if (rioRead(&rdb,buf,9) == 0) goto eoferr;
     buf[9] = '\0';
-    if (memcmp(buf,"REDIS",5) != 0) {
+    if (memcmp(buf, "REDIS0", 6) == 0) {
+        is_valkey_magic = false;
+    } else if (memcmp(buf, "VALKEY", 6) == 0) {
+        is_valkey_magic = true;
+    } else {
         rdbCheckError("Wrong signature trying to load DB from file");
         goto err;
     }
-    rdbver = atoi(buf+5);
-    if (rdbver < 1 || rdbver > RDB_VERSION) {
+    rdbver = atoi(buf + 6);
+    if (rdbver < 1 ||
+        (rdbver >= RDB_FOREIGN_VERSION_MIN && !is_valkey_magic) ||
+        (rdbver > RDB_VERSION && server.rdb_version_check == RDB_VERSION_CHECK_STRICT)) {
         rdbCheckError("Can't handle RDB format version %d",rdbver);
         goto err;
+    }
+    
+    /* Log compatibility mode for higher versions */
+    if (rdbver > RDB_VERSION) {
+        rdbCheckInfo("RDB version %d detected, using downgrade compatibility (current version: %d)", rdbver, RDB_VERSION);
     }
 
     expiretime = -1;
@@ -214,6 +228,12 @@ int redis_check_rdb(char *rdbfilename, FILE *fp) {
         /* Read type. */
         rdbstate.doing = RDB_CHECK_DOING_READ_TYPE;
         if ((type = rdbLoadType(&rdb)) == -1) goto eoferr;
+
+        const char *unsupported = rdbDowngradeUnsupportedTypeReason(type);
+        if (unsupported) {
+            rdbCheckError("Cannot downgrade %s to Redis 6.0", unsupported);
+            goto err;
+        }
 
         /* Handle special types. */
         if (type == RDB_OPCODE_EXPIRETIME) {
@@ -261,6 +281,9 @@ int redis_check_rdb(char *rdbfilename, FILE *fp) {
             if ((expires_size = rdbLoadLen(&rdb,NULL)) == RDB_LENERR)
                 goto eoferr;
             continue; /* Read type again. */
+        } else if (type == RDB_OPCODE_SLOT_INFO) {
+            if (rdbLoadSlotInfoCompat(&rdb) == C_ERR) goto eoferr;
+            continue; /* Read type again. */
         } else if (type == RDB_OPCODE_AUX) {
             /* AUX: generic string-string fields. Use to add state to RDB
              * which is backward compatible. Implementations of RDB loading
@@ -307,7 +330,7 @@ int redis_check_rdb(char *rdbfilename, FILE *fp) {
         rdbstate.keys++;
         /* Read value */
         rdbstate.doing = RDB_CHECK_DOING_READ_OBJECT_VALUE;
-        if ((val = rdbLoadObject(type,&rdb,key->ptr)) == NULL) goto eoferr;
+        if ((val = rdbLoadObjectCompat(type,&rdb,key->ptr,NULL,rdbver)) == NULL) goto eoferr;
         /* Check if the key already expired. */
         if (expiretime != -1 && expiretime < now)
             rdbstate.already_expired++;

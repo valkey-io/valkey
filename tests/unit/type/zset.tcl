@@ -2262,6 +2262,18 @@ start_server {tags {"zset"}} {
         }
     }
 
+    test {ZSET btree unbounded lex range includes high-byte members} {
+        with_config zset-max-ziplist-entries 0 {
+            r del zlexhi
+            r zadd zlexhi 0 "a"
+            r zadd zlexhi 0 "\xff\x00bin"
+            assert_encoding btree zlexhi
+            assert_equal 2 [r zlexcount zlexhi - +]
+            assert_equal 2 [r zremrangebylex zlexhi - +]
+            assert_equal 0 [r exists zlexhi]
+        }
+    }
+
     test {ZSET btree order consistency when elements are moved} {
         with_config zset-max-ziplist-entries 0 {
             for {set times 0} {$times < 10} {incr times} {

@@ -192,10 +192,19 @@ unsigned long orderedIndexDeleteRangeByLex(OrderedIndex *oi, const_sds min, cons
         memcpy(min_packed + SCORE_SIZE, min, min_len);
     }
 
+    bool max_ex_eff = max_ex;
     if (max == shared.maxstring) {
-        max_packed = sdsnewlen(NULL, SCORE_SIZE + 1);
-        memcpy(max_packed, &score_prefix, SCORE_SIZE);
-        memset(max_packed + SCORE_SIZE, 0xFF, 1);
+        /* No single-byte suffix can bound its own continuations under lex
+         * order (a strict prefix sorts before them), so bound the range with
+         * the next score bucket's prefix, exclusive. Valid scores never map
+         * to an all-ones sortable (that bit pattern is a NaN), so the
+         * increment cannot wrap. */
+        uint64_t native = ntohu64(score_prefix);
+        native++;
+        uint64_t next_prefix = htonu64(native);
+        max_packed = sdsnewlen(NULL, SCORE_SIZE);
+        memcpy(max_packed, &next_prefix, SCORE_SIZE);
+        max_ex_eff = true;
     } else {
         size_t max_len = sdslen(max);
         max_packed = sdsnewlen(NULL, SCORE_SIZE + max_len);
@@ -204,7 +213,7 @@ unsigned long orderedIndexDeleteRangeByLex(OrderedIndex *oi, const_sds min, cons
     }
 
     rangeDeleteArgs args = {on_delete, privdata};
-    unsigned long deleted = fbtreeDeleteRangeByValue(fbt, min_packed, max_packed, min_ex, max_ex, rangeDeleteCallback, &args);
+    unsigned long deleted = fbtreeDeleteRangeByValue(fbt, min_packed, max_packed, min_ex, max_ex_eff, rangeDeleteCallback, &args);
     sdsfree(min_packed);
     sdsfree(max_packed);
     return deleted;
@@ -270,10 +279,11 @@ unsigned long orderedIndexCountLexRange(const OrderedIndex *oi, const_sds min, c
     memcpy(&score_prefix, first, SCORE_SIZE);
 
     /* Pack the bounds into [score][element] keys, then count in one shared
-     * descent. Open-ended sentinels pack to a key that sorts before all real
-     * elements (score prefix only) or after them (score prefix + 0xFF); the
-     * same construction the range-delete path uses. */
+     * descent. The minstring sentinel packs to the bare score prefix, which
+     * sorts before every real element; the maxstring sentinel is bounded by
+     * the next score bucket's prefix, exclusive. */
     sds min_packed, max_packed;
+    bool max_ex_eff = max_ex;
     if (min == shared.minstring) {
         min_packed = sdsnewlen(NULL, SCORE_SIZE);
         memcpy(min_packed, &score_prefix, SCORE_SIZE);
@@ -281,14 +291,19 @@ unsigned long orderedIndexCountLexRange(const OrderedIndex *oi, const_sds min, c
         min_packed = packLexBound(score_prefix, min);
     }
     if (max == shared.maxstring) {
-        max_packed = sdsnewlen(NULL, SCORE_SIZE + 1);
-        memcpy(max_packed, &score_prefix, SCORE_SIZE);
-        memset(max_packed + SCORE_SIZE, 0xFF, 1);
+        /* See orderedIndexDeleteRangeByLex: a byte suffix cannot bound its
+         * own continuations; use the next score prefix, exclusive. */
+        uint64_t native = ntohu64(score_prefix);
+        native++;
+        uint64_t next_prefix = htonu64(native);
+        max_packed = sdsnewlen(NULL, SCORE_SIZE);
+        memcpy(max_packed, &next_prefix, SCORE_SIZE);
+        max_ex_eff = true;
     } else {
         max_packed = packLexBound(score_prefix, max);
     }
 
-    unsigned long count = fbtreeCountRangeByValue(fbt, min_packed, max_packed, min_ex, max_ex);
+    unsigned long count = fbtreeCountRangeByValue(fbt, min_packed, max_packed, min_ex, max_ex_eff);
 
     sdsfree(min_packed);
     sdsfree(max_packed);

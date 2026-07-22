@@ -1787,6 +1787,21 @@ TEST_F(OrderedIndexTest, CountLexRangeEmpty) {
     ASSERT_EQ(countLexRange("a", "z", 0, 0), 0UL);
 }
 
+TEST_F(OrderedIndexTest, LexRangeUnboundedIncludesHighBytes) {
+    /* Members whose bytes sort above any single-byte suffix (e.g. leading
+     * 0xFF with continuations) must still fall inside the unbounded
+     * [minstring, maxstring] lex range. */
+    orderedIndexInsert(oi, 0.0, "alpha", 5);
+    orderedIndexInsert(oi, 0.0, "\xff", 1);
+    orderedIndexInsert(oi, 0.0, "\xff\x00tail", 6);
+    orderedIndexInsert(oi, 0.0, "\xff\xff\xff", 3);
+
+    ASSERT_EQ(orderedIndexCountLexRange(oi, shared.minstring, shared.maxstring, 0, 0), 4UL);
+
+    ASSERT_EQ(orderedIndexDeleteRangeByLex(oi, shared.minstring, shared.maxstring, 0, 0, NULL, NULL), 4UL);
+    ASSERT_EQ(orderedIndexLength(oi), 0UL);
+}
+
 /* ========== Memory tests ========== */
 
 TEST_F(OrderedIndexTest, DismissMemoryWalksItems) {

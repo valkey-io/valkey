@@ -119,12 +119,16 @@ static size_t mockHashtableScan(hashtable *ht, size_t cursor, hashtableScanFunct
 
 
 static bool mockHashtableScanHasPassedKey(hashtable *ht, const void *key, size_t cursor) {
-    // Just in case, if it's not one of our hashtables, use the unmocked function
-    if (ht != kvstoreGetHashtable(server.db[0]->keys, 0) &&
-        ht != kvstoreGetHashtable(server.db[1]->keys, 0))
-        return __real_hashtableScanHasPassedKey(ht, key, cursor);
+    // If it's one of our tables, use the mock logic
+    bool itsOurs = false;
+    if (server.db[0]->keys && ht == kvstoreGetHashtable(server.db[0]->keys, 0)) itsOurs = true;
+    if (server.db[1]->keys && ht == kvstoreGetHashtable(server.db[1]->keys, 0)) itsOurs = true;
 
-    return ((const char *)key)[0] < (char)('A' + cursor);
+    // Mock logic uses a lexigraphic cursor
+    if (itsOurs) return ((const char *)key)[0] < (char)('A' + cursor);
+
+    // Otherwise, use the real logic for other hashtables
+    return __real_hashtableScanHasPassedKey(ht, key, cursor);
 }
 
 
@@ -572,6 +576,27 @@ class BgIterationTest : public ::testing::Test {
     }
 
 
+    // Expecting that a special FLUSHDB item has been inserted.
+    void expectReadFlushDB(bgIterator *iter, int db, bool withReplication = false) {
+        bgIteration_feedIterators();
+        bgIteratorItem *item = bgIteratorRead(iter);
+        bgIteration_feedIterators();
+
+        ASSERT_EQ(item->type, BGITERATOR_ITEM_FLUSHDB);
+        EXPECT_EQ(item->dbid, db);
+
+        if (withReplication) {
+            item = bgIteratorRead(iter);
+            bgIteration_feedIterators();
+            ASSERT_EQ(item->type, BGITERATOR_ITEM_REPLICATION);
+            EXPECT_EQ(item->dbid, db);
+            EXPECT_EQ(item->u.repl.cmd, lookupCommandByCString("FLUSHDB"));
+            EXPECT_EQ(item->u.repl.argc, 1);
+            EXPECT_THAT(item->u.repl.argv[0], robjEqualsStr("flushdb"));
+        }
+    }
+
+
     static void debugPrintBucketInfoCb(void *privdata, void *entry) {
         UNUSED(privdata);
         dbEntry *de = (dbEntry *)entry;
@@ -970,7 +995,7 @@ class BgIterationTest : public ::testing::Test {
 
 
     // Simulate execution of a FLUSHDB or FLUSHALL command
-    void simulateFlushDB(int db, int anInUseItem) {
+    void simulateFlushDB(int db, int anInUseItem = -1) {
         client *c = static_cast<client *>(zcalloc(sizeof(client)));
 
         if (db == -1) {
@@ -985,8 +1010,11 @@ class BgIterationTest : public ::testing::Test {
         c->argv = static_cast<robj **>(zcalloc(sizeof(robj *) * c->argc));
         c->argv[0] = createStringObjectFromCString(c->cmd->fullname);
 
-        dbEntry *de_in_use = getItem(anInUseItem);
-        EXPECT_EQ(de_in_use->refcount, 2u);
+        dbEntry *de_in_use;
+        if (anInUseItem >= 0) {
+            de_in_use = getItem(anInUseItem);
+            EXPECT_EQ(de_in_use->refcount, 2u);
+        }
 
         simulateUnblockedWrite(c); // FLUSHDB should never block
 
@@ -1000,7 +1028,9 @@ class BgIterationTest : public ::testing::Test {
             }
         }
 
-        EXPECT_EQ(de_in_use->refcount, 1u);
+        if (anInUseItem >= 0) {
+            EXPECT_EQ(de_in_use->refcount, 1u);
+        }
 
         // and replicate
 
@@ -1582,6 +1612,45 @@ TEST_F(BgIterationTest, modPastFutureItem_eventual) {
     expectReadComplete(it);
 }
 
+// Replication enabled, but NOT consistent.  In this case, if ANY of the keys have been iterated,
+//  ALL of the keys must be replicated so that the command can be processed properly on the replica.
+// With a past and future item, the future item will be expedited.  But in this case, we will ensure
+//  that there's a barrier item (flushdb) in the queue preventing expedite to front of line.
+TEST_F(BgIterationTest, modPastFutureItemBarrier_eventual) {
+    bgIterator *it = bgIteratorCreateFullScanIter("iter", BGITERATOR_CONSISTENCY_EVENTUAL, NULL,
+                                                  iteratorCleanupFn, PRIVDATA);
+
+    // In this test, we need a past and future key IN THE SAME DB (they're used in the same command).
+    //  DB1 has lots of buckets.  After reading item 9,
+    //    8 will be past, 10 will be in queue, 11-15 will be future.
+    expectReadKeySequence(it, 0, 9);
+
+    // Insert a FLUSHDB (barrier item) into the queue.
+    simulateFlushDB(0);
+
+    // We're going to write to key 8 (past) and read from key 12 (future)
+    // Even though key 12 is for READ in this command, it must be expedited so that it exists before
+    //  the associated replication is sent.
+    c = getSetGetClient(8, "xxx", 12);
+    simulateBlockedWrite(c);
+
+    // Key 12 will be expedited, BUT NOT TO THE FRONT - because the FLUSHDB item is a barrier item
+
+    expectReadKey(it, 10);          // was already in queue
+    expectReadFlushDB(it, 0, true); // and now the flush (with replication)
+    expectReadKey(it, 12);          // and then the expedited key
+
+    expectReadKeyWithUnblock(it, 11, 12); // reading key 11 unblocks 12
+
+    simulateUnblockedWriteWithModification(c);
+
+    // Continue...
+    expectReadKey(it, 13);
+    expectReadReplication(it, c);
+
+    expectReadKeySequence(it, 14, LAST_ITEM);
+    expectReadComplete(it);
+}
 
 // Replication NOT enabled.  A read-only key doesn't need to be expedited, even if other keys have
 //  been processed already.  (This should work identically for both consistent/non-consistent.

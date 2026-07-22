@@ -52,6 +52,23 @@ start_server [list overrides [list "dir" $server_path "dbfilename" "encodings.rd
   } $csv_dump
 }
 
+set hash_server_path [tmpdir "server.rdb-hash-listpack-value"]
+
+start_server [list overrides [list "dir" $hash_server_path] keep_persistence true] {
+    test "RDB saves a listpack hash with a value above a later limit" {
+        r hset hash field oversized
+        assert_encoding listpack hash
+        r save
+    }
+}
+
+start_server [list overrides [list "dir" $hash_server_path "hash-max-listpack-value" 1] keep_persistence true] {
+    test "RDB load converts a listpack hash that exceeds hash-max-listpack-value" {
+        assert_encoding hashtable hash
+        assert_equal oversized [r hget hash field]
+    }
+}
+
 start_server_and_kill_it [list "dir" $server_path "dbfilename" "encodings-rdb987.rdb"] {
     test "RDB future version loading, strict version check" {
         wait_for_condition 50 100 {

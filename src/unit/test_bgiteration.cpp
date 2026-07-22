@@ -2659,6 +2659,7 @@ TEST_F(BgIterationTest, multiNotReplicatedButDelRecreateAccess) {
     bgIteration_keyDelete(0, delKey);
     sdsfree(delKey);
     simpleDelItem(6); // H1
+
     bgIteration_handleCommandReplication(c->db->id, c->cmd, c->argc, c->argv); // shouldn't replicate
 
     // Simulate SET H1 - the key doesn't exist, and would normally replicate and mark early iterate,

@@ -2276,7 +2276,6 @@ void bgIteration_keyDelete(int dbid, const_sds key) {
     }
 
     dbEntry *de = dbFind(server.db[dbid], (sds)key);
-    // JHB if (de == NULL) return;
     serverAssert(de != NULL); // This API should be called BEFORE removal from main dict
 
     // For consistent iterators, we need to make sure the item gets written before delete

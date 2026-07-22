@@ -355,8 +355,11 @@ typedef struct ValkeyModulePostExecUnitJob {
 /* The module keyspace notification subscribers list */
 static list *moduleKeyspaceSubscribers;
 
-/* The module post keyspace jobs list */
-static list *modulePostExecUnitJobs;
+/* The module post keyspace jobs list.
+ * Not static: postExecutionUnitOperations() reads its length directly
+ * (via listLength()) to fold the "any pending module job?" check into
+ * a single combined gate, without an extra cross-TU function call. */
+list *modulePostExecUnitJobs;
 
 /* Data structures related to the exported dictionary data structure. */
 typedef struct ValkeyModuleDict {

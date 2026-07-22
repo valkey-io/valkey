@@ -538,26 +538,28 @@ start_server {tags {"pubsub network"}} {
         r config set min-string-size-avoid-copy-reply-threaded 1
 
         set rd [valkey_deferring_client]
-        $rd hello 3
-        $rd read
+        try {
+            $rd hello 3
+            $rd read
 
-        # 16384 is the historical default copy-avoid threshold and the size
-        # reported in the bug; any size >= 1 also hits the forced config above.
-        set payload [string repeat X 16384]
-        assert_equal {1} [subscribe $rd wiretest]
+            # 16384 is the historical default copy-avoid threshold and the size
+            # reported in the bug; any size >= 1 also hits the forced config above.
+            set payload [string repeat X 16384]
+            assert_equal {1} [subscribe $rd wiretest]
 
-        $rd publish wiretest $payload
-        # If the frame is torn, the first RESP value is the bare bulk payload
-        # instead of the PUBLISH integer reply.
-        set publish_reply [$rd read]
-        if {$publish_reply ne 1} {
-            fail "PUBLISH reply expected integer 1, got value of length [string length $publish_reply] starting with '[string range $publish_reply 0 15]'"
+            $rd publish wiretest $payload
+            # If the frame is torn, the first RESP value is the bare bulk payload
+            # instead of the PUBLISH integer reply.
+            set publish_reply [$rd read]
+            if {$publish_reply ne 1} {
+                fail "PUBLISH reply expected integer 1, got value of length [string length $publish_reply] starting with '[string range $publish_reply 0 15]'"
+            }
+            assert_equal [list message wiretest $payload] [$rd read]
+        } finally {
+            catch {$rd close}
+            r config set min-string-size-avoid-copy-reply $copy_avoid
+            r config set min-string-size-avoid-copy-reply-threaded $copy_avoid_threaded
         }
-        assert_equal [list message wiretest $payload] [$rd read]
-
-        $rd close
-        r config set min-string-size-avoid-copy-reply $copy_avoid
-        r config set min-string-size-avoid-copy-reply-threaded $copy_avoid_threaded
-    } {OK} {resp3}
+    } {} {resp3}
 
 }

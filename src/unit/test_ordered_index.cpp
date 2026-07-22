@@ -1835,7 +1835,8 @@ TEST_F(OrderedIndexTest, PointerDeleteCollapsesSpilledPrefixSubtree) {
      * build a three-level tree so emptied children include inner nodes.
      * Deleting every item must release the spilled prefix buffers
      * (LeakSanitizer verifies). */
-    enum { N = 5000, PREFIX = 300 };
+    enum { N = 5000,
+           PREFIX = 300 };
     static OrderedIndexItem *items[N];
     char buf[PREFIX + 8];
     memset(buf, 'p', PREFIX);
@@ -1852,7 +1853,8 @@ TEST_F(OrderedIndexTest, PointerDeleteCollapsesSpilledPrefixSubtree) {
 TEST_F(OrderedIndexTest, RangeDeleteCollapsesSpilledPrefixSubtree) {
     /* Same construction, collapsed through the lex range-delete boundary
      * paths instead of item-by-item deletion. */
-    enum { N = 5000, PREFIX = 300 };
+    enum { N = 5000,
+           PREFIX = 300 };
     char buf[PREFIX + 8];
     memset(buf, 'p', PREFIX);
     for (int i = 0; i < N; i++) {
@@ -1871,16 +1873,18 @@ TEST_F(OrderedIndexTest, RangeDeleteCollapsesSpilledPrefixSubtree) {
     sdsfree(max);
 }
 
-TEST_F(OrderedIndexTest, EstimateMemoryScalesWithElementSize) {
-    /* The estimate samples live items, so trees with very different member
-     * sizes must produce estimates that reflect their actual footprint. */
-    enum { N = 200, BIG = 1024 };
+TEST_F(OrderedIndexTest, EstimateStructureMemoryTracksTreeShape) {
+    /* The structure estimate covers nodes only: it grows with item count
+     * and is independent of member payload size. */
+    enum { N = 200,
+           BIG = 1024 };
     for (int i = 0; i < N; i++) {
         char b[16];
         snprintf(b, sizeof(b), "s%05d", i);
         orderedIndexInsert(oi, 1.0, b, 6);
     }
-    size_t small_est = orderedIndexEstimateMemory(oi, 50);
+    size_t small_members = orderedIndexEstimateStructureMemory(oi);
+    ASSERT_GT(small_members, 0UL);
 
     orderedIndexFree(oi);
     oi = orderedIndexCreate();
@@ -1891,12 +1895,23 @@ TEST_F(OrderedIndexTest, EstimateMemoryScalesWithElementSize) {
         big[7] = 'x';
         orderedIndexInsert(oi, 1.0, big, BIG);
     }
-    size_t big_est = orderedIndexEstimateMemory(oi, 50);
+    size_t big_members = orderedIndexEstimateStructureMemory(oi);
 
-    /* At minimum the payload bytes; at most a few times that. */
-    ASSERT_GT(big_est, (size_t)N * BIG);
-    ASSERT_LT(big_est, (size_t)N * BIG * 3);
-    ASSERT_GT(big_est, small_est * 10);
+    /* Same shape, same structural cost — payload bytes are not included. */
+    ASSERT_EQ(big_members, small_members);
+    ASSERT_LT(big_members, (size_t)N * BIG);
+
+    /* Ten times the items needs roughly ten times the leaves. The band is
+     * loose at the low end because the single root inner node is a fixed
+     * cost that dominates small trees. */
+    for (int i = N; i < N * 10; i++) {
+        snprintf(big, 8, "%06d", i);
+        big[7] = 'x';
+        orderedIndexInsert(oi, 1.0, big, BIG);
+    }
+    size_t tenfold = orderedIndexEstimateStructureMemory(oi);
+    ASSERT_GT(tenfold, big_members * 3);
+    ASSERT_LT(tenfold, big_members * 20);
 }
 
 TEST_F(OrderedIndexTest, DismissMemoryWalksItems) {

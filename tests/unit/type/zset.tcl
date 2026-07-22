@@ -2274,6 +2274,20 @@ start_server {tags {"zset"}} {
         }
     }
 
+    test {ZSET btree MEMORY USAGE reflects member sizes} {
+        with_config zset-max-ziplist-entries 0 {
+            r del zmem
+            set big [string repeat x 1024]
+            for {set i 0} {$i < 100} {incr i} {
+                r zadd zmem $i "$big$i"
+            }
+            assert_encoding btree zmem
+            set usage [r memory usage zmem samples 50]
+            assert {$usage > [expr {100 * 1024}]}
+            assert {$usage < [expr {100 * 1024 * 3}]}
+        }
+    }
+
     test {ZSET btree order consistency when elements are moved} {
         with_config zset-max-ziplist-entries 0 {
             for {set times 0} {$times < 10} {incr times} {

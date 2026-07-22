@@ -1238,9 +1238,20 @@ size_t objectComputeSize(robj *key, robj *o, size_t sample_size, int dbid) {
         if (o->encoding == OBJ_ENCODING_LISTPACK) {
             asize += zmalloc_size(objectGetVal(o));
         } else if (o->encoding == OBJ_ENCODING_BTREE) {
-            hashtable *ht = ((zset *)objectGetVal(o))->ht;
-            OrderedIndex *oi = ((zset *)objectGetVal(o))->oi;
-            asize += sizeof(zset) + orderedIndexEstimateMemory(oi, sample_size) + hashtableMemUsage(ht);
+            zset *zs = objectGetVal(o);
+            hashtableIterator iter;
+            hashtableInitIterator(&iter, zs->ht, 0);
+            void *next;
+
+            asize += sizeof(zset) + orderedIndexEstimateStructureMemory(zs->oi) + hashtableMemUsage(zs->ht);
+            /* The hashtable entries are the packed items shared with the
+             * ordered index, so sampling them covers the member payloads. */
+            while (hashtableNext(&iter, &next) && samples < sample_size) {
+                elesize += sdsAllocSize((sds)next);
+                samples++;
+            }
+            hashtableCleanupIterator(&iter);
+            if (samples) asize += (double)elesize / samples * hashtableSize(zs->ht);
         } else {
             serverPanic("Unknown sorted set encoding");
         }

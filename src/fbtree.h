@@ -25,7 +25,7 @@ const_sds fbtreePeekMax(fbtreeIndex *fbt);
 void fbtreeEmpty(fbtreeIndex *fbt);
 void fbtreeFree(fbtreeIndex *fbt);
 unsigned long fbtreeLength(fbtreeIndex *fbt);
-size_t fbtreeEstimateMemory(fbtreeIndex *fbt, size_t sample_size);
+size_t fbtreeEstimateStructureMemory(fbtreeIndex *fbt);
 unsigned long fbtreeHeight(const fbtreeIndex *fbt);
 void fbtreeInitIterator(fbtreeIterator *iterator, fbtreeIndex *fbt);
 void fbtreeResetIterator(fbtreeIterator *iterator);

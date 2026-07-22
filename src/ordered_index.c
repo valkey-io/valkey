@@ -511,8 +511,8 @@ void orderedIndexDismissMemory(OrderedIndex *oi) {
     fbtreeDismissMemory((fbtreeIndex *)oi);
 }
 
-size_t orderedIndexEstimateMemory(const OrderedIndex *oi, size_t sample_size) {
-    return fbtreeEstimateMemory((fbtreeIndex *)oi, sample_size);
+size_t orderedIndexEstimateStructureMemory(const OrderedIndex *oi) {
+    return fbtreeEstimateStructureMemory((fbtreeIndex *)oi);
 }
 
 /* ==========================================================================

@@ -212,8 +212,10 @@ void orderedIndexSeekToLexRange(OrderedIndexIterator *iter, const_sds min, const
  * on next access. Used during lazy-free to reduce RSS without blocking. */
 void orderedIndexDismissMemory(OrderedIndex *oi);
 
-/* Estimate total memory usage by averaging the specified number of sample elements. */
-size_t orderedIndexEstimateMemory(const OrderedIndex *oi, size_t sample_size);
+/* Estimate the memory used by the index structure itself. Item payloads are
+ * owned jointly with the caller (e.g. a companion hashtable) and are not
+ * included; callers account for them by sampling the items they hold. */
+size_t orderedIndexEstimateStructureMemory(const OrderedIndex *oi);
 
 /* Defrag data structure internals. Returns new pointer if reallocated. */
 OrderedIndex *orderedIndexDefragInternals(OrderedIndex *oi, void *(*defragfn)(void *));

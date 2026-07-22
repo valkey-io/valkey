@@ -1930,7 +1930,7 @@ static bool rdbHashListpackExceedsMaxValue(unsigned char *lp) {
 
     while (p) {
         lpGet(p, &len, intbuf);
-        if (len > server.hash_max_listpack_value) return true;
+        if ((size_t)len > server.hash_max_listpack_value) return true;
         p = lpNext(lp, p);
     }
 
@@ -2384,8 +2384,8 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
         /* Fix the object encoding, and make sure to convert the encoded
          * data type into the base type if accordingly to the current
          * configuration there are too many elements in the encoded data
-         * type. Note that we only check the length and not max element
-         * size as this is an O(N) scan. Eventually everything will get
+         * type. Hash listpacks also check the maximum field and value size.
+         * Other encodings only check the length; eventually everything gets
          * converted. */
         switch (rdbtype) {
         case RDB_TYPE_HASH_ZIPMAP:
@@ -2587,7 +2587,8 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
                 goto emptykey;
             }
 
-            if (hashTypeLength(o) > server.hash_max_listpack_entries)
+            if (hashTypeLength(o) > server.hash_max_listpack_entries ||
+                rdbHashListpackExceedsMaxValue(objectGetVal(o)))
                 hashTypeConvert(o, OBJ_ENCODING_HASHTABLE);
             else
                 objectSetVal(o, lpShrinkToFit(objectGetVal(o)));

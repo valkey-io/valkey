@@ -704,7 +704,7 @@ int redis_check_rdb(char *rdbfilename, FILE *fp) {
         } else if (type == RDB_OPCODE_SLOT_IMPORT) {
             robj *job_name;
             if ((job_name = rdbLoadStringObject(&rdb)) == NULL) goto eoferr;
-            if (sdslen(objectGetVal(job_name)) != CLUSTER_NAMELEN) {
+            if (sdslen(job_name->ptr) != CLUSTER_NAMELEN) {
                 rdbCheckError("Invalid slot import job name length in RDB");
                 decrRefCount(job_name);
                 goto err;

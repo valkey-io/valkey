@@ -390,7 +390,7 @@ int clusterRDBLoadSlotImport(rio *rdb) {
     list *slot_ranges = createSlotRangeList();
     uint64_t num_slot_ranges;
     if ((job_name = rdbLoadStringObject(rdb)) == NULL) goto err;
-    if (sdslen(objectGetVal(job_name)) != CLUSTER_NAMELEN) {
+    if (sdslen(job_name->ptr) != CLUSTER_NAMELEN) {
         serverLog(LL_WARNING, "Invalid slot import job name length in RDB");
         goto err;
     }

@@ -62,6 +62,7 @@
 
 #include "server.h"
 #include "intset.h" /* Compact integer set structure */
+#include "mt19937-64.h"
 #include <math.h>
 
 #include "valkey_strtod.h"
@@ -630,24 +631,28 @@ static int zslParseRange(robj *min, robj *max, zrangespec *spec) {
     if (min->encoding == OBJ_ENCODING_INT) {
         spec->min = (long)objectGetVal(min);
     } else {
-        if (((char *)objectGetVal(min))[0] == '(') {
-            spec->min = valkey_strtod((char *)objectGetVal(min) + 1, &eptr);
+        char *s = objectGetVal(min);
+        size_t len = sdslen(s);
+        if (s[0] == '(') {
+            spec->min = valkey_strtod_n(s + 1, len - 1, &eptr);
             if (eptr[0] != '\0' || isnan(spec->min)) return C_ERR;
             spec->minex = 1;
         } else {
-            spec->min = valkey_strtod((char *)objectGetVal(min), &eptr);
+            spec->min = valkey_strtod_n(s, len, &eptr);
             if (eptr[0] != '\0' || isnan(spec->min)) return C_ERR;
         }
     }
     if (max->encoding == OBJ_ENCODING_INT) {
         spec->max = (long)objectGetVal(max);
     } else {
-        if (((char *)objectGetVal(max))[0] == '(') {
-            spec->max = valkey_strtod((char *)objectGetVal(max) + 1, &eptr);
+        char *s = objectGetVal(max);
+        size_t len = sdslen(s);
+        if (s[0] == '(') {
+            spec->max = valkey_strtod_n(s + 1, len - 1, &eptr);
             if (eptr[0] != '\0' || isnan(spec->max)) return C_ERR;
             spec->maxex = 1;
         } else {
-            spec->max = valkey_strtod((char *)objectGetVal(max), &eptr);
+            spec->max = valkey_strtod_n(s, len, &eptr);
             if (eptr[0] != '\0' || isnan(spec->max)) return C_ERR;
         }
     }
@@ -696,9 +701,9 @@ static int zslParseLexRangeItem(robj *item, sds *dest, int *ex) {
     }
 }
 
-/* Free a lex range structure, must be called only after zslParseLexRange()
+/* Free a lex range structure, must be called only after zsetParseLexRange()
  * populated the structure with success (C_OK returned). */
-void zslFreeLexRange(zlexrangespec *spec) {
+void zsetFreeLexRange(zlexrangespec *spec) {
     if (spec->min != shared.minstring && spec->min != shared.maxstring) sdsfree(spec->min);
     if (spec->max != shared.minstring && spec->max != shared.maxstring) sdsfree(spec->max);
 }
@@ -706,9 +711,9 @@ void zslFreeLexRange(zlexrangespec *spec) {
 /* Populate the lex rangespec according to the objects min and max.
  *
  * Return C_OK on success. On error C_ERR is returned.
- * When OK is returned the structure must be freed with zslFreeLexRange(),
+ * When OK is returned the structure must be freed with zsetFreeLexRange(),
  * otherwise no release is needed. */
-int zslParseLexRange(robj *min, robj *max, zlexrangespec *spec) {
+int zsetParseLexRange(robj *min, robj *max, zlexrangespec *spec) {
     /* The range can't be valid if objects are integer encoded.
      * Every item must start with ( or [. */
     if (min->encoding == OBJ_ENCODING_INT || max->encoding == OBJ_ENCODING_INT) return C_ERR;
@@ -716,7 +721,7 @@ int zslParseLexRange(robj *min, robj *max, zlexrangespec *spec) {
     spec->min = spec->max = NULL;
     if (zslParseLexRangeItem(min, &spec->min, &spec->minex) == C_ERR ||
         zslParseLexRangeItem(max, &spec->max, &spec->maxex) == C_ERR) {
-        zslFreeLexRange(spec);
+        zsetFreeLexRange(spec);
         return C_ERR;
     } else {
         return C_OK;
@@ -841,11 +846,7 @@ zskiplistNode *zslNthInLexRange(zskiplist *zsl, zlexrangespec *range, long n) {
  *----------------------------------------------------------------------------*/
 
 static double zzlStrtod(unsigned char *vstr, unsigned int vlen) {
-    char buf[128];
-    if (vlen > sizeof(buf) - 1) vlen = sizeof(buf) - 1;
-    memcpy(buf, vstr, vlen);
-    buf[vlen] = '\0';
-    return valkey_strtod(buf, NULL);
+    return valkey_strtod_n((const char *)vstr, vlen, NULL);
 }
 
 double zzlGetScore(unsigned char *sptr) {
@@ -864,6 +865,25 @@ double zzlGetScore(unsigned char *sptr) {
     }
 
     return score;
+}
+
+/* Validate that none of the scores in a listpack-encoded sorted set is NAN.
+ * The structural layout (member, score, member, score, ...) must already have
+ * been validated by lpValidateIntegrityAndDups. Returns 1 if all scores are
+ * valid, 0 if a NAN score is found. This guards against crafted RESTORE
+ * payloads: zslInsertNode() asserts the score is not NAN, so a NAN score in a
+ * listpack zset would crash the server when it is later converted to a
+ * skiplist. The skiplist RDB format rejects NAN scores at load time; this is
+ * the equivalent check for the listpack format. */
+int zzlValidateScores(unsigned char *zl) {
+    unsigned char *eptr = lpSeek(zl, 0), *sptr;
+    while (eptr != NULL) {
+        sptr = lpNext(zl, eptr);
+        if (sptr == NULL) return 0; /* odd number of elements */
+        if (isnan(zzlGetScore(sptr))) return 0;
+        eptr = lpNext(zl, sptr);
+    }
+    return 1;
 }
 
 /* Return a listpack element as an SDS string. */
@@ -1696,17 +1716,17 @@ robj *zsetDup(robj *o) {
     zset *zs;
     zset *new_zs;
 
-    serverAssert(o->type == OBJ_ZSET);
+    serverAssert(objectGetType(o) == OBJ_ZSET);
 
     /* Create a new sorted set object that have the same encoding as the original object's encoding */
-    if (o->encoding == OBJ_ENCODING_LISTPACK) {
+    if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) {
         unsigned char *zl = objectGetVal(o);
         size_t sz = lpBytes(zl);
         unsigned char *new_zl = zmalloc(sz);
         memcpy(new_zl, zl, sz);
         zobj = createObject(OBJ_ZSET, new_zl);
         zobj->encoding = OBJ_ENCODING_LISTPACK;
-    } else if (o->encoding == OBJ_ENCODING_SKIPLIST) {
+    } else if (objectGetEncoding(o) == OBJ_ENCODING_SKIPLIST) {
         zobj = createZsetObject();
         zs = objectGetVal(o);
         new_zs = objectGetVal(zobj);
@@ -1985,7 +2005,7 @@ void zremrangeGenericCommand(client *c, zrange_type rangetype) {
         }
     } else if (rangetype == ZRANGE_LEX) {
         notify_type = "zremrangebylex";
-        if (zslParseLexRange(c->argv[2], c->argv[3], &lexrange) != C_OK) {
+        if (zsetParseLexRange(c->argv[2], c->argv[3], &lexrange) != C_OK) {
             addReplyError(c, "min or max not valid string range item");
             return;
         }
@@ -2052,7 +2072,7 @@ void zremrangeGenericCommand(client *c, zrange_type rangetype) {
     addReplyLongLong(c, deleted);
 
 cleanup:
-    if (rangetype == ZRANGE_LEX) zslFreeLexRange(&lexrange);
+    if (rangetype == ZRANGE_LEX) zsetFreeLexRange(&lexrange);
 }
 
 void zremrangebyrankCommand(client *c) {
@@ -2507,7 +2527,10 @@ static void zdiffAlgorithm2(zsetopsrc *src, long setnum, zset *dstzset, size_t *
 
             /* Exit if result set is empty as any additional removal
              * of elements will have no effect. */
-            if (cardinality == 0) break;
+            if (cardinality == 0) {
+                zuiDiscardDirtyValue(&zval);
+                break;
+            }
         }
         zuiClearIterator(&src[j]);
 
@@ -3392,14 +3415,14 @@ void zlexcountCommand(client *c) {
     unsigned long count = 0;
 
     /* Parse the range arguments */
-    if (zslParseLexRange(c->argv[2], c->argv[3], &range) != C_OK) {
+    if (zsetParseLexRange(c->argv[2], c->argv[3], &range) != C_OK) {
         addReplyError(c, "min or max not valid string range item");
         return;
     }
 
     /* Lookup the sorted set */
     if ((zobj = lookupKeyReadOrReply(c, key, shared.czero)) == NULL || checkType(c, zobj, OBJ_ZSET)) {
-        zslFreeLexRange(&range);
+        zsetFreeLexRange(&range);
         return;
     }
 
@@ -3412,7 +3435,7 @@ void zlexcountCommand(client *c) {
 
         /* No "first" element */
         if (eptr == NULL) {
-            zslFreeLexRange(&range);
+            zsetFreeLexRange(&range);
             addReply(c, shared.czero);
             return;
         }
@@ -3458,7 +3481,7 @@ void zlexcountCommand(client *c) {
         serverPanic("Unknown sorted set encoding");
     }
 
-    zslFreeLexRange(&range);
+    zsetFreeLexRange(&range);
     addReplyLongLong(c, count);
 }
 
@@ -3678,7 +3701,7 @@ void zrangeGenericCommand(zrange_result_handler *handler,
 
     case ZRANGE_LEX:
         /* Z[REV]RANGEBYLEX, ZRANGESTORE [REV]RANGEBYLEX */
-        if (zslParseLexRange(c->argv[minidx], c->argv[maxidx], &lexrange) != C_OK) {
+        if (zsetParseLexRange(c->argv[minidx], c->argv[maxidx], &lexrange) != C_OK) {
             addReplyError(c, "min or max not valid string range item");
             return;
         }
@@ -3729,7 +3752,7 @@ void zrangeGenericCommand(zrange_result_handler *handler,
 cleanup:
 
     if (rangetype == ZRANGE_LEX) {
-        zslFreeLexRange(&lexrange);
+        zsetFreeLexRange(&lexrange);
     }
 }
 

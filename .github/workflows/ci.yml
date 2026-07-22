@@ -35,7 +35,9 @@ jobs:
       - name: make
         # Fail build if there are warnings
         # build with TLS just for compilation coverage
-        run: make -j4 all-with-unit-tests SERVER_CFLAGS='-Werror' BUILD_TLS=yes USE_FAST_FLOAT=yes USE_LIBBACKTRACE=yes
+        run: |
+          sudo apt-get install pkg-config libgtest-dev libgmock-dev
+          make -j4 all-with-unit-tests SERVER_CFLAGS='-Werror' BUILD_TLS=yes USE_LIBBACKTRACE=yes
       - name: test
         run: |
           sudo apt-get install tcl8.6 tclx
@@ -50,7 +52,7 @@ jobs:
           if [[ ! -z "$dirty" ]]; then echo "$dirty"; exit 1; fi
       - name: unit tests
         run: |
-          ./src/valkey-unit-tests
+          make test-unit
 
   test-ubuntu-latest-compatibility:
     runs-on: ubuntu-latest
@@ -62,6 +64,9 @@ jobs:
           - {version: "8.0.6", file: "valkey-8.0.6-noble-x86_64.tar.gz"}
           - {version: "8.1.4", file: "valkey-8.1.4-noble-x86_64.tar.gz"}
     steps:
+      - name: Install gtest
+        run: |
+          sudo apt-get install pkg-config libgtest-dev libgmock-dev
       - name: Install libbacktrace
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -74,7 +79,7 @@ jobs:
       - name: make
         # Fail build if there are warnings
         # build with TLS just for compilation coverage
-        run: make -j4 all-with-unit-tests SERVER_CFLAGS='-Werror' BUILD_TLS=yes USE_FAST_FLOAT=yes USE_LIBBACKTRACE=yes
+        run: make -j4 all-with-unit-tests SERVER_CFLAGS='-Werror' BUILD_TLS=yes USE_LIBBACKTRACE=yes
 
       - name: Install old server (${{ matrix.server.version }}) for compatibility testing
         run: |
@@ -103,7 +108,7 @@ jobs:
           sudo apt-get install -y cmake libssl-dev
           mkdir -p build-release
           cd build-release
-          cmake -DCMAKE_BUILD_TYPE=Release .. -DBUILD_TLS=yes -DBUILD_UNIT_TESTS=yes
+          cmake -DCMAKE_BUILD_TYPE=Release .. -DBUILD_TLS=yes -DBUILD_UNIT_GTESTS=yes
           make -j$(nproc)
       - name: test
         run: |
@@ -111,8 +116,7 @@ jobs:
           ./utils/gen-test-certs.sh
           ./build-release/runtest --verbose --tags -slow --dump-logs --tls
       - name: unit tests
-        run: |
-          ./build-release/bin/valkey-unit-tests
+        run: make -C build-release test-unit
 
   test-sanitizer-address:
     runs-on: ubuntu-latest
@@ -128,7 +132,9 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: make
         # build with TLS module just for compilation coverage
-        run: make -j4 all-with-unit-tests SANITIZER=address SERVER_CFLAGS='-Werror' BUILD_TLS=module USE_LIBBACKTRACE=yes
+        run: |
+          sudo apt-get install pkg-config libgtest-dev libgmock-dev
+          make -j4 all-with-unit-tests SANITIZER=address SERVER_CFLAGS='-Werror' BUILD_TLS=module USE_LIBBACKTRACE=yes
       - name: testprep
         run: sudo apt-get install tcl8.6 tclx -y
       - name: test
@@ -136,7 +142,8 @@ jobs:
       - name: module api test
         run: CFLAGS='-Werror' ./runtest-moduleapi --verbose --dump-logs
       - name: unit tests
-        run: ./src/valkey-unit-tests
+        run: |
+          make test-unit
 
   test-rdma:
     runs-on: ubuntu-latest
@@ -160,6 +167,7 @@ jobs:
           make -j4 BUILD_RDMA=yes USE_LIBBACKTRACE=yes
       - name: clone-rxe-kmod
         run: |
+          uname -a
           mkdir -p tests/rdma/rxe
           git clone https://github.com/pizhenwei/rxe.git tests/rdma/rxe
           make -C tests/rdma/rxe
@@ -210,7 +218,14 @@ jobs:
 
   build-macos-latest:
     runs-on: macos-latest
+    env:
+      CC: /opt/homebrew/opt/llvm/bin/clang
+      CXX: /opt/homebrew/opt/llvm/bin/clang++
+      AR: /opt/homebrew/opt/llvm/bin/llvm-ar
+      RANLIB: /opt/homebrew/opt/llvm/bin/llvm-ranlib
     steps:
+      - name: Install build dependencies
+        run: brew install llvm googletest
       - name: Install libbacktrace
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -222,7 +237,11 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: make
         # Build with additional upcoming features
-        run: make -j3 all-with-unit-tests SERVER_CFLAGS='-Werror' USE_FAST_FLOAT=yes USE_LIBBACKTRACE=yes
+        run: |
+          make -j3 all-with-unit-tests SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes LIBBACKTRACE_PREFIX=/usr/local
+      - name: unit tests
+        run: |
+          make test-unit
 
   build-32bit:
     runs-on: ubuntu-latest
@@ -240,16 +259,36 @@ jobs:
           cd libbacktrace && ./configure CFLAGS="-m32" --prefix=/usr/local/libbacktrace32 && make && sudo make install
       - name: Checkout Valkey
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Install gtest
+        run: |
+          sudo apt-get update
+          sudo apt-get install libgtest-dev
+          mkdir -p /tmp/gtest32
+          cd /tmp/gtest32
+          cmake -B build32 \
+              -DCMAKE_BUILD_TYPE=Release \
+              -DCMAKE_C_FLAGS="-m32" \
+              -DCMAKE_CXX_FLAGS="-m32" \
+              -DCMAKE_EXE_LINKER_FLAGS="-m32" \
+              /usr/src/googletest
+          cmake --build build32 --parallel
+          sudo cp build32/lib/*.a /usr/lib32/
+          cd $GITHUB_WORKSPACE
       - name: make
         # Fast float requires C++ 32-bit libraries to compile on 64-bit ubuntu
         # machine i.e. "-cross" suffixed version. Cross-compiling c++ to 32-bit
         # also requires multilib support for g++ compiler i.e. "-multilib"
         # suffixed version of g++. g++-multilib generally includes libstdc++.
         # *cross version as well, but it is also added explicitly just in case.
-        run: make -j4 SERVER_CFLAGS='-Werror' 32bit USE_FAST_FLOAT=yes USE_LIBBACKTRACE=yes LIBBACKTRACE_PREFIX=/usr/local/libbacktrace32
+        run: |
+          make -j4 SERVER_CFLAGS='-Werror' 32bit USE_LIBBACKTRACE=yes LIBBACKTRACE_PREFIX=/usr/local/libbacktrace32 \
+            GTEST_CFLAGS="-I/usr/src/googletest/googletest/include -I/usr/src/googletest/googlemock/include" \
+            GTEST_LIBS="/usr/lib32/libgtest.a /usr/lib32/libgmock.a"
       - name: unit tests
         run: |
-          ./src/valkey-unit-tests
+          make test-unit \
+            GTEST_CFLAGS="-I/usr/src/googletest/googletest/include -I/usr/src/googletest/googlemock/include" \
+            GTEST_LIBS="/usr/lib32/libgtest.a /usr/lib32/libgmock.a"
 
   build-libc-malloc:
     runs-on: ubuntu-latest
@@ -264,7 +303,7 @@ jobs:
       - name: Checkout Valkey
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: make
-        run: make -j4 SERVER_CFLAGS='-Werror' MALLOC=libc USE_FAST_FLOAT=yes USE_LIBBACKTRACE=yes
+        run: make -j4 SERVER_CFLAGS='-Werror' MALLOC=libc USE_LIBBACKTRACE=yes
 
   build-almalinux8-jemalloc:
     runs-on: ubuntu-latest
@@ -278,12 +317,12 @@ jobs:
           path: libbacktrace
       - name: Build libbacktrace
         run: |
-          dnf -y install epel-release gcc gcc-c++ make procps-ng which
+          dnf -y install epel-release gcc gcc-c++ make procps-ng which git cmake
           cd libbacktrace && ./configure && make && make install
       - name: Checkout Valkey
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: make
-        run: make -j4 SERVER_CFLAGS='-Werror' USE_FAST_FLOAT=yes USE_LIBBACKTRACE=yes
+        run: make -j4 SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
 
   format-yaml:
     runs-on: ubuntu-latest
@@ -298,7 +337,7 @@ jobs:
 
       - name: Setup YAML formatter
         run: |
-          go install github.com/google/yamlfmt/cmd/yamlfmt@latest
+          go install github.com/google/yamlfmt/cmd/yamlfmt@v0.21.0
 
       - name: Run yamlfmt
         id: yamlfmt

@@ -77,7 +77,7 @@ proc kill_server config {
     }
 
     # check for leaks
-    if {![dict exists $config "skipleaks"]} {
+    if {$::leaks && ![dict exists $config "skipleaks"]} {
         catch {
             if {[string match {*Darwin*} [exec uname -a]]} {
                 tags {"leaks"} {
@@ -364,8 +364,9 @@ proc spawn_server {executable config_file stdout stderr args} {
         read stdin 1
     }
 
-    # Tell the test server about this new instance.
-    send_data_packet $::test_server_fd server-spawned "$pid - $::curfile"
+    # Tell the test server about this new instance. Send the log path too so
+    # the orchestrator can dump it if the test times out.
+    send_data_packet $::test_server_fd server-spawned [list $pid $stdout $::curfile]
     return $pid
 }
 
@@ -588,7 +589,7 @@ proc start_server {options {code undefined}} {
 
     if {$::io_threads} {
         dict set config "io-threads" 2
-        dict set config "events-per-io-thread" 0
+        dict set config "io-threads-always-active" yes
         dict set config "min-io-threads-avoid-copy-reply" 2
     }
 

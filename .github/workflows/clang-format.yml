@@ -1,5 +1,8 @@
 name: Clang Format Check
 
+permissions:
+  contents: read
+
 on:
   push:
     paths-ignore:
@@ -27,7 +30,6 @@ jobs:
       - name: Set up Clang
         run: |
           sudo apt-get update -y
-          sudo apt-get upgrade -y
           sudo apt-get install software-properties-common -y
           wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | gpg --dearmor | sudo tee /usr/share/keyrings/llvm-toolchain.gpg > /dev/null
           echo "deb [signed-by=/usr/share/keyrings/llvm-toolchain.gpg] http://apt.llvm.org/$(lsb_release -cs)/ llvm-toolchain-$(lsb_release -cs)-18 main" | sudo tee /etc/apt/sources.list.d/llvm.list
@@ -39,7 +41,7 @@ jobs:
           # Run clang-format and capture the diff
           cd src
           shopt -s globstar
-          clang-format-18 -i **/*.c **/*.h
+          clang-format-18 -i **/*.c **/*.h **/*.cpp **/*.hpp
           # Capture the diff output
           DIFF=$(git diff)
           if [ ! -z "$DIFF" ]; then

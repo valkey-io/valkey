@@ -43,6 +43,7 @@
 #include <openssl/conf.h>
 #include <openssl/ssl.h>
 #include <openssl/x509.h>
+#include <openssl/x509v3.h>
 #include <openssl/err.h>
 #include <openssl/rand.h>
 #include <openssl/pem.h>
@@ -465,6 +466,17 @@ static int tlsPasswordCallback(char *buf, int size, int rwflag, void *u) {
 /* Check a single X509 certificate validity */
 static bool isCertValid(X509 *cert) {
     if (!cert) return false;
+#if OPENSSL_VERSION_NUMBER >= 0x40000000L
+    int error = 0;
+    if (X509_check_certificate_times(NULL, cert, &error) != 1) {
+        if (error == X509_V_ERR_ERROR_IN_CERT_NOT_BEFORE_FIELD) {
+            serverLog(LL_WARNING, "Certificate has an invalid notBefore field");
+        } else if (error == X509_V_ERR_ERROR_IN_CERT_NOT_AFTER_FIELD) {
+            serverLog(LL_WARNING, "Certificate has an invalid notAfter field");
+        }
+        return false;
+    }
+#else
     const ASN1_TIME *not_before = X509_get0_notBefore(cert);
     const ASN1_TIME *not_after = X509_get0_notAfter(cert);
     if (!not_before || !not_after) return false;
@@ -472,6 +484,7 @@ static bool isCertValid(X509 *cert) {
         X509_cmp_current_time(not_after) < 0) {
         return false;
     }
+#endif
     return true;
 }
 
@@ -1224,7 +1237,7 @@ static void updatePendingData(tls_connection *conn) {
 }
 
 void updateSSLPendingFlag(tls_connection *conn) {
-    if (SSL_pending(conn->ssl) > 0) {
+    if (conn->ssl && SSL_pending(conn->ssl) > 0) {
         conn->flags |= TLS_CONN_FLAG_HAS_PENDING;
     } else {
         conn->flags &= ~TLS_CONN_FLAG_HAS_PENDING;
@@ -1277,8 +1290,8 @@ static void updateSSLState(connection *conn_) {
     updatePendingData(conn);
 }
 
-static int getCertFieldByName(X509 *cert, const char *field, char *out, size_t outlen) {
-    if (!cert || !field || !out) return 0;
+static int getCertSubjectFieldByName(X509 *cert, const char *field, char *out, size_t outlen) {
+    if (!cert || !field || !out || outlen == 0) return 0;
 
     int nid = -1;
 
@@ -1290,41 +1303,128 @@ static int getCertFieldByName(X509 *cert, const char *field, char *out, size_t o
 
     if (nid == -1) return 0;
 
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+    const X509_NAME *subject = X509_get_subject_name(cert);
+#else
     X509_NAME *subject = X509_get_subject_name(cert);
+#endif
     if (!subject) return 0;
 
-    return X509_NAME_get_text_by_NID(subject, nid, out, outlen) > 0;
+    /* X509_NAME_get_text_by_NID is deprecated in OpenSSL 4.0 */
+    int idx = X509_NAME_get_index_by_NID(subject, nid, -1);
+    if (idx < 0) return 0;
+
+    const X509_NAME_ENTRY *entry = X509_NAME_get_entry(subject, idx);
+    if (!entry) return 0;
+
+    const ASN1_STRING *data = X509_NAME_ENTRY_get_data(entry);
+    if (!data) return 0;
+
+    const unsigned char *str = ASN1_STRING_get0_data(data);
+    int len = ASN1_STRING_length(data);
+    if (!str || len <= 0) return 0;
+
+    /* Copy to output buffer, ensuring null termination */
+    size_t copy_len = (size_t)len < outlen - 1 ? (size_t)len : outlen - 1;
+    memcpy(out, str, copy_len);
+    out[copy_len] = '\0';
+
+    return 1;
 }
 
-sds tlsGetPeerUsername(connection *conn_) {
+/* Extract URI from Subject Alternative Name extension and return the first
+ * enabled Valkey user that matches a URI. Returns NULL if no match found.
+ * If cert_username is non-NULL, it is set to the last URI checked. */
+static user *getValidUserFromCertSanUri(X509 *cert, sds *cert_username) {
+    if (!cert) return NULL;
+
+    GENERAL_NAMES *san_names = X509_get_ext_d2i(cert, NID_subject_alt_name, NULL, NULL);
+    if (!san_names) return NULL;
+
+    user *result = NULL;
+    int num_names = sk_GENERAL_NAME_num(san_names);
+
+    for (int i = 0; i < num_names; i++) {
+        GENERAL_NAME *name = sk_GENERAL_NAME_value(san_names, i);
+
+        if (name->type == GEN_URI) {
+            ASN1_STRING *uri_asn1 = name->d.uniformResourceIdentifier;
+            const unsigned char *uri_data = ASN1_STRING_get0_data(uri_asn1);
+            int uri_len = ASN1_STRING_length(uri_asn1);
+
+            if (!uri_data || uri_len <= 0 || memchr(uri_data, '\0', uri_len)) {
+                serverLog(LL_DEBUG, "TLS: Invalid or malformed SAN URI in certificate");
+                continue;
+            }
+
+            if (cert_username) {
+                sdsfree(*cert_username);
+                *cert_username = sdsnewlen(uri_data, uri_len);
+            }
+
+            user *u = ACLGetUserByName((const char *)uri_data, uri_len);
+            if (u && (u->flags & USER_FLAG_ENABLED)) {
+                result = u;
+                break;
+            }
+        }
+    }
+
+    GENERAL_NAMES_free(san_names);
+    return result;
+}
+
+user *tlsGetPeerUser(connection *conn_, sds *cert_username) {
     tls_connection *conn = (tls_connection *)conn_;
     if (!conn || !SSL_is_init_finished(conn->ssl)) return NULL;
 
-    /* Find the corresponding field name from the enum mapping */
-    const char *field = NULL;
-    switch (server.tls_ctx_config.client_auth_user) {
-    case TLS_CLIENT_FIELD_CN:
-        field = "CN";
-        break;
-    default:
+    long verify_result = SSL_get_verify_result(conn->ssl);
+    if (verify_result != X509_V_OK) {
+        serverLog(LL_DEBUG, "TLS: Client certificate verification failed: %s",
+                  X509_verify_cert_error_string(verify_result));
         return NULL;
     }
 
-    if (!field) return NULL;
-
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+    X509 *cert = SSL_get0_peer_certificate(conn->ssl);
+#else
     X509 *cert = SSL_get_peer_certificate(conn->ssl);
+#endif
     if (!cert) return NULL;
 
-    char field_value[256];
-    sds result = NULL;
+    user *result = NULL;
 
-    if (getCertFieldByName(cert, field, field_value, sizeof(field_value))) {
-        result = sdsnew(field_value);
-    } else {
-        serverLog(LL_NOTICE, "TLS: Failed to extract field '%s' from certificate", field);
+    switch (server.tls_ctx_config.client_auth_user) {
+    case TLS_CLIENT_FIELD_URI:
+        result = getValidUserFromCertSanUri(cert, cert_username);
+        if (!result) {
+            serverLog(LL_VERBOSE, "TLS: No matching user found in certificate SAN URI fields");
+        }
+        break;
+
+    case TLS_CLIENT_FIELD_CN: {
+        char field_value[256];
+        if (getCertSubjectFieldByName(cert, "CN", field_value, sizeof(field_value))) {
+            if (cert_username) *cert_username = sdsnew(field_value);
+            result = ACLGetUserByName(field_value, strlen(field_value));
+            if (!result || !(result->flags & USER_FLAG_ENABLED)) {
+                serverLog(LL_VERBOSE, "TLS: No matching user found for certificate CN '%s'", field_value);
+                result = NULL;
+            }
+        } else {
+            serverLog(LL_DEBUG, "TLS: Failed to extract CN in certificate subject");
+        }
+        break;
     }
 
+    default:
+        break;
+    }
+
+#if OPENSSL_VERSION_NUMBER < 0x30000000L
     X509_free(cert);
+#endif
+
     return result;
 }
 
@@ -1538,6 +1638,7 @@ static int connTLSConnect(connection *conn_,
     unsigned char addr_buf[sizeof(struct in6_addr)];
 
     if (conn->c.state != CONN_STATE_NONE) return C_ERR;
+    if (addr == NULL) return C_ERR;
     ERR_clear_error();
 
     /* Check whether addr is an IP address, if not, use the value for Server Name Indication */
@@ -1710,6 +1811,9 @@ static ssize_t connTLSSyncWrite(connection *conn_, char *ptr, ssize_t size, long
         unsetBlockingTimeout(conn);
     }
 
+    if (ret < 0) {
+        conn->c.last_errno = errno;
+    }
     return ret;
 }
 
@@ -1725,6 +1829,9 @@ static ssize_t connTLSSyncRead(connection *conn_, char *ptr, ssize_t size, long 
         unsetBlockingTimeout(conn);
     }
 
+    if (ret < 0) {
+        conn->c.last_errno = errno;
+    }
     return ret;
 }
 
@@ -1762,6 +1869,9 @@ exit:
     if (!blocking) {
         unsetBlockingTimeout(conn);
     }
+    if (nread < 0) {
+        conn->c.last_errno = errno;
+    }
     return nread;
 }
 
@@ -1775,14 +1885,27 @@ static int tlsHasPendingData(void) {
 }
 
 static int tlsProcessPendingData(void) {
-    listIter li;
     listNode *ln;
 
     int processed = 0;
-    listRewind(pending_list, &li);
-    while ((ln = listNext(&li))) {
+    /* Pop each connection off the list before handling it. A handler may
+     * synchronously free another pending connection (e.g. CLIENT KILL ->
+     * freeClient -> connTLSClose -> listDelNode), so we must not hold an
+     * iterator into a node that could be freed out from under us.
+     *
+     * Connections with buffered data re-add themselves to the tail, so the
+     * length captured on entry bounds the loop and guarantees termination. */
+    unsigned long remaining = listLength(pending_list);
+    while (remaining-- > 0 && (ln = listFirst(pending_list)) != NULL) {
         tls_connection *conn = listNodeValue(ln);
-        if (conn->flags & TLS_CONN_FLAG_POSTPONE_UPDATE_STATE) continue;
+        listDelNode(pending_list, ln);
+        conn->pending_list_node = NULL;
+        if (conn->flags & TLS_CONN_FLAG_POSTPONE_UPDATE_STATE) {
+            /* Not handled now, but keep it pending for a later call. */
+            listAddNodeTail(pending_list, conn);
+            conn->pending_list_node = listLast(pending_list);
+            continue;
+        }
         tlsHandleEvent(conn, AE_READABLE);
         processed++;
     }
@@ -1796,12 +1919,19 @@ static sds connTLSGetPeerCert(connection *conn_) {
     tls_connection *conn = (tls_connection *)conn_;
     if ((conn_->type != connectionTypeTls()) || !conn->ssl) return NULL;
 
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+    X509 *cert = SSL_get0_peer_certificate(conn->ssl);
+#else
     X509 *cert = SSL_get_peer_certificate(conn->ssl);
+#endif
     if (!cert) return NULL;
 
     BIO *bio = BIO_new(BIO_s_mem());
     if (bio == NULL || !PEM_write_bio_X509(bio, cert)) {
         if (bio != NULL) BIO_free(bio);
+#if OPENSSL_VERSION_NUMBER < 0x30000000L
+        X509_free(cert);
+#endif
         return NULL;
     }
 
@@ -1809,6 +1939,10 @@ static sds connTLSGetPeerCert(connection *conn_) {
     long long bio_len = BIO_get_mem_data(bio, &bio_ptr);
     sds cert_pem = sdsnewlen(bio_ptr, bio_len);
     BIO_free(bio);
+
+#if OPENSSL_VERSION_NUMBER < 0x30000000L
+    X509_free(cert);
+#endif
 
     return cert_pem;
 }
@@ -1860,7 +1994,7 @@ static ConnectionType CT_TLS = {
 
     /* TLS specified methods */
     .get_peer_cert = connTLSGetPeerCert,
-    .get_peer_username = tlsGetPeerUsername,
+    .get_peer_user = tlsGetPeerUser,
 
     /* Miscellaneous */
     .connIntegrityChecked = connTLSIsIntegrityChecked,

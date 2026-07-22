@@ -144,13 +144,18 @@ typedef struct {
     rdbAuxFieldDecoder decoder;
 } rdbAuxFieldCodec;
 
+static void dictEntryDestructorSdsKeyHeapValue(void *entry) {
+    dictEntry *de = entry;
+    dictSdsDestructor(dictGetKey(de));
+    dictVanillaFree(dictGetVal(de));
+    zfree(de);
+}
+
 dictType rdbAuxFieldDictType = {
-    dictSdsCaseHash,       /* hash function */
-    NULL,                  /* key dup */
-    dictSdsKeyCaseCompare, /* key compare */
-    dictSdsDestructor,     /* key destructor */
-    dictVanillaFree,       /* val destructor */
-    NULL                   /* allow to expand */
+    .entryGetKey = dictEntryGetKey,
+    .hashFunction = dictSdsCaseHash,
+    .keyCompare = dictSdsKeyCaseCompare,
+    .entryDestructor = dictEntryDestructorSdsKeyHeapValue,
 };
 
 dict *rdbAuxFields = NULL;
@@ -711,33 +716,33 @@ int rdbLoadBinaryFloatValue(rio *rdb, float *val) {
 /* Return the RDB object type to use for saving object "o", or -1 if the object
  * can't be represented in the given RDB version (only for older RDB). */
 int rdbGetObjectType(robj *o, int rdbver) {
-    switch (o->type) {
+    switch (objectGetType(o)) {
     case OBJ_STRING: return RDB_TYPE_STRING;
     case OBJ_LIST:
-        if (o->encoding == OBJ_ENCODING_QUICKLIST || o->encoding == OBJ_ENCODING_LISTPACK)
+        if (objectGetEncoding(o) == OBJ_ENCODING_QUICKLIST || objectGetEncoding(o) == OBJ_ENCODING_LISTPACK)
             return RDB_TYPE_LIST_QUICKLIST_2;
         else
             serverPanic("Unknown list encoding");
     case OBJ_SET:
-        if (o->encoding == OBJ_ENCODING_INTSET)
+        if (objectGetEncoding(o) == OBJ_ENCODING_INTSET)
             return RDB_TYPE_SET_INTSET;
-        else if (o->encoding == OBJ_ENCODING_HASHTABLE)
+        else if (objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE)
             return RDB_TYPE_SET;
-        else if (o->encoding == OBJ_ENCODING_LISTPACK)
+        else if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK)
             return RDB_TYPE_SET_LISTPACK;
         else
             serverPanic("Unknown set encoding");
     case OBJ_ZSET:
-        if (o->encoding == OBJ_ENCODING_LISTPACK)
+        if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK)
             return RDB_TYPE_ZSET_LISTPACK;
-        else if (o->encoding == OBJ_ENCODING_SKIPLIST)
+        else if (objectGetEncoding(o) == OBJ_ENCODING_SKIPLIST)
             return RDB_TYPE_ZSET_2;
         else
             serverPanic("Unknown sorted set encoding");
     case OBJ_HASH:
-        if (o->encoding == OBJ_ENCODING_LISTPACK)
+        if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK)
             return RDB_TYPE_HASH_LISTPACK;
-        else if (o->encoding == OBJ_ENCODING_HASHTABLE)
+        else if (objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE)
             if (hashTypeHasVolatileFields(o))
                 if (rdbver >= 80)
                     return RDB_TYPE_HASH_2;
@@ -814,7 +819,7 @@ ssize_t rdbSaveStreamPEL(rio *rdb, rax *pel, int nacks) {
 /* Serialize the consumers of a stream consumer group into the RDB. Helper
  * function for the stream data type serialization. What we do here is to
  * persist the consumer metadata, and it's PEL, for each consumer. */
-size_t rdbSaveStreamConsumers(rio *rdb, streamCG *cg) {
+ssize_t rdbSaveStreamConsumers(rio *rdb, streamCG *cg) {
     ssize_t n, nwritten = 0;
 
     /* Number of consumers in this consumer group. */
@@ -867,13 +872,13 @@ size_t rdbSaveStreamConsumers(rio *rdb, streamCG *cg) {
  * Returns -1 on error, number of bytes written on success. */
 ssize_t rdbSaveObject(rio *rdb, robj *o, robj *key, int dbid, unsigned char rdbtype) {
     ssize_t n = 0, nwritten = 0;
-    if (o->type == OBJ_STRING) {
+    if (objectGetType(o) == OBJ_STRING) {
         /* Save a string value */
         if ((n = rdbSaveStringObject(rdb, o)) == -1) return -1;
         nwritten += n;
-    } else if (o->type == OBJ_LIST) {
+    } else if (objectGetType(o) == OBJ_LIST) {
         /* Save a list value */
-        if (o->encoding == OBJ_ENCODING_QUICKLIST) {
+        if (objectGetEncoding(o) == OBJ_ENCODING_QUICKLIST) {
             quicklist *ql = objectGetVal(o);
             quicklistNode *node = ql->head;
 
@@ -895,7 +900,7 @@ ssize_t rdbSaveObject(rio *rdb, robj *o, robj *key, int dbid, unsigned char rdbt
                 }
                 node = node->next;
             }
-        } else if (o->encoding == OBJ_ENCODING_LISTPACK) {
+        } else if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) {
             unsigned char *lp = objectGetVal(o);
 
             /* Save list listpack as a fake quicklist that only has a single node. */
@@ -908,9 +913,9 @@ ssize_t rdbSaveObject(rio *rdb, robj *o, robj *key, int dbid, unsigned char rdbt
         } else {
             serverPanic("Unknown list encoding");
         }
-    } else if (o->type == OBJ_SET) {
+    } else if (objectGetType(o) == OBJ_SET) {
         /* Save a set value */
-        if (o->encoding == OBJ_ENCODING_HASHTABLE) {
+        if (objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE) {
             hashtable *set = objectGetVal(o);
 
             if ((n = rdbSaveLen(rdb, hashtableSize(set))) == -1) {
@@ -930,26 +935,26 @@ ssize_t rdbSaveObject(rio *rdb, robj *o, robj *key, int dbid, unsigned char rdbt
                 nwritten += n;
             }
             hashtableCleanupIterator(&iterator);
-        } else if (o->encoding == OBJ_ENCODING_INTSET) {
+        } else if (objectGetEncoding(o) == OBJ_ENCODING_INTSET) {
             size_t l = intsetBlobLen((intset *)objectGetVal(o));
 
             if ((n = rdbSaveRawString(rdb, objectGetVal(o), l)) == -1) return -1;
             nwritten += n;
-        } else if (o->encoding == OBJ_ENCODING_LISTPACK) {
+        } else if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) {
             size_t l = lpBytes((unsigned char *)objectGetVal(o));
             if ((n = rdbSaveRawString(rdb, objectGetVal(o), l)) == -1) return -1;
             nwritten += n;
         } else {
             serverPanic("Unknown set encoding");
         }
-    } else if (o->type == OBJ_ZSET) {
+    } else if (objectGetType(o) == OBJ_ZSET) {
         /* Save a sorted set value */
-        if (o->encoding == OBJ_ENCODING_LISTPACK) {
+        if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) {
             size_t l = lpBytes((unsigned char *)objectGetVal(o));
 
             if ((n = rdbSaveRawString(rdb, objectGetVal(o), l)) == -1) return -1;
             nwritten += n;
-        } else if (o->encoding == OBJ_ENCODING_SKIPLIST) {
+        } else if (objectGetEncoding(o) == OBJ_ENCODING_SKIPLIST) {
             zset *zs = objectGetVal(o);
             zskiplist *zsl = zs->zsl;
 
@@ -976,14 +981,14 @@ ssize_t rdbSaveObject(rio *rdb, robj *o, robj *key, int dbid, unsigned char rdbt
         } else {
             serverPanic("Unknown sorted set encoding");
         }
-    } else if (o->type == OBJ_HASH) {
+    } else if (objectGetType(o) == OBJ_HASH) {
         /* Save a hash value */
-        if (o->encoding == OBJ_ENCODING_LISTPACK) {
+        if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) {
             size_t l = lpBytes((unsigned char *)objectGetVal(o));
 
             if ((n = rdbSaveRawString(rdb, objectGetVal(o), l)) == -1) return -1;
             nwritten += n;
-        } else if (o->encoding == OBJ_ENCODING_HASHTABLE) {
+        } else if (objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE) {
             serverAssert(rdbtype == RDB_TYPE_HASH || rdbtype == RDB_TYPE_HASH_2);
             hashtable *ht = objectGetVal(o);
 
@@ -1013,7 +1018,7 @@ ssize_t rdbSaveObject(rio *rdb, robj *o, robj *key, int dbid, unsigned char rdbt
                 nwritten += n;
                 if (add_expiry) {
                     long long expiry = entryGetExpiry(next);
-                    if ((n = rdbSaveMillisecondTime(rdb, expiry) == -1)) {
+                    if ((n = rdbSaveMillisecondTime(rdb, expiry)) == -1) {
                         hashtableCleanupIterator(&iter);
                         return -1;
                     }
@@ -1025,7 +1030,7 @@ ssize_t rdbSaveObject(rio *rdb, robj *o, robj *key, int dbid, unsigned char rdbt
         } else {
             serverPanic("Unknown hash encoding");
         }
-    } else if (o->type == OBJ_STREAM) {
+    } else if (objectGetType(o) == OBJ_STREAM) {
         /* Store how many listpacks we have inside the radix tree. */
         stream *s = objectGetVal(o);
         rax *rax = s->rax;
@@ -1135,7 +1140,7 @@ ssize_t rdbSaveObject(rio *rdb, robj *o, robj *key, int dbid, unsigned char rdbt
             }
             raxStop(&ri);
         }
-    } else if (o->type == OBJ_MODULE) {
+    } else if (objectGetType(o) == OBJ_MODULE) {
         /* Save a module-specific value. */
         ValkeyModuleIO io;
         moduleValue *mv = objectGetVal(o);
@@ -1213,8 +1218,12 @@ int rdbSaveKeyValuePair(rio *rdb, robj *key, robj *val, long long expiretime, in
     /* Save type, key, value */
     int rdbtype = rdbGetObjectType(val, rdbver);
     if (rdbtype == -1) {
-        serverLog(LL_WARNING, "Can't store key '%s' (db %d) in RDB version %d",
-                  (char *)objectGetVal(key), dbid, rdbver);
+        if (server.hide_user_data_from_log) {
+            serverLog(LL_WARNING, "Can't store key (db %d) in RDB version %d", dbid, rdbver);
+        } else {
+            serverLog(LL_WARNING, "Can't store key '%s' (db %d) in RDB version %d",
+                      (char *)objectGetVal(key), dbid, rdbver);
+        }
         return -1;
     }
     if (rdbSaveType(rdb, rdbtype) == -1) return -1;
@@ -1892,14 +1901,10 @@ static int _lpEntryValidation(unsigned char *p, unsigned int head_count, void *u
     return 1;
 }
 
-/* Validate the integrity of the listpack structure.
- * when `deep` is 0, only the integrity of the header is validated.
- * when `deep` is 1, we scan all the entries one by one.
+/* Validate the integrity of the listpack structure and check for duplicates.
  * when `pairs` is 0, all elements need to be unique (it's a set)
  * when `pairs` is 1, odd elements need to be unique (it's a key-value map) */
-int lpValidateIntegrityAndDups(unsigned char *lp, size_t size, int deep, int pairs) {
-    if (!deep) return lpValidateIntegrity(lp, size, 0, NULL, NULL);
-
+int lpValidateIntegrityAndDups(unsigned char *lp, size_t size, int pairs) {
     /* Keep track of the field names to locate duplicate ones */
     struct {
         int pairs;
@@ -1907,7 +1912,7 @@ int lpValidateIntegrityAndDups(unsigned char *lp, size_t size, int deep, int pai
         hashtable *fields; /* Initialisation at the first callback. */
     } data = {pairs, 0, NULL};
 
-    int ret = lpValidateIntegrity(lp, size, 1, _lpEntryValidation, &data);
+    int ret = lpValidateIntegrity(lp, size, _lpEntryValidation, &data);
 
     /* make sure we have an even number of records. */
     if (pairs && data.count & 1) ret = 0;
@@ -1920,23 +1925,13 @@ int lpValidateIntegrityAndDups(unsigned char *lp, size_t size, int deep, int pai
  * On success a newly allocated object is returned, otherwise NULL.
  * When the function returns NULL and if 'error' is not NULL, the
  * integer pointed by 'error' is set to the type of error that occurred */
-robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rdbflags, time_t now) {
+robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rdbflags, mstime_t now) {
     robj *o = NULL, *ele, *dec;
     uint64_t len;
     unsigned int i;
 
     /* Set default error of load object, it will be set to 0 on success. */
     if (error) *error = RDB_LOAD_ERR_OTHER;
-
-    int deep_integrity_validation = server.sanitize_dump_payload == SANITIZE_DUMP_YES;
-    if (server.sanitize_dump_payload == SANITIZE_DUMP_CLIENTS) {
-        /* Skip sanitization when loading (an RDB), or getting a RESTORE command
-         * from either the primary or a client using an ACL user with the skip-sanitize-payload flag. */
-        int skip = server.loading || (server.current_client && (server.current_client->flag.primary));
-        if (!skip && server.current_client && server.current_client->user)
-            skip = !!(server.current_client->user->flags & USER_FLAG_SANITIZE_PAYLOAD_SKIP);
-        deep_integrity_validation = !skip;
-    }
 
     if (rdbtype == RDB_TYPE_STRING) {
         /* Read string value */
@@ -1997,7 +1992,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
             sumelelen += elelen;
             if (elelen > maxelelen) maxelelen = elelen;
 
-            if (o->encoding == OBJ_ENCODING_INTSET) {
+            if (objectGetEncoding(o) == OBJ_ENCODING_INTSET) {
                 /* Fetch integer value from element. */
                 if (isSdsRepresentableAsLongLong(sdsele, &llval) == C_OK) {
                     uint8_t success;
@@ -2024,7 +2019,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
 
             /* This will also be called when the set was just converted
              * to a listpack encoded set. */
-            if (o->encoding == OBJ_ENCODING_LISTPACK) {
+            if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) {
                 if (setTypeSize(o) < server.set_max_listpack_entries && elelen <= server.set_max_listpack_value &&
                     lpSafeToAdd(objectGetVal(o), elelen)) {
                     unsigned char *p = lpFirst(objectGetVal(o));
@@ -2045,7 +2040,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
 
             /* This will also be called when the set was just converted
              * to a regular hash table encoded set. */
-            if (o->encoding == OBJ_ENCODING_HASHTABLE) {
+            if (objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE) {
                 if (!hashtableAdd((hashtable *)objectGetVal(o), sdsele)) {
                     rdbReportCorruptRDB("Duplicate set members detected");
                     decrRefCount(o);
@@ -2139,17 +2134,17 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
         /* Too many entries or hash object contains elements with expiry? Use a hash table right from the start. */
         if (len > server.hash_max_listpack_entries || rdbtype == RDB_TYPE_HASH_2)
             hashTypeConvert(o, OBJ_ENCODING_HASHTABLE);
-        else if (deep_integrity_validation) {
-            /* In this mode, we need to guarantee that the server won't crash
-             * later when the ziplist is converted to a hashtable.
-             * Create a set (hashtable with no values) to for a dup search.
-             * We can dismiss it as soon as we convert the ziplist to a hash. */
+        else {
+            /* Guarantee that the server won't crash later when the listpack
+             * is converted to a hashtable.
+             * Create a set (hashtable with no values) for a dup search.
+             * We can dismiss it as soon as we convert the listpack to a hash. */
             dupSearchHashtable = hashtableCreate(&setHashtableType);
         }
 
 
         /* Load every field and value into the ziplist */
-        while (o->encoding == OBJ_ENCODING_LISTPACK && len > 0) {
+        while (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK && len > 0) {
             len--;
             /* Load raw strings */
             if ((field = rdbGenericLoadStringObject(rdb, RDB_LOAD_SDS, NULL)) == NULL) {
@@ -2178,7 +2173,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
             }
 
             /* Convert to hash table if size threshold is exceeded */
-            if (o->encoding != OBJ_ENCODING_HASHTABLE &&
+            if (objectGetEncoding(o) != OBJ_ENCODING_HASHTABLE &&
                 (sdslen(field) > server.hash_max_listpack_value || sdslen(value) > server.hash_max_listpack_value ||
                  !lpSafeToAdd(objectGetVal(o), sdslen(field) + sdslen(value)))) {
                 hashTypeConvert(o, OBJ_ENCODING_HASHTABLE);
@@ -2210,7 +2205,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
             dupSearchHashtable = NULL;
         }
 
-        if (o->encoding == OBJ_ENCODING_HASHTABLE) {
+        if (objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE) {
             if (!hashtableTryExpand(objectGetVal(o), len)) {
                 rdbReportCorruptRDB("OOM in hashtableTryExpand %llu", (unsigned long long)len);
                 decrRefCount(o);
@@ -2219,7 +2214,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
         }
 
         /* Load remaining fields and values into the hash table */
-        while (o->encoding == OBJ_ENCODING_HASHTABLE && len > 0) {
+        while (objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE && len > 0) {
             len--;
             /* Load encoded strings */
             if ((field = rdbGenericLoadStringObject(rdb, RDB_LOAD_SDS, NULL)) == NULL) {
@@ -2325,8 +2320,8 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
 
             if (rdbtype == RDB_TYPE_LIST_QUICKLIST_2) {
                 lp = data;
-                if (deep_integrity_validation) server.stat_dump_payload_sanitizations++;
-                if (!lpValidateIntegrity(lp, encoded_len, deep_integrity_validation, NULL, NULL)) {
+                server.stat_dump_payload_sanitizations++;
+                if (!lpValidateIntegrity(lp, encoded_len, NULL, NULL)) {
                     rdbReportCorruptRDB("Listpack integrity check failed.");
                     decrRefCount(o);
                     zfree(lp);
@@ -2403,12 +2398,13 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
 
                     /* search for duplicate records */
                     sds field = sdstrynewlen(fstr, flen);
-                    if (!field || !hashtableAdd(dupSearchHashtable, field) ||
-                        !lpSafeToAdd(lp, (size_t)flen + vlen)) {
+                    int field_added = field && hashtableAdd(dupSearchHashtable, field);
+                    if (!field_added || !lpSafeToAdd(lp, (size_t)flen + vlen)) {
                         rdbReportCorruptRDB("Hash zipmap with dup elements, or big length (%u)", flen);
                         hashtableRelease(dupSearchHashtable);
-                        sdsfree(field);
+                        if (!field_added) sdsfree(field);
                         zfree(encoded);
+                        zfree(lp);
                         objectSetVal(o, NULL);
                         decrRefCount(o);
                         return NULL;
@@ -2421,8 +2417,8 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
                 hashtableRelease(dupSearchHashtable);
                 zfree(objectGetVal(o));
                 objectSetVal(o, lp);
-                o->type = OBJ_HASH;
-                o->encoding = OBJ_ENCODING_LISTPACK;
+                objectSetType(o, OBJ_HASH);
+                objectSetEncoding(o, OBJ_ENCODING_LISTPACK);
 
                 if (hashTypeLength(o) > server.hash_max_listpack_entries || maxlen > server.hash_max_listpack_value) {
                     hashTypeConvert(o, OBJ_ENCODING_HASHTABLE);
@@ -2450,35 +2446,35 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
             }
 
             zfree(encoded);
-            o->type = OBJ_LIST;
+            objectSetType(o, OBJ_LIST);
             objectSetVal(o, ql);
-            o->encoding = OBJ_ENCODING_QUICKLIST;
+            objectSetEncoding(o, OBJ_ENCODING_QUICKLIST);
             break;
         }
         case RDB_TYPE_SET_INTSET:
-            if (deep_integrity_validation) server.stat_dump_payload_sanitizations++;
-            if (!intsetValidateIntegrity(encoded, encoded_len, deep_integrity_validation)) {
+            server.stat_dump_payload_sanitizations++;
+            if (!intsetValidateIntegrity(encoded, encoded_len, 1)) {
                 rdbReportCorruptRDB("Intset integrity check failed.");
                 zfree(encoded);
                 objectSetVal(o, NULL);
                 decrRefCount(o);
                 return NULL;
             }
-            o->type = OBJ_SET;
-            o->encoding = OBJ_ENCODING_INTSET;
+            objectSetType(o, OBJ_SET);
+            objectSetEncoding(o, OBJ_ENCODING_INTSET);
             if (intsetLen(objectGetVal(o)) > server.set_max_intset_entries) setTypeConvert(o, OBJ_ENCODING_HASHTABLE);
             break;
         case RDB_TYPE_SET_LISTPACK:
-            if (deep_integrity_validation) server.stat_dump_payload_sanitizations++;
-            if (!lpValidateIntegrityAndDups(encoded, encoded_len, deep_integrity_validation, 0)) {
+            server.stat_dump_payload_sanitizations++;
+            if (!lpValidateIntegrityAndDups(encoded, encoded_len, 0)) {
                 rdbReportCorruptRDB("Set listpack integrity check failed.");
                 zfree(encoded);
                 objectSetVal(o, NULL);
                 decrRefCount(o);
                 return NULL;
             }
-            o->type = OBJ_SET;
-            o->encoding = OBJ_ENCODING_LISTPACK;
+            objectSetType(o, OBJ_SET);
+            objectSetEncoding(o, OBJ_ENCODING_LISTPACK);
 
             if (setTypeSize(o) == 0) {
                 zfree(encoded);
@@ -2498,11 +2494,23 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
                 decrRefCount(o);
                 return NULL;
             }
+            /* See the RDB_TYPE_ZSET_LISTPACK case: a NAN score would crash the
+             * server when the zset is converted to a skiplist. The legacy
+             * ziplist format is converted to a listpack above, so apply the
+             * same NAN check on the resulting listpack. */
+            if (!zzlValidateScores(lp)) {
+                rdbReportCorruptRDB("Zset ziplist with NAN score detected");
+                zfree(lp);
+                zfree(encoded);
+                objectSetVal(o, NULL);
+                decrRefCount(o);
+                return NULL;
+            }
 
             zfree(objectGetVal(o));
-            o->type = OBJ_ZSET;
+            objectSetType(o, OBJ_ZSET);
             objectSetVal(o, lp);
-            o->encoding = OBJ_ENCODING_LISTPACK;
+            objectSetEncoding(o, OBJ_ENCODING_LISTPACK);
             if (zsetLength(o) == 0) {
                 decrRefCount(o);
                 goto emptykey;
@@ -2515,16 +2523,27 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
             break;
         }
         case RDB_TYPE_ZSET_LISTPACK:
-            if (deep_integrity_validation) server.stat_dump_payload_sanitizations++;
-            if (!lpValidateIntegrityAndDups(encoded, encoded_len, deep_integrity_validation, 1)) {
+            server.stat_dump_payload_sanitizations++;
+            if (!lpValidateIntegrityAndDups(encoded, encoded_len, 1)) {
                 rdbReportCorruptRDB("Zset listpack integrity check failed.");
                 zfree(encoded);
                 objectSetVal(o, NULL);
                 decrRefCount(o);
                 return NULL;
             }
-            o->type = OBJ_ZSET;
-            o->encoding = OBJ_ENCODING_LISTPACK;
+            /* A NAN score would crash the server when the zset is converted to
+             * a skiplist (zslInsertNode asserts the score is not NAN). The
+             * skiplist RDB format rejects NAN scores at load time; do the same
+             * for the listpack format. */
+            if (!zzlValidateScores(encoded)) {
+                rdbReportCorruptRDB("Zset listpack with NAN score detected");
+                zfree(encoded);
+                objectSetVal(o, NULL);
+                decrRefCount(o);
+                return NULL;
+            }
+            objectSetType(o, OBJ_ZSET);
+            objectSetEncoding(o, OBJ_ENCODING_LISTPACK);
             if (zsetLength(o) == 0) {
                 decrRefCount(o);
                 goto emptykey;
@@ -2545,8 +2564,8 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
 
             zfree(objectGetVal(o));
             objectSetVal(o, lp);
-            o->type = OBJ_HASH;
-            o->encoding = OBJ_ENCODING_LISTPACK;
+            objectSetType(o, OBJ_HASH);
+            objectSetEncoding(o, OBJ_ENCODING_LISTPACK);
             if (hashTypeLength(o) == 0) {
                 decrRefCount(o);
                 goto emptykey;
@@ -2559,16 +2578,16 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
             break;
         }
         case RDB_TYPE_HASH_LISTPACK:
-            if (deep_integrity_validation) server.stat_dump_payload_sanitizations++;
-            if (!lpValidateIntegrityAndDups(encoded, encoded_len, deep_integrity_validation, 1)) {
+            server.stat_dump_payload_sanitizations++;
+            if (!lpValidateIntegrityAndDups(encoded, encoded_len, 1)) {
                 rdbReportCorruptRDB("Hash listpack integrity check failed.");
                 zfree(encoded);
                 objectSetVal(o, NULL);
                 decrRefCount(o);
                 return NULL;
             }
-            o->type = OBJ_HASH;
-            o->encoding = OBJ_ENCODING_LISTPACK;
+            objectSetType(o, OBJ_HASH);
+            objectSetEncoding(o, OBJ_ENCODING_LISTPACK);
             if (hashTypeLength(o) == 0) {
                 decrRefCount(o);
                 goto emptykey;
@@ -2619,8 +2638,8 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
                 decrRefCount(o);
                 return NULL;
             }
-            if (deep_integrity_validation) server.stat_dump_payload_sanitizations++;
-            if (!streamValidateListpackIntegrity(lp, lp_size, deep_integrity_validation)) {
+            server.stat_dump_payload_sanitizations++;
+            if (!streamValidateListpackIntegrity(lp, lp_size)) {
                 rdbReportCorruptRDB("Stream listpack integrity check failed.");
                 sdsfree(nodekey);
                 decrRefCount(o);
@@ -2737,7 +2756,11 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
 
             streamCG *cgroup = streamCreateCG(s, cgname, sdslen(cgname), &cg_id, cg_offset);
             if (cgroup == NULL) {
-                rdbReportCorruptRDB("Duplicated consumer group name %s", cgname);
+                if (server.hide_user_data_from_log) {
+                    rdbReportCorruptRDB("Duplicated consumer group name");
+                } else {
+                    rdbReportCorruptRDB("Duplicated consumer group name %s", cgname);
+                }
                 decrRefCount(o);
                 sdsfree(cgname);
                 return NULL;
@@ -2849,34 +2872,37 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
                     /* Set the NACK consumer, that was left to NULL when
                      * loading the global PEL. Then set the same shared
                      * NACK structure also in the consumer-specific PEL. */
+                    if (nack->consumer && nack->consumer != consumer) {
+                        rdbReportCorruptRDB("NACK already assigned to a different consumer, "
+                                            "shared NACKs across consumers are not valid");
+                        decrRefCount(o);
+                        return NULL;
+                    }
                     nack->consumer = consumer;
                     if (!raxTryInsert(consumer->pel, rawid, sizeof(rawid), nack, NULL)) {
                         rdbReportCorruptRDB("Duplicated consumer PEL entry "
                                             " loading a stream consumer "
                                             "group");
                         decrRefCount(o);
-                        streamFreeNACK(nack);
                         return NULL;
                     }
                 }
             }
 
             /* Verify that each PEL eventually got a consumer assigned to it. */
-            if (deep_integrity_validation) {
-                raxIterator ri_cg_pel;
-                raxStart(&ri_cg_pel, cgroup->pel);
-                raxSeek(&ri_cg_pel, "^", NULL, 0);
-                while (raxNext(&ri_cg_pel)) {
-                    streamNACK *nack = ri_cg_pel.data;
-                    if (!nack->consumer) {
-                        raxStop(&ri_cg_pel);
-                        rdbReportCorruptRDB("Stream CG PEL entry without consumer");
-                        decrRefCount(o);
-                        return NULL;
-                    }
+            raxIterator ri_cg_pel;
+            raxStart(&ri_cg_pel, cgroup->pel);
+            raxSeek(&ri_cg_pel, "^", NULL, 0);
+            while (raxNext(&ri_cg_pel)) {
+                streamNACK *nack = ri_cg_pel.data;
+                if (!nack->consumer) {
+                    raxStop(&ri_cg_pel);
+                    rdbReportCorruptRDB("Stream CG PEL entry without consumer");
+                    decrRefCount(o);
+                    return NULL;
                 }
-                raxStop(&ri_cg_pel);
             }
+            raxStop(&ri_cg_pel);
         }
     } else if (rdbtype == RDB_TYPE_MODULE_PRE_GA) {
         rdbReportCorruptRDB("Pre-release module format not supported");
@@ -3469,7 +3495,13 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
              * in an RDB file, instead we will silently discard it and
              * continue loading. */
             if (error == RDB_LOAD_ERR_EMPTY_KEY) {
-                if (empty_keys_skipped++ < 10) serverLog(LL_NOTICE, "rdbLoadObject skipping empty key: %s", key);
+                if (empty_keys_skipped++ < 10) {
+                    if (server.hide_user_data_from_log) {
+                        serverLog(LL_NOTICE, "rdbLoadObject skipping empty key");
+                    } else {
+                        serverLog(LL_NOTICE, "rdbLoadObject skipping empty key: %s", key);
+                    }
+                }
                 sdsfree(key);
             } else if (error == RDB_LOAD_ERR_UNKNOWN_TYPE) {
                 sdsfree(key);
@@ -3514,7 +3546,11 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
                     added = dbAddRDBLoad(db, key, &val);
                     serverAssert(added);
                 } else {
-                    serverLog(LL_WARNING, "RDB has duplicated key '%s' in DB %d", key, db->id);
+                    if (server.hide_user_data_from_log) {
+                        serverLog(LL_WARNING, "RDB has duplicated key in DB %d", db->id);
+                    } else {
+                        serverLog(LL_WARNING, "RDB has duplicated key '%s' in DB %d", key, db->id);
+                    }
                     serverPanic("Duplicated key found in RDB file");
                 }
             }

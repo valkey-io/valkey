@@ -69,44 +69,57 @@ typedef struct functionsLibMetaData {
     sds code;
 } functionsLibMetaData;
 
-static uint64_t dictStrCaseHash(const void *key) {
-    return dictGenCaseHashFunction((unsigned char *)key, strlen((char *)key));
+dictType functionDictType = {
+    .entryGetKey = dictEntryGetKey,
+    .hashFunction = dictCStrCaseHash,
+    .keyCompare = dictSdsKeyCaseCompare,
+    .entryDestructor = dictEntryDestructorSdsKey,
+};
+
+static void dictEntryDestructorSdsKeyEngineStatsValue(void *entry) {
+    dictEntry *de = entry;
+    dictSdsDestructor(dictGetKey(de));
+    engineStatsDispose(dictGetVal(de));
+    zfree(de);
 }
 
-dictType functionDictType = {
-    dictStrCaseHash,       /* hash function */
-    NULL,                  /* key dup */
-    dictSdsKeyCaseCompare, /* key compare */
-    dictSdsDestructor,     /* key destructor */
-    NULL,                  /* val destructor */
-    NULL                   /* allow to expand */
-};
-
 dictType engineStatsDictType = {
-    dictSdsCaseHash,       /* hash function */
-    dictSdsDup,            /* key dup */
-    dictSdsKeyCaseCompare, /* key compare */
-    dictSdsDestructor,     /* key destructor */
-    engineStatsDispose,    /* val destructor */
-    NULL                   /* allow to expand */
+    .entryGetKey = dictEntryGetKey,
+    .hashFunction = dictSdsCaseHash,
+    .keyCompare = dictSdsKeyCaseCompare,
+    .entryDestructor = dictEntryDestructorSdsKeyEngineStatsValue,
 };
 
+static void dictEntryDestructorSdsKeyEngineFunctionValue(void *entry) {
+    dictEntry *de = entry;
+    dictSdsDestructor(dictGetKey(de));
+    engineFunctionDispose(dictGetVal(de));
+    zfree(de);
+}
+
+/* Must be case-insensitive to stay consistent with functionDictType (the
+ * global function dict). Otherwise names differing only in case (e.g. "aaa"
+ * and "AAA") are stored as distinct entries here but collapse to one entry in
+ * the global dict, which later trips an assertion in libraryUnlink. */
 dictType libraryFunctionDictType = {
-    dictSdsHash,           /* hash function */
-    NULL,                  /* key dup */
-    dictSdsKeyCompare,     /* key compare */
-    dictSdsDestructor,     /* key destructor */
-    engineFunctionDispose, /* val destructor */
-    NULL                   /* allow to expand */
+    .entryGetKey = dictEntryGetKey,
+    .hashFunction = dictCStrCaseHash,
+    .keyCompare = dictSdsKeyCaseCompare,
+    .entryDestructor = dictEntryDestructorSdsKeyEngineFunctionValue,
 };
+
+static void dictEntryDestructorSdsKeyEngineLibraryValue(void *entry) {
+    dictEntry *de = entry;
+    dictSdsDestructor(dictGetKey(de));
+    engineLibraryDispose(dictGetVal(de));
+    zfree(de);
+}
 
 dictType librariesDictType = {
-    dictSdsHash,          /* hash function */
-    dictSdsDup,           /* key dup */
-    dictSdsKeyCompare,    /* key compare */
-    dictSdsDestructor,    /* key destructor */
-    engineLibraryDispose, /* val destructor */
-    NULL                  /* allow to expand */
+    .entryGetKey = dictEntryGetKey,
+    .hashFunction = dictSdsHash,
+    .keyCompare = dictSdsKeyCompare,
+    .entryDestructor = dictEntryDestructorSdsKeyEngineLibraryValue,
 };
 
 /* Libraries Ctx. */
@@ -151,9 +164,9 @@ static void engineLibraryDispose(void *obj) {
 }
 
 /* Clear all the functions from the given library ctx */
-void functionsLibCtxClear(functionsLibCtx *lib_ctx, void(callback)(dict *)) {
-    dictEmpty(lib_ctx->functions, callback);
-    dictEmpty(lib_ctx->libraries, callback);
+void functionsLibCtxClear(functionsLibCtx *lib_ctx) {
+    dictEmpty(lib_ctx->functions, NULL);
+    dictEmpty(lib_ctx->libraries, NULL);
     dictIterator *iter = dictGetIterator(lib_ctx->engines_stats);
     dictEntry *entry = NULL;
     while ((entry = dictNext(iter))) {
@@ -175,13 +188,13 @@ static void resetEngineOrCollectResetCallbacks(scriptingEngine *engine, void *co
     }
 }
 
-void functionsLibCtxReleaseCurrent(int async, void(callback)(dict *)) {
+static void functionsLibCtxReleaseCurrent(int async) {
     if (async) {
         list *engine_callbacks = listCreate();
         scriptingEngineManagerForEachEngine(resetEngineOrCollectResetCallbacks, engine_callbacks);
         freeFunctionsAsync(curr_functions_lib_ctx, engine_callbacks);
     } else {
-        functionsLibCtxFree(curr_functions_lib_ctx, callback, NULL);
+        functionsLibCtxFree(curr_functions_lib_ctx, NULL);
         scriptingEngineManagerForEachEngine(resetEngineOrCollectResetCallbacks, NULL);
     }
 }
@@ -191,18 +204,18 @@ static void functionsLibCtxFreeGeneric(functionsLibCtx *functions_lib_ctx, int a
     if (async) {
         freeFunctionsAsync(functions_lib_ctx, NULL);
     } else {
-        functionsLibCtxFree(functions_lib_ctx, NULL, NULL);
+        functionsLibCtxFree(functions_lib_ctx, NULL);
     }
 }
 
-void functionReset(int async, void(callback)(dict *)) {
-    functionsLibCtxReleaseCurrent(async, callback);
+void functionReset(int async) {
+    functionsLibCtxReleaseCurrent(async);
     functionsInit();
 }
 
 /* Free the given functions ctx */
-void functionsLibCtxFree(functionsLibCtx *functions_lib_ctx, void(callback)(dict *), list *engine_callbacks) {
-    functionsLibCtxClear(functions_lib_ctx, callback);
+void functionsLibCtxFree(functionsLibCtx *functions_lib_ctx, list *engine_callbacks) {
+    functionsLibCtxClear(functions_lib_ctx);
     dictRelease(functions_lib_ctx->functions);
     dictRelease(functions_lib_ctx->libraries);
     dictRelease(functions_lib_ctx->engines_stats);
@@ -239,7 +252,7 @@ static void initializeFunctionsLibEngineStats(scriptingEngine *engine,
                                               void *context) {
     functionsLibCtx *lib_ctx = (functionsLibCtx *)context;
     functionsLibEngineStats *stats = zcalloc(sizeof(*stats));
-    dictAdd(lib_ctx->engines_stats, scriptingEngineGetName(engine), stats);
+    dictAdd(lib_ctx->engines_stats, sdsdup(scriptingEngineGetName(engine)), stats);
 }
 
 /* Create a new functions ctx */
@@ -258,7 +271,7 @@ void functionsAddEngineStats(sds engine_name) {
     dictEntry *entry = dictFind(curr_functions_lib_ctx->engines_stats, engine_name);
     if (entry == NULL) {
         functionsLibEngineStats *stats = zcalloc(sizeof(*stats));
-        dictAdd(curr_functions_lib_ctx->engines_stats, engine_name, stats);
+        dictAdd(curr_functions_lib_ctx->engines_stats, sdsdup(engine_name), stats);
     }
 }
 
@@ -349,7 +362,7 @@ static void libraryLink(functionsLibCtx *lib_ctx, functionLibInfo *li) {
     }
     dictReleaseIterator(iter);
 
-    dictAdd(lib_ctx->libraries, li->name, li);
+    dictAdd(lib_ctx->libraries, sdsdup(li->name), li);
     lib_ctx->cache_memory += libraryMallocSize(li);
 
     /* update stats */
@@ -420,7 +433,7 @@ libraryJoin(functionsLibCtx *functions_lib_ctx_dst, functionsLibCtx *functions_l
     dictReleaseIterator(iter);
     iter = NULL;
 
-    functionsLibCtxClear(functions_lib_ctx_src, NULL);
+    functionsLibCtxClear(functions_lib_ctx_src);
     if (old_libraries_list) {
         listRelease(old_libraries_list);
         old_libraries_list = NULL;
@@ -854,7 +867,7 @@ void functionFlushCommand(client *c) {
         return;
     }
 
-    functionReset(async, NULL);
+    functionReset(async);
 
     /* Indicate that the command changed the data so it will be replicated and
      * counted as a data change (for persistence configuration) */

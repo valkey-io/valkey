@@ -201,7 +201,7 @@ proc verify_log_message {srv_idx pattern from_line} {
     incr from_line
     set result [exec tail -n +$from_line < [srv $srv_idx stdout]]
     if {![string match $pattern $result]} {
-        fail "expected pattern found in log file: $pattern, but instead got: $result"
+        fail "expected pattern found in srv $srv_idx log file: $pattern, but instead got: $result"
     }
 }
 
@@ -210,7 +210,7 @@ proc verify_no_log_message {srv_idx pattern from_line} {
     incr from_line
     set result [exec tail -n +$from_line < [srv $srv_idx stdout]]
     if {[string match $pattern $result]} {
-        fail "expected message found in log file: $pattern"
+        fail "expected pattern not found in srv $srv_idx log file: $pattern, but instead got: $result"
     }
 }
 
@@ -1223,7 +1223,13 @@ proc system_backtrace_supported {} {
         return 0
     }
 
-    # libmusl does not support backtrace. Also return 0 on
+    # Check if built with USE_LIBBACKTRACE (for musl/Alpine)
+    # Look for libbacktrace function symbol in the binary
+    if {[catch {exec grep -a "initLibbacktraceFrameState" $::VALKEY_SERVER_BIN} buildinfo] == 0} {
+        return 1
+    }
+
+    # libmusl does not support backtrace natively. Also return 0 on
     # static binaries (ldd exit code 1) where we can't detect libmusl
     catch {
         set ldd [exec ldd $::VALKEY_SERVER_BIN]
@@ -1298,4 +1304,19 @@ proc version_greater_or_equal {a b} {
     } else {
         return 1
     }
+}
+
+proc memcmp {string1 string2} {
+    set len1 [string length $string1]
+    set len2 [string length $string2]
+    set minLen [expr min($len1, $len2)]
+
+    for {set i 0} {$i < $minLen} {incr i} {
+        set char1 [scan [string index $string1 $i] %c]
+        set char2 [scan [string index $string2 $i] %c]
+        if {$char1 != $char2} {
+            return [expr {$char1 - $char2}]
+        }
+    }
+    return [expr {$len1 - $len2}]
 }

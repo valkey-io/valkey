@@ -411,8 +411,7 @@ int ull2string(char *dst, size_t dstlen, unsigned long long value) {
     while (value >= 100) {
         int const i = (value % 100) * 2;
         value /= 100;
-        dst[next] = digits[i + 1];
-        dst[next - 1] = digits[i];
+        memcpy(dst + next - 1, digits + i, 2);
         next -= 2;
     }
 
@@ -421,8 +420,7 @@ int ull2string(char *dst, size_t dstlen, unsigned long long value) {
         dst[next] = '0' + (uint32_t)value;
     } else {
         int i = (uint32_t)value * 2;
-        dst[next] = digits[i + 1];
-        dst[next - 1] = digits[i];
+        memcpy(dst + next - 1, digits + i, 2);
     }
     return length;
 err:
@@ -637,7 +635,9 @@ static int string2llScalar(const char *s, size_t slen, long long *value) {
 }
 
 #if HAVE_IFUNC && HAVE_X86_SIMD
-__attribute__((no_sanitize_address, used)) static int (*string2ll_resolver(void))(const char *, size_t, long long *) {
+VALKEY_NO_SANITIZE("address")
+VALKEY_NO_SANITIZE("thread")
+__attribute__((used)) static int (*string2ll_resolver(void))(const char *, size_t, long long *) {
     /* Ifunc resolvers run before ASan initialization and before CPU detection
      * is initialized, so disable ASan and init CPU detection here. */
     __builtin_cpu_init();
@@ -768,7 +768,7 @@ int string2ld(const char *s, size_t slen, long double *dp) {
 int string2d(const char *s, size_t slen, double *dp) {
     errno = 0;
     char *eptr;
-    *dp = valkey_strtod(s, &eptr);
+    *dp = valkey_strtod_n(s, slen, &eptr);
     if (slen == 0 || isspace(((const char *)s)[0]) || (size_t)(eptr - (char *)s) != slen ||
         (errno == ERANGE && (*dp == HUGE_VAL || *dp == -HUGE_VAL || fpclassify(*dp) == FP_ZERO)) || isnan(*dp) || errno == EINVAL) {
         errno = 0;
@@ -1054,18 +1054,17 @@ err:
 
 /* Populate the provided seed array by hashing the provided string with SHA256
  * and copying the first outlen bytes of the digest into the seed buffer. */
-void getHashSeedFromString(unsigned char *seed_array, size_t outlen, const char *value) {
+void getHashSeedFromString(unsigned char *seed_array, size_t outlen, const char *value, size_t value_len) {
     SHA256_CTX ctx;
     unsigned char digest[SHA256_BLOCK_SIZE];
 
     sha256_init(&ctx);
-    sha256_update(&ctx, (const BYTE *)value, strlen(value));
+    sha256_update(&ctx, (const BYTE *)value, value_len);
     sha256_final(&ctx, digest);
 
     if (outlen > SHA256_BLOCK_SIZE) outlen = SHA256_BLOCK_SIZE;
     memcpy(seed_array, digest, outlen);
 }
-
 
 /* Parses a version string on the form "major.minor.patch" and returns an
  * integer on the form 0xMMmmpp. Returns -1 on parse error. */
@@ -1655,4 +1654,16 @@ sds escapeJsonString(sds s, const char *p, size_t len) {
         p++;
     }
     return sdscatlen(s, "\"", 1);
+}
+
+/* Tomas Wang's 64 bit integer hash */
+uint64_t wangHash64(uint64_t hash) {
+    hash = (~hash) + (hash << 21); /* hash = (hash << 21) - hash - 1; */
+    hash = hash ^ (hash >> 24);
+    hash = (hash + (hash << 3)) + (hash << 8); /* hash * 265 */
+    hash = hash ^ (hash >> 14);
+    hash = (hash + (hash << 2)) + (hash << 4); /* hash * 21 */
+    hash = hash ^ (hash >> 28);
+    hash = hash + (hash << 31);
+    return hash;
 }

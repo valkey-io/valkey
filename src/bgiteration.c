@@ -2276,7 +2276,8 @@ void bgIteration_keyDelete(int dbid, const_sds key) {
     }
 
     dbEntry *de = dbFind(server.db[dbid], (sds)key);
-    if (de == NULL) return;
+    // JHB if (de == NULL) return;
+    serverAssert(de != NULL); // This API should be called BEFORE removal from main dict
 
     // For consistent iterators, we need to make sure the item gets written before delete
     listIter li;
@@ -2298,10 +2299,11 @@ void bgIteration_keyDelete(int dbid, const_sds key) {
 
     /* We might be within the context of a command execution.  This happens if the key is found to
      * be expired when attempting to execute the command.  In this case, we should treat the key as
-     * missing.  If the key exists after the command executes, we can treat it like a new key.
-     * (If not in command execution, this is ok - it's reset at the beginning of command execution.) */
-    robj *oKey = createObject(OBJ_STRING, sdsdup(key));
-    listAddNodeHead(curCmdMissingKeys, oKey);
+     * missing.  If the key exists after the command executes, we can treat it like a new key. */
+    if (server.in_call) {
+        robj *oKey = createObject(OBJ_STRING, sdsdup(key));
+        listAddNodeHead(curCmdMissingKeys, oKey);
+    }
 }
 
 
@@ -2586,7 +2588,7 @@ void bgIteration_handleCommandReplication(int dbid,
          * In the case of EXPIRE/EVICT occurring outside the context of a write command, this is
          *  handled.  If the key is in-use by bgIterator, increment of robj's refcount prevents the
          *  key from deletion. In this case the key will be removed from the main dictionary, but
-         *  held inside bgIteration until no longer needed.
+         *  held by bgIteration until no longer needed.
          *  Even though the entry is not physically deleted yet, it is logically deleted and it is
          *  safe to replicate the DEL/UNLINK.  Since iterators process items FIFO, the replication
          *  for DEL/UNLINK won't actually get processed until other queued replication is processed.
@@ -2599,6 +2601,8 @@ void bgIteration_handleCommandReplication(int dbid,
         bool isDelCommand = isDeleteCmd(cmd);
         if (isDelCommand) {
             sds key = objectGetVal(argv[1]);
+            dbEntry *de = dbFind(server.db[dbid], key);
+            serverAssert(de == NULL); // dbEntry should be removed before replication (self-check)
             if (it->keyset_iter->isKeyInScope(it->keyset_iter, key)) {
                 bool blockClientIfRequiredWasCalled = (server.in_call > 0);
                 if (blockClientIfRequiredWasCalled && iteratorReplicationFlagsWereUpdated) {
@@ -2606,7 +2610,6 @@ void bgIteration_handleCommandReplication(int dbid,
                     shouldReplicateDelCommand = it->cur_cmd_may_replicate;
                 } else {
                     // Otherwise, it's something like active expiration or eviction (unrelated)
-                    dbEntry *de = dbFind(server.db[dbid], key);
                     if (iteratorHasPassedKey(it, dbid, key, de)) {
                         shouldReplicateDelCommand = true;
                     }

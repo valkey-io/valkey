@@ -290,10 +290,11 @@ bool bgIteration_iterationActive(void);
 void bgIteration_beforeSleep(void);
 
 
-/* Notify bgIteration that a key is being deleted.  In Valkey, key deletion can occur in a READ
- * command if the key is expired.  Note that this notification is more about status than memory.
- * Since the dbEntry is a reference counted object, the dbEntry can't be physically deleted if
- * bgIteration is still actively using it. */
+/* Notify bgIteration that a key is about to be deleted.  This call must happen before the removal
+ * from the main dictionary.  In Valkey, key deletion can occur in a READ command if the key is
+ * expired.  Note that this notification is more about status than memory.  Since the dbEntry is a
+ * reference counted object, the dbEntry can't be physically deleted if bgIteration is still
+ * actively using it. */
 void bgIteration_keyDelete(int dbid, const_sds key);
 
 

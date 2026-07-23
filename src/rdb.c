@@ -2384,9 +2384,9 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
         /* Fix the object encoding, and make sure to convert the encoded
          * data type into the base type if accordingly to the current
          * configuration there are too many elements in the encoded data
-         * type. Hash listpacks also check the maximum field and value size.
-         * Other encodings only check the length; eventually everything gets
-         * converted. */
+         * type. Hash encodings also check the maximum field and value size.
+         * Other listpack encodings only check the length; eventually
+         * everything gets converted. */
         switch (rdbtype) {
         case RDB_TYPE_HASH_ZIPMAP:
             /* Since we don't keep zipmaps anymore, the rdb loading for these

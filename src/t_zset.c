@@ -3612,6 +3612,8 @@ void zrevrangebylexCommand(client *c) {
  *
  * The argc_start points to the src key argument, so following syntax is like:
  * <src> <min> <max> [BYSCORE | BYLEX] [REV] [WITHSCORES] [XX] [LIMIT offset count]
+ *
+ * Note: XX is not supported by ZRANGESTORE.
  */
 void zrangeGenericCommand(zrange_result_handler *handler,
                           int argc_start,

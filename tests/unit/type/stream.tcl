@@ -919,9 +919,9 @@ start_server {
         r DEL testxadstream
         r XADD testxadstream 1-0 f v
         r XGROUP CREATE testxadstream testxadgrp1 0
-        assert_error {*Number of IDs must be a positive integer*} {r XACKDEL testxadstream testxadgrp1 IDS abc 1-0}
-        assert_error {*Number of IDs must be a positive integer*} {r XACKDEL testxadstream testxadgrp1 IDS 0 1-0}
-        assert_error {*Number of IDs must be a positive integer*} {r XACKDEL testxadstream testxadgrp1 IDS -5 1-0}
+        assert_error {*value is not an integer or out of range*} {r XACKDEL testxadstream testxadgrp1 IDS abc 1-0}
+        assert_error {*The IDs argument must be a positive integer*} {r XACKDEL testxadstream testxadgrp1 IDS 0 1-0}
+        assert_error {*The IDs argument must be a positive integer*} {r XACKDEL testxadstream testxadgrp1 IDS -5 1-0}
     }
 
     test {XACKDEL IDS numids must match argument count} {
@@ -1031,6 +1031,36 @@ start_server {
         assert_equal 0 [r XLEN testxadstream]
         set pend [r XPENDING testxadstream testxadgrp1]
         assert_equal 0 [lindex $pend 0]
+    }
+
+    test {XACKDEL ACKED drains PEL despite XGROUP SETID moving last_id backward} {
+        r DEL testxadstream
+        r XADD testxadstream 1-0 f v1
+        r XADD testxadstream 5-0 f v5
+        r XGROUP CREATE testxadstream testxadgrp1 0
+
+        # Claim both entries: last_id advances to 5-0 and both land in the PEL.
+        r XREADGROUP GROUP testxadgrp1 testxadcnsmr COUNT 10 STREAMS testxadstream >
+        set pend [r XPENDING testxadstream testxadgrp1]
+        assert_equal 2 [lindex $pend 0]
+        assert_equal 5-0 [lindex $pend 2]
+
+        # Move last_id back before the latest claimed entry. 5-0 stays in the
+        # PEL even though id > last_id now.
+        r XGROUP SETID testxadstream testxadgrp1 1-0
+        set pend [r XPENDING testxadstream testxadgrp1]
+        assert_equal 2 [lindex $pend 0]
+
+        # ACKED must still drain the dangling 5-0 PEL entry and delete the msg.
+        set ids [r XACKDEL testxadstream testxadgrp1 ACKED IDS 1 5-0]
+        assert_equal 1 [llength $ids]
+        assert_equal 1 [lindex $ids 0]
+        assert_equal {} [r xrange testxadstream 5-0 5-0]
+
+        # 5-0 should be gone from the PEL; 1-0 remains pending.
+        set pend [r XPENDING testxadstream testxadgrp1]
+        assert_equal 1 [lindex $pend 0]
+        assert_equal 1-0 [lindex $pend 1]
     }
 
     test {XRANGE fuzzing} {

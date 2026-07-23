@@ -3601,8 +3601,11 @@ void xackdelCommand(client *c) {
 
     /* Parse and validate numids: must be a positive integer. */
     long long id_count;
-    if (getLongLongFromObject(c->argv[argi], &id_count) != C_OK || id_count <= 0) {
-        addReplyError(c, "Number of IDs must be a positive integer");
+    if (getLongLongFromObjectOrReply(c, c->argv[argi], &id_count, NULL) == C_ERR) {
+        return;
+    }
+    if (id_count <= 0) {
+        addReplyError(c, "The IDs argument must be a positive integer");
         return;
     }
     argi++; /* past numids */
@@ -3655,7 +3658,7 @@ void xackdelCommand(client *c) {
     /* Fast path for KEEPREF. Since we only need to cleanup the PEL for the target
      * group, we only need to loop over messages (and not consumers) and can set
      * responses inline. Thus, there's a separate setup for KEEPREF vs. ACKED/DELREF*/
-    if (mode == 0 /* KEEPREF */) {
+    if (mode == 0) { /* KEEPREF */
         addReplyArrayLen(c, id_count);
         for (long long j = 0; j < id_count; j++) {
             int response = -1;
@@ -3721,34 +3724,40 @@ void xackdelCommand(client *c) {
                 unsigned char buf[sizeof(streamID)];
                 streamEncodeID(buf, id);
 
-                /* Message hasn't been delivered to this group yet. */
-                if (streamCompareID(id, &cg->last_id) > 0) {
-                    if (!streamEntryExists(s, id)) {
-                        resps[j] = -1;
-                    } else if (mode == 2 /* ACKED */) {
-                        /* Target group hasn't received it: can't ack.
-                         * Non-target hasn't claimed it: acked but can't delete yet. */
-                        resps[j] = is_target ? -1 : 2;
-                    }
-                    continue;
-                }
-
+                /* Look the message up in this group's PEL first. We cannot
+                 * short-circuit on cg->last_id (i.e. assume "id > last_id
+                 * implies not in PEL") because XGROUP SETID can move
+                 * last_id backward and leave PEL entries behind it; skipping
+                 * the lookup here would leak those NACKs. */
                 void *result;
                 if (raxFind(cg->pel, buf, sizeof(buf), &result)) {
-                    if (is_target || mode == 1 /* DELREF */) {
+                    if (is_target || mode == 1) { /* DELREF */
                         /* Remove from this group's PEL (target always; DELREF removes all). */
                         streamNACK *nack = result;
                         raxRemove(cg->pel, buf, sizeof(buf), NULL);
                         raxRemove(nack->consumer->pel, buf, sizeof(buf), NULL);
                         streamFreeNACK(nack);
                         acked++;
-                    } else if (mode == 2 /* ACKED */) {
-                        resps[j] = 2; /* Another group still has a pending reference. */
+                    } else if (mode == 2) { /* ACKED */
+                        resps[j] = 2;       /* Another group still has a pending reference. */
                     }
                     /* KEEPREF (!is_target && mode == 0): leave other groups' PEL alone. */
+                } else if (streamCompareID(id, &cg->last_id) > 0) {
+                    /* Message hasn't been delivered to this group yet (its ID
+                     * is beyond last_id) and it isn't pending, so it can't be
+                     * acked or deleted through this group. */
+                    if (!streamEntryExists(s, id)) {
+                        resps[j] = -1;
+                    } else if (mode == 2) { /* ACKED */
+                        /* Target group hasn't received it: can't ack.
+                         * Non-target hasn't claimed it: acked but can't delete yet. */
+                        resps[j] = is_target ? -1 : 2;
+                    }
                 } else {
-                    if (is_target && mode == 2 /* ACKED */) {
-                        resps[j] = -1; /* Target group didn't have this message pending. */
+                    /* Message was delivered to this group (id <= last_id) but
+                     * isn't pending: already acked, read with NOACK, or gone. */
+                    if (is_target && mode == 2) { /* ACKED */
+                        resps[j] = -1;            /* Target group didn't have this message pending. */
                     } else if (first_loop && !streamEntryExists(s, id)) {
                         resps[j] = -1; /* Message does not exist in stream. */
                     }
@@ -4279,3 +4288,4 @@ int streamValidateListpackIntegrity(unsigned char *lp, size_t size) {
 
     return 1;
 }
+

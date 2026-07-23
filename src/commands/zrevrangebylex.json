@@ -77,7 +77,7 @@
                 "token": "XX",
                 "type": "pure-token",
                 "optional": true,
-                "since": "9.0.2"
+                "since": "9.2.0"
             }
         ]
     }

@@ -79,7 +79,7 @@ class FbtreeTest : public ::testing::Test {
 
     /* Validate tree invariants. */
     void expectValid() {
-        ASSERT_TRUE(fbtreeDebugValidate(fbt, false)) << "Tree invariant violation";
+        ASSERT_TRUE(fbtreeDebugValidate(fbt, false, NULL, 0)) << "Tree invariant violation";
     }
 
     /* Insert a null-terminated C string, return the stored pointer. */
@@ -2026,7 +2026,7 @@ TEST_F(FbtreeTest, LongPrefixBoundary) {
             snprintf(suffix, sizeof(suffix), "%c%04d", 'a' + (i % 26), i);
             inserted[i] = fbtreeInsert(fbt1, createPrefixString("X", EMBED_PREFIX_LEN, suffix));
         }
-        EXPECT_TRUE(fbtreeDebugValidate(fbt1, false));
+        EXPECT_TRUE(fbtreeDebugValidate(fbt1, false, NULL, 0));
         for (int i = 0; i < count; i++)
             EXPECT_GE(fbtreeGetIndexOfItem(fbt1, inserted[i]), 0);
         zfree(inserted);
@@ -2041,7 +2041,7 @@ TEST_F(FbtreeTest, LongPrefixBoundary) {
             snprintf(suffix, sizeof(suffix), "%c%04d", 'a' + (i % 26), i);
             inserted[i] = fbtreeInsert(fbt2, createPrefixString("X", EMBED_PREFIX_LEN + 1, suffix));
         }
-        EXPECT_TRUE(fbtreeDebugValidate(fbt2, false));
+        EXPECT_TRUE(fbtreeDebugValidate(fbt2, false, NULL, 0));
         for (int i = 0; i < count; i++)
             EXPECT_GE(fbtreeGetIndexOfItem(fbt2, inserted[i]), 0);
         zfree(inserted);
@@ -3530,7 +3530,7 @@ TEST_F(FbtreeTest, DeleteRangeByRankSweep) {
                 << "start=" << start << " end=" << end;
             EXPECT_EQ(remaining, (unsigned long)N - deleted)
                 << "start=" << start << " end=" << end;
-            EXPECT_TRUE(fbtreeDebugValidate(tree, false))
+            EXPECT_TRUE(fbtreeDebugValidate(tree, false, NULL, 0))
                 << "Validation failed: start=" << start << " end=" << end;
 
             /* Verify surviving elements match expected */
@@ -3707,6 +3707,31 @@ TEST_F(FbtreeTest, NodeMergeLeafCacheUpdate) {
     zfree(inserted);
 }
 
+/* Validation failures report which check failed and where. Corrupt an inner
+ * node's stored subtree size, expect a detailed message, then restore. */
+TEST_F(FbtreeTest, DebugValidateReportsFailureDetail) {
+    char buf[16];
+    const int count = NODE_SIZE * 2;
+    for (int i = 0; i < count; i++) {
+        snprintf(buf, sizeof(buf), "key_%03d", i);
+        fbtreeInsert(fbt, createString(buf));
+    }
+    ASSERT_FALSE(fbt->root->is_leaf);
+
+    char errmsg[256];
+    ASSERT_TRUE(fbtreeDebugValidate(fbt, false, errmsg, sizeof(errmsg)));
+    EXPECT_STREQ(errmsg, "");
+
+    innerNode *root = (innerNode *)fbt->root;
+    root->child_sizes[0] += 1;
+    ASSERT_FALSE(fbtreeDebugValidate(fbt, false, errmsg, sizeof(errmsg)));
+    EXPECT_NE(strstr(errmsg, "stored subtree size"), nullptr) << "errmsg: " << errmsg;
+
+    root->child_sizes[0] -= 1;
+    ASSERT_TRUE(fbtreeDebugValidate(fbt, false, errmsg, sizeof(errmsg)));
+    EXPECT_STREQ(errmsg, "");
+}
+
 /* Range delete that leaves boundary nodes underflowed, verify merges
  * happen via fbtreeDebugValidate. */
 TEST_F(FbtreeTest, NodeMergeRangeDelete) {
@@ -3826,7 +3851,7 @@ TEST_F(FbtreeTest, PropertyChildNumItemsConsistency) {
 
         /* Validate child_num_items consistency after all operations */
         if (fbtreeLength(tree) > 0) {
-            ASSERT_TRUE(fbtreeDebugValidate(tree, false))
+            ASSERT_TRUE(fbtreeDebugValidate(tree, false, NULL, 0))
                 << "Validation failed after deletes, iter=" << iter;
         }
 
@@ -3944,7 +3969,7 @@ TEST_F(FbtreeTest, PropertyTreeInvariantsAfterAnyOperation) {
             sds s = generateUniqueKey("c3_", key_counter++, &seed);
             fbtreeInsert(tree, s);
         }
-        ASSERT_TRUE(fbtreeDebugValidate(tree, false))
+        ASSERT_TRUE(fbtreeDebugValidate(tree, false, NULL, 0))
             << "Validation failed after inserts, iter=" << iter;
 
         /* Mixed operation phase: use rank-based operations to avoid pointer tracking */
@@ -3974,7 +3999,7 @@ TEST_F(FbtreeTest, PropertyTreeInvariantsAfterAnyOperation) {
                 fbtreeDeleteRangeByRank(tree, start, end, NULL, NULL);
             }
 
-            ASSERT_TRUE(fbtreeDebugValidate(tree, false))
+            ASSERT_TRUE(fbtreeDebugValidate(tree, false, NULL, 0))
                 << "Validation failed after op " << op << " type=" << op_type
                 << " iter=" << iter;
         }

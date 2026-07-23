@@ -551,10 +551,5 @@ int orderedIndexGetHeight(const OrderedIndex *oi) {
 }
 
 int orderedIndexVerifyIntegrity(const OrderedIndex *oi, char *errmsg, size_t errmsg_len) {
-    if (fbtreeDebugValidate((fbtreeIndex *)oi, false)) {
-        errmsg[0] = '\0';
-        return 1;
-    }
-    snprintf(errmsg, errmsg_len, "fbtree integrity check failed");
-    return 0;
+    return fbtreeDebugValidate((fbtreeIndex *)oi, false, errmsg, errmsg_len) ? 1 : 0;
 }

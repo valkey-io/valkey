@@ -2,6 +2,7 @@
  * This is a general-purpose data structure - zset-specific logic is in zset_fbtree_adapter.c */
 
 #include <stddef.h>
+#include <stdarg.h>
 #include <stdbool.h>
 #include <string.h>
 #include <assert.h>
@@ -2284,11 +2285,28 @@ static void printIndent(int depth) {
     for (int j = 0; j < depth; j++) printf("│  ");
 }
 
-static validateResult validateNode(node *n, int depth, bool verbose);
+/* First-failure error reporting for validation: validateFail() writes a
+ * detailed message into ctx (if provided) for the first failed check only,
+ * preserving the deepest/earliest failure as later checks fail in cascade. */
+typedef struct {
+    char *errmsg;
+    size_t errmsg_len;
+} validateErrCtx;
 
-static validateResult validateLeaf(leafNode *leaf, int depth, bool verbose) {
+static void validateFail(validateErrCtx *err, const char *fmt, ...) {
+    if (!err || !err->errmsg || err->errmsg[0] != '\0') return;
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(err->errmsg, err->errmsg_len, fmt, ap);
+    va_end(ap);
+}
+
+static validateResult validateNode(node *n, int depth, bool verbose, validateErrCtx *err);
+
+static validateResult validateLeaf(leafNode *leaf, int depth, bool verbose, validateErrCtx *err) {
     size_t count = leaf->header.num_items;
     bool valid = (count <= NODE_SIZE);
+    if (!valid) validateFail(err, "leaf at depth %d: num_items %zu exceeds NODE_SIZE %d", depth, count, NODE_SIZE);
 
     if (verbose) {
         printf(" Leaf (%zu items)\n", count);
@@ -2309,7 +2327,7 @@ static validateResult validateLeaf(leafNode *leaf, int depth, bool verbose) {
     return (validateResult){.valid = valid, .size = count, .leftmost_leaf = leaf, .rightmost_leaf = leaf};
 }
 
-static validateResult validateInner(innerNode *inner, int depth, bool verbose) {
+static validateResult validateInner(innerNode *inner, int depth, bool verbose, validateErrCtx *err) {
     bool valid = true;
     size_t total_size = 0;
     leafNode *leftmost = NULL;
@@ -2344,7 +2362,7 @@ static validateResult validateInner(innerNode *inner, int depth, bool verbose) {
             printBinaryString(anchor);
         }
 
-        validateResult child_result = validateNode(child, depth + 1, verbose);
+        validateResult child_result = validateNode(child, depth + 1, verbose, err);
 
         /* Track leftmost/rightmost leaves */
         if (i == 0) leftmost = child_result.leftmost_leaf;
@@ -2355,6 +2373,12 @@ static validateResult validateInner(innerNode *inner, int depth, bool verbose) {
 
         /* Validate child_num_items matches child's actual num_items */
         bool num_items_ok = (inner->child_num_items[i] == inner->children[i]->num_items);
+
+        if (!prefix_ok) validateFail(err, "inner at depth %d child %d: anchor missing node prefix (prefix_len %zu)", depth, i, inner->prefix_len);
+        if (!anchor_ok) validateFail(err, "inner at depth %d child %d: anchor does not match child high key", depth, i);
+        if (!feature_ok) validateFail(err, "inner at depth %d child %d: feature bytes do not match anchor", depth, i);
+        if (!size_ok) validateFail(err, "inner at depth %d child %d: stored subtree size %zu != actual %zu", depth, i, inner->child_sizes[i], child_result.size);
+        if (!num_items_ok) validateFail(err, "inner at depth %d child %d: stored child num_items %u != actual %u", depth, i, (unsigned)inner->child_num_items[i], (unsigned)inner->children[i]->num_items);
 
         valid = valid && prefix_ok && anchor_ok && feature_ok && size_ok && num_items_ok && child_result.valid;
         total_size += child_result.size;
@@ -2373,44 +2397,53 @@ static validateResult validateInner(innerNode *inner, int depth, bool verbose) {
     return (validateResult){.valid = valid, .size = total_size, .leftmost_leaf = leftmost, .rightmost_leaf = rightmost};
 }
 
-static validateResult validateNode(node *n, int depth, bool verbose) {
+static validateResult validateNode(node *n, int depth, bool verbose, validateErrCtx *err) {
     if (!n) return (validateResult){.valid = true, .size = 0};
 
     if (n->is_leaf) {
-        return validateLeaf((leafNode *)n, depth, verbose);
+        return validateLeaf((leafNode *)n, depth, verbose, err);
     } else {
-        return validateInner((innerNode *)n, depth, verbose);
+        return validateInner((innerNode *)n, depth, verbose, err);
     }
 }
 
-bool fbtreeDebugValidate(fbtreeIndex *fbt, bool verbose) {
+bool fbtreeDebugValidate(fbtreeIndex *fbt, bool verbose, char *errmsg, size_t errmsg_len) {
+    if (errmsg && errmsg_len > 0) errmsg[0] = '\0';
+    validateErrCtx err_ctx = {errmsg, errmsg_len};
+    validateErrCtx *err = (errmsg && errmsg_len > 0) ? &err_ctx : NULL;
+
     unsigned long length = fbt->root ? getSubtreeSize(fbt->root) : 0;
     if (verbose) printf("FBTree (length=%lu)\n", length);
     if (!fbt->root) {
         /* Empty tree: caches must be NULL */
         if (fbt->leftmost_leaf || fbt->rightmost_leaf) {
             if (verbose) printf("\033[31mERROR: empty tree has non-NULL leaf cache\033[0m\n");
+            validateFail(err, "empty tree has non-NULL leaf cache");
             return false;
         }
         return true;
     }
 
-    validateResult result = validateNode(fbt->root, 0, verbose);
+    validateResult result = validateNode(fbt->root, 0, verbose, err);
 
     /* Also verify total size matches computed length */
     bool length_ok = (result.size == length);
-    if (!length_ok && verbose) {
-        printf("\033[31mERROR: tree size %zu != computed length %lu\033[0m\n", result.size, length);
+    if (!length_ok) {
+        if (verbose) printf("\033[31mERROR: tree size %zu != computed length %lu\033[0m\n", result.size, length);
+        validateFail(err, "recounted tree size %zu != root subtree size %lu", result.size, length);
     }
 
     /* Verify leaf caches point to actual leftmost/rightmost leaves */
     leafNode *actual_leftmost = result.leftmost_leaf;
     leafNode *actual_rightmost = result.rightmost_leaf;
     bool caches_ok = (fbt->leftmost_leaf == actual_leftmost && fbt->rightmost_leaf == actual_rightmost);
-    if (!caches_ok && verbose) {
-        printf("\033[31mERROR: leaf cache mismatch (leftmost: %p vs %p, rightmost: %p vs %p)\033[0m\n",
-               (void *)fbt->leftmost_leaf, (void *)actual_leftmost,
-               (void *)fbt->rightmost_leaf, (void *)actual_rightmost);
+    if (!caches_ok) {
+        if (verbose) printf("\033[31mERROR: leaf cache mismatch (leftmost: %p vs %p, rightmost: %p vs %p)\033[0m\n",
+                            (void *)fbt->leftmost_leaf, (void *)actual_leftmost,
+                            (void *)fbt->rightmost_leaf, (void *)actual_rightmost);
+        validateFail(err, "leaf cache mismatch (leftmost %p vs actual %p, rightmost %p vs actual %p)",
+                     (void *)fbt->leftmost_leaf, (void *)actual_leftmost,
+                     (void *)fbt->rightmost_leaf, (void *)actual_rightmost);
     }
 
     return result.valid && length_ok && caches_ok;

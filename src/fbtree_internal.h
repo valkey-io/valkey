@@ -84,6 +84,9 @@ static_assert(NODE_SIZE <= FEATURE_ROW_SIZE, "NODE_SIZE must fit in feature row"
 static_assert(EMBED_PREFIX_LEN >= LONG_PREFIX_PTR_OFFSET + sizeof(char *), "embedded_prefix must fit aligned pointer");
 
 /* Debug functions — test-only, not part of the public API. */
-bool fbtreeDebugValidate(fbtreeIndex *fbt, bool verbose);
+/* Validate tree invariants. Returns true when consistent. On failure, when
+ * errmsg is non-NULL, a message describing the first failed check is
+ * written into it (truncated to errmsg_len). */
+bool fbtreeDebugValidate(fbtreeIndex *fbt, bool verbose, char *errmsg, size_t errmsg_len);
 
 #endif /* FBTREE_INTERNAL_H */

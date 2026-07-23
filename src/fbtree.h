@@ -67,7 +67,10 @@ unsigned long fbtreeCountRangeByScore(fbtreeIndex *fbt, const char *min_score, c
 unsigned long fbtreeCountRangeByValue(fbtreeIndex *fbt, const_sds min_val, const_sds max_val, int min_ex, int max_ex);
 
 /* Debug */
-bool fbtreeDebugValidate(fbtreeIndex *fbt, bool verbose);
+/* Validate tree invariants. Returns true when consistent. On failure, when
+ * errmsg is non-NULL, a message describing the first failed check is
+ * written into it (truncated to errmsg_len). */
+bool fbtreeDebugValidate(fbtreeIndex *fbt, bool verbose, char *errmsg, size_t errmsg_len);
 
 /* Leaf iteration for defrag/dismiss (walks the linked list of leaves).
  * Callback receives each packed sds item. For defrag, return the new pointer

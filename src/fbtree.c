@@ -405,6 +405,25 @@ static void unlinkLeaf(leafNode *leaf) {
     if (leaf->next) leaf->next->prev = leaf->prev;
 }
 
+/* Free a node that has been emptied by deletion: unlink leaves from the leaf
+ * chain, release any spilled prefix buffer on inner nodes, then free the
+ * node itself. */
+static void freeEmptyNode(node *n) {
+    if (n->is_leaf)
+        unlinkLeaf((leafNode *)n);
+    else
+        innerNodeFreePrefix((innerNode *)n);
+    zfree(n);
+}
+
+/* Variant for emptied nodes whose leaves have already been removed from the
+ * leaf chain (range deletion splices the chain before trimming boundary
+ * subtrees): only the spilled prefix release applies. */
+static void freeEmptyNodeAlreadyUnlinked(node *n) {
+    if (!n->is_leaf) innerNodeFreePrefix((innerNode *)n);
+    zfree(n);
+}
+
 static insertResult leafNodeSplit(leafNode *left_leaf, sds string, TraversalHint hint) {
     assert(left_leaf->header.num_items == NODE_SIZE);
 
@@ -963,12 +982,7 @@ static deleteResult subtreeDeleteItem(fbtreeIndex *fbt, node *n, const_sds item)
 
     /* Remove empty child */
     if (inner->child_sizes[index] == 0) {
-        node *empty_child = inner->children[index];
-        if (empty_child->is_leaf)
-            unlinkLeaf((leafNode *)empty_child);
-        else
-            innerNodeFreePrefix((innerNode *)empty_child);
-        zfree(empty_child);
+        freeEmptyNode(inner->children[index]);
         innerNodeRemoveChild(inner, index);
         /* Anchor update: if we removed last child, new last child's anchor bubbles up */
         sds new_anchor = (inner->header.num_items > 0 && index == inner->header.num_items)
@@ -1048,12 +1062,7 @@ static deleteResult subtreePop(fbtreeIndex *fbt, node *n, TraversalHint hint, bo
 
     /* Remove empty child */
     if (inner->child_sizes[index] == 0) {
-        node *empty_child = inner->children[index];
-        if (empty_child->is_leaf)
-            unlinkLeaf((leafNode *)empty_child);
-        else
-            innerNodeFreePrefix((innerNode *)empty_child);
-        zfree(empty_child);
+        freeEmptyNode(inner->children[index]);
         innerNodeRemoveChild(inner, index);
         sds new_anchor = (inner->header.num_items > 0 && index == inner->header.num_items)
                              ? inner->anchors[inner->header.num_items - 1]
@@ -1767,9 +1776,7 @@ static unsigned long deleteRangeSameLeaf(fbtreeIndex *fbt,
         inner->child_sizes[ci] -= deleted;
 
         if (inner->child_sizes[ci] == 0) {
-            node *empty = inner->children[ci];
-            if (empty->is_leaf) unlinkLeaf((leafNode *)empty);
-            zfree(empty);
+            freeEmptyNode(inner->children[ci]);
             innerNodeRemoveChild(inner, ci);
         } else {
             innerNodeRefreshChildMeta(inner, ci);
@@ -1899,8 +1906,7 @@ static unsigned long deleteRangeCore(fbtreeIndex *fbt, BoundaryPaths *bp, fbtree
 
         /* Update or remove the boundary child */
         if (getSubtreeSize(inner->children[ci]) == 0) {
-            if (!inner->children[ci]->is_leaf) innerNodeFreePrefix((innerNode *)inner->children[ci]);
-            zfree(inner->children[ci]);
+            freeEmptyNodeAlreadyUnlinked(inner->children[ci]);
             inner->header.num_items = ci;
         } else {
             innerNodeRefreshChildMeta(inner, ci);
@@ -1926,8 +1932,7 @@ static unsigned long deleteRangeCore(fbtreeIndex *fbt, BoundaryPaths *bp, fbtree
         bp->right_sub_idx[d] = 0;
         int new_ci = 0;
         if (getSubtreeSize(inner->children[new_ci]) == 0) {
-            if (!inner->children[new_ci]->is_leaf) innerNodeFreePrefix((innerNode *)inner->children[new_ci]);
-            zfree(inner->children[new_ci]);
+            freeEmptyNodeAlreadyUnlinked(inner->children[new_ci]);
             innerNodeRemoveChildrenRange(inner, 0, 0);
         } else {
             innerNodeRefreshChildMeta(inner, new_ci);
@@ -1978,8 +1983,7 @@ static unsigned long deleteRangeCore(fbtreeIndex *fbt, BoundaryPaths *bp, fbtree
         int ci = bp->shared_left_idx[d];
 
         if (getSubtreeSize(inner->children[ci]) == 0) {
-            if (!inner->children[ci]->is_leaf) innerNodeFreePrefix((innerNode *)inner->children[ci]);
-            zfree(inner->children[ci]);
+            freeEmptyNodeAlreadyUnlinked(inner->children[ci]);
             innerNodeRemoveChild(inner, ci);
         } else {
             innerNodeRefreshChildMeta(inner, ci);

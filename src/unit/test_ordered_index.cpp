@@ -1873,6 +1873,31 @@ TEST_F(OrderedIndexTest, RangeDeleteCollapsesSpilledPrefixSubtree) {
     sdsfree(max);
 }
 
+TEST_F(OrderedIndexTest, SameLeafRangeDeleteCollapsesSpilledPrefixSubtree) {
+    /* Same construction, collapsed through single-member lex range deletes.
+     * Each delete resolves both boundaries to the same leaf, so emptied
+     * ancestors are released by the same-leaf shared-path walk. Deleting
+     * every member this way must release the spilled prefix buffers of the
+     * inner nodes that empty along the way (LeakSanitizer verifies). */
+    enum { N = 5000,
+           PREFIX = 300 };
+    char buf[PREFIX + 8];
+    memset(buf, 'p', PREFIX);
+    for (int i = 0; i < N; i++) {
+        snprintf(buf + PREFIX, 8, "%05d", i);
+        orderedIndexInsert(oi, 1.0, buf, PREFIX + 5);
+    }
+    ASSERT_EQ(orderedIndexLength(oi), (unsigned long)N);
+
+    for (int i = 0; i < N; i++) {
+        snprintf(buf + PREFIX, 8, "%05d", i);
+        sds member = sdsnewlen(buf, PREFIX + 5);
+        ASSERT_EQ(orderedIndexDeleteRangeByLex(oi, member, member, 0, 0, NULL, NULL), 1UL);
+        sdsfree(member);
+    }
+    ASSERT_EQ(orderedIndexLength(oi), 0UL);
+}
+
 TEST_F(OrderedIndexTest, EstimateStructureMemoryTracksTreeShape) {
     /* The structure estimate covers nodes only: it grows with item count
      * and is independent of member payload size. */

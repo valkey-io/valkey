@@ -13679,6 +13679,8 @@ void moduleUnloadAllModules(void) {
     listIter li;
     listNode *ln;
 
+    /* Unload in reverse load order so dependents are unloaded before
+     * their dependencies. */
     listRewindTail(modules, &li);
     while ((ln = listNext(&li)) != NULL) {
         struct ValkeyModule *module = listNodeValue(ln);

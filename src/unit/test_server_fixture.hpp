@@ -36,6 +36,10 @@ void testServerInitMinimal(int dbnum);
 /* Add a real string key/value to database `dbid` via the normal dbAdd() path. */
 void testServerAddStringKey(int dbid, const char *key, const char *val);
 
+/* Add an arbitrary (typed) value object under `key` in database `dbid` via the normal dbAdd()
+ * path. Ownership of `val` passes to the database (as with dbAdd); the key name is copied. */
+void testServerAddObjectKey(int dbid, const char *key, robj *val);
+
 /* Free all keys in all databases. Safe for keys without TTLs / volatile items (the common
  * case for these tests). Call between tests to avoid cross-test contamination. */
 void testServerEmptyAllDbs(void);

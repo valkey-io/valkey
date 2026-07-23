@@ -1338,6 +1338,22 @@ int defragRunCycleForTest(monotime endtime) {
 }
 
 
+/* Test seam (declared locally by src/unit/test_defrag.cpp): expose whether a defrag cycle is in
+ * progress, so a test driving defragWhileBlocked() can loop until the cycle completes. */
+int defragTestIsRunning(void) {
+    return defragIsRunning();
+}
+
+
+/* Test seam (declared locally by src/unit/test_defrag.cpp): begin a defrag cycle exactly as
+ * production does -- including registering the event-loop timer that defragIsRunning() keys on --
+ * so a test can drive the cycle through defragWhileBlocked(). The test never runs the event loop;
+ * defragWhileBlocked() itself simulates the timer proc and deregisters the timer on completion. */
+void defragTestBeginCycle(void) {
+    beginDefragCycle();
+}
+
+
 #define INTERPOLATE(x, x1, x2, y1, y2) ((y1) + ((x) - (x1)) * ((y2) - (y1)) / ((x2) - (x1)))
 #define LIMIT(y, min, max) ((y) < (min) ? min : ((y) > (max) ? max : (y)))
 

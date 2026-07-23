@@ -96,13 +96,16 @@ void testServerInitMinimal(int dbnum) {
     }
 }
 
-void testServerAddStringKey(int dbid, const char *key, const char *val) {
+void testServerAddObjectKey(int dbid, const char *key, robj *val) {
     robj *k = createStringObject(key, strlen(key));
-    robj *v = createStringObject(val, strlen(val));
     /* dbAdd() copies the key's sds into the stored value object and takes ownership of the
      * value (via valref); it does not take ownership of the key robj. */
-    dbAdd(server.db[dbid], k, &v);
+    dbAdd(server.db[dbid], k, &val);
     decrRefCount(k);
+}
+
+void testServerAddStringKey(int dbid, const char *key, const char *val) {
+    testServerAddObjectKey(dbid, key, createStringObject(val, strlen(val)));
 }
 
 void testServerEmptyAllDbs(void) {

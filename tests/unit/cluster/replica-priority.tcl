@@ -1,4 +1,4 @@
-start_cluster 3 4 {tags {external:skip cluster} overrides {cluster-ping-interval 1000 cluster-node-timeout 2000}} {
+start_cluster 3 4 {tags {external:skip cluster} overrides {cluster-ping-interval 1000 cluster-node-timeout 5000}} {
     test "Replica can do a better ranking in auto failover based on the priority" {
         # primary R 0, replica1 R 3, replica2 R 6
 
@@ -71,6 +71,15 @@ start_cluster 3 4 {tags {external:skip cluster} overrides {cluster-ping-interval
             [s -6 role] eq {master}
         } else {
             fail "The old primary was not converted into replica"
+        }
+
+        # Replica priority resets to 0 when the sender stops advertising it
+        R 0 config set cluster-replica-priority 0
+        wait_for_condition 1000 50 {
+            [R 3 debug cluster-replica-priority [R 0 cluster myid]] == 0 &&
+            [R 6 debug cluster-replica-priority [R 0 cluster myid]] == 0
+        } else {
+            fail "Replica priority did not propagate"
         }
     }
 } ;# start_cluster

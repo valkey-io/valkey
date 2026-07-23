@@ -85,7 +85,6 @@ By default (when dual-channel is negotiated), the flow separates control and sna
            |-- writes snapshot ---> (on 2nd conn) --------->|                             |
            |                                                |~~~~~~ forward snapshot ~~~~>| (to replica)
            |------------ SYNCSLOTS SNAPSHOT-EOF ----------->|                             |
-           |                                                |------ SNAPSHOT-EOF -------->| (to replica)
            |                                                |                             |
      ================= 4. Incremental & Pause ================
            |<---------------- SYNCSLOTS REQUEST-PAUSE ------|                             |
@@ -115,7 +114,6 @@ In single-channel fallback mode (if either node has dual-channel disabled), the 
            |~~~~~~~~~~~~~~ snapshot as AOF ~~~~~~~~~~~~~~~~>|                             |
            |                                                |~~~~~~ forward snapshot ~~~~>| (to replica)
            |----------- SYNCSLOTS SNAPSHOT-EOF ------------>|                             |
-           |                                                |------ SNAPSHOT-EOF -------->| (to replica)
            |                                                |                             |
            |<----------- SYNCSLOTS REQUEST-PAUSE -----------|                             |
            |                                                |                             |

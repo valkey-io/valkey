@@ -1355,11 +1355,11 @@ int connectSlotExportJob(slotMigrationJob *job) {
 /* Proceed with a previously started connection. If no problems have occurred,
  * C_OK is returned and completed is set. C_ERR will be returned if an issue was
  * encountered. */
-int proceedWithSlotExportJobConnecting(slotMigrationJob *job, bool *completed) {
-    serverAssert(job->type == SLOT_MIGRATION_EXPORT && job->conn);
+static int proceedWithConnectionEstablishment(connection *conn, bool *completed) {
+    serverAssert(conn);
     *completed = false;
 
-    switch (connGetState(job->conn)) {
+    switch (connGetState(conn)) {
     case CONN_STATE_CONNECTED:
         *completed = true;
         return C_OK;
@@ -2194,8 +2194,9 @@ void proceedWithSlotMigration(slotMigrationJob *job) {
             bool completed = false;
             if (!job->conn) {
                 status = connectSlotExportJob(job);
-            } else {
-                status = proceedWithSlotExportJobConnecting(job, &completed);
+            }
+            if (status == C_OK) {
+                status = proceedWithConnectionEstablishment(job->conn, &completed);
             }
             if (status == C_ERR) {
                 const char *conn_err = job->conn ? connGetLastError(job->conn) : "target node not found";
@@ -2246,7 +2247,7 @@ void proceedWithSlotMigration(slotMigrationJob *job) {
                 status = connectSlotExportSnapshotChannel(job);
             }
             if (status == C_OK) {
-                completed = connGetState(job->snapshot_conn) == CONN_STATE_CONNECTED;
+                status = proceedWithConnectionEstablishment(job->snapshot_conn, &completed);
             }
             if (status == C_ERR) {
                 finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_FAILED,

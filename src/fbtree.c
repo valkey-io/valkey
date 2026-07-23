@@ -1792,8 +1792,6 @@ static unsigned long deleteRangeCore(fbtreeIndex *fbt, BoundaryPaths *bp, fbtree
      * indices that fall outside the leaf (no matching elements in that leaf).
      * Rank paths never hit this since ranks are pre-validated. */
     if (bp->start_idx >= bp->start_leaf->header.num_items && bp->end_idx < 0) return 0;
-    if (bp->start_idx >= bp->start_leaf->header.num_items && bp->start_leaf->next == bp->end_leaf && bp->end_idx < 0)
-        return 0;
     if (bp->end_idx < 0 && bp->start_leaf == bp->end_leaf) return 0;
 
     /* --- Phase 1: Boundaries diverged. Process the split. --- */

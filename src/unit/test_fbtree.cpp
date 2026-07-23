@@ -3722,7 +3722,7 @@ TEST_F(FbtreeTest, DebugValidateReportsFailureDetail) {
     ASSERT_TRUE(fbtreeDebugValidate(fbt, false, errmsg, sizeof(errmsg)));
     EXPECT_STREQ(errmsg, "");
 
-    innerNode *root = (innerNode *)fbt->root;
+    innerNode *root = (innerNode *)(void *)fbt->root;
     root->child_sizes[0] += 1;
     ASSERT_FALSE(fbtreeDebugValidate(fbt, false, errmsg, sizeof(errmsg)));
     EXPECT_NE(strstr(errmsg, "stored subtree size"), nullptr) << "errmsg: " << errmsg;

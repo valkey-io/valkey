@@ -65,6 +65,15 @@ ssize_t __wrap_streamDecompressorFeed(streamDecompressor *decompressor, uint8_t 
 void __wrap_zmadvise_dontneed(void *ptr, size_t size_hint);
 int __wrap_processPendingCommandAndInputBuffer(client *c);
 void __wrap_beforeNextClient(client *c);
+
+void __wrap_blockClientInUseOnKeys(client *c, int nKeys, robj **keys);
+void __wrap_unblockClientsInUseOnKey(robj *key);
+
+int __wrap_ACLCheckAllUserCommandPerm(user *u, struct serverCommand *cmd, robj **argv, int argc, int dbid, int *idxptr);
+
+size_t __wrap_hashtableScan(hashtable *ht, size_t cursor, hashtableScanFunction fn, void *privdata);
+bool __wrap_hashtableScanHasPassedKey(hashtable *ht, const void *key, size_t cursor);
+
 #undef protected
 #undef _Bool
 #undef typename

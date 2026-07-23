@@ -103,7 +103,19 @@ static_assert(sizeof(off_t) >= 8, "off_t must be 64-bit; ensure _FILE_OFFSET_BIT
 #define dismissMemory zmadvise_dontneed
 
 #define VALKEYMODULE_CORE 1
-typedef struct serverObject robj;
+
+/* serverObject (aka robj) is currently overloaded for 2 purposes.  This is a legacy artifact.
+ *   1. It's carries a reference counted STRING (a keyless value) during parsing and command execution.
+ *   2. It's also used to carry a key/value pair which is inserted into the DB.  In this form, the
+ *      value is not limited to being a string.
+ *
+ * The typedef "dbEntry" is used to explicitly connote the latter form.  It indicates a key/value
+ * pair which is suitable to exist in the DB.  It might be active in the DB, or may be unlinked from
+ * the DB (but still contains a key/value).  The value may be any of the Valkey data types/encodings.
+ */
+typedef struct serverObject robj;    // A keyless string OR a key/value pair
+typedef struct serverObject dbEntry; // Explicitly a key/value pair
+
 #include "valkeymodule.h" /* Modules API defines. */
 
 /* Following includes allow test functions to be called from main() */
@@ -1793,6 +1805,7 @@ struct valkeyServer {
     size_t initial_memory_usage;         /* Bytes used after initialization. */
     int always_show_logo;                /* Show logo even for non-stdout logging. */
     int in_exec;                         /* Are we inside EXEC? */
+    int in_call;                         /* Nesting level within the call() function. */
     int busy_module_yield_flags;         /* Are we inside a busy module? (triggered by RM_Yield). see BUSY_MODULE_YIELD_ flags. */
     const char *busy_module_yield_reply; /* When non-null, we are inside RM_Yield. */
     char *ignore_warnings;               /* Config: warnings that should be ignored. */
@@ -1811,6 +1824,7 @@ struct valkeyServer {
     pid_t child_pid;                   /* PID of current child */
     int child_type;                    /* Type of current child */
     _Atomic(int) module_gil_acquiring; /* Indicates whether the GIL is being acquiring by the main thread. */
+    _Atomic(int) module_gil_acquired;  /* Indicates if the main thread has the GIL acquired. */
     /* Networking */
     int port;                              /* TCP listening port */
     int tls_port;                          /* TLS listening port */
@@ -3558,6 +3572,8 @@ void resetServerStats(void);
 void monitorActiveDefrag(void);
 void defragWhileBlocked(void);
 const char *evictPolicyToString(void);
+size_t objectComputeSize(robj *key, robj *o, size_t sample_size, int dbid);
+robj *createStringObjectWithKeyAndExpire(const char *ptr, size_t len, const_sds key, long long expire);
 struct serverMemOverhead *getMemoryOverheadData(void);
 void freeMemoryOverheadData(struct serverMemOverhead *mh);
 void checkChildrenDone(void);
@@ -3817,6 +3833,7 @@ typedef int(emptyDataHashtableFilter)(int didx);
 long long emptyData(int dbnum, int flags, void(callback)(hashtable *));
 long long emptyDbStructure(serverDb **dbarray, int dbnum, int async, void(callback)(hashtable *));
 void resetDbExpiryState(serverDb *db);
+int getFlushCommandFlags(client *c, int *flags);
 void flushAllDataAndResetRDB(int flags);
 long long dbTotalServerKeyCount(void);
 serverDb *initTempDb(int id);
@@ -3962,11 +3979,13 @@ void startEvictionTimeProc(void);
 uint8_t *getConfigurableHashSeed(void);
 uint64_t dictSdsHash(const void *key);
 uint64_t dictSdsCaseHash(const void *key);
+uint64_t dictObjHash(const void *key);
 uint64_t dictCStrHash(const void *key);
 uint64_t dictCStrCaseHash(const void *key);
 uint64_t dictEncObjHash(const void *key);
 int dictSdsKeyCompare(const void *key1, const void *key2);
 int dictSdsKeyCaseCompare(const void *key1, const void *key2);
+int dictObjKeyCompare(const void *key1, const void *key2);
 int dictCStrKeyCompare(const void *key1, const void *key2);
 int dictCStrKeyCaseCompare(const void *key1, const void *key2);
 int dictEncObjKeyCompare(const void *key1, const void *key2);

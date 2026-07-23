@@ -39,6 +39,7 @@
 #include "zmalloc.h"
 #include "sds.h"
 #include "module.h"
+#include "bgiteration.h"
 #include <math.h>
 #include <ctype.h>
 
@@ -371,7 +372,7 @@ robj *createStringObjectFromSds(const_sds s) {
     return createStringObject(s, sdslen(s));
 }
 
-static robj *createStringObjectWithKeyAndExpire(const char *ptr, size_t len, const_sds key, long long expire) {
+robj *createStringObjectWithKeyAndExpire(const char *ptr, size_t len, const_sds key, long long expire) {
     if (shouldEmbedStringObject(len, key, expire)) {
         return createEmbeddedStringObjectWithKeyAndExpire(ptr, len, key, expire);
     } else {
@@ -480,6 +481,7 @@ robj *objectSetKeyAndExpire(robj *o, const_sds key, long long expire) {
     if (objectGetType(o) == OBJ_STRING && objectGetEncoding(o) == OBJ_ENCODING_EMBSTR) {
         robj *new = createStringObjectWithKeyAndExpire(objectGetVal(o), sdslen(objectGetVal(o)), key, expire);
         objectSetLRU(new, objectGetLRU(o));
+        bgIteration_updateDbEntryPtr(o, new);
         decrRefCount(o);
         return new;
     }
@@ -505,6 +507,7 @@ robj *objectSetKeyAndExpire(robj *o, const_sds key, long long expire) {
     robj *new = createUnembeddedObjectWithKeyAndExpire(objectGetType(o), ptr, key, expire);
     objectSetEncoding(new, objectGetEncoding(o));
     objectSetLRU(new, objectGetLRU(o));
+    bgIteration_updateDbEntryPtr(o, new);
     decrRefCount(o);
     return new;
 }

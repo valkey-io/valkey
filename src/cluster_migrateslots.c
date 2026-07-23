@@ -2120,8 +2120,10 @@ static void slotMigrationJobReadHandshakeResponse(connection *conn) {
 
     char *p = job->response_buf;
     if (p[0] == '-') {
-        sds err_msg = sdsnewlen(p, reply_len);
+        sds err = sdsnewlen(p, reply_len);
+        sds err_msg = sdscatfmt(sdsempty(), "Received error during handshake to target: %S", err);
         finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_FAILED, err_msg);
+        sdsfree(err);
         sdsfree(err_msg);
     } else if (p[0] == '+' && !strncasecmp(p + 1, "OK", 2)) {
         sendSyncSlotsMessage(job, "ACK");

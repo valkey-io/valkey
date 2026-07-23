@@ -617,7 +617,7 @@ foreach dual_channel {yes no} {
         }
     }
 
-    proc verify_client_flag {idx flag expected_count} {
+    proc count_client_flag {idx flag} {
         set clients [split [string trim [R $idx client list]] "\r\n"]
         set found 0
         foreach client $clients {
@@ -625,7 +625,13 @@ foreach dual_channel {yes no} {
                 incr found
             }
         }
+        return $found
+    }
+
+    proc verify_client_flag {idx flag expected_count} {
+        set found [count_client_flag $idx $flag]
         if {$found ne $expected_count} {
+            set clients [R $idx client list]
             fail "Expected $flag to appear in client list $expected_count times, got $found: $clients"
         }
     }
@@ -639,11 +645,22 @@ foreach dual_channel {yes no} {
             wait_for_migration_field 2 $jobname state waiting-to-pause
 
             # Check the flags
-            set dual_channel [lindex [R 0 CONFIG GET cluster-slot-migration-dual-channel] 1]
-            set expected_count [expr {$dual_channel ? 2 : 1}]
+            if {$::current_dual_channel eq "yes"} {
+                # In dual-channel, snapshot channel might be closed or not yet closed, so 1 or 2 is fine.
+                set count0 [count_client_flag 0 "i"]
+                set count2 [count_client_flag 2 "E"]
+                if {($count0 != 1 && $count0 != 2) || ($count2 != 1 && $count2 != 2)} {
+                    set clients0 [R 0 client list]
+                    set clients2 [R 2 client list]
+                    fail "Expected 1 or 2 clients with flags in dual-channel: Node 0 (got $count0): $clients0, Node 2 (got $count2): $clients2"
+                }
+            } else {
+                # In single-channel, it must be 1.
+                verify_client_flag 0 "i" 1
+                verify_client_flag 2 "E" 1
+            }
+
             verify_client_flag 0 "E" 0
-            verify_client_flag 2 "E" $expected_count
-            verify_client_flag 0 "i" $expected_count
             verify_client_flag 2 "i" 0
             assert_match "id=*" [R 2 CLIENT LIST FLAGS E]
             assert_equal "" [R 2 CLIENT LIST FLAGS i]
@@ -669,7 +686,7 @@ foreach dual_channel {yes no} {
         }
     }
 
-    if {$dual_channel eq "yes"} {
+    if {$::current_dual_channel eq "yes"} {
         test "Slot migration dual-channel fallback negotiation (source supports, target doesn't)" {
             assert_does_not_resync {
                 # Disable dual-channel on target (R0) only, keep it enabled on source (R2)
@@ -1528,6 +1545,10 @@ foreach dual_channel {yes no} {
             assert_causes_conn_drop 0 {
                 $client CLUSTER SYNCSLOTS ESTABLISH SOURCE $node2_id NAME $fake_jobname SLOTSRANGE 16383 16383
                 $client CLUSTER SYNCSLOTS FAILOVER-GRANTED
+            }
+            assert_causes_conn_drop 0 {
+                $client CLUSTER SYNCSLOTS ESTABLISH SOURCE $node2_id NAME $fake_jobname SLOTSRANGE 16383 16383
+                $client CLUSTER SYNCSLOTS LINK-CHANNEL $fake_jobname
             }
         }
     }

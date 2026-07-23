@@ -95,7 +95,7 @@ typedef struct slotMigrationJob {
     sds response_buf;
     bool use_dual_channel;     /* True if dual channel is negotiated and used. */
     connection *snapshot_conn; /* Source side: temporary connection for snapshot channel before passing to child. */
-    client *snapshot_client;   /* Target side: client associated with the snapshot connection. */
+    client *snapshot_client;   /* Client associated with the snapshot connection (used on both source and target sides). */
 } slotMigrationJob;
 
 static bool isSlotMigrationJobFinished(slotMigrationJob *job);
@@ -852,6 +852,11 @@ slotMigrationJob *createSlotImportJob(client *c,
     return job;
 }
 
+/* We treat slot imports like primaries. Primaries are expected to have a
+ * dedicated query buffer and allocated replication data.
+ *
+ * We also backfill this job's establish command (which would have been
+ * lost, as we did not have a dedicated query buffer before this point). */
 static void initMigrationClientReplication(client *c, sds backfill_cmd) {
     initClientReplicationData(c);
     if (!c->querybuf) {
@@ -1469,6 +1474,11 @@ static sds generateSyncSlotsLinkChannelCommand(slotMigrationJob *job) {
  */
 void slotExportBeginStreaming(slotMigrationJob *job) {
     serverAssert(job->type == SLOT_MIGRATION_EXPORT);
+    if (job->use_dual_channel && job->snapshot_client) {
+        job->snapshot_client->slot_migration_job = NULL;
+        freeClientAsync(job->snapshot_client);
+        job->snapshot_client = NULL;
+    }
     updateSlotMigrationJobState(job, SLOT_EXPORT_STREAMING);
 
     /* When the slot export is not ready, it will skip adding the client to the
@@ -1769,13 +1779,6 @@ void backgroundSlotMigrationDoneHandler(int exitcode, int bysignal) {
             continue;
         }
         if (!bysignal && exitcode == 0) {
-            if (job->use_dual_channel) {
-                if (job->snapshot_client) {
-                    job->snapshot_client->slot_migration_job = NULL;
-                    freeClientAsync(job->snapshot_client);
-                    job->snapshot_client = NULL;
-                }
-            }
             slotExportBeginStreaming(job);
             job->stat_cow_bytes = server.stat_slot_migration_cow_bytes;
         } else {
@@ -2772,11 +2775,6 @@ bool canSlotMigrationJobSendAck(slotMigrationJob *job) {
            job->state != SLOT_EXPORT_READ_AUTH_RESPONSE &&
            job->state != SLOT_EXPORT_SEND_HANDSHAKE &&
            job->state != SLOT_EXPORT_READ_HANDSHAKE_RESPONSE &&
-           job->state != SLOT_EXPORT_CONNECTING_SNAPSHOT &&
-           job->state != SLOT_EXPORT_SEND_SNAPSHOT_AUTH &&
-           job->state != SLOT_EXPORT_READ_SNAPSHOT_AUTH_RESPONSE &&
-           job->state != SLOT_EXPORT_LINKING_SNAPSHOT &&
-           job->state != SLOT_EXPORT_READ_LINK_RESPONSE &&
            job->state != SLOT_IMPORT_OCCURRING_ON_PRIMARY;
 }
 
@@ -2788,7 +2786,6 @@ void clusterSlotMigrationCron(void) {
     listRewind(server.cluster->slot_migration_jobs, &li);
     while ((ln = listNext(&li)) != NULL) {
         job = ln->value;
-
 
         /* Note that after granting failover, we no longer care about the
          * connection timeout, since we will use pause timeout. */
@@ -2888,6 +2885,11 @@ void clusterCommandSyncSlotsLinkChannel(client *c) {
     }
     if (job->type != SLOT_MIGRATION_IMPORT) {
         addReplyError(c, "Job is not an import job");
+        return;
+    }
+    if (job->client == c) {
+        finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_FAILED,
+                               "Cannot link the control channel as snapshot channel");
         return;
     }
     if (job->snapshot_client) {

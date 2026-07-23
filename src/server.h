@@ -3266,7 +3266,6 @@ void freeClientReplicationData(client *c);
 void replicaReceiveRDBFromPrimaryToDisk(connection *conn, int is_dual_channel);
 sds replicationSendAuth(connection *conn);
 sds receiveSynchronousResponse(connection *conn);
-sds sendCommandRaw(connection *conn, sds cmd);
 ConnectionType *connTypeOfReplication(void);
 robj *generateSelectCommand(int dictid);
 

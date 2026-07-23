@@ -447,7 +447,7 @@ TEST_P(DefragBigKeyTest, DeferredKeyYieldsIncrementallyAndCompletes) {
     const DefragBigKeyParam &p = GetParam();
 
     robj *ob = p.build();
-    ASSERT_EQ(ob->encoding, p.expected_encoding);
+    ASSERT_EQ((int)ob->encoding, p.expected_encoding);
     unsigned long len_before = p.length(ob);
     ASSERT_GT(len_before, (unsigned long)BIGKEY_DEFER_THRESHOLD); /* must take the defrag_later path */
     testServerAddObjectKey(0, "bigkey", ob);
@@ -475,7 +475,7 @@ TEST_P(DefragBigKeyTest, DeferredKeyYieldsIncrementallyAndCompletes) {
     robj *found = dbFind(server.db[0], key);
     sdsfree(key);
     ASSERT_TRUE(found != NULL);
-    EXPECT_EQ(found->encoding, p.expected_encoding);
+    EXPECT_EQ((int)found->encoding, p.expected_encoding);
     EXPECT_EQ(p.length(found), len_before);
 }
 
@@ -500,7 +500,7 @@ class DefragListBookmarkTest : public DefragBigKeyTestBase {};
 
 TEST_F(DefragListBookmarkTest, BookmarkLifecycleAcrossYields) {
     robj *ob = buildBigList();
-    ASSERT_EQ(ob->encoding, OBJ_ENCODING_QUICKLIST);
+    ASSERT_EQ((int)ob->encoding, OBJ_ENCODING_QUICKLIST);
     unsigned long len_before = listTypeLength(ob);
     testServerAddObjectKey(0, "biglist", ob);
     sds key = sdsnew("biglist");

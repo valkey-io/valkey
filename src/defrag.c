@@ -44,6 +44,7 @@
 #include "eval.h"
 #include "script.h"
 #include "module.h"
+#include "bgiteration.h"
 #include <stdbool.h>
 #include <stddef.h>
 
@@ -658,6 +659,8 @@ static void defragKey(defragKeysCtx *ctx, robj **elemref) {
     unsigned char *newzl;
     ob = *elemref;
 
+    if (bgIteration_isEntryInuse(ob)) return;
+
     /* Try to defrag robj and/or string value. */
     if ((newob = activeDefragStringOb(ob))) {
         *elemref = newob;
@@ -765,6 +768,11 @@ static void defragPubsubScanCallback(void *privdata, void *elemref) {
  * and 1 if time is up and more work is needed. */
 static int defragLaterItem(robj *ob, unsigned long *cursor, monotime endtime, int dbid) {
     if (ob) {
+        if (bgIteration_isEntryInuse(ob)) {
+            *cursor = 0;
+            return 0;
+        }
+
         if (ob->type == OBJ_LIST && ob->encoding == OBJ_ENCODING_QUICKLIST) {
             return scanLaterList(ob, cursor, endtime);
         } else if (ob->type == OBJ_SET && ob->encoding == OBJ_ENCODING_HASHTABLE) {

@@ -467,6 +467,13 @@ static uint32_t bgIteration_epoch = 1;
  * should respect the setting of cur_cmd_may_replicate. */
 static bool iteratorReplicationFlagsWereUpdated;
 
+/* When a key is deleted (expire/evict):
+ *   1. bgIteration_keyDelete() is called
+ *   2. the key is physically deleted
+ *   3. replication is generated
+ * At the time of replication, we need the (deleted) dbEntry pointer to be able to check
+ * early_iterated_entries.  This variable stores the pointer from the last call of keyDelete() */
+static dbEntry *dbEntryPtrOfLastKeyDelete;
 
 /* BgIteration debug captures BgIteration activity to a large sds buffer.  When an iterator is
  * completed, the entire buffer is written to a file in the current working directory.  Note that
@@ -1804,19 +1811,6 @@ static void handleSwapdb(int db1, int db2) {
 }
 
 
-static void removePtrFromEarlyIterate(dbEntry *de) {
-    /* If the item is being released, let's get the pointer out of our early_iterate_entries.
-     * This is not strictly necessary, but it frees some memory and keeps the dictionary small. */
-    listIter li;
-    listNode *node;
-    listRewind(allIterators, &li);
-    while ((node = listNext(&li)) != NULL) {
-        bgIterator *it = listNodeValue(node);
-        hashtableDelete(it->early_iterate_entries, de); // just try delete (might not be here)
-    }
-}
-
-
 static bool isDbSignificant(int dbid) {
     unsigned long long totalKeys = 0;
     for (int i = 0; i < server.dbnum; i++) {
@@ -2277,6 +2271,7 @@ void bgIteration_keyDelete(int dbid, const_sds key) {
 
     dbEntry *de = dbFind(server.db[dbid], (sds)key);
     serverAssert(de != NULL); // This API should be called BEFORE removal from main dict
+    dbEntryPtrOfLastKeyDelete = de; // save for check at replication time
 
     // For consistent iterators, we need to make sure the item gets written before delete
     listIter li;
@@ -2293,8 +2288,6 @@ void bgIteration_keyDelete(int dbid, const_sds key) {
             }
         }
     }
-
-    removePtrFromEarlyIterate(de);
 
     /* We might be within the context of a command execution.  This happens if the key is found to
      * be expired when attempting to execute the command.  In this case, we should treat the key as
@@ -2609,10 +2602,11 @@ void bgIteration_handleCommandReplication(int dbid,
                     shouldReplicateDelCommand = it->cur_cmd_may_replicate;
                 } else {
                     // Otherwise, it's something like active expiration or eviction (unrelated)
-                    if (iteratorHasPassedKey(it, dbid, key, de)) {
+                    if (iteratorHasPassedKey(it, dbid, key, dbEntryPtrOfLastKeyDelete)) {
                         shouldReplicateDelCommand = true;
                     }
                 }
+                hashtableDelete(it->early_iterate_entries, dbEntryPtrOfLastKeyDelete); // just try delete (might not be here)
             }
         }
 

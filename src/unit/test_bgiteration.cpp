@@ -124,7 +124,7 @@ static bool mockHashtableScanHasPassedKey(hashtable *ht, const void *key, size_t
     if (server.db[0]->keys && ht == kvstoreGetHashtable(server.db[0]->keys, 0)) itsOurs = true;
     if (server.db[1]->keys && ht == kvstoreGetHashtable(server.db[1]->keys, 0)) itsOurs = true;
 
-    // Mock logic uses a lexigraphic cursor
+    // Mock logic uses a lexicographic cursor
     if (itsOurs) return ((const char *)key)[0] < (char)('A' + cursor);
 
     // Otherwise, use the real logic for other hashtables
@@ -848,7 +848,7 @@ class BgIterationTest : public ::testing::Test {
 
 
     // Simulate what happens when a write command isn't blocked
-    void simulateUnblockedWrite(client *c) {
+    void simulateUnblockedWrite_inCall(client *c) {
         EXPECT_CALL(mock, blockClientInUseOnKeys(c, _, _)).Times(0);
         bool blocked = bgIteration_blockClientIfRequired(c);
         EXPECT_FALSE(blocked);
@@ -860,7 +860,7 @@ class BgIterationTest : public ::testing::Test {
     //  scenario where we would NOT be blocked on the write.  It actually alters the value of
     //  the key and updates the metadata.
     void simulateUnblockedWriteWithModification(client *c) {
-        simulateUnblockedWrite(c);
+        simulateUnblockedWrite_inCall(c);
 
         // Fake execution of the command - touch the iterator_epoch counter and swap the value
         // We need to duplicate the value because setKey() can reallocate it.
@@ -980,7 +980,7 @@ class BgIterationTest : public ::testing::Test {
         dbStr[0] = '0' + dbid1;
         c->argv[2] = createStringObjectFromCString(dbStr);
 
-        simulateUnblockedWrite(c); // SWAPDB should never block
+        simulateUnblockedWrite_inCall(c); // SWAPDB should never block
 
         // The real SWAP does more than this, but this is enough for unit tests
         serverDb *aux = server.db[dbid0];
@@ -1016,7 +1016,7 @@ class BgIterationTest : public ::testing::Test {
             EXPECT_EQ(de_in_use->refcount, 2u);
         }
 
-        simulateUnblockedWrite(c); // FLUSHDB should never block
+        simulateUnblockedWrite_inCall(c); // FLUSHDB should never block
 
         // The real FLUSH does more than this, but this is enough for unit tests
 
@@ -1932,7 +1932,7 @@ TEST_F(BgIterationTest, expireKeys_eventual_FutureKeyCreatedThenExpiredDuringSet
     simulateUnblockedWriteWithModification(c); // Not blocked because this is a future key (but we expect repl)
 
     // Now do it again, but break out the steps so that we can simulate an expiration
-    simulateUnblockedWrite(c); // Shouldn't be blocked because this is a future key
+    simulateUnblockedWrite_inCall(c); // Shouldn't be blocked because this is a future key
 
     // Now, as the SET command tries to execute, simulate that the key is expired.
     //  First, the key should be physically removed and bgIteration_keyDelete called
@@ -1966,6 +1966,43 @@ TEST_F(BgIterationTest, expireKeys_eventual_FutureKeyCreatedThenExpiredDuringSet
     // KEY 8 SHOULD BE OMITTED - This was already replicated
     expectReadKeySequence(it, 9, LAST_ITEM);
 
+    expectReadComplete(it);
+}
+
+
+// In this test, a future key is expedited.  Then it is expired by normal expiration processing.
+// We expect to see replication of the delete, since it was early iterated.
+TEST_F(BgIterationTest, expireKeys_eventual_ExpeditedKeyExpired) {
+    bgIterator *it = bgIteratorCreateFullScanIter("iter", BGITERATOR_CONSISTENCY_EVENTUAL, NULL,
+                                                  iteratorCleanupFn, PRIVDATA);
+    expectReadKey(it, 0); // Also queues 1 & 2
+
+    // This will be blocked, and key 7 expedited
+    c = getWrite2KeysClient("sunionstore", 0, 7);
+    simulateBlockedWrite(c, 2); // blocked on both 0 and 7
+
+    expectReadKeyWithUnblock(it, 7, 0); // 7 expedited to front (unblocks 0)
+    expectReadKeyWithUnblock(it, 1, 7); // 1 was already in queue (unblocks 7)
+
+    simulateUnblockedWriteWithModification(c);
+
+    // At this point,
+    //  * item 2 is still in the queue
+    //  * replication for the sunionstore is queued
+    //  * item 7 is in an early iterated state
+
+    // Now expire key 7.  We expect we will see replication (since 7 has been expedited)
+    simulateExpiration(7);
+
+    // Check queue...
+    expectReadKey(it, 2);
+    expectReadReplication(it, c);
+    expectReadReplicationDel(it, 7);
+
+    // and the rest
+    expectReadKeySequence(it, 3, 6);
+    // 7 is missing (expired)
+    expectReadKeySequence(it, 8, LAST_ITEM);
     expectReadComplete(it);
 }
 
@@ -2059,7 +2096,7 @@ TEST_F(BgIterationTest, writeWith2Keys_eventual_keyDeletedDuringSetReplace) {
     // Write command that has 2 keys. 1 existing key that we write to and 1 dependant future key.
     c = getWrite2KeysClient("sunionstore", 12, 13);
 
-    simulateUnblockedWrite(c);
+    simulateUnblockedWrite_inCall(c);
 
     // Now the call to keyDelete happens
     sds sdskey = sdsnew(keyStr(12));
@@ -2380,7 +2417,7 @@ TEST_F(BgIterationTest, copyHandlesProperDb_eventual) {
     expectReadKey(it, 1); // DB0:B1 (was already in queue)
     expectReadKey(it, 2); // DB0:B2 (was already in queue) - releases B1, unblocking the command (queues key 3 & 4)
 
-    simulateUnblockedWrite(c); // We shouldn't be blocked this time
+    simulateUnblockedWrite_inCall(c); // We shouldn't be blocked this time
 
     // Now, we'll simulate the actual activity of the COPY.  DB1:H0 will be deleted in order to
     //  be overwritten.
@@ -2689,7 +2726,7 @@ TEST_F(BgIterationTest, multiBlocksOnFutureKey) {
     // Now that we've read key 6, key 0 (B0) is passed and should not block
     freeTestClient(c);
     c = getMultiClient("SET B0 xxx");
-    simulateUnblockedWrite(c);
+    simulateUnblockedWrite_inCall(c);
     server.in_call--;
 
     // and clean up the rest...
@@ -2714,7 +2751,7 @@ TEST_F(BgIterationTest, multiNotReplicatedButDelRecreateAccess) {
     c = getMultiClient("DEL H1; SET H1 xxx; SET H2 yyy");
     // Now let's process the multi.  Since H1 & H2 are both future (existing) items, we shouldn't
     //  block or replicate.
-    simulateUnblockedWrite(c); // the EXEC
+    simulateUnblockedWrite_inCall(c); // the EXEC
 
     // Simulate the DEL H1
     server.in_exec = 1; // Simulate actual execution of the MULTI/EXEC
@@ -2765,19 +2802,19 @@ TEST_F(BgIterationTest, multiHandlesSelectProperly) {
 
     // These cases should NOT block...  (they access B0 in DB0)
     c = getMultiClient("SET B0 xxx");
-    simulateUnblockedWrite(c);
+    simulateUnblockedWrite_inCall(c);
     server.in_call--;
     freeTestClient(c);
     c = getMultiClient("SELECT 0; SET B0 xxx");
-    simulateUnblockedWrite(c);
+    simulateUnblockedWrite_inCall(c);
     server.in_call--;
     freeTestClient(c);
     c = getMultiClient("SET B0 xxx; SELECT 1");
-    simulateUnblockedWrite(c);
+    simulateUnblockedWrite_inCall(c);
     server.in_call--;
     freeTestClient(c);
     c = getMultiClient("SELECT 1; SELECT 0; SET B0 xxx; SELECT 1");
-    simulateUnblockedWrite(c);
+    simulateUnblockedWrite_inCall(c);
     server.in_call--;
     freeTestClient(c);
 
@@ -2819,19 +2856,19 @@ TEST_F(BgIterationTest, multiHandlesSelectNoPermissionProperly) {
     // These cases should NOT block...  (they access B0 in DB0)
     //  The SELECTs below are inconsequential - with/without select, same result.
     c = getMultiClient("SET B0 xxx");
-    simulateUnblockedWrite(c);
+    simulateUnblockedWrite_inCall(c);
     server.in_call--;
     freeTestClient(c);
     c = getMultiClient("SELECT 0; SET B0 xxx");
-    simulateUnblockedWrite(c);
+    simulateUnblockedWrite_inCall(c);
     server.in_call--;
     freeTestClient(c);
     c = getMultiClient("SET B0 xxx; SELECT 1");
-    simulateUnblockedWrite(c);
+    simulateUnblockedWrite_inCall(c);
     server.in_call--;
     freeTestClient(c);
     c = getMultiClient("SELECT 1; SELECT 0; SET B0 xxx; SELECT 1");
-    simulateUnblockedWrite(c);
+    simulateUnblockedWrite_inCall(c);
     server.in_call--;
     freeTestClient(c);
 
@@ -2841,15 +2878,15 @@ TEST_F(BgIterationTest, multiHandlesSelectNoPermissionProperly) {
     simulateBlockedWrite(c); // will block, no select
     freeTestClient(c);
     c = getMultiClient("SELECT 1; SET B0 xxx");
-    simulateUnblockedWrite(c); // will not block because accessing DB0 (select fails)
+    simulateUnblockedWrite_inCall(c); // will not block because accessing DB0 (select fails)
     server.in_call--;
     freeTestClient(c);
     c = getMultiClient("SELECT 1; SET B0 xxx; SELECT 0");
-    simulateUnblockedWrite(c); // will not block because accessing DB0 (select fails)
+    simulateUnblockedWrite_inCall(c); // will not block because accessing DB0 (select fails)
     server.in_call--;
     freeTestClient(c);
     c = getMultiClient("SELECT 0; SELECT 1; SET B0 xxx; SELECT 1");
-    simulateUnblockedWrite(c); // will not block because accessing DB0 (select fails)
+    simulateUnblockedWrite_inCall(c); // will not block because accessing DB0 (select fails)
     server.in_call--;
 
     expectAnythingCleanup(it);
@@ -2869,19 +2906,19 @@ TEST_F(BgIterationTest, multiHandlesSwapdbProperly) {
 
     // These cases should NOT block...  (they access B0 in DB0)
     c = getMultiClient("SET B0 xxx");
-    simulateUnblockedWrite(c);
+    simulateUnblockedWrite_inCall(c);
     server.in_call--;
     freeTestClient(c);
     c = getMultiClient("SET B0 xxx; SWAPDB 0 1");
-    simulateUnblockedWrite(c);
+    simulateUnblockedWrite_inCall(c);
     server.in_call--;
     freeTestClient(c);
     c = getMultiClient("SET B0 xxx; SWAPDB 0 1; SWAPDB 0 1; SET B0 xxx");
-    simulateUnblockedWrite(c);
+    simulateUnblockedWrite_inCall(c);
     server.in_call--;
     freeTestClient(c);
     c = getMultiClient("SWAPDB 0 1; SELECT 1; SET B0 xxx");
-    simulateUnblockedWrite(c);
+    simulateUnblockedWrite_inCall(c);
     server.in_call--;
     freeTestClient(c);
 
@@ -2923,19 +2960,19 @@ TEST_F(BgIterationTest, multiHandlesSwapdbNoPermissionProperly) {
     // These cases should NOT block...  (they access B0 in DB0)
     //  The SELECTs & SWAPDBs below are inconsequential - with/without select/swapdb, same result.
     c = getMultiClient("SET B0 xxx");
-    simulateUnblockedWrite(c);
+    simulateUnblockedWrite_inCall(c);
     server.in_call--;
     freeTestClient(c);
     c = getMultiClient("SET B0 xxx; SWAPDB 0 1");
-    simulateUnblockedWrite(c);
+    simulateUnblockedWrite_inCall(c);
     server.in_call--;
     freeTestClient(c);
     c = getMultiClient("SET B0 xxx; SWAPDB 0 1; SWAPDB 0 1; SET B0 xxx");
-    simulateUnblockedWrite(c);
+    simulateUnblockedWrite_inCall(c);
     server.in_call--;
     freeTestClient(c);
     c = getMultiClient("SWAPDB 0 1; SELECT 1; SET B0 xxx");
-    simulateUnblockedWrite(c);
+    simulateUnblockedWrite_inCall(c);
     server.in_call--;
     freeTestClient(c);
 
@@ -2945,15 +2982,15 @@ TEST_F(BgIterationTest, multiHandlesSwapdbNoPermissionProperly) {
     simulateBlockedWrite(c);
     freeTestClient(c);
     c = getMultiClient("SWAPDB 1 0; SET B0 xxx; SWAPDB 0 1");
-    simulateUnblockedWrite(c); // will not block because accessing DB0 (swapdb fails)
+    simulateUnblockedWrite_inCall(c); // will not block because accessing DB0 (swapdb fails)
     server.in_call--;
     freeTestClient(c);
     c = getMultiClient("SWAPDB 1 0; SELECT 0; SET B0 xxx; SWAPDB 0 1");
-    simulateUnblockedWrite(c); // will not block because accessing DB0 (swapdb/select fails)
+    simulateUnblockedWrite_inCall(c); // will not block because accessing DB0 (swapdb/select fails)
     server.in_call--;
     freeTestClient(c);
     c = getMultiClient("SWAPDB 1 0; SWAPDB 1 0; SELECT 1; SET B0 xxx; SELECT 1");
-    simulateUnblockedWrite(c); // will not block because accessing DB0 (swapdb/select fails)
+    simulateUnblockedWrite_inCall(c); // will not block because accessing DB0 (swapdb/select fails)
     server.in_call--;
 
     expectAnythingCleanup(it);
@@ -3009,7 +3046,7 @@ TEST_F(BgIterationTest, testLuaWithUndeclaredKey) {
 
     monotime blockTimer;
     elapsedStart(&blockTimer);
-    simulateUnblockedWrite(c); // Not blocked, but delays internally
+    simulateUnblockedWrite_inCall(c); // Not blocked, but delays internally
     server.in_call--;
     // Must have delayed at least 150ms (some time may have passed before timer start)
     EXPECT_GT(elapsedMs(blockTimer), 150u);
@@ -3122,7 +3159,7 @@ TEST_F(BgIterationTest, checkNoKeysWriteIsReplicated) {
     expectReadKey(it, 0);
 
     c = getNoKeysWriteClient();
-    simulateUnblockedWrite(c);
+    simulateUnblockedWrite_inCall(c);
     bgIteration_handleCommandReplication(c->db->id, c->cmd, c->argc, c->argv);
     server.in_call--;
 

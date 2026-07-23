@@ -60,7 +60,7 @@ The source, target, and target replica use the `CLUSTER SYNCSLOTS` command to co
 
 By default (when dual-channel is negotiated), the flow separates control and snapshot traffic:
 
-```
+```text
      Source (Exporting)                              Target (Importing)             Target Replica
            |                                                |                             |
      ================= 1. Establishment & Negotiation =================
@@ -76,8 +76,8 @@ By default (when dual-channel is negotiated), the flow separates control and sna
      ================= 2. Snapshot Link Setup =================
            |                                                |                             |
       (opens 2nd conn)                                      |                             |
-           |============ LINK-CHANNEL name <name> =========>|                             |
-           |<=========== +OK ===============================|                             |
+           |-------- SYNCSLOTS LINK-CHANNEL <name> -------->|                             |
+           |<-- +OK ----------------------------------------|                             |
            |                                                |                             |
      ================= 3. Snapshot Streaming =================
       (forks child)                                         |                             |
@@ -102,7 +102,7 @@ By default (when dual-channel is negotiated), the flow separates control and sna
 
 In single-channel fallback mode (if either node has dual-channel disabled), the flow uses a single connection for both control and data:
 
-```
+```text
      Source (Exporting)                              Target (Importing)             Target Replica
            |                                                |                             |
            |------------ SYNCSLOTS ESTABLISH -------------->|                             |

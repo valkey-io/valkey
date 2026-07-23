@@ -2303,6 +2303,7 @@ struct valkeyServer {
     unsigned long cluster_slot_migration_log_max_len;      /* Maximum count of migrations to display in the
                                                             * migration log, after which we will clear finished
                                                             * migrations. */
+    int cluster_slot_migration_dual_channel;               /* Enable dual channel for atomic slot migration. */
     ssize_t slot_migration_max_failover_repl_bytes;        /* Maximum amount of in flight bytes for a slot migration
                                                             * failover to be attempted. */
     int slot_migration_pipe_read;                          /* Slot migration pipe used to transfer the slots data */
@@ -3265,6 +3266,7 @@ void freeClientReplicationData(client *c);
 void replicaReceiveRDBFromPrimaryToDisk(connection *conn, int is_dual_channel);
 sds replicationSendAuth(connection *conn);
 sds receiveSynchronousResponse(connection *conn);
+sds sendCommandRaw(connection *conn, sds cmd);
 ConnectionType *connTypeOfReplication(void);
 robj *generateSelectCommand(int dictid);
 

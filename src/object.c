@@ -830,15 +830,22 @@ void dismissStreamObject(robj *o, size_t size_hint) {
  * it can reduce unnecessary iteration for complex data types that are probably
  * not going to release any memory. */
 void dismissObject(robj *o, size_t size_hint) {
+    /* Currently we use zmadvise_dontneed only when we use jemalloc with Linux.
+     * so we avoid these pointless loops when they're not going to do anything. */
+#if defined(USE_JEMALLOC) && defined(__linux__)
+    if (objectGetRefcount(o) != 1) return;
+
+    /* Strings are freed via sdsfree, not madvise, so they work regardless of
+     * THP. Handle them before the THP check that guards the madvise paths. */
+    if (objectGetType(o) == OBJ_STRING) {
+        dismissStringObject(o);
+        return;
+    }
+
     /* madvise(MADV_DONTNEED) may not work if Transparent Huge Pages is enabled. */
     if (server.thp_enabled) return;
 
-        /* Currently we use zmadvise_dontneed only when we use jemalloc with Linux.
-         * so we avoid these pointless loops when they're not going to do anything. */
-#if defined(USE_JEMALLOC) && defined(__linux__)
-    if (objectGetRefcount(o) != 1) return;
     switch (objectGetType(o)) {
-    case OBJ_STRING: dismissStringObject(o); break;
     case OBJ_LIST: dismissListObject(o, size_hint); break;
     case OBJ_SET: dismissSetObject(o, size_hint); break;
     case OBJ_ZSET: dismissZsetObject(o, size_hint); break;

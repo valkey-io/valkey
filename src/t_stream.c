@@ -4229,4 +4229,3 @@ int streamValidateListpackIntegrity(unsigned char *lp, size_t size) {
 
     return 1;
 }
-

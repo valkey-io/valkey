@@ -78,6 +78,9 @@
 
 #define PLACEHOLDER_COUNT 10
 static const size_t PLACEHOLDER_LEN = 12; // length of BENCHMARK_PLACEHOLDERS strings
+/* Cap on -r. Keys are written into PLACEHOLDER_LEN-wide fixed slots, so
+ * bumping this requires widening the placeholder handling too. */
+#define MAX_KEYSPACELEN 999999999999LL
 static const char *PLACEHOLDERS[PLACEHOLDER_COUNT] = {
     "__rand_int__", "__rand_1st__", "__rand_2nd__", "__rand_3rd__", "__rand_4th__",
     "__rand_5th__", "__rand_6th__", "__rand_7th__", "__rand_8th__", "__rand_9th__"};
@@ -487,7 +490,7 @@ static void replacePlaceholder(const size_t *indices, const size_t count, char *
         if (config.sequential_replacement) {
             key = atomic_fetch_add_explicit(key_counter, 1, memory_order_relaxed);
         } else {
-            key = ((uint64_t)random() << 31) | (uint64_t)random();
+            key = rand62();
         }
         key %= config.keyspacelen;
     }
@@ -1801,8 +1804,8 @@ int parseOptions(int argc, char **argv) {
                 fprintf(stderr, "Invalid value for -r: '%s' is not a valid number\n", next);
                 exit(1);
             }
-            if (errno == ERANGE || val < 0 || val > 999999999999LL) {
-                fprintf(stderr, "Invalid value for -r: keyspacelen must be between 0 and 999999999999\n");
+            if (errno == ERANGE || val < 0 || val > MAX_KEYSPACELEN) {
+                fprintf(stderr, "Invalid value for -r: keyspacelen must be between 0 and %lld\n", MAX_KEYSPACELEN);
                 exit(1);
             }
             config.replace_placeholders = 1;

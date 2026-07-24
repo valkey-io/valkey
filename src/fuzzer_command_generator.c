@@ -7,6 +7,7 @@
 #include <valkey/valkey.h>
 #include "commands.h"
 #include "fuzzer_command_generator.h"
+#include "cli_common.h"
 #include "sds.h"
 #include "dict.h"
 #include "zmalloc.h"
@@ -1044,6 +1045,8 @@ void initializeRandomSeed(void) {
     struct timeval tv;
     gettimeofday(&tv, NULL);
     srand(time(NULL) ^ (unsigned long)pthread_self() ^ tv.tv_usec);
+    /* rand62() uses random(), whose state is separate from rand(). */
+    srandom(time(NULL) ^ (unsigned long)pthread_self() ^ tv.tv_usec);
 }
 
 /* Initialize the fuzzer with a connected Valkey context */
@@ -1190,7 +1193,7 @@ static void addKeysToCommand(FuzzerCommand *cmd, int numkeys, CommandArgument *a
     }
 
     for (int i = 0; i < numkeys; i++) {
-        long long keyNumber = (long long)(((uint64_t)random() << 31) | (uint64_t)random()) % fuzz_ctx->max_keys;
+        long long keyNumber = (long long)rand62() % fuzz_ctx->max_keys;
         sds keyName;
 
         /* In cluster mode, ensure all keys use the same slot tag to map to the same slot */

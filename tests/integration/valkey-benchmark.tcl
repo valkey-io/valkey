@@ -468,6 +468,12 @@ tags {"benchmark network external:skip logreqres:skip"} {
             assert_match "*must be between 0 and 999999999999*" $error
         }
 
+        test {benchmark: -r rejects non-numeric value} {
+            set cmd [valkeybenchmark $master_host $master_port "-r abc -n 5 -t set"]
+            catch { exec {*}$cmd } error
+            assert_match "*is not a valid number*" $error
+        }
+
         test {benchmark: -r with large keyspace generates keys above 2^31} {
             set cmd [valkeybenchmark $master_host $master_port "-r 999999999999 -n 100 -t set"]
             common_bench_setup $cmd

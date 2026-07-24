@@ -8,6 +8,7 @@
 #include "fmacros.h"
 
 #include "valkey-benchmark-dataset.h"
+#include "cli_common.h"
 #include "zmalloc.h"
 #include <valkey/valkey.h>
 #include <stdbool.h>
@@ -427,7 +428,7 @@ static sds processRandPlaceholdersForDataSet(sds cmd, _Atomic uint64_t *seq_key,
             if (sequential_replacement) {
                 shared_key = atomic_fetch_add_explicit(&seq_key[ph], 1, memory_order_relaxed);
             } else {
-                shared_key = ((uint64_t)random() << 31) | (uint64_t)random();
+                shared_key = rand62();
             }
             shared_key %= keyspacelen;
         }
@@ -441,7 +442,7 @@ static sds processRandPlaceholdersForDataSet(sds cmd, _Atomic uint64_t *seq_key,
                 if (sequential_replacement) {
                     key = atomic_fetch_add_explicit(&seq_key[ph], 1, memory_order_relaxed);
                 } else {
-                    key = ((uint64_t)random() << 31) | (uint64_t)random();
+                    key = rand62();
                 }
                 key %= keyspacelen;
             }

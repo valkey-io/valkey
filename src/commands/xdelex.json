@@ -43,7 +43,6 @@
             },
             {
                 "name": "mode",
-                "token": "MODE",
                 "type": "oneof",
                 "optional": true,
                 "arguments": [

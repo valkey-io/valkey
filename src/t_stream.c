@@ -3702,10 +3702,16 @@ void xdelexCommand(client *c) {
         raxStop(&ri_cgroups);
     }
 
-    /* Respond with array of results and perform stream deletions. */
+    /* Based on the response calculated above for each stream message, delete
+     * the messages if needed (catching not found messages and adjusting the
+     * response).
+     *
+     * This step doesn't enqueue the response yet, because we need to do stream
+     * metadata bookkeeping and send signals first to meet the module keyspace
+     * API contract (matching xdel, xtrim & other stream commands, see
+     * issue #3429). */
     int deleted = 0;
     bool first_entry = 0;
-    addReplyArrayLen(c, id_count);
     for (int j = 0; j < id_count; j++) {
         if (resps[j] == 1) {
             streamID *id = &ids[j];
@@ -3726,7 +3732,6 @@ void xdelexCommand(client *c) {
                 resps[j] = -1;
             }
         }
-        addReplyLongLong(c, resps[j]);
     }
 
     /* Update the stream's first ID. */
@@ -3746,6 +3751,12 @@ void xdelexCommand(client *c) {
         signalModifiedKey(c, c->db, c->argv[1]);
         notifyKeyspaceEvent(NOTIFY_STREAM, "xdel", c->argv[1], c->db->id);
         server.dirty += deleted;
+    }
+
+    /* Emit the array of per-ID results after the mutation has been signaled. */
+    addReplyArrayLen(c, id_count);
+    for (int j = 0; j < id_count; j++) {
+        addReplyLongLong(c, resps[j]);
     }
 
 cleanup:
@@ -4218,3 +4229,4 @@ int streamValidateListpackIntegrity(unsigned char *lp, size_t size) {
 
     return 1;
 }
+

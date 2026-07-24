@@ -262,16 +262,34 @@ start_server {tags {"commandlog"} overrides {commandlog-execution-slower-than 10
         lindex $e 3
     } {sadd set foo {AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA... (1 more bytes)}}
 
-    test {COMMANDLOG slow - EXEC is not logged, just executed commands} {
+    test {COMMANDLOG slow - EXEC is logged alongside slow inner commands} {
         r config set commandlog-execution-slower-than 100000
         r commandlog reset slow
         assert_equal [r commandlog len slow] 0
         r multi
         r debug sleep 0.2
         r exec
+        assert_equal [r commandlog len slow] 2
+        set entries [r commandlog get -1 slow]
+        assert_equal [lindex [lindex $entries 0] 3] {exec}
+        assert_equal [lindex [lindex $entries 1] 3] {debug sleep 0.2}
+    } {} {needs:debug}
+
+    test {COMMANDLOG slow - EXEC records total transaction time when inner commands are individually fast} {
+        r config set commandlog-execution-slower-than 100000
+        r commandlog reset slow
+        r multi
+        r debug sleep 0.02
+        r debug sleep 0.02
+        r debug sleep 0.02
+        r debug sleep 0.02
+        r debug sleep 0.02
+        r debug sleep 0.02
+        r exec
         assert_equal [r commandlog len slow] 1
         set e [lindex [r commandlog get -1 slow] 0]
-        assert_equal [lindex $e 3] {debug sleep 0.2}
+        assert_equal [lindex $e 3] {exec}
+        assert {[lindex $e 2] >= 100000}
     } {} {needs:debug}
 
     test {COMMANDLOG slow - can clean older entries} {

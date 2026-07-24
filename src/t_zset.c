@@ -3721,7 +3721,7 @@ void zrangeGenericCommand(zrange_result_handler *handler,
             handler->beginResultEmission(handler, -1);
             handler->finalizeResultEmission(handler, 0);
         } else if (opt_keyexist) {
-            addReply(c, shared.nullarray[c->resp]);
+            addReplyNullArray(c);
         } else {
             addReply(c, shared.emptyarray);
         }

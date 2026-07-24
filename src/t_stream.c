@@ -3659,7 +3659,6 @@ void xackdelCommand(client *c) {
      * group, we only need to loop over messages (and not consumers) and can set
      * responses inline. Thus, there's a separate setup for KEEPREF vs. ACKED/DELREF*/
     if (mode == 0) { /* KEEPREF */
-        addReplyArrayLen(c, id_count);
         for (long long j = 0; j < id_count; j++) {
             int response = -1;
             streamID *id = &ids[j];
@@ -3693,7 +3692,7 @@ void xackdelCommand(client *c) {
                 }
             }
 
-            addReplyLongLong(c, response);
+            resps[j] = response;
         }
 
         goto sync;
@@ -3775,8 +3774,13 @@ void xackdelCommand(client *c) {
         raxStop(&ri_cgroups);
     }
 
-    /* For ACKED & DELREF modes, respond with array of counts */
-    addReplyArrayLen(c, id_count);
+    /* Based on the response calculated above for each stream message, delete
+     * the messages if needed.
+     *
+     * This step doesn't enqueue the response yet, because we need to do stream
+     * metadata bookkeeping and send signals first to meet the module keyspace
+     * API contract (matching xdel, xtrim & other stream commands, see
+     * issue #3429). */
     for (long long j = 0; j < id_count; j++) {
         /* Delete the message if needed. */
         if (resps[j] == 1) {
@@ -3796,8 +3800,6 @@ void xackdelCommand(client *c) {
                 s->max_deleted_entry_id = *id;
             }
         }
-
-        addReplyLongLong(c, resps[j]);
     }
 
 sync:
@@ -3822,6 +3824,12 @@ sync:
      * the command is propagated to replicas and written to AOF. */
     if (acked) {
         server.dirty += acked;
+    }
+
+    /* Emit the array of per-ID results after the mutation has been signaled. */
+    addReplyArrayLen(c, id_count);
+    for (long long j = 0; j < id_count; j++) {
+        addReplyLongLong(c, resps[j]);
     }
 
 cleanup:
@@ -4294,4 +4302,3 @@ int streamValidateListpackIntegrity(unsigned char *lp, size_t size) {
 
     return 1;
 }
-

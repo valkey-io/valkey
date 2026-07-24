@@ -3699,24 +3699,52 @@ void xackdelCommand(client *c) {
         goto sync;
     }
 
-    /* For ACKED & DELREF modes, we loop for each consumer then for each message,
-     * because iterating this way is faster than by message > by consumer both
-     * because iterating over consumers is slower than messages, and because
-     * this allows us to skip some inner loops once a final response is determined
-     * for a message. */
+    /* For ACKED & DELREF modes we use two phases.
+     *
+     * Phase 1: Check the target group. If a stream message isn't in the target
+     * group, we don't need to check other groups.
+     *
+     * Phase 2: Loops over other groups to do DELREF cleanup and ACKED blocking
+     * (but only for the messages that were present in the target group PEL
+     *  from the checks in Phase 1).
+     *
+     * The target group decides eligibility first: in DELREF this prevents
+     * clearing a non-target's PEL entry before the target is confirmed to hold
+     * the message, and in ACKED it ensures non-targets are only consulted to
+     * block deletion of messages the target is acking. */
+    for (long long j = 0; j < id_count; j++) {
+        streamID *id = &ids[j];
+        unsigned char buf[sizeof(streamID)];
+        streamEncodeID(buf, id);
+
+        void *result;
+        if (raxFind(group->pel, buf, sizeof(buf), &result)) {
+            streamNACK *nack = result;
+            raxRemove(group->pel, buf, sizeof(buf), NULL);
+            raxRemove(nack->consumer->pel, buf, sizeof(buf), NULL);
+            streamFreeNACK(nack);
+            acked++;
+            /* resps[j] stays 1: eligible for deletion (ACKED may still block it). */
+        } else {
+            resps[j] = -1; /* Never delivered / already acked / doesn't exist. */
+        }
+    }
+
     if (s->cgroups != NULL) {
-        int first_loop = 1;
         raxIterator ri_cgroups;
         raxStart(&ri_cgroups, s->cgroups);
         raxSeek(&ri_cgroups, "^", NULL, 0);
         while (raxNext(&ri_cgroups)) {
             streamCG *cg = ri_cgroups.data;
+            if (cg == group) {
+                /* Handled above in Phase 1. */
+                continue;
+            }
 
             for (long long j = 0; j < id_count; j++) {
-                /* Skip if resp is already final. For resps[j] == 2 we still need
-                 * to process the target group to remove its PEL entry. */
-                int is_target = (cg == group);
-                if (resps[j] == -1 || (resps[j] == 2 && !is_target)) {
+                if (resps[j] != 1) {
+                    /* Skip when message wasn't found in target group (-1)
+                     * or when the message can't be deleted b/c of ACKED (2). */
                     continue;
                 }
 
@@ -3724,47 +3752,25 @@ void xackdelCommand(client *c) {
                 unsigned char buf[sizeof(streamID)];
                 streamEncodeID(buf, id);
 
-                /* Look the message up in this group's PEL first. We cannot
-                 * short-circuit on cg->last_id (i.e. assume "id > last_id
-                 * implies not in PEL") because XGROUP SETID can move
-                 * last_id backward and leave PEL entries behind it; skipping
-                 * the lookup here would leak those NACKs. */
                 void *result;
                 if (raxFind(cg->pel, buf, sizeof(buf), &result)) {
-                    if (is_target || mode == 1) { /* DELREF */
-                        /* Remove from this group's PEL (target always; DELREF removes all). */
+                    if (mode == 1) { /* DELREF */
                         streamNACK *nack = result;
                         raxRemove(cg->pel, buf, sizeof(buf), NULL);
                         raxRemove(nack->consumer->pel, buf, sizeof(buf), NULL);
                         streamFreeNACK(nack);
                         acked++;
-                    } else if (mode == 2) { /* ACKED */
-                        resps[j] = 2;       /* Another group still has a pending reference. */
+                    } else { /* ACKED */
+                        /* Another group still has it pending. */
+                        resps[j] = 2;
                     }
-                    /* KEEPREF (!is_target && mode == 0): leave other groups' PEL alone. */
-                } else if (streamCompareID(id, &cg->last_id) > 0) {
-                    /* Message hasn't been delivered to this group yet (its ID
-                     * is beyond last_id) and it isn't pending, so it can't be
-                     * acked or deleted through this group. */
-                    if (!streamEntryExists(s, id)) {
-                        resps[j] = -1;
-                    } else if (mode == 2) { /* ACKED */
-                        /* Target group hasn't received it: can't ack.
-                         * Non-target hasn't claimed it: acked but can't delete yet. */
-                        resps[j] = is_target ? -1 : 2;
-                    }
-                } else {
-                    /* Message was delivered to this group (id <= last_id) but
-                     * isn't pending: already acked, read with NOACK, or gone. */
-                    if (is_target && mode == 2) { /* ACKED */
-                        resps[j] = -1;            /* Target group didn't have this message pending. */
-                    } else if (first_loop && !streamEntryExists(s, id)) {
-                        resps[j] = -1; /* Message does not exist in stream. */
-                    }
+                } else if (mode == 2 &&
+                           streamCompareID(id, &cg->last_id) > 0) { /* ACKED */
+                    /* Non-target hasn't claimed it yet; may still need to
+                     * deliver it, so block deletion. */
+                    resps[j] = 2;
                 }
             }
-
-            first_loop = 0;
         }
         raxStop(&ri_cgroups);
     }

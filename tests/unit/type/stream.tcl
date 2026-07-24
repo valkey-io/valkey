@@ -774,6 +774,49 @@ start_server {
         assert_equal {} [lindex $pend 1]
     }
 
+    test {XACKDEL w/ DELREF skips deleting refs when target group never received message} {
+        r DEL testxadstream
+        r XADD testxadstream 1-0 msg hello
+        # grp1 created first and reads the message; grp2 (target) never reads it.
+        # "grp1" < "grp2" so grp1 is iterated first.
+        r XGROUP CREATE testxadstream grp1 0
+        r XGROUP CREATE testxadstream grp2 0
+        r XREADGROUP GROUP grp1 testxadcnsmr COUNT 1 STREAMS testxadstream >
+
+        # Target grp2 never had 1-0 pending -> must reply -1 and not change any state.
+        set ids [r XACKDEL testxadstream grp2 DELREF IDS 1 1-0]
+        assert_equal 1 [llength $ids]
+        assert_equal -1 [lindex $ids 0]
+
+        # Stream entry is still be present.
+        assert_equal {{1-0 {msg hello}}} [r XRANGE testxadstream 1-0 1-0]
+
+        # grp1's PEL entry is untouched.
+        set pend [r XPENDING testxadstream grp1]
+        assert_equal 1-0 [lindex $pend 1]
+    }
+
+    test {XACKDEL w/ ACKED is a no-op when target group already acked the message} {
+        r DEL testxadstream
+        r XADD testxadstream 1-0 msg hello
+        r XGROUP CREATE testxadstream grp1 0
+        r XGROUP CREATE testxadstream grp2 0
+        r XREADGROUP GROUP grp1 testxadcnsmr COUNT 1 STREAMS testxadstream >
+        r XREADGROUP GROUP grp2 testxadcnsmr COUNT 1 STREAMS testxadstream >
+        # Target grp2 acks the message, dropping it from grp2's PEL.
+        r XACK testxadstream grp2 1-0
+
+        # grp2 no longer has 1-0 pending, so reply -1 and dont modify anything.
+        set ids [r XACKDEL testxadstream grp2 ACKED IDS 1 1-0]
+        assert_equal 1 [llength $ids]
+        assert_equal -1 [lindex $ids 0]
+        assert_equal {{1-0 {msg hello}}} [r XRANGE testxadstream 1-0 1-0]
+
+        # grp1 still holds its PEL entry.
+        set pend [r XPENDING testxadstream grp1]
+        assert_equal 1-0 [lindex $pend 1]
+    }
+
     test {XACKDEL w/ mix of existing and non-existent messages} {
         r DEL testxadstream
         r XADD testxadstream 1 msg hello

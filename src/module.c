@@ -6747,6 +6747,15 @@ static void moduleCallCommandHelper(ValkeyModuleCtx *ctx, client *c, robj **argv
                 flags &= ~VALKEYMODULE_CALL_ARGV_RESPECT_DENY_OOM;
             }
         }
+
+        /* We are currently using command propagation, so this should be dead code.
+         * But just to be safe, allow running any command in these cases. */
+        if (is_running_script && server.primary_host && server.repl_replica_ignore_maxmemory) {
+            flags &= ~VALKEYMODULE_CALL_ARGV_RESPECT_DENY_OOM;
+        }
+        if (is_running_script && server.current_client && mustObeyClient(server.current_client)) {
+            flags &= ~VALKEYMODULE_CALL_ARGV_RESPECT_DENY_OOM;
+        }
     }
 
     if (flags & VALKEYMODULE_CALL_ARGV_RESPECT_DENY_OOM && server.maxmemory) {

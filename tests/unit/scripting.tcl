@@ -2767,6 +2767,51 @@ start_server {tags {"scripting"}} {
         r config set script-check-maxmemory no
     }
 
+    test "script-check-maxmemory aborts a dirty script loaded via EVALSHA (noeviction)" {
+        r flushall sync
+        r config set script-check-maxmemory yes
+        r config set maxmemory-policy noeviction
+
+        # Same dirty-script scenario as above, but executed through EVALSHA to
+        # prove the check is on the shared script execution path, not EVAL only.
+        r set k1{t} v1
+        set sha [r script load {
+            server.call('del', KEYS[1])
+            server.call('set', KEYS[2], ARGV[1])
+        }]
+        r config set maxmemory 1
+        assert_error {OOM *} {r evalsha $sha 2 k1{t} k2{t} v2}
+        assert_equal 0 [r dbsize]
+
+        r config set maxmemory 0
+        r config set script-check-maxmemory no
+    }
+
+    test "script-check-maxmemory aborts a mid-function write loop via FCALL (noeviction)" {
+        r flushall sync
+        r config set script-check-maxmemory yes
+        r config set maxmemory-policy noeviction
+
+        # Unlike a no-shebang EVAL/EVALSHA (which runs in backwards-compat mode and
+        # skips the up-front OOM gate), a function is subject to that gate.
+        r function load replace {#!lua name=oomlib
+            server.register_function('oomfn', function(keys, args)
+                for i = 1, 1000000 do
+                    server.call('set', 'k{t}:' .. i, string.rep('x', 1024))
+                end
+            end)
+        }
+        set used [s used_memory]
+        r config set maxmemory [expr {$used + 1024*5000}]
+        assert_error {OOM *} {r fcall oomfn 0}
+        assert_range [r dbsize] 1 999999
+
+        r config set maxmemory 0
+        r config set maxmemory-policy noeviction
+        r config set script-check-maxmemory no
+        r function flush
+    }
+
     test "script-check-maxmemory rejects the write via pcall but keeps the script running" {
         r flushall sync
         r config set script-check-maxmemory yes

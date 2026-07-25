@@ -3782,6 +3782,19 @@ static void propagatePendingCommands(void) {
     serverOpArrayFree(&server.also_propagate);
 }
 
+/* Whether any of the module-jobs / propagation / module-yield post-execution-
+ * unit work is pending. Shared by postExecutionUnitOperations() and
+ * afterCommand() so the "is there anything to do?" condition for these three
+ * sub-systems has a single home instead of being duplicated at both call
+ * sites - static inline costs nothing here since both callers are in this
+ * same translation unit.
+ *
+ * Must stay an OR of every condition below - never drop one as an
+ * optimization, since that would silently skip real pending work. */
+static inline int hasPostExecutionUnitPendingWork(void) {
+    return listLength(modulePostExecUnitJobs) || server.also_propagate.numops || server.busy_module_yield_flags;
+}
+
 /* Performs operations that should be performed after an execution unit ends.
  * Execution unit is a code that should be done atomically.
  * Execution units can be nested and do not necessarily start with a server command.
@@ -3806,12 +3819,11 @@ void postExecutionUnitOperations(void) {
      * pays for one memory read + one branch instead of three separate
      * (partly cross-translation-unit, non-inlinable) function calls.
      *
-     * This must stay an OR of every condition the three calls below can
-     * act on - never remove one of them as an optimization, since that
-     * would silently skip real pending work (see each callee for the
-     * invariants it protects). */
-    if (unlikely(listLength(modulePostExecUnitJobs) || server.also_propagate.numops ||
-                 server.busy_module_yield_flags)) {
+     * Deliberately NOT hinted unlikely() here: unlike the afterCommand()
+     * gate below, this function is also called right after queuing a
+     * propagation (expire.c, evict.c, db.c) where the condition is
+     * typically true, so a fixed hint would be wrong for those call sites. */
+    if (hasPostExecutionUnitPendingWork()) {
         firePostExecutionUnitJobs();
 
         /* If we are at the top-most call() and not inside an active module
@@ -4205,14 +4217,15 @@ void afterCommand(client *c) {
      * GET, or after each sub-command of a MULTI/EXEC or script) short-
      * circuits before paying for any of the calls below.
      *
-     * Must OR every condition the calls below can act on - never drop one
-     * as an optimization, or real pending work will be silently skipped.
-     * clusterSlotStatsAddNetworkBytesOutForUserClient() is intentionally
-     * excluded: it is not deferred/queued work, it must run for every
-     * command whenever slot-stats accounting is enabled. */
+     * Unlike the shared hasPostExecutionUnitPendingWork() conditions, the
+     * unlikely() hint here is safe: this is the single call site reached
+     * from a plain top-level command, where "nothing pending" genuinely
+     * dominates. clusterSlotStatsAddNetworkBytesOutForUserClient() is
+     * intentionally excluded from the gate: it is not deferred/queued
+     * work, it must run for every command whenever slot-stats accounting
+     * is enabled. */
     if (server.execution_nesting == 0 &&
-        unlikely(listLength(modulePostExecUnitJobs) || server.also_propagate.numops ||
-                 server.busy_module_yield_flags || listLength(server.tracking_pending_keys) ||
+        unlikely(hasPostExecutionUnitPendingWork() || listLength(server.tracking_pending_keys) ||
                  listLength(server.pending_push_messages))) {
         /* Should be done before trackingHandlePendingKeyInvalidations so that we
          * reply to client before invalidating cache (makes more sense) */

@@ -27,7 +27,7 @@ unsigned char *lpSkip(unsigned char *p);
 /* Macros from listpack.c needed for testing */
 #define LP_HDR_SIZE 6u /* 32 bit total len + 16 bit number of elements. */
 #define LP_EOF 0xFF
-#define LP_HDR_NUMELE_UNKNOWN (uint32_t)UINT16_MAX
+#define LP_HDR_NUMELE_UNKNOWN (uint32_t) UINT16_MAX
 #define LP_HDR_NUMELE_UNKNOWN_UL (unsigned long)UINT16_MAX
 #define LP_ENCODING_7BIT_UINT_MASK 0x80
 #define LP_ENCODING_IS_7BIT_UINT(byte) (((byte) & LP_ENCODING_7BIT_UINT_MASK) == 0)

@@ -2719,6 +2719,7 @@ start_server {tags {"scripting"}} {
     test "Don't stop the dirty scripts when an OOM occurs midway through execution" {
         r flushall
         r config set maxmemory 1
+        r config set script-check-maxmemory no
         r eval {
             server.call('get', KEYS[1])
             server.call('del', KEYS[1])
@@ -2731,6 +2732,7 @@ start_server {tags {"scripting"}} {
     test "Stop the non-dirty scripts when an OOM occurs midway through execution" {
         r flushall
         r config set maxmemory 1
+        r config set script-check-maxmemory no
         assert_error {OOM *} {
             r eval {
                 server.call('get', KEYS[1])
@@ -2739,5 +2741,114 @@ start_server {tags {"scripting"}} {
         }
        assert_equal {} [r get foo]
        r config set maxmemory 0
+    }
+
+    test "script-check-maxmemory aborts a dirty script after a non-deny-oom write (noeviction)" {
+        r flushall sync
+        r config set script-check-maxmemory yes
+        r config set maxmemory-policy noeviction
+
+        # Pre-populate a key so the DEL below has an observable effect, proving
+        # the script really entered execution (not rejected up front). DEL is a
+        # write NOT flagged deny-oom that allocates nothing, yet it marks the
+        # script "write dirty"; with script-check-maxmemory the following deny-oom
+        # SET is still OOM-checked and aborts the whole script.
+        r set k1{t} v1
+        r config set maxmemory 1
+        assert_error {OOM *} {
+            r eval {
+                server.call('del', KEYS[1])
+                server.call('set', KEYS[2], ARGV[1])
+            } 2 k1{t} k2{t} v2
+        }
+        assert_equal 0 [r dbsize]
+
+        r config set maxmemory 0
+        r config set script-check-maxmemory no
+    }
+
+    test "script-check-maxmemory rejects the write via pcall but keeps the script running" {
+        r flushall sync
+        r config set script-check-maxmemory yes
+
+        # Pre-populate the keys so the DEL below has an observable effect.
+        r mset k1{t} v1 k3{t} v3
+        r config set maxmemory 1
+
+        # pcall swallows the OOM error, but the deny-oom write is rejected before
+        # it runs, so the dataset does not grow while the script keeps running.
+        assert_equal {rejected} [
+            r eval {
+                server.call('del', KEYS[1])
+                local t = server.pcall('set', KEYS[2], ARGV[1])
+                server.call('del', KEYS[3])
+                if t and t['err'] then return 'rejected' else return 'stored' end
+            } 3 k1{t} k2{t} k3{t} v2
+        ]
+        assert_equal 0 [r dbsize]
+
+        r config set maxmemory 0
+        r config set script-check-maxmemory no
+    }
+
+    test "script-check-maxmemory aborts a mid-script write loop under an eviction policy (allkeys-random)" {
+        r flushall sync
+        r config set script-check-maxmemory yes
+        r config set maxmemory-policy allkeys-random
+
+        # Leave head room so EVAL enters and the first writes succeed, then let the
+        # loop allocate past maxmemory.
+        set used [s used_memory]
+        r config set maxmemory [expr {$used + 1024*5000}]
+        assert_error {OOM *} {
+            r eval {
+                for i = 1, 1000000 do
+                    server.call('set', 'k{t}:' .. i, string.rep('x', 1024))
+                end
+            } 0
+        }
+        assert_range [r dbsize] 1 999999
+
+        r config set maxmemory 0
+        r config set maxmemory-policy noeviction
+        r config set script-check-maxmemory no
+    }
+
+    test "script-check-maxmemory does not abort a dirty script that stays under maxmemory" {
+        r flushall sync
+        r config set script-check-maxmemory yes
+        r config set maxmemory 1GB
+        r config set maxmemory-policy noeviction
+
+        assert_equal OK [
+            r eval {
+                server.call('del', KEYS[1])
+                for i = 1, 100 do
+                    server.call('set', 'k{t}:' .. i, ARGV[1])
+                end
+                return 'OK'
+            } 1 k1{t} v
+        ]
+        assert_equal 100 [r dbsize]
+
+        r config set maxmemory 0
+        r config set script-check-maxmemory no
+    }
+
+    test "script-check-maxmemory does not affect scripts flagged with allow-oom" {
+        r flushall sync
+        r config set script-check-maxmemory yes
+        r config set maxmemory 1
+
+        assert_equal 1 [
+            r eval {#!lua flags=allow-oom
+                server.call('del', KEYS[1])
+                server.call('set', KEYS[1], ARGV[1])
+                return 1
+            } 1 k1{t} bar
+        ]
+        assert_equal bar [r get k1{t}]
+        r config set maxmemory 0
+        r config set script-check-maxmemory no
     }
 }

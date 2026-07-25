@@ -6725,7 +6725,27 @@ static void moduleCallCommandHelper(ValkeyModuleCtx *ctx, client *c, robj **argv
          * first write in the context of this script, otherwise we can't stop
          * in the middle. */
         if (is_running_script && scriptIsWriteDirty()) {
-            flags &= ~VALKEYMODULE_CALL_ARGV_RESPECT_DENY_OOM;
+            /* Clearing RESPECT_DENY_OOM here means every write after the first
+             * one skips the maxmemory check, so the script can finish atomically.
+             *
+             * The downside is that the script can then grow memory without bound,
+             * which can be abused in two ways:
+             *   1. Memory is fine when the script starts, so the first write passes
+             *      the check; the script then runs a huge loop of writes that all
+             *      bypass the maxmemory check.
+             *   2. The script first issues a deletion command (e.g. DEL or ZREM),
+             *      which is a write but is NOT flagged CMD_DENYOOM and allocates no
+             *      memory. It still marks the script as "write dirty", so every
+             *      following (possibly deny-oom) write skips the maxmemory check.
+             *
+             * When the 'script-check-maxmemory' config is enabled we instead keep
+             * enforcing the maxmemory check for every write command executed *during*
+             * the script (i.e. we do NOT clear the RESPECT_DENY_OOM flag here). This
+             * lets such a runaway script be aborted early, trading the atomicity of
+             * the script for protection against unbounded memory growth. */
+            if (!server.script_check_maxmemory) {
+                flags &= ~VALKEYMODULE_CALL_ARGV_RESPECT_DENY_OOM;
+            }
         }
     }
 
@@ -6737,7 +6757,14 @@ static void moduleCallCommandHelper(ValkeyModuleCtx *ctx, client *c, robj **argv
                  * Because it is only set on the main thread, in such case we will check
                  * the actual memory usage. */
                 oom_state = (getMaxmemoryState(NULL, NULL, NULL, NULL) == C_ERR);
+            } else if (is_running_script && scriptIsWriteDirty() && server.script_check_maxmemory) {
+                /* Extra check from 'script-check-maxmemory' for writes in the middle
+                 * of a script (after its first dirty write): look at the live memory
+                 * usage, since server.pre_command_oom_state was captured before the
+                 * script started and would miss the memory the script itself allocated. */
+                oom_state = (getMaxmemoryState(NULL, NULL, NULL, NULL) == C_ERR);
             } else {
+                /* All other cases keep the original pre_command_oom_state semantics. */
                 oom_state = server.pre_command_oom_state;
             }
             if (oom_state) {

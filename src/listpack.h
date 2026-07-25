@@ -76,6 +76,7 @@ lpInsertMetadata(unsigned char *lp, unsigned char *eleint, uint32_t size, unsign
 unsigned char *lpReplace(unsigned char *lp, unsigned char **p, unsigned char *s, uint32_t slen);
 unsigned char *lpReplaceInteger(unsigned char *lp, unsigned char **p, long long lval);
 unsigned char *lpDelete(unsigned char *lp, unsigned char *p, unsigned char **newp);
+unsigned char *lpRemoveMetadata(unsigned char *lp, unsigned char *metadata_ptr);
 unsigned char *lpDeleteRangeWithEntry(unsigned char *lp, unsigned char **p, unsigned long num);
 unsigned char *lpDeleteRange(unsigned char *lp, long index, unsigned long num);
 unsigned char *lpBatchDelete(unsigned char *lp, unsigned char **ps, unsigned long count);

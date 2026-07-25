@@ -89,7 +89,7 @@ static void hashTypeUpdateVolatileCount(robj *o, long delta) {
     long long count = (has_head ? lpGetMetadataValue(head) : 0) + delta;
     serverAssert(count >= 0);
     if (count == 0) {
-        if (has_head) zl = lpDelete(zl, head, NULL);
+        if (has_head) zl = lpRemoveMetadata(zl, head);
     } else {
         unsigned char intenc[LP_MAX_INT_ENCODING_LEN];
         uint64_t enclen;
@@ -506,7 +506,7 @@ int hashTypeSet(robj *o, sds field, sds value, mstime_t expiry, int flags, bool 
                     zl = lpInsertMetadata(zl, intenc, enclen, vptr, LP_AFTER, NULL);
                 }
             } else if (has_expiry) {
-                zl = lpDelete(zl, metadata_ptr, NULL);
+                zl = lpRemoveMetadata(zl, metadata_ptr);
             }
             volatile_delta = (expiry != EXPIRY_NONE ? 1 : 0) - (has_expiry ? 1 : 0);
             update = is_expired ? 0 : 1;
@@ -688,7 +688,7 @@ static expiryModificationResult hashTypePersist(robj *o, sds field) {
         if (!hashTypeListpackFieldIsValid(entry_expiry)) return EXPIRATION_MODIFICATION_NOT_EXIST;
 
         /* Remove the metadata entry; its presence implies the value exists. */
-        zl = lpDelete(zl, metadata_ptr, NULL);
+        zl = lpRemoveMetadata(zl, metadata_ptr);
         objectSetVal(o, zl);
         hashTypeUpdateVolatileCount(o, -1);
         return EXPIRATION_MODIFICATION_SUCCESSFUL;
@@ -723,7 +723,12 @@ bool hashTypeDelete(robj *o, sds field) {
             fptr = lpFind(zl, fptr, (unsigned char *)field, sdslen(field), 1);
             if (fptr != NULL) {
                 unsigned char *value_ptr = lpNext(zl, fptr);
-                bool was_volatile = (value_ptr && lpGetMetadata(zl, value_ptr) != NULL);
+                serverAssert(value_ptr != NULL);
+
+                long long entry_expiry = hashTypeListpackGetExpiry(zl, value_ptr);
+                bool was_volatile = lpGetMetadata(zl, value_ptr) != NULL;
+                if (!hashTypeListpackFieldIsValid(entry_expiry)) return false;
+
                 /* Delete field and value; metadata entries trailing the pair
                  * are deleted along with it. */
                 zl = lpDeleteRangeWithEntry(zl, &fptr, 2);
@@ -843,20 +848,18 @@ int hashTypeNext(hashTypeIterator *hi) {
             serverAssert(vptr != NULL);
 
             unsigned char *metadata_ptr = lpGetMetadata(zl, vptr);
+            /* Advance the cursor now, before any skip decision, so the next
+             * iteration resumes from this pair (the loop re-reads hi->vptr
+             * at the top to advance). */
+            hi->fptr = fptr;
+            hi->vptr = vptr;
+
             if (hi->iterator_type == HASH_ITER_VOLATILE) {
                 /* VOLATILE skips pairs with no metadata */
-                if (metadata_ptr == NULL) {
-                    hi->fptr = fptr;
-                    hi->vptr = vptr;
-                    continue;
-                }
+                if (metadata_ptr == NULL) continue;
             } else if (hi->iterator_type == HASH_ITER_PERSISTENT) {
                 /* PERSISTENT skips pairs with metadata */
-                if (metadata_ptr != NULL) {
-                    hi->fptr = fptr;
-                    hi->vptr = vptr;
-                    continue;
-                }
+                if (metadata_ptr != NULL) continue;
             }
 
             /* Skip fields not visible in the current context (matches the
@@ -864,16 +867,8 @@ int hashTypeNext(hashTypeIterator *hi) {
              * validateEntry semantics). */
             if (metadata_ptr != NULL) {
                 int64_t expiry = lpGetMetadataValue(metadata_ptr);
-                if (!hashTypeListpackFieldIsValid(expiry)) {
-                    hi->fptr = fptr;
-                    hi->vptr = vptr;
-                    continue;
-                }
+                if (!hashTypeListpackFieldIsValid(expiry)) continue;
             }
-
-            /* fptr, vptr now point to the first or next pair */
-            hi->fptr = fptr;
-            hi->vptr = vptr;
             break;
         }
     } else if (hi->encoding == OBJ_ENCODING_HASHTABLE) {

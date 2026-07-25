@@ -1033,6 +1033,14 @@ unsigned char *lpDelete(unsigned char *lp, unsigned char *p, unsigned char **new
     return lpInsert(lp, NULL, NULL, 0, p, LP_REPLACE, newp);
 }
 
+/* This is just a wrapper around lpDelete to remove tagged metadata element
+ * from listpack. 'metadata_ptr' MUST be non-null and should point at a
+ * tagged entry */
+unsigned char *lpRemoveMetadata(unsigned char *lp, unsigned char *metadata_ptr) {
+    assert(lpIsMetadata(metadata_ptr));
+    return lpDelete(lp, metadata_ptr, NULL);
+}
+
 /* Delete a range of entries from the listpack start with the element pointed by 'p'. */
 unsigned char *lpDeleteRangeWithEntry(unsigned char *lp, unsigned char **p, unsigned long num) {
     size_t bytes = lpBytes(lp);

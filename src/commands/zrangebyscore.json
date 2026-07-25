@@ -10,6 +10,10 @@
             [
                 "2.0.0",
                 "Added the `WITHSCORES` modifier."
+            ],
+            [
+                "9.2.0",
+                "Add the `XX` option."
             ]
         ],
         "command_flags": [

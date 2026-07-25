@@ -1662,23 +1662,23 @@ static void rewriteConfigSocketBindOption(standardConfig *config, const char *na
 
 /* Rewrite the loadmodule option. */
 void rewriteConfigLoadmoduleOption(struct rewriteConfigState *state) {
-    if (dictSize(modules) == 0) {
+    if (listLength(modules) == 0) {
         rewriteConfigMarkAsProcessed(state, "loadmodule");
         return;
     }
 
     sds line;
+    listIter li;
+    listNode *ln;
 
-    dictIterator *di = dictGetIterator(modules);
-    dictEntry *de;
-    while ((de = dictNext(di)) != NULL) {
-        struct ValkeyModule *module = dictGetVal(de);
+    listRewind(modules, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        struct ValkeyModule *module = listNodeValue(ln);
         if (module->is_static_module) continue;
         line = moduleLoadQueueEntryToLoadmoduleOptionStr(module, "loadmodule");
         rewriteConfigRewriteLine(state, "loadmodule", line, 1);
     }
-    dictReleaseIterator(di);
-    /* Mark "loadmodule" as processed in case modules is empty. */
+    /* Mark "loadmodule" as processed in case no modules are loaded. */
     rewriteConfigMarkAsProcessed(state, "loadmodule");
 }
 

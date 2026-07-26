@@ -82,11 +82,8 @@ static int clocksourceHasToken(const char *list, const char *name) {
     return 0;
 }
 
-/* Pick a vDSO-capable alternative clocksource from the available list.
- * Only these sources can avoid the syscall path that checkClocksource() measures;
- * suggesting hpet/acpi_pm would not fix the warning. */
+/* Pick a vDSO-capable alternative from available_clocksource, if any. */
 static sds pickAlternativeClocksource(const char *curr, const char *avail) {
-    /* Order matters: prefer the common native sources, then paravirt clocks. */
     static const char *fast_clocksources[] = {
         "tsc", "arch_sys_counter", "kvm-clock", "hyperv_clocksource_tsc_page", NULL};
     int i;
@@ -144,8 +141,8 @@ static int checkClocksource(sds *error_msg) {
         *error_msg = sdscatprintf(sdsempty(),
                                   "Slow system clocksource detected. This can result in degraded performance. "
                                   "Current clocksource: %s. Available clocksources: %s. ",
+                                  curr ? curr : "", avail ? avail : "");
         if (suggest) {
-            /* Only recommend switching when another clocksource actually exists. */
             *error_msg = sdscatprintf(*error_msg,
                                       "Consider changing the system's clocksource. "
                                       "For example: run the command 'echo %s > "
@@ -154,14 +151,10 @@ static int checkClocksource(sds *error_msg) {
                                       "'clocksource=' kernel command line parameter.",
                                       suggest);
         } else if (!curr || !avail) {
-            /* pickAlternativeClocksource() also returns NULL when sysfs reads fail.
-             * Do not claim there is no alternative in that case. */
             *error_msg = sdscat(*error_msg,
                                 "Could not determine the available clocksources from sysfs, "
                                 "so no clocksource change can be recommended.");
         } else {
-            /* No vDSO-capable alternative (common on ARM64 with only arch_sys_counter, or when
-             * only slow sources like hpet/acpi_pm remain). Switching would not help. */
             *error_msg = sdscat(*error_msg,
                                 "No suitable alternative clocksource is available, so changing the system's "
                                 "clocksource is unlikely to help. This may indicate that clock_gettime() is not "

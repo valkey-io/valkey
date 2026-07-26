@@ -271,6 +271,34 @@ void bioCreateAofFsyncNotifyJob(int fd, sds buf, long long reploff) {
     bioSubmitJob(BIO_AOF_FSYNC, job);
 }
 
+/* appendfsync=always offload path: the main thread handed us an AOF buffer to
+ * write and fsync as one bio job (via bioCreateAofFsyncNotifyJob) and asked to
+ * be notified via server.aof_pipe[1] when done. Publishes the result through
+ * server.aof_bio_flush_state for the main thread to reap. */
+static void bioProcessAofFlushOffload(bio_job *job) {
+    sds buf = job->fd_args.buf;
+    int err = 0;
+    size_t len = sdslen(buf);
+    ssize_t nwritten = aofWrite(job->fd_args.fd, buf, len);
+    if (nwritten != (ssize_t)len) {
+        err = (nwritten == -1) ? errno : ENOSPC;
+    } else if (valkey_fsync(job->fd_args.fd) == -1) {
+        err = errno;
+    }
+
+    if (err) {
+        atomic_store_explicit(&server.aof_bio_flush_errno, err, memory_order_relaxed);
+        atomic_store_explicit(&server.aof_bio_flush_state, AOF_BIO_FLUSH_ERR, memory_order_release);
+    } else {
+        atomic_store_explicit(&server.fsynced_reploff_pending, job->fd_args.offset, memory_order_relaxed);
+        atomic_store_explicit(&server.aof_bio_flush_size, len, memory_order_relaxed);
+        atomic_store_explicit(&server.aof_bio_flush_state, AOF_BIO_FLUSH_DONE, memory_order_release);
+    }
+    sdsfree(buf);
+    if (write(server.aof_pipe[1], "x", 1) == -1) { /* best-effort wakeup */
+    }
+}
+
 void *bioProcessBackgroundJobs(void *arg) {
     bio_worker_data *const bwd = arg;
     sigset_t sigset;
@@ -308,36 +336,12 @@ void *bioProcessBackgroundJobs(void *arg) {
             }
             close(job->fd_args.fd);
         } else if (job_type == BIO_AOF_FSYNC || job_type == BIO_CLOSE_AOF) {
-            sds buf = job->fd_args.buf;
-            if (buf != NULL) {
-                /* appendfsync=always offload path: the main thread handed us
-                 * an AOF buffer to write+fsync atomically and asked to be
-                 * notified via server.aof_pipe[1] when done. The job uses
-                 * BIO_AOF_FSYNC because it shares the AOF worker queue with
-                 * the regular fsync jobs; the buf pointer distinguishes it.
-                 * Only bioCreateAofFsyncNotifyJob attaches a buf, and it
-                 * always submits as BIO_AOF_FSYNC, never BIO_CLOSE_AOF. */
+            if (job->fd_args.buf != NULL) {
+                /* Only bioCreateAofFsyncNotifyJob attaches a buf, and it always
+                 * submits as BIO_AOF_FSYNC (never BIO_CLOSE_AOF); the buf pointer
+                 * is what distinguishes the offload job from a regular fsync. */
                 serverAssert(job_type == BIO_AOF_FSYNC);
-                int err = 0;
-                size_t len = sdslen(buf);
-                ssize_t nwritten = aofWrite(job->fd_args.fd, buf, len);
-                if (nwritten != (ssize_t)len) {
-                    err = (nwritten == -1) ? errno : ENOSPC;
-                } else if (valkey_fsync(job->fd_args.fd) == -1) {
-                    err = errno;
-                }
-
-                if (err) {
-                    atomic_store_explicit(&server.aof_bio_flush_errno, err, memory_order_relaxed);
-                    atomic_store_explicit(&server.aof_bio_flush_state, AOF_BIO_FLUSH_ERR, memory_order_release);
-                } else {
-                    atomic_store_explicit(&server.fsynced_reploff_pending, job->fd_args.offset, memory_order_relaxed);
-                    atomic_store_explicit(&server.aof_bio_flush_size, len, memory_order_relaxed);
-                    atomic_store_explicit(&server.aof_bio_flush_state, AOF_BIO_FLUSH_DONE, memory_order_release);
-                }
-                sdsfree(buf);
-                if (write(server.aof_pipe[1], "x", 1) == -1) { /* best-effort wakeup */
-                }
+                bioProcessAofFlushOffload(job);
             } else {
                 /* The fd may be closed by main thread and reused for another
                  * socket, pipe, or file. We just ignore these errno because

@@ -1171,9 +1171,13 @@ int aofIOFlushInProgress(void) {
 
 static void processAofBioFlushResult(void) {
     int state = atomic_load_explicit(&server.aof_bio_flush_state, memory_order_acquire);
-    if (state == AOF_BIO_FLUSH_IDLE || state == AOF_BIO_FLUSH_PENDING) return;
+    switch (state) {
+    case AOF_BIO_FLUSH_IDLE:
+    case AOF_BIO_FLUSH_PENDING:
+        /* Nothing to reap: no offloaded flush has completed yet. */
+        return;
 
-    if (state == AOF_BIO_FLUSH_DONE) {
+    case AOF_BIO_FLUSH_DONE: {
         off_t nwritten = atomic_load_explicit(&server.aof_bio_flush_size, memory_order_relaxed);
         server.aof_current_size += nwritten;
         server.aof_last_incr_size += nwritten;
@@ -1184,14 +1188,17 @@ static void processAofBioFlushResult(void) {
         return;
     }
 
-    int err = atomic_load_explicit(&server.aof_bio_flush_errno, memory_order_relaxed);
-    server.aof_last_write_errno = err;
-    atomic_store_explicit(&server.aof_bio_flush_state, AOF_BIO_FLUSH_IDLE, memory_order_release);
+    case AOF_BIO_FLUSH_ERR: {
+        int err = atomic_load_explicit(&server.aof_bio_flush_errno, memory_order_relaxed);
+        server.aof_last_write_errno = err;
+        atomic_store_explicit(&server.aof_bio_flush_state, AOF_BIO_FLUSH_IDLE, memory_order_release);
 
-    serverLog(LL_WARNING,
-              "Can't persist AOF for fsync policy 'always': %s. Exiting...",
-              strerror(err));
-    exit(1);
+        serverLog(LL_WARNING, "Can't persist AOF for fsync policy 'always': %s. Exiting...", strerror(err));
+        exit(1);
+    }
+
+    default: serverPanic("Unknown AOF bio flush state: %d", state);
+    }
 }
 
 void aofPipeReadable(aeEventLoop *el, int fd, void *privdata, int mask) {
@@ -1248,7 +1255,12 @@ void flushAppendOnlyFile(int force) {
 
     processAofBioFlushResult();
     if (aofIOFlushInProgress()) {
+        /* If not forced, return now. The next beforeSleep iteration will flush
+         * the accumulated in-memory buffer once this offloaded flush completes. */
         if (!force) return;
+
+        /* Forced callers (shutdown, CONFIG appendonly no, AOF rewrite) need the
+         * data on disk now, so drain the bio worker synchronously. */
         bioDrainWorker(BIO_AOF_FSYNC);
         processAofBioFlushResult();
     }

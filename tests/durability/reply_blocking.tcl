@@ -254,6 +254,75 @@ foreach provider_mode {aof} {
                 $primary debug client-enforce-reply-list 0
             }
 
+            test "($provider_mode) Blocked reply stays withheld during re-entrant event processing (busy script)" {
+                # Regression test for the re-entrant beforeSleep branch guarded by
+                # ProcessingEventsWhileBlocked. A busy Lua script drives the server
+                # into processEventsWhileBlocked(), which re-enters beforeSleep and
+                # calls handleClientsWithPendingWrites(). This test proves a
+                # not-yet-durable write reply is NOT flushed on that path: durability
+                # is enforced solely by the per-client reply-blocking boundary, not by
+                # skipping the flush entirely.
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
+
+                # Lower the busy threshold so the spinning script re-enters the event
+                # loop quickly, then restore it at the end.
+                set saved_limit [lindex [$primary config get busy-reply-threshold] 1]
+                $primary config set busy-reply-threshold 10
+
+                pause_provider
+
+                # Writer issues a command whose reply must block until durable.
+                set writer [valkey_deferring_client -1]
+                $writer set durable:reentrant pending
+
+                # Wait until the write is registered as blocked (waiting for ack),
+                # so it is queued for flushing when the re-entrant path runs.
+                wait_for_condition 50 100 {
+                    [string match "*reply_blocking_clients_waiting_ack:1*" [$primary info debug]]
+                } else {
+                    fail "Writer's reply never entered the blocked state"
+                }
+
+                # Busy read-only script forces the server into processEventsWhileBlocked.
+                set busy [valkey_deferring_client -1]
+                $busy eval {while true do end} 0
+
+                # Confirm the re-entrant event loop is actually running: while busy,
+                # the server answers other clients with -BUSY from beforeSleep re-entry.
+                wait_for_condition 50 100 {
+                    [catch {$primary ping} e] == 1 && [string match "BUSY*" $e]
+                } else {
+                    fail "Busy script did not enter processEventsWhileBlocked"
+                }
+
+                # Give the re-entrant beforeSleep several iterations to (not) flush it.
+                after 200
+
+                # The blocked reply must not have leaked out during the busy period.
+                set fd [$writer channel]
+                fconfigure $fd -blocking 0
+                set early_reply [read $fd]
+                fconfigure $fd -blocking 1
+                assert_equal "" $early_reply
+
+                # Stop the busy script (read-only, so SCRIPT KILL is permitted).
+                $primary script kill
+                wait_for_condition 50 100 {
+                    [catch {$primary ping} e] == 0
+                } else {
+                    fail "Could not kill the busy script"
+                }
+                catch {$busy read} _
+                $busy close
+
+                # Once durability advances, the previously-blocked reply is released.
+                unblock_with_provider
+                assert_equal "OK" [$writer read]
+                $writer close
+
+                $primary config set busy-reply-threshold $saved_limit
+            }
+
             # ==================== Non-blocking tests ====================
 
             test "($provider_mode) EVAL_RO should not block replies" {

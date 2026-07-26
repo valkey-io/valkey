@@ -1870,14 +1870,12 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
         processed += processIOThreadsResponses();
         processed += connTypeProcessPendingData();
         if (server.aof_state == AOF_ON || server.aof_state == AOF_WAIT_REWRITE) flushAppendOnlyFile(0);
-        /* When appendfsync=always and the AOF fsync has been offloaded to an
-         * IO thread, skip flushing replies to clients until the fsync completes.
-         * This ensures clients don't receive responses before their writes are
-         * durably committed. The next beforeSleep iteration will flush replies
-         * once processAofIOThreadFlushResult() confirms the fsync is done. */
-        if (!(server.bio_aof_offload_enabled && server.aof_fsync == AOF_FSYNC_ALWAYS && aofIOFlushInProgress())) {
-            processed += handleClientsWithPendingWrites();
-        }
+        /* Durability of not-yet-fsynced replies is enforced per-client by the
+         * reply-blocking boundary (disallowed_byte_offset) and the write cap in
+         * _writeToClient()/writevToClient(), so we can flush unconditionally here
+         * just like the main beforeSleep path: durable/clean replies go out now
+         * while blocked bytes stay capped until the fsync completes. */
+        processed += handleClientsWithPendingWrites();
         int last_processed = 0;
         do {
             /* Try to process all the pending IO events. */

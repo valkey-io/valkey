@@ -82,27 +82,20 @@ static int clocksourceHasToken(const char *list, const char *name) {
     return 0;
 }
 
-/* Pick an alternative clocksource from the available list, preferring tsc. */
+/* Pick a vDSO-capable alternative clocksource from the available list.
+ * Only these sources can avoid the syscall path that checkClocksource() measures;
+ * suggesting hpet/acpi_pm would not fix the warning. */
 static sds pickAlternativeClocksource(const char *curr, const char *avail) {
-    const char *p;
+    /* Order matters: prefer the common native sources, then paravirt clocks. */
+    static const char *fast_clocksources[] = {
+        "tsc", "arch_sys_counter", "kvm-clock", "hyperv_clocksource_tsc_page", NULL};
+    int i;
 
     if (!curr || !avail) return NULL;
 
-    /* Prefer tsc when available and not already selected (typical x86 fix). */
-    if (strcmp(curr, "tsc") != 0 && clocksourceHasToken(avail, "tsc")) return sdsnew("tsc");
-
-    p = avail;
-    while (*p) {
-        size_t len, currlen;
-        const char *end;
-
-        while (*p == ' ') p++;
-        if (!*p) break;
-        end = strchr(p, ' ');
-        len = end ? (size_t)(end - p) : strlen(p);
-        currlen = strlen(curr);
-        if (len != currlen || memcmp(p, curr, len) != 0) return sdsnewlen(p, len);
-        p = end ? end : p + len;
+    for (i = 0; fast_clocksources[i]; i++) {
+        if (strcmp(curr, fast_clocksources[i]) != 0 && clocksourceHasToken(avail, fast_clocksources[i]))
+            return sdsnew(fast_clocksources[i]);
     }
     return NULL;
 }
@@ -153,8 +146,7 @@ static int checkClocksource(sds *error_msg) {
                                   "Current clocksource: %s. Available clocksources: %s. ",
                                   curr ? curr : "", avail ? avail : "");
         if (suggest) {
-            /* Only recommend switching when another clocksource actually exists.
-             * Do not hard-code tsc: it is x86-specific and may be absent (e.g. ARM64). */
+            /* Only recommend a vDSO-capable alternative from the available list. */
             *error_msg = sdscatprintf(*error_msg,
                                       "Consider changing the system's clocksource. "
                                       "For example: run the command 'echo %s > "
@@ -162,13 +154,20 @@ static int checkClocksource(sds *error_msg) {
                                       "To permanently change the system's clocksource you'll need to set the "
                                       "'clocksource=' kernel command line parameter.",
                                       suggest);
-        } else {
-            /* Common on ARM64 where arch_sys_counter is often the only clocksource.
-             * The check may still be useful if vDSO is disabled, but switching is impossible. */
+        } else if (!curr || !avail) {
+            /* pickAlternativeClocksource() also returns NULL when sysfs reads fail.
+             * Do not claim there is no alternative in that case. */
             *error_msg = sdscat(*error_msg,
-                                "No alternative clocksource is available, so the system's clocksource cannot be "
-                                "changed. This may indicate that clock_gettime() is not using the vDSO fast path "
-                                "(for example due to a kernel timer workaround or virtualization limitation).");
+                                "Could not determine the available clocksources from sysfs, "
+                                "so no clocksource change can be recommended.");
+        } else {
+            /* No vDSO-capable alternative (common on ARM64 with only arch_sys_counter, or when
+             * only slow sources like hpet/acpi_pm remain). Switching would not help. */
+            *error_msg = sdscat(*error_msg,
+                                "No suitable alternative clocksource is available, so changing the system's "
+                                "clocksource is unlikely to help. This may indicate that clock_gettime() is not "
+                                "using the vDSO fast path (for example due to a kernel timer workaround or "
+                                "virtualization limitation).");
         }
         sdsfree(suggest);
         sdsfree(avail);

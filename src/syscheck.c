@@ -61,6 +61,52 @@ static sds read_sysfs_line(char *path) {
     return res;
 }
 
+/* Return 1 if `name` appears as a whitespace-separated token in `list`. */
+static int clocksourceHasToken(const char *list, const char *name) {
+    const char *p = list;
+    size_t namelen;
+
+    if (!list || !name || !*name) return 0;
+    namelen = strlen(name);
+    while (*p) {
+        size_t len;
+        const char *end;
+
+        while (*p == ' ') p++;
+        if (!*p) break;
+        end = strchr(p, ' ');
+        len = end ? (size_t)(end - p) : strlen(p);
+        if (len == namelen && memcmp(p, name, len) == 0) return 1;
+        p = end ? end : p + len;
+    }
+    return 0;
+}
+
+/* Pick an alternative clocksource from the available list, preferring tsc. */
+static sds pickAlternativeClocksource(const char *curr, const char *avail) {
+    const char *p;
+
+    if (!curr || !avail) return NULL;
+
+    /* Prefer tsc when available and not already selected (typical x86 fix). */
+    if (strcmp(curr, "tsc") != 0 && clocksourceHasToken(avail, "tsc")) return sdsnew("tsc");
+
+    p = avail;
+    while (*p) {
+        size_t len, currlen;
+        const char *end;
+
+        while (*p == ' ') p++;
+        if (!*p) break;
+        end = strchr(p, ' ');
+        len = end ? (size_t)(end - p) : strlen(p);
+        currlen = strlen(curr);
+        if (len != currlen || memcmp(p, curr, len) != 0) return sdsnewlen(p, len);
+        p = end ? end : p + len;
+    }
+    return NULL;
+}
+
 /* Verify our clocksource implementation doesn't go through a system call (uses vdso).
  * Going through a system call to check the time degrades server performance. */
 static int checkClocksource(sds *error_msg) {
@@ -100,15 +146,31 @@ static int checkClocksource(sds *error_msg) {
     if (stime_us * 10 > stime_us + utime_us) {
         sds avail = read_sysfs_line("/sys/devices/system/clocksource/clocksource0/available_clocksource");
         sds curr = read_sysfs_line("/sys/devices/system/clocksource/clocksource0/current_clocksource");
+        sds suggest = pickAlternativeClocksource(curr, avail);
+
         *error_msg = sdscatprintf(sdsempty(),
                                   "Slow system clocksource detected. This can result in degraded performance. "
-                                  "Consider changing the system's clocksource. "
-                                  "Current clocksource: %s. Available clocksources: %s. "
-                                  "For example: run the command 'echo tsc > "
-                                  "/sys/devices/system/clocksource/clocksource0/current_clocksource' as root. "
-                                  "To permanently change the system's clocksource you'll need to set the "
-                                  "'clocksource=' kernel command line parameter.",
+                                  "Current clocksource: %s. Available clocksources: %s. ",
                                   curr ? curr : "", avail ? avail : "");
+        if (suggest) {
+            /* Only recommend switching when another clocksource actually exists.
+             * Do not hard-code tsc: it is x86-specific and may be absent (e.g. ARM64). */
+            *error_msg = sdscatprintf(*error_msg,
+                                      "Consider changing the system's clocksource. "
+                                      "For example: run the command 'echo %s > "
+                                      "/sys/devices/system/clocksource/clocksource0/current_clocksource' as root. "
+                                      "To permanently change the system's clocksource you'll need to set the "
+                                      "'clocksource=' kernel command line parameter.",
+                                      suggest);
+        } else {
+            /* Common on ARM64 where arch_sys_counter is often the only clocksource.
+             * The check may still be useful if vDSO is disabled, but switching is impossible. */
+            *error_msg = sdscat(*error_msg,
+                                "No alternative clocksource is available, so the system's clocksource cannot be "
+                                "changed. This may indicate that clock_gettime() is not using the vDSO fast path "
+                                "(for example due to a kernel timer workaround or virtualization limitation).");
+        }
+        sdsfree(suggest);
         sdsfree(avail);
         sdsfree(curr);
         return -1;

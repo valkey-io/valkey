@@ -144,9 +144,8 @@ static int checkClocksource(sds *error_msg) {
         *error_msg = sdscatprintf(sdsempty(),
                                   "Slow system clocksource detected. This can result in degraded performance. "
                                   "Current clocksource: %s. Available clocksources: %s. ",
-                                  curr ? curr : "", avail ? avail : "");
         if (suggest) {
-            /* Only recommend a vDSO-capable alternative from the available list. */
+            /* Only recommend switching when another clocksource actually exists. */
             *error_msg = sdscatprintf(*error_msg,
                                       "Consider changing the system's clocksource. "
                                       "For example: run the command 'echo %s > "

@@ -31,6 +31,7 @@
 #include "syscheck.h"
 #include "sds.h"
 #include "anet.h"
+#include "monotonic.h"
 
 #include <time.h>
 #include <sys/resource.h>
@@ -97,13 +98,16 @@ static sds pickAlternativeClocksource(const char *curr, const char *avail) {
     return NULL;
 }
 
-/* Verify our clocksource implementation doesn't go through a system call (uses vdso).
- * Going through a system call to check the time degrades server performance. */
+/* Verify clock_gettime() does not go through a system call (uses vdso).
+ * Skipped when Valkey is already using a hardware monotonic clock. */
 static int checkClocksource(sds *error_msg) {
     unsigned long test_time_us, system_hz;
     struct timespec ts;
     unsigned long long start_us;
     struct rusage ru_start, ru_end;
+
+    monotonicInit();
+    if (monotonicGetType() == MONOTONIC_CLOCK_HW) return 0;
 
     system_hz = sysconf(_SC_CLK_TCK);
 

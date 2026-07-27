@@ -3267,6 +3267,22 @@ static int applyClientMaxMemoryUsage(const char **err) {
     return 1;
 }
 
+static int applyClusterNodeTimeout(const char **err) {
+    UNUSED(err);
+    if (server.cluster_protocol == CLUSTER_PROTOCOL_RAFT) {
+        int ping_period = (int)(server.cluster_node_timeout / 2000);
+        if (ping_period < 1) ping_period = 1;
+        if (ping_period < server.repl_ping_replica_period) {
+            serverLog(LL_NOTICE,
+                      "Raft mode: updating repl-ping-replica-period from %d to %d "
+                      "(half of cluster-node-timeout).",
+                      server.repl_ping_replica_period, ping_period);
+            server.repl_ping_replica_period = ping_period;
+        }
+    }
+    return 1;
+}
+
 #define HASH_SEED_MAX_LEN 256
 static int isValidDbHashSeed(sds val, const char **err) {
     if (sdslen(val) > HASH_SEED_MAX_LEN) {
@@ -3465,7 +3481,7 @@ standardConfig static_configs[] = {
 
     /* Long Long configs */
     createLongLongConfig("busy-reply-threshold", "lua-time-limit", MODIFIABLE_CONFIG, 0, LONG_MAX, server.busy_reply_threshold, 5000, INTEGER_CONFIG, NULL, NULL), /* milliseconds */
-    createLongLongConfig("cluster-node-timeout", NULL, MODIFIABLE_CONFIG, 0, LLONG_MAX, server.cluster_node_timeout, 15000, INTEGER_CONFIG, NULL, NULL),
+    createLongLongConfig("cluster-node-timeout", NULL, MODIFIABLE_CONFIG, 0, LLONG_MAX, server.cluster_node_timeout, 15000, INTEGER_CONFIG, NULL, applyClusterNodeTimeout),
     createLongLongConfig("cluster-ping-interval", NULL, MODIFIABLE_CONFIG | HIDDEN_CONFIG, 0, LLONG_MAX, server.cluster_ping_interval, 0, INTEGER_CONFIG, NULL, NULL),
     createLongLongConfig("commandlog-execution-slower-than", "slowlog-log-slower-than", MODIFIABLE_CONFIG, -1, LLONG_MAX, server.commandlog[COMMANDLOG_TYPE_SLOW].threshold, 10000, INTEGER_CONFIG, NULL, NULL),
     createLongLongConfig("commandlog-request-larger-than", NULL, MODIFIABLE_CONFIG, -1, LLONG_MAX, server.commandlog[COMMANDLOG_TYPE_LARGE_REQUEST].threshold, 1024 * 1024, MEMORY_CONFIG | SIGNED_MEMORY_CONFIG, NULL, NULL),

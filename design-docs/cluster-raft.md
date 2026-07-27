@@ -172,13 +172,21 @@ NODE_INFO <node-id> <address-string> <flags>
     and SET_REPLICA_OF. Flags is "nofailover" or "noflags". No shard epoch required here
     as it does not create any mutations.
 
-NODE_FAIL <node-id>
-    Mark a node as failed. Proposed by the leader when a peer exceeds
-    the node timeout without responding to heartbeats. No shard epoch here as it does not change cluster membership or leadership.
+NODE_FAIL <target-node-id> <proposer-node-id> <shard-epoch>
+    Mark a node as failed. Proposed by a shard member via the
+    replication-stream detector, or by the raft leader via AE_ACK
+    for single-node shards and whole-shard-down fallback. The
+    proposer is validated at propose time; the shard-epoch is
+    validated at apply time to reject entries made stale by a
+    concurrent shard change (see Failure Detection). Does not itself
+    bump the shard epoch.
 
-NODE_RECOVER <node-id>
-    Clear the FAIL flag. Proposed by the leader when it receives
-    AE_ACK from a previously failed node.
+NODE_RECOVER <target-node-id> <proposer-node-id> <shard-epoch>
+    Clear the FAIL flag. Proposed by the primary when a FAIL'd
+    replica reappears in server.replicas, by the raft leader when
+    a single-node shard sends AE_ACK, or by a replica when its
+    FAIL'd primary's replication link is restored (only when
+    failover is disabled). Validation mirrors NODE_FAIL.
 ```
 
 Ranges in SLOT_CHANGE use the same format as nodes.conf: `0-5460` or
@@ -465,16 +473,101 @@ complexity to the leader's replication logic.
 
 ## Failure Detection
 
-The leader tracks `last_ack_time` per peer, updated on every AE_ACK
-received. In the leader's cron, if a peer hasn't responded within
-`cluster-node-timeout`, the leader proposes a NODE_FAIL entry.
+There are two modes of failure detection, working in conjunction:
 
-On apply, the FAIL flag is set on the node and slot coverage is
-rechecked, transitioning `cluster_state` to `fail` if a node with
-slots is down.
+1. **Shard-level (replica ↔ primary):** shard members detect each
+   other via the replication stream (the data-path), which is the
+   authoritative health signal for a shard. Decentralized.
 
-When a failed node comes back and sends AE_ACK, the leader proposes
-a NODE_RECOVER entry to clear the FAIL flag on all nodes.
+2. **Cluster-level (leader → whole shard):** the raft leader detects a
+   shard via AE_ACK when no member of that shard is responsive.
+
+The two modes are complementary: as long as *any* shard member is
+alive, mode 1 owns detection for that shard (it has the real data-path
+signal); mode 2 only fires when the whole shard has gone silent, where
+the leader's AE_ACK is the only remaining signal.
+
+### Cluster-level AE_ACK detector
+
+The raft leader tracks `last_ack_time` per peer, updated on every
+AE_ACK received. This serves two purposes:
+
+1. **Quorum freshness** (`clusterRaftLeaderHasFreshQuorum()`): if a
+   majority of peers have not ACK'd within `cluster-node-timeout`,
+   the leader steps down to prevent split-brain writes.
+
+2. **NODE_FAIL when a whole shard is silent**: if every member of a
+   shard has failed to ACK within `cluster-node-timeout`, no member is
+   alive to run the replication-stream detector, so the leader proposes
+   NODE_FAIL for each timed-out member. A single-node shard also
+   satisfies "every member is silent". When a node comes back and sends
+   AE_ACK, the leader proposes NODE_RECOVER.
+
+### Why replication-stream-based detection is also needed
+
+For shard nodes, the actual liveness signal is replication stream
+health. A primary and its replicas communicate via the replication
+connection — if that connection is healthy, the shard is serving
+traffic correctly regardless of whether the raft leader can reach
+those nodes. This allows shard nodes to operate independently from
+raft leader partitions and avoid false positives.
+
+### Decentralized replication-stream detector
+
+For shards with a primary and one or more replicas, failure is
+detected via the data-path (replication stream). Asymmetric timeouts
+between primary and replica is set to avoid failovers in case of partition
+between primary and replica. This will also be later used as primaryship
+lease for sync replication.
+
+**Primary-side detection:** The primary iterates its cluster-state
+replicas and checks their health via two paths:
+
+1. *Connected replica (in `server.replicas`, state ONLINE)*: checks
+   `repl_ack_time` freshness. Timeout = `cluster-node-timeout`.
+
+2. *Disconnected replica (not in `server.replicas`)*: a crash causes
+   immediate TCP RST and client removal. The primary tracks the first
+   observation time (`repl_unconnected_since`) and proposes NODE_FAIL
+   after `max(REPL_CONNECT_GRACE_PERIOD_MS - (5 seconds), server.node_timeout)`.
+   The grace period allows a healthy replica time to complete its replication handshake after a FAILOVER when replicas connect to the new primary.
+
+**Replica-side detection:** The replica checks `myself->replicaof`
+from cluster state and monitors replication health via
+`server.primary->last_interaction` (link up but silent) or
+`server.repl_down_since` (link dropped). Timeout = `1.5 ×
+cluster-node-timeout`. The asymmetric (longer) timeout ensures the
+primary proposes NODE_FAIL first; the replica only proposes if the
+primary failed to do so (e.g., the primary itself crashed).
+
+**Timeout summary:**
+
+| Path | Timeout | Rationale |
+|------|---------|-----------|
+| Primary: connected replica silent | cluster-node-timeout | Replica should ACK within this window |
+| Replica: primary silent/down | 1.5 × node-timeout | Let primary propose first |
+
+**Recovery:**
+- Primary-side: proposes NODE_RECOVER when a FAIL'd replica is present
+  in `server.replicas` and `repl_ack_time` is fresh.
+- Replica-side: proposes NODE_RECOVER only when failover is disabled
+  (`cluster-replica-no-failover`). Normally, a replica with a FAIL'd
+  primary should failover, not recover.
+
+### NODE_FAIL / NODE_RECOVER validation
+
+A NODE_FAIL/NODE_RECOVER entry carries `<target> <proposer>
+<shard-epoch>` and is validated in two places:
+
+- **Propose time (leader):** the proposer must be legitimate — the raft
+  leader, or the target's actual primary/replica peer.
+  An already-FAIL'd proposer is a no-op. This check runs once,
+  during leader pre-validation.
+
+- **Apply time (NODE_FAIL only):** the shard epoch is re-checked (not
+  bumped). A concurrent FAILOVER bumps the epoch, so a stale `NODE_FAIL` carrying the old epoch is rejected. Without this, after a node R fails over node P, the stale `NODE_FAIL R` from the old primary P could mark the freshly promoted R as FAILED.
+
+- **Apply time (NODE_RECOVER):** no epoch check because clearing a FAIL flag is the safe direction as stale recovery is either a no-op or gets re-FAILed on the next detector tick. Epoch-gating it would only delay a legitimate recovery, an availability regression.
 
 ### Election timeout
 

@@ -53,6 +53,23 @@ typedef enum {
 #define GENERIC_PROPOSAL_REJECTION_MSG "proposal rejected by raft leader"
 #define STALE_SHARD_EPOCH_REJECTION_MSG "proposal rejected due to stale shard epoch"
 
+/* Grace period (ms) before proposing NODE_FAIL for a replica that is not in
+ * server.replicas. After a topology change (FAILOVER/SET_REPLICA_OF), a
+ * healthy replica needs time to establish its replication connection. */
+#define REPL_CONNECT_GRACE_PERIOD_MS 5000
+
+
+/* Primary-side timeout (seconds) for detecting replica failure. */
+static inline time_t raftPrimarySideTimeout(void) {
+    return (time_t)(server.cluster_node_timeout / 1000);
+}
+
+/* Replica-side timeout (seconds) for detecting primary failure. */
+static inline time_t raftReplicaSideTimeout(void) {
+    time_t t = (time_t)(server.cluster_node_timeout / 1000) * 3 / 2;
+    return t < 1 ? 1 : t;
+}
+
 /* Wire-protocol tokens used in REJECT proposal between leader -> follower. */
 #define REJECT_WIRE_CONFLICT "conflict" /* for stale shard epoch validation fail. */
 #define REJECT_WIRE_REJECTED "rejected" /* for any other validation fail. */
@@ -240,6 +257,7 @@ typedef struct {
     uint64_t next_index;
     uint64_t match_index;
     mstime_t last_ack_time;               /* Last time we received AE_ACK from this peer */
+    mstime_t repl_unconnected_since;      /* monotonicMs() when replica first seen missing from server.replicas (0 = connected or not tracked) */
     unsigned int pending_fail_change : 1; /* NODE_FAIL or NODE_RECOVER in flight */
 } clusterNodeRaftData;
 
@@ -375,6 +393,8 @@ static RaftProposalResult clusterRaftApplySlotChange(sds data, int validate_only
 static RaftProposalResult clusterRaftApplySetReplica(sds data, int validate_only);
 static RaftProposalResult clusterRaftApplyFailover(sds data, int validate_only);
 static RaftProposalResult clusterRaftApplyNodeForget(sds data, int validate_only);
+static RaftProposalResult clusterRaftValidateFailRecoverProposer(sds data);
+static void raftClearPendingFailChange(int type, sds data);
 static void raftLogApply(raftLogEntry *e);
 static raftLogEntry *raftLogCreate(uint64_t term, uint64_t index, uint8_t type, sds data);
 static void raftLogAppend(raftLogEntry *e);
@@ -829,6 +849,8 @@ static void clusterRaftPropose(sds entry, void *ctx, void (*callback)(void *ctx,
         RaftProposalResult pre_result = clusterRaftPreValidate(type, data);
         if (pre_result != RAFT_RESULT_OK) {
             if (callback) callback(ctx, raftProposalResultMsg(pre_result));
+            /* Let the detector re-evaluate a rejected NODE_FAIL/NODE_RECOVER. */
+            raftClearPendingFailChange(type, data);
             sdsfree(data);
             return;
         }
@@ -1080,6 +1102,10 @@ static RaftProposalResult clusterRaftPreValidate(int type, sds data) {
     case RAFT_ENTRY_NODE_FORGET:
         result = clusterRaftApplyNodeForget(data, 1);
         break;
+    case RAFT_ENTRY_NODE_FAIL:
+    case RAFT_ENTRY_NODE_RECOVER:
+        result = clusterRaftValidateFailRecoverProposer(data);
+        break;
     default:
         break;
     }
@@ -1295,12 +1321,67 @@ static void clusterRaftCompletePendingProposal(int type, sds data, RaftProposalR
                 return;
             }
             if (pp->callback) pp->callback(pp->ctx, raftProposalResultMsg(result));
+            /* On terminal rejection, free the detector to re-evaluate. */
+            if (result != RAFT_RESULT_OK) raftClearPendingFailChange(type, data);
             sdsfree(pp->data);
             zfree(pp);
             listDelNode(rs->pending_proposals, ln);
             break;
         }
     }
+}
+
+/* Parse a NODE_FAIL or NODE_RECOVER entry.
+ * Format: "<target-node-id> <proposer-node-id> <shard-epoch>"
+ * Sets *target and *proposer to the looked-up nodes
+ * and *epoch to the entry's shard epoch (0 if absent). */
+static void raftParseFailRecoverEntry(sds data, clusterNode **target, clusterNode **proposer, uint64_t *epoch) {
+    *target = NULL;
+    *proposer = NULL;
+    *epoch = 0;
+    int argc;
+    sds *argv = sdssplitlen(data, sdslen(data), " ", 1, &argc);
+    if (!argv) return;
+    if (argc >= 1 && sdslen(argv[0]) == CLUSTER_NAMELEN)
+        *target = clusterLookupNode(argv[0], CLUSTER_NAMELEN);
+    if (argc >= 2 && sdslen(argv[1]) == CLUSTER_NAMELEN)
+        *proposer = clusterLookupNode(argv[1], CLUSTER_NAMELEN);
+    if (argc >= 3)
+        *epoch = strtoull(argv[2], NULL, 10);
+    sdsfreesplitres(argv, argc);
+}
+
+/* Clear a target node's pending_fail_change flag from a NODE_FAIL/NODE_RECOVER
+ * entry's raw data. Used when such a proposal is rejected or expires so the
+ * detector is free to re-evaluate. No-op for other entry types. */
+static void raftClearPendingFailChange(int type, sds data) {
+    if (type != RAFT_ENTRY_NODE_FAIL && type != RAFT_ENTRY_NODE_RECOVER) return;
+    if (sdslen(data) < CLUSTER_NAMELEN) return;
+    clusterNode *target = clusterLookupNode(data, CLUSTER_NAMELEN);
+    if (target) RAFT_NODE(target)->pending_fail_change = 0;
+}
+
+/* Propose-time validation of a NODE_FAIL/NODE_RECOVER proposer. Runs on the
+ * leader (pre-validation) before the entry is appended. The proposer must be:
+ * the raft leader, or a primary proposing for its own replica, or a replica
+ * proposing for its own primary. This is validated at proposal time. */
+static RaftProposalResult clusterRaftValidateFailRecoverProposer(sds data) {
+    clusterRaftState *rs = RAFT_STATE();
+    clusterNode *target, *proposer;
+    uint64_t epoch;
+    raftParseFailRecoverEntry(data, &target, &proposer, &epoch);
+    if (!target || !proposer) return RAFT_RESULT_REJECTED;
+
+    /* The raft leader is always an authoritative proposer. */
+    if (memcmp(proposer->name, rs->leader, CLUSTER_NAMELEN) == 0) return RAFT_RESULT_OK;
+
+    /* A stale (already FAIL'd) proposer is not trusted. */
+    if (nodeFailed(proposer)) return RAFT_RESULT_REJECTED;
+
+    /* Otherwise the proposer must be in a live primary<->replica relationship
+     * with the target. */
+    if (target->replicaof == proposer || proposer->replicaof == target) return RAFT_RESULT_OK;
+    return RAFT_RESULT_REJECTED;
 }
 
 /* Apply a committed log entry. */
@@ -1452,40 +1533,97 @@ static void raftLogApply(raftLogEntry *e) {
         break;
     }
     case RAFT_ENTRY_NODE_FAIL: {
-        clusterNode *node = clusterLookupNode(e->data, sdslen(e->data));
-        if (node && node != myself) {
+        clusterNode *node = NULL;
+        clusterNode *proposer = NULL;
+        uint64_t entry_epoch = 0;
+        raftParseFailRecoverEntry(e->data, &node, &proposer, &entry_epoch);
+        int valid_epoch = (node && clusterValidateShardEpoch(node->shard_id, entry_epoch));
+        int applied = 0;
+        if (node && node != myself && !nodeFailed(node) && valid_epoch) {
             node->flags |= CLUSTER_NODE_FAIL;
             RAFT_NODE(node)->pending_fail_change = 0;
             rs->todo_update_slot_coverage = 1;
             rs->todo_invalidate_slots_cache = 1;
+            applied = 1;
+
+            /* Send REPL_OFFSETS to replicas of the failed primary so they
+             * can rank themselves for automatic failover. Sent at apply
+             * time so replicas have offset data before acting on NODE_FAIL. */
+            if (rs->role == RAFT_ROLE_LEADER &&
+                !nodeIsReplica(node) && clusterNodeNumReplicas(node) > 0) {
+                int num_replicas = clusterNodeNumReplicas(node);
+                sds hint = wireNewMsg("REPL_OFFSETS");
+                for (int r = 0; r < num_replicas; r++) {
+                    clusterNode *replica = clusterNodeGetReplica(node, r);
+                    long long roff = (replica == myself)
+                                         ? (nodeIsReplica(myself) ? replicationGetReplicaOffset()
+                                                                  : server.primary_repl_offset)
+                                         : replica->repl_offset;
+                    hint = sdscatlen(hint, " ", 1);
+                    hint = sdscatlen(hint, replica->name, CLUSTER_NAMELEN);
+                    hint = sdscatfmt(hint, " %I", roff);
+                }
+                hint = wireFinishMsg(hint);
+
+                size_t hint_len = sdslen(hint);
+                clusterMsgSendBlock *block = clusterAllocMsgSendBlock(hint_len);
+                memcpy(block->data, hint, hint_len);
+                sdsfree(hint);
+                for (int r = 0; r < num_replicas; r++) {
+                    clusterNode *replica = clusterNodeGetReplica(node, r);
+                    if (replica == myself) continue;
+                    clusterLink *link = replica->link;
+                    if (link) {
+                        clusterLinkSendBlock(link, block);
+                    } else {
+                        serverLog(LL_WARNING,
+                                  "No outbound link to replica %.40s for REPL_OFFSETS.",
+                                  replica->name);
+                    }
+                }
+                clusterMsgSendBlockDecrRefCount(block);
+            }
+        } else if (node) {
+            RAFT_NODE(node)->pending_fail_change = 0;
         }
-        serverLog(LL_NOTICE, "Applied NODE_FAIL %.40s (index %llu).",
-                  e->data, (unsigned long long)e->index);
+        serverLog(LL_NOTICE, "%s NODE_FAIL %.40s (index %llu).",
+                  applied ? "Applied" : "Skipped duplicate",
+                  node ? node->name : e->data,
+                  (unsigned long long)e->index);
 
         /* If the failed node is my primary, defer failover scheduling
          * to beforeSleep. This avoids acting on stale NODE_FAIL entries
          * when catching up on old log entries — a subsequent NODE_RECOVER
          * in the same batch will clear the flag. */
-        if (node && nodeIsReplica(myself) && myself->replicaof == node &&
-            !nodeCantFailover(myself)) {
+        if (applied && node && nodeIsReplica(myself) &&
+            myself->replicaof == node && !nodeCantFailover(myself)) {
             rs->todo_schedule_failover = 1;
         }
         break;
     }
     case RAFT_ENTRY_NODE_RECOVER: {
-        clusterNode *node = clusterLookupNode(e->data, sdslen(e->data));
+        clusterNode *node = NULL;
+        clusterNode *proposer = NULL;
+        uint64_t entry_epoch = 0;
+        raftParseFailRecoverEntry(e->data, &node, &proposer, &entry_epoch);
+        int applied = 0;
         if (node) {
             node->flags &= ~CLUSTER_NODE_FAIL;
             RAFT_NODE(node)->pending_fail_change = 0;
             rs->todo_update_slot_coverage = 1;
             rs->todo_invalidate_slots_cache = 1;
+            applied = 1;
             /* Cancel deferred failover if the recovered node is my primary. */
             if (nodeIsReplica(myself) && myself->replicaof == node) {
                 rs->todo_schedule_failover = 0;
             }
+        } else if (node) {
+            RAFT_NODE(node)->pending_fail_change = 0;
         }
-        serverLog(LL_NOTICE, "Applied NODE_RECOVER %.40s (index %llu).",
-                  e->data, (unsigned long long)e->index);
+        serverLog(LL_NOTICE, "%s NODE_RECOVER %.40s (index %llu).",
+                  applied ? "Applied" : "Skipped",
+                  node ? node->name : e->data,
+                  (unsigned long long)e->index);
         break;
     }
     case RAFT_ENTRY_NODE_INFO: {
@@ -1723,14 +1861,24 @@ static int clusterRaftProcessAppendEntriesResponse(clusterLink *link, int argc, 
         clusterRaftBroadcastNodeOffset(node, follower_repl_offset);
     }
 
-    /* Propose NODE_RECOVER if the node is back. */
-    if (nodeFailed(node) && !rd->pending_fail_change) {
+    /* Propose NODE_RECOVER if the node is back, with a cooldown to
+     * prevent rapid FAIL/RECOVER flapping.
+     *
+     * For nodes in multi-node shards, skip leader-initiated recovery —
+     * the AE_ACK only proves control-plane connectivity, not data-path
+     * health. The shard members detect data-path recovery themselves
+     * via replication-stream signals. */
+    if (nodeFailed(node) && !rd->pending_fail_change &&
+        !nodeIsReplica(node) && clusterNodeNumReplicas(node) == 0) {
         rd->pending_fail_change = 1;
         sds entry = sdsnew("NODE_RECOVER ");
         entry = sdscatlen(entry, node->name, CLUSTER_NAMELEN);
+        entry = sdscatlen(entry, " ", 1);
+        entry = sdscatlen(entry, myself->name, CLUSTER_NAMELEN);
+        entry = sdscatfmt(entry, " %U", (unsigned long long)clusterGetShardEpoch(node->shard_id));
         clusterRaftPropose(entry, NULL, NULL);
         sdsfree(entry);
-        serverLog(LL_NOTICE, "Node %.40s is back, proposing NODE_RECOVER.", node->name);
+        serverLog(LL_NOTICE, "Node %.40s is back (AE_ACK), proposing NODE_RECOVER.", node->name);
     }
 
     if (success) {
@@ -2045,6 +2193,13 @@ static void clusterRaftInit(void) {
     rs->todo_update_slot_coverage = 1;
     rs->shard_epochs = dictCreate(&raftShardEpochDictType);
     server.cluster->size = 0; /* Incremented by NODE_JOIN apply */
+
+    /* Override ping period so that it is half of cluster timeout */
+    int ping_period = (int)(server.cluster_node_timeout / 2000);
+    if (ping_period < 1) ping_period = 1;
+    if (ping_period < server.repl_ping_replica_period) {
+        server.repl_ping_replica_period = ping_period;
+    }
 }
 
 static void clusterRaftInitLast(void) {
@@ -2068,82 +2223,272 @@ static void clusterRaftInitLast(void) {
     }
 }
 
-/* Leader: detect node failures and propose NODE_FAIL. */
-static void clusterRaftDetectFailures(mstime_t now) {
+/* Find a client in server.replicas matching the given cluster node ID.
+ * Returns the client if found, NULL otherwise. */
+static client *clusterRaftFindReplicaClient(clusterNode *node) {
+    listIter li;
+    listNode *ln;
+    listRewind(server.replicas, &li);
+    while ((ln = listNext(&li))) {
+        client *c = listNodeValue(ln);
+        if (c->repl_data->replica_nodeid && sdslen(c->repl_data->replica_nodeid) == CLUSTER_NAMELEN &&
+            memcmp(c->repl_data->replica_nodeid, node->name, CLUSTER_NAMELEN) == 0) {
+            return c;
+        }
+    }
+    return NULL;
+}
+
+/* Propose NODE_FAIL for a given node.
+ * Format: "NODE_FAIL <target-node-id> <proposer-node-id> <shard-epoch>" */
+static void clusterRaftProposeNodeFail(clusterNode *node, const char *reason) {
+    clusterNodeRaftData *rd = RAFT_NODE(node);
+    if (nodeFailed(node) || rd->pending_fail_change) return;
+
+    serverLog(LL_NOTICE, "%.40s %s, proposing NODE_FAIL.", node->name, reason);
+
+    sds entry = sdsnew("NODE_FAIL ");
+    entry = sdscatlen(entry, node->name, CLUSTER_NAMELEN);
+    entry = sdscatlen(entry, " ", 1);
+    entry = sdscatlen(entry, myself->name, CLUSTER_NAMELEN);
+    entry = sdscatfmt(entry, " %U", (unsigned long long)clusterGetShardEpoch(node->shard_id));
+    clusterRaftPropose(entry, NULL, NULL);
+    sdsfree(entry);
+    rd->pending_fail_change = 1;
+}
+
+/* Leader: periodically drop stale links to failed nodes so that
+ * clusterConnectNodes can establish a fresh connection. This allows
+ * the leader to detect recovery when the node comes back and sends
+ * an AE_ACK on the new link. */
+static void clusterRaftRecycleFailedNodeLinks(mstime_t now) {
     mstime_t node_timeout = server.cluster_node_timeout;
 
-    /* Check individual nodes. */
     dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
     dictEntry *de;
     while ((de = dictNext(di)) != NULL) {
         clusterNode *node = dictGetVal(de);
-        if (node == myself) continue;
-
-        if (nodeFailed(node)) {
-            /* For failed nodes, drop stale links periodically so
-             * clusterConnectNodes can establish a fresh connection.
-             * This allows the leader to detect recovery via AE_ACK. */
-            if (node->link) {
-                clusterNodeRaftData *rd = RAFT_NODE(node);
-                if (rd->last_ack_time > 0 &&
-                    now - rd->last_ack_time > node_timeout) {
-                    freeClusterLink(node->link);
-                    rd->last_ack_time = now;
-                }
-            }
-            continue;
-        }
+        if (node == myself || !nodeFailed(node)) continue;
         clusterNodeRaftData *rd = RAFT_NODE(node);
-        if (rd->pending_fail_change) continue;
-        if (rd->last_ack_time > 0 &&
-            now - rd->last_ack_time > node_timeout) {
-            serverLog(LL_NOTICE, "Node %.40s not responding, proposing NODE_FAIL.", node->name);
-
-            /* If the failed node is a primary with replicas, send
-             * REPL_OFFSETS to each replica with all sibling offsets
-             * so they can rank themselves for automatic failover. */
-            if (!nodeIsReplica(node) && clusterNodeNumReplicas(node) > 0) {
-                int num_replicas = clusterNodeNumReplicas(node);
-                sds hint = wireNewMsg("REPL_OFFSETS");
-                for (int r = 0; r < num_replicas; r++) {
-                    clusterNode *replica = clusterNodeGetReplica(node, r);
-                    long long roff = (replica == myself)
-                                         ? (nodeIsReplica(myself) ? replicationGetReplicaOffset()
-                                                                  : server.primary_repl_offset)
-                                         : replica->repl_offset;
-                    hint = sdscatlen(hint, " ", 1);
-                    hint = sdscatlen(hint, replica->name, CLUSTER_NAMELEN);
-                    hint = sdscatfmt(hint, " %I", roff);
-                }
-                hint = wireFinishMsg(hint);
-
-                /* Build a send block and send to remote replicas. */
-                size_t hint_len = sdslen(hint);
-                clusterMsgSendBlock *block = clusterAllocMsgSendBlock(hint_len);
-                memcpy(block->data, hint, hint_len);
-                sdsfree(hint);
-                for (int r = 0; r < num_replicas; r++) {
-                    clusterNode *replica = clusterNodeGetReplica(node, r);
-                    if (replica == myself) continue;
-                    clusterLink *link = replica->link;
-                    if (link) {
-                        clusterLinkSendBlock(link, block);
-                    } else {
-                        serverLog(LL_WARNING, "No outbound link to replica %.40s for REPL_OFFSETS.",
-                                  replica->name);
-                    }
-                }
-                clusterMsgSendBlockDecrRefCount(block);
+        if (node->link) {
+            if (rd->last_ack_time > 0 &&
+                now - rd->last_ack_time > node_timeout) {
+                freeClusterLink(node->link);
+                rd->last_ack_time = now;
             }
-
-            sds entry = sdsnew("NODE_FAIL ");
-            entry = sdscatlen(entry, node->name, CLUSTER_NAMELEN);
-            clusterRaftPropose(entry, NULL, NULL);
-            sdsfree(entry);
-            rd->pending_fail_change = 1;
         }
     }
     dictReleaseIterator(di);
+}
+
+
+/* Leader: detect node failures via cluster bus (AE_ACK).
+ *
+ * - Single-node shards: always monitored here.
+ * - Multi-node shards: only propose NODE_FAIL when ALL members of the
+ *   shard have timed out (whole-shard-down). If any member is still
+ *   responsive, defer to the decentralized replication-stream detector. */
+static void clusterRaftDetectFailures(mstime_t now) {
+    mstime_t node_timeout = server.cluster_node_timeout;
+
+    dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
+    dictEntry *de;
+    while ((de = dictNext(di)) != NULL) {
+        clusterNode *node = dictGetVal(de);
+        if (node == myself || nodeFailed(node)) continue;
+
+        clusterNodeRaftData *rd = RAFT_NODE(node);
+        if (rd->pending_fail_change) continue;
+        if (!(rd->last_ack_time > 0 && now - rd->last_ack_time > node_timeout))
+            continue;
+
+        /* For multi-node shards, only act if ALL shard members have
+         * timed out. If any member is still alive (including myself),
+         * it will handle detection via the replication stream. */
+        if (nodeIsReplica(node) || clusterNodeNumReplicas(node) > 0) {
+            clusterNode *primary = nodeIsReplica(node) ? node->replicaof : node;
+            /* Orphaned replica with no primary — no replication stream
+             * exists to monitor it. */
+            if (!primary) goto propose_fail;
+            int all_timed_out = 1;
+
+            /* If the leader is itself in this shard, it's a responsive
+             * member — defer to replication-stream detection. */
+            if (memcmp(myself->shard_id, primary->shard_id, CLUSTER_NAMELEN) == 0) {
+                all_timed_out = 0;
+            }
+
+            /* Check the primary: if it's still responsive, it can detect
+             * the failed replica via replication-stream — no need for
+             * AE_ACK fallback. */
+            if (all_timed_out && primary != node && !nodeFailed(primary)) {
+                clusterNodeRaftData *prd = RAFT_NODE(primary);
+                if (!(prd->last_ack_time > 0 && now - prd->last_ack_time > node_timeout)) {
+                    all_timed_out = 0;
+                }
+            }
+            /* Check all replicas: if any replica is still responsive,
+             * it can detect the failed primary via replication-stream. */
+            if (all_timed_out) {
+                int num_replicas = clusterNodeNumReplicas(primary);
+                for (int i = 0; i < num_replicas; i++) {
+                    clusterNode *replica = clusterNodeGetReplica(primary, i);
+                    if (replica == node || nodeFailed(replica)) continue;
+                    clusterNodeRaftData *rrd = RAFT_NODE(replica);
+                    if (!(rrd->last_ack_time > 0 && now - rrd->last_ack_time > node_timeout)) {
+                        all_timed_out = 0;
+                        break;
+                    }
+                }
+            }
+            if (!all_timed_out) continue;
+        }
+
+    propose_fail:
+        clusterRaftProposeNodeFail(node, "AE_ACK timeout");
+    }
+    dictReleaseIterator(di);
+}
+
+/* Detect failures via the replication stream. Active only in raft mode.
+ *
+ * Primary side: monitors replica ACK timestamps. Timeout = cluster_node_timeout (T).
+ * Replica side: monitors primary's last_interaction. Timeout = 1.5T.
+ *
+ * The asymmetric timeout avoids races: the primary (often the raft leader)
+ * proposes NODE_FAIL first; the replica only proposes if the primary failed
+ * to do so (e.g., the primary itself crashed). */
+static void clusterRaftDetectReplStreamFailures(mstime_t now) {
+    if (server.loading || nodeFailed(myself) || server.shutdown_flags) return;
+
+    /* Primary side: iterate cluster-state replicas and check health.
+     * If the replica has a client in server.replicas, check repl_ack_time.
+     * If it does not (crash/disconnect), wait for grace period. */
+    if (nodeIsPrimary(myself) && clusterNodeNumReplicas(myself) > 0) {
+        int num_replicas = clusterNodeNumReplicas(myself);
+        time_t timeout_sec = raftPrimarySideTimeout();
+
+        for (int i = 0; i < num_replicas; i++) {
+            clusterNode *node = clusterNodeGetReplica(myself, i);
+            if (!node || nodeFailed(node)) continue;
+            if (RAFT_NODE(node)->pending_fail_change) continue;
+
+            client *replica_client = clusterRaftFindReplicaClient(node);
+
+            if (replica_client) {
+                /* Replica is connected — reset disconnect tracker. */
+                RAFT_NODE(node)->repl_unconnected_since = 0;
+                /* Check replication ACK freshness. Skip replicas still in
+                 * full sync (repl_ack_time not yet initialized). */
+                if (replica_client->repl_data->repl_state == REPLICA_STATE_ONLINE) {
+                    time_t ack_age = server.unixtime - replica_client->repl_data->repl_ack_time;
+                    if (ack_age > timeout_sec) {
+                        clusterRaftProposeNodeFail(node, "replication stream timeout");
+                    }
+                }
+            } else {
+                /* After FAILOVER, a healthy replica needs time to
+                 * establish the replication connection. Wait for the grace
+                 * period before proposing NODE_FAIL. */
+                clusterNodeRaftData *rd = RAFT_NODE(node);
+                if (rd->repl_unconnected_since == 0) {
+                    rd->repl_unconnected_since = now;
+                } else if (now - rd->repl_unconnected_since > max(server.cluster_node_timeout,
+                                                                  REPL_CONNECT_GRACE_PERIOD_MS)) {
+                    clusterRaftProposeNodeFail(node, "replication stream timeout");
+                }
+            }
+        }
+    }
+
+    /* Replica side: check our primary from cluster state.
+     * Timeout = 1.5T to let the primary propose first. */
+    if (nodeIsReplica(myself) && myself->replicaof &&
+        !nodeFailed(myself->replicaof) &&
+        !RAFT_NODE(myself->replicaof)->pending_fail_change) {
+        clusterNode *my_primary = myself->replicaof;
+        time_t replica_timeout = raftReplicaSideTimeout();
+        int should_propose = 0;
+
+        if (server.repl_state == REPL_STATE_CONNECTED && server.primary) {
+            /* Connected but primary is silent. */
+            time_t primary_age = server.unixtime - server.primary->last_interaction;
+            if (primary_age > replica_timeout) should_propose = 1;
+        } else if (server.repl_down_since > 0) {
+            /* Link dropped and reconnection failing. */
+            time_t down_age = server.unixtime - server.repl_down_since;
+            if (down_age > replica_timeout) should_propose = 1;
+        }
+
+        if (should_propose) {
+            clusterRaftProposeNodeFail(my_primary, "replication stream timeout");
+        }
+    }
+
+    UNUSED(now);
+}
+
+/* Propose NODE_RECOVER for a given node via the replication stream
+ * detector. Used by both primary-side and replica-side recovery paths. */
+static void clusterRaftProposeReplStreamNodeRecover(clusterNode *node) {
+    clusterNodeRaftData *rd = RAFT_NODE(node);
+    if (!nodeFailed(node) || rd->pending_fail_change) return;
+
+    serverLog(LL_NOTICE,
+              "Replication stream recovered: proposing NODE_RECOVER for %.40s.",
+              node->name);
+
+    sds entry = sdsnew("NODE_RECOVER ");
+    entry = sdscatlen(entry, node->name, CLUSTER_NAMELEN);
+    entry = sdscatlen(entry, " ", 1);
+    entry = sdscatlen(entry, myself->name, CLUSTER_NAMELEN);
+    entry = sdscatfmt(entry, " %U", (unsigned long long)clusterGetShardEpoch(node->shard_id));
+    clusterRaftPropose(entry, NULL, NULL);
+    sdsfree(entry);
+    rd->pending_fail_change = 1;
+}
+
+/* Detect data-path recovery via the replication stream for multi-node shards. */
+static void clusterRaftDetectReplStreamRecovery(mstime_t now) {
+    if (server.loading || nodeFailed(myself)) return;
+
+    /* Primary side: check if a FAIL marked replica is active again. */
+    if (nodeIsPrimary(myself) && clusterNodeNumReplicas(myself) > 0) {
+        int num_replicas = clusterNodeNumReplicas(myself);
+        for (int i = 0; i < num_replicas; i++) {
+            clusterNode *node = clusterNodeGetReplica(myself, i);
+            if (!node || !nodeFailed(node)) continue;
+            if (RAFT_NODE(node)->pending_fail_change) continue;
+
+            client *replica_client = clusterRaftFindReplicaClient(node);
+            if (replica_client) {
+                RAFT_NODE(node)->repl_unconnected_since = 0;
+                /* Only propose recovery if the replica is ONLINE and
+                 * actively ACKing. */
+                if (replica_client->repl_data->repl_state == REPLICA_STATE_ONLINE) {
+                    time_t ack_age = server.unixtime - replica_client->repl_data->repl_ack_time;
+                    if (ack_age <= raftPrimarySideTimeout()) {
+                        clusterRaftProposeReplStreamNodeRecover(node);
+                    }
+                }
+            }
+        }
+    }
+
+    /* Replica side: if our primary is marked FAIL but replication is
+     * connected and active, propose recovery. Only when failover is
+     * disabled — otherwise the replica should failover, not recover. */
+    if (nodeIsReplica(myself) && myself->replicaof &&
+        nodeFailed(myself->replicaof) && nodeCantFailover(myself)) {
+        if (server.repl_state == REPL_STATE_CONNECTED && server.primary) {
+            time_t primary_age = server.unixtime - server.primary->last_interaction;
+            if (primary_age <= raftPrimarySideTimeout()) {
+                clusterRaftProposeReplStreamNodeRecover(myself->replicaof);
+            }
+        }
+    }
+
+    UNUSED(now);
 }
 
 /* Forward a pending proposal to the leader or append locally if we are
@@ -2204,6 +2549,7 @@ static void clusterRaftRetryProposals(int include_pending) {
                 RaftProposalResult pre_result = clusterRaftPreValidate(pp->type, pp->data);
                 if (pre_result != RAFT_RESULT_OK) {
                     if (pp->callback) pp->callback(pp->ctx, raftProposalResultMsg(pre_result));
+                    raftClearPendingFailChange(pp->type, pp->data);
                     sdsfree(pp->data);
                     zfree(pp);
                     listDelNode(rs->pending_proposals, ln);
@@ -2268,6 +2614,8 @@ static void clusterRaftCron(void) {
                     serverLog(LL_NOTICE, "Expiring stale proposal %s after %lldms.",
                               raftEntryTypeName(pp->type), (long long)(now - pp->ctime));
                     if (pp->callback) pp->callback(pp->ctx, "-TIMEOUT Cluster consensus not reached in time");
+                    /* Clear pending_fail_change so the detector can re-propose. */
+                    raftClearPendingFailChange(pp->type, pp->data);
                     sdsfree(pp->data);
                     zfree(pp);
                     listDelNode(rs->pending_proposals, eln);
@@ -2328,7 +2676,13 @@ static void clusterRaftCron(void) {
             }
             myself->repl_offset = my_offset;
             clusterRaftDetectFailures(now);
+            clusterRaftRecycleFailedNodeLinks(now);
         }
+
+        /* Replication-stream failure/recovery detection runs on any node
+         * that is a data primary or replica, regardless of raft role. */
+        clusterRaftDetectReplStreamFailures(now);
+        clusterRaftDetectReplStreamRecovery(now);
     }
 
     /* Coordinated manual failover: check if replication caught up. */
@@ -3433,9 +3787,10 @@ static RaftProposalResult clusterRaftApplyFailover(sds data, int validate_only) 
         }
     }
 
-    /* Promote replica to primary. */
+    /* Promote replica to primary. Clear FAIL flag if set — the node is
+     * now the active primary serving slots. */
     clusterNodeRemoveReplica(primary, replica);
-    replica->flags &= ~CLUSTER_NODE_REPLICA;
+    replica->flags &= ~(CLUSTER_NODE_REPLICA | CLUSTER_NODE_FAIL);
     replica->flags |= CLUSTER_NODE_PRIMARY;
     replica->replicaof = NULL;
 

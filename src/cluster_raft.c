@@ -393,6 +393,8 @@ static RaftProposalResult clusterRaftApplySlotChange(sds data, int validate_only
 static RaftProposalResult clusterRaftApplySetReplica(sds data, int validate_only);
 static RaftProposalResult clusterRaftApplyFailover(sds data, int validate_only);
 static RaftProposalResult clusterRaftApplyNodeForget(sds data, int validate_only);
+static RaftProposalResult clusterRaftValidateFailRecoverProposer(sds data);
+static void raftClearPendingFailChange(int type, sds data);
 static void raftLogApply(raftLogEntry *e);
 static raftLogEntry *raftLogCreate(uint64_t term, uint64_t index, uint8_t type, sds data);
 static void raftLogAppend(raftLogEntry *e);
@@ -847,6 +849,8 @@ static void clusterRaftPropose(sds entry, void *ctx, void (*callback)(void *ctx,
         RaftProposalResult pre_result = clusterRaftPreValidate(type, data);
         if (pre_result != RAFT_RESULT_OK) {
             if (callback) callback(ctx, raftProposalResultMsg(pre_result));
+            /* Let the detector re-evaluate a rejected NODE_FAIL/NODE_RECOVER. */
+            raftClearPendingFailChange(type, data);
             sdsfree(data);
             return;
         }
@@ -1098,6 +1102,10 @@ static RaftProposalResult clusterRaftPreValidate(int type, sds data) {
     case RAFT_ENTRY_NODE_FORGET:
         result = clusterRaftApplyNodeForget(data, 1);
         break;
+    case RAFT_ENTRY_NODE_FAIL:
+    case RAFT_ENTRY_NODE_RECOVER:
+        result = clusterRaftValidateFailRecoverProposer(data);
+        break;
     default:
         break;
     }
@@ -1313,6 +1321,8 @@ static void clusterRaftCompletePendingProposal(int type, sds data, RaftProposalR
                 return;
             }
             if (pp->callback) pp->callback(pp->ctx, raftProposalResultMsg(result));
+            /* On terminal rejection, free the detector to re-evaluate. */
+            if (result != RAFT_RESULT_OK) raftClearPendingFailChange(type, data);
             sdsfree(pp->data);
             zfree(pp);
             listDelNode(rs->pending_proposals, ln);
@@ -1321,31 +1331,57 @@ static void clusterRaftCompletePendingProposal(int type, sds data, RaftProposalR
     }
 }
 
-/* Parse a NODE_FAIL or NODE_RECOVER entry and validate the proposer.
- * Format: "<target-node-id> [<proposer-node-id>]"
- * Returns 1 if the proposer is valid, 0 otherwise.
- * Sets *target and *proposer to the looked-up nodes (may be NULL). */
-static int raftValidateFailRecoverEntry(sds data, clusterNode **target, clusterNode **proposer) {
-    clusterRaftState *rs = RAFT_STATE();
+/* Parse a NODE_FAIL or NODE_RECOVER entry.
+ * Format: "<target-node-id> <proposer-node-id> <shard-epoch>"
+ * Sets *target and *proposer to the looked-up nodes
+ * and *epoch to the entry's shard epoch (0 if absent). */
+static void raftParseFailRecoverEntry(sds data, clusterNode **target, clusterNode **proposer, uint64_t *epoch) {
     *target = NULL;
     *proposer = NULL;
-    if (sdslen(data) >= CLUSTER_NAMELEN) {
-        *target = clusterLookupNode(data, CLUSTER_NAMELEN);
-        if (sdslen(data) >= CLUSTER_NAMELEN * 2 + 1) {
-            *proposer = clusterLookupNode(data + CLUSTER_NAMELEN + 1, CLUSTER_NAMELEN);
-        }
-    }
-    if (*target && *proposer) {
-        int is_leader = (memcmp((*proposer)->name, rs->leader, CLUSTER_NAMELEN) == 0);
-        int same_shard = (memcmp((*proposer)->shard_id, (*target)->shard_id, CLUSTER_NAMELEN) == 0);
-        int primary_and_replica = (same_shard && !nodeIsReplica(*proposer) && nodeIsReplica(*target));
-        int replica_and_primary = (same_shard && nodeIsReplica(*proposer) && !nodeIsReplica(*target));
-        if (nodeFailed(*proposer)) return 0;
-        /* Valid if: raft leader, or primary proposing for its replica,
-         * or replica proposing for its primary. */
-        if (!is_leader && !primary_and_replica && !replica_and_primary) return 0;
-    }
-    return 1;
+    *epoch = 0;
+    int argc;
+    sds *argv = sdssplitlen(data, sdslen(data), " ", 1, &argc);
+    if (!argv) return;
+    if (argc >= 1 && sdslen(argv[0]) == CLUSTER_NAMELEN)
+        *target = clusterLookupNode(argv[0], CLUSTER_NAMELEN);
+    if (argc >= 2 && sdslen(argv[1]) == CLUSTER_NAMELEN)
+        *proposer = clusterLookupNode(argv[1], CLUSTER_NAMELEN);
+    if (argc >= 3)
+        *epoch = strtoull(argv[2], NULL, 10);
+    sdsfreesplitres(argv, argc);
+}
+
+/* Clear a target node's pending_fail_change flag from a NODE_FAIL/NODE_RECOVER
+ * entry's raw data. Used when such a proposal is rejected or expires so the
+ * detector is free to re-evaluate. No-op for other entry types. */
+static void raftClearPendingFailChange(int type, sds data) {
+    if (type != RAFT_ENTRY_NODE_FAIL && type != RAFT_ENTRY_NODE_RECOVER) return;
+    if (sdslen(data) < CLUSTER_NAMELEN) return;
+    clusterNode *target = clusterLookupNode(data, CLUSTER_NAMELEN);
+    if (target) RAFT_NODE(target)->pending_fail_change = 0;
+}
+
+/* Propose-time validation of a NODE_FAIL/NODE_RECOVER proposer. Runs on the
+ * leader (pre-validation) before the entry is appended. The proposer must be:
+ * the raft leader, or a primary proposing for its own replica, or a replica
+ * proposing for its own primary. This is validated at proposal time. */
+static RaftProposalResult clusterRaftValidateFailRecoverProposer(sds data) {
+    clusterRaftState *rs = RAFT_STATE();
+    clusterNode *target, *proposer;
+    uint64_t epoch;
+    raftParseFailRecoverEntry(data, &target, &proposer, &epoch);
+    if (!target || !proposer) return RAFT_RESULT_REJECTED;
+
+    /* The raft leader is always an authoritative proposer. */
+    if (memcmp(proposer->name, rs->leader, CLUSTER_NAMELEN) == 0) return RAFT_RESULT_OK;
+
+    /* A stale (already FAIL'd) proposer is not trusted. */
+    if (nodeFailed(proposer)) return RAFT_RESULT_REJECTED;
+
+    /* Otherwise the proposer must be in a live primary<->replica relationship
+     * with the target. */
+    if (target->replicaof == proposer || proposer->replicaof == target) return RAFT_RESULT_OK;
+    return RAFT_RESULT_REJECTED;
 }
 
 /* Apply a committed log entry. */
@@ -1499,9 +1535,11 @@ static void raftLogApply(raftLogEntry *e) {
     case RAFT_ENTRY_NODE_FAIL: {
         clusterNode *node = NULL;
         clusterNode *proposer = NULL;
-        int valid_proposer = raftValidateFailRecoverEntry(e->data, &node, &proposer);
+        uint64_t entry_epoch = 0;
+        raftParseFailRecoverEntry(e->data, &node, &proposer, &entry_epoch);
+        int valid_epoch = (node && clusterValidateShardEpoch(node->shard_id, entry_epoch));
         int applied = 0;
-        if (node && node != myself && !nodeFailed(node) && valid_proposer) {
+        if (node && node != myself && !nodeFailed(node) && valid_epoch) {
             node->flags |= CLUSTER_NODE_FAIL;
             RAFT_NODE(node)->pending_fail_change = 0;
             rs->todo_update_slot_coverage = 1;
@@ -1566,9 +1604,10 @@ static void raftLogApply(raftLogEntry *e) {
     case RAFT_ENTRY_NODE_RECOVER: {
         clusterNode *node = NULL;
         clusterNode *proposer = NULL;
-        int valid_proposer = raftValidateFailRecoverEntry(e->data, &node, &proposer);
+        uint64_t entry_epoch = 0;
+        raftParseFailRecoverEntry(e->data, &node, &proposer, &entry_epoch);
         int applied = 0;
-        if (node && valid_proposer) {
+        if (node) {
             node->flags &= ~CLUSTER_NODE_FAIL;
             RAFT_NODE(node)->pending_fail_change = 0;
             rs->todo_update_slot_coverage = 1;
@@ -1836,6 +1875,7 @@ static int clusterRaftProcessAppendEntriesResponse(clusterLink *link, int argc, 
         entry = sdscatlen(entry, node->name, CLUSTER_NAMELEN);
         entry = sdscatlen(entry, " ", 1);
         entry = sdscatlen(entry, myself->name, CLUSTER_NAMELEN);
+        entry = sdscatfmt(entry, " %U", (unsigned long long)clusterGetShardEpoch(node->shard_id));
         clusterRaftPropose(entry, NULL, NULL);
         sdsfree(entry);
         serverLog(LL_NOTICE, "Node %.40s is back (AE_ACK), proposing NODE_RECOVER.", node->name);
@@ -2200,7 +2240,7 @@ static client *clusterRaftFindReplicaClient(clusterNode *node) {
 }
 
 /* Propose NODE_FAIL for a given node.
- * Format: "NODE_FAIL <target-node-id> <proposer-node-id>" */
+ * Format: "NODE_FAIL <target-node-id> <proposer-node-id> <shard-epoch>" */
 static void clusterRaftProposeNodeFail(clusterNode *node, const char *reason) {
     clusterNodeRaftData *rd = RAFT_NODE(node);
     if (nodeFailed(node) || rd->pending_fail_change) return;
@@ -2211,6 +2251,7 @@ static void clusterRaftProposeNodeFail(clusterNode *node, const char *reason) {
     entry = sdscatlen(entry, node->name, CLUSTER_NAMELEN);
     entry = sdscatlen(entry, " ", 1);
     entry = sdscatlen(entry, myself->name, CLUSTER_NAMELEN);
+    entry = sdscatfmt(entry, " %U", (unsigned long long)clusterGetShardEpoch(node->shard_id));
     clusterRaftPropose(entry, NULL, NULL);
     sdsfree(entry);
     rd->pending_fail_change = 1;
@@ -2352,7 +2393,8 @@ static void clusterRaftDetectReplStreamFailures(mstime_t now) {
                 clusterNodeRaftData *rd = RAFT_NODE(node);
                 if (rd->repl_unconnected_since == 0) {
                     rd->repl_unconnected_since = now;
-                } else if (now - rd->repl_unconnected_since > REPL_CONNECT_GRACE_PERIOD_MS) {
+                } else if (now - rd->repl_unconnected_since > max(server.cluster_node_timeout,
+                                                                  REPL_CONNECT_GRACE_PERIOD_MS)) {
                     clusterRaftProposeNodeFail(node, "replication stream timeout");
                 }
             }
@@ -2400,6 +2442,7 @@ static void clusterRaftProposeReplStreamNodeRecover(clusterNode *node) {
     entry = sdscatlen(entry, node->name, CLUSTER_NAMELEN);
     entry = sdscatlen(entry, " ", 1);
     entry = sdscatlen(entry, myself->name, CLUSTER_NAMELEN);
+    entry = sdscatfmt(entry, " %U", (unsigned long long)clusterGetShardEpoch(node->shard_id));
     clusterRaftPropose(entry, NULL, NULL);
     sdsfree(entry);
     rd->pending_fail_change = 1;
@@ -2506,6 +2549,7 @@ static void clusterRaftRetryProposals(int include_pending) {
                 RaftProposalResult pre_result = clusterRaftPreValidate(pp->type, pp->data);
                 if (pre_result != RAFT_RESULT_OK) {
                     if (pp->callback) pp->callback(pp->ctx, raftProposalResultMsg(pre_result));
+                    raftClearPendingFailChange(pp->type, pp->data);
                     sdsfree(pp->data);
                     zfree(pp);
                     listDelNode(rs->pending_proposals, ln);
@@ -2571,10 +2615,7 @@ static void clusterRaftCron(void) {
                               raftEntryTypeName(pp->type), (long long)(now - pp->ctime));
                     if (pp->callback) pp->callback(pp->ctx, "-TIMEOUT Cluster consensus not reached in time");
                     /* Clear pending_fail_change so the detector can re-propose. */
-                    if (pp->type == RAFT_ENTRY_NODE_FAIL || pp->type == RAFT_ENTRY_NODE_RECOVER) {
-                        clusterNode *target = clusterLookupNode(pp->data, CLUSTER_NAMELEN);
-                        if (target) RAFT_NODE(target)->pending_fail_change = 0;
-                    }
+                    raftClearPendingFailChange(pp->type, pp->data);
                     sdsfree(pp->data);
                     zfree(pp);
                     listDelNode(rs->pending_proposals, eln);

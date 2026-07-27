@@ -400,6 +400,7 @@ void watchForKey(client *c, robj *key) {
     incrRefCount(key);
     listAddNodeTail(&c->mstate->watched_keys, wk);
     watchedKeyLinkToClients(clients, wk);
+    c->mstate->watched_keys_mem += getStringObjectMemory(key);
 
     /* Add the new key to the per-db hashtable for O(1) lookup. */
     hashtableAdd(c->mstate->watched_keys_by_db[c->db->id], wk);
@@ -426,6 +427,7 @@ void unwatchAllKeys(client *c) {
         if (listLength(clients) == 0) dictDelete(wk->db->watched_keys, wk->key);
         /* Remove this watched key from the client->watched list */
         listDelNode(&c->mstate->watched_keys, ln);
+        c->mstate->watched_keys_mem -= getStringObjectMemory(wk->key);
         decrRefCount(wk->key);
         zfree(wk);
     }
@@ -575,9 +577,12 @@ void unwatchCommand(client *c) {
 size_t multiStateMemOverhead(client *c) {
     if (!c->mstate) return 0;
     size_t mem = c->mstate->argv_len_sums;
-    /* Add watched keys overhead, Note: this doesn't take into account the watched keys themselves, because they aren't
-     * managed per-client. */
+    /* Add watched keys overhead. We take into account the watched keys themselves.
+     * A watched key robj is shared (via refcount) by all clients watching the
+     * same key, but we attribute it to each watching client so it stays visible
+     * to CLIENT INFO and maxmemory-clients. */
     mem += listLength(&c->mstate->watched_keys) * (sizeof(listNode) + sizeof(watchedKey));
+    mem += c->mstate->watched_keys_mem;
     /* Add per-db watched keys hashtable overhead. */
     if (c->mstate->watched_keys_by_db) {
         mem += sizeof(hashtable *) * server.dbnum;

@@ -173,7 +173,7 @@ proc do_node_restart {idx} {
 }
 
 # Disable replica migration to prevent empty nodes from joining other shards.
-start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {cluster-allow-replica-migration no cluster-node-timeout 15000 cluster-databases 16}} {
+start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides {cluster-allow-replica-migration no cluster-node-timeout 15000 cluster-databases 16}} {
 
     set node0_id [R 0 CLUSTER MYID]
     set node1_id [R 1 CLUSTER MYID]
@@ -2138,7 +2138,7 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {cluste
     }
 }
 
-start_cluster 3 0 {tags {logreqres:skip external:skip cluster}} {
+start_cluster 3 0 {tags {logreqres:skip external:skip cluster network}} {
     set 16383_slot_tag "{6ZJ}"
     set node0_id [R 0 CLUSTER MYID]
 
@@ -2174,7 +2174,7 @@ start_cluster 3 0 {tags {logreqres:skip external:skip cluster}} {
     }
 }
 
-start_cluster 3 6 {tags {logreqres:skip external:skip cluster}} {
+start_cluster 3 6 {tags {logreqres:skip external:skip cluster network}} {
     set node0_id [R 0 CLUSTER MYID]
     set node1_id [R 1 CLUSTER MYID]
     set node2_id [R 2 CLUSTER MYID]
@@ -2230,7 +2230,7 @@ start_cluster 3 6 {tags {logreqres:skip external:skip cluster}} {
     }
 }
 
-start_cluster 3 0 {tags {logreqres:skip external:skip cluster}} {
+start_cluster 3 0 {tags {logreqres:skip external:skip cluster network}} {
 
     set node0_id [R 0 CLUSTER MYID]
     set node1_id [R 1 CLUSTER MYID]
@@ -2295,7 +2295,7 @@ start_cluster 3 0 {tags {logreqres:skip external:skip cluster}} {
 
 }
 
-start_cluster 3 3 {tags {logreqres:skip external:skip cluster aofrw} overrides {appendonly yes auto-aof-rewrite-percentage 0}} {
+start_cluster 3 3 {tags {logreqres:skip external:skip cluster aofrw network} overrides {appendonly yes auto-aof-rewrite-percentage 0}} {
     set node0_id [R 0 CLUSTER MYID]
     set node1_id [R 1 CLUSTER MYID]
     set node2_id [R 2 CLUSTER MYID]
@@ -2445,7 +2445,7 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster aofrw} overrides {
     }
 }
 
-start_cluster 3 0 {tags {logreqres:skip external:skip cluster} overrides {cluster-require-full-coverage no slot-migration-max-failover-repl-bytes 0 repl-timeout 3600}} {
+start_cluster 3 0 {tags {logreqres:skip external:skip cluster network} overrides {cluster-require-full-coverage no slot-migration-max-failover-repl-bytes 0 repl-timeout 3600}} {
     test "Slot migration remaining_repl_size on the source node" {
         set 16383_slot_tag "{6ZJ}"
         set_debug_prevent_pause 1
@@ -2488,7 +2488,7 @@ start_cluster 3 0 {tags {logreqres:skip external:skip cluster} overrides {cluste
     }
 }
 
-start_cluster 3 0 {tags {logreqres:skip external:skip cluster} overrides {cluster-require-full-coverage no slot-migration-max-failover-repl-bytes -1 repl-timeout 3600}} {
+start_cluster 3 0 {tags {logreqres:skip external:skip cluster network} overrides {cluster-require-full-coverage no slot-migration-max-failover-repl-bytes -1 repl-timeout 3600}} {
     test "slot-migration-max-failover-repl-bytes -1 disables repl bytes limit" {
         set 16383_slot_tag "{6ZJ}"
 

@@ -196,7 +196,12 @@ start_server {tags {"repl external:skip"}} {
         }
         
         test {Replica output bytes metric} {
-            # reset stats 
+            # Make sure no replication traffic (initial sync, backlog writes)
+            # is still in flight before resetting stats, so the zero-baseline
+            # assertion below doesn't race with it.
+            wait_for_ofs_sync $A $B
+
+            # reset stats
             $A config resetstat
             
             set info [$A info stats]
@@ -207,7 +212,7 @@ start_server {tags {"repl external:skip"}} {
             $A set key value
             
             # wait for command propagation
-            wait_for_condition 50 100 {
+            wait_for_condition 100 100 {
                 [$B get key] eq {value}
             } else {
                 fail "Replica did not receive the command"
@@ -685,6 +690,12 @@ foreach testType {Successful Aborted} {
                     test {Blocked commands and configs during async-loading} {
                         assert_error {LOADING*} {$replica config set appendonly no}
                         assert_error {LOADING*} {$replica REPLICAOF no one}
+                    }
+
+                    test {MODULE LOAD and LOADEX are blocked during async-loading} {
+                        set testmodule [file normalize tests/modules/basics.so]
+                        assert_error {LOADING*} {$replica MODULE LOAD $testmodule}
+                        assert_error {LOADING*} {$replica MODULE LOADEX $testmodule}
                     }
 
                     # Make sure that next sync will not start immediately so that we can catch the replica in between syncs

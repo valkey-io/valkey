@@ -10,6 +10,10 @@
             [
                 "2.0.0",
                 "Added the `WITHSCORES` modifier."
+            ],
+            [
+                "9.2.0",
+                "Added the `XX` option."
             ]
         ],
         "command_flags": [
@@ -94,6 +98,13 @@
                 "type": "pure-token",
                 "optional": true,
                 "since": "2.0.0"
+            },
+            {
+                "name": "xx",
+                "token": "XX",
+                "type": "pure-token",
+                "optional": true,
+                "since": "9.2.0"
             },
             {
                 "token": "LIMIT",

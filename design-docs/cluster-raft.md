@@ -529,7 +529,8 @@ replicas and checks their health via two paths:
 2. *Disconnected replica (not in `server.replicas`)*: a crash causes
    immediate TCP RST and client removal. The primary tracks the first
    observation time (`repl_unconnected_since`) and proposes NODE_FAIL
-   after `max(REPL_CONNECT_GRACE_PERIOD_MS - (5 seconds), server.node_timeout)`. The grace period allows a healthy replica time to complete its replication handshake after a FAILOVER when replicas connect to the new primary.
+   after `max(REPL_CONNECT_GRACE_PERIOD_MS - (5 seconds), server.node_timeout)`.
+   The grace period allows a healthy replica time to complete its replication handshake after a FAILOVER when replicas connect to the new primary.
 
 **Replica-side detection:** The replica checks `myself->replicaof`
 from cluster state and monitors replication health via

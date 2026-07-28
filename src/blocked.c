@@ -127,9 +127,13 @@ void blockClient(client *c, int btype) {
  * In case the command failed internally, ERROR_COMMAND_FAILED should be passed.
  * A value of zero indicate no error was reported after the command was unblocked  */
 void updateStatsOnUnblock(client *c, long blocked_us, long reply_us, int failed_or_rejected) {
-    c->duration += blocked_us + reply_us;
-    c->lastcmd->microseconds += c->duration;
-    clusterSlotStatsAddCpuDuration(c, c->duration);
+    long long total_duration = c->duration + blocked_us + reply_us;
+    c->lastcmd->microseconds += total_duration;
+    clusterSlotStatsAddCpuDuration(c, total_duration);
+    /* Only reply_us is added to c->duration because blocked_us (background time)
+     * must not appear in the slowlog (main thread blocking only). */
+    c->duration += reply_us;
+
     c->lastcmd->calls++;
     c->commands_processed++;
     server.stat_numcommands++;
@@ -143,7 +147,7 @@ void updateStatsOnUnblock(client *c, long blocked_us, long reply_us, int failed_
             debugServerAssertWithInfo(c, NULL, 0);
     }
     if (server.latency_tracking_enabled)
-        updateCommandLatencyHistogram(&(c->lastcmd->latency_histogram), c->duration * 1000);
+        updateCommandLatencyHistogram(&(c->lastcmd->latency_histogram), total_duration * 1000);
     /* Log the command into the commandlog if needed. */
     commandlogPushCurrentCommand(c, c->lastcmd);
     c->duration = 0;

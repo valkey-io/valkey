@@ -2776,7 +2776,11 @@ void replicaReceiveRDBFromPrimaryToDisk(connection *conn, int is_dual_channel) {
     /* Put the socket in blocking mode to simplify RDB transfer.
      * We'll restore it when the RDB is received. */
     connBlock(conn);
-    connRecvTimeout(conn, server.repl_timeout * 1000);
+    /* Bound this read with the short repl_syncio_timeout (as the other sync
+     * replication reads do), not the large repl-timeout: the abort flag is only
+     * checked between reads, so on a silent primary this stalls the main thread
+     * in cancelReplicationHandshake() for at most repl_syncio_timeout. */
+    connRecvTimeout(conn, server.repl_syncio_timeout * 1000);
 
     atomic_store_explicit(&server.replica_bio_disk_save_state, REPL_BIO_DISK_SAVE_STATE_IN_PROGRESS, memory_order_release);
     /* Loop until we can read the sync metadata or fail */
@@ -4465,6 +4469,9 @@ void replicationAbortSyncTransfer(void) {
  * Otherwise zero is returned and no operation is performed at all. */
 int cancelReplicationHandshake(int reconnect) {
     if (bioPendingJobsOfType(BIO_RDB_SAVE)) {
+        /* Wait for the disk-saving bio thread to notice the abort flag
+         * and exit. If it is blocked in a socket read this stalls the
+         * main thread for up to repl_syncio_timeout. */
         server.replica_bio_abort_save = 1;
         bioDrainWorker(BIO_RDB_SAVE);
         server.replica_bio_abort_save = 0;

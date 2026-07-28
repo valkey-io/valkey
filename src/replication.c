@@ -2776,7 +2776,7 @@ void replicaReceiveRDBFromPrimaryToDisk(connection *conn, int is_dual_channel) {
     /* Put the socket in blocking mode to simplify RDB transfer.
      * We'll restore it when the RDB is received. */
     connBlock(conn);
-    connRecvTimeout(conn, server.repl_syncio_timeout * 1000);
+    connRecvTimeout(conn, server.repl_timeout * 1000);
 
     atomic_store_explicit(&server.replica_bio_disk_save_state, REPL_BIO_DISK_SAVE_STATE_IN_PROGRESS, memory_order_release);
     /* Loop until we can read the sync metadata or fail */

@@ -2513,7 +2513,7 @@ int main(int argc, char **argv) {
         int seq_len = 0; /* Total number of commands in the sequence. */
         sds cmd_seq = sdsempty();
         for (i = 0; i <= argc; i++) {
-            if (i == start && sds_args[i][0] >= '1' && sds_args[i][0] <= '9') {
+            if (i < argc && i == start && sds_args[i][0] >= '1' && sds_args[i][0] <= '9') {
                 /* Command prefixed by number means repeat command N times. */
                 repeat = atoi(sds_args[i]);
                 start++;

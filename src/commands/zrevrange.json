@@ -43,6 +43,10 @@
         "reply_schema": {
             "anyOf": [
                 {
+                    "description": "Key does not exist and XX option is specified.",
+                    "type": "null"
+                },
+                {
                     "description": "List of member elements.",
                     "type": "array",
                     "uniqueItems": true,

@@ -477,7 +477,8 @@ start_server {tags {"zset"}} {
 
             # Test nullarray (key does not exist) in RESP2
             set null_res [r zrevrange non_existent_key 0 -1 XX]
-            assert_equal {*-1} $null_res
+            set expected_null [expr {$::force_resp3 ? "_" : "*-1"}]
+            assert_equal $expected_null $null_res
 
             # Test emptyarray (key exists but no matching elements) in RESP2
             set empty_res [r zrevrange ztmp 10 20 XX]
@@ -699,7 +700,8 @@ start_server {tags {"zset"}} {
 
             # Test nullarray (key does not exist) in RESP2
             set null_res [r zrangebyscore non_existent_key 0 10 XX]
-            assert_equal {*-1} $null_res
+            set expected_null [expr {$::force_resp3 ? "_" : "*-1"}]
+            assert_equal $expected_null $null_res
 
             # Test emptyarray (key exists but no matching elements) in RESP2
             set empty_res [r zrangebyscore zset 10 20 XX]
@@ -848,7 +850,8 @@ start_server {tags {"zset"}} {
 
             # Test nullarray (key does not exist) in RESP2
             set null_res [r zrangebylex non_existent_key - + XX]
-            assert_equal {*-1} $null_res
+            set expected_null [expr {$::force_resp3 ? "_" : "*-1"}]
+            assert_equal $expected_null $null_res
 
             # Test emptyarray (key exists but no matching elements) in RESP2
             set empty_res [r zrangebylex zset \[zzz + XX]
@@ -2604,7 +2607,8 @@ start_server {tags {"zset"}} {
 
         # Test nullarray (key does not exist) in RESP2
         set null_res [r zrange non_existent_key 0 -1 XX]
-        assert_equal {*-1} $null_res
+        set expected_null [expr {$::force_resp3 ? "_" : "*-1"}]
+        assert_equal $expected_null $null_res
 
         # Test emptyarray (key exists but no matching elements) in RESP2
         set empty_res [r zrange zset_XX 10 20 XX]

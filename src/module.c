@@ -3957,6 +3957,7 @@ int modulePopulateReplicationInfoStructure(void *ri, int structver) {
  *     VALKEYMODULE_CLIENTINFO_FLAG_PRIMARY      Client is a fake client used
  *                                               for applying replicated
  *                                               commands from the primary.
+ *     VALKEYMODULE_CLIENTINFO_FLAG_REPLICA      Client is a replica connection.
  *     VALKEYMODULE_CLIENTINFO_FLAG_MONITOR      Client in monitor mode.
  *     VALKEYMODULE_CLIENTINFO_FLAG_MODULE       Client is a module.
  *     VALKEYMODULE_CLIENTINFO_FLAG_AUTHENTICATED

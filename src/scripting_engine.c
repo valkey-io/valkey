@@ -1045,7 +1045,7 @@ static int findAndExecuteCommand(robj **argv, size_t argc) {
         return CONTINUE_READ_NEXT_COMMAND;
     }
 
-    return cmd->handler(argv, argc, cmd->context);
+    return cmd->handler(argv, argc, cmd->context ? cmd->context : ds.engine->impl.ctx);
 }
 
 void scriptingEngineDebuggerProcessCommands(int *client_disconnected, robj **err) {

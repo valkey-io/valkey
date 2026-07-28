@@ -717,6 +717,7 @@ $(SERVER_NAME): $(ENGINE_SERVER_OBJ) $(LUA_MODULE)
 
 # Valkey static library, used to compile against for unit testing
 $(ENGINE_LIB_NAME): $(ENGINE_SERVER_OBJ)
+	@rm -f $@
 	$(SERVER_AR) rcs $@ $^
 
 # valkey-sentinel

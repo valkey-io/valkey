@@ -10,6 +10,10 @@
             [
                 "2.1.6",
                 "`min` and `max` can be exclusive."
+            ],
+            [
+                "9.2.0",
+                "Added the `XX` option."
             ]
         ],
         "command_flags": [
@@ -42,6 +46,10 @@
         ],
         "reply_schema": {
             "anyOf": [
+                {
+                    "description": "Key does not exist and XX option is specified.",
+                    "type": "null"
+                },
                 {
                     "type": "array",
                     "description": "List of the elements in the specified score range, as not WITHSCORES.",
@@ -93,6 +101,13 @@
                 "token": "WITHSCORES",
                 "type": "pure-token",
                 "optional": true
+            },
+            {
+                "name": "xx",
+                "token": "XX",
+                "type": "pure-token",
+                "optional": true,
+                "since": "9.2.0"
             },
             {
                 "token": "LIMIT",

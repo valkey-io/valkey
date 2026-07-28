@@ -131,6 +131,11 @@ bool throttleRepl_isClientExemptFromCobLimits(client *c) {
     int64_t client_cob_size = (int64_t)getClientOutputBufferMemoryUsage(c);
     if (client_cob_size < getReplicaSteadyStateCobTargetSize()) return false;
 
+    /* Don't exempt if server is over maxmemory.
+     * When eviction is already running, we can't afford to let
+     * replica output buffers grow further. */
+    if (server.maxmemory && getMaxmemoryState(NULL, NULL, NULL, NULL) == C_ERR) return false;
+
     /* Don't protect if throttle has been working too long without success. */
     time_t elapsed = server.unixtime - c->obuf_soft_limit_reached_time;
     if (elapsed > 4 * STEADY_STATE_CONVERGENCE_SECS) return false;

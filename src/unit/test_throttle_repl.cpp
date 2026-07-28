@@ -266,43 +266,52 @@ TEST_F(ThrottleReplTest, insaneCobLimitConfig) {
     EXPECT_TRUE(isReplThrottlerActive());
 }
 
-/* ====================== COB Exemption Tests ============================== */
+TEST_F(ThrottleReplTest, clientCobLimitsExempt) {
+    // Default should return false since throttler not active
+    EXPECT_FALSE(throttleRepl_isClientExemptFromCobLimits(replica_steady));
 
-// TEST_F(ThrottleReplTest, CobExemptWhenThrottlerActive) {
-//     /* Throttler active, COB above target, within timeout */
-//     isReplThrottlerActive() = true;
-//     replica_steady.obuf_soft_limit_reached_time = server.unixtime - 10; /* 10s ago */
+    /* Throttler now active */
+    EXPECT_CALL(mock, getClientOutputBufferMemoryUsage(replica_steady)).WillRepeatedly(Return(COB_LIMIT / 2 + 1));
+    EXPECT_CALL(mock, trendCalc_changePerSecShortTerm(_)).WillRepeatedly(Return(COB_LIMIT / 2));
+    EXPECT_CALL(mock, throttle_register(_, _, _)).WillOnce(Return(1));
+    throttleRepl_adjustThrottling();
+    EXPECT_TRUE(isReplThrottlerActive());
 
-//     EXPECT_CALL(mock, getClientOutputBufferMemoryUsage(&replica_steady))
-//         .WillRepeatedly(Return(300 * 1024 * 1024));
+    /* If throttler has been working too long, not exempt. */
+    server.unixtime = 1000;
+    replica_steady->obuf_soft_limit_reached_time = server.unixtime - 200; // > 4 * STEADY_STATE_CONVERGENCE_SECS
+    EXPECT_FALSE(throttleRepl_isClientExemptFromCobLimits(replica_steady));
+    replica_steady->obuf_soft_limit_reached_time = server.unixtime - 100; // < 4 * STEADY_STATE_CONVERGENCE_SECS
+    EXPECT_TRUE(throttleRepl_isClientExemptFromCobLimits(replica_steady));
 
-//     EXPECT_TRUE(throttleRepl_isClientExemptFromCobLimits(&replica_steady));
-// }
+    /* If available memory is exhausted, not exempt */
+    server.maxmemory = 100;
+    EXPECT_CALL(mock, getMaxmemoryState(_, _, _, _)).WillRepeatedly(Return(C_ERR));
+    EXPECT_FALSE(throttleRepl_isClientExemptFromCobLimits(replica_steady));
+    EXPECT_CALL(mock, getMaxmemoryState(_, _, _, _)).WillRepeatedly(Return(C_OK));
+    EXPECT_TRUE(throttleRepl_isClientExemptFromCobLimits(replica_steady));
 
-// TEST_F(ThrottleReplTest, CobExemptExpiresAfterTimeout) {
-//     /* Throttler active but exceeded 4x convergence timeout (120s) */
-//     isReplThrottlerActive() = true;
-//     replica_steady.obuf_soft_limit_reached_time = server.unixtime - 130; /* 130s > 120s */
+    /* If the cob size is below the cob target, not exempt */
+    EXPECT_CALL(mock, getClientOutputBufferMemoryUsage(replica_steady)).WillRepeatedly(Return(COB_LIMIT / 4));
+    EXPECT_FALSE(throttleRepl_isClientExemptFromCobLimits(replica_steady));
+    EXPECT_CALL(mock, getClientOutputBufferMemoryUsage(replica_steady)).WillRepeatedly(Return(COB_LIMIT / 2 + 1));
+    EXPECT_TRUE(throttleRepl_isClientExemptFromCobLimits(replica_steady));
 
-//     EXPECT_CALL(redis, getClientOutputBufferMemoryUsage(&replica_steady))
-//         .WillRepeatedly(Return(300 * 1024 * 1024));
+    /* If it's not replica client, not exempt. */
+    replica_steady->flag.replica = 0;
+    EXPECT_FALSE(throttleRepl_isClientExemptFromCobLimits(replica_steady));
+    replica_steady->flag.replica = 1;
+    EXPECT_TRUE(throttleRepl_isClientExemptFromCobLimits(replica_steady));
 
-//     EXPECT_FALSE(throttleRepl_isClientExemptFromCobLimits(&replica_steady));
-// }
+    /* If I am not primary, not exempt. */
+    server.primary_host = (char *)"127.0.0.1";
+    EXPECT_FALSE(throttleRepl_isClientExemptFromCobLimits(replica_steady));
+    server.primary_host = NULL;
+    EXPECT_TRUE(throttleRepl_isClientExemptFromCobLimits(replica_steady));
 
-// TEST_F(ThrottleReplTest, CobExemptFalseWhenNotReplica) {
-//     replica_steady.flag.replica = 0;
-//     isReplThrottlerActive() = true;
-//     EXPECT_FALSE(throttleRepl_isClientExemptFromCobLimits(&replica_steady));
-// }
-
-// TEST_F(ThrottleReplTest, CobExemptFalseWhenNotPrimary) {
-//     server.masterhost = (char *)"127.0.0.1"; /* I'm a replica */
-//     isReplThrottlerActive() = true;
-//     EXPECT_FALSE(throttleRepl_isClientExemptFromCobLimits(&replica_steady));
-// }
-
-// TEST_F(ThrottleReplTest, CobExemptFalseWhenThrottlerInactive) {
-//     isReplThrottlerActive() = false;
-//     EXPECT_FALSE(throttleRepl_isClientExemptFromCobLimits(&replica_steady));
-// }
+    /* If throttle repl disabled, not exempt. */
+    throttle_repl_config.steady_state_repl_throttle_enabled = 0;
+    EXPECT_FALSE(throttleRepl_isClientExemptFromCobLimits(replica_steady));
+    throttle_repl_config.steady_state_repl_throttle_enabled = 1;
+    EXPECT_TRUE(throttleRepl_isClientExemptFromCobLimits(replica_steady));
+}

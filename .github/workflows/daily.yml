@@ -21,7 +21,10 @@ on:
         description: "tests to skip (delete the ones you wanna keep, do not leave empty)"
         default: "valkey,modules,sentinel,cluster,unittest,large-memory"
       test_args:
-        description: "extra test arguments"
+        description: "extra test arguments; use valgrind_test instead of --single for targeted valgrind runs"
+        default: ""
+      valgrind_test:
+        description: "single test file or directory to run in valgrind jobs instead of the full shards"
         default: ""
       cluster_test_args:
         description: "extra cluster / sentinel test arguments"
@@ -45,7 +48,12 @@ on:
         type: string
         default: ""
       test_args:
-        description: "extra test arguments"
+        description: "extra test arguments; use valgrind_test instead of --single for targeted valgrind runs"
+        required: false
+        type: string
+        default: ""
+      valgrind_test:
+        description: "single test file or directory to run in valgrind jobs instead of the full shards"
         required: false
         type: string
         default: ""
@@ -822,6 +830,7 @@ jobs:
           echo "$CACHE"
           if [ "$(( $CACHE-$CACHE0 ))" -gt "8000000" ]; then exit 1; fi
   test-valgrind-test:
+    name: test-valgrind-test (${{ matrix.shard }})
     runs-on: ubuntu-latest
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
@@ -829,6 +838,10 @@ jobs:
         (github.event_name == 'pull_request' && github.event.pull_request.base.ref != 'unstable' && github.event.action != 'labeled')) &&
       !contains(github.event.inputs.skipjobs, 'valgrind') && !contains(github.event.inputs.skiptests, 'valkey')
     timeout-minutes: 1440
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(inputs.valgrind_test && '["targeted"]' || '["unit", "cluster", "integration-type"]') }}
     steps:
       - name: prep
         if: github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call'
@@ -858,12 +871,22 @@ jobs:
           sudo apt-get install tcl8.6 tclx valgrind -y
       - name: test
         if: true && !contains(github.event.inputs.skiptests, 'valkey')
-        run: ./runtest --valgrind --no-latency --failures-output test-failures/valkey.json --verbose --clients 1 --timeout 2400 --dump-logs ${{github.event.inputs.test_args}}
+        env:
+          VALGRIND_TEST: ${{ inputs.valgrind_test }}
+        run: |
+          shard_args=()
+          case "${{ matrix.shard }}" in
+            unit) shard_args=(--single tests/unit) ;;
+            cluster) shard_args=(--single tests/unit/cluster) ;;
+            integration-type) shard_args=(--single tests/integration --single tests/unit/type) ;;
+            targeted) shard_args=(--single "$VALGRIND_TEST") ;;
+          esac
+          ./runtest --valgrind --no-latency --failures-output test-failures/valkey.json --verbose --clients 1 --timeout 2400 --dump-logs "${shard_args[@]}" ${{github.event.inputs.test_args}}
       - name: Upload test failures
         if: always()
         uses: ./.github/actions/upload-test-failures
         with:
-          job-name: ${{ github.job }}
+          job-name: ${{ github.job }}-${{ matrix.shard }}
   test-valgrind-misc:
     runs-on: ubuntu-latest
     if: |
@@ -920,6 +943,7 @@ jobs:
         with:
           job-name: ${{ github.job }}
   test-valgrind-no-malloc-usable-size-test:
+    name: test-valgrind-no-malloc-usable-size-test (${{ matrix.shard }})
     runs-on: ubuntu-latest
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
@@ -927,6 +951,10 @@ jobs:
         (github.event_name == 'pull_request' && github.event.pull_request.base.ref != 'unstable' && github.event.action != 'labeled')) &&
       !contains(github.event.inputs.skipjobs, 'valgrind') && !contains(github.event.inputs.skiptests, 'valkey')
     timeout-minutes: 1440
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(inputs.valgrind_test && '["targeted"]' || '["unit", "cluster", "integration-type"]') }}
     steps:
       - name: prep
         if: github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call'
@@ -956,12 +984,22 @@ jobs:
           sudo apt-get install tcl8.6 tclx valgrind -y
       - name: test
         if: true && !contains(github.event.inputs.skiptests, 'valkey')
-        run: ./runtest --valgrind --no-latency --failures-output test-failures/valkey.json --verbose --clients 1 --timeout 2400 --dump-logs ${{github.event.inputs.test_args}}
+        env:
+          VALGRIND_TEST: ${{ inputs.valgrind_test }}
+        run: |
+          shard_args=()
+          case "${{ matrix.shard }}" in
+            unit) shard_args=(--single tests/unit) ;;
+            cluster) shard_args=(--single tests/unit/cluster) ;;
+            integration-type) shard_args=(--single tests/integration --single tests/unit/type) ;;
+            targeted) shard_args=(--single "$VALGRIND_TEST") ;;
+          esac
+          ./runtest --valgrind --no-latency --failures-output test-failures/valkey.json --verbose --clients 1 --timeout 2400 --dump-logs "${shard_args[@]}" ${{github.event.inputs.test_args}}
       - name: Upload test failures
         if: always()
         uses: ./.github/actions/upload-test-failures
         with:
-          job-name: ${{ github.job }}
+          job-name: ${{ github.job }}-${{ matrix.shard }}
   test-valgrind-no-malloc-usable-size-misc:
     runs-on: ubuntu-latest
     if: |

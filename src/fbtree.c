@@ -2455,9 +2455,16 @@ unsigned long fbtreeDefragScan(fbtreeIndex *fbt, unsigned long cursor, void (*it
     if (!fbt || !fbt->root || fbtreeLength(fbt) == 0) return 0;
     if (cursor >= fbtreeLength(fbt)) return 0;
 
-    /* Navigate to the leaf containing rank 'cursor' using child_sizes. O(log N). */
+    /* Descend to the leaf holding rank 'cursor', recording the path so a
+     * relocated high-key item can be re-published to the ancestor anchors that
+     * alias it. Processing one leaf per descent keeps each step's work bounded
+     * to a single contiguous node (prefetcher-friendly) and gives a fresh path
+     * per call; the caller resumes via the returned cursor. O(log N) descent. */
     node *current = fbt->root;
     unsigned long remaining = cursor;
+    innerNode *path[MAX_TREE_DEPTH];
+    int path_idx[MAX_TREE_DEPTH];
+    int depth = 0;
 
     while (!current->is_leaf) {
         innerNode *inner = (innerNode *)current;
@@ -2467,30 +2474,41 @@ unsigned long fbtreeDefragScan(fbtreeIndex *fbt, unsigned long cursor, void (*it
             i++;
         }
         if (i >= inner->header.num_items) return 0;
+        path[depth] = inner;
+        path_idx[depth] = i;
+        depth++;
         current = inner->children[i];
     }
 
     leafNode *leaf = (leafNode *)current;
-
-    /* Process up to 4 leaves per call, starting from 'remaining' offset in the first. */
-    unsigned long processed = 0;
-    int leaves_to_process = 4;
     int start = (int)remaining;
+    int last = leaf->header.num_items - 1;
+    unsigned long processed = 0;
 
-    while (leaf && leaves_to_process-- > 0) {
-        for (int i = start; i < leaf->header.num_items; i++) {
-            sds old_item = leaf->values[i];
-            void *ptr = sdsAllocPtr(old_item);
-            void *newptr = defragfn(ptr);
-            if (newptr) {
-                sds new_item = (char *)newptr + (old_item - (char *)ptr);
-                leaf->values[i] = new_item;
-                item_callback(old_item, new_item, ctx);
+    for (int i = start; i < leaf->header.num_items; i++) {
+        sds old_item = leaf->values[i];
+        void *ptr = sdsAllocPtr(old_item);
+        void *newptr = defragfn(ptr);
+        if (newptr) {
+            sds new_item = (char *)newptr + (old_item - (char *)ptr);
+            leaf->values[i] = new_item;
+            /* Each inner node stores the high key of every child as that
+             * child's anchor (by pointer), so the leaf's last item is the
+             * anchor for this leaf in its direct parent. Re-publish the moved
+             * pointer to that parent, then climb while this leaf is also the
+             * rightmost leaf of the enclosing subtree (the child taken at the
+             * level below was its parent's last), since then it is that
+             * ancestor's high key too. */
+            if (i == last && depth > 0) {
+                path[depth - 1]->anchors[path_idx[depth - 1]] = new_item;
+                for (int d = depth - 2; d >= 0; d--) {
+                    if (path_idx[d + 1] != path[d + 1]->header.num_items - 1) break;
+                    path[d]->anchors[path_idx[d]] = new_item;
+                }
             }
-            processed++;
+            item_callback(old_item, new_item, ctx);
         }
-        leaf = leaf->next;
-        start = 0;
+        processed++;
     }
 
     unsigned long next_rank = cursor + processed;

@@ -4366,6 +4366,64 @@ TEST_F(FbtreeTest, Height) {
 }
 
 /* ==========================================================================
+ * Active-defrag scan tests. A defragfn that unconditionally relocates every
+ * allocation (copy to a fresh block, free the original) lets LeakSanitizer and
+ * AddressSanitizer catch stale references the real jemalloc-hinted path would
+ * only expose under fragmentation.
+ * ========================================================================== */
+
+/* Relocate every allocation: copy to a new block and free the original, so any
+ * surviving reference to the old block is a use-after-free ASAN will flag. */
+static void *fbtreeDefragForceRelocate(void *ptr) {
+    size_t sz = zmalloc_usable_size(ptr);
+    void *newptr = zmalloc(sz);
+    memcpy(newptr, ptr, sz);
+    zfree(ptr);
+    return newptr;
+}
+
+static void fbtreeDefragNoopItemCallback(sds old_item, sds new_item, void *ctx) {
+    (void)old_item;
+    (void)new_item;
+    (void)ctx;
+}
+
+/* Relocating a leaf's high-key item must update every ancestor anchor that
+ * aliases it. The rightmost item of the whole tree is the high key at every
+ * level, so a full sweep that relocates it exercises multi-level propagation.
+ * fbtreeDebugValidate compares each anchor against its child's high key by
+ * pointer and reads the anchor bytes, so a stale anchor fails it (and trips
+ * ASAN on the freed block). */
+TEST_F(FbtreeTest, DefragScanFixesAncestorAnchors) {
+    enum { N = 5000 };
+    char buf[32];
+    for (int i = 0; i < N; i++) {
+        snprintf(buf, sizeof(buf), "key_%08d", i);
+        insert(buf);
+    }
+    ASSERT_FALSE(fbt->root->is_leaf) << "test needs a multi-level tree";
+
+    unsigned long cursor = 0;
+    int guard = 0;
+    do {
+        cursor = fbtreeDefragScan(fbt, cursor, fbtreeDefragNoopItemCallback, NULL, fbtreeDefragForceRelocate);
+        ASSERT_LT(++guard, N + 100) << "sweep did not terminate";
+    } while (cursor != 0);
+
+    char err[256];
+    ASSERT_TRUE(fbtreeDebugValidate(fbt, false, err, sizeof(err))) << err;
+
+    std::vector<std::string> fwd = collectForward();
+    ASSERT_EQ(fwd.size(), (size_t)N);
+    for (int i = 0; i < N; i++) {
+        snprintf(buf, sizeof(buf), "key_%08d", i);
+        /* insert() stores keys with the trailing NUL (createString uses
+         * strlen+1), and collectForward preserves it. */
+        ASSERT_EQ(fwd[i], std::string(buf, strlen(buf) + 1)) << "content changed at index " << i;
+    }
+}
+
+/* ==========================================================================
  * featureSearchSIMD tests - exercise the scalar, SSE2, AVX2, and NEON
  * implementations through test wrappers. FEATURE_SIZE, FEATURE_ROW_SIZE,
  * and FEATURE_BIAS come from fbtree_internal.h.

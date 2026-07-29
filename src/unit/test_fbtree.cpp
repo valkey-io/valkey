@@ -4388,6 +4388,32 @@ static void fbtreeDefragNoopItemCallback(sds old_item, sds new_item, void *ctx) 
     (void)ctx;
 }
 
+/* Counts item relocations reported to the scan. */
+static void fbtreeDefragCountingItemCallback(sds old_item, sds new_item, void *ctx) {
+    (void)old_item;
+    (void)new_item;
+    (*(int *)ctx)++;
+}
+
+/* Relocate only every Nth allocation (the rest stay put), to exercise the
+ * partial-relocation paths a realistic jemalloc-hinted defragfn takes. */
+static int g_fbtreeDefragCounter = 0;
+static int g_fbtreeDefragEveryN = 1;
+static void *fbtreeDefragEveryN(void *ptr) {
+    if ((g_fbtreeDefragCounter++ % g_fbtreeDefragEveryN) != 0) return NULL;
+    size_t sz = zmalloc_usable_size(ptr);
+    void *newptr = zmalloc(sz);
+    memcpy(newptr, ptr, sz);
+    zfree(ptr);
+    return newptr;
+}
+
+/* A defragfn that never relocates: the sweep must still traverse and terminate. */
+static void *fbtreeDefragNoop(void *ptr) {
+    (void)ptr;
+    return NULL;
+}
+
 /* Relocating a leaf's high-key item must update every ancestor anchor that
  * aliases it. The rightmost item of the whole tree is the high key at every
  * level, so a full sweep that relocates it exercises multi-level propagation.
@@ -4496,6 +4522,146 @@ TEST_F(FbtreeTest, DefragNodesRelocatesInnerNodes) {
 
         fbtreeFree(tree);
     }
+}
+
+/* A sweep must visit every item exactly once and then terminate. With a
+ * force-relocate defragfn, item_callback fires once per item, so the total
+ * count equals the length and the cursor returns to 0. */
+TEST_F(FbtreeTest, DefragScanSweepVisitsEachItemOnce) {
+    enum { N = 5000 };
+    char buf[32];
+    for (int i = 0; i < N; i++) {
+        snprintf(buf, sizeof(buf), "key_%08d", i);
+        insert(buf);
+    }
+    int relocated = 0;
+    unsigned long cursor = 0;
+    int calls = 0;
+    do {
+        cursor = fbtreeDefragScan(fbt, cursor, fbtreeDefragCountingItemCallback, &relocated, fbtreeDefragForceRelocate);
+        ASSERT_LT(++calls, N + 100) << "sweep did not terminate";
+    } while (cursor != 0);
+    EXPECT_EQ(relocated, N) << "each item should be relocated exactly once";
+    char err[256];
+    ASSERT_TRUE(fbtreeDebugValidate(fbt, false, err, sizeof(err))) << err;
+    ASSERT_EQ(fbtreeLength(fbt), (unsigned long)N);
+}
+
+/* Partial relocation: only some allocations move. The scan must patch the ones
+ * that move and leave the rest, keeping the tree valid and content intact. */
+TEST_F(FbtreeTest, DefragScanPartialRelocation) {
+    enum { N = 5000 };
+    char buf[32];
+    std::vector<std::string> expected;
+    for (int i = 0; i < N; i++) {
+        snprintf(buf, sizeof(buf), "key_%08d", i);
+        insert(buf);
+        expected.emplace_back(buf, strlen(buf) + 1);
+    }
+    g_fbtreeDefragCounter = 0;
+    g_fbtreeDefragEveryN = 3;
+    unsigned long cursor = 0;
+    int guard = 0;
+    do {
+        cursor = fbtreeDefragScan(fbt, cursor, fbtreeDefragNoopItemCallback, NULL, fbtreeDefragEveryN);
+        ASSERT_LT(++guard, N + 100) << "sweep did not terminate";
+    } while (cursor != 0);
+    char err[256];
+    ASSERT_TRUE(fbtreeDebugValidate(fbt, false, err, sizeof(err))) << err;
+    ASSERT_EQ(collectForward(), expected);
+}
+
+/* A no-op defragfn relocates nothing: the sweep must still terminate and leave
+ * the tree byte-for-byte unchanged. */
+TEST_F(FbtreeTest, DefragScanNoRelocation) {
+    enum { N = 5000 };
+    char buf[32];
+    for (int i = 0; i < N; i++) {
+        snprintf(buf, sizeof(buf), "key_%08d", i);
+        insert(buf);
+    }
+    std::vector<std::string> before = collectForward();
+    node *root_before = fbt->root;
+    unsigned long cursor = 0;
+    int guard = 0;
+    do {
+        cursor = fbtreeDefragScan(fbt, cursor, fbtreeDefragNoopItemCallback, NULL, fbtreeDefragNoop);
+        ASSERT_LT(++guard, N + 100) << "sweep did not terminate";
+    } while (cursor != 0);
+    EXPECT_EQ(fbt->root, root_before) << "no-op defrag must not move the root";
+    ASSERT_EQ(collectForward(), before);
+}
+
+/* A single-leaf tree is its own root: relocating that leaf in the scan must
+ * repoint fbt->root (the depth==0 path). */
+TEST_F(FbtreeTest, DefragScanRelocatesRootLeaf) {
+    char buf[32];
+    for (int i = 0; i < 5; i++) {
+        snprintf(buf, sizeof(buf), "k%04d", i);
+        insert(buf);
+    }
+    ASSERT_TRUE(fbt->root->is_leaf) << "test needs a single-leaf tree";
+    std::vector<std::string> before = collectForward();
+
+    unsigned long cursor = fbtreeDefragScan(fbt, 0, fbtreeDefragNoopItemCallback, NULL, fbtreeDefragForceRelocate);
+    EXPECT_EQ(cursor, 0UL) << "single leaf is one sweep step";
+    EXPECT_TRUE(fbt->root->is_leaf);
+    char err[256];
+    ASSERT_TRUE(fbtreeDebugValidate(fbt, false, err, sizeof(err))) << err;
+    ASSERT_EQ(collectForward(), before);
+}
+
+/* End-to-end: run the structural node pass then a full leaf/item sweep, both
+ * force-relocating everything, and confirm the tree validates and answers
+ * forward, backward, and rank queries identically. */
+TEST_F(FbtreeTest, DefragNodesThenScanEndToEnd) {
+    enum { N = 5000 };
+    char buf[32];
+    std::vector<std::string> expected;
+    for (int i = 0; i < N; i++) {
+        snprintf(buf, sizeof(buf), "key_%08d", i);
+        insert(buf);
+        expected.emplace_back(buf, strlen(buf) + 1);
+    }
+
+    fbtreeDefragNodes(fbt, fbtreeDefragForceRelocate);
+    unsigned long cursor = 0;
+    int guard = 0;
+    do {
+        cursor = fbtreeDefragScan(fbt, cursor, fbtreeDefragNoopItemCallback, NULL, fbtreeDefragForceRelocate);
+        ASSERT_LT(++guard, N + 100) << "sweep did not terminate";
+    } while (cursor != 0);
+
+    char err[256];
+    ASSERT_TRUE(fbtreeDebugValidate(fbt, false, err, sizeof(err))) << err;
+    ASSERT_EQ(collectForward(), expected);
+    std::vector<std::string> rev = expected;
+    std::reverse(rev.begin(), rev.end());
+    ASSERT_EQ(collectBackward(), rev);
+    for (unsigned long r : {0UL, 1UL, (unsigned long)N / 2, (unsigned long)N - 1}) {
+        fbtreeIterator it;
+        fbtreeInitIterator(&it, fbt);
+        fbtreeSeekToRank(&it, r);
+        const_sds pos = fbtreeNext(&it);
+        ASSERT_NE(pos, nullptr) << "seek to rank " << r;
+        ASSERT_EQ(std::string(pos, sdslen(pos)), expected[r]) << "wrong element at rank " << r;
+    }
+}
+
+/* Dismiss walks every leaf and its separately-allocated items; the tree must
+ * stay valid and iterate unchanged afterward. */
+TEST_F(FbtreeTest, DismissMemoryPreservesContent) {
+    enum { N = 3000 };
+    char buf[32];
+    for (int i = 0; i < N; i++) {
+        snprintf(buf, sizeof(buf), "key_%08d", i);
+        insert(buf);
+    }
+    std::vector<std::string> before = collectForward();
+    fbtreeDismissMemory(fbt);
+    char err[256];
+    ASSERT_TRUE(fbtreeDebugValidate(fbt, false, err, sizeof(err))) << err;
+    ASSERT_EQ(collectForward(), before);
 }
 
 /* ==========================================================================

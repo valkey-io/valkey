@@ -3958,6 +3958,8 @@ int modulePopulateReplicationInfoStructure(void *ri, int structver) {
  *                                               for applying replicated
  *                                               commands from the primary.
  *     VALKEYMODULE_CLIENTINFO_FLAG_REPLICA      Client is a replica connection.
+ *                                               Also set for MONITOR clients,
+ *                                               together with FLAG_MONITOR.
  *     VALKEYMODULE_CLIENTINFO_FLAG_MONITOR      Client in monitor mode.
  *     VALKEYMODULE_CLIENTINFO_FLAG_MODULE       Client is a module.
  *     VALKEYMODULE_CLIENTINFO_FLAG_AUTHENTICATED

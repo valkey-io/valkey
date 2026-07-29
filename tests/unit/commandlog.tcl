@@ -279,18 +279,25 @@ start_server {tags {"commandlog"} overrides {commandlog-execution-slower-than 10
         r config set commandlog-execution-slower-than 100000
         r commandlog reset slow
         r multi
-        r debug sleep 0.02
-        r debug sleep 0.02
-        r debug sleep 0.02
-        r debug sleep 0.02
-        r debug sleep 0.02
-        r debug sleep 0.02
+        for {set i 0} {$i < 10} {incr i} {
+            r debug sleep 0.03
+        }
         r exec
         assert_equal [r commandlog len slow] 1
         set e [lindex [r commandlog get -1 slow] 0]
         assert_equal [lindex $e 3] {exec}
         assert {[lindex $e 2] >= 100000}
     } {} {needs:debug}
+
+    test {COMMANDLOG slow - EXEC is not logged when transaction is below threshold} {
+        r config set commandlog-execution-slower-than 100000
+        r commandlog reset slow
+        r multi
+        r set foo bar
+        r get foo
+        r exec
+        assert_equal [r commandlog len slow] 0
+    }
 
     test {COMMANDLOG slow - can clean older entries} {
         r client setname lastentry_client

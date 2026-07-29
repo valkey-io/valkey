@@ -84,6 +84,10 @@ typedef struct leafNode *(*fbtreeLeafDefragFn)(struct leafNode *leaf, void *ctx)
  * item_callback is called with old/new pointers. */
 unsigned long fbtreeDefragScan(fbtreeIndex *fbt, unsigned long cursor, void (*item_callback)(sds old_item, sds new_item, void *ctx), void *ctx, void *(*defragfn)(void *));
 
+/* Relocate every inner node struct. Run once before fbtreeDefragScan, which
+ * handles leaves and items. */
+void fbtreeDefragNodes(fbtreeIndex *fbt, void *(*defragfn)(void *));
+
 /* Walk all leaf nodes and call dismissMemory on each. */
 void fbtreeDismissMemory(fbtreeIndex *fbt);
 

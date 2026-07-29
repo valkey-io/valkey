@@ -4465,6 +4465,39 @@ TEST_F(FbtreeTest, DefragScanRelocatesLeafStructs) {
     }
 }
 
+/* fbtreeDefragNodes must relocate every inner node and repoint parent child
+ * links (and the root), across a single-leaf tree (no inner nodes: a no-op),
+ * a two-level tree (inner root over leaves), and a three-level tree (inner
+ * root over inner nodes). Force-relocate all inner nodes, then the tree must
+ * validate and iterate identically. */
+TEST_F(FbtreeTest, DefragNodesRelocatesInnerNodes) {
+    for (int n : {5, 100, 5000}) {
+        fbtreeIndex *tree = fbtreeCreate();
+        char buf[32];
+        std::vector<std::string> expected;
+        for (int i = 0; i < n; i++) {
+            snprintf(buf, sizeof(buf), "key_%08d", i);
+            fbtreeInsert(tree, createString(buf));
+            expected.emplace_back(buf, strlen(buf) + 1);
+        }
+
+        fbtreeDefragNodes(tree, fbtreeDefragForceRelocate);
+
+        char err[256];
+        ASSERT_TRUE(fbtreeDebugValidate(tree, false, err, sizeof(err))) << "n=" << n << ": " << err;
+        ASSERT_EQ(fbtreeLength(tree), (unsigned long)n) << "n=" << n;
+
+        std::vector<std::string> fwd;
+        fbtreeIterator it;
+        fbtreeInitIterator(&it, tree);
+        const_sds pos;
+        while ((pos = fbtreeNext(&it)) != nullptr) fwd.emplace_back(pos, sdslen(pos));
+        ASSERT_EQ(fwd, expected) << "content changed for n=" << n;
+
+        fbtreeFree(tree);
+    }
+}
+
 /* ==========================================================================
  * featureSearchSIMD tests - exercise the scalar, SSE2, AVX2, and NEON
  * implementations through test wrappers. FEATURE_SIZE, FEATURE_ROW_SIZE,

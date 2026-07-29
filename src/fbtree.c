@@ -2451,6 +2451,31 @@ bool fbtreeDebugValidate(fbtreeIndex *fbt, bool verbose, char *errmsg, size_t er
 
 /* ========== Defrag / Dismiss ========== */
 
+/* Relocate the inner node at *noderef (a slot in the parent, or the tree root)
+ * and, depth-first, every inner node beneath it. Children are relocated before
+ * the node itself so the verbatim copy carries the updated child pointers.
+ * Leaves are not touched here — the rank scan relocates those with their items,
+ * which keeps this pass bounded to the tree's few, fixed-size inner nodes. */
+static void defragInnerNode(node **noderef, void *(*defragfn)(void *)) {
+    node *n = *noderef;
+    if (n->is_leaf) return;
+
+    innerNode *inner = (innerNode *)n;
+    for (int i = 0; i < inner->header.num_items; i++)
+        defragInnerNode(&inner->children[i], defragfn);
+
+    void *newptr = defragfn(inner);
+    if (newptr) *noderef = (node *)newptr;
+}
+
+/* Active-defrag phase for the tree's structural nodes: relocate every inner
+ * node so a fragmented page holding one can be reclaimed. Run once before the
+ * rank scan, which handles leaves and items. */
+void fbtreeDefragNodes(fbtreeIndex *fbt, void *(*defragfn)(void *)) {
+    if (!fbt || !fbt->root) return;
+    defragInnerNode(&fbt->root, defragfn);
+}
+
 unsigned long fbtreeDefragScan(fbtreeIndex *fbt, unsigned long cursor, void (*item_callback)(sds old_item, sds new_item, void *ctx), void *ctx, void *(*defragfn)(void *)) {
     if (!fbt || !fbt->root || fbtreeLength(fbt) == 0) return 0;
     if (cursor >= fbtreeLength(fbt)) return 0;

@@ -520,8 +520,11 @@ size_t orderedIndexEstimateStructureMemory(const OrderedIndex *oi) {
  * ========================================================================== */
 
 OrderedIndex *orderedIndexDefragInternals(OrderedIndex *oi, void *(*defragfn)(void *)) {
-    void *newptr = defragfn(oi);
-    return newptr ? (OrderedIndex *)newptr : oi;
+    fbtreeIndex *fbt = (fbtreeIndex *)oi;
+    void *newptr = defragfn(fbt);
+    if (newptr) fbt = (fbtreeIndex *)newptr;
+    fbtreeDefragNodes(fbt, defragfn);
+    return (OrderedIndex *)fbt;
 }
 
 /* Bridge context: fbtreeDefragScan uses (sds old, sds new, void *ctx) callback,

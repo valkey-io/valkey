@@ -217,12 +217,15 @@ void orderedIndexDismissMemory(OrderedIndex *oi);
  * included; callers account for them by sampling the items they hold. */
 size_t orderedIndexEstimateStructureMemory(const OrderedIndex *oi);
 
-/* Defrag data structure internals. Returns new pointer if reallocated. */
+/* Defrag the index's own allocations: the index struct and every inner node.
+ * Leaves and items are handled incrementally by orderedIndexScanDefrag. Returns
+ * the index pointer, updated if the struct itself was relocated. */
 OrderedIndex *orderedIndexDefragInternals(OrderedIndex *oi, void *(*defragfn)(void *));
 
-/* Incremental defrag scan. Walks items in batches, calling defragfn on each.
- * When an item is reallocated, callback is invoked to update external refs.
- * Returns next cursor, or 0 when complete. */
+/* Incremental defrag scan over rank order, one leaf per call. Relocates the
+ * leaf and its items via defragfn; when an item is relocated, callback is
+ * invoked to update external refs. Inner nodes are handled separately by
+ * orderedIndexDefragInternals. Returns the next cursor, or 0 when complete. */
 unsigned long orderedIndexScanDefrag(OrderedIndex *oi, unsigned long cursor, OrderedIndexDefragCallback callback, void *privdata, void *(*defragfn)(void *));
 
 /* ============================================================

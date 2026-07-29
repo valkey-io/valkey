@@ -72,16 +72,11 @@ unsigned long fbtreeCountRangeByValue(fbtreeIndex *fbt, const_sds min_val, const
  * written into it (truncated to errmsg_len). */
 bool fbtreeDebugValidate(fbtreeIndex *fbt, bool verbose, char *errmsg, size_t errmsg_len);
 
-/* Leaf iteration for defrag/dismiss (walks the linked list of leaves).
- * Callback receives each packed sds item. For defrag, return the new pointer
- * if reallocated, or NULL if unchanged. leaf_callback is for the leaf node
- * itself (same contract). */
-typedef sds (*fbtreeItemDefragFn)(sds item, void *ctx);
-typedef struct leafNode *(*fbtreeLeafDefragFn)(struct leafNode *leaf, void *ctx);
-
-/* Incremental defrag scan. cursor=0 to start, returns 0 when done.
- * Processes up to 16 items per call. When an item is reallocated,
- * item_callback is called with old/new pointers. */
+/* Incremental defrag scan over the tree's rank order. cursor=0 to start,
+ * returns the next cursor (0 when the sweep is done). Relocates one leaf per
+ * call along with its items via defragfn, patching parent links, the leaf
+ * chain, caches, and ancestor anchors. When an item is reallocated,
+ * item_callback is invoked with the old and new pointers. */
 unsigned long fbtreeDefragScan(fbtreeIndex *fbt, unsigned long cursor, void (*item_callback)(sds old_item, sds new_item, void *ctx), void *ctx, void *(*defragfn)(void *));
 
 /* Relocate every inner node struct. Run once before fbtreeDefragScan, which

@@ -28,8 +28,8 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef __INTSET_H
-#define __INTSET_H
+#ifndef INTSET_H
+#define INTSET_H
 #include <stdint.h>
 
 typedef struct intset {
@@ -52,4 +52,4 @@ int intsetValidateIntegrity(const unsigned char *is, size_t size, int deep);
 void intsetFree(intset *is);
 intset *intsetDup(intset *is);
 
-#endif // __INTSET_H
+#endif // INTSET_H

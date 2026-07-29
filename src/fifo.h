@@ -22,8 +22,8 @@
  * The implementation makes no assumptions about the stored values and keeps them intact.
  */
 
-#ifndef __FIFO_H_
-#define __FIFO_H_
+#ifndef FIFO_H
+#define FIFO_H
 
 #include <stdbool.h>
 

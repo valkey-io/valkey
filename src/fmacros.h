@@ -27,8 +27,8 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef _REDIS_FMACRO_H
-#define _REDIS_FMACRO_H
+#ifndef REDIS_FMACRO_H
+#define REDIS_FMACRO_H
 
 #define _BSD_SOURCE
 

@@ -1,5 +1,5 @@
-#ifndef __GEO_H__
-#define __GEO_H__
+#ifndef GEO_H
+#define GEO_H
 
 #include "server.h"
 

@@ -4423,6 +4423,48 @@ TEST_F(FbtreeTest, DefragScanFixesAncestorAnchors) {
     }
 }
 
+/* Relocating every leaf struct must repoint the parent child links, the
+ * leaf-chain neighbors, and the leftmost/rightmost caches. A full sweep with a
+ * force-relocate defragfn moves every leaf; the tree must stay valid and
+ * iterate identically both directions, and rank seeks must still land right.
+ * fbtreeDebugValidate cross-checks the caches against the real end leaves. */
+TEST_F(FbtreeTest, DefragScanRelocatesLeafStructs) {
+    enum { N = 5000 };
+    char buf[32];
+    std::vector<std::string> expected;
+    for (int i = 0; i < N; i++) {
+        snprintf(buf, sizeof(buf), "key_%08d", i);
+        insert(buf);
+        expected.emplace_back(buf, strlen(buf) + 1);
+    }
+    ASSERT_FALSE(fbt->root->is_leaf) << "test needs a multi-level tree";
+
+    unsigned long cursor = 0;
+    int guard = 0;
+    do {
+        cursor = fbtreeDefragScan(fbt, cursor, fbtreeDefragNoopItemCallback, NULL, fbtreeDefragForceRelocate);
+        ASSERT_LT(++guard, N + 100) << "sweep did not terminate";
+    } while (cursor != 0);
+
+    char err[256];
+    ASSERT_TRUE(fbtreeDebugValidate(fbt, false, err, sizeof(err))) << err;
+
+    ASSERT_EQ(collectForward(), expected);
+    std::vector<std::string> rev = expected;
+    std::reverse(rev.begin(), rev.end());
+    ASSERT_EQ(collectBackward(), rev);
+
+    /* Rank seeks must still land on the right elements after relocation. */
+    for (unsigned long r : {0UL, 1UL, (unsigned long)N / 2, (unsigned long)N - 1}) {
+        fbtreeIterator it;
+        fbtreeInitIterator(&it, fbt);
+        fbtreeSeekToRank(&it, r);
+        const_sds pos = fbtreeNext(&it);
+        ASSERT_NE(pos, nullptr) << "seek to rank " << r << " found nothing";
+        ASSERT_EQ(std::string(pos, sdslen(pos)), expected[r]) << "wrong element at rank " << r;
+    }
+}
+
 /* ==========================================================================
  * featureSearchSIMD tests - exercise the scalar, SSE2, AVX2, and NEON
  * implementations through test wrappers. FEATURE_SIZE, FEATURE_ROW_SIZE,

@@ -2456,10 +2456,11 @@ unsigned long fbtreeDefragScan(fbtreeIndex *fbt, unsigned long cursor, void (*it
     if (cursor >= fbtreeLength(fbt)) return 0;
 
     /* Descend to the leaf holding rank 'cursor', recording the path so a
-     * relocated high-key item can be re-published to the ancestor anchors that
-     * alias it. Processing one leaf per descent keeps each step's work bounded
-     * to a single contiguous node (prefetcher-friendly) and gives a fresh path
-     * per call; the caller resumes via the returned cursor. O(log N) descent. */
+     * relocated leaf struct can be repointed from its parent and a relocated
+     * high-key item re-published to the ancestor anchors that alias it.
+     * Processing one leaf per descent keeps each step's work bounded to a
+     * single contiguous node (prefetcher-friendly) and gives a fresh path per
+     * call; the caller resumes via the returned cursor. O(log N) descent. */
     node *current = fbt->root;
     unsigned long remaining = cursor;
     innerNode *path[MAX_TREE_DEPTH];
@@ -2481,6 +2482,26 @@ unsigned long fbtreeDefragScan(fbtreeIndex *fbt, unsigned long cursor, void (*it
     }
 
     leafNode *leaf = (leafNode *)current;
+
+    /* Relocate the leaf struct itself before touching its items, patching every
+     * external reference: the parent's child pointer (or the tree root when the
+     * leaf is the whole tree), the leaf-chain neighbors, and the
+     * leftmost/rightmost caches. A leaf is a plain allocation, so its base is
+     * the struct pointer and its contents (chain links, values) copy verbatim. */
+    void *old_leaf = leaf;
+    void *new_leaf = defragfn(old_leaf);
+    if (new_leaf) {
+        leaf = (leafNode *)new_leaf;
+        if (leaf->prev) leaf->prev->next = leaf;
+        if (leaf->next) leaf->next->prev = leaf;
+        if (depth > 0)
+            path[depth - 1]->children[path_idx[depth - 1]] = (node *)leaf;
+        else
+            fbt->root = (node *)leaf;
+        if (fbt->leftmost_leaf == (leafNode *)old_leaf) fbt->leftmost_leaf = leaf;
+        if (fbt->rightmost_leaf == (leafNode *)old_leaf) fbt->rightmost_leaf = leaf;
+    }
+
     int start = (int)remaining;
     int last = leaf->header.num_items - 1;
     unsigned long processed = 0;

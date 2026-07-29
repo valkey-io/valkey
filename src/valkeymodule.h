@@ -1165,6 +1165,15 @@ typedef enum ValkeyModuleScriptingEngineDebuggerEnableRet {
     VMSE_DEBUG_ENABLE_FAIL,   /* The scripting engine failed to enable the debugging mode. */
 } ValkeyModuleScriptingEngineDebuggerEnableRet;
 
+/* Execute a debugger command.
+ *
+ * - `argv`: the command arguments.
+ *
+ * - `argc`: the number of command arguments.
+ *
+ * - `context`: the `context` field of the command descriptor, or the scripting
+ *   engine runtime context if that field is NULL.
+ */
 typedef int (*ValkeyModuleScriptingEngineDebuggerCommandHandlerFunc)(
     ValkeyModuleString **argv,
     size_t argc,
@@ -1192,7 +1201,7 @@ typedef struct ValkeyModuleScriptingEngineDebuggerCommand {
     const char *desc;                                              /* The description of the command that is shown in the help message. */
     int invisible;                                                 /* Whether this command should be hidden in the help message. */
     ValkeyModuleScriptingEngineDebuggerCommandHandlerFunc handler; /* The function pointer that implements this command. */
-    void *context;                                                 /* The pointer to a context structure that is passed when invoking the command handler. */
+    void *context;                                                 /* The pointer to a context structure that is passed when invoking the command handler. When NULL, the engine context is passed instead. */
 } ValkeyModuleScriptingEngineDebuggerCommandV1;
 
 #define ValkeyModuleScriptingEngineDebuggerCommand ValkeyModuleScriptingEngineDebuggerCommandV1

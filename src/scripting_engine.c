@@ -1045,6 +1045,7 @@ static int findAndExecuteCommand(robj **argv, size_t argc) {
         return CONTINUE_READ_NEXT_COMMAND;
     }
 
+    /* Fall back to the engine's own context, which handlers can cast back to their engine context type. */
     return cmd->handler(argv, argc, cmd->context ? cmd->context : ds.engine->impl.ctx);
 }
 

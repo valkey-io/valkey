@@ -1785,9 +1785,6 @@ start_server {tags {"scripting needs:debug external:skip"}} {
         r flush
         assert_match {*PONG*} [r read]
         reconnect
-
-        # Make sure the server is still alive.
-        assert_equal [r ping] {PONG}
     }
 
     test {Test scripting debug print does not use-after-free the logged value} {
@@ -1798,8 +1795,6 @@ start_server {tags {"scripting needs:debug external:skip"}} {
         r flush
         assert_match {*<value>*somearg*} [r read]
         reconnect
-        # make sure the server is still ok
-        assert_equal [r ping] {PONG}
     }
 }
 

@@ -4,6 +4,12 @@
  * SPDX-License-Identifier: BSD-3-Clause
  */
 
+/* fmacros.h must come before any system header so that feature-test macros
+ * (notably _FILE_OFFSET_BITS=64 for 32-bit builds) take effect. */
+extern "C" {
+#include "../fmacros.h"
+}
+
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 #include <cstdio>

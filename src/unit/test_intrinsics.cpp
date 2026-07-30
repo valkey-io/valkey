@@ -8,22 +8,16 @@
 
 #include <stdint.h>
 
-#if defined(__GNUC__) || defined(__clang__)
-#define INTRINSICS_TEST_HAS_DIAGNOSTIC_PRAGMA
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wparentheses"
+#ifdef __INTRINSICS_H
+#error "intrinsics.h must not be included before this point, or the fallback path is not compiled"
 #endif
 
 #undef __GNUC__
 #undef __clang__
 
 extern "C" {
-#include "intrinsics.h"
+#include "../intrinsics.h"
 }
-
-#ifdef INTRINSICS_TEST_HAS_DIAGNOSTIC_PRAGMA
-#pragma GCC diagnostic pop
-#endif
 
 class IntrinsicsTest : public ::testing::Test {};
 

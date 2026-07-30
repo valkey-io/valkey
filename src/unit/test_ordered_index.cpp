@@ -65,6 +65,7 @@ static int sdsArrayCmp(const void *a, const void *b) {
 }
 
 static void sortSdsArray(sds *arr, size_t n) {
+    if (n == 0) return; /* qsort's array argument is declared non-null */
     qsort(arr, n, sizeof(sds), sdsArrayCmp);
 }
 

@@ -292,6 +292,7 @@ int threadsaveToDisk(const char *filename) {
     serverAssert(filename);
     serverLog(LL_NOTICE, "Beginning threadsaveToDisk");
 
+    server.stat_rdb_saves++;
     threadsaveInfo *saveInfo = zcalloc(sizeof(threadsaveInfo));
 
     char tmpfile[256];

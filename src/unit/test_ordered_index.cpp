@@ -1371,6 +1371,90 @@ TEST_F(OrderedIndexTest, LexRangeSentinels) {
     sdsfree(charlie);
 }
 
+/* ========== Batch-insert workflow tests ========== */
+
+/* orderedIndexItemCreate + orderedIndexItemSetScore + orderedIndexInsertItem
+ * back the store-aggregation path (ZUNIONSTORE/ZDIFFSTORE/ZINTERSTORE): detached
+ * items are created, their scores are adjusted O(1) while aggregating sources,
+ * then all are bulk-inserted at the end. ItemSetScore's no-reposition branch is
+ * reachable only through this path, so it needs direct coverage. */
+
+TEST_F(OrderedIndexTest, BatchInsertCreateSetScoreInsert) {
+    const char *names[] = {"cherry", "apple", "banana", "date"};
+    double finalscore[] = {3.0, 1.0, 2.0, 4.0};
+    const int n = 4;
+    OrderedIndexItem *items[4];
+
+    for (int i = 0; i < n; i++) {
+        /* Create detached (not in any index) at a placeholder score. */
+        items[i] = orderedIndexItemCreate(-999.0, names[i], strlen(names[i]));
+        ASSERT_NE(items[i], nullptr);
+        /* Several O(1) score updates, as aggregation across sources would do. */
+        orderedIndexItemSetScore(items[i], finalscore[i] + 10.0);
+        orderedIndexItemSetScore(items[i], finalscore[i]);
+        assertScore(items[i], finalscore[i]);
+    }
+    /* Nothing is inserted yet. */
+    ASSERT_EQ(orderedIndexLength(oi), 0UL);
+
+    /* Bulk-insert; the index takes ownership and returns the same pointer. */
+    for (int i = 0; i < n; i++) {
+        ASSERT_EQ(orderedIndexInsertItem(oi, items[i]), items[i]);
+    }
+    ASSERT_EQ(orderedIndexLength(oi), (unsigned long)n);
+    verifyOI();
+
+    /* Ordered by the final scores. */
+    ASSERT_ALL_ELEMENTS("apple", "banana", "cherry", "date");
+    assertScore(orderedIndexGetByIndex(oi, 0), 1.0);
+    assertScore(orderedIndexGetByIndex(oi, 1), 2.0);
+    assertScore(orderedIndexGetByIndex(oi, 2), 3.0);
+    assertScore(orderedIndexGetByIndex(oi, 3), 4.0);
+}
+
+TEST_F(OrderedIndexTest, BatchInsertInterleavesWithExistingItems) {
+    /* Items already present via the normal insert path. */
+    insert(2.0, "banana");
+    insert(4.0, "date");
+
+    /* Batch-created items whose scores interleave with the existing ones. */
+    OrderedIndexItem *a = orderedIndexItemCreate(0.0, "apple", 5);
+    orderedIndexItemSetScore(a, 1.0);
+    OrderedIndexItem *c = orderedIndexItemCreate(0.0, "cherry", 6);
+    orderedIndexItemSetScore(c, 3.0);
+    orderedIndexInsertItem(oi, a);
+    orderedIndexInsertItem(oi, c);
+
+    ASSERT_EQ(orderedIndexLength(oi), 4UL);
+    verifyOI();
+    ASSERT_ALL_ELEMENTS("apple", "banana", "cherry", "date");
+}
+
+TEST_F(OrderedIndexTest, BatchInsertManyBuildsValidTree) {
+    /* Enough batch-inserted items to force a multi-level tree, so InsertItem
+     * exercises the full descent/split path rather than a single leaf. */
+    enum { N = 2000 };
+    for (int i = 0; i < N; i++) {
+        char buf[32];
+        snprintf(buf, sizeof(buf), "key%05d", i);
+        OrderedIndexItem *it = orderedIndexItemCreate(0.0, buf, strlen(buf));
+        orderedIndexItemSetScore(it, (double)i);
+        orderedIndexInsertItem(oi, it);
+    }
+    ASSERT_EQ(orderedIndexLength(oi), (unsigned long)N);
+    verifyOI();
+
+    /* Rank order follows the scores set before insertion. */
+    for (int i = 0; i < N; i += 137) {
+        OrderedIndexItem *it = orderedIndexGetByIndex(oi, i);
+        char buf[32];
+        snprintf(buf, sizeof(buf), "key%05d", i);
+        assertScore(it, (double)i);
+        assertElement(it, buf);
+    }
+    ASSERT_EQ(orderedIndexCountScoreRange(oi, NEG_INF, POS_INF, 0, 0), (unsigned long)N);
+}
+
 /* ========== Randomized property tests ========== */
 
 

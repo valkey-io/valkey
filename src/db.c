@@ -37,11 +37,8 @@
 #include "module.h"
 #include "vector.h"
 #include "expire.h"
-<<<<<<< HEAD
 #include "bgiteration.h"
-=======
 #include "crc16_slottable.h"
->>>>>>> upstream/unstable
 
 /*-----------------------------------------------------------------------------
  * C-level DB API

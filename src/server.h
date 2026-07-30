@@ -3217,12 +3217,11 @@ uint8_t objectGetLFUFrequency(robj *o);
 uint32_t objectGetLRUIdleSecs(robj *o);
 uint32_t objectGetIdleness(robj *o);
 
-<<<<<<< HEAD
 /* Object metadata management */
 void objectSetMetadataSize(size_t size);
 size_t objectGetMetadataSize(const robj *o);
 void *objectGetMetadata(const robj *o);
-=======
+
 /* Accessor functions for serverObject fields.
  * Use these instead of direct field access for encapsulation. */
 int objectGetType(const robj *o);
@@ -3232,7 +3231,6 @@ void objectSetEncoding(robj *o, int encoding);
 unsigned int objectGetRefcount(const robj *o);
 unsigned int objectGetLRU(const robj *o);
 void objectSetLRU(robj *o, unsigned int lru);
->>>>>>> upstream/unstable
 
 /* Synchronous I/O with timeout */
 ssize_t syncWrite(int fd, char *ptr, ssize_t size, long long timeout);
@@ -3936,14 +3934,10 @@ void signalKeyAsReady(serverDb *db, robj *key, int type);
 void blockForKeys(client *c, int btype, robj **keys, int numkeys, mstime_t timeout, int unblock_on_nokey);
 void blockClientShutdown(client *c);
 void blockPostponeClient(client *c);
-<<<<<<< HEAD
 void blockClientInUseOnKeys(client *c, int num_keys, robj *keys[]);
 void unblockClientsInUseOnKey(robj *key);
 void unblockClientsInUseOnAllKeys(void);
-void blockClientForReplicaAck(client *c, mstime_t timeout, long long offset, long numreplicas, int numlocal);
-=======
 void blockClientForReplicaAck(client *c, mstime_t timeout, long long offset, int numreplicas, int numlocal);
->>>>>>> upstream/unstable
 void replicationRequestAckFromReplicas(void);
 void signalDeletedKeyAsReady(serverDb *db, robj *key, int type);
 void updateStatsOnUnblock(client *c, long blocked_us, long reply_us, int failed_or_rejected);

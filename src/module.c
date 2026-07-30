@@ -6959,8 +6959,8 @@ static void moduleCallCommandHelper(ValkeyModuleCtx *ctx, client *c, robj **argv
              * command to block. Unblock the client and return an error. */
             c->flag.pending_command = 0;
             unblockClient(c, 0);
-            addReplyError(c, "INUSE key is being processed.");
-            reply = moduleParseReply(c, (ctx->flags & VALKEYMODULE_CTX_AUTO_MEMORY) ? ctx : NULL);
+            errno = EBUSY;
+            reply_error_msg = sdsnew("INUSE key is being processed.");
             goto cleanup;
         }
 

@@ -1597,9 +1597,9 @@ start_server {} {
 
 
 start_server {overrides {forkless-options-supported yes save ""}} {
-    test {threadsave-enabled-for-backup can be enabled with forkless-options-supported} {
-        r config set threadsave-enabled-for-backup yes
-        assert_equal [lindex [r config get threadsave-enabled-for-backup] 1] "yes"
+    test {default-bgsave-method can be set to thread with forkless-options-supported} {
+        r config set default-bgsave-method thread
+        assert_equal [lindex [r config get default-bgsave-method] 1] "thread"
     }
 }
 
@@ -1618,8 +1618,8 @@ start_server {overrides {forkless-options-supported yes save ""}} {
     }
 }
 
-start_server {overrides {forkless-options-supported yes threadsave-enabled-for-backup yes}} {
-    test {BGSAVE uses thread when threadsave-enabled-for-backup is yes} {
+start_server {overrides {forkless-options-supported yes default-bgsave-method thread}} {
+    test {BGSAVE uses thread when default-bgsave-method is thread} {
         r set key value
         set result [r bgsave]
         assert_match "*thread*" $result
@@ -1628,8 +1628,8 @@ start_server {overrides {forkless-options-supported yes threadsave-enabled-for-b
     }
 }
 
-start_server {overrides {threadsave-enabled-for-backup no}} {
-    test {BGSAVE uses fork when threadsave-enabled-for-backup is no} {
+start_server {overrides {default-bgsave-method fork}} {
+    test {BGSAVE uses fork when default-bgsave-method is fork} {
         r set key value
         set result [r bgsave]
         assert_match "*fork*" $result

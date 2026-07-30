@@ -19,6 +19,164 @@ start_server {tags {"other"}} {
         assert_match "*MODULE <subcommand> *" [r MODULE HELP]
     }
 
+    test {CONFIG INFO with config name - enum type} {
+        set result [r CONFIG INFO repl-diskless-load]
+        assert_equal [llength $result] 1
+        set info [lindex $result 0]
+        assert_equal [dict get $info name] "repl-diskless-load"
+        assert_equal [dict get $info type] "enum"
+        assert_match "*disabled*" [dict get $info values]
+    }
+
+    test {CONFIG INFO with config name - numeric type} {
+        set result [r CONFIG INFO maxmemory]
+        assert_equal [llength $result] 1
+        set info [lindex $result 0]
+        assert_equal [dict get $info name] "maxmemory"
+        assert_equal [dict get $info type] "numeric"
+        assert_equal [llength [dict get $info range]] 2
+    }
+
+    test {CONFIG INFO with config name - bool type} {
+        set result [r CONFIG INFO activerehashing]
+        assert_equal [llength $result] 1
+        set info [lindex $result 0]
+        assert_equal [dict get $info name] "activerehashing"
+        assert_equal [dict get $info type] "bool"
+    }
+
+    test {CONFIG INFO with config name - string type} {
+        set result [r CONFIG INFO dbfilename]
+        assert_equal [llength $result] 1
+        set info [lindex $result 0]
+        assert_equal [dict get $info name] "dbfilename"
+        assert_equal [dict get $info type] "string"
+    }
+
+    test {CONFIG INFO with config name - special type} {
+        set result [r CONFIG INFO save]
+        assert_equal [llength $result] 1
+        set info [lindex $result 0]
+        assert_equal [dict get $info name] "save"
+        assert_equal [dict get $info type] "special"
+    }
+
+    test {CONFIG INFO with non-existent config} {
+        set result [r CONFIG INFO nonexistent]
+        assert_equal [llength $result] 0
+    }
+
+    test {CONFIG INFO with pattern matching multiple configs} {
+        set result [r CONFIG INFO max*]
+        assert {[llength $result] > 1}
+        set names [list]
+        foreach entry $result {
+            lappend names [dict get $entry name]
+        }
+        assert {[lsearch $names "maxmemory"] >= 0}
+        assert {[lsearch $names "maxclients"] >= 0}
+    }
+
+    test {CONFIG INFO with multiple patterns deduplicates results} {
+        set result [r CONFIG INFO max* maxmemory]
+        set names [list]
+        foreach entry $result {
+            lappend names [dict get $entry name]
+        }
+        # Count occurrences of maxmemory - should be exactly 1
+        set count 0
+        foreach name $names {
+            if {$name eq "maxmemory"} {
+                incr count
+            }
+        }
+        assert_equal $count 1
+    }
+
+    test {CONFIG INFO includes flags field} {
+        set result [r CONFIG INFO maxmemory]
+        set info [lindex $result 0]
+        assert {[dict exists $info flags]}
+    }
+
+    test {CONFIG INFO flags for immutable config} {
+        set result [r CONFIG INFO databases]
+        set info [lindex $result 0]
+        assert {[lsearch [dict get $info flags] "immutable"] >= 0}
+    }
+
+    test {CONFIG INFO flags for sensitive config} {
+        set result [r CONFIG INFO requirepass]
+        set info [lindex $result 0]
+        assert {[lsearch [dict get $info flags] "sensitive"] >= 0}
+    }
+
+    test {CONFIG INFO alias for config with alias} {
+        set result [r CONFIG INFO replicaof]
+        set info [lindex $result 0]
+        assert_equal [dict get $info alias] "slaveof"
+    }
+
+    test {CONFIG INFO looking up by alias name includes alias flag and points back to primary name} {
+        set result [r CONFIG INFO slaveof]
+        set info [lindex $result 0]
+        assert_equal [dict get $info name] "slaveof"
+        assert_equal [dict get $info alias] "replicaof"
+        assert {[lsearch [dict get $info flags] "alias"] >= 0}
+    }
+
+    test {CONFIG INFO config without alias omits alias field} {
+        set result [r CONFIG INFO maxmemory]
+        set info [lindex $result 0]
+        assert {![dict exists $info alias]}
+    }
+
+    test {CONFIG INFO ordering is consistent across calls} {
+        # Get initial ordering
+        set info1 [r CONFIG INFO a*]
+        set get1 [r CONFIG GET a*]
+        
+        set info_names1 [list]
+        foreach entry $info1 {
+            lappend info_names1 [dict get $entry name]
+        }
+        
+        set get_names1 [dict keys $get1]
+        
+        # Do some operations and call again
+        r SET foo bar
+        r GET foo
+        
+        set info2 [r CONFIG INFO a*]
+        set info_names2 [list]
+        foreach entry $info2 {
+            lappend info_names2 [dict get $entry name]
+        }
+        
+        # Restart server
+        if {!$::external} {
+            restart_server 0 true false
+            
+            set info3 [r CONFIG INFO a*]
+            set get3 [r CONFIG GET a*]
+            
+            set info_names3 [list]
+            foreach entry $info3 {
+                lappend info_names3 [dict get $entry name]
+            }
+            
+            set get_names3 [dict keys $get3]
+            
+            # Verify ordering after restart
+            assert_equal $info_names1 $info_names3
+            assert_equal $get_names1 $get_names3
+        }
+        
+        # All orderings should be identical
+        assert_equal $info_names1 $info_names2
+        assert_equal $info_names1 $get_names1
+    }
+
     test {Coverage: MEMORY MALLOC-STATS} {
         if {[string match {*jemalloc*} [s mem_allocator]]} {
             assert_match "*jemalloc*" [r memory malloc-stats]
@@ -585,8 +743,10 @@ start_server {tags {"other external:skip"}} {
 
 start_server {tags {"other external:skip"}} {
     test "test io-threads are runtime modifiable" {
+        # Each toggle spawns/joins real pthreads; too slow for 100 iterations under Valgrind.
+        set iterations [expr {$::valgrind ? 10 : 100}]
         # Randomly set the number of threads between 1 and 5
-        for {set i 0} {$i < 100} {incr i} {
+        for {set i 0} {$i < $iterations} {incr i} {
             set random_num [expr {int(rand() * 5) + 1}]
             r config set io-threads $random_num
             set thread_num [lindex [r config get io-threads] 1]

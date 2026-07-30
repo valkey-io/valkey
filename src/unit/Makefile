@@ -113,11 +113,21 @@ ifeq ($(uname_S), Darwin)
 WRAP_DIR := wrapped
 VALKEY_SERVER_WRAP_LIB := $(WRAP_DIR)/wrappedlibvalkey.a
 ENGINE_SERVER_WRAP_OBJ := $(addprefix $(WRAP_DIR)/, $(ENGINE_SERVER_OBJ))
+TEST_WRAP_OBJ := $(addprefix $(WRAP_DIR)/, $(ALL_OBJECTS))
+
+# Homebrew does not add llvm/bin to PATH by default, so we check the standard
+# Homebrew prefix locations for both Apple Silicon (/opt/homebrew) and Intel (/usr/local).
+BREW_LLVM_BIN := $(firstword $(wildcard /opt/homebrew/opt/llvm/bin /usr/local/opt/llvm/bin))
+ifneq ($(BREW_LLVM_BIN),)
+  export PATH := $(BREW_LLVM_BIN):$(PATH)
+else
+  $(error LLVM tools not found. Install via: brew install llvm)
+endif
 
 $(WRAP_DIR):
 	@mkdir -p $(WRAP_DIR)
 
-$(WRAP_DIR)/%.o: ../%.o $(WRAP_DIR) generated_wrappers.o
+define wrap-object
 	@mkdir -p $(dir $@)
 	@if file $< | grep -q "LLVM bitcode"; then \
 		llc $< -filetype=obj -o $(WRAP_DIR)/$*_temp.o; \
@@ -129,8 +139,18 @@ $(WRAP_DIR)/%.o: ../%.o $(WRAP_DIR) generated_wrappers.o
 		llvm-objcopy --redefine-syms=$(WRAP_DIR)/$*-wrap-syms $< $@; \
 	fi
 	@rm -f $(WRAP_DIR)/$*-wrap-syms
+endef
+
+# Wrap server library objects
+$(ENGINE_SERVER_WRAP_OBJ): $(WRAP_DIR)/%.o: ../%.o $(WRAP_DIR) generated_wrappers.o
+	$(wrap-object)
+
+# Wrap test objects, so that calls to wrapped functions are redirected to __wrap_*
+$(TEST_WRAP_OBJ): $(WRAP_DIR)/%.o: %.o $(WRAP_DIR) generated_wrappers.o
+	$(wrap-object)
 
 $(VALKEY_SERVER_WRAP_LIB): $(VALKEY_SERVER_LIB) $(ENGINE_SERVER_WRAP_OBJ) generated_wrappers.o
+	@rm -f $@
 	$(SERVER_AR) rcs $@ $(ENGINE_SERVER_WRAP_OBJ)
 endif
 
@@ -198,9 +218,8 @@ generated_wrappers.o: generated_wrappers.cpp
 
 # Generate the single test binary in parent directory.
 ifeq ($(uname_S), Darwin)
-valkey-unit-gtests: $(ALL_OBJECTS) generated_wrappers.o $(VALKEY_SERVER_WRAP_LIB) $(FINAL_LIBS)
+valkey-unit-gtests: $(TEST_WRAP_OBJ) generated_wrappers.o $(VALKEY_SERVER_WRAP_LIB) $(FINAL_LIBS)
 	$(CXX) -g $(LDFLAGS) -fno-lto \
-		-Wl,-flat_namespace -Wl,-undefined,dynamic_lookup \
 		-Wall -Wno-deprecated-declarations \
 		-o $@ $^ $(LD_LIBS) \
 		-lm -pthread -ldl

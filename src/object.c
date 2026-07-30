@@ -50,7 +50,6 @@
  * so if expire is set later, we don't need to reallocate the object. */
 #define KEY_SIZE_TO_INCLUDE_EXPIRE_THRESHOLD 128
 
-<<<<<<< HEAD
 /* Get beginning of embedded data, which may contain expire, metadata, key, and/or value.
  * Embedded data flags must be accurate when called. */
 static unsigned char *objectEmbeddedData(const robj *o) {
@@ -125,7 +124,8 @@ void *objectGetMetadata(const robj *o) {
     }
 
     return (void *)data;
-=======
+}
+
 /* ===================== Accessor functions for serverObject fields ==================== */
 
 int objectGetType(const robj *o) {
@@ -154,7 +154,6 @@ unsigned int objectGetLRU(const robj *o) {
 
 void objectSetLRU(robj *o, unsigned int lru) {
     o->lru = lru;
->>>>>>> upstream/unstable
 }
 
 /* ===================== Creation and parsing of objects ==================== */
@@ -480,12 +479,8 @@ void objectUnembedVal(robj *o) {
 robj *objectSetKeyAndExpire(robj *o, const_sds key, long long expire) {
     if (objectGetType(o) == OBJ_STRING && objectGetEncoding(o) == OBJ_ENCODING_EMBSTR) {
         robj *new = createStringObjectWithKeyAndExpire(objectGetVal(o), sdslen(objectGetVal(o)), key, expire);
-<<<<<<< HEAD
         bgIteration_updateDbEntryPtr(o, new);
-        new->lru = o->lru;
-=======
         objectSetLRU(new, objectGetLRU(o));
->>>>>>> upstream/unstable
         decrRefCount(o);
         return new;
     }
@@ -508,16 +503,10 @@ robj *objectSetKeyAndExpire(robj *o, const_sds key, long long expire) {
          * can be duplicated, but for a module type is not always possible. */
         serverPanic("Not implemented");
     }
-<<<<<<< HEAD
-    robj *new = createUnembeddedObjectWithKeyAndExpire(o->type, ptr, key, expire);
-    bgIteration_updateDbEntryPtr(o, new);
-    new->encoding = o->encoding;
-    new->lru = o->lru;
-=======
     robj *new = createUnembeddedObjectWithKeyAndExpire(objectGetType(o), ptr, key, expire);
+    bgIteration_updateDbEntryPtr(o, new);
     objectSetEncoding(new, objectGetEncoding(o));
     objectSetLRU(new, objectGetLRU(o));
->>>>>>> upstream/unstable
     decrRefCount(o);
     return new;
 }

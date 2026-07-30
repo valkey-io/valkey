@@ -6549,7 +6549,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
         bgIterator *iter = NULL;
         bgIteratorStatus status = {0};
         long long estimated_seconds_remaining = -1;
-        long long current_item_seconds = -1;
+        long long current_item_millis = -1;
 
         if (onValkeyMainThread() && (iter = bgIteratorFind(THREADSAVE_FILE_ITER_NAME)) != NULL) {
             bgIteratorGetStatus(iter, &status);
@@ -6561,13 +6561,13 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
 
             estimated_seconds_remaining = (status.dbentries_processed == 0) ? (long long)-1
                                                                             : (long long)((total_keys - status.dbentries_processed) * status.runtime_ms / status.dbentries_processed / 1000);
-            current_item_seconds = status.current_item_ms / 1000;
+            current_item_millis = status.current_item_ms;
         }
 
         info = sdscatprintf(info,
-                            "threadsave_current_item_seconds:%lld\r\n"
+                            "threadsave_current_item_millis:%lld\r\n"
                             "threadsave_estimated_seconds_remaining:%lld\r\n",
-                            current_item_seconds,
+                            current_item_millis,
                             estimated_seconds_remaining);
     }
 

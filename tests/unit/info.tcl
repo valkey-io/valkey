@@ -579,7 +579,7 @@ start_server {tags {"info" "external:skip"} overrides {save "" forkless-options-
         set info [r info persistence]
         
         # When no threadsave is running, time metrics should be -1
-        assert_match "*threadsave_current_item_seconds:-1*" $info
+        assert_match "*threadsave_current_item_millis:-1*" $info
         assert_match "*threadsave_estimated_seconds_remaining:-1*" $info
         
         # Debug metrics should be 0
@@ -608,7 +608,7 @@ start_server {tags {"info" "external:skip"} overrides {save "" forkless-options-
         set info [r info persistence]
         
         # Verify time metrics are present in persistence section
-        assert_match "*threadsave_current_item_seconds:*" $info
+        assert_match "*threadsave_current_item_millis:*" $info
         assert_match "*threadsave_estimated_seconds_remaining:*" $info
         
         # Verify queue metrics are present in debug section
@@ -668,7 +668,7 @@ start_server {tags {"info" "external:skip"} overrides {save "" forkless-options-
         waitForBgsave r
     }
 
-    test {INFO threadsave current_item_seconds is counted} {
+    test {INFO threadsave current_item_millis is counted} {
         r config set save ""
         r flushall
         r debug populate 10
@@ -685,15 +685,15 @@ start_server {tags {"info" "external:skip"} overrides {save "" forkless-options-
         
         # Wait until the item has been processing for at least 1 second
         wait_for_condition 50 100 {
-            [s threadsave_current_item_seconds] > 0
+            [s threadsave_current_item_millis] > 1000
         } else {
-            fail "threadsave_current_item_seconds never exceeded 0"
+            fail "threadsave_current_item_millis never exceeded 1000"
         }
         
-        set item_time [s threadsave_current_item_seconds]
+        set item_time [s threadsave_current_item_millis]
         
-        # Should be processing an item for ~1 second
-        assert {$item_time > 0}
+        # Should be processing an item for ~1 second (1000+ ms)
+        assert {$item_time > 1000}
         
         r config set rdb-key-save-delay 0
         r bgsave cancel
@@ -751,7 +751,7 @@ start_server {tags {"info" "external:skip"} overrides {save "" forkless-options-
         set info [r info persistence]
         
         # After save completes, time metrics should be -1
-        assert_match "*threadsave_current_item_seconds:-1*" $info
+        assert_match "*threadsave_current_item_millis:-1*" $info
         assert_match "*threadsave_estimated_seconds_remaining:-1*" $info
         
         # Debug metrics should be 0

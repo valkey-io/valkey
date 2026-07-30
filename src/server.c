@@ -4738,6 +4738,17 @@ int processCommand(client *c) {
             if (sample) {
                 exitExecutionUnit();
             }
+
+            /* If the command triggered lazy expiry (e.g., hash field expiry
+             * propagating HDEL via alsoPropagate()), we must flush pending
+             * propagation ops. Without this, the ops linger and trip the
+             * assertion in handleClientsBlockedOnKeys (blocked.c) which
+             * expects also_propagate to be empty. This branch is almost
+             * never taken for pure reads without expiring fields. */
+            if (server.also_propagate.numops > 0) {
+                postExecutionUnitOperations();
+            }
+
             if (!c->flag.blocked) c->flag.executing_command = 0;
 
             /* Stats — always updated */

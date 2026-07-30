@@ -9409,6 +9409,13 @@ void firePostExecutionUnitJobs(void) {
     exitExecutionUnit();
 }
 
+/* Returns 1 if any module post-execution-unit jobs are pending.
+ * Used by the fast-path to determine if afterCommand() must be called
+ * even on non-sampled commands, so that module jobs are not stranded. */
+int moduleHasPostExecutionUnitJobs(void) {
+    return listLength(modulePostExecUnitJobs) > 0;
+}
+
 /* When running inside a key space notification callback, it is dangerous and highly discouraged to perform any write
  * operation (See `VM_SubscribeToKeyspaceEvents`). In order to still perform write actions in this scenario,
  * the server provides `VM_AddPostNotificationJob` API. The API allows to register a job callback which the server will

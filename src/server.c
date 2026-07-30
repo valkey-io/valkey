@@ -4726,6 +4726,16 @@ int processCommand(client *c) {
             if (sample) {
                 call_timer = ustime();
                 enterExecutionUnit(1, call_timer);
+            } else {
+                /* Enter an execution unit WITHOUT updating the cached time
+                 * (no clock read — this is the same zero-cost variant that
+                 * firePostExecutionUnitJobs uses). Without this, code running
+                 * inside proc(c) that checks execution_nesting misbehaves:
+                 * e.g. a module notification callback's nested RM_Call sees
+                 * nesting == 0 and flushes its propagation immediately,
+                 * escaping the atomic MULTI/EXEC batch of the lazy expiry
+                 * that triggered it (replication-order violation). */
+                enterExecutionUnit(0, 0);
             }
 
             c->flag.executing_command = 1;
@@ -4735,21 +4745,18 @@ int processCommand(client *c) {
             /* Execute the command */
             c->cmd->proc(c);
 
-            if (sample) {
-                exitExecutionUnit();
-            }
-
-            /* If the command triggered lazy expiry (e.g., hash field expiry
-             * propagating HDEL via alsoPropagate()), we must flush pending
-             * propagation ops. Without this, the ops linger and trip the
-             * assertion in handleClientsBlockedOnKeys (blocked.c) which
-             * expects also_propagate to be empty. This branch is almost
-             * never taken for pure reads without expiring fields. */
-            if (server.also_propagate.numops > 0) {
-                postExecutionUnitOperations();
-            }
+            exitExecutionUnit();
 
             if (!c->flag.blocked) c->flag.executing_command = 0;
+
+            /* Hoist duration measurement before stats/commandlog so that
+             * commandlogPushCurrentCommand sees a real c->duration on
+             * sampled commands (fixes exec-time slowlog threshold). */
+            ustime_t duration = 0;
+            if (sample) {
+                duration = ustime() - call_timer;
+                c->duration = duration;
+            }
 
             /* Stats — always updated */
             real_cmd->calls++;
@@ -4761,8 +4768,6 @@ int processCommand(client *c) {
 
             if (sample) {
                 /* Sampled path: full timing + telemetry */
-                ustime_t duration = ustime() - call_timer;
-                c->duration = duration;
 
                 /* Extrapolate microseconds: this sample represents ~64 commands */
                 real_cmd->microseconds += duration * 64;
@@ -4779,6 +4784,16 @@ int processCommand(client *c) {
                     server.stat_peak_memory = zmalloc_used;
 
                 /* Full cleanup on sampled commands */
+                afterCommand(c);
+            } else if (server.also_propagate.numops > 0 ||
+                       listLength(server.pending_push_messages) ||
+                       moduleHasPostExecutionUnitJobs()) {
+                /* Non-sampled commands skip afterCommand() for speed, but
+                 * proc(c) can leave cross-command side effects that beforeSleep
+                 * asserts on (also_propagate ops from lazy expiry; push messages
+                 * deferred to a self-subscribed RESP3 client) or that must not
+                 * be delayed (module post-notification jobs).  Three cheap loads,
+                 * branch almost never taken. */
                 afterCommand(c);
             }
 

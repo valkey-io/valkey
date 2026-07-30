@@ -525,4 +525,46 @@ start_server {tags {"pubsub network"}} {
         assert_equal [r read] {message foo vaz}
     } {} {resp3}
 
+    test "Fast-path reads do not strand keymiss push messages (self-subscribed RESP3 client)" {
+        # Regression test: a RESP3 client subscribed to keymiss notifications
+        # issues GET on a missing key. The keymiss push message targeted at the
+        # client itself is deferred into server.pending_push_messages while the
+        # command executes. The read-only fast path skipped afterCommand() on
+        # non-sampled executions (63/64), stranding the message; beforeSleep
+        # then hit the 'listLength(server.pending_push_messages) == 0'
+        # assertion and crashed the server.
+        r config set notify-keyspace-events Em
+        r del missing-key-fastpath
+
+        set rd [valkey_deferring_client]
+        $rd hello 3
+        $rd read ;# consume the HELLO reply map
+
+        assert_equal {1} [subscribe $rd [list "__keyevent@${db}__:keymiss"]]
+
+        # Issue enough GETs to get past the 1-in-64 sampling (the first call
+        # of a command is always sampled; most later ones are not).
+        set n 70
+        for {set i 0} {$i < $n} {incr i} {
+            $rd get missing-key-fastpath
+        }
+
+        # The crash (if regressed) happens in the server's beforeSleep, so
+        # probe liveness from an independent connection BEFORE draining the
+        # subscribed client — this cannot deadlock.
+        assert_equal {PONG} [r ping]
+
+        # Drain the subscribed client. Each GET produced exactly two frames:
+        # the nil reply, then the keymiss push message (pushes are flushed
+        # after the command reply). Count both.
+        set push_count 0
+        for {set i 0} {$i < [expr {$n * 2}]} {incr i} {
+            set reply [$rd read]
+            if {[lindex $reply 0] eq "message"} { incr push_count }
+        }
+        r config set notify-keyspace-events ""
+        $rd close
+        assert_equal $push_count $n
+    } {} {resp3}
+
 }

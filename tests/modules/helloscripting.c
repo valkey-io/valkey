@@ -819,7 +819,31 @@ static int helloDebuggerAbortCommand(ValkeyModuleString **argv, size_t argc, voi
     return 0;
 }
 
-#define COMMAND_COUNT (4)
+/* Regression fixture with a long description containing no whitespace. */
+static int helloDebuggerNoopCommand(ValkeyModuleString **argv, size_t argc, void *context) {
+    VALKEYMODULE_NOT_USED(argv);
+    VALKEYMODULE_NOT_USED(argc);
+    VALKEYMODULE_NOT_USED(context);
+    return 1;
+}
+
+/* Regression fixture with a space at the wrapping boundary. */
+static int helloDebuggerBoundaryCommand(ValkeyModuleString **argv, size_t argc, void *context) {
+    VALKEYMODULE_NOT_USED(argv);
+    VALKEYMODULE_NOT_USED(argc);
+    VALKEYMODULE_NOT_USED(context);
+    return 1;
+}
+
+/* Regression fixture with adjacent spaces at the wrapping boundary. */
+static int helloDebuggerGapCommand(ValkeyModuleString **argv, size_t argc, void *context) {
+    VALKEYMODULE_NOT_USED(argv);
+    VALKEYMODULE_NOT_USED(argc);
+    VALKEYMODULE_NOT_USED(context);
+    return 1;
+}
+
+#define COMMAND_COUNT (7)
 
 static ValkeyModuleScriptingEngineDebuggerCommandParam stack_params[1] = {
     {
@@ -833,6 +857,9 @@ static ValkeyModuleScriptingEngineDebuggerCommand helloDebuggerCommands[COMMAND_
     VALKEYMODULE_SCRIPTING_ENGINE_DEBUGGER_COMMAND("continue", 1, NULL, 0, "Continue normal execution.", 0, helloDebuggerContinueCommand),
     VALKEYMODULE_SCRIPTING_ENGINE_DEBUGGER_COMMAND("stack", 2, stack_params, 1, "Print stack contents. If index is specified, print only the value at index. Indexes start at 0 (top = 0).", 0, helloDebuggerStackCommand),
     VALKEYMODULE_SCRIPTING_ENGINE_DEBUGGER_COMMAND("abort", 1, NULL, 0, "Abort execution.", 0, helloDebuggerAbortCommand),
+    VALKEYMODULE_SCRIPTING_ENGINE_DEBUGGER_COMMAND("noop", 4, NULL, 0, "NoSpaceInThisDescriptionOnPurposeToRegressionTestWrapTextHandlingOfWordsLongerThanTheDebuggerHelpColumnWidth", 0, helloDebuggerNoopCommand),
+    VALKEYMODULE_SCRIPTING_ENGINE_DEBUGGER_COMMAND("boundary", 8, NULL, 0, "QQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQ RRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRR", 0, helloDebuggerBoundaryCommand),
+    VALKEYMODULE_SCRIPTING_ENGINE_DEBUGGER_COMMAND("gap", 3, NULL, 0, "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX  YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY", 0, helloDebuggerGapCommand),
 };
 
 static ValkeyModuleScriptingEngineDebuggerEnableRet helloDebuggerEnable(ValkeyModuleCtx *module_ctx,

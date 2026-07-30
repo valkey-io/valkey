@@ -20,8 +20,8 @@
  * designed to be used alongside a companion hashtable that provides O(1)
  * membership testing when uniqueness is required (as in Valkey's ZSET).
  *
- * The interface is implementation-agnostic. Currently implemented as a skiplist
- * (see ordered_index.c). A B+ tree implementation is planned. */
+ * The interface is implementation-agnostic. It is currently implemented as a
+ * feature B+ tree (fbtree); see ordered_index.c. */
 
 #include "sds.h"
 #include <stdbool.h>
@@ -232,7 +232,7 @@ unsigned long orderedIndexScanDefrag(OrderedIndex *oi, unsigned long cursor, Ord
  * Debug / Verification
  * ============================================================ */
 
-/* Return the internal height of the data structure (skiplist levels). */
+/* Return the internal height of the data structure (tree levels). */
 int orderedIndexGetHeight(const OrderedIndex *oi);
 
 /* Verify structural integrity. Returns 1 if valid, 0 if corrupt.

@@ -4414,6 +4414,37 @@ static void *fbtreeDefragNoop(void *ptr) {
     return NULL;
 }
 
+/* Verify forward iteration yields exactly n keys formatted "key_%08d" for i in
+ * [0, n), each stored with its trailing NUL (as insert()/createString do). */
+static void verifyForwardKeys(fbtreeIndex *tree, int n) {
+    char buf[32];
+    fbtreeIterator it;
+    fbtreeInitIterator(&it, tree);
+    for (int i = 0; i < n; i++) {
+        const_sds pos = fbtreeNext(&it);
+        ASSERT_NE(pos, nullptr) << "missing element at index " << i;
+        int len = snprintf(buf, sizeof(buf), "key_%08d", i) + 1;
+        ASSERT_EQ((int)sdslen(pos), len) << "wrong length at index " << i;
+        ASSERT_EQ(memcmp(pos, buf, len), 0) << "content changed at index " << i;
+    }
+    ASSERT_EQ(fbtreeNext(&it), nullptr) << "extra elements past index " << (n - 1);
+}
+
+/* Same as verifyForwardKeys but walking backward from the tail. */
+static void verifyBackwardKeys(fbtreeIndex *tree, int n) {
+    char buf[32];
+    fbtreeIterator it;
+    fbtreeInitIterator(&it, tree);
+    for (int i = n - 1; i >= 0; i--) {
+        const_sds pos = fbtreePrev(&it);
+        ASSERT_NE(pos, nullptr) << "missing element at index " << i;
+        int len = snprintf(buf, sizeof(buf), "key_%08d", i) + 1;
+        ASSERT_EQ((int)sdslen(pos), len) << "wrong length at index " << i;
+        ASSERT_EQ(memcmp(pos, buf, len), 0) << "content changed at index " << i;
+    }
+    ASSERT_EQ(fbtreePrev(&it), nullptr) << "extra elements before index 0";
+}
+
 /* Relocating a leaf's high-key item must update every ancestor anchor that
  * aliases it. The rightmost item of the whole tree is the high key at every
  * level, so a full sweep that relocates it exercises multi-level propagation.
@@ -4439,14 +4470,7 @@ TEST_F(FbtreeTest, DefragScanFixesAncestorAnchors) {
     char err[256];
     ASSERT_TRUE(fbtreeDebugValidate(fbt, false, err, sizeof(err))) << err;
 
-    std::vector<std::string> fwd = collectForward();
-    ASSERT_EQ(fwd.size(), (size_t)N);
-    for (int i = 0; i < N; i++) {
-        snprintf(buf, sizeof(buf), "key_%08d", i);
-        /* insert() stores keys with the trailing NUL (createString uses
-         * strlen+1), and collectForward preserves it. */
-        ASSERT_EQ(fwd[i], std::string(buf, strlen(buf) + 1)) << "content changed at index " << i;
-    }
+    verifyForwardKeys(fbt, N);
 }
 
 /* Relocating every leaf struct must repoint the parent child links, the
@@ -4457,11 +4481,9 @@ TEST_F(FbtreeTest, DefragScanFixesAncestorAnchors) {
 TEST_F(FbtreeTest, DefragScanRelocatesLeafStructs) {
     enum { N = 5000 };
     char buf[32];
-    std::vector<std::string> expected;
     for (int i = 0; i < N; i++) {
         snprintf(buf, sizeof(buf), "key_%08d", i);
         insert(buf);
-        expected.emplace_back(buf, strlen(buf) + 1);
     }
     ASSERT_FALSE(fbt->root->is_leaf) << "test needs a multi-level tree";
 
@@ -4475,19 +4497,20 @@ TEST_F(FbtreeTest, DefragScanRelocatesLeafStructs) {
     char err[256];
     ASSERT_TRUE(fbtreeDebugValidate(fbt, false, err, sizeof(err))) << err;
 
-    ASSERT_EQ(collectForward(), expected);
-    std::vector<std::string> rev = expected;
-    std::reverse(rev.begin(), rev.end());
-    ASSERT_EQ(collectBackward(), rev);
+    verifyForwardKeys(fbt, N);
+    verifyBackwardKeys(fbt, N);
 
     /* Rank seeks must still land on the right elements after relocation. */
-    for (unsigned long r : {0UL, 1UL, (unsigned long)N / 2, (unsigned long)N - 1}) {
+    unsigned long ranks[] = {0, 1, N / 2, N - 1};
+    for (size_t k = 0; k < sizeof(ranks) / sizeof(ranks[0]); k++) {
+        unsigned long r = ranks[k];
         fbtreeIterator it;
         fbtreeInitIterator(&it, fbt);
         fbtreeSeekToRank(&it, r);
         const_sds pos = fbtreeNext(&it);
         ASSERT_NE(pos, nullptr) << "seek to rank " << r << " found nothing";
-        ASSERT_EQ(std::string(pos, sdslen(pos)), expected[r]) << "wrong element at rank " << r;
+        int len = snprintf(buf, sizeof(buf), "key_%08lu", r) + 1;
+        ASSERT_EQ(memcmp(pos, buf, len), 0) << "wrong element at rank " << r;
     }
 }
 
@@ -4497,14 +4520,14 @@ TEST_F(FbtreeTest, DefragScanRelocatesLeafStructs) {
  * root over inner nodes). Force-relocate all inner nodes, then the tree must
  * validate and iterate identically. */
 TEST_F(FbtreeTest, DefragNodesRelocatesInnerNodes) {
-    for (int n : {5, 100, 5000}) {
+    int shapes[] = {5, 100, 5000};
+    for (size_t s = 0; s < sizeof(shapes) / sizeof(shapes[0]); s++) {
+        int n = shapes[s];
         fbtreeIndex *tree = fbtreeCreate();
         char buf[32];
-        std::vector<std::string> expected;
         for (int i = 0; i < n; i++) {
             snprintf(buf, sizeof(buf), "key_%08d", i);
             fbtreeInsert(tree, createString(buf));
-            expected.emplace_back(buf, strlen(buf) + 1);
         }
 
         fbtreeDefragNodes(tree, fbtreeDefragForceRelocate);
@@ -4512,13 +4535,7 @@ TEST_F(FbtreeTest, DefragNodesRelocatesInnerNodes) {
         char err[256];
         ASSERT_TRUE(fbtreeDebugValidate(tree, false, err, sizeof(err))) << "n=" << n << ": " << err;
         ASSERT_EQ(fbtreeLength(tree), (unsigned long)n) << "n=" << n;
-
-        std::vector<std::string> fwd;
-        fbtreeIterator it;
-        fbtreeInitIterator(&it, tree);
-        const_sds pos;
-        while ((pos = fbtreeNext(&it)) != nullptr) fwd.emplace_back(pos, sdslen(pos));
-        ASSERT_EQ(fwd, expected) << "content changed for n=" << n;
+        verifyForwardKeys(tree, n);
 
         fbtreeFree(tree);
     }
@@ -4552,11 +4569,9 @@ TEST_F(FbtreeTest, DefragScanSweepVisitsEachItemOnce) {
 TEST_F(FbtreeTest, DefragScanPartialRelocation) {
     enum { N = 5000 };
     char buf[32];
-    std::vector<std::string> expected;
     for (int i = 0; i < N; i++) {
         snprintf(buf, sizeof(buf), "key_%08d", i);
         insert(buf);
-        expected.emplace_back(buf, strlen(buf) + 1);
     }
     g_fbtreeDefragCounter = 0;
     g_fbtreeDefragEveryN = 3;
@@ -4568,7 +4583,7 @@ TEST_F(FbtreeTest, DefragScanPartialRelocation) {
     } while (cursor != 0);
     char err[256];
     ASSERT_TRUE(fbtreeDebugValidate(fbt, false, err, sizeof(err))) << err;
-    ASSERT_EQ(collectForward(), expected);
+    verifyForwardKeys(fbt, N);
 }
 
 /* A no-op defragfn relocates nothing: the sweep must still terminate and leave
@@ -4580,7 +4595,6 @@ TEST_F(FbtreeTest, DefragScanNoRelocation) {
         snprintf(buf, sizeof(buf), "key_%08d", i);
         insert(buf);
     }
-    std::vector<std::string> before = collectForward();
     node *root_before = fbt->root;
     unsigned long cursor = 0;
     int guard = 0;
@@ -4589,26 +4603,35 @@ TEST_F(FbtreeTest, DefragScanNoRelocation) {
         ASSERT_LT(++guard, N + 100) << "sweep did not terminate";
     } while (cursor != 0);
     EXPECT_EQ(fbt->root, root_before) << "no-op defrag must not move the root";
-    ASSERT_EQ(collectForward(), before);
+    verifyForwardKeys(fbt, N);
 }
 
 /* A single-leaf tree is its own root: relocating that leaf in the scan must
  * repoint fbt->root (the depth==0 path). */
 TEST_F(FbtreeTest, DefragScanRelocatesRootLeaf) {
+    enum { N = 5 };
     char buf[32];
-    for (int i = 0; i < 5; i++) {
+    for (int i = 0; i < N; i++) {
         snprintf(buf, sizeof(buf), "k%04d", i);
         insert(buf);
     }
     ASSERT_TRUE(fbt->root->is_leaf) << "test needs a single-leaf tree";
-    std::vector<std::string> before = collectForward();
 
     unsigned long cursor = fbtreeDefragScan(fbt, 0, fbtreeDefragNoopItemCallback, NULL, fbtreeDefragForceRelocate);
     EXPECT_EQ(cursor, 0UL) << "single leaf is one sweep step";
     EXPECT_TRUE(fbt->root->is_leaf);
     char err[256];
     ASSERT_TRUE(fbtreeDebugValidate(fbt, false, err, sizeof(err))) << err;
-    ASSERT_EQ(collectForward(), before);
+
+    fbtreeIterator it;
+    fbtreeInitIterator(&it, fbt);
+    for (int i = 0; i < N; i++) {
+        const_sds pos = fbtreeNext(&it);
+        ASSERT_NE(pos, nullptr) << "missing element at index " << i;
+        int len = snprintf(buf, sizeof(buf), "k%04d", i) + 1;
+        ASSERT_EQ(memcmp(pos, buf, len), 0) << "content changed at index " << i;
+    }
+    ASSERT_EQ(fbtreeNext(&it), nullptr);
 }
 
 /* End-to-end: run the structural node pass then a full leaf/item sweep, both
@@ -4617,11 +4640,9 @@ TEST_F(FbtreeTest, DefragScanRelocatesRootLeaf) {
 TEST_F(FbtreeTest, DefragNodesThenScanEndToEnd) {
     enum { N = 5000 };
     char buf[32];
-    std::vector<std::string> expected;
     for (int i = 0; i < N; i++) {
         snprintf(buf, sizeof(buf), "key_%08d", i);
         insert(buf);
-        expected.emplace_back(buf, strlen(buf) + 1);
     }
 
     fbtreeDefragNodes(fbt, fbtreeDefragForceRelocate);
@@ -4634,17 +4655,19 @@ TEST_F(FbtreeTest, DefragNodesThenScanEndToEnd) {
 
     char err[256];
     ASSERT_TRUE(fbtreeDebugValidate(fbt, false, err, sizeof(err))) << err;
-    ASSERT_EQ(collectForward(), expected);
-    std::vector<std::string> rev = expected;
-    std::reverse(rev.begin(), rev.end());
-    ASSERT_EQ(collectBackward(), rev);
-    for (unsigned long r : {0UL, 1UL, (unsigned long)N / 2, (unsigned long)N - 1}) {
+    verifyForwardKeys(fbt, N);
+    verifyBackwardKeys(fbt, N);
+
+    unsigned long ranks[] = {0, 1, N / 2, N - 1};
+    for (size_t k = 0; k < sizeof(ranks) / sizeof(ranks[0]); k++) {
+        unsigned long r = ranks[k];
         fbtreeIterator it;
         fbtreeInitIterator(&it, fbt);
         fbtreeSeekToRank(&it, r);
         const_sds pos = fbtreeNext(&it);
         ASSERT_NE(pos, nullptr) << "seek to rank " << r;
-        ASSERT_EQ(std::string(pos, sdslen(pos)), expected[r]) << "wrong element at rank " << r;
+        int len = snprintf(buf, sizeof(buf), "key_%08lu", r) + 1;
+        ASSERT_EQ(memcmp(pos, buf, len), 0) << "wrong element at rank " << r;
     }
 }
 
@@ -4657,11 +4680,10 @@ TEST_F(FbtreeTest, DismissMemoryPreservesContent) {
         snprintf(buf, sizeof(buf), "key_%08d", i);
         insert(buf);
     }
-    std::vector<std::string> before = collectForward();
     fbtreeDismissMemory(fbt);
     char err[256];
     ASSERT_TRUE(fbtreeDebugValidate(fbt, false, err, sizeof(err))) << err;
-    ASSERT_EQ(collectForward(), before);
+    verifyForwardKeys(fbt, N);
 }
 
 /* ==========================================================================

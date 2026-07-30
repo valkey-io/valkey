@@ -139,7 +139,7 @@ static void *threadsaveProcessor(void *arg) {
         message = "TERMINATED";
     else if (err != C_OK)
         message = "***ERROR***";
-    serverLog(LL_NOTICE, "threadsave: background processor finished.  %ld items processed.  %s",
+    serverLog(LL_NOTICE, "threadsave: background processor finished. %ld items processed. %s",
               items, message);
 
     currentThreadsave = NULL;
@@ -152,11 +152,11 @@ static void cleanupSaveInfoAndEmitEndMetrics(threadsaveInfo *saveInfo) {
     if (saveInfo->terminated && saveInfo->err_code == C_OK) saveInfo->err_code = C_ERR;
     rdbRecordEndMetrics(RDB_BGSAVE_TYPE_THREAD, saveInfo->err_code, time(NULL));
     if (saveInfo->err_code == C_OK) {
-        serverLog(LL_NOTICE, "threadsave: threadsave complete.  %lld seconds.", (long long)server.rdb_save_time_last);
+        serverLog(LL_NOTICE, "threadsave: threadsave complete. %lld seconds.", (long long)server.rdb_save_time_last);
     } else if (saveInfo->terminated) {
-        serverLog(LL_WARNING, "threadsave: threadsave terminated.  %lld seconds.", (long long)server.rdb_save_time_last);
+        serverLog(LL_WARNING, "threadsave: threadsave terminated. %lld seconds.", (long long)server.rdb_save_time_last);
     } else {
-        serverLog(LL_WARNING, "threadsave: threadsave failed.  %lld seconds.", (long long)server.rdb_save_time_last);
+        serverLog(LL_WARNING, "threadsave: threadsave failed. %lld seconds.", (long long)server.rdb_save_time_last);
     }
     stopSaving(saveInfo->err_code == C_OK);
     currentThreadsave = NULL;
@@ -332,7 +332,7 @@ int threadsaveToDisk(const char *filename) {
 werr:
     saveInfo->err_code = C_ERR;
     rdbRecordEndMetrics(RDB_BGSAVE_TYPE_THREAD, C_ERR, time(NULL));
-    serverLog(LL_WARNING, "threadsave: threadsave failed.  %lld seconds.", (long long)server.rdb_save_time_last);
+    serverLog(LL_WARNING, "threadsave: threadsave failed. %lld seconds.", (long long)server.rdb_save_time_last);
     stopSaving(0);
     currentThreadsave = NULL;
 

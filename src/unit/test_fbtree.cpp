@@ -124,6 +124,9 @@ TEST_F(FbtreeTest, CreateAndFree) {
  * innerNode should fit in 2048-byte class, leafNode in 512-byte class.
  * This catches accidental struct bloat that wastes memory. */
 TEST_F(FbtreeTest, NodeAllocationSizes) {
+#ifndef USE_JEMALLOC
+    GTEST_SKIP() << "Node size-class check is jemalloc-specific";
+#endif
     void *inner_test = zmalloc(2048); /* sizeof(innerNode) rounds up to 2048 */
     void *leaf_test = zmalloc(512);   /* sizeof(leafNode) */
 

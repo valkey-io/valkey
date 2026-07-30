@@ -4742,10 +4742,26 @@ int processCommand(client *c) {
             c->flag.buffered_reply = 0;
             c->flag.keyspace_notified = 0;
 
+            /* Snapshot dirty so we can mirror call()'s dirty-based
+             * propagation if the dataset changes under this command. */
+            long long dirty_before = server.dirty;
+
             /* Execute the command */
             c->cmd->proc(c);
 
             exitExecutionUnit();
+
+            /* Mirror call()'s dirty-based propagation exactly: if the
+             * dataset changed while this command ran (e.g. a module
+             * keyspace-notification callback performed a write), call()
+             * would propagate the command verbatim after any queued module
+             * ops. Do the same so the fast path is observably identical to
+             * call() on the replication stream.
+             * NOTE: if upstream later stops replicating read commands in
+             * this situation, remove this block to match. */
+            if (server.dirty != dirty_before && !c->flag.prevent_prop && !(c->cmd->flags & CMD_MODULE)) {
+                alsoPropagate(c->db->id, c->argv, c->argc, PROPAGATE_AOF | PROPAGATE_REPL, c->slot);
+            }
 
             if (!c->flag.blocked) c->flag.executing_command = 0;
 

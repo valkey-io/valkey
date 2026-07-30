@@ -2033,6 +2033,120 @@ TEST_F(OrderedIndexTest, DismissMemoryWalksItems) {
     ASSERT_EQ(orderedIndexCountScoreRange(oi, NEG_INF, POS_INF, 0, 0), 200UL);
 }
 
+/* ========== Defrag tests (OrderedIndex layer) ========== */
+
+/* These exercise orderedIndexDefragInternals + orderedIndexScanDefrag  -- the
+ * wrappers defrag.c actually calls. The fbtree-layer tests cover node/leaf/item
+ * relocation mechanics; here we pin the interface seam: struct-pointer
+ * reassignment, cursor plumbing, and the item-relocation callback that defrag.c
+ * uses to repoint the companion hashtable.
+ *
+ * A defragfn that unconditionally relocates every allocation (copy to a fresh
+ * block, free the original) lets ASAN flag any stale reference the real
+ * jemalloc-hinted path would only expose under fragmentation. */
+
+static void *oiDefragForceRelocate(void *ptr) {
+    size_t sz = zmalloc_usable_size(ptr);
+    void *newptr = zmalloc(sz);
+    memcpy(newptr, ptr, sz);
+    zfree(ptr);
+    return newptr;
+}
+
+/* A defragfn that never relocates: the sweep must still terminate cleanly. */
+static void *oiDefragNoop(void *ptr) {
+    (void)ptr;
+    return NULL;
+}
+
+/* Counts item relocations reported to the scan. The pointers are recorded, not
+ * dereferenced: oiDefragForceRelocate frees the old block before the callback
+ * runs, so reading it would be a use-after-free -- which mirrors how defrag.c
+ * uses the old pointer only as a hashtable lookup key. */
+struct OIDefragRecord {
+    int count;
+};
+static void oiDefragCountingCallback(OrderedIndexItem *old_item, OrderedIndexItem *new_item, void *privdata) {
+    (void)old_item;
+    (void)new_item;
+    ((OIDefragRecord *)privdata)->count++;
+}
+
+/* Full two-phase defrag with everything relocating: the struct, inner nodes,
+ * leaves, and items all move. The callback must fire once per item (the bridge
+ * defrag.c relies on), and the index must stay valid and fully readable  -- which
+ * it can only be if every relocated pointer was patched through. */
+TEST_F(OrderedIndexTest, DefragRelocatesStructNodesLeavesAndItems) {
+    enum { N = 3000 };
+    for (int i = 0; i < N; i++) {
+        char buf[32];
+        snprintf(buf, sizeof(buf), "key%05d", i);
+        orderedIndexInsert(oi, (double)i, buf, strlen(buf));
+    }
+    verifyOI();
+
+    /* Phase A: relocate the index struct + every inner node. Reassign because
+     * the struct pointer itself may move. */
+    oi = orderedIndexDefragInternals(oi, oiDefragForceRelocate);
+    ASSERT_NE(oi, nullptr);
+
+    /* Phase B: sweep leaves + items, one leaf per call. */
+    OIDefragRecord rec = {0};
+    unsigned long cursor = 0;
+    do {
+        cursor = orderedIndexScanDefrag(oi, cursor, oiDefragCountingCallback, &rec, oiDefragForceRelocate);
+    } while (cursor != 0);
+
+    ASSERT_EQ((unsigned long)rec.count, (unsigned long)N); /* every item reported */
+    verifyOI();
+    ASSERT_EQ(orderedIndexLength(oi), (unsigned long)N);
+
+    /* Content intact after everything moved. */
+    for (int i = 0; i < N; i++) {
+        OrderedIndexItem *it = orderedIndexGetByIndex(oi, i);
+        char buf[32];
+        snprintf(buf, sizeof(buf), "key%05d", i);
+        assertScore(it, (double)i);
+        assertElement(it, buf);
+    }
+    ASSERT_EQ(orderedIndexCountScoreRange(oi, NEG_INF, POS_INF, 0, 0), (unsigned long)N);
+}
+
+/* A no-op defragfn moves nothing: the sweep must still traverse and terminate,
+ * the callback must never fire, and content must be untouched. */
+TEST_F(OrderedIndexTest, DefragNoRelocationLeavesIndexUntouched) {
+    populateSequential(500);
+    verifyOI();
+
+    oi = orderedIndexDefragInternals(oi, oiDefragNoop);
+    ASSERT_NE(oi, nullptr);
+
+    OIDefragRecord rec = {0};
+    unsigned long cursor = 0;
+    do {
+        cursor = orderedIndexScanDefrag(oi, cursor, oiDefragCountingCallback, &rec, oiDefragNoop);
+    } while (cursor != 0);
+
+    ASSERT_EQ(rec.count, 0); /* nothing moved -> callback never fires */
+    verifyOI();
+    ASSERT_EQ(orderedIndexLength(oi), 500UL);
+    ASSERT_EQ(orderedIndexCountScoreRange(oi, NEG_INF, POS_INF, 0, 0), 500UL);
+}
+
+/* Defrag on an empty index must be a clean no-op: the struct pass returns a
+ * usable index and the scan reports completion immediately. */
+TEST_F(OrderedIndexTest, DefragEmptyIndexIsNoop) {
+    oi = orderedIndexDefragInternals(oi, oiDefragForceRelocate);
+    ASSERT_NE(oi, nullptr);
+
+    OIDefragRecord rec = {0};
+    unsigned long cursor = orderedIndexScanDefrag(oi, 0, oiDefragCountingCallback, &rec, oiDefragForceRelocate);
+    ASSERT_EQ(cursor, 0UL);
+    ASSERT_EQ(rec.count, 0);
+    ASSERT_EQ(orderedIndexLength(oi), 0UL);
+    verifyOI();
+}
+
 /* ========== On-Delete Callback Tests ========== */
 
 struct OnDeleteRecord {

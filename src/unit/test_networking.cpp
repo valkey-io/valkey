@@ -167,6 +167,11 @@ class NetworkingTest : public ::testing::Test {
             server.repl_backlog = NULL;
         }
         if (server.repl_buffer_blocks) {
+            /* Test bodies free blocks and empty the list on the pass path;
+             * set the free method (as production does, replication.c) so any
+             * blocks still in the list after a fatal assertion failure are
+             * freed along with it. */
+            listSetFreeMethod(server.repl_buffer_blocks, zfree);
             listRelease(server.repl_buffer_blocks);
             server.repl_buffer_blocks = NULL;
         }

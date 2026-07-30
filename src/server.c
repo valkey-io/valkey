@@ -32,6 +32,7 @@
  * SPDX-License-Identifier: BSD-3-Clause
  */
 #include "server.h"
+#include "hotkey.h"
 #include "connection.h"
 #include "monotonic.h"
 #include "cluster.h"
@@ -3134,6 +3135,9 @@ void initServer(void) {
     applyWatchdogPeriod();
 
     if (server.maxmemory_clients != 0) initServerClientMemUsageBuckets();
+
+    /* Initialization hotkey */
+    hotkeyInit();
 }
 
 void initListeners(void) {

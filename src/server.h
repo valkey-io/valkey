@@ -2384,6 +2384,12 @@ struct valkeyServer {
     /* Local environment */
     char *locale_collate;
     char *debug_context; /* A free-form string that has no impact on server except being included in a crash report. */
+
+    /* Hotkey parameters */
+    int hotkey_sampling_percentage; /* Percentage (0-100) of key accesses sampled for hot-key detection; 0 disables it. */
+    int hotkey_top_k;               /* Number of top keys to track per type (Space-Saving K). */
+    int hotkey_window_seconds;      /* Length of the QPS accounting window in seconds. */
+    struct spaceSavingManager *hotkey_manager;
 };
 
 #define MAX_KEYS_BUFFER 256
@@ -4251,6 +4257,8 @@ void lcsCommand(client *c);
 void quitCommand(client *c);
 void resetCommand(client *c);
 void failoverCommand(client *c);
+void hotkeysGetCommand(client *c);
+void hotkeysResetCommand(client *c);
 
 /* Helper functions for getting database id args from argv, argc */
 int *selectDbIdArgs(robj **argv, int argc, int *count);

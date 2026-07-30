@@ -28,6 +28,7 @@
  */
 
 #include "server.h"
+#include "hotkey.h"
 #include "cluster.h"
 #include "cluster_migrateslots.h"
 #include "latency.h"
@@ -38,6 +39,24 @@
 #include "vector.h"
 #include "expire.h"
 #include "crc16_slottable.h"
+
+/* True when the current activity is a genuine client executing a command — a
+ * real client that is actually processing a command, and is not the replication
+ * link/AOF, and not RDB/AOF loading. Importing traffic is user-driven load and
+ * should be counted. Hot-key detection charges only such direct client activity.
+ */
+static inline int hotkeyShouldRecord(void) {
+    client *c = server.current_client;
+    return c != NULL && c->flag.executing_command && !mustObeyClient(c) && !server.loading;
+}
+
+/* Same as hotkeyShouldRecord(), but for the delete path:
+ * additionally require the deletion reason to be a genuine removal (DEL/UNLINK)
+ * rather than passive expiry or eviction (DB_FLAG_KEY_EXPIRED /
+ * DB_FLAG_KEY_EVICTED). */
+static inline int hotkeyShouldRecordDelete(int flags) {
+    return (flags & DB_FLAG_KEY_DELETED) && hotkeyShouldRecord();
+}
 
 /*-----------------------------------------------------------------------------
  * C-level DB API
@@ -120,6 +139,14 @@ robj *lookupKey(serverDb *db, robj *key, int flags) {
         if (!(flags & (LOOKUP_NONOTIFY | LOOKUP_WRITE))) notifyKeyspaceEvent(NOTIFY_KEY_MISS, "keymiss", key, db->id);
         if (!(flags & (LOOKUP_NOSTATS | LOOKUP_WRITE))) server.stat_keyspace_misses++;
         /* TODO: Use separate misses stats and notify event for WRITE */
+    }
+
+    /* If the hot key detection function is enabled and the hot key sampling rate is reached,
+     * hot key statistics will be performed. Skip lookups flagged LOOKUP_NOEFFECTS
+     * (introspection such as OBJECT/DEBUG), which are not real client accesses. */
+    if (hotkeyEnabled() && !(flags & LOOKUP_NOEFFECTS) && hotkeyShouldRecord() &&
+        bernoulliSampleHit(server.hotkey_sampling_percentage)) {
+        recordHotKeySample(key, db->id);
     }
 
     return val;
@@ -476,6 +503,13 @@ int dbGenericDeleteWithDictIndex(serverDb *db, robj *key, int async, int flags, 
     hashtablePosition pos;
     void **ref = kvstoreHashtableTwoPhasePopFindRef(db->keys, dict_index, objectGetVal(key), &pos);
     if (ref != NULL) {
+        /* Charge a write access only for a genuine client-issued DEL/UNLINK —
+         * not passive expiry, eviction, the replication stream, an importing
+         * client, or RDB/AOF loading. */
+        if (hotkeyEnabled() && hotkeyShouldRecordDelete(flags) &&
+            bernoulliSampleHit(server.hotkey_sampling_percentage)) {
+            recordHotKeySample(key, db->id);
+        }
         robj *val = *ref;
         /* VM_StringDMA may call dbUnshareStringValue which may free val, so we
          * need to incr to retain val */
@@ -683,6 +717,13 @@ long long emptyData(int dbnum, int flags, void(callback)(hashtable *)) {
 
     /* Empty the database structure. */
     removed = emptyDbStructure(server.db, dbnum, async, callback);
+
+    if (hotkeyEnabled()) {
+        if (dbnum == -1)
+            hotkeyPurgeAll();
+        else
+            hotkeyPurgeDb(dbnum);
+    }
 
     if (dbnum == -1) flushReplicaKeysWithExpireList(async);
 

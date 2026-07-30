@@ -390,16 +390,25 @@ int clusterRDBSaveSlotImports(rio *rdb, int rdbver) {
 
 /* Load a single slot import from the RDB. */
 int clusterRDBLoadSlotImport(rio *rdb) {
-    robj *job_name;
+    robj *job_name = NULL;
     list *slot_ranges = createSlotRangeList();
     uint64_t num_slot_ranges;
     if ((job_name = rdbLoadStringObject(rdb)) == NULL) goto err;
+    if (sdslen(objectGetVal(job_name)) != CLUSTER_NAMELEN) {
+        serverLog(LL_WARNING, "Invalid slot import job name length in RDB");
+        goto err;
+    }
     if ((num_slot_ranges = rdbLoadLen(rdb, NULL)) == RDB_LENERR) goto err;
     for (uint64_t i = 0; i < num_slot_ranges; i++) {
         uint64_t start_slot;
         uint64_t end_slot;
         if ((start_slot = rdbLoadLen(rdb, NULL)) == RDB_LENERR) goto err;
         if ((end_slot = rdbLoadLen(rdb, NULL)) == RDB_LENERR) goto err;
+        if (start_slot >= CLUSTER_SLOTS || end_slot >= CLUSTER_SLOTS || start_slot > end_slot) {
+            serverLog(LL_WARNING, "Invalid slot import range in RDB: start=%llu end=%llu",
+                      (unsigned long long)start_slot, (unsigned long long)end_slot);
+            goto err;
+        }
 
         slotRange *slot_range = zmalloc(sizeof(slotRange));
         slot_range->start_slot = start_slot;

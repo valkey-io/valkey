@@ -790,15 +790,6 @@ hashtableType kvstoreChannelHashtableType = {
     .getMetadataSize = kvstoreHashtableMetadataSize,
 };
 
-/* Modules system dictionary type. Keys are module name,
- * values are pointer to ValkeyModule struct. */
-dictType modulesDictType = {
-    .entryGetKey = dictEntryGetKey,
-    .hashFunction = dictSdsCaseHash,
-    .keyCompare = dictSdsKeyCaseCompare,
-    .entryDestructor = dictEntryDestructorSdsKey,
-};
-
 /* Migrate cache dict type. */
 dictType migrateCacheDictType = {
     .entryGetKey = dictEntryGetKey,

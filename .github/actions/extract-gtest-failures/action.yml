@@ -1,0 +1,172 @@
+name: 'Extract GTest Failures'
+description: 'Parse gtest-parallel JSON results into the test-failures schema'
+inputs:
+  results-file:
+    description: 'Path to the gtest-parallel JSON dump, relative to the workspace'
+    required: false
+    default: 'gtest-results.json'
+runs:
+  using: 'composite'
+  steps:
+    - name: Extract gtest failures to JSON
+      shell: bash
+      env:
+        GTEST_RESULTS_FILE: ${{ inputs.results-file }}
+      run: |
+        python3 << 'EOF'
+        import glob, json, os, re
+
+        os.makedirs("test-failures", exist_ok=True)
+        results_file = "test-failures/unittest.json"
+        failures = []
+
+        # Largest per-failure error text carried in the artifact, matching the
+        # Tcl side's ::max_failure_error_chars. A verbose ASAN/UBSAN dump can run
+        # to megabytes; the head holds the assertion and first stack that
+        # identify the failure. Keeping the rest bloats the artifact and can push
+        # a filed issue past GitHub's 65536-char body limit.
+        _MAX_ERROR_CHARS = 65536
+
+        # gtest-parallel keeps each test's console log under
+        # <output_dir>/gtest-parallel-logs/<outcome>/, named
+        # <binary>-<test_name>-<n>.log with non-alphanumerics replaced by "_".
+        # The Makefile sets --output_dir to the results file's directory, so the
+        # logs sit beside it. The dump records only PASS/FAIL/TIMEOUT, so the
+        # failure text comes from these logs.
+        _NORMALIZE_RE = re.compile(r"[^A-Za-z0-9]")
+        _EXECUTION_NUMBER_RE = re.compile(r"-(\d+)\.log$")
+
+        # gtest-parallel files each attempt's log by how that attempt ended: a
+        # failure lands in failed/, a test the watchdog killed in timed_out/,
+        # and one still running when the run stopped in interrupted/. All three
+        # are searched, since a timeout's log is never in failed/ and its
+        # verdict is reported the same way. Each attempt is filed separately, so
+        # a test that failed once and then timed out has a log in two of these.
+        _LOG_DIRS = ("failed", "timed_out", "interrupted")
+
+        def failed_log_text(gtest_json, test_name):
+            """Return the console log for a failed test, or "" if not found.
+
+            The execution number in the filename varies with retries, so match
+            the normalized test name and take the highest-numbered log (the
+            last attempt). Reading is best-effort: a missing or unreadable log
+            leaves the error text empty rather than failing extraction.
+            """
+            logs_root = os.path.join(
+                os.path.dirname(gtest_json) or ".", "gtest-parallel-logs"
+            )
+            token = _NORMALIZE_RE.sub("_", test_name)
+            matches = []
+            for outcome in _LOG_DIRS:
+                matches.extend(
+                    glob.glob(os.path.join(logs_root, outcome, f"*-{token}-*.log"))
+                )
+            if not matches:
+                return ""
+
+            # Order by the trailing execution number, not by path: the numbers
+            # are unpadded, so "-10.log" sorts before "-2.log" as text, and the
+            # candidates now come from several directories.
+            def execution_number(path):
+                match = _EXECUTION_NUMBER_RE.search(os.path.basename(path))
+                return int(match.group(1)) if match else 0
+
+            last_attempt = max(matches, key=execution_number)
+            try:
+                with open(last_attempt, encoding="utf-8", errors="replace") as f:
+                    text = f.read().strip()
+            except OSError:
+                return ""
+            if len(text) > _MAX_ERROR_CHARS:
+                text = text[:_MAX_ERROR_CHARS] + "\n... (truncated)"
+            return text
+
+        def write_and_exit(message):
+            """Record no failures and stop, leaving the suite file in place.
+
+            The consolidate step reads each suite file, so bailing out without
+            one would drop the unittest suite with nothing to say why.
+            """
+            with open(results_file, "w") as f:
+                json.dump([], f)
+            print(message)
+            exit(0)
+
+        gtest_json = os.environ.get("GTEST_RESULTS_FILE") or "gtest-results.json"
+        if not os.path.exists(gtest_json):
+            # Some jobs run the unit tests without asking for a dump. Writing an
+            # empty suite for them would report a unittest suite that passed when
+            # its results were never collected, so leave the suite absent.
+            print("No gtest results file; this job collected no unit-test results.")
+            exit(0)
+
+        # gtest-parallel writes the dump only once, after every test finishes,
+        # so a run killed partway through (OOM, job timeout) leaves it empty or
+        # truncated. That says nothing about whether tests failed, so report it
+        # and move on rather than failing the step.
+        try:
+            with open(gtest_json) as f:
+                data = json.load(f)
+        except (OSError, ValueError) as exc:
+            write_and_exit(f"Could not read {gtest_json}: {exc}")
+
+        if not isinstance(data, dict):
+            write_and_exit(
+                f"Unexpected {gtest_json} format: expected an object, got "
+                f"{type(data).__name__}."
+            )
+
+        # gtest-parallel --dump_json_test_results produces:
+        # {"tests": {"TestSuite.TestName": {"actual": "PASS|FAIL|TIMEOUT", ...}, ...}}
+        # or nested: {"tests": {"Suite": {"Test": {"actual": "...", ...}}}}
+        # gtest-parallel records one of PASS, FAIL, or TIMEOUT per attempt.
+        FAILURE_TYPES = {"FAIL": "unittest", "TIMEOUT": "timeout"}
+
+        def walk_tests(node, prefix=""):
+            """Recursively walk the test results structure."""
+            for key, value in node.items():
+                if not isinstance(value, dict):
+                    continue
+                if "actual" not in value:
+                    new_prefix = f"{prefix}{key}." if prefix else f"{key}."
+                    walk_tests(value, new_prefix)
+                    continue
+                full_name = f"{prefix}{key}" if prefix else key
+                # "actual" accumulates one token per attempt ("FAIL FAIL
+                # PASS"); the last token is the final outcome, so a test that
+                # passed on retry is not reported. It can be empty for a test
+                # interrupted before any attempt, and a non-string if the dump
+                # is damaged; neither may abort the whole extraction.
+                actual_field = value.get("actual")
+                if not isinstance(actual_field, str):
+                    continue
+                outcomes = actual_field.split()
+                if not outcomes:
+                    continue
+                ftype = FAILURE_TYPES.get(outcomes[-1])
+                if ftype is None:
+                    continue
+                error = failed_log_text(gtest_json, full_name)
+                failures.append({
+                    "test_name": full_name,
+                    "test_file": "src/unit/valkey-unit-gtests",
+                    "type": ftype,
+                    "error": error or f"gtest {outcomes[-1]}",
+                })
+
+        tests = data.get("tests", data)
+        if not isinstance(tests, dict):
+            write_and_exit(
+                f"Unexpected {gtest_json} tests field: expected an object, got "
+                f"{type(tests).__name__}."
+            )
+        walk_tests(tests)
+
+        with open(results_file, "w") as f:
+            json.dump(failures, f, indent=2)
+
+        if failures:
+            print(f"Found {len(failures)} gtest failure(s)")
+        else:
+            print("No gtest failures")
+        EOF

@@ -400,23 +400,34 @@ proc test_server_cron {} {
         set err "\[[colorstr red TIMEOUT]\]: clients state report follows."
         puts $err
         foreach fd $::active_clients {
-            if {[info exist ::active_clients_task($fd)]} {
-                set task $::active_clients_task($fd)
-                set test_name [regsub {^\([^)]*\)\s*} $task {}]
-                set test_name [regsub {\s*\(pid\s+\d+\)\s*$} $test_name {}]
-                if {![string length [string trim $test_name]] && \
-                    [regexp {\(([^()]*)\)$} $task -> tn]} {
-                    set test_name $tn
-                }
-                set test_name [string trim $test_name]
-                if {[string length $test_name]} {
-                    set file {}
-                    if {[info exist ::active_clients_file($fd)]} {
-                        set file $::active_clients_file($fd)
-                    }
-                    lappend ::failed_tests "\[[colorstr red TIMEOUT]\]: $test_name in $file"
-                    incr ::err_count
-                }
+            if {![info exist ::active_clients_task($fd)]} {
+                continue
+            }
+            set task $::active_clients_task($fd)
+            set file {}
+            if {[info exist ::active_clients_file($fd)]} {
+                set file $::active_clients_file($fd)
+            }
+            if {[regexp {^\(IN PROGRESS\)\s*(.+)$} $task -> test_name]} {
+                # A test body was running: attribute the timeout to it.
+                # Strip the volatile "(pid N)" suffix some test names carry
+                # so the same timeout has a stable identity across runs.
+                set test_name [string trim [regsub {\s*\(pid\s+\d+\)\s*$} $test_name {}]]
+                lappend ::failed_tests [list "\[[colorstr red TIMEOUT]\]: $test_name in $file" "timeout" $file]
+                incr ::err_count
+            } elseif {[string match {(ERR)*} $task]} {
+                # This client's failure is already in ::failed_tests; the
+                # hang is a consequence of it, not a separate failure. Its
+                # payload is an error blob, not a test name.
+            } elseif {[string length $file]} {
+                # No test body was running (server spawn/kill, between tests).
+                # The task payload (pids, fds) is too volatile to be a test
+                # name, so the hang is reported against the file. The state goes
+                # in the message after the file, where the consumer keeps it as
+                # error text; before it, the name regex would capture the word
+                # "hang" and drop the state entirely.
+                lappend ::failed_tests [list "\[[colorstr red TIMEOUT]\]: hang in $file last state: $task" "timeout" $file]
+                incr ::err_count
             }
         }
         show_clients_state
@@ -487,7 +498,11 @@ proc read_from_test_client fd {
     } elseif {$status eq {err}} {
         set err "\[[colorstr red $status]\]: $data"
         puts $err
-        lappend ::failed_tests $err
+        set ctx_file ""
+        if {[info exist ::active_clients_file($fd)]} {
+            set ctx_file $::active_clients_file($fd)
+        }
+        lappend ::failed_tests [list $err "" $ctx_file]
         incr ::err_count
         set ::active_clients_task($fd) "(ERR) $data"
         if {$::exit_on_failure} {
@@ -501,9 +516,24 @@ proc read_from_test_client fd {
         }
     } elseif {$status eq {exception}} {
         puts "\[[colorstr red $status]\]: $data"
+        # restart_server raises on a startup status it cannot recover from, to
+        # stop the client rather than hand it a dead server. When that status is
+        # "reported", wait_server_started already sent the err packet naming the
+        # cause, so recording this raise too would file a second entry for one
+        # dead server: a "startup" against the test file and an "exception"
+        # against none. Those get different identities, so the detector reports
+        # them as two failures. Same reasoning as the "(ERR)" timeout branch
+        # above: a consequence of a recorded failure is not itself one.
+        if {![string match {*Restarted server did not come up: reported*} $data]} {
+            lappend ::failed_tests [list "\[[colorstr red exception]\]: $data" "exception" ""]
+        }
+        incr ::err_count
         if {[catch {write_test_failures} err]} {
             puts "Warning: Failed to write test failures: $err"
         }
+        # This path exits without reaching the_end, so print the summary here or
+        # the run's last word is the raw exception and the count goes unreported.
+        print_test_summary
         kill_clients
         force_kill_all_servers
         exit 1
@@ -635,31 +665,104 @@ proc write_test_failures {} {
     }
 
     set failures {}
-    foreach failed $::failed_tests {
-        if {[string match {*\[*TIMEOUT*\]*} $failed]} continue
-        if {[string match {*Sanitizer error*} $failed]} continue
-        if {[string match {*Valgrind error*} $failed]} continue
-        if {[string match {*Can't start*} $failed]} continue
-        if {[string match {*Check for memory leaks*} $failed]} continue
+    foreach record $::failed_tests {
+        # Each record is {message type-hint file}. The type hint and file are
+        # captured at failure time; classification below refines the type by
+        # matching on the message.
+        set failed [lindex $record 0]
+        set ctx_type [lindex $record 1]
+        set ctx_file [lindex $record 2]
 
-        set status "err"
+        # Strip ANSI color codes so pattern matching and the regexes below
+        # work whether or not the message was colorized (color_term is on
+        # under an xterm TERM, e.g. local runs).
+        set failed [regsub -all {\x1b\[[0-9;]*m} $failed {}]
+
+        set type "assertion"
         set test_name ""
         set test_file ""
         set error_msg ""
 
-        if {[regexp {\[(\w+)\]:\s*(.+?)\s+in\s+(tests/\S+\.tcl)\s*(.*)} $failed -> status test_name test_file error_msg]} {
-            # Successfully parsed
+        # Strip the leading status tag, e.g. "[err]: ". The character class
+        # matters: with a non-greedy ".*?" the shortest overall match wins and
+        # the trailing "\s*" matches nothing, leaving the separator space at
+        # the front of every stripped message.
+        set stripped [regsub {^\[[^\]]*\]:\s*} $failed {}]
+
+        # Classify the failure. The type hint captured at failure time is
+        # authoritative and is checked first: an exception's message text can
+        # contain any of the markers below.
+        #
+        # Markers are anchored to the start of the message, never globbed. A
+        # loose glob also matches a test whose own name or output contains one:
+        # two tests in tests/unit/moduleapi/blockonkeys.tcl carry TIMEOUT, and
+        # tests/modules/blockonbackground.c replies "Can't start thread". Those
+        # would be filed under the marker's type and lose their test identity.
+        if {$ctx_type eq "exception"} {
+            set type "exception"
+            set test_name ""
+            set test_file ""
+            set error_msg $stripped
+        } elseif {[regexp {^\[TIMEOUT\]:} $failed]} {
+            set type "timeout"
+            if {[regexp {\[TIMEOUT\]:\s*(.+?)\s+in\s+(tests/\S+\.tcl)\s*(.*)} $failed -> test_name test_file tail]} {
+                # Anything after the file is the runner's last-known state for a
+                # hang with no test body running. Keep it: it is the only clue
+                # to what the client was doing.
+                set error_msg [expr {$tail eq "" ? "Test timed out" : "Test timed out, $tail"}]
+            } else {
+                set test_name ""
+                set test_file $ctx_file
+                set error_msg $failed
+            }
+        } elseif {[regexp {^Valgrind error:} $stripped]} {
+            set type "valgrind"
+            set test_name ""
+            set test_file $ctx_file
+            set error_msg $stripped
+        } elseif {[regexp {^Sanitizer error:} $stripped]} {
+            set type "sanitizer"
+            set test_name ""
+            set test_file $ctx_file
+            set error_msg $stripped
+        } elseif {[regexp {^Can't start\s} $stripped]} {
+            set type "startup"
+            set test_name ""
+            set test_file $ctx_file
+            set error_msg $stripped
+        } elseif {[regexp {\[(\w+)\]:\s*(.+?)\s+in\s+(tests/\S+\.tcl)\s*(.*)} $failed -> _status test_name test_file error_msg]} {
+            # Standard assertion failure: [err]: <test_name> in <test_file>.
+            # The leak check is one of these, but its name is the same for every
+            # server a file starts ("Check for memory leaks (pid N)"), so it
+            # identifies the check rather than the leak. Dropping the pid alone
+            # would leave one name shared by every leak in the file, collapsing
+            # distinct leaks into one report. Emit it nameless instead: the
+            # detector then keys on the report's own root allocation site, which
+            # is the only part that says which code path leaked.
+            if {[string match {Check for memory leaks*} $test_name]} {
+                set type "memory-leak"
+                set test_name ""
+            } else {
+                set type "assertion"
+            }
         } else {
-            set test_name $failed
-            set test_file "unknown"
-            set error_msg $failed
+            # No known pattern and not the standard assertion format:
+            # classify as exception (the catch-all for unexpected errors)
+            # with no test identity, so the detector groups recurrences by
+            # normalized error text rather than the volatile raw string.
+            set type "exception"
+            set test_name ""
+            set test_file $ctx_file
+            set error_msg $stripped
         }
 
-        foreach var {test_name test_file error_msg status} {
+        set error_msg [truncate_failure_error $error_msg $::max_failure_error_chars]
+
+        foreach var {test_name test_file error_msg type} {
             set $var [json_escape_string [set $var]]
         }
 
-        lappend failures "\{\"test_name\":\"$test_name\",\"test_file\":\"$test_file\",\"status\":\"$status\",\"error\":\"$error_msg\"\}"
+        lappend failures "\{\"test_name\":\"$test_name\",\"test_file\":\"$test_file\",\"type\":\"$type\",\"error\":\"$error_msg\"\}"
     }
 
     set outdir [file dirname $::failures_output_file]
@@ -667,10 +770,11 @@ proc write_test_failures {} {
         file mkdir $outdir
     }
     set fp [open $::failures_output_file w]
-    # JSON is UTF-8. Left on the system encoding, which some CI containers set
-    # to a single-byte locale, a non-ASCII byte in a message is written in that
-    # encoding and the consumer cannot decode the file.
-    fconfigure $fp -encoding utf-8
+    # Failure text arrives over a -translation binary socket, so it is already a
+    # byte string. Writing it through an encoding would re-encode each byte and
+    # corrupt any non-ASCII the server logged; passing the bytes through leaves
+    # the UTF-8 the server emitted intact, which is what the consumer expects.
+    fconfigure $fp -translation binary
     puts $fp "\[[join $failures ","]\]"
     close $fp
 }
@@ -691,8 +795,8 @@ proc the_end {} {
 
     if {[llength $::failed_tests]} {
         puts "\n[colorstr bold-red {!!! WARNING}] The following tests failed:\n"
-        foreach failed $::failed_tests {
-            puts "*** $failed"
+        foreach record $::failed_tests {
+            puts "*** [lindex $record 0]"
         }
         if {!$::dont_clean} cleanup
         exit 1

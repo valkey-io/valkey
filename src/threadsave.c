@@ -202,7 +202,7 @@ static void threadsaveCloseSnapshotFile(void *args[]) {
     mutexQueueAdd(saveInfo->foreground_queue, (void *)PROCESS_COMPLETE_ITEM);
 }
 
-/* Timer proc which runs in the main redis event loop. It monitors to see when the background thread
+/* Timer proc which runs in the main valkey event loop. It monitors to see when the background thread
  * completes the action to close and rename the snapshot file at the end of disk based threadsave,
  * and performs the final clean-up actions. */
 static long long snapshotEndMonitorTimeProc(struct aeEventLoop *eventLoop, long long id, void *clientData) {

@@ -2384,7 +2384,7 @@ void initServerConfig(void) {
     server.primary_initial_offset = -1;
     server.repl_state = REPL_STATE_NONE;
     server.repl_rdb_channel_state = REPL_DUAL_CHANNEL_STATE_NONE;
-    server.cluster_syncing_from_sibling = 0;
+    server.cluster_syncing_from_sibling = false;
     server.cluster_sync_sibling_initial_offset = -1;
     server.cluster_sync_sibling_target_offset = -1;
     server.repl_transfer_tmpfile = NULL;

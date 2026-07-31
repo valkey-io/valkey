@@ -6895,17 +6895,19 @@ static inline void removeAllNotOwnedShardChannelSubscriptions(void) {
  * REPLICA nodes handling
  * -------------------------------------------------------------------------- */
 
-/* Abort a transient sync-from-replica sibling sync when this node leaves replica
- * mode. Invoked from both the cluster reconfiguration path (clusterSetPrimary)
- * and the CLUSTER REPLICATE NO ONE promotion path, so the sibling target is
- * always cleared and replication is redirected back to the real primary (or
- * torn down). This avoids relying on replicationUnsetPrimary()'s internal
- * cleanup, which does not clear the guard flag in every replication state (e.g.
- * REPL_STATE_CONNECT). Safe to call when no sibling sync is in progress. */
-static void clusterAbortSiblingSyncIfActive(void) {
+/* Discard a transient sync-from-replica sibling sync when a topology change
+ * supersedes it. Invoked from both the cluster reconfiguration path
+ * (clusterSetPrimary) and the CLUSTER REPLICATE NO ONE promotion path; each
+ * establishes its own replication target right after (replicationSetPrimary()
+ * and replicationUnsetPrimary() respectively), so the sibling state is
+ * discarded rather than redirected. This avoids relying on
+ * replicationUnsetPrimary()'s internal cleanup, which does not clear the guard
+ * flag in every replication state (e.g. REPL_STATE_CONNECT). Safe to call when
+ * no sibling sync is in progress. */
+static void clusterDiscardSiblingSyncIfActive(void) {
     if (server.cluster_syncing_from_sibling) {
-        serverLog(LL_NOTICE, "Sync-from-replica: aborting sibling sync because this node is leaving replica mode");
-        replicationAbortSiblingSync();
+        serverLog(LL_NOTICE, "Sync-from-replica: discarding sibling sync because the topology changed");
+        replicationDiscardSiblingSync();
     }
 }
 
@@ -6915,8 +6917,9 @@ static void clusterSetPrimary(clusterNode *n, int closeSlots, int full_sync_requ
     serverAssert(n != myself);
     serverAssert(myself->numslots == 0);
 
-    /* Topology changes supersede the transient sibling sync target. */
-    clusterAbortSiblingSyncIfActive();
+    /* Topology changes supersede the transient sibling sync target;
+     * replicationSetPrimary() below establishes the new target. */
+    clusterDiscardSiblingSyncIfActive();
 
     if (clusterNodeIsPrimary(myself)) {
         myself->flags &= ~(CLUSTER_NODE_PRIMARY | CLUSTER_NODE_MIGRATE_TO);
@@ -8215,8 +8218,8 @@ int clusterCommandSpecial(client *c) {
              * Unlike clusterSetPrimary(), this promotion path does not go
              * through replicationSetPrimary(), and replicationUnsetPrimary()
              * does not clear the guard flag in every replication state (e.g.
-             * REPL_STATE_CONNECT), so abort the sibling sync explicitly here. */
-            clusterAbortSiblingSyncIfActive();
+             * REPL_STATE_CONNECT), so discard the sibling sync explicitly here. */
+            clusterDiscardSiblingSyncIfActive();
             clusterSetNodeAsPrimary(myself);
             flushAllDataAndResetRDB(server.repl_replica_lazy_flush ? EMPTYDB_ASYNC : EMPTYDB_NO_FLAGS);
             verifyClusterConfigWithData();
@@ -8278,8 +8281,16 @@ int clusterCommandSpecial(client *c) {
 
         /* Try to seed this replica from a sibling while keeping the cluster
          * topology pointed at n. The final reconnect to n uses PSYNC with n's
-         * replication ID. */
-        if (server.repl_prefer_sync_from_replica && n->num_replicas > 0 && n->replicas) {
+         * replication ID.
+         *
+         * Selection is a deterministic argmax over gossip repl_offset, so
+         * several nodes joining around the same time converge on the same
+         * sibling and serialize behind its BGSAVEs (e.g. fleet patching that
+         * replaces several replicas of one shard in quick succession).
+         * Joiners arriving within the repl-diskless-sync-delay window still
+         * share one fork. Spreading the load (randomized tie-breaking among
+         * near-tied offsets, or primary-side selection) is future work. */
+        if (server.cluster_prefer_sync_from_replica && n->num_replicas > 0 && n->replicas) {
             clusterNode *best_sibling = NULL;
             long long best_offset = -1;
 
@@ -8311,7 +8322,7 @@ int clusterCommandSpecial(client *c) {
                 server.primary_host = sdsnew(best_sibling->ip);
                 server.primary_port = sibling_port;
                 /* cancelReplicationHandshake() may clear this flag. */
-                server.cluster_syncing_from_sibling = 1;
+                server.cluster_syncing_from_sibling = true;
                 server.cluster_sync_sibling_initial_offset = -1;
                 server.cluster_sync_sibling_target_offset = -1;
                 serverLog(LL_NOTICE,

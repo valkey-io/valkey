@@ -1255,7 +1255,7 @@ void syncCommand(client *c) {
         client *replica;
         listNode *ln;
         listIter li;
-        int rdbonly_mismatch = 0;
+        int rdbonly_no_share = 0;
 
         listRewind(server.replicas, &li);
         while ((ln = listNext(&li))) {
@@ -1264,11 +1264,13 @@ void syncCommand(client *c) {
              * a replica without replication buffer. */
             if (replica->repl_data->repl_state != REPLICA_STATE_WAIT_BGSAVE_END)
                 continue;
-            /* The FULLRESYNC offset must describe the RDB snapshot being sent.
-             * rdb-only and non-rdb-only replicas handle buffered changes
-             * differently, so they cannot share a BGSAVE. */
-            if (c->flag.repl_rdbonly != replica->flag.repl_rdbonly) {
-                rdbonly_mismatch = 1;
+            /* The FULLRESYNC offset must describe the RDB snapshot being
+             * sent, which only holds when the attaching replica gets the
+             * trigger's output buffer copied below. rdb-only requesters skip
+             * that copy and an rdb-only trigger has no buffer to copy from,
+             * so rdb-only syncs never share a BGSAVE in either direction. */
+            if (c->flag.repl_rdbonly || replica->flag.repl_rdbonly) {
+                rdbonly_no_share = 1;
                 continue;
             }
             if ((c->repl_data->replica_capa & replica->repl_data->replica_capa) == replica->repl_data->replica_capa &&
@@ -1282,9 +1284,9 @@ void syncCommand(client *c) {
             if (!c->flag.repl_rdbonly) copyReplicaOutputBuffer(c, replica);
             replicationSetupReplicaForFullResync(c, replica->repl_data->psync_initial_offset);
             serverLog(LL_NOTICE, "Waiting for end of BGSAVE for SYNC");
-        } else if (rdbonly_mismatch) {
+        } else if (rdbonly_no_share) {
             serverLog(LL_NOTICE,
-                      "rdb-only and non-rdb-only sync cannot share the same BGSAVE. "
+                      "rdb-only sync cannot share an in-progress BGSAVE. "
                       "Waiting for next BGSAVE for SYNC");
         } else {
             /* No way, we need to wait for the next BGSAVE in order to
@@ -3076,7 +3078,10 @@ void replicationAbortDualChannelSyncTransfer(void) {
 }
 
 /* ---------------------------------------------------------------------------
- * Sync-from-replica: chain approach (P->S->N).
+ * Sync-from-replica: chain approach (P->S->N), where
+ *   P = the cluster primary,
+ *   S = an in-sync sibling replica of P serving as the temporary sync source,
+ *   N = this node, the newly joining replica.
  *
  * Instead of a separate side-channel, N does standard replication from S.
  * S does BGSAVE, sends RDB, and forwards P's stream.
@@ -3085,33 +3090,48 @@ void replicationAbortDualChannelSyncTransfer(void) {
  * --------------------------------------------------------------------------- */
 
 static void replicationClearSiblingSyncState(void) {
-    server.cluster_syncing_from_sibling = 0;
+    server.cluster_syncing_from_sibling = false;
     server.cluster_sync_sibling_initial_offset = -1;
     server.cluster_sync_sibling_target_offset = -1;
 }
 
+/* Forget a transient sibling sync without redirecting primary_host. For
+ * callers that supersede the sibling target themselves: a topology change
+ * establishes a new primary via replicationSetPrimary(), and a promotion
+ * tears replication down via replicationUnsetPrimary(). Unlike
+ * replicationAbortSiblingSync() this cannot fail, since no fallback target
+ * is needed. */
+void replicationDiscardSiblingSync(void) {
+    if (!server.cluster_syncing_from_sibling) return;
+    serverLog(LL_NOTICE, "Sync-from-replica: discarding sibling sync state");
+    replicationClearSiblingSyncState();
+}
+
 /* Cancel an in-progress sibling sync and redirect primary_host back to the
- * primary in the cluster topology. Safe if no sibling sync is active; outside
- * cluster mode there is no topology primary to redirect to. */
+ * primary in the cluster topology. Safe if no sibling sync is active.
+ *
+ * Returns C_ERR without changing any state when the cluster topology has no
+ * primary for this node: there is nothing to fall back to, so the sibling
+ * remains the replication target and the guard flag stays set. INFO and the
+ * failover checks key off that flag, so it must keep reflecting that the node
+ * still depends on the sibling. Callers that need a different target must
+ * establish it themselves (see clusterSetPrimary()). */
 int replicationAbortSiblingSync(void) {
     if (!server.cluster_syncing_from_sibling) return C_OK;
-
-    serverLog(LL_NOTICE,
-              "Sync-from-replica: aborting sibling sync, falling back to primary");
-    replicationClearSiblingSyncState();
 
     clusterNode *pn = NULL;
     if (server.cluster_enabled && server.cluster)
         pn = server.cluster->myself->replicaof;
     if (pn == NULL) {
         serverLog(LL_WARNING,
-                  "Sync-from-replica: cannot fall back because no cluster primary is known");
-        sdsfree(server.primary_host);
-        server.primary_host = NULL;
-        server.primary_port = 0;
+                  "Sync-from-replica: cannot fall back because no cluster primary is known, "
+                  "keeping the sibling as replication target");
         return C_ERR;
     }
 
+    serverLog(LL_NOTICE,
+              "Sync-from-replica: aborting sibling sync, falling back to primary");
+    replicationClearSiblingSyncState();
     sdsfree(server.primary_host);
     server.primary_host = sdsnew(pn->ip);
     server.primary_port = getNodeDefaultReplicationPort(pn);
@@ -3131,8 +3151,10 @@ static void replicationArmSwitchToPrimaryAfterSiblingSync(void) {
         return;
 
     server.cluster_sync_sibling_initial_offset = server.primary->repl_data->reploff;
-    /* Freeze the catch-up target once. Any primary writes after this point
-     * are covered by the final PSYNC to the real primary. */
+    /* Freeze the catch-up target once, at arm time. Chasing a live offset
+     * would move the goalpost on every write and under sustained traffic the
+     * switch would never fire. Anything the real primary writes after this
+     * point is covered by the final PSYNC to it, so a fixed target is safe. */
     server.cluster_sync_sibling_target_offset = server.cluster_sync_sibling_initial_offset;
     clusterNode *pn = server.cluster->myself->replicaof;
     if (pn && pn->repl_offset > server.cluster_sync_sibling_target_offset) {
@@ -3146,14 +3168,14 @@ static void replicationArmSwitchToPrimaryAfterSiblingSync(void) {
     readQueryFromClient(server.primary->conn);
 }
 
-static int primaryAtAppliedCommandBoundary(client *c) {
-    if (c == NULL || c->flag.close_asap || c->flag.blocked) return 0;
+static bool primaryAtAppliedCommandBoundary(client *c) {
+    if (c == NULL || c->flag.close_asap || c->flag.blocked) return false;
     /* Queued commands or a parsed command mean S still has post-RDB stream
      * data pending on N. Unread query buffer bytes are past reploff and can be
      * replayed by PSYNC from the real primary. */
-    if (c->cmd_queue.off < c->cmd_queue.len) return 0;
-    if (c->argc != 0 || c->flag.pending_command) return 0;
-    return 1;
+    if (c->cmd_queue.off < c->cmd_queue.len) return false;
+    if (c->argc != 0 || c->flag.pending_command) return false;
+    return true;
 }
 
 /* Switch from S to P after N has applied S's post-RDB stream at a command
@@ -3170,9 +3192,16 @@ void replicationMaybeSwitchToPrimaryAfterSiblingSync(void) {
 
     clusterNode *pn = server.cluster->myself->replicaof;
     if (pn == NULL) {
-        serverLog(LL_WARNING,
-                  "Sync-from-replica: no primary in cluster topology, staying connected to sibling");
-        replicationClearSiblingSyncState();
+        /* No topology primary to switch to. Keep the sibling sync state (and
+         * with it the failover guard and INFO reporting) since N is still
+         * replicating from S; retry once gossip provides a primary. Throttle
+         * the log because this runs after every primary-client read. */
+        static time_t lastlog_time = 0;
+        if (server.unixtime != lastlog_time) {
+            lastlog_time = server.unixtime;
+            serverLog(LL_WARNING,
+                      "Sync-from-replica: no primary in cluster topology, staying connected to sibling");
+        }
         return;
     }
 
@@ -4218,12 +4247,11 @@ void syncWithPrimaryHandleError(connection **conn) {
     }
     replicationAbortSyncTransfer();
     /* Handshake failure on the transient sibling target falls back to the
-     * cluster primary. */
+     * cluster primary. If no topology primary is known yet, keep the sibling
+     * as target: the CONNECT state below retries it, and a later abort
+     * succeeds once gossip provides a primary. */
     if (server.cluster_syncing_from_sibling && server.cluster_enabled) {
-        if (replicationAbortSiblingSync() == C_ERR) {
-            server.repl_state = REPL_STATE_NONE;
-            return;
-        }
+        replicationAbortSiblingSync();
     }
     server.repl_state = REPL_STATE_CONNECT;
 }
@@ -4647,12 +4675,11 @@ int cancelReplicationHandshake(int reconnect) {
         return 0;
     }
 
-    /* Abort the transient sibling target before reconnecting. */
+    /* Abort the transient sibling target before reconnecting. On C_ERR no
+     * topology primary is known yet; the reconnect below then retries the
+     * sibling, and a later abort succeeds once gossip provides a primary. */
     if (server.cluster_syncing_from_sibling && server.cluster_enabled) {
-        if (replicationAbortSiblingSync() == C_ERR) {
-            server.repl_state = REPL_STATE_NONE;
-            return 1;
-        }
+        replicationAbortSiblingSync();
     }
 
     if (!reconnect) return 1;
@@ -4787,7 +4814,9 @@ void replicationUnsetPrimary(void) {
  * primary into an unexpected way. */
 void replicationHandlePrimaryDisconnection(void) {
     /* If the transient sibling connection drops after RDB load, reconnect to
-     * the real primary immediately instead of retrying the sibling. */
+     * the real primary immediately instead of retrying the sibling. If no
+     * topology primary is known yet, the sibling stays the target and the
+     * reconnect loop retries it until gossip provides a primary. */
     if (server.cluster_syncing_from_sibling && server.cluster_enabled) {
         replicationAbortSiblingSync();
     }

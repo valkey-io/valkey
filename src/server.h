@@ -2135,8 +2135,8 @@ struct valkeyServer {
                                                     * delay (start sooner if they all connect). */
     int dual_channel_replication;                  /* Config used to determine if the replica should
                                                     * use dual channel replication for full syncs. */
-    int repl_prefer_sync_from_replica;             /* Enable sync-from-replica optimization. */
-    int cluster_syncing_from_sibling;              /* Transient sync-from-replica is in progress. */
+    int cluster_prefer_sync_from_replica;          /* Seed new cluster replicas from a sibling replica. */
+    bool cluster_syncing_from_sibling;             /* Transient sync-from-replica is in progress. */
     long long cluster_sync_sibling_initial_offset; /* Sibling offset recorded after RDB load. */
     long long cluster_sync_sibling_target_offset;  /* Highest primary offset observed during sibling sync. */
     _Atomic(int) replica_bio_disk_save_state;      /* Flag set by the bio thread to indicate that the
@@ -3230,8 +3230,11 @@ void freeReplicaReferencedReplBuffer(client *replica);
 void replicationFeedMonitors(client *c, list *monitors, int dictid, robj **argv, int argc);
 void updateReplicasWaitingBgsave(int bgsaveerr, int type);
 void replicationCron(void);
-/* Abort an in-progress sibling sync and retarget replication to the cluster primary. */
+/* Abort an in-progress sibling sync and retarget replication to the cluster
+ * primary; C_ERR (no state changed) when the topology has no primary. */
 int replicationAbortSiblingSync(void);
+/* Forget sibling sync state when the caller establishes its own target. */
+void replicationDiscardSiblingSync(void);
 /* Switch from the sibling back to the primary after the sibling stream drains. */
 void replicationMaybeSwitchToPrimaryAfterSiblingSync(void);
 /* Cancel an active replication handshake; reconnect when requested and possible. */

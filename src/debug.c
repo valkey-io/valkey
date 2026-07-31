@@ -1834,12 +1834,24 @@ static int libbacktrace_full_cb(void *data, uintptr_t pc, const char *filename, 
     return 0;
 }
 
+static void writeRawStacktrace(void **trace, int trace_size, int fd, int uplevel) {
+    char buf[64];
+
+    for (int i = uplevel; i < trace_size; i++) {
+        int len = snprintf_async_signal_safe(buf, sizeof(buf), "#%d 0x%lx <unresolved>\n",
+                                             i - uplevel, (unsigned long)trace[i]);
+        if (len > 0 && write(fd, buf, len) == -1) { /* Avoid warning. */
+        }
+    }
+}
+
 /* Fork and symbolize using libbacktrace (signal-safe approach) */
 static void symbolizeWithLibbacktrace(void **trace, int trace_size, int fd, int uplevel) {
     pid_t pid = fork();
 
     if (pid == 0) {
         /* Child process - safe to use libbacktrace here */
+        if (server.debug_pause_after_fork) debugPauseProcess();
         struct backtrace_state *state = backtrace_create_state(
             NULL, 0, libbacktrace_error_cb, &fd);
         if (state) {
@@ -1888,6 +1900,10 @@ static void symbolizeWithLibbacktrace(void **trace, int trace_size, int fd, int 
             /* Timeout or still interrupted - kill child */
             kill(pid, SIGKILL);
             waitpid(pid, NULL, 0);
+            char *msg = "(libbacktrace symbolization timed out, using raw addresses)\n";
+            if (write(fd, msg, strlen(msg)) == -1) { /* Avoid warning. */
+            }
+            writeRawStacktrace(trace, trace_size, fd, uplevel);
         }
     } else {
         /* Fork failed, fall back to backtrace_symbols_fd */

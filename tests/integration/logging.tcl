@@ -100,12 +100,16 @@ tags {"valgrind:skip"} {
     start_server [list overrides [list dir $server_path]] {
         test "Stacktraces generated on SIGALRM" {
             set pid [s process_id]
+            r debug pause-after-fork 1
             r deferred 1
             r debug sleep 10 ;# so that we see the function in the stack trace
             r flush
             after 100 ;# wait for the server to get into the sleep
             exec kill -SIGALRM $pid
             $check_cb "*Received SIGALRM*"
+            if {[catch {exec grep -a "initLibbacktraceFrameState" $::VALKEY_SERVER_BIN}] == 0} {
+                assert_range [count_log_message 0 "libbacktrace symbolization timed out"] 1 999
+            }
             r read
             r deferred 0
             # make sure the server is still alive

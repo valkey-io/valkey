@@ -12,7 +12,8 @@
             "SKIP_MONITOR",
             "MAY_REPLICATE",
             "NO_MANDATORY_KEYS",
-            "STALE"
+            "STALE",
+            "ACL_DYNAMIC"
         ],
         "acl_categories": [
             "SCRIPTING",

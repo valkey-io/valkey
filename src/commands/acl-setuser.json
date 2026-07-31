@@ -26,7 +26,8 @@
             "NOSCRIPT",
             "LOADING",
             "STALE",
-            "SENTINEL"
+            "SENTINEL",
+            "ACL_DYNAMIC"
         ],
         "command_tips": [
             "REQUEST_POLICY:ALL_NODES",

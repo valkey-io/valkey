@@ -195,17 +195,17 @@ start_server {tags {"acl external:skip"}} {
         set e
     } {*NOPERM*channel*}
 
-    test {In transaction queue publish/subscribe/psubscribe to unauthorized channel will fail} {
-        r ACL setuser psuser +multi +discard
+    test {In transaction unauthorized channel commands are queued and rejected by EXEC} {
+        r ACL setuser psuser +multi +exec
         r MULTI
-        assert_error {*NOPERM*channel*} {r PUBLISH notexits helloworld}
-        r DISCARD
+        assert_equal {QUEUED} [r PUBLISH notexits helloworld]
+        assert_error {*EXECABORT*NOPERM*channel*} {r EXEC}
         r MULTI
-        assert_error {*NOPERM*channel*} {r SUBSCRIBE notexits foo:1}
-        r DISCARD
+        assert_equal {QUEUED} [r SUBSCRIBE notexits foo:1]
+        assert_error {*EXECABORT*NOPERM*channel*} {r EXEC}
         r MULTI
-        assert_error {*NOPERM*channel*} {r PSUBSCRIBE notexits:* bar:*}
-        r DISCARD
+        assert_equal {QUEUED} [r PSUBSCRIBE notexits:* bar:*]
+        assert_error {*EXECABORT*NOPERM*channel*} {r EXEC}
     }
 
     test {It's possible to allow subscribing to a subset of channels} {
@@ -766,7 +766,7 @@ start_server {tags {"acl external:skip"}} {
     test {ACL LOG can distinguish the transaction context (1)} {
         r AUTH antirez foo
         r MULTI
-        catch {r INCR foo}
+        assert_equal {QUEUED} [r INCR foo]
         catch {r EXEC}
         r AUTH default ""
         set entry [lindex [r ACL LOG] 0]
@@ -791,6 +791,203 @@ start_server {tags {"acl external:skip"}} {
         assert {[dict get $entry object] eq {incr}}
         assert_match {*cmd=exec*} [dict get $entry client-info]
         r ACL SETUSER antirez -incr
+    }
+
+    test {MULTI ACL permissions granted before EXEC allow the transaction} {
+        set tx [valkey_client]
+        set verify [valkey_client]
+        $verify DEL tx-acl-grant-key
+        r ACL SETUSER tx-acl-grant reset on nopass +multi +exec
+        $tx AUTH tx-acl-grant password
+
+        assert_equal {OK} [$tx MULTI]
+        assert_equal {QUEUED} [$tx SET tx-acl-grant-key value]
+        r ACL SETUSER tx-acl-grant +set ~*
+
+        assert_equal {OK} [lindex [$tx EXEC] 0]
+        assert_equal {value} [$verify GET tx-acl-grant-key]
+
+        $tx close
+        r ACL DELUSER tx-acl-grant
+        $verify DEL tx-acl-grant-key
+        $verify close
+    }
+
+    test {MULTI ACL permissions revoked before EXEC abort the whole transaction} {
+        set tx [valkey_client]
+        set verify [valkey_client]
+        $verify DEL tx-acl-revoke-key-1 tx-acl-revoke-key-2
+        r ACL SETUSER tx-acl-revoke reset on nopass +multi +exec +set ~*
+        $tx AUTH tx-acl-revoke password
+
+        assert_equal {OK} [$tx MULTI]
+        assert_equal {QUEUED} [$tx SET tx-acl-revoke-key-1 value]
+        assert_equal {QUEUED} [$tx SET tx-acl-revoke-key-2 value]
+        r ACL SETUSER tx-acl-revoke -set
+
+        assert_error {*EXECABORT*NOPERM*set*} {$tx EXEC}
+        assert_equal {0} [$verify EXISTS tx-acl-revoke-key-1 tx-acl-revoke-key-2]
+
+        $tx close
+        r ACL DELUSER tx-acl-revoke
+        $verify close
+    }
+
+    test {MULTI applies ACL revocations to following commands dynamically} {
+        set tx [valkey_client]
+        set verify [valkey_client]
+        $verify DEL tx-acl-dynamic-key-1 tx-acl-dynamic-key-2
+        r ACL SETUSER tx-acl-dynamic reset on nopass +multi +exec +set +acl|setuser ~*
+        $tx AUTH tx-acl-dynamic password
+
+        assert_equal {OK} [$tx MULTI]
+        assert_equal {QUEUED} [$tx SET tx-acl-dynamic-key-1 value]
+        assert_equal {QUEUED} [$tx ACL SETUSER tx-acl-dynamic -set]
+        assert_equal {QUEUED} [$tx SET tx-acl-dynamic-key-2 value]
+
+        $tx readraw 1
+        assert_equal {*3} [$tx EXEC]
+        assert_equal {+OK} [$tx read]
+        assert_equal {+OK} [$tx read]
+        set err [$tx read]
+        $tx readraw 0
+        assert_match {-NOPERM*set*} $err
+
+        assert_equal {1} [$verify EXISTS tx-acl-dynamic-key-1]
+        assert_equal {0} [$verify EXISTS tx-acl-dynamic-key-2]
+
+        $tx close
+        r ACL DELUSER tx-acl-dynamic
+        $verify DEL tx-acl-dynamic-key-1 tx-acl-dynamic-key-2
+        $verify close
+    }
+
+    test {MULTI applies ACL grants to following commands dynamically} {
+        set tx [valkey_client]
+        set verify [valkey_client]
+        $verify DEL tx-acl-dynamic-grant-key
+        r ACL SETUSER tx-acl-dynamic-grant reset on nopass +multi +exec +acl|setuser ~*
+        $tx AUTH tx-acl-dynamic-grant password
+
+        assert_equal {OK} [$tx MULTI]
+        assert_equal {QUEUED} [$tx ACL SETUSER tx-acl-dynamic-grant +set]
+        assert_equal {QUEUED} [$tx SET tx-acl-dynamic-grant-key value]
+        assert_equal {OK OK} [$tx EXEC]
+
+        assert_equal {value} [$verify GET tx-acl-dynamic-grant-key]
+        assert_equal {OK} [$tx SET tx-acl-dynamic-grant-key updated]
+
+        $tx close
+        r ACL DELUSER tx-acl-dynamic-grant
+        $verify DEL tx-acl-dynamic-grant-key
+        $verify close
+    }
+
+    test {MULTI applies AUTH identity changes to following commands dynamically} {
+        set tx [valkey_client]
+        set verify [valkey_client]
+        $verify DEL tx-auth-dynamic-key
+        r ACL SETUSER tx-auth-source reset on nopass +multi +exec +auth +set ~*
+        r ACL SETUSER tx-auth-target reset on >target-password
+        $tx AUTH tx-auth-source password
+
+        assert_equal {OK} [$tx MULTI]
+        assert_equal {QUEUED} [$tx AUTH tx-auth-target target-password]
+        assert_equal {QUEUED} [$tx SET tx-auth-dynamic-key value]
+
+        $tx readraw 1
+        assert_equal {*2} [$tx EXEC]
+        assert_equal {+OK} [$tx read]
+        set err [$tx read]
+        $tx readraw 0
+        assert_match {-NOPERM*set*} $err
+        assert_equal {0} [$verify EXISTS tx-auth-dynamic-key]
+
+        $tx close
+        r ACL DELUSER tx-auth-source tx-auth-target
+        $verify close
+    }
+
+    test {MULTI uses the identity established by AUTH for following commands} {
+        set tx [valkey_client]
+        set verify [valkey_client]
+        $verify DEL tx-auth-grant-key
+        r ACL SETUSER tx-auth-limited reset on nopass +multi +exec +auth
+        r ACL SETUSER tx-auth-privileged reset on >privileged-password +set ~*
+        $tx AUTH tx-auth-limited password
+
+        assert_equal {OK} [$tx MULTI]
+        assert_equal {QUEUED} [$tx AUTH tx-auth-privileged privileged-password]
+        assert_equal {QUEUED} [$tx SET tx-auth-grant-key value]
+        assert_equal {OK OK} [$tx EXEC]
+
+        assert_equal {value} [$verify GET tx-auth-grant-key]
+
+        $tx close
+        r ACL DELUSER tx-auth-limited tx-auth-privileged
+        $verify DEL tx-auth-grant-key
+        $verify close
+    }
+
+    test {MULTI preflights commands before an opaque script} {
+        set tx [valkey_client]
+        set verify [valkey_client]
+        $verify DEL tx-acl-script-key
+        r ACL SETUSER tx-acl-script reset on nopass +multi +exec +eval +ping ~*
+        $tx AUTH tx-acl-script password
+
+        assert_equal {OK} [$tx MULTI]
+        assert_equal {QUEUED} [$tx SET tx-acl-script-key value]
+        assert_equal {QUEUED} [$tx EVAL {return 1} 0]
+        assert_equal {QUEUED} [$tx PING]
+
+        assert_error {*EXECABORT*NOPERM*set*} {$tx EXEC}
+        assert_equal {0} [$verify EXISTS tx-acl-script-key]
+
+        $tx close
+        r ACL DELUSER tx-acl-script
+        $verify close
+    }
+
+    test {MULTI includes the first ACL-dynamic command in preflight} {
+        set tx [valkey_client]
+        r ACL SETUSER tx-acl-script-entry reset on nopass +multi +exec +ping
+        $tx AUTH tx-acl-script-entry password
+
+        assert_equal {OK} [$tx MULTI]
+        assert_equal {QUEUED} [$tx PING]
+        assert_equal {QUEUED} [$tx EVAL {return 1} 0]
+
+        assert_error {*EXECABORT*NOPERM*eval*} {$tx EXEC}
+
+        $tx close
+        r ACL DELUSER tx-acl-script-entry
+    }
+
+    test {MULTI checks commands after an opaque script dynamically} {
+        set tx [valkey_client]
+        set verify [valkey_client]
+        $verify DEL tx-acl-script-dynamic-key
+        r ACL SETUSER tx-acl-script-dynamic reset on nopass +multi +exec +eval +ping ~*
+        $tx AUTH tx-acl-script-dynamic password
+
+        assert_equal {OK} [$tx MULTI]
+        assert_equal {QUEUED} [$tx EVAL {return 1} 0]
+        assert_equal {QUEUED} [$tx SET tx-acl-script-dynamic-key value]
+        assert_equal {QUEUED} [$tx PING]
+
+        $tx readraw 1
+        assert_equal {*3} [$tx EXEC]
+        assert_equal {:1} [$tx read]
+        set err [$tx read]
+        assert_equal {+PONG} [$tx read]
+        $tx readraw 0
+        assert_match {-NOPERM*set*} $err
+        assert_equal {0} [$verify EXISTS tx-acl-script-dynamic-key]
+
+        $tx close
+        r ACL DELUSER tx-acl-script-dynamic
+        $verify close
     }
 
     test {ACL can log errors in the context of Lua scripting} {

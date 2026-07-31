@@ -673,11 +673,10 @@ start_server {tags {"acl external:skip"}} {
         assert_equal "OK" [$r2 select 0]
         assert_equal "OK" [$r2 multi]
         assert_equal "QUEUED" [$r2 set key1 value1]
-        catch {$r2 select 4} err
-        assert_match "*NOPERM*command*" $err
+        assert_equal "QUEUED" [$r2 select 4]
         
         catch {$r2 exec} err
-        assert_match "*EXECABORT*" $err
+        assert_match "*EXECABORT*NOPERM*" $err
     }
     
     test {Test transaction with command permissions in different DBs} {
@@ -1077,16 +1076,17 @@ start_server {tags {"acl external:skip"}} {
     test {Test MULTI with SELECT to invalid database} {
         r ACL SETUSER db-invalid-select on nopass +@all ~* db=0,1
         $r2 auth db-invalid-select password
+        r select 0
+        r del key1
         
         assert_equal "OK" [$r2 select 0]
         assert_equal "OK" [$r2 multi]
         assert_equal "QUEUED" [$r2 set key1 value1]
-        
-        catch {$r2 select 2} err
-        assert_match "*NOPERM*database*" $err
+
+        assert_equal "QUEUED" [$r2 select 2]
         
         catch {$r2 exec} err
-        assert_match "*EXECABORT*" $err
+        assert_match "*EXECABORT*NOPERM*database*" $err
         
         assert_equal {} [$r2 get key1]
     }
@@ -1217,6 +1217,11 @@ start_server {tags {"acl external:skip"}} {
     test {Test MULTI with SELECT and ACL permission changes between queue and exec} {
         r ACL SETUSER db-acl-change on nopass +@all ~* db=0,1
         $r2 auth db-acl-change password
+        r select 0
+        r del key1
+        r select 1
+        r del key2
+        r select 0
         
         assert_equal "OK" [$r2 select 0]
         assert_equal "OK" [$r2 multi]
@@ -1227,7 +1232,13 @@ start_server {tags {"acl external:skip"}} {
         r ACL SETUSER db-acl-change db=0
         
         catch {$r2 exec} err
-        assert_match "*NOPERM*" $err
+        assert_match "*EXECABORT*NOPERM*" $err
+
+        # No command is executed when any ACL check fails.
+        assert_equal {} [r get key1]
+        r select 1
+        assert_equal {} [r get key2]
+        r select 0
         
         # Cleanup
         r ACL SETUSER db-acl-change db=0,1

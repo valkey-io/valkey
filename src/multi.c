@@ -31,11 +31,20 @@
 
 /* ================================ MULTI/EXEC ============================== */
 
+#define MULTI_ACL_DYNAMIC_FLAGS (CMD_ACL_DYNAMIC | CMD_MODULE)
+#define MULTI_NO_ACL_DYNAMIC_COMMAND -1
+
+/* Whether EXEC will reach and execute its queued commands. */
+static int execWillRunQueuedCommands(client *c) {
+    return c->flag.multi && !c->flag.dirty_cas && !c->flag.dirty_exec;
+}
+
 /* Client state initialization for MULTI/EXEC */
 void initClientMultiState(client *c) {
     if (c->mstate) return;
     c->mstate = zcalloc(sizeof(multiState));
     c->mstate->transaction_db_id = c->db->id;
+    c->mstate->first_acl_dynamic_cmd = MULTI_NO_ACL_DYNAMIC_COMMAND;
 }
 
 void freeClientMultiStateCmds(client *c) {
@@ -85,6 +94,7 @@ void resetClientMultiState(client *c) {
     c->mstate->argv_len_sums = 0;
     c->mstate->alloc_count = 0;
     c->mstate->transaction_db_id = c->db->id;
+    c->mstate->first_acl_dynamic_cmd = MULTI_NO_ACL_DYNAMIC_COMMAND;
 }
 
 /* Add a new command into the MULTI commands queue */
@@ -113,6 +123,12 @@ void queueMultiCommand(client *c, uint64_t cmd_flags) {
     mc->argv = c->argv;
     mc->argv_len = c->argv_len;
     mc->slot = c->slot;
+
+    /* Record the boundary after which ACL checks must be performed sequentially. */
+    if (c->mstate->first_acl_dynamic_cmd == MULTI_NO_ACL_DYNAMIC_COMMAND &&
+        (cmd_flags & MULTI_ACL_DYNAMIC_FLAGS)) {
+        c->mstate->first_acl_dynamic_cmd = c->mstate->count;
+    }
 
     if (mc->cmd->get_dbid_args && mc->cmd->proc == selectCommand) {
         int count;
@@ -186,6 +202,83 @@ void execCommandAbort(client *c, sds error) {
     replicationFeedMonitors(c, server.monitors, c->db->id, c->argv, c->argc);
 }
 
+/* Check the ACL permissions for commands that can be validated before EXEC.
+ * ACL-stable transactions are validated completely. Transactions containing
+ * ACL-dynamic commands are validated through the first such command, inclusive;
+ * commands after that boundary are checked sequentially by execCommand().
+ *
+ * SELECT commands are applied to a local DB id so subsequent commands are
+ * checked against the database in which they would execute.
+ *
+ * Returns C_ERR only when an ACL check rejects and aborts the transaction. */
+int execCommandValidateAcl(client *c) {
+    /* Update WATCH expiration once, before both ACL preflight and execCommand(). */
+    if (c->flag.multi && !c->flag.dirty_cas && !c->flag.dirty_exec && isWatchedKeyExpired(c))
+        c->flag.dirty_cas = 1;
+
+    /* Preserve the existing EXEC error precedence. EXEC without MULTI and
+     * transactions invalidated by WATCH or queue-time errors are handled by
+     * execCommand(). */
+    if (!execWillRunQueuedCommands(c)) return C_OK;
+
+    int preflight_count = c->mstate->first_acl_dynamic_cmd == MULTI_NO_ACL_DYNAMIC_COMMAND
+                              ? c->mstate->count
+                              : c->mstate->first_acl_dynamic_cmd + 1;
+
+    int dbid = c->db->id;
+    for (int j = 0; j < preflight_count; j++) {
+        multiCmd *mc = &c->mstate->commands[j];
+        int acl_errpos;
+        int acl_retval = ACLCheckAllUserCommandPerm(c->user, mc->cmd, mc->argv, mc->argc, dbid, &acl_errpos);
+
+        if (acl_retval != ACL_OK) {
+            /* addACLLogEntry() derives the logged object from the client's
+             * current command. Temporarily expose the denied queued command,
+             * then restore EXEC before rejecting so the whole transaction is
+             * aborted. */
+            struct serverCommand *exec_cmd = c->cmd;
+            robj **exec_argv = c->argv;
+            int exec_argc = c->argc;
+
+            c->cmd = mc->cmd;
+            c->argv = mc->argv;
+            c->argc = mc->argc;
+            addACLLogEntry(c, acl_retval, ACL_LOG_CTX_MULTI, acl_errpos, NULL, NULL);
+            c->cmd = exec_cmd;
+            c->argv = exec_argv;
+            c->argc = exec_argc;
+
+            sds msg = getAclErrorMessage(acl_retval, c->user, mc->cmd, objectGetVal(mc->argv[acl_errpos]), 0);
+            rejectCommandFormat(c, "-NOPERM %s", msg);
+            sdsfree(msg);
+            return C_ERR;
+        }
+
+        if (mc->cmd->proc == selectCommand) {
+            int count = 0;
+            int *dbids = selectDbIdArgs(mc->argv, mc->argc, &count);
+            if (dbids && count == 1) dbid = dbids[0];
+            zfree(dbids);
+        }
+    }
+
+    return C_OK;
+}
+
+/* Check the command currently exposed through c->cmd/c->argv against the ACL
+ * state established by commands already executed in the transaction. */
+static int execCommandValidateAclDynamically(client *c) {
+    int acl_errpos;
+    int acl_retval = ACLCheckAllPerm(c, &acl_errpos);
+    if (acl_retval == ACL_OK) return C_OK;
+
+    addACLLogEntry(c, acl_retval, ACL_LOG_CTX_MULTI, acl_errpos, NULL, NULL);
+    sds msg = getAclErrorMessage(acl_retval, c->user, c->cmd, objectGetVal(c->argv[acl_errpos]), 0);
+    addReplyErrorFormat(c, "-NOPERM %s", msg);
+    sdsfree(msg);
+    return C_ERR;
+}
+
 void execCommand(client *c) {
     int j;
     robj **orig_argv;
@@ -197,18 +290,13 @@ void execCommand(client *c) {
         return;
     }
 
-    /* EXEC with expired watched key is disallowed*/
-    if (isWatchedKeyExpired(c)) {
-        c->flag.dirty_cas = 1;
-    }
-
     /* Check if we need to abort the EXEC because:
      * 1) Some WATCHed key was touched.
      * 2) There was a previous error while queueing commands.
      * A failed EXEC in the first case returns a multi bulk nil object
      * (technically it is not an error but a special behavior), while
      * in the second an EXECABORT error is returned. */
-    if (c->flag.dirty_cas || c->flag.dirty_exec) {
+    if (!execWillRunQueuedCommands(c)) {
         if (c->flag.dirty_exec) {
             addReplyErrorObject(c, shared.execaborterr);
         } else {
@@ -234,6 +322,7 @@ void execCommand(client *c) {
     orig_argc = c->argc;
     orig_cmd = c->cmd;
     c->mstate->transaction_db_id = c->db->id;
+    int acl_dynamic_boundary = c->mstate->first_acl_dynamic_cmd;
     addReplyArrayLen(c, c->mstate->count);
     for (j = 0; j < c->mstate->count; j++) {
         c->argc = c->mstate->commands[j].argc;
@@ -241,29 +330,12 @@ void execCommand(client *c) {
         c->argv_len = c->mstate->commands[j].argv_len;
         c->cmd = c->realcmd = c->mstate->commands[j].cmd;
 
-        /* ACL permissions are also checked at the time of execution in case
-         * they were changed after the commands were queued. */
-        int acl_errpos;
-        int acl_retval = ACLCheckAllPerm(c, &acl_errpos);
-        if (acl_retval != ACL_OK) {
-            char *reason;
-            switch (acl_retval) {
-            case ACL_DENIED_CMD: reason = "no permission to execute the command or subcommand"; break;
-            case ACL_DENIED_KEY: reason = "no permission to touch the specified keys"; break;
-            case ACL_DENIED_CHANNEL:
-                reason = "no permission to access one of the channels used "
-                         "as arguments";
-                break;
-            default: reason = "no permission"; break;
-            }
-            addACLLogEntry(c, acl_retval, ACL_LOG_CTX_MULTI, acl_errpos, NULL, NULL);
-            addReplyErrorFormat(c,
-                                "-NOPERM ACLs rules changed between the moment the "
-                                "transaction was accumulated and the EXEC call. "
-                                "This command is no longer allowed for the "
-                                "following reason: %s",
-                                reason);
-        } else {
+        /* The first ACL-dynamic command was included in preflight. Commands
+         * after it are checked in sequence so earlier AUTH/ACL changes affect
+         * later commands. */
+        int validate_acl_dynamically = acl_dynamic_boundary != MULTI_NO_ACL_DYNAMIC_COMMAND &&
+                                       j > acl_dynamic_boundary;
+        if (!validate_acl_dynamically || execCommandValidateAclDynamically(c) == C_OK) {
             if (c->id == CLIENT_ID_AOF)
                 call(c, CMD_CALL_NONE);
             else

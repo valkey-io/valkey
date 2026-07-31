@@ -23,7 +23,8 @@
             "FAST",
             "NO_AUTH",
             "SENTINEL",
-            "ALLOW_BUSY"
+            "ALLOW_BUSY",
+            "ACL_DYNAMIC"
         ],
         "acl_categories": [
             "CONNECTION",

@@ -963,6 +963,7 @@ typedef struct multiState {
                                        Array of size server.dbnum, lazily allocated.
                                        Each hashtable stores watchedKey* directly. */
     int transaction_db_id;          /* Currently SELECTed DB id in transaction context */
+    int first_acl_dynamic_cmd;      /* Index of the first ACL-dynamic command. */
 } multiState;
 
 /* This structure holds the blocking operation state for a client.
@@ -2652,6 +2653,11 @@ typedef int *commandDbIdArgs(robj **argv, int argc, int *count);
  * CMD_WRITE_FIRSTKEY_ONLY: The command must be CMD_WRITE.  It only modifies the first key.
  *                          Other keys are read-only.  Example: SUNIONSTORE
  *
+ * CMD_ACL_DYNAMIC: The command changes the effective ACL context, or may run
+ *                  commands whose ACL requirements cannot be determined before
+ *                  execution. Transactions are preflighted through the first such
+ *                  command, and following commands are checked sequentially.
+ *
  * The following additional flags are only used in order to put commands
  * in a specific ACL category. Commands can have multiple ACL categories.
  * See valkey.conf for the exact meaning of each.
@@ -3106,6 +3112,7 @@ void touchAllWatchedKeysInDb(serverDb *emptied, serverDb *replaced_with);
 void discardTransaction(client *c);
 void flagTransaction(client *c);
 void execCommandAbort(client *c, sds error);
+int execCommandValidateAcl(client *c);
 
 /* Object implementation */
 void decrRefCount(robj *o);

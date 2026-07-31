@@ -12,7 +12,8 @@
             "NOSCRIPT",
             "LOADING",
             "STALE",
-            "SENTINEL"
+            "SENTINEL",
+            "ACL_DYNAMIC"
         ],
         "reply_schema": {
             "const": "OK"

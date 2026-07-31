@@ -4477,6 +4477,9 @@ int processCommand(client *c) {
     int is_denyloading_command = (combined_inv_flags & CMD_LOADING);
     int is_may_replicate_command = (combined_flags & (CMD_WRITE | CMD_MAY_REPLICATE));
     int is_deny_async_loading_command = (combined_flags & CMD_NO_ASYNC_LOADING);
+    int is_queued_multi_command =
+        c->flag.multi && c->cmd->proc != execCommand && c->cmd->proc != discardCommand &&
+        c->cmd->proc != quitCommand && c->cmd->proc != resetCommand;
 
     const int obey_client = mustObeyClient(c);
 
@@ -4485,18 +4488,26 @@ int processCommand(client *c) {
         return C_OK;
     }
 
-    /* Check if the user can run this command according to the current
-     * ACLs. */
-    int acl_errpos;
-    int acl_retval = ACLCheckAllPerm(c, &acl_errpos);
-    if (acl_retval != ACL_OK) {
-        addACLLogEntry(c, acl_retval, (c->flag.multi) ? ACL_LOG_CTX_MULTI : ACL_LOG_CTX_TOPLEVEL, acl_errpos, NULL,
-                       NULL);
-        sds msg = getAclErrorMessage(acl_retval, c->user, c->cmd, objectGetVal(c->argv[acl_errpos]), 0);
-        rejectCommandFormat(c, "-NOPERM %s", msg);
-        sdsfree(msg);
-        return C_OK;
+    /* ACL checks for queued transaction commands are deferred until EXEC.
+     * Commands through the first ACL-dynamic command are preflighted, while
+     * following commands are checked sequentially during execution. All other
+     * commands, including EXEC itself, are checked here. */
+    if (!is_queued_multi_command) {
+        int acl_errpos;
+        int acl_retval = ACLCheckAllPerm(c, &acl_errpos);
+        if (acl_retval != ACL_OK) {
+            addACLLogEntry(c, acl_retval, (c->flag.multi) ? ACL_LOG_CTX_MULTI : ACL_LOG_CTX_TOPLEVEL, acl_errpos, NULL,
+                           NULL);
+            sds msg = getAclErrorMessage(acl_retval, c->user, c->cmd, objectGetVal(c->argv[acl_errpos]), 0);
+            rejectCommandFormat(c, "-NOPERM %s", msg);
+            sdsfree(msg);
+            return C_OK;
+        }
     }
+
+    /* Keep transaction-specific rejection in the pre-execution path and ahead
+     * of bgIteration processing. */
+    if (c->cmd->proc == execCommand && execCommandValidateAcl(c) != C_OK) return C_OK;
 
     /* If cluster is enabled perform the cluster redirection here.
      * However we don't perform the redirection if:
@@ -4717,9 +4728,7 @@ int processCommand(client *c) {
     }
 
     /* Exec the command */
-    if (c->flag.multi && c->cmd->proc != execCommand && c->cmd->proc != discardCommand &&
-        c->cmd->proc != quitCommand &&
-        c->cmd->proc != resetCommand) {
+    if (is_queued_multi_command) {
         queueMultiCommand(c, cmd_flags);
         addReply(c, shared.queued);
     } else {

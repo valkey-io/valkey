@@ -12,7 +12,8 @@
             "SKIP_MONITOR",
             "NO_MANDATORY_KEYS",
             "STALE",
-            "READONLY"
+            "READONLY",
+            "ACL_DYNAMIC"
         ],
         "acl_categories": [
             "SCRIPTING",

@@ -1,8 +1,6 @@
-# Full Sync From Replica - Design Document
+# Sync From Replica - Design Document
 
 **Issue:** valkey-io/valkey#2767
-**Branch:** `review/pr-3-sync-from-replica`
-**Status:** Implementation proposal
 
 ## Problem
 
@@ -108,14 +106,22 @@ A runtime flag `server.cluster_syncing_from_sibling` protects against cluster ev
 
 **At the top of `clusterSetPrimary`** (single guard point for topology changes):
 ```c
-if (server.cluster_syncing_from_sibling) {
-    replicationAbortSiblingSync();  // redirect to real primary, clear flag
-    // fall through to normal clusterSetPrimary behavior
-}
+/* Topology changes supersede the transient sibling sync target;
+ * replicationSetPrimary() below establishes the new target. */
+clusterDiscardSiblingSyncIfActive();
 ```
 
 This covers gossip reconfiguration, sub-replica correction, replica migration,
-slot migration, and operator-initiated `CLUSTER REPLICATE`.
+slot migration, and operator-initiated `CLUSTER REPLICATE`. The same helper
+runs on the `CLUSTER REPLICATE NO ONE` promotion path, which leaves replica
+mode without going through `clusterSetPrimary`.
+
+Failure paths (handshake error, sibling link drop) instead call
+`replicationAbortSiblingSync()`, which redirects `server.primary_host` back to
+the topology primary. If gossip has not yet provided a primary, the abort
+returns `C_ERR` without clearing state: N keeps the sibling as its replication
+target — and the guard flag stays accurate for INFO and the failover checks —
+until a topology primary appears.
 
 **Separate check in CLUSTER FAILOVER handler:**
 ```c
@@ -158,12 +164,13 @@ When a sibling has a BGSAVE already in progress and a new rdb-only client attach
 | S dies during stream catch-up | Sibling sync | Primary link drops after RDB load | `replicationHandlePrimaryDisconnection` -> `replicationAbortSiblingSync` -> fall back to P |
 | S gets promoted (failover) | Sibling sync | `disconnectReplicas` kills N | Detect topology change, fall back to P |
 | S's BGSAVE causes OOM on S | Sibling sync | S crashes or kills BGSAVE | N's connection drops, fall back to P |
-| P fails | Sibling sync | Switch to P has no target | Sub-replica safeguard fires, abort, sync from new primary |
+| P fails | Sibling sync | Switch to P has no target | N stays on S, guard flag stays set; failover elects a new primary, `clusterSetPrimary` discards the sibling sync and N syncs from the new primary |
 | P rejects PSYNC (backlog trimmed) | Switch to P | Residual handoff gap too large | Full sync from P (defeats purpose but safe) |
 | N crashes during sibling sync | Any | Flag lost | Restart triggers normal sync from P |
 | Operator runs CLUSTER FAILOVER FORCE | Sibling sync | Blocked by guard | Error returned to operator |
-| Replica migration triggers | Sibling sync | `clusterSetPrimary` fires | Guard aborts sibling sync, migration proceeds normally |
-| Operator runs CLUSTER REPLICATE | Sibling sync | `clusterSetPrimary` fires | Guard aborts sibling sync, new replication proceeds |
+| Replica migration triggers | Sibling sync | `clusterSetPrimary` fires | Guard discards sibling sync, migration proceeds normally |
+| Operator runs CLUSTER REPLICATE | Sibling sync | `clusterSetPrimary` fires | Guard discards sibling sync, new replication proceeds |
+| Operator runs CLUSTER REPLICATE NO ONE | Sibling sync | Promotion path fires | Guard discards sibling sync, node becomes an empty primary |
 
 **Every failure mode falls back safely.** Worst case is a normal full sync from P, which is the current behavior without this feature.
 
@@ -209,33 +216,13 @@ latency spike. The chain-sync scenario moves that fork to S in every run; P's
 full-sync and fork counters stay flat while the measured SET workload remains
 near baseline.
 
-## Code Changes
-
-### Modified files
-
-| File | Function/Area | Change | Size |
-|---|---|---|---|
-| `cluster_legacy.c` | `clusterSetPrimary` | Abort sibling sync before applying a topology change | S |
-| `cluster_legacy.c` | `CLUSTER REPLICATE` handler | After `clusterSetPrimary(P)`, cancel connection to P, redirect to S, reconnect | S |
-| `cluster_legacy.c` | `CLUSTER FAILOVER` handler | Block FORCE/TAKEOVER during sibling sync | S |
-| `networking.c` / `memory_prefetch.c` | Primary read completion | Re-check whether S's post-RDB stream has drained after direct and I/O-thread primary-client reads | S |
-| `replication.c` | full-sync completion | Flush ACK to S and start delayed stream catch-up before switching to P, including dual-channel completion races | S |
-| `replication.c` | `replicationMaybeSwitchToPrimaryAfterSiblingSync` | Switch to P only after S's stream advances beyond the FULLRESYNC offset and drains at a command boundary | S |
-| `replication.c` | `replicationAbortSiblingSync` | Clear flag, redirect primary_host to real primary from cluster topology | S |
-| `replication.c` | `cancelReplicationHandshake` | Call `replicationAbortSiblingSync` on abort during sibling sync | S |
-| `replication.c` | `syncCommand` | Fix: never attach rdb-only to existing BGSAVE | S |
-| `server.c` / `server.h` | Server state and INFO | Add sibling-sync guard, initial offset, and `stream_catchup` observability | S |
-| `config.c` | New config | `repl-prefer-sync-from-replica yes/no` | S |
-
-**S = small (<30 lines)**
-
-**Estimated total: small implementation change plus targeted cluster tests.**
+## Configuration and Observability
 
 ### New configuration
 
 ```conf
 # Enable sync-from-replica optimization (default: no)
-repl-prefer-sync-from-replica yes
+cluster-prefer-sync-from-replica yes
 ```
 
 ### Observability
@@ -266,19 +253,7 @@ From the weekly meeting discussion on issue #2767:
 
 **Answer:** Transient step. The cluster topology always shows N->P. The sibling connection is invisible to gossip. No new topology concepts or permanent chain replication are introduced. After sync, N is a normal replica of P.
 
-## Alternatives Considered
-
-| Approach | Why rejected |
-|---|---|
-| Cross-server dual-channel (RDB from S, stream from P simultaneously) | Adds substantial state-machine complexity. Chain approach is simpler and EKS benchmarks show chain has zero P impact. |
-| Primary-delegated BGSAVE (P asks S to BGSAVE, relays RDB) | P relays the RDB, doubling P's network I/O. Defeats the purpose. |
-| Serve sibling's existing `dump.rdb` (no BGSAVE) | RDB too stale for any non-trivial workload. P's backlog never covers the gap. |
-| Permanent chain replication (N->S->P) | Sub-replica safeguard actively fights it. Complex topology implications. |
-| Iterative PSYNC convergence (rdb-only, then repeated PSYNCs) | First PSYNC requires S's backlog to cover G0. For 100GB at 50MB/s, G0 = 80GB. Impractical. |
-
-## Future Enhancements
-
-- **Primary-side sibling selection:** P picks the best S using real-time REPLCONF ACK data, sends `+DELEGATED <sibling>` to N. More accurate than gossip-based selection.
-- **Backlog pinning:** New `REPLCONF pin-backlog <offset>` command. Primary holds backlog at a specific offset. Eliminates any residual backlog-gap risk during Phase 2 switch.
-- **Multiple simultaneous new replicas:** Two new nodes syncing from the same sibling can share a single BGSAVE when their replication requirements match.
-- **Automatic backlog sizing on S:** Temporarily increase S's `repl-backlog-size` before Phase 1 based on estimated write rate and RDB time.
+Alternatives considered and future enhancements (primary-side sibling
+selection, backlog pinning, shared BGSAVE for simultaneous joiners, automatic
+backlog sizing) are tracked on issue
+[#2767](https://github.com/valkey-io/valkey/issues/2767).

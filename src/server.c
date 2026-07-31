@@ -888,6 +888,12 @@ int isSaveInProgress(void) {
     return isForkBgsaveInProgress() || isThreadBgsaveInProgress();
 }
 
+/* Returns true if a background save (fork or thread) or child process is
+ * active. */
+int hasActiveSaveOrChild(void) {
+    return hasActiveChildProcess() || isSaveInProgress();
+}
+
 void resetChildState(void) {
     server.child_type = CHILD_TYPE_NONE;
     server.child_pid = -1;
@@ -1654,7 +1660,7 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
      * a BGSAVE was in progress. We don't start the rewrite if there is an
      * active child process (to avoid multiple concurrent fork children) or if
      * a threadsave is in progress (to avoid potential copy-on-write). */
-    if (!hasActiveChildProcess() && !isSaveInProgress() && server.aof_rewrite_scheduled && !aofRewriteLimited()) {
+    if (!hasActiveSaveOrChild() && server.aof_rewrite_scheduled && !aofRewriteLimited()) {
         rewriteAppendOnlyFileBackground();
     }
 
@@ -1690,7 +1696,7 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
 
         /* Trigger an AOF rewrite if needed. Avoid starting while another child process
          * is active. Also avoid when Threadsave is in progress to prevent potential copy-on-write. */
-        if (server.aof_state == AOF_ON && !hasActiveChildProcess() && !isSaveInProgress() && server.aof_rewrite_perc &&
+        if (server.aof_state == AOF_ON && !hasActiveSaveOrChild() && server.aof_rewrite_perc &&
             server.aof_current_size > server.aof_rewrite_min_size) {
             long long base = server.aof_rewrite_base_size ? server.aof_rewrite_base_size : 1;
             long long growth = (server.aof_current_size * 100 / base) - 100;
@@ -1761,7 +1767,7 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
      * Note: this code must be after the replicationCron() call above so
      * make sure when refactoring this file to keep this order. This is useful
      * because we want to give priority to RDB savings for replication. */
-    if (!hasActiveChildProcess() && !isSaveInProgress() && server.rdb_bgsave_scheduled &&
+    if (!hasActiveSaveOrChild() && server.rdb_bgsave_scheduled &&
         (server.unixtime - server.lastbgsave_try > CONFIG_BGSAVE_RETRY_DELAY || server.lastbgsave_status == C_OK)) {
         int result;
         if (server.rdb_bgsave_scheduled == RDB_BGSAVE_TYPE_THREAD) {

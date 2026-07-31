@@ -5422,7 +5422,7 @@ int shouldStartChildReplication(int *mincapa_out, int *req_out, int *rdbver_out)
      * In case of diskless replication, we make sure to wait the specified
      * number of seconds (according to configuration) so that other replicas
      * have the time to arrive before we start streaming. */
-    if (!hasActiveChildProcess() && !isSaveInProgress()) {
+    if (!hasActiveSaveOrChild()) {
         time_t idle, max_idle = 0;
         int replicas_waiting = 0;
         int mincapa;

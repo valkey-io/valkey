@@ -3308,6 +3308,7 @@ void receiveChildInfo(void);
 int serverFork(int purpose);
 int hasActiveChildProcess(void);
 int isSaveInProgress(void);
+int hasActiveSaveOrChild(void);
 int isForkBgsaveInProgress(void);
 int isThreadBgsaveInProgress(void);
 void resetChildState(void);

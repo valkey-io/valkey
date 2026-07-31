@@ -601,7 +601,10 @@ start_server {
     }
 
     test {Stream node GC compacts listpacks with many deleted entries} {
-        r del somestream somestream-copy trimstream trimstream-copy
+        r del somestream
+        r del somestream-copy
+        r del trimstream
+        r del trimstream-copy
         set old_node_max_bytes [lindex [r config get stream-node-max-bytes] 1]
         set old_node_max_entries [lindex [r config get stream-node-max-entries] 1]
         set old_gc_enabled [lindex [r config get stream-node-gc-enabled] 1]
@@ -667,7 +670,10 @@ start_server {
             r restore trimstream-copy 0 $trim_payload
             assert_equal $trim_forward [r xrange trimstream-copy - +]
         } finally {
-            r del somestream somestream-copy trimstream trimstream-copy
+            r del somestream
+            r del somestream-copy
+            r del trimstream
+            r del trimstream-copy
             r config set stream-node-max-bytes $old_node_max_bytes
             r config set stream-node-max-entries $old_node_max_entries
             r config set stream-node-gc-enabled $old_gc_enabled

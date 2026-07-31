@@ -14,8 +14,7 @@
         ],
         "command_flags": [
             "READONLY",
-            "FAST",
-            "KEYSPACE_INFORMATIONAL"
+            "FAST"
         ],
         "acl_categories": [
             "FAST",

@@ -24,11 +24,12 @@
  * (EVAL/EVAL_RO/EVALSHA/EVALSHA_RO/FCALL/FCALL_RO). */
 #define IS_SCRIPT_CALL_CMD(cmd) ((cmd) && (((cmd)->proc == fcallCommand) || ((cmd)->proc == fcallroCommand) || ((cmd)->proc == evalCommand) || ((cmd)->proc == evalRoCommand) || ((cmd)->proc == evalShaCommand) || ((cmd)->proc == evalShaRoCommand)))
 
-/* Returns true if the cmd is a keyspace informational command — a read-only
- * keyspace-introspection command (KEYS, SCAN, EXISTS, etc.) that needs to be
- * tracked for reply-blocking. Classified via CMD_KEYSPACE_INFORMATIONAL flag
- * set in the command JSON specs. */
-#define IS_KEYSPACE_INFORMATIONAL(cmd) ((cmd) && ((cmd)->flags & CMD_KEYSPACE_INFORMATIONAL))
+/* Returns true if the cmd is a whole-keyspace command — a command that reads
+ * the entire keyspace with no key argument (KEYS, SCAN, RANDOMKEY, DBSIZE,
+ * CLUSTERSCAN), so its result depends on any uncommitted write and it must
+ * block on the global replication offset. Classified via the CMD_KEYSPACE_GLOBAL
+ * flag set in the command JSON specs. */
+#define IS_KEYSPACE_GLOBAL(cmd) ((cmd) && ((cmd)->flags & CMD_KEYSPACE_GLOBAL))
 
 /* Flags below help in correctly classifying transactions as
  * either read/write commands or non-keyspace commands. */

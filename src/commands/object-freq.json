@@ -8,8 +8,7 @@
         "container": "OBJECT",
         "function": "objectCommand",
         "command_flags": [
-            "READONLY",
-            "KEYSPACE_INFORMATIONAL"
+            "READONLY"
         ],
         "acl_categories": [
             "KEYSPACE",

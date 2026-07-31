@@ -9,8 +9,7 @@
         "function": "objectCommand",
         "command_flags": [
             "LOADING",
-            "STALE",
-            "KEYSPACE_INFORMATIONAL"
+            "STALE"
         ],
         "acl_categories": [
             "KEYSPACE",

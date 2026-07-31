@@ -189,13 +189,13 @@ static bool clientEligibleForResponseTracking(client *c) {
 
     if (c->cmd == NULL) return false;
 
-    bool is_keyspace_informational_cmd = IS_KEYSPACE_INFORMATIONAL(c->cmd);
+    bool is_keyspace_global_cmd = IS_KEYSPACE_GLOBAL(c->cmd);
 
-    if ((c->cmd->flags & CMD_ADMIN) && !(c->cmd->flags & CMD_WRITE) && !is_keyspace_informational_cmd) {
+    if ((c->cmd->flags & CMD_ADMIN) && !(c->cmd->flags & CMD_WRITE) && !is_keyspace_global_cmd) {
         return false;
     }
 
-    return ((c->cmd->flags & (CMD_WRITE | CMD_READONLY)) || isClientDoingTransaction(c) || is_keyspace_informational_cmd || isFunctionStoreRWCommand(c));
+    return ((c->cmd->flags & (CMD_WRITE | CMD_READONLY)) || isClientDoingTransaction(c) || is_keyspace_global_cmd || isFunctionStoreRWCommand(c));
 }
 
 /* Check if we only allow client to receive up to a certain
@@ -587,8 +587,10 @@ static long long getSingleCommandBlockingOffsetForConsistentWrites(struct client
 
     long long blocking_repl_offset = -1;
 
-    // we can't trust keyspace info if we have any dirty data
-    if (IS_KEYSPACE_INFORMATIONAL(c->cmd) &&
+    // Whole-keyspace commands have no key argument, so their result depends on
+    // any uncommitted write anywhere. Block them on the newest offset whenever
+    // any data is dirty.
+    if (IS_KEYSPACE_GLOBAL(c->cmd) &&
         (listLength(server.reply_blocking.clients_waiting_ack) > 0 || hasUncommittedKeys() || isUncommittedFunctionStore())) {
         blocking_repl_offset = server.primary_repl_offset;
     } else if ((server.primary_repl_offset > server.reply_blocking.pre_call_replication_offset) || (server.also_propagate.numops > server.reply_blocking.pre_call_num_ops_pending_propagation)) {

@@ -9,7 +9,7 @@
         "command_flags": [
             "READONLY",
             "FAST",
-            "KEYSPACE_INFORMATIONAL"
+            "KEYSPACE_GLOBAL"
         ],
         "acl_categories": [
             "FAST",

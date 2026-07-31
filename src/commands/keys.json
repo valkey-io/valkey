@@ -8,7 +8,7 @@
         "function": "keysCommand",
         "command_flags": [
             "READONLY",
-            "KEYSPACE_INFORMATIONAL"
+            "KEYSPACE_GLOBAL"
         ],
         "acl_categories": [
             "DANGEROUS",

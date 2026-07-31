@@ -323,6 +323,105 @@ foreach provider_mode {aof} {
                 $primary config set busy-reply-threshold $saved_limit
             }
 
+            test "($provider_mode) Key-targeting reads block per-key, not on the global dirty offset" {
+                # KEYSPACE_GLOBAL narrowing: commands that carry a key argument
+                # (EXISTS/TYPE/TTL/...) must block only on their own key's offset,
+                # not on the global offset just because some unrelated key is dirty.
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
+
+                # A committed, clean key to read later (written while blocking is off).
+                $primary config set appendfsync everysec
+                $primary set durable:kt-clean cleanval
+                $primary config set appendfsync always
+
+                pause_provider
+
+                # Dirty an unrelated key so the keyspace has uncommitted data.
+                set rd [valkey_deferring_client -1]
+                $rd set durable:kt-dirty pending
+                wait_for_condition 50 100 {
+                    [string match "*reply_blocking_clients_waiting_ack:1*" [$primary info debug]]
+                } else {
+                    fail "writer's reply never entered the blocked state"
+                }
+
+                # Reads of the clean key must return immediately despite the dirty key.
+                set reader [valkey_client -1]
+                assert_equal 1 [$reader exists durable:kt-clean]
+                assert_equal "string" [$reader type durable:kt-clean]
+                assert_equal -1 [$reader ttl durable:kt-clean]
+                $reader close
+
+                # A read of the dirty key itself must still block until durable.
+                set rd2 [valkey_deferring_client -1]
+                $rd2 exists durable:kt-dirty
+                set fd [$rd2 channel]
+                fconfigure $fd -blocking 0
+                assert_equal "" [read $fd]
+                fconfigure $fd -blocking 1
+
+                unblock_with_provider
+                assert_equal 1 [$rd2 read]
+                assert_equal "OK" [$rd read]
+                $rd2 close
+                $rd close
+            }
+
+            test "($provider_mode) Whole-keyspace commands still block while any data is dirty" {
+                # KEYS/SCAN/RANDOMKEY/DBSIZE have no key argument, so a not-yet-durable
+                # write can add/remove a key they would report: they must block on the
+                # global offset whenever anything is dirty.
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
+
+                pause_provider
+
+                set rd [valkey_deferring_client -1]
+                $rd set durable:global-dirty pending
+                wait_for_condition 50 100 {
+                    [string match "*reply_blocking_clients_waiting_ack:1*" [$primary info debug]]
+                } else {
+                    fail "writer's reply never entered the blocked state"
+                }
+
+                set rk [valkey_deferring_client -1]
+                $rk keys *
+                $rk dbsize
+                set fd [$rk channel]
+                fconfigure $fd -blocking 0
+                assert_equal "" [read $fd]
+                fconfigure $fd -blocking 1
+
+                unblock_with_provider
+                assert_morethan [llength [$rk read]] 0
+                assert_morethan [$rk read] 0
+                assert_equal "OK" [$rd read]
+                $rk close
+                $rd close
+            }
+
+            test "($provider_mode) OBJECT HELP is never blocked" {
+                # OBJECT HELP is static help text touching no keys; it must never block.
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
+
+                pause_provider
+
+                set rd [valkey_deferring_client -1]
+                $rd set durable:oh-dirty pending
+                wait_for_condition 50 100 {
+                    [string match "*reply_blocking_clients_waiting_ack:1*" [$primary info debug]]
+                } else {
+                    fail "writer's reply never entered the blocked state"
+                }
+
+                set reader [valkey_client -1]
+                assert_match "*ENCODING*" [$reader object help]
+                $reader close
+
+                unblock_with_provider
+                assert_equal "OK" [$rd read]
+                $rd close
+            }
+
             # ==================== Non-blocking tests ====================
 
             test "($provider_mode) EVAL_RO should not block replies" {

@@ -9,7 +9,7 @@
         "command_flags": [
             "READONLY",
             "TOUCHES_ARBITRARY_KEYS",
-            "KEYSPACE_INFORMATIONAL"
+            "KEYSPACE_GLOBAL"
         ],
         "acl_categories": [
             "KEYSPACE",

@@ -536,7 +536,11 @@ typedef void (*ValkeyModuleEventLoopOneShotFunc)(void *user_data);
 #define VALKEYMODULE_EVENT_KEY 17
 #define VALKEYMODULE_EVENT_AUTHENTICATION_ATTEMPT 18
 #define VALKEYMODULE_EVENT_ATOMIC_SLOT_MIGRATION 19
-#define _VALKEYMODULE_EVENT_NEXT 20 /* Next event flag, should be updated if a new event added. */
+#define VALKEYMODULE_EVENT_COMMAND_RESULT_SUCCESS 20
+#define VALKEYMODULE_EVENT_COMMAND_RESULT_FAILURE 21
+#define VALKEYMODULE_EVENT_COMMAND_RESULT_REJECTED 22
+#define VALKEYMODULE_EVENT_COMMAND_RESULT_ACL_REJECTED 23
+#define _VALKEYMODULE_EVENT_NEXT 24 /* Next event flag, should be updated if a new event added. */
 
 typedef struct ValkeyModuleEvent {
     uint64_t id;      /* VALKEYMODULE_EVENT_... defines. */
@@ -595,7 +599,11 @@ static const ValkeyModuleEvent ValkeyModuleEvent_ReplicationRoleChanged = {VALKE
                                ValkeyModuleEvent_Config = {VALKEYMODULE_EVENT_CONFIG, 1},
                                ValkeyModuleEvent_Key = {VALKEYMODULE_EVENT_KEY, 1},
                                ValkeyModuleEvent_AuthenticationAttempt = {VALKEYMODULE_EVENT_AUTHENTICATION_ATTEMPT, 1},
-                               ValkeyModuleEvent_AtomicSlotMigration = {VALKEYMODULE_EVENT_ATOMIC_SLOT_MIGRATION, 1};
+                               ValkeyModuleEvent_AtomicSlotMigration = {VALKEYMODULE_EVENT_ATOMIC_SLOT_MIGRATION, 1},
+                               ValkeyModuleEvent_CommandResultSuccess = {VALKEYMODULE_EVENT_COMMAND_RESULT_SUCCESS, 1},
+                               ValkeyModuleEvent_CommandResultFailure = {VALKEYMODULE_EVENT_COMMAND_RESULT_FAILURE, 1},
+                               ValkeyModuleEvent_CommandResultRejected = {VALKEYMODULE_EVENT_COMMAND_RESULT_REJECTED, 1},
+                               ValkeyModuleEvent_CommandResultACLRejected = {VALKEYMODULE_EVENT_COMMAND_RESULT_ACL_REJECTED, 1};
 
 /* Those are values that are used for the 'subevent' callback argument. */
 #define VALKEYMODULE_SUBEVENT_PERSISTENCE_RDB_START 0
@@ -674,6 +682,21 @@ static const ValkeyModuleEvent ValkeyModuleEvent_ReplicationRoleChanged = {VALKE
 #define VALKEYMODULE_SUBEVENT_ATOMIC_SLOT_MIGRATION_IMPORT_COMPLETED 4
 #define VALKEYMODULE_SUBEVENT_ATOMIC_SLOT_MIGRATION_EXPORT_COMPLETED 5
 #define _VALKEYMODULE_SUBEVENT_ATOMIC_SLOT_MIGRATION_NEXT 6
+
+/* ValkeyModuleEvent_CommandResultRejected has no subevents (subevent is always 0).
+ * The rejection_context field in ValkeyModuleCommandResultInfo carries the full
+ * error reply string sent to the client (e.g. "-OOM command not allowed...",
+ * "-ERR Command 'xyz' not allowed inside a transaction"). */
+
+/* Subevents for ValkeyModuleEvent_CommandResultACLRejected.
+ * These reuse the ValkeyModuleACLLogEntryReason enum values so the same
+ * constants work with both the ACL log API and this event:
+ *   VALKEYMODULE_ACL_LOG_AUTH    = 0  (NOAUTH; rejection_context = NULL)
+ *   VALKEYMODULE_ACL_LOG_CMD     = 1  (NOPERM command; rejection_context = NULL)
+ *   VALKEYMODULE_ACL_LOG_KEY     = 2  (NOPERM key; rejection_context = key name)
+ *   VALKEYMODULE_ACL_LOG_CHANNEL = 3  (NOPERM channel; rejection_context = channel name)
+ *   VALKEYMODULE_ACL_LOG_DB      = 4  (NOPERM database; rejection_context = NULL)
+ * No additional subevent constants are needed. */
 
 /* ValkeyModuleClientInfo flags.
  * Note: flags VALKEYMODULE_CLIENTINFO_FLAG_PRIMARY and below were added in Valkey 9.1 */
@@ -848,6 +871,28 @@ typedef struct ValkeyModuleAtomicSlotMigrationInfo {
 
 #define ValkeyModuleAtomicSlotMigrationInfo ValkeyModuleAtomicSlotMigrationInfoV1
 
+#define VALKEYMODULE_COMMANDRESULTINFO_VERSION 1
+typedef struct ValkeyModuleCommandResultInfo {
+    uint64_t version;              /* Version of this structure for ABI compat. */
+    const char *command_name;      /* Command name (e.g., "SET", "GET"). */
+    long long duration_us;         /* Execution duration in microseconds. */
+    long long dirty;               /* Number of keys modified. */
+    uint64_t client_id;            /* Client ID that executed the command. */
+    int is_module_client;          /* 1 if command was from RM_Call, 0 otherwise. */
+    int argc;                      /* Number of command arguments. */
+    ValkeyModuleString **argv;     /* Command arguments array (zero-copy). */
+    const char *rejection_context; /* Context string; meaning depends on the event:
+                                    * ValkeyModuleEvent_CommandResultRejected:
+                                    *   The full error reply string sent to the client
+                                    *   (e.g. "-OOM command not allowed when used memory > 'maxmemory'").
+                                    * ValkeyModuleEvent_CommandResultACLRejected:
+                                    *   ACL_LOG_KEY (2): the denied key name.
+                                    *   ACL_LOG_CHANNEL (3): the denied channel name.
+                                    *   All other ACL subevents: NULL. */
+} ValkeyModuleCommandResultInfoV1;
+
+#define ValkeyModuleCommandResultInfo ValkeyModuleCommandResultInfoV1
+
 #define VALKEYMODULE_ATOMICSLOTMIGRATIONINFO_INITIALIZER_V1 {.version = 1}
 
 typedef enum {
@@ -864,12 +909,28 @@ typedef struct ValkeyModuleIO ValkeyModuleIO;
 typedef struct ValkeyModuleDigest ValkeyModuleDigest;
 typedef struct ValkeyModuleInfoCtx ValkeyModuleInfoCtx;
 typedef struct ValkeyModuleDefragCtx ValkeyModuleDefragCtx;
+typedef struct ValkeyModuleAsyncRMCallPromise ValkeyModuleCallArgvBlockedHandle;
 
 /* Function pointers needed by both the core and modules, these needs to be
  * exposed since you can't cast a function pointer to (void *). */
 typedef void (*ValkeyModuleInfoFunc)(ValkeyModuleInfoCtx *ctx, int for_crash_report);
 typedef void (*ValkeyModuleDefragFunc)(ValkeyModuleDefragCtx *ctx);
 typedef void (*ValkeyModuleUserChangedFunc)(uint64_t client_id, void *privdata);
+
+/* ValkeyModule_CallArgv Flags */
+#define VALKEYMODULE_CALL_ARGV_REPLICATE (1 << 0)
+#define VALKEYMODULE_CALL_ARGV_NO_AOF (1 << 1)
+#define VALKEYMODULE_CALL_ARGV_NO_REPLICAS (1 << 2)
+#define VALKEYMODULE_CALL_ARGV_RESP_3 (1 << 3)
+#define VALKEYMODULE_CALL_ARGV_RESP_AUTO (1 << 4)
+#define VALKEYMODULE_CALL_ARGV_RUN_AS_USER (1 << 5)
+#define VALKEYMODULE_CALL_ARGV_SCRIPT_MODE (1 << 6)
+#define VALKEYMODULE_CALL_ARGV_NO_WRITES (1 << 7)
+#define VALKEYMODULE_CALL_ARGV_ERRORS_AS_REPLIES (1 << 8)
+#define VALKEYMODULE_CALL_ARGV_RESPECT_DENY_OOM (1 << 9)
+#define VALKEYMODULE_CALL_ARGV_DRY_RUN (1 << 10)
+#define VALKEYMODULE_CALL_ARGV_ALLOW_BLOCK (1 << 11)
+#define VALKEYMODULE_CALL_ARGV_REPLY_EXACT (1 << 12)
 
 /* Type definitions for implementing scripting engines modules. */
 typedef void ValkeyModuleScriptingEngineCtx;
@@ -1300,6 +1361,56 @@ typedef struct ValkeyModuleScriptingEngineMethodsV4 {
 } ValkeyModuleScriptingEngineMethodsV4;
 
 #define ValkeyModuleScriptingEngineMethods ValkeyModuleScriptingEngineMethodsV4
+
+/* Current ABI version for CallArgv Reply Handlers structure */
+#define VALKEYMODULE_REPLY_HANDLERS_VERSION 1UL
+
+/* Handler table for parsing RESP replies, used by ValkeyModule_CallArgv.
+ * Set the function pointers for the types you want to handle; leave unused ones as NULL.
+ * The `context` pointer is passed as the first argument to every callback.
+ * The `proto` and `proto_len` arguments point to the raw RESP bytes for the parsed value.
+ * For collection types (array, map, set, attribute), separate start and end callbacks are
+ * provided. The `proto` in the end callback covers the entire collection including all its
+ * elements.
+ */
+typedef struct ValkeyModuleReplyHandlersV1 {
+    uint64_t version; /* Version of this structure for ABI compat. */
+
+    void (*null)(void *ctx);
+    void (*nullBulkString)(void *ctx);
+    void (*nullArray)(void *ctx);
+    void (*bulkString)(void *ctx, const char *str, size_t len);
+    void (*simpleString)(void *ctx, const char *str, size_t len);
+    void (*verbatimString)(void *ctx, const char *str, size_t len, const char *fmt);
+    void (*error)(void *ctx, const char *msg, size_t len);
+    void (*integer)(void *ctx, long long val);
+    void (*doubleVal)(void *ctx, double val);
+    void (*bigNumber)(void *ctx, const char *str, size_t len);
+    void (*boolVal)(void *ctx, int val);
+    void (*attributeStart)(void *ctx, size_t len);
+    void (*attributeEnd)(void *ctx);
+    void (*arrayStart)(void *ctx, size_t len);
+    void (*arrayEnd)(void *ctx);
+    void (*mapStart)(void *ctx, size_t len);
+    void (*mapEnd)(void *ctx);
+    void (*setStart)(void *ctx, size_t len);
+    void (*setEnd)(void *ctx);
+    void (*replyParsingError)(void *ctx);
+
+    /* This callback is invoked when the client is blocked waiting for a reply.
+     * `handle` can be passed to ValkeyModule_CallArgvAbort to cancel the
+     * pending call before a reply arrives. The handle is valid until either
+     * onRespAvailable is invoked or ValkeyModule_CallArgvAbort is called. */
+    void (*onBlocked)(void *ctx, ValkeyModuleCtx *module_ctx, ValkeyModuleCallArgvBlockedHandle *handle);
+
+    /* This callback is invoked when a RESP reply is available for processing.
+     * The callback should return 1 if parsing should continue, or 0 if parsing should stop.
+     * `proto` and `proto_len` provide the raw RESP bytes for the entire reply.
+     */
+    int (*onRespAvailable)(void *ctx, ValkeyModuleCtx *module_ctx, const char *proto, size_t proto_len);
+} ValkeyModuleReplyHandlersV1;
+
+#define ValkeyModuleReplyHandlers ValkeyModuleReplyHandlersV1
 
 /* ------------------------- End of common defines ------------------------ */
 

@@ -38,6 +38,7 @@ extern "C" {
 // recognized or have different meanings in C++. To allow C headers
 // to be included in C++ code without errors, we redefine them appropriately.
 #define _Atomic(type) alignas(sizeof(type)) type /* Preserve alignment in C++ builds */
+#define _Alignas alignas                         /* Replace C _Alignas with C++ alignas */
 #define _Bool bool                               /* Replace C _Bool with C++ bool */
 #define typename _typename                       /* Avoid conflict with C++ 'typename' keyword */
 #define protected protected_                     /* Avoid conflict with C++ 'protected' keyword */

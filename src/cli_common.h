@@ -3,6 +3,7 @@
 
 #include <valkey/valkey.h>
 #include "sds.h"
+#include <stdint.h>
 
 typedef struct cliSSLconfig {
     /* Requested SNI, or NULL */
@@ -52,5 +53,9 @@ void freeCliConnInfo(cliConnInfo connInfo);
 sds cliVersion(void);
 
 valkeyContext *valkeyConnectWrapper(enum valkeyConnectionType ct, const char *ip_or_path, int port, const struct timeval tv, int nonblock, int multipath);
+
+/* Two random() calls combined for 62-bit range. Not genrand64_int64: its
+ * state is unlocked and callers are multi-threaded. Seed via srandom(). */
+uint64_t rand62(void);
 
 #endif /* __CLICOMMON_H */

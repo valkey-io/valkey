@@ -119,7 +119,7 @@ int get_ref(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     ValkeyModule_AutoMemory(ctx);
 
     ValkeyModuleKey *key = ValkeyModule_OpenKey(ctx, argv[1], VALKEYMODULE_READ);
-    ValkeyModuleString *reference = ValkeyModule_CreateStringReferenceFromKey(key); /* bumps the value's reference count up by 1 */
+    ValkeyModuleString *reference = ValkeyModule_CreateStringReferenceFromKey(ctx, key); /* bumps the value's reference count up by 1 */
     if (reference == NULL) return ValkeyModule_ReplyWithNull(ctx);
 
     ValkeyModule_ReplyWithString(ctx, reference);
@@ -142,7 +142,7 @@ int ref_capture(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     }
 
     ValkeyModuleKey *key = ValkeyModule_OpenKey(ctx, argv[1], VALKEYMODULE_READ);
-    captured_reference = ValkeyModule_CreateStringReferenceFromKey(key);
+    captured_reference = ValkeyModule_CreateStringReferenceFromKey(ctx, key);
 
     if (captured_reference == NULL) return ValkeyModule_ReplyWithNull(ctx);
     return ValkeyModule_ReplyWithSimpleString(ctx, "OK");

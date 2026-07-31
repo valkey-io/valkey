@@ -2886,8 +2886,15 @@ ValkeyModuleString *VM_CreateStringFromStreamID(ValkeyModuleCtx *ctx, const Valk
  *
  * This function shares the underlying buffer of the key's value when possible.
  *
- * Returns NULL if the key is empty or does not hold a string. */
-ValkeyModuleString *VM_CreateStringReferenceFromKey(ValkeyModuleKey *key) {
+ * The reference is not registered with automatic memory management. It is
+ * meant to outlive the context it was created from. 'ctx' is accepted for
+ * consistency with the other ValkeyModule_CreateString* functions.
+ *
+ * Returns NULL if the key is empty or does not hold a string.
+ *
+ * This API must be called with GIL locked. */
+ValkeyModuleString *VM_CreateStringReferenceFromKey(ValkeyModuleCtx *ctx, ValkeyModuleKey *key) {
+    UNUSED(ctx);
     if (key == NULL || key->value == NULL) return NULL;
     if (key->value->type != OBJ_STRING) return NULL;
 
@@ -4581,13 +4588,33 @@ int VM_StringSet(ValkeyModuleKey *key, ValkeyModuleString *str) {
  * moved into the keyspace, in similar spirit to `std::move`. The caller MUST treat the
  * `str` pointer as having been moved. It must not be referenced or freed again.
  *
- * The caller retains its reference in case of error. Returns VALKEYMODULE_ERR:
- * * If `str->refcount != 1`
- * * If the key is not open for writing there is an active iterator. */
+ * The caller retains its reference in case of error.
+ * Returns VALKEYMODULE_ERR, with errno set to:
+ * * EINVAL when str's refcount is not exactly 1 (required for move)
+ * * EACCES when key is not opened for write.
+ * * EBUSY when key has an open iterator.
+ * * EIO when delete of previous value fails (unlikely, as access is pre-checked).
+ *
+ * This API must be called with GIL locked. */
 int VM_StringSetMove(ValkeyModuleKey *key, ValkeyModuleString *str) {
-    if (!(key->mode & VALKEYMODULE_WRITE) || key->iter) return VALKEYMODULE_ERR;
-    if (str->refcount != 1) return VALKEYMODULE_ERR;
-    VM_DeleteKey(key);
+    if (!(key->mode & VALKEYMODULE_WRITE)) {
+        errno = EACCES;
+        return VALKEYMODULE_ERR;
+    }
+    if (key->iter) {
+        errno = EBUSY;
+        return VALKEYMODULE_ERR;
+    }
+    if (str->refcount != 1) {
+        errno = EINVAL;
+        return VALKEYMODULE_ERR;
+    }
+
+    if (VM_DeleteKey(key) != VALKEYMODULE_OK) {
+        errno = EIO;
+        return VALKEYMODULE_ERR;
+    }
+
     /* if auto-memory was used for this string, mark it as externally managed now */
     autoMemoryFreed(key->ctx, VALKEYMODULE_AM_STRING, str);
     robj *val = str; /* refcount 1, owned by this pointer — setKey uses this robj directly in the keyspace */

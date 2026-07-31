@@ -1729,7 +1729,7 @@ start_server {tags {"repl" "external:skip"}} {
     # Force disk-target BGSAVE: the attach path only exists for disk saves.
     $primary config set repl-diskless-sync no
     $primary config set save ""
-    populate 10000 primary: 100
+    $primary debug populate 10000 primary: 100
 
     test "rdb-only sync does not attach to a non-rdb-only BGSAVE in progress" {
         # Slow the RDB child so the second SYNC arrives while the first

@@ -1,6 +1,6 @@
-# Sync From Replica - Design Document
+# Design Document: Sync From Replica
 
-**Issue:** valkey-io/valkey#2767
+Issue: [valkey-io/valkey#2767](https://github.com/valkey-io/valkey/issues/2767)
 
 ## Problem
 

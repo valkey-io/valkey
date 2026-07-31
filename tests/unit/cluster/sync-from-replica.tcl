@@ -513,7 +513,7 @@ start_cluster 2 2 {tags {external:skip cluster} overrides {cluster-node-timeout 
             # residual handoff gap fits any backlog.
             set p0_offset [get_info 0 master_repl_offset]
             wait_for_condition 500 100 {
-                [get_info 2 slave_repl_offset] >= $p0_offset
+                [get_info 2 master_repl_offset] >= $p0_offset
             } else {
                 fail "Sibling did not drain the write burst before the switch"
             }
@@ -1100,10 +1100,10 @@ start_cluster 2 2 {tags {external:skip cluster} overrides {cluster-node-timeout 
 
 # ---------------------------------------------------------------------------
 # Sibling selection with multiple candidates. Separate topology: one shard
-# with three replicas, so the argmax over gossip offsets is exercised with a
-# real choice. Offsets between in-sync siblings are near-tied and the tie
-# winner is unspecified, so the losing candidate is frozen (SIGSTOP) and P
-# takes a write burst to engineer a deterministic offset gap.
+# with three replicas, so highest-offset selection is exercised with a real
+# choice. Offsets between in-sync siblings are near-tied and the tie winner is
+# unspecified, so the losing candidate is frozen (SIGSTOP) and P takes a write
+# burst to engineer a deterministic offset gap.
 # ---------------------------------------------------------------------------
 
 # Return the replication offset that `observer` currently gossips for node
@@ -1150,7 +1150,7 @@ start_cluster 1 3 {tags {external:skip cluster} overrides {cluster-node-timeout 
             }
 
             # Wait until the joiner-to-be observes sibling 1 strictly ahead of
-            # the frozen sibling 2, so the argmax has a deterministic winner.
+            # the frozen sibling 2, so the selection has a deterministic winner.
             wait_for_condition 100 100 {
                 [observed_replication_offset 3 $sibling1_id] > $frozen_offset
             } else {

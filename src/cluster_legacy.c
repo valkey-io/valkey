@@ -8283,13 +8283,14 @@ int clusterCommandSpecial(client *c) {
          * topology pointed at n. The final reconnect to n uses PSYNC with n's
          * replication ID.
          *
-         * Selection is a deterministic argmax over gossip repl_offset, so
-         * several nodes joining around the same time converge on the same
-         * sibling and serialize behind its BGSAVEs (e.g. fleet patching that
-         * replaces several replicas of one shard in quick succession).
-         * Joiners arriving within the repl-diskless-sync-delay window still
-         * share one fork. Spreading the load (randomized tie-breaking among
-         * near-tied offsets, or primary-side selection) is future work. */
+         * Selection deterministically picks the sibling with the greatest
+         * gossiped repl_offset, so several nodes joining around the same time
+         * converge on the same sibling and serialize behind its BGSAVEs
+         * (e.g. fleet patching that replaces several replicas of one shard in
+         * quick succession). Joiners arriving within the
+         * repl-diskless-sync-delay window still share one fork. Spreading the
+         * load (randomized tie-breaking among near-tied offsets, or
+         * primary-side selection) is future work. */
         if (server.cluster_prefer_sync_from_replica && n->num_replicas > 0 && n->replicas) {
             clusterNode *best_sibling = NULL;
             long long best_offset = -1;

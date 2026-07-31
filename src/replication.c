@@ -3078,6 +3078,7 @@ void replicationAbortDualChannelSyncTransfer(void) {
 }
 
 /* ---------------------------------------------------------------------------
+ * Replication: Replica side.
  * Sync-from-replica: chain approach (P->S->N), where
  *   P = the cluster primary,
  *   S = an in-sync sibling replica of P serving as the temporary sync source,
@@ -3100,10 +3101,8 @@ static void replicationClearSiblingSyncState(void) {
  * establishes a new primary via replicationSetPrimary(), and a promotion
  * tears replication down via replicationUnsetPrimary(). Unlike
  * replicationAbortSiblingSync() this cannot fail, since no fallback target
- * is needed. */
+ * is needed. Callers log the reason for the discard. */
 void replicationDiscardSiblingSync(void) {
-    if (!server.cluster_syncing_from_sibling) return;
-    serverLog(LL_NOTICE, "Sync-from-replica: discarding sibling sync state");
     replicationClearSiblingSyncState();
 }
 
@@ -3194,10 +3193,11 @@ void replicationMaybeSwitchToPrimaryAfterSiblingSync(void) {
     if (pn == NULL) {
         /* No topology primary to switch to. Keep the sibling sync state (and
          * with it the failover guard and INFO reporting) since N is still
-         * replicating from S; retry once gossip provides a primary. Throttle
-         * the log because this runs after every primary-client read. */
+         * replicating from S; retry once gossip provides a primary. Limit
+         * logging rate to 1 line per second since this runs after every
+         * primary-client read. */
         static time_t lastlog_time = 0;
-        if (server.unixtime != lastlog_time) {
+        if (server.unixtime - lastlog_time > 0) {
             lastlog_time = server.unixtime;
             serverLog(LL_WARNING,
                       "Sync-from-replica: no primary in cluster topology, staying connected to sibling");

@@ -2135,7 +2135,6 @@ struct valkeyServer {
                                                     * delay (start sooner if they all connect). */
     int dual_channel_replication;                  /* Config used to determine if the replica should
                                                     * use dual channel replication for full syncs. */
-    int cluster_prefer_sync_from_replica;          /* Seed new cluster replicas from a sibling replica. */
     bool cluster_syncing_from_sibling;             /* Transient sync-from-replica is in progress. */
     long long cluster_sync_sibling_initial_offset; /* Sibling offset recorded after RDB load. */
     long long cluster_sync_sibling_target_offset;  /* Highest primary offset observed during sibling sync. */
@@ -2284,6 +2283,7 @@ struct valkeyServer {
                                                               there is at least an uncovered slot.*/
     int cluster_replica_no_failover;                       /* Prevent replica from starting a failover
                                                             if the primary is in failure state. */
+    int cluster_prefer_sync_from_replica;                  /* Seed new cluster replicas from a sibling replica. */
     char *cluster_announce_ip;                             /* IP address to announce on cluster bus. */
     char *cluster_announce_client_ipv4;                    /* IPv4 for clients, to announce on cluster bus. */
     char *cluster_announce_client_ipv6;                    /* IPv6 for clients, to announce on cluster bus. */

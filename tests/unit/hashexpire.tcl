@@ -36,11 +36,16 @@ proc check_myhash_and_expired_subkeys {r myhash expected_len initial_expired exp
     }
 }
 
+# Note: the EXAT margin is +2 (not +1) because [clock seconds] truncates: at
+# X.99s a +1 timestamp is only ~10ms in the future, and any scheduling stall
+# makes it already-past by the time the server executes the command. That
+# takes the immediate-expiry path, which emits hexpired without a preceding
+# hexpire notification and breaks notification-ordering assertions.
 proc get_short_expire_value {command} {
     expr {
         ($command eq "HEXPIRE" || $command eq "EX") ? 1 :
         ($command eq "HPEXPIRE" || $command eq "PX") ? 1000 :
-        ($command eq "HEXPIREAT" || $command eq "EXAT") ? [clock seconds] + 1 :
+        ($command eq "HEXPIREAT" || $command eq "EXAT") ? [clock seconds] + 2 :
         [clock milliseconds] + 1000
     }
 }
@@ -1539,6 +1544,30 @@ start_server {tags {"hashexpire"}} {
             assert_match {*f10*} $result
         }
     }
+
+    test "HRANDFIELD - CASE 4: does not loop forever when valid fields fewer than count" {
+        r FLUSHALL
+        r DEBUG SET-ACTIVE-EXPIRE 0
+
+        # 71 expired fields + 29 valid fields = 100 total
+        # count=30, count*3=90 < 100 -> CASE 4
+        for {set i 1} {$i <= 71} {incr i} {
+            r HSETEX myhash PX 1 FIELDS 1 f$i v$i
+        }
+        for {set i 72} {$i <= 100} {incr i} {
+            r HSET myhash f$i v$i
+        }
+
+        # Wait for fields to expire
+        after 100
+        assert_equal 100 [r HLEN myhash]
+
+        # Should return at most 29 valid fields without looping forever
+        set result [r HRANDFIELD myhash 30]
+        assert_lessthan_equal [llength $result] 29
+
+        r DEBUG SET-ACTIVE-EXPIRE 1
+    } {OK} {needs:debug}
 
     test "HRANDFIELD - returns null response when all fields are expired" {
         r FLUSHALL

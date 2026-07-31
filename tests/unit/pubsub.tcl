@@ -290,6 +290,41 @@ start_server {tags {"pubsub network"}} {
         $rd1 close
     }
 
+    test "Keyspace notifications: events with no subscribers" {
+        r config set notify-keyspace-events KEA
+        r set foo{t} bar
+
+        set rd1 [valkey_deferring_client]
+        assert_equal {1} [psubscribe $rd1 *]
+        r set foo2{t} bar2
+        assert_equal "pmessage * __keyspace@${db}__:foo2{t} set" [$rd1 read]
+        assert_equal "pmessage * __keyevent@${db}__:set foo2{t}" [$rd1 read]
+        $rd1 close
+    }
+
+    test "Keyspace notifications: K/E bitmask selects emitted channels" {
+        set rd1 [valkey_deferring_client]
+        assert_equal {1} [psubscribe $rd1 *]
+
+        # Neither K nor E: string class fires but is dropped early.
+        r config set notify-keyspace-events $
+        r set foo bar
+        r publish fence hello ;# Fence: no keyspace notification may leak before it
+        assert_equal "pmessage * fence hello" [$rd1 read]
+
+        # Only K: keyspace channel only.
+        r config set notify-keyspace-events K$
+        r set foo bar
+        assert_equal "pmessage * __keyspace@${db}__:foo set" [$rd1 read]
+
+        # Only E: keyevent channel only.
+        r config set notify-keyspace-events E$
+        r set foo bar
+        assert_equal "pmessage * __keyevent@${db}__:set foo" [$rd1 read]
+
+        $rd1 close
+    }
+
     test "Keyspace notifications: we are able to mask events" {
         r config set notify-keyspace-events KEl
         r del mylist

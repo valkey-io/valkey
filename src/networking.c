@@ -6560,7 +6560,7 @@ void processClientIOReadsDone(client *c) {
     int ret = addCommandToBatchAndProcessIfFull(c);
     /* If the command was not added to the commands batch, process it immediately */
     if (ret == C_ERR) {
-        int was_primary = c == server.primary;
+        bool was_primary = c == server.primary;
         if (processPendingCommandAndInputBuffer(c) == C_OK) {
             beforeNextClient(c);
             if (was_primary) replicationMaybeSwitchToPrimaryAfterSiblingSync();

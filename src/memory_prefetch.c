@@ -231,7 +231,7 @@ void processClientsCommandsBatch(void) {
         /* Set the client to null immediately to avoid accessing it again recursively when ProcessingEventsWhileBlocked */
         batch->clients[i] = NULL;
         batch->executed_commands++;
-        int was_primary = c == server.primary;
+        bool was_primary = c == server.primary;
         if (processPendingCommandAndInputBuffer(c) != C_ERR) {
             beforeNextClient(c);
             if (was_primary) replicationMaybeSwitchToPrimaryAfterSiblingSync();

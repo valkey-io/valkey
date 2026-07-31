@@ -3935,9 +3935,14 @@ void bgsaveCommand(client *c) {
 
     /* If user didn't explicitly specify save type, let the system choose */
     if (chosen_save_type == RDB_BGSAVE_TYPE_NONE) {
-        chosen_save_type = (server.default_bgsave_method == RDB_BGSAVE_TYPE_THREAD && server.forkless_options_supported)
+        chosen_save_type = (server.default_bgsave_method == RDB_BGSAVE_TYPE_THREAD && server.forkless_options_supported
+                            && moduleAllDatatypesHandleThreadsave())
                                ? RDB_BGSAVE_TYPE_THREAD
                                : RDB_BGSAVE_TYPE_FORK;
+    } else if (chosen_save_type == RDB_BGSAVE_TYPE_THREAD && !moduleAllDatatypesHandleThreadsave()) {
+        addReplyError(c, "Can't use threadsave: one or more loaded modules have not declared "
+                         "VALKEYMODULE_OPTIONS_HANDLE_THREADSAVE");
+        return;
     }
 
     rdbSaveInfo rsi, *rsiptr;

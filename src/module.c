@@ -7406,6 +7406,24 @@ int moduleVerifyAllAllowAtomicSlotMigrationOrReply(client *c) {
     return C_OK;
 }
 
+/* Returns 0 if any module with registered data types did not declare
+ * VALKEYMODULE_OPTIONS_HANDLE_THREADSAVE, in which case threadsave should be
+ * blocked because the module's RDB save callbacks may not be thread-safe. */
+int moduleAllDatatypesHandleThreadsave(void) {
+    dictIterator *di = dictGetIterator(modules);
+    dictEntry *de;
+
+    while ((de = dictNext(di)) != NULL) {
+        struct ValkeyModule *module = dictGetVal(de);
+        if (listLength(module->types) && !(module->options & VALKEYMODULE_OPTIONS_HANDLE_THREADSAVE)) {
+            dictReleaseIterator(di);
+            return 0;
+        }
+    }
+    dictReleaseIterator(di);
+    return 1;
+}
+
 /* Returns true if any previous IO API failed.
  * for `Load*` APIs the VALKEYMODULE_OPTIONS_HANDLE_IO_ERRORS flag must be set with
  * ValkeyModule_SetModuleOptions first. */

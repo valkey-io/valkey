@@ -1926,8 +1926,8 @@ struct valkeyServer {
     size_t stat_current_cow_peak;                       /* Peak size of copy on write bytes. */
     size_t stat_current_cow_bytes;                      /* Copy on write bytes while child is active. */
     monotime stat_current_cow_updated;                  /* Last update time of stat_current_cow_bytes */
-    size_t stat_current_save_keys_processed;            /* Processed keys while child is active. */
-    size_t stat_current_save_keys_total;                /* Number of keys when child started. */
+    _Atomic(size_t) stat_current_save_keys_processed;   /* Processed keys while save is active. */
+    _Atomic(size_t) stat_current_save_keys_total;       /* Number of keys when save started. */
     size_t stat_rdb_cow_bytes;                          /* Copy on write bytes during RDB saving. */
     size_t stat_aof_cow_bytes;                          /* Copy on write bytes during AOF rewrite. */
     size_t stat_module_cow_bytes;                       /* Copy on write bytes during module fork. */

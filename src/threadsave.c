@@ -82,9 +82,9 @@ static void *threadsaveProcessor(void *arg) {
 
     installRioWriteWrapper(saveInfo);
 
-    const unsigned progressIntervalSecs = 120;
-    monotime lastStatusTime;
-    elapsedStart(&lastStatusTime);
+    const unsigned statsIntervalMs = 1000;
+    monotime lastStatsTime;
+    elapsedStart(&lastStatsTime);
 
     bool done = false;
     bool terminated = false;
@@ -123,9 +123,9 @@ static void *threadsaveProcessor(void *arg) {
             break;
         }
 
-        if (elapsedMs(lastStatusTime) >= progressIntervalSecs * 1000) {
-            elapsedStart(&lastStatusTime);
-            serverLog(LL_NOTICE, "threadsave: progress - keys processed: %ld", items);
+        if (elapsedMs(lastStatsTime) >= statsIntervalMs) {
+            elapsedStart(&lastStatsTime);
+            atomic_store_explicit(&server.stat_current_save_keys_processed, items, memory_order_relaxed);
         }
     }
 
@@ -160,6 +160,8 @@ static void cleanupSaveInfoAndEmitEndMetrics(threadsaveInfo *saveInfo) {
     }
     stopSaving(saveInfo->err_code == C_OK);
     currentThreadsave = NULL;
+    atomic_store_explicit(&server.stat_current_save_keys_processed, 0, memory_order_relaxed);
+    atomic_store_explicit(&server.stat_current_save_keys_total, 0, memory_order_relaxed);
 
     serverAssert(saveInfo->temp_file == NULL);
     zfree(saveInfo);
@@ -324,6 +326,9 @@ int threadsaveToDisk(const char *filename) {
         goto werr;
     }
     currentThreadsave = saveInfo;
+
+    atomic_store_explicit(&server.stat_current_save_keys_total, dbTotalServerKeyCount(), memory_order_relaxed);
+    atomic_store_explicit(&server.stat_current_save_keys_processed, 0, memory_order_relaxed);
 
     startBackgroundThread(saveInfo);
 

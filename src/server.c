@@ -1679,8 +1679,7 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
                 rdbSaveInfo rsi, *rsiptr;
                 rsiptr = rdbPopulateSaveInfo(&rsi);
                 /* Use threadsave if configured, supported, and modules allow it, otherwise use fork */
-                if (server.default_bgsave_method == RDB_BGSAVE_TYPE_THREAD && server.forkless_options_supported
-                    && moduleAllDatatypesHandleThreadsave()) {
+                if (server.default_bgsave_method == RDB_BGSAVE_TYPE_THREAD && server.forkless_options_supported && moduleAllDatatypesHandleThreadsave()) {
                     threadsaveToDisk(server.rdb_filename);
                 } else {
                     rdbSaveBackground(REPLICA_REQ_NONE, server.rdb_filename, rsiptr, RDBFLAGS_NONE);

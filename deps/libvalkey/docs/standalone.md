@@ -43,6 +43,8 @@ valkeyContext *valkeyConnectWithOptions(valkeyOptions *opt);
 
 When connecting to a server, libvalkey will return `NULL` in the event that we can't allocate the context, and set the `err` member if we can connect but there are issues. So when connecting it's simple to handle error states.
 
+When a hostname resolves to multiple addresses, libvalkey will try each address in order until one succeeds or all have failed. Note that the `connect_timeout` applies per address, so the total connection time may be up to N × timeout when multiple addresses are unreachable.
+
 ```c
 valkeyContext *ctx = valkeyConnect("localhost", 6379);
 if (ctx == NULL || ctx->err) {

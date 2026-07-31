@@ -201,10 +201,12 @@ start_server {tags {"repl external:skip"}} {
             # assertion below doesn't race with it.
             wait_for_ofs_sync $A $B
 
-            # reset stats
+            # Reset stats and read them atomically so replication traffic can't
+            # arrive between the reset and the stats snapshot.
+            $A multi
             $A config resetstat
-            
-            set info [$A info stats]
+            $A info stats
+            set info [lindex [$A exec] 1]
             set replica_bytes_output [getInfoProperty $info "total_net_repl_output_bytes"]
             assert_equal $replica_bytes_output 0
             

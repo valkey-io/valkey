@@ -299,6 +299,11 @@ static int helloLangParseCode(const char *code,
         }
 
         if (currentFunc != NULL) {
+            if (currentFunc->num_instructions >= (uint32_t)(sizeof(currentFunc->instructions) / sizeof(currentFunc->instructions[0]))) {
+                *err = ValkeyModule_CreateStringPrintf(NULL, "Function '%s' has too many instructions", currentFunc->name);
+                ValkeyModule_Free(_code);
+                return -1;
+            }
             currentFunc->instructions[currentFunc->num_instructions].kind = kind;
         }
 
@@ -307,6 +312,11 @@ static int helloLangParseCode(const char *code,
         case RFUNCTION:
             if (currentFunc != NULL) {
                 *err = ValkeyModule_CreateStringPrintf(NULL, "Function '%s' is missing RETURN", currentFunc->name);
+                ValkeyModule_Free(_code);
+                return -1;
+            }
+            if (program->num_functions >= (uint32_t)(sizeof(program->functions) / sizeof(program->functions[0]))) {
+                *err = ValkeyModule_CreateStringPrintf(NULL, "Too many functions defined");
                 ValkeyModule_Free(_code);
                 return -1;
             }

@@ -426,6 +426,26 @@ start_server {tags {"modules"}} {
         assert_equal [r ping] {PONG}
     }
 
+    test {Test eval with too many functions defined} {
+        set funcs {}
+        for {set i 0} {$i < 17} {incr i} {
+            append funcs "FUNCTION f$i\nRETURN\n"
+        }
+        set script "#!hello\n$funcs"
+        assert_error {ERR Too many functions defined} {
+            r eval $script 0
+        }
+        assert_equal [r ping] {PONG}
+    }
+
+    test {Test eval with too many instructions in one function} {
+        set script "#!hello\nFUNCTION foo\n[string repeat "CONSTI 1\n" 257]RETURN"
+        assert_error {ERR Function 'foo' has too many instructions} {
+            r eval $script 0
+        }
+        assert_equal [r ping] {PONG}
+    }
+
     test {Test eval with a second FUNCTION before the previous one's RETURN} {
         assert_error {ERR Function 'foo' is missing RETURN} {
             r eval "#!hello\nFUNCTION foo\nFUNCTION bar\nRETURN" 0

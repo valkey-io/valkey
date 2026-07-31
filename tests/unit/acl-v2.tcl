@@ -1546,5 +1546,55 @@ start_server {tags {"acl external:skip"}} {
         }
     }
 
+    test {MOVE cannot leak data out of an unauthorized current DB} {
+        r select 0
+        r set secret-move "top-secret-db0"
+
+        r ACL SETUSER leak-move on nopass +@all ~* db=1
+
+        # Fresh raw client that never issues SELECT, so it stays on DB 0.
+        set rc [valkey [srv 0 host] [srv 0 port] 0 $::tls]
+        $rc auth leak-move password
+
+        # A direct read on the current DB 0 is denied ...
+        assert_error "*NOPERM*database*" {$rc get secret-move}
+
+        # ... and MOVE is denied too, because the source (current) DB 0 is validated.
+        assert_error "*NOPERM*database*" {$rc move secret-move 1}
+
+        # The secret never reached DB 1.
+        $rc select 1
+        assert_equal {} [$rc get secret-move]
+
+        # cleanup
+        $rc close
+        r del secret-move
+        r ACL DELUSER leak-move
+    }
+
+    test {COPY cannot leak data out of an unauthorized current DB} {
+        r select 0
+        r set secret-copy "top-secret-db0"
+
+        r ACL SETUSER leak-copy on nopass +@all ~* db=1
+
+        set rc [valkey [srv 0 host] [srv 0 port] 0 $::tls]
+        $rc auth leak-copy password
+
+        assert_error "*NOPERM*database*" {$rc get secret-copy}
+
+        # COPY is denied because the current (source) DB 0 is validated as well.
+        assert_error "*NOPERM*database*" {$rc copy secret-copy stolen DB 1}
+
+        $rc select 1
+        assert_equal {} [$rc get stolen]
+
+        # cleanup
+        $rc close
+        r select 0
+        r del secret-copy
+        r ACL DELUSER leak-copy
+    }
+
     $r2 close
 }

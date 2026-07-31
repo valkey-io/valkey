@@ -6438,10 +6438,16 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
     if (all_sections || (dictFind(section_dict, "persistence") != NULL)) {
         if (sections++) info = sdscat(info, "\r\n");
         double fork_perc = 0;
+        double thread_perc = 0;
         if (server.stat_module_progress) {
             fork_perc = server.stat_module_progress * 100;
         } else if (server.stat_current_save_keys_total) {
-            fork_perc = ((double)server.stat_current_save_keys_processed / server.stat_current_save_keys_total) * 100;
+            double perc = ((double)server.stat_current_save_keys_processed / server.stat_current_save_keys_total) * 100;
+            if (server.cur_bgsave_type == RDB_BGSAVE_TYPE_THREAD) {
+                thread_perc = perc;
+            } else {
+                fork_perc = perc;
+            }
         }
         int aof_bio_fsync_status = atomic_load_explicit(&server.aof_bio_fsync_status, memory_order_relaxed);
 
@@ -6470,6 +6476,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "current_cow_size:%zu\r\n", server.stat_current_cow_bytes,
                 "current_cow_size_age:%lu\r\n", (server.stat_current_cow_updated ? (unsigned long)elapsedMs(server.stat_current_cow_updated) / 1000 : 0),
                 "current_fork_perc:%.2f\r\n", fork_perc,
+                "current_thread_perc:%.2f\r\n", thread_perc,
                 "current_save_keys_processed:%zu\r\n", server.stat_current_save_keys_processed,
                 "current_save_keys_total:%zu\r\n", server.stat_current_save_keys_total,
                 "rdb_changes_since_last_save:%lld\r\n", server.dirty,

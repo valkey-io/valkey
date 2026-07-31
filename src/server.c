@@ -6554,13 +6554,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
         if (onValkeyMainThread() && (iter = bgIteratorFind(THREADSAVE_FILE_ITER_NAME)) != NULL) {
             bgIteratorGetStatus(iter, &status);
 
-            long long total_keys = 0;
-            for (int i = 0; i < server.dbnum; i++) {
-                total_keys += server.db[i] ? dbSize(server.db[i]) : 0;
-            }
-
-            estimated_seconds_remaining = (status.dbentries_processed == 0) ? (long long)-1
-                                                                            : (long long)((total_keys - status.dbentries_processed) * status.runtime_ms / status.dbentries_processed / 1000);
+            estimated_seconds_remaining = bgIteratorEstimateRemainingSeconds(&status);
             current_item_millis = status.current_item_ms;
         }
 

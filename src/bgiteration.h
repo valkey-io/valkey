@@ -168,6 +168,10 @@ typedef struct {
  * The caller-provided bgIteratorStatus will be populated. */
 void bgIteratorGetStatus(bgIterator *iter, bgIteratorStatus *status);
 
+/* Estimate the remaining seconds for a background iteration based on progress so far.
+ * Returns -1 if no entries have been processed yet (unable to estimate). */
+long long bgIteratorEstimateRemainingSeconds(bgIteratorStatus *status);
+
 
 /* Terminate a background iteration.
  *

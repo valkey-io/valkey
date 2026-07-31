@@ -2150,6 +2150,17 @@ void bgIteratorGetStatus(bgIterator *it, bgIteratorStatus *status) {
                                   : elapsedMs(nonvolatile_item_start_time);
 }
 
+long long bgIteratorEstimateRemainingSeconds(bgIteratorStatus *status) {
+    if (status->dbentries_processed == 0) return -1;
+
+    long long total_keys = 0;
+    for (int i = 0; i < server.dbnum; i++) {
+        total_keys += server.db[i] ? dbSize(server.db[i]) : 0;
+    }
+
+    return (long long)((total_keys - status->dbentries_processed) * status->runtime_ms / status->dbentries_processed / 1000);
+}
+
 
 // PUBLIC API
 void bgIteratorTerminate(bgIterator *it) {

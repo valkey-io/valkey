@@ -2238,6 +2238,7 @@ struct valkeyServer {
     size_t hll_sparse_max_bytes;
     size_t stream_node_max_bytes;
     long long stream_node_max_entries;
+    int stream_node_gc_enabled;
     /* List parameters */
     int list_max_listpack_size;
     int list_compress_depth;

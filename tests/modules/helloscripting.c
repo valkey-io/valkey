@@ -733,6 +733,12 @@ static ValkeyModuleScriptingEngineCompiledFunction **createHelloLangEngine(Valke
     if (ret < 0) {
         for (uint32_t i = 0; i < ctx->program->num_functions; i++) {
             HelloFunc *func = ctx->program->functions[i];
+            for (uint32_t j = 0; j < func->num_instructions; j++) {
+                HelloInst instr = func->instructions[j];
+                if (instr.kind == CONSTS || instr.kind == CALL) {
+                    ValkeyModule_Free(instr.param.string);
+                }
+            }
             ValkeyModule_Free(func->name);
             ValkeyModule_Free(func);
             ctx->program->functions[i] = NULL;

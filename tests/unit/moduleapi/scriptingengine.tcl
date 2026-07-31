@@ -446,6 +446,20 @@ start_server {tags {"modules"}} {
         assert_equal [r ping] {PONG}
     }
 
+    test {Test eval frees a CONSTS operand on a later parse error} {
+        assert_error {ERR Failed to parse integer parameter: 'abc'} {
+            r eval "#!hello\nFUNCTION foo\nCONSTS leaked\nCONSTI abc" 0
+        }
+        assert_equal [r ping] {PONG}
+    }
+
+    test {Test eval frees a CALL command name on a later parse error} {
+        assert_error {ERR Failed to parse integer parameter: 'abc'} {
+            r eval "#!hello\nFUNCTION foo\nCALL leaked\nCONSTI abc" 0
+        }
+        assert_equal [r ping] {PONG}
+    }
+
     test {Test eval with a second FUNCTION before the previous one's RETURN} {
         assert_error {ERR Function 'foo' is missing RETURN} {
             r eval "#!hello\nFUNCTION foo\nFUNCTION bar\nRETURN" 0

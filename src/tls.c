@@ -469,10 +469,11 @@ static bool isCertValid(X509 *cert) {
 #if OPENSSL_VERSION_NUMBER >= 0x40000000L
     int error = 0;
     if (X509_check_certificate_times(NULL, cert, &error) != 1) {
-        return false;
-    }
-    if (error > 0) {
-        serverLog(LL_WARNING, "X509_check_certificate_times() returned error %d", error);
+        if (error == X509_V_ERR_ERROR_IN_CERT_NOT_BEFORE_FIELD) {
+            serverLog(LL_WARNING, "Certificate has an invalid notBefore field");
+        } else if (error == X509_V_ERR_ERROR_IN_CERT_NOT_AFTER_FIELD) {
+            serverLog(LL_WARNING, "Certificate has an invalid notAfter field");
+        }
         return false;
     }
 #else
@@ -1884,14 +1885,27 @@ static int tlsHasPendingData(void) {
 }
 
 static int tlsProcessPendingData(void) {
-    listIter li;
     listNode *ln;
 
     int processed = 0;
-    listRewind(pending_list, &li);
-    while ((ln = listNext(&li))) {
+    /* Pop each connection off the list before handling it. A handler may
+     * synchronously free another pending connection (e.g. CLIENT KILL ->
+     * freeClient -> connTLSClose -> listDelNode), so we must not hold an
+     * iterator into a node that could be freed out from under us.
+     *
+     * Connections with buffered data re-add themselves to the tail, so the
+     * length captured on entry bounds the loop and guarantees termination. */
+    unsigned long remaining = listLength(pending_list);
+    while (remaining-- > 0 && (ln = listFirst(pending_list)) != NULL) {
         tls_connection *conn = listNodeValue(ln);
-        if (conn->flags & TLS_CONN_FLAG_POSTPONE_UPDATE_STATE) continue;
+        listDelNode(pending_list, ln);
+        conn->pending_list_node = NULL;
+        if (conn->flags & TLS_CONN_FLAG_POSTPONE_UPDATE_STATE) {
+            /* Not handled now, but keep it pending for a later call. */
+            listAddNodeTail(pending_list, conn);
+            conn->pending_list_node = listLast(pending_list);
+            continue;
+        }
         tlsHandleEvent(conn, AE_READABLE);
         processed++;
     }

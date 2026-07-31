@@ -820,7 +820,10 @@ start_server {tags {"dual-channel-replication external:skip"}} {
             pause_process $replica_pid
             wait_and_resume_process -1
             $primary debug pause-after-fork 0
-            wait_for_log_messages -1 {"*Client * closed * for overcoming of output buffer limits.*"} $loglines 100 100
+            # Use a generous retry budget: under valgrind the primary fills the
+            # COB much more slowly, and the write load needs time to overflow
+            # the limit before the disconnect log appears.
+            wait_for_log_messages -1 {"*Client * closed * for overcoming of output buffer limits.*"} $loglines 500 100
             wait_for_condition 50 100 {
                 [string match {*replicas_waiting_psync:0*} [$primary info replication]]
             } else {
@@ -1611,6 +1614,49 @@ test "Dual channel replication buffer memory fields" {
             # Replica's replica replication buffer size check.
             assert_morethan_equal [getInfoProperty $replica_info replicas_repl_buffer_size] [expr 1024000 * 40]
             assert_morethan_equal [getInfoProperty $replica_info replicas_repl_buffer_peak] [expr 1024000 * 40]
+        }
+    }
+}
+
+start_server {tags {"dual-channel-replication external:skip"}} {
+    set replica [srv 0 client]
+    set replica_host [srv 0 host]
+    set replica_port [srv 0 port]
+    set replica_log [srv 0 stdout]
+    start_server {} {
+        set primary [srv 0 client]
+        set primary_host [srv 0 host]
+        set primary_port [srv 0 port]
+
+        $primary config set dual-channel-replication-enabled yes
+        $primary config set repl-diskless-sync yes
+        $primary config set repl-diskless-sync-delay 0
+        $replica config set dual-channel-replication-enabled yes
+
+        # A hash with field-level TTLs (HEXPIRE) is hashtable-encoded with
+        # volatile fields, which can only be serialized in RDB version >= 80.
+        # The primary must learn the replica's version over the RDB connection
+        # to pick a new enough RDB version; otherwise it falls back to RDB 11
+        # and the full sync fails with "Can't store key ... in RDB version 11".
+        $primary hset myhash field1 value1 field2 value2 field3 value3
+        $primary hexpire myhash 3600 FIELDS 3 field1 field2 field3
+        assert_encoding hashtable myhash
+
+        test "Dual channel full sync succeeds with hash field expiration data" {
+            set sync_full [s 0 sync_full]
+
+            $replica replicaof $primary_host $primary_port
+            wait_for_sync $replica
+            wait_replica_online $primary
+
+            # A full (RDB) sync must have happened.
+            assert_equal [expr $sync_full + 1] [s 0 sync_full]
+            # The primary never failed to serialize the HFE hash.
+            verify_no_log_message 0 "*Can't store key*" 0
+
+            # The hash and its field TTLs made it across.
+            assert_equal [lsort [$replica hgetall myhash]] [lsort {field1 value1 field2 value2 field3 value3}]
+            assert_range [lindex [$replica httl myhash FIELDS 1 field1] 0] 1 3600
         }
     }
 }

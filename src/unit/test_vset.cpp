@@ -471,6 +471,90 @@ TEST_F(VsetTest, TestVsetRemoveExpiredLeavesHtBucketSizeOne) {
     vsetRelease(&set);
 }
 
+/* Regression test for signed-overflow in the bucket-timestamp math.
+ *
+ * get_bucket_ts()/get_max_bucket_ts() round an expiry up to the next
+ * 16ms / 8192ms window boundary via `(expiry & ~(INTERVAL-1)) + INTERVAL`.
+ * For any expiry inside the top 8192ms window below 2^63 this addition
+ * overflows signed long long and wraps negative. The negative value is then
+ * used as a RAX bucket key; because RAX keys are compared as unsigned
+ * big-endian bytes it sorts *after* every real timestamp, and when a full
+ * VECTOR bucket is forced to split, findSplitPosition() returns a positive
+ * target while the poisoned bucket_ts is negative, tripping:
+ *
+ *     assert(target_bucket_ts < bucket_ts);   // vset.c, splitBucketIfPossible
+ *
+ * Recipe (mirrors the HPEXPIREAT repro): fill one over-2^63 max-window bucket
+ * with 126 entries at timestamp A and 1 at a later sub-window B, so the VECTOR
+ * holds 127 entries spanning two 16ms sub-windows, then add a 128th entry. The
+ * 128th tips the VECTOR over its size limit and forces the vector->rax
+ * conversion + split that overflows. Aborts without the fix; with the fix
+ * (saturating get_bucket_ts/get_max_bucket_ts) it succeeds. */
+TEST_F(VsetTest, TestVsetLargeExpiryBucketOverflow) {
+    vset set;
+    vsetInit(&set);
+
+    /* A = 2^63 - 8192 (start of the last 8192ms window); B = A + 8000 (same
+     * 8192ms window, a different 16ms sub-window). Both are <= LLONG_MAX. */
+    const long long A = 9223372036854767616LL; /* 2^63 - 8192 */
+    const long long B = 9223372036854775616LL; /* 2^63 - 192  */
+    const long long SMALL = 100LL;             /* tiny TTL; must iterate first */
+
+    const int total_entries = 129;
+    mock_entry *entries[total_entries];
+    int n = 0;
+
+    /* 126 entries at A. */
+    for (int i = 0; i < 126; i++) {
+        char key[32];
+        snprintf(key, sizeof(key), "a_%d", i);
+        entries[n] = mockCreateEntry(key, A);
+        ASSERT_TRUE(vsetAddEntry(&set, mockGetExpiry, entries[n]));
+        n++;
+    }
+    /* 1 entry at B -> the VECTOR now holds 127 entries across two sub-windows. */
+    entries[n] = mockCreateEntry("b_0", B);
+    ASSERT_TRUE(vsetAddEntry(&set, mockGetExpiry, entries[n]));
+    n++;
+
+    /* 128th entry at A: tips the VECTOR past 127 and forces the vector->rax
+     * conversion + split. This is the operation that aborts without the fix. */
+    entries[n] = mockCreateEntry("a_last", A);
+    ASSERT_TRUE(vsetAddEntry(&set, mockGetExpiry, entries[n]));
+    n++;
+
+    /* A tiny-TTL entry, added LAST. After the fix the huge-TTL entries live in
+     * the saturated LLONG_MAX bucket (the largest RAX key), so this small
+     * entry must sort into an earlier bucket and be scanned FIRST. This guards
+     * against the overflow re-inverting scan order (a negative/overflowed key
+     * would sort the huge-TTL bucket *before* this one). */
+    entries[n] = mockCreateEntry("small", SMALL);
+    ASSERT_TRUE(vsetAddEntry(&set, mockGetExpiry, entries[n]));
+    n++;
+
+    ASSERT_EQ(n, total_entries);
+
+    /* Every entry must be iterable, and the tiny-TTL entry must be scanned
+     * first: buckets are walked in ascending bucket_ts order, so its earlier
+     * bucket precedes the huge-TTL bucket. Order *within* a bucket is not
+     * guaranteed (HT buckets are unordered), so we only assert this
+     * cross-bucket property. */
+    vsetIterator it;
+    vsetInitIterator(&set, &it);
+    void *entry;
+    int count = 0;
+    while (vsetNext(&it, &entry)) {
+        ASSERT_NE(entry, nullptr);
+        if (count == 0) ASSERT_EQ(mockGetExpiry(entry), SMALL); /* earliest bucket first */
+        count++;
+    }
+    ASSERT_EQ(count, total_entries);
+    vsetResetIterator(&it);
+
+    vsetRelease(&set);
+    for (int i = 0; i < total_entries; i++) mockFreeEntry(entries[i]);
+}
+
 TEST_F(VsetTest, TestVsetDefrag) {
     srand(time(nullptr));
 

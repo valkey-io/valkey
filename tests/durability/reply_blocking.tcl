@@ -422,6 +422,44 @@ foreach provider_mode {aof} {
                 $rd close
             }
 
+            test "($provider_mode) Lazy-expired key deletion is tracked and blocks later reads until durable" {
+                # A key deleted by lazy expiry is a background write (signalModifiedKey
+                # with a NULL client). It must be tracked as uncommitted with no
+                # per-function hook, so a later read blocks until the deletion is durable.
+                assert_equal "always" [lindex [$primary config get appendfsync] 1]
+                $primary debug set-active-expire 0
+
+                # Commit a key, then make it logically expired (provider still acking).
+                $primary set durable:lazyexp v
+                $primary pexpire durable:lazyexp 1
+                after 10
+
+                pause_provider
+
+                # Trigger lazy expiry: returns nil immediately (the triggering read is
+                # not itself a write), deletes the key, and marks the deletion dirty.
+                assert_equal {} [$primary get durable:lazyexp]
+
+                # A later read of the now-deleted key must block until durable.
+                set rd [valkey_deferring_client -1]
+                $rd exists durable:lazyexp
+                wait_for_condition 50 100 {
+                    [string match "*reply_blocking_clients_waiting_ack:1*" [$primary info debug]]
+                } else {
+                    fail "lazy-expiry deletion was not tracked as uncommitted"
+                }
+
+                set fd [$rd channel]
+                fconfigure $fd -blocking 0
+                assert_equal "" [read $fd]
+                fconfigure $fd -blocking 1
+
+                unblock_with_provider
+                assert_equal 0 [$rd read]
+                $rd close
+                $primary debug set-active-expire 1
+            }
+
             # ==================== Non-blocking tests ====================
 
             test "($provider_mode) EVAL_RO should not block replies" {

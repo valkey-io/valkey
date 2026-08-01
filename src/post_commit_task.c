@@ -238,7 +238,13 @@ bool replyBlockingRegisterPostCommitTask(int type, ...) {
 /*================================= Signal Handlers ========================== */
 
 bool replyBlockingSignalModifiedKey(struct client *c, struct serverDb *db, struct serverObject *key) {
-    UNUSED(db);
+    if (!isPrimaryReplyBlockingEnabled()) return false;
+
+    /* Background writes (expiry/eviction) call signalModifiedKey with a NULL
+     * client and have no argv; track them here. Client-command keys are handled
+     * by the command's own offset computation. */
+    if (c == NULL) trackBackgroundModifiedKey(db, key);
+
     // Defer key invalidation messages until the reply-blocking providers acknowledge.
     return replyBlockingRegisterPostCommitTask(POST_COMMIT_KEY_INVALIDATION_TASK,
                                                (void *)c, (void *)key);

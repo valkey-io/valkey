@@ -2002,7 +2002,6 @@ void deleteExpiredKeyAndPropagateWithDictIndex(serverDb *db, robj *keyobj, int d
     notifyKeyspaceEvent(NOTIFY_EXPIRED, "expired", keyobj, db->id);
     signalModifiedKey(NULL, db, keyobj);
     propagateDeletion(db, keyobj, server.lazyfree_lazy_expire, dict_index);
-    if (isPrimaryReplyBlockingEnabled()) handleUncommittedKeyForClient(NULL, keyobj, db);
     server.stat_expiredkeys++;
 }
 
@@ -2134,7 +2133,6 @@ size_t dbReclaimExpiredFields(robj *o, serverDb *db, mstime_t now, unsigned long
             if (!hashTypeHasVolatileFields(o)) dbUntrackKeyWithVolatileItems(db, o);
         }
         signalModifiedKey(NULL, db, keyobj);
-        if (isPrimaryReplyBlockingEnabled()) handleUncommittedKeyForClient(NULL, keyobj, db);
         exitExecutionUnit();
         postExecutionUnitOperations();
         decrRefCount(keyobj);

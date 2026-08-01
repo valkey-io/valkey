@@ -24,6 +24,15 @@ void replyBlockingInitDatabase(struct serverDb *db);
  * @param db The database */
 void handleUncommittedKeyForClient(const struct client *c, struct serverObject *key, struct serverDb *db);
 
+/* Record a key modified by a background write (expiry/eviction), fed from
+ * signalModifiedKey with a NULL client so such paths need no per-function
+ * callsite. drainBackgroundModifiedKeys() applies the real offset later. */
+void trackBackgroundModifiedKey(struct serverDb *db, struct serverObject *key);
+
+/* Apply the final replication offset to keys dirtied by background writes in
+ * the just-completed execution unit. Called from postExecutionUnitOperations(). */
+void drainBackgroundModifiedKeys(long long offset);
+
 /* Retrieve the uncommitted replication offset for a given key.
  * Returns -1 if the key is not tracked or has already been committed
  * (offset <= previous_acked_offset). Does NOT purge — cleanup is handled

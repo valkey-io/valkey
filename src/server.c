@@ -3818,6 +3818,10 @@ void postExecutionUnitOperations(void) {
      * context (e.g. within a module timer) we can propagate what we accumulated. */
     propagatePendingCommands();
 
+    /* Apply the final offset to keys dirtied by background writes (expiry/eviction)
+     * in this unit. Must run after propagatePendingCommands() so the offset is final. */
+    if (server.bio_aof_offload_enabled) drainBackgroundModifiedKeys(server.primary_repl_offset);
+
     /* Module subsystem post-execution-unit logic */
     modulePostExecutionUnitOperations();
 }

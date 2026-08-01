@@ -27,6 +27,11 @@ static list *pending_uncommitted_keys;
 // Pending databases dirtied during a multi-command block.
 static list *pending_uncommitted_dbs;
 
+/* Keys modified by background/implicit writes (expiry, eviction) — i.e.
+ * signalModifiedKey() with a NULL client, which have no argv to derive keys
+ * from. Marked dirty here; drainBackgroundModifiedKeys() sets the real offset. */
+static list *background_modified_keys;
+
 /* Tracks whether all databases were dirtied during the current command
  * within a multi-command block (MULTI/EXEC or Lua script). Module-local
  * state — only accessed within uncommitted_keys.c. */
@@ -178,6 +183,47 @@ void handleUncommittedKeyForClient(const client *c, robj *key, serverDb *db) {
     }
 }
 
+/* Record a key modified by a background write (expiry/eviction), fed from
+ * signalModifiedKey with a NULL client. Marked dirty with an LLONG_MAX
+ * placeholder; drainBackgroundModifiedKeys() sets the real offset after
+ * propagation (the deletion isn't propagated yet at signalModifiedKey time). */
+void trackBackgroundModifiedKey(serverDb *db, robj *key) {
+    if (all_dbs_dirty_in_current_cmd) return;
+
+    if (addUncommittedKey(objectGetVal(key), LLONG_MAX, db->uncommitted_keys)) {
+        if (background_modified_keys == NULL) {
+            background_modified_keys = listCreate();
+            listSetFreeMethod(background_modified_keys, pendingUncommittedKeyDestructor);
+        }
+        pendingUncommittedKey *entry = zmalloc(sizeof(*entry));
+        incrRefCount(key);
+        entry->key = key;
+        entry->uncommitted_keys = db->uncommitted_keys;
+        listAddNodeTail(background_modified_keys, entry);
+    }
+}
+
+/* Apply the final replication offset to keys dirtied by background writes in
+ * the execution unit that just completed, then clear the set. Called from
+ * postExecutionUnitOperations() after propagation, so the offset is final. */
+void drainBackgroundModifiedKeys(long long offset) {
+    if (background_modified_keys == NULL || listLength(background_modified_keys) == 0) return;
+
+    listIter li;
+    listNode *ln;
+    listRewind(background_modified_keys, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        const pendingUncommittedKey *uk = listNodeValue(ln);
+        uncommittedKeyEntry *entry = NULL;
+        if (hashtableFind(uk->uncommitted_keys, objectGetVal(uk->key), (void **)&entry)) {
+            if (entry->offset == LLONG_MAX || entry->offset < offset) {
+                entry->offset = offset;
+            }
+        }
+        listDelNode(background_modified_keys, ln);
+    }
+}
+
 /*================================= Database Modification ==================== */
 
 static void handleDirtyDatabase(client *c, serverDb *db) {
@@ -188,6 +234,7 @@ static void handleDirtyDatabase(client *c, serverDb *db) {
         } else {
             all_dbs_dirty_in_current_cmd = true;
             listEmpty(pending_uncommitted_keys);
+            if (background_modified_keys != NULL) listEmpty(background_modified_keys);
             listEmpty(pending_uncommitted_dbs);
             /* FLUSHALL inside a transaction: any keys previously dirtied
              * in this transaction are now gone.  Clear the per-DB
@@ -317,6 +364,9 @@ void clearAllUncommittedKeys(void) {
     if (pending_uncommitted_keys != NULL) {
         listEmpty(pending_uncommitted_keys);
     }
+    if (background_modified_keys != NULL) {
+        listEmpty(background_modified_keys);
+    }
     if (pending_uncommitted_dbs != NULL) {
         listEmpty(pending_uncommitted_dbs);
     }
@@ -345,6 +395,8 @@ int hasUncommittedKeys(void) {
 void uncommittedKeysInitPending(void) {
     pending_uncommitted_keys = listCreate();
     listSetFreeMethod(pending_uncommitted_keys, pendingUncommittedKeyDestructor);
+    background_modified_keys = listCreate();
+    listSetFreeMethod(background_modified_keys, pendingUncommittedKeyDestructor);
     pending_uncommitted_dbs = listCreate();
     all_dbs_dirty_in_current_cmd = false;
 }
@@ -353,6 +405,10 @@ void uncommittedKeysCleanupPending(void) {
     if (pending_uncommitted_keys != NULL) {
         listRelease(pending_uncommitted_keys);
         pending_uncommitted_keys = NULL;
+    }
+    if (background_modified_keys != NULL) {
+        listRelease(background_modified_keys);
+        background_modified_keys = NULL;
     }
     if (pending_uncommitted_dbs != NULL) {
         listRelease(pending_uncommitted_dbs);

@@ -1574,16 +1574,19 @@ test "Dual channel replication buffer memory fields" {
             set max_data_size [expr $target_buffer_size * 2]
             set bigstr [string repeat x $value_size]
             set sent_data_size 0
-            set replica_buffer_ready 0
             while {$sent_data_size < $max_data_size} {
                 $primary set key $bigstr
                 incr sent_data_size $value_size
                 if {[s $replica_srv_id mem_total_replication_buffers] > $target_buffer_size} {
-                    set replica_buffer_ready 1
                     break
                 }
             }
-            if {!$replica_buffer_ready} {
+
+            # The send budget can run out while data is still in transit, so
+            # wait for the replica to buffer it instead of failing right away.
+            wait_for_condition 1000 50 {
+                [s $replica_srv_id mem_total_replication_buffers] > $target_buffer_size
+            } else {
                 fail "replica didn't buffer $target_buffer_size bytes after sending $sent_data_size bytes"
             }
 

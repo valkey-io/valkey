@@ -1197,14 +1197,21 @@ clusterNode *getNodeByQuery(client *c, int *error_code) {
 
             /* Block the COPY command if it's cross-DB to keep the code simple.
              * Allowing cross-DB COPY is possible, but it would require looking up the second key in the target DB.
-             * The command should only be allowed if the key exists. We may revisit this decision in the future. */
-            if (mcmd->proc == copyCommand &&
-                margc >= 4 && !strcasecmp(margv[3]->ptr, "db")) {
-                long long value;
-                if (getLongLongFromObject(margv[4], &value) != C_OK || value != currentDb->id) {
-                    if (error_code) *error_code = CLUSTER_REDIR_UNSTABLE;
-                    getKeysFreeResult(&result);
-                    return NULL;
+             * The command should only be allowed if the key exists. We may revisit this decision in the future.
+             *
+             * The DB and REPLACE tokens are optional and order-independent, and DB may appear more than once, so
+             * scan every DB clause the way copyCommand does. A DB token without a value is left to copyCommand to
+             * reject as a syntax error. */
+            if (mcmd->proc == copyCommand) {
+                for (int k = 3; k + 1 < margc; k++) {
+                    if (strcasecmp(margv[k]->ptr, "db")) continue;
+                    long long value;
+                    if (getLongLongFromObject(margv[k + 1], &value) != C_OK || value != currentDb->id) {
+                        if (error_code) *error_code = CLUSTER_REDIR_UNSTABLE;
+                        getKeysFreeResult(&result);
+                        return NULL;
+                    }
+                    k++; /* Consume the dbid. */
                 }
             }
 

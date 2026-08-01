@@ -10,6 +10,7 @@
 #include <string.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <limits.h>
 #if HAVE_ARM_NEON
 #include <arm_neon.h>
 #endif
@@ -874,12 +875,22 @@ static long long vsetGetExpiryZero(const void *entry) {
     return 0;
 }
 
+/* Round `expiry` up to the end of its aligned time window (16ms for
+ * get_bucket_ts, 8192ms for get_max_bucket_ts). Saturate at LLONG_MAX so an
+ * expiry inside the top window below 2^63 cannot overflow signed long long
+ * and poison the RAX bucket key with a negative value (which would sort after
+ * every real timestamp and trip assert(target_bucket_ts < bucket_ts) when a
+ * full vector bucket is split). */
 static inline long long get_bucket_ts(long long expiry) {
-    return (expiry & ~(VOLATILESET_BUCKET_INTERVAL_MIN - 1LL)) + VOLATILESET_BUCKET_INTERVAL_MIN;
+    long long aligned = expiry & ~(VOLATILESET_BUCKET_INTERVAL_MIN - 1LL);
+    if (aligned > LLONG_MAX - VOLATILESET_BUCKET_INTERVAL_MIN) return LLONG_MAX;
+    return aligned + VOLATILESET_BUCKET_INTERVAL_MIN;
 }
 
 static inline long long get_max_bucket_ts(long long expiry) {
-    return (expiry & ~(VOLATILESET_BUCKET_INTERVAL_MAX - 1LL)) + VOLATILESET_BUCKET_INTERVAL_MAX;
+    long long aligned = expiry & ~(VOLATILESET_BUCKET_INTERVAL_MAX - 1LL);
+    if (aligned > LLONG_MAX - VOLATILESET_BUCKET_INTERVAL_MAX) return LLONG_MAX;
+    return aligned + VOLATILESET_BUCKET_INTERVAL_MAX;
 }
 
 static inline size_t encodeExpiryKey(long long expiry, unsigned char *key) {

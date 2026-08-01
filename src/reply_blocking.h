@@ -111,6 +111,12 @@ typedef struct reply_blocking_t {
     /* Snapshot of the AOF-acked offset captured at pause time so that writes
      * already acknowledged remain unblocked while new writes block. */
     long long aof_paused_offset;
+
+    /* True while executeDeferredTasksForAck is running deferred post-commit
+     * tasks. Used by notifyKeyspaceEvent to tell a first-pass notification
+     * (notify modules inline + defer the client pub/sub message) apart from the
+     * re-fired client notification driven by the deferred task at ack time. */
+    bool in_post_commit_task_execution;
 } reply_blocking_t;
 
 /* Define the type of command being blocked */

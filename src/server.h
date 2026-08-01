@@ -655,22 +655,21 @@ typedef enum {
 
 /* Keyspace changes notification classes. Every class is associated with a
  * character for configuration purposes. */
-#define NOTIFY_KEYSPACE (1 << 0)             /* K */
-#define NOTIFY_KEYEVENT (1 << 1)             /* E */
-#define NOTIFY_GENERIC (1 << 2)              /* g */
-#define NOTIFY_STRING (1 << 3)               /* $ */
-#define NOTIFY_LIST (1 << 4)                 /* l */
-#define NOTIFY_SET (1 << 5)                  /* s */
-#define NOTIFY_HASH (1 << 6)                 /* h */
-#define NOTIFY_ZSET (1 << 7)                 /* z */
-#define NOTIFY_EXPIRED (1 << 8)              /* x */
-#define NOTIFY_EVICTED (1 << 9)              /* e */
-#define NOTIFY_STREAM (1 << 10)              /* t */
-#define NOTIFY_KEY_MISS (1 << 11)            /* m (Note: This one is excluded from NOTIFY_ALL on purpose) */
-#define NOTIFY_LOADED (1 << 12)              /* module only key space notification, indicate a key loaded from rdb */
-#define NOTIFY_MODULE (1 << 13)              /* d, module key space notification */
-#define NOTIFY_NEW (1 << 14)                 /* n, new key notification */
-#define NOTIFY_IN_POST_COMMIT_TASK (1 << 30) /* notification deferred by reply-blocking post-commit task */
+#define NOTIFY_KEYSPACE (1 << 0)  /* K */
+#define NOTIFY_KEYEVENT (1 << 1)  /* E */
+#define NOTIFY_GENERIC (1 << 2)   /* g */
+#define NOTIFY_STRING (1 << 3)    /* $ */
+#define NOTIFY_LIST (1 << 4)      /* l */
+#define NOTIFY_SET (1 << 5)       /* s */
+#define NOTIFY_HASH (1 << 6)      /* h */
+#define NOTIFY_ZSET (1 << 7)      /* z */
+#define NOTIFY_EXPIRED (1 << 8)   /* x */
+#define NOTIFY_EVICTED (1 << 9)   /* e */
+#define NOTIFY_STREAM (1 << 10)   /* t */
+#define NOTIFY_KEY_MISS (1 << 11) /* m (Note: This one is excluded from NOTIFY_ALL on purpose) */
+#define NOTIFY_LOADED (1 << 12)   /* module only key space notification, indicate a key loaded from rdb */
+#define NOTIFY_MODULE (1 << 13)   /* d, module key space notification */
+#define NOTIFY_NEW (1 << 14)      /* n, new key notification */
 #define NOTIFY_ALL                                                                                            \
     (NOTIFY_GENERIC | NOTIFY_STRING | NOTIFY_LIST | NOTIFY_SET | NOTIFY_HASH | NOTIFY_ZSET | NOTIFY_EXPIRED | \
      NOTIFY_EVICTED | NOTIFY_STREAM | NOTIFY_MODULE) /* A flag */

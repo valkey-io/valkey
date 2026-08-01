@@ -935,10 +935,10 @@ TEST_F(FullReplyBlockingTest, KeyspaceNotifyTaskCopiesEventString) {
     server.primary_repl_offset = 100;
     bool registered = replyBlockingRegisterPostCommitTask(
         POST_COMMIT_KEYSPACE_NOTIFY_TASK,
-        (void *)(long long)NOTIFY_IN_POST_COMMIT_TASK, /* type, as production defers it */
-        (void *)event,                                 /* event string — will be freed below */
-        (void *)key_obj,                               /* key */
-        (void *)(long long)0                           /* dbid */
+        (void *)(long long)NOTIFY_GENERIC, /* type; re-entry skip now comes from the execution flag */
+        (void *)event,                     /* event string — will be freed below */
+        (void *)key_obj,                   /* key */
+        (void *)(long long)0               /* dbid */
     );
     ASSERT_TRUE(registered);
 

@@ -119,7 +119,7 @@ void notifyKeyspaceEvent(int type, char *event, robj *key, int dbid) {
                       c->id == UINT64_MAX || // AOF client
                       getClientType(c) != CLIENT_TYPE_NORMAL);
 
-    if (!(type & NOTIFY_IN_POST_COMMIT_TASK)) {
+    if (!server.reply_blocking.in_post_commit_task_execution) {
         /* Notify modules inline, at the time the keyspace change occurs (bypassing
          * notify-keyspace-events; the module engine filters by each subscriber's event mask).
          * Doing it here rather than from the deferred task ensures subscribers are notified for
@@ -133,9 +133,9 @@ void notifyKeyspaceEvent(int type, char *event, robj *key, int dbid) {
 
         if (isPrimaryReplyBlockingEnabled()) {
             /* Defer only the client (pub/sub) notification until the write is acknowledged.
-             * The task re-enters with NOTIFY_IN_POST_COMMIT_TASK set, which skips modules. */
+             * The deferred task re-enters this function while
+             * in_post_commit_task_execution is set, so modules are not notified again. */
             if (server.notify_keyspace_events & type) {
-                type = type | NOTIFY_IN_POST_COMMIT_TASK;
                 replyBlockingRegisterPostCommitTask(
                     POST_COMMIT_KEYSPACE_NOTIFY_TASK,
                     (void *)(long)type,
@@ -146,8 +146,6 @@ void notifyKeyspaceEvent(int type, char *event, robj *key, int dbid) {
             return;
         }
     }
-
-    type = type & ~NOTIFY_IN_POST_COMMIT_TASK;
 
     /* If notifications for this class of events are off, return ASAP. */
     if (!(server.notify_keyspace_events & type)) return;

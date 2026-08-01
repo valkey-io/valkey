@@ -265,6 +265,14 @@ void executeDeferredTasksForAck(const long long consensus_ack_offset) {
     listNode *ln;
     struct reply_blocking_t *rb_state = &server.reply_blocking;
 
+    /* Mark that we are re-firing deferred tasks. A keyspace-notify task
+     * re-enters notifyKeyspaceEvent(), which checks this flag to skip the
+     * first-pass work (inline module notify + re-registration) and go straight
+     * to publishing the client pub/sub message. Save/restore rather than a bare
+     * false so a future re-entrant task type can't clear it prematurely. */
+    bool prev_in_post_commit_task_execution = rb_state->in_post_commit_task_execution;
+    rb_state->in_post_commit_task_execution = true;
+
     for (int i = 0; i < POST_COMMIT_TASK_TYPE_MAX; i++) {
         listRewind(rb_state->tasks_waiting_ack[i], &li);
         while ((ln = listNext(&li))) {
@@ -277,6 +285,8 @@ void executeDeferredTasksForAck(const long long consensus_ack_offset) {
             }
         }
     }
+
+    rb_state->in_post_commit_task_execution = prev_in_post_commit_task_execution;
 }
 
 // Move pending deferred tasks to the official list with the current replication offset.

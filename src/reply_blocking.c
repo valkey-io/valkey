@@ -752,6 +752,9 @@ void replyBlockingInit(void) {
     // Initialize AOF reply-blocking pause state (used by DEBUG for testing)
     server.reply_blocking.aof_paused = false;
     server.reply_blocking.aof_paused_offset = 0;
+
+    // Not executing deferred post-commit tasks at startup.
+    server.reply_blocking.in_post_commit_task_execution = false;
 }
 
 // Clean up the reply-blocking subsystem on server shutdown.

@@ -619,10 +619,21 @@ start_cluster 3 3 {tags {external:skip cluster} } {
         set result [catch {assert_error [R $primary_id_src COPY "{3560}key1" "{3560}key1" DB 7 REPLACE]} err]
         assert_match "TRYAGAIN Multiple keys request during rehashing of slot" $err
 
-        # Both keys exist, should work, but both keys must exist. 
+        # A DB token with no value is a syntax error, not an out-of-range read.
+        assert_error "ERR syntax error" {R $primary_id_src COPY "{3560}key1" "{3560}key2" DB}
+        assert_error "ERR syntax error" {R $primary_id_src COPY "{3560}key1" "{3560}key2" REPLACE DB}
+        assert_equal {PONG} [R $primary_id_src PING]
+
+        # DB and REPLACE are order-independent, so a cross-DB COPY must be blocked
+        # no matter where the DB clause appears.
+        assert_error "TRYAGAIN*" {R $primary_id_src COPY "{3560}key1" "{3560}key2" REPLACE DB 7}
+        assert_error "TRYAGAIN*" {R $primary_id_src COPY "{3560}key1" "{3560}key2" DB 0 DB 7}
+
+        # Both keys exist, should work, but both keys must exist.
         R $primary_id_src COPY "{3560}key1" "{3560}key2"
         # And it should work if DB param is provided, as long as it matches the selected DB
         R $primary_id_src COPY "{3560}key1" "{3560}key2" DB 0 REPLACE
+        R $primary_id_src COPY "{3560}key1" "{3560}key2" REPLACE DB 0
 
     }
 

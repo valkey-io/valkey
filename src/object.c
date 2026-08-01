@@ -837,10 +837,10 @@ void dismissObject(robj *o, size_t size_hint) {
      * with Valkey, so it is not worth touching it. */
     if (server.thp_enabled) return;
 
-    /* Currently we use zmadvise_dontneed only when we use jemalloc with Linux.
-     * so we avoid these pointless loops when they're not going to do anything.
-     * Strings use sdsfree rather than madvise, but are kept inside this guard
-     * along with the other types. */
+        /* Currently we use zmadvise_dontneed only when we use jemalloc with Linux.
+         * so we avoid these pointless loops when they're not going to do anything.
+         * Strings use sdsfree rather than madvise, but are kept inside this guard
+         * along with the other types. */
 #if defined(USE_JEMALLOC) && defined(__linux__)
     if (objectGetRefcount(o) != 1) return;
     switch (objectGetType(o)) {

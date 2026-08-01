@@ -6929,15 +6929,14 @@ static void moduleCallCommandHelper(ValkeyModuleCtx *ctx, client *c, robj **argv
         if (!(flags & VALKEYMODULE_CALL_ARGV_NO_REPLICAS)) call_flags |= CMD_CALL_PROPAGATE_REPL;
     }
 
-    /* Reject execution if the command accesses uncommitted (dirty) keys. */
-    char *pre_script_err = validateScriptForReplyBlocking(c);
-    if (pre_script_err != NULL) {
-        if (error_as_call_replies) {
-            reply_error_msg = sdsnew(pre_script_err);
-        }
-        errno = EBUSY;
-        goto cleanup;
-    }
+    /* Module commands may observe dirty (not-yet-durably-committed) reads.
+     * When reply-blocking is enabled we withhold user-facing replies in the
+     * COB until the write is acked, but a module consumes a VM_Call reply
+     * synchronously here in C, so there is nothing left to hold once call()
+     * returns. This matches stock Valkey under `appendfsync always`, where a
+     * module's VM_Call reply is likewise returned before the fsync. Gating
+     * module reads on durability is a future opt-in feature (see the unused
+     * module_cmd_blocking_offset hook); for now we neither reject nor block. */
 
     call(c, call_flags);
 

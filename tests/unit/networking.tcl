@@ -227,6 +227,33 @@ start_server {config "minimal.conf" tags {"external:skip"} overrides {enable-deb
             assert_equal {15} [$rd15 read]
         }
 
+        # A queued command whose argc violates its arity used to be handed to
+        # getKeysFromCommand() by the prefetch path, which assumes the arity check
+        # has already passed. GET with argc 1 panicked on the legacy range spec;
+        # EVAL and MIGRATE read past the end of argv.
+        test {Pipelined commands with bad arity do not reach the key prefetcher} {
+            set rd [valkey_deferring_client]
+
+            # Suspend the server so the whole pipeline arrives in a single read and
+            # is parsed into the client's command queue, which is the path that
+            # skipped the arity check.
+            pause_process $server_pid
+            $rd ping
+            $rd get
+            $rd eval x
+            $rd migrate a b
+            $rd flush
+            resume_process $server_pid
+
+            assert_equal {PONG} [$rd read]
+            assert_error "ERR wrong number of arguments*" {$rd read}
+            assert_error "ERR wrong number of arguments*" {$rd read}
+            assert_error "ERR wrong number of arguments*" {$rd read}
+            $rd close
+
+            assert_equal {PONG} [r ping]
+        }
+
         test {prefetch works as expected when changing the batch size while executing the commands batch} {
             # Create 16 (default prefetch batch size) clients
             for {set i 0} {$i < 16} {incr i} {

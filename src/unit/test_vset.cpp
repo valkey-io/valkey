@@ -561,7 +561,7 @@ TEST_F(VsetTest, TestVsetLargeExpiryBucketOverflow) {
     int count = 0;
     while (vsetNext(&it, &entry)) {
         ASSERT_NE(entry, nullptr);
-        if (count == 0) ASSERT_EQ(mockGetExpiry(entry), SMALL); /* earliest bucket first */
+        if (count == 0) { ASSERT_EQ(mockGetExpiry(entry), SMALL); } /* earliest bucket first */
         count++;
     }
     ASSERT_EQ(count, total_entries);

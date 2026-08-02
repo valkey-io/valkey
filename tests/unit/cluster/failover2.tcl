@@ -171,6 +171,15 @@ proc test_replica_config_epoch_failover {type} {
         pause_process [srv 0 pid]
         R 3 DEBUG DROP-CLUSTER-PACKET-FILTER $CLUSTER_PACKET_TYPE_NONE
         R 3 DEBUG CLOSE-CLUSTER-LINK-ON-PACKET-DROP 0
+
+        # For manual failover, trigger the failover IMMEDIATELY while the replica
+        # still has an outdated config epoch. This guarantees the first attempt
+        # will fail with a timeout.
+        if {$type == "manual"} {
+            R 3 cluster failover force
+            wait_for_log_messages -3 {"*Manual failover timed out*"} 0 1200 50
+        }
+
         wait_for_condition 1000 50 {
             [CI 1 cluster_state] == "fail" &&
             [CI 2 cluster_state] == "fail" &&
@@ -179,12 +188,8 @@ proc test_replica_config_epoch_failover {type} {
             fail "Cluster does not fail"
         }
 
-        # Make sure both the automatic and the manual failover will fail in the first time.
         if {$type == "automatic"} {
             wait_for_log_messages -3 {"*Failover attempt expired*"} 0 1200 50
-        } elseif {$type == "manual"} {
-            R 3 cluster failover force
-            wait_for_log_messages -3 {"*Manual failover timed out*"} 0 1200 50
         }
 
         # Make sure the primaries prints the relevant logs.

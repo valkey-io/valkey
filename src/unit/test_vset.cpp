@@ -499,8 +499,9 @@ TEST_F(VsetTest, TestVsetLargeExpiryBucketOverflow) {
     const long long A = 9223372036854767616LL; /* 2^63 - 8192 */
     const long long B = 9223372036854775616LL; /* 2^63 - 192  */
     const long long SMALL = 100LL;             /* tiny TTL; must iterate first */
+    const long long MAXTS = LLONG_MAX;         /* highest TTL HPEXPIREAT accepts */
 
-    const int total_entries = 129;
+    const int total_entries = 131;
     mock_entry *entries[total_entries];
     int n = 0;
 
@@ -532,6 +533,21 @@ TEST_F(VsetTest, TestVsetLargeExpiryBucketOverflow) {
     ASSERT_TRUE(vsetAddEntry(&set, mockGetExpiry, entries[n]));
     n++;
 
+    /* Two entries at exactly LLONG_MAX. get_bucket_ts(LLONG_MAX) ==
+     * get_max_bucket_ts(LLONG_MAX) == LLONG_MAX, so their bucket key equals
+     * their own expiry -- the one value where the exclusive-end invariant
+     * (expiry < bucket_ts) cannot hold. findBucket() seeks strictly-greater-
+     * than the expiry, so once the first LLONG_MAX bucket exists the second
+     * insert must still resolve it via the inclusive terminal-bucket probe;
+     * without it the second insert raxInsert()s over the first (old=NULL) and
+     * silently drops it, so the count comes up one short (130, not 131). */
+    entries[n] = mockCreateEntry("max_0", MAXTS);
+    ASSERT_TRUE(vsetAddEntry(&set, mockGetExpiry, entries[n]));
+    n++;
+    entries[n] = mockCreateEntry("max_1", MAXTS);
+    ASSERT_TRUE(vsetAddEntry(&set, mockGetExpiry, entries[n]));
+    n++;
+
     ASSERT_EQ(n, total_entries);
 
     /* Every entry must be iterable, and the tiny-TTL entry must be scanned
@@ -550,6 +566,16 @@ TEST_F(VsetTest, TestVsetLargeExpiryBucketOverflow) {
     }
     ASSERT_EQ(count, total_entries);
     vsetResetIterator(&it);
+
+    /* Remove every entry, last to first. This exercises findBucket() on the
+     * remove path for all expiries -- including the two LLONG_MAX entries,
+     * which resolve only through the inclusive terminal-bucket probe (without
+     * it removeFromBucket_RAX trips serverAssert(bucket != VSET_NONE_BUCKET_PTR)).
+     * The set must be empty afterwards. */
+    for (int i = n - 1; i >= 0; i--) {
+        ASSERT_TRUE(vsetRemoveEntry(&set, mockGetExpiry, entries[i]));
+    }
+    ASSERT_TRUE(vsetIsEmpty(&set));
 
     vsetRelease(&set);
     for (int i = 0; i < total_entries; i++) mockFreeEntry(entries[i]);

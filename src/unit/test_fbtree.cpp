@@ -4433,7 +4433,7 @@ static void countTreeNodes(node *n, int *inner_count, int *leaf_count) {
         return;
     }
     (*inner_count)++;
-    innerNode *inner = (innerNode *)n;
+    innerNode *inner = (innerNode *)(void *)n;
     for (int i = 0; i < inner->header.num_items; i++) {
         countTreeNodes(inner->children[i], inner_count, leaf_count);
     }
@@ -4444,7 +4444,7 @@ static void countTreeNodes(node *n, int *inner_count, int *leaf_count) {
  * relocate. */
 static int countSpilledPrefixNodes(node *n) {
     if (n->is_leaf) return 0;
-    innerNode *inner = (innerNode *)n;
+    innerNode *inner = (innerNode *)(void *)n;
     int count = (inner->prefix_len > EMBED_PREFIX_LEN) ? 1 : 0;
     for (int i = 0; i < inner->header.num_items; i++) {
         count += countSpilledPrefixNodes(inner->children[i]);

@@ -2838,7 +2838,10 @@ int sortGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult 
         char *name;
         int skip;
     } skiplist[] = {
-        {"limit", 2}, {"get", 1}, {"by", 1}, {NULL, 0} /* End of elements. */
+        {"limit", 2},
+        {"get", 1},
+        {"by", 1},
+        {NULL, 0} /* End of elements. */
     };
 
     for (i = 2; i < argc; i++) {

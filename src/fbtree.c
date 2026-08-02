@@ -2491,7 +2491,16 @@ unsigned long fbtreeDefragScan(fbtreeIndex *fbt, unsigned long cursor, void (*it
      * Bottom-up, so a relocated node's verbatim children array already
      * carries any updated pointer to the node relocated just before it. */
     for (int d = depth - 1; d >= 0 && path_idx[d] == 0; d--) {
-        void *newnode = defragfn(path[d]);
+        innerNode *inner = path[d];
+        /* A spilled long prefix lives in its own heap block; relocate it
+         * before the node so the node's verbatim copy carries the updated
+         * pointer. */
+        if (innerNodeHasLongPrefix(inner)) {
+            char **pptr = (char **)&inner->embedded_prefix[LONG_PREFIX_PTR_OFFSET];
+            void *newprefix = defragfn(*pptr);
+            if (newprefix) *pptr = (char *)newprefix;
+        }
+        void *newnode = defragfn(inner);
         if (!newnode) continue;
         path[d] = (innerNode *)newnode;
         if (d > 0)

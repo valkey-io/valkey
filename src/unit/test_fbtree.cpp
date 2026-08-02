@@ -4439,6 +4439,19 @@ static void countTreeNodes(node *n, int *inner_count, int *leaf_count) {
     }
 }
 
+/* Count inner nodes whose shared prefix spilled to a separate heap block
+ * (prefix_len > EMBED_PREFIX_LEN); each is one extra allocation a sweep must
+ * relocate. */
+static int countSpilledPrefixNodes(node *n) {
+    if (n->is_leaf) return 0;
+    innerNode *inner = (innerNode *)n;
+    int count = (inner->prefix_len > EMBED_PREFIX_LEN) ? 1 : 0;
+    for (int i = 0; i < inner->header.num_items; i++) {
+        count += countSpilledPrefixNodes(inner->children[i]);
+    }
+    return count;
+}
+
 /* Verify forward iteration yields exactly n keys formatted "key_%08d" for i in
  * [0, n), each stored with its trailing NUL (as insert()/createString do). */
 static void verifyForwardKeys(fbtreeIndex *tree, int n) {
@@ -4578,6 +4591,55 @@ TEST_F(FbtreeTest, DefragScanRelocatesInnerNodes) {
         verifyForwardKeys(tree, n);
 
         fbtreeFree(tree);
+    }
+}
+
+/* An inner node whose shared prefix exceeds the embedded capacity stores the
+ * prefix in a separate heap block. The sweep must relocate that block along
+ * with its owning node and re-store the pointer: with a force-relocate
+ * defragfn the old block is freed, so a stale pointer inside the node copy
+ * is a use-after-free on the next prefix-guided descent (ASAN verifies). */
+TEST_F(FbtreeTest, DefragScanRelocatesSpilledPrefixBlocks) {
+    const size_t prefix_len = EMBED_PREFIX_LEN + 46;
+    enum { N = 5000 };
+    char suffix[8];
+    for (int i = 0; i < N; i++) {
+        snprintf(suffix, sizeof(suffix), "s%05d", i);
+        fbtreeInsert(fbt, createPrefixString("P", prefix_len, suffix));
+    }
+
+    int inner_count = 0, leaf_count = 0;
+    countTreeNodes(fbt->root, &inner_count, &leaf_count);
+    int spilled = countSpilledPrefixNodes(fbt->root);
+    ASSERT_GT(spilled, 0) << "construction must produce spilled-prefix inner nodes";
+
+    g_fbtreeDefragRelocations = 0;
+    unsigned long cursor = 0;
+    int guard = 0;
+    do {
+        cursor = fbtreeDefragScan(fbt, cursor, fbtreeDefragNoopItemCallback, NULL, fbtreeDefragCountingForceRelocate);
+        ASSERT_LT(++guard, N + 100) << "sweep did not terminate";
+    } while (cursor != 0);
+
+    EXPECT_EQ(g_fbtreeDefragRelocations, inner_count + spilled + leaf_count + N)
+        << "every inner node, spilled prefix block, leaf, and item should relocate exactly once";
+
+    char err[256];
+    ASSERT_TRUE(fbtreeDebugValidate(fbt, false, err, sizeof(err))) << err;
+    ASSERT_EQ(fbtreeLength(fbt), (unsigned long)N);
+
+    /* Prefix-guided descents read the relocated prefix blocks: seek every
+     * 61st member by value and check its rank. */
+    for (int i = 0; i < N; i += 61) {
+        snprintf(suffix, sizeof(suffix), "s%05d", i);
+        sds probe = createPrefixString("P", prefix_len, suffix);
+        fbtreeIterator it;
+        fbtreeInitIterator(&it, fbt);
+        ASSERT_EQ(fbtreeSeekToValue(probe, &it), (long)i) << "seek for member " << i;
+        const_sds pos = fbtreeNext(&it);
+        ASSERT_NE(pos, nullptr);
+        ASSERT_EQ(memcmp(pos, probe, sdslen(probe)), 0) << "wrong member at rank " << i;
+        sdsfree(probe);
     }
 }
 

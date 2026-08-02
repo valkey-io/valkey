@@ -358,7 +358,7 @@ void replyBlockingInitDatabase(serverDb *db) {
 
 // Clear all uncommitted keys for each database.
 void clearAllUncommittedKeys(void) {
-    serverLog(LL_NOTICE, "Clearing all uncommitted keys for sync replication");
+    serverLog(LL_DEBUG, "Clearing all uncommitted keys");
     /* Clear pending list first — entries hold raw pointers to db->uncommitted_keys
      * hashtables that we're about to free. */
     if (pending_uncommitted_keys != NULL) {

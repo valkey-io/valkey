@@ -1595,7 +1595,7 @@ test "Dual channel replication buffer memory fields" {
                [s $primary_srv_id mem_total_replication_buffers] < [expr $value_size * 10] &&
                [s $replica_srv_id mem_total_replication_buffers] > $target_buffer_size
             } else {
-                fail "replica didn't receive the data in time"
+                fail "replication buffers did not reach expected state (primary=[s $primary_srv_id mem_total_replication_buffers], expected primary<[expr $value_size * 10]; replica=[s $replica_srv_id mem_total_replication_buffers], expected replica>$target_buffer_size)"
             }
 
             # Primary side check. Capture INFO and MEMORY STATS in one EXEC so the

@@ -82,7 +82,10 @@ bool fbtreeDebugValidate(fbtreeIndex *fbt, bool verbose, char *errmsg, size_t er
  * pointers. */
 unsigned long fbtreeDefragScan(fbtreeIndex *fbt, unsigned long cursor, void (*item_callback)(sds old_item, sds new_item, void *ctx), void *ctx, void *(*defragfn)(void *));
 
-/* Walk all leaf nodes and call dismissMemory on each. */
+/* Hint to the OS (madvise DONTNEED) that the tree's memory can be reclaimed:
+ * walks every leaf with its items and every inner node with any spilled
+ * prefix block. Call only when this process will not read the tree again --
+ * reclaimed anonymous pages are zero-filled on any later access. */
 void fbtreeDismissMemory(fbtreeIndex *fbt);
 
 #endif /* FBTREE_H */

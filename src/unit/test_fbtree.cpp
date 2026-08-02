@@ -4772,19 +4772,47 @@ TEST_F(FbtreeTest, DefragScanFullSweepEndToEnd) {
     }
 }
 
-/* Dismiss walks every leaf and its separately-allocated items; the tree must
- * stay valid and iterate unchanged afterward. */
-TEST_F(FbtreeTest, DismissMemoryPreservesContent) {
+/* Dismissal hints memory to the OS (madvise DONTNEED) for contents this
+ * process will not read again -- the fork child after serializing a value.
+ * The observable unit contract is therefore not content preservation but
+ * coverage: every allocation the tree owns is hinted exactly once. The
+ * zmadvise_dontneed wrapper counts calls: one per item, per leaf struct,
+ * and per inner node. */
+TEST_F(FbtreeTest, DismissMemoryHintsEveryAllocationOnce) {
     enum { N = 3000 };
     char buf[32];
     for (int i = 0; i < N; i++) {
         snprintf(buf, sizeof(buf), "key_%08d", i);
         insert(buf);
     }
+    int inner_count = 0, leaf_count = 0;
+    countTreeNodes(fbt->root, &inner_count, &leaf_count);
+    ASSERT_EQ(countSpilledPrefixNodes(fbt->root), 0);
+
+    MockValkey mock;
+    EXPECT_CALL(mock, zmadvise_dontneed(_, _)).Times(N + leaf_count + inner_count);
     fbtreeDismissMemory(fbt);
-    char err[256];
-    ASSERT_TRUE(fbtreeDebugValidate(fbt, false, err, sizeof(err))) << err;
-    verifyForwardKeys(fbt, N);
+}
+
+/* Same coverage contract on a tree whose inner nodes carry spilled
+ * long-prefix heap blocks: each spilled block is one additional allocation
+ * the walk must hint. */
+TEST_F(FbtreeTest, DismissMemoryWalksInnerNodesAndSpilledPrefixes) {
+    const size_t prefix_len = EMBED_PREFIX_LEN + 46;
+    enum { N = 5000 };
+    char suffix[8];
+    for (int i = 0; i < N; i++) {
+        snprintf(suffix, sizeof(suffix), "s%05d", i);
+        fbtreeInsert(fbt, createPrefixString("P", prefix_len, suffix));
+    }
+    int inner_count = 0, leaf_count = 0;
+    countTreeNodes(fbt->root, &inner_count, &leaf_count);
+    int spilled = countSpilledPrefixNodes(fbt->root);
+    ASSERT_GT(spilled, 0) << "construction must produce spilled-prefix inner nodes";
+
+    MockValkey mock;
+    EXPECT_CALL(mock, zmadvise_dontneed(_, _)).Times(N + leaf_count + inner_count + spilled);
+    fbtreeDismissMemory(fbt);
 }
 
 /* ==========================================================================

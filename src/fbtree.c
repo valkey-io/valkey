@@ -2562,8 +2562,27 @@ unsigned long fbtreeDefragScan(fbtreeIndex *fbt, unsigned long cursor, void (*it
     return (next_rank >= fbtreeLength(fbt)) ? 0 : next_rank;
 }
 
+/* Walk the inner nodes above the leaf level, dismissing each node struct and
+ * any spilled long-prefix block. The spilled prefix is the inner-node
+ * allocation that can span whole pages; the node struct itself is dismissed
+ * the same way leaf structs are. Children are dismissed before their parent
+ * so the walk never reads a node after hinting it away. */
+static void dismissInnerNodes(node *n) {
+    if (n->is_leaf) return;
+    innerNode *inner = (innerNode *)n;
+    if (innerNodeHasLongPrefix(inner)) {
+        char **pptr = (char **)&inner->embedded_prefix[LONG_PREFIX_PTR_OFFSET];
+        zmadvise_dontneed(*pptr, inner->prefix_len);
+    }
+    for (int i = 0; i < inner->header.num_items; i++) {
+        dismissInnerNodes(inner->children[i]);
+    }
+    zmadvise_dontneed(inner, 0);
+}
+
 void fbtreeDismissMemory(fbtreeIndex *fbt) {
     if (!fbt) return;
+    if (fbt->root) dismissInnerNodes(fbt->root);
     leafNode *leaf = fbt->leftmost_leaf;
     while (leaf) {
         leafNode *next = leaf->next;

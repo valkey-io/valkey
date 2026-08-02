@@ -208,8 +208,10 @@ void orderedIndexSeekToLexRange(OrderedIndexIterator *iter, const_sds min, const
  * ============================================================ */
 
 /* Hint to the OS that the index's memory pages can be reclaimed (madvise
- * DONTNEED). The index remains valid and usable  -- pages are faulted back in
- * on next access. Used during lazy-free to reduce RSS without blocking. */
+ * DONTNEED). Call only when the calling process will not read the index
+ * again -- e.g. in the fork child after the value has been serialized, to
+ * avoid needless copy-on-write. Reclaimed anonymous pages are zero-filled
+ * on any later access. */
 void orderedIndexDismissMemory(OrderedIndex *oi);
 
 /* Estimate the memory used by the index structure itself. Item payloads are

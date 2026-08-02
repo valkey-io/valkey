@@ -2025,12 +2025,15 @@ TEST_F(OrderedIndexTest, EstimateStructureMemoryTracksTreeShape) {
 }
 
 TEST_F(OrderedIndexTest, DismissMemoryWalksItems) {
-    /* Smoke test: dismissal must walk populated leaves and their separately
-     * allocated packed items without corrupting the index. */
-    populateSequential(200);
+    /* Dismissal hints memory to the OS for contents this process will not
+     * read again (fork child after serialization). At this layer the index
+     * is opaque, so the observable contract is coverage: at least one hint
+     * per item (plus the index's own nodes). */
+    enum { N = 200 };
+    populateSequential(N);
+    MockValkey mock;
+    EXPECT_CALL(mock, zmadvise_dontneed(_, _)).Times(AtLeast(N));
     orderedIndexDismissMemory(oi);
-    ASSERT_EQ(orderedIndexLength(oi), 200UL);
-    ASSERT_EQ(orderedIndexCountScoreRange(oi, NEG_INF, POS_INF, 0, 0), 200UL);
 }
 
 /* ========== Defrag tests (OrderedIndex layer) ========== */

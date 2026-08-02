@@ -75,13 +75,12 @@ bool fbtreeDebugValidate(fbtreeIndex *fbt, bool verbose, char *errmsg, size_t er
 /* Incremental defrag scan over the tree's rank order. cursor=0 to start,
  * returns the next cursor (0 when the sweep is done). Relocates one leaf per
  * call along with its items via defragfn, patching parent links, the leaf
- * chain, caches, and ancestor anchors. When an item is reallocated,
- * item_callback is invoked with the old and new pointers. */
+ * chain, caches, and ancestor anchors. Inner nodes are relocated by the call
+ * that visits their leftmost descendant leaf — at most tree-depth nodes per
+ * call, each exactly once per sweep — so per-call work stays bounded. When an
+ * item is reallocated, item_callback is invoked with the old and new
+ * pointers. */
 unsigned long fbtreeDefragScan(fbtreeIndex *fbt, unsigned long cursor, void (*item_callback)(sds old_item, sds new_item, void *ctx), void *ctx, void *(*defragfn)(void *));
-
-/* Relocate every inner node struct. Run once before fbtreeDefragScan, which
- * handles leaves and items. */
-void fbtreeDefragNodes(fbtreeIndex *fbt, void *(*defragfn)(void *));
 
 /* Walk all leaf nodes and call dismissMemory on each. */
 void fbtreeDismissMemory(fbtreeIndex *fbt);

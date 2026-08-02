@@ -523,7 +523,6 @@ OrderedIndex *orderedIndexDefragInternals(OrderedIndex *oi, void *(*defragfn)(vo
     fbtreeIndex *fbt = (fbtreeIndex *)oi;
     void *newptr = defragfn(fbt);
     if (newptr) fbt = (fbtreeIndex *)newptr;
-    fbtreeDefragNodes(fbt, defragfn);
     return (OrderedIndex *)fbt;
 }
 

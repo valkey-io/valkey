@@ -4417,6 +4417,28 @@ static void *fbtreeDefragNoop(void *ptr) {
     return NULL;
 }
 
+/* Force-relocate variant that counts invocations, for exactly-once accounting
+ * across a full sweep. */
+static int g_fbtreeDefragRelocations = 0;
+static void *fbtreeDefragCountingForceRelocate(void *ptr) {
+    g_fbtreeDefragRelocations++;
+    return fbtreeDefragForceRelocate(ptr);
+}
+
+/* Count the inner nodes and leaves of a tree by structural walk, so tests can
+ * assert how many allocations a sweep must visit. */
+static void countTreeNodes(node *n, int *inner_count, int *leaf_count) {
+    if (n->is_leaf) {
+        (*leaf_count)++;
+        return;
+    }
+    (*inner_count)++;
+    innerNode *inner = (innerNode *)n;
+    for (int i = 0; i < inner->header.num_items; i++) {
+        countTreeNodes(inner->children[i], inner_count, leaf_count);
+    }
+}
+
 /* Verify forward iteration yields exactly n keys formatted "key_%08d" for i in
  * [0, n), each stored with its trailing NUL (as insert()/createString do). */
 static void verifyForwardKeys(fbtreeIndex *tree, int n) {
@@ -4517,12 +4539,14 @@ TEST_F(FbtreeTest, DefragScanRelocatesLeafStructs) {
     }
 }
 
-/* fbtreeDefragNodes must relocate every inner node and repoint parent child
+/* The scan must relocate every inner node and repoint parent child
  * links (and the root), across a single-leaf tree (no inner nodes: a no-op),
  * a two-level tree (inner root over leaves), and a three-level tree (inner
- * root over inner nodes). Force-relocate all inner nodes, then the tree must
- * validate and iterate identically. */
-TEST_F(FbtreeTest, DefragNodesRelocatesInnerNodes) {
+ * root over inner nodes). The scan relocates each inner node in the call that
+ * visits its leftmost descendant leaf, so a full force-relocate sweep must
+ * touch every allocation exactly once: every inner node, every leaf, and
+ * every item. The tree must then validate and iterate identically. */
+TEST_F(FbtreeTest, DefragScanRelocatesInnerNodes) {
     int shapes[] = {5, 100, 5000};
     for (size_t s = 0; s < sizeof(shapes) / sizeof(shapes[0]); s++) {
         int n = shapes[s];
@@ -4533,7 +4557,20 @@ TEST_F(FbtreeTest, DefragNodesRelocatesInnerNodes) {
             fbtreeInsert(tree, createString(buf));
         }
 
-        fbtreeDefragNodes(tree, fbtreeDefragForceRelocate);
+        int inner_count = 0, leaf_count = 0;
+        countTreeNodes(tree->root, &inner_count, &leaf_count);
+
+        g_fbtreeDefragRelocations = 0;
+        unsigned long cursor = 0;
+        int guard = 0;
+        do {
+            cursor = fbtreeDefragScan(tree, cursor, fbtreeDefragNoopItemCallback, NULL, fbtreeDefragCountingForceRelocate);
+            ASSERT_LT(++guard, n + 100) << "n=" << n << ": sweep did not terminate";
+        } while (cursor != 0);
+
+        EXPECT_EQ(g_fbtreeDefragRelocations, inner_count + leaf_count + n)
+            << "n=" << n << ": every inner node (" << inner_count << "), leaf ("
+            << leaf_count << "), and item should relocate exactly once";
 
         char err[256];
         ASSERT_TRUE(fbtreeDebugValidate(tree, false, err, sizeof(err))) << "n=" << n << ": " << err;
@@ -4637,10 +4674,10 @@ TEST_F(FbtreeTest, DefragScanRelocatesRootLeaf) {
     ASSERT_EQ(fbtreeNext(&it), nullptr);
 }
 
-/* End-to-end: run the structural node pass then a full leaf/item sweep, both
- * force-relocating everything, and confirm the tree validates and answers
- * forward, backward, and rank queries identically. */
-TEST_F(FbtreeTest, DefragNodesThenScanEndToEnd) {
+/* End-to-end: run a full sweep force-relocating everything — inner nodes,
+ * leaves, and items — and confirm the tree validates and answers forward,
+ * backward, and rank queries identically. */
+TEST_F(FbtreeTest, DefragScanFullSweepEndToEnd) {
     enum { N = 5000 };
     char buf[32];
     for (int i = 0; i < N; i++) {
@@ -4648,7 +4685,6 @@ TEST_F(FbtreeTest, DefragNodesThenScanEndToEnd) {
         insert(buf);
     }
 
-    fbtreeDefragNodes(fbt, fbtreeDefragForceRelocate);
     unsigned long cursor = 0;
     int guard = 0;
     do {

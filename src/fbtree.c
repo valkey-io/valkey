@@ -2451,31 +2451,6 @@ bool fbtreeDebugValidate(fbtreeIndex *fbt, bool verbose, char *errmsg, size_t er
 
 /* ========== Defrag / Dismiss ========== */
 
-/* Relocate the inner node at *noderef (a slot in the parent, or the tree root)
- * and, depth-first, every inner node beneath it. Children are relocated before
- * the node itself so the verbatim copy carries the updated child pointers.
- * Leaves are not touched here — the rank scan relocates those with their items,
- * which keeps this pass bounded to the tree's few, fixed-size inner nodes. */
-static void defragInnerNode(node **noderef, void *(*defragfn)(void *)) {
-    node *n = *noderef;
-    if (n->is_leaf) return;
-
-    innerNode *inner = (innerNode *)n;
-    for (int i = 0; i < inner->header.num_items; i++)
-        defragInnerNode(&inner->children[i], defragfn);
-
-    void *newptr = defragfn(inner);
-    if (newptr) *noderef = (node *)newptr;
-}
-
-/* Active-defrag phase for the tree's structural nodes: relocate every inner
- * node so a fragmented page holding one can be reclaimed. Run once before the
- * rank scan, which handles leaves and items. */
-void fbtreeDefragNodes(fbtreeIndex *fbt, void *(*defragfn)(void *)) {
-    if (!fbt || !fbt->root) return;
-    defragInnerNode(&fbt->root, defragfn);
-}
-
 unsigned long fbtreeDefragScan(fbtreeIndex *fbt, unsigned long cursor, void (*item_callback)(sds old_item, sds new_item, void *ctx), void *ctx, void *(*defragfn)(void *)) {
     if (!fbt || !fbt->root || fbtreeLength(fbt) == 0) return 0;
     if (cursor >= fbtreeLength(fbt)) return 0;
@@ -2507,6 +2482,23 @@ unsigned long fbtreeDefragScan(fbtreeIndex *fbt, unsigned long cursor, void (*it
     }
 
     leafNode *leaf = (leafNode *)current;
+
+    /* Relocate the inner nodes whose leftmost descendant leaf is this one:
+     * those where the child index taken at that node and at every level
+     * beneath it is zero. Each inner node has exactly one leftmost leaf, so a
+     * full sweep attempts every inner node exactly once, and each call
+     * relocates at most tree-depth nodes, keeping per-call latency bounded.
+     * Bottom-up, so a relocated node's verbatim children array already
+     * carries any updated pointer to the node relocated just before it. */
+    for (int d = depth - 1; d >= 0 && path_idx[d] == 0; d--) {
+        void *newnode = defragfn(path[d]);
+        if (!newnode) continue;
+        path[d] = (innerNode *)newnode;
+        if (d > 0)
+            path[d - 1]->children[path_idx[d - 1]] = (node *)newnode;
+        else
+            fbt->root = (node *)newnode;
+    }
 
     /* Relocate the leaf struct itself before touching its items, patching every
      * external reference: the parent's child pointer (or the tree root when the

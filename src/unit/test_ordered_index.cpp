@@ -2072,8 +2072,8 @@ static void oiDefragCountingCallback(OrderedIndexItem *old_item, OrderedIndexIte
     ((OIDefragRecord *)privdata)->count++;
 }
 
-/* Full two-phase defrag with everything relocating: the struct, inner nodes,
- * leaves, and items all move. The callback must fire once per item (the bridge
+/* Full defrag with everything relocating: the struct, inner nodes, leaves,
+ * and items all move. The callback must fire once per item (the bridge
  * defrag.c relies on), and the index must stay valid and fully readable  -- which
  * it can only be if every relocated pointer was patched through. */
 TEST_F(OrderedIndexTest, DefragRelocatesStructNodesLeavesAndItems) {
@@ -2085,12 +2085,13 @@ TEST_F(OrderedIndexTest, DefragRelocatesStructNodesLeavesAndItems) {
     }
     verifyOI();
 
-    /* Phase A: relocate the index struct + every inner node. Reassign because
-     * the struct pointer itself may move. */
+    /* Relocate the index's top-level struct. Reassign because the struct
+     * pointer itself may move. */
     oi = orderedIndexDefragInternals(oi, oiDefragForceRelocate);
     ASSERT_NE(oi, nullptr);
 
-    /* Phase B: sweep leaves + items, one leaf per call. */
+    /* Sweep: one leaf per call, with inner nodes relocated by the call that
+     * visits their leftmost descendant leaf. */
     OIDefragRecord rec = {0};
     unsigned long cursor = 0;
     do {

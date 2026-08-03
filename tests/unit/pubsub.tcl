@@ -540,9 +540,8 @@ start_server {tags {"pubsub network"}} {
         $rd hello 3
         $rd read
 
-        # Threshold is forced to 1 above, so a small payload is enough to
-        # exercise copy avoidance and keeps failure output readable.
-        set payload [string repeat X 64]
+        # Threshold is forced to 1 above; use 128 so the string is RAW-encoded
+        set payload [string repeat X 128]
         assert_equal {1} [subscribe $rd wiretest]
 
         $rd publish wiretest $payload

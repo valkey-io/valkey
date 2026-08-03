@@ -3887,6 +3887,11 @@ void call(client *c, int flags) {
     c->flag.force_repl = 0;
     c->flag.prevent_prop = 0;
 
+    /* The redaction bitmap describes the argv of the executing command and is
+     * set on demand by the command itself. Clear any bits left by a previous
+     * command, since resetClient() does not run between queued MULTI commands. */
+    c->redact_arg_bitmap = 0;
+
     /* The server core is in charge of propagation when the first entry point
      * of call() is processCommand().
      * The only other option to get to call() without having processCommand

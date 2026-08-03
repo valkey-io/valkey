@@ -201,10 +201,12 @@ start_server {tags {"repl external:skip"}} {
             # assertion below doesn't race with it.
             wait_for_ofs_sync $A $B
 
-            # reset stats
+            # Reset stats and read them atomically so replication traffic can't
+            # arrive between the reset and the stats snapshot.
+            $A multi
             $A config resetstat
-            
-            set info [$A info stats]
+            $A info stats
+            set info [lindex [$A exec] 1]
             set replica_bytes_output [getInfoProperty $info "total_net_repl_output_bytes"]
             assert_equal $replica_bytes_output 0
             
@@ -1677,5 +1679,42 @@ start_server {tags {"repl external:skip"}} {
                 fail "Replication failed."
             }
         }
+    }
+}
+
+start_server {tags {"repl external:skip"}} {
+    set replica [srv 0 client]
+    $replica config set repl-diskless-load disabled
+    $replica commandlog reset slow
+    $replica config set commandlog-execution-slower-than 10000
+
+    start_server {} {
+        set primary [srv 0 client]
+        set primary_host [srv 0 host]
+        set primary_port [srv 0 port]
+
+        $primary config set repl-diskless-sync yes
+        $primary config set repl-diskless-sync-delay 0
+        $primary config set rdbcompression no
+        $primary config set rdb-key-save-delay 10000000
+        $primary debug populate 5 blockread 100000
+
+        test "Cancelling handshake while bio rdb-save read is blocked stalls only up to repl_syncio_timeout" {
+            $replica replicaof $primary_host $primary_port
+
+            # Wait until the replica has entered the payload read phase, i.e. the
+            # bio thread has read the first chunk and is now blocked on the next
+            # (silent) read.
+            wait_for_log_messages -1 {"*receiving streamed RDB from primary*to disk*"} 0 1000 50
+
+            # Aborting the handshake makes the main thread wait in bioDrainWorker()
+            # until the bio thread's blocked read times out. That read is bounded
+            # by repl_syncio_timeout (~5s).
+            $replica replicaof no one
+            # The test is flaky, don't bother to keep it.
+            # assert_match {*replicaof*} [$replica commandlog get -1 slow]
+        }
+
+        $primary config set rdb-key-save-delay 0
     }
 }

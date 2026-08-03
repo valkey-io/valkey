@@ -246,12 +246,29 @@ static inline int isReplicaReadyForReplData(client *replica) {
            !(replica->flag.close_asap);
 }
 
+/* The subscribe / unsubscribe command family has a push as a reply,
+ * or in other words, it responds with a push (or several of them
+ * depending on how many arguments it got), and has no reply. */
+int cmdHasPushAsReply(struct serverCommand *cmd) {
+    if (!cmd) return 0;
+    return cmd->proc == subscribeCommand || cmd->proc == unsubscribeCommand || cmd->proc == psubscribeCommand ||
+           cmd->proc == punsubscribeCommand || cmd->proc == ssubscribeCommand || cmd->proc == sunsubscribeCommand;
+}
+
+/* Publish-to-self push must wait until after the command reply. */
+static int shouldDeferPushMessage(client *c) {
+    return c->flag.pushing && c == server.current_client && server.executing_client &&
+           !cmdHasPushAsReply(server.executing_client->cmd);
+}
+
 /* Decides if copy avoidance is preferred according to client type, number of I/O threads, object size
  * Maybe called with NULL obj for evaluation with no regard to object size
  * Copy avoidance can be allowed only for regular Valkey clients
  * that use _writeToClient handler to write replies to client connection */
 static int isCopyAvoidPreferred(client *c, robj *obj) {
     if (c->flag.fake || isDeferredReplyEnabled(c)) return 0;
+    /* Skip copy avoidance when push bytes would be deferred into pending_push_messages. */
+    if (shouldDeferPushMessage(c)) return 0;
 
     int type = getClientType(c);
     if (type != CLIENT_TYPE_NORMAL && type != CLIENT_TYPE_PUBSUB) return 0;
@@ -694,15 +711,6 @@ static void _addBulkStrRefToToList(client *c, const void *payload, size_t len) {
     _addReplyPayloadToList(c, c->reply, payload, len, BULK_STR_REF);
 }
 
-/* The subscribe / unsubscribe command family has a push as a reply,
- * or in other words, it responds with a push (or several of them
- * depending on how many arguments it got), and has no reply. */
-int cmdHasPushAsReply(struct serverCommand *cmd) {
-    if (!cmd) return 0;
-    return cmd->proc == subscribeCommand || cmd->proc == unsubscribeCommand || cmd->proc == psubscribeCommand ||
-           cmd->proc == punsubscribeCommand || cmd->proc == ssubscribeCommand || cmd->proc == sunsubscribeCommand;
-}
-
 void _addReplyToBufferOrList(client *c, const char *s, size_t len) {
     if (c->flag.close_after_reply) return;
 
@@ -728,8 +736,7 @@ void _addReplyToBufferOrList(client *c, const char *s, size_t len) {
      * the SUBSCRIBE command family, which (currently) have a push message instead of a proper reply.
      * The check for executing_client also avoids affecting push messages that are part of eviction.
      * Check CLIENT_PUSHING first to avoid race conditions, as it's absent in module's fake client. */
-    int defer_push_message = c->flag.pushing && c == server.current_client && server.executing_client &&
-                             !cmdHasPushAsReply(server.executing_client->cmd);
+    int defer_push_message = shouldDeferPushMessage(c);
     if (defer_push_message == 0 && isDeferredReplyEnabled(c)) {
         _addReplyProtoToList(c, c->deferred_reply, s, len);
         return;

@@ -215,6 +215,13 @@ typedef struct benchmarkThread {
     pthread_t thread;
     aeEventLoop *el;
     list *paused_clients;
+    /* Per-thread latency histograms: recording into one shared histogram
+     * with hdr_record_value_atomic makes every command from every thread
+     * contend on the same counter cache lines. Each thread records into
+     * its own histograms lock-free; thread 0 folds them for live display
+     * and the main thread folds them after join for the final report. */
+    struct hdr_histogram *latency_histogram;
+    struct hdr_histogram *current_sec_latency_histogram;
 } benchmarkThread;
 
 /* Cluster. */
@@ -482,6 +489,26 @@ void initPlaceholders(const char *cmd, size_t cmd_len) {
     return;
 }
 
+/* Per-thread PRNG for key generation. rand62() is built on glibc random(),
+ * which serializes every caller on a process-wide lock; with placeholder
+ * replacement calling it per command from all benchmark threads it becomes
+ * a global scalability bottleneck. Use an independent splitmix64 stream per
+ * thread instead, seeded once per thread from the (--seed seedable) global
+ * generator. Note: with --seed, per-thread streams are reproducible only up
+ * to thread scheduling order of first use. */
+static _Thread_local uint64_t bench_rng_state = 0;
+
+static uint64_t benchThreadRand62(void) {
+    if (bench_rng_state == 0) {
+        bench_rng_state = ((uint64_t)random() << 31) ^ (uint64_t)random();
+        if (bench_rng_state == 0) bench_rng_state = 0x9E3779B97F4A7C15ULL;
+    }
+    uint64_t z = (bench_rng_state += 0x9E3779B97F4A7C15ULL);
+    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
+    z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
+    return (z ^ (z >> 31)) & ((1ULL << 62) - 1);
+}
+
 static void replacePlaceholder(const size_t *indices, const size_t count, char *cmd, _Atomic uint64_t *key_counter) {
     if (count == 0) return;
 
@@ -490,7 +517,7 @@ static void replacePlaceholder(const size_t *indices, const size_t count, char *
         if (config.sequential_replacement) {
             key = atomic_fetch_add_explicit(key_counter, 1, memory_order_relaxed);
         } else {
-            key = rand62();
+            key = benchThreadRand62();
         }
         key %= config.keyspacelen;
     }
@@ -801,14 +828,15 @@ static void readHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
                                              ? (long)c->latency
                                              : CONFIG_LATENCY_HISTOGRAM_INSTANT_MAX_VALUE); // Value to record
                     } else {
-                        hdr_record_value_atomic(config.latency_histogram, // Histogram to record to
-                                                (long)c->latency <= CONFIG_LATENCY_HISTOGRAM_MAX_VALUE
-                                                    ? (long)c->latency
-                                                    : CONFIG_LATENCY_HISTOGRAM_MAX_VALUE); // Value to record
-                        hdr_record_value_atomic(config.current_sec_latency_histogram,      // Histogram to record to
-                                                (long)c->latency <= CONFIG_LATENCY_HISTOGRAM_INSTANT_MAX_VALUE
-                                                    ? (long)c->latency
-                                                    : CONFIG_LATENCY_HISTOGRAM_INSTANT_MAX_VALUE); // Value to record
+                        benchmarkThread *thread = config.threads[c->thread_id];
+                        hdr_record_value(thread->latency_histogram, // Histogram to record to
+                                         (long)c->latency <= CONFIG_LATENCY_HISTOGRAM_MAX_VALUE
+                                             ? (long)c->latency
+                                             : CONFIG_LATENCY_HISTOGRAM_MAX_VALUE); // Value to record
+                        hdr_record_value(thread->current_sec_latency_histogram,     // Histogram to record to
+                                         (long)c->latency <= CONFIG_LATENCY_HISTOGRAM_INSTANT_MAX_VALUE
+                                             ? (long)c->latency
+                                             : CONFIG_LATENCY_HISTOGRAM_INSTANT_MAX_VALUE); // Value to record
                     }
                 }
                 c->pending--;
@@ -1295,6 +1323,13 @@ static void startBenchmarkThreads(void) {
         }
     }
     for (i = 0; i < config.num_threads; i++) pthread_join(config.threads[i]->thread, NULL);
+    /* All threads have stopped: fold the per-thread latency histograms into
+     * the global histogram for exact final reporting. Reset it first --
+     * showThroughput may have populated it with approximate live merges. */
+    hdr_reset(config.latency_histogram);
+    for (i = 0; i < config.num_threads; i++) {
+        hdr_add(config.latency_histogram, config.threads[i]->latency_histogram);
+    }
 }
 
 /* Benchmark a sequence of commands. The cmd is RESP encoded of length len and
@@ -1364,12 +1399,22 @@ static benchmarkThread *createBenchmarkThread(int index) {
     thread->index = index;
     thread->el = aeCreateEventLoop(1024 * 10);
     thread->paused_clients = listCreate();
+    hdr_init(CONFIG_LATENCY_HISTOGRAM_MIN_VALUE,         // Minimum value
+             CONFIG_LATENCY_HISTOGRAM_MAX_VALUE,         // Maximum value
+             config.precision,                           // Number of significant figures
+             &thread->latency_histogram);                // Pointer to initialise
+    hdr_init(CONFIG_LATENCY_HISTOGRAM_MIN_VALUE,         // Minimum value
+             CONFIG_LATENCY_HISTOGRAM_INSTANT_MAX_VALUE, // Maximum value
+             config.precision,                           // Number of significant figures
+             &thread->current_sec_latency_histogram);    // Pointer to initialise
     aeCreateTimeEvent(thread->el, 1, showThroughput, (void *)thread, NULL);
     return thread;
 }
 
 static void freeBenchmarkThread(benchmarkThread *thread) {
     if (thread->el) aeDeleteEventLoop(thread->el);
+    if (thread->latency_histogram) hdr_close(thread->latency_histogram);
+    if (thread->current_sec_latency_histogram) hdr_close(thread->current_sec_latency_histogram);
     listRelease(thread->paused_clients);
     zfree(thread);
 }
@@ -2162,6 +2207,13 @@ long long showThroughput(struct aeEventLoop *eventLoop, long long id, void *clie
             atomic_store_explicit(&config.requests_issued, 0, memory_order_relaxed);
             atomic_store_explicit(&config.previous_requests_finished, 0, memory_order_relaxed);
             hdr_reset(config.latency_histogram);
+            /* Per-thread histograms carry the recorded values now; clear them
+             * too. Concurrent recording may leak a warmup sample into the
+             * results -- same benign-race class as the counter resets above. */
+            for (int t = 0; t < config.num_threads; t++) {
+                hdr_reset(config.threads[t]->latency_histogram);
+                hdr_reset(config.threads[t]->current_sec_latency_histogram);
+            }
         }
     } else if (isBenchmarkFinished(requests_finished)) {
         aeStop(eventLoop);
@@ -2181,6 +2233,18 @@ long long showThroughput(struct aeEventLoop *eventLoop, long long id, void *clie
         printf("clients: %d\r", config.liveclients);
         fflush(stdout);
         return SHOW_THROUGHPUT_INTERVAL;
+    }
+    if (config.num_threads) {
+        /* Fold the per-thread histograms for the live display line. The
+         * per-second histograms are reset after folding; a sample recorded
+         * concurrently can be lost, which is acceptable for display only --
+         * the final report is folded exactly after thread join. */
+        hdr_reset(config.latency_histogram);
+        for (int t = 0; t < config.num_threads; t++) {
+            hdr_add(config.latency_histogram, config.threads[t]->latency_histogram);
+            hdr_add(config.current_sec_latency_histogram, config.threads[t]->current_sec_latency_histogram);
+            hdr_reset(config.threads[t]->current_sec_latency_histogram);
+        }
     }
     const float dt = (float)(current_tick - config.start) / 1000.0;
     const float rps = (float)requests_finished / dt;

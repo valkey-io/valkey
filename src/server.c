@@ -4696,8 +4696,131 @@ int processCommand(client *c) {
         queueMultiCommand(c, cmd_flags);
         addReply(c, shared.queued);
     } else {
-        int flags = CMD_CALL_FULL;
-        call(c, flags);
+        /* Fast-path for simple read-only commands: bypass call() overhead with
+         * sampled timing (1/64 commands timed, extrapolated for stats accuracy).
+         * Eligible when:
+         * - Command is read-only and O(1)/O(log N) (CMD_READONLY | CMD_FAST)
+         * - No module result event listeners (nothing to notify)
+         * - No MONITOR clients (nothing to feed)
+         * - Client-side caching tracking inactive (no keys to remember)
+         * - Not in nested execution (top-level only)
+         *
+         * Skips on non-sampled commands: timing, commandlog, latency histogram,
+         *   zmalloc peak check, afterCommand.
+         * Always preserves: cmd->calls, stat_numcommands, failed_calls.
+         * Sampled commands (1/64): full timing, commandlog threshold, histogram,
+         *   zmalloc check, afterCommand — with microseconds extrapolated ×64. */
+        if ((c->cmd->flags & (CMD_READONLY | CMD_FAST)) == (CMD_READONLY | CMD_FAST) &&
+            !commandResultSuccessListeners &&
+            !commandResultFailureListeners &&
+            !listLength(server.monitors) &&
+            !(c->flag.tracking) &&
+            server.execution_nesting == 0) {
+            struct serverCommand *real_cmd = c->cmd->parent ? c->cmd->parent : c->cmd;
+            client *prev_client = server.executing_client;
+            server.executing_client = c;
+
+            /* Determine if this is a sampled command (1 in 64).
+             * Uses per-command call count so the FIRST call of each command type
+             * is always sampled (ensures latency histogram has data immediately). */
+            int sample = (real_cmd->calls & 63) == 0;
+            ustime_t call_timer = 0;
+
+            if (sample) {
+                call_timer = ustime();
+                enterExecutionUnit(1, call_timer);
+            } else {
+                /* Enter an execution unit WITHOUT updating the cached time
+                 * (no clock read — this is the same zero-cost variant that
+                 * firePostExecutionUnitJobs uses). Without this, code running
+                 * inside proc(c) that checks execution_nesting misbehaves:
+                 * e.g. a module notification callback's nested RM_Call sees
+                 * nesting == 0 and flushes its propagation immediately,
+                 * escaping the atomic MULTI/EXEC batch of the lazy expiry
+                 * that triggered it (replication-order violation). */
+                enterExecutionUnit(0, 0);
+            }
+
+            c->flag.executing_command = 1;
+            c->flag.buffered_reply = 0;
+            c->flag.keyspace_notified = 0;
+
+            /* Snapshot dirty so we can mirror call()'s dirty-based
+             * propagation if the dataset changes under this command. */
+            long long dirty_before = server.dirty;
+
+            /* Execute the command */
+            c->cmd->proc(c);
+
+            exitExecutionUnit();
+
+            /* Mirror call()'s dirty-based propagation exactly: if the
+             * dataset changed while this command ran (e.g. a module
+             * keyspace-notification callback performed a write), call()
+             * would propagate the command verbatim after any queued module
+             * ops. Do the same so the fast path is observably identical to
+             * call() on the replication stream.
+             * NOTE: if upstream later stops replicating read commands in
+             * this situation, remove this block to match. */
+            if (server.dirty != dirty_before && !c->flag.prevent_prop && !(c->cmd->flags & CMD_MODULE)) {
+                alsoPropagate(c->db->id, c->argv, c->argc, PROPAGATE_AOF | PROPAGATE_REPL, c->slot);
+            }
+
+            if (!c->flag.blocked) c->flag.executing_command = 0;
+
+            /* Hoist duration measurement before stats/commandlog so that
+             * commandlogPushCurrentCommand sees a real c->duration on
+             * sampled commands (fixes exec-time slowlog threshold). */
+            ustime_t duration = 0;
+            if (sample) {
+                duration = ustime() - call_timer;
+                c->duration = duration;
+            }
+
+            /* Stats — always updated */
+            real_cmd->calls++;
+            server.stat_numcommands++;
+            if (c->deferred_reply_errors) real_cmd->failed_calls++;
+
+            /* Commandlog — always check (large-reply threshold needs every command) */
+            if (!c->flag.blocked) commandlogPushCurrentCommand(c, real_cmd);
+
+            if (sample) {
+                /* Sampled path: full timing + telemetry */
+
+                /* Extrapolate microseconds: this sample represents ~64 commands */
+                real_cmd->microseconds += duration * 64;
+
+                /* Latency histogram: feed real duration (not extrapolated) */
+                if (server.latency_tracking_enabled && !c->flag.blocked)
+                    updateCommandLatencyHistogram(&(real_cmd->latency_histogram), duration * 1000);
+
+                c->duration = 0;
+
+                /* Peak memory check */
+                size_t zmalloc_used = zmalloc_used_memory();
+                if (zmalloc_used > server.stat_peak_memory)
+                    server.stat_peak_memory = zmalloc_used;
+
+                /* Full cleanup on sampled commands */
+                afterCommand(c);
+            } else if (server.also_propagate.numops > 0 ||
+                       listLength(server.pending_push_messages) ||
+                       moduleHasPostExecutionUnitJobs()) {
+                /* Non-sampled commands skip afterCommand() for speed, but
+                 * proc(c) can leave cross-command side effects that beforeSleep
+                 * asserts on (also_propagate ops from lazy expiry; push messages
+                 * deferred to a self-subscribed RESP3 client) or that must not
+                 * be delayed (module post-notification jobs).  Three cheap loads,
+                 * branch almost never taken. */
+                afterCommand(c);
+            }
+
+            server.executing_client = prev_client;
+        } else {
+            int flags = CMD_CALL_FULL;
+            call(c, flags);
+        }
         if (listLength(server.ready_keys) && !isInsideYieldingLongCommand()) handleClientsBlockedOnKeys();
     }
     return C_OK;

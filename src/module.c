@@ -419,8 +419,8 @@ typedef struct ValkeyModuleEventListener {
 } ValkeyModuleEventListener;
 
 list *ValkeyModule_EventListeners;                /* Global list of all the active events. */
-static int commandResultSuccessListeners = 0;     /* Count of modules listening for command result success. */
-static int commandResultFailureListeners = 0;     /* Count of modules listening for command result failure. */
+int commandResultSuccessListeners = 0;            /* Count of modules listening for command result success. */
+int commandResultFailureListeners = 0;            /* Count of modules listening for command result failure. */
 static int commandResultRejectedListeners = 0;    /* Count of modules listening for command result rejected. */
 static int commandResultACLRejectedListeners = 0; /* Count of modules listening for command result ACL rejected. */
 
@@ -9418,6 +9418,13 @@ void firePostExecutionUnitJobs(void) {
         zfree(job);
     }
     exitExecutionUnit();
+}
+
+/* Returns 1 if any module post-execution-unit jobs are pending.
+ * Used by the fast-path to determine if afterCommand() must be called
+ * even on non-sampled commands, so that module jobs are not stranded. */
+int moduleHasPostExecutionUnitJobs(void) {
+    return listLength(modulePostExecUnitJobs) > 0;
 }
 
 /* When running inside a key space notification callback, it is dangerous and highly discouraged to perform any write

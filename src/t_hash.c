@@ -1933,7 +1933,7 @@ void hpersistCommand(client *c) {
     int fields_index = 4, result = 0, changes = 0;
     long long num_fields = 0;
 
-    if (strcasecmp(objectGetVal(c->argv[fields_index - 2]), "fields")) {
+    if (strcasecmp(c->argv[fields_index - 2]->ptr, "fields")) {
         addReplyErrorObject(c, shared.syntaxerr);
         return;
     }
@@ -2008,7 +2008,7 @@ void httlGenericCommand(client *c, long long basetime, int unit) {
     int fields_index = 4;
     long long num_fields = 0, result = -2;
 
-    if (strcasecmp(objectGetVal(c->argv[fields_index - 2]), "fields")) {
+    if (strcasecmp(c->argv[fields_index - 2]->ptr, "fields")) {
         addReplyErrorObject(c, shared.syntaxerr);
         return;
     }

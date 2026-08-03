@@ -1651,6 +1651,7 @@ int rdbSaveBackground(int req, char *filename, rdbSaveInfo *rsi, int rdbflags) {
         /* Parent */
         if (childpid == -1) {
             server.lastbgsave_status = C_ERR;
+            server.lastbgsave_try = time(NULL);
             serverLog(LL_WARNING, "Can't save in background: fork: %s", strerror(errno));
             return C_ERR;
         }

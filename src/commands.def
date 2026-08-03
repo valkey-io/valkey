@@ -11501,7 +11501,7 @@ commandHistory SET_History[] = {
 {"6.2.0","Added the `GET`, `EXAT` and `PXAT` option."},
 {"7.0.0","Allowed the `NX` and `GET` options to be used together."},
 {"8.1.0","Added the `IFEQ` option."},
-{"9.1.0","Added the `IFNE` option."},
+{"9.2.0","Added the `IFNE` option."},
 };
 #endif
 
@@ -11522,7 +11522,7 @@ struct COMMAND_ARG SET_condition_Subargs[] = {
 {MAKE_ARG("nx",ARG_TYPE_PURE_TOKEN,-1,"NX",NULL,"2.6.12",CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("xx",ARG_TYPE_PURE_TOKEN,-1,"XX",NULL,"2.6.12",CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("comparison-value",ARG_TYPE_STRING,-1,"IFEQ","Sets the key's value only if the current value matches the specified comparison value.","8.1.0",CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("comparison-not-equal",ARG_TYPE_STRING,-1,"IFNE","Sets the key's value only if the current value does not match the specified comparison value.","9.1.0",CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("comparison-not-equal",ARG_TYPE_STRING,-1,"IFNE","Sets the key's value only if the current value does not match the specified comparison value.","9.2.0",CMD_ARG_NONE,0,NULL)},
 };
 
 /* SET expiration argument table */

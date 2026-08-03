@@ -759,6 +759,8 @@ typedef enum {
 #define ARGS_SET_FXX (1 << 12)  /* Set if key item exists. */
 #define ARGS_SET_IFNE (1 << 13) /* Set only if values are not equal */
 
+#define ARGS_SET_CONDITIONAL \
+    (ARGS_SET_NX | ARGS_SET_XX | ARGS_SET_IFEQ | ARGS_SET_IFNE)
 
 /* An Object, that is a type able to hold a string / list / set */
 

@@ -40,6 +40,10 @@
 
 #define LP_INTBUF_SIZE 21 /* 20 digits of -2^63 + 1 null term = 21. */
 #define LP_MAX_INT_ENCODING_LEN 9
+/* Worst-case on-wire size of a tagged metadata entry: tag byte + widest
+ * integer encoding + 1-byte backlen. Callers sizing an addition that
+ * includes metadata (e.g. via lpSafeToAdd) must account for this. */
+#define LP_METADATA_MAX_ENTRY_BYTES (1 + LP_MAX_INT_ENCODING_LEN + 1)
 
 #define lpGetTotalBytes(p) \
     (((uint32_t)(p)[0] << 0) | ((uint32_t)(p)[1] << 8) | ((uint32_t)(p)[2] << 16) | ((uint32_t)(p)[3] << 24))

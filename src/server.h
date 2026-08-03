@@ -3608,6 +3608,7 @@ long long hashTypeListpackGetExpiry(unsigned char *zl, unsigned char *vptr); /* 
 bool hashTypeListpackFieldIsValid(long long expiry);                         /* listpack mirror of validateEntry: is a field with this expiry visible now */
 void hashTypeFreeVolatileSet(robj *o);                                       /* needed only for freeHashObject */
 void hashTypeTrackEntry(robj *o, entry *entry);                              /* needed only for rdbLoadObject */
+void hashTypeUpdateVolatileCount(robj *o, long delta);                       /* exported only for rdbLoadObject's HASH_2-to-listpack path */
 size_t hashTypeScanDefrag(robj *ob, size_t cursor, void *(*defragAlloc)(void *));
 size_t hashTypeDeleteExpiredFields(robj *o, mstime_t now, unsigned long max_fields, robj **out_fields);
 

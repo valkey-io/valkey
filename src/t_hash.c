@@ -80,7 +80,7 @@ static vset *hashTypeGetVolatileSet(robj *o) {
  *
  * Must be called after the mutation it accounts for; it may reallocate the
  * listpack, so callers must not reuse element pointers taken before it. */
-static void hashTypeUpdateVolatileCount(robj *o, long delta) {
+void hashTypeUpdateVolatileCount(robj *o, long delta) {
     if (delta == 0) return;
     serverAssert(objectGetEncoding(o) == OBJ_ENCODING_LISTPACK);
     unsigned char *zl = objectGetVal(o);
@@ -136,9 +136,27 @@ bool hashTypeHasVolatileFields(robj *o) {
     return false;
 }
 
+/* Transient "ignore TTL" state for the listpack encoding. The hashtable
+ * encoding hangs this state on the object itself (by swapping the hashtable
+ * type, see below); a listpack has nowhere to put it, so we use a file-scope
+ * flag consulted by hashTypeListpackFieldIsValid(). This is safe because
+ * command execution is single threaded and every ignore-bracket is a tight
+ * set(true)/.../set(false) pair that does not span commands. */
+static bool listpack_ttl_ignored = false;
+
 /* make any access to the hash object elements ignore the specific elements expiration.
  * This is mainly in order to be able to access hash elements which are already expired. */
 static inline void hashTypeIgnoreTTL(robj *o, bool ignore) {
+    if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) {
+        listpack_ttl_ignored = ignore;
+        return;
+    }
+    /* Clearing is done regardless of encoding so that a bracket whose object
+     * was converted listpack->hashtable in between cannot leak the flag.
+     * Setting, however, must NOT touch the flag for hashtable objects:
+     * hashTypeFreeVolatileSet() uses ignore=true as steady-state (not
+     * bracketed) configuration for hashes without volatile fields. */
+    if (!ignore) listpack_ttl_ignored = false;
     if (objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE) {
         /* prevent placing access function if not needed */
         if (!ignore && hashTypeGetVolatileSet(o) == NULL) {
@@ -224,6 +242,10 @@ bool hashHashtableTypeValidate(hashtable *ht, void *entryptr) {
  * loading, replication stream, slot migration, import mode). */
 bool hashTypeListpackFieldIsValid(long long expiry) {
     if (expiry == EXPIRY_NONE) return true;
+    /* Inside an ignore-TTL bracket (e.g. HSETEX force-deleting an already
+     * expired field) every field is visible, mirroring the hashtable
+     * encoding's type swap to the non-validating hashHashtableType. */
+    if (listpack_ttl_ignored) return true;
     if (getExpirationPolicyWithFlags(0) == POLICY_IGNORE_EXPIRE) return true;
     return !timestampIsExpired(expiry);
 }

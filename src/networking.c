@@ -171,17 +171,23 @@ typedef enum {
  * for a string object. This includes internal fragmentation. */
 size_t getStringObjectSdsUsedMemory(robj *o) {
     serverAssertWithInfo(NULL, o, o->type == OBJ_STRING);
-    if (o->encoding != OBJ_ENCODING_INT) {
+    if (objectGetEncoding(o) != OBJ_ENCODING_INT) {
         return sdsAllocSize(objectGetVal(o));
     }
     return 0;
+}
+
+/* Return the total memory used by a string object, including the robj
+ * structure and the sds string overhead (internal fragmentation). */
+size_t getStringObjectMemory(robj *o) {
+    return sizeof(robj) + getStringObjectSdsUsedMemory(o);
 }
 
 /* Return the length of a string object.
  * This does NOT include internal fragmentation or sds unused space. */
 size_t getStringObjectLen(robj *o) {
     serverAssertWithInfo(NULL, o, o->type == OBJ_STRING);
-    switch (o->encoding) {
+    switch (objectGetEncoding(o)) {
     case OBJ_ENCODING_RAW: return sdslen(objectGetVal(o));
     case OBJ_ENCODING_EMBSTR: return sdslen(objectGetVal(o));
     default: return 0; /* Just integer encoding for now. */
@@ -1091,9 +1097,24 @@ void trimReplyUnusedTailSpace(client *c) {
     /* We only try to trim the space is relatively high (more than a 1/4 of the
      * allocation), otherwise there's a high chance realloc will NOP.
      * Also, to avoid large memmove which happens as part of realloc, we only do
-     * that if the used part is small.  */
+     * that if the used part is small.
+     *
+     * Two conditions gate the realloc, for two distinct reasons:
+     *  - io_write_state != CLIENT_PENDING_IO: while an IO thread is writing it
+     *    concurrently walks the whole reply list, so mutating any block races
+     *    with it. This is a thread-safety requirement, independent of which
+     *    block we touch.
+     *  - tail->buf != io_last_written.buf: never free/move the block the write
+     *    bookmark points at. If we did, the allocator could hand the same
+     *    address back for a new reply block; the bookmark would then match an
+     *    unrelated, shorter block while its data_len still claims more bytes
+     *    were sent, and the next write would over-skip (empty IOV) and drop the
+     *    reply's leading bytes. A pointer check is NOT enough at the consumer
+     *    side because that recycle reuses the same address (ABA); the only
+     *    robust fix is to not free the bookmarked block in the first place.
+     * See https://github.com/valkey-io/valkey/pull/4060 */
     if (tail->size - tail->used > tail->size / 4 && tail->used < PROTO_REPLY_CHUNK_BYTES &&
-        c->io_write_state != CLIENT_PENDING_IO && !tail->flag.buf_encoded) {
+        c->io_write_state != CLIENT_PENDING_IO && tail->buf != c->io_last_written.buf && !tail->flag.buf_encoded) {
         size_t usable_size;
         size_t old_size = tail->size;
         tail = zrealloc_usable(tail, tail->used + sizeof(clientReplyBlock), &usable_size);
@@ -1164,9 +1185,13 @@ void setDeferredReply(client *c, void *node, const char *s, size_t length) {
      * - The next node is non-NULL,
      * - It has enough room already allocated
      * - And not too large (avoid large memmove)
-     * - And the client is not in a pending I/O state */
+     * - And it is safe to mutate the target node: the client is not
+     *   CLIENT_PENDING_IO (an IO thread is not concurrently walking the reply
+     *   list) AND the target node is not the one io_last_written references
+     *   (mutating the bookmarked block desyncs the write bookmark).
+     *   See https://github.com/valkey-io/valkey/pull/4060 */
     if (ln->prev != NULL && (prev = listNodeValue(ln->prev)) && prev->size > prev->used &&
-        c->io_write_state != CLIENT_PENDING_IO && !prev->flag.buf_encoded) {
+        c->io_write_state != CLIENT_PENDING_IO && prev->buf != c->io_last_written.buf && !prev->flag.buf_encoded) {
         size_t len_to_copy = prev->size - prev->used;
         if (len_to_copy > length) len_to_copy = length;
         memcpy(prev->buf + prev->used, s, len_to_copy);
@@ -1181,7 +1206,8 @@ void setDeferredReply(client *c, void *node, const char *s, size_t length) {
     }
 
     if (ln->next != NULL && (next = listNodeValue(ln->next)) && next->size - next->used >= length &&
-        next->used < PROTO_REPLY_CHUNK_BYTES * 4 && c->io_write_state != CLIENT_PENDING_IO && !next->flag.buf_encoded) {
+        next->used < PROTO_REPLY_CHUNK_BYTES * 4 && c->io_write_state != CLIENT_PENDING_IO &&
+        next->buf != c->io_last_written.buf && !next->flag.buf_encoded) {
         memmove(next->buf + length, next->buf, next->used);
         memcpy(next->buf, s, length);
         c->net_output_bytes_curr_cmd += length;
@@ -2977,6 +3003,11 @@ static void _postWriteToClient(client *c) {
     if (c->bufpos > 0) {
         /* Is this buffer is last written? */
         last_written = (c->buf == c->io_last_written.buf);
+        /* Bookmark desync detector (debug builds only); see the comment in the
+         * reply-list loop below and https://github.com/valkey-io/valkey/pull/4060 */
+        if (last_written) {
+            debugServerAssert(c->io_last_written.bufpos == 0 || c->io_last_written.bufpos <= c->bufpos);
+        }
         /* If buffer is completely written */
         if (!last_written || c->bufpos == c->io_last_written.bufpos) {
             /* If encoded then release references to bulk string objects */
@@ -3000,6 +3031,16 @@ static void _postWriteToClient(client *c) {
         clientReplyBlock *o = listNodeValue(next);
         /* Is this buffer is last written? */
         last_written = (o->buf == c->io_last_written.buf);
+        /* Bookmark desync detector (debug builds only): for the bookmarked
+         * block, the recorded in-memory write position (bufpos) must never
+         * exceed the block's current content (used); a violation means the
+         * block was freed/shrunk/recycled while the bookmark was live. Catches
+         * any complete-write desync (plain or encoded); a partial write stores
+         * bufpos == 0 and is intentionally not checked here. See the PR for the
+         * full rationale: https://github.com/valkey-io/valkey/pull/4060 */
+        if (last_written) {
+            debugServerAssert(c->io_last_written.bufpos == 0 || c->io_last_written.bufpos <= o->used);
+        }
         /* If buffer is completely written */
         if (!last_written || o->used == c->io_last_written.bufpos) {
             c->reply_bytes -= o->size;
@@ -6087,10 +6128,11 @@ size_t getClientMemoryUsage(client *c, size_t *output_buffer_mem_usage) {
      * i.e. unused sds space and internal fragmentation, just the string length. but this is enough to
      * spot problematic clients. */
     mem += c->argv_len_sum + sizeof(robj *) * c->argc;
+
+    /* Add memory overhead of multi. */
     mem += multiStateMemOverhead(c);
 
-    /* Add memory overhead of pubsub channels and patterns. Note: this is just the overhead of the robj pointers
-     * to the strings themselves because they aren't stored per client. */
+    /* Add memory overhead of pubsub channels and patterns. */
     mem += pubsubMemOverhead(c);
 
     /* Add memory overhead of the tracking prefixes, this is an underestimation so we don't need to traverse the entire
@@ -6703,4 +6745,8 @@ void testOnlyAddBufferToReplyIOV(int encoded, char *buf, size_t bufpos, replyIOV
 
 void testOnlySaveLastWrittenBuf(client *c, bufWriteMetadata *metadata, int bufcnt, size_t totlen, size_t totwritten) {
     saveLastWrittenBuf(c, metadata, bufcnt, totlen, totwritten);
+}
+
+void testOnlyTrimReplyUnusedTailSpace(client *c) {
+    trimReplyUnusedTailSpace(c);
 }

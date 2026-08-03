@@ -5,6 +5,7 @@
  */
 
 #include "io_threads.h"
+#include "cluster_migrateslots.h"
 #include "queues.h"
 #include <sys/resource.h>
 
@@ -545,6 +546,11 @@ int trySendWriteToIOThreads(client *c) {
     if (getClientType(c) == CLIENT_TYPE_REPLICA && c->repl_data->repl_state != REPLICA_STATE_ONLINE) return C_ERR;
     /* We can't offload debugged clients as the main-thread may read at the same time  */
     if (c->flag.lua_debug) return C_ERR;
+    /* Avoid offloading writes to IO thread for the slot migration export job while snapshotting.
+     * During this phase, replies accumulate in the output buffer but must not be flushed
+     * as concurrent IO thread writes would race with the main thread processing incoming
+     * ACKs on the same client's query buffer. */
+    if (c->slot_migration_job && !clusterSlotMigrationShouldInstallWriteHandler(c)) return C_ERR;
 
     int is_replica = getClientType(c) == CLIENT_TYPE_REPLICA;
     clientReplyBlock *block = NULL;
@@ -610,7 +616,7 @@ void ioThreadFreeArgv(robj **argv) {
         }
 
         /* The main-thread set the refcount to 0 to indicate that this is the last argument to free */
-        if (o->refcount == 0) {
+        if (objectGetRefcount(o) == 0) {
             last_arg = 1;
             o->refcount = 1;
         }

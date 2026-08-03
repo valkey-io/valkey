@@ -6,6 +6,12 @@
         "since": "2.8.9",
         "arity": -4,
         "function": "zrevrangebylexCommand",
+        "history": [
+            [
+                "9.2.0",
+                "Added the `XX` option."
+            ]
+        ],
         "command_flags": [
             "READONLY"
         ],
@@ -35,12 +41,20 @@
             }
         ],
         "reply_schema": {
-            "type": "array",
-            "description": "List of the elements in the specified score range.",
-            "uniqueItems": true,
-            "items": {
-                "type": "string"
-            }
+            "anyOf": [
+                {
+                    "description": "Key does not exist and XX option is specified.",
+                    "type": "null"
+                },
+                {
+                    "type": "array",
+                    "description": "List of the elements in the specified score range.",
+                    "uniqueItems": true,
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            ]
         },
         "arguments": [
             {
@@ -71,6 +85,13 @@
                         "type": "integer"
                     }
                 ]
+            },
+            {
+                "name": "xx",
+                "token": "XX",
+                "type": "pure-token",
+                "optional": true,
+                "since": "9.2.0"
             }
         ]
     }

@@ -509,6 +509,42 @@ static uint64_t benchThreadRand62(void) {
     return (z ^ (z >> 31)) & ((1ULL << 62) - 1);
 }
 
+/* Batched per-thread accounting for config.requests_finished. A relaxed
+ * fetch_add per completed command from every thread turns the counter's
+ * cache line into a process-wide contention point at high rates (the same
+ * failure mode as the shared latency histogram). Each thread accumulates
+ * locally and publishes one fetch_add per REQUESTS_FINISHED_FLUSH_BATCH
+ * completions, so the line is written at ~rps/batch instead of ~rps; the
+ * per-command read below then almost always hits a Shared cached copy.
+ *
+ * The residue is flushed from each thread's showThroughput timer (so
+ * count-mode termination, detected from the global value, cannot stall on
+ * unpublished counts) and after aeMain() returns (so the final report is
+ * exact). Consequences of the batching: termination detection and the
+ * "stop recording latency at the end" gate can lag by up to
+ * batch * num_threads commands, and a warmup-boundary reset can carry over
+ * a residue of the same magnitude -- both are the same benign-race class
+ * as the surrounding relaxed counter resets. Single-threaded mode keeps
+ * the exact per-command path. */
+#define REQUESTS_FINISHED_FLUSH_BATCH 256
+static _Thread_local int pending_requests_finished = 0;
+
+static void flushRequestsFinished(void) {
+    if (pending_requests_finished > 0) {
+        atomic_fetch_add_explicit(&config.requests_finished, pending_requests_finished, memory_order_relaxed);
+        pending_requests_finished = 0;
+    }
+}
+
+static int addRequestFinished(void) {
+    if (config.num_threads == 0) {
+        return atomic_fetch_add_explicit(&config.requests_finished, 1, memory_order_relaxed);
+    }
+    pending_requests_finished++;
+    if (pending_requests_finished >= REQUESTS_FINISHED_FLUSH_BATCH) flushRequestsFinished();
+    return atomic_load_explicit(&config.requests_finished, memory_order_relaxed) + pending_requests_finished;
+}
+
 static void replacePlaceholder(const size_t *indices, const size_t count, char *cmd, _Atomic uint64_t *key_counter) {
     if (count == 0) return;
 
@@ -816,7 +852,7 @@ static void readHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
                     }
                     continue;
                 }
-                int requests_finished = atomic_fetch_add_explicit(&config.requests_finished, 1, memory_order_relaxed);
+                int requests_finished = addRequestFinished();
                 if (!isBenchmarkFinished(requests_finished)) {
                     if (config.num_threads == 0) {
                         hdr_record_value(config.latency_histogram, // Histogram to record to
@@ -1432,6 +1468,9 @@ static void freeBenchmarkThreads(void) {
 static void *execBenchmarkThread(void *ptr) {
     benchmarkThread *thread = (benchmarkThread *)ptr;
     aeMain(thread->el);
+    /* Publish any batched completion residue: the final report reads
+     * config.requests_finished after all threads are joined. */
+    flushRequestsFinished();
     return NULL;
 }
 
@@ -2187,6 +2226,9 @@ long long showThroughput(struct aeEventLoop *eventLoop, long long id, void *clie
     UNUSED(eventLoop);
     UNUSED(id);
     benchmarkThread *thread = (benchmarkThread *)clientData;
+    /* Publish this thread's batched completion count so global termination
+     * detection and the displayed totals stay fresh (see addRequestFinished). */
+    flushRequestsFinished();
     int requests_finished = atomic_load_explicit(&config.requests_finished, memory_order_relaxed);
     int previous_requests_finished = atomic_load_explicit(&config.previous_requests_finished, memory_order_relaxed);
     long long current_tick = mstime();

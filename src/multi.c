@@ -285,8 +285,11 @@ void execCommand(client *c) {
         c->mstate->commands[j].cmd = c->cmd;
 
         /* The original argv has already been processed for commandlog and monitor,
-         * so we can safely free it before proceeding to the next command. */
+         * so we can safely free it before proceeding to the next command. The
+         * redaction bitmap refers to the argv we just consumed, so it must be
+         * cleared as well or it will be applied to the next command's arguments. */
         freeClientOriginalArgv(c);
+        c->redact_arg_bitmap = 0;
     }
 
     // restore old DENY_BLOCKING value

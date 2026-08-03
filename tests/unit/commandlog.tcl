@@ -198,6 +198,21 @@ start_server {tags {"commandlog"} overrides {commandlog-execution-slower-than 10
         assert_match {* key 9 5000 AUTH2 (redacted) (redacted)} [lindex [lindex $slowlog_resp 0] 3]
     } {} {needs:repl}
 
+    test {COMMANDLOG slow - Redaction does not leak to later commands in a MULTI} {
+        r config set commandlog-execution-slower-than 0
+        r commandlog reset slow
+        r multi
+        r acl setuser commandlog-test-user +get
+        r set foo bar
+        r exec
+        r config set commandlog-execution-slower-than -1
+        set slowlog_resp [r commandlog get -1 slow]
+
+        # The ACL SETUSER redaction must not carry over to the following SET
+        assert_equal {set foo bar} [lindex [lindex $slowlog_resp 0] 3]
+        r acl deluser commandlog-test-user
+    }
+
     test {COMMANDLOG slow - Rewritten commands are logged as their original command} {
         r config set commandlog-execution-slower-than 0
 

@@ -774,8 +774,10 @@ unsigned char *lpFind(unsigned char *lp, unsigned char *p, unsigned char *s, uin
 /* What kind of entry an insertion produces. LP_ENTRY_METADATA entries carry
  * the LP_ENCODING_TAGGED marker, are skipped by the logical iterators and are
  * not counted in the header numele field. */
-typedef enum { LP_ENTRY_DATA = 0,
-               LP_ENTRY_METADATA } lpEntryType;
+typedef enum {
+    LP_ENTRY_DATA = 0,
+    LP_ENTRY_METADATA
+} lpEntryType;
 
 static unsigned char *lpInsertImpl(unsigned char *lp,
                                    unsigned char *elestr,

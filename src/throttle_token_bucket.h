@@ -4,17 +4,17 @@
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * The Token Bucket Algorithm is a traffic control method where tokens are added to a bucket at a fixed rate (up to a
- * maximum capacity), and commands can be processed only if enough tokens are available.
+ * maximum capacity), and tokens can be requested from the bucket as needed (if tokens are available).
  *
  * Terminology:
- * Token: A permission unit required to process commands; a command can be processed only if enough tokens are available.
+ * Token: A permission unit required to perform some metered work; the caller will only perform the work if tokens are available.
  * Bucket: A logical storage that holds tokens until they are used.
  *
  * Working:
  * 1. Tokens are added to the bucket at a constant rate and stored up to the maximum capacity.
- * 2. When a command arrives, the system checks whether enough tokens are available in the bucket.
- * 3. If enough tokens are available, the required number of tokens is removed from the bucket, and the command is processed.
- * 4. If tokens are unavailable, the command is queued until new tokens are generated.
+ * 2. When a caller needs to perform work, an attempt is made to get one or more tokens.
+ * 3. If enough tokens are available, the required number of tokens is removed from the bucket, and the caller may proceed with the intended work.
+ * 4. If tokens are unavailable, the caller must wait until sufficient tokens are available.
  */
 
 #ifndef THROTTLE_TOKEN_BUCKET_H

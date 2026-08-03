@@ -2316,6 +2316,7 @@ struct valkeyServer {
     connection *slot_migration_pipe_conn;                  /* xxxx */
     char *slot_migration_pipe_buff;                        /* In slot migration, this buffer holds slot snapshot data. */
     ssize_t slot_migration_pipe_bufflen;                   /* that was read from the rdb pipe. */
+    int cluster_crc_enabled;                               /* Enable CRC32 checksum for cluster bus messages. */
     /* Debug config that goes along with cluster_drop_packet_filter. When set, the link is closed on packet drop. */
     uint32_t debug_cluster_close_link_on_packet_drop : 1;
     /* Debug config to control the random ping. When set, we will disable the random ping in clusterCron. */
@@ -2325,6 +2326,10 @@ struct valkeyServer {
     /* Debug config to expose intermediary slot migration states. */
     uint32_t debug_slot_migration_prevent_pause : 1;
     uint32_t debug_slot_migration_prevent_failover : 1;
+    /* Debug config to flip a bit at this byte offset in the next outgoing cluster message. -1 means disabled. */
+    int debug_cluster_crc_flip_bit;
+    /* Debug config to flip a random bit in every outgoing cluster message until this mstime. 0 means disabled. */
+    mstime_t debug_cluster_crc_flip_until;
     sds cached_cluster_slot_info[CACHE_CONN_TYPE_MAX]; /* Index in array is a bitwise or of CACHE_CONN_TYPE_* */
     /* Scripting */
     mstime_t busy_reply_threshold;  /* Script / module timeout in milliseconds */
@@ -3855,6 +3860,7 @@ int setGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *
 int bitfieldGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result);
 
 unsigned short crc16(const char *buf, int len);
+uint32_t crc32(uint32_t seed, const unsigned char *buf, size_t len);
 
 /* Sentinel */
 void initSentinelConfig(void);

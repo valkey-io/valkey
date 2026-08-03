@@ -1636,6 +1636,7 @@ void resetClusterStats(void) {
     server.cluster->stats_bus_module_bytes_sent = 0;
     server.cluster->stats_bus_module_bytes_received = 0;
     server.cluster->stat_cluster_links_buffer_limit_exceeded = 0;
+    server.cluster->stat_cluster_messages_crc_mismatch = 0;
 }
 
 void clusterCommandFlushslot(client *c) {

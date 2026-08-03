@@ -953,6 +953,13 @@ start_server {tags {"hashexpire"}} {
         assert_equal -2 [r HTTL nokey FIELDS 1 field1]
     } {}
 
+    test {HTTL/HPTTL/HEXPIRETIME/HPEXPIRETIME - check for syntax and type errors} {
+        foreach cmd {HTTL HPTTL HEXPIRETIME HPEXPIRETIME} {
+            assert_error "*ERR syntax error" {r $cmd myhash a 1 c}
+            assert_error "*value is not an integer or out of range" {r $cmd myhash FIELDS a b c}
+        }
+    }
+
     ##### EXPIRETIME ######
 
     # Basic Expiry Functionality
@@ -1294,6 +1301,13 @@ start_server {tags {"hashexpire"}} {
     test {HPERSIST - wrong type key returns error} {
         r SET mystr hello
         assert_error {*WRONGTYPE*} {r HPERSIST mystr FIELDS 1 f1}
+    }
+
+    test {HPERSIST - check for syntax and type errors} {
+        assert_error "*ERR syntax error" {r hpersist myhash a 1 c}
+        assert_error "*value is not an integer or out of range" {r hpersist myhash FIELDS a b c}
+        assert_error "*numfields should be greater than 0 and match the provided number of fields" {r hpersist myhash FIELDS 2 a b c}
+        assert_error "*numfields should be greater than 0 and match the provided number of fields" {r hpersist myhash FIELDS 4 a b c}
     }
 
     test "HPERSIST - field does not exist" {

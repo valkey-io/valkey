@@ -2271,6 +2271,11 @@ void hpersistCommand(client *c) {
     int fields_index = 4, result = 0, changes = 0;
     long long num_fields = 0;
 
+    if (strcasecmp(objectGetVal(c->argv[fields_index - 2]), "fields")) {
+        addReplyErrorObject(c, shared.syntaxerr);
+        return;
+    }
+
     if (getLongLongFromObjectOrReply(c, c->argv[fields_index - 1], &num_fields, NULL) != C_OK) return;
 
     /* Check that the parsed fields number matches the real provided number of fields */
@@ -2340,6 +2345,11 @@ void hpersistCommand(client *c) {
 void httlGenericCommand(client *c, mstime_t basetime, int unit) {
     int fields_index = 4;
     long long num_fields = 0, result = -2;
+
+    if (strcasecmp(objectGetVal(c->argv[fields_index - 2]), "fields")) {
+        addReplyErrorObject(c, shared.syntaxerr);
+        return;
+    }
 
     if (getLongLongFromObjectOrReply(c, c->argv[fields_index - 1], &num_fields, NULL) != C_OK) return;
 

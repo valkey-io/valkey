@@ -525,4 +525,34 @@ start_server {tags {"pubsub network"}} {
         assert_equal [r read] {message foo vaz}
     } {} {resp3}
 
+    # when a RESP3 connection both publishes and is subscribed, reply copy
+    # avoidance for large bulk payloads can write the payload into c->buf
+    # while the push header is deferred to pending_push_messages, tearing
+    # the push frame apart on the wire.
+    test "RESP3 publish to self keeps push frame contiguous under copy avoidance" {
+        set copy_avoid [lindex [r config get min-string-size-avoid-copy-reply] 1]
+        set copy_avoid_threaded [lindex [r config get min-string-size-avoid-copy-reply-threaded] 1]
+        # Force the copy-avoidance path regardless of defaults / IO threads.
+        r config set min-string-size-avoid-copy-reply 1
+        r config set min-string-size-avoid-copy-reply-threaded 1
+
+        set rd [valkey_deferring_client]
+        $rd hello 3
+        $rd read
+
+        # Threshold is forced to 1 above; use 128 so the string is RAW-encoded
+        set payload [string repeat X 128]
+        assert_equal {1} [subscribe $rd wiretest]
+
+        $rd publish wiretest $payload
+        # If the frame is torn, the first RESP value is the bare bulk payload
+        # instead of the PUBLISH integer reply.
+        assert_equal 1 [$rd read]
+        assert_equal [list message wiretest $payload] [$rd read]
+
+        $rd close
+        r config set min-string-size-avoid-copy-reply $copy_avoid
+        r config set min-string-size-avoid-copy-reply-threaded $copy_avoid_threaded
+    } {OK} {resp3}
+
 }

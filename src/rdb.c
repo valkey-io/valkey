@@ -1207,7 +1207,7 @@ int rdbSaveKeyValuePair(rio *rdb, robj *key, robj *val, long long expiretime, in
 
     /* Save the LFU info. */
     if (savelfu) {
-        uint8_t freq = objectGetLFUFrequency(val);
+        uint8_t freq = objectGetLFUFrequencyReadOnly(val);
         /* We can encode this in exactly two bytes: the opcode and an 8
          * bit counter, since the frequency is logarithmic with a 0-255 range.
          * Note that we do not store the halving time because to reset it

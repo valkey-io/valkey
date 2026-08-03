@@ -525,7 +525,6 @@ start_server {tags {"pubsub network"}} {
         assert_equal [r read] {message foo vaz}
     } {} {resp3}
 
-    # Regression for https://github.com/valkey-io/valkey/issues/4231:
     # when a RESP3 connection both publishes and is subscribed, reply copy
     # avoidance for large bulk payloads can write the payload into c->buf
     # while the push header is deferred to pending_push_messages, tearing
@@ -538,28 +537,23 @@ start_server {tags {"pubsub network"}} {
         r config set min-string-size-avoid-copy-reply-threaded 1
 
         set rd [valkey_deferring_client]
-        try {
-            $rd hello 3
-            $rd read
+        $rd hello 3
+        $rd read
 
-            # 16384 is the historical default copy-avoid threshold and the size
-            # reported in the bug; any size >= 1 also hits the forced config above.
-            set payload [string repeat X 16384]
-            assert_equal {1} [subscribe $rd wiretest]
+        # Threshold is forced to 1 above, so a small payload is enough to
+        # exercise copy avoidance and keeps failure output readable.
+        set payload [string repeat X 64]
+        assert_equal {1} [subscribe $rd wiretest]
 
-            $rd publish wiretest $payload
-            # If the frame is torn, the first RESP value is the bare bulk payload
-            # instead of the PUBLISH integer reply.
-            set publish_reply [$rd read]
-            if {$publish_reply ne 1} {
-                fail "PUBLISH reply expected integer 1, got value of length [string length $publish_reply] starting with '[string range $publish_reply 0 15]'"
-            }
-            assert_equal [list message wiretest $payload] [$rd read]
-        } finally {
-            catch {$rd close}
-            r config set min-string-size-avoid-copy-reply $copy_avoid
-            r config set min-string-size-avoid-copy-reply-threaded $copy_avoid_threaded
-        }
-    } {} {resp3}
+        $rd publish wiretest $payload
+        # If the frame is torn, the first RESP value is the bare bulk payload
+        # instead of the PUBLISH integer reply.
+        assert_equal 1 [$rd read]
+        assert_equal [list message wiretest $payload] [$rd read]
+
+        $rd close
+        r config set min-string-size-avoid-copy-reply $copy_avoid
+        r config set min-string-size-avoid-copy-reply-threaded $copy_avoid_threaded
+    } {OK} {resp3}
 
 }

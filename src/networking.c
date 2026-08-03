@@ -279,8 +279,9 @@ static int shouldDeferPushMessage(client *c) {
  * Copy avoidance can be allowed only for regular Valkey clients
  * that use _writeToClient handler to write replies to client connection */
 static int isCopyAvoidPreferred(client *c, robj *obj) {
-    /* Skip CA when push bytes would be deferred into pending_push_messages. */
-    if (c->flag.fake || isDeferredReplyEnabled(c) || shouldDeferPushMessage(c)) return 0;
+    if (c->flag.fake || isDeferredReplyEnabled(c)) return 0;
+    /* Skip copy avoidance when push bytes would be deferred into pending_push_messages. */
+    if (shouldDeferPushMessage(c)) return 0;
 
     int type = getClientType(c);
     if (type != CLIENT_TYPE_NORMAL && type != CLIENT_TYPE_PUBSUB) return 0;

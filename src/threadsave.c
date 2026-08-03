@@ -10,8 +10,8 @@ static const void *PROCESS_COMPLETE_ITEM = (void *)-1;
 static const int SNAPSHOT_FILE_CLOSE_MONITOR_INTERVAL_MS = 200;
 
 typedef struct {
-    rio save_rio;                                                       /* Must be 1st to permit cast from rio back to threadsaveInfo */
-    int cur_db;                                                         /* Last selectDb issued */
+    rio save_rio; /* Must be 1st to permit cast from rio back to threadsaveInfo */
+    int cur_db;   /* Last selectDb issued */
     bgIterator *iterator;
     uint64_t bytes_written;
     int err_code;

@@ -2202,7 +2202,7 @@ bgIteratorItem *bgIteratorRead(bgIterator *it) {
          * Without this, a unit test could get stuck waiting on the completion event because
          * feed won't get invoked.  For production, feed is called regularly from the main thread.
          * Note - this is checking that the exact same thread is used and shouldn't count modules. */
-        if (pthread_equal(server.main_thread_id, pthread_self()) != 0) bgIteration_feedIterators_task(NULL, 0, NULL);
+        if (onValkeyMainThread()) bgIteration_feedIterators_task(NULL, 0, NULL);
     } else {
         it->client_is_active = true;
     }

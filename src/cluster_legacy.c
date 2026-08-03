@@ -5371,6 +5371,22 @@ void clusterSendMFStart(clusterNode *node) {
     clusterMsgSendBlockDecrRefCount(msgblock);
 }
 
+/* Returns 1 if 'primary' has a replica, other than 'candidate', that is a viable
+ * failover candidate and is known to have processed part of the primary's
+ * replication stream, that is, its replication offset is not zero.
+ *
+ * Replicas that can't win an election instead of 'candidate' are not considered,
+ * so that a shard is never left without a possible failover. */
+static int betterFailoverCandidateExists(clusterNode *primary, clusterNode *candidate) {
+    for (int i = 0; i < primary->num_replicas; i++) {
+        clusterNode *replica = primary->replicas[i];
+        if (replica == candidate) continue;
+        if (nodeFailed(replica) || nodeTimedOut(replica) || nodeCantFailover(replica)) continue;
+        if (replica->repl_offset != 0) return 1;
+    }
+    return 0;
+}
+
 /* Vote for the node asking for our vote if there are the conditions. */
 void clusterSendFailoverAuthIfNeeded(clusterNode *node, clusterMsg *request) {
     clusterNode *primary = node->replicaof;
@@ -5425,6 +5441,28 @@ void clusterSendFailoverAuthIfNeeded(clusterNode *node, clusterMsg *request) {
             serverLog(LL_WARNING, "Failover auth denied to %.40s (%s) for epoch %llu: its primary is up", node->name,
                       humanNodename(node), (unsigned long long)requestCurrentEpoch);
         }
+        return;
+    }
+
+    /* Don't vote for a replica that has a zero replication offset, that is, a
+     * replica that never processed anything from the replication stream of the
+     * failed primary, as long as some other replica of the same primary is a
+     * viable candidate with a non-zero offset.
+     *
+     * Such a replica has no data of its own and would cause a full data loss if
+     * it won the election. It also self-penalizes its election delay, so it only
+     * asks for votes this early when it hasn't learned about its siblings yet.
+     * Granting it a vote splits the votes with the better ranked replica, and
+     * since only one vote per epoch is allowed, the good candidate can lose the
+     * election it should have won.
+     *
+     * This is bypassed for manual failovers, where the user explicitly asked
+     * for this specific replica to be promoted. */
+    if (!force_ack && ntohu64(request->offset) == 0 && betterFailoverCandidateExists(primary, node)) {
+        serverLog(LL_WARNING,
+                  "Failover auth denied to %.40s (%s) for epoch %llu: "
+                  "its replication offset is zero and a better candidate exists",
+                  node->name, humanNodename(node), (unsigned long long)requestCurrentEpoch);
         return;
     }
 

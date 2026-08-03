@@ -352,6 +352,67 @@ start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 
     test_sub_replica "sigstop"
 } my_slot_allocation cluster_allocate_replicas ;# start_cluster
 
+start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 1000 cluster-migration-barrier 999 shutdown-timeout 0}} {
+    test "Zero repl offset replica can still win the election when it is the only candidate" {
+        # Write a key to primary 0 so that it has a non-zero repl_offset.
+        set value [string repeat "x" 1024]
+        R 0 set key_991803 $value
+        assert_equal $value [R 0 get key_991803]
+
+        # Move server 4 away from primary 0, so that primary 0 is left without
+        # any replica. Wait until primary 0 sees it has no replica anymore.
+        R 4 cluster replicate [R 1 cluster myid]
+        wait_for_condition 1000 50 {
+            [s 0 connected_slaves] eq 0
+        } else {
+            puts "R 0 role: [R 0 role]"
+            fail "Primary 0 still has replicas"
+        }
+
+        # 10s, make sure primary 0 will hang in the save, so that the new
+        # replica never completes the full sync and keeps a zero repl offset.
+        R 0 config set rdb-key-save-delay 100000000
+
+        # Make server 7 the only replica of primary 0.
+        R 7 config set cluster-replica-validity-factor 0
+        R 7 cluster replicate [R 0 cluster myid]
+        wait_for_condition 1000 50 {
+            [get_my_primary_peer 7] eq "[srv 0 host]:[srv 0 port]"
+        } else {
+            puts "R 7 role: [R 7 role]"
+            fail "Server 7 did not become a replica of primary 0"
+        }
+
+        # Pause primary 0.
+        set primary0_pid [s 0 process_id]
+        pause_process $primary0_pid
+
+        # Server 7 has a zero repl offset, but since it is the only candidate
+        # of primary 0, the other primaries must still vote for it, otherwise
+        # this shard would never be able to fail over.
+        wait_for_condition 1000 50 {
+            [s -7 role] eq {master}
+        } else {
+            puts "s -7 role: [s -7 role]"
+            puts "R 7: [R 7 cluster info]"
+            fail "Failover does not happened"
+        }
+
+        # Make sure it really was an election with a zero offset, i.e. that we
+        # exercised the only-candidate path and not some other code path.
+        verify_log_message -7 "*Start of election*offset 0*" 0
+
+        resume_process $primary0_pid
+
+        # Wait for the old primary to go online and become a replica.
+        wait_for_condition 1000 50 {
+            [s 0 role] eq {slave}
+        } else {
+            fail "The old primary was not converted into replica"
+        }
+    }
+} my_slot_allocation cluster_allocate_replicas ;# start_cluster
+
 proc test_cluster_setslot {type} {
     test "valkey-cli make source node ignores NOREPLICAS error when doing the last CLUSTER SETSLOT - $type" {
         R 3 config set cluster-allow-replica-migration no

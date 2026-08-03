@@ -19,7 +19,7 @@
 
 #include "sds.h"
 struct throttle_repl_config {
-    int steady_state_repl_throttle_enabled;
+    int repl_throttle_steady_state_enabled;
 };
 extern struct throttle_repl_config throttle_repl_config;
 

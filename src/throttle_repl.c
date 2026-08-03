@@ -12,15 +12,14 @@
 /* Configuration instance. */
 struct throttle_repl_config throttle_repl_config;
 
-#define RATE_INCREASE_MULTIPLIER 1.05
-#define RATE_DECREASE_MULTIPLIER 0.95
-#define COB_TREND_WINDOW_SECS 2              /* A 2-second window gives 20 data points at     \
-                                              * 100ms serverCron. Sufficient for a good       \
-                                              * measurement, while remaining short enough for \
-                                              * throttling adjustments every 100ms. */
-#define STEADY_STATE_CONVERGENCE_SECS 30     /* projection horizon for COB extrapolation */
-#define MAX_COB_TARGET (1024L * 1024 * 1024) /* 1GB */
-#define METRICS_NAME "ReplThrottle"          /* shared metrics group name */
+/* A 2-second window gives 20 data points at 100ms serverCron. Sufficient for a good
+ * measurement, while remaining short enough for throttling adjustments every 100ms. */
+static const int COB_TREND_WINDOW_SECS = 2;
+static const double RATE_INCREASE_MULTIPLIER = 1.05;
+static const double RATE_DECREASE_MULTIPLIER = 0.95;
+static const int STEADY_STATE_CONVERGENCE_SECS = 30;    /* projection horizon for COB extrapolation */
+static const long MAX_COB_TARGET = 1024L * 1024 * 1024; /* 1GB */
+static const char *const METRICS_NAME = "ReplThrottle"; /* shared metrics group name */
 
 /* Metrics for INFO output and operational visibility. */
 typedef struct {
@@ -32,12 +31,12 @@ typedef struct {
 } throttleReplMetrics;
 
 static throttleReplMetrics metrics = {0};
-static int throttle_id = 0;
+static throttler *repl_throttler = NULL;
 
 /* --- Internal helpers --- */
 
 static bool isThrottlerActive(void) {
-    return (throttle_id != 0);
+    return (repl_throttler != NULL);
 }
 
 /* Criteria: throttle commands that generate replication traffic. */
@@ -49,7 +48,8 @@ static bool criteriaProc(client *c, void *priv_data) {
 
 static void installThrottler(void) {
     serverAssert(!isThrottlerActive());
-    throttle_id = throttle_register(criteriaProc, NULL, METRICS_NAME);
+    repl_throttler = throttle_register(criteriaProc, NULL, METRICS_NAME);
+    serverAssert(repl_throttler != NULL);
     metrics.is_throttler_active = true;
     metrics.current_throttle_rate = THROTTLE_UNLIMITED_RATE;
     metrics.throttle_activation_events++;
@@ -57,8 +57,8 @@ static void installThrottler(void) {
 
 static void uninstallThrottler(void) {
     serverAssert(isThrottlerActive());
-    throttle_deregister(throttle_id);
-    throttle_id = 0;
+    throttle_deregister(repl_throttler);
+    repl_throttler = NULL;
     metrics.is_throttler_active = false;
     metrics.current_throttle_rate = THROTTLE_UNLIMITED_RATE;
 }
@@ -69,10 +69,10 @@ static void adjustThrottleRate(bool reduceTrafficRate) {
     if (isThrottlerActive()) {
         double rate;
         if (reduceTrafficRate) {
-            rate = throttle_adjustRate(throttle_id, RATE_DECREASE_MULTIPLIER);
+            rate = throttle_adjustRate(repl_throttler, RATE_DECREASE_MULTIPLIER);
             metrics.throttle_more_events++;
         } else {
-            rate = throttle_adjustRate(throttle_id, RATE_INCREASE_MULTIPLIER);
+            rate = throttle_adjustRate(repl_throttler, RATE_INCREASE_MULTIPLIER);
             metrics.throttle_less_events++;
             if (rate >= THROTTLE_UNLIMITED_RATE) uninstallThrottler();
         }
@@ -122,13 +122,14 @@ static bool evaluateSteadyStateThrottle(client *c, int64_t cob_size) {
  * throttling hasn't had time to adjust and there is no severe memory condition, it makes
  * sense to allow the replica to live until throttling can stabilize the situation. */
 bool throttleRepl_isClientExemptFromCobLimits(client *c) {
-    if (!throttle_repl_config.steady_state_repl_throttle_enabled || !isThrottlerActive()) return false;
+    if (!throttle_repl_config.repl_throttle_steady_state_enabled || !isThrottlerActive()) return false;
     if (!iAmPrimary()) return false;
     if (!c->flag.replica) return false;
 
     /* Throttle is actively working, protect this replica from COB
      * disconnect if its COB is above target. */
     int64_t client_cob_size = (int64_t)getClientOutputBufferMemoryUsage(c);
+    /* There's no need to protect the replica if it's already using less than the target size. */
     if (client_cob_size < getReplicaSteadyStateCobTargetSize()) return false;
 
     /* Don't exempt if server is over maxmemory.
@@ -139,18 +140,19 @@ bool throttleRepl_isClientExemptFromCobLimits(client *c) {
     /* Don't protect if throttle has been working too long without success. */
     time_t elapsed = server.unixtime - c->obuf_soft_limit_reached_time;
     if (elapsed > 4 * STEADY_STATE_CONVERGENCE_SECS) return false;
+    /* Otherwise, allow the replica to exceed the configured limits, giving the throttler time to correct. */
     return true;
 }
 
 /* Called from serverCron every 100ms. Evaluates the replica with the largest COB and
  * adjusts throttling as needed. */
 void throttleRepl_adjustThrottling(void) {
-    if (!iAmPrimary()) {
-        /* Failover could happen before. */
+    /* If we're no longer the primary (e.g. after failover) or steady-state repl throttling
+     * was disabled, tear down any active throttler and stop. */
+    if (!iAmPrimary() || !throttle_repl_config.repl_throttle_steady_state_enabled) {
         if (isThrottlerActive()) uninstallThrottler();
         return;
     }
-    if (!throttle_repl_config.steady_state_repl_throttle_enabled && !isThrottlerActive()) return;
 
     bool reduceTrafficRate = false;
     client *measured_steady_state_replica = NULL;
@@ -196,7 +198,8 @@ sds throttleRepl_sdscatInfoMetrics(sds info) {
                             metrics.current_throttle_rate);
     }
 
-    const throttleMetrics *throttle_metrics = throttle_getMetrics(METRICS_NAME);
+    throttleMetrics throttle_metrics;
+    throttle_getMetrics(METRICS_NAME, &throttle_metrics);
     info = sdscatprintf(info,
                         "repl_throttle_activation_events:%lu\r\n"
                         "repl_throttle_more_events:%lu\r\n"
@@ -207,9 +210,9 @@ sds throttleRepl_sdscatInfoMetrics(sds info) {
                         metrics.throttle_activation_events,
                         metrics.throttle_more_events,
                         metrics.throttle_less_events,
-                        isThrottlerActive() ? throttle_getGuardrailSecs(throttle_id) : 0L,
-                        throttle_metrics->num_clients_throttled,
-                        throttle_metrics->num_throttled_commands);
+                        isThrottlerActive() ? throttle_getGuardrailSecs(repl_throttler) : 0L,
+                        throttle_metrics.num_clients_throttled,
+                        throttle_metrics.num_commands_throttled);
 
     return info;
 }

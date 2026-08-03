@@ -361,7 +361,7 @@ client *createClient(connection *conn) {
     c->repl_data = NULL;
     c->throttler = NULL;
     c->throttle_node = NULL;
-    c->throttle_start_us = 0;
+    c->throttle_start = 0;
     c->cob_trend = NULL;
     c->bstate = NULL;
     c->pubsub_data = NULL;

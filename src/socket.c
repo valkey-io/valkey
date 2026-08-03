@@ -422,8 +422,7 @@ static int connSocketGetType(void) {
     return CONN_TYPE_SOCKET;
 }
 
-int connSocketIsClosing(connection *conn) {
-    if (aeGetFileEvents(server.el, conn->fd) != AE_NONE) return false;
+int connTcpSocketIsClosing(connection *conn) {
 #if defined(__linux__)
     struct tcp_info info;
     socklen_t infolen = sizeof(info);
@@ -488,7 +487,7 @@ static ConnectionType CT_Socket = {
 
     /* Miscellaneous */
     .connIntegrityChecked = NULL,
-    .is_closing = connSocketIsClosing,
+    .is_closing = connTcpSocketIsClosing,
 };
 
 int connBlock(connection *conn) {

@@ -30,10 +30,13 @@ typedef struct tokenBucket tokenBucket;
  * bigger bursts after idle periods. */
 tokenBucket *tokenBucket_create(double tokens_per_sec, double max_burst_time_secs);
 
+/* Free a token bucket and its resources. */
 void tokenBucket_free(tokenBucket *bucket);
 
+/* Return the current refill rate in tokens per second. */
 double tokenBucket_getRate(tokenBucket *bucket);
 
+/* Update the refill rate. Tokens are clamped to the new bucket capacity. */
 void tokenBucket_setRate(tokenBucket *bucket, double new_rate);
 
 /* Attempt to consume tokens. Returns true if tokens were deducted.

@@ -20,33 +20,40 @@
 #ifndef THROTTLE_H
 #define THROTTLE_H
 
-#include "server.h"
+#include "sds.h"
 #include <stdbool.h>
+typedef struct client client;
+typedef struct throttler throttler;
 
 static const double THROTTLE_UNLIMITED_RATE = 10000000.0;
 
-static const int THROTTLE_INVALID_ID = -2;
-
 /* A throttleCriteriaProc checks a client's current command and decides if it meets the criteria
  * for throttling. Returns true if the client meets the throttling criteria.
+ *
+ * The criteria proc should base decisions only on the state of the client, not considering
+ * the question of the current requirements for throttling. If this returns true, the client
+ * MIGHT be throttled.
  *
  * priv_data - a private data structure provided during throttle_register. It can provide
  *             anything needed by the criteria proc, or NULL if unneeded. */
 typedef bool throttleCriteriaProc(client *c, void *priv_data);
 
-/* Metrics for a group of related throttlers sharing the same metrics_name.
+/* Metrics for a throttler or group of related throttlers. The metrics name allows the metrics to
+ * persist even after the throttler(s) is deregistered. Metrics collection will continue (under the
+ * same name) if/when the throttler is registered again.
  *
  * Note: Multiple related throttlers can share the same metrics by using the same metrics_name.
- * A typical use case is multiple instantiations of the same throttler with different private
- * data. */
+ * A typical use case is multiple instantiations of the same throttler with different private data. */
 typedef struct {
     int num_clients_throttled;   /* the backlog of currently throttled (queued) clients */
-    int num_throttled_commands;  /* total number of commands throttled through this metrics group */
+    int num_commands_throttled;  /* total number of commands throttled through this metrics group */
     double ops_per_sec;          /* the current throttling rate (summed across related throttlers) */
     double incoming_tps;         /* average incoming TPS over a 5-second rolling window */
     long oldest_client_delay_us; /* delay in microseconds for the oldest throttled client */
 } throttleMetrics;
 
+/* Initialize the throttling framework. Must be called once at startup before any
+ * throttler is registered. Idempotent: safe to call more than once. */
 void throttle_init(void);
 
 /* Register a new throttler.
@@ -54,36 +61,42 @@ void throttle_init(void);
  *   priv_data     - private data for passing to the criteria_proc (may be NULL)
  *   metrics_name  - a string used to identify a shared metrics group
  *
- * Returns an integer ID of the new throttler. */
-int throttle_register(throttleCriteriaProc *criteria_proc,
+ * Returns the registered throttler. */
+throttler *throttle_register(throttleCriteriaProc *criteria_proc,
                       void *priv_data,
                       const char *metrics_name);
 
 /* Deregisters the throttler such that:
  *   - No new clients will be throttled by this throttler.
  *   - Existing queued clients will be drained at unlimited rate until the queue is empty. */
-void throttle_deregister(int id);
+void throttle_deregister(throttler *t);
 
-void throttle_setRate(int id, double ops_per_sec);
+/* Set the absolute throttling rate for the given throttler.
+ *   ops_per_sec - target rate in operations per second (must be >= 0)
+ *
+ * The rate is clamped: values below EPSILON are treated as 0,
+ * and values above THROTTLE_UNLIMITED_RATE are capped at that ceiling. */
+void throttle_setRate(throttler *t, double ops_per_sec);
 
 /* A smart adjustment to the throttling rate. The multiplier is applied to the current rate,
  * with consideration for the actual incoming traffic rate.
  *   multiplier - applied to current rate to determine new rate (range 0.0 .. 3.0)
  *
- * If multiplier > 1.0: increase rate (with minimum step of 1 ops/sec at low rates).
- * If multiplier < 1.0: decrease rate (clamped to incoming TPS floor).
- * If multiplier == 0.0: halt (rate set to 0).
+ * If multiplier >= 1.0: increase the rate. If currently halted (rate ~0), jump to a
+ *                       starting rate; otherwise increase proportionally with a minimum
+ *                       step of 1 ops/sec.
+ * If multiplier < 1.0: decrease the rate proportionally. If the rate is far above the current
+ *                      incoming rate, immediately adjusts down to the incoming rate.
  *
  * Returns the actual rate set after clamping and adjustment.
  *
  * Usage guidance:
- *    1.  Adjust throttling at a regular interval > 250ms.  Adjusting the throttle too fast will
- *        result in large throttling swings before an observed metric has a chance to change.
- *        This can easily create a hysteresis problem.  The current incoming rate is based on a
- *        5-second window and will not update faster than 250ms.
- *    2.  Set a target for the observed metric.  As the observed metric approaches the target, make
- *        progressively smaller changes to the rate. */
-double throttle_adjustRate(int id, double multiplier);
+ *    1.  Size each step to your call frequency: the more often you call this, the smaller
+ *        each step should be. The driving metrics are smoothed and update slowly, so a large
+ *        step applied at high frequency overshoots and causes hysteresis.
+ *    2.  Prefer a small constant step, as a constant multiplicative step already tapers in
+ *        absolute terms as the rate nears the target. */
+double throttle_adjustRate(throttler *t, double multiplier);
 
 /* Removes the client from the throttle queue. */
 void throttle_removeClient(client *c);
@@ -101,13 +114,9 @@ void throttle_removeClient(client *c);
  * throttled again for the same command after unblocking. */
 bool throttleClientIfNeeded(client *c);
 
-/* Get the total number of commands throttled across all throttlers. */
-long long throttle_getTotalThrottledCommands(void);
-
 /* Get the metrics associated with a given metrics name.
- * Memory is managed by the throttler. Do not free the returned pointer.
- * Call this each time metrics are needed. Do not cache the pointer. */
-const throttleMetrics *throttle_getMetrics(const char *metrics_name);
+ * The caller provides the metrics structure. */
+void throttle_getMetrics(const char *metrics_name, throttleMetrics *metrics);
 
 /* Append framework-level throttle metrics to the INFO output string.
  * Plug-in specific metrics are reported by their own sdscatInfoMetrics functions. */
@@ -115,6 +124,6 @@ sds throttle_sdscatInfoMetrics(sds info);
 
 /* Get the number of seconds the throttler's rate has been below the guardrail.
  * Returns 0 if the rate is above the guardrail or the throttler is not active. */
-long throttle_getGuardrailSecs(int id);
+long throttle_getGuardrailSecs(throttler *t);
 
 #endif

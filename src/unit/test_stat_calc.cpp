@@ -14,7 +14,7 @@ static monotime fakeGetMonotonicUs(void);
 static monotime (*origGetMonotonicUs)(void);
 }
 
-#define ONE_SECOND_IN_MICROS 1000000
+static const long ONE_SECOND_IN_MICROS = 1000000;
 
 static monotime fakeMonotimeUs;
 

@@ -1998,7 +1998,7 @@ static ConnectionType CT_TLS = {
 
     /* Miscellaneous */
     .connIntegrityChecked = connTLSIsIntegrityChecked,
-    .is_closing = connSocketIsClosing,
+    .is_closing = connTcpSocketIsClosing,
 
 };
 

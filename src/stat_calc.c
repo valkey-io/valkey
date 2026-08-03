@@ -7,7 +7,7 @@
 #include "server.h"
 #include "monotonic.h"
 
-#define ONE_SECOND_IN_MICROS 1000000
+static const long ONE_SECOND_IN_MICROS = 1000000;
 
 /* ------------- TPS Calculator ------------- */
 struct tpsCalculator {
@@ -42,13 +42,10 @@ void tpsCalculator_record(tpsCalculator *calc, unsigned long transactions) {
     monotime now = getMonotonicUs();
     long elapsed_us = now - calc->last_update;
 
-    if (elapsed_us < calc->update_freq_us) {
-        /* Accumulate until the update frequency is hit */
-        calc->uncounted_trans += transactions;
-        return;
-    }
+    calc->uncounted_trans += transactions;
+    if (elapsed_us < calc->update_freq_us) return; /* accumulate until update frequency is hit */
 
-    double total = (double)(calc->uncounted_trans + transactions);
+    double total = (double)calc->uncounted_trans;
     calc->uncounted_trans = 0;
     calc->last_update = now;
 

@@ -1187,6 +1187,9 @@ void getExpensiveClientsInfo(size_t *in_usage, size_t *out_usage) {
 static bool clientsCronTcpIsClosing(client *c) {
     if (!c->conn) return false;
 
+    /* If the fd is still watched by the event loop, it detects the close and frees the client itself. */
+    if (connHasReadHandler(c->conn) || connHasWriteHandler(c->conn)) return false;
+
     if (!connIsClosing(c->conn)) return false;
 
     if (server.verbosity <= LL_VERBOSE) {
@@ -1250,10 +1253,10 @@ static void clientsCron(int clients_this_cycle) {
          * The protocol is that they return non-zero if the client was
          * terminated. */
         if (clientsCronHandleTimeout(c, now)) continue;
+        if (clientsCronTcpIsClosing(c)) continue;
         if (clientsCronResizeQueryBuffer(c)) continue;
         if (clientsCronResizeOutputBuffer(c, now)) continue;
         if (clientsCronTrackExpensiveClients(c, curr_peak_mem_usage_slot)) continue;
-        if (clientsCronTcpIsClosing(c)) continue;
 
         /* Iterating all the clients in getMemoryOverheadData() is too slow and
          * in turn would make the INFO command too slow. So we perform this
@@ -6100,7 +6103,6 @@ dict *genInfoSectionDict(robj **argv, int argc, char **defaults, int *out_all, i
         "errorstats",
         "cluster",
         "keyspace",
-        "throttle",
         NULL,
     };
     if (!defaults) defaults = default_sections;
@@ -6836,9 +6838,6 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
     if (all_sections || (dictFind(section_dict, "throttle") != NULL)) {
         if (sections++) info = sdscat(info, "\r\n");
         info = sdscat(info, "# Throttle\r\n");
-        info = sdscatprintf(info,
-                            "throttle_total_throttled_commands:%lld\r\n",
-                            throttle_getTotalThrottledCommands());
         info = throttle_sdscatInfoMetrics(info);
         info = throttleRepl_sdscatInfoMetrics(info);
     }

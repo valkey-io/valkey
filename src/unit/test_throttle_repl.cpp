@@ -28,7 +28,7 @@ class ThrottleReplTest : public ::testing::Test {
     RealValkey real;
     static const unsigned long long COB_LIMIT = 10 * 1024 * 1024; /* 10 MB */
     client *replica_steady = nullptr;
-    static inline throttleMetrics fakeMetrics = {0};
+    throttler *dummy_throttler = (throttler *)1;
 
     static void SetUpTestSuite() {
         /* Server set up */
@@ -39,7 +39,7 @@ class ThrottleReplTest : public ::testing::Test {
         server.client_obuf_limits[CLIENT_TYPE_REPLICA].hard_limit_bytes = COB_LIMIT;
 
         /* throttle_repl set up */
-        throttle_repl_config.steady_state_repl_throttle_enabled = 1;
+        throttle_repl_config.repl_throttle_steady_state_enabled = 1;
 
         /* monotonic set up */
         origGetMonotonicUs = getMonotonicUs;
@@ -55,7 +55,7 @@ class ThrottleReplTest : public ::testing::Test {
     void SetUp() override {
         replica_steady = createFakeReplicaClient(1);
         replica_steady->repl_data->repl_state = REPLICA_STATE_ONLINE;
-        EXPECT_CALL(mock, throttle_getMetrics(_)).WillRepeatedly(Return(&fakeMetrics));
+        EXPECT_CALL(mock, throttle_getMetrics(_, _)).WillRepeatedly(SetArgPointee<1>(throttleMetrics{}));
         EXPECT_CALL(mock, throttle_getGuardrailSecs(_)).WillRepeatedly(Return(0L));
     }
 
@@ -102,10 +102,10 @@ class ThrottleReplTest : public ::testing::Test {
     /* Snapshot the INFO output and return one field's numeric value (-1 if absent). */
     double readMetric(const char *key) {
         sds info = throttleRepl_sdscatInfoMetrics(sdsempty());
-        char needle[128];
-        snprintf(needle, sizeof(needle), "%s:", key);
-        char *p = strstr(info, needle);
-        double v = p ? strtod(p + strlen(needle), NULL) : -1.0;
+        char search_for[128];
+        snprintf(search_for, sizeof(search_for), "%s:", key);
+        char *p = strstr(info, search_for);
+        double v = p ? strtod(p + strlen(search_for), NULL) : -1.0;
         sdsfree(info);
         return v;
     }
@@ -158,7 +158,7 @@ TEST_F(ThrottleReplTest, steadyStateThrottleIncreasingTrend) {
     EXPECT_CALL(mock, getClientOutputBufferMemoryUsage(replica_steady)).WillRepeatedly(Return(COB_LIMIT / 4 + 1));
     EXPECT_CALL(mock, trendCalc_changePerSecShortTerm(_)).WillRepeatedly(Return(COB_LIMIT / 2));
 
-    EXPECT_CALL(mock, throttle_register(_, _, _)).WillOnce(Return(1));
+    EXPECT_CALL(mock, throttle_register(_, _, _)).WillOnce(Return(dummy_throttler));
     throttleRepl_adjustThrottling();
     EXPECT_TRUE(isReplThrottlerActive());
     EXPECT_TRUE(verifyThrottleEvent(1, 0, 0)); // Throttler activated, no more/less events yets
@@ -186,7 +186,7 @@ TEST_F(ThrottleReplTest, steadyStateThrottleDecreasingTrend) {
     EXPECT_CALL(mock, getClientOutputBufferMemoryUsage(replica_steady)).WillRepeatedly(Return(COB_LIMIT / 2 + 40));
     EXPECT_CALL(mock, trendCalc_changePerSecShortTerm(_)).WillRepeatedly(Return(-1.0));
 
-    EXPECT_CALL(mock, throttle_register(_, _, _)).WillOnce(Return(1));
+    EXPECT_CALL(mock, throttle_register(_, _, _)).WillOnce(Return(dummy_throttler));
     throttleRepl_adjustThrottling();
     EXPECT_TRUE(isReplThrottlerActive());
     EXPECT_TRUE(verifyThrottleEvent(1, 0, 0)); // Throttler activated, no more/less events yets
@@ -218,14 +218,14 @@ TEST_F(ThrottleReplTest, steadyStateThrottleBasedOnLargestCob) {
     client *dummy_replica = createFakeReplicaClient(2);
     dummy_replica->repl_data->repl_state = REPLICA_STATE_ONLINE;
     EXPECT_CALL(mock, getClientOutputBufferMemoryUsage(dummy_replica)).WillRepeatedly(Return(COB_LIMIT));
-    EXPECT_CALL(mock, throttle_register(_, _, _)).WillOnce(Return(1));
+    EXPECT_CALL(mock, throttle_register(_, _, _)).WillOnce(Return(dummy_throttler));
     throttleRepl_adjustThrottling();
     EXPECT_TRUE(isReplThrottlerActive());
     freeFakeReplicaClient(dummy_replica);
 }
 
 TEST_F(ThrottleReplTest, disabledConfigNoNewThrottle) {
-    throttle_repl_config.steady_state_repl_throttle_enabled = 0;
+    throttle_repl_config.repl_throttle_steady_state_enabled = 0;
     EXPECT_CALL(mock, getClientOutputBufferMemoryUsage(replica_steady)).WillRepeatedly(Return(COB_LIMIT / 4 + 1));
     EXPECT_CALL(mock, trendCalc_changePerSecShortTerm(_)).WillRepeatedly(Return(COB_LIMIT / 2));
 
@@ -237,16 +237,15 @@ TEST_F(ThrottleReplTest, disabledConfigNoNewThrottle) {
 
 TEST_F(ThrottleReplTest, throttlerRemovedAfterFailover) {
     /* Simulate active throttler then failover (become replica) */
-    int throttler_id = 42;
     EXPECT_CALL(mock, getClientOutputBufferMemoryUsage(replica_steady)).WillRepeatedly(Return(COB_LIMIT / 4 + 1));
     EXPECT_CALL(mock, trendCalc_changePerSecShortTerm(_)).WillRepeatedly(Return(COB_LIMIT / 2));
-    EXPECT_CALL(mock, throttle_register(_, _, _)).WillOnce(Return(throttler_id));
+    EXPECT_CALL(mock, throttle_register(_, _, _)).WillOnce(Return(dummy_throttler));
     throttleRepl_adjustThrottling();
     EXPECT_TRUE(isReplThrottlerActive());
 
     server.primary_host = (char *)"127.0.0.1"; /* now a replica */
 
-    EXPECT_CALL(mock, throttle_deregister(throttler_id)).Times(1);
+    EXPECT_CALL(mock, throttle_deregister(dummy_throttler)).Times(1);
     throttleRepl_adjustThrottling();
     EXPECT_FALSE(isReplThrottlerActive());
 }
@@ -260,7 +259,7 @@ TEST_F(ThrottleReplTest, insaneCobLimitConfig) {
 
     EXPECT_CALL(mock, getClientOutputBufferMemoryUsage(replica_steady)).WillRepeatedly(Return(max_cob_target + 1));
     EXPECT_CALL(mock, trendCalc_changePerSecShortTerm(_)).WillRepeatedly(Return(1.0));
-    EXPECT_CALL(mock, throttle_register(_, _, _)).WillOnce(Return(1));
+    EXPECT_CALL(mock, throttle_register(_, _, _)).WillOnce(Return(dummy_throttler));
 
     throttleRepl_adjustThrottling();
     EXPECT_TRUE(isReplThrottlerActive());
@@ -273,7 +272,7 @@ TEST_F(ThrottleReplTest, clientCobLimitsExempt) {
     /* Throttler now active */
     EXPECT_CALL(mock, getClientOutputBufferMemoryUsage(replica_steady)).WillRepeatedly(Return(COB_LIMIT / 2 + 1));
     EXPECT_CALL(mock, trendCalc_changePerSecShortTerm(_)).WillRepeatedly(Return(COB_LIMIT / 2));
-    EXPECT_CALL(mock, throttle_register(_, _, _)).WillOnce(Return(1));
+    EXPECT_CALL(mock, throttle_register(_, _, _)).WillOnce(Return(dummy_throttler));
     throttleRepl_adjustThrottling();
     EXPECT_TRUE(isReplThrottlerActive());
 
@@ -310,8 +309,8 @@ TEST_F(ThrottleReplTest, clientCobLimitsExempt) {
     EXPECT_TRUE(throttleRepl_isClientExemptFromCobLimits(replica_steady));
 
     /* If throttle repl disabled, not exempt. */
-    throttle_repl_config.steady_state_repl_throttle_enabled = 0;
+    throttle_repl_config.repl_throttle_steady_state_enabled = 0;
     EXPECT_FALSE(throttleRepl_isClientExemptFromCobLimits(replica_steady));
-    throttle_repl_config.steady_state_repl_throttle_enabled = 1;
+    throttle_repl_config.repl_throttle_steady_state_enabled = 1;
     EXPECT_TRUE(throttleRepl_isClientExemptFromCobLimits(replica_steady));
 }

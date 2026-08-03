@@ -5,7 +5,7 @@
  */
 
 #include "throttle_token_bucket.h"
-#include "server.h"
+#include "zmalloc.h"
 #include "monotonic.h"
 
 struct tokenBucket {
@@ -37,16 +37,12 @@ static void tokenBucket_replenish(tokenBucket *bucket) {
     monotime now = getMonotonicUs();
     uint64_t delta_us = now - bucket->last_time_check;
     double tokens_to_add = delta_us * bucket->tokens_per_sec / 1000000.0;
-    if (tokens_to_add > 0) {
-        bucket->token_count += tokens_to_add;
-        trimTokenBucket(bucket);
-    }
+    bucket->token_count += tokens_to_add;
+    trimTokenBucket(bucket);
     bucket->last_time_check = now;
 }
 
 tokenBucket *tokenBucket_create(double tokens_per_sec, double max_burst_time_secs) {
-    serverAssert(tokens_per_sec >= 0);
-    serverAssert(max_burst_time_secs >= 0);
     tokenBucket *bucket = zmalloc(sizeof(tokenBucket));
     bucket->tokens_per_sec = tokens_per_sec;
     bucket->max_burst_time_secs = max_burst_time_secs;
@@ -64,7 +60,6 @@ double tokenBucket_getRate(tokenBucket *bucket) {
 }
 
 void tokenBucket_setRate(tokenBucket *bucket, double new_rate) {
-    serverAssert(new_rate >= 0);
     bucket->tokens_per_sec = new_rate;
     trimTokenBucket(bucket);
 }
@@ -78,6 +73,7 @@ bool tokenBucket_tryConsume(tokenBucket *bucket, double tokens, bool force_consu
 }
 
 double tokenBucket_msUntilAvailable(tokenBucket *bucket, double target_tokens) {
+    tokenBucket_replenish(bucket);
     if (bucket->token_count >= target_tokens) return 0.0;
     if (bucket->tokens_per_sec <= 0) return -1.0; /* halted — never available */
     double needed = target_tokens - bucket->token_count;

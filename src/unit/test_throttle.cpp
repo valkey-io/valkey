@@ -75,6 +75,7 @@ class ThrottleTest : public ::testing::Test {
         c->conn->type = &dummyConnType;
         c->conn->read_handler = (ConnectionCallbackFunc)1;
         c->flag.pending_command = 1;
+        c->argc = 1;
         c->cmd = write_command ? &set_cmd : &get_cmd;
         return c;
     }
@@ -94,23 +95,27 @@ class ThrottleTest : public ::testing::Test {
             EXPECT_NE(c->throttler, nullptr);
             EXPECT_NE(c->throttle_node, nullptr);
             EXPECT_EQ(c->flag.throttle_checked, 1ULL);
-            EXPECT_NE(c->throttle_start_us, 0ULL);
+            EXPECT_NE(c->throttle_start, 0ULL);
         } else {
             EXPECT_EQ(c->throttler, nullptr);
             EXPECT_EQ(c->throttle_node, nullptr);
-            EXPECT_EQ(c->throttle_start_us, 0ULL);
+            EXPECT_EQ(c->throttle_start, 0ULL);
+            EXPECT_EQ(c->flag.throttle_multi, 0ULL);
         }
         return throttled;
     }
 
     void verifyThrottler(const char *metric_name, int clients_throttled, int cmds_throttled) {
-        const throttleMetrics *m = throttle_getMetrics(metric_name);
-        EXPECT_EQ(m->num_clients_throttled, clients_throttled);
-        EXPECT_EQ(m->num_throttled_commands, cmds_throttled);
+        throttleMetrics m;
+        throttle_getMetrics(metric_name, &m);
+        EXPECT_EQ(m.num_clients_throttled, clients_throttled);
+        EXPECT_EQ(m.num_commands_throttled, cmds_throttled);
     }
 };
 
 using ThrottleDeathTest = ThrottleTest;
+
+/* ---- throttleClientIfNeeded tests ---- */
 
 TEST_F(ThrottleTest, noThrottlerPassesThrough) {
     client *c = createFakeClient(1, true);
@@ -121,55 +126,71 @@ TEST_F(ThrottleTest, noThrottlerPassesThrough) {
 }
 
 TEST_F(ThrottleTest, throttleHappyCase) {
-    int id = throttle_register(fakeWriteCriteria, NULL, "fake_throttler");
+    throttler *t = throttle_register(fakeWriteCriteria, NULL, "fake_throttler");
     client *c = createFakeClient(1, true);
-    throttle_setRate(id, 0.0); // This will empty the bucket
+    throttle_setRate(t, 0.0); // This will empty the bucket
 
-    EXPECT_CALL(mock, aeCreateTimeEvent(_, _, _, _, _)).WillOnce(Return(1));
+    aeTimeProc *timeProc = NULL;
+    void *clientData = NULL;
+    EXPECT_CALL(mock, aeCreateTimeEvent(_, _, _, _, _))
+        .WillOnce(DoAll(SaveArg<2>(&timeProc), SaveArg<3>(&clientData), Return(1)));
     EXPECT_TRUE(throttleClientIfNeeded(c));
     EXPECT_TRUE(clientIsThrottled(c));
 
     EXPECT_FALSE(throttleClientIfNeeded(c)); // We don't throttle client if it's already throttled
     verifyThrottler("fake_throttler", 1, 1);
 
-    EXPECT_CALL(mock, aeDeleteTimeEvent(_, _)).WillOnce(Return(1));
-    throttle_removeClient(c);
+    /* Drain via timeProc */
+    throttle_setRate(t, THROTTLE_UNLIMITED_RATE);
+    fakeMonotimeUs += 1000000;
+    EXPECT_CALL(mock, processPendingCommandAndInputBuffer(c)).WillOnce(Return(C_OK));
+    EXPECT_CALL(mock, beforeNextClient(c)).Times(1);
+    long long ret = timeProc(server.el, 1, clientData);
+    EXPECT_EQ(ret, AE_NOMORE);
+
     EXPECT_FALSE(clientIsThrottled(c));
     verifyThrottler("fake_throttler", 0, 1);
 
-    throttle_deregister(id);
+    throttle_deregister(t);
     freeFakeClient(c);
 }
 
 TEST_F(ThrottleTest, criteriaMismatchPassesThrough) {
-    int id = throttle_register(fakeWriteCriteria, NULL, "fake_throttler");
+    throttler *t = throttle_register(fakeWriteCriteria, NULL, "fake_throttler");
+    throttle_setRate(t, 0.0);
     client *c = createFakeClient(1, false); // client with read command
 
+    EXPECT_CALL(mock, aeCreateTimeEvent(_, _, _, _, _)).Times(0);
     EXPECT_FALSE(throttleClientIfNeeded(c));
     EXPECT_FALSE(clientIsThrottled(c));
     verifyThrottler("fake_throttler", 0, 0);
 
-    throttle_deregister(id);
+    throttle_deregister(t);
     freeFakeClient(c);
 }
 
 TEST_F(ThrottleTest, tokenAvailablePassesThrough) {
-    int id = throttle_register(fakeWriteCriteria, NULL, "fake_throttler"); /* starts at UNLIMITED rate, full bucket */
+    throttler *t = throttle_register(fakeWriteCriteria, NULL, "fake_throttler"); /* starts at UNLIMITED rate, full bucket */
     client *c = createFakeClient(1, true);
 
-    /* Criteria matches, but tokens are available, consume token and proceed. */
+    /* Criteria matches, tokens are available, consume token and proceed. */
+    EXPECT_CALL(mock, aeCreateTimeEvent(_, _, _, _, _)).Times(0);
     EXPECT_FALSE(throttleClientIfNeeded(c));
     EXPECT_FALSE(clientIsThrottled(c));
     verifyThrottler("fake_throttler", 0, 0);
 
-    throttle_deregister(id);
+    throttle_deregister(t);
     freeFakeClient(c);
 }
 
 TEST_F(ThrottleTest, deregisteredThrottlerDrainsButDoesNotThrottleNewClients) {
-    int id = throttle_register(fakeWriteCriteria, NULL, "fake_throttler");
-    throttle_setRate(id, 0.0);
-    EXPECT_CALL(mock, aeCreateTimeEvent(_, _, _, _, _)).WillOnce(Return(1));
+    throttler *t = throttle_register(fakeWriteCriteria, NULL, "fake_throttler");
+    throttle_setRate(t, 0.0);
+
+    aeTimeProc *timeProc = NULL;
+    void *clientData = NULL;
+    EXPECT_CALL(mock, aeCreateTimeEvent(_, _, _, _, _))
+        .WillOnce(DoAll(SaveArg<2>(&timeProc), SaveArg<3>(&clientData), Return(1)));
 
     /* Queue a client so the throttler cannot be freed on deregister. */
     client *queued = createFakeClient(1, true);
@@ -178,16 +199,21 @@ TEST_F(ThrottleTest, deregisteredThrottlerDrainsButDoesNotThrottleNewClients) {
 
     /* Deregister with a non-empty queue: the throttler stays alive in CLEANUP
      * state (still draining the queued client) but must not throttle new clients. */
-    throttle_deregister(id);
+    throttle_deregister(t);
 
     /* A new matching write command passes through untouched. */
     client *fresh = createFakeClient(2, true);
     EXPECT_FALSE(throttleClientIfNeeded(fresh));
     EXPECT_FALSE(clientIsThrottled(fresh));
+    verifyThrottler("fake_throttler", 1, 1);
 
-    /* Drain the original client; emptying the queue frees the CLEANUP throttler. */
-    EXPECT_CALL(mock, aeDeleteTimeEvent(_, _)).WillOnce(Return(1));
-    throttle_removeClient(queued);
+    /* Drain via timeProc — deregister already set rate to UNLIMITED. */
+    fakeMonotimeUs += 1000000;
+    EXPECT_CALL(mock, processPendingCommandAndInputBuffer(queued)).WillOnce(Return(C_OK));
+    EXPECT_CALL(mock, beforeNextClient(queued)).Times(1);
+    long long ret = timeProc(server.el, 1, clientData);
+    EXPECT_EQ(ret, AE_NOMORE);
+    verifyThrottler("fake_throttler", 0, 1);
 
     freeFakeClient(queued);
     freeFakeClient(fresh);
@@ -197,10 +223,14 @@ TEST_F(ThrottleTest, strictestThrottlerThrottle) {
     /* Two throttlers both match a write command. The strictest (lowest rate)
      * wins: the client is queued under it and the multi-match flag is set so
      * the other bucket is charged on release. */
-    int loose = throttle_register(fakeWriteCriteria, NULL, "loose"); /* UNLIMITED */
-    int strict = throttle_register(fakeWriteCriteria, NULL, "strict");
+    throttler *loose = throttle_register(fakeWriteCriteria, NULL, "loose"); /* UNLIMITED */
+    throttler *strict = throttle_register(fakeWriteCriteria, NULL, "strict");
     throttle_setRate(strict, 0.0); /* no tokens -> strictest */
-    EXPECT_CALL(mock, aeCreateTimeEvent(_, _, _, _, _)).WillOnce(Return(1));
+
+    aeTimeProc *timeProc = NULL;
+    void *clientData = NULL;
+    EXPECT_CALL(mock, aeCreateTimeEvent(_, _, _, _, _))
+        .WillOnce(DoAll(SaveArg<2>(&timeProc), SaveArg<3>(&clientData), Return(1)));
 
     client *c = createFakeClient(1, true);
     EXPECT_TRUE(throttleClientIfNeeded(c));
@@ -211,8 +241,17 @@ TEST_F(ThrottleTest, strictestThrottlerThrottle) {
     verifyThrottler("strict", 1, 1);
     verifyThrottler("loose", 0, 0);
 
-    EXPECT_CALL(mock, aeDeleteTimeEvent(_, _)).WillOnce(Return(1));
-    throttle_removeClient(c);
+    /* Drain via timeProc. */
+    throttle_setRate(strict, THROTTLE_UNLIMITED_RATE);
+    fakeMonotimeUs += 1000000;
+    EXPECT_CALL(mock, tokenBucket_tryConsume(_, _, false)).WillOnce(Return(true));
+    EXPECT_CALL(mock, tokenBucket_tryConsume(_, _, true)).WillOnce(Return(true));
+    EXPECT_CALL(mock, processPendingCommandAndInputBuffer(c)).WillOnce(Return(C_OK));
+    EXPECT_CALL(mock, beforeNextClient(c)).Times(1);
+    long long ret = timeProc(server.el, 1, clientData);
+    EXPECT_EQ(ret, AE_NOMORE);
+    EXPECT_EQ(c->flag.throttle_multi, 0ULL);
+
     throttle_deregister(loose);
     throttle_deregister(strict);
     freeFakeClient(c);
@@ -222,8 +261,8 @@ TEST_F(ThrottleTest, strictestThrottlerNonThrottle) {
     /* Two throttlers both match, but the strictest still has a token, so the
      * client passes through (not throttled). Because it matched >1 throttler,
      * consumeOtherThrottlers also charges the other bucket on the pass path. */
-    int loose = throttle_register(fakeWriteCriteria, NULL, "loose"); /* UNLIMITED */
-    int strict = throttle_register(fakeWriteCriteria, NULL, "strict");
+    throttler *loose = throttle_register(fakeWriteCriteria, NULL, "loose"); /* UNLIMITED */
+    throttler *strict = throttle_register(fakeWriteCriteria, NULL, "strict");
     throttle_setRate(strict, 1.0);
 
     client *c = createFakeClient(1, true);
@@ -242,113 +281,386 @@ TEST_F(ThrottleTest, strictestThrottlerNonThrottle) {
     freeFakeClient(c);
 }
 
+/* ---- throttler rate tests ---- */
+
 TEST_F(ThrottleTest, adjustRatePolicyIncrease) {
-    int id = throttle_register(fakeWriteCriteria, NULL, "fake_throttler"); /* starts UNLIMITED */
+    throttler *t = throttle_register(fakeWriteCriteria, NULL, "fake_throttler"); /* starts UNLIMITED */
 
     /* Increase while already UNLIMITED is a no-op. */
-    EXPECT_DOUBLE_EQ(throttle_adjustRate(id, 2.0), THROTTLE_UNLIMITED_RATE);
+    EXPECT_DOUBLE_EQ(throttle_adjustRate(t, 2.0), THROTTLE_UNLIMITED_RATE);
 
     /* Recover from halted state jumps to the fixed restart rate (100 ops/sec). */
-    throttle_setRate(id, 0.0);
-    EXPECT_DOUBLE_EQ(throttle_adjustRate(id, 2.0), 100.0);
+    throttle_setRate(t, 0.0);
+    EXPECT_DOUBLE_EQ(throttle_adjustRate(t, 2.0), 100.0);
 
     /* Normal increase: 100 * (2.0 - 1.0) = 200. */
-    EXPECT_DOUBLE_EQ(throttle_adjustRate(id, 2.0), 200.0);
+    EXPECT_DOUBLE_EQ(throttle_adjustRate(t, 2.0), 200.0);
 
     /* Tiny multiplier still increases by the minimum step of 1 ops/sec. */
-    EXPECT_DOUBLE_EQ(throttle_adjustRate(id, 1.00001), 201.0);
+    EXPECT_DOUBLE_EQ(throttle_adjustRate(t, 1.00001), 201.0);
 
-    throttle_deregister(id);
+    throttle_deregister(t);
 }
 
 TEST_F(ThrottleTest, adjustRatePolicyDecrease) {
-    int id = throttle_register(fakeWriteCriteria, NULL, "fake_throttler"); /* starts UNLIMITED */
+    throttler *t = throttle_register(fakeWriteCriteria, NULL, "fake_throttler"); /* starts UNLIMITED */
 
-    EXPECT_CALL(mock, tpsCalculator_averageTps(_)).WillRepeatedly(Return(500.0)); /* TPS floor */
+    EXPECT_CALL(mock, tpsCalculator_averageTps(_)).WillRepeatedly(Return(500.0)); /* incoming TPS */
 
-    /* Normal decrease, well above the floor. */
-    EXPECT_DOUBLE_EQ(throttle_adjustRate(id, 0.5), THROTTLE_UNLIMITED_RATE * 0.5);
+    /* Decreasing a rate that is still above incoming snaps straight down to incoming. */
+    EXPECT_DOUBLE_EQ(throttle_adjustRate(t, 0.95), 500.0);
 
-    /* Decrease clamped up to the incoming-TPS floor: 1000 * 0.1 = 100 < 500. */
-    throttle_setRate(id, 1000.0);
-    EXPECT_DOUBLE_EQ(throttle_adjustRate(id, 0.1), 500.0);
+    /* Once at/below incoming, a further decrease goes below it (real throttling):
+     * 500 * 0.8 = 400 < 500. */
+    EXPECT_DOUBLE_EQ(throttle_adjustRate(t, 0.8), 400.0);
 
-    /* With no incoming TPS the floor is disabled: 500 * 0.1 = 50. */
+    /* With no measured incoming TPS the snap is disabled: 400 * 0.5 = 200. */
     EXPECT_CALL(mock, tpsCalculator_averageTps(_)).WillRepeatedly(Return(0.0));
-    EXPECT_DOUBLE_EQ(throttle_adjustRate(id, 0.1), 50.0);
+    EXPECT_DOUBLE_EQ(throttle_adjustRate(t, 0.5), 200.0);
 
-    throttle_deregister(id);
+    throttle_deregister(t);
 }
 
 TEST_F(ThrottleTest, setRate) {
-    int id = throttle_register(fakeWriteCriteria, NULL, "fake_throttler");
+    throttler *t = throttle_register(fakeWriteCriteria, NULL, "fake_throttler");
+    throttleMetrics m;
 
     /* A normal rate is stored as-is. */
-    throttle_setRate(id, 1234.0);
-    EXPECT_DOUBLE_EQ(throttle_getMetrics("fake_throttler")->ops_per_sec, 1234.0);
+    throttle_setRate(t, 1234.0);
+    throttle_getMetrics("fake_throttler", &m);
+    EXPECT_DOUBLE_EQ(m.ops_per_sec, 1234.0);
 
     /* Above the unlimited ceiling is clamped down to THROTTLE_UNLIMITED_RATE. */
-    throttle_setRate(id, THROTTLE_UNLIMITED_RATE * 2);
-    EXPECT_DOUBLE_EQ(throttle_getMetrics("fake_throttler")->ops_per_sec, THROTTLE_UNLIMITED_RATE);
+    throttle_setRate(t, THROTTLE_UNLIMITED_RATE * 2);
+    throttle_getMetrics("fake_throttler", &m);
+    EXPECT_DOUBLE_EQ(m.ops_per_sec, THROTTLE_UNLIMITED_RATE);
 
     /* Below epsilon collapses to zero. */
-    throttle_setRate(id, 0.00001);
-    EXPECT_DOUBLE_EQ(throttle_getMetrics("fake_throttler")->ops_per_sec, 0.0);
+    throttle_setRate(t, 0.00001);
+    throttle_getMetrics("fake_throttler", &m);
+    EXPECT_DOUBLE_EQ(m.ops_per_sec, 0.0);
 
-    throttle_deregister(id);
+    throttle_deregister(t);
 }
 
 TEST_F(ThrottleTest, guardrailSecsTracking) {
-    int id = throttle_register(fakeWriteCriteria, NULL, "fake_throttler");
+    throttler *t = throttle_register(fakeWriteCriteria, NULL, "fake_throttler");
 
-    /* 0.05 ops/sec == 3 ops/min, at or below the 6 ops/min guardrail. */
-    throttle_setRate(id, 0.05);
+    /* 0.05 ops/sec, at or below the 0.1 ops/sec guardrail. */
+    throttle_setRate(t, 0.05);
     fakeMonotimeUs += 3 * 1000000; /* advance 3 seconds */
-    EXPECT_EQ(throttle_getGuardrailSecs(id), 3L);
+    EXPECT_EQ(throttle_getGuardrailSecs(t), 3L);
 
     /* Back above the guardrail resets the timer. */
-    throttle_setRate(id, 1.0); /* 60 ops/min */
-    EXPECT_EQ(throttle_getGuardrailSecs(id), 0L);
+    throttle_setRate(t, 1.0); /* above the 0.1 ops/sec guardrail */
+    EXPECT_EQ(throttle_getGuardrailSecs(t), 0L);
 
-    throttle_deregister(id);
+    throttle_deregister(t);
 }
 
-// /* ---- A-layer: metrics aggregation ---- */
+/* ---- metrics aggregation ---- */
 
 TEST_F(ThrottleTest, metricsAggregateAcrossSharedName) {
     /* Two throttlers sharing one metrics group ("shared") aggregate their metrics */
-    int a = throttle_register(fakeWriteCriteria, NULL, "shared");
-    int b = throttle_register(fakeWriteCriteria, NULL, "shared");
+    throttler *a = throttle_register(fakeWriteCriteria, NULL, "shared");
+    throttler *b = throttle_register(fakeWriteCriteria, NULL, "shared");
 
     /* ops_per_sec is the SUM of both throttlers' rates. */
     throttle_setRate(a, 100.0);
     throttle_setRate(b, 250.0);
-    EXPECT_DOUBLE_EQ(throttle_getMetrics("shared")->ops_per_sec, 350.0);
+    throttleMetrics m;
+    throttle_getMetrics("shared", &m);
+    EXPECT_DOUBLE_EQ(m.ops_per_sec, 350.0);
 
     /* Empty both buckets. Both clients are writes matching both throttlers, so the
      * strictest (a, rate 0) wins and both queue under a; b stays empty. */
     throttle_setRate(a, 0.0);
     throttle_setRate(b, 0.0);
+
+    aeTimeProc *timeProc = NULL;
+    void *clientData = NULL;
+    EXPECT_CALL(mock, aeCreateTimeEvent(_, _, _, _, _))
+        .WillOnce(DoAll(SaveArg<2>(&timeProc), SaveArg<3>(&clientData), Return(1)));
+
+    client *c1 = createFakeClient(1, true);
+    EXPECT_TRUE(throttleClientIfNeeded(c1)); /* throttle_start = 100 (fake clock) */
+    fakeMonotimeUs += 5 * 1000000;           /* +5s */
+    client *c2 = createFakeClient(2, true);
+    EXPECT_TRUE(throttleClientIfNeeded(c2)); /* throttle_start = 5,000,100 */
+
+    throttle_getMetrics("shared", &m);
+    /* Both clients increment the shared metrics group. */
+    EXPECT_EQ(m.num_clients_throttled, 2);
+    EXPECT_EQ(m.num_commands_throttled, 2);
+    /* oldest_client_delay_us tracks the oldest queued client (c1, queued 5s ago). */
+    EXPECT_EQ(m.oldest_client_delay_us, 5 * 1000000);
+
+    /* Drain via timeProc. */
+    throttle_setRate(a, THROTTLE_UNLIMITED_RATE);
+    throttle_setRate(b, THROTTLE_UNLIMITED_RATE);
+    fakeMonotimeUs += 1000000;
+    /* Both clients have throttle_multi set (matched both throttlers), so each
+     * release will also consume the other throttler's bucket. */
+    EXPECT_CALL(mock, tokenBucket_tryConsume(_, _, false)).Times(2).WillRepeatedly(Return(true));
+    EXPECT_CALL(mock, tokenBucket_tryConsume(_, _, true)).Times(2).WillRepeatedly(Return(true));
+    EXPECT_CALL(mock, processPendingCommandAndInputBuffer(_)).Times(2).WillRepeatedly(Return(C_OK));
+    EXPECT_CALL(mock, beforeNextClient(_)).Times(2);
+    long long ret = timeProc(server.el, 1, clientData);
+    EXPECT_EQ(ret, AE_NOMORE);
+
+    throttle_getMetrics("shared", &m);
+    verifyThrottler("shared", 0, 2);
+    EXPECT_EQ(m.oldest_client_delay_us, 0);
+
+    throttle_deregister(a);
+    throttle_deregister(b);
+    freeFakeClient(c1);
+    freeFakeClient(c2);
+}
+
+/* ---- throttlerTimeProc tests ---- */
+
+TEST_F(ThrottleTest, timeProcHappyCaseOneCall) {
+    /* When enough tokens are available, timeProc releases all queued clients in one call. */
+    throttler *t = throttle_register(fakeWriteCriteria, NULL, "fake_throttler");
+    throttle_setRate(t, 0.0);
+
+    aeTimeProc *timeProc = NULL;
+    void *clientData = NULL;
+    EXPECT_CALL(mock, aeCreateTimeEvent(_, _, _, _, _))
+        .WillOnce(DoAll(SaveArg<2>(&timeProc), SaveArg<3>(&clientData), Return(1)));
+
+    client *c1 = createFakeClient(1, true);
+    client *c2 = createFakeClient(2, true);
+    EXPECT_TRUE(throttleClientIfNeeded(c1));
+    EXPECT_TRUE(throttleClientIfNeeded(c2));
+
+    /* Set unlimited rate so both clients are released in one timeProc call. */
+    throttle_setRate(t, THROTTLE_UNLIMITED_RATE);
+    fakeMonotimeUs += 1000000;
+
+    EXPECT_CALL(mock, processPendingCommandAndInputBuffer(_)).Times(2).WillRepeatedly(Return(C_OK));
+    EXPECT_CALL(mock, beforeNextClient(_)).Times(2);
+
+    long long ret = timeProc(server.el, 1, clientData);
+    EXPECT_EQ(ret, AE_NOMORE);
+
+    EXPECT_FALSE(clientIsThrottled(c1));
+    EXPECT_FALSE(clientIsThrottled(c2));
+    EXPECT_NE(c1->conn->read_handler, nullptr);
+    EXPECT_NE(c2->conn->read_handler, nullptr);
+    verifyThrottler("fake_throttler", 0, 2);
+
+    throttle_deregister(t);
+    freeFakeClient(c1);
+    freeFakeClient(c2);
+}
+
+TEST_F(ThrottleTest, timeProcHappyCaseMultipleCall) {
+    /* When the timer fires but tokens run out before the queue is empty, it reschedules. */
+    throttler *t = throttle_register(fakeWriteCriteria, NULL, "fake_throttler");
+    throttle_setRate(t, 0.0);
+
+    aeTimeProc *timeProc = NULL;
+    void *clientData = NULL;
+    EXPECT_CALL(mock, aeCreateTimeEvent(_, _, _, _, _))
+        .WillOnce(DoAll(SaveArg<2>(&timeProc), SaveArg<3>(&clientData), Return(1)));
+
+    client *c1 = createFakeClient(1, true);
+    client *c2 = createFakeClient(2, true);
+    EXPECT_TRUE(throttleClientIfNeeded(c1));
+    EXPECT_TRUE(throttleClientIfNeeded(c2));
+
+    /* Set 1 ops/sec rate, so only 1 token available after refill. */
+    throttle_setRate(t, 1.0);
+    fakeMonotimeUs += 1000000;
+
+    /* Only the first client will be released. No aeDeleteTimeEvent since queue stays non-empty. */
+    EXPECT_CALL(mock, processPendingCommandAndInputBuffer(c1)).WillOnce(Return(C_OK));
+    EXPECT_CALL(mock, beforeNextClient(c1)).Times(1);
+
+    long long ret = timeProc(server.el, 1, clientData);
+    /* Should return a positive wait time (reschedule). */
+    EXPECT_EQ(ret, 100);
+
+    /* c1 released, c2 still throttled. */
+    EXPECT_FALSE(clientIsThrottled(c1));
+    EXPECT_NE(c1->conn->read_handler, nullptr);
+    EXPECT_TRUE(clientIsThrottled(c2));
+    verifyThrottler("fake_throttler", 1, 2);
+
+    /* Drain c2 for cleanup. */
+    fakeMonotimeUs += 1000000; /* advance 1s, 1 token available */
+    EXPECT_CALL(mock, processPendingCommandAndInputBuffer(c2)).WillOnce(Return(C_OK));
+    EXPECT_CALL(mock, beforeNextClient(c2)).Times(1);
+    ret = timeProc(server.el, 1, clientData);
+    EXPECT_EQ(ret, AE_NOMORE);
+    EXPECT_FALSE(clientIsThrottled(c2));
+    EXPECT_NE(c2->conn->read_handler, nullptr);
+    verifyThrottler("fake_throttler", 0, 2);
+
+    throttle_deregister(t);
+    freeFakeClient(c1);
+    freeFakeClient(c2);
+}
+
+TEST_F(ThrottleTest, timeProcCallsFreeClientOnConnSetReadHandlerFailure) {
+    /* If connSetReadHandler returns C_ERR, the client is freed. */
+    throttler *t = throttle_register(fakeWriteCriteria, NULL, "fake_throttler");
+    throttle_setRate(t, 0.0);
+
+    aeTimeProc *timeProc = NULL;
+    void *clientData = NULL;
+    EXPECT_CALL(mock, aeCreateTimeEvent(_, _, _, _, _))
+        .WillOnce(DoAll(SaveArg<2>(&timeProc), SaveArg<3>(&clientData), Return(1)));
+
+    client *c = createFakeClient(1, true);
+    EXPECT_TRUE(throttleClientIfNeeded(c));
+    EXPECT_TRUE(clientIsThrottled(c));
+
+    /* Install a failing read handler to simulate connection error. */
+    static ConnectionType failConnType = {0};
+    failConnType.set_read_handler = [](connection *, ConnectionCallbackFunc) -> int {
+        return C_ERR;
+    };
+    c->conn->type = &failConnType;
+
+    throttle_setRate(t, THROTTLE_UNLIMITED_RATE);
+    fakeMonotimeUs += 1000000;
+
+    /* freeClient should be called because connSetReadHandler fails. */
+    EXPECT_CALL(mock, freeClient(c)).WillOnce(Return(0));
+    EXPECT_CALL(mock, processPendingCommandAndInputBuffer(_)).Times(0);
+
+    long long ret = timeProc(server.el, 1, clientData);
+    EXPECT_EQ(ret, AE_NOMORE);
+    EXPECT_FALSE(clientIsThrottled(c));
+    verifyThrottler("fake_throttler", 0, 1);
+
+    throttle_deregister(t);
+    freeFakeClient(c); // We still need to call it since freeClient is mocked.
+}
+
+TEST_F(ThrottleTest, timeProcProcessingFailureSkipsBeforeNextClient) {
+    /* If processPendingCommandAndInputBuffer returns C_ERR, beforeNextClient is NOT called. */
+    throttler *t = throttle_register(fakeWriteCriteria, NULL, "fake_throttler");
+    throttle_setRate(t, 0.0);
+
+    aeTimeProc *timeProc = NULL;
+    void *clientData = NULL;
+    EXPECT_CALL(mock, aeCreateTimeEvent(_, _, _, _, _))
+        .WillOnce(DoAll(SaveArg<2>(&timeProc), SaveArg<3>(&clientData), Return(1)));
+
+    client *c = createFakeClient(1, true);
+    EXPECT_TRUE(throttleClientIfNeeded(c));
+
+    throttle_setRate(t, THROTTLE_UNLIMITED_RATE);
+    fakeMonotimeUs += 1000000;
+
+    EXPECT_CALL(mock, processPendingCommandAndInputBuffer(c)).WillOnce(Return(C_ERR));
+    EXPECT_CALL(mock, beforeNextClient(_)).Times(0);
+
+    long long ret = timeProc(server.el, 1, clientData);
+    EXPECT_EQ(ret, AE_NOMORE);
+    EXPECT_FALSE(clientIsThrottled(c));
+    throttle_deregister(t);
+    freeFakeClient(c);
+}
+
+TEST_F(ThrottleTest, timeProcMultiThrottlerConsumesOtherBuckets) {
+    /* When a client matched multiple throttlers (throttle_multi flag), releasing it
+     * via the timer should also consume tokens from the other throttlers. */
+    throttler *loose = throttle_register(fakeWriteCriteria, NULL, "share");
+    throttler *strict = throttle_register(fakeWriteCriteria, NULL, "share");
+    throttle_setRate(strict, 0.0); /* strict has no tokens and client queues here */
+
+    aeTimeProc *timeProc = NULL;
+    void *clientData = NULL;
+    EXPECT_CALL(mock, aeCreateTimeEvent(_, _, _, _, _))
+        .WillOnce(DoAll(SaveArg<2>(&timeProc), SaveArg<3>(&clientData), Return(1)));
+
+    client *c = createFakeClient(1, true);
+    EXPECT_TRUE(throttleClientIfNeeded(c));
+    EXPECT_EQ(c->flag.throttle_multi, 1ULL);
+
+    /* Now release: set strict to high rate. */
+    throttle_setRate(strict, THROTTLE_UNLIMITED_RATE);
+    fakeMonotimeUs += 1000000;
+
+    /* The strict throttler's own bucket is consumed (force_consume=false) in the while loop,
+     * then consumeOtherThrottlers charges the loose throttler (force_consume=true). */
+    EXPECT_CALL(mock, tokenBucket_tryConsume(_, _, false)).WillOnce(Return(true));
+    EXPECT_CALL(mock, tokenBucket_tryConsume(_, _, true)).WillOnce(Return(true));
+    EXPECT_CALL(mock, processPendingCommandAndInputBuffer(c)).WillOnce(Return(C_OK));
+    EXPECT_CALL(mock, beforeNextClient(c)).Times(1);
+
+    long long ret = timeProc(server.el, 1, clientData);
+    EXPECT_EQ(ret, AE_NOMORE);
+    EXPECT_FALSE(clientIsThrottled(c));
+    verifyThrottler("share", 0, 1);
+
+    throttle_deregister(loose);
+    throttle_deregister(strict);
+    freeFakeClient(c);
+}
+
+TEST_F(ThrottleTest, timeProcCleanupThrottlerFreesOnDrain) {
+    /* A deregistered throttler (CLEANUP state) is freed when the timer drains it. */
+    throttler *t = throttle_register(fakeWriteCriteria, NULL, "fake_throttler");
+    throttle_setRate(t, 0.0);
+
+    aeTimeProc *timeProc = NULL;
+    void *clientData = NULL;
+    EXPECT_CALL(mock, aeCreateTimeEvent(_, _, _, _, _))
+        .WillOnce(DoAll(SaveArg<2>(&timeProc), SaveArg<3>(&clientData), Return(1)));
+
+    client *c = createFakeClient(1, true);
+    EXPECT_TRUE(throttleClientIfNeeded(c));
+
+    /* Deregister while client is still queued, enters CLEANUP state.
+     * deregister sets rate to THROTTLE_UNLIMITED_RATE internally. */
+    throttle_deregister(t);
+
+    fakeMonotimeUs += 1000000;
+    EXPECT_CALL(mock, processPendingCommandAndInputBuffer(c)).WillOnce(Return(C_OK));
+    EXPECT_CALL(mock, beforeNextClient(c)).Times(1);
+
+    long long ret = timeProc(server.el, 1, clientData);
+    EXPECT_EQ(ret, AE_NOMORE);
+    EXPECT_FALSE(clientIsThrottled(c));
+    verifyThrottler("fake_throttler", 0, 1);
+
+    freeFakeClient(c);
+}
+
+/* ---- throttle_removeClient test ---- */
+TEST_F(ThrottleTest, removeClient) {
+    throttler *t = throttle_register(fakeWriteCriteria, NULL, "fake_throttler");
+    throttle_setRate(t, 0.0);
+
     EXPECT_CALL(mock, aeCreateTimeEvent(_, _, _, _, _)).WillOnce(Return(1));
 
     client *c1 = createFakeClient(1, true);
-    EXPECT_TRUE(throttleClientIfNeeded(c1)); /* throttle_start_us = 100 (fake clock) */
-    fakeMonotimeUs += 5 * 1000000;           /* +5s */
     client *c2 = createFakeClient(2, true);
-    EXPECT_TRUE(throttleClientIfNeeded(c2)); /* throttle_start_us = 5,000,100 */
+    EXPECT_TRUE(throttleClientIfNeeded(c1));
+    EXPECT_TRUE(throttleClientIfNeeded(c2));
+    EXPECT_TRUE(clientIsThrottled(c1));
+    EXPECT_TRUE(clientIsThrottled(c2));
+    verifyThrottler("fake_throttler", 2, 2);
 
-    const throttleMetrics *m = throttle_getMetrics("shared");
-    /* Both clients increment the shared metrics group. */
-    EXPECT_EQ(m->num_clients_throttled, 2);
-    EXPECT_EQ(m->num_throttled_commands, 2);
-    /* oldest_client_delay_us tracks the oldest queued client (c1, queued 5s ago). */
-    EXPECT_EQ(m->oldest_client_delay_us, 5 * 1000000);
-
-    EXPECT_CALL(mock, aeDeleteTimeEvent(_, _)).WillOnce(Return(1));
+    /* Remove the client from the throttler queue. */
     throttle_removeClient(c1);
+    EXPECT_FALSE(clientIsThrottled(c1));
+    EXPECT_EQ(c1->conn->read_handler, nullptr);
+    verifyThrottler("fake_throttler", 1, 2);
+
+    EXPECT_CALL(mock, aeDeleteTimeEvent(_, _)).WillOnce(Return(AE_OK));
     throttle_removeClient(c2);
-    throttle_deregister(a);
-    throttle_deregister(b);
+    EXPECT_FALSE(clientIsThrottled(c2));
+    EXPECT_EQ(c2->conn->read_handler, nullptr);
+    verifyThrottler("fake_throttler", 0, 2);
+
+    throttle_deregister(t);
     freeFakeClient(c1);
     freeFakeClient(c2);
 }
@@ -356,18 +668,18 @@ TEST_F(ThrottleTest, metricsAggregateAcrossSharedName) {
 /* ---- Death tests ---- */
 
 TEST_F(ThrottleDeathTest, deregisterThrottlerFail) {
-    /* deregister a non-existent throttler */
-    EXPECT_DEATH(throttle_deregister(99999), "");
+    /* deregister a NULL throttler */
+    EXPECT_DEATH(throttle_deregister(NULL), "");
 }
 
 TEST_F(ThrottleDeathTest, setRateNegativeAsserts) {
-    int id = throttle_register(fakeWriteCriteria, NULL, "neg_rate");
-    EXPECT_DEATH(throttle_setRate(id, -1.0), "");
-    throttle_deregister(id);
+    throttler *t = throttle_register(fakeWriteCriteria, NULL, "neg_rate");
+    EXPECT_DEATH(throttle_setRate(t, -1.0), "");
+    throttle_deregister(t);
 }
 
 TEST_F(ThrottleDeathTest, adjustRateOutOfRangeAsserts) {
-    int id = throttle_register(fakeWriteCriteria, NULL, "bad_mult");
-    EXPECT_DEATH(throttle_adjustRate(id, 3.5), ""); /* multiplier must be <= 3.0 */
-    throttle_deregister(id);
+    throttler *t = throttle_register(fakeWriteCriteria, NULL, "bad_mult");
+    EXPECT_DEATH(throttle_adjustRate(t, 3.5), ""); /* multiplier must be <= 3.0 */
+    throttle_deregister(t);
 }

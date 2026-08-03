@@ -1409,7 +1409,7 @@ typedef struct client {
     /* Throttling */
     struct throttler *throttler;       /* Current throttler this client is queued in, or NULL */
     listNode *throttle_node;           /* Node in throttler's client_queue */
-    monotime throttle_start_us;        /* When this client was queued for throttling */
+    monotime throttle_start;           /* When this client was queued for throttling */
     struct trendCalculator *cob_trend; /* Per-replica COB size trend (NULL if not replica) */
 #ifdef LOG_REQ_RES
     clientReqResInfo reqres;

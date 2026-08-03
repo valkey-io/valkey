@@ -66,16 +66,20 @@ long long __wrap_aeCreateTimeEvent(aeEventLoop *eventLoop, long long millisecond
 int __wrap_aeDeleteTimeEvent(aeEventLoop *eventLoop, long long id);
 size_t __wrap_getClientOutputBufferMemoryUsage(client *c);
 int __wrap_getMaxmemoryState(size_t *total, size_t *logical, size_t *tofree, float *level);
+int __wrap_processPendingCommandAndInputBuffer(client *c);
+void __wrap_beforeNextClient(client *c);
+int __wrap_freeClient(client *c);
 
 /* Throttler mocks */
-int __wrap_throttle_register(throttleCriteriaProc *criteria_proc, void *priv_data, const char *metrics_name);
-void __wrap_throttle_deregister(int id);
-double __wrap_throttle_adjustRate(int id, double multiplier);
-const throttleMetrics *__wrap_throttle_getMetrics(const char *metrics_name);
-long __wrap_throttle_getGuardrailSecs(int id);
+throttler *__wrap_throttle_register(throttleCriteriaProc *criteria_proc, void *priv_data, const char *metrics_name);
+void __wrap_throttle_deregister(throttler *t);
+double __wrap_throttle_adjustRate(throttler *t, double multiplier);
+void __wrap_throttle_getMetrics(const char *metrics_name, throttleMetrics *metrics);
+long __wrap_throttle_getGuardrailSecs(throttler *t);
 
 /* Token bucket mocks */
 bool __wrap_tokenBucket_tryConsume(tokenBucket *bucket, double tokens, bool force_consume);
+double __wrap_tokenBucket_msUntilAvailable(tokenBucket *bucket, double tokens);
 
 /* Statcalc mocks */
 double __wrap_tpsCalculator_averageTps(tpsCalculator *calc);

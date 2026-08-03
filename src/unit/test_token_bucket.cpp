@@ -68,6 +68,21 @@ TEST_F(TokenBucketTest, HaltedBucket) {
     EXPECT_DOUBLE_EQ(tokenBucket_msUntilAvailable(bucket, 11.0), 0.0); /* We should still have 11 tokens available */
 }
 
+TEST_F(TokenBucketTest, MsUntilAvailableReplenishes) {
+    EXPECT_TRUE(tokenBucket_tryConsume(bucket, 12.0, false));          /* drain (size = 100*0.1+2 = 12) */
+    EXPECT_DOUBLE_EQ(tokenBucket_msUntilAvailable(bucket, 1.0), 10.0); /* empty right now */
+
+    fakeMonotimeUs += 1000000; /* advance 1s, bucket refills to full */
+
+    /* Bucket is full again */
+    EXPECT_DOUBLE_EQ(tokenBucket_msUntilAvailable(bucket, 12.0), 0.0);
+
+    /* Partial refill: drain again, advance only 5ms */
+    EXPECT_TRUE(tokenBucket_tryConsume(bucket, 12.0, false));
+    fakeMonotimeUs += 5000;                                           /* 0.5 token accrued */
+    EXPECT_DOUBLE_EQ(tokenBucket_msUntilAvailable(bucket, 1.0), 5.0); /* need 5ms more */
+}
+
 TEST_F(TokenBucketTest, ConsumeTokens_normal) {
     /* Drain all tokens (bucket size = rate * burst_time + 2 = 100*0.1+2 = 12) */
     EXPECT_TRUE(tokenBucket_tryConsume(bucket, 12.0, false));

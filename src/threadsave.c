@@ -12,7 +12,6 @@ static const int SNAPSHOT_FILE_CLOSE_MONITOR_INTERVAL_MS = 200;
 typedef struct {
     rio save_rio;                                                       /* Must be 1st to permit cast from rio back to threadsaveInfo */
     int cur_db;                                                         /* Last selectDb issued */
-    size_t (*realRioWrite)(struct _rio *, const void *buf, size_t len); /* See rioWriteWrapper */
     bgIterator *iterator;
     uint64_t bytes_written;
     int err_code;
@@ -25,22 +24,11 @@ typedef struct {
 /* Keep a global indicator of the current iterator (for cancellation purposes). */
 static threadsaveInfo *currentThreadsave = NULL;
 
-/* When saving a large object, there is no mechanism to break out and perform periodic status
- * checks. To get around this, the rioWrite routine is replaced with this function. The original
- * write routine is saved in the threadsaveInfo. */
-static size_t rioWriteWrapper(rio *r, const void *buf, size_t len) {
+/* rio check_abort_between_writes callback: checks if the threadsave iterator is being terminated. */
+static int threadsaveShouldAbort(rio *r) {
     static_assert(offsetof(threadsaveInfo, save_rio) == 0, "rio must be castable to threadsaveInfo");
     threadsaveInfo *saveInfo = (threadsaveInfo *)r;
-
-    if (saveInfo->iterator && bgIteratorIsTerminating(saveInfo->iterator)) return 0; // indicate error
-
-    return saveInfo->realRioWrite(r, buf, len);
-}
-
-static void installRioWriteWrapper(threadsaveInfo *saveInfo) {
-    serverAssert(saveInfo->realRioWrite == NULL);
-    saveInfo->realRioWrite = saveInfo->save_rio.write;
-    saveInfo->save_rio.write = rioWriteWrapper;
+    return saveInfo->iterator && bgIteratorIsTerminating(saveInfo->iterator);
 }
 
 static int writeSelectDb(threadsaveInfo *saveInfo, int new_db) {
@@ -80,7 +68,7 @@ static void *threadsaveProcessor(void *arg) {
     serverLog(LL_NOTICE, "threadsave: background processor started");
     int err = C_OK;
 
-    installRioWriteWrapper(saveInfo);
+    saveInfo->save_rio.check_abort_between_writes = threadsaveShouldAbort;
 
     const unsigned statsIntervalMs = 1000;
     monotime lastStatsTime;

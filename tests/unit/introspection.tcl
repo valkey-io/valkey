@@ -1236,6 +1236,398 @@ start_server {tags {"introspection"}} {
         $bc close
     }
 
+    test {MONITOR TRACE emits WRITE events in RESP format} {
+        set rd [valkey_deferring_client]
+        $rd MONITOR TRACE
+        assert_match {*OK*} [$rd read]
+        r set tracekey traceval
+        set event [$rd read]
+        # RESP format: array of 10 elements
+        assert_equal [llength $event] 10
+        # Fields: ts_us, seq, db, cmd, key, access_type, key_exists, obj_type, key_bytes, value_bytes
+        assert_equal [lindex $event 4] {tracekey}
+        assert_equal [lindex $event 5] {WRITE}
+        assert_equal [lindex $event 6] 1
+        assert_equal [lindex $event 7] {string}
+        $rd close
+    }
+
+    test {MONITOR TRACE emits READ events} {
+        r set readkey readval
+        set rd [valkey_deferring_client]
+        $rd MONITOR TRACE
+        assert_match {*OK*} [$rd read]
+        r get readkey
+        set event [$rd read]
+        assert_equal [lindex $event 4] {readkey}
+        assert_equal [lindex $event 5] {READ}
+        assert_equal [lindex $event 6] 1
+        $rd close
+    }
+
+    test {MONITOR TRACE emits DELETE events} {
+        r set delkey delval
+        set rd [valkey_deferring_client]
+        $rd MONITOR TRACE
+        assert_match {*OK*} [$rd read]
+        r del delkey
+        set event [$rd read]
+        assert_equal [lindex $event 4] {delkey}
+        assert_equal [lindex $event 5] {DELETE}
+        $rd close
+    }
+
+    test {MONITOR TRACE CSV format escapes binary-unsafe keys} {
+        set rd [valkey_deferring_client]
+        $rd MONITOR TRACE FORMAT csv
+        assert_match {*OK*} [$rd read]
+        # Key with quotes and commas that require RFC 4180 escaping
+        r set "key\"with,special" val
+        set line [$rd read]
+        # Quotes are doubled, commas are safe inside quotes
+        assert_match {*"key""with,special"*WRITE*} $line
+        # Key with non-printable byte (binary)
+        r set "bin\x01ary" val
+        set line [$rd read]
+        # Non-printable bytes are hex-escaped
+        assert_match {*"bin\\x01ary"*WRITE*} $line
+        $rd close
+    }
+
+    test {MONITOR TRACE RATE 0 suppresses all events} {
+        set rd [valkey_deferring_client]
+        $rd MONITOR TRACE RATE 0 SEED 1
+        assert_match {*OK*} [$rd read]
+        r set ratekey rateval
+        r set ratekey2 rateval2
+        # With rate 0, no events should be emitted. Send a PING to verify
+        # the connection is alive and no events arrived before it.
+        after 100
+        $rd PING
+        set reply [$rd read]
+        assert_match {*PONG*} $reply
+        $rd close
+    }
+
+    test {MONITOR TRACE RATE 1 emits all events} {
+        set rd [valkey_deferring_client]
+        $rd MONITOR TRACE RATE 1
+        assert_match {*OK*} [$rd read]
+        r set allkey allval
+        set event [$rd read]
+        assert_equal [lindex $event 4] {allkey}
+        assert_equal [lindex $event 5] {WRITE}
+        $rd close
+    }
+
+    test {MONITOR TRACE RATE with SEED is deterministic} {
+        # Run twice with the same RATE and SEED, verify identical key sets are sampled
+        set keys {aaa bbb ccc ddd eee fff ggg hhh iii jjj}
+        foreach attempt {1 2} {
+            set rd [valkey_deferring_client]
+            $rd MONITOR TRACE RATE 0.5 SEED 42
+            $rd read ;# Discard OK/status
+            foreach k $keys {
+                r set $k val
+            }
+            # Collect all emitted keys
+            set sampled($attempt) {}
+            foreach k $keys {
+                # Non-blocking read: try to get an event within a short window
+            }
+            # Read events until we get a PING response (sentinel for end of events)
+            after 50
+            $rd PING
+            while {1} {
+                set msg [$rd read]
+                if {$msg eq "PONG"} break
+                lappend sampled($attempt) [lindex $msg 4]
+            }
+            $rd close
+        }
+        # Both runs must produce the exact same sampled key set
+        assert_equal $sampled(1) $sampled(2)
+        # With RATE 0.5 SEED 42, the deterministic sampled set is:
+        assert_equal $sampled(1) {ddd eee fff ggg hhh iii jjj}
+    }
+
+    test {MONITOR TRACE NEGATIVE-LOOKUPS yes includes misses} {
+        r del noexist
+        set rd [valkey_deferring_client]
+        $rd MONITOR TRACE NEGATIVE-LOOKUPS yes
+        assert_match {*OK*} [$rd read]
+        r get noexist
+        set event [$rd read]
+        assert_equal [lindex $event 4] {noexist}
+        assert_equal [lindex $event 5] {READ}
+        assert_equal [lindex $event 6] 0
+        $rd close
+    }
+
+    test {MONITOR TRACE NEGATIVE-LOOKUPS no excludes misses} {
+        r del noexist2
+        set rd [valkey_deferring_client]
+        $rd MONITOR TRACE NEGATIVE-LOOKUPS no
+        assert_match {*OK*} [$rd read]
+        r get noexist2
+        # No event for the miss; verify by sending another command that does produce an event
+        r set existkey existval
+        set event [$rd read]
+        assert_equal [lindex $event 4] {existkey}
+        assert_equal [lindex $event 5] {WRITE}
+        $rd close
+    }
+
+    test {MONITOR TRACE reports non-zero key and value bytes} {
+        set rd [valkey_deferring_client]
+        $rd MONITOR TRACE
+        assert_match {*OK*} [$rd read]
+        # Use a 500-byte value to guarantee RAW encoding (external SDS allocation)
+        r set sizekey [string repeat x 500]
+        set event [$rd read]
+        # key_bytes (index 8) = robj entry overhead, must be positive
+        assert {[lindex $event 8] > 0}
+        # value_bytes (index 9) = external value allocation, positive for RAW strings
+        assert {[lindex $event 9] > 0}
+        $rd close
+    }
+
+    test {MONITOR TRACE SAMPLES increases value_bytes for complex types} {
+        # Create a list large enough to use quicklist encoding (multiple nodes)
+        r del sizelist
+        for {set i 0} {$i < 1000} {incr i} {
+            r rpush sizelist "element:$i:padding-to-make-it-bigger"
+        }
+        # Measure with default (no SAMPLES = fast path, zmalloc_size only)
+        set rd [valkey_deferring_client]
+        $rd MONITOR TRACE
+        assert_match {*OK*} [$rd read]
+        r rpush sizelist shallow
+        set event [$rd read]
+        set shallow_bytes [lindex $event 9]
+        $rd close
+
+        # Measure with SAMPLES 5 (deep objectComputeSize)
+        set rd [valkey_deferring_client]
+        $rd MONITOR TRACE SAMPLES 5
+        assert_match {*OK*} [$rd read]
+        r rpush sizelist deep
+        set event [$rd read]
+        set deep_bytes [lindex $event 9]
+        $rd close
+
+        # Deep sizing should report more bytes than shallow for a list
+        assert {$deep_bytes > $shallow_bytes}
+    }
+
+    test {MONITOR TRACE client disconnect cleans up tracer list} {
+        set rd [valkey_deferring_client]
+        $rd MONITOR TRACE
+        assert_match {*OK*} [$rd read]
+        $rd close
+        # After disconnect, SET should not crash
+        r set afterclose val
+        assert_equal [r get afterclose] {val}
+    }
+
+    test {MONITOR TRACE reports correct db for non-default database} {
+        set rd [valkey_deferring_client]
+        $rd MONITOR TRACE
+        assert_match {*OK*} [$rd read]
+        r select 3
+        r set dbkey dbval
+        set event [$rd read]
+        # db field (index 2) should be 3
+        assert_equal [lindex $event 2] 3
+        r select 0
+        $rd close
+    }
+
+    test {MONITOR TRACE MOVE reports correct db for destination} {
+        r select 0
+        r set movekey moveval
+        r del movekey ;# clean up any prior state in db 5
+        r select 5
+        r del movekey
+        r select 0
+        r set movekey moveval
+        set rd [valkey_deferring_client]
+        $rd MONITOR TRACE
+        assert_match {*OK*} [$rd read]
+        r move movekey 5
+        # Should see a DELETE on db 0 and a WRITE on db 5
+        set events {}
+        after 50
+        $rd PING
+        while {1} {
+            set msg [$rd read]
+            if {$msg eq "PONG"} break
+            lappend events $msg
+        }
+        # Find the DELETE event (source db 0)
+        set found_delete 0
+        set found_write 0
+        foreach ev $events {
+            if {[lindex $ev 4] eq "movekey" && [lindex $ev 5] eq "DELETE"} {
+                assert_equal [lindex $ev 2] 0
+                set found_delete 1
+            }
+            if {[lindex $ev 4] eq "movekey" && [lindex $ev 5] eq "WRITE"} {
+                assert_equal [lindex $ev 2] 5
+                set found_write 1
+            }
+        }
+        assert_equal $found_delete 1
+        assert_equal $found_write 1
+        $rd close
+    }
+
+    test {MONITOR TRACE reports correct value size per database} {
+        # Same key name in two DBs with different value sizes
+        r select 0
+        r set samekey "short"
+        r select 2
+        r set samekey [string repeat x 1000]
+        r select 0
+        set rd [valkey_deferring_client]
+        $rd MONITOR TRACE
+        assert_match {*OK*} [$rd read]
+        # Read from db 0 (small value)
+        r get samekey
+        set ev0 [$rd read]
+        # Read from db 2 (large value)
+        r select 2
+        r get samekey
+        set ev2 [$rd read]
+        r select 0
+        $rd close
+        # db 0 value_bytes should be much smaller than db 2
+        set bytes0 [lindex $ev0 9]
+        set bytes2 [lindex $ev2 9]
+        assert {$bytes2 > $bytes0}
+        # Verify correct db ids
+        assert_equal [lindex $ev0 2] 0
+        assert_equal [lindex $ev2 2] 2
+    }
+
+    test {MONITOR TRACE key_bytes + value_bytes matches MEMORY USAGE for strings} {
+        set rd [valkey_deferring_client]
+        $rd MONITOR TRACE SAMPLES 0
+        assert_match {*OK*} [$rd read]
+        # Embedded string (EMBSTR)
+        r set emb_key "small"
+        set event [$rd read]
+        set trace_total [expr {[lindex $event 8] + [lindex $event 9]}]
+        set mem [r memory usage emb_key samples 0]
+        assert_equal $trace_total $mem "embedded string mismatch"
+        # RAW string (large value)
+        r set raw_key [string repeat x 500]
+        set event [$rd read]
+        set trace_total [expr {[lindex $event 8] + [lindex $event 9]}]
+        set mem [r memory usage raw_key samples 0]
+        assert_equal $trace_total $mem "raw string mismatch"
+        $rd close
+    }
+
+    test {MONITOR TRACE key_bytes + value_bytes matches MEMORY USAGE for hash types} {
+        # Listpack hash (small)
+        r del myhash_lp
+        for {set i 0} {$i < 5} {incr i} {
+            r hset myhash_lp "field$i" "value$i"
+        }
+        set rd [valkey_deferring_client]
+        $rd MONITOR TRACE SAMPLES 0
+        assert_match {*OK*} [$rd read]
+        r hget myhash_lp field0
+        set event [$rd read]
+        set trace_total [expr {[lindex $event 8] + [lindex $event 9]}]
+        set mem [r memory usage myhash_lp samples 0]
+        assert_equal $trace_total $mem "listpack hash mismatch"
+        $rd close
+
+        # Hashtable hash (large)
+        r del myhash_ht
+        for {set i 0} {$i < 200} {incr i} {
+            r hset myhash_ht "field_with_long_name_$i" [string repeat v 50]
+        }
+        set rd [valkey_deferring_client]
+        $rd MONITOR TRACE SAMPLES 0
+        assert_match {*OK*} [$rd read]
+        r hget myhash_ht field_with_long_name_0
+        set event [$rd read]
+        set trace_total [expr {[lindex $event 8] + [lindex $event 9]}]
+        set mem [r memory usage myhash_ht samples 0]
+        assert_equal $trace_total $mem "hashtable hash mismatch"
+        $rd close
+    }
+
+    test {MONITOR TRACE key_bytes + value_bytes matches MEMORY USAGE for set} {
+        r del myset
+        for {set i 0} {$i < 200} {incr i} {
+            r sadd myset "member_$i"
+        }
+        set rd [valkey_deferring_client]
+        $rd MONITOR TRACE SAMPLES 0
+        assert_match {*OK*} [$rd read]
+        r sismember myset member_0
+        set event [$rd read]
+        set trace_total [expr {[lindex $event 8] + [lindex $event 9]}]
+        set mem [r memory usage myset samples 0]
+        assert_equal $trace_total $mem "set mismatch"
+        $rd close
+    }
+
+    test {MONITOR TRACE key_bytes + value_bytes matches MEMORY USAGE for zset} {
+        r del myzset
+        for {set i 0} {$i < 200} {incr i} {
+            r zadd myzset $i "member_$i"
+        }
+        set rd [valkey_deferring_client]
+        $rd MONITOR TRACE SAMPLES 0
+        assert_match {*OK*} [$rd read]
+        r zscore myzset member_0
+        set event [$rd read]
+        set trace_total [expr {[lindex $event 8] + [lindex $event 9]}]
+        set mem [r memory usage myzset samples 0]
+        assert_equal $trace_total $mem "zset mismatch"
+        $rd close
+    }
+
+    test {MONITOR TRACE key_bytes + value_bytes matches MEMORY USAGE for stream} {
+        r del mystream
+        for {set i 0} {$i < 50} {incr i} {
+            r xadd mystream "*" field value
+        }
+        set rd [valkey_deferring_client]
+        $rd MONITOR TRACE SAMPLES 0
+        assert_match {*OK*} [$rd read]
+        r xlen mystream
+        set event [$rd read]
+        set trace_total [expr {[lindex $event 8] + [lindex $event 9]}]
+        set mem [r memory usage mystream samples 0]
+        assert_equal $trace_total $mem "stream mismatch"
+        $rd close
+    }
+
+    test {MONITOR TRACE key_bytes + value_bytes matches MEMORY USAGE with various SAMPLES} {
+        # Create a large hash for meaningful sampling differences
+        r del sampled_hash
+        for {set i 0} {$i < 200} {incr i} {
+            r hset sampled_hash "field_$i" [string repeat v 30]
+        }
+        foreach samples_val {0 1 5 50} {
+            set rd [valkey_deferring_client]
+            $rd MONITOR TRACE SAMPLES $samples_val
+            assert_match {*OK*} [$rd read]
+            r hget sampled_hash field_0
+            set event [$rd read]
+            set trace_total [expr {[lindex $event 8] + [lindex $event 9]}]
+            set mem [r memory usage sampled_hash samples $samples_val]
+            assert_equal $trace_total $mem "SAMPLES $samples_val mismatch"
+            $rd close
+        }
+    }
+
     test {CLIENT GETNAME should return NIL if name is not assigned} {
         r client getname
     } {}

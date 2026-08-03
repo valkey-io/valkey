@@ -28,6 +28,7 @@
  */
 
 #include "server.h"
+#include "workload_trace.h"
 #include "cluster.h"
 #include "cluster_migrateslots.h"
 #include "latency.h"
@@ -120,6 +121,12 @@ robj *lookupKey(serverDb *db, robj *key, int flags) {
         if (!(flags & (LOOKUP_NONOTIFY | LOOKUP_WRITE))) notifyKeyspaceEvent(NOTIFY_KEY_MISS, "keymiss", key, db->id);
         if (!(flags & (LOOKUP_NOSTATS | LOOKUP_WRITE))) server.stat_keyspace_misses++;
         /* TODO: Use separate misses stats and notify event for WRITE */
+    }
+
+    /* Emit workload trace READ event for non-write lookups.
+     * Write-path lookups (LOOKUP_WRITE) get traced as WRITE events in setKey/dbAdd. */
+    if (workloadTraceActive() && !(flags & LOOKUP_WRITE)) {
+        workloadTraceEmitRead(db, key, val);
     }
 
     return val;
@@ -480,6 +487,11 @@ int dbGenericDeleteWithDictIndex(serverDb *db, robj *key, int async, int flags, 
         /* VM_StringDMA may call dbUnshareStringValue which may free val, so we
          * need to incr to retain val */
         incrRefCount(val);
+        /* Emit workload trace DELETE event before the object is freed.
+         * Skip expired keys — expiry is a server-side mechanism, not a workload event. */
+        if (workloadTraceActive() && !(flags & DB_FLAG_KEY_EXPIRED)) {
+            workloadTraceEmitDelete(db, key, val);
+        }
         /* Tells the module that the key has been unlinked from the database. */
         moduleNotifyKeyUnlink(key, val, db->id, flags);
         /* We want to try to unblock any module clients or clients using a blocking XREADGROUP */
@@ -755,6 +767,12 @@ long long dbTotalServerKeyCount(void) {
 void signalModifiedKey(client *c, serverDb *db, robj *key) {
     touchWatchedKey(db, key);
     trackingInvalidateKey(c, key, 1);
+    if (workloadTraceActive()) {
+        /* Extra lookup cost is acceptable: only paid when tracing is active,
+         * and avoids changing 77+ signalModifiedKey call sites. */
+        robj *val = dbFind(db, objectGetVal(key));
+        if (val) workloadTraceEmitWrite(db, key, val);
+    }
 }
 
 void signalFlushedDb(int dbid, int async) {

@@ -2197,8 +2197,12 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
 
         o = createHashObject();
 
-        /* Too many entries or hash object contains elements with expiry? Use a hash table right from the start. */
-        if (len > server.hash_max_listpack_entries || rdbtype == RDB_TYPE_HASH_2)
+        /* Too many entries? Use a hash table right from the start. A HASH_2
+         * hash (field TTLs) that is small enough is loaded as a listpack with
+         * tagged metadata entries: the triplet format already carries the
+         * expiry, so no dedicated RDB type is needed to preserve the listpack
+         * encoding across a save/load cycle. */
+        if (len > server.hash_max_listpack_entries)
             hashTypeConvert(o, OBJ_ENCODING_HASHTABLE);
         else {
             /* Guarantee that the server won't crash later when the listpack
@@ -2210,6 +2214,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
 
 
         /* Load every field and value into the ziplist */
+        long long volatile_fields = 0; /* fields loaded into the listpack carrying a TTL */
         while (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK && len > 0) {
             len--;
             /* Load raw strings */
@@ -2225,6 +2230,19 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
                 return NULL;
             }
 
+            /* Also load the entry expiry */
+            long long itemexpiry = EXPIRY_NONE;
+            if (rdbtype == RDB_TYPE_HASH_2) {
+                itemexpiry = rdbLoadMillisecondTime(rdb, RDB_VERSION);
+                if (itemexpiry < EXPIRY_NONE || rioGetReadError(rdb)) {
+                    sdsfree(field);
+                    sdsfree(value);
+                    decrRefCount(o);
+                    if (dupSearchHashtable) hashtableRelease(dupSearchHashtable);
+                    return NULL;
+                }
+            }
+
             if (dupSearchHashtable) {
                 sds field_dup = sdsdup(field);
                 if (!hashtableAdd(dupSearchHashtable, field_dup)) {
@@ -2238,12 +2256,39 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
                 }
             }
 
-            /* Convert to hash table if size threshold is exceeded */
+            /* If this is a non-preamble RDB being loaded on the primary, and this
+             * field is already expired relative to 'now', skip it */
+            if (iAmPrimary() && !(rdbflags & RDBFLAGS_AOF_PREAMBLE) && now != 0 &&
+                itemexpiry != EXPIRY_NONE && itemexpiry < now) {
+                /* Emit HDEL to replicas. */
+                if ((rdbflags & RDBFLAGS_FEED_REPL) && server.repl_backlog) {
+                    robj keyobj, fieldobj;
+                    initStaticStringObject(keyobj, key);
+                    initStaticStringObject(fieldobj, field);
+                    robj *argv[3];
+                    argv[0] = shared.hdel;
+                    argv[1] = &keyobj;
+                    argv[2] = &fieldobj;
+                    replicationFeedReplicas(dbid, argv, 3);
+                }
+                sdsfree(field);
+                sdsfree(value);
+                continue;
+            }
+
+            /* Convert to hash table if size threshold is exceeded. A field
+             * carrying a TTL also adds a tagged metadata entry, which
+             * lpSafeToAdd knows nothing about, so account for its worst case
+             * here. */
+            size_t add_bytes = sdslen(field) + sdslen(value);
+            if (itemexpiry != EXPIRY_NONE) add_bytes += LP_METADATA_MAX_ENTRY_BYTES;
             if (objectGetEncoding(o) != OBJ_ENCODING_HASHTABLE &&
                 (sdslen(field) > server.hash_max_listpack_value || sdslen(value) > server.hash_max_listpack_value ||
-                 !lpSafeToAdd(objectGetVal(o), sdslen(field) + sdslen(value)))) {
+                 !lpSafeToAdd(objectGetVal(o), add_bytes))) {
+                /* hashTypeConvert carries the TTLs of the pairs already in the
+                 * listpack into the volatile set; no header is needed for that. */
                 hashTypeConvert(o, OBJ_ENCODING_HASHTABLE);
-                entry *entry = entryCreate(field, value, EXPIRY_NONE);
+                entry *entry = entryCreate(field, value, itemexpiry);
                 sdsfree(field);
                 if (!hashtableAdd((hashtable *)objectGetVal(o), entry)) {
                     rdbReportCorruptRDB("Duplicate hash fields detected");
@@ -2252,13 +2297,24 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
                     decrRefCount(o);
                     return NULL;
                 }
+                if (itemexpiry != EXPIRY_NONE) hashTypeTrackEntry(o, entry);
                 break;
             }
 
 
-            /* Add pair to listpack */
+            /* Add pair to listpack, with a trailing tagged metadata entry
+             * when the field carries a TTL. */
             objectSetVal(o, lpAppend(objectGetVal(o), (unsigned char *)field, sdslen(field)));
             objectSetVal(o, lpAppend(objectGetVal(o), (unsigned char *)value, sdslen(value)));
+            if (itemexpiry != EXPIRY_NONE) {
+                unsigned char intenc[LP_MAX_INT_ENCODING_LEN];
+                uint64_t enclen;
+                lpEncodeIntegerGetType(itemexpiry, intenc, &enclen);
+                unsigned char *zl = objectGetVal(o);
+                unsigned char *eofptr = zl + lpGetTotalBytes(zl) - 1;
+                objectSetVal(o, lpInsertMetadata(zl, intenc, enclen, eofptr, LP_BEFORE, NULL));
+                volatile_fields++;
+            }
 
             sdsfree(field);
             sdsfree(value);
@@ -2270,6 +2326,13 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
             hashtableRelease(dupSearchHashtable);
             dupSearchHashtable = NULL;
         }
+
+        /* Install the aggregate volatile-count header in one pass (per-pair
+         * updates would rewrite it on every insert). This must happen before
+         * any load-time reaping, which gates on the O(1) header peek in
+         * hashTypeHasVolatileFields(). */
+        if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK && volatile_fields > 0)
+            hashTypeUpdateVolatileCount(o, volatile_fields);
 
         if (objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE) {
             if (!hashtableTryExpand(objectGetVal(o), len)) {

@@ -9453,14 +9453,26 @@ long long moduleTimerHandler(struct aeEventLoop *eventLoop, long long id, void *
         memcpy(&expiretime, ri.key, sizeof(expiretime));
         expiretime = ntohu64(expiretime);
         if (now >= expiretime) {
+            /* Preserve the timer ID before invoking the callback. The callback
+             * may call ValkeyModule_StopTimer() on the currently firing timer,
+             * which removes the radix-tree entry and frees the timer object.
+             * Also, other tree mutations in the callback can invalidate ri.key. */
+            ValkeyModuleTimerID current_id;
+            memcpy(&current_id, ri.key, sizeof(current_id));
+
             ValkeyModuleTimer *timer = ri.data;
             ValkeyModuleCtx ctx;
             moduleCreateContext(&ctx, timer->module, VALKEYMODULE_CTX_TEMP_CLIENT);
             selectDb(ctx.client, timer->dbid);
             timer->callback(&ctx, timer->data);
             moduleFreeContext(&ctx);
-            raxRemove(Timers, (unsigned char *)ri.key, ri.key_len, NULL);
-            zfree(timer);
+
+            /* Skip cleanup if the callback already stopped this timer. */
+            void *live = NULL;
+            if (raxFind(Timers, (unsigned char *)&current_id, sizeof(current_id), &live) && live == timer) {
+                raxRemove(Timers, (unsigned char *)&current_id, sizeof(current_id), NULL);
+                zfree(timer);
+            }
         } else {
             /* We call ustime() again instead of using the cached 'now' so that
              * 'next_period' isn't affected by the time it took to execute

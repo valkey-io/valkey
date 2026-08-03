@@ -218,7 +218,7 @@ start_server {tags {"commandlog"} overrides {commandlog-execution-slower-than 10
         r commandlog reset slow
         # MIGRATE on a missing key returns NOKEY before connecting anywhere,
         # but redacts its AUTH2 arguments while parsing them.
-        r eval {redis.call('migrate', '127.0.0.1', '9999', 'missingkey', '9', '100', 'AUTH2', 'user', 'password')} 0
+        r eval {server.call('migrate', '127.0.0.1', '9999', 'missingkey', '9', '100', 'AUTH2', 'user', 'password')} 0
         r config set commandlog-execution-slower-than -1
         set slowlog_resp [r commandlog get -1 slow]
 

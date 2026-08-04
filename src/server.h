@@ -195,17 +195,16 @@ struct ValkeyModule;
 /* Instantaneous metrics tracking. */
 #define STATS_METRIC_SAMPLES 16 /* Number of samples per metric. */
 typedef enum {
-    STATS_METRIC_COMMAND = 0,            /* Number of commands executed. */
-    STATS_METRIC_NET_INPUT,              /* Bytes read from network. */
-    STATS_METRIC_NET_OUTPUT,             /* Bytes written to network. */
-    STATS_METRIC_NET_INPUT_REPLICATION,  /* Bytes read from network during replication. */
-    STATS_METRIC_NET_OUTPUT_REPLICATION, /* Bytes written to network during replication. */
-    STATS_METRIC_EL_CYCLE,               /* Number of eventloop cycled. */
-    STATS_METRIC_EL_DURATION,            /* Eventloop duration. */
-    STATS_METRIC_IO_WAIT,                /* IO queue size */
-    STATS_METRIC_MAIN_THREAD_CPU_SYS,    /* Main thread CPU sys time */
-    STATS_METRIC_MAIN_THREAD_CPU_USER,   /* Main thread CPU user time */
-    STATS_METRIC_COUNT                   /* Total count */
+    STATS_METRIC_COMMAND = 0,             /* Number of commands executed. */
+    STATS_METRIC_NET_INPUT,               /* Bytes read from network. */
+    STATS_METRIC_NET_OUTPUT,              /* Bytes written to network. */
+    STATS_METRIC_NET_INPUT_REPLICATION,   /* Bytes read from network during replication. */
+    STATS_METRIC_NET_OUTPUT_REPLICATION,  /* Bytes written to network during replication. */
+    STATS_METRIC_EL_CYCLE,                /* Number of eventloop cycled. */
+    STATS_METRIC_EL_DURATION,             /* Eventloop duration. */
+    STATS_METRIC_IO_WAIT,                 /* IO queue size */
+    STATS_METRIC_MAIN_THREAD_ACTIVE_TIME, /* Main-thread active time */
+    STATS_METRIC_COUNT                    /* Total count */
 } instantaneous_metric_type;
 
 /* Protocol and I/O related defines */
@@ -587,17 +586,23 @@ typedef enum {
 #define PAUSE_ACTION_REPLICA (1 << 4) /* pause replica traffic */
 
 /* Sets log format */
-typedef enum { LOG_FORMAT_LEGACY = 0,
-               LOG_FORMAT_LOGFMT,
-               LOG_FORMAT_JSON } log_format_type;
+typedef enum {
+    LOG_FORMAT_LEGACY = 0,
+    LOG_FORMAT_LOGFMT,
+    LOG_FORMAT_JSON
+} log_format_type;
 
 /* Sets log timestamp format */
-typedef enum { LOG_TIMESTAMP_LEGACY = 0,
-               LOG_TIMESTAMP_ISO8601,
-               LOG_TIMESTAMP_MILLISECONDS } log_timestamp_type;
+typedef enum {
+    LOG_TIMESTAMP_LEGACY = 0,
+    LOG_TIMESTAMP_ISO8601,
+    LOG_TIMESTAMP_MILLISECONDS
+} log_timestamp_type;
 
-typedef enum { RDB_VERSION_CHECK_STRICT = 0,
-               RDB_VERSION_CHECK_RELAXED } rdb_version_check_type;
+typedef enum {
+    RDB_VERSION_CHECK_STRICT = 0,
+    RDB_VERSION_CHECK_RELAXED
+} rdb_version_check_type;
 
 /* Structure representing a non-owning view of a buffer.
  * A stringRef struct does not manage the underlying memory, so its destruction
@@ -948,6 +953,7 @@ typedef struct multiState {
     size_t argv_len_sums;           /* mem used by all commands arguments */
     int alloc_count;                /* total number of multiCmd struct memory reserved. */
     list watched_keys;              /* List of watchedKey for iteration and cleanup. */
+    size_t watched_keys_mem;        /* Memory used by watched key robj objects. */
     hashtable **watched_keys_by_db; /* Per-db hashtable for O(1) watched key lookup.
                                        Array of size server.dbnum, lazily allocated.
                                        Each hashtable stores watchedKey* directly. */
@@ -1204,6 +1210,7 @@ typedef struct ClientPubSubData {
     hashtable *pubsub_channels;      /* channels a client is interested in (SUBSCRIBE) */
     hashtable *pubsub_patterns;      /* patterns a client is interested in (PSUBSCRIBE) */
     hashtable *pubsubshard_channels; /* shard level channels a client is interested in (SSUBSCRIBE) */
+    size_t pubsub_object_mem;        /* Memory used by channel/pattern name robj objects. */
     /* If this client is in tracking mode and this field is non zero,
      * invalidation messages for keys fetched by this client will be sent to
      * the specified client ID. */
@@ -1302,6 +1309,10 @@ typedef struct client {
     /* Input buffer and command parsing fields */
     sds querybuf;        /* Buffer we use to accumulate client queries. */
     size_t qb_pos;       /* The position we have read in querybuf. */
+    size_t qb_applied;   /* Right boundary of the *current* command in querybuf.
+                          * qb_pos may run ahead due to multi-command parsing, so
+                          * we use qb_applied (replicated clients only) to advance
+                          * reploff by exactly this command's bytes. */
     robj **argv;         /* Arguments of current command. */
     int argc;            /* Num of arguments of current command. */
     int argv_len;        /* Size of argv array (may be more than argc) */
@@ -2138,6 +2149,8 @@ struct valkeyServer {
                                                  * to establish psync. */
     int debug_pause_after_fork;                 /* Debug param that pauses the main process
                                                  * after a replication fork() (for bgsave). */
+    int debug_pause_before_psync;               /* Replica pauses (SIGSTOP) right before
+                                                 * sending PSYNC to its primary. */
     size_t repl_buffer_mem;                     /* The memory of replication buffer. */
     list *repl_buffer_blocks;                   /* Replication buffers blocks list
                                                  * (serving replica clients and repl backlog) */
@@ -2835,10 +2848,9 @@ extern dictType externalStringType;
 extern dictType sdsHashDictType;
 extern hashtableType clientHashtableType;
 extern hashtableType kvstoreChannelHashtableType;
-extern dictType modulesDictType;
 extern hashtableType sdsReplyHashtableType;
 extern dictType keylistDictType;
-extern dict *modules;
+extern list *modules;
 
 /*-----------------------------------------------------------------------------
  * Functions prototypes
@@ -2979,6 +2991,7 @@ void copyReplicaOutputBuffer(client *dst, client *src);
 void addListRangeReply(client *c, robj *o, long start, long end, int reverse);
 void deferredAfterErrorReply(client *c, list *errors);
 size_t getStringObjectSdsUsedMemory(robj *o);
+size_t getStringObjectMemory(robj *o);
 void freeClientReplyValue(void *o);
 void *dupClientReplyValue(void *o);
 char *getClientPeerId(client *c);
@@ -3145,6 +3158,7 @@ robj *tryObjectEncoding(robj *o);
 robj *tryObjectEncodingEx(robj *o, int try_trim);
 robj *getDecodedObject(robj *o);
 size_t stringObjectLen(robj *o);
+size_t getStringObjectLen(robj *o);
 robj *createStringObjectFromLongLong(long long value);
 robj *createStringObjectFromLongLongForValue(long long value);
 robj *createStringObjectFromLongLongWithSds(long long value);
@@ -3175,7 +3189,7 @@ int compareStringObjects(const robj *a, const robj *b);
 int collateStringObjects(const robj *a, const robj *b);
 int equalStringObjects(robj *a, robj *b);
 void trimStringObjectIfNeeded(robj *o, int trim_small_values);
-#define sdsEncodedObject(objptr) (objptr->encoding == OBJ_ENCODING_RAW || objptr->encoding == OBJ_ENCODING_EMBSTR)
+#define sdsEncodedObject(objptr) (objectGetEncoding(objptr) == OBJ_ENCODING_RAW || objectGetEncoding(objptr) == OBJ_ENCODING_EMBSTR)
 
 /* Objects with val and/or key embedded */
 robj *objectSetKeyAndExpire(robj *o, const_sds key, long long expire);
@@ -3188,6 +3202,16 @@ mstime_t objectGetExpire(const robj *o);
 uint8_t objectGetLFUFrequency(robj *o);
 uint32_t objectGetLRUIdleSecs(robj *o);
 uint32_t objectGetIdleness(robj *o);
+
+/* Accessor functions for serverObject fields.
+ * Use these instead of direct field access for encapsulation. */
+int objectGetType(const robj *o);
+void objectSetType(robj *o, int type);
+int objectGetEncoding(const robj *o);
+void objectSetEncoding(robj *o, int encoding);
+unsigned int objectGetRefcount(const robj *o);
+unsigned int objectGetLRU(const robj *o);
+void objectSetLRU(robj *o, unsigned int lru);
 
 /* Synchronous I/O with timeout */
 ssize_t syncWrite(int fd, char *ptr, ssize_t size, long long timeout);
@@ -3412,6 +3436,7 @@ zskiplistNode *zslInsert(zskiplist *zsl, double score, const_sds ele);
 zskiplistNode *zslNthInRange(zskiplist *zsl, zrangespec *range, long n, long *rank);
 sds zslGetNodeElement(const zskiplistNode *x);
 double zzlGetScore(unsigned char *sptr);
+int zzlValidateScores(unsigned char *zl);
 void zzlNext(unsigned char *zl, unsigned char **eptr, unsigned char **sptr);
 void zzlPrev(unsigned char *zl, unsigned char **eptr, unsigned char **sptr);
 unsigned char *zzlFirstInRange(unsigned char *zl, zrangespec *range);
@@ -3457,6 +3482,9 @@ int processCommand(client *c);
 int processPendingCommandAndInputBuffer(client *c);
 int processCommandAndResetClient(client *c);
 void setupSignalHandlers(void);
+#ifdef USE_LIBBACKTRACE
+void initLibbacktraceFrameState(void);
+#endif
 int createSocketAcceptHandler(connListener *sfd, aeFileProc *accept_handler);
 connListener *listenerByType(int type);
 int changeListener(connListener *listener);
@@ -4121,6 +4149,7 @@ void configGetCommand(client *c);
 void configResetStatCommand(client *c);
 void configRewriteCommand(client *c);
 void configHelpCommand(client *c);
+void configInfoCommand(client *c);
 void hincrbyCommand(client *c);
 void hincrbyfloatCommand(client *c);
 void subscribeCommand(client *c);

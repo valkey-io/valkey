@@ -347,6 +347,24 @@ start_server {tags {"acl external:skip"}} {
         assert_equal "" [dict get $secondary_selector databases]
     }
 
+    test {Test ACL LIST omits implicit alldbs} {
+        set response [lindex [r ACL LIST] [lsearch [r ACL LIST] "user default*"]]
+        assert_no_match "* alldbs *" $response
+
+        r ACL SETUSER user-list-alldbs on nopass -@all +get ~* &* alldbs
+        set response [lindex [r ACL LIST] [lsearch [r ACL LIST] "user user-list-alldbs*"]]
+        assert_no_match "* alldbs *" $response
+
+        r ACL SETUSER user-list-alldbs db=0,1
+        set response [lindex [r ACL LIST] [lsearch [r ACL LIST] "user user-list-alldbs*"]]
+        assert_match "* db=0,1 *" $response
+
+        r ACL SETUSER user-list-alldbs resetdbs
+        set response [lindex [r ACL LIST] [lsearch [r ACL LIST] "user user-list-alldbs*"]]
+        assert_match "* resetdbs *" $response
+
+        r ACL DELUSER user-list-alldbs
+    }
 
     test {Test ACL list idempotency} {
         r ACL SETUSER user-idempotency off -@all +get resetchannels &channel1 %R~foo1 %W~bar1 ~baz1 (-@all +set resetchannels &channel2 %R~foo2 %W~bar2 ~baz2)
@@ -1526,6 +1544,56 @@ start_server {tags {"acl external:skip"}} {
             assert_equal "database" [dict get $entry reason]
             assert_equal $expected [dict get $entry object]
         }
+    }
+
+    test {MOVE cannot leak data out of an unauthorized current DB} {
+        r select 0
+        r set secret-move "top-secret-db0"
+
+        r ACL SETUSER leak-move on nopass +@all ~* db=1
+
+        # Fresh raw client that never issues SELECT, so it stays on DB 0.
+        set rc [valkey [srv 0 host] [srv 0 port] 0 $::tls]
+        $rc auth leak-move password
+
+        # A direct read on the current DB 0 is denied ...
+        assert_error "*NOPERM*database*" {$rc get secret-move}
+
+        # ... and MOVE is denied too, because the source (current) DB 0 is validated.
+        assert_error "*NOPERM*database*" {$rc move secret-move 1}
+
+        # The secret never reached DB 1.
+        $rc select 1
+        assert_equal {} [$rc get secret-move]
+
+        # cleanup
+        $rc close
+        r del secret-move
+        r ACL DELUSER leak-move
+    }
+
+    test {COPY cannot leak data out of an unauthorized current DB} {
+        r select 0
+        r set secret-copy "top-secret-db0"
+
+        r ACL SETUSER leak-copy on nopass +@all ~* db=1
+
+        set rc [valkey [srv 0 host] [srv 0 port] 0 $::tls]
+        $rc auth leak-copy password
+
+        assert_error "*NOPERM*database*" {$rc get secret-copy}
+
+        # COPY is denied because the current (source) DB 0 is validated as well.
+        assert_error "*NOPERM*database*" {$rc copy secret-copy stolen DB 1}
+
+        $rc select 1
+        assert_equal {} [$rc get stolen]
+
+        # cleanup
+        $rc close
+        r select 0
+        r del secret-copy
+        r ACL DELUSER leak-copy
     }
 
     $r2 close

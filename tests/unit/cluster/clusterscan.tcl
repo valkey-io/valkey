@@ -40,6 +40,16 @@ start_cluster 1 0 {tags {external:skip cluster}} {
         assert_error "*unknown type name*" {R 0 clusterscan 0 TYPE notatype}
     }
 
+    test "CLUSTERSCAN cursor is not tracked by client tracking" {
+        R 0 client tracking on
+        assert_equal 0 [s 0 tracking_total_keys]
+
+        R 0 clusterscan "0-{06S}-0"
+        assert_equal 0 [s 0 tracking_total_keys]
+
+        R 0 client tracking off
+    }
+
     test "CLUSTERSCAN with SLOT restricts to single slot" {
         # When SLOT X is provided, clusterscan should only iterate on slot X
         # and return "0" when exhausted and not advance to slot X+1.
@@ -62,6 +72,28 @@ start_cluster 1 0 {tags {external:skip cluster}} {
         assert {$iterations < $max_loops}
         
         assert_equal $cursor "0"
+    }
+
+    test "CLUSTERSCAN cursor is NOT_KEY and does not break ACL key checks" {
+        # The CLUSTERSCAN cursor (e.g. "0" or "0-{06S}-0") is a routing token,
+        # not a real user key. A user with restricted key permissions (+clusterscan
+        # but only ~foo:*) must still be able to use CLUSTERSCAN without getting
+        # "NOPERM No permissions to access a key" on the cursor itself.
+
+        # Create a user with limited key access but allowed to run clusterscan
+        R 0 ACL SETUSER scan_acl_leak on >pass resetkeys ~foo:* resetchannels -@all +clusterscan
+        set rd [valkey_deferring_client 0]
+        $rd AUTH scan_acl_leak pass
+        $rd read
+
+        $rd clusterscan 0
+        $rd read
+        $rd clusterscan 0-{06S}-0
+        $rd read
+        $rd clusterscan 0-{6ZJ}-0
+        $rd read
+
+        $rd close
     }
 }
 
@@ -621,10 +653,20 @@ start_cluster 3 0 {tags {external:skip cluster}} {
         # With full-coverage=yes the cluster enters FAIL state.
         # Cursors for slot 0 should get "Hash slot not served".
         # Cursors for assigned but remote slots should get "cluster is down".
-        R 0 CLUSTER DELSLOTS 0
-        catch {R 1 CLUSTER DELSLOTS 0}
-        catch {R 2 CLUSTER DELSLOTS 0}
-        wait_for_cluster_state fail
+        #
+        # Retry DELSLOTS in a loop: R0's old stale packet can rebind slot 0
+        # to R0 on R1/R2 and undoing the DELSLOTS. Loop until all nodes converge
+        # to FAIL with slot 0 unassigned.
+        wait_for_condition 1000 50 {
+            [catch {R 0 CLUSTER DELSLOTS 0}] >= 0 &&
+            [catch {R 1 CLUSTER DELSLOTS 0}] >= 0 &&
+            [catch {R 2 CLUSTER DELSLOTS 0}] >= 0 &&
+            [CI 0 cluster_state] eq "fail" &&
+            [CI 1 cluster_state] eq "fail" &&
+            [CI 2 cluster_state] eq "fail"
+        } else {
+            fail "Cluster did not converge to FAIL after DELSLOTS"
+        }
 
         # Unassigned slot -> specific error.
         assert_error {CLUSTERDOWN Hash slot not served} {R 0 clusterscan "0-{06S}-0"}

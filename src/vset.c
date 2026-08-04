@@ -1505,11 +1505,31 @@ static inline size_t vsetBucketRemoveExpired_HASHTABLE(vsetBucket **bucket, vset
     }
     hashtableCleanupIterator(&it);
 
-    /* in case we completed scanning the hashtable which is now empty */
+    /* Collapse or downgrade the bucket based on how many entries remain.
+     *
+     * The active-expire path is bounded by max_count (the per-key expire
+     * quota in dbReclaimExpiredFields), so it can stop *before* the bucket
+     * is fully drained. We must preserve the same bucket-type invariant the
+     * normal removal path relies on:
+     *   - size 0 : free the hashtable, bucket becomes NONE.
+     *   - size 1 : downgrade to SINGLE. An HT bucket must never persist with
+     *              a single entry -- removeFromBucket_HASHTABLE() asserts
+     *              hashtableSize(ht) > 0 after a delete and downgrades to
+     *              SINGLE at size 1. If we leave a size-1 HT bucket here, a
+     *              later normal removal of that entry (HDEL, or a cross-bucket
+     *              HSETEX update via removeEntryFromRaxBucket) deletes the sole
+     *              entry, drops the size 1->0, and trips that assertion. */
     size_t ht_size = hashtableSize(ht);
     if (ht_size == 0) {
         hashtableRelease(ht);
         *bucket = vsetBucketFromNone();
+    } else if (ht_size == 1) {
+        hashtableIterator hi;
+        hashtableInitIterator(&hi, ht, 0);
+        void *ptr;
+        hashtableNext(&hi, &ptr);
+        hashtableRelease(ht);
+        *bucket = vsetBucketFromSingle(ptr);
     }
     return count;
 }

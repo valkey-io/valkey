@@ -494,7 +494,7 @@ uint64_t dictEncObjHash(const void *key) {
 
     if (sdsEncodedObject(o)) {
         return dictGenHashFunction(objectGetVal(o), sdslen((sds)objectGetVal(o)));
-    } else if (o->encoding == OBJ_ENCODING_INT) {
+    } else if (objectGetEncoding(o) == OBJ_ENCODING_INT) {
         char buf[32];
         int len;
 
@@ -788,15 +788,6 @@ hashtableType kvstoreChannelHashtableType = {
     .rehashingCompleted = kvstoreHashtableRehashingCompleted,
     .trackMemUsage = kvstoreHashtableTrackMemUsage,
     .getMetadataSize = kvstoreHashtableMetadataSize,
-};
-
-/* Modules system dictionary type. Keys are module name,
- * values are pointer to ValkeyModule struct. */
-dictType modulesDictType = {
-    .entryGetKey = dictEntryGetKey,
-    .hashFunction = dictSdsCaseHash,
-    .keyCompare = dictSdsKeyCaseCompare,
-    .entryDestructor = dictEntryDestructorSdsKey,
 };
 
 /* Migrate cache dict type. */
@@ -1570,6 +1561,11 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
 
     cronUpdateMemoryStats();
 
+    /* Refresh the cached daylight-saving info periodically every 1 second.
+     * This is only used to render log timestamps, so it doesn't need to be
+     * updated on every event-loop wakeup. */
+    run_with_period(1000) updateCachedTime(1);
+
     /* We received a SIGTERM or SIGINT, shutting down here in a safe way, as it is
      * not ok doing so inside the signal handler. */
     if (server.shutdown_asap && !isShutdownInitiated()) {
@@ -1800,6 +1796,9 @@ void whileBlockedCron(void) {
     latencyStartMonitor(latency);
 
     defragWhileBlocked();
+
+    /* serverCron() doesn't run while blocked, so refresh the cached daylight-saving info here. */
+    updateCachedTime(1);
 
     /* Update memory stats during loading (excluding blocked scripts) */
     if (server.loading) cronUpdateMemoryStats();
@@ -2071,8 +2070,9 @@ void afterSleep(struct aeEventLoop *eventLoop, int numevents) {
         server.el_cmd_cnt_start = server.stat_numcommands;
     }
 
-    /* Update the time cache. */
-    updateCachedTime(1);
+    /* Update the time cache. Skip the (relatively expensive) daylight-saving
+     * refresh here since afterSleep() runs on every event-loop wakeup. */
+    updateCachedTime(0);
 
     /* Update command time snapshot in case it'll be required without a command
      * e.g. somehow used by module timers. Don't update it while yielding to a
@@ -2915,6 +2915,9 @@ serverDb *createDatabaseIfNeeded(int id) {
 void initServer(void) {
     signal(SIGHUP, SIG_IGN);
     signal(SIGPIPE, SIG_IGN);
+#ifdef USE_LIBBACKTRACE
+    initLibbacktraceFrameState();
+#endif
     setupSignalHandlers();
     ThreadsManager_init();
     makeThreadKillable();
@@ -2968,6 +2971,7 @@ void initServer(void) {
     server.client_mem_usage_buckets = NULL;
     server.debug_client_enforce_reply_list = 0;
     server.debug_force_free_primary_async = 0;
+    server.debug_pause_before_psync = 0;
     resetReplicationBuffer();
 
     /* Make sure the locale is set on startup based on the config file. */
@@ -5381,7 +5385,10 @@ void addReplyCommandSubCommands(client *c,
                                 void (*reply_function)(client *, struct serverCommand *),
                                 int use_map) {
     if (!cmd->subcommands_ht) {
-        addReplySetLen(c, 0);
+        if (use_map)
+            addReplyMapLen(c, 0);
+        else
+            addReplyArrayLen(c, 0);
         return;
     }
 
@@ -6586,8 +6593,8 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                     "replicas_repl_buffer_peak:%zu\r\n", server.pending_repl_data.peak));
 
             if (server.repl_state == REPL_STATE_TRANSFER) {
-                int repl_transfer_size_stat;
-                int repl_transfer_read_stat;
+                off_t repl_transfer_size_stat;
+                off_t repl_transfer_read_stat;
                 if (atomic_load_explicit(&server.replica_bio_disk_save_state, memory_order_acquire) != REPL_BIO_DISK_SAVE_STATE_NONE) {
                     repl_transfer_size_stat = server.bio_repl_transfer_size;
                     repl_transfer_read_stat = server.bio_repl_transfer_read;

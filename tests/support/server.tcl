@@ -364,8 +364,9 @@ proc spawn_server {executable config_file stdout stderr args} {
         read stdin 1
     }
 
-    # Tell the test server about this new instance.
-    send_data_packet $::test_server_fd server-spawned "$pid - $::curfile"
+    # Tell the test server about this new instance. Send the log path too so
+    # the orchestrator can dump it if the test times out.
+    send_data_packet $::test_server_fd server-spawned [list $pid $stdout $::curfile]
     return $pid
 }
 

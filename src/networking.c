@@ -171,17 +171,23 @@ typedef enum {
  * for a string object. This includes internal fragmentation. */
 size_t getStringObjectSdsUsedMemory(robj *o) {
     serverAssertWithInfo(NULL, o, o->type == OBJ_STRING);
-    if (o->encoding != OBJ_ENCODING_INT) {
+    if (objectGetEncoding(o) != OBJ_ENCODING_INT) {
         return sdsAllocSize(objectGetVal(o));
     }
     return 0;
+}
+
+/* Return the total memory used by a string object, including the robj
+ * structure and the sds string overhead (internal fragmentation). */
+size_t getStringObjectMemory(robj *o) {
+    return sizeof(robj) + getStringObjectSdsUsedMemory(o);
 }
 
 /* Return the length of a string object.
  * This does NOT include internal fragmentation or sds unused space. */
 size_t getStringObjectLen(robj *o) {
     serverAssertWithInfo(NULL, o, o->type == OBJ_STRING);
-    switch (o->encoding) {
+    switch (objectGetEncoding(o)) {
     case OBJ_ENCODING_RAW: return sdslen(objectGetVal(o));
     case OBJ_ENCODING_EMBSTR: return sdslen(objectGetVal(o));
     default: return 0; /* Just integer encoding for now. */
@@ -253,12 +259,29 @@ static inline int isReplicaReadyForReplData(client *replica) {
            !(replica->flag.close_asap);
 }
 
+/* The subscribe / unsubscribe command family has a push as a reply,
+ * or in other words, it responds with a push (or several of them
+ * depending on how many arguments it got), and has no reply. */
+int cmdHasPushAsReply(struct serverCommand *cmd) {
+    if (!cmd) return 0;
+    return cmd->proc == subscribeCommand || cmd->proc == unsubscribeCommand || cmd->proc == psubscribeCommand ||
+           cmd->proc == punsubscribeCommand || cmd->proc == ssubscribeCommand || cmd->proc == sunsubscribeCommand;
+}
+
+/* Publish-to-self push must wait until after the command reply. */
+static int shouldDeferPushMessage(client *c) {
+    return c->flag.pushing && c == server.current_client && server.executing_client &&
+           !cmdHasPushAsReply(server.executing_client->cmd);
+}
+
 /* Decides if copy avoidance is preferred according to client type, number of I/O threads, object size
  * Maybe called with NULL obj for evaluation with no regard to object size
  * Copy avoidance can be allowed only for regular Valkey clients
  * that use _writeToClient handler to write replies to client connection */
 static int isCopyAvoidPreferred(client *c, robj *obj) {
     if (c->flag.fake || isDeferredReplyEnabled(c)) return 0;
+    /* Skip copy avoidance when push bytes would be deferred into pending_push_messages. */
+    if (shouldDeferPushMessage(c)) return 0;
 
     int type = getClientType(c);
     if (type != CLIENT_TYPE_NORMAL && type != CLIENT_TYPE_PUBSUB) return 0;
@@ -313,6 +336,7 @@ client *createClient(connection *conn) {
     c->buf_peak = c->buf_usable_size;
     c->buf_peak_last_reset_time = server.unixtime;
     c->qb_pos = 0;
+    c->qb_applied = 0;
     c->querybuf = NULL;
     c->querybuf_peak = 0;
     c->reqtype = 0;
@@ -706,15 +730,6 @@ static void _addBulkStrRefToToList(client *c, const void *payload, size_t len) {
     _addReplyPayloadToList(c, c->reply, payload, len, BULK_STR_REF);
 }
 
-/* The subscribe / unsubscribe command family has a push as a reply,
- * or in other words, it responds with a push (or several of them
- * depending on how many arguments it got), and has no reply. */
-int cmdHasPushAsReply(struct serverCommand *cmd) {
-    if (!cmd) return 0;
-    return cmd->proc == subscribeCommand || cmd->proc == unsubscribeCommand || cmd->proc == psubscribeCommand ||
-           cmd->proc == punsubscribeCommand || cmd->proc == ssubscribeCommand || cmd->proc == sunsubscribeCommand;
-}
-
 void _addReplyToBufferOrList(client *c, const char *s, size_t len) {
     if (c->flag.close_after_reply) return;
 
@@ -740,8 +755,7 @@ void _addReplyToBufferOrList(client *c, const char *s, size_t len) {
      * the SUBSCRIBE command family, which (currently) have a push message instead of a proper reply.
      * The check for executing_client also avoids affecting push messages that are part of eviction.
      * Check CLIENT_PUSHING first to avoid race conditions, as it's absent in module's fake client. */
-    int defer_push_message = c->flag.pushing && c == server.current_client && server.executing_client &&
-                             !cmdHasPushAsReply(server.executing_client->cmd);
+    int defer_push_message = shouldDeferPushMessage(c);
     if (defer_push_message == 0 && isDeferredReplyEnabled(c)) {
         _addReplyProtoToList(c, c->deferred_reply, s, len);
         return;
@@ -1090,9 +1104,24 @@ void trimReplyUnusedTailSpace(client *c) {
     /* We only try to trim the space is relatively high (more than a 1/4 of the
      * allocation), otherwise there's a high chance realloc will NOP.
      * Also, to avoid large memmove which happens as part of realloc, we only do
-     * that if the used part is small.  */
+     * that if the used part is small.
+     *
+     * Two conditions gate the realloc, for two distinct reasons:
+     *  - io_write_state != CLIENT_PENDING_IO: while an IO thread is writing it
+     *    concurrently walks the whole reply list, so mutating any block races
+     *    with it. This is a thread-safety requirement, independent of which
+     *    block we touch.
+     *  - tail->buf != io_last_written.buf: never free/move the block the write
+     *    bookmark points at. If we did, the allocator could hand the same
+     *    address back for a new reply block; the bookmark would then match an
+     *    unrelated, shorter block while its data_len still claims more bytes
+     *    were sent, and the next write would over-skip (empty IOV) and drop the
+     *    reply's leading bytes. A pointer check is NOT enough at the consumer
+     *    side because that recycle reuses the same address (ABA); the only
+     *    robust fix is to not free the bookmarked block in the first place.
+     * See https://github.com/valkey-io/valkey/pull/4060 */
     if (tail->size - tail->used > tail->size / 4 && tail->used < PROTO_REPLY_CHUNK_BYTES &&
-        c->io_write_state != CLIENT_PENDING_IO && !tail->flag.buf_encoded) {
+        c->io_write_state != CLIENT_PENDING_IO && tail->buf != c->io_last_written.buf && !tail->flag.buf_encoded) {
         size_t usable_size;
         size_t old_size = tail->size;
         tail = zrealloc_usable(tail, tail->used + sizeof(clientReplyBlock), &usable_size);
@@ -1163,9 +1192,13 @@ void setDeferredReply(client *c, void *node, const char *s, size_t length) {
      * - The next node is non-NULL,
      * - It has enough room already allocated
      * - And not too large (avoid large memmove)
-     * - And the client is not in a pending I/O state */
+     * - And it is safe to mutate the target node: the client is not
+     *   CLIENT_PENDING_IO (an IO thread is not concurrently walking the reply
+     *   list) AND the target node is not the one io_last_written references
+     *   (mutating the bookmarked block desyncs the write bookmark).
+     *   See https://github.com/valkey-io/valkey/pull/4060 */
     if (ln->prev != NULL && (prev = listNodeValue(ln->prev)) && prev->size > prev->used &&
-        c->io_write_state != CLIENT_PENDING_IO && !prev->flag.buf_encoded) {
+        c->io_write_state != CLIENT_PENDING_IO && prev->buf != c->io_last_written.buf && !prev->flag.buf_encoded) {
         size_t len_to_copy = prev->size - prev->used;
         if (len_to_copy > length) len_to_copy = length;
         memcpy(prev->buf + prev->used, s, len_to_copy);
@@ -1180,7 +1213,8 @@ void setDeferredReply(client *c, void *node, const char *s, size_t length) {
     }
 
     if (ln->next != NULL && (next = listNodeValue(ln->next)) && next->size - next->used >= length &&
-        next->used < PROTO_REPLY_CHUNK_BYTES * 4 && c->io_write_state != CLIENT_PENDING_IO && !next->flag.buf_encoded) {
+        next->used < PROTO_REPLY_CHUNK_BYTES * 4 && c->io_write_state != CLIENT_PENDING_IO &&
+        next->buf != c->io_last_written.buf && !next->flag.buf_encoded) {
         memmove(next->buf + length, next->buf, next->used);
         memcpy(next->buf, s, length);
         c->net_output_bytes_curr_cmd += length;
@@ -2278,6 +2312,7 @@ void resetSharedQueryBuf(client *c) {
     c->querybuf = NULL;
     sdsclear(thread_shared_qb);
     c->qb_pos = 0;
+    c->qb_applied = 0;
 }
 
 /* Trims the client query buffer to the current position. */
@@ -2295,6 +2330,7 @@ void trimClientQueryBuffer(client *c) {
     if (c->qb_pos > 0) {
         sdsrange(c->querybuf, c->qb_pos, -1);
         c->qb_pos = 0;
+        c->qb_applied = 0;
     }
 }
 
@@ -2325,6 +2361,11 @@ void beforeNextClient(client *c) {
         if (c->repl_data->repl_applied) {
             sdsrange(c->querybuf, c->repl_data->repl_applied, -1);
             c->qb_pos -= c->repl_data->repl_applied;
+            /* qb_applied is an absolute offset, shift it together with the trimmed
+             * querybuf. commandProcessed() advances repl_applied to qb_applied after
+             * each command, so qb_applied >= repl_applied should always true here. */
+            serverAssert(c->qb_applied >= (size_t)c->repl_data->repl_applied);
+            c->qb_applied -= c->repl_data->repl_applied;
             c->repl_data->repl_applied = 0;
         }
     } else {
@@ -2969,6 +3010,11 @@ static void _postWriteToClient(client *c) {
     if (c->bufpos > 0) {
         /* Is this buffer is last written? */
         last_written = (c->buf == c->io_last_written.buf);
+        /* Bookmark desync detector (debug builds only); see the comment in the
+         * reply-list loop below and https://github.com/valkey-io/valkey/pull/4060 */
+        if (last_written) {
+            debugServerAssert(c->io_last_written.bufpos == 0 || c->io_last_written.bufpos <= c->bufpos);
+        }
         /* If buffer is completely written */
         if (!last_written || c->bufpos == c->io_last_written.bufpos) {
             /* If encoded then release references to bulk string objects */
@@ -2992,6 +3038,16 @@ static void _postWriteToClient(client *c) {
         clientReplyBlock *o = listNodeValue(next);
         /* Is this buffer is last written? */
         last_written = (o->buf == c->io_last_written.buf);
+        /* Bookmark desync detector (debug builds only): for the bookmarked
+         * block, the recorded in-memory write position (bufpos) must never
+         * exceed the block's current content (used); a violation means the
+         * block was freed/shrunk/recycled while the bookmark was live. Catches
+         * any complete-write desync (plain or encoded); a partial write stores
+         * bufpos == 0 and is intentionally not checked here. See the PR for the
+         * full rationale: https://github.com/valkey-io/valkey/pull/4060 */
+        if (last_written) {
+            debugServerAssert(c->io_last_written.bufpos == 0 || c->io_last_written.bufpos <= o->used);
+        }
         /* If buffer is completely written */
         if (!last_written || o->used == c->io_last_written.bufpos) {
             c->reply_bytes -= o->size;
@@ -3510,6 +3566,8 @@ void parseInlineBuffer(client *c) {
      * */
     c->net_input_bytes_curr_cmd = (c->argv_len_sum + (c->argc - 1) + 2);
     c->read_flags |= READ_FLAGS_PARSING_COMPLETED;
+    /* Record qb_pos so commandProcessed() can update reploff precisely. */
+    c->qb_applied = c->qb_pos;
     c->reqtype = 0;
 }
 
@@ -3563,16 +3621,14 @@ void parseMultibulkBuffer(client *c) {
                               &c->argv_len_sum, &c->net_input_bytes_curr_cmd);
     c->read_flags |= flag;
 
+    /* Record qb_pos for commandProcessed(). Written unconditionally because a
+     * client may become replicated mid-command (e.g. CLUSTER SYNCSLOTS ESTABLISH
+     * installs slot_migration_job inside its own handler). */
+    if (c->read_flags & READ_FLAGS_PARSING_COMPLETED) c->qb_applied = c->qb_pos;
+
     if (c->read_flags & READ_FLAGS_AUTH_REQUIRED) {
         /* Execute client's AUTH command before parsing more, because it affects
          * parser limits for max allowed bulk and multibulk lengths. */
-        return;
-    }
-
-    if (isReplicatedClient(c)) {
-        /* TODO: some change is required for replication offset which is
-         * computed from c->qb_pos, assuming we only parse one command at a
-         * time. Disable multi-command parsing for replication for now. */
         return;
     }
 
@@ -3764,6 +3820,7 @@ static int parseMultibulk(client *c,
                     }
                     sdsrange(c->querybuf, c->qb_pos, -1);
                     c->qb_pos = 0;
+                    c->qb_applied = 0;
                     /* Hint the sds library about the amount of bytes this string is
                      * going to contain. */
                     c->querybuf = sdsMakeRoomForNonGreedy(c->querybuf, ll + 2 - sdslen(c->querybuf));
@@ -3850,8 +3907,16 @@ void commandProcessed(client *c) {
 
     long long prev_offset = c->repl_data->reploff;
     if (isReplicatedClient(c) && !c->flag.multi) {
-        /* Update the applied replication offset of our primary. */
-        c->repl_data->reploff = c->repl_data->read_reploff - sdslen(c->querybuf) + c->qb_pos;
+        /* Advance reploff by exactly this command's bytes. Use qb_applied
+         * (current command's right boundary) instead of qb_pos, which may
+         * have run ahead due to multi-command parsing. */
+        c->repl_data->reploff = c->repl_data->read_reploff - sdslen(c->querybuf) + c->qb_applied;
+        /* Every applied non-MULTI command should consume >0 bytes from the
+         * replication stream, so reploff must strictly advance. A no-op
+         * advance means qb_applied was not maintained for the command we
+         * just processed (e.g. a command was backfilled into querybuf without
+         * updating qb_applied). */
+        serverAssert(c->repl_data->reploff > prev_offset);
     }
 
     /* If the client is replicated we need to compute the difference
@@ -4027,6 +4092,7 @@ static bool consumeCommandQueue(client *c) {
     c->net_input_bytes_curr_cmd = p->input_bytes;
     c->parsed_cmd = p->cmd;
     c->slot = p->slot;
+    c->qb_applied += p->input_bytes;
     if (queue->off == queue->len) {
         /* The queue is empty. Don't free it here, because if parsing is done in
          * I/O threads, we want to free it in I/O threads too, to avoid
@@ -6069,10 +6135,11 @@ size_t getClientMemoryUsage(client *c, size_t *output_buffer_mem_usage) {
      * i.e. unused sds space and internal fragmentation, just the string length. but this is enough to
      * spot problematic clients. */
     mem += c->argv_len_sum + sizeof(robj *) * c->argc;
+
+    /* Add memory overhead of multi. */
     mem += multiStateMemOverhead(c);
 
-    /* Add memory overhead of pubsub channels and patterns. Note: this is just the overhead of the robj pointers
-     * to the strings themselves because they aren't stored per client. */
+    /* Add memory overhead of pubsub channels and patterns. */
     mem += pubsubMemOverhead(c);
 
     /* Add memory overhead of the tracking prefixes, this is an underestimation so we don't need to traverse the entire
@@ -6532,31 +6599,16 @@ void evictClients(void) {
     size_t client_eviction_limit = getClientEvictionLimit();
     if (client_eviction_limit == 0) return;
 
-    /* Variable to track memory of clients marked for close but not yet freed */
-    size_t pending_freed = 0;
-
     while (server.stat_clients_type_memory[CLIENT_TYPE_NORMAL] +
-               server.stat_clients_type_memory[CLIENT_TYPE_PUBSUB] -
-               pending_freed >
+               server.stat_clients_type_memory[CLIENT_TYPE_PUBSUB] >
            client_eviction_limit) {
         listNode *ln = listNext(&bucket_iter);
         if (ln) {
             client *c = ln->value;
-            if (c->flag.close_asap) {
-                /* Already scheduled to close. Count memory as freed and skip. */
-                pending_freed += getClientMemoryUsage(c, NULL);
-                continue;
-            }
             sds ci = catClientInfoString(sdsempty(), c, server.hide_user_data_from_log);
             serverLog(LL_NOTICE, "Evicting client: %s", ci);
+            if (freeClient(c)) server.stat_evictedclients++;
             sdsfree(ci);
-            server.stat_evictedclients++;
-
-            if (freeClient(c) == 0) {
-                /* Protected client (async close). Count memory as freed and skip. */
-                pending_freed += getClientMemoryUsage(c, NULL);
-                continue;
-            }
         } else {
             curr_bucket--;
             if (curr_bucket < 0) {
@@ -6700,4 +6752,8 @@ void testOnlyAddBufferToReplyIOV(int encoded, char *buf, size_t bufpos, replyIOV
 
 void testOnlySaveLastWrittenBuf(client *c, bufWriteMetadata *metadata, int bufcnt, size_t totlen, size_t totwritten) {
     saveLastWrittenBuf(c, metadata, bufcnt, totlen, totwritten);
+}
+
+void testOnlyTrimReplyUnusedTailSpace(client *c) {
+    trimReplyUnusedTailSpace(c);
 }

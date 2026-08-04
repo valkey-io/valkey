@@ -581,7 +581,7 @@ ENGINE_SERVER_OBJ = \
     ziplist.o \
     zipmap.o \
     zmalloc.o \
-	queues.o
+    queues.o
 ENGINE_SERVER_OBJ+=$(ENGINE_TRACE_OBJ)
 ENGINE_CLI_NAME=$(ENGINE_NAME)-cli$(PROG_SUFFIX)
 ENGINE_CLI_OBJ = \
@@ -713,6 +713,7 @@ $(SERVER_NAME): $(ENGINE_SERVER_OBJ) $(LUA_MODULE)
 
 # Valkey static library, used to compile against for unit testing
 $(ENGINE_LIB_NAME): $(ENGINE_SERVER_OBJ)
+	@rm -f $@
 	$(SERVER_AR) rcs $@ $^
 
 # valkey-sentinel

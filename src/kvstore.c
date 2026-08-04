@@ -442,7 +442,12 @@ unsigned long long kvstoreScan(kvstore *kvs,
 
     int skip = !ht || (skip_cb && skip_cb(ht)) || kvstoreIsImporting(kvs, didx);
     if (!skip) {
-        ht_cursor = hashtableScan(ht, ht_cursor, hashtableScanToKvstoreScanCallback, &cb_data);
+        /* kvstore wraps the cursor by left-shifting it by num_hashtables_bits
+         * and OR-ing the slot index into the low bits before sending it to
+         * the client. That shift conflicts with the bit positions used by
+         * hashtableScan's randomized-start encoding, so opt out here. */
+        ht_cursor = hashtableScanDefrag(ht, ht_cursor, hashtableScanToKvstoreScanCallback,
+                                        &cb_data, NULL, HASHTABLE_SCAN_NO_RANDOMIZE_START);
         /* In hashtableScan, scan_cb may delete entries (e.g., in active expire case). */
         freeHashtableIfNeeded(kvs, didx);
     }

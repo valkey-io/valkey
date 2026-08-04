@@ -91,6 +91,7 @@
 #define CLI_RCFILE_DEFAULT ".valkeyclirc"
 #define CLI_AUTH_ENV "VALKEYCLI_AUTH"
 #define OLD_CLI_AUTH_ENV "REDISCLI_AUTH"
+#define CLI_USER_ENV "VALKEYCLI_USER"
 #define CLI_HOST_ENV "VALKEYCLI_HOST"
 #define CLI_PORT_ENV "VALKEYCLI_PORT"
 #define CLI_CLUSTER_YES_ENV "VALKEYCLI_CLUSTER_YES"
@@ -2940,6 +2941,10 @@ static void parseEnv(void) {
     if (auth != NULL) {
         config.conn_info.auth = auth;
     }
+    char *user = getenv(CLI_USER_ENV);
+    if (user != NULL) {
+        config.conn_info.user = user;
+    }
     char *host = getenv(CLI_HOST_ENV);
     if (host != NULL) {
         config.conn_info.hostip = sdsnew(host);
@@ -3007,6 +3012,8 @@ static void usage(int err) {
             "                     variable to pass this password more safely\n"
             "                     (if both are used, this argument takes precedence).\n"
             "  --user <username>  Used to send ACL style 'AUTH username pass'. Needs -a.\n"
+            "                     You can also use the " CLI_USER_ENV " environment variable\n"
+            "                     (if both are used, this argument takes precedence).\n"
             "  --pass <password>  Alias of -a for consistency with the new --user option.\n"
             "  --askpass          Force user to input password with mask from STDIN.\n"
             "                     If this argument is used, '-a' and " CLI_AUTH_ENV "\n"

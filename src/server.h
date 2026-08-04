@@ -586,17 +586,23 @@ typedef enum {
 #define PAUSE_ACTION_REPLICA (1 << 4) /* pause replica traffic */
 
 /* Sets log format */
-typedef enum { LOG_FORMAT_LEGACY = 0,
-               LOG_FORMAT_LOGFMT,
-               LOG_FORMAT_JSON } log_format_type;
+typedef enum {
+    LOG_FORMAT_LEGACY = 0,
+    LOG_FORMAT_LOGFMT,
+    LOG_FORMAT_JSON
+} log_format_type;
 
 /* Sets log timestamp format */
-typedef enum { LOG_TIMESTAMP_LEGACY = 0,
-               LOG_TIMESTAMP_ISO8601,
-               LOG_TIMESTAMP_MILLISECONDS } log_timestamp_type;
+typedef enum {
+    LOG_TIMESTAMP_LEGACY = 0,
+    LOG_TIMESTAMP_ISO8601,
+    LOG_TIMESTAMP_MILLISECONDS
+} log_timestamp_type;
 
-typedef enum { RDB_VERSION_CHECK_STRICT = 0,
-               RDB_VERSION_CHECK_RELAXED } rdb_version_check_type;
+typedef enum {
+    RDB_VERSION_CHECK_STRICT = 0,
+    RDB_VERSION_CHECK_RELAXED
+} rdb_version_check_type;
 
 /* Structure representing a non-owning view of a buffer.
  * A stringRef struct does not manage the underlying memory, so its destruction
@@ -947,6 +953,7 @@ typedef struct multiState {
     size_t argv_len_sums;           /* mem used by all commands arguments */
     int alloc_count;                /* total number of multiCmd struct memory reserved. */
     list watched_keys;              /* List of watchedKey for iteration and cleanup. */
+    size_t watched_keys_mem;        /* Memory used by watched key robj objects. */
     hashtable **watched_keys_by_db; /* Per-db hashtable for O(1) watched key lookup.
                                        Array of size server.dbnum, lazily allocated.
                                        Each hashtable stores watchedKey* directly. */
@@ -1203,6 +1210,7 @@ typedef struct ClientPubSubData {
     hashtable *pubsub_channels;      /* channels a client is interested in (SUBSCRIBE) */
     hashtable *pubsub_patterns;      /* patterns a client is interested in (PSUBSCRIBE) */
     hashtable *pubsubshard_channels; /* shard level channels a client is interested in (SSUBSCRIBE) */
+    size_t pubsub_object_mem;        /* Memory used by channel/pattern name robj objects. */
     /* If this client is in tracking mode and this field is non zero,
      * invalidation messages for keys fetched by this client will be sent to
      * the specified client ID. */
@@ -2141,6 +2149,8 @@ struct valkeyServer {
                                                  * to establish psync. */
     int debug_pause_after_fork;                 /* Debug param that pauses the main process
                                                  * after a replication fork() (for bgsave). */
+    int debug_pause_before_psync;               /* Replica pauses (SIGSTOP) right before
+                                                 * sending PSYNC to its primary. */
     size_t repl_buffer_mem;                     /* The memory of replication buffer. */
     list *repl_buffer_blocks;                   /* Replication buffers blocks list
                                                  * (serving replica clients and repl backlog) */
@@ -2838,10 +2848,9 @@ extern dictType externalStringType;
 extern dictType sdsHashDictType;
 extern hashtableType clientHashtableType;
 extern hashtableType kvstoreChannelHashtableType;
-extern dictType modulesDictType;
 extern hashtableType sdsReplyHashtableType;
 extern dictType keylistDictType;
-extern dict *modules;
+extern list *modules;
 
 /*-----------------------------------------------------------------------------
  * Functions prototypes
@@ -2982,6 +2991,7 @@ void copyReplicaOutputBuffer(client *dst, client *src);
 void addListRangeReply(client *c, robj *o, long start, long end, int reverse);
 void deferredAfterErrorReply(client *c, list *errors);
 size_t getStringObjectSdsUsedMemory(robj *o);
+size_t getStringObjectMemory(robj *o);
 void freeClientReplyValue(void *o);
 void *dupClientReplyValue(void *o);
 char *getClientPeerId(client *c);
@@ -3148,6 +3158,7 @@ robj *tryObjectEncoding(robj *o);
 robj *tryObjectEncodingEx(robj *o, int try_trim);
 robj *getDecodedObject(robj *o);
 size_t stringObjectLen(robj *o);
+size_t getStringObjectLen(robj *o);
 robj *createStringObjectFromLongLong(long long value);
 robj *createStringObjectFromLongLongForValue(long long value);
 robj *createStringObjectFromLongLongWithSds(long long value);

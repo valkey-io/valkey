@@ -712,14 +712,19 @@ proc process_is_paused pid {
     return [string match {*T*} [lindex [exec ps j $pid] 16]]
 }
 
-proc pause_process pid {
-    exec kill -SIGSTOP $pid
+# Wait until the process enters a paused state.
+proc wait_process_paused pid {
     wait_for_condition 50 100 {
-        [string match {*T*} [lindex [exec ps j $pid] 16]]
+        [process_is_paused $pid]
     } else {
         puts [exec ps j $pid]
         fail "process didn't stop"
     }
+}
+
+proc pause_process pid {
+    exec kill -SIGSTOP $pid
+    wait_process_paused $pid
 }
 
 proc resume_process pid {

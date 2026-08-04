@@ -213,7 +213,9 @@ char *humanNodename(clusterNode *node) {
     /* Avoid allocating heap memory so that users can call the function with ease.
      * Use a small ring of thread-local buffers here so that multiple function calls
      * in the same logging statement are safe. */
-    enum { BUF_COUNT = 8 };
+    enum {
+        BUF_COUNT = 8
+    };
     static _Thread_local char buffers[BUF_COUNT][CONN_ADDR_STR_LEN];
     static _Thread_local int idx;
 
@@ -6375,12 +6377,11 @@ void clusterCron(void) {
             /* Timeout reached. Set the node as possibly failing if it is
              * not already in this state. */
             if (!(node->flags & (CLUSTER_NODE_PFAIL | CLUSTER_NODE_FAIL))) {
+                serverLog(LL_NOTICE, "NODE %.40s (%s) possibly failing.", node->name, humanNodename(node));
                 node->flags |= CLUSTER_NODE_PFAIL;
                 update_state = 1;
                 if (clusterNodeIsVotingPrimary(myself)) {
                     markNodeAsFailingIfNeeded(node);
-                } else {
-                    serverLog(LL_NOTICE, "NODE %.40s (%s) possibly failing.", node->name, humanNodename(node));
                 }
             }
         }

@@ -592,7 +592,11 @@ static void fullScanIteratorFlushDb(genericIterator *genIt, int cur_dbid) {
     int orig_db = (cur_dbid == -1) ? it->iter_db : it->cur_to_orig_db[cur_dbid];
     if (orig_db == it->iter_db) {
         // We are currently iterating on the DB that's being flushed.
-        it->kvs = NULL;
+        if (it->kvs) {
+            // If it->kvs is set, we're actively scanning and have paused rehash
+            resumeRehashForKvsHashtable(it->kvs, it->kvs_didx);
+            it->kvs = NULL;
+        }
         // Iteration will continue with the next DB.
     }
 }

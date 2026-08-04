@@ -2315,9 +2315,10 @@ struct valkeyServer {
                                                             * failover to be attempted. */
     int slot_migration_pipe_read;                          /* Slot migration pipe used to transfer the slots data */
     int slot_migration_child_exit_pipe;                    /* Used by the slot migration parent allow child exit. */
-    connection *slot_migration_pipe_conn;                  /* xxxx */
+    connection *slot_migration_pipe_conn;                  /* Connection of the slot migration target client. The slot
+                                                            * snapshot data read from the pipe is written to it. */
     char *slot_migration_pipe_buff;                        /* In slot migration, this buffer holds slot snapshot data. */
-    ssize_t slot_migration_pipe_bufflen;                   /* that was read from the rdb pipe. */
+    ssize_t slot_migration_pipe_bufflen;                   /* that was read from the slot migration pipe. */
     /* Debug config that goes along with cluster_drop_packet_filter. When set, the link is closed on packet drop. */
     uint32_t debug_cluster_close_link_on_packet_drop : 1;
     /* Debug config to control the random ping. When set, we will disable the random ping in clusterCron. */

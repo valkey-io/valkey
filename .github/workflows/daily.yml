@@ -16,7 +16,7 @@ on:
     inputs:
       skipjobs:
         description: "jobs to skip (delete the ones you wanna keep, do not leave empty)"
-        default: "valgrind,sanitizer,tls,freebsd,macos,alpine,32bit,iothreads,ubuntu,rpm-distros,malloc,specific,fortify,reply-schema,arm,s390x,lttng"
+        default: "valgrind,sanitizer,tls,freebsd,macos,alpine,32bit,iothreads,ubuntu,rpm-distros,malloc,specific,fortify,reply-schema,arm,s390x,lttng,solo"
       skiptests:
         description: "tests to skip (delete the ones you wanna keep, do not leave empty)"
         default: "valkey,modules,sentinel,cluster,unittest,large-memory"
@@ -168,7 +168,11 @@ jobs:
     # Runs the run_solo tests (defrag, fuzzer, and cluster resharding/failover2/
     # replica-migration-slow) once, on jemalloc arm. These tests execute alone
     # after the parallel phase drains; the rest of the matrix passes --skip-solo
-    # so they are not duplicated across every platform/config.
+    # so they are not duplicated across every platform/config. The cluster solo
+    # tests also run once under --tls to cover the TLS-specific code paths
+    # (e.g. resharding dual-listener + MOVED-over-plaintext).
+    # Sanitizer, valgrind, and force-defrag jobs still run solo tests where the
+    # memory/UB checker or forced defrag adds coverage this job does not.
     runs-on: ubuntu-24.04-arm
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
@@ -199,12 +203,17 @@ jobs:
           path: libbacktrace
       - run: cd libbacktrace && ./configure && make && sudo make install
       - name: make
-        run: make SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
+        run: make BUILD_TLS=yes SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
       - name: testprep
-        run: sudo apt-get install tcl8.6 tclx
+        run: |
+          sudo apt-get install tcl8.6 tclx tcl-tls
+          ./utils/gen-test-certs.sh
       - name: solo tests
         if: true && !contains(github.event.inputs.skiptests, 'valkey')
         run: ./runtest ${{ github.event_name != 'pull_request' && '--accurate' || '' }} --failures-output test-failures/valkey.json --verbose --dump-logs --single unit/memefficiency --single unit/fuzzer --single unit/cluster/resharding --single unit/cluster/failover2 --single unit/cluster/replica-migration-slow ${{github.event.inputs.test_args}}
+      - name: solo cluster tests - TLS
+        if: true && !contains(github.event.inputs.skiptests, 'valkey')
+        run: ./runtest ${{ github.event_name != 'pull_request' && '--accurate' || '' }} --failures-output test-failures/valkey-tls.json --verbose --dump-logs --tls --single unit/cluster/resharding --single unit/cluster/failover2 --single unit/cluster/replica-migration-slow ${{github.event.inputs.test_args}}
       - name: Upload test failures
         if: always()
         uses: ./.github/actions/upload-test-failures
@@ -2108,7 +2117,7 @@ jobs:
 
               case "${SKIPTESTS:-}" in
                 *valkey*) ;;
-                *) ./runtest ${RUN_ACCURATE:-} --failures-output test-failures/valkey.json --verbose --dump-logs ${TEST_ARGS:-} ;;
+                *) ./runtest ${RUN_ACCURATE:-} --failures-output test-failures/valkey.json --verbose --dump-logs --skip-solo ${TEST_ARGS:-} ;;
               esac
 
               case "${SKIPTESTS:-}" in

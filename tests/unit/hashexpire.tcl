@@ -1549,8 +1549,9 @@ start_server {tags {"hashexpire"}} {
 
         # Now write a persistent elements
         assert_equal {3} [r HSET myhash f8 v8 f9 v9 f10 v10]
-        # The hash still holds 8 expired but not yet reclaimed fields, so CASE 4
-        # picks fields by random sampling over all 11 of them. Sampling gives up
+        # HSET on the expired f8 clears its TTL, so the hash now holds 7 expired
+        # but not yet reclaimed fields plus the 3 valid ones, 10 entries in total.
+        # CASE 4 picks fields by random sampling over all 10 of them, and gives up
         # after a bounded number of tries, so the reply may hold fewer than the
         # requested 3 fields even though 3 valid fields exist. See #4208.
         # Assert only what is guaranteed: whatever comes back is distinct and is

@@ -3887,9 +3887,12 @@ void call(client *c, int flags) {
     c->flag.force_repl = 0;
     c->flag.prevent_prop = 0;
 
-    /* The redaction bitmap describes the argv of the executing command and is
-     * set on demand by the command itself. Clear any bits left by a previous
-     * command, since resetClient() does not run between queued MULTI commands. */
+    /* The redaction bitmap describes the argv of the command about to execute and
+     * is set on demand by the command itself. Clearing it here covers every case
+     * where one client executes several commands without an intervening
+     * resetClient(): the queued commands of a MULTI, RM_Call sequences issued on a
+     * reused module temp client, and the server.call() chain of a script. Stale
+     * bits would otherwise redact the wrong argument of a later command. */
     c->redact_arg_bitmap = 0;
 
     /* The server core is in charge of propagation when the first entry point

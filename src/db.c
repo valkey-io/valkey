@@ -110,8 +110,8 @@ robj *lookupKey(serverDb *db, robj *key, int flags) {
             flags |= LOOKUP_NOTOUCH;
         if (!hasActiveChildProcess() && !(flags & LOOKUP_NOTOUCH)) {
             /* Shared objects can't be stored in the database. */
-            serverAssert(val->refcount != OBJ_SHARED_REFCOUNT);
-            val->lru = lrulfu_touch(val->lru);
+            serverAssert(objectGetRefcount(val) != OBJ_SHARED_REFCOUNT);
+            objectSetLRU(val, lrulfu_touch(objectGetLRU(val)));
         }
 
         if (!(flags & (LOOKUP_NOSTATS | LOOKUP_WRITE))) server.stat_keyspace_hits++;
@@ -220,7 +220,7 @@ static void dbAddInternal(serverDb *db, robj *key, robj **valref, int update_if_
     dbTrackKeyWithVolatileItems(db, val);
     initObjectLRUOrLFU(val);
     kvstoreHashtableAdd(db->keys, dict_index, val);
-    signalKeyAsReady(db, key, val->type);
+    signalKeyAsReady(db, key, objectGetType(val));
     notifyKeyspaceEvent(NOTIFY_NEW, "new", key, db->id);
     *valref = val;
 }
@@ -335,24 +335,24 @@ static void dbSetValue(serverDb *db, robj *key, robj **valref, int overwrite, vo
          * callback of the module. */
         moduleNotifyKeyUnlink(key, old, db->id, DB_FLAG_KEY_OVERWRITE);
         /* We want to try to unblock any module clients or clients using a blocking XREADGROUP */
-        signalDeletedKeyAsReady(db, key, old->type);
+        signalDeletedKeyAsReady(db, key, objectGetType(old));
         decrRefCount(old);
         /* Because of VM_StringDMA, old may be changed, so we need get old again */
         old = *oldref;
     }
 
-    if ((old->refcount == 1 && old->encoding != OBJ_ENCODING_EMBSTR) &&
-        (val->refcount == 1 && val->encoding != OBJ_ENCODING_EMBSTR)) {
-        /* Keep old object in the database. Just swap it's ptr, type and
+    if ((objectGetRefcount(old) == 1 && objectGetEncoding(old) != OBJ_ENCODING_EMBSTR) &&
+        (objectGetRefcount(val) == 1 && objectGetEncoding(val) != OBJ_ENCODING_EMBSTR)) {
+        /* Keep old object in the database. Just swap its ptr, type and
          * encoding with the content of val. */
-        int tmp_type = old->type;
-        int tmp_encoding = old->encoding;
+        int tmp_type = objectGetType(old);
+        int tmp_encoding = objectGetEncoding(old);
         void *tmp_ptr = objectGetVal(old);
-        old->type = val->type;
-        old->encoding = val->encoding;
+        objectSetType(old, objectGetType(val));
+        objectSetEncoding(old, objectGetEncoding(val));
         objectSetVal(old, objectGetVal(val));
-        val->type = tmp_type;
-        val->encoding = tmp_encoding;
+        objectSetType(val, tmp_type);
+        objectSetEncoding(val, tmp_encoding);
         objectSetVal(val, tmp_ptr);
         /* Set new to old to keep the old object. Set old to val to be freed below. */
         new = old;
@@ -373,11 +373,11 @@ static void dbSetValue(serverDb *db, robj *key, robj **valref, int overwrite, vo
     }
 
     /* If overwriting a hash object, un-track it from the volatile items tracking if it contains volatile items.*/
-    if (old->type == OBJ_HASH && hashTypeHasVolatileFields(old)) {
+    if (objectGetType(old) == OBJ_HASH && hashTypeHasVolatileFields(old)) {
         /* Some commands create a new value (with NO key) and use setKey to change the value of an existing key.
          * In this case the old can be replaced with the provided value and be left without a key
          * however it is still a hashObject with optional volatile items and we need to untrack it. */
-        dbUntrackKeyWithVolatileItems(db, old->hasembkey ? old : new);
+        dbUntrackKeyWithVolatileItems(db, objectHasEmbeddedKey(old) ? old : new);
     }
     /* If the new object is a hash with volatile items we need to track it again */
     dbTrackKeyWithVolatileItems(db, new);
@@ -483,7 +483,7 @@ int dbGenericDeleteWithDictIndex(serverDb *db, robj *key, int async, int flags, 
         /* Tells the module that the key has been unlinked from the database. */
         moduleNotifyKeyUnlink(key, val, db->id, flags);
         /* We want to try to unblock any module clients or clients using a blocking XREADGROUP */
-        signalDeletedKeyAsReady(db, key, val->type);
+        signalDeletedKeyAsReady(db, key, objectGetType(val));
         /* Match the incrRefCount above. */
         decrRefCount(val);
         /* Because of dbUnshareStringValue, the val in de may change. */
@@ -584,7 +584,7 @@ int dbDelete(serverDb *db, robj *key) {
  */
 robj *dbUnshareStringValue(serverDb *db, robj *key, robj *o) {
     serverAssert(objectGetType(o) == OBJ_STRING);
-    if (o->refcount != 1 || o->encoding != OBJ_ENCODING_RAW) {
+    if (objectGetRefcount(o) != 1 || objectGetEncoding(o) != OBJ_ENCODING_RAW) {
         robj *decoded = getDecodedObject(o);
         o = createRawStringObject(objectGetVal(decoded), sdslen(objectGetVal(decoded)));
         decrRefCount(decoded);
@@ -993,8 +993,8 @@ typedef struct {
 
 /* Helper function to compare key type in scan commands */
 int objectTypeCompare(robj *o, long long target) {
-    if (o->type != OBJ_MODULE) {
-        if (o->type != target)
+    if (objectGetType(o) != OBJ_MODULE) {
+        if (objectGetType(o) != target)
             return 0;
         else
             return 1;
@@ -1035,9 +1035,9 @@ void keysScanCallback(void *privdata, void *entry, int didx) {
 
     /* Handle and skip expired key. */
     if (objectIsExpired(obj)) {
-        robj kobj;
-        initStaticStringObject(kobj, key);
-        if (expireIfNeededWithDictIndex(data->db, &kobj, obj, 0, didx) != KEY_VALID) {
+        robjStatic kobj_buf;
+        robj *kobj = initStaticStringObject(&kobj_buf, key);
+        if (expireIfNeededWithDictIndex(data->db, kobj, obj, 0, didx) != KEY_VALID) {
             return;
         }
     }
@@ -1061,9 +1061,9 @@ void hashtableScanCallback(void *privdata, void *entry) {
     serverAssert(o != NULL);
 
     /* get key, value */
-    if (o->type == OBJ_SET) {
+    if (objectGetType(o) == OBJ_SET) {
         key = (sds)entry;
-    } else if (o->type == OBJ_ZSET) {
+    } else if (objectGetType(o) == OBJ_ZSET) {
         zskiplistNode *node = (zskiplistNode *)entry;
         key = zslGetNodeElement(node);
         /* zset data is copied after filtering by key */
@@ -1085,7 +1085,7 @@ void hashtableScanCallback(void *privdata, void *entry) {
 
     /* zset data must be copied. Do this after filtering to avoid unneeded
      * allocations. */
-    if (o->type == OBJ_ZSET) {
+    if (objectGetType(o) == OBJ_ZSET) {
         /* zset data is copied */
         zskiplistNode *node = (zskiplistNode *)entry;
         key = sdsdup(zslGetNodeElement(node));
@@ -1138,13 +1138,13 @@ char *getObjectTypeName(robj *o) {
         return "none";
     }
 
-    serverAssert(o->type >= 0 && o->type < OBJ_TYPE_MAX);
+    serverAssert(objectGetType(o) >= 0 && objectGetType(o) < OBJ_TYPE_MAX);
 
-    if (o->type == OBJ_MODULE) {
+    if (objectGetType(o) == OBJ_MODULE) {
         moduleValue *mv = objectGetVal(o);
         return mv->type->name;
     } else {
-        return obj_type_name[o->type];
+        return obj_type_name[objectGetType(o)];
     }
 }
 
@@ -1184,14 +1184,14 @@ int parseScanOptionsOrReply(client *c, robj *o, int start_idx, bool allow_slot, 
             }
             i += 2;
         } else if (!strcasecmp(opt, "novalues")) {
-            if (!o || o->type != OBJ_HASH) {
+            if (!o || objectGetType(o) != OBJ_HASH) {
                 addReplyError(c, "NOVALUES option can only be used in HSCAN");
                 return C_ERR;
             }
             opts->only_keys = 1;
             i++;
         } else if (!strcasecmp(opt, "noscores")) {
-            if (!o || o->type != OBJ_ZSET) {
+            if (!o || objectGetType(o) != OBJ_ZSET) {
                 addReplyError(c, "NOSCORES option can only be used in ZSCAN");
                 return C_ERR;
             }
@@ -1230,7 +1230,7 @@ void scanGenericCommandWithOptions(client *c, robj *o, unsigned long long cursor
 
     /* Object must be NULL (to iterate keys names), or the type of the object
      * must be Set, Sorted Set, or Hash. */
-    serverAssert(o == NULL || o->type == OBJ_SET || objectGetType(o) == OBJ_HASH || o->type == OBJ_ZSET);
+    serverAssert(o == NULL || objectGetType(o) == OBJ_SET || objectGetType(o) == OBJ_HASH || objectGetType(o) == OBJ_ZSET);
 
     /* Iterate the collection.
      *
@@ -1248,13 +1248,13 @@ void scanGenericCommandWithOptions(client *c, robj *o, unsigned long long cursor
     void (*free_callback)(sds) = sdsfree;
     if (o == NULL) {
         free_callback = NULL;
-    } else if (o->type == OBJ_SET && o->encoding == OBJ_ENCODING_HASHTABLE) {
+    } else if (objectGetType(o) == OBJ_SET && objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE) {
         ht = objectGetVal(o);
         free_callback = NULL;
-    } else if (objectGetType(o) == OBJ_HASH && o->encoding == OBJ_ENCODING_HASHTABLE) {
+    } else if (objectGetType(o) == OBJ_HASH && objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE) {
         ht = objectGetVal(o);
         free_callback = NULL;
-    } else if (o->type == OBJ_ZSET && o->encoding == OBJ_ENCODING_SKIPLIST) {
+    } else if (objectGetType(o) == OBJ_ZSET && objectGetEncoding(o) == OBJ_ENCODING_SKIPLIST) {
         zset *zs = objectGetVal(o);
         ht = zs->ht;
         /* scanning ZSET allocates temporary strings even though it's a dict */
@@ -1312,7 +1312,7 @@ void scanGenericCommandWithOptions(client *c, robj *o, unsigned long long cursor
                 cursor = hashtableScan(ht, cursor, hashtableScanCallback, &data);
             }
         } while (cursor && maxiterations-- && data.sampled < opts->count);
-    } else if (o->type == OBJ_SET) {
+    } else if (objectGetType(o) == OBJ_SET) {
         char *str;
         char buf[LONG_STR_SIZE];
         size_t len;
@@ -1331,7 +1331,7 @@ void scanGenericCommandWithOptions(client *c, robj *o, unsigned long long cursor
         }
         setTypeReleaseIterator(si);
         cursor = 0;
-    } else if ((objectGetType(o) == OBJ_HASH || o->type == OBJ_ZSET) && o->encoding == OBJ_ENCODING_LISTPACK) {
+    } else if ((objectGetType(o) == OBJ_HASH || objectGetType(o) == OBJ_ZSET) && objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) {
         unsigned char *p = lpFirst(objectGetVal(o));
         unsigned char *str;
         int64_t len;
@@ -1674,7 +1674,7 @@ void copyCommand(client *c) {
 
     /* Duplicate object according to object's type. */
     robj *newobj;
-    switch (o->type) {
+    switch (objectGetType(o)) {
     case OBJ_STRING: newobj = dupStringObject(o); break;
     case OBJ_LIST: newobj = listTypeDup(o); break;
     case OBJ_SET: newobj = setTypeDup(o); break;
@@ -1714,7 +1714,7 @@ void scanDatabaseForReadyKeys(serverDb *db) {
         robj *key = dictGetKey(de);
         robj *value = dbFind(db, objectGetVal(key));
         if (value) {
-            signalKeyAsReady(db, key, value->type);
+            signalKeyAsReady(db, key, objectGetType(value));
         }
     }
     dictReleaseIterator(di);
@@ -1733,14 +1733,14 @@ void scanDatabaseForDeletedKeys(serverDb *emptied, serverDb *replaced_with) {
 
         robj *value = dbFind(emptied, objectGetVal(key));
         if (value) {
-            original_type = value->type;
+            original_type = objectGetType(value);
             existed = 1;
         }
 
         if (replaced_with) {
             value = dbFind(replaced_with, objectGetVal(key));
             if (value) {
-                curr_type = value->type;
+                curr_type = objectGetType(value);
                 exists = 1;
             }
         }
@@ -2169,7 +2169,7 @@ static keyStatus expireIfNeededWithDictIndex(serverDb *db, robj *key, robj *val,
         return KEY_EXPIRED;
 
     /* The key needs to be converted from static to heap before deleted */
-    int static_key = key->refcount == OBJ_STATIC_REFCOUNT;
+    int static_key = objectGetRefcount(key) == OBJ_STATIC_REFCOUNT;
     if (static_key) {
         key = createStringObject(objectGetVal(key), sdslen(objectGetVal(key)));
     }

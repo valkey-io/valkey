@@ -29,7 +29,7 @@
  */
 
 #include "hashtable.h"
-#include "server.h"
+#include "object_internals.h"
 #include "serverassert.h"
 #include "functions.h"
 #include "intset.h" /* Compact integer set structure */
@@ -71,12 +71,36 @@ unsigned int objectGetRefcount(const robj *o) {
     return o->refcount;
 }
 
+void objectSetRefcount(robj *o, unsigned int refcount) {
+    o->refcount = refcount;
+}
+
 unsigned int objectGetLRU(const robj *o) {
     return o->lru;
 }
 
 void objectSetLRU(robj *o, unsigned int lru) {
     o->lru = lru;
+}
+
+robj *initStaticStringObject(robjStatic *buf, void *ptr) {
+    robj *o = (robj *)buf;
+    o->refcount = OBJ_STATIC_REFCOUNT;
+    o->type = OBJ_STRING;
+    o->encoding = OBJ_ENCODING_RAW;
+    o->hasexpire = 0;
+    o->hasembkey = 0;
+    o->hasembval = 0;
+    o->val_ptr = ptr;
+    return o;
+}
+
+size_t objectGetStructSize(void) {
+    return sizeof(robj);
+}
+
+int objectHasEmbeddedKey(const robj *o) {
+    return o->hasembkey;
 }
 
 /* ===================== Creation and parsing of objects ==================== */

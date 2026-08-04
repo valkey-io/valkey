@@ -137,7 +137,7 @@ static void prefetchValue(KeyPrefetchInfo *info) {
     void *entry;
     if (hashtableIncrementalFindGetResult(&info->hashtab_state, &entry)) {
         robj *val = entry;
-        if (val->encoding == OBJ_ENCODING_RAW && val->type == OBJ_STRING) {
+        if (objectGetEncoding(val) == OBJ_ENCODING_RAW && objectGetType(val) == OBJ_STRING) {
             valkey_prefetch(objectGetVal(val));
         }
     }
@@ -194,7 +194,7 @@ static void prefetchCommands(void) {
         client *c = batch->clients[i];
         if (!c || c->argc <= 1) continue;
         for (int j = 1; j < c->argc; j++) {
-            if (c->argv[j]->encoding == OBJ_ENCODING_RAW) {
+            if (objectGetEncoding(c->argv[j]) == OBJ_ENCODING_RAW) {
                 valkey_prefetch(objectGetVal(c->argv[j]));
             }
         }

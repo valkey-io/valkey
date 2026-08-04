@@ -170,7 +170,7 @@ typedef enum {
 /* Return the amount of memory used by the sds string at object->ptr
  * for a string object. This includes internal fragmentation. */
 size_t getStringObjectSdsUsedMemory(robj *o) {
-    serverAssertWithInfo(NULL, o, o->type == OBJ_STRING);
+    serverAssertWithInfo(NULL, o, objectGetType(o) == OBJ_STRING);
     if (objectGetEncoding(o) != OBJ_ENCODING_INT) {
         return sdsAllocSize(objectGetVal(o));
     }
@@ -180,13 +180,13 @@ size_t getStringObjectSdsUsedMemory(robj *o) {
 /* Return the total memory used by a string object, including the robj
  * structure and the sds string overhead (internal fragmentation). */
 size_t getStringObjectMemory(robj *o) {
-    return sizeof(robj) + getStringObjectSdsUsedMemory(o);
+    return objectGetStructSize() + getStringObjectSdsUsedMemory(o);
 }
 
 /* Return the length of a string object.
  * This does NOT include internal fragmentation or sds unused space. */
 size_t getStringObjectLen(robj *o) {
-    serverAssertWithInfo(NULL, o, o->type == OBJ_STRING);
+    serverAssertWithInfo(NULL, o, objectGetType(o) == OBJ_STRING);
     switch (objectGetEncoding(o)) {
     case OBJ_ENCODING_RAW: return sdslen(objectGetVal(o));
     case OBJ_ENCODING_EMBSTR: return sdslen(objectGetVal(o));
@@ -287,8 +287,8 @@ static int isCopyAvoidPreferred(client *c, robj *obj) {
     if (type != CLIENT_TYPE_NORMAL && type != CLIENT_TYPE_PUBSUB) return 0;
 
     if (obj) {
-        if (obj->encoding != OBJ_ENCODING_RAW) return 0;
-        if (obj->refcount == OBJ_STATIC_REFCOUNT) return 0;
+        if (objectGetEncoding(obj) != OBJ_ENCODING_RAW) return 0;
+        if (objectGetRefcount(obj) == OBJ_STATIC_REFCOUNT) return 0;
     }
 
     /* Copy avoidance is preferred for any string size starting certain number of I/O threads  */
@@ -802,7 +802,7 @@ void addReply(client *c, robj *obj) {
 
     if (sdsEncodedObject(obj)) {
         _addReplyToBufferOrList(c, objectGetVal(obj), sdslen(objectGetVal(obj)));
-    } else if (obj->encoding == OBJ_ENCODING_INT) {
+    } else if (objectGetEncoding(obj) == OBJ_ENCODING_INT) {
         /* For integer encoded strings we just convert it into a string
          * using our optimized function, and attach the resulting string
          * to the output buffer. */
@@ -1509,7 +1509,7 @@ void addReplyBulk(client *c, robj *obj) {
         /* If copy avoidance allowed, then we explicitly maintain net_output_bytes_curr_cmd.
          * We determine per-reply if tracking is enabled by checking the config in the main thread. */
         if (server.commandlog[COMMANDLOG_TYPE_LARGE_REPLY].threshold != -1) {
-            serverAssert(obj->encoding == OBJ_ENCODING_RAW);
+            serverAssert(objectGetEncoding(obj) == OBJ_ENCODING_RAW);
             size_t str_len = sdslen(objectGetVal(obj));
             uint32_t num_len = digits10(str_len);
             /* RESP encodes bulk strings as $<length>\r\n<data>\r\n */
@@ -4206,7 +4206,7 @@ static void prefetchCommandQueueKeys(client *c) {
             robj *val = entry;
             /* TODO? Prefetch all types and encodings except OBJ_ENCODING_EMBSTR
              * and OBJ_ENCODING_INT. */
-            if (val->encoding == OBJ_ENCODING_RAW && val->type == OBJ_STRING) {
+            if (objectGetEncoding(val) == OBJ_ENCODING_RAW && objectGetType(val) == OBJ_STRING) {
                 valkey_prefetch(objectGetVal(val));
             }
         }

@@ -634,7 +634,7 @@ void replicationFeedReplicas(int dictid, robj **argv, int argc) {
 
     for (int j = 0; j < argc; j++) {
         robj *o = argv[j];
-        if (o->encoding == OBJ_ENCODING_INT) {
+        if (objectGetEncoding(o) == OBJ_ENCODING_INT) {
             char aux[LONG_STR_SIZE];
             size_t dlen = ll2string(aux, sizeof(aux), (long)objectGetVal(o));
             frame = catReplicationBulkLen(frame, dlen);
@@ -745,7 +745,7 @@ void replicationFeedMonitors(client *c, list *monitors, int dictid, robj **argv,
     for (j = 0; j < argc; j++) {
         if (clientCommandArgShouldBeRedacted(c, j)) {
             cmdrepr = sdscatrepr(cmdrepr, (char *)objectGetVal(shared.redacted), sdslen(objectGetVal(shared.redacted)));
-        } else if (argv[j]->encoding == OBJ_ENCODING_INT) {
+        } else if (objectGetEncoding(argv[j]) == OBJ_ENCODING_INT) {
             cmdrepr = sdscatprintf(cmdrepr, "\"%ld\"", (long)objectGetVal(argv[j]));
         } else {
             cmdrepr = sdscatrepr(cmdrepr, (char *)objectGetVal(argv[j]), sdslen(objectGetVal(argv[j])));

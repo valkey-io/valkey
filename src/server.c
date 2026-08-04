@@ -475,17 +475,17 @@ int dictEncObjKeyCompare(const void *key1, const void *key2) {
     robj *o1 = (robj *)key1, *o2 = (robj *)key2;
     int cmp;
 
-    if (o1->encoding == OBJ_ENCODING_INT && o2->encoding == OBJ_ENCODING_INT) return objectGetVal(o1) == objectGetVal(o2);
+    if (objectGetEncoding(o1) == OBJ_ENCODING_INT && objectGetEncoding(o2) == OBJ_ENCODING_INT) return objectGetVal(o1) == objectGetVal(o2);
 
     /* Due to OBJ_STATIC_REFCOUNT, we avoid calling getDecodedObject() without
      * good reasons, because it would incrRefCount() the object, which
      * is invalid. So we check to make sure dictFind() works with static
      * objects as well. */
-    if (o1->refcount != OBJ_STATIC_REFCOUNT) o1 = getDecodedObject(o1);
-    if (o2->refcount != OBJ_STATIC_REFCOUNT) o2 = getDecodedObject(o2);
+    if (objectGetRefcount(o1) != OBJ_STATIC_REFCOUNT) o1 = getDecodedObject(o1);
+    if (objectGetRefcount(o2) != OBJ_STATIC_REFCOUNT) o2 = getDecodedObject(o2);
     cmp = dictSdsKeyCompare(objectGetVal(o1), objectGetVal(o2));
-    if (o1->refcount != OBJ_STATIC_REFCOUNT) decrRefCount(o1);
-    if (o2->refcount != OBJ_STATIC_REFCOUNT) decrRefCount(o2);
+    if (objectGetRefcount(o1) != OBJ_STATIC_REFCOUNT) decrRefCount(o1);
+    if (objectGetRefcount(o2) != OBJ_STATIC_REFCOUNT) decrRefCount(o2);
     return cmp;
 }
 
@@ -648,8 +648,8 @@ const void *hashtableObjectGetKey(const void *entry) {
 /* Prefetch the value if it's not embedded. */
 void hashtableObjectPrefetchValue(const void *entry) {
     const robj *obj = entry;
-    if (obj->encoding != OBJ_ENCODING_EMBSTR &&
-        obj->encoding != OBJ_ENCODING_INT) {
+    if (objectGetEncoding(obj) != OBJ_ENCODING_EMBSTR &&
+        objectGetEncoding(obj) != OBJ_ENCODING_INT) {
         valkey_prefetch(objectGetVal(obj));
     }
 }
@@ -2264,7 +2264,7 @@ void createSharedObjects(void) {
 
     for (j = 0; j < OBJ_SHARED_INTEGERS; j++) {
         shared.integers[j] = makeObjectShared(createObject(OBJ_STRING, (void *)(long)j));
-        shared.integers[j]->encoding = OBJ_ENCODING_INT;
+        objectSetEncoding(shared.integers[j], OBJ_ENCODING_INT);
     }
     for (j = 0; j < OBJ_SHARED_BULKHDR_LEN; j++) {
         shared.mbulkhdr[j] = createSharedStringFromSds(sdscatprintf(sdsempty(), "*%d\r\n", j));
@@ -3529,11 +3529,10 @@ struct serverCommand *lookupCommandBySdsLogic(hashtable *commands, sds s) {
     }
 
     serverAssert(argc > 0); /* Avoid warning `-Wmaybe-uninitialized` in lookupCommandLogic() */
-    robj objects[argc];
+    robjStatic objects[argc];
     robj *argv[argc];
     for (j = 0; j < argc; j++) {
-        initStaticStringObject(objects[j], strings[j]);
-        argv[j] = &objects[j];
+        argv[j] = initStaticStringObject(&objects[j], strings[j]);
     }
 
     struct serverCommand *cmd = lookupCommandLogic(commands, argv, argc, 1);
@@ -3920,14 +3919,14 @@ void call(client *c, int flags) {
      * modifications. */
     robj **debug_argv_clone = NULL;
     int debug_argc_clone = 0;
-    int *debug_argv_refcount = NULL;
+    unsigned int *debug_argv_refcount = NULL;
     if (c->flag.argv_borrowed && server.enable_debug_assert) {
         debug_argc_clone = c->original_argv ? c->original_argc : c->argc;
         debug_argv_clone = zmalloc(sizeof(robj *) * debug_argc_clone);
-        debug_argv_refcount = zmalloc(sizeof(int) * debug_argc_clone);
+        debug_argv_refcount = zmalloc(sizeof(unsigned int) * debug_argc_clone);
         for (int i = 0; i < debug_argc_clone; i++) {
             debug_argv_clone[i] = c->original_argv ? c->original_argv[i] : c->argv[i];
-            debug_argv_refcount[i] = c->original_argv ? c->original_argv[i]->refcount : c->argv[i]->refcount;
+            debug_argv_refcount[i] = c->original_argv ? objectGetRefcount(c->original_argv[i]) : objectGetRefcount(c->argv[i]);
         }
     }
 
@@ -3946,11 +3945,11 @@ void call(client *c, int flags) {
                 serverLog(LL_WARNING, "Debug: command %s modified argv[%d]", c->cmd->current_name, i);
             }
             serverAssert(debug_argv_clone[i] == argv[i]);
-            if (argv[i]->refcount < debug_argv_refcount[i]) {
-                serverLog(LL_WARNING, "Debug: command %s modified argv[%d] refcount, original value: %d, new value: %d",
-                          c->cmd->current_name, i, debug_argv_refcount[i], argv[i]->refcount);
+            if (objectGetRefcount(argv[i]) < debug_argv_refcount[i]) {
+                serverLog(LL_WARNING, "Debug: command %s modified argv[%d] refcount, original value: %u, new value: %u",
+                          c->cmd->current_name, i, debug_argv_refcount[i], objectGetRefcount(argv[i]));
             }
-            serverAssert(argv[i]->refcount >= debug_argv_refcount[i]);
+            serverAssert(objectGetRefcount(argv[i]) >= debug_argv_refcount[i]);
         }
         zfree(debug_argv_clone);
         zfree(debug_argv_refcount);

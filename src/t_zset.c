@@ -628,7 +628,7 @@ static int zslParseRange(robj *min, robj *max, zrangespec *spec) {
      * by the "(" character, it's considered "open". For instance
      * ZRANGEBYSCORE zset (1.5 (2.5 will match min < x < max
      * ZRANGEBYSCORE zset 1.5 2.5 will instead match min <= x <= max */
-    if (min->encoding == OBJ_ENCODING_INT) {
+    if (objectGetEncoding(min) == OBJ_ENCODING_INT) {
         spec->min = (long)objectGetVal(min);
     } else {
         char *s = objectGetVal(min);
@@ -642,7 +642,7 @@ static int zslParseRange(robj *min, robj *max, zrangespec *spec) {
             if (eptr[0] != '\0' || isnan(spec->min)) return C_ERR;
         }
     }
-    if (max->encoding == OBJ_ENCODING_INT) {
+    if (objectGetEncoding(max) == OBJ_ENCODING_INT) {
         spec->max = (long)objectGetVal(max);
     } else {
         char *s = objectGetVal(max);
@@ -716,7 +716,7 @@ void zsetFreeLexRange(zlexrangespec *spec) {
 int zsetParseLexRange(robj *min, robj *max, zlexrangespec *spec) {
     /* The range can't be valid if objects are integer encoded.
      * Every item must start with ( or [. */
-    if (min->encoding == OBJ_ENCODING_INT || max->encoding == OBJ_ENCODING_INT) return C_ERR;
+    if (objectGetEncoding(min) == OBJ_ENCODING_INT || objectGetEncoding(max) == OBJ_ENCODING_INT) return C_ERR;
 
     spec->min = spec->max = NULL;
     if (zslParseLexRangeItem(min, &spec->min, &spec->minex) == C_ERR ||
@@ -1281,9 +1281,9 @@ unsigned char *zzlDeleteRangeByRank(unsigned char *zl, unsigned int start, unsig
 
 unsigned long zsetLength(const robj *zobj) {
     unsigned long length = 0;
-    if (zobj->encoding == OBJ_ENCODING_LISTPACK) {
+    if (objectGetEncoding(zobj) == OBJ_ENCODING_LISTPACK) {
         length = zzlLength(objectGetVal(zobj));
-    } else if (zobj->encoding == OBJ_ENCODING_SKIPLIST) {
+    } else if (objectGetEncoding(zobj) == OBJ_ENCODING_SKIPLIST) {
         length = zslGetLength(((const zset *)objectGetVal(zobj))->zsl);
     } else {
         serverPanic("Unknown sorted set encoding");
@@ -1313,7 +1313,7 @@ robj *zsetTypeCreate(size_t size_hint, size_t val_len_hint) {
 /* Check if the existing zset should be converted to another encoding based off the
  * the size hint. */
 void zsetTypeMaybeConvert(robj *zobj, size_t size_hint, size_t value_len_hint) {
-    if (zobj->encoding == OBJ_ENCODING_LISTPACK &&
+    if (objectGetEncoding(zobj) == OBJ_ENCODING_LISTPACK &&
         (size_hint > server.zset_max_listpack_entries || value_len_hint > server.zset_max_listpack_value)) {
         zsetConvertAndExpand(zobj, OBJ_ENCODING_SKIPLIST, size_hint);
     }
@@ -1333,8 +1333,8 @@ void zsetConvertAndExpand(robj *zobj, int encoding, unsigned long cap) {
     sds ele;
     double score;
 
-    if (zobj->encoding == encoding) return;
-    if (zobj->encoding == OBJ_ENCODING_LISTPACK) {
+    if (objectGetEncoding(zobj) == encoding) return;
+    if (objectGetEncoding(zobj) == OBJ_ENCODING_LISTPACK) {
         unsigned char *zl = objectGetVal(zobj);
         unsigned char *eptr, *sptr;
         unsigned char *vstr;
@@ -1372,8 +1372,8 @@ void zsetConvertAndExpand(robj *zobj, int encoding, unsigned long cap) {
 
         zfree(objectGetVal(zobj));
         objectSetVal(zobj, zs);
-        zobj->encoding = OBJ_ENCODING_SKIPLIST;
-    } else if (zobj->encoding == OBJ_ENCODING_SKIPLIST) {
+        objectSetEncoding(zobj, OBJ_ENCODING_SKIPLIST);
+    } else if (objectGetEncoding(zobj) == OBJ_ENCODING_SKIPLIST) {
         unsigned char *zl = lpNew(0);
 
         if (encoding != OBJ_ENCODING_LISTPACK) serverPanic("Unknown target encoding");
@@ -1395,7 +1395,7 @@ void zsetConvertAndExpand(robj *zobj, int encoding, unsigned long cap) {
 
         zfree(zs);
         objectSetVal(zobj, zl);
-        zobj->encoding = OBJ_ENCODING_LISTPACK;
+        objectSetEncoding(zobj, OBJ_ENCODING_LISTPACK);
     } else {
         serverPanic("Unknown sorted set encoding");
     }
@@ -1405,7 +1405,7 @@ void zsetConvertAndExpand(robj *zobj, int encoding, unsigned long cap) {
  * and if the number of elements and the maximum element size and total elements size
  * are within the expected ranges. */
 void zsetConvertToListpackIfNeeded(robj *zobj, size_t maxelelen, size_t totelelen) {
-    if (zobj->encoding == OBJ_ENCODING_LISTPACK) return;
+    if (objectGetEncoding(zobj) == OBJ_ENCODING_LISTPACK) return;
     zset *zset = objectGetVal(zobj);
 
     if (zslGetLength(zset->zsl) <= server.zset_max_listpack_entries &&
@@ -1421,9 +1421,9 @@ void zsetConvertToListpackIfNeeded(robj *zobj, size_t maxelelen, size_t totelele
 int zsetScore(robj *zobj, sds member, double *score) {
     if (!zobj || !member) return C_ERR;
 
-    if (zobj->encoding == OBJ_ENCODING_LISTPACK) {
+    if (objectGetEncoding(zobj) == OBJ_ENCODING_LISTPACK) {
         if (zzlFind(objectGetVal(zobj), member, score) == NULL) return C_ERR;
-    } else if (zobj->encoding == OBJ_ENCODING_SKIPLIST) {
+    } else if (objectGetEncoding(zobj) == OBJ_ENCODING_SKIPLIST) {
         zset *zs = objectGetVal(zobj);
         void *entry;
         if (!hashtableFind(zs->ht, member, &entry)) return C_ERR;
@@ -1497,7 +1497,7 @@ int zsetAdd(robj *zobj, double score, sds ele, int in_flags, int *out_flags, dou
     }
 
     /* Update the sorted set according to its encoding. */
-    if (zobj->encoding == OBJ_ENCODING_LISTPACK) {
+    if (objectGetEncoding(zobj) == OBJ_ENCODING_LISTPACK) {
         unsigned char *eptr;
 
         if ((eptr = zzlFind(objectGetVal(zobj), ele, &curscore)) != NULL) {
@@ -1551,7 +1551,7 @@ int zsetAdd(robj *zobj, double score, sds ele, int in_flags, int *out_flags, dou
 
     /* Note that the above block handling listpack would have either returned or
      * converted the key to skiplist. */
-    if (zobj->encoding == OBJ_ENCODING_SKIPLIST) {
+    if (objectGetEncoding(zobj) == OBJ_ENCODING_SKIPLIST) {
         zset *zs = objectGetVal(zobj);
 
         void **node_ref_in_hashtable = hashtableFindRef(zs->ht, ele);
@@ -1626,14 +1626,14 @@ static int zsetRemoveFromSkiplist(zset *zs, sds ele) {
 /* Delete the element 'ele' from the sorted set, returning 1 if the element
  * existed and was deleted, 0 otherwise (the element was not there). */
 int zsetDel(robj *zobj, sds ele) {
-    if (zobj->encoding == OBJ_ENCODING_LISTPACK) {
+    if (objectGetEncoding(zobj) == OBJ_ENCODING_LISTPACK) {
         unsigned char *eptr;
 
         if ((eptr = zzlFind(objectGetVal(zobj), ele, NULL)) != NULL) {
             objectSetVal(zobj, zzlDelete(objectGetVal(zobj), eptr));
             return 1;
         }
-    } else if (zobj->encoding == OBJ_ENCODING_SKIPLIST) {
+    } else if (objectGetEncoding(zobj) == OBJ_ENCODING_SKIPLIST) {
         zset *zs = objectGetVal(zobj);
         if (zsetRemoveFromSkiplist(zs, ele)) {
             return 1;
@@ -1661,7 +1661,7 @@ static long zsetRank(robj *zobj, sds ele, int reverse, double *output_score) {
 
     llen = zsetLength(zobj);
 
-    if (zobj->encoding == OBJ_ENCODING_LISTPACK) {
+    if (objectGetEncoding(zobj) == OBJ_ENCODING_LISTPACK) {
         unsigned char *zl = objectGetVal(zobj);
         unsigned char *eptr, *sptr;
 
@@ -1686,7 +1686,7 @@ static long zsetRank(robj *zobj, sds ele, int reverse, double *output_score) {
         } else {
             return -1;
         }
-    } else if (zobj->encoding == OBJ_ENCODING_SKIPLIST) {
+    } else if (objectGetEncoding(zobj) == OBJ_ENCODING_SKIPLIST) {
         zset *zs = objectGetVal(zobj);
 
         void *entry;
@@ -1725,7 +1725,7 @@ robj *zsetDup(robj *o) {
         unsigned char *new_zl = zmalloc(sz);
         memcpy(new_zl, zl, sz);
         zobj = createObject(OBJ_ZSET, new_zl);
-        zobj->encoding = OBJ_ENCODING_LISTPACK;
+        objectSetEncoding(zobj, OBJ_ENCODING_LISTPACK);
     } else if (objectGetEncoding(o) == OBJ_ENCODING_SKIPLIST) {
         zobj = createZsetObject();
         zs = objectGetVal(o);
@@ -1774,7 +1774,7 @@ void zsetReplyFromListpackEntry(client *c, listpackEntry *e) {
  * The memory in `key` is not to be freed or modified by the caller.
  * 'score' can be NULL in which case it's not extracted. */
 static void zsetTypeRandomElement(robj *zsetobj, unsigned long zsetsize, listpackEntry *key, double *score) {
-    if (zsetobj->encoding == OBJ_ENCODING_SKIPLIST) {
+    if (objectGetEncoding(zsetobj) == OBJ_ENCODING_SKIPLIST) {
         zset *zs = objectGetVal(zsetobj);
         void *entry;
         hashtableFairRandomEntry(zs->ht, &entry);
@@ -1783,7 +1783,7 @@ static void zsetTypeRandomElement(robj *zsetobj, unsigned long zsetsize, listpac
         key->sval = (unsigned char *)ele;
         key->slen = sdslen(ele);
         if (score) *score = node->score;
-    } else if (zsetobj->encoding == OBJ_ENCODING_LISTPACK) {
+    } else if (objectGetEncoding(zsetobj) == OBJ_ENCODING_LISTPACK) {
         listpackEntry val;
         lpRandomPair(objectGetVal(zsetobj), zsetsize, key, &val);
         if (score) {
@@ -1953,7 +1953,7 @@ void zremCommand(client *c) {
 
     if ((zobj = lookupKeyWriteOrReply(c, key, shared.czero)) == NULL || checkType(c, zobj, OBJ_ZSET)) return;
 
-    if (zobj->encoding == OBJ_ENCODING_SKIPLIST) hashtablePauseAutoShrink(((zset *)objectGetVal(zobj))->ht);
+    if (objectGetEncoding(zobj) == OBJ_ENCODING_SKIPLIST) hashtablePauseAutoShrink(((zset *)objectGetVal(zobj))->ht);
     for (j = 2; j < c->argc; j++) {
         if (zsetDel(zobj, objectGetVal(c->argv[j]))) deleted++;
         if (zsetLength(zobj) == 0) {
@@ -1962,7 +1962,7 @@ void zremCommand(client *c) {
             break;
         }
     }
-    if (!keyremoved && zobj->encoding == OBJ_ENCODING_SKIPLIST) hashtableResumeAutoShrink(((zset *)objectGetVal(zobj))->ht);
+    if (!keyremoved && objectGetEncoding(zobj) == OBJ_ENCODING_SKIPLIST) hashtableResumeAutoShrink(((zset *)objectGetVal(zobj))->ht);
 
     if (deleted) {
         notifyKeyspaceEvent(NOTIFY_ZSET, "zrem", key, c->db->id);
@@ -2033,7 +2033,7 @@ void zremrangeGenericCommand(client *c, zrange_type rangetype) {
     }
 
     /* Step 3: Perform the range deletion operation. */
-    if (zobj->encoding == OBJ_ENCODING_LISTPACK) {
+    if (objectGetEncoding(zobj) == OBJ_ENCODING_LISTPACK) {
         switch (rangetype) {
         case ZRANGE_AUTO:
         case ZRANGE_RANK: objectSetVal(zobj, zzlDeleteRangeByRank(objectGetVal(zobj), start + 1, end + 1, &deleted)); break;
@@ -2044,7 +2044,7 @@ void zremrangeGenericCommand(client *c, zrange_type rangetype) {
             dbDelete(c->db, key);
             keyremoved = 1;
         }
-    } else if (zobj->encoding == OBJ_ENCODING_SKIPLIST) {
+    } else if (objectGetEncoding(zobj) == OBJ_ENCODING_SKIPLIST) {
         zset *zs = objectGetVal(zobj);
         hashtablePauseAutoShrink(zs->ht);
         switch (rangetype) {
@@ -2646,15 +2646,15 @@ static void zunionInterDiffGenericCommand(client *c, robj *dstkey, int numkeysIn
     for (i = 0, j = numkeysIndex + 1; i < setnum; i++, j++) {
         robj *obj = lookupKeyRead(c->db, c->argv[j]);
         if (obj != NULL) {
-            if (obj->type != OBJ_ZSET && obj->type != OBJ_SET) {
+            if (objectGetType(obj) != OBJ_ZSET && objectGetType(obj) != OBJ_SET) {
                 zfree(src);
                 addReplyErrorObject(c, shared.wrongtypeerr);
                 return;
             }
 
             src[i].subject = obj;
-            src[i].type = obj->type;
-            src[i].encoding = obj->encoding;
+            src[i].type = objectGetType(obj);
+            src[i].encoding = objectGetEncoding(obj);
         } else {
             src[i].subject = NULL;
         }
@@ -3127,7 +3127,7 @@ void genericZrangebyrankCommand(zrange_result_handler *handler,
     result_cardinality = rangelen;
 
     handler->beginResultEmission(handler, rangelen);
-    if (zobj->encoding == OBJ_ENCODING_LISTPACK) {
+    if (objectGetEncoding(zobj) == OBJ_ENCODING_LISTPACK) {
         unsigned char *zl = objectGetVal(zobj);
         unsigned char *eptr, *sptr;
         unsigned char *vstr;
@@ -3162,7 +3162,7 @@ void genericZrangebyrankCommand(zrange_result_handler *handler,
                 zzlNext(zl, &eptr, &sptr);
         }
 
-    } else if (zobj->encoding == OBJ_ENCODING_SKIPLIST) {
+    } else if (objectGetEncoding(zobj) == OBJ_ENCODING_SKIPLIST) {
         zset *zs = objectGetVal(zobj);
         zskiplist *zsl = zs->zsl;
         zskiplistNode *ln;
@@ -3230,7 +3230,7 @@ void genericZrangebyscoreCommand(zrange_result_handler *handler,
         return;
     }
 
-    if (zobj->encoding == OBJ_ENCODING_LISTPACK) {
+    if (objectGetEncoding(zobj) == OBJ_ENCODING_LISTPACK) {
         unsigned char *zl = objectGetVal(zobj);
         unsigned char *eptr, *sptr;
         unsigned char *vstr;
@@ -3282,7 +3282,7 @@ void genericZrangebyscoreCommand(zrange_result_handler *handler,
                 zzlNext(zl, &eptr, &sptr);
             }
         }
-    } else if (zobj->encoding == OBJ_ENCODING_SKIPLIST) {
+    } else if (objectGetEncoding(zobj) == OBJ_ENCODING_SKIPLIST) {
         zset *zs = objectGetVal(zobj);
         zskiplist *zsl = zs->zsl;
         zskiplistNode *ln;
@@ -3349,7 +3349,7 @@ void zcountCommand(client *c) {
     /* Lookup the sorted set */
     if ((zobj = lookupKeyReadOrReply(c, key, shared.czero)) == NULL || checkType(c, zobj, OBJ_ZSET)) return;
 
-    if (zobj->encoding == OBJ_ENCODING_LISTPACK) {
+    if (objectGetEncoding(zobj) == OBJ_ENCODING_LISTPACK) {
         unsigned char *zl = objectGetVal(zobj);
         unsigned char *eptr, *sptr;
         double score;
@@ -3380,7 +3380,7 @@ void zcountCommand(client *c) {
                 zzlNext(zl, &eptr, &sptr);
             }
         }
-    } else if (zobj->encoding == OBJ_ENCODING_SKIPLIST) {
+    } else if (objectGetEncoding(zobj) == OBJ_ENCODING_SKIPLIST) {
         zset *zs = objectGetVal(zobj);
         zskiplist *zsl = zs->zsl;
         zskiplistNode *zn;
@@ -3426,7 +3426,7 @@ void zlexcountCommand(client *c) {
         return;
     }
 
-    if (zobj->encoding == OBJ_ENCODING_LISTPACK) {
+    if (objectGetEncoding(zobj) == OBJ_ENCODING_LISTPACK) {
         unsigned char *zl = objectGetVal(zobj);
         unsigned char *eptr, *sptr;
 
@@ -3454,7 +3454,7 @@ void zlexcountCommand(client *c) {
                 zzlNext(zl, &eptr, &sptr);
             }
         }
-    } else if (zobj->encoding == OBJ_ENCODING_SKIPLIST) {
+    } else if (objectGetEncoding(zobj) == OBJ_ENCODING_SKIPLIST) {
         zset *zs = objectGetVal(zobj);
         zskiplist *zsl = zs->zsl;
         zskiplistNode *zn;
@@ -3497,7 +3497,7 @@ void genericZrangebylexCommand(zrange_result_handler *handler,
 
     handler->beginResultEmission(handler, -1);
 
-    if (zobj->encoding == OBJ_ENCODING_LISTPACK) {
+    if (objectGetEncoding(zobj) == OBJ_ENCODING_LISTPACK) {
         unsigned char *zl = objectGetVal(zobj);
         unsigned char *eptr, *sptr;
         unsigned char *vstr;
@@ -3551,7 +3551,7 @@ void genericZrangebylexCommand(zrange_result_handler *handler,
                 zzlNext(zl, &eptr, &sptr);
             }
         }
-    } else if (zobj->encoding == OBJ_ENCODING_SKIPLIST) {
+    } else if (objectGetEncoding(zobj) == OBJ_ENCODING_SKIPLIST) {
         zset *zs = objectGetVal(zobj);
         zskiplist *zsl = zs->zsl;
         zskiplistNode *ln;
@@ -3952,7 +3952,7 @@ void genericZpopCommand(client *c,
 
     /* Remove the element. */
     do {
-        if (zobj->encoding == OBJ_ENCODING_LISTPACK) {
+        if (objectGetEncoding(zobj) == OBJ_ENCODING_LISTPACK) {
             unsigned char *zl = objectGetVal(zobj);
             unsigned char *eptr, *sptr;
             unsigned char *vstr;
@@ -3972,7 +3972,7 @@ void genericZpopCommand(client *c,
             sptr = lpNext(zl, eptr);
             serverAssertWithInfo(c, zobj, sptr != NULL);
             score = zzlGetScore(sptr);
-        } else if (zobj->encoding == OBJ_ENCODING_SKIPLIST) {
+        } else if (objectGetEncoding(zobj) == OBJ_ENCODING_SKIPLIST) {
             zset *zs = objectGetVal(zobj);
             zskiplist *zsl = zs->zsl;
             zskiplistNode *zln;
@@ -4186,7 +4186,7 @@ void zrandmemberWithCountCommand(client *c, long l, int withscores) {
             addReplyArrayLen(c, count * 2);
         else
             addReplyArrayLen(c, count);
-        if (zsetobj->encoding == OBJ_ENCODING_SKIPLIST) {
+        if (objectGetEncoding(zsetobj) == OBJ_ENCODING_SKIPLIST) {
             zset *zs = objectGetVal(zsetobj);
             while (count--) {
                 void *entry;
@@ -4198,7 +4198,7 @@ void zrandmemberWithCountCommand(client *c, long l, int withscores) {
                 if (withscores) addReplyDouble(c, node->score);
                 if (c->flag.close_asap) break;
             }
-        } else if (zsetobj->encoding == OBJ_ENCODING_LISTPACK) {
+        } else if (objectGetEncoding(zsetobj) == OBJ_ENCODING_LISTPACK) {
             listpackEntry *keys, *vals = NULL;
             unsigned long limit, sample_count;
             limit = count > ZRANDMEMBER_RANDOM_SAMPLE_LIMIT ? ZRANDMEMBER_RANDOM_SAMPLE_LIMIT : count;
@@ -4220,8 +4220,8 @@ void zrandmemberWithCountCommand(client *c, long l, int withscores) {
     zsetopsrc src;
     zsetopval zval;
     src.subject = zsetobj;
-    src.type = zsetobj->type;
-    src.encoding = zsetobj->encoding;
+    src.type = objectGetType(zsetobj);
+    src.encoding = objectGetEncoding(zsetobj);
     zuiInitIterator(&src);
     memset(&zval, 0, sizeof(zval));
 
@@ -4253,7 +4253,7 @@ void zrandmemberWithCountCommand(client *c, long l, int withscores) {
      *
      * And it is inefficient to repeatedly pick one random element from a
      * listpack in CASE 4. So we use this instead. */
-    if (zsetobj->encoding == OBJ_ENCODING_LISTPACK) {
+    if (objectGetEncoding(zsetobj) == OBJ_ENCODING_LISTPACK) {
         listpackEntry *keys, *vals = NULL;
         keys = zmalloc(sizeof(listpackEntry) * count);
         if (withscores) vals = zmalloc(sizeof(listpackEntry) * count);

@@ -274,7 +274,7 @@ int geoGetPointsInRange(robj *zobj, double min, double max, GeoShape *shape, geo
     /* That's: min <= val < max */
     zrangespec range = {.min = min, .max = max, .minex = 0, .maxex = 1};
     size_t origincount = ga->used;
-    if (zobj->encoding == OBJ_ENCODING_LISTPACK) {
+    if (objectGetEncoding(zobj) == OBJ_ENCODING_LISTPACK) {
         unsigned char *zl = objectGetVal(zobj);
         unsigned char *eptr, *sptr;
         unsigned char *vstr = NULL;
@@ -305,7 +305,7 @@ int geoGetPointsInRange(robj *zobj, double min, double max, GeoShape *shape, geo
             if (ga->used && limit && ga->used >= limit) break;
             zzlNext(zl, &eptr, &sptr);
         }
-    } else if (zobj->encoding == OBJ_ENCODING_SKIPLIST) {
+    } else if (objectGetEncoding(zobj) == OBJ_ENCODING_SKIPLIST) {
         zset *zs = objectGetVal(zobj);
         zskiplist *zsl = zs->zsl;
         zskiplistNode *ln;

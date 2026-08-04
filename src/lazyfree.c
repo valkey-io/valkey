@@ -135,19 +135,19 @@ void lazyfreeResetStats(void) {
  * For lists the function returns the number of elements in the quicklist
  * representing the list. */
 size_t lazyfreeGetFreeEffort(robj *key, robj *obj, int dbid) {
-    if (obj->type == OBJ_LIST && obj->encoding == OBJ_ENCODING_QUICKLIST) {
+    if (objectGetType(obj) == OBJ_LIST && objectGetEncoding(obj) == OBJ_ENCODING_QUICKLIST) {
         quicklist *ql = objectGetVal(obj);
         return ql->len;
-    } else if (obj->type == OBJ_SET && obj->encoding == OBJ_ENCODING_HASHTABLE) {
+    } else if (objectGetType(obj) == OBJ_SET && objectGetEncoding(obj) == OBJ_ENCODING_HASHTABLE) {
         hashtable *ht = objectGetVal(obj);
         return hashtableSize(ht);
-    } else if (obj->type == OBJ_ZSET && obj->encoding == OBJ_ENCODING_SKIPLIST) {
+    } else if (objectGetType(obj) == OBJ_ZSET && objectGetEncoding(obj) == OBJ_ENCODING_SKIPLIST) {
         zset *zs = objectGetVal(obj);
         return zslGetLength(zs->zsl);
-    } else if (obj->type == OBJ_HASH && obj->encoding == OBJ_ENCODING_HASHTABLE) {
+    } else if (objectGetType(obj) == OBJ_HASH && objectGetEncoding(obj) == OBJ_ENCODING_HASHTABLE) {
         hashtable *ht = objectGetVal(obj);
         return hashtableSize(ht);
-    } else if (obj->type == OBJ_STREAM) {
+    } else if (objectGetType(obj) == OBJ_STREAM) {
         size_t effort = 0;
         stream *s = objectGetVal(obj);
 
@@ -171,7 +171,7 @@ size_t lazyfreeGetFreeEffort(robj *key, robj *obj, int dbid) {
             raxStop(&ri);
         }
         return effort;
-    } else if (obj->type == OBJ_MODULE) {
+    } else if (objectGetType(obj) == OBJ_MODULE) {
         size_t effort = moduleGetFreeEffort(key, obj, dbid);
         /* If the module's free_effort returns 0, we will use asynchronous free
          * memory by default. */
@@ -195,7 +195,7 @@ void freeObjAsync(robj *key, robj *obj, int dbid) {
      * possible. This rarely happens, however sometimes the implementation
      * of parts of the server core may call incrRefCount() to protect
      * objects, and then call dbDelete(). */
-    if (free_effort > LAZYFREE_THRESHOLD && obj->refcount == 1) {
+    if (free_effort > LAZYFREE_THRESHOLD && objectGetRefcount(obj) == 1) {
         atomic_fetch_add_explicit(&lazyfree_objects, 1, memory_order_relaxed);
         bioCreateLazyFreeJob(lazyfreeFreeObject, 1, obj);
     } else {

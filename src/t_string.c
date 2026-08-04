@@ -536,7 +536,7 @@ void mgetCommand(client *c) {
         if (o == NULL) {
             addReplyNull(c);
         } else {
-            if (o->type != OBJ_STRING) {
+            if (objectGetType(o) != OBJ_STRING) {
                 addReplyNull(c);
             } else {
                 addReplyBulk(c, o);
@@ -710,7 +710,7 @@ void incrDecrCommand(client *c, long long incr) {
     }
     value += incr;
 
-    if (o && o->refcount == 1 && objectGetEncoding(o) == OBJ_ENCODING_INT &&
+    if (o && objectGetRefcount(o) == 1 && objectGetEncoding(o) == OBJ_ENCODING_INT &&
         value >= LONG_MIN && value <= LONG_MAX) {
         new = o;
         objectSetVal(o, (void *)((long)value));
@@ -848,8 +848,8 @@ void lcsCommand(client *c) {
 
     obja = lookupKeyRead(c->db, c->argv[1]);
     objb = lookupKeyRead(c->db, c->argv[2]);
-    if ((obja && obja->type != OBJ_STRING) ||
-        (objb && objb->type != OBJ_STRING)) {
+    if ((obja && objectGetType(obja) != OBJ_STRING) ||
+        (objb && objectGetType(objb) != OBJ_STRING)) {
         addReplyError(c,
                       "The specified keys must contain string values");
         /* Don't cleanup the objects, we need to do that

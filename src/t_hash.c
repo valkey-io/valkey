@@ -169,7 +169,7 @@ void hashTypeTryConversion(robj *o, robj **argv, int start, int end) {
     int i;
     size_t sum = 0;
 
-    if (o->encoding != OBJ_ENCODING_LISTPACK) return;
+    if (objectGetEncoding(o) != OBJ_ENCODING_LISTPACK) return;
 
     /* We guess that most of the values in the input are unique, so
      * if there are enough arguments we create a pre-sized hash, which
@@ -626,7 +626,7 @@ unsigned long hashTypeLength(const robj *o) {
 
 void hashTypeInitIterator(robj *subject, hashTypeIterator *hi) {
     hi->subject = subject;
-    hi->encoding = subject->encoding;
+    hi->encoding = objectGetEncoding(subject);
     hi->volatile_items_iter = false;
 
     if (hi->encoding == OBJ_ENCODING_LISTPACK) {
@@ -641,7 +641,7 @@ void hashTypeInitIterator(robj *subject, hashTypeIterator *hi) {
 
 void hashTypeInitVolatileIterator(robj *subject, hashTypeIterator *hi) {
     hi->subject = subject;
-    hi->encoding = subject->encoding;
+    hi->encoding = objectGetEncoding(subject);
     hi->volatile_items_iter = true;
 
     if (hi->encoding == OBJ_ENCODING_LISTPACK) {
@@ -833,12 +833,12 @@ robj *hashTypeDup(robj *o) {
         unsigned char *new_zl = zmalloc(sz);
         memcpy(new_zl, zl, sz);
         hobj = createObject(OBJ_HASH, new_zl);
-        hobj->encoding = OBJ_ENCODING_LISTPACK;
+        objectSetEncoding(hobj, OBJ_ENCODING_LISTPACK);
     } else if (objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE) {
         hashtable *ht = hashtableCreate(&hashHashtableType);
         hashtableExpand(ht, hashtableSize((const hashtable *)objectGetVal(o)));
         hobj = createObject(OBJ_HASH, ht);
-        hobj->encoding = OBJ_ENCODING_HASHTABLE;
+        objectSetEncoding(hobj, OBJ_ENCODING_HASHTABLE);
 
         hashTypeInitIterator(o, &hi);
         while (hashTypeNext(&hi) != C_ERR) {
@@ -882,7 +882,7 @@ void hashReplyFromListpackEntry(client *c, listpackEntry *e) {
  * Return C_OK otherwise. */
 static int hashTypeRandomElement(robj *hashobj, unsigned long hashsize, listpackEntry *field, listpackEntry *val) {
     int rc = C_OK;
-    if (hashobj->encoding == OBJ_ENCODING_HASHTABLE) {
+    if (objectGetEncoding(hashobj) == OBJ_ENCODING_HASHTABLE) {
         void *e = NULL;
         int maxtries = 100;
         hashTypeIgnoreTTL(hashobj, true);
@@ -905,7 +905,7 @@ static int hashTypeRandomElement(robj *hashobj, unsigned long hashsize, listpack
             }
         }
         hashTypeIgnoreTTL(hashobj, false);
-    } else if (hashobj->encoding == OBJ_ENCODING_LISTPACK) {
+    } else if (objectGetEncoding(hashobj) == OBJ_ENCODING_LISTPACK) {
         lpRandomPair(objectGetVal(hashobj), hashsize, field, val);
     } else {
         serverPanic("Unknown hash encoding");
@@ -1130,7 +1130,7 @@ void hdelCommand(client *c) {
     if ((o = lookupKeyWriteOrReply(c, c->argv[1], shared.czero)) == NULL || checkType(c, o, OBJ_HASH)) return;
 
     bool hash_volatile_items = hashTypeHasVolatileFields(o);
-    if (o->encoding == OBJ_ENCODING_HASHTABLE) hashtablePauseAutoShrink(objectGetVal(o));
+    if (objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE) hashtablePauseAutoShrink(objectGetVal(o));
     for (j = 2; j < c->argc; j++) {
         if (hashTypeDelete(o, objectGetVal(c->argv[j]))) {
             deleted++;
@@ -1142,7 +1142,7 @@ void hdelCommand(client *c) {
             }
         }
     }
-    if (!keyremoved && o->encoding == OBJ_ENCODING_HASHTABLE) hashtableResumeAutoShrink(objectGetVal(o));
+    if (!keyremoved && objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE) hashtableResumeAutoShrink(objectGetVal(o));
     if (deleted) {
         if (!keyremoved && hash_volatile_items != hashTypeHasVolatileFields(o)) {
             dbUpdateObjectWithVolatileItemsTracking(c->db, o);
@@ -1181,7 +1181,7 @@ void hgetdelCommand(client *c) {
     if (checkType(c, o, OBJ_HASH)) return;
 
     bool hash_volatile_items = hashTypeHasVolatileFields(o);
-    if (o && o->encoding == OBJ_ENCODING_HASHTABLE) hashtablePauseAutoShrink(objectGetVal(o));
+    if (o && objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE) hashtablePauseAutoShrink(objectGetVal(o));
 
     initDeferredReplyBuffer(c);
 
@@ -1202,7 +1202,7 @@ void hgetdelCommand(client *c) {
             }
         }
     }
-    if (!keyremoved && o && o->encoding == OBJ_ENCODING_HASHTABLE) hashtableResumeAutoShrink(objectGetVal(o));
+    if (!keyremoved && o && objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE) hashtableResumeAutoShrink(objectGetVal(o));
 
     if (deleted) {
         if (!keyremoved && hash_volatile_items != hashTypeHasVolatileFields(o)) {
@@ -2192,7 +2192,7 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
      * structures. This case is the only one that also needs to return the
      * elements in random order. */
     if (!uniq || count == 1) {
-        if (hash->encoding == OBJ_ENCODING_HASHTABLE) {
+        if (objectGetEncoding(hash) == OBJ_ENCODING_HASHTABLE) {
             while (count--) {
                 listpackEntry field, value;
 
@@ -2207,7 +2207,7 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
                 if (c->flag.close_asap) break;
                 reply_size++;
             }
-        } else if (hash->encoding == OBJ_ENCODING_LISTPACK) {
+        } else if (objectGetEncoding(hash) == OBJ_ENCODING_LISTPACK) {
             listpackEntry *fields, *vals = NULL;
             unsigned long limit, sample_count;
 
@@ -2254,7 +2254,7 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
      *
      * And it is inefficient to repeatedly pick one random element from a
      * listpack in CASE 4. So we use this instead. */
-    if (hash->encoding == OBJ_ENCODING_LISTPACK) {
+    if (objectGetEncoding(hash) == OBJ_ENCODING_LISTPACK) {
         reply_size = count < size ? count : size;
         listpackEntry *fields, *vals = NULL;
         fields = zmalloc(sizeof(listpackEntry) * count);
@@ -2465,12 +2465,12 @@ static void defragHashTypeEntry(void *privdata, void *element_ref) {
 }
 
 size_t hashTypeScanDefrag(robj *ob, size_t cursor, void *(*defragAllocfn)(void *)) {
-    if (ob->encoding == OBJ_ENCODING_LISTPACK) {
+    if (objectGetEncoding(ob) == OBJ_ENCODING_LISTPACK) {
         unsigned char *newzl;
         if ((newzl = activeDefragAlloc(objectGetVal(ob)))) objectSetVal(ob, newzl);
         return 0;
     }
-    serverAssert(ob->encoding == OBJ_ENCODING_HASHTABLE);
+    serverAssert(objectGetEncoding(ob) == OBJ_ENCODING_HASHTABLE);
     static struct volatileSetCursor {
         size_t cursor;
         bool is_vsetDefrag;

@@ -333,6 +333,7 @@ proc get_field_in_client_list {id client_list filed} {
 proc run_solo {name code} {
     if {$::skip_solo} {
         # Solo tests are consolidated into a dedicated CI job; skip them here.
+        send_data_packet $::test_server_fd skip $name
         return
     }
     if {$::numclients == 1 || $::loop || $::external} {

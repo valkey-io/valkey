@@ -2280,16 +2280,16 @@ long long showThroughput(struct aeEventLoop *eventLoop, long long id, void *clie
         return SHOW_THROUGHPUT_INTERVAL;
     }
     if (config.num_threads) {
-        /* Fold the per-thread histograms for the live display line. The
-         * per-second histograms are reset after folding; a sample recorded
-         * concurrently can be lost, which is acceptable for display only --
-         * the final report is folded exactly after thread join. */
+        /* Use thread-0's own histograms for the live display line. This is
+         * race-free (showThroughput runs on thread-0's event loop, same thread
+         * that records into these histograms) and representative under uniform
+         * workloads. The final report folds all threads exactly after join. */
+        benchmarkThread *t0 = config.threads[0];
         hdr_reset(config.latency_histogram);
-        for (int t = 0; t < config.num_threads; t++) {
-            hdr_add(config.latency_histogram, config.threads[t]->latency_histogram);
-            hdr_add(config.current_sec_latency_histogram, config.threads[t]->current_sec_latency_histogram);
-            hdr_reset(config.threads[t]->current_sec_latency_histogram);
-        }
+        hdr_add(config.latency_histogram, t0->latency_histogram);
+        hdr_reset(config.current_sec_latency_histogram);
+        hdr_add(config.current_sec_latency_histogram, t0->current_sec_latency_histogram);
+        hdr_reset(t0->current_sec_latency_histogram);
     }
     const float dt = (float)(current_tick - config.start) / 1000.0;
     const float rps = (float)requests_finished / dt;

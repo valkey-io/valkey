@@ -6,6 +6,7 @@
 
 #include "cluster_migrateslots.h"
 #include "bio.h"
+#include "io_threads.h"
 #include "module.h"
 #include "functions.h"
 
@@ -1903,6 +1904,14 @@ slotMigrationJob *createSlotExportJob(clusterNode *target_node,
  * success. If there is an error, fail the migration with the error message. */
 void slotMigrationJobReadEstablishResponse(connection *conn) {
     client *c = (client *)connGetPrivateData(conn);
+
+    /* Don't read while an IO thread may be concurrently writing on this
+     * connection (e.g. flushing the ESTABLISH command). Concurrent read and
+     * write on the same connection is not safe with TLS. Events are
+     * level-triggered, so this handler will fire again once the write is
+     * done. Matches the guard in readQueryFromClient(). */
+    if (clientHasPendingIO(c)) return;
+
     slotMigrationJob *job = c->slot_migration_job;
     if (c->flag.close_asap || !isSlotMigrationJobInProgress(job)) {
         return;

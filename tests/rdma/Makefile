@@ -3,6 +3,7 @@ LIBVALKEY_DIR = ../../deps/libvalkey
 LIBVALKEY_LIB = $(LIBVALKEY_DIR)/lib/libvalkey.a
 LIBVALKEY_RDMA_LIB = $(LIBVALKEY_DIR)/lib/libvalkey_rdma.a
 LIBVALKEY_SDS = $(LIBVALKEY_DIR)/src/sds.c
+LIBVALKEY_SRCS = $(wildcard $(LIBVALKEY_DIR)/src/*.c) $(wildcard $(LIBVALKEY_DIR)/include/valkey/*.h) $(LIBVALKEY_DIR)/Makefile
 
 ifeq ($(RDMA_PKGCONFIG),0)
         RDMA_LIBS=$(shell $(PKG_CONFIG) --libs librdmacm libibverbs)
@@ -18,7 +19,7 @@ rdma-test: rdma-test.c test.h
 	@echo "\t~# rdma res show"
 	@echo "\n      Then launch valkey-server with RDMA support, Run ./rdma-test to test ..."
 
-$(LIBVALKEY_LIB) $(LIBVALKEY_RDMA_LIB) &:
+$(LIBVALKEY_LIB) $(LIBVALKEY_RDMA_LIB) &: $(LIBVALKEY_SRCS)
 	@$(MAKE) -C $(LIBVALKEY_DIR) static USE_RDMA=1
 
 libvalkey-test: libvalkey-test.c test.h $(LIBVALKEY_LIB) $(LIBVALKEY_RDMA_LIB) $(LIBVALKEY_SDS)

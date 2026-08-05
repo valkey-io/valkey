@@ -1910,7 +1910,7 @@ void slotMigrationJobReadEstablishResponse(connection *conn) {
      * write on the same connection is not safe with TLS. Events are
      * level-triggered, so this handler will fire again once the write is
      * done. Matches the guard in readQueryFromClient(). */
-    if (clientHasPendingIO(c)) return;
+    if (c->io_write_state != CLIENT_IDLE || c->io_read_state != CLIENT_IDLE) return;
 
     slotMigrationJob *job = c->slot_migration_job;
     if (c->flag.close_asap || !isSlotMigrationJobInProgress(job)) {

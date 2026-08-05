@@ -2150,7 +2150,10 @@ static int keyIsExpiredWithDictIndex(serverDb *db, robj *key, int dict_index) {
 
 /* Check if the key is expired. */
 int keyIsExpired(serverDb *db, robj *key) {
-    int dict_index = getKVStoreIndexForKey(objectGetVal(key));
+    sds keyname = objectGetVal(key);
+    /* The key is not guaranteed to belong to the executing command's slot, so
+     * the slot cached on the client cannot be used here, calculate it. */
+    int dict_index = server.cluster_enabled ? (int)keyHashSlot(keyname, sdslen(keyname)) : 0;
     return keyIsExpiredWithDictIndex(db, key, dict_index);
 }
 

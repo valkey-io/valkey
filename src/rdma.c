@@ -1782,15 +1782,17 @@ static int rdmaProcessPendingData(void) {
         /* a connection can be disconnected by remote peer, CM event mark state as CONN_STATE_CLOSED, kick connection
          * read/write handler to close connection */
         if (conn->state == CONN_STATE_ERROR || conn->state == CONN_STATE_CLOSED) {
+            /* Unlink before callHandler: read_handler may schedule close and
+             * free the connection when refs drop to 0 */
+            listDelNode(pending_list, ln);
+            rdma_conn->pending_list_node = NULL;
+
             /* Invoke both read_handler and write_handler, unless read_handler
                returns 0, indicating the connection has closed, in which case
                write_handler will be skipped. */
             if (callHandler(conn, conn->read_handler)) {
                 callHandler(conn, conn->write_handler);
             }
-
-            listDelNode(pending_list, ln);
-            rdma_conn->pending_list_node = NULL;
 
             ++processed;
             continue;

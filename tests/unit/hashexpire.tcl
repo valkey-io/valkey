@@ -36,11 +36,16 @@ proc check_myhash_and_expired_subkeys {r myhash expected_len initial_expired exp
     }
 }
 
+# Note: the EXAT margin is +2 (not +1) because [clock seconds] truncates: at
+# X.99s a +1 timestamp is only ~10ms in the future, and any scheduling stall
+# makes it already-past by the time the server executes the command. That
+# takes the immediate-expiry path, which emits hexpired without a preceding
+# hexpire notification and breaks notification-ordering assertions.
 proc get_short_expire_value {command} {
     expr {
         ($command eq "HEXPIRE" || $command eq "EX") ? 1 :
         ($command eq "HPEXPIRE" || $command eq "PX") ? 1000 :
-        ($command eq "HEXPIREAT" || $command eq "EXAT") ? [clock seconds] + 1 :
+        ($command eq "HEXPIREAT" || $command eq "EXAT") ? [clock seconds] + 2 :
         [clock milliseconds] + 1000
     }
 }
@@ -1057,6 +1062,13 @@ start_server {tags {"hashexpire"}} {
         assert_equal -2 [r HTTL nokey FIELDS 1 field1]
     } {}
 
+    test {HTTL/HPTTL/HEXPIRETIME/HPEXPIRETIME - check for syntax and type errors} {
+        foreach cmd {HTTL HPTTL HEXPIRETIME HPEXPIRETIME} {
+            assert_error "*ERR syntax error" {r $cmd myhash a 1 c}
+            assert_error "*value is not an integer or out of range" {r $cmd myhash FIELDS a b c}
+        }
+    }
+
     ##### EXPIRETIME ######
 
     # Basic Expiry Functionality
@@ -1400,6 +1412,13 @@ start_server {tags {"hashexpire"}} {
         assert_error {*WRONGTYPE*} {r HPERSIST mystr FIELDS 1 f1}
     }
 
+    test {HPERSIST - check for syntax and type errors} {
+        assert_error "*ERR syntax error" {r hpersist myhash a 1 c}
+        assert_error "*value is not an integer or out of range" {r hpersist myhash FIELDS a b c}
+        assert_error "*numfields should be greater than 0 and match the provided number of fields" {r hpersist myhash FIELDS 2 a b c}
+        assert_error "*numfields should be greater than 0 and match the provided number of fields" {r hpersist myhash FIELDS 4 a b c}
+    }
+
     test "HPERSIST - field does not exist" {
         r FLUSHALL
         r hset myhash field1 value1
@@ -1530,13 +1549,20 @@ start_server {tags {"hashexpire"}} {
 
         # Now write a persistent elements
         assert_equal {3} [r HSET myhash f8 v8 f9 v9 f10 v10]
-        # make sure this is the elements we will get all the time
+        # HSET on the expired f8 clears its TTL, so the hash now holds 7 expired
+        # but not yet reclaimed fields plus the 3 valid ones, 10 entries in total.
+        # CASE 4 picks fields by random sampling over all 10 of them, and gives up
+        # after a bounded number of tries, so the reply may hold fewer than the
+        # requested 3 fields even though 3 valid fields exist. See #4208.
+        # Assert only what is guaranteed: whatever comes back is distinct and is
+        # one of the valid fields.
         for {set i 1} {$i <= 50} {incr i} {
             set result [r hrandfield myhash 3]
-            assert_equal 3 [llength [split $result]]
-            assert_match {*f8*} $result
-            assert_match {*f9*} $result
-            assert_match {*f10*} $result
+            assert_lessthan_equal [llength $result] 3
+            assert_equal [llength $result] [llength [lsort -unique $result]]
+            foreach field $result {
+                assert {$field in {f8 f9 f10}}
+            }
         }
     }
 

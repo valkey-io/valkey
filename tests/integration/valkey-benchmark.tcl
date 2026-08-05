@@ -480,6 +480,34 @@ tags {"benchmark network external:skip logreqres:skip"} {
             assert_match "*Options -n and --duration are mutually exclusive*" $error
         }
 
+        test {benchmark: -r rejects overflow value} {
+            set cmd [valkeybenchmark $master_host $master_port "-r 99999999999999999999 -n 5 -t set"]
+            catch { exec {*}$cmd } error
+            assert_match "*must be between 0 and 999999999999*" $error
+        }
+
+        test {benchmark: -r rejects non-numeric value} {
+            set cmd [valkeybenchmark $master_host $master_port "-r abc -n 5 -t set"]
+            catch { exec {*}$cmd } error
+            assert_match "*is not a valid number*" $error
+        }
+
+        test {benchmark: -r with large keyspace generates keys above 2^31} {
+            set cmd [valkeybenchmark $master_host $master_port "-r 999999999999 -n 100 -t set"]
+            common_bench_setup $cmd
+            set keys [r keys *]
+            set found_large 0
+            foreach key $keys {
+                set num [string range $key 4 end]
+                scan $num %lld num
+                if {$num > 2147483647} {
+                    set found_large 1
+                    break
+                }
+            }
+            assert_equal 1 $found_large
+        }
+
         test {benchmark: warmup applies to all tests in multi-test run} {
             set start_time [clock clicks -millisec]
             set cmd [valkeybenchmark $master_host $master_port "-r 5 --warmup 2 -n 50 -t set,get,incr"]

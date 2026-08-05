@@ -65,6 +65,9 @@ typedef enum {
 #define CONN_FLAG_WRITE_BARRIER (1 << 1)        /* Write barrier requested */
 #define CONN_FLAG_ALLOW_ACCEPT_OFFLOAD (1 << 2) /* Connection accept can be offloaded to IO threads. */
 
+#define CONN_POSTPONE_READ (1 << 0)
+#define CONN_POSTPONE_WRITE (1 << 1)
+
 typedef enum {
     CONN_TYPE_INVALID = -1,
     CONN_TYPE_SOCKET,
@@ -141,7 +144,7 @@ typedef struct ConnectionType {
 
     /* Postpone update state - with IO threads & TLS we don't want the IO threads to update the event loop events - let
      * the main-thread do it */
-    void (*postpone_update_state)(struct connection *conn, int);
+    void (*postpone_update_state)(struct connection *conn, int postpone_mask);
     /* Called by the main-thread */
     void (*update_state)(struct connection *conn);
 
@@ -517,9 +520,9 @@ static inline void connUpdateState(connection *conn) {
     }
 }
 
-static inline void connSetPostponeUpdateState(connection *conn, int on) {
-    if (conn->type->postpone_update_state) {
-        conn->type->postpone_update_state(conn, on);
+static inline void connSetPostponeUpdateState(connection *conn, int postpone_mask) {
+    if (conn && conn->type && conn->type->postpone_update_state) {
+        conn->type->postpone_update_state(conn, postpone_mask);
     }
 }
 

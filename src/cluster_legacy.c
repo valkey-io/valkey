@@ -4258,11 +4258,19 @@ int clusterProcessPacket(clusterLink *link) {
             } else {
                 /* Node is a replica. */
                 clusterNode *sender_claimed_primary = clusterLookupNode(msg->replicaof, CLUSTER_NAMELEN);
+                int ignore_failed_primary_msg = sender_claimed_primary && nodeFailed(sender_claimed_primary);
 
-                if (sender_last_reported_as_primary) {
+                if (ignore_failed_primary_msg) {
+                    serverLog(LL_NOTICE,
+                              "Ignore stale replica message from %.40s (%s) in shard %.40s; claimed primary %.40s "
+                              "(%s) is marked FAIL",
+                              sender->name, humanNodename(sender), sender->shard_id, sender_claimed_primary->name,
+                              humanNodename(sender_claimed_primary));
+                }
+
+                if (sender_last_reported_as_primary && !ignore_failed_primary_msg) {
                     serverLog(LL_DEBUG, "node %.40s (%s) announces that it is a %s in shard %.40s", sender->name,
                               humanNodename(sender), sender_claims_to_be_primary ? "primary" : "replica", sender->shard_id);
-
                     /* Primary turned into a replica! Reconfigure the node. */
                     if (sender_claimed_primary && areInSameShard(sender_claimed_primary, sender)) {
                         /* `sender` was a primary and was in the same shard as its new primary */
@@ -4334,7 +4342,8 @@ int clusterProcessPacket(clusterLink *link) {
                 }
 
                 /* Primary node changed for this replica? */
-                if (sender_claimed_primary && sender->replicaof != sender_claimed_primary) {
+                if (sender_claimed_primary && !ignore_failed_primary_msg &&
+                    sender->replicaof != sender_claimed_primary) {
                     if (sender->replicaof) clusterNodeRemoveReplica(sender->replicaof, sender);
                     serverLog(LL_NOTICE, "Node %.40s (%s) is now a replica of node %.40s (%s) in shard %.40s",
                               sender->name, humanNodename(sender), sender_claimed_primary->name,

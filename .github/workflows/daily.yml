@@ -2229,11 +2229,35 @@ jobs:
           merge-multiple: false
 
       - name: Merge into single file
+        id: merge
         run: |
           python3 << 'EOF'
           import json, glob, os
 
           merged = {}
+          damaged = []
+
+          # Every field the Tcl writers emit for a failure. A file can parse as
+          # JSON yet still be damaged: a run killed mid-write can leave a null or
+          # a half-built object in the list. Those publish as real failures the
+          # detector then reads as empty, so the entry shape is checked too, not
+          # just the list around it.
+          REQUIRED_FAILURE_FIELDS = ("test_name", "test_file", "status", "error")
+
+          def invalid_entry_reason(entry, index):
+              """Why *entry* is not a usable failure object, or None if it is."""
+              if not isinstance(entry, dict):
+                  return f"entry {index} is {type(entry).__name__}, expected an object"
+              missing = [f for f in REQUIRED_FAILURE_FIELDS if f not in entry]
+              if missing:
+                  return f"entry {index} is missing {', '.join(missing)}"
+              nonstring = [
+                  f for f in REQUIRED_FAILURE_FIELDS
+                  if not isinstance(entry[f], str)
+              ]
+              if nonstring:
+                  return f"entry {index} has non-string {', '.join(nonstring)}"
+              return None
 
           for job_dir in sorted(glob.glob("individual-failures/test-failures-*")):
               job_name = os.path.basename(job_dir).replace("test-failures-", "")
@@ -2241,8 +2265,34 @@ jobs:
 
               for suite_file in glob.glob(os.path.join(job_dir, "*.json")):
                   suite_name = os.path.splitext(os.path.basename(suite_file))[0]
-                  with open(suite_file) as f:
-                      data = json.load(f)
+                  # Read each suite independently. A damaged file (a job killed
+                  # mid-write, a truncated upload) must not abort the merge: the
+                  # artifact carries every other job's failures too.
+                  try:
+                      with open(suite_file, encoding="utf-8") as f:
+                          data = json.load(f)
+                  except (OSError, ValueError) as exc:
+                      damaged.append(f"{job_name}/{suite_name}: {exc}")
+                      print(f"{job_name}/{suite_name}: unreadable, skipped ({exc})")
+                      continue
+                  # A suite file is a list of failures. Anything else parses but
+                  # has no length, so treat it as damaged rather than letting it
+                  # raise past this loop and lose the whole artifact.
+                  if not isinstance(data, list):
+                      reason = f"expected a JSON list, got {type(data).__name__}"
+                      damaged.append(f"{job_name}/{suite_name}: {reason}")
+                      print(f"{job_name}/{suite_name}: unreadable, skipped ({reason})")
+                      continue
+                  entry_reasons = [
+                      r for r in (
+                          invalid_entry_reason(e, i) for i, e in enumerate(data)
+                      ) if r
+                  ]
+                  if entry_reasons:
+                      reason = "; ".join(entry_reasons)
+                      damaged.append(f"{job_name}/{suite_name}: {reason}")
+                      print(f"{job_name}/{suite_name}: unreadable, skipped ({reason})")
+                      continue
                   merged[job_name][suite_name] = data
                   count = len(data)
                   if count:
@@ -2252,6 +2302,23 @@ jobs:
 
           with open("all-test-failures.json", "w") as f:
               json.dump(merged, f, indent=2)
+
+          if damaged:
+              # Record the loss for the step that fails this job after the
+              # upload. The artifact is still worth publishing because it holds
+              # every readable job's failures, but it is incomplete, so the job
+              # must not report success.
+              print(f"::error::{len(damaged)} suite file(s) could not be read "
+                    f"and are missing from the artifact: {'; '.join(damaged)}")
+              with open("consolidation-damage.txt", "w") as f:
+                  f.write("\n".join(damaged))
+
+          # Signal damage to later steps so the per-job artifacts that fed the
+          # merge are kept for inspection rather than deleted.
+          step_output = os.environ.get("GITHUB_OUTPUT")
+          if step_output:
+              with open(step_output, "a") as f:
+                  f.write(f"damaged={'true' if damaged else 'false'}\n")
           EOF
 
       - name: Upload consolidated failures
@@ -2261,7 +2328,11 @@ jobs:
           path: all-test-failures.json
           retention-days: 30
 
+      # Skip the cleanup when a suite file was damaged, so the per-job
+      # artifacts survive for inspection. The parse-error string alone is not
+      # enough to reconstruct a file killed mid-write or truncated on upload.
       - name: Delete individual artifacts
+        if: steps.merge.outputs.damaged != 'true'
         uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
         with:
           script: |
@@ -2286,6 +2357,17 @@ jobs:
               }
             }
             console.log('Done. Individual artifacts deleted.');
+
+      # Last step, so the consolidated artifact is published and any healthy
+      # per-job artifacts are cleaned up first. An artifact missing some suites
+      # must not leave this job green.
+      - name: Fail if any suite file was unreadable
+        run: |
+          if [ -f consolidation-damage.txt ]; then
+            echo "Suite files missing from the artifact:"
+            cat consolidation-damage.txt
+            exit 1
+          fi
   notify-about-job-results:
     runs-on: ubuntu-latest
     if: always() && github.event_name == 'schedule' && github.repository == 'valkey-io/valkey'
@@ -2324,6 +2406,7 @@ jobs:
       - test-alpine-libc-malloc
       - test-alpine-32bit
       - reply-schemas-validator
+      - consolidate-test-failures
     steps:
       - name: Collect job status
         run: |

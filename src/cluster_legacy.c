@@ -1008,6 +1008,9 @@ int clusterLoadConfig(char *filename) {
                 sdsfreesplitres(argv, argc);
                 goto fmterr;
             }
+            /* The return value of clusterAddSlot is ignored here, which is fine
+             * because a well-formed nodes.conf has no slot conflicts; any stray
+             * ownership from a bad config is eventually corrected by gossip. */
             while (start <= stop) clusterAddSlot(n, start++);
         }
 
@@ -4209,8 +4212,8 @@ int clusterProcessPacket(clusterLink *link) {
                     serverLog(LL_DEBUG, "Node %.40s (%s) announces that it is a primary in shard %.40s",
                               sender->name, humanNodename(sender), sender->shard_id);
                     clusterSetNodeAsPrimary(sender);
-                } else if (!nodeIsPrimary(sender)) {
-                    /* Sender has no role locally yet (e.g. created with noflags
+                } else if (!sender_last_reported_as_primary) {
+                    /* `sender` has no role locally yet (e.g. created with noflags
                      * from nodes.conf). Adopt the advertised primary role. */
                     serverLog(LL_NOTICE, "Node %.40s (%s) had no role and now announces as a primary in shard %.40s",
                               sender->name, humanNodename(sender), sender->shard_id);
@@ -4292,11 +4295,21 @@ int clusterProcessPacket(clusterLink *link) {
 
                     /* Update config and state. */
                     clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_FSYNC_CONFIG);
-                } else if (!nodeIsReplica(sender)) {
-                    /* Sender has no role locally yet (e.g. created with noflags
+                } else if (!sender_last_reported_as_replica) {
+                    /* `sender` has no role locally yet (e.g. created with noflags
                      * from nodes.conf). Adopt the advertised replica role. */
                     serverLog(LL_NOTICE, "Node %.40s (%s) had no role and now announces as a replica in shard %.40s",
                               sender->name, humanNodename(sender), sender->shard_id);
+                    /* A replica must never own slots, so any residual ownership is
+                     * an abnormal leftover and should be cleared so the replica does
+                     * not keep slots it never serves. */
+                    int slots = clusterDelNodeSlots(sender);
+                    if (slots) {
+                        serverLog(LL_NOTICE,
+                                  "Node %.40s (%s) became a replica in shard %.40s, removed %d slot(s) it owned",
+                                  sender->name, humanNodename(sender), sender->shard_id, slots);
+                    }
+                    serverAssert(sender->numslots == 0);
                     sender->flags &= ~(CLUSTER_NODE_PRIMARY | CLUSTER_NODE_MIGRATE_TO);
                     sender->flags |= CLUSTER_NODE_REPLICA;
                     clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE);

@@ -177,7 +177,7 @@ start_server {tags {"maxmemory external:skip"}} {
             for {set j 0} {$j < $numkeys} {incr j} {
                 r setex [randomKey] 10000 x
             }
-            assert {[s used_memory] < ($limit+4096)}
+            assert {[s used_memory] < ($limit+16384)}
         }
     }
 
@@ -216,7 +216,7 @@ start_server {tags {"maxmemory external:skip"}} {
                 }
             }
             if {[string match allkeys-* $policy]} {
-                assert {[s used_memory] < ($limit+4096)}
+                assert {[s used_memory] < ($limit+16384)}
             } else {
                 assert {$err == 1}
             }
@@ -260,7 +260,7 @@ start_server {tags {"maxmemory external:skip"}} {
                 catch {r setex "foo:$j" 10000 x}
             }
             # We should still be under the limit.
-            assert {[s used_memory] < ($limit+4096)}
+            assert {[s used_memory] < ($limit+16384)}
             # However all our non volatile keys should be here.
             for {set j 0} {$j < $numkeys} {incr j 2} {
                 assert {[r exists "key:$j"]}

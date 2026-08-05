@@ -173,7 +173,7 @@ proc do_node_restart {idx} {
 }
 
 # Disable replica migration to prevent empty nodes from joining other shards.
-start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {cluster-allow-replica-migration no cluster-node-timeout 15000 cluster-databases 16}} {
+start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides {cluster-allow-replica-migration no cluster-node-timeout 15000 cluster-databases 16}} {
 
     set node0_id [R 0 CLUSTER MYID]
     set node1_id [R 1 CLUSTER MYID]
@@ -2138,7 +2138,7 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {cluste
     }
 }
 
-start_cluster 3 0 {tags {logreqres:skip external:skip cluster}} {
+start_cluster 3 0 {tags {logreqres:skip external:skip cluster network}} {
     set 16383_slot_tag "{6ZJ}"
     set node0_id [R 0 CLUSTER MYID]
 
@@ -2174,7 +2174,7 @@ start_cluster 3 0 {tags {logreqres:skip external:skip cluster}} {
     }
 }
 
-start_cluster 3 6 {tags {logreqres:skip external:skip cluster}} {
+start_cluster 3 6 {tags {logreqres:skip external:skip cluster network}} {
     set node0_id [R 0 CLUSTER MYID]
     set node1_id [R 1 CLUSTER MYID]
     set node2_id [R 2 CLUSTER MYID]
@@ -2230,7 +2230,7 @@ start_cluster 3 6 {tags {logreqres:skip external:skip cluster}} {
     }
 }
 
-start_cluster 3 0 {tags {logreqres:skip external:skip cluster}} {
+start_cluster 3 0 {tags {logreqres:skip external:skip cluster network}} {
 
     set node0_id [R 0 CLUSTER MYID]
     set node1_id [R 1 CLUSTER MYID]
@@ -2295,7 +2295,7 @@ start_cluster 3 0 {tags {logreqres:skip external:skip cluster}} {
 
 }
 
-start_cluster 3 3 {tags {logreqres:skip external:skip cluster aofrw} overrides {appendonly yes auto-aof-rewrite-percentage 0}} {
+start_cluster 3 3 {tags {logreqres:skip external:skip cluster aofrw network} overrides {appendonly yes auto-aof-rewrite-percentage 0}} {
     set node0_id [R 0 CLUSTER MYID]
     set node1_id [R 1 CLUSTER MYID]
     set node2_id [R 2 CLUSTER MYID]
@@ -2445,12 +2445,12 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster aofrw} overrides {
     }
 }
 
-start_cluster 3 0 {tags {logreqres:skip external:skip cluster} overrides {cluster-require-full-coverage no slot-migration-max-failover-repl-bytes 0}} {
+start_cluster 3 0 {tags {logreqres:skip external:skip cluster network} overrides {cluster-require-full-coverage no slot-migration-max-failover-repl-bytes 0 repl-timeout 3600}} {
     test "Slot migration remaining_repl_size on the source node" {
         set 16383_slot_tag "{6ZJ}"
         set_debug_prevent_pause 1
 
-        # Move 16383 from R0 to R2
+        # Move 16383 from R2 to R0.
         assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE [R 0 CLUSTER MYID]]
         set jobname [get_job_name 2 16383]
         wait_for_migration_field 2 $jobname state waiting-to-pause
@@ -2465,7 +2465,7 @@ start_cluster 3 0 {tags {logreqres:skip external:skip cluster} overrides {cluste
         pause_process [srv 0 pid]
         set bigstr [string repeat x 1024000]
         for {set j 0} {$j < 50} {incr j} {
-            R 2 set "$16383_slot_tag:key:" $bigstr
+            R 2 set "$16383_slot_tag:key" $bigstr
         }
 
         # Check R0 remaining repl size is OK.
@@ -2482,5 +2482,53 @@ start_cluster 3 0 {tags {logreqres:skip external:skip cluster} overrides {cluste
         set export_migration [get_migration_by_name 2 $jobname]
         assert_equal [dict get $export_migration remaining_repl_size] 0
         assert_equal [dict get $import_migration remaining_repl_size] 0
+
+        # Check the remaining_repl_size log is OK.
+        verify_log_message -2 "*Pausing writes (remaining_repl_size is 0) to allow slot migration*" 0
+    }
+}
+
+start_cluster 3 0 {tags {logreqres:skip external:skip cluster network} overrides {cluster-require-full-coverage no slot-migration-max-failover-repl-bytes -1 repl-timeout 3600}} {
+    test "slot-migration-max-failover-repl-bytes -1 disables repl bytes limit" {
+        set 16383_slot_tag "{6ZJ}"
+
+        # Use PREVENT-PAUSE to hold the migration at the waiting-to-pause
+        # state so we can fill the replication buffer first.
+        R 2 DEBUG SLOTMIGRATION PREVENT-PAUSE 1
+
+        # Move slot 16383 from R2 to R0.
+        assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE [R 0 CLUSTER MYID]]
+        set jobname [get_job_name 2 16383]
+        wait_for_migration_field 2 $jobname state waiting-to-pause
+
+        # Pause the target (R0) process and generate data to fill the
+        # replication buffer on the source (R2).
+        pause_process [srv 0 pid]
+        set bigstr [string repeat x 1024000]
+        for {set j 0} {$j < 50} {incr j} {
+            R 2 set "$16383_slot_tag:key" $bigstr
+        }
+
+        # Confirm the replication buffer has accumulated data.
+        set export_migration [get_migration_by_name 2 $jobname]
+        set remaining_repl_size [dict get $export_migration remaining_repl_size]
+        assert_morethan $remaining_repl_size [expr 1024000 * 25]
+
+        # Resume the PREVENT-PAUSE.
+        # With slot-migration-max-failover-repl-bytes -1, the source (R2) should proceed
+        # to pause writes regardless of the large remaining_repl_size.
+        R 2 DEBUG SLOTMIGRATION PREVENT-PAUSE 0
+        # The logged remaining_repl_size is racy: the migration cron appends
+        # SYNCSLOTS ACKs to the same job->client buffer and R0 is paused so it
+        # never drains. Assert a lower bound against the snapshot.
+        set log_line [lindex [wait_for_log_messages -2 {"*Pausing writes*"} 0 1000 10] 0]
+        if {![regexp {remaining_repl_size is (\d+)} $log_line _ actual_repl_size]} {
+            fail "could not parse remaining_repl_size from log line: $log_line"
+        }
+        assert_morethan_equal $actual_repl_size $remaining_repl_size
+
+        # Resume R0 and wait for R0 to finish the migration.
+        resume_process [srv 0 pid]
+        wait_for_migration 0 16383
     }
 }

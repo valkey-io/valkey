@@ -1,0 +1,122 @@
+version = 1
+
+[[annotations]]
+path = "**"
+precedence = "aggregate"
+SPDX-FileCopyrightText = ["2024-present, Valkey contributors", "2006-2020, Redis Ltd."]
+SPDX-License-Identifier = "BSD-3-Clause"
+
+[[annotations]]
+path = "src/setproctitle.c"
+precedence = "aggregate"
+SPDX-FileCopyrightText = ["2010, William Ahern", "2013, Redis Ltd.", "2013, Stam He"]
+SPDX-License-Identifier = "MIT"
+
+[[annotations]]
+path = ["src/crc64.c", "src/crc64.h"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = ["2014, Matt Stancliff <matt@genges.com>", "2020, Amazon Web Services"]
+SPDX-License-Identifier = "BSD-3-Clause"
+
+[[annotations]]
+path = ["src/sha1.c", "src/sha1.h"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "Steve Reid <steve@edmweb.com>"
+SPDX-License-Identifier = "CC0-1.0"
+
+[[annotations]]
+path = ["src/sha256.c", "src/sha256.h"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "Brad Conte <brad@bradconte.com>"
+SPDX-License-Identifier = "CC0-1.0"
+
+[[annotations]]
+path = "src/siphash.c"
+precedence = "aggregate"
+SPDX-FileCopyrightText = ["2012-2016, Jean-Philippe Aumasson <jeanphilippe.aumasson@gmail.com>", "2012-2014, Daniel J. Bernstein <djb@cr.yp.to>", "2017, Redis Ltd."]
+SPDX-License-Identifier = "CC0-1.0"
+
+[[annotations]]
+path = ["src/mt19937-64.c", "src/mt19937-64.h"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2004, Makoto Matsumoto and Takuji Nishimura"
+SPDX-License-Identifier = "BSD-3-Clause"
+
+[[annotations]]
+path = ["src/crcspeed.c", "src/crcspeed.h"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = ["2013, Mark Adler", "2019-2024, Josiah Carlson <josiah.carlson@gmail.com>"]
+SPDX-License-Identifier = "Zlib"
+
+[[annotations]]
+path = ["src/crccombine.c", "src/crccombine.h"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = ["2013, Mark Adler", "2019-2024, Josiah Carlson <josiah.carlson@gmail.com>"]
+SPDX-License-Identifier = "Zlib"
+
+[[annotations]]
+path = "src/strl.c"
+precedence = "aggregate"
+SPDX-FileCopyrightText = "1998, 2015, Todd C. Miller <millert@openbsd.org>"
+SPDX-License-Identifier = "ISC"
+
+[[annotations]]
+path = ["src/pqsort.c", "src/pqsort.h"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = ["1992, 1993, The Regents of the University of California", "2009-2012, Redis Ltd."]
+SPDX-License-Identifier = "BSD-3-Clause"
+
+[[annotations]]
+path = ["src/lzf.h", "src/lzfP.h", "src/lzf_c.c", "src/lzf_d.c"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2000-2010, Marc Alexander Lehmann <schmorp@schmorp.de>"
+SPDX-License-Identifier = "BSD-2-Clause"
+
+[[annotations]]
+path = "deps/libvalkey/**"
+precedence = "aggregate"
+SPDX-FileCopyrightText = ["2024-present, libvalkey contributors", "2009-2022, Salvatore Sanfilippo <antirez@gmail.com>", "2009-2022, Pieter Noordhuis <pcnoordhuis@gmail.com>", "2020-2022, Bjorn Svensson <bjorn.a.svensson@est.tech>", "2020-2022, Viktor Söderqvist <viktor.soderqvist@est.tech>", "2021, Red Hat"]
+SPDX-License-Identifier = "BSD-3-Clause"
+
+[[annotations]]
+path = "deps/jemalloc/**"
+precedence = "aggregate"
+SPDX-FileCopyrightText = ["2002-present, Jason Evans <jasone@canonware.com>", "2007-2012, Mozilla Foundation", "2009-present, Facebook, Inc.", "2024-present, Valkey contributors"]
+SPDX-License-Identifier = "BSD-2-Clause"
+
+[[annotations]]
+path = "deps/linenoise/**"
+precedence = "aggregate"
+SPDX-FileCopyrightText = ["2010-2016, Redis Ltd.", "2010-2013, Pieter Noordhuis <pcnoordhuis@gmail.com>", "2024-present, Valkey contributors"]
+SPDX-License-Identifier = "BSD-2-Clause"
+
+[[annotations]]
+path = "deps/hdr_histogram/**"
+precedence = "aggregate"
+SPDX-FileCopyrightText = ["2012-2014, Gil Tene", "2014, Michael Barker", "2014, Matt Warren", "2020-2022, Redis Ltd."]
+SPDX-License-Identifier = "CC0-1.0 AND BSD-2-Clause"
+
+[[annotations]]
+path = "deps/lua/**"
+precedence = "aggregate"
+SPDX-FileCopyrightText = ["1994-2012, Lua.org, PUC-Rio", "2008-2012, Mike Pall", "2010-2012, Mark Pulford <mark@kyne.com.au>", "2015-2024, Redis Ltd.", "2024-present, Valkey contributors"]
+SPDX-License-Identifier = "MIT"
+
+[[annotations]]
+path = "deps/fast_float/**"
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2021, The fast_float authors"
+SPDX-License-Identifier = "MIT"
+
+[[annotations]]
+path = "deps/fpconv/**"
+precedence = "aggregate"
+SPDX-FileCopyrightText = ["2013-2019, Andreas Samoljuk <as.smljk@gmail.com>", "2009, Florian Loitsch <florian.loitsch@inria.fr>"]
+SPDX-License-Identifier = "BSL-1.0"
+
+[[annotations]]
+path = "deps/gtest-parallel/**"
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2013, Google Inc."
+SPDX-License-Identifier = "Apache-2.0"
+SPDX-FileComment = "Development/testing dependency only. Not present in compiled binaries."

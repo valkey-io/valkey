@@ -72,7 +72,7 @@ static ssize_t valkeyNetRead(valkeyContext *c, char *buf, size_t bufcap) {
             valkeySetError(c, VALKEY_ERR_TIMEOUT, "recv timeout");
             return -1;
         } else {
-            valkeySetError(c, VALKEY_ERR_IO, strerror(errno));
+            valkeySetErrorFromErrno(c, VALKEY_ERR_IO, NULL);
             return -1;
         }
     } else if (nread == 0) {
@@ -92,23 +92,12 @@ static ssize_t valkeyNetWrite(valkeyContext *c) {
             /* Try again */
             return 0;
         } else {
-            valkeySetError(c, VALKEY_ERR_IO, strerror(errno));
+            valkeySetErrorFromErrno(c, VALKEY_ERR_IO, NULL);
             return -1;
         }
     }
 
     return nwritten;
-}
-
-static void valkeySetErrorFromErrno(valkeyContext *c, int type, const char *prefix) {
-    int errorno = errno; /* snprintf() may change errno */
-    char buf[128] = {0};
-    size_t len = 0;
-
-    if (prefix != NULL)
-        len = snprintf(buf, sizeof(buf), "%s: ", prefix);
-    strerror_r(errorno, (char *)(buf + len), sizeof(buf) - len);
-    valkeySetError(c, type, buf);
 }
 
 static int valkeySetReuseAddr(valkeyContext *c) {
@@ -180,7 +169,7 @@ int valkeyKeepAlive(valkeyContext *c, int interval) {
 
 #ifndef _WIN32
     if (setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &val, sizeof(val)) == -1) {
-        valkeySetError(c, VALKEY_ERR_OTHER, strerror(errno));
+        valkeySetErrorFromErrno(c, VALKEY_ERR_OTHER, NULL);
         return VALKEY_ERR;
     }
 
@@ -188,13 +177,13 @@ int valkeyKeepAlive(valkeyContext *c, int interval) {
 
 #if defined(__APPLE__) && defined(__MACH__)
     if (setsockopt(fd, IPPROTO_TCP, TCP_KEEPALIVE, &val, sizeof(val)) < 0) {
-        valkeySetError(c, VALKEY_ERR_OTHER, strerror(errno));
+        valkeySetErrorFromErrno(c, VALKEY_ERR_OTHER, NULL);
         return VALKEY_ERR;
     }
 #else
 #if defined(__GLIBC__) && !defined(__FreeBSD_kernel__)
     if (setsockopt(fd, IPPROTO_TCP, TCP_KEEPIDLE, &val, sizeof(val)) < 0) {
-        valkeySetError(c, VALKEY_ERR_OTHER, strerror(errno));
+        valkeySetErrorFromErrno(c, VALKEY_ERR_OTHER, NULL);
         return VALKEY_ERR;
     }
 
@@ -202,13 +191,13 @@ int valkeyKeepAlive(valkeyContext *c, int interval) {
     if (val == 0)
         val = 1;
     if (setsockopt(fd, IPPROTO_TCP, TCP_KEEPINTVL, &val, sizeof(val)) < 0) {
-        valkeySetError(c, VALKEY_ERR_OTHER, strerror(errno));
+        valkeySetErrorFromErrno(c, VALKEY_ERR_OTHER, NULL);
         return VALKEY_ERR;
     }
 
     val = 3;
     if (setsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT, &val, sizeof(val)) < 0) {
-        valkeySetError(c, VALKEY_ERR_OTHER, strerror(errno));
+        valkeySetErrorFromErrno(c, VALKEY_ERR_OTHER, NULL);
         return VALKEY_ERR;
     }
 #endif
@@ -486,6 +475,7 @@ int valkeyContextConnectTcp(valkeyContext *c, const valkeyOptions *options) {
             continue;
 
         c->fd = s;
+        /* Use non-blocking connect to be able to enforce connect timeout. */
         if (valkeySetBlocking(c, 0) != VALKEY_OK)
             goto error;
         if (c->tcp.source_addr) {
@@ -515,9 +505,7 @@ int valkeyContextConnectTcp(valkeyContext *c, const valkeyOptions *options) {
             }
             freeaddrinfo(bservinfo);
             if (!bound) {
-                char buf[128];
-                snprintf(buf, sizeof(buf), "Can't bind socket: %s", strerror(errno));
-                valkeySetError(c, VALKEY_ERR_OTHER, buf);
+                valkeySetErrorFromErrno(c, VALKEY_ERR_OTHER, "Can't bind socket");
                 goto error;
             }
         }
@@ -532,43 +520,39 @@ int valkeyContextConnectTcp(valkeyContext *c, const valkeyOptions *options) {
         c->addrlen = p->ai_addrlen;
 
         if (connect(s, p->ai_addr, p->ai_addrlen) == -1) {
-            if (errno == EHOSTUNREACH) {
-                valkeyNetClose(c);
-                continue;
-            } else if (errno == EINPROGRESS) {
-                if (blocking) {
-                    goto wait_for_ready;
-                }
-                /* This is ok.
-                 * Note that even when it's in blocking mode, we unset blocking
-                 * for `connect()`
-                 */
-            } else if (errno == EADDRNOTAVAIL && reuseaddr) {
-                if (++reuses >= VALKEY_CONNECT_RETRIES) {
-                    goto error;
-                } else {
+            if (errno == EINPROGRESS) {
+                if (blocking && valkeyContextWaitReady(c, timeout_msec) != VALKEY_OK) {
                     valkeyNetClose(c);
+                    continue;
+                }
+                /* Non-blocking: EINPROGRESS is expected, continue to success. */
+            } else if (errno == EADDRNOTAVAIL && reuseaddr) {
+                valkeyNetClose(c);
+                if (++reuses >= VALKEY_CONNECT_RETRIES) {
+                    continue;
+                } else {
                     goto addrretry;
                 }
             } else {
-            wait_for_ready:
-                if (valkeyContextWaitReady(c, timeout_msec) != VALKEY_OK)
-                    goto error;
-                if (valkeySetTcpNoDelay(c) != VALKEY_OK)
-                    goto error;
+                valkeyNetClose(c);
+                continue;
             }
         }
+        /* TCP_NODELAY is set here for blocking connections only. For non-blocking,
+         * it's deferred to valkeyAsyncHandleConnect() after connect completes,
+         * since some systems reject setsockopt on in-progress sockets. */
+        if (blocking && valkeySetTcpNoDelay(c) != VALKEY_OK)
+            goto error;
         if (blocking && valkeySetBlocking(c, 1) != VALKEY_OK)
             goto error;
 
         c->flags |= VALKEY_CONNECTED;
         rv = VALKEY_OK;
+        valkeyClearError(c);
         goto end;
     }
     if (p == NULL) {
-        char buf[128];
-        snprintf(buf, sizeof(buf), "Can't create socket: %s", strerror(errno));
-        valkeySetError(c, VALKEY_ERR_OTHER, buf);
+        valkeySetErrorFromErrno(c, VALKEY_ERR_IO, NULL);
         goto error;
     }
 

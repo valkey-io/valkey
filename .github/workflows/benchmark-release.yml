@@ -38,10 +38,8 @@ jobs:
         include:
           - arch: x86
             machine: ec2-al-2023-pr-benchmarking-x86
-            config: benchmark-config-x86.json
           - arch: arm64
             machine: ec2-al-2023-pr-benchmarking-arm64
-            config: benchmark-config-arm.json
     concurrency:
       group: ${{ matrix.machine }}
       cancel-in-progress: false
@@ -54,7 +52,6 @@ jobs:
           echo "Version 2: ${{ github.event.inputs.version2 }}"
           echo "Issue ID: ${{ github.event.inputs.issue_id }}"
           echo "Architecture: ${{ matrix.arch }}"
-          echo "Config: ${{ matrix.config }}"
           echo "Runs: ${{ github.event.inputs.runs }}"
 
           # Validate issue ID is numeric
@@ -105,7 +102,8 @@ jobs:
               python3-devel \
               openssl-devel \
               bzip2-devel \
-              libffi-devel
+              libffi-devel \
+              jq
           pip install --require-hashes -r requirements.txt
 
       - name: Build latest valkey_latest
@@ -143,18 +141,19 @@ jobs:
           EC2_X86_IP: ${{ secrets.EC2_X86_IP }}
           EC2_ARM64_IP: ${{ secrets.EC2_ARM64_IP }}
         run: |
-          # Set the target IP based on the matrix architecture
+          CONFIG_FILE="configs/benchmark-config-arm.json"
+
+          # Set the target IP and override config based on architecture
           if [[ "${{ matrix.arch }}" == "x86" ]]; then
             TARGET_IP=$EC2_X86_IP
-            echo "Using x86 machine IP"
+            # Override client_cpu_range for x86 due to different NUMA node core allocation
+            jq '[.[] | .client_cpu_range = "144-191,48-95"]' "$CONFIG_FILE" > tmp.json && mv tmp.json "$CONFIG_FILE"
           elif [[ "${{ matrix.arch }}" == "arm64" ]]; then
             TARGET_IP=$EC2_ARM64_IP
-            echo "Using ARM64 machine IP"
           else
             echo "Error: Unknown architecture: ${{ matrix.arch }}"
             exit 1
           fi
-          CONFIG_FILE="../valkey/.github/benchmark_configs/${{ matrix.config }}"
 
           # Verify our custom valkey-benchmark exists
           if [[ ! -f "$VALKEY_BENCHMARK_PATH" ]]; then
@@ -178,7 +177,6 @@ jobs:
           echo "- Version 1: ${{ github.event.inputs.version1 }}"
           echo "- Version 2: ${{ github.event.inputs.version2 }}"
           echo "- Architecture: ${{ matrix.arch }}"
-          echo "- Config: ${{ matrix.config }}"
           echo "- Using latest valkey-benchmark: $VALKEY_BENCHMARK_PATH"
           echo "- This ensures both versions use the same (latest) benchmark tool for consistent results"
 

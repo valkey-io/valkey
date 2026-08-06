@@ -2118,6 +2118,14 @@ long long vsetEstimatedEarliestExpiry(vset *set, vsetGetExpiryFunc getExpiry) {
         rax *r = vsetBucketRax(*set);
         raxIterator it;
         raxStart(&it, r);
+        /* Position on the smallest (earliest) bucket key and materialize it.
+         * raxStart() alone leaves the iterator unpositioned with key_len = 0,
+         * so reading it.key without a raxSeek("^") + raxNext() decodes an
+         * uninitialized buffer and returns a garbage expiry. This mirrors the
+         * traversal pattern used by every other RAX walk in this file. A
+         * RAX-encoded set is never empty, so the first advance always succeeds. */
+        raxSeek(&it, "^", NULL, 0);
+        assert(raxNext(&it));
         expiry = decodeExpiryKey(it.key);
         raxStop(&it);
         break;

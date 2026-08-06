@@ -134,8 +134,7 @@ static void processUnthrottledClient(client *c) {
             return;
         }
     }
-    /* Only call beforeNextClient if the client is not freed (did not return C_ERR). */
-    if (processPendingCommandAndInputBuffer(c) == C_OK) beforeNextClient(c);
+    queueClientForReprocessing(c);
 }
 
 /* Timer event handler: releases queued clients at the token bucket rate.
@@ -185,8 +184,8 @@ static void throttlerAddClient(throttler *t, client *c) {
     c->throttler = t;
     c->throttle_node = listLast(t->client_queue);
 
-    if (t->time_event_id == AE_DELETED_EVENT_ID) {
-        serverAssert(listLength(t->client_queue) == 1);
+    if (listLength(t->client_queue) == 1) {
+        serverAssert(t->time_event_id == AE_DELETED_EVENT_ID);
         t->time_event_id = aeCreateTimeEvent(server.el,
                                              waitTimeMs(t),
                                              throttlerTimeProc,
@@ -210,8 +209,8 @@ void throttle_init(void) {
  * metrics object by using the same name. This allows statistics to be aggregated across related
  * throttler instances. */
 throttler *throttle_register(throttleCriteriaProc *criteria_proc,
-                      void *priv_data,
-                      const char *metrics_name) {
+                             void *priv_data,
+                             const char *metrics_name) {
     serverAssert(criteria_proc != NULL);
     serverAssert(metrics_name != NULL);
 

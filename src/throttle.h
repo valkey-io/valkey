@@ -63,8 +63,8 @@ void throttle_init(void);
  *
  * Returns the registered throttler. */
 throttler *throttle_register(throttleCriteriaProc *criteria_proc,
-                      void *priv_data,
-                      const char *metrics_name);
+                             void *priv_data,
+                             const char *metrics_name);
 
 /* Deregisters the throttler such that:
  *   - No new clients will be throttled by this throttler.

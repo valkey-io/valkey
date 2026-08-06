@@ -143,8 +143,7 @@ TEST_F(ThrottleTest, throttleHappyCase) {
     /* Drain via timeProc */
     throttle_setRate(t, THROTTLE_UNLIMITED_RATE);
     fakeMonotimeUs += 1000000;
-    EXPECT_CALL(mock, processPendingCommandAndInputBuffer(c)).WillOnce(Return(C_OK));
-    EXPECT_CALL(mock, beforeNextClient(c)).Times(1);
+    EXPECT_CALL(mock, queueClientForReprocessing(c)).Times(1);
     long long ret = timeProc(server.el, 1, clientData);
     EXPECT_EQ(ret, AE_NOMORE);
 
@@ -209,8 +208,7 @@ TEST_F(ThrottleTest, deregisteredThrottlerDrainsButDoesNotThrottleNewClients) {
 
     /* Drain via timeProc — deregister already set rate to UNLIMITED. */
     fakeMonotimeUs += 1000000;
-    EXPECT_CALL(mock, processPendingCommandAndInputBuffer(queued)).WillOnce(Return(C_OK));
-    EXPECT_CALL(mock, beforeNextClient(queued)).Times(1);
+    EXPECT_CALL(mock, queueClientForReprocessing(queued)).Times(1);
     long long ret = timeProc(server.el, 1, clientData);
     EXPECT_EQ(ret, AE_NOMORE);
     verifyThrottler("fake_throttler", 0, 1);
@@ -246,8 +244,7 @@ TEST_F(ThrottleTest, strictestThrottlerThrottle) {
     fakeMonotimeUs += 1000000;
     EXPECT_CALL(mock, tokenBucket_tryConsume(_, _, false)).WillOnce(Return(true));
     EXPECT_CALL(mock, tokenBucket_tryConsume(_, _, true)).WillOnce(Return(true));
-    EXPECT_CALL(mock, processPendingCommandAndInputBuffer(c)).WillOnce(Return(C_OK));
-    EXPECT_CALL(mock, beforeNextClient(c)).Times(1);
+    EXPECT_CALL(mock, queueClientForReprocessing(c)).Times(1);
     long long ret = timeProc(server.el, 1, clientData);
     EXPECT_EQ(ret, AE_NOMORE);
     EXPECT_EQ(c->flag.throttle_multi, 0ULL);
@@ -403,8 +400,7 @@ TEST_F(ThrottleTest, metricsAggregateAcrossSharedName) {
      * release will also consume the other throttler's bucket. */
     EXPECT_CALL(mock, tokenBucket_tryConsume(_, _, false)).Times(2).WillRepeatedly(Return(true));
     EXPECT_CALL(mock, tokenBucket_tryConsume(_, _, true)).Times(2).WillRepeatedly(Return(true));
-    EXPECT_CALL(mock, processPendingCommandAndInputBuffer(_)).Times(2).WillRepeatedly(Return(C_OK));
-    EXPECT_CALL(mock, beforeNextClient(_)).Times(2);
+    EXPECT_CALL(mock, queueClientForReprocessing(_)).Times(2);
     long long ret = timeProc(server.el, 1, clientData);
     EXPECT_EQ(ret, AE_NOMORE);
 
@@ -439,8 +435,7 @@ TEST_F(ThrottleTest, timeProcHappyCaseOneCall) {
     throttle_setRate(t, THROTTLE_UNLIMITED_RATE);
     fakeMonotimeUs += 1000000;
 
-    EXPECT_CALL(mock, processPendingCommandAndInputBuffer(_)).Times(2).WillRepeatedly(Return(C_OK));
-    EXPECT_CALL(mock, beforeNextClient(_)).Times(2);
+    EXPECT_CALL(mock, queueClientForReprocessing(_)).Times(2);
 
     long long ret = timeProc(server.el, 1, clientData);
     EXPECT_EQ(ret, AE_NOMORE);
@@ -476,8 +471,7 @@ TEST_F(ThrottleTest, timeProcHappyCaseMultipleCall) {
     fakeMonotimeUs += 1000000;
 
     /* Only the first client will be released. No aeDeleteTimeEvent since queue stays non-empty. */
-    EXPECT_CALL(mock, processPendingCommandAndInputBuffer(c1)).WillOnce(Return(C_OK));
-    EXPECT_CALL(mock, beforeNextClient(c1)).Times(1);
+    EXPECT_CALL(mock, queueClientForReprocessing(c1)).Times(1);
 
     long long ret = timeProc(server.el, 1, clientData);
     /* Should return a positive wait time (reschedule). */
@@ -491,8 +485,7 @@ TEST_F(ThrottleTest, timeProcHappyCaseMultipleCall) {
 
     /* Drain c2 for cleanup. */
     fakeMonotimeUs += 1000000; /* advance 1s, 1 token available */
-    EXPECT_CALL(mock, processPendingCommandAndInputBuffer(c2)).WillOnce(Return(C_OK));
-    EXPECT_CALL(mock, beforeNextClient(c2)).Times(1);
+    EXPECT_CALL(mock, queueClientForReprocessing(c2)).Times(1);
     ret = timeProc(server.el, 1, clientData);
     EXPECT_EQ(ret, AE_NOMORE);
     EXPECT_FALSE(clientIsThrottled(c2));
@@ -530,7 +523,7 @@ TEST_F(ThrottleTest, timeProcCallsFreeClientOnConnSetReadHandlerFailure) {
 
     /* freeClient should be called because connSetReadHandler fails. */
     EXPECT_CALL(mock, freeClient(c)).WillOnce(Return(0));
-    EXPECT_CALL(mock, processPendingCommandAndInputBuffer(_)).Times(0);
+    EXPECT_CALL(mock, queueClientForReprocessing(_)).Times(0);
 
     long long ret = timeProc(server.el, 1, clientData);
     EXPECT_EQ(ret, AE_NOMORE);
@@ -539,32 +532,6 @@ TEST_F(ThrottleTest, timeProcCallsFreeClientOnConnSetReadHandlerFailure) {
 
     throttle_deregister(t);
     freeFakeClient(c); // We still need to call it since freeClient is mocked.
-}
-
-TEST_F(ThrottleTest, timeProcProcessingFailureSkipsBeforeNextClient) {
-    /* If processPendingCommandAndInputBuffer returns C_ERR, beforeNextClient is NOT called. */
-    throttler *t = throttle_register(fakeWriteCriteria, NULL, "fake_throttler");
-    throttle_setRate(t, 0.0);
-
-    aeTimeProc *timeProc = NULL;
-    void *clientData = NULL;
-    EXPECT_CALL(mock, aeCreateTimeEvent(_, _, _, _, _))
-        .WillOnce(DoAll(SaveArg<2>(&timeProc), SaveArg<3>(&clientData), Return(1)));
-
-    client *c = createFakeClient(1, true);
-    EXPECT_TRUE(throttleClientIfNeeded(c));
-
-    throttle_setRate(t, THROTTLE_UNLIMITED_RATE);
-    fakeMonotimeUs += 1000000;
-
-    EXPECT_CALL(mock, processPendingCommandAndInputBuffer(c)).WillOnce(Return(C_ERR));
-    EXPECT_CALL(mock, beforeNextClient(_)).Times(0);
-
-    long long ret = timeProc(server.el, 1, clientData);
-    EXPECT_EQ(ret, AE_NOMORE);
-    EXPECT_FALSE(clientIsThrottled(c));
-    throttle_deregister(t);
-    freeFakeClient(c);
 }
 
 TEST_F(ThrottleTest, timeProcMultiThrottlerConsumesOtherBuckets) {
@@ -591,8 +558,7 @@ TEST_F(ThrottleTest, timeProcMultiThrottlerConsumesOtherBuckets) {
      * then consumeOtherThrottlers charges the loose throttler (force_consume=true). */
     EXPECT_CALL(mock, tokenBucket_tryConsume(_, _, false)).WillOnce(Return(true));
     EXPECT_CALL(mock, tokenBucket_tryConsume(_, _, true)).WillOnce(Return(true));
-    EXPECT_CALL(mock, processPendingCommandAndInputBuffer(c)).WillOnce(Return(C_OK));
-    EXPECT_CALL(mock, beforeNextClient(c)).Times(1);
+    EXPECT_CALL(mock, queueClientForReprocessing(c)).Times(1);
 
     long long ret = timeProc(server.el, 1, clientData);
     EXPECT_EQ(ret, AE_NOMORE);
@@ -622,8 +588,7 @@ TEST_F(ThrottleTest, timeProcCleanupThrottlerFreesOnDrain) {
     throttle_deregister(t);
 
     fakeMonotimeUs += 1000000;
-    EXPECT_CALL(mock, processPendingCommandAndInputBuffer(c)).WillOnce(Return(C_OK));
-    EXPECT_CALL(mock, beforeNextClient(c)).Times(1);
+    EXPECT_CALL(mock, queueClientForReprocessing(c)).Times(1);
 
     long long ret = timeProc(server.el, 1, clientData);
     EXPECT_EQ(ret, AE_NOMORE);

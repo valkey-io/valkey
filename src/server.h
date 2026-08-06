@@ -586,17 +586,23 @@ typedef enum {
 #define PAUSE_ACTION_REPLICA (1 << 4) /* pause replica traffic */
 
 /* Sets log format */
-typedef enum { LOG_FORMAT_LEGACY = 0,
-               LOG_FORMAT_LOGFMT,
-               LOG_FORMAT_JSON } log_format_type;
+typedef enum {
+    LOG_FORMAT_LEGACY = 0,
+    LOG_FORMAT_LOGFMT,
+    LOG_FORMAT_JSON
+} log_format_type;
 
 /* Sets log timestamp format */
-typedef enum { LOG_TIMESTAMP_LEGACY = 0,
-               LOG_TIMESTAMP_ISO8601,
-               LOG_TIMESTAMP_MILLISECONDS } log_timestamp_type;
+typedef enum {
+    LOG_TIMESTAMP_LEGACY = 0,
+    LOG_TIMESTAMP_ISO8601,
+    LOG_TIMESTAMP_MILLISECONDS
+} log_timestamp_type;
 
-typedef enum { RDB_VERSION_CHECK_STRICT = 0,
-               RDB_VERSION_CHECK_RELAXED } rdb_version_check_type;
+typedef enum {
+    RDB_VERSION_CHECK_STRICT = 0,
+    RDB_VERSION_CHECK_RELAXED
+} rdb_version_check_type;
 
 /* Structure representing a non-owning view of a buffer.
  * A stringRef struct does not manage the underlying memory, so its destruction
@@ -1419,6 +1425,14 @@ typedef struct client {
 /* Forward declaration */
 bool isImportSlotMigrationJob(slotMigrationJob *job);
 
+/* Absolute postpone mask from client IO offload state (not artificial READ hold). */
+static inline int clientConnPostponeMaskFromIOState(client *c) {
+    int mask = 0;
+    if (c->io_read_state != CLIENT_IDLE) mask |= CONN_POSTPONE_READ;
+    if (c->io_write_state != CLIENT_IDLE) mask |= CONN_POSTPONE_WRITE;
+    return mask;
+}
+
 /* Get the class of a client, used in order to enforce limits to different
  * classes of clients.
  *
@@ -2151,6 +2165,8 @@ struct valkeyServer {
                                                  * to establish psync. */
     int debug_pause_after_fork;                 /* Debug param that pauses the main process
                                                  * after a replication fork() (for bgsave). */
+    int debug_pause_before_psync;               /* Replica pauses (SIGSTOP) right before
+                                                 * sending PSYNC to its primary. */
     size_t repl_buffer_mem;                     /* The memory of replication buffer. */
     list *repl_buffer_blocks;                   /* Replication buffers blocks list
                                                  * (serving replica clients and repl backlog) */
@@ -2315,9 +2331,10 @@ struct valkeyServer {
                                                             * failover to be attempted. */
     int slot_migration_pipe_read;                          /* Slot migration pipe used to transfer the slots data */
     int slot_migration_child_exit_pipe;                    /* Used by the slot migration parent allow child exit. */
-    connection *slot_migration_pipe_conn;                  /* xxxx */
+    connection *slot_migration_pipe_conn;                  /* Connection of the slot migration target client. The slot
+                                                            * snapshot data read from the pipe is written to it. */
     char *slot_migration_pipe_buff;                        /* In slot migration, this buffer holds slot snapshot data. */
-    ssize_t slot_migration_pipe_bufflen;                   /* that was read from the rdb pipe. */
+    ssize_t slot_migration_pipe_bufflen;                   /* that was read from the slot migration pipe. */
     /* Debug config that goes along with cluster_drop_packet_filter. When set, the link is closed on packet drop. */
     uint32_t debug_cluster_close_link_on_packet_drop : 1;
     /* Debug config to control the random ping. When set, we will disable the random ping in clusterCron. */
@@ -3053,10 +3070,11 @@ void waitForClientIO(client *c);
 void ioThreadReadQueryFromClient(client *c);
 void ioThreadWriteToClient(client *c);
 int canParseCommand(client *c);
-void processClientIOReadsDone(client *c);
+int processClientIOReadsDone(client *c);
 void processClientIOWriteDone(client *c);
 void releaseReplyReferences(client *c);
 void resetLastWrittenBuf(client *c);
+int clientConnPostponeMask(client *c);
 
 int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_idx, int max_args, int *flags, int *unit, int *expire_idx, robj **expire, robj **compare_val);
 

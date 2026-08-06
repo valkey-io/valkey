@@ -66,8 +66,7 @@ long long __wrap_aeCreateTimeEvent(aeEventLoop *eventLoop, long long millisecond
 int __wrap_aeDeleteTimeEvent(aeEventLoop *eventLoop, long long id);
 size_t __wrap_getClientOutputBufferMemoryUsage(client *c);
 int __wrap_getMaxmemoryState(size_t *total, size_t *logical, size_t *tofree, float *level);
-int __wrap_processPendingCommandAndInputBuffer(client *c);
-void __wrap_beforeNextClient(client *c);
+void __wrap_queueClientForReprocessing(client *c);
 int __wrap_freeClient(client *c);
 
 /* Throttler mocks */

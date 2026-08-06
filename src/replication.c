@@ -2776,6 +2776,10 @@ void replicaReceiveRDBFromPrimaryToDisk(connection *conn, int is_dual_channel) {
     /* Put the socket in blocking mode to simplify RDB transfer.
      * We'll restore it when the RDB is received. */
     connBlock(conn);
+    /* Bound this read with the short repl_syncio_timeout (as the other sync
+     * replication reads do), not the large repl-timeout: the abort flag is only
+     * checked between reads, so on a silent primary this stalls the main thread
+     * in cancelReplicationHandshake() for at most repl_syncio_timeout. */
     connRecvTimeout(conn, server.repl_syncio_timeout * 1000);
 
     atomic_store_explicit(&server.replica_bio_disk_save_state, REPL_BIO_DISK_SAVE_STATE_IN_PROGRESS, memory_order_release);
@@ -3701,7 +3705,12 @@ int replicaProcessPsyncReply(connection *conn) {
      * Return PSYNC_NOT_SUPPORTED on errors we don't understand, otherwise
      * return PSYNC_TRY_LATER if we believe this is a transient error. */
 
-    if (!strncmp(reply, "-NOMASTERLINK", 13) || !strncmp(reply, "-LOADING", 8)) {
+    /* The primary replied with a transient error: it cannot serve a PSYNC
+     * right now, but will be able to in the future. Retry PSYNC later instead
+     * of falling back to the legacy SYNC command, because a SYNC full resync
+     * does not carry the +FULLRESYNC offset baseline, which would leave the
+     * replica in pre_psync mode (no ACKs, breaking WAIT / psync / failover). */
+    if (!strncmp(reply, "-NOMASTERLINK", 13) || !strncmp(reply, "-LOADING", 8) || !strncmp(reply, "-BUSY", 5)) {
         serverLog(LL_NOTICE,
                   "Primary is currently unable to PSYNC "
                   "but should be in the future: %s",
@@ -4046,6 +4055,14 @@ int syncWithPrimaryHandleReceiveNodeIDReplyState(connection *conn) {
 }
 
 int syncWithPrimaryHandleSendPsyncState(connection *conn) {
+    /* Debug hook: pause the replica right before it sends PSYNC to its
+     * primary, so a test can put the primary into a transient (e.g. BUSY)
+     * state and deterministically reproduce the PSYNC -> SYNC downgrade race. */
+    if (server.debug_pause_before_psync) {
+        server.debug_pause_before_psync = 0;
+        debugPauseProcess();
+    }
+
     if (replicaSendPsyncCommand(conn) == PSYNC_WRITE_ERROR) {
         sds err = sdsnew("Write error sending the PSYNC command.");
         abortFailover(err);
@@ -4465,6 +4482,9 @@ void replicationAbortSyncTransfer(void) {
  * Otherwise zero is returned and no operation is performed at all. */
 int cancelReplicationHandshake(int reconnect) {
     if (bioPendingJobsOfType(BIO_RDB_SAVE)) {
+        /* Wait for the disk-saving bio thread to notice the abort flag
+         * and exit. If it is blocked in a socket read this stalls the
+         * main thread for up to repl_syncio_timeout. */
         server.replica_bio_abort_save = 1;
         bioDrainWorker(BIO_RDB_SAVE);
         server.replica_bio_abort_save = 0;

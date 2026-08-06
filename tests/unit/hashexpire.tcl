@@ -4723,3 +4723,57 @@ start_server {tags {"hash"}} {
        }
    }
 }
+
+start_server {tags {"hashexpire"}} {
+    # Regression: HPEXPIREAT with timestamps at/near the top of the int64 range
+    # used to crash the server via the vset bucket-timestamp math. Two flows:
+    #   (1) a timestamp inside the top 8192ms window below 2^63 overflowed the
+    #       rounding into a negative RAX bucket key, tripping
+    #       assert(target_bucket_ts < bucket_ts) during a vector->rax split;
+    #   (2) a timestamp of exactly LLONG_MAX lands in a bucket keyed LLONG_MAX
+    #       (equal to its own expiry), which findBucket()'s strict ">" seek can
+    #       never resolve -- dropping fields from the TTL index and aborting on
+    #       the next access via serverAssert(bucket != VSET_NONE_BUCKET_PTR).
+
+    test {HPEXPIREAT near-2^63 timestamp does not crash on vector->rax split} {
+        r DEL myhash
+        # A = 2^63 - 8192 (start of the last 8192ms window)
+        # B = A + 8000    (same 8192ms window, a later 16ms sub-window)
+        set A 9223372036854767616
+        set B 9223372036854775616
+        set kv {}
+        for {set i 1} {$i <= 128} {incr i} { lappend kv f$i v }
+        r HSET myhash {*}$kv
+        set f126 {}
+        for {set i 1} {$i <= 126} {incr i} { lappend f126 f$i }
+        r HPEXPIREAT myhash $A FIELDS 126 {*}$f126
+        r HPEXPIREAT myhash $B FIELDS 1 f127
+        r HPEXPIREAT myhash $A FIELDS 1 f128
+        assert_equal "PONG" [r ping]
+        assert_equal 128 [r HLEN myhash]
+        r DEL myhash
+    } {1}
+
+    test {HPEXPIREAT at LLONG_MAX keeps fields consistent and does not crash} {
+        r DEL myhash
+        # LLONG_MAX is the highest absolute-ms timestamp HPEXPIREAT accepts.
+        set MAXTS 9223372036854775807
+        set kv {}
+        for {set i 1} {$i <= 128} {incr i} { lappend kv f$i v }
+        r HSET myhash {*}$kv
+        set fall {}
+        for {set i 1} {$i <= 128} {incr i} { lappend fall f$i }
+        # 128 TTL'd fields put the vset in RAX encoding; all share the LLONG_MAX
+        # bucket. Without the fix the last insert silently drops the others from
+        # the TTL index.
+        r HPEXPIREAT myhash $MAXTS FIELDS 128 {*}$fall
+        assert_equal "PONG" [r ping]
+        assert_equal 128 [r HLEN myhash]
+        # Deleting a field routes through findBucket() on the LLONG_MAX bucket;
+        # without the inclusive terminal-bucket probe this aborts the server.
+        assert_equal 1 [r HDEL myhash f1]
+        assert_equal "PONG" [r ping]
+        assert_equal 127 [r HLEN myhash]
+        r DEL myhash
+    } {1}
+}

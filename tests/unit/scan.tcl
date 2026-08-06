@@ -262,7 +262,7 @@ proc test_scan {type} {
         }
     }
 
-    foreach enc {listpack skiplist} {
+    foreach enc {listpack btree} {
         test "{$type} ZSCAN with encoding $enc" {
             # Create the Sorted Set
             r del zset

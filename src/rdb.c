@@ -736,7 +736,7 @@ int rdbGetObjectType(robj *o, int rdbver) {
     case OBJ_ZSET:
         if (o->encoding == OBJ_ENCODING_LISTPACK)
             return RDB_TYPE_ZSET_LISTPACK;
-        else if (o->encoding == OBJ_ENCODING_SKIPLIST)
+        else if (o->encoding == OBJ_ENCODING_BTREE)
             return RDB_TYPE_ZSET_2;
         else
             serverPanic("Unknown sorted set encoding");
@@ -955,7 +955,7 @@ ssize_t rdbSaveObject(rio *rdb, robj *o, robj *key, int dbid, unsigned char rdbt
 
             if ((n = rdbSaveRawString(rdb, objectGetVal(o), l)) == -1) return -1;
             nwritten += n;
-        } else if (o->encoding == OBJ_ENCODING_SKIPLIST) {
+        } else if (o->encoding == OBJ_ENCODING_BTREE) {
             zset *zs = objectGetVal(o);
 
             if ((n = rdbSaveLen(rdb, orderedIndexLength(zs->oi))) == -1) return -1;
@@ -2123,7 +2123,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
             if (!hashtableAdd(zs->ht, znode)) {
                 rdbReportCorruptRDB("Duplicate zset fields detected");
                 decrRefCount(o);
-                /* no need to free 'sdsele', will be released by zslFree together with 'o' */
+                /* no need to free 'sdsele', will be released with 'o' */
                 return NULL;
             }
         }
@@ -2518,7 +2518,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
             }
 
             if (zsetLength(o) > server.zset_max_listpack_entries)
-                zsetConvert(o, OBJ_ENCODING_SKIPLIST);
+                zsetConvert(o, OBJ_ENCODING_BTREE);
             else
                 objectSetVal(o, lpShrinkToFit(objectGetVal(o)));
             break;
@@ -2539,7 +2539,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
                 goto emptykey;
             }
 
-            if (zsetLength(o) > server.zset_max_listpack_entries) zsetConvert(o, OBJ_ENCODING_SKIPLIST);
+            if (zsetLength(o) > server.zset_max_listpack_entries) zsetConvert(o, OBJ_ENCODING_BTREE);
             break;
         case RDB_TYPE_HASH_ZIPLIST: {
             unsigned char *lp = lpNew(encoded_len);

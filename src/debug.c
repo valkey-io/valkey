@@ -210,7 +210,7 @@ void xorObjectDigest(serverDb *db, robj *keyobj, unsigned char *digest, robj *o)
                 xorDigest(digest, eledigest, 20);
                 zzlNext(zl, &eptr, &sptr);
             }
-        } else if (o->encoding == OBJ_ENCODING_SKIPLIST) {
+        } else if (o->encoding == OBJ_ENCODING_BTREE) {
             zset *zs = objectGetVal(o);
             hashtableIterator iter;
             hashtableInitIterator(&iter, zs->ht, 0);
@@ -976,7 +976,7 @@ void debugCommand(client *c) {
         /* Get the hashtable reference from the object, if possible. */
         hashtable *ht = NULL;
         switch (o->encoding) {
-        case OBJ_ENCODING_SKIPLIST: {
+        case OBJ_ENCODING_BTREE: {
             zset *zs = objectGetVal(o);
             ht = zs->ht;
         } break;
@@ -1186,7 +1186,7 @@ void serverLogObjectDebugInfo(const robj *o) {
         serverLog(LL_WARNING, "Hash size: %d", (int)hashTypeLength(o));
     } else if (o->type == OBJ_ZSET) {
         serverLog(LL_WARNING, "Sorted set size: %d", (int)zsetLength(o));
-        if (o->encoding == OBJ_ENCODING_SKIPLIST) {
+        if (o->encoding == OBJ_ENCODING_BTREE) {
             /* Not declared in ordered_index.h — debug-only introspection. */
             extern int orderedIndexGetHeight(const OrderedIndex *oi);
             serverLog(LL_WARNING, "Index height: %d", orderedIndexGetHeight(((const zset *)o->ptr)->oi));

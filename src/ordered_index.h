@@ -20,8 +20,8 @@
  * designed to be used alongside a companion hashtable that provides O(1)
  * membership testing when uniqueness is required (as in Valkey's ZSET).
  *
- * The interface is implementation-agnostic. Currently implemented as a skiplist
- * (see ordered_index.c). A B+ tree implementation is planned. */
+ * The interface is implementation-agnostic. It is currently implemented as a
+ * feature B+ tree (fbtree); see ordered_index.c. */
 
 #include "sds.h"
 #include <stdbool.h>
@@ -30,7 +30,7 @@
 /* Opaque types. The concrete definitions are backend-specific. */
 typedef struct OrderedIndex OrderedIndex;
 typedef struct OrderedIndexItem OrderedIndexItem;
-typedef uint64_t OrderedIndexIterator[2];
+typedef uint64_t OrderedIndexIterator[3];
 
 /* Callback invoked for each item removed during a range-delete operation.
  * The item pointer is valid for the duration of the callback but will be
@@ -208,26 +208,34 @@ void orderedIndexSeekToLexRange(OrderedIndexIterator *iter, const_sds min, const
  * ============================================================ */
 
 /* Hint to the OS that the index's memory pages can be reclaimed (madvise
- * DONTNEED). The index remains valid and usable  -- pages are faulted back in
- * on next access. Used during lazy-free to reduce RSS without blocking. */
+ * DONTNEED). Call only when the calling process will not read the index
+ * again -- e.g. in the fork child after the value has been serialized, to
+ * avoid needless copy-on-write. Reclaimed anonymous pages are zero-filled
+ * on any later access. */
 void orderedIndexDismissMemory(OrderedIndex *oi);
 
-/* Estimate total memory usage by averaging the specified number of sample elements. */
-size_t orderedIndexEstimateMemory(const OrderedIndex *oi, size_t sample_size);
+/* Estimate the memory used by the index structure itself. Item payloads are
+ * owned jointly with the caller (e.g. a companion hashtable) and are not
+ * included; callers account for them by sampling the items they hold. */
+size_t orderedIndexEstimateStructureMemory(const OrderedIndex *oi);
 
-/* Defrag data structure internals. Returns new pointer if reallocated. */
+/* Defrag the index's own top-level struct. All node and item allocations are
+ * handled incrementally by orderedIndexScanDefrag. Returns the index pointer,
+ * updated if the struct was relocated. */
 OrderedIndex *orderedIndexDefragInternals(OrderedIndex *oi, void *(*defragfn)(void *));
 
-/* Incremental defrag scan. Walks items in batches, calling defragfn on each.
- * When an item is reallocated, callback is invoked to update external refs.
- * Returns next cursor, or 0 when complete. */
+/* Incremental defrag scan over rank order, one leaf per call. Relocates the
+ * leaf and its items via defragfn; when an item is relocated, callback is
+ * invoked to update external refs. Inner nodes are relocated by the call that
+ * visits their leftmost descendant leaf, bounding per-call work to at most
+ * tree-depth node relocations. Returns the next cursor, or 0 when complete. */
 unsigned long orderedIndexScanDefrag(OrderedIndex *oi, unsigned long cursor, OrderedIndexDefragCallback callback, void *privdata, void *(*defragfn)(void *));
 
 /* ============================================================
  * Debug / Verification
  * ============================================================ */
 
-/* Return the internal height of the data structure (skiplist levels). */
+/* Return the internal height of the data structure (tree levels). */
 int orderedIndexGetHeight(const OrderedIndex *oi);
 
 /* Verify structural integrity. Returns 1 if valid, 0 if corrupt.

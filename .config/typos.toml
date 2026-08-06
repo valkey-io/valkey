@@ -15,6 +15,8 @@ optin = "optin"
 smove = "smove"
 Parth = "Parth" # seems like the spellchecker does not like it is similar to "Path"
 nd = "nd"
+Ba = "Ba"
+Addd = "Addd"
 
 [default]
 extend-ignore-re = [

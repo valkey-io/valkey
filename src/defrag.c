@@ -237,9 +237,9 @@ robj *activeDefragStringOb(robj *ob) {
     return new_robj;
 }
 
-/* Callback for orderedIndexScanDefrag — when a node is reallocated, update
- * the hashtable's pointer to it. */
-static void defragZsetNodeCallback(OrderedIndexItem *old_item, OrderedIndexItem *new_item, void *privdata) {
+/* Callback for orderedIndexScanDefrag — when a packed member item is
+ * relocated, update the companion hashtable's pointer to it. */
+static void defragZsetItemCallback(OrderedIndexItem *old_item, OrderedIndexItem *new_item, void *privdata) {
     hashtable *ht = privdata;
     bool replaced = hashtableReplaceReallocatedEntry(ht, old_item, new_item);
     serverAssert(replaced);
@@ -387,9 +387,9 @@ static long scanLaterList(robj *ob, unsigned long *cursor, monotime endtime) {
 }
 
 static void scanLaterZset(robj *ob, unsigned long *cursor) {
-    serverAssert(ob->type == OBJ_ZSET && ob->encoding == OBJ_ENCODING_SKIPLIST);
+    serverAssert(ob->type == OBJ_ZSET && ob->encoding == OBJ_ENCODING_BTREE);
     zset *zs = (zset *)objectGetVal(ob);
-    *cursor = orderedIndexScanDefrag(zs->oi, *cursor, defragZsetNodeCallback, zs->ht, activeDefragAlloc);
+    *cursor = orderedIndexScanDefrag(zs->oi, *cursor, defragZsetItemCallback, zs->ht, activeDefragAlloc);
 }
 
 /* Used as hashtable scan callback when all we need is to defrag the hashtable
@@ -424,8 +424,8 @@ static void defragQuicklist(robj *ob) {
         activeDefragQuickListNodes(ql);
 }
 
-static void defragZsetSkiplist(robj *ob) {
-    serverAssert(ob->type == OBJ_ZSET && ob->encoding == OBJ_ENCODING_SKIPLIST);
+static void defragZset(robj *ob) {
+    serverAssert(ob->type == OBJ_ZSET && ob->encoding == OBJ_ENCODING_BTREE);
     zset *zs = (zset *)objectGetVal(ob);
 
     zset *newzs;
@@ -444,7 +444,7 @@ static void defragZsetSkiplist(robj *ob) {
     else {
         unsigned long cursor = 0;
         do {
-            cursor = orderedIndexScanDefrag(zs->oi, cursor, defragZsetNodeCallback, zs->ht, activeDefragAlloc);
+            cursor = orderedIndexScanDefrag(zs->oi, cursor, defragZsetItemCallback, zs->ht, activeDefragAlloc);
         } while (cursor != 0);
     }
 }
@@ -698,8 +698,8 @@ static void defragKey(defragKeysCtx *ctx, robj **elemref) {
     } else if (ob->type == OBJ_ZSET) {
         if (ob->encoding == OBJ_ENCODING_LISTPACK) {
             if ((newzl = activeDefragAlloc(objectGetVal(ob)))) objectSetVal(ob, newzl);
-        } else if (ob->encoding == OBJ_ENCODING_SKIPLIST) {
-            defragZsetSkiplist(ob);
+        } else if (ob->encoding == OBJ_ENCODING_BTREE) {
+            defragZset(ob);
         } else {
             serverPanic("Unknown sorted set encoding");
         }
@@ -767,7 +767,7 @@ static int defragLaterItem(robj *ob, unsigned long *cursor, monotime endtime, in
             return scanLaterList(ob, cursor, endtime);
         } else if (ob->type == OBJ_SET && ob->encoding == OBJ_ENCODING_HASHTABLE) {
             scanLaterSet(ob, cursor);
-        } else if (ob->type == OBJ_ZSET && ob->encoding == OBJ_ENCODING_SKIPLIST) {
+        } else if (ob->type == OBJ_ZSET && ob->encoding == OBJ_ENCODING_BTREE) {
             scanLaterZset(ob, cursor);
         } else if (ob->type == OBJ_HASH && ob->encoding == OBJ_ENCODING_HASHTABLE) {
             scanLaterHash(ob, cursor);

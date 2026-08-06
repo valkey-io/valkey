@@ -626,20 +626,30 @@ hashtableType setHashtableType = {
     .keyCompare = dictSdsKeyCompare,
     .entryDestructor = dictSdsDestructor};
 
-/* Extract the element portion of a zset hashtable key as (ptr, len).
- * Handles both stored OrderedIndex items and plain sds lookup keys.
- * Currently both are plain sds; the fbtree backend (next PR) extends this
- * to skip an 8-byte score prefix on packed items using the sds aux bit. */
-static const char *zsetExtractElement(const void *key, size_t *len) {
-    *len = sdslen((const_sds)key);
-    return (const char *)key;
-}
+/* Zset hashtable callbacks for fbtree backend.
+ * Stored entries are packed [8B score][element]. Lookup keys are plain sds
+ * marked via zsetMarkLookupKey. The callbacks extract the element portion
+ * based on whether the key is marked (plain sds) or unmarked (packed item). */
 
-const void *zsetHashtableGetKey(const void *element) {
-    const char *ptr;
-    size_t len;
-    orderedIndexItemGetElement((const OrderedIndexItem *)element, &ptr, &len);
-    return ptr;
+#define FBTREE_SCORE_SIZE 8
+
+static const char *zsetExtractElement(const void *key, size_t *len) {
+    const_sds s = (const_sds)key;
+    if (zsetIsLookupKey(s)) {
+        /* Plain sds lookup key — use as-is.
+         * For SDS_TYPE_5 keys that were marked, sdslen is broken (type bits
+         * were overwritten), so read length directly from the flags byte. */
+        unsigned char flags = s[-1];
+        if ((flags & SDS_TYPE_MASK) == ZSET_LOOKUP_TYPE5_MARKER) {
+            *len = flags >> SDS_TYPE_BITS;
+        } else {
+            *len = sdslen(s);
+        }
+        return (const char *)s;
+    }
+    /* Packed fbtree item — skip 8-byte score prefix */
+    *len = sdslen(s) - FBTREE_SCORE_SIZE;
+    return (const char *)s + FBTREE_SCORE_SIZE;
 }
 
 static uint64_t zsetHashFunction(const void *key) {
@@ -659,7 +669,6 @@ static int zsetKeyCompare(const void *a, const void *b) {
 /* Sorted sets hash (an ordered index is used in addition to the hash table) */
 hashtableType zsetHashtableType = {
     .hashFunction = zsetHashFunction,
-    .entryGetKey = zsetHashtableGetKey,
     .keyCompare = zsetKeyCompare,
 };
 

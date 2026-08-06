@@ -5094,7 +5094,7 @@ void VM_ZsetRangeStop(ValkeyModuleKey *key) {
     /* Free resources if needed. */
     if (key->u.zset.type == VALKEYMODULE_ZSET_RANGE_LEX) zsetFreeLexRange(&key->u.zset.lrs);
     /* Reset the ordered index iterator if one was active. */
-    if (key->value->encoding == OBJ_ENCODING_SKIPLIST &&
+    if (key->value->encoding == OBJ_ENCODING_BTREE &&
         key->u.zset.type != VALKEYMODULE_ZSET_RANGE_NONE) {
         orderedIndexResetIterator(&key->u.zset.oi);
     }
@@ -5133,7 +5133,7 @@ int zsetInitScoreRange(ValkeyModuleKey *key, double min, double max, int minex, 
 
     if (key->value->encoding == OBJ_ENCODING_LISTPACK) {
         key->u.zset.current = first ? zzlFirstInRange(objectGetVal(key->value), zrs) : zzlLastInRange(objectGetVal(key->value), zrs);
-    } else if (key->value->encoding == OBJ_ENCODING_SKIPLIST) {
+    } else if (key->value->encoding == OBJ_ENCODING_BTREE) {
         zset *zs = objectGetVal(key->value);
         orderedIndexInitIterator(&key->u.zset.oi, zs->oi);
         orderedIndexSeekToScoreRange(&key->u.zset.oi, zrs->min, zrs->max, zrs->minex, zrs->maxex, first ? 0 : -1);
@@ -5197,7 +5197,7 @@ int zsetInitLexRange(ValkeyModuleKey *key, ValkeyModuleString *min, ValkeyModule
     if (key->value->encoding == OBJ_ENCODING_LISTPACK) {
         key->u.zset.current =
             first ? zzlFirstInLexRange(objectGetVal(key->value), zlrs) : zzlLastInLexRange(objectGetVal(key->value), zlrs);
-    } else if (key->value->encoding == OBJ_ENCODING_SKIPLIST) {
+    } else if (key->value->encoding == OBJ_ENCODING_BTREE) {
         zset *zs = objectGetVal(key->value);
         orderedIndexInitIterator(&key->u.zset.oi, zs->oi);
         orderedIndexSeekToLexRange(&key->u.zset.oi, zlrs->min, zlrs->max, zlrs->minex, zlrs->maxex, first ? 0 : -1);
@@ -5249,7 +5249,7 @@ ValkeyModuleString *VM_ZsetRangeCurrentElement(ValkeyModuleKey *key, double *sco
             *score = zzlGetScore(sptr);
         }
         str = createObject(OBJ_STRING, ele);
-    } else if (key->value->encoding == OBJ_ENCODING_SKIPLIST) {
+    } else if (key->value->encoding == OBJ_ENCODING_BTREE) {
         const OrderedIndexItem *ln = key->u.zset.current;
         if (score) *score = orderedIndexItemGetScore(ln);
         const char *ele;
@@ -5301,7 +5301,7 @@ int VM_ZsetRangeNext(ValkeyModuleKey *key) {
             key->u.zset.current = next;
             return 1;
         }
-    } else if (key->value->encoding == OBJ_ENCODING_SKIPLIST) {
+    } else if (key->value->encoding == OBJ_ENCODING_BTREE) {
         OrderedIndexItem *next = orderedIndexNext(&key->u.zset.oi);
         if (next == NULL) {
             key->u.zset.er = 1;
@@ -5366,7 +5366,7 @@ int VM_ZsetRangePrev(ValkeyModuleKey *key) {
             key->u.zset.current = prev;
             return 1;
         }
-    } else if (key->value->encoding == OBJ_ENCODING_SKIPLIST) {
+    } else if (key->value->encoding == OBJ_ENCODING_BTREE) {
         OrderedIndexItem *prev = orderedIndexPrev(&key->u.zset.oi);
         if (prev == NULL) {
             key->u.zset.er = 1;
@@ -12101,7 +12101,7 @@ int VM_ScanKey(ValkeyModuleKey *key, ValkeyModuleScanCursor *cursor, ValkeyModul
     } else if (o->type == OBJ_HASH) {
         if (o->encoding == OBJ_ENCODING_HASHTABLE) ht = objectGetVal(o);
     } else if (o->type == OBJ_ZSET) {
-        if (o->encoding == OBJ_ENCODING_SKIPLIST) ht = ((zset *)objectGetVal(o))->ht;
+        if (o->encoding == OBJ_ENCODING_BTREE) ht = ((zset *)objectGetVal(o))->ht;
     } else {
         errno = EINVAL;
         return 0;

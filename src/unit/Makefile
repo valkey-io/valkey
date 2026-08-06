@@ -19,13 +19,19 @@ DEPENDS := $(patsubst %.cpp,%.d,$(SOURCES))
 TEST_CFLAGS := $(CFLAGS)
 
 # Hold new gtest test to a high standard
+# The -Wframe-larger-than cap must accommodate the compiler-generated static
+# initialization function, whose frame grows with the number of TEST_F
+# registrations in a file: under -fsanitize=address each registration's
+# temporaries get their own redzoned stack slot, roughly 150 bytes per test
+# on current toolchains (more on older ones). 128K allows large test files
+# while still catching runaway frames in hand-written code.
 MORE_WARNINGS=-Wno-variadic-macros \
 	-Werror \
 	-Wpedantic \
 	-Wextra \
 	-Wall \
 	-Wcast-align \
-	-Wframe-larger-than=32768 \
+	-Wframe-larger-than=131072 \
 	-Wno-strict-overflow \
 	-Wsign-compare \
 	-Werror=missing-braces \

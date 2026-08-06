@@ -65,6 +65,7 @@ static int sdsArrayCmp(const void *a, const void *b) {
 }
 
 static void sortSdsArray(sds *arr, size_t n) {
+    if (n == 0) return; /* qsort's array argument is declared non-null */
     qsort(arr, n, sizeof(sds), sdsArrayCmp);
 }
 
@@ -667,6 +668,53 @@ TEST_F(OrderedIndexTest, SpecialDoubleValues) {
     orderedIndexResetIterator(&iter);
 }
 
+TEST_F(OrderedIndexTest, SignedZeroScoresShareOneKey) {
+    /* IEEE -0.0 and +0.0 must map to the same tree key so that numeric
+     * score-range semantics hold (as they did with C double comparison). */
+    insert(-0.0, "neg");
+    insert(0.0, "pos");
+
+    ASSERT_EQ(orderedIndexCountScoreRange(oi, 0.0, 0.0, 0, 0), 2UL);
+    ASSERT_EQ(orderedIndexCountScoreRange(oi, -0.0, -0.0, 0, 0), 2UL);
+    ASSERT_EQ(orderedIndexCountScoreRange(oi, -0.0, 0.0, 0, 0), 2UL);
+
+    /* Range iteration over [0, 0] must yield both members. */
+    OrderedIndexIterator iter;
+    orderedIndexInitIterator(&iter, oi);
+    orderedIndexSeekToScoreRange(&iter, 0.0, 0.0, false, false, 0);
+    ASSERT_NE(orderedIndexNext(&iter), nullptr);
+    ASSERT_NE(orderedIndexNext(&iter), nullptr);
+
+    /* Deleting by score range 0..0 must remove members stored with -0. */
+    ASSERT_EQ(orderedIndexDeleteRangeByScore(oi, 0.0, 0.0, false, false, NULL, NULL), 2UL);
+    ASSERT_EQ(orderedIndexLength(oi), 0UL);
+}
+
+TEST_F(OrderedIndexTest, ScoreDescentWithLongSharedScorePrefix) {
+    /* Adjacent representable doubles differ only in their lowest mantissa
+     * bits, so the packed anchors of an inner node share most of their
+     * 8-byte score prefix. The score-only descent must stay within the
+     * 8-byte key when the shared prefix reaches into its final bytes. */
+    enum { N = 200 };
+    double scores[N];
+    double s = 1.0;
+    for (int i = 0; i < N; i++) {
+        scores[i] = s;
+        insert(s, "e");
+        s = nextafter(s, 2.0);
+    }
+
+    ASSERT_EQ(orderedIndexCountScoreRange(oi, scores[100], scores[100], 0, 0), 1UL);
+    ASSERT_EQ(orderedIndexCountScoreRange(oi, scores[0], scores[99], 0, 0), 100UL);
+
+    OrderedIndexIterator iter;
+    orderedIndexInitIterator(&iter, oi);
+    orderedIndexSeekToScoreRange(&iter, scores[50], scores[50], false, false, 0);
+    OrderedIndexItem *item = orderedIndexNext(&iter);
+    ASSERT_NE(item, nullptr);
+    assertScore(item, scores[50]);
+}
+
 TEST_F(OrderedIndexTest, EmptyIndexOperations) {
     ASSERT_EQ(orderedIndexLength(oi), 0UL);
     OrderedIndexIterator iter;
@@ -755,6 +803,35 @@ TEST_F(OrderedIndexTest, DuplicateInsert_DeleteOne) {
     OrderedIndexItem *remaining = orderedIndexGetFirst(oi);
     ASSERT_NE(remaining, nullptr);
     assertScore(remaining, 1.0);
+}
+
+TEST_F(OrderedIndexTest, DuplicateInsert_ManySpanningLeafSplits) {
+    /* Insert enough identical (score, element) pairs to overflow a single
+     * leaf and force splits, so equal values span sibling leaves whose
+     * anchors are identical. Every instance must remain individually
+     * addressable by rank and deletable by pointer, regardless of which
+     * sibling leaf it landed in. */
+    enum { DUP_COUNT = 200 }; /* several leaves worth of duplicates */
+    OrderedIndexItem *items[DUP_COUNT];
+    for (int i = 0; i < DUP_COUNT; i++) items[i] = insert(1.0, "dup");
+    ASSERT_EQ(orderedIndexLength(oi), (unsigned long)DUP_COUNT);
+
+    /* Every instance is findable and each occupies a distinct rank. */
+    bool seen[DUP_COUNT] = {false};
+    for (int i = 0; i < DUP_COUNT; i++) {
+        unsigned long rank = orderedIndexGetIndex(oi, items[i]);
+        ASSERT_LT(rank, (unsigned long)DUP_COUNT) << "instance " << i << " not found by rank lookup";
+        ASSERT_FALSE(seen[rank]) << "instances " << i << " share rank " << rank;
+        seen[rank] = true;
+    }
+
+    /* Delete every instance by pointer, newest first (later instances are
+     * the ones routed past by a leftmost-only descent). */
+    for (int i = DUP_COUNT - 1; i >= 0; i--) {
+        orderedIndexDelete(oi, items[i]);
+        ASSERT_EQ(orderedIndexLength(oi), (unsigned long)i) << "delete of instance " << i << " did not remove it";
+    }
+    verifyOI();
 }
 
 TEST_F(OrderedIndexTest, DuplicateInsert_PopRemovesOne) {
@@ -1294,6 +1371,90 @@ TEST_F(OrderedIndexTest, LexRangeSentinels) {
     sdsfree(charlie);
 }
 
+/* ========== Batch-insert workflow tests ========== */
+
+/* orderedIndexItemCreate + orderedIndexItemSetScore + orderedIndexInsertItem
+ * back the store-aggregation path (ZUNIONSTORE/ZDIFFSTORE/ZINTERSTORE): detached
+ * items are created, their scores are adjusted O(1) while aggregating sources,
+ * then all are bulk-inserted at the end. ItemSetScore's no-reposition branch is
+ * reachable only through this path, so it needs direct coverage. */
+
+TEST_F(OrderedIndexTest, BatchInsertCreateSetScoreInsert) {
+    const char *names[] = {"cherry", "apple", "banana", "date"};
+    double finalscore[] = {3.0, 1.0, 2.0, 4.0};
+    const int n = 4;
+    OrderedIndexItem *items[4];
+
+    for (int i = 0; i < n; i++) {
+        /* Create detached (not in any index) at a placeholder score. */
+        items[i] = orderedIndexItemCreate(-999.0, names[i], strlen(names[i]));
+        ASSERT_NE(items[i], nullptr);
+        /* Several O(1) score updates, as aggregation across sources would do. */
+        orderedIndexItemSetScore(items[i], finalscore[i] + 10.0);
+        orderedIndexItemSetScore(items[i], finalscore[i]);
+        assertScore(items[i], finalscore[i]);
+    }
+    /* Nothing is inserted yet. */
+    ASSERT_EQ(orderedIndexLength(oi), 0UL);
+
+    /* Bulk-insert; the index takes ownership and returns the same pointer. */
+    for (int i = 0; i < n; i++) {
+        ASSERT_EQ(orderedIndexInsertItem(oi, items[i]), items[i]);
+    }
+    ASSERT_EQ(orderedIndexLength(oi), (unsigned long)n);
+    verifyOI();
+
+    /* Ordered by the final scores. */
+    ASSERT_ALL_ELEMENTS("apple", "banana", "cherry", "date");
+    assertScore(orderedIndexGetByIndex(oi, 0), 1.0);
+    assertScore(orderedIndexGetByIndex(oi, 1), 2.0);
+    assertScore(orderedIndexGetByIndex(oi, 2), 3.0);
+    assertScore(orderedIndexGetByIndex(oi, 3), 4.0);
+}
+
+TEST_F(OrderedIndexTest, BatchInsertInterleavesWithExistingItems) {
+    /* Items already present via the normal insert path. */
+    insert(2.0, "banana");
+    insert(4.0, "date");
+
+    /* Batch-created items whose scores interleave with the existing ones. */
+    OrderedIndexItem *a = orderedIndexItemCreate(0.0, "apple", 5);
+    orderedIndexItemSetScore(a, 1.0);
+    OrderedIndexItem *c = orderedIndexItemCreate(0.0, "cherry", 6);
+    orderedIndexItemSetScore(c, 3.0);
+    orderedIndexInsertItem(oi, a);
+    orderedIndexInsertItem(oi, c);
+
+    ASSERT_EQ(orderedIndexLength(oi), 4UL);
+    verifyOI();
+    ASSERT_ALL_ELEMENTS("apple", "banana", "cherry", "date");
+}
+
+TEST_F(OrderedIndexTest, BatchInsertManyBuildsValidTree) {
+    /* Enough batch-inserted items to force a multi-level tree, so InsertItem
+     * exercises the full descent/split path rather than a single leaf. */
+    enum { N = 2000 };
+    for (int i = 0; i < N; i++) {
+        char buf[32];
+        snprintf(buf, sizeof(buf), "key%05d", i);
+        OrderedIndexItem *it = orderedIndexItemCreate(0.0, buf, strlen(buf));
+        orderedIndexItemSetScore(it, (double)i);
+        orderedIndexInsertItem(oi, it);
+    }
+    ASSERT_EQ(orderedIndexLength(oi), (unsigned long)N);
+    verifyOI();
+
+    /* Rank order follows the scores set before insertion. */
+    for (int i = 0; i < N; i += 137) {
+        OrderedIndexItem *it = orderedIndexGetByIndex(oi, i);
+        char buf[32];
+        snprintf(buf, sizeof(buf), "key%05d", i);
+        assertScore(it, (double)i);
+        assertElement(it, buf);
+    }
+    ASSERT_EQ(orderedIndexCountScoreRange(oi, NEG_INF, POS_INF, 0, 0), (unsigned long)N);
+}
+
 /* ========== Randomized property tests ========== */
 
 
@@ -1734,6 +1895,260 @@ TEST_F(OrderedIndexTest, CountLexRange) {
 
 TEST_F(OrderedIndexTest, CountLexRangeEmpty) {
     ASSERT_EQ(countLexRange("a", "z", 0, 0), 0UL);
+}
+
+TEST_F(OrderedIndexTest, LexRangeUnboundedIncludesHighBytes) {
+    /* Members whose bytes sort above any single-byte suffix (e.g. leading
+     * 0xFF with continuations) must still fall inside the unbounded
+     * [minstring, maxstring] lex range. */
+    orderedIndexInsert(oi, 0.0, "alpha", 5);
+    orderedIndexInsert(oi, 0.0, "\xff", 1);
+    orderedIndexInsert(oi, 0.0, "\xff\x00tail", 6);
+    orderedIndexInsert(oi, 0.0, "\xff\xff\xff", 3);
+
+    ASSERT_EQ(orderedIndexCountLexRange(oi, shared.minstring, shared.maxstring, 0, 0), 4UL);
+
+    ASSERT_EQ(orderedIndexDeleteRangeByLex(oi, shared.minstring, shared.maxstring, 0, 0, NULL, NULL), 4UL);
+    ASSERT_EQ(orderedIndexLength(oi), 0UL);
+}
+
+/* ========== Memory tests ========== */
+
+TEST_F(OrderedIndexTest, PointerDeleteCollapsesSpilledPrefixSubtree) {
+    /* Members long enough that inner-node shared prefixes exceed the
+     * embedded capacity and spill to a heap buffer, and enough of them to
+     * build a three-level tree so emptied children include inner nodes.
+     * Deleting every item must release the spilled prefix buffers
+     * (LeakSanitizer verifies). */
+    enum { N = 5000,
+           PREFIX = 300 };
+    static OrderedIndexItem *items[N];
+    char buf[PREFIX + 8];
+    memset(buf, 'p', PREFIX);
+    for (int i = 0; i < N; i++) {
+        snprintf(buf + PREFIX, 8, "%05d", i);
+        items[i] = orderedIndexInsert(oi, 1.0, buf, PREFIX + 5);
+    }
+    ASSERT_EQ(orderedIndexLength(oi), (unsigned long)N);
+
+    for (int i = 0; i < N; i++) orderedIndexDelete(oi, items[i]);
+    ASSERT_EQ(orderedIndexLength(oi), 0UL);
+}
+
+TEST_F(OrderedIndexTest, RangeDeleteCollapsesSpilledPrefixSubtree) {
+    /* Same construction, collapsed through the lex range-delete boundary
+     * paths instead of item-by-item deletion. */
+    enum { N = 5000,
+           PREFIX = 300 };
+    char buf[PREFIX + 8];
+    memset(buf, 'p', PREFIX);
+    for (int i = 0; i < N; i++) {
+        snprintf(buf + PREFIX, 8, "%05d", i);
+        orderedIndexInsert(oi, 1.0, buf, PREFIX + 5);
+    }
+
+    snprintf(buf + PREFIX, 8, "%05d", 500);
+    sds min = sdsnewlen(buf, PREFIX + 5);
+    snprintf(buf + PREFIX, 8, "%05d", 4000);
+    sds max = sdsnewlen(buf, PREFIX + 5);
+    ASSERT_EQ(orderedIndexDeleteRangeByLex(oi, min, max, 0, 0, NULL, NULL), 3501UL);
+    ASSERT_EQ(orderedIndexDeleteRangeByLex(oi, shared.minstring, shared.maxstring, 0, 0, NULL, NULL), (unsigned long)(N - 3501));
+    ASSERT_EQ(orderedIndexLength(oi), 0UL);
+    sdsfree(min);
+    sdsfree(max);
+}
+
+TEST_F(OrderedIndexTest, SameLeafRangeDeleteCollapsesSpilledPrefixSubtree) {
+    /* Same construction, collapsed through single-member lex range deletes.
+     * Each delete resolves both boundaries to the same leaf, so emptied
+     * ancestors are released by the same-leaf shared-path walk. Deleting
+     * every member this way must release the spilled prefix buffers of the
+     * inner nodes that empty along the way (LeakSanitizer verifies). */
+    enum { N = 5000,
+           PREFIX = 300 };
+    char buf[PREFIX + 8];
+    memset(buf, 'p', PREFIX);
+    for (int i = 0; i < N; i++) {
+        snprintf(buf + PREFIX, 8, "%05d", i);
+        orderedIndexInsert(oi, 1.0, buf, PREFIX + 5);
+    }
+    ASSERT_EQ(orderedIndexLength(oi), (unsigned long)N);
+
+    for (int i = 0; i < N; i++) {
+        snprintf(buf + PREFIX, 8, "%05d", i);
+        sds member = sdsnewlen(buf, PREFIX + 5);
+        ASSERT_EQ(orderedIndexDeleteRangeByLex(oi, member, member, 0, 0, NULL, NULL), 1UL);
+        sdsfree(member);
+    }
+    ASSERT_EQ(orderedIndexLength(oi), 0UL);
+}
+
+TEST_F(OrderedIndexTest, EstimateStructureMemoryTracksTreeShape) {
+    /* The structure estimate covers nodes only: it grows with item count
+     * and is independent of member payload size. */
+    enum { N = 200,
+           BIG = 1024 };
+    for (int i = 0; i < N; i++) {
+        char b[16];
+        snprintf(b, sizeof(b), "s%05d", i);
+        orderedIndexInsert(oi, 1.0, b, 6);
+    }
+    size_t small_members = orderedIndexEstimateStructureMemory(oi);
+    ASSERT_GT(small_members, 0UL);
+
+    orderedIndexFree(oi);
+    oi = orderedIndexCreate();
+    static char big[BIG];
+    memset(big, 'b', BIG);
+    for (int i = 0; i < N; i++) {
+        snprintf(big, 8, "%06d", i);
+        big[7] = 'x';
+        orderedIndexInsert(oi, 1.0, big, BIG);
+    }
+    size_t big_members = orderedIndexEstimateStructureMemory(oi);
+
+    /* Same shape, same structural cost — payload bytes are not included. */
+    ASSERT_EQ(big_members, small_members);
+    ASSERT_LT(big_members, (size_t)N * BIG);
+
+    /* Ten times the items needs roughly ten times the leaves. The band is
+     * loose at the low end because the single root inner node is a fixed
+     * cost that dominates small trees. */
+    for (int i = N; i < N * 10; i++) {
+        snprintf(big, 8, "%06d", i);
+        big[7] = 'x';
+        orderedIndexInsert(oi, 1.0, big, BIG);
+    }
+    size_t tenfold = orderedIndexEstimateStructureMemory(oi);
+    ASSERT_GT(tenfold, big_members * 3);
+    ASSERT_LT(tenfold, big_members * 20);
+}
+
+TEST_F(OrderedIndexTest, DismissMemoryWalksItems) {
+    /* Dismissal hints memory to the OS for contents this process will not
+     * read again (fork child after serialization). At this layer the index
+     * is opaque, so the observable contract is coverage: at least one hint
+     * per item (plus the index's own nodes). */
+    enum { N = 200 };
+    populateSequential(N);
+    MockValkey mock;
+    EXPECT_CALL(mock, zmadvise_dontneed(_, _)).Times(AtLeast(N));
+    orderedIndexDismissMemory(oi);
+}
+
+/* ========== Defrag tests (OrderedIndex layer) ========== */
+
+/* These exercise orderedIndexDefragInternals + orderedIndexScanDefrag  -- the
+ * wrappers defrag.c actually calls. The fbtree-layer tests cover node/leaf/item
+ * relocation mechanics; here we pin the interface seam: struct-pointer
+ * reassignment, cursor plumbing, and the item-relocation callback that defrag.c
+ * uses to repoint the companion hashtable.
+ *
+ * A defragfn that unconditionally relocates every allocation (copy to a fresh
+ * block, free the original) lets ASAN flag any stale reference the real
+ * jemalloc-hinted path would only expose under fragmentation. */
+
+static void *oiDefragForceRelocate(void *ptr) {
+    size_t sz = zmalloc_usable_size(ptr);
+    void *newptr = zmalloc(sz);
+    memcpy(newptr, ptr, sz);
+    zfree(ptr);
+    return newptr;
+}
+
+/* A defragfn that never relocates: the sweep must still terminate cleanly. */
+static void *oiDefragNoop(void *ptr) {
+    (void)ptr;
+    return NULL;
+}
+
+/* Counts item relocations reported to the scan. The pointers are recorded, not
+ * dereferenced: oiDefragForceRelocate frees the old block before the callback
+ * runs, so reading it would be a use-after-free -- which mirrors how defrag.c
+ * uses the old pointer only as a hashtable lookup key. */
+struct OIDefragRecord {
+    int count;
+};
+static void oiDefragCountingCallback(OrderedIndexItem *old_item, OrderedIndexItem *new_item, void *privdata) {
+    (void)old_item;
+    (void)new_item;
+    ((OIDefragRecord *)privdata)->count++;
+}
+
+/* Full defrag with everything relocating: the struct, inner nodes, leaves,
+ * and items all move. The callback must fire once per item (the bridge
+ * defrag.c relies on), and the index must stay valid and fully readable  -- which
+ * it can only be if every relocated pointer was patched through. */
+TEST_F(OrderedIndexTest, DefragRelocatesStructNodesLeavesAndItems) {
+    enum { N = 3000 };
+    for (int i = 0; i < N; i++) {
+        char buf[32];
+        snprintf(buf, sizeof(buf), "key%05d", i);
+        orderedIndexInsert(oi, (double)i, buf, strlen(buf));
+    }
+    verifyOI();
+
+    /* Relocate the index's top-level struct. Reassign because the struct
+     * pointer itself may move. */
+    oi = orderedIndexDefragInternals(oi, oiDefragForceRelocate);
+    ASSERT_NE(oi, nullptr);
+
+    /* Sweep: one leaf per call, with inner nodes relocated by the call that
+     * visits their leftmost descendant leaf. */
+    OIDefragRecord rec = {0};
+    unsigned long cursor = 0;
+    do {
+        cursor = orderedIndexScanDefrag(oi, cursor, oiDefragCountingCallback, &rec, oiDefragForceRelocate);
+    } while (cursor != 0);
+
+    ASSERT_EQ((unsigned long)rec.count, (unsigned long)N); /* every item reported */
+    verifyOI();
+    ASSERT_EQ(orderedIndexLength(oi), (unsigned long)N);
+
+    /* Content intact after everything moved. */
+    for (int i = 0; i < N; i++) {
+        OrderedIndexItem *it = orderedIndexGetByIndex(oi, i);
+        char buf[32];
+        snprintf(buf, sizeof(buf), "key%05d", i);
+        assertScore(it, (double)i);
+        assertElement(it, buf);
+    }
+    ASSERT_EQ(orderedIndexCountScoreRange(oi, NEG_INF, POS_INF, 0, 0), (unsigned long)N);
+}
+
+/* A no-op defragfn moves nothing: the sweep must still traverse and terminate,
+ * the callback must never fire, and content must be untouched. */
+TEST_F(OrderedIndexTest, DefragNoRelocationLeavesIndexUntouched) {
+    populateSequential(500);
+    verifyOI();
+
+    oi = orderedIndexDefragInternals(oi, oiDefragNoop);
+    ASSERT_NE(oi, nullptr);
+
+    OIDefragRecord rec = {0};
+    unsigned long cursor = 0;
+    do {
+        cursor = orderedIndexScanDefrag(oi, cursor, oiDefragCountingCallback, &rec, oiDefragNoop);
+    } while (cursor != 0);
+
+    ASSERT_EQ(rec.count, 0); /* nothing moved -> callback never fires */
+    verifyOI();
+    ASSERT_EQ(orderedIndexLength(oi), 500UL);
+    ASSERT_EQ(orderedIndexCountScoreRange(oi, NEG_INF, POS_INF, 0, 0), 500UL);
+}
+
+/* Defrag on an empty index must be a clean no-op: the struct pass returns a
+ * usable index and the scan reports completion immediately. */
+TEST_F(OrderedIndexTest, DefragEmptyIndexIsNoop) {
+    oi = orderedIndexDefragInternals(oi, oiDefragForceRelocate);
+    ASSERT_NE(oi, nullptr);
+
+    OIDefragRecord rec = {0};
+    unsigned long cursor = orderedIndexScanDefrag(oi, 0, oiDefragCountingCallback, &rec, oiDefragForceRelocate);
+    ASSERT_EQ(cursor, 0UL);
+    ASSERT_EQ(rec.count, 0);
+    ASSERT_EQ(orderedIndexLength(oi), 0UL);
+    verifyOI();
 }
 
 /* ========== On-Delete Callback Tests ========== */

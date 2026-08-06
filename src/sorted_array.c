@@ -5,9 +5,9 @@
  */
 
 #include "sorted_array.h"
+#include "serverassert.h"
 #include "zmalloc.h"
 
-#include <assert.h>
 #include <string.h>
 
 #define SORTED_ARRAY_INITIAL_CAPACITY 8

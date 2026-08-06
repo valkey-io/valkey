@@ -385,12 +385,12 @@ typedef enum {
 
 /* Configuration and entry list of different types of command logs */
 typedef struct commandlog {
-    list *entries;                            /* Recency store: the most recent entries, newest first. */
-    struct sortedArray *magnitude;            /* Magnitude store: the highest-value entries, worst first. */
+    list *entries;                 /* Recency store: the most recent entries, newest first. */
+    struct sortedArray *magnitude; /* Magnitude store: the highest-value entries, worst first. */
     long long entry_id[COMMANDLOG_STORE_NUM];
-    long long threshold;                      /* Applies to the recency store only. */
-    unsigned long max_len;                    /* Max entries in the recency store. */
-    unsigned long magnitude_max_len;          /* Max entries in the magnitude store. */
+    long long threshold;             /* Applies to the recency store only. */
+    unsigned long max_len;           /* Max entries in the recency store. */
+    unsigned long magnitude_max_len; /* Max entries in the magnitude store. */
 } commandlog;
 
 /* Replica replication state. Used in server.repl_state for replicas to remember

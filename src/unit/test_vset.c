@@ -73,6 +73,134 @@ int test_vset_add_and_iterate(int argc, char **argv, int flags) {
     return 0;
 }
 
+/* Exercises vsetEstimatedEarliestExpiry() across every reachable bucket
+ * encoding: NONE, SINGLE, VECTOR, and RAX (both a single time-bucket and
+ * multiple time-buckets).
+ *
+ * Note on RAX: the estimate is the timestamp of the earliest time-bucket
+ * (the entry's expiry rounded up to a bucket-interval boundary), not the
+ * exact entry expiry. raxSeek("^") already positions the iterator on the
+ * smallest key and populates it.key, so the RAX case reads the earliest
+ * bucket directly.
+ *
+ * A top-level HT bucket is intentionally not tested: vsetAddEntry() always
+ * wraps an over-full vector into a RAX (HT exists only as a rax sub-bucket),
+ * and shrinkRaxBucketIfPossible() never collapses a rax to a bare HT, so a
+ * top-level HT set is unreachable. */
+int test_vset_estimated_earliest_expiry(int argc, char **argv, int flags) {
+    (void)argc;
+    (void)argv;
+    (void)flags;
+
+    /* Bucket keys round an expiry up to a bucket-interval boundary, so a
+     * RAX bucket's timestamp lies within VOLATILESET_BUCKET_INTERVAL_MAX of
+     * the entries' expiry. vset.h does not export that constant, so mirror it
+     * here (white-box). */
+    const long long BUCKET_MAX = 1LL << 13; /* VOLATILESET_BUCKET_INTERVAL_MAX */
+
+    /* --- VSET_BUCKET_NONE: empty set returns -1 --- */
+    {
+        vset set;
+        vsetInit(&set);
+        TEST_ASSERT(vsetIsEmpty(&set));
+        TEST_ASSERT(vsetEstimatedEarliestExpiry(&set, mockGetExpiry) == -1);
+        vsetRelease(&set);
+    }
+
+    /* --- VSET_BUCKET_SINGLE: returns the sole entry's exact expiry --- */
+    {
+        vset set;
+        vsetInit(&set);
+        mock_entry *e = mockCreateEntry("only", 12345LL);
+        TEST_ASSERT(vsetAddEntry(&set, mockGetExpiry, e));
+        TEST_ASSERT(vsetEstimatedEarliestExpiry(&set, mockGetExpiry) == 12345LL);
+        vsetRelease(&set);
+        mockFreeEntry(e);
+    }
+
+    /* --- VSET_BUCKET_VECTOR: returns the earliest (sorted index 0) expiry,
+     * regardless of insertion order. Stays a vector while < 128 entries. --- */
+    {
+        vset set;
+        vsetInit(&set);
+        const long long expiries[] = {500, 100, 300, 700, 200};
+        const int n = (int)(sizeof(expiries) / sizeof(expiries[0]));
+        mock_entry *entries[n];
+        for (int i = 0; i < n; i++) {
+            char buf[32];
+            snprintf(buf, sizeof(buf), "v_%d", i);
+            entries[i] = mockCreateEntry(buf, expiries[i]);
+            TEST_ASSERT(vsetAddEntry(&set, mockGetExpiry, entries[i]));
+        }
+        /* 100 is the minimum -> exact expiry returned for a vector. */
+        TEST_ASSERT(vsetEstimatedEarliestExpiry(&set, mockGetExpiry) == 100LL);
+        vsetRelease(&set);
+        for (int i = 0; i < n; i++) mockFreeEntry(entries[i]);
+    }
+
+    /* --- VSET_BUCKET_RAX, single time-bucket: > 127 entries with the same
+     * expiry force a vector -> RAX conversion (one HT sub-bucket). The
+     * estimate is the earliest bucket's timestamp: the bucket key rounds the
+     * expiry up to a bucket-interval boundary, so it lies in
+     * [expiry, expiry + BUCKET_MAX]. With the raxNext() bug it instead reads
+     * an unpopulated key (typically 0), which fails the lower bound. --- */
+    {
+        vset set;
+        vsetInit(&set);
+        const long long expiry = 1000LL;
+        const int n = 200;
+        mock_entry *entries[n];
+        for (int i = 0; i < n; i++) {
+            char buf[32];
+            snprintf(buf, sizeof(buf), "r_%d", i);
+            entries[i] = mockCreateEntry(buf, expiry);
+            TEST_ASSERT(vsetAddEntry(&set, mockGetExpiry, entries[i]));
+        }
+        long long est = vsetEstimatedEarliestExpiry(&set, mockGetExpiry);
+        TEST_ASSERT(est >= expiry);
+        TEST_ASSERT(est <= expiry + BUCKET_MAX);
+        vsetRelease(&set);
+        for (int i = 0; i < n; i++) mockFreeEntry(entries[i]);
+    }
+
+    /* --- VSET_BUCKET_RAX, multiple time-buckets: the estimate must come from
+     * the EARLIEST bucket, proving raxSeek("^") + raxNext() selects the
+     * smallest key (not a later one or garbage). --- */
+    {
+        vset set;
+        vsetInit(&set);
+        const long long early = 1000LL;
+        const long long late = 100LL * 1000 * 1000; /* a far later, distinct bucket */
+        const int n_each = 128;                     /* force RAX */
+        mock_entry *entries[2 * n_each];
+        int idx = 0;
+        /* Insert the LATE bucket first to ensure ordering is by key, not by
+         * insertion order. */
+        for (int i = 0; i < n_each; i++) {
+            char buf[32];
+            snprintf(buf, sizeof(buf), "late_%d", i);
+            entries[idx] = mockCreateEntry(buf, late);
+            TEST_ASSERT(vsetAddEntry(&set, mockGetExpiry, entries[idx]));
+            idx++;
+        }
+        for (int i = 0; i < n_each; i++) {
+            char buf[32];
+            snprintf(buf, sizeof(buf), "early_%d", i);
+            entries[idx] = mockCreateEntry(buf, early);
+            TEST_ASSERT(vsetAddEntry(&set, mockGetExpiry, entries[idx]));
+            idx++;
+        }
+        long long est = vsetEstimatedEarliestExpiry(&set, mockGetExpiry);
+        /* Must reflect the early bucket, not the late one. */
+        TEST_ASSERT(est >= early);
+        TEST_ASSERT(est <= early + BUCKET_MAX);
+        TEST_ASSERT(est < late);
+        vsetRelease(&set);
+        for (int i = 0; i < idx; i++) mockFreeEntry(entries[i]);
+    }
+    return 0;
+}
+
 int test_vset_large_batch_same_expiry(int argc, char **argv, int flags) {
     (void)argc;
     (void)argv;

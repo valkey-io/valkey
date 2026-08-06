@@ -537,6 +537,125 @@ int test_vset_remove_expired_leaves_ht_bucket_size_one(int argc, char **argv, in
     return 0;
 }
 
+/* Regression test for signed-overflow in the bucket-timestamp math.
+ *
+ * get_bucket_ts()/get_max_bucket_ts() round an expiry up to the next
+ * 16ms / 8192ms window boundary via `(expiry & ~(INTERVAL-1)) + INTERVAL`.
+ * For any expiry inside the top 8192ms window below 2^63 this addition
+ * overflows signed long long and wraps negative. The negative value is then
+ * used as a RAX bucket key; because RAX keys are compared as unsigned
+ * big-endian bytes it sorts *after* every real timestamp, and when a full
+ * VECTOR bucket is forced to split, findSplitPosition() returns a positive
+ * target while the poisoned bucket_ts is negative, tripping:
+ *
+ *     assert(target_bucket_ts < bucket_ts);   // vset.c, splitBucketIfPossible
+ *
+ * Recipe (mirrors the HPEXPIREAT repro): fill one over-2^63 max-window bucket
+ * with 126 entries at timestamp A and 1 at a later sub-window B, so the VECTOR
+ * holds 127 entries spanning two 16ms sub-windows, then add a 128th entry. The
+ * 128th tips the VECTOR over its size limit and forces the vector->rax
+ * conversion + split that overflows. Aborts without the fix; with the fix
+ * (saturating get_bucket_ts/get_max_bucket_ts) it succeeds. */
+int test_vset_large_expiry_bucket_overflow(int argc, char **argv, int flags) {
+    (void)argc;
+    (void)argv;
+    (void)flags;
+
+    vset set;
+    vsetInit(&set);
+
+    /* A = 2^63 - 8192 (start of the last 8192ms window); B = A + 8000 (same
+     * 8192ms window, a different 16ms sub-window). Both are <= LLONG_MAX. */
+    const long long A = 9223372036854767616LL; /* 2^63 - 8192 */
+    const long long B = 9223372036854775616LL; /* 2^63 - 192  */
+    const long long SMALL = 100LL;             /* tiny TTL; must iterate first */
+    const long long MAXTS = LLONG_MAX;         /* highest TTL HPEXPIREAT accepts */
+
+    const int total_entries = 131;
+    mock_entry **entries = zmalloc(sizeof(mock_entry *) * total_entries);
+    TEST_ASSERT(entries != NULL);
+    int n = 0;
+
+    /* 126 entries at A. */
+    for (int i = 0; i < 126; i++) {
+        char key[32];
+        snprintf(key, sizeof(key), "a_%d", i);
+        entries[n] = mockCreateEntry(key, A);
+        TEST_ASSERT(vsetAddEntry(&set, mockGetExpiry, entries[n]));
+        n++;
+    }
+    /* 1 entry at B -> the VECTOR now holds 127 entries across two sub-windows. */
+    entries[n] = mockCreateEntry("b_0", B);
+    TEST_ASSERT(vsetAddEntry(&set, mockGetExpiry, entries[n]));
+    n++;
+
+    /* 128th entry at A: tips the VECTOR past 127 and forces the vector->rax
+     * conversion + split. This is the operation that aborts without the fix. */
+    entries[n] = mockCreateEntry("a_last", A);
+    TEST_ASSERT(vsetAddEntry(&set, mockGetExpiry, entries[n]));
+    n++;
+
+    /* A tiny-TTL entry, added LAST. After the fix the huge-TTL entries live in
+     * the saturated LLONG_MAX bucket (the largest RAX key), so this small
+     * entry must sort into an earlier bucket and be scanned FIRST. This guards
+     * against the overflow re-inverting scan order (a negative/overflowed key
+     * would sort the huge-TTL bucket *before* this one). */
+    entries[n] = mockCreateEntry("small", SMALL);
+    TEST_ASSERT(vsetAddEntry(&set, mockGetExpiry, entries[n]));
+    n++;
+
+    /* Two entries at exactly LLONG_MAX. get_bucket_ts(LLONG_MAX) ==
+     * get_max_bucket_ts(LLONG_MAX) == LLONG_MAX, so their bucket key equals
+     * their own expiry -- the one value where the exclusive-end invariant
+     * (expiry < bucket_ts) cannot hold. findBucket() seeks strictly-greater-
+     * than the expiry, so once the first LLONG_MAX bucket exists the second
+     * insert must still resolve it via the inclusive terminal-bucket probe;
+     * without it the second insert raxInsert()s over the first (old=NULL) and
+     * silently drops it, so the count comes up one short (130, not 131). */
+    entries[n] = mockCreateEntry("max_0", MAXTS);
+    TEST_ASSERT(vsetAddEntry(&set, mockGetExpiry, entries[n]));
+    n++;
+    entries[n] = mockCreateEntry("max_1", MAXTS);
+    TEST_ASSERT(vsetAddEntry(&set, mockGetExpiry, entries[n]));
+    n++;
+
+    TEST_ASSERT(n == total_entries);
+
+    /* Every entry must be iterable, and the tiny-TTL entry must be scanned
+     * first: buckets are walked in ascending bucket_ts order, so its earlier
+     * bucket precedes the huge-TTL bucket. Order *within* a bucket is not
+     * guaranteed (HT buckets are unordered), so we only assert this
+     * cross-bucket property. */
+    vsetIterator it;
+    vsetInitIterator(&set, &it);
+    void *entry;
+    int count = 0;
+    while (vsetNext(&it, &entry)) {
+        TEST_ASSERT(entry != NULL);
+        if (count == 0) {
+            TEST_ASSERT(mockGetExpiry(entry) == SMALL);
+        } /* earliest bucket first */
+        count++;
+    }
+    TEST_ASSERT(count == total_entries);
+    vsetResetIterator(&it);
+
+    /* Remove every entry, last to first. This exercises findBucket() on the
+     * remove path for all expiries -- including the two LLONG_MAX entries,
+     * which resolve only through the inclusive terminal-bucket probe (without
+     * it removeFromBucket_RAX trips serverAssert(bucket != VSET_NONE_BUCKET_PTR)).
+     * The set must be empty afterwards. */
+    for (int i = n - 1; i >= 0; i--) {
+        TEST_ASSERT(vsetRemoveEntry(&set, mockGetExpiry, entries[i]));
+    }
+    TEST_ASSERT(vsetIsEmpty(&set));
+
+    vsetRelease(&set);
+    for (int i = 0; i < total_entries; i++) mockFreeEntry(entries[i]);
+    zfree(entries);
+    return 0;
+}
+
 /* --------- Defrag Test --------- */
 int test_vset_defrag(int argc, char **argv, int flags) {
     UNUSED(argc);

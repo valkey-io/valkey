@@ -6635,7 +6635,10 @@ int processIOThreadsReadDone(void) {
         client *c = lookupClientByID(followup_ids[i]);
         if (!c || !c->conn) continue;
 
-        if (processPendingCommandAndInputBuffer(c) == C_OK) beforeNextClient(c);
+        /* Skip blocked clients: pending_command is kept for retry after unblock. */
+        if (!c->flag.blocked && !c->flag.unblocked) {
+            if (processPendingCommandAndInputBuffer(c) == C_OK) beforeNextClient(c);
+        }
 
         c = lookupClientByID(followup_ids[i]);
         if (!c || !c->conn) continue;

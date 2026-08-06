@@ -526,7 +526,7 @@ ENGINE_SERVER_OBJ = \
     lzf_d.o \
     memory_prefetch.o \
     memtest.o \
-    minheap.o \
+    sorted_array.o \
     module.o \
     monotonic.o \
     mt19937-64.o \

@@ -1,12 +1,18 @@
 {
     "RESET": {
-        "summary": "Clears all entries from the specified type of command log.",
+        "summary": "Clears entries from the specified type of command log. Clears both the recency and magnitude entries unless one is selected.",
         "complexity": "O(N) where N is the number of entries in the commandlog",
         "group": "server",
         "since": "8.1.0",
-        "arity": 3,
+        "arity": -3,
         "container": "COMMANDLOG",
         "function": "commandlogCommand",
+        "history": [
+            [
+                "9.2.0",
+                "Added the `RECENCY` and `MAGNITUDE` options."
+            ]
+        ],
         "command_flags": [
             "ADMIN",
             "LOADING",
@@ -38,6 +44,24 @@
                         "name": "large-reply",
                         "type": "pure-token",
                         "token": "large-reply"
+                    }
+                ]
+            },
+            {
+                "name": "store",
+                "type": "oneof",
+                "optional": true,
+                "since": "9.2.0",
+                "arguments": [
+                    {
+                        "name": "recency",
+                        "type": "pure-token",
+                        "token": "RECENCY"
+                    },
+                    {
+                        "name": "magnitude",
+                        "type": "pure-token",
+                        "token": "MAGNITUDE"
                     }
                 ]
             }

@@ -4,9 +4,15 @@
         "complexity": "O(1)",
         "group": "server",
         "since": "8.1.0",
-        "arity": 3,
+        "arity": -3,
         "container": "COMMANDLOG",
         "function": "commandlogCommand",
+        "history": [
+            [
+                "9.2.0",
+                "Added the `RECENCY` and `MAGNITUDE` options."
+            ]
+        ],
         "command_flags": [
             "ADMIN",
             "LOADING",
@@ -41,6 +47,24 @@
                         "name": "large-reply",
                         "type": "pure-token",
                         "token": "large-reply"
+                    }
+                ]
+            },
+            {
+                "name": "store",
+                "type": "oneof",
+                "optional": true,
+                "since": "9.2.0",
+                "arguments": [
+                    {
+                        "name": "recency",
+                        "type": "pure-token",
+                        "token": "RECENCY"
+                    },
+                    {
+                        "name": "magnitude",
+                        "type": "pure-token",
+                        "token": "MAGNITUDE"
                     }
                 ]
             }

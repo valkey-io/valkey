@@ -4,9 +4,15 @@
         "complexity": "O(N) where N is the number of entries returned",
         "group": "server",
         "since": "8.1.0",
-        "arity": 4,
+        "arity": -4,
         "container": "COMMANDLOG",
         "function": "commandlogCommand",
+        "history": [
+            [
+                "9.2.0",
+                "Added the `RECENCY` and `MAGNITUDE` options."
+            ]
+        ],
         "command_flags": [
             "ADMIN",
             "LOADING",
@@ -18,7 +24,7 @@
         ],
         "reply_schema": {
             "type": "array",
-            "description": "Entries from the command log in chronological order.",
+            "description": "Entries from the command log, in chronological order for `RECENCY` or highest-value first for `MAGNITUDE`.",
             "uniqueItems": true,
             "items": {
                 "type": "array",
@@ -80,6 +86,24 @@
                         "name": "large-reply",
                         "type": "pure-token",
                         "token": "large-reply"
+                    }
+                ]
+            },
+            {
+                "name": "store",
+                "type": "oneof",
+                "optional": true,
+                "since": "9.2.0",
+                "arguments": [
+                    {
+                        "name": "recency",
+                        "type": "pure-token",
+                        "token": "RECENCY"
+                    },
+                    {
+                        "name": "magnitude",
+                        "type": "pure-token",
+                        "token": "MAGNITUDE"
                     }
                 ]
             }

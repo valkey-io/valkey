@@ -652,3 +652,110 @@ TEST_F(VsetTest, TestVsetFuzzer) {
     ASSERT_TRUE(vsetIsEmpty(&set) && mock_entry_count == 0);
     vsetRelease(&set);
 }
+
+TEST_F(VsetTest, TestVsetMemUsage) {
+    vset set;
+
+    /* NONE: memory usage should be 0 */
+    vsetInit(&set);
+    ASSERT_EQ(vsetMemUsage(&set), 0u);
+
+    /* SINGLE: memory usage should be 0 (entry pointer stored inline) */
+    insert_mock_entry_with_expiry(&set, 100);
+    ASSERT_EQ(vsetMemUsage(&set), 0u);
+
+    /* VECTOR: second entry forces SINGLE → VECTOR, memory now non-zero */
+    insert_mock_entry_with_expiry(&set, 200);
+    ASSERT_GT(vsetMemUsage(&set), 0u);
+
+    vsetRelease(&set);
+
+    /* RAX with one bucket: 200 entries all with same expiry time
+     * overflow the VECTOR limit (127) and land in a single HT-encoded
+     * time bucket inside the RAX. */
+    vsetInit(&set);
+    for (int i = 0; i < 200; i++) {
+        insert_mock_entry_with_expiry(&set, 1000LL);
+    }
+    size_t mem_one_bucket = vsetMemUsage(&set);
+    ASSERT_GT(mem_one_bucket, 0u);
+    vsetRelease(&set);
+
+    /* RAX with multiple buckets: spread entries across many time windows
+     * so the RAX holds several distinct time buckets. */
+    vsetInit(&set);
+    for (int i = 0; i < 200; i++) {
+        long long expiry = 1000LL + i * 10000LL;
+        insert_mock_entry_with_expiry(&set, expiry);
+    }
+    size_t mem_multi_bucket = vsetMemUsage(&set);
+    ASSERT_GT(mem_multi_bucket, 0u);
+    ASSERT_GT(mem_multi_bucket, mem_one_bucket);
+
+    vsetRelease(&set);
+}
+
+TEST_F(VsetTest, TestVsetClear) {
+    vset set;
+    vsetInit(&set);
+
+    /* Clear an already-empty set: should be safe and leave it empty */
+    vsetClear(&set);
+    ASSERT_TRUE(vsetIsEmpty(&set));
+
+    /* Clear a set with a couple of entries */
+    mock_entry *e1 = mockCreateEntry("clear_key1", 100);
+    mock_entry *e2 = mockCreateEntry("clear_key2", 200);
+    ASSERT_TRUE(vsetAddEntry(&set, mockGetExpiry, e1));
+    ASSERT_TRUE(vsetAddEntry(&set, mockGetExpiry, e2));
+    ASSERT_FALSE(vsetIsEmpty(&set));
+    vsetClear(&set);
+    ASSERT_TRUE(vsetIsEmpty(&set));
+
+    /* Entries survive clear — the vset only holds references,
+     * the caller still owns and is responsible for the entry objects. */
+    ASSERT_EQ(mockGetExpiry(e1), 100);
+    ASSERT_EQ(mockGetExpiry(e2), 200);
+    mockFreeEntry(e1);
+    mockFreeEntry(e2);
+
+    /* Clear a set with many entries (RAX encoding) */
+    for (int i = 0; i < 200; i++) {
+        insert_mock_entry_with_expiry(&set, 1000LL);
+    }
+    ASSERT_FALSE(vsetIsEmpty(&set));
+    vsetClear(&set);
+    ASSERT_TRUE(vsetIsEmpty(&set));
+
+    /* vsetRelease makes vsetIsValid return false */
+    ASSERT_TRUE(vsetIsValid(&set));
+    vsetRelease(&set);
+    ASSERT_FALSE(vsetIsValid(&set));
+}
+
+TEST_F(VsetTest, TestVsetIsValid) {
+    /* Uninitialized (zeroed stack) set is invalid */
+    vset set;
+    memset(&set, 0, sizeof(set));
+    ASSERT_FALSE(vsetIsValid(&set));
+
+    /* vsetInit produces a valid set */
+    vsetInit(&set);
+    ASSERT_TRUE(vsetIsValid(&set));
+
+    /* A populated set is still valid */
+    mock_entry *e1 = mockCreateEntry("valid_key1", 100);
+    ASSERT_TRUE(vsetAddEntry(&set, mockGetExpiry, e1));
+    ASSERT_TRUE(vsetIsValid(&set));
+
+    /* Released set is invalid */
+    vsetRelease(&set);
+    ASSERT_FALSE(vsetIsValid(&set));
+
+    /* Re-initialized after release is valid again */
+    vsetInit(&set);
+    ASSERT_TRUE(vsetIsValid(&set));
+
+    vsetRelease(&set);
+    mockFreeEntry(e1);
+}

@@ -373,8 +373,23 @@ void initIOThreads(void) {
 
 int trySendReadToIOThreads(client *c) {
     if (server.active_io_threads_num <= 1) return C_ERR;
-    /* If IO thread is already reading, return C_OK to make sure the main thread will not handle it. */
-    if (c->io_read_state != CLIENT_IDLE) return C_OK;
+    /* Fake/teardown clients may have no connection. */
+    if (!c->conn) return C_ERR;
+    /* Still reading on an IO thread: refresh postpone mask and leave it there. */
+    if (c->io_read_state == CLIENT_PENDING_IO) {
+        connSetPostponeUpdateState(c->conn, clientConnPostponeMaskFromIOState(c));
+        return C_OK;
+    }
+    /* Completed read waits for processIOThreadsReadDone; refresh postpone mask. */
+    if (c->io_read_state == CLIENT_COMPLETED_IO) {
+        connSetPostponeUpdateState(c->conn, clientConnPostponeMaskFromIOState(c));
+        return C_OK;
+    }
+    /* In-flight write: also postpone READ until processClientIOWriteDone. */
+    if (c->io_write_state != CLIENT_IDLE) {
+        connSetPostponeUpdateState(c->conn, clientConnPostponeMaskFromIOState(c) | CONN_POSTPONE_READ);
+        return C_OK;
+    }
     /* For simplicity, don't offload replica clients reads as read traffic from replica is negligible */
     if (getClientType(c) == CLIENT_TYPE_REPLICA) return C_ERR;
     /* With Lua debug client we may call connWrite directly in the main thread */
@@ -402,7 +417,7 @@ int trySendReadToIOThreads(client *c) {
     c->read_flags |= isReplicatedClient(c) ? READ_FLAGS_REPLICATED : 0;
 
     c->io_read_state = CLIENT_PENDING_IO;
-    connSetPostponeUpdateState(c->conn, 1);
+    connSetPostponeUpdateState(c->conn, clientConnPostponeMaskFromIOState(c));
     IOJobQueue_push(jq, ioThreadReadQueryFromClient, c);
     c->flag.pending_read = 1;
     listLinkNodeTail(server.clients_pending_io_read, &c->pending_read_list_node);
@@ -414,8 +429,11 @@ int trySendReadToIOThreads(client *c) {
  * or C_ERR if the client is not eligible for offloading. */
 int trySendWriteToIOThreads(client *c) {
     if (server.active_io_threads_num <= 1) return C_ERR;
+    if (!c->conn) return C_ERR;
     /* The I/O thread is already writing for this client. */
     if (c->io_write_state != CLIENT_IDLE) return C_OK;
+    /* Serialize with an in-flight read (PENDING or COMPLETED). */
+    if (c->io_read_state != CLIENT_IDLE) return C_ERR;
     /* Nothing to write */
     if (!clientHasPendingReplies(c)) return C_ERR;
     /* For simplicity, avoid offloading non-online replicas */
@@ -472,9 +490,9 @@ int trySendWriteToIOThreads(client *c) {
     serverAssert(c->bufpos > 0 || c->io_last_bufpos > 0 || is_replica);
 
     /* The main-thread will update the client state after the I/O thread completes the write. */
-    connSetPostponeUpdateState(c->conn, 1);
     c->write_flags = is_replica ? WRITE_FLAGS_IS_REPLICA : 0;
     c->io_write_state = CLIENT_PENDING_IO;
+    connSetPostponeUpdateState(c->conn, clientConnPostponeMaskFromIOState(c));
 
     IOJobQueue_push(jq, ioThreadWriteToClient, c);
     return C_OK;
@@ -676,7 +694,7 @@ int trySendAcceptToIOThreads(connection *conn) {
     c->io_read_state = CLIENT_PENDING_IO;
     c->flag.pending_read = 1;
     listLinkNodeTail(server.clients_pending_io_read, &c->pending_read_list_node);
-    connSetPostponeUpdateState(c->conn, 1);
+    connSetPostponeUpdateState(c->conn, clientConnPostponeMaskFromIOState(c));
     server.stat_io_accept_offloaded++;
     IOJobQueue_push(job_queue, ioThreadAccept, c);
 

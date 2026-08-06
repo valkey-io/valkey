@@ -48,9 +48,9 @@ static monotime getMonotonicUs_x86(void) {
     return ((__uint128_t)__rdtsc() * mono_ticks_speed) >> MONO_FPMULT_SHIFT;
 }
 
-/* Reject TSC when the kernel is not using it as clocksource (e.g. after a
- * cross-core sync failure). If sysfs is unavailable, return 0 and defer. */
-static int kernelClocksourceRejectsTsc(void) {
+/* Return 1 only when the kernel is using TSC as clocksource. Fail closed if
+ * sysfs is unreadable: constant_tsc alone does not prove cross-core sync. */
+static int kernelClocksourceIsTsc(void) {
     char buf[64];
     size_t len;
     FILE *f = fopen("/sys/devices/system/clocksource/clocksource0/current_clocksource", "r");
@@ -64,7 +64,7 @@ static int kernelClocksourceRejectsTsc(void) {
     len = strlen(buf);
     while (len > 0 && (buf[len - 1] == '\n' || buf[len - 1] == '\r' || buf[len - 1] == ' '))
         buf[--len] = '\0';
-    return strcmp(buf, "tsc") != 0;
+    return strcmp(buf, "tsc") == 0;
 }
 
 static void monotonicInit_x86linux(void) {
@@ -76,7 +76,7 @@ static void monotonicInit_x86linux(void) {
     int constantTsc = 0;
     int rc;
 
-    if (kernelClocksourceRejectsTsc()) {
+    if (!kernelClocksourceIsTsc()) {
         fprintf(stderr, "monotonic: x86 linux, kernel clocksource is not tsc");
         return;
     }

@@ -517,6 +517,7 @@ tags {"external:skip"} {
             wait_done_loading $client
             assert_equal rdb-value [$client get rdb-key]
             assert_equal {} [$client get transaction-key]
+            assert_equal OK [$client set post-recovery-key post-recovery-value]
 
             restart_server 0 true false
 
@@ -524,6 +525,7 @@ tags {"external:skip"} {
             wait_done_loading $client
             assert_equal rdb-value [$client get rdb-key]
             assert_equal {} [$client get transaction-key]
+            assert_equal post-recovery-value [$client get post-recovery-key]
         }
 
         clean_aof_persistence $aof_dirpath

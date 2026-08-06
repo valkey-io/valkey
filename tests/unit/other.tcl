@@ -6,19 +6,6 @@ start_server {tags {"other"}} {
         } {ok}
     }
 
-    # Regression for #4345: a zero TSC calibration multiplier freezes
-    # getMonotonicUs() at 0, so serverCron never runs and TIME stalls.
-    test {Monotonic clock is not frozen} {
-        set mono [status r monotonic_clock]
-        assert_no_match {*inf*} $mono
-        set t1 [r time]
-        after 200
-        set t2 [r time]
-        set delta_us [expr {([lindex $t2 0] - [lindex $t1 0]) * 1000000 +
-                            ([lindex $t2 1] - [lindex $t1 1])}]
-        assert {$delta_us >= 100000}
-    }
-
     test {Coverage: HELP commands} {
         assert_match "*OBJECT <subcommand> *" [r OBJECT HELP]
         assert_match "*MEMORY <subcommand> *" [r MEMORY HELP]

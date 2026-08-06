@@ -2,6 +2,7 @@
 #include <stddef.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <string.h>
 #include <time.h>
 #include "serverassert.h"
 
@@ -31,6 +32,7 @@ static char monotonic_info_string[32];
  *   USE_PROCESSOR_CLOCK: processor clock usage not explicitly disabled
  *   __x86_64__: requires 64-bit x86 architecture (for rdtsc instruction and 128-bit arithmetic)
  *   __linux__: needed to access /proc/cpuinfo for verifying 'constant_tsc' CPU flag
+ *              and the kernel clocksource sysfs node for cross-core TSC trust
  *   __SIZEOF_INT128__: requires compiler support for 128-bit integers to prevent wraparound
  */
 #if defined(USE_PROCESSOR_CLOCK) && defined(__x86_64__) && defined(__linux__) && defined(__SIZEOF_INT128__)
@@ -46,6 +48,25 @@ static monotime getMonotonicUs_x86(void) {
     return ((__uint128_t)__rdtsc() * mono_ticks_speed) >> MONO_FPMULT_SHIFT;
 }
 
+/* Reject TSC when the kernel is not using it as clocksource (e.g. after a
+ * cross-core sync failure). If sysfs is unavailable, return 0 and defer. */
+static int kernelClocksourceRejectsTsc(void) {
+    char buf[64];
+    size_t len;
+    FILE *f = fopen("/sys/devices/system/clocksource/clocksource0/current_clocksource", "r");
+    if (f == NULL) return 0;
+    if (fgets(buf, sizeof(buf), f) == NULL) {
+        fclose(f);
+        return 0;
+    }
+    fclose(f);
+
+    len = strlen(buf);
+    while (len > 0 && (buf[len - 1] == '\n' || buf[len - 1] == '\r' || buf[len - 1] == ' '))
+        buf[--len] = '\0';
+    return strcmp(buf, "tsc") != 0;
+}
+
 static void monotonicInit_x86linux(void) {
     const int bufflen = 256;
     char buf[bufflen];
@@ -54,6 +75,11 @@ static void monotonicInit_x86linux(void) {
     regmatch_t pmatch[nmatch];
     int constantTsc = 0;
     int rc;
+
+    if (kernelClocksourceRejectsTsc()) {
+        fprintf(stderr, "monotonic: x86 linux, kernel clocksource is not tsc");
+        return;
+    }
 
     /* Calibrate TSC ticks per microsecond against CLOCK_MONOTONIC.
      * This determines the actual TSC frequency regardless of what
@@ -70,13 +96,16 @@ static void monotonicInit_x86linux(void) {
         clock_gettime(CLOCK_MONOTONIC, &end);
 
         uint64_t elapsed_us = (end.tv_sec - start.tv_sec) * 1000000ULL + (end.tv_nsec - start.tv_nsec) / 1000;
+        /* Discard if TSC went backwards (core migration across unsynced TSCs). */
+        if (tsc_end <= tsc_start || elapsed_us == 0) continue;
         uint64_t tsc_elapsed = tsc_end - tsc_start;
         double sample_ticks_per_us = (double)tsc_elapsed / (double)elapsed_us;
         uint64_t sample_mult = (uint64_t)((double)(1ULL << MONO_FPMULT_SHIFT) / sample_ticks_per_us);
 
         /* Use the minimum out of TSC_CALIBRATION_ITERATIONS iterations for accuracy
-         * because mono_ticks_speed represents an inverse relationship of ticks_per_us. */
-        if (sample_mult < mono_ticks_speed) {
+         * because mono_ticks_speed represents an inverse relationship of ticks_per_us.
+         * Skip a zero multiplier: it would always win the minimum and freeze the clock. */
+        if (sample_mult != 0 && sample_mult < mono_ticks_speed) {
             mono_ticks_speed = sample_mult;
         }
     }
@@ -98,7 +127,7 @@ static void monotonicInit_x86linux(void) {
     }
     regfree(&constTscRegex);
 
-    if (mono_ticks_speed == UINT64_MAX) {
+    if (mono_ticks_speed == UINT64_MAX || mono_ticks_speed == 0) {
         fprintf(stderr, "monotonic: x86 linux, unable to determine clock rate");
         return;
     }

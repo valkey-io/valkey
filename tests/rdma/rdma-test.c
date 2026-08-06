@@ -8,7 +8,7 @@
  * ==========================================================================
  */
 
-#ifndef __linux__ /* currently RDMA is only supported on Linux */
+#ifndef __linux__    /* currently RDMA is only supported on Linux */
 
 #error "BUILD ERROR: RDMA is only supported on Linux"
 
@@ -33,8 +33,6 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-#include "test.h"
-
 typedef struct valkeyRdmaFeature {
     /* defined as following Opcodes */
     uint16_t opcode;
@@ -55,9 +53,8 @@ typedef struct valkeyRdmaMemory {
     /* defined as following Opcodes */
     uint16_t opcode;
     uint8_t rsvd[14];
-    /* address of a transfer buffer which is used to receive remote streaming
-     * data, aka 'RX buffer address'. The remote side should use this as 'TX
-     * buffer address' */
+    /* address of a transfer buffer which is used to receive remote streaming data,
+     * aka 'RX buffer address'. The remote side should use this as 'TX buffer address' */
     uint64_t addr;
     /* length of the 'RX buffer' */
     uint32_t length;
@@ -78,10 +75,11 @@ typedef enum valkeyRdmaOpcode {
     RegisterXferMemory = 3,
 } valkeyRdmaOpcode;
 
+#define MAX_THREADS 32
 #define UNUSED(x) (void)(x)
 #define MIN(a, b) (a) < (b) ? a : b
 #define VALKEY_RDMA_MAX_WQE 1024
-#define VALKEY_RDMA_DEFAULT_RX_LEN (1024 * 1024)
+#define VALKEY_RDMA_DEFAULT_RX_LEN  (1024*1024)
 #define VALKEY_RDMA_INVALID_OPCODE 0xffff
 
 typedef struct RdmaContext {
@@ -141,7 +139,7 @@ static inline long valkeyNowMs(void) {
     struct timeval tv;
 
     if (gettimeofday(&tv, NULL) < 0)
-        return -1;
+            return -1;
 
     return tv.tv_sec * 1000 + tv.tv_usec / 1000;
 }
@@ -150,6 +148,7 @@ static int rdmaPostRecv(RdmaContext *ctx, struct rdma_cm_id *cm_id, valkeyRdmaCm
     struct ibv_sge sge;
     size_t length = sizeof(valkeyRdmaCmd);
     struct ibv_recv_wr recv_wr, *bad_wr;
+
 
     sge.addr = (uint64_t)(uintptr_t)cmd;
     sge.length = length;
@@ -268,6 +267,7 @@ static int rdmaAdjustSendbuf(RdmaContext *ctx, unsigned int length) {
     return 0;
 }
 
+
 static int rdmaSendCommand(RdmaContext *ctx, struct rdma_cm_id *cm_id, valkeyRdmaCmd *cmd) {
     struct ibv_send_wr send_wr, *bad_wr;
     struct ibv_sge sge;
@@ -305,7 +305,7 @@ static int rdmaSendCommand(RdmaContext *ctx, struct rdma_cm_id *cm_id, valkeyRdm
 }
 
 static int connRdmaRegisterRx(RdmaContext *ctx, struct rdma_cm_id *cm_id) {
-    valkeyRdmaCmd cmd = {0};
+    valkeyRdmaCmd cmd = { 0 };
 
     cmd.memory.opcode = htons(RegisterXferMemory);
     cmd.memory.addr = htobe64((uint64_t)(uintptr_t)ctx->recv_buf);
@@ -688,6 +688,7 @@ error:
 }
 
 static int valkeyRdmaEstablished(RdmaContext *ctx, struct rdma_cm_id *cm_id) {
+
     /* it's time to tell redis we have already connected */
     ctx->connected = true;
 
@@ -772,7 +773,7 @@ static int valkeyRdmaWaitConn(RdmaContext *ctx, long timeout) {
 
 static RdmaContext *valkeyContextConnectRdma(const char *addr, int port, int timeout) {
     int ret;
-    char _port[6]; /* strlen("65535"); */
+    char _port[6];  /* strlen("65535"); */
     struct addrinfo hints, *servinfo = NULL, *p;
     RdmaContext *ctx = NULL;
     struct sockaddr_storage saddr;
@@ -784,8 +785,8 @@ static RdmaContext *valkeyContextConnectRdma(const char *addr, int port, int tim
     hints.ai_socktype = SOCK_STREAM;
 
     if ((ret = getaddrinfo(addr, _port, &hints, &servinfo)) != 0) {
-        hints.ai_family = AF_INET6;
-        if ((ret = getaddrinfo(addr, _port, &hints, &servinfo)) != 0) {
+         hints.ai_family = AF_INET6;
+         if ((ret = getaddrinfo(addr, _port, &hints, &servinfo)) != 0) {
             rdmaFatal(gai_strerror(ret));
             return NULL;
         }
@@ -815,11 +816,11 @@ static RdmaContext *valkeyContextConnectRdma(const char *addr, int port, int tim
 
     for (p = servinfo; p != NULL; p = p->ai_next) {
         if (p->ai_family == PF_INET) {
-            memcpy(&saddr, p->ai_addr, sizeof(struct sockaddr_in));
-            ((struct sockaddr_in *)&saddr)->sin_port = htons(port);
+                memcpy(&saddr, p->ai_addr, sizeof(struct sockaddr_in));
+                ((struct sockaddr_in *)&saddr)->sin_port = htons(port);
         } else if (p->ai_family == PF_INET6) {
-            memcpy(&saddr, p->ai_addr, sizeof(struct sockaddr_in6));
-            ((struct sockaddr_in6 *)&saddr)->sin6_port = htons(port);
+                memcpy(&saddr, p->ai_addr, sizeof(struct sockaddr_in6));
+                ((struct sockaddr_in6 *)&saddr)->sin6_port = htons(port);
         } else {
             rdmaFatal("RDMA: unsupported family");
             goto free_rdma;
@@ -854,20 +855,18 @@ free_rdma:
     }
 
 end:
-    if (servinfo) {
+    if(servinfo) {
         freeaddrinfo(servinfo);
     }
 
     return ctx;
 }
 
-static rdma_test_config config = {
-    .port = RDMA_TEST_DEFAULT_PORT,
-    .threads = 0, /* single-threaded main mode by default */
-    .minkeys = 128,
-    .maxkeys = 8192,
-    .datasize = RDMA_TEST_DEFAULT_DATASIZE_RDMA_TEST,
-};
+static int port = 6379;
+static char *host = NULL;
+static int minkeys = 128;
+static int maxkeys = 8192;
+static int keysize = 1024 + 1; /* for '\0' terminator */
 
 struct test_kv_pair {
     char key[32]; /* "THREAD01-000001" */
@@ -880,12 +879,12 @@ static void *test_routine(void *arg) {
     struct test_kv_pair *kv_pairs = NULL, *kv_pair;
     int keys;
 
-    ctx = valkeyContextConnectRdma(config.host, config.port, 1000);
+    ctx = valkeyContextConnectRdma(host, port, 1000);
     if (!ctx) {
-        rdmaFatal("RDMA connect failed");
+         rdmaFatal("RDMA connect failed");
     }
 
-    int bufsize = config.datasize + 128;
+    int bufsize = keysize + 128;
     char *inbuf = malloc(bufsize);
     char *outbuf = malloc(bufsize);
     int inbytes, outbytes;
@@ -900,15 +899,16 @@ static void *test_routine(void *arg) {
     printf("Valkey Over RDMA test thread[%d] PING/PONG [OK]\n", tid);
 
     /* prepare random KV for SET/GET */
-    keys = rdmaTestRandCount(config.minkeys, config.maxkeys);
+    keys = random() % (maxkeys - minkeys) + minkeys;
     kv_pairs = calloc(sizeof(struct test_kv_pair), keys);
 
     for (int i = 0; i < keys; i++) {
         kv_pair = &kv_pairs[i];
-        rdmaTestFormatThreadKey(kv_pair->key, sizeof(kv_pair->key), tid, i);
-        kv_pair->value = rdmaTestNewValue(config.datasize);
-        if (!kv_pair->value)
-            rdmaFatal("RDMA: alloc value failed");
+        snprintf(kv_pair->key, sizeof(kv_pair->key) - 1, "THREAD%02d-%06d", tid, i);
+        kv_pair->value = calloc(keysize, 1);
+        for (int k = 0; k < keysize - 1; k++) {
+            kv_pair->value[k] = 'A' + random() % 26; /* generate upper case string */
+        }
     }
     printf("Valkey Over RDMA test thread[%d] prepare %d KVs [OK]\n", tid, keys);
 
@@ -918,18 +918,16 @@ static void *test_routine(void *arg) {
     for (int i = 0; i < keys; i++) {
         kv_pair = &kv_pairs[i];
         /* build SET command */
-        outbytes =
-            sprintf(outbuf, "*3\r\n$3\r\nSET\r\n$%ld\r\n%s\r\n$%zu\r\n%.*s\r\n",
-                    strlen(kv_pair->key), kv_pair->key, config.datasize,
-                    (int)config.datasize, kv_pair->value);
+        outbytes = sprintf(outbuf, "*3\r\n$3\r\nSET\r\n$%ld\r\n%s\r\n$%ld\r\n%s\r\n",
+                           strlen(kv_pair->key), kv_pair->key,
+                           strlen(kv_pair->value), kv_pair->value);
         valkeyRdmaWrite(ctx, outbuf, outbytes);
         inbytes = valkeyRdmaReadFull(ctx, inbuf, strlen(okresp));
         assert(!strncmp("+OK\r\n", inbuf, inbytes));
     }
     printf("Valkey Over RDMA test thread[%d] SET %d KVs [OK]\n", tid, keys);
 
-    /* # round 3, test BGSAVE, to avoid "-ERR Background save already", run BGSAVE
-     * only once */
+    /* # round 3, test BGSAVE, to avoid "-ERR Background save already", run BGSAVE only once */
     char *bgsavecmd = "*1\r\n$6\r\nBGSAVE\r\n";
     char *bgsaveresp = "+Background saving started\r\n";
     static int bgsaved;
@@ -942,9 +940,8 @@ static void *test_routine(void *arg) {
     }
 
     /* # round 4, test GET. also verify all the value already set */
-    char getrespprex[32];
-    int getrespprexlen =
-        snprintf(getrespprex, sizeof(getrespprex), "$%zu\r\n", config.datasize);
+    char *getrespprex = "$1024\r\n";
+    int getrespprexlen = strlen(getrespprex);
 
     for (int i = 0; i < keys; i++) {
         kv_pair = &kv_pairs[i];
@@ -952,27 +949,96 @@ static void *test_routine(void *arg) {
         outbytes = sprintf(outbuf, "*2\r\n$3\r\nGET\r\n$%ld\r\n%s\r\n",
                            strlen(kv_pair->key), kv_pair->key);
         valkeyRdmaWrite(ctx, outbuf, outbytes);
-        inbytes =
-            valkeyRdmaReadFull(ctx, inbuf, getrespprexlen + config.datasize + 2);
+        inbytes = valkeyRdmaReadFull(ctx, inbuf, getrespprexlen + strlen(kv_pair->value) + 2);
         assert(!strncmp(getrespprex, inbuf, getrespprexlen));
-        assert(rdmaTestValueEquals(inbuf + getrespprexlen, config.datasize,
-                                   kv_pair->value, config.datasize));
+        assert(!strncmp(kv_pair->value, inbuf + getrespprexlen, strlen(kv_pair->value)));
     }
     printf("Valkey Over RDMA test thread[%d] GET %d KVs [OK]\n", tid, keys);
 
     return NULL;
 }
 
-int main(int argc, char *argv[]) {
-    pthread_t threads[RDMA_TEST_MAX_THREADS];
+void usage(char *proc) {
+    printf("%s usage:\n", proc);
+    printf("\t--help/-H\n");
+    printf("\t--host/-h HOSTADDR\n");
+    printf("\t--port/-p PORT\n");
+    printf("\t--maxkeys/-M MAXKEYS\n");
+    printf("\t--minkeys/-M MINKEYS\n");
+    printf("\t--thread/-t THREADS\n");
+}
 
-    rdmaTestParseArgs(argc, argv, &config);
+int main(int argc, char *argv[])
+{
+    int c, args;
+    int nr_threads = 0;
+    pthread_t threads[MAX_THREADS];
+
+    static struct option long_opts[] = {
+        { "help", no_argument, NULL, 'H' },
+        { "host", required_argument, NULL, 'h' },
+        { "port", required_argument, NULL, 'p' },
+        { "maxkeys", required_argument, NULL, 'M' },
+        { "minkeys", required_argument, NULL, 'm' },
+        { "thread", required_argument, NULL, 't' },
+    };
+    static char *short_opts = "Hh:p:t:M:m:";
+
+    while (1) {
+        c = getopt_long(argc, argv, short_opts, long_opts, &args);
+        if (c == -1) {
+            break;
+        }
+        switch (c) {
+        case 'h':
+            host = optarg;
+            break;
+
+        case 'p':
+            port = atoi(optarg);
+            if (port <= 0 || port > 65535) {
+                rdmaFatal("invalid port");
+            }
+            break;
+
+        case 't':
+            nr_threads = atoi(optarg);
+            if (nr_threads < 0 || nr_threads > MAX_THREADS) {
+                rdmaFatal("--threads/-t is expected as [0, 32]");
+            }
+            break;
+
+        case 'M':
+            maxkeys = atoi(optarg);
+            break;
+
+        case 'm':
+            minkeys = atoi(optarg);
+            break;
+
+        case 'H':
+            usage(argv[0]);
+            exit(0);
+
+        default:
+            usage(argv[0]);
+            exit(-1); /* this is not considered as success, to avoid auto-test workaround */
+        }
+    }
+
+    if (!host) {
+         rdmaFatal("missing --host/-H");
+    }
+
+    if (minkeys > maxkeys) {
+         rdmaFatal("minkeys should less than maxkeys");
+    }
 
     /* To make the test randomly */
     srandom(time(NULL) ^ getpid());
 
     /* main thread mode */
-    if (!config.threads) {
+    if (!nr_threads) {
         printf("Test a single client in main thread ...\n");
         test_routine(NULL);
 
@@ -980,11 +1046,11 @@ int main(int argc, char *argv[]) {
     }
 
     /* multi threads mode */
-    for (int i = 0; i < config.threads; i++) {
+    for (int i = 0; i < nr_threads; i++) {
         assert(!pthread_create(&threads[i], NULL, test_routine, NULL));
     }
 
-    for (int i = 0; i < config.threads; i++) {
+    for (int i = 0; i < nr_threads; i++) {
         pthread_join(threads[i], NULL);
     }
 
@@ -993,4 +1059,4 @@ int main(int argc, char *argv[]) {
     return 0;
 }
 
-#endif /* __linux__ */
+#endif   /* __linux__ */

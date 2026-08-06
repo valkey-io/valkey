@@ -17,6 +17,11 @@ import argparse
 import sys
 import signal
 
+RDMA_PORT = 6379
+IO_THREADS = 4
+BENCH_TIMEOUT = 120
+
+
 def build_program():
     valkeydir = os.path.dirname(os.path.abspath(__file__)) + "/../.."
     cmd = "make -C " + valkeydir + "/tests/rdma"
@@ -24,10 +29,10 @@ def build_program():
     outs, _ = p.communicate()
     if p.returncode:
         print("---------------\n" + outs.decode() + "---------------\n")
-        print("Valkey Over RDMA build test programs [FAILED]")
+        print("Valkey Over RDMA build rdma-test [FAILED]")
         return 1
 
-    print("Valkey Over RDMA build test programs [OK]")
+    print("Valkey Over RDMA build rdma-test program [OK]")
     return 0
 
 
@@ -92,16 +97,12 @@ def find_rdma_ip_from_sysfs(rxe_only=False):
     return None
 
 
-# iterate /sys/class/infiniband, find any usable RDMA device, and return IPv4/IPV6 address
 def find_rdma_dev(install_rxe=False):
-    # After rdma link add, gid_attrs/ndevs can lag behind the device node. Unstable
-    # usually hid this because rdma-test.c compilation took long enough; on CI the
-    # main BUILD_RDMA=yes step pre-builds libvalkey, so this script's make is often
-    # instant and find runs too early unless we retry.
+    # After rdma link add, gid_attrs/ndevs can lag behind the device node.
+    # Retry briefly when we just installed RXE. Prefer RXE over host NICs
+    # (e.g. GitHub Actions mana_0) which share an IP but fail rdma_resolve_addr.
     retries = 10 if install_rxe else 1
     for attempt in range(retries):
-        # With --install-rxe, ignore host RDMA NICs (e.g. GitHub Actions mana_0).
-        # They share the same IP but rdma_resolve_addr() fails for local tests.
         ipaddr = find_rdma_ip_from_sysfs(rxe_only=install_rxe)
         if ipaddr is not None:
             return ipaddr
@@ -119,10 +120,51 @@ def find_rdma_dev(install_rxe=False):
     return None
 
 
-def run_test_client(name, cmd, timeout):
+def print_server_log(logpath, label):
+    try:
+        with open(logpath, "r") as fp:
+            content = fp.read()
+    except OSError:
+        return
+    if not content:
+        return
+    print("Valkey Over RDMA valkey-server " + label + " log:")
+    print("---------------\n" + content + "---------------\n")
+
+
+def start_server(svrcmd, logpath):
+    logfile = open(logpath, "w", buffering=1)
+    svr = subprocess.Popen(svrcmd, shell=False, stdout=logfile, stderr=subprocess.STDOUT)
+    try:
+        svr.wait(1)
+    except subprocess.TimeoutExpired:
+        print("Valkey Over RDMA valkey-server start [OK]")
+        return (svr, logfile, logpath)
+
+    logfile.flush()
+    logfile.close()
+    print("Valkey Over RDMA valkey-server exited within 1s [FAILED]")
+    print_server_log(logpath, "startup")
+    svr.wait()
+    return None
+
+
+def stop_server(svr_state):
+    if svr_state is None:
+        return
+    svr, logfile, _logpath = svr_state
+    if svr.poll() is None:
+        svr.kill()
+    svr.wait()
+    logfile.flush()
+    logfile.close()
+
+
+def run_cmd(name, cmd, timeout):
     start = time.time()
     try:
-        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=timeout, text=True)
+        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                timeout=timeout, text=True)
     except subprocess.TimeoutExpired as e:
         print("Valkey Over RDMA " + name + " timed out after " + str(timeout) + "s [FAILED]")
         if e.stdout:
@@ -141,108 +183,52 @@ def run_test_client(name, cmd, timeout):
     return 0
 
 
-def build_server_cmd(svrpath, tmpdir, ipaddr, rdma_port, io_threads):
-    cmd = [svrpath, "--port", "0", "--loglevel", "verbose", "--protected-mode", "yes",
-           "--appendonly", "no", "--daemonize", "no", "--dir", tmpdir,
-           "--rdma-port", str(rdma_port), "--rdma-bind", ipaddr]
-    if io_threads:
-        cmd.extend(["--io-threads", str(io_threads), "--io-threads-always-active", "yes"])
-    return cmd
+def server_base_cmd(svrpath, tmpdir, ipaddr):
+    return [svrpath, "--port", "0", "--loglevel", "verbose", "--protected-mode", "yes",
+            "--appendonly", "no", "--daemonize", "no", "--dir", tmpdir,
+            "--rdma-port", str(RDMA_PORT), "--rdma-bind", ipaddr]
 
 
-def build_test_client_cmd(clipath, ipaddr, rdma_port):
-    """Only pass connection info; workload defaults live in each C test binary."""
-    return [clipath, "-h", ipaddr, "-p", str(rdma_port)]
-
-
-def print_server_log(logpath, label):
-    try:
-        with open(logpath, "r") as fp:
-            content = fp.read()
-    except OSError:
-        return
-
-    if not content:
-        return
-
-    print("Valkey Over RDMA valkey-server " + label + " log:")
-    print("---------------\n" + content + "---------------\n")
-
-
-def start_server(cmd, logpath):
-    logfile = open(logpath, "w", buffering=1)
-    svr = subprocess.Popen(cmd, shell=False, stdout=logfile, stderr=subprocess.STDOUT)
-    try:
-        svr.wait(1)
-    except subprocess.TimeoutExpired:
-        print("Valkey Over RDMA valkey-server start [OK]")
-        return (svr, logfile, logpath)
-
-    logfile.flush()
-    logfile.close()
-    print("Valkey Over RDMA valkey-server exited within 1s [FAILED]")
-    print_server_log(logpath, "startup")
-    svr.wait()
-    return None
-
-
-def stop_server(svr_state):
-    if svr_state is None:
-        return
-
-    svr, logfile, _logpath = svr_state
-    if svr.poll() is None:
-        svr.kill()
-    svr.wait()
-    logfile.flush()
-    logfile.close()
-
-
-def test_rdma(ipaddr, rdma_port, io_threads, libvalkey_timeout):
+def test_rdma(ipaddr):
     valkeydir = os.path.dirname(os.path.abspath(__file__)) + "/../.."
-
-    # step 1, prepare test directory
     tmpdir = valkeydir + "/tests/rdma/tmp"
     subprocess.Popen("mkdir -p " + tmpdir, shell=True).wait()
 
     svrpath = valkeydir + "/src/valkey-server"
+    benchpath = valkeydir + "/src/valkey-benchmark"
+    clipath = valkeydir + "/tests/rdma/rdma-test"
     svr = None
     try:
-        # step 2, rdma-test uses the original server config (RDMA only, no IO threads)
+        # Phase 1: basic RDMA CM/verbs smoke (no IO threads), same as upstream.
         svr_log = tmpdir + "/server-rdma-test.log"
-        svr = start_server(build_server_cmd(svrpath, tmpdir, ipaddr, rdma_port, io_threads=0),
-                           svr_log)
+        svr = start_server(server_base_cmd(svrpath, tmpdir, ipaddr), svr_log)
         if svr is None:
             return 1
 
-        clipath = valkeydir + "/tests/rdma/rdma-test"
-        clicmd = build_test_client_cmd(clipath, ipaddr, rdma_port)
-        retval = run_test_client("rdma-test", clicmd, 60)
+        clicmd = [clipath, "--thread", "4", "-h", ipaddr, "-p", str(RDMA_PORT)]
+        retval = run_cmd("rdma-test", clicmd, 60)
         if retval:
-            stop_server(svr)
-            svr = None
             print_server_log(svr_log, "rdma-test")
             return retval
         stop_server(svr)
         svr = None
 
-        # step 3, libvalkey-test restarts server with IO threads for the regression case
-        svr_log = tmpdir + "/server-libvalkey-test.log"
-        svr = start_server(build_server_cmd(svrpath, tmpdir, ipaddr, rdma_port, io_threads),
-                           svr_log)
+        # Phase 2: RDMA + IO threads stress via valkey-benchmark (repro path for #3611).
+        svr_log = tmpdir + "/server-benchmark.log"
+        svrcmd = server_base_cmd(svrpath, tmpdir, ipaddr) + [
+            "--io-threads", str(IO_THREADS), "--io-threads-always-active", "yes"]
+        svr = start_server(svrcmd, svr_log)
         if svr is None:
             return 1
 
-        clipath = valkeydir + "/tests/rdma/libvalkey-test"
-        clicmd = build_test_client_cmd(clipath, ipaddr, rdma_port)
-        retval = run_test_client("libvalkey-test", clicmd, libvalkey_timeout)
+        benchcmd = [benchpath, "-h", ipaddr, "-p", str(RDMA_PORT), "--rdma", "-q",
+                    "-d", "256", "--threads", "16", "-c", "128", "-P", "384",
+                    "-n", "200000", "-t", "set,get"]
+        print("Valkey Over RDMA valkey-benchmark " + " ".join(benchcmd[1:]))
+        retval = run_cmd("valkey-benchmark", benchcmd, BENCH_TIMEOUT)
         if retval:
-            stop_server(svr)
-            svr = None
-            print_server_log(svr_log, "libvalkey-test")
+            print_server_log(svr_log, "valkey-benchmark")
             return retval
-        stop_server(svr)
-        svr = None
         return 0
     finally:
         stop_server(svr)
@@ -250,8 +236,7 @@ def test_rdma(ipaddr, rdma_port, io_threads, libvalkey_timeout):
 
 
 def test_exit(retval, install_rxe):
-    # Once we're tearing down, ignore further interrupts so cleanup runs to
-    # completion. Otherwise a Ctrl+C during rmmod leaves the RXE device behind.
+    # Ignore further interrupts so cleanup (kill server / remove RXE) finishes.
     signal.signal(signal.SIGINT, signal.SIG_IGN)
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
 
@@ -266,14 +251,7 @@ def test_exit(retval, install_rxe):
 
 
 def install_signal_handlers():
-    """Raise KeyboardInterrupt on SIGINT/SIGTERM so that interrupting the test
-    (e.g. Ctrl+C) still runs the normal cleanup path - killing valkey-server
-    and removing the RXE device. Without this, an interrupted run leaks the
-    RXE device and the server, and the leftover RXE state can make the next
-    rdma-test fail with a spurious assertion."""
     def handler(signum, frame):
-        # Re-arm as ignored so a second Ctrl+C can't interrupt the teardown
-        # (kill server / remove RXE device) already in progress.
         signal.signal(signal.SIGINT, signal.SIG_IGN)
         signal.signal(signal.SIGTERM, signal.SIG_IGN)
         raise KeyboardInterrupt
@@ -288,12 +266,6 @@ if __name__ == "__main__":
         formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("-r", "--install-rxe", action='store_true',
         help="install RXE driver and setup RXE device")
-    parser.add_argument("--rdma-port", type=int, default=6379,
-        help="RDMA port for valkey-server and test clients")
-    parser.add_argument("--io-threads", type=int, default=4,
-        help="valkey-server IO threads during libvalkey-test")
-    parser.add_argument("--timeout", type=int, default=120,
-        help="libvalkey-test client timeout in seconds")
     args = parser.parse_args()
     install_signal_handlers()
 
@@ -310,7 +282,6 @@ if __name__ == "__main__":
                 print("Valkey Over RDMA setup RXE [FAILED]")
                 test_exit(1, args.install_rxe)
 
-        # build C client into binary
         retval = build_program()
         if retval:
             test_exit(retval, args.install_rxe)
@@ -320,7 +291,7 @@ if __name__ == "__main__":
             print("Valkey Over RDMA test detect existing RDMA device [FAILED]")
             retval = 1
         else:
-            retval = test_rdma(ipaddr, args.rdma_port, args.io_threads, args.timeout)
+            retval = test_rdma(ipaddr)
             if not retval:
                 print("Valkey Over RDMA test over " + ipaddr + " [OK]")
     except KeyboardInterrupt:

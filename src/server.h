@@ -3574,9 +3574,11 @@ int calculateKeySlot(sds key);
 
 /* kvstore wrappers */
 int getKVStoreIndexForKey(sds key);
+int getKVStoreIndexForKeyNoCache(sds key);
 int dbExpand(serverDb *db, uint64_t db_size, int try_expand);
 int dbExpandExpires(serverDb *db, uint64_t db_size, int try_expand);
 robj *dbFind(serverDb *db, sds key);
+robj *dbFindNoCachedSlot(serverDb *db, sds key);
 robj *dbFindExpires(serverDb *db, sds key);
 robj *dbFindExpiresWithDictIndex(serverDb *db, sds key, int dict_index);
 unsigned long long dbSize(serverDb *db);

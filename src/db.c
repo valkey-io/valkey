@@ -234,6 +234,13 @@ int getKVStoreIndexForKey(sds key) {
     return server.cluster_enabled ? getKeySlot(key) : 0;
 }
 
+/* Same as getKVStoreIndexForKey(), but always computes the slot instead of reusing the one cached on
+ * the current client. Use this for keys that are not guaranteed to belong to the executing command's
+ * slot, such as the WATCHed keys of other clients. */
+int getKVStoreIndexForKeyNoCache(sds key) {
+    return server.cluster_enabled ? (int)keyHashSlot(key, (int)sdslen(key)) : 0;
+}
+
 /* Returns the cluster hash slot for a given key, trying to use the cached slot that
  * stored on the server.current_client first. If there is no cached value, it will compute the hash slot
  * and then cache the value.*/
@@ -2150,10 +2157,9 @@ static int keyIsExpiredWithDictIndex(serverDb *db, robj *key, int dict_index) {
 
 /* Check if the key is expired. */
 int keyIsExpired(serverDb *db, robj *key) {
-    sds keyname = objectGetVal(key);
-    /* The key is not guaranteed to belong to the executing command's slot, so
-     * the slot cached on the client cannot be used here, calculate it. */
-    int dict_index = server.cluster_enabled ? (int)keyHashSlot(keyname, sdslen(keyname)) : 0;
+    /* The key is not guaranteed to belong to the executing command's slot, so the slot cached on the
+     * client cannot be used here. */
+    int dict_index = getKVStoreIndexForKeyNoCache(objectGetVal(key));
     return keyIsExpiredWithDictIndex(db, key, dict_index);
 }
 
@@ -2274,6 +2280,12 @@ static robj *dbFindWithDictIndex(serverDb *db, sds key, int dict_index) {
 
 robj *dbFind(serverDb *db, sds key) {
     int dict_index = getKVStoreIndexForKey(key);
+    return dbFindWithDictIndex(db, key, dict_index);
+}
+
+/* Same as dbFind(), for keys that are not guaranteed to belong to the executing command's slot. */
+robj *dbFindNoCachedSlot(serverDb *db, sds key) {
+    int dict_index = getKVStoreIndexForKeyNoCache(key);
     return dbFindWithDictIndex(db, key, dict_index);
 }
 

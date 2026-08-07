@@ -48,8 +48,10 @@
 
 #ifdef HAVE_DEFRAG
 
-typedef enum { DEFRAG_NOT_DONE = 0,
-               DEFRAG_DONE = 1 } doneStatus;
+typedef enum {
+    DEFRAG_NOT_DONE = 0,
+    DEFRAG_DONE = 1
+} doneStatus;
 
 /*
  * Defragmentation is performed in stages.  Each stage is serviced by a stage function

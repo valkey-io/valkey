@@ -689,5 +689,80 @@ start_server {} {
     }
 }
 
+start_server {} {
+    # Disable copy avoidance
+    r config set min-io-threads-avoid-copy-reply 0
+    r config set min-string-size-avoid-copy-reply 0
+    r config set min-string-size-avoid-copy-reply-threaded 0
+
+    test "a client pending an async free doesn't cause over-eviction of other clients" {
+        r debug replybuffer resizing 0
+        r client setname control
+        r client no-evict on
+        r config set maxmemory-clients 0
+
+        # A large client we'll protect (simulating a deferred/async close), plus two
+        # small clients that must survive once the protected client's memory is accounted for.
+        set big_size [mb 2]
+        set small_size [kb 100]
+
+        set rr_big [valkey_client]
+        $rr_big client setname big_client
+        $rr_big write [join [list "*2\r\n\$$big_size\r\n" [string repeat v $big_size]] ""]
+        $rr_big flush
+        wait_for_condition 200 10 {
+            [client_field big_client tot-mem] >= $big_size
+        } else {
+            fail "Failed to fill qbuf for big_client"
+        }
+
+        set small_rrs {}
+        for {set j 0} {$j < 2} {incr j} {
+            set rr [valkey_client]
+            lappend small_rrs $rr
+            $rr client setname small_client$j
+            $rr write [join [list "*2\r\n\$$small_size\r\n" [string repeat v $small_size]] ""]
+            $rr flush
+            wait_for_condition 200 10 {
+                [client_field small_client$j tot-mem] >= $small_size
+            } else {
+                fail "Failed to fill qbuf for small_client$j"
+            }
+        }
+
+        set big_mem [client_field big_client tot-mem]
+        set small0_mem [client_field small_client0 tot-mem]
+        set small1_mem [client_field small_client1 tot-mem]
+        set control_mem [client_field control tot-mem]
+
+        # Protect big_client so freeClient() can only defer to an async close.
+        # Fetch its id via CLIENT LIST (rr_big's own connection is mid-parse, see above).
+        set big_id [client_field big_client id]
+        r debug protect-client $big_id
+
+        # Set the limit so freeing just the big client's memory suffices; the
+        # small clients must not need to be touched.
+        set limit [expr {$control_mem + $small0_mem + $small1_mem + 1024}]
+        r config set maxmemory-clients $limit
+
+        # The big client should be marked for (async) close: flags contains 'A'.
+        wait_for_condition 50 100 {
+            [string match {*A*} [client_field big_client flags]]
+        } else {
+            fail "protected big client was not scheduled for close"
+        }
+
+        # Still present (only unlinked once actually freed), and the small clients
+        # must not have been evicted to compensate.
+        assert {[client_exists big_client]}
+        assert {[client_exists small_client0]}
+        assert {[client_exists small_client1]}
+
+        r debug replybuffer resizing 1
+        catch {$rr_big close}
+        foreach rr $small_rrs {$rr close}
+    } {} {needs:debug tls:skip}
+}
+
 } ;# tags
 

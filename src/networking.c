@@ -177,6 +177,12 @@ size_t getStringObjectSdsUsedMemory(robj *o) {
     return 0;
 }
 
+/* Return the total memory used by a string object, including the robj
+ * structure and the sds string overhead (internal fragmentation). */
+size_t getStringObjectMemory(robj *o) {
+    return sizeof(robj) + getStringObjectSdsUsedMemory(o);
+}
+
 /* Return the length of a string object.
  * This does NOT include internal fragmentation or sds unused space. */
 size_t getStringObjectLen(robj *o) {
@@ -191,6 +197,17 @@ size_t getStringObjectLen(robj *o) {
 /* Actual allocated size of a client reply block */
 static size_t clientReplyAllocSize(clientReplyBlock *block) {
     return sizeof(clientReplyBlock) + block->size;
+}
+
+/* Postpone mask from client input/command state. Hold READ only while parsed pipeline
+ * commands are still in cmd_queue (must be consumed via processInputBuffer, not a new
+ * parseInputBuffer). Do not use multibulklen or pending_command here: incomplete parses
+ * and not-yet-run commands still need the read path (or processPendingCommandAndInputBuffer)
+ * to make progress. */
+int clientConnPostponeMask(client *c) {
+    int mask = clientConnPostponeMaskFromIOState(c);
+    if (c->cmd_queue.off < c->cmd_queue.len) mask |= CONN_POSTPONE_READ;
+    return mask;
 }
 
 /* Client.reply list dup and free methods. */
@@ -253,12 +270,29 @@ static inline int isReplicaReadyForReplData(client *replica) {
            !(replica->flag.close_asap);
 }
 
+/* The subscribe / unsubscribe command family has a push as a reply,
+ * or in other words, it responds with a push (or several of them
+ * depending on how many arguments it got), and has no reply. */
+int cmdHasPushAsReply(struct serverCommand *cmd) {
+    if (!cmd) return 0;
+    return cmd->proc == subscribeCommand || cmd->proc == unsubscribeCommand || cmd->proc == psubscribeCommand ||
+           cmd->proc == punsubscribeCommand || cmd->proc == ssubscribeCommand || cmd->proc == sunsubscribeCommand;
+}
+
+/* Publish-to-self push must wait until after the command reply. */
+static int shouldDeferPushMessage(client *c) {
+    return c->flag.pushing && c == server.current_client && server.executing_client &&
+           !cmdHasPushAsReply(server.executing_client->cmd);
+}
+
 /* Decides if copy avoidance is preferred according to client type, number of I/O threads, object size
  * Maybe called with NULL obj for evaluation with no regard to object size
  * Copy avoidance can be allowed only for regular Valkey clients
  * that use _writeToClient handler to write replies to client connection */
 static int isCopyAvoidPreferred(client *c, robj *obj) {
     if (c->flag.fake || isDeferredReplyEnabled(c)) return 0;
+    /* Skip copy avoidance when push bytes would be deferred into pending_push_messages. */
+    if (shouldDeferPushMessage(c)) return 0;
 
     int type = getClientType(c);
     if (type != CLIENT_TYPE_NORMAL && type != CLIENT_TYPE_PUBSUB) return 0;
@@ -707,15 +741,6 @@ static void _addBulkStrRefToToList(client *c, const void *payload, size_t len) {
     _addReplyPayloadToList(c, c->reply, payload, len, BULK_STR_REF);
 }
 
-/* The subscribe / unsubscribe command family has a push as a reply,
- * or in other words, it responds with a push (or several of them
- * depending on how many arguments it got), and has no reply. */
-int cmdHasPushAsReply(struct serverCommand *cmd) {
-    if (!cmd) return 0;
-    return cmd->proc == subscribeCommand || cmd->proc == unsubscribeCommand || cmd->proc == psubscribeCommand ||
-           cmd->proc == punsubscribeCommand || cmd->proc == ssubscribeCommand || cmd->proc == sunsubscribeCommand;
-}
-
 void _addReplyToBufferOrList(client *c, const char *s, size_t len) {
     if (c->flag.close_after_reply) return;
 
@@ -741,8 +766,7 @@ void _addReplyToBufferOrList(client *c, const char *s, size_t len) {
      * the SUBSCRIBE command family, which (currently) have a push message instead of a proper reply.
      * The check for executing_client also avoids affecting push messages that are part of eviction.
      * Check CLIENT_PUSHING first to avoid race conditions, as it's absent in module's fake client. */
-    int defer_push_message = c->flag.pushing && c == server.current_client && server.executing_client &&
-                             !cmdHasPushAsReply(server.executing_client->cmd);
+    int defer_push_message = shouldDeferPushMessage(c);
     if (defer_push_message == 0 && isDeferredReplyEnabled(c)) {
         _addReplyProtoToList(c, c->deferred_reply, s, len);
         return;
@@ -3290,12 +3314,17 @@ void processClientIOWriteDone(client *c) {
     /* Don't post-process-writes to clients that are going to be closed anyway. */
     if (c->flag.close_asap) return;
 
+    int mask = 0;
+    if (c->io_read_state == CLIENT_PENDING_IO || c->io_read_state == CLIENT_COMPLETED_IO)
+        mask |= CONN_POSTPONE_READ;
 
-    connSetPostponeUpdateState(c->conn, 0);
+    connSetPostponeUpdateState(c->conn, mask);
+    if (postWriteToClient(c) == C_ERR) return;
+    uint64_t id = c->id;
     connUpdateState(c->conn);
-    if (postWriteToClient(c) == C_ERR) {
-        return;
-    }
+
+    c = lookupClientByID(id);
+    if (!c || !c->conn) return;
 
     if (!clientHasPendingReplies(c)) return;
 
@@ -3994,6 +4023,11 @@ void parseInputBuffer(client *c) {
     /* The command queue must be emptied before parsing. */
     serverAssert(c->cmd_queue.len == 0);
 
+    /* Hold off transport read handlers for the duration of parsing (RDMA update_state
+     * may otherwise re-enter readQueryFromClient and corrupt cmd_queue). */
+    connection *conn = c->conn;
+    if (conn) connSetPostponeUpdateState(conn, clientConnPostponeMaskFromIOState(c) | CONN_POSTPONE_READ);
+
     /* Determine request type when unknown. */
     if (!c->reqtype) {
         if (c->querybuf[c->qb_pos] == '*') {
@@ -4010,6 +4044,11 @@ void parseInputBuffer(client *c) {
     } else {
         serverPanic("Unknown request type");
     }
+
+    /* Restore only IO-state postpone; do not hold READ for cmd_queue here.
+     * Pipeline commands are drained by processInputBuffer; leaving READ postponed
+     * without a later handleReadJobs/connUpdateState clear stalls RDMA rx. */
+    if (conn) connSetPostponeUpdateState(conn, clientConnPostponeMaskFromIOState(c));
 }
 
 /* Free unused memory in a client's queue of parsed commands. */
@@ -6122,10 +6161,11 @@ size_t getClientMemoryUsage(client *c, size_t *output_buffer_mem_usage) {
      * i.e. unused sds space and internal fragmentation, just the string length. but this is enough to
      * spot problematic clients. */
     mem += c->argv_len_sum + sizeof(robj *) * c->argc;
+
+    /* Add memory overhead of multi. */
     mem += multiStateMemOverhead(c);
 
-    /* Add memory overhead of pubsub channels and patterns. Note: this is just the overhead of the robj pointers
-     * to the strings themselves because they aren't stored per client. */
+    /* Add memory overhead of pubsub channels and patterns. */
     mem += pubsubMemOverhead(c);
 
     /* Add memory overhead of the tracking prefixes, this is an underestimation so we don't need to traverse the entire
@@ -6499,7 +6539,8 @@ int postponeClientRead(client *c) {
     return (trySendReadToIOThreads(c) == C_OK);
 }
 
-void processClientIOReadsDone(client *c) {
+/* Returns non-zero if connUpdateState must run again after processClientsCommandsBatch(). */
+int processClientIOReadsDone(client *c) {
     serverAssert(c->io_read_state == CLIENT_COMPLETED_IO);
 
     if (ProcessingEventsWhileBlocked) {
@@ -6512,33 +6553,43 @@ void processClientIOReadsDone(client *c) {
     c->io_read_state = CLIENT_IDLE;
 
     /* Don't post-process-reads from clients that are going to be closed anyway. */
-    if (c->flag.close_asap) return;
+    if (c->flag.close_asap) return 0;
 
     /* If a client is protected, don't do anything,
      * that may trigger read/write error or recreate handler. */
-    if (c->flag.protected) return;
+    if (c->flag.protected) return 0;
 
     /* Save the current conn state, as connUpdateState may modify it */
     int in_accept_state = (connGetState(c->conn) == CONN_STATE_ACCEPTING);
-    connSetPostponeUpdateState(c->conn, 0);
-    connUpdateState(c->conn);
+    int needs_post_read_update = 0;
+
+    if (c->conn) {
+        int mask = 0;
+        if (!in_accept_state) {
+            mask |= CONN_POSTPONE_READ;
+            if (c->io_write_state != CLIENT_IDLE) mask |= CONN_POSTPONE_WRITE;
+            needs_post_read_update = 1;
+        }
+        connSetPostponeUpdateState(c->conn, mask);
+        connUpdateState(c->conn);
+    }
 
     /* In accept state, no client's data was read - stop here. */
-    if (in_accept_state) return;
+    if (in_accept_state) return 0;
 
     /* On read error - stop here. */
     if (handleReadResult(c) == C_ERR) {
-        return;
+        return needs_post_read_update;
     }
 
     if (!(c->read_flags & READ_FLAGS_DONT_PARSE)) {
         parseResult res = handleParseResults(c);
         /* On parse error - stop here. */
         if (res == PARSE_ERR) {
-            return;
+            return needs_post_read_update;
         } else if (res == PARSE_NEEDMORE) {
             beforeNextClient(c);
-            return;
+            return needs_post_read_update;
         }
     }
 
@@ -6552,6 +6603,7 @@ void processClientIOReadsDone(client *c) {
     if (ret == C_ERR) {
         if (processPendingCommandAndInputBuffer(c) == C_OK) beforeNextClient(c);
     }
+    return needs_post_read_update;
 }
 
 /* Returns the actual client eviction limit based on current configuration or
@@ -6585,16 +6637,33 @@ void evictClients(void) {
     size_t client_eviction_limit = getClientEvictionLimit();
     if (client_eviction_limit == 0) return;
 
+    /* Variable to track memory of clients marked for close but not yet freed */
+    size_t pending_freed = 0;
+
     while (server.stat_clients_type_memory[CLIENT_TYPE_NORMAL] +
                server.stat_clients_type_memory[CLIENT_TYPE_PUBSUB] >
-           client_eviction_limit) {
+           client_eviction_limit + pending_freed) {
         listNode *ln = listNext(&bucket_iter);
         if (ln) {
             client *c = ln->value;
+            if (c->flag.close_asap) {
+                /* Already scheduled to close. Count memory as freed and skip. */
+                pending_freed += c->last_memory_usage;
+                continue;
+            }
             sds ci = catClientInfoString(sdsempty(), c, server.hide_user_data_from_log);
             serverLog(LL_NOTICE, "Evicting client: %s", ci);
-            if (freeClient(c)) server.stat_evictedclients++;
             sdsfree(ci);
+            server.stat_evictedclients++;
+
+            if (freeClient(c) == 0) {
+                /* Client was only scheduled for asynchronous free (e.g. protected
+                 * or has pending IO) - its memory won't drop from the stats above
+                 * until that completes. Count it as freed here so we don't keep
+                 * evicting further clients while waiting for it. */
+                pending_freed += c->last_memory_usage;
+                continue;
+            }
         } else {
             curr_bucket--;
             if (curr_bucket < 0) {

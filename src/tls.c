@@ -1211,9 +1211,9 @@ static void registerSSLEvent(tls_connection *conn) {
     }
 }
 
-static void postPoneUpdateSSLState(connection *conn_, int postpone) {
+static void postPoneUpdateSSLState(connection *conn_, int postpone_mask) {
     tls_connection *conn = (tls_connection *)conn_;
-    if (postpone) {
+    if (postpone_mask) {
         conn->flags |= TLS_CONN_FLAG_POSTPONE_UPDATE_STATE;
     } else {
         conn->flags &= ~TLS_CONN_FLAG_POSTPONE_UPDATE_STATE;
@@ -1248,8 +1248,8 @@ static void updateSSLEvent(tls_connection *conn) {
     if (conn->flags & TLS_CONN_FLAG_POSTPONE_UPDATE_STATE) return;
 
     int mask = aeGetFileEvents(server.el, conn->c.fd);
-    int need_read = conn->c.read_handler || (conn->flags & TLS_CONN_FLAG_WRITE_WANT_READ);
-    int need_write = conn->c.write_handler || (conn->flags & TLS_CONN_FLAG_READ_WANT_WRITE);
+    int need_read = conn->c.read_handler || (conn->c.write_handler && (conn->flags & TLS_CONN_FLAG_WRITE_WANT_READ));
+    int need_write = conn->c.write_handler || (conn->c.read_handler && (conn->flags & TLS_CONN_FLAG_READ_WANT_WRITE));
 
     if (need_read && !(mask & AE_READABLE))
         aeCreateFileEvent(server.el, conn->c.fd, AE_READABLE, tlsEventHandler, conn);
@@ -1479,10 +1479,12 @@ static void tlsHandleEvent(tls_connection *conn, int mask) {
         if (connTLSAccept((connection *)conn, NULL) == C_ERR || conn->c.state != CONN_STATE_CONNECTED) return;
         break;
     case CONN_STATE_CONNECTED: {
-        int call_read = ((mask & AE_READABLE) && conn->c.read_handler) ||
-                        ((mask & AE_WRITABLE) && (conn->flags & TLS_CONN_FLAG_READ_WANT_WRITE));
-        int call_write = ((mask & AE_WRITABLE) && conn->c.write_handler) ||
-                         ((mask & AE_READABLE) && (conn->flags & TLS_CONN_FLAG_WRITE_WANT_READ));
+        int call_read = conn->c.read_handler &&
+                        ((mask & AE_READABLE) ||
+                         ((mask & AE_WRITABLE) && (conn->flags & TLS_CONN_FLAG_READ_WANT_WRITE)));
+        int call_write = conn->c.write_handler &&
+                         ((mask & AE_WRITABLE) ||
+                          ((mask & AE_READABLE) && (conn->flags & TLS_CONN_FLAG_WRITE_WANT_READ)));
 
         /* Normally we execute the readable event first, and the writable
          * event laster. This is useful as sometimes we may be able
@@ -1885,14 +1887,27 @@ static int tlsHasPendingData(void) {
 }
 
 static int tlsProcessPendingData(void) {
-    listIter li;
     listNode *ln;
 
     int processed = 0;
-    listRewind(pending_list, &li);
-    while ((ln = listNext(&li))) {
+    /* Pop each connection off the list before handling it. A handler may
+     * synchronously free another pending connection (e.g. CLIENT KILL ->
+     * freeClient -> connTLSClose -> listDelNode), so we must not hold an
+     * iterator into a node that could be freed out from under us.
+     *
+     * Connections with buffered data re-add themselves to the tail, so the
+     * length captured on entry bounds the loop and guarantees termination. */
+    unsigned long remaining = listLength(pending_list);
+    while (remaining-- > 0 && (ln = listFirst(pending_list)) != NULL) {
         tls_connection *conn = listNodeValue(ln);
-        if (conn->flags & TLS_CONN_FLAG_POSTPONE_UPDATE_STATE) continue;
+        listDelNode(pending_list, ln);
+        conn->pending_list_node = NULL;
+        if (conn->flags & TLS_CONN_FLAG_POSTPONE_UPDATE_STATE) {
+            /* Not handled now, but keep it pending for a later call. */
+            listAddNodeTail(pending_list, conn);
+            conn->pending_list_node = listLast(pending_list);
+            continue;
+        }
         tlsHandleEvent(conn, AE_READABLE);
         processed++;
     }

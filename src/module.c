@@ -106,7 +106,7 @@ struct ValkeyModuleSharedAPI {
 };
 typedef struct ValkeyModuleSharedAPI ValkeyModuleSharedAPI;
 
-dict *modules; /* Hash table of modules. SDS -> ValkeyModule ptr.*/
+list *modules; /* List of ValkeyModule pointers, in load order. */
 
 /* Entries in the context->amqueue array, representing objects to free
  * when the callback returns. */
@@ -2365,9 +2365,18 @@ static int moduleConvertArgFlags(int flags) {
     return realflags;
 }
 
+static int moduleNameMatch(void *module, void *name) {
+    return strcasecmp(((struct ValkeyModule *)module)->name, name) == 0;
+}
+
+static struct ValkeyModule *moduleLookupByName(const char *name) {
+    listNode *ln = listSearchKey(modules, (void *)name);
+    return ln ? listNodeValue(ln) : NULL;
+}
+
 /* Return `struct ValkeyModule *` as `void *` to avoid exposing it outside of module.c. */
 void *moduleGetHandleByName(char *modulename) {
-    return dictFetchValue(modules, modulename);
+    return moduleLookupByName(modulename);
 }
 
 /* Returns 1 if `cmd` is a command of the module `modulename`. 0 otherwise. */
@@ -2448,10 +2457,7 @@ void VM_SetModuleAttribs(ValkeyModuleCtx *ctx, const char *name, int ver, int ap
 /* Return non-zero if the module name is busy.
  * Otherwise zero is returned. */
 int VM_IsModuleNameBusy(const char *name) {
-    sds modulename = sdsnew(name);
-    dictEntry *de = dictFind(modules, modulename);
-    sdsfree(modulename);
-    return de != NULL;
+    return moduleLookupByName(name) != NULL;
 }
 
 /* Return the current UNIX time in milliseconds. */
@@ -3948,9 +3954,13 @@ int modulePopulateReplicationInfoStructure(void *ri, int structver) {
  *     VALKEYMODULE_CLIENTINFO_FLAG_UNIXSOCKET   Client using unix domain socket.
  *     VALKEYMODULE_CLIENTINFO_FLAG_MULTI        Client in MULTI state.
  *     VALKEYMODULE_CLIENTINFO_FLAG_READONLY     Client in ReadOnly state.
- *     VALKEYMODULE_CLIENTINFO_FLAG_PRIMARY      Client is a fake client used
- *                                               for applying replicated
- *                                               commands from the primary.
+ *     VALKEYMODULE_CLIENTINFO_FLAG_PRIMARY      Client is the replication link
+ *                                               from this replica's primary,
+ *                                               over which replicated commands
+ *                                               are applied.
+ *     VALKEYMODULE_CLIENTINFO_FLAG_REPLICA      Client is a replica connection.
+ *                                               Also set for MONITOR clients,
+ *                                               together with FLAG_MONITOR.
  *     VALKEYMODULE_CLIENTINFO_FLAG_MONITOR      Client in monitor mode.
  *     VALKEYMODULE_CLIENTINFO_FLAG_MODULE       Client is a module.
  *     VALKEYMODULE_CLIENTINFO_FLAG_AUTHENTICATED
@@ -7195,13 +7205,14 @@ uint64_t moduleTypeEncodeId(const char *name, int encver) {
  * a type with the same name as the one given. Returns the moduleType
  * structure pointer if such a module is found, or NULL otherwise. */
 moduleType *moduleTypeLookupModuleByNameInternal(const char *name, int ignore_case) {
-    if (dictSize(modules) == 0) return NULL;
+    if (listLength(modules) == 0) return NULL;
 
-    dictIterator *di = dictGetIterator(modules);
-    dictEntry *de;
+    listIter modules_iter;
+    listNode *module_node;
 
-    while ((de = dictNext(di)) != NULL) {
-        struct ValkeyModule *module = dictGetVal(de);
+    listRewind(modules, &modules_iter);
+    while ((module_node = listNext(&modules_iter)) != NULL) {
+        struct ValkeyModule *module = listNodeValue(module_node);
         listIter li;
         listNode *ln;
 
@@ -7210,12 +7221,10 @@ moduleType *moduleTypeLookupModuleByNameInternal(const char *name, int ignore_ca
             moduleType *mt = ln->value;
             if ((!ignore_case && memcmp(name, mt->name, sizeof(mt->name)) == 0) ||
                 (ignore_case && !strcasecmp(name, mt->name))) {
-                dictReleaseIterator(di);
                 return mt;
             }
         }
     }
-    dictReleaseIterator(di);
     return NULL;
 }
 /* Search all registered modules by name, and name is case sensitive */
@@ -7234,7 +7243,7 @@ moduleType *moduleTypeLookupModuleByNameIgnoreCase(const char *name) {
 #define MODULE_LOOKUP_CACHE_SIZE 3
 
 moduleType *moduleTypeLookupModuleByID(uint64_t id) {
-    if (dictSize(modules) == 0) return NULL;
+    if (listLength(modules) == 0) return NULL;
 
     static struct {
         uint64_t id;
@@ -7248,11 +7257,12 @@ moduleType *moduleTypeLookupModuleByID(uint64_t id) {
 
     /* Slow module by module lookup. */
     moduleType *mt = NULL;
-    dictIterator *di = dictGetIterator(modules);
-    dictEntry *de;
+    listIter modules_iter;
+    listNode *module_node;
 
-    while ((de = dictNext(di)) != NULL && mt == NULL) {
-        struct ValkeyModule *module = dictGetVal(de);
+    listRewind(modules, &modules_iter);
+    while (mt == NULL && (module_node = listNext(&modules_iter)) != NULL) {
+        struct ValkeyModule *module = listNodeValue(module_node);
         listIter li;
         listNode *ln;
 
@@ -7267,7 +7277,6 @@ moduleType *moduleTypeLookupModuleByID(uint64_t id) {
             }
         }
     }
-    dictReleaseIterator(di);
 
     /* Add to cache if possible. */
     if (mt && j < MODULE_LOOKUP_CACHE_SIZE) {
@@ -7593,19 +7602,18 @@ void moduleRDBLoadError(ValkeyModuleIO *io) {
  * VALKEYMODULE_OPTIONS_HANDLE_IO_ERRORS, in which case diskless loading should
  * be avoided since it could cause data loss. */
 int moduleAllDatatypesHandleErrors(void) {
-    if (dictSize(modules) == 0) return 1;
+    if (listLength(modules) == 0) return 1;
 
-    dictIterator *di = dictGetIterator(modules);
-    dictEntry *de;
+    listIter li;
+    listNode *ln;
 
-    while ((de = dictNext(di)) != NULL) {
-        struct ValkeyModule *module = dictGetVal(de);
+    listRewind(modules, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        struct ValkeyModule *module = listNodeValue(ln);
         if (listLength(module->types) && !(module->options & VALKEYMODULE_OPTIONS_HANDLE_IO_ERRORS)) {
-            dictReleaseIterator(di);
             return 0;
         }
     }
-    dictReleaseIterator(di);
     return 1;
 }
 
@@ -7613,40 +7621,38 @@ int moduleAllDatatypesHandleErrors(void) {
  * diskless async loading should be avoided because module doesn't know there can be traffic during
  * database full resynchronization. */
 int moduleAllModulesHandleReplAsyncLoad(void) {
-    if (dictSize(modules) == 0) return 1;
+    if (listLength(modules) == 0) return 1;
 
-    dictIterator *di = dictGetIterator(modules);
-    dictEntry *de;
+    listIter li;
+    listNode *ln;
 
-    while ((de = dictNext(di)) != NULL) {
-        struct ValkeyModule *module = dictGetVal(de);
+    listRewind(modules, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        struct ValkeyModule *module = listNodeValue(ln);
         if (!(module->options & VALKEYMODULE_OPTIONS_HANDLE_REPL_ASYNC_LOAD)) {
-            dictReleaseIterator(di);
             return 0;
         }
     }
-    dictReleaseIterator(di);
     return 1;
 }
 
 int moduleVerifyAllAllowAtomicSlotMigrationOrReply(client *c) {
-    if (dictSize(modules) == 0) return C_OK;
+    if (listLength(modules) == 0) return C_OK;
 
-    dictIterator *di = dictGetIterator(modules);
-    dictEntry *de;
+    listIter li;
+    listNode *ln;
 
-    while ((de = dictNext(di)) != NULL) {
-        struct ValkeyModule *module = dictGetVal(de);
+    listRewind(modules, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        struct ValkeyModule *module = listNodeValue(ln);
         if (!(module->options & VALKEYMODULE_OPTIONS_HANDLE_ATOMIC_SLOT_MIGRATION)) {
             addReplyErrorFormat(c, "The module %s does not support atomic slot migrations. "
                                    "Please ensure all modules have declared support for "
                                    "atomic slot migration and try again",
                                 module->name);
-            dictReleaseIterator(di);
             return C_ERR;
         }
     }
-    dictReleaseIterator(di);
     return C_OK;
 }
 
@@ -7907,14 +7913,15 @@ long double VM_LoadLongDouble(ValkeyModuleIO *io) {
 /* Iterate over modules, and trigger rdb aux saving for the ones modules types
  * who asked for it. */
 ssize_t rdbSaveModulesAux(rio *rdb, int when) {
-    if (dictSize(modules) == 0) return 0;
+    if (listLength(modules) == 0) return 0;
 
     size_t total_written = 0;
-    dictIterator *di = dictGetIterator(modules);
-    dictEntry *de;
+    listIter modules_iter;
+    listNode *module_node;
 
-    while ((de = dictNext(di)) != NULL) {
-        struct ValkeyModule *module = dictGetVal(de);
+    listRewind(modules, &modules_iter);
+    while ((module_node = listNext(&modules_iter)) != NULL) {
+        struct ValkeyModule *module = listNodeValue(module_node);
         listIter li;
         listNode *ln;
 
@@ -7923,15 +7930,11 @@ ssize_t rdbSaveModulesAux(rio *rdb, int when) {
             moduleType *mt = ln->value;
             if ((!mt->aux_save && !mt->aux_save2) || !(mt->aux_save_triggers & when)) continue;
             ssize_t ret = rdbSaveSingleModuleAux(rdb, when, mt);
-            if (ret == -1) {
-                dictReleaseIterator(di);
-                return -1;
-            }
+            if (ret == -1) return -1;
             total_written += ret;
         }
     }
 
-    dictReleaseIterator(di);
     return total_written;
 }
 
@@ -9919,14 +9922,26 @@ long long moduleTimerHandler(struct aeEventLoop *eventLoop, long long id, void *
         memcpy(&expiretime, ri.key, sizeof(expiretime));
         expiretime = ntohu64(expiretime);
         if (now >= expiretime) {
+            /* Preserve the timer ID before invoking the callback. The callback
+             * may call ValkeyModule_StopTimer() on the currently firing timer,
+             * which removes the radix-tree entry and frees the timer object.
+             * Also, other tree mutations in the callback can invalidate ri.key. */
+            ValkeyModuleTimerID current_id;
+            memcpy(&current_id, ri.key, sizeof(current_id));
+
             ValkeyModuleTimer *timer = ri.data;
             ValkeyModuleCtx ctx;
             moduleCreateContext(&ctx, timer->module, VALKEYMODULE_CTX_TEMP_CLIENT);
             selectDb(ctx.client, timer->dbid);
             timer->callback(&ctx, timer->data);
             moduleFreeContext(&ctx);
-            raxRemove(Timers, (unsigned char *)ri.key, ri.key_len, NULL);
-            zfree(timer);
+
+            /* Skip cleanup if the callback already stopped this timer. */
+            void *live = NULL;
+            if (raxFind(Timers, (unsigned char *)&current_id, sizeof(current_id), &live) && live == timer) {
+                raxRemove(Timers, (unsigned char *)&current_id, sizeof(current_id), NULL);
+                zfree(timer);
+            }
         } else {
             /* We call ustime() again instead of using the cached 'now' so that
              * 'next_period' isn't affected by the time it took to execute
@@ -11176,13 +11191,14 @@ int VM_RegisterInfoFunc(ValkeyModuleCtx *ctx, ValkeyModuleInfoFunc cb) {
 }
 
 sds modulesCollectInfo(sds info, dict *sections_dict, int for_crash_report, int sections) {
-    if (dictSize(modules) == 0) return info;
+    if (listLength(modules) == 0) return info;
 
-    dictIterator *di = dictGetIterator(modules);
-    dictEntry *de;
+    listIter li;
+    listNode *ln;
 
-    while ((de = dictNext(di)) != NULL) {
-        struct ValkeyModule *module = dictGetVal(de);
+    listRewind(modules, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        struct ValkeyModule *module = listNodeValue(ln);
         if (!module->info_cb) continue;
         ValkeyModuleInfoCtx info_ctx = {module, sections_dict, info, sections, 0, 0};
         module->info_cb(&info_ctx, for_crash_report);
@@ -11191,7 +11207,6 @@ sds modulesCollectInfo(sds info, dict *sections_dict, int for_crash_report, int 
         info = info_ctx.info;
         sections = info_ctx.sections;
     }
-    dictReleaseIterator(di);
     return info;
 }
 
@@ -13047,9 +13062,10 @@ dictType sdsKeyValueHashDictType = {
 void moduleInitModulesSystem(void) {
     moduleUnblockedClients = listCreate();
     server.loadmodule_queue = listCreate();
+    modules = listCreate();
+    listSetMatchMethod(modules, moduleNameMatch);
     server.module_configs_queue = dictCreate(&sdsKeyValueHashDictType);
     server.module_gil_acquiring = 0;
-    modules = dictCreate(&modulesDictType);
     moduleAuthCallbacks = listCreate();
 
     /* Set up the keyspace notification subscriber list and static client */
@@ -13392,7 +13408,7 @@ static int moduleInitPostOnLoadResolved(ModuleLoadFunc onload,
     }
 
     /* Module loaded! Register it. */
-    dictAdd(modules, ctx.module->name, ctx.module);
+    listAddNodeTail(modules, ctx.module);
     ctx.module->blocked_clients = 0;
     ctx.module->handle = handle;
     ctx.module->is_static_module = is_static;
@@ -13562,7 +13578,7 @@ static int moduleLoadStaticSymbol(void **out, void **handle, const char *symbol_
  *
  * Once the entry point is found, the function creates a temporary module
  * context, invokes the OnLoad callback, and on success registers the module
- * in the global modules dictionary with is_static_module set to 1 and handle
+ * in the global modules list with is_static_module set to 1 and handle
  * set to NULL (since there is no shared-object handle to keep open).
  *
  * If 'is_loadex' is true, the function also validates that all queued module
@@ -13656,10 +13672,10 @@ static int moduleUnloadInternal(struct ValkeyModule *module, const char **errmsg
     /* Fire the unloaded modules event. */
     moduleFireServerEvent(VALKEYMODULE_EVENT_MODULE_CHANGE, VALKEYMODULE_SUBEVENT_MODULE_UNLOADED, module);
 
-    /* Remove from list of modules. */
     serverLog(LL_NOTICE, "Module %s unloaded", module->name);
-    dictDelete(modules, module->name);
-    module->name = NULL; /* The name was already freed by dictDelete(). */
+    listNode *ln = listSearchKey(modules, module->name);
+    serverAssert(ln != NULL);
+    listDelNode(modules, ln);
     moduleFreeModuleStructure(module);
 
     /* Recompute command bits for all users once the modules has been completely unloaded. */
@@ -13671,7 +13687,7 @@ static int moduleUnloadInternal(struct ValkeyModule *module, const char **errmsg
  * C_OK is returned, otherwise C_ERR is returned and errmsg is set
  * with an appropriate message. */
 int moduleUnload(sds name, const char **errmsg) {
-    struct ValkeyModule *module = dictFetchValue(modules, name);
+    struct ValkeyModule *module = moduleLookupByName(name);
 
     if (module == NULL) {
         *errmsg = "no such module with that name";
@@ -13684,7 +13700,7 @@ int moduleUnload(sds name, const char **errmsg) {
 /* Unload all loaded modules from the server.
  *
  * This function iterates through all modules registered in the server's
- * module dictionary and attempts to unload each one by calling
+ * module list and attempts to unload each one by calling
  * moduleUnloadInternal(). If a module fails to unload (e.g., due to
  * having active data types, blocked clients, or being used by other modules),
  * the function logs a warning message but continues attempting to unload
@@ -13696,20 +13712,22 @@ int moduleUnload(sds name, const char **errmsg) {
  * by module unload failures.
  */
 void moduleUnloadAllModules(void) {
-    if (dictSize(modules) == 0) return;
+    if (listLength(modules) == 0) return;
 
-    dictIterator *di = dictGetSafeIterator(modules);
-    dictEntry *de;
+    listIter li;
+    listNode *ln;
 
-    while ((de = dictNext(di)) != NULL) {
-        struct ValkeyModule *module = dictGetVal(de);
+    /* Unload in reverse load order so dependents are unloaded before
+     * their dependencies. */
+    listRewindTail(modules, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        struct ValkeyModule *module = listNodeValue(ln);
 
         const char *errmsg = NULL;
         if (moduleUnloadInternal(module, &errmsg) == C_ERR) {
             serverLog(LL_WARNING, "Failed to unload module %s: %s", module->name, errmsg);
         }
     }
-    dictReleaseIterator(di);
 }
 
 void modulePipeReadable(aeEventLoop *el, int fd, void *privdata, int mask) {
@@ -13728,22 +13746,22 @@ void modulePipeReadable(aeEventLoop *el, int fd, void *privdata, int mask) {
 /* Helper function for the MODULE and HELLO command: send the list of the
  * loaded modules to the client. */
 void addReplyLoadedModules(client *c) {
-    if (dictSize(modules) == 0) {
+    if (listLength(modules) == 0) {
         addReplyArrayLen(c, 0);
         return;
     }
 
-    dictIterator *di = dictGetIterator(modules);
-    dictEntry *de;
+    listIter li;
+    listNode *ln;
 
-    addReplyArrayLen(c, dictSize(modules));
-    while ((de = dictNext(di)) != NULL) {
-        sds name = dictGetKey(de);
-        struct ValkeyModule *module = dictGetVal(de);
+    addReplyArrayLen(c, listLength(modules));
+    listRewind(modules, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        struct ValkeyModule *module = listNodeValue(ln);
         sds path = module->loadmod->path;
         addReplyMapLen(c, 4);
         addReplyBulkCString(c, "name");
-        addReplyBulkCBuffer(c, name, sdslen(name));
+        addReplyBulkCBuffer(c, module->name, sdslen(module->name));
         addReplyBulkCString(c, "ver");
         addReplyLongLong(c, module->ver);
         addReplyBulkCString(c, "path");
@@ -13754,7 +13772,6 @@ void addReplyLoadedModules(client *c) {
             addReplyBulk(c, module->loadmod->argv[i]);
         }
     }
-    dictReleaseIterator(di);
 }
 
 /* Helper for genModulesInfoString(): given a list of modules, return
@@ -13796,14 +13813,14 @@ sds genModulesInfoStringRenderModuleOptions(struct ValkeyModule *module) {
  *
  * references must be substituted with the new pointer returned by the call. */
 sds genModulesInfoString(sds info) {
-    if (dictSize(modules) == 0) return info;
+    if (listLength(modules) == 0) return info;
 
-    dictIterator *di = dictGetIterator(modules);
-    dictEntry *de;
+    listIter li;
+    listNode *ln;
 
-    while ((de = dictNext(di)) != NULL) {
-        sds name = dictGetKey(de);
-        struct ValkeyModule *module = dictGetVal(de);
+    listRewind(modules, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        struct ValkeyModule *module = listNodeValue(ln);
 
         sds usedby = genModulesInfoStringRenderModulesList(module->usedby);
         sds using = genModulesInfoStringRenderModulesList(module->using);
@@ -13811,12 +13828,11 @@ sds genModulesInfoString(sds info) {
         info = sdscatfmt(info,
                          "module:name=%S,ver=%i,api=%i,filters=%i,"
                          "usedby=%S,using=%S,options=%S\r\n",
-                         name, module->ver, module->apiver, (int)listLength(module->filters), usedby, using, options);
+                         module->name, module->ver, module->apiver, (int)listLength(module->filters), usedby, using, options);
         sdsfree(usedby);
         sdsfree(using);
         sdsfree(options);
     }
-    dictReleaseIterator(di);
     return info;
 }
 
@@ -14673,7 +14689,7 @@ void moduleCommand(client *c) {
 
 /* Return the number of registered modules. */
 size_t moduleCount(void) {
-    return dictSize(modules);
+    return listLength(modules);
 }
 
 /* --------------------------------------------------------------------------
@@ -15082,18 +15098,18 @@ int moduleDefragValue(robj *key, robj *value, int dbid) {
 
 /* Call registered module API defrag functions */
 void moduleDefragGlobals(void) {
-    if (dictSize(modules) == 0) return;
+    if (listLength(modules) == 0) return;
 
-    dictIterator *di = dictGetIterator(modules);
-    dictEntry *de;
+    listIter li;
+    listNode *ln;
 
-    while ((de = dictNext(di)) != NULL) {
-        struct ValkeyModule *module = dictGetVal(de);
+    listRewind(modules, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        struct ValkeyModule *module = listNodeValue(ln);
         if (!module->defrag_cb) continue;
         ValkeyModuleDefragCtx defrag_ctx = {0, NULL, NULL, -1};
         module->defrag_cb(&defrag_ctx);
     }
-    dictReleaseIterator(di);
 }
 
 /* Returns the name of the key currently being processed.

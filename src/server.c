@@ -790,15 +790,6 @@ hashtableType kvstoreChannelHashtableType = {
     .getMetadataSize = kvstoreHashtableMetadataSize,
 };
 
-/* Modules system dictionary type. Keys are module name,
- * values are pointer to ValkeyModule struct. */
-dictType modulesDictType = {
-    .entryGetKey = dictEntryGetKey,
-    .hashFunction = dictSdsCaseHash,
-    .keyCompare = dictSdsKeyCaseCompare,
-    .entryDestructor = dictEntryDestructorSdsKey,
-};
-
 /* Migrate cache dict type. */
 dictType migrateCacheDictType = {
     .entryGetKey = dictEntryGetKey,
@@ -2980,6 +2971,7 @@ void initServer(void) {
     server.client_mem_usage_buckets = NULL;
     server.debug_client_enforce_reply_list = 0;
     server.debug_force_free_primary_async = 0;
+    server.debug_pause_before_psync = 0;
     resetReplicationBuffer();
 
     /* Make sure the locale is set on startup based on the config file. */

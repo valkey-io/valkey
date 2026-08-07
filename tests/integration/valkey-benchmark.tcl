@@ -416,8 +416,7 @@ tags {"benchmark network external:skip logreqres:skip"} {
         }
 
         test {benchmark: dataset with base64 field decoding} {
-            # Create CSV with a base64-encoded binary field
-            # "AQIDBA==" decodes to bytes: 0x01 0x02 0x03 0x04 (4 bytes)
+            # "AQIDBA==" -> 0x01020304 (4 bytes), "BQYHCAkK" -> 0x05060708090a (6 bytes)
             set csv_data "id,title,embedding\n1,laptop,AQIDBA==\n2,phone,BQYHCAkK"
             set csv_file [tmpfile "base64_dataset.csv"]
             set fd [open $csv_file w]
@@ -433,24 +432,22 @@ tags {"benchmark network external:skip logreqres:skip"} {
             set keys [r keys "doc:*"]
             assert {[llength $keys] > 0}
 
-            # Verify the hash field names are "title" and "embedding" (not "embedding:base64")
+            # ":base64" suffix must be stripped from the field name
             set sample_key [lindex $keys 0]
             set fields [lsort [r hkeys $sample_key]]
             assert_equal [lsort {embedding title}] $fields
 
-            # Verify the title field is plain text
+            # title stays plain text
             set title [r hget $sample_key title]
             assert {$title eq "laptop" || $title eq "phone"}
 
-            # Verify the embedding field has correct decoded binary length
+            # embedding is decoded to binary
             set actual_emb [r hget $sample_key embedding]
             if {$title eq "laptop"} {
-                # "AQIDBA==" → 4 bytes: \x01\x02\x03\x04
                 assert_equal 4 [string length $actual_emb]
                 binary scan $actual_emb H* hex_value
                 assert_equal "01020304" $hex_value
             } else {
-                # "BQYHCAkK" → 6 bytes: \x05\x06\x07\x08\x09\x0a
                 assert_equal 6 [string length $actual_emb]
                 binary scan $actual_emb H* hex_value
                 assert_equal "05060708090a" $hex_value
@@ -460,8 +457,7 @@ tags {"benchmark network external:skip logreqres:skip"} {
         }
 
         test {benchmark: dataset base64 field preserves null bytes} {
-            # "AQADAQk=" decodes to 5 bytes: \x01\x00\x03\x01\x09
-            # Contains \x00 at byte 2, which would truncate if strlen() were used
+            # "AQADAQk=" -> 0x0100030109 (5 bytes); the \x00 would truncate under strlen()
             set csv_data "id,vector\n1,AQADAQk="
             set csv_file [tmpfile "base64_nullbyte.csv"]
             set fd [open $csv_file w]
@@ -473,13 +469,12 @@ tags {"benchmark network external:skip logreqres:skip"} {
             common_bench_setup $cmd
             assert_match {*calls=2,*} [cmdstat hset]
 
-            # Verify the full binary is preserved past the null byte
+            # Full binary must survive past the null byte (5 bytes, not 1)
             set keys [r keys "doc:*"]
             assert {[llength $keys] > 0}
             set sample_key [lindex $keys 0]
             set actual [r hget $sample_key vector]
 
-            # Must be 5 bytes, not 1 (which is what strlen would give)
             assert_equal 5 [string length $actual]
             binary scan $actual H* hex_value
             assert_equal "0100030109" $hex_value
@@ -487,9 +482,52 @@ tags {"benchmark network external:skip logreqres:skip"} {
             file delete $csv_file
         }
 
+        test {benchmark: dataset base64 field with malformed length is skipped safely} {
+            # "A=" length 2 is not a multiple of 4; the length guard must reject it
+            # (else the out_len math underflows size_t). Field is stored empty, no crash.
+            set csv_data "id,vector\n1,A=\n2,A="
+            set csv_file [tmpfile "base64_badlen.csv"]
+            set fd [open $csv_file w]
+            puts $fd $csv_data
+            close $fd
+
+            set cmd [valkeybenchmark $master_host $master_port \
+                "--dataset $csv_file -n 2 -r 10 -- HSET doc:__rand_int__ vector __field:vector:base64__"]
+            common_bench_setup $cmd
+            assert_match {*calls=2,*} [cmdstat hset]
+
+            # Malformed input decodes to an empty value
+            set keys [r keys "doc:*"]
+            assert {[llength $keys] > 0}
+            set actual [r hget [lindex $keys 0] vector]
+            assert_equal 0 [string length $actual]
+
+            file delete $csv_file
+        }
+
+        test {benchmark: dataset base64 field with invalid characters is skipped safely} {
+            # '!' and '@' are outside the base64 alphabet; field is stored empty, no crash.
+            set csv_data "id,vector\n1,AQ!@\n2,AQ!@"
+            set csv_file [tmpfile "base64_badchar.csv"]
+            set fd [open $csv_file w]
+            puts $fd $csv_data
+            close $fd
+
+            set cmd [valkeybenchmark $master_host $master_port \
+                "--dataset $csv_file -n 2 -r 10 -- HSET doc:__rand_int__ vector __field:vector:base64__"]
+            common_bench_setup $cmd
+            assert_match {*calls=2,*} [cmdstat hset]
+
+            set keys [r keys "doc:*"]
+            assert {[llength $keys] > 0}
+            set actual [r hget [lindex $keys 0] vector]
+            assert_equal 0 [string length $actual]
+
+            file delete $csv_file
+        }
+
         test {benchmark: dataset base64 field without suffix stays as text} {
-            # Same CSV but command does NOT use :base64 suffix
-            # Field should be stored as raw base64 text (not decoded)
+            # No ":base64" suffix -> value stored as the literal base64 string, not decoded
             set csv_data "id,embedding\n1,AAAAAAAAAD8AAABAAACAQQ=="
             set csv_file [tmpfile "base64_text.csv"]
             set fd [open $csv_file w]
@@ -500,7 +538,7 @@ tags {"benchmark network external:skip logreqres:skip"} {
                 "--dataset $csv_file -n 2 -r 10 -- SET doc:__rand_int__ __field:embedding__"]
             common_bench_setup $cmd
 
-            # Without :base64, the value should be the literal base64 string (24 chars)
+            # Value should be the literal 24-char base64 string
             set keys [r keys "doc:*"]
             assert {[llength $keys] > 0}
             set value [r get [lindex $keys 0]]

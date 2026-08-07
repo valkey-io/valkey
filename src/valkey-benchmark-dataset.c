@@ -48,6 +48,7 @@ static const unsigned char b64_decode_table[256] = {
 static bool datasetBuildFieldMap(dataset *ds, sds *template_argv, int template_argc);
 static sds getFieldValue(const char *row, int column_index, char delimiter);
 static unsigned char *base64Decode(const char *input, size_t input_len, size_t *out_len);
+static bool fieldStripBase64Suffix(const char *field_start, size_t *field_name_len);
 static bool csvDiscoverFields(dataset *ds);
 static bool csvLoadDocuments(dataset *ds, int verbose);
 static bool shouldStopLoading(dataset *ds);
@@ -146,9 +147,7 @@ bool datasetBuildFieldMap(dataset *ds, sds *template_argv, int template_argc) {
             if (!field_end) break;
 
             size_t field_name_len = field_end - field_start;
-            if (field_name_len > 7 && !memcmp(field_start + field_name_len - 7, ":base64", 7)) {
-                field_name_len -= 7;
-            }
+            fieldStripBase64Suffix(field_start, &field_name_len);
             sds field_name = sdsnewlen(field_start, field_name_len);
 
             int field_idx = -1;
@@ -194,12 +193,11 @@ sds datasetGenerateCommand(dataset *ds, int record_index, sds *template_argv, in
     }
 
     char *cmd = NULL;
-    size_t *argvlen = zmalloc(template_argc * sizeof(size_t));
+    size_t argvlen[template_argc];
     for (int i = 0; i < template_argc; i++) {
         argvlen[i] = sdslen(processed_argv[i]);
     }
     int len = valkeyFormatCommandArgv(&cmd, template_argc, (const char **)processed_argv, argvlen);
-    zfree(argvlen);
     if (len == -1) {
         for (int i = 0; i < template_argc; i++) {
             sdsfree(processed_argv[i]);
@@ -267,32 +265,59 @@ static sds getFieldValue(const char *row, int column_index, char delimiter) {
     return sdsempty();
 }
 
+static bool fieldStripBase64Suffix(const char *field_start, size_t *field_name_len) {
+    if (*field_name_len > BASE64_SUFFIX_LEN &&
+        !memcmp(field_start + *field_name_len - BASE64_SUFFIX_LEN, BASE64_SUFFIX, BASE64_SUFFIX_LEN)) {
+        *field_name_len -= BASE64_SUFFIX_LEN;
+        return true;
+    }
+    return false;
+}
+
 static unsigned char *base64Decode(const char *input, size_t input_len, size_t *out_len) {
-    if (input_len == 0) {
-        *out_len = 0;
+    *out_len = 0;
+
+    if (input_len == 0 || input_len % 4 != 0) {
+        if (input_len != 0) {
+            fprintf(stderr, "Warning: skipping :base64 field, length %zu is not a multiple of 4\n", input_len);
+        }
         return zmalloc(1);
     }
 
-    /* Calculate output length, accounting for padding */
+    /* Calculate output length, accounting for padding. */
     size_t padding = 0;
-    if (input_len >= 1 && input[input_len - 1] == '=') padding++;
-    if (input_len >= 2 && input[input_len - 2] == '=') padding++;
-    *out_len = (input_len / 4) * 3 - padding;
+    if (input[input_len - 1] == '=') padding++;
+    if (input[input_len - 2] == '=') padding++;
+    size_t capacity = (input_len / 4) * 3 - padding;
 
-    unsigned char *output = zmalloc(*out_len);
+    unsigned char *output = zmalloc(capacity ? capacity : 1);
     size_t i = 0, j = 0;
 
     while (i < input_len) {
-        unsigned char a = b64_decode_table[(unsigned char)input[i++]];
-        unsigned char b = (i < input_len) ? b64_decode_table[(unsigned char)input[i++]] : 0;
-        unsigned char c = (i < input_len) ? b64_decode_table[(unsigned char)input[i++]] : 0;
-        unsigned char d = (i < input_len) ? b64_decode_table[(unsigned char)input[i++]] : 0;
+        unsigned char raw[4];
+        for (int k = 0; k < 4; k++) {
+            unsigned char ch = (unsigned char)input[i++];
+            /* '=' padding only decodes to 0 and only in the final group. */
+            if (ch == '=') {
+                raw[k] = 0;
+                continue;
+            }
+            unsigned char v = b64_decode_table[ch];
+            if (v == 255) {
+                fprintf(stderr, "Warning: skipping :base64 field, invalid character '%c'\n", ch);
+                zfree(output);
+                *out_len = 0;
+                return zmalloc(1);
+            }
+            raw[k] = v;
+        }
 
-        if (j < *out_len) output[j++] = (a << 2) | (b >> 4);
-        if (j < *out_len) output[j++] = (b << 4) | (c >> 2);
-        if (j < *out_len) output[j++] = (c << 6) | d;
+        if (j < capacity) output[j++] = (raw[0] << 2) | (raw[1] >> 4);
+        if (j < capacity) output[j++] = (raw[1] << 4) | (raw[2] >> 2);
+        if (j < capacity) output[j++] = (raw[2] << 6) | raw[3];
     }
 
+    *out_len = capacity;
     return output;
 }
 
@@ -455,12 +480,7 @@ static sds processFieldsInArg(dataset *ds, sds arg, int record_index) {
         if (!field_end) break;
 
         size_t field_name_len = field_end - field_start;
-
-        bool needs_decode = false;
-        if (field_name_len > 7 && !memcmp(field_start + field_name_len - 7, ":base64", 7)) {
-            needs_decode = true;
-            field_name_len -= 7;
-        }
+        bool needs_decode = fieldStripBase64Suffix(field_start, &field_name_len);
 
         int field_idx = findFieldIndex(ds, field_start, field_name_len);
         if (field_idx == -1) break;
@@ -530,5 +550,3 @@ static sds processRandPlaceholdersForDataSet(sds cmd, _Atomic uint64_t *seq_key,
 
     return cmd;
 }
-
-

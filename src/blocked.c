@@ -618,28 +618,19 @@ void signalDeletedKeyAsReady(serverDb *db, robj *key, int type) {
     signalKeyAsReadyLogic(db, key, type, 1);
 }
 
-/* Return 1 if client c is still present in the live blocked-clients list for
- * rl->key. Pointer match alone is not identity after free/reuse; callers must
- * also check c->id against the snapshotted id. */
-static int clientStillInBlockingKeysList(readyList *rl, client *c) {
-    dictEntry *de = dictFind(rl->db->blocking_keys, rl->key);
+/* Find a waiter for rl->key by client id (real or RM_Call fake clients). */
+static client *getClientFromBlockingKeysList(readyList *rl, uint64_t id) {
+    list *client_list = dictFetchValue(rl->db->blocking_keys, rl->key);
     listNode *ln;
     listIter li;
 
-    if (de == NULL) return 0;
-    listRewind(dictGetVal(de), &li);
+    if (client_list == NULL) return NULL;
+    listRewind(client_list, &li);
     while ((ln = listNext(&li)) != NULL) {
-        if (listNodeValue(ln) == c) return 1;
+        client *c = listNodeValue(ln);
+        if (c->id == id) return c;
     }
-    return 0;
-}
-
-/* Return 1 if a live client is still blocked waiting on rl->key. */
-static int clientStillBlockedOnReadyKey(client *c, readyList *rl) {
-    if (c == NULL || !c->flag.blocked) return 0;
-    if (c->bstate == NULL || c->bstate->keys == NULL) return 0;
-    if (c->db != rl->db) return 0;
-    return dictFind(c->bstate->keys, rl->key) != NULL;
+    return NULL;
 }
 
 /* Helper function for handleClientsBlockedOnKeys(). This function is called
@@ -656,46 +647,27 @@ static void handleClientsBlockedOnKey(readyList *rl) {
         listIter li;
         long count = listLength(clients);
         long snapshot_len = 0;
-        struct {
-            client *c;
-            uint64_t id;
-        } *snapshot;
+        uint64_t *ids;
         long i;
 
-        /* Snapshot client* + id (not listNode*): serving one client may re-enter
-         * and free another still queued on this key (CLIENT KILL / evictClients),
-         * invalidating a listIter's cached successor. Prefer O(1) re-check via
-         * lookupClientByID(); fall back to a live-list scan for RM_Call fake
-         * clients that are absent from clients_index. */
-        snapshot = zmalloc(sizeof(*snapshot) * count);
+        /* Snapshot ids: serve may freeClient() another waiter and invalidate
+         * a listIter successor. Re-resolve each id from the live list. */
+        ids = zmalloc(sizeof(*ids) * count);
         listRewind(clients, &li);
         while ((ln = listNext(&li)) != NULL && snapshot_len < count) {
             client *c = listNodeValue(ln);
-            snapshot[snapshot_len].c = c;
-            snapshot[snapshot_len].id = c->id;
-            snapshot_len++;
+            ids[snapshot_len++] = c->id;
         }
 
         /* Avoid processing more than the initial count so that we're not stuck
          * in an endless loop in case the reprocessing of the command blocks again. */
         for (i = 0; i < snapshot_len; i++) {
-            client *receiver = snapshot[i].c;
-            robj *o;
+            client *receiver = getClientFromBlockingKeysList(rl, ids[i]);
 
-            /* Re-validate before serving: real clients via id map; RM_Call fake
-             * clients (absent from clients_index) via list + id + still-blocked.
-             * Check list membership before reading receiver fields so a freed
-             * client is skipped without deref; matching id then rejects a
-             * different client reused at the same address. */
-            if (lookupClientByID(snapshot[i].id) == receiver) {
-                if (!clientStillBlockedOnReadyKey(receiver, rl)) continue;
-            } else if (!clientStillInBlockingKeysList(rl, receiver) ||
-                       receiver->id != snapshot[i].id ||
-                       !clientStillBlockedOnReadyKey(receiver, rl)) {
-                continue;
-            }
+            /* Freed / unlinked mid-loop: skip. Still on the waiter list: serve. */
+            if (receiver == NULL) continue;
 
-            o = lookupKeyReadWithFlags(rl->db, rl->key, LOOKUP_NOEFFECTS);
+            robj *o = lookupKeyReadWithFlags(rl->db, rl->key, LOOKUP_NOEFFECTS);
             /* 1. In case new key was added/touched we need to verify it satisfy the
              *    blocked type, since we might process the wrong key type.
              * 2. We want to serve clients blocked on module keys
@@ -711,7 +683,7 @@ static void handleClientsBlockedOnKey(readyList *rl) {
                     moduleUnblockClientOnKey(receiver, rl->key);
             }
         }
-        zfree(snapshot);
+        zfree(ids);
     }
 }
 

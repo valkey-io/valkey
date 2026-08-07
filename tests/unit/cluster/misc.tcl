@@ -47,20 +47,23 @@ start_cluster 1 1 {tags {external:skip cluster}} {
         set transaction_key "{tag2}written-by-exec"
         assert {[R 0 cluster keyslot $watched_key] != [R 0 cluster keyslot $transaction_key]}
 
-        # The TTL is set before WATCH and active expiry is off, so nothing but the key having expired can
-        # abort the transaction.
+        # The TTL is set before WATCH, and the key is still in the keyspace once it elapses, so nothing but
+        # the key having expired can abort the transaction.
         R 0 debug set-active-expire 0
         R 0 del $transaction_key
         R 0 set $watched_key alive px 50
         R 0 watch $watched_key
+        set keys_before [R 0 dbsize]
         after 100
+        assert_equal $keys_before [R 0 dbsize]
 
         R 0 multi
         R 0 set $transaction_key committed
-        assert_equal {} [R 0 exec]
-        assert_equal 0 [R 0 exists $transaction_key]
-
+        set reply [R 0 exec]
         R 0 debug set-active-expire 1
+
+        assert_equal {} $reply
+        assert_equal 0 [R 0 exists $transaction_key]
     }
 
     test {WATCHed key in another slot that is untouched commits EXEC} {
@@ -93,9 +96,10 @@ start_cluster 1 1 {tags {external:skip cluster}} {
 
         $watcher multi
         $watcher set $transaction_key committed-by-watcher
-        assert_equal {} [$watcher exec]
-
+        set reply [$watcher exec]
         $watcher close
+
+        assert_equal {} $reply
     }
 }
 

@@ -601,5 +601,61 @@ start_server {} {
     }
 }
 
+# Regression: BLPOP reexec → evictClients() freeing a same-key successor
+# must not UAF the ready-key waiter list (same class as #4198, no module).
+start_server {} {
+    test {BLPOP + maxmemory-clients: successor eviction during ready-key reexec} {
+        r flushdb
+        r client no-evict on
+        r config set maxmemory-clients 100mb
+        r config set client-output-buffer-limit "normal 0 0 0"
+
+        r setrange fat 300000 x
+
+        # First waiter (served first). Must not be the eviction victim.
+        set rdA [valkey_deferring_client]
+        $rdA client no-evict on
+        $rdA flush
+        assert_equal OK [$rdA read]
+        $rdA client setname blpop_a
+        $rdA flush
+        assert_equal OK [$rdA read]
+        $rdA blpop mylist 0
+        $rdA flush
+
+        # Second waiter: inflate server-side output buffer, then block as successor.
+        set rdB [valkey_deferring_client]
+        $rdB client setname blpop_b
+        $rdB flush
+        assert_equal OK [$rdB read]
+        while {[client_field blpop_b tot-mem] < 2000000} {
+            $rdB get fat
+            $rdB flush
+        }
+        # Leave GET replies unread so tot-mem stays large while blocked.
+        $rdB blpop mylist 0
+        $rdB flush
+
+        wait_for_blocked_clients_count 2
+        assert {[client_field blpop_b tot-mem] >= 2000000}
+
+        # 128KiB is the server's minimum client-eviction limit.
+        set low_limit [expr {128 * 1024}]
+        r multi
+        r config set maxmemory-clients $low_limit
+        r lpush mylist v1
+        assert_equal {OK 1} [r exec]
+
+        # Surviving here (especially under ASan) means the ready-key iterator
+        # did not UAF when the successor was freed mid-iteration.
+        assert_equal PONG [r ping]
+        assert_equal {mylist v1} [$rdA read]
+        assert {![client_exists blpop_b]}
+
+        catch {$rdA close}
+        catch {$rdB close}
+    }
+}
+
 } ;# tags
 

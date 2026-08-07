@@ -3288,6 +3288,13 @@ int processClientIOWriteDone(client *c, int allow_async_writes) {
     c = lookupClientByID(id);
     if (!c || !c->conn) return 1;
 
+    /* Replica ACK may have arrived while an IO-thread write was in flight. */
+    if (c->flag.replica) {
+        readQueryFromClient(c->conn);
+        c = lookupClientByID(id);
+        if (!c || !c->conn) return 1;
+    }
+
     if (clientHasPendingReplies(c)) {
         if (c->write_flags & WRITE_FLAGS_WRITE_ERROR) {
             /* Install the write handler if there are pending writes in some of the clients as a result of not being
@@ -4355,7 +4362,10 @@ void readQueryFromClient(connection *conn) {
     /* Check if we can send the client to be handled by the IO-thread */
     if (postponeClientRead(c)) return;
 
-    if (c->io_write_state != CLIENT_IDLE || c->io_read_state != CLIENT_IDLE) return;
+    /* Don't race an in-flight IO-thread read. */
+    if (c->io_read_state != CLIENT_IDLE) return;
+    /* TLS/RDMA must serialize with IO-thread write; TCP is full-duplex. */
+    if (c->io_write_state != CLIENT_IDLE && conn->type && conn->type->postpone_update_state) return;
 
     bool repeat = false;
     int iter = 0;

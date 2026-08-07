@@ -334,6 +334,28 @@ start_cluster 3 0 [list config_lines $modules] {
         }
         verify_log_message 0 "*DING (type 3) RECEIVED*TestUAF*" 0
     }
+
+    test "VM_RegisterClusterMessageReceiver - dangling callback after MODULE UNLOAD" {
+        # Register a receiver for type 3 on node1
+        assert_equal OK [$node1 test.register_receiver]
+
+        # Unload the module on node1
+        assert_equal OK [$node1 MODULE UNLOAD cluster]
+
+        # Another node sends a type 3 packet; node1 receives it and, on the
+        # buggy code, would invoke the dangling callback and crash. After the
+        # fix the entry is gone, so the packet is simply ignored.
+        R 0 CONFIG RESETSTAT
+        assert_equal OK [$node2 test.send_msg_type3]
+
+        # Verify node1 is still alive (the receiving node must not have crashed).
+        wait_for_condition 50 100 {
+            [CI 0 cluster_stats_messages_module_received] >= 1
+        } else {
+            fail "node1 didn't receive cluster module message"
+        }
+        assert_equal PONG [$node1 PING]
+    }
 }
 
 start_cluster 2 0 {overrides {cluster-node-timeout 1000}} {

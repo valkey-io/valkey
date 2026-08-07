@@ -67,6 +67,7 @@ int test_cluster_shards(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
 #define MSGTYPE_DING 1
 #define MSGTYPE_DONG 2
 #define MSGTYPE_TEST_UAF 3
+#define MSGTYPE_TEST_UAF_2 254
 
 /* test.pingall */
 int PingallCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
@@ -94,6 +95,7 @@ int test_register_receiver(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int 
     UNUSED(argv);
     UNUSED(argc);
     ValkeyModule_RegisterClusterMessageReceiver(ctx, MSGTYPE_TEST_UAF, DingReceiver);
+    ValkeyModule_RegisterClusterMessageReceiver(ctx, MSGTYPE_TEST_UAF_2, DingReceiver);
     return ValkeyModule_ReplyWithSimpleString(ctx, "OK");
 }
 
@@ -101,6 +103,7 @@ int test_unregister_receiver(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, in
     UNUSED(argv);
     UNUSED(argc);
     ValkeyModule_RegisterClusterMessageReceiver(ctx, MSGTYPE_TEST_UAF, NULL);
+    ValkeyModule_RegisterClusterMessageReceiver(ctx, MSGTYPE_TEST_UAF_2, NULL);
     return ValkeyModule_ReplyWithSimpleString(ctx, "OK");
 }
 
@@ -108,6 +111,7 @@ int test_send_msg_type3(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
     UNUSED(argv);
     UNUSED(argc);
     ValkeyModule_SendClusterMessage(ctx, NULL, MSGTYPE_TEST_UAF, "TestUAF", 7);
+    ValkeyModule_SendClusterMessage(ctx, NULL, MSGTYPE_TEST_UAF_2, "TestUAF2", 8);
     return ValkeyModule_ReplyWithSimpleString(ctx, "OK");
 }
 

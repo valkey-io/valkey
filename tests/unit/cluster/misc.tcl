@@ -40,19 +40,15 @@ start_cluster 1 1 {tags {external:skip cluster}} {
         assert_error {CROSSSLOT *} {r exec}
     }
 
-    # WATCH is not confined to the slot of the transaction's commands, so lookups on WATCHed keys have to
-    # compute the key's slot instead of reusing the slot cached on the client while EXEC runs. Asserting on
-    # EXEC's reply covers both ways a wrong-slot lookup shows up: it aborts the server where the cached slot
-    # assertion is compiled in, and silently commits a transaction that should have aborted where it is not.
+    # Regression tests for WATCHed keys that hash to a different slot than the transaction's commands. EXEC
+    # committed such a transaction even when the WATCHed key had expired or had been removed.
     test {WATCHed key in another slot that expired aborts EXEC} {
         set watched_key "{tag1}watched"
         set transaction_key "{tag2}written-by-exec"
         assert {[R 0 cluster keyslot $watched_key] != [R 0 cluster keyslot $transaction_key]}
 
-        # Set the TTL before WATCH. Expiring the key afterwards would mark the client dirty through the
-        # normal key-modification path, and the transaction would abort without consulting the expiry check.
-        # Active expiry is off, so the key stays physically present and only the expiry check on the WATCHed
-        # key can abort the transaction.
+        # The TTL is set before WATCH and active expiry is off, so nothing but the key having expired can
+        # abort the transaction.
         R 0 debug set-active-expire 0
         R 0 del $transaction_key
         R 0 set $watched_key alive px 50
@@ -90,14 +86,11 @@ start_cluster 1 1 {tags {external:skip cluster}} {
         $watcher set $watched_key alive
         $watcher watch $watched_key
 
-        # FLUSHALL walks the WATCHed keys of every client, which can be in any slot, while the transaction's
-        # slot is the one cached on the client running it.
         R 0 multi
         R 0 set $transaction_key committed
         R 0 flushall
         assert_equal {OK OK} [R 0 exec]
 
-        # The watched key is gone, so the watcher's transaction must not commit.
         $watcher multi
         $watcher set $transaction_key committed-by-watcher
         assert_equal {} [$watcher exec]

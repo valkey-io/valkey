@@ -2,7 +2,6 @@
 #include <stddef.h>
 #include <stdlib.h>
 #include <stdio.h>
-#include <string.h>
 #include <time.h>
 #include "serverassert.h"
 
@@ -32,7 +31,6 @@ static char monotonic_info_string[32];
  *   USE_PROCESSOR_CLOCK: processor clock usage not explicitly disabled
  *   __x86_64__: requires 64-bit x86 architecture (for rdtsc instruction and 128-bit arithmetic)
  *   __linux__: needed to access /proc/cpuinfo for verifying 'constant_tsc' CPU flag
- *              and the kernel clocksource sysfs node for cross-core TSC trust
  *   __SIZEOF_INT128__: requires compiler support for 128-bit integers to prevent wraparound
  */
 #if defined(USE_PROCESSOR_CLOCK) && defined(__x86_64__) && defined(__linux__) && defined(__SIZEOF_INT128__)
@@ -48,25 +46,6 @@ static monotime getMonotonicUs_x86(void) {
     return ((__uint128_t)__rdtsc() * mono_ticks_speed) >> MONO_FPMULT_SHIFT;
 }
 
-/* Return 1 only when the kernel is using TSC as clocksource. Fail closed if
- * sysfs is unreadable: constant_tsc alone does not prove cross-core sync. */
-static int kernelClocksourceIsTsc(void) {
-    char buf[64];
-    size_t len;
-    FILE *f = fopen("/sys/devices/system/clocksource/clocksource0/current_clocksource", "r");
-    if (f == NULL) return 0;
-    if (fgets(buf, sizeof(buf), f) == NULL) {
-        fclose(f);
-        return 0;
-    }
-    fclose(f);
-
-    len = strlen(buf);
-    while (len > 0 && (buf[len - 1] == '\n' || buf[len - 1] == '\r' || buf[len - 1] == ' '))
-        buf[--len] = '\0';
-    return strcmp(buf, "tsc") == 0;
-}
-
 static void monotonicInit_x86linux(void) {
     const int bufflen = 256;
     char buf[bufflen];
@@ -75,11 +54,6 @@ static void monotonicInit_x86linux(void) {
     regmatch_t pmatch[nmatch];
     int constantTsc = 0;
     int rc;
-
-    if (!kernelClocksourceIsTsc()) {
-        fprintf(stderr, "monotonic: x86 linux, kernel clocksource is not tsc");
-        return;
-    }
 
     /* Calibrate TSC ticks per microsecond against CLOCK_MONOTONIC.
      * This determines the actual TSC frequency regardless of what

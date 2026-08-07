@@ -3,6 +3,7 @@
 # more information.
 
 set tcl_precision 17
+source tests/support/stacktrace.tcl
 source tests/support/valkey.tcl
 source tests/support/aofmanifest.tcl
 source tests/support/server.tcl
@@ -78,6 +79,7 @@ set ::failures_output_file ""; # If set, write failures JSON to this path
 set ::timeout 1200; # 20 minutes without progresses will quit the test.
 set ::last_progress [clock seconds]
 set ::active_servers {} ; # Pids of active server instances.
+array set ::server_logs {} ; # Maps server pid -> stdout log path.
 set ::dont_clean 0
 set ::dont_pre_clean 0
 set ::wait_server 0
@@ -418,6 +420,7 @@ proc test_server_cron {} {
             }
         }
         show_clients_state
+        dump_server_logs
         force_kill_all_servers
         kill_clients
         the_end
@@ -509,13 +512,15 @@ proc read_from_test_client fd {
     } elseif {$status eq {server-spawning}} {
         set ::active_clients_task($fd) "(SPAWNING SERVER) $data"
     } elseif {$status eq {server-spawned}} {
-        set pid [string trim [lindex [split $data "-"] 0]]
+        set pid [string trim [lindex $data 0]]
+        set ::server_logs($pid) [lindex $data 1]
         lappend ::active_servers $pid
-        set ::active_clients_task($fd) "(SPAWNED SERVER) pid:$data"
+        set ::active_clients_task($fd) "(SPAWNED SERVER) pid:$pid"
     } elseif {$status eq {server-killing}} {
         set ::active_clients_task($fd) "(KILLING SERVER) pid:$data"
     } elseif {$status eq {server-killed}} {
         set ::active_servers [lsearch -all -inline -not -exact $::active_servers $data]
+        unset -nocomplain ::server_logs($data)
         set ::active_clients_task($fd) "(KILLED SERVER) pid:$data"
     } elseif {$status eq {run_solo}} {
         lappend ::run_solo_tests $data
@@ -542,6 +547,18 @@ proc show_clients_state {} {
 proc kill_clients {} {
     foreach p $::clients_pids {
         catch {exec kill $p}
+    }
+}
+
+# Print the tail of each still-running server's log. Called on timeout so the
+# log of the stuck server is visible in CI output for troubleshooting.
+proc dump_server_logs {} {
+    foreach pid $::active_servers {
+        if {![info exists ::server_logs($pid)]} continue
+        set log $::server_logs($pid)
+        if {![file exists $log]} continue
+        puts "\n=== Server log (pid $pid): $log ==="
+        catch {puts [exec tail -n 100 $log]}
     }
 }
 
@@ -638,10 +655,9 @@ proc write_test_failures {} {
             set error_msg $failed
         }
 
-        set test_name [string map {"\\" "\\\\" "\"" "\\\"" "\n" "\\n" "\r" "\\r" "\t" "\\t" "\b" "\\b" "\f" "\\f"} $test_name]
-        set test_file [string map {"\\" "\\\\" "\"" "\\\"" "\n" "\\n" "\r" "\\r" "\t" "\\t" "\b" "\\b" "\f" "\\f"} $test_file]
-        set error_msg [string map {"\\" "\\\\" "\"" "\\\"" "\n" "\\n" "\r" "\\r" "\t" "\\t" "\b" "\\b" "\f" "\\f"} $error_msg]
-        set status [string map {"\\" "\\\\" "\"" "\\\"" "\n" "\\n" "\r" "\\r" "\t" "\\t" "\b" "\\b" "\f" "\\f"} $status]
+        foreach var {test_name test_file error_msg status} {
+            set $var [json_escape_string [set $var]]
+        }
 
         lappend failures "\{\"test_name\":\"$test_name\",\"test_file\":\"$test_file\",\"status\":\"$status\",\"error\":\"$error_msg\"\}"
     }
@@ -651,6 +667,10 @@ proc write_test_failures {} {
         file mkdir $outdir
     }
     set fp [open $::failures_output_file w]
+    # JSON is UTF-8. Left on the system encoding, which some CI containers set
+    # to a single-byte locale, a non-ASCII byte in a message is written in that
+    # encoding and the consumer cannot decode the file.
+    fconfigure $fp -encoding utf-8
     puts $fp "\[[join $failures ","]\]"
     close $fp
 }
@@ -1124,7 +1144,14 @@ proc is_a_slow_computer {} {
 
 if {$::client} {
     if {[catch { test_client_main $::test_server_port } err]} {
-        set estr "Executing test client: $err.\n$::errorInfo"
+        if {$::stacktrace ne "" && $::stacktrace_err eq $err} {
+            # Pretty stacktraces from our stacktrace.tcl
+            set stacktrace $::stacktrace
+        } else {
+            # Fallback for Tcl builtin errors not raised via return or error.
+            set stacktrace $::errorInfo
+        }
+        set estr "Executing test client: $err.\n$stacktrace"
         if {[catch {send_data_packet $::test_server_fd exception $estr}]} {
             puts $estr
         }

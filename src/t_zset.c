@@ -212,6 +212,25 @@ double zzlGetScore(unsigned char *sptr) {
     return score;
 }
 
+/* Validate that none of the scores in a listpack-encoded sorted set is NAN.
+ * The structural layout (member, score, member, score, ...) must already have
+ * been validated by lpValidateIntegrityAndDups. Returns 1 if all scores are
+ * valid, 0 if a NAN score is found. This guards against crafted RESTORE
+ * payloads: zslInsertNode() asserts the score is not NAN, so a NAN score in a
+ * listpack zset would crash the server when it is later converted to a
+ * skiplist. The skiplist RDB format rejects NAN scores at load time; this is
+ * the equivalent check for the listpack format. */
+int zzlValidateScores(unsigned char *zl) {
+    unsigned char *eptr = lpSeek(zl, 0), *sptr;
+    while (eptr != NULL) {
+        sptr = lpNext(zl, eptr);
+        if (sptr == NULL) return 0; /* odd number of elements */
+        if (isnan(zzlGetScore(sptr))) return 0;
+        eptr = lpNext(zl, sptr);
+    }
+    return 1;
+}
+
 /* Return a listpack element as an SDS string. */
 sds lpGetObject(unsigned char *sptr) {
     unsigned char *vstr;
@@ -1065,17 +1084,17 @@ robj *zsetDup(robj *o) {
     zset *zs;
     zset *new_zs;
 
-    serverAssert(o->type == OBJ_ZSET);
+    serverAssert(objectGetType(o) == OBJ_ZSET);
 
     /* Create a new sorted set object that have the same encoding as the original object's encoding */
-    if (o->encoding == OBJ_ENCODING_LISTPACK) {
+    if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) {
         unsigned char *zl = objectGetVal(o);
         size_t sz = lpBytes(zl);
         unsigned char *new_zl = zmalloc(sz);
         memcpy(new_zl, zl, sz);
         zobj = createObject(OBJ_ZSET, new_zl);
         zobj->encoding = OBJ_ENCODING_LISTPACK;
-    } else if (o->encoding == OBJ_ENCODING_BTREE) {
+    } else if (objectGetEncoding(o) == OBJ_ENCODING_BTREE) {
         zobj = createZsetObject();
         zs = objectGetVal(o);
         new_zs = objectGetVal(zobj);
@@ -2575,14 +2594,14 @@ void zrangestoreCommand(client *c) {
     zrangeGenericCommand(&handler, 2, 1, ZRANGE_AUTO, ZRANGE_DIRECTION_AUTO);
 }
 
-/* ZRANGE <key> <min> <max> [BYSCORE | BYLEX] [REV] [WITHSCORES] [LIMIT offset count] */
+/* ZRANGE <key> <min> <max> [BYSCORE | BYLEX] [REV] [WITHSCORES] [XX] [LIMIT offset count] */
 void zrangeCommand(client *c) {
     zrange_result_handler handler;
     zrangeResultHandlerInit(&handler, c, ZRANGE_CONSUMER_TYPE_CLIENT);
     zrangeGenericCommand(&handler, 1, 0, ZRANGE_AUTO, ZRANGE_DIRECTION_AUTO);
 }
 
-/* ZREVRANGE <key> <start> <stop> [WITHSCORES] */
+/* ZREVRANGE <key> <start> <stop> [WITHSCORES] [XX] */
 void zrevrangeCommand(client *c) {
     zrange_result_handler handler;
     zrangeResultHandlerInit(&handler, c, ZRANGE_CONSUMER_TYPE_CLIENT);
@@ -2691,14 +2710,14 @@ void genericZrangebyscoreCommand(zrange_result_handler *handler,
     handler->finalizeResultEmission(handler, rangelen);
 }
 
-/* ZRANGEBYSCORE <key> <min> <max> [WITHSCORES] [LIMIT offset count] */
+/* ZRANGEBYSCORE <key> <min> <max> [WITHSCORES] [XX] [LIMIT offset count] */
 void zrangebyscoreCommand(client *c) {
     zrange_result_handler handler;
     zrangeResultHandlerInit(&handler, c, ZRANGE_CONSUMER_TYPE_CLIENT);
     zrangeGenericCommand(&handler, 1, 0, ZRANGE_SCORE, ZRANGE_DIRECTION_FORWARD);
 }
 
-/* ZREVRANGEBYSCORE <key> <max> <min> [WITHSCORES] [LIMIT offset count] */
+/* ZREVRANGEBYSCORE <key> <max> <min> [WITHSCORES] [XX] [LIMIT offset count] */
 void zrevrangebyscoreCommand(client *c) {
     zrange_result_handler handler;
     zrangeResultHandlerInit(&handler, c, ZRANGE_CONSUMER_TYPE_CLIENT);
@@ -2921,14 +2940,14 @@ void genericZrangebylexCommand(zrange_result_handler *handler,
     handler->finalizeResultEmission(handler, rangelen);
 }
 
-/* ZRANGEBYLEX <key> <min> <max> [LIMIT offset count] */
+/* ZRANGEBYLEX <key> <min> <max> [LIMIT offset count] [XX] */
 void zrangebylexCommand(client *c) {
     zrange_result_handler handler;
     zrangeResultHandlerInit(&handler, c, ZRANGE_CONSUMER_TYPE_CLIENT);
     zrangeGenericCommand(&handler, 1, 0, ZRANGE_LEX, ZRANGE_DIRECTION_FORWARD);
 }
 
-/* ZREVRANGEBYLEX <key> <max> <min> [LIMIT offset count] */
+/* ZREVRANGEBYLEX <key> <max> <min> [LIMIT offset count] [XX] */
 void zrevrangebylexCommand(client *c) {
     zrange_result_handler handler;
     zrangeResultHandlerInit(&handler, c, ZRANGE_CONSUMER_TYPE_CLIENT);
@@ -2943,7 +2962,9 @@ void zrevrangebylexCommand(client *c) {
  * other command pass explicit value.
  *
  * The argc_start points to the src key argument, so following syntax is like:
- * <src> <min> <max> [BYSCORE | BYLEX] [REV] [WITHSCORES] [LIMIT offset count]
+ * <src> <min> <max> [BYSCORE | BYLEX] [REV] [WITHSCORES] [XX] [LIMIT offset count]
+ *
+ * Note: XX is not supported by ZRANGESTORE.
  */
 void zrangeGenericCommand(zrange_result_handler *handler,
                           int argc_start,
@@ -2962,6 +2983,7 @@ void zrangeGenericCommand(zrange_result_handler *handler,
     long opt_start = 0;
     long opt_end = 0;
     int opt_withscores = 0;
+    int opt_keyexist = 0;
     long opt_offset = 0;
     long opt_limit = -1;
 
@@ -2970,6 +2992,8 @@ void zrangeGenericCommand(zrange_result_handler *handler,
         int leftargs = c->argc - j - 1;
         if (!store && !strcasecmp(objectGetVal(c->argv[j]), "withscores")) {
             opt_withscores = 1;
+        } else if (!store && !strcasecmp(objectGetVal(c->argv[j]), "xx")) {
+            opt_keyexist = 1;
         } else if (!strcasecmp(objectGetVal(c->argv[j]), "limit") && leftargs >= 2) {
             if ((getLongFromObjectOrReply(c, c->argv[j + 1], &opt_offset, NULL) != C_OK) ||
                 (getLongFromObjectOrReply(c, c->argv[j + 2], &opt_limit, NULL) != C_OK)) {
@@ -3047,6 +3071,8 @@ void zrangeGenericCommand(zrange_result_handler *handler,
         if (store) {
             handler->beginResultEmission(handler, -1);
             handler->finalizeResultEmission(handler, 0);
+        } else if (opt_keyexist) {
+            addReplyNullArray(c);
         } else {
             addReply(c, shared.emptyarray);
         }

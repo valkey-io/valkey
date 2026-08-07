@@ -10,6 +10,7 @@
 #include <string.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <limits.h>
 #if HAVE_ARM_NEON
 #include <arm_neon.h>
 #endif
@@ -874,12 +875,22 @@ static long long vsetGetExpiryZero(const void *entry) {
     return 0;
 }
 
+/* Round `expiry` up to the end of its aligned time window (16ms for
+ * get_bucket_ts, 8192ms for get_max_bucket_ts). Saturate at LLONG_MAX so an
+ * expiry inside the top window below 2^63 cannot overflow signed long long
+ * and poison the RAX bucket key with a negative value (which would sort after
+ * every real timestamp and trip assert(target_bucket_ts < bucket_ts) when a
+ * full vector bucket is split). */
 static inline long long get_bucket_ts(long long expiry) {
-    return (expiry & ~(VOLATILESET_BUCKET_INTERVAL_MIN - 1LL)) + VOLATILESET_BUCKET_INTERVAL_MIN;
+    long long aligned = expiry & ~(VOLATILESET_BUCKET_INTERVAL_MIN - 1LL);
+    if (aligned > LLONG_MAX - VOLATILESET_BUCKET_INTERVAL_MIN) return LLONG_MAX;
+    return aligned + VOLATILESET_BUCKET_INTERVAL_MIN;
 }
 
 static inline long long get_max_bucket_ts(long long expiry) {
-    return (expiry & ~(VOLATILESET_BUCKET_INTERVAL_MAX - 1LL)) + VOLATILESET_BUCKET_INTERVAL_MAX;
+    long long aligned = expiry & ~(VOLATILESET_BUCKET_INTERVAL_MAX - 1LL);
+    if (aligned > LLONG_MAX - VOLATILESET_BUCKET_INTERVAL_MAX) return LLONG_MAX;
+    return aligned + VOLATILESET_BUCKET_INTERVAL_MAX;
 }
 
 static inline size_t encodeExpiryKey(long long expiry, unsigned char *key) {
@@ -1069,14 +1080,24 @@ hashtableType pointerHashtableType = {
 static inline vsetBucket *findBucket(rax *expiry_buckets, long long expiry, unsigned char *key, size_t *key_len, long long *pbucket_ts, raxNode **node) {
     *key_len = encodeExpiryKey(expiry, key);
     vsetBucket *bucket = vsetBucketFromNone();
-    /* First try to locate the first bucket which is larger than the specified key */
     raxIterator iter;
     raxStart(&iter, expiry_buckets);
-    raxSeek(&iter, ">", (unsigned char *)key, *key_len);
+    /* An entry whose expiry is exactly LLONG_MAX lives in a bucket keyed
+     * LLONG_MAX: get_bucket_ts()/get_max_bucket_ts() saturate there, and the
+     * bucket is never repositioned below LLONG_MAX (its max entry keeps
+     * bucket_ts == LLONG_MAX). That key equals the entry's own expiry, which the
+     * strictly-greater ">" seek used for every other expiry can never match, so
+     * look the terminal bucket up by exact match. Otherwise locate the first
+     * bucket whose key is larger than the entry's expiry. */
+    if (expiry == LLONG_MAX) {
+        raxSeek(&iter, "=", (unsigned char *)key, *key_len);
+    } else {
+        raxSeek(&iter, ">", (unsigned char *)key, *key_len);
+    }
 
     if (raxNext(&iter)) {
         long long bucket_ts = decodeExpiryKey(iter.key);
-        /* If this bucket span over a window to far in the future, it is not a candidate. */
+        /* If this bucket spans a window too far in the future, it is not a candidate. */
         if (get_max_bucket_ts(expiry) < bucket_ts) {
             raxStop(&iter);
             return vsetBucketFromNone();
@@ -1088,7 +1109,7 @@ static inline vsetBucket *findBucket(rax *expiry_buckets, long long expiry, unsi
             assert(iter.key_len == VSET_BUCKET_KEY_LEN);
             memcpy(key, iter.key, iter.key_len);
         }
-        if (pbucket_ts) *pbucket_ts = decodeExpiryKey(iter.key);
+        if (pbucket_ts) *pbucket_ts = bucket_ts;
     }
     raxStop(&iter);
     return bucket;
@@ -1505,11 +1526,31 @@ static inline size_t vsetBucketRemoveExpired_HASHTABLE(vsetBucket **bucket, vset
     }
     hashtableCleanupIterator(&it);
 
-    /* in case we completed scanning the hashtable which is now empty */
+    /* Collapse or downgrade the bucket based on how many entries remain.
+     *
+     * The active-expire path is bounded by max_count (the per-key expire
+     * quota in dbReclaimExpiredFields), so it can stop *before* the bucket
+     * is fully drained. We must preserve the same bucket-type invariant the
+     * normal removal path relies on:
+     *   - size 0 : free the hashtable, bucket becomes NONE.
+     *   - size 1 : downgrade to SINGLE. An HT bucket must never persist with
+     *              a single entry -- removeFromBucket_HASHTABLE() asserts
+     *              hashtableSize(ht) > 0 after a delete and downgrades to
+     *              SINGLE at size 1. If we leave a size-1 HT bucket here, a
+     *              later normal removal of that entry (HDEL, or a cross-bucket
+     *              HSETEX update via removeEntryFromRaxBucket) deletes the sole
+     *              entry, drops the size 1->0, and trips that assertion. */
     size_t ht_size = hashtableSize(ht);
     if (ht_size == 0) {
         hashtableRelease(ht);
         *bucket = vsetBucketFromNone();
+    } else if (ht_size == 1) {
+        hashtableIterator hi;
+        hashtableInitIterator(&hi, ht, 0);
+        void *ptr;
+        hashtableNext(&hi, &ptr);
+        hashtableRelease(ht);
+        *bucket = vsetBucketFromSingle(ptr);
     }
     return count;
 }
@@ -2130,6 +2171,14 @@ long long vsetEstimatedEarliestExpiry(vset *set, vsetGetExpiryFunc getExpiry) {
         rax *r = vsetBucketRax(*set);
         raxIterator it;
         raxStart(&it, r);
+        /* Position on the smallest (earliest) bucket key and materialize it.
+         * raxStart() alone leaves the iterator unpositioned with key_len = 0,
+         * so reading it.key without a raxSeek("^") + raxNext() decodes an
+         * uninitialized buffer and returns a garbage expiry. This mirrors the
+         * traversal pattern used by every other RAX walk in this file. A
+         * RAX-encoded set is never empty, so the first advance always succeeds. */
+        raxSeek(&it, "^", NULL, 0);
+        assert(raxNext(&it));
         expiry = decodeExpiryKey(it.key);
         raxStop(&it);
         break;

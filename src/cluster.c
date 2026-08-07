@@ -773,16 +773,15 @@ int verifyClusterNodeId(const char *name, int length) {
     return C_OK;
 }
 
-int isValidAuxChar(int c) {
-    /* Return true if the character is alphanumeric */
-    if (isalnum(c)) {
-        return 1;
-    }
+static int isValidAuxChar(unsigned char c) {
+    /* Reject everything up through ',' (0x2C) inclusive: control characters
+     * (0x00-0x1F), space !"#$%&'()*+, (0x20-0x2C), and DEL (0x7F). */
+    if (c <= ',' || c == 0x7F) return 0;
 
-    /* List of invalid characters */
-    static const char *invalid_charset = "!#$%&()*+;<>?@[]^{|}~";
+    /* Reject additional characters above 0x2C (comma) that are format-significant in
+     * nodes.conf or otherwise unsafe. */
+    static const char *invalid_charset = ";<=>?@[]^{|}~\\";
 
-    /* Return true if the character is NOT in the invalid charset */
     return strchr(invalid_charset, c) == NULL;
 }
 
@@ -1200,14 +1199,21 @@ clusterNode *getNodeByQuery(client *c, int *error_code) {
 
             /* Block the COPY command if it's cross-DB to keep the code simple.
              * Allowing cross-DB COPY is possible, but it would require looking up the second key in the target DB.
-             * The command should only be allowed if the key exists. We may revisit this decision in the future. */
-            if (mcmd->proc == copyCommand &&
-                margc >= 4 && !strcasecmp(objectGetVal(margv[3]), "db")) {
-                long long value;
-                if (getLongLongFromObject(margv[4], &value) != C_OK || value != currentDb->id) {
-                    if (error_code) *error_code = CLUSTER_REDIR_UNSTABLE;
-                    getKeysFreeResult(&result);
-                    return NULL;
+             * The command should only be allowed if the key exists. We may revisit this decision in the future.
+             *
+             * The DB and REPLACE tokens are optional and order-independent, and DB may appear more than once, so
+             * scan every DB clause the way copyCommand does. A DB token without a value is left to copyCommand to
+             * reject as a syntax error. */
+            if (mcmd->proc == copyCommand) {
+                for (int k = 3; k + 1 < margc; k++) {
+                    if (strcasecmp(objectGetVal(margv[k]), "db")) continue;
+                    long long value;
+                    if (getLongLongFromObject(margv[k + 1], &value) != C_OK || value != currentDb->id) {
+                        if (error_code) *error_code = CLUSTER_REDIR_UNSTABLE;
+                        getKeysFreeResult(&result);
+                        return NULL;
+                    }
+                    k++; /* Consume the dbid. */
                 }
             }
 

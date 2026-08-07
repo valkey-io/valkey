@@ -27,7 +27,12 @@ typedef enum {
     ITER_PAST_END,     /* Positioned past last element (fbtreeNext returns NULL, fbtreePrev works) */
 } IterState;
 
-typedef struct {
+/* may_alias is required: fbtreeIterator is declared as uint64_t[3] and
+ * iteratorFromOpaque() accesses it through this struct type. Without the
+ * attribute that access violates strict aliasing, and gcc 15 with LTO
+ * miscompiles fbtreeSeekToRank on musl toolchains (seek stores elided,
+ * iterator behaves as never seeked). Do not remove. */
+typedef struct __attribute__((may_alias)) {
     fbtreeIndex *fbt;
     leafNode *current_leaf;
     uint8_t current_index;
@@ -2606,7 +2611,9 @@ size_t fbtreeEstimateStructureMemory(fbtreeIndex *fbt) {
     /* Leaf count is exact for small chains; for larger trees it is
      * extrapolated from the fill of the first leaves, which reflects how
      * sparse deletes have left the tree. */
-    enum { FILL_SAMPLE_LEAVES = 16 };
+    enum {
+        FILL_SAMPLE_LEAVES = 16
+    };
     size_t leaves_seen = 0, items_seen = 0;
     leafNode *leaf = fbt->leftmost_leaf;
     while (leaf && leaves_seen < FILL_SAMPLE_LEAVES) {

@@ -2417,27 +2417,33 @@ int main(int argc, char **argv) {
          *
          *     [N] command args [ ";" [N] command args [...] ]
          */
-        int start = 0;  /* Argument index where the current command starts. */
-        int repeat = 1; /* Number of times to repeat the current command. */
+        int start = 0;             /* Argument index where the current command starts. */
+        int repeat = 1;            /* Number of times to repeat the current command. */
+        int has_repeat = 0;        /* Current segment is prefixed by a repeat count. */
+        int malformed_segment = 0; /* A segment was left with no command to run. */
         cmd_seq = sdsempty();
         for (i = 0; i <= argc; i++) {
             if (i < argc && i == start && sds_args[i][0] >= '1' && sds_args[i][0] <= '9') {
                 /* Command prefixed by number means repeat command N times. */
                 repeat = atoi(sds_args[i]);
+                has_repeat = 1;
                 start++;
             } else if (i == argc || strcmp(";", sds_args[i]) == 0) {
                 cmd = NULL;
                 if (i == start) {
-                    /* Empty segment: advance past it and reset repeat so it is
-                     * not later mistaken for a command. */
+                    /* Empty segment. Only a trailing separator (i == argc) is
+                     * harmless; otherwise the caller lost a command or a count. */
+                    if (has_repeat || i < argc) malformed_segment = 1;
                     start = i + 1;
                     repeat = 1;
+                    has_repeat = 0;
                     continue;
                 }
 
                 addRespCommandToSequence(sds_args, argvlen, start, i, repeat, &cmd_seq, &seq_len);
                 start = i + 1;
                 repeat = 1;
+                has_repeat = 0;
             } else if (strstr(sds_args[i], "__data__")) {
                 if (config.current_dataset) {
                     fprintf(stderr, "Error: __data__ placeholders cannot be used with --dataset option\n");
@@ -2463,8 +2469,8 @@ int main(int argc, char **argv) {
             }
             /* NOTE: Field placeholder processing is handled above in the command-level loop to ensure row consistency */
         }
-        if (seq_len <= 0) {
-            fprintf(stderr, "No command specified: a repeat count must be followed by a command.\n"
+        if (seq_len <= 0 || malformed_segment) {
+            fprintf(stderr, "Invalid command sequence: a command is missing.\n"
                             "Use -n <requests> to set the total number of requests.\n");
             return 1;
         }

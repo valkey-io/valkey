@@ -441,10 +441,8 @@ int trySendWriteToIOThreads(client *c) {
     if (c->io_read_state != CLIENT_IDLE) return C_ERR;
     /* Nothing to write */
     if (!clientHasPendingReplies(c)) return C_ERR;
-    /* Online replicas only; skip write offload while WAIT/WAITAOF need ACKs. */
-    if (getClientType(c) == CLIENT_TYPE_REPLICA &&
-        (c->repl_data->repl_state != REPLICA_STATE_ONLINE || listLength(server.clients_waiting_acks)))
-        return C_ERR;
+    /* For simplicity, avoid offloading non-online replicas */
+    if (getClientType(c) == CLIENT_TYPE_REPLICA && c->repl_data->repl_state != REPLICA_STATE_ONLINE) return C_ERR;
     /* We can't offload debugged clients as the main-thread may read at the same time  */
     if (c->flag.lua_debug) return C_ERR;
 

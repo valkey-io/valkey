@@ -3354,8 +3354,7 @@ int handleClientsWithPendingWrites(void) {
     listRewind(server.clients_pending_write, &li);
     while ((ln = listNext(&li))) {
         client *c = listNodeValue(ln);
-        c->flag.pending_write = 0;
-        listUnlinkNode(server.clients_pending_write, ln);
+        serverAssert(c->flag.pending_write);
 
         /* If a client is protected, don't do anything,
          * that may trigger write error or recreate handler. */
@@ -3364,13 +3363,22 @@ int handleClientsWithPendingWrites(void) {
         /* Don't write to clients that are going to be closed anyway. */
         if (c->flag.close_asap) continue;
 
+        /* Stay queued while a read IO job owns this client. */
+        if (c->io_read_state == CLIENT_PENDING_IO) continue;
+
+        c->flag.pending_write = 0;
+        listUnlinkNode(server.clients_pending_write, ln);
+
         if (!clientHasPendingReplies(c)) continue;
 
         /* If we can send the client to the I/O thread, let it handle the write. */
         if (trySendWriteToIOThreads(c) == C_OK) continue;
 
-        /* We can't write to the client while IO operation is in progress. */
-        if (c->io_write_state != CLIENT_IDLE || c->io_read_state != CLIENT_IDLE) continue;
+        /* Can't write while IO is in progress; re-queue to avoid stranding replies. */
+        if (c->io_write_state != CLIENT_IDLE || c->io_read_state != CLIENT_IDLE) {
+            putClientInPendingWriteQueue(c);
+            continue;
+        }
 
         processed++;
 

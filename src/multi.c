@@ -455,7 +455,7 @@ int isWatchedKeyExpired(client *c) {
     while ((ln = listNext(&li))) {
         wk = listNodeValue(ln);
         if (wk->expired) continue; /* was expired when WATCH was called */
-        if (keyIsExpired(wk->db, wk->key)) return 1;
+        if (keyIsExpiredByKey(wk->db, wk->key)) return 1;
     }
 
     return 0;

@@ -2154,6 +2154,17 @@ int keyIsExpired(serverDb *db, robj *key) {
     return keyIsExpiredWithDictIndex(db, key, dict_index);
 }
 
+/* Check if the key is expired, computing the KV store index from the key's
+ * own hash slot rather than the current client's cached slot. This is
+ * necessary when checking the expiry of keys that may reside in a different
+ * slot than the one the executing client is associated with, e.g. WATCHed
+ * keys during EXEC that may be in a different slot than the transaction. */
+int keyIsExpiredByKey(serverDb *db, robj *key) {
+    int dict_index = server.cluster_enabled ?
+        keyHashSlot((char *)objectGetVal(key), (int)sdslen(objectGetVal(key))) : 0;
+    return keyIsExpiredWithDictIndex(db, key, dict_index);
+}
+
 /* val is optional. Pass NULL if val is not yet fetched from the database. */
 static keyStatus expireIfNeededWithDictIndex(serverDb *db, robj *key, robj *val, int flags, int dict_index) {
     if (server.lazy_expire_disabled) return KEY_VALID;

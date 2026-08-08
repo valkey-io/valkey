@@ -3766,6 +3766,7 @@ void propagateDeletion(serverDb *db, robj *key, int lazy, int slot);
 int propagateFieldsDeletion(serverDb *db, robj *o, size_t n_fields, robj *fields[], int slot);
 size_t dbReclaimExpiredFields(robj *o, serverDb *db, mstime_t now, unsigned long max_entries, int didx);
 int keyIsExpired(serverDb *db, robj *key);
+int keyIsExpiredByKey(serverDb *db, robj *key);
 long long getExpire(serverDb *db, robj *key);
 robj *setExpire(client *c, serverDb *db, robj *key, long long when);
 int checkAlreadyExpired(mstime_t when);

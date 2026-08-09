@@ -2593,7 +2593,26 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
                 goto emptykey;
             }
 
-            if (hashTypeLength(o) > server.hash_max_listpack_entries) hashTypeConvert(o, OBJ_ENCODING_HASHTABLE);
+            if (hashTypeLength(o) > server.hash_max_listpack_entries) {
+                hashTypeConvert(o, OBJ_ENCODING_HASHTABLE);
+            } else {
+                /* Check if any field or value exceeds hash_max_listpack_value.
+                 * This mirrors the runtime check in hashTypeSet() and the
+                 * per-element check in the RDB_TYPE_HASH loading path. */
+                unsigned char *lp = objectGetVal(o);
+                unsigned char *p = lpFirst(lp);
+                while (p) {
+                    unsigned int slen;
+                    long long lval;
+                    unsigned char *vstr = lpGetValue(p, &slen, &lval);
+                    size_t len = vstr ? slen : (size_t)sdigits10(lval);
+                    if (len > server.hash_max_listpack_value) {
+                        hashTypeConvert(o, OBJ_ENCODING_HASHTABLE);
+                        break;
+                    }
+                    p = lpNext(lp, p);
+                }
+            }
             break;
         default:
             /* totally unreachable */

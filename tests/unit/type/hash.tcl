@@ -938,4 +938,22 @@ start_server {tags {"hash"}} {
         assert_error "*value is NaN or Infinity*" {r hincrbyfloat hfoo field +inf}
         assert_equal 0 [r exists hfoo]
     } {} {valgrind:skip}
+
+    test {Hash listpack loaded via RDB respects hash-max-listpack-value} {
+        r del k kk
+        # A value at the default hash-max-listpack-value (8) stays listpack-encoded.
+        r hset k f [string repeat a 8]
+        assert_encoding listpack k
+        set dump [r dump k]
+
+        # Lower hash-max-listpack-entries and hash-max-listpack-value so the
+        # existing value now exceeds the value threshold. The load path must
+        # convert the listpack to a hashtable, just like the runtime path does
+        # when a new value exceeds the threshold.
+        config_set hash-max-listpack-entries 2
+        config_set hash-max-listpack-value 2
+        r restore kk 0 $dump
+        assert_encoding hashtable kk
+        assert_equal [r hget kk f] [string repeat a 8]
+    }
 }

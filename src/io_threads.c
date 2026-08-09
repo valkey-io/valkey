@@ -865,7 +865,11 @@ static void handleReadJobs(client **read_jobs, int read_count) {
             client *c = lookupClientByID(read_client_ids[i]);
             if (!c || !c->conn) continue;
 
-            if (processPendingCommandAndInputBuffer(c) == C_OK) beforeNextClient(c);
+            /* pending_command belongs to whoever blocked the client. BLOCKED_POSTPONE
+             * keeps it set across unblockClient(), hence the unblocked check too. */
+            if (!c->flag.blocked && !c->flag.unblocked &&
+                processPendingCommandAndInputBuffer(c) == C_OK)
+                beforeNextClient(c);
 
             c = lookupClientByID(read_client_ids[i]);
             if (!c || !c->conn) continue;

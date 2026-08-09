@@ -171,3 +171,39 @@ start_server {config "minimal.conf" tags {"external:skip" "valgrind:skip"} overr
         assert_equal {PONG} [r ping]
     }
 }
+
+start_server {config "minimal.conf" tags {"external:skip" "valgrind:skip"} overrides {io-threads 5}} {
+    # handleReadJobs() used to re-run the pending command of a client that
+    # processClientsCommandsBatch() had just blocked, blocking it twice and
+    # leaking a server.blocked_clients reference per blocking command.
+    test {Blocking command offloaded to an IO thread blocks the client only once} {
+        assert_equal {OK} [r config set io-threads-always-active yes]
+        activate_io_threads_and_wait
+
+        set rd [valkey_deferring_client]
+        $rd blpop iothreads-blist 0
+        wait_for_blocked_clients_count 1
+
+        r lpush iothreads-blist foo
+        assert_equal {iothreads-blist foo} [$rd read]
+        wait_for_blocked_clients_count 0
+
+        $rd close
+        assert_equal {PONG} [r ping]
+    }
+
+    test {Blocking command offloaded to an IO thread does not leak blocked_clients on timeout} {
+        assert_equal {OK} [r config set io-threads-always-active yes]
+        activate_io_threads_and_wait
+
+        set rd [valkey_deferring_client]
+        $rd blpop iothreads-nolist 1
+        wait_for_blocked_clients_count 1
+
+        assert_equal {} [$rd read]
+        wait_for_blocked_clients_count 0
+
+        $rd close
+        assert_equal {PONG} [r ping]
+    }
+}

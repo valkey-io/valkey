@@ -1767,6 +1767,28 @@ robj *rdbLoadCheckModuleValue(rio *rdb, char *modulename) {
     return createStringObject("module-dummy-value", 18);
 }
 
+/* Return the maximum byte length of string entries in a listpack.
+ * step=1 inspects every entry (sets, hashes); step=2 skips every second
+ * entry (zsets: skip scores). Integer-encoded entries are ignored.
+ * Used by the RDB load path to enforce *-max-listpack-value symmetrically
+ * with the runtime conversion. */
+static unsigned int lpMaxElementLength(unsigned char *lp, int step) {
+    unsigned int maxlen = 0, slen;
+    long long lval;
+    unsigned char *p = lpFirst(lp);
+    int idx = 0;
+    while (p) {
+        if (step != 2 || (idx % 2 == 0)) {
+            if (lpGetValue(p, &slen, &lval) != NULL) {
+                if (slen > maxlen) maxlen = slen;
+            }
+        }
+        p = lpNext(lp, p);
+        idx++;
+    }
+    return maxlen;
+}
+
 /* callback for hashZiplistConvertAndValidateIntegrity.
  * Check that the ziplist doesn't have duplicate hash field names.
  * The ziplist element pointed by 'p' will be converted and stored into listpack. */
@@ -2482,7 +2504,8 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
                 decrRefCount(o);
                 goto emptykey;
             }
-            if (setTypeSize(o) > server.set_max_listpack_entries) setTypeConvert(o, OBJ_ENCODING_HASHTABLE);
+            if (setTypeSize(o) > server.set_max_listpack_entries ||
+                lpMaxElementLength(objectGetVal(o), 1) > server.set_max_listpack_value) setTypeConvert(o, OBJ_ENCODING_HASHTABLE);
             break;
         case RDB_TYPE_ZSET_ZIPLIST: {
             unsigned char *lp = lpNew(encoded_len);
@@ -2549,7 +2572,8 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
                 goto emptykey;
             }
 
-            if (zsetLength(o) > server.zset_max_listpack_entries) zsetConvert(o, OBJ_ENCODING_SKIPLIST);
+            if (zsetLength(o) > server.zset_max_listpack_entries ||
+                lpMaxElementLength(objectGetVal(o), 2) > server.zset_max_listpack_value) zsetConvert(o, OBJ_ENCODING_SKIPLIST);
             break;
         case RDB_TYPE_HASH_ZIPLIST: {
             unsigned char *lp = lpNew(encoded_len);
@@ -2593,7 +2617,11 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
                 goto emptykey;
             }
 
-            if (hashTypeLength(o) > server.hash_max_listpack_entries) hashTypeConvert(o, OBJ_ENCODING_HASHTABLE);
+            /* Apply both the entries and the value threshold, symmetric with
+             * the runtime conversion. */
+            if (hashTypeLength(o) > server.hash_max_listpack_entries ||
+                lpMaxElementLength(objectGetVal(o), 1) > server.hash_max_listpack_value)
+                hashTypeConvert(o, OBJ_ENCODING_HASHTABLE);
             break;
         default:
             /* totally unreachable */

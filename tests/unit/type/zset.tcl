@@ -2983,6 +2983,29 @@ start_server {tags {"zset"}} {
             r config set zset-max-listpack-entries $original_max
         }
     }
+
+    test {ZSet listpack is converted to skiplist on RDB load when value exceeds zset-max-listpack-value} {
+        set orig_entries [lindex [r config get zset-max-listpack-entries] 1]
+        set orig_value [lindex [r config get zset-max-listpack-value] 1]
+
+        # Write under a permissive value threshold so the zset stays listpack,
+        # then tighten the threshold before reloading through RDB. The load path
+        # must convert the oversized listpack to a skiplist.
+        r config set zset-max-listpack-entries 512
+        r config set zset-max-listpack-value 256
+        r del myzset
+        r zadd myzset 1 [string repeat a 200]
+
+        r config set zset-max-listpack-value 64
+        r debug reload
+
+        set err [catch {assert_encoding skiplist myzset} err_msg]
+
+        r config set zset-max-listpack-entries $orig_entries
+        r config set zset-max-listpack-value $orig_value
+
+        if {$err} {error $err_msg}
+    } {} {needs:debug}
 }
 
 start_server [list overrides [list save ""] tags {"zset needs:debug external:skip"}] {

@@ -938,4 +938,27 @@ start_server {tags {"hash"}} {
         assert_error "*value is NaN or Infinity*" {r hincrbyfloat hfoo field +inf}
         assert_equal 0 [r exists hfoo]
     } {} {valgrind:skip}
+
+    test {Hash listpack is converted to hashtable on RDB load when value exceeds hash-max-listpack-value} {
+        set orig_entries [lindex [r config get hash-max-listpack-entries] 1]
+        set orig_value [lindex [r config get hash-max-listpack-value] 1]
+
+        # Write under a permissive value threshold so the hash stays listpack,
+        # then tighten the threshold before reloading through RDB. The load path
+        # must convert the oversized listpack to a hashtable.
+        r config set hash-max-listpack-entries 512
+        r config set hash-max-listpack-value 256
+        r del myhash
+        r hset myhash f [string repeat a 200]
+
+        r config set hash-max-listpack-value 64
+        r debug reload
+
+        set err [catch {assert_encoding hashtable myhash} err_msg]
+
+        r config set hash-max-listpack-entries $orig_entries
+        r config set hash-max-listpack-value $orig_value
+
+        if {$err} {error $err_msg}
+    } {} {needs:debug}
 }

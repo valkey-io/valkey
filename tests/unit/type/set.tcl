@@ -168,7 +168,30 @@ foreach type {single multiple single_multiple} {
         assert_equal 1 [r sadd myset b]
         assert_encoding hashtable myset
     }
-}
+} ;# foreach type
+
+    test {Set listpack is converted to hashtable on RDB load when value exceeds set-max-listpack-value} {
+        set orig_entries [lindex [r config get set-max-listpack-entries] 1]
+        set orig_value [lindex [r config get set-max-listpack-value] 1]
+
+        # Write under a permissive value threshold so the set stays listpack,
+        # then tighten the threshold before reloading through RDB. The load path
+        # must convert the oversized listpack to a hashtable.
+        r config set set-max-listpack-entries 512
+        r config set set-max-listpack-value 256
+        r del myset
+        r sadd myset [string repeat a 200]
+
+        r config set set-max-listpack-value 64
+        r debug reload
+
+        set err [catch {assert_encoding hashtable myset} err_msg]
+
+        r config set set-max-listpack-entries $orig_entries
+        r config set set-max-listpack-value $orig_value
+
+        if {$err} {error $err_msg}
+    } {} {needs:debug}
 
     test {Variadic SADD} {
         r del myset

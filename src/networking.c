@@ -6542,6 +6542,8 @@ int postponeClientRead(client *c) {
     return (trySendReadToIOThreads(c) == C_OK);
 }
 
+#define IO_READ_DONE_BATCH 16
+
 int processIOThreadsReadDone(void) {
     if (ProcessingEventsWhileBlocked) {
         /* When ProcessingEventsWhileBlocked we may call processIOThreadsReadDone recursively.
@@ -6551,121 +6553,118 @@ int processIOThreadsReadDone(void) {
 
     if (listLength(server.clients_pending_io_read) == 0) return 0;
     int processed = 0;
-    listNode *ln;
 
-    /* Ids needing a second connUpdateState after the command batch. Sized to the
-     * current pending list; may grow if clients are re-queued mid-loop. */
-    size_t followup_n = 0, followup_cap = listLength(server.clients_pending_io_read);
-    uint64_t *followup_ids = zmalloc(followup_cap * sizeof(uint64_t));
+    while (1) {
+        uint64_t followup_ids[IO_READ_DONE_BATCH];
+        size_t followup_n = 0;
+        int batch_count = 0;
+        listNode *ln;
+        listNode *next = listFirst(server.clients_pending_io_read);
 
-    listNode *next = listFirst(server.clients_pending_io_read);
-    while (next) {
-        ln = next;
-        next = listNextNode(ln);
-        client *c = listNodeValue(ln);
+        while (next && batch_count < IO_READ_DONE_BATCH) {
+            ln = next;
+            next = listNextNode(ln);
+            client *c = listNodeValue(ln);
 
-        /* Client is still waiting for a pending I/O - skip it */
-        if (c->io_write_state == CLIENT_PENDING_IO || c->io_read_state == CLIENT_PENDING_IO) continue;
-        /* If the write job is done, process it ASAP to free the buffer and handle connection errors */
-        if (c->io_write_state == CLIENT_COMPLETED_IO) {
-            int allow_async_writes = 0; /* Don't send writes for the client to IO threads before processing the reads */
-            processClientIOWriteDone(c, allow_async_writes);
-        }
-        /* memory barrier acquire to get the updated client state */
-        atomic_thread_fence(memory_order_acquire);
-
-        listUnlinkNode(server.clients_pending_io_read, ln);
-        c->flag.pending_read = 0;
-        c->io_read_state = CLIENT_IDLE;
-
-        /* Don't post-process-reads from clients that are going to be closed anyway. */
-        if (c->flag.close_asap) continue;
-
-        /* If a client is protected, don't do anything,
-         * that may trigger read/write error or recreate handler. */
-        if (c->flag.protected) continue;
-
-        processed++;
-        server.stat_io_reads_processed++;
-
-        /* Save the current conn state, as connUpdateState may modify it */
-        int in_accept_state = (connGetState(c->conn) == CONN_STATE_ACCEPTING);
-        int needs_post_read_update = 0;
-
-        /* Keep READ postponed through command batching. */
-        if (c->conn) {
-            int mask = 0;
-            if (!in_accept_state) {
-                mask |= CONN_POSTPONE_READ;
-                if (c->io_write_state != CLIENT_IDLE) mask |= CONN_POSTPONE_WRITE;
-                needs_post_read_update = 1;
+            /* Client is still waiting for a pending I/O - skip it */
+            if (c->io_write_state == CLIENT_PENDING_IO || c->io_read_state == CLIENT_PENDING_IO) continue;
+            /* If the write job is done, process it ASAP to free the buffer and handle connection errors */
+            if (c->io_write_state == CLIENT_COMPLETED_IO) {
+                int allow_async_writes = 0; /* Don't send writes for the client to IO threads before processing the reads */
+                processClientIOWriteDone(c, allow_async_writes);
             }
-            connSetPostponeUpdateState(c->conn, mask);
+            /* memory barrier acquire to get the updated client state */
+            atomic_thread_fence(memory_order_acquire);
+
+            listUnlinkNode(server.clients_pending_io_read, ln);
+            c->flag.pending_read = 0;
+            c->io_read_state = CLIENT_IDLE;
+            batch_count++;
+
+            /* Don't post-process-reads from clients that are going to be closed anyway. */
+            if (c->flag.close_asap) continue;
+
+            /* If a client is protected, don't do anything,
+             * that may trigger read/write error or recreate handler. */
+            if (c->flag.protected) continue;
+
+            processed++;
+            server.stat_io_reads_processed++;
+
+            /* Save the current conn state, as connUpdateState may modify it */
+            int in_accept_state = (connGetState(c->conn) == CONN_STATE_ACCEPTING);
+            int needs_post_read_update = 0;
+
+            /* Keep READ postponed through command batching. */
+            if (c->conn) {
+                int mask = 0;
+                if (!in_accept_state) {
+                    mask |= CONN_POSTPONE_READ;
+                    if (c->io_write_state != CLIENT_IDLE) mask |= CONN_POSTPONE_WRITE;
+                    needs_post_read_update = 1;
+                }
+                connSetPostponeUpdateState(c->conn, mask);
+                connUpdateState(c->conn);
+            }
+
+            /* In accept state, no client's data was read - stop here. */
+            if (in_accept_state) continue;
+
+            if (needs_post_read_update) followup_ids[followup_n++] = c->id;
+
+            /* On read error - stop here. */
+            if (handleReadResult(c) == C_ERR) {
+                continue;
+            }
+
+            if (!(c->read_flags & READ_FLAGS_DONT_PARSE)) {
+                parseResult res = handleParseResults(c);
+                /* On parse error - stop here. */
+                if (res == PARSE_ERR) {
+                    continue;
+                } else if (res == PARSE_NEEDMORE) {
+                    beforeNextClient(c);
+                    continue;
+                }
+            }
+
+            if (c->argc > 0) {
+                c->flag.pending_command = 1;
+            }
+
+            size_t list_length_before_command_execute = listLength(server.clients_pending_io_read);
+            /* try to add the command to the batch */
+            int ret = addCommandToBatchAndProcessIfFull(c);
+            /* If the command was not added to the commands batch, process it immediately */
+            if (ret == C_ERR) {
+                if (processPendingCommandAndInputBuffer(c) == C_OK) beforeNextClient(c);
+            }
+            if (list_length_before_command_execute != listLength(server.clients_pending_io_read)) {
+                /* A client was unlink from the list possibly making the next node invalid */
+                next = listFirst(server.clients_pending_io_read);
+            }
+        }
+
+        if (batch_count == 0) break; /* Empty, or only PENDING_IO left. */
+
+        processClientsCommandsBatch();
+
+        /* Apply final postpone mask after draining input and cmd_queue. */
+        for (size_t i = 0; i < followup_n; i++) {
+            client *c = lookupClientByID(followup_ids[i]);
+            if (!c || !c->conn) continue;
+
+            /* Skip blocked clients: pending_command is kept for retry after unblock. */
+            if (!c->flag.blocked && !c->flag.unblocked) {
+                if (processPendingCommandAndInputBuffer(c) == C_OK) beforeNextClient(c);
+            }
+
+            c = lookupClientByID(followup_ids[i]);
+            if (!c || !c->conn) continue;
+            connSetPostponeUpdateState(c->conn, clientConnPostponeMask(c));
             connUpdateState(c->conn);
         }
-
-        /* In accept state, no client's data was read - stop here. */
-        if (in_accept_state) continue;
-
-        if (needs_post_read_update) {
-            if (followup_n == followup_cap) {
-                followup_cap *= 2;
-                followup_ids = zrealloc(followup_ids, followup_cap * sizeof(uint64_t));
-            }
-            followup_ids[followup_n++] = c->id;
-        }
-
-        /* On read error - stop here. */
-        if (handleReadResult(c) == C_ERR) {
-            continue;
-        }
-
-        if (!(c->read_flags & READ_FLAGS_DONT_PARSE)) {
-            parseResult res = handleParseResults(c);
-            /* On parse error - stop here. */
-            if (res == PARSE_ERR) {
-                continue;
-            } else if (res == PARSE_NEEDMORE) {
-                beforeNextClient(c);
-                continue;
-            }
-        }
-
-        if (c->argc > 0) {
-            c->flag.pending_command = 1;
-        }
-
-        size_t list_length_before_command_execute = listLength(server.clients_pending_io_read);
-        /* try to add the command to the batch */
-        int ret = addCommandToBatchAndProcessIfFull(c);
-        /* If the command was not added to the commands batch, process it immediately */
-        if (ret == C_ERR) {
-            if (processPendingCommandAndInputBuffer(c) == C_OK) beforeNextClient(c);
-        }
-        if (list_length_before_command_execute != listLength(server.clients_pending_io_read)) {
-            /* A client was unlink from the list possibly making the next node invalid */
-            next = listFirst(server.clients_pending_io_read);
-        }
     }
-
-    processClientsCommandsBatch();
-
-    /* Apply final postpone mask after draining input and cmd_queue. */
-    for (size_t i = 0; i < followup_n; i++) {
-        client *c = lookupClientByID(followup_ids[i]);
-        if (!c || !c->conn) continue;
-
-        /* Skip blocked clients: pending_command is kept for retry after unblock. */
-        if (!c->flag.blocked && !c->flag.unblocked) {
-            if (processPendingCommandAndInputBuffer(c) == C_OK) beforeNextClient(c);
-        }
-
-        c = lookupClientByID(followup_ids[i]);
-        if (!c || !c->conn) continue;
-        connSetPostponeUpdateState(c->conn, clientConnPostponeMask(c));
-        connUpdateState(c->conn);
-    }
-    zfree(followup_ids);
 
     return processed;
 }

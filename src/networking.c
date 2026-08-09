@@ -3994,6 +3994,10 @@ int processPendingCommandAndInputBuffer(client *c) {
      * So whenever we change the code here we need to consider if we need this change on module
      * blocked client as well */
     if (c->flag.pending_command) {
+        /* Return if client is already blocked */
+        if (c->flag.blocked) {
+            return C_OK;
+        }
         c->flag.pending_command = 0;
         if (processCommandAndResetClient(c) == C_ERR) {
             return C_ERR;

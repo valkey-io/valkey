@@ -2539,7 +2539,8 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
                 goto emptykey;
             }
 
-            if (zsetLength(o) > server.zset_max_listpack_entries)
+            if (zsetLength(o) > server.zset_max_listpack_entries ||
+                lpMaxElementLength(objectGetVal(o), 2) > server.zset_max_listpack_value)
                 zsetConvert(o, OBJ_ENCODING_SKIPLIST);
             else
                 objectSetVal(o, lpShrinkToFit(objectGetVal(o)));
@@ -2595,7 +2596,8 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
                 goto emptykey;
             }
 
-            if (hashTypeLength(o) > server.hash_max_listpack_entries)
+            if (hashTypeLength(o) > server.hash_max_listpack_entries ||
+                lpMaxElementLength(objectGetVal(o), 1) > server.hash_max_listpack_value)
                 hashTypeConvert(o, OBJ_ENCODING_HASHTABLE);
             else
                 objectSetVal(o, lpShrinkToFit(objectGetVal(o)));

@@ -4372,8 +4372,10 @@ void readQueryFromClient(connection *conn) {
 
     /* Don't race an in-flight IO-thread read. */
     if (c->io_read_state != CLIENT_IDLE) return;
-    /* TLS/RDMA must serialize with IO-thread write; TCP is full-duplex. */
-    if (c->io_write_state != CLIENT_IDLE && conn->type && conn->type->postpone_update_state) return;
+    /* Serialize with IO write, except TCP replicas (need REPLCONF ACK). */
+    if (c->io_write_state != CLIENT_IDLE &&
+        (!c->flag.replica || (conn->type && conn->type->postpone_update_state)))
+        return;
 
     bool repeat = false;
     int iter = 0;

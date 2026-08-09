@@ -385,9 +385,8 @@ int trySendReadToIOThreads(client *c) {
         connSetPostponeUpdateState(c->conn, clientConnPostponeMaskFromIOState(c));
         return C_OK;
     }
-    /* Serialize READ across an in-flight write only if postpone is honored
-     * (TLS/RDMA). TCP has no postpone_update_state — return C_ERR so the main
-     * thread can still read (e.g. replica ACK). */
+    /* In-flight write: postpone READ on TLS/RDMA. On TCP let the main thread
+     * decide in readQueryFromClient (replicas only). */
     if (c->io_write_state != CLIENT_IDLE) {
         if (c->conn->type && c->conn->type->postpone_update_state) {
             connSetPostponeUpdateState(c->conn, clientConnPostponeMaskFromIOState(c) | CONN_POSTPONE_READ);

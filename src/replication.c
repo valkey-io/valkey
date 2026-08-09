@@ -1078,6 +1078,7 @@ void syncCommand(client *c) {
      * the client about already issued commands. We need a fresh reply
      * buffer registering the differences between the BGSAVE and the current
      * dataset, so that we can copy to other replicas if needed. */
+    processIOThreadsWriteDone(); /* reap COMPLETED_IO left by waitForClientIO() */
     if (clientHasPendingReplies(c)) {
         addReplyError(c, "SYNC and PSYNC are invalid with pending output");
         return;

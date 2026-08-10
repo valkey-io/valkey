@@ -7,8 +7,6 @@
 #include <string.h>
 #include <inttypes.h>
 #include <stdio.h>
-/* serverassert.h replaces assert.h: assert() routes to _serverAssert for crash
- * reports, and it defines static_assert used by fbtree_internal.h below. */
 #include "serverassert.h"
 #include "config.h"
 #include "fbtree.h"

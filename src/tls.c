@@ -906,6 +906,14 @@ static int connTLSWrite(connection *conn_, const void *data, size_t data_len) {
     int ret;
 
     if (conn->c.state != CONN_STATE_CONNECTED) return -1;
+    if (server.debug_force_tls_write_error) {
+        conn->last_failed_write_data_len = data_len;
+        conn->flags &= ~(TLS_CONN_FLAG_WRITE_WANT_READ | TLS_CONN_FLAG_READ_WANT_WRITE);
+        conn->flags |= TLS_CONN_FLAG_READ_WANT_WRITE;
+        updateSSLEvent(conn);
+        errno = EAGAIN;
+        return -1;
+    }
     ERR_clear_error();
     /* In case when last write failed due to some internal reason, retry has to provide
      * at least the same amount of bytes (https://docs.openssl.org/master/man3/SSL_write).
@@ -926,11 +934,10 @@ static int connTLSWritev(connection *conn_, const struct iovec *iov, int iovcnt)
     tls_connection *conn = (tls_connection *)conn_;
     if (iovcnt == 1) return connTLSWrite(conn_, iov[0].iov_base, iov[0].iov_len);
 
-    /* Accumulate the amount of bytes of each buffer and check if it exceeds NET_MAX_WRITES_PER_EVENT. */
-    size_t iov_bytes_len = 0;
+    /* Accumulate the total amount of bytes of all buffers. */
+    size_t total_len = 0;
     for (int i = 0; i < iovcnt; i++) {
-        iov_bytes_len += iov[i].iov_len;
-        if (iov_bytes_len > NET_MAX_WRITES_PER_EVENT) break;
+        total_len += iov[i].iov_len;
     }
 
     /* In case the amount of all buffers is greater than NET_MAX_WRITES_PER_EVENT,
@@ -941,7 +948,7 @@ static int connTLSWritev(connection *conn_, const struct iovec *iov, int iovcnt)
      * the last failed write (https://docs.openssl.org/master/man3/SSL_write) so in case the first io buffer
      * does not provide at least the same amount of bytes as previous failed write, we will have to fallback to
      * memory copy to a static buffer before calling SSL_write. */
-    if (iov_bytes_len > NET_MAX_WRITES_PER_EVENT && iovcnt > 0 && iov[0].iov_len >= conn->last_failed_write_data_len) {
+    if (total_len > NET_MAX_WRITES_PER_EVENT && iovcnt > 0 && iov[0].iov_len >= conn->last_failed_write_data_len) {
         ssize_t tot_sent = 0;
         for (int i = 0; i < iovcnt; i++) {
             ssize_t sent = connTLSWrite(conn_, iov[i].iov_base, iov[i].iov_len);
@@ -952,21 +959,36 @@ static int connTLSWritev(connection *conn_, const struct iovec *iov, int iovcnt)
         return tot_sent;
     }
 
-    /* The amount of all buffers is less than NET_MAX_WRITES_PER_EVENT,
-     * which is worth doing more memory copies in exchange for fewer system calls,
-     * so concatenate these scattered buffers into a contiguous piece of memory
-     * and send it away by one call to connTLSWrite().
-     * However, code can fallback here in case when last write failed and first
-     * element of io is buffer not big enough to provide required amount of bytes
-     * to retry, so iov_bytes_len may exceed NET_MAX_WRITES_PER_EVENT by the amount
-     * of remaining bytes from last taken io. */
-    char buf[iov_bytes_len];
-    size_t offset = 0;
-    for (int i = 0; i < iovcnt && offset < iov_bytes_len; i++) {
-        memcpy(buf + offset, iov[i].iov_base, iov[i].iov_len);
-        offset += iov[i].iov_len;
+    /* We concatenate scattered buffers into a contiguous piece of memory
+     * and send it away by one call to connTLSWrite() to reduce system calls.
+     * To avoid stack overflow (VLA) and heap allocation, we use a fixed-size buffer
+     * of NET_MAX_WRITES_PER_EVENT and copy only up to this limit. The remaining
+     * data will be sent in subsequent socket writable events (partial writes). */
+    char buf[NET_MAX_WRITES_PER_EVENT];
+    size_t to_write = 0;
+
+    for (int i = 0; i < iovcnt && to_write < NET_MAX_WRITES_PER_EVENT; i++) {
+        size_t available = NET_MAX_WRITES_PER_EVENT - to_write;
+        size_t copy_len = iov[i].iov_len;
+        if (copy_len > available) {
+            copy_len = available;
+        }
+        memcpy(buf + to_write, iov[i].iov_base, copy_len);
+        to_write += copy_len;
     }
-    return connTLSWrite(conn_, buf, iov_bytes_len);
+
+    /* Verify OpenSSL retry constraint: we must have copied at least the amount
+     * of bytes that failed in the previous write attempt. */
+    if (to_write < conn->last_failed_write_data_len) {
+        serverLog(LL_WARNING, "connTLSWritev: cannot satisfy last_failed_write_data_len (%zu < %zu)",
+                  to_write, conn->last_failed_write_data_len);
+        conn->c.last_errno = EIO;
+        conn->c.state = CONN_STATE_ERROR;
+        errno = EIO;
+        return -1;
+    }
+
+    return connTLSWrite(conn_, buf, to_write);
 }
 
 static int connTLSRead(connection *conn_, void *buf, size_t buf_len) {

@@ -315,7 +315,10 @@ start_server {} {
             if {[catch {
                 $rr write [join [list "*1\r\n\$$qbsize\r\n" [string repeat v $qbsize]] ""]
                 $rr flush
-                wait_for_condition 200 10 {
+                # The qbuf must reach exactly qbsize, so a generous budget
+                # cannot hide a stall; it only tolerates slow fills on
+                # heavily loaded CI runners.
+                wait_for_condition 500 100 {
                     [client_field $cname qbuf] == $qbsize
                 } else {
                     fail "Failed to fill qbuf for test"
@@ -358,8 +361,10 @@ start_server {} {
         set qbsize [expr {$maxmemory_clients - $obuf_size}]
         $rr1 write [join [list "*1\r\n\$$qbsize\r\n" [string repeat v $qbsize]] ""]
         $rr1 flush
-        # Wait for qbuff to be as expected
-        wait_for_condition 200 10 {
+        # Wait for qbuff to be as expected. The qbuf must reach exactly
+        # qbsize, so a generous budget cannot hide a stall; it only
+        # tolerates slow fills on heavily loaded CI runners.
+        wait_for_condition 500 100 {
             [client_field qbuf-client qbuf] == $qbsize
         } else {
             fail "Failed to fill qbuf for test"

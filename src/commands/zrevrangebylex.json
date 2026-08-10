@@ -41,12 +41,20 @@
             }
         ],
         "reply_schema": {
-            "type": "array",
-            "description": "List of the elements in the specified score range.",
-            "uniqueItems": true,
-            "items": {
-                "type": "string"
-            }
+            "anyOf": [
+                {
+                    "description": "Key does not exist and XX option is specified.",
+                    "type": "null"
+                },
+                {
+                    "type": "array",
+                    "description": "List of the elements in the specified score range.",
+                    "uniqueItems": true,
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            ]
         },
         "arguments": [
             {

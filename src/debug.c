@@ -40,6 +40,8 @@
 #include "sds.h"
 #include "module.h"
 
+#include "tls.h"
+
 #include <arpa/inet.h>
 #include <signal.h>
 #include <dlfcn.h>
@@ -518,6 +520,8 @@ void debugCommand(client *c) {
             "    Enable or disable the reply buffer resize cron job",
             "PAUSE-AFTER-FORK <0|1>",
             "    Stop the server's main process after fork.",
+            "PAUSE-BEFORE-PSYNC <0|1>",
+            "    Stop the server's main process before sending PSYNC.",
             "DELAY-RDB-CLIENT-FREE-SECONDS <seconds>",
             "    Grace period in seconds for replica main channel to establish psync.",
             "DICT-RESIZING <0|1>",
@@ -535,6 +539,8 @@ void debugCommand(client *c) {
             "    Force freeClient on primary to use async path.",
             "PROTECT-CLIENT <id>",
             "    Protect a client from being freed, forcing deferred close.",
+            "FORCE-TLS-WRITE-ERROR <0|1>",
+            "    Force TLS write error for testing.",
             NULL};
         addExtendedReplyHelp(c, help, clusterDebugCommandExtendedHelp());
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "segfault")) {
@@ -1063,6 +1069,9 @@ void debugCommand(client *c) {
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "pause-after-fork") && c->argc == 3) {
         server.debug_pause_after_fork = atoi(objectGetVal(c->argv[2]));
         addReply(c, shared.ok);
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "pause-before-psync") && c->argc == 3) {
+        server.debug_pause_before_psync = atoi(objectGetVal(c->argv[2]));
+        addReply(c, shared.ok);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "delay-rdb-client-free-seconds") && c->argc == 3) {
         server.wait_before_rdb_client_free = atoi(objectGetVal(c->argv[2]));
         addReply(c, shared.ok);
@@ -1094,6 +1103,19 @@ void debugCommand(client *c) {
         } else {
             addReplyError(c, "No such client");
         }
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "force-tls-write-error") && c->argc == 3) {
+#ifdef USE_OPENSSL
+        long val;
+        if (getLongFromObjectOrReply(c, c->argv[2], &val, NULL) != C_OK) return;
+        if (val < 0 || val > 1) {
+            addReplyError(c, "Value must be 0 or 1");
+            return;
+        }
+        server.debug_force_tls_write_error = val;
+        addReply(c, shared.ok);
+#else
+        addReplyError(c, "TLS is not enabled");
+#endif
     } else if (!handleDebugClusterCommand(c)) {
         addReplySubcommandSyntaxError(c);
         return;

@@ -2,6 +2,18 @@ start_server {tags {"tls"}} {
     if {$::tls} {
         package require tls
 
+        proc check_client_stuck {control_client client_port {min_omem 1}} {
+            set clients [$control_client CLIENT LIST]
+            foreach client [split $clients "\n"] {
+                if {[regexp "addr=127.0.0.1:$client_port" $client]} {
+                    if {[regexp {omem=([0-9]+)} $client -> omem]} {
+                        return [expr {$omem >= $min_omem}]
+                    }
+                }
+            }
+            return 0
+        }
+
         test {TLS: Not accepting non-TLS connections on a TLS port} {
             set s [valkey [srv 0 host] [srv 0 port]]
             catch {$s PING} e
@@ -153,6 +165,111 @@ start_server {tags {"tls"}} {
             # Now use a password
             r config set tls-key-file-pass 1234
             r config set tls-key-file $keyfile_encrypted
+        }
+
+        test {TLS: connTLSWritev stack overflow crash reproduction} {
+            # Regression test for a bug where a previously failed OpenSSL write for a
+            # small server response would trigger a stack overflow if immediately
+            # followed by any large server response.
+            # Prepare data on server
+            # We use a control client (TCP) to avoid TLS write errors on control connection
+            set plain_port [srv 0 pport]
+
+            # Ensure the plaintext listener is active in case a prior test disabled it.
+            r CONFIG SET port $plain_port
+
+            set control_client [valkey [srv 0 host] $plain_port]
+            
+            $control_client SELECT 0
+            $control_client SET large_key [string repeat "A" 10485760] ;# 10MB
+            $control_client SET small_key [string repeat "B" 10240]    ;# 10KB
+            
+            # Connect raw TLS client
+            set fd [::tls::socket [srv 0 host] [srv 0 port]]
+            fconfigure $fd -translation binary -blocking 1
+            
+            # 1. Enable forced TLS write errors globally
+            assert_equal OK [$control_client DEBUG FORCE-TLS-WRITE-ERROR 1]
+            
+            # 2. Send Batch 1 on TLS client: 2x GET small_key
+            # They will be combined by server and fail to write, setting last_failed to ~20KB
+            set payload1 ""
+            append payload1 "*2\r\n\$3\r\nGET\r\n\$9\r\nsmall_key\r\n"
+            append payload1 "*2\r\n\$3\r\nGET\r\n\$9\r\nsmall_key\r\n"
+            puts -nonewline $fd $payload1
+            flush $fd
+            
+            # Get local port of raw client
+            set client_port [lindex [fconfigure $fd -sockname] 2]
+            
+            # Wait until the server has accumulated the replies for Batch 1
+            # and is stuck (omem > 0).
+            wait_for_condition 50 100 {
+                [check_client_stuck $control_client $client_port]
+            } else {
+                fail "Timeout waiting for client replies to stack up"
+            }
+            
+            # 3. Send Batch 2 on TLS client: GET large_key
+            # This is appended to the reply list
+            set payload2 ""
+            append payload2 "*2\r\n\$3\r\nGET\r\n\$9\r\nlarge_key\r\n"
+            puts -nonewline $fd $payload2
+            flush $fd
+            
+            # Wait until the server has processed Batch 2 and queued the large reply.
+            # Total expected omem is at least 10MB.
+            wait_for_condition 50 100 {
+                [check_client_stuck $control_client $client_port 10000000]
+            } else {
+                fail "Timeout waiting for large key reply to be queued"
+            }
+            
+            # 4. Disable forced TLS write errors globally
+            # This will trigger the server to resume writing to the TLS client.
+            # It will call connTLSWritev with iov[0].iov_len (10KB) < last_failed (20KB),
+            # and iov_bytes_len > 64KB (due to large_key), triggering the fallback path.
+            assert_equal OK [$control_client DEBUG FORCE-TLS-WRITE-ERROR 0]
+            
+            # 5. Read replies from TLS client.
+            # If the server crashed, this will fail with I/O error.
+            # We expect:
+            # - Reply 1: 10KB of 'B's (plus protocol helper)
+            # - Reply 2: 10KB of 'B's (plus protocol helper)
+            # - Reply 3: 10MB of 'A's (plus protocol helper)
+            # Total expected bytes:
+            # small_key reply: "$10240\r\n" (8 bytes) + 10240 bytes + "\r\n" (2 bytes) = 10250 bytes
+            # large_key reply: "$10485760\r\n" (11 bytes) + 10485760 bytes + "\r\n" (2 bytes) = 10485773 bytes
+            # Total = 10250 + 10250 + 10485773 = 10506273 bytes
+            # Let's just read the expected number of bytes.
+            
+            set expected_bytes [expr {10250 + 10250 + 10485773}]
+            set got 0
+            set data ""
+            while {$got < $expected_bytes} {
+                set chunk [read $fd [expr {$expected_bytes - $got}]]
+                if {[string length $chunk] == 0} {
+                    if {[eof $fd]} {
+                        error "EOF reached before reading all bytes"
+                    }
+                    # Keep trying if not EOF
+                    after 10
+                    continue
+                }
+                incr got [string length $chunk]
+                # We only keep the last 100 bytes to check integrity without using too much memory
+                append data $chunk
+                if {[string length $data] > 100} {
+                    set data [string range $data end-99 end]
+                }
+            }
+            
+            # Assert we got everything and the tail is correct (ends with 'A's + \r\n)
+            assert_equal $expected_bytes $got
+            assert_match "*[string repeat "A" 80]\r\n" $data
+            
+            close $fd
+            $control_client close
         }
     }
 }

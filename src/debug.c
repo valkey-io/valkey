@@ -521,6 +521,8 @@ void debugCommand(client *c) {
             "    Force freeClient on primary to use async path.",
             "PROTECT-CLIENT <id>",
             "    Protect a client from being freed, forcing deferred close.",
+            "FORCE-TLS-WRITE-ERROR <0|1>",
+            "    Force TLS write error for testing.",
             NULL};
         addExtendedReplyHelp(c, help, clusterDebugCommandExtendedHelp());
     } else if (!strcasecmp(c->argv[1]->ptr, "segfault")) {
@@ -1071,6 +1073,19 @@ void debugCommand(client *c) {
         } else {
             addReplyError(c, "No such client");
         }
+    } else if (!strcasecmp(c->argv[1]->ptr, "force-tls-write-error") && c->argc == 3) {
+#ifdef USE_OPENSSL
+        long val;
+        if (getLongFromObjectOrReply(c, c->argv[2], &val, NULL) != C_OK) return;
+        if (val < 0 || val > 1) {
+            addReplyError(c, "Value must be 0 or 1");
+            return;
+        }
+        server.debug_force_tls_write_error = val;
+        addReply(c, shared.ok);
+#else
+        addReplyError(c, "TLS is not enabled");
+#endif
     } else if (!handleDebugClusterCommand(c)) {
         addReplySubcommandSyntaxError(c);
         return;

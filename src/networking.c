@@ -4305,7 +4305,11 @@ void initThreadedIO(void) {
         pthread_mutex_init(&io_threads_mutex[i],NULL);
         setIOPendingCount(i, 0);
         pthread_mutex_lock(&io_threads_mutex[i]); /* Thread will be stopped. */
-        if (pthread_create(&tid,NULL,IOThreadMain,(void*)(long)i) != 0) {
+        pthread_attr_t attr;
+        serverInitThreadAttribute(&attr);
+        int err = pthread_create(&tid, &attr, IOThreadMain, (void *)(long)i);
+        pthread_attr_destroy(&attr);
+        if (err != 0) {
             serverLog(LL_WARNING,"Fatal: Can't initialize IO thread.");
             exit(1);
         }

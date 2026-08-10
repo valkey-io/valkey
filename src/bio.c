@@ -111,15 +111,10 @@ typedef union bio_job {
 
 void *bioProcessBackgroundJobs(void *arg);
 
-/* Make sure we have enough stack to perform all the things we do in the
- * main thread. */
-#define REDIS_THREAD_STACK_SIZE (1024*1024*4)
-
 /* Initialize the background system, spawning the thread. */
 void bioInit(void) {
     pthread_attr_t attr;
     pthread_t thread;
-    size_t stacksize;
     unsigned long j;
 
     /* Initialization of state vars and objects */
@@ -130,11 +125,7 @@ void bioInit(void) {
     }
 
     /* Set the stack size as by default it may be small in some system */
-    pthread_attr_init(&attr);
-    pthread_attr_getstacksize(&attr,&stacksize);
-    if (!stacksize) stacksize = 1; /* The world is full of Solaris Fixes */
-    while (stacksize < REDIS_THREAD_STACK_SIZE) stacksize *= 2;
-    pthread_attr_setstacksize(&attr, stacksize);
+    serverInitThreadAttribute(&attr);
 
     /* Ready to spawn our threads. We use the single argument the thread
      * function accepts in order to pass the job ID the thread is
@@ -148,6 +139,7 @@ void bioInit(void) {
         }
         bio_threads[j] = thread;
     }
+    pthread_attr_destroy(&attr);
 }
 
 void bioSubmitJob(int type, bio_job *job) {

@@ -1384,13 +1384,13 @@ static void updateAnnouncedClientTlsPort(clusterNode *node, int value) {
     clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG);
 }
 
-static void updateCommandLatencyStats(clusterNode *node, uint32_t current_rtt){
-    node -> max_round_trip_time = max(node -> max_round_trip_time, current_rtt);
+static void updateCommandLatencyStats(clusterNode *node, uint32_t current_rtt) {
+    node->max_round_trip_time = max(node->max_round_trip_time, current_rtt);
 
-    if(node -> avg_round_trip_time == 0) {
-        node -> avg_round_trip_time = current_rtt;
+    if (node->avg_round_trip_time == 0) {
+        node->avg_round_trip_time = current_rtt;
     } else {
-        node -> avg_round_trip_time = (node -> avg_round_trip_time * server.load_factor_historic_rtt_latency + current_rtt) / server.sliding_window_length_rtt_latency_stats ;
+        node->avg_round_trip_time = (node->avg_round_trip_time * server.load_factor_historic_rtt_latency + current_rtt) / server.sliding_window_length_rtt_latency_stats;
     }
 }
 
@@ -1808,7 +1808,7 @@ clusterLink *createClusterLink(clusterNode *node) {
         node->link = link;
     }
     link->flags = 0;
-    link->ping_echo_time = 0; 
+    link->ping_echo_time = 0;
     return link;
 }
 
@@ -3522,42 +3522,39 @@ static uint32_t writePingExtensions(clusterMsg *hdr, int gossipcount) {
     extensions +=
         writeSdsPingExtIfNonempty(&totlen, &cursor, CLUSTERMSG_EXT_TYPE_AVAILABILITY_ZONE, myself->availability_zone);
 
-        
+
     if (server.cluster_nodes_latency_stats_enabled) {
-    if (hdr == NULL) {
+        if (hdr == NULL) {
             totlen += sizeof(clusterMsgPingExt) + sizeof(clusterMsgPingExtEchoTime);
             extensions++;
-        }
-    else{        
-    uint16_t msg_type = ntohs(hdr->type);
-    
-    if(msg_type == CLUSTERMSG_TYPE_PING || msg_type == CLUSTERMSG_TYPE_MEET) {
-        //pass on fresh ts
-        uint64_t current_time = mstime();
-        extensions += writePingTimeExtIfNonzero(&totlen, &cursor, CLUSTERMSG_EXT_TYPE_PING_ECHO_TIME, current_time);
-    }
-    else if(msg_type == CLUSTERMSG_TYPE_PONG) {
+        } else {
+            uint16_t msg_type = ntohs(hdr->type);
 
-        clusterNode *node = clusterLookupNode(hdr->sender, CLUSTER_NAMELEN);
-        if (node) {
-            uint64_t extracted_echo_time = 0;
-            clusterLink *active_link = NULL;
+            if (msg_type == CLUSTERMSG_TYPE_PING || msg_type == CLUSTERMSG_TYPE_MEET) {
+                // pass on fresh ts
+                uint64_t current_time = mstime();
+                extensions += writePingTimeExtIfNonzero(&totlen, &cursor, CLUSTERMSG_EXT_TYPE_PING_ECHO_TIME, current_time);
+            } else if (msg_type == CLUSTERMSG_TYPE_PONG) {
+                clusterNode *node = clusterLookupNode(hdr->sender, CLUSTER_NAMELEN);
+                if (node) {
+                    uint64_t extracted_echo_time = 0;
+                    clusterLink *active_link = NULL;
 
-            if (node -> inbound_link && node -> inbound_link -> ping_echo_time != 0) {
-                active_link = node -> inbound_link;
-                extracted_echo_time = node -> inbound_link -> ping_echo_time;
-            }
-            else if (node -> link && node -> link -> ping_echo_time != 0) {
-                active_link = node -> link;
-                extracted_echo_time = node -> link -> ping_echo_time;
-            }
+                    if (node->inbound_link && node->inbound_link->ping_echo_time != 0) {
+                        active_link = node->inbound_link;
+                        extracted_echo_time = node->inbound_link->ping_echo_time;
+                    } else if (node->link && node->link->ping_echo_time != 0) {
+                        active_link = node->link;
+                        extracted_echo_time = node->link->ping_echo_time;
+                    }
 
-            if(extracted_echo_time != 0) {
-                extensions += writePingTimeExtIfNonzero(&totlen, &cursor, CLUSTERMSG_EXT_TYPE_PING_ECHO_TIME, extracted_echo_time);
-                active_link -> ping_echo_time = 0; //reset the echo time after sending it in PONG
+                    if (extracted_echo_time != 0) {
+                        extensions += writePingTimeExtIfNonzero(&totlen, &cursor, CLUSTERMSG_EXT_TYPE_PING_ECHO_TIME, extracted_echo_time);
+                        active_link->ping_echo_time = 0; // reset the echo time after sending it in PONG
+                    }
+                }
             }
         }
-    }}
     }
 
     /* Gossip forgotten nodes */
@@ -3672,10 +3669,9 @@ int clusterProcessPingExtensions(clusterMsg *hdr, clusterLink *link) {
         } else if (type == CLUSTERMSG_EXT_TYPE_PING_ECHO_TIME) {
             clusterMsgPingExtEchoTime *ping_echo_time_ext =
                 (clusterMsgPingExtEchoTime *)&(ext->ext[0].ping_echo_time);
-            if(link) 
-                link -> ping_echo_time = ping_echo_time_ext->ping_echo_time;
-        }
-         else {
+            if (link)
+                link->ping_echo_time = ping_echo_time_ext->ping_echo_time;
+        } else {
             /* Unknown type, we will ignore it but log what happened. */
             serverLog(LL_WARNING, "Received unknown extension type %d", type);
         }
@@ -7465,16 +7461,16 @@ void addNodeDetailsToShardReply(client *c, clusterNode *node) {
         reply_count++;
     }
 
-    if(server.cluster_nodes_latency_stats_enabled) {
+    if (server.cluster_nodes_latency_stats_enabled) {
         // if (node->max_round_trip_time) {
-            addReplyBulkCString(c, "max-round-trip-time");
-            addReplyLongLong(c, node->max_round_trip_time);
-            reply_count++;
+        addReplyBulkCString(c, "max-round-trip-time");
+        addReplyLongLong(c, node->max_round_trip_time);
+        reply_count++;
         // }
         // if (node->avg_round_trip_time) {
-            addReplyBulkCString(c, "avg-round-trip-time");
-            addReplyLongLong(c, node->avg_round_trip_time);
-            reply_count++;
+        addReplyBulkCString(c, "avg-round-trip-time");
+        addReplyLongLong(c, node->avg_round_trip_time);
+        reply_count++;
         // }
     }
 

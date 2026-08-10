@@ -1736,6 +1736,7 @@ static int connTLSWritev(connection *conn_, const struct iovec *iov, int iovcnt)
     if (to_write < conn->last_failed_write_data_len) {
         serverLog(LL_WARNING, "connTLSWritev: cannot satisfy last_failed_write_data_len (%zu < %zu)",
                   to_write, conn->last_failed_write_data_len);
+        conn->c.last_errno = EIO;
         conn->c.state = CONN_STATE_ERROR;
         errno = EIO;
         return -1;

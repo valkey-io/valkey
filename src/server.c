@@ -2857,6 +2857,14 @@ void resetServerStats(void) {
     server.el_cmd_cnt_max = 0;
     server.stat_active_time = 0;
     server.el_iteration_active = false;
+    server.stat_total_prefetch_batches = 0;
+    server.stat_total_prefetch_entries = 0;
+    server.acl_info.invalid_cmd_accesses = 0;
+    server.acl_info.invalid_key_accesses = 0;
+    server.acl_info.user_auth_failures = 0;
+    server.acl_info.invalid_channel_accesses = 0;
+    server.acl_info.acl_access_denied_tls_cert = 0;
+    server.acl_info.invalid_db_accesses = 0;
     lazyfreeResetStats();
 }
 
@@ -3065,14 +3073,6 @@ void initServer(void) {
     server.aof_last_write_errno = 0;
     server.repl_good_replicas_count = 0;
     server.last_sig_received = 0;
-
-    /* Initiate acl info struct */
-    server.acl_info.invalid_cmd_accesses = 0;
-    server.acl_info.invalid_key_accesses = 0;
-    server.acl_info.user_auth_failures = 0;
-    server.acl_info.invalid_channel_accesses = 0;
-    server.acl_info.acl_access_denied_tls_cert = 0;
-    server.acl_info.invalid_db_accesses = 0;
 
     /* Create the timer callback, this is our way to process many background
      * operations incrementally, like eviction of unaccessed expired keys, etc. */

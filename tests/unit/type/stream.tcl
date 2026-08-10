@@ -719,6 +719,18 @@ start_server {
         assert {[r XLEN mystream] == 400}
     }
 
+    test {XTRIM with MAXLEN 0 keeps an empty stream key} {
+        r DEL mystream
+        r XADD mystream 1-0 f v
+        r XADD mystream 2-0 f v
+        assert_equal 2 [r XTRIM mystream MAXLEN = 0]
+        assert_equal 1 [r EXISTS mystream]
+        set reply [r XINFO STREAM mystream]
+        assert_equal 0 [dict get $reply length]
+        assert_equal "2-0" [dict get $reply last-generated-id]
+        assert_equal "0-0" [dict get $reply recorded-first-entry-id]
+    }
+
     test {XADD with LIMIT consecutive calls} {
         r del mystream
         r config set stream-node-max-entries 10

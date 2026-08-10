@@ -719,6 +719,15 @@ int64_t streamTrim(stream *s, streamAddTrimArgs *args) {
 
     if (trim_strategy == TRIM_STRATEGY_NONE) return 0;
     if (trim_strategy == TRIM_STRATEGY_MAXLEN && s->length <= maxlen) return 0;
+    if (trim_strategy == TRIM_STRATEGY_MAXLEN && maxlen == 0 && !approx && limit == 0) {
+        int64_t deleted = s->length;
+        raxFreeWithCallback(s->rax, lpFreeVoid);
+        s->rax = raxNew();
+        s->length = 0;
+        s->first_id.ms = 0;
+        s->first_id.seq = 0;
+        return deleted;
+    }
 
     raxIterator ri;
     raxStart(&ri, s->rax);

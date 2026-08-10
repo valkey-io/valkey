@@ -2060,6 +2060,7 @@ void initServerConfig(void) {
     server.page_size = sysconf(_SC_PAGESIZE);
     server.extended_redis_compat = 0;
     server.pause_cron = 0;
+    server.debug_force_tls_write_error = 0;
     server.dict_resizing = 1;
 
     server.latency_tracking_info_percentiles_len = 3;
@@ -6695,6 +6696,17 @@ int serverIsSupervised(int mode) {
 int iAmPrimary(void) {
     return ((!server.cluster_enabled && server.primary_host == NULL) ||
             (server.cluster_enabled && clusterNodeIsPrimary(getMyClusterNode())));
+}
+
+/* Initialize thread attribute with a guarded stack size.
+ * Doubling the stack size until it is at least VALKEY_THREAD_STACK_SIZE. */
+void serverInitThreadAttribute(pthread_attr_t *attr) {
+    size_t stacksize;
+    pthread_attr_init(attr);
+    pthread_attr_getstacksize(attr, &stacksize);
+    if (!stacksize) stacksize = 1;
+    while (stacksize < VALKEY_THREAD_STACK_SIZE) stacksize *= 2;
+    pthread_attr_setstacksize(attr, stacksize);
 }
 
 #ifdef SERVER_TEST

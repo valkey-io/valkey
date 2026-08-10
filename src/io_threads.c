@@ -271,7 +271,12 @@ static void createIOThread(int id) {
     pthread_mutex_init(&io_threads_mutex[id], NULL);
     IOJobQueue_init(&io_jobs[id], IO_JOB_QUEUE_SIZE);
     pthread_mutex_lock(&io_threads_mutex[id]); /* Thread will be stopped. */
-    int err = pthread_create(&tid, NULL, IOThreadMain, (void *)(long)id);
+
+    pthread_attr_t attr;
+    serverInitThreadAttribute(&attr);
+
+    int err = pthread_create(&tid, &attr, IOThreadMain, (void *)(long)id);
+    pthread_attr_destroy(&attr);
     if (err) {
         serverLog(LL_WARNING, "Fatal: Can't initialize IO thread, pthread_create failed with: %s", strerror(err));
         exit(1);

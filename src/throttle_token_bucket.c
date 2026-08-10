@@ -5,8 +5,8 @@
  */
 
 #include "throttle_token_bucket.h"
-#include "zmalloc.h"
 #include "monotonic.h"
+#include "zmalloc.h"
 
 struct tokenBucket {
     double tokens_per_sec;      // Rate at which tokens are added to the bucket (tokens per second)

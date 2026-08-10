@@ -4,8 +4,9 @@
  * SPDX-License-Identifier: BSD-3-Clause
  */
 #include "stat_calc.h"
-#include "server.h"
 #include "monotonic.h"
+#include "zmalloc.h"
+#include <stdbool.h>
 
 static const long ONE_SECOND_IN_MICROS = 1000000;
 
@@ -21,7 +22,6 @@ struct tpsCalculator {
 };
 
 tpsCalculator *newTpsCalc(int window_secs) {
-    serverAssert(window_secs > 0);
     tpsCalculator *calc = zmalloc(sizeof(tpsCalculator));
     calc->window_secs = (double)window_secs;
     calc->window_us = (double)window_secs * 1000000.0;

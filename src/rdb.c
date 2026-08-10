@@ -1767,21 +1767,24 @@ robj *rdbLoadCheckModuleValue(rio *rdb, char *modulename) {
     return createStringObject("module-dummy-value", 18);
 }
 
-/* Return the maximum byte length of string entries in a listpack.
+/* Return the maximum byte length of the entries in a listpack, measured as
+ * the length of their string form so that integer-encoded entries count the
+ * same as they do at runtime (runtime uses ll2string before comparing against
+ * *-max-listpack-value, see t_set.c/t_hash.c/t_zset.c).
  * step=1 inspects every entry (sets, hashes); step=2 skips every second
- * entry (zsets: skip scores). Integer-encoded entries are ignored.
+ * entry (zsets: skip scores).
  * Used by the RDB load path to enforce *-max-listpack-value symmetrically
  * with the runtime conversion. */
 static unsigned int lpMaxElementLength(unsigned char *lp, int step) {
-    unsigned int maxlen = 0, slen;
-    long long lval;
+    unsigned char intbuf[LP_INTBUF_SIZE];
+    unsigned int maxlen = 0;
+    int64_t slen;
     unsigned char *p = lpFirst(lp);
     int idx = 0;
     while (p) {
         if (step != 2 || (idx % 2 == 0)) {
-            if (lpGetValue(p, &slen, &lval) != NULL) {
-                if (slen > maxlen) maxlen = slen;
-            }
+            lpGet(p, &slen, intbuf);
+            if ((unsigned int)slen > maxlen) maxlen = (unsigned int)slen;
         }
         p = lpNext(lp, p);
         idx++;
@@ -2390,9 +2393,8 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
         /* Fix the object encoding, and make sure to convert the encoded
          * data type into the base type if accordingly to the current
          * configuration there are too many elements in the encoded data
-         * type. Note that we only check the length and not max element
-         * size as this is an O(N) scan. Eventually everything will get
-         * converted. */
+         * type, or the elements are too large (checked for most encoded
+         * types; see lpMaxElementLength and the zipmap path). */
         switch (rdbtype) {
         case RDB_TYPE_HASH_ZIPMAP:
             /* Since we don't keep zipmaps anymore, the rdb loading for these

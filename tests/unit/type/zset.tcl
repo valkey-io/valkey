@@ -2995,6 +2995,7 @@ start_server {tags {"zset"}} {
         r config set zset-max-listpack-value 256
         r del myzset
         r zadd myzset 1 [string repeat a 200]
+        assert_encoding listpack myzset
 
         r config set zset-max-listpack-value 64
         r debug reload

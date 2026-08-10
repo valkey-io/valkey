@@ -181,6 +181,7 @@ foreach type {single multiple single_multiple} {
         r config set set-max-listpack-value 256
         r del myset
         r sadd myset [string repeat a 200]
+        assert_encoding listpack myset
 
         r config set set-max-listpack-value 64
         r debug reload

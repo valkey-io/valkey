@@ -950,6 +950,7 @@ start_server {tags {"hash"}} {
         r config set hash-max-listpack-value 256
         r del myhash
         r hset myhash f [string repeat a 200]
+        assert_encoding listpack myhash
 
         r config set hash-max-listpack-value 64
         r debug reload

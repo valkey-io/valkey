@@ -2354,6 +2354,7 @@ void initServerConfig(void) {
     server.page_size = sysconf(_SC_PAGESIZE);
     server.extended_redis_compat = 0;
     server.pause_cron = 0;
+    server.debug_force_tls_write_error = 0;
     server.dict_resizing = 1;
     server.import_mode = 0;
 
@@ -2857,6 +2858,14 @@ void resetServerStats(void) {
     server.el_cmd_cnt_max = 0;
     server.stat_active_time = 0;
     server.el_iteration_active = false;
+    server.stat_total_prefetch_batches = 0;
+    server.stat_total_prefetch_entries = 0;
+    server.acl_info.invalid_cmd_accesses = 0;
+    server.acl_info.invalid_key_accesses = 0;
+    server.acl_info.user_auth_failures = 0;
+    server.acl_info.invalid_channel_accesses = 0;
+    server.acl_info.acl_access_denied_tls_cert = 0;
+    server.acl_info.invalid_db_accesses = 0;
     lazyfreeResetStats();
 }
 
@@ -3065,14 +3074,6 @@ void initServer(void) {
     server.aof_last_write_errno = 0;
     server.repl_good_replicas_count = 0;
     server.last_sig_received = 0;
-
-    /* Initiate acl info struct */
-    server.acl_info.invalid_cmd_accesses = 0;
-    server.acl_info.invalid_key_accesses = 0;
-    server.acl_info.user_auth_failures = 0;
-    server.acl_info.invalid_channel_accesses = 0;
-    server.acl_info.acl_access_denied_tls_cert = 0;
-    server.acl_info.invalid_db_accesses = 0;
 
     /* Create the timer callback, this is our way to process many background
      * operations incrementally, like eviction of unaccessed expired keys, etc. */
@@ -7497,6 +7498,17 @@ int serverIsSupervised(int mode) {
 int iAmPrimary(void) {
     return ((!server.cluster_enabled && server.primary_host == NULL) ||
             (server.cluster_enabled && clusterNodeIsPrimary(getMyClusterNode())));
+}
+
+/* Initialize thread attribute with a guarded stack size.
+ * Doubling the stack size until it is at least VALKEY_THREAD_STACK_SIZE. */
+void serverInitThreadAttribute(pthread_attr_t *attr) {
+    size_t stacksize;
+    pthread_attr_init(attr);
+    pthread_attr_getstacksize(attr, &stacksize);
+    if (!stacksize) stacksize = 1;
+    while (stacksize < VALKEY_THREAD_STACK_SIZE) stacksize *= 2;
+    pthread_attr_setstacksize(attr, stacksize);
 }
 
 /* Main is marked as weak so that unit tests can use their own main function. */

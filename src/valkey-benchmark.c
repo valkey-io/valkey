@@ -164,6 +164,11 @@ static struct config {
     atomic_uint_fast64_t last_time_ns;
     uint64_t time_per_token;
     uint64_t time_per_burst;
+    /* Range/count support for range commands */
+    int count;       /* Items per operation (--count) */
+    int range_argc;  /* >0 = range regeneration path active */
+    sds *range_argv; /* Original command args; __rand_beg__/__rand_end__
+                        are substring-substituted per request */
     /* Dataset support */
     sds dataset_file;
     int max_documents;        /* Maximum documents to load from dataset */
@@ -482,9 +487,9 @@ void initPlaceholders(const char *cmd, size_t cmd_len) {
     return;
 }
 
-static void replacePlaceholder(const size_t *indices, const size_t count, char *cmd, _Atomic uint64_t *key_counter) {
-    if (count == 0) return;
-
+/* Generate the next random (or sequential) key value for a placeholder,
+ * bounded by the -r keyspace. Returns 0 when no keyspace is set. */
+static uint64_t nextRandKey(_Atomic uint64_t *key_counter) {
     uint64_t key = 0;
     if (config.keyspacelen != 0) {
         if (config.sequential_replacement) {
@@ -494,6 +499,13 @@ static void replacePlaceholder(const size_t *indices, const size_t count, char *
         }
         key %= config.keyspacelen;
     }
+    return key;
+}
+
+static void replacePlaceholder(const size_t *indices, const size_t count, char *cmd, _Atomic uint64_t *key_counter) {
+    if (count == 0) return;
+
+    uint64_t key = nextRandKey(key_counter);
 
     /* convert key to string at first location */
     char *p = cmd + indices[0] + PLACEHOLDER_LEN - 1;
@@ -508,6 +520,155 @@ static void replacePlaceholder(const size_t *indices, const size_t count, char *
         char *placeholder = cmd + indices[i];
         memcpy(placeholder, cmd + indices[0], PLACEHOLDER_LEN);
     }
+}
+
+/* Generate range begin/end values for the current request. */
+static void getRangeValues(long long *beg, long long *end) {
+    int space = config.keyspacelen - config.count;
+    if (space <= 0) space = 1;
+    *beg = random() % space;
+    *end = *beg + config.count - 1;
+}
+
+/* Return a new sds with every occurrence of 'needle' in 's' replaced by 'repl'.
+ * Used to substitute __rand_beg__/__rand_end__ within command arguments, which
+ * lets the placeholders appear embedded in larger tokens (e.g. exclusive score
+ * bounds "(__rand_beg__" or stream IDs "__rand_end__-0"). */
+static sds sdsReplaceAll(const char *s, const char *needle, const char *repl) {
+    sds out = sdsempty();
+    size_t nlen = strlen(needle);
+    const char *p = s, *f;
+    while ((f = strstr(p, needle)) != NULL) {
+        out = sdscatlen(out, p, f - p);
+        out = sdscat(out, repl);
+        p = f + nlen;
+    }
+    return sdscat(out, p);
+}
+
+/* Replace only the first occurrence of 'needle' in 's' with 'repl', freeing 's'
+ * and returning the new sds. Used for __rand_int__, where each occurrence needs
+ * an independent value. */
+static sds sdsReplaceFirst(sds s, const char *needle, const char *repl) {
+    char *f = strstr(s, needle);
+    if (f == NULL) return s;
+    size_t off = f - s, nlen = strlen(needle);
+    sds out = sdsempty();
+    out = sdscatlen(out, s, off);
+    out = sdscat(out, repl);
+    out = sdscat(out, s + off + nlen);
+    sdsfree(s);
+    return out;
+}
+
+/* Append one RESP-encoded command to obuf, substituting fresh values for all
+ * placeholders in config.range_argv. __rand_beg__/__rand_end__ take the current
+ * range bounds; __rand_int__ (PLACEHOLDERS[0]) gets an independent value per
+ * occurrence; each __rand_Nth__ (PLACEHOLDERS[1..9]) gets one value shared
+ * across its occurrences in the command. */
+static void appendRangeCommand(sds *obuf) {
+    static _Atomic uint64_t seq[PLACEHOLDER_COUNT] = {0};
+
+    long long beg, end;
+    getRangeValues(&beg, &end);
+    char begs[24], ends[24];
+    snprintf(begs, sizeof(begs), "%lld", beg);
+    snprintf(ends, sizeof(ends), "%lld", end);
+
+    /* One shared value per ordinal placeholder used anywhere in this command. */
+    char shbuf[PLACEHOLDER_COUNT][24];
+    int shset[PLACEHOLDER_COUNT] = {0};
+
+    const char *av[config.range_argc];
+    size_t avl[config.range_argc];
+    sds subst[config.range_argc];
+
+    for (int a = 0; a < config.range_argc; a++) {
+        sds s = sdsnew(config.range_argv[a]);
+
+        if (strstr(s, "__rand_beg__")) {
+            sds t = sdsReplaceAll(s, "__rand_beg__", begs);
+            sdsfree(s);
+            s = t;
+        }
+        if (strstr(s, "__rand_end__")) {
+            sds t = sdsReplaceAll(s, "__rand_end__", ends);
+            sdsfree(s);
+            s = t;
+        }
+
+        /* Ordinal placeholders: PLACEHOLDERS[1..9], one shared value each. */
+        for (int i = 1; i < PLACEHOLDER_COUNT; i++) {
+            if (strstr(s, PLACEHOLDERS[i])) {
+                if (!shset[i]) {
+                    snprintf(shbuf[i], sizeof(shbuf[i]), "%llu",
+                             (unsigned long long)nextRandKey(&seq[i]));
+                    shset[i] = 1;
+                }
+                sds t = sdsReplaceAll(s, PLACEHOLDERS[i], shbuf[i]);
+                sdsfree(s);
+                s = t;
+            }
+        }
+
+        /* __rand_int__ (PLACEHOLDERS[0]): independent value per occurrence. */
+        while (strstr(s, PLACEHOLDERS[0])) {
+            char v[24];
+            snprintf(v, sizeof(v), "%llu", (unsigned long long)nextRandKey(&seq[0]));
+            s = sdsReplaceFirst(s, PLACEHOLDERS[0], v);
+        }
+
+        subst[a] = s;
+        av[a] = s;
+        avl[a] = sdslen(s);
+    }
+
+    char *cmd;
+    int len = valkeyFormatCommandArgv(&cmd, config.range_argc, av, avl);
+    *obuf = sdscatlen(*obuf, cmd, len);
+    free(cmd);
+    for (int a = 0; a < config.range_argc; a++) sdsfree(subst[a]);
+}
+
+/* Install a range command from a fixed list of argument strings (built-in tests). */
+static void setRangeArgv(int argc, const char **args) {
+    config.range_argc = argc;
+    config.range_argv = zmalloc(sizeof(sds) * argc);
+    for (int i = 0; i < argc; i++) config.range_argv[i] = sdsnew(args[i]);
+}
+
+static void clearRangeArgv(void) {
+    if (!config.range_argv) return;
+    for (int i = 0; i < config.range_argc; i++) sdsfree(config.range_argv[i]);
+    zfree(config.range_argv);
+    config.range_argv = NULL;
+    config.range_argc = 0;
+}
+
+/* If a custom command uses __rand_beg__/__rand_end__, install config.range_argv
+ * so writeHandler regenerates the command per request. No-op when the command
+ * has no range placeholders. Other placeholders (__rand_int__, __rand_Nth__) in
+ * the same command are substituted per request by appendRangeCommand. */
+static void setupCustomRangeCommand(int argc, sds *sds_args, int seq_len) {
+    int has_range = 0;
+    for (int i = 0; i < argc; i++) {
+        if (strstr(sds_args[i], "__rand_beg__") || strstr(sds_args[i], "__rand_end__")) {
+            has_range = 1;
+            break;
+        }
+    }
+    if (!has_range) return;
+
+    /* Per-request regeneration operates on a single command template, so a
+     * command sequence (;) cannot be supported. */
+    if (seq_len > 1) {
+        fprintf(stderr, "Error: __rand_beg__/__rand_end__ cannot be used with command sequences (;)\n");
+        exit(1);
+    }
+
+    config.range_argc = argc;
+    config.range_argv = zmalloc(sizeof(sds) * argc);
+    for (int i = 0; i < argc; i++) config.range_argv[i] = sdsdup(sds_args[i]);
 }
 
 static void replacePlaceholders(char *cmd_data, int cmd_count) {
@@ -931,6 +1092,12 @@ static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
             /* Scan generated commands for {tag} in cluster mode */
             if (config.cluster_mode && c->stagptr) {
                 scanClusterTags(c, c->obuf + c->prefixlen);
+            }
+        } else if (config.range_argv != NULL) {
+            /* Range mode: regenerate commands with fresh beg/end values */
+            sdssetlen(c->obuf, c->prefixlen);
+            for (int p = 0; p < config.pipeline; p++) {
+                appendRangeCommand(&c->obuf);
             }
         } else {
             /* Standard mode */
@@ -1356,6 +1523,18 @@ static void benchmark(const char *title, char *cmd, int len) {
     benchmarkSequence(title, cmd, len, 1);
 }
 
+/* Run a built-in range benchmark: install the range command template, run one
+ * benchmark with a freshly-substituted seed command (regenerated per request by
+ * writeHandler), then tear down range mode. */
+static void benchmarkRangeCommand(const char *title, int argc, const char **args) {
+    setRangeArgv(argc, args);
+    sds seed = sdsempty();
+    appendRangeCommand(&seed);
+    benchmark(title, seed, sdslen(seed));
+    sdsfree(seed);
+    clearRangeArgv();
+}
+
 /* Thread functions. */
 
 static benchmarkThread *createBenchmarkThread(int index) {
@@ -1746,6 +1925,10 @@ int parseOptions(int argc, char **argv) {
             if (lastarg) goto invalid;
             config.warmup_duration = atoi(argv[++i]);
 
+        } else if (!strcmp(argv[i], "--count")) {
+            if (lastarg) goto invalid;
+            config.count = atoi(argv[++i]);
+            if (config.count < 1) config.count = 1;
         } else if (!strcmp(argv[i], "-k")) {
             if (lastarg) goto invalid;
             config.keepalive = atoi(argv[++i]);
@@ -1999,7 +2182,7 @@ usage:
 
 
     printf(
-        "%s%s%s%s%s%s", /* Split to avoid strings longer than 4095 (-Woverlength-strings). */
+        "%s%s%s%s%s%s%s", /* Split to avoid strings longer than 4095 (-Woverlength-strings). */
         "Usage: valkey-benchmark [OPTIONS] [--] [COMMAND ARGS...]\n\n"
         "Simulates sending commands using multiple clients. The utility provides a\n"
         "default set of tests. You can run a subset of the tests using the -t option or\n"
@@ -2013,6 +2196,8 @@ usage:
         "                    command will have different values.\n"
         "__rand_1st__        Like __rand_int__ but multiple occurrences will have the same\n"
         "                    value. __rand_2nd__ through __rand_9th__ are also available.\n"
+        " __rand_beg__       Random range start position, bounded by -r minus --count.\n"
+        " __rand_end__       Range end position, always __rand_beg__ + --count - 1.\n"
         " __data__           Replaced with data of the size specified by the -d option.\n"
         " __field:name__     Replaced with data from the specified field/column in the\n"
         "                    dataset. Requires --dataset option.\n"
@@ -2040,6 +2225,11 @@ usage:
         "                    (mutually exclusive with -n)\n"
         " --warmup <seconds> Run benchmark for specified warmup period before\n"
         "                    recording data\n"
+        " --count <N>        Items per operation. For range commands (zrange, lrange):\n"
+        "                    sets result-set size via __rand_beg__/__rand_end__. For count\n"
+        "                    commands (srandmember, hrandfield, lpop): passed as COUNT arg.\n"
+        "                    For random ranges, keep --count <= -r; a larger value always\n"
+        "                    starts at offset 0 and returns the whole structure.\n",
         " -d <size>          Data size of SET/GET value in bytes (default 3)\n"
         " --dbnum <db>       SELECT the specified db number (default 0)\n"
         " -3                 Start session in RESP3 protocol mode.\n"
@@ -2292,6 +2482,9 @@ int main(int argc, char **argv) {
     config.replace_placeholders = 0;
     config.keyspacelen = 0;
     config.sequential_replacement = 0;
+    config.count = 0;
+    config.range_argc = 0;
+    config.range_argv = NULL;
     config.quiet = 0;
     config.csv = 0;
     config.loop = 0;
@@ -2561,9 +2754,16 @@ int main(int argc, char **argv) {
         len = sdslen(cmd_seq);
         /* adjust the datasize to the parsed command */
         config.datasize = len;
+
+        /* --count activates __rand_beg__/__rand_end__, just as -r activates
+         * __rand_int__. Without it the placeholders pass through verbatim. */
+        if (config.count > 0)
+            setupCustomRangeCommand(argc, sds_args, seq_len);
+
         do {
             benchmarkSequence(title, cmd_seq, len, seq_len);
         } while (config.loop);
+        clearRangeArgv();
         sdsfree(cmd_seq);
         sdsfreesplitres(sds_args, argc);
 
@@ -2618,13 +2818,19 @@ int main(int argc, char **argv) {
         }
 
         if (test_is_selected("lpop")) {
-            len = valkeyFormatCommand(&cmd, "LPOP mylist%s", tag);
+            if (config.count > 0)
+                len = valkeyFormatCommand(&cmd, "LPOP mylist%s %d", tag, config.count);
+            else
+                len = valkeyFormatCommand(&cmd, "LPOP mylist%s", tag);
             benchmark("LPOP", cmd, len);
             free(cmd);
         }
 
         if (test_is_selected("rpop")) {
-            len = valkeyFormatCommand(&cmd, "RPOP mylist%s", tag);
+            if (config.count > 0)
+                len = valkeyFormatCommand(&cmd, "RPOP mylist%s %d", tag, config.count);
+            else
+                len = valkeyFormatCommand(&cmd, "RPOP mylist%s", tag);
             benchmark("RPOP", cmd, len);
             free(cmd);
         }
@@ -2656,8 +2862,91 @@ int main(int argc, char **argv) {
         }
 
         if (test_is_selected("zpopmin")) {
-            len = valkeyFormatCommand(&cmd, "ZPOPMIN myzset%s", tag);
+            if (config.count > 0)
+                len = valkeyFormatCommand(&cmd, "ZPOPMIN myzset%s %d", tag, config.count);
+            else
+                len = valkeyFormatCommand(&cmd, "ZPOPMIN myzset%s", tag);
             benchmark("ZPOPMIN", cmd, len);
+            free(cmd);
+        }
+
+        if (config.tests != NULL && test_is_selected("zpopmax")) {
+            if (config.count > 0)
+                len = valkeyFormatCommand(&cmd, "ZPOPMAX myzset%s %d", tag, config.count);
+            else
+                len = valkeyFormatCommand(&cmd, "ZPOPMAX myzset%s", tag);
+            benchmark("ZPOPMAX", cmd, len);
+            free(cmd);
+        }
+
+        /* Optional COUNT: without --count these use the single-element form.
+         * Selected only via -t (config.tests != NULL), not the default suite. */
+        if (config.tests != NULL && test_is_selected("srandmember")) {
+            if (config.count > 0)
+                len = valkeyFormatCommand(&cmd, "SRANDMEMBER myset%s %d", tag, config.count);
+            else
+                len = valkeyFormatCommand(&cmd, "SRANDMEMBER myset%s", tag);
+            benchmark("SRANDMEMBER", cmd, len);
+            free(cmd);
+        }
+
+        if (config.tests != NULL && test_is_selected("hrandfield")) {
+            if (config.count > 0)
+                len = valkeyFormatCommand(&cmd, "HRANDFIELD myhash%s %d", tag, config.count);
+            else
+                len = valkeyFormatCommand(&cmd, "HRANDFIELD myhash%s", tag);
+            benchmark("HRANDFIELD", cmd, len);
+            free(cmd);
+        }
+
+        if (config.tests != NULL && test_is_selected("zrandmember")) {
+            if (config.count > 0)
+                len = valkeyFormatCommand(&cmd, "ZRANDMEMBER myzset%s %d", tag, config.count);
+            else
+                len = valkeyFormatCommand(&cmd, "ZRANDMEMBER myzset%s", tag);
+            benchmark("ZRANDMEMBER", cmd, len);
+            free(cmd);
+        }
+
+        if (config.tests != NULL && test_is_selected("zrange")) {
+            if (config.count <= 0) {
+                fprintf(stderr, "Error: -t zrange requires --count <N>\n");
+                exit(1);
+            }
+            if (config.keyspacelen <= 0) {
+                fprintf(stderr, "Error: -t zrange requires -r <keyspace>\n");
+                exit(1);
+            }
+            char keybuf[64];
+            snprintf(keybuf, sizeof(keybuf), "myzset%s", tag);
+            const char *args[] = {"ZRANGE", keybuf, "__rand_beg__", "__rand_end__", "WITHSCORES"};
+            benchmarkRangeCommand("ZRANGE", 5, args);
+        }
+
+        if (config.tests != NULL && test_is_selected("zrangebyscore")) {
+            if (config.count <= 0) {
+                fprintf(stderr, "Error: -t zrangebyscore requires --count <N>\n");
+                exit(1);
+            }
+            if (config.keyspacelen <= 0) {
+                fprintf(stderr, "Error: -t zrangebyscore requires -r <keyspace>\n");
+                exit(1);
+            }
+            char keybuf[64];
+            snprintf(keybuf, sizeof(keybuf), "myzset%s", tag);
+            const char *args[] = {"ZRANGEBYSCORE", keybuf, "__rand_beg__", "__rand_end__", "WITHSCORES"};
+            benchmarkRangeCommand("ZRANGEBYSCORE", 5, args);
+        }
+
+        if (test_is_selected("zscore")) {
+            len = valkeyFormatCommand(&cmd, "ZSCORE myzset%s element:__rand_int__", tag);
+            benchmark("ZSCORE", cmd, len);
+            free(cmd);
+        }
+
+        if (test_is_selected("zrank")) {
+            len = valkeyFormatCommand(&cmd, "ZRANK myzset%s element:__rand_int__", tag);
+            benchmark("ZRANK", cmd, len);
             free(cmd);
         }
 

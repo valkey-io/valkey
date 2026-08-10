@@ -602,6 +602,152 @@ tags {"benchmark network external:skip logreqres:skip"} {
                 }
             }
         }
+
+        test {benchmark: zrange with --count random offset} {
+            set cmd [valkeybenchmark $master_host $master_port "-t zadd -n 1000 -r 1000 --sequential"]
+            common_bench_setup $cmd
+            assert_equal 1000 [r zcard myzset]
+
+            r config resetstat
+            set cmd [valkeybenchmark $master_host $master_port "-t zrange --count 10 -r 1000 -n 100"]
+            common_bench_setup $cmd
+            assert_match {*calls=100,*} [cmdstat zrange]
+        }
+
+        test {benchmark: zrangebyscore with --count} {
+            r config resetstat
+            set cmd [valkeybenchmark $master_host $master_port "-t zrangebyscore --count 10 -r 1000 -n 50"]
+            common_bench_setup $cmd
+            assert_match {*calls=50,*} [cmdstat zrangebyscore]
+        }
+
+        test {benchmark: zscore} {
+            r config resetstat
+            set cmd [valkeybenchmark $master_host $master_port "-t zscore -r 1000 -n 100"]
+            common_bench_setup $cmd
+            assert_match {*calls=100,*} [cmdstat zscore]
+        }
+
+        test {benchmark: zrank} {
+            r config resetstat
+            set cmd [valkeybenchmark $master_host $master_port "-t zrank -r 1000 -n 100"]
+            common_bench_setup $cmd
+            assert_match {*calls=100,*} [cmdstat zrank]
+        }
+
+        test {benchmark: zrange without --count fails} {
+            set cmd [valkeybenchmark $master_host $master_port "-t zrange -n 10"]
+            catch { exec {*}$cmd } error
+            assert_match "*requires --count*" $error
+        }
+
+        test {benchmark: zrange,zscore,zrank combined} {
+            r config resetstat
+            set cmd [valkeybenchmark $master_host $master_port "-t zrange,zscore,zrank --count 5 -r 1000 -n 50"]
+            common_bench_setup $cmd
+            assert_match {*calls=50,*} [cmdstat zrange]
+            assert_match {*calls=50,*} [cmdstat zscore]
+            assert_match {*calls=50,*} [cmdstat zrank]
+        }
+
+        test {benchmark: custom command with __rand_beg__ and __rand_end__} {
+            r config resetstat
+            set cmd [valkeybenchmark $master_host $master_port "--count 10 -r 1000 -n 50 -- ZRANGE myzset __rand_beg__ __rand_end__ WITHSCORES"]
+            common_bench_setup $cmd
+            assert_match {*calls=50,*} [cmdstat zrange]
+        }
+
+        test {benchmark: custom LRANGE with __rand_beg__ and __rand_end__} {
+            r rpush mylist {*}[lrepeat 100 item]
+            r config resetstat
+            set cmd [valkeybenchmark $master_host $master_port "--count 10 -r 100 -n 50 -- LRANGE mylist __rand_beg__ __rand_end__"]
+            common_bench_setup $cmd
+            assert_match {*calls=50,*} [cmdstat lrange]
+        }
+
+        test {benchmark: __rand_int__ mixed with range placeholders} {
+            r config resetstat
+            set cmd [valkeybenchmark $master_host $master_port "--count 10 -r 100 -n 50 -- ZRANGE myzset:__rand_int__ __rand_beg__ __rand_end__"]
+            common_bench_setup $cmd
+            assert_match {*calls=50,*} [cmdstat zrange]
+        }
+
+        test {benchmark: range placeholder embedded in larger token} {
+            r config resetstat
+            set cmd [valkeybenchmark $master_host $master_port "--count 10 -r 1000 -n 50 -- ZRANGEBYSCORE myzset (__rand_beg__ __rand_end__"]
+            common_bench_setup $cmd
+            assert_match {*calls=50,*} [cmdstat zrangebyscore]
+        }
+
+        test {benchmark: srandmember with --count} {
+            r config resetstat
+            set cmd [valkeybenchmark $master_host $master_port "-t srandmember --count 10 -r 1000 -n 50"]
+            common_bench_setup $cmd
+            assert_match {*calls=50,*} [cmdstat srandmember]
+        }
+
+        test {benchmark: srandmember without --count (single member)} {
+            r config resetstat
+            set cmd [valkeybenchmark $master_host $master_port "-t srandmember -r 1000 -n 50"]
+            common_bench_setup $cmd
+            assert_match {*calls=50,*} [cmdstat srandmember]
+        }
+
+        test {benchmark: hrandfield with --count} {
+            r config resetstat
+            set cmd [valkeybenchmark $master_host $master_port "-t hrandfield --count 10 -r 1000 -n 50"]
+            common_bench_setup $cmd
+            assert_match {*calls=50,*} [cmdstat hrandfield]
+        }
+
+        test {benchmark: hrandfield without --count (single field)} {
+            r config resetstat
+            set cmd [valkeybenchmark $master_host $master_port "-t hrandfield -r 1000 -n 50"]
+            common_bench_setup $cmd
+            assert_match {*calls=50,*} [cmdstat hrandfield]
+        }
+
+        test {benchmark: zrandmember with --count} {
+            r config resetstat
+            set cmd [valkeybenchmark $master_host $master_port "-t zrandmember --count 10 -r 1000 -n 50"]
+            common_bench_setup $cmd
+            assert_match {*calls=50,*} [cmdstat zrandmember]
+        }
+
+        test {benchmark: zrandmember without --count (single member)} {
+            r config resetstat
+            set cmd [valkeybenchmark $master_host $master_port "-t zrandmember -r 1000 -n 50"]
+            common_bench_setup $cmd
+            assert_match {*calls=50,*} [cmdstat zrandmember]
+        }
+
+        test {benchmark: lpop with --count} {
+            r config resetstat
+            set cmd [valkeybenchmark $master_host $master_port "-t lpop --count 5 -n 50"]
+            common_bench_setup $cmd
+            assert_match {*calls=50,*} [cmdstat lpop]
+        }
+
+        test {benchmark: rpop with --count} {
+            r config resetstat
+            set cmd [valkeybenchmark $master_host $master_port "-t rpop --count 5 -n 50"]
+            common_bench_setup $cmd
+            assert_match {*calls=50,*} [cmdstat rpop]
+        }
+
+        test {benchmark: zpopmin with --count} {
+            r config resetstat
+            set cmd [valkeybenchmark $master_host $master_port "-t zpopmin --count 5 -n 50"]
+            common_bench_setup $cmd
+            assert_match {*calls=50,*} [cmdstat zpopmin]
+        }
+
+        test {benchmark: zpopmax with --count} {
+            r config resetstat
+            set cmd [valkeybenchmark $master_host $master_port "-t zpopmax --count 5 -n 50"]
+            common_bench_setup $cmd
+            assert_match {*calls=50,*} [cmdstat zpopmax]
+        }
     }
 }
 

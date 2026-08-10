@@ -501,6 +501,8 @@ void debugCommand(client *c) {
 "CLIENT-ENFORCE-REPLY-LIST <0|1>",
 "    When set to 1, it enforces the use of the client reply list directly",
 "    and avoids using the client's static buffer.",
+"FORCE-TLS-WRITE-ERROR <0|1>",
+"    Force TLS write error for testing.",
 NULL
         };
         addReplyHelp(c, help);
@@ -1054,6 +1056,19 @@ NULL
     } else if (!strcasecmp(c->argv[1]->ptr, "client-enforce-reply-list") && c->argc == 3) {
         server.debug_client_enforce_reply_list = atoi(c->argv[2]->ptr);
         addReply(c, shared.ok);
+    } else if (!strcasecmp(c->argv[1]->ptr, "force-tls-write-error") && c->argc == 3) {
+#ifdef USE_OPENSSL
+        long val;
+        if (getLongFromObjectOrReply(c, c->argv[2], &val, NULL) != C_OK) return;
+        if (val < 0 || val > 1) {
+            addReplyError(c, "Value must be 0 or 1");
+            return;
+        }
+        server.debug_force_tls_write_error = val;
+        addReply(c, shared.ok);
+#else
+        addReplyError(c, "TLS is not enabled");
+#endif
     } else {
         addReplySubcommandSyntaxError(c);
         return;

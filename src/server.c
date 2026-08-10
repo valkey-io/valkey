@@ -2608,6 +2608,7 @@ void initServer(void) {
     server.reply_buffer_resizing_enabled = 1;
     server.client_mem_usage_buckets = NULL;
     server.debug_client_enforce_reply_list = 0;
+    server.debug_force_tls_write_error = 0;
     resetReplicationBuffer();
 
     /* Make sure the locale is set on startup based on the config file. */
@@ -7041,6 +7042,17 @@ redisTestProc *getTestProcByName(const char *name) {
     return NULL;
 }
 #endif
+
+/* Initialize thread attributes with a guarded stack size. TLS writes can use
+ * NET_MAX_WRITES_PER_EVENT bytes on the stack, including in I/O threads. */
+void serverInitThreadAttribute(pthread_attr_t *attr) {
+    size_t stacksize;
+    pthread_attr_init(attr);
+    pthread_attr_getstacksize(attr, &stacksize);
+    if (!stacksize) stacksize = 1;
+    while (stacksize < VALKEY_THREAD_STACK_SIZE) stacksize *= 2;
+    pthread_attr_setstacksize(attr, stacksize);
+}
 
 int main(int argc, char **argv) {
     struct timeval tv;

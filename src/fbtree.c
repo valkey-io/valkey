@@ -5,13 +5,14 @@
 #include <stdarg.h>
 #include <stdbool.h>
 #include <string.h>
-#include <assert.h>
 #include <inttypes.h>
 #include <stdio.h>
+/* serverassert.h replaces assert.h: assert() routes to _serverAssert for crash
+ * reports, and it defines static_assert used by fbtree_internal.h below. */
+#include "serverassert.h"
 #include "config.h"
 #include "fbtree.h"
 #include "fbtree_internal.h"
-#include "serverassert.h"
 #include "zmalloc.h"
 #include "sds.h"
 

@@ -39,6 +39,68 @@ start_cluster 1 1 {tags {external:skip cluster}} {
         assert_equal QUEUED [r get bar]
         assert_error {CROSSSLOT *} {r exec}
     }
+
+    # Regression tests for WATCHed keys that hash to a different slot than the transaction's commands. EXEC
+    # committed such a transaction even when the WATCHed key had expired or had been removed.
+    test {WATCHed key in another slot that expired aborts EXEC} {
+        set watched_key "{tag1}watched"
+        set transaction_key "{tag2}written-by-exec"
+        assert {[R 0 cluster keyslot $watched_key] != [R 0 cluster keyslot $transaction_key]}
+
+        # The TTL is set before WATCH, and the key is still in the keyspace once it elapses, so nothing but
+        # the key having expired can abort the transaction.
+        R 0 debug set-active-expire 0
+        R 0 del $transaction_key
+        R 0 set $watched_key alive px 50
+        R 0 watch $watched_key
+        set keys_before [R 0 dbsize]
+        after 100
+        assert_equal $keys_before [R 0 dbsize]
+
+        R 0 multi
+        R 0 set $transaction_key committed
+        set reply [R 0 exec]
+        R 0 debug set-active-expire 1
+
+        assert_equal {} $reply
+        assert_equal 0 [R 0 exists $transaction_key]
+    }
+
+    test {WATCHed key in another slot that is untouched commits EXEC} {
+        set watched_key "{tag1}watched-alive"
+        set transaction_key "{tag2}written-by-exec"
+        assert {[R 0 cluster keyslot $watched_key] != [R 0 cluster keyslot $transaction_key]}
+
+        R 0 set $watched_key alive
+        R 0 watch $watched_key
+
+        R 0 multi
+        R 0 set $transaction_key committed
+        assert_equal {OK} [R 0 exec]
+        assert_equal {committed} [R 0 get $transaction_key]
+    }
+
+    test {WATCHed key in another slot flushed by a transaction aborts the watcher's EXEC} {
+        set watched_key "{tag1}watched-flush"
+        set transaction_key "{tag2}written-with-flush"
+        assert {[R 0 cluster keyslot $watched_key] != [R 0 cluster keyslot $transaction_key]}
+
+        set watcher [valkey_client 0]
+        $watcher set $watched_key alive
+        $watcher watch $watched_key
+
+        R 0 multi
+        R 0 set $transaction_key committed
+        R 0 flushall
+        assert_equal {OK OK} [R 0 exec]
+
+        $watcher multi
+        $watcher set $transaction_key committed-by-watcher
+        set reply [$watcher exec]
+        $watcher close
+
+        assert_equal {} $reply
+    }
 }
 
 # Create a folder called "nodes.conf" to trigger temp nodes.conf rename

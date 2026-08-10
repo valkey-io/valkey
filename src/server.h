@@ -3569,11 +3569,12 @@ long long getInstantaneousMetric(int metric);
 #define RESTART_SERVER_GRACEFULLY (1 << 0)     /* Do proper shutdown. */
 #define RESTART_SERVER_CONFIG_REWRITE (1 << 1) /* CONFIG REWRITE before restart.*/
 int restartServer(client *c, int flags, mstime_t delay);
-int getKeySlot(sds key);
+int getCachedKeySlot(sds key);
 int calculateKeySlot(sds key);
 
 /* kvstore wrappers */
 int getKVStoreIndexForKey(sds key);
+int getKVStoreIndexUsingCachedSlot(sds key);
 int dbExpand(serverDb *db, uint64_t db_size, int try_expand);
 int dbExpandExpires(serverDb *db, uint64_t db_size, int try_expand);
 robj *dbFind(serverDb *db, sds key);

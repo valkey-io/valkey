@@ -79,7 +79,7 @@ static robj *dbFindWithDictIndex(serverDb *db, sds key, int dict_index);
  * expired on replicas even if the primary is lagging expiring our key via DELs
  * in the replication link. */
 robj *lookupKey(serverDb *db, robj *key, int flags) {
-    int dict_index = getKVStoreIndexForKey(objectGetVal(key));
+    int dict_index = getKVStoreIndexUsingCachedSlot(objectGetVal(key));
     robj *val = dbFindWithDictIndex(db, objectGetVal(key), dict_index);
     if (val) {
         /* Forcing deletion of expired keys on a replica makes the replica
@@ -200,7 +200,7 @@ void dbUpdateObjectWithVolatileItemsTracking(serverDb *db, robj *o) {
  * If the update_if_existing argument is false, the program is aborted
  * if the key already exists, otherwise, it can fall back to dbOverwrite. */
 static void dbAddInternal(serverDb *db, robj *key, robj **valref, int update_if_existing) {
-    int dict_index = getKVStoreIndexForKey(objectGetVal(key));
+    int dict_index = getKVStoreIndexUsingCachedSlot(objectGetVal(key));
     void **oldref = NULL;
     if (update_if_existing) {
         oldref = kvstoreHashtableFindRef(db->keys, dict_index, objectGetVal(key));
@@ -229,15 +229,21 @@ void dbAdd(serverDb *db, robj *key, robj **valref) {
     dbAddInternal(db, key, valref, 0);
 }
 
-/* Returns which dict index should be used with kvstore for a given key. */
+/* Returns which dict index should be used with kvstore for a given key, computed from the key itself. */
 int getKVStoreIndexForKey(sds key) {
-    return server.cluster_enabled ? getKeySlot(key) : 0;
+    return server.cluster_enabled ? (int)keyHashSlot(key, (int)sdslen(key)) : 0;
 }
 
-/* Returns the cluster hash slot for a given key, trying to use the cached slot that
- * stored on the server.current_client first. If there is no cached value, it will compute the hash slot
- * and then cache the value.*/
-int getKeySlot(sds key) {
+/* Same as getKVStoreIndexForKey(), but reuses the slot cached on the client rather than hashing the key.
+ * Only valid for keys the currently executing command declared, since the cached slot is that command's. */
+int getKVStoreIndexUsingCachedSlot(sds key) {
+    return server.cluster_enabled ? getCachedKeySlot(key) : 0;
+}
+
+/* Returns the slot cached on the client for the currently executing command, computing it from the key
+ * when no cached slot is available. Only valid for keys that command declared: any other key can hash to
+ * a different slot, so use keyHashSlot() or getKVStoreIndexForKey() for those. */
+int getCachedKeySlot(sds key) {
     serverAssert(server.cluster_enabled);
     /* This is performance optimization that uses pre-set slot id from the current command,
      * in order to avoid calculation of the key hash.
@@ -319,7 +325,7 @@ int dbAddRDBLoad(serverDb *db, sds key, robj **valref) {
 static void dbSetValue(serverDb *db, robj *key, robj **valref, int overwrite, void **oldref) {
     robj *val = *valref;
     if (oldref == NULL) {
-        int dict_index = getKVStoreIndexForKey(objectGetVal(key));
+        int dict_index = getKVStoreIndexUsingCachedSlot(objectGetVal(key));
         oldref = kvstoreHashtableFindRef(db->keys, dict_index, objectGetVal(key));
     }
     serverAssertWithInfo(NULL, key, oldref != NULL);
@@ -365,7 +371,7 @@ static void dbSetValue(serverDb *db, robj *key, robj **valref, int overwrite, vo
         *oldref = new;
         /* Replace the old value at its location in the expire space. */
         if (expire >= 0) {
-            int dict_index = getKVStoreIndexForKey(objectGetVal(key));
+            int dict_index = getKVStoreIndexUsingCachedSlot(objectGetVal(key));
             void **expireref = kvstoreHashtableFindRef(db->expires, dict_index, objectGetVal(key));
             serverAssert(expireref != NULL);
             *expireref = new;

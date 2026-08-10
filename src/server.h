@@ -3762,7 +3762,6 @@ int setModuleUnsignedNumericConfig(ModuleConfig *config, unsigned long long val,
 
 /* db.c -- Keyspace access API */
 int removeExpire(serverDb *db, robj *key);
-void deleteExpiredKeyAndPropagate(serverDb *db, robj *keyobj);
 void deleteExpiredKeyAndPropagateWithDictIndex(serverDb *db, robj *keyobj, int dict_index);
 void deleteExpiredKeyFromOverwriteAndPropagate(client *c, robj *keyobj);
 void propagateDeletion(serverDb *db, robj *key, int lazy, int slot);

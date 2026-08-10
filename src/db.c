@@ -1896,7 +1896,7 @@ void swapdbCommand(client *c) {
  *----------------------------------------------------------------------------*/
 
 int removeExpire(serverDb *db, robj *key) {
-    int dict_index = getKVStoreIndexForKey(objectGetVal(key));
+    int dict_index = getKVStoreIndexUsingCachedSlot(objectGetVal(key));
     void *popped;
     if (kvstoreHashtablePop(db->expires, dict_index, objectGetVal(key), &popped)) {
         robj *val = popped;
@@ -1922,7 +1922,7 @@ robj *setExpire(client *c, serverDb *db, robj *key, long long when) {
     /* Reuse the object from the main dict in the expire dict. When setting
      * expire in an robj, it's potentially reallocated. We need to updates the
      * pointer(s) to it. */
-    int dict_index = getKVStoreIndexForKey(objectGetVal(key));
+    int dict_index = getKVStoreIndexUsingCachedSlot(objectGetVal(key));
     void **valref = kvstoreHashtableFindRef(db->keys, dict_index, objectGetVal(key));
     serverAssertWithInfo(NULL, key, valref != NULL);
     val = *valref;
@@ -1931,7 +1931,7 @@ robj *setExpire(client *c, serverDb *db, robj *key, long long when) {
     robj *newval = objectSetExpire(val, when);
     if (objectGetType(newval) == OBJ_HASH && hashTypeHasVolatileFields(newval)) {
         /* Replace the pointer in the keys_with_volatile_items table without accessing the old pointer. */
-        int dict_index = getKVStoreIndexForKey(objectGetKey(newval));
+        int dict_index = getKVStoreIndexUsingCachedSlot(objectGetKey(newval));
         hashtable *volatile_items_ht = kvstoreGetHashtable(db->keys_with_volatile_items, dict_index);
         bool replaced = hashtableReplaceReallocatedEntry(volatile_items_ht, val, newval);
         serverAssert(replaced);
@@ -1986,11 +1986,6 @@ void deleteExpiredKeyAndPropagateWithDictIndex(serverDb *db, robj *keyobj, int d
     server.stat_expiredkeys++;
 }
 
-/* Delete the specified expired key and propagate expire. */
-void deleteExpiredKeyAndPropagate(serverDb *db, robj *keyobj) {
-    int dict_index = getKVStoreIndexForKey(objectGetVal(keyobj));
-    deleteExpiredKeyAndPropagateWithDictIndex(db, keyobj, dict_index);
-}
 
 /* Delete the specified expired key from overwriting and propagate the DEL or UNLINK. */
 void deleteExpiredKeyFromOverwriteAndPropagate(client *c, robj *keyobj) {

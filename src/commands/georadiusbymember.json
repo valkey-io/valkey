@@ -46,7 +46,8 @@
             {
                 "flags": [
                     "OW",
-                    "UPDATE"
+                    "UPDATE",
+                    "VARIABLE_FLAGS"
                 ],
                 "begin_search": {
                     "keyword": {
@@ -65,7 +66,8 @@
             {
                 "flags": [
                     "OW",
-                    "UPDATE"
+                    "UPDATE",
+                    "VARIABLE_FLAGS"
                 ],
                 "begin_search": {
                     "keyword": {

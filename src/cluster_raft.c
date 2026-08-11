@@ -176,7 +176,7 @@ typedef struct {
 
     /* Pending MEET callbacks waiting for NODE_JOIN commit. */
     list *pending_meets;  /* CLUSTER MEET commands waiting for OK reply */
-    list *deferred_meets; /* Inbound MEET messages deferred until size > 1 */
+    list *deferred_meets; /* Inbound MEET messages drained once we're in a multi-member cluster */
 
     /* Deferred work for beforeSleep. */
     unsigned int todo_update_slot_coverage : 1;
@@ -1398,7 +1398,7 @@ static void raftLogApply(raftLogEntry *e) {
                     rs->todo_save_config = 1;
 
                     /* Process deferred MEET messages now that we're in a cluster. */
-                    if (server.cluster->size > 0 && listLength(rs->deferred_meets) > 0) {
+                    if (clusterRaftHasPeerMembers() && listLength(rs->deferred_meets) > 0) {
                         listIter dli;
                         listNode *dln;
                         listRewind(rs->deferred_meets, &dli);

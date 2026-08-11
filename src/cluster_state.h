@@ -32,8 +32,6 @@ extern dictType clusterSlotDictType;
 #define nodeTimedOut(n) ((n)->flags & CLUSTER_NODE_PFAIL)
 #define nodeFailed(n) ((n)->flags & CLUSTER_NODE_FAIL)
 #define nodeCantFailover(n) ((n)->flags & CLUSTER_NODE_NOFAILOVER)
-#define nodeIsLearner(n) ((n)->flags & CLUSTER_NODE_LEARNER)
-#define nodeIsVoter(n) (!((n)->flags & (CLUSTER_NODE_MEET | CLUSTER_NODE_LEARNER)))
 
 struct clusterNode {
     mstime_t ctime;                         /* Node object creation time. */

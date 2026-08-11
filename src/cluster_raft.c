@@ -249,6 +249,13 @@ typedef struct {
 
 #define RAFT_NODE(n) ((clusterNodeRaftData *)(n)->protocol_data)
 
+static int nodeIsLearner(clusterNode *n) {
+    return n->flags & CLUSTER_NODE_LEARNER;
+}
+static int nodeIsVoter(clusterNode *n) {
+    return !(n->flags & (CLUSTER_NODE_MEET | CLUSTER_NODE_LEARNER));
+}
+
 /* --------------------------------------------------------------------------
  * Wire format helpers
  * -------------------------------------------------------------------------- */

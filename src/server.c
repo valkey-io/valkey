@@ -7815,8 +7815,10 @@ __attribute__((weak)) int main(int argc, char **argv) {
     }
 
 #if defined(LUA_ENABLED) && STATIC_LUA
-    /* Initialize the LUA scripting engine on-startup only when LUA is built statically */
-    if (scriptingEngineManagerFind("lua") == NULL) {
+    /* Initialize the LUA scripting engine on-startup only when LUA is built statically.
+     * Sentinel does not support SCRIPTING commands nor the MODULE commands, so the Lua
+     * engine is not needed here. */
+    if (!server.sentinel_mode && scriptingEngineManagerFind("lua") == NULL) {
         if (moduleLoadStatic("lua", NULL, 0, 0) != C_OK) {
             serverPanic("Lua engine initialization failed, check the server logs.");
         }

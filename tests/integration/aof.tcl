@@ -29,6 +29,34 @@ tags {"aof external:skip logreqres:skip"} {
         }
     }
 
+    create_aof $aof_dirpath $aof_file {
+        append_to_aof [formatCommand set foo hello]
+        append_to_aof [formatCommand multi]
+        append_to_aof [formatCommand set bar world]
+        append_to_aof [string range [formatCommand exec] 0 end-1]
+    }
+
+    start_server_aof [list dir $server_path aof-load-truncated yes] {
+        test "Short read in MULTI: Discard incomplete transaction and preserve subsequent writes across restart" {
+            assert_equal 1 [is_alive [srv pid]]
+            set client [valkey [srv host] [srv port] 0 $::tls]
+            wait_done_loading $client
+            assert_equal "hello" [$client get foo]
+            assert_equal {} [$client get bar]
+            assert_equal "OK" [$client set baz survived]
+            assert_equal "survived" [$client get baz]
+
+            restart_server 0 true false
+
+            assert_equal 1 [is_alive [srv pid]]
+            set client [valkey [srv host] [srv port] 0 $::tls]
+            wait_done_loading $client
+            assert_equal "hello" [$client get foo]
+            assert_equal {} [$client get bar]
+            assert_equal "survived" [$client get baz]
+        }
+    }
+
     ## Should also start with truncated AOF without incomplete MULTI block.
     create_aof $aof_dirpath $aof_file {
         append_to_aof [formatCommand incr foo]

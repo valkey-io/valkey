@@ -142,6 +142,7 @@ struct ValkeyModule;
 #define CRON_DBS_PER_CALL 16
 #define CRON_DICTS_PER_DB 16
 #define NET_MAX_WRITES_PER_EVENT (1024 * 64)
+#define VALKEY_THREAD_STACK_SIZE (1024 * 1024 * 4)
 #define PROTO_SHARED_SELECT_CMDS 10
 #define OBJ_SHARED_INTEGERS 10000
 #define OBJ_SHARED_BULKHDR_LEN 32
@@ -1417,6 +1418,14 @@ typedef struct client {
 /* Forward declaration */
 bool isImportSlotMigrationJob(slotMigrationJob *job);
 
+/* Absolute postpone mask from client IO offload state (not artificial READ hold). */
+static inline int clientConnPostponeMaskFromIOState(client *c) {
+    int mask = 0;
+    if (c->io_read_state != CLIENT_IDLE) mask |= CONN_POSTPONE_READ;
+    if (c->io_write_state != CLIENT_IDLE) mask |= CONN_POSTPONE_WRITE;
+    return mask;
+}
+
 /* Get the class of a client, used in order to enforce limits to different
  * classes of clients.
  *
@@ -2308,6 +2317,7 @@ struct valkeyServer {
     sds hash_seed;                                         /* Configurable DB hash seed */
     int cluster_slot_stats_enabled;                        /* Cluster slot usage statistics tracking enabled. */
     mstime_t cluster_mf_timeout;                           /* Milliseconds to do a manual failover. */
+    unsigned int cluster_replica_priority;                 /* Replica priority from cluster-replica-priority. */
     unsigned long cluster_slot_migration_log_max_len;      /* Maximum count of migrations to display in the
                                                             * migration log, after which we will clear finished
                                                             * migrations. */
@@ -2399,6 +2409,8 @@ struct valkeyServer {
     int hotkey_top_k;               /* Number of top keys to track per type (Space-Saving K). */
     int hotkey_window_seconds;      /* Length of the QPS accounting window in seconds. */
     struct spaceSavingManager *hotkey_manager;
+    
+    int debug_force_tls_write_error;
 };
 
 #define MAX_KEYS_BUFFER 256
@@ -3060,10 +3072,11 @@ void waitForClientIO(client *c);
 void ioThreadReadQueryFromClient(client *c);
 void ioThreadWriteToClient(client *c);
 int canParseCommand(client *c);
-void processClientIOReadsDone(client *c);
+int processClientIOReadsDone(client *c);
 void processClientIOWriteDone(client *c);
 void releaseReplyReferences(client *c);
 void resetLastWrittenBuf(client *c);
+int clientConnPostponeMask(client *c);
 
 int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_idx, int max_args, int *flags, int *unit, int *expire_idx, robj **expire, robj **compare_val);
 
@@ -4336,6 +4349,7 @@ void debugPauseProcess(void);
 #define serverDebug(fmt, ...) printf("DEBUG %s:%d > " fmt "\n", __FILE__, __LINE__, __VA_ARGS__)
 #define serverDebugMark() printf("-- MARK %s:%d --\n", __FILE__, __LINE__)
 
+void serverInitThreadAttribute(pthread_attr_t *attr);
 int iAmPrimary(void);
 
 #define STRINGIFY_(x) #x

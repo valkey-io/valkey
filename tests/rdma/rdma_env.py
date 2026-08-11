@@ -55,6 +55,10 @@ def prepare_rxe(interface):
     print("Valkey Over RDMA install RXE [OK]")
 
     softrdma = "rxe_" + interface
+    if os.path.exists("/sys/class/infiniband/" + softrdma):
+        print("Valkey Over RDMA add RXE device <%s> [OK]" % softrdma)
+        return
+
     cmd = "rdma link add " + softrdma + " type rxe netdev " + interface
     p = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE)
     if p.wait():

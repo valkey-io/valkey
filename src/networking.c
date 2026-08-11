@@ -199,6 +199,17 @@ static size_t clientReplyAllocSize(clientReplyBlock *block) {
     return sizeof(clientReplyBlock) + block->size;
 }
 
+/* Postpone mask from client input/command state. Hold READ only while parsed pipeline
+ * commands are still in cmd_queue (must be consumed via processInputBuffer, not a new
+ * parseInputBuffer). Do not use multibulklen or pending_command here: incomplete parses
+ * and not-yet-run commands still need the read path (or processPendingCommandAndInputBuffer)
+ * to make progress. */
+int clientConnPostponeMask(client *c) {
+    int mask = clientConnPostponeMaskFromIOState(c);
+    if (c->cmd_queue.off < c->cmd_queue.len) mask |= CONN_POSTPONE_READ;
+    return mask;
+}
+
 /* Client.reply list dup and free methods. */
 void *dupClientReplyValue(void *o) {
     size_t bufsize = clientReplyAllocSize((clientReplyBlock *)o);
@@ -3303,12 +3314,17 @@ void processClientIOWriteDone(client *c) {
     /* Don't post-process-writes to clients that are going to be closed anyway. */
     if (c->flag.close_asap) return;
 
+    int mask = 0;
+    if (c->io_read_state == CLIENT_PENDING_IO || c->io_read_state == CLIENT_COMPLETED_IO)
+        mask |= CONN_POSTPONE_READ;
 
-    connSetPostponeUpdateState(c->conn, 0);
+    connSetPostponeUpdateState(c->conn, mask);
+    if (postWriteToClient(c) == C_ERR) return;
+    uint64_t id = c->id;
     connUpdateState(c->conn);
-    if (postWriteToClient(c) == C_ERR) {
-        return;
-    }
+
+    c = lookupClientByID(id);
+    if (!c || !c->conn) return;
 
     if (!clientHasPendingReplies(c)) return;
 
@@ -3973,6 +3989,10 @@ int processCommandAndResetClient(client *c) {
  * the client. Returns C_ERR if the client is no longer valid after executing
  * the command, and C_OK for all other cases. */
 int processPendingCommandAndInputBuffer(client *c) {
+    /* Blocked clients are resumed via processUnblockedClients(); skip them here
+     * to avoid re-entering processCommand() while pending_command is intentionally left set. */
+    if (c->flag.blocked) return C_OK;
+
     /* Notice, this code is also called from 'processUnblockedClients'.
      * But in case of a module blocked client (see RM_Call 'K' flag) we do not reach this code path.
      * So whenever we change the code here we need to consider if we need this change on module
@@ -4007,6 +4027,11 @@ void parseInputBuffer(client *c) {
     /* The command queue must be emptied before parsing. */
     serverAssert(c->cmd_queue.len == 0);
 
+    /* Hold off transport read handlers for the duration of parsing (RDMA update_state
+     * may otherwise re-enter readQueryFromClient and corrupt cmd_queue). */
+    connection *conn = c->conn;
+    if (conn) connSetPostponeUpdateState(conn, clientConnPostponeMaskFromIOState(c) | CONN_POSTPONE_READ);
+
     /* Determine request type when unknown. */
     if (!c->reqtype) {
         if (c->querybuf[c->qb_pos] == '*') {
@@ -4023,6 +4048,11 @@ void parseInputBuffer(client *c) {
     } else {
         serverPanic("Unknown request type");
     }
+
+    /* Restore only IO-state postpone; do not hold READ for cmd_queue here.
+     * Pipeline commands are drained by processInputBuffer; leaving READ postponed
+     * without a later handleReadJobs/connUpdateState clear stalls RDMA rx. */
+    if (conn) connSetPostponeUpdateState(conn, clientConnPostponeMaskFromIOState(c));
 }
 
 /* Free unused memory in a client's queue of parsed commands. */
@@ -6513,7 +6543,8 @@ int postponeClientRead(client *c) {
     return (trySendReadToIOThreads(c) == C_OK);
 }
 
-void processClientIOReadsDone(client *c) {
+/* Returns non-zero if connUpdateState must run again after processClientsCommandsBatch(). */
+int processClientIOReadsDone(client *c) {
     serverAssert(c->io_read_state == CLIENT_COMPLETED_IO);
 
     if (ProcessingEventsWhileBlocked) {
@@ -6526,33 +6557,43 @@ void processClientIOReadsDone(client *c) {
     c->io_read_state = CLIENT_IDLE;
 
     /* Don't post-process-reads from clients that are going to be closed anyway. */
-    if (c->flag.close_asap) return;
+    if (c->flag.close_asap) return 0;
 
     /* If a client is protected, don't do anything,
      * that may trigger read/write error or recreate handler. */
-    if (c->flag.protected) return;
+    if (c->flag.protected) return 0;
 
     /* Save the current conn state, as connUpdateState may modify it */
     int in_accept_state = (connGetState(c->conn) == CONN_STATE_ACCEPTING);
-    connSetPostponeUpdateState(c->conn, 0);
-    connUpdateState(c->conn);
+    int needs_post_read_update = 0;
+
+    if (c->conn) {
+        int mask = 0;
+        if (!in_accept_state) {
+            mask |= CONN_POSTPONE_READ;
+            if (c->io_write_state != CLIENT_IDLE) mask |= CONN_POSTPONE_WRITE;
+            needs_post_read_update = 1;
+        }
+        connSetPostponeUpdateState(c->conn, mask);
+        connUpdateState(c->conn);
+    }
 
     /* In accept state, no client's data was read - stop here. */
-    if (in_accept_state) return;
+    if (in_accept_state) return 0;
 
     /* On read error - stop here. */
     if (handleReadResult(c) == C_ERR) {
-        return;
+        return needs_post_read_update;
     }
 
     if (!(c->read_flags & READ_FLAGS_DONT_PARSE)) {
         parseResult res = handleParseResults(c);
         /* On parse error - stop here. */
         if (res == PARSE_ERR) {
-            return;
+            return needs_post_read_update;
         } else if (res == PARSE_NEEDMORE) {
             beforeNextClient(c);
-            return;
+            return needs_post_read_update;
         }
     }
 
@@ -6566,6 +6607,7 @@ void processClientIOReadsDone(client *c) {
     if (ret == C_ERR) {
         if (processPendingCommandAndInputBuffer(c) == C_OK) beforeNextClient(c);
     }
+    return needs_post_read_update;
 }
 
 /* Returns the actual client eviction limit based on current configuration or
@@ -6599,16 +6641,33 @@ void evictClients(void) {
     size_t client_eviction_limit = getClientEvictionLimit();
     if (client_eviction_limit == 0) return;
 
+    /* Variable to track memory of clients marked for close but not yet freed */
+    size_t pending_freed = 0;
+
     while (server.stat_clients_type_memory[CLIENT_TYPE_NORMAL] +
                server.stat_clients_type_memory[CLIENT_TYPE_PUBSUB] >
-           client_eviction_limit) {
+           client_eviction_limit + pending_freed) {
         listNode *ln = listNext(&bucket_iter);
         if (ln) {
             client *c = ln->value;
+            if (c->flag.close_asap) {
+                /* Already scheduled to close. Count memory as freed and skip. */
+                pending_freed += c->last_memory_usage;
+                continue;
+            }
             sds ci = catClientInfoString(sdsempty(), c, server.hide_user_data_from_log);
             serverLog(LL_NOTICE, "Evicting client: %s", ci);
-            if (freeClient(c)) server.stat_evictedclients++;
             sdsfree(ci);
+            server.stat_evictedclients++;
+
+            if (freeClient(c) == 0) {
+                /* Client was only scheduled for asynchronous free (e.g. protected
+                 * or has pending IO) - its memory won't drop from the stats above
+                 * until that completes. Count it as freed here so we don't keep
+                 * evicting further clients while waiting for it. */
+                pending_freed += c->last_memory_usage;
+                continue;
+            }
         } else {
             curr_bucket--;
             if (curr_bucket < 0) {

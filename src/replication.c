@@ -2470,7 +2470,6 @@ void replicaAfterLoadPrimaryRDB(connection *conn, rdbSaveInfo *rsi, int disk_bas
         }
     }
 
-
     /* In case of dual channel replication sync we want to close the RDB connection
      * once the connection is established */
     if (conn == server.repl_rdb_transfer_s) {

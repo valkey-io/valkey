@@ -1622,7 +1622,7 @@ start_server {overrides {forkless-options-supported yes default-bgsave-method th
     test {BGSAVE uses thread when default-bgsave-method is thread} {
         r set key value
         set result [r bgsave]
-        assert_match "*thread*" $result
+        assert_match "*Background saving started*" $result
         waitForBgsave r
         assert_equal [s rdb_last_bgsave_type] "thread"
     }
@@ -1632,7 +1632,7 @@ start_server {overrides {default-bgsave-method fork}} {
     test {BGSAVE uses fork when default-bgsave-method is fork} {
         r set key value
         set result [r bgsave]
-        assert_match "*fork*" $result
+        assert_match "*Background saving started*" $result
         waitForBgsave r
         assert_equal [s rdb_last_bgsave_type] "fork"
     }

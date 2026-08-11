@@ -3965,9 +3965,9 @@ void bgsaveCommand(client *c) {
                              "possible.");
         }
     } else if (chosen_save_type == RDB_BGSAVE_TYPE_THREAD && threadsaveToDisk(server.rdb_filename) == C_OK) {
-        addReplyStatus(c, "Background saving (thread) started");
+        addReplyStatus(c, "Background saving started");
     } else if (rdbSaveBackground(REPLICA_REQ_NONE, server.rdb_filename, rsiptr, RDBFLAGS_NONE) == C_OK) {
-        addReplyStatus(c, "Background saving (fork) started");
+        addReplyStatus(c, "Background saving started");
     } else {
         addReplyErrorObject(c, shared.err);
     }

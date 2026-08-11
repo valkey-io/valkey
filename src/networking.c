@@ -3989,6 +3989,10 @@ int processCommandAndResetClient(client *c) {
  * the client. Returns C_ERR if the client is no longer valid after executing
  * the command, and C_OK for all other cases. */
 int processPendingCommandAndInputBuffer(client *c) {
+    /* Blocked clients are resumed via processUnblockedClients(); skip them here
+     * to avoid re-entering processCommand() while pending_command is intentionally left set. */
+    if (c->flag.blocked) return C_OK;
+
     /* Notice, this code is also called from 'processUnblockedClients'.
      * But in case of a module blocked client (see RM_Call 'K' flag) we do not reach this code path.
      * So whenever we change the code here we need to consider if we need this change on module
@@ -6637,16 +6641,33 @@ void evictClients(void) {
     size_t client_eviction_limit = getClientEvictionLimit();
     if (client_eviction_limit == 0) return;
 
+    /* Variable to track memory of clients marked for close but not yet freed */
+    size_t pending_freed = 0;
+
     while (server.stat_clients_type_memory[CLIENT_TYPE_NORMAL] +
                server.stat_clients_type_memory[CLIENT_TYPE_PUBSUB] >
-           client_eviction_limit) {
+           client_eviction_limit + pending_freed) {
         listNode *ln = listNext(&bucket_iter);
         if (ln) {
             client *c = ln->value;
+            if (c->flag.close_asap) {
+                /* Already scheduled to close. Count memory as freed and skip. */
+                pending_freed += c->last_memory_usage;
+                continue;
+            }
             sds ci = catClientInfoString(sdsempty(), c, server.hide_user_data_from_log);
             serverLog(LL_NOTICE, "Evicting client: %s", ci);
-            if (freeClient(c)) server.stat_evictedclients++;
             sdsfree(ci);
+            server.stat_evictedclients++;
+
+            if (freeClient(c) == 0) {
+                /* Client was only scheduled for asynchronous free (e.g. protected
+                 * or has pending IO) - its memory won't drop from the stats above
+                 * until that completes. Count it as freed here so we don't keep
+                 * evicting further clients while waiting for it. */
+                pending_freed += c->last_memory_usage;
+                continue;
+            }
         } else {
             curr_bucket--;
             if (curr_bucket < 0) {

@@ -331,6 +331,10 @@ static int64_t usUntilEarliestTimer(aeEventLoop *eventLoop) {
     }
     /* Cache the result for next time */
     eventLoop->earliestTimer = earliest;
+
+    /* All events are pending deletion (zombies only): no valid timer. */
+    if (earliest == NULL) return -1;
+
     monotime now = getMonotonicUs();
     return (now >= earliest->when) ? 0 : earliest->when - now;
 }

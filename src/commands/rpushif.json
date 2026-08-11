@@ -20,6 +20,7 @@
             {
                 "flags": [
                     "RW",
+                    "ACCESS",
                     "INSERT"
                 ],
                 "begin_search": {

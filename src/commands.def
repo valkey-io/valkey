@@ -5084,7 +5084,7 @@ struct COMMAND_ARG LPUSH_Args[] = {
 #ifndef SKIP_CMD_KEY_SPECS_TABLE
 /* LPUSHIF key specs */
 keySpec LPUSHIF_Keyspecs[1] = {
-{NULL,CMD_KEY_RW|CMD_KEY_INSERT,KSPEC_BS_INDEX,.bs.index={1},KSPEC_FK_RANGE,.fk.range={0,1,0}}
+{NULL,CMD_KEY_RW|CMD_KEY_ACCESS|CMD_KEY_INSERT,KSPEC_BS_INDEX,.bs.index={1},KSPEC_FK_RANGE,.fk.range={0,1,0}}
 };
 #endif
 
@@ -5359,7 +5359,7 @@ struct COMMAND_ARG RPUSH_Args[] = {
 #ifndef SKIP_CMD_KEY_SPECS_TABLE
 /* RPUSHIF key specs */
 keySpec RPUSHIF_Keyspecs[1] = {
-{NULL,CMD_KEY_RW|CMD_KEY_INSERT,KSPEC_BS_INDEX,.bs.index={1},KSPEC_FK_RANGE,.fk.range={0,1,0}}
+{NULL,CMD_KEY_RW|CMD_KEY_ACCESS|CMD_KEY_INSERT,KSPEC_BS_INDEX,.bs.index={1},KSPEC_FK_RANGE,.fk.range={0,1,0}}
 };
 #endif
 

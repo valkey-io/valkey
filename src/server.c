@@ -6476,7 +6476,6 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "current_cow_size:%zu\r\n", server.stat_current_cow_bytes,
                 "current_cow_size_age:%lu\r\n", (server.stat_current_cow_updated ? (unsigned long)elapsedMs(server.stat_current_cow_updated) / 1000 : 0),
                 "current_fork_perc:%.2f\r\n", save_perc,
-                "current_save_perc:%.2f\r\n", save_perc,
                 "current_save_keys_processed:%zu\r\n", server.stat_current_save_keys_processed,
                 "current_save_keys_total:%zu\r\n", server.stat_current_save_keys_total,
                 "rdb_changes_since_last_save:%lld\r\n", server.dirty,

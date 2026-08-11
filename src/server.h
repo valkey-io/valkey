@@ -2403,14 +2403,12 @@ struct valkeyServer {
     /* Local environment */
     char *locale_collate;
     char *debug_context; /* A free-form string that has no impact on server except being included in a crash report. */
-
+    int debug_force_tls_write_error;
     /* Hotkey parameters */
     int hotkey_sampling_percentage; /* Percentage (0-100) of key accesses sampled for hot-key detection; 0 disables it. */
     int hotkey_top_k;               /* Number of top keys to track per type (Space-Saving K). */
     int hotkey_window_seconds;      /* Length of the QPS accounting window in seconds. */
     struct spaceSavingManager *hotkey_manager;
-    
-    int debug_force_tls_write_error;
 };
 
 #define MAX_KEYS_BUFFER 256

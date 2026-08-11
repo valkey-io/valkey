@@ -1816,7 +1816,7 @@ static int clusterRaftProcessAppendEntriesResponse(clusterLink *link, int argc, 
             if (idx <= rs->commit_index) break;
             if (rs->log[i - 1]->term != rs->current_term) continue;
 
-            int matches = nodeIsVoter(myself) ? 1 : 0; /* Self, if voting. */
+            int matches = 1; /* Myself, the leader, always a voter */
             dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
             dictEntry *de;
             while ((de = dictNext(di)) != NULL) {

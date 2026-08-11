@@ -66,6 +66,15 @@ unsigned char *lpPrependInteger(unsigned char *lp, long long lval);
 unsigned char *lpAppend(unsigned char *lp, unsigned char *s, uint32_t slen);
 unsigned char *lpAppendInteger(unsigned char *lp, long long lval);
 unsigned char *lpReplace(unsigned char *lp, unsigned char **p, unsigned char *s, uint32_t slen);
+/* Return the exact listpack byte count after replacing the valid entry at 'p'
+ * with the 'slen' bytes at 's'. This query does not mutate 'lp' or 'p', and it
+ * does not retain either pointer. The caller-owned entry pointer remains valid
+ * only until 'lp' is next mutated or reallocated.
+ *
+ * The input length is uint32_t. Callers with a wider length must not narrow it.
+ * The uint64_t result can exceed UINT32_MAX; such a result means the replacement
+ * cannot be represented by a listpack and is not an error sentinel. */
+uint64_t lpEstimateReplacementBytes(unsigned char *lp, unsigned char *p, unsigned char *s, uint32_t slen);
 unsigned char *lpReplaceInteger(unsigned char *lp, unsigned char **p, long long lval);
 unsigned char *lpDelete(unsigned char *lp, unsigned char *p, unsigned char **newp);
 unsigned char *lpDeleteRangeWithEntry(unsigned char *lp, unsigned char **p, unsigned long num);

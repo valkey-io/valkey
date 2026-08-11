@@ -8,7 +8,9 @@
 
 #include <cassert>
 #include <cstdint>
+#include <string>
 #include <sys/time.h>
+#include <vector>
 
 extern "C" {
 #include "adlist.h"
@@ -543,6 +545,58 @@ TEST_F(ListpackTest, listpackReplaceWithDifferentSize) {
                       27),
               0);
     lpFree(lp);
+}
+
+static void verifyReplacementEstimate(const std::string &replacement) {
+    unsigned char *lp = createList();
+    unsigned char *duplicate = lpDup(lp);
+    unsigned char *p = lpSeek(lp, 1);
+    unsigned char *duplicate_p = lpSeek(duplicate, 1);
+    unsigned char *original_p = p;
+    size_t original_bytes = lpBytes(lp);
+    std::vector<unsigned char> original(lp, lp + original_bytes);
+    auto *replacement_bytes = (unsigned char *)replacement.data();
+    uint32_t replacement_len = static_cast<uint32_t>(replacement.size());
+
+    uint64_t estimated = lpEstimateReplacementBytes(lp, p, replacement_bytes, replacement_len);
+
+    EXPECT_EQ(p, original_p);
+    EXPECT_EQ(lpBytes(lp), original_bytes);
+    EXPECT_EQ(memcmp(lp, original.data(), original_bytes), 0);
+
+    duplicate = lpReplace(duplicate, &duplicate_p, replacement_bytes, replacement_len);
+    ASSERT_NE(duplicate, nullptr);
+    EXPECT_EQ(estimated, lpBytes(duplicate));
+
+    lpFree(duplicate);
+    lpFree(lp);
+}
+
+TEST_F(ListpackTest, listpackEstimateReplacementStringsAndIntegers) {
+    verifyReplacementEstimate("replacement");
+    verifyReplacementEstimate("65536");
+}
+
+TEST_F(ListpackTest, listpackEstimateReplacementStringHeaderBoundaries) {
+    for (size_t len : {63, 64, 4095, 4096}) {
+        verifyReplacementEstimate(std::string(len, 'x'));
+    }
+}
+
+TEST_F(ListpackTest, listpackEstimateReplacementBacklenBoundaries) {
+    /* The payload lengths account for the string header, placing the encoded
+     * entry immediately before and after the 127 and 16383 backlen limits. */
+    for (size_t len : {125, 126, 16378, 16379}) {
+        verifyReplacementEstimate(std::string(len, 'x'));
+    }
+}
+
+TEST_F(ListpackTest, listpackEstimateReplacementPracticalLargeBoundary) {
+    /* Exercise the 2097151-byte backlen boundary without a multi-gigabyte
+     * allocation. Five bytes are used by the 32-bit string header. */
+    for (size_t len : {2097146, 2097147}) {
+        verifyReplacementEstimate(std::string(len, 'x'));
+    }
 }
 
 TEST_F(ListpackTest, listpackRegressionGt255Bytes) {

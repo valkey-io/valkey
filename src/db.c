@@ -2706,7 +2706,12 @@ int migrateGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResu
  *                             [COUNT count] [STORE key|STOREDIST key]
  * GEORADIUSBYMEMBER key member radius unit ... options ...
  *
- * This command has a fully defined keyspec, so returning flags isn't needed. */
+ * Because repeated STORE/STOREDIST options are accepted and the last one wins,
+ * the static keyword key-specs (which match the first STORE) cannot identify
+ * the effective destination. The key-specs are therefore marked VARIABLE_FLAGS
+ * so this helper is used by both cluster routing and ACL key extraction. As a
+ * result it must report accurate per-key flags matching the key-specs:
+ * the source key is read-only access, the (last) store key is overwrite/update. */
 int georadiusGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result) {
     int i, num;
     keyReference *keys;
@@ -2735,10 +2740,10 @@ int georadiusGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysRe
 
     /* Add all key positions to keys[] */
     keys[0].pos = 1;
-    keys[0].flags = 0;
+    keys[0].flags = CMD_KEY_RO | CMD_KEY_ACCESS;
     if (num > 1) {
         keys[1].pos = stored_key;
-        keys[1].flags = 0;
+        keys[1].flags = CMD_KEY_OW | CMD_KEY_UPDATE;
     }
     result->numkeys = num;
     return num;

@@ -53,3 +53,18 @@ proc raft_add_voter {leader node_id} {
         fail "Could not promote $node_id to voter: $err"
     }
 }
+
+# TEST HARNESS ONLY — not production behavior.
+#
+# On the wire, CLUSTER MEET still proposes NODE_JOIN ... learner.
+# start_cluster historically assumed every joined node could vote
+# (pre-learner). Generic cluster tests still rely on that topology,
+# so after MEET we explicitly ADDVOTER each peer.
+#
+# Do NOT copy this into product code. Tests that need learners must
+# use start_multiple_servers (or equivalent) and promote themselves.
+proc raft_promote_start_cluster_voters {node_count} {
+    for {set i 1} {$i < $node_count} {incr i} {
+        raft_add_voter [srv 0 client] [R $i CLUSTER MYID]
+    }
+}

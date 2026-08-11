@@ -289,7 +289,26 @@ static int shouldDeferPushMessage(client *c) {
  * Maybe called with NULL obj for evaluation with no regard to object size
  * Copy avoidance can be allowed only for regular Valkey clients
  * that use _writeToClient handler to write replies to client connection */
+
+/* True if the I/O thread count alone enables copy avoidance, regardless of the
+ * size of the object being replied. Depends only on server config. */
+static inline int copyAvoidEnabledByIOThreads(void) {
+    return server.min_io_threads_copy_avoid && server.io_threads_num >= server.min_io_threads_copy_avoid;
+}
+
 static int isCopyAvoidPreferred(client *c, robj *obj) {
+    /* Cheap config-only early-out before any per-client or per-object work.
+     * With no object to size-check, the I/O thread gate is the only thing that
+     * can enable copy avoidance; with an object, the applicable size limit must
+     * at least be configured. Callers on the hot reply path additionally test
+     * copyAvoidEnabledByIOThreads() inline so they can skip this call. */
+    if (!copyAvoidEnabledByIOThreads()) {
+        if (!obj) return 0;
+        size_t size_limit = (server.io_threads_num == 1) ? (size_t)server.min_string_size_copy_avoid
+                                                         : (size_t)server.min_string_size_copy_avoid_threaded;
+        if (!size_limit) return 0;
+    }
+
     if (c->flag.fake || isDeferredReplyEnabled(c)) return 0;
     /* Skip copy avoidance when push bytes would be deferred into pending_push_messages. */
     if (shouldDeferPushMessage(c)) return 0;
@@ -303,7 +322,7 @@ static int isCopyAvoidPreferred(client *c, robj *obj) {
     }
 
     /* Copy avoidance is preferred for any string size starting certain number of I/O threads  */
-    if (server.min_io_threads_copy_avoid && server.io_threads_num >= server.min_io_threads_copy_avoid) return 1;
+    if (copyAvoidEnabledByIOThreads()) return 1;
 
     if (!obj) return 0;
 
@@ -653,7 +672,7 @@ static size_t _addReplyPayloadToBuffer(client *c, const void *payload, size_t le
 static size_t _addReplyToBuffer(client *c, const char *s, size_t len) {
     if (!len) return 0;
     if (!c->bufpos) {
-        c->flag.buf_encoded = isCopyAvoidPreferred(c, NULL);
+        c->flag.buf_encoded = copyAvoidEnabledByIOThreads() && isCopyAvoidPreferred(c, NULL);
     }
     return _addReplyPayloadToBuffer(c, s, len, PLAIN_REPLY);
 }
@@ -675,7 +694,8 @@ static void _addReplyPayloadToList(client *c, list *reply_list, const char *payl
     listNode *ln = listLast(reply_list);
     clientReplyBlock *tail = ln ? listNodeValue(ln) : NULL;
     /* Determine if encoded buffer is required */
-    int encoded = payload_type == BULK_STR_REF || isCopyAvoidPreferred(c, NULL);
+    int encoded =
+        payload_type == BULK_STR_REF || (copyAvoidEnabledByIOThreads() && isCopyAvoidPreferred(c, NULL));
 
     /* Note that 'tail' may be NULL even if we have a tail node, because when
      * addReplyDeferredLen() is used, it sets a dummy node to NULL just
@@ -748,7 +768,9 @@ void _addReplyToBufferOrList(client *c, const char *s, size_t len) {
      * replication link that caused a reply to be generated we'll simply disconnect it.
      * Note this is the simplest way to check a command added a response. Replication links are used to write data but
      * not for responses, so we should normally never get here on a replica client. */
-    if (getClientType(c) == CLIENT_TYPE_REPLICA) {
+    /* Equivalent to getClientType(c) == CLIENT_TYPE_REPLICA, but kept inline: this
+     * runs on every reply append, and getClientType() does not get inlined here. */
+    if (unlikely(!c->flag.primary && c->flag.replica && !c->flag.monitor)) {
         sds cmdname = c->lastcmd ? c->lastcmd->fullname : NULL;
         logInvalidUseAndFreeClientAsync(c, "Replica generated a reply to command '%s'",
                                         cmdname ? cmdname : "<unknown>");
@@ -1543,8 +1565,66 @@ void addReplyBulkCBuffer(client *c, const void *p, size_t len) {
     _addReplyToBufferOrList(c, "\r\n", 2);
 }
 
+/* Emit a complete bulk string ($<len>\r\n<data>\r\n) into the client's static
+ * reply buffer with a single append, or return 0 if it does not fit.
+ *
+ * The generic path splits every bulk string into three appends (header, data,
+ * trailing CRLF), and each one re-walks the buffer-or-list logic. For commands
+ * that emit many small bulk strings back to back - HGETALL over a hashtable
+ * encoded hash being the motivating case - that dominates the command cost.
+ * Doing the whole thing in one memcpy-style append keeps the common case to a
+ * single bounds check.
+ *
+ * Only handles the plain (non copy-avoiding) static buffer; callers fall back
+ * to the generic path for everything else. */
+static inline int tryAddBulkCBufferFast(client *c, const void *p, size_t len) {
+    /* The generic path drops replies for such clients; don't bypass that. */
+    if (unlikely(c->flag.close_after_reply)) return 0;
+    /* Deferred and push-message routing send the reply somewhere other than
+     * c->buf; leave those to the generic path. */
+    if (unlikely(isDeferredReplyEnabled(c) || c->flag.pushing)) return 0;
+    /* Encoded buffers carry per-chunk payload headers, so the fused write
+     * below (which assumes a flat buffer) does not apply. Note c->bufpos == 0
+     * means the encoding for this buffer has not been decided yet. */
+    if (c->flag.buf_encoded || c->bufpos == 0) return 0;
+    /* Once the reply list is in use the static buffer is closed for writes. */
+    if (listLength(c->reply) > 0) return 0;
+    if (unlikely(server.debug_client_enforce_reply_list)) return 0;
+
+    /* $ + up to 20 digits + \r\n + data + \r\n */
+    char hdr[LONG_STR_SIZE + 3];
+    size_t hdr_len;
+    if (len < OBJ_SHARED_BULKHDR_LEN) {
+        /* Reuse the shared "$<len>\r\n" strings for small lengths. */
+        hdr_len = OBJ_SHARED_HDR_STRLEN(len);
+        memcpy(hdr, objectGetVal(shared.bulkhdr[len]), hdr_len);
+    } else {
+        hdr[0] = '$';
+        int n = ll2string(hdr + 1, sizeof(hdr) - 1, (long long)len);
+        hdr[n + 1] = '\r';
+        hdr[n + 2] = '\n';
+        hdr_len = n + 3;
+    }
+
+    size_t total = hdr_len + len + 2;
+    if (total > c->buf_usable_size - c->bufpos) return 0;
+
+    char *dst = c->buf + c->bufpos;
+    memcpy(dst, hdr, hdr_len);
+    memcpy(dst + hdr_len, p, len);
+    dst[hdr_len + len] = '\r';
+    dst[hdr_len + len + 1] = '\n';
+    c->bufpos += total;
+    if (c->buf_peak < (size_t)c->bufpos) c->buf_peak = (size_t)c->bufpos;
+
+    c->net_output_bytes_curr_cmd += total;
+    reqresSaveClientReplyOffset(c);
+    return 1;
+}
+
 void addWritePreparedReplyBulkCBuffer(writePreparedClient *wpc, const void *p, size_t len) {
     client *c = (client *)wpc;
+    if (tryAddBulkCBufferFast(c, p, len)) return;
     _addReplyLongLongWithPrefix(c, len, '$');
     _addReplyToBufferOrList(c, p, len);
     _addReplyToBufferOrList(c, "\r\n", 2);

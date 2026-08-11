@@ -39,6 +39,19 @@ start_cluster 1 1 {tags {external:skip cluster}} {
         assert_equal QUEUED [r get bar]
         assert_error {CROSSSLOT *} {r exec}
     }
+
+    test {HMOVE/HMOVENX same slot and cross slot handling} {
+        R 0 flushall
+        R 0 hset "{hmove}src" a 1 c 3
+        assert_equal {1} [R 0 hmove "{hmove}src" "{hmove}dst" a b]
+        assert_equal 1 [R 0 hget "{hmove}dst" b]
+        assert_equal {1} [R 0 hmovenx "{hmove}src" "{hmove}dst" c d]
+        assert_equal 3 [R 0 hget "{hmove}dst" d]
+
+        R 0 hset "{hmove-src}src" a 1
+        assert_error {CROSSSLOT *} {R 0 hmove "{hmove-src}src" "{hmove-dst}dst" a b}
+        assert_equal 1 [R 0 hget "{hmove-src}src" a]
+    }
 }
 
 # Create a folder called "nodes.conf" to trigger temp nodes.conf rename

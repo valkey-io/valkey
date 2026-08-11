@@ -4130,6 +4130,8 @@ void hgetCommand(client *c);
 void hgetdelCommand(client *c);
 void hmgetCommand(client *c);
 void hdelCommand(client *c);
+void hmoveCommand(client *c);
+void hmovenxCommand(client *c);
 void hlenCommand(client *c);
 void hstrlenCommand(client *c);
 void zremrangebyrankCommand(client *c);

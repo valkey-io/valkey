@@ -4058,6 +4058,70 @@ struct COMMAND_ARG HMGET_Args[] = {
 {MAKE_ARG("field",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_MULTIPLE,0,NULL)},
 };
 
+/********** HMOVE ********************/
+
+#ifndef SKIP_CMD_HISTORY_TABLE
+/* HMOVE history */
+#define HMOVE_History NULL
+#endif
+
+#ifndef SKIP_CMD_TIPS_TABLE
+/* HMOVE tips */
+#define HMOVE_Tips NULL
+#endif
+
+#ifndef SKIP_CMD_KEY_SPECS_TABLE
+/* HMOVE key specs */
+keySpec HMOVE_Keyspecs[2] = {
+{NULL,CMD_KEY_RW|CMD_KEY_ACCESS|CMD_KEY_DELETE,KSPEC_BS_INDEX,.bs.index={1},KSPEC_FK_RANGE,.fk.range={0,1,0}},{NULL,CMD_KEY_RW|CMD_KEY_UPDATE,KSPEC_BS_INDEX,.bs.index={2},KSPEC_FK_RANGE,.fk.range={0,1,0}}
+};
+#endif
+
+/* HMOVE data argument table */
+struct COMMAND_ARG HMOVE_data_Subargs[] = {
+{MAKE_ARG("old-field",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("new-field",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+};
+
+/* HMOVE argument table */
+struct COMMAND_ARG HMOVE_Args[] = {
+{MAKE_ARG("source",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("destination",ARG_TYPE_KEY,1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("data",ARG_TYPE_BLOCK,-1,NULL,NULL,NULL,CMD_ARG_MULTIPLE,2,NULL),.subargs=HMOVE_data_Subargs},
+};
+
+/********** HMOVENX ********************/
+
+#ifndef SKIP_CMD_HISTORY_TABLE
+/* HMOVENX history */
+#define HMOVENX_History NULL
+#endif
+
+#ifndef SKIP_CMD_TIPS_TABLE
+/* HMOVENX tips */
+#define HMOVENX_Tips NULL
+#endif
+
+#ifndef SKIP_CMD_KEY_SPECS_TABLE
+/* HMOVENX key specs */
+keySpec HMOVENX_Keyspecs[2] = {
+{NULL,CMD_KEY_RW|CMD_KEY_ACCESS|CMD_KEY_DELETE,KSPEC_BS_INDEX,.bs.index={1},KSPEC_FK_RANGE,.fk.range={0,1,0}},{NULL,CMD_KEY_RW|CMD_KEY_INSERT,KSPEC_BS_INDEX,.bs.index={2},KSPEC_FK_RANGE,.fk.range={0,1,0}}
+};
+#endif
+
+/* HMOVENX data argument table */
+struct COMMAND_ARG HMOVENX_data_Subargs[] = {
+{MAKE_ARG("old-field",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("new-field",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+};
+
+/* HMOVENX argument table */
+struct COMMAND_ARG HMOVENX_Args[] = {
+{MAKE_ARG("source",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("destination",ARG_TYPE_KEY,1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("data",ARG_TYPE_BLOCK,-1,NULL,NULL,NULL,CMD_ARG_MULTIPLE,2,NULL),.subargs=HMOVENX_data_Subargs},
+};
+
 /********** HMSET ********************/
 
 #ifndef SKIP_CMD_HISTORY_TABLE
@@ -11966,6 +12030,8 @@ struct COMMAND_STRUCT serverCommandTable[] = {
 {MAKE_CMD("hkeys","Returns all fields in a hash.","O(N) where N is the size of the hash.","2.0.0",CMD_DOC_NONE,NULL,NULL,"hash",COMMAND_GROUP_HASH,HKEYS_History,0,HKEYS_Tips,1,hkeysCommand,2,CMD_READONLY,ACL_CATEGORY_HASH|ACL_CATEGORY_READ|ACL_CATEGORY_SLOW,NULL,HKEYS_Keyspecs,1,NULL,1),.args=HKEYS_Args},
 {MAKE_CMD("hlen","Returns the number of fields in a hash.","O(1)","2.0.0",CMD_DOC_NONE,NULL,NULL,"hash",COMMAND_GROUP_HASH,HLEN_History,0,HLEN_Tips,0,hlenCommand,2,CMD_READONLY|CMD_FAST,ACL_CATEGORY_FAST|ACL_CATEGORY_HASH|ACL_CATEGORY_READ,NULL,HLEN_Keyspecs,1,NULL,1),.args=HLEN_Args},
 {MAKE_CMD("hmget","Returns the values of all fields in a hash.","O(N) where N is the number of fields being requested.","2.0.0",CMD_DOC_NONE,NULL,NULL,"hash",COMMAND_GROUP_HASH,HMGET_History,0,HMGET_Tips,0,hmgetCommand,-3,CMD_READONLY|CMD_FAST,ACL_CATEGORY_FAST|ACL_CATEGORY_HASH|ACL_CATEGORY_READ,NULL,HMGET_Keyspecs,1,NULL,2),.args=HMGET_Args},
+{MAKE_CMD("hmove","Moves one or more fields from one hash to another and overwrites existing destination fields.","O(N) where N is the number of field move pairs.","9.2.0",CMD_DOC_NONE,NULL,NULL,"hash",COMMAND_GROUP_HASH,HMOVE_History,0,HMOVE_Tips,0,hmoveCommand,-5,CMD_WRITE|CMD_FAST,ACL_CATEGORY_FAST|ACL_CATEGORY_HASH|ACL_CATEGORY_WRITE,NULL,HMOVE_Keyspecs,2,NULL,3),.args=HMOVE_Args},
+{MAKE_CMD("hmovenx","Moves one or more fields from one hash to another only when the destination field does not exist.","O(N) where N is the number of field move pairs.","9.2.0",CMD_DOC_NONE,NULL,NULL,"hash",COMMAND_GROUP_HASH,HMOVENX_History,0,HMOVENX_Tips,0,hmovenxCommand,-5,CMD_WRITE|CMD_FAST,ACL_CATEGORY_FAST|ACL_CATEGORY_HASH|ACL_CATEGORY_WRITE,NULL,HMOVENX_Keyspecs,2,NULL,3),.args=HMOVENX_Args},
 {MAKE_CMD("hmset","Sets the values of multiple fields.","O(N) where N is the number of fields being set.","2.0.0",CMD_DOC_NONE,NULL,NULL,"hash",COMMAND_GROUP_HASH,HMSET_History,0,HMSET_Tips,0,hsetCommand,-4,CMD_WRITE|CMD_DENYOOM|CMD_FAST,ACL_CATEGORY_FAST|ACL_CATEGORY_HASH|ACL_CATEGORY_WRITE,NULL,HMSET_Keyspecs,1,NULL,2),.args=HMSET_Args},
 {MAKE_CMD("hpersist","Remove the existing expiration on a hash key's field(s).","O(N) where N is the number of specified fields.","9.0.0",CMD_DOC_NONE,NULL,NULL,"hash",COMMAND_GROUP_HASH,HPERSIST_History,0,HPERSIST_Tips,0,hpersistCommand,-5,CMD_WRITE|CMD_FAST,ACL_CATEGORY_FAST|ACL_CATEGORY_HASH|ACL_CATEGORY_WRITE,NULL,HPERSIST_Keyspecs,1,NULL,2),.args=HPERSIST_Args},
 {MAKE_CMD("hpexpire","Sets expiry time on hash object.","O(N) where N is the number of specified fields.","9.0.0",CMD_DOC_NONE,NULL,NULL,"hash",COMMAND_GROUP_HASH,HPEXPIRE_History,0,HPEXPIRE_Tips,0,hpexpireCommand,-6,CMD_WRITE|CMD_FAST,ACL_CATEGORY_FAST|ACL_CATEGORY_HASH|ACL_CATEGORY_WRITE,NULL,HPEXPIRE_Keyspecs,1,NULL,4),.args=HPEXPIRE_Args},

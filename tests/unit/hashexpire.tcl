@@ -380,6 +380,16 @@ start_server {tags {"hashexpire"}} {
             set e
         } {ERR *}
     }
+
+    test "HMOVE preserves hash field TTL" {
+        r FLUSHALL
+        r HSET srchash{t} f1 v1
+        assert_equal {1} [r HEXPIRE srchash{t} 600 FIELDS 1 f1]
+        assert_equal {1} [r HMOVE srchash{t} dsthash{t} f1 f2]
+        assert_equal v1 [r HGET dsthash{t} f2]
+        assert_equal -2 [r HTTL srchash{t} FIELDS 1 f1]
+        assert_morethan [r HTTL dsthash{t} FIELDS 1 f2] 0
+    }
 }
 
 start_server {tags {"hashexpire"}} {

@@ -518,6 +518,143 @@ start_server {tags {"hash"}} {
         assert_error "*numfields should be greater than 0 and match the provided number of fields" {r hgetdel myhash FIELDS 4 a b c}
     }
 
+    test {HMOVE - single field from listpack encoded hash} {
+        r del srchash dsthash
+        r hset srchash a 1
+        assert_encoding listpack srchash
+        set rv {}
+        lappend rv [r hmove srchash dsthash a b]
+        lappend rv [r hget dsthash b]
+        lappend rv [r hexists srchash a]
+        lappend rv [r exists srchash]
+        set _ $rv
+    } {1 1 0 0}
+
+    test {HMOVE - single field from hashtable encoded hash} {
+        r del srchash dsthash
+        set oldfield [string repeat o 80]
+        set newfield [string repeat n 80]
+        r hset srchash $oldfield 1
+        assert_encoding hashtable srchash
+        set rv {}
+        lappend rv [r hmove srchash dsthash $oldfield $newfield]
+        lappend rv [r hget dsthash $newfield]
+        lappend rv [r hexists srchash $oldfield]
+        lappend rv [r exists srchash]
+        set _ $rv
+    } {1 1 0 0}
+
+    test {HMOVE - source field missing and source key missing} {
+        r del srchash dsthash
+        r hset srchash a 1
+        set rv {}
+        lappend rv [r hmove srchash dsthash missing b]
+        lappend rv [r hget srchash a]
+        lappend rv [r exists dsthash]
+        r del srchash
+        lappend rv [r hmove srchash dsthash a b c d]
+        lappend rv [r exists dsthash]
+        set _ $rv
+    } {0 1 0 {0 0} 0}
+
+    test {HMOVE - overwrite existing destination field} {
+        r del srchash dsthash
+        r hset srchash a 1
+        r hset dsthash b 2
+        set rv {}
+        lappend rv [r hmove srchash dsthash a b]
+        lappend rv [r hget dsthash b]
+        lappend rv [r hexists srchash a]
+        lappend rv [r exists srchash]
+        lappend rv [r hlen dsthash]
+        set _ $rv
+    } {1 1 0 0 1}
+
+    test {HMOVE - multiple field pairs are processed left-to-right} {
+        r del srchash dsthash
+        r hmset srchash a 1 b 2
+        set rv {}
+        lappend rv [r hmove srchash dsthash a x a y b x]
+        lappend rv [r hget dsthash x]
+        lappend rv [r hget dsthash y]
+        lappend rv [r exists srchash]
+        set _ $rv
+    } {{1 0 1} 2 {} 0}
+
+    test {HMOVE - same source and destination key behaves like rename} {
+        r del myhash
+        r hmset myhash a 1 b 2
+        set rv {}
+        lappend rv [r hmove myhash myhash b temp a b temp a]
+        lappend rv [r hget myhash a]
+        lappend rv [r hget myhash b]
+        lappend rv [r hexists myhash temp]
+        set _ $rv
+    } {{1 1 1} 2 1 0}
+
+    test {HMOVE - same source and destination field} {
+        r del myhash
+        r hset myhash a 1
+        set rv {}
+        lappend rv [r hmove myhash myhash a a]
+        lappend rv [r hmove myhash myhash missing missing]
+        lappend rv [r hget myhash a]
+        set _ $rv
+    } {1 0 1}
+
+    test {HMOVENX - destination field exists} {
+        r del srchash dsthash
+        r hset srchash a 1
+        r hset dsthash b 2
+        set rv {}
+        lappend rv [r hmovenx srchash dsthash a b]
+        lappend rv [r hget srchash a]
+        lappend rv [r hget dsthash b]
+        set _ $rv
+    } {0 1 2}
+
+    test {HMOVENX - destination field missing} {
+        r del srchash dsthash
+        r hset srchash a 1
+        set rv {}
+        lappend rv [r hmovenx srchash dsthash a b]
+        lappend rv [r hget dsthash b]
+        lappend rv [r hexists srchash a]
+        lappend rv [r exists srchash]
+        set _ $rv
+    } {1 1 0 0}
+
+    test {HMOVENX - same source and destination field} {
+        r del myhash
+        r hset myhash a 1
+        set rv {}
+        lappend rv [r hmovenx myhash myhash a a]
+        lappend rv [r hmovenx myhash myhash missing missing]
+        lappend rv [r hget myhash a]
+        set _ $rv
+    } {0 0 1}
+
+    test {HMOVE/HMOVENX - wrong type} {
+        r del wrongtype srchash dsthash
+        r set wrongtype somevalue
+        r hset srchash a 1
+        assert_error "*WRONGTYPE*" {r hmove wrongtype dsthash a b}
+        assert_error "*WRONGTYPE*" {r hmovenx wrongtype dsthash a b}
+        assert_error "*WRONGTYPE*" {r hmove srchash wrongtype a b}
+        assert_equal 1 [r hget srchash a]
+    }
+
+    test {HMOVE/HMOVENX - wrong number of arguments} {
+        assert_error "*wrong number of arguments*" {r hmove srchash}
+        assert_error "*wrong number of arguments*" {r hmove srchash dsthash}
+        assert_error "*wrong number of arguments*" {r hmove srchash dsthash a}
+        assert_error "*wrong number of arguments*" {r hmove srchash dsthash a b c}
+        assert_error "*wrong number of arguments*" {r hmovenx srchash}
+        assert_error "*wrong number of arguments*" {r hmovenx srchash dsthash}
+        assert_error "*wrong number of arguments*" {r hmovenx srchash dsthash a}
+        assert_error "*wrong number of arguments*" {r hmovenx srchash dsthash a b c}
+    }
+
     test {HDEL and return value} {
         set rv {}
         lappend rv [r hdel smallhash nokey]

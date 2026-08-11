@@ -3705,7 +3705,12 @@ int replicaProcessPsyncReply(connection *conn) {
      * Return PSYNC_NOT_SUPPORTED on errors we don't understand, otherwise
      * return PSYNC_TRY_LATER if we believe this is a transient error. */
 
-    if (!strncmp(reply, "-NOMASTERLINK", 13) || !strncmp(reply, "-LOADING", 8)) {
+    /* The primary replied with a transient error: it cannot serve a PSYNC
+     * right now, but will be able to in the future. Retry PSYNC later instead
+     * of falling back to the legacy SYNC command, because a SYNC full resync
+     * does not carry the +FULLRESYNC offset baseline, which would leave the
+     * replica in pre_psync mode (no ACKs, breaking WAIT / psync / failover). */
+    if (!strncmp(reply, "-NOMASTERLINK", 13) || !strncmp(reply, "-LOADING", 8) || !strncmp(reply, "-BUSY", 5)) {
         serverLog(LL_NOTICE,
                   "Primary is currently unable to PSYNC "
                   "but should be in the future: %s",
@@ -4050,6 +4055,14 @@ int syncWithPrimaryHandleReceiveNodeIDReplyState(connection *conn) {
 }
 
 int syncWithPrimaryHandleSendPsyncState(connection *conn) {
+    /* Debug hook: pause the replica right before it sends PSYNC to its
+     * primary, so a test can put the primary into a transient (e.g. BUSY)
+     * state and deterministically reproduce the PSYNC -> SYNC downgrade race. */
+    if (server.debug_pause_before_psync) {
+        server.debug_pause_before_psync = 0;
+        debugPauseProcess();
+    }
+
     if (replicaSendPsyncCommand(conn) == PSYNC_WRITE_ERROR) {
         sds err = sdsnew("Write error sending the PSYNC command.");
         abortFailover(err);

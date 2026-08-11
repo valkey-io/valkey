@@ -87,8 +87,8 @@ target_compile_options(valkey-unit-gtests PRIVATE
     -Wno-deprecated-declarations
     -Wno-write-strings
 )
-# -fno-var-tracking-assignments is GCC-only, skip on clang
-if (NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+# -fno-var-tracking-assignments is only supported by GCC
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     target_compile_options(valkey-unit-gtests PRIVATE -fno-var-tracking-assignments)
 endif()
 

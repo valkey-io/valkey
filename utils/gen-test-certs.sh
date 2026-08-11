@@ -45,14 +45,18 @@ cat > tests/tls/openssl.cnf <<_END_
 [ server_cert ]
 keyUsage = digitalSignature, keyEncipherment
 nsCertType = server
+subjectAltName = IP:127.0.0.1, IP:::1, DNS:localhost
 
 [ client_cert ]
 keyUsage = digitalSignature, keyEncipherment
 nsCertType = client
+
+[ generic_cert ]
+subjectAltName = IP:127.0.0.1, IP:::1, DNS:localhost
 _END_
 
 generate_cert server "Server-only" "-extfile tests/tls/openssl.cnf -extensions server_cert"
 generate_cert client "Client-only" "-extfile tests/tls/openssl.cnf -extensions client_cert"
-generate_cert valkey "Generic-cert"
+generate_cert valkey "Generic-cert" "-extfile tests/tls/openssl.cnf -extensions generic_cert"
 
 [ -f tests/tls/valkey.dh ] || openssl dhparam -out tests/tls/valkey.dh 2048

@@ -3206,8 +3206,23 @@ int clusterIsValidPacket(clusterLink *link) {
             explen = sizeof(clusterMsg);
         }
         explen -= sizeof(union clusterMsgData);
-        explen +=
-            sizeof(clusterMsgDataPublish) - 8 + ntohl(publish_data->channel_len) + ntohl(publish_data->message_len);
+        explen += sizeof(clusterMsgDataPublish) - 8;
+        /* The channel and message lengths come from the packet. Make sure each fits
+         * in the remaining space before adding it, so explen can't overflow. */
+        if (totlen < explen || (totlen - explen) < ntohl(publish_data->channel_len)) {
+            serverLog(LL_WARNING,
+                      "Received invalid %s packet with channel length that exceeds total packet length (%lld)",
+                      clusterGetMessageTypeString(type), (unsigned long long)totlen);
+            return 0;
+        }
+        explen += ntohl(publish_data->channel_len);
+        if ((totlen - explen) < ntohl(publish_data->message_len)) {
+            serverLog(LL_WARNING,
+                      "Received invalid %s packet with message length that exceeds total packet length (%lld)",
+                      clusterGetMessageTypeString(type), (unsigned long long)totlen);
+            return 0;
+        }
+        explen += ntohl(publish_data->message_len);
     } else if (type == CLUSTERMSG_TYPE_FAILOVER_AUTH_REQUEST || type == CLUSTERMSG_TYPE_FAILOVER_AUTH_ACK ||
                type == CLUSTERMSG_TYPE_MFSTART) {
         explen = sizeof(clusterMsg) - sizeof(union clusterMsgData);
@@ -3215,14 +3230,25 @@ int clusterIsValidPacket(clusterLink *link) {
         explen = sizeof(clusterMsg) - sizeof(union clusterMsgData);
         explen += sizeof(clusterMsgDataUpdate);
     } else if (type == CLUSTERMSG_TYPE_MODULE) {
+        uint32_t module_len;
         if (is_light) {
             clusterMsgLight *hdr_light = (clusterMsgLight *)link->rcvbuf;
             explen = sizeof(clusterMsgLight) - sizeof(union clusterMsgData);
-            explen += sizeof(clusterMsgModule) - 3 + ntohl(hdr_light->data.module.msg.len);
+            module_len = ntohl(hdr_light->data.module.msg.len);
         } else {
             explen = sizeof(clusterMsg) - sizeof(union clusterMsgData);
-            explen += sizeof(clusterMsgModule) - 3 + ntohl(hdr->data.module.msg.len);
+            module_len = ntohl(hdr->data.module.msg.len);
         }
+        explen += sizeof(clusterMsgModule) - 3;
+        /* The module payload length comes from the packet. Make sure it fits in
+         * the remaining space before adding it, so explen can't overflow. */
+        if (totlen < explen || (totlen - explen) < module_len) {
+            serverLog(LL_WARNING,
+                      "Received invalid %s packet with module payload length that exceeds total packet length (%lld)",
+                      clusterGetMessageTypeString(type), (unsigned long long)totlen);
+            return 0;
+        }
+        explen += module_len;
     } else {
         /* We don't know this type of packet, so we assume it's well formed. */
         explen = totlen;

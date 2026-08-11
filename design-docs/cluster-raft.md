@@ -878,7 +878,12 @@ targets.
   entries, especially don't trigger primary/replica failovers in a
   minority partition).
 - Log compaction / snapshotting for lagging followers.
-- Automatic learner promotion and chained learner replication.
+- Automatic learner promotion (promote the first 5 or 7 nodes to voters).
+- Chained learner replication.
+- Balancing voters over availability zones: the leader can use the
+  per-node availability-zone info to add/remove voters so that voters
+  are spread across at least 3 zones, letting the cluster survive a
+  single zone outage.
 - Leader transfer on CLUSTER FORGET where the target is the leader.
 - Safety regarding membership changes (use new quorum).
 - Cluster merging via MEET: when two independently configured clusters

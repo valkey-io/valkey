@@ -426,8 +426,8 @@ static bool clusterRaftHasPeerMembers(void) {
     return false;
 }
 
-static int clusterRaftIsNonSingleton(void) {
-    return server.cluster->size > 1 || clusterRaftHasPeerMembers();
+static bool clusterRaftIsSingleton(void) {
+    return server.cluster->size <= 1 && !clusterRaftHasPeerMembers();
 }
 
 /* Leader step-down to follower. */
@@ -589,7 +589,7 @@ static void clusterRaftSendGreeting(clusterLink *link, const char *verb) {
 
 /* Send MEET with singleton|cluster flag. */
 static void clusterRaftSendMeet(clusterLink *link) {
-    const char *flag = clusterRaftIsNonSingleton() ? "cluster" : "singleton";
+    const char *flag = clusterRaftIsSingleton() ? "singleton" : "cluster";
     sds msg = wireNewMsg("MEET");
     msg = sdscatfmt(msg, " %s", flag);
     msg = wireFinishMsg(msg);
@@ -704,12 +704,12 @@ static int clusterRaftProcessMeet(clusterLink *link, int argc, sds *argv) {
 
     clusterRaftState *rs = RAFT_STATE();
 
-    if (clusterRaftIsNonSingleton() && !sender_is_singleton) {
+    if (!clusterRaftIsSingleton() && !sender_is_singleton) {
         /* Both sides are in a cluster — reject. Merging non-singleton
          * clusters is not supported. */
         serverLog(LL_WARNING, "Rejecting MEET from %.40s: both sides are in a cluster.", sender->name);
         clusterRaftSendBare(link, "MEET_REJECTED");
-    } else if (clusterRaftIsNonSingleton()) {
+    } else if (!clusterRaftIsSingleton()) {
         /* I'm in a cluster, sender is a singleton — reply WELCOME and
          * invite the sender. WELCOME tells the sender to step down. */
         clusterRaftSendBare(link, "WELCOME");
@@ -760,7 +760,7 @@ static int clusterRaftProcessWelcome(clusterLink *link, int argc, sds *argv) {
     serverLog(LL_NOTICE, "Received WELCOME from %.40s, stepping down.", sender->name);
 
     clusterRaftState *rs = RAFT_STATE();
-    if (rs->role == RAFT_ROLE_LEADER && !clusterRaftIsNonSingleton()) {
+    if (rs->role == RAFT_ROLE_LEADER && clusterRaftIsSingleton()) {
         clusterRaftSingletonStepDown();
     }
 

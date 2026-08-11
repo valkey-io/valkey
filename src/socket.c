@@ -376,9 +376,10 @@ static int connSocketBlockingConnect(connection *conn, const char *addr, int por
 
     conn->fd = fd;
 
-    if ((aeWait(fd, AE_WRITABLE, timeout) & AE_WRITABLE) == 0) {
+    int result = aeWait(fd, AE_WRITABLE, timeout);
+    if (result <= 0) {
         conn->state = CONN_STATE_ERROR;
-        conn->last_errno = ETIMEDOUT;
+        conn->last_errno = (result == 0) ? ETIMEDOUT : errno;
         return C_ERR;
     }
 

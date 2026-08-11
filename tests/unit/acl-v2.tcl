@@ -452,6 +452,68 @@ start_server {tags {"acl external:skip"}} {
         assert_match {*has no permissions to access the 'write1' key*} [r ACL DRYRUN command-test GEORADIUS write1 longitude latitude radius M STORE write2]
     }
 
+    test {Test GEORADIUS duplicate STORE options check the final destination key} {
+        # Regression test: duplicate STORE/STOREDIST options must not let the
+        # ACL check only the first (decoy) destination. The command uses the
+        # LAST STORE/STOREDIST key, so the ACL must check that key too.
+        # 'protected:*' is not granted to this user, so any access to it denies.
+        r ACL setuser geo-store-dryrun +georadius +georadiusbymember %R~geo:* %W~scratch:*
+
+        # The last STORE/STOREDIST names the unauthorized 'protected:*' key,
+        # so the command must be denied on that key (not on the first decoy).
+        assert_match {*has no permissions to access the 'protected:dst' key*} \
+            [r ACL DRYRUN geo-store-dryrun GEORADIUS geo:src 0 0 1 km STORE scratch:ok STORE protected:dst]
+        assert_match {*has no permissions to access the 'protected:dst' key*} \
+            [r ACL DRYRUN geo-store-dryrun GEORADIUS geo:src 0 0 1 km STOREDIST scratch:ok STOREDIST protected:dst]
+        # Mixed STORE then STOREDIST: the last one (STOREDIST) wins.
+        assert_match {*has no permissions to access the 'protected:dst' key*} \
+            [r ACL DRYRUN geo-store-dryrun GEORADIUS geo:src 0 0 1 km STORE scratch:ok STOREDIST protected:dst]
+        # The final destination wins even when the decoy is the unauthorized one:
+        # last key is allowed, so the command is allowed.
+        assert_equal "OK" [r ACL DRYRUN geo-store-dryrun GEORADIUS geo:src 0 0 1 km STORE protected:dst STORE scratch:ok]
+        # Legitimate single/repeated allowed destination is not over-blocked.
+        assert_equal "OK" [r ACL DRYRUN geo-store-dryrun GEORADIUS geo:src 0 0 1 km STORE scratch:ok]
+        assert_equal "OK" [r ACL DRYRUN geo-store-dryrun GEORADIUS geo:src 0 0 1 km STORE scratch:ok STORE scratch:ok]
+
+        # Same for GEORADIUSBYMEMBER.
+        assert_match {*has no permissions to access the 'protected:dst' key*} \
+            [r ACL DRYRUN geo-store-dryrun GEORADIUSBYMEMBER geo:src member 1 km STORE scratch:ok STORE protected:dst]
+        assert_equal "OK" [r ACL DRYRUN geo-store-dryrun GEORADIUSBYMEMBER geo:src member 1 km STORE scratch:ok]
+
+        r ACL deluser geo-store-dryrun
+    }
+
+    test {GEORADIUS duplicate STORE options cannot bypass key-level write ACL} {
+        # End-to-end regression test for the duplicate-STORE ACL bypass: an
+        # authenticated user with write access only to scratch:* must not be
+        # able to use a second STORE option to write/delete protected:*.
+        r del protected:dst
+        r geoadd geo:src 13.361389 38.115556 "Palermo" 15.087269 37.502669 "Catania"
+        r set protected:dst sentinel
+
+        r ACL SETUSER geo-store-bypass on nopass +georadius +georadiusbymember +acl|whoami %R~geo:* %W~scratch:*
+        $r2 auth geo-store-bypass password
+        assert_equal "geo-store-bypass" [$r2 acl whoami]
+
+        # Legitimate single STORE to an allowed key works (no over-block).
+        assert_equal 2 [$r2 georadius geo:src 13.361389 38.115556 500 km STORE scratch:ok]
+
+        # Duplicate STORE whose final destination is protected must be denied,
+        # and the protected key must be left untouched.
+        assert_error {*NOPERM*key*} {$r2 georadius geo:src 13.361389 38.115556 500 km STORE scratch:ok STORE protected:dst}
+        assert_error {*NOPERM*key*} {$r2 georadiusbymember geo:src Palermo 500 km STORE scratch:ok STORE protected:dst}
+
+        # Missing source would otherwise DELETE the destination key. Ensure the
+        # ACL still blocks it and protected:dst survives intact.
+        assert_error {*NOPERM*key*} {$r2 georadius geo:missing 0 0 1 km STORE scratch:ok STORE protected:dst}
+        assert_equal "sentinel" [r get protected:dst]
+
+        # cleanup (re-auth before deleting the user that $r2 is logged in as)
+        $r2 auth default password
+        r ACL deluser geo-store-bypass
+        r del geo:src scratch:ok protected:dst
+    }
+
     # Existence test commands are not marked as access since they are the result
     # of a lot of write commands. We therefore make the claim they can be executed
     # when either READ or WRITE flags are provided.
@@ -1544,6 +1606,56 @@ start_server {tags {"acl external:skip"}} {
             assert_equal "database" [dict get $entry reason]
             assert_equal $expected [dict get $entry object]
         }
+    }
+
+    test {MOVE cannot leak data out of an unauthorized current DB} {
+        r select 0
+        r set secret-move "top-secret-db0"
+
+        r ACL SETUSER leak-move on nopass +@all ~* db=1
+
+        # Fresh raw client that never issues SELECT, so it stays on DB 0.
+        set rc [valkey [srv 0 host] [srv 0 port] 0 $::tls]
+        $rc auth leak-move password
+
+        # A direct read on the current DB 0 is denied ...
+        assert_error "*NOPERM*database*" {$rc get secret-move}
+
+        # ... and MOVE is denied too, because the source (current) DB 0 is validated.
+        assert_error "*NOPERM*database*" {$rc move secret-move 1}
+
+        # The secret never reached DB 1.
+        $rc select 1
+        assert_equal {} [$rc get secret-move]
+
+        # cleanup
+        $rc close
+        r del secret-move
+        r ACL DELUSER leak-move
+    }
+
+    test {COPY cannot leak data out of an unauthorized current DB} {
+        r select 0
+        r set secret-copy "top-secret-db0"
+
+        r ACL SETUSER leak-copy on nopass +@all ~* db=1
+
+        set rc [valkey [srv 0 host] [srv 0 port] 0 $::tls]
+        $rc auth leak-copy password
+
+        assert_error "*NOPERM*database*" {$rc get secret-copy}
+
+        # COPY is denied because the current (source) DB 0 is validated as well.
+        assert_error "*NOPERM*database*" {$rc copy secret-copy stolen DB 1}
+
+        $rc select 1
+        assert_equal {} [$rc get stolen]
+
+        # cleanup
+        $rc close
+        r select 0
+        r del secret-copy
+        r ACL DELUSER leak-copy
     }
 
     $r2 close

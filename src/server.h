@@ -142,6 +142,7 @@ struct ValkeyModule;
 #define CRON_DBS_PER_CALL 16
 #define CRON_DICTS_PER_DB 16
 #define NET_MAX_WRITES_PER_EVENT (1024 * 64)
+#define VALKEY_THREAD_STACK_SIZE (1024 * 1024 * 4)
 #define PROTO_SHARED_SELECT_CMDS 10
 #define OBJ_SHARED_INTEGERS 10000
 #define OBJ_SHARED_BULKHDR_LEN 32
@@ -496,8 +497,6 @@ typedef enum {
 #define SUPERVISED_SYSTEMD 2
 #define SUPERVISED_UPSTART 3
 
-#define ZSKIPLIST_MAXLEVEL 32 /* Should be enough for 2^64 elements */
-#define ZSKIPLIST_MAX_SEARCH 10
 
 /* Append only defines */
 #define REPL_MAX_WRITTEN_BEFORE_FSYNC (1024 * 1024 * 8) /* 8 MB */
@@ -586,17 +585,23 @@ typedef enum {
 #define PAUSE_ACTION_REPLICA (1 << 4) /* pause replica traffic */
 
 /* Sets log format */
-typedef enum { LOG_FORMAT_LEGACY = 0,
-               LOG_FORMAT_LOGFMT,
-               LOG_FORMAT_JSON } log_format_type;
+typedef enum {
+    LOG_FORMAT_LEGACY = 0,
+    LOG_FORMAT_LOGFMT,
+    LOG_FORMAT_JSON
+} log_format_type;
 
 /* Sets log timestamp format */
-typedef enum { LOG_TIMESTAMP_LEGACY = 0,
-               LOG_TIMESTAMP_ISO8601,
-               LOG_TIMESTAMP_MILLISECONDS } log_timestamp_type;
+typedef enum {
+    LOG_TIMESTAMP_LEGACY = 0,
+    LOG_TIMESTAMP_ISO8601,
+    LOG_TIMESTAMP_MILLISECONDS
+} log_timestamp_type;
 
-typedef enum { RDB_VERSION_CHECK_STRICT = 0,
-               RDB_VERSION_CHECK_RELAXED } rdb_version_check_type;
+typedef enum {
+    RDB_VERSION_CHECK_STRICT = 0,
+    RDB_VERSION_CHECK_RELAXED
+} rdb_version_check_type;
 
 /* Structure representing a non-owning view of a buffer.
  * A stringRef struct does not manage the underlying memory, so its destruction
@@ -765,7 +770,7 @@ typedef struct ValkeyModuleType moduleType;
 #define OBJ_ENCODING_LINKEDLIST 4 /* No longer used: old list encoding. */
 #define OBJ_ENCODING_ZIPLIST 5    /* No longer used: old list/hash/zset encoding. */
 #define OBJ_ENCODING_INTSET 6     /* Encoded as intset */
-#define OBJ_ENCODING_SKIPLIST 7   /* Encoded as skiplist */
+#define OBJ_ENCODING_BTREE 7      /* Encoded as B+tree (fbtree) */
 #define OBJ_ENCODING_EMBSTR 8     /* Embedded sds string encoding */
 #define OBJ_ENCODING_QUICKLIST 9  /* Encoded as linked list of listpacks */
 #define OBJ_ENCODING_STREAM 10    /* Encoded as a radix tree of listpacks */
@@ -947,6 +952,7 @@ typedef struct multiState {
     size_t argv_len_sums;           /* mem used by all commands arguments */
     int alloc_count;                /* total number of multiCmd struct memory reserved. */
     list watched_keys;              /* List of watchedKey for iteration and cleanup. */
+    size_t watched_keys_mem;        /* Memory used by watched key robj objects. */
     hashtable **watched_keys_by_db; /* Per-db hashtable for O(1) watched key lookup.
                                        Array of size server.dbnum, lazily allocated.
                                        Each hashtable stores watchedKey* directly. */
@@ -1203,6 +1209,7 @@ typedef struct ClientPubSubData {
     hashtable *pubsub_channels;      /* channels a client is interested in (SUBSCRIBE) */
     hashtable *pubsub_patterns;      /* patterns a client is interested in (PSUBSCRIBE) */
     hashtable *pubsubshard_channels; /* shard level channels a client is interested in (SSUBSCRIBE) */
+    size_t pubsub_object_mem;        /* Memory used by channel/pattern name robj objects. */
     /* If this client is in tracking mode and this field is non zero,
      * invalidation messages for keys fetched by this client will be sent to
      * the specified client ID. */
@@ -1301,6 +1308,10 @@ typedef struct client {
     /* Input buffer and command parsing fields */
     sds querybuf;        /* Buffer we use to accumulate client queries. */
     size_t qb_pos;       /* The position we have read in querybuf. */
+    size_t qb_applied;   /* Right boundary of the *current* command in querybuf.
+                          * qb_pos may run ahead due to multi-command parsing, so
+                          * we use qb_applied (replicated clients only) to advance
+                          * reploff by exactly this command's bytes. */
     robj **argv;         /* Arguments of current command. */
     int argc;            /* Num of arguments of current command. */
     int argv_len;        /* Size of argv array (may be more than argc) */
@@ -1405,6 +1416,14 @@ typedef struct client {
 /* Forward declaration */
 bool isImportSlotMigrationJob(slotMigrationJob *job);
 
+/* Absolute postpone mask from client IO offload state (not artificial READ hold). */
+static inline int clientConnPostponeMaskFromIOState(client *c) {
+    int mask = 0;
+    if (c->io_read_state != CLIENT_IDLE) mask |= CONN_POSTPONE_READ;
+    if (c->io_write_state != CLIENT_IDLE) mask |= CONN_POSTPONE_WRITE;
+    return mask;
+}
+
 /* Get the class of a client, used in order to enforce limits to different
  * classes of clients.
  *
@@ -1479,42 +1498,36 @@ struct sharedObjectsStruct {
     sds minstring, maxstring;
 };
 
-/* ZSETs use a specialized version of Skiplists */
-typedef struct zskiplistNode {
-    union {
-        double score;         /* Sorting score for node ordering. */
-        unsigned long length; /* Number of elements in the skiplist. */
-    };
-    union {
-        struct zskiplistNode *backward; /* Pointer to previous node for reverse traversal. */
-        struct zskiplistNode *tail;     /* Tail element of the skiplist. */
-    };
-    struct zskiplistLevel {
-        struct zskiplistNode *forward;
-        /* At each level we keep the span, which is the number of elements which are on the "subtree"
-         * from this node at this level to the next node at the same level.
-         * One exception is the value at level 0. In level 0 the span can only be 1 or 0 (in case the last elements in the list)
-         * So we use it in order to hold the height of the node, which is the number of levels. */
-        unsigned long span;
-    } level[1]; /* Flexible array member - actual levels determined at node creation. */
-    /* For non-header nodes, after the level[], sds header length (1 byte) and an embedded sds element are stored. */
-} zskiplistNode;
-
-/* The header node does not store actual data (no score, no backward pointer,
- * and its node height is fixed at ZSKIPLIST_MAXLEVEL).
- * To save memory, we reuse the memory space of these fields in the header node to store:
- *   - skiplist length (number of elements)
- *   - tail pointer to the last element
- *   - maximum current level of the skiplist
- * For detailed memory layout, refer to the zskiplistNode struct definition. */
-typedef struct zskiplist {
-    zskiplistNode header;
-} zskiplist;
+/* OrderedIndex - full definition in ordered_index.h */
+typedef struct OrderedIndex OrderedIndex;
 
 typedef struct zset {
     hashtable *ht;
-    zskiplist *zsl;
+    OrderedIndex *oi;
 } zset;
+
+/* Lookup-key marking for fbtree hashtable disambiguation.
+ * Packed fbtree items ([score][ele]) are stored in the hashtable. When doing
+ * a lookup with a plain sds key, we mark it so the hash/compare callbacks
+ * can distinguish it from a packed stored item. */
+#define ZSET_LOOKUP_TYPE5_MARKER 6
+static inline void zsetMarkLookupKey(sds s) {
+    if (sdsType(s) == SDS_TYPE_5)
+        s[-1] = (s[-1] & ~SDS_TYPE_MASK) | ZSET_LOOKUP_TYPE5_MARKER;
+    else
+        sdsSetAuxBit(s, 0, 1);
+}
+static inline void zsetUnmarkLookupKey(sds s) {
+    unsigned char type = s[-1] & SDS_TYPE_MASK;
+    if (type == ZSET_LOOKUP_TYPE5_MARKER)
+        s[-1] = (s[-1] & ~SDS_TYPE_MASK) | SDS_TYPE_5;
+    else
+        sdsSetAuxBit(s, 0, 0);
+}
+static inline int zsetIsLookupKey(const_sds s) {
+    unsigned char type = s[-1] & SDS_TYPE_MASK;
+    return type == ZSET_LOOKUP_TYPE5_MARKER || sdsGetAuxBit(s, 0);
+}
 
 typedef struct clientBufferLimitsConfig {
     unsigned long long hard_limit_bytes;
@@ -2137,6 +2150,8 @@ struct valkeyServer {
                                                  * to establish psync. */
     int debug_pause_after_fork;                 /* Debug param that pauses the main process
                                                  * after a replication fork() (for bgsave). */
+    int debug_pause_before_psync;               /* Replica pauses (SIGSTOP) right before
+                                                 * sending PSYNC to its primary. */
     size_t repl_buffer_mem;                     /* The memory of replication buffer. */
     list *repl_buffer_blocks;                   /* Replication buffers blocks list
                                                  * (serving replica clients and repl backlog) */
@@ -2294,6 +2309,7 @@ struct valkeyServer {
     sds hash_seed;                                         /* Configurable DB hash seed */
     int cluster_slot_stats_enabled;                        /* Cluster slot usage statistics tracking enabled. */
     mstime_t cluster_mf_timeout;                           /* Milliseconds to do a manual failover. */
+    unsigned int cluster_replica_priority;                 /* Replica priority from cluster-replica-priority. */
     unsigned long cluster_slot_migration_log_max_len;      /* Maximum count of migrations to display in the
                                                             * migration log, after which we will clear finished
                                                             * migrations. */
@@ -2301,9 +2317,10 @@ struct valkeyServer {
                                                             * failover to be attempted. */
     int slot_migration_pipe_read;                          /* Slot migration pipe used to transfer the slots data */
     int slot_migration_child_exit_pipe;                    /* Used by the slot migration parent allow child exit. */
-    connection *slot_migration_pipe_conn;                  /* xxxx */
+    connection *slot_migration_pipe_conn;                  /* Connection of the slot migration target client. The slot
+                                                            * snapshot data read from the pipe is written to it. */
     char *slot_migration_pipe_buff;                        /* In slot migration, this buffer holds slot snapshot data. */
-    ssize_t slot_migration_pipe_bufflen;                   /* that was read from the rdb pipe. */
+    ssize_t slot_migration_pipe_bufflen;                   /* that was read from the slot migration pipe. */
     /* Debug config that goes along with cluster_drop_packet_filter. When set, the link is closed on packet drop. */
     uint32_t debug_cluster_close_link_on_packet_drop : 1;
     /* Debug config to control the random ping. When set, we will disable the random ping in clusterCron. */
@@ -2378,6 +2395,7 @@ struct valkeyServer {
     /* Local environment */
     char *locale_collate;
     char *debug_context; /* A free-form string that has no impact on server except being included in a crash report. */
+    int debug_force_tls_write_error;
 };
 
 #define MAX_KEYS_BUFFER 256
@@ -2834,10 +2852,9 @@ extern dictType externalStringType;
 extern dictType sdsHashDictType;
 extern hashtableType clientHashtableType;
 extern hashtableType kvstoreChannelHashtableType;
-extern dictType modulesDictType;
 extern hashtableType sdsReplyHashtableType;
 extern dictType keylistDictType;
-extern dict *modules;
+extern list *modules;
 
 /*-----------------------------------------------------------------------------
  * Functions prototypes
@@ -2978,6 +2995,7 @@ void copyReplicaOutputBuffer(client *dst, client *src);
 void addListRangeReply(client *c, robj *o, long start, long end, int reverse);
 void deferredAfterErrorReply(client *c, list *errors);
 size_t getStringObjectSdsUsedMemory(robj *o);
+size_t getStringObjectMemory(robj *o);
 void freeClientReplyValue(void *o);
 void *dupClientReplyValue(void *o);
 char *getClientPeerId(client *c);
@@ -3039,10 +3057,11 @@ void waitForClientIO(client *c);
 void ioThreadReadQueryFromClient(client *c);
 void ioThreadWriteToClient(client *c);
 int canParseCommand(client *c);
-void processClientIOReadsDone(client *c);
+int processClientIOReadsDone(client *c);
 void processClientIOWriteDone(client *c);
 void releaseReplyReferences(client *c);
 void resetLastWrittenBuf(client *c);
+int clientConnPostponeMask(client *c);
 
 int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_idx, int max_args, int *flags, int *unit, int *expire_idx, robj **expire, robj **compare_val);
 
@@ -3144,6 +3163,7 @@ robj *tryObjectEncoding(robj *o);
 robj *tryObjectEncodingEx(robj *o, int try_trim);
 robj *getDecodedObject(robj *o);
 size_t stringObjectLen(robj *o);
+size_t getStringObjectLen(robj *o);
 robj *createStringObjectFromLongLong(long long value);
 robj *createStringObjectFromLongLongForValue(long long value);
 robj *createStringObjectFromLongLongWithSds(long long value);
@@ -3174,7 +3194,7 @@ int compareStringObjects(const robj *a, const robj *b);
 int collateStringObjects(const robj *a, const robj *b);
 int equalStringObjects(robj *a, robj *b);
 void trimStringObjectIfNeeded(robj *o, int trim_small_values);
-#define sdsEncodedObject(objptr) (objptr->encoding == OBJ_ENCODING_RAW || objptr->encoding == OBJ_ENCODING_EMBSTR)
+#define sdsEncodedObject(objptr) (objectGetEncoding(objptr) == OBJ_ENCODING_RAW || objectGetEncoding(objptr) == OBJ_ENCODING_EMBSTR)
 
 /* Objects with val and/or key embedded */
 robj *objectSetKeyAndExpire(robj *o, const_sds key, long long expire);
@@ -3187,6 +3207,16 @@ mstime_t objectGetExpire(const robj *o);
 uint8_t objectGetLFUFrequency(robj *o);
 uint32_t objectGetLRUIdleSecs(robj *o);
 uint32_t objectGetIdleness(robj *o);
+
+/* Accessor functions for serverObject fields.
+ * Use these instead of direct field access for encapsulation. */
+int objectGetType(const robj *o);
+void objectSetType(robj *o, int type);
+int objectGetEncoding(const robj *o);
+void objectSetEncoding(robj *o, int encoding);
+unsigned int objectGetRefcount(const robj *o);
+unsigned int objectGetLRU(const robj *o);
+void objectSetLRU(robj *o, unsigned int lru);
 
 /* Synchronous I/O with timeout */
 ssize_t syncWrite(int fd, char *ptr, ssize_t size, long long timeout);
@@ -3395,22 +3425,19 @@ typedef struct {
     int minex, maxex; /* are min or max exclusive? */
 } zlexrangespec;
 
+/* Zset range comparison utilities (used by both listpack and ordered index encodings) */
+int zsetScoreGteMin(double value, zrangespec *spec);
+int zsetScoreLteMax(double value, zrangespec *spec);
+int zsetLexCompare(const char *a, size_t alen, sds b);
+int zsetLexGteMin(const char *value, size_t len, zlexrangespec *spec);
+int zsetLexLteMax(const char *value, size_t len, zlexrangespec *spec);
+
 /* flags for incrCommandFailedCalls */
 #define ERROR_COMMAND_REJECTED (1 << 0) /* Indicate to update the command rejected stats */
 #define ERROR_COMMAND_FAILED (1 << 1)   /* Indicate to update the command failed stats */
 
-zskiplist *zslCreate(void);
-int zslGetHeight(const zskiplist *zsl);
-zskiplistNode *zslGetTail(const zskiplist *zsl);
-void zslSetTail(zskiplist *zsl, zskiplistNode *tail);
-unsigned long zslGetLength(const zskiplist *zsl);
-zskiplistNode *zslGetHeader(zskiplist *zsl);
-size_t zslGetAllocSize(void);
-void zslFree(zskiplist *zsl);
-zskiplistNode *zslInsert(zskiplist *zsl, double score, const_sds ele);
-zskiplistNode *zslNthInRange(zskiplist *zsl, zrangespec *range, long n, long *rank);
-sds zslGetNodeElement(const zskiplistNode *x);
 double zzlGetScore(unsigned char *sptr);
+int zzlValidateScores(unsigned char *zl);
 void zzlNext(unsigned char *zl, unsigned char **eptr, unsigned char **sptr);
 void zzlPrev(unsigned char *zl, unsigned char **eptr, unsigned char **sptr);
 unsigned char *zzlFirstInRange(unsigned char *zl, zrangespec *range);
@@ -3432,17 +3459,12 @@ void genericZpopCommand(client *c,
                         int reply_nil_when_empty,
                         int *deleted);
 sds lpGetObject(unsigned char *sptr);
-int zslValueGteMin(double value, zrangespec *spec);
-int zslValueLteMax(double value, zrangespec *spec);
 void zsetFreeLexRange(zlexrangespec *spec);
 int zsetParseLexRange(robj *min, robj *max, zlexrangespec *spec);
 unsigned char *zzlFirstInLexRange(unsigned char *zl, zlexrangespec *range);
 unsigned char *zzlLastInLexRange(unsigned char *zl, zlexrangespec *range);
-zskiplistNode *zslNthInLexRange(zskiplist *zsl, zlexrangespec *range, long n);
 int zzlLexValueGteMin(unsigned char *p, zlexrangespec *spec);
 int zzlLexValueLteMax(unsigned char *p, zlexrangespec *spec);
-int zslLexValueGteMin(sds value, zlexrangespec *spec);
-int zslLexValueLteMax(sds value, zlexrangespec *spec);
 
 /* Core functions */
 int getMaxmemoryState(size_t *total, size_t *logical, size_t *tofree, float *level);
@@ -3456,6 +3478,9 @@ int processCommand(client *c);
 int processPendingCommandAndInputBuffer(client *c);
 int processCommandAndResetClient(client *c);
 void setupSignalHandlers(void);
+#ifdef USE_LIBBACKTRACE
+void initLibbacktraceFrameState(void);
+#endif
 int createSocketAcceptHandler(connListener *sfd, aeFileProc *accept_handler);
 connListener *listenerByType(int type);
 int changeListener(connListener *listener);
@@ -4120,6 +4145,7 @@ void configGetCommand(client *c);
 void configResetStatCommand(client *c);
 void configRewriteCommand(client *c);
 void configHelpCommand(client *c);
+void configInfoCommand(client *c);
 void hincrbyCommand(client *c);
 void hincrbyfloatCommand(client *c);
 void subscribeCommand(client *c);
@@ -4297,6 +4323,7 @@ void debugPauseProcess(void);
 #define serverDebug(fmt, ...) printf("DEBUG %s:%d > " fmt "\n", __FILE__, __LINE__, __VA_ARGS__)
 #define serverDebugMark() printf("-- MARK %s:%d --\n", __FILE__, __LINE__)
 
+void serverInitThreadAttribute(pthread_attr_t *attr);
 int iAmPrimary(void);
 
 #define STRINGIFY_(x) #x

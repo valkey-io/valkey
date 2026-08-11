@@ -29,8 +29,10 @@
 
 #include "mt19937-64.h"
 #include "server.h"
+#include "ordered_index.h"
 #include "rdb.h"
 #include "module.h"
+#include "cluster.h"
 #include "hdr_histogram.h"
 #include "fpconv_dtoa.h"
 
@@ -316,20 +318,22 @@ void computeDatasetProfile(int dbid, robj *keyobj, robj *o, long long expiretime
                 zzlNext(zl, &eptr, &sptr);
             }
             statsRecordCount(lpLength(objectGetVal(o)), stats);
-        } else if (o->encoding == OBJ_ENCODING_SKIPLIST) {
+        } else if (o->encoding == OBJ_ENCODING_BTREE) {
             zset *zs = objectGetVal(o);
             hashtableIterator iter;
             hashtableInitIterator(&iter, zs->ht, 0);
 
             void *next;
             while (hashtableNext(&iter, &next)) {
-                zskiplistNode *node = next;
+                OrderedIndexItem *node = next;
                 size_t eleLen = 0;
+                const char *ele;
+                size_t ele_len;
+                orderedIndexItemGetElement(node, &ele, &ele_len);
 
-                const int len = fpconv_dtoa(node->score, buf);
+                const int len = fpconv_dtoa(orderedIndexItemGetScore(node), buf);
                 buf[len] = '\0';
-                sds ele = zslGetNodeElement(node);
-                eleLen += sdslen(ele) + strlen(buf);
+                eleLen += ele_len + strlen(buf);
                 statsRecordElementSize(eleLen, 1, stats);
             }
             hashtableCleanupIterator(&iter);
@@ -704,6 +708,11 @@ int redis_check_rdb(char *rdbfilename, FILE *fp) {
         } else if (type == RDB_OPCODE_SLOT_IMPORT) {
             robj *job_name;
             if ((job_name = rdbLoadStringObject(&rdb)) == NULL) goto eoferr;
+            if (sdslen(objectGetVal(job_name)) != CLUSTER_NAMELEN) {
+                rdbCheckError("Invalid slot import job name length in RDB");
+                decrRefCount(job_name);
+                goto err;
+            }
             decrRefCount(job_name);
             uint64_t num_slot_ranges;
             if ((num_slot_ranges = rdbLoadLen(&rdb, NULL)) == RDB_LENERR) goto eoferr;

@@ -223,12 +223,15 @@ proc log_crashes {} {
         close $fd
     }
 
-    set logs [glob */err.txt]
-    foreach log $logs {
-        set res [find_valgrind_errors $log true]
-        if {$res != ""} {
-            puts $res
-            incr ::failed
+    # Only scan for valgrind errors when actually running under valgrind.
+    if {$::valgrind} {
+        set logs [glob */err.txt]
+        foreach log $logs {
+            set res [find_valgrind_errors $log true]
+            if {$res != ""} {
+                puts $res
+                incr ::failed
+            }
         }
     }
 
@@ -575,9 +578,9 @@ proc write_test_failures {} {
         set test_file [lindex $entry 1]
         set error_msg [lindex $entry 2]
 
-        set test_name [string map {"\\" "\\\\" "\"" "\\\"" "\n" "\\n" "\r" "\\r" "\t" "\\t" "\b" "\\b" "\f" "\\f"} $test_name]
-        set test_file [string map {"\\" "\\\\" "\"" "\\\"" "\n" "\\n" "\r" "\\r" "\t" "\\t" "\b" "\\b" "\f" "\\f"} $test_file]
-        set error_msg [string map {"\\" "\\\\" "\"" "\\\"" "\n" "\\n" "\r" "\\r" "\t" "\\t" "\b" "\\b" "\f" "\\f"} $error_msg]
+        set test_name [json_escape_string $test_name]
+        set test_file [json_escape_string $test_file]
+        set error_msg [json_escape_string $error_msg]
 
         lappend failures "\{\"test_name\":\"$test_name\",\"test_file\":\"$test_file\",\"status\":\"err\",\"error\":\"$error_msg\"\}"
     }
@@ -587,6 +590,8 @@ proc write_test_failures {} {
         file mkdir $outdir
     }
     set fp [open $::failures_output_file w]
+    # JSON is UTF-8, so do not leave the channel on the system encoding.
+    fconfigure $fp -encoding utf-8
     puts $fp "\[[join $failures ","]\]"
     close $fp
 }

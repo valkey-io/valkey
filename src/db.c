@@ -28,6 +28,7 @@
  */
 
 #include "server.h"
+#include "ordered_index.h"
 #include "cluster.h"
 #include "cluster_migrateslots.h"
 #include "latency.h"
@@ -174,7 +175,7 @@ robj *lookupKeyWriteOrReply(client *c, robj *key, robj *reply) {
 /* For hash keys, checks if they contain volatile items and updates tracking accordingly.
  * Always accesses the tracking kvstore, even if the tracking state doesn't change. */
 void dbUpdateObjectWithVolatileItemsTracking(serverDb *db, robj *o) {
-    if (o->type == OBJ_HASH) {
+    if (objectGetType(o) == OBJ_HASH) {
         if (hashTypeHasVolatileFields(o)) {
             dbTrackKeyWithVolatileItems(db, o);
         } else {
@@ -359,7 +360,7 @@ static void dbSetValue(serverDb *db, robj *key, robj **valref, int overwrite, vo
         old = val;
     } else {
         /* Replace the old value at its location in the key space. */
-        val->lru = old->lru;
+        objectSetLRU(val, objectGetLRU(old));
         long long expire = objectGetExpire(old);
         new = objectSetKeyAndExpire(val, objectGetVal(key), expire);
         *oldref = new;
@@ -500,7 +501,7 @@ int dbGenericDeleteWithDictIndex(serverDb *db, robj *key, int async, int flags, 
         }
 
         /* If deleting a hash object, un-track it from the volatile items tracking if it contains volatile items.*/
-        if (val->type == OBJ_HASH && hashTypeHasVolatileFields(val)) {
+        if (objectGetType(val) == OBJ_HASH && hashTypeHasVolatileFields(val)) {
             dbUntrackKeyWithVolatileItems(db, val);
         }
 
@@ -525,7 +526,7 @@ int dbGenericDelete(serverDb *db, robj *key, int async, int flags) {
 /* Add a key with volatile items to the tracking kvstore. */
 void dbTrackKeyWithVolatileItems(serverDb *db, robj *o) {
     serverAssert(objectGetKey(o));
-    if (o->type == OBJ_HASH && hashTypeHasVolatileFields(o)) {
+    if (objectGetType(o) == OBJ_HASH && hashTypeHasVolatileFields(o)) {
         int dict_index = getKVStoreIndexForKey(objectGetKey(o));
         kvstoreHashtableAdd(db->keys_with_volatile_items, dict_index, o);
     }
@@ -583,7 +584,7 @@ int dbDelete(serverDb *db, robj *key) {
  * using an sdscat() call to append some data, or anything else.
  */
 robj *dbUnshareStringValue(serverDb *db, robj *key, robj *o) {
-    serverAssert(o->type == OBJ_STRING);
+    serverAssert(objectGetType(o) == OBJ_STRING);
     if (o->refcount != 1 || o->encoding != OBJ_ENCODING_RAW) {
         robj *decoded = getDecodedObject(o);
         o = createRawStringObject(objectGetVal(decoded), sdslen(objectGetVal(decoded)));
@@ -688,8 +689,7 @@ long long emptyData(int dbnum, int flags, void(callback)(hashtable *)) {
 
     if (with_functions) {
         serverAssert(dbnum == -1);
-        /* TODO: fix this callback incompatibility. The arg is not used. */
-        functionReset(async, (void (*)(dict *))callback);
+        functionReset(async);
     }
 
     /* Also fire the end event. Note that this event will fire almost
@@ -823,7 +823,7 @@ void flushAllDataAndResetRDB(int flags) {
     /* jemalloc 5 doesn't release pages back to the OS when there's no traffic.
      * for large databases, flushdb blocks for long anyway, so a bit more won't
      * harm and this way the flush and purge will be synchronous. */
-    if (!(flags & EMPTYDB_ASYNC)) jemalloc_purge();
+    if (!(flags & EMPTYDB_ASYNC)) zmalloc_purge();
 #endif
 }
 
@@ -848,7 +848,7 @@ void flushdbCommand(client *c) {
     /* jemalloc 5 doesn't release pages back to the OS when there's no traffic.
      * for large databases, flushdb blocks for long anyway, so a bit more won't
      * harm and this way the flush and purge will be synchronous. */
-    if (!(flags & EMPTYDB_ASYNC)) jemalloc_purge();
+    if (!(flags & EMPTYDB_ASYNC)) zmalloc_purge();
 #endif
 }
 
@@ -1053,6 +1053,8 @@ void hashtableScanCallback(void *privdata, void *entry) {
     scanData *data = (scanData *)privdata;
     stringRef val = {NULL, 0};
     sds key = NULL;
+    const char *zset_ptr = NULL;
+    size_t zset_ele_len = 0;
 
     robj *o = data->o;
     data->sampled++;
@@ -1065,10 +1067,9 @@ void hashtableScanCallback(void *privdata, void *entry) {
     if (o->type == OBJ_SET) {
         key = (sds)entry;
     } else if (o->type == OBJ_ZSET) {
-        zskiplistNode *node = (zskiplistNode *)entry;
-        key = zslGetNodeElement(node);
-        /* zset data is copied after filtering by key */
-    } else if (o->type == OBJ_HASH) {
+        orderedIndexItemGetElement((const OrderedIndexItem *)entry, &zset_ptr, &zset_ele_len);
+        /* zset data is copied after filtering */
+    } else if (objectGetType(o) == OBJ_HASH) {
         key = entryGetField(entry);
         if (!data->only_keys) {
             val.buf = entryGetValue(entry, &val.len);
@@ -1079,7 +1080,9 @@ void hashtableScanCallback(void *privdata, void *entry) {
 
     /* Filter element if it does not match the pattern. */
     if (data->pattern) {
-        if (!stringmatchlen(data->pattern, sdslen(data->pattern), key, sdslen(key), 0)) {
+        const char *match_ptr = (o->type == OBJ_ZSET) ? zset_ptr : key;
+        size_t match_len = (o->type == OBJ_ZSET) ? zset_ele_len : sdslen(key);
+        if (!stringmatchlen(data->pattern, sdslen(data->pattern), match_ptr, match_len, 0)) {
             return;
         }
     }
@@ -1088,11 +1091,13 @@ void hashtableScanCallback(void *privdata, void *entry) {
      * allocations. */
     if (o->type == OBJ_ZSET) {
         /* zset data is copied */
-        zskiplistNode *node = (zskiplistNode *)entry;
-        key = sdsdup(zslGetNodeElement(node));
+        const char *ptr;
+        size_t ele_len;
+        orderedIndexItemGetElement((const OrderedIndexItem *)entry, &ptr, &ele_len);
+        key = sdsnewlen(ptr, ele_len);
         if (!data->only_keys) {
             char buf[MAX_LONG_DOUBLE_CHARS];
-            int len = ld2string(buf, sizeof(buf), node->score, LD_STR_AUTO);
+            int len = ld2string(buf, sizeof(buf), orderedIndexItemGetScore((const OrderedIndexItem *)entry), LD_STR_AUTO);
             sds tmp = sdsnewlen(buf, len);
             val.buf = (const char *)tmp;
             val.len = sdslen(tmp);
@@ -1231,7 +1236,7 @@ void scanGenericCommandWithOptions(client *c, robj *o, unsigned long long cursor
 
     /* Object must be NULL (to iterate keys names), or the type of the object
      * must be Set, Sorted Set, or Hash. */
-    serverAssert(o == NULL || o->type == OBJ_SET || o->type == OBJ_HASH || o->type == OBJ_ZSET);
+    serverAssert(o == NULL || o->type == OBJ_SET || objectGetType(o) == OBJ_HASH || o->type == OBJ_ZSET);
 
     /* Iterate the collection.
      *
@@ -1252,10 +1257,10 @@ void scanGenericCommandWithOptions(client *c, robj *o, unsigned long long cursor
     } else if (o->type == OBJ_SET && o->encoding == OBJ_ENCODING_HASHTABLE) {
         ht = objectGetVal(o);
         free_callback = NULL;
-    } else if (o->type == OBJ_HASH && o->encoding == OBJ_ENCODING_HASHTABLE) {
+    } else if (objectGetType(o) == OBJ_HASH && o->encoding == OBJ_ENCODING_HASHTABLE) {
         ht = objectGetVal(o);
         free_callback = NULL;
-    } else if (o->type == OBJ_ZSET && o->encoding == OBJ_ENCODING_SKIPLIST) {
+    } else if (o->type == OBJ_ZSET && o->encoding == OBJ_ENCODING_BTREE) {
         zset *zs = objectGetVal(o);
         ht = zs->ht;
         /* scanning ZSET allocates temporary strings even though it's a dict */
@@ -1332,7 +1337,7 @@ void scanGenericCommandWithOptions(client *c, robj *o, unsigned long long cursor
         }
         setTypeReleaseIterator(si);
         cursor = 0;
-    } else if ((o->type == OBJ_HASH || o->type == OBJ_ZSET) && o->encoding == OBJ_ENCODING_LISTPACK) {
+    } else if ((objectGetType(o) == OBJ_HASH || o->type == OBJ_ZSET) && o->encoding == OBJ_ENCODING_LISTPACK) {
         unsigned char *p = lpFirst(objectGetVal(o));
         unsigned char *str;
         int64_t len;
@@ -1924,7 +1929,7 @@ robj *setExpire(client *c, serverDb *db, robj *key, long long when) {
     long long old_when = objectGetExpire(val);
 
     robj *newval = objectSetExpire(val, when);
-    if (newval->type == OBJ_HASH && hashTypeHasVolatileFields(newval)) {
+    if (objectGetType(newval) == OBJ_HASH && hashTypeHasVolatileFields(newval)) {
         /* Replace the pointer in the keys_with_volatile_items table without accessing the old pointer. */
         int dict_index = getKVStoreIndexForKey(objectGetKey(newval));
         hashtable *volatile_items_ht = kvstoreGetHashtable(db->keys_with_volatile_items, dict_index);
@@ -2505,9 +2510,13 @@ int getKeysFromCommandWithSpecs(struct serverCommand *cmd,
 
 /* This function returns a sanity check if the command may have keys. */
 int doesCommandHaveKeys(struct serverCommand *cmd) {
-    return cmd->getkeys_proc ||                             /* has getkeys_proc (non modules) */
-           (cmd->flags & CMD_MODULE_GETKEYS) ||             /* module with GETKEYS */
-           (getAllKeySpecsFlags(cmd, 1) & CMD_KEY_NOT_KEY); /* has at least one key-spec not marked as NOT_KEY */
+    /* At least one key-spec not marked as NOT_KEY means the command has real keys. */
+    if (getAllKeySpecsFlags(cmd, 1) & CMD_KEY_NOT_KEY) return 1;
+    /* If the command has getkeys_proc but all its key-specs are NOT_KEY,
+     * the proc is only used for slot routing, not for real key arguments. */
+    if (cmd->getkeys_proc && cmd->key_specs_num > 0) return 0;
+    return cmd->getkeys_proc ||               /* has getkeys_proc (non modules) */
+           (cmd->flags & CMD_MODULE_GETKEYS); /* module with GETKEYS */
 }
 
 /* A simplified channel spec table that contains all of the commands
@@ -2810,7 +2819,10 @@ int sortGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult 
         char *name;
         int skip;
     } skiplist[] = {
-        {"limit", 2}, {"get", 1}, {"by", 1}, {NULL, 0} /* End of elements. */
+        {"limit", 2},
+        {"get", 1},
+        {"by", 1},
+        {NULL, 0} /* End of elements. */
     };
 
     for (i = 2; i < argc; i++) {
@@ -2884,7 +2896,12 @@ int migrateGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResu
  *                             [COUNT count] [STORE key|STOREDIST key]
  * GEORADIUSBYMEMBER key member radius unit ... options ...
  *
- * This command has a fully defined keyspec, so returning flags isn't needed. */
+ * Because repeated STORE/STOREDIST options are accepted and the last one wins,
+ * the static keyword key-specs (which match the first STORE) cannot identify
+ * the effective destination. The key-specs are therefore marked VARIABLE_FLAGS
+ * so this helper is used by both cluster routing and ACL key extraction. As a
+ * result it must report accurate per-key flags matching the key-specs:
+ * the source key is read-only access, the (last) store key is overwrite/update. */
 int georadiusGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result) {
     int i, num;
     keyReference *keys;
@@ -2913,10 +2930,10 @@ int georadiusGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysRe
 
     /* Add all key positions to keys[] */
     keys[0].pos = 1;
-    keys[0].flags = 0;
+    keys[0].flags = CMD_KEY_RO | CMD_KEY_ACCESS;
     if (num > 1) {
         keys[1].pos = stored_key;
-        keys[1].flags = 0;
+        keys[1].flags = CMD_KEY_OW | CMD_KEY_UPDATE;
     }
     result->numkeys = num;
     return num;

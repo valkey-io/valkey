@@ -1719,6 +1719,10 @@ static int ACLSelectorCheckKey(aclSelector *selector, const char *key, int keyle
     /* The selector can access any key */
     if (selector->flags & SELECTOR_FLAG_ALLKEYS) return ACL_OK;
 
+    /* NOT_KEY entries are routing-only tokens, not real user keys.
+     * Bypass key-pattern ACL checks, consistent with how keyspecs skip them. */
+    if (keyspec_flags & CMD_KEY_NOT_KEY) return ACL_OK;
+
     listIter li;
     listNode *ln;
     listRewind(selector->patterns, &li);
@@ -1859,17 +1863,28 @@ static int ACLSelectorCheckCmd(aclSelector *selector,
         int *positions = cmd->get_dbid_args(argv, argc, &count);
         if (positions) {
             for (int i = 0; i < count; i++) {
-                long long dbid;
+                long long argdbid;
                 /* The helper has already validated argv[positions[i]] as a
                  * valid in-range dbid, so this should never fail. */
-                serverAssert(getLongLongFromObject(argv[positions[i]], &dbid) == C_OK);
-                if (!ACLSelectorCanAccessDb(selector, (int)dbid)) {
+                serverAssert(getLongLongFromObject(argv[positions[i]], &argdbid) == C_OK);
+                if (!ACLSelectorCanAccessDb(selector, (int)argdbid)) {
                     if (keyidxptr) *keyidxptr = positions[i];
                     zfree(positions);
                     return ACL_DENIED_DB;
                 }
             }
             zfree(positions);
+        }
+        /* Commands such as MOVE and COPY also read from / operate on the keys
+         * in the current database, not just the destination database named in
+         * their arguments. The current database must therefore be authorized
+         * as well, otherwise a user without access to the current DB could use
+         * MOVE/COPY to exfiltrate its keys into a database it can access.
+         * This only applies to commands that carry real keys: SELECT and SWAPDB
+         * also declare dbid args but do not touch the current DB's keys. */
+        if (doesCommandHaveKeys(cmd) && !ACLSelectorCanAccessDb(selector, dbid)) {
+            if (keyidxptr) *keyidxptr = 0;
+            return ACL_DENIED_DB;
         }
     } else if ((cmd->flags & CMD_ALL_DBS) && !(selector->flags & SELECTOR_FLAG_ALLDBS)) {
         for (int i = 0; i < server.dbnum; i++) {

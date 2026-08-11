@@ -494,6 +494,43 @@ tags {"external:skip"} {
         clean_aof_persistence $aof_dirpath
     }
 
+    test {Old-style RDB-preamble AOF preserves preamble on truncated MULTI} {
+        start_server {overrides {appendonly no aof-use-rdb-preamble yes save {}}} {
+            r select 0
+            r set rdb-key rdb-value
+
+            r config set appendonly yes
+            waitForBgrewriteaof r
+
+            file mkdir $server_path
+            file copy -force [get_base_aof_path r] $aof_old_name_old_path
+        }
+
+        set fp [open $aof_old_name_old_path a]
+        append_to_aof [formatCommand multi]
+        append_to_aof [formatCommand set transaction-key transaction-value]
+        append_to_aof [string range [formatCommand exec] 0 end-1]
+        close $fp
+
+        start_server_aof [list dir $server_path aof-load-truncated yes] {
+            set client [valkey [srv host] [srv port] 0 $::tls]
+            wait_done_loading $client
+            assert_equal rdb-value [$client get rdb-key]
+            assert_equal {} [$client get transaction-key]
+            assert_equal OK [$client set post-recovery-key post-recovery-value]
+
+            restart_server 0 true false
+
+            set client [valkey [srv host] [srv port] 0 $::tls]
+            wait_done_loading $client
+            assert_equal rdb-value [$client get rdb-key]
+            assert_equal {} [$client get transaction-key]
+            assert_equal post-recovery-value [$client get post-recovery-key]
+        }
+
+        clean_aof_persistence $aof_dirpath
+    }
+
     test {Multi Part AOF can continue the upgrade from the interrupted upgrade state} {
         create_aof $server_path $aof_old_name_old_path {
             append_to_aof [formatCommand set k1 v1]

@@ -28,6 +28,7 @@
  */
 
 #include "server.h"
+#include "ordered_index.h"
 #include "cluster.h"
 #include "cluster_migrateslots.h"
 #include "latency.h"
@@ -244,7 +245,7 @@ int getKeySlot(sds key) {
      *
      * This optimization is only used when current_client flag `CLIENT_EXECUTING_COMMAND` is set.
      * It only gets set during the execution of command under `call` method. Other flows requesting
-     * the key slot would fallback to keyHashSlot.
+     * the key slot would fall back to keyHashSlot.
      *
      * Modules and scripts executed on the primary may get replicated as multi-execs that operate on multiple slots,
      * so we must always recompute the slot for commands coming from the primary or AOF.
@@ -1052,6 +1053,8 @@ void hashtableScanCallback(void *privdata, void *entry) {
     scanData *data = (scanData *)privdata;
     stringRef val = {NULL, 0};
     sds key = NULL;
+    const char *zset_ptr = NULL;
+    size_t zset_ele_len = 0;
 
     robj *o = data->o;
     data->sampled++;
@@ -1064,9 +1067,8 @@ void hashtableScanCallback(void *privdata, void *entry) {
     if (o->type == OBJ_SET) {
         key = (sds)entry;
     } else if (o->type == OBJ_ZSET) {
-        zskiplistNode *node = (zskiplistNode *)entry;
-        key = zslGetNodeElement(node);
-        /* zset data is copied after filtering by key */
+        orderedIndexItemGetElement((const OrderedIndexItem *)entry, &zset_ptr, &zset_ele_len);
+        /* zset data is copied after filtering */
     } else if (objectGetType(o) == OBJ_HASH) {
         key = entryGetField(entry);
         if (!data->only_keys) {
@@ -1078,7 +1080,9 @@ void hashtableScanCallback(void *privdata, void *entry) {
 
     /* Filter element if it does not match the pattern. */
     if (data->pattern) {
-        if (!stringmatchlen(data->pattern, sdslen(data->pattern), key, sdslen(key), 0)) {
+        const char *match_ptr = (o->type == OBJ_ZSET) ? zset_ptr : key;
+        size_t match_len = (o->type == OBJ_ZSET) ? zset_ele_len : sdslen(key);
+        if (!stringmatchlen(data->pattern, sdslen(data->pattern), match_ptr, match_len, 0)) {
             return;
         }
     }
@@ -1087,11 +1091,13 @@ void hashtableScanCallback(void *privdata, void *entry) {
      * allocations. */
     if (o->type == OBJ_ZSET) {
         /* zset data is copied */
-        zskiplistNode *node = (zskiplistNode *)entry;
-        key = sdsdup(zslGetNodeElement(node));
+        const char *ptr;
+        size_t ele_len;
+        orderedIndexItemGetElement((const OrderedIndexItem *)entry, &ptr, &ele_len);
+        key = sdsnewlen(ptr, ele_len);
         if (!data->only_keys) {
             char buf[MAX_LONG_DOUBLE_CHARS];
-            int len = ld2string(buf, sizeof(buf), node->score, LD_STR_AUTO);
+            int len = ld2string(buf, sizeof(buf), orderedIndexItemGetScore((const OrderedIndexItem *)entry), LD_STR_AUTO);
             sds tmp = sdsnewlen(buf, len);
             val.buf = (const char *)tmp;
             val.len = sdslen(tmp);
@@ -1254,7 +1260,7 @@ void scanGenericCommandWithOptions(client *c, robj *o, unsigned long long cursor
     } else if (objectGetType(o) == OBJ_HASH && o->encoding == OBJ_ENCODING_HASHTABLE) {
         ht = objectGetVal(o);
         free_callback = NULL;
-    } else if (o->type == OBJ_ZSET && o->encoding == OBJ_ENCODING_SKIPLIST) {
+    } else if (o->type == OBJ_ZSET && o->encoding == OBJ_ENCODING_BTREE) {
         zset *zs = objectGetVal(o);
         ht = zs->ht;
         /* scanning ZSET allocates temporary strings even though it's a dict */
@@ -2490,7 +2496,7 @@ int getKeysFromCommandWithSpecs(struct serverCommand *cmd,
         int ret = getKeysUsingKeySpecs(cmd, argv, argc, search_flags, result);
         if (ret >= 0) return ret;
         /* If the specs returned with an error (probably an INVALID or INCOMPLETE spec),
-         * fallback to the callback method. */
+         * fall back to the callback method. */
     }
 
     /* Resort to getkeys callback methods. */
@@ -2890,7 +2896,12 @@ int migrateGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResu
  *                             [COUNT count] [STORE key|STOREDIST key]
  * GEORADIUSBYMEMBER key member radius unit ... options ...
  *
- * This command has a fully defined keyspec, so returning flags isn't needed. */
+ * Because repeated STORE/STOREDIST options are accepted and the last one wins,
+ * the static keyword key-specs (which match the first STORE) cannot identify
+ * the effective destination. The key-specs are therefore marked VARIABLE_FLAGS
+ * so this helper is used by both cluster routing and ACL key extraction. As a
+ * result it must report accurate per-key flags matching the key-specs:
+ * the source key is read-only access, the (last) store key is overwrite/update. */
 int georadiusGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result) {
     int i, num;
     keyReference *keys;
@@ -2919,10 +2930,10 @@ int georadiusGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysRe
 
     /* Add all key positions to keys[] */
     keys[0].pos = 1;
-    keys[0].flags = 0;
+    keys[0].flags = CMD_KEY_RO | CMD_KEY_ACCESS;
     if (num > 1) {
         keys[1].pos = stored_key;
-        keys[1].flags = 0;
+        keys[1].flags = CMD_KEY_OW | CMD_KEY_UPDATE;
     }
     result->numkeys = num;
     return num;

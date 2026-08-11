@@ -4645,7 +4645,7 @@ void replicationHandlePrimaryDisconnection(void) {
      * replicationUnsetPrimary()/replicationSetPrimary() may have already
      * finalized replication state. Only transition to REPL_STATE_CONNECT if
      * we were genuinely connected (REPL_STATE_CONNECTED) and primary_host is
-     * still set. Otherwise this is a stale deferred free and we must not
+     * still set. Otherwise, this is a stale deferred free and we must not
      * clobber the current state. */
     if (server.repl_state == REPL_STATE_CONNECTED && server.primary_host) {
         server.repl_state = REPL_STATE_CONNECT;

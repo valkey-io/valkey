@@ -34,6 +34,7 @@
 
 #include "hashtable.h"
 #include "server.h"
+#include "ordered_index.h"
 #include "lzf.h" /* LZF compression library */
 #include "zipmap.h"
 #include "endianconv.h"
@@ -735,7 +736,7 @@ int rdbGetObjectType(robj *o, int rdbver) {
     case OBJ_ZSET:
         if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK)
             return RDB_TYPE_ZSET_LISTPACK;
-        else if (objectGetEncoding(o) == OBJ_ENCODING_SKIPLIST)
+        else if (objectGetEncoding(o) == OBJ_ENCODING_BTREE)
             return RDB_TYPE_ZSET_2;
         else
             serverPanic("Unknown sorted set encoding");
@@ -954,11 +955,10 @@ ssize_t rdbSaveObject(rio *rdb, robj *o, robj *key, int dbid, unsigned char rdbt
 
             if ((n = rdbSaveRawString(rdb, objectGetVal(o), l)) == -1) return -1;
             nwritten += n;
-        } else if (objectGetEncoding(o) == OBJ_ENCODING_SKIPLIST) {
+        } else if (objectGetEncoding(o) == OBJ_ENCODING_BTREE) {
             zset *zs = objectGetVal(o);
-            zskiplist *zsl = zs->zsl;
 
-            if ((n = rdbSaveLen(rdb, zslGetLength(zsl))) == -1) return -1;
+            if ((n = rdbSaveLen(rdb, orderedIndexLength(zs->oi))) == -1) return -1;
             nwritten += n;
 
             /* We save the skiplist elements from the greatest to the smallest
@@ -967,16 +967,19 @@ ssize_t rdbSaveObject(rio *rdb, robj *o, robj *key, int dbid, unsigned char rdbt
              * element will always be the smaller, so adding to the skiplist
              * will always immediately stop at the head, making the insertion
              * O(1) instead of O(log(N)). */
-            zskiplistNode *zn = zslGetTail(zsl);
-            while (zn != NULL) {
-                sds ele = zslGetNodeElement(zn);
-                if ((n = rdbSaveRawString(rdb, (unsigned char *)ele, sdslen(ele))) == -1) {
+            OrderedIndexIterator iter;
+            orderedIndexInitIterator(&iter, zs->oi);
+            OrderedIndexItem *item;
+            while ((item = orderedIndexPrev(&iter)) != NULL) {
+                const char *ele;
+                size_t ele_len;
+                orderedIndexItemGetElement(item, &ele, &ele_len);
+                if ((n = rdbSaveRawString(rdb, (unsigned char *)ele, ele_len)) == -1) {
                     return -1;
                 }
                 nwritten += n;
-                if ((n = rdbSaveBinaryDoubleValue(rdb, zn->score)) == -1) return -1;
+                if ((n = rdbSaveBinaryDoubleValue(rdb, orderedIndexItemGetScore(item))) == -1) return -1;
                 nwritten += n;
-                zn = zn->backward;
             }
         } else {
             serverPanic("Unknown sorted set encoding");
@@ -2073,7 +2076,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
         while (zsetlen--) {
             sds sdsele;
             double score;
-            zskiplistNode *znode;
+            OrderedIndexItem *znode;
 
             if ((sdsele = rdbGenericLoadStringObject(rdb, RDB_LOAD_SDS, NULL)) == NULL) {
                 decrRefCount(o);
@@ -2105,12 +2108,12 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
             if (sdslen(sdsele) > maxelelen) maxelelen = sdslen(sdsele);
             totelelen += sdslen(sdsele);
 
-            znode = zslInsert(zs->zsl, score, sdsele);
+            znode = orderedIndexInsert(zs->oi, score, sdsele, sdslen(sdsele));
             sdsfree(sdsele);
             if (!hashtableAdd(zs->ht, znode)) {
                 rdbReportCorruptRDB("Duplicate zset fields detected");
                 decrRefCount(o);
-                /* no need to free 'sdsele', will be released by zslFree together with 'o' */
+                /* no need to free 'sdsele', will be released with 'o' */
                 return NULL;
             }
         }
@@ -2517,7 +2520,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
             }
 
             if (zsetLength(o) > server.zset_max_listpack_entries)
-                zsetConvert(o, OBJ_ENCODING_SKIPLIST);
+                zsetConvert(o, OBJ_ENCODING_BTREE);
             else
                 objectSetVal(o, lpShrinkToFit(objectGetVal(o)));
             break;
@@ -2549,7 +2552,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
                 goto emptykey;
             }
 
-            if (zsetLength(o) > server.zset_max_listpack_entries) zsetConvert(o, OBJ_ENCODING_SKIPLIST);
+            if (zsetLength(o) > server.zset_max_listpack_entries) zsetConvert(o, OBJ_ENCODING_BTREE);
             break;
         case RDB_TYPE_HASH_ZIPLIST: {
             unsigned char *lp = lpNew(encoded_len);

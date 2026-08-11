@@ -32,7 +32,7 @@ start_server {tags {"dismiss external:skip"}} {
         }
 
         # zset
-        r zadd bigzset1 1.0 $bigstr         ; # skiplist encoding
+        r zadd bigzset1 1.0 $bigstr         ; # btree encoding
         for {set i 0} {$i < 128} {incr i} {
             r zadd bigzset2 1.0 $64bytes    ; # ziplist encoding
         }

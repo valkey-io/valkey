@@ -28,6 +28,7 @@
  */
 
 #include "server.h"
+#include "ordered_index.h"
 #include "util.h"
 #include "sha1.h" /* SHA1 is used for DEBUG DIGEST */
 #include "crc64.h"
@@ -39,6 +40,8 @@
 #include "io_threads.h"
 #include "sds.h"
 #include "module.h"
+
+#include "tls.h"
 
 #include <arpa/inet.h>
 #include <signal.h>
@@ -211,19 +214,21 @@ void xorObjectDigest(serverDb *db, robj *keyobj, unsigned char *digest, robj *o)
                 xorDigest(digest, eledigest, 20);
                 zzlNext(zl, &eptr, &sptr);
             }
-        } else if (objectGetEncoding(o) == OBJ_ENCODING_SKIPLIST) {
+        } else if (objectGetEncoding(o) == OBJ_ENCODING_BTREE) {
             zset *zs = objectGetVal(o);
             hashtableIterator iter;
             hashtableInitIterator(&iter, zs->ht, 0);
 
             void *next;
             while (hashtableNext(&iter, &next)) {
-                zskiplistNode *node = next;
-                const int len = fpconv_dtoa(node->score, buf);
+                OrderedIndexItem *node = next;
+                const char *ele;
+                size_t ele_len;
+                orderedIndexItemGetElement(node, &ele, &ele_len);
+                const int len = fpconv_dtoa(orderedIndexItemGetScore(node), buf);
                 buf[len] = '\0';
                 memset(eledigest, 0, 20);
-                sds ele = zslGetNodeElement(node);
-                mixDigest(eledigest, ele, sdslen(ele));
+                mixDigest(eledigest, ele, ele_len);
                 mixDigest(eledigest, buf, strlen(buf));
                 xorDigest(digest, eledigest, 20);
             }
@@ -537,6 +542,8 @@ void debugCommand(client *c) {
             "    Force freeClient on primary to use async path.",
             "PROTECT-CLIENT <id>",
             "    Protect a client from being freed, forcing deferred close.",
+            "FORCE-TLS-WRITE-ERROR <0|1>",
+            "    Force TLS write error for testing.",
             NULL};
         addExtendedReplyHelp(c, help, clusterDebugCommandExtendedHelp());
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "segfault")) {
@@ -981,7 +988,7 @@ void debugCommand(client *c) {
         /* Get the hashtable reference from the object, if possible. */
         hashtable *ht = NULL;
         switch (objectGetEncoding(o)) {
-        case OBJ_ENCODING_SKIPLIST: {
+        case OBJ_ENCODING_BTREE: {
             zset *zs = objectGetVal(o);
             ht = zs->ht;
         } break;
@@ -1099,6 +1106,19 @@ void debugCommand(client *c) {
         } else {
             addReplyError(c, "No such client");
         }
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "force-tls-write-error") && c->argc == 3) {
+#ifdef USE_OPENSSL
+        long val;
+        if (getLongFromObjectOrReply(c, c->argv[2], &val, NULL) != C_OK) return;
+        if (val < 0 || val > 1) {
+            addReplyError(c, "Value must be 0 or 1");
+            return;
+        }
+        server.debug_force_tls_write_error = val;
+        addReply(c, shared.ok);
+#else
+        addReplyError(c, "TLS is not enabled");
+#endif
     } else if (!handleDebugClusterCommand(c)) {
         addReplySubcommandSyntaxError(c);
         return;
@@ -1194,8 +1214,11 @@ void serverLogObjectDebugInfo(const robj *o) {
         serverLog(LL_WARNING, "Hash size: %d", (int)hashTypeLength(o));
     } else if (objectGetType(o) == OBJ_ZSET) {
         serverLog(LL_WARNING, "Sorted set size: %d", (int)zsetLength(o));
-        if (objectGetEncoding(o) == OBJ_ENCODING_SKIPLIST)
-            serverLog(LL_WARNING, "Skiplist level: %d", (int)((const zset *)o->ptr)->zsl->level);
+        if (objectGetEncoding(o) == OBJ_ENCODING_BTREE) {
+            /* Not declared in ordered_index.h — debug-only introspection. */
+            extern int orderedIndexGetHeight(const OrderedIndex *oi);
+            serverLog(LL_WARNING, "Index height: %d", orderedIndexGetHeight(((const zset *)o->ptr)->oi));
+        }
     } else if (objectGetType(o) == OBJ_STREAM) {
         serverLog(LL_WARNING, "Stream size: %d", (int)streamLength(o));
     }

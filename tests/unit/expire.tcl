@@ -965,6 +965,49 @@ start_server {tags {"expire"}} {
             fail "key wasn't expired"
         }
     }
+
+    test {RESET clears the import-source flag} {
+        r config set import-mode yes
+        assert_equal [r client import-source on] {OK}
+        assert_match {*flags=I*} [r client list id [r client id]]
+
+        # RESET must make the connection resemble a fresh client, which
+        # includes dropping the import-source privilege.
+        r reset
+        assert_match {*flags=N*} [r client list id [r client id]]
+
+        r config set import-mode no
+    } {OK} {needs:reset}
+
+    test {RESET drops import-source expiration semantics} {
+        r flushall
+        r config set import-mode yes
+
+        r set foo1 1 PX 1
+        after 10
+
+        # While import-source is on, the expired key is visible.
+        assert_equal [r client import-source on] {OK}
+        assert_match {*flags=I*} [r client list id [r client id]]
+        assert_equal [r ttl foo1] {0}
+        assert_equal [r get foo1] {1}
+
+        # After RESET the connection must lose import-source semantics, so the
+        # logically-expired key looks missing again, exactly like a fresh client.
+        r reset
+        assert_match {*flags=N*} [r client list id [r client id]]
+        assert_equal [r get foo1] {}
+        assert_equal [r ttl foo1] {-2}
+
+        r config set import-mode no
+
+        # Verify all keys have expired (cleanup, mirrors the import-source tests).
+        wait_for_condition 40 100 {
+            [r dbsize] eq 0
+        } else {
+            fail "Keys did not actively expire."
+        }
+    } {} {needs:reset}
 }
 
 start_server {tags {expire} overrides {hz 100}} {

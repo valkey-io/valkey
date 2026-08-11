@@ -2107,6 +2107,7 @@ void clearClientConnectionState(client *c) {
     c->flag.reply_skip_next = 0;
     c->flag.no_touch = 0;
     c->flag.no_evict = 0;
+    c->flag.import_source = 0;
 }
 
 void freeClient(client *c) {

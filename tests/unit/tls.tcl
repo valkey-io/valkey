@@ -10,28 +10,28 @@ start_server {tags {"tls"}} {
 
         test {TLS: Verify tls-auth-clients behaves as expected} {
             set s [redis [srv 0 host] [srv 0 port]]
-            ::tls::import [$s channel]
+            ::tls::import [$s channel] -cafile $::tlsdir/ca.crt
             catch {$s PING} e
             assert_match {*error*} $e
 
             r CONFIG SET tls-auth-clients no
 
             set s [redis [srv 0 host] [srv 0 port]]
-            ::tls::import [$s channel]
+            ::tls::import [$s channel] -cafile $::tlsdir/ca.crt
             catch {$s PING} e
             assert_match {PONG} $e
 
             r CONFIG SET tls-auth-clients optional
 
             set s [redis [srv 0 host] [srv 0 port]]
-            ::tls::import [$s channel]
+            ::tls::import [$s channel] -cafile $::tlsdir/ca.crt
             catch {$s PING} e
             assert_match {PONG} $e
 
             r CONFIG SET tls-auth-clients yes
 
             set s [redis [srv 0 host] [srv 0 port]]
-            ::tls::import [$s channel]
+            ::tls::import [$s channel] -cafile $::tlsdir/ca.crt
             catch {$s PING} e
             assert_match {*error*} $e
         }

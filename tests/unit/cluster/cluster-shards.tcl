@@ -20,9 +20,7 @@ proc get_node_info_from_shard {id reference {type node}} {
     return {}
 }
 
-# Gossip-style force failover after pausing the only voter/leader; skipped
-# under raft because MEET joins as learner and FAILOVER requires leader commit.
-start_cluster 3 3 {tags {external:skip cluster cluster-raft:skip}} {
+start_cluster 3 3 {tags {external:skip cluster}} {
     set primary_node 0
     set replica_node 3
     set validation_node 4
@@ -91,9 +89,7 @@ proc cluster_ensure_master {id} {
 # transiently-orphaned primary during the cluster restart test and change its
 # shard id. Migration semantics are not under test here (CLUSTER REPLICATE is
 # manual and unaffected).
-# Legacy CLUSTER SHARDS / gossip failover / RESET-FORGET / rolling restart tests.
-# Skipped under raft: see cluster-raft:skip note above and learner MEET semantics.
-start_cluster 4 5 {tags {external:skip cluster cluster-raft:skip} overrides {cluster-allow-replica-migration no}} {
+start_cluster 4 5 {tags {external:skip cluster} overrides {cluster-allow-replica-migration no}} {
 
 # cluster_master_nodes and cluster_replica_nodes refer to the active cluster members.
 set ::cluster_master_nodes 4
@@ -245,11 +241,26 @@ test "Test the replica reports a loading state while it's loading" {
 }
 
 test "Regression test for a crash when calling SHARDS during handshake" {
-    # Use R 8 (standalone node) to establish handshaking connections
+    # R8: RESET + FORGET + MEET, then SHARDS while links are still handshaking.
+    # Raft: yield leadership before RESET; FORGET once (not a loop).
     set id [R 8 CLUSTER MYID]
+    if {$::cluster_raft && [CI 0 cluster_raft_leader] eq $id} {
+        pause_process [srv 8 pid]
+        wait_for_condition 1000 50 {
+            set leader [CI 0 cluster_raft_leader]
+            expr {$leader ne "" && $leader ne $id}
+        } else {
+            resume_process [srv 8 pid]
+            fail "Cluster did not elect a new leader while R8 was paused"
+        }
+        resume_process [srv 8 pid]
+    }
     R 8 CLUSTER RESET HARD
-    for {set i 0} {$i < 8} {incr i} {
-        R $i CLUSTER FORGET $id
+    R 0 CLUSTER FORGET $id
+    wait_for_condition 50 100 {
+        [node_is_forgotten $id]
+    } else {
+        fail "Old R8 id was not forgotten"
     }
     R 8 cluster meet 127.0.0.1 [srv 0 port]
     # This line would previously crash, since all the outbound

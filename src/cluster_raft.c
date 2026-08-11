@@ -1386,35 +1386,34 @@ static void raftLogApply(raftLogEntry *e) {
                 /* Update address for existing node. */
                 clusterNodeParseAddressString(existing, argv[1]);
             }
-            /* On first official join, clear MEET and mark whether the node
-             * participates in quorum. */
+            /* On first official join, clear MEET and mark voter/learner. */
             clusterNode *joined = existing ? existing : clusterLookupNode(argv[0], CLUSTER_NAMELEN);
-            if (joined) {
-                if (!existing || (joined->flags & CLUSTER_NODE_MEET)) {
-                    joined->flags &= ~CLUSTER_NODE_MEET;
-                    if (learner) {
-                        joined->flags |= CLUSTER_NODE_LEARNER;
-                    } else {
-                        joined->flags &= ~CLUSTER_NODE_LEARNER;
-                        server.cluster->size++;
-                    }
-                    clusterAddNodeToShard(joined->shard_id, joined);
-                    rs->todo_save_config = 1;
+            bool first_join = false;
+            if (joined && (!existing || (joined->flags & CLUSTER_NODE_MEET))) {
+                first_join = true;
+                joined->flags &= ~CLUSTER_NODE_MEET;
+                if (learner) {
+                    joined->flags |= CLUSTER_NODE_LEARNER;
+                } else {
+                    joined->flags &= ~CLUSTER_NODE_LEARNER;
+                    server.cluster->size++;
+                }
+                clusterAddNodeToShard(joined->shard_id, joined);
+                rs->todo_save_config = 1;
 
-                    /* Process deferred MEET messages now that we're in a cluster. */
-                    if (clusterRaftHasPeerMembers() && listLength(rs->deferred_meets) > 0) {
-                        listIter dli;
-                        listNode *dln;
-                        listRewind(rs->deferred_meets, &dli);
-                        while ((dln = listNext(&dli)) != NULL) {
-                            clusterLink *mlink = listNodeValue(dln);
-                            if (mlink->node) {
-                                clusterRaftSendBare(mlink, "WELCOME");
-                                clusterRaftInvitePeer(mlink->node);
-                            }
+                /* Process deferred MEET messages now that we're in a cluster. */
+                if (clusterRaftHasPeerMembers() && listLength(rs->deferred_meets) > 0) {
+                    listIter dli;
+                    listNode *dln;
+                    listRewind(rs->deferred_meets, &dli);
+                    while ((dln = listNext(&dli)) != NULL) {
+                        clusterLink *mlink = listNodeValue(dln);
+                        if (mlink->node) {
+                            clusterRaftSendBare(mlink, "WELCOME");
+                            clusterRaftInvitePeer(mlink->node);
                         }
-                        listEmpty(rs->deferred_meets);
                     }
+                    listEmpty(rs->deferred_meets);
                 }
             }
             rs->todo_invalidate_slots_cache = 1;
@@ -1424,22 +1423,32 @@ static void raftLogApply(raftLogEntry *e) {
 
             /* Leader: initialize replication state for the new peer. */
             if (rs->role == RAFT_ROLE_LEADER) {
-                clusterNode *joined = clusterLookupNode(argv[0], CLUSTER_NAMELEN);
-                if (joined && joined != myself) {
-                    RAFT_NODE(joined)->next_index = 1;
-                    RAFT_NODE(joined)->match_index = 0;
-                    RAFT_NODE(joined)->last_ack_time = monotonicMs();
+                clusterNode *peer = clusterLookupNode(argv[0], CLUSTER_NAMELEN);
+                if (peer && peer != myself) {
+                    RAFT_NODE(peer)->next_index = 1;
+                    RAFT_NODE(peer)->match_index = 0;
+                    RAFT_NODE(peer)->last_ack_time = monotonicMs();
                 }
             }
 
-            /* If this entry is about us, promote from joiner to follower. */
+            /* Ourselves: keep rs->role aligned with the membership flag above.
+             *
+             * learner → LEARNER (even if AE already made us FOLLOWER)
+             * voter + JOINER → FOLLOWER
+             * voter + LEADER → keep LEADER (singleton self-join) */
             if (memcmp(argv[0], myself->name, CLUSTER_NAMELEN) == 0) {
                 sdsfree(rs->my_last_committed_info);
                 rs->my_last_committed_info = clusterRaftBuildMyNodeInfo();
 
-                if (rs->role == RAFT_ROLE_JOINER) {
-                    rs->role = learner ? RAFT_ROLE_LEARNER : RAFT_ROLE_FOLLOWER;
-                    rs->todo_save_config = 1;
+                int was_joiner = (rs->role == RAFT_ROLE_JOINER);
+                if (first_join) {
+                    if (learner)
+                        rs->role = RAFT_ROLE_LEARNER;
+                    else if (was_joiner)
+                        rs->role = RAFT_ROLE_FOLLOWER;
+                }
+
+                if (was_joiner) {
                     serverLog(LL_NOTICE, "Promoted from joiner to %s.", learner ? "learner" : "follower");
 
                     /* Propose SLOT_CHANGE for slots assigned before joining

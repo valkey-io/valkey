@@ -1326,26 +1326,76 @@ proc memcmp {string1 string2} {
     return [expr {$len1 - $len2}]
 }
 
-# Escape a string for use as a JSON string value.
+# Every C0 control character needs escaping, not just the ones with a short
+# form: JSON forbids them raw, and one anywhere in the file makes the whole file
+# unparsable, discarding every failure in the run. Server output and memory-tool
+# reports do carry them. Built once, since the map is walked per character and
+# the strings being escaped run to megabytes.
+set ::json_escape_map {
+    "\\" "\\\\" "\"" "\\\"" "\n" "\\n" "\r" "\\r"
+    "\t" "\\t" "\b" "\\b" "\f" "\\f"
+}
+foreach code {0 1 2 3 4 5 6 7 11 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31} {
+    lappend ::json_escape_map [format %c $code] [format {\u%04x} $code]
+}
+
+# Reduce a string to UTF-8 bytes, whichever form it arrived in.
 #
-# Beyond the characters with a short escape, every C0 control character has to
-# be escaped: JSON forbids them raw, and one raw byte makes the whole file
-# unparsable, taking every failure in the run with it. Failure messages carry
-# server output and memory-tool reports, which do contain control bytes, and an
-# incomplete ANSI sequence survives colour stripping.
-proc json_escape_string {s} {
-    set s [string map {
-        "\\" "\\\\" "\"" "\\\"" "\n" "\\n" "\r" "\\r"
-        "\t" "\\t" "\b" "\\b" "\f" "\\f"
-    } $s]
-    set out ""
-    foreach ch [split $s ""] {
-        scan $ch %c code
-        if {$code < 0x20} {
-            append out [format {\u%04x} $code]
-        } else {
-            append out $ch
-        }
+# Failure text reaches the harness two ways and they are not the same type: over
+# a -translation binary socket it is already UTF-8 bytes, while [exec cat] of a
+# log decodes into a real Tcl string. Writing either one out assuming the other
+# corrupts it, so both are normalized here. A byte that is not part of a valid
+# UTF-8 sequence (a latin-1 log) is converted rather than passed through, so the
+# artifact always decodes.
+proc utf8_bytes {s} {
+    # All-ASCII text is already both forms at once and is the overwhelmingly
+    # common case, so it short-circuits the conversions below; those cost several
+    # passes over a report that can run to megabytes.
+    if {[string is ascii $s]} {
+        return $s
     }
-    return $out
+    # A codepoint above 255 cannot be a byte, so the string is a decoded one.
+    if {[regexp {[^\u0000-\u00ff]} $s]} {
+        return [encoding convertto utf-8 $s]
+    }
+    # Every codepoint fits a byte. If those bytes already form valid UTF-8, they
+    # came off the binary socket and must pass through untouched; otherwise the
+    # text is latin-1 and needs converting. Tcl 9's strict encoding profile
+    # raises on an invalid sequence rather than substituting, so the decode is
+    # caught: a failure means the bytes are not valid UTF-8, which is the
+    # latin-1 case, and only a clean decode is worth the round-trip comparison.
+    if {![catch {encoding convertfrom utf-8 $s} decoded]
+        && [encoding convertto utf-8 $decoded] eq $s} {
+        return $s
+    }
+    return [encoding convertto utf-8 $s]
+}
+
+# Largest per-failure error text the artifact carries, in bytes.
+set ::max_failure_error_chars 65536
+
+# Cap a failure's error text, in bytes, on a UTF-8 character boundary.
+#
+# A memory-tool report is the tool's whole stderr buffer and can run to tens of
+# megabytes. The head holds the diagnostic and the first stack, which is what
+# identifies the failure; keeping the rest makes the artifact too large to upload
+# and slows the write enough for a job timeout to truncate it mid-file. Cutting
+# inside a multi-byte sequence would leave the whole artifact undecodable.
+proc truncate_failure_error {s limit} {
+    set s [utf8_bytes $s]
+    if {[string length $s] <= $limit} {
+        return $s
+    }
+    set cut $limit
+    while {$cut > 0} {
+        scan [string index $s $cut] %c code
+        if {$code eq "" || ($code & 0xC0) != 0x80} break
+        incr cut -1
+    }
+    return "[string range $s 0 [expr {$cut - 1}]]\n... (truncated)"
+}
+
+# Escape a string for use as a JSON string value.
+proc json_escape_string {s} {
+    return [string map $::json_escape_map [utf8_bytes $s]]
 }

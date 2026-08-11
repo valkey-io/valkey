@@ -237,8 +237,14 @@ all: valkey-unit-gtests
 
 .PHONY: test-unit
 TEST_ARGS = $(if $(accurate),--accurate) $(if $(large_memory),--large-memory) $(if $(valgrind),--valgrind) $(if $(seed),--seed $(seed))
+# Set json_results=<path> to dump per-test outcomes and preserve each test's
+# console log. CI points json_results at a file, and --output_dir keeps the
+# per-test logs beside it; the extract-gtest-failures action reads the failing
+# ones for the full failure text. gtest-parallel writes both before returning
+# the test exit code, so they survive a failing run.
+GTEST_JSON_ARGS = $(if $(json_results),--dump_json_test_results $(json_results) --output_dir $(dir $(json_results)))
 test-unit: valkey-unit-gtests
-	python3 ../../deps/gtest-parallel/gtest_parallel.py ./valkey-unit-gtests --gtest_filter=$(UNIT_TEST_PATTERN)* -- $(TEST_ARGS)
+	python3 ../../deps/gtest-parallel/gtest_parallel.py ./valkey-unit-gtests --gtest_filter=$(UNIT_TEST_PATTERN)* $(GTEST_JSON_ARGS) -- $(TEST_ARGS)
 	@printf '\033[32mAll UNIT TESTS PASSED!\033[0m\n'
 
 .PHONY: valgrind

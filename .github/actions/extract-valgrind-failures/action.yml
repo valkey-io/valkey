@@ -1,0 +1,130 @@
+name: 'Extract Valgrind Failures'
+description: 'Parse valgrind logs from the gtest unit-test run into the test-failures schema'
+inputs:
+  # The default covers both shapes the unittest step writes: err.<pid>.txt for
+  # the gtest binary under gtest-parallel, and err.txt for the older
+  # valkey-unit-tests fallback.
+  log-glob:
+    description: 'Space-separated globs matching the valgrind logs, relative to the workspace'
+    required: false
+    default: 'err.*.txt err.txt'
+  suite-name:
+    description: 'Suite file to write under test-failures/'
+    required: false
+    default: 'valgrind-unittest'
+runs:
+  using: 'composite'
+  steps:
+    - name: Extract valgrind failures to JSON
+      shell: bash
+      env:
+        VALGRIND_LOG_GLOB: ${{ inputs.log-glob }}
+        VALGRIND_SUITE_NAME: ${{ inputs.suite-name }}
+      run: |
+        python3 << 'EOF'
+        import glob, json, os, re
+
+        # The unittest step runs the gtest binary under valgrind with
+        # --log-file=err.%p.txt, then greps those logs and exits non-zero when
+        # one holds an error. That makes the job red, but the logs are not part
+        # of the failures artifact, so a valgrind error found while every gtest
+        # verdict passed reached no issue: the detector saw a red run whose
+        # artifact named no failure. This step carries those reports across.
+
+        os.makedirs("test-failures", exist_ok=True)
+        suite_name = os.environ.get("VALGRIND_SUITE_NAME") or "valgrind-unittest"
+        results_file = os.path.join("test-failures", f"{suite_name}.json")
+
+        # Largest per-failure error text carried in the artifact, matching the
+        # Tcl side's ::max_failure_error_chars. A valgrind buffer can run to
+        # megabytes; the head holds the diagnostic and first stack that identify
+        # the failure, and the consumer caps an issue body at 65536 anyway.
+        _MAX_ERROR_CHARS = 65536
+
+        # The same signals tests/support/util.tcl's find_valgrind_errors looks
+        # for, so a log this step reports is one the Tcl harness would report
+        # too. Kept deliberately in step with that proc: a divergence would mean
+        # the same buffer is a failure in one path and clean in the other.
+        _ERROR_SIGNALS = (
+            re.compile(r" at 0x"),
+            re.compile(r"Invalid"),
+            re.compile(r"Mismatched"),
+            re.compile(r"uninitialized"),
+            re.compile(r"has a fishy"),
+            re.compile(r"overlap"),
+        )
+
+        # "set address range perms" warnings are routine and not a concern; every
+        # other warning is, which is how find_valgrind_errors reads them.
+        _WARNING_RE = re.compile(r"^(?=.*Warning)(?:(?!set address range perms).)*$", re.M)
+
+        # A run that ended cleanly says so. Absent, the process did not
+        # terminate properly and the buffer is reported.
+        _CLEAN_SIGNALS = (
+            re.compile(r"definitely lost: 0 bytes"),
+            re.compile(r"no leaks are possible"),
+        )
+
+        def valgrind_error_in(text):
+            """The buffer when it reports an error, else "" — mirrors the Tcl proc."""
+            if any(signal.search(text) for signal in _ERROR_SIGNALS):
+                return text
+            if _WARNING_RE.search(text):
+                return text
+            if not any(signal.search(text) for signal in _CLEAN_SIGNALS):
+                return text
+            return ""
+
+        def truncate(text):
+            if len(text) <= _MAX_ERROR_CHARS:
+                return text
+            return text[:_MAX_ERROR_CHARS] + "\n... (truncated)"
+
+        log_glob = os.environ.get("VALGRIND_LOG_GLOB") or "err.*.txt err.txt"
+        # Sorted and deduped so the artifact is stable across runs: the pid in
+        # each filename varies, an unordered glob would reorder entries between
+        # runs, and the globs can overlap on one file.
+        logs = sorted({
+            path
+            for pattern in log_glob.split()
+            for path in glob.glob(pattern)
+        })
+        if not logs:
+            # No logs means the unittest step did not run the gtest binary under
+            # valgrind (the binary was absent, or the step was skipped). Writing
+            # an empty suite would report a suite that passed when it never ran,
+            # so leave the file absent.
+            print("No valgrind logs; this job collected no valgrind results.")
+            raise SystemExit(0)
+
+        failures = []
+        for path in logs:
+            try:
+                with open(path, encoding="utf-8", errors="replace") as f:
+                    text = f.read()
+            except OSError as exc:
+                # Best effort: an unreadable log must not fail the step, which
+                # would drop the readable ones with it.
+                print(f"{path}: unreadable, skipped ({exc})")
+                continue
+            error = valgrind_error_in(text).strip()
+            if not error:
+                continue
+            # Prefixed exactly as check_valgrind_errors does, so the consumer
+            # classifies and fingerprints this the same as a harness-reported
+            # valgrind failure rather than treating it as a new shape.
+            failures.append({
+                "test_name": "",
+                "test_file": "src/unit/valkey-unit-gtests",
+                "type": "valgrind",
+                "error": truncate(f"Valgrind error: {error}"),
+            })
+
+        with open(results_file, "w") as f:
+            json.dump(failures, f, indent=2)
+
+        if failures:
+            print(f"Found {len(failures)} valgrind failure(s) in {len(logs)} log(s)")
+        else:
+            print(f"No valgrind failures in {len(logs)} log(s)")
+        EOF

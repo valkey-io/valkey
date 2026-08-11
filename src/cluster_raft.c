@@ -435,6 +435,7 @@ static bool clusterRaftIsSingleton(void) {
  * Voters become followers; learners and joiners keep their role. */
 static void clusterRaftStepDown(mstime_t now, const char *reason) {
     clusterRaftState *rs = RAFT_STATE();
+    enum raftRole old_role = rs->role;
     clusterRaftDeferPendingProposals();
     if (rs->role != RAFT_ROLE_LEARNER && rs->role != RAFT_ROLE_JOINER)
         rs->role = RAFT_ROLE_FOLLOWER;
@@ -444,7 +445,8 @@ static void clusterRaftStepDown(mstime_t now, const char *reason) {
     clusterRaftRandomizeElectionTimeout();
     rs->last_heartbeat = now;
     rs->todo_save_config = 1;
-    serverLog(LL_NOTICE, "Stepping down: %s.", reason);
+    if (rs->role != old_role)
+        serverLog(LL_NOTICE, "Stepping down: %s.", reason);
 }
 
 /* Return non-zero if the leader still has a recently responsive voting

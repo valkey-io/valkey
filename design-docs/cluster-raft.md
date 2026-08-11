@@ -384,22 +384,121 @@ down prematurely and defer the MEET.
 
 ### Membership changes
 
-Membership and voting rights are separate. `NODE_JOIN` adds a node to
-the replicated topology as a learner; `ADD_VOTER` and `DEL_VOTER`
-change the voting set. `NODE_FORGET` removes either a learner or a
-voter. When the removed node is a voter, the voting size is decremented
-on apply.
-
-`server.cluster->size` is the number of voters only. Learners remain in
-`server.cluster->nodes` so they can receive AE, apply topology entries,
-own slots, and act as data primaries or replicas, but they are ignored
-for elections, commit quorum, and leader freshness checks.
+Membership and voting rights are separate. A node is added with
+`NODE_JOIN` and removed with `NODE_FORGET`; voting rights are changed
+with `ADD_VOTER` and `DEL_VOTER`. `server.cluster->size` is the number
+of voters only. Learners remain in `server.cluster->nodes` so they can
+receive AE, apply topology entries, own slots, and act as data
+primaries or replicas, but they are ignored for elections, commit
+quorum, and leader freshness checks.
 
 New nodes join as learners by default, following Ongaro §4.2.1 and the
 etcd learner design: the leader replicates log entries to the new node
 without increasing the majority required to commit. Once the learner has
 caught up to the leader's log, the leader can append `ADD_VOTER` to
 promote it to a voting follower.
+
+Not every membership entry is a configuration change. Only entries that
+touch `server.cluster->size` are:
+
+| Entry                                | Changes quorum |
+|--------------------------------------|----------------|
+| `NODE_JOIN ... learner`              | no             |
+| `NODE_FORGET` of a learner           | no             |
+| `NODE_JOIN ... voter` (self-join)    | yes (size++)   |
+| `ADD_VOTER`                          | yes (size++)   |
+| `DEL_VOTER`                          | yes (size--)   |
+| `NODE_FORGET` of a voter             | yes (size--)   |
+
+Adding or removing a learner does not affect quorum, so the safety
+discussion below only applies to the quorum-changing entries.
+
+**Config takes effect on apply, not on append.** Quorum is computed
+from `server.cluster->size`, which is updated when the entry is applied
+(after commit). This differs from Ongaro's single-server approach
+(§4.1) where the new configuration takes effect when the entry is
+appended to the log.
+
+**Implications of config-on-apply:**
+
+1. Multiple quorum-changing entries can be in flight simultaneously.
+   The leader does not need to wait for one to commit before proposing
+   the next. This enables fast cluster formation (all nodes invited in
+   one batch).
+
+2. A quorum-changing entry is committed using the **old** quorum (the
+   cluster size before the change). For example, adding D as a voter to
+   {A,B,C} requires 2 ACKs (majority of 3), not 3 ACKs (majority of 4).
+
+3. If a leader election truncates uncommitted quorum-changing entries,
+   no configuration rollback is needed — the config never took effect.
+   Affected nodes time out as joiners and revert to singleton leaders.
+
+4. Joint consensus is not needed. The quorum transitions atomically at
+   apply time in a single step.
+
+**Comparison to config-on-append (Ongaro §4.1):**
+
+With config-on-append, the new quorum is used to commit the membership
+entry itself. This guarantees the new node has the entry before it
+takes effect, eliminating any window of reduced redundancy. However, it
+adds complexity:
+
+- Only one membership change can be in flight at a time (the leader
+  must wait for commit before proposing the next change).
+- If the entry is truncated after append but before commit, nodes must
+  roll back to the previous configuration.
+- The new node must be caught up before the entry is proposed
+  (otherwise it can't ACK in time, stalling the commit).
+
+**Safety of committing with old quorum — known limitation:**
+
+After committing a quorum-changing entry (e.g. NODE_JOIN(F) ... voter
+to {A,B,C,D,E}) with old quorum (3 ACKs), the nodes that have the
+entry operate at size=6 (quorum=4), while nodes that don't have it
+still believe size=5 (quorum=3). This split in quorum views can
+violate safety:
+
+Example (size 5→6): 3 nodes have the entry (size=6 view). The other 3
+nodes don't have it (size=5 view, quorum=3). If 2 of the 3 nodes with
+the entry crash, the 3 nodes without it can elect a leader among
+themselves (they have quorum=3 under their view). That leader
+overwrites the entry via log truncation. The committed entry is lost.
+
+For size 3→4: 2 nodes have the entry (size=4 view). The other 2 don't
+(size=3 view, quorum=2). If 1 node with the entry crashes, the 2
+without can elect a leader (quorum=2 under their view).
+
+The root cause: nodes disagree on cluster size, leading to two
+different quorum calculations coexisting. This is exactly what Ongaro's
+config-on-append prevents — by making all nodes adopt the new config
+immediately on append, they all agree on quorum.
+
+In practice, this requires crashes within the brief window between
+commit and AE delivery. The leader sends AE immediately after commit,
+so the window is one network round-trip. Once AE is delivered, all
+nodes agree on the new size and the split disappears.
+
+**Worst case if this occurs:** The new node is orphaned — it stepped
+down to joiner but its entry was lost. It reverts to singleton leader
+after timeout. The CLUSTER MEET client already returned OK, so the
+admin believes the node joined. No data loss or split brain occurs (the
+node never had slots). The admin can detect the issue via CLUSTER NODES
+and retry CLUSTER MEET.
+
+**Accepted tradeoff:** We accept this limitation because:
+- The window is extremely brief (one AE round-trip after commit).
+- It enables fast cluster formation (multiple changes in flight, no
+  need to catch up the new node before committing).
+- It avoids the complexity of config-on-append or joint consensus.
+- Kafka's KRaft uses the same approach.
+
+**Future fix:** To eliminate this window entirely, use either
+config-on-append (Ongaro §4.1, where the new configuration takes effect
+on append and its quorum is used for commit) or joint consensus (§4.3).
+Both require the new node to receive AE as a non-voting member before
+its entry is committed, adding complexity to the leader's replication
+logic.
 
 ## Failure Detection
 

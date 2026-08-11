@@ -2409,16 +2409,16 @@ void replicaBeforeLoadPrimaryRDB(connection *conn, int use_diskless_load) {
 }
 
 /* Helper function to update the full sync duration metric for both single/dual channel replication. */
-static void replicationUpdateFullSyncDuration(void) {
+static void captureReplFullSyncCompleteDuration(void) {
     if (server.repl_full_sync_start_time) {
-        server.repl_full_sync_duration_ms = elapsedMs(server.repl_full_sync_start_time);
+        server.repl_full_sync_complete_duration_ms = elapsedMs(server.repl_full_sync_start_time);
         server.repl_full_sync_start_time = 0;
     }
 }
 
 void replicaAfterLoadPrimaryRDB(connection *conn, rdbSaveInfo *rsi, int disk_based_sync) {
     /* Finalize full sync duration here to exclude backlog draining/streaming time for simplicity and consistency. */
-    replicationUpdateFullSyncDuration();
+    captureReplFullSyncCompleteDuration();
 
     /* Final setup of the connected replica <- primary link */
     if (conn == server.repl_rdb_transfer_s) {

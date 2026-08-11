@@ -8,13 +8,13 @@ start_server {tags {"repl external:skip"}} {
         set master_host [srv 0 host]
         set master_port [srv 0 port]
 
-        test {Assert primary_last_full_sync_duration_ms is empty on master} {
-            set val [status $master primary_last_full_sync_duration_ms]
+        test {Assert last_successful_sync_duration_ms is empty on master} {
+            set val [status $master last_successful_sync_duration_ms]
             assert {$val eq ""}
         }
 
-        test {Assert primary_last_full_sync_duration_ms is empty on replica initially} {
-            set val [status $replica primary_last_full_sync_duration_ms]
+        test {Assert last_successful_sync_duration_ms is empty on replica initially} {
+            set val [status $replica last_successful_sync_duration_ms]
             assert {$val eq ""}
         }
 
@@ -27,8 +27,8 @@ start_server {tags {"repl external:skip"}} {
             }
         }
 
-        test {Assert primary_last_full_sync_duration_ms is reported and valid} {
-            set val [status $replica primary_last_full_sync_duration_ms]
+        test {Assert last_successful_sync_duration_ms is reported and valid} {
+            set val [status $replica last_successful_sync_duration_ms]
             assert {$val ne ""}
             assert {[string is integer -strict $val]}
             assert {$val >= 0}
@@ -41,7 +41,7 @@ start_server {tags {"repl external:skip"}} {
             } else {
                 fail "Replica failed to become master"
             }
-            set val [status $replica primary_last_full_sync_duration_ms]
+            set val [status $replica last_successful_sync_duration_ms]
             assert {$val eq ""}
         }
 
@@ -54,8 +54,8 @@ start_server {tags {"repl external:skip"}} {
             }
         }
 
-        test {Assert primary_last_full_sync_duration_ms is still reported and valid} {
-            set val [status $replica primary_last_full_sync_duration_ms]
+        test {Assert last_successful_sync_duration_ms is still reported and valid} {
+            set val [status $replica last_successful_sync_duration_ms]
             assert {$val ne ""}
             assert {[string is integer -strict $val]}
             assert {$val >= 0}
@@ -88,7 +88,7 @@ start_server {tags {"repl external:skip"}} {
                 fail "Replica could not connect to master"
             }
 
-            set val [status $replica primary_last_full_sync_duration_ms]
+            set val [status $replica last_successful_sync_duration_ms]
             assert {$val ne ""}
             assert {[string is integer -strict $val]}
             assert {$val >= 0}

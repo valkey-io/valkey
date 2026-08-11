@@ -710,6 +710,8 @@ proc start_server {options {code undefined}} {
             set err {}
             append err [exec cat $stdout] "\n" [exec cat $stderr]
             start_server_error $executable $config_file $err
+            set ::singledb $old_singledb
+            set ::tags [lrange $::tags 0 end-[llength $tags]]
             return
         }
         set server_started 1

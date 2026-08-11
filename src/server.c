@@ -32,6 +32,7 @@
  * SPDX-License-Identifier: BSD-3-Clause
  */
 #include "server.h"
+#include "ordered_index.h"
 #include "connection.h"
 #include "monotonic.h"
 #include "cluster.h"
@@ -625,16 +626,50 @@ hashtableType setHashtableType = {
     .keyCompare = dictSdsKeyCompare,
     .entryDestructor = dictSdsDestructor};
 
-const void *zsetHashtableGetKey(const void *element) {
-    const zskiplistNode *node = element;
-    return zslGetNodeElement(node);
+/* Zset hashtable callbacks for fbtree backend.
+ * Stored entries are packed [8B score][element]. Lookup keys are plain sds
+ * marked via zsetMarkLookupKey. The callbacks extract the element portion
+ * based on whether the key is marked (plain sds) or unmarked (packed item). */
+
+#define FBTREE_SCORE_SIZE 8
+
+static const char *zsetExtractElement(const void *key, size_t *len) {
+    const_sds s = (const_sds)key;
+    if (zsetIsLookupKey(s)) {
+        /* Plain sds lookup key — use as-is.
+         * For SDS_TYPE_5 keys that were marked, sdslen is broken (type bits
+         * were overwritten), so read length directly from the flags byte. */
+        unsigned char flags = s[-1];
+        if ((flags & SDS_TYPE_MASK) == ZSET_LOOKUP_TYPE5_MARKER) {
+            *len = flags >> SDS_TYPE_BITS;
+        } else {
+            *len = sdslen(s);
+        }
+        return (const char *)s;
+    }
+    /* Packed fbtree item — skip 8-byte score prefix */
+    *len = sdslen(s) - FBTREE_SCORE_SIZE;
+    return (const char *)s + FBTREE_SCORE_SIZE;
 }
 
-/* Sorted sets hash (note: a skiplist is used in addition to the hash table) */
+static uint64_t zsetHashFunction(const void *key) {
+    size_t len;
+    const char *ptr = zsetExtractElement(key, &len);
+    return genHashFunctionConfigurableSeed(ptr, len);
+}
+
+static int zsetKeyCompare(const void *a, const void *b) {
+    size_t alen, blen;
+    const char *aptr = zsetExtractElement(a, &alen);
+    const char *bptr = zsetExtractElement(b, &blen);
+    if (alen != blen) return 0;
+    return memcmp(aptr, bptr, alen) == 0;
+}
+
+/* Sorted sets hash (an ordered index is used in addition to the hash table) */
 hashtableType zsetHashtableType = {
-    .hashFunction = sdsHashConfigurableSeed,
-    .entryGetKey = zsetHashtableGetKey,
-    .keyCompare = dictSdsKeyCompare,
+    .hashFunction = zsetHashFunction,
+    .keyCompare = zsetKeyCompare,
 };
 
 uint64_t hashtableSdsHash(const void *key) {

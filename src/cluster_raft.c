@@ -42,6 +42,7 @@
 #include "cluster_nodes.h"
 
 #include <arpa/inet.h>
+#include <stdbool.h>
 
 /* Result codes for proposal pre-validation and apply-time validation.
  * Used for control flow instead of comparing human-readable error strings. */
@@ -410,18 +411,19 @@ static int clusterRaftQuorum(void) {
     return server.cluster->size / 2 + 1;
 }
 
-static int clusterRaftHasPeerMembers(void) {
+/* True if there are any nodes other than myself without the MEET flag. */
+static bool clusterRaftHasPeerMembers(void) {
     dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
     dictEntry *de;
     while ((de = dictNext(di)) != NULL) {
         clusterNode *node = dictGetVal(de);
         if (node != myself && !(node->flags & CLUSTER_NODE_MEET)) {
             dictReleaseIterator(di);
-            return 1;
+            return true;
         }
     }
     dictReleaseIterator(di);
-    return 0;
+    return false;
 }
 
 static int clusterRaftIsNonSingleton(void) {

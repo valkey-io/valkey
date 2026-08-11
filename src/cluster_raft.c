@@ -251,10 +251,10 @@ typedef struct {
 
 #define RAFT_NODE(n) ((clusterNodeRaftData *)(n)->protocol_data)
 
-static int nodeIsLearner(clusterNode *n) {
+static bool nodeIsLearner(clusterNode *n) {
     return n->flags & CLUSTER_NODE_LEARNER;
 }
-static int nodeIsVoter(clusterNode *n) {
+static bool nodeIsVoter(clusterNode *n) {
     return !(n->flags & (CLUSTER_NODE_MEET | CLUSTER_NODE_LEARNER));
 }
 
@@ -2314,25 +2314,10 @@ static void clusterRaftRetryProposals(int include_pending) {
     }
 }
 
-/* Verify the LEARNER node flag and the Raft role stay in sync for myself.
- *
- * Invariants:
- *   - role == LEARNER  <=>  LEARNER flag set.
- *   - leader/candidate/pre-candidate are voters, so the flag must be clear.
- * This catches regressions from the (flag, role) synchronization points:
- * NODE_JOIN apply, ADD_VOTER/DEL_VOTER apply, and reset. */
+/* myself: RAFT_ROLE_LEARNER <=> CLUSTER_NODE_LEARNER. */
 static void clusterRaftAssertLearnerRole(void) {
     clusterRaftState *rs = RAFT_STATE();
-    int learner_flag = nodeIsLearner(myself);
-    if (rs->role == RAFT_ROLE_LEADER || rs->role == RAFT_ROLE_CANDIDATE ||
-        rs->role == RAFT_ROLE_PRE_CANDIDATE) {
-        serverAssert(!learner_flag);
-    } else if (rs->role == RAFT_ROLE_LEARNER) {
-        serverAssert(learner_flag);
-    } else {
-        /* FOLLOWER or JOINER: voter or pre-member, flag must be clear. */
-        serverAssert(!learner_flag);
-    }
+    serverAssert((rs->role == RAFT_ROLE_LEARNER) == nodeIsLearner(myself));
 }
 
 static void clusterRaftCron(void) {
@@ -3701,7 +3686,7 @@ static RaftProposalResult clusterRaftApplyNodeForget(sds data, int validate_only
     /* Save shard_id before deleting the node. */
     char shard_id[CLUSTER_NAMELEN];
     memcpy(shard_id, node->shard_id, CLUSTER_NAMELEN);
-    int was_voter = nodeIsVoter(node);
+    bool was_voter = nodeIsVoter(node);
 
     /* Detach link before deleting so clusterReadHandler can detect
      * that the node it was talking to is gone. */

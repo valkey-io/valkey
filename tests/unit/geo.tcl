@@ -496,6 +496,25 @@ start_server {tags {"geo"}} {
         assert {[lindex $res 3] > 166}
     }
 
+    test {GEORADIUS COMMAND GETKEYS extracts the last STORE destination} {
+        # Regression test for the duplicate-STORE ACL bypass: key extraction
+        # must report the LAST (effective) STORE/STOREDIST key, matching what
+        # the command implementation actually writes to.
+        assert_equal {src} [r command getkeys georadius src 0 0 1 km]
+        assert_equal {src dst} [r command getkeys georadius src 0 0 1 km STORE dst]
+        assert_equal {src dst} [r command getkeys georadius src 0 0 1 km STOREDIST dst]
+        assert_equal {src b} [r command getkeys georadius src 0 0 1 km STORE a STORE b]
+        assert_equal {src b} [r command getkeys georadius src 0 0 1 km STOREDIST a STOREDIST b]
+        assert_equal {src b} [r command getkeys georadius src 0 0 1 km STORE a STOREDIST b]
+    }
+
+    test {GEORADIUSBYMEMBER COMMAND GETKEYS extracts the last STORE destination} {
+        assert_equal {src} [r command getkeys georadiusbymember src member 1 km]
+        assert_equal {src dst} [r command getkeys georadiusbymember src member 1 km STORE dst]
+        assert_equal {src b} [r command getkeys georadiusbymember src member 1 km STORE a STORE b]
+        assert_equal {src b} [r command getkeys georadiusbymember src member 1 km STORE a STOREDIST b]
+    }
+
     test {GEOSEARCHSTORE STORE option: plain usage} {
         r geosearchstore points2{t} points{t} fromlonlat 13.361389 38.115556 byradius 500 km
         assert_equal [r zrange points{t} 0 -1] [r zrange points2{t} 0 -1]

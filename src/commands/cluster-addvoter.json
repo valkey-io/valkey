@@ -3,7 +3,7 @@
         "summary": "Promotes a learner to a voting member.",
         "complexity": "O(1)",
         "group": "cluster",
-        "since": "9.0.0",
+        "since": "10.0.0",
         "arity": 3,
         "container": "CLUSTER",
         "function": "clusterCommand",

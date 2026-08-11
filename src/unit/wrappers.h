@@ -68,6 +68,7 @@ size_t __wrap_getClientOutputBufferMemoryUsage(client *c);
 int __wrap_getMaxmemoryState(size_t *total, size_t *logical, size_t *tofree, float *level);
 void __wrap_queueClientForReprocessing(client *c);
 int __wrap_freeClient(client *c);
+void __wrap_zmadvise_dontneed(void *ptr, size_t size_hint);
 
 /* Throttler mocks */
 throttler *__wrap_throttle_register(throttleCriteriaProc *criteria_proc, void *priv_data, const char *metrics_name);
@@ -85,6 +86,7 @@ double __wrap_tpsCalculator_averageTps(tpsCalculator *calc);
 trendCalculator *__wrap_newTrendCalc(int windowSecs);
 void __wrap_trendCalc_recordMetric(trendCalculator *calc, long metricValue);
 double __wrap_trendCalc_changePerSecShortTerm(trendCalculator *calc);
+
 #undef protected
 #undef _Bool
 #undef typename

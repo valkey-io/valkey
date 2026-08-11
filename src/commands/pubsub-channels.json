@@ -26,6 +26,10 @@
             "items": {
                 "type": "string"
             }
-        }
+        },
+        "acl_categories": [
+            "PUBSUB",
+            "SLOW"
+        ]
     }
 }

@@ -11,7 +11,9 @@
             "WRITE"
         ],
         "acl_categories": [
-            "STRING"
+            "FAST",
+            "STRING",
+            "WRITE"
         ],
         "key_specs": [
             {
@@ -46,15 +48,15 @@
             ]
         },
         "arguments": [
-          {
-              "name": "key",
-              "type": "key",
-              "key_spec_index": 0
-          },
-          {
-              "name": "value",
-              "type": "string"
-          }
+            {
+                "name": "key",
+                "type": "key",
+                "key_spec_index": 0
+            },
+            {
+                "name": "value",
+                "type": "string"
+            }
         ]
     }
 }

@@ -30,6 +30,7 @@
 
 #ifndef VALKEY_ALLOC_H
 #define VALKEY_ALLOC_H
+#include "visibility.h"
 
 #include <stddef.h> /* for size_t */
 #include <stdint.h>
@@ -47,13 +48,13 @@ typedef struct valkeyAllocFuncs {
     void (*freeFn)(void *);
 } valkeyAllocFuncs;
 
-valkeyAllocFuncs valkeySetAllocators(valkeyAllocFuncs *fns);
-void valkeyResetAllocators(void);
+LIBVALKEY_API valkeyAllocFuncs valkeySetAllocators(valkeyAllocFuncs *fns);
+LIBVALKEY_API void valkeyResetAllocators(void);
 
 #ifndef _WIN32
 
 /* valkey' configured allocator function pointer struct */
-extern valkeyAllocFuncs valkeyAllocFns;
+LIBVALKEY_API extern valkeyAllocFuncs valkeyAllocFns;
 
 static inline void *vk_malloc(size_t size) {
     return valkeyAllocFns.mallocFn(size);
@@ -81,11 +82,11 @@ static inline void vk_free(void *ptr) {
 
 #else
 
-void *vk_malloc(size_t size);
-void *vk_calloc(size_t nmemb, size_t size);
-void *vk_realloc(void *ptr, size_t size);
-char *vk_strdup(const char *str);
-void vk_free(void *ptr);
+LIBVALKEY_API void *vk_malloc(size_t size);
+LIBVALKEY_API void *vk_calloc(size_t nmemb, size_t size);
+LIBVALKEY_API void *vk_realloc(void *ptr, size_t size);
+LIBVALKEY_API char *vk_strdup(const char *str);
+LIBVALKEY_API void vk_free(void *ptr);
 
 #endif
 

@@ -201,7 +201,7 @@ proc verify_log_message {srv_idx pattern from_line} {
     incr from_line
     set result [exec tail -n +$from_line < [srv $srv_idx stdout]]
     if {![string match $pattern $result]} {
-        fail "expected message not found in log file: $pattern"
+        fail "expected pattern found in srv $srv_idx log file: $pattern, but instead got: $result"
     }
 }
 
@@ -210,7 +210,7 @@ proc verify_no_log_message {srv_idx pattern from_line} {
     incr from_line
     set result [exec tail -n +$from_line < [srv $srv_idx stdout]]
     if {[string match $pattern $result]} {
-        fail "expected message found in log file: $pattern"
+        fail "expected pattern not found in srv $srv_idx log file: $pattern, but instead got: $result"
     }
 }
 
@@ -652,7 +652,12 @@ proc populate {num {prefix key:} {size 3} {idx 0} {prints false} {expires 0}} {
     set val [string repeat A $size]
     for {set j 0} {$j < $pipeline} {incr j} {
         if {$expires > 0} {
-            r $idx set $prefix$j $val ex $expires
+            if {$expires < 1} {
+                set pexpires [expr int($expires * 1000)]
+                r $idx set $prefix$j $val px $pexpires
+            } else {
+                r $idx set $prefix$j $val ex $expires
+            }
         } else {
             r $idx set $prefix$j $val
         }
@@ -660,7 +665,12 @@ proc populate {num {prefix key:} {size 3} {idx 0} {prints false} {expires 0}} {
     }
     for {} {$j < $num} {incr j} {
         if {$expires > 0} {
-            r $idx set $prefix$j $val ex $expires
+            if {$expires < 1} {
+                set pexpires [expr int($expires * 1000)]
+                r $idx set $prefix$j $val px $pexpires
+            } else {
+                r $idx set $prefix$j $val ex $expires
+            }
         } else {
             r $idx set $prefix$j $val
         }
@@ -702,14 +712,19 @@ proc process_is_paused pid {
     return [string match {*T*} [lindex [exec ps j $pid] 16]]
 }
 
-proc pause_process pid {
-    exec kill -SIGSTOP $pid
+# Wait until the process enters a paused state.
+proc wait_process_paused pid {
     wait_for_condition 50 100 {
-        [string match {*T*} [lindex [exec ps j $pid] 16]]
+        [process_is_paused $pid]
     } else {
         puts [exec ps j $pid]
         fail "process didn't stop"
     }
+}
+
+proc pause_process pid {
+    exec kill -SIGSTOP $pid
+    wait_process_paused $pid
 }
 
 proc resume_process pid {
@@ -1213,10 +1228,16 @@ proc system_backtrace_supported {} {
         return 0
     }
 
-    # libmusl does not support backtrace. Also return 0 on
+    # Check if built with USE_LIBBACKTRACE (for musl/Alpine)
+    # Look for libbacktrace function symbol in the binary
+    if {[catch {exec grep -a "initLibbacktraceFrameState" $::VALKEY_SERVER_BIN} buildinfo] == 0} {
+        return 1
+    }
+
+    # libmusl does not support backtrace natively. Also return 0 on
     # static binaries (ldd exit code 1) where we can't detect libmusl
     catch {
-        set ldd [exec ldd src/valkey-server]
+        set ldd [exec ldd $::VALKEY_SERVER_BIN]
         if {![string match {*libc.*musl*} $ldd]} {
             return 1
         }
@@ -1229,6 +1250,24 @@ proc generate_largevalue_test_array {} {
     set largevalue(listpack) "hello"
     set largevalue(quicklist) [string repeat "x" 8192]
     return [array get largevalue]
+}
+
+proc get_client_id_by_last_cmd {r cmd} {
+    set client_list [$r client list]
+    set client_id ""
+    set lines [split $client_list "\n"]
+    foreach line $lines {
+        if {[string match *cmd=$cmd* $line]} {
+            set parts [split $line " "]
+            foreach part $parts {
+                if {[string match id=* $part]} {
+                    set client_id [lindex [split $part "="] 1]
+                    return $client_id
+                }
+            }
+        }
+    }
+    return $client_id
 }
 
 # Breakpoint function, which invokes a minimal debugger.
@@ -1251,4 +1290,73 @@ proc bp {{s {}}} {
         catch {uplevel 1 $line} res
         puts $res
     }
+}
+
+# Compares two version strings. Returns 1 if a >= b, 0 otherwise.
+proc version_greater_or_equal {a b} {
+    regexp {^([0-9]+)\.([0-9]+)\.([0-9]+)$} $a -> a_major a_minor a_patch
+    regexp {^([0-9]+)\.([0-9]+)\.([0-9]+)$} $b -> b_major b_minor b_patch
+    if {$a_major < $b_major} {
+        return 0
+    } elseif {$a_major > $b_major} {
+        return 1
+    } elseif {$a_minor < $b_minor} {
+        return 0
+    } elseif {$a_minor > $b_minor} {
+        return 1
+    } elseif {$a_patch < $b_patch} {
+        return 0
+    } else {
+        return 1
+    }
+}
+
+proc memcmp {string1 string2} {
+    set len1 [string length $string1]
+    set len2 [string length $string2]
+    set minLen [expr min($len1, $len2)]
+
+    for {set i 0} {$i < $minLen} {incr i} {
+        set char1 [scan [string index $string1 $i] %c]
+        set char2 [scan [string index $string2 $i] %c]
+        if {$char1 != $char2} {
+            return [expr {$char1 - $char2}]
+        }
+    }
+    return [expr {$len1 - $len2}]
+}
+
+# Execute body with a temporary config override, restoring the original
+# value even if the body fails.
+proc with_config {config value body} {
+    set old [lindex [r config get $config] 1]
+    r config set $config $value
+    catch {uplevel 1 $body} result opts
+    r config set $config $old
+    dict incr opts -level
+    return -options $opts $result
+}
+
+# Escape a string for use as a JSON string value.
+#
+# Beyond the characters with a short escape, every C0 control character has to
+# be escaped: JSON forbids them raw, and one raw byte makes the whole file
+# unparsable, taking every failure in the run with it. Failure messages carry
+# server output and memory-tool reports, which do contain control bytes, and an
+# incomplete ANSI sequence survives colour stripping.
+proc json_escape_string {s} {
+    set s [string map {
+        "\\" "\\\\" "\"" "\\\"" "\n" "\\n" "\r" "\\r"
+        "\t" "\\t" "\b" "\\b" "\f" "\\f"
+    } $s]
+    set out ""
+    foreach ch [split $s ""] {
+        scan $ch %c code
+        if {$code < 0x20} {
+            append out [format {\u%04x} $code]
+        } else {
+            append out $ch
+        }
+    }
+    return $out
 }

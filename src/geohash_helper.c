@@ -296,7 +296,7 @@ double geohashGetDistance(double lon1d, double lat1d, double lon2d, double lat2d
     v = sin((lon2r - lon1r) / 2);
     /* Reflects about 6nm on earth for comparing longitudes. */
     const double GEO_EPSILON = 1e-15;
-    /* if v == 0, or practically 0, we can avoid doing expensive math when lons are practically the same */
+    /* if v == 0, or practically 0, we can avoid doing expensive math when longitudes are practically the same */
     if (fabs(v) <= GEO_EPSILON) return geohashGetLatDistance(lat1d, lat2d);
     lat1r = deg_rad(lat1d);
     lat2r = deg_rad(lat2d);

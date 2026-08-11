@@ -43,6 +43,15 @@ test "errorstats: rejected call due to MOVED Redirection" {
 } ;# start_cluster
 
 start_cluster 3 0 {tags {external:skip cluster} overrides {cluster-node-timeout 1000}} {
+    test "cluster bus byte stats move on a healthy cluster" {
+        wait_for_condition 1000 50 {
+            [CI 0 cluster_stats_bytes_sent] >= 1 &&
+            [CI 0 cluster_stats_bytes_received] >= 1
+        } else {
+            fail "R 0 cluster bus byte stats are not as expected"
+        }
+    }
+
     test "fail reason changed" {
         # Kill one primary, so the cluster fail with not-full-coverage.
         pause_process [srv 0 pid]
@@ -63,6 +72,36 @@ start_cluster 3 0 {tags {external:skip cluster} overrides {cluster-node-timeout 
         resume_process [srv -1 pid]
         wait_for_cluster_state ok
     }
+
+    test "CONFIG RESETSTAT resets cluster related stats" {
+        R 0 config set cluster-link-sendbuf-limit 1
+        wait_for_condition 1000 10 {
+            [CI 0 cluster_stats_messages_sent] >= 1 &&
+            [CI 0 cluster_stats_messages_received] >= 1 &&
+            [CI 0 cluster_stats_bytes_sent] >= 1 &&
+            [CI 0 cluster_stats_bytes_received] >= 1 &&
+            [CI 0 total_cluster_links_buffer_limit_exceeded] >= 1
+        } else {
+            fail "R 0 related info fields are not as expected"
+        }
+
+        R 0 multi
+        R 0 config resetstat
+        R 0 cluster info
+        set info [lindex [R 0 exec] 1]
+        
+        assert_equal [getInfoProperty $info cluster_stats_messages_sent] 0
+        assert_equal [getInfoProperty $info cluster_stats_messages_received] 0
+        assert_equal [getInfoProperty $info cluster_stats_bytes_sent] 0
+        assert_equal [getInfoProperty $info cluster_stats_bytes_received] 0
+        assert_equal [getInfoProperty $info cluster_stats_pubsub_bytes_sent] 0
+        assert_equal [getInfoProperty $info cluster_stats_pubsub_bytes_received] 0
+        assert_equal [getInfoProperty $info cluster_stats_module_bytes_sent] 0
+        assert_equal [getInfoProperty $info cluster_stats_module_bytes_received] 0
+        assert_equal [getInfoProperty $info total_cluster_links_buffer_limit_exceeded] 0
+
+        R 0 config set cluster-link-sendbuf-limit 0
+    }    
 }
 
 start_cluster 3 0 {tags {external:skip cluster} overrides {cluster-node-timeout 1000}} {

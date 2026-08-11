@@ -171,6 +171,51 @@ foreach command {SORT SORT_RO} {
         assert_equal [r sort zset by nosort limit -10 100] {a c e b d}
     }
 
+    test "SORT sorted set skiplist BY nosort should retain ordering" {
+        with_config zset-max-ziplist-entries 0 {
+            r del zset
+            r zadd zset 1 a
+            r zadd zset 5 b
+            r zadd zset 2 c
+            r zadd zset 10 d
+            r zadd zset 3 e
+            assert_encoding btree zset
+            assert_equal [r sort zset by nosort asc] {a c e b d}
+            assert_equal [r sort zset by nosort desc] {d b e c a}
+        }
+    }
+
+    test "SORT sorted set skiplist BY nosort + LIMIT" {
+        with_config zset-max-ziplist-entries 0 {
+            r del zset
+            r zadd zset 1 a
+            r zadd zset 5 b
+            r zadd zset 2 c
+            r zadd zset 10 d
+            r zadd zset 3 e
+            assert_encoding btree zset
+            assert_equal [r sort zset by nosort asc limit 0 1] {a}
+            assert_equal [r sort zset by nosort desc limit 0 1] {d}
+            assert_equal [r sort zset by nosort asc limit 0 2] {a c}
+            assert_equal [r sort zset by nosort desc limit 0 2] {d b}
+            assert_equal [r sort zset by nosort limit 5 10] {}
+            assert_equal [r sort zset by nosort limit -10 100] {a c e b d}
+        }
+    }
+
+    test "SORT sorted set skiplist with BY pattern" {
+        with_config zset-max-ziplist-entries 0 {
+            r del zset
+            r zadd zset 1 a
+            r zadd zset 5 b
+            r zadd zset 2 c
+            r zadd zset 10 d
+            r zadd zset 3 e
+            assert_encoding btree zset
+            assert_equal [r sort zset alpha desc] {e d c b a}
+        }
+    }
+
     test "SORT sorted set BY nosort works as expected from scripts" {
         r del zset
         r zadd zset 1 a
@@ -203,6 +248,11 @@ foreach command {SORT SORT_RO} {
         }
         assert_equal [lsort -real $floats] [r sort mylist]
     }
+
+    test "SORT returns an empty array if the list is empty" {
+        r flushdb
+        r sort mylist
+    } {}
 
     test "SORT with STORE returns zero if result is empty (github issue 224)" {
         r flushdb

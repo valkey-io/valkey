@@ -34,13 +34,16 @@
 #include "win32.h"
 
 #include "valkey.h"
+#include "visibility.h"
 
 #include <sds.h>
 
 #include <limits.h>
 #include <string.h>
 
-void valkeySetError(valkeyContext *c, int type, const char *str);
+LIBVALKEY_API void valkeySetError(valkeyContext *c, int type, const char *str);
+LIBVALKEY_API void valkeySetErrorFromErrno(valkeyContext *c, int type, const char *prefix);
+void valkeyClearError(valkeyContext *c);
 
 /* Helper function. Convert struct timeval to millisecond. */
 static inline int valkeyContextTimeoutMsec(const struct timeval *timeout, long *result) {
@@ -123,7 +126,8 @@ static inline int valkeyContextUpdateCommandTimeout(valkeyContext *c,
     return VALKEY_OK;
 }
 
-int valkeyContextRegisterFuncs(valkeyContextFuncs *funcs, enum valkeyConnectionType type);
+/* Visible although private since required by libvalkey_rdma.so */
+LIBVALKEY_API int valkeyContextRegisterFuncs(valkeyContextFuncs *funcs, enum valkeyConnectionType type);
 void valkeyContextRegisterTcpFuncs(void);
 void valkeyContextRegisterUnixFuncs(void);
 void valkeyContextRegisterUserfdFuncs(void);

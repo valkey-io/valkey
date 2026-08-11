@@ -70,7 +70,7 @@ server3=$!
 wait $syncpid1 $syncpid2 $syncpid3;
 
 # Run client which resends failed commands in the reply callback
-timeout 4s "$clientprog" 127.0.0.1:7401 > "$testname.out" <<'EOF'
+timeout 4s "$clientprog" --blocking-initial-update 127.0.0.1:7401 > "$testname.out" <<'EOF'
 !resend
 !async
 GET foo

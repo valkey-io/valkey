@@ -11,6 +11,8 @@
             "READONLY"
         ],
         "acl_categories": [
+            "READ",
+            "SLOW",
             "SORTEDSET"
         ],
         "key_specs": [

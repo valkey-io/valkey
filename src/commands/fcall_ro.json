@@ -15,7 +15,8 @@
             "READONLY"
         ],
         "acl_categories": [
-            "SCRIPTING"
+            "SCRIPTING",
+            "SLOW"
         ],
         "key_specs": [
             {

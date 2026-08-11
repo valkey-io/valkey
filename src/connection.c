@@ -30,23 +30,10 @@
 static ConnectionType *connTypes[CONN_TYPE_MAX];
 
 int connTypeRegister(ConnectionType *ct) {
-    const char *typename = ct->get_type(NULL);
-    ConnectionType *tmpct;
-    int type;
+    int type = ct->get_type();
+    serverAssert(type >= 0 && type < CONN_TYPE_MAX && !connTypes[type]);
 
-    /* find an empty slot to store the new connection type */
-    for (type = 0; type < CONN_TYPE_MAX; type++) {
-        tmpct = connTypes[type];
-        if (!tmpct) break;
-
-        /* ignore case, we really don't care "tls"/"TLS" */
-        if (!strcasecmp(typename, tmpct->get_type(NULL))) {
-            serverLog(LL_WARNING, "Connection types %s already registered", typename);
-            return C_ERR;
-        }
-    }
-
-    serverLog(LL_VERBOSE, "Connection type %s registered", typename);
+    serverLog(LL_VERBOSE, "Connection type %s registering", getConnectionTypeName(type));
     connTypes[type] = ct;
 
     if (ct->init) {
@@ -72,19 +59,15 @@ int connTypeInitialize(void) {
     return C_OK;
 }
 
-ConnectionType *connectionByType(const char *typename) {
-    ConnectionType *ct;
+ConnectionType *connectionByType(int type) {
+    serverAssert(type >= 0 && type < CONN_TYPE_MAX);
 
-    for (int type = 0; type < CONN_TYPE_MAX; type++) {
-        ct = connTypes[type];
-        if (!ct) break;
+    ConnectionType *ct = connTypes[type];
 
-        if (!strcasecmp(typename, ct->get_type(NULL))) return ct;
+    if (!ct) {
+        serverLog(LL_WARNING, "Missing implement of connection type %s", getConnectionTypeName(type));
     }
-
-    serverLog(LL_WARNING, "Missing implement of connection type %s", typename);
-
-    return NULL;
+    return ct;
 }
 
 /* Cache TCP connection type, query it by string once */
@@ -124,26 +107,13 @@ ConnectionType *connectionTypeUnix(void) {
     return ct_unix;
 }
 
-int connectionIndexByType(const char *typename) {
-    ConnectionType *ct;
-
-    for (int type = 0; type < CONN_TYPE_MAX; type++) {
-        ct = connTypes[type];
-        if (!ct) break;
-
-        if (!strcasecmp(typename, ct->get_type(NULL))) return type;
-    }
-
-    return -1;
-}
-
 void connTypeCleanupAll(void) {
     ConnectionType *ct;
     int type;
 
     for (type = 0; type < CONN_TYPE_MAX; type++) {
         ct = connTypes[type];
-        if (!ct) break;
+        if (!ct) continue;
 
         if (ct->cleanup) ct->cleanup();
     }
@@ -186,7 +156,7 @@ sds getListensInfoString(sds info) {
         connListener *listener = &server.listeners[j];
         if (listener->ct == NULL) continue;
 
-        info = sdscatfmt(info, "listener%i:name=%s", j, listener->ct->get_type(NULL));
+        info = sdscatfmt(info, "listener%i:name=%s", j, getConnectionTypeName(listener->ct->get_type()));
         for (int i = 0; i < listener->count; i++) {
             info = sdscatfmt(info, ",bind=%s", listener->bindaddr[i]);
         }

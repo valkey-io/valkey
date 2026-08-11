@@ -1,5 +1,8 @@
 name: Trigger Build Release
 
+permissions:
+  contents: read
+
 on:
   release:
     types: [published]
@@ -37,10 +40,21 @@ jobs:
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "environment=$ENVIRONMENT" >> $GITHUB_OUTPUT
 
-      - name: Trigger build
-        uses: peter-evans/repository-dispatch@ff45666b9427631e3450c54a1bcbee4d9ff4d7c0 # Version 3
+      - name: Generate token
+        id: generate-token
+        if: github.repository_owner == 'valkey-io'
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1.12.0
         with:
-          token: ${{ secrets.AUTOMATION_PAT }}
+          app-id: ${{ secrets.VALKEYRIE_BOT_APP_ID }}
+          private-key: ${{ secrets.VALKEYRIE_BOT_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: valkey-release-automation
+          permission-contents: write
+
+      - name: Trigger build
+        uses: peter-evans/repository-dispatch@28959ce8df70de7be546dd1250a005dd32156697 # v4.0.1
+        with:
+          token: ${{ github.repository_owner == 'valkey-io' && steps.generate-token.outputs.token || secrets.AUTOMATION_PAT }}
           repository: ${{ github.repository_owner }}/valkey-release-automation
           event-type: build-release
           client-payload: >

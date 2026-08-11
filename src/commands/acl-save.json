@@ -15,11 +15,16 @@
             "SENTINEL"
         ],
         "command_tips": [
-          "REQUEST_POLICY:ALL_NODES",
-          "RESPONSE_POLICY:ALL_SUCCEEDED"
+            "REQUEST_POLICY:ALL_NODES",
+            "RESPONSE_POLICY:ALL_SUCCEEDED"
         ],
         "reply_schema": {
             "const": "OK"
-        }
+        },
+        "acl_categories": [
+            "ADMIN",
+            "DANGEROUS",
+            "SLOW"
+        ]
     }
 }

@@ -304,3 +304,30 @@ tags "modules" {
         }
     }
 }
+
+start_server {tags {"modules"} overrides {forkless-options-supported yes save "" enable-debug-command yes enable-module-command yes}} {
+    test {MODULE LOAD is blocked during threadsave} {
+        r debug populate 100
+
+        # Start slow threadsave
+        r config set rdb-key-save-delay 200000
+        r bgsave thread
+
+        wait_for_condition 50 100 {
+            [s rdb_bgsave_in_progress] == 1
+        } else {
+            fail "threadsave didn't start"
+        }
+
+        # Try to load a module - should fail during threadsave
+        catch {r module load $testmodule} err
+        assert_match "*Error*" $err
+
+        r config set rdb-key-save-delay 0
+        r bgsave cancel
+        waitForBgsave r
+
+        # After threadsave completes, module load should succeed
+        assert_equal {OK} [r module load $testmodule]
+    }
+}

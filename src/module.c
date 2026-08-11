@@ -12847,6 +12847,11 @@ int moduleLoad(const char *path, void **module_argv, int module_argc, int is_loa
     int (*onload)(void *, void **, int);
     void *handle;
 
+    if (isSaveInProgress()) {
+        serverLog(LL_WARNING, "Module %s failed to load: cannot load during threadsave.", path);
+        return C_ERR;
+    }
+
     struct stat st;
     if (stat(path, &st) == 0) {
         /* This check is best effort */

@@ -348,7 +348,7 @@ test "Raft proto: PRE_VOTE denied when candidate log is stale" {
         assert_match "HI *" $reply
 
         set ae "AE $seed_id 1 0 0 1 1\n"
-        append ae "1 NODE_JOIN $joined_id $joined_addr"
+        append ae "1 NODE_JOIN $joined_id $joined_addr voter"
         raft_send $fd_seed $ae
         set reply [raft_recv $fd_seed]
         assert_match "AE_ACK 1 1 1 *" $reply
@@ -411,8 +411,8 @@ test "Raft proto: pre-vote timeout does not inflate term without quorum" {
             # Commit both nodes into the fake leader's log. The real node must
             # see the fake peer as joined, otherwise pre-vote requests are skipped.
             set ae "AE $fake_id 2 0 0 2 2\n"
-            append ae "2 NODE_JOIN $node_id 127.0.0.1:[srv 0 port]@[expr {[srv 0 port] + 10000}],,tls-port=0,shard-id=[string repeat t 40]\n"
-            append ae "2 NODE_JOIN $fake_id $fake_addr"
+            append ae "2 NODE_JOIN $node_id 127.0.0.1:[srv 0 port]@[expr {[srv 0 port] + 10000}],,tls-port=0,shard-id=[string repeat t 40] voter\n"
+            append ae "2 NODE_JOIN $fake_id $fake_addr voter"
             raft_send $leader_fd $ae
             set reply [raft_recv $leader_fd]
             assert_match "AE_ACK 2 1 2 *" $reply
@@ -481,7 +481,7 @@ test "Raft proto: REPL_OFFSETS updates node replication offset" {
         # AE <leader-id> <term> <prev-log-idx> <prev-log-term> <commit> <count>
         # Entry: <term> <type> <data>
         set ae "AE $leader_id 1 0 0 2 2\n"
-        append ae "1 NODE_JOIN $replica_id $replica_addr\n"
+        append ae "1 NODE_JOIN $replica_id $replica_addr voter\n"
         append ae "1 SET_REPLICA_OF $replica_id $leader_id $leader_shard"
         raft_send $fd $ae
 

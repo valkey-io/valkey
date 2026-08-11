@@ -811,7 +811,7 @@ static int clusterRaftProcessMeetRejected(clusterLink *link, int argc, sds *argv
  * the term prefix: "<type-name> <data...>"
  *
  * Examples:
- *   PROPOSE NODE_JOIN <node-id> <address>
+ *   PROPOSE NODE_JOIN <node-id> <address> <learner|voter>
  *   PROPOSE SLOT_CHANGE <source-id-or-dash> <source-epoch> <target-id-or-dash> <target-epoch> <range> [<range> ...]
  * -------------------------------------------------------------------------- */
 static int raftEntryTypeByName(const char *name) {
@@ -1354,21 +1354,19 @@ static void raftLogApply(raftLogEntry *e) {
     RaftProposalResult entry_result = RAFT_RESULT_OK;
     switch (e->type) {
     case RAFT_ENTRY_NODE_JOIN: {
-        /* data: "<node-id> <address> [learner|voter]" */
+        /* data: "<node-id> <address> <learner|voter>" */
         int argc;
         sds *argv = sdssplitlen(e->data, sdslen(e->data), " ", 1, &argc);
-        if (argv && argc >= 2 && sdslen(argv[0]) == CLUSTER_NAMELEN) {
-            int learner = 0;
-            if (argc >= 3) {
-                if (!strcasecmp(argv[2], "learner")) {
-                    learner = 1;
-                } else if (!strcasecmp(argv[2], "voter")) {
-                    learner = 0;
-                } else {
-                    serverLog(LL_WARNING, "NODE_JOIN rejected: unknown membership mode '%s'.", argv[2]);
-                    if (argv) sdsfreesplitres(argv, argc);
-                    break;
-                }
+        if (argv && argc >= 3 && sdslen(argv[0]) == CLUSTER_NAMELEN) {
+            bool learner;
+            if (!strcasecmp(argv[2], "learner")) {
+                learner = true;
+            } else if (!strcasecmp(argv[2], "voter")) {
+                learner = false;
+            } else {
+                serverLog(LL_WARNING, "NODE_JOIN rejected: unknown membership mode '%s'.", argv[2]);
+                sdsfreesplitres(argv, argc);
+                break;
             }
             clusterNode *existing = clusterLookupNode(argv[0], CLUSTER_NAMELEN);
             if (!existing) {
@@ -1377,7 +1375,7 @@ static void raftLogApply(raftLogEntry *e) {
                     clusterAddNode(n);
                 } else {
                     freeClusterNode(n);
-                    if (argv) sdsfreesplitres(argv, argc);
+                    sdsfreesplitres(argv, argc);
                     break;
                 }
             } else if (existing != myself) {
@@ -1385,8 +1383,7 @@ static void raftLogApply(raftLogEntry *e) {
                 clusterNodeParseAddressString(existing, argv[1]);
             }
             /* On first official join, clear MEET and mark whether the node
-             * participates in quorum. Old NODE_JOIN entries without a mode are
-             * treated as voters for compatibility. */
+             * participates in quorum. */
             clusterNode *joined = existing ? existing : clusterLookupNode(argv[0], CLUSTER_NAMELEN);
             if (joined) {
                 if (!existing || (joined->flags & CLUSTER_NODE_MEET)) {

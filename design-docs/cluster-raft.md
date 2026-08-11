@@ -136,10 +136,10 @@ Each log entry has a type and a text data field. The entry types and
 their data formats:
 
 ```
-NODE_JOIN <node-id> <address> [learner|voter]
+NODE_JOIN <node-id> <address> <learner|voter>
     Add a node to the cluster. Applied when a new node is discovered
-    via MEET. New peers join as learners by default, so this entry does
-    not change quorum. The local singleton self-join uses voter mode.
+    via MEET. New peers join as learners, so this entry does not change
+    quorum. The local singleton self-join uses voter mode.
 
 ADD_VOTER <node-id>
     Promote a learner to a voting follower after it has caught up with

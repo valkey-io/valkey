@@ -112,7 +112,7 @@ static void freeCompiledFunc(lua_State *lua,
 
 /*
  * Compile a given script code by generating a set of compiled functions. These
- * functions are also saved into the the registry of the Lua environment.
+ * functions are also saved into the registry of the Lua environment.
  *
  * Returns an array of compiled functions. The `compileFunction` struct stores a
  * Lua ref that allows to later retrieve the function from the registry.

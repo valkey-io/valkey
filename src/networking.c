@@ -5034,6 +5034,7 @@ static int validateClientFlagFilter(sds flag_filter) {
         case 'r':
         case 'e':
         case 'T':
+        case 'h':
         case 'I':
         case 'i':
         case 'E':
@@ -5188,6 +5189,9 @@ static int clientMatchesFlagFilter(client *c, sds flag_filter) {
         case 'T': /* client will not touch the LRU/LFU of the keys it accesses */
             if (!c->flag.no_touch) return 0;
             break;
+        case 'h': /* client is throttled */
+            if (!c->flag.throttled) return 0;
+            break;
         case 'I': /* Import source flag */
             if (!c->flag.import_source) return 0;
             break;
@@ -5204,7 +5208,7 @@ static int clientMatchesFlagFilter(client *c, sds flag_filter) {
                 c->flag.dirty_cas || c->flag.close_after_reply ||
                 c->flag.unblocked || c->flag.close_asap ||
                 c->flag.unix_socket || c->flag.readonly ||
-                c->flag.no_evict || c->flag.no_touch ||
+                c->flag.no_evict || c->flag.no_touch || c->flag.throttled ||
                 c->flag.import_source || c->slot_migration_job) {
                 return 0;
             }

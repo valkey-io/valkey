@@ -17,9 +17,9 @@ struct throttle_repl_config throttle_repl_config;
 static const int COB_TREND_WINDOW_SECS = 2;
 static const double RATE_INCREASE_MULTIPLIER = 1.05;
 static const double RATE_DECREASE_MULTIPLIER = 0.95;
-static const int STEADY_STATE_CONVERGENCE_SECS = 30;    /* projection horizon for COB extrapolation */
-static const long MAX_COB_TARGET = 1024L * 1024 * 1024; /* 1GB */
-static const char *const METRICS_NAME = "ReplThrottle"; /* shared metrics group name */
+static const int STEADY_STATE_CONVERGENCE_SECS = 30;     /* projection horizon for COB extrapolation */
+static const long MAX_COB_TARGET = 1024L * 1024 * 1024;  /* 1GB */
+static const char *const METRICS_NAME = "repl_throttle"; /* shared metrics group name */
 
 /* Metrics for INFO output and operational visibility. */
 typedef struct {
@@ -65,10 +65,10 @@ static void uninstallThrottler(void) {
 
 /* Apply a rate change based on the evaluator's decision. Installs the throttler on first
  * reduce request and removes it when rate reaches UNLIMITED. */
-static void adjustThrottleRate(bool reduceTrafficRate) {
+static void adjustThrottleRate(bool reduce_traffic_rate) {
     if (isThrottlerActive()) {
         double rate;
-        if (reduceTrafficRate) {
+        if (reduce_traffic_rate) {
             rate = throttle_adjustRate(repl_throttler, RATE_DECREASE_MULTIPLIER);
             metrics.throttle_more_events++;
         } else {
@@ -80,7 +80,7 @@ static void adjustThrottleRate(bool reduceTrafficRate) {
     } else {
         /* Installing the throttler starts measurement of current traffic rate.
          * Once the measurement is stable, rate adjustments will be meaningful. */
-        if (reduceTrafficRate) installThrottler();
+        if (reduce_traffic_rate) installThrottler();
     }
 }
 
@@ -124,7 +124,7 @@ static bool evaluateSteadyStateThrottle(client *c, int64_t cob_size) {
 bool throttleRepl_isClientExemptFromCobLimits(client *c) {
     if (!throttle_repl_config.repl_throttle_steady_state_enabled || !isThrottlerActive()) return false;
     if (!iAmPrimary()) return false;
-    if (!c->flag.replica) return false;
+    if (getClientType(c) != CLIENT_TYPE_REPLICA) return false;
 
     /* Throttle is actively working, protect this replica from COB
      * disconnect if its COB is above target. */
@@ -154,7 +154,7 @@ void throttleRepl_adjustThrottling(void) {
         return;
     }
 
-    bool reduceTrafficRate = false;
+    bool reduce_traffic_rate = false;
     client *measured_steady_state_replica = NULL;
     uint64_t largest_steady_state_cob = 0;
 
@@ -181,10 +181,10 @@ void throttleRepl_adjustThrottling(void) {
     }
 
     if (measured_steady_state_replica != NULL) {
-        reduceTrafficRate = evaluateSteadyStateThrottle(measured_steady_state_replica, largest_steady_state_cob);
+        reduce_traffic_rate = evaluateSteadyStateThrottle(measured_steady_state_replica, largest_steady_state_cob);
     }
 
-    adjustThrottleRate(reduceTrafficRate);
+    adjustThrottleRate(reduce_traffic_rate);
 }
 
 sds throttleRepl_sdscatInfoMetrics(sds info) {
@@ -206,7 +206,7 @@ sds throttleRepl_sdscatInfoMetrics(sds info) {
                         "repl_throttle_less_events:%lu\r\n"
                         "repl_throttle_below_guardrail_secs:%ld\r\n"
                         "repl_throttle_current_clients:%d\r\n"
-                        "repl_throttle_total_commands:%d\r\n",
+                        "repl_throttle_total_commands:%lld\r\n",
                         metrics.throttle_activation_events,
                         metrics.throttle_more_events,
                         metrics.throttle_less_events,

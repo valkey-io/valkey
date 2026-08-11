@@ -68,6 +68,13 @@ class ThrottleTest : public ::testing::Test {
         return C_OK;
     }
 
+    /* A set_read_handler that always fails, to simulate a connection error. */
+    static int failSetReadHandler(connection *conn, ConnectionCallbackFunc func) {
+        UNUSED(conn);
+        UNUSED(func);
+        return C_ERR;
+    }
+
     client *createFakeClient(int client_id, bool write_command) {
         client *c = (client *)zcalloc(sizeof(client));
         c->id = client_id;
@@ -513,9 +520,7 @@ TEST_F(ThrottleTest, timeProcCallsFreeClientOnConnSetReadHandlerFailure) {
 
     /* Install a failing read handler to simulate connection error. */
     static ConnectionType failConnType = {0};
-    failConnType.set_read_handler = [](connection *, ConnectionCallbackFunc) -> int {
-        return C_ERR;
-    };
+    failConnType.set_read_handler = failSetReadHandler;
     c->conn->type = &failConnType;
 
     throttle_setRate(t, THROTTLE_UNLIMITED_RATE);

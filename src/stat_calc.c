@@ -69,23 +69,23 @@ double tpsCalculator_averageTps(tpsCalculator *calc) {
 
 #define DATA_POINTS 10
 struct trendCalculator {
-    int windowSec;
-    monotime lastUpdate;
-    long updateFreqUs;
-    bool newCalculator;
+    int window_sec;
+    monotime last_update;
+    long update_freq_us;
+    bool is_new;
     long metrics[DATA_POINTS];
-    long uncountedTotal;
-    int uncountedSamples;
+    long uncounted_total;
+    int uncounted_samples;
     double trend;
-    double trendShort;
+    double trend_short;
 };
 
-trendCalculator *newTrendCalc(int windowSecs) {
+trendCalculator *newTrendCalc(int window_secs) {
     trendCalculator *calc = zcalloc(sizeof(trendCalculator));
-    calc->windowSec = windowSecs;
-    calc->lastUpdate = getMonotonicUs();
-    calc->updateFreqUs = windowSecs * ONE_SECOND_IN_MICROS / DATA_POINTS;
-    calc->newCalculator = true;
+    calc->window_sec = window_secs;
+    calc->last_update = getMonotonicUs();
+    calc->update_freq_us = window_secs * ONE_SECOND_IN_MICROS / DATA_POINTS;
+    calc->is_new = true;
     return calc;
 }
 
@@ -93,37 +93,37 @@ void trendCalc_free(trendCalculator *calc) {
     zfree(calc);
 }
 
-void trendCalc_recordMetric(trendCalculator *calc, long metricValue) {
+void trendCalc_recordMetric(trendCalculator *calc, long metric_value) {
     monotime now = getMonotonicUs();
-    long elapsedUs = now - calc->lastUpdate;
+    long elapsed_us = now - calc->last_update;
 
-    calc->uncountedTotal += metricValue;
-    calc->uncountedSamples++;
+    calc->uncounted_total += metric_value;
+    calc->uncounted_samples++;
 
-    if (elapsedUs < calc->updateFreqUs) return;
+    if (elapsed_us < calc->update_freq_us) return;
 
-    long newValue = calc->uncountedTotal / calc->uncountedSamples;
-    calc->uncountedTotal = 0;
-    calc->uncountedSamples = 0;
-    calc->lastUpdate = now;
+    long new_value = calc->uncounted_total / calc->uncounted_samples;
+    calc->uncounted_total = 0;
+    calc->uncounted_samples = 0;
+    calc->last_update = now;
 
-    if (calc->newCalculator) {
-        for (int i = 0; i < DATA_POINTS; i++) calc->metrics[i] = newValue;
-        calc->newCalculator = false;
+    if (calc->is_new) {
+        for (int i = 0; i < DATA_POINTS; i++) calc->metrics[i] = new_value;
+        calc->is_new = false;
     }
 
-    long olderTotal = 0;
+    long older_total = 0;
     for (int i = 0; i < DATA_POINTS / 2; i++) {
         calc->metrics[i] = calc->metrics[i + 1];
-        olderTotal += calc->metrics[i];
+        older_total += calc->metrics[i];
     }
-    long newerTotal = 0;
+    long newer_total = 0;
     for (int i = DATA_POINTS / 2; i < DATA_POINTS - 1; i++) {
         calc->metrics[i] = calc->metrics[i + 1];
-        newerTotal += calc->metrics[i];
+        newer_total += calc->metrics[i];
     }
-    calc->metrics[DATA_POINTS - 1] = newValue;
-    newerTotal += newValue;
+    calc->metrics[DATA_POINTS - 1] = new_value;
+    newer_total += new_value;
 
     /* Formula is the average of the newer data points, less the average of the older data
      * points. The time is from the center of each half,
@@ -132,15 +132,15 @@ void trendCalc_recordMetric(trendCalculator *calc, long metricValue) {
      * Where:
      *     AveNewer = newerTotal / (DATA_POINTS/2)
      *     AveOlder = olderTotal / (DATA_POINTS/2) */
-    double olderAvg = (double)olderTotal / (DATA_POINTS / 2);
-    double newerAvg = (double)newerTotal / (DATA_POINTS / 2);
-    double timeBetweenCenters = (double)calc->windowSec / 2.0;
-    calc->trend = (newerAvg - olderAvg) / timeBetweenCenters;
+    double older_avg = (double)older_total / (DATA_POINTS / 2);
+    double newer_avg = (double)newer_total / (DATA_POINTS / 2);
+    double time_between_centers = (double)calc->window_sec / 2.0;
+    calc->trend = (newer_avg - older_avg) / time_between_centers;
 
     /* Short-term: rate of change between last 2 datapoints. */
-    long deltaShort = calc->metrics[DATA_POINTS - 1] - calc->metrics[DATA_POINTS - 2];
-    double timeBetweenSlots = (double)calc->windowSec / DATA_POINTS;
-    calc->trendShort = deltaShort / timeBetweenSlots;
+    long delta_short = calc->metrics[DATA_POINTS - 1] - calc->metrics[DATA_POINTS - 2];
+    double time_between_slots = (double)calc->window_sec / DATA_POINTS;
+    calc->trend_short = delta_short / time_between_slots;
 }
 
 double trendCalc_changePerSec(trendCalculator *calc) {
@@ -148,5 +148,5 @@ double trendCalc_changePerSec(trendCalculator *calc) {
 }
 
 double trendCalc_changePerSecShortTerm(trendCalculator *calc) {
-    return calc->trendShort;
+    return calc->trend_short;
 }

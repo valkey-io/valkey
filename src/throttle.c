@@ -27,7 +27,7 @@ static list *throttlerList = NULL;
 typedef struct metricsEntry {
     sds throttler_type;
     int num_clients_throttled;
-    int num_commands_throttled;
+    long long num_commands_throttled;
     tpsCalculator *incoming_tps;
 } metricsEntry;
 
@@ -365,7 +365,7 @@ void throttle_getMetrics(const char *metrics_name, throttleMetrics *metrics) {
     listRewind(throttlerList, &li);
     while ((ln = listNext(&li))) {
         throttler *t = ln->value;
-        if (t->metrics != m) continue;
+        if (t->metrics != m || t->cleanup) continue;
         metrics->ops_per_sec += tokenBucket_getRate(t->bucket);
         if (listLength(t->client_queue) > 0) {
             client *oldest = listNodeValue(listFirst(t->client_queue));
@@ -376,9 +376,9 @@ void throttle_getMetrics(const char *metrics_name, throttleMetrics *metrics) {
 }
 
 sds throttle_sdscatInfoMetrics(sds info) {
-    info = sdscatprintf(info, "throttle_total_throttled_commands:%lld\r\n", total_throttled_commands);
+    info = sdscatprintf(info, "total_throttled_commands:%lld\r\n", total_throttled_commands);
 
-    // Check for any throttlers which are below guardrail.  Report only offending throttlers.
+    /* Check for any throttlers which are below guardrail. Report only offending throttlers. */
     listNode *ln;
     listIter li;
     listRewind(throttlerList, &li);

@@ -158,3 +158,24 @@ TEST_F(TokenBucketTest, SetRateChangesRate) {
     EXPECT_FALSE(tokenBucket_tryConsume(bucket, 1.0, false)); /* now empty */
     EXPECT_DOUBLE_EQ(tokenBucket_msUntilAvailable(bucket, 1.0), 100.0);
 }
+
+TEST_F(TokenBucketTest, SetRateSettlesElapsedAtOldRate) {
+    /* setRate must credit elapsed time at the OLD rate before switching. */
+    tokenBucket *b = tokenBucket_create(1.0, 10.0);
+    EXPECT_TRUE(tokenBucket_tryConsume(b, 12.0, false)); /* drain to empty */
+    EXPECT_FALSE(tokenBucket_tryConsume(b, 0.5, false));
+
+    fakeMonotimeUs += 5000000; /* 5 tokens should accrue */
+
+    tokenBucket_setRate(b, 1000.0); /* the 5 elapsed seconds belong to the OLD rate */
+
+    EXPECT_FALSE(tokenBucket_tryConsume(b, 6.0, false)); /* only 5 available, not thousands */
+    EXPECT_TRUE(tokenBucket_tryConsume(b, 5.0, false));
+
+    /* Confirm the NEW rate now governs accrual: at 1000/s, 10ms yields ~10 tokens */
+    fakeMonotimeUs += 10000;
+    EXPECT_TRUE(tokenBucket_tryConsume(b, 10.0, false));
+    EXPECT_FALSE(tokenBucket_tryConsume(b, 0.1, false)); /* now empty */
+
+    tokenBucket_free(b);
+}

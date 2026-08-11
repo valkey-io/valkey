@@ -45,11 +45,11 @@ typedef bool throttleCriteriaProc(client *c, void *priv_data);
  * Note: Multiple related throttlers can share the same metrics by using the same metrics_name.
  * A typical use case is multiple instantiations of the same throttler with different private data. */
 typedef struct {
-    int num_clients_throttled;   /* the backlog of currently throttled (queued) clients */
-    int num_commands_throttled;  /* total number of commands throttled through this metrics group */
-    double ops_per_sec;          /* the current throttling rate (summed across related throttlers) */
-    double incoming_tps;         /* average incoming TPS over a 5-second rolling window */
-    long oldest_client_delay_us; /* delay in microseconds for the oldest throttled client */
+    int num_clients_throttled;        /* the backlog of currently throttled (queued) clients */
+    long long num_commands_throttled; /* total number of commands throttled through this metrics group */
+    double ops_per_sec;               /* the current throttling rate (summed across related throttlers) */
+    double incoming_tps;              /* average incoming TPS over a 5-second rolling window */
+    long oldest_client_delay_us;      /* delay in microseconds for the oldest throttled client */
 } throttleMetrics;
 
 /* Initialize the throttling framework. Must be called once at startup before any

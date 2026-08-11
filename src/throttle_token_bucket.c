@@ -60,6 +60,7 @@ double tokenBucket_getRate(tokenBucket *bucket) {
 }
 
 void tokenBucket_setRate(tokenBucket *bucket, double new_rate) {
+    tokenBucket_replenish(bucket);
     bucket->tokens_per_sec = new_rate;
     trimTokenBucket(bucket);
 }
@@ -75,7 +76,8 @@ bool tokenBucket_tryConsume(tokenBucket *bucket, double tokens, bool force_consu
 double tokenBucket_msUntilAvailable(tokenBucket *bucket, double target_tokens) {
     tokenBucket_replenish(bucket);
     if (bucket->token_count >= target_tokens) return 0.0;
-    if (bucket->tokens_per_sec <= 0) return -1.0; /* halted — never available */
+    /* Rates below BUCKET_EPSILON give zero capacity, so tokens never accumulate. */
+    if (bucket->tokens_per_sec < BUCKET_EPSILON) return -1.0; /* halted -- never available */
     double needed = target_tokens - bucket->token_count;
     return needed * 1000.0 / bucket->tokens_per_sec;
 }

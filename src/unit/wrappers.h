@@ -79,12 +79,9 @@ long __wrap_throttle_getGuardrailSecs(throttler *t);
 
 /* Token bucket mocks */
 bool __wrap_tokenBucket_tryConsume(tokenBucket *bucket, double tokens, bool force_consume);
-double __wrap_tokenBucket_msUntilAvailable(tokenBucket *bucket, double tokens);
 
 /* Statcalc mocks */
 double __wrap_tpsCalculator_averageTps(tpsCalculator *calc);
-trendCalculator *__wrap_newTrendCalc(int windowSecs);
-void __wrap_trendCalc_recordMetric(trendCalculator *calc, long metricValue);
 double __wrap_trendCalc_changePerSecShortTerm(trendCalculator *calc);
 
 #undef protected

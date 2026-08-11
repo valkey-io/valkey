@@ -5,7 +5,10 @@
  */
 
 #include "io_threads.h"
+#include "cluster_migrateslots.h"
+#include "connection.h"
 #include "queues.h"
+#include "server.h"
 #include <sys/resource.h>
 
 #define IO_MPSC_QUEUE_SIZE 16384
@@ -390,7 +393,12 @@ static void createIOThread(int id) {
     pthread_t tid;
     pthread_mutex_init(&io_threads_mutex[id], NULL);
     pthread_mutex_lock(&io_threads_mutex[id]); /* Thread will be stopped. */
-    int err = pthread_create(&tid, NULL, IOThreadMain, (void *)(long)id);
+
+    pthread_attr_t attr;
+    serverInitThreadAttribute(&attr);
+
+    int err = pthread_create(&tid, &attr, IOThreadMain, (void *)(long)id);
+    pthread_attr_destroy(&attr);
     if (err) {
         serverLog(LL_WARNING, "Fatal: Can't initialize IO thread, pthread_create failed with: %s", strerror(err));
         exit(1);
@@ -500,8 +508,13 @@ void initIOThreads(int prev_threads_num) {
 
 int trySendReadToIOThreads(client *c) {
     if (server.active_io_threads_num <= 1) return C_ERR;
-    /* If IO thread is already reading, return C_OK to make sure the main thread will not handle it. */
-    if (c->io_read_state != CLIENT_IDLE) return C_OK;
+    /* Fake/teardown clients may have no connection; never offload those. */
+    if (!c->conn) return C_ERR;
+    /* If IO thread is still reading, return C_OK so the main thread does not race it. */
+    if (c->io_read_state == CLIENT_PENDING_IO) return C_OK;
+    /* A completed read must be finished by processClientIOReadsDone on the main thread
+     * before we try to offload another read; do not treat it like PENDING_IO. */
+    if (c->io_read_state == CLIENT_COMPLETED_IO) return C_ERR;
     if (c->io_write_state == CLIENT_PENDING_IO) return C_OK;
     /* For simplicity, don't offload replica clients reads as read traffic from replica is negligible */
     if (getClientType(c) == CLIENT_TYPE_REPLICA) return C_ERR;
@@ -516,7 +529,7 @@ int trySendReadToIOThreads(client *c) {
     c->read_flags |= isReplicatedClient(c) ? READ_FLAGS_REPLICATED : 0;
 
     c->io_read_state = CLIENT_PENDING_IO;
-    connSetPostponeUpdateState(c->conn, 1);
+    connSetPostponeUpdateState(c->conn, clientConnPostponeMaskFromIOState(c));
 
     if (unlikely(spmcEnqueue(&io_shared_inbox, tagJob(c, JOB_REQ_READ_CLIENT)) == false)) {
         c->read_flags = 0;
@@ -536,6 +549,7 @@ int trySendReadToIOThreads(client *c) {
  * or C_ERR if the client is not eligible for offloading. */
 int trySendWriteToIOThreads(client *c) {
     if (server.active_io_threads_num <= 1) return C_ERR;
+    if (!c->conn) return C_ERR;
     /* The I/O thread is already writing for this client. */
     if (c->io_write_state != CLIENT_IDLE) return C_OK;
     if (c->io_read_state == CLIENT_PENDING_IO) return C_ERR;
@@ -545,6 +559,11 @@ int trySendWriteToIOThreads(client *c) {
     if (getClientType(c) == CLIENT_TYPE_REPLICA && c->repl_data->repl_state != REPLICA_STATE_ONLINE) return C_ERR;
     /* We can't offload debugged clients as the main-thread may read at the same time  */
     if (c->flag.lua_debug) return C_ERR;
+    /* Avoid offloading writes to IO thread for the slot migration export job while snapshotting.
+     * During this phase, replies accumulate in the output buffer but must not be flushed
+     * as concurrent IO thread writes would race with the main thread processing incoming
+     * ACKs on the same client's query buffer. */
+    if (c->slot_migration_job && !clusterSlotMigrationShouldInstallWriteHandler(c)) return C_ERR;
 
     int is_replica = getClientType(c) == CLIENT_TYPE_REPLICA;
     clientReplyBlock *block = NULL;
@@ -569,9 +588,9 @@ int trySendWriteToIOThreads(client *c) {
     serverAssert(c->bufpos > 0 || c->io_last_bufpos > 0 || is_replica);
 
     /* The main-thread will update the client state after the I/O thread completes the write. */
-    connSetPostponeUpdateState(c->conn, 1);
     c->write_flags = is_replica ? WRITE_FLAGS_IS_REPLICA : 0;
     c->io_write_state = CLIENT_PENDING_IO;
+    connSetPostponeUpdateState(c->conn, clientConnPostponeMaskFromIOState(c));
     void *job = tagJob(c, JOB_REQ_WRITE_CLIENT);
     if (unlikely(spmcEnqueue(&io_shared_inbox, job) == false)) {
         c->io_write_state = CLIENT_IDLE;
@@ -610,7 +629,7 @@ void ioThreadFreeArgv(robj **argv) {
         }
 
         /* The main-thread set the refcount to 0 to indicate that this is the last argument to free */
-        if (o->refcount == 0) {
+        if (objectGetRefcount(o) == 0) {
             last_arg = 1;
             o->refcount = 1;
         }
@@ -810,7 +829,7 @@ int trySendAcceptToIOThreads(connection *conn) {
 
     c->io_read_state = CLIENT_PENDING_IO;
     c->flag.pending_read = 1;
-    connSetPostponeUpdateState(c->conn, 1);
+    connSetPostponeUpdateState(c->conn, clientConnPostponeMaskFromIOState(c));
 
     void *job = tagJob(c, JOB_REQ_ACCEPT);
     if (unlikely(spmcEnqueue(&io_shared_inbox, job) == false)) {
@@ -826,20 +845,38 @@ int trySendAcceptToIOThreads(connection *conn) {
     return C_OK;
 }
 
+#define JOB_BATCH_SIZE (16)
+
 /* Function to handle read jobs */
 static void handleReadJobs(client **read_jobs, int read_count) {
     server.stat_io_reads_pending -= read_count;
     serverAssert(server.stat_io_reads_pending >= 0);
+    uint64_t read_client_ids[JOB_BATCH_SIZE];
+    int id_count = 0;
     /* process each client */
     for (int i = 0; i < read_count; i++) {
         client *c = read_jobs[i];
-        processClientIOReadsDone(c);
+        uint64_t id = c->id;
+        if (processClientIOReadsDone(c)) read_client_ids[id_count++] = id;
     }
 
     /* Process commands in batch if we processed any reads */
     if (read_count) {
         server.stat_io_reads_processed += read_count;
         processClientsCommandsBatch();
+
+        /* Resume transport after draining pending input and command queue. */
+        for (int i = 0; i < id_count; i++) {
+            client *c = lookupClientByID(read_client_ids[i]);
+            if (!c || !c->conn) continue;
+
+            if (processPendingCommandAndInputBuffer(c) == C_OK) beforeNextClient(c);
+
+            c = lookupClientByID(read_client_ids[i]);
+            if (!c || !c->conn) continue;
+            connSetPostponeUpdateState(c->conn, clientConnPostponeMask(c));
+            connUpdateState(c->conn);
+        }
     }
 }
 
@@ -855,7 +892,6 @@ static void handleWriteJobs(client **write_jobs, int write_count) {
     }
 }
 
-#define JOB_BATCH_SIZE (16)
 int processIOThreadsResponses(void) {
     /* We don't check for threads number  since some threads may return jobs then deactivate/shut-down */
 

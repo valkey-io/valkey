@@ -70,6 +70,11 @@ typedef struct clusterLink {
                                                                                    * shard so that the replicas can make a better ranking   \
                                                                                    * decisions to help with the failover. */
 #define CLUSTER_NODE_FAILOVER_AUTH_NACK_SUPPORTED (1 << 14)                       /* This node understands FAILOVER_AUTH_NACK messages. */
+#define CLUSTER_NODE_MAX CLUSTER_NODE_FAILOVER_AUTH_NACK_SUPPORTED                /* Max bit for CLUSTER_NODE_* flag, update while adding a new flag. */
+
+/* Ensure cluster node flags never silently grew beyond 16 bits.
+ * The flags in clusterMsg and clusterMsgDataGossip are uint16_t. */
+static_assert(CLUSTER_NODE_MAX <= UINT16_MAX, "cluster node flags must fit in 16 bits");
 
 #define CLUSTER_NODE_NULL_NAME                                                                                         \
     "\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000" \
@@ -180,6 +185,7 @@ typedef enum {
     CLUSTERMSG_EXT_TYPE_CLIENT_PORT,
     CLUSTERMSG_EXT_TYPE_CLIENT_TLS_PORT,
     CLUSTERMSG_EXT_TYPE_AVAILABILITY_ZONE,
+    CLUSTERMSG_EXT_TYPE_REPLICA_PRIORITY,
 } clusterMsgPingtypes;
 
 /* Helper function for making sure extensions are eight byte aligned. */
@@ -225,6 +231,10 @@ typedef struct {
 } clusterMsgPingExtClientTlsPort;
 
 typedef struct {
+    unsigned int replica_priority; /* The replica priority. */
+} clusterMsgPingExtReplicaPriority;
+
+typedef struct {
     uint32_t length; /* Total length of this extension message (including this header) */
     uint16_t type;   /* Type of this extension message (see clusterMsgPingtypes) */
     uint16_t unused; /* 16 bits of padding to make this structure 8 byte aligned. */
@@ -238,6 +248,7 @@ typedef struct {
         clusterMsgPingExtClientPort announce_client_port;
         clusterMsgPingExtClientTlsPort announce_client_tls_port;
         clusterMsgPingExtAvailabilityZone availability_zone;
+        clusterMsgPingExtReplicaPriority replica_priority;
     } ext[]; /* Actual extension information, formatted so that the data is 8
               * byte aligned, regardless of its content. */
 } clusterMsgPingExt;
@@ -436,6 +447,7 @@ struct _clusterNode {
     rax *fail_reports;                      /* Radix tree for failure reports with sorted order by timestamp */
     int is_node_healthy;                    /* Boolean indicating the cached node health.
                                                Update with updateAndCountChangedNodeHealth(). */
+    unsigned int replica_priority;          /* Replica priority used for auto failover ranking. */
 };
 
 /* Struct used for storing slot statistics. */

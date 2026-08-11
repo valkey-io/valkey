@@ -142,6 +142,7 @@ struct ValkeyModule;
 #define CRON_DBS_PER_CALL 16
 #define CRON_DICTS_PER_DB 16
 #define NET_MAX_WRITES_PER_EVENT (1024 * 64)
+#define VALKEY_THREAD_STACK_SIZE (1024 * 1024 * 4)
 #define PROTO_SHARED_SELECT_CMDS 10
 #define OBJ_SHARED_INTEGERS 10000
 #define OBJ_SHARED_BULKHDR_LEN 32
@@ -586,17 +587,23 @@ typedef enum {
 #define PAUSE_ACTION_REPLICA (1 << 4) /* pause replica traffic */
 
 /* Sets log format */
-typedef enum { LOG_FORMAT_LEGACY = 0,
-               LOG_FORMAT_LOGFMT,
-               LOG_FORMAT_JSON } log_format_type;
+typedef enum {
+    LOG_FORMAT_LEGACY = 0,
+    LOG_FORMAT_LOGFMT,
+    LOG_FORMAT_JSON
+} log_format_type;
 
 /* Sets log timestamp format */
-typedef enum { LOG_TIMESTAMP_LEGACY = 0,
-               LOG_TIMESTAMP_ISO8601,
-               LOG_TIMESTAMP_MILLISECONDS } log_timestamp_type;
+typedef enum {
+    LOG_TIMESTAMP_LEGACY = 0,
+    LOG_TIMESTAMP_ISO8601,
+    LOG_TIMESTAMP_MILLISECONDS
+} log_timestamp_type;
 
-typedef enum { RDB_VERSION_CHECK_STRICT = 0,
-               RDB_VERSION_CHECK_RELAXED } rdb_version_check_type;
+typedef enum {
+    RDB_VERSION_CHECK_STRICT = 0,
+    RDB_VERSION_CHECK_RELAXED
+} rdb_version_check_type;
 
 /* Structure representing a non-owning view of a buffer.
  * A stringRef struct does not manage the underlying memory, so its destruction
@@ -947,6 +954,7 @@ typedef struct multiState {
     size_t argv_len_sums;           /* mem used by all commands arguments */
     int alloc_count;                /* total number of multiCmd struct memory reserved. */
     list watched_keys;              /* List of watchedKey for iteration and cleanup. */
+    size_t watched_keys_mem;        /* Memory used by watched key robj objects. */
     hashtable **watched_keys_by_db; /* Per-db hashtable for O(1) watched key lookup.
                                        Array of size server.dbnum, lazily allocated.
                                        Each hashtable stores watchedKey* directly. */
@@ -1203,6 +1211,7 @@ typedef struct ClientPubSubData {
     hashtable *pubsub_channels;      /* channels a client is interested in (SUBSCRIBE) */
     hashtable *pubsub_patterns;      /* patterns a client is interested in (PSUBSCRIBE) */
     hashtable *pubsubshard_channels; /* shard level channels a client is interested in (SSUBSCRIBE) */
+    size_t pubsub_object_mem;        /* Memory used by channel/pattern name robj objects. */
     /* If this client is in tracking mode and this field is non zero,
      * invalidation messages for keys fetched by this client will be sent to
      * the specified client ID. */
@@ -1408,6 +1417,14 @@ typedef struct client {
 
 /* Forward declaration */
 bool isImportSlotMigrationJob(slotMigrationJob *job);
+
+/* Absolute postpone mask from client IO offload state (not artificial READ hold). */
+static inline int clientConnPostponeMaskFromIOState(client *c) {
+    int mask = 0;
+    if (c->io_read_state != CLIENT_IDLE) mask |= CONN_POSTPONE_READ;
+    if (c->io_write_state != CLIENT_IDLE) mask |= CONN_POSTPONE_WRITE;
+    return mask;
+}
 
 /* Get the class of a client, used in order to enforce limits to different
  * classes of clients.
@@ -2141,6 +2158,8 @@ struct valkeyServer {
                                                  * to establish psync. */
     int debug_pause_after_fork;                 /* Debug param that pauses the main process
                                                  * after a replication fork() (for bgsave). */
+    int debug_pause_before_psync;               /* Replica pauses (SIGSTOP) right before
+                                                 * sending PSYNC to its primary. */
     size_t repl_buffer_mem;                     /* The memory of replication buffer. */
     list *repl_buffer_blocks;                   /* Replication buffers blocks list
                                                  * (serving replica clients and repl backlog) */
@@ -2298,6 +2317,7 @@ struct valkeyServer {
     sds hash_seed;                                         /* Configurable DB hash seed */
     int cluster_slot_stats_enabled;                        /* Cluster slot usage statistics tracking enabled. */
     mstime_t cluster_mf_timeout;                           /* Milliseconds to do a manual failover. */
+    unsigned int cluster_replica_priority;                 /* Replica priority from cluster-replica-priority. */
     unsigned long cluster_slot_migration_log_max_len;      /* Maximum count of migrations to display in the
                                                             * migration log, after which we will clear finished
                                                             * migrations. */
@@ -2305,9 +2325,10 @@ struct valkeyServer {
                                                             * failover to be attempted. */
     int slot_migration_pipe_read;                          /* Slot migration pipe used to transfer the slots data */
     int slot_migration_child_exit_pipe;                    /* Used by the slot migration parent allow child exit. */
-    connection *slot_migration_pipe_conn;                  /* xxxx */
+    connection *slot_migration_pipe_conn;                  /* Connection of the slot migration target client. The slot
+                                                            * snapshot data read from the pipe is written to it. */
     char *slot_migration_pipe_buff;                        /* In slot migration, this buffer holds slot snapshot data. */
-    ssize_t slot_migration_pipe_bufflen;                   /* that was read from the rdb pipe. */
+    ssize_t slot_migration_pipe_bufflen;                   /* that was read from the slot migration pipe. */
     /* Debug config that goes along with cluster_drop_packet_filter. When set, the link is closed on packet drop. */
     uint32_t debug_cluster_close_link_on_packet_drop : 1;
     /* Debug config to control the random ping. When set, we will disable the random ping in clusterCron. */
@@ -2387,6 +2408,7 @@ struct valkeyServer {
     /* Local environment */
     char *locale_collate;
     char *debug_context; /* A free-form string that has no impact on server except being included in a crash report. */
+    int debug_force_tls_write_error;
 };
 
 #define MAX_KEYS_BUFFER 256
@@ -2843,10 +2865,9 @@ extern dictType externalStringType;
 extern dictType sdsHashDictType;
 extern hashtableType clientHashtableType;
 extern hashtableType kvstoreChannelHashtableType;
-extern dictType modulesDictType;
 extern hashtableType sdsReplyHashtableType;
 extern dictType keylistDictType;
-extern dict *modules;
+extern list *modules;
 
 /*-----------------------------------------------------------------------------
  * Functions prototypes
@@ -2987,6 +3008,7 @@ void copyReplicaOutputBuffer(client *dst, client *src);
 void addListRangeReply(client *c, robj *o, long start, long end, int reverse);
 void deferredAfterErrorReply(client *c, list *errors);
 size_t getStringObjectSdsUsedMemory(robj *o);
+size_t getStringObjectMemory(robj *o);
 void freeClientReplyValue(void *o);
 void *dupClientReplyValue(void *o);
 char *getClientPeerId(client *c);
@@ -3048,10 +3070,11 @@ void waitForClientIO(client *c);
 void ioThreadReadQueryFromClient(client *c);
 void ioThreadWriteToClient(client *c);
 int canParseCommand(client *c);
-void processClientIOReadsDone(client *c);
+int processClientIOReadsDone(client *c);
 void processClientIOWriteDone(client *c);
 void releaseReplyReferences(client *c);
 void resetLastWrittenBuf(client *c);
+int clientConnPostponeMask(client *c);
 
 int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_idx, int max_args, int *flags, int *unit, int *expire_idx, robj **expire, robj **compare_val);
 
@@ -3153,6 +3176,7 @@ robj *tryObjectEncoding(robj *o);
 robj *tryObjectEncodingEx(robj *o, int try_trim);
 robj *getDecodedObject(robj *o);
 size_t stringObjectLen(robj *o);
+size_t getStringObjectLen(robj *o);
 robj *createStringObjectFromLongLong(long long value);
 robj *createStringObjectFromLongLongForValue(long long value);
 robj *createStringObjectFromLongLongWithSds(long long value);
@@ -3183,7 +3207,7 @@ int compareStringObjects(const robj *a, const robj *b);
 int collateStringObjects(const robj *a, const robj *b);
 int equalStringObjects(robj *a, robj *b);
 void trimStringObjectIfNeeded(robj *o, int trim_small_values);
-#define sdsEncodedObject(objptr) (objptr->encoding == OBJ_ENCODING_RAW || objptr->encoding == OBJ_ENCODING_EMBSTR)
+#define sdsEncodedObject(objptr) (objectGetEncoding(objptr) == OBJ_ENCODING_RAW || objectGetEncoding(objptr) == OBJ_ENCODING_EMBSTR)
 
 /* Objects with val and/or key embedded */
 robj *objectSetKeyAndExpire(robj *o, const_sds key, long long expire);
@@ -3196,6 +3220,16 @@ mstime_t objectGetExpire(const robj *o);
 uint8_t objectGetLFUFrequency(robj *o);
 uint32_t objectGetLRUIdleSecs(robj *o);
 uint32_t objectGetIdleness(robj *o);
+
+/* Accessor functions for serverObject fields.
+ * Use these instead of direct field access for encapsulation. */
+int objectGetType(const robj *o);
+void objectSetType(robj *o, int type);
+int objectGetEncoding(const robj *o);
+void objectSetEncoding(robj *o, int encoding);
+unsigned int objectGetRefcount(const robj *o);
+unsigned int objectGetLRU(const robj *o);
+void objectSetLRU(robj *o, unsigned int lru);
 
 /* Synchronous I/O with timeout */
 ssize_t syncWrite(int fd, char *ptr, ssize_t size, long long timeout);
@@ -3466,6 +3500,9 @@ int processCommand(client *c);
 int processPendingCommandAndInputBuffer(client *c);
 int processCommandAndResetClient(client *c);
 void setupSignalHandlers(void);
+#ifdef USE_LIBBACKTRACE
+void initLibbacktraceFrameState(void);
+#endif
 int createSocketAcceptHandler(connListener *sfd, aeFileProc *accept_handler);
 connListener *listenerByType(int type);
 int changeListener(connListener *listener);
@@ -4130,6 +4167,7 @@ void configGetCommand(client *c);
 void configResetStatCommand(client *c);
 void configRewriteCommand(client *c);
 void configHelpCommand(client *c);
+void configInfoCommand(client *c);
 void hincrbyCommand(client *c);
 void hincrbyfloatCommand(client *c);
 void subscribeCommand(client *c);
@@ -4307,6 +4345,7 @@ void debugPauseProcess(void);
 #define serverDebug(fmt, ...) printf("DEBUG %s:%d > " fmt "\n", __FILE__, __LINE__, __VA_ARGS__)
 #define serverDebugMark() printf("-- MARK %s:%d --\n", __FILE__, __LINE__)
 
+void serverInitThreadAttribute(pthread_attr_t *attr);
 int iAmPrimary(void);
 
 #define STRINGIFY_(x) #x

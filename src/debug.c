@@ -40,6 +40,8 @@
 #include "sds.h"
 #include "module.h"
 
+#include "tls.h"
+
 #include <arpa/inet.h>
 #include <signal.h>
 #include <dlfcn.h>
@@ -50,7 +52,9 @@
 #include "valkey_strtod.h"
 
 #ifdef HAVE_BACKTRACE
+#ifdef HAVE_EXECINFO
 #include <execinfo.h>
+#endif
 #ifndef __OpenBSD__
 #include <ucontext.h>
 #else
@@ -151,15 +155,15 @@ void mixStringObjectDigest(unsigned char *digest, robj *o) {
  * will continue mixing this object digest to anything that was already
  * present. */
 void xorObjectDigest(serverDb *db, robj *keyobj, unsigned char *digest, robj *o) {
-    uint32_t aux = htonl(o->type);
+    uint32_t aux = htonl(objectGetType(o));
     mixDigest(digest, &aux, sizeof(aux));
     long long expiretime = objectGetExpire(o);
     char buf[128];
 
     /* Save the key and associated value */
-    if (o->type == OBJ_STRING) {
+    if (objectGetType(o) == OBJ_STRING) {
         mixStringObjectDigest(digest, o);
-    } else if (o->type == OBJ_LIST) {
+    } else if (objectGetType(o) == OBJ_LIST) {
         listTypeIterator *li = listTypeInitIterator(o, 0, LIST_TAIL);
         listTypeEntry entry;
         while (listTypeNext(li, &entry)) {
@@ -168,7 +172,7 @@ void xorObjectDigest(serverDb *db, robj *keyobj, unsigned char *digest, robj *o)
             decrRefCount(eleobj);
         }
         listTypeReleaseIterator(li);
-    } else if (o->type == OBJ_SET) {
+    } else if (objectGetType(o) == OBJ_SET) {
         setTypeIterator *si = setTypeInitIterator(o);
         sds sdsele;
         while ((sdsele = setTypeNextObject(si)) != NULL) {
@@ -176,10 +180,10 @@ void xorObjectDigest(serverDb *db, robj *keyobj, unsigned char *digest, robj *o)
             sdsfree(sdsele);
         }
         setTypeReleaseIterator(si);
-    } else if (o->type == OBJ_ZSET) {
+    } else if (objectGetType(o) == OBJ_ZSET) {
         unsigned char eledigest[20];
 
-        if (o->encoding == OBJ_ENCODING_LISTPACK) {
+        if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) {
             unsigned char *zl = objectGetVal(o);
             unsigned char *eptr, *sptr;
             unsigned char *vstr;
@@ -209,7 +213,7 @@ void xorObjectDigest(serverDb *db, robj *keyobj, unsigned char *digest, robj *o)
                 xorDigest(digest, eledigest, 20);
                 zzlNext(zl, &eptr, &sptr);
             }
-        } else if (o->encoding == OBJ_ENCODING_SKIPLIST) {
+        } else if (objectGetEncoding(o) == OBJ_ENCODING_SKIPLIST) {
             zset *zs = objectGetVal(o);
             hashtableIterator iter;
             hashtableInitIterator(&iter, zs->ht, 0);
@@ -229,7 +233,7 @@ void xorObjectDigest(serverDb *db, robj *keyobj, unsigned char *digest, robj *o)
         } else {
             serverPanic("Unknown sorted set encoding");
         }
-    } else if (o->type == OBJ_HASH) {
+    } else if (objectGetType(o) == OBJ_HASH) {
         hashTypeIterator hi;
         hashTypeInitIterator(o, &hi);
         while (hashTypeNext(&hi) != C_ERR) {
@@ -246,7 +250,7 @@ void xorObjectDigest(serverDb *db, robj *keyobj, unsigned char *digest, robj *o)
             xorDigest(digest, eledigest, 20);
         }
         hashTypeResetIterator(&hi);
-    } else if (o->type == OBJ_STREAM) {
+    } else if (objectGetType(o) == OBJ_STREAM) {
         streamIterator si;
         streamIteratorStart(&si, objectGetVal(o), NULL, NULL, 0);
         streamID id;
@@ -266,7 +270,7 @@ void xorObjectDigest(serverDb *db, robj *keyobj, unsigned char *digest, robj *o)
             }
         }
         streamIteratorStop(&si);
-    } else if (o->type == OBJ_MODULE) {
+    } else if (objectGetType(o) == OBJ_MODULE) {
         ValkeyModuleDigest md = {{0}, {0}, keyobj, db->id};
         moduleValue *mv = objectGetVal(o);
         moduleType *mt = mv->type;
@@ -492,6 +496,10 @@ void debugCommand(client *c) {
             "    Setting it to 0 disables expiring keys in background when they are not",
             "    accessed (otherwise the behavior). Setting it to 1 reenables back the",
             "    default.",
+            "SET-DISABLE-DENY-SCRIPTS <0|1>",
+            "    Setting it to 1 allows scripts to run commands marked with the NOSCRIPT",
+            "    flag, which are normally not allowed from scripts. Setting it to 0",
+            "    restores the default behavior.",
             "QUICKLIST-PACKED-THRESHOLD <size>",
             "    Sets the threshold for elements to be inserted as plain vs packed nodes",
             "    Default value is 1GB, allows values up to 4GB. Setting to 0 restores to default.",
@@ -520,7 +528,9 @@ void debugCommand(client *c) {
             "    Enable or disable the reply buffer resize cron job",
             "PAUSE-AFTER-FORK <0|1>",
             "    Stop the server's main process after fork.",
-            "DELAY-RDB-CLIENT-FREE-SECOND <seconds>",
+            "PAUSE-BEFORE-PSYNC <0|1>",
+            "    Stop the server's main process before sending PSYNC.",
+            "DELAY-RDB-CLIENT-FREE-SECONDS <seconds>",
             "    Grace period in seconds for replica main channel to establish psync.",
             "DICT-RESIZING <0|1>",
             "    Enable or disable the main dict and expire dict resizing.",
@@ -537,6 +547,8 @@ void debugCommand(client *c) {
             "    Force freeClient on primary to use async path.",
             "PROTECT-CLIENT <id>",
             "    Protect a client from being freed, forcing deferred close.",
+            "FORCE-TLS-WRITE-ERROR <0|1>",
+            "    Force TLS write error for testing.",
             NULL};
         addExtendedReplyHelp(c, help, clusterDebugCommandExtendedHelp());
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "segfault")) {
@@ -763,7 +775,7 @@ void debugCommand(client *c) {
 
         if ((o = objectCommandLookupOrReply(c, c->argv[2], shared.nokeyerr)) == NULL) return;
 
-        if (o->encoding != OBJ_ENCODING_LISTPACK) {
+        if (objectGetEncoding(o) != OBJ_ENCODING_LISTPACK) {
             addReplyError(c, "Not a listpack encoded object.");
         } else {
             lpRepr(objectGetVal(o));
@@ -776,7 +788,7 @@ void debugCommand(client *c) {
 
         int full = 0;
         if (c->argc == 4) full = atoi(objectGetVal(c->argv[3]));
-        if (o->encoding != OBJ_ENCODING_QUICKLIST) {
+        if (objectGetEncoding(o) != OBJ_ENCODING_QUICKLIST) {
             addReplyError(c, "Not a quicklist encoded object.");
         } else {
             quicklistRepr(objectGetVal(o), full);
@@ -998,7 +1010,7 @@ void debugCommand(client *c) {
 
         /* Get the hashtable reference from the object, if possible. */
         hashtable *ht = NULL;
-        switch (o->encoding) {
+        switch (objectGetEncoding(o)) {
         case OBJ_ENCODING_SKIPLIST: {
             zset *zs = objectGetVal(o);
             ht = zs->ht;
@@ -1083,6 +1095,9 @@ void debugCommand(client *c) {
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "pause-after-fork") && c->argc == 3) {
         server.debug_pause_after_fork = atoi(objectGetVal(c->argv[2]));
         addReply(c, shared.ok);
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "pause-before-psync") && c->argc == 3) {
+        server.debug_pause_before_psync = atoi(objectGetVal(c->argv[2]));
+        addReply(c, shared.ok);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "delay-rdb-client-free-seconds") && c->argc == 3) {
         server.wait_before_rdb_client_free = atoi(objectGetVal(c->argv[2]));
         addReply(c, shared.ok);
@@ -1114,6 +1129,19 @@ void debugCommand(client *c) {
         } else {
             addReplyError(c, "No such client");
         }
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "force-tls-write-error") && c->argc == 3) {
+#ifdef USE_OPENSSL
+        long val;
+        if (getLongFromObjectOrReply(c, c->argv[2], &val, NULL) != C_OK) return;
+        if (val < 0 || val > 1) {
+            addReplyError(c, "Value must be 0 or 1");
+            return;
+        }
+        server.debug_force_tls_write_error = val;
+        addReply(c, shared.ok);
+#else
+        addReplyError(c, "TLS is not enabled");
+#endif
     } else if (!handleDebugClusterCommand(c)) {
         addReplySubcommandSyntaxError(c);
         return;
@@ -1183,9 +1211,9 @@ void _serverAssertPrintClientInfo(const client *c) {
 }
 
 void serverLogObjectDebugInfo(const robj *o) {
-    serverLog(LL_WARNING, "Object type: %u", o->type);
-    serverLog(LL_WARNING, "Object encoding: %u", o->encoding);
-    serverLog(LL_WARNING, "Object refcount: %d", o->refcount);
+    serverLog(LL_WARNING, "Object type: %u", objectGetType(o));
+    serverLog(LL_WARNING, "Object encoding: %u", objectGetEncoding(o));
+    serverLog(LL_WARNING, "Object refcount: %d", objectGetRefcount(o));
 #if defined(UNSAFE_CRASH_REPORT) && UNSAFE_CRASH_REPORT
     /* This code is now disabled. o->ptr may be unreliable to print. in some
      * cases a ziplist could have already been freed by realloc, but not yet
@@ -1194,24 +1222,24 @@ void serverLogObjectDebugInfo(const robj *o) {
      * For some cases it may be ok to crash here again, but these could cause
      * invalid memory access which will bother valgrind and also possibly cause
      * random memory portion to be "leaked" into the logfile. */
-    if (o->type == OBJ_STRING && sdsEncodedObject(o)) {
+    if (objectGetType(o) == OBJ_STRING && sdsEncodedObject(o)) {
         serverLog(LL_WARNING, "Object raw string len: %zu", sdslen(o->ptr));
         if (sdslen(o->ptr) < 4096) {
             sds repr = sdscatrepr(sdsempty(), o->ptr, sdslen(o->ptr));
             serverLog(LL_WARNING, "Object raw string content: %s", repr);
             sdsfree(repr);
         }
-    } else if (o->type == OBJ_LIST) {
+    } else if (objectGetType(o) == OBJ_LIST) {
         serverLog(LL_WARNING, "List length: %d", (int)listTypeLength(o));
-    } else if (o->type == OBJ_SET) {
+    } else if (objectGetType(o) == OBJ_SET) {
         serverLog(LL_WARNING, "Set size: %d", (int)setTypeSize(o));
-    } else if (o->type == OBJ_HASH) {
+    } else if (objectGetType(o) == OBJ_HASH) {
         serverLog(LL_WARNING, "Hash size: %d", (int)hashTypeLength(o));
-    } else if (o->type == OBJ_ZSET) {
+    } else if (objectGetType(o) == OBJ_ZSET) {
         serverLog(LL_WARNING, "Sorted set size: %d", (int)zsetLength(o));
-        if (o->encoding == OBJ_ENCODING_SKIPLIST)
+        if (objectGetEncoding(o) == OBJ_ENCODING_SKIPLIST)
             serverLog(LL_WARNING, "Skiplist level: %d", (int)((const zset *)o->ptr)->zsl->level);
-    } else if (o->type == OBJ_STREAM) {
+    } else if (objectGetType(o) == OBJ_STREAM) {
         serverLog(LL_WARNING, "Stream size: %d", (int)streamLength(o));
     }
 #endif
@@ -1765,6 +1793,47 @@ static void setupStacktracePipe(void) { /* we don't need a pipe to write the sta
 #define BACKTRACE_MAX_SIZE 100
 
 #ifdef USE_LIBBACKTRACE
+/* On systems without execinfo.h (e.g. musl/Alpine), use libbacktrace's
+ * backtrace_simple() to collect stack frame addresses. */
+struct bt_collect_data {
+    void **trace;
+    int max_size;
+    int count;
+};
+
+static int bt_simple_collect_cb(void *data, uintptr_t pc) {
+    struct bt_collect_data *d = (struct bt_collect_data *)data;
+    if (d->count < d->max_size) {
+        d->trace[d->count++] = (void *)pc;
+    }
+    return 0;
+}
+
+static void bt_simple_error_cb(void *data, const char *msg, int errnum) {
+    (void)data;
+    (void)msg;
+    (void)errnum;
+}
+
+static struct backtrace_state *bt_frame_state = NULL;
+
+/* Preallocate at startup: backtrace_create_state() calls malloc, which is not
+ * async-signal-safe and could deadlock if called from a crash signal handler. */
+void initLibbacktraceFrameState(void) {
+    bt_frame_state = backtrace_create_state(NULL, 1, bt_simple_error_cb, NULL);
+}
+
+static int valkey_backtrace(void **trace, int max_size) {
+    if (!bt_frame_state) return 0;
+    struct bt_collect_data data = {trace, max_size, 0};
+    backtrace_simple(bt_frame_state, 0, bt_simple_collect_cb, bt_simple_error_cb, &data);
+    return data.count;
+}
+
+#define backtrace(trace, size) valkey_backtrace(trace, size)
+#endif /* USE_LIBBACKTRACE */
+
+#ifdef USE_LIBBACKTRACE
 /* Callback data for libbacktrace */
 typedef struct {
     int fd;
@@ -1824,14 +1893,26 @@ static void symbolizeWithLibbacktrace(void **trace, int trace_size, int fd, int 
             }
             /* If libbacktrace produced no frames or no useful function names, fall back to standard backtrace */
             if (cb_data.count == 0 || !cb_data.found_symbols) {
+#ifdef HAVE_EXECINFO
                 char *msg = "\n(libbacktrace failed to resolve symbols, falling back to standard backtrace)\n";
                 if (write(fd, msg, strlen(msg)) == -1) { /* Avoid warning. */
                 }
                 backtrace_symbols_fd(trace + uplevel, trace_size - uplevel, fd);
+#else
+                char *msg = "\n(no symbol information available for these frames)\n";
+                if (write(fd, msg, strlen(msg)) == -1) { /* Avoid warning. */
+                }
+#endif
             }
         } else {
             /* Fallback if state creation fails */
+#ifdef HAVE_EXECINFO
             backtrace_symbols_fd(trace + uplevel, trace_size - uplevel, fd);
+#else
+            char *msg = "(libbacktrace state creation failed, no fallback available)\n";
+            if (write(fd, msg, strlen(msg)) == -1) { /* Avoid warning. */
+            }
+#endif
         }
         _exit(0);
     } else if (pid > 0) {
@@ -1853,7 +1934,13 @@ static void symbolizeWithLibbacktrace(void **trace, int trace_size, int fd, int 
         }
     } else {
         /* Fork failed, fall back to backtrace_symbols_fd */
+#ifdef HAVE_EXECINFO
         backtrace_symbols_fd(trace + uplevel, trace_size - uplevel, fd);
+#else
+        char *msg = "(fork failed, no fallback available)\n";
+        if (write(fd, msg, strlen(msg)) == -1) { /* Avoid warning. */
+        }
+#endif
     }
 }
 #endif /* USE_LIBBACKTRACE */
@@ -1995,7 +2082,11 @@ __attribute__((noinline)) void logStackTrace(void *eip, int uplevel, int current
         msg = "EIP:\n";
         if (write(fd, msg, strlen(msg)) == -1) { /* Avoid warning. */
         };
+#ifdef USE_LIBBACKTRACE
+        symbolizeWithLibbacktrace(&eip, 1, fd, 0);
+#elif defined(HAVE_EXECINFO)
         backtrace_symbols_fd(&eip, 1, fd);
+#endif
     }
 
     /* Write symbols to log file */

@@ -122,10 +122,11 @@ typedef struct {
 
 enum raftRole {
     RAFT_ROLE_JOINER = 0, /* Stepped down singleton waiting to be added to a cluster */
-    RAFT_ROLE_FOLLOWER = 1,
-    RAFT_ROLE_PRE_CANDIDATE = 2,
-    RAFT_ROLE_CANDIDATE = 3,
-    RAFT_ROLE_LEADER = 4,
+    RAFT_ROLE_LEARNER = 1,
+    RAFT_ROLE_FOLLOWER = 2,
+    RAFT_ROLE_PRE_CANDIDATE = 3,
+    RAFT_ROLE_CANDIDATE = 4,
+    RAFT_ROLE_LEADER = 5,
 };
 
 /* --------------------------------------------------------------------------
@@ -430,18 +431,20 @@ static bool clusterRaftIsSingleton(void) {
     return server.cluster->size <= 1 && !clusterRaftHasPeerMembers();
 }
 
-/* Leader step-down to follower. */
+/* Step down on higher term / lost quorum.
+ * Voters become followers; learners and joiners keep their role. */
 static void clusterRaftStepDown(mstime_t now, const char *reason) {
     clusterRaftState *rs = RAFT_STATE();
     clusterRaftDeferPendingProposals();
-    rs->role = RAFT_ROLE_FOLLOWER;
+    if (rs->role != RAFT_ROLE_LEARNER && rs->role != RAFT_ROLE_JOINER)
+        rs->role = RAFT_ROLE_FOLLOWER;
     rs->votes_received = 0;
     memset(rs->voted_for, 0, CLUSTER_NAMELEN);
     memset(rs->leader, 0, CLUSTER_NAMELEN);
     clusterRaftRandomizeElectionTimeout();
     rs->last_heartbeat = now;
     rs->todo_save_config = 1;
-    serverLog(LL_NOTICE, "Stepping down to follower: %s.", reason);
+    serverLog(LL_NOTICE, "Stepping down: %s.", reason);
 }
 
 /* Return non-zero if the leader still has a recently responsive voting
@@ -675,7 +678,8 @@ static int clusterRaftProcessHi(clusterLink *link, int argc, sds *argv) {
 
     /* If we just established a link to the leader and have deferred
      * proposals, trigger retry in the next beforeSleep. */
-    if (rs->role == RAFT_ROLE_FOLLOWER && listLength(rs->pending_proposals) > 0 &&
+    if ((rs->role == RAFT_ROLE_FOLLOWER || rs->role == RAFT_ROLE_LEARNER) &&
+        listLength(rs->pending_proposals) > 0 &&
         link->node && memcmp(link->node->name, rs->leader, CLUSTER_NAMELEN) == 0) {
         rs->todo_retry_proposals = 1;
     }
@@ -1434,7 +1438,7 @@ static void raftLogApply(raftLogEntry *e) {
                 rs->my_last_committed_info = clusterRaftBuildMyNodeInfo();
 
                 if (rs->role == RAFT_ROLE_JOINER) {
-                    rs->role = RAFT_ROLE_FOLLOWER;
+                    rs->role = learner ? RAFT_ROLE_LEARNER : RAFT_ROLE_FOLLOWER;
                     rs->todo_save_config = 1;
                     serverLog(LL_NOTICE, "Promoted from joiner to %s.", learner ? "learner" : "follower");
 
@@ -1705,7 +1709,7 @@ static int clusterRaftProcessAppendEntries(clusterLink *link, int argc, sds *arg
     clusterRaftMaybeStepDown(msg_term);
 
     /* Accept heartbeat. */
-    if (rs->role != RAFT_ROLE_JOINER) rs->role = RAFT_ROLE_FOLLOWER;
+    if (rs->role != RAFT_ROLE_JOINER && rs->role != RAFT_ROLE_LEARNER) rs->role = RAFT_ROLE_FOLLOWER;
     rs->last_heartbeat = monotonicMs();
     memcpy(rs->leader, argv[1], CLUSTER_NAMELEN);
 
@@ -2142,6 +2146,7 @@ static void clusterRaftInitLast(void) {
     /* Fresh single-node cluster: become leader immediately. */
     clusterRaftState *rs = RAFT_STATE();
     if (dictSize(server.cluster->nodes) == 1 && server.cluster->size == 0) {
+        myself->flags &= ~CLUSTER_NODE_LEARNER;
         rs->role = RAFT_ROLE_LEADER;
         rs->current_term = 1;
         memcpy(rs->leader, myself->name, CLUSTER_NAMELEN);
@@ -2259,9 +2264,9 @@ static void clusterRaftRetryProposals(int include_pending) {
     clusterRaftState *rs = RAFT_STATE();
     if (listLength(rs->pending_proposals) == 0) return;
 
-    /* For followers, check leader link once — it's the same for all entries. */
+    /* For followers/learners, check leader link once — it's the same for all entries. */
     clusterLink *leader_link = NULL;
-    if (rs->role == RAFT_ROLE_FOLLOWER) {
+    if (rs->role == RAFT_ROLE_FOLLOWER || rs->role == RAFT_ROLE_LEARNER) {
         clusterNode *leader = clusterLookupNode(rs->leader, CLUSTER_NAMELEN);
         if (!leader || !leader->link) {
             rs->todo_retry_proposals = 1;
@@ -2300,10 +2305,32 @@ static void clusterRaftRetryProposals(int include_pending) {
     }
 }
 
+/* Verify the LEARNER node flag and the Raft role stay in sync for myself.
+ *
+ * Invariants:
+ *   - role == LEARNER  <=>  LEARNER flag set.
+ *   - leader/candidate/pre-candidate are voters, so the flag must be clear.
+ * This catches regressions from the (flag, role) synchronization points:
+ * NODE_JOIN apply, ADD_VOTER/DEL_VOTER apply, and reset. */
+static void clusterRaftAssertLearnerRole(void) {
+    clusterRaftState *rs = RAFT_STATE();
+    int learner_flag = nodeIsLearner(myself);
+    if (rs->role == RAFT_ROLE_LEADER || rs->role == RAFT_ROLE_CANDIDATE ||
+        rs->role == RAFT_ROLE_PRE_CANDIDATE) {
+        serverAssert(!learner_flag);
+    } else if (rs->role == RAFT_ROLE_LEARNER) {
+        serverAssert(learner_flag);
+    } else {
+        /* FOLLOWER or JOINER: voter or pre-member, flag must be clear. */
+        serverAssert(!learner_flag);
+    }
+}
+
 static void clusterRaftCron(void) {
     clusterRaftState *rs = RAFT_STATE();
     mstime_t now = monotonicMs();
 
+    clusterRaftAssertLearnerRole();
     if (!server.debug_cluster_disable_reconnection) clusterConnectNodes();
 
     /* Joiner timeout: if we stepped down to join a cluster but never
@@ -3079,6 +3106,10 @@ static void clusterRaftPostLoad(void) {
         if (nodeIsVoter(node)) server.cluster->size++;
     }
     dictReleaseIterator(di);
+    /* Sync Raft role with the persisted LEARNER flag for myself.
+     * Note: global `myself` is not set yet when postLoad runs. */
+    if (server.cluster->myself && nodeIsLearner(server.cluster->myself))
+        rs->role = RAFT_ROLE_LEARNER;
     /* If we're a replica, start replication. */
     if (server.cluster->myself &&
         nodeIsReplica(server.cluster->myself) &&
@@ -3185,10 +3216,10 @@ static sds clusterRaftAppendInfoFields(sds info) {
                      server.cluster->size);
 
     /* Raft-specific fields. */
-    const char *role_str = nodeIsLearner(myself)                 ? "learner"
-                           : rs->role == RAFT_ROLE_LEADER        ? "leader"
+    const char *role_str = rs->role == RAFT_ROLE_LEADER          ? "leader"
                            : rs->role == RAFT_ROLE_CANDIDATE     ? "candidate"
                            : rs->role == RAFT_ROLE_PRE_CANDIDATE ? "pre-candidate"
+                           : rs->role == RAFT_ROLE_LEARNER       ? "learner"
                            : rs->role == RAFT_ROLE_JOINER        ? "joiner"
                                                                  : "follower";
     info = sdscatprintf(info,
@@ -3593,6 +3624,7 @@ static RaftProposalResult clusterRaftApplyAddVoter(sds data, int validate_only) 
     }
 
     node->flags &= ~CLUSTER_NODE_LEARNER;
+    if (node == myself) rs->role = RAFT_ROLE_FOLLOWER;
     server.cluster->size++;
     rs->todo_save_config = 1;
     sdsfreesplitres(argv, argc);
@@ -3623,6 +3655,7 @@ static RaftProposalResult clusterRaftApplyDelVoter(sds data, int validate_only) 
     }
 
     node->flags |= CLUSTER_NODE_LEARNER;
+    if (node == myself) rs->role = RAFT_ROLE_LEARNER;
     server.cluster->size--;
     rs->todo_save_config = 1;
     sdsfreesplitres(argv, argc);

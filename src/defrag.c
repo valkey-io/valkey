@@ -248,59 +248,6 @@ static void defragZsetItemCallback(OrderedIndexItem *old_item, OrderedIndexItem 
     server.stat_active_defrag_scanned++;
 }
 
-#define DEFRAG_SDS_DICT_NO_VAL 0
-#define DEFRAG_SDS_DICT_VAL_IS_SDS 1
-#define DEFRAG_SDS_DICT_VAL_IS_STROB 2
-#define DEFRAG_SDS_DICT_VAL_VOID_PTR 3
-#define DEFRAG_SDS_DICT_VAL_LUA_SCRIPT 4
-
-typedef void *(dictDefragAllocFunction)(void *ptr);
-typedef struct {
-    dictDefragAllocFunction *defragKey;
-    dictDefragAllocFunction *defragVal;
-} dictDefragFunctions;
-
-static void activeDefragDictCallback(void *privdata, void *entry_ref) {
-    dictDefragFunctions *defragfns = privdata;
-    dictEntry **de_ref = (dictEntry **)entry_ref;
-    dictEntry *de = *de_ref;
-
-    /* Defrag the entry itself */
-    dictEntry *newentry = activeDefragAlloc(de);
-    if (newentry) {
-        de = newentry;
-        *de_ref = newentry;
-    }
-
-    /* Defrag the key */
-    if (defragfns->defragKey) {
-        void *newkey = defragfns->defragKey(de->key);
-        if (newkey) de->key = newkey;
-    }
-
-    /* Defrag the value */
-    if (defragfns->defragVal) {
-        void *newval = defragfns->defragVal(de->v.val);
-        if (newval) de->v.val = newval;
-    }
-}
-
-/* Defrag a dict with sds key and optional value (either ptr, sds or robj string) */
-static void activeDefragSdsDict(dict *d, int val_type) {
-    unsigned long cursor = 0;
-    dictDefragFunctions defragfns = {
-        .defragKey = (dictDefragAllocFunction *)activeDefragSds,
-        .defragVal = (val_type == DEFRAG_SDS_DICT_VAL_IS_SDS       ? (dictDefragAllocFunction *)activeDefragSds
-                      : val_type == DEFRAG_SDS_DICT_VAL_IS_STROB   ? (dictDefragAllocFunction *)activeDefragStringOb
-                      : val_type == DEFRAG_SDS_DICT_VAL_VOID_PTR   ? (dictDefragAllocFunction *)activeDefragAlloc
-                      : val_type == DEFRAG_SDS_DICT_VAL_LUA_SCRIPT ? (dictDefragAllocFunction *)evalActiveDefragScript
-                                                                   : NULL)};
-    do {
-        cursor = hashtableScanDefrag(d, cursor, activeDefragDictCallback,
-                                     &defragfns, activeDefragAlloc, HASHTABLE_SCAN_EMIT_REF);
-    } while (cursor != 0);
-}
-
 static void activeDefragSdsHashtableCallback(void *privdata, void *entry_ref) {
     UNUSED(privdata);
     sds *sds_ref = (sds *)entry_ref;
@@ -956,10 +903,7 @@ static doneStatus defragLuaScripts(monotime endtime, void *target, void *privdat
     UNUSED(target);
     UNUSED(privdata);
     if (endtime == 0) return DEFRAG_NOT_DONE; // required initialization
-    /* In case we are in the process of eval some script we do not want to replace the script being run
-     * so we just bail out without really defragging here. */
-    if (scriptIsRunning()) return DEFRAG_DONE;
-    activeDefragSdsDict(evalScriptsDict(), DEFRAG_SDS_DICT_VAL_LUA_SCRIPT);
+    evalDefragScripts(activeDefragAlloc);
     return DEFRAG_DONE;
 }
 

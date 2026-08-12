@@ -140,7 +140,7 @@ int streamDecrID(streamID *id) {
 
 /* Generate the next stream item ID given the previous one. If the current
  * milliseconds Unix time is greater than the previous one, just use this
- * as time part and start with sequence part of zero. Otherwise we use the
+ * as time part and start with sequence part of zero. Otherwise, we use the
  * previous time (and never go backward) and increment the sequence. */
 void streamNextID(streamID *last_id, streamID *new_id) {
     uint64_t ms = commandTimeSnapshot();
@@ -719,6 +719,15 @@ int64_t streamTrim(stream *s, streamAddTrimArgs *args) {
 
     if (trim_strategy == TRIM_STRATEGY_NONE) return 0;
     if (trim_strategy == TRIM_STRATEGY_MAXLEN && s->length <= maxlen) return 0;
+    if (trim_strategy == TRIM_STRATEGY_MAXLEN && maxlen == 0 && !approx && limit == 0) {
+        int64_t deleted = s->length;
+        raxFreeWithCallback(s->rax, lpFreeVoid);
+        s->rax = raxNew();
+        s->length = 0;
+        s->first_id.ms = 0;
+        s->first_id.seq = 0;
+        return deleted;
+    }
 
     raxIterator ri;
     raxStart(&ri, s->rax);
@@ -3978,8 +3987,13 @@ void xinfoCommand(client *c) {
 
 /* Validate the integrity stream listpack entries structure. Both in term of a
  * valid listpack, but also that the structure of the entries matches a valid
- * stream. return 1 if valid 0 if not valid. */
-int streamValidateListpackIntegrity(unsigned char *lp, size_t size) {
+ * stream. return 1 if valid 0 if not valid.
+ *
+ * If 'valid_count' is not NULL, the number of non-deleted (non-tombstone)
+ * entries in this listpack is added to it. Callers use this to validate the
+ * stream length loaded from an RDB payload against the entries actually
+ * present. */
+int streamValidateListpackIntegrity(unsigned char *lp, size_t size, uint64_t *valid_count) {
     int valid_record;
     unsigned char *p, *next;
 
@@ -3992,19 +4006,23 @@ int streamValidateListpackIntegrity(unsigned char *lp, size_t size) {
 
     /* entry count */
     int64_t entry_count = lpGetIntegerIfValid(p, &valid_record);
-    if (!valid_record) return 0;
+    if (!valid_record || entry_count < 0) return 0;
     p = next;
     if (!lpValidateNext(lp, &next, size)) return 0;
 
+    /* The master entry count is the number of live (non-deleted) entries in
+     * this listpack. Accumulate it so the caller can verify the stream length. */
+    if (valid_count) *valid_count += entry_count;
+
     /* deleted */
     int64_t deleted_count = lpGetIntegerIfValid(p, &valid_record);
-    if (!valid_record) return 0;
+    if (!valid_record || deleted_count < 0) return 0;
     p = next;
     if (!lpValidateNext(lp, &next, size)) return 0;
 
     /* num-of-fields */
     int64_t primary_fields = lpGetIntegerIfValid(p, &valid_record);
-    if (!valid_record) return 0;
+    if (!valid_record || primary_fields < 0) return 0;
     p = next;
     if (!lpValidateNext(lp, &next, size)) return 0;
 
@@ -4042,7 +4060,7 @@ int streamValidateListpackIntegrity(unsigned char *lp, size_t size) {
         if (!(flags & STREAM_ITEM_FLAG_SAMEFIELDS)) {
             /* num-of-fields */
             fields = lpGetIntegerIfValid(p, &valid_record);
-            if (!valid_record) return 0;
+            if (!valid_record || fields < 0) return 0;
             p = next;
             if (!lpValidateNext(lp, &next, size)) return 0;
 

@@ -1326,6 +1326,17 @@ proc memcmp {string1 string2} {
     return [expr {$len1 - $len2}]
 }
 
+# Execute body with a temporary config override, restoring the original
+# value even if the body fails.
+proc with_config {config value body} {
+    set old [lindex [r config get $config] 1]
+    r config set $config $value
+    catch {uplevel 1 $body} result opts
+    r config set $config $old
+    dict incr opts -level
+    return -options $opts $result
+}
+
 # Escape a string for use as a JSON string value.
 #
 # Beyond the characters with a short escape, every C0 control character has to

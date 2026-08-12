@@ -30,6 +30,7 @@
 
 #include "hashtable.h"
 #include "server.h"
+#include "ordered_index.h"
 #include "serverassert.h"
 #include "functions.h"
 #include "intset.h" /* Compact integer set structure */
@@ -474,7 +475,7 @@ robj *createStringObjectFromLongLongWithSds(long long value) {
 
 /* Create a string object from a long double. If humanfriendly is non-zero
  * it does not use exponential format and trims trailing zeroes at the end,
- * however this results in loss of precision. Otherwise exp format is used
+ * however this results in loss of precision. Otherwise, exp format is used
  * and the output of snprintf() is not modified.
  *
  * The 'humanfriendly' option is used for INCRBYFLOAT and HINCRBYFLOAT. */
@@ -556,9 +557,9 @@ robj *createZsetObject(void) {
     robj *o;
 
     zs->ht = hashtableCreate(&zsetHashtableType);
-    zs->zsl = zslCreate();
+    zs->oi = orderedIndexCreate();
     o = createObject(OBJ_ZSET, zs);
-    objectSetEncoding(o, OBJ_ENCODING_SKIPLIST);
+    objectSetEncoding(o, OBJ_ENCODING_BTREE);
     return o;
 }
 
@@ -611,10 +612,10 @@ void freeSetObject(robj *o) {
 void freeZsetObject(robj *o) {
     zset *zs;
     switch (objectGetEncoding(o)) {
-    case OBJ_ENCODING_SKIPLIST:
+    case OBJ_ENCODING_BTREE:
         zs = objectGetVal(o);
         hashtableRelease(zs->ht);
-        zslFree(zs->zsl);
+        orderedIndexFree(zs->oi);
         zfree(zs);
         break;
     case OBJ_ENCODING_LISTPACK: zfree(objectGetVal(o)); break;
@@ -748,19 +749,14 @@ void dismissSetObject(robj *o, size_t size_hint) {
 
 /* See dismissObject() */
 void dismissZsetObject(robj *o, size_t size_hint) {
-    if (objectGetEncoding(o) == OBJ_ENCODING_SKIPLIST) {
+    if (objectGetEncoding(o) == OBJ_ENCODING_BTREE) {
         zset *zs = objectGetVal(o);
-        zskiplist *zsl = zs->zsl;
-        serverAssert(zslGetLength(zsl) != 0);
+        unsigned long len = orderedIndexLength(zs->oi);
+        serverAssert(len != 0);
         /* We iterate all nodes only when average member size is bigger than a
          * page size, and there's a high chance we'll actually dismiss something. */
-        if (size_hint / zslGetLength(zsl) >= server.page_size) {
-            zskiplistNode *zn = zslGetTail(zsl);
-            while (zn != NULL) {
-                zskiplistNode *next = zn->backward;
-                dismissMemory(zn, 0);
-                zn = next;
-            }
+        if (size_hint / len >= server.page_size) {
+            orderedIndexDismissMemory(zs->oi);
         }
 
         dismissHashtable(zs->ht);
@@ -1207,7 +1203,7 @@ char *strEncoding(int encoding) {
     case OBJ_ENCODING_QUICKLIST: return "quicklist";
     case OBJ_ENCODING_LISTPACK: return "listpack";
     case OBJ_ENCODING_INTSET: return "intset";
-    case OBJ_ENCODING_SKIPLIST: return "skiplist";
+    case OBJ_ENCODING_BTREE: return "btree";
     case OBJ_ENCODING_EMBSTR: return "embstr";
     case OBJ_ENCODING_STREAM: return "stream";
     default: return "unknown";
@@ -1272,18 +1268,21 @@ size_t objectComputeSize(robj *key, robj *o, size_t sample_size, int dbid) {
     } else if (objectGetType(o) == OBJ_ZSET) {
         if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) {
             asize += zmalloc_size(objectGetVal(o));
-        } else if (objectGetEncoding(o) == OBJ_ENCODING_SKIPLIST) {
-            hashtable *ht = ((zset *)objectGetVal(o))->ht;
-            zskiplist *zsl = ((zset *)objectGetVal(o))->zsl;
-            zskiplistNode *zheader = zslGetHeader(zsl);
-            zskiplistNode *znode = zheader->level[0].forward;
-            asize += sizeof(zset) + zslGetAllocSize() + hashtableMemUsage(ht);
-            while (znode != NULL && samples < sample_size) {
-                elesize += zmalloc_size(znode);
+        } else if (objectGetEncoding(o) == OBJ_ENCODING_BTREE) {
+            zset *zs = objectGetVal(o);
+            hashtableIterator iter;
+            hashtableInitIterator(&iter, zs->ht, 0);
+            void *next;
+
+            asize += sizeof(zset) + orderedIndexEstimateStructureMemory(zs->oi) + hashtableMemUsage(zs->ht);
+            /* The hashtable entries are the packed items shared with the
+             * ordered index, so sampling them covers the member payloads. */
+            while (hashtableNext(&iter, &next) && samples < sample_size) {
+                elesize += sdsAllocSize((sds)next);
                 samples++;
-                znode = znode->level[0].forward;
             }
-            if (samples) asize += (double)elesize / samples * hashtableSize(ht);
+            hashtableCleanupIterator(&iter);
+            if (samples) asize += (double)elesize / samples * hashtableSize(zs->ht);
         } else {
             serverPanic("Unknown sorted set encoding");
         }

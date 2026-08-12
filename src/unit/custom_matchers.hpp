@@ -1,6 +1,7 @@
 #ifndef _CUSTOM_MATCHERS_HPP_
 #define _CUSTOM_MATCHERS_HPP_
 
+#include "wrappers.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 #include <string>

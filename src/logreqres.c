@@ -81,7 +81,7 @@ static int reqresShouldLog(client *c) {
     if (c->flag.fake || c->conn == NULL) return 0;
 
     /* Ignore client with streaming non-standard response */
-    if (c->flag.pubsub || c->flag.monitor || c->flag.replica) return 0;
+    if (c->flag.pubsub || c->flag.replica_or_monitor) return 0;
 
     /* We only log normal user clients.
      * Internal clients (slot migration etc.) may use shared buffers or emit commands that

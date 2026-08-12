@@ -877,6 +877,19 @@ static void clusterRaftPropose(sds entry, void *ctx, void (*callback)(void *ctx,
             sdsfree(data);
             return;
         }
+        /* NODE_FORGET is idempotent: already-gone targets succeed without a
+         * no-op log entry so classic multi-node FORGET keeps working. */
+        if (type == RAFT_ENTRY_NODE_FORGET) {
+            int fargc;
+            sds *fargv = sdssplitlen(data, sdslen(data), " ", 1, &fargc);
+            int already_gone = (!fargv || fargc < 1 || !clusterLookupNode(fargv[0], sdslen(fargv[0])));
+            if (fargv) sdsfreesplitres(fargv, fargc);
+            if (already_gone) {
+                sdsfree(data);
+                if (callback) callback(ctx, NULL);
+                return;
+            }
+        }
     }
 
     /* Track pending proposal for retry on leader change. */
@@ -3670,7 +3683,9 @@ static RaftProposalResult clusterRaftApplyNodeForget(sds data, int validate_only
     if (!argv || argc < 2) goto reject;
 
     clusterNode *node = clusterLookupNode(argv[0], sdslen(argv[0]));
-    if (!node || node == myself) goto reject;
+    
+    if (!node) goto done;
+    if (node == myself) goto reject;
 
     uint64_t epoch = strtoull(argv[1], NULL, 10);
     if (!clusterValidateShardEpoch(node->shard_id, epoch)) {

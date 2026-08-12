@@ -3683,7 +3683,7 @@ static RaftProposalResult clusterRaftApplyNodeForget(sds data, int validate_only
     if (!argv || argc < 2) goto reject;
 
     clusterNode *node = clusterLookupNode(argv[0], sdslen(argv[0]));
-    
+
     if (!node) goto done;
     if (node == myself) goto reject;
 

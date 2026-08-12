@@ -445,3 +445,254 @@ start_server {tags {"commandlog"} overrides {commandlog-execution-slower-than 10
         assert_equal [lindex [r config get commandlog-reply-larger-than] 1] -1
     } {} {external:skip}
 }
+
+start_server {tags {"commandlog"} overrides {commandlog-execution-slower-than 10000 commandlog-slow-execution-max-len 128 commandlog-slow-execution-magnitude-max-len 5}} {
+
+    test {Magnitude store - captures commands below the recency threshold} {
+        r commandlog reset slow
+        for {set i 0} {$i < 10} {incr i} {
+            r set key$i val$i
+        }
+        assert_equal 0 [r commandlog len slow recency]
+        assert_equal 5 [r commandlog len slow magnitude]
+    }
+
+    test {Magnitude store - bounded by its own max-len} {
+        r commandlog reset slow
+        for {set i 0} {$i < 100} {incr i} {
+            r set key$i val$i
+        }
+        assert_equal 5 [r commandlog len slow magnitude]
+    }
+
+    test {Magnitude store - entries are returned highest value first} {
+        r commandlog reset slow
+        for {set i 0} {$i < 50} {incr i} {
+            r set key$i val$i
+        }
+        set entries [r commandlog get -1 slow magnitude]
+        assert_equal 5 [llength $entries]
+        set prev [lindex [lindex $entries 0] 2]
+        foreach entry $entries {
+            set value [lindex $entry 2]
+            assert {$value <= $prev}
+            set prev $value
+        }
+    }
+
+    test {Magnitude store - a slow command displaces faster ones} {
+        r commandlog reset slow
+        for {set i 0} {$i < 50} {incr i} {
+            r set key$i val$i
+        }
+        r debug sleep 0.01
+        # The sleep is the slowest command by far, so it must be the top entry.
+        set top [lindex [r commandlog get 1 slow magnitude] 0]
+        assert {[lindex $top 2] > 5000}
+    } {} {needs:debug}
+
+    test {Magnitude store - keeps only the worst entries once full} {
+        r commandlog reset slow
+        for {set i 0} {$i < 5} {incr i} {
+            r debug sleep 0.01
+        }
+        # Heap is full of 10ms sleeps. Fast commands must all be rejected.
+        for {set i 0} {$i < 50} {incr i} {
+            r set key$i val$i
+        }
+        foreach entry [r commandlog get -1 slow magnitude] {
+            assert {[lindex $entry 2] > 5000}
+        }
+    } {} {needs:debug}
+
+    test {Both stores are populated together} {
+        r config set commandlog-execution-slower-than 0
+        r commandlog reset slow
+        for {set i 0} {$i < 10} {incr i} {
+            r set key$i val$i
+        }
+        # Recency keeps up to 128, magnitude up to 5.
+        assert {[r commandlog len slow recency] >= 10}
+        assert_equal 5 [r commandlog len slow magnitude]
+        r config set commandlog-execution-slower-than 10000
+    }
+
+    test {LEN and GET default to the recency store} {
+        r config set commandlog-execution-slower-than 0
+        r commandlog reset slow
+        r set foo bar
+        # Restore the threshold first, otherwise each command below is logged
+        r config set commandlog-execution-slower-than 10000
+        assert_equal [r commandlog len slow] [r commandlog len slow recency]
+        assert_equal [r commandlog get -1 slow] [r commandlog get -1 slow recency]
+    }
+
+    test {RESET without a store clears both} {
+        r config set commandlog-execution-slower-than 0
+        for {set i 0} {$i < 10} {incr i} {
+            r set key$i val$i
+        }
+        r debug sleep 0.01
+        r config set commandlog-execution-slower-than 10000
+        assert {[r commandlog len slow recency] > 0}
+        assert_equal 5 [r commandlog len slow magnitude]
+
+        r commandlog reset slow
+        # The magnitude store will log the reset command
+        set entries [r commandlog get -1 slow magnitude]
+        assert_equal 1 [llength $entries]
+        assert {[lindex [lindex $entries 0] 2] < 5000}
+        assert_equal 0 [r commandlog len slow recency]
+    } {} {needs:debug}
+
+    test {RESET with a store clears only that one} {
+        r config set commandlog-execution-slower-than 0
+        r commandlog reset slow
+        for {set i 0} {$i < 10} {incr i} {
+            r set key$i val$i
+        }
+        r debug sleep 0.01
+        r config set commandlog-execution-slower-than 10000
+
+        # 1 reset + 10 sets + the sleep
+        assert_equal 12 [r commandlog len slow recency]
+        assert_equal 5 [r commandlog len slow magnitude]
+        assert {[lindex [r commandlog get 1 slow magnitude] 0 2] > 5000}
+
+        # Resetting only the recency
+        r commandlog reset slow recency
+        assert_equal 0 [r commandlog len slow recency]
+        assert_equal 5 [r commandlog len slow magnitude]
+        assert {[lindex [r commandlog get 1 slow magnitude] 0 2] > 5000}
+
+        # Repopulate the recency store
+        r config set commandlog-execution-slower-than 0
+        r set foo1 bar1
+        r set foo2 bar2
+        r config set commandlog-execution-slower-than 10000
+
+        # Resetting only the magnitude store
+        r commandlog reset slow magnitude
+        # The reset was logged into the threshold-ignoring magnitude store.
+        set entries [r commandlog get -1 slow magnitude]
+        assert_equal 1 [llength $entries]
+        assert {[lindex [lindex $entries 0] 2] < 5000}
+        # 1 config + 2 set
+        assert_equal 3 [r commandlog len slow recency]
+    } {} {needs:debug}
+
+    test {Lowering the magnitude max-len trims immediately} {
+        r commandlog reset slow
+        for {set i 0} {$i < 50} {incr i} {
+            r set key$i val$i
+        }
+        assert_equal 5 [r commandlog len slow magnitude]
+        r config set commandlog-slow-execution-magnitude-max-len 2
+        assert_equal 2 [r commandlog len slow magnitude]
+        r config set commandlog-slow-execution-magnitude-max-len 5
+    }
+
+    test {Lowering the recency max-len trims immediately} {
+        r config set commandlog-execution-slower-than 0
+        r commandlog reset slow
+        for {set i 0} {$i < 30} {incr i} {
+            r set key$i val$i
+        }
+        r config set commandlog-execution-slower-than 10000
+        assert {[r commandlog len slow recency] >= 20}
+        r config set commandlog-slow-execution-max-len 4
+        assert_equal 4 [r commandlog len slow recency]
+        r config set commandlog-slow-execution-max-len 128
+    }
+
+    test {Magnitude store - disabled with max-len 0} {
+        r config set commandlog-slow-execution-magnitude-max-len 0
+        r commandlog reset slow
+        for {set i 0} {$i < 10} {incr i} {
+            r set key$i val$i
+        }
+        assert_equal 0 [r commandlog len slow magnitude]
+        r config set commandlog-slow-execution-magnitude-max-len 5
+    }
+
+    test {Magnitude store - unaffected by the recency threshold being disabled} {
+        r config set commandlog-execution-slower-than -1
+        r commandlog reset slow
+        for {set i 0} {$i < 10} {incr i} {
+            r set key$i val$i
+        }
+        assert_equal 0 [r commandlog len slow recency]
+        assert_equal 5 [r commandlog len slow magnitude]
+        r config set commandlog-execution-slower-than 10000
+    }
+
+    test {SLOWLOG is unchanged and reads the recency entries} {
+        r config set commandlog-execution-slower-than 0
+        r commandlog reset slow
+        for {set i 0} {$i < 10} {incr i} {
+            r set key$i val$i
+        }
+        r config set commandlog-execution-slower-than 10000
+        assert_equal [r slowlog len] [r commandlog len slow recency]
+        assert_equal [r slowlog get -1] [r commandlog get -1 slow recency]
+        assert_equal 3 [llength [r slowlog get 3]]
+    }
+
+    test {SLOWLOG takes no store selector} {
+        assert_error "*wrong number of arguments*" {r slowlog len recency}
+        assert_error "*wrong number of arguments*" {r slowlog reset magnitude}
+        assert_error "*count should be greater than or equal to -1*" {r slowlog get magnitude}
+    }
+
+    test {SLOWLOG RESET clears only the recency entries} {
+        r config set commandlog-execution-slower-than 0
+        r commandlog reset slow
+        for {set i 0} {$i < 10} {incr i} {
+            r set key$i val$i
+        }
+        r debug sleep 0.01
+        r config set commandlog-execution-slower-than 10000
+        assert {[r commandlog len slow recency] > 0}
+        assert {[r commandlog len slow magnitude] > 0}
+        # The sleep is the slowest command by far, so it heads the magnitude set.
+        assert {[lindex [lindex [r commandlog get 1 slow magnitude] 0] 2] > 5000}
+
+        r slowlog reset
+        assert_equal 0 [r commandlog len slow recency]
+        # The magnitude set is untouched: the slow command is still retained.
+        assert {[lindex [lindex [r commandlog get 1 slow magnitude] 0] 2] > 5000}
+    } {} {needs:debug}
+
+    test {Invalid store selector is rejected} {
+        assert_error "*store should be one of*" {r commandlog len slow bogus}
+        assert_error "*store should be one of*" {r commandlog get 1 slow bogus}
+        assert_error "*store should be one of*" {r commandlog reset slow bogus}
+    }
+}
+
+start_server {tags {"commandlog"}} {
+    test {Magnitude store works for large-request and large-reply types} {
+        r commandlog reset large-request
+        r commandlog reset large-reply
+        for {set i 0} {$i < 50} {incr i} {
+            r set bigkey$i [string repeat A 100]
+        }
+        for {set i 0} {$i < 50} {incr i} {
+            r get bigkey$i
+        }
+        # Default thresholds are 1MB so the recency sets stay empty,
+        assert_equal 0 [r commandlog len large-request recency]
+        assert_equal 0 [r commandlog len large-reply recency]
+        assert_equal 32 [r commandlog len large-request magnitude]
+        assert_equal 32 [r commandlog len large-reply magnitude]
+
+        # Largest first
+        set entries [r commandlog get -1 large-request magnitude]
+        set prev [lindex [lindex $entries 0] 2]
+        foreach entry $entries {
+            assert {[lindex $entry 2] <= $prev}
+            set prev [lindex $entry 2]
+        }
+        assert {[lindex [lindex $entries 0] 2] > 100}
+    }
+}

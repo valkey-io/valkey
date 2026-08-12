@@ -638,7 +638,7 @@ static size_t _addReplyPayloadToBuffer(client *c, const void *payload, size_t le
     size_t available = c->buf_usable_size - c->bufpos;
     size_t reply_len = min(available, len);
     if (c->flag.buf_encoded) {
-        int track_bytes = (server.commandlog[COMMANDLOG_TYPE_LARGE_REPLY].threshold != -1);
+        int track_bytes = commandlogTypeEnabled(COMMANDLOG_TYPE_LARGE_REPLY);
         reply_len = upsertPayloadHeader(c->buf, &c->bufpos, &c->last_header, payload_type, len, c->slot, track_bytes, available);
     }
     if (!reply_len) return 0;
@@ -689,7 +689,7 @@ static void _addReplyPayloadToList(client *c, list *reply_list, const char *payl
         size_t copy = avail >= len ? len : avail;
 
         if (tail->flag.buf_encoded) {
-            int track_bytes = (server.commandlog[COMMANDLOG_TYPE_LARGE_REPLY].threshold != -1);
+            int track_bytes = commandlogTypeEnabled(COMMANDLOG_TYPE_LARGE_REPLY);
             copy = upsertPayloadHeader(tail->buf, &tail->used, &tail->last_header, payload_type, len, c->slot, track_bytes, avail);
         } else if (encoded) {
             /* If encoded buffer is required but tail is unencoded then pretend nothing can be added to it
@@ -718,7 +718,7 @@ static void _addReplyPayloadToList(client *c, list *reply_list, const char *payl
         tail->flag.buf_encoded = encoded;
         tail->last_header = NULL;
         if (tail->flag.buf_encoded) {
-            int track_bytes = (server.commandlog[COMMANDLOG_TYPE_LARGE_REPLY].threshold != -1);
+            int track_bytes = commandlogTypeEnabled(COMMANDLOG_TYPE_LARGE_REPLY);
             upsertPayloadHeader(tail->buf, &tail->used, &tail->last_header, payload_type, len, c->slot, track_bytes, tail->size);
         }
         memcpy(tail->buf + tail->used, payload, len);
@@ -1519,7 +1519,7 @@ void addReplyBulk(client *c, robj *obj) {
     if (tryAvoidBulkStrCopyToReply(c, obj) == C_OK) {
         /* If copy avoidance allowed, then we explicitly maintain net_output_bytes_curr_cmd.
          * We determine per-reply if tracking is enabled by checking the config in the main thread. */
-        if (server.commandlog[COMMANDLOG_TYPE_LARGE_REPLY].threshold != -1) {
+        if (commandlogTypeEnabled(COMMANDLOG_TYPE_LARGE_REPLY)) {
             serverAssert(obj->encoding == OBJ_ENCODING_RAW);
             size_t str_len = sdslen(objectGetVal(obj));
             uint32_t num_len = digits10(str_len);
@@ -2970,10 +2970,11 @@ static void releaseBufReferences(char *buf, size_t bufpos, client *c) {
                 atomic_fetch_sub_explicit(&c->io_tracked_reply_len, header->reply_len, memory_order_relaxed);
             }
 
-            /* When net byte tracking was disabled in the main thread (commandlog-reply-larger-than -1)
-             * at the time this reply was added, we account for cluster slot stats here in the IO thread
-             * after writing the reply. When tracking was enabled, it's already accounted in the main thread
-             * via afterCommand() -> clusterSlotStatsAddNetworkBytesOutForUserClient(). */
+            /* When net byte tracking was disabled in the main thread (the whole large-reply command log
+             * is off, see commandlogTypeEnabled()) at the time this reply was added, we account for
+             * cluster slot stats here in the IO thread after writing the reply. When tracking was
+             * enabled, it's already accounted in the main thread via afterCommand() ->
+             * clusterSlotStatsAddNetworkBytesOutForUserClient(). */
             if (!header->track_bytes) {
                 clusterSlotStatsAddNetworkBytesOutForSlot(header->slot, header->reply_len);
             }

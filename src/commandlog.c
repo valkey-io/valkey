@@ -24,11 +24,12 @@
 
 #include "commandlog.h"
 #include "script.h"
+#include "sorted_array.h"
 
 /* Create a new commandlog entry.
  * Incrementing the ref count of all the objects retained is up to
  * this function. */
-static commandlogEntry *commandlogCreateEntry(client *c, robj **argv, int argc, long long value, int type) {
+static commandlogEntry *commandlogCreateEntry(client *c, robj **argv, int argc, long long value, int type, commandlog_store store) {
     commandlogEntry *ce = zmalloc(sizeof(*ce));
     int j, ceargc = argc;
 
@@ -68,7 +69,7 @@ static commandlogEntry *commandlogCreateEntry(client *c, robj **argv, int argc, 
     }
     ce->time = time(NULL);
     ce->value = value;
-    ce->id = server.commandlog[type].entry_id++;
+    ce->id = server.commandlog[type].entry_id[store]++;
     ce->peerid = sdsnew(getClientPeerId(c));
     ce->cname = c->name ? sdsnew(objectGetVal(c->name)) : sdsempty();
     return ce;
@@ -89,13 +90,24 @@ static void commandlogFreeEntry(void *ceptr) {
     zfree(ce);
 }
 
+/* Order two log entries by their value, smallest first. */
+static int commandlogEntryCompareByValue(const void *a, const void *b) {
+    const commandlogEntry *ea = a;
+    const commandlogEntry *eb = b;
+    if (ea->value < eb->value) return -1;
+    if (ea->value > eb->value) return 1;
+    return 0;
+}
+
 /* Initialize the command log. This function should be called a single time
  * at server startup. */
 void commandlogInit(void) {
     for (int i = 0; i < COMMANDLOG_TYPE_NUM; i++) {
         server.commandlog[i].entries = listCreate();
-        server.commandlog[i].entry_id = 0;
+        for (int j = 0; j < COMMANDLOG_STORE_NUM; j++) server.commandlog[i].entry_id[j] = 0;
+        server.commandlog[i].magnitude = sortedArrayCreate(commandlogEntryCompareByValue);
         listSetFreeMethod(server.commandlog[i].entries, commandlogFreeEntry);
+        sortedArraySetFreeMethod(server.commandlog[i].magnitude, commandlogFreeEntry);
     }
 }
 
@@ -103,43 +115,107 @@ void commandlogInit(void) {
  * This function will make sure to trim the command log accordingly to the
  * configured max length. */
 static void commandlogPushEntryIfNeeded(client *c, robj **argv, int argc, long long value, int type) {
-    if (server.commandlog[type].threshold < 0 || server.commandlog[type].max_len == 0) return; /* The corresponding commandlog disabled */
-    if (value >= server.commandlog[type].threshold)
-        listAddNodeHead(server.commandlog[type].entries, commandlogCreateEntry(c, argv, argc, value, type));
+    commandlog *cl = &server.commandlog[type];
 
-    /* Remove old entries if needed. */
-    while (listLength(server.commandlog[type].entries) > server.commandlog[type].max_len) listDelNode(server.commandlog[type].entries, listLast(server.commandlog[type].entries));
-}
-
-/* Remove all the entries from the current command log of the specified type. */
-static void commandlogReset(int type) {
-    while (listLength(server.commandlog[type].entries) > 0) listDelNode(server.commandlog[type].entries, listLast(server.commandlog[type].entries));
-}
-
-/* Reply command logs to client. */
-static void commandlogGetReply(client *c, int type, long count) {
-    listIter li;
-    listNode *ln;
-    commandlogEntry *ce;
-
-    if (count > (long)listLength(server.commandlog[type].entries)) {
-        count = listLength(server.commandlog[type].entries);
+    if (cl->threshold >= 0 && cl->max_len > 0 && value >= cl->threshold) {
+        listAddNodeHead(cl->entries, commandlogCreateEntry(c, argv, argc, value, type, COMMANDLOG_STORE_RECENCY));
+        /* Remove old entries if needed. */
+        while (listLength(cl->entries) > cl->max_len) listDelNode(cl->entries, listLast(cl->entries));
     }
-    addReplyArrayLen(c, count);
-    listRewind(server.commandlog[type].entries, &li);
-    while (count--) {
-        int j;
 
-        ln = listNext(&li);
-        ce = ln->value;
-        addReplyArrayLen(c, 6);
-        addReplyLongLong(c, ce->id);
-        addReplyLongLong(c, ce->time);
-        addReplyLongLong(c, ce->value);
-        addReplyArrayLen(c, ce->argc);
-        for (j = 0; j < ce->argc; j++) addReplyBulk(c, ce->argv[j]);
-        addReplyBulkCBuffer(c, ce->peerid, sdslen(ce->peerid));
-        addReplyBulkCBuffer(c, ce->cname, sdslen(ce->cname));
+    if (cl->magnitude_max_len > 0) {
+        sortedArray *magnitude = cl->magnitude;
+        if (sortedArrayLen(magnitude) < cl->magnitude_max_len) {
+            sortedArrayInsert(magnitude, commandlogCreateEntry(c, argv, argc, value, type, COMMANDLOG_STORE_MAGNITUDE));
+        } else {
+            /* Full, compare against the least significant entry. */
+            if (value > ((const commandlogEntry *)sortedArrayPeekMin(magnitude))->value) {
+                commandlogFreeEntry(sortedArrayExtractMin(magnitude));
+                sortedArrayInsert(magnitude, commandlogCreateEntry(c, argv, argc, value, type, COMMANDLOG_STORE_MAGNITUDE));
+            }
+        }
+    }
+}
+
+/* Remove all the entries from the given store of the specified command log type. */
+static void commandlogResetStore(int type, commandlog_store store) {
+    commandlog *cl = &server.commandlog[type];
+    if (store == COMMANDLOG_STORE_MAGNITUDE) {
+        sortedArrayEmpty(cl->magnitude);
+    } else {
+        while (listLength(cl->entries) > 0) listDelNode(cl->entries, listLast(cl->entries));
+    }
+}
+
+/* Remove all the entries from both stores of the specified command log type. */
+static void commandlogReset(int type) {
+    commandlogResetStore(type, COMMANDLOG_STORE_RECENCY);
+    commandlogResetStore(type, COMMANDLOG_STORE_MAGNITUDE);
+}
+
+/* Trim every command log store down to its currently configured max length.
+ * The magnitude store drops the smallest-value entries first, the recency store
+ * drops the oldest. */
+void commandlogTrimToMaxLen(void) {
+    for (int type = 0; type < COMMANDLOG_TYPE_NUM; type++) {
+        commandlog *cl = &server.commandlog[type];
+        while (sortedArrayLen(cl->magnitude) > cl->magnitude_max_len) {
+            commandlogFreeEntry(sortedArrayExtractMin(cl->magnitude));
+        }
+        while (listLength(cl->entries) > cl->max_len) {
+            listDelNode(cl->entries, listLast(cl->entries));
+        }
+    }
+}
+
+/* Return 1 if the given command log type is enabled in any of its backing stores. */
+int commandlogTypeEnabled(int type) {
+    commandlog *cl = &server.commandlog[type];
+    return (cl->threshold >= 0 && cl->max_len > 0) || cl->magnitude_max_len > 0;
+}
+
+static unsigned long commandlogLength(int type, commandlog_store store) {
+    commandlog *cl = &server.commandlog[type];
+    if (store == COMMANDLOG_STORE_MAGNITUDE) return sortedArrayLen(cl->magnitude);
+    return listLength(cl->entries);
+}
+
+static void commandlogReplyWithEntry(client *c, commandlogEntry *ce) {
+    addReplyArrayLen(c, 6);
+    addReplyLongLong(c, ce->id);
+    addReplyLongLong(c, ce->time);
+    addReplyLongLong(c, ce->value);
+    addReplyArrayLen(c, ce->argc);
+    for (int j = 0; j < ce->argc; j++) addReplyBulk(c, ce->argv[j]);
+    addReplyBulkCBuffer(c, ce->peerid, sdslen(ce->peerid));
+    addReplyBulkCBuffer(c, ce->cname, sdslen(ce->cname));
+}
+
+/* Reply command logs to client. Recency entries are returned newest first,
+ * magnitude entries highest-value first. */
+static void commandlogGetReply(client *c, int type, commandlog_store store, long count) {
+    commandlog *cl = &server.commandlog[type];
+    if (store == COMMANDLOG_STORE_MAGNITUDE) {
+        if (count > (long)sortedArrayLen(cl->magnitude)) {
+            count = sortedArrayLen(cl->magnitude);
+        }
+        addReplyArrayLen(c, count);
+        for (long i = 0; i < count; i++) {
+            commandlogReplyWithEntry(c, sortedArrayGet(cl->magnitude, i));
+        }
+    } else {
+        listIter li;
+        listNode *ln;
+
+        if (count > (long)listLength(cl->entries)) {
+            count = listLength(cl->entries);
+        }
+        addReplyArrayLen(c, count);
+        listRewind(cl->entries, &li);
+        while (count--) {
+            ln = listNext(&li);
+            commandlogReplyWithEntry(c, ln->value);
+        }
     }
 }
 
@@ -171,6 +247,21 @@ void commandlogPushCurrentCommand(client *c, struct serverCommand *cmd) {
     commandlogPushEntryIfNeeded(c, argv, argc, net_output_bytes_curr_cmd, COMMANDLOG_TYPE_LARGE_REPLY);
 }
 
+/* Parse the optional store selector. Returns C_OK and sets *store on success,
+ * or replies with an error and returns C_ERR. */
+static int commandlogGetStoreOrReply(client *c, robj *o, commandlog_store *store) {
+    if (!strcasecmp(objectGetVal(o), "recency")) {
+        *store = COMMANDLOG_STORE_RECENCY;
+        return C_OK;
+    }
+    if (!strcasecmp(objectGetVal(o), "magnitude")) {
+        *store = COMMANDLOG_STORE_MAGNITUDE;
+        return C_OK;
+    }
+    addReplyError(c, "store should be one of the following: recency, magnitude");
+    return C_ERR;
+}
+
 /* The SLOWLOG command. Implements all the subcommands needed to handle the
  * slow log. */
 void slowlogCommand(client *c) {
@@ -189,10 +280,10 @@ void slowlogCommand(client *c) {
         };
         addReplyHelp(c, help);
     } else if (c->argc == 2 && !strcasecmp(objectGetVal(c->argv[1]), "reset")) {
-        commandlogReset(COMMANDLOG_TYPE_SLOW);
+        commandlogResetStore(COMMANDLOG_TYPE_SLOW, COMMANDLOG_STORE_RECENCY);
         addReply(c, shared.ok);
     } else if (c->argc == 2 && !strcasecmp(objectGetVal(c->argv[1]), "len")) {
-        addReplyLongLong(c, listLength(server.commandlog[COMMANDLOG_TYPE_SLOW].entries));
+        addReplyLongLong(c, commandlogLength(COMMANDLOG_TYPE_SLOW, COMMANDLOG_STORE_RECENCY));
     } else if ((c->argc == 2 || c->argc == 3) && !strcasecmp(objectGetVal(c->argv[1]), "get")) {
         long count = 10;
 
@@ -205,11 +296,11 @@ void slowlogCommand(client *c) {
             if (count == -1) {
                 /* We treat -1 as a special value, which means to get all slow logs.
                  * Simply set count to the length of server.commandlog. */
-                count = listLength(server.commandlog[COMMANDLOG_TYPE_SLOW].entries);
+                count = commandlogLength(COMMANDLOG_TYPE_SLOW, COMMANDLOG_STORE_RECENCY);
             }
         }
 
-        commandlogGetReply(c, COMMANDLOG_TYPE_SLOW, count);
+        commandlogGetReply(c, COMMANDLOG_TYPE_SLOW, COMMANDLOG_STORE_RECENCY, count);
     } else {
         addReplySubcommandSyntaxError(c);
     }
@@ -229,8 +320,9 @@ void commandlogCommand(client *c) {
     int type;
     if (c->argc == 2 && !strcasecmp(objectGetVal(c->argv[1]), "help")) {
         const char *help[] = {
-            "GET <count> <type>",
+            "GET <count> <type> [RECENCY|MAGNITUDE]",
             "    Return top <count> entries of the specified <type> from the commandlog (-1 mean all).",
+            "    RECENCY (default) returns the most recent entries, MAGNITUDE the highest-value ones.",
             "    Entries are made of:",
             "    id, timestamp,",
             "        time in microseconds for type of slow,",
@@ -238,22 +330,31 @@ void commandlogCommand(client *c) {
             "        or size in bytes for type of large-reply",
             "    arguments array, client IP and port,",
             "    client name",
-            "LEN <type>",
-            "    Return the length of the specified type of commandlog.",
-            "RESET <type>",
-            "    Reset the specified type of commandlog.",
+            "LEN <type> [RECENCY|MAGNITUDE]",
+            "    Return the length of the specified type of commandlog (default: RECENCY).",
+            "RESET <type> [RECENCY|MAGNITUDE]",
+            "    Reset the specified type of commandlog. Without the last argument both sets of entries are cleared.",
             NULL,
         };
         addReplyHelp(c, help);
-    } else if (c->argc == 3 && !strcasecmp(objectGetVal(c->argv[1]), "reset")) {
+    } else if ((c->argc == 3 || c->argc == 4) && !strcasecmp(objectGetVal(c->argv[1]), "reset")) {
         if ((type = commandlogGetTypeOrReply(c, c->argv[2])) == -1) return;
-        commandlogReset(type);
+        if (c->argc == 4) {
+            commandlog_store store;
+            if (commandlogGetStoreOrReply(c, c->argv[3], &store) != C_OK) return;
+            commandlogResetStore(type, store);
+        } else {
+            commandlogReset(type);
+        }
         addReply(c, shared.ok);
-    } else if (c->argc == 3 && !strcasecmp(objectGetVal(c->argv[1]), "len")) {
+    } else if ((c->argc == 3 || c->argc == 4) && !strcasecmp(objectGetVal(c->argv[1]), "len")) {
+        commandlog_store store = COMMANDLOG_STORE_RECENCY;
         if ((type = commandlogGetTypeOrReply(c, c->argv[2])) == -1) return;
-        addReplyLongLong(c, listLength(server.commandlog[type].entries));
-    } else if (c->argc == 4 && !strcasecmp(objectGetVal(c->argv[1]), "get")) {
+        if (c->argc == 4 && commandlogGetStoreOrReply(c, c->argv[3], &store) != C_OK) return;
+        addReplyLongLong(c, commandlogLength(type, store));
+    } else if ((c->argc == 4 || c->argc == 5) && !strcasecmp(objectGetVal(c->argv[1]), "get")) {
         long count;
+        commandlog_store store = COMMANDLOG_STORE_RECENCY;
 
         /* Consume count arg. */
         if (getRangeLongFromObjectOrReply(c, c->argv[2], -1, LONG_MAX, &count,
@@ -262,13 +363,13 @@ void commandlogCommand(client *c) {
 
         if ((type = commandlogGetTypeOrReply(c, c->argv[3])) == -1) return;
 
+        if (c->argc == 5 && commandlogGetStoreOrReply(c, c->argv[4], &store) != C_OK) return;
+
         if (count == -1) {
-            /* We treat -1 as a special value, which means to get all command logs.
-             * Simply set count to the length of server.commandlog. */
-            count = listLength(server.commandlog[type].entries);
+            count = commandlogLength(type, store);
         }
 
-        commandlogGetReply(c, type, count);
+        commandlogGetReply(c, type, store, count);
     } else {
         addReplySubcommandSyntaxError(c);
     }

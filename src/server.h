@@ -85,6 +85,7 @@
 #include "trace/trace.h"
 #include "entry.h"
 #include "lrulfu.h"
+#include "sorted_array.h"
 
 /*
  * Sanity check: we require large-file support. If include order caused
@@ -376,12 +377,21 @@ typedef enum {
     COMMANDLOG_TYPE_NUM
 } commandlog_type;
 
+/* Backing store of a command log. */
+typedef enum {
+    COMMANDLOG_STORE_RECENCY = 0,
+    COMMANDLOG_STORE_MAGNITUDE,
+    COMMANDLOG_STORE_NUM
+} commandlog_store;
+
 /* Configuration and entry list of different types of command logs */
 typedef struct commandlog {
-    list *entries;
-    long long entry_id;
-    long long threshold;
-    unsigned long max_len;
+    list *entries;                 /* Recency store: the most recent entries, newest first. */
+    struct sortedArray *magnitude; /* Magnitude store: the highest-value entries, worst first. */
+    long long entry_id[COMMANDLOG_STORE_NUM];
+    long long threshold;             /* Applies to the recency store only. */
+    unsigned long max_len;           /* Max entries in the recency store. */
+    unsigned long magnitude_max_len; /* Max entries in the magnitude store. */
 } commandlog;
 
 /* Replica replication state. Used in server.repl_state for replicas to remember
@@ -3504,6 +3514,8 @@ void preventCommandPropagation(client *c);
 void preventCommandAOF(client *c);
 void preventCommandReplication(client *c);
 void commandlogPushCurrentCommand(client *c, struct serverCommand *cmd);
+void commandlogTrimToMaxLen(void);
+int commandlogTypeEnabled(int type);
 void updateCommandLatencyHistogram(struct hdr_histogram **latency_histogram, int64_t duration_hist);
 int prepareForShutdown(client *c, int flags);
 void replyToClientsBlockedOnShutdown(void);

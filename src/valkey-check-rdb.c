@@ -29,6 +29,7 @@
 
 #include "mt19937-64.h"
 #include "server.h"
+#include "ordered_index.h"
 #include "rdb.h"
 #include "module.h"
 #include "cluster.h"
@@ -317,20 +318,22 @@ void computeDatasetProfile(int dbid, robj *keyobj, robj *o, long long expiretime
                 zzlNext(zl, &eptr, &sptr);
             }
             statsRecordCount(lpLength(objectGetVal(o)), stats);
-        } else if (o->encoding == OBJ_ENCODING_SKIPLIST) {
+        } else if (o->encoding == OBJ_ENCODING_BTREE) {
             zset *zs = objectGetVal(o);
             hashtableIterator iter;
             hashtableInitIterator(&iter, zs->ht, 0);
 
             void *next;
             while (hashtableNext(&iter, &next)) {
-                zskiplistNode *node = next;
+                OrderedIndexItem *node = next;
                 size_t eleLen = 0;
+                const char *ele;
+                size_t ele_len;
+                orderedIndexItemGetElement(node, &ele, &ele_len);
 
-                const int len = fpconv_dtoa(node->score, buf);
+                const int len = fpconv_dtoa(orderedIndexItemGetScore(node), buf);
                 buf[len] = '\0';
-                sds ele = zslGetNodeElement(node);
-                eleLen += sdslen(ele) + strlen(buf);
+                eleLen += ele_len + strlen(buf);
                 statsRecordElementSize(eleLen, 1, stats);
             }
             hashtableCleanupIterator(&iter);
@@ -568,7 +571,7 @@ void rdbCheckSetError(const char *fmt, ...) {
     rdbstate.error_set = 1;
 }
 
-/* During RDB check we setup a special signal handler for memory violations
+/* During RDB check we set up a special signal handler for memory violations
  * and similar conditions, so that we can log the offending part of the RDB
  * if the crash is due to broken content. */
 void rdbCheckHandleCrash(int sig, siginfo_t *info, void *secret) {
@@ -904,7 +907,7 @@ checkRdbUsage:
  *
  * When called with fp = NULL, the function never returns, but exits with the
  * status code according to success (RDB is sane) or error (RDB is corrupted).
- * Otherwise if called with a non NULL fp, the function returns C_OK or
+ * Otherwise, if called with a non NULL fp, the function returns C_OK or
  * C_ERR depending on the success or failure. */
 int redis_check_rdb_main(int argc, char **argv, FILE *fp) {
     parseCheckRdbOptions(argc, argv, fp);

@@ -1301,6 +1301,25 @@ typedef struct LastWrittenBuf {
 /* Forward declaration of slotMigrationJob */
 typedef struct slotMigrationJob slotMigrationJob;
 
+/* Covers GET (argc=2), GETRANGE (argc=3), SUBSTR (argc=4). Larger-argc commands
+ * (e.g. MGET with many keys) fall back to a heap-allocated argv copy. */
+#define CMDLOG_INLINE_ARGV_MAX 4
+
+/* One deferred commandlog large-reply check, queued while a copy-avoidance
+ * command's reply size is still unknown on the main thread. The exact reply
+ * size is filled in later (at buffer-release time) from the IO-thread-computed
+ * payloadHeader->reply_len, then compared against the large-reply threshold. */
+typedef struct cmdlogDeferredReply {
+    robj *argv_inline[CMDLOG_INLINE_ARGV_MAX]; /* Inline argv stash for small argc (no allocation). */
+    robj **argv_heap;                          /* Heap-allocated argv array when argc > CMDLOG_INLINE_ARGV_MAX, else NULL.
+                                                * Never store a pointer to argv_inline here: the entry lives in a
+                                                * reallocatable array, so the active argv is computed from the current
+                                                * entry address (argv_heap ? argv_heap : argv_inline). */
+    int argc;                                  /* Number of stashed args. */
+    size_t plain_bytes;                        /* PLAIN_REPLY bytes for this command, counted on the main thread. */
+    size_t bulk_bytes;                         /* BULK_STR_REF bytes for this command, accumulated at release time. */
+} cmdlogDeferredReply;
+
 typedef struct client {
     /* Basic client information and connection. */
     uint64_t id; /* Client incremental unique ID. */
@@ -1378,11 +1397,24 @@ typedef struct client {
     unsigned long long commands_processed;        /* Total count of commands this client executed. */
     unsigned long long net_output_bytes_curr_cmd; /* Total network output bytes sent to this client, by the current command. */
     _Atomic(size_t) io_tracked_reply_len;         /* Total size of BULK_STR_REF replies tracked by I/O threads. */
-    size_t buf_peak;                              /* Peak used size of buffer in last 5 sec interval. */
-    int nwritten;                                 /* Number of bytes of the last write. */
-    int nread;                                    /* Number of bytes of the last read. */
-    int read_flags;                               /* Client Read flags - used to communicate the client read state. */
-    int slot;                                     /* The slot the client is executing against. Set to -1 if no slot is being used */
+    /* Deferred commandlog large-reply state for copy-avoidance replies.
+     * With copy avoidance the reply size isn't known on the main thread at
+     * command time, and argv is freed before the IO thread writes. We stash a
+     * per-command FIFO of argv refs here; each command's exact reply size is
+     * attributed at buffer-release time (from payloadHeader->reply_len) and the
+     * threshold check + logging happens once all replies are flushed. The FIFO
+     * is lazily allocated and reused for the client's lifetime; when
+     * commandlog-reply-larger-than is -1 (disabled) it is never touched. */
+    cmdlogDeferredReply *cmdlog_deferred; /* FIFO of pending checks (NULL until first use). */
+    int cmdlog_deferred_len;              /* Number of queued entries. */
+    int cmdlog_deferred_cap;              /* Allocated capacity of the FIFO. */
+    int cmdlog_deferred_cursor;           /* Entry currently receiving bytes during release (-1 = none yet). */
+    int cmdlog_bulk_boundary;             /* 1 = next BULK_STR_REF header begins a new command. */
+    size_t buf_peak;                      /* Peak used size of buffer in last 5 sec interval. */
+    int nwritten;                         /* Number of bytes of the last write. */
+    int nread;                            /* Number of bytes of the last read. */
+    int read_flags;                       /* Client Read flags - used to communicate the client read state. */
+    int slot;                             /* The slot the client is executing against. Set to -1 if no slot is being used */
     listNode *mem_usage_bucket_node;
     clientMemUsageBucket *mem_usage_bucket;
     /* In updateClientMemoryUsage() we track the memory usage of
@@ -3504,6 +3536,9 @@ void preventCommandPropagation(client *c);
 void preventCommandAOF(client *c);
 void preventCommandReplication(client *c);
 void commandlogPushCurrentCommand(client *c, struct serverCommand *cmd);
+void commandlogAccumulateDeferredBytes(client *c, size_t reply_len, int cmd_start);
+void commandlogFinalizeDeferred(client *c);
+void commandlogFreeDeferred(client *c);
 void updateCommandLatencyHistogram(struct hdr_histogram **latency_histogram, int64_t duration_hist);
 int prepareForShutdown(client *c, int flags);
 void replyToClientsBlockedOnShutdown(void);

@@ -866,7 +866,7 @@ int d2string(char *buf, size_t len, double value) {
  */
 int fixedpoint_d2string(char *dst, size_t dstlen, double dvalue, int fractional_digits) {
     if (fractional_digits < 1 || fractional_digits > 17) goto err;
-    /* min size of 2 ( due to 0. ) + n fractional_digitits + \0 */
+    /* min size of 2 ( due to 0. ) + n fractional_digits + \0 */
     if ((int)dstlen < (fractional_digits + 3)) goto err;
     if (dvalue == 0) {
         dst[0] = '0';
@@ -1054,18 +1054,17 @@ err:
 
 /* Populate the provided seed array by hashing the provided string with SHA256
  * and copying the first outlen bytes of the digest into the seed buffer. */
-void getHashSeedFromString(unsigned char *seed_array, size_t outlen, const char *value) {
+void getHashSeedFromString(unsigned char *seed_array, size_t outlen, const char *value, size_t value_len) {
     SHA256_CTX ctx;
     unsigned char digest[SHA256_BLOCK_SIZE];
 
     sha256_init(&ctx);
-    sha256_update(&ctx, (const BYTE *)value, strlen(value));
+    sha256_update(&ctx, (const BYTE *)value, value_len);
     sha256_final(&ctx, digest);
 
     if (outlen > SHA256_BLOCK_SIZE) outlen = SHA256_BLOCK_SIZE;
     memcpy(seed_array, digest, outlen);
 }
-
 
 /* Parses a version string on the form "major.minor.patch" and returns an
  * integer on the form 0xMMmmpp. Returns -1 on parse error. */

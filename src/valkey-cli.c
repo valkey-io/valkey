@@ -91,6 +91,7 @@
 #define CLI_RCFILE_DEFAULT ".valkeyclirc"
 #define CLI_AUTH_ENV "VALKEYCLI_AUTH"
 #define OLD_CLI_AUTH_ENV "REDISCLI_AUTH"
+#define CLI_USER_ENV "VALKEYCLI_USER"
 #define CLI_HOST_ENV "VALKEYCLI_HOST"
 #define CLI_PORT_ENV "VALKEYCLI_PORT"
 #define CLI_CLUSTER_YES_ENV "VALKEYCLI_CLUSTER_YES"
@@ -2381,7 +2382,7 @@ static int cliSendCommand(int argc, char **argv, long repeat) {
                           !strcasecmp(command, "sunsubscribe"));
     if (!strcasecmp(command, "sync") || !strcasecmp(command, "psync")) config.replica_mode = 1;
 
-    /* When the user manually calls SCRIPT DEBUG, setup the activation of
+    /* When the user manually calls SCRIPT DEBUG, set up the activation of
      * debugging mode on the next eval if needed. */
     if (argc == 3 && !strcasecmp(argv[0], "script") && !strcasecmp(argv[1], "debug")) {
         if (!strcasecmp(argv[2], "yes") || !strcasecmp(argv[2], "sync")) {
@@ -2397,7 +2398,7 @@ static int cliSendCommand(int argc, char **argv, long repeat) {
         config.output = OUTPUT_RAW;
     }
 
-    /* Setup argument length */
+    /* Set up argument length */
     argvlen = zmalloc(argc * sizeof(size_t));
     for (j = 0; j < argc; j++) argvlen[j] = sdslen(argv[j]);
 
@@ -2940,6 +2941,10 @@ static void parseEnv(void) {
     if (auth != NULL) {
         config.conn_info.auth = auth;
     }
+    char *user = getenv(CLI_USER_ENV);
+    if (user != NULL) {
+        config.conn_info.user = user;
+    }
     char *host = getenv(CLI_HOST_ENV);
     if (host != NULL) {
         config.conn_info.hostip = sdsnew(host);
@@ -3007,6 +3012,8 @@ static void usage(int err) {
             "                     variable to pass this password more safely\n"
             "                     (if both are used, this argument takes precedence).\n"
             "  --user <username>  Used to send ACL style 'AUTH username pass'. Needs -a.\n"
+            "                     You can also use the " CLI_USER_ENV " environment variable\n"
+            "                     (if both are used, this argument takes precedence).\n"
             "  --pass <password>  Alias of -a for consistency with the new --user option.\n"
             "  --askpass          Force user to input password with mask from STDIN.\n"
             "                     If this argument is used, '-a' and " CLI_AUTH_ENV "\n"
@@ -3049,7 +3056,7 @@ static void usage(int err) {
     fprintf(target,
             "  --latency          Enter a special mode continuously sampling latency.\n"
             "                     If you use this mode in an interactive session it runs\n"
-            "                     forever displaying real-time stats. Otherwise if --raw or\n"
+            "                     forever displaying real-time stats. Otherwise, if --raw or\n"
             "                     --csv is specified, or if you redirect the output to a non\n"
             "                     TTY, it samples the latency for 1 second (you can use\n"
             "                     -i to change the interval), then produces a single output\n"
@@ -8939,8 +8946,10 @@ static void getRDB(clusterManagerNode *node) {
     }
     if (usemark) {
         payload = ULLONG_MAX - payload - RDB_EOF_MARK_SIZE;
-        if (!write_to_stdout && ftruncate(fd, payload) == -1)
+        if (!write_to_stdout && ftruncate(fd, payload) == -1) {
             fprintf(stderr, "ftruncate failed: %s.\n", strerror(errno));
+            exit(1);
+        }
         fprintf(stderr, "Transfer finished with success after %llu bytes\n", payload);
     } else {
         fprintf(stderr, "Transfer finished with success.\n");

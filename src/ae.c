@@ -136,7 +136,7 @@ void aeSetDontWait(aeEventLoop *eventLoop, int noWait) {
  * set size minus one, AE_ERR is returned and the operation is not
  * performed at all.
  *
- * Otherwise AE_OK is returned and the operation is successful. */
+ * Otherwise, AE_OK is returned and the operation is successful. */
 int aeResizeSetSize(aeEventLoop *eventLoop, int setsize) {
     AE_LOCK(eventLoop);
     int ret = AE_OK;
@@ -311,6 +311,9 @@ static int64_t usUntilEarliestTimer(aeEventLoop *eventLoop) {
         if ((!earliest || te->when < earliest->when) && te->id != AE_DELETED_EVENT_ID) earliest = te;
         te = te->next;
     }
+
+    /* All events are pending deletion (zombies only): no valid timer. */
+    if (earliest == NULL) return -1;
 
     monotime now = getMonotonicUs();
     return (now >= earliest->when) ? 0 : earliest->when - now;

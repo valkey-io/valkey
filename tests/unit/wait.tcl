@@ -19,14 +19,22 @@ start_server {} {
         }
     }
 
+    test {WAIT out of range numreplicas} {
+        # numreplicas is stored in blockingState as int, so it must be
+        # validated to fit within [0, INT_MAX] to prevent overflow.
+        assert_error "*out of range*" {$master wait -1 0}
+        assert_error "*out of range*" {$master wait 2147483648 0}
+        assert_error "*out of range*" {$master wait 9223372036854775808 0}
+    }
+
     test {WAIT out of range timeout (milliseconds)} {
         # Timeout is parsed as milliseconds by getLongLongFromObjectOrReply().
         # Verify we get out of range message if value is behind LLONG_MAX
-        # (decimal value equals to 0x8000000000000000)
+        # (decimal value equals 0x8000000000000000)
          assert_error "*or out of range*" {$master wait 2 9223372036854775808}
 
          # expected to fail by later overflow condition after addition
-         # of mstime(). (decimal value equals to 0x7FFFFFFFFFFFFFFF)
+         # of mstime(). (decimal value equals 0x7FFFFFFFFFFFFFFF)
          assert_error "*timeout is out of range*" {$master wait 2 9223372036854775807}
 
          assert_error "*timeout is negative*" {$master wait 2 -1}
@@ -100,7 +108,7 @@ start_server {} {
     }
 
     start_server {} {
-        test {Setup a new replica} {
+        test {Set up a new replica} {
             r replicaof $master_host $master_port
             wait_for_ofs_sync $master r
             wait_for_ofs_sync $master $slave
@@ -133,6 +141,27 @@ start_server {} {
 tags {"wait aof network external:skip"} {
     start_server {overrides {appendonly {yes} auto-aof-rewrite-percentage {0}}} {
         set master [srv 0 client]
+
+        test {WAITAOF out of range numlocal} {
+            # numlocal must be 0 or 1.
+            assert_error "*out of range*" {$master waitaof -1 0 0}
+            assert_error "*out of range*" {$master waitaof 2 0 0}
+        }
+
+        test {WAITAOF out of range numreplicas} {
+            # numreplicas is stored in blockingState as int, so it must be
+            # validated to fit within [0, INT_MAX] to prevent overflow.
+            assert_error "*out of range*" {$master waitaof 0 -1 0}
+            assert_error "*out of range*" {$master waitaof 0 2147483648 0}
+            assert_error "*out of range*" {$master waitaof 0 9223372036854775808 0}
+        }
+
+        test {WAITAOF out of range timeout (milliseconds)} {
+            # Verify timeout validation for WAITAOF, similar to WAIT.
+            assert_error "*out of range*" {$master waitaof 0 0 9223372036854775808}
+            assert_error "*timeout is out of range*" {$master waitaof 0 0 9223372036854775807}
+            assert_error "*timeout is negative*" {$master waitaof 0 0 -1}
+        }
 
         test {WAITAOF local copy before fsync} {
             r config set appendfsync no

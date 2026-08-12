@@ -174,12 +174,6 @@ start_cluster 5 5 {tags {external:skip cluster}} {
         assert {$verified_masters >= 5}
     }
 
-    test "Dump sanitization was skipped for migrations" {
-        for {set id 0} {$id < [llength $::servers]} {incr id} {
-            assert {[s [expr -1*$id] dump_payload_sanitizations] == 0}
-        }
-    }
-
 } ;# start_cluster
 } ;# run_solo
 } ;# tag

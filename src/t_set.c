@@ -43,7 +43,7 @@
 void sunionDiffGenericCommand(client *c, robj **setkeys, int setnum, robj *dstkey, int op);
 
 /* Factory method to return a set that *can* hold "value". When the object has
- * an integer-encodable value, an intset will be returned. Otherwise a listpack
+ * an integer-encodable value, an intset will be returned. Otherwise, a listpack
  * or a regular hash table.
  *
  * The size hint indicates approximately how many items will be added which is
@@ -559,24 +559,24 @@ robj *setTypeDup(robj *o) {
     robj *set;
     setTypeIterator *si;
 
-    serverAssert(o->type == OBJ_SET);
+    serverAssert(objectGetType(o) == OBJ_SET);
 
     /* Create a new set object that have the same encoding as the original object's encoding */
-    if (o->encoding == OBJ_ENCODING_INTSET) {
+    if (objectGetEncoding(o) == OBJ_ENCODING_INTSET) {
         intset *is = objectGetVal(o);
         size_t size = intsetBlobLen(is);
         intset *newis = zmalloc(size);
         memcpy(newis, is, size);
         set = createObject(OBJ_SET, newis);
         set->encoding = OBJ_ENCODING_INTSET;
-    } else if (o->encoding == OBJ_ENCODING_LISTPACK) {
+    } else if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) {
         unsigned char *lp = objectGetVal(o);
         size_t sz = lpBytes(lp);
         unsigned char *new_lp = zmalloc(sz);
         memcpy(new_lp, lp, sz);
         set = createObject(OBJ_SET, new_lp);
         set->encoding = OBJ_ENCODING_LISTPACK;
-    } else if (o->encoding == OBJ_ENCODING_HASHTABLE) {
+    } else if (objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE) {
         set = createSetObject();
         hashtable *ht = objectGetVal(o);
         hashtableExpand(objectGetVal(set), hashtableSize(ht));
@@ -1476,7 +1476,7 @@ void sunionDiffGenericCommand(client *c, robj **setkeys, int setnum, robj *dstke
          * 'dstset_encoding' is used to determine which kind of encoding to use when initialize 'dstset'.
          *
          * If all sets are all OBJ_ENCODING_INTSET encoding or 'dstkey' is not null, keep 'dstset'
-         * OBJ_ENCODING_INTSET encoding when initialize. Otherwise it is not efficient to create the 'dstset'
+         * OBJ_ENCODING_INTSET encoding when initialize. Otherwise, it is not efficient to create the 'dstset'
          * from intset and then convert to listpack or hashtable.
          *
          * If one of the set is OBJ_ENCODING_LISTPACK, let's set 'dstset' to hashtable default encoding,

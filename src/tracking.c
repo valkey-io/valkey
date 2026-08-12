@@ -61,7 +61,7 @@ typedef struct bcastState {
 /* Remove the tracking state from the client 'c'. Note that there is not much
  * to do for us here, if not to decrement the counter of the clients in
  * tracking mode, because we just store the ID of the client in the tracking
- * table, so we'll remove the ID reference in a lazy way. Otherwise when a
+ * table, so we'll remove the ID reference in a lazy way. Otherwise, when a
  * client with many entries in the table is removed, it would cost a lot of
  * time to do the cleanup. */
 void disableTracking(client *c) {
@@ -229,7 +229,7 @@ void trackingRememberKeys(client *tracking, client *executing) {
 
     getKeysResult result;
     initGetKeysResult(&result);
-    int numkeys = getKeysFromCommand(executing->cmd, executing->argv, executing->argc, &result);
+    int numkeys = getKeysFromCommandWithSpecs(executing->cmd, executing->argv, executing->argc, GET_KEYSPEC_DEFAULT, &result);
     if (!numkeys) {
         getKeysFreeResult(&result);
         return;

@@ -28,7 +28,7 @@ if (NOT BUILD_LUA STREQUAL "no")
     endif ()
     add_subdirectory(modules/lua)
     if (BUILD_LUA STREQUAL "static")
-        target_link_libraries(valkey-server $<LINK_LIBRARY:WHOLE_ARCHIVE,valkeylua>)
+        target_link_libraries(valkey-server PRIVATE $<LINK_LIBRARY:WHOLE_ARCHIVE,valkeylua>)
     else ()
         add_dependencies(valkey-server valkeylua)
     endif ()
@@ -74,6 +74,7 @@ list(APPEND CLI_LIBS "ffc")
 valkey_build_and_install_bin(valkey-cli "${VALKEY_CLI_SRCS}" "${VALKEY_SERVER_LDFLAGS}" "${CLI_LIBS}" "redis-cli")
 add_dependencies(valkey-cli generate_commands_def)
 add_dependencies(valkey-cli generate_fmtargs_h)
+add_dependencies(valkey-cli release_header)
 
 # Target: valkey-benchmark
 list(APPEND BENCH_LIBS "fpconv")
@@ -83,6 +84,7 @@ valkey_build_and_install_bin(valkey-benchmark "${VALKEY_BENCHMARK_SRCS}" "${VALK
                              "redis-benchmark")
 add_dependencies(valkey-benchmark generate_commands_def)
 add_dependencies(valkey-benchmark generate_fmtargs_h)
+add_dependencies(valkey-benchmark release_header)
 
 # Targets: valkey-sentinel, valkey-check-aof and valkey-check-rdb are just symbolic links
 valkey_create_symlink("valkey-server" "valkey-sentinel")
@@ -95,7 +97,7 @@ if (BUILD_RDMA_MODULE)
     message(STATUS "Building RDMA module")
     add_library(${MODULE_NAME} SHARED "${VALKEY_RDMA_MODULE_SRCS}")
     target_compile_options(${MODULE_NAME} PRIVATE -DBUILD_RDMA_MODULE=2 -DUSE_RDMA=1)
-    target_link_libraries(${MODULE_NAME} "${RDMA_LIBS}")
+    target_link_libraries(${MODULE_NAME} PRIVATE "${RDMA_LIBS}")
     # remove the "lib" prefix from the module
     set_target_properties(${MODULE_NAME} PROPERTIES PREFIX "")
     valkey_install_bin(${MODULE_NAME})

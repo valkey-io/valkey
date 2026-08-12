@@ -779,6 +779,21 @@ test {corrupt payload: stream listpack with negative field count} {
     }
 }
 
+test {corrupt payload: stream listpack with negative deleted count} {
+    # A master entry that declares a negative number of deleted entries must be
+    # rejected on load. The deleted count is added to the entry count to bound
+    # the entry validation loop, so a negative value lets a listpack claim more
+    # live entries (3 here) than it actually contains (1) while still walking
+    # cleanly to the end of the listpack. Without the sign check the payload is
+    # accepted, leaving the master entry count inconsistent with the entries.
+    start_server [list overrides [list loglevel verbose use-exit-on-panic yes crash-memcheck-enabled no] ] {
+        r debug set-skip-checksum-validation 1
+        catch {r restore _neg_deleted 0 "\x15\x01\x10\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x01\x18\x18\x00\x00\x00\x08\x00\x03\x01\xDF\xFE\x02\x00\x01\x00\x01\x02\x01\x00\x01\x00\x01\x03\x01\xFF\x03\x01\x01\x01\x01\x00\x00\x03\x00\x0B\x00\x00\x00\x00\x00\x00\x00\x00\x00"} err
+        assert_match "*Bad data format*" $err
+        assert_equal [r ping] "PONG"
+    }
+}
+
 test {corrupt payload: fuzzer findings - streamLastValidID panic} {
     start_server [list overrides [list loglevel verbose use-exit-on-panic yes crash-memcheck-enabled no] ] {
         r debug set-skip-checksum-validation 1

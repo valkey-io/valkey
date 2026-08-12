@@ -322,7 +322,7 @@ uint64_t rdbLoadLen(rio *rdb, int *isencoded) {
 /* Encodes the "value" argument as integer when it fits in the supported ranges
  * for encoded types. If the function successfully encodes the integer, the
  * representation is stored in the buffer pointer to by "enc" and the string
- * length is returned. Otherwise 0 is returned. */
+ * length is returned. Otherwise, 0 is returned. */
 int rdbEncodeInteger(long long value, unsigned char *enc) {
     if (value >= -(1 << 7) && value <= (1 << 7) - 1) {
         enc[0] = (RDB_ENCVAL << 6) | RDB_ENC_INT8;
@@ -2985,7 +2985,7 @@ emptykey:
     return NULL;
 }
 
-/* Mark that we are loading in the global state and setup the fields
+/* Mark that we are loading in the global state and set up the fields
  * needed to provide loading stats. */
 void startLoading(size_t size, int rdbflags, int async) {
     /* Load the DB */
@@ -3013,7 +3013,7 @@ void startLoading(size_t size, int rdbflags, int async) {
     moduleFireServerEvent(VALKEYMODULE_EVENT_LOADING, subevent, NULL);
 }
 
-/* Mark that we are loading in the global state and setup the fields
+/* Mark that we are loading in the global state and set up the fields
  * needed to provide loading stats.
  * 'filename' is optional and used for rdb-check on error */
 void startLoadingFile(size_t size, char *filename, int rdbflags) {

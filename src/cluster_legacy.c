@@ -2139,7 +2139,7 @@ void clusterNodeCleanupFailureReports(clusterNode *node) {
  * time.
  *
  * The function returns 1 if the failure report was found and removed.
- * Otherwise 0 is returned. */
+ * Otherwise, 0 is returned. */
 int clusterNodeDelFailureReport(clusterNode *node, clusterNode *sender) {
     raxIterator ri;
     raxStart(&ri, node->fail_reports);
@@ -2414,7 +2414,7 @@ uint64_t clusterGetMaxEpoch(int filter) {
  * However the cluster uses this auto-generated new config epochs in two
  * cases:
  *
- * 1) When slots are closed after importing. Otherwise resharding would be
+ * 1) When slots are closed after importing. Otherwise, resharding would be
  *    too expensive.
  * 2) When CLUSTER FAILOVER is called with options that force a replica to
  *    failover its primary even if there is not primary majority able to
@@ -3876,8 +3876,23 @@ int clusterIsValidPacket(clusterLink *link) {
             explen = sizeof(clusterMsg);
         }
         explen -= sizeof(union clusterMsgData);
-        explen +=
-            sizeof(clusterMsgDataPublish) - 8 + ntohl(publish_data->channel_len) + ntohl(publish_data->message_len);
+        explen += sizeof(clusterMsgDataPublish) - 8;
+        /* The channel and message lengths come from the packet. Make sure each fits
+         * in the remaining space before adding it, so explen can't overflow. */
+        if (totlen < explen || (totlen - explen) < ntohl(publish_data->channel_len)) {
+            serverLog(LL_WARNING,
+                      "Received invalid %s packet with channel length that exceeds total packet length (%lld)",
+                      clusterGetMessageTypeString(type), (unsigned long long)totlen);
+            return 0;
+        }
+        explen += ntohl(publish_data->channel_len);
+        if ((totlen - explen) < ntohl(publish_data->message_len)) {
+            serverLog(LL_WARNING,
+                      "Received invalid %s packet with message length that exceeds total packet length (%lld)",
+                      clusterGetMessageTypeString(type), (unsigned long long)totlen);
+            return 0;
+        }
+        explen += ntohl(publish_data->message_len);
     } else if (type == CLUSTERMSG_TYPE_FAILOVER_AUTH_REQUEST || type == CLUSTERMSG_TYPE_FAILOVER_AUTH_ACK ||
                type == CLUSTERMSG_TYPE_MFSTART) {
         explen = sizeof(clusterMsg) - sizeof(union clusterMsgData);
@@ -3885,15 +3900,26 @@ int clusterIsValidPacket(clusterLink *link) {
         explen = sizeof(clusterMsg) - sizeof(union clusterMsgData);
         explen += sizeof(clusterMsgDataUpdate);
     } else if (type == CLUSTERMSG_TYPE_MODULE) {
+        uint32_t module_len;
         if (is_light) {
             clusterMsgLight *msg_light = toClusterMsgLight(link->rcvbuf);
             explen = sizeof(clusterMsgLight) - sizeof(union clusterMsgData);
-            explen += sizeof(clusterMsgModule) - 3 + ntohl(msg_light->data.module.msg.len);
+            module_len = ntohl(msg_light->data.module.msg.len);
         } else {
             clusterMsg *msg = toClusterMsg(link->rcvbuf);
             explen = sizeof(clusterMsg) - sizeof(union clusterMsgData);
-            explen += sizeof(clusterMsgModule) - 3 + ntohl(msg->data.module.msg.len);
+            module_len = ntohl(msg->data.module.msg.len);
         }
+        explen += sizeof(clusterMsgModule) - 3;
+        /* The module payload length comes from the packet. Make sure it fits in
+         * the remaining space before adding it, so explen can't overflow. */
+        if (totlen < explen || (totlen - explen) < module_len) {
+            serverLog(LL_WARNING,
+                      "Received invalid %s packet with module payload length that exceeds total packet length (%lld)",
+                      clusterGetMessageTypeString(type), (unsigned long long)totlen);
+            return 0;
+        }
+        explen += module_len;
     } else {
         /* We don't know this type of packet, so we assume it's well formed. */
         explen = totlen;
@@ -4898,7 +4924,7 @@ static void clusterBuildMessageHdr(clusterMsg *hdr, int type, size_t msglen) {
     memcpy(hdr->sender, myself->name, CLUSTER_NAMELEN);
 
     /* If cluster-announce-ip option is enabled, force the receivers of our
-     * packets to use the specified address for this node. Otherwise if the
+     * packets to use the specified address for this node. Otherwise, if the
      * first byte is zero, they'll do auto discovery. */
     memset(hdr->myip, 0, NET_IP_STR_LEN);
     if (server.cluster_announce_ip) {
@@ -5519,7 +5545,7 @@ void clusterSendFailoverAuthIfNeeded(clusterNode *node, clusterMsg *request) {
 
             /* Send an UPDATE message to the replica. After receiving the UPDATE message,
              * the replica will update the slots config so that it can initiate a failover
-             * again later. Otherwise the replica will never get votes if the primary is down. */
+             * again later. Otherwise, the replica will never get votes if the primary is down. */
             serverLog(LL_VERBOSE,
                       "Node %.40s (%s) has old slots configuration, sending "
                       "an UPDATE message about %.40s (%s)",
@@ -5836,7 +5862,7 @@ void clusterHandleReplicaFailover(void) {
     }
 
     /* If the previous failover attempt timeout and the retry time has
-     * elapsed, we can setup a new one. */
+     * elapsed, we can set up a new one. */
     if (auth_age > auth_retry_time) {
         server.cluster->failover_auth_time = now +
                                              delay +                         /* Fixed delay to let FAIL msg propagate. */
@@ -6587,7 +6613,7 @@ void bitmapClearBit(unsigned char *bitmap, int pos) {
 }
 
 /* Return non-zero if there is at least one primary with replicas in the cluster.
- * Otherwise zero is returned. Used by clusterNodeSetSlotBit() to set the
+ * Otherwise, zero is returned. Used by clusterNodeSetSlotBit() to set the
  * MIGRATE_TO flag the when a primary gets the first slot. */
 int clusterPrimariesHaveReplicas(void) {
     dictIterator di;
@@ -6911,7 +6937,7 @@ int verifyClusterConfigWithData(void) {
     clusterCleanSlotImportsAfterLoad();
 
     /* Check that all the slots we see populated memory have a corresponding
-     * entry in the cluster table. Otherwise fix the table. */
+     * entry in the cluster table. Otherwise, fix the table. */
     for (j = 0; j < CLUSTER_SLOTS; j++) {
         if (!countKeysInSlot(j)) continue; /* No keys in this slot. */
         /* Check if we are assigned to this slot or if we are importing it.

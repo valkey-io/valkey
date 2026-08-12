@@ -83,7 +83,7 @@ void throttle_setRate(throttler *t, double ops_per_sec);
  *   multiplier - applied to current rate to determine new rate (range 0.0 .. 3.0)
  *
  * If multiplier >= 1.0: increase the rate. If currently halted (rate ~0), jump to a
- *                       starting rate; otherwise increase proportionally with a minimum
+ *                       starting rate; otherwise, increase proportionally with a minimum
  *                       step of 1 ops/sec.
  * If multiplier < 1.0: decrease the rate proportionally. If the rate is far above the current
  *                      incoming rate, immediately adjusts down to the incoming rate.

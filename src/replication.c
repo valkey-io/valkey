@@ -4334,7 +4334,7 @@ void syncWithPrimary(connection *conn) {
         return;
     }
 
-    /* Mark the begining of the full sync */
+    /* Mark the beginning of the full sync */
     elapsedStart(&server.repl_full_sync_start_time);
 
     /* Fall back to SYNC if needed. Otherwise, psync_result == PSYNC_FULLRESYNC

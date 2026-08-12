@@ -335,10 +335,10 @@ static size_t rioFdWrite(rio *r, const void *buf, size_t len) {
 
     /* For small writes, we rather keep the data in user-space buffer, and flush
      * it only when it grows. however for larger writes, we prefer to flush
-     * any pre-existing buffer, and write the new one directly without reallocs
+     * any preexisting buffer, and write the new one directly without reallocs
      * and memory copying. */
     if (len > PROTO_IOBUF_LEN) {
-        /* First, flush any pre-existing buffered data. */
+        /* First, flush any preexisting buffered data. */
         if (sdslen(r->io.fd.buf)) {
             if (rioFdWrite(r, NULL, 0) == 0) return 0;
         }

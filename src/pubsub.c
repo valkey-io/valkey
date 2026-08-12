@@ -302,7 +302,7 @@ int pubsubSubscribeChannel(client *c, robj *channel, pubsubtype type) {
         retval = 1;
         /* Add the client to the channel -> list of clients hash table */
         if (server.cluster_enabled && type.shard) {
-            slot = getKeySlot(objectGetVal(channel));
+            slot = getCachedKeySlot(objectGetVal(channel));
         }
 
         hashtablePosition pos;
@@ -344,7 +344,7 @@ int pubsubUnsubscribeChannel(client *c, robj *channel, int notify, pubsubtype ty
         retval = 1;
         /* Remove the client from the channel -> clients list hash table */
         if (server.cluster_enabled && type.shard) {
-            /* Using keyHashSlot directly because we can't rely on the current_client's slot via getKeySlot() here,
+            /* Using keyHashSlot directly because we can't rely on the current_client's slot via getCachedKeySlot() here,
              * as it might differ from the channel's slot. */
             slot = keyHashSlot(objectGetVal(channel), (int)sdslen(objectGetVal(channel)));
         }

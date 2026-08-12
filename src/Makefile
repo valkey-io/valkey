@@ -502,6 +502,7 @@ ENGINE_SERVER_OBJ = \
     eval.o \
     evict.o \
     expire.o \
+    fbtree.o \
     fifo.o \
     functions.o \
     geo.o \
@@ -534,6 +535,7 @@ ENGINE_SERVER_OBJ = \
     networking.o \
     notify.o \
     object.o \
+    ordered_index.o \
     pqsort.o \
     pubsub.o \
     quicklist.o \

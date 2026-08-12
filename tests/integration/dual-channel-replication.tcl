@@ -615,7 +615,7 @@ start_server {tags {"dual-channel-replication external:skip"}} {
                 set loglines [lindex $res 1]
                 incr $loglines
                 wait_and_resume_process -2
-                verify_replica_online $primary 0 700
+                verify_replica_online $primary 0 [expr {$::valgrind ? 7000 : 700}]
                 wait_for_condition 50 1000 {
                     [status $replica1 master_link_status] == "up"
                 } else {
@@ -631,7 +631,7 @@ start_server {tags {"dual-channel-replication external:skip"}} {
                 set loglines [lindex $res 1]
                 incr $loglines
                 wait_and_resume_process -1
-                verify_replica_online $primary 0 700
+                verify_replica_online $primary 0 [expr {$::valgrind ? 7000 : 700}]
                 wait_for_condition 50 1000 {
                     [status $replica2 master_link_status] == "up"
                 } else {

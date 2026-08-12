@@ -140,7 +140,7 @@ int streamDecrID(streamID *id) {
 
 /* Generate the next stream item ID given the previous one. If the current
  * milliseconds Unix time is greater than the previous one, just use this
- * as time part and start with sequence part of zero. Otherwise we use the
+ * as time part and start with sequence part of zero. Otherwise, we use the
  * previous time (and never go backward) and increment the sequence. */
 void streamNextID(streamID *last_id, streamID *new_id) {
     uint64_t ms = commandTimeSnapshot();
@@ -719,6 +719,15 @@ int64_t streamTrim(stream *s, streamAddTrimArgs *args) {
 
     if (trim_strategy == TRIM_STRATEGY_NONE) return 0;
     if (trim_strategy == TRIM_STRATEGY_MAXLEN && s->length <= maxlen) return 0;
+    if (trim_strategy == TRIM_STRATEGY_MAXLEN && maxlen == 0 && !approx && limit == 0) {
+        int64_t deleted = s->length;
+        raxFreeWithCallback(s->rax, lpFreeVoid);
+        s->rax = raxNew();
+        s->length = 0;
+        s->first_id.ms = 0;
+        s->first_id.seq = 0;
+        return deleted;
+    }
 
     raxIterator ri;
     raxStart(&ri, s->rax);

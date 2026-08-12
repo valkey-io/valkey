@@ -1121,7 +1121,7 @@ int moduleGetCommandChannelsViaAPI(struct serverCommand *cmd, robj **argv, int a
 
 /* Return non-zero if a module command, that was declared with the
  * flag "getkeys-api", is called in a special way to get the keys positions
- * and not to get executed. Otherwise zero is returned. */
+ * and not to get executed. Otherwise, zero is returned. */
 int VM_IsKeysPositionRequest(ValkeyModuleCtx *ctx) {
     return (ctx->flags & VALKEYMODULE_CTX_KEYS_POS_REQUEST) != 0;
 }
@@ -1174,7 +1174,7 @@ void VM_KeyAtPos(ValkeyModuleCtx *ctx, int pos) {
 
 /* Return non-zero if a module command, that was declared with the
  * flag "getchannels-api", is called in a special way to get the channel positions
- * and not to get executed. Otherwise zero is returned. */
+ * and not to get executed. Otherwise, zero is returned. */
 int VM_IsChannelsPositionRequest(ValkeyModuleCtx *ctx) {
     return (ctx->flags & VALKEYMODULE_CTX_CHANNELS_POS_REQUEST) != 0;
 }
@@ -1307,7 +1307,7 @@ ValkeyModuleCommand *moduleCreateCommandProxy(struct ValkeyModule *module,
  * - The command name contains some chars that are not allowed.
  * - A set of invalid flags were passed.
  *
- * Otherwise VALKEYMODULE_OK is returned and the new command is registered.
+ * Otherwise, VALKEYMODULE_OK is returned and the new command is registered.
  *
  * This function must be called during the initialization of the module
  * inside the ValkeyModule_OnLoad() function. Calling this function outside
@@ -2425,7 +2425,7 @@ void moduleListFree(void *config) {
 }
 
 void VM_SetModuleAttribs(ValkeyModuleCtx *ctx, const char *name, int ver, int apiver) {
-    /* Called by VM_Init() to setup the `ctx->module` structure.
+    /* Called by VM_Init() to set up the `ctx->module` structure.
      *
      * This is an internal function, module developers don't need
      * to use it. */
@@ -2457,7 +2457,7 @@ void VM_SetModuleAttribs(ValkeyModuleCtx *ctx, const char *name, int ver, int ap
 }
 
 /* Return non-zero if the module name is busy.
- * Otherwise zero is returned. */
+ * Otherwise, zero is returned. */
 int VM_IsModuleNameBusy(const char *name) {
     return moduleLookupByName(name) != NULL;
 }
@@ -3873,7 +3873,7 @@ int VM_MustObeyClient(ValkeyModuleCtx *ctx) {
 /* This is a helper for VM_GetClientInfoById() and other functions: given
  * a client, it populates the client info structure with the appropriate
  * fields depending on the version provided. If the version is not valid
- * then VALKEYMODULE_ERR is returned. Otherwise the function returns
+ * then VALKEYMODULE_ERR is returned. Otherwise, the function returns
  * VALKEYMODULE_OK and the structure pointed by 'ci' gets populated. */
 
 int modulePopulateClientInfoStructure(void *ci, client *client, int structver) {
@@ -3908,7 +3908,7 @@ int modulePopulateClientInfoStructure(void *ci, client *client, int structver) {
 /* This is a helper for moduleFireServerEvent() and other functions:
  * It populates the replication info structure with the appropriate
  * fields depending on the version provided. If the version is not valid
- * then VALKEYMODULE_ERR is returned. Otherwise the function returns
+ * then VALKEYMODULE_ERR is returned. Otherwise, the function returns
  * VALKEYMODULE_OK and the structure pointed by 'ri' gets populated. */
 int modulePopulateReplicationInfoStructure(void *ri, int structver) {
     if (structver != 1) return VALKEYMODULE_ERR;
@@ -4322,7 +4322,7 @@ ValkeyModuleKey *VM_OpenKey(ValkeyModuleCtx *ctx, robj *keyname, int mode) {
         }
     }
 
-    /* Setup the key handle. */
+    /* Set up the key handle. */
     kp = zmalloc(sizeof(*kp));
     moduleInitKey(kp, ctx, keyname, value, mode);
     autoMemoryAdd(ctx, VALKEYMODULE_AM_KEY, kp);
@@ -4408,7 +4408,7 @@ size_t VM_ValueLength(ValkeyModuleKey *key) {
     }
 }
 
-/* If the key is open for writing, remove it, and setup the key to
+/* If the key is open for writing, remove it, and set up the key to
  * accept new writes as an empty key (that will be created on demand).
  * On success VALKEYMODULE_OK is returned. If the key is not open for
  * writing VALKEYMODULE_ERR is returned. */
@@ -4422,7 +4422,7 @@ int VM_DeleteKey(ValkeyModuleKey *key) {
 }
 
 /* If the key is open for writing, unlink it (that is delete it in a
- * non-blocking way, not reclaiming memory immediately) and setup the key to
+ * non-blocking way, not reclaiming memory immediately) and set up the key to
  * accept new writes as an empty key (that will be created on demand).
  * On success VALKEYMODULE_OK is returned. If the key is not open for
  * writing VALKEYMODULE_ERR is returned. */
@@ -5074,7 +5074,7 @@ int VM_ZsetRem(ValkeyModuleKey *key, ValkeyModuleString *ele, int *deleted) {
 }
 
 /* On success retrieve the double score associated at the sorted set element
- * 'ele' and returns VALKEYMODULE_OK. Otherwise VALKEYMODULE_ERR is returned
+ * 'ele' and returns VALKEYMODULE_OK. Otherwise, VALKEYMODULE_ERR is returned
  * to signal one of the following conditions:
  *
  * * There is no such element 'ele' in the sorted set.
@@ -5121,7 +5121,7 @@ int VM_ZsetRangeEndReached(ValkeyModuleKey *key) {
 }
 
 /* Helper function for VM_ZsetFirstInScoreRange() and VM_ZsetLastInScoreRange().
- * Setup the sorted set iteration according to the specified score range
+ * Set up the sorted set iteration according to the specified score range
  * (see the functions calling it for more info). If 'first' is true the
  * first element in the range is used as a starting point for the iterator
  * otherwise the last. Return VALKEYMODULE_OK on success otherwise
@@ -5133,7 +5133,7 @@ int zsetInitScoreRange(ValkeyModuleKey *key, double min, double max, int minex, 
     key->u.zset.type = VALKEYMODULE_ZSET_RANGE_SCORE;
     key->u.zset.er = 0;
 
-    /* Setup the range structure used by the sorted set core implementation
+    /* Set up the range structure used by the sorted set core implementation
      * in order to seek at the specified element. */
     zrangespec *zrs = &key->u.zset.rs;
     zrs->min = min;
@@ -5155,7 +5155,7 @@ int zsetInitScoreRange(ValkeyModuleKey *key, double min, double max, int minex, 
     return VALKEYMODULE_OK;
 }
 
-/* Setup a sorted set iterator seeking the first element in the specified
+/* Set up a sorted set iterator seeking the first element in the specified
  * range. Returns VALKEYMODULE_OK if the iterator was correctly initialized
  * otherwise VALKEYMODULE_ERR is returned in the following conditions:
  *
@@ -5167,7 +5167,7 @@ int zsetInitScoreRange(ValkeyModuleKey *key, double min, double max, int minex, 
  * * VALKEYMODULE_POSITIVE_INFINITE for positive infinite value
  * * VALKEYMODULE_NEGATIVE_INFINITE for negative infinite value
  *
- * 'minex' and 'maxex' parameters, if true, respectively setup a range
+ * 'minex' and 'maxex' parameters, if true, respectively set up a range
  * where the min and max value are exclusive (not included) instead of
  * inclusive. */
 int VM_ZsetFirstInScoreRange(ValkeyModuleKey *key, double min, double max, int minex, int maxex) {
@@ -5181,7 +5181,7 @@ int VM_ZsetLastInScoreRange(ValkeyModuleKey *key, double min, double max, int mi
 }
 
 /* Helper function for VM_ZsetFirstInLexRange() and VM_ZsetLastInLexRange().
- * Setup the sorted set iteration according to the specified lexicographical
+ * Set up the sorted set iteration according to the specified lexicographical
  * range (see the functions calling it for more info). If 'first' is true the
  * first element in the range is used as a starting point for the iterator
  * otherwise the last. Return VALKEYMODULE_OK on success otherwise
@@ -5195,7 +5195,7 @@ int zsetInitLexRange(ValkeyModuleKey *key, ValkeyModuleString *min, ValkeyModule
     VM_ZsetRangeStop(key);
     key->u.zset.er = 0;
 
-    /* Setup the range structure used by the sorted set core implementation
+    /* Set up the range structure used by the sorted set core implementation
      * in order to seek at the specified element. */
     zlexrangespec *zlrs = &key->u.zset.lrs;
     if (zsetParseLexRange(min, max, zlrs) == C_ERR) return VALKEYMODULE_ERR;
@@ -5220,7 +5220,7 @@ int zsetInitLexRange(ValkeyModuleKey *key, ValkeyModuleString *min, ValkeyModule
     return VALKEYMODULE_OK;
 }
 
-/* Setup a sorted set iterator seeking the first element in the specified
+/* Set up a sorted set iterator seeking the first element in the specified
  * lexicographical range. Returns VALKEYMODULE_OK if the iterator was correctly
  * initialized otherwise VALKEYMODULE_ERR is returned in the
  * following conditions:
@@ -6335,7 +6335,7 @@ const char *VM_CallReplyStringPtr(ValkeyModuleCallReply *reply, size_t *len) {
 }
 
 /* Return a new string object from a call reply of type string, error or
- * integer. Otherwise (wrong reply type) return NULL. */
+ * integer. Otherwise, (wrong reply type) return NULL. */
 ValkeyModuleString *VM_CreateStringFromCallReply(ValkeyModuleCallReply *reply) {
     ValkeyModuleCtx *ctx = callReplyGetPrivateData(reply);
     size_t len;
@@ -6360,7 +6360,7 @@ void VM_SetContextUser(ValkeyModuleCtx *ctx, const ValkeyModuleUser *user) {
 
 /* Returns an array of robj pointers, by parsing the format specifier "fmt" as described for
  * the VM_Call(), VM_Replicate() and other module APIs. Populates *argcp with the number of
- * items (which equals to the length of the allocated argv).
+ * items (which equals the length of the allocated argv).
  *
  * The integer pointed by 'flags' is populated with flags according
  * to special modifiers in "fmt". The supported modifiers map to
@@ -7483,7 +7483,7 @@ robj *moduleTypeDupOrReply(client *c, robj *fromkey, robj *tokey, int todb, robj
  * If ValkeyModule_CreateDataType() is called outside of ValkeyModule_OnLoad() function,
  * there is already a module registering a type with the same name,
  * or if the module name or encver is invalid, NULL is returned.
- * Otherwise the new type is registered into the server, and a reference of
+ * Otherwise, the new type is registered into the server, and a reference of
  * type ValkeyModuleType is returned: the caller of the function should store
  * this reference into a global variable to make future use of it in the
  * modules type API, since a single module may register multiple types.
@@ -9207,7 +9207,7 @@ int VM_BlockedClientDisconnected(ValkeyModuleCtx *ctx) {
  * context with certain modules APIs. If 'bc' is not NULL then the module will
  * be bound to a blocked client, and it will be possible to use the
  * `ValkeyModule_Reply*` family of functions to accumulate a reply for when the
- * client will be unblocked. Otherwise the thread safe context will be
+ * client will be unblocked. Otherwise, the thread safe context will be
  * detached by a specific client.
  *
  * To call non-reply APIs, the thread safe context must be prepared with:
@@ -9774,7 +9774,7 @@ int moduleGetClusterNodeInfoForClient(ValkeyModuleCtx *ctx,
                                       int *flags);
 
 /* Populate the specified info for the node having as ID the specified 'id',
- * then returns VALKEYMODULE_OK. Otherwise if the format of node ID is invalid
+ * then returns VALKEYMODULE_OK. Otherwise, if the format of node ID is invalid
  * or the node ID does not exist from the POV of this local node, VALKEYMODULE_ERR
  * is returned.
  *
@@ -10881,7 +10881,7 @@ uint64_t VM_DictSize(ValkeyModuleDict *d) {
 
 /* Store the specified key into the dictionary, setting its value to the
  * pointer 'ptr'. If the key was added with success, since it did not
- * already exist, VALKEYMODULE_OK is returned. Otherwise if the key already
+ * already exist, VALKEYMODULE_OK is returned. Otherwise, if the key already
  * exists the function returns VALKEYMODULE_ERR. */
 int VM_DictSetC(ValkeyModuleDict *d, void *key, size_t keylen, void *ptr) {
     int retval = raxTryInsert(d->rax, key, keylen, ptr, NULL);
@@ -11950,7 +11950,7 @@ static void moduleScanCallback(void *privdata, void *element, int didx) {
     sds key = objectGetKey(val);
     ValkeyModuleString *keyname = createObject(OBJ_STRING, sdsdup(key));
 
-    /* Setup the key handle. */
+    /* Set up the key handle. */
     ValkeyModuleKey kp = {0};
     moduleInitKey(&kp, data->ctx, keyname, val, VALKEYMODULE_READ);
 
@@ -11987,7 +11987,7 @@ void VM_ScanCursorDestroy(ValkeyModuleScanCursor *cursor) {
  *     void scan_callback(ValkeyModuleCtx *ctx, ValkeyModuleString *keyname,
  *                        ValkeyModuleKey *key, void *privdata);
  *
- * - `ctx`: the module context provided to for the scan.
+ * - `ctx`: the module context provided for the scan.
  * - `keyname`: owned by the caller and need to be retained if used after this
  *   function.
  * - `key`: holds info on the key and value, it is provided as best effort, in
@@ -12097,7 +12097,7 @@ static void moduleScanKeyHashtableCallback(void *privdata, void *entry) {
  *
  *     void scan_callback(ValkeyModuleKey *key, ValkeyModuleString* field, ValkeyModuleString* value, void *privdata);
  *
- * - key - the key context provided to for the scan.
+ * - key - the key context provided for the scan.
  * - field - field name, owned by the caller and need to be retained if used
  *   after this function.
  * - value - value string or NULL for set type, owned by the caller and need to
@@ -12261,7 +12261,7 @@ int VM_ExitFromChild(int retcode) {
 }
 
 /* Kill the active module forked child, if there is one active and the
- * pid matches, and returns C_OK. Otherwise if there is no active module
+ * pid matches, and returns C_OK. Otherwise, if there is no active module
  * child or the pid does not match, return C_ERR without doing anything. */
 int TerminateModuleForkChild(int child_pid, int wait) {
     /* Module child should be active and pid should match. */
@@ -12854,7 +12854,7 @@ typedef struct KeyInfo {
  * with the event, depending on what exactly happened. */
 void moduleFireServerEvent(uint64_t eid, int subid, void *data) {
     /* Fast path to return ASAP if there is nothing to do, avoiding to
-     * setup the iterator and so forth: we want this call to be extremely
+     * set up the iterator and so forth: we want this call to be extremely
      * cheap if there are no registered modules. */
     if (listLength(ValkeyModule_EventListeners) == 0) return;
 
@@ -13120,7 +13120,7 @@ void moduleInitModulesSystem(void) {
     /* Create the timers radix tree. */
     Timers = raxNew();
 
-    /* Setup the event listeners data structures. */
+    /* Set up the event listeners data structures. */
     ValkeyModule_EventListeners = listCreate();
 
     /* Making sure moduleEventVersions is synced with the number of events. */

@@ -488,7 +488,7 @@ start_server {
         r XADD "\{lestream\}2" 2-0 k2 v5
         r XADD "\{lestream\}2" 3-0 k3 v6
 
-        # read last element from 3 streams (2 with enetries, 1 non-existent)
+        # read last element from 3 streams (2 with entries, 1 non-existent)
         # verify the last element from the two existing streams were returned
         set res [r XREAD STREAMS "\{lestream\}1" "\{lestream\}2" "\{lestream\}3" + + +]
         assert_equal $res {{{{lestream}1} {{3-0 {k3 v3}}}} {{{lestream}2} {{3-0 {k3 v6}}}}}

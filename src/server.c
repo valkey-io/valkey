@@ -833,7 +833,7 @@ dictType migrateCacheDictType = {
     .entryDestructor = dictEntryDestructorSdsKey,
 };
 
-/* Dict for for case-insensitive search using null terminated C strings.
+/* Dict for case-insensitive search using null terminated C strings.
  * The keys stored in dict are sds though. */
 dictType stringSetDictType = {
     .entryGetKey = dictEntryGetKey,
@@ -842,7 +842,7 @@ dictType stringSetDictType = {
     .entryDestructor = dictEntryDestructorSdsKey,
 };
 
-/* Dict for for case-insensitive search using null terminated C strings.
+/* Dict for case-insensitive search using null terminated C strings.
  * The key and value do not have a destructor. */
 dictType externalStringType = {
     .entryGetKey = dictEntryGetKey,
@@ -1352,7 +1352,7 @@ void databasesCron(void) {
     monitorActiveDefrag();
 
     /* Perform hash tables rehashing if needed, but only if there are no
-     * other processes saving the DB on disk. Otherwise rehashing is bad
+     * other processes saving the DB on disk. Otherwise, rehashing is bad
      * as will cause a lot of copy-on-write of memory pages. */
     if (!hasActiveChildProcess()) {
         /* We use global counters so if we stop the computation at a given
@@ -3406,7 +3406,7 @@ void commandAddSubcommand(struct serverCommand *parent, struct serverCommand *su
 
 /* Recursively populate the command structure.
  *
- * On success, the function return C_OK. Otherwise C_ERR is returned and we won't
+ * On success, the function return C_OK. Otherwise, C_ERR is returned and we won't
  * add this command in the commands dict. */
 int populateCommandStructure(struct serverCommand *c) {
     /* If the command marks with CMD_SENTINEL, it exists in sentinel. */
@@ -3950,6 +3950,14 @@ void call(client *c, int flags) {
     c->flag.force_aof = 0;
     c->flag.force_repl = 0;
     c->flag.prevent_prop = 0;
+
+    /* The redaction bitmap describes the argv of the command about to execute and
+     * is set on demand by the command itself. Clearing it here covers every case
+     * where one client executes several commands without an intervening
+     * resetClient(): the queued commands of a MULTI, RM_Call sequences issued on a
+     * reused module temp client, and the server.call() chain of a script. Stale
+     * bits would otherwise redact the wrong argument of a later command. */
+    c->redact_arg_bitmap = 0;
 
     /* The server core is in charge of propagation when the first entry point
      * of call() is processCommand().
@@ -7859,8 +7867,10 @@ __attribute__((weak)) int main(int argc, char **argv) {
     }
 
 #if defined(LUA_ENABLED) && STATIC_LUA
-    /* Initialize the LUA scripting engine on-startup only when LUA is built statically */
-    if (scriptingEngineManagerFind("lua") == NULL) {
+    /* Initialize the LUA scripting engine on-startup only when LUA is built statically.
+     * Sentinel does not support SCRIPTING commands nor the MODULE commands, so the Lua
+     * engine is not needed here. */
+    if (!server.sentinel_mode && scriptingEngineManagerFind("lua") == NULL) {
         if (moduleLoadStatic("lua", NULL, 0, 0) != C_OK) {
             serverPanic("Lua engine initialization failed, check the server logs.");
         }

@@ -80,7 +80,7 @@ static robj *dbFindWithDictIndex(serverDb *db, sds key, int dict_index);
  * expired on replicas even if the primary is lagging expiring our key via DELs
  * in the replication link. */
 robj *lookupKey(serverDb *db, robj *key, int flags) {
-    int dict_index = getKVStoreIndexForKey(objectGetVal(key));
+    int dict_index = getKVStoreIndexUsingCachedSlot(objectGetVal(key));
     robj *val = dbFindWithDictIndex(db, objectGetVal(key), dict_index);
     if (val) {
         /* Forcing deletion of expired keys on a replica makes the replica
@@ -201,7 +201,7 @@ void dbUpdateObjectWithVolatileItemsTracking(serverDb *db, robj *o) {
  * If the update_if_existing argument is false, the program is aborted
  * if the key already exists, otherwise, it can fall back to dbOverwrite. */
 static void dbAddInternal(serverDb *db, robj *key, robj **valref, int update_if_existing) {
-    int dict_index = getKVStoreIndexForKey(objectGetVal(key));
+    int dict_index = getKVStoreIndexUsingCachedSlot(objectGetVal(key));
     void **oldref = NULL;
     if (update_if_existing) {
         oldref = kvstoreHashtableFindRef(db->keys, dict_index, objectGetVal(key));
@@ -230,22 +230,28 @@ void dbAdd(serverDb *db, robj *key, robj **valref) {
     dbAddInternal(db, key, valref, 0);
 }
 
-/* Returns which dict index should be used with kvstore for a given key. */
+/* Returns which dict index should be used with kvstore for a given key, computed from the key itself. */
 int getKVStoreIndexForKey(sds key) {
-    return server.cluster_enabled ? getKeySlot(key) : 0;
+    return server.cluster_enabled ? (int)keyHashSlot(key, (int)sdslen(key)) : 0;
 }
 
-/* Returns the cluster hash slot for a given key, trying to use the cached slot that
- * stored on the server.current_client first. If there is no cached value, it will compute the hash slot
- * and then cache the value.*/
-int getKeySlot(sds key) {
+/* Same as getKVStoreIndexForKey(), but reuses the slot cached on the client rather than hashing the key.
+ * Only valid for keys the currently executing command declared, since the cached slot is that command's. */
+int getKVStoreIndexUsingCachedSlot(sds key) {
+    return server.cluster_enabled ? getCachedKeySlot(key) : 0;
+}
+
+/* Returns the slot cached on the client for the currently executing command, computing it from the key
+ * when no cached slot is available. Only valid for keys that command declared: any other key can hash to
+ * a different slot, so use keyHashSlot() or getKVStoreIndexForKey() for those. */
+int getCachedKeySlot(sds key) {
     serverAssert(server.cluster_enabled);
     /* This is performance optimization that uses pre-set slot id from the current command,
      * in order to avoid calculation of the key hash.
      *
      * This optimization is only used when current_client flag `CLIENT_EXECUTING_COMMAND` is set.
      * It only gets set during the execution of command under `call` method. Other flows requesting
-     * the key slot would fallback to keyHashSlot.
+     * the key slot would fall back to keyHashSlot.
      *
      * Modules and scripts executed on the primary may get replicated as multi-execs that operate on multiple slots,
      * so we must always recompute the slot for commands coming from the primary or AOF.
@@ -320,7 +326,7 @@ int dbAddRDBLoad(serverDb *db, sds key, robj **valref) {
 static void dbSetValue(serverDb *db, robj *key, robj **valref, int overwrite, void **oldref) {
     robj *val = *valref;
     if (oldref == NULL) {
-        int dict_index = getKVStoreIndexForKey(objectGetVal(key));
+        int dict_index = getKVStoreIndexUsingCachedSlot(objectGetVal(key));
         oldref = kvstoreHashtableFindRef(db->keys, dict_index, objectGetVal(key));
     }
     serverAssertWithInfo(NULL, key, oldref != NULL);
@@ -366,7 +372,7 @@ static void dbSetValue(serverDb *db, robj *key, robj **valref, int overwrite, vo
         *oldref = new;
         /* Replace the old value at its location in the expire space. */
         if (expire >= 0) {
-            int dict_index = getKVStoreIndexForKey(objectGetVal(key));
+            int dict_index = getKVStoreIndexUsingCachedSlot(objectGetVal(key));
             void **expireref = kvstoreHashtableFindRef(db->expires, dict_index, objectGetVal(key));
             serverAssert(expireref != NULL);
             *expireref = new;
@@ -568,7 +574,7 @@ int dbDelete(serverDb *db, robj *key) {
  *
  * If the object is found in one of the above conditions (or both) by the
  * function, an unshared / not-encoded copy of the string object is stored
- * at 'key' in the specified 'db'. Otherwise the object 'o' itself is
+ * at 'key' in the specified 'db'. Otherwise, the object 'o' itself is
  * returned.
  *
  * USAGE:
@@ -653,7 +659,7 @@ long long emptyDbStructure(serverDb **dbarray, int dbnum, int async, void(callba
  * to specify that we do not want to delete the functions.
  *
  * On success the function returns the number of keys removed from the
- * database(s). Otherwise -1 is returned in the specific case the
+ * database(s). Otherwise, -1 is returned in the specific case the
  * DB number is out of range, and errno is set to EINVAL. */
 long long emptyData(int dbnum, int flags, void(callback)(hashtable *)) {
     int async = (flags & EMPTYDB_ASYNC);
@@ -1123,7 +1129,7 @@ void hashtableScanCallback(void *privdata, void *entry) {
 
 /* Try to parse a SCAN cursor stored at buffer 'buf':
  * if the cursor is valid, store it as unsigned integer into *cursor and
- * returns C_OK. Otherwise return C_ERR and send an error to the
+ * returns C_OK. Otherwise, return C_ERR and send an error to the
  * client. */
 int parseScanCursorOrReply(client *c, sds buf, unsigned long long *cursor) {
     if (!string2ull(buf, sdslen(buf), cursor)) {
@@ -1921,7 +1927,7 @@ void swapdbCommand(client *c) {
  *----------------------------------------------------------------------------*/
 
 int removeExpire(serverDb *db, robj *key) {
-    int dict_index = getKVStoreIndexForKey(objectGetVal(key));
+    int dict_index = getKVStoreIndexUsingCachedSlot(objectGetVal(key));
     void *popped;
     if (kvstoreHashtablePop(db->expires, dict_index, objectGetVal(key), &popped)) {
         robj *val = popped;
@@ -1947,7 +1953,7 @@ robj *setExpire(client *c, serverDb *db, robj *key, long long when) {
     /* Reuse the object from the main dict in the expire dict. When setting
      * expire in an robj, it's potentially reallocated. We need to updates the
      * pointer(s) to it. */
-    int dict_index = getKVStoreIndexForKey(objectGetVal(key));
+    int dict_index = getKVStoreIndexUsingCachedSlot(objectGetVal(key));
     void **valref = kvstoreHashtableFindRef(db->keys, dict_index, objectGetVal(key));
     serverAssertWithInfo(NULL, key, valref != NULL);
     val = *valref;
@@ -1956,7 +1962,7 @@ robj *setExpire(client *c, serverDb *db, robj *key, long long when) {
     robj *newval = objectSetExpire(val, when);
     if (objectGetType(newval) == OBJ_HASH && hashTypeHasVolatileFields(newval)) {
         /* Replace the pointer in the keys_with_volatile_items table without accessing the old pointer. */
-        int dict_index = getKVStoreIndexForKey(objectGetKey(newval));
+        int dict_index = getKVStoreIndexUsingCachedSlot(objectGetKey(newval));
         hashtable *volatile_items_ht = kvstoreGetHashtable(db->keys_with_volatile_items, dict_index);
         bool replaced = hashtableReplaceReallocatedEntry(volatile_items_ht, val, newval);
         serverAssert(replaced);
@@ -2011,11 +2017,6 @@ void deleteExpiredKeyAndPropagateWithDictIndex(serverDb *db, robj *keyobj, int d
     server.stat_expiredkeys++;
 }
 
-/* Delete the specified expired key and propagate expire. */
-void deleteExpiredKeyAndPropagate(serverDb *db, robj *keyobj) {
-    int dict_index = getKVStoreIndexForKey(objectGetVal(keyobj));
-    deleteExpiredKeyAndPropagateWithDictIndex(db, keyobj, dict_index);
-}
 
 /* Delete the specified expired key from overwriting and propagate the DEL or UNLINK. */
 void deleteExpiredKeyFromOverwriteAndPropagate(client *c, robj *keyobj) {
@@ -2267,7 +2268,7 @@ static int dbExpandSkipSlot(int slot) {
  * if try_expand is non-zero, `hashtableTryExpand` is used else `hashtableExpand`.
  *
  * Returns C_OK or C_ERR. C_OK response is for successful expansion. C_ERR
- * signifies failure in allocation if try_expand is non-zero. Otherwise it
+ * signifies failure in allocation if try_expand is non-zero. Otherwise, it
  * signifies that no expansion was performed.
  */
 static int dbExpandGeneric(kvstore *kvs, uint64_t db_size, int try_expand) {
@@ -2521,7 +2522,7 @@ int getKeysFromCommandWithSpecs(struct serverCommand *cmd,
         int ret = getKeysUsingKeySpecs(cmd, argv, argc, search_flags, result);
         if (ret >= 0) return ret;
         /* If the specs returned with an error (probably an INVALID or INCOMPLETE spec),
-         * fallback to the callback method. */
+         * fall back to the callback method. */
     }
 
     /* Resort to getkeys callback methods. */
@@ -2601,7 +2602,7 @@ int getChannelsFromCommand(struct serverCommand *cmd, robj **argv, int argc, get
     if (cmd->flags & CMD_MODULE_GETCHANNELS) {
         return moduleGetCommandChannelsViaAPI(cmd, argv, argc, result);
     }
-    /* Otherwise check the channel spec table */
+    /* Otherwise, check the channel spec table */
     for (ChannelSpecs *spec = commands_with_channels; spec != NULL; spec += 1) {
         if (cmd->proc == spec->proc) {
             int start = spec->start;

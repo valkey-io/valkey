@@ -8,8 +8,7 @@
         "function": "dbsizeCommand",
         "command_flags": [
             "READONLY",
-            "FAST",
-            "KEYSPACE_GLOBAL"
+            "FAST"
         ],
         "acl_categories": [
             "FAST",

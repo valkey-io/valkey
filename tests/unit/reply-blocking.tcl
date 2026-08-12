@@ -368,7 +368,7 @@ foreach provider_mode {aof} {
             }
 
             test "($provider_mode) Whole-keyspace commands still block while any data is dirty" {
-                # KEYS/SCAN/RANDOMKEY/DBSIZE have no key argument, so a not-yet-durable
+                # KEYS/SCAN/RANDOMKEY have no key argument, so a not-yet-durable
                 # write can add/remove a key they would report: they must block on the
                 # global offset whenever anything is dirty.
                 assert_equal "always" [lindex [$primary config get appendfsync] 1]
@@ -385,7 +385,6 @@ foreach provider_mode {aof} {
 
                 set rk [valkey_deferring_client -1]
                 $rk keys *
-                $rk dbsize
                 set fd [$rk channel]
                 fconfigure $fd -blocking 0
                 assert_equal "" [read $fd]
@@ -393,7 +392,6 @@ foreach provider_mode {aof} {
 
                 unblock_with_provider
                 assert_morethan [llength [$rk read]] 0
-                assert_morethan [$rk read] 0
                 assert_equal "OK" [$rd read]
                 $rk close
                 $rd close

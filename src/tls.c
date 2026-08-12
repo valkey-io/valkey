@@ -601,9 +601,9 @@ static void registerSSLEvent(tls_connection *conn) {
     }
 }
 
-static void postPoneUpdateSSLState(connection *conn_, int postpone) {
+static void postPoneUpdateSSLState(connection *conn_, int postpone_mask) {
     tls_connection *conn = (tls_connection *)conn_;
-    if (postpone) {
+    if (postpone_mask) {
         conn->flags |= TLS_CONN_FLAG_POSTPONE_UPDATE_STATE;
     } else {
         conn->flags &= ~TLS_CONN_FLAG_POSTPONE_UPDATE_STATE;

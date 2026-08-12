@@ -1926,6 +1926,8 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     }
 
     processIOThreadsWriteDone();
+    /* Write-done can update replica offsets after blockedBeforeSleep() ran. */
+    if (listLength(server.clients_waiting_acks)) processClientsWaitingReplicas();
 
     /* Record cron time in beforeSleep. This does not include the time consumed by AOF writing and IO writing above. */
     monotime cron_start_time_after_write = getMonotonicUs();

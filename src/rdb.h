@@ -232,5 +232,6 @@ int rdbWriteHeader(rio *rdb, int req, int rdbver, int rdbflags, rdbSaveInfo *rsi
 int rdbWriteFooter(rio *rdb, int req);
 void rdbRecordStartMetrics(int bgsave_type);
 void rdbRecordEndMetrics(int bgsave_type, int status, time_t save_end);
+void rdbClearSaveState(time_t save_end);
 
 #endif

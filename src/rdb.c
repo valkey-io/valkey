@@ -3657,10 +3657,8 @@ void backgroundSaveDoneHandler(int exitcode, int bysignal) {
     default: serverPanic("Unknown RDB child type."); break;
     }
 
-    server.rdb_write_target = RDB_WRITE_TARGET_NONE;
-    server.cur_bgsave_type = RDB_BGSAVE_TYPE_NONE;
-    server.rdb_save_time_last = save_end - server.rdb_save_time_start;
-    server.rdb_save_time_start = -1;
+    rdbClearSaveState(save_end);
+
     /* Possibly there are replicas waiting for a BGSAVE in order to be served
      * (the first stage of SYNC is a bulk transfer of dump.rdb) */
     updateReplicasWaitingBgsave((!bysignal && exitcode == 0) ? C_OK : C_ERR, type);
@@ -4110,14 +4108,19 @@ void rdbRecordStartMetrics(int bgsave_type) {
     server.cur_bgsave_type = bgsave_type;
 }
 
-/* Common state updates when a background save completes. */
-void rdbRecordEndMetrics(int bgsave_type, int status, time_t save_end) {
-    server.lastbgsave_status = status;
-    server.lastbgsave_type = bgsave_type;
+/* Reset save timing and target state. Called after any background save or
+ * transfer completes, regardless of whether it was a persistence event. */
+void rdbClearSaveState(time_t save_end) {
     server.rdb_save_time_last = save_end - server.rdb_save_time_start;
     server.rdb_save_time_start = -1;
     server.rdb_write_target = RDB_WRITE_TARGET_NONE;
     server.cur_bgsave_type = RDB_BGSAVE_TYPE_NONE;
+}
+
+/* Record persistence metrics when a background save completes. */
+void rdbRecordEndMetrics(int bgsave_type, int status, time_t save_end) {
+    server.lastbgsave_status = status;
+    server.lastbgsave_type = bgsave_type;
     if (status == C_OK) {
         server.dirty = server.dirty - server.dirty_before_bgsave;
         server.lastsave = save_end;

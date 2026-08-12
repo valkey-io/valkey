@@ -139,6 +139,7 @@ static void *threadsaveProcessor(void *arg) {
 static void cleanupSaveInfoAndEmitEndMetrics(threadsaveInfo *saveInfo) {
     if (saveInfo->terminated && saveInfo->err_code == C_OK) saveInfo->err_code = C_ERR;
     rdbRecordEndMetrics(RDB_BGSAVE_TYPE_THREAD, saveInfo->err_code, time(NULL));
+    rdbClearSaveState(time(NULL));
     if (saveInfo->err_code == C_OK) {
         serverLog(LL_NOTICE, "threadsave: threadsave complete. %lld seconds.", (long long)server.rdb_save_time_last);
     } else if (saveInfo->terminated) {
@@ -326,6 +327,7 @@ int threadsaveToDisk(const char *filename) {
 werr:
     saveInfo->err_code = C_ERR;
     rdbRecordEndMetrics(RDB_BGSAVE_TYPE_THREAD, C_ERR, time(NULL));
+    rdbClearSaveState(time(NULL));
     serverLog(LL_WARNING, "threadsave: threadsave failed. %lld seconds.", (long long)server.rdb_save_time_last);
     stopSaving(0);
     currentThreadsave = NULL;

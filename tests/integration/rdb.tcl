@@ -276,6 +276,52 @@ start_server {overrides {forkless-options-supported yes save ""}} {
         }
     }
 
+    foreach bgsave_type {"fork" "thread"} {
+        test "bgsave $bgsave_type metrics are correct after success" {
+            set saves_before [s rdb_saves]
+            populate 100 "" 16
+            r bgsave $bgsave_type
+            waitForBgsave r
+            assert {[s rdb_saves] == $saves_before + 1}
+            assert {[s rdb_last_bgsave_time_sec] >= 0 && [s rdb_last_bgsave_time_sec] < 3600}
+            assert_equal [s rdb_last_bgsave_status] "ok"
+            assert_equal [s rdb_last_bgsave_type] $bgsave_type
+            assert {[s rdb_bgsave_in_progress] == 0}
+            assert {[s current_fork_perc] == 0}
+            assert {[s current_save_keys_processed] == 0}
+            assert {[s current_save_keys_total] == 0}
+        }
+    }
+
+    foreach bgsave_type {"fork" "thread"} {
+        test "bgsave $bgsave_type metrics are correct after failure" {
+            set saves_before [s rdb_saves]
+            populate 1000 "" 16
+            r config set rdb-key-save-delay 10000000
+            r bgsave $bgsave_type
+            wait_for_condition 50 100 {
+                [s rdb_bgsave_in_progress] == 1
+            } else {
+                fail "$bgsave_type bgsave didn't start"
+            }
+            if {$bgsave_type eq "fork"} {
+                set pid [get_child_pid 0]
+                catch {exec kill -9 $pid}
+            } else {
+                r flushdb
+            }
+            waitForBgsave r
+            assert {[s rdb_last_bgsave_time_sec] >= 0 && [s rdb_last_bgsave_time_sec] < 3600}
+            assert_equal [s rdb_last_bgsave_status] "err"
+            assert_equal [s rdb_last_bgsave_type] $bgsave_type
+            assert {[s rdb_bgsave_in_progress] == 0}
+            assert {[s current_fork_perc] == 0}
+            assert {[s current_save_keys_processed] == 0}
+            assert {[s current_save_keys_total] == 0}
+            r config set rdb-key-save-delay 0
+        }
+    }
+
     foreach bgsave_type {"" "fork" "thread"} {
         test "bgsave cancel aborts $bgsave_type save" {
             # Generating RDB will take some 100 seconds

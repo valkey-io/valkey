@@ -839,7 +839,7 @@ long long getPsyncInitialOffset(void) {
 }
 
 /* Send a FULLRESYNC reply in the specific case of a full resynchronization,
- * as a side effect setup the replica for a full sync in different ways:
+ * as a side effect set up the replica for a full sync in different ways:
  *
  * 1) Remember, into the replica client structure, the replication offset
  *    we sent here, so that if new replicas will later attach to the same
@@ -1221,7 +1221,7 @@ void syncCommand(client *c) {
     /* Full resynchronization. */
     server.stat_sync_full++;
 
-    /* Setup the replica as one waiting for BGSAVE to start. The following code
+    /* Set up the replica as one waiting for BGSAVE to start. The following code
      * paths will change the state if we handle the replica differently. */
     c->repl_data->repl_state = REPLICA_STATE_WAIT_BGSAVE_START;
     if (server.repl_disable_tcp_nodelay) anetDisableTcpNoDelay(NULL, c->conn->fd); /* Non critical if it fails. */
@@ -1953,7 +1953,7 @@ void slotMigrationPipeWriteHandler(struct connection *conn) {
         }
     }
 
-    /* Remove the write handler and setup the pipe read handler. */
+    /* Remove the write handler and set up the pipe read handler. */
     connSetWriteHandler(conn, NULL);
     target->repl_data->repl_last_partial_write = 0;
     if (aeCreateFileEvent(server.el, server.slot_migration_pipe_read, AE_READABLE, slotMigrationPipeReadHandler, NULL) == AE_ERR) {
@@ -3687,7 +3687,7 @@ int replicaProcessPsyncReply(connection *conn) {
             }
         }
 
-        /* Setup the replication to continue. */
+        /* Set up the replication to continue. */
         sdsfree(reply);
         replicationResurrectCachedPrimary(conn);
 
@@ -4392,7 +4392,7 @@ void syncWithPrimary(connection *conn) {
             return;
         }
     } else {
-        /* Setup the non blocking download of the bulk file. */
+        /* Set up the non blocking download of the bulk file. */
         if (connSetReadHandler(conn, replicaReceiveRDBFromPrimaryToMemory) == C_ERR) {
             char conninfo[CONN_INFO_LEN];
             serverLog(LL_WARNING, "Can't create readable event for SYNC: %s (%s)", strerror(errno),
@@ -4944,7 +4944,7 @@ void establishPrimaryConnection(void) {
  * Turn the cached primary into the current primary, using the file descriptor
  * passed as argument as the socket for the new primary.
  *
- * This function is called when successfully setup a partial resynchronization
+ * This function is called when successfully setting up a partial resynchronization
  * so the stream of data that we'll receive will start from where this
  * primary left. */
 void replicationResurrectCachedPrimary(connection *conn) {

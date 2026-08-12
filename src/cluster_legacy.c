@@ -5862,7 +5862,7 @@ void clusterHandleReplicaFailover(void) {
     }
 
     /* If the previous failover attempt timeout and the retry time has
-     * elapsed, we can setup a new one. */
+     * elapsed, we can set up a new one. */
     if (auth_age > auth_retry_time) {
         server.cluster->failover_auth_time = now +
                                              delay +                         /* Fixed delay to let FAIL msg propagate. */

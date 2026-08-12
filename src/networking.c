@@ -3550,7 +3550,7 @@ void parseInlineBuffer(client *c) {
     /* Move querybuffer position to the next query in the buffer. */
     c->qb_pos += querylen + linefeed_chars;
 
-    /* Setup argv array on client structure */
+    /* Set up argv array on client structure */
     if (argc) {
         if (c->argv) zfree(c->argv);
         c->argv_len = argc;
@@ -3743,7 +3743,7 @@ static int parseMultibulk(client *c,
         c->multibulklen = ll;
         c->bulklen = -1;
 
-        /* Setup argv array */
+        /* Set up argv array */
         if (*argv) zfree(*argv);
         *argv_len = min(c->multibulklen, 1024);
         *argv = zmalloc(sizeof(robj *) * *argv_len);

@@ -108,6 +108,8 @@ proc raft_reply_ae_ack {fd ae_msg repl_offset} {
     return $last_index
 }
 
+source tests/support/cluster_raft.tcl
+
 test "Raft proto: connect to cluster bus and exchange HELLO" {
     start_server {overrides {cluster-enabled yes cluster-protocol raft}} {
         set port [srv 0 port]
@@ -209,6 +211,66 @@ test "Raft proto: joiner reverts to leader after timeout" {
     }
 }
 
+test "Raft proto: learner join, voter promotion, demotion, and forget" {
+    start_server {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 1000}} {
+        set cport [expr {[srv 0 port] + 10000}]
+        set self_id [R 0 CLUSTER MYID]
+        set self_shard [string repeat "1" 40]
+        set self_addr "127.0.0.1:[srv 0 port]@$cport,,tls-port=0,shard-id=$self_shard"
+        set leader_id [string repeat "2" 40]
+        set leader_addr "127.0.0.1:9997@19997,,tls-port=0,shard-id=[string repeat 3 40]"
+        set learner_id [string repeat "4" 40]
+        set learner_shard [string repeat "5" 40]
+        set learner_addr "127.0.0.1:9996@19996,,tls-port=0,shard-id=$learner_shard"
+
+        set fd [raft_connect 127.0.0.1 $cport]
+        raft_send $fd "HELLO $leader_id $leader_addr"
+        set reply [raft_recv $fd]
+        assert_match "HI *" $reply
+
+        set ae "AE $leader_id 1 0 0 2 2\n"
+        append ae "1 NODE_JOIN $self_id $self_addr voter\n"
+        append ae "1 NODE_JOIN $learner_id $learner_addr learner"
+        raft_send $fd $ae
+        set reply [raft_recv $fd]
+        assert_match "AE_ACK 1 1 2 *" $reply
+        assert_equal 1 [CI 0 cluster_size]
+        assert_match "*learner*" [raft_cluster_nodes_line [srv 0 client] $learner_id]
+        R 0 CLUSTER SAVECONFIG
+        set nodes_conf "[lindex [R 0 CONFIG GET dir] 1]/nodes.conf"
+        set fp [open $nodes_conf r]
+        set nodes_conf_text [read $fp]
+        close $fp
+        assert_match "*$learner_id *learner*" $nodes_conf_text
+
+        set ae "AE $leader_id 1 2 1 3 1\n"
+        append ae "1 ADD_VOTER $learner_id"
+        raft_send $fd $ae
+        set reply [raft_recv $fd]
+        assert_match "AE_ACK 1 1 3 *" $reply
+        assert_equal 2 [CI 0 cluster_size]
+        assert {![string match "*learner*" [raft_cluster_nodes_line [srv 0 client] $learner_id]]}
+
+        set ae "AE $leader_id 1 3 1 4 1\n"
+        append ae "1 DEL_VOTER $learner_id"
+        raft_send $fd $ae
+        set reply [raft_recv $fd]
+        assert_match "AE_ACK 1 1 4 *" $reply
+        assert_equal 1 [CI 0 cluster_size]
+        assert_match "*learner*" [raft_cluster_nodes_line [srv 0 client] $learner_id]
+
+        set ae "AE $leader_id 1 4 1 5 1\n"
+        append ae "1 NODE_FORGET $learner_id 0"
+        raft_send $fd $ae
+        set reply [raft_recv $fd]
+        assert_match "AE_ACK 1 1 5 *" $reply
+        assert_equal 1 [CI 0 cluster_size]
+        assert_equal "" [raft_cluster_nodes_line [srv 0 client] $learner_id]
+
+        close $fd
+    }
+}
+
 
 test "Raft proto: PRE_VOTE denied while leader lease is active" {
     start_server {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 1000}} {
@@ -286,7 +348,7 @@ test "Raft proto: PRE_VOTE denied when candidate log is stale" {
         assert_match "HI *" $reply
 
         set ae "AE $seed_id 1 0 0 1 1\n"
-        append ae "1 NODE_JOIN $joined_id $joined_addr"
+        append ae "1 NODE_JOIN $joined_id $joined_addr voter"
         raft_send $fd_seed $ae
         set reply [raft_recv $fd_seed]
         assert_match "AE_ACK 1 1 1 *" $reply
@@ -349,8 +411,8 @@ test "Raft proto: pre-vote timeout does not inflate term without quorum" {
             # Commit both nodes into the fake leader's log. The real node must
             # see the fake peer as joined, otherwise pre-vote requests are skipped.
             set ae "AE $fake_id 2 0 0 2 2\n"
-            append ae "2 NODE_JOIN $node_id 127.0.0.1:[srv 0 port]@[expr {[srv 0 port] + 10000}],,tls-port=0,shard-id=[string repeat t 40]\n"
-            append ae "2 NODE_JOIN $fake_id $fake_addr"
+            append ae "2 NODE_JOIN $node_id 127.0.0.1:[srv 0 port]@[expr {[srv 0 port] + 10000}],,tls-port=0,shard-id=[string repeat t 40] voter\n"
+            append ae "2 NODE_JOIN $fake_id $fake_addr voter"
             raft_send $leader_fd $ae
             set reply [raft_recv $leader_fd]
             assert_match "AE_ACK 2 1 2 *" $reply
@@ -419,7 +481,7 @@ test "Raft proto: REPL_OFFSETS updates node replication offset" {
         # AE <leader-id> <term> <prev-log-idx> <prev-log-term> <commit> <count>
         # Entry: <term> <type> <data>
         set ae "AE $leader_id 1 0 0 2 2\n"
-        append ae "1 NODE_JOIN $replica_id $replica_addr\n"
+        append ae "1 NODE_JOIN $replica_id $replica_addr voter\n"
         append ae "1 SET_REPLICA_OF $replica_id $leader_id $leader_shard"
         raft_send $fd $ae
 
@@ -534,6 +596,7 @@ test "Raft proto: leader sends REPL_OFFSETS after follower offset changes" {
 start_multiple_servers 2 {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 2000 loglevel debug}} {
     # Shared setup: form cluster and assign slots.
     R 0 CLUSTER MEET [srv -1 host] [srv -1 port]
+    raft_add_voter [srv 0 client] [R 1 CLUSTER MYID]
 
     wait_for_condition 50 100 {
         [CI 0 cluster_size] == 2 &&

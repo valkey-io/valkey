@@ -51,6 +51,7 @@ jobs:
     needs: determine-release-branches
     if: needs.determine-release-branches.outputs.has-branches == 'true' && github.repository == 'valkey-io/valkey'
     runs-on: ubuntu-latest
+    timeout-minutes: 1440
     permissions:
       actions: write
       contents: read
@@ -74,5 +75,9 @@ jobs:
           echo "$out"
 
           run_id=$(grep -oiE 'actions/runs/[0-9]+' <<<"$out" | grep -oE '[0-9]+' | head -1 || true)
+          if [ -z "$run_id" ]; then
+            echo "gh workflow run returned no run URL (rare 204 dispatch response) for $BRANCH" >&2
+            exit 1
+          fi
 
           gh run watch "$run_id" --repo "$REPO" --exit-status --compact --interval 300

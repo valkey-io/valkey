@@ -98,7 +98,7 @@ static void dictEntryDestructorSdsKeyEngineFunctionValue(void *entry) {
 }
 
 /* Must be case-insensitive to stay consistent with functionDictType (the
- * global function dict). Otherwise names differing only in case (e.g. "aaa"
+ * global function dict). Otherwise, names differing only in case (e.g. "aaa"
  * and "AAA") are stored as distinct entries here but collapse to one entry in
  * the global dict, which later trips an assertion in libraryUnlink. */
 dictType libraryFunctionDictType = {
@@ -374,7 +374,7 @@ static void libraryLink(functionsLibCtx *lib_ctx, functionLibInfo *li) {
 
 /* Takes all libraries from lib_ctx_src and add to lib_ctx_dst.
  * On collision, if 'replace' argument is true, replace the existing library with the new one.
- * Otherwise abort and leave 'lib_ctx_dst' and 'lib_ctx_src' untouched.
+ * Otherwise, abort and leave 'lib_ctx_dst' and 'lib_ctx_src' untouched.
  * Return C_OK on success and C_ERR if aborted. If C_ERR is returned, set a relevant
  * error message on the 'err' out parameter.
  *  */

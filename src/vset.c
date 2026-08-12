@@ -1087,7 +1087,7 @@ static inline vsetBucket *findBucket(rax *expiry_buckets, long long expiry, unsi
      * bucket is never repositioned below LLONG_MAX (its max entry keeps
      * bucket_ts == LLONG_MAX). That key equals the entry's own expiry, which the
      * strictly-greater ">" seek used for every other expiry can never match, so
-     * look the terminal bucket up by exact match. Otherwise locate the first
+     * look the terminal bucket up by exact match. Otherwise, locate the first
      * bucket whose key is larger than the entry's expiry. */
     if (expiry == LLONG_MAX) {
         raxSeek(&iter, "=", (unsigned char *)key, *key_len);

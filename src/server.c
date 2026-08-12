@@ -1926,6 +1926,8 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     }
 
     processIOThreadsWriteDone();
+    /* Write-done can update replica offsets after blockedBeforeSleep() ran. */
+    if (listLength(server.clients_waiting_acks)) processClientsWaitingReplicas();
 
     /* Record cron time in beforeSleep. This does not include the time consumed by AOF writing and IO writing above. */
     monotime cron_start_time_after_write = getMonotonicUs();
@@ -5214,7 +5216,10 @@ void addReplyCommandSubCommands(client *c,
                                 void (*reply_function)(client *, struct serverCommand *),
                                 int use_map) {
     if (!cmd->subcommands_ht) {
-        addReplySetLen(c, 0);
+        if (use_map)
+            addReplyMapLen(c, 0);
+        else
+            addReplyArrayLen(c, 0);
         return;
     }
 
@@ -6257,8 +6262,8 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                     "replicas_repl_buffer_peak:%zu\r\n", server.pending_repl_data.peak));
 
             if (server.repl_state == REPL_STATE_TRANSFER) {
-                int repl_transfer_size_stat;
-                int repl_transfer_read_stat;
+                off_t repl_transfer_size_stat;
+                off_t repl_transfer_read_stat;
                 if (atomic_load_explicit(&server.replica_bio_disk_save_state, memory_order_acquire) != REPL_BIO_DISK_SAVE_STATE_NONE) {
                     repl_transfer_size_stat = server.bio_repl_transfer_size;
                     repl_transfer_read_stat = server.bio_repl_transfer_read;
@@ -7393,6 +7398,13 @@ __attribute__((weak)) int main(int argc, char **argv) {
     if (server.cluster_enabled) {
         clusterInitLast();
     }
+
+    /* Sync lua_insecure_api_current with the final config value after all
+     * config sources (default, config file, command-line args) have been
+     * applied, so that updateLuaEnableInsecureApi() can correctly detect
+     * subsequent changes via CONFIG SET. */
+    server.lua_insecure_api_current = server.lua_enable_insecure_api;
+
     InitServerLast();
 
     if (!server.sentinel_mode) {

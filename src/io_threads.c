@@ -44,9 +44,9 @@ static void IOJobQueue_cleanup(IOJobQueue *jq) {
 static int IOJobQueue_isFull(const IOJobQueue *jq) {
     debugServerAssertWithInfo(NULL, NULL, inMainThread());
     size_t current_head = atomic_load_explicit(&jq->head, memory_order_relaxed);
-    /* We don't use memory_order_acquire for the tail due to performance reasons,
-     * In the worst case we will just assume wrongly the buffer is full and the main thread will do the job by itself. */
-    size_t current_tail = atomic_load_explicit(&jq->tail, memory_order_relaxed);
+    /* Use memory_order_acquire for the tail to pair with the memory_order_release in IOJobQueue_removeJob.
+     * This ensures the data/handler NULL stores are visible before we check the slot in IOJobQueue_push. */
+    size_t current_tail = atomic_load_explicit(&jq->tail, memory_order_acquire);
     size_t next_head = (current_head + 1) % jq->size;
     return next_head == current_tail;
 }
@@ -102,16 +102,21 @@ static int IOJobQueue_isEmpty(const IOJobQueue *jq) {
 }
 
 /* Removes the next job from the given job queue by advancing the tail index.
- * Called by the IO thread.
+ * Called by the IO thread (consumer).
  * The caller must ensure that the queue is not empty before calling this function.
- * This function uses relaxed memory order, so the caller need to use an release memory fence
- * after calling this function to make sure the updated tail is visible to the producer (main thread). */
+ * Uses memory_order_release on the tail store to ensure the data/handler NULL stores
+ * are visible to the producer (main thread) before the tail advance. */
 static void IOJobQueue_removeJob(IOJobQueue *jq) {
     debugServerAssertWithInfo(NULL, NULL, !inMainThread());
     size_t current_tail = atomic_load_explicit(&jq->tail, memory_order_relaxed);
     jq->ring_buffer[current_tail].data = NULL;
     jq->ring_buffer[current_tail].handler = NULL;
-    atomic_store_explicit(&jq->tail, (current_tail + 1) % jq->size, memory_order_relaxed);
+    /* Use memory_order_release to ensure the NULL stores above are visible to the
+     * producer (main thread) before the tail advance. Without this, on weakly-ordered
+     * architectures (e.g. ARM/aarch64), the tail store could be reordered before the
+     * data/handler stores, causing the main thread to see a "free" slot with stale
+     * non-NULL data, potentially triggering crashes or undefined behavior. */
+    atomic_store_explicit(&jq->tail, (current_tail + 1) % jq->size, memory_order_release);
 }
 
 /* Retrieves the next job handler and data from the job queue without removal.
@@ -251,9 +256,10 @@ static void *IOThreadMain(void *myid) {
             /* Remove the job after it was processed */
             IOJobQueue_removeJob(jq);
         }
-        /* Memory barrier to make sure the main thread sees the updated tail index.
-         * We do it once per loop and not per tail-update for optimization reasons.
-         * As the main-thread main concern is to check if the queue is empty, it's enough to do it once at the end. */
+        /* Note: IOJobQueue_removeJob uses memory_order_release on the tail store,
+         * ensuring visibility of each slot's cleared data before the tail advance.
+         * This additional fence ensures the main thread's IOJobQueue_isEmpty sees
+         * the final tail value promptly when spinning in drainIOThreadsQueue. */
         atomic_thread_fence(memory_order_release);
     }
     pthread_cleanup_pop(0);
@@ -367,8 +373,27 @@ void initIOThreads(void) {
 
 int trySendReadToIOThreads(client *c) {
     if (server.active_io_threads_num <= 1) return C_ERR;
-    /* If IO thread is already reading, return C_OK to make sure the main thread will not handle it. */
-    if (c->io_read_state != CLIENT_IDLE) return C_OK;
+    /* Fake/teardown clients may have no connection. */
+    if (!c->conn) return C_ERR;
+    /* Still reading on an IO thread: refresh postpone mask and leave it there. */
+    if (c->io_read_state == CLIENT_PENDING_IO) {
+        connSetPostponeUpdateState(c->conn, clientConnPostponeMaskFromIOState(c));
+        return C_OK;
+    }
+    /* Completed read waits for processIOThreadsReadDone; refresh postpone mask. */
+    if (c->io_read_state == CLIENT_COMPLETED_IO) {
+        connSetPostponeUpdateState(c->conn, clientConnPostponeMaskFromIOState(c));
+        return C_OK;
+    }
+    /* In-flight write: postpone READ on TLS/RDMA. On TCP let the main thread
+     * decide in readQueryFromClient (replicas only). */
+    if (c->io_write_state != CLIENT_IDLE) {
+        if (c->conn->type && c->conn->type->postpone_update_state) {
+            connSetPostponeUpdateState(c->conn, clientConnPostponeMaskFromIOState(c) | CONN_POSTPONE_READ);
+            return C_OK;
+        }
+        return C_ERR;
+    }
     /* For simplicity, don't offload replica clients reads as read traffic from replica is negligible */
     if (getClientType(c) == CLIENT_TYPE_REPLICA) return C_ERR;
     /* With Lua debug client we may call connWrite directly in the main thread */
@@ -396,7 +421,7 @@ int trySendReadToIOThreads(client *c) {
     c->read_flags |= isReplicatedClient(c) ? READ_FLAGS_REPLICATED : 0;
 
     c->io_read_state = CLIENT_PENDING_IO;
-    connSetPostponeUpdateState(c->conn, 1);
+    connSetPostponeUpdateState(c->conn, clientConnPostponeMaskFromIOState(c));
     IOJobQueue_push(jq, ioThreadReadQueryFromClient, c);
     c->flag.pending_read = 1;
     listLinkNodeTail(server.clients_pending_io_read, &c->pending_read_list_node);
@@ -408,8 +433,11 @@ int trySendReadToIOThreads(client *c) {
  * or C_ERR if the client is not eligible for offloading. */
 int trySendWriteToIOThreads(client *c) {
     if (server.active_io_threads_num <= 1) return C_ERR;
+    if (!c->conn) return C_ERR;
     /* The I/O thread is already writing for this client. */
     if (c->io_write_state != CLIENT_IDLE) return C_OK;
+    /* Serialize with an in-flight read (PENDING or COMPLETED). */
+    if (c->io_read_state != CLIENT_IDLE) return C_ERR;
     /* Nothing to write */
     if (!clientHasPendingReplies(c)) return C_ERR;
     /* For simplicity, avoid offloading non-online replicas */
@@ -466,9 +494,9 @@ int trySendWriteToIOThreads(client *c) {
     serverAssert(c->bufpos > 0 || c->io_last_bufpos > 0 || is_replica);
 
     /* The main-thread will update the client state after the I/O thread completes the write. */
-    connSetPostponeUpdateState(c->conn, 1);
     c->write_flags = is_replica ? WRITE_FLAGS_IS_REPLICA : 0;
     c->io_write_state = CLIENT_PENDING_IO;
+    connSetPostponeUpdateState(c->conn, clientConnPostponeMaskFromIOState(c));
 
     IOJobQueue_push(jq, ioThreadWriteToClient, c);
     return C_OK;
@@ -670,7 +698,7 @@ int trySendAcceptToIOThreads(connection *conn) {
     c->io_read_state = CLIENT_PENDING_IO;
     c->flag.pending_read = 1;
     listLinkNodeTail(server.clients_pending_io_read, &c->pending_read_list_node);
-    connSetPostponeUpdateState(c->conn, 1);
+    connSetPostponeUpdateState(c->conn, clientConnPostponeMaskFromIOState(c));
     server.stat_io_accept_offloaded++;
     IOJobQueue_push(job_queue, ioThreadAccept, c);
 

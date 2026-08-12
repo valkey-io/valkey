@@ -601,9 +601,9 @@ static void registerSSLEvent(tls_connection *conn) {
     }
 }
 
-static void postPoneUpdateSSLState(connection *conn_, int postpone) {
+static void postPoneUpdateSSLState(connection *conn_, int postpone_mask) {
     tls_connection *conn = (tls_connection *)conn_;
-    if (postpone) {
+    if (postpone_mask) {
         conn->flags |= TLS_CONN_FLAG_POSTPONE_UPDATE_STATE;
     } else {
         conn->flags &= ~TLS_CONN_FLAG_POSTPONE_UPDATE_STATE;
@@ -627,7 +627,7 @@ static void updatePendingData(tls_connection *conn) {
 }
 
 void updateSSLPendingFlag(tls_connection *conn) {
-    if (SSL_pending(conn->ssl) > 0) {
+    if (conn->ssl && SSL_pending(conn->ssl) > 0) {
         conn->flags |= TLS_CONN_FLAG_HAS_PENDING;
     } else {
         conn->flags &= ~TLS_CONN_FLAG_HAS_PENDING;
@@ -681,7 +681,7 @@ static void updateSSLState(connection *conn_) {
 }
 
 static int getCertFieldByName(X509 *cert, const char *field, char *out, size_t outlen) {
-    if (!cert || !field || !out) return 0;
+    if (!cert || !field || !out || outlen == 0) return 0;
 
     int nid = -1;
 
@@ -693,10 +693,33 @@ static int getCertFieldByName(X509 *cert, const char *field, char *out, size_t o
 
     if (nid == -1) return 0;
 
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+    const X509_NAME *subject = X509_get_subject_name(cert);
+#else
     X509_NAME *subject = X509_get_subject_name(cert);
+#endif
     if (!subject) return 0;
 
-    return X509_NAME_get_text_by_NID(subject, nid, out, outlen) > 0;
+    /* X509_NAME_get_text_by_NID is deprecated in OpenSSL 4.0 */
+    int idx = X509_NAME_get_index_by_NID(subject, nid, -1);
+    if (idx < 0) return 0;
+
+    const X509_NAME_ENTRY *entry = X509_NAME_get_entry(subject, idx);
+    if (!entry) return 0;
+
+    const ASN1_STRING *data = X509_NAME_ENTRY_get_data(entry);
+    if (!data) return 0;
+
+    const unsigned char *str = ASN1_STRING_get0_data(data);
+    int len = ASN1_STRING_length(data);
+    if (!str || len <= 0) return 0;
+
+    /* Copy to output buffer, ensuring null termination */
+    size_t copy_len = (size_t)len < outlen - 1 ? (size_t)len : outlen - 1;
+    memcpy(out, str, copy_len);
+    out[copy_len] = '\0';
+
+    return 1;
 }
 
 sds tlsGetPeerUsername(connection *conn_) {
@@ -1113,6 +1136,9 @@ static ssize_t connTLSSyncWrite(connection *conn_, char *ptr, ssize_t size, long
         unsetBlockingTimeout(conn);
     }
 
+    if (ret < 0) {
+        conn->c.last_errno = errno;
+    }
     return ret;
 }
 
@@ -1128,6 +1154,9 @@ static ssize_t connTLSSyncRead(connection *conn_, char *ptr, ssize_t size, long 
         unsetBlockingTimeout(conn);
     }
 
+    if (ret < 0) {
+        conn->c.last_errno = errno;
+    }
     return ret;
 }
 
@@ -1165,6 +1194,9 @@ exit:
     if (!blocking) {
         unsetBlockingTimeout(conn);
     }
+    if (nread < 0) {
+        conn->c.last_errno = errno;
+    }
     return nread;
 }
 
@@ -1178,14 +1210,27 @@ static int tlsHasPendingData(void) {
 }
 
 static int tlsProcessPendingData(void) {
-    listIter li;
     listNode *ln;
 
     int processed = 0;
-    listRewind(pending_list, &li);
-    while ((ln = listNext(&li))) {
+    /* Pop each connection off the list before handling it. A handler may
+     * synchronously free another pending connection (e.g. CLIENT KILL ->
+     * freeClient -> connTLSClose -> listDelNode), so we must not hold an
+     * iterator into a node that could be freed out from under us.
+     *
+     * Connections with buffered data re-add themselves to the tail, so the
+     * length captured on entry bounds the loop and guarantees termination. */
+    unsigned long remaining = listLength(pending_list);
+    while (remaining-- > 0 && (ln = listFirst(pending_list)) != NULL) {
         tls_connection *conn = listNodeValue(ln);
-        if (conn->flags & TLS_CONN_FLAG_POSTPONE_UPDATE_STATE) continue;
+        listDelNode(pending_list, ln);
+        conn->pending_list_node = NULL;
+        if (conn->flags & TLS_CONN_FLAG_POSTPONE_UPDATE_STATE) {
+            /* Not handled now, but keep it pending for a later call. */
+            listAddNodeTail(pending_list, conn);
+            conn->pending_list_node = listLast(pending_list);
+            continue;
+        }
         tlsHandleEvent(conn, AE_READABLE);
         processed++;
     }

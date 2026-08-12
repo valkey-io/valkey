@@ -517,6 +517,10 @@ void debugCommand(client *c) {
             "    When set to 1, slot migrations will be prevented from pausing on the source node.",
             "SLOTMIGRATION PREVENT-FAILOVER <0|1>",
             "    When set to 1, slot migrations will be prevented from performing the slot-level failover on the target node.",
+            "FORCE-FREE-PRIMARY-ASYNC <0|1>",
+            "    Force freeClient on primary to use async path.",
+            "PROTECT-CLIENT <id>",
+            "    Protect a client from being freed, forcing deferred close.",
             NULL};
         addExtendedReplyHelp(c, help, clusterDebugCommandExtendedHelp());
     } else if (!strcasecmp(c->argv[1]->ptr, "segfault")) {
@@ -1052,6 +1056,21 @@ void debugCommand(client *c) {
     } else if (!strcasecmp(c->argv[1]->ptr, "client-enforce-reply-list") && c->argc == 3) {
         server.debug_client_enforce_reply_list = atoi(c->argv[2]->ptr);
         addReply(c, shared.ok);
+    } else if (!strcasecmp(c->argv[1]->ptr, "protect-client") && c->argc == 3) {
+        char *endptr;
+        errno = 0;
+        uint64_t id = strtoull(c->argv[2]->ptr, &endptr, 10);
+        if (errno == ERANGE || endptr == c->argv[2]->ptr || *endptr != '\0') {
+            addReplyError(c, "Invalid client id");
+            return;
+        }
+        client *target = lookupClientByID(id);
+        if (target) {
+            protectClient(target);
+            addReply(c, shared.ok);
+        } else {
+            addReplyError(c, "No such client");
+        }
     } else if (!handleDebugClusterCommand(c)) {
         addReplySubcommandSyntaxError(c);
         return;
@@ -1945,7 +1964,11 @@ void logCurrentClient(client *cc, const char *title) {
         key = getDecodedObject(cc->argv[1]);
         val = dbFind(cc->db, key->ptr);
         if (val) {
-            serverLog(LL_WARNING, "key '%s' found in DB containing the following object:", (char *)key->ptr);
+            if (server.hide_user_data_from_log) {
+                serverLog(LL_WARNING, "key '*redacted*' found in DB containing the following object:");
+            } else {
+                serverLog(LL_WARNING, "key '%s' found in DB containing the following object:", (char *)key->ptr);
+            }
             serverLogObjectDebugInfo(val);
         }
         decrRefCount(key);

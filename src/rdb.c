@@ -2359,11 +2359,12 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error) {
 
                     /* search for duplicate records */
                     sds field = sdstrynewlen(fstr, flen);
-                    if (!field || !hashtableAdd(dupSearchHashtable, field) ||
-                        !lpSafeToAdd(lp, (size_t)flen + vlen)) {
+                    if (!field || !lpSafeToAdd(lp, (size_t)flen + vlen) ||
+                        !hashtableAdd(dupSearchHashtable, field)) {
                         rdbReportCorruptRDB("Hash zipmap with dup elements, or big length (%u)", flen);
                         hashtableRelease(dupSearchHashtable);
                         sdsfree(field);
+                        lpFree(lp);
                         zfree(encoded);
                         o->ptr = NULL;
                         decrRefCount(o);
@@ -2454,6 +2455,18 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error) {
                 decrRefCount(o);
                 return NULL;
             }
+            /* See the RDB_TYPE_ZSET_LISTPACK case: a NAN score would crash the
+             * server when the zset is converted to a skiplist. The legacy
+             * ziplist format is converted to a listpack above, so apply the
+             * same NAN check on the resulting listpack. */
+            if (!zzlValidateScores(lp)) {
+                rdbReportCorruptRDB("Zset ziplist with NAN score detected");
+                zfree(lp);
+                zfree(encoded);
+                o->ptr = NULL;
+                decrRefCount(o);
+                return NULL;
+            }
 
             zfree(o->ptr);
             o->type = OBJ_ZSET;
@@ -2474,6 +2487,17 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error) {
             if (deep_integrity_validation) server.stat_dump_payload_sanitizations++;
             if (!lpValidateIntegrityAndDups(encoded, encoded_len, deep_integrity_validation, 1)) {
                 rdbReportCorruptRDB("Zset listpack integrity check failed.");
+                zfree(encoded);
+                o->ptr = NULL;
+                decrRefCount(o);
+                return NULL;
+            }
+            /* A NAN score would crash the server when the zset is converted to
+             * a skiplist (zslInsertNode asserts the score is not NAN). The
+             * skiplist RDB format rejects NAN scores at load time; do the same
+             * for the listpack format. */
+            if (!zzlValidateScores(encoded)) {
+                rdbReportCorruptRDB("Zset listpack with NAN score detected");
                 zfree(encoded);
                 o->ptr = NULL;
                 decrRefCount(o);
@@ -2693,7 +2717,11 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error) {
 
             streamCG *cgroup = streamCreateCG(s, cgname, sdslen(cgname), &cg_id, cg_offset);
             if (cgroup == NULL) {
-                rdbReportCorruptRDB("Duplicated consumer group name %s", cgname);
+                if (server.hide_user_data_from_log) {
+                    rdbReportCorruptRDB("Duplicated consumer group name");
+                } else {
+                    rdbReportCorruptRDB("Duplicated consumer group name %s", cgname);
+                }
                 decrRefCount(o);
                 sdsfree(cgname);
                 return NULL;
@@ -2805,13 +2833,18 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error) {
                     /* Set the NACK consumer, that was left to NULL when
                      * loading the global PEL. Then set the same shared
                      * NACK structure also in the consumer-specific PEL. */
+                    if (nack->consumer && nack->consumer != consumer) {
+                        rdbReportCorruptRDB("NACK already assigned to a different consumer, "
+                                            "shared NACKs across consumers are not valid");
+                        decrRefCount(o);
+                        return NULL;
+                    }
                     nack->consumer = consumer;
                     if (!raxTryInsert(consumer->pel, rawid, sizeof(rawid), nack, NULL)) {
                         rdbReportCorruptRDB("Duplicated consumer PEL entry "
                                             " loading a stream consumer "
                                             "group");
                         decrRefCount(o);
-                        streamFreeNACK(nack);
                         return NULL;
                     }
                 }
@@ -3411,7 +3444,13 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
              * in an RDB file, instead we will silently discard it and
              * continue loading. */
             if (error == RDB_LOAD_ERR_EMPTY_KEY) {
-                if (empty_keys_skipped++ < 10) serverLog(LL_NOTICE, "rdbLoadObject skipping empty key: %s", key);
+                if (empty_keys_skipped++ < 10) {
+                    if (server.hide_user_data_from_log) {
+                        serverLog(LL_NOTICE, "rdbLoadObject skipping empty key");
+                    } else {
+                        serverLog(LL_NOTICE, "rdbLoadObject skipping empty key: %s", key);
+                    }
+                }
                 sdsfree(key);
             } else if (error == RDB_LOAD_ERR_UNKNOWN_TYPE) {
                 sdsfree(key);
@@ -3453,7 +3492,11 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
                     added = dbAddRDBLoad(db, key, &val);
                     serverAssert(added);
                 } else {
-                    serverLog(LL_WARNING, "RDB has duplicated key '%s' in DB %d", key, db->id);
+                    if (server.hide_user_data_from_log) {
+                        serverLog(LL_WARNING, "RDB has duplicated key in DB %d", db->id);
+                    } else {
+                        serverLog(LL_WARNING, "RDB has duplicated key '%s' in DB %d", key, db->id);
+                    }
                     serverPanic("Duplicated key found in RDB file");
                 }
             }

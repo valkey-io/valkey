@@ -426,4 +426,75 @@ start_server {tags {"dump"}} {
             assert_match {*WRONGPASS*} $err
         }
     } {} {external:skip}
+
+    test {RESTORE rejects zipmap with overlong field length encoding (CVE-2026-25243)} {
+        # Craft a RESTORE payload containing a hash-zipmap (RDB type 9) where
+        # the field-name length is encoded using the 5-byte format (0xfe prefix)
+        # even though the actual length (3) fits in a single byte.
+        #
+        # The bug: zipmapValidateIntegrity() walks the zipmap using the actual
+        # encoded size (5 bytes for 0xfe prefix), but zipmapNext() recalculates
+        # the encoding size via zipmapEncodeLength(NULL, len) which returns 1
+        # for lengths < 254.  This 4-byte mismatch causes zipmapNext() to read
+        # at wrong offsets during the hash conversion loop after validation,
+        # leading to invalid memory access (heap buffer over-read).
+        #
+        # Zipmap layout (2 entries, 24 bytes):
+        #   02              - zmlen (2 entries)
+        #   fe 03000000     - field length = 3, overlong 5-byte encoding
+        #   616263          - "abc"
+        #   03              - value length = 3
+        #   00              - free = 0
+        #   646566          - "def"
+        #   03              - field length = 3 (normal, padding entry)
+        #   676869          - "ghi"
+        #   03              - value length = 3
+        #   00              - free = 0
+        #   6a6b6c          - "jkl"
+        #   ff              - ZIPMAP_END
+        #
+        # Post-patch: zipmapValidateIntegrity() rejects (l < 254 && s != 1).
+        #
+        # RESTORE payload: <type=09><rdb-string-len=18><zipmap><rdb-ver=5000><crc=0>
+
+        r debug set-skip-checksum-validation 1
+        set payload "\x09\x18\x02\xfe\x03\x00\x00\x00\x61\x62\x63\x03\x00\x64\x65\x66\x03\x67\x68\x69\x03\x00\x6a\x6b\x6c\xff\x50\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+        catch {r restore zipmap_test 0 $payload} err
+        r debug set-skip-checksum-validation 0
+        assert_match {*Bad data format*} $err
+    } {} {needs:debug}
+
+    test {RESTORE rejects stream with shared NACK across consumers} {
+        # Create a valid stream with consumer group and two consumers
+        r DEL mystream
+        r XADD mystream 1-1 f v
+        r XADD mystream 2-1 f v
+        r XGROUP CREATE mystream grp 0
+        r XREADGROUP GROUP grp consumer1 COUNT 1 STREAMS mystream ">"
+        r XREADGROUP GROUP grp consumer2 COUNT 1 STREAMS mystream ">"
+
+        set dump [r DUMP mystream]
+        r DEL mystream
+
+        # In the dump, consumer2's PEL entry contains message ID 2-1.
+        # Replace it with 1-1 (same as consumer1's) to create a shared NACK.
+        # Message ID 2-1 in big-endian: \x00\x00\x00\x00\x00\x00\x00\x02\x00\x00\x00\x00\x00\x00\x00\x01
+        # Message ID 1-1 in big-endian: \x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x01
+        # Find the last occurrence of ID 2-1 (in consumer2's PEL) and replace with 1-1
+        set id_2_1 "\x00\x00\x00\x00\x00\x00\x00\x02\x00\x00\x00\x00\x00\x00\x00\x01"
+        set id_1_1 "\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x01"
+
+        # Find the last occurrence (consumer2's PEL entry, not the global PEL)
+        set last_pos [string last $id_2_1 $dump]
+        if {$last_pos == -1} {
+            fail "Could not find message ID 2-1 in dump"
+        }
+        set corrupt_dump [string replace $dump $last_pos [expr {$last_pos + 15}] $id_1_1]
+
+        # Skip CRC validation since we modified the payload
+        r debug set-skip-checksum-validation 1
+        catch {r RESTORE mystream 0 $corrupt_dump} err
+        r debug set-skip-checksum-validation 0
+        assert_match {*Bad data format*} $err
+    } {} {needs:debug}
 }

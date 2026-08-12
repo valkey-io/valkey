@@ -1436,3 +1436,93 @@ test "Chained replicas can disconnect protected RDB channel client when using du
         }
     }
 }
+
+start_server {tags {"dual-channel-replication external:skip"}} {
+    set replica [srv 0 client]
+    set replica_host [srv 0 host]
+    set replica_port [srv 0 port]
+    start_server {} {
+        set primary [srv 0 client]
+        set primary_host [srv 0 host]
+        set primary_port [srv 0 port]
+
+        # Configure primary with delayed sync to observe handshake state
+        $primary config set repl-diskless-sync yes
+        $primary config set repl-diskless-sync-delay 1000
+        $primary config set dual-channel-replication-enabled yes
+
+        # Configure replica with announced IP
+        $replica config set dual-channel-replication-enabled yes
+        $replica config set replica-announce-ip "5.5.5.5"
+
+        test "dual-channel-replication rdb-channel reports replica-announce-ip" {
+            $replica replicaof $primary_host $primary_port
+
+            # Wait for replica to enter wait_bgsave state (rdb-channel established)
+            wait_for_condition 50 1000 {
+                [string match *state=wait_bgsave* [$primary info replication]]
+            } else {
+                fail "Replica does not enter wait_bgsave state"
+            }
+
+            # Verify the rdb-channel shows the announced IP, not connection IP
+            set info [$primary info replication]
+            assert_match "*ip=5.5.5.5,*type=rdb-channel*" $info
+        }
+
+        # Allow sync to complete
+        $primary config set repl-diskless-sync-delay 0
+
+        test "dual-channel-replication sync completes with replica-announce-ip" {
+            verify_replica_online $primary 0 500
+            wait_for_condition 50 1000 {
+                [string match *connected_slaves:1* [$primary info]]
+            } else {
+                fail "Replica failed to sync"
+            }
+        }
+    }
+}
+
+start_server {tags {"dual-channel-replication external:skip"}} {
+    set replica [srv 0 client]
+    set replica_host [srv 0 host]
+    set replica_port [srv 0 port]
+    set replica_log [srv 0 stdout]
+    start_server {} {
+        set primary [srv 0 client]
+        set primary_host [srv 0 host]
+        set primary_port [srv 0 port]
+
+        $primary config set dual-channel-replication-enabled yes
+        $primary config set repl-diskless-sync yes
+        $primary config set repl-diskless-sync-delay 0
+        $replica config set dual-channel-replication-enabled yes
+
+        # A hash with field-level TTLs (HEXPIRE) is hashtable-encoded with
+        # volatile fields, which can only be serialized in RDB version >= 80.
+        # The primary must learn the replica's version over the RDB connection
+        # to pick a new enough RDB version; otherwise it falls back to RDB 11
+        # and the full sync fails with "Can't store key ... in RDB version 11".
+        $primary hset myhash field1 value1 field2 value2 field3 value3
+        $primary hexpire myhash 3600 FIELDS 3 field1 field2 field3
+        assert_encoding hashtable myhash
+
+        test "Dual channel full sync succeeds with hash field expiration data" {
+            set sync_full [s 0 sync_full]
+
+            $replica replicaof $primary_host $primary_port
+            wait_for_sync $replica
+            wait_replica_online $primary
+
+            # A full (RDB) sync must have happened.
+            assert_equal [expr $sync_full + 1] [s 0 sync_full]
+            # The primary never failed to serialize the HFE hash.
+            verify_no_log_message 0 "*Can't store key*" 0
+
+            # The hash and its field TTLs made it across.
+            assert_equal [lsort [$replica hgetall myhash]] [lsort {field1 value1 field2 value2 field3 value3}]
+            assert_range [lindex [$replica httl myhash FIELDS 1 field1] 0] 1 3600
+        }
+    }
+}

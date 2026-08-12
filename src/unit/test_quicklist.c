@@ -2257,6 +2257,13 @@ int test_quicklistCompressAndDecomressQuicklistPlainNodeLargeThanUINT32MAX(int a
 
     if (!(flags & UNIT_TEST_LARGE_MEMORY)) return 0;
 
+#ifdef VALKEY_ADDRESS_SANITIZER
+    /* Skip under ASAN: compression requires both original (4GB) and output
+     * buffer (~4GB) simultaneously, totaling ~8GB. With ASAN's 2-3x memory
+     * overhead, peak usage reaches ~16-24GB, exceeding GitHub runner limits. */
+    return 0;
+#endif
+
 #if ULONG_MAX >= 0xffffffffffffffff
 
     size_t sz = (1ull << 32);

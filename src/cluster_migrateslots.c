@@ -761,7 +761,6 @@ void clusterCommandSyncSlotsFinish(client *c) {
         return;
     }
 
-    addReply(c, shared.ok);
     slotMigrationJob *job = clusterLookupMigrationJob(name);
     if (!job) {
         addReplyError(c, "No such slot migration job");
@@ -778,6 +777,7 @@ void clusterCommandSyncSlotsFinish(client *c) {
         return;
     }
 
+    addReply(c, shared.ok);
     forceCommandPropagation(c, PROPAGATE_REPL | PROPAGATE_AOF);
     finishSlotMigrationJob(job, target_state, message);
 }
@@ -936,9 +936,10 @@ void clusterUpdateSlotImportsOnOwnershipChange(void) {
             finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_FAILED,
                                    "Slots were unexpectedly assigned to myself "
                                    "during import");
+        } else {
+            finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_FAILED,
+                                   "Slots are no longer owned by source node");
         }
-        finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_FAILED,
-                               "Slots are no longer owned by source node");
     }
 }
 
@@ -1300,6 +1301,13 @@ void slotExportConnectHandler(connection *conn) {
  * the job as private data. */
 int connectSlotExportJob(slotMigrationJob *job) {
     clusterNode *n = clusterLookupNode(job->target_node_name, CLUSTER_NAMELEN);
+    if (n == NULL) {
+        serverLog(LL_WARNING,
+                  "Slot migration %s: target node %.40s not found in cluster, "
+                  "aborting connection attempt.",
+                  job->description, job->target_node_name);
+        return C_ERR;
+    }
     int port = getNodeDefaultReplicationPort(n);
     serverLog(LL_NOTICE, "Connecting slot migration %s (ip: %s, port %d)",
               job->description,
@@ -1407,9 +1415,9 @@ sds generateSyncSlotsEstablishCommand(slotMigrationJob *job) {
     listRewind(job->slot_ranges, &li);
     while ((ln = listNext(&li))) {
         slotRange *range = (slotRange *)ln->value;
-        sdscatfmt(result, "$%i\r\n%i\r\n$%i\r\n%i\r\n",
-                  digits10(range->start_slot), range->start_slot,
-                  digits10(range->end_slot), range->end_slot);
+        result = sdscatfmt(result, "$%i\r\n%i\r\n$%i\r\n%i\r\n",
+                           digits10(range->start_slot), range->start_slot,
+                           digits10(range->end_slot), range->end_slot);
     }
     return result;
 }
@@ -1446,8 +1454,8 @@ int slotExportTryDoPause(slotMigrationJob *job) {
         return C_ERR;
     }
     serverLog(LL_NOTICE,
-              "Pausing writes to allow slot migration %s to finalize failover.",
-              job->description);
+              "Pausing writes (remaining_repl_size is %lld) to allow slot migration %s to finalize failover.",
+              job->client->reply_bytes, job->description);
     job->mf_end = mstime() + server.cluster_mf_timeout * CLUSTER_MF_PAUSE_MULT;
     pauseActions(PAUSE_DURING_SLOT_MIGRATION, job->mf_end,
                  PAUSE_ACTIONS_CLIENT_WRITE_SET);
@@ -1993,10 +2001,11 @@ void proceedWithSlotMigration(slotMigrationJob *job) {
                 status = proceedWithSlotExportJobConnecting(job, &completed);
             }
             if (status == C_ERR) {
+                const char *conn_err = job->conn ? connGetLastError(job->conn) : "target node not found";
                 sds status_msg =
                     sdscatfmt(sdsempty(),
                               "Unable to connect to target node: %s",
-                              connGetLastError(job->conn));
+                              conn_err);
                 finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_FAILED,
                                        status_msg);
                 sdsfree(status_msg);
@@ -2143,6 +2152,7 @@ void resetSlotMigrationJob(slotMigrationJob *job) {
     /* Only one of client or conn should be set. */
     serverAssert(!job->client || !job->conn);
     if (job->client) {
+        job->client->slot_migration_job = NULL;
         freeClientAsync(job->client);
         job->client = NULL;
     } else if (job->conn) {

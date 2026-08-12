@@ -121,13 +121,41 @@ start_cluster 3 6 {tags {external:skip cluster}} {
     }
 
     test "Make sure the replicas always get the different ranks" {
-        if {[s -3 role] == "master"} {
-            verify_log_message -3 "*Start of election*rank #0*" 0
-            verify_log_message -6 "*Start of election*rank #1*" 0
-        } else {
-            verify_log_message -3 "*Start of election*rank #1*" 0
-            verify_log_message -6 "*Start of election*rank #0*" 0
+        set log3 [exec cat [srv -3 stdout]]
+        set log6 [exec cat [srv -6 stdout]]
+    
+        set srv3_has_rank0 [string match "*Start of election*(rank #0*" $log3]
+        set srv3_has_rank1 [string match "*Start of election*(rank #1*" $log3]
+        set srv6_has_rank0 [string match "*Start of election*(rank #0*" $log6]
+        set srv6_has_rank1 [string match "*Start of election*(rank #1*" $log6]
+    
+        # One should have rank #0, other should have rank #1 (different ranks)
+        if {!(($srv3_has_rank0 && $srv6_has_rank1) || ($srv3_has_rank1 && $srv6_has_rank0))} {
+            fail "Replicas should have different ranks: srv3_rank0=$srv3_has_rank0, srv3_rank1=$srv3_has_rank1, srv6_rank0=$srv6_has_rank0, srv6_rank1=$srv6_has_rank1"
         }
     }
 
+} ;# start_cluster
+
+proc test_small_timeout {timeout} {
+    test "Failover with cluster-node-time set to $timeout" {
+        R 3 config set cluster-node-timeout $timeout
+
+        pause_process [srv 0 pid]
+        wait_for_condition 1000 50 {
+            [s -3 role] == "master"
+        } else {
+            fail "Failover did not happen"
+        }
+
+        resume_process [srv 0 pid]
+    }
+}
+
+start_cluster 3 1 {tags {external:skip cluster}} {
+    test_small_timeout 30
+} ;# start_cluster
+
+start_cluster 3 1 {tags {external:skip cluster}} {
+    test_small_timeout 0
 } ;# start_cluster

@@ -178,7 +178,7 @@ configEnum rdb_version_check_enum[] = {{"strict", RDB_VERSION_CHECK_STRICT},
                                        {NULL, 0}};
 
 configEnum bgsave_method_enum[] = {{"fork", RDB_BGSAVE_TYPE_FORK},
-                                   {"thread", RDB_BGSAVE_TYPE_THREAD},
+                                   {"forkless", RDB_BGSAVE_TYPE_FORKLESS},
                                    {NULL, 0}};
 
 /* Output buffer limits presets. */

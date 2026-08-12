@@ -46,7 +46,7 @@
 #include "module.h"
 #include "cluster.h"
 #include "cluster_migrateslots.h"
-#include "threadsave.h"
+#include "forkless.h"
 
 #include <math.h>
 #include <fcntl.h>
@@ -2994,7 +2994,7 @@ void startSaving(int rdbflags) {
             subevent = VALKEYMODULE_SUBEVENT_PERSISTENCE_SYNC_AOF_START;
         }
     } else {
-        if (getpid() != server.pid || (rdbflags & RDBFLAGS_THREADSAVE)) {
+        if (getpid() != server.pid || (rdbflags & RDBFLAGS_FORKLESS_SAVE)) {
             subevent = VALKEYMODULE_SUBEVENT_PERSISTENCE_RDB_START;
         } else {
             subevent = VALKEYMODULE_SUBEVENT_PERSISTENCE_SYNC_RDB_START;
@@ -3877,7 +3877,7 @@ void saveCommand(client *c) {
     }
 }
 
-/* BGSAVE [SCHEDULE [FORK|THREAD]] | BGSAVE [FORK|THREAD] | BGSAVE CANCEL */
+/* BGSAVE [SCHEDULE [FORK|FORKLESS]] | BGSAVE [FORK|FORKLESS] | BGSAVE CANCEL */
 void bgsaveCommand(client *c) {
     int schedule = 0;
     int chosen_save_type = RDB_BGSAVE_TYPE_NONE;
@@ -3888,8 +3888,8 @@ void bgsaveCommand(client *c) {
      *             Instead of returning an error, the BGSAVE is scheduled to run
      *             when the AOF rewrite completes.
      * - FORK: uses fork-based save (default)
-     * - THREAD: uses thread-based save
-     * SCHEDULE can be combined with FORK or THREAD to specify the save method. */
+     * - FORKLESS: uses forkless save
+     * SCHEDULE can be combined with FORK or FORKLESS to specify the save method. */
     for (int i = 1; i < c->argc; i++) {
         char *arg = objectGetVal(c->argv[i]);
         if (!strcasecmp(arg, "schedule")) {
@@ -3905,10 +3905,10 @@ void bgsaveCommand(client *c) {
                 serverLog(LL_NOTICE, "Background saving (fork) will be aborted due to user request");
                 killRDBChild();
                 addReplyStatus(c, "Background saving cancelled");
-            } else if (isThreadBgsaveInProgress()) {
-                /* There is an ongoing threadsave */
-                serverLog(LL_NOTICE, "Background saving (thread) will be aborted due to user request");
-                threadsaveCancel();
+            } else if (isForklessSaveInProgress()) {
+                /* There is an ongoing forkless save */
+                serverLog(LL_NOTICE, "Background saving (forkless) will be aborted due to user request");
+                forklessSaveCancel();
                 addReplyStatus(c, "Background saving cancelled");
             } else if (server.rdb_bgsave_scheduled != RDB_BGSAVE_TYPE_NONE) {
                 serverLog(LL_NOTICE, "Scheduled background saving will be cancelled due to user request");
@@ -3920,12 +3920,12 @@ void bgsaveCommand(client *c) {
             return;
         } else if (!strcasecmp(arg, "fork")) {
             chosen_save_type = RDB_BGSAVE_TYPE_FORK;
-        } else if (!strcasecmp(arg, "thread")) {
+        } else if (!strcasecmp(arg, "forkless")) {
             if (!server.forkless_options_supported) {
-                addReplyError(c, "BGSAVE THREAD requires starting the server with forkless-options-supported enabled");
+                addReplyError(c, "BGSAVE FORKLESS requires starting the server with forkless-options-supported enabled");
                 return;
             }
-            chosen_save_type = RDB_BGSAVE_TYPE_THREAD;
+            chosen_save_type = RDB_BGSAVE_TYPE_FORKLESS;
         } else {
             addReplyErrorObject(c, shared.syntaxerr);
             return;
@@ -3934,12 +3934,12 @@ void bgsaveCommand(client *c) {
 
     /* If user didn't explicitly specify save type, let the system choose */
     if (chosen_save_type == RDB_BGSAVE_TYPE_NONE) {
-        chosen_save_type = (server.default_bgsave_method == RDB_BGSAVE_TYPE_THREAD && server.forkless_options_supported && moduleAllDatatypesHandleThreadsave())
-                               ? RDB_BGSAVE_TYPE_THREAD
+        chosen_save_type = (server.default_bgsave_method == RDB_BGSAVE_TYPE_FORKLESS && server.forkless_options_supported && moduleAllDatatypesHandleForklessSave())
+                               ? RDB_BGSAVE_TYPE_FORKLESS
                                : RDB_BGSAVE_TYPE_FORK;
-    } else if (chosen_save_type == RDB_BGSAVE_TYPE_THREAD && !moduleAllDatatypesHandleThreadsave()) {
-        addReplyError(c, "Can't use threadsave: one or more loaded modules have not declared "
-                         "VALKEYMODULE_OPTIONS_HANDLE_THREADSAVE");
+    } else if (chosen_save_type == RDB_BGSAVE_TYPE_FORKLESS && !moduleAllDatatypesHandleForklessSave()) {
+        addReplyError(c, "Can't use forkless save: one or more loaded modules have not declared "
+                         "VALKEYMODULE_OPTIONS_HANDLE_FORKLESS_SAVE");
         return;
     }
 
@@ -3962,7 +3962,7 @@ void bgsaveCommand(client *c) {
                              "Use BGSAVE SCHEDULE in order to schedule a BGSAVE whenever "
                              "possible.");
         }
-    } else if (chosen_save_type == RDB_BGSAVE_TYPE_THREAD && threadsaveToDisk(server.rdb_filename) == C_OK) {
+    } else if (chosen_save_type == RDB_BGSAVE_TYPE_FORKLESS && forklessSaveToDisk(server.rdb_filename) == C_OK) {
         addReplyStatus(c, "Background saving started");
     } else if (rdbSaveBackground(REPLICA_REQ_NONE, server.rdb_filename, rsiptr, RDBFLAGS_NONE) == C_OK) {
         addReplyStatus(c, "Background saving started");

@@ -52,7 +52,7 @@
 #include "module.h"
 #include "scripting_engine.h"
 #include "util.h"
-#include "threadsave.h"
+#include "forkless.h"
 
 #include "eval.h"
 #include "bgiteration.h"
@@ -880,15 +880,15 @@ int isForkBgsaveInProgress(void) {
     return server.child_type == CHILD_TYPE_RDB;
 }
 
-int isThreadBgsaveInProgress(void) {
-    return server.cur_bgsave_type == RDB_BGSAVE_TYPE_THREAD;
+int isForklessSaveInProgress(void) {
+    return server.cur_bgsave_type == RDB_BGSAVE_TYPE_FORKLESS;
 }
 
 int isSaveInProgress(void) {
-    return isForkBgsaveInProgress() || isThreadBgsaveInProgress();
+    return isForkBgsaveInProgress() || isForklessSaveInProgress();
 }
 
-/* Returns true if a background save (fork or thread) or child process is
+/* Returns true if a background save (fork or forkless) or child process is
  * active. */
 int hasActiveSaveOrChild(void) {
     return hasActiveChildProcess() || isSaveInProgress();
@@ -1659,7 +1659,7 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
     /* Start a scheduled AOF rewrite if this was requested by the user while
      * a BGSAVE was in progress. We don't start the rewrite if there is an
      * active child process (to avoid multiple concurrent fork children) or if
-     * a threadsave is in progress (to avoid potential copy-on-write). */
+     * a forkless save is in progress (to avoid potential copy-on-write). */
     if (!hasActiveSaveOrChild() && server.aof_rewrite_scheduled && !aofRewriteLimited()) {
         rewriteAppendOnlyFileBackground();
     }
@@ -1684,9 +1684,9 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
                 serverLog(LL_NOTICE, "%d changes in %d seconds. Saving...", sp->changes, (int)sp->seconds);
                 rdbSaveInfo rsi, *rsiptr;
                 rsiptr = rdbPopulateSaveInfo(&rsi);
-                /* Use threadsave if configured, supported, and modules allow it, otherwise use fork */
-                if (server.default_bgsave_method == RDB_BGSAVE_TYPE_THREAD && server.forkless_options_supported && moduleAllDatatypesHandleThreadsave()) {
-                    threadsaveToDisk(server.rdb_filename);
+                /* Use forkless save if configured, supported, and modules allow it, otherwise use fork */
+                if (server.default_bgsave_method == RDB_BGSAVE_TYPE_FORKLESS && server.forkless_options_supported && moduleAllDatatypesHandleForklessSave()) {
+                    forklessSaveToDisk(server.rdb_filename);
                 } else {
                     rdbSaveBackground(REPLICA_REQ_NONE, server.rdb_filename, rsiptr, RDBFLAGS_NONE);
                 }
@@ -1695,7 +1695,7 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
         }
 
         /* Trigger an AOF rewrite if needed. Avoid starting while another child process
-         * is active. Also avoid when Threadsave is in progress to prevent potential copy-on-write. */
+         * is active. Also avoid when forkless save is in progress to prevent potential copy-on-write. */
         if (server.aof_state == AOF_ON && !hasActiveSaveOrChild() && server.aof_rewrite_perc &&
             server.aof_current_size > server.aof_rewrite_min_size) {
             long long base = server.aof_rewrite_base_size ? server.aof_rewrite_base_size : 1;
@@ -1770,8 +1770,8 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
     if (!hasActiveSaveOrChild() && server.rdb_bgsave_scheduled &&
         (server.unixtime - server.lastbgsave_try > CONFIG_BGSAVE_RETRY_DELAY || server.lastbgsave_status == C_OK)) {
         int result;
-        if (server.rdb_bgsave_scheduled == RDB_BGSAVE_TYPE_THREAD) {
-            result = threadsaveToDisk(server.rdb_filename);
+        if (server.rdb_bgsave_scheduled == RDB_BGSAVE_TYPE_FORKLESS) {
+            result = forklessSaveToDisk(server.rdb_filename);
         } else {
             rdbSaveInfo rsi, *rsiptr;
             rsiptr = rdbPopulateSaveInfo(&rsi);
@@ -4968,9 +4968,9 @@ int finishShutdown(void) {
          * but OS will close this fd when process exits. */
         rdbRemoveTempFile(server.child_pid, 0);
     }
-    if (isThreadBgsaveInProgress()) {
+    if (isForklessSaveInProgress()) {
         serverLog(LL_WARNING, "There is a thread saving an .rdb. Cancelling it!");
-        threadsaveCancel();
+        forklessSaveCancel();
     }
 
     /* Kill module child if there is one. */
@@ -6455,7 +6455,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
         const char *current_bgsave_type;
         switch (server.cur_bgsave_type) {
         case RDB_BGSAVE_TYPE_FORK: current_bgsave_type = "fork"; break;
-        case RDB_BGSAVE_TYPE_THREAD: current_bgsave_type = "thread"; break;
+        case RDB_BGSAVE_TYPE_FORKLESS: current_bgsave_type = "forkless"; break;
         default: current_bgsave_type = "none"; break;
         }
 
@@ -6463,7 +6463,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
         const char *last_bgsave_type;
         switch (server.lastbgsave_type) {
         case RDB_BGSAVE_TYPE_FORK: last_bgsave_type = "fork"; break;
-        case RDB_BGSAVE_TYPE_THREAD: last_bgsave_type = "thread"; break;
+        case RDB_BGSAVE_TYPE_FORKLESS: last_bgsave_type = "forkless"; break;
         default: last_bgsave_type = "none"; break;
         }
 
@@ -6551,13 +6551,13 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                     "loading_eta_seconds:%jd\r\n", (intmax_t)eta));
         }
 
-        /* Threadsave / bgiteration metrics */
+        /* Forkless / bgiteration metrics */
         bgIterator *iter = NULL;
         bgIteratorStatus status = {0};
         long long estimated_seconds_remaining = -1;
         long long current_item_millis = -1;
 
-        if (onValkeyMainThread() && (iter = bgIteratorFind(THREADSAVE_FILE_ITER_NAME)) != NULL) {
+        if (onValkeyMainThread() && (iter = bgIteratorFind(FORKLESS_SAVE_FILE_ITER_NAME)) != NULL) {
             bgIteratorGetStatus(iter, &status);
 
             estimated_seconds_remaining = bgIteratorEstimateRemainingSeconds(&status);
@@ -6565,8 +6565,8 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
         }
 
         info = sdscatprintf(info,
-                            "threadsave_current_item_millis:%lld\r\n"
-                            "threadsave_estimated_seconds_remaining:%lld\r\n",
+                            "forkless_current_item_millis:%lld\r\n"
+                            "forkless_estimated_seconds_remaining:%lld\r\n",
                             current_item_millis,
                             estimated_seconds_remaining);
     }
@@ -6920,18 +6920,18 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "eventloop_duration_max:%llu\r\n", server.duration_stats[EL_DURATION_TYPE_EL].max,
                 "eventloop_cmd_per_cycle_max:%lld\r\n", server.el_cmd_cnt_max));
 
-        /* Threadsave debug metrics */
+        /* Forkless debug metrics */
         {
             bgIteratorStatus status = {0};
             if (onValkeyMainThread()) {
-                bgIterator *iter = bgIteratorFind(THREADSAVE_FILE_ITER_NAME);
+                bgIterator *iter = bgIteratorFind(FORKLESS_SAVE_FILE_ITER_NAME);
                 if (iter != NULL) bgIteratorGetStatus(iter, &status);
             }
             info = sdscatprintf(info,
-                                "threadsave_current_queue_length:%lu\r\n"
-                                "threadsave_queue_length_target:%lu\r\n"
-                                "threadsave_dbentries_queued:%lu\r\n"
-                                "threadsave_dbentries_processed:%lu\r\n",
+                                "forkless_current_queue_length:%lu\r\n"
+                                "forkless_queue_length_target:%lu\r\n"
+                                "forkless_dbentries_queued:%lu\r\n"
+                                "forkless_dbentries_processed:%lu\r\n",
                                 status.queue_length,
                                 status.queue_length_target,
                                 status.dbentries_queued,

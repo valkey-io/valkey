@@ -70,7 +70,7 @@
 #include "io_threads.h"
 #include "scripting_engine.h"
 #include "cluster_migrateslots.h"
-#include "threadsave.h"
+#include "forkless.h"
 #include <dlfcn.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
@@ -7407,15 +7407,15 @@ int moduleVerifyAllAllowAtomicSlotMigrationOrReply(client *c) {
 }
 
 /* Returns 0 if any module with registered data types did not declare
- * VALKEYMODULE_OPTIONS_HANDLE_THREADSAVE, in which case threadsave should be
+ * VALKEYMODULE_OPTIONS_HANDLE_FORKLESS_SAVE, in which case forkless save should be
  * blocked because the module's RDB save callbacks may not be thread-safe. */
-int moduleAllDatatypesHandleThreadsave(void) {
+int moduleAllDatatypesHandleForklessSave(void) {
     dictIterator *di = dictGetIterator(modules);
     dictEntry *de;
 
     while ((de = dictNext(di)) != NULL) {
         struct ValkeyModule *module = dictGetVal(de);
-        if (listLength(module->types) && !(module->options & VALKEYMODULE_OPTIONS_HANDLE_THREADSAVE)) {
+        if (listLength(module->types) && !(module->options & VALKEYMODULE_OPTIONS_HANDLE_FORKLESS_SAVE)) {
             dictReleaseIterator(di);
             return 0;
         }
@@ -12848,7 +12848,7 @@ int moduleLoad(const char *path, void **module_argv, int module_argc, int is_loa
     void *handle;
 
     if (isSaveInProgress()) {
-        serverLog(LL_WARNING, "Module %s failed to load: cannot load during threadsave.", path);
+        serverLog(LL_WARNING, "Module %s failed to load: cannot load during forkless save.", path);
         return C_ERR;
     }
 
@@ -13769,7 +13769,7 @@ int VM_RdbLoad(ValkeyModuleCtx *ctx, ValkeyModuleRdbStream *stream, int flags) {
     /* Kill existing RDB fork as it is saving outdated data. Also killing it
      * will prevent COW memory issue. */
     if (isForkBgsaveInProgress()) killRDBChild();
-    if (isThreadBgsaveInProgress()) threadsaveCancel();
+    if (isForklessSaveInProgress()) forklessSaveCancel();
 
     /* Kill existing slot migration fork as it is saving outdated data. Also killing it
      * will prevent COW memory issue. */

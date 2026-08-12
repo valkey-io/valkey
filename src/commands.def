@@ -7170,7 +7170,7 @@ struct COMMAND_STRUCT ACL_Subcommands[] = {
 commandHistory BGSAVE_History[] = {
 {"3.2.2","Added the `SCHEDULE` option."},
 {"8.1.0","Added the `CANCEL` option."},
-{"10.0.0","Added the `FORK` and `THREAD` options. `SCHEDULE` can be combined with `FORK` or `THREAD`."},
+{"9.2.0","Added the `FORK` and `FORKLESS` options. `SCHEDULE` can be combined with `FORK` or `FORKLESS`."},
 };
 #endif
 
@@ -7187,13 +7187,13 @@ commandHistory BGSAVE_History[] = {
 /* BGSAVE save_type argument table */
 struct COMMAND_ARG BGSAVE_save_type_Subargs[] = {
 {MAKE_ARG("fork",ARG_TYPE_PURE_TOKEN,-1,"FORK",NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("thread",ARG_TYPE_PURE_TOKEN,-1,"THREAD",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("forkless",ARG_TYPE_PURE_TOKEN,-1,"FORKLESS",NULL,NULL,CMD_ARG_NONE,0,NULL)},
 };
 
 /* BGSAVE argument table */
 struct COMMAND_ARG BGSAVE_Args[] = {
 {MAKE_ARG("schedule",ARG_TYPE_PURE_TOKEN,-1,"SCHEDULE",NULL,"3.2.2",CMD_ARG_OPTIONAL,0,NULL)},
-{MAKE_ARG("save-type",ARG_TYPE_ONEOF,-1,NULL,NULL,"10.0.0",CMD_ARG_OPTIONAL,2,NULL),.subargs=BGSAVE_save_type_Subargs},
+{MAKE_ARG("save-type",ARG_TYPE_ONEOF,-1,NULL,NULL,"9.2.0",CMD_ARG_OPTIONAL,2,NULL),.subargs=BGSAVE_save_type_Subargs},
 {MAKE_ARG("cancel",ARG_TYPE_PURE_TOKEN,-1,"CANCEL",NULL,"8.1.0",CMD_ARG_OPTIONAL,0,NULL)},
 };
 

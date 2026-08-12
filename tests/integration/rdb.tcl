@@ -232,7 +232,7 @@ start_server_and_kill_it [list "dir" $server_path] {
 }
 
 start_server {overrides {forkless-options-supported yes save ""}} {
-    foreach bgsave_type {"" "fork" "thread"} {
+    foreach bgsave_type {"" "fork" "forkless"} {
         test "Test FLUSHALL aborts bgsave $bgsave_type" {
             # 5000 keys with 1ms sleep per key should take 5 second
             r config set rdb-key-save-delay 1000
@@ -242,7 +242,7 @@ start_server {overrides {forkless-options-supported yes save ""}} {
             assert_equal [s rdb_bgsave_in_progress] 1
             
             # Verify we're testing the right save type while it's running
-            set expected_type [expr {$bgsave_type eq "thread" ? "thread" : "fork"}]
+            set expected_type [expr {$bgsave_type eq "forkless" ? "forkless" : "fork"}]
             assert_equal [s rdb_current_bgsave_type] $expected_type
             
             r flushall
@@ -259,7 +259,7 @@ start_server {overrides {forkless-options-supported yes save ""}} {
         }
     }
 
-    foreach bgsave_type {"" "fork" "thread"} {
+    foreach bgsave_type {"" "fork" "forkless"} {
         test "bgsave $bgsave_type resets the change counter" {
             r config set rdb-key-save-delay 0
             r bgsave {*}$bgsave_type
@@ -271,12 +271,12 @@ start_server {overrides {forkless-options-supported yes save ""}} {
             assert_equal [s rdb_changes_since_last_save] 0
             
             # Verify we tested the right save type
-            set expected_type [expr {$bgsave_type eq "thread" ? "thread" : "fork"}]
+            set expected_type [expr {$bgsave_type eq "forkless" ? "forkless" : "fork"}]
             assert_equal [s rdb_last_bgsave_type] $expected_type
         }
     }
 
-    foreach bgsave_type {"fork" "thread"} {
+    foreach bgsave_type {"fork" "forkless"} {
         test "bgsave $bgsave_type metrics are correct after success" {
             set saves_before [s rdb_saves]
             populate 100 "" 16
@@ -293,7 +293,7 @@ start_server {overrides {forkless-options-supported yes save ""}} {
         }
     }
 
-    foreach bgsave_type {"fork" "thread"} {
+    foreach bgsave_type {"fork" "forkless"} {
         test "bgsave $bgsave_type metrics are correct after failure" {
             set saves_before [s rdb_saves]
             populate 1000 "" 16
@@ -322,7 +322,7 @@ start_server {overrides {forkless-options-supported yes save ""}} {
         }
     }
 
-    foreach bgsave_type {"" "fork" "thread"} {
+    foreach bgsave_type {"" "fork" "forkless"} {
         test "bgsave cancel aborts $bgsave_type save" {
             # Generating RDB will take some 100 seconds
             r config set rdb-key-save-delay 1000000
@@ -336,16 +336,16 @@ start_server {overrides {forkless-options-supported yes save ""}} {
             }
             
             # Verify we're testing the right save type
-            set expected_type [expr {$bgsave_type eq "thread" ? "thread" : "fork"}]
+            set expected_type [expr {$bgsave_type eq "forkless" ? "forkless" : "fork"}]
             assert_equal [s rdb_current_bgsave_type] $expected_type
             
-            if {$bgsave_type ne "thread"} {
+            if {$bgsave_type ne "forkless"} {
                 set fork_child_pid [get_child_pid 0]
             }
             
             assert {[r bgsave cancel] eq {Background saving cancelled}}
             
-            if {$bgsave_type ne "thread"} {
+            if {$bgsave_type ne "forkless"} {
                 set temp_rdb [file join [lindex [r config get dir] 1] temp-${fork_child_pid}.rdb]
                 # Temp rdb must be deleted
                 wait_for_condition 50 100 {
@@ -367,7 +367,7 @@ start_server {overrides {forkless-options-supported yes save ""}} {
 }
 
 start_server {overrides {forkless-options-supported yes save ""}} {
-    test "thread bgsave contains expired keys from when save started" {
+    test "forkless bgsave contains expired keys from when save started" {
         
         # Set two keys that expire together
         r set k1 v1
@@ -376,13 +376,13 @@ start_server {overrides {forkless-options-supported yes save ""}} {
         r expireat k1 [expr {$curr_time + 2}]
         r expireat k2 [expr {$curr_time + 2}]
         
-        # Start slow thread save
+        # Start slow forkless save
         r config set rdb-key-save-delay 10000000
-        r bgsave thread
+        r bgsave forkless
         wait_for_condition 50 100 {
             [s rdb_bgsave_in_progress] == 1
         } else {
-            fail "thread bgsave did not start"
+            fail "forkless bgsave did not start"
         }
         
         # Let both keys expire
@@ -391,7 +391,7 @@ start_server {overrides {forkless-options-supported yes save ""}} {
         # Serialize k1 in the foreground by touching it
         r set k1 v11
         
-        # Complete threadsave so k2 will be serialized in background
+        # Complete forkless save so k2 will be serialized in background
         r config set rdb-key-save-delay 0
         waitForBgsave r
         
@@ -406,7 +406,7 @@ start_server {overrides {forkless-options-supported yes save ""}} {
 }
 
 start_server {overrides {forkless-options-supported yes save ""}} {
-    test "FLUSHDB during single-db thread bgsave causes save to fail" {
+    test "FLUSHDB during single-db forkless bgsave causes save to fail" {
         
         # Populate database with complex dataset
         createComplexDataset r 100
@@ -415,13 +415,13 @@ start_server {overrides {forkless-options-supported yes save ""}} {
         set initial_keys [r dbsize]
         assert {$initial_keys > 0}
         
-        # Start threadsave with very slow save (high delay per key)
+        # Start forkless save with very slow save (high delay per key)
         r config set rdb-key-save-delay 10000
-        r bgsave thread
+        r bgsave forkless
         wait_for_condition 50 100 {
             [s rdb_bgsave_in_progress] == 1
         } else {
-            fail "thread bgsave did not start"
+            fail "forkless bgsave did not start"
         }
         
         # FLUSHDB should cancel the save
@@ -434,17 +434,17 @@ start_server {overrides {forkless-options-supported yes save ""}} {
         wait_for_condition 50 100 {
             [s rdb_bgsave_in_progress] == 0
         } else {
-            fail "thread bgsave did not abort"
+            fail "forkless bgsave did not abort"
         }
         
         # Verify save failed
         assert_equal [s rdb_last_bgsave_status] err
-        assert_equal [s rdb_last_bgsave_type] thread
+        assert_equal [s rdb_last_bgsave_type] forkless
     } {} {needs:debug}
 }
 
 start_server {overrides {forkless-options-supported yes save ""}} {
-    test "FLUSHDB during multi-db thread bgsave causes save to fail" {
+    test "FLUSHDB during multi-db forkless bgsave causes save to fail" {
         
         # Populate multiple databases
         for {set i 0} {$i < 100} {incr i} {
@@ -456,16 +456,16 @@ start_server {overrides {forkless-options-supported yes save ""}} {
         }
         r select 0
         
-        # Start slow thread save
+        # Start slow forkless save
         r config set rdb-key-save-delay 10000
-        r bgsave thread
+        r bgsave forkless
         wait_for_condition 50 100 {
             [s rdb_bgsave_in_progress] == 1
         } else {
-            fail "thread bgsave did not start"
+            fail "forkless bgsave did not start"
         }
         
-        # Give threadsave time to start iterating
+        # Give forkless save time to start iterating
         after 100
         
         # FLUSHDB on db 1 while save is running - this should terminate the save
@@ -479,16 +479,16 @@ start_server {overrides {forkless-options-supported yes save ""}} {
         wait_for_condition 50 100 {
             [s rdb_bgsave_in_progress] == 0
         } else {
-            fail "thread bgsave did not abort"
+            fail "forkless bgsave did not abort"
         }
         
-        # Threadsave should have failed
+        # Forkless save should have failed
         assert_equal [s rdb_last_bgsave_status] err
     } {} {needs:debug}
 }
 
 start_server {overrides {forkless-options-supported yes save ""}} {
-    test "multiple databases modifications during thread bgsave" {
+    test "multiple databases modifications during forkless bgsave" {
         
         # Populate 5 databases with all data types
         for {set db 0} {$db < 5} {incr db} {
@@ -497,13 +497,13 @@ start_server {overrides {forkless-options-supported yes save ""}} {
         }
         r select 0
         
-        # Start slow threadsave
+        # Start slow forkless save
         r config set rdb-key-save-delay 10000
-        r bgsave thread
+        r bgsave forkless
         wait_for_condition 50 100 {
             [s rdb_bgsave_in_progress] == 1
         } else {
-            fail "thread bgsave did not start"
+            fail "forkless bgsave did not start"
         }
         
         # Modify keys in all databases while save is running
@@ -579,19 +579,19 @@ start_server {overrides {forkless-options-supported yes save ""}} {
 }
 
 start_server {overrides {forkless-options-supported yes save ""}} {
-    test "modify new keys during thread bgsave" {
+    test "modify new keys during forkless bgsave" {
         
         # Populate database with all data types
         createComplexDatasetForVerification r 20
         set original_keys [r dbsize]
         
-        # Start threadsave with very slow save (high delay per key)
+        # Start forkless save with very slow save (high delay per key)
         r config set rdb-key-save-delay 10000
-        r bgsave thread
+        r bgsave forkless
         wait_for_condition 50 100 {
             [s rdb_bgsave_in_progress] == 1
         } else {
-            fail "thread bgsave did not start"
+            fail "forkless bgsave did not start"
         }
         
         # Create new keys of all data types while save is running
@@ -663,7 +663,7 @@ start_server {overrides {forkless-options-supported yes save ""}} {
 }
 
 start_server {overrides {forkless-options-supported yes save ""}} {
-    test "SWAPDB during thread bgsave" {
+    test "SWAPDB during forkless bgsave" {
         
         # Populate 5 databases with all data types
         for {set db 0} {$db < 5} {incr db} {
@@ -672,13 +672,13 @@ start_server {overrides {forkless-options-supported yes save ""}} {
         }
         r select 0
         
-        # Start slow threadsave
+        # Start slow forkless save
         r config set rdb-key-save-delay 10000
-        r bgsave thread
+        r bgsave forkless
         wait_for_condition 50 100 {
             [s rdb_bgsave_in_progress] == 1
         } else {
-            fail "thread bgsave did not start"
+            fail "forkless bgsave did not start"
         }
         
         # Keep swapping databases while save is running
@@ -729,7 +729,7 @@ start_server {overrides {forkless-options-supported yes save ""}} {
 }
 
 start_server {overrides {forkless-options-supported yes save ""}} {
-    test "delete all keys after SWAPDB during thread bgsave" {
+    test "delete all keys after SWAPDB during forkless bgsave" {
         
         # Populate 5 databases with all data types
         for {set db 0} {$db < 5} {incr db} {
@@ -738,13 +738,13 @@ start_server {overrides {forkless-options-supported yes save ""}} {
         }
         r select 0
         
-        # Start slow threadsave
+        # Start slow forkless save
         r config set rdb-key-save-delay 10000
-        r bgsave thread
+        r bgsave forkless
         wait_for_condition 50 100 {
             [s rdb_bgsave_in_progress] == 1
         } else {
-            fail "thread bgsave did not start"
+            fail "forkless bgsave did not start"
         }
         
         # Swap databases with fixed permutation [2, 3, 4, 0, 1]
@@ -789,18 +789,18 @@ start_server {overrides {forkless-options-supported yes save ""}} {
 }
 
 start_server {overrides {forkless-options-supported yes save ""}} {
-    test "deleting keys during thread bgsave" {
+    test "deleting keys during forkless bgsave" {
         
         # Populate database with all data types
         createComplexDatasetForVerification r 20
         
-        # Start threadsave with very slow save (high delay per key)
+        # Start forkless save with very slow save (high delay per key)
         r config set rdb-key-save-delay 10000
-        r bgsave thread
+        r bgsave forkless
         wait_for_condition 50 100 {
             [s rdb_bgsave_in_progress] == 1
         } else {
-            fail "thread bgsave did not start"
+            fail "forkless bgsave did not start"
         }
         
         # Delete all keys in the database
@@ -834,7 +834,7 @@ start_server {overrides {forkless-options-supported yes save ""}} {
 }
 
 start_server {overrides {forkless-options-supported yes save ""}} {
-    test "blocking commands during thread bgsave" {
+    test "blocking commands during forkless bgsave" {
         
         # Create initial dataset with 100 keys
         createComplexDatasetForVerification r 100
@@ -867,7 +867,7 @@ start_server {overrides {forkless-options-supported yes save ""}} {
         
         # Start save with slow speed
         r config set rdb-key-save-delay 100000
-        r bgsave thread
+        r bgsave forkless
         
         wait_for_condition 50 100 {
             [s rdb_bgsave_in_progress] == 1
@@ -979,7 +979,7 @@ start_server {overrides {forkless-options-supported yes save ""}} {
 }
 
 start_server {overrides {forkless-options-supported yes save ""}} {
-    test "TTL expiration during thread bgsave" {
+    test "TTL expiration during forkless bgsave" {
         
         # Create initial dataset with 100 keys
         set num_keys 100
@@ -995,7 +995,7 @@ start_server {overrides {forkless-options-supported yes save ""}} {
         }
         
         # Start save and wait for completion
-        r bgsave thread
+        r bgsave forkless
         waitForBgsave r
         
         # Reload from RDB
@@ -1055,14 +1055,14 @@ start_server {overrides {forkless-options-supported yes save ""}} {
 }
 
 start_server {overrides {forkless-options-supported yes save ""}} {
-    test "evictions during thread bgsave" {
+    test "evictions during forkless bgsave" {
         
         # Create initial dataset
         createComplexDatasetForVerification r 1000
         
         # Start save with stopped speed
         r config set rdb-key-save-delay 10000
-        r bgsave thread
+        r bgsave forkless
         
         wait_for_condition 50 100 {
             [s rdb_bgsave_in_progress] == 1
@@ -1105,14 +1105,14 @@ start_server {overrides {forkless-options-supported yes save ""}} {
 }
 
 start_server {overrides {forkless-options-supported yes save ""}} {
-    test "comprehensive modifications on all data types during thread bgsave" {
+    test "comprehensive modifications on all data types during forkless bgsave" {
         
         # Create initial dataset with 1000 keys
         createComplexDatasetForVerification r 1000
         
         # Start save with slow speed to keep it running during modifications
         r config set rdb-key-save-delay 1000000
-        r bgsave thread        
+        r bgsave forkless        
         wait_for_condition 50 100 {
             [s rdb_bgsave_in_progress] == 1
         } else {
@@ -1167,7 +1167,7 @@ start_server {overrides {forkless-options-supported yes save ""}} {
 }
 
 start_server {overrides {forkless-options-supported yes save ""}} {
-    test "store key deletion by georadius during thread bgsave" {
+    test "store key deletion by georadius during forkless bgsave" {
         
         # Create initial dataset with geo data
         createComplexDatasetForVerification r 1000
@@ -1178,7 +1178,7 @@ start_server {overrides {forkless-options-supported yes save ""}} {
         
         # Start save with stopped speed
         r config set rdb-key-save-delay 10000
-        r bgsave thread
+        r bgsave forkless
         
         wait_for_condition 50 100 {
             [s rdb_bgsave_in_progress] == 1
@@ -1213,7 +1213,7 @@ start_server {overrides {forkless-options-supported yes save ""}} {
 }
 
 start_server {overrides {forkless-options-supported yes save ""}} {
-    test "transactions during thread bgsave" {
+    test "transactions during forkless bgsave" {
         
         # Populate 5 databases
         for {set db 0} {$db < 5} {incr db} {
@@ -1241,7 +1241,7 @@ start_server {overrides {forkless-options-supported yes save ""}} {
         
         # Start save with slow speed
         r config set rdb-key-save-delay 10000
-        r bgsave thread
+        r bgsave forkless
         
         wait_for_condition 50 100 {
             [s rdb_bgsave_in_progress] == 1
@@ -1338,8 +1338,8 @@ start_server {overrides {forkless-options-supported yes save ""}} {
 }
 
 start_server {overrides {forkless-options-supported yes save ""}} {
-    foreach first_type {fork thread} {
-        foreach second_type {fork thread} {
+    foreach first_type {fork forkless} {
+        foreach second_type {fork forkless} {
             test "$first_type bgsave blocks $second_type bgsave" {
                 r config set rdb-key-save-delay 1000000
                 populate 100 "" 16
@@ -1558,7 +1558,7 @@ start_server [list overrides [list "dir" $server_path "dbfilename" "scriptbackup
 }
 
 start_server {overrides {forkless-options-supported yes save ""}} {
-    foreach bgsave_type {"" "fork" "thread"} {
+    foreach bgsave_type {"" "fork" "forkless"} {
         test "failed bgsave $bgsave_type prevents writes" {
             # Make sure the server saves an RDB on shutdown
             r config set save "900 1"
@@ -1568,11 +1568,11 @@ start_server {overrides {forkless-options-supported yes save ""}} {
             r set x x
             r bgsave {*}$bgsave_type
             
-            if {$bgsave_type ne "thread"} {
+            if {$bgsave_type ne "forkless"} {
                 set pid1 [get_child_pid 0]
                 catch {exec kill -9 $pid1}
             } else {
-                # For threadsave, cancel it to simulate failure
+                # For forkless save, cancel it to simulate failure
                 r bgsave cancel
             }
             waitForBgsave r
@@ -1643,34 +1643,34 @@ start_server {} {
 
 
 start_server {overrides {forkless-options-supported yes save ""}} {
-    test {default-bgsave-method can be set to thread with forkless-options-supported} {
-        r config set default-bgsave-method thread
-        assert_equal [lindex [r config get default-bgsave-method] 1] "thread"
+    test {default-bgsave-method can be set to forkless with forkless-options-supported} {
+        r config set default-bgsave-method forkless
+        assert_equal [lindex [r config get default-bgsave-method] 1] "forkless"
     }
 }
 
 start_server {} {
-    test {BGSAVE THREAD requires forkless-options-supported} {
-        catch {r bgsave thread} err
+    test {BGSAVE FORKLESS requires forkless-options-supported} {
+        catch {r bgsave forkless} err
         assert_match "*forkless-options-supported*" $err
     }
 }
 
 start_server {overrides {forkless-options-supported yes save ""}} {
-    test {BGSAVE THREAD works with forkless-options-supported} {
-        r bgsave thread
+    test {BGSAVE FORKLESS works with forkless-options-supported} {
+        r bgsave forkless
         waitForBgsave r
-        assert_equal [s rdb_last_bgsave_type] "thread"
+        assert_equal [s rdb_last_bgsave_type] "forkless"
     }
 }
 
-start_server {overrides {forkless-options-supported yes default-bgsave-method thread}} {
-    test {BGSAVE uses thread when default-bgsave-method is thread} {
+start_server {overrides {forkless-options-supported yes default-bgsave-method forkless}} {
+    test {BGSAVE uses forkless when default-bgsave-method is forkless} {
         r set key value
         set result [r bgsave]
         assert_match "*Background saving started*" $result
         waitForBgsave r
-        assert_equal [s rdb_last_bgsave_type] "thread"
+        assert_equal [s rdb_last_bgsave_type] "forkless"
     }
 }
 

@@ -661,8 +661,8 @@ typedef enum {
 /* RDB bgsave type. */
 typedef enum {
     RDB_BGSAVE_TYPE_NONE = 0,
-    RDB_BGSAVE_TYPE_FORK = 1,  /* Fork-based bgsave. */
-    RDB_BGSAVE_TYPE_THREAD = 2 /* Thread-based bgsave (threadsave). */
+    RDB_BGSAVE_TYPE_FORK = 1,    /* Fork-based bgsave. */
+    RDB_BGSAVE_TYPE_FORKLESS = 2 /* Forkless bgsave. */
 } rdbBgsaveType;
 
 /* Keyspace changes notification classes. Every class is associated with a
@@ -2089,7 +2089,7 @@ struct valkeyServer {
     int rdb_key_save_delay;               /* Delay in microseconds between keys while
                                            * writing aof or rdb. (for testings). negative
                                            * value means fractions of microseconds (on average). */
-    int default_bgsave_method;            /* Default bgsave method: RDB_BGSAVE_TYPE_FORK or RDB_BGSAVE_TYPE_THREAD */
+    int default_bgsave_method;            /* Default bgsave method: RDB_BGSAVE_TYPE_FORK or RDB_BGSAVE_TYPE_FORKLESS */
     int key_load_delay;                   /* Delay in microseconds between keys while
                                            * loading aof or rdb. (for testings). negative
                                            * value means fractions of microseconds (on average). */
@@ -3311,7 +3311,7 @@ int hasActiveChildProcess(void);
 int isSaveInProgress(void);
 int hasActiveSaveOrChild(void);
 int isForkBgsaveInProgress(void);
-int isThreadBgsaveInProgress(void);
+int isForklessSaveInProgress(void);
 void resetChildState(void);
 int isMutuallyExclusiveChildType(int type);
 

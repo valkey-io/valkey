@@ -16,8 +16,8 @@
                 "Added the `CANCEL` option."
             ],
             [
-                "10.0.0",
-                "Added the `FORK` and `THREAD` options. `SCHEDULE` can be combined with `FORK` or `THREAD`."
+                "9.2.0",
+                "Added the `FORK` and `FORKLESS` options. `SCHEDULE` can be combined with `FORK` or `FORKLESS`."
             ]
         ],
         "command_flags": [
@@ -37,7 +37,7 @@
                 "name": "save-type",
                 "type": "oneof",
                 "optional": true,
-                "since": "10.0.0",
+                "since": "9.2.0",
                 "arguments": [
                     {
                         "name": "fork",
@@ -45,8 +45,8 @@
                         "type": "pure-token"
                     },
                     {
-                        "name": "thread",
-                        "token": "THREAD",
+                        "name": "forkless",
+                        "token": "FORKLESS",
                         "type": "pure-token"
                     }
                 ]
@@ -62,10 +62,7 @@
         "reply_schema": {
             "oneOf": [
                 {
-                    "const": "Background saving (fork) started"
-                },
-                {
-                    "const": "Background saving (thread) started"
+                    "const": "Background saving started"
                 },
                 {
                     "const": "Background saving scheduled"

@@ -1,4 +1,4 @@
-#include "threadsave.h"
+#include "forkless.h"
 #include "server.h"
 #include "bgiteration.h"
 #include "mutexqueue.h"
@@ -10,7 +10,7 @@ static const void *PROCESS_COMPLETE_ITEM = (void *)-1;
 static const int SNAPSHOT_FILE_CLOSE_MONITOR_INTERVAL_MS = 200;
 
 typedef struct {
-    rio save_rio; /* Must be 1st to permit cast from rio back to threadsaveInfo */
+    rio save_rio; /* Must be 1st to permit cast from rio back to forklessSaveInfo */
     int cur_db;   /* Last selectDb issued */
     bgIterator *iterator;
     uint64_t bytes_written;
@@ -19,34 +19,34 @@ typedef struct {
     bool terminated;
     sds temp_file;
     sds final_file;
-} threadsaveInfo;
+} forklessSaveInfo;
 
 /* Keep a global indicator of the current iterator (for cancellation purposes). */
-static threadsaveInfo *currentThreadsave = NULL;
+static forklessSaveInfo *currentForklessSave = NULL;
 
-/* rio check_abort_between_writes callback: checks if the threadsave iterator is being terminated. */
-static int threadsaveShouldAbort(rio *r) {
-    static_assert(offsetof(threadsaveInfo, save_rio) == 0, "rio must be castable to threadsaveInfo");
-    threadsaveInfo *saveInfo = (threadsaveInfo *)r;
+/* rio check_abort_between_writes callback: checks if the forkless save iterator is being terminated. */
+static int forklessSaveShouldAbort(rio *r) {
+    static_assert(offsetof(forklessSaveInfo, save_rio) == 0, "rio must be castable to forklessSaveInfo");
+    forklessSaveInfo *saveInfo = (forklessSaveInfo *)r;
     return saveInfo->iterator && bgIteratorIsTerminating(saveInfo->iterator);
 }
 
-static int writeSelectDb(threadsaveInfo *saveInfo, int new_db) {
+static int writeSelectDb(forklessSaveInfo *saveInfo, int new_db) {
     if (new_db == saveInfo->cur_db) return C_OK;
 
     if (rdbSaveType(&saveInfo->save_rio, RDB_OPCODE_SELECTDB) == -1) {
-        serverLog(LL_WARNING, "threadsave: error while writing OPCODE_SELECTDB");
+        serverLog(LL_WARNING, "forkless-save: error while writing OPCODE_SELECTDB");
         return C_ERR;
     }
     if (rdbSaveLen(&saveInfo->save_rio, new_db) == -1) {
-        serverLog(LL_WARNING, "threadsave: error while writing selectDb value");
+        serverLog(LL_WARNING, "forkless-save: error while writing selectDb value");
         return C_ERR;
     }
     saveInfo->cur_db = new_db;
     return C_OK;
 }
 
-static int writeDbSizeHints(threadsaveInfo *saveInfo) {
+static int writeDbSizeHints(forklessSaveInfo *saveInfo) {
     for (int dbid = 0; dbid < server.dbnum; dbid++) {
         serverDb *db = server.db[dbid];
         if (db == NULL || dbSize(db) == 0) continue;
@@ -61,14 +61,14 @@ static int writeDbSizeHints(threadsaveInfo *saveInfo) {
  *  - The RDB header has been written (magic, aux fields, functions)
  *  - The DB size hints have been written
  * This function is responsible for writing all of the dictionary entries. */
-static void *threadsaveProcessor(void *arg) {
+static void *forklessSaveProcessor(void *arg) {
     serverAssert(!onValkeyMainThread());
-    threadsaveInfo *saveInfo = arg;
+    forklessSaveInfo *saveInfo = arg;
 
-    serverLog(LL_NOTICE, "threadsave: background processor started");
+    serverLog(LL_NOTICE, "forkless-save: background processor started");
     int err = C_OK;
 
-    saveInfo->save_rio.check_abort_between_writes = threadsaveShouldAbort;
+    saveInfo->save_rio.check_abort_between_writes = forklessSaveShouldAbort;
 
     const unsigned statsIntervalMs = 1000;
     monotime lastStatsTime;
@@ -100,7 +100,7 @@ static void *threadsaveProcessor(void *arg) {
 
             long long expire = objectGetExpire(item->u.dbe.de);
             if (rdbSaveKeyValuePair(&saveInfo->save_rio, &key, o, expire, item->dbid, RDB_VERSION) == -1) {
-                serverLog(LL_WARNING, "threadsave: error writing KV pair");
+                serverLog(LL_WARNING, "forkless-save: error writing KV pair");
                 err = C_ERR;
             }
             break;
@@ -127,28 +127,28 @@ static void *threadsaveProcessor(void *arg) {
         message = "TERMINATED";
     else if (err != C_OK)
         message = "***ERROR***";
-    serverLog(LL_NOTICE, "threadsave: background processor finished. %ld items processed. %s",
+    serverLog(LL_NOTICE, "forkless-save: background processor finished. %ld items processed. %s",
               items, message);
 
-    currentThreadsave = NULL;
+    currentForklessSave = NULL;
     saveInfo->err_code = err;
     bgIteratorClose(saveInfo->iterator);
     return NULL;
 }
 
-static void cleanupSaveInfoAndEmitEndMetrics(threadsaveInfo *saveInfo) {
+static void cleanupSaveInfoAndEmitEndMetrics(forklessSaveInfo *saveInfo) {
     if (saveInfo->terminated && saveInfo->err_code == C_OK) saveInfo->err_code = C_ERR;
-    rdbRecordEndMetrics(RDB_BGSAVE_TYPE_THREAD, saveInfo->err_code, time(NULL));
+    rdbRecordEndMetrics(RDB_BGSAVE_TYPE_FORKLESS, saveInfo->err_code, time(NULL));
     rdbClearSaveState(time(NULL));
     if (saveInfo->err_code == C_OK) {
-        serverLog(LL_NOTICE, "threadsave: threadsave complete. %lld seconds.", (long long)server.rdb_save_time_last);
+        serverLog(LL_NOTICE, "forkless-save: forkless save complete. %lld seconds.", (long long)server.rdb_save_time_last);
     } else if (saveInfo->terminated) {
-        serverLog(LL_WARNING, "threadsave: threadsave terminated. %lld seconds.", (long long)server.rdb_save_time_last);
+        serverLog(LL_WARNING, "forkless-save: forkless save terminated. %lld seconds.", (long long)server.rdb_save_time_last);
     } else {
-        serverLog(LL_WARNING, "threadsave: threadsave failed. %lld seconds.", (long long)server.rdb_save_time_last);
+        serverLog(LL_WARNING, "forkless-save: forkless save failed. %lld seconds.", (long long)server.rdb_save_time_last);
     }
     stopSaving(saveInfo->err_code == C_OK);
-    currentThreadsave = NULL;
+    currentForklessSave = NULL;
     atomic_store_explicit(&server.stat_current_save_keys_processed, 0, memory_order_relaxed);
     atomic_store_explicit(&server.stat_current_save_keys_total, 0, memory_order_relaxed);
 
@@ -156,27 +156,27 @@ static void cleanupSaveInfoAndEmitEndMetrics(threadsaveInfo *saveInfo) {
     zfree(saveInfo);
 }
 
-/* Routine for background thread to close and rename the threadsave snapshot file.
+/* Routine for background thread to close and rename the forkless save snapshot file.
  * Closing the file requires synchronously flushing the content to disk, which can
  * take some time. */
-static void threadsaveCloseSnapshotFile(void *args[]) {
+static void forklessSaveCloseSnapshotFile(void *args[]) {
     serverAssert(!onValkeyMainThread());
-    threadsaveInfo *saveInfo = (threadsaveInfo *)args[0];
+    forklessSaveInfo *saveInfo = (forklessSaveInfo *)args[0];
     /* Error or not, close the file... */
     if (fsync(fileno(saveInfo->save_rio.io.file.fp)) != 0) {
-        serverLog(LL_WARNING, "threadsave: error fsyncing temp file [%s]: %s",
+        serverLog(LL_WARNING, "forkless-save: error fsyncing temp file [%s]: %s",
                   saveInfo->temp_file, strerror(errno));
         saveInfo->err_code = C_ERR;
     }
     if (fclose(saveInfo->save_rio.io.file.fp) != 0) {
-        serverLog(LL_WARNING, "threadsave: error closing temp file [%s]: %s",
+        serverLog(LL_WARNING, "forkless-save: error closing temp file [%s]: %s",
                   saveInfo->temp_file, strerror(errno));
         saveInfo->err_code = C_ERR;
     }
 
     if (!saveInfo->terminated && saveInfo->err_code == C_OK) {
         if (rename(saveInfo->temp_file, saveInfo->final_file) != 0) {
-            serverLog(LL_WARNING, "threadsave: error moving temp file [%s] to destination [%s]: %s",
+            serverLog(LL_WARNING, "forkless-save: error moving temp file [%s] to destination [%s]: %s",
                       saveInfo->temp_file, saveInfo->final_file, strerror(errno));
             saveInfo->err_code = C_ERR;
         }
@@ -194,14 +194,14 @@ static void threadsaveCloseSnapshotFile(void *args[]) {
 }
 
 /* Timer proc which runs in the main valkey event loop. It monitors to see when the background thread
- * completes the action to close and rename the snapshot file at the end of disk based threadsave,
+ * completes the action to close and rename the snapshot file at the end of disk based forkless save,
  * and performs the final clean-up actions. */
 static long long snapshotEndMonitorTimeProc(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     UNUSED(eventLoop);
     UNUSED(id);
     serverAssert(onValkeyMainThread());
 
-    threadsaveInfo *saveInfo = (threadsaveInfo *)clientData;
+    forklessSaveInfo *saveInfo = (forklessSaveInfo *)clientData;
 
     /* I own this mutex queue from the main thread, check to see if the background
        job is done or not. Note we only expect a single notification event here. */
@@ -214,15 +214,15 @@ static long long snapshotEndMonitorTimeProc(struct aeEventLoop *eventLoop, long 
     return SNAPSHOT_FILE_CLOSE_MONITOR_INTERVAL_MS;
 }
 
-void threadsaveComplete(bool terminated, void *privdata) {
+void forklessSaveComplete(bool terminated, void *privdata) {
     serverAssert(onValkeyMainThread());
-    serverLog(LL_NOTICE, "threadsave: completion proc - %s", (terminated) ? "terminated" : "ok");
+    serverLog(LL_NOTICE, "forkless-save: completion proc - %s", (terminated) ? "terminated" : "ok");
 
-    threadsaveInfo *saveInfo = privdata;
+    forklessSaveInfo *saveInfo = privdata;
     saveInfo->terminated = terminated;
     /* The save iterator should be terminated and freed at this point in time. */
     saveInfo->iterator = NULL;
-    /* For file based threadsave, we need to generate the RDB end marker. and complete the save */
+    /* For file based forkless save, we need to generate the RDB end marker. and complete the save */
     if (!saveInfo->terminated && saveInfo->err_code == C_OK) {
         saveInfo->err_code = rdbWriteFooter(&saveInfo->save_rio, REPLICA_REQ_NONE) == C_ERR ? C_ERR : C_OK;
     }
@@ -234,20 +234,20 @@ void threadsaveComplete(bool terminated, void *privdata) {
     aeCreateTimeEvent(server.el, SNAPSHOT_FILE_CLOSE_MONITOR_INTERVAL_MS, snapshotEndMonitorTimeProc, saveInfo, NULL);
     /* Submit a background job to close and rename the snapshot file */
     saveInfo->foreground_queue = mutexQueueCreate(); // The monitor proc will delete this
-    bioCreateLazyFreeJob(threadsaveCloseSnapshotFile, 1, saveInfo);
-    serverLog(LL_NOTICE, "threadsave: created background thread to perform snapshot file close and rename");
+    bioCreateLazyFreeJob(forklessSaveCloseSnapshotFile, 1, saveInfo);
+    serverLog(LL_NOTICE, "forkless-save: created background thread to perform snapshot file close and rename");
     /* We will now wait for the background closeSnapshotFile job to complete.
      * The remainder of the cleanup will be performed in the snapshotEndMonitorTimeProc. */
 }
 
-static int threadsaveCommonStart(threadsaveInfo *saveInfo) {
+static int forklessSaveCommonStart(forklessSaveInfo *saveInfo) {
     serverAssert(onValkeyMainThread());
 
     saveInfo->cur_db = -1;
 
-    serverLog(LL_NOTICE, "Using Threadsave for next backup");
-    rdbRecordStartMetrics(RDB_BGSAVE_TYPE_THREAD);
-    startSaving(RDBFLAGS_THREADSAVE);
+    serverLog(LL_NOTICE, "Using forkless save for next backup");
+    rdbRecordStartMetrics(RDB_BGSAVE_TYPE_FORKLESS);
+    startSaving(RDBFLAGS_FORKLESS_SAVE);
 
     rdbSaveInfo rsi, *rsiptr = rdbPopulateSaveInfo(&rsi);
     if (rdbWriteHeader(&saveInfo->save_rio, REPLICA_REQ_NONE, RDB_VERSION, RDBFLAGS_NONE, rsiptr) == C_ERR) return C_ERR;
@@ -257,7 +257,7 @@ static int threadsaveCommonStart(threadsaveInfo *saveInfo) {
     return C_OK;
 }
 
-static void startBackgroundThread(threadsaveInfo *saveInfo) {
+static void startBackgroundThread(forklessSaveInfo *saveInfo) {
     serverAssert(onValkeyMainThread());
 
     pthread_t thread_id;
@@ -267,7 +267,7 @@ static void startBackgroundThread(threadsaveInfo *saveInfo) {
     serverAssert(pthread_rc == 0);
     pthread_rc = pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
     serverAssert(pthread_rc == 0);
-    pthread_rc = pthread_create(&thread_id, &attr, &threadsaveProcessor, saveInfo);
+    pthread_rc = pthread_create(&thread_id, &attr, &forklessSaveProcessor, saveInfo);
     serverAssert(pthread_rc == 0);
     pthread_rc = pthread_attr_destroy(&attr);
     serverAssert(pthread_rc == 0);
@@ -276,15 +276,15 @@ static void startBackgroundThread(threadsaveInfo *saveInfo) {
 /* Save a point-in-time snapshot to the given filename.
  * The filename must be under the server's current working directory.
  * Writes to a temp file and renames to the final filename on completion. */
-int threadsaveToDisk(const char *filename) {
+int forklessSaveToDisk(const char *filename) {
     serverAssert(onValkeyMainThread());
-    serverAssert(currentThreadsave == NULL);
+    serverAssert(currentForklessSave == NULL);
     serverAssert(!isSaveInProgress());
     serverAssert(filename);
-    serverLog(LL_NOTICE, "Beginning threadsaveToDisk");
+    serverLog(LL_NOTICE, "Beginning forklessSaveToDisk");
 
     server.stat_rdb_saves++;
-    threadsaveInfo *saveInfo = zcalloc(sizeof(threadsaveInfo));
+    forklessSaveInfo *saveInfo = zcalloc(sizeof(forklessSaveInfo));
 
     char tmpfile[256];
     snprintf(tmpfile, sizeof(tmpfile), "temp-%d.rdb", (int)getpid());
@@ -293,7 +293,7 @@ int threadsaveToDisk(const char *filename) {
 
     FILE *file = fopen(saveInfo->temp_file, "wb");
     if (file == NULL) {
-        serverLog(LL_WARNING, "threadsave: failed to open temp file [%s] for threadsave: %s",
+        serverLog(LL_WARNING, "forkless-save: failed to open temp file [%s] for forkless save: %s",
                   saveInfo->temp_file, strerror(errno));
         goto werr;
     }
@@ -304,17 +304,17 @@ int threadsaveToDisk(const char *filename) {
         rioSetReclaimCache(&saveInfo->save_rio, 1);
     }
 
-    int rc = threadsaveCommonStart(saveInfo);
+    int rc = forklessSaveCommonStart(saveInfo);
     if (rc != C_OK) goto werr;
 
     /* Saving to a file indicates a consistent snapshot (a backup at a point in time) */
-    saveInfo->iterator = bgIteratorCreateFullScanIter(THREADSAVE_FILE_ITER_NAME,
-                                                      BGITERATOR_CONSISTENCY_START, NULL, threadsaveComplete, saveInfo);
+    saveInfo->iterator = bgIteratorCreateFullScanIter(FORKLESS_SAVE_FILE_ITER_NAME,
+                                                      BGITERATOR_CONSISTENCY_START, NULL, forklessSaveComplete, saveInfo);
     if (saveInfo->iterator == NULL) {
-        serverLog(LL_WARNING, "threadsave: error creating iterator");
+        serverLog(LL_WARNING, "forkless-save: error creating iterator");
         goto werr;
     }
-    currentThreadsave = saveInfo;
+    currentForklessSave = saveInfo;
 
     atomic_store_explicit(&server.stat_current_save_keys_total, dbTotalServerKeyCount(), memory_order_relaxed);
     atomic_store_explicit(&server.stat_current_save_keys_processed, 0, memory_order_relaxed);
@@ -326,19 +326,19 @@ int threadsaveToDisk(const char *filename) {
 
 werr:
     saveInfo->err_code = C_ERR;
-    rdbRecordEndMetrics(RDB_BGSAVE_TYPE_THREAD, C_ERR, time(NULL));
+    rdbRecordEndMetrics(RDB_BGSAVE_TYPE_FORKLESS, C_ERR, time(NULL));
     rdbClearSaveState(time(NULL));
-    serverLog(LL_WARNING, "threadsave: threadsave failed. %lld seconds.", (long long)server.rdb_save_time_last);
+    serverLog(LL_WARNING, "forkless-save: forkless save failed. %lld seconds.", (long long)server.rdb_save_time_last);
     stopSaving(0);
-    currentThreadsave = NULL;
+    currentForklessSave = NULL;
 
     if (file != NULL) {
         if (fclose(file) != 0) {
-            serverLog(LL_WARNING, "threadsave: Could not close temp file [%s]: %s",
+            serverLog(LL_WARNING, "forkless-save: Could not close temp file [%s]: %s",
                       saveInfo->temp_file, strerror(errno));
         }
         if (unlink(saveInfo->temp_file) != 0) {
-            serverLog(LL_WARNING, "threadsave: Could not delete temp file [%s]: %s",
+            serverLog(LL_WARNING, "forkless-save: Could not delete temp file [%s]: %s",
                       saveInfo->temp_file, strerror(errno));
         }
     }
@@ -348,9 +348,9 @@ werr:
     return C_ERR;
 }
 
-/* Cancels the currently running threadsave, if one is in progress. */
-void threadsaveCancel(void) {
+/* Cancels the currently running forkless save, if one is in progress. */
+void forklessSaveCancel(void) {
     serverAssert(onValkeyMainThread());
-    if (currentThreadsave == NULL) return;
-    bgIteratorTerminate(currentThreadsave->iterator);
+    if (currentForklessSave == NULL) return;
+    bgIteratorTerminate(currentForklessSave->iterator);
 }

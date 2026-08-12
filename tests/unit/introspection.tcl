@@ -1968,7 +1968,7 @@ test {CONFIG hash-seed is immutable and settable at startup} {
 } {} {external:skip}
 
 start_server {overrides {forkless-options-supported yes} tags {"introspection" "external:skip"}} {
-    foreach bgsave_type {"" "fork" "thread"} {
+    foreach bgsave_type {"" "fork" "forkless"} {
         test "CLIENT KILL close the client connection during bgsave - $bgsave_type" {
             r flushall
             r set k v
@@ -1980,7 +1980,7 @@ start_server {overrides {forkless-options-supported yes} tags {"introspection" "
                 fail "bgsave did not start in time"
             }
 
-            set expected_type [expr {$bgsave_type eq "thread" ? "thread" : "fork"}]
+            set expected_type [expr {$bgsave_type eq "forkless" ? "forkless" : "fork"}]
             assert_equal [s rdb_current_bgsave_type] $expected_type
 
             r client kill skipme no

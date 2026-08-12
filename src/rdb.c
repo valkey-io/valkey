@@ -2515,6 +2515,10 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error) {
             return NULL;
         }
 
+        /* Sum of non-deleted entries across all listpacks, used below to
+         * validate the stream length loaded from the payload. */
+        uint64_t valid_entries = 0;
+
         while(listpacks--) {
             /* Get the master ID, the one we'll use as key of the radix tree
              * node: the entries inside the listpack itself are delta-encoded
@@ -2544,7 +2548,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error) {
                 return NULL;
             }
             if (deep_integrity_validation) server.stat_dump_payload_sanitizations++;
-            if (!streamValidateListpackIntegrity(lp, lp_size, deep_integrity_validation)) {
+            if (!streamValidateListpackIntegrity(lp, lp_size, deep_integrity_validation, &valid_entries)) {
                 rdbReportCorruptRDB("Stream listpack integrity check failed.");
                 sdsfree(nodekey);
                 decrRefCount(o);
@@ -2614,6 +2618,20 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error) {
 
         if (s->length && !raxSize(s->rax)) {
             rdbReportCorruptRDB("Stream length inconsistent with rax entries");
+            decrRefCount(o);
+            return NULL;
+        }
+
+        /* Validate that the loaded length matches the number of non-deleted
+         * entries actually present in the listpacks. 's->length' comes straight
+         * from the payload; a crafted payload can claim a positive length while
+         * every listpack entry is a tombstone, which later makes
+         * streamLastValidID() panic ("length is N, but no max id") when a
+         * command such as XSETID, XADD or XREADGROUP looks up the last valid
+         * ID. valid_entries was accumulated during listpack validation above,
+         * which parses the master entry counts only in deep mode. */
+        if (deep_integrity_validation && s->length != valid_entries) {
+            rdbReportCorruptRDB("Stream length inconsistent with the number of valid entries");
             decrRefCount(o);
             return NULL;
         }

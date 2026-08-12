@@ -811,6 +811,20 @@ test {corrupt payload: zset listpack with NAN score} {
     }
 }
 
+test {corrupt payload: stream length inconsistent with valid entries} {
+    # A stream whose listpack entries are all tombstones, but whose loaded
+    # length claims a positive value, must be rejected on load. Otherwise the
+    # mismatch makes streamLastValidID() panic ("length is N, but no max id")
+    # when a command such as XSETID looks up the last valid ID.
+    start_server [list overrides [list loglevel verbose use-exit-on-panic yes crash-memcheck-enabled no] ] {
+        r config set sanitize-dump-payload yes
+        r debug set-skip-checksum-validation 1
+        catch {r restore _tomb_stream 0 "\x15\x01\x10\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x01\x28\x28\x00\x00\x00\x0F\x00\x00\x01\x02\x01\x01\x01\x81\x66\x02\x00\x01\x03\x01\x00\x01\x00\x01\x81\x76\x02\x04\x01\x03\x01\x01\x01\x01\x01\x81\x76\x02\x04\x01\xFF\x01\x02\x02\x01\x01\x00\x00\x02\x00\x0B\x00\x3F\xD1\x7E\xA1\xC7\x54\x12\x57"} err
+        assert_match "*Bad data format*" $err
+        assert_equal [r ping] "PONG"
+    }
+}
+
 test {corrupt payload: zset ziplist with NAN score} {
     # Same as the listpack case but for the legacy ziplist format, which is
     # converted to a listpack on load. A NAN score must be rejected so it can
@@ -820,6 +834,36 @@ test {corrupt payload: zset ziplist with NAN score} {
         catch {r restore _nan_zset_zl 0 "\x0C\x1D\x1D\x00\x00\x00\x17\x00\x00\x00\x04\x00\x00\x02\x6D\x31\x04\x03\x6E\x61\x6E\x05\x02\x6D\x32\x04\x03\x32\x2E\x35\xFF\x0B\x00\x00\x00\x00\x00\x00\x00\x00\x00"} err
         assert_match "*Bad data format*" $err
         verify_log_message 0 "*NAN score*" 0
+        assert_equal [r ping] "PONG"
+    }
+}
+
+test {corrupt payload: stream listpack with negative field count} {
+    # A stream master entry that declares a negative number of fields must be
+    # rejected on load. The field count drives listpack traversal in
+    # streamIteratorGetID(), so a negative value walks past the listpack and
+    # asserts when a command such as XRANGE reads the stream.
+    start_server [list overrides [list loglevel verbose use-exit-on-panic yes crash-memcheck-enabled no] ] {
+        r config set sanitize-dump-payload yes
+        r debug set-skip-checksum-validation 1
+        catch {r restore _neg_fields 0 "\x15\x01\x10\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x01\x18\x18\x00\x00\x00\x08\x00\x01\x01\x00\x01\xDF\xFD\x02\x00\x01\x02\x01\x00\x01\x00\x01\x00\x01\xFF\x01\x01\x01\x01\x01\x00\x00\x01\x00\x0B\x00\x00\x00\x00\x00\x00\x00\x00\x00"} err
+        assert_match "*Bad data format*" $err
+        assert_equal [r ping] "PONG"
+    }
+}
+
+test {corrupt payload: stream listpack with negative deleted count} {
+    # A master entry that declares a negative number of deleted entries must be
+    # rejected on load. The deleted count is added to the entry count to bound
+    # the entry validation loop, so a negative value lets a listpack claim more
+    # live entries (3 here) than it actually contains (1) while still walking
+    # cleanly to the end of the listpack. Without the sign check the payload is
+    # accepted, leaving the master entry count inconsistent with the entries.
+    start_server [list overrides [list loglevel verbose use-exit-on-panic yes crash-memcheck-enabled no] ] {
+        r config set sanitize-dump-payload yes
+        r debug set-skip-checksum-validation 1
+        catch {r restore _neg_deleted 0 "\x15\x01\x10\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x01\x18\x18\x00\x00\x00\x08\x00\x03\x01\xDF\xFE\x02\x00\x01\x00\x01\x02\x01\x00\x01\x00\x01\x03\x01\xFF\x03\x01\x01\x01\x01\x00\x00\x03\x00\x0B\x00\x00\x00\x00\x00\x00\x00\x00\x00"} err
+        assert_match "*Bad data format*" $err
         assert_equal [r ping] "PONG"
     }
 }

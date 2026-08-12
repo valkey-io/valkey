@@ -1,6 +1,8 @@
 #ifndef HOTKEY_H
 #define HOTKEY_H
 
+#include <stdint.h>
+
 /*
  * Server-side hot key detection. The Space-Saving algorithm and its
  * frozen-window manager are generic and live in space_saving.{c,h}; this
@@ -17,6 +19,8 @@ int hotKeyWindowCallback(const char **err);
 
 /* Is hot-key detection currently enabled (sampling percentage > 0)? */
 int hotkeyEnabled(void);
+/* Number of sampled observations in the last completed window (N). */
+uint64_t hotkeyLastWindowSamples(void);
 /* Create the manager at server startup if detection is enabled. */
 void hotkeyInit(void);
 

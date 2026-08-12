@@ -43,12 +43,15 @@
 
 /* True when the current activity is a genuine client executing a command — a
  * real client that is actually processing a command, and is not the replication
- * link/AOF, and not RDB/AOF loading. Importing traffic is user-driven load and
- * should be counted. Hot-key detection charges only such direct client activity.
- */
+ * link/AOF, and not RDB/AOF loading, and not an administrative bulk slot
+ * deletion (delKeysInSlot, e.g. CLUSTER FLUSHSLOT / slot migration — that is not
+ * user key access and must not feed or evict the sampler). Importing traffic is
+ * user-driven load and should be counted. Hot-key detection charges only such
+ * direct client activity. */
 static inline int hotkeyShouldRecord(void) {
     client *c = server.current_client;
-    return c != NULL && c->flag.executing_command && !mustObeyClient(c) && !server.loading;
+    return c != NULL && c->flag.executing_command && !mustObeyClient(c) && !server.loading &&
+           !server.server_del_keys_in_slot;
 }
 
 /* Same as hotkeyShouldRecord(), but for the delete path:
@@ -505,8 +508,8 @@ int dbGenericDeleteWithDictIndex(serverDb *db, robj *key, int async, int flags, 
     void **ref = kvstoreHashtableTwoPhasePopFindRef(db->keys, dict_index, objectGetVal(key), &pos);
     if (ref != NULL) {
         /* Charge a write access only for a genuine client-issued DEL/UNLINK —
-         * not passive expiry, eviction, the replication stream, an importing
-         * client, or RDB/AOF loading. */
+         * not passive expiry, eviction, the replication stream, or RDB/AOF
+         * loading. (Importing clients are counted, see hotkeyShouldRecord.) */
         if (hotkeyEnabled() && hotkeyShouldRecordDelete(flags) &&
             bernoulliSampleHit(server.hotkey_sampling_percentage)) {
             recordHotKeySample(key, db->id);

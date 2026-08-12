@@ -6846,6 +6846,16 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
         }
     }
 
+    /* Hotkey */
+    if (all_sections || (dictFind(section_dict, "hotkey") != NULL)) {
+        if (sections++) info = sdscat(info, "\r\n");
+        info = sdscatprintf(info, "# Hotkey\r\n");
+        /* N for the last completed window: only keys above N/K are guaranteed
+         * tracked, so this gives operators the detection floor of a report. */
+        info = sdscatprintf(info, "hotkey_last_window_samples:%llu\r\n",
+                            (unsigned long long)hotkeyLastWindowSamples());
+    }
+
     /* Get info from modules.
      * Returned when the user asked for "everything", "modules", or a specific module section.
      * We're not aware of the module section names here, and we rather avoid the search when we can.

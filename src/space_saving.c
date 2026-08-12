@@ -28,41 +28,53 @@ typedef struct {
     uint64_t error; /* Maximum overestimate vs. the true count */
 } spaceSavingSlot;
 
+/* A single Space-Saving summary. Internal to this file; callers use the
+ * spaceSavingManager (frozen-window) API in space_saving.h. */
+typedef struct spaceSavingWindow spaceSavingWindow;
+
 struct spaceSavingWindow {
     spaceSavingSlot *slots; /* capacity-sized array */
     int capacity;           /* K */
     int size;               /* number of occupied slots (0..capacity) */
+    uint64_t total;         /* total observations recorded in this window (N) */
+    void *ctx;              /* opaque caller context describing how to interpret
+                               this window's counts (owned by the caller) */
     spaceSavingType *type;  /* caller-provided item vtable */
 };
 
-spaceSavingWindow *spaceSavingWindowCreate(int k, spaceSavingType *type) {
+static spaceSavingWindow *spaceSavingWindowCreate(int k, spaceSavingType *type) {
     if (k <= 0 || !type || !type->cmp || !type->dup || !type->free) return NULL;
     spaceSavingWindow *w = zcalloc(sizeof(*w));
     w->slots = zcalloc((size_t)k * sizeof(spaceSavingSlot));
     w->capacity = k;
     w->size = 0;
+    w->total = 0;
+    w->ctx = NULL;
     w->type = type;
     return w;
 }
 
-void spaceSavingWindowReset(spaceSavingWindow *w) {
+static void spaceSavingWindowReset(spaceSavingWindow *w) {
     if (!w) return;
     for (int i = 0; i < w->size; i++) {
         if (w->slots[i].item) w->type->free(w->slots[i].item);
         w->slots[i].item = NULL;
     }
     w->size = 0;
+    w->total = 0;
+    w->ctx = NULL;
 }
 
-void spaceSavingWindowRelease(spaceSavingWindow *w) {
+static void spaceSavingWindowRelease(spaceSavingWindow *w) {
     if (!w) return;
     spaceSavingWindowReset(w);
     zfree(w->slots);
     zfree(w);
 }
 
-void recordSpaceSavingWindowSample(spaceSavingWindow *w, const void *item) {
+static void recordSpaceSavingWindowSample(spaceSavingWindow *w, const void *item) {
     if (!w || !item) return;
+    w->total++;
     uint32_t h = w->type->hash ? w->type->hash(item) : 0;
 
     /* Single pass: look for an existing slot (fast-rejecting on the cached hash
@@ -102,11 +114,11 @@ void recordSpaceSavingWindowSample(spaceSavingWindow *w, const void *item) {
     e->error = min_count;
 }
 
-int spaceSavingWindowCount(spaceSavingWindow *w) {
+static int spaceSavingWindowCount(spaceSavingWindow *w) {
     return w ? w->size : 0;
 }
 
-void spaceSavingWindowAt(spaceSavingWindow *w, int i, void **item, uint64_t *count, uint64_t *error) {
+static void spaceSavingWindowAt(spaceSavingWindow *w, int i, void **item, uint64_t *count, uint64_t *error) {
     if (!w || i < 0 || i >= w->size) return;
     spaceSavingSlot *e = &w->slots[i];
     if (item) *item = e->item;
@@ -114,7 +126,7 @@ void spaceSavingWindowAt(spaceSavingWindow *w, int i, void **item, uint64_t *cou
     if (error) *error = e->error;
 }
 
-void spaceSavingWindowRemoveIf(spaceSavingWindow *w, int (*pred)(const void *item, void *arg), void *arg) {
+static void spaceSavingWindowRemoveIf(spaceSavingWindow *w, int (*pred)(const void *item, void *arg), void *arg) {
     if (!w || !pred) return;
     int out = 0;
     for (int i = 0; i < w->size; i++) {
@@ -136,16 +148,16 @@ void spaceSavingWindowRemoveIf(spaceSavingWindow *w, int (*pred)(const void *ite
 struct spaceSavingManager {
     spaceSavingWindow *live;   /* Current (open) window */
     spaceSavingWindow *frozen; /* Last completed window (read path) */
-    uint64_t window_us;        /* Window length in microseconds */
-    uint64_t window_start_us;  /* Start time of the current window */
+    uint64_t live_window_length_us; /* Length of the current (live) window, in microseconds */
+    uint64_t live_window_start_us;  /* Start time of the current (live) window */
 };
 
 spaceSavingManager *spaceSavingManagerCreate(int k, uint64_t window_us, uint64_t now_us, spaceSavingType *type) {
     spaceSavingManager *m = zcalloc(sizeof(*m));
     m->live = spaceSavingWindowCreate(k, type);
     m->frozen = spaceSavingWindowCreate(k, type);
-    m->window_us = window_us;
-    m->window_start_us = now_us;
+    m->live_window_length_us = window_us;
+    m->live_window_start_us = now_us;
     if (!m->live || !m->frozen) {
         spaceSavingManagerRelease(m);
         return NULL;
@@ -164,11 +176,7 @@ void spaceSavingManagerReset(spaceSavingManager *m, uint64_t now_us) {
     if (!m) return;
     spaceSavingWindowReset(m->live);
     spaceSavingWindowReset(m->frozen);
-    m->window_start_us = now_us;
-}
-
-void spaceSavingManagerSetWindow(spaceSavingManager *m, uint64_t window_us) {
-    if (m) m->window_us = window_us;
+    m->live_window_start_us = now_us;
 }
 
 /* Freeze the live window: the previous snapshot is discarded, the live window
@@ -180,15 +188,20 @@ static void spaceSavingManagerFreeze(spaceSavingManager *m) {
     m->frozen = m->live;
     m->live = tmp;
     spaceSavingWindowReset(m->live);
+    /* The frozen window (old live) carries the context it ran under — it travels
+     * with the window on the swap. Carry that same context forward into the new
+     * live window so subsequent samples keep the current config until the caller
+     * sets a new one. */
+    m->live->ctx = m->frozen->ctx;
 }
 
 void spaceSavingManagerRotate(spaceSavingManager *m, uint64_t now_us) {
     uint64_t elapsed, windows;
-    if (!m || m->window_us == 0) return;
-    if (now_us <= m->window_start_us) return; /* monotonic guard */
-    elapsed = now_us - m->window_start_us;
-    if (elapsed < m->window_us) return; /* current window still open */
-    windows = elapsed / m->window_us;   /* full windows elapsed */
+    if (!m || m->live_window_length_us == 0) return;
+    if (now_us <= m->live_window_start_us) return; /* monotonic guard */
+    elapsed = now_us - m->live_window_start_us;
+    if (elapsed < m->live_window_length_us) return; /* current window still open */
+    windows = elapsed / m->live_window_length_us;   /* full windows elapsed */
 
     /* One freeze snapshots the just-completed window. If two or more whole
      * windows elapsed (an idle gap), a second freeze pushes that snapshot out
@@ -196,7 +209,7 @@ void spaceSavingManagerRotate(spaceSavingManager *m, uint64_t now_us) {
      * second is a no-op on an already-empty summary, so cap at two. */
     int freeze_count = (windows >= 2) ? 2 : 1;
     for (int i = 0; i < freeze_count; i++) spaceSavingManagerFreeze(m);
-    m->window_start_us += windows * m->window_us;
+    m->live_window_start_us += windows * m->live_window_length_us;
 }
 
 void recordSpaceSavingManagerSample(spaceSavingManager *m, uint64_t now_us, const void *item) {
@@ -219,12 +232,65 @@ void spaceSavingManagerRemoveIf(spaceSavingManager *m, int (*pred)(const void *i
     spaceSavingWindowRemoveIf(m->frozen, pred, arg);
 }
 
-uint64_t spaceSavingEstimateRate(uint64_t count, uint64_t error, int sample_percentage, int window_seconds) {
-    if (sample_percentage <= 0 || window_seconds <= 0) return 0;
-    /* Midpoint of [count-error, count] is (count - error/2); the *2 below keeps
-     * error/2 exact. Scale the sampled count back up by 100/sample_percentage,
-     * then divide by the window length to get a per-second rate. */
-    uint64_t num = (2 * count - error) * 100;
-    uint64_t den = 2ULL * (uint64_t)sample_percentage * (uint64_t)window_seconds;
-    return (num + den / 2) / den; /* rounded to nearest */
+/* Set the opaque context for the current (live) window. Copied to the frozen
+ * window each time a window is frozen. The caller owns the pointed-to data. */
+void spaceSavingManagerSetLiveContext(spaceSavingManager *m, void *ctx) {
+    if (m) m->live->ctx = ctx;
+}
+
+/* Return the opaque context that was active for the last completed (frozen)
+ * window, or NULL if none. */
+void *spaceSavingManagerFrozenContext(spaceSavingManager *m) {
+    return m ? m->frozen->ctx : NULL;
+}
+
+/* Total number of observations recorded in the last completed (frozen) window. */
+uint64_t spaceSavingManagerFrozenTotal(spaceSavingManager *m) {
+    return m ? m->frozen->total : 0;
+}
+
+/* Resize a window to `new_k` capacity, keeping the highest-count entries.
+ * Grow: preserve all entries; shrink: keep the top `new_k` by count. */
+static void spaceSavingWindowResize(spaceSavingWindow *w, int new_k) {
+    if (!w || new_k <= 0 || new_k == w->capacity) return;
+    if (new_k < w->size) {
+        /* Selection of the top new_k by count (K is small, O(K^2) is fine). */
+        for (int i = 0; i < new_k; i++) {
+            int max_idx = i;
+            for (int j = i + 1; j < w->size; j++)
+                if (w->slots[j].count > w->slots[max_idx].count) max_idx = j;
+            if (max_idx != i) {
+                spaceSavingSlot t = w->slots[i];
+                w->slots[i] = w->slots[max_idx];
+                w->slots[max_idx] = t;
+            }
+        }
+        for (int i = new_k; i < w->size; i++)
+            if (w->slots[i].item) w->type->free(w->slots[i].item);
+        w->size = new_k;
+    }
+    w->slots = zrealloc(w->slots, (size_t)new_k * sizeof(spaceSavingSlot));
+    for (int i = (w->capacity < new_k ? w->capacity : new_k); i < new_k; i++) {
+        w->slots[i].item = NULL;
+        w->slots[i].hash = 0;
+        w->slots[i].count = 0;
+        w->slots[i].error = 0;
+    }
+    w->capacity = new_k;
+}
+
+/* Reconfigure the manager: reset only the live window (its counts were gathered
+ * under the previous config and are no longer comparable) and start a fresh
+ * window at `now_us` with the new capacity and window length, while KEEPING the
+ * last completed (frozen) window and its context intact so an in-flight query
+ * still sees it. Use this instead of releasing/recreating on a config change. */
+void spaceSavingManagerReconfigure(spaceSavingManager *m, int new_k, uint64_t new_window_us, uint64_t now_us) {
+    if (!m) return;
+    spaceSavingWindowReset(m->live);
+    if (new_k > 0 && new_k != m->live->capacity) {
+        spaceSavingWindowResize(m->live, new_k);
+        spaceSavingWindowResize(m->frozen, new_k);
+    }
+    m->live_window_length_us = new_window_us;
+    m->live_window_start_us = now_us;
 }

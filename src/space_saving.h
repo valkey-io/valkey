@@ -59,35 +59,14 @@ typedef struct {
 } spaceSavingType;
 
 /* --------------------------------------------------------------------------
- * spaceSavingWindow — a single Space-Saving summary
- * --------------------------------------------------------------------------*/
-
-typedef struct spaceSavingWindow spaceSavingWindow;
-
-/* Create a summary tracking up to `k` items. `type` must outlive it. */
-spaceSavingWindow *spaceSavingWindowCreate(int k, spaceSavingType *type);
-/* Free the summary and every identity it owns. NULL-safe. */
-void spaceSavingWindowRelease(spaceSavingWindow *w);
-/* Drop all tracked items but keep capacity and type. */
-void spaceSavingWindowReset(spaceSavingWindow *w);
-/* Record one observation of `item` (borrowed; copied via `dup` only on insert). */
-void recordSpaceSavingWindowSample(spaceSavingWindow *w, const void *item);
-/* Number of items currently tracked (0..k). */
-int spaceSavingWindowCount(spaceSavingWindow *w);
-/* Read the i-th tracked slot (0 <= i < count). Out-params may be NULL; `*item`
- * is library-owned and valid until the next mutating call. Slots are unordered. */
-void spaceSavingWindowAt(spaceSavingWindow *w, int i, void **item, uint64_t *count, uint64_t *error);
-/* Remove every tracked item for which `pred(item, arg)` is non-zero. */
-void spaceSavingWindowRemoveIf(spaceSavingWindow *w, int (*pred)(const void *item, void *arg), void *arg);
-
-/* --------------------------------------------------------------------------
  * spaceSavingManager — frozen-window top-K over fixed time windows
  *
  * Keeps a `live` window accumulating the current interval and a `frozen`
  * snapshot of the last completed one. The caller supplies a monotonic
  * microsecond clock on each call, so the module has no global-clock dependency.
- * When `window_us` elapses, the live window is frozen and a fresh one starts;
- * readers observe only the last completed window, never a partial one.
+ * When the live window length elapses, the live window is frozen and a fresh one
+ * starts; readers observe only the last completed window, never a partial one.
+ * (The underlying single Space-Saving summary is an internal detail.)
  * --------------------------------------------------------------------------*/
 
 typedef struct spaceSavingManager spaceSavingManager;
@@ -99,8 +78,6 @@ spaceSavingManager *spaceSavingManagerCreate(int k, uint64_t window_us, uint64_t
 void spaceSavingManagerRelease(spaceSavingManager *m);
 /* Clear both windows and restart the current window at `now_us`. */
 void spaceSavingManagerReset(spaceSavingManager *m, uint64_t now_us);
-/* Change the window length; takes effect at the next boundary check. */
-void spaceSavingManagerSetWindow(spaceSavingManager *m, uint64_t window_us);
 /* Freeze whichever window(s) fully elapsed by `now_us` (no-op if still open). */
 void spaceSavingManagerRotate(spaceSavingManager *m, uint64_t now_us);
 /* Record one observation into the current window (rotating first if due). */
@@ -112,14 +89,18 @@ void spaceSavingManagerAt(spaceSavingManager *m, int i, void **item, uint64_t *c
 /* Remove matching items from BOTH the live and frozen windows. */
 void spaceSavingManagerRemoveIf(spaceSavingManager *m, int (*pred)(const void *item, void *arg), void *arg);
 
-/* Recover a per-second rate from a Space-Saving (count, error) pair whose counts
- * were produced by Bernoulli sampling at `sample_percentage` percent over a
- * window of `window_seconds`:
- *
- *   rate = (count - error/2) * (100 / sample_percentage) / window_seconds
- *
- * Uses the midpoint of the [count-error, count] band and exact integer
- * arithmetic (rounded to nearest). Returns 0 for non-positive inputs. */
-uint64_t spaceSavingEstimateRate(uint64_t count, uint64_t error, int sample_percentage, int window_seconds);
+/* Attach an opaque context to the current (live) window (e.g. a struct holding
+ * the sampling percentage and window seconds used to interpret its counts). It
+ * is copied (by pointer) to the frozen window whenever a window is frozen; the
+ * caller owns the pointed-to data and must keep it valid while referenced. */
+void spaceSavingManagerSetLiveContext(spaceSavingManager *m, void *ctx);
+/* Opaque context that was active for the last completed (frozen) window (or NULL). */
+void *spaceSavingManagerFrozenContext(spaceSavingManager *m);
+/* Total observations recorded in the last completed (frozen) window (N). */
+uint64_t spaceSavingManagerFrozenTotal(spaceSavingManager *m);
+/* Reset only the live window and restart it at `now_us` with the given capacity
+ * and window length, keeping the last completed (frozen) window and its context.
+ * Use on a config change instead of releasing/recreating the manager. */
+void spaceSavingManagerReconfigure(spaceSavingManager *m, int new_k, uint64_t new_window_us, uint64_t now_us);
 
 #endif /* SPACE_SAVING_H */

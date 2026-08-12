@@ -7,6 +7,7 @@
 #include "server.h"
 #include "hotkey.h"
 #include "cluster.h"
+#include "monotonic.h"
 #include "space_saving.h"
 
 /* ---------------------------------------------------------------------------
@@ -68,10 +69,34 @@ static uint32_t hotkeyItemHash(const void *a) {
 
 static spaceSavingType hotkeyItemType = {hotkeyItemCmp, hotkeyItemDup, hotkeyItemFree, hotkeyItemHash};
 
+/* The config that interprets a window's sampled counts. A frozen window keeps
+ * the values that were active when it was captured (via the manager's opaque
+ * context pointer), so HOTKEYS GET estimates it correctly even after a later
+ * CONFIG SET. Two slots suffice: at most two windows (live + frozen) reference
+ * a context at once, so we ping-pong to avoid clobbering the frozen one. */
+typedef struct {
+    int sampling_percentage;
+    int window_seconds;
+} hotkeyWindowCtx;
+
+static hotkeyWindowCtx hotkeyWindowCtxPool[2];
+
+/* Point the manager's live-window context at the current config, using the pool
+ * slot not currently held by the frozen window. */
+static void hotkeySetWindowContext(spaceSavingManager *m) {
+    hotkeyWindowCtx *frozen = spaceSavingManagerFrozenContext(m);
+    hotkeyWindowCtx *slot = (frozen == &hotkeyWindowCtxPool[0]) ? &hotkeyWindowCtxPool[1] : &hotkeyWindowCtxPool[0];
+    slot->sampling_percentage = server.hotkey_sampling_percentage;
+    slot->window_seconds = server.hotkey_window_seconds;
+    spaceSavingManagerSetLiveContext(m, slot);
+}
+
 /* Create a frozen-window manager sized and timed from the current config. */
 static spaceSavingManager *hotkeyCreateManager(void) {
-    return spaceSavingManagerCreate(server.hotkey_top_k, (uint64_t)server.hotkey_window_seconds * 1000000ULL,
-                                    (uint64_t)server.ustime, &hotkeyItemType);
+    spaceSavingManager *m = spaceSavingManagerCreate(
+        server.hotkey_top_k, (uint64_t)server.hotkey_window_seconds * 1000000ULL, getMonotonicUs(), &hotkeyItemType);
+    if (m) hotkeySetWindowContext(m);
+    return m;
 }
 
 /* ===========================================================================
@@ -79,7 +104,10 @@ static spaceSavingManager *hotkeyCreateManager(void) {
  * ==========================================================================*/
 
 void hotkeyPurgeAll(void) {
-    if (server.hotkey_manager) spaceSavingManagerReset(server.hotkey_manager, (uint64_t)server.ustime);
+    if (!server.hotkey_manager) return;
+    spaceSavingManagerReset(server.hotkey_manager, getMonotonicUs());
+    /* Reset clears each window's context; re-establish the live one. */
+    hotkeySetWindowContext(server.hotkey_manager);
 }
 
 static int hotkeyItemInSlot(const void *item, void *arg) {
@@ -123,7 +151,7 @@ void recordHotKeySample(robj *key, int dbid) {
     sds k = objectGetVal(key);
     if (!k) return;
     hotkeyItem probe = {k, dbid};
-    recordSpaceSavingManagerSample(m, (uint64_t)server.ustime, &probe);
+    recordSpaceSavingManagerSample(m, getMonotonicUs(), &probe);
 }
 
 /* ===========================================================================
@@ -144,6 +172,19 @@ static int hotkeyCollectedCmpDesc(const void *a, const void *b) {
     return 0;
 }
 
+/* Recover a per-second rate from a frozen (count, error) pair whose counts were
+ * Bernoulli-sampled at `sample_percentage` percent over `window_seconds`. Uses
+ * the midpoint of the [count-error, count] band (the *2 keeps error/2 exact),
+ * scales the sampled count back up by 100/sample_percentage, then divides by the
+ * window length. Integer arithmetic, rounded to nearest; 0 for non-positive
+ * inputs. */
+static uint64_t hotkeyEstimateQps(uint64_t count, uint64_t error, int sample_percentage, int window_seconds) {
+    if (sample_percentage <= 0 || window_seconds <= 0) return 0;
+    uint64_t num = (2 * count - error) * 100;
+    uint64_t den = 2ULL * (uint64_t)sample_percentage * (uint64_t)window_seconds;
+    return (num + den / 2) / den;
+}
+
 void hotkeysGetCommand(client *c) {
     if (!hotkeyEnabled()) {
         addReplyError(c, "Hotkey detection is disabled");
@@ -156,7 +197,7 @@ void hotkeysGetCommand(client *c) {
 
     /* Close any window that has fully elapsed so we report the latest
      * completed window. */
-    spaceSavingManagerRotate(m, (uint64_t)server.ustime);
+    spaceSavingManagerRotate(m, getMonotonicUs());
 
     int cap = spaceSavingManagerCount(m);
     if (cap == 0) {
@@ -166,6 +207,11 @@ void hotkeysGetCommand(client *c) {
 
     hotkeyCollected *arr = zmalloc(cap * sizeof(hotkeyCollected));
     int n = 0;
+    /* Estimate with the sampling %/window that produced the frozen window, not
+     * the current config (which may have changed since it was captured). */
+    hotkeyWindowCtx *fctx = spaceSavingManagerFrozenContext(m);
+    int frozen_pct = fctx ? fctx->sampling_percentage : 0;
+    int frozen_window_s = fctx ? fctx->window_seconds : 0;
     for (int i = 0; i < cap; i++) {
         void *item;
         uint64_t count, error;
@@ -173,7 +219,7 @@ void hotkeysGetCommand(client *c) {
         hotkeyItem *hi = item;
         arr[n].key = hi->key;
         arr[n].dbid = hi->dbid;
-        arr[n].qps = spaceSavingEstimateRate(count, error, server.hotkey_sampling_percentage, server.hotkey_window_seconds);
+        arr[n].qps = hotkeyEstimateQps(count, error, frozen_pct, frozen_window_s);
         n++;
     }
 
@@ -212,43 +258,63 @@ int hotkeyEnabled(void) {
     return server.hotkey_sampling_percentage > 0;
 }
 
-/* Tear down any existing manager and, if detection is enabled, create a fresh
- * one from the current config. Called at startup and on every hotkey config
- * change, so the manager always reflects the latest sampling / top-k / window
- * (recreating discards the in-progress window, which is fine for a rare admin
- * config change). */
-static void hotkeyManagerRefresh(void) {
-    if (server.hotkey_manager) {
-        spaceSavingManagerRelease(server.hotkey_manager);
-        server.hotkey_manager = NULL;
-    }
-    if (hotkeyEnabled()) server.hotkey_manager = hotkeyCreateManager();
+/* Number of sampled observations in the last completed window (N). The
+ * Space-Saving guarantee is stated relative to N: only keys with frequency
+ * above N/K are guaranteed tracked, so operators use it to gauge the detection
+ * floor and how much to trust a given entry. 0 when detection is disabled. */
+uint64_t hotkeyLastWindowSamples(void) {
+    return server.hotkey_manager ? spaceSavingManagerFrozenTotal(server.hotkey_manager) : 0;
 }
 
-/* Bring up hot-key detection at server startup (creates the manager if
- * detection is enabled). */
+/* Reconfigure the manager in place from the current config: the in-progress
+ * (live) window is reset (its counts were gathered under the old config), but
+ * the last completed (frozen) window is KEPT along with the config that
+ * produced it, so an operator's in-flight HOTKEYS GET still sees it. No-op when
+ * detection is disabled (no manager). Use HOTKEYS RESET to discard everything. */
+static void hotkeyManagerReconfigure(void) {
+    if (!server.hotkey_manager) return;
+    spaceSavingManagerReconfigure(server.hotkey_manager, server.hotkey_top_k,
+                                  (uint64_t)server.hotkey_window_seconds * 1000000ULL, getMonotonicUs());
+    hotkeySetWindowContext(server.hotkey_manager);
+}
+
+/* Bring up hot-key detection at server startup (creates the manager if enabled). */
 void hotkeyInit(void) {
-    hotkeyManagerRefresh();
+    if (hotkeyEnabled() && !server.hotkey_manager) {
+        server.hotkey_manager = hotkeyCreateManager();
+    }
 }
 
 /* ===========================================================================
- * Config callbacks — every hotkey config change refreshes the manager.
+ * Config callbacks
  * ==========================================================================*/
 
+/* Sampling percentage is also the on/off switch, so it drives the lifecycle;
+ * if it merely changed while staying enabled, reconfigure in place. */
 int hotKeySamplingCallback(const char **err) {
     UNUSED(err);
-    hotkeyManagerRefresh();
+    if (hotkeyEnabled() && server.hotkey_manager)
+        hotkeyManagerReconfigure();
+    else {
+        if (hotkeyEnabled() && !server.hotkey_manager) {
+            server.hotkey_manager = hotkeyCreateManager();
+        }
+        else if (!hotkeyEnabled() && server.hotkey_manager) {
+            spaceSavingManagerRelease(server.hotkey_manager);
+            server.hotkey_manager = NULL;
+        }
+    }
     return 1;
 }
 
 int hotKeyTopKCallback(const char **err) {
     UNUSED(err);
-    hotkeyManagerRefresh();
+    hotkeyManagerReconfigure();
     return 1;
 }
 
 int hotKeyWindowCallback(const char **err) {
     UNUSED(err);
-    hotkeyManagerRefresh();
+    hotkeyManagerReconfigure();
     return 1;
 }

@@ -84,7 +84,7 @@ class ThrottleReplTest : public ::testing::Test {
     }
 
     bool isReplThrottlerActive() {
-        return (long)readMetric("repl_throttle_active") == 1;
+        return readMetric("repl_throttle_rate") > 0.0;
     }
 
     double getThrottlerRate() {

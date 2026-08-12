@@ -118,9 +118,10 @@ static bool evaluateSteadyStateThrottle(client *c, int64_t cob_size) {
 
 /* --- Public API --- */
 
-/* In some cases, we want to protect replicas from being killed by the COB limits. When
- * throttling hasn't had time to adjust and there is no severe memory condition, it makes
- * sense to allow the replica to live until throttling can stabilize the situation. */
+/* Determines whether a replica should be temporarily exempted from the soft client output
+ * buffer limit. While the steady-state throttle is converging, exempting the soft limit
+ * prevents a premature disconnect and allows the throttler to reduce the replica's buffer
+ * back below target. */
 bool throttleRepl_isClientExemptFromCobLimits(client *c) {
     if (!throttle_repl_config.repl_throttle_steady_state_enabled || !isThrottlerActive()) return false;
     if (!iAmPrimary()) return false;
@@ -132,15 +133,14 @@ bool throttleRepl_isClientExemptFromCobLimits(client *c) {
     /* There's no need to protect the replica if it's already using less than the target size. */
     if (client_cob_size < getReplicaSteadyStateCobTargetSize()) return false;
 
-    /* Don't exempt if server is over maxmemory.
-     * When eviction is already running, we can't afford to let
-     * replica output buffers grow further. */
+    /* Don't exempt if the server is over maxmemory.
+     * When eviction is already running, we can't afford to let replica output buffers grow further. */
     if (server.maxmemory && getMaxmemoryState(NULL, NULL, NULL, NULL) == C_ERR) return false;
 
     /* Don't protect if throttle has been working too long without success. */
     time_t elapsed = server.unixtime - c->obuf_soft_limit_reached_time;
     if (elapsed > 4 * STEADY_STATE_CONVERGENCE_SECS) return false;
-    /* Otherwise, allow the replica to exceed the configured limits, giving the throttler time to correct. */
+    /* Otherwise, allow the replica to exceed the soft limit, giving the throttler time to correct. */
     return true;
 }
 
@@ -189,14 +189,8 @@ void throttleRepl_adjustThrottling(void) {
 
 sds throttleRepl_sdscatInfoMetrics(sds info) {
     info = sdscatprintf(info,
-                        "repl_throttle_active:%d\r\n",
-                        metrics.is_throttler_active ? 1 : 0);
-
-    if (metrics.is_throttler_active) {
-        info = sdscatprintf(info,
-                            "repl_throttle_rate:%.2f\r\n",
-                            metrics.current_throttle_rate);
-    }
+                        "repl_throttle_rate:%.2f\r\n",
+                        metrics.is_throttler_active ? metrics.current_throttle_rate : 0);
 
     throttleMetrics throttle_metrics;
     throttle_getMetrics(METRICS_NAME, &throttle_metrics);

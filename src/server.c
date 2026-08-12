@@ -6871,10 +6871,10 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
         }
     }
 
-    /* Throttle */
-    if (all_sections || (dictFind(section_dict, "throttle") != NULL)) {
+    /* Throttling */
+    if (all_sections || (dictFind(section_dict, "throttling") != NULL)) {
         if (sections++) info = sdscat(info, "\r\n");
-        info = sdscat(info, "# Throttle\r\n");
+        info = sdscat(info, "# Throttling\r\n");
         info = throttle_sdscatInfoMetrics(info);
         info = throttleRepl_sdscatInfoMetrics(info);
     }

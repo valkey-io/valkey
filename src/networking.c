@@ -6284,7 +6284,10 @@ int checkClientOutputBufferLimits(client *c) {
     } else {
         c->obuf_soft_limit_reached_time = 0;
     }
-    if ((soft || hard) && throttleRepl_isClientExemptFromCobLimits(c)) return 0;
+    /* The steady-state throttle may exempt a replica from the soft limit to give throttling
+     * time to converge; the hard limit is never suppressed, so a replica that reaches it is
+     * always disconnected. */
+    if (soft && !hard && throttleRepl_isClientExemptFromCobLimits(c)) return 0;
     return soft || hard;
 }
 

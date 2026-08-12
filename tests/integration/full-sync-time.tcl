@@ -60,6 +60,52 @@ start_server {tags {"repl external:skip"}} {
             assert {[string is integer -strict $val]}
             assert {$val >= 0}
         }
+
+        test {Assert last_successful_sync_duration_ms is NOT reset when primary changes directly} {
+            set val [status $replica last_successful_sync_duration_ms]
+            assert {$val ne ""}
+            assert {$val >= 0}
+            set old_val $val
+
+            # Change primary to a non-existent one
+            $replica replicaof 127.0.0.1 9999
+
+            # The metric should NOT be reset, it should keep the old value
+            set val [status $replica last_successful_sync_duration_ms]
+            assert {$val == $old_val}
+
+            # Clean up
+            $replica replicaof no one
+        }
+
+        test {Assert last_successful_sync_duration_ms is reset when transitioning replica -> master -> replica (failed sync)} {
+            # Sync with master first to get a valid duration
+            $replica replicaof $master_host $master_port
+            wait_for_condition 50 100 {
+                [status $replica master_link_status] eq "up"
+            } else {
+                fail "Replica could not reconnect to master"
+            }
+            assert {[status $replica last_successful_sync_duration_ms] >= 0}
+
+            # Turn replica into master
+            $replica replicaof no one
+            wait_for_condition 50 100 {
+                [lindex [$replica role] 0] eq "master"
+            } else {
+                fail "Replica failed to become master"
+            }
+
+            # Turn replica into replica of non-existent master
+            $replica replicaof 127.0.0.1 9999
+
+            # The metric should be -1
+            set val [status $replica last_successful_sync_duration_ms]
+            assert {$val == -1}
+
+            # Clean up
+            $replica replicaof no one
+        }
     }
 }
 

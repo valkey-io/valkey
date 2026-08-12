@@ -4636,6 +4636,9 @@ void replicationUnsetPrimary(void) {
     /* Reset down time so it'll be ready for when we turn into replica again. */
     server.repl_down_since = 0;
 
+    /* Reset full sync complete duration since we are no longer a replica */
+    server.repl_full_sync_complete_duration_ms = -1;
+
     /* Fire the role change modules event. */
     moduleFireServerEvent(VALKEYMODULE_EVENT_REPLICATION_ROLE_CHANGED, VALKEYMODULE_EVENT_REPLROLECHANGED_NOW_PRIMARY,
                           NULL);

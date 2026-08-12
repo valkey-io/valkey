@@ -241,9 +241,10 @@ test "Test the replica reports a loading state while it's loading" {
 }
 
 test "Regression test for a crash when calling SHARDS during handshake" {
-    # R8: RESET + FORGET + MEET, then SHARDS while links are still handshaking.
-    # Raft: yield leadership before RESET; FORGET once (not a loop).
+    # Use R 8 (standalone node) to establish handshaking connections
     set id [R 8 CLUSTER MYID]
+    # Raft: if R8 is leader, yield first — RESET would otherwise leave
+    # followers proposing FORGET to a reborn singleton that rejects it.
     if {$::cluster_raft && [CI 0 cluster_raft_leader] eq $id} {
         pause_process [srv 8 pid]
         wait_for_condition 1000 50 {
@@ -256,11 +257,19 @@ test "Regression test for a crash when calling SHARDS during handshake" {
         resume_process [srv 8 pid]
     }
     R 8 CLUSTER RESET HARD
-    R 0 CLUSTER FORGET $id
-    wait_for_condition 50 100 {
-        [node_is_forgotten $id]
+    # Gossip: FORGET is local — classic admin pattern hits every node.
+    # Raft: one proposal is replicated; looping would race on commit.
+    if {$::cluster_raft} {
+        R 0 CLUSTER FORGET $id
+        wait_for_condition 50 100 {
+            [node_is_forgotten $id]
+        } else {
+            fail "Old R8 id was not forgotten"
+        }
     } else {
-        fail "Old R8 id was not forgotten"
+        for {set i 0} {$i < 8} {incr i} {
+            R $i CLUSTER FORGET $id
+        }
     }
     R 8 cluster meet 127.0.0.1 [srv 0 port]
     # This line would previously crash, since all the outbound

@@ -1717,7 +1717,7 @@ void pfcountCommand(client *c) {
         for (j = 1; j < c->argc; j++) {
             /* Check type and size. */
             robj *o = lookupKeyRead(c->db, c->argv[j]);
-            if (o == NULL) continue; /* Assume empty HLL for non existing var.*/
+            if (o == NULL) continue; /* Assume empty HLL for nonexistent var.*/
             if (isHLLObjectOrReply(c, o) != C_OK) return;
 
             /* Merge with this HLL with our 'max' HLL by setting max[i]
@@ -1805,7 +1805,7 @@ void pfmergeCommand(client *c) {
     for (j = 1; j < c->argc; j++) {
         /* Check type and size. */
         robj *o = lookupKeyRead(c->db, c->argv[j]);
-        if (o == NULL) continue; /* Assume empty HLL for non existing var. */
+        if (o == NULL) continue; /* Assume empty HLL for nonexistent var. */
         if (isHLLObjectOrReply(c, o) != C_OK) return;
 
         /* If at least one involved HLL is dense, use the dense representation

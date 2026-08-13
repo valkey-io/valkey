@@ -1,7 +1,7 @@
 /*
  * Copyright Valkey Contributors.
  * All rights reserved.
- * SPDX-License-Identifier: BSD 3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause
  */
 
 #ifndef __BGITERATION_H
@@ -168,10 +168,6 @@ typedef struct {
  * The caller-provided bgIteratorStatus will be populated. */
 void bgIteratorGetStatus(bgIterator *iter, bgIteratorStatus *status);
 
-/* Estimate the remaining seconds for a background iteration based on progress so far.
- * Returns -1 if no entries have been processed yet (unable to estimate). */
-long long bgIteratorEstimateRemainingSeconds(bgIteratorStatus *status);
-
 
 /* Terminate a background iteration.
  *
@@ -231,6 +227,7 @@ typedef struct {
     struct serverCommand *cmd;
     robj **argv;
     int argc;
+    size_t replication_size;
 } replicationData;
 
 typedef struct {
@@ -255,8 +252,8 @@ typedef struct {
  * iterator, the iteration client's queue may run dry and this call will block until data is
  * available.
  *
- * NOTE: Reading an item returns previously read items to Valkey.  It is unsafe to reference an item
- * previously read.
+ * NOTE: Reading an item returns previously read items to the main thread.  It is unsafe to
+ * reference an item previously read.
  *
  * (All memory management is the responsibility of the bgIterator - not the reader.) */
 bgIteratorItem *bgIteratorRead(bgIterator *iter);
@@ -288,10 +285,16 @@ void bgIteration_init(void);
 bool bgIteration_iterationActive(void);
 
 
-/* Notify bgIteration that a key is being deleted.  In Valkey, key deletion can occur in a READ
- * command if the key is expired.  Note that this notification is more about status than memory.
- * Since the dbEntry is a reference counted object, the dbEntry can't be physically deleted if
- * bgIteration is still actively using it. */
+/* Called as a beforeSleep action, receives items back from bgIteration.  This is just a little
+ * quicker than waiting for bgIteration's internal timer. */
+void bgIteration_beforeSleep(void);
+
+
+/* Notify bgIteration that a key is about to be deleted.  This call must happen before the removal
+ * from the main dictionary.  In Valkey, key deletion can occur in a READ command if the key is
+ * expired.  Note that this notification is more about status than memory.  Since the dbEntry is a
+ * reference counted object, the dbEntry can't be physically deleted if bgIteration is still
+ * actively using it. */
 void bgIteration_keyDelete(int dbid, const_sds key);
 
 

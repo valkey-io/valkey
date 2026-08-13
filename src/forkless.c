@@ -2,7 +2,6 @@
 #include "server.h"
 #include "bgiteration.h"
 #include "mutexqueue.h"
-#include <assert.h>
 #include "rdb.h"
 #include "bio.h"
 
@@ -284,19 +283,20 @@ int forklessSaveToDisk(const char *filename) {
     serverLog(LL_NOTICE, "Beginning forklessSaveToDisk");
 
     server.stat_rdb_saves++;
-    forklessSaveInfo *saveInfo = zcalloc(sizeof(forklessSaveInfo));
 
     char tmpfile[256];
     snprintf(tmpfile, sizeof(tmpfile), "temp-%d.rdb", (int)getpid());
-    saveInfo->temp_file = sdsnew(tmpfile);
-    saveInfo->final_file = sdsnew(filename);
 
-    FILE *file = fopen(saveInfo->temp_file, "wb");
+    FILE *file = fopen(tmpfile, "wb");
     if (file == NULL) {
         serverLog(LL_WARNING, "forkless-save: failed to open temp file [%s] for forkless save: %s",
-                  saveInfo->temp_file, strerror(errno));
-        goto werr;
+                  tmpfile, strerror(errno));
+        return C_ERR;
     }
+
+    forklessSaveInfo *saveInfo = zcalloc(sizeof(forklessSaveInfo));
+    saveInfo->temp_file = sdsnew(tmpfile);
+    saveInfo->final_file = sdsnew(filename);
 
     rioInitWithFile(&saveInfo->save_rio, file);
     if (server.rdb_save_incremental_fsync) {
@@ -353,4 +353,58 @@ void forklessSaveCancel(void) {
     serverAssert(onValkeyMainThread());
     if (currentForklessSave == NULL) return;
     bgIteratorTerminate(currentForklessSave->iterator);
+}
+
+int isForklessSaveInProgress(void) {
+    return server.cur_bgsave_type == RDB_BGSAVE_TYPE_FORKLESS;
+}
+
+/* Appends forkless save INFO metrics to the provided sds string. */
+sds forkless_catInfo(sds info) {
+    long long estimated_seconds_remaining = -1;
+    long long current_item_millis = -1;
+
+    if (onValkeyMainThread()) {
+        bgIterator *iter = bgIteratorFind(FORKLESS_SAVE_FILE_ITER_NAME);
+        if (iter != NULL) {
+            bgIteratorStatus status = {0};
+            bgIteratorGetStatus(iter, &status);
+            current_item_millis = status.current_item_ms;
+
+            if (status.dbentries_processed > 0) {
+                long long total_keys = 0;
+                for (int i = 0; i < server.dbnum; i++) {
+                    total_keys += server.db[i] ? dbSize(server.db[i]) : 0;
+                }
+                estimated_seconds_remaining = (total_keys - status.dbentries_processed) *
+                                              status.runtime_ms / status.dbentries_processed / 1000;
+            }
+        }
+    }
+
+    return sdscatprintf(info,
+                        "forkless_current_item_millis:%lld\r\n"
+                        "forkless_estimated_seconds_remaining:%lld\r\n",
+                        current_item_millis,
+                        estimated_seconds_remaining);
+}
+
+/* Appends forkless debug metrics to the provided sds string. */
+sds forkless_catDebugInfo(sds info) {
+    bgIteratorStatus status = {0};
+
+    if (onValkeyMainThread()) {
+        bgIterator *iter = bgIteratorFind(FORKLESS_SAVE_FILE_ITER_NAME);
+        if (iter != NULL) bgIteratorGetStatus(iter, &status);
+    }
+
+    return sdscatprintf(info,
+                        "forkless_current_queue_length:%lu\r\n"
+                        "forkless_queue_length_target:%lu\r\n"
+                        "forkless_dbentries_queued:%lu\r\n"
+                        "forkless_dbentries_processed:%lu\r\n",
+                        status.queue_length,
+                        status.queue_length_target,
+                        status.dbentries_queued,
+                        status.dbentries_processed);
 }

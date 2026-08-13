@@ -452,6 +452,94 @@ foreach {type large} [array get largevalue] {
         r select 9
     } {OK} {singledb:skip}
 
+    test {MOVE can replace an existing key} {
+        r select 10
+        r del move-replace-key
+        r set move-replace-key "1"
+        r select 9
+        r del move-replace-key
+        r set move-replace-key "0"
+        assert_equal 1 [r move move-replace-key 10 replace]
+        r select 10
+        assert_equal "0" [r get move-replace-key]
+        r select 9
+    } {OK} {singledb:skip}
+
+    test {MOVE REPLACE moves source TTL over existing destination TTL} {
+        r select 10
+        r del move-replace-ttl
+        r set move-replace-ttl "dst" ex 200
+        r select 9
+        r del move-replace-ttl
+        r set move-replace-ttl "src" ex 100
+        assert_equal 1 [r move move-replace-ttl 10 replace]
+        assert_equal -2 [r ttl move-replace-ttl]
+        r select 10
+        assert_equal "src" [r get move-replace-ttl]
+        assert {[r ttl move-replace-ttl] > 0 && [r ttl move-replace-ttl] <= 100}
+        r select 9
+    } {OK} {singledb:skip}
+
+    test {MOVE REPLACE removes destination TTL when source has none} {
+        r select 10
+        r del move-replace-no-ttl
+        r set move-replace-no-ttl "dst" ex 100
+        r select 9
+        r del move-replace-no-ttl
+        r set move-replace-no-ttl "src"
+        assert_equal 1 [r move move-replace-no-ttl 10 replace]
+        r select 10
+        assert_equal "src" [r get move-replace-no-ttl]
+        assert_equal -1 [r ttl move-replace-no-ttl]
+        r select 9
+    } {OK} {singledb:skip}
+
+    test {MOVE REPLACE syntax errors} {
+        assert_error "ERR syntax error*" {r move move-replace-key 10 notreplace}
+        assert_error "ERR syntax error*" {r move move-replace-key 10 replace extra}
+    } {} {singledb:skip}
+
+    test {MOVE REPLACE emits move keyspace notifications} {
+        r config set notify-keyspace-events KEg
+        r select 10
+        r del move-replace-notify
+        r set move-replace-notify "dst"
+        r select 9
+        r del move-replace-notify
+        r set move-replace-notify "src"
+
+        set rd1 [valkey_deferring_client]
+        assert_equal {1} [psubscribe $rd1 *]
+        assert_equal 1 [r move move-replace-notify 10 replace]
+        assert_equal "pmessage * __keyspace@9__:move-replace-notify move_from" [$rd1 read]
+        assert_equal "pmessage * __keyevent@9__:move_from move-replace-notify" [$rd1 read]
+        assert_equal "pmessage * __keyspace@10__:move-replace-notify move_to" [$rd1 read]
+        assert_equal "pmessage * __keyevent@10__:move_to move-replace-notify" [$rd1 read]
+        $rd1 close
+        r config set notify-keyspace-events {}
+        r select 9
+    } {OK} {singledb:skip}
+
+    test {MOVE REPLACE invalidates WATCH on destination key} {
+        r select 10
+        r del move-replace-watch
+        r set move-replace-watch "dst"
+
+        set rd1 [valkey_client]
+        $rd1 select 10
+        $rd1 watch move-replace-watch
+        $rd1 multi
+
+        r select 9
+        r del move-replace-watch
+        r set move-replace-watch "src"
+        assert_equal 1 [r move move-replace-watch 10 replace]
+        $rd1 set move-replace-watch queued
+        assert_equal {} [$rd1 exec]
+        $rd1 close
+        r select 9
+    } {OK} {singledb:skip}
+
     test {SET/GET keys in different DBs} {
         r set a hello
         r set b world
@@ -557,6 +645,7 @@ foreach {type large} [array get largevalue] {
         r SET [string repeat "a" 50000] 1
         r KEYS [string repeat "*?" 50000]
     } {}
+
 }
 
 start_cluster 1 0 {tags {"keyspace external:skip cluster"}} {

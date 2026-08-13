@@ -170,11 +170,9 @@ void fieldExpireScanCallback(void *privdata, void *volaKey, int didx) {
     serverAssert(hashTypeHasVolatileFields(o));
 
     data->has_more_expired_entries = false;
+    data->sampled++;
 
-    if (bgIteration_isEntryInuse(o)) {
-        data->sampled++;
-        return;
-    }
+    if (bgIteration_isEntryInuse(o)) return;
 
     mstime_t now = server.mstime;
     size_t expired_fields = dbReclaimExpiredFields(o, data->db, now, data->max_entries, didx);
@@ -182,7 +180,6 @@ void fieldExpireScanCallback(void *privdata, void *volaKey, int didx) {
         data->has_more_expired_entries = (expired_fields == data->max_entries);
         data->expired++;
     }
-    data->sampled++;
 }
 
 static int expireShouldSkipTableForSamplingCb(hashtable *ht) {
@@ -347,7 +344,7 @@ static ustime_t activeExpireCycleJob(enum activeExpiryType jobType, int cycleTyp
 
             while (data.sampled < num && checked_buckets < max_buckets) {
                 unsigned long cursor = db->expiry[jobType].cursor;
-                cursor = kvstoreScan(kvs, cursor, -1, scan_cb,
+                cursor = kvstoreScan(kvs, cursor, -1, -1, scan_cb,
                                      expireShouldSkipTableForSamplingCb, &data);
                 if (!data.has_more_expired_entries) db->expiry[jobType].cursor = cursor;
                 if (db->expiry[jobType].cursor == 0 && !data.has_more_expired_entries) {

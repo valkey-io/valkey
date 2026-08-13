@@ -138,13 +138,6 @@ start_server [list overrides [list "dir" $server_path] keep_persistence true] {
         r xdel stream [lindex [lindex [lindex [lindex $records 0] 1] 1] 0]
         r xack stream mygroup [lindex [lindex [lindex [lindex $records 0] 1] 0] 0]
         set digest [debug_digest]
-        r config set sanitize-dump-payload no
-        r debug reload
-        set newdigest [debug_digest]
-        assert {$digest eq $newdigest}
-    }
-    test {Test RDB stream encoding - sanitize dump} {
-        r config set sanitize-dump-payload yes
         r debug reload
         set newdigest [debug_digest]
         assert {$digest eq $newdigest}

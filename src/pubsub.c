@@ -279,8 +279,10 @@ void freeClientPubSubData(client *c) {
     c->pubsub_data->pubsub_patterns = NULL;
     hashtableRelease(c->pubsub_data->pubsubshard_channels);
     c->pubsub_data->pubsubshard_channels = NULL;
-    if (c->pubsub_data->client_tracking_prefixes) {
-        disableTracking(c);
+    /* Tracking state (redirection target and BCAST prefixes) is stored inside
+     * pubsub_data, so disable it while the structure is still alive. */
+    if (c->flag.tracking) {
+        disableTracking(c, 0);
     }
     zfree(c->pubsub_data);
     c->pubsub_data = NULL;

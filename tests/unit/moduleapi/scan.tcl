@@ -97,17 +97,17 @@ start_server {tags {"modules"}} {
         lsort [r scan.scan_key_raw rz]
     } {{f1 1} {f2 2}}
 
-    test {Module scan_key_raw zset skiplist} {
+    test {Module scan_key_raw zset btree} {
         r del rz1
         r zadd rz1 1 f1 2 f2 3 f3
-        assert_encoding skiplist rz1
+        assert_encoding btree rz1
         lsort [r scan.scan_key_raw rz1]
     } {{f1 1} {f2 2} {f3 3}}
 
     test {Module scan_key_raw zset fractional score (d2string form)} {
         r del rz2
         r zadd rz2 1.5 f1 2 f2 3 f3
-        assert_encoding skiplist rz2
+        assert_encoding btree rz2
         assert_equal [lsort [r zrange rz2 0 -1 withscores]] [lsort {f1 1.5 f2 2 f3 3}]
         lsort [r scan.scan_key_raw rz2]
     } {{f1 1.5} {f2 2} {f3 3}}

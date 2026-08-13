@@ -12096,7 +12096,7 @@ typedef struct {
     ValkeyModuleScanKeyRawBorrowedCB fn;
 } ScanKeyRawBorrowedCBData;
 
-/* Hashtable-encoded SET / HASH / ZSET(skiplist) callback: borrowed field/member
+/* Hashtable-encoded SET / HASH / ZSET(btree) callback: borrowed field/member
  * (+ borrowed hash value, or materialized zset score). */
 static void moduleScanKeyRawBorrowedHashtableCallback(void *privdata, void *entry) {
     ScanKeyRawBorrowedCBData *data = privdata;
@@ -12105,11 +12105,12 @@ static void moduleScanKeyRawBorrowedHashtableCallback(void *privdata, void *entr
         sds member = entry;
         data->fn(data->key, member, sdslen(member), NULL, 0, data->user_data);
     } else if (objectGetType(o) == OBJ_ZSET) {
-        zskiplistNode *node = (zskiplistNode *)entry;
-        sds member = zslGetNodeElement(node);
+        const char *member;
+        size_t mlen;
+        orderedIndexItemGetElement((const OrderedIndexItem *)entry, &member, &mlen);
         char scorebuf[MAX_D2STRING_CHARS]; /* materialized: callback-scoped */
-        int slen = d2string(scorebuf, sizeof(scorebuf), node->score);
-        data->fn(data->key, member, sdslen(member), scorebuf, (size_t)slen, data->user_data);
+        int slen = d2string(scorebuf, sizeof(scorebuf), orderedIndexItemGetScore((const OrderedIndexItem *)entry));
+        data->fn(data->key, member, mlen, scorebuf, (size_t)slen, data->user_data);
     } else if (objectGetType(o) == OBJ_HASH) {
         sds field = entryGetField(entry);
         size_t val_len;
@@ -12132,7 +12133,7 @@ static void moduleScanKeyRawBorrowedHashtableCallback(void *privdata, void *entr
  *
  * SCORE FORMAT: zset scores are rendered with d2string() -- the canonical shortest
  * round-trip form used by ZRANGE ... WITHSCORES and other zset replies -- and this
- * is consistent across the skiplist and listpack encodings. Note this differs from
+ * is consistent across the btree and listpack encodings. Note this differs from
  * VM_ScanKey, which renders zset scores via createStringObjectFromLongDouble()
  * (%.17Lg); the form here is intentional so borrowed scans match the canonical
  * zset reply representation.
@@ -12165,7 +12166,7 @@ int VM_ScanKeyRawBorrowed(ValkeyModuleKey *key, ValkeyModuleScanCursor *cursor, 
     } else if (objectGetType(o) == OBJ_HASH) {
         if (objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE) ht = objectGetVal(o);
     } else if (objectGetType(o) == OBJ_ZSET) {
-        if (objectGetEncoding(o) == OBJ_ENCODING_SKIPLIST) ht = ((zset *)objectGetVal(o))->ht;
+        if (objectGetEncoding(o) == OBJ_ENCODING_BTREE) ht = ((zset *)objectGetVal(o))->ht;
     } else {
         errno = EINVAL;
         return 0;
@@ -12176,7 +12177,7 @@ int VM_ScanKeyRawBorrowed(ValkeyModuleKey *key, ValkeyModuleScanCursor *cursor, 
     }
     int ret = 1;
     if (ht) {
-        /* hashtable-encoded set/hash, or skiplist-encoded zset: incremental. */
+        /* hashtable-encoded set/hash, or btree-encoded zset: incremental. */
         ScanKeyRawBorrowedCBData data = {key, privdata, fn};
         cursor->cursor = hashtableScan(ht, cursor->cursor, moduleScanKeyRawBorrowedHashtableCallback, &data);
         if (cursor->cursor == 0) {

@@ -80,7 +80,7 @@ int activeExpireCycleTryExpire(serverDb *db, robj *val, mstime_t now, int didx) 
 }
 
 /* Try to expire a few timed out keys. The algorithm used is adaptive and
- * will use few CPU cycles if there are few expiring keys, otherwise
+ * will use few CPU cycles if there are few expiring keys; otherwise,
  * it will get more aggressive to avoid that too much memory is used by
  * keys that can be removed from the keyspace.
  *

@@ -147,6 +147,10 @@ typedef struct ConnectionType {
     void (*postpone_update_state)(struct connection *conn, int postpone_mask);
     /* Called by the main-thread */
     void (*update_state)(struct connection *conn);
+    /* 1 if update_state may synchronously invoke read/write handlers.
+     * When set, processClientIOReadsDone defers clearing postpone until after
+     * command batching; leave 0 for transports that do not need that. */
+    int sync_handlers_in_update_state;
 
     /* TLS specified methods */
     sds (*get_peer_cert)(struct connection *conn);

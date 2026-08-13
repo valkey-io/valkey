@@ -530,6 +530,10 @@ static inline void connSetPostponeUpdateState(connection *conn, int postpone_mas
     }
 }
 
+static inline int connUpdateStateMayInvokeHandlers(connection *conn) {
+    return conn && conn->type && conn->type->sync_handlers_in_update_state;
+}
+
 static inline int connIsIntegrityChecked(connection *conn) {
     return conn->type->connIntegrityChecked && conn->type->connIntegrityChecked();
 }

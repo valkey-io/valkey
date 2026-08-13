@@ -6572,7 +6572,7 @@ int processClientIOReadsDone(client *c) {
      * handlers. Always call update_state, including ACCEPTING. */
     if (c->conn) {
         int mask = 0;
-        if (!in_accept_state && c->conn->type->sync_handlers_in_update_state) {
+        if (!in_accept_state && connUpdateStateMayInvokeHandlers(c->conn)) {
             mask = CONN_POSTPONE_READ;
             if (c->io_write_state != CLIENT_IDLE) mask |= CONN_POSTPONE_WRITE;
             needs_post_read_update = 1;

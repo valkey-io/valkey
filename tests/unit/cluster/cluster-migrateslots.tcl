@@ -46,6 +46,14 @@ proc get_migration_by_name {node_idx name} {
     return ""
 }
 
+proc wait_for_migration_registered {node_idx jobname} {
+    wait_for_condition 100 100 {
+        [get_migration_by_name $node_idx $jobname] ne ""
+    } else {
+        fail "Migration $jobname was not registered on node $node_idx within 10000 ms"
+    }
+}
+
 proc wait_for_migration_field {node_idx jobname field value} {
     wait_for_condition 100 100 {
         [get_migration_by_name $node_idx $jobname] ne "" && [dict get [get_migration_by_name $node_idx $jobname] $field] eq $value
@@ -1533,11 +1541,15 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
             # Unknown field
             assert_error "*syntax error*" {R 0 CLUSTER SYNCSLOTS ESTABLISH SOURCE $node2_id NAME $fake_jobname SLOTSRANGE 16383 16383 BAD_FIELD bad_value}
 
-            # Already importing
+            # Already importing. The slot is rejected as soon as the import job
+            # is registered on the target, so only wait for that. Waiting for a
+            # later state such as waiting-for-paused would make this test depend
+            # on the source finishing its snapshot, which can take much longer
+            # than the wait budget on instrumented builds.
             set_debug_prevent_pause 1
             assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id]
             set jobname [get_job_name 2 16383]
-            wait_for_migration_field 0 $jobname state waiting-for-paused
+            wait_for_migration_registered 0 $jobname
             assert_error "*Slot is already being imported on the target by a different migration*" {R 0 CLUSTER SYNCSLOTS ESTABLISH SOURCE $node2_id NAME $fake_jobname SLOTSRANGE 16383 16383}
             assert_match "OK" [R 2 CLUSTER CANCELSLOTMIGRATIONS]
             wait_for_migration_field 0 $jobname state failed

@@ -64,6 +64,11 @@ list *ACLLog;      /* Our security log, the user is able to inspect that
 
 long long ACLLogEntryCount = 0; /* Number of ACL log entries created */
 
+static dictType aclMembershipDictType = {
+    .entryGetKey = dictEntryGetKey,
+    .entryDestructor = zfree,
+};
+
 static rax *commandId = NULL; /* Command name to id mapping */
 
 static unsigned long nextid = 0; /* Next command id that has not been assigned */
@@ -470,7 +475,7 @@ static user *ACLCreateUser(const char *name, size_t namelen) {
     aclSelector *s = ACLCreateSelector(SELECTOR_FLAG_ROOT);
     listAddNodeHead(u->selectors, s);
 
-    u->roles = dictCreate(&stringSetDictType);
+    u->roles = dictCreate(&aclMembershipDictType);
     u->members = NULL;
 
     raxInsert(Users, (unsigned char *)name, namelen, u, NULL);
@@ -500,22 +505,22 @@ static void ACLUserClearRoles(user *u) {
     dictEntry *de;
     while ((de = dictNext(di))) {
         user *r = dictGetVal(de);
-        dictDelete(r->members, u->name);
+        dictDelete(r->members, u);
     }
     dictReleaseIterator(di);
     dictRelease(u->roles);
     u->roles = NULL;
 }
 
-/* Copy role assignments from src to dst, registering dst as a member of each role. */
+/* Copy role assignments from src to dst, registering dst as a member of each role.*/
 static void ACLCopyRoles(user *dst, user *src) {
     if (!src->roles) return;
     dictIterator *di = dictGetIterator(src->roles);
     dictEntry *de;
     while ((de = dictNext(di))) {
         user *r = dictGetVal(de);
-        dictAdd(dst->roles, sdsdup(r->name), r);
-        dictAdd(r->members, sdsdup(dst->name), dst);
+        serverAssert(dictAdd(dst->roles, r, r) == DICT_OK);
+        serverAssert(dictAdd(r->members, dst, dst) == DICT_OK);
     }
     dictReleaseIterator(di);
 }
@@ -585,7 +590,7 @@ static void ACLCopyUser(user *dst, user *src) {
     /* Clean up dst's existing role memberships, then copy from src. */
     ACLUserClearRoles(dst);
     if (src->roles) {
-        dst->roles = dictCreate(&stringSetDictType);
+        dst->roles = dictCreate(&aclMembershipDictType);
         ACLCopyRoles(dst, src);
     } else {
         dst->roles = NULL;
@@ -606,7 +611,7 @@ static user *ACLCreateRole(const char *name, size_t namelen) {
     r->name = sdsnewlen(name, namelen);
     r->flags = USER_FLAG_ROLE;
     r->passwords = NULL;
-    r->members = dictCreate(&stringSetDictType);
+    r->members = dictCreate(&aclMembershipDictType);
     r->roles = NULL;
     r->acl_string = NULL;
     r->selectors = listCreate();
@@ -1733,7 +1738,7 @@ int ACLSetUser(user *u, const char *op, ssize_t oplen) {
         serverAssert(ACLSetUser(u, "-@all", -1) == C_OK);
 
         ACLUserClearRoles(u);
-        u->roles = dictCreate(&stringSetDictType);
+        u->roles = dictCreate(&aclMembershipDictType);
     } else if (oplen >= 7 && !strncasecmp(op, "+@role:", 7)) {
         /* Add user to a role */
         const char *rolename = op + 7;
@@ -1743,9 +1748,8 @@ int ACLSetUser(user *u, const char *op, ssize_t oplen) {
             errno = ESRCH;
             return C_ERR;
         }
-        if (dictFind(u->roles, r->name) == NULL) {
-            dictAdd(u->roles, sdsdup(r->name), r);
-            dictAdd(r->members, sdsdup(u->name), u);
+        if (dictAdd(u->roles, r, r) == DICT_OK) {
+            serverAssert(dictAdd(r->members, u, u) == DICT_OK);
         }
     } else if (oplen >= 7 && !strncasecmp(op, "-@role:", 7)) {
         /* Remove user from a role */
@@ -1756,8 +1760,8 @@ int ACLSetUser(user *u, const char *op, ssize_t oplen) {
             errno = ESRCH;
             return C_ERR;
         }
-        dictDelete(u->roles, r->name);
-        dictDelete(r->members, u->name);
+        dictDelete(u->roles, r);
+        dictDelete(r->members, u);
     } else {
         aclSelector *selector = ACLUserGetRootSelector(u);
         if (ACLSetSelector(selector, op, oplen) == C_ERR) {

@@ -332,6 +332,29 @@ start_server {tags {"acl external:skip"}} {
         assert_equal $roles {}
     }
 
+    # --- Case sensitivity of role and user names ---
+
+    test {Role names are case-sensitive} {
+        r ACL SETROLE Cache ~c:* +get
+        r ACL SETROLE cache ~d:* +set
+        assert_equal {Cache cache} [lsort [lsearch -all -inline [r ACL ROLES] {*ache}]]
+
+        r ACL SETUSER caseuser on >p +@role:Cache +@role:cache
+        set info [r ACL GETUSER caseuser]
+        set idx [lsearch $info "roles"]
+        assert_equal {Cache cache} [lsort [lindex $info [expr {$idx + 1}]]]
+    }
+
+    test {User names are case-sensitive on the role member list} {
+        r ACL SETROLE rr ~* +get
+        r ACL SETUSER alice on >p +@role:rr
+        r ACL SETUSER ALICE on >p +@role:rr
+
+        set info [r ACL GETROLE rr]
+        set idx [lsearch $info "members"]
+        assert_equal {ALICE alice} [lsort [lindex $info [expr {$idx + 1}]]]
+    }
+
     # Cleanup
     test {Cleanup test users and roles} {
         # Remove all non-default users (which also drops their role memberships)
@@ -385,6 +408,30 @@ start_server [list overrides [list "dir" $server_path "aclfile" "role.acl"] tags
         r ACL LOAD
         lsort [r ACL ROLES]
     } {customer viewer}
+
+    test {Default user keeps its role membership across ACL LOAD} {
+        for {set i 0} {$i < 3} {incr i} {
+            r ACL LOAD
+
+            set info [r ACL GETUSER default]
+            set idx [lsearch $info "roles"]
+            assert_equal {viewer} [lindex $info [expr {$idx + 1}]]
+
+            set info [r ACL GETROLE viewer]
+            set idx [lsearch $info "members"]
+            assert_equal {bob default} [lsort [lindex $info [expr {$idx + 1}]]]
+        }
+    }
+
+    test {Role held by the default user cannot be deleted} {
+        r ACL SETUSER bob -@role:viewer
+        catch {r ACL DELROLE viewer} err
+        assert_match {*has members*} $err
+
+        # Reading the user back must not dereference a stale role entry.
+        assert_match {*+@role:viewer*} [r ACL LIST]
+        assert_equal {PONG} [r PING]
+    }
 }
 
 # Test ACL file error paths for roles

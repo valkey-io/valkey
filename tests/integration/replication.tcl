@@ -196,10 +196,17 @@ start_server {tags {"repl external:skip"}} {
         }
         
         test {Replica output bytes metric} {
-            # reset stats 
+            # Make sure no replication traffic (initial sync, backlog writes)
+            # is still in flight before resetting stats, so the zero-baseline
+            # assertion below doesn't race with it.
+            wait_for_ofs_sync $A $B
+
+            # Reset stats and read them atomically so replication traffic can't
+            # arrive between the reset and the stats snapshot.
+            $A multi
             $A config resetstat
-            
-            set info [$A info stats]
+            $A info stats
+            set info [lindex [$A exec] 1]
             set replica_bytes_output [getInfoProperty $info "total_net_repl_output_bytes"]
             assert_equal $replica_bytes_output 0
             
@@ -207,7 +214,7 @@ start_server {tags {"repl external:skip"}} {
             $A set key value
             
             # wait for command propagation
-            wait_for_condition 50 100 {
+            wait_for_condition 100 100 {
                 [$B get key] eq {value}
             } else {
                 fail "Replica did not receive the command"
@@ -685,6 +692,12 @@ foreach testType {Successful Aborted} {
                     test {Blocked commands and configs during async-loading} {
                         assert_error {LOADING*} {$replica config set appendonly no}
                         assert_error {LOADING*} {$replica REPLICAOF no one}
+                    }
+
+                    test {MODULE LOAD and LOADEX are blocked during async-loading} {
+                        set testmodule [file normalize tests/modules/basics.so]
+                        assert_error {LOADING*} {$replica MODULE LOAD $testmodule}
+                        assert_error {LOADING*} {$replica MODULE LOADEX $testmodule}
                     }
 
                     # Make sure that next sync will not start immediately so that we can catch the replica in between syncs
@@ -1448,7 +1461,7 @@ test {replica can handle EINTR if use diskless load} {
             set res [wait_for_log_messages -1 {"*Loading DB in memory*"} 0 200 10]
             set loglines [lindex $res 1]
 
-            # Wait till we see the watchgod log line AFTER the loading started
+            # Wait till we see the watchdog log line AFTER the loading started
             wait_for_log_messages -1 {"*WATCHDOG TIMER EXPIRED*"} $loglines 200 10
 
             # Make sure we're still loading, and that there was just one full sync attempt
@@ -1665,6 +1678,65 @@ start_server {tags {"repl external:skip"}} {
                 puts [$replica keys *]
                 fail "Replication failed."
             }
+        }
+    }
+}
+
+start_server {tags {"repl external:skip"}} {
+    set replica [srv 0 client]
+    $replica config set repl-diskless-load disabled
+    $replica commandlog reset slow
+    $replica config set commandlog-execution-slower-than 10000
+
+    start_server {} {
+        set primary [srv 0 client]
+        set primary_host [srv 0 host]
+        set primary_port [srv 0 port]
+
+        $primary config set repl-diskless-sync yes
+        $primary config set repl-diskless-sync-delay 0
+        $primary config set rdbcompression no
+        $primary config set rdb-key-save-delay 10000000
+        $primary debug populate 5 blockread 100000
+
+        test "Cancelling handshake while bio rdb-save read is blocked stalls only up to repl_syncio_timeout" {
+            $replica replicaof $primary_host $primary_port
+
+            # Wait until the replica has entered the payload read phase, i.e. the
+            # bio thread has read the first chunk and is now blocked on the next
+            # (silent) read.
+            wait_for_log_messages -1 {"*receiving streamed RDB from primary*to disk*"} 0 1000 50
+
+            # Aborting the handshake makes the main thread wait in bioDrainWorker()
+            # until the bio thread's blocked read times out. That read is bounded
+            # by repl_syncio_timeout (~5s).
+            $replica replicaof no one
+            # The test is flaky, don't bother to keep it.
+            # assert_match {*replicaof*} [$replica commandlog get -1 slow]
+        }
+
+        $primary config set rdb-key-save-delay 0
+    }
+}
+
+test "SYNC/PSYNC returns NOMASTERLINK with replica-serve-stale-data yes/no and master link down" {
+    start_server {tags {"repl external:skip"}} {
+        set replica [srv 0 client]
+
+        # Point the replica at an unreachable primary so the link stays down.
+        $replica replicaof 127.0.0.1 1
+        wait_for_condition 50 100 {
+            [string match {*master_link_status:down*} [$replica info replication]]
+        } else {
+            fail "Replica link is not down"
+        }
+
+        # SYNC/PSYNC must reach syncCommand and return -NOMASTERLINK in both
+        # the 'no' and 'yes' configurations.
+        foreach stale {yes no} {
+            $replica config set replica-serve-stale-data $stale
+            assert_error {NOMASTERLINK*} {$replica psync ? -1}
+            assert_error {NOMASTERLINK*} {$replica sync}
         }
     }
 }

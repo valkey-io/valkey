@@ -43,7 +43,7 @@
 void sunionDiffGenericCommand(client *c, robj **setkeys, int setnum, robj *dstkey, int op);
 
 /* Factory method to return a set that *can* hold "value". When the object has
- * an integer-encodable value, an intset will be returned. Otherwise a listpack
+ * an integer-encodable value, an intset will be returned. Otherwise, a listpack
  * or a regular hash table.
  *
  * The size hint indicates approximately how many items will be added which is
@@ -407,7 +407,7 @@ sds setTypeNextObject(setTypeIterator *si) {
 
 /* Return random element from a non empty set.
  * The returned element can be an int64_t value if the set is encoded
- * as an "intset" blob of integers, or an string.
+ * as an "intset" blob of integers, or a string.
  *
  * The caller provides three pointers to be populated with the right
  * object. The return value of the function is the object->encoding
@@ -1476,7 +1476,7 @@ void sunionDiffGenericCommand(client *c, robj **setkeys, int setnum, robj *dstke
          * 'dstset_encoding' is used to determine which kind of encoding to use when initialize 'dstset'.
          *
          * If all sets are all OBJ_ENCODING_INTSET encoding or 'dstkey' is not null, keep 'dstset'
-         * OBJ_ENCODING_INTSET encoding when initialize. Otherwise it is not efficient to create the 'dstset'
+         * OBJ_ENCODING_INTSET encoding when initialize. Otherwise, it is not efficient to create the 'dstset'
          * from intset and then convert to listpack or hashtable.
          *
          * If one of the set is OBJ_ENCODING_LISTPACK, let's set 'dstset' to hashtable default encoding,

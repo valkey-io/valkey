@@ -60,6 +60,7 @@ extern "C" {
  *       Example: serverLog(int level, const char *fmt, ...) should NOT be mocked.
  */
 long long __wrap_aeCreateTimeEvent(aeEventLoop *eventLoop, long long milliseconds, aeTimeProc *proc, void *clientData, aeEventFinalizerProc *finalizerProc);
+void __wrap_zmadvise_dontneed(void *ptr, size_t size_hint);
 #undef protected
 #undef _Bool
 #undef typename

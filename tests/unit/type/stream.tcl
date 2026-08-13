@@ -488,7 +488,7 @@ start_server {
         r XADD "\{lestream\}2" 2-0 k2 v5
         r XADD "\{lestream\}2" 3-0 k3 v6
 
-        # read last element from 3 streams (2 with enetries, 1 non-existent)
+        # read last element from 3 streams (2 with entries, 1 non-existent)
         # verify the last element from the two existing streams were returned
         set res [r XREAD STREAMS "\{lestream\}1" "\{lestream\}2" "\{lestream\}3" + + +]
         assert_equal $res {{{{lestream}1} {{3-0 {k3 v3}}}} {{{lestream}2} {{3-0 {k3 v6}}}}}
@@ -719,6 +719,18 @@ start_server {
         assert {[r XLEN mystream] == 400}
     }
 
+    test {XTRIM with MAXLEN 0 keeps an empty stream key} {
+        r DEL mystream
+        r XADD mystream 1-0 f v
+        r XADD mystream 2-0 f v
+        assert_equal 2 [r XTRIM mystream MAXLEN = 0]
+        assert_equal 1 [r EXISTS mystream]
+        set reply [r XINFO STREAM mystream]
+        assert_equal 0 [dict get $reply length]
+        assert_equal "2-0" [dict get $reply last-generated-id]
+        assert_equal "0-0" [dict get $reply recorded-first-entry-id]
+    }
+
     test {XADD with LIMIT consecutive calls} {
         r del mystream
         r config set stream-node-max-entries 10
@@ -908,6 +920,34 @@ start_server {tags {"stream needs:debug"} overrides {appendonly yes stream-node-
         r XADD mystream * xitem v
         incr j
         assert {[r xlen mystream] == 91}
+        r flushall
+    }
+
+    test {XADD/XTRIM strip redundant LIMIT when rewriting for propagation} {
+        set aof [get_last_incr_aof_path r]
+        r config set stream-node-max-entries 10
+
+        for {set j 0} {$j < 100} {incr j} {
+            r XADD mystream * xitem v
+        }
+        assert_equal 100 [r xlen mystream]
+
+        r XADD mystream MAXLEN ~ 55 LIMIT 30 * xitem v
+        assert_equal 71 [r xlen mystream]
+
+        set len_before_trim [r xlen mystream]
+        set trimmed [r XTRIM mystream MAXLEN ~ 50 LIMIT 30]
+        assert {$trimmed > 0 && $trimmed <= 30}
+        assert_equal [expr {$len_before_trim - $trimmed}] [r xlen mystream]
+
+        set fp [open $aof r]
+        fconfigure $fp -translation binary
+        set blob [read $fp]
+        close $fp
+        assert_equal -1 [string first "LIMIT" $blob]
+
+        r debug loadaof
+        assert_equal [expr {$len_before_trim - $trimmed}] [r xlen mystream]
     }
 }
 
@@ -1041,7 +1081,7 @@ start_server {tags {"stream"}} {
         assert_equal [dict get $reply max-deleted-entry-id] "2-0"
     }
 
-    test {XADD with artial ID with maximal seq} {
+    test {XADD with partial ID with maximal seq} {
         r DEL x
         r XADD x 1-18446744073709551615 f1 v1
         assert_error {*The ID specified in XADD is equal or smaller*} {r XADD x 1-* f2 v2}

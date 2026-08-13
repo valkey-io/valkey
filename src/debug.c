@@ -820,7 +820,7 @@ void debugCommand(client *c) {
         addReplyStatus(c, d);
         sdsfree(d);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "digest-value") && c->argc >= 2) {
-        /* DEBUG DIGEST-VALUE key key key ... key. */
+        /* DEBUG DIGEST-VALUE key key ... key. */
         addReplyArrayLen(c, c->argc - 2);
         for (int j = 2; j < c->argc; j++) {
             unsigned char digest[20];

@@ -227,14 +227,43 @@ start_cluster 3 0 [list config_lines $modules] {
         assert_equal OK [$node1 test.register_receiver]
 
         R 0 CONFIG RESETSTAT
-        assert_equal OK [$node2 test.send_msg_type3]
+        assert_equal OK [$node2 test.send_msg_uaf]
 
         wait_for_condition 50 100 {
-            [CI 0 cluster_stats_messages_module_received] >= 1
+            [CI 0 cluster_stats_messages_module_received] >= 2
         } else {
             fail "node1 didn't receive cluster module message after re-registration"
         }
         verify_log_message 0 "*DING (type 3) RECEIVED*TestUAF*" 0
+        verify_log_message 0 "*DING (type 254) RECEIVED*TestMAX*" 0
+    }
+
+    test "VM_RegisterClusterMessageReceiver - dangling callback after MODULE UNLOAD" {
+        set loglines [count_log_lines 0]
+
+        # Register the receivers on node1
+        assert_equal OK [$node1 test.register_receiver]
+
+        # Unload the module on node1
+        assert_equal OK [$node1 MODULE UNLOAD cluster]
+
+        # Another node sends a packet; node1 receives it and, on the buggy code,
+        # would invoke the dangling callback and crash. After the fix the entry
+        # is gone, so the packet is simply ignored.
+        R 0 CONFIG RESETSTAT
+        assert_equal OK [$node2 test.send_msg_uaf]
+
+        # Verify node1 is still alive (the receiving node must not have crashed).
+        wait_for_condition 50 100 {
+            [CI 0 cluster_stats_messages_module_received] >= 2
+        } else {
+            fail "node1 didn't receive cluster module message"
+        }
+        incr loglines
+        set result [exec tail -n +$loglines < [srv 0 stdout]]
+        assert_no_match "*DING (type 3) RECEIVED*TestUAF*" $result
+        assert_no_match "*DING (type 254) RECEIVED*TestMAX*" $result
+        assert_equal PONG [$node1 PING]
     }
 }
 

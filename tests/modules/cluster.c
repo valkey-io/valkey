@@ -2,6 +2,7 @@
 
 #define UNUSED(x) (void)(x)
 #define MSGTYPE_TEST_UAF 3
+#define MSGTYPE_TEST_MAX 254
 
 static void testReceiver(ValkeyModuleCtx *ctx,
                          const char *sender_id,
@@ -16,6 +17,7 @@ static int testRegisterReceiver(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
     UNUSED(argv);
     UNUSED(argc);
     ValkeyModule_RegisterClusterMessageReceiver(ctx, MSGTYPE_TEST_UAF, testReceiver);
+    ValkeyModule_RegisterClusterMessageReceiver(ctx, MSGTYPE_TEST_MAX, testReceiver);
     return ValkeyModule_ReplyWithSimpleString(ctx, "OK");
 }
 
@@ -23,6 +25,7 @@ static int testUnregisterReceiver(ValkeyModuleCtx *ctx, ValkeyModuleString **arg
     UNUSED(argv);
     UNUSED(argc);
     ValkeyModule_RegisterClusterMessageReceiver(ctx, MSGTYPE_TEST_UAF, NULL);
+    ValkeyModule_RegisterClusterMessageReceiver(ctx, MSGTYPE_TEST_MAX, NULL);
     return ValkeyModule_ReplyWithSimpleString(ctx, "OK");
 }
 
@@ -30,6 +33,7 @@ static int testSendMessage(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int 
     UNUSED(argv);
     UNUSED(argc);
     ValkeyModule_SendClusterMessage(ctx, NULL, MSGTYPE_TEST_UAF, "TestUAF", 7);
+    ValkeyModule_SendClusterMessage(ctx, NULL, MSGTYPE_TEST_MAX, "TestMAX", 7);
     return ValkeyModule_ReplyWithSimpleString(ctx, "OK");
 }
 
@@ -44,7 +48,7 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
         return VALKEYMODULE_ERR;
     if (ValkeyModule_CreateCommand(ctx, "test.unregister_receiver", testUnregisterReceiver, "", 0, 0, 0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
-    if (ValkeyModule_CreateCommand(ctx, "test.send_msg_type3", testSendMessage, "", 0, 0, 0) == VALKEYMODULE_ERR)
+    if (ValkeyModule_CreateCommand(ctx, "test.send_msg_uaf", testSendMessage, "", 0, 0, 0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
     return VALKEYMODULE_OK;

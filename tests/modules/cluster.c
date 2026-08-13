@@ -66,6 +66,7 @@ int test_cluster_shards(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
 #define MSGTYPE_DING 1
 #define MSGTYPE_DONG 2
 #define MSGTYPE_TEST_UAF 3
+#define MSGTYPE_TEST_MAX 254
 
 /* test.pingall */
 int PingallCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
@@ -89,6 +90,7 @@ int test_register_receiver(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int 
     UNUSED(argv);
     UNUSED(argc);
     ValkeyModule_RegisterClusterMessageReceiver(ctx, MSGTYPE_TEST_UAF, DingReceiver);
+    ValkeyModule_RegisterClusterMessageReceiver(ctx, MSGTYPE_TEST_MAX, DingReceiver);
     return ValkeyModule_ReplyWithSimpleString(ctx, "OK");
 }
 
@@ -96,13 +98,15 @@ int test_unregister_receiver(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, in
     UNUSED(argv);
     UNUSED(argc);
     ValkeyModule_RegisterClusterMessageReceiver(ctx, MSGTYPE_TEST_UAF, NULL);
+    ValkeyModule_RegisterClusterMessageReceiver(ctx, MSGTYPE_TEST_MAX, NULL);
     return ValkeyModule_ReplyWithSimpleString(ctx, "OK");
 }
 
-int test_send_msg_type3(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+int test_send_msg_uaf(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     UNUSED(argv);
     UNUSED(argc);
     ValkeyModule_SendClusterMessage(ctx, NULL, MSGTYPE_TEST_UAF, "TestUAF", 7);
+    ValkeyModule_SendClusterMessage(ctx, NULL, MSGTYPE_TEST_MAX, "TestMAX", 7);
     return ValkeyModule_ReplyWithSimpleString(ctx, "OK");
 }
 
@@ -127,7 +131,7 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
         return VALKEYMODULE_ERR;
     if (ValkeyModule_CreateCommand(ctx, "test.unregister_receiver", test_unregister_receiver, "", 0, 0, 0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
-    if (ValkeyModule_CreateCommand(ctx, "test.send_msg_type3", test_send_msg_type3, "", 0, 0, 0) == VALKEYMODULE_ERR)
+    if (ValkeyModule_CreateCommand(ctx, "test.send_msg_uaf", test_send_msg_uaf, "", 0, 0, 0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
     if (ValkeyModule_CreateCommand(ctx, "test.start_cluster_timer", test_start_cluster_timer, "", 0, 0, 0) == VALKEYMODULE_ERR)

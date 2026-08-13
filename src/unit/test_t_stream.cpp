@@ -9,6 +9,7 @@
 #include <cstring>
 
 extern "C" {
+#include "listpack.h"
 #include "stream.h"
 }
 
@@ -74,4 +75,21 @@ TEST_F(StreamIdTest, TestStreamIDLexicographicOrdering) {
     streamEncodeID(buf_d, &id_d);
 
     ASSERT_LT(memcmp(buf_c, buf_d, 16), 0);
+}
+
+TEST_F(StreamIdTest, TestStreamListpackRejectsDeletedCountMismatch) {
+    unsigned char *lp = lpNew(0);
+    lp = lpAppendInteger(lp, 1); /* One live entry according to the header. */
+    lp = lpAppendInteger(lp, 0);
+    lp = lpAppendInteger(lp, 1);
+    lp = lpAppend(lp, (unsigned char *)"field", 5);
+    lp = lpAppendInteger(lp, 0);
+    lp = lpAppendInteger(lp, 3); /* SAMEFIELDS | DELETED */
+    lp = lpAppendInteger(lp, 0);
+    lp = lpAppendInteger(lp, 0);
+    lp = lpAppend(lp, (unsigned char *)"value", 5);
+    lp = lpAppendInteger(lp, 4);
+
+    EXPECT_FALSE(streamValidateListpackIntegrity(lp, lpBytes(lp)));
+    lpFree(lp);
 }

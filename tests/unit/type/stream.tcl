@@ -599,6 +599,87 @@ start_server {
         assert {[dict get [lindex $result 0 1] b] eq {2}}
         assert {[dict get [lindex $result 1 1] c] eq {3}}
     }
+
+    test {Stream node GC compacts listpacks with many deleted entries} {
+        r del somestream
+        r del somestream-copy
+        r del trimstream
+        r del trimstream-copy
+        set old_node_max_bytes [lindex [r config get stream-node-max-bytes] 1]
+        set old_node_max_entries [lindex [r config get stream-node-max-entries] 1]
+        set old_gc_enabled [lindex [r config get stream-node-gc-enabled] 1]
+        r config set stream-node-max-bytes 1000000
+        r config set stream-node-max-entries 100
+        r config set stream-node-gc-enabled no
+
+        try {
+            set deleted_ids {}
+            set value [string repeat x 256]
+            for {set j 1} {$j <= 100} {incr j} {
+                switch [expr {$j % 3}] {
+                    0 {r xadd somestream $j-0 a $value b $value c $value}
+                    1 {r xadd somestream $j-0 a $value}
+                    2 {r xadd somestream $j-0 b $value c $value}
+                }
+                if {$j < 70} {
+                    lappend deleted_ids $j-0
+                }
+            }
+
+            set memory_before [r memory usage somestream]
+            assert_equal 69 [r xdel somestream {*}$deleted_ids]
+            set memory_gc_disabled [r memory usage somestream]
+            assert {$memory_gc_disabled > $memory_before / 2}
+
+            r config set stream-node-gc-enabled yes
+            assert_equal 1 [r xdel somestream 70-0]
+            set memory_after [r memory usage somestream]
+            assert {$memory_after < $memory_before / 2}
+
+            set forward [r xrange somestream - +]
+            set reverse [r xrevrange somestream + -]
+            assert_equal 30 [llength $forward]
+            assert_equal [lreverse $forward] $reverse
+            assert_equal 71-0 [lindex $forward 0 0]
+            assert_equal 100-0 [lindex $reverse 0 0]
+            assert_equal 101-0 [r xadd somestream 101-0 a added]
+            assert_equal {a added} [lindex [r xrange somestream 101-0 101-0] 0 1]
+
+            set payload [r dump somestream]
+            r restore somestream-copy 0 $payload
+            assert_equal [r xrange somestream - +] [r xrange somestream-copy - +]
+
+            for {set j 1} {$j <= 100} {incr j} {
+                switch [expr {$j % 3}] {
+                    0 {r xadd trimstream $j-0 a $value b $value c $value}
+                    1 {r xadd trimstream $j-0 a $value}
+                    2 {r xadd trimstream $j-0 b $value c $value}
+                }
+            }
+            set trim_memory_before [r memory usage trimstream]
+            assert_equal 70 [r xtrim trimstream maxlen = 30]
+            set trim_memory_after [r memory usage trimstream]
+            assert {$trim_memory_after < $trim_memory_before / 2}
+            set trim_forward [r xrange trimstream - +]
+            set trim_reverse [r xrevrange trimstream + -]
+            assert_equal 30 [llength $trim_forward]
+            assert_equal [lreverse $trim_forward] $trim_reverse
+            assert_equal 71-0 [lindex $trim_forward 0 0]
+
+            set trim_payload [r dump trimstream]
+            r restore trimstream-copy 0 $trim_payload
+            assert_equal $trim_forward [r xrange trimstream-copy - +]
+        } finally {
+            r del somestream
+            r del somestream-copy
+            r del trimstream
+            r del trimstream-copy
+            r config set stream-node-max-bytes $old_node_max_bytes
+            r config set stream-node-max-entries $old_node_max_entries
+            r config set stream-node-gc-enabled $old_gc_enabled
+        }
+    }
+
     # Here the idea is to check the consistency of the stream data structure
     # as we remove all the elements down to zero elements.
     test {XDEL fuzz test} {
@@ -631,6 +712,48 @@ start_server {
                 set res [r xrange somestream - +]
                 assert {[llength $res] == $x}
             }
+        }
+    }
+
+    test {XDEL fuzz test with frequent stream node GC} {
+        set old_node_max_bytes [lindex [r config get stream-node-max-bytes] 1]
+        set old_node_max_entries [lindex [r config get stream-node-max-entries] 1]
+        set old_gc_enabled [lindex [r config get stream-node-gc-enabled] 1]
+        r config set stream-node-max-bytes 1000000
+        r config set stream-node-max-entries 12
+
+        try {
+            foreach gc_enabled {yes no} {
+                r config set stream-node-gc-enabled $gc_enabled
+                r del somestream
+                set ids {}
+                for {set j 0} {$j < 600} {incr j} {
+                    switch [expr {$j % 3}] {
+                        0 {set id [r xadd somestream * a $j]}
+                        1 {set id [r xadd somestream * a $j b $j]}
+                        2 {set id [r xadd somestream * c $j d $j e $j]}
+                    }
+                    lappend ids $id
+                }
+
+                set ids [lshuffle $ids]
+                set remaining 600
+                foreach id $ids {
+                    assert_equal 1 [r xdel somestream $id]
+                    incr remaining -1
+                    if {$remaining % 25 == 0} {
+                        set forward [r xrange somestream - +]
+                        set reverse [r xrevrange somestream + -]
+                        assert_equal $remaining [llength $forward]
+                        assert_equal [lreverse $forward] $reverse
+                    }
+                }
+            }
+        } finally {
+            r del somestream
+            r config set stream-node-max-bytes $old_node_max_bytes
+            r config set stream-node-max-entries $old_node_max_entries
+            r config set stream-node-gc-enabled $old_gc_enabled
         }
     }
 

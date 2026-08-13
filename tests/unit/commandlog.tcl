@@ -208,8 +208,10 @@ start_server {tags {"commandlog"} overrides {commandlog-execution-slower-than 10
         r config set commandlog-execution-slower-than -1
         set slowlog_resp [r commandlog get -1 slow]
 
+        # Entry 0 is EXEC, entry 1 is SET, entry 2 is ACL SETUSER.
         # The ACL SETUSER redaction must not carry over to the following SET
-        assert_equal {set foo bar} [lindex [lindex $slowlog_resp 0] 3]
+        assert_equal {exec} [lindex [lindex $slowlog_resp 0] 3]
+        assert_equal {set foo bar} [lindex [lindex $slowlog_resp 1] 3]
         r acl deluser commandlog-test-user
     }
 

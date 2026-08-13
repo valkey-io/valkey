@@ -4007,12 +4007,24 @@ int streamValidateListpackIntegrity(unsigned char *lp, size_t size, uint64_t *va
     if (!valid_record || zero != 0) return 0;
     p = next; if (!lpValidateNext(lp, &next, size)) return 0;
 
+    /* Only the sum of the two header counts is validated by the traversal
+     * below, so count the live and deleted records actually present and
+     * reconcile both. streamIteratorRemoveEntry() frees the whole node once the
+     * declared live count reaches 1, so a header that understates it makes XDEL
+     * destroy the records it failed to account for. */
+    int64_t declared_live = entry_count, declared_deleted = deleted_count;
+    uint64_t live_records = 0, deleted_records = 0;
+
     entry_count += deleted_count;
     while (entry_count--) {
         if (!p) return 0;
         int64_t fields = master_fields, extra_fields = 3;
         int64_t flags = lpGetIntegerIfValid(p, &valid_record);
         if (!valid_record) return 0;
+        if (flags & STREAM_ITEM_FLAG_DELETED)
+            deleted_records++;
+        else
+            live_records++;
         p = next; if (!lpValidateNext(lp, &next, size)) return 0;
 
         /* entry id */
@@ -4051,6 +4063,7 @@ int streamValidateListpackIntegrity(unsigned char *lp, size_t size, uint64_t *va
 
     if (next)
         return 0;
+    if (live_records != (uint64_t)declared_live || deleted_records != (uint64_t)declared_deleted) return 0;
 
     return 1;
 }

@@ -1741,7 +1741,7 @@ test "SYNC/PSYNC returns NOMASTERLINK with replica-serve-stale-data yes/no and m
     }
 }
 
-start_server {tags {"repl external:skip"}} {
+start_server {tags {"repl external:skip cluster:skip"}} {
     set primary [srv 0 client]
     set primary_host [srv 0 host]
     set primary_port [srv 0 port]

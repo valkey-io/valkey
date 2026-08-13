@@ -1548,8 +1548,6 @@ static void generateStringArgValue(FuzzerCommand *cmd, const char *argName, Comm
         appendArg(cmd, sdscatprintf(sdsempty(), "module-%d", rand() % 100));
     } else if (strcmp(argName, "arg") == 0 || strcmp(argName, "args") == 0) {
         appendArg(cmd, sdscatprintf(sdsempty(), "arg%d", rand() % 10));
-    } else if (strcmp(argName, "command") == 0) {
-        appendArg(cmd, sdsnew(commands[rand() % (sizeof(commands) / sizeof(commands[0]))]));
     } else if (strcmp(argName, "threshold") == 0) {
         appendArg(cmd, sdscatprintf(sdsempty(), "%d", rand() % 30));
     } else if (strcmp(argName, "metric") == 0) {

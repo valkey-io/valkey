@@ -49,7 +49,7 @@
  * (with the exception of a ----- line which can appear first). Other comment
  * blocks, which are not intended for the modules API user, such as this comment
  * block, do NOT start with a markdown level 2 heading, so they are included in
- * the generated a API documentation.
+ * the generated API documentation.
  *
  * The documentation comments may contain markdown formatting. Some automatic
  * replacements are done, such as the replacement of RM with ValkeyModule in
@@ -7244,12 +7244,12 @@ moduleType *moduleTypeLookupModuleByNameInternal(const char *name, int ignore_ca
     }
     return NULL;
 }
-/* Search all registered modules by name, and name is case sensitive */
+/* Search all registered modules by name, and name is case-sensitive */
 moduleType *moduleTypeLookupModuleByName(const char *name) {
     return moduleTypeLookupModuleByNameInternal(name, 0);
 }
 
-/* Search all registered modules by name, but case insensitive */
+/* Search all registered modules by name, but case-insensitive */
 moduleType *moduleTypeLookupModuleByNameIgnoreCase(const char *name) {
     return moduleTypeLookupModuleByNameInternal(name, 1);
 }
@@ -8771,7 +8771,7 @@ ValkeyModuleBlockedClient *VM_BlockClientOnAuth(ValkeyModuleCtx *ctx,
     return bc;
 }
 
-/* Get the private data that was previusely set on a blocked client */
+/* Get the private data that was previously set on a blocked client */
 void *VM_BlockClientGetPrivateData(ValkeyModuleBlockedClient *blocked_client) {
     return blocked_client->privdata;
 }
@@ -11460,7 +11460,7 @@ int moduleUnregisterSharedAPI(ValkeyModule *module) {
     return count;
 }
 
-/* Remove the specified module as an user of APIs of ever other module.
+/* Remove the specified module as a user of APIs of every other module.
  * This is usually called when a module is unloaded.
  *
  * Returns the number of modules this module was using APIs from. */
@@ -11900,7 +11900,7 @@ size_t VM_MallocSizeDict(ValkeyModuleDict *dict) {
     return size;
 }
 
-/* Return the a number between 0 to 1 indicating the amount of memory
+/* Return a number between 0 to 1 indicating the amount of memory
  * currently used, relative to the server "maxmemory" configuration.
  *
  * * 0 - No memory limit configured.
@@ -13099,7 +13099,7 @@ void moduleInitModulesSystem(void) {
 
     /* Create a pipe for module threads to be able to wake up the server main thread.
      * Make the pipe non blocking. This is just a best effort aware mechanism
-     * and we do not want to block not in the read nor in the write half.
+     * and we want to avoid blocking in both the read and write halves.
      * Enable close-on-exec flag on pipes in case of the fork-exec system calls in
      * sentinels or servers. */
     if (anetPipe(server.module_pipe, O_CLOEXEC | O_NONBLOCK, O_CLOEXEC | O_NONBLOCK) == -1) {
@@ -13173,7 +13173,7 @@ void moduleRemoveConfigs(ValkeyModule *module) {
 }
 
 /* Remove ACL categories added by the module when it fails to load. */
-void moduleRemoveCateogires(ValkeyModule *module) {
+void moduleRemoveCategories(ValkeyModule *module) {
     if (module->num_acl_categories_added) {
         ACLCleanupCategoriesOnFailure(module->num_acl_categories_added);
     }
@@ -13404,7 +13404,7 @@ static int moduleInitPostOnLoadResolved(ModuleLoadFunc onload,
             serverLog(LL_WARNING, "%sModule %s initialization failed. Module not loaded.",
                       is_static ? "Static " : "", display_name);
             moduleUnregisterCleanup(ctx.module);
-            moduleRemoveCateogires(ctx.module);
+            moduleRemoveCategories(ctx.module);
             moduleFreeModuleStructure(ctx.module);
             if (errmsg) *errmsg = "module initialization failed";
         } else {

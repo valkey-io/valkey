@@ -70,7 +70,7 @@ int HelloPushNative_ValkeyCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **arg
     return VALKEYMODULE_OK;
 }
 
-/* HELLO.PUSH.CALL implements RPUSH using an higher level approach, calling
+/* HELLO.PUSH.CALL implements RPUSH using a higher level approach, calling
  * a command instead of working with the key in a low level way. This
  * approach is useful when you need to call commands that are not
  * available as low level APIs, or when you don't need the maximum speed

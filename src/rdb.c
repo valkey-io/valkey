@@ -1871,7 +1871,7 @@ static int _listZiplistEntryConvertAndValidate(unsigned char *p, unsigned int he
     return 1;
 }
 
-/* callback for to check the listpack doesn't have duplicate records */
+/* callback to check the listpack doesn't have duplicate records */
 static int _lpEntryValidation(unsigned char *p, unsigned int head_count, void *userdata) {
     struct {
         int pairs;
@@ -2614,6 +2614,10 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
             return NULL;
         }
 
+        /* Sum of non-deleted entries across all listpacks, used below to
+         * validate the stream length loaded from the payload. */
+        uint64_t valid_entries = 0;
+
         while (listpacks--) {
             /* Get the primary ID, the one we'll use as key of the radix tree
              * node: the entries inside the listpack itself are delta-encoded
@@ -2642,7 +2646,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
                 return NULL;
             }
             server.stat_dump_payload_sanitizations++;
-            if (!streamValidateListpackIntegrity(lp, lp_size)) {
+            if (!streamValidateListpackIntegrity(lp, lp_size, &valid_entries)) {
                 rdbReportCorruptRDB("Stream listpack integrity check failed.");
                 sdsfree(nodekey);
                 decrRefCount(o);
@@ -2711,6 +2715,19 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
 
         if (s->length && !raxSize(s->rax)) {
             rdbReportCorruptRDB("Stream length inconsistent with rax entries");
+            decrRefCount(o);
+            return NULL;
+        }
+
+        /* Validate that the loaded length matches the number of non-deleted
+         * entries actually present in the listpacks. 's->length' comes straight
+         * from the payload; a crafted payload can claim a positive length while
+         * every listpack entry is a tombstone, which later makes
+         * streamLastValidID() panic ("length is N, but no max id") when a
+         * command such as XSETID, XADD or XREADGROUP looks up the last valid
+         * ID. valid_entries was accumulated during listpack validation above. */
+        if (s->length != valid_entries) {
+            rdbReportCorruptRDB("Stream length inconsistent with the number of valid entries");
             decrRefCount(o);
             return NULL;
         }
@@ -3094,7 +3111,7 @@ void rdbLoadProgressCallback(rio *r, const void *buf, size_t len) {
  * message on failure.
  *
  * The lib_ctx argument is also optional. If NULL is given, only verify rdb
- * structure with out performing the actual functions loading. */
+ * structure without performing the actual functions loading. */
 int rdbFunctionLoad(rio *rdb, int ver, functionsLibCtx *lib_ctx, int rdbflags, sds *err) {
     UNUSED(ver);
     sds error = NULL;

@@ -173,7 +173,7 @@ proc spawn_instance {type base_port count {conf {}} {base_conf_file ""}} {
         if {[server_is_up $::host $port 100] == 0} {
             set logfile [file join $dirname log.txt]
             puts [exec tail $logfile]
-            abort_sentinel_test "Problems starting $type #$instance_id: ping timeout, maybe server start failed, check $logfile"
+            abort_sentinel_test "Problem starting $type #$instance_id: ping timeout, maybe server start failed, check $logfile"
         }
 
         # Push the instance into the right list
@@ -614,7 +614,7 @@ proc end_tests {} {
 # The "S" command is used to interact with the N-th Sentinel.
 # The general form is:
 #
-# S <sentinel-id> command arg arg arg ...
+# S <sentinel-id> command arg [arg ...]
 #
 # Example to ping the Sentinel 0 (first instance): S 0 PING
 proc S {n args} {

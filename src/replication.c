@@ -1418,7 +1418,7 @@ void freeClientReplicationData(client *c) {
  * The replica reports its version.
  *
  * - rdb-channel <1|0>
- * Used to identify the client as a replica's rdb connection in an dual channel
+ * Used to identify the client as a replica's rdb connection in a dual channel
  * sync session.
  *
  * - set-rdb-client-id <client-id>
@@ -2294,7 +2294,7 @@ void disklessLoadDiscardTempDb(serverDb **tempDb) {
     discardTempDb(tempDb);
 }
 
-/* Helper function for to initialize temp function lib context.
+/* Helper function to initialize temp function lib context.
  * The temp ctx may be populated by functionsLibCtxSwapWithCurrent or
  * freed by disklessLoadDiscardFunctionsLibCtx later. */
 functionsLibCtx *disklessLoadFunctionsLibCtxCreate(void) {
@@ -3917,7 +3917,7 @@ int syncWithPrimaryHandleSendHandshakeState(connection *conn) {
      *                    Inform the primary of this capa only during diskless sync
      *                    using a connection that has integrity checks (such as TLS).
      *                    In non-diskless sync, or non-integrity-checked connection, there is more
-     *                    concern for data corruprion so we keep this extra layer of detection.
+     *                    concern for data corruption so we keep this extra layer of detection.
      *
      * The primary will ignore capabilities it does not understand. */
 
@@ -4301,7 +4301,7 @@ void syncWithPrimary(connection *conn) {
         }
     }
 
-    /* If the primary is in an transient error, we should try to PSYNC
+    /* If the primary is in a transient error, we should try to PSYNC
      * from scratch later, so go to the error path. This happens when
      * the server is loading the dataset or is not connected with its
      * primary and so forth. */
@@ -5407,7 +5407,7 @@ void replicationCron(void) {
     /* Second, send a newline to all the replicas in pre-synchronization
      * stage, that is, replicas waiting for the primary to create the RDB file.
      *
-     * Also send the a newline to all the chained replicas we have, if we lost
+     * Also send a newline to all the chained replicas we have, if we lost
      * connection from our primary, to keep the replicas aware that their
      * primary is online. This is needed since sub-replicas only receive proxied
      * data from top-level primaries, so there is no explicit pinging in order

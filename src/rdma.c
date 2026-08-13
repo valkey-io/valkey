@@ -732,7 +732,7 @@ static void connRdmaEventHandler(struct aeEventLoop *el, int fd, void *clientDat
         return;
     }
 
-    /* uplayer should read all */
+    /* up layer should read all */
     while (!(rdma_conn->postpone_mask & CONN_POSTPONE_READ) && ctx->rx.pos < ctx->rx.offset) {
         /* When an IO-thread read completed but processClientIOReadsDone has not run yet,
          * readQueryFromClient cannot consume RDMA RX; without this break the read_handler
@@ -1860,6 +1860,8 @@ static ConnectionType CT_RDMA = {
     .process_pending_data = rdmaProcessPendingData,
     .postpone_update_state = postPoneUpdateRdmaState,
     .update_state = updateRdmaState,
+    /* updateRdmaState → connRdmaEventHandler may sync-call read/write handlers. */
+    .sync_handlers_in_update_state = 1,
 
     /* Miscellaneous */
     .connIntegrityChecked = NULL,

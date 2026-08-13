@@ -19,9 +19,9 @@ start_server {tags {"modules"}} {
         assert_equal {OK} [r testmoduleone.rm_register_auth_cb]
     }
 
-    test {test module AUTH for non existing / disabled users} {
+    test {test module AUTH for nonexistent / disabled users} {
         r config resetstat
-        # Validate that an error is thrown for non existing users.
+        # Validate that an error is thrown for nonexistent users.
         assert_error {*WRONGPASS*} {r AUTH foo pwd}
         assert_match {*calls=1,*,rejected_calls=0,failed_calls=1} [cmdstat auth]
         # Validate that an error is thrown for disabled users.

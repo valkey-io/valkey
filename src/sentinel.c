@@ -1482,7 +1482,7 @@ sentinelValkeyInstance *getSentinelValkeyInstanceByAddrAndRunID(dict *instances,
     serverAssert(addr || runid); /* User must pass at least one search param. */
     if (addr != NULL) {
         /* Try to resolve addr. If hostnames are used, we're accepting an ri_addr
-         * that contains an hostname only and can still be matched based on that.
+         * that contains a hostname only and can still be matched based on that.
          */
         ri_addr = createSentinelAddr(addr, port, 1);
         if (!ri_addr) return NULL;
@@ -3778,7 +3778,7 @@ void sentinelCommand(client *c) {
             "    failover.",
             "CONFIG SET param value [param value ...]",
             "    Set a global Sentinel configuration parameter.",
-            "CONFIG GET <param> [param param param ...]",
+            "CONFIG GET param [param ...]",
             "    Get global Sentinel configuration parameter.",
             "DEBUG [<param> <value> ...]",
             "    Show a list of configurable time parameters and their values (milliseconds).",

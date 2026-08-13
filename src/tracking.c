@@ -45,7 +45,7 @@ rax *TrackingTable = NULL;
 rax *PrefixTable = NULL;
 uint64_t TrackingTableTotalItems = 0; /* Total number of IDs stored across
                                          the whole tracking table. This gives
-                                         an hint about the total memory we
+                                         a hint about the total memory we
                                          are using server side for CSC. */
 robj *TrackingChannelName;
 

@@ -198,6 +198,35 @@ start_server {tags {"commandlog"} overrides {commandlog-execution-slower-than 10
         assert_match {* key 9 5000 AUTH2 (redacted) (redacted)} [lindex [lindex $slowlog_resp 0] 3]
     } {} {needs:repl}
 
+    test {COMMANDLOG slow - Redaction does not leak to later commands in a MULTI} {
+        r config set commandlog-execution-slower-than 0
+        r commandlog reset slow
+        r multi
+        r acl setuser commandlog-test-user +get
+        r set foo bar
+        r exec
+        r config set commandlog-execution-slower-than -1
+        set slowlog_resp [r commandlog get -1 slow]
+
+        # The ACL SETUSER redaction must not carry over to the following SET
+        assert_equal {set foo bar} [lindex [lindex $slowlog_resp 0] 3]
+        r acl deluser commandlog-test-user
+    }
+
+    test {COMMANDLOG slow - Redaction is applied to commands executed from scripts} {
+        r config set commandlog-execution-slower-than 0
+        r commandlog reset slow
+        # MIGRATE on a missing key returns NOKEY before connecting anywhere,
+        # but redacts its AUTH2 arguments while parsing them.
+        r eval {server.call('migrate', '127.0.0.1', '9999', 'missingkey', '9', '100', 'AUTH2', 'user', 'password')} 0
+        r config set commandlog-execution-slower-than -1
+        set slowlog_resp [r commandlog get -1 slow]
+
+        # Entry 0 is the EVAL itself, entry 1 is the MIGRATE the script executed
+        assert_equal {migrate 127.0.0.1 9999 missingkey 9 100 AUTH2 (redacted) (redacted)} \
+            [lindex [lindex $slowlog_resp 1] 3]
+    }
+
     test {COMMANDLOG slow - Rewritten commands are logged as their original command} {
         r config set commandlog-execution-slower-than 0
 
@@ -262,17 +291,42 @@ start_server {tags {"commandlog"} overrides {commandlog-execution-slower-than 10
         lindex $e 3
     } {sadd set foo {AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA... (1 more bytes)}}
 
-    test {COMMANDLOG slow - EXEC is not logged, just executed commands} {
+    test {COMMANDLOG slow - EXEC is logged alongside slow inner commands} {
         r config set commandlog-execution-slower-than 100000
         r commandlog reset slow
         assert_equal [r commandlog len slow] 0
         r multi
         r debug sleep 0.2
         r exec
+        assert_equal [r commandlog len slow] 2
+        set entries [r commandlog get -1 slow]
+        assert_equal [lindex [lindex $entries 0] 3] {exec}
+        assert_equal [lindex [lindex $entries 1] 3] {debug sleep 0.2}
+    } {} {needs:debug}
+
+    test {COMMANDLOG slow - EXEC records total transaction time when inner commands are individually fast} {
+        r config set commandlog-execution-slower-than 100000
+        r commandlog reset slow
+        r multi
+        for {set i 0} {$i < 10} {incr i} {
+            r debug sleep 0.03
+        }
+        r exec
         assert_equal [r commandlog len slow] 1
         set e [lindex [r commandlog get -1 slow] 0]
-        assert_equal [lindex $e 3] {debug sleep 0.2}
+        assert_equal [lindex $e 3] {exec}
+        assert {[lindex $e 2] >= 100000}
     } {} {needs:debug}
+
+    test {COMMANDLOG slow - EXEC is not logged when transaction is below threshold} {
+        r config set commandlog-execution-slower-than 100000
+        r commandlog reset slow
+        r multi
+        r set foo bar
+        r get foo
+        r exec
+        assert_equal [r commandlog len slow] 0
+    }
 
     test {COMMANDLOG slow - can clean older entries} {
         r client setname lastentry_client

@@ -2396,7 +2396,7 @@ void beforeNextClient(client *c) {
     /* Handle async frees */
     /* Note: this doesn't make the server.clients_to_close list redundant because of
      * cases where we want an async free of a client other than myself. For example
-     * in ACL modifications we disconnect clients authenticated to non-existent
+     * in ACL modifications we disconnect clients authenticated to nonexistent
      * users (see ACL LOAD). */
     if (c->flag.close_asap) {
         freeClient(c);
@@ -6589,10 +6589,12 @@ int processClientIOReadsDone(client *c) {
     int in_accept_state = (connGetState(c->conn) == CONN_STATE_ACCEPTING);
     int needs_post_read_update = 0;
 
+    /* Defer the post-batch update only when update_state may sync-invoke
+     * handlers. Always call update_state, including ACCEPTING. */
     if (c->conn) {
         int mask = 0;
-        if (!in_accept_state) {
-            mask |= CONN_POSTPONE_READ;
+        if (!in_accept_state && connUpdateStateMayInvokeHandlers(c->conn)) {
+            mask = CONN_POSTPONE_READ;
             if (c->io_write_state != CLIENT_IDLE) mask |= CONN_POSTPONE_WRITE;
             needs_post_read_update = 1;
         }

@@ -283,10 +283,10 @@ start_cluster 3 0 [list config_lines $modules] {
     }
 
     test "VM_RegisterClusterMessageReceiver - unregister head and re-register does not crash" {
-        # Register a receiver for type 3 on node1
+        # Register the receivers on node1
         assert_equal OK [$node1 test.register_receiver]
 
-        # Unregister it (this is the head of the list for type 3)
+        # Unregister it (the head of the list)
         assert_equal OK [$node1 test.unregister_receiver]
 
         # Re-register - on the buggy code this traverses freed memory and crashes
@@ -294,14 +294,41 @@ start_cluster 3 0 [list config_lines $modules] {
 
         # Send from node2 so node1 receives it via the re-registered receiver
         R 0 CONFIG RESETSTAT
-        assert_equal OK [$node2 test.send_msg_type3]
+        assert_equal OK [$node2 test.send_msg_uaf]
 
         wait_for_condition 50 100 {
-            [CI 0 cluster_stats_messages_module_received] >= 1
+            [CI 0 cluster_stats_messages_module_received] >= 2
         } else {
             fail "node1 didn't receive cluster module message after re-registration"
         }
         verify_log_message 0 "*DING (type 3) RECEIVED*TestUAF*" 0
+        verify_log_message 0 "*DING (type 254) RECEIVED*TestMAX*" 0
+    }
+
+    test "VM_RegisterClusterMessageReceiver - dangling callback after MODULE UNLOAD" {
+        set loglines [count_log_lines 0]
+
+        # Register the receivers on node1
+        assert_equal OK [$node1 test.register_receiver]
+
+        # Unload the module on node1
+        assert_equal OK [$node1 MODULE UNLOAD cluster]
+
+        # Another node sends a packet; node1 receives it and, on the buggy code,
+        # would invoke the dangling callback and crash. After the fix the entry
+        # is gone, so the packet is simply ignored.
+        R 0 CONFIG RESETSTAT
+        assert_equal OK [$node2 test.send_msg_uaf]
+
+        # Verify node1 is still alive (the receiving node must not have crashed).
+        wait_for_condition 50 100 {
+            [CI 0 cluster_stats_messages_module_received] >= 2
+        } else {
+            fail "node1 didn't receive cluster module message"
+        }
+        verify_no_log_message 0 "*DING (type 3) RECEIVED*TestUAF*" $loglines
+        verify_no_log_message 0 "*DING (type 254) RECEIVED*TestMAX*" $loglines
+        assert_equal PONG [$node1 PING]
     }
 
     test "VM_CALL CLUSTER SLOTS from Module Timer" {

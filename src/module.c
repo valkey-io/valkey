@@ -12339,6 +12339,30 @@ void moduleUnregisterCommands(struct ValkeyModule *module) {
     hashtableResetIterator(&iter);
 }
 
+/* Remove every cluster message receiver that belongs to the given module. */
+static void moduleUnregisterClusterReceivers(ValkeyModule *module) {
+    if (!server.cluster_enabled) return;
+
+    for (int type = 0; type < UINT8_MAX; type++) {
+        moduleClusterReceiver *r = clusterReceivers[type], *prev = NULL;
+        while (r) {
+            if (r->module == module) {
+                /* Unlink the receiver node from the linked list. A module
+                 * registers at most one receiver per type, so we can stop
+                 * scanning this type as soon as we removed it. */
+                if (prev)
+                    prev->next = r->next;
+                else
+                    clusterReceivers[type] = r->next;
+                zfree(r);
+                break;
+            }
+            prev = r;
+            r = r->next;
+        }
+    }
+}
+
 /* We parse argv to add sds "NAME VALUE" pairs to the server.module_configs_queue list of configs.
  * We also increment the module_argv pointer to just after ARGS if there are args, otherwise
  * we set it to NULL */
@@ -12391,6 +12415,7 @@ void moduleUnregisterCleanup(ValkeyModule *module) {
     moduleUnsubscribeAllServerEvents(module);
     moduleRemoveConfigs(module);
     moduleUnregisterAuthCBs(module);
+    moduleUnregisterClusterReceivers(module);
 }
 
 /* Load a module and initialize it. On success C_OK is returned, otherwise

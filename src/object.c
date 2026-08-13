@@ -1743,6 +1743,14 @@ uint8_t objectGetLFUFrequency(robj *o) {
     return freq;
 }
 
+/* Return the LFU frequency for an object without updating the object's
+ * decay timestamp. Safe to call from a background thread. */
+uint8_t objectGetLFUFrequencyReadOnly(robj *o) {
+    uint8_t freq;
+    lfu_getFrequency(o->lru, &freq);
+    return freq;
+}
+
 /* Return the LRU idle time for an object. */
 uint32_t objectGetLRUIdleSecs(robj *o) {
     return lru_getIdleSecs(o->lru);

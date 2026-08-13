@@ -13,6 +13,7 @@
 typedef struct serverObject robj;
 
 /* Config callbacks (wired from config.c). */
+int hotKeyEnabledCallback(const char **err);
 int hotKeySamplingCallback(const char **err);
 int hotKeyTopKCallback(const char **err);
 int hotKeyWindowCallback(const char **err);
@@ -23,6 +24,8 @@ int hotkeyEnabled(void);
 uint64_t hotkeyLastWindowSamples(void);
 /* Create the manager at server startup if detection is enabled. */
 void hotkeyInit(void);
+/* Periodic maintenance (call from serverCron): freeze elapsed windows on time. */
+void hotkeyCron(void);
 
 /* Drop tracked keys: all, or scoped to a cluster slot / database. */
 void hotkeyPurgeAll(void);

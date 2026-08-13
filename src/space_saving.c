@@ -212,9 +212,11 @@ void spaceSavingManagerRotate(spaceSavingManager *m, uint64_t now_us) {
     m->live_window_start_us += windows * m->live_window_length_us;
 }
 
-void recordSpaceSavingManagerSample(spaceSavingManager *m, uint64_t now_us, const void *item) {
+/* Record one observation into the current (live) window. Does NOT rotate: the
+ * caller drives window boundaries by calling spaceSavingManagerRotate() on a
+ * timer, which keeps this hot path free of any clock read. */
+void recordSpaceSavingManagerSample(spaceSavingManager *m, const void *item) {
     if (!m) return;
-    spaceSavingManagerRotate(m, now_us);
     recordSpaceSavingWindowSample(m->live, item);
 }
 

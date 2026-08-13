@@ -1653,6 +1653,10 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
     /* Handle background operations on databases. */
     databasesCron();
 
+    /* Close any elapsed hot-key detection window on schedule, so a completed
+     * window is frozen even with no traffic. */
+    hotkeyCron();
+
     /* Start a scheduled AOF rewrite if this was requested by the user while
      * a BGSAVE was in progress. */
     if (!hasActiveChildProcess() && server.aof_rewrite_scheduled && !aofRewriteLimited()) {

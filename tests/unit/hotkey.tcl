@@ -15,10 +15,11 @@ start_server {tags {"hotkey external:skip"}} {
     }
 
     test "Enable hotkey functionality" {
+        r config set hotkey-enabled yes
         r config set hotkey-sampling-percentage 100
         r config set hotkey-window-seconds 1
-        set hotkey_status [r config get hotkey-sampling-percentage]
-        assert_equal [lindex $hotkey_status 1] "100"
+        set hotkey_status [r config get hotkey-enabled]
+        assert_equal [lindex $hotkey_status 1] "yes"
     }
 
     test "HOTKEYS GET returns empty when no hot keys" {
@@ -120,8 +121,8 @@ start_server {tags {"hotkey external:skip"}} {
     }
 
     test "Disable hotkey functionality" {
-        r config set hotkey-sampling-percentage 0
-        assert_equal [lindex [r config get hotkey-sampling-percentage] 1] "0"
+        r config set hotkey-enabled no
+        assert_equal [lindex [r config get hotkey-enabled] 1] "no"
         catch {r hotkeys get} err
         assert_match "*Hotkey detection is disabled*" $err
         catch {r hotkeys reset} err
@@ -129,8 +130,8 @@ start_server {tags {"hotkey external:skip"}} {
     }
 
     test "Re-enable hotkey functionality" {
-        r config set hotkey-sampling-percentage 100
-        assert_equal [lindex [r config get hotkey-sampling-percentage] 1] "100"
+        r config set hotkey-enabled yes
+        assert_equal [lindex [r config get hotkey-enabled] 1] "yes"
         assert_equal [r hotkeys reset] "OK"
     }
 
@@ -242,8 +243,8 @@ start_server {tags {"hotkey external:skip"}} {
         set hotkeys_before [hk_wait_hotkeys]
         assert {[llength $hotkeys_before] > 0}
 
-        r config set hotkey-sampling-percentage 0
-        r config set hotkey-sampling-percentage 100
+        r config set hotkey-enabled no
+        r config set hotkey-enabled yes
         set hotkeys_after [r hotkeys get]
         assert_equal [llength $hotkeys_after] 0
         assert_equal [r ping] "PONG"

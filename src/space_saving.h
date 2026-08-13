@@ -80,8 +80,10 @@ void spaceSavingManagerRelease(spaceSavingManager *m);
 void spaceSavingManagerReset(spaceSavingManager *m, uint64_t now_us);
 /* Freeze whichever window(s) fully elapsed by `now_us` (no-op if still open). */
 void spaceSavingManagerRotate(spaceSavingManager *m, uint64_t now_us);
-/* Record one observation into the current window (rotating first if due). */
-void recordSpaceSavingManagerSample(spaceSavingManager *m, uint64_t now_us, const void *item);
+/* Record one observation into the current (live) window. Does NOT rotate — the
+ * caller must drive boundaries by calling spaceSavingManagerRotate() on a timer,
+ * keeping this hot path free of any clock read. */
+void recordSpaceSavingManagerSample(spaceSavingManager *m, const void *item);
 /* Number of items in the last completed (frozen) window. */
 int spaceSavingManagerCount(spaceSavingManager *m);
 /* Read the i-th item of the frozen window (see spaceSavingWindowAt). */

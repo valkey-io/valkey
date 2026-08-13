@@ -110,6 +110,15 @@ void hotkeyPurgeAll(void) {
     hotkeySetWindowContext(server.hotkey_manager);
 }
 
+/* Periodic maintenance from serverCron: close any window that has fully elapsed
+ * so a completed window is frozen on schedule even when there is no traffic (and
+ * so any future window-boundary work — history, notifications — has a place to
+ * hang). Cheap: a subtract and a compare unless a boundary was actually crossed.
+ * No-op when detection is disabled. */
+void hotkeyCron(void) {
+    if (server.hotkey_manager) spaceSavingManagerRotate(server.hotkey_manager, getMonotonicUs());
+}
+
 static int hotkeyItemInSlot(const void *item, void *arg) {
     const hotkeyItem *hi = item;
     return (int)keyHashSlot(hi->key, (int)sdslen(hi->key)) == *(int *)arg;
@@ -151,7 +160,7 @@ void recordHotKeySample(robj *key, int dbid) {
     sds k = objectGetVal(key);
     if (!k) return;
     hotkeyItem probe = {k, dbid};
-    recordSpaceSavingManagerSample(m, getMonotonicUs(), &probe);
+    recordSpaceSavingManagerSample(m, &probe);
 }
 
 /* ===========================================================================
@@ -252,10 +261,11 @@ void hotkeysResetCommand(client *c) {
  * Generic hotkey API
  * ==========================================================================*/
 
-/* Is hot-key detection currently enabled? Detection is on whenever a non-zero
- * sampling percentage is configured — there is no separate on/off switch. */
+/* Is hot-key detection currently enabled? Controlled by the explicit
+ * `hotkey-enabled` switch; the sampling percentage only sets how much traffic
+ * is sampled while enabled. */
 int hotkeyEnabled(void) {
-    return server.hotkey_sampling_percentage > 0;
+    return server.hotkey_enabled;
 }
 
 /* Number of sampled observations in the last completed window (N). The
@@ -278,32 +288,37 @@ static void hotkeyManagerReconfigure(void) {
     hotkeySetWindowContext(server.hotkey_manager);
 }
 
+/* Create or free the manager to match the enabled state. */
+static void hotkeyManagerSetEnabled(int enabled) {
+    if (enabled && !server.hotkey_manager) {
+        server.hotkey_manager = hotkeyCreateManager();
+    } else if (!enabled && server.hotkey_manager) {
+        spaceSavingManagerRelease(server.hotkey_manager);
+        server.hotkey_manager = NULL;
+    }
+}
+
 /* Bring up hot-key detection at server startup (creates the manager if enabled). */
 void hotkeyInit(void) {
-    if (hotkeyEnabled() && !server.hotkey_manager) {
-        server.hotkey_manager = hotkeyCreateManager();
-    }
+    hotkeyManagerSetEnabled(hotkeyEnabled());
 }
 
 /* ===========================================================================
  * Config callbacks
  * ==========================================================================*/
 
-/* Sampling percentage is also the on/off switch, so it drives the lifecycle;
- * if it merely changed while staying enabled, reconfigure in place. */
+/* The explicit on/off switch drives the manager lifecycle. */
+int hotKeyEnabledCallback(const char **err) {
+    UNUSED(err);
+    hotkeyManagerSetEnabled(server.hotkey_enabled);
+    return 1;
+}
+
+/* Sampling percentage only changes how much traffic is sampled; reconfigure in
+ * place so a live query still sees the last completed window (no-op if disabled). */
 int hotKeySamplingCallback(const char **err) {
     UNUSED(err);
-    if (hotkeyEnabled() && server.hotkey_manager)
-        hotkeyManagerReconfigure();
-    else {
-        if (hotkeyEnabled() && !server.hotkey_manager) {
-            server.hotkey_manager = hotkeyCreateManager();
-        }
-        else if (!hotkeyEnabled() && server.hotkey_manager) {
-            spaceSavingManagerRelease(server.hotkey_manager);
-            server.hotkey_manager = NULL;
-        }
-    }
+    hotkeyManagerReconfigure();
     return 1;
 }
 

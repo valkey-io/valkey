@@ -146,8 +146,8 @@ static void spaceSavingWindowRemoveIf(spaceSavingWindow *w, int (*pred)(const vo
  * ==========================================================================*/
 
 struct spaceSavingManager {
-    spaceSavingWindow *live;   /* Current (open) window */
-    spaceSavingWindow *frozen; /* Last completed window (read path) */
+    spaceSavingWindow *live;        /* Current (open) window */
+    spaceSavingWindow *frozen;      /* Last completed window (read path) */
     uint64_t live_window_length_us; /* Length of the current (live) window, in microseconds */
     uint64_t live_window_start_us;  /* Start time of the current (live) window */
 };

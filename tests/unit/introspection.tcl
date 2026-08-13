@@ -93,6 +93,51 @@ start_server {tags {"introspection"}} {
         }
     }
 
+    # Get client tot-mem excluding query buffer (qbuf + qbuf-free)
+    proc get_client_mem_no_qbuf {info} {
+        set tot [get_field_in_client_info $info "tot-mem"]
+        set qbuf [get_field_in_client_info $info "qbuf"]
+        set qbuf_free [get_field_in_client_info $info "qbuf-free"]
+        return [expr {$tot - $qbuf - $qbuf_free}]
+    }
+
+    test {CLIENT INFO tot-mem includes watched key memory} {
+        set mem1 [get_client_mem_no_qbuf [r client info]]
+
+        r watch [string repeat "x" 50000]
+        set mem2 [get_client_mem_no_qbuf [r client info]]
+        assert_morethan_equal [expr $mem2 - $mem1] 10000
+
+        r unwatch
+        set mem3 [get_client_mem_no_qbuf [r client info]]
+        assert_morethan_equal [expr $mem2 - $mem3] 10000
+    }
+
+    foreach {subscribe unsubscribe} {subscribe unsubscribe psubscribe punsubscribe ssubscribe sunsubscribe} {
+        test "CLIENT INFO tot-mem includes pubsub channel/pattern memory - $subscribe $unsubscribe" {
+            set rd [valkey_deferring_client]
+            $rd client id
+            set rd_id [$rd read]
+
+            set info1 [lsearch -inline [split [r client list] "\r\n"] "id=$rd_id *"]
+            set mem1 [get_client_mem_no_qbuf $info1]
+
+            $rd $subscribe [string repeat "x" 50000]
+            $rd read
+            set info2 [lsearch -inline [split [r client list] "\r\n"] "id=$rd_id *"]
+            set mem2 [get_client_mem_no_qbuf $info2]
+            assert_morethan_equal [expr $mem2 - $mem1] 10000
+
+            $rd $unsubscribe
+            $rd read
+            set info3 [lsearch -inline [split [r client list] "\r\n"] "id=$rd_id *"]
+            set mem3 [get_client_mem_no_qbuf $info3]
+            assert_morethan_equal [expr $mem2 - $mem3] 10000
+
+            $rd close
+        }
+    }
+
     test {CLIENT LIST with ADDR filter} {
         set client_info [r client info]
         regexp {addr=([^ ]+)} $client_info match myaddr

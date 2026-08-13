@@ -577,7 +577,7 @@ typedef void (*ValkeyModuleEventCallback)(struct ValkeyModuleCtx *ctx,
  *          2
  *      }
  * The reason for that is forward-compatibility: We want that module that
- * compiled with a new valkeymodule.h to be able to work with a old server,
+ * compiled with a new valkeymodule.h to be able to work with an old server,
  * unless the author explicitly decided to use the newer event type.
  */
 static const ValkeyModuleEvent ValkeyModuleEvent_ReplicationRoleChanged = {VALKEYMODULE_EVENT_REPLICATION_ROLE_CHANGED,

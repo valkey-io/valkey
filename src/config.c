@@ -573,7 +573,7 @@ void loadServerConfigFromString(sds config) {
              * remove it from the command table. */
             serverAssert(hashtableDelete(server.commands, argv[1]));
 
-            /* Otherwise we re-add the command under a different name. */
+            /* Otherwise, we re-add the command under a different name. */
             if (sdslen(argv[2]) != 0) {
                 if (cmd->current_name != cmd->fullname) {
                     sdsfree(cmd->current_name);
@@ -1507,7 +1507,7 @@ void rewriteConfigUserOption(struct rewriteConfigState *state) {
         return;
     }
 
-    /* Otherwise scan the list of users and rewrite every line. Note that
+    /* Otherwise, scan the list of users and rewrite every line. Note that
      * in case the list here is empty, the effect will just be to comment
      * all the users directive inside the config file. */
     raxIterator ri;
@@ -1662,23 +1662,23 @@ static void rewriteConfigSocketBindOption(standardConfig *config, const char *na
 
 /* Rewrite the loadmodule option. */
 void rewriteConfigLoadmoduleOption(struct rewriteConfigState *state) {
-    if (dictSize(modules) == 0) {
+    if (listLength(modules) == 0) {
         rewriteConfigMarkAsProcessed(state, "loadmodule");
         return;
     }
 
     sds line;
+    listIter li;
+    listNode *ln;
 
-    dictIterator *di = dictGetIterator(modules);
-    dictEntry *de;
-    while ((de = dictNext(di)) != NULL) {
-        struct ValkeyModule *module = dictGetVal(de);
+    listRewind(modules, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        struct ValkeyModule *module = listNodeValue(ln);
         if (module->is_static_module) continue;
         line = moduleLoadQueueEntryToLoadmoduleOptionStr(module, "loadmodule");
         rewriteConfigRewriteLine(state, "loadmodule", line, 1);
     }
-    dictReleaseIterator(di);
-    /* Mark "loadmodule" as processed in case modules is empty. */
+    /* Mark "loadmodule" as processed in case no modules are loaded. */
     rewriteConfigMarkAsProcessed(state, "loadmodule");
 }
 
@@ -2539,7 +2539,7 @@ static int isValidAnnouncedIp(char *val, const char **err) {
         *err = "cluster-announce-ip contains invalid character";
         return 0;
     }
-    /* Empty resets the announced ip. Otherwise accept a literal IPv4/IPv6, or a
+    /* Empty resets the announced ip. Otherwise, accept a literal IPv4/IPv6, or a
      * hostname, since some users set a hostname here before
      * cluster-announce-hostname existed. */
     if (val[0] != '\0' && anetResolve(NULL, val, NULL, 0, ANET_IP_ONLY) != ANET_OK && !isValidHostname(val)) {
@@ -3184,6 +3184,12 @@ static int updateRdmaPort(const char **err) {
     return 1;
 }
 
+static int updateClusterReplicaPriority(const char **err) {
+    UNUSED(err);
+    clusterUpdateMyselfReplicaPriority();
+    return 1;
+}
+
 static int setConfigReplicaOfOption(standardConfig *config, sds *argv, int argc, const char **err) {
     UNUSED(config);
 
@@ -3512,6 +3518,7 @@ standardConfig static_configs[] = {
 #ifdef LOG_REQ_RES
     createUIntConfig("client-default-resp", NULL, IMMUTABLE_CONFIG | HIDDEN_CONFIG, 2, 3, server.client_default_resp, 2, INTEGER_CONFIG, NULL, NULL),
 #endif
+    createUIntConfig("cluster-replica-priority", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, server.cluster_replica_priority, 0, INTEGER_CONFIG, NULL, updateClusterReplicaPriority),
 
     /* Unsigned Long configs */
     createULongConfig("active-defrag-max-scan-fields", NULL, MODIFIABLE_CONFIG, 1, LONG_MAX, server.active_defrag_max_scan_fields, 1000, INTEGER_CONFIG, NULL, NULL), /* Default: keys with more than 1000 fields will be processed separately */

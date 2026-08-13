@@ -794,6 +794,100 @@ test {corrupt payload: stream listpack with negative deleted count} {
     }
 }
 
+# Port the five focused listpack-count cases from #4381 to the Tcl harness.
+# The fixture mirrors buildTwoRecordStreamListpack: two same-fields records,
+# with header counts independent of each record's deleted flag.
+proc stream_count_test_payload {live deleted first_deleted second_deleted rdb_version} {
+    # Listpack: 42 bytes, 15 elements. Integer entries below include their
+    # one-byte back-length; "f", "v1" and "v2" use short-string encodings.
+    set lp [binary format H* 2a0000000f00]
+    append lp [binary format c* [list $live 1 $deleted 1 1 1]]
+    append lp [binary format H* 8166020001]
+    set seq 0
+    foreach is_deleted [list $first_deleted $second_deleted] {
+        append lp [binary format c* [list [expr {2 | $is_deleted}] 1 0 1 $seq 1]]
+        append lp [binary format H* 8276]
+        append lp [binary format c* [list [expr {49 + $seq}] 3 4 1]]
+        incr seq
+    }
+    append lp [binary format H* ff]
+    assert_equal 42 [string length $lp]
+
+    # RDB stream-listpacks-v3: one node with primary ID 1-0, then the listpack.
+    set payload [binary format H* 150110000000000000000100000000000000002a]
+    append payload $lp
+    # Length matches the declared live count, so rejection must come from
+    # the record/header split, not the outer stream-length check.
+    # Metadata: length, last ID, first ID, max-deleted ID, entries-added, groups.
+    set max_deleted [expr {$first_deleted || $second_deleted}]
+    append payload [binary format c* [list $live 1 1 1 0 $max_deleted $max_deleted 2 0]]
+    # Use the server's own format version. The checksum is skipped below
+    # because these fixtures deliberately change the serialized content.
+    append payload $rdb_version [binary format H* 0000000000000000]
+    return $payload
+}
+
+start_server [list overrides [list loglevel verbose use-exit-on-panic yes crash-memcheck-enabled no]] {
+    r debug set-skip-checksum-validation 1
+    r set _count_version_probe value
+    set rdb_version [string range [r dump _count_version_probe] end-9 end-8]
+    r del _count_version_probe
+    foreach {case live deleted first_deleted second_deleted expected} {
+        matching-live-counts 2 0 0 0 {{1-0 {f v1}} {1-1 {f v2}}}
+        matching-deleted-record 1 1 0 1 {{1-0 {f v1}}}
+        understated-live-count 1 1 0 0 invalid
+        overstated-live-count 2 0 0 1 invalid
+        all-deleted-with-live-header 2 0 1 1 invalid
+    } {
+        test "stream listpack count validation: $case" {
+            r del _count_matrix
+            set payload [stream_count_test_payload $live $deleted $first_deleted $second_deleted $rdb_version]
+            if {$expected eq "invalid"} {
+                assert_error "*Bad data format*" {r restore _count_matrix 0 $payload}
+                assert_equal 0 [r exists _count_matrix]
+                verify_log_message 0 "*Stream listpack integrity check failed*" 0
+            } else {
+                assert_equal OK [r restore _count_matrix 0 $payload]
+                assert_equal $live [r xlen _count_matrix]
+                assert_equal $expected [r xrange _count_matrix - +]
+            }
+            assert_equal PONG [r ping]
+        }
+    }
+}
+
+test {corrupt payload: stream listpack live and deleted counts do not match the records} {
+    # A master entry may declare a live/deleted split that disagrees with the
+    # records that follow. Only the sum is validated by the entry loop, and the
+    # stream length here matches the declared live count, so the payload passes
+    # both checks while understating the live records. XDEL then reads the
+    # declared live count of 1, treats the node as holding its last live record
+    # and frees the whole node, destroying the record the header did not account
+    # for. XLEN disagrees with XRANGE until that happens.
+    #
+    # Built from a valid two-live-record control by changing the master entry
+    # count from 2 to 1, its deleted count from 0 to 1 and the stream length
+    # from 2 to 1, then recomputing the DUMP CRC64. All three encode in the
+    # same byte width, so no other byte moves.
+    start_server [list overrides [list loglevel verbose use-exit-on-panic yes crash-memcheck-enabled no] ] {
+        catch {r restore _split_mismatch 0 "\x15\x01\x10\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x2D\x2D\x00\x00\x00\x11\x00\x01\x01\x01\x01\x01\x01\x81\x66\x02\x00\x01\x02\x01\x00\x01\x00\x01\x81\x76\x02\x04\x01\x00\x01\x01\x01\x00\x01\x01\x01\x81\x67\x02\x81\x77\x02\x06\x01\xFF\x01\x02\x00\x01\x00\x00\x00\x02\x00\x50\x00\x90\x7A\xE8\x68\xB6\x55\xB2\x22"} err
+        assert_match "*Bad data format*" $err
+        assert_equal 0 [r exists _split_mismatch]
+        verify_log_message 0 "*Stream listpack integrity check failed*" 0
+
+        # The control differs only in those three bytes, so it must still load
+        # and delete one record without disturbing the other.
+        set stream_valid "\x15\x01\x10\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x2D\x2D\x00\x00\x00\x11\x00\x02\x01\x00\x01\x01\x01\x81\x66\x02\x00\x01\x02\x01\x00\x01\x00\x01\x81\x76\x02\x04\x01\x00\x01\x01\x01\x00\x01\x01\x01\x81\x67\x02\x81\x77\x02\x06\x01\xFF\x02\x02\x00\x01\x00\x00\x00\x02\x00\x50\x00\xA1\xDF\xE0\xE1\x48\xC5\xF8\x85"
+        assert_equal OK [r restore _control 0 $stream_valid]
+        assert_equal 2 [r xlen _control]
+        assert_equal {{1-0 {f v}} {2-0 {g w}}} [r xrange _control - +]
+        assert_equal 1 [r xdel _control 1-0]
+        assert_equal 1 [r xlen _control]
+        assert_equal {{2-0 {g w}}} [r xrange _control - +]
+        assert_equal [r ping] "PONG"
+    }
+}
+
 test {corrupt payload: fuzzer findings - streamLastValidID panic} {
     start_server [list overrides [list loglevel verbose use-exit-on-panic yes crash-memcheck-enabled no] ] {
         r debug set-skip-checksum-validation 1
@@ -847,4 +941,3 @@ test {corrupt payload: stream with duplicate consumer PEL entry} {
 }
 
 } ;# tags
-

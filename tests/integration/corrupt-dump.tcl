@@ -794,6 +794,38 @@ test {corrupt payload: stream listpack with negative deleted count} {
     }
 }
 
+test {corrupt payload: stream listpack live and deleted counts do not match the records} {
+    # A master entry may declare a live/deleted split that disagrees with the
+    # records that follow. Only the sum is validated by the entry loop, and the
+    # stream length here matches the declared live count, so the payload passes
+    # both checks while understating the live records. XDEL then reads the
+    # declared live count of 1, treats the node as holding its last live record
+    # and frees the whole node, destroying the record the header did not account
+    # for. XLEN disagrees with XRANGE until that happens.
+    #
+    # Built from a valid two-live-record control by changing the master entry
+    # count from 2 to 1, its deleted count from 0 to 1 and the stream length
+    # from 2 to 1, then recomputing the DUMP CRC64. All three encode in the
+    # same byte width, so no other byte moves.
+    start_server [list overrides [list loglevel verbose use-exit-on-panic yes crash-memcheck-enabled no] ] {
+        catch {r restore _split_mismatch 0 "\x15\x01\x10\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x2D\x2D\x00\x00\x00\x11\x00\x01\x01\x01\x01\x01\x01\x81\x66\x02\x00\x01\x02\x01\x00\x01\x00\x01\x81\x76\x02\x04\x01\x00\x01\x01\x01\x00\x01\x01\x01\x81\x67\x02\x81\x77\x02\x06\x01\xFF\x01\x02\x00\x01\x00\x00\x00\x02\x00\x50\x00\x90\x7A\xE8\x68\xB6\x55\xB2\x22"} err
+        assert_match "*Bad data format*" $err
+        assert_equal 0 [r exists _split_mismatch]
+        verify_log_message 0 "*Stream listpack integrity check failed*" 0
+
+        # The control differs only in those three bytes, so it must still load
+        # and delete one record without disturbing the other.
+        set stream_valid "\x15\x01\x10\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x2D\x2D\x00\x00\x00\x11\x00\x02\x01\x00\x01\x01\x01\x81\x66\x02\x00\x01\x02\x01\x00\x01\x00\x01\x81\x76\x02\x04\x01\x00\x01\x01\x01\x00\x01\x01\x01\x81\x67\x02\x81\x77\x02\x06\x01\xFF\x02\x02\x00\x01\x00\x00\x00\x02\x00\x50\x00\xA1\xDF\xE0\xE1\x48\xC5\xF8\x85"
+        assert_equal OK [r restore _control 0 $stream_valid]
+        assert_equal 2 [r xlen _control]
+        assert_equal {{1-0 {f v}} {2-0 {g w}}} [r xrange _control - +]
+        assert_equal 1 [r xdel _control 1-0]
+        assert_equal 1 [r xlen _control]
+        assert_equal {{2-0 {g w}}} [r xrange _control - +]
+        assert_equal [r ping] "PONG"
+    }
+}
+
 test {corrupt payload: fuzzer findings - streamLastValidID panic} {
     start_server [list overrides [list loglevel verbose use-exit-on-panic yes crash-memcheck-enabled no] ] {
         r debug set-skip-checksum-validation 1

@@ -358,3 +358,12 @@ start_server {tags {"modules acl"}} {
         assert_equal {OK} [r module unload aclcheck]
     }
 }
+
+set modrole "modconfrole -@all +aclcheck.module.command.aclcategories.write"
+start_server [list tags {"modules acl"} overrides [list loadmodule $testmodule role $modrole]] {
+    test {role in config can reference a module command} {
+        assert_equal [r ACL ROLES] {modconfrole}
+        r acl SETUSER j10 on >password -@all +@role:modconfrole
+        assert_equal [r acl DRYRUN j10 aclcheck.module.command.aclcategories.write] OK
+    }
+}

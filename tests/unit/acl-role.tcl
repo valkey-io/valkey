@@ -156,10 +156,9 @@ start_server {tags {"acl external:skip"}} {
         r ACL DELROLE otherrole
     } {1}
 
-    test {ACL DELROLE - non-existent role returns error} {
-        catch {r ACL DELROLE nonexistent} err
-        assert_match {*not found*} $err
-    }
+    test {ACL DELROLE - non-existent role is not counted} {
+        r ACL DELROLE nonexistent
+    } {0}
 
     test {ACL DELROLE - delete multiple roles at once} {
         r ACL SETROLE delA +get
@@ -471,6 +470,16 @@ start_server [list overrides [list "dir" $server_path "aclfile" "role.acl"] tags
         close $fd
         catch {r ACL LOAD} err
         assert_match {*requires a role name*} $err
+    }
+
+    test {ACL LOAD - duplicate role fails} {
+        set fd [open "$server_path/role.acl" w]
+        puts $fd "role dup ~* +@all"
+        puts $fd "role dup ~* +@read"
+        puts $fd "user default on nopass ~* &* +@all"
+        close $fd
+        catch {r ACL LOAD} err
+        assert_match {*Duplicate role*} $err
     }
 
     test {Restore valid ACL file} {

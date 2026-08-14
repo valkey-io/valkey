@@ -2983,11 +2983,13 @@ int ACLAppendRoleForLoading(sds *argv, int argc, int *argc_err) {
 
     for (int j = 0; j < merged_argc; j++) {
         if (ACLSetUser(&fakeRole, acl_args[j], sdslen(acl_args[j])) == C_ERR) {
-            listRelease(fakeRole.selectors);
-            if (argc_err) *argc_err = j + 2;
-            for (int i = 0; i < merged_argc; i++) sdsfree(acl_args[i]);
-            zfree(acl_args);
-            return C_ERR;
+            if (errno != ENOENT && errno != ESRCH) {
+                listRelease(fakeRole.selectors);
+                if (argc_err) *argc_err = j + 2;
+                for (int i = 0; i < merged_argc; i++) sdsfree(acl_args[i]);
+                zfree(acl_args);
+                return C_ERR;
+            }
         }
     }
     listRelease(fakeRole.selectors);
@@ -3132,6 +3134,12 @@ static sds ACLLoadFromFile(const char *filename) {
         }
 
         user *r = ACLGetRoleByName(argv[1], sdslen(argv[1]));
+        if (r) {
+            errors = sdscatprintf(errors, "WARNING: Duplicate role '%s' found on line %d. ", argv[1], linenum);
+            sdsfreesplitres(argv, argc);
+            continue;
+        }
+
         sds error = ACLStringSetRole(r, argv[1], argv + 2, argc - 2);
         if (error) {
             errors = sdscatprintf(errors, "%s:%d: %s. ", server.acl_filename, linenum, error);
@@ -4085,11 +4093,7 @@ void aclCommand(client *c) {
         for (int j = 2; j < c->argc; j++) {
             sds rolename = objectGetVal(c->argv[j]);
             user *r = ACLGetRoleByName(rolename, sdslen(rolename));
-            if (!r) {
-                addReplyErrorFormat(c, "Role '%s' not found", rolename);
-                return;
-            }
-            if (dictSize(r->members) > 0) {
+            if (r && dictSize(r->members) > 0) {
                 addReplyErrorFormat(c, "Role '%s' has members. Remove all users from the role before deleting it.",
                                     rolename);
                 return;

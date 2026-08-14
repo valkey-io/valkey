@@ -133,6 +133,22 @@ TEST_F(UtilTest, TestString2l) {
 #endif
 }
 
+TEST_F(UtilTest, TestString2ullBase16AsyncSignalSafe) {
+    char buf[32];
+    unsigned long long value;
+
+    valkey_strlcpy(buf, "0000010000000000", sizeof(buf));
+    ASSERT_EQ(string2ull_base16_async_signal_safe(buf, strlen(buf), &value), 1);
+    ASSERT_EQ(value, 1ULL << 40);
+
+    valkey_strlcpy(buf, "ffffffffffffffff", sizeof(buf));
+    ASSERT_EQ(string2ull_base16_async_signal_safe(buf, strlen(buf), &value), 1);
+    ASSERT_EQ(value, ULLONG_MAX);
+
+    valkey_strlcpy(buf, "10000000000000000", sizeof(buf));
+    ASSERT_EQ(string2ull_base16_async_signal_safe(buf, strlen(buf), &value), -1);
+}
+
 TEST_F(UtilTest, TestLl2string) {
     char buf[32];
     long long v;

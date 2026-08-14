@@ -216,6 +216,13 @@ start_server {tags {"modules acl"}} {
         r ACL DELUSER selcmduser
     }
 
+    test {Module unload blocked by ACL role rule} {
+        r ACL SETROLE modrole +subcommands.parent_get_fullname
+        catch {r module unload subcommands} e
+        assert_match {*one or more ACL users reference commands from this module*} $e
+        r ACL DELROLE modrole
+    }
+
     test {Unload the module - subcommands} {
         r ACL DELUSER subcmduser basecmduser denycmduser selcmduser
         assert_equal {OK} [r module unload subcommands]
@@ -273,6 +280,16 @@ start_server {tags {"modules acl"}} {
         r acl SETUSER j3 on >password -@all +@WRITE
         assert_equal [r module load $testmodule] OK
         assert_equal [r acl DRYRUN j3 aclcheck.module.command.aclcategories.write] OK
+        assert_equal {OK} [r module unload aclcheck]
+    }
+}
+
+start_server {tags {"modules acl"}} {
+    test {test existing roles to have access to module commands loaded on runtime} {
+        r acl SETROLE writerole -@all +@WRITE
+        r acl SETUSER j7 on >password -@all +@role:writerole
+        assert_equal [r module load $testmodule] OK
+        assert_equal [r acl DRYRUN j7 aclcheck.module.command.aclcategories.write] OK
         assert_equal {OK} [r module unload aclcheck]
     }
 }

@@ -894,12 +894,11 @@ static void ACLSetSelectorCommandBitsForCategory(hashtable *commands, aclSelecto
     hashtableCleanupIterator(&iter);
 }
 
-/* This function is responsible for recomputing the command bits for all selectors of the existing users.
- * It uses the 'command_rules', a string representation of the ordered categories and commands,
- * to recompute the command bits. */
-void ACLRecomputeCommandBitsFromCommandRulesAllUsers(void) {
+/* Recompute the command bits for all selectors of every entry in table, which
+ * is either the Users or the Roles radix tree. */
+static void ACLRecomputeCommandBitsFromCommandRulesInTable(rax *table) {
     raxIterator ri;
-    raxStart(&ri, Users);
+    raxStart(&ri, table);
     raxSeek(&ri, "^", NULL, 0);
     while (raxNext(&ri)) {
         user *u = ri.data;
@@ -931,6 +930,14 @@ void ACLRecomputeCommandBitsFromCommandRulesAllUsers(void) {
     raxStop(&ri);
 }
 
+/* This function is responsible for recomputing the command bits for all selectors of the existing users.
+ * It uses the 'command_rules', a string representation of the ordered categories and commands,
+ * to recompute the command bits. */
+void ACLRecomputeCommandBitsFromCommandRulesAllUsers(void) {
+    ACLRecomputeCommandBitsFromCommandRulesInTable(Users);
+    ACLRecomputeCommandBitsFromCommandRulesInTable(Roles);
+}
+
 static int ACLSetSelectorCategory(aclSelector *selector, const char *category, int allow) {
     uint64_t cflag = ACLGetCommandCategoryFlagByName(category + 1);
     if (!cflag) return C_ERR;
@@ -942,13 +949,11 @@ static int ACLSetSelectorCategory(aclSelector *selector, const char *category, i
     return C_OK;
 }
 
-/* Check if any ACL user has command rules referencing the specified module.
- * If rule_out is not NULL, it will be set to a duplicate of the first matching
- * rule.
- * Returns 1 if any rules are found, 0 otherwise. */
-int ACLModuleHasCommandRules(const struct ValkeyModule *module, sds *rule_out) {
+/* Check if any entry in table, which is either the Users or the Roles radix
+ * tree, has command rules referencing the specified module. */
+static int ACLTableHasModuleCommandRules(rax *table, const struct ValkeyModule *module, sds *rule_out) {
     raxIterator ri;
-    raxStart(&ri, Users);
+    raxStart(&ri, table);
     raxSeek(&ri, "^", NULL, 0);
     while (raxNext(&ri)) {
         user *u = ri.data;
@@ -991,6 +996,15 @@ int ACLModuleHasCommandRules(const struct ValkeyModule *module, sds *rule_out) {
     }
     raxStop(&ri);
     return 0;
+}
+
+/* Check if any ACL user has command rules referencing the specified module.
+ * If rule_out is not NULL, it will be set to a duplicate of the first matching
+ * rule.
+ * Returns 1 if any rules are found, 0 otherwise. */
+int ACLModuleHasCommandRules(const struct ValkeyModule *module, sds *rule_out) {
+    if (ACLTableHasModuleCommandRules(Users, module, rule_out)) return 1;
+    return ACLTableHasModuleCommandRules(Roles, module, rule_out);
 }
 
 /* This function returns an SDS string representing the specified selector ACL

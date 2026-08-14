@@ -478,11 +478,16 @@ start_server [list config_lines $conf_lines tags [list "external:skip"]] {
         assert_match {*no permissions*} $result
     }
 
-    test {CONFIG REWRITE preserves role directives} {
+    test {CONFIG REWRITE persists runtime role changes} {
+        r ACL SETROLE runtimerole ~rt:* +get
         r CONFIG REWRITE
-        set cfg [exec cat [srv 0 config_file]]
-        assert_match {*role inlinerole*} $cfg
-        assert_match {*user inlineuser*} $cfg
+        assert_match {*role runtimerole*} [exec cat [srv 0 config_file]]
+    }
+
+    test {CONFIG REWRITE drops roles deleted at runtime} {
+        r ACL DELROLE runtimerole
+        r CONFIG REWRITE
+        assert_equal 0 [string match {*role runtimerole*} [exec cat [srv 0 config_file]]]
     }
 }
 

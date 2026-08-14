@@ -2,7 +2,7 @@
 
 #define UNUSED(x) (void)(x)
 #define MSGTYPE_TEST_UAF 3
-#define MSGTYPE_TEST_MAX 254
+#define MSGTYPE_TEST_MAX 255
 
 static void testReceiver(ValkeyModuleCtx *ctx,
                          const char *sender_id,

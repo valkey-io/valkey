@@ -334,7 +334,7 @@ int checkSingleAof(char *aof_filename, char *aof_filepath, int last_file, int fi
     return AOF_CHECK_OK;
 }
 
-/* Used to determine whether the file is a RDB file. These two possibilities:
+/* Used to determine whether the file is an RDB file. These two possibilities:
  * 1. The file is an old style RDB-preamble AOF
  * 2. The file is a BASE AOF in Multi Part AOF
  * */

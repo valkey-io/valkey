@@ -47,7 +47,7 @@ start_cluster 2 1 {tags {external:skip cluster}} {
 
         wait_node_marked_pfail 0 $replica1_instance_id
 
-        # Resume other primary and wait for to show replica as failed
+        # Resume other primary and wait for the replica to show as failed
         resume_process $primary2_pid
 
         wait_node_marked_fail 0 $replica1_instance_id

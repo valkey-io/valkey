@@ -2267,9 +2267,13 @@ int test_is_selected(const char *name) {
 int main(int argc, char **argv) {
     int i;
     char *data, *cmd, *tag;
-    int len;
+    int len = 0;
 
     client c;
+    sds title = NULL, cmd_seq = NULL;
+    sds *sds_args = NULL;
+    size_t *argvlen = NULL;
+    int seq_len = 0; /* Total number of commands in the sequence. */
 
     srandom(time(NULL) ^ getpid());
     init_genrand64(ustime() ^ getpid());
@@ -2387,6 +2391,94 @@ int main(int argc, char **argv) {
         exit(1);
     }
 
+    /* Parse and validate the command sequence given in the remaining arguments
+     * before connecting, so a malformed invocation is reported up front without
+     * needing a reachable server. */
+    if (argc && !config.fuzz_mode && !config.idlemode) {
+        title = sdsnew(argv[0]);
+        for (i = 1; i < argc; i++) {
+            title = sdscatlen(title, " ", 1);
+            title = sdscatlen(title, (char *)argv[i], strlen(argv[i]));
+        }
+        sds_args = getSdsArrayFromArgv(argc, argv, 0);
+        if (!sds_args) {
+            fprintf(stderr, "Invalid quoted string\n");
+            return 1;
+        }
+        if (config.stdinarg) {
+            sds_args = sds_realloc(sds_args, (argc + 1) * sizeof(sds));
+            sds_args[argc] = readArgFromStdin();
+            argc++;
+        }
+        /* Set up argument length */
+        argvlen = zmalloc(argc * sizeof(size_t));
+        for (i = 0; i < argc; i++) argvlen[i] = sdslen(sds_args[i]);
+        /* RESP-encode the command(s) given on the syntax
+         *
+         *     [N] command args [ ";" [N] command args [...] ]
+         */
+        int start = 0;             /* Argument index where the current command starts. */
+        int repeat = 1;            /* Number of times to repeat the current command. */
+        int has_repeat = 0;        /* Current segment is prefixed by a repeat count. */
+        int malformed_segment = 0; /* A segment was left with no command to run. */
+        cmd_seq = sdsempty();
+        for (i = 0; i <= argc; i++) {
+            if (i < argc && i == start && sds_args[i][0] >= '1' && sds_args[i][0] <= '9') {
+                /* Command prefixed by number means repeat command N times. */
+                repeat = atoi(sds_args[i]);
+                has_repeat = 1;
+                start++;
+            } else if (i == argc || strcmp(";", sds_args[i]) == 0) {
+                cmd = NULL;
+                if (i == start) {
+                    /* Empty segment. Only a trailing separator (i == argc) is
+                     * harmless; otherwise the caller lost a command or a count. */
+                    if (has_repeat || i < argc) malformed_segment = 1;
+                    start = i + 1;
+                    repeat = 1;
+                    has_repeat = 0;
+                    continue;
+                }
+
+                addRespCommandToSequence(sds_args, argvlen, start, i, repeat, &cmd_seq, &seq_len);
+                start = i + 1;
+                repeat = 1;
+                has_repeat = 0;
+            } else if (strstr(sds_args[i], "__data__")) {
+                if (config.current_dataset) {
+                    fprintf(stderr, "Error: __data__ placeholders cannot be used with --dataset option\n");
+                    exit(1);
+                }
+                /* Replace data placeholders with data of length given by -d. */
+                int num_parts;
+                sds *parts = sdssplitlen(sds_args[i], sdslen(sds_args[i]),
+                                         "__data__", strlen("__data__"),
+                                         &num_parts);
+                sds newarg = parts[0];
+                parts[0] = NULL; /* prevent it from being freed below */
+                for (int j = 1; j < num_parts; j++) {
+                    char data[config.datasize];
+                    genBenchmarkRandomData(data, config.datasize);
+                    newarg = sdscatlen(newarg, data, config.datasize);
+                    newarg = sdscatlen(newarg, parts[j], sdslen(parts[j]));
+                }
+                sdsfreesplitres(parts, num_parts);
+                sdsfree(sds_args[i]);
+                sds_args[i] = newarg;
+                argvlen[i] = sdslen(sds_args[i]);
+            }
+            /* NOTE: Field placeholder processing is handled above in the command-level loop to ensure row consistency */
+        }
+        if (seq_len <= 0 || malformed_segment) {
+            fprintf(stderr, "Invalid command sequence: a command is missing.\n"
+                            "Use -n <requests> to set the total number of requests.\n");
+            return 1;
+        }
+        len = sdslen(cmd_seq);
+        /* adjust the datasize to the parsed command */
+        config.datasize = len;
+    }
+
     if (config.cluster_mode && !config.fuzz_mode) {
         // We only include the slot placeholder {tag} if cluster mode is enabled
         tag = ":{tag}";
@@ -2493,74 +2585,8 @@ int main(int argc, char **argv) {
             config.fuzz_flags);
     }
 
-    /* Run benchmark with command in the remainder of the arguments. */
-    if (argc) {
-        sds title = sdsnew(argv[0]);
-        for (i = 1; i < argc; i++) {
-            title = sdscatlen(title, " ", 1);
-            title = sdscatlen(title, (char *)argv[i], strlen(argv[i]));
-        }
-        sds *sds_args = getSdsArrayFromArgv(argc, argv, 0);
-        if (!sds_args) {
-            fprintf(stderr, "Invalid quoted string\n");
-            return 1;
-        }
-        if (config.stdinarg) {
-            sds_args = sds_realloc(sds_args, (argc + 1) * sizeof(sds));
-            sds_args[argc] = readArgFromStdin();
-            argc++;
-        }
-        /* Setup argument length */
-        size_t *argvlen = zmalloc(argc * sizeof(size_t));
-        for (i = 0; i < argc; i++) argvlen[i] = sdslen(sds_args[i]);
-        /* RESP-encode the command(s) given on the syntax
-         *
-         *     [N] command args [ ";" [N] command args [...] ]
-         */
-        int start = 0;   /* Argument index where the current command starts. */
-        int repeat = 1;  /* Number of times to repeat the current command. */
-        int seq_len = 0; /* Total number of commands in the sequence. */
-        sds cmd_seq = sdsempty();
-        for (i = 0; i <= argc; i++) {
-            if (i < argc && i == start && sds_args[i][0] >= '1' && sds_args[i][0] <= '9') {
-                /* Command prefixed by number means repeat command N times. */
-                repeat = atoi(sds_args[i]);
-                start++;
-            } else if (i == argc || strcmp(";", sds_args[i]) == 0) {
-                cmd = NULL;
-                if (i == start) continue;
-
-                addRespCommandToSequence(sds_args, argvlen, start, i, repeat, &cmd_seq, &seq_len);
-                start = i + 1;
-                repeat = 1;
-            } else if (strstr(sds_args[i], "__data__")) {
-                if (config.current_dataset) {
-                    fprintf(stderr, "Error: __data__ placeholders cannot be used with --dataset option\n");
-                    exit(1);
-                }
-                /* Replace data placeholders with data of length given by -d. */
-                int num_parts;
-                sds *parts = sdssplitlen(sds_args[i], sdslen(sds_args[i]),
-                                         "__data__", strlen("__data__"),
-                                         &num_parts);
-                sds newarg = parts[0];
-                parts[0] = NULL; /* prevent it from being freed below */
-                for (int j = 1; j < num_parts; j++) {
-                    char data[config.datasize];
-                    genBenchmarkRandomData(data, config.datasize);
-                    newarg = sdscatlen(newarg, data, config.datasize);
-                    newarg = sdscatlen(newarg, parts[j], sdslen(parts[j]));
-                }
-                sdsfreesplitres(parts, num_parts);
-                sdsfree(sds_args[i]);
-                sds_args[i] = newarg;
-                argvlen[i] = sdslen(sds_args[i]);
-            }
-            /* NOTE: Field placeholder processing is handled above in the command-level loop to ensure row consistency */
-        }
-        len = sdslen(cmd_seq);
-        /* adjust the datasize to the parsed command */
-        config.datasize = len;
+    /* Run benchmark with the command sequence already parsed above. */
+    if (argc && cmd_seq) {
         do {
             benchmarkSequence(title, cmd_seq, len, seq_len);
         } while (config.loop);

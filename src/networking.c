@@ -6598,11 +6598,12 @@ int processIOThreadsReadDone(void) {
         int in_accept_state = (connGetState(c->conn) == CONN_STATE_ACCEPTING);
         int needs_post_read_update = 0;
 
-        /* Keep READ postponed through command batching. */
+        /* Defer the post-batch update only when update_state may sync-invoke
+         * handlers. Always call update_state, including ACCEPTING. */
         if (c->conn) {
             int mask = 0;
-            if (!in_accept_state) {
-                mask |= CONN_POSTPONE_READ;
+            if (!in_accept_state && connUpdateStateMayInvokeHandlers(c->conn)) {
+                mask = CONN_POSTPONE_READ;
                 if (c->io_write_state != CLIENT_IDLE) mask |= CONN_POSTPONE_WRITE;
                 needs_post_read_update = 1;
             }

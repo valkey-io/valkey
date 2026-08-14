@@ -342,10 +342,15 @@ typedef uint64_t ValkeyModuleTimerID;
  * slot migration must be used. */
 #define VALKEYMODULE_OPTIONS_HANDLE_ATOMIC_SLOT_MIGRATION (1 << 5)
 
+/* Declare that the module's RDB save callbacks are thread-safe and can be
+ * invoked from a background thread during forkless save. When not set by any
+ * module that has registered data types, forkless save will be blocked. */
+#define VALKEYMODULE_OPTIONS_HANDLE_FORKLESS_SAVE (1 << 6)
+
 /* Next option flag, must be updated when adding new module flags above!
  * This flag should not be used directly by the module.
  * Use ValkeyModule_GetModuleOptionsAll instead. */
-#define _VALKEYMODULE_OPTIONS_FLAGS_NEXT (1 << 6)
+#define _VALKEYMODULE_OPTIONS_FLAGS_NEXT (1 << 7)
 
 /* Definitions for ValkeyModule_SetCommandInfo. */
 

@@ -508,6 +508,7 @@ ENGINE_SERVER_OBJ = \
     expire.o \
     fbtree.o \
     fifo.o \
+	forkless.o \
     functions.o \
     geo.o \
     geohash.o \

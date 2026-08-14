@@ -14,6 +14,10 @@
             [
                 "8.1.0",
                 "Added the `CANCEL` option."
+            ],
+            [
+                "9.2.0",
+                "Added the `FORK` and `FORKLESS` options. `SCHEDULE` can be combined with `FORK` or `FORKLESS`."
             ]
         ],
         "command_flags": [
@@ -23,23 +27,36 @@
         ],
         "arguments": [
             {
-                "name": "operation",
+                "name": "schedule",
+                "token": "SCHEDULE",
+                "type": "pure-token",
+                "optional": true,
+                "since": "3.2.2"
+            },
+            {
+                "name": "save-type",
                 "type": "oneof",
                 "optional": true,
+                "since": "9.2.0",
                 "arguments": [
                     {
-                        "name": "schedule",
-                        "token": "SCHEDULE",
-                        "type": "pure-token",
-                        "since": "3.2.2"
+                        "name": "fork",
+                        "token": "FORK",
+                        "type": "pure-token"
                     },
                     {
-                        "name": "cancel",
-                        "token": "CANCEL",
-                        "type": "pure-token",
-                        "since": "8.1.0"
+                        "name": "forkless",
+                        "token": "FORKLESS",
+                        "type": "pure-token"
                     }
                 ]
+            },
+            {
+                "name": "cancel",
+                "token": "CANCEL",
+                "type": "pure-token",
+                "optional": true,
+                "since": "8.1.0"
             }
         ],
         "reply_schema": {

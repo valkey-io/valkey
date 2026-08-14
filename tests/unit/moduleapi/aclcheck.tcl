@@ -336,3 +336,25 @@ start_server {tags {"modules acl"}} {
         assert_error {ERR Error loading module: module initialization failed} {r module load $testmodule 1}
     }
 }
+
+start_server {tags {"modules acl"}} {
+    r module load $testmodule
+
+    test {test module check acl for key and channel perm granted by a role} {
+        r acl SETROLE modperms ~x resetchannels &ch1
+        r acl setuser default on nopass +@all resetkeys resetchannels +@role:modperms
+
+        assert_equal [r aclcheck.set.check.key "~" x 5] OK
+        assert_error "*DENIED KEY*" {r aclcheck.set.check.key "~" v 5}
+        assert_equal [r aclcheck.publish.check.channel ch1 msg] 0
+        assert_error "*DENIED CHANNEL*" {r aclcheck.publish.check.channel ch2 msg}
+
+        # Restore the default user so the module can be unloaded.
+        r acl setuser default -@role:modperms on nopass ~* &* +@all alldbs
+        r acl DELROLE modperms
+    }
+
+    test {Unload the module - aclcheck role perms} {
+        assert_equal {OK} [r module unload aclcheck]
+    }
+}

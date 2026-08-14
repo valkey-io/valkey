@@ -2261,6 +2261,22 @@ static int ACLSelectorCheckCmd(aclSelector *selector,
     return ACL_OK;
 }
 
+/* Returns ACL_OK if any selector in selectors grants the requested access to
+ * key, ACL_DENIED_KEY otherwise. */
+static int ACLSelectorsCheckKey(list *selectors, const char *key, int keylen, int flags, bool is_prefix) {
+    listIter li;
+    listNode *ln;
+
+    listRewind(selectors, &li);
+    while ((ln = listNext(&li))) {
+        aclSelector *s = (aclSelector *)listNodeValue(ln);
+        if (ACLSelectorCheckKey(s, key, keylen, flags, is_prefix) == ACL_OK) {
+            return ACL_OK;
+        }
+    }
+    return ACL_DENIED_KEY;
+}
+
 /* Checks whether the given user has permission to access a specified key.
  *
  * This function verifies the access control list (ACL) permissions for a user on a key.
@@ -2285,21 +2301,49 @@ static int ACLSelectorCheckCmd(aclSelector *selector,
  *       it only evaluates read-only selectors.
  */
 int ACLUserCheckKeyPerm(user *u, const char *key, int keylen, int flags, bool is_prefix) {
-    listIter li;
-    listNode *ln;
-
     /* If there is no associated user, the connection can run anything. */
     if (u == NULL) return ACL_OK;
 
-    /* Check all of the selectors */
-    listRewind(u->selectors, &li);
-    while ((ln = listNext(&li))) {
-        aclSelector *s = (aclSelector *)listNodeValue(ln);
-        if (ACLSelectorCheckKey(s, key, keylen, flags, is_prefix) == ACL_OK) {
-            return ACL_OK;
+    /* Check the user's own selectors, then the selectors of each of its roles:
+     * access is granted as soon as any of them allows the key. */
+    if (ACLSelectorsCheckKey(u->selectors, key, keylen, flags, is_prefix) == ACL_OK) return ACL_OK;
+
+    if (u->roles) {
+        dictIterator *di = dictGetIterator(u->roles);
+        dictEntry *de;
+        while ((de = dictNext(di))) {
+            user *r = (user *)dictGetVal(de);
+            if (ACLSelectorsCheckKey(r->selectors, key, keylen, flags, is_prefix) == ACL_OK) {
+                dictReleaseIterator(di);
+                return ACL_OK;
+            }
         }
+        dictReleaseIterator(di);
     }
     return ACL_DENIED_KEY;
+}
+
+/* Returns 1 if any selector in selectors both allows the command and has the
+ * unrestricted key access specified by flags. The key result cache is passed
+ * in so that it can be shared across several selector lists. */
+static int ACLSelectorsCheckCmdWithUnrestrictedKeyAccess(list *selectors,
+                                                         struct serverCommand *cmd,
+                                                         robj **argv,
+                                                         int argc,
+                                                         int dbid,
+                                                         int flags,
+                                                         aclKeyResultCache *cache) {
+    listIter li;
+    listNode *ln;
+    int local_idxptr;
+
+    listRewind(selectors, &li);
+    while ((ln = listNext(&li))) {
+        aclSelector *s = (aclSelector *)listNodeValue(ln);
+        int acl_retval = ACLSelectorCheckCmd(s, cmd, argv, argc, &local_idxptr, cache, dbid);
+        if (acl_retval == ACL_OK && ACLSelectorHasUnrestrictedKeyAccess(s, flags)) return 1;
+    }
+    return 0;
 }
 
 /* Checks if the user can execute the given command with the added restriction
@@ -2309,10 +2353,6 @@ int ACLUserCheckKeyPerm(user *u, const char *key, int keylen, int flags, bool is
  * if the user has access or 0 otherwise.
  */
 int ACLUserCheckCmdWithUnrestrictedKeyAccess(user *u, struct serverCommand *cmd, robj **argv, int argc, int dbid, int flags) {
-    listIter li;
-    listNode *ln;
-    int local_idxptr;
-
     /* If there is no associated user, the connection can run anything. */
     if (u == NULL) return 1;
 
@@ -2321,34 +2361,30 @@ int ACLUserCheckCmdWithUnrestrictedKeyAccess(user *u, struct serverCommand *cmd,
     aclKeyResultCache cache;
     initACLKeyResultCache(&cache);
 
-    /* Check each selector sequentially */
-    listRewind(u->selectors, &li);
-    while ((ln = listNext(&li))) {
-        aclSelector *s = (aclSelector *)listNodeValue(ln);
-        int acl_retval = ACLSelectorCheckCmd(s, cmd, argv, argc, &local_idxptr, &cache, dbid);
-        if (acl_retval == ACL_OK && ACLSelectorHasUnrestrictedKeyAccess(s, flags)) {
-            cleanupACLKeyResultCache(&cache);
-            return 1;
+    /* Check the user's own selectors, then the selectors of each of its roles. */
+    int retval = ACLSelectorsCheckCmdWithUnrestrictedKeyAccess(u->selectors, cmd, argv, argc, dbid, flags, &cache);
+
+    if (!retval && u->roles) {
+        dictIterator *di = dictGetIterator(u->roles);
+        dictEntry *de;
+        while (!retval && (de = dictNext(di))) {
+            user *r = (user *)dictGetVal(de);
+            retval = ACLSelectorsCheckCmdWithUnrestrictedKeyAccess(r->selectors, cmd, argv, argc, dbid, flags, &cache);
         }
+        dictReleaseIterator(di);
     }
+
     cleanupACLKeyResultCache(&cache);
-    return 0;
+    return retval;
 }
 
-/* Check if the channel can be accessed by the client according to
- * the ACLs associated with the specified user.
- *
- * If the user can access the key, ACL_OK is returned, otherwise
- * ACL_DENIED_CHANNEL is returned. */
-int ACLUserCheckChannelPerm(user *u, sds channel, int is_pattern) {
+/* Returns ACL_OK if any selector in selectors grants access to channel,
+ * ACL_DENIED_CHANNEL otherwise. */
+static int ACLSelectorsCheckChannel(list *selectors, sds channel, int is_pattern) {
     listIter li;
     listNode *ln;
 
-    /* If there is no associated user, the connection can run anything. */
-    if (u == NULL) return ACL_OK;
-
-    /* Check all of the selectors */
-    listRewind(u->selectors, &li);
+    listRewind(selectors, &li);
     while ((ln = listNext(&li))) {
         aclSelector *s = (aclSelector *)listNodeValue(ln);
         /* The selector can run any keys */
@@ -2358,6 +2394,33 @@ int ACLUserCheckChannelPerm(user *u, sds channel, int is_pattern) {
         if (ACLCheckChannelAgainstList(s->channels, channel, sdslen(channel), is_pattern) == ACL_OK) {
             return ACL_OK;
         }
+    }
+    return ACL_DENIED_CHANNEL;
+}
+
+/* Check if the channel can be accessed by the client according to
+ * the ACLs associated with the specified user.
+ *
+ * If the user can access the key, ACL_OK is returned, otherwise
+ * ACL_DENIED_CHANNEL is returned. */
+int ACLUserCheckChannelPerm(user *u, sds channel, int is_pattern) {
+    /* If there is no associated user, the connection can run anything. */
+    if (u == NULL) return ACL_OK;
+
+    /* Check the user's own selectors, then the selectors of each of its roles. */
+    if (ACLSelectorsCheckChannel(u->selectors, channel, is_pattern) == ACL_OK) return ACL_OK;
+
+    if (u->roles) {
+        dictIterator *di = dictGetIterator(u->roles);
+        dictEntry *de;
+        while ((de = dictNext(di))) {
+            user *r = (user *)dictGetVal(de);
+            if (ACLSelectorsCheckChannel(r->selectors, channel, is_pattern) == ACL_OK) {
+                dictReleaseIterator(di);
+                return ACL_OK;
+            }
+        }
+        dictReleaseIterator(di);
     }
     return ACL_DENIED_CHANNEL;
 }

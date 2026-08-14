@@ -277,6 +277,22 @@ start_server {tags {"acl external:skip"}} {
         assert_match {*no permissions*} $result
     }
 
+    test {SORT BY/GET honours full key access granted by a role} {
+        r RPUSH sortlist 1 2 3
+        r ACL SETROLE allkeysrole ~* +@all
+        r ACL SETROLE onekeyrole ~sortlist +@all
+        r ACL SETUSER sortok on >p +@role:allkeysrole
+        r ACL SETUSER sortlimited on >p +@role:onekeyrole
+
+        r AUTH sortok p
+        assert_equal {1 2 3} [r SORT sortlist BY weight_* GET #]
+
+        r AUTH sortlimited p
+        assert_error {*BY option of SORT denied*} {r SORT sortlist BY weight_*}
+
+        r AUTH default ""
+    } {OK} {needs:reset}
+
     # --- ACL LIST ---
 
     test {ACL LIST includes roles} {

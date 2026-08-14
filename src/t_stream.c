@@ -1762,7 +1762,7 @@ size_t streamReplyWithRange(client *c,
 
             /* Try to add a new NACK. Most of the time this will work and
              * will not require extra lookups. We'll fix the problem later
-             * if we find that there is already a entry for this ID. */
+             * if we find that there is already an entry for this ID. */
             streamNACK *nack = streamCreateNACK(consumer);
             int group_inserted = raxTryInsert(group->pel, buf, sizeof(buf), nack, NULL);
             int consumer_inserted = raxTryInsert(consumer->pel, buf, sizeof(buf), nack, NULL);
@@ -3146,7 +3146,7 @@ void xpendingCommand(client *c) {
  *      Creates the pending message entry in the PEL even if certain
  *      specified IDs are not already in the PEL assigned to a different
  *      client. However the message must be exist in the stream, otherwise
- *      the IDs of non existing messages are ignored.
+ *      the IDs of nonexistent messages are ignored.
  *
  * 5. JUSTID:
  *      Return just an array of IDs of messages successfully claimed,
@@ -3314,7 +3314,7 @@ void xclaimCommand(client *c) {
              * by the caller is satisfied by this entry.
              *
              * Note that the nack could be created by FORCE, in this
-             * case there was no pre-existing entry and minidle should
+             * case there was no preexisting entry and minidle should
              * be ignored, but in that case nack->consumer is NULL. */
             if (nack->consumer && minidle) {
                 mstime_t this_idle = now - nack->delivery_time;
@@ -3987,8 +3987,13 @@ void xinfoCommand(client *c) {
 
 /* Validate the integrity stream listpack entries structure. Both in term of a
  * valid listpack, but also that the structure of the entries matches a valid
- * stream. return 1 if valid 0 if not valid. */
-int streamValidateListpackIntegrity(unsigned char *lp, size_t size) {
+ * stream. return 1 if valid 0 if not valid.
+ *
+ * If 'valid_count' is not NULL, the number of non-deleted (non-tombstone)
+ * entries in this listpack is added to it. Callers use this to validate the
+ * stream length loaded from an RDB payload against the entries actually
+ * present. */
+int streamValidateListpackIntegrity(unsigned char *lp, size_t size, uint64_t *valid_count) {
     int valid_record;
     unsigned char *p, *next;
 
@@ -4001,19 +4006,23 @@ int streamValidateListpackIntegrity(unsigned char *lp, size_t size) {
 
     /* entry count */
     int64_t entry_count = lpGetIntegerIfValid(p, &valid_record);
-    if (!valid_record) return 0;
+    if (!valid_record || entry_count < 0) return 0;
     p = next;
     if (!lpValidateNext(lp, &next, size)) return 0;
 
+    /* The master entry count is the number of live (non-deleted) entries in
+     * this listpack. Accumulate it so the caller can verify the stream length. */
+    if (valid_count) *valid_count += entry_count;
+
     /* deleted */
     int64_t deleted_count = lpGetIntegerIfValid(p, &valid_record);
-    if (!valid_record) return 0;
+    if (!valid_record || deleted_count < 0) return 0;
     p = next;
     if (!lpValidateNext(lp, &next, size)) return 0;
 
     /* num-of-fields */
     int64_t primary_fields = lpGetIntegerIfValid(p, &valid_record);
-    if (!valid_record) return 0;
+    if (!valid_record || primary_fields < 0) return 0;
     p = next;
     if (!lpValidateNext(lp, &next, size)) return 0;
 
@@ -4029,12 +4038,24 @@ int streamValidateListpackIntegrity(unsigned char *lp, size_t size) {
     p = next;
     if (!lpValidateNext(lp, &next, size)) return 0;
 
+    /* Only the sum of the two header counts is validated by the traversal
+     * below, so count the live and deleted records actually present and
+     * reconcile both. streamIteratorRemoveEntry() frees the whole node once the
+     * declared live count reaches 1, so a header that understates it makes XDEL
+     * destroy the records it failed to account for. */
+    int64_t declared_live = entry_count, declared_deleted = deleted_count;
+    uint64_t live_records = 0, deleted_records = 0;
+
     entry_count += deleted_count;
     while (entry_count--) {
         if (!p) return 0;
         int64_t fields = primary_fields, extra_fields = 3;
         int64_t flags = lpGetIntegerIfValid(p, &valid_record);
         if (!valid_record) return 0;
+        if (flags & STREAM_ITEM_FLAG_DELETED)
+            deleted_records++;
+        else
+            live_records++;
         p = next;
         if (!lpValidateNext(lp, &next, size)) return 0;
 
@@ -4051,7 +4072,7 @@ int streamValidateListpackIntegrity(unsigned char *lp, size_t size) {
         if (!(flags & STREAM_ITEM_FLAG_SAMEFIELDS)) {
             /* num-of-fields */
             fields = lpGetIntegerIfValid(p, &valid_record);
-            if (!valid_record) return 0;
+            if (!valid_record || fields < 0) return 0;
             p = next;
             if (!lpValidateNext(lp, &next, size)) return 0;
 
@@ -4079,6 +4100,7 @@ int streamValidateListpackIntegrity(unsigned char *lp, size_t size) {
     }
 
     if (next) return 0;
+    if (live_records != (uint64_t)declared_live || deleted_records != (uint64_t)declared_deleted) return 0;
 
     return 1;
 }

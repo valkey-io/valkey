@@ -2053,7 +2053,7 @@ void luaCallFunction(ValkeyModuleCtx *ctx,
     int delhook = 0;
 
     /* We must set it before we set the Lua hook, theoretically the
-     * Lua hook might be called wheneven we run any Lua instruction
+     * Lua hook might be called whenever we run any Lua instruction
      * such as 'luaSetGlobalArray' and we want the run_ctx to be available
      * each time the Lua hook is invoked. */
 

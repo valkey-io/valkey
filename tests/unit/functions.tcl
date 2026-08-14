@@ -26,7 +26,7 @@ start_server {tags {"scripting"}} {
         set _ $e
     } {*already exists*}
 
-    test {FUNCTION - Create an already exiting library raise error (case insensitive)} {
+    test {FUNCTION - Create an already exiting library raise error (case-insensitive)} {
         catch {
             r function load [get_function_code LUA test test {return 'hello1'}]
         } e
@@ -59,7 +59,7 @@ start_server {tags {"scripting"}} {
         r fcall test 0
     } {hello1}
 
-    test {FUNCTION - test function case insensitive} {
+    test {FUNCTION - test function case-insensitive} {
         r fcall TEST 0
     } {hello1}
 
@@ -1039,7 +1039,7 @@ start_server {tags {"scripting"}} {
         r config set maxmemory 0
     } {OK} {needs:config-maxmemory}
 
-    test {FUNCTION - verify allow-omm allows running any command} {
+    test {FUNCTION - verify allow-oom allows running any command} {
         r FUNCTION load replace {#!lua name=f1
             server.register_function{
                 function_name='f1',

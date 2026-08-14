@@ -64,7 +64,7 @@ int test_cluster_shards(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
 }
 
 #define MSGTYPE_TEST_UAF 3
-#define MSGTYPE_TEST_MAX 254
+#define MSGTYPE_TEST_MAX 255
 
 void DingReceiver(ValkeyModuleCtx *ctx, const char *sender_id, uint8_t type, const unsigned char *payload, uint32_t len) {
     ValkeyModule_Log(ctx, "notice", "DING (type %d) RECEIVED from %.*s: '%.*s'", type, VALKEYMODULE_NODE_ID_LEN, sender_id, (int)len, payload);

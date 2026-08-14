@@ -71,30 +71,65 @@ TEST_F(MemoryPrefetchTest, TestPrefetchStringKey) {
 
 /* Test prefetchStringKey and prefetchKeyBucketRange with chained collision buckets and active rehashing. */
 TEST_F(MemoryPrefetchTest, TestPrefetchStringKeyCollisionsAndRehash) {
+    hashtableSetResizePolicy(HASHTABLE_RESIZE_AVOID);
+
     const int num_keys = 20;
     robj *keys[num_keys];
-    for (int i = 0; i < num_keys; i++) {
-        char buf[32];
-        int len = snprintf(buf, sizeof(buf), "collision_key_%d", i);
-        keys[i] = createStringObject(buf, len);
 
+    /* Insert the first key to initialize hashtable and determine the target bucket. */
+    keys[0] = createStringObject("collision_key_0", 15);
+    sds k0_sds = sdsnew("collision_key_0");
+    robj *val0 = createRawStringObject("collision_data", 14);
+    val0 = objectSetKeyAndExpire(val0, k0_sds, -1);
+    sdsfree(k0_sds);
+    kvstoreHashtableAdd(db.keys, 0, val0);
+
+    hashtable *ht = kvstoreGetHashtable(db.keys, 0);
+    ASSERT_TRUE(ht != NULL);
+    ASSERT_GT(hashtableBuckets(ht), (size_t)0);
+
+    size_t bucket_mask = hashtableBuckets(ht) - 1;
+    sds first_key_sds = (sds)objectGetVal(keys[0]);
+    size_t target_bucket = hashtableGetType(ht)->hashFunction(first_key_sds) & bucket_mask;
+
+    int found = 1;
+    int candidate_id = 1;
+
+    /* Derive remaining keys that hash to the exact same bucket index to force a collision chain. */
+    while (found < num_keys) {
+        char buf[64];
+        int len = snprintf(buf, sizeof(buf), "collision_key_%d", candidate_id++);
         sds k_sds = sdsnewlen(buf, len);
-        robj *val = createRawStringObject("collision_data", 14);
-        val = objectSetKeyAndExpire(val, k_sds, -1);
-        sdsfree(k_sds);
-        kvstoreHashtableAdd(db.keys, 0, val);
+        uint64_t hash = hashtableGetType(ht)->hashFunction(k_sds);
+        size_t b_idx = hash & bucket_mask;
+
+        if (b_idx == target_bucket) {
+            keys[found] = createStringObject(buf, len);
+            robj *val = createRawStringObject("collision_data", 14);
+            val = objectSetKeyAndExpire(val, k_sds, -1);
+            sdsfree(k_sds);
+            kvstoreHashtableAdd(db.keys, 0, val);
+            found++;
+        } else {
+            sdsfree(k_sds);
+        }
     }
 
-    /* Prefetch existing keys across chained buckets */
+    /* Verify that a collision chain with chained child buckets was formed. */
+    ASSERT_GT(hashtableChainedBuckets(ht, 0), (size_t)0);
+
+    /* Prefetch existing keys across chained collision buckets */
     for (int i = 0; i < num_keys; i++) {
         prefetchStringKey(&db, keys[i]);
     }
     prefetchKeyBucketRange(&db, keys, 0, num_keys, 1, 8);
 
-    /* Trigger active rehashing and verify traversal across table 0 and table 1 */
-    hashtable *ht = kvstoreGetHashtable(db.keys, 0);
+    /* Trigger active rehashing and assert that rehashing is active */
+    hashtableSetResizePolicy(HASHTABLE_RESIZE_ALLOW);
     hashtableExpand(ht, 128);
+    ASSERT_TRUE(hashtableIsRehashing(ht));
 
+    /* Prefetch while table is actively rehashing across table 0 and table 1 */
     for (int i = 0; i < num_keys; i++) {
         prefetchStringKey(&db, keys[i]);
     }
@@ -103,8 +138,40 @@ TEST_F(MemoryPrefetchTest, TestPrefetchStringKeyCollisionsAndRehash) {
     for (int i = 0; i < num_keys; i++) {
         decrRefCount(keys[i]);
     }
+
+    hashtableSetResizePolicy(HASHTABLE_RESIZE_ALLOW);
 }
 
+
+/* Test prefetchKeyBucketRange with NULL pointers and invalid stride values. */
+TEST_F(MemoryPrefetchTest, TestPrefetchKeyBucketRangeInvalidInputs) {
+    robj *argv[4];
+    for (int i = 0; i < 4; i++) {
+        argv[i] = createStringObject("k", 1);
+    }
+
+    /* NULL db or keys should return safely */
+    prefetchKeyBucketRange(NULL, argv, 0, 4, 1, 2);
+
+    serverDb empty_db;
+    memset(&empty_db, 0, sizeof(empty_db));
+    prefetchKeyBucketRange(&empty_db, argv, 0, 4, 1, 2);
+
+    /* NULL argv should return safely */
+    prefetchKeyBucketRange(&db, NULL, 0, 4, 1, 2);
+
+    /* stride <= 0 should return safely without division by zero */
+    prefetchKeyBucketRange(&db, argv, 0, 4, 0, 2);
+    prefetchKeyBucketRange(&db, argv, 0, 4, -1, 2);
+
+    /* start >= end should return safely */
+    prefetchKeyBucketRange(&db, argv, 4, 2, 1, 2);
+    prefetchKeyBucketRange(&db, argv, 2, 2, 1, 2);
+
+    for (int i = 0; i < 4; i++) {
+        decrRefCount(argv[i]);
+    }
+}
 
 /* Test prefetchKeyBucketRange with offset <= 0. */
 TEST_F(MemoryPrefetchTest, TestPrefetchKeyBucketRangeZeroOrNegativeOffset) {

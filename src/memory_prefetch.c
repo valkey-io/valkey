@@ -308,7 +308,7 @@ void removeClientFromPendingCommandsBatch(client *c) {
  * controller to asynchronously load the 64-byte dictionary hash bucket into L1 cache,
  * hiding memory latency while the caller processes prior keys. */
 void prefetchStringKey(serverDb *db, robj *keyobj) {
-    if (!db || !db->keys || !keyobj || keyobj->type != OBJ_STRING) return;
+    if (!db || !db->keys || !keyobj || keyobj->type != OBJ_STRING || !sdsEncodedObject(keyobj)) return;
 
     sds key = (sds)objectGetVal(keyobj);
     if (!key) return;
@@ -325,9 +325,10 @@ void prefetchStringKey(serverDb *db, robj *keyobj) {
 /* Helper function to prime the prefetch pipeline for a range of keys.
  * If there is only one key to process in the range, it skips prefetching. */
 void prefetchKeyBucketRange(serverDb *db, robj **argv, int start, int end, int stride, int offset) {
-    if (offset <= 0 || (end - start + stride - 1) / stride <= 1 || !db || !db->keys) return;
-    int limit = start + offset * stride;
-    if (limit > end) limit = end;
+    if (!db || !db->keys || !argv || stride <= 0 || offset <= 0 || start >= end) return;
+    if ((end - start + stride - 1) / stride <= 1) return;
+    long long calc_limit = (long long)start + (long long)offset * stride;
+    int limit = (calc_limit > (long long)end) ? end : (int)calc_limit;
     for (int i = start; i < limit; i += stride) {
         prefetchStringKey(db, argv[i]);
     }

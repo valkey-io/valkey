@@ -2417,9 +2417,6 @@ static void captureReplFullSyncCompleteDuration(void) {
 }
 
 void replicaAfterLoadPrimaryRDB(connection *conn, rdbSaveInfo *rsi, int disk_based_sync) {
-    /* Finalize full sync duration here to exclude backlog draining/streaming time for simplicity and consistency. */
-    captureReplFullSyncCompleteDuration();
-
     /* Final setup of the connected replica <- primary link */
     if (conn == server.repl_rdb_transfer_s) {
         dualChannelSyncHandleRdbLoadCompletion();
@@ -2429,6 +2426,9 @@ void replicaAfterLoadPrimaryRDB(connection *conn, rdbSaveInfo *rsi, int disk_bas
         server.repl_down_since = 0;
         /* Send the initial ACK immediately to put this replica in online state. */
         replicationSendAck();
+        /* Finalize full sync duration here for single channel replication.
+         * Exclude backlog draining/streaming time for simplicity. */
+        captureReplFullSyncCompleteDuration();
     }
 
     /* Fire the primary link modules event. */
@@ -3467,6 +3467,8 @@ int streamReplDataBufToDb(client *c) {
 void dualChannelSyncSuccess(void) {
     server.primary_initial_offset = server.repl_provisional_primary.reploff;
     replicationResurrectProvisionalPrimary();
+    /* Finalize full sync duration here to exclude backlog draining/streaming time to be consistent with single channel. */
+    captureReplFullSyncCompleteDuration();
     /* Wait for the accumulated buffer to be processed before reading any more replication updates */
     if (server.pending_repl_data.blocks && streamReplDataBufToDb(server.primary) == C_ERR) {
         /* Sync session aborted during repl data streaming. */

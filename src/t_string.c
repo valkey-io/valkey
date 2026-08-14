@@ -533,13 +533,12 @@ void mgetCommand(client *c) {
 
     addReplyArrayLen(c, c->argc - 1);
 
-    /* Prime the software pipeline */
+    /* Prime the software pipeline: prefetch upto initial batch size */
     int prefetch_offset = server.prefetch_batch_max_size;
     prefetchKeyBucketRange(c->db, c->argv, 1, c->argc, 1, prefetch_offset);
 
-    /* Process arguments in a sliding window: while verifying/resolving key j,
-     * asynchronously prefetch the key that is 'OFFSET' elements ahead. */
     for (j = 1; j < c->argc; j++) {
+        /* Sliding window prefetch asynchronously for the remaining keys */
         int pidx = j + prefetch_offset;
         if (prefetch_offset > 0 && pidx < c->argc) {
             prefetchStringKey(c->db, c->argv[pidx]);
@@ -565,16 +564,15 @@ void msetGenericCommand(client *c, int nx) {
         addReplyErrorArity(c);
         return;
     }
-
+    /* Prime the software pipeline: prefetch upto initial batch size */
     int prefetch_offset = server.prefetch_batch_max_size * 2;
-    /* Prime the software pipeline just once */
     prefetchKeyBucketRange(c->db, c->argv, 1, c->argc, 2, server.prefetch_batch_max_size);
 
     /* Handle the NX flag. The MSETNX semantic is to return zero and don't
      * set anything if at least one key already exists. */
     if (nx) {
         for (j = 1; j < c->argc; j += 2) {
-            /* Sliding window prefetch for the next existence check */
+            /* Sliding window prefetch asynchronously for the remaining keys */
             int pidx = j + prefetch_offset;
             if (prefetch_offset > 0 && pidx < c->argc) {
                 prefetchStringKey(c->db, c->argv[pidx]);
@@ -590,6 +588,7 @@ void msetGenericCommand(client *c, int nx) {
     for (j = 1; j < c->argc; j += 2) {
         /* Avoid duplicate sliding window prefetching if we already did it during the nx check. */
         if (!nx) {
+            /* Sliding window prefetch asynchronously for the remaining keys */
             int pidx = j + prefetch_offset;
             if (prefetch_offset > 0 && pidx < c->argc) {
                 prefetchStringKey(c->db, c->argv[pidx]);
@@ -668,15 +667,15 @@ void msetexCommand(client *c) {
         return;
     }
 
+    /* Prime the software pipeline: prefetch upto initial batch size */
     int prefetch_offset = server.prefetch_batch_max_size * 2;
-    /* Prime the prefetch pipeline just once */
     prefetchKeyBucketRange(c->db, c->argv, 2, args_start_idx, 2, server.prefetch_batch_max_size);
 
     /* Check NX/XX key-level conditions before setting the keys.
      * All key-value pairs are located within the range [2, args_start_idx). */
     if (flags & (ARGS_SET_NX | ARGS_SET_XX)) {
         for (int j = 2; j < args_start_idx; j += 2) {
-            /* Prefetch next keys in the sliding window */
+            /* Sliding window prefetch asynchronously for the remaining keys */
             int pidx = j + prefetch_offset;
             if (prefetch_offset > 0 && pidx < args_start_idx) {
                 prefetchStringKey(c->db, c->argv[pidx]);
@@ -699,6 +698,7 @@ void msetexCommand(client *c) {
     for (int j = 2; j < 2 + numkeys * 2; j += 2) {
         /* Avoid duplicate sliding window prefetching if already done in NX/XX existence checks */
         if (!(flags & (ARGS_SET_NX | ARGS_SET_XX))) {
+            /* Sliding window prefetch asynchronously for the remaining keys */
             int pidx = j + prefetch_offset;
             if (prefetch_offset > 0 && pidx < 2 + numkeys * 2) {
                 prefetchStringKey(c->db, c->argv[pidx]);

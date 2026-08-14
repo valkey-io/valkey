@@ -9029,8 +9029,10 @@ typedef struct moduleClusterNodeInfo {
 } mdouleClusterNodeInfo;
 
 /* We have an array of message types: each bucket is a linked list of
- * configured receivers. */
-static moduleClusterReceiver *clusterReceivers[UINT8_MAX];
+ * configured receivers. The array covers the full uint8_t range, so
+ * every valid cluster message type (0..255) has a bucket. */
+#define NUM_CLUSTER_MESSAGE_TYPES (UINT8_MAX + 1)
+static moduleClusterReceiver *clusterReceivers[NUM_CLUSTER_MESSAGE_TYPES];
 
 /* Dispatch the message to the right module receiver. */
 void moduleCallClusterReceivers(const char *sender_id,
@@ -9061,7 +9063,10 @@ void moduleCallClusterReceivers(const char *sender_id,
  * will be invoked with details, including the 40-byte node ID of the sender.
  *
  * In Valkey 8.1 and later, the node ID is null-terminated. Prior to 8.1, it was
- * not null-terminated */
+ * not null-terminated.
+ *
+ * Note: Old versions of Valkey could not handle type 255. This was fixed in
+ * 9.1.2, 9.0.6, 8.1.10, 8.0.11 and 7.2.15. */
 void VM_RegisterClusterMessageReceiver(ValkeyModuleCtx *ctx,
                                        uint8_t type,
                                        ValkeyModuleClusterMessageReceiver callback) {
@@ -12343,7 +12348,7 @@ void moduleUnregisterCommands(struct ValkeyModule *module) {
 static void moduleUnregisterClusterReceivers(ValkeyModule *module) {
     if (!server.cluster_enabled) return;
 
-    for (int type = 0; type < UINT8_MAX; type++) {
+    for (int type = 0; type < NUM_CLUSTER_MESSAGE_TYPES; type++) {
         moduleClusterReceiver *r = clusterReceivers[type], *prev = NULL;
         while (r) {
             if (r->module == module) {

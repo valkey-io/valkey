@@ -66,7 +66,7 @@ int test_cluster_shards(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
 #define MSGTYPE_DING 1
 #define MSGTYPE_DONG 2
 #define MSGTYPE_TEST_UAF 3
-#define MSGTYPE_TEST_MAX 254
+#define MSGTYPE_TEST_MAX 255
 
 /* test.pingall */
 int PingallCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {

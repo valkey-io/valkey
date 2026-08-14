@@ -1,7 +1,7 @@
 {
     "SETROLE": {
         "summary": "Creates and modifies an ACL role and its rules.",
-        "complexity": "O(N). Where N is the number of rules provided.",
+        "complexity": "O(N+M*C). Where N is the number of rules provided, M the number of users in the role and C the number of connected clients.",
         "group": "server",
         "since": "9.2.0",
         "arity": -3,

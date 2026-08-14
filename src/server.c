@@ -53,6 +53,7 @@
 #include "module.h"
 #include "scripting_engine.h"
 #include "util.h"
+#include "forkless.h"
 
 #include "eval.h"
 #include "bgiteration.h"
@@ -905,6 +906,12 @@ int hasActiveChildProcess(void) {
     return server.child_pid != -1;
 }
 
+/* Returns true if a background save (fork or forkless) or child process is
+ * active. */
+int hasActiveSaveOrChild(void) {
+    return hasActiveChildProcess() || isSaveInProgress();
+}
+
 void resetChildState(void) {
     server.child_type = CHILD_TYPE_NONE;
     server.child_pid = -1;
@@ -1673,8 +1680,10 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
     databasesCron();
 
     /* Start a scheduled AOF rewrite if this was requested by the user while
-     * a BGSAVE was in progress. */
-    if (!hasActiveChildProcess() && server.aof_rewrite_scheduled && !aofRewriteLimited()) {
+     * a BGSAVE was in progress. We don't start the rewrite if there is an
+     * active child process (to avoid multiple concurrent fork children) or if
+     * a forkless save is in progress (to avoid potential copy-on-write). */
+    if (!hasActiveSaveOrChild() && server.aof_rewrite_scheduled && !aofRewriteLimited()) {
         rewriteAppendOnlyFileBackground();
     }
 
@@ -1682,7 +1691,7 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
     if (hasActiveChildProcess() || scriptingEngineDebuggerPendingChildren()) {
         run_with_period(1000) receiveChildInfo();
         checkChildrenDone();
-    } else {
+    } else if (!isSaveInProgress()) {
         /* If there is not a background saving/rewrite in progress check if
          * we have to save/rewrite now. */
         for (j = 0; j < server.saveparamslen; j++) {
@@ -1696,15 +1705,19 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
                 (server.unixtime - server.lastbgsave_try > CONFIG_BGSAVE_RETRY_DELAY ||
                  server.lastbgsave_status == C_OK)) {
                 serverLog(LL_NOTICE, "%d changes in %d seconds. Saving...", sp->changes, (int)sp->seconds);
-                rdbSaveInfo rsi, *rsiptr;
-                rsiptr = rdbPopulateSaveInfo(&rsi);
-                rdbSaveBackground(REPLICA_REQ_NONE, server.rdb_filename, rsiptr, RDBFLAGS_NONE);
+                int type = (server.default_bgsave_method == RDB_BGSAVE_TYPE_FORKLESS &&
+                            server.forkless_options_supported &&
+                            moduleAllDatatypesHandleForklessSave())
+                               ? RDB_BGSAVE_TYPE_FORKLESS
+                               : RDB_BGSAVE_TYPE_FORK;
+                rdbStartBgsave(type);
                 break;
             }
         }
 
-        /* Trigger an AOF rewrite if needed. */
-        if (server.aof_state == AOF_ON && !hasActiveChildProcess() && server.aof_rewrite_perc &&
+        /* Trigger an AOF rewrite if needed. Avoid starting while another child process
+         * is active. Also avoid when forkless save is in progress to prevent potential copy-on-write. */
+        if (server.aof_state == AOF_ON && !hasActiveSaveOrChild() && server.aof_rewrite_perc &&
             server.aof_current_size > server.aof_rewrite_min_size) {
             long long base = server.aof_rewrite_base_size ? server.aof_rewrite_base_size : 1;
             long long growth = (server.aof_current_size * 100 / base) - 100;
@@ -1775,12 +1788,9 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
      * Note: this code must be after the replicationCron() call above so
      * make sure when refactoring this file to keep this order. This is useful
      * because we want to give priority to RDB savings for replication. */
-    if (!hasActiveChildProcess() && server.rdb_bgsave_scheduled &&
+    if (!hasActiveSaveOrChild() && server.rdb_bgsave_scheduled &&
         (server.unixtime - server.lastbgsave_try > CONFIG_BGSAVE_RETRY_DELAY || server.lastbgsave_status == C_OK)) {
-        rdbSaveInfo rsi, *rsiptr;
-        rsiptr = rdbPopulateSaveInfo(&rsi);
-        if (rdbSaveBackground(REPLICA_REQ_NONE, server.rdb_filename, rsiptr, RDBFLAGS_NONE) == C_OK)
-            server.rdb_bgsave_scheduled = 0;
+        if (rdbStartBgsave(server.rdb_bgsave_scheduled) == C_OK) server.rdb_bgsave_scheduled = RDB_BGSAVE_TYPE_NONE;
     }
 
     /* TLS auto-reload if enabled (only when TLS is built-in). */
@@ -3104,13 +3114,13 @@ void initServer(void) {
     server.client_pause_in_transaction = 0;
     server.child_pid = -1;
     server.child_type = CHILD_TYPE_NONE;
-    server.rdb_child_type = RDB_CHILD_TYPE_NONE;
+    server.rdb_write_target = RDB_WRITE_TARGET_NONE;
     server.rdb_pipe_conns = NULL;
     server.rdb_pipe_numconns = 0;
     server.rdb_pipe_numconns_writing = 0;
     server.rdb_pipe_buff = NULL;
     server.rdb_pipe_bufflen = 0;
-    server.rdb_bgsave_scheduled = 0;
+    server.rdb_bgsave_scheduled = RDB_BGSAVE_TYPE_NONE;
     server.child_info_pipe[0] = -1;
     server.child_info_pipe[1] = -1;
     server.child_info_nread = 0;
@@ -3145,6 +3155,8 @@ void initServer(void) {
     server.cron_malloc_stats.allocator_active = 0;
     server.cron_malloc_stats.allocator_resident = 0;
     server.lastbgsave_status = C_OK;
+    server.lastbgsave_type = RDB_BGSAVE_TYPE_NONE;
+    server.cur_bgsave_type = RDB_BGSAVE_TYPE_NONE;
     server.aof_last_write_status = C_OK;
     server.aof_last_write_errno = 0;
     server.repl_good_replicas_count = 0;
@@ -5078,7 +5090,7 @@ int finishShutdown(void) {
     /* Kill the saving child if there is a background saving in progress.
        We want to avoid race conditions, for instance our saving child may
        overwrite the synchronous saving did by SHUTDOWN. */
-    if (server.child_type == CHILD_TYPE_RDB) {
+    if (isForkBgsaveInProgress()) {
         serverLog(LL_WARNING, "There is a child saving an .rdb. Killing it!");
         killRDBChild();
         /* Note that, in killRDBChild normally has backgroundSaveDoneHandler
@@ -5088,6 +5100,10 @@ int finishShutdown(void) {
          * The temp rdb file fd may won't be closed when the server exits quickly,
          * but OS will close this fd when process exits. */
         rdbRemoveTempFile(server.child_pid, 0);
+    }
+    if (isForklessSaveInProgress()) {
+        serverLog(LL_WARNING, "There is a thread saving an .rdb. Cancelling it!");
+        forklessSaveCancel();
     }
 
     /* Kill module child if there is one. */
@@ -6563,13 +6579,29 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
     /* Persistence */
     if (all_sections || (dictFind(section_dict, "persistence") != NULL)) {
         if (sections++) info = sdscat(info, "\r\n");
-        double fork_perc = 0;
+        double save_perc = 0;
         if (server.stat_module_progress) {
-            fork_perc = server.stat_module_progress * 100;
+            save_perc = server.stat_module_progress * 100;
         } else if (server.stat_current_save_keys_total) {
-            fork_perc = ((double)server.stat_current_save_keys_processed / server.stat_current_save_keys_total) * 100;
+            save_perc = ((double)server.stat_current_save_keys_processed / server.stat_current_save_keys_total) * 100;
         }
         int aof_bio_fsync_status = atomic_load_explicit(&server.aof_bio_fsync_status, memory_order_relaxed);
+
+        /* Determine current bgsave type */
+        const char *current_bgsave_type;
+        switch (server.cur_bgsave_type) {
+        case RDB_BGSAVE_TYPE_FORK: current_bgsave_type = "fork"; break;
+        case RDB_BGSAVE_TYPE_FORKLESS: current_bgsave_type = "forkless"; break;
+        default: current_bgsave_type = "none"; break;
+        }
+
+        /* Determine last bgsave type */
+        const char *last_bgsave_type;
+        switch (server.lastbgsave_type) {
+        case RDB_BGSAVE_TYPE_FORK: last_bgsave_type = "fork"; break;
+        case RDB_BGSAVE_TYPE_FORKLESS: last_bgsave_type = "forkless"; break;
+        default: last_bgsave_type = "none"; break;
+        }
 
         info = sdscatprintf(
             info,
@@ -6579,15 +6611,17 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "current_cow_peak:%zu\r\n", server.stat_current_cow_peak,
                 "current_cow_size:%zu\r\n", server.stat_current_cow_bytes,
                 "current_cow_size_age:%lu\r\n", (server.stat_current_cow_updated ? (unsigned long)elapsedMs(server.stat_current_cow_updated) / 1000 : 0),
-                "current_fork_perc:%.2f\r\n", fork_perc,
+                "current_fork_perc:%.2f\r\n", save_perc,
                 "current_save_keys_processed:%zu\r\n", server.stat_current_save_keys_processed,
                 "current_save_keys_total:%zu\r\n", server.stat_current_save_keys_total,
                 "rdb_changes_since_last_save:%lld\r\n", server.dirty,
-                "rdb_bgsave_in_progress:%d\r\n", server.child_type == CHILD_TYPE_RDB,
+                "rdb_bgsave_in_progress:%d\r\n", isSaveInProgress(),
+                "rdb_current_bgsave_type:%s\r\n", current_bgsave_type,
+                "rdb_last_bgsave_type:%s\r\n", last_bgsave_type,
                 "rdb_last_save_time:%jd\r\n", (intmax_t)server.lastsave,
                 "rdb_last_bgsave_status:%s\r\n", (server.lastbgsave_status == C_OK) ? "ok" : "err",
                 "rdb_last_bgsave_time_sec:%jd\r\n", (intmax_t)server.rdb_save_time_last,
-                "rdb_current_bgsave_time_sec:%jd\r\n", (intmax_t)((server.child_type != CHILD_TYPE_RDB) ? -1 : time(NULL) - server.rdb_save_time_start),
+                "rdb_current_bgsave_time_sec:%jd\r\n", (intmax_t)(isSaveInProgress() ? time(NULL) - server.rdb_save_time_start : -1),
                 "rdb_saves:%lld\r\n", server.stat_rdb_saves,
                 "rdb_last_cow_size:%zu\r\n", server.stat_rdb_cow_bytes,
                 "rdb_last_load_keys_expired:%lld\r\n", server.rdb_last_load_keys_expired,
@@ -6652,6 +6686,9 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                     "loading_loaded_perc:%.2f\r\n", perc,
                     "loading_eta_seconds:%jd\r\n", (intmax_t)eta));
         }
+
+        /* Forkless / bgiteration metrics */
+        info = forkless_catInfo(info);
     }
 
     /* Stats */
@@ -7005,6 +7042,9 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "eventloop_cmd_per_cycle_max:%lld\r\n", server.el_cmd_cnt_max,
                 "io_threaded_reads_pending:%lld\r\n", server.stat_io_reads_pending,
                 "io_threaded_writes_pending:%lld\r\n", server.stat_io_writes_pending));
+
+        /* Forkless debug metrics */
+        info = forkless_catDebugInfo(info);
     }
 
     return info;

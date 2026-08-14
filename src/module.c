@@ -70,6 +70,7 @@
 #include "io_threads.h"
 #include "scripting_engine.h"
 #include "cluster_migrateslots.h"
+#include "forkless.h"
 #include <dlfcn.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
@@ -2565,7 +2566,7 @@ void VM_Yield(ValkeyModuleCtx *ctx, int flags, const char *busy_reply) {
             if (flags & VALKEYMODULE_YIELD_FLAG_CLIENTS) server.busy_module_yield_flags |= BUSY_MODULE_YIELD_CLIENTS;
 
             /* Let the server process events */
-            if (!pthread_equal(server.main_thread_id, pthread_self())) {
+            if (!onValkeyMainThread()) {
                 /* If we are not in the main thread, we defer event loop processing to the main thread
                  * after the main thread enters acquiring GIL state in order to protect the event
                  * loop (ae.c) and avoid potential race conditions. */
@@ -7685,6 +7686,23 @@ int moduleVerifyAllAllowAtomicSlotMigrationOrReply(client *c) {
         }
     }
     return C_OK;
+}
+
+/* Returns 0 if any module with registered data types did not declare
+ * VALKEYMODULE_OPTIONS_HANDLE_FORKLESS_SAVE, in which case forkless save should be
+ * blocked because the module's RDB save callbacks may not be thread-safe. */
+int moduleAllDatatypesHandleForklessSave(void) {
+    listIter li;
+    listNode *ln;
+
+    listRewind(modules, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        struct ValkeyModule *module = listNodeValue(ln);
+        if (listLength(module->types) && !(module->options & VALKEYMODULE_OPTIONS_HANDLE_FORKLESS_SAVE)) {
+            return 0;
+        }
+    }
+    return 1;
 }
 
 /* Returns true if any previous IO API failed.
@@ -13533,6 +13551,12 @@ int moduleLoad(const char *path, void **module_argv, int module_argc, int is_loa
     ModuleLoadFunc onload;
     void *handle;
 
+    if (isForklessSaveInProgress()) {
+        serverLog(LL_WARNING, "Module %s failed to load: cannot load during forkless save.", path);
+        if (errmsg) *errmsg = "cannot load module during forkless save";
+        return C_ERR;
+    }
+
     if (server.async_loading) {
         serverLog(LL_WARNING, "Module %s failed to load: cannot load during async replication.", path);
         if (errmsg) *errmsg = "cannot load module during async replication";
@@ -14485,7 +14509,8 @@ int VM_RdbLoad(ValkeyModuleCtx *ctx, ValkeyModuleRdbStream *stream, int flags) {
 
     /* Kill existing RDB fork as it is saving outdated data. Also killing it
      * will prevent COW memory issue. */
-    if (server.child_type == CHILD_TYPE_RDB) killRDBChild();
+    if (isForkBgsaveInProgress()) killRDBChild();
+    if (isForklessSaveInProgress()) forklessSaveCancel();
 
     /* Kill existing slot migration fork as it is saving outdated data. Also killing it
      * will prevent COW memory issue. */

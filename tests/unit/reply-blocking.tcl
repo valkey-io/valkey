@@ -1113,12 +1113,20 @@ foreach provider_mode {aof} {
                 $primary set durable:flush-track-b val_b
                 $primary config set appendfsync always
 
-                # Drain any invalidation messages from the SETs above
-                # (BCAST mode sends invalidations for all writes)
-                after 100
+                # Drain setup-SET invalidations. BCAST broadcasts them
+                # asynchronously in beforeSleep, so poll until quiet instead of
+                # using a racy fixed wait.
                 set tracker_fd [$tracker channel]
                 fconfigure $tracker_fd -blocking 0
-                read $tracker_fd
+                set quiet 0
+                for {set i 0} {$i < 100} {incr i} {
+                    if {[read $tracker_fd] eq ""} {
+                        if {[incr quiet] >= 3} break
+                    } else {
+                        set quiet 0
+                    }
+                    after 20
+                }
                 fconfigure $tracker_fd -blocking 1
 
                 # Pause the provider so the FLUSHDB invalidation is deferred

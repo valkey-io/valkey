@@ -147,6 +147,8 @@ struct ValkeyModule;
 #define C_ERR -1
 #define C_RETRY -2
 
+#define onValkeyMainThread() (pthread_equal(server.main_thread_id, pthread_self()) != 0)
+
 /* Static server configuration */
 #define CONFIG_DEFAULT_HZ 10 /* Time interrupt calls/sec. */
 #define CONFIG_MIN_HZ 1
@@ -652,10 +654,19 @@ typedef enum {
     CLUSTER_CONFIGFILE_SAVE_BEHAVIOR_BEST_EFFORT, /* Attempt to save on a "best-effort" basis, process will not exit if it fails. */
 } cluster_persist_config_mode;
 
-/* RDB active child save type. */
-#define RDB_CHILD_TYPE_NONE 0
-#define RDB_CHILD_TYPE_DISK 1   /* RDB is written to disk. */
-#define RDB_CHILD_TYPE_SOCKET 2 /* RDB is written to replica socket. */
+/* RDB write target type. */
+typedef enum {
+    RDB_WRITE_TARGET_NONE = 0,
+    RDB_WRITE_TARGET_DISK = 1,  /* RDB is written to disk. */
+    RDB_WRITE_TARGET_SOCKET = 2 /* RDB is written to replica socket. */
+} rdbWriteTarget;
+
+/* RDB bgsave type. */
+typedef enum {
+    RDB_BGSAVE_TYPE_NONE = 0,
+    RDB_BGSAVE_TYPE_FORK = 1,    /* Fork-based bgsave. */
+    RDB_BGSAVE_TYPE_FORKLESS = 2 /* Forkless bgsave. */
+} rdbBgsaveType;
 
 /* Keyspace changes notification classes. Every class is associated with a
  * character for configuration purposes. */
@@ -1927,8 +1938,8 @@ struct valkeyServer {
     size_t stat_current_cow_peak;                       /* Peak size of copy on write bytes. */
     size_t stat_current_cow_bytes;                      /* Copy on write bytes while child is active. */
     monotime stat_current_cow_updated;                  /* Last update time of stat_current_cow_bytes */
-    size_t stat_current_save_keys_processed;            /* Processed keys while child is active. */
-    size_t stat_current_save_keys_total;                /* Number of keys when child started. */
+    _Atomic(size_t) stat_current_save_keys_processed;   /* Processed keys while save is active. */
+    _Atomic(size_t) stat_current_save_keys_total;       /* Number of keys when save started. */
     size_t stat_rdb_cow_bytes;                          /* Copy on write bytes during RDB saving. */
     size_t stat_aof_cow_bytes;                          /* Copy on write bytes during AOF rewrite. */
     size_t stat_module_cow_bytes;                       /* Copy on write bytes during module fork. */
@@ -2074,8 +2085,10 @@ struct valkeyServer {
     time_t lastbgsave_try;                /* Unix time of last attempted bgsave */
     time_t rdb_save_time_last;            /* Time used by last RDB save run. */
     time_t rdb_save_time_start;           /* Current RDB save start time. */
-    int rdb_bgsave_scheduled;             /* BGSAVE when possible if true. */
-    int rdb_child_type;                   /* Type of save by active child. */
+    rdbBgsaveType rdb_bgsave_scheduled;   /* BGSAVE when possible if non-zero. */
+    rdbWriteTarget rdb_write_target;      /* Type of save by active child. */
+    rdbBgsaveType cur_bgsave_type;        /* Current bgsave type. */
+    rdbBgsaveType lastbgsave_type;        /* Last completed bgsave type. */
     int lastbgsave_status;                /* C_OK or C_ERR */
     int stop_writes_on_bgsave_err;        /* Don't allow writes if can't BGSAVE */
     int rdb_pipe_read;                    /* RDB pipe used to transfer the rdb data */
@@ -2089,6 +2102,7 @@ struct valkeyServer {
     int rdb_key_save_delay;               /* Delay in microseconds between keys while
                                            * writing aof or rdb. (for testings). negative
                                            * value means fractions of microseconds (on average). */
+    int default_bgsave_method;            /* Default bgsave method: RDB_BGSAVE_TYPE_FORK or RDB_BGSAVE_TYPE_FORKLESS */
     int key_load_delay;                   /* Delay in microseconds between keys while
                                            * loading aof or rdb. (for testings). negative
                                            * value means fractions of microseconds (on average). */
@@ -3345,6 +3359,9 @@ void receiveChildInfo(void);
 /* Fork helpers */
 int serverFork(int purpose);
 int hasActiveChildProcess(void);
+int isSaveInProgress(void);
+int hasActiveSaveOrChild(void);
+int isForkBgsaveInProgress(void);
 void resetChildState(void);
 int isMutuallyExclusiveChildType(int type);
 

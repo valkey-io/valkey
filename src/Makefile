@@ -504,6 +504,7 @@ ENGINE_SERVER_OBJ = \
     evict.o \
     expire.o \
     fifo.o \
+	forkless.o \
     functions.o \
     geo.o \
     geohash.o \

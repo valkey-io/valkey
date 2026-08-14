@@ -435,9 +435,9 @@ err:
 #define MULTIPLIER_10E16 10000000000000000ULL
 
 /**
- * Convert a string into an signed 64-bit integer using AVX-512 instructions.
+ * Convert a string into a signed 64-bit integer using AVX-512 instructions.
  *
- * This function parses a string of digits and converts it into an signed
+ * This function parses a string of digits and converts it into a signed
  * 64-bit integer. It leverages AVX-512 SIMD instructions for optimized
  * processing and performs strict validation to ensure the input string
  * represents a valid signed integer.
@@ -866,7 +866,7 @@ int d2string(char *buf, size_t len, double value) {
  */
 int fixedpoint_d2string(char *dst, size_t dstlen, double dvalue, int fractional_digits) {
     if (fractional_digits < 1 || fractional_digits > 17) goto err;
-    /* min size of 2 ( due to 0. ) + n fractional_digitits + \0 */
+    /* min size of 2 ( due to 0. ) + n fractional_digits + \0 */
     if ((int)dstlen < (fractional_digits + 3)) goto err;
     if (dvalue == 0) {
         dst[0] = '0';

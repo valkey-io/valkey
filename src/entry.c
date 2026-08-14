@@ -490,7 +490,7 @@ entry *entryUpdate(entry *e, sds value, mstime_t expiry) {
     return new_entry;
 }
 
-/* Returns memory usage of a entry, including all allocations owned by
+/* Returns memory usage of an entry, including all allocations owned by
  * the entry. */
 size_t entryMemUsage(entry *entry) {
     size_t mem = 0;
@@ -511,7 +511,7 @@ size_t entryMemUsage(entry *entry) {
     return mem;
 }
 
-/* Defragments a entry (field-value pair) if needed, using the
+/* Defragments an entry (field-value pair) if needed, using the
  * provided defrag functions. The defrag functions return NULL if the allocation
  * was not moved, otherwise they return a pointer to the new memory location.
  * A separate sds defrag function is needed because of the unique memory layout

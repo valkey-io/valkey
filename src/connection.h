@@ -147,6 +147,10 @@ typedef struct ConnectionType {
     void (*postpone_update_state)(struct connection *conn, int postpone_mask);
     /* Called by the main-thread */
     void (*update_state)(struct connection *conn);
+    /* 1 if update_state may synchronously invoke read/write handlers.
+     * When set, processClientIOReadsDone defers clearing postpone until after
+     * command batching; leave 0 for transports that do not need that. */
+    int sync_handlers_in_update_state;
 
     /* TLS specified methods */
     sds (*get_peer_cert)(struct connection *conn);
@@ -175,7 +179,7 @@ struct connection {
 
 #define CONFIG_BINDADDR_MAX 16
 
-/* Setup a listener by a connection type */
+/* Set up a listener by a connection type */
 struct connListener {
     int fd[CONFIG_BINDADDR_MAX];
     int count;
@@ -524,6 +528,10 @@ static inline void connSetPostponeUpdateState(connection *conn, int postpone_mas
     if (conn && conn->type && conn->type->postpone_update_state) {
         conn->type->postpone_update_state(conn, postpone_mask);
     }
+}
+
+static inline int connUpdateStateMayInvokeHandlers(connection *conn) {
+    return conn && conn->type && conn->type->sync_handlers_in_update_state;
 }
 
 static inline int connIsIntegrityChecked(connection *conn) {

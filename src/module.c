@@ -9612,8 +9612,10 @@ typedef struct moduleClusterNodeInfo {
 } moduleClusterNodeInfo;
 
 /* We have an array of message types: each bucket is a linked list of
- * configured receivers. */
-static moduleClusterReceiver *clusterReceivers[UINT8_MAX];
+ * configured receivers. The array covers the full uint8_t range, so
+ * every valid cluster message type (0..255) has a bucket. */
+#define MAX_CLUSTER_MESSAGE_TYPES (UINT8_MAX + 1)
+static moduleClusterReceiver *clusterReceivers[MAX_CLUSTER_MESSAGE_TYPES];
 
 /* Dispatch the message to the right module receiver. */
 void moduleCallClusterReceivers(const char *sender_id,
@@ -13334,7 +13336,7 @@ void moduleUnregisterCommands(struct ValkeyModule *module) {
 static void moduleUnregisterClusterReceivers(ValkeyModule *module) {
     if (!server.cluster_enabled) return;
 
-    for (int type = 0; type < UINT8_MAX; type++) {
+    for (int type = 0; type < MAX_CLUSTER_MESSAGE_TYPES; type++) {
         moduleClusterReceiver *r = clusterReceivers[type], *prev = NULL;
         while (r) {
             if (r->module == module) {

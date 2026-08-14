@@ -302,7 +302,7 @@ start_cluster 3 0 [list config_lines $modules] {
             fail "node1 didn't receive cluster module message after re-registration"
         }
         verify_log_message 0 "*DING (type 3) RECEIVED*TestUAF*" 0
-        verify_log_message 0 "*DING (type 254) RECEIVED*TestMAX*" 0
+        verify_log_message 0 "*DING (type 255) RECEIVED*TestMAX*" 0
     }
 
     test "VM_RegisterClusterMessageReceiver - dangling callback after MODULE UNLOAD" {
@@ -327,7 +327,7 @@ start_cluster 3 0 [list config_lines $modules] {
             fail "node1 didn't receive cluster module message"
         }
         verify_no_log_message 0 "*DING (type 3) RECEIVED*TestUAF*" $loglines
-        verify_no_log_message 0 "*DING (type 254) RECEIVED*TestMAX*" $loglines
+        verify_no_log_message 0 "*DING (type 255) RECEIVED*TestMAX*" $loglines
         assert_equal PONG [$node1 PING]
     }
 

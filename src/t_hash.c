@@ -1805,11 +1805,11 @@ static long hashTypeReplyNonVolatileHashtable(writePreparedClient *wpc, robj *o,
         }
         if (batch_count == 0) break;
 
-        /* Phase 2: the entries are warm now, so prefetch the field/value sds
-         * buffers they point at. */
-        for (int i = 0; i < batch_count; i++) {
-            if (flags & OBJ_HASH_FIELD) valkey_prefetch(entryGetField(batch[i]));
-            if (flags & OBJ_HASH_VALUE) {
+        /* Phase 2: the entries are warm now, so prefetch the separately
+         * allocated value buffers. The field needs no prefetch - it is the
+         * entry pointer itself, already prefetched in phase 1. */
+        if (flags & OBJ_HASH_VALUE) {
+            for (int i = 0; i < batch_count; i++) {
                 size_t vlen;
                 valkey_prefetch(entryGetValue(batch[i], &vlen));
             }
@@ -1854,8 +1854,11 @@ void genericHgetallCommand(client *c, int flags) {
      * heap-allocated reply blocks. This holds for listpack-encoded hashes
      * (which cannot hold volatile fields at all) as well as hashtable-encoded
      * ones without volatile fields. */
-    if (!hashTypeHasVolatileFields(o)) {
-        unsigned long length = hashTypeLength(o);
+    unsigned long length = 0;
+    void *replylen = NULL;
+    bool exact_len = !hashTypeHasVolatileFields(o);
+    if (exact_len) {
+        length = hashTypeLength(o);
         /* We return a map if the user requested fields and values, like in
          * the HGETALL case. Otherwise, to use a flat array makes more sense. */
         if (flags & OBJ_HASH_FIELD && flags & OBJ_HASH_VALUE) {
@@ -1863,37 +1866,24 @@ void genericHgetallCommand(client *c, int flags) {
         } else {
             addWritePreparedReplyArrayLen(wpc, length);
         }
-
         if (objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE) {
             /* Batched iteration with prefetching; see the helper above. */
             count = hashTypeReplyNonVolatileHashtable(wpc, o, flags);
-        } else {
-            /* Listpack entries live in one contiguous allocation, so plain
-             * iteration is already cache-friendly. */
-            hashTypeInitIterator(o, &hi);
-            while (hashTypeNext(&hi) != C_ERR) {
-                if (flags & OBJ_HASH_FIELD) {
-                    addHashIteratorCursorToReply(wpc, &hi, OBJ_HASH_FIELD);
-                    count++;
-                }
-                if (flags & OBJ_HASH_VALUE) {
-                    addHashIteratorCursorToReply(wpc, &hi, OBJ_HASH_VALUE);
-                    count++;
-                }
-            }
-            hashTypeResetIterator(&hi);
+            /* The header was written up front, so the element count must
+             * match it exactly or we have emitted a malformed reply. */
+            serverAssert((unsigned long)count ==
+                         ((flags & OBJ_HASH_FIELD && flags & OBJ_HASH_VALUE) ? length * 2 : length));
+            return;
         }
-        /* The header was written up front, so the element count must match it
-         * exactly or we have emitted a malformed reply. */
-        serverAssert((unsigned long)count ==
-                     ((flags & OBJ_HASH_FIELD && flags & OBJ_HASH_VALUE) ? length * 2 : length));
-        return;
+        /* Listpack entries live in one contiguous allocation, so plain
+         * iteration below is already cache-friendly. */
+    } else {
+        /* The hash has volatile fields, so its length may shrink
+         * mid-iteration as fields expire and isn't known until we've walked
+         * it: the aggregate header has to be deferred. */
+        replylen = addReplyDeferredLen(c);
     }
 
-    /* The hash has volatile fields, so its length may shrink mid-iteration as
-     * fields expire and isn't known until we've walked it: the aggregate
-     * header has to be deferred. */
-    void *replylen = addReplyDeferredLen(c);
     hashTypeInitIterator(o, &hi);
     while (hashTypeNext(&hi) != C_ERR) {
         if (flags & OBJ_HASH_FIELD) {
@@ -1908,7 +1898,10 @@ void genericHgetallCommand(client *c, int flags) {
 
     hashTypeResetIterator(&hi);
     /* Make sure we returned the right number of elements. */
-    if (flags & OBJ_HASH_FIELD && flags & OBJ_HASH_VALUE) {
+    if (exact_len) {
+        serverAssert((unsigned long)count ==
+                     ((flags & OBJ_HASH_FIELD && flags & OBJ_HASH_VALUE) ? length * 2 : length));
+    } else if (flags & OBJ_HASH_FIELD && flags & OBJ_HASH_VALUE) {
         setDeferredMapLen(c, replylen, count / 2);
     } else {
         setDeferredArrayLen(c, replylen, count);

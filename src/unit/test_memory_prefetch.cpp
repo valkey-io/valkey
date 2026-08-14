@@ -33,10 +33,23 @@ class MemoryPrefetchTest : public ::testing::Test {
     }
 };
 
-/* Test prefetchStringKey with empty database and non-empty database. */
+/* Test prefetchStringKey with empty database, non-empty database, and edge cases. */
 TEST_F(MemoryPrefetchTest, TestPrefetchStringKey) {
     robj *key1 = createStringObject("key1", 4);
     robj *key2 = createStringObject("key2", 4);
+
+    /* Edge cases: NULL database, NULL key, non-string object */
+    prefetchStringKey(NULL, key1);
+    prefetchStringKey(&db, NULL);
+
+    robj *int_key = createObject(OBJ_STRING, (void *)100);
+    int_key->encoding = OBJ_ENCODING_INT;
+    prefetchStringKey(&db, int_key);
+    decrRefCount(int_key);
+
+    robj *list_obj = createQuicklistObject(0, 0);
+    prefetchStringKey(&db, list_obj);
+    decrRefCount(list_obj);
 
     /* Prefetch on empty database - should execute safely without crash */
     prefetchStringKey(&db, key1);
@@ -54,6 +67,42 @@ TEST_F(MemoryPrefetchTest, TestPrefetchStringKey) {
 
     decrRefCount(key1);
     decrRefCount(key2);
+}
+
+/* Test prefetchStringKey and prefetchKeyBucketRange with chained collision buckets and active rehashing. */
+TEST_F(MemoryPrefetchTest, TestPrefetchStringKeyCollisionsAndRehash) {
+    const int num_keys = 20;
+    robj *keys[num_keys];
+    for (int i = 0; i < num_keys; i++) {
+        char buf[32];
+        int len = snprintf(buf, sizeof(buf), "collision_key_%d", i);
+        keys[i] = createStringObject(buf, len);
+
+        sds k_sds = sdsnewlen(buf, len);
+        robj *val = createRawStringObject("collision_data", 14);
+        val = objectSetKeyAndExpire(val, k_sds, -1);
+        sdsfree(k_sds);
+        kvstoreHashtableAdd(db.keys, 0, val);
+    }
+
+    /* Prefetch existing keys across chained buckets */
+    for (int i = 0; i < num_keys; i++) {
+        prefetchStringKey(&db, keys[i]);
+    }
+    prefetchKeyBucketRange(&db, keys, 0, num_keys, 1, 8);
+
+    /* Trigger active rehashing and verify traversal across table 0 and table 1 */
+    hashtable *ht = kvstoreGetHashtable(db.keys, 0);
+    hashtableExpand(ht, 128);
+
+    for (int i = 0; i < num_keys; i++) {
+        prefetchStringKey(&db, keys[i]);
+    }
+    prefetchKeyBucketRange(&db, keys, 0, num_keys, 1, 8);
+
+    for (int i = 0; i < num_keys; i++) {
+        decrRefCount(keys[i]);
+    }
 }
 
 

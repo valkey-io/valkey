@@ -303,26 +303,32 @@ void removeClientFromPendingCommandsBatch(client *c) {
     }
 }
 
-/* Helper function to prefetch memory required for a key lookup.
- * This instructs the CPU's memory controller to asynchronously load
- * the dictionary hash buckets into the L1 cache,
- * effectively hiding memory latency when iterating over large datasets. */
+/* Helper function to prefetch memory required for a key lookup in multi-key loops.
+ * Performs a lightweight Stage 1 primary bucket prefetch, instructing the CPU memory
+ * controller to asynchronously load the 64-byte dictionary hash bucket into L1 cache,
+ * hiding memory latency while the caller processes prior keys. */
 void prefetchStringKey(serverDb *db, robj *keyobj) {
-    hashtableIncrementalFindState state;
+    if (!db || !db->keys || !keyobj || keyobj->type != OBJ_STRING) return;
+
     sds key = (sds)objectGetVal(keyobj);
-    hashtable *ht = kvstoreGetHashtable(db->keys, getKVStoreIndexForKey(key));
-    if (ht) {
-        hashtableIncrementalFindInit(&state, ht, key);
-        hashtableIncrementalFindStep(&state);
-    }
+    if (!key) return;
+
+    int dict_index = getKVStoreIndexForKey(key);
+    hashtable *ht = kvstoreGetHashtable(db->keys, dict_index);
+    if (!ht || hashtableSize(ht) == 0) return;
+
+    hashtableIncrementalFindState state;
+    hashtableIncrementalFindInit(&state, ht, key);
+    hashtableIncrementalFindStep(&state);
 }
 
 /* Helper function to prime the prefetch pipeline for a range of keys.
  * If there is only one key to process in the range, it skips prefetching. */
 void prefetchKeyBucketRange(serverDb *db, robj **argv, int start, int end, int stride, int offset) {
-    if (offset <= 0 || (end - start + stride - 1) / stride <= 1) return;
+    if (offset <= 0 || (end - start + stride - 1) / stride <= 1 || !db || !db->keys) return;
     int limit = start + offset * stride;
-    for (int i = start; i < limit && i < end; i += stride) {
+    if (limit > end) limit = end;
+    for (int i = start; i < limit; i += stride) {
         prefetchStringKey(db, argv[i]);
     }
 }

@@ -115,6 +115,7 @@ typedef struct aeEventLoop {
     aeCustomPollProc *custompoll;
     pthread_mutex_t poll_mutex;
     int flags;
+    monotime earliest_timer_when; /* Cached monotonic time of earliest timer */
 } aeEventLoop;
 
 /* Prototypes */

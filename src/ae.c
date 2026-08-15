@@ -92,6 +92,7 @@ aeEventLoop *aeCreateEventLoop(int setsize) {
     eventLoop->aftersleep = NULL;
     eventLoop->custompoll = NULL;
     eventLoop->flags = 0;
+    eventLoop->earliest_timer_when = 0;
     /* Initialize the eventloop mutex with PTHREAD_MUTEX_ERRORCHECK type */
     pthread_mutexattr_t attr;
     pthread_mutexattr_init(&attr);
@@ -278,7 +279,25 @@ long long aeCreateTimeEvent(aeEventLoop *eventLoop,
     te->refcount = 0;
     if (te->next) te->next->prev = te;
     eventLoop->timeEventHead = te;
+    if (eventLoop->earliest_timer_when == 0 || te->when < eventLoop->earliest_timer_when) {
+        eventLoop->earliest_timer_when = te->when;
+    }
     return id;
+}
+
+
+static void aeRecomputeEarliestTimer(aeEventLoop *eventLoop) {
+    aeTimeEvent *te = eventLoop->timeEventHead;
+    monotime earliest = 0;
+    while (te) {
+        if (te->id != AE_DELETED_EVENT_ID) {
+            if (earliest == 0 || te->when < earliest) {
+                earliest = te->when;
+            }
+        }
+        te = te->next;
+    }
+    eventLoop->earliest_timer_when = earliest;
 }
 
 int aeDeleteTimeEvent(aeEventLoop *eventLoop, long long id) {
@@ -286,6 +305,7 @@ int aeDeleteTimeEvent(aeEventLoop *eventLoop, long long id) {
     while (te) {
         if (te->id == id) {
             te->id = AE_DELETED_EVENT_ID;
+            aeRecomputeEarliestTimer(eventLoop);
             return AE_OK;
         }
         te = te->next;
@@ -303,20 +323,9 @@ int aeDeleteTimeEvent(aeEventLoop *eventLoop, long long id) {
  * 2) Use a skiplist to have this operation as O(1) and insertion as O(log(N)).
  */
 static int64_t usUntilEarliestTimer(aeEventLoop *eventLoop) {
-    aeTimeEvent *te = eventLoop->timeEventHead;
-    if (te == NULL) return -1;
-
-    aeTimeEvent *earliest = NULL;
-    while (te) {
-        if ((!earliest || te->when < earliest->when) && te->id != AE_DELETED_EVENT_ID) earliest = te;
-        te = te->next;
-    }
-
-    /* All events are pending deletion (zombies only): no valid timer. */
-    if (earliest == NULL) return -1;
-
+    if (eventLoop->earliest_timer_when == 0) return -1;
     monotime now = getMonotonicUs();
-    return (now >= earliest->when) ? 0 : earliest->when - now;
+    return (now >= eventLoop->earliest_timer_when) ? 0 : (int64_t)(eventLoop->earliest_timer_when - now);
 }
 
 /* Process time events */
@@ -382,6 +391,7 @@ static int processTimeEvents(aeEventLoop *eventLoop) {
         }
         te = te->next;
     }
+    aeRecomputeEarliestTimer(eventLoop);
     return processed;
 }
 

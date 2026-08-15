@@ -414,6 +414,83 @@ start_cluster 2 0 {overrides {cluster-node-timeout 1000}} {
         assert_equal {OK} [R 0 MODULE LOAD $testmodule]
         assert_equal {OK} [R 0 MODULE UNLOAD test]
     }
+
+    test "Module VM_OpenKey cross-slot undeclared key access" {
+        set clustermodule [file normalize tests/modules/cluster.so]
+        assert_equal {OK} [R 0 MODULE LOAD $clustermodule]
+
+        # Find keys with distinct hash slots that all belong to node 0 (slots 0-5460):
+        # {bar} = 5061, {baz} = 4813, {alpha} = 865, {k2} = 449, {k3} = 4576
+        set key_declared "{bar}declared"
+        set key_target_read "{baz}target_read"
+        set key_target_write "{alpha}target_write"
+        set key_target_expire "{k2}target_expire"
+        set key_target_wrongtype "{k3}target_wrongtype"
+
+        set slot_declared [R 0 CLUSTER KEYSLOT $key_declared]
+        set slot_target_read [R 0 CLUSTER KEYSLOT $key_target_read]
+        set slot_target_write [R 0 CLUSTER KEYSLOT $key_target_write]
+        set slot_target_expire [R 0 CLUSTER KEYSLOT $key_target_expire]
+        set slot_target_wrongtype [R 0 CLUSTER KEYSLOT $key_target_wrongtype]
+
+        # Explicitly verify all hash slots are genuinely distinct
+        assert {$slot_declared != $slot_target_read}
+        assert {$slot_declared != $slot_target_write}
+        assert {$slot_declared != $slot_target_expire}
+        assert {$slot_declared != $slot_target_wrongtype}
+        assert {$slot_target_read != $slot_target_write}
+
+        # Derive actual local slot range owned by node 0 dynamically
+        set node0_id [R 0 CLUSTER MYID]
+        set local_start -1
+        set local_end -1
+        foreach slot_range [R 0 cluster slots] {
+            set primary_info [lindex $slot_range 2]
+            set primary_id [lindex $primary_info 2]
+            if {$primary_id eq $node0_id} {
+                set local_start [lindex $slot_range 0]
+                set local_end [lindex $slot_range 1]
+                break
+            }
+        }
+        assert {$local_start >= 0 && $local_end >= $local_start}
+
+        # Explicitly verify all hash slots belong to node 0's actual slot range
+        assert {$slot_declared >= $local_start && $slot_declared <= $local_end}
+        assert {$slot_target_read >= $local_start && $slot_target_read <= $local_end}
+        assert {$slot_target_write >= $local_start && $slot_target_write <= $local_end}
+        assert {$slot_target_expire >= $local_start && $slot_target_expire <= $local_end}
+        assert {$slot_target_wrongtype >= $local_start && $slot_target_wrongtype <= $local_end}
+
+        # 1. READ: Declared key in slot 5061, undeclared target in slot 4813
+        R 0 SET $key_target_read "read_val"
+        assert_equal "read_val" [R 0 test.openkey_cross_slot $key_declared $key_target_read read]
+
+        # 2. WRITE: Command declared key in slot 5061, writes undeclared key in slot 865
+        assert_equal "OK" [R 0 test.openkey_cross_slot $key_declared $key_target_write write "written_val"]
+        assert_equal "written_val" [R 0 GET $key_target_write]
+
+        # 3. EXPIRY: Command declared key in slot 5061, sets TTL on undeclared key in slot 449
+        R 0 SET $key_target_expire "expiring_val"
+        assert_equal "OK" [R 0 test.openkey_cross_slot $key_declared $key_target_expire expire 100000]
+        set ttl [R 0 TTL $key_target_expire]
+        assert {$ttl > 0 && $ttl <= 100}
+
+        # 4. EXPIRY ERROR HANDLING: missing key and invalid TTL (< -1)
+        assert_error "*ERR SetExpire failed*" {R 0 test.openkey_cross_slot $key_declared "{k2}nonexistent" expire 100000}
+        assert_error "*ERR SetExpire failed*" {R 0 test.openkey_cross_slot $key_declared $key_target_expire expire -10}
+
+        # 5. EXPIRY CANCELLATION: VALKEYMODULE_NO_EXPIRE (-1) cancels expiration (PERSIST)
+        assert_equal "OK" [R 0 test.openkey_cross_slot $key_declared $key_target_expire expire -1]
+        assert_equal -1 [R 0 TTL $key_target_expire]
+
+        # 6. WRONG-TYPE READ: string DMA on a list key returns WRONGTYPE
+        R 0 LPUSH $key_target_wrongtype "list_elem"
+        assert_error "*WRONGTYPE*" {R 0 test.openkey_cross_slot $key_declared $key_target_wrongtype read}
+
+        assert_equal {OK} [R 0 MODULE UNLOAD cluster]
+    }
+
 }
 
 } ;# end tag

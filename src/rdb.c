@@ -34,6 +34,7 @@
 
 #include "hashtable.h"
 #include "server.h"
+#include "ordered_index.h"
 #include "lzf.h" /* LZF compression library */
 #include "zipmap.h"
 #include "endianconv.h"
@@ -321,7 +322,7 @@ uint64_t rdbLoadLen(rio *rdb, int *isencoded) {
 /* Encodes the "value" argument as integer when it fits in the supported ranges
  * for encoded types. If the function successfully encodes the integer, the
  * representation is stored in the buffer pointer to by "enc" and the string
- * length is returned. Otherwise 0 is returned. */
+ * length is returned. Otherwise, 0 is returned. */
 int rdbEncodeInteger(long long value, unsigned char *enc) {
     if (value >= -(1 << 7) && value <= (1 << 7) - 1) {
         enc[0] = (RDB_ENCVAL << 6) | RDB_ENC_INT8;
@@ -735,7 +736,7 @@ int rdbGetObjectType(robj *o, int rdbver) {
     case OBJ_ZSET:
         if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK)
             return RDB_TYPE_ZSET_LISTPACK;
-        else if (objectGetEncoding(o) == OBJ_ENCODING_SKIPLIST)
+        else if (objectGetEncoding(o) == OBJ_ENCODING_BTREE)
             return RDB_TYPE_ZSET_2;
         else
             serverPanic("Unknown sorted set encoding");
@@ -954,11 +955,10 @@ ssize_t rdbSaveObject(rio *rdb, robj *o, robj *key, int dbid, unsigned char rdbt
 
             if ((n = rdbSaveRawString(rdb, objectGetVal(o), l)) == -1) return -1;
             nwritten += n;
-        } else if (objectGetEncoding(o) == OBJ_ENCODING_SKIPLIST) {
+        } else if (objectGetEncoding(o) == OBJ_ENCODING_BTREE) {
             zset *zs = objectGetVal(o);
-            zskiplist *zsl = zs->zsl;
 
-            if ((n = rdbSaveLen(rdb, zslGetLength(zsl))) == -1) return -1;
+            if ((n = rdbSaveLen(rdb, orderedIndexLength(zs->oi))) == -1) return -1;
             nwritten += n;
 
             /* We save the skiplist elements from the greatest to the smallest
@@ -967,16 +967,19 @@ ssize_t rdbSaveObject(rio *rdb, robj *o, robj *key, int dbid, unsigned char rdbt
              * element will always be the smaller, so adding to the skiplist
              * will always immediately stop at the head, making the insertion
              * O(1) instead of O(log(N)). */
-            zskiplistNode *zn = zslGetTail(zsl);
-            while (zn != NULL) {
-                sds ele = zslGetNodeElement(zn);
-                if ((n = rdbSaveRawString(rdb, (unsigned char *)ele, sdslen(ele))) == -1) {
+            OrderedIndexIterator iter;
+            orderedIndexInitIterator(&iter, zs->oi);
+            OrderedIndexItem *item;
+            while ((item = orderedIndexPrev(&iter)) != NULL) {
+                const char *ele;
+                size_t ele_len;
+                orderedIndexItemGetElement(item, &ele, &ele_len);
+                if ((n = rdbSaveRawString(rdb, (unsigned char *)ele, ele_len)) == -1) {
                     return -1;
                 }
                 nwritten += n;
-                if ((n = rdbSaveBinaryDoubleValue(rdb, zn->score)) == -1) return -1;
+                if ((n = rdbSaveBinaryDoubleValue(rdb, orderedIndexItemGetScore(item))) == -1) return -1;
                 nwritten += n;
-                zn = zn->backward;
             }
         } else {
             serverPanic("Unknown sorted set encoding");
@@ -1868,7 +1871,7 @@ static int _listZiplistEntryConvertAndValidate(unsigned char *p, unsigned int he
     return 1;
 }
 
-/* callback for to check the listpack doesn't have duplicate records */
+/* callback to check the listpack doesn't have duplicate records */
 static int _lpEntryValidation(unsigned char *p, unsigned int head_count, void *userdata) {
     struct {
         int pairs;
@@ -2073,7 +2076,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
         while (zsetlen--) {
             sds sdsele;
             double score;
-            zskiplistNode *znode;
+            OrderedIndexItem *znode;
 
             if ((sdsele = rdbGenericLoadStringObject(rdb, RDB_LOAD_SDS, NULL)) == NULL) {
                 decrRefCount(o);
@@ -2105,12 +2108,12 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
             if (sdslen(sdsele) > maxelelen) maxelelen = sdslen(sdsele);
             totelelen += sdslen(sdsele);
 
-            znode = zslInsert(zs->zsl, score, sdsele);
+            znode = orderedIndexInsert(zs->oi, score, sdsele, sdslen(sdsele));
             sdsfree(sdsele);
             if (!hashtableAdd(zs->ht, znode)) {
                 rdbReportCorruptRDB("Duplicate zset fields detected");
                 decrRefCount(o);
-                /* no need to free 'sdsele', will be released by zslFree together with 'o' */
+                /* no need to free 'sdsele', will be released with 'o' */
                 return NULL;
             }
         }
@@ -2517,7 +2520,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
             }
 
             if (zsetLength(o) > server.zset_max_listpack_entries)
-                zsetConvert(o, OBJ_ENCODING_SKIPLIST);
+                zsetConvert(o, OBJ_ENCODING_BTREE);
             else
                 objectSetVal(o, lpShrinkToFit(objectGetVal(o)));
             break;
@@ -2549,7 +2552,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
                 goto emptykey;
             }
 
-            if (zsetLength(o) > server.zset_max_listpack_entries) zsetConvert(o, OBJ_ENCODING_SKIPLIST);
+            if (zsetLength(o) > server.zset_max_listpack_entries) zsetConvert(o, OBJ_ENCODING_BTREE);
             break;
         case RDB_TYPE_HASH_ZIPLIST: {
             unsigned char *lp = lpNew(encoded_len);
@@ -2611,6 +2614,10 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
             return NULL;
         }
 
+        /* Sum of non-deleted entries across all listpacks, used below to
+         * validate the stream length loaded from the payload. */
+        uint64_t valid_entries = 0;
+
         while (listpacks--) {
             /* Get the primary ID, the one we'll use as key of the radix tree
              * node: the entries inside the listpack itself are delta-encoded
@@ -2639,7 +2646,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
                 return NULL;
             }
             server.stat_dump_payload_sanitizations++;
-            if (!streamValidateListpackIntegrity(lp, lp_size)) {
+            if (!streamValidateListpackIntegrity(lp, lp_size, &valid_entries)) {
                 rdbReportCorruptRDB("Stream listpack integrity check failed.");
                 sdsfree(nodekey);
                 decrRefCount(o);
@@ -2708,6 +2715,19 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
 
         if (s->length && !raxSize(s->rax)) {
             rdbReportCorruptRDB("Stream length inconsistent with rax entries");
+            decrRefCount(o);
+            return NULL;
+        }
+
+        /* Validate that the loaded length matches the number of non-deleted
+         * entries actually present in the listpacks. 's->length' comes straight
+         * from the payload; a crafted payload can claim a positive length while
+         * every listpack entry is a tombstone, which later makes
+         * streamLastValidID() panic ("length is N, but no max id") when a
+         * command such as XSETID, XADD or XREADGROUP looks up the last valid
+         * ID. valid_entries was accumulated during listpack validation above. */
+        if (s->length != valid_entries) {
+            rdbReportCorruptRDB("Stream length inconsistent with the number of valid entries");
             decrRefCount(o);
             return NULL;
         }
@@ -2982,7 +3002,7 @@ emptykey:
     return NULL;
 }
 
-/* Mark that we are loading in the global state and setup the fields
+/* Mark that we are loading in the global state and set up the fields
  * needed to provide loading stats. */
 void startLoading(size_t size, int rdbflags, int async) {
     /* Load the DB */
@@ -3010,7 +3030,7 @@ void startLoading(size_t size, int rdbflags, int async) {
     moduleFireServerEvent(VALKEYMODULE_EVENT_LOADING, subevent, NULL);
 }
 
-/* Mark that we are loading in the global state and setup the fields
+/* Mark that we are loading in the global state and set up the fields
  * needed to provide loading stats.
  * 'filename' is optional and used for rdb-check on error */
 void startLoadingFile(size_t size, char *filename, int rdbflags) {
@@ -3091,7 +3111,7 @@ void rdbLoadProgressCallback(rio *r, const void *buf, size_t len) {
  * message on failure.
  *
  * The lib_ctx argument is also optional. If NULL is given, only verify rdb
- * structure with out performing the actual functions loading. */
+ * structure without performing the actual functions loading. */
 int rdbFunctionLoad(rio *rdb, int ver, functionsLibCtx *lib_ctx, int rdbflags, sds *err) {
     UNUSED(ver);
     sds error = NULL;

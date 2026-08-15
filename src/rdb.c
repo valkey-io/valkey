@@ -2596,7 +2596,24 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
                 goto emptykey;
             }
 
-            if (hashTypeLength(o) > server.hash_max_listpack_entries) hashTypeConvert(o, OBJ_ENCODING_HASHTABLE);
+            {
+                unsigned char *lp = objectGetVal(o);
+                unsigned char *p = lpFirst(lp);
+                int convert = 0;
+                while (p) {
+                    unsigned int slen = 0;
+                    long long lval = 0;
+                    unsigned char *vstr = lpGetValue(p, &slen, &lval);
+                    if (vstr && slen > server.hash_max_listpack_value) {
+                        convert = 1;
+                        break;
+                    }
+                    p = lpNext(lp, p);
+                }
+                if (convert || hashTypeLength(o) > server.hash_max_listpack_entries) {
+                    hashTypeConvert(o, OBJ_ENCODING_HASHTABLE);
+                }
+            }
             break;
         default:
             /* totally unreachable */

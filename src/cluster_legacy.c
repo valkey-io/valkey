@@ -5724,6 +5724,10 @@ void clusterLogCantFailover(int reason) {
     case CLUSTER_CANT_FAILOVER_WAITING_DELAY: msg = "Waiting the delay before I can start a new failover."; break;
     case CLUSTER_CANT_FAILOVER_EXPIRED: msg = "Failover attempt expired."; break;
     case CLUSTER_CANT_FAILOVER_WAITING_VOTES: msg = "Waiting for votes, but majority still not reached."; break;
+    case CLUSTER_CANT_FAILOVER_OFFSET_ZERO:
+        msg = "Replication offset is 0 and no data has been received from the primary. "
+              "Please check the 'cluster-replica-no-failover-offset-zero' configuration option.";
+        break;
     default: serverPanic("Unknown cant failover reason code.");
     }
     lastlog_time = time(NULL);
@@ -5859,6 +5863,17 @@ void clusterHandleReplicaFailover(void) {
             clusterLogCantFailover(CLUSTER_CANT_FAILOVER_DATA_AGE);
             return;
         }
+    }
+
+    /* Refuse to start an automatic failover if our replication offset is 0,
+     * when configured to do so. Such a replica has never received any data
+     * from its primary (e.g. it was just added and hasn't finished the initial
+     * sync), so promoting it would lose all the shard data. Manual failovers,
+     * being an explicit user action, are allowed. */
+    if (server.cluster_replica_no_failover_offset_zero && !manual_failover &&
+        replicationGetReplicaOffset() == 0) {
+        clusterLogCantFailover(CLUSTER_CANT_FAILOVER_OFFSET_ZERO);
+        return;
     }
 
     /* If the previous failover attempt timeout and the retry time has

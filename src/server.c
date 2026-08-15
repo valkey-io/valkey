@@ -2365,6 +2365,9 @@ void initServerConfig(void) {
     server.aof_flush_sleep = 0;
     server.aof_last_fsync = time(NULL) * 1000;
     server.aof_cur_timestamp = 0;
+    server.aof_integrity_check = 0;
+    server.aof_running_checksum = 0;
+    server.aof_integrity_chain_active = 0;
     atomic_store_explicit(&server.aof_bio_fsync_status, C_OK, memory_order_relaxed);
     server.aof_rewrite_time_last = -1;
     server.aof_rewrite_time_start = -1;
@@ -3077,6 +3080,7 @@ void initServer(void) {
     server.child_info_pipe[1] = -1;
     server.child_info_nread = 0;
     server.aof_buf = sdsempty();
+    server.aof_retry_buf = sdsempty();
     server.lastsave = time(NULL); /* At startup we consider the DB saved. */
     server.lastbgsave_try = 0;    /* At startup we never tried to BGSAVE. */
     server.rdb_save_time_last = -1;

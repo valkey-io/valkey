@@ -150,6 +150,7 @@ struct ValkeyModule;
 #define LOG_MAX_LEN 1024                                      /* Default maximum length of syslog messages.*/
 #define AOF_REWRITE_ITEMS_PER_CMD 64
 #define AOF_ANNOTATION_LINE_MAX_LEN 1024
+#define AOF_INTEGRITY_OFF_MARKER "#INTEGRITY_OFF\r\n"
 #define CONFIG_RUN_ID_SIZE 40
 #define RDB_EOF_MARK_SIZE 40
 #define CONFIG_REPL_BACKLOG_MIN_SIZE (1024 * 16) /* 16k */
@@ -1710,6 +1711,7 @@ typedef struct {
     sds file_name;           /* file name */
     long long file_seq;      /* file sequence */
     aof_file_type file_type; /* file type */
+    uint64_t last_checksum;  /* The last checksum of this AOF file. */
 } aofInfo;
 
 typedef struct {
@@ -2032,6 +2034,12 @@ struct valkeyServer {
     time_t aof_rewrite_time_start;      /* Current AOF rewrite start time. */
     time_t aof_cur_timestamp;           /* Current record timestamp in AOF */
     int aof_timestamp_enabled;          /* Enable record timestamp in AOF */
+    int aof_integrity_check;            /* Enable metadata integrity check in AOF */
+    uint64_t aof_running_checksum;      /* Current AOF running checksum */
+    uint64_t aof_rewrite_base_checksum; /* AOF running checksum at the start of rewrite */
+    sds aof_retry_buf;                  /* Buffer to store data that failed to be written fully during a partial write. */
+    int aof_integrity_chain_active;     /* 1 if we are currently in an active AOF integrity chain.
+                                           This ensures we expect headers even if the checksum is 0. */
     int aof_lastbgrewrite_status;       /* C_OK or C_ERR */
     unsigned long aof_delayed_fsync;    /* delayed AOF fsync() counter */
     int aof_rewrite_incremental_fsync;  /* fsync incrementally while aof rewriting? */

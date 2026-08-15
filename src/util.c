@@ -60,6 +60,92 @@
 #endif
 
 /* Glob-style pattern matching. */
+
+static int parse_class(const char *pattern, int patternLen, int nocase, unsigned char *bitmap, int *class_pat_len) {
+    if (patternLen < 2 || pattern[0] != '[') return 0;
+    int p_idx = 1;
+    int not_op = 0;
+    if (p_idx < patternLen && pattern[p_idx] == '^') {
+        not_op = 1;
+        p_idx++;
+    }
+    
+    if (not_op) {
+        memset(bitmap, 0xFF, 32);
+    } else {
+        memset(bitmap, 0, 32);
+    }
+    
+    while (p_idx < patternLen) {
+        if (pattern[p_idx] == ']') {
+            *class_pat_len = p_idx + 1;
+            return 1;
+        }
+        
+        unsigned char start = 0, end = 0;
+        int is_range = 0;
+        
+        if (pattern[p_idx] == '\\' && p_idx + 1 < patternLen) {
+            start = (unsigned char)pattern[p_idx + 1];
+            p_idx += 2;
+        } else if (p_idx + 2 < patternLen && pattern[p_idx + 1] == '-') {
+            start = (unsigned char)pattern[p_idx];
+            end = (unsigned char)pattern[p_idx + 2];
+            is_range = 1;
+            p_idx += 3;
+        } else {
+            start = (unsigned char)pattern[p_idx];
+            p_idx++;
+        }
+        
+        if (is_range) {
+            if (start > end) {
+                unsigned char t = start;
+                start = end;
+                end = t;
+            }
+            for (int c = start; c <= end; c++) {
+                if (nocase) {
+                    int l = tolower(c);
+                    int u = toupper(c);
+                    if (not_op) {
+                        bitmap[l / 8] &= ~(1 << (l % 8));
+                        bitmap[u / 8] &= ~(1 << (u % 8));
+                    } else {
+                        bitmap[l / 8] |= (1 << (l % 8));
+                        bitmap[u / 8] |= (1 << (u % 8));
+                    }
+                } else {
+                    if (not_op) {
+                        bitmap[c / 8] &= ~(1 << (c % 8));
+                    } else {
+                        bitmap[c / 8] |= (1 << (c % 8));
+                    }
+                }
+            }
+        } else {
+            if (nocase) {
+                int l = tolower(start);
+                int u = toupper(start);
+                if (not_op) {
+                    bitmap[l / 8] &= ~(1 << (l % 8));
+                    bitmap[u / 8] &= ~(1 << (u % 8));
+                } else {
+                    bitmap[l / 8] |= (1 << (l % 8));
+                    bitmap[u / 8] |= (1 << (u % 8));
+                }
+            } else {
+                if (not_op) {
+                    bitmap[start / 8] &= ~(1 << (start % 8));
+                } else {
+                    bitmap[start / 8] |= (1 << (start % 8));
+                }
+            }
+        }
+    }
+    return 0;
+}
+
 static int stringmatchlen_impl(const char *pattern,
                                int patternLen,
                                const char *string,
@@ -78,6 +164,27 @@ static int stringmatchlen_impl(const char *pattern,
                 patternLen--;
             }
             if (patternLen == 1) return 1; /* match */
+
+            /* Optimize backtracking on character class matches */
+            if (patternLen > 1 && pattern[1] == '[') {
+                unsigned char bitmap[32] = {0};
+                int class_pat_len = 0;
+                if (parse_class(pattern + 1, patternLen - 1, nocase, bitmap, &class_pat_len)) {
+                    while (stringLen) {
+                        unsigned char c = (unsigned char)string[0];
+                        if (bitmap[c / 8] & (1 << (c % 8))) {
+                            if (stringmatchlen_impl(pattern + 1 + class_pat_len, patternLen - 1 - class_pat_len,
+                                                    string + 1, stringLen - 1, nocase, skipLongerMatches, nesting + 1))
+                                return 1;
+                        }
+                        if (*skipLongerMatches) return 0;
+                        string++;
+                        stringLen--;
+                    }
+                    *skipLongerMatches = 1;
+                    return 0;
+                }
+            }
             while (stringLen) {
                 if (stringmatchlen_impl(pattern + 1, patternLen - 1, string, stringLen, nocase, skipLongerMatches,
                                         nesting + 1))

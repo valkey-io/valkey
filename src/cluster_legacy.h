@@ -199,10 +199,6 @@ typedef struct {
 } clusterMsgPingExtAvailabilityZone;
 
 typedef struct {
-    uint64_t ping_echo_time; /* The ping echo time, in milliseconds. */
-} clusterMsgPingExtPingEchoTime;
-
-typedef struct {
     char name[CLUSTER_NAMELEN]; /* Node name. */
     uint64_t ttl;               /* Remaining time to blacklist the node, in seconds. */
 } clusterMsgPingExtForgottenNode;

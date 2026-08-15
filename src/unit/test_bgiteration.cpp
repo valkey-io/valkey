@@ -1218,7 +1218,7 @@ TEST_F(BgIterationTest, modFutureItem_start) {
 }
 
 
-// Modify a future item, with replication but without consistency.  (Like a Threadsave Full Sync operation)
+// Modify a future item, with replication but without consistency.  (Like a Forkless Full Sync operation)
 // Our expectation for this case is that the modification should proceed without blocking, as the
 //  mode is inconsistent.  We don't expect replication, as we haven't reached the item yet.  We'll
 //  see the modified item later.
@@ -1315,7 +1315,7 @@ TEST_F(BgIterationTest, modCurrentItem_start) {
 }
 
 
-// Modify a current item, with replication but without consistency.  (Like a Threadsave Full Sync operation)
+// Modify a current item, with replication but without consistency.  (Like a Forkless Full Sync operation)
 // Our expectation for this case is that the modification SHOULD be blocked.  After the key is processed,
 //  the write will proceed, and the replication will be sent.
 TEST_F(BgIterationTest, modCurrentItem_eventual) {
@@ -1400,7 +1400,7 @@ TEST_F(BgIterationTest, modPastItem_start) {
 }
 
 
-// Modify a past item, with replication but without consistency.  (Like a Threadsave Full Sync operation)
+// Modify a past item, with replication but without consistency.  (Like a Forkless Full Sync operation)
 // Our expectation for this case is that the modification should proceed without blocking.
 //  Replication will be sent.
 TEST_F(BgIterationTest, modPastItem_eventual) {

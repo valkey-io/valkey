@@ -612,7 +612,7 @@ static bool fullScanIteratorHasPassedItem(genericIterator *genIt, const_sds key,
 
     /* We're in the middle of processing a DB.  In cluster-mode, the DB is divided into 1 hashtable
      * per slot.  In cluster-mode-disabled, we treat all keys as in slot 0. */
-    int keySlot = server.cluster_enabled ? getKeySlot((sds)key) : 0;
+    int keySlot = server.cluster_enabled ? getKVStoreIndexForKey((sds)key) : 0;
     if (keySlot < it->kvs_didx) return true;
     if (keySlot > it->kvs_didx) return false;
 
@@ -745,7 +745,7 @@ static bool pauseRehashing(dbEntry *de) {
         hashtablePauseRehashing(ht);
         return true;
     }
-    case OBJ_ENCODING_SKIPLIST: { // SORTED SET
+    case OBJ_ENCODING_BTREE: { // SORTED SET
         zset *zs = objectGetVal(de);
         hashtablePauseRehashing(zs->ht);
         return true;
@@ -762,7 +762,7 @@ static void resumeRehashing(dbEntry *de) {
         hashtableResumeRehashing(ht);
         break;
     }
-    case OBJ_ENCODING_SKIPLIST: { // SORTED SET
+    case OBJ_ENCODING_BTREE: { // SORTED SET
         zset *zs = objectGetVal(de);
         hashtableResumeRehashing(zs->ht);
         break;

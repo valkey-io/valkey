@@ -201,10 +201,12 @@ start_server {tags {"repl external:skip"}} {
             # assertion below doesn't race with it.
             wait_for_ofs_sync $A $B
 
-            # reset stats
+            # Reset stats and read them atomically so replication traffic can't
+            # arrive between the reset and the stats snapshot.
+            $A multi
             $A config resetstat
-            
-            set info [$A info stats]
+            $A info stats
+            set info [lindex [$A exec] 1]
             set replica_bytes_output [getInfoProperty $info "total_net_repl_output_bytes"]
             assert_equal $replica_bytes_output 0
             
@@ -1459,7 +1461,7 @@ test {replica can handle EINTR if use diskless load} {
             set res [wait_for_log_messages -1 {"*Loading DB in memory*"} 0 200 10]
             set loglines [lindex $res 1]
 
-            # Wait till we see the watchgod log line AFTER the loading started
+            # Wait till we see the watchdog log line AFTER the loading started
             wait_for_log_messages -1 {"*WATCHDOG TIMER EXPIRED*"} $loglines 200 10
 
             # Make sure we're still loading, and that there was just one full sync attempt
@@ -1798,5 +1800,27 @@ start_server {tags {"repl external:skip"}} {
         }
 
         $primary config set rdb-key-save-delay 0
+    }
+}
+
+test "SYNC/PSYNC returns NOMASTERLINK with replica-serve-stale-data yes/no and master link down" {
+    start_server {tags {"repl external:skip"}} {
+        set replica [srv 0 client]
+
+        # Point the replica at an unreachable primary so the link stays down.
+        $replica replicaof 127.0.0.1 1
+        wait_for_condition 50 100 {
+            [string match {*master_link_status:down*} [$replica info replication]]
+        } else {
+            fail "Replica link is not down"
+        }
+
+        # SYNC/PSYNC must reach syncCommand and return -NOMASTERLINK in both
+        # the 'no' and 'yes' configurations.
+        foreach stale {yes no} {
+            $replica config set replica-serve-stale-data $stale
+            assert_error {NOMASTERLINK*} {$replica psync ? -1}
+            assert_error {NOMASTERLINK*} {$replica sync}
+        }
     }
 }

@@ -748,14 +748,19 @@ proc process_is_paused pid {
     return [string match {*T*} [lindex [exec ps j $pid] 16]]
 }
 
-proc pause_process pid {
-    exec kill -SIGSTOP $pid
+# Wait until the process enters a paused state.
+proc wait_process_paused pid {
     wait_for_condition 50 100 {
-        [string match {*T*} [lindex [exec ps j $pid] 16]]
+        [process_is_paused $pid]
     } else {
         puts [exec ps j $pid]
         fail "process didn't stop"
     }
+}
+
+proc pause_process pid {
+    exec kill -SIGSTOP $pid
+    wait_process_paused $pid
 }
 
 proc resume_process pid {
@@ -1355,4 +1360,39 @@ proc memcmp {string1 string2} {
         }
     }
     return [expr {$len1 - $len2}]
+}
+
+# Execute body with a temporary config override, restoring the original
+# value even if the body fails.
+proc with_config {config value body} {
+    set old [lindex [r config get $config] 1]
+    r config set $config $value
+    catch {uplevel 1 $body} result opts
+    r config set $config $old
+    dict incr opts -level
+    return -options $opts $result
+}
+
+# Escape a string for use as a JSON string value.
+#
+# Beyond the characters with a short escape, every C0 control character has to
+# be escaped: JSON forbids them raw, and one raw byte makes the whole file
+# unparsable, taking every failure in the run with it. Failure messages carry
+# server output and memory-tool reports, which do contain control bytes, and an
+# incomplete ANSI sequence survives colour stripping.
+proc json_escape_string {s} {
+    set s [string map {
+        "\\" "\\\\" "\"" "\\\"" "\n" "\\n" "\r" "\\r"
+        "\t" "\\t" "\b" "\\b" "\f" "\\f"
+    } $s]
+    set out ""
+    foreach ch [split $s ""] {
+        scan $ch %c code
+        if {$code < 0x20} {
+            append out [format {\u%04x} $code]
+        } else {
+            append out $ch
+        }
+    }
+    return $out
 }

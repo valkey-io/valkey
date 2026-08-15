@@ -71,6 +71,7 @@ int __wrap_ACLCheckAllUserCommandPerm(user *u, struct serverCommand *cmd, robj *
 size_t __wrap_hashtableScan(hashtable *ht, size_t cursor, hashtableScanFunction fn, void *privdata);
 bool __wrap_hashtableScanHasPassedKey(hashtable *ht, const void *key, size_t cursor);
 
+void __wrap_zmadvise_dontneed(void *ptr, size_t size_hint);
 #undef protected
 #undef _Bool
 #undef typename

@@ -355,7 +355,7 @@ sds sdsResize(sds s, size_t size, int would_regrow) {
 
     /* If the type is the same, or can hold the size in it with low overhead
      * (larger than SDS_TYPE_8), we just realloc(), letting the allocator
-     * to do the copy only if really needed. Otherwise if the change is
+     * to do the copy only if really needed. Otherwise, if the change is
      * huge, we manually reallocate the string to use the different header
      * type. */
     int use_realloc = (oldtype == type || (type < oldtype && type > SDS_TYPE_8));

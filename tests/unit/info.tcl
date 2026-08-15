@@ -429,7 +429,7 @@ start_server {tags {"info" "external:skip" "debug_defrag:skip"}} {
             assert_equal {1} [subscribe $rd2 {chan2}]
             set info [r info clients]
             assert_equal [getInfoProperty $info pubsub_clients] {2}
-            # unsubscribe non existing channel
+            # unsubscribe nonexistent channel
             assert_equal {1} [unsubscribe $rd2 {non-exist-chan}]
             set info [r info clients]
             assert_equal [getInfoProperty $info pubsub_clients] {2}

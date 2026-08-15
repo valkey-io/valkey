@@ -2312,8 +2312,8 @@ struct valkeyServer {
     int cluster_slot_stats_enabled;                        /* Cluster slot usage statistics tracking enabled. */
     int cluster_nodes_latency_stats_enabled;               /* 1 if latency statistics for cluster nodes are enabled, 0 otherwise. */
 
-    int sliding_window_length_rtt_latency_stats; /* The length of the sliding window used to track RTT latency stats for cluster nodes. */
-    int load_factor_historic_rtt_latency;        /* load factor to determine how much historic RTT latency data should affect the avg latency(EMA) for cluster nodes. */
+    int sliding_window_length_rtt_latency_stats;           /* The length of the sliding window used to track RTT latency stats for cluster nodes. */
+    int load_factor_historic_rtt_latency;                  /* load factor to determine how much historic RTT latency data should affect the avg latency(EMA) for cluster nodes. */
 
     int cluster_slot_stats_enabled;                        /* Cluster slot usage statistics tracking enabled. */
     mstime_t cluster_mf_timeout;                           /* Milliseconds to do a manual failover. */

@@ -2310,12 +2310,12 @@ struct valkeyServer {
                                                             * the cluster after it is forgotten with CLUSTER FORGET. */
     sds hash_seed;                                         /* Configurable DB hash seed */
     int cluster_slot_stats_enabled;                        /* Cluster slot usage statistics tracking enabled. */
-<<<<<<< HEAD
     int cluster_nodes_latency_stats_enabled;               /* 1 if latency statistics for cluster nodes are enabled, 0 otherwise. */
 
     int sliding_window_length_rtt_latency_stats;      /* The length of the sliding window used to track RTT latency stats for cluster nodes. */
     int load_factor_historic_rtt_latency;             /* load factor to determine how much historic RTT latency data should affect the avg latency(EMA) for cluster nodes. */
     mstime_t cluster_mf_timeout;                      /* Milliseconds to do a manual failover. */
+    unsigned int cluster_replica_priority;            /* Replica priority from cluster-replica-priority. */
     unsigned long cluster_slot_migration_log_max_len; /* Maximum count of migrations to display in the
                                                        * migration log, after which we will clear finished
                                                        * migrations. */
@@ -2327,21 +2327,6 @@ struct valkeyServer {
                                                        * snapshot data read from the pipe is written to it. */
     char *slot_migration_pipe_buff;                   /* In slot migration, this buffer holds slot snapshot data. */
     ssize_t slot_migration_pipe_bufflen;              /* that was read from the slot migration pipe. */
-=======
-    mstime_t cluster_mf_timeout;                           /* Milliseconds to do a manual failover. */
-    unsigned int cluster_replica_priority;                 /* Replica priority from cluster-replica-priority. */
-    unsigned long cluster_slot_migration_log_max_len;      /* Maximum count of migrations to display in the
-                                                            * migration log, after which we will clear finished
-                                                            * migrations. */
-    ssize_t slot_migration_max_failover_repl_bytes;        /* Maximum amount of in flight bytes for a slot migration
-                                                            * failover to be attempted. */
-    int slot_migration_pipe_read;                          /* Slot migration pipe used to transfer the slots data */
-    int slot_migration_child_exit_pipe;                    /* Used by the slot migration parent allow child exit. */
-    connection *slot_migration_pipe_conn;                  /* Connection of the slot migration target client. The slot
-                                                            * snapshot data read from the pipe is written to it. */
-    char *slot_migration_pipe_buff;                        /* In slot migration, this buffer holds slot snapshot data. */
-    ssize_t slot_migration_pipe_bufflen;                   /* that was read from the slot migration pipe. */
->>>>>>> unstable
     /* Debug config that goes along with cluster_drop_packet_filter. When set, the link is closed on packet drop. */
     uint32_t debug_cluster_close_link_on_packet_drop : 1;
     /* Debug config to control the random ping. When set, we will disable the random ping in clusterCron. */

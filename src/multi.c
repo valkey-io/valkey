@@ -250,7 +250,10 @@ void execCommand(client *c) {
         /* ACL permissions are also checked at the time of execution in case
          * they were changed after the commands were queued. */
         int acl_errpos;
-        int acl_retval = ACLCheckAllPerm(c, &acl_errpos);
+        int acl_retval = ACL_OK;
+        if (c->id != CLIENT_ID_AOF) {
+            acl_retval = ACLCheckAllPerm(c, &acl_errpos);
+        }
         if (acl_retval != ACL_OK) {
             char *reason;
             switch (acl_retval) {

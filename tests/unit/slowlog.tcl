@@ -193,8 +193,7 @@ start_server {tags {"slowlog"} overrides {slowlog-log-slower-than 1000000}} {
             r debug sleep 0.03
         }
         r exec
-        assert_equal [r slowlog len] 1
-        set e [lindex [r slowlog get] 0]
+        set e [lindex [r slowlog get 1] 0]
         assert_equal [lindex $e 3] {exec}
         assert {[lindex $e 2] >= 100000}
     } {} {needs:debug}

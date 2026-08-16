@@ -49,12 +49,17 @@ start_cluster 1 1 {tags {external:skip cluster}} {
 
         # The TTL is set before WATCH, and the key is still in the keyspace once it elapses, so nothing but
         # the key having expired can abort the transaction.
+        # Under Valgrind the server is very slow: if the TTL is shorter than the time between SET and WATCH,
+        # keyIsExpired() fires during watchForKey() and the key is recorded as "already expired when WATCHed",
+        # causing isWatchedKeyExpired() to skip it and EXEC to commit. Use a larger TTL and wait under Valgrind.
+        set ttl_ms [expr {$::valgrind ? 5000 : 50}]
+        set wait_ms [expr {$::valgrind ? 10000 : 100}]
         R 0 debug set-active-expire 0
         R 0 del $transaction_key
-        R 0 set $watched_key alive px 50
+        R 0 set $watched_key alive px $ttl_ms
         R 0 watch $watched_key
         set keys_before [R 0 dbsize]
-        after 100
+        after $wait_ms
         assert_equal $keys_before [R 0 dbsize]
 
         R 0 multi

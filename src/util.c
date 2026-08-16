@@ -59,14 +59,218 @@
 #include <immintrin.h>
 #endif
 
-/* Glob-style pattern matching. */
+/* Membership bitmap plus bookkeeping for a single "[...]" character class,
+ * built once by parseCharClass()/buildClassCache() below. */
+typedef struct {
+    unsigned char bitmap[32]; /* 256-bit set of matching bytes. */
+    int not_op;               /* Class was negated with a leading '^'. */
+    int consumed;             /* Pattern bytes occupied by the class, including '[' and ']'. */
+} classInfo;
+
+static inline void classBitmapSet(unsigned char bitmap[32], unsigned char c) {
+    bitmap[c >> 3] |= (unsigned char)(1 << (c & 7));
+}
+
+static inline int classBitmapTest(const unsigned char bitmap[32], unsigned char c) {
+    return (bitmap[c >> 3] >> (c & 7)) & 1;
+}
+
+/* Parse a bracket character class starting at 'pattern' (which must point at
+ * the '[' character) into a 256-bit membership bitmap, mirroring the inline
+ * '[' handling in stringmatchlen_impl() exactly -- including its lenient
+ * treatment of an unterminated class. Doing this parse once per class,
+ * rather than once per string position the enclosing '*' backtracks to,
+ * turns an O(class size) class test into O(1). */
+static void parseCharClass(const char *pattern, int patternLen, int nocase, classInfo *info) {
+    const char *start = pattern;
+    int not_op;
+
+    memset(info->bitmap, 0, sizeof(info->bitmap));
+    pattern++;
+    patternLen--;
+    not_op = patternLen && pattern[0] == '^';
+    if (not_op) {
+        pattern++;
+        patternLen--;
+    }
+    while (1) {
+        if (patternLen >= 2 && pattern[0] == '\\') {
+            pattern++;
+            patternLen--;
+            classBitmapSet(info->bitmap, (unsigned char)pattern[0]);
+        } else if (patternLen == 0) {
+            pattern--;
+            patternLen++;
+            break;
+        } else if (pattern[0] == ']') {
+            break;
+        } else if (patternLen >= 3 && pattern[1] == '-') {
+            /* Endpoints are read as plain char, exactly like the inline
+             * parser in stringmatchlen_impl(), so that signed-char
+             * platforms keep the historical matching behavior. */
+            int start_c = pattern[0];
+            int end_c = pattern[2];
+            if (start_c > end_c) {
+                int t = start_c;
+                start_c = end_c;
+                end_c = t;
+            }
+            if (nocase) {
+                start_c = tolower(start_c);
+                end_c = tolower(end_c);
+            }
+            pattern += 2;
+            patternLen -= 2;
+            for (int b = 0; b < 256; b++) {
+                int c = (char)b;
+                if (nocase) c = tolower(c);
+                if (c >= start_c && c <= end_c) classBitmapSet(info->bitmap, (unsigned char)b);
+            }
+        } else {
+            if (!nocase) {
+                classBitmapSet(info->bitmap, (unsigned char)pattern[0]);
+            } else {
+                classBitmapSet(info->bitmap, (unsigned char)tolower((unsigned char)pattern[0]));
+                classBitmapSet(info->bitmap, (unsigned char)toupper((unsigned char)pattern[0]));
+            }
+        }
+        pattern++;
+        patternLen--;
+    }
+    pattern++;
+    patternLen--;
+    info->not_op = not_op;
+    info->consumed = (int)(pattern - start);
+}
+
+/* One parsed class plus the pattern offset it was found at. buildClassCache()
+ * stores these in a single flat, offset-ordered array -- one entry per class
+ * actually present in the pattern, not one slot per pattern byte -- so
+ * memory scales with the number of classes rather than with pattern length. */
+typedef struct {
+    int offset;
+    classInfo info;
+} classCacheEntry;
+
+typedef struct {
+    classCacheEntry *entries;
+    int count;
+} classCache;
+
+/* Cap how much of the pattern buildClassCache() will scan, so that a huge
+ * client-supplied pattern cannot force a correspondingly huge transient
+ * allocation. Patterns above this fall back to the inline parser, which is
+ * slower but bounded by proto-max-bulk-len either way. */
+#define CLASS_CACHE_MAX_PATTERN_LEN (1024 * 1024)
+
+/* Cap the number of classes buildClassCache() will pre-parse. Without this,
+ * a pattern packed with many small classes (e.g. '*' followed by thousands
+ * of repeated "[a-b]") would still parse every one of them eagerly on every
+ * call -- and a range costs a fixed 256-iteration bitmap fill each -- which
+ * reintroduces a pattern-length-sized CPU cost per call, exactly what
+ * pre-parsing was meant to amortize away. Above this many classes, fall back
+ * to the inline parser instead. */
+#define CLASS_CACHE_MAX_CLASSES 1024
+
+/* Binary search classCache's offset-ordered entries for the class starting
+ * at 'offset'. Returns NULL if there is none (shouldn't happen for an
+ * offset stringmatchlen_impl() actually reaches, since buildClassCache()
+ * finds every class the interpreter would, but callers treat NULL as "fall
+ * back to the inline parser" rather than assuming this can't happen). */
+static classInfo *classCacheLookup(const classCache *cache, int offset) {
+    int lo = 0, hi = cache->count - 1;
+    while (lo <= hi) {
+        int mid = lo + (hi - lo) / 2;
+        if (cache->entries[mid].offset == offset) return &cache->entries[mid].info;
+        if (cache->entries[mid].offset < offset) {
+            lo = mid + 1;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    return NULL;
+}
+
+/* Scan the whole pattern once and pre-parse every "[...]" class it contains
+ * into a compact array. Returns NULL (doing no work, so stringmatchlen_impl()
+ * falls back to its inline parser) unless the pattern can trigger the '*'
+ * backtracking that makes repeated class parsing expensive -- i.e. unless it
+ * contains a '*' followed later by a '[' -- and also on allocation failure,
+ * since this cache is purely an optimization and every allocation here uses
+ * the failure-safe ztry* variants rather than the panic-on-OOM zmalloc(). */
+static classCache *buildClassCache(const char *pattern, int patternLen, int nocase) {
+    if (patternLen > CLASS_CACHE_MAX_PATTERN_LEN) return NULL;
+    const char *star = memchr(pattern, '*', patternLen);
+    if (!star) return NULL;
+    int afterStarLen = patternLen - (int)(star - pattern);
+    if (!memchr(star, '[', afterStarLen)) return NULL;
+
+    int capacity = 16;
+    classCacheEntry *entries = ztrymalloc(sizeof(classCacheEntry) * capacity);
+    if (!entries) return NULL;
+
+    int count = 0;
+    int i = 0;
+    while (i < patternLen) {
+        if (pattern[i] == '[') {
+            if (count == CLASS_CACHE_MAX_CLASSES) {
+                zfree(entries);
+                return NULL;
+            }
+            if (count == capacity) {
+                capacity *= 2;
+                classCacheEntry *grown = ztryrealloc(entries, sizeof(classCacheEntry) * capacity);
+                if (!grown) {
+                    zfree(entries);
+                    return NULL;
+                }
+                entries = grown;
+            }
+            entries[count].offset = i;
+            parseCharClass(pattern + i, patternLen - i, nocase, &entries[count].info);
+            i += entries[count].info.consumed;
+            count++;
+        } else if (pattern[i] == '\\' && i + 1 < patternLen) {
+            i += 2;
+        } else {
+            i += 1;
+        }
+    }
+
+    if (count == 0) {
+        zfree(entries);
+        return NULL;
+    }
+
+    classCache *cache = ztrymalloc(sizeof(classCache));
+    if (!cache) {
+        zfree(entries);
+        return NULL;
+    }
+    cache->entries = entries;
+    cache->count = count;
+    return cache;
+}
+
+static void freeClassCache(classCache *cache) {
+    if (!cache) return;
+    zfree(cache->entries);
+    zfree(cache);
+}
+
+/* Glob-style pattern matching. 'origPattern' is the immutable base pointer
+ * of the whole pattern (used to index into 'cache'); 'cache' is the
+ * pre-parsed class table built by buildClassCache(), or NULL if the
+ * pattern doesn't need it. */
 static int stringmatchlen_impl(const char *pattern,
                                int patternLen,
                                const char *string,
                                int stringLen,
                                int nocase,
                                int *skipLongerMatches,
-                               int nesting) {
+                               int nesting,
+                               const char *origPattern,
+                               const classCache *cache) {
     /* Protection against abusive patterns. */
     if (nesting > 1000) return 0;
 
@@ -80,7 +284,7 @@ static int stringmatchlen_impl(const char *pattern,
             if (patternLen == 1) return 1; /* match */
             while (stringLen) {
                 if (stringmatchlen_impl(pattern + 1, patternLen - 1, string, stringLen, nocase, skipLongerMatches,
-                                        nesting + 1))
+                                        nesting + 1, origPattern, cache))
                     return 1;                     /* match */
                 if (*skipLongerMatches) return 0; /* no match */
                 string++;
@@ -105,6 +309,19 @@ static int stringmatchlen_impl(const char *pattern,
             break;
         case '[': {
             int not_op, match;
+            const classInfo *cached = cache ? classCacheLookup(cache, (int)(pattern - origPattern)) : NULL;
+
+            if (cached) {
+                not_op = cached->not_op;
+                match = classBitmapTest(cached->bitmap, (unsigned char)string[0]);
+                if (not_op) match = !match;
+                if (!match) return 0; /* no match */
+                pattern += cached->consumed - 1;
+                patternLen -= cached->consumed - 1;
+                string++;
+                stringLen--;
+                break;
+            }
 
             pattern++;
             patternLen--;
@@ -190,11 +407,49 @@ static int stringmatchlen_impl(const char *pattern,
 
 int stringmatchlen(const char *pattern, int patternLen, const char *string, int stringLen, int nocase) {
     int skipLongerMatches = 0;
-    return stringmatchlen_impl(pattern, patternLen, string, stringLen, nocase, &skipLongerMatches, 0);
+    classCache *cache = buildClassCache(pattern, patternLen, nocase);
+    int ret =
+        stringmatchlen_impl(pattern, patternLen, string, stringLen, nocase, &skipLongerMatches, 0, pattern, cache);
+    freeClassCache(cache);
+    return ret;
 }
 
 int stringmatch(const char *pattern, const char *string, int nocase) {
     return stringmatchlen(pattern, strlen(pattern), string, strlen(string), nocase);
+}
+
+/* See the comment on the declaration in util.h: this lets a caller that
+ * matches one pattern against many candidate strings build the class cache
+ * once instead of on every candidate, which matters because stringmatchlen()
+ * alone rebuilds it on every call -- fine for a single match, but a loop
+ * over e.g. the whole keyspace would otherwise multiply that build cost by
+ * the number of candidates. */
+struct stringmatchPrepared {
+    const char *pattern;
+    int patternLen;
+    int nocase;
+    classCache *cache;
+};
+
+stringmatchPrepared *stringmatchlen_prepare(const char *pattern, int patternLen, int nocase) {
+    stringmatchPrepared *prepared = zmalloc(sizeof(stringmatchPrepared));
+    prepared->pattern = pattern;
+    prepared->patternLen = patternLen;
+    prepared->nocase = nocase;
+    prepared->cache = buildClassCache(pattern, patternLen, nocase);
+    return prepared;
+}
+
+int stringmatchlen_prepared(const stringmatchPrepared *prepared, const char *s, int slen) {
+    int skipLongerMatches = 0;
+    return stringmatchlen_impl(prepared->pattern, prepared->patternLen, s, slen, prepared->nocase,
+                               &skipLongerMatches, 0, prepared->pattern, prepared->cache);
+}
+
+void stringmatchlen_prepared_free(stringmatchPrepared *prepared) {
+    if (!prepared) return;
+    freeClassCache(prepared->cache);
+    zfree(prepared);
 }
 
 int prefixmatchlen(const char *pattern, int patternLen, const char *string, int stringLen, int nocase) {

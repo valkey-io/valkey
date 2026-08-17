@@ -837,7 +837,9 @@ slotMigrationJob *createSlotImportJob(client *c,
     job->client->slot_migration_job = job;
     if (c && c->conn) {
         /* Upgrade connection to high priority */
-        connUpgradePriority(c->conn, CONN_PRIORITY_HIGH);
+        if (connSetPriority(c->conn, CONN_PRIORITY_HIGH) == C_ERR) {
+            serverLog(LL_WARNING, "Failed to upgrade priority for slot migration connection %d", c->conn->fd);
+        }
     }
 
     /* We treat slot imports like primaries. Primaries are expected to have a

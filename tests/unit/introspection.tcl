@@ -2115,38 +2115,3 @@ test {CONFIG hash-seed is immutable and settable at startup} {
         }
     }
 } {} {external:skip}
-
-test {Prioritize Sentinel connections based on client name} {
-    start_server {tags {"introspection"}} {
-        set rd [valkey_client]
-        
-        proc get_client_qos {id} {
-            set clients [split [string trim [r client list]] "\n"]
-            foreach c $clients {
-                if {[regexp "id=$id .* flags=(\\w+)" $c match flags]} {
-                    if {[string match "*H*" $flags]} {
-                        return "prioritized"
-                    } else {
-                        return "normal"
-                    }
-                }
-            }
-            return "unknown"
-        }
-        
-        set rd_id [$rd client id]
-        
-        # Initially, QoS should be normal
-        assert_equal "normal" [get_client_qos $rd_id]
-        
-        # Set name to something that doesn't start with sentinel-
-        $rd client setname "not-sentinel"
-        assert_equal "normal" [get_client_qos $rd_id]
-        
-        # Set name starting with sentinel-
-        $rd client setname "sentinel-12345-cmd"
-        assert_equal "prioritized" [get_client_qos $rd_id]
-        
-        $rd close
-    }
-}

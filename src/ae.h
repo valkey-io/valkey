@@ -47,7 +47,9 @@
                               loop iteration. Useful when you want to persist \
                               things to disk before sending replies, and want \
                               to do that in a group fashion. */
-#define AE_HIGH_PRIORITY 8 /* Route to high-priority nested loop */
+#define AE_HIGH_PRIORITY 8 /* Virtual routing mask flag: when set in aeCreateFileEvent(), \
+                            * the event is registered on hp_event_loop if available.      \
+                            * Stripped before passing to the underlying OS multiplexer. */
 
 #define AE_FILE_EVENTS (1 << 0)
 #define AE_TIME_EVENTS (1 << 1)
@@ -125,8 +127,13 @@ typedef struct aeEventLoop {
     pthread_mutex_t poll_mutex;
     int flags;
 
-    /* QoS */
+    /* High-Priority Quality of Service (QoS):
+     * hp_event_loop points to a secondary, nested event loop dedicated to critical
+     * internal channels (cluster bus, slot migration, replication). Sockets registered
+     * here are processed ahead of normal client traffic and periodically preempt
+     * normal event iterations. NULL if unsupported by the OS multiplexer or disabled. */
     struct aeEventLoop *hp_event_loop;
+    monotime hp_last_poll_us; /* Timestamp (microseconds) when hp_event_loop was last drained */
 } aeEventLoop;
 
 /* Prototypes */
@@ -155,9 +162,14 @@ int aePoll(aeEventLoop *eventLoop, struct timeval *tvp);
 int aeGetSetSize(aeEventLoop *eventLoop);
 int aeResizeSetSize(aeEventLoop *eventLoop, int setsize);
 void aeSetDontWait(aeEventLoop *eventLoop, int noWait);
-/* Process high priority events preemptively. */
+
+/* Preemptively processes pending high-priority events during long-running normal event loops.
+ * Returns the number of high-priority events processed. */
 int aeProcessHPEventsPreemptively(aeEventLoop *eventLoop, int iter_count);
-/* Link a high-priority event loop to a main event loop for nested polling. */
-void aeLinkHighPriorityEventLoop(aeEventLoop *eventLoop, aeEventLoop *hp_event_loop);
+
+/* Links a nested high-priority event loop to the main event loop by registering the child loop's
+ * multiplexer descriptor (e.g. epoll fd) on the parent loop with AE_READABLE.
+ * Returns AE_OK on success or AE_ERR if multiplexer nesting is unsupported or registration fails. */
+int aeLinkHighPriorityEventLoop(aeEventLoop *eventLoop, aeEventLoop *hp_event_loop);
 
 #endif

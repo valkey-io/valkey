@@ -78,13 +78,14 @@
  * implementations are AE_READABLE & AE_WRITABLE. */
 #define BACKEND_MASK(mask) ((mask) & (AE_READABLE | AE_WRITABLE))
 
-/* High priority event loop periodic preemptive poll interval in microseconds.*/
+/* High priority event loop periodic preemptive poll interval in microseconds.
+ * High-priority events are checked periodically during normal event loops to prevent
+ * long batches of normal client commands from starving control plane traffic. */
 #define AE_HP_EVENT_PREEMPTIVE_CHECK_INTERVAL_US 1000
-/* High priority event loop periodic preemptive poll mask.*/
-#define AE_HP_EVENT_PREEMPTIVE_CHECK_MASK 3
 
-/* last time high priority event loop was polled */
-static long long hp_event_loop_last_poll_us = 0;
+/* High priority event loop periodic preemptive poll mask.
+ * Used to amortize getMonotonicUs() clock reads across every 4th iteration ((iter & 3) == 0). */
+#define AE_HP_EVENT_PREEMPTIVE_CHECK_MASK 3
 
 aeEventLoop *aeCreateEventLoop(int setsize) {
     aeEventLoop *eventLoop;
@@ -106,6 +107,7 @@ aeEventLoop *aeCreateEventLoop(int setsize) {
     eventLoop->custompoll = NULL;
     eventLoop->flags = 0;
     eventLoop->hp_event_loop = NULL;
+    eventLoop->hp_last_poll_us = 0;
     /* Initialize the eventloop mutex with PTHREAD_MUTEX_ERRORCHECK type */
     pthread_mutexattr_t attr;
     pthread_mutexattr_init(&attr);
@@ -160,6 +162,10 @@ int aeResizeSetSize(aeEventLoop *eventLoop, int setsize) {
     if (eventLoop->maxfd >= setsize) goto err;
     if (aeApiResize(eventLoop->apidata, setsize) == -1) goto err;
 
+    if (eventLoop->hp_event_loop) {
+        if (aeResizeSetSize(eventLoop->hp_event_loop, setsize) == AE_ERR) goto err;
+    }
+
     eventLoop->events = zrealloc(eventLoop->events, sizeof(aeFileEvent) * setsize);
     eventLoop->fired = zrealloc(eventLoop->fired, sizeof(aeFiredEvent) * setsize);
     eventLoop->setsize = setsize;
@@ -178,6 +184,8 @@ done:
 
 void aeDeleteEventLoop(aeEventLoop *eventLoop) {
     if (eventLoop->hp_event_loop) {
+        int hp_fd = aeApiGetPollFd(eventLoop->hp_event_loop);
+        if (hp_fd != -1) aeDeleteFileEvent(eventLoop, hp_fd, AE_READABLE);
         aeDeleteEventLoop(eventLoop->hp_event_loop);
     }
     aeApiFree(eventLoop->apidata);
@@ -205,6 +213,8 @@ int aeCreateFileEvent(aeEventLoop *eventLoop, int fd, int mask, aeFileProc *proc
             /* Register events on to high priority event loop */
             return aeCreateFileEvent(eventLoop->hp_event_loop, fd, mask & ~AE_HIGH_PRIORITY, proc, clientData);
         }
+        /* If hp_event_loop is not initialized, strip the high priority flag */
+        mask &= ~AE_HIGH_PRIORITY;
     }
     AE_LOCK(eventLoop);
     int ret = AE_ERR;
@@ -448,20 +458,18 @@ static int aeProcessHPEventsNow(aeEventLoop *eventLoop) {
     int processed = 0;
     if (eventLoop->hp_event_loop != NULL) {
         processed = aeProcessEvents(eventLoop->hp_event_loop, AE_ALL_EVENTS | AE_DONT_WAIT);
-        hp_event_loop_last_poll_us = getMonotonicUs();
+        eventLoop->hp_last_poll_us = getMonotonicUs();
     }
     return processed;
 }
 
-/*
- * Preemptively processes high priority events if the elapsed time since the last poll
+/* Preemptively processes high priority events if the elapsed time since the last poll
  * exceeds the AE_HP_EVENT_PREEMPTIVE_CHECK_INTERVAL_US threshold and iter count
- * is a multiple of AE_HP_EVENT_PREEMPTIVE_CHECK_MASK.
- */
+ * is a multiple of AE_HP_EVENT_PREEMPTIVE_CHECK_MASK.  */
 int aeProcessHPEventsPreemptively(aeEventLoop *eventLoop, int iter_count) {
-    if (eventLoop->hp_event_loop == NULL) return 0;
+    if (eventLoop->hp_event_loop == NULL || iter_count == 0) return 0;
     if ((iter_count & AE_HP_EVENT_PREEMPTIVE_CHECK_MASK) == 0) {
-        if (elapsedUs(hp_event_loop_last_poll_us) >= AE_HP_EVENT_PREEMPTIVE_CHECK_INTERVAL_US) {
+        if (elapsedUs(eventLoop->hp_last_poll_us) >= AE_HP_EVENT_PREEMPTIVE_CHECK_INTERVAL_US) {
             return aeProcessHPEventsNow(eventLoop);
         }
     }
@@ -532,23 +540,19 @@ int aeProcessEvents(aeEventLoop *eventLoop, int flags) {
         /* After sleep callback. */
         if (eventLoop->aftersleep != NULL && flags & AE_CALL_AFTER_SLEEP) eventLoop->aftersleep(eventLoop, numevents);
 
-        /* Process all high-priority events before we start processing the normal events
-         * if the high-priority event loop's FD (`hp_fd`) was fired.*/
+        /* Prioritize high-priority event loop: if hp_fd fired, drain HP events
+         * immediately before processing normal events. */
         int hp_fd = -1;
         if (eventLoop->hp_event_loop != NULL) {
             hp_fd = aeApiGetPollFd(eventLoop->hp_event_loop);
-        }
-        int hp_fired = 0;
-        if (hp_fd != -1) {
-            for (j = 0; j < numevents; j++) {
-                if (eventLoop->fired[j].fd == hp_fd) {
-                    hp_fired = 1;
-                    break;
+            if (hp_fd != -1) {
+                for (j = 0; j < numevents; j++) {
+                    if (eventLoop->fired[j].fd == hp_fd) {
+                        processed += aeProcessHPEventsNow(eventLoop);
+                        break;
+                    }
                 }
             }
-        }
-        if (hp_fired) {
-            processed += aeProcessHPEventsNow(eventLoop);
         }
 
         for (j = 0; j < numevents; j++) {
@@ -559,8 +563,7 @@ int aeProcessEvents(aeEventLoop *eventLoop, int flags) {
 
             int fd = eventLoop->fired[j].fd;
             /* Skip processing HP events here again as they were already processed above */
-            if (hp_fired && fd == hp_fd) continue;
-
+            if (fd == hp_fd) continue;
             aeFileEvent *fe = &eventLoop->events[fd];
             int mask = eventLoop->fired[j].mask;
             int fired = 0; /* Number of events fired for current fd. */
@@ -683,8 +686,17 @@ static void hpEventLoopHandler(aeEventLoop *el, int fd, void *privdata, int mask
 
 /* Register a high-priority event loop file descriptor in the main event loop,
  * which will awake main eventloop when the high-priority event loop file descriptor is fired. */
-void aeLinkHighPriorityEventLoop(aeEventLoop *eventLoop, aeEventLoop *hp_event_loop) {
-    eventLoop->hp_event_loop = hp_event_loop;
+int aeLinkHighPriorityEventLoop(aeEventLoop *eventLoop, aeEventLoop *hp_event_loop) {
+    if (eventLoop == NULL || hp_event_loop == NULL) return AE_ERR;
     int hp_fd = aeApiGetPollFd(hp_event_loop);
-    if (hp_fd != -1) aeCreateFileEvent(eventLoop, hp_fd, AE_READABLE, hpEventLoopHandler, hp_event_loop);
+    if (hp_fd == -1) {
+        eventLoop->hp_event_loop = NULL;
+        return AE_ERR;
+    }
+    if (aeCreateFileEvent(eventLoop, hp_fd, AE_READABLE, hpEventLoopHandler, hp_event_loop) == AE_ERR) {
+        eventLoop->hp_event_loop = NULL;
+        return AE_ERR;
+    }
+    eventLoop->hp_event_loop = hp_event_loop;
+    return AE_OK;
 }

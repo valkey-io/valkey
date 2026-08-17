@@ -168,48 +168,77 @@ sds getListensInfoString(sds info) {
 
     return info;
 }
-/* Upgrade connection priority */
-void connUpgradePriority(connection *conn, int priority) {
+/* Set connection priority. If the connection already has active events
+ * registered in the event loop, migrate them to the new priority level.
+ * Handles postponed state safely if the socket is offloaded to IO threads,
+ * preserves AE_BARRIER ordering flags, and performs atomic rollback on failure.
+ * Returns C_OK on success, or C_ERR if event migration fails. */
+int connSetPriority(connection *conn, int priority) {
     serverAssert(conn != NULL);
-    if (conn->priority == priority) return;
+    if (conn->priority == priority) return C_OK;
 
+    /* Fast path: if no socket exists or no event loop is active, update field directly */
+    if (conn->fd == -1 || server.el == NULL) {
+        conn->priority = priority;
+        return C_OK;
+    }
+
+    int mask = aeGetFileEvents(server.el, conn->fd);
+    if (mask == AE_NONE) {
+        conn->priority = priority;
+        return C_OK;
+    }
+
+    /* If socket state update is postponed by IO threads, update priority field only;
+     * connUpdateState() will register with the new priority upon IO completion. */
+    if (conn->flags & CONN_FLAG_POSTPONE_UPDATE_STATE) {
+        conn->priority = priority;
+        return C_OK;
+    }
+
+    /* Dynamic migration: active events exist on this socket */
     int old_priority = conn->priority;
     conn->priority = priority;
 
-    if (conn->fd != -1) {
-        int mask = aeGetFileEvents(server.el, conn->fd);
-        if (mask != AE_NONE) {
-            /* Delete from wherever it is (AE will route delete correctly) */
-            aeDeleteFileEvent(server.el, conn->fd, AE_READABLE | AE_WRITABLE);
+    /* Delete existing registration (AE routes delete to the correct loop) */
+    aeDeleteFileEvent(server.el, conn->fd, AE_READABLE | AE_WRITABLE);
 
-            /* Re-create with new priority flag */
-            int hp_flag = connGetAEPriorityFlag(conn);
-            if (mask & AE_READABLE)
-                aeCreateFileEvent(server.el, conn->fd, AE_READABLE | hp_flag, conn->type->ae_handler, conn);
-            if (mask & AE_WRITABLE)
-                aeCreateFileEvent(server.el, conn->fd, AE_WRITABLE | hp_flag, conn->type->ae_handler, conn);
+    /* If transport has custom state updater (e.g. TLS), delegate to it */
+    if (conn->type && conn->type->update_state) {
+        conn->type->update_state(conn);
+    } else {
+        int barrier = mask & AE_BARRIER;
+        int ae_hp_flag = connGetAEPriorityFlag(conn);
+        if ((mask & AE_READABLE) &&
+            aeCreateFileEvent(server.el, conn->fd, AE_READABLE | barrier | ae_hp_flag, conn->type->ae_handler, conn) == AE_ERR) {
+            goto rollback;
+        }
+        if ((mask & AE_WRITABLE) &&
+            aeCreateFileEvent(server.el, conn->fd, AE_WRITABLE | barrier | ae_hp_flag, conn->type->ae_handler, conn) == AE_ERR) {
+            goto rollback;
         }
     }
 
-    serverLog(LL_DEBUG, "Connection fd %d qos upgraded from %s to %s", conn->fd, getConnectionPriorityName(old_priority), getConnectionPriorityName(priority));
-}
+    serverLog(LL_DEBUG, "Connection fd %d priority updated from %s to %s",
+              conn->fd, getConnectionPriorityName(old_priority), getConnectionPriorityName(priority));
+    return C_OK;
 
-/* Set connection priority */
-void connSetPriority(connection *conn, int priority) {
-    serverAssert(conn != NULL);
-    if (conn->priority == priority) return;
-    conn->priority = priority;
+rollback:
+    /* Rollback priority and restore previous event registrations */
+    conn->priority = old_priority;
+    int barrier = mask & AE_BARRIER;
+    int old_ae_hp_flag = connGetAEPriorityFlag(conn);
+    if (mask & AE_READABLE)
+        aeCreateFileEvent(server.el, conn->fd, AE_READABLE | barrier | old_ae_hp_flag, conn->type->ae_handler, conn);
+    if (mask & AE_WRITABLE)
+        aeCreateFileEvent(server.el, conn->fd, AE_WRITABLE | barrier | old_ae_hp_flag, conn->type->ae_handler, conn);
+    return C_ERR;
 }
 
 /* Get connection priority */
 int connGetPriority(connection *conn) {
     /* Always return CONN_PRIORITY_NORMAL if conn is NULL.*/
     return conn ? conn->priority : CONN_PRIORITY_NORMAL;
-}
-
-/* Get AE priority flag for a connection */
-int connGetAEPriorityFlag(connection *conn) {
-    return (conn && conn->priority == CONN_PRIORITY_HIGH) ? AE_HIGH_PRIORITY : 0;
 }
 
 /* Get connection priority name from priority value. */

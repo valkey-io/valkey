@@ -1951,7 +1951,8 @@ void clusterAcceptHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
         }
 
         connection *conn = connCreateAccepted(connTypeOfCluster(), cfd, &require_auth);
-        /* Set connection to high priority */
+        /* Tag inbound cluster bus link as high-priority so cluster gossip and heartbeats
+         * are processed in hp_event_loop ahead of normal client traffic. */
         connSetPriority(conn, CONN_PRIORITY_HIGH);
 
         /* Make sure connection is not in an error state */
@@ -6316,7 +6317,8 @@ static int clusterNodeCronHandleReconnect(clusterNode *node, mstime_t now, long 
         (*cluster_conn_attempts)--;
         clusterLink *link = createClusterLink(node);
         link->conn = connCreate(connTypeOfCluster());
-        /* Set connection to high priority */
+        /* Tag outbound cluster bus link as high-priority so node reconnects, gossip ping/pong,
+         * and failure detection heartbeats operate within hp_event_loop. */
         connSetPriority(link->conn, CONN_PRIORITY_HIGH);
         connSetPrivateData(link->conn, link);
         if (connConnect(link->conn, node->ip, node->cport, server.bind_source_addr, 0, clusterLinkConnectHandler) ==

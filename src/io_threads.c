@@ -949,23 +949,27 @@ static int processOutboxBatch(mpscQueue *outbox) {
     return received_responses;
 }
 
+/* Process completed IO jobs from worker threads back onto the main thread.
+ * Drains the high-priority outbox first to guarantee control-plane responsiveness,
+ * and performs periodic preemptive polling of hp_event_loop while consuming normal jobs. */
 int processIOThreadsResponses(void) {
-    /* We don't check for threads number  since some threads may return jobs then deactivate/shut-down */
+    /* We don't check for threads number since some threads may return jobs then deactivate/shut-down */
 
-    /* Quick check if any pending operations exist */
+    /* Quick check if any pending operations exist across any priority level */
     if (getPendingIOResponsesCount() == 0) return 0;
 
     int total_processed = 0;
     int counter = 0;
     /* Loop until we consume all pending jobs */
     while (1) {
+        /* 1. Strict Priority: First, drain high-priority events (cluster bus, replication, and slot migration jobs) */
         int processed = processOutboxBatch(&io_shared_outbox[CONN_PRIORITY_HIGH]);
         if (processed == 0) {
-            /* Preemptively poll for new high priority events to prevent normal IO
-             * events from delaying critical traffic.
-             */
+            /* 2. Preemptive Poll: When high-priority outbox is empty, check if any new
+             * high-priority events arrived on hp_event_loop before processing normal traffic. */
             aeProcessHPEventsPreemptively(server.el, counter);
         }
+        /* 3. Drain normal client events */
         processed += processOutboxBatch(&io_shared_outbox[CONN_PRIORITY_NORMAL]);
         total_processed += processed;
         counter++;

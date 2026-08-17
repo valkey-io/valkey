@@ -4677,13 +4677,6 @@ int clientSetName(client *c, robj *name, const char **err) {
     if (c->name) decrRefCount(c->name);
     c->name = name;
     incrRefCount(name);
-
-    if (name && len >= 9 && strncmp(objectGetVal(name), "sentinel-", 9) == 0) {
-        if (c->conn) {
-            /* Upgrade connection priority to high for sentinel */
-            connUpgradePriority(c->conn, CONN_PRIORITY_HIGH);
-        }
-    }
     return C_OK;
 }
 

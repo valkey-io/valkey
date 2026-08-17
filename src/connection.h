@@ -61,9 +61,12 @@ typedef enum {
     CONN_STATE_ERROR
 } ConnectionState;
 
-#define CONN_FLAG_CLOSE_SCHEDULED (1 << 0)      /* Closed scheduled by a handler */
-#define CONN_FLAG_WRITE_BARRIER (1 << 1)        /* Write barrier requested */
-#define CONN_FLAG_ALLOW_ACCEPT_OFFLOAD (1 << 2) /* Connection accept can be offloaded to IO threads. */
+#define CONN_FLAG_CLOSE_SCHEDULED (1 << 0)       /* Closed scheduled by a handler */
+#define CONN_FLAG_WRITE_BARRIER (1 << 1)         /* Write barrier requested */
+#define CONN_FLAG_ALLOW_ACCEPT_OFFLOAD (1 << 2)  /* Connection accept can be offloaded to IO threads. */
+#define CONN_FLAG_POSTPONE_UPDATE_STATE (1 << 3) /* Connection update state is postponed by IO threads   \
+                                                  * to prevent main thread event loop races while worker \
+                                                  * threads access the socket buffers. */
 
 #define CONN_POSTPONE_READ (1 << 0)
 #define CONN_POSTPONE_WRITE (1 << 1)
@@ -529,11 +532,21 @@ static inline aeFileProc *connAcceptHandler(ConnectionType *ct) {
 sds getListensInfoString(sds info);
 
 /* Connection qos(see connPriority enum). */
-void connSetPriority(connection *conn, int priority);
-void connUpgradePriority(connection *conn, int priority);
+int connSetPriority(connection *conn, int priority);
 int connGetPriority(connection *conn);
 const char *getConnectionPriorityName(int priority);
-int connGetAEPriorityFlag(connection *conn);
+
+/* Get AE priority flag for a connection. */
+static inline int connGetAEPriorityFlag(const connection *conn) {
+    if (conn == NULL) return AE_NONE;
+    switch (conn->priority) {
+    case CONN_PRIORITY_HIGH:
+        return AE_HIGH_PRIORITY;
+    case CONN_PRIORITY_NORMAL:
+    default:
+        return AE_NONE;
+    }
+}
 int RedisRegisterConnectionTypeSocket(void);
 int RedisRegisterConnectionTypeUnix(void);
 int RedisRegisterConnectionTypeTLS(void);
@@ -551,8 +564,14 @@ static inline void connUpdateState(connection *conn) {
 }
 
 static inline void connSetPostponeUpdateState(connection *conn, int postpone_mask) {
-    if (conn && conn->type && conn->type->postpone_update_state) {
-        conn->type->postpone_update_state(conn, postpone_mask);
+    if (conn) {
+        if (postpone_mask)
+            conn->flags |= CONN_FLAG_POSTPONE_UPDATE_STATE;
+        else
+            conn->flags &= ~CONN_FLAG_POSTPONE_UPDATE_STATE;
+        if (conn->type && conn->type->postpone_update_state) {
+            conn->type->postpone_update_state(conn, postpone_mask);
+        }
     }
 }
 

@@ -3040,14 +3040,21 @@ void initServer(void) {
     const char *clk_msg = monotonicInit();
     serverLog(LL_NOTICE, "monotonic clock: %s", clk_msg);
     server.el = aeCreateEventLoop(server.maxclients + CONFIG_FDSET_INCR);
-    /*Create high priority event loop*/
+    /* Create high-priority event loop for internal connections (cluster bus, replication, and slot migration jobs) */
     aeEventLoop *hp_el = aeCreateEventLoop(server.maxclients + CONFIG_FDSET_INCR);
     if (server.el == NULL || hp_el == NULL) {
         serverLog(LL_WARNING, "Failed creating the event loop. Error message: '%s'", strerror(errno));
         exit(1);
     }
-    /*Link high priority event loop with main event loop*/
-    aeLinkHighPriorityEventLoop(server.el, hp_el);
+    /* Link high priority event loop with main event loop via nested multiplexer polling.
+     * If multiplexer nesting is unsupported (e.g. evport, select), gracefully
+     * free hp_el and fall back to main event loop event processing without QoS. */
+    if (aeLinkHighPriorityEventLoop(server.el, hp_el) == AE_ERR) {
+        serverLog(LL_NOTICE, "QoS event prioritization not supported on %s multiplexer, falling back to standard event processing",
+                  aeGetApiName());
+        aeDeleteEventLoop(hp_el);
+        hp_el = NULL;
+    }
     server.dbnum = server.cluster_enabled ? server.config_databases_cluster : server.config_databases;
     server.db = zcalloc(sizeof(serverDb *) * server.dbnum);
     createDatabaseIfNeeded(0); /* The default database should always exist */

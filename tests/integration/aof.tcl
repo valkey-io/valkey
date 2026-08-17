@@ -452,6 +452,32 @@ tags {"aof external:skip"} {
         }
     }
 
+    # A MULTI/EXEC block in the AOF must be replayed even when the default user
+    # is disabled. EXEC re-checks ACLs of the queued commands, but that check
+    # must not apply to the client used for loading the AOF, otherwise the
+    # transaction's writes are silently lost.
+    create_aof $aof_dirpath $aof_file {
+        append_to_aof [formatCommand set outside-tx 1]
+        append_to_aof [formatCommand multi]
+        append_to_aof [formatCommand set inside-tx-a 2]
+        append_to_aof [formatCommand set inside-tx-b 3]
+        append_to_aof [formatCommand exec]
+    }
+
+    set acl_config_lines {user {default off} user {someuser on nopass ~* &* +@all}}
+    set acl_config [concat $defaults [list dir $server_path]]
+    set srv [start_server [list overrides $acl_config config_lines $acl_config_lines]]
+    test {AOF with MULTI/EXEC is fully loaded when the default user is disabled} {
+        set c [redis [dict get $srv host] [dict get $srv port] 0 $::tls]
+        $c auth someuser somepass
+        wait_done_loading $c
+        assert_equal 1 [$c get outside-tx]
+        assert_equal 2 [$c get inside-tx-a]
+        assert_equal 3 [$c get inside-tx-b]
+        $c close
+    }
+    kill_server $srv
+
     # redis could load AOF which has timestamp annotations inside
     create_aof $aof_dirpath $aof_file {
         append_to_aof "#TS:1628217470\r\n"

@@ -644,6 +644,13 @@ typedef enum {
     CLUSTER_CONFIGFILE_SAVE_BEHAVIOR_BEST_EFFORT, /* Attempt to save on a "best-effort" basis, process will not exit if it fails. */
 } cluster_persist_config_mode;
 
+/* Replica failover policy for server.cluster_replica_no_failover. */
+typedef enum {
+    CLUSTER_REPLICA_NO_FAILOVER_NO = 0,  /* Allow automatic failover (default). */
+    CLUSTER_REPLICA_NO_FAILOVER_YES,     /* Never start a failover; sets CLUSTER_NODE_NOFAILOVER. */
+    CLUSTER_REPLICA_NO_FAILOVER_NO_DATA, /* Refuse automatic failover only while offset is 0. */
+} cluster_replica_no_failover_policy;
+
 /* RDB active child save type. */
 #define RDB_CHILD_TYPE_NONE 0
 #define RDB_CHILD_TYPE_DISK 1   /* RDB is written to disk. */
@@ -2281,13 +2288,7 @@ struct valkeyServer {
     int cluster_replica_validity_factor;                   /* Replica max data age for failover. */
     int cluster_require_full_coverage;                     /* If true, put the cluster down if
                                                               there is at least an uncovered slot.*/
-    int cluster_replica_no_failover;                       /* Prevent replica from starting a failover
-                                                            if the primary is in failure state. */
-    int cluster_replica_failover_require_data;             /* Refuse to start an automatic failover when the
-                                                            * replica has no data yet (e.g. its replication
-                                                            * offset is 0 because it has never completed a
-                                                            * sync with its primary), which would otherwise
-                                                            * result in the loss of all shard data. */
+    int cluster_replica_no_failover;                       /* Replica failover policy (NO/YES/NO_DATA). */
     char *cluster_announce_ip;                             /* IP address to announce on cluster bus. */
     char *cluster_announce_client_ipv4;                    /* IPv4 for clients, to announce on cluster bus. */
     char *cluster_announce_client_ipv6;                    /* IPv6 for clients, to announce on cluster bus. */

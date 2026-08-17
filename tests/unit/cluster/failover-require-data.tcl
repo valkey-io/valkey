@@ -1,4 +1,4 @@
-# Check that 'cluster-replica-failover-require-data' prevents a replica whose
+# Check that 'cluster-replica-no-failover no-data' prevents a replica whose
 # replication offset is still 0 (it never completed a sync with its primary)
 # from starting an automatic failover, which would promote an empty node and
 # lose all the data of the shard.
@@ -38,7 +38,7 @@ proc test_zero_offset_replica {sync_type} {
         # Turn on the guard on the replica: a zero-offset replica must not start an
         # automatic failover. Validity factor 0 lets it become a candidate immediately
         # once the primary is down.
-        R 3 CONFIG SET cluster-replica-failover-require-data yes
+        R 3 CONFIG SET cluster-replica-no-failover no-data
         R 3 CONFIG SET cluster-replica-validity-factor 0
 
         # Add the empty node as a replica of R0 and wait until the role change is
@@ -72,7 +72,7 @@ proc test_zero_offset_replica {sync_type} {
         wait_for_log_messages -3 {"*Currently unable to failover*Replication offset is 0*"} 0 1000 50
 
         # Disabling the guard lets the zero-offset replica win the election.
-        R 3 CONFIG SET cluster-replica-failover-require-data no
+        R 3 CONFIG SET cluster-replica-no-failover no
         wait_for_condition 1000 50 {
             [s -3 role] eq {master}
         } else {

@@ -54,7 +54,8 @@
 
 
 void evalGenericCommandWithDebugging(client *c, int evalsha);
-static void evalCtxDeleteScript(sds sha);
+struct evalCtx;
+static void evalCtxDeleteScript(struct evalCtx *ctx, sds sha);
 
 typedef struct evalScript {
     compiledFunction *script;
@@ -80,7 +81,7 @@ static void dictEntryDestructorSdsKeyScriptValue(void *entry) {
     zfree(de);
 }
 
-/* evalCtx.scripts sha (as sds string) -> scripts (as evalScript) cache. */
+/* struct evalCtx's 'scripts' dict type: sha (as sds string) -> scripts (as evalScript) cache. */
 dictType shaScriptObjectDictType = {
     .entryGetKey = dictEntryGetKey,
     .hashFunction = dictCStrCaseHash,
@@ -94,7 +95,25 @@ struct evalCtx {
     list *scripts_lru_list;              /* A list of SHA1, first in first out LRU eviction. */
     unsigned long long scripts_mem;      /* Cached scripts' memory + oh */
     unsigned long long eval_scripts_mem; /* Cached eval scripts' memory + oh */
-} evalCtx;
+};
+
+/* Array of eval contexts. When 'script-cache-per-db' is disabled this is a
+ * single element (index 0 always used); when enabled it has one element per
+ * configured database, so the script cache is scoped to the client's
+ * currently selected DB. Sized once at startup since 'databases' and
+ * 'script-cache-per-db' are both immutable configs. */
+static struct evalCtx *evalCtxs;
+static int evalCtxCount;
+
+/* Resolve which eval context slot a client's command should use. */
+static inline int evalCtxIndexForClient(client *c) {
+    if (evalCtxCount == 1) return 0;
+    return (c->flag.multi) ? c->mstate->transaction_db_id : c->db->id;
+}
+
+static inline struct evalCtx *evalGetCtx(client *c) {
+    return &evalCtxs[evalCtxIndexForClient(c)];
+}
 
 /* Initialize the scripting environment.
  *
@@ -107,11 +126,15 @@ void evalInit(void) {
      * Initialize a list we use for script LRU evictions.
      * Note that we duplicate the sha when adding to the lru list due to defrag,
      * and we need to free them respectively. */
-    evalCtx.scripts = dictCreate(&shaScriptObjectDictType);
-    evalCtx.scripts_lru_list = listCreate();
-    listSetFreeMethod(evalCtx.scripts_lru_list, sdsfreeVoid);
-    evalCtx.scripts_mem = 0;
-    evalCtx.eval_scripts_mem = 0;
+    evalCtxCount = server.script_cache_per_db ? server.dbnum : 1;
+    evalCtxs = zcalloc(sizeof(struct evalCtx) * evalCtxCount);
+    for (int i = 0; i < evalCtxCount; i++) {
+        evalCtxs[i].scripts = dictCreate(&shaScriptObjectDictType);
+        evalCtxs[i].scripts_lru_list = listCreate();
+        listSetFreeMethod(evalCtxs[i].scripts_lru_list, sdsfreeVoid);
+        evalCtxs[i].scripts_mem = 0;
+        evalCtxs[i].eval_scripts_mem = 0;
+    }
 }
 
 /* ---------------------------------------------------------------------------
@@ -161,22 +184,22 @@ void freeEvalScripts(dict *scripts, list *scripts_lru_list, list *engine_callbac
     }
 }
 
-static void scriptsMemoryAdd(size_t memory, int is_eval) {
-    evalCtx.scripts_mem += memory;
-    if (is_eval) evalCtx.eval_scripts_mem += memory;
+static void scriptsMemoryAdd(struct evalCtx *ctx, size_t memory, int is_eval) {
+    ctx->scripts_mem += memory;
+    if (is_eval) ctx->eval_scripts_mem += memory;
 }
 
-static void scriptsMemorySubtract(size_t memory, int is_eval) {
-    evalCtx.scripts_mem -= memory;
-    if (is_eval) evalCtx.eval_scripts_mem -= memory;
+static void scriptsMemorySubtract(struct evalCtx *ctx, size_t memory, int is_eval) {
+    ctx->scripts_mem -= memory;
+    if (is_eval) ctx->eval_scripts_mem -= memory;
 }
 
 /* Remove an LRU node and account for its duplicated SHA. Both counters include
  * this list-owned allocation; dictionary-owned memory is handled separately. */
-static void scriptsLRUDeleteNode(listNode *node) {
+static void scriptsLRUDeleteNode(struct evalCtx *ctx, listNode *node) {
     sds sha = listNodeValue(node);
-    scriptsMemorySubtract(sdsAllocSize(sha), 1);
-    listDelNode(evalCtx.scripts_lru_list, node);
+    scriptsMemorySubtract(ctx, sdsAllocSize(sha), 1);
+    listDelNode(ctx->scripts_lru_list, node);
 }
 
 static void resetEngineEvalEnvCallback(scriptingEngine *engine, void *context) {
@@ -189,15 +212,41 @@ static void resetEngineEvalEnvCallback(scriptingEngine *engine, void *context) {
     }
 }
 
+/* Free the given ctx's dict/lru list and put a fresh, empty pair in their place.
+ * If 'engine_callbacks' is non-NULL, those callbacks run once the old dict is fully
+ * released (used to reset the shared engine environment exactly once when flushing
+ * every ctx; pass NULL to skip that, which is what a single-DB flush does). */
+static void evalFlushCtx(struct evalCtx *ctx, int async, list *engine_callbacks) {
+    dict *old_scripts = ctx->scripts;
+    list *old_lru_list = ctx->scripts_lru_list;
+
+    ctx->scripts = dictCreate(&shaScriptObjectDictType);
+    ctx->scripts_lru_list = listCreate();
+    listSetFreeMethod(ctx->scripts_lru_list, sdsfreeVoid);
+    ctx->scripts_mem = 0;
+    ctx->eval_scripts_mem = 0;
+
+    if (async) {
+        freeEvalScriptsAsync(old_scripts, old_lru_list, engine_callbacks);
+    } else {
+        freeEvalScripts(old_scripts, old_lru_list, engine_callbacks);
+    }
+}
+
 /* Release resources related to Lua scripting.
  * This function is used in order to reset the scripting environment. */
 void evalRelease(int async) {
+    list *engine_callbacks = async ? listCreate() : NULL;
     if (async) {
-        list *engine_callbacks = listCreate();
         scriptingEngineManagerForEachEngine(resetEngineEvalEnvCallback, engine_callbacks);
-        freeEvalScriptsAsync(evalCtx.scripts, evalCtx.scripts_lru_list, engine_callbacks);
-    } else {
-        freeEvalScripts(evalCtx.scripts, evalCtx.scripts_lru_list, NULL);
+    }
+    for (int i = 0; i < evalCtxCount; i++) {
+        /* The engine environment reset only needs to happen once overall, not once
+         * per DB slot, so it's only attached to the first slot's async free job (or
+         * run once after the loop for the sync case below). */
+        evalFlushCtx(&evalCtxs[i], async, (i == 0) ? engine_callbacks : NULL);
+    }
+    if (!async) {
         scriptingEngineManagerForEachEngine(resetEngineEvalEnvCallback, NULL);
     }
 }
@@ -206,18 +255,22 @@ void evalRelease(int async) {
  * Called when a scripting engine is unregistered to avoid dangling engine
  * pointers in the eval script cache. */
 void evalRemoveScriptsFromEngine(scriptingEngine *engine) {
-    dictIterator *iter = dictGetSafeIterator(evalCtx.scripts);
-    dictEntry *entry;
-    while ((entry = dictNext(iter))) {
-        evalScript *es = dictGetVal(entry);
-        if (es->engine == engine) evalCtxDeleteScript(dictGetKey(entry));
+    for (int i = 0; i < evalCtxCount; i++) {
+        struct evalCtx *ctx = &evalCtxs[i];
+        dictIterator *iter = dictGetSafeIterator(ctx->scripts);
+        dictEntry *entry;
+        while ((entry = dictNext(iter))) {
+            evalScript *es = dictGetVal(entry);
+            if (es->engine == engine) evalCtxDeleteScript(ctx, dictGetKey(entry));
+        }
+        dictReleaseIterator(iter);
     }
-    dictReleaseIterator(iter);
 }
 
 void evalReset(int async) {
+    /* evalRelease() already swaps in fresh, empty dict/lru pairs for every ctx
+     * (evalFlushCtx()), so there's no need to re-run evalInit() here. */
     evalRelease(async);
-    evalInit();
 }
 
 /* ---------------------------------------------------------------------------
@@ -327,7 +380,7 @@ uint64_t evalGetCommandFlags(client *c, uint64_t cmd_flags) {
     if (evalsha && sdslen(objectGetVal(c->argv[1])) != 40) return cmd_flags;
     uint64_t script_flags;
     evalCalcScriptHash(evalsha, objectGetVal(c->argv[1]), sha);
-    c->cur_script = dictFind(evalCtx.scripts, sha);
+    c->cur_script = dictFind(evalGetCtx(c)->scripts, sha);
     if (!c->cur_script) {
         if (evalsha) return cmd_flags;
         if (evalExtractShebangFlags(objectGetVal(c->argv[1]), NULL, &script_flags, NULL, NULL) == C_ERR) return cmd_flags;
@@ -341,19 +394,19 @@ uint64_t evalGetCommandFlags(client *c, uint64_t cmd_flags) {
 
 /* Delete a cached script with the specified sha.
  *
- * This removes the script from the scripting engine, the script dictionary, and
- * the EVAL LRU list when it has one. */
-static void evalCtxDeleteScript(sds sha) {
-    dictEntry *de = dictUnlink(evalCtx.scripts, sha);
+ * This removes the script from the scripting engine, the given context's script
+ * dictionary, and that context's EVAL LRU list when it has one. */
+static void evalCtxDeleteScript(struct evalCtx *ctx, sds sha) {
+    dictEntry *de = dictUnlink(ctx->scripts, sha);
     serverAssert(de);
     sds dict_sha = dictGetKey(de);
     evalScript *es = dictGetVal(de);
-    scriptsMemorySubtract(sdsAllocSize(dict_sha) + getStringObjectSdsUsedMemory(es->body), es->node != NULL);
+    scriptsMemorySubtract(ctx, sdsAllocSize(dict_sha) + getStringObjectSdsUsedMemory(es->body), es->node != NULL);
     if (es->node) {
-        scriptsLRUDeleteNode(es->node);
+        scriptsLRUDeleteNode(ctx, es->node);
         es->node = NULL;
     }
-    dictFreeUnlinkedEntry(evalCtx.scripts, de);
+    dictFreeUnlinkedEntry(ctx->scripts, de);
 }
 
 /* Add a script to the LRU eviction list, evicting oldest scripts if necessary.
@@ -368,7 +421,9 @@ static void evalCtxDeleteScript(sds sha) {
  *
  * This function enforces a maximum count limit (LRU_LIST_LENGTH = 500) on cached
  * scripts loaded via EVAL. When the limit is reached, the oldest (least recently
- * used) scripts are evicted to make room for new ones.
+ * used) scripts are evicted to make room for new ones. The limit is per eval
+ * context, so with 'script-cache-per-db' enabled every DB slot gets its own 500
+ * script allowance.
  *
  * Note: Scripts loaded via SCRIPT LOAD are not added to this LRU list and are
  * exempt from count-based eviction. maxmemory-scripts only applies to scripts
@@ -378,19 +433,24 @@ static void evalCtxDeleteScript(sds sha) {
  * and use it for quick removal and re-insertion into an LRU list each time the
  * script is used. */
 #define LRU_LIST_LENGTH 500
-static listNode *scriptsLRUAdd(sds sha) {
+static listNode *scriptsLRUAdd(struct evalCtx *ctx, sds sha) {
     /* Evict oldest. */
-    while (listLength(evalCtx.scripts_lru_list) >= LRU_LIST_LENGTH) {
-        sds oldest = listNodeValue(listFirst(evalCtx.scripts_lru_list));
-        evalCtxDeleteScript(oldest);
+    while (listLength(ctx->scripts_lru_list) >= LRU_LIST_LENGTH) {
+        sds oldest = listNodeValue(listFirst(ctx->scripts_lru_list));
+        evalCtxDeleteScript(ctx, oldest);
         server.stat_evictedscripts++;
     }
 
     /* Add current. */
     sds lru_sha = sdsdup(sha);
-    listAddNodeTail(evalCtx.scripts_lru_list, lru_sha);
-    scriptsMemoryAdd(sdsAllocSize(lru_sha), 1);
-    return listLast(evalCtx.scripts_lru_list);
+    listAddNodeTail(ctx->scripts_lru_list, lru_sha);
+    scriptsMemoryAdd(ctx, sdsAllocSize(lru_sha), 1);
+    return listLast(ctx->scripts_lru_list);
+}
+
+/* Return the memory overhead used by the EVAL scripts of a single context. */
+static unsigned long evalCtxScriptsMemoryOverhead(struct evalCtx *ctx) {
+    return ctx->eval_scripts_mem + listLength(ctx->scripts_lru_list) * (sizeof(evalScript) + sizeof(listNode));
 }
 
 /* Returns the actual scripts eviction limit based on current configuration or
@@ -438,41 +498,40 @@ static int isScriptsEvictionProcRunning = 0;
  * - To avoid blocking the server, eviction is time-limited. If the time limit is
  *   reached while memory is still over the limit, a time proc continues eviction.
  *
+ * With 'script-cache-per-db' enabled each DB slot holds its own cache and is
+ * given its own maxmemory-scripts allowance, so the limit is applied against a
+ * single context at a time and eviction never crosses DB boundaries.
+ *
+ * 'timer' and 'scripts_evicted' are owned by the caller so that a sweep over
+ * several contexts shares one time budget.
+ *
  * Returns:
  * - SCRIPTS_EVICT_OK: Memory is within limits or no limit configured.
  * - SCRIPTS_EVICT_RUNNING: Eviction still needed, async proc scheduled. */
-static int performScriptsEvictions(void) {
-    /* Do not evict while a long-running command has yielded to the event loop;
-     * the next eligible trigger will retry the eviction. */
-    if (isInsideYieldingLongCommand()) return SCRIPTS_EVICT_OK;
-
+static int performCtxScriptsEvictions(struct evalCtx *ctx,
+                                      size_t script_eviction_limit,
+                                      monotime timer,
+                                      int *scripts_evicted) {
     /* Nothing to evict if no scripts cached. */
-    if (dictSize(evalCtx.scripts) == 0) return SCRIPTS_EVICT_OK;
+    if (dictSize(ctx->scripts) == 0) return SCRIPTS_EVICT_OK;
 
-    /* Check if memory-based eviction is enabled. */
-    size_t script_eviction_limit = getScriptsMemoryLimit();
-    if (script_eviction_limit == 0) return SCRIPTS_EVICT_OK;
-
-    int scripts_evicted = 0;
     unsigned long scripts_eviction_time_limit_us = 500; /* 500 microseconds max per call */
-    monotime scripts_eviction_timer;
-    elapsedStart(&scripts_eviction_timer);
 
     /* Evict EVAL scripts until their memory usage is under the limit. */
-    while (evalScriptsMemoryOverhead() > script_eviction_limit) {
-        listNode *node = listFirst(evalCtx.scripts_lru_list);
+    while (evalCtxScriptsMemoryOverhead(ctx) > script_eviction_limit) {
+        listNode *node = listFirst(ctx->scripts_lru_list);
         if (node == NULL) return SCRIPTS_EVICT_OK;
 
         sds sha = listNodeValue(node);
-        evalCtxDeleteScript(sha);
+        evalCtxDeleteScript(ctx, sha);
         server.stat_evictedscripts++;
-        scripts_evicted++;
+        (*scripts_evicted)++;
 
-        if (scripts_evicted % 16 == 0) {
+        if (*scripts_evicted % 16 == 0) {
             /* After some time, exit the loop early. We don't want to spend too much
              * time here and block the server. */
-            if (elapsedUs(scripts_eviction_timer) > scripts_eviction_time_limit_us) {
-                if (evalScriptsMemoryOverhead() > script_eviction_limit) {
+            if (elapsedUs(timer) > scripts_eviction_time_limit_us) {
+                if (evalCtxScriptsMemoryOverhead(ctx) > script_eviction_limit) {
                     /* Still need to evict scripts, start the eviction timer proc. */
                     startScriptsEvictionTimeProc();
                     return SCRIPTS_EVICT_RUNNING;
@@ -486,13 +545,42 @@ static int performScriptsEvictions(void) {
     return SCRIPTS_EVICT_OK;
 }
 
+/* Run memory-based evictions over the given context, or over every context when
+ * 'ctx' is NULL (used by the eviction time proc, which has no client to resolve
+ * a DB slot from). */
+static int performScriptsEvictions(struct evalCtx *ctx) {
+    /* Do not evict while a long-running command has yielded to the event loop;
+     * the next eligible trigger will retry the eviction. */
+    if (isInsideYieldingLongCommand()) return SCRIPTS_EVICT_OK;
+
+    /* Check if memory-based eviction is enabled. */
+    size_t script_eviction_limit = getScriptsMemoryLimit();
+    if (script_eviction_limit == 0) return SCRIPTS_EVICT_OK;
+
+    int scripts_evicted = 0;
+    monotime scripts_eviction_timer;
+    elapsedStart(&scripts_eviction_timer);
+
+    if (ctx != NULL) {
+        return performCtxScriptsEvictions(ctx, script_eviction_limit, scripts_eviction_timer, &scripts_evicted);
+    }
+
+    for (int i = 0; i < evalCtxCount; i++) {
+        int status = performCtxScriptsEvictions(&evalCtxs[i], script_eviction_limit, scripts_eviction_timer,
+                                                &scripts_evicted);
+        if (status == SCRIPTS_EVICT_RUNNING) return SCRIPTS_EVICT_RUNNING;
+    }
+
+    return SCRIPTS_EVICT_OK;
+}
+
 /* Time event proc for script eviction. */
 static long long scriptsEvictionTimeProc(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     UNUSED(eventLoop);
     UNUSED(id);
     UNUSED(clientData);
 
-    if (performScriptsEvictions() == SCRIPTS_EVICT_RUNNING) return 0; /* Keep evicting */
+    if (performScriptsEvictions(NULL) == SCRIPTS_EVICT_RUNNING) return 0; /* Keep evicting */
 
     isScriptsEvictionProcRunning = 0;
     return AE_NOMORE;
@@ -508,6 +596,7 @@ void startScriptsEvictionTimeProc(void) {
 
 static int evalRegisterNewScript(client *c, robj *body, char **sha) {
     serverAssert(sha != NULL);
+    struct evalCtx *ctx = evalGetCtx(c);
 
     /* When `*sha` is `NULL`, it's because we're coming from the SCRIPT LOAD
      * code path, and therefore we need to compute the hash of the script. */
@@ -519,7 +608,7 @@ static int evalRegisterNewScript(client *c, robj *body, char **sha) {
 
         /* If the script was previously added via EVAL, we promote it to
          * SCRIPT LOAD, prevent it from being evicted later. */
-        dictEntry *entry = dictFind(evalCtx.scripts, *sha);
+        dictEntry *entry = dictFind(ctx->scripts, *sha);
         if (entry != NULL) {
             evalScript *es = dictGetVal(entry);
             if (es->node) {
@@ -528,9 +617,9 @@ static int evalRegisterNewScript(client *c, robj *body, char **sha) {
                 size_t body_mem = getStringObjectSdsUsedMemory(es->body);
                 /* The dictionary entry and body remain cached, but no longer
                  * belong to the EVAL-only accounting. */
-                scriptsMemorySubtract(sha_mem + body_mem, 1);
-                scriptsMemoryAdd(sha_mem + body_mem, 0);
-                scriptsLRUDeleteNode(es->node);
+                scriptsMemorySubtract(ctx, sha_mem + body_mem, 1);
+                scriptsMemoryAdd(ctx, sha_mem + body_mem, 0);
+                scriptsLRUDeleteNode(ctx, es->node);
                 es->node = NULL;
             }
 
@@ -598,7 +687,7 @@ static int evalRegisterNewScript(client *c, robj *body, char **sha) {
     serverAssert(num_compiled_functions == 1);
 
     /* Try evict EVAL scripts before actually adding the script. */
-    if (!is_script_load) performScriptsEvictions();
+    if (!is_script_load) performScriptsEvictions(ctx);
 
     /* We also save a SHA1 -> Original script map in a dictionary
      * so that we can replicate / write in the AOF all the
@@ -610,13 +699,13 @@ static int evalRegisterNewScript(client *c, robj *body, char **sha) {
     sds _sha = sdsnew(*sha);
     if (!is_script_load) {
         /* Script LRU eviction only applies to EVAL, not SCRIPT LOAD. */
-        es->node = scriptsLRUAdd(_sha);
+        es->node = scriptsLRUAdd(ctx, _sha);
     }
     es->body = body;
 
-    int retval = dictAdd(evalCtx.scripts, _sha, es);
+    int retval = dictAdd(ctx->scripts, _sha, es);
     serverAssert(retval == DICT_OK);
-    scriptsMemoryAdd(sdsAllocSize(_sha) + getStringObjectSdsUsedMemory(body), !is_script_load);
+    scriptsMemoryAdd(ctx, sdsAllocSize(_sha) + getStringObjectSdsUsedMemory(body), !is_script_load);
     incrRefCount(body);
     zfree(functions);
 
@@ -626,6 +715,7 @@ static int evalRegisterNewScript(client *c, robj *body, char **sha) {
 static void evalGenericCommand(client *c, int evalsha) {
     char sha[41];
     long long numkeys;
+    struct evalCtx *ctx = evalGetCtx(c);
 
     /* Get the number of arguments that are keys */
     if (getLongLongFromObjectOrReply(c, c->argv[2], &numkeys, NULL) != C_OK) return;
@@ -644,7 +734,7 @@ static void evalGenericCommand(client *c, int evalsha) {
         evalCalcScriptHash(evalsha, objectGetVal(c->argv[1]), sha);
     }
 
-    dictEntry *entry = dictFind(evalCtx.scripts, sha);
+    dictEntry *entry = dictFind(ctx->scripts, sha);
 
     if (evalsha && entry == NULL) {
         /* Calling EVALSHA using a hash that was never added to the scripts
@@ -659,7 +749,7 @@ static void evalGenericCommand(client *c, int evalsha) {
         if (evalRegisterNewScript(c, body, &_sha) != C_OK) {
             return;
         }
-        entry = dictFind(evalCtx.scripts, sha);
+        entry = dictFind(ctx->scripts, sha);
         serverAssert(entry != NULL);
     }
 
@@ -687,8 +777,8 @@ static void evalGenericCommand(client *c, int evalsha) {
     if (es->node) {
         /* Quick removal and re-insertion after the script is called to
          * maintain the LRU list. */
-        listUnlinkNode(evalCtx.scripts_lru_list, es->node);
-        listLinkNodeTail(evalCtx.scripts_lru_list, es->node);
+        listUnlinkNode(ctx->scripts_lru_list, es->node);
+        listLinkNodeTail(ctx->scripts_lru_list, es->node);
     }
 }
 
@@ -744,6 +834,8 @@ void scriptCommand(client *c) {
             "     by the lazyfree-lazy-user-flush configuration directive. Valid modes are:",
             "    * ASYNC: Asynchronously flush the scripts cache.",
             "    * SYNC: Synchronously flush the scripts cache.",
+            "    When the 'script-cache-per-db' config is enabled, only the caller's",
+            "     currently selected database's scripts are flushed.",
             "KILL",
             "    Kill the currently executing Lua script.",
             "LOAD <script>",
@@ -765,14 +857,20 @@ void scriptCommand(client *c) {
             addReplyError(c, "SCRIPT FLUSH only support SYNC|ASYNC option");
             return;
         }
-        evalReset(async);
+        if (server.script_cache_per_db) {
+            /* Only clear the caller's own DB slot; the shared Lua engine environment
+             * is left alone (that reset stays tied to a full, all-DBs flush). */
+            evalFlushCtx(evalGetCtx(c), async, NULL);
+        } else {
+            evalReset(async);
+        }
         addReply(c, shared.ok);
     } else if (c->argc >= 2 && !strcasecmp(objectGetVal(c->argv[1]), "exists")) {
         int j;
 
         addReplyArrayLen(c, c->argc - 2);
         for (j = 2; j < c->argc; j++) {
-            if (dictFind(evalCtx.scripts, objectGetVal(c->argv[j])))
+            if (dictFind(evalGetCtx(c)->scripts, objectGetVal(c->argv[j])))
                 addReply(c, shared.cone);
             else
                 addReply(c, shared.czero);
@@ -826,7 +924,8 @@ void scriptCommand(client *c) {
         dictEntry *de;
         evalScript *es;
 
-        if (sdslen(objectGetVal(c->argv[2])) == 40 && (de = dictFind(evalCtx.scripts, objectGetVal(c->argv[2])))) {
+        if (sdslen(objectGetVal(c->argv[2])) == 40 &&
+            (de = dictFind(evalGetCtx(c)->scripts, objectGetVal(c->argv[2])))) {
             es = dictGetVal(de);
             addReplyBulk(c, es->body);
         } else {
@@ -849,22 +948,38 @@ unsigned long evalMemory(void) {
     return memory;
 }
 
-dict *evalCtxScriptsDict(void) {
-    return evalCtx.scripts;
+unsigned long evalScriptsCount(void) {
+    unsigned long count = 0;
+    for (int i = 0; i < evalCtxCount; i++) count += dictSize(evalCtxs[i].scripts);
+    return count;
 }
 
-/* Return the memory overhead used by cached scripts. */
+int evalScriptsDictCount(void) {
+    return evalCtxCount;
+}
+
+dict *evalScriptsDictAt(int index) {
+    return evalCtxs[index].scripts;
+}
+
+/* Return the memory overhead used by cached scripts, across every eval context. */
 unsigned long scriptsMemoryOverhead(void) {
-    return evalCtx.scripts_mem +
-           dictMemUsage(evalCtx.scripts) +
-           dictSize(evalCtx.scripts) * sizeof(evalScript) +
-           listLength(evalCtx.scripts_lru_list) * sizeof(listNode);
+    unsigned long mem = 0;
+    for (int i = 0; i < evalCtxCount; i++) {
+        struct evalCtx *ctx = &evalCtxs[i];
+        mem += ctx->scripts_mem + dictMemUsage(ctx->scripts) + dictSize(ctx->scripts) * sizeof(evalScript) +
+               listLength(ctx->scripts_lru_list) * sizeof(listNode);
+    }
+    return mem;
 }
 
-/* Return the memory overhead used by EVAL scripts. */
+/* Return the memory overhead used by EVAL scripts, across every eval context.
+ * Note that maxmemory-scripts is enforced per context, not against this total;
+ * see performScriptsEvictions(). */
 unsigned long evalScriptsMemoryOverhead(void) {
-    return evalCtx.eval_scripts_mem +
-           listLength(evalCtx.scripts_lru_list) * (sizeof(evalScript) + sizeof(listNode));
+    unsigned long mem = 0;
+    for (int i = 0; i < evalCtxCount; i++) mem += evalCtxScriptsMemoryOverhead(&evalCtxs[i]);
+    return mem;
 }
 
 /* Wrapper for EVAL / EVALSHA that enables debugging, and makes sure

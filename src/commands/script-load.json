@@ -10,7 +10,8 @@
         "command_flags": [
             "DENYOOM",
             "NOSCRIPT",
-            "STALE"
+            "STALE",
+            "CURRENT_DB"
         ],
         "acl_categories": [
             "SCRIPTING",

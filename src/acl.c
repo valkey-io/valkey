@@ -212,23 +212,30 @@ static int time_independent_strcmp(char *a, char *b, int len) {
     return diff; /* If zero strings are the same. */
 }
 
+/* Given a binary digest of 'len' bytes, returns its lowercase hexadecimal
+ * representation as a new SDS string. */
+static sds ACLHexDigest(const unsigned char *digest, size_t len) {
+    const char *cset = "0123456789abcdef";
+    sds hex = sdsnewlen(SDS_NOINIT, len * 2);
+
+    for (size_t j = 0; j < len; j++) {
+        hex[j * 2] = cset[((digest[j] & 0xF0) >> 4)];
+        hex[j * 2 + 1] = cset[(digest[j] & 0xF)];
+    }
+    return hex;
+}
+
 /* Given an SDS string, returns the SHA256 hex representation as a
  * new SDS string. */
 static sds ACLHashPassword(unsigned char *cleartext, size_t len) {
     SHA256_CTX ctx;
     unsigned char hash[SHA256_BLOCK_SIZE];
-    char hex[HASH_PASSWORD_LEN];
-    char *cset = "0123456789abcdef";
 
     sha256_init(&ctx);
     sha256_update(&ctx, (unsigned char *)cleartext, len);
     sha256_final(&ctx, hash);
 
-    for (int j = 0; j < SHA256_BLOCK_SIZE; j++) {
-        hex[j * 2] = cset[((hash[j] & 0xF0) >> 4)];
-        hex[j * 2 + 1] = cset[(hash[j] & 0xF)];
-    }
-    return sdsnewlen(hex, HASH_PASSWORD_LEN);
+    return ACLHexDigest(hash, SHA256_BLOCK_SIZE);
 }
 
 /* Given a hash and the hash length, returns C_OK if it is a valid password
@@ -941,6 +948,53 @@ robj *ACLDescribeUser(user *u) {
     incrRefCount(u->acl_string);
 
     return u->acl_string;
+}
+
+/* Return a fingerprint of the ACL rules currently in effect, as a new SDS
+ * string holding the hex representation of the digest. This is what ACL
+ * DIGEST replies with, so that a client can tell whether the rules a server
+ * is running are still the ones it expects without having to parse them.
+ *
+ * For every user the SHA256 of its name and its rule string is computed, and
+ * all the per user digests are combined with XOR. Two properties matter here:
+ *
+ * 1. XOR is commutative, so the result does not depend on the order the users
+ *    are visited in. They are kept in a radix tree and are therefore already
+ *    sorted, but the digest does not have to rely on that.
+ * 2. XOR also cancels out two equal values, so hashing the rules alone would
+ *    make a pair of users having the very same rules contribute nothing. The
+ *    name is hashed together with the rules to keep each user distinct.
+ *
+ * The hashed content of a user is what ACL LIST reports for it, without the
+ * leading "user " keyword. It covers the flags, the passwords, the commands,
+ * the keys and the channels, so any change to any user changes the digest. */
+static sds ACLDigest(void) {
+    unsigned char digest[SHA256_BLOCK_SIZE] = {0};
+    raxIterator ri;
+
+    raxStart(&ri, Users);
+    raxSeek(&ri, "^", NULL, 0);
+    while (raxNext(&ri)) {
+        user *u = ri.data;
+        robj *rules = ACLDescribeUser(u);
+        sds rulestr = objectGetVal(rules);
+        unsigned char userdigest[SHA256_BLOCK_SIZE];
+        SHA256_CTX ctx;
+
+        /* Usernames can't contain spaces, so the separator makes the pair of
+         * name and rules unambiguous. */
+        sha256_init(&ctx);
+        sha256_update(&ctx, (unsigned char *)u->name, sdslen(u->name));
+        sha256_update(&ctx, (unsigned char *)" ", 1);
+        sha256_update(&ctx, (unsigned char *)rulestr, sdslen(rulestr));
+        sha256_final(&ctx, userdigest);
+        decrRefCount(rules);
+
+        for (int j = 0; j < SHA256_BLOCK_SIZE; j++) digest[j] ^= userdigest[j];
+    }
+    raxStop(&ri);
+
+    return ACLHexDigest(digest, SHA256_BLOCK_SIZE);
 }
 
 /* Get a command from the original command table, that is not affected
@@ -3105,6 +3159,7 @@ static int aclAddReplySelectorDescription(client *c, aclSelector *s) {
  * ACL SAVE
  * ACL LIST
  * ACL USERS
+ * ACL DIGEST
  * ACL CAT [<category>]
  * ACL SETUSER <username> ... acl rules ...
  * ACL DELUSER <username> [...]
@@ -3236,6 +3291,8 @@ void aclCommand(client *c) {
             }
         }
         raxStop(&ri);
+    } else if (!strcasecmp(sub, "digest") && c->argc == 2) {
+        addReplyBulkSds(c, ACLDigest());
     } else if (!strcasecmp(sub, "whoami") && c->argc == 2) {
         if (c->user != NULL) {
             addReplyBulkCBuffer(c, c->user->name, sdslen(c->user->name));
@@ -3406,6 +3463,8 @@ void aclCommand(client *c) {
             "    when no category is specified.",
             "DELUSER <username> [<username> ...]",
             "    Delete a list of users.",
+            "DIGEST",
+            "    Return a fingerprint of the rules currently in effect.",
             "DRYRUN <username> <command> [<arg> ...]",
             "    Returns whether the user can execute the given command without executing the command.",
             "GETUSER <username>",

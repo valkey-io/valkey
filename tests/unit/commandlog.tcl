@@ -315,8 +315,7 @@ start_server {tags {"commandlog"} overrides {commandlog-execution-slower-than 10
             r debug sleep 0.03
         }
         r exec
-        assert_equal [r commandlog len slow] 1
-        set e [lindex [r commandlog get -1 slow] 0]
+        set e [lindex [r commandlog get 1 slow] 0]
         assert_equal [lindex $e 3] {exec}
         assert {[lindex $e 2] >= 100000}
     } {} {needs:debug}

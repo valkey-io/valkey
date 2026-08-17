@@ -1494,7 +1494,7 @@ struct client *createAOFClient(void) {
     c->id = CLIENT_ID_AOF; /* So modules can identify it's the AOF client. */
 
     /* The AOF client is not subject to ACL checks because all commands present
-       in the AOF file must be replayed. */
+     * in the AOF file must be replayed. */
     c->user = NULL;
 
     /*

@@ -44,6 +44,7 @@ extern "C" {
 #define protected protected_                     /* Avoid conflict with C++ 'protected' keyword */
 
 #include "ae.h"
+#include "compression.h"
 #include "server.h"
 #include "stat_calc.h"
 #include "throttle.h"
@@ -68,6 +69,7 @@ size_t __wrap_getClientOutputBufferMemoryUsage(client *c);
 int __wrap_getMaxmemoryState(size_t *total, size_t *logical, size_t *tofree, float *level);
 void __wrap_queueClientForReprocessing(client *c);
 int __wrap_freeClient(client *c);
+ssize_t __wrap_streamDecompressorFeed(streamDecompressor *decompressor, uint8_t *output, size_t output_capacity, const uint8_t *input, size_t input_len, size_t *input_consumed);
 void __wrap_zmadvise_dontneed(void *ptr, size_t size_hint);
 
 /* Throttler mocks */

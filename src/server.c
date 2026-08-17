@@ -2456,6 +2456,8 @@ void initServerConfig(void) {
     server.rdb_client_id = -1;
     server.loading_process_events_interval_ms = LOADING_PROCESS_EVENTS_INTERVAL_DEFAULT;
     server.loading_rio = NULL;
+    server.repl_full_sync_start_time = 0;
+    server.repl_full_sync_complete_duration_ms = -1;
 
     /* Replication partial resync backlog */
     server.repl_backlog = NULL;
@@ -6659,6 +6661,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                     "master_port:%d\r\n", server.primary_port,
                     "master_link_status:%s\r\n", (server.repl_state == REPL_STATE_CONNECTED) ? "up" : "down",
                     "master_last_io_seconds_ago:%d\r\n", server.primary ? ((int)(server.unixtime - server.primary->last_interaction)) : -1,
+                    "last_successful_sync_duration_ms:%lld\r\n", server.repl_full_sync_complete_duration_ms,
                     "master_sync_in_progress:%d\r\n", server.repl_state == REPL_STATE_TRANSFER,
                     "slave_read_repl_offset:%lld\r\n", replica_read_repl_offset,
                     "slave_repl_offset:%lld\r\n", replica_repl_offset,

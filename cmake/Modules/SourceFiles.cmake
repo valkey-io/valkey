@@ -124,6 +124,9 @@ set(VALKEY_SERVER_SRCS
     ${CMAKE_SOURCE_DIR}/src/fifo.c
     ${CMAKE_SOURCE_DIR}/src/mutexqueue.c
     ${CMAKE_SOURCE_DIR}/src/queues.c
+    ${CMAKE_SOURCE_DIR}/src/compression.c
+    ${CMAKE_SOURCE_DIR}/src/compression_lz4.c
+    ${CMAKE_SOURCE_DIR}/src/compression_stream.c
     ${CMAKE_SOURCE_DIR}/src/throttle_token_bucket.c
     ${CMAKE_SOURCE_DIR}/src/stat_calc.c
     ${CMAKE_SOURCE_DIR}/src/throttle_repl.c

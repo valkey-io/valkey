@@ -2283,10 +2283,11 @@ struct valkeyServer {
                                                               there is at least an uncovered slot.*/
     int cluster_replica_no_failover;                       /* Prevent replica from starting a failover
                                                             if the primary is in failure state. */
-    int cluster_replica_no_failover_offset_zero;           /* Prevent a replica with a replication offset
-                                                            * of 0 (e.g. it has never completed a sync with
-                                                            * its primary) from starting an automatic failover,
-                                                            * which would result in the loss of all shard data. */
+    int cluster_replica_failover_require_data;             /* Refuse to start an automatic failover when the
+                                                            * replica has no data yet (e.g. its replication
+                                                            * offset is 0 because it has never completed a
+                                                            * sync with its primary), which would otherwise
+                                                            * result in the loss of all shard data. */
     char *cluster_announce_ip;                             /* IP address to announce on cluster bus. */
     char *cluster_announce_client_ipv4;                    /* IPv4 for clients, to announce on cluster bus. */
     char *cluster_announce_client_ipv6;                    /* IPv6 for clients, to announce on cluster bus. */

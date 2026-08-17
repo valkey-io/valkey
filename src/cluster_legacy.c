@@ -5724,9 +5724,9 @@ void clusterLogCantFailover(int reason) {
     case CLUSTER_CANT_FAILOVER_WAITING_DELAY: msg = "Waiting the delay before I can start a new failover."; break;
     case CLUSTER_CANT_FAILOVER_EXPIRED: msg = "Failover attempt expired."; break;
     case CLUSTER_CANT_FAILOVER_WAITING_VOTES: msg = "Waiting for votes, but majority still not reached."; break;
-    case CLUSTER_CANT_FAILOVER_OFFSET_ZERO:
+    case CLUSTER_CANT_FAILOVER_NO_DATA:
         msg = "Replication offset is 0 and no data has been received from the primary. "
-              "Please check the 'cluster-replica-no-failover-offset-zero' configuration option.";
+              "Please check the 'cluster-replica-failover-require-data' configuration option.";
         break;
     default: serverPanic("Unknown cant failover reason code.");
     }
@@ -5865,14 +5865,16 @@ void clusterHandleReplicaFailover(void) {
         }
     }
 
-    /* Refuse to start an automatic failover if our replication offset is 0,
-     * when configured to do so. Such a replica has never received any data
-     * from its primary (e.g. it was just added and hasn't finished the initial
-     * sync), so promoting it would lose all the shard data. Manual failovers,
-     * being an explicit user action, are allowed. */
-    if (server.cluster_replica_no_failover_offset_zero && !manual_failover &&
+    /* Refuse to start an automatic failover if we have no data yet, when
+     * configured to do so. Such a replica has never received any data from
+     * its primary (e.g. it was just added and hasn't finished the initial
+     * sync, so its replication offset is 0), so promoting it would lose all
+     * the shard data.
+     *
+     * Check bypassed for manual failovers. */
+    if (server.cluster_replica_failover_require_data && !manual_failover &&
         replicationGetReplicaOffset() == 0) {
-        clusterLogCantFailover(CLUSTER_CANT_FAILOVER_OFFSET_ZERO);
+        clusterLogCantFailover(CLUSTER_CANT_FAILOVER_NO_DATA);
         return;
     }
 

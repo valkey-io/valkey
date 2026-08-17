@@ -208,6 +208,12 @@ proc cluster_allocate_replicas {masters replicas} {
     }
 }
 
+# Replica allocator that does not attach any replica to a primary. Pass it as
+# the replica_allocator argument of start_cluster when a test needs the extra
+# nodes to stay unassigned at setup time, e.g. to add them later as replicas
+# with a particular replication configuration.
+proc no_replica_allocation {primaries replicas} {}
+
 # Setup method to be executed to configure the cluster before the
 # tests run.
 proc cluster_setup {masters replicas node_count slot_allocator replica_allocator options} {

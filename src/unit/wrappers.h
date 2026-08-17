@@ -44,6 +44,7 @@ extern "C" {
 #define protected protected_                     /* Avoid conflict with C++ 'protected' keyword */
 
 #include "ae.h"
+#include "compression.h"
 #include "server.h"
 
 /**
@@ -60,6 +61,7 @@ extern "C" {
  *       Example: serverLog(int level, const char *fmt, ...) should NOT be mocked.
  */
 long long __wrap_aeCreateTimeEvent(aeEventLoop *eventLoop, long long milliseconds, aeTimeProc *proc, void *clientData, aeEventFinalizerProc *finalizerProc);
+ssize_t __wrap_streamDecompressorFeed(streamDecompressor *decompressor, uint8_t *output, size_t output_capacity, const uint8_t *input, size_t input_len, size_t *input_consumed);
 void __wrap_zmadvise_dontneed(void *ptr, size_t size_hint);
 #undef protected
 #undef _Bool

@@ -951,23 +951,11 @@ robj *ACLDescribeUser(user *u) {
 }
 
 /* Return a fingerprint of the ACL rules currently in effect, as a new SDS
- * string holding the hex representation of the digest. This is what ACL
- * DIGEST replies with, so that a client can tell whether the rules a server
- * is running are still the ones it expects without having to parse them.
+ * string holding the hex representation of the digest.
  *
- * For every user the SHA256 of its name and its rule string is computed, and
- * all the per user digests are combined with XOR. Two properties matter here:
- *
- * 1. XOR is commutative, so the result does not depend on the order the users
- *    are visited in. They are kept in a radix tree and are therefore already
- *    sorted, but the digest does not have to rely on that.
- * 2. XOR also cancels out two equal values, so hashing the rules alone would
- *    make a pair of users having the very same rules contribute nothing. The
- *    name is hashed together with the rules to keep each user distinct.
- *
- * The hashed content of a user is what ACL LIST reports for it, without the
- * leading "user " keyword. It covers the flags, the passwords, the commands,
- * the keys and the channels, so any change to any user changes the digest. */
+ * The digest is the XOR-combined SHA256("username rules") for all users. The
+ * username is part of what is hashed because XOR cancels out two equal values,
+ * which would otherwise drop a pair of users having the same rules. */
 static sds ACLDigest(void) {
     unsigned char digest[SHA256_BLOCK_SIZE] = {0};
     raxIterator ri;

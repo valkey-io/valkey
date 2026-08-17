@@ -183,9 +183,9 @@ configEnum rdb_compression_enum[] = {{"no", RDB_COMPRESSION_NO},
                                      {NULL, 0}};
 
 configEnum cluster_replica_no_failover_enum[] = {{"no", CLUSTER_REPLICA_NO_FAILOVER_NO},
-                                                {"yes", CLUSTER_REPLICA_NO_FAILOVER_YES},
-                                                {"no-data", CLUSTER_REPLICA_NO_FAILOVER_NO_DATA},
-                                                {NULL, 0}};
+                                                 {"yes", CLUSTER_REPLICA_NO_FAILOVER_YES},
+                                                 {"no-data", CLUSTER_REPLICA_NO_FAILOVER_NO_DATA},
+                                                 {NULL, 0}};
 
 /* Output buffer limits presets. */
 clientBufferLimitsConfig clientBufferLimitsDefaults[CLIENT_TYPE_OBUF_COUNT] = {

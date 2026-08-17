@@ -46,19 +46,15 @@ proc test_zero_offset_replica {sync_type} {
         # replica of R0).
         R 3 cluster replicate [R 0 CLUSTER MYID]
         wait_for_condition 1000 50 {
-            # Replica's own view: it sees itself as a replica of R0.
             [cluster_has_flag [cluster_get_node_by_id 3 $R3_nodeid] slave] eq 1 &&
             [dict get [cluster_get_node_by_id 3 $R3_nodeid] slaveof] eq $R0_nodeid &&
 
-            # Primary 0's view: it recognizes R3 as its replica.
             [cluster_has_flag [cluster_get_node_by_id 0 $R3_nodeid] slave] eq 1 &&
             [dict get [cluster_get_node_by_id 0 $R3_nodeid] slaveof] eq $R0_nodeid &&
 
-            # Primary 1's view: it agrees R3 is a replica of R0.
             [cluster_has_flag [cluster_get_node_by_id 1 $R3_nodeid] slave] eq 1 &&
             [dict get [cluster_get_node_by_id 1 $R3_nodeid] slaveof] eq $R0_nodeid &&
 
-            # Primary 2's view: it agrees R3 is a replica of R0.
             [cluster_has_flag [cluster_get_node_by_id 2 $R3_nodeid] slave] eq 1 &&
             [dict get [cluster_get_node_by_id 2 $R3_nodeid] slaveof] eq $R0_nodeid
         } else {

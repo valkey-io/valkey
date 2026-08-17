@@ -721,6 +721,75 @@ start_server {tags {"scripting"}} {
         }
     }
 
+    start_server {tags {"scripting external:skip singledb:skip"} overrides {script-cache-per-db yes}} {
+        ;# The test suite's connections default to DB 9; use it plus DB 10 here and
+        ;# always land back on DB 9 so later tests see the expected connection state.
+        test {SCRIPT LOAD/EVALSHA cache is isolated per DB when script-cache-per-db is enabled} {
+            r select 9
+            set sha [r script load "return 'hello'"]
+            r select 10
+            assert_error {NOSCRIPT*} {r evalsha $sha 0}
+            r select 9
+        }
+
+        test {Same script body loaded independently on two DBs gets its own cache entry each} {
+            r select 9
+            set sha [r script load "return 'hello'"]
+            r select 10
+            r script load "return 'hello'"
+            assert_equal {hello} [r evalsha $sha 0]
+            r select 9
+            assert_equal {hello} [r evalsha $sha 0]
+        }
+
+        test {SCRIPT FLUSH only clears the caller's current DB when script-cache-per-db is enabled} {
+            r select 9
+            set sha [r script load "return 'hello'"]
+            r select 10
+            r script load "return 'hello'"
+            r select 9
+            r script flush sync
+            assert_error {NOSCRIPT*} {r evalsha $sha 0}
+            r select 10
+            assert_equal {hello} [r evalsha $sha 0]
+            r script flush sync
+            r select 9
+        }
+
+        test {number_of_cached_scripts reflects the sum across every DB, plus a per-DB breakdown} {
+            r select 9
+            r script flush sync
+            r select 10
+            r script flush sync
+            r select 9
+            r script load "return 1"
+            r select 10
+            r script load "return 1"
+            r script load "return 2"
+            set info [r info Memory]
+            assert_match "*number_of_cached_scripts:3*" $info
+            assert_match "*db9_cached_scripts:1*" $info
+            assert_match "*db10_cached_scripts:2*" $info
+            r script flush sync
+            r select 9
+            r script flush sync
+        }
+    }
+
+    test {INFO Memory has no per-DB script breakdown when script-cache-per-db is disabled} {
+        r select 9
+        r script load "return 1"
+        assert_no_match "*db*_cached_scripts:*" [r info Memory]
+    } undefined {singledb:skip}
+
+    test {SCRIPT LOAD/EVALSHA cache stays global when script-cache-per-db is disabled} {
+        r select 9
+        set sha [r script load "return 'hello'"]
+        r select 10
+        assert_equal {hello} [r evalsha $sha 0]
+        r select 9
+    } undefined {singledb:skip}
+
     test {SCRIPTING FLUSH ASYNC} {
         r script flush sync
         for {set j 0} {$j < 100} {incr j} {

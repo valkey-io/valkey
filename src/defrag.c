@@ -959,7 +959,10 @@ static doneStatus defragLuaScripts(monotime endtime, void *target, void *privdat
     /* In case we are in the process of eval some script we do not want to replace the script being run
      * so we just bail out without really defragging here. */
     if (scriptIsRunning()) return DEFRAG_DONE;
-    activeDefragSdsDict(evalScriptsDict(), DEFRAG_SDS_DICT_VAL_LUA_SCRIPT);
+    int count = evalScriptsDictCount();
+    for (int i = 0; i < count; i++) {
+        activeDefragSdsDict(evalScriptsDictAt(i), DEFRAG_SDS_DICT_VAL_LUA_SCRIPT);
+    }
     return DEFRAG_DONE;
 }
 

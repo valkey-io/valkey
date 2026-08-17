@@ -12,6 +12,8 @@
             "STALE"
         ],
         "acl_categories": [
+            "KEYSPACE",
+            "READ",
             "SCRIPTING",
             "SLOW"
         ],

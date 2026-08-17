@@ -51,6 +51,10 @@
                     "send-buffer-used": {
                         "description": "Size of the portion of the link's send buffer that is currently holding data(messages).",
                         "type": "integer"
+                    },
+                    "qos": {
+                        "description": "Quality of service priority level of the link connection.",
+                        "type": "string"
                     }
                 },
                 "additionalProperties": false

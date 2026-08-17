@@ -17,9 +17,9 @@
 #define _Static_assert static_assert
 extern "C" {
 #include "ae.h"
-#include "monotonic.h"
 #include "connection.h"
 #include "io_threads.h"
+#include "monotonic.h"
 #include "server.h"
 }
 #undef _Static_assert
@@ -204,7 +204,7 @@ TEST_P(SocketPrioritizationConnTest, DynamicPriorityUpdateOnActiveConnection) {
     EXPECT_EQ(aeGetFileEvents(server.el->hp_event_loop, read_fd) & AE_READABLE, 0);
 
     /* Dynamically upgrade connection to high priority */
-    connUpgradePriority(conn, CONN_PRIORITY_HIGH);
+    EXPECT_EQ(connSetPriority(conn, CONN_PRIORITY_HIGH), C_OK);
     EXPECT_EQ(connGetPriority(conn), CONN_PRIORITY_HIGH);
     int events = aeGetFileEvents(server.el, read_fd);
     EXPECT_NE(events & AE_READABLE, 0);
@@ -212,7 +212,7 @@ TEST_P(SocketPrioritizationConnTest, DynamicPriorityUpdateOnActiveConnection) {
     EXPECT_NE(aeGetFileEvents(server.el->hp_event_loop, read_fd) & AE_READABLE, 0);
 
     /* Dynamically downgrade connection back to normal priority */
-    connUpgradePriority(conn, CONN_PRIORITY_NORMAL);
+    EXPECT_EQ(connSetPriority(conn, CONN_PRIORITY_NORMAL), C_OK);
     EXPECT_EQ(connGetPriority(conn), CONN_PRIORITY_NORMAL);
     EXPECT_NE(aeGetFileEvents(server.el, read_fd) & AE_READABLE, 0);
     EXPECT_EQ(aeGetFileEvents(server.el->hp_event_loop, read_fd) & AE_READABLE, 0);
@@ -394,7 +394,7 @@ TEST_F(SocketPrioritizationTest, MultiIterationPreemptionCheckMask) {
     aeProcessEvents(server.el, AE_FILE_EVENTS | AE_DONT_WAIT);
 
     ASSERT_EQ(g_execution_count, 7);
-    /* At iteration 0 (j = 0), hp_event_loop preempted */
+    /* At start (pre-loop), hp_event_loop processed */
     EXPECT_EQ(g_execution_order[0], 999);
     EXPECT_NE(g_execution_order[1], 999);
     EXPECT_NE(g_execution_order[2], 999);
@@ -526,6 +526,99 @@ TEST_F(SocketPrioritizationTest, LevelTriggeredBatchProcessingAndStarvationPreve
         close(pipes[i][0]);
         close(pipes[i][1]);
     }
+}
+
+TEST_F(SocketPrioritizationTest, DualEventLoopResize) {
+    ASSERT_NE(server.el, (aeEventLoop *)NULL);
+    ASSERT_NE(server.el->hp_event_loop, (aeEventLoop *)NULL);
+    EXPECT_EQ(aeGetSetSize(server.el), 1024);
+    EXPECT_EQ(aeGetSetSize(server.el->hp_event_loop), 1024);
+
+    int ret = aeResizeSetSize(server.el, 2048);
+    EXPECT_EQ(ret, AE_OK);
+    EXPECT_EQ(aeGetSetSize(server.el), 2048);
+    EXPECT_EQ(aeGetSetSize(server.el->hp_event_loop), 2048);
+}
+
+TEST_F(SocketPrioritizationTest, FallbackMaskSanitization) {
+    aeEventLoop *standalone_el = aeCreateEventLoop(64);
+    ASSERT_NE(standalone_el, (aeEventLoop *)NULL);
+    EXPECT_EQ(standalone_el->hp_event_loop, (aeEventLoop *)NULL);
+
+    int fds[2];
+    ASSERT_EQ(pipe(fds), 0);
+
+    /* Register with AE_HIGH_PRIORITY on standalone event loop with no hp_event_loop */
+    int ret = aeCreateFileEvent(standalone_el, fds[0], AE_READABLE | AE_HIGH_PRIORITY, testNormalEventCallback, NULL);
+    EXPECT_EQ(ret, AE_OK);
+
+    /* Mask should only have AE_READABLE, and NOT retain AE_HIGH_PRIORITY (0x8) */
+    int events = aeGetFileEvents(standalone_el, fds[0]);
+    EXPECT_EQ(events, AE_READABLE);
+
+    /* Delete the readable event */
+    aeDeleteFileEvent(standalone_el, fds[0], AE_READABLE);
+    EXPECT_EQ(aeGetFileEvents(standalone_el, fds[0]), AE_NONE);
+
+    close(fds[0]);
+    close(fds[1]);
+    aeDeleteEventLoop(standalone_el);
+}
+
+TEST_F(SocketPrioritizationTest, PostponedStateDynamicPriorityUpdate) {
+    ConnectionType *ct = connectionByType(CONN_TYPE_SOCKET);
+    ASSERT_NE(ct, (ConnectionType *)NULL);
+
+    int fds[2];
+    ASSERT_EQ(pipe(fds), 0);
+
+    connection *conn = connCreate(ct);
+    ASSERT_NE(conn, (connection *)NULL);
+    conn->fd = fds[0];
+
+    int ret = connSetReadHandler(conn, dummyConnectionHandler);
+    EXPECT_EQ(ret, C_OK);
+    EXPECT_EQ(connGetPriority(conn), CONN_PRIORITY_NORMAL);
+
+    /* Set postponed state (e.g. while offloaded to IO threads) */
+    conn->flags |= CONN_FLAG_POSTPONE_UPDATE_STATE;
+
+    /* Upgrading priority while postponed must update priority field but defer event loop migration */
+    ret = connSetPriority(conn, CONN_PRIORITY_HIGH);
+    EXPECT_EQ(ret, C_OK);
+    EXPECT_EQ(connGetPriority(conn), CONN_PRIORITY_HIGH);
+
+    conn->flags &= ~CONN_FLAG_POSTPONE_UPDATE_STATE;
+    conn->state = CONN_STATE_NONE;
+    connClose(conn);
+    close(fds[1]);
+}
+
+TEST_F(SocketPrioritizationTest, WriteBarrierPreservation) {
+    ConnectionType *ct = connectionByType(CONN_TYPE_SOCKET);
+    ASSERT_NE(ct, (ConnectionType *)NULL);
+
+    int fds[2];
+    ASSERT_EQ(pipe(fds), 0);
+
+    connection *conn = connCreate(ct);
+    ASSERT_NE(conn, (connection *)NULL);
+    conn->fd = fds[0];
+
+    int ret = connSetWriteHandlerWithBarrier(conn, dummyConnectionHandler, 1);
+    EXPECT_EQ(ret, C_OK);
+
+    int events = aeGetFileEvents(server.el, fds[0]);
+    EXPECT_NE(events & AE_WRITABLE, 0);
+
+    /* Upgrade priority: verify migration succeeds with barrier */
+    ret = connSetPriority(conn, CONN_PRIORITY_HIGH);
+    EXPECT_EQ(ret, C_OK);
+    EXPECT_EQ(connGetPriority(conn), CONN_PRIORITY_HIGH);
+
+    conn->state = CONN_STATE_NONE;
+    connClose(conn);
+    close(fds[1]);
 }
 
 INSTANTIATE_TEST_SUITE_P(

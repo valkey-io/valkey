@@ -4,6 +4,7 @@ SERVER_AR ?= $(AR)
 -include ../.make-settings
 OPT=-Og -g
 uname_S := $(shell sh -c 'uname -s 2>/dev/null || echo not')
+PKG_CONFIG ?= pkg-config
 
 # Add -m32 for 32bit builds
 ifeq ($(findstring -m32,$(CFLAGS)),-m32)
@@ -113,6 +114,53 @@ ifeq ($(strip $(GTEST_LIBS)),)
     $(error googletest not found. Install gtest or set GTEST_CFLAGS/GTEST_LIBS explicitly)
 endif
 
+ZSTD_CFLAGS ?= $(shell $(PKG_CONFIG) --cflags libzstd 2>/dev/null)
+ZSTD_LIBS ?=
+BUILD_ZSTD ?= auto
+ZSTD_PKGCONFIG_LIBDIR := $(shell $(PKG_CONFIG) --variable=libdir libzstd 2>/dev/null)
+ZSTD_PKGCONFIG_PCFILEDIR := $(shell $(PKG_CONFIG) --variable=pcfiledir libzstd 2>/dev/null)
+# Debian and Ubuntu ship libzstd.pc with libdir=/usr/lib while installing the
+# archive to the multiarch directory, so also probe next to the .pc file.
+ZSTD_STATIC_ARCHIVE := $(firstword $(wildcard \
+    $(if $(ZSTD_PKGCONFIG_LIBDIR),$(ZSTD_PKGCONFIG_LIBDIR)/libzstd.a) \
+    $(if $(ZSTD_PKGCONFIG_PCFILEDIR),$(abspath $(ZSTD_PKGCONFIG_PCFILEDIR)/..)/libzstd.a)))
+ifeq ($(origin BUILD_WITH_ZSTD),undefined)
+BUILD_WITH_ZSTD=no
+ifneq ($(filter $(BUILD_ZSTD),yes no auto),$(BUILD_ZSTD))
+$(error BUILD_ZSTD must be yes, no, or auto)
+endif
+ZSTD_PKGCONFIG := $(shell $(PKG_CONFIG) --atleast-version=1.4.7 libzstd >/dev/null 2>&1 && test -n "$(ZSTD_STATIC_ARCHIVE)" && echo $$?)
+ifeq ($(BUILD_ZSTD),yes)
+	BUILD_WITH_ZSTD=yes
+else ifeq ($(BUILD_ZSTD),auto)
+ifeq ($(ZSTD_PKGCONFIG),0)
+	BUILD_WITH_ZSTD=yes
+endif
+ifneq ($(strip $(ZSTD_LIBS)),)
+	BUILD_WITH_ZSTD=yes
+endif
+endif
+else
+ZSTD_PKGCONFIG := $(shell $(PKG_CONFIG) --atleast-version=1.4.7 libzstd >/dev/null 2>&1 && test -n "$(ZSTD_STATIC_ARCHIVE)" && echo $$?)
+endif
+
+ZSTD_LD_LIBS :=
+ifeq ($(BUILD_WITH_ZSTD),yes)
+ifeq ($(ZSTD_PKGCONFIG),0)
+ifeq ($(strip $(ZSTD_CFLAGS)),)
+	ZSTD_CFLAGS := $(shell $(PKG_CONFIG) --cflags libzstd 2>/dev/null)
+endif
+ifeq ($(strip $(ZSTD_LIBS)),)
+	ZSTD_LIBS := $(ZSTD_STATIC_ARCHIVE) $(filter-out -lzstd,$(shell $(PKG_CONFIG) --libs --static libzstd 2>/dev/null))
+endif
+endif
+ifeq ($(strip $(ZSTD_LIBS)),)
+$(error Static Zstandard 1.4.7 or newer not found. Install the static libzstd archive or set ZSTD_CFLAGS and ZSTD_LIBS to a static build)
+endif
+TEST_CFLAGS += -DHAVE_ZSTD $(ZSTD_CFLAGS)
+ZSTD_LD_LIBS := $(ZSTD_LIBS)
+endif
+
 # On Darwin (macOS), the linker does not support -Wl,--wrap,
 # so we manually define __wrap_* and __real_* for each function in wrappers.h.
 # by copying all object files into the wrapped/ folder and applying symbol redefinitions.
@@ -182,7 +230,8 @@ LD_LIBS := $(HIREDIS_LIB) \
 	$(GTEST_LIBS) \
 	$(HDR_HISTOGRAM_LIB) \
 	$(FPCONV_LIB) \
-	$(LZ4_LIB)
+	$(LZ4_LIB) \
+	$(ZSTD_LD_LIBS)
 
 # Add libbacktrace support if enabled
 ifeq ($(USE_LIBBACKTRACE),yes)

@@ -180,6 +180,9 @@ configEnum rdb_compression_enum[] = {{"no", RDB_COMPRESSION_NO},
                                      {"yes", RDB_COMPRESSION_YES},
                                      {"lzf", RDB_COMPRESSION_LZF},
                                      {"lz4", RDB_COMPRESSION_LZ4},
+#ifdef HAVE_ZSTD
+                                     {"zstd", RDB_COMPRESSION_ZSTD},
+#endif
                                      {NULL, 0}};
 
 /* Output buffer limits presets. */

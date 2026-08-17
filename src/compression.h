@@ -17,6 +17,7 @@ typedef enum {
     ALGO_NONE = 0,
     ALGO_LZF = 1, /* Per-string LZF inside the RDB payload (legacy). */
     ALGO_LZ4 = 2,
+    ALGO_ZSTD = 3,
 } compressionAlgo;
 
 typedef enum {

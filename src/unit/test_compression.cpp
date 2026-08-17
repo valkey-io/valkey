@@ -147,6 +147,41 @@ static ssize_t decompressAll(streamDecompressor *decompressor,
  * Streaming compression/decompression tests
  * =================================================================== */
 
+TEST(CompressionTest, zstdStreamCompressorDecompressorRoundTrip) {
+#ifndef HAVE_ZSTD
+    GTEST_SKIP() << "Zstandard support is not compiled in";
+#else
+    const char input[] = "Hello, Valkey Zstandard compression. This is a streaming test payload.";
+    const size_t input_len = sizeof(input) - 1;
+
+    streamCompressor compressor;
+    ASSERT_EQ(streamCompressorInit(&compressor, ALGO_ZSTD, 3, true), C_OK);
+    size_t bound = streamCompressorOutputBound(&compressor, input_len);
+    ASSERT_GT(bound, 0u);
+
+    uint8_t *compressed = (uint8_t *)zmalloc(bound);
+    ssize_t compressed_len = streamCompressorFeed(&compressor, compressed, bound,
+                                                  (const uint8_t *)input, input_len,
+                                                  COMPRESS_FLUSH_END);
+    ASSERT_GT(compressed_len, 0);
+    streamCompressorFree(&compressor);
+
+    streamDecompressor decompressor;
+    ASSERT_EQ(streamDecompressorInit(&decompressor, ALGO_ZSTD, false), C_OK);
+    uint8_t decompressed[sizeof(input)] = {0};
+    size_t input_consumed = 0;
+    ssize_t decompressed_len = streamDecompressorFeed(&decompressor, decompressed,
+                                                      sizeof(decompressed), compressed,
+                                                      (size_t)compressed_len, &input_consumed);
+    ASSERT_EQ(decompressed_len, (ssize_t)input_len);
+    EXPECT_EQ(input_consumed, (size_t)compressed_len);
+    EXPECT_EQ(memcmp(decompressed, input, input_len), 0);
+
+    streamDecompressorFree(&decompressor);
+    zfree(compressed);
+#endif
+}
+
 TEST(CompressionTest, streamCompressorOutputBound) {
     const size_t input_sizes[] = {0, 1, 1024, 64 * 1024};
     const compressFlushMode flush_modes[] = {
@@ -845,6 +880,30 @@ TEST(CompressionTest, streamWriterRejectsUnsupportedAlgorithms) {
         streamWriterFree(&writer);
     }
 
+#ifndef HAVE_ZSTD
+    streamWriter zstd_writer;
+    EXPECT_EQ(streamWriterInit(&zstd_writer, ALGO_ZSTD, true, emitToDynamicBuf, &db), C_ERR);
+    streamWriterFree(&zstd_writer);
+
+    const uint8_t zstd_envelope[VCS_ENVELOPE_SIZE] = {
+        VCS_MAGIC_0,
+        VCS_MAGIC_1,
+        VCS_MAGIC_2,
+        VCS_VERSION,
+        VCS_CODEC_ZSTD,
+        0,
+        VCS_STREAM_RDB,
+    };
+    MemReader source = {};
+    source.data = zstd_envelope;
+    source.len = sizeof(zstd_envelope);
+    streamReaderConfig cfg = makeReaderConfig(false, STREAM_READER_BUFFER_SIZE_MIN, false);
+    streamReader reader;
+    EXPECT_EQ(streamReaderInit(&reader, &cfg, memReaderRead, &source, NULL), C_ERR);
+    EXPECT_EQ(reader.error_kind, STREAM_READER_ERROR_INCOMPATIBLE);
+    streamReaderFree(&reader);
+#endif
+
     dynamicBufFree(&db);
 }
 
@@ -902,6 +961,159 @@ TEST(CompressionTest, streamWriterSinkFailuresAreSticky) {
     ASSERT_EQ(emitter.calls, calls_after_failure) << "a failed finish must remain failed";
     streamWriterFree(&writer);
 }
+
+TEST(CompressionTest, zstdStreamWriterRoundTrip) {
+#ifndef HAVE_ZSTD
+    GTEST_SKIP() << "Zstandard support is not compiled in";
+#else
+    const size_t payload_len = (1024 * 1024) + 4096;
+    uint8_t *payload = (uint8_t *)zmalloc(payload_len);
+    for (size_t i = 0; i < payload_len; i++) {
+        payload[i] = (uint8_t)((i * 37 + 19) % 251);
+    }
+    DynamicBuf db;
+    dynamicBufInit(&db);
+
+    streamWriter writer;
+    ASSERT_EQ(streamWriterInit(&writer, ALGO_ZSTD, true, emitToDynamicBuf, &db), C_OK);
+    ASSERT_EQ(streamWriterWrite(&writer, payload, 31), C_OK);
+    ASSERT_EQ(streamWriterWrite(&writer, payload + 31, payload_len - 31), C_OK);
+    ASSERT_EQ(streamWriterFinish(&writer), C_OK);
+    streamWriterFree(&writer);
+
+    ASSERT_GT(sdslen((const char *)db.data), (size_t)VCS_ENVELOPE_SIZE);
+    EXPECT_EQ(db.data[VCS_OFFSET_CODEC], VCS_CODEC_ZSTD);
+
+    MemReader source = {};
+    source.data = db.data;
+    source.len = sdslen((const char *)db.data);
+    source.max_chunk = 4096;
+    streamReaderConfig cfg = makeReaderConfig(false, STREAM_READER_BUFFER_SIZE_MIN, false);
+    streamReader reader;
+    compressionAlgo detected_algo = ALGO_NONE;
+    ASSERT_EQ(streamReaderInit(&reader, &cfg, memReaderRead, &source, &detected_algo), C_OK);
+    ASSERT_EQ(detected_algo, ALGO_ZSTD);
+
+    uint8_t *output = (uint8_t *)zmalloc(payload_len);
+    size_t total = 0;
+    while (total < payload_len) {
+        size_t read_len = payload_len - total;
+        if (read_len > 4093) read_len = 4093;
+        ssize_t nread = streamReaderRead(&reader, output + total, read_len);
+        if (nread <= 0) {
+            ADD_FAILURE() << "zstd stream reader should keep making progress";
+            break;
+        }
+        total += (size_t)nread;
+    }
+    EXPECT_EQ(total, payload_len);
+    if (total == payload_len) {
+        EXPECT_EQ(memcmp(output, payload, payload_len), 0);
+    }
+    EXPECT_EQ(streamReaderRead(&reader, output, 1), 0);
+    ASSERT_EQ(streamReaderFinish(&reader), C_OK);
+
+    zfree(output);
+    zfree(payload);
+    streamReaderFree(&reader);
+    dynamicBufFree(&db);
+#endif
+}
+
+TEST(CompressionTest, zstdEmptyStreamRoundTrip) {
+#ifndef HAVE_ZSTD
+    GTEST_SKIP() << "Zstandard support is not compiled in";
+#else
+    DynamicBuf db;
+    dynamicBufInit(&db);
+    streamWriter writer;
+    ASSERT_EQ(streamWriterInit(&writer, ALGO_ZSTD, true, emitToDynamicBuf, &db), C_OK);
+    ASSERT_EQ(streamWriterFinish(&writer), C_OK);
+    streamWriterFree(&writer);
+
+    MemReader source = {};
+    source.data = db.data;
+    source.len = sdslen((const char *)db.data);
+    source.max_chunk = 1;
+    streamReaderConfig cfg = makeReaderConfig(false, STREAM_READER_BUFFER_SIZE_MIN, false);
+    streamReader reader;
+    ASSERT_EQ(streamReaderInit(&reader, &cfg, memReaderRead, &source, NULL), C_OK);
+    uint8_t output = 0;
+    EXPECT_EQ(streamReaderRead(&reader, &output, 1), 0);
+    EXPECT_EQ(streamReaderFinish(&reader), C_OK);
+
+    streamReaderFree(&reader);
+    dynamicBufFree(&db);
+#endif
+}
+
+TEST(CompressionTest, zstdChecksumValidationAndTruncation) {
+#ifndef HAVE_ZSTD
+    GTEST_SKIP() << "Zstandard support is not compiled in";
+#else
+    const char payload[] = "zstd checksum validation payload";
+    const size_t payload_len = sizeof(payload) - 1;
+    DynamicBuf db;
+    dynamicBufInit(&db);
+    streamWriter writer;
+    ASSERT_EQ(streamWriterInit(&writer, ALGO_ZSTD, true, emitToDynamicBuf, &db), C_OK);
+    ASSERT_EQ(streamWriterWrite(&writer, payload, payload_len), C_OK);
+    ASSERT_EQ(streamWriterFinish(&writer), C_OK);
+    streamWriterFree(&writer);
+
+    size_t encoded_len = sdslen((const char *)db.data);
+    ASSERT_GT(encoded_len, (size_t)VCS_ENVELOPE_SIZE + 5);
+    db.data[encoded_len - 1] ^= 1;
+
+    const bool skip_checksum_cases[] = {false, true};
+    for (size_t i = 0; i < sizeof(skip_checksum_cases) / sizeof(skip_checksum_cases[0]); i++) {
+        MemReader source = {};
+        source.data = db.data;
+        source.len = encoded_len;
+        source.max_chunk = 3;
+        streamReaderConfig cfg = makeReaderConfig(false, STREAM_READER_BUFFER_SIZE_MIN,
+                                                  skip_checksum_cases[i]);
+        streamReader reader;
+        ASSERT_EQ(streamReaderInit(&reader, &cfg, memReaderRead, &source, NULL), C_OK);
+
+        uint8_t output[sizeof(payload)] = {0};
+        ssize_t nread = streamReaderRead(&reader, output, payload_len);
+        if (skip_checksum_cases[i]) {
+            ASSERT_EQ(nread, (ssize_t)payload_len);
+            EXPECT_EQ(memcmp(output, payload, payload_len), 0);
+            EXPECT_EQ(streamReaderFinish(&reader), C_OK);
+        } else if (nread == (ssize_t)payload_len) {
+            EXPECT_EQ(streamReaderFinish(&reader), C_ERR);
+        } else {
+            EXPECT_EQ(nread, -1);
+        }
+        streamReaderFree(&reader);
+    }
+
+    MemReader truncated = {};
+    truncated.data = db.data;
+    truncated.len = encoded_len - 5;
+    truncated.max_chunk = 2;
+    streamReaderConfig bypass = makeReaderConfig(false, STREAM_READER_BUFFER_SIZE_MIN, true);
+    streamReader reader;
+    ASSERT_EQ(streamReaderInit(&reader, &bypass, memReaderRead, &truncated, NULL), C_OK);
+    uint8_t output[sizeof(payload)] = {0};
+    ssize_t nread = streamReaderRead(&reader, output, payload_len);
+    if (nread == (ssize_t)payload_len) {
+        EXPECT_EQ(streamReaderFinish(&reader), C_ERR);
+    } else if (nread > 0) {
+        EXPECT_EQ(streamReaderRead(&reader, output, payload_len), -1);
+        EXPECT_EQ(streamReaderFinish(&reader), C_ERR);
+    } else {
+        EXPECT_EQ(nread, -1);
+    }
+    streamReaderFree(&reader);
+    dynamicBufFree(&db);
+#endif
+}
+
+/* A single write larger than STREAM_WRITER_INPUT_CHUNK_SIZE exercises the
+ * writer's bounded scratch-buffer path. */
 
 TEST(CompressionTest, checksumBypassSkipsOnlyCodecVerification) {
     const char *payload = "checksum bypass payload";

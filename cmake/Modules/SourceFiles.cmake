@@ -128,6 +128,10 @@ set(VALKEY_SERVER_SRCS
     ${CMAKE_SOURCE_DIR}/src/compression_lz4.c
     ${CMAKE_SOURCE_DIR}/src/compression_stream.c)
 
+if (BUILD_WITH_ZSTD)
+    list(APPEND VALKEY_SERVER_SRCS ${CMAKE_SOURCE_DIR}/src/compression_zstd.c)
+endif ()
+
 
 # valkey-cli
 set(VALKEY_CLI_SRCS

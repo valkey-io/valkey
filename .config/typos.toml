@@ -18,7 +18,7 @@ Collet = "Collet" # LZ4 author Yann Collet
 nd = "nd"
 Ba = "Ba"
 Addd = "Addd"
-threadsave = "threadsave"
+forkless = "forkless"
 
 [default.extend-identifiers]
 dbe = "dbe"
@@ -64,7 +64,7 @@ seeked = "seeked"
 
 [type.c.extend-words]
 arange = "arange"
-Threadsave = "Threadsave"
+Forkless = "Forkless"
 fo = "fo"
 frst = "frst"
 limite = "limite"

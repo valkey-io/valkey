@@ -1860,6 +1860,8 @@ static ConnectionType CT_RDMA = {
     .process_pending_data = rdmaProcessPendingData,
     .postpone_update_state = postPoneUpdateRdmaState,
     .update_state = updateRdmaState,
+    /* updateRdmaState → connRdmaEventHandler may sync-call read/write handlers. */
+    .sync_handlers_in_update_state = 1,
 
     /* Miscellaneous */
     .connIntegrityChecked = NULL,

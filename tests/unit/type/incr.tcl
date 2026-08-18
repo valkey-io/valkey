@@ -1,5 +1,5 @@
 start_server {tags {"incr"}} {
-    test {INCR against non existing key} {
+    test {INCR against nonexistent key} {
         set res {}
         append res [r incr novar]
         append res [r get novar]
@@ -87,7 +87,7 @@ start_server {tags {"incr"}} {
         assert {$old eq $new}
     } {} {needs:debug}
 
-    test {INCRBYFLOAT against non existing key} {
+    test {INCRBYFLOAT against nonexistent key} {
         r del novar
         list    [roundFloat [r incrbyfloat novar 1]] \
                 [roundFloat [r get novar]] \

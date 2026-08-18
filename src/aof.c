@@ -1524,7 +1524,7 @@ struct client *createAOFClient(void) {
  * AOF_NOT_EXIST: AOF file doesn't exist.
  * AOF_EMPTY: The AOF file is empty (nothing to load).
  * AOF_FAILED: Failed to load the AOF file. */
-int loadSingleAppendOnlyFile(char *filename) {
+int loadSingleAppendOnlyFile(char *filename, rdbSaveInfo *rsi) {
     struct client *fakeClient;
     struct valkey_stat sb;
     int old_aof_state = server.aof_state;
@@ -1583,7 +1583,7 @@ int loadSingleAppendOnlyFile(char *filename) {
 
         if (fseek(fp, 0, SEEK_SET) == -1) goto readerr;
         rioInitWithFile(&rdb, fp);
-        if (rdbLoadRio(&rdb, RDBFLAGS_AOF_PREAMBLE, NULL) != RDB_OK) {
+        if (rdbLoadRio(&rdb, RDBFLAGS_AOF_PREAMBLE, rsi) != RDB_OK) {
             if (old_style)
                 serverLog(LL_WARNING, "Error reading the RDB preamble of the AOF file %s, AOF loading aborted",
                           filename);
@@ -1777,7 +1777,7 @@ cleanup:
 }
 
 /* Load the AOF files according the aofManifest pointed by am. */
-int loadAppendOnlyFiles(aofManifest *am) {
+int loadAppendOnlyFiles(aofManifest *am, rdbSaveInfo *rsi) {
     serverAssert(am != NULL);
     int status, ret = AOF_OK;
     long long start;
@@ -1831,7 +1831,7 @@ int loadAppendOnlyFiles(aofManifest *am) {
         base_size = getAppendOnlyFileSize(aof_name, NULL);
         last_file = ++aof_num == total_num;
         start = ustime();
-        ret = loadSingleAppendOnlyFile(aof_name);
+        ret = loadSingleAppendOnlyFile(aof_name, rsi);
         if (ret == AOF_OK || (ret == AOF_TRUNCATED && last_file)) {
             serverLog(LL_NOTICE, "DB loaded from base file %s: %.3f seconds", aof_name,
                       (float)(ustime() - start) / 1000000);
@@ -1848,6 +1848,20 @@ int loadAppendOnlyFiles(aofManifest *am) {
         }
     }
 
+    /* The repl-id/repl-offset aux fields read from the base file (if any)
+     * describe the replication state at the moment the base was written.
+     * If there is any incremental AOF data on top of it, that state is
+     * stale: more commands will be replayed after it below, advancing the
+     * dataset past the persisted offset without updating it. Restoring a
+     * cached primary from that stale offset could make a later PSYNC
+     * replay backlog commands that were already applied from the
+     * incremental AOF, double-applying non-idempotent commands (e.g.
+     * INCR, XADD). Invalidate it so the caller falls back to a full sync
+     * instead. */
+    if (rsi && rsi->repl_id_is_set && total_size > base_size) {
+        rsi->repl_id_is_set = 0;
+    }
+
     /* Load INCR AOFs if needed. */
     if (listLength(am->incr_aof_list)) {
         listNode *ln;
@@ -1861,7 +1875,7 @@ int loadAppendOnlyFiles(aofManifest *am) {
             updateLoadingFileName(aof_name);
             last_file = ++aof_num == total_num;
             start = ustime();
-            ret = loadSingleAppendOnlyFile(aof_name);
+            ret = loadSingleAppendOnlyFile(aof_name, NULL);
             if (ret == AOF_OK || (ret == AOF_TRUNCATED && last_file)) {
                 serverLog(LL_NOTICE, "DB loaded from incr file %s: %.3f seconds", aof_name,
                           (float)(ustime() - start) / 1000000);
@@ -2537,7 +2551,9 @@ int rewriteAppendOnlyFile(char *filename) {
 
     if (server.aof_use_rdb_preamble) {
         int error;
-        if (rdbSaveRio(REPLICA_REQ_NONE, RDB_VERSION, &aof, &error, RDBFLAGS_AOF_PREAMBLE, NULL) == C_ERR) {
+        rdbSaveInfo rsi = RDB_SAVE_INFO_INIT;
+        rdbSaveInfo *rsiptr = rdbPopulateSaveInfo(&rsi);
+        if (rdbSaveRio(REPLICA_REQ_NONE, RDB_VERSION, &aof, &error, RDBFLAGS_AOF_PREAMBLE, rsiptr) == C_ERR) {
             errno = error;
             goto werr;
         }

@@ -1166,10 +1166,10 @@ static int clusterSaveConfig(bool use_bio, bool do_fsync) {
     } else {
         int res = clusterSaveConfigImpl(content, false, do_fsync);
         if (res == C_OK) {
-            atomic_store_explicit(&server.cluster_config_bio_save_status, C_OK, memory_order_relaxed);
+            atomic_store_explicit(&server.cluster_config_save_status, C_OK, memory_order_relaxed);
             atomic_store_explicit(&server.cluster_config_last_save_time, time(NULL), memory_order_relaxed);
         } else {
-            atomic_store_explicit(&server.cluster_config_bio_save_status, C_ERR, memory_order_relaxed);
+            atomic_store_explicit(&server.cluster_config_save_status, C_ERR, memory_order_relaxed);
         }
         return res;
     }
@@ -7387,7 +7387,7 @@ sds genClusterInfoString(sds info) {
     }
     dictReleaseIterator(di);
 
-    int config_bio_save_status = atomic_load_explicit(&server.cluster_config_bio_save_status, memory_order_relaxed);
+    int config_save_status = atomic_load_explicit(&server.cluster_config_save_status, memory_order_relaxed);
     time_t config_last_save_time = atomic_load_explicit(&server.cluster_config_last_save_time, memory_order_relaxed);
 
     info = sdscatfmt(info,
@@ -7410,7 +7410,7 @@ sds genClusterInfoString(sds info) {
                      nodes_pfail, nodes_fail, voting_nodes_pfail, voting_nodes_fail,
                      (unsigned long long)dictSize(server.cluster->nodes), server.cluster->size,
                      (unsigned long long)server.cluster->currentEpoch, (unsigned long long)my_epoch,
-                     (config_bio_save_status == C_OK) ? "ok" : "err",
+                     (config_save_status == C_OK) ? "ok" : "err",
                      (long long)config_last_save_time);
 
     /* Show stats about messages sent and received. */

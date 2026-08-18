@@ -1069,9 +1069,15 @@ void debugCommand(client *c) {
         server.debug_client_enforce_reply_list = atoi(objectGetVal(c->argv[2]));
         addReply(c, shared.ok);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "bio-drain") && c->argc == 3) {
-        long type;
-        if (getRangeLongFromObjectOrReply(c, c->argv[2], 0, BIO_NUM_OPS - 1, &type, NULL) != C_OK) return;
-        bioDrainWorker((int)type);
+        int type;
+        const char *name = objectGetVal(c->argv[2]);
+        if (!strcasecmp(name, "BIO_CLUSTER_SAVE")) {
+            type = BIO_CLUSTER_SAVE;
+        } else {
+            addReplySubcommandSyntaxError(c);
+            return;
+        }
+        bioDrainWorker(type);
         addReply(c, shared.ok);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "force-free-primary-async") && c->argc == 3) {
         server.debug_force_free_primary_async = atoi(objectGetVal(c->argv[2]));

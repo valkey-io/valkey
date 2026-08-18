@@ -2652,9 +2652,10 @@ static int is_thread_ready_to_signal(const char *proc_pid_task_path, const char 
         /* iterate the file until we reach SigBlk or SigIgn field line */
         if (!strncmp(buff, "SigBlk:\t", field_name_len) || !strncmp(buff, "SigIgn:\t", field_name_len)) {
             line = buff + field_name_len;
-            unsigned long sig_mask;
-            if (-1 == string2ul_base16_async_signal_safe(line, sizeof(buff), &sig_mask)) {
-                serverLogRawFromHandler(LL_WARNING, "Can't convert signal mask to an unsigned long due to an overflow");
+            unsigned long long sig_mask;
+            if (-1 == string2ull_base16_async_signal_safe(line, sizeof(buff), &sig_mask)) {
+                serverLogRawFromHandler(LL_WARNING,
+                                        "Can't convert signal mask to an unsigned long long due to an overflow");
                 ret = 0;
                 break;
             }
@@ -2662,7 +2663,7 @@ static int is_thread_ready_to_signal(const char *proc_pid_task_path, const char 
             /* The bit position in a signal mask aligns with the signal number. Since signal numbers start from 1
             we need to adjust the signal number by subtracting 1 to align it correctly with the zero-based indexing used
           */
-            if (sig_mask & (1L << (sig_num - 1))) { /* if the signal is blocked/ignored return 0 */
+            if (sig_mask & (1ULL << (sig_num - 1))) { /* if the signal is blocked/ignored return 0 */
                 ret = 0;
                 break;
             }

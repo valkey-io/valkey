@@ -15,11 +15,11 @@ start_server {tags {"hotkey external:skip"}} {
     }
 
     test "Enable hotkey functionality" {
-        r config set hotkey-enabled yes
+        r config set hotkey-top-k 16
         r config set hotkey-sampling-percentage 100
         r config set hotkey-window-seconds 1
-        set hotkey_status [r config get hotkey-enabled]
-        assert_equal [lindex $hotkey_status 1] "yes"
+        set hotkey_status [r config get hotkey-top-k]
+        assert_equal [lindex $hotkey_status 1] "16"
     }
 
     test "HOTKEYS GET returns empty when no hot keys" {
@@ -121,8 +121,8 @@ start_server {tags {"hotkey external:skip"}} {
     }
 
     test "Disable hotkey functionality" {
-        r config set hotkey-enabled no
-        assert_equal [lindex [r config get hotkey-enabled] 1] "no"
+        r config set hotkey-top-k 0
+        assert_equal [lindex [r config get hotkey-top-k] 1] "0"
         catch {r hotkeys get} err
         assert_match "*Hotkey detection is disabled*" $err
         catch {r hotkeys reset} err
@@ -130,8 +130,8 @@ start_server {tags {"hotkey external:skip"}} {
     }
 
     test "Re-enable hotkey functionality" {
-        r config set hotkey-enabled yes
-        assert_equal [lindex [r config get hotkey-enabled] 1] "yes"
+        r config set hotkey-top-k 16
+        assert_equal [lindex [r config get hotkey-top-k] 1] "16"
         assert_equal [r hotkeys reset] "OK"
     }
 
@@ -243,8 +243,8 @@ start_server {tags {"hotkey external:skip"}} {
         set hotkeys_before [hk_wait_hotkeys]
         assert {[llength $hotkeys_before] > 0}
 
-        r config set hotkey-enabled no
-        r config set hotkey-enabled yes
+        r config set hotkey-top-k 0
+        r config set hotkey-top-k 16
         set hotkeys_after [r hotkeys get]
         assert_equal [llength $hotkeys_after] 0
         assert_equal [r ping] "PONG"
@@ -309,5 +309,101 @@ start_server {tags {"hotkey external:skip"}} {
         assert {[llength $hotkeys] > 0}
 
         r config set hotkey-top-k 16
+    }
+
+    # Returns the list of key names reported by the last completed window.
+    proc hk_names {hotkeys} {
+        set names {}
+        foreach e $hotkeys { lappend names [dict get $e key] }
+        return $names
+    }
+
+    proc hk_enable {} {
+        r config set hotkey-top-k 16
+        r config set hotkey-sampling-percentage 100
+        r config set hotkey-window-seconds 1
+    }
+
+    test "CLIENT NO-TOUCH does not suppress hot-key accounting" {
+        # A no-touch client only skips the LRU/LFU update. Accounting must be
+        # identical either way, and in particular a hit must not be dropped
+        # while a miss on an equally hot key is still counted.
+        hk_enable
+        r set "nt_hit" "val"
+        r del "nt_miss"
+        r hotkeys reset
+
+        r client no-touch on
+        # One window, equal access counts: an existing key and a missing one.
+        r multi
+        for {set i 0} {$i < 300} {incr i} {
+            r get "nt_hit"
+            r get "nt_miss"
+        }
+        r exec
+        r client no-touch off
+
+        set hotkeys [hk_wait_hotkeys]
+        set names [hk_names $hotkeys]
+        if {[lsearch $names "nt_hit"] < 0} {
+            fail "a hit on an existing key was not counted for a no-touch client"
+        }
+        if {[lsearch $names "nt_miss"] < 0} {
+            fail "a miss was not counted for a no-touch client"
+        }
+
+        # Same number of accesses in the same window, so the same rate.
+        set qps_hit -1
+        set qps_miss -2
+        foreach e $hotkeys {
+            if {[dict get $e key] eq "nt_hit"} { set qps_hit [dict get $e qps] }
+            if {[dict get $e key] eq "nt_miss"} { set qps_miss [dict get $e qps] }
+        }
+        assert_equal $qps_hit $qps_miss
+    }
+
+    test "EXISTS, TYPE and TTL count as key accesses" {
+        # These read the key without touching it (LOOKUP_NOTOUCH). They are
+        # still genuine client accesses and must be reported.
+        hk_enable
+        r set "meta_key" "val"
+        r expire "meta_key" 1000
+
+        foreach cmd {exists type ttl} {
+            # Reset first so only this command's accesses are in the window.
+            r hotkeys reset
+            r multi
+            for {set i 0} {$i < 200} {incr i} { r $cmd "meta_key" }
+            r exec
+
+            set names [hk_names [hk_wait_hotkeys]]
+            if {[lsearch $names "meta_key"] < 0} {
+                fail "$cmd on a hot key was not reported"
+            }
+        }
+    }
+
+    test "OBJECT ENCODING is introspection and is not counted" {
+        # OBJECT looks keys up with LOOKUP_NOHOTKEY. Drive it in a tight loop
+        # alongside a real GET on another key in the SAME window: the real
+        # access must be reported and the introspection must not, so an empty
+        # or not-yet-frozen window cannot make this pass vacuously.
+        hk_enable
+        r set "obj_probe" "val"
+        r set "real_probe" "val"
+        r hotkeys reset
+
+        r multi
+        for {set i 0} {$i < 300} {incr i} {
+            r object encoding "obj_probe"
+            r get "real_probe"
+        }
+        r exec
+
+        set names [hk_names [hk_wait_hotkeys]]
+        if {[lsearch $names "real_probe"] < 0} {
+            fail "a real access in the same window was not reported"
+        }
+        assert {[lsearch $names "obj_probe"] < 0}
     }
 }

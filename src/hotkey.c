@@ -13,89 +13,19 @@
 /* ---------------------------------------------------------------------------
  * Hot-key detection
  *
- * A generic frozen-window Space-Saving manager (spaceSavingManager, see
- * space_saving.h) does the heavy lifting: it keeps a live window accumulating
- * the current `hotkey-window-seconds` and a frozen snapshot of the last
- * completed window, which is what HOTKEYS GET reports. This file supplies only
- * the Valkey specifics: the hot-key item type (key name + db), the
- * sampling/enable policy, config wiring, and the HOTKEYS commands.
+ * A frozen-window Space-Saving manager (spaceSavingManager, see space_saving.h)
+ * does the heavy lifting: it tracks the top-K (key, db) pairs, keeping a live
+ * window accumulating the current `hotkey-window-seconds` and a frozen snapshot
+ * of the last completed window, which is what HOTKEYS GET reports. This file
+ * supplies the policy around it: the sampling/enable configuration, the
+ * invalidation predicates, and the HOTKEYS commands.
  * --------------------------------------------------------------------------*/
-
-/* ===========================================================================
- * Tracked item: (key name, db)
- *
- * The Space-Saving core is item-agnostic; the hot-key identity is a key name
- * plus the database it lives in. The cluster hash slot, when needed for
- * slot-scoped invalidation, is derived from the key on demand.
- * ==========================================================================*/
-
-typedef struct {
-    sds key;
-    int dbid;
-} hotkeyItem;
-
-static int hotkeyItemCmp(const void *a, const void *b) {
-    const hotkeyItem *x = a, *y = b;
-    if (x->dbid != y->dbid) return 1;
-    return sdscmp(x->key, y->key); /* 0 == equal */
-}
-
-static void *hotkeyItemDup(const void *a) {
-    const hotkeyItem *x = a;
-    hotkeyItem *c = zmalloc(sizeof(*c));
-    c->key = sdsdup(x->key);
-    c->dbid = x->dbid;
-    return c;
-}
-
-static void hotkeyItemFree(void *a) {
-    hotkeyItem *x = a;
-    sdsfree(x->key);
-    zfree(x);
-}
-
-/* FNV-1a over the key name, folded with the db id so identical names in
- * different databases fast-reject without a full compare. */
-static uint32_t hotkeyItemHash(const void *a) {
-    const hotkeyItem *x = a;
-    uint32_t h = 2166136261u;
-    size_t klen = sdslen(x->key);
-    for (size_t i = 0; i < klen; i++) {
-        h ^= (unsigned char)x->key[i];
-        h *= 16777619u;
-    }
-    return h ^ (uint32_t)x->dbid;
-}
-
-static spaceSavingType hotkeyItemType = {hotkeyItemCmp, hotkeyItemDup, hotkeyItemFree, hotkeyItemHash};
-
-/* The config that interprets a window's sampled counts. A frozen window keeps
- * the values that were active when it was captured (via the manager's opaque
- * context pointer), so HOTKEYS GET estimates it correctly even after a later
- * CONFIG SET. Two slots suffice: at most two windows (live + frozen) reference
- * a context at once, so we ping-pong to avoid clobbering the frozen one. */
-typedef struct {
-    int sampling_percentage;
-    int window_seconds;
-} hotkeyWindowCtx;
-
-static hotkeyWindowCtx hotkeyWindowCtxPool[2];
-
-/* Point the manager's live-window context at the current config, using the pool
- * slot not currently held by the frozen window. */
-static void hotkeySetWindowContext(spaceSavingManager *m) {
-    hotkeyWindowCtx *frozen = spaceSavingManagerFrozenContext(m);
-    hotkeyWindowCtx *slot = (frozen == &hotkeyWindowCtxPool[0]) ? &hotkeyWindowCtxPool[1] : &hotkeyWindowCtxPool[0];
-    slot->sampling_percentage = server.hotkey_sampling_percentage;
-    slot->window_seconds = server.hotkey_window_seconds;
-    spaceSavingManagerSetLiveContext(m, slot);
-}
 
 /* Create a frozen-window manager sized and timed from the current config. */
 static spaceSavingManager *hotkeyCreateManager(void) {
-    spaceSavingManager *m = spaceSavingManagerCreate(
-        server.hotkey_top_k, (uint64_t)server.hotkey_window_seconds * 1000000ULL, getMonotonicUs(), &hotkeyItemType);
-    if (m) hotkeySetWindowContext(m);
+    uint64_t window_us = (uint64_t)server.hotkey_window_seconds * 1000000ULL;
+    spaceSavingManager *m = spaceSavingManagerCreate(server.hotkey_top_k, window_us, getMonotonicUs());
+    if (m) spaceSavingManagerSetLiveSampling(m, server.hotkey_sampling_percentage, server.hotkey_window_seconds);
     return m;
 }
 
@@ -106,8 +36,9 @@ static spaceSavingManager *hotkeyCreateManager(void) {
 void hotkeyPurgeAll(void) {
     if (!server.hotkey_manager) return;
     spaceSavingManagerReset(server.hotkey_manager, getMonotonicUs());
-    /* Reset clears each window's context; re-establish the live one. */
-    hotkeySetWindowContext(server.hotkey_manager);
+    /* Reset clears each window's sampling config; re-establish the live one. */
+    spaceSavingManagerSetLiveSampling(server.hotkey_manager, server.hotkey_sampling_percentage,
+                                      server.hotkey_window_seconds);
 }
 
 /* Periodic maintenance from serverCron: close any window that has fully elapsed
@@ -119,13 +50,16 @@ void hotkeyCron(void) {
     if (server.hotkey_manager) spaceSavingManagerRotate(server.hotkey_manager, getMonotonicUs());
 }
 
-static int hotkeyItemInSlot(const void *item, void *arg) {
-    const hotkeyItem *hi = item;
-    return (int)keyHashSlot(hi->key, (int)sdslen(hi->key)) == *(int *)arg;
+/* The cluster hash slot is not stored per entry — it is derived from the key
+ * name on demand, only when a slot-scoped purge asks for it. */
+static int hotkeyItemInSlot(sds key, int dbid, void *arg) {
+    UNUSED(dbid);
+    return (int)keyHashSlot(key, (int)sdslen(key)) == *(int *)arg;
 }
 
-static int hotkeyItemInDb(const void *item, void *arg) {
-    return ((const hotkeyItem *)item)->dbid == *(int *)arg;
+static int hotkeyItemInDb(sds key, int dbid, void *arg) {
+    UNUSED(key);
+    return dbid == *(int *)arg;
 }
 
 /* Drop every entry on `slot` from both windows, so a removed slot's keys
@@ -152,15 +86,13 @@ void hotkeyPurgeDb(int dbid) {
  * Per-access detection hook
  * ==========================================================================*/
 
-/* Record one sampled access (read or write) of `key` in database `dbid`. Builds
- * the tracked item, bumps the sampled-count metric, and feeds the manager. */
+/* Record one sampled access (read or write) of `key` in database `dbid`. */
 void recordHotKeySample(robj *key, int dbid) {
     spaceSavingManager *m = server.hotkey_manager;
     if (!m || !key) return;
     sds k = objectGetVal(key);
     if (!k) return;
-    hotkeyItem probe = {k, dbid};
-    recordSpaceSavingManagerSample(m, &probe);
+    recordSpaceSavingManagerSample(m, k, dbid);
 }
 
 /* ===========================================================================
@@ -218,16 +150,11 @@ void hotkeysGetCommand(client *c) {
     int n = 0;
     /* Estimate with the sampling %/window that produced the frozen window, not
      * the current config (which may have changed since it was captured). */
-    hotkeyWindowCtx *fctx = spaceSavingManagerFrozenContext(m);
-    int frozen_pct = fctx ? fctx->sampling_percentage : 0;
-    int frozen_window_s = fctx ? fctx->window_seconds : 0;
+    int frozen_pct, frozen_window_s;
+    spaceSavingManagerFrozenSampling(m, &frozen_pct, &frozen_window_s);
     for (int i = 0; i < cap; i++) {
-        void *item;
         uint64_t count, error;
-        spaceSavingManagerAt(m, i, &item, &count, &error);
-        hotkeyItem *hi = item;
-        arr[n].key = hi->key;
-        arr[n].dbid = hi->dbid;
+        spaceSavingManagerAt(m, i, &arr[n].key, &arr[n].dbid, &count, &error);
         arr[n].qps = hotkeyEstimateQps(count, error, frozen_pct, frozen_window_s);
         n++;
     }
@@ -261,11 +188,12 @@ void hotkeysResetCommand(client *c) {
  * Generic hotkey API
  * ==========================================================================*/
 
-/* Is hot-key detection currently enabled? Controlled by the explicit
- * `hotkey-enabled` switch; the sampling percentage only sets how much traffic
- * is sampled while enabled. */
+/* Is hot-key detection currently enabled? Tracking zero keys is the same thing
+ * as not tracking, so `hotkey-top-k` doubles as the on/off switch: 0 disables
+ * detection, any positive value enables it and sets the Space-Saving capacity.
+ * The sampling percentage only sets how much traffic is sampled while enabled. */
 int hotkeyEnabled(void) {
-    return server.hotkey_enabled;
+    return server.hotkey_top_k > 0;
 }
 
 /* Number of sampled observations in the last completed window (N). The
@@ -285,7 +213,8 @@ static void hotkeyManagerReconfigure(void) {
     if (!server.hotkey_manager) return;
     spaceSavingManagerReconfigure(server.hotkey_manager, server.hotkey_top_k,
                                   (uint64_t)server.hotkey_window_seconds * 1000000ULL, getMonotonicUs());
-    hotkeySetWindowContext(server.hotkey_manager);
+    spaceSavingManagerSetLiveSampling(server.hotkey_manager, server.hotkey_sampling_percentage,
+                                      server.hotkey_window_seconds);
 }
 
 /* Create or free the manager to match the enabled state. */
@@ -307,13 +236,6 @@ void hotkeyInit(void) {
  * Config callbacks
  * ==========================================================================*/
 
-/* The explicit on/off switch drives the manager lifecycle. */
-int hotKeyEnabledCallback(const char **err) {
-    UNUSED(err);
-    hotkeyManagerSetEnabled(server.hotkey_enabled);
-    return 1;
-}
-
 /* Sampling percentage only changes how much traffic is sampled; reconfigure in
  * place so a live query still sees the last completed window (no-op if disabled). */
 int hotKeySamplingCallback(const char **err) {
@@ -322,9 +244,15 @@ int hotKeySamplingCallback(const char **err) {
     return 1;
 }
 
+/* top-k is also the on/off switch (0 disables), so it drives the manager
+ * lifecycle: crossing 0 creates or frees it, while a change that stays enabled
+ * reconfigures in place and keeps the last completed window. */
 int hotKeyTopKCallback(const char **err) {
     UNUSED(err);
-    hotkeyManagerReconfigure();
+    if (hotkeyEnabled() && server.hotkey_manager)
+        hotkeyManagerReconfigure();
+    else
+        hotkeyManagerSetEnabled(hotkeyEnabled());
     return 1;
 }
 

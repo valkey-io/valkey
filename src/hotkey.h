@@ -13,7 +13,6 @@
 typedef struct serverObject robj;
 
 /* Config callbacks (wired from config.c). */
-int hotKeyEnabledCallback(const char **err);
 int hotKeySamplingCallback(const char **err);
 int hotKeyTopKCallback(const char **err);
 int hotKeyWindowCallback(const char **err);

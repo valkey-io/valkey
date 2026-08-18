@@ -146,9 +146,11 @@ robj *lookupKey(serverDb *db, robj *key, int flags) {
     }
 
     /* If the hot key detection function is enabled and the hot key sampling rate is reached,
-     * hot key statistics will be performed. Skip lookups flagged LOOKUP_NOEFFECTS
-     * (introspection such as OBJECT/DEBUG), which are not real client accesses. */
-    if (hotkeyEnabled() && !(flags & LOOKUP_NOEFFECTS) && hotkeyShouldRecord() &&
+     * hot key statistics will be performed. Only lookups flagged LOOKUP_NOHOTKEY are skipped
+     * (introspection such as OBJECT/DEBUG). Note this must test that dedicated bit and not
+     * LOOKUP_NOEFFECTS, which is a mask of several flags: a lookup carrying only LOOKUP_NOTOUCH
+     * (EXISTS/TYPE/TTL, or any hit from a CLIENT NO-TOUCH client) is a genuine client access. */
+    if (hotkeyEnabled() && !(flags & LOOKUP_NOHOTKEY) && hotkeyShouldRecord() &&
         bernoulliSampleHit(server.hotkey_sampling_percentage)) {
         recordHotKeySample(key, db->id);
     }

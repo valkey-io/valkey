@@ -422,17 +422,20 @@ static int connSocketGetType(void) {
     return CONN_TYPE_SOCKET;
 }
 
-int connSocketIsClosing(connection *conn) {
-    if (aeGetFileEvents(server.el, conn->fd) != AE_NONE) return false;
+int connTcpSocketIsClosing(connection *conn) {
 #if defined(__linux__)
     struct tcp_info info;
     socklen_t infolen = sizeof(info);
-    if (getsockopt(conn->fd, IPPROTO_TCP, TCP_INFO, &info, &infolen) != 0 || infolen < sizeof(info)) return false; // Cannot retrieve TCP info
+    if (getsockopt(conn->fd, IPPROTO_TCP, TCP_INFO, &info, &infolen) != 0 ||
+        infolen < offsetof(struct tcp_info, tcpi_state) + sizeof(info.tcpi_state))
+        return false; /* Cannot retrieve TCP info, or the state field was not returned. */
     return (info.tcpi_state == TCP_CLOSE_WAIT || info.tcpi_state == TCP_CLOSE);
 #elif defined(__APPLE__)
     struct tcp_connection_info info;
     socklen_t infolen = sizeof(info);
-    if (getsockopt(conn->fd, IPPROTO_TCP, TCP_CONNECTION_INFO, &info, &infolen) != 0 || infolen < sizeof(info)) return false; // Cannot retrieve TCP info
+    if (getsockopt(conn->fd, IPPROTO_TCP, TCP_CONNECTION_INFO, &info, &infolen) != 0 ||
+        infolen < offsetof(struct tcp_connection_info, tcpi_state) + sizeof(info.tcpi_state))
+        return false; /* Cannot retrieve TCP info, or the state field was not returned. */
     return (info.tcpi_state == TCPS_CLOSE_WAIT || info.tcpi_state == TCPS_CLOSED);
 #else
     /* Unsupported platform: zombie connection detection is not available. */
@@ -488,7 +491,7 @@ static ConnectionType CT_Socket = {
 
     /* Miscellaneous */
     .connIntegrityChecked = NULL,
-    .is_closing = connSocketIsClosing,
+    .is_closing = connTcpSocketIsClosing,
 };
 
 int connBlock(connection *conn) {

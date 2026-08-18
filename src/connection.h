@@ -404,8 +404,8 @@ static inline int connIsClosing(connection *conn) {
     return conn->type->is_closing(conn);
 }
 
-/* Shared is_closing implementation for socket-based connections. */
-int connSocketIsClosing(connection *conn);
+/* Shared is_closing implementation for TCP socket-based connections. */
+int connTcpSocketIsClosing(connection *conn);
 
 /* Associate a private data pointer with the connection */
 static inline void connSetPrivateData(connection *conn, void *data) {

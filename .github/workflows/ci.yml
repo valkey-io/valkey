@@ -218,7 +218,14 @@ jobs:
 
   build-macos-latest:
     runs-on: macos-latest
+    env:
+      CC: /opt/homebrew/opt/llvm/bin/clang
+      CXX: /opt/homebrew/opt/llvm/bin/clang++
+      AR: /opt/homebrew/opt/llvm/bin/llvm-ar
+      RANLIB: /opt/homebrew/opt/llvm/bin/llvm-ranlib
     steps:
+      - name: Install build dependencies
+        run: brew install llvm googletest
       - name: Install libbacktrace
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -228,17 +235,13 @@ jobs:
       - run: cd libbacktrace && ./configure && make && sudo make install
       - name: Checkout Valkey
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - name: Install build dependencies
-        run: brew install llvm googletest
       - name: make
         # Build with additional upcoming features
         run: |
-          export PATH="/opt/homebrew/opt/llvm/bin:$PATH"
-          export CC=/opt/homebrew/opt/llvm/bin/clang
-          export CXX=/opt/homebrew/opt/llvm/bin/clang++
-          export AR=/opt/homebrew/opt/llvm/bin/llvm-ar
-          export RANLIB=/opt/homebrew/opt/llvm/bin/llvm-ranlib
           make -j3 all-with-unit-tests SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes LIBBACKTRACE_PREFIX=/usr/local
+      - name: unit tests
+        run: |
+          make test-unit
 
   build-32bit:
     runs-on: ubuntu-latest

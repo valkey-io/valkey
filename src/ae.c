@@ -78,10 +78,10 @@
  * implementations are AE_READABLE & AE_WRITABLE. */
 #define BACKEND_MASK(mask) ((mask) & (AE_READABLE | AE_WRITABLE))
 
-/* High priority event loop periodic preemptive poll interval in microseconds.
+/* High priority event loop periodic preemptive poll default interval in microseconds.
  * High-priority events are checked periodically during normal event loops to prevent
  * long batches of normal client commands from starving control plane traffic. */
-#define AE_HP_EVENT_PREEMPTIVE_CHECK_INTERVAL_US 1000
+#define AE_HP_DEFAULT_PREEMPT_CHECK_INTERVAL_US 2000
 
 /* High priority event loop periodic preemptive poll mask.
  * Used to amortize getMonotonicUs() clock reads across every 4th iteration ((iter & 3) == 0). */
@@ -108,6 +108,7 @@ aeEventLoop *aeCreateEventLoop(int setsize) {
     eventLoop->flags = 0;
     eventLoop->hp_event_loop = NULL;
     eventLoop->hp_last_poll_us = 0;
+    eventLoop->hp_preempt_check_interval_us = AE_HP_DEFAULT_PREEMPT_CHECK_INTERVAL_US;
     /* Initialize the eventloop mutex with PTHREAD_MUTEX_ERRORCHECK type */
     pthread_mutexattr_t attr;
     pthread_mutexattr_init(&attr);
@@ -463,13 +464,27 @@ static int aeProcessHPEventsNow(aeEventLoop *eventLoop) {
     return processed;
 }
 
+/* Set the preemptive poll interval in microseconds for high-priority events.
+ * High-priority events are checked periodically during normal event processing
+ * when processing batches of normal events exceeds this interval.
+ * Setting this interval to 0 disables preemptive polling. */
+void aeSetHPPreemptCheckInterval(aeEventLoop *eventLoop, uint64_t interval_us) {
+    if (eventLoop) eventLoop->hp_preempt_check_interval_us = interval_us;
+}
+
+/* Get the current preemptive poll interval in microseconds for high-priority events.
+ * Returns 0 if eventLoop is NULL or preemption is disabled. */
+uint64_t aeGetHPPreemptCheckInterval(aeEventLoop *eventLoop) {
+    return eventLoop ? eventLoop->hp_preempt_check_interval_us : 0;
+}
+
 /* Preemptively processes high priority events if the elapsed time since the last poll
- * exceeds the AE_HP_EVENT_PREEMPTIVE_CHECK_INTERVAL_US threshold and iter count
- * is a multiple of AE_HP_EVENT_PREEMPTIVE_CHECK_MASK.  */
+ * exceeds the hp_preempt_check_interval_us threshold and iter count
+ * is a multiple of AE_HP_EVENT_PREEMPTIVE_CHECK_MASK (0 disables preemption). */
 int aeProcessHPEventsPreemptively(aeEventLoop *eventLoop, int iter_count) {
-    if (eventLoop->hp_event_loop == NULL || iter_count == 0) return 0;
+    if (eventLoop->hp_event_loop == NULL || eventLoop->hp_preempt_check_interval_us == 0 || iter_count == 0) return 0;
     if ((iter_count & AE_HP_EVENT_PREEMPTIVE_CHECK_MASK) == 0) {
-        if (elapsedUs(eventLoop->hp_last_poll_us) >= AE_HP_EVENT_PREEMPTIVE_CHECK_INTERVAL_US) {
+        if (elapsedUs(eventLoop->hp_last_poll_us) >= eventLoop->hp_preempt_check_interval_us) {
             return aeProcessHPEventsNow(eventLoop);
         }
     }
@@ -557,7 +572,7 @@ int aeProcessEvents(aeEventLoop *eventLoop, int flags) {
 
         for (j = 0; j < numevents; j++) {
             /* Periodic Preemptive Poll:
-             * If processing normal events is taking more than AE_HP_EVENT_PREEMPTIVE_CHECK_INTERVAL_US, check for new HP events.
+             * If processing normal events is taking more than hp_preempt_check_interval_us, check for new HP events.
              * Batch AE_HP_EVENT_PREEMPTIVE_CHECK_MASK checks to minimize monotonic clock call overhead. */
             processed += aeProcessHPEventsPreemptively(eventLoop, j);
 

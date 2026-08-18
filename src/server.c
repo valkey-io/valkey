@@ -3110,6 +3110,7 @@ void initServer(void) {
         aeDeleteEventLoop(hp_el);
         hp_el = NULL;
     }
+    aeSetHPPreemptCheckInterval(server.el, server.qos_preemptive_poll_interval_us);
     server.dbnum = server.cluster_enabled ? server.config_databases_cluster : server.config_databases;
     server.db = zcalloc(sizeof(serverDb *) * server.dbnum);
 

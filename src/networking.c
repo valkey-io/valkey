@@ -3321,11 +3321,16 @@ void processClientIOWriteDone(client *c) {
 
     connSetPostponeUpdateState(c->conn, mask);
     if (postWriteToClient(c) == C_ERR) return;
+
+    /* connUpdateState may sync-invoke handlers for some transports (e.g. RDMA)
+     * and free the client; only then re-fetch it by id after the update. */
+    int may_invoke_handlers = connUpdateStateMayInvokeHandlers(c->conn);
     uint64_t id = c->id;
     connUpdateState(c->conn);
-
-    c = lookupClientByID(id);
-    if (!c || !c->conn) return;
+    if (may_invoke_handlers) {
+        c = lookupClientByID(id);
+        if (!c || !c->conn) return;
+    }
 
     if (!clientHasPendingReplies(c)) return;
 

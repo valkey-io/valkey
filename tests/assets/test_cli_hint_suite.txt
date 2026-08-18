@@ -10,6 +10,9 @@
 "DECRBY xyz " "decrement"
 "DECRBY " "key decrement"
 
+# Command with optional arg: INCREX 
+"INCREX xyz " "[NX|XX] [EX ex|PX px|EXAT unix-time-seconds|PXAT unix-time-milliseconds] [BYINT byint|BYFLOAT byfloat]"
+
 # Command with optional arg: LPOP key [count]
 "LPOP key " "[count]"
 "LPOP key 3 " ""

@@ -1,0 +1,129 @@
+{
+    "INCREX": {
+        "summary": "Increments the integer value of a key with an option to expire. Uses 0 as initial value if the key doesn't exist.",
+        "complexity": "O(1)",
+        "group": "string",
+        "since": "9.2.0",
+        "arity": -2,
+        "function": "incrExCommand",
+        "command_flags": [
+            "WRITE",
+            "DENYOOM",
+            "FAST"
+        ],
+        "acl_categories": [
+            "FAST",
+            "STRING",
+            "WRITE"
+        ],
+        "key_specs": [
+            {
+                "flags": [
+                    "RW",
+                    "ACCESS",
+                    "UPDATE"
+                ],
+                "begin_search": {
+                    "index": {
+                        "pos": 1
+                    }
+                },
+                "find_keys": {
+                    "range": {
+                        "lastkey": 0,
+                        "step": 1,
+                        "limit": 0
+                    }
+                }
+            }
+        ],
+        "arguments": [
+            {
+                "name": "key",
+                "type": "key",
+                "key_spec_index": 0
+            },
+            {
+                "name": "condition",
+                "type": "oneof",
+                "optional": true,
+                "arguments": [
+                    {
+                        "name": "nx",
+                        "type": "pure-token",
+                        "token": "NX",
+                        "since": "9.2.0"
+                    },
+                    {
+                        "name": "xx",
+                        "type": "pure-token",
+                        "token": "XX",
+                        "since": "9.2.0"
+                    }
+                ]
+            },
+            {
+                "name": "expiration",
+                "type": "oneof",
+                "optional": true,
+                "arguments": [
+                    {
+                        "name": "ex",
+                        "type": "integer",
+                        "token": "EX",
+                        "since": "9.2.0"
+                    },
+                    {
+                        "name": "px",
+                        "type": "integer",
+                        "token": "PX",
+                        "since": "9.2.0"
+                    },
+                    {
+                        "name": "unix-time-seconds",
+                        "type": "unix-time",
+                        "token": "EXAT",
+                        "since": "9.2.0"
+                    },
+                    {
+                        "name": "unix-time-milliseconds",
+                        "type": "unix-time",
+                        "token": "PXAT",
+                        "since": "9.2.0"
+                    }
+                ]
+            },
+            {
+                "name": "value",
+                "type": "oneof",
+                "optional": true,
+                "arguments": [
+                    {
+                        "name": "byint",
+                        "type": "integer",
+                        "token": "BYINT",
+                        "since": "9.2.0"
+                    },
+                    {
+                        "name": "byfloat",
+                        "type": "double",
+                        "token": "BYFLOAT",
+                        "since": "9.2.0"
+                    }
+                ]
+            }
+        ],
+        "reply_schema": {
+            "oneOf": [
+                {
+                    "description": "The value of key after the increment",
+                    "type": "integer"
+                },
+                {
+                    "description": "The value of key after the increment",
+                    "type": "double"
+                }
+            ]
+        }
+    }
+}

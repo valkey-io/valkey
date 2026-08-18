@@ -7917,7 +7917,7 @@ __attribute__((weak)) int main(int argc, char **argv) {
  * start_idx provides a way to start scanning from a specific index.
  * max_args provides a way to limit the scan to a specific range of arguments.
  */
-int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_idx, int max_args, int *flags, int *unit, int *expire_idx, robj **expire, robj **compare_val) {
+int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_idx, int max_args, int *flags, int *unit, int *expire_idx, robj **expire, robj **compare_val, robj **value) {
     int j = start_idx;
     if (expire_idx) *expire_idx = -1;
     for (; j < max_args; j++) {
@@ -7928,13 +7928,13 @@ int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_
         if ((opt[0] == 'n' || opt[0] == 'N') &&
             (opt[1] == 'x' || opt[1] == 'X') && opt[2] == '\0' &&
             !(*flags & ARGS_SET_XX || *flags & ARGS_SET_IFEQ) &&
-            (command_type == COMMAND_SET || command_type == COMMAND_HSET || command_type == COMMAND_MSET))
+            (command_type == COMMAND_SET || command_type == COMMAND_HSET || command_type == COMMAND_MSET || command_type == COMMAND_INCREX))
         {
             *flags |= ARGS_SET_NX;
         } else if ((opt[0] == 'x' || opt[0] == 'X') &&
                    (opt[1] == 'x' || opt[1] == 'X') && opt[2] == '\0' &&
                    !(*flags & ARGS_SET_NX || *flags & ARGS_SET_IFEQ) &&
-                   (command_type == COMMAND_SET || command_type == COMMAND_HSET || command_type == COMMAND_MSET))
+                   (command_type == COMMAND_SET || command_type == COMMAND_HSET || command_type == COMMAND_MSET || command_type == COMMAND_INCREX))
         {
             *flags |= ARGS_SET_XX;
         } else if ((opt[0] == 'f' || opt[0] == 'F') &&
@@ -8023,6 +8023,28 @@ int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_
             *expire = next;
             if (expire_idx) *expire_idx = j;
             j++;
+        } else if ((opt[0] == 'b' || opt[0] == 'B') &&
+                   (opt[1] == 'y' || opt[1] == 'Y') &&
+                   (opt[2] == 'i' || opt[2] == 'I') &&
+                   (opt[3] == 'n' || opt[3] == 'N') &&
+                   (opt[4] == 't' || opt[4] == 'T') && opt[5] == '\0' &&
+                   !(*flags & ARGS_BYFLOAT) && next)
+        {
+            *flags |= ARGS_BYINT;
+            *value = next;
+            j++;
+        } else if ((opt[0] == 'b' || opt[0] == 'B') &&
+                   (opt[1] == 'y' || opt[1] == 'Y') &&
+                   (opt[2] == 'f' || opt[2] == 'F') &&
+                   (opt[3] == 'l' || opt[3] == 'L') &&
+                   (opt[4] == 'o' || opt[4] == 'O') &&
+                   (opt[5] == 'a' || opt[5] == 'A') &&
+                   (opt[6] == 't' || opt[6] == 'T') && opt[7] == '\0' &&
+                   !(*flags & ARGS_BYINT) && next)
+        {
+            *flags |= ARGS_BYFLOAT;
+            *value = next;
+            j++;
         } else {
             addReplyErrorObject(c, shared.syntaxerr);
             return C_ERR;
@@ -8031,5 +8053,4 @@ int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_
     }
     return C_OK;
 }
-
 /* The End */

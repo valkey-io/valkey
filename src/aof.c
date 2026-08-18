@@ -965,7 +965,7 @@ int startAppendOnly(void) {
     serverAssert(server.aof_state == AOF_OFF);
 
     server.aof_state = AOF_WAIT_REWRITE;
-    if (hasActiveChildProcess() && server.child_type != CHILD_TYPE_AOF) {
+    if (hasActiveSaveOrChild() && server.child_type != CHILD_TYPE_AOF) {
         server.aof_rewrite_scheduled = 1;
         serverLog(LL_NOTICE, "AOF was enabled but there is already another background operation. An AOF background was "
                              "scheduled to start when possible.");

@@ -1,23 +1,3 @@
-proc read_file {path} {
-    set fd [open $path r]
-    set data [read $fd]
-    close $fd
-    return $data
-}
-
-proc file_has_pattern {path pattern} {
-    if {![file exists $path]} {
-        return 0
-    }
-    return [regexp $pattern [read_file $path]]
-}
-
-proc cluster_nodes_conf_path {id} {
-    set dir [lindex [R $id config get dir] 1]
-    set conf [lindex [R $id config get cluster-config-file] 1]
-    return [file join $dir $conf]
-}
-
 start_cluster 3 4 {tags {external:skip cluster} overrides {cluster-ping-interval 1000 cluster-node-timeout 5000}} {
     test "Replica can do a better ranking in auto failover based on the priority" {
         # primary R 0, replica1 R 3, replica2 R 6

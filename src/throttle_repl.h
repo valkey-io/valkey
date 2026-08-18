@@ -19,7 +19,7 @@
 
 #include "sds.h"
 struct throttle_repl_config {
-    int repl_throttle_steady_state_enabled;
+    int repl_throttling_enabled;
 };
 extern struct throttle_repl_config throttle_repl_config;
 
@@ -32,5 +32,8 @@ void throttleRepl_adjustThrottling(void);
 
 /* Append replication throttle metrics to the INFO output string. */
 sds throttleRepl_sdscatInfoMetrics(sds info);
+
+/* Append verbose debug replication throttle metrics to the INFO output string. */
+sds throttleRepl_sdscatInfoDebugMetrics(sds info);
 
 #endif

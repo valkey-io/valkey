@@ -21,7 +21,7 @@ proc wait_throttled_client {r writer wid} {
             $writer set nudge v
         }
         if {[client_throttled $r $wid] &&
-            [getInfoProperty [{*}$r info throttling] repl_throttle_current_clients] > 0} {
+            [getInfoProperty [{*}$r info debug] repl_throttle_current_clients] > 0} {
             return 1
         }
     }
@@ -42,7 +42,7 @@ start_server {tags {"throttle repl external:skip"}} {
             uplevel 1 {
                 $primary replicaof no one
                 $primary flushall
-                $primary config set repl-throttle-steady-state-enabled yes
+                $primary config set repl-throttling-enabled yes
                 $primary config set client-output-buffer-limit "replica 1024mb 64kb 3600"
                 $replica replicaof no one
                 $replica flushall
@@ -64,9 +64,9 @@ start_server {tags {"throttle repl external:skip"}} {
                 $writer set key:$i [string repeat x 1000]
             }
 
-            # Throttler is activated and reports a non-zero rate.
+            # Throttler is activated and reports a non-negative rate.
             wait_for_condition 50 100 {
-                [throttle_rate $primary] != 0
+                [throttle_rate $primary] >= 0
             } else {
                 exec kill -SIGCONT $replica_pid
                 fail "throttle did not activate while the replica's COB was growing"
@@ -78,10 +78,10 @@ start_server {tags {"throttle repl external:skip"}} {
             assert {[getInfoProperty [$primary info throttling] repl_throttle_activation_events] >= 1}
 
             # As the replica catches up, the throttler ramps its rate back to
-            # unlimited and uninstalls, reporting a zero rate again. The ramp-up is
-            # gradual climbing back, so allow a generous window.
+            # unlimited and uninstalls, reporting an inactive rate (-1) again. The
+            # ramp-up is gradual climbing back, so allow a generous window.
             wait_for_condition 300 100 {
-                [throttle_rate $primary] == 0
+                [throttle_rate $primary] == -1
             } else {
                 fail "throttle did not release after the replica caught up"
             }
@@ -128,7 +128,7 @@ start_server {tags {"throttle repl external:skip"}} {
                 $writer set fkey:$i [string repeat z 1000]
             }
             wait_for_condition 50 100 {
-                [throttle_rate $primary] != 0
+                [throttle_rate $primary] >= 0
             } else {
                 exec kill -SIGCONT $replica_pid
                 fail "throttle did not activate before failover"
@@ -143,7 +143,7 @@ start_server {tags {"throttle repl external:skip"}} {
             # down even though the still-frozen replica's COB is high.
             $primary replicaof $replica_host $replica_port
             wait_for_condition 50 100 {
-                [throttle_rate $primary] == 0 && ![client_throttled $primary $wid]
+                [throttle_rate $primary] == -1 && ![client_throttled $primary $wid]
             } else {
                 exec kill -SIGCONT $replica_pid
                 fail "throttle was not torn down after the primary was demoted"
@@ -166,7 +166,7 @@ start_server {tags {"throttle repl external:skip"}} {
                 $writer set key:$i [string repeat w 1000]
             }
             wait_for_condition 50 100 {
-                [throttle_rate $primary] != 0
+                [throttle_rate $primary] >= 0
             } else {
                 exec kill -SIGCONT $replica_pid
                 fail "Throttler did not activate."
@@ -178,9 +178,9 @@ start_server {tags {"throttle repl external:skip"}} {
 
             # Disable the feature while COB is still high. The throttler must tear
             # down AND release its throttled client.
-            $primary config set repl-throttle-steady-state-enabled no
+            $primary config set repl-throttling-enabled no
             wait_for_condition 50 100 {
-                [throttle_rate $primary] == 0 && ![client_throttled $primary $wid]
+                [throttle_rate $primary] == -1 && ![client_throttled $primary $wid]
             } else {
                 exec kill -SIGCONT $replica_pid
                 fail "Throttle not torn down / client not released after disabling steady state throttling."
@@ -203,7 +203,7 @@ start_server {tags {"throttle repl external:skip"}} {
                 $writer set key:$i [string repeat w 1000]
             }
             wait_for_condition 50 100 {
-                [throttle_rate $primary] != 0
+                [throttle_rate $primary] >= 0
             } else {
                 exec kill -SIGCONT $replica_pid
                 fail "Throttler did not activate."
@@ -223,7 +223,7 @@ start_server {tags {"throttle repl external:skip"}} {
             # It must then be removed from the throttler.
             $writer close
             wait_for_condition 50 100 {
-                [getInfoProperty [$primary info throttling] repl_throttle_current_clients] == 0 &&
+                [getInfoProperty [$primary info debug] repl_throttle_current_clients] == 0 &&
                 ![client_throttled $primary $wid]
             } else {
                 exec kill -SIGCONT $replica_pid

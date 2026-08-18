@@ -18,7 +18,6 @@ static const int COB_TREND_WINDOW_SECS = 2;
 static const double RATE_INCREASE_MULTIPLIER = 1.05;
 static const double RATE_DECREASE_MULTIPLIER = 0.95;
 static const int STEADY_STATE_CONVERGENCE_SECS = 30;     /* projection horizon for COB extrapolation */
-static const long MAX_COB_TARGET = 1024L * 1024 * 1024;  /* 1GB */
 static const char *const METRICS_NAME = "repl_throttle"; /* shared metrics group name */
 
 /* Metrics for INFO output and operational visibility. */
@@ -90,8 +89,6 @@ static int64_t getReplicaSteadyStateCobTargetSize(void) {
 
     int64_t cob_target = limit / 2; /* Target is half the limit. */
 
-    if (cob_target == 0 || cob_target > MAX_COB_TARGET) cob_target = MAX_COB_TARGET;
-
     return cob_target;
 }
 
@@ -123,7 +120,7 @@ static bool evaluateSteadyStateThrottle(client *c, int64_t cob_size) {
  * prevents a premature disconnect and allows the throttler to reduce the replica's buffer
  * back below target. */
 bool throttleRepl_isClientExemptFromCobLimits(client *c) {
-    if (!throttle_repl_config.repl_throttle_steady_state_enabled || !isThrottlerActive()) return false;
+    if (!throttle_repl_config.repl_throttling_enabled || !isThrottlerActive()) return false;
     if (!iAmPrimary()) return false;
     if (getClientType(c) != CLIENT_TYPE_REPLICA) return false;
 
@@ -147,9 +144,10 @@ bool throttleRepl_isClientExemptFromCobLimits(client *c) {
 /* Called from serverCron every 100ms. Evaluates the replica with the largest COB and
  * adjusts throttling as needed. */
 void throttleRepl_adjustThrottling(void) {
-    /* If we're no longer the primary (e.g. after failover) or steady-state repl throttling
-     * was disabled, tear down any active throttler and stop. */
-    if (!iAmPrimary() || !throttle_repl_config.repl_throttle_steady_state_enabled) {
+    /* Tear down and stop if we're no longer the primary (e.g. after failover), replication
+     * throttling was disabled, or no COB limit is configured. */
+    if (!iAmPrimary() || !throttle_repl_config.repl_throttling_enabled ||
+        getReplicaSteadyStateCobTargetSize() <= 0) {
         if (isThrottlerActive()) uninstallThrottler();
         return;
     }
@@ -188,25 +186,32 @@ void throttleRepl_adjustThrottling(void) {
 }
 
 sds throttleRepl_sdscatInfoMetrics(sds info) {
-    info = sdscatprintf(info,
-                        "repl_throttle_rate:%.2f\r\n",
-                        metrics.is_throttler_active ? metrics.current_throttle_rate : 0);
-
     throttleMetrics throttle_metrics;
     throttle_getMetrics(METRICS_NAME, &throttle_metrics);
     info = sdscatprintf(info,
+                        "repl_throttle_rate:%.2f\r\n"
                         "repl_throttle_activation_events:%lu\r\n"
+                        "repl_throttle_below_guardrail_secs:%ld\r\n"
+                        "repl_throttle_total_commands:%lld\r\n",
+                        metrics.is_throttler_active ? metrics.current_throttle_rate : -1.0,
+                        metrics.throttle_activation_events,
+                        isThrottlerActive() ? throttle_getGuardrailSecs(repl_throttler) : 0L,
+                        throttle_metrics.num_commands_throttled);
+
+    return info;
+}
+
+/* Verbose debug metrics. */
+sds throttleRepl_sdscatInfoDebugMetrics(sds info) {
+    throttleMetrics throttle_metrics;
+    throttle_getMetrics(METRICS_NAME, &throttle_metrics);
+    info = sdscatprintf(info,
                         "repl_throttle_more_events:%lu\r\n"
                         "repl_throttle_less_events:%lu\r\n"
-                        "repl_throttle_below_guardrail_secs:%ld\r\n"
-                        "repl_throttle_current_clients:%d\r\n"
-                        "repl_throttle_total_commands:%lld\r\n",
-                        metrics.throttle_activation_events,
+                        "repl_throttle_current_clients:%d\r\n",
                         metrics.throttle_more_events,
                         metrics.throttle_less_events,
-                        isThrottlerActive() ? throttle_getGuardrailSecs(repl_throttler) : 0L,
-                        throttle_metrics.num_clients_throttled,
-                        throttle_metrics.num_commands_throttled);
+                        throttle_metrics.num_clients_throttled);
 
     return info;
 }

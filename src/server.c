@@ -6913,6 +6913,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "eventloop_cmd_per_cycle_max:%lld\r\n", server.el_cmd_cnt_max,
                 "io_threaded_reads_pending:%lld\r\n", server.stat_io_reads_pending,
                 "io_threaded_writes_pending:%lld\r\n", server.stat_io_writes_pending));
+        info = throttleRepl_sdscatInfoDebugMetrics(info);
     }
 
     return info;

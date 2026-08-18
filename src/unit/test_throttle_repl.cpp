@@ -38,7 +38,7 @@ class ThrottleReplTest : public ::testing::Test {
         server.client_obuf_limits[CLIENT_TYPE_REPLICA].hard_limit_bytes = COB_LIMIT;
 
         /* throttle_repl set up */
-        throttle_repl_config.repl_throttle_steady_state_enabled = 1;
+        throttle_repl_config.repl_throttling_enabled = 1;
 
         /* monotonic set up */
         origGetMonotonicUs = getMonotonicUs;
@@ -84,7 +84,7 @@ class ThrottleReplTest : public ::testing::Test {
     }
 
     bool isReplThrottlerActive() {
-        return readMetric("repl_throttle_rate") > 0.0;
+        return readMetric("repl_throttle_rate") >= 0.0;
     }
 
     double getThrottlerRate() {
@@ -101,6 +101,7 @@ class ThrottleReplTest : public ::testing::Test {
     /* Snapshot the INFO output and return one field's numeric value (-1 if absent). */
     double readMetric(const char *key) {
         sds info = throttleRepl_sdscatInfoMetrics(sdsempty());
+        info = throttleRepl_sdscatInfoDebugMetrics(info);
         char search_for[128];
         snprintf(search_for, sizeof(search_for), "%s:", key);
         char *p = strstr(info, search_for);
@@ -112,6 +113,20 @@ class ThrottleReplTest : public ::testing::Test {
 
 TEST_F(ThrottleReplTest, NoReplicasNoThrottle) {
     listEmpty(server.replicas);
+    throttleRepl_adjustThrottling();
+    EXPECT_FALSE(isReplThrottlerActive());
+}
+
+TEST_F(ThrottleReplTest, noCobLimitConfiguredNoThrottle) {
+    /* With neither a soft nor a hard COB limit configured, the cob target is 0.
+     * The adjustThrottling treats target 0 as "feature off": it never activates, even with
+     * a huge COB and increasing trend. */
+    server.client_obuf_limits[CLIENT_TYPE_REPLICA].soft_limit_bytes = 0;
+    server.client_obuf_limits[CLIENT_TYPE_REPLICA].hard_limit_bytes = 0;
+
+    EXPECT_CALL(mock, getClientOutputBufferMemoryUsage(replica_steady)).WillRepeatedly(Return(COB_LIMIT * 1000));
+    EXPECT_CALL(mock, trendCalc_changePerSecShortTerm(_)).WillRepeatedly(Return(COB_LIMIT * 1000));
+
     throttleRepl_adjustThrottling();
     EXPECT_FALSE(isReplThrottlerActive());
 }
@@ -224,7 +239,7 @@ TEST_F(ThrottleReplTest, steadyStateThrottleBasedOnLargestCob) {
 }
 
 TEST_F(ThrottleReplTest, disabledConfigNoNewThrottle) {
-    throttle_repl_config.repl_throttle_steady_state_enabled = 0;
+    throttle_repl_config.repl_throttling_enabled = 0;
     EXPECT_CALL(mock, getClientOutputBufferMemoryUsage(replica_steady)).WillRepeatedly(Return(COB_LIMIT / 4 + 1));
     EXPECT_CALL(mock, trendCalc_changePerSecShortTerm(_)).WillRepeatedly(Return(COB_LIMIT / 2));
 
@@ -247,21 +262,6 @@ TEST_F(ThrottleReplTest, throttlerRemovedAfterFailover) {
     EXPECT_CALL(mock, throttle_deregister(dummy_throttler)).Times(1);
     throttleRepl_adjustThrottling();
     EXPECT_FALSE(isReplThrottlerActive());
-}
-
-TEST_F(ThrottleReplTest, insaneCobLimitConfig) {
-    /* If the configured soft limit is absurd, the target is capped at MAX_COB_TARGET (1GB).
-     * So a COB far below the configured limit can still exceed the capped target and throttle. */
-    server.client_obuf_limits[CLIENT_TYPE_REPLICA].soft_limit_bytes = 10LL * 1024 * 1024 * 1024; /* 10 GB */
-    server.client_obuf_limits[CLIENT_TYPE_REPLICA].hard_limit_bytes = 10LL * 1024 * 1024 * 1024; /* 10 GB */
-    const long max_cob_target = 1024L * 1024 * 1024;                                             /* 1 GB ceiling */
-
-    EXPECT_CALL(mock, getClientOutputBufferMemoryUsage(replica_steady)).WillRepeatedly(Return(max_cob_target + 1));
-    EXPECT_CALL(mock, trendCalc_changePerSecShortTerm(_)).WillRepeatedly(Return(1.0));
-    EXPECT_CALL(mock, throttle_register(_, _, _)).WillOnce(Return(dummy_throttler));
-
-    throttleRepl_adjustThrottling();
-    EXPECT_TRUE(isReplThrottlerActive());
 }
 
 TEST_F(ThrottleReplTest, clientCobLimitsExempt) {
@@ -308,8 +308,8 @@ TEST_F(ThrottleReplTest, clientCobLimitsExempt) {
     EXPECT_TRUE(throttleRepl_isClientExemptFromCobLimits(replica_steady));
 
     /* If throttle repl disabled, not exempt. */
-    throttle_repl_config.repl_throttle_steady_state_enabled = 0;
+    throttle_repl_config.repl_throttling_enabled = 0;
     EXPECT_FALSE(throttleRepl_isClientExemptFromCobLimits(replica_steady));
-    throttle_repl_config.repl_throttle_steady_state_enabled = 1;
+    throttle_repl_config.repl_throttling_enabled = 1;
     EXPECT_TRUE(throttleRepl_isClientExemptFromCobLimits(replica_steady));
 }

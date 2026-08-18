@@ -1,8 +1,6 @@
 # Test higher-level Raft cluster behavior that does not require direct
 # wire-protocol interaction from Tcl.
 
-source tests/support/cluster_raft.tcl
-
 tags {external:skip cluster singledb} {
 
 test "Raft: leader steps down after losing quorum freshness" {
@@ -10,8 +8,6 @@ test "Raft: leader steps down after losing quorum freshness" {
         set r0 [srv 0 client]
         $r0 CLUSTER MEET [srv -1 host] [srv -1 port]
         $r0 CLUSTER MEET [srv -2 host] [srv -2 port]
-        raft_add_voter $r0 [[srv -1 client] CLUSTER MYID]
-        raft_add_voter $r0 [[srv -2 client] CLUSTER MYID]
 
         wait_for_condition 50 100 {
             [CI 0 cluster_size] == 3 &&

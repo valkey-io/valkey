@@ -266,6 +266,7 @@ static bool nodeIsVoter(clusterNode *n) {
 #define REPL_OFFSETS_BROADCAST_PERIOD_MS 10000
 #define RAFT_LOG_REWRITE_THRESHOLD 100
 #define PROPOSAL_MAX_RETRIES 10
+#define RAFT_TARGET_VOTERS 5
 
 /* Monotonic millisecond clock for timeouts and failure detection.
  * Unlike gettimeofday(), this is not affected by system clock adjustments. */
@@ -371,6 +372,15 @@ static clusterMsgSendBlock *clusterRaftBuildAllOffsetsMsg(void) {
  * Helpers
  * -------------------------------------------------------------------------- */
 
+/* Identity of a quorum-changing transition is (entry type, target node-id =
+ * the first CLUSTER_NAMELEN bytes of the entry data). Used to enforce
+ * "at most one membership transition in flight". */
+typedef enum {
+    RAFT_QC_NONE = 0, /* No quorum-changing entry in flight. */
+    RAFT_QC_SAME,     /* The same transition is already in flight. */
+    RAFT_QC_CONFLICT, /* A different transition is in flight. */
+} raftQuorumChangeStatus;
+
 static void clusterRaftPropose(sds entry, void *ctx, void (*callback)(void *ctx, const char *error));
 static void clusterRaftDeferPendingProposals(void);
 static void clusterRaftCompletePendingProposal(int type, sds data, RaftProposalResult result);
@@ -401,6 +411,10 @@ static void clusterRaftPersistNewLogEntries(uint64_t from);
 static uint64_t raftLogLastTerm(void);
 static int clusterRaftCanGrantVote(clusterRaftState *rs, uint64_t candidate_last_index, uint64_t candidate_last_term);
 static void clusterRaftStartElection(void);
+static bool raftEntryAffectsQuorum(int type, sds data);
+static raftQuorumChangeStatus clusterRaftQuorumChangeStatus(int type, sds data);
+static clusterNode *clusterRaftSelectPromotionCandidate(void);
+static void clusterRaftAutoPromoteLearner(void);
 
 static void clusterRaftRandomizeElectionTimeout(void) {
     mstime_t base = server.cluster_node_timeout;
@@ -1112,6 +1126,12 @@ static bool parseSlotChangeEpochs(sds *argv, int argc, slotChangeEpochInfo *info
  * RAFT_RESULT_REJECTED describing why it failed. */
 static RaftProposalResult clusterRaftPreValidate(int type, sds data) {
     RaftProposalResult result = RAFT_RESULT_OK;
+    /* Enforce at most one quorum-changing transition in flight. A different
+     * membership transition already in the log is rejected here so it never
+     * consumes log space. */
+    if (clusterRaftQuorumChangeStatus(type, data) == RAFT_QC_CONFLICT) {
+        return RAFT_RESULT_REJECTED;
+    }
     switch (type) {
     case RAFT_ENTRY_FAILOVER:
         result = clusterRaftApplyFailover(data, 1);
@@ -1322,6 +1342,58 @@ static uint64_t raftLogLastTerm(void) {
 static uint64_t raftLogTermAt(uint64_t index) {
     raftLogEntry *e = raftLogGet(index);
     return e ? e->term : 0;
+}
+
+/* True if the entry changes the voting set (server.cluster->size). Safe on
+ * malformed/too-short data: never reads past the buffer. */
+static bool raftEntryAffectsQuorum(int type, sds data) {
+    if (sdslen(data) < CLUSTER_NAMELEN) return false;
+
+    switch (type) {
+    case RAFT_ENTRY_ADD_VOTER:
+    case RAFT_ENTRY_DEL_VOTER:
+        return true;
+    case RAFT_ENTRY_NODE_JOIN: {
+        /* data: "<node-id> <address> <learner|voter>" */
+        int argc;
+        sds *argv = sdssplitlen(data, sdslen(data), " ", 1, &argc);
+        bool changes = (argv && argc >= 3 && !strcasecmp(argv[2], "voter"));
+        if (argv) sdsfreesplitres(argv, argc);
+        return changes;
+    }
+    case RAFT_ENTRY_NODE_FORGET: {
+        clusterNode *node = clusterLookupNode(data, CLUSTER_NAMELEN);
+        return node != NULL && nodeIsVoter(node);
+    }
+    default:
+        return false;
+    }
+}
+
+/* Classify the in-flight (committed but not yet applied) quorum-changing
+ * entries relative to a candidate transition. Scans (last_applied,
+ * raftLogLastIndex()] once. Returns:
+ *   RAFT_QC_NONE     — no quorum-changing entry in flight.
+ *   RAFT_QC_SAME     — the identical (type, target) transition is in flight.
+ *   RAFT_QC_CONFLICT — a different transition is in flight. */
+static raftQuorumChangeStatus clusterRaftQuorumChangeStatus(int type, sds data) {
+    if (!raftEntryAffectsQuorum(type, data)) return RAFT_QC_NONE;
+
+    clusterRaftState *rs = RAFT_STATE();
+    int found_same = 0;
+    int found_conflict = 0;
+    for (uint64_t idx = rs->last_applied + 1; idx <= raftLogLastIndex(); idx++) {
+        raftLogEntry *e = raftLogGet(idx);
+        if (!e || !raftEntryAffectsQuorum(e->type, e->data)) continue;
+        if (e->type == type && memcmp(e->data, data, CLUSTER_NAMELEN) == 0) {
+            found_same = 1;
+        } else {
+            found_conflict = 1;
+        }
+    }
+    if (found_conflict) return RAFT_QC_CONFLICT;
+    if (found_same) return RAFT_QC_SAME;
+    return RAFT_QC_NONE;
 }
 
 /* Find a pending proposal matching type+data, fire its callback, and remove it.
@@ -2292,24 +2364,46 @@ static void clusterRaftRetryProposals(int include_pending) {
     while ((ln = listNext(&li)) != NULL) {
         raftPendingProposal *pp = listNodeValue(ln);
 
-        /* For deferred entries, update to latest shard epoch */
+        /* For deferred entries, update to latest shard epoch. */
         if (pp->deferred) {
             if (!raftRefreshEpochInData(pp->type, &pp->data)) continue;
 
             pp->deferred = 0;
+        } else if (!include_pending) {
+            continue;
+        }
 
-            if (rs->role == RAFT_ROLE_LEADER) {
-                RaftProposalResult pre_result = clusterRaftPreValidate(pp->type, pp->data);
-                if (pre_result != RAFT_RESULT_OK) {
-                    if (pp->callback) pp->callback(pp->ctx, raftProposalResultMsg(pre_result));
-                    sdsfree(pp->data);
-                    zfree(pp);
-                    listDelNode(rs->pending_proposals, ln);
+        if (rs->role == RAFT_ROLE_LEADER) {
+            raftQuorumChangeStatus status = clusterRaftQuorumChangeStatus(pp->type, pp->data);
+
+            /* A different membership transition is in flight: reject. */
+            if (status == RAFT_QC_CONFLICT) {
+                if (pp->callback) pp->callback(pp->ctx, GENERIC_PROPOSAL_REJECTION_MSG);
+                sdsfree(pp->data);
+                zfree(pp);
+                listDelNode(rs->pending_proposals, ln);
+                continue;
+            }
+
+            /* The identical transition is already in the log; it will
+             * complete the pending proposal when applied. */
+            if (status == RAFT_QC_SAME) continue;
+
+            /* No membership transition in flight: run full pre-validation. */
+            RaftProposalResult pre_result = clusterRaftPreValidate(pp->type, pp->data);
+            if (pre_result != RAFT_RESULT_OK) {
+                if (pre_result == RAFT_RESULT_STALE_EPOCH && pp->retries > 0) {
+                    pp->retries--;
+                    pp->deferred = 1;
+                    rs->todo_retry_deferred = 1;
                     continue;
                 }
+                if (pp->callback) pp->callback(pp->ctx, raftProposalResultMsg(pre_result));
+                sdsfree(pp->data);
+                zfree(pp);
+                listDelNode(rs->pending_proposals, ln);
+                continue;
             }
-        } else {
-            if (!include_pending) continue;
         }
 
         clusterRaftSendProposal(pp, leader_link);
@@ -2320,6 +2414,53 @@ static void clusterRaftRetryProposals(int include_pending) {
 static void clusterRaftAssertLearnerRole(void) {
     clusterRaftState *rs = RAFT_STATE();
     serverAssert((rs->role == RAFT_ROLE_LEARNER) == nodeIsLearner(myself));
+}
+
+/* Pick a learner eligible for automatic promotion to voter. A candidate must
+ * be a learner that finished joining (no MEET flag), is not marked failed,
+ * has an active link, and has fully caught up with the leader's log. */
+static clusterNode *clusterRaftSelectPromotionCandidate(void) {
+    uint64_t last = raftLogLastIndex();
+    dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
+    dictEntry *de;
+    while ((de = dictNext(di)) != NULL) {
+        clusterNode *n = dictGetVal(de);
+        if (!nodeIsLearner(n)) continue;
+        if (n->flags & CLUSTER_NODE_MEET) continue;
+        if (nodeFailed(n)) continue;
+        if (!n->link) continue;
+        if (RAFT_NODE(n)->match_index < last) continue;
+        dictReleaseIterator(di);
+        return n;
+    }
+    dictReleaseIterator(di);
+    return NULL;
+}
+
+/* Leader-only, one-way reconciliation controller: promote caught-up learners
+ * to voters until the voting set reaches RAFT_TARGET_VOTERS. Reuses the
+ * ADD_VOTER path. Never demotes; when size >= target it is a no-op. Stops
+ * while any membership transition is in flight. */
+static void clusterRaftAutoPromoteLearner(void) {
+    clusterRaftState *rs = RAFT_STATE();
+    if (rs->role != RAFT_ROLE_LEADER) return;
+    if (server.cluster->size >= RAFT_TARGET_VOTERS) return;
+
+    clusterNode *candidate = clusterRaftSelectPromotionCandidate();
+    if (!candidate) return;
+
+    sds data = sdsnewlen(candidate->name, CLUSTER_NAMELEN);
+    /* Only one membership transition in flight at a time. */
+    if (clusterRaftQuorumChangeStatus(RAFT_ENTRY_ADD_VOTER, data) != RAFT_QC_NONE) {
+        sdsfree(data);
+        return;
+    }
+
+    sds entry = sdsnew("ADD_VOTER ");
+    entry = sdscatsds(entry, data);
+    clusterRaftPropose(entry, NULL, NULL);
+    sdsfree(data);
+    sdsfree(entry);
 }
 
 static void clusterRaftCron(void) {
@@ -2434,6 +2575,7 @@ static void clusterRaftCron(void) {
             }
             myself->repl_offset = my_offset;
             clusterRaftDetectFailures(now);
+            clusterRaftAutoPromoteLearner();
         }
     }
 
@@ -3646,6 +3788,12 @@ static RaftProposalResult clusterRaftApplyDelVoter(sds data, int validate_only) 
     }
 
     if (validate_only) {
+        /* Replacement-first: refuse to demote below the auto-promotion
+         * target. The caller must add a replacement voter first. */
+        if (server.cluster->size - 1 < RAFT_TARGET_VOTERS) {
+            sdsfreesplitres(argv, argc);
+            return RAFT_RESULT_REJECTED;
+        }
         sdsfreesplitres(argv, argc);
         return RAFT_RESULT_OK;
     }
@@ -3685,7 +3833,13 @@ static RaftProposalResult clusterRaftApplyNodeForget(sds data, int validate_only
         goto reject;
     }
 
-    if (validate_only) goto done;
+    if (validate_only) {
+        /* Replacement-first: refuse to forget a voter below the target. */
+        if (nodeIsVoter(node) && server.cluster->size - 1 < RAFT_TARGET_VOTERS) {
+            goto reject;
+        }
+        goto done;
+    }
 
     /* Save shard_id before deleting the node. */
     char shard_id[CLUSTER_NAMELEN];

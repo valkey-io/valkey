@@ -121,7 +121,7 @@
                 },
                 {
                     "description": "The value of key after the increment",
-                    "type": "double"
+                    "type": "string"
                 }
             ]
         }

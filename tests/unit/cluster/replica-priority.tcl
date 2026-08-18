@@ -1,3 +1,23 @@
+proc read_file {path} {
+    set fd [open $path r]
+    set data [read $fd]
+    close $fd
+    return $data
+}
+
+proc file_has_pattern {path pattern} {
+    if {![file exists $path]} {
+        return 0
+    }
+    return [regexp $pattern [read_file $path]]
+}
+
+proc cluster_nodes_conf_path {id} {
+    set dir [lindex [R $id config get dir] 1]
+    set conf [lindex [R $id config get cluster-config-file] 1]
+    return [file join $dir $conf]
+}
+
 start_cluster 3 4 {tags {external:skip cluster} overrides {cluster-ping-interval 1000 cluster-node-timeout 5000}} {
     test "Replica can do a better ranking in auto failover based on the priority" {
         # primary R 0, replica1 R 3, replica2 R 6
@@ -80,6 +100,54 @@ start_cluster 3 4 {tags {external:skip cluster} overrides {cluster-ping-interval
             [R 6 debug cluster-replica-priority [R 0 cluster myid]] == 0
         } else {
             fail "Replica priority did not propagate"
+        }
+    }
+
+    test "Non-zero replica priority is persisted in nodes.conf" {
+        R 0 config set cluster-replica-priority 10
+        R 3 config set cluster-replica-priority 20
+        R 6 config set cluster-replica-priority 30
+
+        set nodes_conf0 [cluster_nodes_conf_path 0]
+        set nodes_conf3 [cluster_nodes_conf_path 3]
+        set nodes_conf6 [cluster_nodes_conf_path 6]
+
+        # Each node should learn its peers' non-zero priorities and write
+        # them to its own nodes.conf via the replica-priority aux field.
+        wait_for_condition 1000 50 {
+            [file_has_pattern $nodes_conf0 {replica-priority=10}] &&
+            [file_has_pattern $nodes_conf0 {replica-priority=20}] &&
+            [file_has_pattern $nodes_conf0 {replica-priority=30}] &&
+            [file_has_pattern $nodes_conf3 {replica-priority=10}] &&
+            [file_has_pattern $nodes_conf3 {replica-priority=20}] &&
+            [file_has_pattern $nodes_conf3 {replica-priority=30}] &&
+            [file_has_pattern $nodes_conf6 {replica-priority=10}] &&
+            [file_has_pattern $nodes_conf6 {replica-priority=20}] &&
+            [file_has_pattern $nodes_conf6 {replica-priority=30}]
+        } else {
+            fail "Non-zero replica priority was not persisted to nodes.conf"
+        }
+
+        # A node whose priority is 0 (the default, highest failover rank) must not
+        # be written to nodes.conf.
+        R 0 config set cluster-replica-priority 0
+        wait_for_condition 1000 50 {
+            ![file_has_pattern $nodes_conf0 {replica-priority=0}] &&
+            ![file_has_pattern $nodes_conf3 {replica-priority=0}] &&
+            ![file_has_pattern $nodes_conf6 {replica-priority=0}]
+        } else {
+            fail "Zero replica priority was unexpectedly persisted to nodes.conf"
+        }
+
+        # Restart node 3 and make sure it restores the learned peer priorities
+        # from nodes.conf instead of dropping them until the next gossip.
+        restart_server -3 true false
+        wait_for_cluster_propagation
+        wait_for_condition 1000 50 {
+            [R 3 debug cluster-replica-priority [R 0 cluster myid]] == 0 &&
+            [R 3 debug cluster-replica-priority [R 6 cluster myid]] == 30
+        } else {
+            fail "Persisted replica priority was not restored after restart"
         }
     }
 } ;# start_cluster

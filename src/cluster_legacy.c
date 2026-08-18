@@ -129,7 +129,9 @@ int auxAnnounceClientTcpPortPresent(clusterNode *n);
 int auxAnnounceClientTlsPortSetter(clusterNode *n, void *value, size_t length);
 sds auxAnnounceClientTlsPortGetter(clusterNode *n, sds s);
 int auxAnnounceClientTlsPortPresent(clusterNode *n);
-int auxAnnounceClientTlsPortPresent(clusterNode *n);
+int auxReplicaPrioritySetter(clusterNode *n, void *value, size_t length);
+sds auxReplicaPriorityGetter(clusterNode *n, sds s);
+int auxReplicaPriorityPresent(clusterNode *n);
 static void clusterBuildMessageHdrLight(clusterMsgLight *hdr, int type, size_t msglen);
 static void clusterBuildMessageHdr(clusterMsg *hdr, int type, size_t msglen);
 void freeClusterLink(clusterLink *link);
@@ -429,6 +431,7 @@ typedef enum {
     af_announce_client_tcp_port,
     af_announce_client_tls_port,
     af_availability_zone,
+    af_replica_priority,
     af_count, /* must be the last field */
 } auxFieldIndex;
 
@@ -446,6 +449,7 @@ auxFieldHandler auxFieldHandlers[] = {
     {"client-tcp-port", auxAnnounceClientTcpPortSetter, auxAnnounceClientTcpPortGetter, auxAnnounceClientTcpPortPresent},
     {"client-tls-port", auxAnnounceClientTlsPortSetter, auxAnnounceClientTlsPortGetter, auxAnnounceClientTlsPortPresent},
     {"availability-zone", auxAvailabilityZoneSetter, auxAvailabilityZoneGetter, auxAvailabilityZonePresent},
+    {"replica-priority", auxReplicaPrioritySetter, auxReplicaPriorityGetter, auxReplicaPriorityPresent},
 };
 
 int auxShardIdSetter(clusterNode *n, void *value, size_t length) {
@@ -637,6 +641,29 @@ sds auxAnnounceClientTlsPortGetter(clusterNode *n, sds s) {
 
 int auxAnnounceClientTlsPortPresent(clusterNode *n) {
     return n->announce_client_tls_port > 0 && n->announce_client_tls_port < 65536;
+}
+
+int auxReplicaPrioritySetter(clusterNode *n, void *value, size_t length) {
+    if (length < 1) return C_ERR;
+
+    unsigned long long replica_priority;
+    if (!string2ull((char *)value, length, &replica_priority)) return C_ERR;
+    if (replica_priority > UINT_MAX) return C_ERR;
+
+    n->replica_priority = (unsigned int)replica_priority;
+    return C_OK;
+}
+
+sds auxReplicaPriorityGetter(clusterNode *n, sds s) {
+    return sdscatfmt(s, "%u", n->replica_priority);
+}
+
+int auxReplicaPriorityPresent(clusterNode *n) {
+    /* Only persist a non-zero priority. A node that doesn't advertise a
+     * priority (old version or unset) is consistently treated as priority 0,
+     * which is the default and the highest failover rank, so there's no need
+     * to store the absent default. */
+    return n->replica_priority != 0;
 }
 
 /* clusterLink send queue blocks */
@@ -1425,7 +1452,10 @@ static void updateShardId(clusterNode *node, const char *shard_id) {
 }
 
 static void updateReplicaPriority(clusterNode *node, unsigned int replica_priority) {
+    if (node->replica_priority == replica_priority) return;
+
     node->replica_priority = replica_priority;
+    clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG);
 }
 
 static inline int areInSameShard(clusterNode *node1, clusterNode *node2) {
@@ -1465,7 +1495,7 @@ void clusterUpdateMyselfClientIpV6(void) {
 void clusterUpdateMyselfReplicaPriority(void) {
     if (!myself) return;
     myself->replica_priority = server.cluster_replica_priority;
-    clusterDoBeforeSleep(CLUSTER_TODO_BROADCAST_ALL);
+    clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_BROADCAST_ALL);
 }
 
 void clusterInit(void) {

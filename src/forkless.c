@@ -162,7 +162,15 @@ static void forklessSaveCloseSnapshotFile(void *args[]) {
     serverAssert(!onValkeyMainThread());
     forklessSaveInfo *saveInfo = (forklessSaveInfo *)args[0];
     /* Error or not, close the file... */
-    if (fsync(fileno(saveInfo->save_rio.io.file.fp)) != 0) {
+    /* Flush the RIO buffer to the OS before fsync, otherwise any bytes still
+     * buffered (including the tail written after the last autosync boundary and
+     * the RDB footer) are not covered by the fsync below. */
+    if (rioFlush(&saveInfo->save_rio) == 0) {
+        serverLog(LL_WARNING, "forkless-save: error flushing temp file [%s]: %s",
+                  saveInfo->temp_file, strerror(errno));
+        saveInfo->err_code = C_ERR;
+    }
+    if (valkey_fsync(fileno(saveInfo->save_rio.io.file.fp)) != 0) {
         serverLog(LL_WARNING, "forkless-save: error fsyncing temp file [%s]: %s",
                   saveInfo->temp_file, strerror(errno));
         saveInfo->err_code = C_ERR;
@@ -177,6 +185,11 @@ static void forklessSaveCloseSnapshotFile(void *args[]) {
         if (rename(saveInfo->temp_file, saveInfo->final_file) != 0) {
             serverLog(LL_WARNING, "forkless-save: error moving temp file [%s] to destination [%s]: %s",
                       saveInfo->temp_file, saveInfo->final_file, strerror(errno));
+            saveInfo->err_code = C_ERR;
+        } else if (fsyncFileDir(saveInfo->final_file) != 0) {
+            /* fsync the directory so the rename itself survives a crash. */
+            serverLog(LL_WARNING, "forkless-save: error syncing directory for [%s]: %s",
+                      saveInfo->final_file, strerror(errno));
             saveInfo->err_code = C_ERR;
         }
     }

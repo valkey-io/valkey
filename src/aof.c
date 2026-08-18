@@ -1134,7 +1134,7 @@ cleanup:
 /* This is a wrapper to the write syscall in order to retry on short writes
  * or if the syscall gets interrupted. It could look strange that we retry
  * on short writes given that we are writing to a block device: normally if
- * the first call is short, there is a end-of-space condition, so the next
+ * the first call is short, there is an end-of-space condition, so the next
  * is likely to fail. However apparently in modern systems this is no longer
  * true, and in general it looks just more resilient to retry the write. If
  * there is an actual error condition we'll get it at the next try. */
@@ -1168,7 +1168,7 @@ ssize_t aofWrite(int fd, const char *buf, size_t len) {
  * About the 'force' argument:
  *
  * When the fsync policy is set to 'everysec' we may delay the flush if there
- * is still an fsync() going on in the background thread, since for instance
+ * is still a fsync() going on in the background thread, since for instance
  * on Linux write(2) will be blocked by the background fsync anyway.
  * When this happens we remember that there is some aof buffer to be
  * flushed ASAP, and will try to do that in the serverCron() function.

@@ -689,7 +689,7 @@ typedef struct {
 
 /* Trim the stream 's' according to args->trim_strategy, and return the
  * number of elements removed from the stream. The 'approx' option, if non-zero,
- * specifies that the trimming must be performed in a approximated way in
+ * specifies that the trimming must be performed in an approximated way in
  * order to maximize performances. This means that the stream may contain
  * entries with IDs < 'id' in case of MINID (or more elements than 'maxlen'
  * in case of MAXLEN), and elements are only removed if we can remove
@@ -1553,7 +1553,7 @@ long long streamEstimateDistanceFromFirstEverEntry(stream *s, streamID *id) {
  * are created in the pending list of the stream and consumers. We need
  * to propagate this changes in the form of XCLAIM commands. */
 void streamPropagateXCLAIM(client *c, robj *key, streamCG *group, robj *groupname, robj *id, streamNACK *nack) {
-    /* We need to generate an XCLAIM that will work in a idempotent fashion:
+    /* We need to generate an XCLAIM that will work in an idempotent fashion:
      *
      * XCLAIM <key> <group> <consumer> 0 <id> TIME <milliseconds-unix-time>
      *        RETRYCOUNT <count> FORCE JUSTID LASTID <id>.

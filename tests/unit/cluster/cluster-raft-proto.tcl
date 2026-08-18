@@ -130,8 +130,6 @@ proc raft_reply_ae_ack {fd ae_msg repl_offset} {
     return $last_index
 }
 
-source tests/support/cluster_raft.tcl
-
 test "Raft proto: connect to cluster bus and exchange HELLO" {
     start_server {overrides {cluster-enabled yes cluster-protocol raft}} {
         set port [srv 0 port]
@@ -257,7 +255,7 @@ test "Raft proto: learner join, voter promotion, demotion, and forget" {
         set reply [raft_recv $fd]
         assert_match "AE_ACK 1 1 2 *" $reply
         assert_equal 1 [CI 0 cluster_size]
-        assert_match "*learner*" [raft_cluster_nodes_line [srv 0 client] $learner_id]
+        assert {[cluster_has_flag [cluster_get_node_by_id 0 $learner_id] learner]}
         R 0 CLUSTER SAVECONFIG
         set nodes_conf "[lindex [R 0 CONFIG GET dir] 1]/nodes.conf"
         set fp [open $nodes_conf r]
@@ -271,7 +269,7 @@ test "Raft proto: learner join, voter promotion, demotion, and forget" {
         set reply [raft_recv $fd]
         assert_match "AE_ACK 1 1 3 *" $reply
         assert_equal 2 [CI 0 cluster_size]
-        assert {![string match "*learner*" [raft_cluster_nodes_line [srv 0 client] $learner_id]]}
+        assert {![cluster_has_flag [cluster_get_node_by_id 0 $learner_id] learner]}
 
         set ae "AE $leader_id 1 3 1 4 1\n"
         append ae "1 DEL_VOTER $learner_id"
@@ -279,7 +277,7 @@ test "Raft proto: learner join, voter promotion, demotion, and forget" {
         set reply [raft_recv $fd]
         assert_match "AE_ACK 1 1 4 *" $reply
         assert_equal 1 [CI 0 cluster_size]
-        assert_match "*learner*" [raft_cluster_nodes_line [srv 0 client] $learner_id]
+        assert {[cluster_has_flag [cluster_get_node_by_id 0 $learner_id] learner]}
 
         set ae "AE $leader_id 1 4 1 5 1\n"
         append ae "1 NODE_FORGET $learner_id 0"
@@ -287,7 +285,7 @@ test "Raft proto: learner join, voter promotion, demotion, and forget" {
         set reply [raft_recv $fd]
         assert_match "AE_ACK 1 1 5 *" $reply
         assert_equal 1 [CI 0 cluster_size]
-        assert_equal "" [raft_cluster_nodes_line [srv 0 client] $learner_id]
+        assert_equal {} [cluster_get_node_by_id 0 $learner_id]
 
         close $fd
     }
@@ -999,7 +997,6 @@ test "Raft proto: proposal waits for a new leader instead of expiring" {
 start_multiple_servers 2 {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 2000 loglevel debug}} {
     # Shared setup: form cluster and assign slots.
     R 0 CLUSTER MEET [srv -1 host] [srv -1 port]
-    raft_add_voter [srv 0 client] [R 1 CLUSTER MYID]
 
     wait_for_condition 50 100 {
         [CI 0 cluster_size] == 2 &&

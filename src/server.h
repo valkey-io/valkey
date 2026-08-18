@@ -2014,6 +2014,7 @@ struct valkeyServer {
                                                     invocation of the event loop. */
     unsigned int max_new_conns_per_cycle;     /* The maximum number of tcp connections that will be accepted during each
                                                     invocation of the event loop. */
+    int qos_preemptive_poll_interval_us;      /* High-priority event loop preemptive poll interval in microseconds */
     /* AOF persistence */
     int aof_enabled;                    /* AOF configuration */
     int aof_state;                      /* AOF_(ON|OFF|WAIT_REWRITE) */

@@ -133,7 +133,8 @@ typedef struct aeEventLoop {
      * here are processed ahead of normal client traffic and periodically preempt
      * normal event iterations. NULL if unsupported by the OS multiplexer or disabled. */
     struct aeEventLoop *hp_event_loop;
-    monotime hp_last_poll_us; /* Timestamp (microseconds) when hp_event_loop was last drained */
+    monotime hp_last_poll_us;              /* Timestamp (microseconds) when hp_event_loop was last drained */
+    uint64_t hp_preempt_check_interval_us; /* Preemptive check interval in microseconds (0 = disabled) */
 } aeEventLoop;
 
 /* Prototypes */
@@ -166,6 +167,10 @@ void aeSetDontWait(aeEventLoop *eventLoop, int noWait);
 /* Preemptively processes pending high-priority events during long-running normal event loops.
  * Returns the number of high-priority events processed. */
 int aeProcessHPEventsPreemptively(aeEventLoop *eventLoop, int iter_count);
+
+/* Sets and gets the high-priority event preemption check interval in microseconds. */
+void aeSetHPPreemptCheckInterval(aeEventLoop *eventLoop, uint64_t interval_us);
+uint64_t aeGetHPPreemptCheckInterval(aeEventLoop *eventLoop);
 
 /* Links a nested high-priority event loop to the main event loop by registering the child loop's
  * multiplexer descriptor (e.g. epoll fd) on the parent loop with AE_READABLE.

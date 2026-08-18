@@ -86,9 +86,9 @@ static int g_normal_cb_count = 0;
 static void testNormalEventCallbackMaskCheck(aeEventLoop *el, int fd, void *privdata, int mask) {
     testNormalEventCallback(el, fd, privdata, mask);
     g_normal_cb_count++;
-    /* Sleep > 1000 us on 3rd normal event (j = 2) and trigger 2nd HP pipe so (itr_cnt & 3) == 0 check at j = 4 polls hp_el */
+    /* Sleep > 2000 us on 3rd normal event (j = 2) and trigger 2nd HP pipe so (itr_cnt & 3) == 0 check at j = 4 polls hp_el */
     if (g_normal_cb_count == 3 && g_hp_pipe2_write_fd != -1) {
-        usleep(1500);
+        usleep(2500);
         char c = 'x';
         if (write(g_hp_pipe2_write_fd, &c, 1) < 0) {
         }
@@ -160,6 +160,21 @@ TEST_F(SocketPrioritizationTest, EventLoopDualInitialization) {
     ASSERT_NE(server.el->hp_event_loop, (aeEventLoop *)NULL);
     EXPECT_EQ(server.el->hp_event_loop, server.el->hp_event_loop);
     EXPECT_EQ(server.el->hp_event_loop->hp_event_loop, (aeEventLoop *)NULL);
+    EXPECT_EQ(aeGetHPPreemptCheckInterval(server.el), 2000ULL);
+    aeSetHPPreemptCheckInterval(server.el, 5000ULL);
+    EXPECT_EQ(aeGetHPPreemptCheckInterval(server.el), 5000ULL);
+    aeSetHPPreemptCheckInterval(server.el, 2000ULL);
+}
+
+TEST_F(SocketPrioritizationTest, DynamicPreemptionIntervalThreshold) {
+    /* Test getter and setter */
+    aeSetHPPreemptCheckInterval(server.el, 500ULL);
+    EXPECT_EQ(aeGetHPPreemptCheckInterval(server.el), 500ULL);
+
+    /* Test disabling preemption (interval = 0) */
+    aeSetHPPreemptCheckInterval(server.el, 0ULL);
+    EXPECT_EQ(aeGetHPPreemptCheckInterval(server.el), 0ULL);
+    aeSetHPPreemptCheckInterval(server.el, 2000ULL);
 }
 
 TEST_P(SocketPrioritizationConnTest, ConnectionPriorityMetadataAndHelpers) {

@@ -86,7 +86,7 @@ typedef void (*bgIteratorCleanupFunc)(bool terminated, void *privdata);
  * This bgIterator will iterate through the entire keyspace (across all DBs).
  *
  * NAME:        a human readable name for the iterator (must be unique)
- * FLAGS:       creation flags indicate iteration options
+ * CONSISTENCY: the consistency guarantee for the iteration
  * REPLDONE:    if provided, called after the last replication item has been queued (on the Valkey main thread)
  * CLEANUP:     if provided, called at the end of iteration (on the Valkey main thread)
  * PRIVDATA:    passed to cleanup function
@@ -109,7 +109,7 @@ bgIterator *bgIteratorCreateFullScanIter(
  * This bgIterator will iterate through the keys belonging to a set of cluster slots.
  *
  * NAME:        a human readable name for the iterator (must be unique)
- * FLAGS:       creation flags indicate iteration options
+ * CONSISTENCY: the consistency guarantee for the iteration
  * SLOTS:       array of cluster slots to iterate over
  * SLOTS_COUNT: size of the array of slots
  * REPLDONE:    if provided, called after the last replication item has been queued (on the Valkey main thread)

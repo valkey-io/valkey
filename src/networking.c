@@ -3282,11 +3282,16 @@ int processClientIOWriteDone(client *c, int allow_async_writes) {
     if (postWriteToClient(c) == C_ERR) {
         return 1;
     }
+
+    /* connUpdateState may sync-invoke handlers for some transports (e.g. RDMA)
+     * and free the client; only then re-fetch it by id after the update. */
+    int may_invoke_handlers = connUpdateStateMayInvokeHandlers(c->conn);
     uint64_t id = c->id;
     connUpdateState(c->conn);
-
-    c = lookupClientByID(id);
-    if (!c || !c->conn) return 1;
+    if (may_invoke_handlers) {
+        c = lookupClientByID(id);
+        if (!c || !c->conn) return 1;
+    }
 
     /* Replica ACK may have arrived while an IO-thread write was in flight. */
     if (c->flag.replica) {

@@ -43,12 +43,13 @@ proc raft_add_voter {leader node_id} {
     } else {
         fail "Node $node_id did not finish joining on $leader"
     }
-    if {![raft_node_has_flag $leader $node_id learner]} {
-        return
-    }
     set err ""
+    # The auto-promoter may have already promoted this learner, making a
+    # subsequent ADDVOTER fail with "already a voter". Treat either
+    # "promoted" or "ADDVOTER succeeded" as success (avoids a TOCTOU race).
     wait_for_condition 200 100 {
-        [expr {![catch {$leader CLUSTER ADDVOTER $node_id} err]}]
+        [expr {![raft_node_has_flag $leader $node_id learner] ||
+               ![catch {$leader CLUSTER ADDVOTER $node_id} err]}]
     } else {
         fail "Could not promote $node_id to voter: $err"
     }

@@ -104,6 +104,12 @@ start_cluster 3 4 {tags {external:skip cluster} overrides {cluster-ping-interval
     }
 
     test "Non-zero replica priority is persisted in nodes.conf" {
+        set CLUSTER_PACKET_TYPE_NONE -1
+        set CLUSTER_PACKET_TYPE_ALL -2
+
+        set R0_nodeid [R 0 cluster myid]
+        set R6_nodeid [R 6 cluster myid]
+
         R 0 config set cluster-replica-priority 10
         R 3 config set cluster-replica-priority 20
         R 6 config set cluster-replica-priority 30
@@ -133,21 +139,35 @@ start_cluster 3 4 {tags {external:skip cluster} overrides {cluster-ping-interval
         R 0 config set cluster-replica-priority 0
         wait_for_condition 1000 50 {
             ![file_has_pattern $nodes_conf0 {replica-priority=0}] &&
+            ![file_has_pattern $nodes_conf0 {replica-priority=10}] &&
             ![file_has_pattern $nodes_conf3 {replica-priority=0}] &&
-            ![file_has_pattern $nodes_conf6 {replica-priority=0}]
+            ![file_has_pattern $nodes_conf3 {replica-priority=10}] &&
+            ![file_has_pattern $nodes_conf6 {replica-priority=0}] &&
+            ![file_has_pattern $nodes_conf6 {replica-priority=10}]
         } else {
             fail "Zero replica priority was unexpectedly persisted to nodes.conf"
         }
 
         # Restart node 3 and make sure it restores the learned peer priorities
-        # from nodes.conf instead of dropping them until the next gossip.
+        # from nodes.conf.
+        R 3 DEBUG DROP-CLUSTER-PACKET-FILTER $CLUSTER_PACKET_TYPE_ALL
+        R 0 config set cluster-replica-priority 100
+        R 6 config set cluster-replica-priority 300
+        pause_process [srv 0 pid]
+        pause_process [srv -6 pid]
         restart_server -3 true false
-        wait_for_cluster_propagation
+        assert_equal [R 3 debug cluster-replica-priority $R0_nodeid] 0
+        assert_equal [R 3 debug cluster-replica-priority $R6_nodeid] 30
+
+        # Everything will be alright.
+        R 3 DEBUG DROP-CLUSTER-PACKET-FILTER $CLUSTER_PACKET_TYPE_NONE
+        resume_process [srv 0 pid]
+        resume_process [srv -6 pid]
         wait_for_condition 1000 50 {
-            [R 3 debug cluster-replica-priority [R 0 cluster myid]] == 0 &&
-            [R 3 debug cluster-replica-priority [R 6 cluster myid]] == 30
+            [R 3 debug cluster-replica-priority $R0_nodeid] == 100 &&
+            [R 3 debug cluster-replica-priority $R6_nodeid] == 300
         } else {
-            fail "Persisted replica priority was not restored after restart"
+            fail "Replica priority did not propagate"
         }
     }
 } ;# start_cluster

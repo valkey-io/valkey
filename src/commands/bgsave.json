@@ -27,36 +27,48 @@
         ],
         "arguments": [
             {
-                "name": "schedule",
-                "token": "SCHEDULE",
-                "type": "pure-token",
-                "optional": true,
-                "since": "3.2.2"
-            },
-            {
-                "name": "save-type",
+                "name": "operation",
                 "type": "oneof",
                 "optional": true,
-                "since": "9.2.0",
                 "arguments": [
                     {
-                        "name": "fork",
-                        "token": "FORK",
-                        "type": "pure-token"
+                        "name": "save",
+                        "type": "block",
+                        "arguments": [
+                            {
+                                "name": "schedule",
+                                "token": "SCHEDULE",
+                                "type": "pure-token",
+                                "optional": true,
+                                "since": "3.2.2"
+                            },
+                            {
+                                "name": "save-type",
+                                "type": "oneof",
+                                "optional": true,
+                                "since": "9.2.0",
+                                "arguments": [
+                                    {
+                                        "name": "fork",
+                                        "token": "FORK",
+                                        "type": "pure-token"
+                                    },
+                                    {
+                                        "name": "forkless",
+                                        "token": "FORKLESS",
+                                        "type": "pure-token"
+                                    }
+                                ]
+                            }
+                        ]
                     },
                     {
-                        "name": "forkless",
-                        "token": "FORKLESS",
-                        "type": "pure-token"
+                        "name": "cancel",
+                        "token": "CANCEL",
+                        "type": "pure-token",
+                        "since": "8.1.0"
                     }
                 ]
-            },
-            {
-                "name": "cancel",
-                "token": "CANCEL",
-                "type": "pure-token",
-                "optional": true,
-                "since": "8.1.0"
             }
         ],
         "reply_schema": {

@@ -44,6 +44,9 @@
                             },
                             "network-bytes-out": {
                                 "type": "integer"
+                            },
+                            "repl-stream-bytes": {
+                                "type": "integer"
                             }
                         }
                     }

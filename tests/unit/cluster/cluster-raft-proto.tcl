@@ -2,60 +2,7 @@
 # A single valkey-server is started and we connect to its cluster bus port,
 # speaking the raft wire protocol directly.
 
-# Build a raft wire message: "RAFT" + 4-byte big-endian length + payload.
-proc raft_msg {payload} {
-    set len [expr {8 + [string length $payload]}]
-    set hdr "RAFT"
-    append hdr [binary format I $len]
-    append hdr $payload
-    return $hdr
-}
-
-# Connect to a node's cluster bus port and return the socket.
-proc raft_connect {host port} {
-    set fd [socket $host $port]
-    fconfigure $fd -translation binary -buffering full
-    return $fd
-}
-
-# Send a raft message on a cluster bus connection.
-proc raft_send {fd payload} {
-    puts -nonewline $fd [raft_msg $payload]
-    flush $fd
-}
-
-# Read a raft message from a cluster bus connection. Returns the payload.
-proc raft_recv {fd {timeout 5000}} {
-    # Read 8-byte header
-    fconfigure $fd -blocking 0
-    set deadline [expr {[clock milliseconds] + $timeout}]
-    set hdr ""
-    while {[string length $hdr] < 8} {
-        append hdr [read $fd [expr {8 - [string length $hdr]}]]
-        if {[string length $hdr] < 8} {
-            if {[clock milliseconds] > $deadline} {
-                error "timeout reading raft header"
-            }
-            after 10
-        }
-    }
-    if {[string range $hdr 0 3] ne "RAFT"} {
-        error "bad raft header: [string range $hdr 0 3]"
-    }
-    binary scan [string range $hdr 4 7] I totlen
-    set paylen [expr {$totlen - 8}]
-    set payload ""
-    while {[string length $payload] < $paylen} {
-        append payload [read $fd [expr {$paylen - [string length $payload]}]]
-        if {[string length $payload] < $paylen} {
-            if {[clock milliseconds] > $deadline} {
-                error "timeout reading raft payload (got [string length $payload]/$paylen)"
-            }
-            after 10
-        }
-    }
-    return $payload
-}
+source tests/support/cluster_raft.tcl
 
 # Read messages until one matches the pattern and return it.
 proc raft_recv_until {fd pattern {timeout 5000}} {

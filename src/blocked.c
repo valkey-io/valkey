@@ -1021,7 +1021,9 @@ static void unlinkBlockInUseClient(client *c) {
         robj *key = dictGetKey(de);
         list *clientList = keyToClients_getBlockedClientsList(key);
         serverAssert(clientList != NULL);
-        listDelNode(clientList, listSearchKey(clientList, c));
+        listNode *ln = listSearchKey(clientList, c);
+        serverAssert(ln != NULL);
+        listDelNode(clientList, ln);
         if (listLength(clientList) == 0) hashtableDelete(inuse_key_to_clients, key);
     }
     dictReleaseIterator(di);

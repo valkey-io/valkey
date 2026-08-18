@@ -129,7 +129,6 @@ static void *forklessSaveProcessor(void *arg) {
     serverLog(LL_NOTICE, "forkless-save: background processor finished. %ld items processed. %s",
               items, message);
 
-    currentForklessSave = NULL;
     saveInfo->err_code = err;
     bgIteratorClose(saveInfo->iterator);
     return NULL;

@@ -10,7 +10,7 @@ proc raft_form_cluster {num_voters num_nodes} {
         R 0 CLUSTER MEET [srv -$i host] [srv -$i port]
     }
     for {set i 1} {$i < $num_voters} {incr i} {
-        raft_add_voter [srv 0 client] [R $i CLUSTER MYID]
+        raft_add_voter 0 [R $i CLUSTER MYID]
     }
     wait_for_condition 100 100 {
         [raft_cluster_formed $num_voters $num_nodes]
@@ -35,8 +35,6 @@ test "Raft: leader steps down after losing quorum freshness" {
         set r0 [srv 0 client]
         $r0 CLUSTER MEET [srv -1 host] [srv -1 port]
         $r0 CLUSTER MEET [srv -2 host] [srv -2 port]
-        raft_add_voter $r0 [[srv -1 client] CLUSTER MYID]
-        raft_add_voter $r0 [[srv -2 client] CLUSTER MYID]
 
         wait_for_condition 50 100 {
             [CI 0 cluster_size] == 3 &&

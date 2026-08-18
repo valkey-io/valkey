@@ -188,6 +188,11 @@ configEnum bgsave_method_enum[] = {{"fork", RDB_BGSAVE_TYPE_FORK},
                                    {"forkless", RDB_BGSAVE_TYPE_FORKLESS},
                                    {NULL, 0}};
 
+configEnum repl_compression_enum[] = {{"no", REPL_COMPRESSION_NO},
+                                      {"yes", REPL_COMPRESSION_YES},
+                                      {"lz4", REPL_COMPRESSION_LZ4},
+                                      {NULL, 0}};
+
 /* Output buffer limits presets. */
 clientBufferLimitsConfig clientBufferLimitsDefaults[CLIENT_TYPE_OBUF_COUNT] = {
     {0, 0, 0},                                 /* normal */
@@ -891,6 +896,7 @@ void configSetCommand(client *c) {
     int config_count, i, j;
     int invalid_args = 0, deny_loading_error = 0;
     int *config_map_fns;
+    int repl_compression_changed_before = server.repl_compression_changed;
 
     /* Make sure we have an even number of arguments: conf-val pairs */
     if (c->argc & 1) {
@@ -1020,6 +1026,9 @@ void configSetCommand(client *c) {
     goto end;
 
 err:
+    /* Apply callbacks may schedule deferred side effects. A failed transaction
+     * restores configuration values, so restore the pending state as well. */
+    server.repl_compression_changed = repl_compression_changed_before;
     if (deny_loading_error) {
         /* We give the loading error precedence because it may be handled by clients differently, unlike a plain -ERR. */
         addReplyErrorObject(c, shared.loadingerr);
@@ -2683,6 +2692,15 @@ static int updateJemallocBgThread(const char **err) {
     return 1;
 }
 
+static int updateReplCompression(const char **err) {
+    UNUSED(err);
+    /* Reconnects are irreversible, so replicationCron reconciles live links
+     * after CONFIG SET returns. configSetCommand restores this flag if the
+     * transaction rolls back. */
+    server.repl_compression_changed = 1;
+    return 1;
+}
+
 static int updateReplBacklogSize(const char **err) {
     UNUSED(err);
     resizeReplicationBacklog();
@@ -3488,6 +3506,7 @@ standardConfig static_configs[] = {
     createEnumConfig("log-timestamp-format", NULL, MODIFIABLE_CONFIG, log_timestamp_format_enum, server.log_timestamp_format, LOG_TIMESTAMP_LEGACY, NULL, NULL),
     createEnumConfig("rdb-version-check", NULL, MODIFIABLE_CONFIG, rdb_version_check_enum, server.rdb_version_check, RDB_VERSION_CHECK_STRICT, NULL, NULL),
     createEnumConfig("rdbcompression", NULL, MODIFIABLE_CONFIG, rdb_compression_enum, server.rdb_compression, RDB_COMPRESSION_YES, NULL, NULL),
+    createEnumConfig("repl-compression", NULL, MODIFIABLE_CONFIG, repl_compression_enum, server.repl_compression, REPL_COMPRESSION_NO, NULL, updateReplCompression),
 
     /* Integer configs */
     createIntConfig("databases", NULL, IMMUTABLE_CONFIG, 1, INT_MAX, server.config_databases, 16, INTEGER_CONFIG, NULL, NULL),

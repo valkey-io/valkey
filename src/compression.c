@@ -33,6 +33,7 @@ int streamCompressorInit(streamCompressor *compressor,
     compressor->algo = algo;
     compressor->level = level;
     compressor->codec_checksum = codec_checksum;
+    compressor->content_checksum = codec_checksum;
 
     switch (algo) {
     case ALGO_LZ4:

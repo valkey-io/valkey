@@ -25,9 +25,7 @@ static bool vcsHasMagicPrefix(const uint8_t *buf, size_t len) {
     return memcmp(buf, VCS_MAGIC, n) == 0;
 }
 
-static int writeVcsEnvelope(streamWriterWriteFn write_cb,
-                            void *ctx,
-                            compressionAlgo algo) {
+int vcsBuildEnvelope(uint8_t *out, compressionAlgo algo, uint8_t stream_kind) {
     uint8_t codec;
     switch (algo) {
     case ALGO_LZ4:
@@ -44,14 +42,21 @@ static int writeVcsEnvelope(streamWriterWriteFn write_cb,
         [VCS_OFFSET_VERSION] = VCS_VERSION,
         [VCS_OFFSET_CODEC] = codec,
         [VCS_OFFSET_RESERVED] = 0,
-        [VCS_OFFSET_STREAM_KIND] = VCS_STREAM_RDB,
+        [VCS_OFFSET_STREAM_KIND] = stream_kind,
     };
+    memcpy(out, envelope, VCS_ENVELOPE_SIZE);
+    return C_OK;
+}
+
+static int writeVcsEnvelope(streamWriterWriteFn write_cb, void *ctx, compressionAlgo algo, uint8_t stream_kind) {
+    uint8_t envelope[VCS_ENVELOPE_SIZE];
+    if (vcsBuildEnvelope(envelope, algo, stream_kind) == C_ERR) return C_ERR;
     return write_cb(ctx, envelope, VCS_ENVELOPE_SIZE);
 }
 
 /* Reject a nonzero reserved byte so a future envelope extension fails loudly
  * rather than being silently misinterpreted. */
-static int readVcsEnvelope(const uint8_t *buf, compressionAlgo *algo) {
+static int readVcsEnvelope(const uint8_t *buf, uint8_t expected_stream_kind, compressionAlgo *algo) {
     if (buf[VCS_OFFSET_VERSION] != VCS_VERSION) return C_ERR;
 
     switch (buf[VCS_OFFSET_CODEC]) {
@@ -62,7 +67,7 @@ static int readVcsEnvelope(const uint8_t *buf, compressionAlgo *algo) {
         return C_ERR;
     }
     if (buf[VCS_OFFSET_RESERVED] != 0) return C_ERR;
-    if (buf[VCS_OFFSET_STREAM_KIND] != VCS_STREAM_RDB) return C_ERR;
+    if (buf[VCS_OFFSET_STREAM_KIND] != expected_stream_kind) return C_ERR;
     return C_OK;
 }
 
@@ -83,11 +88,11 @@ int streamWriterInit(streamWriter *writer, compressionAlgo algo, bool codec_chec
 }
 
 /* Envelope is emitted lazily so a writer that's created but never written
- * doesn't leave a stub envelope on the sink. */
+ * doesn't leave a stub envelope on the output. */
 static int streamWriterEnsureEnvelope(streamWriter *writer) {
     if (writer->state == STREAM_WRITER_STATE_ACTIVE) return C_OK;
     if (writer->state != STREAM_WRITER_STATE_INITIAL) return C_ERR;
-    if (writeVcsEnvelope(writer->write_cb, writer->write_ctx, writer->compressor.algo) == C_ERR) {
+    if (writeVcsEnvelope(writer->write_cb, writer->write_ctx, writer->compressor.algo, VCS_STREAM_RDB) == C_ERR) {
         writer->state = STREAM_WRITER_STATE_ERROR;
         return C_ERR;
     }
@@ -197,7 +202,7 @@ int streamReaderInit(streamReader *reader, const streamReaderConfig *cfg, stream
         }
 
         if (reader->probe.header_len == VCS_ENVELOPE_SIZE) {
-            if (readVcsEnvelope(reader->probe.header, &algo) == C_ERR) {
+            if (readVcsEnvelope(reader->probe.header, VCS_STREAM_RDB, &algo) == C_ERR) {
                 streamReaderSetError(reader, STREAM_READER_ERROR_INCOMPATIBLE);
                 return C_ERR;
             }
@@ -419,4 +424,111 @@ void streamReaderFree(streamReader *reader) {
     reader->decompressed_buf = NULL;
     reader->decompressed_buf_len = 0;
     reader->decompressed_buf_pos = 0;
+}
+
+/* ===== Push reader ===== */
+
+/* Decoded-output room offered to the codec per feed iteration: bounds how
+ * much the caller's sds over-allocates per iteration while the drain loop
+ * empties the codec's buffered output. */
+#define STREAM_PUSH_READER_CHUNK (16 * 1024)
+
+void streamPushReaderInit(streamPushReader *pr, uint8_t stream_kind) {
+    memset(pr, 0, sizeof(*pr));
+    pr->stream_kind = stream_kind;
+}
+
+void streamPushReaderFree(streamPushReader *pr) {
+    if (pr->state == STREAM_PUSH_READER_COMPRESSED) streamDecompressorFree(&pr->decompressor);
+    pr->state = STREAM_PUSH_READER_PROBE;
+    pr->envelope_len = 0;
+}
+
+/* Append raw bytes to *out (passthrough), respecting the remaining budget. */
+static streamPushReaderResult pushReaderEmit(sds *out, const uint8_t *in, size_t len, size_t *budget) {
+    if (len == 0) return STREAM_PUSH_READER_OK;
+    if (len > *budget) return STREAM_PUSH_READER_OVERFLOW;
+    *out = sdscatlen(*out, in, len);
+    *budget -= len;
+    return STREAM_PUSH_READER_OK;
+}
+
+/* Drain compressed bytes [in, in+len) through the codec, appending decoded
+ * output to *out within the remaining budget (decompression-bomb guard). */
+static streamPushReaderResult
+pushReaderFeedCodec(streamPushReader *pr, const uint8_t *in, size_t len, sds *out, size_t *budget) {
+    size_t off = 0;
+    size_t room = 0;
+    ssize_t produced = 0;
+    do {
+        /* Budget exhausted with more output possibly pending: the stream
+         * expands past the bomb-guard cap. Checked up front so the codec is
+         * never handed more room than the remaining budget allows. */
+        if (*budget == 0) return STREAM_PUSH_READER_OVERFLOW;
+        room = STREAM_PUSH_READER_CHUNK;
+        if (room > *budget) room = *budget;
+        size_t used = sdslen(*out);
+        *out = sdsMakeRoomFor(*out, room);
+        size_t consumed = 0;
+        produced = streamDecompressorFeed(&pr->decompressor, (uint8_t *)*out + used, room, in + off, len - off,
+                                          &consumed);
+        if (produced < 0 || consumed > len - off) return STREAM_PUSH_READER_ERR;
+        if (produced > 0) {
+            sdsIncrLen(*out, (size_t)produced);
+            *budget -= (size_t)produced;
+        }
+        off += consumed;
+        /* Report the frame end; for a long-lived stream this means the
+         * source ended it unexpectedly. */
+        if (pr->decompressor.frame_done) return STREAM_PUSH_READER_FRAME_DONE;
+        /* The codec always makes progress given input and output room; no
+         * progress with input still pending is a stuck state. Fail rather
+         * than let the caller drop the unconsumed tail. Gated on pending
+         * input: empty-input drain iterations legitimately produce 0. */
+        if (off < len && consumed == 0 && produced == 0) return STREAM_PUSH_READER_ERR;
+        /* Keep draining with empty input while the codec may hold buffered
+         * output, which is only the case when it filled the entire room. */
+    } while (off < len || (size_t)produced == room);
+    return STREAM_PUSH_READER_OK;
+}
+
+streamPushReaderResult streamPushReaderFeed(streamPushReader *pr, const void *src, size_t len, sds *out, size_t output_max) {
+    const uint8_t *in = src;
+    size_t off = 0;
+    size_t budget = output_max;
+
+    /* Probe phase: classify the stream from its leading bytes. The magic may
+     * arrive split across feeds, so bytes accumulate until the prefix matches
+     * or rules out the VCS magic. */
+    if (pr->state == STREAM_PUSH_READER_PROBE) {
+        while (pr->envelope_len < VCS_MAGIC_SIZE && off < len) {
+            if (in[off] != VCS_MAGIC[pr->envelope_len]) {
+                pr->state = STREAM_PUSH_READER_PASSTHROUGH; /* Not a VCS stream. */
+                break;
+            }
+            pr->envelope[pr->envelope_len++] = in[off++];
+        }
+
+        if (pr->state == STREAM_PUSH_READER_PROBE) {
+            /* Magic matches so far; gather the rest of the envelope. */
+            while (pr->envelope_len < VCS_ENVELOPE_SIZE && off < len) pr->envelope[pr->envelope_len++] = in[off++];
+            if (pr->envelope_len < VCS_ENVELOPE_SIZE) return STREAM_PUSH_READER_OK; /* Need more header. */
+
+            compressionAlgo algo = ALGO_NONE;
+            if (readVcsEnvelope(pr->envelope, pr->stream_kind, &algo) != C_OK)
+                return STREAM_PUSH_READER_ERR;
+            if (streamDecompressorInit(&pr->decompressor, algo, false) != C_OK) return STREAM_PUSH_READER_ERR;
+            pr->state = STREAM_PUSH_READER_COMPRESSED;
+        }
+    }
+
+    if (pr->state == STREAM_PUSH_READER_PASSTHROUGH) {
+        /* Replay any buffered magic-prefix bytes once, then forward the rest. */
+        streamPushReaderResult r = pushReaderEmit(out, pr->envelope, pr->envelope_len, &budget);
+        pr->envelope_len = 0;
+        if (r != STREAM_PUSH_READER_OK) return r;
+        return pushReaderEmit(out, in + off, len - off, &budget);
+    }
+    if (off < len) return pushReaderFeedCodec(pr, in + off, len - off, out, &budget);
+    return STREAM_PUSH_READER_OK;
 }

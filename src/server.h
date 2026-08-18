@@ -32,6 +32,7 @@
 
 #include "fmacros.h"
 #include "config.h"
+#include "compression_stream.h"
 #include "solarisfixes.h"
 #include "rio.h"
 #include "commands.h"
@@ -465,9 +466,11 @@ typedef enum {
 #define REPLICA_CAPA_PSYNC2 (1 << 1)            /* Supports PSYNC2 protocol. */
 #define REPLICA_CAPA_DUAL_CHANNEL (1 << 2)      /* Supports dual channel replication sync */
 #define REPLICA_CAPA_SKIP_RDB_CHECKSUM (1 << 3) /* Supports skipping RDB checksum for sync requests. */
+#define REPLICA_CAPA_COMPRESS_STREAM (1 << 4)   /* Can decode a compressed incremental replication stream. */
 
 /* Replica capability strings */
 #define REPLICA_CAPA_SKIP_RDB_CHECKSUM_STR "skip-rdb-checksum" /* Supports skipping RDB checksum for sync requests. */
+#define REPLICA_CAPA_COMPRESS_STREAM_STR "compress-stream"     /* Can decode a compressed incremental replication stream. */
 
 /* Replica requirements */
 #define REPLICA_REQ_NONE 0
@@ -622,6 +625,12 @@ typedef enum {
     RDB_COMPRESSION_LZF,    /* Pin legacy per-string LZF compression. */
     RDB_COMPRESSION_LZ4     /* Pin whole-stream LZ4 compression. */
 } rdb_compression_mode;
+
+typedef enum {
+    REPL_COMPRESSION_NO = 0, /* Disable replication compression. */
+    REPL_COMPRESSION_YES,    /* Use the default compression algorithm. */
+    REPL_COMPRESSION_LZ4     /* Pin whole-stream LZ4 compression. */
+} repl_compression_mode;
 
 /* Structure representing a non-owning view of a buffer.
  * A stringRef struct does not manage the underlying memory, so its destruction
@@ -1257,6 +1266,20 @@ typedef struct ClientPubSubData {
                                       context of client side caching. */
 } ClientPubSubData;
 
+/* Max raw replication-backlog bytes compressed per write dispatch cycle;
+ * bounds per-batch latency and the compressed staging buffer. */
+#define REPL_COMPRESSION_BATCH_LIMIT (1024 * 1024)
+
+/* Incremental replication compression state for one replica link (primary
+ * side). The write path compresses backlog bytes directly into out_buf via
+ * the codec (VCS_STREAM_REPL envelope first), then drains it to the socket. */
+typedef struct replicaCompressState {
+    streamCompressor stream; /* Codec state; the frame stays open for the link's lifetime. */
+    sds out_buf;             /* Compressed bytes staged for the socket. */
+    size_t out_buf_pos;      /* Next unsent byte offset within out_buf. */
+    size_t batch_raw_bytes;  /* Raw backlog bytes represented by out_buf. */
+} replicaCompressState;
+
 typedef struct ClientReplicationData {
     int repl_state;                      /* Replication state if this is a replica. */
     int repl_start_cmd_stream_on_ack;    /* Install replica write handler on first ACK. */
@@ -1288,6 +1311,11 @@ typedef struct ClientReplicationData {
     size_t ref_block_pos;                /* Access position of referenced buffer block,
                                            i.e. the next offset to send. */
     sds replica_nodeid;                  /* Node id in cluster mode. */
+    /* Incremental replication compression state (primary side, per replica). */
+    replicaCompressState *repl_compressor; /* Per-replica replication compressor (NULL if uncompressed). */
+    /* Compression metrics (primary side, per replica). */
+    long long repl_compressed_bytes_total;   /* Total compressed bytes sent (main thread only). */
+    long long repl_uncompressed_bytes_total; /* Total raw bytes before compression (main thread only). */
 } ClientReplicationData;
 
 typedef struct ClientModuleData {
@@ -2101,6 +2129,11 @@ struct valkeyServer {
     int saveparamslen;                    /* Number of saving points */
     char *rdb_filename;                   /* Name of RDB file */
     int rdb_compression;                  /* RDB compression mode */
+    int repl_compression;                 /* Replication compression mode */
+    int repl_compression_changed;         /* repl-compression changed at runtime; consumed once by
+                                           * replicationCron to drop the upstream link for
+                                           * renegotiation. Replica links reconcile from live state
+                                           * every tick and do not read this flag. */
     int rdb_checksum;                     /* Use RDB checksum? */
     int rdb_del_sync_files;               /* Remove RDB files used only for SYNC if
                                              the instance does not use persistence. */
@@ -2219,33 +2252,36 @@ struct valkeyServer {
         long long read_reploff;
         int dbid;
     } repl_provisional_primary;
-    client *cached_primary;               /* Cached primary to be reused for PSYNC. */
-    rio *loading_rio;                     /* Pointer to the rio object currently used for loading data. */
-    int repl_syncio_timeout;              /* Timeout for synchronous I/O calls */
-    int repl_state;                       /* Replication status if the instance is a replica */
-    int repl_rdb_channel_state;           /* State of the replica's rdb channel during dual-channel-replication */
-    off_t repl_transfer_size;             /* Size of RDB to read from primary during sync. */
-    off_t repl_transfer_read;             /* Amount of RDB read from primary during sync. */
-    off_t repl_transfer_last_fsync_off;   /* Offset when we fsync-ed last time. */
-    connection *repl_transfer_s;          /* Replica -> Primary SYNC connection */
-    connection *repl_rdb_transfer_s;      /* Primary FULL SYNC connection (RDB download) */
-    int repl_transfer_fd;                 /* Replica -> Primary SYNC temp file descriptor */
-    char *repl_transfer_tmpfile;          /* Replica-> Primary SYNC temp file name */
-    _Atomic(time_t) repl_transfer_lastio; /* Unix time of the latest read, for timeout */
-    int repl_serve_stale_data;            /* Serve stale data when link is down? */
-    int repl_replica_ro;                  /* Replica is read only? */
-    int repl_replica_ignore_maxmemory;    /* If true replicas do not evict. */
-    time_t repl_down_since;               /* Unix time at which link with primary went down */
-    int repl_disable_tcp_nodelay;         /* Disable TCP_NODELAY after SYNC? */
-    int repl_mptcp;                       /* Use Multipath TCP for replica on client side */
-    int replica_priority;                 /* Reported in INFO and used by Sentinel. */
-    int replica_announced;                /* If true, replica is announced by Sentinel */
-    int replica_announce_port;            /* Give the primary this listening port. */
-    char *replica_announce_ip;            /* Give the primary this ip address. */
-    int propagation_error_behavior;       /* Configures the behavior of the replica
-                                           * when it receives an error on the replication stream */
-    int repl_ignore_disk_write_error;     /* Configures whether replicas panic when unable to
-                                           * persist writes to AOF. */
+    client *cached_primary;                  /* Cached primary to be reused for PSYNC. */
+    rio *loading_rio;                        /* Pointer to the rio object currently used for loading data. */
+    int repl_syncio_timeout;                 /* Timeout for synchronous I/O calls */
+    int repl_state;                          /* Replication status if the instance is a replica */
+    int repl_rdb_channel_state;              /* State of the replica's rdb channel during dual-channel-replication */
+    off_t repl_transfer_size;                /* Size of RDB to read from primary during sync. */
+    off_t repl_transfer_read;                /* Amount of RDB read from primary during sync. */
+    off_t repl_transfer_last_fsync_off;      /* Offset when we fsync-ed last time. */
+    connection *repl_transfer_s;             /* Replica -> Primary SYNC connection */
+    connection *repl_rdb_transfer_s;         /* Primary FULL SYNC connection (RDB download) */
+    int repl_transfer_fd;                    /* Replica -> Primary SYNC temp file descriptor */
+    char *repl_transfer_tmpfile;             /* Replica-> Primary SYNC temp file name */
+    _Atomic(time_t) repl_transfer_lastio;    /* Unix time of the latest read, for timeout */
+    int repl_serve_stale_data;               /* Serve stale data when link is down? */
+    int repl_replica_ro;                     /* Replica is read only? */
+    int repl_replica_ignore_maxmemory;       /* If true replicas do not evict. */
+    time_t repl_down_since;                  /* Unix time at which link with primary went down */
+    int repl_disable_tcp_nodelay;            /* Disable TCP_NODELAY after SYNC? */
+    int repl_mptcp;                          /* Use Multipath TCP for replica on client side */
+    int replica_priority;                    /* Reported in INFO and used by Sentinel. */
+    int replica_announced;                   /* If true, replica is announced by Sentinel */
+    int replica_announce_port;               /* Give the primary this listening port. */
+    char *replica_announce_ip;               /* Give the primary this ip address. */
+    int propagation_error_behavior;          /* Configures the behavior of the replica
+                                              * when it receives an error on the replication stream */
+    int repl_ignore_disk_write_error;        /* Configures whether replicas panic when unable to
+                                              * persist writes to AOF. */
+    streamPushReader *repl_stream_reader;    /* Replica-side replication stream reader (NULL when inactive). */
+    long long repl_decompression_errors;     /* Decompression failures (replica side). */
+    long long total_repl_decompressed_bytes; /* Total decompressed bytes processed (replica side). */
 
     /* The following two fields is where we store primary PSYNC replid/offset
      * while the PSYNC is in progress. At the end we'll copy the fields into
@@ -2990,6 +3026,9 @@ void dictVanillaFree(void *val);
 /* Write flags for various write errors and states */
 #define WRITE_FLAGS_WRITE_ERROR (1 << 0)
 #define WRITE_FLAGS_IS_REPLICA (1 << 1)
+/* Compressor failed, possibly on an IO thread; postWriteToReplica reads the
+ * flag on the main thread and disconnects the replica. */
+#define WRITE_FLAGS_COMPRESSION_ERROR (1 << 2)
 
 client *createClient(connection *conn);
 int freeClient(client *c);
@@ -3091,6 +3130,8 @@ int getClientTypeByName(char *name);
 char *getClientTypeName(int client_class);
 void flushReplicasOutputBuffers(void);
 void disconnectReplicas(void);
+void replicaDestroyCompression(client *c);
+ssize_t replDecodeToQueryBuf(client *c, const void *buf, size_t len);
 void evictClients(void);
 int listenToPort(connListener *fds);
 void pauseActions(pause_purpose purpose, mstime_t end, uint32_t actions);

@@ -2385,25 +2385,24 @@ static void clusterRaftRetryProposals(int include_pending) {
                 continue;
             }
 
-            /* The same transition is already in flight: resend it without
-             * re-running readiness/target checks. match_index may have been
-             * reset by a leader change, which would falsely reject a
-             * transition that is already committed to the log. */
-            if (status == RAFT_QC_NONE) {
-                RaftProposalResult pre_result = clusterRaftPreValidate(pp->type, pp->data);
-                if (pre_result != RAFT_RESULT_OK) {
-                    if (pre_result == RAFT_RESULT_STALE_EPOCH && pp->retries > 0) {
-                        pp->retries--;
-                        pp->deferred = 1;
-                        rs->todo_retry_deferred = 1;
-                        continue;
-                    }
-                    if (pp->callback) pp->callback(pp->ctx, raftProposalResultMsg(pre_result));
-                    sdsfree(pp->data);
-                    zfree(pp);
-                    listDelNode(rs->pending_proposals, ln);
+            /* The identical transition is already in the log; it will
+             * complete the pending proposal when applied. */
+            if (status == RAFT_QC_SAME) continue;
+
+            /* No membership transition in flight: run full pre-validation. */
+            RaftProposalResult pre_result = clusterRaftPreValidate(pp->type, pp->data);
+            if (pre_result != RAFT_RESULT_OK) {
+                if (pre_result == RAFT_RESULT_STALE_EPOCH && pp->retries > 0) {
+                    pp->retries--;
+                    pp->deferred = 1;
+                    rs->todo_retry_deferred = 1;
                     continue;
                 }
+                if (pp->callback) pp->callback(pp->ctx, raftProposalResultMsg(pre_result));
+                sdsfree(pp->data);
+                zfree(pp);
+                listDelNode(rs->pending_proposals, ln);
+                continue;
             }
         }
 
@@ -3834,7 +3833,13 @@ static RaftProposalResult clusterRaftApplyNodeForget(sds data, int validate_only
         goto reject;
     }
 
-    if (validate_only) goto done;
+    if (validate_only) {
+        /* Replacement-first: refuse to forget a voter below the target. */
+        if (nodeIsVoter(node) && server.cluster->size - 1 < RAFT_TARGET_VOTERS) {
+            goto reject;
+        }
+        goto done;
+    }
 
     /* Save shard_id before deleting the node. */
     char shard_id[CLUSTER_NAMELEN];

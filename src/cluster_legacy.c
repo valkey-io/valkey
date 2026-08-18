@@ -1456,6 +1456,10 @@ static void updateReplicaPriority(clusterNode *node, unsigned int replica_priori
 
     node->replica_priority = replica_priority;
     clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG);
+    /* Only broadcast our own change. When this function is called from the
+     * gossip path (e.g. with `sender`), the value was learned from a peer and
+     * must not be re-broadcast. */
+    if (node == myself) clusterDoBeforeSleep(CLUSTER_TODO_BROADCAST_ALL);
 }
 
 static inline int areInSameShard(clusterNode *node1, clusterNode *node2) {
@@ -1494,8 +1498,7 @@ void clusterUpdateMyselfClientIpV6(void) {
 
 void clusterUpdateMyselfReplicaPriority(void) {
     if (!myself) return;
-    myself->replica_priority = server.cluster_replica_priority;
-    clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_BROADCAST_ALL);
+    updateReplicaPriority(myself, server.cluster_replica_priority);
 }
 
 void clusterInit(void) {

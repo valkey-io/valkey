@@ -22,6 +22,31 @@ proc randstring {min max {type binary}} {
     return $output
 }
 
+# Read and write files without applying Tcl text translations. These helpers
+# are shared by persistence tests that inspect or mutate serialized data.
+proc read_binary_file_prefix {path count} {
+    set fd [open $path r]
+    fconfigure $fd -translation binary
+    set prefix [read $fd $count]
+    close $fd
+    return $prefix
+}
+
+proc read_binary_file {path} {
+    set fd [open $path r]
+    fconfigure $fd -translation binary
+    set data [read $fd]
+    close $fd
+    return $data
+}
+
+proc write_binary_file {path data} {
+    set fd [open $path w]
+    fconfigure $fd -translation binary
+    puts -nonewline $fd $data
+    close $fd
+}
+
 # Useful for some test
 proc zlistAlikeSort {a b} {
     if {[lindex $a 0] > [lindex $b 0]} {return 1}
@@ -1333,6 +1358,14 @@ proc with_config {config value body} {
     r config set $config $value
     catch {uplevel 1 $body} result opts
     r config set $config $old
+    dict incr opts -level
+    return -options $opts $result
+}
+
+# Execute body and always run cleanup, preserving the body's completion status.
+proc with_cleanup {body cleanup} {
+    catch {uplevel 1 $body} result opts
+    uplevel 1 $cleanup
     dict incr opts -level
     return -options $opts $result
 }

@@ -108,8 +108,8 @@ typedef enum {
     EL_DURATION_TYPE_AOF,     // cumulative time duration metric of flushing AOF in eventloop
     EL_DURATION_TYPE_CRON,    // cumulative time duration metric of cron (serverCron and beforeSleep, but excluding IO and
                               // AOF)
-    EL_DURATION_TYPE_QOS_EL,  // cumulative time duration metric of QoS high-priority eventloop
-    EL_DURATION_TYPE_QOS_CMD, // cumulative time duration metric of QoS high-priority handler execution
+    EL_DURATION_TYPE_QOS_EL,  // cumulative time duration metric of QoS eventloop
+    EL_DURATION_TYPE_QOS_CMD, // cumulative time duration metric of QoS handler execution
     EL_DURATION_TYPE_NUM
 } DurationType;
 

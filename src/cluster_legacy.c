@@ -2053,7 +2053,7 @@ void clusterAcceptHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
 
         connection *conn = connCreateAccepted(connTypeOfCluster(), cfd, &require_auth);
         /* Tag inbound cluster bus link as high-priority so cluster gossip and heartbeats
-         * are processed in hp_event_loop ahead of normal client traffic. */
+         * are processed in qos_el ahead of normal client traffic. */
         connSetPriority(conn, CONN_PRIORITY_HIGH);
         /* Mark as cluster-owned before any TLS accept retries so generic
          * accept offload routing can safely avoid client assumptions. */
@@ -6681,7 +6681,7 @@ static int clusterNodeCronHandleReconnect(clusterNode *node, mstime_t now, long 
         clusterLink *link = createClusterLink(node);
         link->conn = connCreate(connTypeOfCluster());
         /* Tag outbound cluster bus link as high-priority so node reconnects, gossip ping/pong,
-         * and failure detection heartbeats operate within hp_event_loop. */
+         * and failure detection heartbeats operate within qos_el. */
         connSetPriority(link->conn, CONN_PRIORITY_HIGH);
         connSetPrivateData(link->conn, link);
         connSetOwnerKind(link->conn, CONN_OWNER_CLUSTER_LINK);

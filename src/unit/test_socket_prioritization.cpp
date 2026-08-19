@@ -67,12 +67,12 @@ static void testNormalEventCallback(aeEventLoop *el, int fd, void *privdata, int
     }
 }
 
-static void testHighPriorityEventCallback(aeEventLoop *el, int fd, void *privdata, int mask) {
+static void testQoSEventCallback(aeEventLoop *el, int fd, void *privdata, int mask) {
     UNUSED(el);
     UNUSED(mask);
     UNUSED(privdata);
     if (g_execution_count < 1024) {
-        /* Use 999 to identify high priority execution */
+        /* Use 999 to identify QoS execution */
         g_execution_order[g_execution_count++] = 999;
     }
     char buf[1];
@@ -81,16 +81,16 @@ static void testHighPriorityEventCallback(aeEventLoop *el, int fd, void *privdat
     }
 }
 
-static int g_hp_pipe2_write_fd = -1;
+static int g_qos_pipe2_write_fd = -1;
 static int g_normal_cb_count = 0;
 static void testNormalEventCallbackMaskCheck(aeEventLoop *el, int fd, void *privdata, int mask) {
     testNormalEventCallback(el, fd, privdata, mask);
     g_normal_cb_count++;
-    /* Sleep > 2000 us on 3rd normal event (j = 2) and trigger 2nd HP pipe so (itr_cnt & 3) == 0 check at j = 4 polls hp_el */
-    if (g_normal_cb_count == 3 && g_hp_pipe2_write_fd != -1) {
+    /* Sleep > 2000 us on 3rd normal event (j = 2) and trigger 2nd QoS pipe so (itr_cnt & 3) == 0 check at j = 4 polls qos_el */
+    if (g_normal_cb_count == 3 && g_qos_pipe2_write_fd != -1) {
         usleep(2500);
         char c = 'x';
-        if (write(g_hp_pipe2_write_fd, &c, 1) < 0) {
+        if (write(g_qos_pipe2_write_fd, &c, 1) < 0) {
         }
     }
 }
@@ -133,9 +133,9 @@ class SocketPrioritizationTest : public ::testing::Test {
         }
 
         server.el = aeCreateEventLoop(1024);
-        aeEventLoop *hp_el = aeCreateEventLoop(1024);
-        if (server.el && hp_el) {
-            aeLinkHighPriorityEventLoop(server.el, hp_el);
+        aeEventLoop *qos_el = aeCreateEventLoop(1024);
+        if (server.el && qos_el) {
+            aeLinkQoSEventLoop(server.el, qos_el);
         }
         g_execution_count = 0;
     }
@@ -157,24 +157,24 @@ class SocketPrioritizationConnTest : public SocketPrioritizationTest, public ::t
 
 TEST_F(SocketPrioritizationTest, EventLoopDualInitialization) {
     ASSERT_NE(server.el, (aeEventLoop *)NULL);
-    ASSERT_NE(server.el->hp_event_loop, (aeEventLoop *)NULL);
-    EXPECT_EQ(server.el->hp_event_loop, server.el->hp_event_loop);
-    EXPECT_EQ(server.el->hp_event_loop->hp_event_loop, (aeEventLoop *)NULL);
-    EXPECT_EQ(aeGetHPPreemptCheckInterval(server.el), 2000ULL);
-    aeSetHPPreemptCheckInterval(server.el, 5000ULL);
-    EXPECT_EQ(aeGetHPPreemptCheckInterval(server.el), 5000ULL);
-    aeSetHPPreemptCheckInterval(server.el, 2000ULL);
+    ASSERT_NE(server.el->qos_el, (aeEventLoop *)NULL);
+    EXPECT_EQ(server.el->qos_el, server.el->qos_el);
+    EXPECT_EQ(server.el->qos_el->qos_el, (aeEventLoop *)NULL);
+    EXPECT_EQ(aeGetQoSPreemptCheckInterval(server.el), 2000ULL);
+    aeSetQoSPreemptCheckInterval(server.el, 5000ULL);
+    EXPECT_EQ(aeGetQoSPreemptCheckInterval(server.el), 5000ULL);
+    aeSetQoSPreemptCheckInterval(server.el, 2000ULL);
 }
 
 TEST_F(SocketPrioritizationTest, DynamicPreemptionIntervalThreshold) {
     /* Test getter and setter */
-    aeSetHPPreemptCheckInterval(server.el, 500ULL);
-    EXPECT_EQ(aeGetHPPreemptCheckInterval(server.el), 500ULL);
+    aeSetQoSPreemptCheckInterval(server.el, 500ULL);
+    EXPECT_EQ(aeGetQoSPreemptCheckInterval(server.el), 500ULL);
 
     /* Test disabling preemption (interval = 0) */
-    aeSetHPPreemptCheckInterval(server.el, 0ULL);
-    EXPECT_EQ(aeGetHPPreemptCheckInterval(server.el), 0ULL);
-    aeSetHPPreemptCheckInterval(server.el, 2000ULL);
+    aeSetQoSPreemptCheckInterval(server.el, 0ULL);
+    EXPECT_EQ(aeGetQoSPreemptCheckInterval(server.el), 0ULL);
+    aeSetQoSPreemptCheckInterval(server.el, 2000ULL);
 }
 
 TEST_P(SocketPrioritizationConnTest, ConnectionPriorityMetadataAndHelpers) {
@@ -214,9 +214,9 @@ TEST_P(SocketPrioritizationConnTest, DynamicPriorityUpdateOnActiveConnection) {
     ret = connSetReadHandler(conn, dummyConnectionHandler);
     EXPECT_EQ(ret, C_OK);
 
-    /* Event should exist in normal loop, but not in high priority loop */
+    /* Event should exist in normal loop, but not in QoS loop */
     EXPECT_NE(aeGetFileEvents(server.el, read_fd) & AE_READABLE, 0);
-    EXPECT_EQ(aeGetFileEvents(server.el->hp_event_loop, read_fd) & AE_READABLE, 0);
+    EXPECT_EQ(aeGetFileEvents(server.el->qos_el, read_fd) & AE_READABLE, 0);
 
     /* Dynamically upgrade connection to high priority */
     EXPECT_EQ(connSetPriority(conn, CONN_PRIORITY_HIGH), C_OK);
@@ -224,22 +224,22 @@ TEST_P(SocketPrioritizationConnTest, DynamicPriorityUpdateOnActiveConnection) {
     int events = aeGetFileEvents(server.el, read_fd);
     EXPECT_NE(events & AE_READABLE, 0);
     EXPECT_NE(events & AE_HIGH_PRIORITY, 0);
-    EXPECT_NE(aeGetFileEvents(server.el->hp_event_loop, read_fd) & AE_READABLE, 0);
+    EXPECT_NE(aeGetFileEvents(server.el->qos_el, read_fd) & AE_READABLE, 0);
 
     /* Dynamically downgrade connection back to normal priority */
     EXPECT_EQ(connSetPriority(conn, CONN_PRIORITY_NORMAL), C_OK);
     EXPECT_EQ(connGetPriority(conn), CONN_PRIORITY_NORMAL);
     EXPECT_NE(aeGetFileEvents(server.el, read_fd) & AE_READABLE, 0);
-    EXPECT_EQ(aeGetFileEvents(server.el->hp_event_loop, read_fd) & AE_READABLE, 0);
+    EXPECT_EQ(aeGetFileEvents(server.el->qos_el, read_fd) & AE_READABLE, 0);
 
     conn->state = CONN_STATE_NONE;
     connClose(conn);
     close(write_fd);
 }
 
-TEST_F(SocketPrioritizationTest, PreemptionOfNormalEventsByHighPriorityLoop) {
+TEST_F(SocketPrioritizationTest, PreemptionOfNormalEventsByQoSLoop) {
     int normal_pipes[2][2];
-    int hp_pipe[2];
+    int qos_pipe[2];
     int i;
     int ret;
 
@@ -250,10 +250,10 @@ TEST_F(SocketPrioritizationTest, PreemptionOfNormalEventsByHighPriorityLoop) {
         fcntl(normal_pipes[i][0], F_SETFL, O_NONBLOCK);
         fcntl(normal_pipes[i][1], F_SETFL, O_NONBLOCK);
     }
-    ret = pipe(hp_pipe);
+    ret = pipe(qos_pipe);
     ASSERT_EQ(ret, 0);
-    fcntl(hp_pipe[0], F_SETFL, O_NONBLOCK);
-    fcntl(hp_pipe[1], F_SETFL, O_NONBLOCK);
+    fcntl(qos_pipe[0], F_SETFL, O_NONBLOCK);
+    fcntl(qos_pipe[1], F_SETFL, O_NONBLOCK);
 
     /* Register normal events on server.el */
     ret = aeCreateFileEvent(server.el, normal_pipes[0][0], AE_READABLE, testNormalEventCallback, NULL);
@@ -261,8 +261,8 @@ TEST_F(SocketPrioritizationTest, PreemptionOfNormalEventsByHighPriorityLoop) {
     ret = aeCreateFileEvent(server.el, normal_pipes[1][0], AE_READABLE, testNormalEventCallback, NULL);
     EXPECT_EQ(ret, AE_OK);
 
-    /* Register high priority event on server.el->hp_event_loop */
-    ret = aeCreateFileEvent(server.el->hp_event_loop, hp_pipe[0], AE_READABLE, testHighPriorityEventCallback, NULL);
+    /* Register QoS event on server.el->qos_el */
+    ret = aeCreateFileEvent(server.el->qos_el, qos_pipe[0], AE_READABLE, testQoSEventCallback, NULL);
     EXPECT_EQ(ret, AE_OK);
 
     /* Write 1 byte to all pipes so they fire */
@@ -271,32 +271,32 @@ TEST_F(SocketPrioritizationTest, PreemptionOfNormalEventsByHighPriorityLoop) {
     }
     if (write(normal_pipes[1][1], &c, 1) < 0) {
     }
-    if (write(hp_pipe[1], &c, 1) < 0) {
+    if (write(qos_pipe[1], &c, 1) < 0) {
     }
 
-    /* Ensure more than HP_EVENTS_POLL_CHECK_EVERY_US (1000 us) has elapsed for hp_event_loop->last_poll_us */
+    /* Ensure more than AE_QOS_DEFAULT_PREEMPT_CHECK_INTERVAL_US (2000 us) has elapsed for qos_el->qos_el_last_poll_us */
     advanceMockTime(1000000);
 
     g_execution_count = 0;
-    /* Process events on main event loop. At iteration j = 0, PROCESS_HP_EVENTS_IF_NEEDED will trigger
-     * polling of server.el->hp_event_loop and execute testHighPriorityEventCallback before processing the normal events! */
+    /* Process events on main event loop. Preemption check will trigger
+     * polling of server.el->qos_el and execute testQoSEventCallback before processing the normal events! */
     aeProcessEvents(server.el, AE_FILE_EVENTS | AE_DONT_WAIT);
 
-    /* Verify that high priority event (id 999) executed first due to preemption */
+    /* Verify that QoS event (id 999) executed first due to preemption */
     ASSERT_GE(g_execution_count, 1);
     EXPECT_EQ(g_execution_order[0], 999);
 
     /* Cleanup events and file descriptors */
     aeDeleteFileEvent(server.el, normal_pipes[0][0], AE_READABLE);
     aeDeleteFileEvent(server.el, normal_pipes[1][0], AE_READABLE);
-    aeDeleteFileEvent(server.el->hp_event_loop, hp_pipe[0], AE_READABLE);
+    aeDeleteFileEvent(server.el->qos_el, qos_pipe[0], AE_READABLE);
 
     for (i = 0; i < 2; i++) {
         close(normal_pipes[i][0]);
         close(normal_pipes[i][1]);
     }
-    close(hp_pipe[0]);
-    close(hp_pipe[1]);
+    close(qos_pipe[0]);
+    close(qos_pipe[1]);
 }
 
 TEST_F(SocketPrioritizationTest, QoSNames) {
@@ -304,7 +304,7 @@ TEST_F(SocketPrioritizationTest, QoSNames) {
     EXPECT_STREQ(getConnectionPriorityName(CONN_PRIORITY_HIGH), "prioritized");
 }
 
-static void testHighPriorityWriteCallback(struct connection *conn) {
+static void testQoSWriteCallback(struct connection *conn) {
     if (g_execution_count < 1024) {
         g_execution_order[g_execution_count++] = 999;
     }
@@ -315,7 +315,7 @@ TEST_P(SocketPrioritizationConnTest, WriteHandlerPriorityPreemption) {
     ConnectionType *ct = connectionByType(GetParam());
     if (ct == NULL) return;
     int normal_pipe[2];
-    int hp_pipe[2];
+    int qos_pipe[2];
     int ret;
 
     ret = pipe(normal_pipe);
@@ -323,23 +323,23 @@ TEST_P(SocketPrioritizationConnTest, WriteHandlerPriorityPreemption) {
     fcntl(normal_pipe[0], F_SETFL, O_NONBLOCK);
     fcntl(normal_pipe[1], F_SETFL, O_NONBLOCK);
 
-    ret = pipe(hp_pipe);
+    ret = pipe(qos_pipe);
     ASSERT_EQ(ret, 0);
-    fcntl(hp_pipe[0], F_SETFL, O_NONBLOCK);
-    fcntl(hp_pipe[1], F_SETFL, O_NONBLOCK);
+    fcntl(qos_pipe[0], F_SETFL, O_NONBLOCK);
+    fcntl(qos_pipe[1], F_SETFL, O_NONBLOCK);
 
-    connection *hp_conn = connCreate(ct);
-    ASSERT_NE(hp_conn, (connection *)NULL);
-    hp_conn->state = CONN_STATE_CONNECTED;
-    hp_conn->fd = hp_pipe[1];
-    connSetPriority(hp_conn, CONN_PRIORITY_HIGH);
+    connection *qos_conn = connCreate(ct);
+    ASSERT_NE(qos_conn, (connection *)NULL);
+    qos_conn->state = CONN_STATE_CONNECTED;
+    qos_conn->fd = qos_pipe[1];
+    connSetPriority(qos_conn, CONN_PRIORITY_HIGH);
 
     /* Register normal read event on server.el */
     ret = aeCreateFileEvent(server.el, normal_pipe[0], AE_READABLE, testNormalEventCallback, NULL);
     EXPECT_EQ(ret, AE_OK);
 
-    /* Register high priority write event on server.el->hp_event_loop via connection wrapper */
-    ret = connSetWriteHandler(hp_conn, testHighPriorityWriteCallback);
+    /* Register QoS write event on server.el->qos_el via connection wrapper */
+    ret = connSetWriteHandler(qos_conn, testQoSWriteCallback);
     EXPECT_EQ(ret, C_OK);
 
     char c = 'w';
@@ -354,18 +354,18 @@ TEST_P(SocketPrioritizationConnTest, WriteHandlerPriorityPreemption) {
     EXPECT_EQ(g_execution_order[0], 999);
 
     aeDeleteFileEvent(server.el, normal_pipe[0], AE_READABLE);
-    hp_conn->state = CONN_STATE_NONE;
-    connClose(hp_conn);
+    qos_conn->state = CONN_STATE_NONE;
+    connClose(qos_conn);
     close(normal_pipe[0]);
     close(normal_pipe[1]);
-    close(hp_pipe[0]);
+    close(qos_pipe[0]);
 }
 
 TEST_F(SocketPrioritizationTest, MultiIterationPreemptionCheckMask) {
-    /* Verify that PROCESS_HP_EVENTS_IF_NEEDED checks hp_el on iterations where (itr_cnt & 3) == 0 */
+    /* Verify that preemption check services qos_el on iterations where (itr_cnt & 3) == 0 */
     int normal_pipes[5][2];
-    int hp_pipe[2];
-    int hp_pipe2[2];
+    int qos_pipe[2];
+    int qos_pipe2[2];
     int i, ret;
 
     for (i = 0; i < 5; i++) {
@@ -374,23 +374,23 @@ TEST_F(SocketPrioritizationTest, MultiIterationPreemptionCheckMask) {
         fcntl(normal_pipes[i][0], F_SETFL, O_NONBLOCK);
         fcntl(normal_pipes[i][1], F_SETFL, O_NONBLOCK);
     }
-    ret = pipe(hp_pipe);
+    ret = pipe(qos_pipe);
     ASSERT_EQ(ret, 0);
-    fcntl(hp_pipe[0], F_SETFL, O_NONBLOCK);
-    fcntl(hp_pipe[1], F_SETFL, O_NONBLOCK);
+    fcntl(qos_pipe[0], F_SETFL, O_NONBLOCK);
+    fcntl(qos_pipe[1], F_SETFL, O_NONBLOCK);
 
-    ret = pipe(hp_pipe2);
+    ret = pipe(qos_pipe2);
     ASSERT_EQ(ret, 0);
-    fcntl(hp_pipe2[0], F_SETFL, O_NONBLOCK);
-    fcntl(hp_pipe2[1], F_SETFL, O_NONBLOCK);
+    fcntl(qos_pipe2[0], F_SETFL, O_NONBLOCK);
+    fcntl(qos_pipe2[1], F_SETFL, O_NONBLOCK);
 
     for (i = 0; i < 5; i++) {
         ret = aeCreateFileEvent(server.el, normal_pipes[i][0], AE_READABLE, testNormalEventCallbackMaskCheck, NULL);
         EXPECT_EQ(ret, AE_OK);
     }
-    ret = aeCreateFileEvent(server.el->hp_event_loop, hp_pipe[0], AE_READABLE, testHighPriorityEventCallback, NULL);
+    ret = aeCreateFileEvent(server.el->qos_el, qos_pipe[0], AE_READABLE, testQoSEventCallback, NULL);
     EXPECT_EQ(ret, AE_OK);
-    ret = aeCreateFileEvent(server.el->hp_event_loop, hp_pipe2[0], AE_READABLE, testHighPriorityEventCallback, NULL);
+    ret = aeCreateFileEvent(server.el->qos_el, qos_pipe2[0], AE_READABLE, testQoSEventCallback, NULL);
     EXPECT_EQ(ret, AE_OK);
 
     char c = 'z';
@@ -398,10 +398,10 @@ TEST_F(SocketPrioritizationTest, MultiIterationPreemptionCheckMask) {
         if (write(normal_pipes[i][1], &c, 1) < 0) {
         }
     }
-    if (write(hp_pipe[1], &c, 1) < 0) {
+    if (write(qos_pipe[1], &c, 1) < 0) {
     }
 
-    g_hp_pipe2_write_fd = hp_pipe2[1];
+    g_qos_pipe2_write_fd = qos_pipe2[1];
     g_normal_cb_count = 0;
     advanceMockTime(1000000);
     g_execution_count = 0;
@@ -409,29 +409,29 @@ TEST_F(SocketPrioritizationTest, MultiIterationPreemptionCheckMask) {
     aeProcessEvents(server.el, AE_FILE_EVENTS | AE_DONT_WAIT);
 
     ASSERT_EQ(g_execution_count, 7);
-    /* At start (pre-loop), hp_event_loop processed */
+    /* At start (pre-loop), qos_el processed */
     EXPECT_EQ(g_execution_order[0], 999);
     EXPECT_NE(g_execution_order[1], 999);
     EXPECT_NE(g_execution_order[2], 999);
     EXPECT_NE(g_execution_order[3], 999);
     EXPECT_NE(g_execution_order[4], 999);
-    /* At iteration 4 ((j & 3) == 0 after >1000us elapsed), hp_event_loop is checked and serviced again on later masked iteration */
+    /* At iteration 4 ((j & 3) == 0 after >2000us elapsed), qos_el is checked and serviced again on later masked iteration */
     EXPECT_EQ(g_execution_order[5], 999);
     EXPECT_NE(g_execution_order[6], 999);
 
-    g_hp_pipe2_write_fd = -1;
+    g_qos_pipe2_write_fd = -1;
 
     for (i = 0; i < 5; i++) {
         aeDeleteFileEvent(server.el, normal_pipes[i][0], AE_READABLE);
         close(normal_pipes[i][0]);
         close(normal_pipes[i][1]);
     }
-    aeDeleteFileEvent(server.el->hp_event_loop, hp_pipe[0], AE_READABLE);
-    close(hp_pipe[0]);
-    close(hp_pipe[1]);
-    aeDeleteFileEvent(server.el->hp_event_loop, hp_pipe2[0], AE_READABLE);
-    close(hp_pipe2[0]);
-    close(hp_pipe2[1]);
+    aeDeleteFileEvent(server.el->qos_el, qos_pipe[0], AE_READABLE);
+    close(qos_pipe[0]);
+    close(qos_pipe[1]);
+    aeDeleteFileEvent(server.el->qos_el, qos_pipe2[0], AE_READABLE);
+    close(qos_pipe2[0]);
+    close(qos_pipe2[1]);
 }
 
 TEST_F(SocketPrioritizationTest, LevelTriggeredEventsFairnessAndOrdering) {
@@ -449,7 +449,7 @@ TEST_F(SocketPrioritizationTest, LevelTriggeredEventsFairnessAndOrdering) {
         fcntl(pipes[i][0], F_SETFL, O_NONBLOCK);
         fcntl(pipes[i][1], F_SETFL, O_NONBLOCK);
 
-        ret = aeCreateFileEvent(server.el->hp_event_loop, pipes[i][0], AE_READABLE, testLevelTriggeredCallback, &counts[i]);
+        ret = aeCreateFileEvent(server.el->qos_el, pipes[i][0], AE_READABLE, testLevelTriggeredCallback, &counts[i]);
         EXPECT_EQ(ret, AE_OK);
 
         char data[BYTES_PER_FD] = {'a', 'b', 'c', 'd', 'e'};
@@ -464,13 +464,13 @@ TEST_F(SocketPrioritizationTest, LevelTriggeredEventsFairnessAndOrdering) {
         for (i = 0; i < NUM_FDS; i++) total_served += counts[i];
         if (total_served >= NUM_FDS * BYTES_PER_FD) break;
 
-        aeProcessEvents(server.el->hp_event_loop, AE_FILE_EVENTS | AE_DONT_WAIT);
+        aeProcessEvents(server.el->qos_el, AE_FILE_EVENTS | AE_DONT_WAIT);
     }
 
     /* Verify all FDs were served exactly BYTES_PER_FD times without any level-triggered event being lost or starved */
     for (i = 0; i < NUM_FDS; i++) {
         EXPECT_EQ(counts[i], BYTES_PER_FD);
-        aeDeleteFileEvent(server.el->hp_event_loop, pipes[i][0], AE_READABLE);
+        aeDeleteFileEvent(server.el->qos_el, pipes[i][0], AE_READABLE);
         close(pipes[i][0]);
         close(pipes[i][1]);
     }
@@ -493,14 +493,14 @@ TEST_F(SocketPrioritizationTest, LevelTriggeredBatchProcessingAndStarvationPreve
 
     /* 1. Register Head FDs (0..6) with 3 bytes (unprocessed at the head) and Tail FDs (14..19) with 5 bytes */
     for (i = 0; i <= 6; i++) {
-        ret = aeCreateFileEvent(server.el->hp_event_loop, pipes[i][0], AE_READABLE, testLevelTriggeredCallback, &counts[i]);
+        ret = aeCreateFileEvent(server.el->qos_el, pipes[i][0], AE_READABLE, testLevelTriggeredCallback, &counts[i]);
         EXPECT_EQ(ret, AE_OK);
         char data[3] = {'h', 'e', 'a'};
         if (write(pipes[i][1], data, 3) < 0) {
         }
     }
     for (i = 14; i <= 19; i++) {
-        ret = aeCreateFileEvent(server.el->hp_event_loop, pipes[i][0], AE_READABLE, testLevelTriggeredCallback, &counts[i]);
+        ret = aeCreateFileEvent(server.el->qos_el, pipes[i][0], AE_READABLE, testLevelTriggeredCallback, &counts[i]);
         EXPECT_EQ(ret, AE_OK);
         char data[5] = {'t', 'a', 'i', 'l', 's'};
         if (write(pipes[i][1], data, 5) < 0) {
@@ -508,13 +508,13 @@ TEST_F(SocketPrioritizationTest, LevelTriggeredBatchProcessingAndStarvationPreve
     }
 
     /* Process batch 1: Head and Tail FDs each fire once (reading 1 byte due to level trigger) */
-    aeProcessEvents(server.el->hp_event_loop, AE_FILE_EVENTS | AE_DONT_WAIT);
+    aeProcessEvents(server.el->qos_el, AE_FILE_EVENTS | AE_DONT_WAIT);
     for (i = 0; i <= 6; i++) EXPECT_GE(counts[i], 1);
     for (i = 14; i <= 19; i++) EXPECT_GE(counts[i], 1);
 
     /* 2. Register Middle FDs (7..13) with 3 bytes (new events in the middle while head/tail have remaining level-triggered data) */
     for (i = 7; i <= 13; i++) {
-        ret = aeCreateFileEvent(server.el->hp_event_loop, pipes[i][0], AE_READABLE, testLevelTriggeredCallback, &counts[i]);
+        ret = aeCreateFileEvent(server.el->qos_el, pipes[i][0], AE_READABLE, testLevelTriggeredCallback, &counts[i]);
         EXPECT_EQ(ret, AE_OK);
         char data[3] = {'m', 'i', 'd'};
         if (write(pipes[i][1], data, 3) < 0) {
@@ -528,7 +528,7 @@ TEST_F(SocketPrioritizationTest, LevelTriggeredBatchProcessingAndStarvationPreve
         /* 7 head FDs x 3 + 7 middle FDs x 3 + 6 tail FDs x 5 = 21 + 21 + 30 = 72 total bytes */
         if (total_served >= 72) break;
 
-        aeProcessEvents(server.el->hp_event_loop, AE_FILE_EVENTS | AE_DONT_WAIT);
+        aeProcessEvents(server.el->qos_el, AE_FILE_EVENTS | AE_DONT_WAIT);
     }
 
     /* Verify every single FD across head (unprocessed), middle (new), and tail (level-triggered remaining data) was fully served */
@@ -537,7 +537,7 @@ TEST_F(SocketPrioritizationTest, LevelTriggeredBatchProcessingAndStarvationPreve
     for (i = 14; i <= 19; i++) EXPECT_EQ(counts[i], 5);
 
     for (i = 0; i < NUM_FDS; i++) {
-        aeDeleteFileEvent(server.el->hp_event_loop, pipes[i][0], AE_READABLE);
+        aeDeleteFileEvent(server.el->qos_el, pipes[i][0], AE_READABLE);
         close(pipes[i][0]);
         close(pipes[i][1]);
     }
@@ -545,25 +545,25 @@ TEST_F(SocketPrioritizationTest, LevelTriggeredBatchProcessingAndStarvationPreve
 
 TEST_F(SocketPrioritizationTest, DualEventLoopResize) {
     ASSERT_NE(server.el, (aeEventLoop *)NULL);
-    ASSERT_NE(server.el->hp_event_loop, (aeEventLoop *)NULL);
+    ASSERT_NE(server.el->qos_el, (aeEventLoop *)NULL);
     EXPECT_EQ(aeGetSetSize(server.el), 1024);
-    EXPECT_EQ(aeGetSetSize(server.el->hp_event_loop), 1024);
+    EXPECT_EQ(aeGetSetSize(server.el->qos_el), 1024);
 
     int ret = aeResizeSetSize(server.el, 2048);
     EXPECT_EQ(ret, AE_OK);
     EXPECT_EQ(aeGetSetSize(server.el), 2048);
-    EXPECT_EQ(aeGetSetSize(server.el->hp_event_loop), 2048);
+    EXPECT_EQ(aeGetSetSize(server.el->qos_el), 2048);
 }
 
 TEST_F(SocketPrioritizationTest, FallbackMaskSanitization) {
     aeEventLoop *standalone_el = aeCreateEventLoop(64);
     ASSERT_NE(standalone_el, (aeEventLoop *)NULL);
-    EXPECT_EQ(standalone_el->hp_event_loop, (aeEventLoop *)NULL);
+    EXPECT_EQ(standalone_el->qos_el, (aeEventLoop *)NULL);
 
     int fds[2];
     ASSERT_EQ(pipe(fds), 0);
 
-    /* Register with AE_HIGH_PRIORITY on standalone event loop with no hp_event_loop */
+    /* Register with AE_HIGH_PRIORITY on standalone event loop with no qos_el */
     int ret = aeCreateFileEvent(standalone_el, fds[0], AE_READABLE | AE_HIGH_PRIORITY, testNormalEventCallback, NULL);
     EXPECT_EQ(ret, AE_OK);
 
@@ -888,17 +888,19 @@ static void qosTestFileProc(aeEventLoop *el, int fd, void *privdata, int mask) {
     (void)privdata;
     (void)mask;
     char b;
-    (void)read(fd, &b, 1);
+    if (read(fd, &b, 1) < 0) {
+        /* Ignore read error in test callback */
+    }
 }
 
-/* Test that high-priority event loop duration callback correctly samples QoS metrics. */
+/* Test that QoS event loop duration callback correctly samples QoS metrics. */
 TEST_F(SocketPrioritizationTest, QoSEventLoopStatsMetrics) {
     aeEventLoop *main_loop = aeCreateEventLoop(64);
-    aeEventLoop *hp_loop = aeCreateEventLoop(64);
+    aeEventLoop *qos_loop = aeCreateEventLoop(64);
     ASSERT_NE(main_loop, (aeEventLoop *)NULL);
-    ASSERT_NE(hp_loop, (aeEventLoop *)NULL);
-    ASSERT_EQ(aeLinkHighPriorityEventLoop(main_loop, hp_loop), AE_OK);
-    aeSetHPStatsCallback(main_loop, qosMetricTestCb);
+    ASSERT_NE(qos_loop, (aeEventLoop *)NULL);
+    ASSERT_EQ(aeLinkQoSEventLoop(main_loop, qos_loop), AE_OK);
+    aeSetQoSStatsCallback(main_loop, qosMetricTestCb);
 
     unsigned long long orig_cnt = server.duration_stats[EL_DURATION_TYPE_QOS_EL].cnt;
     unsigned long long orig_sum = server.duration_stats[EL_DURATION_TYPE_QOS_EL].sum;

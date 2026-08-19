@@ -208,13 +208,13 @@ int connSetPriority(connection *conn, int priority) {
         conn->type->update_state(conn);
     } else {
         int barrier = mask & AE_BARRIER;
-        int ae_hp_flag = connGetAEPriorityFlag(conn);
+        int ae_qos_flag = connGetAEPriorityFlag(conn);
         if ((mask & AE_READABLE) &&
-            aeCreateFileEvent(server.el, conn->fd, AE_READABLE | barrier | ae_hp_flag, conn->type->ae_handler, conn) == AE_ERR) {
+            aeCreateFileEvent(server.el, conn->fd, AE_READABLE | barrier | ae_qos_flag, conn->type->ae_handler, conn) == AE_ERR) {
             goto rollback;
         }
         if ((mask & AE_WRITABLE) &&
-            aeCreateFileEvent(server.el, conn->fd, AE_WRITABLE | barrier | ae_hp_flag, conn->type->ae_handler, conn) == AE_ERR) {
+            aeCreateFileEvent(server.el, conn->fd, AE_WRITABLE | barrier | ae_qos_flag, conn->type->ae_handler, conn) == AE_ERR) {
             goto rollback;
         }
     }
@@ -227,11 +227,11 @@ rollback:
     /* Rollback priority and restore previous event registrations */
     conn->priority = old_priority;
     int barrier = mask & AE_BARRIER;
-    int old_ae_hp_flag = connGetAEPriorityFlag(conn);
+    int old_ae_qos_flag = connGetAEPriorityFlag(conn);
     if (mask & AE_READABLE)
-        aeCreateFileEvent(server.el, conn->fd, AE_READABLE | barrier | old_ae_hp_flag, conn->type->ae_handler, conn);
+        aeCreateFileEvent(server.el, conn->fd, AE_READABLE | barrier | old_ae_qos_flag, conn->type->ae_handler, conn);
     if (mask & AE_WRITABLE)
-        aeCreateFileEvent(server.el, conn->fd, AE_WRITABLE | barrier | old_ae_hp_flag, conn->type->ae_handler, conn);
+        aeCreateFileEvent(server.el, conn->fd, AE_WRITABLE | barrier | old_ae_qos_flag, conn->type->ae_handler, conn);
     return C_ERR;
 }
 

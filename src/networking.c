@@ -1862,7 +1862,16 @@ void freeClient(client *c) {
 
     /* Remove the contribution that this client gave to our
      * incrementally computed memory usage. */
-    if (c->conn) server.stat_clients_type_memory[c->last_memory_type] -= c->last_memory_usage;
+    if (c->last_memory_usage) {
+        /* A client is only ever accounted while it has a live connection,
+         * see updateClientMemoryUsage() for details.
+         *
+         * So at this point either c->conn is still set, or we are releasing
+         * a cached_primary whose conn was already NULLed by unlinkClient()
+         * during replicationCachePrimary(). */
+        debugServerAssert(c->conn || c == server.cached_primary);
+        server.stat_clients_type_memory[c->last_memory_type] -= c->last_memory_usage;
+    }
 
     /* Unlink the client: this will close the socket, remove the I/O
      * handlers, and remove references of the client from different

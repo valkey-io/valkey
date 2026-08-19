@@ -333,8 +333,6 @@ int clusterSlotStatsEnabled(int slot) {
     return server.cluster_slot_stats_enabled && server.cluster_enabled && slot != -1;
 }
 
-/* Test-only wrappers for static comparators, following the testOnly* pattern
- * used elsewhere (e.g. quicklist.c, networking.c, intset.c). */
 int testOnlySlotStatForSortAscCmp(const void *a, const void *b) {
     return slotStatForSortAscCmp(a, b);
 }

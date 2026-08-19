@@ -26,6 +26,8 @@
  * See: wrapper_util.py, generate-wrappers.py
  */
 
+#include "gmock/gmock.h"
+#include "gtest/gtest.h"
 #include <sched.h>
 #ifdef __cplusplus
 extern "C" {

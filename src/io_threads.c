@@ -951,7 +951,7 @@ static int processOutboxBatch(mpscQueue *outbox) {
 
 /* Process completed IO jobs from worker threads back onto the main thread.
  * Drains the high-priority outbox first to guarantee control-plane responsiveness,
- * and performs periodic preemptive polling of hp_event_loop while consuming normal jobs. */
+ * and performs periodic preemptive polling of qos_el while consuming normal jobs. */
 int processIOThreadsResponses(void) {
     /* We don't check for threads number since some threads may return jobs then deactivate/shut-down */
 
@@ -966,8 +966,8 @@ int processIOThreadsResponses(void) {
         int processed = processOutboxBatch(&io_shared_outbox[CONN_PRIORITY_HIGH]);
         if (processed == 0) {
             /* 2. Preemptive Poll: When high-priority outbox is empty, check if any new
-             * high-priority events arrived on hp_event_loop before processing normal traffic. */
-            aeProcessHPEventsPreemptively(server.el, counter);
+             * high-priority events arrived on qos_el before processing normal traffic. */
+            aeProcessQoSEventsPreemptively(server.el, counter);
         }
         /* 3. Drain normal client events */
         processed += processOutboxBatch(&io_shared_outbox[CONN_PRIORITY_NORMAL]);

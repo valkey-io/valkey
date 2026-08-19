@@ -169,7 +169,7 @@ typedef struct ConnectionType {
 /* Connection scheduling priority levels.
  *
  * High-priority connections receive preferential treatment across two subsystems:
- * 1. HP Event loop (ae): Connections that are registered with hp_event_loop are
+ * 1. QoS Event loop (ae): Connections that are registered with qos_el are
  * processed ahead of normal priority events in the event polling loop.
  * 2. I/O threads: Read and write tasks are dispatched to dedicated
  * high-priority queues (io_shared_inbox[CONN_PRIORITY_HIGH] and io_shared_outbox[CONN_PRIORITY_HIGH]),

@@ -2123,9 +2123,9 @@ void afterSleep(struct aeEventLoop *eventLoop, int numevents) {
     IOThreadsAfterSleep(numevents);
 }
 
-/* Callback invoked by the event loop after draining high-priority events.
+/* Callback invoked by the event loop after draining QoS events.
  * Records QoS eventloop duration and updates peak commands executed per QoS cycle. */
-static void hpStatsCallback(struct aeEventLoop *el, uint64_t duration_us) {
+static void qosStatsCallback(struct aeEventLoop *el, uint64_t duration_us) {
     UNUSED(el);
     durationAddSample(EL_DURATION_TYPE_QOS_EL, duration_us);
     unsigned long long qos_cmds = server.duration_stats[EL_DURATION_TYPE_QOS_CMD].cnt;
@@ -3061,23 +3061,23 @@ void initServer(void) {
     const char *clk_msg = monotonicInit();
     serverLog(LL_NOTICE, "monotonic clock: %s", clk_msg);
     server.el = aeCreateEventLoop(server.maxclients + CONFIG_FDSET_INCR);
-    /* Create high-priority event loop for internal connections (cluster bus, replication, and slot migration jobs) */
-    aeEventLoop *hp_el = aeCreateEventLoop(server.maxclients + CONFIG_FDSET_INCR);
-    if (server.el == NULL || hp_el == NULL) {
+    /* Create QoS event loop for internal connections (cluster bus, replication, and slot migration jobs) */
+    aeEventLoop *qos_el = aeCreateEventLoop(server.maxclients + CONFIG_FDSET_INCR);
+    if (server.el == NULL || qos_el == NULL) {
         serverLog(LL_WARNING, "Failed creating the event loop. Error message: '%s'", strerror(errno));
         exit(1);
     }
-    /* Link high priority event loop with main event loop via nested multiplexer polling.
+    /* Link QoS event loop with main event loop via nested multiplexer polling.
      * If multiplexer nesting is unsupported (e.g. evport, select), gracefully
-     * free hp_el and fall back to main event loop event processing without QoS. */
-    if (aeLinkHighPriorityEventLoop(server.el, hp_el) == AE_ERR) {
+     * free qos_el and fall back to main event loop event processing without QoS. */
+    if (aeLinkQoSEventLoop(server.el, qos_el) == AE_ERR) {
         serverLog(LL_NOTICE, "QoS event prioritization not supported on %s multiplexer, falling back to standard event processing",
                   aeGetApiName());
-        aeDeleteEventLoop(hp_el);
-        hp_el = NULL;
+        aeDeleteEventLoop(qos_el);
+        qos_el = NULL;
     }
-    aeSetHPStatsCallback(server.el, hpStatsCallback);
-    aeSetHPPreemptCheckInterval(server.el, server.qos_preemptive_poll_interval_us);
+    aeSetQoSStatsCallback(server.el, qosStatsCallback);
+    aeSetQoSPreemptCheckInterval(server.el, server.qos_preemptive_poll_interval_us);
     server.dbnum = server.cluster_enabled ? server.config_databases_cluster : server.config_databases;
     server.db = zcalloc(sizeof(serverDb *) * server.dbnum);
     createDatabaseIfNeeded(0); /* The default database should always exist */

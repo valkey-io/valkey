@@ -2658,7 +2658,7 @@ static int updateDefragConfiguration(const char **err) {
 static int updateQoSPreemptivePollInterval(const char **err) {
     UNUSED(err);
     if (server.el) {
-        aeSetHPPreemptCheckInterval(server.el, server.qos_preemptive_poll_interval_us);
+        aeSetQoSPreemptCheckInterval(server.el, server.qos_preemptive_poll_interval_us);
     }
     return 1;
 }

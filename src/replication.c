@@ -4387,7 +4387,7 @@ void syncWithPrimary(connection *conn) {
         /* Create RDB connection */
         server.repl_rdb_transfer_s = connCreate(connTypeOfReplication());
         /* Tag connection as high-priority before connecting so non-blocking connect and
-         * subsequent RDB transfer events are registered directly on hp_event_loop. */
+         * subsequent RDB transfer events are registered directly on qos_el. */
         connSetPriority(server.repl_rdb_transfer_s, CONN_PRIORITY_HIGH);
         if (connConnect(server.repl_rdb_transfer_s, server.primary_host, server.primary_port, server.bind_source_addr,
                         server.repl_mptcp, dualChannelFullSyncWithPrimary) == C_ERR) {
@@ -4440,7 +4440,7 @@ void syncWithPrimary(connection *conn) {
 int connectWithPrimary(void) {
     server.repl_transfer_s = connCreate(connTypeOfReplication());
     /* Tag main replication connection as high-priority before connecting so handshake,
-     * heartbeat pings, and PSYNC streaming are processed in hp_event_loop. */
+     * heartbeat pings, and PSYNC streaming are processed in qos_el. */
     connSetPriority(server.repl_transfer_s, CONN_PRIORITY_HIGH);
     if (connConnect(server.repl_transfer_s, server.primary_host, server.primary_port, server.bind_source_addr,
                     server.repl_mptcp, syncWithPrimary) == C_ERR) {

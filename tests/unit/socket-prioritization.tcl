@@ -25,7 +25,7 @@ start_server {tags {"socket-prioritization"}} {
     }
 
     test {Socket Prioritization: Replication QoS classification and CLIENT KILL} {
-        # Start a replica server and verify that replication links are upgraded to high priority
+        # Start a replica server and verify that replication links are upgraded to QoS priority
         start_server {} {
             set replica [srv 0 client]
             set replica_host [srv 0 host]
@@ -86,7 +86,7 @@ start_server {tags {"socket-prioritization"}} {
             wait_for_condition 50 100 {
                 [string match "*name=replica_mock_${io_threads}*flags=*H*" [$primary client list flags H name replica_mock_$io_threads]]
             } else {
-                fail "Replica connection was not upgraded to high priority (io-threads=$io_threads)"
+                fail "Replica connection was not upgraded to QoS priority (io-threads=$io_threads)"
             }
             
             $replica_mock close
@@ -111,7 +111,7 @@ start_server {tags {"socket-prioritization external:skip"}} {
         start_server {} {
             set replica2 [srv 0 client]
 
-            test "Benchmark standalone replica sync under pipeline load with high-priority event loop" {
+            test "Benchmark standalone replica sync under pipeline load with QoS event loop" {
                 set load_clients {}
                 for {set c 0} {$c < 5} {incr c} {
                     lappend load_clients [valkey $primary_host $primary_port 0 $::tls]

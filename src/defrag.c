@@ -968,16 +968,14 @@ static doneStatus defragModuleGlobals(monotime endtime, void *target, void *priv
     UNUSED(target);
     UNUSED(privdata);
     if (endtime == 0) {
-        // Stage init: clear each module's "done this cycle" flag so a new cycle
-        // visits every module again.
+        // Init: clear each module's done flag so the stage visits every module again.
         moduleDefragGlobalsStart();
         return DEFRAG_NOT_DONE;
     }
+    /* Reschedule the stage if a module still has work (its cursor is non-zero, e.g. work
+     * queued on its own threads) or we ran out of time.  Modules already done this cycle are
+     * skipped on the next call, so we resume with the remaining ones. */
     int more_work = moduleDefragGlobals(endtime);
-    /* Re-run this stage next cycle if we ran out of time mid-iteration, or if a
-     * module reported it still has work queued (e.g. on its own threads). On
-     * re-run, modules already finished this cycle are skipped so we resume with
-     * the remaining ones. */
     if (more_work || getMonotonicUs() >= endtime) return DEFRAG_NOT_DONE;
     return DEFRAG_DONE;
 }

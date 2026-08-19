@@ -15147,11 +15147,9 @@ int moduleDefragValue(robj *key, robj *value, int dbid) {
     return 1;
 }
 
-/* Reset per-module global-defrag state at the start of a defrag cycle. Called
- * with endtime==0 (stage initialization). Clears the "done this cycle" flag so
- * every module is visited again in the new cycle. Cursors are intentionally
- * NOT reset here: a module owns its cursor and decides when to reset it (it may
- * carry progress across cycles). */
+/* Called at stage init (endtime==0) to start a new global defrag pass.  Clears each module's
+ * done flag so every module is visited again.  Cursors are not touched here: a module owns its
+ * cursor and may carry progress across cycles. */
 void moduleDefragGlobalsStart(void) {
     listIter li;
     listNode *ln;
@@ -15163,24 +15161,16 @@ void moduleDefragGlobalsStart(void) {
     }
 }
 
-/* Call registered module API defrag functions.
+/* Invoke each module's global defrag callback, forwarding 'endtime' so the callback can bound its
+ * own latency via VM_DefragShouldStop().  Each module is given a persistent cursor
+ * (module->defrag_cursor) to save progress with VM_DefragCursorSet() and resume on a later call.
  *
- * endtime is the monotonic deadline for this invocation, forwarded to each
- * module's callback via the ctx so VM_DefragShouldStop() works for global
- * defrag. Each module gets a persistent cursor (module->defrag_cursor) so it
- * can save progress with VM_DefragCursorSet() and resume on the next cycle.
- *
- * When the deadline is hit mid-iteration we return without visiting the rest of
- * the modules. Modules already finished this cycle set defrag_done_this_cycle
- * so a subsequent invocation resumes with the remaining modules rather than
- * re-running the finished ones. The flag lives on the module struct, so if a
- * module is unloaded between invocations its state disappears safely.
- *
- * The per-module cursor doubles as the "more work" signal, matching the
- * convention used throughout defrag.c: a callback that leaves its cursor
- * non-zero wants to be called again; a cursor of 0 means that module is done
- * for this cycle. A module offloading work to its own threads keeps the cursor
- * non-zero while that work is still outstanding.
+ * The cursor is also the module's "more work" signal, following the convention used elsewhere in
+ * defrag: a non-zero cursor means the module wants to be called again (scan not finished, or work
+ * still draining on its own threads); a zero cursor means it is done for this cycle.  A module done
+ * this cycle sets defrag_done_this_cycle and is skipped until the next cycle clears it, so that
+ * returning here after 'endtime' resumes with the remaining modules rather than repeating finished
+ * ones.  The flag lives on the module struct, so it is discarded safely if a module is unloaded.
  *
  * Returns 1 if any module still has work to do, 0 otherwise. */
 int moduleDefragGlobals(monotime endtime) {

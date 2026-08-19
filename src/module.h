@@ -117,8 +117,8 @@ typedef struct ValkeyModule {
     int blocked_clients;                  /* Count of ValkeyModuleBlockedClient in this module. */
     ValkeyModuleInfoFunc info_cb;         /* Callback for module to add INFO fields. */
     ValkeyModuleDefragFunc defrag_cb;     /* Callback for global data defrag. */
-    unsigned long defrag_cursor;          /* Persistent cursor for global defrag, saved across cycles. */
-    int defrag_done_this_cycle;           /* Global defrag: module finished this cycle, skip on resume. */
+    unsigned long defrag_cursor;          /* Global defrag cursor, owned by the module, persists across cycles. */
+    int defrag_done_this_cycle;           /* Global defrag: module is done this cycle, skip until next cycle. */
     struct moduleLoadQueueEntry *loadmod; /* Module load arguments for config rewrite. */
     int num_commands_with_acl_categories; /* Number of commands in this module included in acl categories */
     int onload;                           /* Flag to identify if the call is being made from Onload (0 or 1) */

@@ -967,11 +967,18 @@ static doneStatus defragLuaScripts(monotime endtime, void *target, void *privdat
 static doneStatus defragModuleGlobals(monotime endtime, void *target, void *privdata) {
     UNUSED(target);
     UNUSED(privdata);
-    if (endtime == 0) return DEFRAG_NOT_DONE; // required initialization
-    moduleDefragGlobals(endtime);
-    /* If we ran out of time, a module may still have queued work. Re-run this
-     * stage on the next cycle so modules can resume from their saved cursor. */
-    if (getMonotonicUs() >= endtime) return DEFRAG_NOT_DONE;
+    if (endtime == 0) {
+        // Stage init: clear each module's "done this cycle" flag so a new cycle
+        // visits every module again.
+        moduleDefragGlobalsStart();
+        return DEFRAG_NOT_DONE;
+    }
+    int more_work = moduleDefragGlobals(endtime);
+    /* Re-run this stage next cycle if we ran out of time mid-iteration, or if a
+     * module reported it still has work queued (e.g. on its own threads). On
+     * re-run, modules already finished this cycle are skipped so we resume with
+     * the remaining ones. */
+    if (more_work || getMonotonicUs() >= endtime) return DEFRAG_NOT_DONE;
     return DEFRAG_DONE;
 }
 

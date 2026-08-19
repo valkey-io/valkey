@@ -2450,6 +2450,7 @@ void VM_SetModuleAttribs(ValkeyModuleCtx *ctx, const char *name, int ver, int ap
     module->info_cb = 0;
     module->defrag_cb = 0;
     module->defrag_cursor = 0;
+    module->defrag_done_this_cycle = 0;
     module->loadmod = NULL;
     module->num_commands_with_acl_categories = 0;
     module->onload = 1;
@@ -15146,15 +15147,45 @@ int moduleDefragValue(robj *key, robj *value, int dbid) {
     return 1;
 }
 
+/* Reset per-module global-defrag state at the start of a defrag cycle. Called
+ * with endtime==0 (stage initialization). Clears the "done this cycle" flag so
+ * every module is visited again in the new cycle. Cursors are intentionally
+ * NOT reset here: a module owns its cursor and decides when to reset it (it may
+ * carry progress across cycles). */
+void moduleDefragGlobalsStart(void) {
+    listIter li;
+    listNode *ln;
+
+    listRewind(modules, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        struct ValkeyModule *module = listNodeValue(ln);
+        module->defrag_done_this_cycle = 0;
+    }
+}
+
 /* Call registered module API defrag functions.
  *
  * endtime is the monotonic deadline for this invocation, forwarded to each
  * module's callback via the ctx so VM_DefragShouldStop() works for global
  * defrag. Each module gets a persistent cursor (module->defrag_cursor) so it
  * can save progress with VM_DefragCursorSet() and resume on the next cycle.
- */
-void moduleDefragGlobals(monotime endtime) {
-    if (listLength(modules) == 0) return;
+ *
+ * When the deadline is hit mid-iteration we return without visiting the rest of
+ * the modules. Modules already finished this cycle set defrag_done_this_cycle
+ * so a subsequent invocation resumes with the remaining modules rather than
+ * re-running the finished ones. The flag lives on the module struct, so if a
+ * module is unloaded between invocations its state disappears safely.
+ *
+ * The per-module cursor doubles as the "more work" signal, matching the
+ * convention used throughout defrag.c: a callback that leaves its cursor
+ * non-zero wants to be called again; a cursor of 0 means that module is done
+ * for this cycle. A module offloading work to its own threads keeps the cursor
+ * non-zero while that work is still outstanding.
+ *
+ * Returns 1 if any module still has work to do, 0 otherwise. */
+int moduleDefragGlobals(monotime endtime) {
+    int more_work = 0;
+    if (listLength(modules) == 0) return more_work;
 
     listIter li;
     listNode *ln;
@@ -15163,10 +15194,17 @@ void moduleDefragGlobals(monotime endtime) {
     while ((ln = listNext(&li)) != NULL) {
         struct ValkeyModule *module = listNodeValue(ln);
         if (!module->defrag_cb) continue;
+        if (module->defrag_done_this_cycle) continue;
         ValkeyModuleDefragCtx defrag_ctx = {endtime, &module->defrag_cursor, NULL, -1};
         module->defrag_cb(&defrag_ctx);
+        if (module->defrag_cursor != 0) {
+            more_work = 1;
+        } else {
+            module->defrag_done_this_cycle = 1;
+        }
         if (endtime != 0 && getMonotonicUs() >= endtime) break;
     }
+    return more_work;
 }
 
 /* Returns the name of the key currently being processed.

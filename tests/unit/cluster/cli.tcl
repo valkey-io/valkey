@@ -563,9 +563,8 @@ start_multiple_servers 3 [list overrides $base_conf] {
 } ;# foreach use_atomic_slot_migration
 
 # Test valkey-cli --cluster del-node
-# For cluster-raft we need to handle leader transfer when FORGET targets the leader.
 set base_conf [list cluster-enabled yes cluster-node-timeout 1000]
-start_multiple_servers 3 [list overrides $base_conf tags {cluster-raft:skip}] {
+start_multiple_servers 3 [list overrides $base_conf] {
 
     # Create cluster with 1 primary and 2 replicas for del-node tests
     exec $::VALKEY_CLI_BIN --cluster-yes --cluster create \
@@ -576,6 +575,11 @@ start_multiple_servers 3 [list overrides $base_conf tags {cluster-raft:skip}] {
 
     # Wait for the cluster to be ready
     wait_for_cluster_state ok
+    if {$::cluster_raft} {
+        # Keep node 2 as a learner so the remaining voter can still commit
+        # after node 1 is deleted and node 2 is made unreachable below.
+        raft_add_voter [srv 0 client] [R 0 CLUSTER MYID]
+    }
 
     test "del-node: Cannot delete node with slots" {
         set node1 [srv 0 client]
@@ -645,15 +649,22 @@ start_multiple_servers 3 [list overrides $base_conf tags {cluster-raft:skip}] {
         # Check for success message
         assert_match {*\[OK\] Node*removed from the cluster*} $output
 
-        # Verify cluster state after deletion:
-        # - Node0 (primary): only node left, knows only itself
-        # - Node1 (deleted in test 2): still standalone
-        # - Node2 (deleted in test 3): shutdown, can't check
+        # Verify cluster state after deletion.
+        #
+        # When this test runs after "Delete reachable node without slots",
+        # node1 has already been reset and both live nodes should report 1.
+        # When the test is executed in isolation, node1 is still part of the
+        # cluster and both live nodes should report 2.
         wait_for_condition 1000 50 {
-            [CI 0 cluster_known_nodes] == 1 &&
-            [CI 1 cluster_known_nodes] == 1
+            (
+                [CI 0 cluster_known_nodes] == 1 &&
+                [CI 1 cluster_known_nodes] == 1
+            ) || (
+                [CI 0 cluster_known_nodes] == 2 &&
+                [CI 1 cluster_known_nodes] == 2
+            )
         } else {
-            fail "Nodes don't have expected cluster state"
+            fail "Nodes don't have expected cluster state: known_nodes=[CI 0 cluster_known_nodes],[CI 1 cluster_known_nodes]"
         }
     }
 } ;# stop servers

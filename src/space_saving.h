@@ -30,9 +30,10 @@
  *
  * The manager keeps two windows: a `live` one accumulating the current interval
  * and a `frozen` snapshot of the last completed interval. Readers observe only
- * the frozen window, never a partial one. Each window also carries the sampling
- * configuration its counts were gathered under, so a reader can interpret a
- * frozen window correctly even after the configuration has since changed.
+ * the frozen window, never a partial one. Each window also records the real
+ * interval it accumulated over and the sampling percentage its counts were
+ * gathered under, so a reader can turn a frozen window into a rate correctly
+ * even after the configuration has since changed.
  *
  * The caller supplies a monotonic microsecond clock on each call, so this
  * module has no global-clock dependency, and drives window boundaries by
@@ -49,8 +50,8 @@ typedef struct spaceSavingManager spaceSavingManager;
 spaceSavingManager *spaceSavingManagerCreate(int k, uint64_t window_us, uint64_t now_us);
 /* Free the manager and every key it owns. NULL-safe. */
 void spaceSavingManagerRelease(spaceSavingManager *m);
-/* Clear both windows (including their sampling config) and restart the current
- * window at `now_us`. */
+/* Clear both windows (including their recorded timing and sampling percentage)
+ * and restart the current window at `now_us`. */
 void spaceSavingManagerReset(spaceSavingManager *m, uint64_t now_us);
 /* Freeze whichever window(s) fully elapsed by `now_us` (no-op if still open). */
 void spaceSavingManagerRotate(spaceSavingManager *m, uint64_t now_us);
@@ -71,15 +72,21 @@ void spaceSavingManagerRemoveIf(spaceSavingManager *m, int (*pred)(sds key, int 
 /* Total observations recorded in the last completed (frozen) window (N). */
 uint64_t spaceSavingManagerFrozenTotal(spaceSavingManager *m);
 
-/* Record the sampling configuration that the current (live) window's counts are
+/* Record the sampling percentage that the current (live) window's counts are
  * being gathered under. It travels with the window when it is frozen, so a
- * reader can scale the frozen counts by the configuration that produced them
- * even after a later change. */
-void spaceSavingManagerSetLiveSampling(spaceSavingManager *m, int sampling_percentage, int window_seconds);
-/* Sampling configuration that was in effect for the last completed (frozen)
- * window. Out-params may be NULL; both report 0 when the window never had one
- * (freshly created or reset). */
-void spaceSavingManagerFrozenSampling(spaceSavingManager *m, int *sampling_percentage, int *window_seconds);
+ * reader can scale the frozen counts by the percentage that produced them even
+ * after a later change. */
+void spaceSavingManagerSetLiveSamplingPercentage(spaceSavingManager *m, int sampling_percentage);
+/* Sampling percentage that was in effect for the last completed (frozen)
+ * window; 0 when the window never had one (freshly created or reset). */
+int spaceSavingManagerFrozenSamplingPercentage(spaceSavingManager *m);
+/* Real time the last completed (frozen) window spent accumulating, in
+ * microseconds, or 0 if there is no completed window yet. Rotation is driven by
+ * the caller's timer, so a window is closed at or after its nominal boundary and
+ * this is its configured length plus the rotation lag. Rates must be derived
+ * from THIS, not from the configured window length, or they over-report by that
+ * lag. */
+uint64_t spaceSavingManagerFrozenDurationUs(spaceSavingManager *m);
 
 /* Reset only the live window and restart it at `now_us` with the given capacity
  * and window length, keeping the last completed (frozen) window and its

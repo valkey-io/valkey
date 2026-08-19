@@ -21,6 +21,8 @@ int hotKeyWindowCallback(const char **err);
 int hotkeyEnabled(void);
 /* Number of sampled observations in the last completed window (N). */
 uint64_t hotkeyLastWindowSamples(void);
+/* Real duration of the last completed window, in microseconds. */
+uint64_t hotkeyLastWindowDurationUs(void);
 /* Create the manager at server startup if detection is enabled. */
 void hotkeyInit(void);
 /* Periodic maintenance (call from serverCron): freeze elapsed windows on time. */

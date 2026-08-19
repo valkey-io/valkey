@@ -25,7 +25,7 @@
 static spaceSavingManager *hotkeyCreateManager(void) {
     uint64_t window_us = (uint64_t)server.hotkey_window_seconds * 1000000ULL;
     spaceSavingManager *m = spaceSavingManagerCreate(server.hotkey_top_k, window_us, getMonotonicUs());
-    if (m) spaceSavingManagerSetLiveSampling(m, server.hotkey_sampling_percentage, server.hotkey_window_seconds);
+    if (m) spaceSavingManagerSetLiveSamplingPercentage(m, server.hotkey_sampling_percentage);
     return m;
 }
 
@@ -37,8 +37,7 @@ void hotkeyPurgeAll(void) {
     if (!server.hotkey_manager) return;
     spaceSavingManagerReset(server.hotkey_manager, getMonotonicUs());
     /* Reset clears each window's sampling config; re-establish the live one. */
-    spaceSavingManagerSetLiveSampling(server.hotkey_manager, server.hotkey_sampling_percentage,
-                                      server.hotkey_window_seconds);
+    spaceSavingManagerSetLiveSamplingPercentage(server.hotkey_manager, server.hotkey_sampling_percentage);
 }
 
 /* Periodic maintenance from serverCron: close any window that has fully elapsed
@@ -113,17 +112,38 @@ static int hotkeyCollectedCmpDesc(const void *a, const void *b) {
     return 0;
 }
 
+/* Compute (a * b) / c rounded to nearest, without overflowing the intermediate
+ * product. Uses a 128-bit intermediate where the compiler has one (as
+ * monotonic.c does); the uint64 fallback is exact for every reachable input,
+ * since overflowing it would take upwards of 9e10 sampled hits on one key
+ * inside a single window. */
+static uint64_t hotkeyMulDivRound(uint64_t a, uint64_t b, uint64_t c) {
+#ifdef __SIZEOF_INT128__
+    __uint128_t num = (__uint128_t)a * b;
+    return (uint64_t)((num + c / 2) / c);
+#else
+    return (a * b + c / 2) / c;
+#endif
+}
+
 /* Recover a per-second rate from a frozen (count, error) pair whose counts were
- * Bernoulli-sampled at `sample_percentage` percent over `window_seconds`. Uses
- * the midpoint of the [count-error, count] band (the *2 keeps error/2 exact),
- * scales the sampled count back up by 100/sample_percentage, then divides by the
- * window length. Integer arithmetic, rounded to nearest; 0 for non-positive
- * inputs. */
-static uint64_t hotkeyEstimateQps(uint64_t count, uint64_t error, int sample_percentage, int window_seconds) {
-    if (sample_percentage <= 0 || window_seconds <= 0) return 0;
-    uint64_t num = (2 * count - error) * 100;
-    uint64_t den = 2ULL * (uint64_t)sample_percentage * (uint64_t)window_seconds;
-    return (num + den / 2) / den;
+ * Bernoulli-sampled at `sample_percentage` percent over a window that really
+ * lasted `duration_us` microseconds. Uses the midpoint of the [count-error,
+ * count] band (the *2 keeps error/2 exact) and scales the sampled count back up
+ * by 100/sample_percentage.
+ *
+ * The denominator is the window's MEASURED duration, not the configured
+ * `hotkey-window-seconds`. Rotation is driven by serverCron, so a window is
+ * closed at or after its nominal boundary and holds the traffic of that whole
+ * real interval; dividing by the nominal length would over-report by the
+ * rotation lag (up to ~1/server.hz, i.e. ~10% at the default hz with a 1s
+ * window) and always in the same direction. Integer arithmetic, rounded to
+ * nearest; 0 for non-positive inputs. */
+static uint64_t hotkeyEstimateQps(uint64_t count, uint64_t error, int sample_percentage, uint64_t duration_us) {
+    if (sample_percentage <= 0 || duration_us == 0) return 0;
+    uint64_t twice_midpoint = 2 * count - error;
+    uint64_t den = 2ULL * (uint64_t)sample_percentage * duration_us;
+    return hotkeyMulDivRound(twice_midpoint, 100ULL * 1000000ULL, den);
 }
 
 void hotkeysGetCommand(client *c) {
@@ -148,14 +168,14 @@ void hotkeysGetCommand(client *c) {
 
     hotkeyCollected *arr = zmalloc(cap * sizeof(hotkeyCollected));
     int n = 0;
-    /* Estimate with the sampling %/window that produced the frozen window, not
-     * the current config (which may have changed since it was captured). */
-    int frozen_pct, frozen_window_s;
-    spaceSavingManagerFrozenSampling(m, &frozen_pct, &frozen_window_s);
+    /* Estimate with the sampling percentage that produced the frozen window (the
+     * current config may have changed since) and the interval it really spanned. */
+    int frozen_pct = spaceSavingManagerFrozenSamplingPercentage(m);
+    uint64_t frozen_duration_us = spaceSavingManagerFrozenDurationUs(m);
     for (int i = 0; i < cap; i++) {
         uint64_t count, error;
         spaceSavingManagerAt(m, i, &arr[n].key, &arr[n].dbid, &count, &error);
-        arr[n].qps = hotkeyEstimateQps(count, error, frozen_pct, frozen_window_s);
+        arr[n].qps = hotkeyEstimateQps(count, error, frozen_pct, frozen_duration_us);
         n++;
     }
 
@@ -204,6 +224,14 @@ uint64_t hotkeyLastWindowSamples(void) {
     return server.hotkey_manager ? spaceSavingManagerFrozenTotal(server.hotkey_manager) : 0;
 }
 
+/* Real duration of the last completed window, in microseconds. Reported in INFO
+ * so an operator can tell an empty report apart from one measured over an
+ * unusually short or long window (rotation runs on the serverCron tick, so the
+ * span is the configured length plus that lag). 0 when detection is disabled. */
+uint64_t hotkeyLastWindowDurationUs(void) {
+    return server.hotkey_manager ? spaceSavingManagerFrozenDurationUs(server.hotkey_manager) : 0;
+}
+
 /* Reconfigure the manager in place from the current config: the in-progress
  * (live) window is reset (its counts were gathered under the old config), but
  * the last completed (frozen) window is KEPT along with the config that
@@ -213,8 +241,7 @@ static void hotkeyManagerReconfigure(void) {
     if (!server.hotkey_manager) return;
     spaceSavingManagerReconfigure(server.hotkey_manager, server.hotkey_top_k,
                                   (uint64_t)server.hotkey_window_seconds * 1000000ULL, getMonotonicUs());
-    spaceSavingManagerSetLiveSampling(server.hotkey_manager, server.hotkey_sampling_percentage,
-                                      server.hotkey_window_seconds);
+    spaceSavingManagerSetLiveSamplingPercentage(server.hotkey_manager, server.hotkey_sampling_percentage);
 }
 
 /* Create or free the manager to match the enabled state. */

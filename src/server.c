@@ -6869,6 +6869,10 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
          * tracked, so this gives operators the detection floor of a report. */
         info = sdscatprintf(info, "hotkey_last_window_samples:%llu\r\n",
                             (unsigned long long)hotkeyLastWindowSamples());
+        /* The real span the report was measured over, which is the configured
+         * window plus the rotation lag — and the QPS denominator. */
+        info = sdscatprintf(info, "hotkey_last_window_duration_ms:%llu\r\n",
+                            (unsigned long long)(hotkeyLastWindowDurationUs() / 1000));
     }
 
     /* Get info from modules.

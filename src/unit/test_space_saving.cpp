@@ -26,7 +26,7 @@ extern "C" {
 #include "space_saving.h"
 }
 
-#define WINDOW_US 1000 /* 1ms windows keep the arithmetic obvious */
+#define WINDOW_US 1000ULL /* 1ms windows keep the arithmetic obvious */
 
 /* Record one observation of `name` in database `dbid`. The key is borrowed by
  * the module (copied only if a slot is committed to it), so we free our copy. */
@@ -340,48 +340,80 @@ TEST(SpaceSaving, RemoveIfPurgesLiveAndFrozenWindows) {
 }
 
 /* ---------------------------------------------------------------------------
- * The per-window sampling config travels with the window it was recorded for,
- * so a frozen window stays interpretable after the configuration changes.
+ * The per-window sampling percentage travels with the window it was recorded
+ * for, so a frozen window stays interpretable after the configuration changes.
  * --------------------------------------------------------------------------*/
-TEST(SpaceSaving, FrozenWindowKeepsTheSamplingConfigThatProducedIt) {
+TEST(SpaceSaving, FrozenWindowKeepsTheSamplingPercentageThatProducedIt) {
     spaceSavingManager *m = spaceSavingManagerCreate(4, WINDOW_US, 0);
     ASSERT_NE(m, nullptr);
 
-    int pct = -1, secs = -1;
     /* Nothing has been recorded or configured yet. */
-    spaceSavingManagerFrozenSampling(m, &pct, &secs);
-    EXPECT_EQ(pct, 0);
-    EXPECT_EQ(secs, 0);
+    EXPECT_EQ(spaceSavingManagerFrozenSamplingPercentage(m), 0);
 
-    spaceSavingManagerSetLiveSampling(m, 100, 1);
+    spaceSavingManagerSetLiveSamplingPercentage(m, 100);
     recordName(m, "a", 0);
     uint64_t now = freezeOnce(m, 0);
-
-    spaceSavingManagerFrozenSampling(m, &pct, &secs);
-    EXPECT_EQ(pct, 100);
-    EXPECT_EQ(secs, 1);
+    EXPECT_EQ(spaceSavingManagerFrozenSamplingPercentage(m), 100);
 
     /* Sampling is lowered afterwards. The already-frozen window must still
-     * report the values its counts were gathered under. */
+     * report the value its counts were gathered under. */
     spaceSavingManagerReconfigure(m, 4, WINDOW_US, now);
-    spaceSavingManagerSetLiveSampling(m, 10, 1);
-    spaceSavingManagerFrozenSampling(m, &pct, &secs);
-    EXPECT_EQ(pct, 100) << "the frozen window must keep its own sampling config";
-    EXPECT_EQ(secs, 1);
+    spaceSavingManagerSetLiveSamplingPercentage(m, 10);
+    EXPECT_EQ(spaceSavingManagerFrozenSamplingPercentage(m), 100)
+        << "the frozen window must keep its own sampling percentage";
     EXPECT_EQ(frozenFind(m, "a", 0, NULL, NULL), 1) << "reconfigure must keep the frozen window";
 
-    /* Once that window rotates out, the new config applies. */
+    /* Once that window rotates out, the new percentage applies. */
     recordName(m, "b", 0);
     freezeOnce(m, now);
-    spaceSavingManagerFrozenSampling(m, &pct, &secs);
-    EXPECT_EQ(pct, 10);
+    EXPECT_EQ(spaceSavingManagerFrozenSamplingPercentage(m), 10);
 
-    /* A full reset clears the frozen config along with the data. */
+    /* A full reset clears the percentage along with the data. */
     spaceSavingManagerReset(m, 0);
-    spaceSavingManagerFrozenSampling(m, &pct, &secs);
-    EXPECT_EQ(pct, 0);
-    EXPECT_EQ(secs, 0);
+    EXPECT_EQ(spaceSavingManagerFrozenSamplingPercentage(m), 0);
     EXPECT_EQ(spaceSavingManagerCount(m), 0);
+
+    spaceSavingManagerRelease(m);
+}
+
+/* ---------------------------------------------------------------------------
+ * A window reports the interval it REALLY accumulated over, not its configured
+ * length. Rotation is timer-driven, so it runs at or after the nominal
+ * boundary; using the configured length as a rate denominator would
+ * systematically over-report by that lag.
+ * --------------------------------------------------------------------------*/
+TEST(SpaceSaving, FrozenDurationIsTheRealSpanIncludingRotationLag) {
+    spaceSavingManager *m = spaceSavingManagerCreate(8, WINDOW_US, 0);
+    ASSERT_NE(m, nullptr);
+
+    /* No completed window yet. */
+    EXPECT_EQ(spaceSavingManagerFrozenDurationUs(m), 0u);
+
+    /* Rotation runs late: the boundary is at WINDOW_US but cron only gets to it
+     * half a window later, and the samples in between land in this window. */
+    const uint64_t lag_us = WINDOW_US / 2;
+    for (int i = 0; i < 10; i++) recordName(m, "a", 0);
+    spaceSavingManagerRotate(m, WINDOW_US + lag_us);
+    ASSERT_EQ(spaceSavingManagerCount(m), 1);
+    EXPECT_EQ(spaceSavingManagerFrozenDurationUs(m), WINDOW_US + lag_us)
+        << "the frozen duration must include the rotation lag";
+
+    /* The next window starts when the rotation actually happened, not at the
+     * nominal grid position, so consecutive durations do not double-count the
+     * lag: closing the next window one length later spans exactly one length. */
+    for (int i = 0; i < 4; i++) recordName(m, "b", 0);
+    spaceSavingManagerRotate(m, 2 * WINDOW_US + lag_us);
+    ASSERT_EQ(frozenFind(m, "b", 0, NULL, NULL), 1);
+    EXPECT_EQ(spaceSavingManagerFrozenDurationUs(m), WINDOW_US);
+
+    /* Reset clears the recorded timing. */
+    spaceSavingManagerReset(m, 5 * WINDOW_US);
+    EXPECT_EQ(spaceSavingManagerFrozenDurationUs(m), 0u);
+    for (int i = 0; i < 3; i++) recordName(m, "c", 0);
+    spaceSavingManagerRotate(m, 6 * WINDOW_US);
+    ASSERT_EQ(frozenFind(m, "c", 0, NULL, NULL), 1);
+    EXPECT_EQ(spaceSavingManagerFrozenDurationUs(m), WINDOW_US)
+        << "the window must be measured from the reset, not from creation";
 
     spaceSavingManagerRelease(m);
 }

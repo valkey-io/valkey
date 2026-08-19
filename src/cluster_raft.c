@@ -1273,7 +1273,7 @@ static clusterNode *clusterRaftSelectTransferTarget(void) {
         clusterNode *node = dictGetVal(de);
         if (node == myself || !node->link) continue;
         if (nodeFailed(node)) continue;
-        if (node->flags & (CLUSTER_NODE_MEET | CLUSTER_NODE_HANDSHAKE)) continue;
+        if (!nodeIsVoter(node)) continue;
         uint64_t mi = RAFT_NODE(node)->match_index;
         if (!best || mi > best_match) {
             best = node;
@@ -1301,7 +1301,7 @@ static int clusterRaftRequestLeaderTransfer(void) {
         return 1;
     }
 
-    if (rs->role == RAFT_ROLE_FOLLOWER) {
+    if (rs->role == RAFT_ROLE_FOLLOWER || rs->role == RAFT_ROLE_LEARNER) {
         clusterNode *leader = clusterLookupNode(rs->leader, CLUSTER_NAMELEN);
         if (!leader || !leader->link || nodeFailed(leader)) {
             rs->todo_connect_nodes = 1;
@@ -2338,7 +2338,9 @@ static void clusterRaftSendProposal(raftPendingProposal *pp, clusterLink *leader
 static void clusterRaftRetryProposals(int include_pending) {
     clusterRaftState *rs = RAFT_STATE();
     if (listLength(rs->pending_proposals) == 0) return;
-    if (rs->role != RAFT_ROLE_LEADER && rs->role != RAFT_ROLE_FOLLOWER) return;
+    if (rs->role != RAFT_ROLE_LEADER &&
+        rs->role != RAFT_ROLE_FOLLOWER &&
+        rs->role != RAFT_ROLE_LEARNER) return;
 
     /* For followers/learners, check leader link once — it's the same for all entries. */
     clusterLink *leader_link = NULL;
@@ -3737,7 +3739,10 @@ static RaftProposalResult clusterRaftApplyNodeForget(sds data, int validate_only
     clusterNode *node = clusterLookupNode(argv[0], sdslen(argv[0]));
     /* Already forgotten: success (idempotent; may be a no-op log entry). */
     if (!node) goto done;
-    if (node == myself) goto reject;
+    if (node == myself) {
+        if (validate_only) goto reject;
+        goto done;
+    }
 
     uint64_t epoch = strtoull(argv[1], NULL, 10);
     if (!clusterValidateShardEpoch(node->shard_id, epoch)) {
@@ -3827,13 +3832,7 @@ static void clusterRaftForgetNode(const char *node_id, size_t id_len, void *ctx,
     if (id_len == CLUSTER_NAMELEN && memcmp(node_id, rs->leader, CLUSTER_NAMELEN) == 0) {
         clusterNode *leader_node = clusterLookupNode(node_id, id_len);
         if (leader_node && !nodeFailed(leader_node)) {
-            clusterNode *node = clusterLookupNode(node_id, CLUSTER_NAMELEN);
-            if (!node) {
-                if (callback) callback(ctx, NULL);
-                return;
-            }
-
-            uint64_t epoch = clusterGetShardEpoch(node->shard_id);
+            uint64_t epoch = clusterGetShardEpoch(leader_node->shard_id);
             sds data = sdsnewlen(node_id, CLUSTER_NAMELEN);
             data = sdscatfmt(data, " %U", (unsigned long long)epoch);
             clusterRaftQueuePendingProposal(RAFT_ENTRY_NODE_FORGET, data, ctx, callback, node_id);

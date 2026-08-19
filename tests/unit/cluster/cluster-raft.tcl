@@ -48,41 +48,46 @@ test "Raft: leader steps down after losing quorum freshness" {
 
 test "Raft: CLUSTER FORGET transfers leadership when target is leader" {
     start_multiple_servers 3 {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 1000}} {
-        [srv 0 client] CLUSTER MEET [srv -1 host] [srv -1 port]
-        [srv 0 client] CLUSTER MEET [srv -2 host] [srv -2 port]
+        set r0 [srv 0 client]
+        $r0 CLUSTER MEET [srv -1 host] [srv -1 port]
+        $r0 CLUSTER MEET [srv -2 host] [srv -2 port]
+        raft_add_voter $r0 [R 1 CLUSTER MYID]
 
-        wait_for_condition 50 100 {
-            [CI 0 cluster_size] == 3 &&
-            [CI 1 cluster_size] == 3 &&
-            [CI 2 cluster_size] == 3
+        wait_for_condition 100 100 {
+            [CI 0 cluster_size] == 2 &&
+            [CI 1 cluster_size] == 2 &&
+            [CI 2 cluster_size] == 2 &&
+            [CI 2 cluster_raft_role] eq "learner"
         } else {
-            fail "Cluster did not form: sizes=[CI 0 cluster_size],[CI 1 cluster_size],[CI 2 cluster_size]"
+            fail "Cluster did not form with two voters and one learner: sizes=[CI 0 cluster_size],[CI 1 cluster_size],[CI 2 cluster_size] role2=[CI 2 cluster_raft_role]"
         }
 
         set leader_id [CI 0 cluster_raft_leader]
         set leader_idx -1
-        set followers [list]
-        foreach idx {0 1 2} {
+        set survivor_idx -1
+        foreach idx {0 1} {
             if {[R $idx CLUSTER MYID] eq $leader_id} {
                 set leader_idx $idx
             } else {
-                lappend followers $idx
+                set survivor_idx $idx
             }
         }
 
         assert {$leader_idx >= 0}
-        assert_equal 2 [llength $followers]
+        assert {$survivor_idx >= 0}
 
-        set forgetter_idx [lindex $followers 0]
-        set survivor_idx [lindex $followers 1]
+        set forgetter_idx 2
+        set survivor_id [R $survivor_idx CLUSTER MYID]
         assert_equal "OK" [R $forgetter_idx CLUSTER FORGET $leader_id]
 
         wait_for_condition 100 50 {
             [CI $forgetter_idx cluster_raft_leader] ne "" &&
             [CI $forgetter_idx cluster_raft_leader] eq [CI $survivor_idx cluster_raft_leader] &&
-            [CI $forgetter_idx cluster_raft_leader] ne $leader_id
+            [CI $forgetter_idx cluster_raft_leader] eq $survivor_id &&
+            [CI $forgetter_idx cluster_size] == 1 &&
+            [CI $survivor_idx cluster_size] == 1
         } else {
-            fail "Leader was not transferred before forgetting: forgetter_leader=[CI $forgetter_idx cluster_raft_leader] survivor_leader=[CI $survivor_idx cluster_raft_leader]"
+            fail "Leader was not transferred to the voter before forgetting: old_leader=$leader_id survivor=$survivor_id forgetter_leader=[CI $forgetter_idx cluster_raft_leader] survivor_leader=[CI $survivor_idx cluster_raft_leader] sizes=[CI $forgetter_idx cluster_size],[CI $survivor_idx cluster_size]"
         }
     }
 }

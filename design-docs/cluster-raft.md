@@ -88,7 +88,7 @@ REPL_OFFSETS <node-id> <offset> [<node-id> <offset> ...]
     health reporting.
 
 TRANSFER_LEADER <term>
-    Sent by a follower to ask the current leader to hand off leadership.
+    Sent by a follower or learner to ask the current leader to hand off leadership.
     Used when an administrative operation, such as forgetting the leader,
     needs a different node to become leader first.
 

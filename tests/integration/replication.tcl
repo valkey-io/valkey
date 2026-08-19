@@ -765,8 +765,12 @@ proc stop_fake_primary {pid} {
     }
 }
 
-proc test_fake_primary_bulk_length {bulk_payload expect_rejection} {
-    start_server {tags {repl external:skip tls:skip} overrides {save "" repl-diskless-load swapdb}} {
+proc test_fake_primary_bulk_length {bulk_payload expect_rejection {diskless_load swapdb}} {
+    # The metadata is parsed before the load path is chosen, so run the cases
+    # with both repl-diskless-load swapdb (in-memory load) and the default
+    # disabled (the RDB is written to disk from the bio thread).
+    start_server [list tags {repl external:skip tls:skip} \
+                      overrides [list save {} repl-diskless-load $diskless_load]] {
         set replica [srv 0 client]
         set fake_port [find_available_port $::baseport $::portcount]
         set tclsh [info nameofexecutable]
@@ -793,11 +797,11 @@ proc test_fake_primary_bulk_length {bulk_payload expect_rejection} {
             set loglines [count_log_lines 0]
             $replica replicaof 127.0.0.1 $fake_port
             if {$expect_rejection} {
-                wait_for_log_messages 0 {"*Invalid bulk metadata from PRIMARY*"} $loglines 100 10
+                wait_for_log_messages 0 {"*Invalid bulk metadata from PRIMARY*"} $loglines 1500 10
                 verify_no_log_message 0 "*Loading DB in memory*" $loglines
                 assert_equal down [s 0 master_link_status]
             } else {
-                wait_for_log_messages 0 {"*Loading DB in memory*"} $loglines 100 10
+                wait_for_log_messages 0 {"*Loading DB in memory*"} $loglines 1500 10
                 verify_no_log_message 0 "*Failed to read sync metadata*" $loglines
             }
             assert_equal PONG [$replica ping]
@@ -819,10 +823,14 @@ foreach {description bulk_payload} [list \
     {null bulk length} {$-1} \
     {zero bulk length} {$0} \
     {signed-overflow bulk length} {$9223372036854775808} \
+    {bulk length with leading plus} {$+1} \
+    {bulk length with leading zero} {$01} \
     {bulk length with trailing garbage} {$1x} \
     {bulk length with embedded NUL} "\$1\x00garbage"] {
-    test "Diskless replica rejects fake primary $description" {
-        test_fake_primary_bulk_length $bulk_payload 1
+    foreach diskless_load {swapdb disabled} {
+        test "Replica with repl-diskless-load $diskless_load rejects fake primary $description" {
+            test_fake_primary_bulk_length $bulk_payload 1 $diskless_load
+        }
     }
 }
 
@@ -831,7 +839,13 @@ test {Diskless replica accepts valid fake primary bulk length} {
     test_fake_primary_bulk_length "\$1\nx" 0
 }
 
-test {Diskless replica accepts fake primary bulk length at 2^32 boundary} {
+# This only asserts that a bulk length above 2^32 is accepted and that loading
+# starts. It does NOT cover the 32-bit size_t narrowing bug: before the fix, a
+# 32-bit build narrowed 4294967296 to 0, and RIO treats a 0 read limit as
+# unlimited, so loading started there too and this test still passed. The
+# overflow-safe arithmetic itself is covered by RioConnOverflowTest in
+# src/unit/test_rio.cpp.
+test {Diskless replica accepts fake primary bulk length above 2^32} {
     test_fake_primary_bulk_length {$4294967296} 0
 }
 

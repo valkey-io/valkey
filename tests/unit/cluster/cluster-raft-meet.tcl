@@ -1,15 +1,6 @@
 # Test CLUSTER MEET scenarios for the Raft cluster protocol.
 
-proc get_cluster_info_field {client field} {
-    set info [$client CLUSTER INFO]
-    foreach line [split $info "\n"] {
-        set line [string trim $line "\r"]
-        if {[string match "${field}:*" $line]} {
-            return [lindex [split $line ":"] 1]
-        }
-    }
-    return ""
-}
+source tests/support/cluster_raft.tcl
 
 tags {external:skip cluster singledb} {
 
@@ -19,6 +10,7 @@ start_multiple_servers 2 {overrides {cluster-enabled yes cluster-protocol raft}}
         set r1 [srv -1 client]
 
         $r0 CLUSTER MEET [srv -1 host] [srv -1 port]
+        raft_add_voter $r0 [$r1 CLUSTER MYID]
 
         wait_for_condition 50 100 {
             [get_cluster_info_field $r0 cluster_size] == 2 &&
@@ -36,8 +28,11 @@ start_multiple_servers 5 {overrides {cluster-enabled yes cluster-protocol raft}}
         for {set i 1} {$i < 5} {incr i} {
             $r0 CLUSTER MEET [srv -$i host] [srv -$i port]
         }
+        for {set i 1} {$i < 5} {incr i} {
+            raft_add_voter $r0 [[srv -$i client] CLUSTER MYID]
+        }
 
-        wait_for_condition 50 200 {
+        wait_for_condition 100 200 {
             [get_cluster_info_field $r0 cluster_size] == 5 &&
             [get_cluster_info_field [srv -1 client] cluster_size] == 5 &&
             [get_cluster_info_field [srv -4 client] cluster_size] == 5
@@ -49,18 +44,21 @@ start_multiple_servers 5 {overrides {cluster-enabled yes cluster-protocol raft}}
 
 start_multiple_servers 5 {overrides {cluster-enabled yes cluster-protocol raft}} {
     test "Raft MEET: reverse star formation - each node meets the first node" {
-        set r0 [srv 0 client]
-
         for {set i 1} {$i < 5} {incr i} {
             [srv -$i client] CLUSTER MEET [srv 0 host] [srv 0 port]
         }
+        # The first initiator becomes leader; promote all joined learners there.
+        set leader [srv -1 client]
+        foreach idx {0 -1 -2 -3 -4} {
+            raft_add_voter $leader [[srv $idx client] CLUSTER MYID]
+        }
 
-        wait_for_condition 50 200 {
-            [get_cluster_info_field $r0 cluster_size] == 5 &&
+        wait_for_condition 100 200 {
+            [get_cluster_info_field [srv 0 client] cluster_size] == 5 &&
             [get_cluster_info_field [srv -1 client] cluster_size] == 5 &&
             [get_cluster_info_field [srv -4 client] cluster_size] == 5
         } else {
-            fail "Sizes: [get_cluster_info_field $r0 cluster_size] [get_cluster_info_field [srv -1 client] cluster_size] [get_cluster_info_field [srv -4 client] cluster_size]"
+            fail "Sizes: [get_cluster_info_field [srv 0 client] cluster_size] [get_cluster_info_field [srv -1 client] cluster_size] [get_cluster_info_field [srv -4 client] cluster_size]"
         }
     }
 }
@@ -72,8 +70,11 @@ start_multiple_servers 5 {overrides {cluster-enabled yes cluster-protocol raft}}
         for {set i 0} {$i < 4} {incr i} {
             [srv -$i client] CLUSTER MEET [srv -[expr {$i+1}] host] [srv -[expr {$i+1}] port]
         }
+        for {set i 1} {$i < 5} {incr i} {
+            raft_add_voter $r0 [[srv -$i client] CLUSTER MYID]
+        }
 
-        wait_for_condition 50 200 {
+        wait_for_condition 100 200 {
             [get_cluster_info_field $r0 cluster_size] == 5 &&
             [get_cluster_info_field [srv -1 client] cluster_size] == 5 &&
             [get_cluster_info_field [srv -4 client] cluster_size] == 5
@@ -89,6 +90,7 @@ start_multiple_servers 2 {overrides {cluster-enabled yes cluster-protocol raft}}
         set r1 [srv -1 client]
 
         $r0 CLUSTER MEET [srv -1 host] [srv -1 port]
+        raft_add_voter $r0 [$r1 CLUSTER MYID]
         wait_for_condition 50 100 {
             [get_cluster_info_field $r0 cluster_size] == 2
         } else {
@@ -113,7 +115,9 @@ start_multiple_servers 4 {overrides {cluster-enabled yes cluster-protocol raft}}
     test "Raft MEET: merging two clusters is rejected" {
         # Form two separate 2-node clusters.
         [srv 0 client] CLUSTER MEET [srv -1 host] [srv -1 port]
+        raft_add_voter [srv 0 client] [[srv -1 client] CLUSTER MYID]
         [srv -2 client] CLUSTER MEET [srv -3 host] [srv -3 port]
+        raft_add_voter [srv -2 client] [[srv -3 client] CLUSTER MYID]
 
         wait_for_condition 50 100 {
             [get_cluster_info_field [srv 0 client] cluster_size] == 2 &&

@@ -120,8 +120,11 @@ cluster with only one member. Singleton means that it's alone.
   Cannot vote, propose, or form a cluster. Waits for AE from the
   leader to receive its NODE_JOIN entry. Reverts to singleton leader
   after 4× cluster-node-timeout if no AE arrives.
+- **Learner**: A non-voting member that receives and applies the Raft
+  log but is not counted for elections or commit quorum. Learners can
+  own slots and act as data primaries or replicas.
 - **Follower**: Participates in elections and counts for quorum.
-  Promoted from joiner when the node's NODE_JOIN entry is applied.
+  Promoted from learner by ADD_VOTER after catching up with the log.
 - **Pre-candidate**: Runs a pre-vote round without incrementing term.
   Reverts to follower if no quorum is reached within one election timeout
   (see [Election timeout](#election-timeout)).
@@ -138,10 +141,18 @@ Each log entry has a type and a text data field. The entry types and
 their data formats:
 
 ```
-NODE_JOIN <node-id> <address>
+NODE_JOIN <node-id> <address> <learner|voter>
     Add a node to the cluster. Applied when a new node is discovered
-    via MEET. The node starts as a learner and is promoted to follower
-    when the entry is committed.
+    via MEET. New peers join as learners, so this entry does not change
+    quorum. The local singleton self-join uses voter mode.
+
+ADD_VOTER <node-id>
+    Promote a learner to a voting follower after it has caught up with
+    the leader's log. This increments the voting cluster size.
+
+DEL_VOTER <node-id>
+    Demote a voting follower to learner. The node stays in the cluster
+    and continues receiving AE, but no longer counts for quorum.
 
 NODE_FORGET <node-id> <shard-epoch>
     Remove a node from the cluster (CLUSTER FORGET). The epoch refers to
@@ -378,8 +389,37 @@ down prematurely and defer the MEET.
 
 ### Membership changes
 
-Nodes are added and removed using NODE_JOIN and NODE_FORGET log
-entries.
+Membership and voting rights are separate. `NODE_JOIN` adds a node to
+the replicated topology as a learner; `ADD_VOTER` and `DEL_VOTER`
+change the voting set. `NODE_FORGET` removes either a learner or a
+voter. When the removed node is a voter, the voting size is decremented
+on apply.
+
+`server.cluster->size` is the number of voters only. Learners remain in
+`server.cluster->nodes` so they can receive AE, apply topology entries,
+own slots, and act as data primaries or replicas, but they are ignored
+for elections, commit quorum, and leader freshness checks.
+
+New peers join as learners, following Ongaro §4.2.1 and the etcd
+learner design: the leader replicates log entries to the new node
+without increasing the majority required to commit. Once the learner has
+caught up to the leader's log, the leader can append `ADD_VOTER` to
+promote it to a voting follower.
+
+Not every membership entry is a configuration change. Only entries that
+touch `server.cluster->size` are:
+
+| Entry                                | Changes quorum |
+|--------------------------------------|----------------|
+| `NODE_JOIN ... learner`              | no             |
+| `NODE_FORGET` of a learner           | no             |
+| `NODE_JOIN ... voter` (self-join)    | yes (size++)   |
+| `ADD_VOTER`                          | yes (size++)   |
+| `DEL_VOTER`                          | yes (size--)   |
+| `NODE_FORGET` of a voter             | yes (size--)   |
+
+Adding or removing a learner does not affect quorum, so the safety
+discussion below only applies to the quorum-changing entries.
 
 **Config takes effect on apply, not on append.** Quorum is computed
 from `server.cluster->size`, which is updated when NODE_JOIN is
@@ -846,8 +886,13 @@ targets.
   entries, especially don't trigger primary/replica failovers in a
   minority partition).
 - Log compaction / snapshotting for lagging followers.
-- Learners (non-voting members): reduces the risk for split-vote for
-  leader election in large clusters and reduces commit overhead.
+- Automatic learner promotion (promote the first 5 or 7 nodes to voters).
+- Chained learner replication.
+- Balancing voters over availability zones: the leader can use the
+  per-node availability-zone info to add/remove voters so that voters
+  are spread across at least 3 zones, letting the cluster survive a
+  single zone outage.
+- Leader transfer on CLUSTER FORGET where the target is the leader.
 - Safety regarding membership changes (use new quorum).
 - Cluster merging via MEET: when two independently configured clusters
   are joined via CLUSTER MEET, the clusters should merge, either

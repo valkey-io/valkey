@@ -109,6 +109,7 @@ aeEventLoop *aeCreateEventLoop(int setsize) {
     eventLoop->hp_event_loop = NULL;
     eventLoop->hp_last_poll_us = 0;
     eventLoop->hp_preempt_check_interval_us = AE_HP_DEFAULT_PREEMPT_CHECK_INTERVAL_US;
+    eventLoop->hp_stats_callback = NULL;
     /* Initialize the eventloop mutex with PTHREAD_MUTEX_ERRORCHECK type */
     pthread_mutexattr_t attr;
     pthread_mutexattr_init(&attr);
@@ -454,14 +455,25 @@ int aePoll(aeEventLoop *eventLoop, struct timeval *tvp) {
     return ret;
 }
 
-/* Process all high priority events immediately */
+/* Process all high priority events immediately and invoke the duration callback
+ * with the elapsed time in microseconds if registered. */
 static int aeProcessHPEventsNow(aeEventLoop *eventLoop) {
     int processed = 0;
     if (eventLoop->hp_event_loop != NULL) {
+        monotime start = getMonotonicUs();
         processed = aeProcessEvents(eventLoop->hp_event_loop, AE_ALL_EVENTS | AE_DONT_WAIT);
         eventLoop->hp_last_poll_us = getMonotonicUs();
+
+        if (eventLoop->hp_stats_callback != NULL) {
+            eventLoop->hp_stats_callback(eventLoop, eventLoop->hp_last_poll_us - start);
+        }
     }
     return processed;
+}
+
+/* Set callback to receive elapsed duration of high-priority event processing */
+void aeSetHPStatsCallback(aeEventLoop *eventLoop, aeHPStatsProc *cb) {
+    if (eventLoop) eventLoop->hp_stats_callback = cb;
 }
 
 /* Set the preemptive poll interval in microseconds for high-priority events.

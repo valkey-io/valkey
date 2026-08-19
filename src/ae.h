@@ -83,6 +83,8 @@ typedef void aeEventFinalizerProc(struct aeEventLoop *eventLoop, void *clientDat
 typedef void aeBeforeSleepProc(struct aeEventLoop *eventLoop);
 typedef void aeAfterSleepProc(struct aeEventLoop *eventLoop, int numevents);
 typedef int aeCustomPollProc(struct aeEventLoop *eventLoop);
+/* Callback invoked with elapsed microseconds after high-priority events are processed. */
+typedef void aeHPStatsProc(struct aeEventLoop *eventLoop, uint64_t duration_us);
 
 /* File event structure */
 typedef struct aeFileEvent {
@@ -135,6 +137,7 @@ typedef struct aeEventLoop {
     struct aeEventLoop *hp_event_loop;
     monotime hp_last_poll_us;              /* Timestamp (microseconds) when hp_event_loop was last drained */
     uint64_t hp_preempt_check_interval_us; /* Preemptive check interval in microseconds (0 = disabled) */
+    aeHPStatsProc *hp_stats_callback;      /* Callback invoked with elapsed microseconds after draining hp_event_loop */
 } aeEventLoop;
 
 /* Prototypes */
@@ -171,6 +174,8 @@ int aeProcessHPEventsPreemptively(aeEventLoop *eventLoop, int iter_count);
 /* Sets and gets the high-priority event preemption check interval in microseconds. */
 void aeSetHPPreemptCheckInterval(aeEventLoop *eventLoop, uint64_t interval_us);
 uint64_t aeGetHPPreemptCheckInterval(aeEventLoop *eventLoop);
+/* Sets the callback invoked with elapsed duration whenever high-priority events are processed. */
+void aeSetHPStatsCallback(aeEventLoop *eventLoop, aeHPStatsProc *cb);
 
 /* Links a nested high-priority event loop to the main event loop by registering the child loop's
  * multiplexer descriptor (e.g. epoll fd) on the parent loop with AE_READABLE.

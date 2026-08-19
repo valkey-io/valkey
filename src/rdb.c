@@ -4207,8 +4207,17 @@ void bgsaveCommand(client *c) {
             }
             return;
         } else if (!strcasecmp(arg, "fork")) {
+            /* The save type is a "oneof": at most one of FORK/FORKLESS. */
+            if (chosen_save_type != RDB_BGSAVE_TYPE_NONE) {
+                addReplyErrorObject(c, shared.syntaxerr);
+                return;
+            }
             chosen_save_type = RDB_BGSAVE_TYPE_FORK;
         } else if (!strcasecmp(arg, "forkless")) {
+            if (chosen_save_type != RDB_BGSAVE_TYPE_NONE) {
+                addReplyErrorObject(c, shared.syntaxerr);
+                return;
+            }
             if (!server.forkless_options_supported) {
                 addReplyError(c, "BGSAVE FORKLESS requires starting the server with forkless-options-supported enabled");
                 return;

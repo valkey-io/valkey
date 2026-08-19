@@ -358,6 +358,15 @@ start_server {overrides {forkless-options-supported yes save ""}} {
         }
     }
 }
+start_server {overrides {forkless-options-supported yes save ""}} {
+    test "BGSAVE rejects conflicting save types" {
+        # save-type is a oneof: at most one of FORK/FORKLESS may be given.
+        assert_error "*syntax*" {r bgsave fork forkless}
+        assert_error "*syntax*" {r bgsave forkless fork}
+        assert_error "*syntax*" {r bgsave fork fork}
+        assert_error "*syntax*" {r bgsave forkless forkless}
+    }
+}
 
 start_server {overrides {forkless-options-supported yes save ""}} {
     test "forkless bgsave contains expired keys from when save started" {

@@ -877,3 +877,44 @@ TEST(KqueueFairnessTest, KernelBehavior) {
     close(kq);
 }
 #endif
+
+static void qosMetricTestCb(struct aeEventLoop *el, uint64_t duration_us) {
+    (void)el;
+    durationAddSample(EL_DURATION_TYPE_QOS_EL, duration_us);
+}
+
+static void qosTestFileProc(aeEventLoop *el, int fd, void *privdata, int mask) {
+    (void)el;
+    (void)privdata;
+    (void)mask;
+    char b;
+    (void)read(fd, &b, 1);
+}
+
+/* Test that high-priority event loop duration callback correctly samples QoS metrics. */
+TEST_F(SocketPrioritizationTest, QoSEventLoopStatsMetrics) {
+    aeEventLoop *main_loop = aeCreateEventLoop(64);
+    aeEventLoop *hp_loop = aeCreateEventLoop(64);
+    ASSERT_NE(main_loop, (aeEventLoop *)NULL);
+    ASSERT_NE(hp_loop, (aeEventLoop *)NULL);
+    ASSERT_EQ(aeLinkHighPriorityEventLoop(main_loop, hp_loop), AE_OK);
+    aeSetHPStatsCallback(main_loop, qosMetricTestCb);
+
+    unsigned long long orig_cnt = server.duration_stats[EL_DURATION_TYPE_QOS_EL].cnt;
+    unsigned long long orig_sum = server.duration_stats[EL_DURATION_TYPE_QOS_EL].sum;
+
+    int fds[2];
+    ASSERT_EQ(pipe(fds), 0);
+    ASSERT_EQ(aeCreateFileEvent(main_loop, fds[0], AE_READABLE | AE_HIGH_PRIORITY, qosTestFileProc, NULL), AE_OK);
+
+    char b = 'x';
+    ASSERT_EQ(write(fds[1], &b, 1), 1);
+    aeProcessEvents(main_loop, AE_DONT_WAIT | AE_ALL_EVENTS);
+
+    EXPECT_GT(server.duration_stats[EL_DURATION_TYPE_QOS_EL].cnt, orig_cnt);
+    EXPECT_GE(server.duration_stats[EL_DURATION_TYPE_QOS_EL].sum, orig_sum);
+
+    close(fds[0]);
+    close(fds[1]);
+    aeDeleteEventLoop(main_loop);
+}

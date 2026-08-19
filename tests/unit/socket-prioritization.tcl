@@ -161,5 +161,24 @@ start_server {tags {"socket-prioritization external:skip"}} {
             r config set qos-preemptive-poll-interval-us 2000
             assert_equal [lindex [r config get qos-preemptive-poll-interval-us] 1] 2000
         }
+
+        test {Socket Prioritization: INFO stats and debug QoS metrics} {
+            set info_stats [$primary info stats]
+            set info_debug [$primary info debug]
+
+            assert_morethan [getInfoProperty $info_stats qos_eventloop_cycles] 0
+            assert_morethan [getInfoProperty $info_stats qos_eventloop_duration_sum] 0
+            assert_morethan [getInfoProperty $info_stats qos_eventloop_duration_cmd_sum] 0
+            assert {[getInfoProperty $info_debug qos_eventloop_duration_max] >= 0}
+            assert {[getInfoProperty $info_debug qos_eventloop_cmd_per_cycle_max] >= 0}
+
+            # Reset stats and verify
+            $primary config resetstat
+            set info_stats_reset [$primary info stats]
+            assert_equal [getInfoProperty $info_stats_reset qos_eventloop_cycles] 0
+            assert_equal [getInfoProperty $info_stats_reset qos_eventloop_duration_sum] 0
+            assert_equal [getInfoProperty $info_stats_reset qos_eventloop_duration_cmd_sum] 0
+            assert_equal [getInfoProperty [$primary info debug] qos_eventloop_cmd_per_cycle_max] 0
+        }
     }
 }

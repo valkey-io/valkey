@@ -1073,6 +1073,7 @@ int clusterSaveConfig(int do_fsync) {
     size_t content_size, offset = 0;
     ssize_t written_bytes;
     int fd = -1;
+    int close_errno;
     int retval = C_ERR;
     mstime_t latency;
 
@@ -1120,6 +1121,23 @@ int clusterSaveConfig(int do_fsync) {
         latencyEndMonitor(latency);
         latencyAddSampleIfNeeded("cluster-config-fsync", latency);
         latencyTraceIfNeeded(cluster, cluster_config_fsync, latency);
+    }
+
+    /* Close the temp file before publishing it with rename(). A write error
+     * that was deferred by the kernel is only reported here, so closing first
+     * keeps a truncated file, which makes the next clusterLoadConfig() panic,
+     * from replacing a good one. It also keeps us working on filesystems that
+     * refuse to rename a file that still has an open descriptor, such as an
+     * SMB-backed mount. */
+    latencyStartMonitor(latency);
+    close_errno = close(fd) == -1 ? errno : 0;
+    fd = -1;
+    latencyEndMonitor(latency);
+    latencyAddSampleIfNeeded("cluster-config-close", latency);
+    latencyTraceIfNeeded(cluster, cluster_config_close, latency);
+    if (close_errno) {
+        serverLog(LL_WARNING, "Could not close tmp cluster config file: %s", strerror(close_errno));
+        goto cleanup;
     }
 
     latencyStartMonitor(latency);

@@ -113,6 +113,12 @@ proc create_nodes_conf_folder {srv_idx} {
     exec mkdir -p $cluster_conf_path
 }
 
+proc leftover_nodes_conf_tmp_files {srv_idx} {
+    set dir [lindex [R $srv_idx config get dir] 1]
+    set cluster_conf [lindex [R $srv_idx config get cluster-config-file] 1]
+    return [glob -nocomplain "[file join $dir $cluster_conf].tmp-*"]
+}
+
 start_cluster 1 1 {tags {external:skip cluster} overrides {cluster-config-save-behavior sync}} {
     test {cluster-config-save-behavior sync mode - node exits when config save fails} {
         # Create folder that can cause the rename fail.
@@ -174,6 +180,11 @@ start_cluster 1 1 {tags {external:skip cluster} overrides {cluster-config-save-b
         assert_equal [count_log_message 0 "Cluster config updated even though writing the cluster config file to disk failed"] 1
         assert_morethan_equal [count_log_message -1 "Could not rename tmp cluster config file"] 2
         assert_equal [count_log_message -1 "Cluster config updated even though writing the cluster config file to disk failed"] 1
+
+        # Every failed save closes and removes its temp file, so a node that
+        # never manages to rename must not accumulate them.
+        assert_equal {} [leftover_nodes_conf_tmp_files 0]
+        assert_equal {} [leftover_nodes_conf_tmp_files 1]
     }
 }
 

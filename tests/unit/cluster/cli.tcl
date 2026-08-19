@@ -575,6 +575,11 @@ start_multiple_servers 3 [list overrides $base_conf] {
 
     # Wait for the cluster to be ready
     wait_for_cluster_state ok
+    if {$::cluster_raft} {
+        # Keep node 2 as a learner so the remaining voter can still commit
+        # after node 1 is deleted and node 2 is made unreachable below.
+        raft_add_voter [srv 0 client] [R 0 CLUSTER MYID]
+    }
 
     test "del-node: Cannot delete node with slots" {
         set node1 [srv 0 client]

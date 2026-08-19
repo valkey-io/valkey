@@ -3832,6 +3832,13 @@ static void clusterRaftForgetNode(const char *node_id, size_t id_len, void *ctx,
     if (id_len == CLUSTER_NAMELEN && memcmp(node_id, rs->leader, CLUSTER_NAMELEN) == 0) {
         clusterNode *leader_node = clusterLookupNode(node_id, id_len);
         if (leader_node && !nodeFailed(leader_node)) {
+            /* Leadership transfer cannot succeed without another voter. Fail
+             * immediately instead of leaving the proposal to time out. */
+            if (server.cluster->size <= 1) {
+                if (callback) callback(ctx, "no eligible voting member available for leadership transfer");
+                return;
+            }
+
             uint64_t epoch = clusterGetShardEpoch(leader_node->shard_id);
             sds data = sdsnewlen(node_id, CLUSTER_NAMELEN);
             data = sdscatfmt(data, " %U", (unsigned long long)epoch);

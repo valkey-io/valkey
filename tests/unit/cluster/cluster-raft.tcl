@@ -92,4 +92,24 @@ test "Raft: CLUSTER FORGET transfers leadership when target is leader" {
     }
 }
 
+test "Raft: CLUSTER FORGET rejects leader transfer without another voter" {
+    start_multiple_servers 2 {overrides {cluster-enabled yes cluster-protocol raft cluster-node-timeout 1000}} {
+        set r0 [srv 0 client]
+        $r0 CLUSTER MEET [srv -1 host] [srv -1 port]
+
+        wait_for_condition 100 100 {
+            [CI 0 cluster_size] == 1 &&
+            [CI 1 cluster_size] == 1 &&
+            [CI 1 cluster_raft_role] eq "learner"
+        } else {
+            fail "Cluster did not form with one voter and one learner: sizes=[CI 0 cluster_size],[CI 1 cluster_size] role1=[CI 1 cluster_raft_role]"
+        }
+
+        set leader_id [CI 1 cluster_raft_leader]
+        assert_error "*no eligible voting member available for leadership transfer*" {
+            R 1 CLUSTER FORGET $leader_id
+        }
+    }
+}
+
 } ;# tags

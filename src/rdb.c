@@ -4171,7 +4171,7 @@ void bgsaveCommand(client *c) {
     int chosen_save_type = RDB_BGSAVE_TYPE_NONE;
 
     /* BGSAVE can be invoked with the following options:
-     * - CANCEL: terminates an in-progress or scheduled BGSAVE (standalone only)
+     * - CANCEL: terminates an in-progress or scheduled BGSAVE
      * - SCHEDULE: schedules a BGSAVE when an AOF rewrite is in progress.
      *             Instead of returning an error, the BGSAVE is scheduled to run
      *             when the AOF rewrite completes.

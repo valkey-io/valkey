@@ -385,12 +385,13 @@ sds forkless_catInfo(sds info) {
             current_item_millis = status.current_item_ms;
 
             if (status.dbentries_processed > 0) {
-                long long total_keys = 0;
-                for (int i = 0; i < server.dbnum; i++) {
-                    total_keys += server.db[i] ? dbSize(server.db[i]) : 0;
-                }
-                estimated_seconds_remaining = (total_keys - status.dbentries_processed) *
-                                              status.runtime_ms / status.dbentries_processed / 1000;
+                long long total_keys =
+                    (long long)atomic_load_explicit(&server.stat_current_save_keys_total, memory_order_relaxed);
+                /* The ETA is best effort. Clamp at 0 since dbentries_processed
+                 * can exceed total_keys (e.g. a full sync may process more than
+                 * the start-time key count). */
+                long long remaining = max(total_keys - (long long)status.dbentries_processed, 0);
+                estimated_seconds_remaining = remaining * status.runtime_ms / status.dbentries_processed / 1000;
             }
         }
     }

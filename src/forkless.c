@@ -129,7 +129,6 @@ static void *forklessSaveProcessor(void *arg) {
     serverLog(LL_NOTICE, "forkless-save: background processor finished. %ld items processed. %s",
               items, message);
 
-    currentForklessSave = NULL;
     saveInfo->err_code = err;
     bgIteratorClose(saveInfo->iterator);
     return NULL;
@@ -234,6 +233,7 @@ void forklessSaveComplete(bool terminated, void *privdata) {
     saveInfo->terminated = terminated;
     /* The save iterator should be terminated and freed at this point in time. */
     saveInfo->iterator = NULL;
+    currentForklessSave = NULL;
     /* For file based forkless save, we need to generate the RDB end marker. and complete the save */
     if (!saveInfo->terminated && saveInfo->err_code == C_OK) {
         saveInfo->err_code = rdbWriteFooter(&saveInfo->save_rio, REPLICA_REQ_NONE) == C_ERR ? C_ERR : C_OK;

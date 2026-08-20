@@ -1123,12 +1123,11 @@ int clusterSaveConfig(int do_fsync) {
         latencyTraceIfNeeded(cluster, cluster_config_fsync, latency);
     }
 
-    /* Close the temp file before publishing it with rename(). A write error
-     * that was deferred by the kernel is only reported here, so closing first
-     * keeps a truncated file, which makes the next clusterLoadConfig() panic,
-     * from replacing a good one. It also keeps us working on filesystems that
-     * refuse to rename a file that still has an open descriptor, such as an
-     * SMB-backed mount. */
+    /* Close the temp file before publishing it with rename(). A write error the
+     * kernel deferred is reported by close() and by nothing before it, so a
+     * truncated temp file would otherwise be renamed over a good nodes.conf,
+     * and clusterLoadConfig() panics on a corrupt file at the next start.
+     * ACLSaveToFile() closes before renaming for the same reason. */
     latencyStartMonitor(latency);
     close_errno = close(fd) == -1 ? errno : 0;
     fd = -1;

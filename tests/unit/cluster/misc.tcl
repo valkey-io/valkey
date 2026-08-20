@@ -181,8 +181,9 @@ start_cluster 1 1 {tags {external:skip cluster} overrides {cluster-config-save-b
         assert_morethan_equal [count_log_message -1 "Could not rename tmp cluster config file"] 2
         assert_equal [count_log_message -1 "Cluster config updated even though writing the cluster config file to disk failed"] 1
 
-        # Every failed save closes and removes its temp file, so a node that
-        # never manages to rename must not accumulate them.
+        # A node whose renames keep failing must not accumulate temp files.
+        # This holds before this commit too; it is here to keep the invariant
+        # from regressing as the save path is reordered.
         assert_equal {} [leftover_nodes_conf_tmp_files 0]
         assert_equal {} [leftover_nodes_conf_tmp_files 1]
     }

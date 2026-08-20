@@ -3266,6 +3266,7 @@ void objectSetLRU(robj *o, unsigned int lru);
 void objectSetMetadataSize(size_t size);
 size_t objectGetMetadataSize(const robj *o);
 void *objectGetMetadata(const robj *o);
+void objectCopyMetadata(robj *dst, const robj *src);
 
 /* Synchronous I/O with timeout */
 ssize_t syncWrite(int fd, char *ptr, ssize_t size, long long timeout);

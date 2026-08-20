@@ -157,6 +157,22 @@ void *objectGetMetadata(const robj *o) {
     return (void *)data;
 }
 
+/* Copy the opaque metadata region from one object to another. Used when an
+ * object is reallocated (e.g. objectSetKeyAndExpire) so that metadata attached
+ * by subsystems such as background iteration (forkless save) survives the move.
+ *
+ * The copy happens only when both objects actually carry metadata (both have an
+ * embedded key and the configured metadata size is non-zero). If the source has
+ * no metadata there is nothing to preserve, and the destination keeps its
+ * zero-initialized metadata. */
+void objectCopyMetadata(robj *dst, const robj *src) {
+    if (object_metadata_size == 0) return;
+    void *src_md = objectGetMetadata(src);
+    void *dst_md = objectGetMetadata(dst);
+    if (src_md == NULL || dst_md == NULL) return;
+    memcpy(dst_md, src_md, object_metadata_size);
+}
+
 /* ===================== Creation and parsing of objects ==================== */
 
 /* Creates an object, optionally with embedded key and expire fields. The key
@@ -481,6 +497,7 @@ robj *objectSetKeyAndExpire(robj *o, const_sds key, long long expire) {
     if (objectGetType(o) == OBJ_STRING && objectGetEncoding(o) == OBJ_ENCODING_EMBSTR) {
         robj *new = createStringObjectWithKeyAndExpire(objectGetVal(o), sdslen(objectGetVal(o)), key, expire);
         objectSetLRU(new, objectGetLRU(o));
+        objectCopyMetadata(new, o);
         bgIteration_updateDbEntryPtr(o, new);
         decrRefCount(o);
         return new;
@@ -507,6 +524,7 @@ robj *objectSetKeyAndExpire(robj *o, const_sds key, long long expire) {
     robj *new = createUnembeddedObjectWithKeyAndExpire(objectGetType(o), ptr, key, expire);
     objectSetEncoding(new, objectGetEncoding(o));
     objectSetLRU(new, objectGetLRU(o));
+    objectCopyMetadata(new, o);
     bgIteration_updateDbEntryPtr(o, new);
     decrRefCount(o);
     return new;

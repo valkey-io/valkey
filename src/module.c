@@ -14988,22 +14988,32 @@ struct ValkeyModuleDefragCtx {
 
 /* Register a defrag callback for global data, i.e. anything that the module
  * may allocate that is not tied to a specific data type.
+ *
+ * Unlike the per-key data type defrag callback, the global callback is invoked
+ * with a time limit: it should call VM_DefragShouldStop() periodically and
+ * return once that returns non-zero. To resume where it left off on the next
+ * call, it uses VM_DefragCursorSet()/VM_DefragCursorGet(). A stored cursor of 0
+ * means "done"; a non-zero cursor tells the defrag process there is more work
+ * and the callback will be invoked again. The callback MUST store a cursor of 0
+ * once it has finished, otherwise it will keep being invoked.
  */
 int VM_RegisterDefragFunc(ValkeyModuleCtx *ctx, ValkeyModuleDefragFunc cb) {
     ctx->module->defrag_cb = cb;
     return VALKEYMODULE_OK;
 }
 
-/* When the data type defrag callback iterates complex structures, this
- * function should be called periodically. A zero (false) return
- * indicates the callback may continue its work. A non-zero value (true)
- * indicates it should stop.
+/* When a defrag callback iterates complex structures, this function should be
+ * called periodically. A zero (false) return indicates the callback may
+ * continue its work. A non-zero value (true) indicates it should stop.
  *
- * When stopped, the callback may use VM_DefragCursorSet() to store its
+ * When stopped, the callback should use VM_DefragCursorSet() to store its
  * position so it can later use VM_DefragCursorGet() to resume defragging.
  *
- * When stopped and more work is left to be done, the callback should
- * return 1. Otherwise, it should return 0.
+ * How "more work remains" is signalled depends on the callback type:
+ *  - the per-key data type defrag callback returns 1 if stopped with more work
+ *    left, or 0 when done;
+ *  - the global defrag callback returns nothing; instead a stored cursor of 0
+ *    means done and a non-zero cursor means more work remains.
  *
  * NOTE: Modules should consider the frequency in which this function is called,
  * so it generally makes sense to do small batches of work in between calls.
@@ -15014,25 +15024,25 @@ int VM_DefragShouldStop(ValkeyModuleDefragCtx *ctx) {
 
 /* Store an arbitrary cursor value for future re-use.
  *
- * This should only be called if VM_DefragShouldStop() has returned a non-zero
- * value and the defrag callback is about to exit without fully iterating its
- * data type.
+ * This is used to resume defragmentation across callback invocations, and is
+ * available in two cases:
+ *  - "late defrag" of a data type key. Late defrag is selected for keys that
+ *    implement the `free_effort` callback and return a value larger than the
+ *    'active-defrag-max-scan-fields' configuration directive. Smaller keys, and
+ *    keys that do not implement `free_effort`, are not defragged in late mode,
+ *    and a call to this function for them returns VALKEYMODULE_ERR.
+ *  - the global defrag callback (registered via VM_RegisterDefragFunc), which
+ *    is always given a cursor. There, a stored cursor of 0 means the callback
+ *    is done and a non-zero value means it should be invoked again to continue.
  *
- * This behavior is reserved to cases where late defrag is performed. Late
- * defrag is selected for keys that implement the `free_effort` callback and
- * return a `free_effort` value that is larger than the defrag
- * 'active-defrag-max-scan-fields' configuration directive.
+ * The cursor may be used by the module to represent some progress into its
+ * data. Modules may also store additional cursor-related information locally
+ * and use the cursor as a flag that indicates when traversal of a new key
+ * begins. This is possible because the API guarantees that concurrent
+ * defragmentation of multiple keys will not be performed.
  *
- * Smaller keys, keys that do not implement `free_effort` or the global
- * defrag callback are not called in late-defrag mode. In those cases, a
- * call to this function will return VALKEYMODULE_ERR.
- *
- * The cursor may be used by the module to represent some progress into the
- * module's data type. Modules may also store additional cursor-related
- * information locally and use the cursor as a flag that indicates when
- * traversal of a new key begins. This is possible because the API makes
- * a guarantee that concurrent defragmentation of multiple keys will
- * not be performed.
+ * Returns VALKEYMODULE_ERR if no cursor is available for this callback (see
+ * above), VALKEYMODULE_OK otherwise.
  */
 int VM_DefragCursorSet(ValkeyModuleDefragCtx *ctx, unsigned long cursor) {
     if (!ctx->cursor) return VALKEYMODULE_ERR;
@@ -15043,9 +15053,9 @@ int VM_DefragCursorSet(ValkeyModuleDefragCtx *ctx, unsigned long cursor) {
 
 /* Fetch a cursor value that has been previously stored using VM_DefragCursorSet().
  *
- * If not called for a late defrag operation, VALKEYMODULE_ERR will be returned and
- * the cursor should be ignored. See VM_DefragCursorSet() for more details on
- * defrag cursors.
+ * Returns VALKEYMODULE_ERR if no cursor is available for this callback (see
+ * VM_DefragCursorSet() for when that is the case), in which case the cursor
+ * should be ignored. On the first invocation the stored cursor is 0.
  */
 int VM_DefragCursorGet(ValkeyModuleDefragCtx *ctx, unsigned long *cursor) {
     if (!ctx->cursor) return VALKEYMODULE_ERR;
@@ -15147,10 +15157,16 @@ int moduleDefragValue(robj *key, robj *value, int dbid) {
     return 1;
 }
 
+/* Index of the module to start from on the next moduleDefragGlobals() call. Advanced past the
+ * module we stopped on so a module with ongoing work doesn't starve the others. */
+static unsigned long defrag_module_start_idx = 0;
+
 /* Called at stage init (endtime==0) to start a new global defrag pass.  Clears each module's
- * done flag so every module is visited again.  Cursors are not touched here: a module owns its
- * cursor and may carry progress across cycles. */
+ * done flag so every module is visited again, and resets the round-robin start position.  Cursors
+ * are not touched here: a module owns its cursor and may carry progress across cycles. */
 void moduleDefragGlobalsStart(void) {
+    defrag_module_start_idx = 0;
+
     listIter li;
     listNode *ln;
 
@@ -15168,21 +15184,22 @@ void moduleDefragGlobalsStart(void) {
  * The cursor is also the module's "more work" signal, following the convention used elsewhere in
  * defrag: a non-zero cursor means the module wants to be called again (scan not finished, or work
  * still draining on its own threads); a zero cursor means it is done for this cycle.  A module done
- * this cycle sets defrag_done_this_cycle and is skipped until the next cycle clears it, so that
- * returning here after 'endtime' resumes with the remaining modules rather than repeating finished
- * ones.  The flag lives on the module struct, so it is discarded safely if a module is unloaded.
+ * this cycle sets defrag_done_this_cycle and is skipped until the next cycle clears it.
+ *
+ * When the deadline is hit mid-iteration we resume on the next call from the module after the one
+ * we stopped on (defrag_module_start_idx), so a module that keeps consuming the deadline can't
+ * starve the modules after it.  The done flags and start index live outside the module structs, so
+ * they are unaffected if a module is unloaded between calls.
  *
  * Returns 1 if any module still has work to do, 0 otherwise. */
 int moduleDefragGlobals(monotime endtime) {
     int more_work = 0;
-    if (listLength(modules) == 0) return more_work;
+    unsigned long count = listLength(modules);
+    if (count == 0) return more_work;
 
-    listIter li;
-    listNode *ln;
-
-    listRewind(modules, &li);
-    while ((ln = listNext(&li)) != NULL) {
-        struct ValkeyModule *module = listNodeValue(ln);
+    for (unsigned long n = 0; n < count; n++) {
+        unsigned long idx = (defrag_module_start_idx + n) % count;
+        struct ValkeyModule *module = listNodeValue(listIndex(modules, idx));
         if (!module->defrag_cb) continue;
         if (module->defrag_done_this_cycle) continue;
         ValkeyModuleDefragCtx defrag_ctx = {endtime, &module->defrag_cursor, NULL, -1};
@@ -15192,7 +15209,10 @@ int moduleDefragGlobals(monotime endtime) {
         } else {
             module->defrag_done_this_cycle = 1;
         }
-        if (endtime != 0 && getMonotonicUs() >= endtime) break;
+        if (endtime != 0 && getMonotonicUs() >= endtime) {
+            defrag_module_start_idx = (idx + 1) % count;
+            break;
+        }
     }
     return more_work;
 }

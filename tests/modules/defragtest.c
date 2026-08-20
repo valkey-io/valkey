@@ -14,6 +14,7 @@ struct FragObject {
 
 /* Make sure we get the expected cursor */
 unsigned long int last_set_cursor = 0;
+unsigned long int last_set_global_cursor = 0;
 
 unsigned long int datatype_attempts = 0;
 unsigned long int datatype_defragged = 0;
@@ -21,9 +22,14 @@ unsigned long int datatype_resumes = 0;
 unsigned long int datatype_wrong_cursor = 0;
 unsigned long int global_attempts = 0;
 unsigned long int global_defragged = 0;
+unsigned long int global_resumes = 0;
+unsigned long int global_wrong_cursor = 0;
 
 int global_strings_len = 0;
 ValkeyModuleString **global_strings = NULL;
+/* If non-zero, the global defrag callback stops after this many strings per
+ * invocation, forcing it to resume via the cursor on later calls. */
+int global_maxstep = 0;
 
 static void createGlobalStrings(ValkeyModuleCtx *ctx, int count)
 {
@@ -37,14 +43,39 @@ static void createGlobalStrings(ValkeyModuleCtx *ctx, int count)
 
 static void defragGlobalStrings(ValkeyModuleDefragCtx *ctx)
 {
-    for (int i = 0; i < global_strings_len; i++) {
+    unsigned long i = 0;
+    int steps = 0;
+
+    /* Resume from the saved cursor, validating it's what we set last time. */
+    if (ValkeyModule_DefragCursorGet(ctx, &i) == VALKEYMODULE_OK) {
+        if (i > 0) global_resumes++;
+        if (i != last_set_global_cursor) global_wrong_cursor++;
+    } else {
+        if (last_set_global_cursor != 0) global_wrong_cursor++;
+    }
+
+    for (; i < (unsigned long)global_strings_len; i++) {
         ValkeyModuleString *new = ValkeyModule_DefragValkeyModuleString(ctx, global_strings[i]);
         global_attempts++;
         if (new != NULL) {
             global_strings[i] = new;
             global_defragged++;
         }
+
+        /* Stop after maxstep strings, or when out of time, saving progress in
+         * the cursor so the next invocation resumes here. */
+        if ((global_maxstep && ++steps >= global_maxstep) ||
+            ((i % 64 == 0) && ValkeyModule_DefragShouldStop(ctx)))
+        {
+            ValkeyModule_DefragCursorSet(ctx, i + 1);
+            last_set_global_cursor = i + 1;
+            return;
+        }
     }
+
+    /* Finished: reset the cursor to 0 so core sees this module as done. */
+    ValkeyModule_DefragCursorSet(ctx, 0);
+    last_set_global_cursor = 0;
 }
 
 static void FragInfo(ValkeyModuleInfoCtx *ctx, int for_crash_report) {
@@ -57,6 +88,8 @@ static void FragInfo(ValkeyModuleInfoCtx *ctx, int for_crash_report) {
     ValkeyModule_InfoAddFieldLongLong(ctx, "datatype_wrong_cursor", datatype_wrong_cursor);
     ValkeyModule_InfoAddFieldLongLong(ctx, "global_attempts", global_attempts);
     ValkeyModule_InfoAddFieldLongLong(ctx, "global_defragged", global_defragged);
+    ValkeyModule_InfoAddFieldLongLong(ctx, "global_resumes", global_resumes);
+    ValkeyModule_InfoAddFieldLongLong(ctx, "global_wrong_cursor", global_wrong_cursor);
 }
 
 struct FragObject *createFragObject(unsigned long len, unsigned long size, int maxstep) {
@@ -83,6 +116,8 @@ static int fragResetStatsCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv
     datatype_wrong_cursor = 0;
     global_attempts = 0;
     global_defragged = 0;
+    global_resumes = 0;
+    global_wrong_cursor = 0;
 
     ValkeyModule_ReplyWithSimpleString(ctx, "OK");
     return VALKEYMODULE_OK;
@@ -204,8 +239,17 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
     }
 
     long long glen;
-    if (argc != 1 || ValkeyModule_StringToLongLong(argv[0], &glen) == VALKEYMODULE_ERR) {
+    if (argc < 1 || argc > 2 || ValkeyModule_StringToLongLong(argv[0], &glen) == VALKEYMODULE_ERR) {
         return VALKEYMODULE_ERR;
+    }
+
+    /* Optional 2nd arg: global defrag step limit per callback invocation. */
+    if (argc == 2) {
+        long long gmaxstep;
+        if (ValkeyModule_StringToLongLong(argv[1], &gmaxstep) == VALKEYMODULE_ERR) {
+            return VALKEYMODULE_ERR;
+        }
+        global_maxstep = gmaxstep;
     }
 
     createGlobalStrings(ctx, glen);

@@ -57,5 +57,19 @@ start_server {tags {"modules"} overrides {{save ""}}} {
             assert {[getInfoProperty $info defragtest_global_resumes] > 0}
             assert_equal 0 [getInfoProperty $info defragtest_global_wrong_cursor]
         }
+
+        test {Module defrag: global defrag is revisited on later cycles} {
+            r flushdb
+            r frag.resetstats
+
+            # Once the callback finishes a pass it resets its cursor to 0 (done).
+            # A finished module is skipped for the rest of that cycle but must be
+            # revisited on later cycles, so over time the callback runs many more
+            # times than the single pass needed to walk all global strings.
+            after 3000
+            set info [r info defragtest_stats]
+            assert {[getInfoProperty $info defragtest_global_attempts] > 10000}
+            assert_equal 0 [getInfoProperty $info defragtest_global_wrong_cursor]
+        }
     }
 }

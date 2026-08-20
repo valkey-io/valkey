@@ -3787,12 +3787,14 @@ static void propagatePendingCommands(void) {
  * afterCommand() so the "is there anything to do?" condition for these three
  * sub-systems has a single home instead of being duplicated at both call
  * sites - static inline costs nothing here since both callers are in this
- * same translation unit.
+ * same translation unit. moduleHasPostExecUnitJobs() is a tiny cross-TU
+ * accessor rather than reaching into module.c's list directly, so this file
+ * doesn't need to know how the module subsystem tracks its pending jobs.
  *
  * Must stay an OR of every condition below - never drop one as an
  * optimization, since that would silently skip real pending work. */
 static inline int hasPostExecutionUnitPendingWork(void) {
-    return listLength(modulePostExecUnitJobs) || server.also_propagate.numops || server.busy_module_yield_flags;
+    return moduleHasPostExecUnitJobs() || server.also_propagate.numops || server.busy_module_yield_flags;
 }
 
 /* Performs operations that should be performed after an execution unit ends.
@@ -4225,7 +4227,7 @@ void afterCommand(client *c) {
      * work, it must run for every command whenever slot-stats accounting
      * is enabled. */
     if (server.execution_nesting == 0 &&
-        unlikely(hasPostExecutionUnitPendingWork() || listLength(server.tracking_pending_keys) ||
+        unlikely(hasPostExecutionUnitPendingWork() || trackingHasPendingKeyInvalidations() ||
                  listLength(server.pending_push_messages))) {
         /* Should be done before trackingHandlePendingKeyInvalidations so that we
          * reply to client before invalidating cache (makes more sense) */

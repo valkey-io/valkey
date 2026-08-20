@@ -355,11 +355,8 @@ typedef struct ValkeyModulePostExecUnitJob {
 /* The module keyspace notification subscribers list */
 static list *moduleKeyspaceSubscribers;
 
-/* The module post keyspace jobs list.
- * Not static: postExecutionUnitOperations() reads its length directly
- * (via listLength()) to fold the "any pending module job?" check into
- * a single combined gate, without an extra cross-TU function call. */
-list *modulePostExecUnitJobs;
+/* The module post keyspace jobs list */
+static list *modulePostExecUnitJobs;
 
 /* Data structures related to the exported dictionary data structure. */
 typedef struct ValkeyModuleDict {
@@ -9397,6 +9394,16 @@ int VM_SubscribeToKeyspaceEvents(ValkeyModuleCtx *ctx, int types, ValkeyModuleNo
 
     listAddNodeTail(moduleKeyspaceSubscribers, sub);
     return VALKEYMODULE_OK;
+}
+
+/* Whether any module post-execution-unit job is pending. Kept as a tiny
+ * accessor rather than exposing modulePostExecUnitJobs itself, so callers
+ * outside this file (postExecutionUnitOperations()) don't need to know it's
+ * backed by a list - if that representation ever changes, only this
+ * function needs to change with it. It's trivial enough that LTO can inline
+ * it at its (currently single) call site same as any other cross-TU call. */
+bool moduleHasPostExecUnitJobs(void) {
+    return listLength(modulePostExecUnitJobs) > 0;
 }
 
 void firePostExecutionUnitJobs(void) {

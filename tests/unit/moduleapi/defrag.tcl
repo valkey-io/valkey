@@ -73,3 +73,34 @@ start_server {tags {"modules"} overrides {{save ""}}} {
         }
     }
 }
+
+set busymodule [file normalize tests/modules/defragglobalbusy.so]
+
+start_server {tags {"modules"} overrides {{save ""}}} {
+    # Load the "busy" module first so it sits ahead of defragtest in the module
+    # list. Its global defrag callback consumes the whole deadline every call
+    # and never finishes. defragtest is loaded second with a small step limit.
+    r module load $busymodule
+    r module load $testmodule 10000 100
+    r config set active-defrag-ignore-bytes 1
+    r config set active-defrag-threshold-lower 0
+    r config set active-defrag-cycle-min 99
+
+    catch {r config set activedefrag yes} e
+    if {[r config get activedefrag] eq "activedefrag yes"} {
+
+        test {Module defrag: a busy global callback does not starve others} {
+            r frag.resetstats
+
+            # The busy module always leaves work, so if the stage restarted at
+            # the head every time it would run only the busy module forever.
+            # Round-robin scheduling advances past it, so defragtest's global
+            # callback still gets invoked.
+            after 3000
+            set busyinfo [r info defragglobalbusy_stats]
+            set testinfo [r info defragtest_stats]
+            assert {[getInfoProperty $busyinfo defragglobalbusy_busy_calls] > 0}
+            assert {[getInfoProperty $testinfo defragtest_global_attempts] > 0}
+        }
+    }
+}

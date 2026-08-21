@@ -488,6 +488,16 @@ void orderedIndexSeekToLexRange(OrderedIndexIterator *iter, const_sds min, const
     unsigned long len = fbtreeLength(fbt);
     int reverse = (offset < 0);
 
+    /* A crossed sentinel bound (min is the positively infinite string or max
+     * is the negatively infinite string) admits no elements; the sentinels
+     * are identity values whose bytes must never be packed as an element.
+     * Park the iterator where the first step in the iteration direction
+     * yields nothing. */
+    if (min == shared.maxstring || max == shared.minstring) {
+        fbtreeSeekToRank(fbt_iter, reverse ? 0 : len);
+        return;
+    }
+
     if (!reverse) {
         /* Forward: seek to min bound */
         if (min == shared.minstring) {

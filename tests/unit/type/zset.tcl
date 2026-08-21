@@ -798,6 +798,16 @@ start_server {tags {"zset"}} {
             assert_equal {b} [r zrange zset 0 -1]
         }
 
+        test "ZRANGEBYLEX/ZREVRANGEBYLEX crossed sentinel bounds are empty - $encoding" {
+            create_default_lex_zset
+            assert_equal {} [r zrangebylex zset + \[c]
+            assert_equal {} [r zrangebylex zset + +]
+            assert_equal {} [r zrevrangebylex zset - \[c]
+            assert_equal {} [r zrevrangebylex zset - -]
+            assert_equal {} [r zrangebylex zset + \[c LIMIT 1 2]
+            assert_equal {} [r zrevrangebylex zset - \[c LIMIT 1 2]
+        }
+
         test "ZRANGEBYLEX with LIMIT - $encoding" {
             create_default_lex_zset
             assert_equal {alpha bar} [r zrangebylex zset - \[cool LIMIT 0 2]

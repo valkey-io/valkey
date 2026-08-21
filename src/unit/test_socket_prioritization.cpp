@@ -83,11 +83,11 @@ static void testQoSEventCallback(aeEventLoop *el, int fd, void *privdata, int ma
 
 static int g_qos_pipe2_write_fd = -1;
 static int g_normal_cb_count = 0;
-static void testNormalEventCallbackMaskCheck(aeEventLoop *el, int fd, void *privdata, int mask) {
+static void testNormalEventCallbackPreemptCheck(aeEventLoop *el, int fd, void *privdata, int mask) {
     testNormalEventCallback(el, fd, privdata, mask);
     g_normal_cb_count++;
-    /* Sleep > 2000 us on 3rd normal event (j = 2) and trigger 2nd QoS pipe so (itr_cnt & 3) == 0 check at j = 4 polls qos_el */
-    if (g_normal_cb_count == 3 && g_qos_pipe2_write_fd != -1) {
+    /* Sleep > 2000 us on 2nd normal event and trigger 2nd QoS pipe so the next iteration immediately preempts and polls qos_el */
+    if (g_normal_cb_count == 2 && g_qos_pipe2_write_fd != -1) {
         usleep(2500);
         char c = 'x';
         if (write(g_qos_pipe2_write_fd, &c, 1) < 0) {
@@ -133,9 +133,8 @@ class SocketPrioritizationTest : public ::testing::Test {
         }
 
         server.el = aeCreateEventLoop(1024);
-        aeEventLoop *qos_el = aeCreateEventLoop(1024);
-        if (server.el && qos_el) {
-            aeLinkQoSEventLoop(server.el, qos_el);
+        if (server.el) {
+            aeActuateQoSEventLoopIfSupported(server.el, 1024, 2000, NULL);
         }
         g_execution_count = 0;
     }
@@ -160,20 +159,26 @@ TEST_F(SocketPrioritizationTest, EventLoopDualInitialization) {
     ASSERT_NE(server.el->qos_el, (aeEventLoop *)NULL);
     EXPECT_EQ(server.el->qos_el, server.el->qos_el);
     EXPECT_EQ(server.el->qos_el->qos_el, (aeEventLoop *)NULL);
-    EXPECT_EQ(aeGetQoSPreemptCheckInterval(server.el), 2000ULL);
+    EXPECT_EQ(server.el->qos_el_preempt_check_interval_us, 2000ULL);
     aeSetQoSPreemptCheckInterval(server.el, 5000ULL);
-    EXPECT_EQ(aeGetQoSPreemptCheckInterval(server.el), 5000ULL);
+    EXPECT_EQ(server.el->qos_el_preempt_check_interval_us, 5000ULL);
     aeSetQoSPreemptCheckInterval(server.el, 2000ULL);
+
+    /* Newly created standalone loop must have preemption disabled (0) by default */
+    aeEventLoop *standalone = aeCreateEventLoop(64);
+    ASSERT_NE(standalone, (aeEventLoop *)NULL);
+    EXPECT_EQ(standalone->qos_el_preempt_check_interval_us, 0ULL);
+    aeDeleteEventLoop(standalone);
 }
 
 TEST_F(SocketPrioritizationTest, DynamicPreemptionIntervalThreshold) {
     /* Test getter and setter */
     aeSetQoSPreemptCheckInterval(server.el, 500ULL);
-    EXPECT_EQ(aeGetQoSPreemptCheckInterval(server.el), 500ULL);
+    EXPECT_EQ(server.el->qos_el_preempt_check_interval_us, 500ULL);
 
     /* Test disabling preemption (interval = 0) */
     aeSetQoSPreemptCheckInterval(server.el, 0ULL);
-    EXPECT_EQ(aeGetQoSPreemptCheckInterval(server.el), 0ULL);
+    EXPECT_EQ(server.el->qos_el_preempt_check_interval_us, 0ULL);
     aeSetQoSPreemptCheckInterval(server.el, 2000ULL);
 }
 
@@ -183,15 +188,15 @@ TEST_P(SocketPrioritizationConnTest, ConnectionPriorityMetadataAndHelpers) {
     connection *conn = connCreate(ct);
     ASSERT_NE(conn, (connection *)NULL);
 
-    /* Default priority should be normal */
-    EXPECT_EQ(connGetPriority(conn), CONN_PRIORITY_NORMAL);
+    /* Default priority should be normal (false) */
+    EXPECT_FALSE(connIsPriority(conn));
 
     /* Update metadata when fd is not yet set (-1) */
-    connSetPriority(conn, CONN_PRIORITY_HIGH);
-    EXPECT_EQ(connGetPriority(conn), CONN_PRIORITY_HIGH);
+    connSetPriority(conn, true);
+    EXPECT_TRUE(connIsPriority(conn));
 
-    connSetPriority(conn, CONN_PRIORITY_NORMAL);
-    EXPECT_EQ(connGetPriority(conn), CONN_PRIORITY_NORMAL);
+    connSetPriority(conn, false);
+    EXPECT_FALSE(connIsPriority(conn));
 
     conn->state = CONN_STATE_NONE;
     connClose(conn);
@@ -219,16 +224,16 @@ TEST_P(SocketPrioritizationConnTest, DynamicPriorityUpdateOnActiveConnection) {
     EXPECT_EQ(aeGetFileEvents(server.el->qos_el, read_fd) & AE_READABLE, 0);
 
     /* Dynamically upgrade connection to high priority */
-    EXPECT_EQ(connSetPriority(conn, CONN_PRIORITY_HIGH), C_OK);
-    EXPECT_EQ(connGetPriority(conn), CONN_PRIORITY_HIGH);
+    EXPECT_EQ(connSetPriority(conn, true), C_OK);
+    EXPECT_TRUE(connIsPriority(conn));
     int events = aeGetFileEvents(server.el, read_fd);
     EXPECT_NE(events & AE_READABLE, 0);
     EXPECT_NE(events & AE_HIGH_PRIORITY, 0);
     EXPECT_NE(aeGetFileEvents(server.el->qos_el, read_fd) & AE_READABLE, 0);
 
     /* Dynamically downgrade connection back to normal priority */
-    EXPECT_EQ(connSetPriority(conn, CONN_PRIORITY_NORMAL), C_OK);
-    EXPECT_EQ(connGetPriority(conn), CONN_PRIORITY_NORMAL);
+    EXPECT_EQ(connSetPriority(conn, false), C_OK);
+    EXPECT_FALSE(connIsPriority(conn));
     EXPECT_NE(aeGetFileEvents(server.el, read_fd) & AE_READABLE, 0);
     EXPECT_EQ(aeGetFileEvents(server.el->qos_el, read_fd) & AE_READABLE, 0);
 
@@ -299,11 +304,6 @@ TEST_F(SocketPrioritizationTest, PreemptionOfNormalEventsByQoSLoop) {
     close(qos_pipe[1]);
 }
 
-TEST_F(SocketPrioritizationTest, QoSNames) {
-    EXPECT_STREQ(getConnectionPriorityName(CONN_PRIORITY_NORMAL), "normal");
-    EXPECT_STREQ(getConnectionPriorityName(CONN_PRIORITY_HIGH), "prioritized");
-}
-
 static void testQoSWriteCallback(struct connection *conn) {
     if (g_execution_count < 1024) {
         g_execution_order[g_execution_count++] = 999;
@@ -332,7 +332,7 @@ TEST_P(SocketPrioritizationConnTest, WriteHandlerPriorityPreemption) {
     ASSERT_NE(qos_conn, (connection *)NULL);
     qos_conn->state = CONN_STATE_CONNECTED;
     qos_conn->fd = qos_pipe[1];
-    connSetPriority(qos_conn, CONN_PRIORITY_HIGH);
+    connSetPriority(qos_conn, true);
 
     /* Register normal read event on server.el */
     ret = aeCreateFileEvent(server.el, normal_pipe[0], AE_READABLE, testNormalEventCallback, NULL);
@@ -361,8 +361,8 @@ TEST_P(SocketPrioritizationConnTest, WriteHandlerPriorityPreemption) {
     close(qos_pipe[0]);
 }
 
-TEST_F(SocketPrioritizationTest, MultiIterationPreemptionCheckMask) {
-    /* Verify that preemption check services qos_el on iterations where (itr_cnt & 3) == 0 */
+TEST_F(SocketPrioritizationTest, ImmediatePreemptionDuringNormalEventProcessing) {
+    /* Verify that preemption check immediately services qos_el on the next iteration when elapsed time threshold is crossed */
     int normal_pipes[5][2];
     int qos_pipe[2];
     int qos_pipe2[2];
@@ -385,7 +385,7 @@ TEST_F(SocketPrioritizationTest, MultiIterationPreemptionCheckMask) {
     fcntl(qos_pipe2[1], F_SETFL, O_NONBLOCK);
 
     for (i = 0; i < 5; i++) {
-        ret = aeCreateFileEvent(server.el, normal_pipes[i][0], AE_READABLE, testNormalEventCallbackMaskCheck, NULL);
+        ret = aeCreateFileEvent(server.el, normal_pipes[i][0], AE_READABLE, testNormalEventCallbackPreemptCheck, NULL);
         EXPECT_EQ(ret, AE_OK);
     }
     ret = aeCreateFileEvent(server.el->qos_el, qos_pipe[0], AE_READABLE, testQoSEventCallback, NULL);
@@ -411,12 +411,15 @@ TEST_F(SocketPrioritizationTest, MultiIterationPreemptionCheckMask) {
     ASSERT_EQ(g_execution_count, 7);
     /* At start (pre-loop), qos_el processed */
     EXPECT_EQ(g_execution_order[0], 999);
+    /* 1st normal event */
     EXPECT_NE(g_execution_order[1], 999);
+    /* 2nd normal event (sleeps >2000us and writes to qos_pipe2) */
     EXPECT_NE(g_execution_order[2], 999);
-    EXPECT_NE(g_execution_order[3], 999);
+    /* Immediate preemption on the very next iteration */
+    EXPECT_EQ(g_execution_order[3], 999);
+    /* Remaining normal events */
     EXPECT_NE(g_execution_order[4], 999);
-    /* At iteration 4 ((j & 3) == 0 after >2000us elapsed), qos_el is checked and serviced again on later masked iteration */
-    EXPECT_EQ(g_execution_order[5], 999);
+    EXPECT_NE(g_execution_order[5], 999);
     EXPECT_NE(g_execution_order[6], 999);
 
     g_qos_pipe2_write_fd = -1;
@@ -593,15 +596,15 @@ TEST_F(SocketPrioritizationTest, PostponedStateDynamicPriorityUpdate) {
 
     int ret = connSetReadHandler(conn, dummyConnectionHandler);
     EXPECT_EQ(ret, C_OK);
-    EXPECT_EQ(connGetPriority(conn), CONN_PRIORITY_NORMAL);
+    EXPECT_FALSE(connIsPriority(conn));
 
     /* Set postponed state (e.g. while offloaded to IO threads) */
     conn->flags |= CONN_FLAG_POSTPONE_UPDATE_STATE;
 
     /* Upgrading priority while postponed must update priority field but defer event loop migration */
-    ret = connSetPriority(conn, CONN_PRIORITY_HIGH);
+    ret = connSetPriority(conn, true);
     EXPECT_EQ(ret, C_OK);
-    EXPECT_EQ(connGetPriority(conn), CONN_PRIORITY_HIGH);
+    EXPECT_TRUE(connIsPriority(conn));
 
     conn->flags &= ~CONN_FLAG_POSTPONE_UPDATE_STATE;
     conn->state = CONN_STATE_NONE;
@@ -627,9 +630,9 @@ TEST_F(SocketPrioritizationTest, WriteBarrierPreservation) {
     EXPECT_NE(events & AE_WRITABLE, 0);
 
     /* Upgrade priority: verify migration succeeds with barrier */
-    ret = connSetPriority(conn, CONN_PRIORITY_HIGH);
+    ret = connSetPriority(conn, true);
     EXPECT_EQ(ret, C_OK);
-    EXPECT_EQ(connGetPriority(conn), CONN_PRIORITY_HIGH);
+    EXPECT_TRUE(connIsPriority(conn));
 
     conn->state = CONN_STATE_NONE;
     connClose(conn);
@@ -896,11 +899,8 @@ static void qosTestFileProc(aeEventLoop *el, int fd, void *privdata, int mask) {
 /* Test that QoS event loop duration callback correctly samples QoS metrics. */
 TEST_F(SocketPrioritizationTest, QoSEventLoopStatsMetrics) {
     aeEventLoop *main_loop = aeCreateEventLoop(64);
-    aeEventLoop *qos_loop = aeCreateEventLoop(64);
     ASSERT_NE(main_loop, (aeEventLoop *)NULL);
-    ASSERT_NE(qos_loop, (aeEventLoop *)NULL);
-    ASSERT_EQ(aeLinkQoSEventLoop(main_loop, qos_loop), AE_OK);
-    aeSetQoSStatsCallback(main_loop, qosMetricTestCb);
+    ASSERT_EQ(aeActuateQoSEventLoopIfSupported(main_loop, 64, 2000, qosMetricTestCb), AE_OK);
 
     unsigned long long orig_cnt = server.duration_stats[EL_DURATION_TYPE_QOS_EL].cnt;
     unsigned long long orig_sum = server.duration_stats[EL_DURATION_TYPE_QOS_EL].sum;

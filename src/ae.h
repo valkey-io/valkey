@@ -167,19 +167,9 @@ int aeGetSetSize(aeEventLoop *eventLoop);
 int aeResizeSetSize(aeEventLoop *eventLoop, int setsize);
 void aeSetDontWait(aeEventLoop *eventLoop, int noWait);
 
-/* Preemptively processes pending QoS events during long-running normal event loops.
- * Returns the number of QoS events processed. */
-int aeProcessQoSEventsPreemptively(aeEventLoop *eventLoop, int iter_count);
-
-/* Sets and gets the QoS event preemption check interval in microseconds. */
+/* QoS event loop prototypes */
+int aeActuateQoSEventLoopIfSupported(aeEventLoop *eventLoop, int setsize, uint64_t qosPreemptPollIntervalUs, aeQoSStatsProc *qosStatsCallback);
+int aeProcessQoSEventsPreemptively(aeEventLoop *eventLoop);
 void aeSetQoSPreemptCheckInterval(aeEventLoop *eventLoop, uint64_t interval_us);
-uint64_t aeGetQoSPreemptCheckInterval(aeEventLoop *eventLoop);
-/* Sets the callback invoked with elapsed duration whenever QoS events are processed. */
-void aeSetQoSStatsCallback(aeEventLoop *eventLoop, aeQoSStatsProc *cb);
-
-/* Links a nested QoS event loop to the main event loop by registering the child loop's
- * multiplexer descriptor (e.g. epoll fd) on the parent loop with AE_READABLE.
- * Returns AE_OK on success or AE_ERR if multiplexer nesting is unsupported or registration fails. */
-int aeLinkQoSEventLoop(aeEventLoop *eventLoop, aeEventLoop *qos_el);
 
 #endif

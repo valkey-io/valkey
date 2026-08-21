@@ -171,34 +171,34 @@ sds getListensInfoString(sds info) {
 /* Set connection priority. If the connection already has active events
  * registered in the event loop, migrate them to the new priority level.
  * Handles postponed state safely if the socket is offloaded to IO threads,
- * preserves AE_BARRIER ordering flags, and performs atomic rollback on failure.
+ * and preserves AE_BARRIER ordering flags.
  * Returns C_OK on success, or C_ERR if event migration fails. */
-int connSetPriority(connection *conn, int priority) {
+int connSetPriority(connection *conn, bool is_priority) {
     serverAssert(conn != NULL);
-    if (conn->priority == priority) return C_OK;
+    if (conn->is_priority == is_priority) return C_OK;
 
-    /* Fast path: if no socket exists or no event loop is active, update field directly */
-    if (conn->fd == -1 || server.el == NULL) {
-        conn->priority = priority;
+    /* Fast path: if no socket exists yet, update priority field directly */
+    if (conn->fd == -1) {
+        conn->is_priority = is_priority;
         return C_OK;
     }
 
     int mask = aeGetFileEvents(server.el, conn->fd);
     if (mask == AE_NONE) {
-        conn->priority = priority;
+        conn->is_priority = is_priority;
         return C_OK;
     }
 
     /* If socket state update is postponed by IO threads, update priority field only;
      * connUpdateState() will register with the new priority upon IO completion. */
     if (conn->flags & CONN_FLAG_POSTPONE_UPDATE_STATE) {
-        conn->priority = priority;
+        conn->is_priority = is_priority;
         return C_OK;
     }
 
     /* Dynamic migration: active events exist on this socket */
-    int old_priority = conn->priority;
-    conn->priority = priority;
+    bool old_priority = conn->is_priority;
+    conn->is_priority = is_priority;
 
     /* Delete existing registration (AE routes delete to the correct loop) */
     aeDeleteFileEvent(server.el, conn->fd, AE_READABLE | AE_WRITABLE);
@@ -207,45 +207,15 @@ int connSetPriority(connection *conn, int priority) {
     if (conn->type && conn->type->update_state) {
         conn->type->update_state(conn);
     } else {
-        int barrier = mask & AE_BARRIER;
-        int ae_qos_flag = connGetAEPriorityFlag(conn);
-        if ((mask & AE_READABLE) &&
-            aeCreateFileEvent(server.el, conn->fd, AE_READABLE | barrier | ae_qos_flag, conn->type->ae_handler, conn) == AE_ERR) {
-            goto rollback;
-        }
-        if ((mask & AE_WRITABLE) &&
-            aeCreateFileEvent(server.el, conn->fd, AE_WRITABLE | barrier | ae_qos_flag, conn->type->ae_handler, conn) == AE_ERR) {
-            goto rollback;
+        mask = (mask & ~AE_HIGH_PRIORITY);               /* Strip off old priority flag */
+        if (conn->is_priority) mask |= AE_HIGH_PRIORITY; /* Add new priority flag */
+
+        if (aeCreateFileEvent(server.el, conn->fd, mask, conn->type->ae_handler, conn) == AE_ERR) {
+            return C_ERR;
         }
     }
 
     serverLog(LL_DEBUG, "Connection fd %d priority updated from %s to %s",
-              conn->fd, getConnectionPriorityName(old_priority), getConnectionPriorityName(priority));
+              conn->fd, old_priority ? "prioritized" : "normal", is_priority ? "prioritized" : "normal");
     return C_OK;
-
-rollback:
-    /* Rollback priority and restore previous event registrations */
-    conn->priority = old_priority;
-    int barrier = mask & AE_BARRIER;
-    int old_ae_qos_flag = connGetAEPriorityFlag(conn);
-    if (mask & AE_READABLE)
-        aeCreateFileEvent(server.el, conn->fd, AE_READABLE | barrier | old_ae_qos_flag, conn->type->ae_handler, conn);
-    if (mask & AE_WRITABLE)
-        aeCreateFileEvent(server.el, conn->fd, AE_WRITABLE | barrier | old_ae_qos_flag, conn->type->ae_handler, conn);
-    return C_ERR;
-}
-
-/* Get connection priority */
-int connGetPriority(connection *conn) {
-    /* Always return CONN_PRIORITY_NORMAL if conn is NULL.*/
-    return conn ? conn->priority : CONN_PRIORITY_NORMAL;
-}
-
-/* Get connection priority name from priority value. */
-const char *getConnectionPriorityName(int priority) {
-    switch (priority) {
-    case CONN_PRIORITY_NORMAL: return "normal";
-    case CONN_PRIORITY_HIGH: return "prioritized";
-    default: return "normal";
-    }
 }

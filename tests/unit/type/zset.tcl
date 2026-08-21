@@ -787,6 +787,17 @@ start_server {tags {"zset"}} {
             assert_equal 1 [r zlexcount zset (maxstring +]
         }
 
+        test "ZLEXCOUNT/ZREMRANGEBYLEX include empty-string member at - bound - $encoding" {
+            r del zset
+            r zadd zset 0 "" 0 a 0 b
+            assert_equal 3 [r zlexcount zset - +]
+            assert_equal 2 [r zlexcount zset - \[a]
+            assert_equal 1 [r zlexcount zset - (a]
+            assert_equal {{} a} [r zrangebylex zset - \[a]
+            assert_equal 2 [r zremrangebylex zset - \[a]
+            assert_equal {b} [r zrange zset 0 -1]
+        }
+
         test "ZRANGEBYLEX with LIMIT - $encoding" {
             create_default_lex_zset
             assert_equal {alpha bar} [r zrangebylex zset - \[cool LIMIT 0 2]

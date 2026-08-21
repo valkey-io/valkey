@@ -318,11 +318,14 @@ int hashTypeExists(robj *o, sds field) {
     return hashTypeGetValue(o, field, &vstr, &vlen, &vll, NULL) == C_OK;
 }
 
+/* Test if the value of the specified field is a string reference (stringRef).
+ * Returns false if the field doesn't exist, is already expired or its value is
+ * not a string reference. Listpack encoded hashes can't hold string references. */
 bool hashTypeHasStringRef(robj *o, sds field) {
     if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) return false;
-    hashtable *ht = objectGetVal(o);
-    void **entry_ref = hashtableFindRef(ht, field);
-    return (entryHasStringRef(*entry_ref));
+    void *entry = NULL;
+    if (!hashtableFind(objectGetVal(o), field, &entry)) return false;
+    return entryHasStringRef(entry);
 }
 
 /* Update a hash field value with a string reference value.

@@ -72,6 +72,18 @@
 #define REDIS_TLS_PROTO_DEFAULT (REDIS_TLS_PROTO_TLSv1_2)
 #endif
 
+#if defined(TLS_NO_GROUPS)
+#define CONN_TLS_SUPPORTS_GROUPS 0
+#elif defined(SSL_CTX_set1_groups_list)
+#define CONN_TLS_SUPPORTS_GROUPS 1
+#define valkeyTlsCtxSetGroupsList(ctx, list) SSL_CTX_set1_groups_list((ctx), (list))
+#elif defined(SSL_CTX_set1_curves_list)
+#define CONN_TLS_SUPPORTS_GROUPS 1
+#define valkeyTlsCtxSetGroupsList(ctx, list) SSL_CTX_set1_curves_list((ctx), (list))
+#else
+#error "tls-groups requires OpenSSL with SSL_CTX_set1_groups_list or SSL_CTX_set1_curves_list. Define TLS_NO_GROUPS to build without TLS groups."
+#endif
+
 SSL_CTX *valkey_tls_ctx = NULL;
 SSL_CTX *valkey_tls_client_ctx = NULL;
 
@@ -641,6 +653,18 @@ static SSL_CTX *createSSLContext(serverTLSContextConfig *ctx_config, int protoco
         goto error;
     }
 #endif
+
+    if (ctx_config->groups) {
+#if CONN_TLS_SUPPORTS_GROUPS
+        if (!valkeyTlsCtxSetGroupsList(ctx, ctx_config->groups)) {
+            serverLog(LL_WARNING, "Failed to configure TLS groups: %s", ctx_config->groups);
+            goto error;
+        }
+#else
+        serverLog(LL_WARNING, "Failed to configure TLS groups: not supported by this build");
+        goto error;
+#endif
+    }
 
     return ctx;
 

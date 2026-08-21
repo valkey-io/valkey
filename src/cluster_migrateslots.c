@@ -837,7 +837,7 @@ slotMigrationJob *createSlotImportJob(client *c,
     job->client->slot_migration_job = job;
     if (c && c->conn) {
         /* Upgrade connection to high priority */
-        if (connSetPriority(c->conn, CONN_PRIORITY_HIGH) == C_ERR) {
+        if (connSetPriority(c->conn, true) == C_ERR) {
             serverLog(LL_WARNING, "Failed to upgrade priority for slot migration connection %d", c->conn->fd);
         }
     }
@@ -1338,7 +1338,7 @@ int connectSlotExportJob(slotMigrationJob *job) {
 
     job->conn = connCreate(connTypeOfReplication());
     /* Set connection to high priority */
-    connSetPriority(job->conn, CONN_PRIORITY_HIGH);
+    connSetPriority(job->conn, true);
     if (connConnect(job->conn, n->ip, port, server.bind_source_addr,
                     0, slotExportConnectHandler) == C_ERR) {
         return C_ERR;

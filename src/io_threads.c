@@ -552,7 +552,7 @@ int trySendReadToIOThreads(client *c) {
     c->io_read_state = CLIENT_PENDING_IO;
     connSetPostponeUpdateState(c->conn, clientConnPostponeMaskFromIOState(c));
 
-    int qidx = connGetPriority(c->conn);
+    int qidx = connIsPriority(c->conn);
     if (unlikely(spmcEnqueue(&io_shared_inbox[qidx], tagJob(c, JOB_REQ_READ_CLIENT)) == false)) {
         c->read_flags = 0;
         c->io_read_state = CLIENT_IDLE;
@@ -615,7 +615,7 @@ int trySendWriteToIOThreads(client *c) {
     connSetPostponeUpdateState(c->conn, clientConnPostponeMaskFromIOState(c));
     void *job = tagJob(c, JOB_REQ_WRITE_CLIENT);
 
-    int qidx = connGetPriority(c->conn);
+    int qidx = connIsPriority(c->conn);
     if (unlikely(spmcEnqueue(&io_shared_inbox[qidx], job) == false)) {
         c->io_write_state = CLIENT_IDLE;
         connSetPostponeUpdateState(c->conn, 0);
@@ -802,7 +802,7 @@ void trySendPollJobToIOThreads(void) {
 }
 
 void sendToMainThread(client *c, int type) {
-    int qidx = connGetPriority(c->conn);
+    int qidx = connIsPriority(c->conn);
     if (unlikely(pending_io_responses[qidx])) {
         flushPendingList(&pending_io_responses[qidx], &io_shared_outbox[qidx], &io_thread_ticket[qidx], 0);
     }
@@ -959,7 +959,6 @@ int processIOThreadsResponses(void) {
     if (getPendingIOResponsesCount() == 0) return 0;
 
     int total_processed = 0;
-    int counter = 0;
     /* Loop until we consume all pending jobs */
     while (1) {
         /* 1. Strict Priority: First, drain high-priority events (cluster bus, replication, and slot migration jobs) */
@@ -967,12 +966,11 @@ int processIOThreadsResponses(void) {
         if (processed == 0) {
             /* 2. Preemptive Poll: When high-priority outbox is empty, check if any new
              * high-priority events arrived on qos_el before processing normal traffic. */
-            aeProcessQoSEventsPreemptively(server.el, counter);
+            aeProcessQoSEventsPreemptively(server.el);
         }
         /* 3. Drain normal client events */
         processed += processOutboxBatch(&io_shared_outbox[CONN_PRIORITY_NORMAL]);
         total_processed += processed;
-        counter++;
         if (processed == 0) return total_processed;
     }
 }

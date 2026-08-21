@@ -78,15 +78,6 @@
  * implementations are AE_READABLE & AE_WRITABLE. */
 #define BACKEND_MASK(mask) ((mask) & (AE_READABLE | AE_WRITABLE))
 
-/* QoS event loop periodic preemptive poll default interval in microseconds.
- * QoS events are checked periodically during normal event loops to prevent
- * long batches of normal client commands from starving control plane traffic. */
-#define AE_QOS_DEFAULT_PREEMPT_CHECK_INTERVAL_US 2000
-
-/* QoS event loop periodic preemptive poll mask.
- * Used to amortize getMonotonicUs() clock reads across every 4th iteration ((iter & 3) == 0). */
-#define AE_QOS_EVENT_PREEMPTIVE_CHECK_MASK 3
-
 aeEventLoop *aeCreateEventLoop(int setsize) {
     aeEventLoop *eventLoop;
     int i;
@@ -108,7 +99,7 @@ aeEventLoop *aeCreateEventLoop(int setsize) {
     eventLoop->flags = 0;
     eventLoop->qos_el = NULL;
     eventLoop->qos_el_last_poll_us = 0;
-    eventLoop->qos_el_preempt_check_interval_us = AE_QOS_DEFAULT_PREEMPT_CHECK_INTERVAL_US;
+    eventLoop->qos_el_preempt_check_interval_us = 0;
     eventLoop->qos_el_stats_callback = NULL;
     /* Initialize the eventloop mutex with PTHREAD_MUTEX_ERRORCHECK type */
     pthread_mutexattr_t attr;
@@ -455,16 +446,16 @@ int aePoll(aeEventLoop *eventLoop, struct timeval *tvp) {
     return ret;
 }
 
-/* Process all QoS events immediately and invoke the duration callback
+/* Process all QoS events and invoke the stats callback
  * with the elapsed time in microseconds if registered. */
-static int aeProcessQoSEventsNow(aeEventLoop *eventLoop) {
+static int aeProcessQoSEvents(aeEventLoop *eventLoop) {
     int processed = 0;
     if (eventLoop->qos_el != NULL) {
         monotime start = getMonotonicUs();
         processed = aeProcessEvents(eventLoop->qos_el, AE_ALL_EVENTS | AE_DONT_WAIT);
         eventLoop->qos_el_last_poll_us = getMonotonicUs();
-
-        if (eventLoop->qos_el_stats_callback != NULL) {
+        /* Update INFO stats if registered and QoS events were processed */
+        if (eventLoop->qos_el_stats_callback != NULL && processed > 0) {
             eventLoop->qos_el_stats_callback(eventLoop, eventLoop->qos_el_last_poll_us - start);
         }
     }
@@ -472,8 +463,8 @@ static int aeProcessQoSEventsNow(aeEventLoop *eventLoop) {
 }
 
 /* Set callback to receive elapsed duration of QoS event processing */
-void aeSetQoSStatsCallback(aeEventLoop *eventLoop, aeQoSStatsProc *cb) {
-    if (eventLoop) eventLoop->qos_el_stats_callback = cb;
+static void aeSetQoSStatsCallback(aeEventLoop *eventLoop, aeQoSStatsProc *cb) {
+    eventLoop->qos_el_stats_callback = cb;
 }
 
 /* Set the preemptive poll interval in microseconds for QoS events.
@@ -481,26 +472,16 @@ void aeSetQoSStatsCallback(aeEventLoop *eventLoop, aeQoSStatsProc *cb) {
  * when processing batches of normal events exceeds this interval.
  * Setting this interval to 0 disables preemptive polling. */
 void aeSetQoSPreemptCheckInterval(aeEventLoop *eventLoop, uint64_t interval_us) {
-    if (eventLoop) eventLoop->qos_el_preempt_check_interval_us = interval_us;
-}
-
-/* Get the current preemptive poll interval in microseconds for QoS events.
- * Returns 0 if eventLoop is NULL or preemption is disabled. */
-uint64_t aeGetQoSPreemptCheckInterval(aeEventLoop *eventLoop) {
-    return eventLoop ? eventLoop->qos_el_preempt_check_interval_us : 0;
+    eventLoop->qos_el_preempt_check_interval_us = interval_us;
 }
 
 /* Preemptively processes QoS events if the elapsed time since the last poll
- * exceeds the qos_el_preempt_check_interval_us threshold and iter count
- * is a multiple of AE_QOS_EVENT_PREEMPTIVE_CHECK_MASK (0 disables preemption). */
-int aeProcessQoSEventsPreemptively(aeEventLoop *eventLoop, int iter_count) {
-    if (eventLoop->qos_el == NULL || eventLoop->qos_el_preempt_check_interval_us == 0 || iter_count == 0) return 0;
-    if ((iter_count & AE_QOS_EVENT_PREEMPTIVE_CHECK_MASK) == 0) {
-        if (elapsedUs(eventLoop->qos_el_last_poll_us) >= eventLoop->qos_el_preempt_check_interval_us) {
-            return aeProcessQoSEventsNow(eventLoop);
-        }
-    }
-    return 0;
+ * exceeds the qos_el_preempt_check_interval_us threshold (0 disables preemption). */
+int aeProcessQoSEventsPreemptively(aeEventLoop *eventLoop) {
+    /* Skip if the multiplexer backend doesn't support nested event loop or preemptive polling is disabled */
+    if (eventLoop->qos_el == NULL || eventLoop->qos_el_preempt_check_interval_us == 0) return 0;
+    if (elapsedUs(eventLoop->qos_el_last_poll_us) < eventLoop->qos_el_preempt_check_interval_us) return 0;
+    return aeProcessQoSEvents(eventLoop);
 }
 
 /* Process every pending file event, then every pending time event
@@ -575,7 +556,7 @@ int aeProcessEvents(aeEventLoop *eventLoop, int flags) {
             if (qos_fd != -1) {
                 for (j = 0; j < numevents; j++) {
                     if (eventLoop->fired[j].fd == qos_fd) {
-                        processed += aeProcessQoSEventsNow(eventLoop);
+                        processed += aeProcessQoSEvents(eventLoop);
                         break;
                     }
                 }
@@ -584,9 +565,8 @@ int aeProcessEvents(aeEventLoop *eventLoop, int flags) {
 
         for (j = 0; j < numevents; j++) {
             /* Periodic Preemptive Poll:
-             * If processing normal events is taking more than qos_el_preempt_check_interval_us, check for new QoS events.
-             * Batch AE_QOS_EVENT_PREEMPTIVE_CHECK_MASK checks to minimize monotonic clock call overhead. */
-            processed += aeProcessQoSEventsPreemptively(eventLoop, j);
+             * If processing normal events is taking more than qos_el_preempt_check_interval_us, check for new QoS events. */
+            processed += aeProcessQoSEventsPreemptively(eventLoop);
 
             int fd = eventLoop->fired[j].fd;
             /* Skip processing QoS events here again as they were already processed above */
@@ -702,28 +682,52 @@ void aeSetPollProtect(aeEventLoop *eventLoop, int protect) {
     }
 }
 
-/* Event handler for the nested QoS event loop poll,
- * which will immediately process QoS events registered on the QoS event loop file descriptor.*/
-static void qosEventLoopHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
-    AE_NOTUSED(fd);
-    AE_NOTUSED(privdata);
-    AE_NOTUSED(mask);
-    aeProcessQoSEventsNow(el);
-}
-
 /* Register a QoS event loop file descriptor in the main event loop,
  * which will awake main eventloop when the QoS event loop file descriptor is fired. */
-int aeLinkQoSEventLoop(aeEventLoop *eventLoop, aeEventLoop *qos_el) {
-    if (eventLoop == NULL || qos_el == NULL) return AE_ERR;
+static int aeLinkQoSEventLoop(aeEventLoop *eventLoop, aeEventLoop *qos_el) {
+    assert(eventLoop != NULL && qos_el != NULL);
     int qos_fd = aeApiGetPollFd(qos_el);
-    if (qos_fd == -1) {
-        eventLoop->qos_el = NULL;
-        return AE_ERR;
-    }
-    if (aeCreateFileEvent(eventLoop, qos_fd, AE_READABLE, qosEventLoopHandler, qos_el) == AE_ERR) {
-        eventLoop->qos_el = NULL;
+    if (qos_fd == -1) return AE_ERR;
+    /* Register qos_fd with NULL callback: qos_fd is only used to wake up the main loop's
+     * multiplexer when QoS traffic arrives. aeProcessEvents() checks for qos_fd and drains
+     * qos_el directly before dispatching normal events, and explicitly skips callback
+     * dispatch for qos_fd. */
+    if (aeCreateFileEvent(eventLoop, qos_fd, AE_READABLE, NULL, NULL) == AE_ERR) {
         return AE_ERR;
     }
     eventLoop->qos_el = qos_el;
+    return AE_OK;
+}
+/* Actuate QoS event loop if supported: creates a nested eventloop for internal
+ * connections (cluster bus, replication, and slot migration jobs). It installs
+ * a preemptive polling mechanism that wakes the main event loop and processes
+ * QoS events at regular interval. If qosPreemptPollIntervalUs is 0, standard
+ * event loop behavior is preserved. The provided stats callback is invoked with the
+ * elapsed duration of each QoS event processing cycle, enabling monitoring and
+ * statistics for QoS processing.
+ * Returns AE_OK on success, or AE_ERR if QoS eventloop actuation fails
+ * (e.g., unsupported platform, memory allocation failure, or I/O error).
+ */
+int aeActuateQoSEventLoopIfSupported(aeEventLoop *eventLoop, int setsize, uint64_t qosPreemptPollIntervalUs, aeQoSStatsProc *qosStatsCallback) {
+    assert(eventLoop != NULL);
+
+    /* Create QoS event loop for internal connections (cluster bus, replication, and slot migration jobs) */
+    aeEventLoop *qos_el = aeCreateEventLoop(setsize);
+    if (qos_el == NULL) return AE_ERR;
+
+    /* Set the QoS event preemption check interval in microseconds. */
+    aeSetQoSPreemptCheckInterval(eventLoop, qosPreemptPollIntervalUs);
+
+    /* Sets the stats callback invoked with elapsed duration whenever QoS events are processed. */
+    aeSetQoSStatsCallback(eventLoop, qosStatsCallback);
+
+    /* Link QoS eventloop with main eventloop via nested multiplexer polling.
+     * If multiplexer nesting is unsupported (e.g. evport, select), gracefully
+     * free QoS eventloop and fall back to main eventloop event processing without QoS. */
+    if (aeLinkQoSEventLoop(eventLoop, qos_el) == AE_ERR) {
+        /* gracefully free QoS eventloop and fall back to main eventloop event processing without QoS */
+        aeDeleteEventLoop(qos_el);
+        return AE_ERR;
+    }
     return AE_OK;
 }

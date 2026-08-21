@@ -32,9 +32,10 @@
 #define VALKEY_CONNECTION_H
 
 #include <errno.h>
+#include <stdbool.h>
 #include <stdio.h>
-#include <string.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/uio.h>
 
 #include "ae.h"
@@ -198,7 +199,7 @@ struct connection {
     ConnectionCallbackFunc conn_handler;
     ConnectionCallbackFunc write_handler;
     ConnectionCallbackFunc read_handler;
-    int priority; /* connPriority value */
+    bool is_priority; /* true if connection is prioritized for QoS */
 };
 
 #define CONFIG_BINDADDR_MAX 16
@@ -531,21 +532,15 @@ static inline aeFileProc *connAcceptHandler(ConnectionType *ct) {
 /* Get Listeners information, note that caller should free the non-empty string */
 sds getListensInfoString(sds info);
 
-/* Connection qos(see connPriority enum). */
-int connSetPriority(connection *conn, int priority);
-int connGetPriority(connection *conn);
-const char *getConnectionPriorityName(int priority);
+/* Connection QoS / Priority. */
+int connSetPriority(connection *conn, bool is_priority);
+static inline bool connIsPriority(const connection *conn) {
+    return conn && conn->is_priority;
+}
 
 /* Get AE priority flag for a connection. */
 static inline int connGetAEPriorityFlag(const connection *conn) {
-    if (conn == NULL) return AE_NONE;
-    switch (conn->priority) {
-    case CONN_PRIORITY_HIGH:
-        return AE_HIGH_PRIORITY;
-    case CONN_PRIORITY_NORMAL:
-    default:
-        return AE_NONE;
-    }
+    return (conn && conn->is_priority) ? AE_HIGH_PRIORITY : AE_NONE;
 }
 int RedisRegisterConnectionTypeSocket(void);
 int RedisRegisterConnectionTypeUnix(void);

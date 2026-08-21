@@ -281,8 +281,7 @@ static void connSocketEventHandler(struct aeEventLoop *el, int fd, void *clientD
             conn->state = CONN_STATE_CONNECTED;
         }
 
-        if (!conn->write_handler)
-            aeDeleteFileEvent(el, conn->fd, AE_WRITABLE);
+        if (!conn->write_handler) aeDeleteFileEvent(el, conn->fd, AE_WRITABLE);
 
         if (!callHandler(conn, conn->conn_handler)) return;
         conn->conn_handler = NULL;

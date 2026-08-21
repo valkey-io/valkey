@@ -3061,23 +3061,16 @@ void initServer(void) {
     const char *clk_msg = monotonicInit();
     serverLog(LL_NOTICE, "monotonic clock: %s", clk_msg);
     server.el = aeCreateEventLoop(server.maxclients + CONFIG_FDSET_INCR);
-    /* Create QoS event loop for internal connections (cluster bus, replication, and slot migration jobs) */
-    aeEventLoop *qos_el = aeCreateEventLoop(server.maxclients + CONFIG_FDSET_INCR);
-    if (server.el == NULL || qos_el == NULL) {
+    if (server.el == NULL) {
         serverLog(LL_WARNING, "Failed creating the event loop. Error message: '%s'", strerror(errno));
         exit(1);
     }
-    /* Link QoS event loop with main event loop via nested multiplexer polling.
-     * If multiplexer nesting is unsupported (e.g. evport, select), gracefully
-     * free qos_el and fall back to main event loop event processing without QoS. */
-    if (aeLinkQoSEventLoop(server.el, qos_el) == AE_ERR) {
+    /* Setup QoS event loop if multiplexer backend supports nested event loop polling.
+     * If multiplexer nesting is unsupported (e.g. evport, select), gracefully fallback to main event loop event processing without QoS. */
+    if (aeActuateQoSEventLoopIfSupported(server.el, server.maxclients + CONFIG_FDSET_INCR, server.qos_preemptive_poll_interval_us, qosStatsCallback) == AE_ERR) {
         serverLog(LL_NOTICE, "QoS event prioritization not supported on %s multiplexer, falling back to standard event processing",
                   aeGetApiName());
-        aeDeleteEventLoop(qos_el);
-        qos_el = NULL;
     }
-    aeSetQoSStatsCallback(server.el, qosStatsCallback);
-    aeSetQoSPreemptCheckInterval(server.el, server.qos_preemptive_poll_interval_us);
     server.dbnum = server.cluster_enabled ? server.config_databases_cluster : server.config_databases;
     server.db = zcalloc(sizeof(serverDb *) * server.dbnum);
     createDatabaseIfNeeded(0); /* The default database should always exist */
@@ -4094,7 +4087,7 @@ void call(client *c, int flags) {
         if (server.execution_nesting == 0) {
             durationAddSample(EL_DURATION_TYPE_CMD, duration);
             /* Attribute command execution latency for high-priority client connections. */
-            if (c->conn && connGetPriority(c->conn) == CONN_PRIORITY_HIGH) {
+            if (connIsPriority(c->conn)) {
                 durationAddSample(EL_DURATION_TYPE_QOS_CMD, duration);
             }
         }

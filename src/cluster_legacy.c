@@ -1953,7 +1953,7 @@ void clusterAcceptHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
         connection *conn = connCreateAccepted(connTypeOfCluster(), cfd, &require_auth);
         /* Tag inbound cluster bus link as high-priority so cluster gossip and heartbeats
          * are processed in qos_el ahead of normal client traffic. */
-        connSetPriority(conn, CONN_PRIORITY_HIGH);
+        connSetPriority(conn, true);
 
         /* Make sure connection is not in an error state */
         if (connGetState(conn) != CONN_STATE_ACCEPTING) {
@@ -6319,7 +6319,7 @@ static int clusterNodeCronHandleReconnect(clusterNode *node, mstime_t now, long 
         link->conn = connCreate(connTypeOfCluster());
         /* Tag outbound cluster bus link as high-priority so node reconnects, gossip ping/pong,
          * and failure detection heartbeats operate within qos_el. */
-        connSetPriority(link->conn, CONN_PRIORITY_HIGH);
+        connSetPriority(link->conn, true);
         connSetPrivateData(link->conn, link);
         if (connConnect(link->conn, node->ip, node->cport, server.bind_source_addr, 0, clusterLinkConnectHandler) ==
             C_ERR) {
@@ -7330,7 +7330,7 @@ void addReplyClusterLinkDescription(client *c, clusterLink *link) {
     addReplyLongLong(c, link->send_msg_queue_mem);
 
     addReplyBulkCString(c, "qos");
-    addReplyBulkCString(c, getConnectionPriorityName(connGetPriority(link->conn)));
+    addReplyBulkCString(c, connIsPriority(link->conn) ? "prioritized" : "normal");
 }
 
 /* Add to the output buffer of the given client an array of cluster link descriptions,

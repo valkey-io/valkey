@@ -2014,6 +2014,20 @@ start_server {tags {"zset"}} {
                 set maxinc [randomInt 2]
                 if {$mininc} {set cmin "\[$min"} else {set cmin "($min"}
                 if {$maxinc} {set cmax "\[$max"} else {set cmax "($max"}
+
+                # Sometimes replace a bound with an infinite sentinel so the
+                # special range items are exercised, including double and
+                # crossed sentinel combinations that must yield empty results.
+                # minlim/maxlim track the sentinel for the Tcl model:
+                # -1 = negatively infinite, 1 = positively infinite, 0 = none.
+                set minlim 0
+                set maxlim 0
+                if {[randomInt 10] == 0} {
+                    if {[randomInt 2]} {set cmin -; set minlim -1} else {set cmin +; set minlim 1}
+                }
+                if {[randomInt 10] == 0} {
+                    if {[randomInt 2]} {set cmax -; set maxlim -1} else {set cmax +; set maxlim 1}
+                }
                 set rev [randomInt 2]
                 if {$rev} {
                     set cmd zrevrangebylex
@@ -2035,25 +2049,32 @@ start_server {tags {"zset"}} {
                 # Compute the same output via Tcl
                 set o {}
                 set copy $lexset
-                if {(!$rev && [string compare $min $max] > 0) ||
-                    ($rev && [string compare $max $min] > 0)} {
-                    # Empty output when ranges are inverted.
+                if {$rev} {
+                    # Invert the Tcl array using the server itself.
+                    set copy [r zrevrange zset 0 -1]
+                    # Invert min / max as well
+                    lassign [list $min $max $mininc $maxinc $minlim $maxlim] \
+                        max min maxinc mininc maxlim minlim
+                }
+                if {$minlim == 1 || $maxlim == -1 ||
+                    ($minlim == 0 && $maxlim == 0 && [string compare $min $max] > 0)} {
+                    # Empty output when the range is inverted, including a
+                    # positively infinite min or negatively infinite max.
                 } else {
-                    if {$rev} {
-                        # Invert the Tcl array using the server itself.
-                        set copy [r zrevrange zset 0 -1]
-                        # Invert min / max as well
-                        lassign [list $min $max $mininc $maxinc] \
-                            max min maxinc mininc
-                    }
                     foreach e $copy {
-                        set mincmp [string compare $e $min]
-                        set maxcmp [string compare $e $max]
-                        if {
-                             ($mininc && $mincmp >= 0 || !$mininc && $mincmp > 0)
-                             &&
-                             ($maxinc && $maxcmp <= 0 || !$maxinc && $maxcmp < 0)
-                        } {
+                        if {$minlim == -1} {
+                            set minok 1
+                        } else {
+                            set mincmp [string compare $e $min]
+                            set minok [expr {$mininc ? $mincmp >= 0 : $mincmp > 0}]
+                        }
+                        if {$maxlim == 1} {
+                            set maxok 1
+                        } else {
+                            set maxcmp [string compare $e $max]
+                            set maxok [expr {$maxinc ? $maxcmp <= 0 : $maxcmp < 0}]
+                        }
+                        if {$minok && $maxok} {
                             lappend o $e
                         }
                     }
@@ -2083,6 +2104,12 @@ start_server {tags {"zset"}} {
                 set maxinc [randomInt 2]
                 if {$mininc} {set cmin "\[$min"} else {set cmin "($min"}
                 if {$maxinc} {set cmax "\[$max"} else {set cmax "($max"}
+
+                # Sometimes replace a bound with an infinite sentinel so the
+                # special range items are exercised, including double and
+                # crossed sentinel combinations that must yield empty results.
+                if {[randomInt 10] == 0} {set cmin [lindex {- +} [randomInt 2]]}
+                if {[randomInt 10] == 0} {set cmax [lindex {- +} [randomInt 2]]}
 
                 # Make sure data is the same in both sides
                 assert {[r zrange zset{t} 0 -1] eq $lexset}

@@ -45,8 +45,11 @@ start_server {tags {"modules"}} {
         r hash.set_stringref k f1 hello1
         r hash.set_stringref k f2 hello2
         r hpexpire k 1 FIELDS 1 f1
-        after 50
-        assert_equal "0" [r hash.has_stringref k f1]
+        wait_for_condition 50 100 {
+            [r hash.has_stringref k f1] eq 0
+        } else {
+            fail "Hash field did not expire"
+        }
         assert_equal "1" [r hash.has_stringref k f2]
     }
 

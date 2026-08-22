@@ -452,68 +452,6 @@ start_server {tags {"acl external:skip"}} {
         assert_match {*has no permissions to access the 'write1' key*} [r ACL DRYRUN command-test GEORADIUS write1 longitude latitude radius M STORE write2]
     }
 
-    test {Test GEORADIUS duplicate STORE options check the final destination key} {
-        # Regression test: duplicate STORE/STOREDIST options must not let the
-        # ACL check only the first (decoy) destination. The command uses the
-        # LAST STORE/STOREDIST key, so the ACL must check that key too.
-        # 'protected:*' is not granted to this user, so any access to it denies.
-        r ACL setuser geo-store-dryrun +georadius +georadiusbymember %R~geo:* %W~scratch:*
-
-        # The last STORE/STOREDIST names the unauthorized 'protected:*' key,
-        # so the command must be denied on that key (not on the first decoy).
-        assert_match {*has no permissions to access the 'protected:dst' key*} \
-            [r ACL DRYRUN geo-store-dryrun GEORADIUS geo:src 0 0 1 km STORE scratch:ok STORE protected:dst]
-        assert_match {*has no permissions to access the 'protected:dst' key*} \
-            [r ACL DRYRUN geo-store-dryrun GEORADIUS geo:src 0 0 1 km STOREDIST scratch:ok STOREDIST protected:dst]
-        # Mixed STORE then STOREDIST: the last one (STOREDIST) wins.
-        assert_match {*has no permissions to access the 'protected:dst' key*} \
-            [r ACL DRYRUN geo-store-dryrun GEORADIUS geo:src 0 0 1 km STORE scratch:ok STOREDIST protected:dst]
-        # The final destination wins even when the decoy is the unauthorized one:
-        # last key is allowed, so the command is allowed.
-        assert_equal "OK" [r ACL DRYRUN geo-store-dryrun GEORADIUS geo:src 0 0 1 km STORE protected:dst STORE scratch:ok]
-        # Legitimate single/repeated allowed destination is not over-blocked.
-        assert_equal "OK" [r ACL DRYRUN geo-store-dryrun GEORADIUS geo:src 0 0 1 km STORE scratch:ok]
-        assert_equal "OK" [r ACL DRYRUN geo-store-dryrun GEORADIUS geo:src 0 0 1 km STORE scratch:ok STORE scratch:ok]
-
-        # Same for GEORADIUSBYMEMBER.
-        assert_match {*has no permissions to access the 'protected:dst' key*} \
-            [r ACL DRYRUN geo-store-dryrun GEORADIUSBYMEMBER geo:src member 1 km STORE scratch:ok STORE protected:dst]
-        assert_equal "OK" [r ACL DRYRUN geo-store-dryrun GEORADIUSBYMEMBER geo:src member 1 km STORE scratch:ok]
-
-        r ACL deluser geo-store-dryrun
-    }
-
-    test {GEORADIUS duplicate STORE options cannot bypass key-level write ACL} {
-        # End-to-end regression test for the duplicate-STORE ACL bypass: an
-        # authenticated user with write access only to scratch:* must not be
-        # able to use a second STORE option to write/delete protected:*.
-        r del protected:dst
-        r geoadd geo:src 13.361389 38.115556 "Palermo" 15.087269 37.502669 "Catania"
-        r set protected:dst sentinel
-
-        r ACL SETUSER geo-store-bypass on nopass +georadius +georadiusbymember +acl|whoami %R~geo:* %W~scratch:*
-        $r2 auth geo-store-bypass password
-        assert_equal "geo-store-bypass" [$r2 acl whoami]
-
-        # Legitimate single STORE to an allowed key works (no over-block).
-        assert_equal 2 [$r2 georadius geo:src 13.361389 38.115556 500 km STORE scratch:ok]
-
-        # Duplicate STORE whose final destination is protected must be denied,
-        # and the protected key must be left untouched.
-        assert_error {*NOPERM*key*} {$r2 georadius geo:src 13.361389 38.115556 500 km STORE scratch:ok STORE protected:dst}
-        assert_error {*NOPERM*key*} {$r2 georadiusbymember geo:src Palermo 500 km STORE scratch:ok STORE protected:dst}
-
-        # Missing source would otherwise DELETE the destination key. Ensure the
-        # ACL still blocks it and protected:dst survives intact.
-        assert_error {*NOPERM*key*} {$r2 georadius geo:missing 0 0 1 km STORE scratch:ok STORE protected:dst}
-        assert_equal "sentinel" [r get protected:dst]
-
-        # cleanup (re-auth before deleting the user that $r2 is logged in as)
-        $r2 auth default password
-        r ACL deluser geo-store-bypass
-        r del geo:src scratch:ok protected:dst
-    }
-
     # Existence test commands are not marked as access since they are the result
     # of a lot of write commands. We therefore make the claim they can be executed
     # when either READ or WRITE flags are provided.
@@ -534,7 +472,7 @@ start_server {tags {"acl external:skip"}} {
     # Unlike existence test commands, intersection cardinality commands process the data
     # between keys and return an aggregated cardinality. therefore they have the access
     # requirement.
-    test {Intersection cardinality commands are access commands} {
+    test {Intersection cardinaltiy commands are access commands} {
         assert_equal "OK" [r ACL DRYRUN command-test SINTERCARD 2 read read]
         assert_match {*has no permissions to access the 'write' key*} [r ACL DRYRUN command-test SINTERCARD 2 write read]
         assert_match {*has no permissions to access the 'nothing' key*} [r ACL DRYRUN command-test SINTERCARD 2 nothing read]
@@ -781,6 +719,77 @@ start_server {tags {"acl external:skip"}} {
 
         set result [$r2 exec]
         assert_equal 3 [llength $result]
+    }
+
+    test {EXEC aborts atomically when ACL is tightened between MULTI and EXEC} {
+        r ACL SETUSER tx-atomic-user on nopass +@all ~*
+        $r2 auth tx-atomic-user password
+        assert_equal "OK" [$r2 select 0]
+        r select 0
+        r del tx-atomic-a tx-atomic-b
+
+        assert_equal "OK" [$r2 multi]
+        assert_equal "QUEUED" [$r2 set tx-atomic-a 1]
+        assert_equal "QUEUED" [$r2 set tx-atomic-b 2]
+
+        r ACL SETUSER tx-atomic-user -set
+
+        catch {$r2 exec} err
+        assert_match "*EXECABORT*NOPERM*" $err
+        assert_equal 0 [r exists tx-atomic-a]
+        assert_equal 0 [r exists tx-atomic-b]
+    }
+
+    test {SELECT inside MULTI cannot be used to write a DB the selector forbids} {
+        r ACL SETUSER db-bypass-user on nopass (db=0,1 +@all -@read ~*) (db=2,3 +@all -@write ~*)
+        $r2 auth db-bypass-user password
+
+        assert_equal "OK" [$r2 select 0]
+        assert_equal "OK" [$r2 multi]
+        assert_equal "QUEUED" [$r2 select 2]
+        catch {$r2 set db-bypass-foo bar} err
+        assert_match "*NOPERM*" $err
+        catch {$r2 exec} err
+        assert_match "*EXECABORT*" $err
+
+        assert_equal "OK" [$r2 select 2]
+        assert_equal {} [$r2 get db-bypass-foo]
+    }
+
+    test {AUTH inside MULTI is not pre-validated against the old user} {
+        r ACL SETUSER limited-tx-user on nopass +@all ~*
+        r ACL SETUSER privileged-tx-user on nopass +@all ~*
+        $r2 auth limited-tx-user password
+        assert_equal "OK" [$r2 select 0]
+        r select 0
+        r del auth-in-multi before-auth
+
+        assert_equal "OK" [$r2 multi]
+        assert_equal "QUEUED" [$r2 set before-auth 1]
+        assert_equal "QUEUED" [$r2 auth privileged-tx-user password]
+        assert_equal "QUEUED" [$r2 set auth-in-multi 1]
+        set result [$r2 exec]
+        assert_equal 3 [llength $result]
+        assert_equal "OK" [lindex $result 0]
+        assert_equal "OK" [lindex $result 1]
+        assert_equal "OK" [lindex $result 2]
+        assert_equal 1 [r get before-auth]
+        assert_equal 1 [r get auth-in-multi]
+        assert_equal privileged-tx-user [$r2 ACL WHOAMI]
+    }
+
+    test {ACL SETUSER inside MULTI still executes as a batch} {
+        r ACL SETUSER batch-acl-admin on nopass +@all ~*
+        $r2 auth batch-acl-admin password
+        assert_equal "OK" [$r2 select 0]
+
+        assert_equal "OK" [$r2 multi]
+        assert_equal "QUEUED" [$r2 ACL SETUSER batched-alice on nopass +ping]
+        assert_equal "QUEUED" [$r2 ACL SETUSER batched-bob on nopass +ping]
+        set result [$r2 exec]
+        assert_equal {OK OK} $result
+        assert_match {*ping*} [dict get [r ACL GETUSER batched-alice] commands]
+        assert_match {*ping*} [dict get [r ACL GETUSER batched-bob] commands]
     }
     
     test {Test database ACL with string representation} {

@@ -867,7 +867,7 @@ start_server {tags {"multi"}} {
             r XADD mystream * foo3 bar3
             r XGROUP CREATE mystream mygroup 0
 
-            # make sure the XCLAIM (propagated by XREADGROUP) is indeed inside MULTI/EXEC
+            # make sure the XCALIM (propagated by XREADGROUP) is indeed inside MULTI/EXEC
             r multi
             r XREADGROUP GROUP mygroup consumer1 COUNT 2 STREAMS mystream ">"
             r XREADGROUP GROUP mygroup consumer1 STREAMS mystream ">"
@@ -1039,6 +1039,19 @@ start_server {overrides {appendonly {yes} appendfilename {appendonly.aof} append
         }
         r get foo
     } {}
+
+    test {AOF reload restores every command from a MULTI/EXEC} {
+        r flushall
+        r multi
+        r set aof-tx-a 1
+        r set aof-tx-b 2
+        r exec
+        r set aof-tx-c 3
+        r debug loadaof
+        assert_equal 1 [r get aof-tx-a]
+        assert_equal 2 [r get aof-tx-b]
+        assert_equal 3 [r get aof-tx-c]
+    }
 }
 
 start_cluster 1 0 {tags {"external:skip cluster"}} {

@@ -93,6 +93,7 @@ tags {"external:skip"} {
             append_to_manifest "file appendonly.aof.3.incr.aof seq 3 type i\n"
         }
 
+        close [open $server_path/stdout "w"]
         start_server_aof_ex [list dir $server_path] [list wait_ready false] {
             wait_for_condition 100 50 {
                 ! [is_alive [srv pid]]
@@ -179,6 +180,7 @@ tags {"external:skip"} {
             append_to_manifest "file appendonly.aof.1.incr.aof seq 1 type i\n"
         }
 
+        close [open $server_path/stdout "w"]
         start_server_aof_ex [list dir $server_path] [list wait_ready false] {
             wait_for_condition 100 50 {
                 ! [is_alive [srv pid]]
@@ -186,7 +188,7 @@ tags {"external:skip"} {
                 fail "AOF loading didn't fail"
             }
 
-            assert_equal 2 [count_message_lines $server_path/stdout "Invalid AOF manifest file format"]
+            assert_equal 1 [count_message_lines $server_path/stdout "Invalid AOF manifest file format"]
         }
 
         clean_aof_persistence $aof_dirpath
@@ -206,6 +208,7 @@ tags {"external:skip"} {
             append_to_manifest "file appendonly.aof.1.incr.aof type i\n"
         }
 
+        close [open $server_path/stdout "w"]
         start_server_aof_ex [list dir $server_path] [list wait_ready false] {
             wait_for_condition 100 50 {
                 ! [is_alive [srv pid]]
@@ -213,7 +216,7 @@ tags {"external:skip"} {
                 fail "AOF loading didn't fail"
             }
 
-            assert_equal 3 [count_message_lines $server_path/stdout "Invalid AOF manifest file format"]
+            assert_equal 1 [count_message_lines $server_path/stdout "Invalid AOF manifest file format"]
         }
 
         clean_aof_persistence $aof_dirpath
@@ -260,6 +263,7 @@ tags {"external:skip"} {
             append_to_manifest "file appendonly.aof.1.incr.aof seq 1 type i newkey\n"
         }
 
+        close [open $server_path/stdout "w"]
         start_server_aof_ex [list dir $server_path] [list wait_ready false] {
             wait_for_condition 100 50 {
                 ! [is_alive [srv pid]]
@@ -267,7 +271,7 @@ tags {"external:skip"} {
                 fail "AOF loading didn't fail"
             }
 
-            assert_equal 4 [count_message_lines $server_path/stdout "Invalid AOF manifest file format"]
+            assert_equal 1 [count_message_lines $server_path/stdout "Invalid AOF manifest file format"]
         }
 
         clean_aof_persistence $aof_dirpath

@@ -193,6 +193,7 @@ tags {"check-rdb network external:skip logreqres:skip"} {
             assert_match "*db.0.type.zset.keys.total:0*" $result
             assert_match "*db.0.type.hash.keys.total:0*" $result
             assert_match "*db.0.type.stream.keys.total:0*" $result
+            assert_match "*db.0.type.radix.keys.total:0*" $result
         }
 
         test "test valkey-check-rdb stats function" {
@@ -257,6 +258,12 @@ tags {"check-rdb network external:skip logreqres:skip"} {
                     r xadd $key * $field $field_value
                 }
             }
+            r select 6
+            for {set i 70} {$i < 80} {incr i} {
+                set key [string repeat "$i" 10]
+                r rset $key path field value
+                r rset $key path:child second another-value
+            }
             r save
             
             set dump_rdb [file join [lindex [r config get dir] 1] dump.rdb]
@@ -270,6 +277,8 @@ tags {"check-rdb network external:skip logreqres:skip"} {
             assert_match "*db.3.type.zset.keys.total:10*" $result
             assert_match "*db.4.type.hash.keys.total:10*" $result
             assert_match "*db.5.type.stream.keys.total:10*" $result
+            assert_match "*db.6.type.radix.keys.total:10*" $result
+            assert_match "*db.6.type.radix.elements.total:20*" $result
         }
     }
 }

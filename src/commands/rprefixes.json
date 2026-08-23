@@ -1,0 +1,29 @@
+{
+    "RPREFIXES": {
+        "summary": "Returns stored radix paths that prefix a query.",
+        "complexity": "O(L + N), where L is the query length and N is returned data.",
+        "group": "radix",
+        "since": "9.0.0",
+        "arity": -3,
+        "function": "rprefixesCommand",
+        "command_flags": ["READONLY"],
+        "acl_categories": ["RADIX", "READ", "SLOW"],
+        "key_specs": [{
+            "flags": ["RO", "ACCESS"],
+            "begin_search": {"index": {"pos": 1}},
+            "find_keys": {"range": {"lastkey": 0, "step": 1, "limit": 0}}
+        }],
+        "arguments": [
+            {"name": "key", "type": "key", "key_spec_index": 0},
+            {"name": "query", "type": "string"},
+            {"name": "lengths", "type": "pure-token", "token": "LENGTHS", "optional": true},
+            {"name": "withvalues", "type": "pure-token", "token": "WITHVALUES", "optional": true},
+            {"name": "fields", "type": "block", "optional": true, "arguments": [
+                {"name": "numfields", "type": "integer", "token": "FIELDS"},
+                {"name": "field", "type": "string", "multiple": true}
+            ]},
+            {"name": "count", "type": "integer", "token": "COUNT", "optional": true},
+            {"name": "maxlen", "type": "integer", "token": "MAXLEN", "optional": true}
+        ]
+    }
+}

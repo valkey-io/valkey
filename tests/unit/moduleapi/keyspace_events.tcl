@@ -130,6 +130,17 @@ tags "modules" {
             assert_match {*db=0*} [r client info]
         } {} {singledb:skip}
 
+        test {Radix key type, length and module notifications} {
+            r del radix-key
+            set before [r keyspace.get_radix_events]
+            r rset radix-key path field value
+            r rset radix-key path second value
+            assert_equal {8 1} [r keyspace.key_type_length radix-key]
+            assert_equal [expr {$before + 2}] [r keyspace.get_radix_events]
+            r rdel radix-key path
+            assert_equal [expr {$before + 3}] [r keyspace.get_radix_events]
+        }
+
         test "Unload the module - testkeyspace" {
             assert_equal {OK} [r module unload testkeyspace]
         }

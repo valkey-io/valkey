@@ -256,6 +256,7 @@ extern int configOOMScoreAdjValuesDefaults[CONFIG_OOM_COUNT];
 #define ACL_CATEGORY_CONNECTION (1ULL << 18)
 #define ACL_CATEGORY_TRANSACTION (1ULL << 19)
 #define ACL_CATEGORY_SCRIPTING (1ULL << 20)
+#define ACL_CATEGORY_RADIX (1ULL << 21)
 
 /* Key-spec flags *
  * -------------- */
@@ -673,9 +674,10 @@ typedef enum {
 #define NOTIFY_LOADED (1 << 12)   /* module only key space notification, indicate a key loaded from rdb */
 #define NOTIFY_MODULE (1 << 13)   /* d, module key space notification */
 #define NOTIFY_NEW (1 << 14)      /* n, new key notification */
+#define NOTIFY_RADIX (1 << 15)    /* r, radix tree notification */
 #define NOTIFY_ALL                                                                                            \
     (NOTIFY_GENERIC | NOTIFY_STRING | NOTIFY_LIST | NOTIFY_SET | NOTIFY_HASH | NOTIFY_ZSET | NOTIFY_EXPIRED | \
-     NOTIFY_EVICTED | NOTIFY_STREAM | NOTIFY_MODULE) /* A flag */
+     NOTIFY_EVICTED | NOTIFY_STREAM | NOTIFY_MODULE | NOTIFY_RADIX) /* A flag */
 
 /* Period in milliseconds between successive clusterCron() executions */
 #define CLUSTER_CRON_PERIOD_MS 100
@@ -760,7 +762,8 @@ typedef enum {
  * encoding version. */
 #define OBJ_MODULE 5   /* Module object. */
 #define OBJ_STREAM 6   /* Stream object. */
-#define OBJ_TYPE_MAX 7 /* Maximum number of object types */
+#define OBJ_RADIX 7    /* Radix tree object. */
+#define OBJ_TYPE_MAX 8 /* Maximum number of object types */
 
 typedef struct ValkeyModuleType moduleType;
 
@@ -782,6 +785,7 @@ typedef struct ValkeyModuleType moduleType;
 #define OBJ_ENCODING_QUICKLIST 9  /* Encoded as linked list of listpacks */
 #define OBJ_ENCODING_STREAM 10    /* Encoded as a radix tree of listpacks */
 #define OBJ_ENCODING_LISTPACK 11  /* Encoded as a listpack */
+#define OBJ_ENCODING_RADIX 12     /* Radix tree of hash payloads */
 
 #define OBJ_REFCOUNT_BITS 29
 #define OBJ_SHARED_REFCOUNT ((1 << OBJ_REFCOUNT_BITS) - 1) /* Global object never destroyed. */
@@ -2572,6 +2576,7 @@ typedef enum {
     COMMAND_GROUP_GEO,
     COMMAND_GROUP_STREAM,
     COMMAND_GROUP_BITMAP,
+    COMMAND_GROUP_RADIX,
     COMMAND_GROUP_MODULE,
 } serverCommandGroup;
 
@@ -3185,6 +3190,7 @@ robj *createSetListpackObject(void);
 robj *createHashObject(void);
 robj *createZsetObject(void);
 robj *createZsetListpackObject(void);
+robj *createRadixObject(void);
 robj *createStreamObject(void);
 robj *createModuleObject(moduleType *mt, void *value);
 int getLongFromObjectOrReply(client *c, robj *o, long *target, const char *msg);
@@ -4115,6 +4121,16 @@ void strlenCommand(client *c);
 void zrankCommand(client *c);
 void zrevrankCommand(client *c);
 void hsetCommand(client *c);
+void rsetCommand(client *c);
+void rgetCommand(client *c);
+void rmgetCommand(client *c);
+void rgetallCommand(client *c);
+void rdelCommand(client *c);
+void rlongestCommand(client *c);
+void rprefixesCommand(client *c);
+void rdelprefixCommand(client *c);
+void rscanCommand(client *c);
+void rcardCommand(client *c);
 void hsetnxCommand(client *c);
 void hsetexCommand(client *c);
 void hgetexCommand(client *c);

@@ -82,6 +82,7 @@ struct ACLCategoryItem {
     {"hyperloglog", ACL_CATEGORY_HYPERLOGLOG},
     {"geo", ACL_CATEGORY_GEO},
     {"stream", ACL_CATEGORY_STREAM},
+    {"radix", ACL_CATEGORY_RADIX},
     {"pubsub", ACL_CATEGORY_PUBSUB},
     {"admin", ACL_CATEGORY_ADMIN},
     {"fast", ACL_CATEGORY_FAST},

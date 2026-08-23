@@ -801,6 +801,328 @@ TEST_F(RaxTest, raxRegressionTest6) {
     raxFree(rax_tree);
 }
 
+/* --------------------------------------------------------------------------
+ * Prefix lookup tests: raxFindLongestPrefix() / raxForEachPrefix().
+ * -------------------------------------------------------------------------*/
+
+/* Sentinels used to check that the output arguments of raxFindLongestPrefix()
+ * are left untouched when there is no match. */
+#define PREFIX_LEN_SENTINEL ((size_t)0xdeadbeef)
+static void *prefixValueSentinel = (void *)(char *)"prefix-value-sentinel";
+
+/* Collects the keys reported by raxForEachPrefix(). Declared with C linkage
+ * because the callback is handed over to C code. */
+#define PREFIX_MAX_MATCHES 32
+extern "C" {
+typedef struct prefixCollector {
+    size_t count;      /* Number of times the callback was invoked. */
+    size_t stop_after; /* Stop the iteration once 'count' reaches this, 0 = never. */
+    unsigned char *key[PREFIX_MAX_MATCHES];
+    size_t key_len[PREFIX_MAX_MATCHES];
+    void *value[PREFIX_MAX_MATCHES];
+} prefixCollector;
+
+static int prefixCollect(unsigned char *key, size_t key_len, void *value, void *privdata) {
+    prefixCollector *c = (prefixCollector *)privdata;
+    if (c->count < PREFIX_MAX_MATCHES) {
+        c->key[c->count] = key;
+        c->key_len[c->count] = key_len;
+        c->value[c->count] = value;
+    }
+    c->count++;
+    if (c->stop_after && c->count >= c->stop_after) return 0;
+    return 1;
+}
+}
+
+static void prefixCollectorInit(prefixCollector *c, size_t stop_after) {
+    memset(c, 0, sizeof(*c));
+    c->stop_after = stop_after;
+}
+
+/* Deterministic longest prefix lookups, including the empty stored key, the
+ * empty query, keys stored in internal nodes and exact matches. */
+TEST_F(RaxTest, raxLongestPrefixUnitTests) {
+    rax *t = raxNew();
+    raxInsert(t, (unsigned char *)"", 0, (void *)(long)1, nullptr);
+    raxInsert(t, (unsigned char *)"a", 1, (void *)(long)2, nullptr);
+    raxInsert(t, (unsigned char *)"ab", 2, (void *)(long)3, nullptr);
+    raxInsert(t, (unsigned char *)"abcd", 4, (void *)(long)4, nullptr);
+
+    /* The queries cover, in order: the empty query matching the empty key,
+     * exact matches on a leaf and on a key that has children, a query stopping
+     * in the middle of a compressed chunk, an exact match on the deepest key, a
+     * query longer than every stored key, and two queries for which only the
+     * empty key matches. */
+    struct {
+        const char *query;
+        size_t query_len;
+        size_t expected_len;
+        long expected_value;
+    } tests[] = {/* Query. */ /* Query len. */ /* Longest prefix len. */ /* Value. */
+                 {"", 0, 0, 1},
+                 {"a", 1, 1, 2},
+                 {"ab", 2, 2, 3},
+                 {"abc", 3, 2, 3},
+                 {"abcd", 4, 4, 4},
+                 {"abcdefg", 7, 4, 4},
+                 {"b", 1, 0, 1},
+                 {"xyz", 3, 0, 1}};
+
+    for (size_t i = 0; i < sizeof(tests) / sizeof(tests[0]); i++) {
+        size_t prefix_len = PREFIX_LEN_SENTINEL;
+        void *value = prefixValueSentinel;
+        int found = raxFindLongestPrefix(t, (unsigned char *)tests[i].query, tests[i].query_len, &prefix_len, &value);
+        EXPECT_EQ(found, 1) << "No prefix found for query '" << tests[i].query << "'";
+        EXPECT_EQ(prefix_len, tests[i].expected_len) << "Wrong prefix length for query '" << tests[i].query << "'";
+        EXPECT_EQ(value, (void *)tests[i].expected_value) << "Wrong value for query '" << tests[i].query << "'";
+    }
+
+    /* Both output arguments are optional. */
+    EXPECT_EQ(raxFindLongestPrefix(t, (unsigned char *)"abc", 3, nullptr, nullptr), 1);
+
+    raxFree(t);
+}
+
+/* Without the empty key stored, queries that do not fully match any key must
+ * report a miss, in particular when the walk stops in the middle of a
+ * compressed node. */
+TEST_F(RaxTest, raxLongestPrefixMisses) {
+    rax *t = raxNew();
+    raxInsert(t, (unsigned char *)"foo", 3, (void *)(long)1, nullptr);
+    raxInsert(t, (unsigned char *)"foobar", 6, (void *)(long)2, nullptr);
+
+    const char *misses[] = {"", "f", "fo", "goo", "gfoo", nullptr};
+    for (int i = 0; misses[i] != nullptr; i++) {
+        size_t prefix_len = PREFIX_LEN_SENTINEL;
+        void *value = prefixValueSentinel;
+        int found = raxFindLongestPrefix(t, (unsigned char *)misses[i], strlen(misses[i]), &prefix_len, &value);
+        EXPECT_EQ(found, 0) << "Unexpected prefix found for query '" << misses[i] << "'";
+        /* On a miss the output arguments must not be touched. */
+        EXPECT_EQ(prefix_len, PREFIX_LEN_SENTINEL) << "prefix_len modified on miss for '" << misses[i] << "'";
+        EXPECT_EQ(value, prefixValueSentinel) << "value modified on miss for '" << misses[i] << "'";
+    }
+
+    /* An empty tree has no prefix for any query, not even for the empty one. */
+    prefixCollector c;
+    prefixCollectorInit(&c, 0);
+    rax *empty = raxNew();
+    EXPECT_EQ(raxFindLongestPrefix(empty, (unsigned char *)"foo", 3, nullptr, nullptr), 0);
+    EXPECT_EQ(raxFindLongestPrefix(empty, nullptr, 0, nullptr, nullptr), 0);
+    EXPECT_EQ(raxForEachPrefix(empty, (unsigned char *)"foo", 3, prefixCollect, &c), (size_t)0);
+    EXPECT_EQ(c.count, (size_t)0);
+    raxFree(empty);
+
+    raxFree(t);
+}
+
+/* Keys stored with a NULL value use a special encoding in rax: make sure a
+ * match with a NULL value is not confused with a miss. */
+TEST_F(RaxTest, raxLongestPrefixNullValues) {
+    rax *t = raxNew();
+    raxInsert(t, (unsigned char *)"", 0, nullptr, nullptr);
+    raxInsert(t, (unsigned char *)"foo", 3, nullptr, nullptr);
+    raxInsert(t, (unsigned char *)"foobar", 6, (void *)(long)7, nullptr);
+
+    size_t prefix_len = PREFIX_LEN_SENTINEL;
+    void *value = prefixValueSentinel;
+    EXPECT_EQ(raxFindLongestPrefix(t, (unsigned char *)"fooba", 5, &prefix_len, &value), 1);
+    EXPECT_EQ(prefix_len, (size_t)3);
+    EXPECT_EQ(value, nullptr) << "A NULL value must be reported as NULL";
+
+    /* Same for the empty key stored with a NULL value. */
+    prefix_len = PREFIX_LEN_SENTINEL;
+    value = prefixValueSentinel;
+    EXPECT_EQ(raxFindLongestPrefix(t, (unsigned char *)"zap", 3, &prefix_len, &value), 1);
+    EXPECT_EQ(prefix_len, (size_t)0);
+    EXPECT_EQ(value, nullptr);
+
+    /* And the longest match keeps winning even if shorter ones are NULL. */
+    prefix_len = PREFIX_LEN_SENTINEL;
+    value = prefixValueSentinel;
+    EXPECT_EQ(raxFindLongestPrefix(t, (unsigned char *)"foobarbaz", 9, &prefix_len, &value), 1);
+    EXPECT_EQ(prefix_len, (size_t)6);
+    EXPECT_EQ(value, (void *)(long)7);
+
+    raxFree(t);
+}
+
+/* Keys are binary safe, so embedded NUL bytes must be handled like any other
+ * byte, both in the stored keys and in the query. */
+TEST_F(RaxTest, raxLongestPrefixEmbeddedNul) {
+    unsigned char k1[] = {'a', 0};
+    unsigned char k2[] = {'a', 0, 'b'};
+    unsigned char k3[] = {'a', 0, 'b', 'c', 0, 'd'};
+    unsigned char query[] = {'a', 0, 'b', 'c', 0, 'd', 'e'};
+
+    rax *t = raxNew();
+    raxInsert(t, k1, sizeof(k1), (void *)(long)1, nullptr);
+    raxInsert(t, k2, sizeof(k2), (void *)(long)2, nullptr);
+    raxInsert(t, k3, sizeof(k3), (void *)(long)3, nullptr);
+
+    size_t prefix_len = PREFIX_LEN_SENTINEL;
+    void *value = prefixValueSentinel;
+    EXPECT_EQ(raxFindLongestPrefix(t, query, sizeof(query), &prefix_len, &value), 1);
+    EXPECT_EQ(prefix_len, (size_t)6);
+    EXPECT_EQ(value, (void *)(long)3);
+
+    /* Stopping right before the last byte of the deepest key. */
+    prefix_len = PREFIX_LEN_SENTINEL;
+    value = prefixValueSentinel;
+    EXPECT_EQ(raxFindLongestPrefix(t, query, 5, &prefix_len, &value), 1);
+    EXPECT_EQ(prefix_len, (size_t)3);
+    EXPECT_EQ(value, (void *)(long)2);
+
+    /* "a" alone is not a key: the NUL byte is part of the shortest one. */
+    EXPECT_EQ(raxFindLongestPrefix(t, query, 1, nullptr, nullptr), 0);
+
+    /* All three keys are prefixes of the query, NUL bytes included. */
+    prefixCollector c;
+    prefixCollectorInit(&c, 0);
+    EXPECT_EQ(raxForEachPrefix(t, query, sizeof(query), prefixCollect, &c), (size_t)3);
+    EXPECT_EQ(c.key_len[0], (size_t)2);
+    EXPECT_EQ(c.key_len[1], (size_t)3);
+    EXPECT_EQ(c.key_len[2], (size_t)6);
+
+    raxFree(t);
+}
+
+/* raxForEachPrefix() must report every matching key from the shortest to the
+ * longest, pointing into the caller query buffer. */
+TEST_F(RaxTest, raxForEachPrefixUnitTests) {
+    rax *t = raxNew();
+    raxInsert(t, (unsigned char *)"", 0, (void *)(long)1, nullptr);
+    raxInsert(t, (unsigned char *)"a", 1, (void *)(long)2, nullptr);
+    raxInsert(t, (unsigned char *)"ab", 2, (void *)(long)3, nullptr);
+    raxInsert(t, (unsigned char *)"abcd", 4, (void *)(long)4, nullptr);
+    raxInsert(t, (unsigned char *)"abcdef", 6, (void *)(long)5, nullptr);
+    raxInsert(t, (unsigned char *)"abz", 3, (void *)(long)6, nullptr);
+
+    unsigned char query[] = "abcde";
+    size_t query_len = 5;
+    size_t expected_len[] = {0, 1, 2, 4};
+    long expected_value[] = {1, 2, 3, 4};
+
+    prefixCollector c;
+    prefixCollectorInit(&c, 0);
+    EXPECT_EQ(raxForEachPrefix(t, query, query_len, prefixCollect, &c), (size_t)4);
+    EXPECT_EQ(c.count, (size_t)4);
+    for (size_t i = 0; i < c.count && i < (size_t)4; i++) {
+        EXPECT_EQ(c.key[i], query) << "Match " << i << " does not point into the query buffer";
+        EXPECT_EQ(c.key_len[i], expected_len[i]) << "Wrong length for match " << i;
+        EXPECT_EQ(c.value[i], (void *)expected_value[i]) << "Wrong value for match " << i;
+    }
+
+    /* A NULL callback is a valid way to only count the matching keys. */
+    EXPECT_EQ(raxForEachPrefix(t, query, query_len, nullptr, nullptr), (size_t)4);
+
+    /* An exact match is reported as well. */
+    prefixCollectorInit(&c, 0);
+    EXPECT_EQ(raxForEachPrefix(t, (unsigned char *)"abcdef", 6, prefixCollect, &c), (size_t)5);
+    EXPECT_EQ(c.key_len[4], (size_t)6);
+
+    /* The empty query only matches the empty key. */
+    prefixCollectorInit(&c, 0);
+    EXPECT_EQ(raxForEachPrefix(t, nullptr, 0, prefixCollect, &c), (size_t)1);
+    EXPECT_EQ(c.key_len[0], (size_t)0);
+    EXPECT_EQ(c.key[0], nullptr) << "The key must be the query pointer, even when NULL";
+    EXPECT_EQ(c.value[0], (void *)(long)1);
+
+    raxFree(t);
+}
+
+/* A callback returning zero stops the iteration, and the invocation asking for
+ * the stop is still accounted for. */
+TEST_F(RaxTest, raxForEachPrefixEarlyStop) {
+    rax *t = raxNew();
+    raxInsert(t, (unsigned char *)"", 0, (void *)(long)1, nullptr);
+    raxInsert(t, (unsigned char *)"a", 1, (void *)(long)2, nullptr);
+    raxInsert(t, (unsigned char *)"ab", 2, (void *)(long)3, nullptr);
+    raxInsert(t, (unsigned char *)"abc", 3, (void *)(long)4, nullptr);
+
+    for (size_t stop_after = 1; stop_after <= 4; stop_after++) {
+        prefixCollector c;
+        prefixCollectorInit(&c, stop_after);
+        EXPECT_EQ(raxForEachPrefix(t, (unsigned char *)"abc", 3, prefixCollect, &c), stop_after)
+            << "Iteration did not stop after " << stop_after << " matches";
+        EXPECT_EQ(c.count, stop_after);
+        for (size_t i = 0; i < c.count; i++) EXPECT_EQ(c.key_len[i], i);
+    }
+
+    /* Stopping on the very first match must not report the following ones. */
+    prefixCollector c;
+    prefixCollectorInit(&c, 1);
+    raxForEachPrefix(t, (unsigned char *)"abc", 3, prefixCollect, &c);
+    EXPECT_EQ(c.key_len[0], (size_t)0);
+
+    raxFree(t);
+}
+
+/* Oracle based test: the longest prefix and the full set of prefixes are
+ * cross-checked against repeated raxFind() calls on every prefix length of the
+ * query. A tiny charset is used so that keys share long prefixes and the tree
+ * is full of compressed nodes and keys stored in internal nodes. */
+TEST_F(RaxTest, raxPrefixOracle) {
+    const size_t max_keylen = 12;
+    const size_t max_querylen = 16;
+
+    for (int with_empty_key = 0; with_empty_key < 2; with_empty_key++) {
+        rax *t = raxNew();
+        unsigned char buf[max_querylen];
+
+        if (with_empty_key) raxInsert(t, (unsigned char *)"", 0, (void *)(long)-1, nullptr);
+        for (int i = 0; i < 2000; i++) {
+            size_t keylen = 1 + (size_t)(genrand64_int64() % max_keylen);
+            for (size_t j = 0; j < keylen; j++) buf[j] = (unsigned char)('a' + genrand64_int64() % 3);
+            /* htHash() may return 0, so NULL values are exercised too. */
+            raxInsert(t, buf, keylen, (void *)(unsigned long)htHash(buf, keylen), nullptr);
+        }
+
+        for (int i = 0; i < 2000; i++) {
+            size_t querylen = (size_t)(genrand64_int64() % (max_querylen + 1));
+            for (size_t j = 0; j < querylen; j++) buf[j] = (unsigned char)('a' + genrand64_int64() % 3);
+
+            /* Build the expected result by looking up every prefix. */
+            size_t expected_count = 0;
+            size_t expected_len[max_querylen + 1];
+            void *expected_value[max_querylen + 1];
+            for (size_t l = 0; l <= querylen; l++) {
+                void *v = nullptr;
+                if (raxFind(t, buf, l, &v)) {
+                    expected_len[expected_count] = l;
+                    expected_value[expected_count] = v;
+                    expected_count++;
+                }
+            }
+
+            size_t prefix_len = PREFIX_LEN_SENTINEL;
+            void *value = prefixValueSentinel;
+            int found = raxFindLongestPrefix(t, buf, querylen, &prefix_len, &value);
+            EXPECT_EQ(found, expected_count ? 1 : 0);
+            if (expected_count) {
+                EXPECT_EQ(prefix_len, expected_len[expected_count - 1]);
+                EXPECT_EQ(value, expected_value[expected_count - 1]);
+            } else {
+                EXPECT_EQ(prefix_len, PREFIX_LEN_SENTINEL);
+                EXPECT_EQ(value, prefixValueSentinel);
+            }
+
+            prefixCollector c;
+            prefixCollectorInit(&c, 0);
+            EXPECT_EQ(raxForEachPrefix(t, buf, querylen, prefixCollect, &c), expected_count);
+            for (size_t j = 0; j < expected_count && j < PREFIX_MAX_MATCHES; j++) {
+                EXPECT_EQ(c.key_len[j], expected_len[j]);
+                EXPECT_EQ(c.value[j], expected_value[j]);
+            }
+
+            /* Stop at the first failure instead of flooding the output. */
+            if (HasFailure()) break;
+        }
+        raxFree(t);
+        if (HasFailure()) break;
+    }
+}
+
 /* This is a benchmark test for rax performance.
  * To run this test explicitly, use:
  *   ./src/unit/valkey-unit-gtests --gtest_filter=RaxTest.DISABLED_raxBenchmark --gtest_also_run_disabled_tests

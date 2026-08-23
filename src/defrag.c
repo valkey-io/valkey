@@ -39,6 +39,7 @@
  */
 
 #include "server.h"
+#include "radix.h"
 #include "ordered_index.h"
 #include "hashtable.h"
 #include "eval.h"
@@ -546,6 +547,71 @@ static int scanLaterStreamListpacks(robj *ob, unsigned long *cursor, monotime en
     return 0;
 }
 
+static sds radix_defrag_last_path;
+static unsigned long radix_defrag_hash_cursor;
+
+static int scanLaterRadix(robj *ob, unsigned long *cursor, monotime endtime) {
+    serverAssert(ob->type == OBJ_RADIX && ob->encoding == OBJ_ENCODING_RADIX);
+    radixObject *rt = objectGetVal(ob);
+    raxIterator ri;
+    raxStart(&ri, rt->index);
+    ri.node_cb = defragRaxNode;
+
+    if (*cursor == 0) {
+        sdsfree(radix_defrag_last_path);
+        radix_defrag_last_path = NULL;
+        radix_defrag_hash_cursor = 0;
+        defragRaxNode(&rt->index->head);
+        raxSeek(&ri, "^", NULL, 0);
+        *cursor = 1;
+    } else if (radix_defrag_last_path && radix_defrag_hash_cursor) {
+        if (!raxSeek(&ri, "=", (unsigned char *)radix_defrag_last_path, sdslen(radix_defrag_last_path))) {
+            radix_defrag_hash_cursor = 0;
+            raxSeek(&ri, ">", (unsigned char *)radix_defrag_last_path, sdslen(radix_defrag_last_path));
+        }
+    } else if (radix_defrag_last_path) {
+        raxSeek(&ri, ">", (unsigned char *)radix_defrag_last_path, sdslen(radix_defrag_last_path));
+    } else {
+        raxSeek(&ri, "^", NULL, 0);
+    }
+
+    long iterations = 0;
+    while (raxNext(&ri)) {
+        if (radix_defrag_hash_cursor &&
+            (!radix_defrag_last_path ||
+             ri.key_len != sdslen(radix_defrag_last_path) ||
+             memcmp(ri.key, radix_defrag_last_path, ri.key_len) != 0)) {
+            radix_defrag_hash_cursor = 0;
+        }
+
+        robj *payload = ri.data;
+        robj *newpayload = activeDefragAlloc(payload);
+        if (newpayload) {
+            payload = newpayload;
+            raxSetData(ri.node, payload);
+        }
+        radix_defrag_hash_cursor = hashTypeScanDefrag(payload, radix_defrag_hash_cursor, activeDefragAlloc);
+        sdsfree(radix_defrag_last_path);
+        radix_defrag_last_path = sdsnewlen(ri.key, ri.key_len);
+        server.stat_active_defrag_scanned++;
+
+        if (radix_defrag_hash_cursor) {
+            raxStop(&ri);
+            return 0;
+        }
+        if (++iterations > 128 && getMonotonicUs() > endtime) {
+            raxStop(&ri);
+            return 1;
+        }
+    }
+    raxStop(&ri);
+    sdsfree(radix_defrag_last_path);
+    radix_defrag_last_path = NULL;
+    radix_defrag_hash_cursor = 0;
+    *cursor = 0;
+    return 0;
+}
+
 /* optional callback used defrag each rax element (not including the element pointer itself) */
 typedef void *(raxDefragFunction)(raxIterator *ri, void *privdata);
 
@@ -570,6 +636,38 @@ static void defragRadixTree(rax **raxref, int defrag_data, raxDefragFunction *el
         if (newdata) raxSetData(ri.node, ri.data = newdata);
     }
     raxStop(&ri);
+}
+
+static void *defragRadixPayload(raxIterator *ri, void *privdata) {
+    UNUSED(privdata);
+    robj *payload = ri->data;
+    robj *newpayload = activeDefragAlloc(payload);
+    if (newpayload) payload = newpayload;
+
+    unsigned long cursor = 0;
+    do {
+        cursor = hashTypeScanDefrag(payload, cursor, activeDefragAlloc);
+    } while (cursor != 0);
+    return newpayload;
+}
+
+static void defragRadix(robj *ob) {
+    serverAssert(ob->type == OBJ_RADIX && ob->encoding == OBJ_ENCODING_RADIX);
+    radixObject *rt = objectGetVal(ob);
+    radixObject *newrt = activeDefragAlloc(rt);
+    if (newrt) {
+        objectSetVal(ob, newrt);
+        rt = newrt;
+    }
+
+    if (rt->num_paths > server.active_defrag_max_scan_fields ||
+        rt->num_fields > server.active_defrag_max_scan_fields) {
+        rax *newindex = activeDefragAlloc(rt->index);
+        if (newindex) rt->index = newindex;
+        defragLater(ob);
+    } else {
+        defragRadixTree(&rt->index, 0, defragRadixPayload, NULL);
+    }
 }
 
 typedef struct {
@@ -709,6 +807,8 @@ static void defragKey(defragKeysCtx *ctx, robj **elemref) {
         defragHash(ob);
     } else if (ob->type == OBJ_STREAM) {
         defragStream(ob);
+    } else if (ob->type == OBJ_RADIX) {
+        defragRadix(ob);
     } else if (ob->type == OBJ_MODULE) {
         defragModule(db, ob);
     } else {
@@ -775,6 +875,8 @@ static int defragLaterItem(robj *ob, unsigned long *cursor, monotime endtime, in
             scanLaterHash(ob, cursor);
         } else if (ob->type == OBJ_STREAM && ob->encoding == OBJ_ENCODING_STREAM) {
             return scanLaterStreamListpacks(ob, cursor, endtime);
+        } else if (ob->type == OBJ_RADIX && ob->encoding == OBJ_ENCODING_RADIX) {
+            return scanLaterRadix(ob, cursor, endtime);
         } else if (ob->type == OBJ_MODULE) {
             /* Fun fact (and a bug since forever): The key is passed to
              * moduleLateDefrag as an sds string, but the parameter is declared
@@ -784,9 +886,15 @@ static int defragLaterItem(robj *ob, unsigned long *cursor, monotime endtime, in
             void *sds_key_passed_as_robj = objectGetKey(ob);
             return moduleLateDefrag(sds_key_passed_as_robj, ob, cursor, endtime, dbid);
         } else {
+            sdsfree(radix_defrag_last_path);
+            radix_defrag_last_path = NULL;
+            radix_defrag_hash_cursor = 0;
             *cursor = 0; /* object type/encoding may have changed since we schedule it for later */
         }
     } else {
+        sdsfree(radix_defrag_last_path);
+        radix_defrag_last_path = NULL;
+        radix_defrag_hash_cursor = 0;
         *cursor = 0; /* object may have been deleted already */
     }
     return 0;

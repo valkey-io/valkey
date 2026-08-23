@@ -48,6 +48,16 @@ ValkeyModuleDict *module_event_log = NULL;
 
 /** Counts how many deleted KSN we got on keys with a prefix of "count_dels_" **/
 static size_t dels = 0;
+static size_t radix_events = 0;
+
+static int KeySpace_NotificationRadix(ValkeyModuleCtx *ctx, int type, const char *event, ValkeyModuleString *key) {
+    VALKEYMODULE_NOT_USED(ctx);
+    VALKEYMODULE_NOT_USED(event);
+    VALKEYMODULE_NOT_USED(key);
+    ValkeyModule_Assert(type == VALKEYMODULE_NOTIFY_RADIX);
+    radix_events++;
+    return VALKEYMODULE_OK;
+}
 
 static int KeySpace_NotificationLoaded(ValkeyModuleCtx *ctx, int type, const char *event, ValkeyModuleString *key){
     VALKEYMODULE_NOT_USED(ctx);
@@ -316,6 +326,22 @@ static int cmdGetDels(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc)
     return ValkeyModule_ReplyWithLongLong(ctx, dels);
 }
 
+static int cmdGetRadixEvents(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    VALKEYMODULE_NOT_USED(argv);
+    if (argc != 1) return ValkeyModule_WrongArity(ctx);
+    return ValkeyModule_ReplyWithLongLong(ctx, radix_events);
+}
+
+static int cmdKeyTypeLength(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    if (argc != 2) return ValkeyModule_WrongArity(ctx);
+    ValkeyModuleKey *key = ValkeyModule_OpenKey(ctx, argv[1], VALKEYMODULE_READ);
+    ValkeyModule_ReplyWithArray(ctx, 2);
+    ValkeyModule_ReplyWithLongLong(ctx, ValkeyModule_KeyType(key));
+    ValkeyModule_ReplyWithLongLong(ctx, ValkeyModule_ValueLength(key));
+    ValkeyModule_CloseKey(key);
+    return VALKEYMODULE_OK;
+}
+
 /* This function must be present on each module. It is used in order to
  * register the commands into the server. */
 int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
@@ -330,6 +356,9 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
 
     if (!(keySpaceAll & VALKEYMODULE_NOTIFY_LOADED)) {
         // VALKEYMODULE_NOTIFY_LOADED event are not supported we can not start
+        return VALKEYMODULE_ERR;
+    }
+    if (!(keySpaceAll & VALKEYMODULE_NOTIFY_RADIX)) {
         return VALKEYMODULE_ERR;
     }
 
@@ -358,6 +387,9 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
     }
 
     if(ValkeyModule_SubscribeToKeyspaceEvents(ctx, VALKEYMODULE_NOTIFY_STRING, KeySpace_NotificationModuleStringPostNotificationJob) != VALKEYMODULE_OK){
+        return VALKEYMODULE_ERR;
+    }
+    if (ValkeyModule_SubscribeToKeyspaceEvents(ctx, VALKEYMODULE_NOTIFY_RADIX, KeySpace_NotificationRadix) != VALKEYMODULE_OK) {
         return VALKEYMODULE_ERR;
     }
 
@@ -400,6 +432,14 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
 
     if (ValkeyModule_CreateCommand(ctx, "keyspace.get_dels", cmdGetDels,
                                   "readonly", 0, 0, 0) == VALKEYMODULE_ERR){
+        return VALKEYMODULE_ERR;
+    }
+    if (ValkeyModule_CreateCommand(ctx, "keyspace.get_radix_events", cmdGetRadixEvents,
+                                  "readonly", 0, 0, 0) == VALKEYMODULE_ERR){
+        return VALKEYMODULE_ERR;
+    }
+    if (ValkeyModule_CreateCommand(ctx, "keyspace.key_type_length", cmdKeyTypeLength,
+                                  "readonly", 1, 1, 1) == VALKEYMODULE_ERR){
         return VALKEYMODULE_ERR;
     }
 

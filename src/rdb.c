@@ -34,6 +34,7 @@
 
 #include "hashtable.h"
 #include "server.h"
+#include "radix.h"
 #include "ordered_index.h"
 #include "lzf.h" /* LZF compression library */
 #include "zipmap.h"
@@ -776,6 +777,7 @@ int rdbGetObjectType(robj *o, int rdbver) {
         else
             serverPanic("Unknown hash encoding");
     case OBJ_STREAM: return RDB_TYPE_STREAM_LISTPACKS_3;
+    case OBJ_RADIX: return rdbver >= 80 ? RDB_TYPE_RADIX : -1;
     case OBJ_MODULE: return RDB_TYPE_MODULE_2;
     default: serverPanic("Unknown object type");
     }
@@ -1055,6 +1057,57 @@ ssize_t rdbSaveObject(rio *rdb, robj *o, robj *key, int dbid, unsigned char rdbt
         } else {
             serverPanic("Unknown hash encoding");
         }
+    } else if (objectGetType(o) == OBJ_RADIX) {
+        radixObject *rt = objectGetVal(o);
+        serverAssert(objectGetEncoding(o) == OBJ_ENCODING_RADIX);
+        serverAssert(rt->num_paths == raxSize(rt->index));
+        if ((n = rdbSaveLen(rdb, rt->num_paths)) == -1) return -1;
+        nwritten += n;
+
+        raxIterator ri;
+        raxStart(&ri, rt->index);
+        raxSeek(&ri, "^", NULL, 0);
+        uint64_t saved_fields = 0;
+        while (raxNext(&ri)) {
+            robj *payload = ri.data;
+            uint64_t fields = hashTypeLength(payload);
+            serverAssert(fields > 0);
+            serverAssert(UINT64_MAX - saved_fields >= fields);
+            saved_fields += fields;
+            if ((n = rdbSaveRawString(rdb, ri.key, ri.key_len)) == -1) {
+                raxStop(&ri);
+                return -1;
+            }
+            nwritten += n;
+            if ((n = rdbSaveLen(rdb, fields)) == -1) {
+                raxStop(&ri);
+                return -1;
+            }
+            nwritten += n;
+
+            hashTypeIterator hi;
+            hashTypeInitIterator(payload, &hi);
+            while (hashTypeNext(&hi) != C_ERR) {
+                sds field = hashTypeCurrentObjectNewSds(&hi, OBJ_HASH_FIELD);
+                sds value = hashTypeCurrentObjectNewSds(&hi, OBJ_HASH_VALUE);
+                n = rdbSaveRawString(rdb, (unsigned char *)field, sdslen(field));
+                if (n != -1) nwritten += n;
+                if (n != -1) {
+                    n = rdbSaveRawString(rdb, (unsigned char *)value, sdslen(value));
+                    if (n != -1) nwritten += n;
+                }
+                sdsfree(field);
+                sdsfree(value);
+                if (n == -1) {
+                    hashTypeResetIterator(&hi);
+                    raxStop(&ri);
+                    return -1;
+                }
+            }
+            hashTypeResetIterator(&hi);
+        }
+        raxStop(&ri);
+        serverAssert(saved_fields == rt->num_fields);
     } else if (objectGetType(o) == OBJ_STREAM) {
         /* Store how many listpacks we have inside the radix tree. */
         stream *s = objectGetVal(o);
@@ -2694,6 +2747,90 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
             rdbReportCorruptRDB("Unknown RDB encoding type %d", rdbtype);
             break;
         }
+    } else if (rdbtype == RDB_TYPE_RADIX) {
+        uint64_t paths = rdbLoadLen(rdb, NULL);
+        if (paths == RDB_LENERR) {
+            rdbReportReadError("Radix path count loading failed.");
+            return NULL;
+        }
+        if (paths == 0) goto emptykey;
+        if (paths > SIZE_MAX) {
+            rdbReportCorruptRDB("Radix path count exceeds platform limits");
+            return NULL;
+        }
+
+        o = createRadixObject();
+        radixObject *rt = objectGetVal(o);
+        uint64_t total_fields = 0;
+        while (paths--) {
+            sds path = rdbGenericLoadStringObject(rdb, RDB_LOAD_SDS, NULL);
+            if (path == NULL) {
+                rdbReportReadError("Radix path loading failed.");
+                decrRefCount(o);
+                return NULL;
+            }
+
+            uint64_t fields = rdbLoadLen(rdb, NULL);
+            if (fields == RDB_LENERR) {
+                rdbReportReadError("Radix field count loading failed.");
+                sdsfree(path);
+                decrRefCount(o);
+                return NULL;
+            }
+            if (fields == 0 || fields > SIZE_MAX || fields > UINT64_MAX - total_fields) {
+                rdbReportCorruptRDB("Invalid radix field count");
+                sdsfree(path);
+                decrRefCount(o);
+                return NULL;
+            }
+
+            robj *payload = createHashObject();
+            for (uint64_t j = 0; j < fields; j++) {
+                sds field = rdbGenericLoadStringObject(rdb, RDB_LOAD_SDS, NULL);
+                if (field == NULL) {
+                    rdbReportReadError("Radix field loading failed.");
+                    decrRefCount(payload);
+                    sdsfree(path);
+                    decrRefCount(o);
+                    return NULL;
+                }
+                sds value = rdbGenericLoadStringObject(rdb, RDB_LOAD_SDS, NULL);
+                if (value == NULL) {
+                    rdbReportReadError("Radix value loading failed.");
+                    sdsfree(field);
+                    decrRefCount(payload);
+                    sdsfree(path);
+                    decrRefCount(o);
+                    return NULL;
+                }
+                if (hashTypeExists(payload, field)) {
+                    rdbReportCorruptRDB("Duplicate radix fields detected");
+                    sdsfree(field);
+                    sdsfree(value);
+                    decrRefCount(payload);
+                    sdsfree(path);
+                    decrRefCount(o);
+                    return NULL;
+                }
+                bool expired = false;
+                serverAssert(!hashTypeSet(payload, field, value, EXPIRY_NONE, HASH_SET_COPY, &expired));
+                serverAssert(!expired);
+                sdsfree(field);
+                sdsfree(value);
+            }
+
+            if (!raxTryInsert(rt->index, (unsigned char *)path, sdslen(path), payload, NULL)) {
+                rdbReportCorruptRDB("Duplicate radix paths detected");
+                decrRefCount(payload);
+                sdsfree(path);
+                decrRefCount(o);
+                return NULL;
+            }
+            sdsfree(path);
+            rt->num_paths++;
+            total_fields += fields;
+        }
+        rt->num_fields = total_fields;
     } else if (rdbtype == RDB_TYPE_STREAM_LISTPACKS || rdbtype == RDB_TYPE_STREAM_LISTPACKS_2 ||
                rdbtype == RDB_TYPE_STREAM_LISTPACKS_3) {
         o = createStreamObject();

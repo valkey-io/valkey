@@ -1,0 +1,22 @@
+{
+    "RMGET": {
+        "summary": "Returns multiple field values from an exact radix tree path.",
+        "complexity": "O(L + F*U), where F is the number of fields.",
+        "group": "radix",
+        "since": "9.0.0",
+        "arity": -4,
+        "function": "rmgetCommand",
+        "command_flags": ["READONLY", "FAST"],
+        "acl_categories": ["FAST", "RADIX", "READ"],
+        "key_specs": [{
+            "flags": ["RO", "ACCESS"],
+            "begin_search": {"index": {"pos": 1}},
+            "find_keys": {"range": {"lastkey": 0, "step": 1, "limit": 0}}
+        }],
+        "arguments": [
+            {"name": "key", "type": "key", "key_spec_index": 0},
+            {"name": "path", "type": "string"},
+            {"name": "field", "type": "string", "multiple": true}
+        ]
+    }
+}

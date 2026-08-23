@@ -35,6 +35,7 @@ following keys. To be safe, assume all of them are optional.
   * `"hyperloglog"`
   * `"list"`
   * `"pubsub"`
+  * `"radix"`
   * `"scripting"`
   * `"sentinel"`
   * `"server"`
@@ -88,6 +89,7 @@ following keys. To be safe, assume all of them are optional.
   * `"HYPERLOGLOG"`
   * `"KEYSPACE"`
   * `"LIST"`
+  * `"RADIX"`
   * `"SCRIPTING"`
   * `"SET"`
   * `"SORTEDSET"`

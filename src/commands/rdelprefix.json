@@ -1,0 +1,21 @@
+{
+    "RDELPREFIX": {
+        "summary": "Deletes all radix tree paths under a prefix.",
+        "complexity": "O(L + N), where N is the number of deleted paths.",
+        "group": "radix",
+        "since": "9.0.0",
+        "arity": 3,
+        "function": "rdelprefixCommand",
+        "command_flags": ["WRITE"],
+        "acl_categories": ["RADIX", "WRITE", "SLOW"],
+        "key_specs": [{
+            "flags": ["RW", "UPDATE"],
+            "begin_search": {"index": {"pos": 1}},
+            "find_keys": {"range": {"lastkey": 0, "step": 1, "limit": 0}}
+        }],
+        "arguments": [
+            {"name": "key", "type": "key", "key_spec_index": 0},
+            {"name": "prefix", "type": "string"}
+        ]
+    }
+}

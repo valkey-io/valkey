@@ -59,6 +59,7 @@ int keyspaceEventsStringToFlags(char *classes) {
         case 'm': flags |= NOTIFY_KEY_MISS; break;
         case 'd': flags |= NOTIFY_MODULE; break;
         case 'n': flags |= NOTIFY_NEW; break;
+        case 'r': flags |= NOTIFY_RADIX; break;
         default: return -1;
         }
     }
@@ -87,6 +88,7 @@ sds keyspaceEventsFlagsToString(int flags) {
         if (flags & NOTIFY_STREAM) res = sdscatlen(res, "t", 1);
         if (flags & NOTIFY_MODULE) res = sdscatlen(res, "d", 1);
         if (flags & NOTIFY_NEW) res = sdscatlen(res, "n", 1);
+        if (flags & NOTIFY_RADIX) res = sdscatlen(res, "r", 1);
     }
     if (flags & NOTIFY_KEYSPACE) res = sdscatlen(res, "K", 1);
     if (flags & NOTIFY_KEYEVENT) res = sdscatlen(res, "E", 1);
@@ -108,7 +110,8 @@ void notifyKeyspaceEvent(int type, char *event, robj *key, int dbid) {
     char buf[24];
     client *c = server.executing_client;
     debugServerAssert(moduleNotifyKeyspaceSubscribersCnt() == 0 ||
-                      (type & (NOTIFY_GENERIC | NOTIFY_STRING | NOTIFY_LIST | NOTIFY_SET | NOTIFY_HASH | NOTIFY_ZSET | NOTIFY_STREAM)) == 0 ||
+                      (type & (NOTIFY_GENERIC | NOTIFY_STRING | NOTIFY_LIST | NOTIFY_SET | NOTIFY_HASH | NOTIFY_ZSET |
+                               NOTIFY_STREAM | NOTIFY_RADIX)) == 0 ||
                       c == NULL ||
                       c->cmd == NULL ||
                       (c->cmd->flags & CMD_WRITE) == 0 ||

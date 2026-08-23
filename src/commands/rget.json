@@ -1,0 +1,22 @@
+{
+    "RGET": {
+        "summary": "Returns a field value from an exact radix tree path.",
+        "complexity": "O(L + U), where L is the path length and U is the payload lookup cost.",
+        "group": "radix",
+        "since": "9.0.0",
+        "arity": 4,
+        "function": "rgetCommand",
+        "command_flags": ["READONLY", "FAST"],
+        "acl_categories": ["FAST", "RADIX", "READ"],
+        "key_specs": [{
+            "flags": ["RO", "ACCESS"],
+            "begin_search": {"index": {"pos": 1}},
+            "find_keys": {"range": {"lastkey": 0, "step": 1, "limit": 0}}
+        }],
+        "arguments": [
+            {"name": "key", "type": "key", "key_spec_index": 0},
+            {"name": "path", "type": "string"},
+            {"name": "field", "type": "string"}
+        ]
+    }
+}

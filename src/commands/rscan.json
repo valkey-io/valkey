@@ -1,0 +1,24 @@
+{
+    "RSCAN": {
+        "summary": "Incrementally iterates over radix tree paths.",
+        "complexity": "O(L + C + N) for each call.",
+        "group": "radix",
+        "since": "9.0.0",
+        "arity": -3,
+        "function": "rscanCommand",
+        "command_flags": ["READONLY"],
+        "acl_categories": ["RADIX", "READ", "SLOW"],
+        "key_specs": [{
+            "flags": ["RO", "ACCESS"],
+            "begin_search": {"index": {"pos": 1}},
+            "find_keys": {"range": {"lastkey": 0, "step": 1, "limit": 0}}
+        }],
+        "arguments": [
+            {"name": "key", "type": "key", "key_spec_index": 0},
+            {"name": "cursor", "type": "string"},
+            {"name": "prefix", "type": "string", "token": "PREFIX", "optional": true},
+            {"name": "count", "type": "integer", "token": "COUNT", "optional": true},
+            {"name": "withvalues", "type": "pure-token", "token": "WITHVALUES", "optional": true}
+        ]
+    }
+}

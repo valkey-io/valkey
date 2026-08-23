@@ -1,0 +1,29 @@
+{
+    "RLONGEST": {
+        "summary": "Returns the longest stored radix path that prefixes a query.",
+        "complexity": "O(L + N), where L is the query length and N is returned payload data.",
+        "group": "radix",
+        "since": "9.0.0",
+        "arity": -3,
+        "function": "rlongestCommand",
+        "command_flags": ["READONLY"],
+        "acl_categories": ["RADIX", "READ", "SLOW"],
+        "key_specs": [{
+            "flags": ["RO", "ACCESS"],
+            "begin_search": {"index": {"pos": 1}},
+            "find_keys": {"range": {"lastkey": 0, "step": 1, "limit": 0}}
+        }],
+        "arguments": [
+            {"name": "key", "type": "key", "key_spec_index": 0},
+            {"name": "query", "type": "string"},
+            {"name": "length", "type": "pure-token", "token": "LENGTH", "optional": true},
+            {"name": "values", "type": "oneof", "optional": true, "arguments": [
+                {"name": "withvalues", "type": "pure-token", "token": "WITHVALUES"},
+                {"name": "fields", "type": "block", "arguments": [
+                    {"name": "numfields", "type": "integer", "token": "FIELDS"},
+                    {"name": "field", "type": "string", "multiple": true}
+                ]}
+            ]}
+        ]
+    }
+}

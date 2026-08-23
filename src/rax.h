@@ -165,6 +165,23 @@ typedef struct raxStack {
  * This is currently only supported in forward iterations (raxNext) */
 typedef int (*raxNodeCallback)(raxNode **noderef);
 
+/* Callback invoked by raxForEachPrefix() once for every stored key that is a
+ * prefix of the queried string.
+ *
+ * 'key' points inside the query buffer passed to raxForEachPrefix(), and the
+ * matching key is exactly its first 'key_len' bytes: no copy is performed and
+ * the buffer is not NUL terminated, so 'key_len' must always be honored. When
+ * the stored key is the empty string, 'key_len' is 0 and 'key' is just the
+ * query pointer, that may well be NULL.
+ *
+ * 'value' is the value associated with the key, and is NULL both when the key
+ * was stored with a NULL value and when it was stored with no value at all:
+ * the callback being invoked at all is what tells the key exists.
+ *
+ * The callback must return a non-zero value to continue the iteration, or
+ * zero in order to stop it. */
+typedef int (*raxPrefixCallback)(unsigned char *key, size_t key_len, void *value, void *privdata);
+
 /* Radix tree iterator state is encapsulated into this data structure. */
 #define RAX_ITER_STATIC_LEN 128
 #define RAX_ITER_JUST_SEEKED (1 << 0) /* Iterator was just seeked. Return current \
@@ -192,6 +209,8 @@ int raxInsert(rax *rax, unsigned char *s, size_t len, void *data, void **old);
 int raxTryInsert(rax *rax, unsigned char *s, size_t len, void *data, void **old);
 int raxRemove(rax *rax, unsigned char *s, size_t len, void **old);
 int raxFind(rax *rax, unsigned char *s, size_t len, void **value);
+int raxFindLongestPrefix(rax *rax, unsigned char *s, size_t len, size_t *prefix_len, void **value);
+size_t raxForEachPrefix(rax *rax, unsigned char *s, size_t len, raxPrefixCallback cb, void *privdata);
 void raxFree(rax *rax);
 void raxFreeWithCallback(rax *rax, void (*free_callback)(void *));
 void raxStart(raxIterator *it, rax *rt);

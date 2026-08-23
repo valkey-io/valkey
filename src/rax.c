@@ -919,6 +919,113 @@ int raxFind(rax *rax, unsigned char *s, size_t len, void **value) {
     return 1;
 }
 
+/* Single pass walk of the tree along the query string 's' of 'len' bytes,
+ * visiting every node that represents a prefix of the query, and reporting
+ * each of those nodes that stores a key.
+ *
+ * This is the shared engine of raxFindLongestPrefix() and raxForEachPrefix():
+ * matches are reported in strictly increasing prefix length, so the last one
+ * reported is always the longest.
+ *
+ * If 'cb' is not NULL it is invoked for every match, and the walk is
+ * interrupted as soon as it returns zero. If 'prefix_len' and/or 'value' are
+ * not NULL they are overwritten at every match with, respectively, the length
+ * of the matching key and its associated value, so that once the walk is over
+ * they describe the last (longest) match. They are left untouched when there
+ * is no match at all.
+ *
+ * The number of matches reported is returned. The walk never allocates, so it
+ * can't fail: the keys are not materialized since a key matching the query is
+ * by definition just a prefix of 's' itself. */
+static inline size_t raxLowWalkPrefixes(rax *rax,
+                                        unsigned char *s,
+                                        size_t len,
+                                        raxPrefixCallback cb,
+                                        void *privdata,
+                                        size_t *prefix_len,
+                                        void **value) {
+    raxNode *h = rax->head;
+    /* Number of query bytes consumed so far: 'h' is always the node reached by
+     * walking the prefix s[0..i). */
+    size_t i = 0;
+    size_t matches = 0;
+
+    while (1) {
+        debugnode("Prefix walk current node", h);
+        /* A node is reached after consuming exactly the query bytes of the
+         * prefix it represents, so if it holds a key, that key is s[0..i).
+         * This correctly covers the empty key stored in the root node, and
+         * keys stored in internal nodes that also have children. */
+        if (h->iskey) {
+            void *data = raxGetData(h); /* NULL both for NULL and absent values. */
+            matches++;
+            if (prefix_len) *prefix_len = i;
+            if (value) *value = data;
+            if (cb && cb(s, i, data, privdata) == 0) break;
+        }
+
+        /* Stop once the query is exhausted or we reached a leaf node. */
+        if (i == len || h->size == 0) break;
+
+        unsigned char *v = h->data;
+        size_t j;
+        if (h->iscompr) {
+            /* All the characters of a compressed node but the last one belong
+             * to nodes that are not materialized, and that by construction
+             * can't hold a key. So unless the whole chunk matches the query
+             * there is no further prefix to report. */
+            for (j = 0; j < h->size && i < len; j++, i++) {
+                if (v[j] != s[i]) break;
+            }
+            if (j != h->size) break;
+            j = 0; /* The only child of a compressed node is at index 0. */
+        } else {
+            unsigned char *p = memchr(v, s[i], h->size);
+            if (p == NULL) break;
+            j = (size_t)(p - v);
+            i++;
+        }
+
+        raxNode **children = raxNodeFirstChildPtr(h);
+        memcpy(&h, children + j, sizeof(h));
+    }
+    return matches;
+}
+
+/* Look for the longest key stored in the rax that is a prefix of the string
+ * 's' of 'len' bytes: return 1 if such a key exists, 0 otherwise. A key equal
+ * to the query counts as a prefix of it, and the empty key, when stored, is a
+ * prefix of every query, including the empty one.
+ *
+ * On success, if 'prefix_len' is not NULL the length of the matching key is
+ * stored at that address, and if 'value' is not NULL the associated value is
+ * stored at that address. Note that the value is NULL for keys stored with a
+ * NULL value, so only the return value of this function can be used in order
+ * to tell a match apart from a miss. When there is no match both output
+ * arguments are left untouched.
+ *
+ * The lookup is performed in a single descent of the tree, so the time
+ * complexity is O(len) regardless of how many keys are a prefix of 's'. */
+int raxFindLongestPrefix(rax *rax, unsigned char *s, size_t len, size_t *prefix_len, void **value) {
+    debugf("### Longest prefix lookup: %.*s\n", (int)len, s);
+    return raxLowWalkPrefixes(rax, s, len, NULL, NULL, prefix_len, value) != 0;
+}
+
+/* Invoke 'cb' once for every key stored in the rax that is a prefix of the
+ * string 's' of 'len' bytes, from the shortest to the longest one. A key equal
+ * to the query is reported as well, and so is the empty key when stored.
+ *
+ * The number of times the callback was invoked is returned, including the
+ * invocation that asked to stop the iteration by returning zero. Passing a
+ * NULL callback is a valid way to just count the matching keys.
+ *
+ * The whole iteration is a single descent of the tree and never allocates, so
+ * the time complexity is O(len) plus the cost of the callbacks. */
+size_t raxForEachPrefix(rax *rax, unsigned char *s, size_t len, raxPrefixCallback cb, void *privdata) {
+    debugf("### All prefixes lookup: %.*s\n", (int)len, s);
+    return raxLowWalkPrefixes(rax, s, len, cb, privdata, NULL, NULL);
+}
+
 /* Return the memory address where the 'parent' node stores the specified
  * 'child' pointer, so that the caller can update the pointer with another
  * one if needed. The function assumes it will find a match, otherwise the

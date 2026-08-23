@@ -56,6 +56,7 @@
  * function names. For details, see the script src/modules/gendoc.rb.
  * -------------------------------------------------------------------------- */
 #include "server.h"
+#include "radix.h"
 #include "ordered_index.h"
 #include "cluster.h"
 #include "commandlog.h"
@@ -835,6 +836,7 @@ int moduleDelKeyIfEmpty(ValkeyModuleKey *key) {
     case OBJ_ZSET: isempty = zsetLength(o) == 0; break;
     case OBJ_HASH: isempty = hashTypeLength(o) == 0; break;
     case OBJ_STREAM: isempty = streamLength(o) == 0; break;
+    case OBJ_RADIX: isempty = ((radixObject *)objectGetVal(o))->num_paths == 0; break;
     default: isempty = 0;
     }
 
@@ -4386,6 +4388,7 @@ int VM_KeyType(ValkeyModuleKey *key) {
     case OBJ_HASH: return VALKEYMODULE_KEYTYPE_HASH;
     case OBJ_MODULE: return VALKEYMODULE_KEYTYPE_MODULE;
     case OBJ_STREAM: return VALKEYMODULE_KEYTYPE_STREAM;
+    case OBJ_RADIX: return VALKEYMODULE_KEYTYPE_RADIX;
     default: return VALKEYMODULE_KEYTYPE_EMPTY;
     }
 }
@@ -4404,6 +4407,7 @@ size_t VM_ValueLength(ValkeyModuleKey *key) {
     case OBJ_ZSET: return zsetLength(key->value);
     case OBJ_HASH: return hashTypeLength(key->value);
     case OBJ_STREAM: return streamLength(key->value);
+    case OBJ_RADIX: return ((radixObject *)objectGetVal(key->value))->num_paths;
     default: return 0;
     }
 }
@@ -9358,6 +9362,7 @@ void moduleReleaseGIL(void) {
  *  - VALKEYMODULE_NOTIFY_EXPIRED: Expiration events
  *  - VALKEYMODULE_NOTIFY_EVICTED: Eviction events
  *  - VALKEYMODULE_NOTIFY_STREAM: Stream events
+ *  - VALKEYMODULE_NOTIFY_RADIX: Radix tree events
  *  - VALKEYMODULE_NOTIFY_MODULE: Module types events
  *  - VALKEYMODULE_NOTIFY_KEYMISS: Key-miss events
  *                                Notice, key-miss event is the only type

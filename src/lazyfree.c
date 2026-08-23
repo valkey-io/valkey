@@ -1,4 +1,5 @@
 #include "server.h"
+#include "radix.h"
 #include "ordered_index.h"
 #include "bio.h"
 #include "functions.h"
@@ -148,6 +149,13 @@ size_t lazyfreeGetFreeEffort(robj *key, robj *obj, int dbid) {
     } else if (obj->type == OBJ_HASH && obj->encoding == OBJ_ENCODING_HASHTABLE) {
         hashtable *ht = objectGetVal(obj);
         return hashtableSize(ht);
+    } else if (obj->type == OBJ_RADIX) {
+        radixObject *rt = objectGetVal(obj);
+        uint64_t effort = rt->index->numnodes;
+        if (UINT64_MAX - effort < rt->num_paths) return SIZE_MAX;
+        effort += rt->num_paths;
+        if (UINT64_MAX - effort < rt->num_fields || effort + rt->num_fields > SIZE_MAX) return SIZE_MAX;
+        return effort + rt->num_fields;
     } else if (obj->type == OBJ_STREAM) {
         size_t effort = 0;
         stream *s = objectGetVal(obj);

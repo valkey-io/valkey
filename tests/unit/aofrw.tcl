@@ -165,6 +165,24 @@ start_server {tags {"aofrw external:skip"} overrides {aof-use-rdb-preamble no}} 
         }
     }
 
+    test {AOF rewrite and replay preserve radix paths and payloads} {
+        r flushall
+        set binary_path "a\x00b"
+        set binary_field "f\x00x"
+        set binary_value "v\x00z"
+        r rset radix {} root {}
+        r rset radix $binary_path $binary_field $binary_value
+        r rset radix abc one 1
+        r rset radix abc two 2
+        set digest [debug_digest]
+        r bgrewriteaof
+        waitForBgrewriteaof r
+        r debug loadaof
+        assert_equal $digest [debug_digest]
+        assert_equal $binary_value [r rget radix $binary_path $binary_field]
+        assert_equal [dict create one 1 two 2] [dict create {*}[r rgetall radix abc]]
+    }
+
     foreach d {string int} {
         foreach e {listpack btree} {
             test "AOF rewrite of zset with $e encoding, $d data" {

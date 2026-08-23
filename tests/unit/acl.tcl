@@ -630,11 +630,21 @@ start_server {tags {"acl external:skip"}} {
         set categories [r acl cat]
         assert_not_equal [lsearch $categories "keyspace"] -1
         assert_not_equal [lsearch $categories "connection"] -1
+        assert_not_equal [lsearch $categories "radix"] -1
     }
 
     test "ACL CAT category - list all commands/subcommands that belong to category" {
         assert_not_equal [lsearch [r acl cat transaction] "multi"] -1
         assert_not_equal [lsearch [r acl cat scripting] "function|list"] -1
+        set radix_commands [r acl cat radix]
+        foreach command {rcard rdel rdelprefix rget rgetall rlongest rmget rprefixes rscan rset} {
+            assert_not_equal [lsearch $radix_commands $command] -1
+        }
+        assert_equal [lsearch $radix_commands hset] -1
+        r ACL SETUSER radix-user on nopass -@all +@radix ~*
+        assert_equal OK [r ACL DRYRUN radix-user RSET key path field value]
+        assert_match {*has no permissions*} [r ACL DRYRUN radix-user HSET key field value]
+        r ACL DELUSER radix-user
 
         # Negative check to make sure it doesn't actually return all commands.
         assert_equal [lsearch [r acl cat keyspace] "set"] -1

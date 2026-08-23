@@ -360,6 +360,23 @@ foreach {type large} [array get largevalue] {
         r config set hash-max-ziplist-entries $original_max
     }
 
+    test {COPY deep-copies radix paths and payloads} {
+        r del radix{t} newradix{t}
+        r rset radix{t} {} root empty
+        r rset radix{t} ab field one
+        r rset radix{t} ab second two
+        r rset radix{t} abc child three
+        assert_equal 1 [r copy radix{t} newradix{t}]
+        set digest [debug_digest_value radix{t}]
+        assert_equal $digest [debug_digest_value newradix{t}]
+        r rset radix{t} ab field changed
+        r rdel radix{t} abc
+        assert_equal one [r rget newradix{t} ab field]
+        assert_equal three [r rget newradix{t} abc child]
+        r del radix{t}
+        assert_equal $digest [debug_digest_value newradix{t}]
+    }
+
     test {COPY basic usage for stream} {
         r del mystream{t} mynewstream{t}
         for {set i 0} {$i < 1000} {incr i} {

@@ -8,6 +8,20 @@ start_server {tags {"dump"}} {
         list [r exists foo] [r restore foo 0 $encoded] [r ttl foo] [r get foo]
     } {0 OK -1 bar}
 
+    test {DUMP / RESTORE preserve radix paths and payloads} {
+        set binary_path "a\x00b"
+        set binary_field "f\x00x"
+        set binary_value "v\x00z"
+        r rset radix {} root {}
+        r rset radix $binary_path $binary_field $binary_value
+        set encoded [r dump radix]
+        r del radix
+        assert_equal OK [r restore radix 0 $encoded]
+        assert_equal {} [r rget radix {} root]
+        assert_equal $binary_value [r rget radix $binary_path $binary_field]
+        assert_equal 2 [r rcard radix]
+    }
+
     test {RESTORE can set an arbitrary expire to the materialized key} {
         r set foo bar
         set encoded [r dump foo]

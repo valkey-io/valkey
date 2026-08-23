@@ -29,6 +29,7 @@
 
 #include "mt19937-64.h"
 #include "server.h"
+#include "radix.h"
 #include "ordered_index.h"
 #include "rdb.h"
 #include "module.h"
@@ -165,12 +166,13 @@ char *rdb_type_string[] = {
     "set-listpack",
     "stream-v3",
     "hash-volatile-items",
+    "radix",
 };
 
 static_assert(sizeof(rdb_type_string) / sizeof(rdb_type_string[0]) == RDB_TYPE_LAST, "Mismatch between enum and string table");
 
 char *type_name[OBJ_TYPE_MAX] = {"string", "list", "set", "zset", "hash", "module", /* module type is special */
-                                 "stream"};
+                                 "stream", "radix"};
 
 /********************** Rdb stats **********************/
 void statsRecordCount(size_t eleCount, rdbStats *stats) {
@@ -374,6 +376,28 @@ void computeDatasetProfile(int dbid, robj *keyobj, robj *o, long long expiretime
         }
         hashTypeResetIterator(&hi);
         statsRecordCount(hashTypeLength(o), stats);
+    } else if (o->type == OBJ_RADIX) {
+        radixObject *rt = objectGetVal(o);
+        raxIterator ri;
+        raxStart(&ri, rt->index);
+        raxSeek(&ri, "^", NULL, 0);
+        while (raxNext(&ri)) {
+            size_t element_size = ri.key_len;
+            robj *payload = ri.data;
+            hashTypeIterator hi;
+            hashTypeInitIterator(payload, &hi);
+            while (hashTypeNext(&hi) != C_ERR) {
+                sds field = hashTypeCurrentObjectNewSds(&hi, OBJ_HASH_FIELD);
+                sds value = hashTypeCurrentObjectNewSds(&hi, OBJ_HASH_VALUE);
+                element_size += sdslen(field) + sdslen(value);
+                sdsfree(field);
+                sdsfree(value);
+            }
+            hashTypeResetIterator(&hi);
+            statsRecordElementSize(element_size, 1, stats);
+        }
+        raxStop(&ri);
+        statsRecordCount(rt->num_paths, stats);
     } else if (o->type == OBJ_STREAM) {
         streamIterator si;
         streamIteratorStart(&si, objectGetVal(o), NULL, NULL, 0);

@@ -1,0 +1,22 @@
+{
+    "RDEL": {
+        "summary": "Deletes fields or an entire payload from a radix tree path.",
+        "complexity": "O(L + F*U), where F is the number of fields.",
+        "group": "radix",
+        "since": "9.0.0",
+        "arity": -3,
+        "function": "rdelCommand",
+        "command_flags": ["WRITE", "FAST"],
+        "acl_categories": ["FAST", "RADIX", "WRITE"],
+        "key_specs": [{
+            "flags": ["RW", "UPDATE"],
+            "begin_search": {"index": {"pos": 1}},
+            "find_keys": {"range": {"lastkey": 0, "step": 1, "limit": 0}}
+        }],
+        "arguments": [
+            {"name": "key", "type": "key", "key_spec_index": 0},
+            {"name": "path", "type": "string"},
+            {"name": "field", "type": "string", "optional": true, "multiple": true}
+        ]
+    }
+}

@@ -28,6 +28,7 @@
  */
 
 #include "server.h"
+#include "radix.h"
 #include "ordered_index.h"
 #include "bio.h"
 #include "rio.h"
@@ -2140,6 +2141,34 @@ int rewriteHashObject(rio *r, robj *key, robj *o) {
     return 1;
 }
 
+/* Emit one RSET command for every field stored at every radix path. */
+int rewriteRadixObject(rio *r, robj *key, robj *o) {
+    radixObject *rt = objectGetVal(o);
+    raxIterator ri;
+    raxStart(&ri, rt->index);
+    raxSeek(&ri, "^", NULL, 0);
+    while (raxNext(&ri)) {
+        robj *payload = ri.data;
+        hashTypeIterator hi;
+        hashTypeInitIterator(payload, &hi);
+        while (hashTypeNext(&hi) != C_ERR) {
+            if (!rioWriteBulkCount(r, '*', 5) ||
+                !rioWriteBulkString(r, "RSET", 4) ||
+                !rioWriteBulkObject(r, key) ||
+                !rioWriteBulkString(r, (char *)ri.key, ri.key_len) ||
+                !rioWriteHashIteratorCursor(r, &hi, OBJ_HASH_FIELD) ||
+                !rioWriteHashIteratorCursor(r, &hi, OBJ_HASH_VALUE)) {
+                hashTypeResetIterator(&hi);
+                raxStop(&ri);
+                return 0;
+            }
+        }
+        hashTypeResetIterator(&hi);
+    }
+    raxStop(&ri);
+    return 1;
+}
+
 /* Helper for rewriteStreamObject() that generates a bulk string into the
  * AOF representing the ID 'id'. */
 int rioWriteBulkStreamID(rio *r, streamID *id) {
@@ -2390,6 +2419,8 @@ int rewriteObjectRio(rio *aof, robj *o, int db_num) {
         if (rewriteHashObject(aof, &key, o) == 0) return C_ERR;
     } else if (objectGetType(o) == OBJ_STREAM) {
         if (rewriteStreamObject(aof, &key, o) == 0) return C_ERR;
+    } else if (objectGetType(o) == OBJ_RADIX) {
+        if (rewriteRadixObject(aof, &key, o) == 0) return C_ERR;
     } else if (objectGetType(o) == OBJ_MODULE) {
         if (rewriteModuleObject(aof, &key, o, db_num) == 0) return C_ERR;
     } else {

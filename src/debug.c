@@ -28,6 +28,7 @@
  */
 
 #include "server.h"
+#include "radix.h"
 #include "ordered_index.h"
 #include "util.h"
 #include "sha1.h" /* SHA1 is used for DEBUG DIGEST */
@@ -253,6 +254,33 @@ void xorObjectDigest(serverDb *db, robj *keyobj, unsigned char *digest, robj *o)
             xorDigest(digest, eledigest, 20);
         }
         hashTypeResetIterator(&hi);
+    } else if (objectGetType(o) == OBJ_RADIX) {
+        radixObject *rt = objectGetVal(o);
+        raxIterator ri;
+        raxStart(&ri, rt->index);
+        raxSeek(&ri, "^", NULL, 0);
+        while (raxNext(&ri)) {
+            unsigned char pathdigest[20] = {0};
+            unsigned char payloaddigest[20] = {0};
+            mixDigest(pathdigest, ri.key, ri.key_len);
+
+            hashTypeIterator hi;
+            hashTypeInitIterator(ri.data, &hi);
+            while (hashTypeNext(&hi) != C_ERR) {
+                unsigned char fielddigest[20] = {0};
+                sds field = hashTypeCurrentObjectNewSds(&hi, OBJ_HASH_FIELD);
+                sds value = hashTypeCurrentObjectNewSds(&hi, OBJ_HASH_VALUE);
+                mixDigest(fielddigest, field, sdslen(field));
+                mixDigest(fielddigest, value, sdslen(value));
+                xorDigest(payloaddigest, fielddigest, sizeof(fielddigest));
+                sdsfree(field);
+                sdsfree(value);
+            }
+            hashTypeResetIterator(&hi);
+            mixDigest(pathdigest, payloaddigest, sizeof(payloaddigest));
+            xorDigest(digest, pathdigest, sizeof(pathdigest));
+        }
+        raxStop(&ri);
     } else if (objectGetType(o) == OBJ_STREAM) {
         streamIterator si;
         streamIteratorStart(&si, objectGetVal(o), NULL, NULL, 0);
@@ -1221,6 +1249,12 @@ void serverLogObjectDebugInfo(const robj *o) {
         }
     } else if (objectGetType(o) == OBJ_STREAM) {
         serverLog(LL_WARNING, "Stream size: %d", (int)streamLength(o));
+    } else if (objectGetType(o) == OBJ_RADIX) {
+        radixObject *rt = objectGetVal(o);
+        serverLog(LL_WARNING,
+                  "Radix paths: %llu, fields: %llu",
+                  (unsigned long long)rt->num_paths,
+                  (unsigned long long)rt->num_fields);
     }
 #endif
 }

@@ -39,6 +39,7 @@
 #include "zmalloc.h"
 #include "sds.h"
 #include "module.h"
+#include "radix.h"
 #include <math.h>
 #include <ctype.h>
 
@@ -577,6 +578,16 @@ robj *createStreamObject(void) {
     return o;
 }
 
+robj *createRadixObject(void) {
+    radixObject *rt = zmalloc(sizeof(*rt));
+    rt->index = raxNew();
+    rt->num_paths = 0;
+    rt->num_fields = 0;
+    robj *o = createObject(OBJ_RADIX, rt);
+    objectSetEncoding(o, OBJ_ENCODING_RADIX);
+    return o;
+}
+
 robj *createModuleObject(moduleType *mt, void *value) {
     moduleValue *mv = zmalloc(sizeof(*mv));
     mv->type = mt;
@@ -644,6 +655,35 @@ void freeStreamObject(robj *o) {
     freeStream(objectGetVal(o));
 }
 
+static void freeRadixPayload(void *payload) {
+    decrRefCount(payload);
+}
+
+void freeRadixObject(robj *o) {
+    radixObject *rt = objectGetVal(o);
+    raxFreeWithCallback(rt->index, freeRadixPayload);
+    zfree(rt);
+}
+
+robj *radixTypeDup(robj *o) {
+    serverAssert(objectGetType(o) == OBJ_RADIX && objectGetEncoding(o) == OBJ_ENCODING_RADIX);
+    radixObject *rt = objectGetVal(o);
+    robj *copy = createRadixObject();
+    radixObject *copy_rt = objectGetVal(copy);
+
+    raxIterator ri;
+    raxStart(&ri, rt->index);
+    raxSeek(&ri, "^", NULL, 0);
+    while (raxNext(&ri)) {
+        robj *payload = hashTypeDup(ri.data);
+        serverAssert(raxInsert(copy_rt->index, ri.key, ri.key_len, payload, NULL));
+    }
+    raxStop(&ri);
+    copy_rt->num_paths = rt->num_paths;
+    copy_rt->num_fields = rt->num_fields;
+    return copy;
+}
+
 void incrRefCount(robj *o) {
     if (objectGetRefcount(o) < OBJ_FIRST_SPECIAL_REFCOUNT) {
         o->refcount++;
@@ -667,6 +707,7 @@ void decrRefCount(robj *o) {
             case OBJ_HASH: freeHashObject(o); break;
             case OBJ_MODULE: freeModuleObject(o); break;
             case OBJ_STREAM: freeStreamObject(o); break;
+            case OBJ_RADIX: freeRadixObject(o); break;
             default: serverPanic("Unknown object type"); break;
             }
         }
@@ -792,6 +833,19 @@ void dismissHashObject(robj *o, size_t size_hint) {
     }
 }
 
+void dismissRadixObject(robj *o, size_t size_hint) {
+    radixObject *rt = objectGetVal(o);
+    if (rt->num_paths == 0 || size_hint / rt->num_paths < server.page_size) return;
+
+    raxIterator ri;
+    raxStart(&ri, rt->index);
+    raxSeek(&ri, "^", NULL, 0);
+    while (raxNext(&ri)) {
+        dismissHashObject(ri.data, size_hint / rt->num_paths);
+    }
+    raxStop(&ri);
+}
+
 /* See dismissObject() */
 void dismissStreamObject(robj *o, size_t size_hint) {
     stream *s = objectGetVal(o);
@@ -840,6 +894,7 @@ void dismissObject(robj *o, size_t size_hint) {
     case OBJ_ZSET: dismissZsetObject(o, size_hint); break;
     case OBJ_HASH: dismissHashObject(o, size_hint); break;
     case OBJ_STREAM: dismissStreamObject(o, size_hint); break;
+    case OBJ_RADIX: dismissRadixObject(o, size_hint); break;
     default: break;
     }
 #else
@@ -1206,6 +1261,7 @@ char *strEncoding(int encoding) {
     case OBJ_ENCODING_BTREE: return "btree";
     case OBJ_ENCODING_EMBSTR: return "embstr";
     case OBJ_ENCODING_STREAM: return "stream";
+    case OBJ_ENCODING_RADIX: return "radix";
     default: return "unknown";
     }
 }
@@ -1307,6 +1363,21 @@ size_t objectComputeSize(robj *key, robj *o, size_t sample_size, int dbid) {
         } else {
             serverPanic("Unknown hash encoding");
         }
+    } else if (objectGetType(o) == OBJ_RADIX) {
+        radixObject *rt = objectGetVal(o);
+        asize += zmalloc_size(rt);
+        asize += raxAllocSize(rt->index);
+
+        raxIterator ri;
+        raxStart(&ri, rt->index);
+        raxSeek(&ri, "^", NULL, 0);
+        size_t payload_size = 0;
+        while (samples < sample_size && raxNext(&ri)) {
+            payload_size += objectComputeSize(NULL, ri.data, sample_size, dbid);
+            samples++;
+        }
+        raxStop(&ri);
+        if (samples) asize += (double)payload_size / samples * rt->num_paths;
     } else if (objectGetType(o) == OBJ_STREAM) {
         stream *s = objectGetVal(o);
         asize += sizeof(*s);

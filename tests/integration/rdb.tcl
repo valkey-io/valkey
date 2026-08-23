@@ -144,6 +144,21 @@ start_server [list overrides [list "dir" $server_path] keep_persistence true] {
     }
     # delete the stream, maybe valgrind will find something
     r del stream
+
+    test {RDB reload preserves radix paths and payloads} {
+        set binary_path "a\x00b"
+        set binary_field "f\x00x"
+        set binary_value "v\x00z"
+        r rset radix {} root {}
+        r rset radix $binary_path $binary_field $binary_value
+        r rset radix abc other value
+        set digest [debug_digest]
+        r debug reload
+        assert_equal $digest [debug_digest]
+        assert_equal {} [r rget radix {} root]
+        assert_equal $binary_value [r rget radix $binary_path $binary_field]
+        assert_equal value [r rget radix abc other]
+    }
 }
 
 set dump_path [file join $server_path dump.rdb]

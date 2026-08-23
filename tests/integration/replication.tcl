@@ -99,9 +99,17 @@ start_server {tags {"repl external:skip"}} {
             assert_equal [$A debug digest] [$B debug digest]
         }
 
-        test {INCREX with EX propagates the correct TTL to replica} {
+        test {INCREX byint with EX propagates the correct TTL to replica} {
             r del test
             r increx test ex 100 byint 1
+            wait_for_ofs_sync $A $B
+            assert_equal [$A get test] [$B get test]
+            assert_range [$B ttl test] 1 100
+        }
+
+        test {INCREX byfloat with EX propagates the correct TTL to replica} {
+            r del test
+            r increx test ex 100 byfloat 1.1
             wait_for_ofs_sync $A $B
             assert_equal [$A get test] [$B get test]
             assert_range [$B ttl test] 1 100
@@ -114,6 +122,29 @@ start_server {tags {"repl external:skip"}} {
             r del test
             r increx test byfloat 0.1
             r increx test byfloat 0.2
+            wait_for_ofs_sync $A $B
+            assert_equal [$A get test] [$B get test]
+            assert_equal [$A debug digest] [$B debug digest]
+        }
+
+        test {INCREX BYFLOAT with NX without expire replicates deterministically} {
+            # Guards against float drift: BYFLOAT results must replicate as
+            # the resolved value, not as the literal INCREX/BYFLOAT command,
+            # the same way INCRBYFLOAT always rewrites to SET.
+            r del test
+            r increx test byfloat 0.1 NX
+            wait_for_ofs_sync $A $B
+            assert_equal [$A get test] [$B get test]
+            assert_equal [$A debug digest] [$B debug digest]
+        }
+
+        test {INCREX BYFLOAT with XX without expire replicates deterministically} {
+            # Guards against float drift: BYFLOAT results must replicate as
+            # the resolved value, not as the literal INCREX/BYFLOAT command,
+            # the same way INCRBYFLOAT always rewrites to SET.
+            r del test
+            r increx test byfloat 0.1
+            r increx test byfloat 0.1 XX
             wait_for_ofs_sync $A $B
             assert_equal [$A get test] [$B get test]
             assert_equal [$A debug digest] [$B debug digest]
@@ -346,7 +377,7 @@ start_server {tags {"repl external:skip"}} {
             }
             close_replication_stream $repl
         }
-        
+
         test {INCREX with expire propagates as SET with PXAT} {
             r -1 del foo
             set repl [attach_to_replication_stream]

@@ -5,7 +5,7 @@
         "group": "string",
         "since": "9.2.0",
         "arity": -2,
-        "function": "incrExCommand",
+        "function": "increxCommand",
         "command_flags": [
             "WRITE",
             "DENYOOM",
@@ -51,14 +51,12 @@
                     {
                         "name": "nx",
                         "type": "pure-token",
-                        "token": "NX",
-                        "since": "9.2.0"
+                        "token": "NX"
                     },
                     {
                         "name": "xx",
                         "type": "pure-token",
-                        "token": "XX",
-                        "since": "9.2.0"
+                        "token": "XX"
                     }
                 ]
             },
@@ -70,26 +68,22 @@
                     {
                         "name": "ex",
                         "type": "integer",
-                        "token": "EX",
-                        "since": "9.2.0"
+                        "token": "EX"
                     },
                     {
                         "name": "px",
                         "type": "integer",
-                        "token": "PX",
-                        "since": "9.2.0"
+                        "token": "PX"
                     },
                     {
                         "name": "unix-time-seconds",
                         "type": "unix-time",
-                        "token": "EXAT",
-                        "since": "9.2.0"
+                        "token": "EXAT"
                     },
                     {
                         "name": "unix-time-milliseconds",
                         "type": "unix-time",
-                        "token": "PXAT",
-                        "since": "9.2.0"
+                        "token": "PXAT"
                     }
                 ]
             },
@@ -101,14 +95,12 @@
                     {
                         "name": "byint",
                         "type": "integer",
-                        "token": "BYINT",
-                        "since": "9.2.0"
+                        "token": "BYINT"
                     },
                     {
                         "name": "byfloat",
                         "type": "double",
-                        "token": "BYFLOAT",
-                        "since": "9.2.0"
+                        "token": "BYFLOAT"
                     }
                 ]
             }

@@ -7917,7 +7917,7 @@ __attribute__((weak)) int main(int argc, char **argv) {
  * start_idx provides a way to start scanning from a specific index.
  * max_args provides a way to limit the scan to a specific range of arguments.
  */
-int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_idx, int max_args, int *flags, int *unit, int *expire_idx, robj **expire, robj **compare_val, robj **value) {
+int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_idx, int max_args, int *flags, int *unit, int *expire_idx, robj **expire, robj **compare_val, robj **incrby_val) {
     int j = start_idx;
     if (expire_idx) *expire_idx = -1;
     for (; j < max_args; j++) {
@@ -8028,10 +8028,11 @@ int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_
                    (opt[2] == 'i' || opt[2] == 'I') &&
                    (opt[3] == 'n' || opt[3] == 'N') &&
                    (opt[4] == 't' || opt[4] == 'T') && opt[5] == '\0' &&
-                   !(*flags & ARGS_BYFLOAT) && next)
+                   command_type == COMMAND_INCREX &&
+                   !(*flags & ARGS_BYINT) && !(*flags & ARGS_BYFLOAT) && next)
         {
             *flags |= ARGS_BYINT;
-            *value = next;
+            *incrby_val = next;
             j++;
         } else if ((opt[0] == 'b' || opt[0] == 'B') &&
                    (opt[1] == 'y' || opt[1] == 'Y') &&
@@ -8040,10 +8041,11 @@ int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_
                    (opt[4] == 'o' || opt[4] == 'O') &&
                    (opt[5] == 'a' || opt[5] == 'A') &&
                    (opt[6] == 't' || opt[6] == 'T') && opt[7] == '\0' &&
-                   !(*flags & ARGS_BYINT) && next)
+                   command_type == COMMAND_INCREX &&
+                   !(*flags & ARGS_BYINT) && !(*flags & ARGS_BYFLOAT) && next)
         {
             *flags |= ARGS_BYFLOAT;
-            *value = next;
+            *incrby_val = next;
             j++;
         } else {
             addReplyErrorObject(c, shared.syntaxerr);

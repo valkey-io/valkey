@@ -788,18 +788,17 @@ void incrbyfloatCommand(client *c) {
     rewriteClientCommandArgument(c, 3, shared.keepttl);
 }
 
-void incrExCommand(client *c) {
+void increxCommand(client *c) {
     robj *expire = NULL;
-    robj *comparison = NULL;
-    robj *incr_obj = NULL;      /* value token for BYINT/BYFLOAT, if present */
+    robj *incr_obj = NULL; /* value token for BYINT/BYFLOAT, if present */
     int unit = UNIT_SECONDS;
     int flags = ARGS_NO_FLAGS;
     long long incr_ll = 1;
     long double incr_ld = 1.0L;
     int use_float = 0;
-    
 
-    if (parseExtendedCommandArgumentsOrReply(c, COMMAND_INCREX, 2, c->argc, &flags, &unit, NULL, &expire, &comparison, &incr_obj) != C_OK) {
+
+    if (parseExtendedCommandArgumentsOrReply(c, COMMAND_INCREX, 2, c->argc, &flags, &unit, NULL, &expire, NULL, &incr_obj) != C_OK) {
         return;
     }
 
@@ -888,7 +887,8 @@ void incrExCommand(client *c) {
         notifyKeyspaceEvent(NOTIFY_GENERIC, "expire", c->argv[1], c->db->id);
 
         robj *milliseconds_obj = createStringObjectFromLongLong(milliseconds);
-        robj *value_obj =createStringObjectFromLongLongForValue(value_ll);
+        robj *value_obj = use_float ? createStringObjectFromLongDouble(value_ld, 1)
+                         : createStringObjectFromLongLongForValue(value_ll);
         rewriteClientCommandVector(c, 5, shared.set, c->argv[1], value_obj, shared.pxat, milliseconds_obj);
         decrRefCount(milliseconds_obj);
         decrRefCount(value_obj);
@@ -898,9 +898,7 @@ void incrExCommand(client *c) {
          * that was stored, rather than re-deriving the string from
          * value_ld a second time (which risks formatting drift
          * between what the master stored and what it propagates). */
-        rewriteClientCommandArgument(c, 0, shared.set);
-        rewriteClientCommandArgument(c, 2, new);
-        rewriteClientCommandArgument(c, 3, shared.keepttl);
+        rewriteClientCommandVector(c, 4, shared.set, c->argv[1], new, shared.keepttl);
     }
 
     signalModifiedKey(c, c->db, c->argv[1]);

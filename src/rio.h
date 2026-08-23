@@ -33,6 +33,8 @@
 #define VALKEY_RIO_H
 
 #include <stdio.h>
+#include <stdbool.h>
+#include <sys/types.h>
 #include <stdint.h>
 #include "sds.h"
 #include "connection.h"
@@ -41,20 +43,28 @@
 #define RIO_FLAG_WRITE_ERROR (1 << 1)
 #define RIO_FLAG_CLOSE_ASAP (1 << 2) /* Rio was closed asynchronously during the current rio operation. */
 #define RIO_FLAG_SKIP_RDB_CHECKSUM (1 << 3)
+#define RIO_FLAG_STREAMING_COMPRESSION (1 << 4) /* Input uses whole-stream compression. */
 
 #define RIO_TYPE_FILE (1 << 0)
 #define RIO_TYPE_BUFFER (1 << 1)
 #define RIO_TYPE_CONN (1 << 2)
 #define RIO_TYPE_FD (1 << 3)
 
+struct streamWriter;
+struct streamReader;
+
 struct _rio {
-    /* Backend functions.
-     * Since this functions do not tolerate short writes or reads the return
-     * value is simplified to: zero on error, non zero on complete success. */
+    /* Backend functions. read and write are the exact-length interface used by
+     * parsers: zero means failure, nonzero means all len bytes were processed. */
     size_t (*read)(struct _rio *, void *buf, size_t len);
     size_t (*write)(struct _rio *, const void *buf, size_t len);
     off_t (*tell)(struct _rio *);
     int (*flush)(struct _rio *);
+    /* Partial-read backend. Here len is a maximum, not a requirement: return
+     * >0 bytes read, 0 on EOF, or -1 on error. A stream decoder uses this
+     * because it cannot know how many encoded bytes will produce the decoded
+     * bytes requested by its caller. NULL when the backend cannot be read. */
+    ssize_t (*read_some)(struct _rio *, void *buf, size_t len);
     /* The update_cksum method if not NULL is used to compute the checksum of
      * all the data that was read or written so far. The method should be
      * designed so that can be called with the current checksum, and the buf
@@ -68,8 +78,24 @@ struct _rio {
     /* number of bytes read or written */
     size_t processed_bytes;
 
-    /* maximum single read or write chunk size */
+    /* Number of bytes read or written on the stream's concrete I/O path. This
+     * differs from processed_bytes when a stream transforms data. */
+    size_t stream_processed_bytes;
+
+    /* Maximum size of one backend operation, not a total byte limit. Zero
+     * means unlimited. rioRead/rioWrite split larger requests into chunks. */
     size_t max_processing_chunk;
+
+    /* Optional stream transforms. The caller owns their lifetime, and rio only
+     * dispatches logical bytes through these opaque objects:
+     *
+     *   write: rioWrite -> streamWriter -> rioWriteRaw -> backend write
+     *   read:  rioRead  <- streamReader <- rioReadRawPartial <- backend read
+     *
+     * Compression policy, framing, buffers, and codec state remain in
+     * compression_stream. */
+    struct streamWriter *stream_writer;
+    struct streamReader *stream_reader;
 
     /* Backend-specific vars. */
     union {
@@ -116,17 +142,41 @@ typedef struct _rio rio;
  * actual implementation of read / write / tell, and will update the checksum
  * if needed. */
 
+/* Implemented in rio.c, where the opaque stream types are visible. */
+size_t rioWriteStream(rio *r, const void *buf, size_t len);
+size_t rioReadStream(rio *r, void *buf, size_t len);
+
+/* Write directly to the concrete backend, bypassing the stream writer and
+ * logical checksum/accounting. streamWriter uses this to emit encoded bytes
+ * without recursively invoking itself. */
+static inline size_t rioWriteRaw(rio *r, const void *buf, size_t len) {
+    if (r->flags & RIO_FLAG_WRITE_ERROR || r->flags & RIO_FLAG_CLOSE_ASAP) return 0;
+    while (len) {
+        size_t bytes_to_write =
+            (r->max_processing_chunk && r->max_processing_chunk < len) ? r->max_processing_chunk : len;
+        if (r->write(r, buf, bytes_to_write) == 0) {
+            r->flags |= RIO_FLAG_WRITE_ERROR;
+            return 0;
+        }
+        buf = (const char *)buf + bytes_to_write;
+        len -= bytes_to_write;
+        r->stream_processed_bytes += bytes_to_write;
+    }
+    return 1;
+}
+
 static inline size_t rioWrite(rio *r, const void *buf, size_t len) {
     if (r->flags & RIO_FLAG_WRITE_ERROR || r->flags & RIO_FLAG_CLOSE_ASAP) return 0;
     while (len) {
         size_t bytes_to_write =
             (r->max_processing_chunk && r->max_processing_chunk < len) ? r->max_processing_chunk : len;
         if (r->update_cksum) r->update_cksum(r, buf, bytes_to_write);
-        if (r->write(r, buf, bytes_to_write) == 0) {
-            r->flags |= RIO_FLAG_WRITE_ERROR;
-            return 0;
+        if (r->stream_writer) {
+            if (rioWriteStream(r, buf, bytes_to_write) == 0) return 0;
+        } else {
+            if (rioWriteRaw(r, buf, bytes_to_write) == 0) return 0;
         }
-        buf = (char *)buf + bytes_to_write;
+        buf = (const char *)buf + bytes_to_write;
         len -= bytes_to_write;
         r->processed_bytes += bytes_to_write;
     }
@@ -138,9 +188,14 @@ static inline size_t rioRead(rio *r, void *buf, size_t len) {
     while (len) {
         size_t bytes_to_read =
             (r->max_processing_chunk && r->max_processing_chunk < len) ? r->max_processing_chunk : len;
-        if (r->read(r, buf, bytes_to_read) == 0) {
-            r->flags |= RIO_FLAG_READ_ERROR;
-            return 0;
+        if (r->stream_reader) {
+            if (rioReadStream(r, buf, bytes_to_read) == 0) return 0;
+        } else {
+            if (r->read(r, buf, bytes_to_read) == 0) {
+                r->flags |= RIO_FLAG_READ_ERROR;
+                return 0;
+            }
+            r->stream_processed_bytes += bytes_to_read;
         }
         if (r->update_cksum) r->update_cksum(r, buf, bytes_to_read);
         buf = (char *)buf + bytes_to_read;
@@ -151,11 +206,18 @@ static inline size_t rioRead(rio *r, void *buf, size_t len) {
 }
 
 static inline off_t rioTell(rio *r) {
+    /* Stream readers report physical bytes consumed from the source, which
+     * drives file-loading progress for decoded streams. */
+    if (r->stream_reader) return (off_t)r->stream_processed_bytes;
     return r->tell(r);
 }
 
+static inline int rioFlushRaw(rio *r) {
+    return r->flush ? r->flush(r) : 1;
+}
+
 static inline int rioFlush(rio *r) {
-    return r->flush(r);
+    return rioFlushRaw(r);
 }
 
 static inline void rioCloseASAP(rio *r) {
@@ -187,6 +249,10 @@ void rioInitWithFile(rio *r, FILE *fp);
 void rioInitWithBuffer(rio *r, sds s);
 void rioInitWithConn(rio *r, connection *conn, size_t read_limit);
 void rioInitWithFd(rio *r, int fd);
+void rioAttachStreamWriter(rio *r, struct streamWriter *writer);
+void rioDetachStreamWriter(rio *r);
+void rioAttachStreamReader(rio *r, struct streamReader *reader);
+void rioDetachStreamReader(rio *r);
 
 void rioFreeFd(rio *r);
 void rioFreeConn(rio *r, sds *out_remainingBufferedData);
@@ -200,6 +266,7 @@ struct serverObject;
 int rioWriteBulkObject(rio *r, struct serverObject *obj);
 
 void rioGenericUpdateChecksum(rio *r, const void *buf, size_t len);
+ssize_t rioReadRawPartial(rio *r, void *buf, size_t len);
 void rioSetAutoSync(rio *r, off_t bytes);
 void rioSetReclaimCache(rio *r, int enabled);
 uint8_t rioCheckType(rio *r);

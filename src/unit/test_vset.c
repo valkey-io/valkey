@@ -123,10 +123,10 @@ int test_vset_estimated_earliest_expiry(int argc, char **argv, int flags) {
     {
         vset set;
         vsetInit(&set);
-        const long long expiries[] = {500, 100, 300, 700, 200};
-        const int n = (int)(sizeof(expiries) / sizeof(expiries[0]));
-        mock_entry *entries[n];
-        for (int i = 0; i < n; i++) {
+        enum { entry_count = 5 };
+        const long long expiries[entry_count] = {500, 100, 300, 700, 200};
+        mock_entry *entries[entry_count];
+        for (int i = 0; i < entry_count; i++) {
             char buf[32];
             snprintf(buf, sizeof(buf), "v_%d", i);
             entries[i] = mockCreateEntry(buf, expiries[i]);
@@ -135,7 +135,7 @@ int test_vset_estimated_earliest_expiry(int argc, char **argv, int flags) {
         /* 100 is the minimum -> exact expiry returned for a vector. */
         TEST_ASSERT(vsetEstimatedEarliestExpiry(&set, mockGetExpiry) == 100LL);
         vsetRelease(&set);
-        for (int i = 0; i < n; i++) mockFreeEntry(entries[i]);
+        for (int i = 0; i < entry_count; i++) mockFreeEntry(entries[i]);
     }
 
     /* --- VSET_BUCKET_RAX, single time-bucket: > 127 entries with the same
@@ -148,9 +148,9 @@ int test_vset_estimated_earliest_expiry(int argc, char **argv, int flags) {
         vset set;
         vsetInit(&set);
         const long long expiry = 1000LL;
-        const int n = 200;
-        mock_entry *entries[n];
-        for (int i = 0; i < n; i++) {
+        enum { entry_count = 200 };
+        mock_entry *entries[entry_count];
+        for (int i = 0; i < entry_count; i++) {
             char buf[32];
             snprintf(buf, sizeof(buf), "r_%d", i);
             entries[i] = mockCreateEntry(buf, expiry);
@@ -160,7 +160,7 @@ int test_vset_estimated_earliest_expiry(int argc, char **argv, int flags) {
         TEST_ASSERT(est >= expiry);
         TEST_ASSERT(est <= expiry + BUCKET_MAX);
         vsetRelease(&set);
-        for (int i = 0; i < n; i++) mockFreeEntry(entries[i]);
+        for (int i = 0; i < entry_count; i++) mockFreeEntry(entries[i]);
     }
 
     /* --- VSET_BUCKET_RAX, multiple time-buckets: the estimate must come from
@@ -171,19 +171,19 @@ int test_vset_estimated_earliest_expiry(int argc, char **argv, int flags) {
         vsetInit(&set);
         const long long early = 1000LL;
         const long long late = 100LL * 1000 * 1000; /* a far later, distinct bucket */
-        const int n_each = 128;                     /* force RAX */
-        mock_entry *entries[2 * n_each];
+        enum { entries_per_bucket = 128 };          /* force RAX */
+        mock_entry *entries[2 * entries_per_bucket];
         int idx = 0;
         /* Insert the LATE bucket first to ensure ordering is by key, not by
          * insertion order. */
-        for (int i = 0; i < n_each; i++) {
+        for (int i = 0; i < entries_per_bucket; i++) {
             char buf[32];
             snprintf(buf, sizeof(buf), "late_%d", i);
             entries[idx] = mockCreateEntry(buf, late);
             TEST_ASSERT(vsetAddEntry(&set, mockGetExpiry, entries[idx]));
             idx++;
         }
-        for (int i = 0; i < n_each; i++) {
+        for (int i = 0; i < entries_per_bucket; i++) {
             char buf[32];
             snprintf(buf, sizeof(buf), "early_%d", i);
             entries[idx] = mockCreateEntry(buf, early);

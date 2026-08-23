@@ -275,6 +275,18 @@ start_cluster 3 0 [list config_lines $modules] {
         verify_log_message 0 "*DING (type 255) RECEIVED*TestMAX*" 0
     }
 
+    test "VM_CALL CLUSTER SLOTS from Module Timer" {
+        assert_equal {OK} [$node1 test.start_cluster_timer]
+        assert_equal {OK} [$node2 test.start_cluster_timer]
+        assert_equal {OK} [$node3 test.start_cluster_timer]
+
+        wait_for_condition 50 100 {
+            [count_log_message 0 "* <cluster> Timer: CLUSTER SLOTS success*"] >= 1
+        } else {
+            fail "Timer did not execute CLUSTER SLOTS or server crashed"
+        }
+    }
+
     test "VM_RegisterClusterMessageReceiver - dangling callback after MODULE UNLOAD" {
         set loglines [count_log_lines 0]
 
@@ -299,18 +311,6 @@ start_cluster 3 0 [list config_lines $modules] {
         verify_no_log_message 0 "*DING (type 3) RECEIVED*TestUAF*" $loglines
         verify_no_log_message 0 "*DING (type 255) RECEIVED*TestMAX*" $loglines
         assert_equal PONG [$node1 PING]
-    }
-
-    test "VM_CALL CLUSTER SLOTS from Module Timer" {
-        assert_equal {OK} [$node1 test.start_cluster_timer]
-        assert_equal {OK} [$node2 test.start_cluster_timer]
-        assert_equal {OK} [$node3 test.start_cluster_timer]
-
-        wait_for_condition 50 100 {
-            [count_log_message 0 "* <cluster> Timer: CLUSTER SLOTS success*"] >= 1
-        } else {
-            fail "Timer did not execute CLUSTER SLOTS or server crashed"
-        }
     }
 }
 

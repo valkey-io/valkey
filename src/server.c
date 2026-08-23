@@ -2419,6 +2419,7 @@ void initServerConfig(void) {
     server.cached_primary = NULL;
     server.primary_initial_offset = -1;
     server.repl_state = REPL_STATE_NONE;
+    server.repl_sync_paused = 0;
     server.repl_rdb_channel_state = REPL_DUAL_CHANNEL_STATE_NONE;
     server.repl_transfer_tmpfile = NULL;
     server.repl_transfer_fd = -1;
@@ -6634,6 +6635,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                     "master_last_io_seconds_ago:%d\r\n", server.primary ? ((int)(server.unixtime - server.primary->last_interaction)) : -1,
                     "last_successful_sync_duration_ms:%lld\r\n", server.repl_full_sync_complete_duration_ms,
                     "master_sync_in_progress:%d\r\n", server.repl_state == REPL_STATE_TRANSFER,
+                    "master_sync_paused:%d\r\n", server.repl_sync_paused,
                     "slave_read_repl_offset:%lld\r\n", replica_read_repl_offset,
                     "slave_repl_offset:%lld\r\n", replica_repl_offset,
                     "replicas_repl_buffer_size:%zu\r\n", server.pending_repl_data.len,

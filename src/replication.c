@@ -4512,17 +4512,18 @@ int cancelReplicationHandshake(int reconnect) {
     if (server.repl_rdb_channel_state != REPL_DUAL_CHANNEL_STATE_NONE) {
         replicationAbortDualChannelSyncTransfer();
     }
+    int next_state = server.repl_sync_paused ? REPL_STATE_PAUSED : REPL_STATE_CONNECT;
     if (server.repl_state == REPL_STATE_TRANSFER) {
         replicationAbortSyncTransfer();
-        server.repl_state = REPL_STATE_CONNECT;
+        server.repl_state = next_state;
     } else if (server.repl_state == REPL_STATE_CONNECTING || replicaIsInHandshakeState()) {
         undoConnectWithPrimary();
-        server.repl_state = REPL_STATE_CONNECT;
+        server.repl_state = next_state;
     } else {
         return 0;
     }
 
-    if (!reconnect) return 1;
+    if (!reconnect || server.repl_sync_paused) return 1;
 
     /* try to re-connect without waiting for replicationCron, this is needed
      * for the "diskless loading short read" test. */
@@ -4535,6 +4536,7 @@ int cancelReplicationHandshake(int reconnect) {
 /* Set replication to the specified primary address and port. */
 void replicationSetPrimary(char *ip, int port, int full_sync_required, bool disconnect_blocked) {
     int was_primary = server.primary_host == NULL;
+    server.repl_sync_paused = 0;
 
     sdsfree(server.primary_host);
     server.primary_host = NULL;
@@ -4596,6 +4598,7 @@ void replicationSetPrimary(char *ip, int port, int full_sync_required, bool disc
 /* Cancel replication, setting the instance as a primary itself. */
 void replicationUnsetPrimary(void) {
     if (server.primary_host == NULL) return; /* Nothing to do. */
+    server.repl_sync_paused = 0;
 
     /* Fire the primary link modules event. */
     if (server.repl_state == REPL_STATE_CONNECTED)
@@ -4747,6 +4750,40 @@ void replicaofCommand(client *c) {
     addReply(c, shared.ok);
 }
 
+void replsyncCommand(client *c) {
+    if (server.primary_host == NULL) {
+        addReplyError(c, "REPLSYNC is only valid on a replica");
+        return;
+    }
+
+    if (!strcasecmp(objectGetVal(c->argv[1]), "pause")) {
+        if (server.repl_state == REPL_STATE_CONNECTED) {
+            addReplyError(c, "cannot pause an online replication link");
+            return;
+        }
+        if (server.repl_state == REPL_STATE_PAUSED) {
+            addReply(c, shared.ok);
+            return;
+        }
+        server.repl_sync_paused = 1;
+        if (server.loading_rio != NULL) {
+            rioCloseASAP(server.loading_rio);
+        } else if (!cancelReplicationHandshake(0)) {
+            server.repl_state = REPL_STATE_PAUSED;
+        }
+        addReply(c, shared.ok);
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "resume")) {
+        server.repl_sync_paused = 0;
+        if (server.repl_state == REPL_STATE_PAUSED) {
+            server.repl_state = REPL_STATE_CONNECT;
+            connectWithPrimary();
+        }
+        addReply(c, shared.ok);
+    } else {
+        addReplyErrorObject(c, shared.syntaxerr);
+    }
+}
+
 /* ROLE command: provide information about the role of the instance
  * (primary or replica) and additional information related to replication
  * in an easy to process format. */
@@ -4795,6 +4832,7 @@ void roleCommand(client *c) {
         } else {
             switch (server.repl_state) {
             case REPL_STATE_NONE: replica_state = "none"; break;
+            case REPL_STATE_PAUSED: replica_state = "paused"; break;
             case REPL_STATE_CONNECT: replica_state = "connect"; break;
             case REPL_STATE_CONNECTING: replica_state = "connecting"; break;
             case REPL_STATE_TRANSFER: replica_state = "sync"; break;

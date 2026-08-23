@@ -85,6 +85,10 @@
                                     "const": "none"
                                 },
                                 {
+                                    "description": "Synchronization with the primary is paused.",
+                                    "const": "paused"
+                                },
+                                {
                                     "description": "The instance needs to connect to its primary.",
                                     "const": "connect"
                                 },

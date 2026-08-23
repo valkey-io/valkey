@@ -3807,6 +3807,11 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
      * the RDB file from a socket during initial SYNC (diskless replica mode),
      * we'll report the error to the caller, so that we can retry. */
 eoferr:
+    if ((rdb->flags & RIO_FLAG_CLOSE_ASAP) && server.repl_sync_paused &&
+        server.repl_state == REPL_STATE_TRANSFER) {
+        serverLog(LL_NOTICE, "RDB loading aborted because replication synchronization was paused");
+        return RDB_FAILED;
+    }
     if (rdbRioHasInternalStreamReaderError(rdb)) {
         serverLog(LL_WARNING, "Internal error while decoding streaming-compressed RDB input. Aborting now.");
         rdbReportReadError("Internal error decoding compressed RDB stream");

@@ -1,0 +1,43 @@
+{
+    "REPLSYNC": {
+        "summary": "Pauses or resumes synchronization with the configured primary.",
+        "complexity": "O(1)",
+        "group": "server",
+        "since": "9.0.0",
+        "arity": 2,
+        "function": "replsyncCommand",
+        "command_flags": [
+            "ADMIN",
+            "NOSCRIPT",
+            "NO_MULTI",
+            "LOADING",
+            "STALE"
+        ],
+        "arguments": [
+            {
+                "name": "action",
+                "type": "oneof",
+                "arguments": [
+                    {
+                        "name": "pause",
+                        "type": "pure-token",
+                        "token": "PAUSE"
+                    },
+                    {
+                        "name": "resume",
+                        "type": "pure-token",
+                        "token": "RESUME"
+                    }
+                ]
+            }
+        ],
+        "reply_schema": {
+            "const": "OK"
+        },
+        "acl_categories": [
+            "ADMIN",
+            "DANGEROUS",
+            "SLOW"
+        ]
+    }
+}

@@ -388,6 +388,7 @@ typedef struct commandlog {
  * what to do next. */
 typedef enum {
     REPL_STATE_NONE = 0,   /* No active replication */
+    REPL_STATE_PAUSED,     /* Synchronization paused by an operator */
     REPL_STATE_CONNECT,    /* Must connect to primary */
     REPL_STATE_CONNECTING, /* Connecting to primary */
     /* --- Handshake states, must be ordered --- */
@@ -2181,6 +2182,7 @@ struct valkeyServer {
     rio *loading_rio;                     /* Pointer to the rio object currently used for loading data. */
     int repl_syncio_timeout;              /* Timeout for synchronous I/O calls */
     int repl_state;                       /* Replication status if the instance is a replica */
+    int repl_sync_paused;                 /* Prevent reconnect while a requested sync abort unwinds. */
     int repl_rdb_channel_state;           /* State of the replica's rdb channel during dual-channel-replication */
     off_t repl_transfer_size;             /* Size of RDB to read from primary during sync. */
     off_t repl_transfer_read;             /* Amount of RDB read from primary during sync. */
@@ -4074,6 +4076,7 @@ void expiretimeCommand(client *c);
 void pexpiretimeCommand(client *c);
 void persistCommand(client *c);
 void replicaofCommand(client *c);
+void replsyncCommand(client *c);
 void roleCommand(client *c);
 void debugCommand(client *c);
 void msetCommand(client *c);

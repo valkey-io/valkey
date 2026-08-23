@@ -874,7 +874,7 @@ void increxCommand(client *c) {
         objectSetVal(o, (void *)((long)value_ll));
     } else {
         new = use_float ? createStringObjectFromLongDouble(value_ld, 1)
-                         : createStringObjectFromLongLongForValue(value_ll);
+                        : createStringObjectFromLongLongForValue(value_ll);
         if (o) {
             dbReplaceValue(c->db, c->argv[1], &new);
         } else {
@@ -888,7 +888,7 @@ void increxCommand(client *c) {
 
         robj *milliseconds_obj = createStringObjectFromLongLong(milliseconds);
         robj *value_obj = use_float ? createStringObjectFromLongDouble(value_ld, 1)
-                         : createStringObjectFromLongLongForValue(value_ll);
+                                    : createStringObjectFromLongLongForValue(value_ll);
         rewriteClientCommandVector(c, 5, shared.set, c->argv[1], value_obj, shared.pxat, milliseconds_obj);
         decrRefCount(milliseconds_obj);
         decrRefCount(value_obj);

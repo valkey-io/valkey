@@ -738,7 +738,7 @@ typedef enum {
 #define ARGS_SET_FNX (1 << 11) /* Set if key item not exists. */
 #define ARGS_SET_FXX (1 << 12) /* Set if key item exists. */
 #define ARGS_BYINT (1 << 13)   /* Set if the value needs to be incremented by an integer. */
-#define ARGS_BYFLOAT (1 << 14)   /* Set if the value needs to be incremented by a float. */
+#define ARGS_BYFLOAT (1 << 14) /* Set if the value needs to be incremented by a float. */
 
 /* An Object, that is a type able to hold a string / list / set */
 

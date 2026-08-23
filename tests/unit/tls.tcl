@@ -193,6 +193,8 @@ start_server {tags {"tls"}} {
             # Prepare data on server
             # We use a control client (TCP) to avoid TLS write errors on control connection
             set plain_port [srv 0 pport]
+            # Ensure the plaintext listener is active in case a prior test disabled it.
+            r CONFIG SET port $plain_port
             set control_client [valkey [srv 0 host] $plain_port]
             
             $control_client SELECT 0

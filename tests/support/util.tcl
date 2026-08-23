@@ -22,6 +22,31 @@ proc randstring {min max {type binary}} {
     return $output
 }
 
+# Read and write files without applying Tcl text translations. These helpers
+# are shared by persistence tests that inspect or mutate serialized data.
+proc read_binary_file_prefix {path count} {
+    set fd [open $path r]
+    fconfigure $fd -translation binary
+    set prefix [read $fd $count]
+    close $fd
+    return $prefix
+}
+
+proc read_binary_file {path} {
+    set fd [open $path r]
+    fconfigure $fd -translation binary
+    set data [read $fd]
+    close $fd
+    return $data
+}
+
+proc write_binary_file {path data} {
+    set fd [open $path w]
+    fconfigure $fd -translation binary
+    puts -nonewline $fd $data
+    close $fd
+}
+
 # Useful for some test
 proc zlistAlikeSort {a b} {
     if {[lindex $a 0] > [lindex $b 0]} {return 1}
@@ -1337,6 +1362,14 @@ proc with_config {config value body} {
     return -options $opts $result
 }
 
+# Execute body and always run cleanup, preserving the body's completion status.
+proc with_cleanup {body cleanup} {
+    catch {uplevel 1 $body} result opts
+    uplevel 1 $cleanup
+    dict incr opts -level
+    return -options $opts $result
+}
+
 # Escape a string for use as a JSON string value.
 #
 # Beyond the characters with a short escape, every C0 control character has to
@@ -1359,4 +1392,30 @@ proc json_escape_string {s} {
         }
     }
     return $out
+}
+
+proc read_file {path} {
+    set fd [open $path r]
+    set data [read $fd]
+    close $fd
+    return $data
+}
+
+proc write_file {path content} {
+    set fd [open $path w]
+    puts $fd $content
+    close $fd
+}
+
+proc file_has_pattern {path pattern} {
+    if {![file exists $path]} {
+        return 0
+    }
+    return [regexp $pattern [read_file $path]]
+}
+
+proc cluster_nodes_conf_path {id} {
+    set dir [lindex [R $id config get dir] 1]
+    set conf [lindex [R $id config get cluster-config-file] 1]
+    return [file join $dir $conf]
 }

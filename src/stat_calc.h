@@ -52,9 +52,6 @@ void trendCalc_free(trendCalculator *calc);
  * calling more often reduces the impact of individual outliers. */
 void trendCalc_recordMetric(trendCalculator *calc, long metric_value);
 
-/* Get the average rate of change over the full window. */
-double trendCalc_changePerSec(trendCalculator *calc);
-
 /* Get the rate of change using only the final 10% of the window.
  * More responsive to sudden changes but noisier than the full-window trend. */
 double trendCalc_changePerSecShortTerm(trendCalculator *calc);

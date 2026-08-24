@@ -143,10 +143,6 @@ void trendCalc_recordMetric(trendCalculator *calc, long metric_value) {
     calc->trend_short = delta_short / time_between_slots;
 }
 
-double trendCalc_changePerSec(trendCalculator *calc) {
-    return calc->trend;
-}
-
 double trendCalc_changePerSecShortTerm(trendCalculator *calc) {
     return calc->trend_short;
 }

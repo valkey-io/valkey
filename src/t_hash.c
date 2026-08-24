@@ -1147,35 +1147,38 @@ static int hashTypeRandomElement(robj *hashobj, unsigned long hashsize, listpack
     } else if (hashobj->encoding == OBJ_ENCODING_LISTPACK) {
         if (hashsize == 0) return C_ERR;
 
-        hashTypeIterator hi;
-
-        /* Count actual NON Expired fields */
-        hashTypeInitIterator(hashobj, &hi);
-        unsigned long actual_count = 0;
-        while (hashTypeNext(&hi) != C_ERR) {
-            actual_count++;
-        }
-        hashTypeResetIterator(&hi);
-
-        if (actual_count == 0) return C_ERR;
-
-        /* Pick random ones and iterate */
-        unsigned long idx = rand() % actual_count;
-        hashTypeInitIterator(hashobj, &hi);
-        unsigned long count = 0;
-        while (hashTypeNext(&hi) != C_ERR) {
-            if (count == idx) {
-                field->sval = lpGetValue(hi.fptr, &field->slen, &field->lval);
-                if (val) {
-                    val->sval = lpGetValue(hi.vptr, &val->slen, &val->lval);
-                }
-                hashTypeResetIterator(&hi);
-                return C_OK;
+        unsigned char *zl = objectGetVal(hashobj);
+        if (!hashTypeHasVolatileFields(hashobj)) {
+            /* No volatile fields: every pair is live, seek directly. */
+            unsigned char *fptr = lpSeek(zl, 2 * (rand() % hashsize));
+            serverAssert(fptr != NULL);
+            field->sval = lpGetValue(fptr, &field->slen, &field->lval);
+            if (val) {
+                unsigned char *vptr = lpNext(zl, fptr);
+                val->sval = lpGetValue(vptr, &val->slen, &val->lval);
             }
-            count++;
+            return C_OK;
+        }
+
+        /* Volatile fields present: single-pass reservoir sampling (k=1)
+         * over the live pairs; the i-th live pair is kept with probability
+         * 1/i, giving a uniform pick without a counting pre-pass. */
+        hashTypeIterator hi;
+        unsigned char *fptr = NULL, *vptr = NULL;
+        unsigned long seen = 0;
+        hashTypeInitIterator(hashobj, &hi);
+        while (hashTypeNext(&hi) != C_ERR) {
+            seen++;
+            if (rand() % seen == 0) {
+                fptr = hi.fptr;
+                vptr = hi.vptr;
+            }
         }
         hashTypeResetIterator(&hi);
-        rc = C_ERR;
+        if (fptr == NULL) return C_ERR; /* all fields expired */
+
+        field->sval = lpGetValue(fptr, &field->slen, &field->lval);
+        if (val) val->sval = lpGetValue(vptr, &val->slen, &val->lval);
     } else {
         serverPanic("Unknown hash encoding");
     }
@@ -2476,17 +2479,32 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
                 reply_size++;
             }
         } else if (hash->encoding == OBJ_ENCODING_LISTPACK) {
-            while (count--) {
-                listpackEntry field, value;
-                if (hashTypeRandomElement(hash, size, &field, &value) != C_OK)
-                    break;
+            /* Gather the live pairs once, then sample from them with
+             * replacement; picking one random element per iteration would
+             * rescan the listpack every time. */
+            listpackEntry *fields = zmalloc(sizeof(listpackEntry) * size);
+            listpackEntry *values = withvalues ? zmalloc(sizeof(listpackEntry) * size) : NULL;
+            hashTypeIterator hi;
+            unsigned long live = 0;
+            hashTypeInitIterator(hash, &hi);
+            while (hashTypeNext(&hi) != C_ERR) {
+                fields[live].sval = lpGetValue(hi.fptr, &fields[live].slen, &fields[live].lval);
+                if (values) values[live].sval = lpGetValue(hi.vptr, &values[live].slen, &values[live].lval);
+                live++;
+            }
+            hashTypeResetIterator(&hi);
+
+            while (live > 0 && count--) {
+                unsigned long idx = rand() % live;
                 /* A listpack field/value may be integer-encoded, in which case
                  * 'sval' is NULL and the value is held in 'lval'. Use the helper
                  * that handles both cases instead of assuming a string buffer. */
-                hrandfieldReplyWithListpack(wpc, 1, &field, withvalues ? &value : NULL);
+                hrandfieldReplyWithListpack(wpc, 1, &fields[idx], values ? &values[idx] : NULL);
                 if (c->flag.close_asap) break;
                 reply_size++;
             }
+            zfree(fields);
+            if (values) zfree(values);
         }
         goto set_deferred_response;
     }

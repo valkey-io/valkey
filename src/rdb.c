@@ -764,12 +764,9 @@ int rdbGetObjectType(robj *o, int rdbver) {
             serverPanic("Unknown sorted set encoding");
     case OBJ_HASH:
         if (hashTypeHasVolatileFields(o)) {
-            /* Field TTL need a TTL-capable RDB type. Only new targets can take the
-             * raw tagged listpack; RDB 80 (9.0) targets get HASH_2 triplets
-             * regardless of encoding; older targets can't store it */
-            if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK && rdbver >= 81) {
-                return RDB_TYPE_HASH_LISTPACK_2;
-            }
+            /* Field TTLs need a TTL-capable RDB type: HASH_2 triplets for
+             * RDB 80 (9.0) and newer targets, regardless of the in-memory
+             * encoding; older targets can't store them. */
             if (rdbver >= 80) return RDB_TYPE_HASH_2;
             return -1; /* can't be stored in old RDB */
         }
@@ -1010,10 +1007,8 @@ ssize_t rdbSaveObject(rio *rdb, robj *o, robj *key, int dbid, unsigned char rdbt
     } else if (objectGetType(o) == OBJ_HASH) {
         /* Save a hash value */
         if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK && rdbtype == RDB_TYPE_HASH_2) {
-            /* A listpack hash with field TTLs serialized for a target that
-             * understands HASH_2 but not RDB_TYPE_HASH_LISTPACK_2: write the
-             * field/value/expiry triplet format without converting the
-             * in-memory object. */
+            /* A listpack hash with field TTLs: write the field/value/expiry
+             * triplet format without converting the in-memory object. */
             unsigned char *zl = objectGetVal(o);
             unsigned char field_intbuf[LP_INTBUF_SIZE], value_intbuf[LP_INTBUF_SIZE];
 
@@ -2581,7 +2576,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
     } else if (rdbtype == RDB_TYPE_HASH_ZIPMAP || rdbtype == RDB_TYPE_LIST_ZIPLIST || rdbtype == RDB_TYPE_SET_INTSET ||
                rdbtype == RDB_TYPE_SET_LISTPACK || rdbtype == RDB_TYPE_ZSET_ZIPLIST ||
                rdbtype == RDB_TYPE_ZSET_LISTPACK || rdbtype == RDB_TYPE_HASH_ZIPLIST ||
-               rdbtype == RDB_TYPE_HASH_LISTPACK || rdbtype == RDB_TYPE_HASH_LISTPACK_2) {
+               rdbtype == RDB_TYPE_HASH_LISTPACK) {
         size_t encoded_len;
         unsigned char *encoded = rdbGenericLoadStringObject(rdb, RDB_LOAD_PLAIN, &encoded_len);
         if (encoded == NULL) return NULL;
@@ -2800,13 +2795,11 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
                 objectSetVal(o, lpShrinkToFit(objectGetVal(o)));
             break;
         }
-        case RDB_TYPE_HASH_LISTPACK:
-        case RDB_TYPE_HASH_LISTPACK_2: {
-            /* Tagged metadata (field TTLs) is only legal in the _2 variant;
-             * in the legacy type it indicates corruption. */
-            int allow_metadata = (rdbtype == RDB_TYPE_HASH_LISTPACK_2);
+        case RDB_TYPE_HASH_LISTPACK: {
+            /* Tagged metadata (field TTLs) never appears in this type;
+             * it indicates corruption. */
             server.stat_dump_payload_sanitizations++;
-            if (!lpValidateIntegrityAndDups(encoded, encoded_len, 1, allow_metadata)) {
+            if (!lpValidateIntegrityAndDups(encoded, encoded_len, 1, 0)) {
                 rdbReportCorruptRDB("Hash listpack integrity check failed.");
                 zfree(encoded);
                 objectSetVal(o, NULL);
@@ -2821,40 +2814,6 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
             if (hashTypeLength(o) == 0) {
                 decrRefCount(o);
                 goto emptykey;
-            }
-
-            /* On a primary loading a non-preamble RDB, drop any fields that are
-             * already expired relative to 'now', mirroring the RDB_TYPE_HASH_2
-             * path above. Replicas and AOF-preamble loads keep them and wait
-             * for an explicit HDEL/DEL from the primary. 'now' is 0 in the
-             * RESTORE path, so expired fields are preserved there as expected. */
-            if (iAmPrimary() && !(rdbflags & RDBFLAGS_AOF_PREAMBLE) && now != 0 &&
-                hashTypeHasVolatileFields(o)) { /* O(1) header peek: skip the reap scan
-                                                 * (and its allocation) for the common
-                                                 * no-TTL hash. */
-                unsigned long nfields = hashTypeLength(o);
-                robj **expired_fields = zmalloc(sizeof(robj *) * nfields);
-                size_t nexpired = hashTypeDeleteExpiredFields(o, now, nfields, expired_fields);
-                /* Feed an HDEL to replicas for every dropped field. */
-                if (nexpired && (rdbflags & RDBFLAGS_FEED_REPL) && server.repl_backlog) {
-                    robj keyobj;
-                    initStaticStringObject(keyobj, key);
-                    for (size_t i = 0; i < nexpired; i++) {
-                        robj *argv[3] = {shared.hdel, &keyobj, expired_fields[i]};
-                        replicationFeedReplicas(dbid, argv, 3);
-                    }
-                }
-                for (size_t i = 0; i < nexpired; i++) decrRefCount(expired_fields[i]);
-                zfree(expired_fields);
-
-                /* If reaping emptied the hash, skip the key. This is distinct
-                 * from a genuinely empty key, so it gets its own error code
-                 * (and stat counter). */
-                if (hashTypeLength(o) == 0) {
-                    decrRefCount(o);
-                    if (error) *error = RDB_LOAD_ERR_ALL_ITEMS_EXPIRED;
-                    return NULL;
-                }
             }
 
             if (hashTypeLength(o) > server.hash_max_listpack_entries) hashTypeConvert(o, OBJ_ENCODING_HASHTABLE);

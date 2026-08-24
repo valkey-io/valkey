@@ -2408,6 +2408,14 @@ void replicaBeforeLoadPrimaryRDB(connection *conn, int use_diskless_load) {
     connSetReadHandler(conn, NULL);
 }
 
+/* Helper function to update the full sync duration metric for both single/dual channel replication. */
+static void captureReplFullSyncCompleteDuration(void) {
+    if (server.repl_full_sync_start_time) {
+        server.repl_full_sync_complete_duration_ms = elapsedMs(server.repl_full_sync_start_time);
+        server.repl_full_sync_start_time = 0;
+    }
+}
+
 void replicaAfterLoadPrimaryRDB(connection *conn, rdbSaveInfo *rsi, int disk_based_sync) {
     /* Final setup of the connected replica <- primary link */
     if (conn == server.repl_rdb_transfer_s) {
@@ -2418,6 +2426,9 @@ void replicaAfterLoadPrimaryRDB(connection *conn, rdbSaveInfo *rsi, int disk_bas
         server.repl_down_since = 0;
         /* Send the initial ACK immediately to put this replica in online state. */
         replicationSendAck();
+        /* Finalize full sync duration here for single channel replication.
+         * Exclude backlog draining/streaming time for simplicity. */
+        captureReplFullSyncCompleteDuration();
     }
 
     /* Fire the primary link modules event. */
@@ -3055,6 +3066,7 @@ void replicationAbortDualChannelSyncTransfer(void) {
     server.repl_provisional_primary.conn = NULL;
     server.repl_provisional_primary.dbid = -1;
     server.rdb_client_id = -1;
+    server.repl_full_sync_start_time = 0;
     freePendingReplDataBuf();
     return;
 }
@@ -3455,6 +3467,8 @@ int streamReplDataBufToDb(client *c) {
 void dualChannelSyncSuccess(void) {
     server.primary_initial_offset = server.repl_provisional_primary.reploff;
     replicationResurrectProvisionalPrimary();
+    /* Finalize full sync duration here to exclude backlog draining/streaming time to be consistent with single channel. */
+    captureReplFullSyncCompleteDuration();
     /* Wait for the accumulated buffer to be processed before reading any more replication updates */
     if (server.pending_repl_data.blocks && streamReplDataBufToDb(server.primary) == C_ERR) {
         /* Sync session aborted during repl data streaming. */
@@ -4322,6 +4336,9 @@ void syncWithPrimary(connection *conn) {
         return;
     }
 
+    /* Mark the beginning of the full sync */
+    elapsedStart(&server.repl_full_sync_start_time);
+
     /* Fall back to SYNC if needed. Otherwise, psync_result == PSYNC_FULLRESYNC
      * and the server.primary_replid and primary_initial_offset are
      * already populated. */
@@ -4462,6 +4479,7 @@ void undoConnectWithPrimary(void) {
 
     connClose(server.repl_transfer_s);
     server.repl_transfer_s = NULL;
+    server.repl_full_sync_start_time = 0;
 }
 
 /* Abort the async download of the bulk dataset while SYNC-ing with primary.
@@ -4470,6 +4488,7 @@ void undoConnectWithPrimary(void) {
 void replicationAbortSyncTransfer(void) {
     undoConnectWithPrimary();
     cleanupTransferResources();
+    server.repl_full_sync_start_time = 0;
 }
 
 /* This function aborts a non blocking replication attempt if there is one
@@ -4619,6 +4638,9 @@ void replicationUnsetPrimary(void) {
 
     /* Reset down time so it'll be ready for when we turn into replica again. */
     server.repl_down_since = 0;
+
+    /* Reset full sync complete duration since we are no longer a replica */
+    server.repl_full_sync_complete_duration_ms = -1;
 
     /* Fire the role change modules event. */
     moduleFireServerEvent(VALKEYMODULE_EVENT_REPLICATION_ROLE_CHANGED, VALKEYMODULE_EVENT_REPLROLECHANGED_NOW_PRIMARY,

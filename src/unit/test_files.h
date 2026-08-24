@@ -7,6 +7,18 @@ typedef struct unitTest {
 } unitTest;
 
 int test_popcount(int argc, char **argv, int flags);
+int test_slotStatForSortAscCmpSmallValues(int argc, char **argv, int flags);
+int test_slotStatForSortDescCmpSmallValues(int argc, char **argv, int flags);
+int test_slotStatForSortAscCmpDiffExceedsIntMax(int argc, char **argv, int flags);
+int test_slotStatForSortAscCmpLargeGreaterThanSmall(int argc, char **argv, int flags);
+int test_slotStatForSortDescCmpDiffExceedsIntMax(int argc, char **argv, int flags);
+int test_slotStatForSortDescCmpLargeGreaterThanSmall(int argc, char **argv, int flags);
+int test_slotStatForSortAscCmpExactly2Pow32(int argc, char **argv, int flags);
+int test_slotStatForSortDescCmpExactly2Pow32(int argc, char **argv, int flags);
+int test_slotStatForSortAscCmpTieBreakBySlot(int argc, char **argv, int flags);
+int test_slotStatForSortDescCmpTieBreakBySlot(int argc, char **argv, int flags);
+int test_slotStatForSortAscCmpEqual(int argc, char **argv, int flags);
+int test_slotStatForSortDescCmpEqual(int argc, char **argv, int flags);
 int test_crc64(int argc, char **argv, int flags);
 int test_crc64combine(int argc, char **argv, int flags);
 int test_dictCreate(int argc, char **argv, int flags);
@@ -235,6 +247,7 @@ int test_zmallocAllocReallocCallocAndFree(int argc, char **argv, int flags);
 int test_zmallocAllocZeroByteAndFree(int argc, char **argv, int flags);
 
 unitTest __test_bitops_c[] = {{"test_popcount", test_popcount}, {NULL, NULL}};
+unitTest __test_cluster_slot_stats_c[] = {{"test_slotStatForSortAscCmpSmallValues", test_slotStatForSortAscCmpSmallValues}, {"test_slotStatForSortDescCmpSmallValues", test_slotStatForSortDescCmpSmallValues}, {"test_slotStatForSortAscCmpDiffExceedsIntMax", test_slotStatForSortAscCmpDiffExceedsIntMax}, {"test_slotStatForSortAscCmpLargeGreaterThanSmall", test_slotStatForSortAscCmpLargeGreaterThanSmall}, {"test_slotStatForSortDescCmpDiffExceedsIntMax", test_slotStatForSortDescCmpDiffExceedsIntMax}, {"test_slotStatForSortDescCmpLargeGreaterThanSmall", test_slotStatForSortDescCmpLargeGreaterThanSmall}, {"test_slotStatForSortAscCmpExactly2Pow32", test_slotStatForSortAscCmpExactly2Pow32}, {"test_slotStatForSortDescCmpExactly2Pow32", test_slotStatForSortDescCmpExactly2Pow32}, {"test_slotStatForSortAscCmpTieBreakBySlot", test_slotStatForSortAscCmpTieBreakBySlot}, {"test_slotStatForSortDescCmpTieBreakBySlot", test_slotStatForSortDescCmpTieBreakBySlot}, {"test_slotStatForSortAscCmpEqual", test_slotStatForSortAscCmpEqual}, {"test_slotStatForSortDescCmpEqual", test_slotStatForSortDescCmpEqual}, {NULL, NULL}};
 unitTest __test_crc64_c[] = {{"test_crc64", test_crc64}, {NULL, NULL}};
 unitTest __test_crc64combine_c[] = {{"test_crc64combine", test_crc64combine}, {NULL, NULL}};
 unitTest __test_dict_c[] = {{"test_dictCreate", test_dictCreate}, {"test_dictAdd16Keys", test_dictAdd16Keys}, {"test_dictDisableResize", test_dictDisableResize}, {"test_dictAddOneKeyTriggerResize", test_dictAddOneKeyTriggerResize}, {"test_dictDeleteKeys", test_dictDeleteKeys}, {"test_dictDeleteOneKeyTriggerResize", test_dictDeleteOneKeyTriggerResize}, {"test_dictEmptyDirAdd128Keys", test_dictEmptyDirAdd128Keys}, {"test_dictDisableResizeReduceTo3", test_dictDisableResizeReduceTo3}, {"test_dictDeleteOneKeyTriggerResizeAgain", test_dictDeleteOneKeyTriggerResizeAgain}, {"test_dictBenchmark", test_dictBenchmark}, {NULL, NULL}};
@@ -260,6 +273,7 @@ struct unitTestSuite {
     unitTest *tests;
 } unitTestSuite[] = {
     {"test_bitops.c", __test_bitops_c},
+    {"test_cluster_slot_stats.c", __test_cluster_slot_stats_c},
     {"test_crc64.c", __test_crc64_c},
     {"test_crc64combine.c", __test_crc64combine_c},
     {"test_dict.c", __test_dict_c},

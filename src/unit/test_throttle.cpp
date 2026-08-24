@@ -36,6 +36,7 @@ class ThrottleTest : public ::testing::Test {
     static void SetUpTestSuite() {
         memset(&server, 0, sizeof(valkeyServer));
         server.hz = CONFIG_DEFAULT_HZ;
+        server.logfile = (char *)"";
         dummyConnType.set_read_handler = dummySetReadHandler;
         throttle_init();
 

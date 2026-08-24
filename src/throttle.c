@@ -23,6 +23,7 @@ static const double MIN_ADJUST_AFTER_DISABLE = 100.0;         /* initial rate wh
 
 static hashtable *metricsTable = NULL;
 static list *throttlerList = NULL;
+static long long next_throttler_id = 0; /* monotonic id assigned to each registered throttler */
 
 typedef struct metricsEntry {
     sds throttler_type;
@@ -32,6 +33,7 @@ typedef struct metricsEntry {
 } metricsEntry;
 
 typedef struct throttler {
+    long long id;                        /* unique per-instance id */
     bool cleanup;                        /* true once deregistered; freed when its queue drains */
     throttleCriteriaProc *criteria_proc; /* callback defining throttling criteria */
     long long time_event_id;             /* timer event id for throttlerTimeProc */
@@ -215,6 +217,7 @@ throttler *throttle_register(throttleCriteriaProc *criteria_proc,
     serverAssert(metrics_name != NULL);
 
     throttler *t = zmalloc(sizeof(throttler));
+    t->id = next_throttler_id++;
     t->cleanup = false;
     t->criteria_proc = criteria_proc;
     t->time_event_id = AE_DELETED_EVENT_ID;
@@ -226,11 +229,13 @@ throttler *throttle_register(throttleCriteriaProc *criteria_proc,
     listAddNodeTail(throttlerList, t);
     t->ln = listLast(throttlerList);
     throttle_setRate(t, THROTTLE_UNLIMITED_RATE);
+    serverLog(LL_DEBUG, "Throttler registered: metrics=%s id=%lld", metrics_name, t->id);
     return t;
 }
 
 void throttle_deregister(throttler *t) {
     serverAssert(t != NULL);
+    serverLog(LL_DEBUG, "Throttler deregistered: metrics=%s id=%lld", t->metrics->throttler_type, t->id);
 
     if (listLength(t->client_queue) == 0) {
         freeThrottler(t);
@@ -386,11 +391,9 @@ sds throttle_sdscatInfoMetrics(sds info) {
         throttler *t = ln->value;
         if (t->rate_below_guardrail_since != 0) {
             int secs = elapsedSec(t->rate_below_guardrail_since);
-            if (secs > 0) {
-                info = sdscatprintf(info,
-                                    "throttle_%s_guardrail_secs:%d\r\n",
-                                    t->metrics->throttler_type, secs);
-            }
+            info = sdscatprintf(info,
+                                "throttle_%s_%lld_guardrail_secs:%d\r\n",
+                                t->metrics->throttler_type, t->id, secs);
         }
     }
     return info;

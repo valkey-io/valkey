@@ -24,6 +24,7 @@ const char *COMMAND_GROUP_STR[] = {
     "geo",
     "stream",
     "bitmap",
+    "radix",
     "module"
 };
 
@@ -5606,6 +5607,302 @@ struct COMMAND_ARG SUNSUBSCRIBE_Args[] = {
 /* UNSUBSCRIBE argument table */
 struct COMMAND_ARG UNSUBSCRIBE_Args[] = {
 {MAKE_ARG("channel",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_OPTIONAL|CMD_ARG_MULTIPLE,0,NULL)},
+};
+
+/********** RCARD ********************/
+
+#ifndef SKIP_CMD_HISTORY_TABLE
+/* RCARD history */
+#define RCARD_History NULL
+#endif
+
+#ifndef SKIP_CMD_TIPS_TABLE
+/* RCARD tips */
+#define RCARD_Tips NULL
+#endif
+
+#ifndef SKIP_CMD_KEY_SPECS_TABLE
+/* RCARD key specs */
+keySpec RCARD_Keyspecs[1] = {
+{NULL,CMD_KEY_RO|CMD_KEY_ACCESS,KSPEC_BS_INDEX,.bs.index={1},KSPEC_FK_RANGE,.fk.range={0,1,0}}
+};
+#endif
+
+/* RCARD argument table */
+struct COMMAND_ARG RCARD_Args[] = {
+{MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+};
+
+/********** RDEL ********************/
+
+#ifndef SKIP_CMD_HISTORY_TABLE
+/* RDEL history */
+#define RDEL_History NULL
+#endif
+
+#ifndef SKIP_CMD_TIPS_TABLE
+/* RDEL tips */
+#define RDEL_Tips NULL
+#endif
+
+#ifndef SKIP_CMD_KEY_SPECS_TABLE
+/* RDEL key specs */
+keySpec RDEL_Keyspecs[1] = {
+{NULL,CMD_KEY_RW|CMD_KEY_ACCESS|CMD_KEY_DELETE,KSPEC_BS_INDEX,.bs.index={1},KSPEC_FK_RANGE,.fk.range={0,1,0}}
+};
+#endif
+
+/* RDEL argument table */
+struct COMMAND_ARG RDEL_Args[] = {
+{MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("path",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("field",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_OPTIONAL|CMD_ARG_MULTIPLE,0,NULL)},
+};
+
+/********** RDELPREFIX ********************/
+
+#ifndef SKIP_CMD_HISTORY_TABLE
+/* RDELPREFIX history */
+#define RDELPREFIX_History NULL
+#endif
+
+#ifndef SKIP_CMD_TIPS_TABLE
+/* RDELPREFIX tips */
+#define RDELPREFIX_Tips NULL
+#endif
+
+#ifndef SKIP_CMD_KEY_SPECS_TABLE
+/* RDELPREFIX key specs */
+keySpec RDELPREFIX_Keyspecs[1] = {
+{NULL,CMD_KEY_RW|CMD_KEY_ACCESS|CMD_KEY_DELETE,KSPEC_BS_INDEX,.bs.index={1},KSPEC_FK_RANGE,.fk.range={0,1,0}}
+};
+#endif
+
+/* RDELPREFIX argument table */
+struct COMMAND_ARG RDELPREFIX_Args[] = {
+{MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("prefix",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+};
+
+/********** RGET ********************/
+
+#ifndef SKIP_CMD_HISTORY_TABLE
+/* RGET history */
+#define RGET_History NULL
+#endif
+
+#ifndef SKIP_CMD_TIPS_TABLE
+/* RGET tips */
+#define RGET_Tips NULL
+#endif
+
+#ifndef SKIP_CMD_KEY_SPECS_TABLE
+/* RGET key specs */
+keySpec RGET_Keyspecs[1] = {
+{NULL,CMD_KEY_RO|CMD_KEY_ACCESS,KSPEC_BS_INDEX,.bs.index={1},KSPEC_FK_RANGE,.fk.range={0,1,0}}
+};
+#endif
+
+/* RGET argument table */
+struct COMMAND_ARG RGET_Args[] = {
+{MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("path",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("field",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+};
+
+/********** RGETALL ********************/
+
+#ifndef SKIP_CMD_HISTORY_TABLE
+/* RGETALL history */
+#define RGETALL_History NULL
+#endif
+
+#ifndef SKIP_CMD_TIPS_TABLE
+/* RGETALL tips */
+const char *RGETALL_Tips[] = {
+"nondeterministic_output_order",
+};
+#endif
+
+#ifndef SKIP_CMD_KEY_SPECS_TABLE
+/* RGETALL key specs */
+keySpec RGETALL_Keyspecs[1] = {
+{NULL,CMD_KEY_RO|CMD_KEY_ACCESS,KSPEC_BS_INDEX,.bs.index={1},KSPEC_FK_RANGE,.fk.range={0,1,0}}
+};
+#endif
+
+/* RGETALL argument table */
+struct COMMAND_ARG RGETALL_Args[] = {
+{MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("path",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+};
+
+/********** RLONGEST ********************/
+
+#ifndef SKIP_CMD_HISTORY_TABLE
+/* RLONGEST history */
+#define RLONGEST_History NULL
+#endif
+
+#ifndef SKIP_CMD_TIPS_TABLE
+/* RLONGEST tips */
+#define RLONGEST_Tips NULL
+#endif
+
+#ifndef SKIP_CMD_KEY_SPECS_TABLE
+/* RLONGEST key specs */
+keySpec RLONGEST_Keyspecs[1] = {
+{NULL,CMD_KEY_RO|CMD_KEY_ACCESS,KSPEC_BS_INDEX,.bs.index={1},KSPEC_FK_RANGE,.fk.range={0,1,0}}
+};
+#endif
+
+/* RLONGEST values fields argument table */
+struct COMMAND_ARG RLONGEST_values_fields_Subargs[] = {
+{MAKE_ARG("numfields",ARG_TYPE_INTEGER,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("field",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_MULTIPLE,0,NULL)},
+};
+
+/* RLONGEST values argument table */
+struct COMMAND_ARG RLONGEST_values_Subargs[] = {
+{MAKE_ARG("withvalues",ARG_TYPE_PURE_TOKEN,-1,"WITHVALUES",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("fields",ARG_TYPE_BLOCK,-1,"FIELDS",NULL,NULL,CMD_ARG_NONE,2,NULL),.subargs=RLONGEST_values_fields_Subargs},
+};
+
+/* RLONGEST argument table */
+struct COMMAND_ARG RLONGEST_Args[] = {
+{MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("query",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("length",ARG_TYPE_PURE_TOKEN,-1,"LENGTH",NULL,NULL,CMD_ARG_OPTIONAL,0,NULL)},
+{MAKE_ARG("values",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_OPTIONAL,2,NULL),.subargs=RLONGEST_values_Subargs},
+};
+
+/********** RMGET ********************/
+
+#ifndef SKIP_CMD_HISTORY_TABLE
+/* RMGET history */
+#define RMGET_History NULL
+#endif
+
+#ifndef SKIP_CMD_TIPS_TABLE
+/* RMGET tips */
+#define RMGET_Tips NULL
+#endif
+
+#ifndef SKIP_CMD_KEY_SPECS_TABLE
+/* RMGET key specs */
+keySpec RMGET_Keyspecs[1] = {
+{NULL,CMD_KEY_RO|CMD_KEY_ACCESS,KSPEC_BS_INDEX,.bs.index={1},KSPEC_FK_RANGE,.fk.range={0,1,0}}
+};
+#endif
+
+/* RMGET argument table */
+struct COMMAND_ARG RMGET_Args[] = {
+{MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("path",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("field",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_MULTIPLE,0,NULL)},
+};
+
+/********** RPREFIXES ********************/
+
+#ifndef SKIP_CMD_HISTORY_TABLE
+/* RPREFIXES history */
+#define RPREFIXES_History NULL
+#endif
+
+#ifndef SKIP_CMD_TIPS_TABLE
+/* RPREFIXES tips */
+#define RPREFIXES_Tips NULL
+#endif
+
+#ifndef SKIP_CMD_KEY_SPECS_TABLE
+/* RPREFIXES key specs */
+keySpec RPREFIXES_Keyspecs[1] = {
+{NULL,CMD_KEY_RO|CMD_KEY_ACCESS,KSPEC_BS_INDEX,.bs.index={1},KSPEC_FK_RANGE,.fk.range={0,1,0}}
+};
+#endif
+
+/* RPREFIXES values fields argument table */
+struct COMMAND_ARG RPREFIXES_values_fields_Subargs[] = {
+{MAKE_ARG("numfields",ARG_TYPE_INTEGER,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("field",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_MULTIPLE,0,NULL)},
+};
+
+/* RPREFIXES values argument table */
+struct COMMAND_ARG RPREFIXES_values_Subargs[] = {
+{MAKE_ARG("withvalues",ARG_TYPE_PURE_TOKEN,-1,"WITHVALUES",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("fields",ARG_TYPE_BLOCK,-1,"FIELDS",NULL,NULL,CMD_ARG_NONE,2,NULL),.subargs=RPREFIXES_values_fields_Subargs},
+};
+
+/* RPREFIXES argument table */
+struct COMMAND_ARG RPREFIXES_Args[] = {
+{MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("query",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("lengths",ARG_TYPE_PURE_TOKEN,-1,"LENGTHS",NULL,NULL,CMD_ARG_OPTIONAL,0,NULL)},
+{MAKE_ARG("values",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_OPTIONAL,2,NULL),.subargs=RPREFIXES_values_Subargs},
+{MAKE_ARG("count",ARG_TYPE_INTEGER,-1,"COUNT",NULL,NULL,CMD_ARG_OPTIONAL,0,NULL)},
+{MAKE_ARG("max-path-bytes",ARG_TYPE_INTEGER,-1,"MAXLEN",NULL,NULL,CMD_ARG_OPTIONAL,0,NULL)},
+};
+
+/********** RSCAN ********************/
+
+#ifndef SKIP_CMD_HISTORY_TABLE
+/* RSCAN history */
+#define RSCAN_History NULL
+#endif
+
+#ifndef SKIP_CMD_TIPS_TABLE
+/* RSCAN tips */
+#define RSCAN_Tips NULL
+#endif
+
+#ifndef SKIP_CMD_KEY_SPECS_TABLE
+/* RSCAN key specs */
+keySpec RSCAN_Keyspecs[1] = {
+{NULL,CMD_KEY_RO|CMD_KEY_ACCESS,KSPEC_BS_INDEX,.bs.index={1},KSPEC_FK_RANGE,.fk.range={0,1,0}}
+};
+#endif
+
+/* RSCAN argument table */
+struct COMMAND_ARG RSCAN_Args[] = {
+{MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("cursor",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("prefix",ARG_TYPE_STRING,-1,"PREFIX",NULL,NULL,CMD_ARG_OPTIONAL,0,NULL)},
+{MAKE_ARG("count",ARG_TYPE_INTEGER,-1,"COUNT",NULL,NULL,CMD_ARG_OPTIONAL,0,NULL)},
+{MAKE_ARG("withvalues",ARG_TYPE_PURE_TOKEN,-1,"WITHVALUES",NULL,NULL,CMD_ARG_OPTIONAL,0,NULL)},
+};
+
+/********** RSET ********************/
+
+#ifndef SKIP_CMD_HISTORY_TABLE
+/* RSET history */
+#define RSET_History NULL
+#endif
+
+#ifndef SKIP_CMD_TIPS_TABLE
+/* RSET tips */
+#define RSET_Tips NULL
+#endif
+
+#ifndef SKIP_CMD_KEY_SPECS_TABLE
+/* RSET key specs */
+keySpec RSET_Keyspecs[1] = {
+{NULL,CMD_KEY_RW|CMD_KEY_UPDATE,KSPEC_BS_INDEX,.bs.index={1},KSPEC_FK_RANGE,.fk.range={0,1,0}}
+};
+#endif
+
+/* RSET condition argument table */
+struct COMMAND_ARG RSET_condition_Subargs[] = {
+{MAKE_ARG("nx",ARG_TYPE_PURE_TOKEN,-1,"NX",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("xx",ARG_TYPE_PURE_TOKEN,-1,"XX",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+};
+
+/* RSET argument table */
+struct COMMAND_ARG RSET_Args[] = {
+{MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("path",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("field",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("value",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("condition",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_OPTIONAL,2,NULL),.subargs=RSET_condition_Subargs},
 };
 
 /********** EVAL ********************/
@@ -12019,6 +12316,17 @@ struct COMMAND_STRUCT serverCommandTable[] = {
 {MAKE_CMD("subscribe","Listens for messages published to channels.","O(N) where N is the number of channels to subscribe to.","2.0.0",CMD_DOC_NONE,NULL,NULL,"pubsub",COMMAND_GROUP_PUBSUB,SUBSCRIBE_History,0,SUBSCRIBE_Tips,0,subscribeCommand,-2,CMD_PUBSUB|CMD_NOSCRIPT|CMD_LOADING|CMD_STALE|CMD_SENTINEL,ACL_CATEGORY_PUBSUB|ACL_CATEGORY_SLOW,NULL,SUBSCRIBE_Keyspecs,0,NULL,1),.args=SUBSCRIBE_Args},
 {MAKE_CMD("sunsubscribe","Stops listening to messages posted to shard channels.","O(N) where N is the number of shard channels to unsubscribe.","7.0.0",CMD_DOC_NONE,NULL,NULL,"pubsub",COMMAND_GROUP_PUBSUB,SUNSUBSCRIBE_History,0,SUNSUBSCRIBE_Tips,0,sunsubscribeCommand,-1,CMD_PUBSUB|CMD_NOSCRIPT|CMD_LOADING|CMD_STALE,ACL_CATEGORY_PUBSUB|ACL_CATEGORY_SLOW,NULL,SUNSUBSCRIBE_Keyspecs,1,NULL,1),.args=SUNSUBSCRIBE_Args},
 {MAKE_CMD("unsubscribe","Stops listening to messages posted to channels.","O(N) where N is the number of channels to unsubscribe.","2.0.0",CMD_DOC_NONE,NULL,NULL,"pubsub",COMMAND_GROUP_PUBSUB,UNSUBSCRIBE_History,0,UNSUBSCRIBE_Tips,0,unsubscribeCommand,-1,CMD_PUBSUB|CMD_NOSCRIPT|CMD_LOADING|CMD_STALE|CMD_SENTINEL,ACL_CATEGORY_PUBSUB|ACL_CATEGORY_SLOW,NULL,UNSUBSCRIBE_Keyspecs,0,NULL,1),.args=UNSUBSCRIBE_Args},
+/* radix */
+{MAKE_CMD("rcard","Returns the number of logical paths in a radix tree.","O(1).","9.2.0",CMD_DOC_NONE,NULL,NULL,"radix",COMMAND_GROUP_RADIX,RCARD_History,0,RCARD_Tips,0,rcardCommand,2,CMD_READONLY|CMD_FAST,ACL_CATEGORY_RADIX|ACL_CATEGORY_READ|ACL_CATEGORY_FAST,NULL,RCARD_Keyspecs,1,NULL,1),.args=RCARD_Args},
+{MAKE_CMD("rdel","Deletes fields or the complete payload at a radix-tree path.","O(L + F*U).","9.2.0",CMD_DOC_NONE,NULL,NULL,"radix",COMMAND_GROUP_RADIX,RDEL_History,0,RDEL_Tips,0,rdelCommand,-3,CMD_WRITE|CMD_FAST,ACL_CATEGORY_RADIX|ACL_CATEGORY_WRITE|ACL_CATEGORY_FAST,NULL,RDEL_Keyspecs,1,NULL,3),.args=RDEL_Args},
+{MAKE_CMD("rdelprefix","Deletes every stored radix path below a prefix.","O(L + N).","9.2.0",CMD_DOC_NONE,NULL,NULL,"radix",COMMAND_GROUP_RADIX,RDELPREFIX_History,0,RDELPREFIX_Tips,0,rdelprefixCommand,3,CMD_WRITE,ACL_CATEGORY_RADIX|ACL_CATEGORY_WRITE|ACL_CATEGORY_SLOW,NULL,RDELPREFIX_Keyspecs,1,NULL,2),.args=RDELPREFIX_Args},
+{MAKE_CMD("rget","Returns one field from an exact radix-tree path.","O(L + U).","9.2.0",CMD_DOC_NONE,NULL,NULL,"radix",COMMAND_GROUP_RADIX,RGET_History,0,RGET_Tips,0,rgetCommand,4,CMD_READONLY|CMD_FAST,ACL_CATEGORY_RADIX|ACL_CATEGORY_READ|ACL_CATEGORY_FAST,NULL,RGET_Keyspecs,1,NULL,3),.args=RGET_Args},
+{MAKE_CMD("rgetall","Returns all field-value pairs at an exact radix-tree path.","O(L + O).","9.2.0",CMD_DOC_NONE,NULL,NULL,"radix",COMMAND_GROUP_RADIX,RGETALL_History,0,RGETALL_Tips,1,rgetallCommand,3,CMD_READONLY,ACL_CATEGORY_RADIX|ACL_CATEGORY_READ|ACL_CATEGORY_SLOW,NULL,RGETALL_Keyspecs,1,NULL,2),.args=RGETALL_Args},
+{MAKE_CMD("rlongest","Returns the longest stored radix path that prefixes a query.","O(L + O).","9.2.0",CMD_DOC_NONE,NULL,NULL,"radix",COMMAND_GROUP_RADIX,RLONGEST_History,0,RLONGEST_Tips,0,rlongestCommand,-3,CMD_READONLY,ACL_CATEGORY_RADIX|ACL_CATEGORY_READ|ACL_CATEGORY_SLOW,NULL,RLONGEST_Keyspecs,1,NULL,4),.args=RLONGEST_Args},
+{MAKE_CMD("rmget","Returns multiple fields from an exact radix-tree path.","O(L + F*U).","9.2.0",CMD_DOC_NONE,NULL,NULL,"radix",COMMAND_GROUP_RADIX,RMGET_History,0,RMGET_Tips,0,rmgetCommand,-4,CMD_READONLY|CMD_FAST,ACL_CATEGORY_RADIX|ACL_CATEGORY_READ|ACL_CATEGORY_FAST,NULL,RMGET_Keyspecs,1,NULL,3),.args=RMGET_Args},
+{MAKE_CMD("rprefixes","Returns every stored radix path that prefixes a query.","O(L + O).","9.2.0",CMD_DOC_NONE,NULL,NULL,"radix",COMMAND_GROUP_RADIX,RPREFIXES_History,0,RPREFIXES_Tips,0,rprefixesCommand,-3,CMD_READONLY,ACL_CATEGORY_RADIX|ACL_CATEGORY_READ|ACL_CATEGORY_SLOW,NULL,RPREFIXES_Keyspecs,1,NULL,6),.args=RPREFIXES_Args},
+{MAKE_CMD("rscan","Incrementally traverses radix-tree paths in lexicographic order.","O(L + C + O) per call.","9.2.0",CMD_DOC_NONE,NULL,NULL,"radix",COMMAND_GROUP_RADIX,RSCAN_History,0,RSCAN_Tips,0,rscanCommand,-3,CMD_READONLY,ACL_CATEGORY_RADIX|ACL_CATEGORY_READ|ACL_CATEGORY_SLOW,NULL,RSCAN_Keyspecs,1,NULL,5),.args=RSCAN_Args},
+{MAKE_CMD("rset","Sets a field and value at a radix-tree path.","O(L + U), where L is the path length and U is the payload field lookup cost.","9.2.0",CMD_DOC_NONE,NULL,NULL,"radix",COMMAND_GROUP_RADIX,RSET_History,0,RSET_Tips,0,rsetCommand,-5,CMD_WRITE|CMD_DENYOOM|CMD_FAST,ACL_CATEGORY_RADIX|ACL_CATEGORY_WRITE|ACL_CATEGORY_FAST,NULL,RSET_Keyspecs,1,NULL,5),.args=RSET_Args},
 /* scripting */
 {MAKE_CMD("eval","Executes a server-side Lua script.","Depends on the script that is executed.","2.6.0",CMD_DOC_NONE,NULL,NULL,"scripting",COMMAND_GROUP_SCRIPTING,EVAL_History,0,EVAL_Tips,0,evalCommand,-3,CMD_NOSCRIPT|CMD_SKIP_MONITOR|CMD_MAY_REPLICATE|CMD_NO_MANDATORY_KEYS|CMD_STALE,ACL_CATEGORY_SCRIPTING|ACL_CATEGORY_SLOW,NULL,EVAL_Keyspecs,1,evalGetKeys,4),.args=EVAL_Args},
 {MAKE_CMD("evalsha","Executes a server-side Lua script by SHA1 digest.","Depends on the script that is executed.","2.6.0",CMD_DOC_NONE,NULL,NULL,"scripting",COMMAND_GROUP_SCRIPTING,EVALSHA_History,0,EVALSHA_Tips,0,evalShaCommand,-3,CMD_NOSCRIPT|CMD_SKIP_MONITOR|CMD_MAY_REPLICATE|CMD_NO_MANDATORY_KEYS|CMD_STALE,ACL_CATEGORY_SCRIPTING|ACL_CATEGORY_SLOW,NULL,EVALSHA_Keyspecs,1,evalGetKeys,4),.args=EVALSHA_Args},

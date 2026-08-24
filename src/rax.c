@@ -919,6 +919,71 @@ int raxFind(rax *rax, unsigned char *s, size_t len, void **value) {
     return 1;
 }
 
+/* Walk a query once and report every stored key encountered on its path.
+ * Unlike repeated raxFind() calls, compressed edges are compared only once,
+ * keeping ancestor-prefix enumeration O(len + matches). */
+size_t raxForEachPrefix(rax *rax,
+                        unsigned char *s,
+                        size_t len,
+                        raxPrefixCallback callback,
+                        void *context) {
+    raxNode *h = rax->head;
+    size_t consumed = 0;
+    size_t matches = 0;
+
+    if (h->iskey) {
+        matches++;
+        if (callback && !callback(0, raxGetData(h), context)) return matches;
+    }
+
+    while (consumed < len && h->size) {
+        raxNode **children = raxNodeFirstChildPtr(h);
+        size_t child_index = 0;
+
+        if (h->iscompr) {
+            size_t remaining = len - consumed;
+            size_t compare_len = remaining < h->size ? remaining : h->size;
+            if (memcmp(h->data, s + consumed, compare_len) != 0) break;
+            consumed += compare_len;
+            if (compare_len != h->size) break;
+        } else {
+            unsigned char *edge = memchr(h->data, s[consumed], h->size);
+            if (edge == NULL) break;
+            child_index = (size_t)(edge - h->data);
+            consumed++;
+        }
+
+        memcpy(&h, children + child_index, sizeof(h));
+        if (h->iskey) {
+            matches++;
+            if (callback && !callback(consumed, raxGetData(h), context)) break;
+        }
+    }
+    return matches;
+}
+
+typedef struct raxLongestPrefixContext {
+    size_t matched_len;
+    void *value;
+} raxLongestPrefixContext;
+
+static int raxRememberLongestPrefix(size_t key_len, void *data, void *context) {
+    raxLongestPrefixContext *longest = context;
+    longest->matched_len = key_len;
+    longest->value = data;
+    return 1;
+}
+
+/* Find the deepest stored key that is an ancestor of the query. */
+int raxFindLongestPrefix(rax *rax, unsigned char *s, size_t len, size_t *matched_len, void **value) {
+    raxLongestPrefixContext longest = {0, NULL};
+    size_t matches = raxForEachPrefix(rax, s, len, raxRememberLongestPrefix, &longest);
+    if (matches == 0) return 0;
+    if (matched_len) *matched_len = longest.matched_len;
+    if (value) *value = longest.value;
+    return 1;
+}
+
 /* Return the memory address where the 'parent' node stores the specified
  * 'child' pointer, so that the caller can update the pointer with another
  * one if needed. The function assumes it will find a match, otherwise the

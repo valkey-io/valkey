@@ -42,6 +42,7 @@ jobs:
         run: |
           ./src/valkey-server --daemonize yes --save "" --logfile external-server.log \
             --enable-protected-configs yes --enable-debug-command yes --enable-module-command yes
+          sleep 5
       - name: Run external test
         run: |
           ./runtest \
@@ -76,6 +77,7 @@ jobs:
           ./src/valkey-server --cluster-enabled yes --cluster-databases 16 --daemonize yes \
             --save "" --logfile external-server.log \
             --enable-protected-configs yes --enable-debug-command yes --enable-module-command yes
+          sleep 5
       - name: Create a single node cluster
         run: ./src/valkey-cli cluster addslots $(for slot in {0..16383}; do echo $slot; done); sleep 5
       - name: Run external test
@@ -111,6 +113,7 @@ jobs:
       - name: Start valkey-server
         run: |
           ./src/valkey-server --daemonize yes --save "" --logfile external-server.log
+          sleep 5
       - name: Run external test
         run: |
           ./runtest \

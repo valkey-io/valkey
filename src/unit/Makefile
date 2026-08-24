@@ -19,13 +19,19 @@ DEPENDS := $(patsubst %.cpp,%.d,$(SOURCES))
 TEST_CFLAGS := $(CFLAGS)
 
 # Hold new gtest test to a high standard
+# The -Wframe-larger-than cap must accommodate the compiler-generated static
+# initialization function, whose frame grows with the number of TEST_F
+# registrations in a file: under -fsanitize=address each registration's
+# temporaries get their own redzoned stack slot, roughly 150 bytes per test
+# on current toolchains (more on older ones). 128K allows large test files
+# while still catching runaway frames in hand-written code.
 MORE_WARNINGS=-Wno-variadic-macros \
 	-Werror \
 	-Wpedantic \
 	-Wextra \
 	-Wall \
 	-Wcast-align \
-	-Wframe-larger-than=32768 \
+	-Wframe-larger-than=131072 \
 	-Wno-strict-overflow \
 	-Wsign-compare \
 	-Werror=missing-braces \
@@ -94,6 +100,7 @@ HIREDIS_LIB := ../../deps/libvalkey/lib/libvalkey.a
 JEMALLOC_LIB := ../../deps/jemalloc/lib/libjemalloc.a
 HDR_HISTOGRAM_LIB := ../../deps/hdr_histogram/libhdrhistogram.a
 FPCONV_LIB := ../../deps/fpconv/libfpconv.a
+LZ4_LIB := ../../deps/lz4/liblz4.a
 TLS_LIBS := ../../deps/libvalkey/lib/libvalkey_tls.a -lssl -lcrypto
 GTEST_CFLAGS ?=
 GTEST_LIBS   ?=
@@ -174,7 +181,8 @@ LD_LIBS := $(HIREDIS_LIB) \
 	$(JEMALLOC_LIB) \
 	$(GTEST_LIBS) \
 	$(HDR_HISTOGRAM_LIB) \
-	$(FPCONV_LIB)
+	$(FPCONV_LIB) \
+	$(LZ4_LIB)
 
 # Add libbacktrace support if enabled
 ifeq ($(USE_LIBBACKTRACE),yes)

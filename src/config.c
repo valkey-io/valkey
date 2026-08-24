@@ -176,6 +176,12 @@ configEnum rdb_version_check_enum[] = {{"strict", RDB_VERSION_CHECK_STRICT},
                                        {"relaxed", RDB_VERSION_CHECK_RELAXED},
                                        {NULL, 0}};
 
+configEnum rdb_compression_enum[] = {{"no", RDB_COMPRESSION_NO},
+                                     {"yes", RDB_COMPRESSION_YES},
+                                     {"lzf", RDB_COMPRESSION_LZF},
+                                     {"lz4", RDB_COMPRESSION_LZ4},
+                                     {NULL, 0}};
+
 /* Output buffer limits presets. */
 clientBufferLimitsConfig clientBufferLimitsDefaults[CLIENT_TYPE_OBUF_COUNT] = {
     {0, 0, 0},                                 /* normal */
@@ -573,7 +579,7 @@ void loadServerConfigFromString(sds config) {
              * remove it from the command table. */
             serverAssert(hashtableDelete(server.commands, argv[1]));
 
-            /* Otherwise we re-add the command under a different name. */
+            /* Otherwise, we re-add the command under a different name. */
             if (sdslen(argv[2]) != 0) {
                 if (cmd->current_name != cmd->fullname) {
                     sdsfree(cmd->current_name);
@@ -1507,7 +1513,7 @@ void rewriteConfigUserOption(struct rewriteConfigState *state) {
         return;
     }
 
-    /* Otherwise scan the list of users and rewrite every line. Note that
+    /* Otherwise, scan the list of users and rewrite every line. Note that
      * in case the list here is empty, the effect will just be to comment
      * all the users directive inside the config file. */
     raxIterator ri;
@@ -2539,7 +2545,7 @@ static int isValidAnnouncedIp(char *val, const char **err) {
         *err = "cluster-announce-ip contains invalid character";
         return 0;
     }
-    /* Empty resets the announced ip. Otherwise accept a literal IPv4/IPv6, or a
+    /* Empty resets the announced ip. Otherwise, accept a literal IPv4/IPv6, or a
      * hostname, since some users set a hostname here before
      * cluster-announce-hostname existed. */
     if (val[0] != '\0' && anetResolve(NULL, val, NULL, 0, ANET_IP_ONLY) != ANET_OK && !isValidHostname(val)) {
@@ -3184,6 +3190,12 @@ static int updateRdmaPort(const char **err) {
     return 1;
 }
 
+static int updateClusterReplicaPriority(const char **err) {
+    UNUSED(err);
+    clusterUpdateMyselfReplicaPriority();
+    return 1;
+}
+
 static int setConfigReplicaOfOption(standardConfig *config, sds *argv, int argc, const char **err) {
     UNUSED(config);
 
@@ -3342,7 +3354,6 @@ standardConfig static_configs[] = {
     createBoolConfig("daemonize", NULL, IMMUTABLE_CONFIG, server.daemonize, 0, NULL, NULL),
     createBoolConfig("always-show-logo", NULL, IMMUTABLE_CONFIG, server.always_show_logo, 0, NULL, NULL),
     createBoolConfig("protected-mode", NULL, MODIFIABLE_CONFIG, server.protected_mode, 1, NULL, NULL),
-    createBoolConfig("rdbcompression", NULL, MODIFIABLE_CONFIG, server.rdb_compression, 1, NULL, NULL),
     createBoolConfig("rdb-del-sync-files", NULL, MODIFIABLE_CONFIG, server.rdb_del_sync_files, 0, NULL, NULL),
     createBoolConfig("activerehashing", NULL, MODIFIABLE_CONFIG, server.activerehashing, 1, NULL, NULL),
     createBoolConfig("stop-writes-on-bgsave-error", NULL, MODIFIABLE_CONFIG, server.stop_writes_on_bgsave_err, 1, NULL, NULL),
@@ -3449,6 +3460,7 @@ standardConfig static_configs[] = {
     createEnumConfig("log-format", NULL, MODIFIABLE_CONFIG, log_format_enum, server.log_format, LOG_FORMAT_LEGACY, NULL, NULL),
     createEnumConfig("log-timestamp-format", NULL, MODIFIABLE_CONFIG, log_timestamp_format_enum, server.log_timestamp_format, LOG_TIMESTAMP_LEGACY, NULL, NULL),
     createEnumConfig("rdb-version-check", NULL, MODIFIABLE_CONFIG, rdb_version_check_enum, server.rdb_version_check, RDB_VERSION_CHECK_STRICT, NULL, NULL),
+    createEnumConfig("rdbcompression", NULL, MODIFIABLE_CONFIG, rdb_compression_enum, server.rdb_compression, RDB_COMPRESSION_YES, NULL, NULL),
 
     /* Integer configs */
     createIntConfig("databases", NULL, IMMUTABLE_CONFIG, 1, INT_MAX, server.config_databases, 16, INTEGER_CONFIG, NULL, NULL),
@@ -3512,6 +3524,7 @@ standardConfig static_configs[] = {
 #ifdef LOG_REQ_RES
     createUIntConfig("client-default-resp", NULL, IMMUTABLE_CONFIG | HIDDEN_CONFIG, 2, 3, server.client_default_resp, 2, INTEGER_CONFIG, NULL, NULL),
 #endif
+    createUIntConfig("cluster-replica-priority", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, server.cluster_replica_priority, 0, INTEGER_CONFIG, NULL, updateClusterReplicaPriority),
 
     /* Unsigned Long configs */
     createULongConfig("active-defrag-max-scan-fields", NULL, MODIFIABLE_CONFIG, 1, LONG_MAX, server.active_defrag_max_scan_fields, 1000, INTEGER_CONFIG, NULL, NULL), /* Default: keys with more than 1000 fields will be processed separately */

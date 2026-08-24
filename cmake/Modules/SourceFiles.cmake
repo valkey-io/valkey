@@ -33,6 +33,8 @@ set(VALKEY_SERVER_SRCS
     ${CMAKE_SOURCE_DIR}/src/t_list.c
     ${CMAKE_SOURCE_DIR}/src/t_set.c
     ${CMAKE_SOURCE_DIR}/src/t_zset.c
+    ${CMAKE_SOURCE_DIR}/src/fbtree.c
+    ${CMAKE_SOURCE_DIR}/src/ordered_index.c
     ${CMAKE_SOURCE_DIR}/src/t_hash.c
     ${CMAKE_SOURCE_DIR}/src/config.c
     ${CMAKE_SOURCE_DIR}/src/aof.c
@@ -121,7 +123,10 @@ set(VALKEY_SERVER_SRCS
     ${CMAKE_SOURCE_DIR}/src/vset.c
     ${CMAKE_SOURCE_DIR}/src/fifo.c
     ${CMAKE_SOURCE_DIR}/src/mutexqueue.c
-    ${CMAKE_SOURCE_DIR}/src/queues.c)
+    ${CMAKE_SOURCE_DIR}/src/queues.c
+    ${CMAKE_SOURCE_DIR}/src/compression.c
+    ${CMAKE_SOURCE_DIR}/src/compression_lz4.c
+    ${CMAKE_SOURCE_DIR}/src/compression_stream.c)
 
 
 # valkey-cli

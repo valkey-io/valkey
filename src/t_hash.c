@@ -2054,7 +2054,7 @@ void genericHgetallCommand(client *c, int flags) {
     writePreparedClient *wpc = prepareClientForFutureWrites(c);
     if (!wpc) return;
     /* We return a map if the user requested fields and values, like in the
-     * HGETALL case. Otherwise to use a flat array makes more sense. */
+     * HGETALL case. Otherwise, to use a flat array makes more sense. */
     void *replylen = addReplyDeferredLen(c);
     hashTypeInitIterator(o, &hi);
     while (hashTypeNext(&hi) != C_ERR) {
@@ -2695,6 +2695,10 @@ typedef struct {
 
 /* Callback for popping expired entries from the volatile set.
  * Deletes the entry from the hash table and tracks it in the expiry context.
+ *
+ * This function does not incr the dirty counter. Caller needs to increment
+ * it themselves if necessary.
+ *
  * Returns 1 if deleted, 0 if nothing to do. */
 static int hashTypeExpireEntry(void *entry, void *c) {
     expiryContext *ctx = c;

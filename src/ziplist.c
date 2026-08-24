@@ -195,7 +195,7 @@
 #define ZIP_BIG_PREVLEN 254 /* ZIP_BIG_PREVLEN - 1 is the max number of bytes of      \
                                the previous entry, for the "prevlen" field prefixing  \
                                each entry, to be represented with just a single byte. \
-                               Otherwise it is represented as FE AA BB CC DD, where   \
+                               Otherwise, it is represented as FE AA BB CC DD, where  \
                                AA BB CC DD are a 4 bytes unsigned integer             \
                                representing the previous entry len. */
 
@@ -744,7 +744,7 @@ unsigned char *__ziplistCascadeUpdate(unsigned char *zl, unsigned char *p) {
     size_t firstentrylen;                    /* Used to handle insert at head. */
     size_t rawlen, curlen = intrev32ifbe(ZIPLIST_BYTES(zl));
     size_t extra = 0, cnt = 0, offset;
-    size_t delta = 4; /* Extra bytes needed to update a entry's prevlen (5-1). */
+    size_t delta = 4; /* Extra bytes needed to update an entry's prevlen (5-1). */
     unsigned char *tail = zl + intrev32ifbe(ZIPLIST_TAIL_OFFSET(zl));
 
     /* Empty ziplist */

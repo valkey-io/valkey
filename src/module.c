@@ -15157,8 +15157,9 @@ int moduleDefragValue(robj *key, robj *value, int dbid) {
     return 1;
 }
 
-/* Index of the module to start from on the next moduleDefragGlobals() call. Advanced past the
- * module we stopped on so a module with ongoing work doesn't starve the others. */
+/* Index of the module to start from on the next moduleDefragGlobals() call.  Advanced past the
+ * module we stopped on so a module with ongoing work doesn't starve the others.  An index rather
+ * than a cached listNode, because a module can be unloaded between invocations. */
 static unsigned long defrag_module_start_idx = 0;
 
 /* Called at stage init (endtime==0) to start a new global defrag pass.  Clears each module's
@@ -15197,21 +15198,35 @@ int moduleDefragGlobals(monotime endtime) {
     unsigned long count = listLength(modules);
     if (count == 0) return more_work;
 
-    for (unsigned long n = 0; n < count; n++) {
-        unsigned long idx = (defrag_module_start_idx + n) % count;
-        struct ValkeyModule *module = listNodeValue(listIndex(modules, idx));
-        if (!module->defrag_cb) continue;
-        if (module->defrag_done_this_cycle) continue;
-        ValkeyModuleDefragCtx defrag_ctx = {endtime, &module->defrag_cursor, NULL, -1};
-        module->defrag_cb(&defrag_ctx);
-        if (module->defrag_cursor != 0) {
-            more_work = 1;
-        } else {
-            module->defrag_done_this_cycle = 1;
-        }
-        if (endtime != 0 && getMonotonicUs() >= endtime) {
-            defrag_module_start_idx = (idx + 1) % count;
-            break;
+    /* Two sequential walks cover the modules round-robin: the first handles the range
+     * [start_idx, count) and the second the wrapped remainder [0, start_idx).  Indexing the list
+     * per step instead would make the traversal quadratic in the number of loaded modules. */
+    for (int pass = 0; pass < 2; pass++) {
+        listIter li;
+        listNode *ln;
+        unsigned long idx = 0;
+
+        listRewind(modules, &li);
+        while ((ln = listNext(&li)) != NULL) {
+            const unsigned long this_idx = idx++;
+            const int in_this_pass =
+                (pass == 0) ? (this_idx >= defrag_module_start_idx) : (this_idx < defrag_module_start_idx);
+            if (!in_this_pass) continue;
+
+            struct ValkeyModule *module = listNodeValue(ln);
+            if (!module->defrag_cb) continue;
+            if (module->defrag_done_this_cycle) continue;
+            ValkeyModuleDefragCtx defrag_ctx = {endtime, &module->defrag_cursor, NULL, -1};
+            module->defrag_cb(&defrag_ctx);
+            if (module->defrag_cursor != 0) {
+                more_work = 1;
+            } else {
+                module->defrag_done_this_cycle = 1;
+            }
+            if (endtime != 0 && getMonotonicUs() >= endtime) {
+                defrag_module_start_idx = (this_idx + 1) % count;
+                return more_work;
+            }
         }
     }
     return more_work;

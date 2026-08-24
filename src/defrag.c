@@ -1024,6 +1024,12 @@ static void endDefragCycle(bool normal_termination) {
     }
     defrag_later_cursor = 0;
 
+    /* Modules keep their own defrag cursor.  On a normal termination those are already 0, since
+     * the module stage only completes once no module reports outstanding work.  An abnormal
+     * termination interrupts modules mid-pass, so discard what they saved: the position may refer
+     * to state that is rebuilt before defrag runs again. */
+    if (!normal_termination) moduleDefragGlobalsAbort();
+
     size_t frag_bytes;
     float frag_pct = getAllocatorFragmentation(&frag_bytes);
     serverLog(LL_VERBOSE, "Active defrag done in %dms, reallocated=%d, frag=%.0f%%, frag_bytes=%zu",

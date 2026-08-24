@@ -102,5 +102,28 @@ start_server {tags {"modules"} overrides {{save ""}}} {
             assert {[getInfoProperty $busyinfo defragglobalbusy_busy_calls] > 0}
             assert {[getInfoProperty $testinfo defragtest_global_attempts] > 0}
         }
+
+        test {Module defrag: aborting a cycle discards the module cursor} {
+            # The busy module stores a non-zero cursor on every invocation and never
+            # finishes, so once it has run it always resumes from a saved position.
+            # Aborting the cycle must discard that position, because it refers to
+            # module state that may be rebuilt before defrag next runs. Observed via
+            # busy_fresh_starts, which only increments when the callback sees a zero
+            # cursor, i.e. the start of a genuinely fresh pass.
+            set before [getInfoProperty [r info defragglobalbusy_stats] \
+                            defragglobalbusy_busy_fresh_starts]
+            assert {$before > 0}
+
+            # Abnormal termination: this is the endDefragCycle(false) path.
+            r config set activedefrag no
+            r config set activedefrag yes
+
+            wait_for_condition 50 100 {
+                [getInfoProperty [r info defragglobalbusy_stats] \
+                     defragglobalbusy_busy_fresh_starts] > $before
+            } else {
+                fail "module cursor was not discarded when the defrag cycle was aborted"
+            }
+        }
     }
 }

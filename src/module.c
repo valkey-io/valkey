@@ -15041,6 +15041,12 @@ int VM_DefragShouldStop(ValkeyModuleDefragCtx *ctx) {
  * begins. This is possible because the API guarantees that concurrent
  * defragmentation of multiple keys will not be performed.
  *
+ * A stored cursor is not guaranteed to persist. It is discarded if the defrag cycle terminates
+ * abnormally, and it may outlive an operation that invalidated whatever the module was iterating,
+ * such as a keyspace flush or a database swap, since those do not end the cycle. A module must
+ * therefore validate a cursor it reads rather than trust it, for example by encoding a generation
+ * stamp alongside the position, and must be able to restart cleanly when it no longer applies.
+ *
  * Returns VALKEYMODULE_ERR if no cursor is available for this callback (see
  * above), VALKEYMODULE_OK otherwise.
  */
@@ -15163,8 +15169,12 @@ int moduleDefragValue(robj *key, robj *value, int dbid) {
 static unsigned long defrag_module_start_idx = 0;
 
 /* Called at stage init (endtime==0) to start a new global defrag pass.  Clears each module's
- * done flag so every module is visited again, and resets the round-robin start position.  Cursors
- * are not touched here: a module owns its cursor and may carry progress across cycles. */
+ * done flag so every module is visited again, and resets the round-robin start position.
+ *
+ * Cursors are not cleared here.  On a normal cycle end every cursor is already 0, because the
+ * stage only reports DEFRAG_DONE once no module has work left.  A cursor can only outlive a cycle
+ * when that cycle was aborted, and that case is handled in moduleDefragGlobalsAbort() rather than
+ * here, so a module is never handed back a position saved by an interrupted pass. */
 void moduleDefragGlobalsStart(void) {
     defrag_module_start_idx = 0;
 
@@ -15174,6 +15184,22 @@ void moduleDefragGlobalsStart(void) {
     listRewind(modules, &li);
     while ((ln = listNext(&li)) != NULL) {
         struct ValkeyModule *module = listNodeValue(ln);
+        module->defrag_done_this_cycle = 0;
+    }
+}
+
+/* Discard in-progress global defrag state.  Called when a defrag cycle terminates abnormally,
+ * which interrupts modules mid-pass: a cursor saved at that point refers to a position in module
+ * state that may be rebuilt before defrag next runs, so it must not be handed back.  Mirrors
+ * defrag_later_cursor being cleared in endDefragCycle(). */
+void moduleDefragGlobalsAbort(void) {
+    listIter li;
+    listNode *ln;
+
+    listRewind(modules, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        struct ValkeyModule *module = listNodeValue(ln);
+        module->defrag_cursor = 0;
         module->defrag_done_this_cycle = 0;
     }
 }

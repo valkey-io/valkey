@@ -38,6 +38,7 @@ GROUPS = {
     "geo": "COMMAND_GROUP_GEO",
     "stream": "COMMAND_GROUP_STREAM",
     "bitmap": "COMMAND_GROUP_BITMAP",
+    "radix": "COMMAND_GROUP_RADIX",
 }
 
 
@@ -716,6 +717,7 @@ const char *COMMAND_GROUP_STR[] = {
     "geo",
     "stream",
     "bitmap",
+    "radix",
     "module"
 };
 

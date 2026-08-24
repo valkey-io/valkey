@@ -273,6 +273,8 @@ void xorObjectDigest(serverDb *db, robj *keyobj, unsigned char *digest, robj *o)
             }
         }
         streamIteratorStop(&si);
+    } else if (objectGetType(o) == OBJ_RADIX) {
+        radixTypeDigest(digest, o);
     } else if (objectGetType(o) == OBJ_MODULE) {
         ValkeyModuleDigest md = {{0}, {0}, keyobj, db->id};
         moduleValue *mv = objectGetVal(o);
@@ -1262,6 +1264,9 @@ void serverLogObjectDebugInfo(const robj *o) {
         }
     } else if (objectGetType(o) == OBJ_STREAM) {
         serverLog(LL_WARNING, "Stream size: %d", (int)streamLength(o));
+    } else if (objectGetType(o) == OBJ_RADIX) {
+        serverLog(LL_WARNING, "Radix path count: %llu",
+                  (unsigned long long)raxSize(((radixObject *)objectGetVal(o))->index));
     }
 #endif
 }

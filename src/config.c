@@ -176,6 +176,12 @@ configEnum rdb_version_check_enum[] = {{"strict", RDB_VERSION_CHECK_STRICT},
                                        {"relaxed", RDB_VERSION_CHECK_RELAXED},
                                        {NULL, 0}};
 
+configEnum rdb_compression_enum[] = {{"no", RDB_COMPRESSION_NO},
+                                     {"yes", RDB_COMPRESSION_YES},
+                                     {"lzf", RDB_COMPRESSION_LZF},
+                                     {"lz4", RDB_COMPRESSION_LZ4},
+                                     {NULL, 0}};
+
 /* Output buffer limits presets. */
 clientBufferLimitsConfig clientBufferLimitsDefaults[CLIENT_TYPE_OBUF_COUNT] = {
     {0, 0, 0},                                 /* normal */
@@ -185,6 +191,24 @@ clientBufferLimitsConfig clientBufferLimitsDefaults[CLIENT_TYPE_OBUF_COUNT] = {
 
 /* OOM Score defaults */
 int configOOMScoreAdjValuesDefaults[CONFIG_OOM_COUNT] = {0, 200, 800};
+
+/* Mapping of config flags to their human-readable names.
+ * Keep in sync with the flag definitions in server.h. */
+struct {
+    unsigned int flag;
+    const char *name;
+} configFlagNames[] = {
+    {IMMUTABLE_CONFIG, "immutable"},
+    {SENSITIVE_CONFIG, "sensitive"},
+    {DEBUG_CONFIG, "debug"},
+    {MULTI_ARG_CONFIG, "multi-arg"},
+    {HIDDEN_CONFIG, "hidden"},
+    {PROTECTED_CONFIG, "protected"},
+    {DENY_LOADING_CONFIG, "deny-loading"},
+    {ALIAS_CONFIG, "alias"},
+    {MODULE_CONFIG, "module"},
+    {VOLATILE_CONFIG, "volatile"},
+};
 
 /* Generic config infrastructure function pointers
  * int is_valid_fn(val, err)
@@ -555,7 +579,7 @@ void loadServerConfigFromString(sds config) {
              * remove it from the command table. */
             serverAssert(hashtableDelete(server.commands, argv[1]));
 
-            /* Otherwise we re-add the command under a different name. */
+            /* Otherwise, we re-add the command under a different name. */
             if (sdslen(argv[2]) != 0) {
                 if (cmd->current_name != cmd->fullname) {
                     sdsfree(cmd->current_name);
@@ -785,6 +809,60 @@ static void restoreBackupConfig(standardConfig **set_configs,
     }
 }
 
+/* Match configs by name or pattern. Returns a dict of matched configs. */
+static dict *matchSinglePatternToConfigs(sds pattern) {
+    dict *matches = dictCreate(&externalStringType);
+
+    /* If the string doesn't contain glob patterns, just directly
+     * look up the key in the dictionary. */
+    if (!strpbrk(pattern, "[*?")) {
+        standardConfig *config = lookupConfig(pattern);
+        if (config) {
+            dictAdd(matches, (void *)config->name, config);
+        }
+        return matches;
+    }
+
+    /* Otherwise, do a match against all items in the dictionary. */
+    dictIterator *di = dictGetIterator(configs);
+    dictEntry *de;
+
+    while ((de = dictNext(di)) != NULL) {
+        standardConfig *config = dictGetVal(de);
+        /* Note that hidden configs require an exact match (not a pattern) */
+        if (config->flags & HIDDEN_CONFIG) continue;
+        if (stringmatch(pattern, dictGetKey(de), 1)) {
+            dictAdd(matches, dictGetKey(de), config);
+        }
+    }
+    dictReleaseIterator(di);
+
+    return matches;
+}
+
+/* Match config patterns from arguments. Returns a dict of all matched configs (deduplicated). */
+static dict *matchPatternsToConfigs(robj **patterns, int pattern_count) {
+    dict *all_matches = dictCreate(&externalStringType);
+    dictIterator *di;
+    dictEntry *de;
+
+    for (int i = 0; i < pattern_count; i++) {
+        sds pattern = objectGetVal(patterns[i]);
+
+        dict *single_pattern_matches = matchSinglePatternToConfigs(pattern);
+        di = dictGetIterator(single_pattern_matches);
+        while ((de = dictNext(di)) != NULL) {
+            if (dictFind(all_matches, dictGetKey(de))) continue;
+            dictAdd(all_matches, dictGetKey(de), dictGetVal(de));
+        }
+        dictReleaseIterator(di);
+        dictRelease(single_pattern_matches);
+    }
+
+    return all_matches;
+}
+
+
 /*-----------------------------------------------------------------------------
  * CONFIG SET implementation
  *----------------------------------------------------------------------------*/
@@ -959,72 +1037,54 @@ static int configKeyCompare(const void *a, const void *b) {
     return strcmp(key_a, key_b);
 }
 
+/* Returns sorted array of configs from dict. Caller must free. */
+static standardConfig **getSortedConfigs(dict *matches, int *count) {
+    dictEntry *de;
+    dictIterator *di;
+    int n = dictSize(matches);
+    *count = n;
+
+    struct {
+        const char *key;
+        standardConfig *config;
+    } *sorted = zmalloc(sizeof(*sorted) * n);
+
+    di = dictGetIterator(matches);
+    int i = 0;
+    while ((de = dictNext(di)) != NULL) {
+        sorted[i].key = dictGetKey(de);
+        sorted[i].config = dictGetVal(de);
+        i++;
+    }
+    dictReleaseIterator(di);
+
+    qsort(sorted, n, sizeof(*sorted), configKeyCompare);
+
+    standardConfig **result = zmalloc(sizeof(standardConfig *) * n);
+    for (i = 0; i < n; i++) {
+        result[i] = sorted[i].config;
+    }
+    zfree(sorted);
+    return result;
+}
+
 /*-----------------------------------------------------------------------------
  * CONFIG GET implementation
  *----------------------------------------------------------------------------*/
 
 void configGetCommand(client *c) {
-    int i;
-    dictEntry *de;
-    dictIterator *di;
-    /* Create a dictionary to store the matched configs */
-    dict *matches = dictCreate(&externalStringType);
-    for (i = 0; i < c->argc - 2; i++) {
-        robj *o = c->argv[2 + i];
-        sds name = objectGetVal(o);
-
-        /* If the string doesn't contain glob patterns, just directly
-         * look up the key in the dictionary. */
-        if (!strpbrk(name, "[*?")) {
-            if (dictFind(matches, name)) continue;
-            standardConfig *config = lookupConfig(name);
-
-            if (config) {
-                dictAdd(matches, name, config);
-            }
-            continue;
-        }
-
-        /* Otherwise, do a match against all items in the dictionary. */
-        di = dictGetIterator(configs);
-
-        while ((de = dictNext(di)) != NULL) {
-            standardConfig *config = dictGetVal(de);
-            /* Note that hidden configs require an exact match (not a pattern) */
-            if (config->flags & HIDDEN_CONFIG) continue;
-            if (dictFind(matches, config->name)) continue;
-            if (stringmatch(name, dictGetKey(de), 1)) {
-                dictAdd(matches, dictGetKey(de), config);
-            }
-        }
-        dictReleaseIterator(di);
-    }
-
-    di = dictGetIterator(matches);
-    int n = dictSize(matches);
-    addReplyMapLen(c, n);
-
-    struct {
-        const char *key;
-        sds value;
-    } *sorted = zmalloc(sizeof(*sorted) * n);
-
-    i = 0;
-    while ((de = dictNext(di)) != NULL) {
-        standardConfig *config = (standardConfig *)dictGetVal(de);
-        sorted[i].key = dictGetKey(de);
-        sorted[i].value = config->interface.get(config);
-        i++;
-    }
-    dictReleaseIterator(di);
+    dict *matches = matchPatternsToConfigs(c->argv + 2, c->argc - 2);
+    int n;
+    standardConfig **configs = getSortedConfigs(matches, &n);
     dictRelease(matches);
 
-    qsort(sorted, n, sizeof(*sorted), configKeyCompare);
-    for (i = 0; i < n; i++) {
-        addReplyBulkCString(c, sorted[i].key);
-        addReplyBulkSds(c, sorted[i].value);
+    addReplyMapLen(c, n);
+    for (int i = 0; i < n; i++) {
+        addReplyBulkCString(c, configs[i]->name);
+        sds value = configs[i]->interface.get(configs[i]);
+        addReplyBulkSds(c, value);
     }
-    zfree(sorted);
+    zfree(configs);
 }
 
 /*-----------------------------------------------------------------------------
@@ -1453,7 +1513,7 @@ void rewriteConfigUserOption(struct rewriteConfigState *state) {
         return;
     }
 
-    /* Otherwise scan the list of users and rewrite every line. Note that
+    /* Otherwise, scan the list of users and rewrite every line. Note that
      * in case the list here is empty, the effect will just be to comment
      * all the users directive inside the config file. */
     raxIterator ri;
@@ -1608,18 +1668,23 @@ static void rewriteConfigSocketBindOption(standardConfig *config, const char *na
 
 /* Rewrite the loadmodule option. */
 void rewriteConfigLoadmoduleOption(struct rewriteConfigState *state) {
-    sds line;
+    if (listLength(modules) == 0) {
+        rewriteConfigMarkAsProcessed(state, "loadmodule");
+        return;
+    }
 
-    dictIterator *di = dictGetIterator(modules);
-    dictEntry *de;
-    while ((de = dictNext(di)) != NULL) {
-        struct ValkeyModule *module = dictGetVal(de);
+    sds line;
+    listIter li;
+    listNode *ln;
+
+    listRewind(modules, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        struct ValkeyModule *module = listNodeValue(ln);
         if (module->is_static_module) continue;
         line = moduleLoadQueueEntryToLoadmoduleOptionStr(module, "loadmodule");
         rewriteConfigRewriteLine(state, "loadmodule", line, 1);
     }
-    dictReleaseIterator(di);
-    /* Mark "loadmodule" as processed in case modules is empty. */
+    /* Mark "loadmodule" as processed in case no modules are loaded. */
     rewriteConfigMarkAsProcessed(state, "loadmodule");
 }
 
@@ -2459,6 +2524,18 @@ static int isValidAnnouncedNodename(char *val, const char **err) {
     return 1;
 }
 
+/* Validates the character set of a hostname (alphanumeric, hyphens and dots),
+ * without checking the length. Returns 1 if valid, 0 otherwise. */
+static int isValidHostname(const char *val) {
+    for (int i = 0; val[i]; i++) {
+        char c = val[i];
+        if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || (c == '-') || (c == '.'))) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
 static int isValidAnnouncedIp(char *val, const char **err) {
     if (sdslen(val) >= NET_IP_STR_LEN) {
         *err = "cluster-announce-ip is too long";
@@ -2466,6 +2543,13 @@ static int isValidAnnouncedIp(char *val, const char **err) {
     }
     if (!(isValidAuxString(val, sdslen(val)))) {
         *err = "cluster-announce-ip contains invalid character";
+        return 0;
+    }
+    /* Empty resets the announced ip. Otherwise, accept a literal IPv4/IPv6, or a
+     * hostname, since some users set a hostname here before
+     * cluster-announce-hostname existed. */
+    if (val[0] != '\0' && anetResolve(NULL, val, NULL, 0, ANET_IP_ONLY) != ANET_OK && !isValidHostname(val)) {
+        *err = "cluster-announce-ip is not a valid IP address or hostname";
         return 0;
     }
     return 1;
@@ -2476,18 +2560,10 @@ static int isValidAnnouncedHostname(char *val, const char **err) {
         *err = "Hostnames must be less than " STRINGIFY(NET_HOST_STR_LEN) " characters";
         return 0;
     }
-
-    int i = 0;
-    char c;
-    while ((c = val[i])) {
-        /* We just validate the character set to make sure that everything
-         * is parsed and handled correctly. */
-        if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || (c == '-') || (c == '.'))) {
-            *err = "Hostnames may only contain alphanumeric characters, "
-                   "hyphens or dots";
-            return 0;
-        }
-        c = val[i++];
+    if (!isValidHostname(val)) {
+        *err = "Hostnames may only contain alphanumeric characters, "
+               "hyphens or dots";
+        return 0;
     }
     return 1;
 }
@@ -3114,6 +3190,12 @@ static int updateRdmaPort(const char **err) {
     return 1;
 }
 
+static int updateClusterReplicaPriority(const char **err) {
+    UNUSED(err);
+    clusterUpdateMyselfReplicaPriority();
+    return 1;
+}
+
 static int setConfigReplicaOfOption(standardConfig *config, sds *argv, int argc, const char **err) {
     UNUSED(config);
 
@@ -3272,7 +3354,6 @@ standardConfig static_configs[] = {
     createBoolConfig("daemonize", NULL, IMMUTABLE_CONFIG, server.daemonize, 0, NULL, NULL),
     createBoolConfig("always-show-logo", NULL, IMMUTABLE_CONFIG, server.always_show_logo, 0, NULL, NULL),
     createBoolConfig("protected-mode", NULL, MODIFIABLE_CONFIG, server.protected_mode, 1, NULL, NULL),
-    createBoolConfig("rdbcompression", NULL, MODIFIABLE_CONFIG, server.rdb_compression, 1, NULL, NULL),
     createBoolConfig("rdb-del-sync-files", NULL, MODIFIABLE_CONFIG, server.rdb_del_sync_files, 0, NULL, NULL),
     createBoolConfig("activerehashing", NULL, MODIFIABLE_CONFIG, server.activerehashing, 1, NULL, NULL),
     createBoolConfig("stop-writes-on-bgsave-error", NULL, MODIFIABLE_CONFIG, server.stop_writes_on_bgsave_err, 1, NULL, NULL),
@@ -3379,6 +3460,7 @@ standardConfig static_configs[] = {
     createEnumConfig("log-format", NULL, MODIFIABLE_CONFIG, log_format_enum, server.log_format, LOG_FORMAT_LEGACY, NULL, NULL),
     createEnumConfig("log-timestamp-format", NULL, MODIFIABLE_CONFIG, log_timestamp_format_enum, server.log_timestamp_format, LOG_TIMESTAMP_LEGACY, NULL, NULL),
     createEnumConfig("rdb-version-check", NULL, MODIFIABLE_CONFIG, rdb_version_check_enum, server.rdb_version_check, RDB_VERSION_CHECK_STRICT, NULL, NULL),
+    createEnumConfig("rdbcompression", NULL, MODIFIABLE_CONFIG, rdb_compression_enum, server.rdb_compression, RDB_COMPRESSION_YES, NULL, NULL),
 
     /* Integer configs */
     createIntConfig("databases", NULL, IMMUTABLE_CONFIG, 1, INT_MAX, server.config_databases, 16, INTEGER_CONFIG, NULL, NULL),
@@ -3442,6 +3524,7 @@ standardConfig static_configs[] = {
 #ifdef LOG_REQ_RES
     createUIntConfig("client-default-resp", NULL, IMMUTABLE_CONFIG | HIDDEN_CONFIG, 2, 3, server.client_default_resp, 2, INTEGER_CONFIG, NULL, NULL),
 #endif
+    createUIntConfig("cluster-replica-priority", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, server.cluster_replica_priority, 0, INTEGER_CONFIG, NULL, updateClusterReplicaPriority),
 
     /* Unsigned Long configs */
     createULongConfig("active-defrag-max-scan-fields", NULL, MODIFIABLE_CONFIG, 1, LONG_MAX, server.active_defrag_max_scan_fields, 1000, INTEGER_CONFIG, NULL, NULL), /* Default: keys with more than 1000 fields will be processed separately */
@@ -3682,9 +3765,103 @@ void configHelpCommand(client *c) {
                           "    Reset statistics reported by the INFO command.",
                           "REWRITE",
                           "    Rewrite the configuration file.",
+                          "INFO <pattern> [<pattern> ...]",
+                          "    Return information about configs matching the glob-like <pattern>(s).",
                           NULL};
 
     addReplyHelp(c, help);
+}
+
+/*-----------------------------------------------------------------------------
+ * CONFIG INFO
+ *----------------------------------------------------------------------------*/
+
+static void addConfigInfoReply(client *c, standardConfig *config) {
+    int fields = 3; /* name, type, flags */
+    if (config->alias) fields++;
+    if (config->type == ENUM_CONFIG || config->type == NUMERIC_CONFIG) fields++;
+
+    addReplyMapLen(c, fields);
+
+    /* Name */
+    addReplyBulkCString(c, "name");
+    addReplyBulkCString(c, config->name);
+
+    /* Type */
+    addReplyBulkCString(c, "type");
+    const char *type_str;
+    switch (config->type) {
+    case BOOL_CONFIG: type_str = "bool"; break;
+    case NUMERIC_CONFIG: type_str = "numeric"; break;
+    case STRING_CONFIG: type_str = "string"; break;
+    case SDS_CONFIG: type_str = "string"; break;
+    case ENUM_CONFIG: type_str = "enum"; break;
+    case SPECIAL_CONFIG: type_str = "special"; break;
+    default: type_str = "unknown"; break;
+    }
+    addReplyBulkCString(c, type_str);
+
+    /* Flags */
+    int flag_count = 0;
+    for (int i = 0; i < (int)numElements(configFlagNames); i++) {
+        if (config->flags & configFlagNames[i].flag) flag_count++;
+    }
+    addReplyBulkCString(c, "flags");
+    addReplyArrayLen(c, flag_count);
+    for (int i = 0; i < (int)numElements(configFlagNames); i++) {
+        if (config->flags & configFlagNames[i].flag) addReplyBulkCString(c, configFlagNames[i].name);
+    }
+
+    /* Alias */
+    if (config->alias) {
+        addReplyBulkCString(c, "alias");
+        addReplyBulkCString(c, config->alias);
+    }
+
+    /* Values (enum) or Range (numeric) */
+    if (config->type == ENUM_CONFIG) {
+        configEnum *enumNode = config->data.enumd.enum_value;
+        int count = 0;
+        while (enumNode[count].name != NULL) count++;
+        addReplyBulkCString(c, "values");
+        addReplyArrayLen(c, count);
+        for (int i = 0; i < count; i++) {
+            addReplyBulkCString(c, enumNode[i].name);
+        }
+    } else if (config->type == NUMERIC_CONFIG) {
+        int is_unsigned = config->data.numeric.flags & UNSIGNED_CONFIG ||
+                          config->data.numeric.numeric_type == NUMERIC_TYPE_UINT ||
+                          config->data.numeric.numeric_type == NUMERIC_TYPE_ULONG ||
+                          config->data.numeric.numeric_type == NUMERIC_TYPE_ULONG_LONG ||
+                          config->data.numeric.numeric_type == NUMERIC_TYPE_SIZE_T;
+        addReplyBulkCString(c, "range");
+        addReplyArrayLen(c, 2);
+        char buf[LONG_STR_SIZE];
+        if (is_unsigned) {
+            ull2string(buf, sizeof(buf), (unsigned long long)config->data.numeric.lower_bound);
+            addReplyBulkCString(c, buf);
+            ull2string(buf, sizeof(buf), (unsigned long long)config->data.numeric.upper_bound);
+            addReplyBulkCString(c, buf);
+        } else {
+            ll2string(buf, sizeof(buf), config->data.numeric.lower_bound);
+            addReplyBulkCString(c, buf);
+            ll2string(buf, sizeof(buf), config->data.numeric.upper_bound);
+            addReplyBulkCString(c, buf);
+        }
+    }
+}
+
+void configInfoCommand(client *c) {
+    dict *matches = matchPatternsToConfigs(c->argv + 2, c->argc - 2);
+    int n;
+    standardConfig **configs = getSortedConfigs(matches, &n);
+    dictRelease(matches);
+
+    addReplyArrayLen(c, n);
+    for (int i = 0; i < n; i++) {
+        addConfigInfoReply(c, configs[i]);
+    }
+    zfree(configs);
 }
 
 /*-----------------------------------------------------------------------------

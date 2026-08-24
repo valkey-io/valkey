@@ -2370,7 +2370,7 @@ struct COMMAND_ARG MIGRATE_Args[] = {
 #ifndef SKIP_CMD_HISTORY_TABLE
 /* MOVE history */
 commandHistory MOVE_History[] = {
-{"10.0.0","added REPLACE option."},
+{"9.2.0","added REPLACE option."},
 };
 #endif
 
@@ -2390,7 +2390,7 @@ keySpec MOVE_Keyspecs[1] = {
 struct COMMAND_ARG MOVE_Args[] = {
 {MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("db",ARG_TYPE_INTEGER,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("replace",ARG_TYPE_PURE_TOKEN,-1,"REPLACE",NULL,"10.0.0",CMD_ARG_OPTIONAL,0,NULL)},
+{MAKE_ARG("replace",ARG_TYPE_PURE_TOKEN,-1,"REPLACE",NULL,"9.2.0",CMD_ARG_OPTIONAL,0,NULL)},
 };
 
 /********** OBJECT ENCODING ********************/
@@ -3214,7 +3214,7 @@ commandHistory GEORADIUS_History[] = {
 #ifndef SKIP_CMD_KEY_SPECS_TABLE
 /* GEORADIUS key specs */
 keySpec GEORADIUS_Keyspecs[3] = {
-{NULL,CMD_KEY_RO|CMD_KEY_ACCESS,KSPEC_BS_INDEX,.bs.index={1},KSPEC_FK_RANGE,.fk.range={0,1,0}},{NULL,CMD_KEY_OW|CMD_KEY_UPDATE,KSPEC_BS_KEYWORD,.bs.keyword={"STORE",6},KSPEC_FK_RANGE,.fk.range={0,1,0}},{NULL,CMD_KEY_OW|CMD_KEY_UPDATE,KSPEC_BS_KEYWORD,.bs.keyword={"STOREDIST",6},KSPEC_FK_RANGE,.fk.range={0,1,0}}
+{NULL,CMD_KEY_RO|CMD_KEY_ACCESS,KSPEC_BS_INDEX,.bs.index={1},KSPEC_FK_RANGE,.fk.range={0,1,0}},{NULL,CMD_KEY_OW|CMD_KEY_UPDATE|CMD_KEY_VARIABLE_FLAGS,KSPEC_BS_KEYWORD,.bs.keyword={"STORE",6},KSPEC_FK_RANGE,.fk.range={0,1,0}},{NULL,CMD_KEY_OW|CMD_KEY_UPDATE|CMD_KEY_VARIABLE_FLAGS,KSPEC_BS_KEYWORD,.bs.keyword={"STOREDIST",6},KSPEC_FK_RANGE,.fk.range={0,1,0}}
 };
 #endif
 
@@ -3277,7 +3277,7 @@ commandHistory GEORADIUSBYMEMBER_History[] = {
 #ifndef SKIP_CMD_KEY_SPECS_TABLE
 /* GEORADIUSBYMEMBER key specs */
 keySpec GEORADIUSBYMEMBER_Keyspecs[3] = {
-{NULL,CMD_KEY_RO|CMD_KEY_ACCESS,KSPEC_BS_INDEX,.bs.index={1},KSPEC_FK_RANGE,.fk.range={0,1,0}},{NULL,CMD_KEY_OW|CMD_KEY_UPDATE,KSPEC_BS_KEYWORD,.bs.keyword={"STORE",5},KSPEC_FK_RANGE,.fk.range={0,1,0}},{NULL,CMD_KEY_OW|CMD_KEY_UPDATE,KSPEC_BS_KEYWORD,.bs.keyword={"STOREDIST",5},KSPEC_FK_RANGE,.fk.range={0,1,0}}
+{NULL,CMD_KEY_RO|CMD_KEY_ACCESS,KSPEC_BS_INDEX,.bs.index={1},KSPEC_FK_RANGE,.fk.range={0,1,0}},{NULL,CMD_KEY_OW|CMD_KEY_UPDATE|CMD_KEY_VARIABLE_FLAGS,KSPEC_BS_KEYWORD,.bs.keyword={"STORE",5},KSPEC_FK_RANGE,.fk.range={0,1,0}},{NULL,CMD_KEY_OW|CMD_KEY_UPDATE|CMD_KEY_VARIABLE_FLAGS,KSPEC_BS_KEYWORD,.bs.keyword={"STOREDIST",5},KSPEC_FK_RANGE,.fk.range={0,1,0}}
 };
 #endif
 
@@ -7571,6 +7571,28 @@ struct COMMAND_ARG CONFIG_GET_Args[] = {
 #define CONFIG_HELP_Keyspecs NULL
 #endif
 
+/********** CONFIG INFO ********************/
+
+#ifndef SKIP_CMD_HISTORY_TABLE
+/* CONFIG INFO history */
+#define CONFIG_INFO_History NULL
+#endif
+
+#ifndef SKIP_CMD_TIPS_TABLE
+/* CONFIG INFO tips */
+#define CONFIG_INFO_Tips NULL
+#endif
+
+#ifndef SKIP_CMD_KEY_SPECS_TABLE
+/* CONFIG INFO key specs */
+#define CONFIG_INFO_Keyspecs NULL
+#endif
+
+/* CONFIG INFO argument table */
+struct COMMAND_ARG CONFIG_INFO_Args[] = {
+{MAKE_ARG("pattern",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_MULTIPLE,0,NULL)},
+};
+
 /********** CONFIG RESETSTAT ********************/
 
 #ifndef SKIP_CMD_HISTORY_TABLE
@@ -7648,6 +7670,7 @@ struct COMMAND_ARG CONFIG_SET_Args[] = {
 struct COMMAND_STRUCT CONFIG_Subcommands[] = {
 {MAKE_CMD("get","Returns the effective values of configuration parameters.","O(N) when N is the number of configuration parameters provided","2.0.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,CONFIG_GET_History,1,CONFIG_GET_Tips,0,configGetCommand,-3,CMD_ADMIN|CMD_NOSCRIPT|CMD_LOADING|CMD_STALE,ACL_CATEGORY_ADMIN|ACL_CATEGORY_DANGEROUS|ACL_CATEGORY_SLOW,NULL,CONFIG_GET_Keyspecs,0,NULL,1),.args=CONFIG_GET_Args},
 {MAKE_CMD("help","Returns helpful text about the different subcommands.","O(1)","5.0.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,CONFIG_HELP_History,0,CONFIG_HELP_Tips,0,configHelpCommand,2,CMD_LOADING|CMD_STALE,ACL_CATEGORY_SLOW,NULL,CONFIG_HELP_Keyspecs,0,NULL,0)},
+{MAKE_CMD("info","Returns information about configuration parameters matching the given patterns.","O(N) when N is the number of configuration parameters provided","9.2.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,CONFIG_INFO_History,0,CONFIG_INFO_Tips,0,configInfoCommand,-3,CMD_ADMIN|CMD_NOSCRIPT|CMD_LOADING|CMD_STALE,ACL_CATEGORY_ADMIN|ACL_CATEGORY_DANGEROUS|ACL_CATEGORY_SLOW,NULL,CONFIG_INFO_Keyspecs,0,NULL,1),.args=CONFIG_INFO_Args},
 {MAKE_CMD("resetstat","Resets the server's statistics.","O(1)","2.0.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,CONFIG_RESETSTAT_History,0,CONFIG_RESETSTAT_Tips,2,configResetStatCommand,2,CMD_ADMIN|CMD_NOSCRIPT|CMD_LOADING|CMD_STALE,ACL_CATEGORY_ADMIN|ACL_CATEGORY_DANGEROUS|ACL_CATEGORY_SLOW,NULL,CONFIG_RESETSTAT_Keyspecs,0,NULL,0)},
 {MAKE_CMD("rewrite","Persists the effective configuration to file.","O(1)","2.8.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,CONFIG_REWRITE_History,0,CONFIG_REWRITE_Tips,2,configRewriteCommand,2,CMD_ADMIN|CMD_NOSCRIPT|CMD_LOADING|CMD_STALE,ACL_CATEGORY_ADMIN|ACL_CATEGORY_DANGEROUS|ACL_CATEGORY_SLOW,NULL,CONFIG_REWRITE_Keyspecs,0,NULL,0)},
 {MAKE_CMD("set","Sets configuration parameters in-flight.","O(N) when N is the number of configuration parameters provided","2.0.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,CONFIG_SET_History,1,CONFIG_SET_Tips,2,configSetCommand,-4,CMD_ADMIN|CMD_NOSCRIPT|CMD_LOADING|CMD_STALE,ACL_CATEGORY_ADMIN|ACL_CATEGORY_DANGEROUS|ACL_CATEGORY_SLOW,NULL,CONFIG_SET_Keyspecs,0,NULL,1),.args=CONFIG_SET_Args},
@@ -9761,6 +9784,7 @@ struct COMMAND_ARG ZRANDMEMBER_Args[] = {
 /* ZRANGE history */
 commandHistory ZRANGE_History[] = {
 {"6.2.0","Added the `REV`, `BYSCORE`, `BYLEX` and `LIMIT` options."},
+{"9.2.0","Added the `XX` option."},
 };
 #endif
 
@@ -9797,13 +9821,16 @@ struct COMMAND_ARG ZRANGE_Args[] = {
 {MAKE_ARG("rev",ARG_TYPE_PURE_TOKEN,-1,"REV",NULL,"6.2.0",CMD_ARG_OPTIONAL,0,NULL)},
 {MAKE_ARG("limit",ARG_TYPE_BLOCK,-1,"LIMIT",NULL,"6.2.0",CMD_ARG_OPTIONAL,2,NULL),.subargs=ZRANGE_limit_Subargs},
 {MAKE_ARG("withscores",ARG_TYPE_PURE_TOKEN,-1,"WITHSCORES",NULL,NULL,CMD_ARG_OPTIONAL,0,NULL)},
+{MAKE_ARG("xx",ARG_TYPE_PURE_TOKEN,-1,"XX",NULL,"9.2.0",CMD_ARG_OPTIONAL,0,NULL)},
 };
 
 /********** ZRANGEBYLEX ********************/
 
 #ifndef SKIP_CMD_HISTORY_TABLE
 /* ZRANGEBYLEX history */
-#define ZRANGEBYLEX_History NULL
+commandHistory ZRANGEBYLEX_History[] = {
+{"9.2.0","Added the `XX` option."},
+};
 #endif
 
 #ifndef SKIP_CMD_TIPS_TABLE
@@ -9830,6 +9857,7 @@ struct COMMAND_ARG ZRANGEBYLEX_Args[] = {
 {MAKE_ARG("min",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("max",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("limit",ARG_TYPE_BLOCK,-1,"LIMIT",NULL,NULL,CMD_ARG_OPTIONAL,2,NULL),.subargs=ZRANGEBYLEX_limit_Subargs},
+{MAKE_ARG("xx",ARG_TYPE_PURE_TOKEN,-1,"XX",NULL,"9.2.0",CMD_ARG_OPTIONAL,0,NULL)},
 };
 
 /********** ZRANGEBYSCORE ********************/
@@ -9838,6 +9866,7 @@ struct COMMAND_ARG ZRANGEBYLEX_Args[] = {
 /* ZRANGEBYSCORE history */
 commandHistory ZRANGEBYSCORE_History[] = {
 {"2.0.0","Added the `WITHSCORES` modifier."},
+{"9.2.0","Added the `XX` option."},
 };
 #endif
 
@@ -9865,6 +9894,7 @@ struct COMMAND_ARG ZRANGEBYSCORE_Args[] = {
 {MAKE_ARG("min",ARG_TYPE_DOUBLE,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("max",ARG_TYPE_DOUBLE,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("withscores",ARG_TYPE_PURE_TOKEN,-1,"WITHSCORES",NULL,"2.0.0",CMD_ARG_OPTIONAL,0,NULL)},
+{MAKE_ARG("xx",ARG_TYPE_PURE_TOKEN,-1,"XX",NULL,"9.2.0",CMD_ARG_OPTIONAL,0,NULL)},
 {MAKE_ARG("limit",ARG_TYPE_BLOCK,-1,"LIMIT",NULL,NULL,CMD_ARG_OPTIONAL,2,NULL),.subargs=ZRANGEBYSCORE_limit_Subargs},
 };
 
@@ -10047,7 +10077,9 @@ struct COMMAND_ARG ZREMRANGEBYSCORE_Args[] = {
 
 #ifndef SKIP_CMD_HISTORY_TABLE
 /* ZREVRANGE history */
-#define ZREVRANGE_History NULL
+commandHistory ZREVRANGE_History[] = {
+{"9.2.0","Added the `XX` option."},
+};
 #endif
 
 #ifndef SKIP_CMD_TIPS_TABLE
@@ -10068,13 +10100,16 @@ struct COMMAND_ARG ZREVRANGE_Args[] = {
 {MAKE_ARG("start",ARG_TYPE_INTEGER,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("stop",ARG_TYPE_INTEGER,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("withscores",ARG_TYPE_PURE_TOKEN,-1,"WITHSCORES",NULL,NULL,CMD_ARG_OPTIONAL,0,NULL)},
+{MAKE_ARG("xx",ARG_TYPE_PURE_TOKEN,-1,"XX",NULL,"9.2.0",CMD_ARG_OPTIONAL,0,NULL)},
 };
 
 /********** ZREVRANGEBYLEX ********************/
 
 #ifndef SKIP_CMD_HISTORY_TABLE
 /* ZREVRANGEBYLEX history */
-#define ZREVRANGEBYLEX_History NULL
+commandHistory ZREVRANGEBYLEX_History[] = {
+{"9.2.0","Added the `XX` option."},
+};
 #endif
 
 #ifndef SKIP_CMD_TIPS_TABLE
@@ -10101,6 +10136,7 @@ struct COMMAND_ARG ZREVRANGEBYLEX_Args[] = {
 {MAKE_ARG("max",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("min",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("limit",ARG_TYPE_BLOCK,-1,"LIMIT",NULL,NULL,CMD_ARG_OPTIONAL,2,NULL),.subargs=ZREVRANGEBYLEX_limit_Subargs},
+{MAKE_ARG("xx",ARG_TYPE_PURE_TOKEN,-1,"XX",NULL,"9.2.0",CMD_ARG_OPTIONAL,0,NULL)},
 };
 
 /********** ZREVRANGEBYSCORE ********************/
@@ -10109,6 +10145,7 @@ struct COMMAND_ARG ZREVRANGEBYLEX_Args[] = {
 /* ZREVRANGEBYSCORE history */
 commandHistory ZREVRANGEBYSCORE_History[] = {
 {"2.1.6","`min` and `max` can be exclusive."},
+{"9.2.0","Added the `XX` option."},
 };
 #endif
 
@@ -10136,6 +10173,7 @@ struct COMMAND_ARG ZREVRANGEBYSCORE_Args[] = {
 {MAKE_ARG("max",ARG_TYPE_DOUBLE,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("min",ARG_TYPE_DOUBLE,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("withscores",ARG_TYPE_PURE_TOKEN,-1,"WITHSCORES",NULL,NULL,CMD_ARG_OPTIONAL,0,NULL)},
+{MAKE_ARG("xx",ARG_TYPE_PURE_TOKEN,-1,"XX",NULL,"9.2.0",CMD_ARG_OPTIONAL,0,NULL)},
 {MAKE_ARG("limit",ARG_TYPE_BLOCK,-1,"LIMIT",NULL,NULL,CMD_ARG_OPTIONAL,2,NULL),.subargs=ZREVRANGEBYSCORE_limit_Subargs},
 };
 
@@ -12011,7 +12049,7 @@ struct COMMAND_STRUCT serverCommandTable[] = {
 {MAKE_CMD("memory","A container for memory diagnostics commands.","Depends on subcommand.","4.0.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,MEMORY_History,0,MEMORY_Tips,0,NULL,-2,0,ACL_CATEGORY_SLOW,NULL,MEMORY_Keyspecs,0,NULL,0),.subcommands=MEMORY_Subcommands},
 {MAKE_CMD("module","A container for module commands.","Depends on subcommand.","4.0.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,MODULE_History,0,MODULE_Tips,0,NULL,-2,0,ACL_CATEGORY_SLOW,NULL,MODULE_Keyspecs,0,NULL,0),.subcommands=MODULE_Subcommands},
 {MAKE_CMD("monitor","Listens for all requests received by the server in real-time.",NULL,"1.0.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,MONITOR_History,0,MONITOR_Tips,0,monitorCommand,1,CMD_ADMIN|CMD_NOSCRIPT|CMD_LOADING|CMD_STALE,ACL_CATEGORY_ADMIN|ACL_CATEGORY_DANGEROUS|ACL_CATEGORY_SLOW,NULL,MONITOR_Keyspecs,0,NULL,0)},
-{MAKE_CMD("psync","An internal command used in replication.",NULL,"2.8.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,PSYNC_History,0,PSYNC_Tips,0,syncCommand,-3,CMD_NO_ASYNC_LOADING|CMD_ADMIN|CMD_NO_MULTI|CMD_NOSCRIPT,ACL_CATEGORY_ADMIN|ACL_CATEGORY_DANGEROUS|ACL_CATEGORY_SLOW,NULL,PSYNC_Keyspecs,0,NULL,2),.args=PSYNC_Args},
+{MAKE_CMD("psync","An internal command used in replication.",NULL,"2.8.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,PSYNC_History,0,PSYNC_Tips,0,syncCommand,-3,CMD_NO_ASYNC_LOADING|CMD_ADMIN|CMD_STALE|CMD_NO_MULTI|CMD_NOSCRIPT,ACL_CATEGORY_ADMIN|ACL_CATEGORY_DANGEROUS|ACL_CATEGORY_SLOW,NULL,PSYNC_Keyspecs,0,NULL,2),.args=PSYNC_Args},
 {MAKE_CMD("replconf","An internal command for configuring the replication stream.","O(1)","3.0.0",CMD_DOC_SYSCMD,NULL,NULL,"server",COMMAND_GROUP_SERVER,REPLCONF_History,0,REPLCONF_Tips,0,replconfCommand,-1,CMD_ADMIN|CMD_NOSCRIPT|CMD_LOADING|CMD_STALE|CMD_ALLOW_BUSY,ACL_CATEGORY_ADMIN|ACL_CATEGORY_DANGEROUS|ACL_CATEGORY_SLOW,NULL,REPLCONF_Keyspecs,0,NULL,0)},
 {MAKE_CMD("replicaof","Configures a server as replica of another, or promotes it to a primary.","O(1)","5.0.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,REPLICAOF_History,0,REPLICAOF_Tips,0,replicaofCommand,3,CMD_NO_ASYNC_LOADING|CMD_ADMIN|CMD_NOSCRIPT|CMD_STALE,ACL_CATEGORY_ADMIN|ACL_CATEGORY_DANGEROUS|ACL_CATEGORY_SLOW,NULL,REPLICAOF_Keyspecs,0,NULL,1),.args=REPLICAOF_Args},
 {MAKE_CMD("restore-asking","An internal command for migrating keys in a cluster.","O(1) to create the new key and additional O(N*M) to reconstruct the serialized value, where N is the number of objects composing the value and M their average size. For small string values the time complexity is thus O(1)+O(1*M) where M is small, so simply O(1). However for sorted set values the complexity is O(N*M*log(N)) because inserting values into sorted sets is O(log(N)).","3.0.0",CMD_DOC_SYSCMD,NULL,NULL,"server",COMMAND_GROUP_SERVER,RESTORE_ASKING_History,3,RESTORE_ASKING_Tips,0,restoreCommand,-4,CMD_WRITE|CMD_DENYOOM|CMD_ASKING,ACL_CATEGORY_DANGEROUS|ACL_CATEGORY_KEYSPACE|ACL_CATEGORY_SLOW|ACL_CATEGORY_WRITE,NULL,RESTORE_ASKING_Keyspecs,1,NULL,7),.args=RESTORE_ASKING_Args},
@@ -12021,7 +12059,7 @@ struct COMMAND_STRUCT serverCommandTable[] = {
 {MAKE_CMD("slaveof","Sets a server as a replica of another, or promotes it to being a primary.","O(1)","1.0.0",CMD_DOC_DEPRECATED,"`REPLICAOF`","5.0.0","server",COMMAND_GROUP_SERVER,SLAVEOF_History,0,SLAVEOF_Tips,0,replicaofCommand,3,CMD_NO_ASYNC_LOADING|CMD_ADMIN|CMD_NOSCRIPT|CMD_STALE,ACL_CATEGORY_ADMIN|ACL_CATEGORY_DANGEROUS|ACL_CATEGORY_SLOW,NULL,SLAVEOF_Keyspecs,0,NULL,1),.args=SLAVEOF_Args},
 {MAKE_CMD("slowlog","A container for slow log commands.","Depends on subcommand.","2.2.12",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,SLOWLOG_History,0,SLOWLOG_Tips,0,NULL,-2,0,ACL_CATEGORY_SLOW,NULL,SLOWLOG_Keyspecs,0,NULL,0),.subcommands=SLOWLOG_Subcommands},
 {MAKE_CMD("swapdb","Swaps two databases.","O(N) where N is the count of clients watching or blocking on keys from both databases.","4.0.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,SWAPDB_History,0,SWAPDB_Tips,0,swapdbCommand,3,CMD_WRITE|CMD_FAST,ACL_CATEGORY_DANGEROUS|ACL_CATEGORY_FAST|ACL_CATEGORY_KEYSPACE|ACL_CATEGORY_WRITE,swapdbDbIdArgs,SWAPDB_Keyspecs,0,NULL,2),.args=SWAPDB_Args},
-{MAKE_CMD("sync","An internal command used in replication.",NULL,"1.0.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,SYNC_History,0,SYNC_Tips,0,syncCommand,1,CMD_NO_ASYNC_LOADING|CMD_ADMIN|CMD_NO_MULTI|CMD_NOSCRIPT,ACL_CATEGORY_ADMIN|ACL_CATEGORY_DANGEROUS|ACL_CATEGORY_SLOW,NULL,SYNC_Keyspecs,0,NULL,0)},
+{MAKE_CMD("sync","An internal command used in replication.",NULL,"1.0.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,SYNC_History,0,SYNC_Tips,0,syncCommand,1,CMD_NO_ASYNC_LOADING|CMD_ADMIN|CMD_STALE|CMD_NO_MULTI|CMD_NOSCRIPT,ACL_CATEGORY_ADMIN|ACL_CATEGORY_DANGEROUS|ACL_CATEGORY_SLOW,NULL,SYNC_Keyspecs,0,NULL,0)},
 {MAKE_CMD("time","Returns the server time.","O(1)","2.6.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,TIME_History,0,TIME_Tips,1,timeCommand,1,CMD_LOADING|CMD_STALE|CMD_FAST,ACL_CATEGORY_FAST,NULL,TIME_Keyspecs,0,NULL,0)},
 /* set */
 {MAKE_CMD("sadd","Adds one or more members to a set. Creates the key if it doesn't exist.","O(1) for each element added, so O(N) to add N elements when the command is called with multiple arguments.","1.0.0",CMD_DOC_NONE,NULL,NULL,"set",COMMAND_GROUP_SET,SADD_History,1,SADD_Tips,0,saddCommand,-3,CMD_WRITE|CMD_DENYOOM|CMD_FAST,ACL_CATEGORY_FAST|ACL_CATEGORY_SET|ACL_CATEGORY_WRITE,NULL,SADD_Keyspecs,1,NULL,2),.args=SADD_Args},
@@ -12060,18 +12098,18 @@ struct COMMAND_STRUCT serverCommandTable[] = {
 {MAKE_CMD("zpopmax","Returns the highest-scoring members from a sorted set after removing them. Deletes the sorted set if the last member was popped.","O(log(N)*M) with N being the number of elements in the sorted set, and M being the number of elements popped.","5.0.0",CMD_DOC_NONE,NULL,NULL,"sorted_set",COMMAND_GROUP_SORTED_SET,ZPOPMAX_History,0,ZPOPMAX_Tips,0,zpopmaxCommand,-2,CMD_WRITE|CMD_FAST,ACL_CATEGORY_FAST|ACL_CATEGORY_SORTEDSET|ACL_CATEGORY_WRITE,NULL,ZPOPMAX_Keyspecs,1,NULL,2),.args=ZPOPMAX_Args},
 {MAKE_CMD("zpopmin","Returns the lowest-scoring members from a sorted set after removing them. Deletes the sorted set if the last member was popped.","O(log(N)*M) with N being the number of elements in the sorted set, and M being the number of elements popped.","5.0.0",CMD_DOC_NONE,NULL,NULL,"sorted_set",COMMAND_GROUP_SORTED_SET,ZPOPMIN_History,0,ZPOPMIN_Tips,0,zpopminCommand,-2,CMD_WRITE|CMD_FAST,ACL_CATEGORY_FAST|ACL_CATEGORY_SORTEDSET|ACL_CATEGORY_WRITE,NULL,ZPOPMIN_Keyspecs,1,NULL,2),.args=ZPOPMIN_Args},
 {MAKE_CMD("zrandmember","Returns one or more random members from a sorted set.","O(N) where N is the number of members returned","6.2.0",CMD_DOC_NONE,NULL,NULL,"sorted_set",COMMAND_GROUP_SORTED_SET,ZRANDMEMBER_History,0,ZRANDMEMBER_Tips,1,zrandmemberCommand,-2,CMD_READONLY,ACL_CATEGORY_READ|ACL_CATEGORY_SLOW|ACL_CATEGORY_SORTEDSET,NULL,ZRANDMEMBER_Keyspecs,1,NULL,2),.args=ZRANDMEMBER_Args},
-{MAKE_CMD("zrange","Returns members in a sorted set within a range of indexes.","O(log(N)+M) with N being the number of elements in the sorted set and M the number of elements returned.","1.2.0",CMD_DOC_NONE,NULL,NULL,"sorted_set",COMMAND_GROUP_SORTED_SET,ZRANGE_History,1,ZRANGE_Tips,0,zrangeCommand,-4,CMD_READONLY,ACL_CATEGORY_READ|ACL_CATEGORY_SLOW|ACL_CATEGORY_SORTEDSET,NULL,ZRANGE_Keyspecs,1,NULL,7),.args=ZRANGE_Args},
-{MAKE_CMD("zrangebylex","Returns members in a sorted set within a lexicographical range.","O(log(N)+M) with N being the number of elements in the sorted set and M the number of elements being returned. If M is constant (e.g. always asking for the first 10 elements with LIMIT), you can consider it O(log(N)).","2.8.9",CMD_DOC_NONE,NULL,NULL,"sorted_set",COMMAND_GROUP_SORTED_SET,ZRANGEBYLEX_History,0,ZRANGEBYLEX_Tips,0,zrangebylexCommand,-4,CMD_READONLY,ACL_CATEGORY_READ|ACL_CATEGORY_SLOW|ACL_CATEGORY_SORTEDSET,NULL,ZRANGEBYLEX_Keyspecs,1,NULL,4),.args=ZRANGEBYLEX_Args},
-{MAKE_CMD("zrangebyscore","Returns members in a sorted set within a range of scores.","O(log(N)+M) with N being the number of elements in the sorted set and M the number of elements being returned. If M is constant (e.g. always asking for the first 10 elements with LIMIT), you can consider it O(log(N)).","1.0.5",CMD_DOC_NONE,NULL,NULL,"sorted_set",COMMAND_GROUP_SORTED_SET,ZRANGEBYSCORE_History,1,ZRANGEBYSCORE_Tips,0,zrangebyscoreCommand,-4,CMD_READONLY,ACL_CATEGORY_READ|ACL_CATEGORY_SLOW|ACL_CATEGORY_SORTEDSET,NULL,ZRANGEBYSCORE_Keyspecs,1,NULL,5),.args=ZRANGEBYSCORE_Args},
+{MAKE_CMD("zrange","Returns members in a sorted set within a range of indexes.","O(log(N)+M) with N being the number of elements in the sorted set and M the number of elements returned.","1.2.0",CMD_DOC_NONE,NULL,NULL,"sorted_set",COMMAND_GROUP_SORTED_SET,ZRANGE_History,2,ZRANGE_Tips,0,zrangeCommand,-4,CMD_READONLY,ACL_CATEGORY_READ|ACL_CATEGORY_SLOW|ACL_CATEGORY_SORTEDSET,NULL,ZRANGE_Keyspecs,1,NULL,8),.args=ZRANGE_Args},
+{MAKE_CMD("zrangebylex","Returns members in a sorted set within a lexicographical range.","O(log(N)+M) with N being the number of elements in the sorted set and M the number of elements being returned. If M is constant (e.g. always asking for the first 10 elements with LIMIT), you can consider it O(log(N)).","2.8.9",CMD_DOC_NONE,NULL,NULL,"sorted_set",COMMAND_GROUP_SORTED_SET,ZRANGEBYLEX_History,1,ZRANGEBYLEX_Tips,0,zrangebylexCommand,-4,CMD_READONLY,ACL_CATEGORY_READ|ACL_CATEGORY_SLOW|ACL_CATEGORY_SORTEDSET,NULL,ZRANGEBYLEX_Keyspecs,1,NULL,5),.args=ZRANGEBYLEX_Args},
+{MAKE_CMD("zrangebyscore","Returns members in a sorted set within a range of scores.","O(log(N)+M) with N being the number of elements in the sorted set and M the number of elements being returned. If M is constant (e.g. always asking for the first 10 elements with LIMIT), you can consider it O(log(N)).","1.0.5",CMD_DOC_NONE,NULL,NULL,"sorted_set",COMMAND_GROUP_SORTED_SET,ZRANGEBYSCORE_History,2,ZRANGEBYSCORE_Tips,0,zrangebyscoreCommand,-4,CMD_READONLY,ACL_CATEGORY_READ|ACL_CATEGORY_SLOW|ACL_CATEGORY_SORTEDSET,NULL,ZRANGEBYSCORE_Keyspecs,1,NULL,6),.args=ZRANGEBYSCORE_Args},
 {MAKE_CMD("zrangestore","Stores a range of members from sorted set in a key.","O(log(N)+M) with N being the number of elements in the sorted set and M the number of elements stored into the destination key.","6.2.0",CMD_DOC_NONE,NULL,NULL,"sorted_set",COMMAND_GROUP_SORTED_SET,ZRANGESTORE_History,0,ZRANGESTORE_Tips,0,zrangestoreCommand,-5,CMD_WRITE|CMD_DENYOOM,ACL_CATEGORY_SLOW|ACL_CATEGORY_SORTEDSET|ACL_CATEGORY_WRITE,NULL,ZRANGESTORE_Keyspecs,2,NULL,7),.args=ZRANGESTORE_Args},
 {MAKE_CMD("zrank","Returns the index of a member in a sorted set ordered by ascending scores.","O(log(N))","2.0.0",CMD_DOC_NONE,NULL,NULL,"sorted_set",COMMAND_GROUP_SORTED_SET,ZRANK_History,1,ZRANK_Tips,0,zrankCommand,-3,CMD_READONLY|CMD_FAST,ACL_CATEGORY_FAST|ACL_CATEGORY_READ|ACL_CATEGORY_SORTEDSET,NULL,ZRANK_Keyspecs,1,NULL,3),.args=ZRANK_Args},
 {MAKE_CMD("zrem","Removes one or more members from a sorted set. Deletes the sorted set if all members were removed.","O(M*log(N)) with N being the number of elements in the sorted set and M the number of elements to be removed.","1.2.0",CMD_DOC_NONE,NULL,NULL,"sorted_set",COMMAND_GROUP_SORTED_SET,ZREM_History,1,ZREM_Tips,0,zremCommand,-3,CMD_WRITE|CMD_FAST,ACL_CATEGORY_FAST|ACL_CATEGORY_SORTEDSET|ACL_CATEGORY_WRITE,NULL,ZREM_Keyspecs,1,NULL,2),.args=ZREM_Args},
 {MAKE_CMD("zremrangebylex","Removes members in a sorted set within a lexicographical range. Deletes the sorted set if all members were removed.","O(log(N)+M) with N being the number of elements in the sorted set and M the number of elements removed by the operation.","2.8.9",CMD_DOC_NONE,NULL,NULL,"sorted_set",COMMAND_GROUP_SORTED_SET,ZREMRANGEBYLEX_History,0,ZREMRANGEBYLEX_Tips,0,zremrangebylexCommand,4,CMD_WRITE,ACL_CATEGORY_SLOW|ACL_CATEGORY_SORTEDSET|ACL_CATEGORY_WRITE,NULL,ZREMRANGEBYLEX_Keyspecs,1,NULL,3),.args=ZREMRANGEBYLEX_Args},
 {MAKE_CMD("zremrangebyrank","Removes members in a sorted set within a range of indexes. Deletes the sorted set if all members were removed.","O(log(N)+M) with N being the number of elements in the sorted set and M the number of elements removed by the operation.","2.0.0",CMD_DOC_NONE,NULL,NULL,"sorted_set",COMMAND_GROUP_SORTED_SET,ZREMRANGEBYRANK_History,0,ZREMRANGEBYRANK_Tips,0,zremrangebyrankCommand,4,CMD_WRITE,ACL_CATEGORY_SLOW|ACL_CATEGORY_SORTEDSET|ACL_CATEGORY_WRITE,NULL,ZREMRANGEBYRANK_Keyspecs,1,NULL,3),.args=ZREMRANGEBYRANK_Args},
 {MAKE_CMD("zremrangebyscore","Removes members in a sorted set within a range of scores. Deletes the sorted set if all members were removed.","O(log(N)+M) with N being the number of elements in the sorted set and M the number of elements removed by the operation.","1.2.0",CMD_DOC_NONE,NULL,NULL,"sorted_set",COMMAND_GROUP_SORTED_SET,ZREMRANGEBYSCORE_History,0,ZREMRANGEBYSCORE_Tips,0,zremrangebyscoreCommand,4,CMD_WRITE,ACL_CATEGORY_SLOW|ACL_CATEGORY_SORTEDSET|ACL_CATEGORY_WRITE,NULL,ZREMRANGEBYSCORE_Keyspecs,1,NULL,3),.args=ZREMRANGEBYSCORE_Args},
-{MAKE_CMD("zrevrange","Returns members in a sorted set within a range of indexes in reverse order.","O(log(N)+M) with N being the number of elements in the sorted set and M the number of elements returned.","1.2.0",CMD_DOC_NONE,NULL,NULL,"sorted_set",COMMAND_GROUP_SORTED_SET,ZREVRANGE_History,0,ZREVRANGE_Tips,0,zrevrangeCommand,-4,CMD_READONLY,ACL_CATEGORY_READ|ACL_CATEGORY_SLOW|ACL_CATEGORY_SORTEDSET,NULL,ZREVRANGE_Keyspecs,1,NULL,4),.args=ZREVRANGE_Args},
-{MAKE_CMD("zrevrangebylex","Returns members in a sorted set within a lexicographical range in reverse order.","O(log(N)+M) with N being the number of elements in the sorted set and M the number of elements being returned. If M is constant (e.g. always asking for the first 10 elements with LIMIT), you can consider it O(log(N)).","2.8.9",CMD_DOC_NONE,NULL,NULL,"sorted_set",COMMAND_GROUP_SORTED_SET,ZREVRANGEBYLEX_History,0,ZREVRANGEBYLEX_Tips,0,zrevrangebylexCommand,-4,CMD_READONLY,ACL_CATEGORY_READ|ACL_CATEGORY_SLOW|ACL_CATEGORY_SORTEDSET,NULL,ZREVRANGEBYLEX_Keyspecs,1,NULL,4),.args=ZREVRANGEBYLEX_Args},
-{MAKE_CMD("zrevrangebyscore","Returns members in a sorted set within a range of scores in reverse order.","O(log(N)+M) with N being the number of elements in the sorted set and M the number of elements being returned. If M is constant (e.g. always asking for the first 10 elements with LIMIT), you can consider it O(log(N)).","2.2.0",CMD_DOC_NONE,NULL,NULL,"sorted_set",COMMAND_GROUP_SORTED_SET,ZREVRANGEBYSCORE_History,1,ZREVRANGEBYSCORE_Tips,0,zrevrangebyscoreCommand,-4,CMD_READONLY,ACL_CATEGORY_READ|ACL_CATEGORY_SLOW|ACL_CATEGORY_SORTEDSET,NULL,ZREVRANGEBYSCORE_Keyspecs,1,NULL,5),.args=ZREVRANGEBYSCORE_Args},
+{MAKE_CMD("zrevrange","Returns members in a sorted set within a range of indexes in reverse order.","O(log(N)+M) with N being the number of elements in the sorted set and M the number of elements returned.","1.2.0",CMD_DOC_NONE,NULL,NULL,"sorted_set",COMMAND_GROUP_SORTED_SET,ZREVRANGE_History,1,ZREVRANGE_Tips,0,zrevrangeCommand,-4,CMD_READONLY,ACL_CATEGORY_READ|ACL_CATEGORY_SLOW|ACL_CATEGORY_SORTEDSET,NULL,ZREVRANGE_Keyspecs,1,NULL,5),.args=ZREVRANGE_Args},
+{MAKE_CMD("zrevrangebylex","Returns members in a sorted set within a lexicographical range in reverse order.","O(log(N)+M) with N being the number of elements in the sorted set and M the number of elements being returned. If M is constant (e.g. always asking for the first 10 elements with LIMIT), you can consider it O(log(N)).","2.8.9",CMD_DOC_NONE,NULL,NULL,"sorted_set",COMMAND_GROUP_SORTED_SET,ZREVRANGEBYLEX_History,1,ZREVRANGEBYLEX_Tips,0,zrevrangebylexCommand,-4,CMD_READONLY,ACL_CATEGORY_READ|ACL_CATEGORY_SLOW|ACL_CATEGORY_SORTEDSET,NULL,ZREVRANGEBYLEX_Keyspecs,1,NULL,5),.args=ZREVRANGEBYLEX_Args},
+{MAKE_CMD("zrevrangebyscore","Returns members in a sorted set within a range of scores in reverse order.","O(log(N)+M) with N being the number of elements in the sorted set and M the number of elements being returned. If M is constant (e.g. always asking for the first 10 elements with LIMIT), you can consider it O(log(N)).","2.2.0",CMD_DOC_NONE,NULL,NULL,"sorted_set",COMMAND_GROUP_SORTED_SET,ZREVRANGEBYSCORE_History,2,ZREVRANGEBYSCORE_Tips,0,zrevrangebyscoreCommand,-4,CMD_READONLY,ACL_CATEGORY_READ|ACL_CATEGORY_SLOW|ACL_CATEGORY_SORTEDSET,NULL,ZREVRANGEBYSCORE_Keyspecs,1,NULL,6),.args=ZREVRANGEBYSCORE_Args},
 {MAKE_CMD("zrevrank","Returns the index of a member in a sorted set ordered by descending scores.","O(log(N))","2.0.0",CMD_DOC_NONE,NULL,NULL,"sorted_set",COMMAND_GROUP_SORTED_SET,ZREVRANK_History,1,ZREVRANK_Tips,0,zrevrankCommand,-3,CMD_READONLY|CMD_FAST,ACL_CATEGORY_FAST|ACL_CATEGORY_READ|ACL_CATEGORY_SORTEDSET,NULL,ZREVRANK_Keyspecs,1,NULL,3),.args=ZREVRANK_Args},
 {MAKE_CMD("zscan","Iterates over members and scores of a sorted set.","O(1) for every call. O(N) for a complete iteration, including enough command calls for the cursor to return back to 0. N is the number of elements inside the collection.","2.8.0",CMD_DOC_NONE,NULL,NULL,"sorted_set",COMMAND_GROUP_SORTED_SET,ZSCAN_History,1,ZSCAN_Tips,1,zscanCommand,-3,CMD_READONLY,ACL_CATEGORY_READ|ACL_CATEGORY_SLOW|ACL_CATEGORY_SORTEDSET,NULL,ZSCAN_Keyspecs,1,NULL,5),.args=ZSCAN_Args},
 {MAKE_CMD("zscore","Returns the score of a member in a sorted set.","O(1)","1.2.0",CMD_DOC_NONE,NULL,NULL,"sorted_set",COMMAND_GROUP_SORTED_SET,ZSCORE_History,0,ZSCORE_Tips,0,zscoreCommand,3,CMD_READONLY|CMD_FAST,ACL_CATEGORY_FAST|ACL_CATEGORY_READ|ACL_CATEGORY_SORTEDSET,NULL,ZSCORE_Keyspecs,1,NULL,2),.args=ZSCORE_Args},
@@ -12120,7 +12158,7 @@ struct COMMAND_STRUCT serverCommandTable[] = {
 {MAKE_CMD("substr","Returns a substring from a string value.","O(N) where N is the length of the returned string. The complexity is ultimately determined by the returned length, but because creating a substring from an existing string is very cheap, it can be considered O(1) for small strings.","1.0.0",CMD_DOC_NONE,NULL,NULL,"string",COMMAND_GROUP_STRING,SUBSTR_History,0,SUBSTR_Tips,0,getrangeCommand,4,CMD_READONLY,ACL_CATEGORY_READ|ACL_CATEGORY_SLOW|ACL_CATEGORY_STRING,NULL,SUBSTR_Keyspecs,1,NULL,3),.args=SUBSTR_Args},
 /* transactions */
 {MAKE_CMD("discard","Discards a transaction.","O(N), when N is the number of queued commands","2.0.0",CMD_DOC_NONE,NULL,NULL,"transactions",COMMAND_GROUP_TRANSACTIONS,DISCARD_History,0,DISCARD_Tips,0,discardCommand,1,CMD_NOSCRIPT|CMD_LOADING|CMD_STALE|CMD_FAST|CMD_ALLOW_BUSY,ACL_CATEGORY_FAST|ACL_CATEGORY_TRANSACTION,NULL,DISCARD_Keyspecs,0,NULL,0)},
-{MAKE_CMD("exec","Executes all commands in a transaction.","Depends on commands in the transaction","1.2.0",CMD_DOC_NONE,NULL,NULL,"transactions",COMMAND_GROUP_TRANSACTIONS,EXEC_History,0,EXEC_Tips,0,execCommand,1,CMD_NOSCRIPT|CMD_LOADING|CMD_STALE|CMD_SKIP_COMMANDLOG,ACL_CATEGORY_SLOW|ACL_CATEGORY_TRANSACTION,NULL,EXEC_Keyspecs,0,NULL,0)},
+{MAKE_CMD("exec","Executes all commands in a transaction.","Depends on commands in the transaction","1.2.0",CMD_DOC_NONE,NULL,NULL,"transactions",COMMAND_GROUP_TRANSACTIONS,EXEC_History,0,EXEC_Tips,0,execCommand,1,CMD_NOSCRIPT|CMD_LOADING|CMD_STALE,ACL_CATEGORY_SLOW|ACL_CATEGORY_TRANSACTION,NULL,EXEC_Keyspecs,0,NULL,0)},
 {MAKE_CMD("multi","Starts a transaction.","O(1)","1.2.0",CMD_DOC_NONE,NULL,NULL,"transactions",COMMAND_GROUP_TRANSACTIONS,MULTI_History,0,MULTI_Tips,0,multiCommand,1,CMD_NOSCRIPT|CMD_LOADING|CMD_STALE|CMD_FAST|CMD_NO_MULTI|CMD_ALLOW_BUSY,ACL_CATEGORY_FAST|ACL_CATEGORY_TRANSACTION,NULL,MULTI_Keyspecs,0,NULL,0)},
 {MAKE_CMD("unwatch","Forgets about watched keys of a transaction.","O(1)","2.2.0",CMD_DOC_NONE,NULL,NULL,"transactions",COMMAND_GROUP_TRANSACTIONS,UNWATCH_History,0,UNWATCH_Tips,0,unwatchCommand,1,CMD_NOSCRIPT|CMD_LOADING|CMD_STALE|CMD_FAST|CMD_ALLOW_BUSY,ACL_CATEGORY_FAST|ACL_CATEGORY_TRANSACTION,NULL,UNWATCH_Keyspecs,0,NULL,0)},
 {MAKE_CMD("watch","Monitors changes to keys to determine the execution of a transaction.","O(1) for every key.","2.2.0",CMD_DOC_NONE,NULL,NULL,"transactions",COMMAND_GROUP_TRANSACTIONS,WATCH_History,0,WATCH_Tips,0,watchCommand,-2,CMD_NOSCRIPT|CMD_LOADING|CMD_STALE|CMD_FAST|CMD_NO_MULTI|CMD_ALLOW_BUSY,ACL_CATEGORY_FAST|ACL_CATEGORY_TRANSACTION,NULL,WATCH_Keyspecs,1,NULL,1),.args=WATCH_Args},

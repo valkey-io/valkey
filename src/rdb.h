@@ -50,15 +50,13 @@
  * In an RDB file/stream, we also check the magic string REDIS or VALKEY but in
  * the DUMP/RESTORE format, there is only the RDB version number and no magic
  * string. */
-#define RDB_VERSION 81
+#define RDB_VERSION 80
 
 /* Mapping between RDB version and the Valkey version where it was added. */
 static const int RDB_VERSION_MAP[][2] = {
     /* {RDB version, added in Valkey version} from oldest to newest. */
     {11, 0x070200},
     {80, 0x090000},
-    {81, 0x0A0000}, /* TODO(maintainers): confirm target release for
-                     * RDB_TYPE_HASH_LISTPACK_2 before merge. */
 };
 
 /* Reserved range for foreign (unsupported, non-OSS) RDB format. */
@@ -130,8 +128,7 @@ enum RdbType {
     RDB_TYPE_STREAM_LISTPACKS_2 = 19,
     RDB_TYPE_SET_LISTPACK = 20, /* Added in RDB 11 (7.2) */
     RDB_TYPE_STREAM_LISTPACKS_3 = 21,
-    RDB_TYPE_HASH_2 = 22,          /* Hash with field-level expiration, RDB 80 (9.0) */
-    RDB_TYPE_HASH_LISTPACK_2 = 23, /* Hash listpack with tagged field-expiration metadata, RDB 81 */
+    RDB_TYPE_HASH_2 = 22, /* Hash with field-level expiration, RDB 80 (9.0) */
     RDB_TYPE_LAST
 };
 /* NOTE: WHEN ADDING NEW RDB TYPE, UPDATE rdb_type_string[] */

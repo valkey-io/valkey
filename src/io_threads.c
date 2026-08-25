@@ -548,6 +548,20 @@ void testOnlyFreeIOThreadQueues(void) {
     io_thread_ticket = (mpscTicket){0};
 }
 
+/* Fill the shared inbox so the next dispatch has to take its enqueue-failure
+ * path. The queue is file-static, so tests cannot do this themselves. */
+void testOnlyFillIOThreadInbox(void) {
+    while (spmcEnqueue(&io_shared_inbox, (void *)-1)) {
+        /* Keep going until the queue rejects the push. */
+    }
+}
+
+/* Expose the cluster pending-response count so tests can assert that a failed
+ * or completed dispatch leaves no response outstanding. */
+size_t testOnlyGetClusterIOPendingResponses(void) {
+    return cluster_io_pending_responses;
+}
+
 int trySendReadToIOThreads(client *c) {
     if (server.active_io_threads_num <= 1) return C_ERR;
     /* Fake/teardown clients may have no connection; never offload those. */

@@ -53,6 +53,8 @@ void IOThreadsBeforeSleep(long long current_time);
 void drainIOThreadsQueue(void);
 void testOnlyInitIOThreadQueues(void);
 void testOnlyFreeIOThreadQueues(void);
+void testOnlyFillIOThreadInbox(void);
+size_t testOnlyGetClusterIOPendingResponses(void);
 void trySendPollJobToIOThreads(void);
 int trySendAcceptToIOThreads(connection *conn);
 struct clusterLink;

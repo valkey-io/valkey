@@ -4131,6 +4131,7 @@ int rdbSaveToReplicasSockets(int req, int rdbver, rdbSaveInfo *rsi) {
 
             server.rdb_save_time_start = time(NULL);
             server.rdb_write_target = RDB_WRITE_TARGET_SOCKET;
+            server.cur_bgsave_type = RDB_BGSAVE_TYPE_FORK;
             if (dual_channel) {
                 /* For dual channel sync, the main process no longer requires these RDB connections. */
                 zfree(conns);

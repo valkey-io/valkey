@@ -6,8 +6,6 @@
  */
 
 #include "qos.h"
-#include "server.h"
-#include "cluster.h"
 #include <string.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -245,18 +243,6 @@ bool isIpQosPrioritized(const char *ip) {
     return false;
 }
 
-bool canAcceptQosConnection(bool is_prioritized) {
-    long long total_clients = (long long)listLength(server.clients) +
-                              (long long)getClusterConnectionsCount();
-    if (is_prioritized) {
-        return total_clients < (long long)server.maxclients;
-    } else {
-        unsigned int reserved = 0;
-        if (server.qos_reserved_min_clients > 0 && qos_subnets_count > 0) {
-            reserved = server.qos_reserved_min_clients;
-        }
-        long long normal_limit = (long long)server.maxclients - (long long)reserved;
-        if (normal_limit < 1) normal_limit = 1;
-        return total_clients < normal_limit;
-    }
+bool hasQosSubnetSources(void) {
+    return qos_subnets_count > 0;
 }

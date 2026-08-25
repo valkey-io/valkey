@@ -36,6 +36,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdbool.h>
 #include <sys/uio.h>
 
 #include "ae.h"
@@ -184,12 +185,12 @@ struct connection {
     short int flags;
     short int refs;
     unsigned short int iovcnt;
+    bool is_priority; /* true if connection is prioritized for QoS */
     ConnectionOwnerKind owner_kind;
     void *private_data;
     ConnectionCallbackFunc conn_handler;
     ConnectionCallbackFunc write_handler;
     ConnectionCallbackFunc read_handler;
-    bool is_priority; /* true if connection is prioritized for QoS */
 };
 
 #define CONFIG_BINDADDR_MAX 16
@@ -428,6 +429,16 @@ static inline void connSetPrivateData(connection *conn, void *data) {
 /* Get the associated private data pointer */
 static inline void *connGetPrivateData(connection *conn) {
     return conn->private_data;
+}
+
+/* Set whether this connection is prioritized for QoS */
+static inline void connSetPriority(connection *conn, bool is_priority) {
+    conn->is_priority = is_priority;
+}
+
+/* Return true if the connection has high QoS priority */
+static inline bool connIsPriority(const connection *conn) {
+    return conn && conn->is_priority;
 }
 
 /* Set the owner kind for the connection */

@@ -717,7 +717,7 @@ client *moduleAllocTempClient(void) {
         c = moduleTempClients[--moduleTempClientCount];
         if (moduleTempClientCount < moduleTempClientMinCount) moduleTempClientMinCount = moduleTempClientCount;
     } else {
-        c = createClient(NULL, 0);
+        c = createClient(NULL);
         c->flag.module = 1;
         c->flag.fake = 1;
         c->user = NULL; /* Root user */
@@ -994,7 +994,7 @@ void moduleCreateContext(ValkeyModuleCtx *out_ctx, ValkeyModule *module, int ctx
     if (ctx_flags & VALKEYMODULE_CTX_TEMP_CLIENT)
         out_ctx->client = moduleAllocTempClient();
     else if (ctx_flags & VALKEYMODULE_CTX_NEW_CLIENT) {
-        out_ctx->client = createClient(NULL, 0);
+        out_ctx->client = createClient(NULL);
         out_ctx->client->flag.fake = 1;
     }
 

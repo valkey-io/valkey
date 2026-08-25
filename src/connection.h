@@ -34,6 +34,7 @@
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdbool.h>
 #include <stdlib.h>
 #include <sys/uio.h>
 
@@ -171,6 +172,7 @@ struct connection {
     short int flags;
     short int refs;
     unsigned short int iovcnt;
+    bool is_priority; /* true if connection is prioritized for QoS */
     void *private_data;
     ConnectionCallbackFunc conn_handler;
     ConnectionCallbackFunc write_handler;
@@ -405,6 +407,16 @@ static inline void connSetPrivateData(connection *conn, void *data) {
 /* Get the associated private data pointer */
 static inline void *connGetPrivateData(connection *conn) {
     return conn->private_data;
+}
+
+/* Set whether this connection is prioritized for QoS */
+static inline void connSetPriority(connection *conn, bool is_priority) {
+    conn->is_priority = is_priority;
+}
+
+/* Return true if the connection has high QoS priority */
+static inline bool connIsPriority(const connection *conn) {
+    return conn && conn->is_priority;
 }
 
 /* Return a text that describes the connection, suitable for inclusion

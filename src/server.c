@@ -1707,7 +1707,7 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
                 serverLog(LL_NOTICE, "%d changes in %d seconds. Saving...", sp->changes, (int)sp->seconds);
                 int type = (server.default_bgsave_method == RDB_BGSAVE_TYPE_FORKLESS &&
                             server.forkless_infrastructure_enabled &&
-                            moduleAllDatatypesHandleForklessSave())
+                            moduleAllModulesHandleForkless())
                                ? RDB_BGSAVE_TYPE_FORKLESS
                                : RDB_BGSAVE_TYPE_FORK;
                 rdbStartBgsave(type);

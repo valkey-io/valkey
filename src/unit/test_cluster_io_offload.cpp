@@ -68,6 +68,10 @@ class ClusterIOOffloadTest : public ::testing::Test {
         }
         zfree(server.logfile);
         server.logfile = NULL;
+        /* Every test must leave the cluster pending-response count balanced.
+         * A dispatch that returns without publishing a result would strand it
+         * forever and stall processIOThreadsResponses(). */
+        EXPECT_EQ(testOnlyGetClusterIOPendingResponses(), 0u) << "leaked a cluster I/O pending response";
         testOnlyFreeIOThreadQueues();
     }
 
@@ -118,12 +122,6 @@ class ClusterIOOffloadTest : public ::testing::Test {
         link->send_msg_queue_mem += sizeof(listNode) + blk->totlen;
     }
 
-    void ensureRcvbufCapacity(clusterLink *link, size_t len) {
-        if (link->rcvbuf_alloc >= len) return;
-        link->rcvbuf = (char *)zrealloc(link->rcvbuf, len);
-        link->rcvbuf_alloc = len;
-    }
-
     /* A minimal well-formed cluster packet. The type is chosen so that
      * clusterProcessPacket() accepts it from an unknown sender and only bumps
      * the per-type received counter. */
@@ -137,17 +135,27 @@ class ClusterIOOffloadTest : public ::testing::Test {
         return raw;
     }
 
-    /* Put one complete packet plus a one-byte partial tail in rcvbuf and mark
-     * the packet as framed, as a worker read job would have left it. */
-    void seedCompletePackets(clusterLink *link) {
+    /* Exactly one complete packet, nothing after it. */
+    void seedOneCompletePacket(fakeConnection *fc) {
         unsigned char *pkt = buildRawPacket(CLUSTERMSG_MIN_LEN);
-        ensureRcvbufCapacity(link, CLUSTERMSG_MIN_LEN + 1);
-        memcpy(link->rcvbuf, pkt, CLUSTERMSG_MIN_LEN);
-        link->rcvbuf[CLUSTERMSG_MIN_LEN] = 'T';
-        link->rcvbuf_len = CLUSTERMSG_MIN_LEN + 1;
-        link->io_complete_bytes = CLUSTERMSG_MIN_LEN;
-        link->io_complete_packets = 1;
+        fakeConnSetReadData(fc, pkt, CLUSTERMSG_MIN_LEN);
         zfree(pkt);
+    }
+
+    /* One complete packet followed by a header that fails signature validation,
+     * so framing reports a protocol error with a valid prefix in front of it.
+     * The garbage must be long enough for the framing step to inspect it as a
+     * header rather than treat it as a partial read. */
+    void seedCompletePacketFollowedByGarbage(fakeConnection *fc) {
+        const size_t garbage_len = 64;
+        size_t len = CLUSTERMSG_MIN_LEN + garbage_len;
+        unsigned char *pkt = buildRawPacket(CLUSTERMSG_MIN_LEN);
+        unsigned char *buf = (unsigned char *)zcalloc(len);
+        memcpy(buf, pkt, CLUSTERMSG_MIN_LEN);
+        memset(buf + CLUSTERMSG_MIN_LEN, 'Z', garbage_len);
+        fakeConnSetReadData(fc, buf, len);
+        zfree(pkt);
+        zfree(buf);
     }
 
     /* Feed the connection one complete packet plus a partial tail, so a read
@@ -209,61 +217,49 @@ TEST_F(ClusterIOOffloadTest, ReadOffloadRoundTrip) {
     /* Only the unparsed tail is left, compacted to the front. */
     EXPECT_EQ(link->rcvbuf_len, 1u);
     EXPECT_EQ(link->rcvbuf[0], 'T');
-    EXPECT_EQ(testOnlyGetClusterIOPendingResponses(), 0u);
     EXPECT_EQ(server.stat_cluster_threaded_reads_processed, 1LL);
     EXPECT_EQ(fc->postpone_state, 0);
 }
 
-TEST_F(ClusterIOOffloadTest, ReadCompletionDrainsFramedPacketsAndCompactsTail) {
-    clusterLink *link = makeLink();
-    ASSERT_EQ(trySendClusterReadToIOThreads(link), C_OK);
-    seedCompletePackets(link);
-    link->io_result = CLUSTER_IO_OK;
-
-    clusterHandleReadCompletion(link);
-
-    EXPECT_EQ(link->io_complete_bytes, 0u);
-    EXPECT_EQ(link->io_complete_packets, 0u);
-    EXPECT_EQ(link->rcvbuf_len, 1u);
-    EXPECT_EQ(link->rcvbuf[0], 'T');
-}
-
-TEST_F(ClusterIOOffloadTest, ReadCompletionOnEofDrainsThenCloses) {
+/* A peer that sends a valid packet and then hangs up must have that packet
+ * applied before the link is torn down. Same for a hard read error and for a
+ * malformed trailing header. All three drive the real worker so the result code
+ * comes from clusterReadJob() rather than being injected. */
+TEST_F(ClusterIOOffloadTest, ReadOffloadOnEofDrainsThenCloses) {
     clusterLink *link = makeLink();
     fakeConnection *fc = (fakeConnection *)link->conn;
-    ASSERT_EQ(trySendClusterReadToIOThreads(link), C_OK);
-    seedCompletePackets(link);
-    link->io_result = CLUSTER_IO_EOF;
+    seedOneCompletePacket(fc);
+    fc->eof = 1;
 
-    clusterHandleReadCompletion(link);
+    ASSERT_EQ(trySendClusterReadToIOThreads(link), C_OK);
+    runInlineWorkerAndDrain(clusterReadJob, link);
     releaseLinkOwnership(link);
 
     EXPECT_GE(fc->close_calls, 1);
     EXPECT_EQ(server.cluster->stats_bus_messages_received[CLUSTERMSG_TYPE_FAILOVER_AUTH_ACK], 1LL);
 }
 
-TEST_F(ClusterIOOffloadTest, ReadCompletionOnReadErrorDrainsThenCloses) {
+TEST_F(ClusterIOOffloadTest, ReadOffloadOnReadErrorDrainsThenCloses) {
     clusterLink *link = makeLink();
     fakeConnection *fc = (fakeConnection *)link->conn;
-    ASSERT_EQ(trySendClusterReadToIOThreads(link), C_OK);
-    seedCompletePackets(link);
-    link->io_result = CLUSTER_IO_READ_ERROR;
+    seedOneCompletePacket(fc);
+    fc->fail_read = 1;
 
-    clusterHandleReadCompletion(link);
+    ASSERT_EQ(trySendClusterReadToIOThreads(link), C_OK);
+    runInlineWorkerAndDrain(clusterReadJob, link);
     releaseLinkOwnership(link);
 
     EXPECT_GE(fc->close_calls, 1);
     EXPECT_EQ(server.cluster->stats_bus_messages_received[CLUSTERMSG_TYPE_FAILOVER_AUTH_ACK], 1LL);
 }
 
-TEST_F(ClusterIOOffloadTest, ReadCompletionOnProtocolErrorDrainsThenCloses) {
+TEST_F(ClusterIOOffloadTest, ReadOffloadOnProtocolErrorDrainsValidPrefixThenCloses) {
     clusterLink *link = makeLink();
     fakeConnection *fc = (fakeConnection *)link->conn;
-    ASSERT_EQ(trySendClusterReadToIOThreads(link), C_OK);
-    seedCompletePackets(link);
-    link->io_result = CLUSTER_IO_BAD_HEADER;
+    seedCompletePacketFollowedByGarbage(fc);
 
-    clusterHandleReadCompletion(link);
+    ASSERT_EQ(trySendClusterReadToIOThreads(link), C_OK);
+    runInlineWorkerAndDrain(clusterReadJob, link);
     releaseLinkOwnership(link);
 
     EXPECT_GE(fc->close_calls, 1);
@@ -307,7 +303,6 @@ TEST_F(ClusterIOOffloadTest, WriteOffloadRoundTripDrainsQueue) {
     EXPECT_EQ(link->io_write_state, CLUSTER_LINK_IO_IDLE);
     EXPECT_EQ(link->io_refs, 0);
     EXPECT_EQ(link->conn->write_handler, (ConnectionCallbackFunc)NULL);
-    EXPECT_EQ(testOnlyGetClusterIOPendingResponses(), 0u);
     EXPECT_EQ(server.stat_cluster_threaded_writes_processed, 1LL);
     EXPECT_EQ(fc->postpone_state, 0);
 }
@@ -327,7 +322,6 @@ TEST_F(ClusterIOOffloadTest, WriteOffloadRoundTripPartialSendKeepsHandler) {
     EXPECT_EQ(link->io_write_state, CLUSTER_LINK_IO_IDLE);
     /* More to send, so the write handler must stay armed. */
     EXPECT_NE(link->conn->write_handler, (ConnectionCallbackFunc)NULL);
-    EXPECT_EQ(testOnlyGetClusterIOPendingResponses(), 0u);
 }
 
 TEST_F(ClusterIOOffloadTest, WriteCompletionPopsOnlyVisibleNodes) {
@@ -380,7 +374,6 @@ TEST_F(ClusterIOOffloadTest, WriteDispatchSkippedWhileConnecting) {
     EXPECT_EQ(fc->postpone_state, 0);
     /* The message stays queued for the next dispatch. */
     EXPECT_EQ(listLength(link->send_msg_queue), 1UL);
-    EXPECT_EQ(testOnlyGetClusterIOPendingResponses(), 0u);
     /* Not a fallback: no I/O was attempted anywhere. */
     EXPECT_EQ(server.stat_cluster_io_main_thread_fallbacks, 0LL);
 }
@@ -396,7 +389,6 @@ TEST_F(ClusterIOOffloadTest, ReadDispatchSkippedWhileConnecting) {
     EXPECT_EQ(link->io_refs, 0);
     EXPECT_EQ(link->conn->refs, 1);
     EXPECT_EQ(fc->postpone_state, 0);
-    EXPECT_EQ(testOnlyGetClusterIOPendingResponses(), 0u);
     EXPECT_EQ(server.stat_cluster_io_main_thread_fallbacks, 0LL);
 }
 
@@ -427,7 +419,6 @@ TEST_F(ClusterIOOffloadTest, ReadDispatchInboxFullUnwindsAndCountsFallback) {
     EXPECT_EQ(link->conn->refs, 1);
     EXPECT_EQ(fc->postpone_state, 0);
     EXPECT_EQ(server.stat_cluster_io_main_thread_fallbacks, 1LL);
-    EXPECT_EQ(testOnlyGetClusterIOPendingResponses(), 0u);
 }
 
 TEST_F(ClusterIOOffloadTest, WriteDispatchInboxFullUnwindsAndCountsFallback) {
@@ -451,7 +442,6 @@ TEST_F(ClusterIOOffloadTest, WriteDispatchInboxFullUnwindsAndCountsFallback) {
     EXPECT_EQ(link->conn->refs, 1);
     EXPECT_EQ(fc->postpone_state, 0);
     EXPECT_EQ(server.stat_cluster_io_main_thread_fallbacks, 1LL);
-    EXPECT_EQ(testOnlyGetClusterIOPendingResponses(), 0u);
 }
 
 TEST_F(ClusterIOOffloadTest, AcceptDispatchInboxFullUnwindsAndCountsFallback) {
@@ -465,7 +455,6 @@ TEST_F(ClusterIOOffloadTest, AcceptDispatchInboxFullUnwindsAndCountsFallback) {
     EXPECT_EQ(fc->conn.refs, 1);
     EXPECT_EQ(fc->postpone_state, 0);
     EXPECT_EQ(server.stat_cluster_io_main_thread_fallbacks, 1LL);
-    EXPECT_EQ(testOnlyGetClusterIOPendingResponses(), 0u);
 }
 
 TEST_F(ClusterIOOffloadTest, PoolInactiveCountsFallback) {
@@ -480,7 +469,6 @@ TEST_F(ClusterIOOffloadTest, PoolInactiveCountsFallback) {
 
     EXPECT_EQ(server.stat_cluster_io_main_thread_fallbacks, 2LL);
     EXPECT_EQ(link->io_refs, 0);
-    EXPECT_EQ(testOnlyGetClusterIOPendingResponses(), 0u);
 }
 
 TEST_F(ClusterIOOffloadTest, DispatchDeferredWhileJobInFlight) {
@@ -499,7 +487,6 @@ TEST_F(ClusterIOOffloadTest, DispatchDeferredWhileJobInFlight) {
     EXPECT_EQ(server.stat_cluster_io_main_thread_fallbacks, 0LL);
 
     runInlineWorkerAndDrain(clusterWriteJob, link);
-    EXPECT_EQ(testOnlyGetClusterIOPendingResponses(), 0u);
 }
 
 /* --- Buffer limit and deferred teardown ------------------------------- */
@@ -533,7 +520,6 @@ TEST_F(ClusterIOOffloadTest, FreeClusterLinkDefersWhenIoRefOutstanding) {
     runInlineWorkerAndDrain(clusterReadJob, link);
     releaseLinkOwnership(link);
     EXPECT_GE(fc->close_calls, 1);
-    EXPECT_EQ(testOnlyGetClusterIOPendingResponses(), 0u);
 }
 
 TEST_F(ClusterIOOffloadTest, ReadCompletionFinalizesDeferredFree) {
@@ -561,7 +547,6 @@ TEST_F(ClusterIOOffloadTest, AcceptDispatchRequiresOffloadAllowedFlag) {
     EXPECT_EQ(trySendClusterAcceptToIOThreads(&fc->conn), C_ERR);
     EXPECT_EQ(fc->conn.flags & CONN_FLAG_ACCEPT_OFFLOAD_PENDING, 0);
     EXPECT_EQ(server.stat_cluster_io_main_thread_fallbacks, 0LL);
-    EXPECT_EQ(testOnlyGetClusterIOPendingResponses(), 0u);
 }
 
 TEST_F(ClusterIOOffloadTest, AcceptDispatchIsIdempotentWhilePending) {
@@ -578,10 +563,10 @@ TEST_F(ClusterIOOffloadTest, AcceptDispatchIsIdempotentWhilePending) {
     EXPECT_EQ(fc->conn.refs, refs_after_first);
     EXPECT_EQ(testOnlyGetClusterIOPendingResponses(), 1u);
 
-    /* Drain so the connection is not left referenced by the queue. */
-    clusterHandleAcceptCompletion(&fc->conn);
-    connDecrRefs(&fc->conn);
-    fc->conn.flags &= ~CONN_FLAG_ACCEPT_OFFLOAD_PENDING;
+    /* Drain through the real path so nothing is left referenced by the queue. */
+    clusterAcceptJob(&fc->conn);
+    processIOThreadsResponses();
+    trackLink((clusterLink *)connGetPrivateData(&fc->conn));
 }
 
 TEST_F(ClusterIOOffloadTest, AcceptOffloadRoundTripCreatesLink) {
@@ -602,7 +587,6 @@ TEST_F(ClusterIOOffloadTest, AcceptOffloadRoundTripCreatesLink) {
     ASSERT_NE(connGetPrivateData(&fc->conn), (void *)NULL);
     trackLink((clusterLink *)connGetPrivateData(&fc->conn));
     EXPECT_NE(fc->conn.read_handler, (ConnectionCallbackFunc)NULL);
-    EXPECT_EQ(testOnlyGetClusterIOPendingResponses(), 0u);
     EXPECT_EQ(server.stat_cluster_threaded_accepts_processed, 1LL);
 }
 

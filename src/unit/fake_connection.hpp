@@ -35,10 +35,15 @@ typedef struct fakeConnection {
     size_t buf_size;
     size_t written;
 
-    /* Read source. Reads past read_len report EAGAIN. */
+    /* Read source. Once read_data is drained, the next read reports EAGAIN,
+     * or EOF / a hard error if the corresponding flag is set. A hard error
+     * moves the connection out of CONN_STATE_CONNECTED, which is how callers
+     * tell a real error from EAGAIN. */
     unsigned char *read_data;
     size_t read_len;
     size_t read_pos;
+    int eof;
+    int fail_read;
 
     /* Recorded calls, for tests that assert on connection lifecycle. */
     int close_calls;
@@ -86,6 +91,11 @@ inline int fakeConnRead(connection *conn, void *buf, size_t len) {
     fakeConnection *fc = (fakeConnection *)conn;
     if (fc->error) return -1;
     if (fc->read_pos >= fc->read_len) {
+        if (fc->eof) return 0;
+        if (fc->fail_read) {
+            conn->state = CONN_STATE_ERROR;
+            return -1;
+        }
         errno = EAGAIN;
         return -1;
     }

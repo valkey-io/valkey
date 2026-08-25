@@ -184,8 +184,7 @@ static void spaceSavingWindowResize(spaceSavingWindow *w, int new_k) {
 struct spaceSavingManager {
     spaceSavingWindow *live;        /* Current (open) window */
     spaceSavingWindow *frozen;      /* Last completed window (read path) */
-    uint64_t live_window_length_us; /* Length of the current (live) window, in microseconds */
-    uint64_t live_window_start_us;  /* Start time of the current (live) window */
+    uint64_t live_window_length_us; /* Configured length of a window, in microseconds */
 };
 
 spaceSavingManager *spaceSavingManagerCreate(int k, uint64_t window_us, uint64_t now_us) {
@@ -193,7 +192,6 @@ spaceSavingManager *spaceSavingManagerCreate(int k, uint64_t window_us, uint64_t
     m->live = spaceSavingWindowCreate(k);
     m->frozen = spaceSavingWindowCreate(k);
     m->live_window_length_us = window_us;
-    m->live_window_start_us = now_us;
     if (!m->live || !m->frozen) {
         spaceSavingManagerRelease(m);
         return NULL;
@@ -211,9 +209,15 @@ void spaceSavingManagerRelease(spaceSavingManager *m) {
 
 void spaceSavingManagerReset(spaceSavingManager *m, uint64_t now_us) {
     if (!m) return;
+    /* The sampling percentage is configuration, not measurement: it describes
+     * how the NEXT observations will be gathered, so it outlives the data being
+     * dropped. Preserving it here is what makes this safe to call from the
+     * rotate path — clearing it would leave the live window at 0 and every
+     * subsequent estimate would come back as zero until a config change. */
+    int live_pct = m->live->sampling_percentage;
     spaceSavingWindowReset(m->live);
     spaceSavingWindowReset(m->frozen);
-    m->live_window_start_us = now_us;
+    m->live->sampling_percentage = live_pct;
     m->live->start_us = now_us;
 }
 
@@ -241,21 +245,35 @@ static void spaceSavingManagerFreeze(spaceSavingManager *m, uint64_t now_us) {
     m->live->sampling_percentage = m->frozen->sampling_percentage;
 }
 
+/* Close the live window once its configured length has fully elapsed. Rotation
+ * is timer-driven, so a window is closed at or after its nominal boundary and
+ * the snapshot carries the real interval it accumulated over.
+ *
+ * If the timer ran so late that the live window covers more than twice the
+ * configured length, its counts span too coarse an interval to publish as "the
+ * last window", so they are dropped rather than reported. That does discard
+ * whatever traffic arrived during the stall, which is the accepted cost of
+ * bounding how stale a report can be: a frozen window always spans
+ * [length, 2 * length), so HOTKEYS GET can never quietly return a long-run
+ * average under a one-window label.
+ *
+ * Boundaries are measured from when the live window really started, not from a
+ * nominal grid. A window is therefore never SHORTER than the configured length
+ * (it is length + however late this call ran), and a late rotation cannot
+ * shorten the following window — at the cost of the boundaries drifting against
+ * the wall clock, so a long run sees slightly fewer windows than
+ * elapsed / length. For a sampled estimator that reports its own measured span,
+ * never-shorter-than-configured is the more useful guarantee: it keeps N per
+ * window from collapsing after a hiccup. */
 void spaceSavingManagerRotate(spaceSavingManager *m, uint64_t now_us) {
-    uint64_t elapsed, windows;
     if (!m || m->live_window_length_us == 0) return;
-    if (now_us <= m->live_window_start_us) return; /* monotonic guard */
-    elapsed = now_us - m->live_window_start_us;
-    if (elapsed < m->live_window_length_us) return; /* current window still open */
-    windows = elapsed / m->live_window_length_us;   /* full windows elapsed */
-
-    /* One freeze snapshots the just-completed window. If two or more whole
-     * windows elapsed (an idle gap), a second freeze pushes that snapshot out
-     * too, so the frozen window correctly ends up empty. Any freeze past the
-     * second is a no-op on an already-empty summary, so cap at two. */
-    int freeze_count = (windows >= 2) ? 2 : 1;
-    for (int i = 0; i < freeze_count; i++) spaceSavingManagerFreeze(m, now_us);
-    m->live_window_start_us += windows * m->live_window_length_us;
+    uint64_t len = m->live_window_length_us;
+    uint64_t start_us = m->live->start_us;
+    if (now_us < start_us + len) return; /* current window still open */
+    if (now_us >= start_us + 2 * len)
+        spaceSavingManagerReset(m, now_us); /* too coarse to report: drop it */
+    else
+        spaceSavingManagerFreeze(m, now_us);
 }
 
 void recordSpaceSavingManagerSample(spaceSavingManager *m, sds key, int dbid) {
@@ -311,12 +329,13 @@ uint64_t spaceSavingManagerFrozenDurationUs(spaceSavingManager *m) {
  * change. */
 void spaceSavingManagerReconfigure(spaceSavingManager *m, int new_k, uint64_t new_window_us, uint64_t now_us) {
     if (!m) return;
+    int live_pct = m->live->sampling_percentage; /* configuration outlives the data */
     spaceSavingWindowReset(m->live);
+    m->live->sampling_percentage = live_pct;
     if (new_k > 0 && new_k != m->live->capacity) {
         spaceSavingWindowResize(m->live, new_k);
         spaceSavingWindowResize(m->frozen, new_k);
     }
     m->live_window_length_us = new_window_us;
-    m->live_window_start_us = now_us;
     m->live->start_us = now_us;
 }

@@ -169,11 +169,12 @@ TEST(SpaceSaving, FrequencyAboveNOverKIsTracked) {
 }
 
 /* ---------------------------------------------------------------------------
- * 3. Freezing: a completed window becomes readable, a partial one does not, and
- *    an idle gap of two or more windows double-freezes so the reader sees an
- *    empty window rather than stale data.
+ * 3. Rotation policy. A window is published only if it was closed within twice
+ *    its configured length; past that its counts span too coarse an interval to
+ *    label "the last window", so they are dropped — even when the window did
+ *    receive traffic. A merely-late rotation keeps its counts.
  * --------------------------------------------------------------------------*/
-TEST(SpaceSaving, FreezeAndDoubleFreezeAfterIdleGap) {
+TEST(SpaceSaving, LateRotationKeepsCountsUntilTheStalenessCutoff) {
     spaceSavingManager *m = spaceSavingManagerCreate(8, WINDOW_US, 0);
     ASSERT_NE(m, nullptr);
 
@@ -191,29 +192,69 @@ TEST(SpaceSaving, FreezeAndDoubleFreezeAfterIdleGap) {
     ASSERT_EQ(frozenFind(m, "a", 0, &count, NULL), 1);
     EXPECT_EQ(count, 3u);
     EXPECT_EQ(spaceSavingManagerFrozenTotal(m), 3u);
+    EXPECT_EQ(spaceSavingManagerFrozenDurationUs(m), WINDOW_US);
 
     /* A rotate that crosses no new boundary leaves the snapshot untouched. */
     spaceSavingManagerRotate(m, WINDOW_US + 1);
     EXPECT_EQ(spaceSavingManagerCount(m), 1);
     EXPECT_EQ(spaceSavingManagerFrozenTotal(m), 3u);
 
-    /* Two whole windows elapse with no traffic. The empty live window is frozen
-     * and pushes the old (hot) snapshot out, so the reader sees nothing stale. */
-    spaceSavingManagerRotate(m, WINDOW_US + 2 * WINDOW_US);
-    EXPECT_EQ(spaceSavingManagerCount(m), 0);
-    EXPECT_EQ(spaceSavingManagerFrozenTotal(m), 0u);
-    EXPECT_EQ(frozenFind(m, "a", 0, NULL, NULL), 0);
-
-    /* A long idle gap behaves the same way (capped at two freezes) and the
-     * window start stays aligned to the grid, so the next boundary still works. */
+    /* A late rotation, still within the cutoff: the counts are kept and the
+     * reported duration includes the lag rather than the nominal length. */
     for (int i = 0; i < 5; i++) recordName(m, "b", 0);
-    spaceSavingManagerRotate(m, 1000 * WINDOW_US);
-    EXPECT_EQ(spaceSavingManagerCount(m), 0) << "an idle gap must not report a partial window";
+    uint64_t late = WINDOW_US + WINDOW_US + (WINDOW_US - 1); /* just under 2x */
+    spaceSavingManagerRotate(m, late);
+    ASSERT_EQ(frozenFind(m, "b", 0, &count, NULL), 1) << "a late rotation must not lose its counts";
+    EXPECT_EQ(count, 5u);
+    EXPECT_EQ(spaceSavingManagerFrozenDurationUs(m), 2 * WINDOW_US - 1);
+
+    /* Past the cutoff the window is dropped, INCLUDING the traffic it saw: its
+     * span is too coarse to publish as one window. */
     for (int i = 0; i < 7; i++) recordName(m, "c", 0);
+    spaceSavingManagerRotate(m, late + 2 * WINDOW_US);
+    EXPECT_EQ(spaceSavingManagerCount(m), 0) << "an over-long window must be dropped, not reported";
+    EXPECT_EQ(spaceSavingManagerFrozenTotal(m), 0u);
+    EXPECT_EQ(frozenFind(m, "c", 0, NULL, NULL), 0);
+    EXPECT_EQ(spaceSavingManagerFrozenDurationUs(m), 0u);
+
+    /* A long stall behaves the same way, and measuring re-bases on the drop, so
+     * the very next window is a normal one. */
+    for (int i = 0; i < 4; i++) recordName(m, "d", 0);
+    spaceSavingManagerRotate(m, 1000 * WINDOW_US);
+    EXPECT_EQ(spaceSavingManagerCount(m), 0);
+    for (int i = 0; i < 6; i++) recordName(m, "e", 0);
     spaceSavingManagerRotate(m, 1001 * WINDOW_US);
     ASSERT_EQ(spaceSavingManagerCount(m), 1);
-    ASSERT_EQ(frozenFind(m, "c", 0, &count, NULL), 1);
-    EXPECT_EQ(count, 7u);
+    ASSERT_EQ(frozenFind(m, "e", 0, &count, NULL), 1);
+    EXPECT_EQ(count, 6u);
+    EXPECT_EQ(spaceSavingManagerFrozenDurationUs(m), WINDOW_US);
+
+    spaceSavingManagerRelease(m);
+}
+
+/* A late rotation must not shorten the FOLLOWING window: boundaries are measured
+ * from when a window really started, so the lag does not propagate. */
+TEST(SpaceSaving, RotationLagDoesNotShortenTheNextWindow) {
+    spaceSavingManager *m = spaceSavingManagerCreate(8, WINDOW_US, 0);
+    ASSERT_NE(m, nullptr);
+
+    const uint64_t lag_us = WINDOW_US / 2;
+    recordName(m, "a", 0);
+    spaceSavingManagerRotate(m, WINDOW_US + lag_us); /* late by half a window */
+    ASSERT_EQ(spaceSavingManagerCount(m), 1);
+
+    /* On a nominal grid the next window would already be due at 2 * WINDOW_US,
+     * i.e. only half a length after this one opened. Measuring from the real
+     * start keeps it open for a full length. */
+    recordName(m, "b", 0);
+    spaceSavingManagerRotate(m, 2 * WINDOW_US);
+    EXPECT_EQ(frozenFind(m, "a", 0, NULL, NULL), 1) << "the next window must not be cut short by the lag";
+    EXPECT_EQ(frozenFind(m, "b", 0, NULL, NULL), 0);
+
+    /* It closes a full length after it actually opened. */
+    spaceSavingManagerRotate(m, WINDOW_US + lag_us + WINDOW_US);
+    ASSERT_EQ(frozenFind(m, "b", 0, NULL, NULL), 1);
+    EXPECT_EQ(spaceSavingManagerFrozenDurationUs(m), WINDOW_US) << "no window may be shorter than configured";
 
     spaceSavingManagerRelease(m);
 }
@@ -372,6 +413,37 @@ TEST(SpaceSaving, FrozenWindowKeepsTheSamplingPercentageThatProducedIt) {
     spaceSavingManagerReset(m, 0);
     EXPECT_EQ(spaceSavingManagerFrozenSamplingPercentage(m), 0);
     EXPECT_EQ(spaceSavingManagerCount(m), 0);
+
+    spaceSavingManagerRelease(m);
+}
+
+/* The configured sampling percentage must survive a window being dropped. The
+ * discard path resets both windows, and if that cleared the percentage the next
+ * frozen window would carry 0 and every rate derived from it would silently come
+ * back as zero until a config change re-set it. */
+TEST(SpaceSaving, SamplingPercentageSurvivesADroppedWindow) {
+    spaceSavingManager *m = spaceSavingManagerCreate(4, WINDOW_US, 0);
+    ASSERT_NE(m, nullptr);
+
+    spaceSavingManagerSetLiveSamplingPercentage(m, 100);
+    recordName(m, "a", 0);
+
+    /* Stall well past the cutoff, so the window is dropped rather than frozen. */
+    spaceSavingManagerRotate(m, 10 * WINDOW_US);
+    ASSERT_EQ(spaceSavingManagerCount(m), 0);
+
+    /* The next window still knows how its counts are being sampled. */
+    recordName(m, "b", 0);
+    spaceSavingManagerRotate(m, 11 * WINDOW_US);
+    ASSERT_EQ(spaceSavingManagerCount(m), 1);
+    EXPECT_EQ(spaceSavingManagerFrozenSamplingPercentage(m), 100) << "a dropped window must not clear the config";
+
+    /* An explicit reset preserves it as well. */
+    spaceSavingManagerReset(m, 11 * WINDOW_US);
+    recordName(m, "c", 0);
+    spaceSavingManagerRotate(m, 12 * WINDOW_US);
+    ASSERT_EQ(spaceSavingManagerCount(m), 1);
+    EXPECT_EQ(spaceSavingManagerFrozenSamplingPercentage(m), 100);
 
     spaceSavingManagerRelease(m);
 }

@@ -35,9 +35,9 @@ static spaceSavingManager *hotkeyCreateManager(void) {
 
 void hotkeyPurgeAll(void) {
     if (!server.hotkey_manager) return;
+    /* Reset preserves the live window's sampling percentage, so there is nothing
+     * to re-establish here. */
     spaceSavingManagerReset(server.hotkey_manager, getMonotonicUs());
-    /* Reset clears each window's sampling config; re-establish the live one. */
-    spaceSavingManagerSetLiveSamplingPercentage(server.hotkey_manager, server.hotkey_sampling_percentage);
 }
 
 /* Periodic maintenance from serverCron: close any window that has fully elapsed
@@ -227,7 +227,10 @@ uint64_t hotkeyLastWindowSamples(void) {
 /* Real duration of the last completed window, in microseconds. Reported in INFO
  * so an operator can tell an empty report apart from one measured over an
  * unusually short or long window (rotation runs on the serverCron tick, so the
- * span is the configured length plus that lag). 0 when detection is disabled. */
+ * span is the configured length plus that lag). 0 means there is no completed
+ * window: detection was just enabled or reset, or the last window was dropped
+ * for spanning more than twice the configured length — those cases are not
+ * distinguishable from this field alone. */
 uint64_t hotkeyLastWindowDurationUs(void) {
     return server.hotkey_manager ? spaceSavingManagerFrozenDurationUs(server.hotkey_manager) : 0;
 }

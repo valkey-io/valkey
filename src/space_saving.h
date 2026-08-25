@@ -50,10 +50,17 @@ typedef struct spaceSavingManager spaceSavingManager;
 spaceSavingManager *spaceSavingManagerCreate(int k, uint64_t window_us, uint64_t now_us);
 /* Free the manager and every key it owns. NULL-safe. */
 void spaceSavingManagerRelease(spaceSavingManager *m);
-/* Clear both windows (including their recorded timing and sampling percentage)
- * and restart the current window at `now_us`. */
+/* Clear both windows (including their recorded timing) and restart measuring at
+ * `now_us`. The configured sampling percentage is preserved, since it describes
+ * how the next observations will be gathered rather than the data dropped. */
 void spaceSavingManagerReset(spaceSavingManager *m, uint64_t now_us);
-/* Freeze whichever window(s) fully elapsed by `now_us` (no-op if still open). */
+/* Close the live window if its configured length has fully elapsed (no-op if it
+ * is still open). A window that ran past TWICE the configured length is dropped
+ * instead of frozen: its counts span too coarse an interval to publish as "the
+ * last window". So a frozen window always spans [length, 2 * length) — never
+ * shorter than configured, and never a long-run average mislabelled as one
+ * window. Boundaries are measured from the live window's real start, so a late
+ * call cannot shorten the following window. */
 void spaceSavingManagerRotate(spaceSavingManager *m, uint64_t now_us);
 /* Record one observation of (`key`, `dbid`) into the current (live) window.
  * `key` is borrowed — it is copied only if a slot is committed to it. Does NOT
@@ -81,11 +88,13 @@ void spaceSavingManagerSetLiveSamplingPercentage(spaceSavingManager *m, int samp
  * window; 0 when the window never had one (freshly created or reset). */
 int spaceSavingManagerFrozenSamplingPercentage(spaceSavingManager *m);
 /* Real time the last completed (frozen) window spent accumulating, in
- * microseconds, or 0 if there is no completed window yet. Rotation is driven by
- * the caller's timer, so a window is closed at or after its nominal boundary and
- * this is its configured length plus the rotation lag. Rates must be derived
- * from THIS, not from the configured window length, or they over-report by that
- * lag. */
+ * microseconds, or 0 if there is no completed window yet — which also covers a
+ * window that was dropped for being too coarse (see spaceSavingManagerRotate),
+ * so 0 does not distinguish "just started" from "just dropped one". Rotation is
+ * driven by the caller's timer, so a window is closed at or after its nominal
+ * boundary and this is its configured length plus the rotation lag. Rates must
+ * be derived from THIS, not from the configured window length, or they
+ * over-report by that lag. */
 uint64_t spaceSavingManagerFrozenDurationUs(spaceSavingManager *m);
 
 /* Reset only the live window and restart it at `now_us` with the given capacity

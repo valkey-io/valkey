@@ -4763,7 +4763,7 @@ int processCommand(client *c) {
         return C_OK;
     }
 
-    if (throttleClientIfNeeded(c)) return C_OK;
+    if (throttle_throttleClientIfNeeded(c)) return C_OK;
 
     /* Exec the command */
     if (c->flag.multi && c->cmd->proc != execCommand && c->cmd->proc != discardCommand &&

@@ -21,9 +21,9 @@ static const double EPSILON = 0.0001;                         /* values below th
 static const double TOKENS_BURST_RATE_SEC = 0.1;              /* burst capacity in seconds of sustained rate */
 static const double MIN_ADJUST_AFTER_DISABLE = 100.0;         /* initial rate when recovering from halted state */
 
-static hashtable *metricsTable = NULL;
-static list *throttlerList = NULL;
-static long long next_throttler_id = 0; /* monotonic id assigned to each registered throttler */
+static hashtable *metrics_table = NULL;    /* Maps throtter type name to metricsEntry*. */
+static list *throttler_list = NULL;        /* all currently registered throttlers */
+static long long total_throttled_commands; /* framework-level cumulative throttled-command counter */
 
 typedef struct metricsEntry {
     sds throttler_type;
@@ -33,14 +33,13 @@ typedef struct metricsEntry {
 } metricsEntry;
 
 typedef struct throttler {
-    long long id;                        /* unique per-instance id */
     bool cleanup;                        /* true once deregistered; freed when its queue drains */
     throttleCriteriaProc *criteria_proc; /* callback defining throttling criteria */
     long long time_event_id;             /* timer event id for throttlerTimeProc */
     void *priv_data;                     /* private data for use by the criteria_proc */
     tokenBucket *bucket;                 /* token bucket: 1 token = 1 operation */
     list *client_queue;                  /* clients currently queued for throttling */
-    listNode *ln;                        /* my node in throttlerList */
+    listNode *ln;                        /* my node in throttler_list */
     monotime rate_below_guardrail_since; /* timestamp when rate dropped below guardrail, or 0 */
     metricsEntry *metrics;               /* reference to the named metrics object */
 } throttler;
@@ -64,22 +63,26 @@ static hashtableType metricsHashtableType = {
     .entryDestructor = metricsDestructor,
 };
 
+/* dictType for metricsEntry* to earliest below-guardrail monotime, used for
+ * producing INFO output to report earliest guardrail per metrics type. */
+static dictType guardrailAggDictType = {
+    .entryGetKey = dictEntryGetKey,
+    .entryDestructor = zfree,
+};
+
 static metricsEntry *findMetrics(const char *name) {
     sds key = sdsnew(name);
     metricsEntry *found;
-    if (hashtableFind(metricsTable, key, (void **)&found)) {
+    if (hashtableFind(metrics_table, key, (void **)&found)) {
         sdsfree(key);
         return found;
     }
     metricsEntry *m = zcalloc(sizeof(metricsEntry));
     m->throttler_type = key;
-    m->incoming_tps = newTpsCalc(TPS_WINDOW_SEC);
-    hashtableAdd(metricsTable, m);
+    m->incoming_tps = tpsCalculator_create(TPS_WINDOW_SEC);
+    hashtableAdd(metrics_table, m);
     return m;
 }
-
-/* Framework-level metrics */
-static long long total_throttled_commands;
 
 /* Compute how long to wait before the next token becomes available. */
 static int waitTimeMs(throttler *t) {
@@ -93,7 +96,7 @@ static void freeThrottler(throttler *t) {
     serverAssert(listLength(t->client_queue) == 0);
     serverAssert(t->time_event_id == AE_DELETED_EVENT_ID);
     serverAssert(t->ln != NULL);
-    listDelNode(throttlerList, t->ln);
+    listDelNode(throttler_list, t->ln);
     listRelease(t->client_queue);
     tokenBucket_free(t->bucket);
     /* metrics is shared and do not free here */
@@ -118,7 +121,7 @@ static void dequeueThrottledClient(client *c) {
 static void consumeOtherThrottlers(client *c, throttler *except) {
     listNode *ln;
     listIter li;
-    listRewind(throttlerList, &li);
+    listRewind(throttler_list, &li);
     while ((ln = listNext(&li))) {
         throttler *t = ln->value;
         if (t->cleanup || t == except) continue;
@@ -126,9 +129,9 @@ static void consumeOtherThrottlers(client *c, throttler *except) {
     }
 }
 
-/* Re-execute a client's deferred command after throttle release.
- * Restores the read handler and processes the pending command and input buffer. */
-static void processUnthrottledClient(client *c) {
+/* Hand an unthrottled client back to the event loop: restore its read handler and queue
+ * it for reprocessing. */
+static void queueUnthrottledClientForReprocessing(client *c) {
     serverAssert(c->argc > 0 && c->flag.pending_command && !c->flag.throttled);
     if (c->conn && !connHasReadHandler(c->conn)) {
         if (connSetReadHandler(c->conn, readQueryFromClient) == C_ERR) {
@@ -159,7 +162,7 @@ static long long throttlerTimeProc(struct aeEventLoop *eventLoop, long long id, 
             c->flag.throttle_multi = 0;
             consumeOtherThrottlers(c, t);
         }
-        processUnthrottledClient(c);
+        queueUnthrottledClientForReprocessing(c);
     }
 
     if (listLength(t->client_queue) == 0) {
@@ -198,11 +201,11 @@ static void throttlerAddClient(throttler *t, client *c) {
 /* === Public API === */
 
 void throttle_init(void) {
-    if (throttlerList == NULL) {
-        throttlerList = listCreate();
+    if (throttler_list == NULL) {
+        throttler_list = listCreate();
     }
-    if (metricsTable == NULL) {
-        metricsTable = hashtableCreate(&metricsHashtableType);
+    if (metrics_table == NULL) {
+        metrics_table = hashtableCreate(&metricsHashtableType);
     }
 }
 
@@ -217,7 +220,6 @@ throttler *throttle_register(throttleCriteriaProc *criteria_proc,
     serverAssert(metrics_name != NULL);
 
     throttler *t = zmalloc(sizeof(throttler));
-    t->id = next_throttler_id++;
     t->cleanup = false;
     t->criteria_proc = criteria_proc;
     t->time_event_id = AE_DELETED_EVENT_ID;
@@ -226,22 +228,22 @@ throttler *throttle_register(throttleCriteriaProc *criteria_proc,
     t->metrics = findMetrics(metrics_name);
     t->client_queue = listCreate();
     t->rate_below_guardrail_since = 0;
-    listAddNodeTail(throttlerList, t);
-    t->ln = listLast(throttlerList);
+    listAddNodeTail(throttler_list, t);
+    t->ln = listLast(throttler_list);
     throttle_setRate(t, THROTTLE_UNLIMITED_RATE);
-    serverLog(LL_DEBUG, "Throttler registered: metrics=%s id=%lld", metrics_name, t->id);
+    serverLog(LL_DEBUG, "Throttler registered: type=%s", t->metrics->throttler_type);
     return t;
 }
 
 void throttle_deregister(throttler *t) {
     serverAssert(t != NULL);
-    serverLog(LL_DEBUG, "Throttler deregistered: metrics=%s id=%lld", t->metrics->throttler_type, t->id);
+    serverLog(LL_DEBUG, "Throttler deregistered: type=%s", t->metrics->throttler_type);
 
     if (listLength(t->client_queue) == 0) {
         freeThrottler(t);
     } else {
         t->cleanup = true;
-        tokenBucket_setRate(t->bucket, THROTTLE_UNLIMITED_RATE);
+        throttle_setRate(t, THROTTLE_UNLIMITED_RATE);
     }
 }
 
@@ -278,7 +280,7 @@ double throttle_adjustRate(throttler *t, double multiplier) {
          * measured incoming TPS, reduce it directly to that rate. */
         new_rate = current * multiplier;
         double incoming = tpsCalculator_averageTps(t->metrics->incoming_tps);
-        /* If there is no incoming rate, it's possible that the tpsCalc hasn't been populated with
+        /* If there is no incoming rate, it's possible that the tps calculator hasn't been populated with
          * data yet. Otherwise, if there's actually no incoming traffic, it doesn't matter if the
          * rate is adjusted. */
         if (incoming > EPSILON && new_rate > incoming) new_rate = incoming;
@@ -310,8 +312,8 @@ void throttle_removeClient(client *c) {
     }
 }
 
-bool throttleClientIfNeeded(client *c) {
-    if (throttlerList == NULL || listLength(throttlerList) == 0) return false;
+bool throttle_throttleClientIfNeeded(client *c) {
+    if (throttler_list == NULL || listLength(throttler_list) == 0) return false;
 
     /* Skip internal clients and clients already checked for this command.
      * Prevents re-throttling after unblocking. */
@@ -326,7 +328,7 @@ bool throttleClientIfNeeded(client *c) {
     throttler *strictest = NULL;
     listNode *ln;
     listIter li;
-    listRewind(throttlerList, &li);
+    listRewind(throttler_list, &li);
     while ((ln = listNext(&li))) {
         throttler *t = ln->value;
         if (t->cleanup) continue;
@@ -367,7 +369,7 @@ void throttle_getMetrics(const char *metrics_name, throttleMetrics *metrics) {
     /* Aggregate ops_per_sec and oldest_client from all throttlers sharing this metrics. */
     listNode *ln;
     listIter li;
-    listRewind(throttlerList, &li);
+    listRewind(throttler_list, &li);
     while ((ln = listNext(&li))) {
         throttler *t = ln->value;
         if (t->metrics != m || t->cleanup) continue;
@@ -383,18 +385,37 @@ void throttle_getMetrics(const char *metrics_name, throttleMetrics *metrics) {
 sds throttle_sdscatInfoMetrics(sds info) {
     info = sdscatprintf(info, "total_throttled_commands:%lld\r\n", total_throttled_commands);
 
-    /* Check for any throttlers which are below guardrail. Report only offending throttlers. */
+    /* Report the longest-below-guardrail throttler per metrics type. */
+    dict *guardrail_agg = NULL;
     listNode *ln;
     listIter li;
-    listRewind(throttlerList, &li);
+    listRewind(throttler_list, &li);
     while ((ln = listNext(&li))) {
         throttler *t = ln->value;
-        if (t->rate_below_guardrail_since != 0) {
-            int secs = elapsedSec(t->rate_below_guardrail_since);
-            info = sdscatprintf(info,
-                                "throttle_%s_%lld_guardrail_secs:%d\r\n",
-                                t->metrics->throttler_type, t->id, secs);
+        if (t->cleanup || t->rate_below_guardrail_since == 0) continue;
+
+        if (guardrail_agg == NULL) guardrail_agg = dictCreate(&guardrailAggDictType);
+        dictEntry *existing;
+        dictEntry *de = dictAddRaw(guardrail_agg, t->metrics, &existing);
+        if (de != NULL) {
+            /* First seen for this type. */
+            dictSetUnsignedIntegerVal(de, t->rate_below_guardrail_since);
+        } else if (t->rate_below_guardrail_since < dictGetUnsignedIntegerVal(existing)) {
+            /* Keep the earliest start. */
+            dictSetUnsignedIntegerVal(existing, t->rate_below_guardrail_since);
         }
+    }
+
+    if (guardrail_agg != NULL) {
+        dictIterator it;
+        dictInitIterator(&it, guardrail_agg);
+        dictEntry *de;
+        while ((de = dictNext(&it)) != NULL) {
+            metricsEntry *m = dictGetKey(de);
+            int secs = elapsedSec((monotime)dictGetUnsignedIntegerVal(de));
+            info = sdscatprintf(info, "throttle_%s_guardrail_secs:%d\r\n", m->throttler_type, secs);
+        }
+        dictRelease(guardrail_agg);
     }
     return info;
 }

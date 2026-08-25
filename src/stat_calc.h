@@ -19,7 +19,7 @@
 
 typedef struct tpsCalculator tpsCalculator;
 
-tpsCalculator *newTpsCalc(int window_secs);
+tpsCalculator *tpsCalculator_create(int window_secs);
 
 void tpsCalculator_free(tpsCalculator *calc);
 
@@ -43,17 +43,17 @@ double tpsCalculator_averageTps(tpsCalculator *calc);
  */
 typedef struct trendCalculator trendCalculator;
 
-trendCalculator *newTrendCalc(int window_secs);
+trendCalculator *trendCalculator_create(int window_secs);
 
-void trendCalc_free(trendCalculator *calc);
+void trendCalculator_free(trendCalculator *calc);
 
 /* Add a datapoint to the calculator. Should be called at minimum 10 times
  * over the window for smooth results. If the metric is highly volatile,
  * calling more often reduces the impact of individual outliers. */
-void trendCalc_recordMetric(trendCalculator *calc, long metric_value);
+void trendCalculator_recordMetric(trendCalculator *calc, long metric_value);
 
 /* Get the rate of change using only the final 10% of the window.
  * More responsive to sudden changes but noisier than the full-window trend. */
-double trendCalc_changePerSecShortTerm(trendCalculator *calc);
+double trendCalculator_changePerSecShortTerm(trendCalculator *calc);
 
 #endif

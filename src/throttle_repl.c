@@ -10,7 +10,7 @@
 #include "stat_calc.h"
 
 /* Configuration instance. */
-struct throttle_repl_config throttle_repl_config;
+struct throttleReplConfig throttleRepl_config;
 
 /* A 2-second window gives 20 data points at 100ms serverCron. Sufficient for a good
  * measurement, while remaining short enough for throttling adjustments every 100ms. */
@@ -107,7 +107,7 @@ static bool evaluateSteadyStateThrottle(client *c, int64_t cob_size) {
      * datapoints. The short trend results in more jittery rate adjustments, but this is good
      * as the up/down/up/down... type adjustments result in a smoother traffic rate than
      * up/up/up/down/down/down... */
-    double short_trend = trendCalc_changePerSecShortTerm(c->cob_trend);
+    double short_trend = trendCalculator_changePerSecShortTerm(c->cob_trend);
     int64_t extrapolated = cob_size + (int64_t)(short_trend * STEADY_STATE_CONVERGENCE_SECS);
 
     return (extrapolated > cob_target);
@@ -120,7 +120,7 @@ static bool evaluateSteadyStateThrottle(client *c, int64_t cob_size) {
  * prevents a premature disconnect and allows the throttler to reduce the replica's buffer
  * back below target. */
 bool throttleRepl_isClientExemptFromCobLimits(client *c) {
-    if (!throttle_repl_config.repl_throttling_enabled || !isThrottlerActive()) return false;
+    if (!throttleRepl_config.repl_throttling_enabled || !isThrottlerActive()) return false;
     if (!iAmPrimary()) return false;
     if (getClientType(c) != CLIENT_TYPE_REPLICA) return false;
 
@@ -146,7 +146,7 @@ bool throttleRepl_isClientExemptFromCobLimits(client *c) {
 void throttleRepl_adjustThrottling(void) {
     /* Tear down and stop if we're no longer the primary (e.g. after failover), replication
      * throttling was disabled, or no COB limit is configured. */
-    if (!iAmPrimary() || !throttle_repl_config.repl_throttling_enabled ||
+    if (!iAmPrimary() || !throttleRepl_config.repl_throttling_enabled ||
         getReplicaSteadyStateCobTargetSize() <= 0) {
         if (isThrottlerActive()) uninstallThrottler();
         return;
@@ -166,8 +166,8 @@ void throttleRepl_adjustThrottling(void) {
 
         unsigned long cob_size = getClientOutputBufferMemoryUsage(c);
 
-        if (c->cob_trend == NULL) c->cob_trend = newTrendCalc(COB_TREND_WINDOW_SECS);
-        trendCalc_recordMetric(c->cob_trend, cob_size);
+        if (c->cob_trend == NULL) c->cob_trend = trendCalculator_create(COB_TREND_WINDOW_SECS);
+        trendCalculator_recordMetric(c->cob_trend, cob_size);
 
         /* The COB size contains some overhead. Treat it as zero until we reach a minimum. */
         if (cob_size <= PROTO_REPLY_CHUNK_BYTES) cob_size = 0;

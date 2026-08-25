@@ -112,7 +112,7 @@ void throttle_removeClient(client *c);
  * are available. Throttling is checked before blocking, so a throttled
  * command cannot be blocked. Once a client is passed to this function, it will not be
  * throttled again for the same command after unblocking. */
-bool throttleClientIfNeeded(client *c);
+bool throttle_throttleClientIfNeeded(client *c);
 
 /* Get the metrics associated with a given metrics name.
  * The caller provides the metrics structure. */

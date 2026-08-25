@@ -2277,7 +2277,7 @@ int freeClient(client *c) {
     if (c->lib_name) decrRefCount(c->lib_name);
     if (c->lib_ver) decrRefCount(c->lib_ver);
     freeClientMultiState(c);
-    if (c->cob_trend) trendCalc_free(c->cob_trend);
+    if (c->cob_trend) trendCalculator_free(c->cob_trend);
     sdsfree(c->peerid);
     sdsfree(c->sockname);
     zfree(c);

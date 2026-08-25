@@ -21,7 +21,7 @@ struct tpsCalculator {
     bool is_new;
 };
 
-tpsCalculator *newTpsCalc(int window_secs) {
+tpsCalculator *tpsCalculator_create(int window_secs) {
     tpsCalculator *calc = zmalloc(sizeof(tpsCalculator));
     calc->window_secs = (double)window_secs;
     calc->window_us = (double)window_secs * 1000000.0;
@@ -80,7 +80,7 @@ struct trendCalculator {
     double trend_short;
 };
 
-trendCalculator *newTrendCalc(int window_secs) {
+trendCalculator *trendCalculator_create(int window_secs) {
     trendCalculator *calc = zcalloc(sizeof(trendCalculator));
     calc->window_sec = window_secs;
     calc->last_update = getMonotonicUs();
@@ -89,11 +89,11 @@ trendCalculator *newTrendCalc(int window_secs) {
     return calc;
 }
 
-void trendCalc_free(trendCalculator *calc) {
+void trendCalculator_free(trendCalculator *calc) {
     zfree(calc);
 }
 
-void trendCalc_recordMetric(trendCalculator *calc, long metric_value) {
+void trendCalculator_recordMetric(trendCalculator *calc, long metric_value) {
     monotime now = getMonotonicUs();
     long elapsed_us = now - calc->last_update;
 
@@ -143,6 +143,6 @@ void trendCalc_recordMetric(trendCalculator *calc, long metric_value) {
     calc->trend_short = delta_short / time_between_slots;
 }
 
-double trendCalc_changePerSecShortTerm(trendCalculator *calc) {
+double trendCalculator_changePerSecShortTerm(trendCalculator *calc) {
     return calc->trend_short;
 }

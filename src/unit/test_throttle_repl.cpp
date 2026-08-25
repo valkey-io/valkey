@@ -38,7 +38,7 @@ class ThrottleReplTest : public ::testing::Test {
         server.client_obuf_limits[CLIENT_TYPE_REPLICA].hard_limit_bytes = COB_LIMIT;
 
         /* throttle_repl set up */
-        throttle_repl_config.repl_throttling_enabled = 1;
+        throttleRepl_config.repl_throttling_enabled = 1;
 
         /* monotonic set up */
         origGetMonotonicUs = getMonotonicUs;
@@ -76,7 +76,7 @@ class ThrottleReplTest : public ::testing::Test {
         ASSERT_TRUE(c->flag.throttled == 0);
         ASSERT_TRUE(c->throttler == NULL);
         ASSERT_TRUE(c->throttle_node == NULL);
-        if (c->cob_trend) trendCalc_free(c->cob_trend);
+        if (c->cob_trend) trendCalculator_free(c->cob_trend);
         if (c->repl_data) zfree(c->repl_data);
         listNode *ln = listSearchKey(server.replicas, c);
         if (ln) listDelNode(server.replicas, ln);
@@ -125,7 +125,7 @@ TEST_F(ThrottleReplTest, noCobLimitConfiguredNoThrottle) {
     server.client_obuf_limits[CLIENT_TYPE_REPLICA].hard_limit_bytes = 0;
 
     EXPECT_CALL(mock, getClientOutputBufferMemoryUsage(replica_steady)).WillRepeatedly(Return(COB_LIMIT * 1000));
-    EXPECT_CALL(mock, trendCalc_changePerSecShortTerm(_)).WillRepeatedly(Return(COB_LIMIT * 1000));
+    EXPECT_CALL(mock, trendCalculator_changePerSecShortTerm(_)).WillRepeatedly(Return(COB_LIMIT * 1000));
 
     throttleRepl_adjustThrottling();
     EXPECT_FALSE(isReplThrottlerActive());
@@ -142,26 +142,26 @@ TEST_F(ThrottleReplTest, steadyStateNoThrottleCases) {
     EXPECT_TRUE(replica_steady->cob_trend != NULL);
 
     /* cob size < 1/4 soft limit, huge trend: still no throttle (below threshold, so the trend is not considered) */
-    EXPECT_CALL(mock, trendCalc_changePerSecShortTerm(_)).WillRepeatedly(Return(COB_LIMIT));
+    EXPECT_CALL(mock, trendCalculator_changePerSecShortTerm(_)).WillRepeatedly(Return(COB_LIMIT));
     throttleRepl_adjustThrottling();
     EXPECT_FALSE(isReplThrottlerActive());
 
     /* For cob size >= 1/4 soft limit, throttler should be enabled if the extrapolated cob size exceeds the cob target (1/2 soft limit). */
     /* cob size >= 1/4 soft limit but < 1/2 soft limit, trend is decreasing */
     EXPECT_CALL(mock, getClientOutputBufferMemoryUsage(replica_steady)).WillRepeatedly(Return(COB_LIMIT / 4 + 1));
-    EXPECT_CALL(mock, trendCalc_changePerSecShortTerm(_)).WillRepeatedly(Return(-1.0));
+    EXPECT_CALL(mock, trendCalculator_changePerSecShortTerm(_)).WillRepeatedly(Return(-1.0));
     throttleRepl_adjustThrottling();
     EXPECT_FALSE(isReplThrottlerActive());
 
     /* cob size >= 1/4 soft limit but < 1/2 soft limit, trend is slowly increasing */
     EXPECT_CALL(mock, getClientOutputBufferMemoryUsage(replica_steady)).WillRepeatedly(Return(COB_LIMIT / 4 + 1));
-    EXPECT_CALL(mock, trendCalc_changePerSecShortTerm(_)).WillRepeatedly(Return(1.0));
+    EXPECT_CALL(mock, trendCalculator_changePerSecShortTerm(_)).WillRepeatedly(Return(1.0));
     throttleRepl_adjustThrottling();
     EXPECT_FALSE(isReplThrottlerActive());
 
     /* cob size >1/2 soft limit, trend is decreasing and extrapolated value below target */
     EXPECT_CALL(mock, getClientOutputBufferMemoryUsage(replica_steady)).WillRepeatedly(Return(COB_LIMIT / 2 + 1));
-    EXPECT_CALL(mock, trendCalc_changePerSecShortTerm(_)).WillRepeatedly(Return(-1.0));
+    EXPECT_CALL(mock, trendCalculator_changePerSecShortTerm(_)).WillRepeatedly(Return(-1.0));
     throttleRepl_adjustThrottling();
     EXPECT_FALSE(isReplThrottlerActive());
 }
@@ -170,7 +170,7 @@ TEST_F(ThrottleReplTest, steadyStateThrottleIncreasingTrend) {
     /* Test case for steady-state replica above threshold (1/4 cob soft limit),
      * for increasing trend, throttle could happen when the extrapolated value exceed the 1/2 cob soft limit. */
     EXPECT_CALL(mock, getClientOutputBufferMemoryUsage(replica_steady)).WillRepeatedly(Return(COB_LIMIT / 4 + 1));
-    EXPECT_CALL(mock, trendCalc_changePerSecShortTerm(_)).WillRepeatedly(Return(COB_LIMIT / 2));
+    EXPECT_CALL(mock, trendCalculator_changePerSecShortTerm(_)).WillRepeatedly(Return(COB_LIMIT / 2));
 
     EXPECT_CALL(mock, throttle_register(_, _, _)).WillOnce(Return(dummy_throttler));
     throttleRepl_adjustThrottling();
@@ -186,7 +186,7 @@ TEST_F(ThrottleReplTest, steadyStateThrottleIncreasingTrend) {
     EXPECT_TRUE(verifyThrottleEvent(1, 2, 0)); // Reduce traffic, throttles more traffic.
 
     // Now mock traffic trend is slowed down more, throttler should be deregistered
-    EXPECT_CALL(mock, trendCalc_changePerSecShortTerm(_)).WillRepeatedly(Return(1.0));
+    EXPECT_CALL(mock, trendCalculator_changePerSecShortTerm(_)).WillRepeatedly(Return(1.0));
     EXPECT_CALL(mock, throttle_adjustRate(_, 1.05)).WillOnce(Return(10000000.0));
     EXPECT_CALL(mock, throttle_deregister(_)).Times(1);
     throttleRepl_adjustThrottling();
@@ -198,7 +198,7 @@ TEST_F(ThrottleReplTest, steadyStateThrottleDecreasingTrend) {
     /* Test case for steady-state replica above threshold (1/4 cob soft limit),
      * for decreasing trend, throttle could happen when the extrapolated value exceed the 1/2 cob soft limit. */
     EXPECT_CALL(mock, getClientOutputBufferMemoryUsage(replica_steady)).WillRepeatedly(Return(COB_LIMIT / 2 + 40));
-    EXPECT_CALL(mock, trendCalc_changePerSecShortTerm(_)).WillRepeatedly(Return(-1.0));
+    EXPECT_CALL(mock, trendCalculator_changePerSecShortTerm(_)).WillRepeatedly(Return(-1.0));
 
     EXPECT_CALL(mock, throttle_register(_, _, _)).WillOnce(Return(dummy_throttler));
     throttleRepl_adjustThrottling();
@@ -214,7 +214,7 @@ TEST_F(ThrottleReplTest, steadyStateThrottleDecreasingTrend) {
     EXPECT_TRUE(verifyThrottleEvent(1, 2, 0)); // Reduce traffic, throttles more traffic.
 
     // Now mock traffic trend is slowed down more, throttler should be deregistered
-    EXPECT_CALL(mock, trendCalc_changePerSecShortTerm(_)).WillRepeatedly(Return(-2.0));
+    EXPECT_CALL(mock, trendCalculator_changePerSecShortTerm(_)).WillRepeatedly(Return(-2.0));
     EXPECT_CALL(mock, throttle_adjustRate(_, 1.05)).WillOnce(Return(10000000.0));
     EXPECT_CALL(mock, throttle_deregister(_)).Times(1);
     throttleRepl_adjustThrottling();
@@ -239,9 +239,9 @@ TEST_F(ThrottleReplTest, steadyStateThrottleBasedOnLargestCob) {
 }
 
 TEST_F(ThrottleReplTest, disabledConfigNoNewThrottle) {
-    throttle_repl_config.repl_throttling_enabled = 0;
+    throttleRepl_config.repl_throttling_enabled = 0;
     EXPECT_CALL(mock, getClientOutputBufferMemoryUsage(replica_steady)).WillRepeatedly(Return(COB_LIMIT / 4 + 1));
-    EXPECT_CALL(mock, trendCalc_changePerSecShortTerm(_)).WillRepeatedly(Return(COB_LIMIT / 2));
+    EXPECT_CALL(mock, trendCalculator_changePerSecShortTerm(_)).WillRepeatedly(Return(COB_LIMIT / 2));
 
     throttleRepl_adjustThrottling();
 
@@ -252,7 +252,7 @@ TEST_F(ThrottleReplTest, disabledConfigNoNewThrottle) {
 TEST_F(ThrottleReplTest, throttlerRemovedAfterFailover) {
     /* Simulate active throttler then failover (become replica) */
     EXPECT_CALL(mock, getClientOutputBufferMemoryUsage(replica_steady)).WillRepeatedly(Return(COB_LIMIT / 4 + 1));
-    EXPECT_CALL(mock, trendCalc_changePerSecShortTerm(_)).WillRepeatedly(Return(COB_LIMIT / 2));
+    EXPECT_CALL(mock, trendCalculator_changePerSecShortTerm(_)).WillRepeatedly(Return(COB_LIMIT / 2));
     EXPECT_CALL(mock, throttle_register(_, _, _)).WillOnce(Return(dummy_throttler));
     throttleRepl_adjustThrottling();
     EXPECT_TRUE(isReplThrottlerActive());
@@ -270,7 +270,7 @@ TEST_F(ThrottleReplTest, clientCobLimitsExempt) {
 
     /* Throttler now active */
     EXPECT_CALL(mock, getClientOutputBufferMemoryUsage(replica_steady)).WillRepeatedly(Return(COB_LIMIT / 2 + 1));
-    EXPECT_CALL(mock, trendCalc_changePerSecShortTerm(_)).WillRepeatedly(Return(COB_LIMIT / 2));
+    EXPECT_CALL(mock, trendCalculator_changePerSecShortTerm(_)).WillRepeatedly(Return(COB_LIMIT / 2));
     EXPECT_CALL(mock, throttle_register(_, _, _)).WillOnce(Return(dummy_throttler));
     throttleRepl_adjustThrottling();
     EXPECT_TRUE(isReplThrottlerActive());
@@ -308,8 +308,8 @@ TEST_F(ThrottleReplTest, clientCobLimitsExempt) {
     EXPECT_TRUE(throttleRepl_isClientExemptFromCobLimits(replica_steady));
 
     /* If throttle repl disabled, not exempt. */
-    throttle_repl_config.repl_throttling_enabled = 0;
+    throttleRepl_config.repl_throttling_enabled = 0;
     EXPECT_FALSE(throttleRepl_isClientExemptFromCobLimits(replica_steady));
-    throttle_repl_config.repl_throttling_enabled = 1;
+    throttleRepl_config.repl_throttling_enabled = 1;
     EXPECT_TRUE(throttleRepl_isClientExemptFromCobLimits(replica_steady));
 }

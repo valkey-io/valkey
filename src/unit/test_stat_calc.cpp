@@ -38,13 +38,13 @@ class StatCalcTest : public ::testing::Test {
 
     void SetUp() override {
         fakeMonotimeUs = 100;
-        tps = newTpsCalc(5);
-        trend = newTrendCalc(5);
+        tps = tpsCalculator_create(5);
+        trend = trendCalculator_create(5);
     }
 
     void TearDown() override {
         tpsCalculator_free(tps);
-        trendCalc_free(trend);
+        trendCalculator_free(trend);
     }
 };
 
@@ -114,48 +114,48 @@ TEST_F(StatCalcTest, TpsMultipleRecordsInOneInterval) {
 static const monotime TREND_INTERVAL = 5 * ONE_SECOND_IN_MICROS / 10;
 
 TEST_F(StatCalcTest, TrendInitZero) {
-    EXPECT_DOUBLE_EQ(trendCalc_changePerSecShortTerm(trend), 0.0);
+    EXPECT_DOUBLE_EQ(trendCalculator_changePerSecShortTerm(trend), 0.0);
 }
 
 TEST_F(StatCalcTest, TrendSingleDatapointFlat) {
     /* A single datapoint cannot establish a slope, so the trend stays flat. */
     fakeMonotimeUs += TREND_INTERVAL;
-    trendCalc_recordMetric(trend, 100);
-    EXPECT_DOUBLE_EQ(trendCalc_changePerSecShortTerm(trend), 0.0);
+    trendCalculator_recordMetric(trend, 100);
+    EXPECT_DOUBLE_EQ(trendCalculator_changePerSecShortTerm(trend), 0.0);
 }
 
 TEST_F(StatCalcTest, TrendTwoPoint) {
     fakeMonotimeUs += TREND_INTERVAL;
-    trendCalc_recordMetric(trend, 100); /* First point fills all 10 slots */
+    trendCalculator_recordMetric(trend, 100); /* First point fills all 10 slots */
 
     fakeMonotimeUs += TREND_INTERVAL;
-    trendCalc_recordMetric(trend, 0);
+    trendCalculator_recordMetric(trend, 0);
 
     /* Now we have 9 points at 100 and 1 point at 0.
      *  Left average is 100. Right average is 400/5 = 80.
      *  Trend has decreased 20 over 2.5 seconds, or 8/sec. */
     /* The short-term view shows a decrease from 100 to 0 over 1/2 sec. */
-    EXPECT_DOUBLE_EQ(trendCalc_changePerSecShortTerm(trend), -200.0);
+    EXPECT_DOUBLE_EQ(trendCalculator_changePerSecShortTerm(trend), -200.0);
 
     fakeMonotimeUs += TREND_INTERVAL;
-    trendCalc_recordMetric(trend, 0);
+    trendCalculator_recordMetric(trend, 0);
 
     /* Now we have 8 points at 100 and 2 points at 0.
      *  Left average is 100. Right average is 300/5 = 60.
      *  Trend has decreased 40 over 2.5 seconds, or 16/sec. */
     /* The short-term view shows no change (0 to 0). */
-    EXPECT_DOUBLE_EQ(trendCalc_changePerSecShortTerm(trend), 0.0);
+    EXPECT_DOUBLE_EQ(trendCalculator_changePerSecShortTerm(trend), 0.0);
 }
 
 TEST_F(StatCalcTest, TrendIntervalGating) {
     fakeMonotimeUs += TREND_INTERVAL;
-    trendCalc_recordMetric(trend, 100); /* First point fills all 10 slots */
+    trendCalculator_recordMetric(trend, 100); /* First point fills all 10 slots */
 
     fakeMonotimeUs += TREND_INTERVAL - 1; /* Not at the collection interval yet */
-    trendCalc_recordMetric(trend, 0);
+    trendCalculator_recordMetric(trend, 0);
 
     /* The datapoint was not collected, so the trend should not have changed. */
-    EXPECT_DOUBLE_EQ(trendCalc_changePerSecShortTerm(trend), 0.0);
+    EXPECT_DOUBLE_EQ(trendCalculator_changePerSecShortTerm(trend), 0.0);
 }
 
 TEST_F(StatCalcTest, TrendRising) {
@@ -167,9 +167,9 @@ TEST_F(StatCalcTest, TrendRising) {
      * Short-term: last two slots (420 -> 470) over 0.5s = 100.0 */
     for (int i = 0; i < 50; i++) {
         fakeMonotimeUs += ONE_SECOND_IN_MICROS / 10;
-        trendCalc_recordMetric(trend, (long)(i * 10));
+        trendCalculator_recordMetric(trend, (long)(i * 10));
     }
-    EXPECT_DOUBLE_EQ(trendCalc_changePerSecShortTerm(trend), 100.0);
+    EXPECT_DOUBLE_EQ(trendCalculator_changePerSecShortTerm(trend), 100.0);
 }
 
 TEST_F(StatCalcTest, TrendFalling) {
@@ -181,7 +181,7 @@ TEST_F(StatCalcTest, TrendFalling) {
      * Short-term: last two slots (80 -> 30) over 0.5s = -100.0 */
     for (int i = 0; i < 50; i++) {
         fakeMonotimeUs += ONE_SECOND_IN_MICROS / 10;
-        trendCalc_recordMetric(trend, (long)(500 - i * 10));
+        trendCalculator_recordMetric(trend, (long)(500 - i * 10));
     }
-    EXPECT_DOUBLE_EQ(trendCalc_changePerSecShortTerm(trend), -100.0);
+    EXPECT_DOUBLE_EQ(trendCalculator_changePerSecShortTerm(trend), -100.0);
 }

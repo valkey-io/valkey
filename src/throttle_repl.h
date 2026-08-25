@@ -18,10 +18,10 @@
 #define THROTTLE_REPL_H
 
 #include "sds.h"
-struct throttle_repl_config {
+struct throttleReplConfig {
     int repl_throttling_enabled;
 };
-extern struct throttle_repl_config throttle_repl_config;
+extern struct throttleReplConfig throttleRepl_config;
 
 /* Returns true if the client should be exempt from COB disconnect limits because throttling
  * is actively working to stabilize the replica. */

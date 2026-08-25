@@ -33,7 +33,7 @@ static void trimTokenBucket(tokenBucket *bucket) {
     if (bucket->token_count < -bucket_size) bucket->token_count = -bucket_size;
 }
 
-static void tokenBucket_replenish(tokenBucket *bucket) {
+static void replenishTokenBucket(tokenBucket *bucket) {
     monotime now = getMonotonicUs();
     uint64_t delta_us = now - bucket->last_time_check;
     double tokens_to_add = delta_us * bucket->tokens_per_sec / 1000000.0;
@@ -60,13 +60,13 @@ double tokenBucket_getRate(tokenBucket *bucket) {
 }
 
 void tokenBucket_setRate(tokenBucket *bucket, double new_rate) {
-    tokenBucket_replenish(bucket);
+    replenishTokenBucket(bucket);
     bucket->tokens_per_sec = new_rate;
     trimTokenBucket(bucket);
 }
 
 bool tokenBucket_tryConsume(tokenBucket *bucket, double tokens, bool force_consume) {
-    tokenBucket_replenish(bucket);
+    replenishTokenBucket(bucket);
     if (!force_consume && bucket->token_count < tokens) return false;
     bucket->token_count -= tokens;
     trimTokenBucket(bucket); /* bound debt at -bucket_size so recovery time stays bounded */
@@ -74,7 +74,7 @@ bool tokenBucket_tryConsume(tokenBucket *bucket, double tokens, bool force_consu
 }
 
 double tokenBucket_msUntilAvailable(tokenBucket *bucket, double target_tokens) {
-    tokenBucket_replenish(bucket);
+    replenishTokenBucket(bucket);
     if (bucket->token_count >= target_tokens) return 0.0;
     /* Rates below BUCKET_EPSILON give zero capacity, so tokens never accumulate. */
     if (bucket->tokens_per_sec < BUCKET_EPSILON) return -1.0; /* halted -- never available */

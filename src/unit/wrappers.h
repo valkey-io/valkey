@@ -86,7 +86,7 @@ bool __wrap_tokenBucket_tryConsume(tokenBucket *bucket, double tokens, bool forc
 
 /* Statcalc mocks */
 double __wrap_tpsCalculator_averageTps(tpsCalculator *calc);
-double __wrap_trendCalc_changePerSecShortTerm(trendCalculator *calc);
+double __wrap_trendCalculator_changePerSecShortTerm(trendCalculator *calc);
 
 #undef protected
 #undef _Bool

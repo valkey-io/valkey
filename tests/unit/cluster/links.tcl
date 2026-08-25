@@ -67,7 +67,7 @@ proc publish_messages {server num_msgs msg_size} {
     }
 }
 
-start_cluster 1 2 {tags {external:skip cluster}} {
+start_cluster 1 2 {tags {external:skip cluster network}} {
     set primary_id 0
     set replica1_id 1
 
@@ -122,7 +122,7 @@ start_cluster 1 2 {tags {external:skip cluster}} {
     } {} {needs:debug}
 }
 
-start_cluster 3 0 {tags {external:skip cluster}} {
+start_cluster 3 0 {tags {external:skip cluster network}} {
     test "Each node has two links with each peer" {
         for {set id 0} {$id < [llength $::servers]} {incr id} {
             # Assert that from point of view of each node, there are two links for

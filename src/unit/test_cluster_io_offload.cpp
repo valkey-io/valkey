@@ -212,14 +212,14 @@ class ClusterIOOffloadTest : public ::testing::Test {
         return raw;
     }
 
-    void seedQueuedSnapshot(clusterLink *link) {
+    void seedCompletePackets(clusterLink *link) {
         unsigned char *pkt = buildRawPacket(CLUSTERMSG_MIN_LEN);
         ensureRcvbufCapacity(link, CLUSTERMSG_MIN_LEN + 1);
         memcpy(link->rcvbuf, pkt, CLUSTERMSG_MIN_LEN);
         link->rcvbuf[CLUSTERMSG_MIN_LEN] = 'T';
         link->rcvbuf_len = CLUSTERMSG_MIN_LEN + 1;
-        link->io_rcvbuf_snapshot_len = CLUSTERMSG_MIN_LEN;
-        link->io_rcvbuf_snapshot_packets = 1;
+        link->io_complete_bytes = CLUSTERMSG_MIN_LEN;
+        link->io_complete_packets = 1;
         zfree(pkt);
     }
 };
@@ -237,8 +237,8 @@ TEST_F(ClusterIOOffloadTest, ReadJobSnapshotsCompletePrefixAndLeavesTail) {
     link->io_read_state = CLUSTER_LINK_IO_PENDING;
     clusterReadJob(link);
 
-    EXPECT_EQ(link->io_rcvbuf_snapshot_len, (size_t)CLUSTERMSG_MIN_LEN);
-    EXPECT_EQ(link->io_rcvbuf_snapshot_packets, 1u);
+    EXPECT_EQ(link->io_complete_bytes, (size_t)CLUSTERMSG_MIN_LEN);
+    EXPECT_EQ(link->io_complete_packets, 1u);
     EXPECT_EQ(link->rcvbuf_len, (size_t)CLUSTERMSG_MIN_LEN + 1);
     link->io_read_state = CLUSTER_LINK_IO_IDLE;
 
@@ -249,13 +249,13 @@ TEST_F(ClusterIOOffloadTest, ReadJobSnapshotsCompletePrefixAndLeavesTail) {
 TEST_F(ClusterIOOffloadTest, ReadCompletionDrainsSnapshotAndCompactsTail) {
     clusterLink *link = makeLink();
     ASSERT_EQ(trySendClusterReadToIOThreads(link), C_OK);
-    seedQueuedSnapshot(link);
+    seedCompletePackets(link);
     link->io_result = CLUSTER_IO_OK;
 
     clusterHandleReadCompletion(link);
 
-    EXPECT_EQ(link->io_rcvbuf_snapshot_len, 0u);
-    EXPECT_EQ(link->io_rcvbuf_snapshot_packets, 0u);
+    EXPECT_EQ(link->io_complete_bytes, 0u);
+    EXPECT_EQ(link->io_complete_packets, 0u);
     EXPECT_EQ(link->rcvbuf_len, 1u);
     EXPECT_EQ(link->rcvbuf[0], 'T');
 }
@@ -264,7 +264,7 @@ TEST_F(ClusterIOOffloadTest, ReadCompletionOnEofDrainsThenCloses) {
     clusterLink *link = makeLink();
     FakeConn *fc = (FakeConn *)link->conn;
     ASSERT_EQ(trySendClusterReadToIOThreads(link), C_OK);
-    seedQueuedSnapshot(link);
+    seedCompletePackets(link);
     link->io_result = CLUSTER_IO_EOF;
 
     clusterHandleReadCompletion(link);
@@ -278,7 +278,7 @@ TEST_F(ClusterIOOffloadTest, ReadCompletionOnReadErrorDrainsThenCloses) {
     clusterLink *link = makeLink();
     FakeConn *fc = (FakeConn *)link->conn;
     ASSERT_EQ(trySendClusterReadToIOThreads(link), C_OK);
-    seedQueuedSnapshot(link);
+    seedCompletePackets(link);
     link->io_result = CLUSTER_IO_READ_ERROR;
 
     clusterHandleReadCompletion(link);
@@ -292,7 +292,7 @@ TEST_F(ClusterIOOffloadTest, ReadCompletionOnProtocolErrorDrainsThenCloses) {
     clusterLink *link = makeLink();
     FakeConn *fc = (FakeConn *)link->conn;
     ASSERT_EQ(trySendClusterReadToIOThreads(link), C_OK);
-    seedQueuedSnapshot(link);
+    seedCompletePackets(link);
     link->io_result = CLUSTER_IO_BAD_HEADER;
 
     clusterHandleReadCompletion(link);

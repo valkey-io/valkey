@@ -86,9 +86,9 @@ typedef struct clusterLink {
     /* Pre-dispatch rcvbuf_alloc for memory accounting on completion */
     size_t rcvbuf_alloc_at_dispatch; /* rcvbuf_alloc when read job was dispatched */
 
-    /* Async read snapshot/result */
-    size_t io_rcvbuf_snapshot_len;     /* Complete packet bytes queued at the start of rcvbuf */
-    size_t io_rcvbuf_snapshot_packets; /* Number of complete packets in io_rcvbuf_snapshot_len */
+    /* Async read framing/result */
+    size_t io_complete_bytes;   /* Bytes at the start of rcvbuf framed as complete packets */
+    size_t io_complete_packets; /* Number of complete packets in io_complete_bytes */
 } clusterLink;
 
 /* Cluster link flags and macros. */

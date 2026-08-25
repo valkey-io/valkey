@@ -2894,8 +2894,6 @@ void resetServerStats(void) {
     server.stat_cluster_threaded_writes_processed = 0;
     server.stat_cluster_threaded_accepts_processed = 0;
     server.stat_cluster_io_main_thread_fallbacks = 0;
-    server.stat_cluster_async_closed_links = 0;
-    server.stat_cluster_queued_inbound_packets = 0;
     server.stat_reply_buffer_expands = 0;
     memset(server.duration_stats, 0, sizeof(durationStats) * EL_DURATION_TYPE_NUM);
     server.el_cmd_cnt_max = 0;
@@ -3111,8 +3109,6 @@ void initServer(void) {
     server.stat_cluster_threaded_writes_processed = 0;
     server.stat_cluster_threaded_accepts_processed = 0;
     server.stat_cluster_io_main_thread_fallbacks = 0;
-    server.stat_cluster_async_closed_links = 0;
-    server.stat_cluster_queued_inbound_packets = 0;
     server.cron_malloc_stats.zmalloc_used = 0;
     server.cron_malloc_stats.process_rss = 0;
     server.cron_malloc_stats.allocator_allocated = 0;
@@ -6614,8 +6610,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "eventloop_duration_sum:%llu\r\n", server.duration_stats[EL_DURATION_TYPE_EL].sum,
                 "eventloop_duration_cmd_sum:%llu\r\n", server.duration_stats[EL_DURATION_TYPE_CMD].sum,
                 "instantaneous_eventloop_cycles_per_sec:%llu\r\n", getInstantaneousMetric(STATS_METRIC_EL_CYCLE),
-                "instantaneous_eventloop_duration_usec:%llu\r\n", getInstantaneousMetric(STATS_METRIC_EL_DURATION),
-                "instantaneous_io_pending_jobs:%lld\r\n", getInstantaneousMetric(STATS_METRIC_IO_WAIT)));
+                "instantaneous_eventloop_duration_usec:%llu\r\n", getInstantaneousMetric(STATS_METRIC_EL_DURATION)));
         info = genValkeyInfoStringACLStats(info);
     }
 

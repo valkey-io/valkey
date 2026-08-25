@@ -1826,12 +1826,6 @@ static void clusterMsgSendBlockDecrRefCount(void *node) {
     }
 }
 
-static void clusterResetRcvbufSnapshot(clusterLink *link) {
-    server.stat_cluster_queued_inbound_packets -= link->io_rcvbuf_snapshot_packets;
-    link->io_rcvbuf_snapshot_len = 0;
-    link->io_rcvbuf_snapshot_packets = 0;
-}
-
 clusterLink *createClusterLink(clusterNode *node) {
     clusterLink *link = zmalloc(sizeof(*link));
     link->ctime = mstime();
@@ -1858,8 +1852,8 @@ clusterLink *createClusterLink(clusterNode *node) {
     atomic_store_explicit(&link->last_io_read_time, 0, memory_order_relaxed);
 
     link->rcvbuf_alloc_at_dispatch = 0;
-    link->io_rcvbuf_snapshot_len = 0;
-    link->io_rcvbuf_snapshot_packets = 0;
+    link->io_complete_bytes = 0;
+    link->io_complete_packets = 0;
 
     server.stat_cluster_links_memory += link->rcvbuf_alloc + link->send_msg_queue_mem;
     link->conn = NULL;
@@ -1914,7 +1908,6 @@ int freeClusterLink(clusterLink *link) {
                 connSetWriteHandler(link->conn, NULL);
             }
             link->async_close = 1;
-            server.stat_cluster_async_closed_links++;
         }
         return 0;
     }
@@ -1932,8 +1925,9 @@ int freeClusterLink(clusterLink *link) {
     server.stat_cluster_links_memory -= sizeof(list) + listLength(link->send_msg_queue) * sizeof(listNode);
     listRelease(link->send_msg_queue);
 
-    /* Clear any queued read snapshot that was accounted for on completion. */
-    clusterResetRcvbufSnapshot(link);
+    /* Discard any complete packets the worker framed but we never applied. */
+    link->io_complete_bytes = 0;
+    link->io_complete_packets = 0;
 
     server.stat_cluster_links_memory -= link->rcvbuf_alloc;
     zfree(link->rcvbuf);
@@ -1992,7 +1986,6 @@ static void clusterConnAcceptHandler(connection *conn) {
     link = createClusterLink(NULL);
     link->conn = conn;
     connSetPrivateData(conn, link);
-    connSetOwnerKind(conn, CONN_OWNER_CLUSTER_LINK);
 
     /* Register read handler */
     connSetReadHandler(conn, clusterReadHandler);
@@ -2023,7 +2016,10 @@ void clusterAcceptHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
         /* Mark as cluster-owned before any TLS accept retries so generic
          * accept offload routing can safely avoid client assumptions. */
         connSetOwnerKind(conn, CONN_OWNER_CLUSTER_LINK);
-        conn->flags |= CONN_FLAG_ALLOW_ACCEPT_OFFLOAD;
+        /* Only a TLS accept is worth offloading: it runs the handshake. A
+         * plain TCP accept just flips the connection state, so offloading it
+         * would cost a worker round trip and an inbox slot for no work. */
+        if (connGetType(conn) == CONN_TYPE_TLS) conn->flags |= CONN_FLAG_ALLOW_ACCEPT_OFFLOAD;
 
         /* Make sure connection is not in an error state */
         if (connGetState(conn) != CONN_STATE_ACCEPTING) {
@@ -4762,24 +4758,23 @@ int clusterProcessPacket(clusterLink *link) {
 
 /* Drain complete packets queued at the start of rcvbuf.
  *
- * io_rcvbuf_snapshot_len marks the bytes the I/O thread determined contain
+ * io_complete_bytes marks the bytes the I/O thread determined contain
  * only complete packets. The main thread processes those packets in place,
  * removing each one from the front of rcvbuf after it is applied.
  *
  * Returns 1 if the link is still valid after all packets were applied, or
  * 0 if packet processing freed the link. */
-static int clusterDrainRcvbufSnapshot(clusterLink *link) {
-    while (link->io_rcvbuf_snapshot_len > 0) {
+static int clusterDrainCompletePackets(clusterLink *link) {
+    while (link->io_complete_bytes > 0) {
         clusterMsgHeader *hdr = (clusterMsgHeader *)link->rcvbuf;
         uint32_t totlen = ntohl(hdr->totlen);
         size_t saved_rcvbuf_len = atomic_load_explicit(&link->rcvbuf_len, memory_order_relaxed);
 
-        serverAssert(link->io_rcvbuf_snapshot_len >= totlen);
-        serverAssert(link->io_rcvbuf_snapshot_packets > 0);
+        serverAssert(link->io_complete_bytes >= totlen);
+        serverAssert(link->io_complete_packets > 0);
 
-        link->io_rcvbuf_snapshot_len -= totlen;
-        link->io_rcvbuf_snapshot_packets--;
-        server.stat_cluster_queued_inbound_packets--;
+        link->io_complete_bytes -= totlen;
+        link->io_complete_packets--;
 
         atomic_store_explicit(&link->rcvbuf_len, totlen, memory_order_relaxed);
         if (!clusterProcessPacket(link)) {
@@ -4924,22 +4919,22 @@ static inline int isClusterMsgSignatureAndLengthValid(clusterMsgHeader *hdr) {
 /* Find the maximal prefix of rcvbuf that contains only complete packets.
  *
  * Scans the buffer by validating the signature ("RCmb"), minimum header
- * length, and total length field. snapshot_len is the number of bytes at the
- * start of rcvbuf that contain complete packets, and packet_count is the
+ * length, and total length field. complete_bytes is the number of bytes at the
+ * start of rcvbuf that contain complete packets, and complete_packets is the
  * number of packets in that prefix.
  *
  * Thread-safe: reads only from the provided buffer and writes only to the
  * output parameters. Does not touch clusterNode, clusterState, or any
  * main-thread structure. */
-void clusterSnapshotPackets(char *rcvbuf,
-                            size_t rcvbuf_len,
-                            size_t *snapshot_len,
-                            size_t *packet_count,
-                            clusterIOResult *result) {
+void clusterFindCompletePackets(char *rcvbuf,
+                                size_t rcvbuf_len,
+                                size_t *complete_bytes,
+                                size_t *complete_packets,
+                                clusterIOResult *result) {
     size_t offset = 0;
 
-    *snapshot_len = 0;
-    *packet_count = 0;
+    *complete_bytes = 0;
+    *complete_packets = 0;
     *result = CLUSTER_IO_OK;
 
     while (offset < rcvbuf_len) {
@@ -4952,7 +4947,7 @@ void clusterSnapshotPackets(char *rcvbuf,
 
         /* Validate signature and minimum length. */
         if (memcmp(hdr->sig, "RCmb", 4) != 0) {
-            *snapshot_len = offset; /* preserve any valid prefix already scanned */
+            *complete_bytes = offset; /* preserve any valid prefix already scanned */
             *result = CLUSTER_IO_BAD_HEADER;
             return;
         }
@@ -4962,7 +4957,7 @@ void clusterSnapshotPackets(char *rcvbuf,
         uint32_t minlen = IS_LIGHT_MESSAGE(type) ? CLUSTERMSG_LIGHT_MIN_LEN : CLUSTERMSG_MIN_LEN;
 
         if (totlen < minlen) {
-            *snapshot_len = offset; /* preserve any valid prefix already scanned */
+            *complete_bytes = offset; /* preserve any valid prefix already scanned */
             *result = CLUSTER_IO_BAD_LENGTH;
             return;
         }
@@ -4971,10 +4966,10 @@ void clusterSnapshotPackets(char *rcvbuf,
         if (remaining < totlen) break;
 
         offset += totlen;
-        (*packet_count)++;
+        (*complete_packets)++;
     }
 
-    *snapshot_len = offset;
+    *complete_bytes = offset;
 }
 
 /* Read data. Try to read the first field of the header first to check the
@@ -4988,12 +4983,12 @@ void clusterReadHandler(connection *conn) {
     unsigned int readlen, rcvbuflen;
 
     /* A worker read job is still in flight or its completion hasn't been
-     * consumed yet. Do not touch the read snapshot or rcvbuf from the main
+     * consumed yet. Do not touch the framed packets or rcvbuf from the main
      * thread until clusterHandleReadCompletion() transitions the link back
      * to idle. */
     if (link->io_read_state != CLUSTER_LINK_IO_IDLE) return;
 
-    if (!clusterDrainRcvbufSnapshot(link)) return;
+    if (!clusterDrainCompletePackets(link)) return;
 
     /* Try to offload the read first. If offload is unavailable (pool inactive,
      * queue full), fall back to the synchronous path below. */
@@ -7867,15 +7862,11 @@ sds genClusterInfoString(sds info) {
                      "cluster_io_threaded_reads_processed:%I\r\n"
                      "cluster_io_threaded_writes_processed:%I\r\n"
                      "cluster_io_threaded_accepts_processed:%I\r\n"
-                     "cluster_io_main_thread_fallbacks:%I\r\n"
-                     "cluster_io_async_closed_links:%I\r\n"
-                     "cluster_io_queued_inbound_packets:%I\r\n",
+                     "cluster_io_main_thread_fallbacks:%I\r\n",
                      (long long)server.stat_cluster_threaded_reads_processed,
                      (long long)server.stat_cluster_threaded_writes_processed,
                      (long long)server.stat_cluster_threaded_accepts_processed,
-                     (long long)server.stat_cluster_io_main_thread_fallbacks,
-                     (long long)server.stat_cluster_async_closed_links,
-                     (long long)server.stat_cluster_queued_inbound_packets);
+                     (long long)server.stat_cluster_io_main_thread_fallbacks);
 
     return info;
 }
@@ -9028,11 +9019,11 @@ void clusterReadJob(clusterLink *link) {
     serverAssert(link->io_read_state == CLUSTER_LINK_IO_PENDING);
     serverAssert(link->io_write_state == CLUSTER_LINK_IO_IDLE);
 
-    if (conn == NULL) {
-        link->io_result = CLUSTER_IO_READ_ERROR;
-        sendToMainThread(link, JOB_RES_CLUSTER_READ);
-        return;
-    }
+    /* The link holds a connection for as long as an I/O job can be in flight:
+     * link->conn is only cleared on the immediate free path, which is
+     * unreachable while io_refs > 0, and the async-close path keeps the
+     * connection alive until the last completion. */
+    serverAssert(conn != NULL);
 
     /* Read loop: pull as many bytes as the kernel has ready. */
     while (1) {
@@ -9069,21 +9060,18 @@ void clusterReadJob(clusterLink *link) {
         break;
     }
 
-    /* If we read something, snapshot the complete packet prefix and update
+    /* If we read something, frame the complete packet prefix and update
      * the read timestamp. */
     if (total_read > 0) {
-        size_t snapshot_len = 0;
-        size_t packet_count = 0;
+        size_t complete_bytes = 0;
+        size_t complete_packets = 0;
         clusterIOResult frame_result;
-        serverAssert(link->io_rcvbuf_snapshot_len == 0);
-        serverAssert(link->io_rcvbuf_snapshot_packets == 0);
-        clusterSnapshotPackets(link->rcvbuf,
-                               atomic_load_explicit(&link->rcvbuf_len, memory_order_relaxed),
-                               &snapshot_len,
-                               &packet_count,
-                               &frame_result);
-        link->io_rcvbuf_snapshot_len = snapshot_len;
-        link->io_rcvbuf_snapshot_packets = packet_count;
+        serverAssert(link->io_complete_bytes == 0);
+        serverAssert(link->io_complete_packets == 0);
+        clusterFindCompletePackets(link->rcvbuf, atomic_load_explicit(&link->rcvbuf_len, memory_order_relaxed),
+                                   &complete_bytes, &complete_packets, &frame_result);
+        link->io_complete_bytes = complete_bytes;
+        link->io_complete_packets = complete_packets;
 
         /* If framing found a protocol error, that takes priority. */
         if (frame_result != CLUSTER_IO_OK) {
@@ -9120,12 +9108,8 @@ void clusterWriteJob(clusterLink *link) {
     serverAssert(link->io_write_state == CLUSTER_LINK_IO_PENDING);
     serverAssert(link->io_read_state == CLUSTER_LINK_IO_IDLE);
 
-    if (conn == NULL) {
-        link->io_nodes_sent = 0;
-        link->io_result = CLUSTER_IO_WRITE_ERROR;
-        sendToMainThread(link, JOB_RES_CLUSTER_WRITE);
-        return;
-    }
+    /* See clusterReadJob(): link->conn outlives any in-flight I/O job. */
+    serverAssert(conn != NULL);
 
     while (node) {
         clusterMsgSendBlock *msgblock = (clusterMsgSendBlock *)node->value;
@@ -9163,9 +9147,10 @@ void clusterWriteJob(clusterLink *link) {
 /* I/O thread worker: perform TLS accept handshake on a cluster connection.
  * No clusterLink exists yet — it is created by the main thread on success. */
 void clusterAcceptJob(connection *conn) {
-    if (conn == NULL) {
-        return;
-    }
+    /* The dispatcher holds a reference on the connection for the whole job, so
+     * it cannot be NULL here. Returning early instead would skip
+     * sendToMainThread() and leak a pending response forever. */
+    serverAssert(conn != NULL);
     connAccept(conn, NULL);
     sendToMainThread(conn, JOB_RES_CLUSTER_ACCEPT);
 }
@@ -9201,11 +9186,6 @@ void clusterHandleReadCompletion(clusterLink *link) {
         server.stat_cluster_links_memory += link->rcvbuf_alloc - link->rcvbuf_alloc_at_dispatch;
     }
 
-    /* Account for complete packets queued in rcvbuf by the I/O thread.
-     * Any leftover snapshot is drained before dispatch, so these fields
-     * reflect only this job's output. */
-    server.stat_cluster_queued_inbound_packets += link->io_rcvbuf_snapshot_packets;
-
     /* If the link was already marked for async close, check if we can
      * perform the final free now that io_refs has been decremented. */
     if (link->async_close) {
@@ -9221,8 +9201,8 @@ void clusterHandleReadCompletion(clusterLink *link) {
     if (result == CLUSTER_IO_BAD_HEADER || result == CLUSTER_IO_BAD_LENGTH) {
         /* Drain any valid packets that preceded the bad header/length before
          * closing, so we don't silently drop already-complete messages. */
-        if (link->io_rcvbuf_snapshot_len > 0) {
-            if (!clusterDrainRcvbufSnapshot(link)) return;
+        if (link->io_complete_bytes > 0) {
+            if (!clusterDrainCompletePackets(link)) return;
         }
         serverLog(LL_WARNING, "Bad cluster packet header/length from node %.40s:%s (%s)",
                   clusterLinkGetNodeName(link),
@@ -9240,7 +9220,7 @@ void clusterHandleReadCompletion(clusterLink *link) {
                   (result == CLUSTER_IO_EOF) ? "connection closed" : "read error");
     }
 
-    if (!clusterDrainRcvbufSnapshot(link)) return;
+    if (!clusterDrainCompletePackets(link)) return;
 
     if (atomic_load_explicit(&link->rcvbuf_len, memory_order_relaxed) == 0) {
         clusterShrinkRcvbuf(link);

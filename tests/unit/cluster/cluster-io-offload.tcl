@@ -1,6 +1,6 @@
 # Cluster I/O offload integration coverage.
 
-start_cluster 3 0 {tags {external:skip cluster} overrides {io-threads 4 io-threads-always-active yes}} {
+start_cluster 3 0 {tags {external:skip cluster network} overrides {io-threads 4 io-threads-always-active yes}} {
 
     test "cluster boots and reaches ok with io-threads > 1" {
         assert {[lindex [R 0 config get io-threads] 1] > 1}
@@ -21,16 +21,20 @@ start_cluster 3 0 {tags {external:skip cluster} overrides {io-threads 4 io-threa
 
         # Cluster bus gossip is already active; with a 1-byte limit, the next
         # outbound cluster message should force the offending link closed.
-        try {
+        set err [catch {
             wait_for_condition 500 10 {
                 [CI 0 total_cluster_links_buffer_limit_exceeded] > $old_exceeded
             } else {
                 fail "cluster links buffer limit stat did not increase"
             }
-        } finally {
-            # Restore limit and require that the cluster converges back to ok.
-            R 0 config set cluster-link-sendbuf-limit $oldlimit
-            wait_for_cluster_state ok
+        } res opts]
+
+        # Restore limit and require that the cluster converges back to ok,
+        # whether or not the assertion above held.
+        R 0 config set cluster-link-sendbuf-limit $oldlimit
+        wait_for_cluster_state ok
+        if {$err} {
+            return -options $opts $res
         }
     }
 
@@ -39,7 +43,7 @@ start_cluster 3 0 {tags {external:skip cluster} overrides {io-threads 4 io-threa
         R 0 config set io-threads 1
         R 0 config resetstat
 
-        try {
+        set err [catch {
             wait_for_condition 500 10 {
                 [CI 0 cluster_stats_messages_sent] > 0 &&
                 [CI 0 cluster_stats_messages_received] > 0 &&
@@ -47,9 +51,12 @@ start_cluster 3 0 {tags {external:skip cluster} overrides {io-threads 4 io-threa
             } else {
                 fail "cluster io main-thread fallback stat did not increase after disabling io threads"
             }
-        } finally {
-            R 0 config set io-threads $old_threads
-            wait_for_cluster_state ok
+        } res opts]
+
+        R 0 config set io-threads $old_threads
+        wait_for_cluster_state ok
+        if {$err} {
+            return -options $opts $res
         }
     }
 } ;# start_cluster
@@ -58,7 +65,7 @@ start_cluster 3 0 {tags {external:skip cluster} overrides {io-threads 4 io-threa
 # TLS cluster offload retry/stability coverage.
 
 if {$::tls} {
-    start_cluster 3 3 {tags {external:skip cluster tls} overrides {tls-cluster yes tls-replication yes io-threads 4 io-threads-always-active yes}} {
+    start_cluster 3 3 {tags {external:skip cluster tls network} overrides {tls-cluster yes tls-replication yes io-threads 4 io-threads-always-active yes}} {
 
         test "tls cluster with io-threads > 1 reaches ok" {
             assert {[lindex [R 0 config get io-threads] 1] > 1}

@@ -204,9 +204,9 @@ cluster state; workers do transport work only.
 
 Key design decisions:
 
-- **Read snapshot boundary.** Workers read into `clusterLink->rcvbuf`, scan
-  the prefix of complete packets, and publish `io_rcvbuf_snapshot_len` /
-  `io_rcvbuf_snapshot_packets`. The main thread drains exactly that prefix
+- **Read framing boundary.** Workers read into `clusterLink->rcvbuf`, scan
+  the prefix of complete packets, and publish `io_complete_bytes` /
+  `io_complete_packets`. The main thread drains exactly that prefix
   on completion.
 - **Write snapshot boundary.** A single canonical `send_msg_queue` is shared
   with the worker via `io_last_send_block` + `io_head_offset`. New messages
@@ -218,11 +218,18 @@ Key design decisions:
 - **Accept serialization.** `CONN_FLAG_ACCEPT_OFFLOAD_PENDING` ensures only
   one accept job is in flight per connection across TLS retries. The
   generic accept path uses `ConnectionOwnerKind` to route cluster-owned
-  connections back to the cluster dispatcher.
+  connections back to the cluster dispatcher. Only TLS accepts are
+  offloaded; a plain TCP accept does no real work.
+- **Dispatch is skipped while connecting.** A link whose TCP connect or TLS
+  handshake is still in progress is left to the connection layer, which
+  drives the read/write handler once the connection is established.
 - **Fallback.** If dispatch returns `C_ERR`, the caller runs the I/O on
   the main thread and increments `cluster_io_main_thread_fallbacks`.
 
-Counters live in `CLUSTER INFO`.
+`CLUSTER INFO` reports `cluster_io_threaded_reads_processed`,
+`cluster_io_threaded_writes_processed`,
+`cluster_io_threaded_accepts_processed` (all counted when a worker job
+completes) and `cluster_io_main_thread_fallbacks`.
 
 ## Relevant Code
 

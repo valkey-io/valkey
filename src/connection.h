@@ -426,11 +426,6 @@ static inline ConnectionOwnerKind connGetOwnerKind(connection *conn) {
     return conn->owner_kind;
 }
 
-/* Return true if the connection is owned by a clusterLink */
-static inline int connIsClusterLink(connection *conn) {
-    return conn->owner_kind == CONN_OWNER_CLUSTER_LINK;
-}
-
 /* Return a text that describes the connection, suitable for inclusion
  * in CLIENT LIST and similar outputs.
  *

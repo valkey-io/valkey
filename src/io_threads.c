@@ -676,10 +676,14 @@ int trySendClusterReadToIOThreads(struct clusterLink *link) {
     /* Invariant: io_refs must be 0 when both states are IDLE. */
     serverAssert(link->io_refs == 0);
 
-    /* clusterReadHandler() drains any queued packet snapshot before
+    /* clusterReadHandler() drains any queued complete packets before
      * attempting a new dispatch. */
-    serverAssert(link->io_rcvbuf_snapshot_len == 0);
-    serverAssert(link->io_rcvbuf_snapshot_packets == 0);
+    serverAssert(link->io_complete_bytes == 0);
+    serverAssert(link->io_complete_packets == 0);
+
+    /* The connection is not established yet. See the equivalent guard in
+     * trySendClusterWriteToIOThreads() for why we return C_OK here. */
+    if (connGetState(link->conn) != CONN_STATE_CONNECTED) return C_OK;
 
     /* No I/O thread pool available — synchronous fallback. */
     if (server.active_io_threads_num <= 1) {
@@ -709,7 +713,6 @@ int trySendClusterReadToIOThreads(struct clusterLink *link) {
 
     io_jobs_submitted++;
     cluster_io_pending_responses++;
-    server.stat_cluster_threaded_reads_processed++;
     return C_OK;
 }
 
@@ -735,6 +738,17 @@ int trySendClusterWriteToIOThreads(struct clusterLink *link) {
 
     /* Nothing to write. */
     if (listLength(link->send_msg_queue) == 0) return C_OK;
+
+    /* The connection is still being established (TCP connect or TLS handshake
+     * in progress). Don't dispatch: connWrite() fails with a non-EAGAIN error
+     * on a connection that isn't connected yet, the worker reports
+     * CLUSTER_IO_WRITE_ERROR and the completion handler turns that into a link
+     * teardown, so a slow handshake would kill the link. Nothing is stranded:
+     * the caller installed the write handler and the connection layer drives it
+     * once the handshake completes. Return C_OK so the caller neither retries
+     * synchronously (which fails the same way, see clusterWriteHandler) nor
+     * records a main-thread fallback. */
+    if (connGetState(link->conn) != CONN_STATE_CONNECTED) return C_OK;
 
     /* No I/O thread pool available — synchronous fallback. */
     if (server.active_io_threads_num <= 1) {
@@ -773,7 +787,6 @@ int trySendClusterWriteToIOThreads(struct clusterLink *link) {
 
     io_jobs_submitted++;
     cluster_io_pending_responses++;
-    server.stat_cluster_threaded_writes_processed++;
     return C_OK;
 }
 
@@ -803,7 +816,6 @@ int trySendClusterAcceptToIOThreads(connection *conn) {
 
     io_jobs_submitted++;
     cluster_io_pending_responses++;
-    server.stat_cluster_threaded_accepts_processed++;
     return C_OK;
 }
 
@@ -1130,14 +1142,17 @@ int processIOThreadsResponses(void) {
                 } else if (job_type == JOB_RES_CLUSTER_READ) {
                     serverAssert(cluster_io_pending_responses > 0);
                     cluster_io_pending_responses--;
+                    server.stat_cluster_threaded_reads_processed++;
                     clusterHandleReadCompletion((struct clusterLink *)data);
                 } else if (job_type == JOB_RES_CLUSTER_WRITE) {
                     serverAssert(cluster_io_pending_responses > 0);
                     cluster_io_pending_responses--;
+                    server.stat_cluster_threaded_writes_processed++;
                     clusterHandleWriteCompletion((struct clusterLink *)data);
                 } else if (job_type == JOB_RES_CLUSTER_ACCEPT) {
                     serverAssert(cluster_io_pending_responses > 0);
                     cluster_io_pending_responses--;
+                    server.stat_cluster_threaded_accepts_processed++;
                     clusterHandleAcceptCompletion((connection *)data);
                 } else {
                     serverPanic("Unknown job type %d", job_type);

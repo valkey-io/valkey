@@ -1999,7 +1999,7 @@ static bgIterator *bgIteratorCreate(const char *name,
                                     void *privdata,
                                     bgIterationType iter_type,
                                     genericIterator *keyset_iter) {
-    serverAssert(server.forkless_options_supported);
+    serverAssert(server.forkless_infrastructure_enabled);
     serverAssert(hasMainThreadExclusivity());
     serverAssert(server.cluster_enabled || iter_type == BGITERATION_TYPE_FULLSCAN);
 

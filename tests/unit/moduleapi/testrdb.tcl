@@ -305,7 +305,7 @@ tags "modules" {
     }
 }
 
-start_server {tags {"modules"} overrides {forkless-options-supported yes save "" enable-debug-command yes enable-module-command yes}} {
+start_server {tags {"modules"} overrides {forkless-infrastructure-enabled yes save "" enable-debug-command yes enable-module-command yes}} {
     test {MODULE LOAD is blocked during forkless save} {
         r debug populate 100
 

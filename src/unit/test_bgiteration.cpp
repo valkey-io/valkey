@@ -281,7 +281,7 @@ class BgIterationTest : public ::testing::Test {
 
     void SetUp() override {
         server.main_thread_id = pthread_self();
-        server.forkless_options_supported = 1;
+        server.forkless_infrastructure_enabled = 1;
         objectSetMetadataSize(BGITERATION_ENTRY_METADATA_SIZE);
 
         bgIteration_unitTestDisableCloning();

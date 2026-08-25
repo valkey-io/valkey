@@ -4209,8 +4209,8 @@ void bgsaveCommand(client *c) {
         } else if (!strcasecmp(arg, "fork")) {
             chosen_save_type = RDB_BGSAVE_TYPE_FORK;
         } else if (!strcasecmp(arg, "forkless")) {
-            if (!server.forkless_options_supported) {
-                addReplyError(c, "BGSAVE FORKLESS requires starting the server with forkless-options-supported enabled");
+            if (!server.forkless_infrastructure_enabled) {
+                addReplyError(c, "BGSAVE FORKLESS requires starting the server with forkless-infrastructure-enabled enabled");
                 return;
             }
             chosen_save_type = RDB_BGSAVE_TYPE_FORKLESS;
@@ -4222,7 +4222,7 @@ void bgsaveCommand(client *c) {
 
     /* If user didn't explicitly specify save type, let the system choose */
     if (chosen_save_type == RDB_BGSAVE_TYPE_NONE) {
-        chosen_save_type = (server.default_bgsave_method == RDB_BGSAVE_TYPE_FORKLESS && server.forkless_options_supported && moduleAllDatatypesHandleForklessSave())
+        chosen_save_type = (server.default_bgsave_method == RDB_BGSAVE_TYPE_FORKLESS && server.forkless_infrastructure_enabled && moduleAllDatatypesHandleForklessSave())
                                ? RDB_BGSAVE_TYPE_FORKLESS
                                : RDB_BGSAVE_TYPE_FORK;
     } else if (chosen_save_type == RDB_BGSAVE_TYPE_FORKLESS && !moduleAllDatatypesHandleForklessSave()) {

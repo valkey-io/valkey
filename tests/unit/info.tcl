@@ -571,7 +571,7 @@ start_server {tags {"info" "external:skip"}} {
     }
 }
 
-start_server {tags {"info" "external:skip"} overrides {save "" forkless-options-supported yes}} {
+start_server {tags {"info" "external:skip"} overrides {save "" forkless-infrastructure-enabled yes}} {
     test {INFO forkless save metrics show default values when no save is running} {
         r config set save ""
         r flushall

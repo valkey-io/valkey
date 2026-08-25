@@ -194,3 +194,31 @@ TEST_F(QosTest, QosValidateAndUpdateSubnetSources) {
     EXPECT_EQ(updateQosSubnetSources("192.168.1.0/24 10.0.0.0/8"), 0);
     qosFree();
 }
+
+TEST_F(QosTest, IsIpQosPrioritized) {
+    qosFree();
+    EXPECT_FALSE(isIpQosPrioritized("192.168.1.1"));
+    EXPECT_FALSE(isIpQosPrioritized(NULL));
+
+    ASSERT_EQ(updateQosSubnetSources("192.168.1.0/24 2001:db8::/32"), 0);
+
+    EXPECT_TRUE(isIpQosPrioritized("192.168.1.50"));
+    EXPECT_TRUE(isIpQosPrioritized("2001:db8::1"));
+    EXPECT_FALSE(isIpQosPrioritized("192.168.2.1"));
+    EXPECT_FALSE(isIpQosPrioritized("2001:db9::1"));
+    EXPECT_FALSE(isIpQosPrioritized(NULL));
+    EXPECT_FALSE(isIpQosPrioritized("invalid-ip"));
+
+    qosFree();
+}
+
+TEST_F(QosTest, HasQosSubnetSources) {
+    qosFree();
+    EXPECT_FALSE(hasQosSubnetSources());
+
+    ASSERT_EQ(updateQosSubnetSources("192.168.1.0/24"), 0);
+    EXPECT_TRUE(hasQosSubnetSources());
+
+    qosFree();
+    EXPECT_FALSE(hasQosSubnetSources());
+}

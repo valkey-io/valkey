@@ -13,7 +13,7 @@
  * Scope:
  *   - Binary IP subnet compilation, CIDR normalization, and fast binary matching.
  *   - QoS configuration lifecycle, validation, and atomicity.
- *   - Connection admission evaluation (canAcceptQosConnection).
+ *   - Connection admission control.
  * -----------------------------------------------------------------------------
  */
 
@@ -22,6 +22,11 @@
 
 #include <stdbool.h>
 #include <arpa/inet.h>
+
+#ifndef C_OK
+#define C_OK 0
+#define C_ERR -1
+#endif
 
 /* Represents an IP subnet (IPv4 or IPv6) and its prefix length. */
 typedef struct qosSubnet {
@@ -33,21 +38,21 @@ typedef struct qosSubnet {
     int prefix_len;
 } qosSubnet;
 
+/* QoS Subsystem Lifecycle */
+void qosInit(void);
+void qosFree(void);
+
 /* Low-level Subnet Primitives */
 int parseQosSubnetSource(const char *token, qosSubnet *subnet);
 int parseQosSubnetSourceList(const char *raw_sources, qosSubnet **subnets, int *count);
 bool matchIpAgainstQosSubnetSources(const char *ip, const qosSubnet *subnets, int count);
 
-/* Subsystem Lifecycle */
-void qosInit(void);
-void qosFree(void);
-
 /* Configuration Validation & Updates */
 int validateQosSubnetSources(const char *sources, const char **err);
 int updateQosSubnetSources(const char *sources);
 
-/* Connection Priority & Admission Control */
+/* Connection Priority & Active Subnet Sources */
 bool isIpQosPrioritized(const char *ip);
-bool canAcceptQosConnection(bool is_prioritized);
+bool hasQosSubnetSources(void);
 
 #endif /* QOS_H */

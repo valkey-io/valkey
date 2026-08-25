@@ -2573,6 +2573,14 @@ static int isValidQosReservedMinClients(long long val, const char **err) {
     return 1;
 }
 
+static int isValidMaxclients(long long val, const char **err) {
+    if (val <= 0 || (unsigned long long)val <= server.qos_reserved_min_clients) {
+        *err = "maxclients must be greater than qos-reserved-min-clients";
+        return 0;
+    }
+    return 1;
+}
+
 static int isValidAnnouncedHostname(char *val, const char **err) {
     if (strlen(val) >= NET_HOST_STR_LEN) {
         *err = "Hostnames must be less than " STRINGIFY(NET_HOST_STR_LEN) " characters";
@@ -3536,7 +3544,7 @@ standardConfig static_configs[] = {
 
 
     /* Unsigned int configs */
-    createUIntConfig("maxclients", NULL, MODIFIABLE_CONFIG, 1, UINT_MAX, server.maxclients, 10000, INTEGER_CONFIG, NULL, updateMaxclients),
+    createUIntConfig("maxclients", NULL, MODIFIABLE_CONFIG, 1, UINT_MAX, server.maxclients, 10000, INTEGER_CONFIG, isValidMaxclients, updateMaxclients),
     createUIntConfig("qos-reserved-min-clients", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, server.qos_reserved_min_clients, 0, INTEGER_CONFIG, isValidQosReservedMinClients, NULL),
     createUIntConfig("unixsocketperm", NULL, IMMUTABLE_CONFIG, 0, 0777, server.unix_ctx_config.perm, 0, OCTAL_CONFIG, NULL, NULL),
     createUIntConfig("socket-mark-id", NULL, IMMUTABLE_CONFIG, 0, UINT_MAX, server.socket_mark_id, 0, INTEGER_CONFIG, NULL, NULL),

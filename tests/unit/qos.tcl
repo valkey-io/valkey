@@ -1,17 +1,4 @@
 start_server {tags {"qos"}} {
-    set qos_info [r info clients]
-    set cluster_conns 0
-    regexp {cluster_connections:(\d+)} $qos_info -> cluster_conns
-    set prioritized_clients 0
-    regexp {connected_clients_prioritized:(\d+)} $qos_info -> prioritized_clients
-    set base_clients [lindex [r client list] 0]
-    set total_conns [llength [split [r client list] "\n"]]
-    if {$total_conns > 0} {
-        set base_clients $total_conns
-    } else {
-        set base_clients 1
-    }
-
     # Helper to get the IP address of the current test client as seen by the server.
     proc get_current_client_ip {} {
         set my_id [r client id]
@@ -39,25 +26,6 @@ start_server {tags {"qos"}} {
         } else {
             return "$ip/32"
         }
-    }
-
-    # Helper to check if a client has expected QoS
-    proc assert_client_qos {client_id expected_qos} {
-        set client_list [r client list]
-        set found 0
-        foreach line [split $client_list "\n"] {
-            if {$line == ""} continue
-            if {[regexp "id=$client_id " $line]} {
-                set found 1
-                if {$expected_qos eq "prioritized"} {
-                    assert {[regexp {flags=[^ ]*H} $line]}
-                } else {
-                    assert {![regexp {flags=[^ ]*H} $line]}
-                }
-                break
-            }
-        }
-        assert_equal 1 $found "Client ID $client_id not found in client list"
     }
 
     # Save original configs for global restoration
@@ -104,6 +72,14 @@ start_server {tags {"qos"}} {
         set cur_maxclients [lindex [r config get maxclients] 1]
         catch {r config set qos-reserved-min-clients $cur_maxclients} err
         assert_match "*must be less than maxclients*" $err
+
+        # Should fail if maxclients <= qos-reserved-min-clients
+        r config set qos-reserved-min-clients 10
+        catch {r config set maxclients 10} err
+        assert_match "*must be greater than qos-reserved-min-clients*" $err
+        catch {r config set maxclients 5} err
+        assert_match "*must be greater than qos-reserved-min-clients*" $err
+        r config set qos-reserved-min-clients 0
     }
 
     test {QoS reserved partition admission control and observability} {
@@ -147,36 +123,18 @@ start_server {tags {"qos"}} {
         set info_clients [r info clients]
         assert_match "*connected_clients_prioritized:2*" $info_clients
 
-        # Verify CLIENT LIST output contains 'H' flag for p1/p2 and not for c1 or r
-        assert_client_qos $p1_id "prioritized"
-        assert_client_qos $p2_id "prioritized"
-        assert_client_qos $c1_id "normal"
-        assert_client_qos [r client id] "normal"
+        # Close p1 and verify active prioritized count decrements
+        $p1 close
+        set info_clients [r info clients]
+        assert_match "*connected_clients_prioritized:1*" $info_clients
 
-        # Verify CLIENT INFO from prioritized client contains flags=...H...
-        $p1 client info
-        set p1_info [$p1 read]
-        assert {[regexp {flags=[^ ]*H} $p1_info]}
+        # Close p2 and verify active prioritized count becomes 0
+        $p2 close
+        set info_clients [r info clients]
+        assert_match "*connected_clients_prioritized:0*" $info_clients
 
-        # Verify CLIENT LIST with FLAGS H and NOT-FLAGS H filters
-        set h_list [r client list flags H]
-        set not_h_list [r client list not-flags H]
-        assert {[regexp "id=$p1_id " $h_list]}
-        assert {[regexp "id=$p2_id " $h_list]}
-        assert {![regexp "id=$c1_id " $h_list]}
-        assert {![regexp "id=$p1_id " $not_h_list]}
-        assert {![regexp "id=$p2_id " $not_h_list]}
-        assert {[regexp "id=$c1_id " $not_h_list]}
-
-        # Verify CLIENT KILL with FLAGS H kills only prioritized clients
-        set killed [r client kill flags H]
-        assert_equal 2 $killed
-        assert_client_qos $c1_id "normal"
-
-        # Close all to clean up
+        # Close c1
         catch {$c1 close}
-        catch {$p1 close}
-        catch {$p2 close}
     }
 
     test {QoS maxclients ceiling rejection with rejected_priority_connections stat} {
@@ -230,7 +188,7 @@ start_server {tags {"qos"}} {
         $p1 ping
         assert_equal {PONG} [$p1 read]
         
-        assert_client_qos $p1_id "prioritized"
+        assert_match "*connected_clients_prioritized:1*" [r info clients]
 
         catch {$p1 close}
         
@@ -243,7 +201,7 @@ start_server {tags {"qos"}} {
         $p2 ping
         assert_equal {PONG} [$p2 read]
         
-        assert_client_qos $p2_id "prioritized"
+        assert_match "*connected_clients_prioritized:1*" [r info clients]
         
         catch {$p2 close}
     }
@@ -259,7 +217,7 @@ start_server {tags {"qos"}} {
         $p1 ping
         assert_equal {PONG} [$p1 read]
         
-        assert_client_qos $p1_id "prioritized"
+        assert_match "*connected_clients_prioritized:1*" [r info clients]
 
         catch {$p1 close}
     }

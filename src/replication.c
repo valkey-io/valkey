@@ -2197,7 +2197,7 @@ void replicationEmptyDbCallback(hashtable *ht) {
  * performed, this function materializes the primary client we store
  * at server.primary, starting from the specified file descriptor. */
 void replicationCreatePrimaryClientWithHandler(connection *conn, int dbid, ConnectionCallbackFunc handler) {
-    server.primary = createClient(conn, 1);
+    server.primary = createClient(conn);
     if (conn) connSetReadHandler(server.primary->conn, handler);
 
     /**

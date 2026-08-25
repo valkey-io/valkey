@@ -6,16 +6,22 @@
  */
 
 #include "qos.h"
+#include "server.h"
+#include "cluster.h"
 #include <string.h>
 #include <stdlib.h>
 #include <stdint.h>
 #include <arpa/inet.h>
 #include "zmalloc.h"
 
-/* parseSubnet parses a subnet token in CIDR notation (e.g. "192.168.1.0/24")
+/* Encapsulated compiled QoS subnets */
+static qosSubnet *qos_subnets = NULL;
+static int qos_subnets_count = 0;
+
+/* parseQosSubnetSource parses a subnet token in CIDR notation (e.g. "192.168.1.0/24")
  * and populates the qosSubnet structure.
  * Returns 0 on success, -1 on parsing/validation error. */
-int parseSubnet(const char *token, qosSubnet *subnet) {
+int parseQosSubnetSource(const char *token, qosSubnet *subnet) {
     if (!token || !subnet) return -1;
 
     const char *slash = strchr(token, '/');
@@ -55,6 +61,12 @@ int parseSubnet(const char *token, qosSubnet *subnet) {
         if (inet_pton(AF_INET, ip_part, &subnet->addr.ipv4) != 1) return -1;
     } else {
         if (inet_pton(AF_INET6, ip_part, &subnet->addr.ipv6) != 1) return -1;
+        /* Normalize IPv4-mapped IPv6 subnet */
+        if (IN6_IS_ADDR_V4MAPPED(&subnet->addr.ipv6)) {
+            family = AF_INET;
+            subnet->addr.ipv4.s_addr = *(uint32_t *)(&subnet->addr.ipv6.s6_addr[12]);
+            prefix = (prefix > 96) ? (prefix - 96) : 0;
+        }
     }
 
     subnet->family = family;
@@ -62,11 +74,11 @@ int parseSubnet(const char *token, qosSubnet *subnet) {
     return 0;
 }
 
-/* parseSubnetList parses a string containing a list of subnets separated by spaces, tabs, or commas.
+/* parseQosSubnetSourceList parses a string containing a list of subnets separated by spaces, tabs, or commas.
  * On success, it allocates an array of qosSubnet, populates it, and sets *subnets and *count.
  * Returns 0 on success, and -1 on any parsing or allocation error.
  * Caller is responsible for freeing *subnets using zfree() if it is non-NULL. */
-int parseSubnetList(const char *raw_sources, qosSubnet **subnets, int *count) {
+int parseQosSubnetSourceList(const char *raw_sources, qosSubnet **subnets, int *count) {
     if (!subnets || !count) return -1;
     *subnets = NULL;
     *count = 0;
@@ -109,7 +121,7 @@ int parseSubnetList(const char *raw_sources, qosSubnet **subnets, int *count) {
     token = strtok_r(sources_to_parse, " \t,", &saveptr);
     while (token != NULL) {
         if (strlen(token) > 0) {
-            if (parseSubnet(token, &new_subnets[source_index++]) < 0) {
+            if (parseQosSubnetSource(token, &new_subnets[source_index++]) < 0) {
                 success = 0;
                 break;
             }
@@ -128,11 +140,11 @@ int parseSubnetList(const char *raw_sources, qosSubnet **subnets, int *count) {
     return 0;
 }
 
-/* matchIpAgainstSubnets checks if the given IP address matches any of the
+/* matchIpAgainstQosSubnetSources checks if the given IP address matches any of the
  * subnets in the list.
- * Returns 1 if matching any subnet, 0 otherwise. */
-int matchIpAgainstSubnets(const char *ip, qosSubnet *subnets, int count) {
-    if (!ip || !subnets || count <= 0) return 0;
+ * Returns true if matching any subnet, false otherwise. */
+bool matchIpAgainstQosSubnetSources(const char *ip, const qosSubnet *subnets, int count) {
+    if (!ip || !subnets || count <= 0) return false;
 
     int family;
     union {
@@ -142,14 +154,19 @@ int matchIpAgainstSubnets(const char *ip, qosSubnet *subnets, int count) {
 
     if (strchr(ip, ':')) {
         family = AF_INET6;
-        if (inet_pton(AF_INET6, ip, &ip_addr.ipv6) != 1) return 0;
+        if (inet_pton(AF_INET6, ip, &ip_addr.ipv6) != 1) return false;
+        /* Normalize IPv4-mapped IPv6 address */
+        if (IN6_IS_ADDR_V4MAPPED(&ip_addr.ipv6)) {
+            family = AF_INET;
+            ip_addr.ipv4.s_addr = *(uint32_t *)(&ip_addr.ipv6.s6_addr[12]);
+        }
     } else {
         family = AF_INET;
-        if (inet_pton(AF_INET, ip, &ip_addr.ipv4) != 1) return 0;
+        if (inet_pton(AF_INET, ip, &ip_addr.ipv4) != 1) return false;
     }
 
     for (int i = 0; i < count; i++) {
-        qosSubnet *subnet = &subnets[i];
+        const qosSubnet *subnet = &subnets[i];
         if (subnet->family != family) continue;
 
         if (family == AF_INET) {
@@ -157,7 +174,7 @@ int matchIpAgainstSubnets(const char *ip, qosSubnet *subnets, int count) {
             uint32_t ip_val = ntohl(ip_addr.ipv4.s_addr);
             uint32_t mask = (subnet->prefix_len == 0) ? 0 : (0xFFFFFFFFU << (32 - subnet->prefix_len));
             if ((ip_val & mask) == (subnet_val & mask)) {
-                return 1;
+                return true;
             }
         } else {
             int bytes = subnet->prefix_len / 8;
@@ -178,9 +195,68 @@ int matchIpAgainstSubnets(const char *ip, qosSubnet *subnets, int count) {
                 }
             }
 
-            if (match) return 1;
+            if (match) return true;
         }
     }
 
-    return 0;
+    return false;
+}
+
+void qosInit(void) {
+    qos_subnets = NULL;
+    qos_subnets_count = 0;
+}
+
+void qosFree(void) {
+    if (qos_subnets) {
+        zfree(qos_subnets);
+        qos_subnets = NULL;
+    }
+    qos_subnets_count = 0;
+}
+
+int validateQosSubnetSources(const char *sources, const char **err) {
+    qosSubnet *subnets = NULL;
+    int count = 0;
+    if (parseQosSubnetSourceList(sources, &subnets, &count) < 0) {
+        if (err) *err = "Invalid IP address or CIDR subnet in qos-subnet-sources";
+        return C_ERR;
+    }
+    if (subnets) zfree(subnets);
+    return C_OK;
+}
+
+int updateQosSubnetSources(const char *sources) {
+    qosSubnet *new_subnets = NULL;
+    int new_count = 0;
+    if (parseQosSubnetSourceList(sources, &new_subnets, &new_count) < 0) {
+        return C_ERR;
+    }
+    if (qos_subnets) zfree(qos_subnets);
+    qos_subnets = new_subnets;
+    qos_subnets_count = new_count;
+    return C_OK;
+}
+
+bool isIpQosPrioritized(const char *ip) {
+    if (qos_subnets_count > 0 && ip != NULL && matchIpAgainstQosSubnetSources(ip, qos_subnets, qos_subnets_count)) {
+        return true;
+    }
+    return false;
+}
+
+bool canAcceptQosConnection(bool is_prioritized) {
+    long long total_clients = (long long)listLength(server.clients) +
+                              (long long)getClusterConnectionsCount();
+    if (is_prioritized) {
+        return total_clients < (long long)server.maxclients;
+    } else {
+        unsigned int reserved = 0;
+        if (server.qos_reserved_min_clients > 0 && qos_subnets_count > 0) {
+            reserved = server.qos_reserved_min_clients;
+        }
+        long long normal_limit = (long long)server.maxclients - (long long)reserved;
+        if (normal_limit < 1) normal_limit = 1;
+        return total_clients < normal_limit;
+    }
 }

@@ -1489,7 +1489,7 @@ void feedAppendOnlyFile(int dictid, robj **argv, int argc) {
 /* Commands are always executed in the context of a client, so in
  * order to load the append only file we need to create a fake client. */
 struct client *createAOFClient(void) {
-    struct client *c = createClient(NULL, 0);
+    struct client *c = createClient(NULL);
 
     c->id = CLIENT_ID_AOF; /* So modules can identify it's the AOF client. */
 

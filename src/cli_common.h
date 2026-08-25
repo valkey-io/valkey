@@ -3,20 +3,12 @@
 
 #include <valkey/valkey.h>
 #include "sds.h"
+#include "tls.h"
 #include <stdint.h>
 
-#ifdef USE_OPENSSL
-#include <openssl/ssl.h>
-#endif
-
-#if defined(TLS_NO_GROUPS)
-#define CLI_TLS_SUPPORTS_GROUPS 0
-#elif defined(SSL_CTX_set1_groups_list)
+#if VALKEY_TLS_SUPPORTS_GROUPS
 #define CLI_TLS_SUPPORTS_GROUPS 1
-#define cliSslCtxSetGroupsList(ctx, list) SSL_CTX_set1_groups_list((ctx), (list))
-#elif defined(SSL_CTX_set1_curves_list)
-#define CLI_TLS_SUPPORTS_GROUPS 1
-#define cliSslCtxSetGroupsList(ctx, list) SSL_CTX_set1_curves_list((ctx), (list))
+#define cliSslCtxSetGroupsList(ctx, list) valkeyTlsCtxSetGroupsList((ctx), (list))
 #else
 #define CLI_TLS_SUPPORTS_GROUPS 0
 #endif

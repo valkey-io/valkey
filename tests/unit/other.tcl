@@ -753,7 +753,7 @@ if {$::verbose} {
 close $tempFileId
 file delete $tempFileName
 
-start_server {overrides {forkless-options-supported yes} tags {"other" "external:skip"}} {
+start_server {overrides {forkless-infrastructure-enabled yes} tags {"other" "external:skip"}} {
     foreach bgsave_type {"" "fork" "forkless"} {
         test "BGSAVE $bgsave_type" {
             r flushall

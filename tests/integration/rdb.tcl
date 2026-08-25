@@ -224,7 +224,7 @@ start_server_and_kill_it [list "dir" $server_path] {
     }
 }
 
-start_server {overrides {forkless-options-supported yes save ""}} {
+start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
     foreach bgsave_type {"" "fork" "forkless"} {
         test "Test FLUSHALL aborts bgsave $bgsave_type" {
             # 5000 keys with 1ms sleep per key should take 5 second
@@ -359,7 +359,7 @@ start_server {overrides {forkless-options-supported yes save ""}} {
     }
 }
 
-start_server {overrides {forkless-options-supported yes save ""}} {
+start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
     test "forkless bgsave contains expired keys from when save started" {
         
         # Set two keys that expire together
@@ -398,7 +398,7 @@ start_server {overrides {forkless-options-supported yes save ""}} {
     } {} {needs:debug}
 }
 
-start_server {overrides {forkless-options-supported yes save ""}} {
+start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
     test "FLUSHDB during single-db forkless bgsave causes save to fail" {
         
         # Populate database with complex dataset
@@ -436,7 +436,7 @@ start_server {overrides {forkless-options-supported yes save ""}} {
     } {} {needs:debug}
 }
 
-start_server {overrides {forkless-options-supported yes save ""}} {
+start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
     test "FLUSHDB during multi-db forkless bgsave causes save to fail" {
         
         # Populate multiple databases
@@ -480,7 +480,7 @@ start_server {overrides {forkless-options-supported yes save ""}} {
     } {} {needs:debug}
 }
 
-start_server {overrides {forkless-options-supported yes save ""}} {
+start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
     test "multiple databases modifications during forkless bgsave" {
         
         # Populate 5 databases with all data types
@@ -571,7 +571,7 @@ start_server {overrides {forkless-options-supported yes save ""}} {
     } {} {needs:debug}
 }
 
-start_server {overrides {forkless-options-supported yes save ""}} {
+start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
     test "modify new keys during forkless bgsave" {
         
         # Populate database with all data types
@@ -655,7 +655,7 @@ start_server {overrides {forkless-options-supported yes save ""}} {
     } {} {needs:debug}
 }
 
-start_server {overrides {forkless-options-supported yes save ""}} {
+start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
     test "SWAPDB during forkless bgsave" {
         
         # Populate 5 databases with all data types
@@ -721,7 +721,7 @@ start_server {overrides {forkless-options-supported yes save ""}} {
     } {} {needs:debug}
 }
 
-start_server {overrides {forkless-options-supported yes save ""}} {
+start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
     test "delete all keys after SWAPDB during forkless bgsave" {
         
         # Populate 5 databases with all data types
@@ -781,7 +781,7 @@ start_server {overrides {forkless-options-supported yes save ""}} {
     } {} {needs:debug}
 }
 
-start_server {overrides {forkless-options-supported yes save ""}} {
+start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
     test "deleting keys during forkless bgsave" {
         
         # Populate database with all data types
@@ -826,7 +826,7 @@ start_server {overrides {forkless-options-supported yes save ""}} {
     } {} {needs:debug}
 }
 
-start_server {overrides {forkless-options-supported yes save ""}} {
+start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
     test "blocking commands during forkless bgsave" {
         
         # Create initial dataset with 100 keys
@@ -971,7 +971,7 @@ start_server {overrides {forkless-options-supported yes save ""}} {
     } {} {needs:debug}
 }
 
-start_server {overrides {forkless-options-supported yes save ""}} {
+start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
     test "TTL expiration during forkless bgsave" {
         
         # Create initial dataset with 100 keys
@@ -1047,7 +1047,7 @@ start_server {overrides {forkless-options-supported yes save ""}} {
     } {} {needs:debug}
 }
 
-start_server {overrides {forkless-options-supported yes save ""}} {
+start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
     test "evictions during forkless bgsave" {
         
         # Create initial dataset
@@ -1097,7 +1097,7 @@ start_server {overrides {forkless-options-supported yes save ""}} {
     } {} {needs:debug}
 }
 
-start_server {overrides {forkless-options-supported yes save ""}} {
+start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
     test "comprehensive modifications on all data types during forkless bgsave" {
         
         # Create initial dataset with 1000 keys
@@ -1159,7 +1159,7 @@ start_server {overrides {forkless-options-supported yes save ""}} {
     } {} {needs:debug}
 }
 
-start_server {overrides {forkless-options-supported yes save ""}} {
+start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
     test "store key deletion by georadius during forkless bgsave" {
         
         # Create initial dataset with geo data
@@ -1205,7 +1205,7 @@ start_server {overrides {forkless-options-supported yes save ""}} {
     } {} {needs:debug}
 }
 
-start_server {overrides {forkless-options-supported yes save ""}} {
+start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
     test "transactions during forkless bgsave" {
         
         # Populate 5 databases
@@ -1330,7 +1330,7 @@ start_server {overrides {forkless-options-supported yes save ""}} {
     } {} {needs:debug}
 }
 
-start_server {overrides {forkless-options-supported yes save ""}} {
+start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
     foreach first_type {fork forkless} {
         foreach second_type {fork forkless} {
             test "$first_type bgsave blocks $second_type bgsave" {
@@ -1550,7 +1550,7 @@ start_server [list overrides [list "dir" $server_path "dbfilename" "scriptbackup
     }
 }
 
-start_server {overrides {forkless-options-supported yes save ""}} {
+start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
     foreach bgsave_type {"" "fork" "forkless"} {
         test "failed bgsave $bgsave_type prevents writes" {
             # Make sure the server saves an RDB on shutdown
@@ -1635,29 +1635,29 @@ start_server {} {
 }
 
 
-start_server {overrides {forkless-options-supported yes save ""}} {
-    test {default-bgsave-method can be set to forkless with forkless-options-supported} {
+start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
+    test {default-bgsave-method can be set to forkless with forkless-infrastructure-enabled} {
         r config set default-bgsave-method forkless
         assert_equal [lindex [r config get default-bgsave-method] 1] "forkless"
     }
 }
 
 start_server {} {
-    test {BGSAVE FORKLESS requires forkless-options-supported} {
+    test {BGSAVE FORKLESS requires forkless-infrastructure-enabled} {
         catch {r bgsave forkless} err
-        assert_match "*forkless-options-supported*" $err
+        assert_match "*forkless-infrastructure-enabled*" $err
     }
 }
 
-start_server {overrides {forkless-options-supported yes save ""}} {
-    test {BGSAVE FORKLESS works with forkless-options-supported} {
+start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
+    test {BGSAVE FORKLESS works with forkless-infrastructure-enabled} {
         r bgsave forkless
         waitForBgsave r
         assert_equal [s rdb_last_bgsave_type] "forkless"
     }
 }
 
-start_server {overrides {forkless-options-supported yes default-bgsave-method forkless}} {
+start_server {overrides {forkless-infrastructure-enabled yes default-bgsave-method forkless}} {
     test {BGSAVE uses forkless when default-bgsave-method is forkless} {
         r set key value
         set result [r bgsave]

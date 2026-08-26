@@ -1340,16 +1340,16 @@ start_server {tags {"introspection"}} {
 
         # Values that don't fit struct saveparam, both just above the limit and
         # way beyond what strtoll() can represent.
-        assert_error {ERR CONFIG SET failed*Invalid save parameters} {r config set save "1 2147483648"}
-        assert_error {ERR CONFIG SET failed*Invalid save parameters} {r config set save "2147483648 1"}
-        assert_error {ERR CONFIG SET failed*Invalid save parameters} {r config set save "1 999999999999999999999999"}
-        assert_error {ERR CONFIG SET failed*Invalid save parameters} {r config set save "999999999999999999999999 1"}
-        assert_error {ERR CONFIG SET failed*Invalid save parameters} {r config set save "1 21474836499999999999999999999999"}
+        assert_error {ERR CONFIG SET failed*Invalid save parameters*} {r config set save "1 2147483648"}
+        assert_error {ERR CONFIG SET failed*Invalid save parameters*} {r config set save "2147483648 1"}
+        assert_error {ERR CONFIG SET failed*Invalid save parameters*} {r config set save "1 999999999999999999999999"}
+        assert_error {ERR CONFIG SET failed*Invalid save parameters*} {r config set save "999999999999999999999999 1"}
+        assert_error {ERR CONFIG SET failed*Invalid save parameters*} {r config set save "1 21474836499999999999999999999999"}
 
         # Non numeric, empty and out of range values, also when a valid pair comes first
-        assert_error {ERR CONFIG SET failed*Invalid save parameters} {r config set save "900 foo"}
-        assert_error {ERR CONFIG SET failed*Invalid save parameters} {r config set save "900 "}
-        assert_error {ERR CONFIG SET failed*Invalid save parameters} {r config set save "900 1 1 2147483648"}
+        assert_error {ERR CONFIG SET failed*Invalid save parameters*} {r config set save "900 foo"}
+        assert_error {ERR CONFIG SET failed*Invalid save parameters*} {r config set save "900 "}
+        assert_error {ERR CONFIG SET failed*Invalid save parameters*} {r config set save "900 1 1 2147483648"}
 
         # A rejected CONFIG SET must leave the previous save params untouched
         assert_equal $original [lindex [r config get save] 1]

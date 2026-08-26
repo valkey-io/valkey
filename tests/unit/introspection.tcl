@@ -1362,7 +1362,7 @@ start_server {tags {"introspection"}} {
             rdma-rx-size
             rdma-bind
             rdma-port
-            forkless-options-supported
+            forkless-infrastructure-enabled
         }
 
         if {!$::tls} {
@@ -2086,7 +2086,7 @@ test {CONFIG hash-seed is immutable and settable at startup} {
     }
 } {} {external:skip}
 
-start_server {overrides {forkless-options-supported yes} tags {"introspection" "external:skip"}} {
+start_server {overrides {forkless-infrastructure-enabled yes} tags {"introspection" "external:skip"}} {
     foreach bgsave_type {"" "fork" "forkless"} {
         test "CLIENT KILL close the client connection during bgsave - $bgsave_type" {
             r flushall

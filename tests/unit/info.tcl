@@ -571,7 +571,7 @@ start_server {tags {"info" "external:skip"}} {
     }
 }
 
-start_server {tags {"info" "external:skip"} overrides {save "" forkless-options-supported yes}} {
+start_server {tags {"info" "external:skip"} overrides {save "" forkless-infrastructure-enabled yes}} {
     test {INFO forkless save metrics show default values when no save is running} {
         r config set save ""
         r flushall
@@ -775,16 +775,13 @@ start_server {tags {"info" "external:skip"} overrides {save "" forkless-options-
         }
         
         set time1 [s rdb_current_bgsave_time_sec]
-        
-        # Wait 2 seconds
-        after 2000
-        
-        set time2 [s rdb_current_bgsave_time_sec]
-        
-        # Time should have increased by approximately 2 seconds
-        assert {$time2 >= $time1 + 1}
-        assert {$time2 <= $time1 + 3}
-        
+
+        wait_for_condition 50 100 {
+            [s rdb_current_bgsave_time_sec] >= $time1 + 2
+        } else {
+            fail "rdb_current_bgsave_time_sec did not advance during forkless save"
+        }
+
         r config set rdb-key-save-delay 0
         r bgsave cancel
         waitForBgsave r

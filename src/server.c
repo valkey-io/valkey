@@ -1706,8 +1706,8 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
                  server.lastbgsave_status == C_OK)) {
                 serverLog(LL_NOTICE, "%d changes in %d seconds. Saving...", sp->changes, (int)sp->seconds);
                 int type = (server.default_bgsave_method == RDB_BGSAVE_TYPE_FORKLESS &&
-                            server.forkless_options_supported &&
-                            moduleAllDatatypesHandleForklessSave())
+                            server.forkless_infrastructure_enabled &&
+                            moduleAllModulesHandleForkless())
                                ? RDB_BGSAVE_TYPE_FORKLESS
                                : RDB_BGSAVE_TYPE_FORK;
                 rdbStartBgsave(type);
@@ -2390,7 +2390,7 @@ void initServerConfig(void) {
     for (j = 0; j < CONFIG_DEFAULT_BINDADDR_COUNT; j++) server.bindaddr[j] = zstrdup(default_bindaddr[j]);
     memset(server.listeners, 0x00, sizeof(server.listeners));
     server.active_expire_enabled = 1;
-    server.forkless_options_supported = 0;
+    server.forkless_infrastructure_enabled = 0;
     server.lazy_expire_disabled = 0;
     server.skip_checksum_validation = 0;
     server.loading = 0;
@@ -3086,7 +3086,7 @@ void initServer(void) {
     server.db = zcalloc(sizeof(serverDb *) * server.dbnum);
 
     /* Set object metadata size before creating any database key objects */
-    if (server.forkless_options_supported) {
+    if (server.forkless_infrastructure_enabled) {
         /* NOTE: At this time, there is only one reason for dbEntry metadata: bgIteration.  However,
          * if/when new metadata options are added, we will need to compute the size of a variable
          * size metadata, and provide appropriate accessors to access the specific portion of the
@@ -7342,7 +7342,7 @@ void closeChildUnusedResourceAfterFork(void) {
 /* purpose is one of CHILD_TYPE_ types */
 int serverFork(int purpose) {
     if (isMutuallyExclusiveChildType(purpose)) {
-        if (hasActiveChildProcess()) {
+        if (hasActiveSaveOrChild()) {
             errno = EALREADY;
             return -1;
         }

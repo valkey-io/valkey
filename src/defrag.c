@@ -664,6 +664,7 @@ static void defragKey(defragKeysCtx *ctx, robj **elemref) {
     /* Try to defrag robj and/or string value. */
     if ((newob = activeDefragStringOb(ob))) {
         *elemref = newob;
+        bgIteration_updateDbEntryPtr(ob, newob);
         if (objectGetExpire(newob) >= 0) {
             /* Replace the pointer in the expire table without accessing the old
              * pointer. */

@@ -1141,7 +1141,7 @@ static bool expediteSingleKeyWithoutOptimization(bgIterator *it,
     bool mustBlock = false;
 
     sds key = objectGetVal(oKey);
-    dbEntry *de = dbFind(server.db[dbid], key);
+    dbEntry *de = (server.db[dbid]) ? dbFind(server.db[dbid], key) : NULL;
     if (de != NULL) {
         if (!iteratorHasPassedKey(it, dbid, key, de)) {
             if (addEarlyIterationKey(it, de, dbid)) {
@@ -1282,7 +1282,7 @@ static bool expediteKeysForWrite(bgIterator *it,
         for (int i = 0; i < numKeys; i++) {
             robj *oKey = argv[keyrefs[i].pos];
             sds key = objectGetVal(oKey);
-            dbEntry *de = dbFind(server.db[dbid], key);
+            dbEntry *de = (server.db[dbid]) ? dbFind(server.db[dbid], key) : NULL;
             if (de == NULL) continue; // New key, no need to expedite
             if (!iteratorHasPassedKey(it, dbid, key, de) &&
                 ((bgIterationEntryMetadata *)objectGetMetadata(de))->iterator_epoch <= it->consistent_modification_id) {
@@ -1313,7 +1313,7 @@ static bool expediteKeysForWrite(bgIterator *it,
             for (int i = 0; i < numKeys; i++) {
                 robj *oKey = argv[keyrefs[i].pos];
                 sds key = objectGetVal(oKey);
-                dbEntry *de = dbFind(server.db[dbid], key);
+                dbEntry *de = (server.db[dbid]) ? dbFind(server.db[dbid], key) : NULL;
                 if (de == NULL) {
                     if (collectMissing) {
                         incrRefCount(oKey);
@@ -1376,7 +1376,7 @@ static bool expediteKeysForWrite(bgIterator *it,
             for (int i = 0; i < numKeys; i++) {
                 robj *oKey = argv[keyrefs[i].pos];
                 sds key = objectGetVal(oKey);
-                dbEntry *de = dbFind(server.db[dbid], key);
+                dbEntry *de = (server.db[dbid]) ? dbFind(server.db[dbid], key) : NULL;
                 if (de == NULL) {
                     if (collectMissing) {
                         incrRefCount(oKey);
@@ -1999,7 +1999,7 @@ static bgIterator *bgIteratorCreate(const char *name,
                                     void *privdata,
                                     bgIterationType iter_type,
                                     genericIterator *keyset_iter) {
-    serverAssert(server.forkless_options_supported);
+    serverAssert(server.forkless_infrastructure_enabled);
     serverAssert(hasMainThreadExclusivity());
     serverAssert(server.cluster_enabled || iter_type == BGITERATION_TYPE_FULLSCAN);
 

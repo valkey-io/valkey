@@ -275,6 +275,7 @@ void bgIteratorClose(bgIterator *iter);
  * BGITERATION HOOKS REQUIRED TO SUPPORT ITERATION - CALLS INSERTED INTO MAIN VALKEY CODE
  ********************************************************************************************/
 
+/* Size of bgIterationEntryMetadata (internal to bgiteration.c) */
 #define BGITERATION_ENTRY_METADATA_SIZE 4
 
 /* Must be called once (and only once) at server startup.  */

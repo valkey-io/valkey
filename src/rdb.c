@@ -4131,6 +4131,7 @@ int rdbSaveToReplicasSockets(int req, int rdbver, rdbSaveInfo *rsi) {
 
             server.rdb_save_time_start = time(NULL);
             server.rdb_write_target = RDB_WRITE_TARGET_SOCKET;
+            server.cur_bgsave_type = RDB_BGSAVE_TYPE_FORK;
             if (dual_channel) {
                 /* For dual channel sync, the main process no longer requires these RDB connections. */
                 zfree(conns);
@@ -4171,7 +4172,7 @@ void bgsaveCommand(client *c) {
     int chosen_save_type = RDB_BGSAVE_TYPE_NONE;
 
     /* BGSAVE can be invoked with the following options:
-     * - CANCEL: terminates an in-progress or scheduled BGSAVE (standalone only)
+     * - CANCEL: terminates an in-progress or scheduled BGSAVE
      * - SCHEDULE: schedules a BGSAVE when an AOF rewrite is in progress.
      *             Instead of returning an error, the BGSAVE is scheduled to run
      *             when the AOF rewrite completes.
@@ -4209,8 +4210,8 @@ void bgsaveCommand(client *c) {
         } else if (!strcasecmp(arg, "fork")) {
             chosen_save_type = RDB_BGSAVE_TYPE_FORK;
         } else if (!strcasecmp(arg, "forkless")) {
-            if (!server.forkless_options_supported) {
-                addReplyError(c, "BGSAVE FORKLESS requires starting the server with forkless-options-supported enabled");
+            if (!server.forkless_infrastructure_enabled) {
+                addReplyError(c, "BGSAVE FORKLESS requires starting the server with forkless-infrastructure-enabled enabled");
                 return;
             }
             chosen_save_type = RDB_BGSAVE_TYPE_FORKLESS;
@@ -4222,12 +4223,12 @@ void bgsaveCommand(client *c) {
 
     /* If user didn't explicitly specify save type, let the system choose */
     if (chosen_save_type == RDB_BGSAVE_TYPE_NONE) {
-        chosen_save_type = (server.default_bgsave_method == RDB_BGSAVE_TYPE_FORKLESS && server.forkless_options_supported && moduleAllDatatypesHandleForklessSave())
+        chosen_save_type = (server.default_bgsave_method == RDB_BGSAVE_TYPE_FORKLESS && server.forkless_infrastructure_enabled && moduleAllModulesHandleForkless())
                                ? RDB_BGSAVE_TYPE_FORKLESS
                                : RDB_BGSAVE_TYPE_FORK;
-    } else if (chosen_save_type == RDB_BGSAVE_TYPE_FORKLESS && !moduleAllDatatypesHandleForklessSave()) {
+    } else if (chosen_save_type == RDB_BGSAVE_TYPE_FORKLESS && !moduleAllModulesHandleForkless()) {
         addReplyError(c, "Can't use forkless save: one or more loaded modules have not declared "
-                         "VALKEYMODULE_OPTIONS_HANDLE_FORKLESS_SAVE");
+                         "VALKEYMODULE_OPTIONS_HANDLE_FORKLESS");
         return;
     }
 

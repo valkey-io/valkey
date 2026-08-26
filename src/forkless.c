@@ -129,7 +129,6 @@ static void *forklessSaveProcessor(void *arg) {
     serverLog(LL_NOTICE, "forkless-save: background processor finished. %ld items processed. %s",
               items, message);
 
-    currentForklessSave = NULL;
     saveInfo->err_code = err;
     bgIteratorClose(saveInfo->iterator);
     return NULL;
@@ -162,7 +161,15 @@ static void forklessSaveCloseSnapshotFile(void *args[]) {
     serverAssert(!onValkeyMainThread());
     forklessSaveInfo *saveInfo = (forklessSaveInfo *)args[0];
     /* Error or not, close the file... */
-    if (fsync(fileno(saveInfo->save_rio.io.file.fp)) != 0) {
+    /* Flush the RIO buffer to the OS before fsync, otherwise any bytes still
+     * buffered (including the tail written after the last autosync boundary and
+     * the RDB footer) are not covered by the fsync below. */
+    if (rioFlush(&saveInfo->save_rio) == 0) {
+        serverLog(LL_WARNING, "forkless-save: error flushing temp file [%s]: %s",
+                  saveInfo->temp_file, strerror(errno));
+        saveInfo->err_code = C_ERR;
+    }
+    if (valkey_fsync(fileno(saveInfo->save_rio.io.file.fp)) != 0) {
         serverLog(LL_WARNING, "forkless-save: error fsyncing temp file [%s]: %s",
                   saveInfo->temp_file, strerror(errno));
         saveInfo->err_code = C_ERR;
@@ -177,6 +184,11 @@ static void forklessSaveCloseSnapshotFile(void *args[]) {
         if (rename(saveInfo->temp_file, saveInfo->final_file) != 0) {
             serverLog(LL_WARNING, "forkless-save: error moving temp file [%s] to destination [%s]: %s",
                       saveInfo->temp_file, saveInfo->final_file, strerror(errno));
+            saveInfo->err_code = C_ERR;
+        } else if (fsyncFileDir(saveInfo->final_file) != 0) {
+            /* fsync the directory so the rename itself survives a crash. */
+            serverLog(LL_WARNING, "forkless-save: error syncing directory for [%s]: %s",
+                      saveInfo->final_file, strerror(errno));
             saveInfo->err_code = C_ERR;
         }
     }
@@ -221,6 +233,7 @@ void forklessSaveComplete(bool terminated, void *privdata) {
     saveInfo->terminated = terminated;
     /* The save iterator should be terminated and freed at this point in time. */
     saveInfo->iterator = NULL;
+    currentForklessSave = NULL;
     /* For file based forkless save, we need to generate the RDB end marker. and complete the save */
     if (!saveInfo->terminated && saveInfo->err_code == C_OK) {
         saveInfo->err_code = rdbWriteFooter(&saveInfo->save_rio, REPLICA_REQ_NONE) == C_ERR ? C_ERR : C_OK;
@@ -372,12 +385,13 @@ sds forkless_catInfo(sds info) {
             current_item_millis = status.current_item_ms;
 
             if (status.dbentries_processed > 0) {
-                long long total_keys = 0;
-                for (int i = 0; i < server.dbnum; i++) {
-                    total_keys += server.db[i] ? dbSize(server.db[i]) : 0;
-                }
-                estimated_seconds_remaining = (total_keys - status.dbentries_processed) *
-                                              status.runtime_ms / status.dbentries_processed / 1000;
+                long long total_keys =
+                    (long long)atomic_load_explicit(&server.stat_current_save_keys_total, memory_order_relaxed);
+                /* The ETA is best effort. Clamp at 0 since dbentries_processed
+                 * can exceed total_keys (e.g. a full sync may process more than
+                 * the start-time key count). */
+                long long remaining = max(total_keys - (long long)status.dbentries_processed, 0);
+                estimated_seconds_remaining = remaining * status.runtime_ms / status.dbentries_processed / 1000;
             }
         }
     }

@@ -70,6 +70,7 @@
 #include "io_threads.h"
 #include "scripting_engine.h"
 #include "cluster_migrateslots.h"
+#include "bgiteration.h"
 #include "forkless.h"
 #include <dlfcn.h>
 #include <sys/stat.h>
@@ -4300,6 +4301,14 @@ static void moduleInitKeyTypeSpecific(ValkeyModuleKey *key) {
  * call ValkeyModule_CloseKey() and ValkeyModule_KeyType() on a NULL
  * value.
  *
+ * Valkey 9.2+: When opening a key with VALKEYMODULE_WRITE, NULL will be returned
+ * if the key is currently write-locked (i.e. if forkless operations are operating
+ * on the key).  This change is non-breaking as:
+ * * Modules have to opt-in using VALKEYMODULE_OPTIONS_HANDLE_FORKLESS_SAVE
+ * * Module write commands are blocked (before execution), if a declared key is write-locked
+ * The risk is only for a module that performs VM_OpenKey() on a key which was NOT
+ * declared in the current command OR arbitrarily opens keys during a timer event.
+ *
  * Extra flags that can be pass to the API under the mode argument:
  * * VALKEYMODULE_OPEN_KEY_NOTOUCH - Avoid touching the LRU/LFU of the key when opened.
  * * VALKEYMODULE_OPEN_KEY_NONOTIFY - Don't trigger keyspace event on key misses.
@@ -4318,6 +4327,7 @@ ValkeyModuleKey *VM_OpenKey(ValkeyModuleCtx *ctx, robj *keyname, int mode) {
 
     if (mode & VALKEYMODULE_WRITE) {
         value = lookupKeyWriteWithFlags(ctx->client->db, keyname, flags);
+        if (value && bgIteration_isEntryInuse(value)) return NULL;
     } else {
         value = lookupKeyReadWithFlags(ctx->client->db, keyname, flags);
         if (value == NULL) {
@@ -7688,17 +7698,20 @@ int moduleVerifyAllAllowAtomicSlotMigrationOrReply(client *c) {
     return C_OK;
 }
 
-/* Returns 0 if any module with registered data types did not declare
- * VALKEYMODULE_OPTIONS_HANDLE_FORKLESS_SAVE, in which case forkless save should be
- * blocked because the module's RDB save callbacks may not be thread-safe. */
-int moduleAllDatatypesHandleForklessSave(void) {
+/* Returns 0 if any loaded module did not declare
+ * VALKEYMODULE_OPTIONS_HANDLE_FORKLESS, in which case forkless operations
+ * should be blocked. Every module must opt in: a module that accesses a key for
+ * write during a forkless operation must acknowledge the possible behavior
+ * change, and a module that registers a data type must also confirm its RDB save
+ * callback is thread-safe. */
+int moduleAllModulesHandleForkless(void) {
     listIter li;
     listNode *ln;
 
     listRewind(modules, &li);
     while ((ln = listNext(&li)) != NULL) {
         struct ValkeyModule *module = listNodeValue(ln);
-        if (listLength(module->types) && !(module->options & VALKEYMODULE_OPTIONS_HANDLE_FORKLESS_SAVE)) {
+        if (!(module->options & VALKEYMODULE_OPTIONS_HANDLE_FORKLESS)) {
             return 0;
         }
     }

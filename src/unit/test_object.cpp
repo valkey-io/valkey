@@ -52,6 +52,7 @@ class ObjectTest : public ::testing::Test {
             decrRefCount(obj);
             if (!isEmbedded) break;
         }
+        EXPECT_LE(len, 256) << "no embedding limit found within the search range";
 
         sdsfree(k);
         return len - 1;

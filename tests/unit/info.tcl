@@ -576,14 +576,12 @@ start_server {tags {"info" "external:skip"} overrides {save "" forkless-infrastr
         r config set save ""
         r flushall
         
-        set info [r info persistence]
-        
         # When no forkless save is running, time metrics should be -1
-        assert_match "*forkless_current_item_ms:-1*" $info
-        assert_match "*forkless_estimated_seconds_remaining:-1*" $info
+        set dbg [r info debug]
+        assert_match "*forkless_current_item_ms:-1*" $dbg
+        assert_match "*forkless_estimated_seconds_remaining:-1*" [r info persistence]
         
         # Debug metrics should be 0
-        set dbg [r info debug]
         assert_match "*forkless_current_queue_length:0*" $dbg
         assert_match "*forkless_queue_length_target:0*" $dbg
         assert_match "*forkless_dbentries_queued:0*" $dbg
@@ -606,14 +604,13 @@ start_server {tags {"info" "external:skip"} overrides {save "" forkless-infrastr
             fail "forkless save didn't start"
         }
         
-        set info [r info persistence]
+        set dbg [r info debug]
         
-        # Verify time metrics are present in persistence section
-        assert_match "*forkless_current_item_ms:*" $info
-        assert_match "*forkless_estimated_seconds_remaining:*" $info
+        # Verify time metrics are present in debug section
+        assert_match "*forkless_current_item_ms:*" $dbg
+        assert_match "*forkless_estimated_seconds_remaining:*" [r info persistence]
         
         # Verify queue metrics are present in debug section
-        set dbg [r info debug]
         assert_match "*forkless_current_queue_length:*" $dbg
         assert_match "*forkless_queue_length_target:*" $dbg
         assert_match "*forkless_dbentries_queued:*" $dbg
@@ -688,12 +685,12 @@ start_server {tags {"info" "external:skip"} overrides {save "" forkless-infrastr
         
         # Wait until the item has been processing for at least 1 second
         wait_for_condition 50 100 {
-            [s forkless_current_item_ms] > 1000
+            [getInfoProperty [r info debug] forkless_current_item_ms] > 1000
         } else {
             fail "forkless_current_item_ms never exceeded 1000"
         }
         
-        set item_time [s forkless_current_item_ms]
+        set item_time [getInfoProperty [r info debug] forkless_current_item_ms]
         
         # Should be processing an item for ~1 second (1000+ ms)
         assert {$item_time > 1000}
@@ -725,7 +722,7 @@ start_server {tags {"info" "external:skip"} overrides {save "" forkless-infrastr
         
         set dbg [r info debug]
         set processed [getInfoProperty $dbg forkless_dbentries_processed]
-        set estimated [s forkless_estimated_seconds_remaining]
+        set estimated [getInfoProperty [r info persistence] forkless_estimated_seconds_remaining]
         
         # Should have processed at least 1 key
         assert {$processed >= 1}
@@ -750,14 +747,12 @@ start_server {tags {"info" "external:skip"} overrides {save "" forkless-infrastr
         r bgsave
         waitForBgsave r
         
-        set info [r info persistence]
-        
         # After save completes, time metrics should be -1
-        assert_match "*forkless_current_item_ms:-1*" $info
-        assert_match "*forkless_estimated_seconds_remaining:-1*" $info
+        set dbg [r info debug]
+        assert_match "*forkless_current_item_ms:-1*" $dbg
+        assert_match "*forkless_estimated_seconds_remaining:-1*" [r info persistence]
         
         # Debug metrics should be 0
-        set dbg [r info debug]
         assert_match "*forkless_current_queue_length:0*" $dbg
         assert_match "*forkless_queue_length_target:0*" $dbg
         assert_match "*forkless_dbentries_queued:0*" $dbg

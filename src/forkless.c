@@ -375,14 +375,14 @@ int isForklessSaveInProgress(void) {
 /* Appends forkless save INFO metrics to the provided sds string. */
 sds forkless_catInfo(sds info) {
     long long estimated_seconds_remaining = -1;
-    long long current_item_millis = -1;
+    long long current_item_ms = -1;
 
     if (onValkeyMainThread()) {
         bgIterator *iter = bgIteratorFind(FORKLESS_SAVE_FILE_ITER_NAME);
         if (iter != NULL) {
             bgIteratorStatus status = {0};
             bgIteratorGetStatus(iter, &status);
-            current_item_millis = status.current_item_ms;
+            current_item_ms = status.current_item_ms;
 
             if (status.dbentries_processed > 0) {
                 long long total_keys =
@@ -397,9 +397,9 @@ sds forkless_catInfo(sds info) {
     }
 
     return sdscatprintf(info,
-                        "forkless_current_item_millis:%lld\r\n"
+                        "forkless_current_item_ms:%lld\r\n"
                         "forkless_estimated_seconds_remaining:%lld\r\n",
-                        current_item_millis,
+                        current_item_ms,
                         estimated_seconds_remaining);
 }
 

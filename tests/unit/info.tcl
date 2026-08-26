@@ -579,7 +579,7 @@ start_server {tags {"info" "external:skip"} overrides {save "" forkless-infrastr
         set info [r info persistence]
         
         # When no forkless save is running, time metrics should be -1
-        assert_match "*forkless_current_item_millis:-1*" $info
+        assert_match "*forkless_current_item_ms:-1*" $info
         assert_match "*forkless_estimated_seconds_remaining:-1*" $info
         
         # Debug metrics should be 0
@@ -608,7 +608,7 @@ start_server {tags {"info" "external:skip"} overrides {save "" forkless-infrastr
         set info [r info persistence]
         
         # Verify time metrics are present in persistence section
-        assert_match "*forkless_current_item_millis:*" $info
+        assert_match "*forkless_current_item_ms:*" $info
         assert_match "*forkless_estimated_seconds_remaining:*" $info
         
         # Verify queue metrics are present in debug section
@@ -668,7 +668,7 @@ start_server {tags {"info" "external:skip"} overrides {save "" forkless-infrastr
         waitForBgsave r
     }
 
-    test {INFO forkless save current_item_millis is counted} {
+    test {INFO forkless save current_item_ms is counted} {
         r config set save ""
         r flushall
         r debug populate 10
@@ -685,12 +685,12 @@ start_server {tags {"info" "external:skip"} overrides {save "" forkless-infrastr
         
         # Wait until the item has been processing for at least 1 second
         wait_for_condition 50 100 {
-            [s forkless_current_item_millis] > 1000
+            [s forkless_current_item_ms] > 1000
         } else {
-            fail "forkless_current_item_millis never exceeded 1000"
+            fail "forkless_current_item_ms never exceeded 1000"
         }
         
-        set item_time [s forkless_current_item_millis]
+        set item_time [s forkless_current_item_ms]
         
         # Should be processing an item for ~1 second (1000+ ms)
         assert {$item_time > 1000}
@@ -748,7 +748,7 @@ start_server {tags {"info" "external:skip"} overrides {save "" forkless-infrastr
         set info [r info persistence]
         
         # After save completes, time metrics should be -1
-        assert_match "*forkless_current_item_millis:-1*" $info
+        assert_match "*forkless_current_item_ms:-1*" $info
         assert_match "*forkless_estimated_seconds_remaining:-1*" $info
         
         # Debug metrics should be 0

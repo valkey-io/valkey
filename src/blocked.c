@@ -618,21 +618,6 @@ void signalDeletedKeyAsReady(serverDb *db, robj *key, int type) {
     signalKeyAsReadyLogic(db, key, type, 1);
 }
 
-/* Find a waiter for rl->key by client id (real or RM_Call fake clients). */
-static client *getClientFromBlockingKeysList(readyList *rl, uint64_t id) {
-    list *client_list = dictFetchValue(rl->db->blocking_keys, rl->key);
-    listNode *ln;
-    listIter li;
-
-    if (client_list == NULL) return NULL;
-    listRewind(client_list, &li);
-    while ((ln = listNext(&li)) != NULL) {
-        client *c = listNodeValue(ln);
-        if (c->id == id) return c;
-    }
-    return NULL;
-}
-
 /* Helper function for handleClientsBlockedOnKeys(). This function is called
  * whenever a key is ready. we iterate over all the clients blocked on this key
  * and try to re-execute the command (in case the key is still available). */
@@ -644,28 +629,23 @@ static void handleClientsBlockedOnKey(readyList *rl) {
     if (de) {
         list *clients = dictGetVal(de);
         listNode *ln;
-        listIter li;
+        client *receiver;
         long count = listLength(clients);
-        long snapshot_len = 0;
-        uint64_t *ids;
-        long i;
-
-        /* Snapshot ids: serve may freeClient() another waiter and invalidate
-         * a listIter successor. Re-resolve each id from the live list. */
-        ids = zmalloc(sizeof(*ids) * count);
-        listRewind(clients, &li);
-        while ((ln = listNext(&li)) != NULL && snapshot_len < count) {
-            client *c = listNodeValue(ln);
-            ids[snapshot_len++] = c->id;
-        }
-
         /* Avoid processing more than the initial count so that we're not stuck
          * in an endless loop in case the reprocessing of the command blocks again. */
-        for (i = 0; i < snapshot_len; i++) {
-            client *receiver = getClientFromBlockingKeysList(rl, ids[i]);
+        while (count-- > 0) {
+            /* Re-resolve the entry each round: serving a client may free this
+             * whole blocking_keys entry or re-create it, so a saved entry would
+             * dangle. */
+            de = dictFind(rl->db->blocking_keys, rl->key);
+            if (de == NULL) break;
+            clients = dictGetVal(de);
 
-            /* Freed / unlinked mid-loop: skip. Still on the waiter list: serve. */
-            if (receiver == NULL) continue;
+            /* Process the head, then rotate it to the tail, so we can fairly
+             * iterate all receivers step by step without a dangling iterator. */
+            ln = listFirst(clients);
+            receiver = listNodeValue(ln);
+            listRotateHeadToTail(clients);
 
             robj *o = lookupKeyReadWithFlags(rl->db, rl->key, LOOKUP_NOEFFECTS);
             /* 1. In case new key was added/touched we need to verify it satisfy the
@@ -683,7 +663,6 @@ static void handleClientsBlockedOnKey(readyList *rl) {
                     moduleUnblockClientOnKey(receiver, rl->key);
             }
         }
-        zfree(ids);
     }
 }
 

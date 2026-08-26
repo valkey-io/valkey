@@ -4161,7 +4161,7 @@ void discardCommandQueue(client *c) {
     queue->off = queue->len = queue->cap = 0;
 }
 
-/* Returns the number of keys in the the incr_states array after adding keys. */
+/* Returns the number of keys in the incr_states array after adding keys. */
 static int addKeysToIncrFindBatch(client *c,
                                   struct serverCommand *cmd,
                                   robj **argv,

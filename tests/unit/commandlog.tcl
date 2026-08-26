@@ -98,25 +98,27 @@ start_server {tags {"commandlog"} overrides {commandlog-execution-slower-than 10
         # for slow
         r debug sleep 0.2
         set e [lindex [r commandlog get -1 slow] 0]
-        assert_equal [llength $e] 6
+        assert_equal [llength $e] 7
         if {!$::external} {
             assert_equal [lindex $e 0] 118
         }
         assert_equal [expr {[lindex $e 2] > 100000}] 1
         assert_equal [lindex $e 3] {debug sleep 0.2}
         assert_equal {foobar} [lindex $e 5]
+        assert_equal {default} [lindex $e 6]
 
         # for large-request
         set value [string repeat A 1024]
         r set testkey $value
         set e [lindex [r commandlog get -1 large-request] 0]
-        assert_equal [llength $e] 6
+        assert_equal [llength $e] 7
         if {!$::external} {
             assert_equal [lindex $e 0] 118
         }
         assert_equal [expr {[lindex $e 2] > 1024}] 1
         assert_equal [lindex $e 3] {set testkey {AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA... (896 more bytes)}}
         assert_equal {foobar} [lindex $e 5]
+        assert_equal {default} [lindex $e 6]
 
         # for large-reply - without reply copy avoidance
         set copy_avoid [lindex [r config get min-string-size-avoid-copy-reply] 1]
@@ -125,26 +127,28 @@ start_server {tags {"commandlog"} overrides {commandlog-execution-slower-than 10
         }
         r get testkey
         set e [lindex [r commandlog get -1 large-reply] 0]
-        assert_equal [llength $e] 6
+        assert_equal [llength $e] 7
         if {!$::external} {
             assert_equal [lindex $e 0] 117
         }
         assert_equal [expr {[lindex $e 2] > 1024}] 1
         assert_equal [lindex $e 3] {get testkey}
         assert_equal {foobar} [lindex $e 5]
+        assert_equal {default} [lindex $e 6]
 
         # for large-reply - with reply copy avoidance
         # set min-string-size-avoid-copy-reply to 1 so wo will use reply copy avoidance
         r config set min-string-size-avoid-copy-reply 1
         r get testkey
         set e [lindex [r commandlog get -1 large-reply] 0]
-        assert_equal [llength $e] 6
+        assert_equal [llength $e] 7
         if {!$::external} {
             assert_equal [lindex $e 0] 118
         }
         assert_equal [expr {[lindex $e 2] > 1024}] 1
         assert_equal [lindex $e 3] {get testkey}
         assert_equal {foobar} [lindex $e 5]
+        assert_equal {default} [lindex $e 6]
         # Restore min-string-size-avoid-copy-reply value
         r config set min-string-size-avoid-copy-reply $copy_avoid
     } {OK} {needs:debug}
@@ -414,7 +418,7 @@ start_server {tags {"commandlog"} overrides {commandlog-execution-slower-than 10
             assert_equal 2 [llength $slowlog_resp]
 
             # The first one is the script command, and the second one is the ping command executed in the script
-            # Each slowlog contains: id, timestamp, execution time, command array, ip:port, client name
+            # Each slowlog contains: id, timestamp, execution time, command array, ip:port, client name, user name
             set script_cmd [lindex $slowlog_resp 0]
             set ping_cmd [lindex $slowlog_resp 1]
 
@@ -430,6 +434,8 @@ start_server {tags {"commandlog"} overrides {commandlog-execution-slower-than 10
             assert_equal [lindex $script_cmd 4] [lindex $ping_cmd 4]
             assert_equal {test-client} [lindex $script_cmd 5]
             assert_equal {test-client} [lindex $ping_cmd 5]
+            assert_equal {default} [lindex $script_cmd 6]
+            assert_equal {default} [lindex $ping_cmd 6]
         }
     }
 

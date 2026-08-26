@@ -1,6 +1,6 @@
 {
     "INCREX": {
-        "summary": "Increments the integer value of a key with an option to expire. Uses 0 as initial value if the key doesn't exist.",
+        "summary": "Increments the numeric value of a key with an option to expire. Uses 0 as initial value if the key doesn't exist.",
         "complexity": "O(1)",
         "group": "string",
         "since": "9.2.0",
@@ -114,6 +114,10 @@
                 {
                     "description": "The value of key after the increment",
                     "type": "string"
+                },
+                {
+                    "description": "If the key was not set due to the NX|XX option or when the expiration is in the past, a null value is returned.",
+                    "type": "null"
                 }
             ]
         }

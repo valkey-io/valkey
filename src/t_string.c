@@ -797,7 +797,6 @@ void increxCommand(client *c) {
     long double incr_ld = 1.0L;
     int use_float = 0;
 
-
     if (parseExtendedCommandArgumentsOrReply(c, COMMAND_INCREX, 2, c->argc, &flags, &unit, NULL, &expire, NULL, &incr_obj) != C_OK) {
         return;
     }
@@ -834,15 +833,6 @@ void increxCommand(client *c) {
         use_float = 1;
     }
 
-    /* If the `milliseconds` have expired, then we don't need to set it into the
-     * database, and then wait for the active expire to delete it, it is wasteful.
-     * If the key already exists, delete it. */
-    if (expire && checkAlreadyExpired(milliseconds)) {
-        if (o) deleteExpiredKeyFromOverwriteAndPropagate(c, c->argv[1]);
-        addReplyNull(c);
-        return;
-    }
-
     if (o) {
         if (checkType(c, o, OBJ_STRING)) return;
         if (use_float) {
@@ -850,6 +840,15 @@ void increxCommand(client *c) {
         } else {
             if (getLongLongFromObjectOrReply(c, o, &oldvalue_ll, NULL) != C_OK) return;
         }
+    }
+
+    /* If the `milliseconds` have expired, then we don't need to set it into the
+     * database, and then wait for the active expire to delete it, it is wasteful.
+     * If the key already exists, delete it. */
+    if (expire && checkAlreadyExpired(milliseconds)) {
+        if (o) deleteExpiredKeyFromOverwriteAndPropagate(c, c->argv[1]);
+        addReplyNull(c);
+        return;
     }
 
     if (use_float) {
@@ -882,16 +881,16 @@ void increxCommand(client *c) {
         }
     }
 
+    signalModifiedKey(c, c->db, c->argv[1]);
+    notifyKeyspaceEvent(NOTIFY_STRING, use_float ? "incrbyfloat" : "incrby", c->argv[1], c->db->id);
+    server.dirty++;
+
     if (expire) {
+        robj *milliseconds_obj = createStringObjectFromLongLong(milliseconds);
+        rewriteClientCommandVector(c, 5, shared.set, c->argv[1], new, shared.pxat, milliseconds_obj);
+        decrRefCount(milliseconds_obj);
         setExpire(c, c->db, c->argv[1], milliseconds);
         notifyKeyspaceEvent(NOTIFY_GENERIC, "expire", c->argv[1], c->db->id);
-
-        robj *milliseconds_obj = createStringObjectFromLongLong(milliseconds);
-        robj *value_obj = use_float ? createStringObjectFromLongDouble(value_ld, 1)
-                                    : createStringObjectFromLongLongForValue(value_ll);
-        rewriteClientCommandVector(c, 5, shared.set, c->argv[1], value_obj, shared.pxat, milliseconds_obj);
-        decrRefCount(milliseconds_obj);
-        decrRefCount(value_obj);
     } else if (use_float) {
         /* BYFLOAT with no expire still needs rewriting to SET for
          * deterministic replication - reuse `new`, the exact object
@@ -900,10 +899,6 @@ void increxCommand(client *c) {
          * between what the master stored and what it propagates). */
         rewriteClientCommandVector(c, 4, shared.set, c->argv[1], new, shared.keepttl);
     }
-
-    signalModifiedKey(c, c->db, c->argv[1]);
-    notifyKeyspaceEvent(NOTIFY_STRING, "incrby", c->argv[1], c->db->id);
-    server.dirty++;
 
     if (use_float) {
         addReplyHumanLongDouble(c, value_ld);

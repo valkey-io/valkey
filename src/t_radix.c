@@ -316,7 +316,7 @@ void rdelCommand(client *c) {
         signalModifiedKey(c, c->db, c->argv[1]);
         notifyKeyspaceEvent(NOTIFY_RADIX, "rdel", c->argv[1], c->db->id);
         if (key_removed) notifyKeyspaceEvent(NOTIFY_GENERIC, "del", c->argv[1], c->db->id);
-        server.dirty++;
+        server.dirty += deleted;
     }
     addReplyLongLong(c, deleted);
 }
@@ -537,7 +537,7 @@ void rdelprefixCommand(client *c) {
         signalModifiedKey(c, c->db, c->argv[1]);
         notifyKeyspaceEvent(NOTIFY_RADIX, "rdelprefix", c->argv[1], c->db->id);
         if (key_removed) notifyKeyspaceEvent(NOTIFY_GENERIC, "del", c->argv[1], c->db->id);
-        server.dirty++;
+        server.dirty += len;
     }
     addReplyLongLong(c, len);
 }

@@ -324,8 +324,8 @@ start_server {tags {"modules"} overrides {forkless-infrastructure-enabled yes sa
         catch {r module load $testmodule} err
         assert_match "*Error*" $err
 
-        r config set rdb-key-save-delay 0
         r bgsave cancel
+        r config set rdb-key-save-delay 0
         waitForBgsave r
 
         # After forkless save completes, module load should succeed

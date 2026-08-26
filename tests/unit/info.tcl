@@ -623,8 +623,8 @@ start_server {tags {"info" "external:skip"} overrides {save "" forkless-infrastr
         set target [getInfoProperty $dbg forkless_queue_length_target]
         assert {$target > 0}
         
-        r config set rdb-key-save-delay 0
         r bgsave cancel
+        r config set rdb-key-save-delay 0
         waitForBgsave r
     }
 
@@ -665,8 +665,8 @@ start_server {tags {"info" "external:skip"} overrides {save "" forkless-infrastr
         # At least one should have increased
         assert {$queued2 > $queued1 || $processed2 > $processed1}
         
-        r config set rdb-key-save-delay 0
         r bgsave cancel
+        r config set rdb-key-save-delay 0
         waitForBgsave r
     }
 
@@ -698,8 +698,8 @@ start_server {tags {"info" "external:skip"} overrides {save "" forkless-infrastr
         # Should be processing an item for ~1 second (1000+ ms)
         assert {$item_time > 1000}
         
-        r config set rdb-key-save-delay 0
         r bgsave cancel
+        r config set rdb-key-save-delay 0
         waitForBgsave r
     }
 
@@ -734,8 +734,8 @@ start_server {tags {"info" "external:skip"} overrides {save "" forkless-infrastr
         # in the tens of seconds range. Use a wide band to avoid timing flakes.
         assert {$estimated > 0 && $estimated < 300}
         
-        r config set rdb-key-save-delay 0
         r bgsave cancel
+        r config set rdb-key-save-delay 0
         waitForBgsave r
     }
 
@@ -788,8 +788,8 @@ start_server {tags {"info" "external:skip"} overrides {save "" forkless-infrastr
             fail "rdb_current_bgsave_time_sec did not advance during forkless save"
         }
 
-        r config set rdb-key-save-delay 0
         r bgsave cancel
+        r config set rdb-key-save-delay 0
         waitForBgsave r
     }
 }

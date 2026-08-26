@@ -125,5 +125,23 @@ start_server {tags {"modules"} overrides {{save ""}}} {
                 fail "module cursor was not discarded when the defrag cycle was aborted"
             }
         }
+
+        test {Module defrag: unloading a module releases an outstanding cursor} {
+            # The busy module never finishes, so it always has a cursor allocated. Unloading it must
+            # free that cursor rather than leak it, and must not leave the defrag stage referring to
+            # a module that is gone.
+            assert {[getInfoProperty [r info defragglobalbusy_stats] \
+                         defragglobalbusy_busy_calls] > 0}
+
+            assert_equal {OK} [r module unload defragglobalbusy]
+
+            # The remaining module must keep being defragged afterwards.
+            r frag.resetstats
+            wait_for_condition 50 100 {
+                [getInfoProperty [r info defragtest_stats] defragtest_global_attempts] > 0
+            } else {
+                fail "global defrag stopped working after a module was unloaded"
+            }
+        }
     }
 }

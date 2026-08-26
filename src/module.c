@@ -2449,7 +2449,7 @@ void VM_SetModuleAttribs(ValkeyModuleCtx *ctx, const char *name, int ver, int ap
     module->options = 0;
     module->info_cb = 0;
     module->defrag_cb = 0;
-    module->defrag_cursor = 0;
+    module->defrag_cursor = NULL;
     module->defrag_done_this_cycle = 0;
     module->loadmod = NULL;
     module->num_commands_with_acl_categories = 0;
@@ -13226,6 +13226,8 @@ void moduleLoadFromQueue(void) {
 }
 
 void moduleFreeModuleStructure(struct ValkeyModule *module) {
+    /* A global defrag pass may be outstanding, and its cursor is owned by the server. */
+    moduleDefragGlobalsReleaseCursor(module);
     listRelease(module->types);
     listRelease(module->filters);
     listRelease(module->usedby);
@@ -14986,6 +14988,32 @@ struct ValkeyModuleDefragCtx {
     int dbid;                 /* The dbid of the key being processed, -1 when unknown. */
 };
 
+/* Resume state for a module's global defrag pass.
+ *
+ * The per-key defrag cursor needs no lifetime of its own: it belongs to one key, and the server
+ * resets it in moduleLateDefrag() when that key's callback reports completion.  The global callback
+ * has no such bracketing, so its cursor is an object the server allocates when it first visits the
+ * module in a cycle and frees when the pass ends, when the cycle terminates abnormally, or when the
+ * module is unloaded.  Freeing it is what guarantees a module is never handed a position saved
+ * before an interruption.
+ *
+ * The position is reached through the existing VM_DefragCursorSet()/VM_DefragCursorGet(), which the
+ * defrag context points at, so this type adds no module-visible API.  Making it a type rather than a
+ * bare value means further per-pass state can be added here without changing any signature. */
+typedef struct moduleDefragCursor {
+    unsigned long position; /* Where the callback stopped.  Zero means done for this cycle. */
+} moduleDefragCursor;
+
+static moduleDefragCursor *moduleDefragCursorCreate(void) {
+    moduleDefragCursor *cursor = zmalloc(sizeof(*cursor));
+    cursor->position = 0;
+    return cursor;
+}
+
+static void moduleDefragCursorDestroy(moduleDefragCursor *cursor) {
+    zfree(cursor);
+}
+
 /* Register a defrag callback for global data, i.e. anything that the module
  * may allocate that is not tied to a specific data type.
  *
@@ -14996,6 +15024,10 @@ struct ValkeyModuleDefragCtx {
  * means "done"; a non-zero cursor tells the defrag process there is more work
  * and the callback will be invoked again. The callback MUST store a cursor of 0
  * once it has finished, otherwise it will keep being invoked.
+ *
+ * The cursor belongs to one pass and is owned by the server, which discards it once the callback
+ * reports completion or the pass is interrupted. A callback therefore only ever reads back a
+ * position it stored during the same pass, and a cursor of 0 always means a fresh start.
  */
 int VM_RegisterDefragFunc(ValkeyModuleCtx *ctx, ValkeyModuleDefragFunc cb) {
     ctx->module->defrag_cb = cb;
@@ -15171,10 +15203,11 @@ static unsigned long defrag_module_start_idx = 0;
 /* Called at stage init (endtime==0) to start a new global defrag pass.  Clears each module's
  * done flag so every module is visited again, and resets the round-robin start position.
  *
- * Cursors are not cleared here.  On a normal cycle end every cursor is already 0, because the
- * stage only reports DEFRAG_DONE once no module has work left.  A cursor can only outlive a cycle
- * when that cycle was aborted, and that case is handled in moduleDefragGlobalsAbort() rather than
- * here, so a module is never handed back a position saved by an interrupted pass. */
+ * Cursors are not released here.  On a normal cycle end every cursor has already been released,
+ * because the stage only reports DEFRAG_DONE once no module has work left.  A cursor can only
+ * outlive a cycle when that cycle was aborted, and that case is handled in
+ * moduleDefragGlobalsAbort() rather than here, so a module is never handed back a position saved by
+ * an interrupted pass. */
 void moduleDefragGlobalsStart(void) {
     defrag_module_start_idx = 0;
 
@@ -15188,6 +15221,13 @@ void moduleDefragGlobalsStart(void) {
     }
 }
 
+/* Free a module's global defrag cursor.  Called when the pass ends, when it is interrupted, and when
+ * the module is unloaded. */
+void moduleDefragGlobalsReleaseCursor(struct ValkeyModule *module) {
+    moduleDefragCursorDestroy(module->defrag_cursor);
+    module->defrag_cursor = NULL;
+}
+
 /* Discard in-progress global defrag state.  Called when a defrag cycle terminates abnormally,
  * which interrupts modules mid-pass: a cursor saved at that point refers to a position in module
  * state that may be rebuilt before defrag next runs, so it must not be handed back.  Mirrors
@@ -15199,7 +15239,7 @@ void moduleDefragGlobalsAbort(void) {
     listRewind(modules, &li);
     while ((ln = listNext(&li)) != NULL) {
         struct ValkeyModule *module = listNodeValue(ln);
-        module->defrag_cursor = 0;
+        moduleDefragGlobalsReleaseCursor(module);
         module->defrag_done_this_cycle = 0;
     }
 }
@@ -15242,11 +15282,16 @@ int moduleDefragGlobals(monotime endtime) {
             struct ValkeyModule *module = listNodeValue(ln);
             if (!module->defrag_cb) continue;
             if (module->defrag_done_this_cycle) continue;
-            ValkeyModuleDefragCtx defrag_ctx = {endtime, &module->defrag_cursor, NULL, -1};
+            /* Allocate the cursor on the first visit of this cycle and point the context at the
+             * position inside it, so VM_DefragCursorSet()/Get() work unchanged. */
+            if (!module->defrag_cursor) module->defrag_cursor = moduleDefragCursorCreate();
+            ValkeyModuleDefragCtx defrag_ctx = {endtime, &module->defrag_cursor->position, NULL, -1};
             module->defrag_cb(&defrag_ctx);
-            if (module->defrag_cursor != 0) {
+            if (module->defrag_cursor->position != 0) {
                 more_work = 1;
             } else {
+                /* Done for this cycle, so the pass is over and its cursor goes with it. */
+                moduleDefragGlobalsReleaseCursor(module);
                 module->defrag_done_this_cycle = 1;
             }
             if (endtime != 0 && getMonotonicUs() >= endtime) {

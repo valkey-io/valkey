@@ -14,10 +14,6 @@
             [
                 "8.1.0",
                 "Added the `CANCEL` option."
-            ],
-            [
-                "9.2.0",
-                "Added the `FORK` and `FORKLESS` options. `SCHEDULE` can be combined with `FORK` or `FORKLESS`."
             ]
         ],
         "command_flags": [
@@ -32,35 +28,10 @@
                 "optional": true,
                 "arguments": [
                     {
-                        "name": "save",
-                        "type": "block",
-                        "arguments": [
-                            {
-                                "name": "schedule",
-                                "token": "SCHEDULE",
-                                "type": "pure-token",
-                                "optional": true,
-                                "since": "3.2.2"
-                            },
-                            {
-                                "name": "save-type",
-                                "type": "oneof",
-                                "optional": true,
-                                "since": "9.2.0",
-                                "arguments": [
-                                    {
-                                        "name": "fork",
-                                        "token": "FORK",
-                                        "type": "pure-token"
-                                    },
-                                    {
-                                        "name": "forkless",
-                                        "token": "FORKLESS",
-                                        "type": "pure-token"
-                                    }
-                                ]
-                            }
-                        ]
+                        "name": "schedule",
+                        "token": "SCHEDULE",
+                        "type": "pure-token",
+                        "since": "3.2.2"
                     },
                     {
                         "name": "cancel",

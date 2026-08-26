@@ -1731,6 +1731,26 @@ int isSaveInProgress(void) {
     return isForkBgsaveInProgress() || isForklessSaveInProgress();
 }
 
+/* Choose the background save method based on configuration. Returns forkless
+ * only when it is configured, the infrastructure is enabled, and every loaded
+ * module can handle a forkless save. Otherwise fall back to a fork-based save
+ * and log why, so the fallback is not silent. */
+int resolveBgsaveType(void) {
+    if (server.default_bgsave_method != RDB_BGSAVE_TYPE_FORKLESS) return RDB_BGSAVE_TYPE_FORK;
+
+    if (!server.forkless_infrastructure_enabled) {
+        serverLog(LL_WARNING, "Falling back to fork-based save: forkless is configured but "
+                              "forkless-infrastructure-enabled is off");
+        return RDB_BGSAVE_TYPE_FORK;
+    }
+    if (!moduleAllModulesHandleForkless()) {
+        serverLog(LL_WARNING, "Falling back to fork-based save: forkless is configured but a loaded "
+                              "module has not declared VALKEYMODULE_OPTIONS_HANDLE_FORKLESS");
+        return RDB_BGSAVE_TYPE_FORK;
+    }
+    return RDB_BGSAVE_TYPE_FORKLESS;
+}
+
 /* Start a background save, choosing fork or forkless based on bgsave_type. */
 int rdbStartBgsave(int bgsave_type) {
     if (bgsave_type == RDB_BGSAVE_TYPE_FORKLESS) {
@@ -4166,19 +4186,15 @@ void saveCommand(client *c) {
     }
 }
 
-/* BGSAVE [SCHEDULE [FORK|FORKLESS]] | BGSAVE [FORK|FORKLESS] | BGSAVE CANCEL */
+/* BGSAVE [SCHEDULE] | BGSAVE CANCEL */
 void bgsaveCommand(client *c) {
     int schedule = 0;
-    int chosen_save_type = RDB_BGSAVE_TYPE_NONE;
 
     /* BGSAVE can be invoked with the following options:
      * - CANCEL: terminates an in-progress or scheduled BGSAVE
      * - SCHEDULE: schedules a BGSAVE when an AOF rewrite is in progress.
      *             Instead of returning an error, the BGSAVE is scheduled to run
-     *             when the AOF rewrite completes.
-     * - FORK: uses fork-based save (default)
-     * - FORKLESS: uses forkless save
-     * SCHEDULE can be combined with FORK or FORKLESS to specify the save method. */
+     *             when the AOF rewrite completes. */
     for (int i = 1; i < c->argc; i++) {
         char *arg = objectGetVal(c->argv[i]);
         if (!strcasecmp(arg, "schedule")) {
@@ -4207,30 +4223,13 @@ void bgsaveCommand(client *c) {
                 addReplyError(c, "Background saving is currently not in progress or scheduled");
             }
             return;
-        } else if (!strcasecmp(arg, "fork")) {
-            chosen_save_type = RDB_BGSAVE_TYPE_FORK;
-        } else if (!strcasecmp(arg, "forkless")) {
-            if (!server.forkless_infrastructure_enabled) {
-                addReplyError(c, "BGSAVE FORKLESS requires starting the server with forkless-infrastructure-enabled enabled");
-                return;
-            }
-            chosen_save_type = RDB_BGSAVE_TYPE_FORKLESS;
         } else {
             addReplyErrorObject(c, shared.syntaxerr);
             return;
         }
     }
 
-    /* If user didn't explicitly specify save type, let the system choose */
-    if (chosen_save_type == RDB_BGSAVE_TYPE_NONE) {
-        chosen_save_type = (server.default_bgsave_method == RDB_BGSAVE_TYPE_FORKLESS && server.forkless_infrastructure_enabled && moduleAllModulesHandleForkless())
-                               ? RDB_BGSAVE_TYPE_FORKLESS
-                               : RDB_BGSAVE_TYPE_FORK;
-    } else if (chosen_save_type == RDB_BGSAVE_TYPE_FORKLESS && !moduleAllModulesHandleForkless()) {
-        addReplyError(c, "Can't use forkless save: one or more loaded modules have not declared "
-                         "VALKEYMODULE_OPTIONS_HANDLE_FORKLESS");
-        return;
-    }
+    int chosen_save_type = resolveBgsaveType();
 
     rdbSaveInfo rsi, *rsiptr;
     rsiptr = rdbPopulateSaveInfo(&rsi);

@@ -7342,7 +7342,7 @@ void closeChildUnusedResourceAfterFork(void) {
 /* purpose is one of CHILD_TYPE_ types */
 int serverFork(int purpose) {
     if (isMutuallyExclusiveChildType(purpose)) {
-        if (hasActiveChildProcess()) {
+        if (hasActiveSaveOrChild()) {
             errno = EALREADY;
             return -1;
         }

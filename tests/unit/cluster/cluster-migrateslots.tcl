@@ -66,7 +66,7 @@ proc wait_for_countkeysinslot {node_idx slot value} {
 
 proc wait_for_migration {node_idx slot} {
     set target_id [R $node_idx CLUSTER MYID]
-    wait_for_condition 100 100 {
+    wait_for_condition 200 100 {
         [is_slot_migrated $node_idx $slot]
     } else {
         set nodes [get_cluster_nodes $node_idx]

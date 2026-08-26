@@ -1,11 +1,11 @@
 {
-    "RPREFIXES": {
+    "RAXPREFIXES": {
         "summary": "Returns every stored radix path that prefixes a query.",
         "complexity": "O(L + O).",
         "group": "radix",
         "since": "9.2.0",
         "arity": -3,
-        "function": "rprefixesCommand",
+        "function": "raxprefixesCommand",
         "command_flags": ["READONLY"],
         "acl_categories": ["RADIX", "READ", "SLOW"],
         "key_specs": [{"flags": ["RO", "ACCESS"], "begin_search": {"index": {"pos": 1}}, "find_keys": {"range": {"lastkey": 0, "step": 1, "limit": 0}}}],

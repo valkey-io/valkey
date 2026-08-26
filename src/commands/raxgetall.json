@@ -1,11 +1,11 @@
 {
-    "RGETALL": {
+    "RAXGETALL": {
         "summary": "Returns all field-value pairs at an exact radix-tree path.",
         "complexity": "O(L + O).",
         "group": "radix",
         "since": "9.2.0",
         "arity": 3,
-        "function": "rgetallCommand",
+        "function": "raxgetallCommand",
         "command_flags": ["READONLY"],
         "acl_categories": ["RADIX", "READ", "SLOW"],
         "command_tips": ["NONDETERMINISTIC_OUTPUT_ORDER"],

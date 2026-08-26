@@ -1,0 +1,22 @@
+{
+    "RAXEXISTS": {
+        "summary": "Tests whether an exact logical path exists in a radix tree.",
+        "complexity": "O(L), where L is the path length.",
+        "group": "radix",
+        "since": "9.2.0",
+        "arity": 3,
+        "function": "raxexistsCommand",
+        "command_flags": ["READONLY", "FAST"],
+        "acl_categories": ["RADIX", "READ", "FAST"],
+        "key_specs": [{
+            "flags": ["RO", "ACCESS"],
+            "begin_search": {"index": {"pos": 1}},
+            "find_keys": {"range": {"lastkey": 0, "step": 1, "limit": 0}}
+        }],
+        "reply_schema": {"type": "integer"},
+        "arguments": [
+            {"name": "key", "type": "key", "key_spec_index": 0},
+            {"name": "path", "type": "string"}
+        ]
+    }
+}

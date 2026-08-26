@@ -156,7 +156,8 @@ struct ValkeyModule;
 #define CONFIG_BGSAVE_RETRY_DELAY 5              /* Wait a few secs before trying again. */
 #define CONFIG_DEFAULT_PID_FILE "/var/run/valkey.pid"
 #define CONFIG_DEFAULT_BINDADDR_COUNT 2
-#define CONFIG_DEFAULT_BINDADDR {"*", "-::*"}
+#define CONFIG_DEFAULT_BINDADDR \
+    {"*", "-::*"}
 #define CONFIG_BINDADDR_MAX 16
 #define CONFIG_MIN_RESERVED_FDS 32
 #define CONFIG_DEFAULT_PROC_TITLE_TEMPLATE "{title} {listen-addr} {server-mode}"
@@ -1639,7 +1640,8 @@ typedef struct rdbSaveInfo {
     long long repl_offset;                /* Replication offset. */
 } rdbSaveInfo;
 
-#define RDB_SAVE_INFO_INIT {-1, 0, "0000000000000000000000000000000000000000", -1}
+#define RDB_SAVE_INFO_INIT \
+    {-1, 0, "0000000000000000000000000000000000000000", -1}
 
 struct malloc_stats {
     size_t zmalloc_used;
@@ -3650,16 +3652,18 @@ robj *radixTypeDup(robj *o);
 size_t radixTypeMemUsage(robj *o, size_t sample_size);
 void radixTypeDigest(unsigned char *digest, robj *o);
 int rewriteRadixObject(rio *r, robj *key, robj *o);
-void rsetCommand(client *c);
-void rgetCommand(client *c);
-void rmgetCommand(client *c);
-void rgetallCommand(client *c);
-void rdelCommand(client *c);
-void rlongestCommand(client *c);
-void rprefixesCommand(client *c);
-void rdelprefixCommand(client *c);
-void rscanCommand(client *c);
-void rcardCommand(client *c);
+void raxsetCommand(client *c);
+void raxmsetCommand(client *c);
+void raxgetCommand(client *c);
+void raxmgetCommand(client *c);
+void raxgetallCommand(client *c);
+void raxexistsCommand(client *c);
+void raxdelCommand(client *c);
+void raxlongestCommand(client *c);
+void raxprefixesCommand(client *c);
+void raxdelprefixCommand(client *c);
+void raxscanCommand(client *c);
+void raxcardCommand(client *c);
 
 /* Pub / Sub */
 int pubsubUnsubscribeAllChannels(client *c, int notify);

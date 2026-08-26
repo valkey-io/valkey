@@ -93,7 +93,7 @@ start_server {tags {"repl needs:other-server external:skip"}} {
             skip "Replica $old_replica_version does support Radix"
         }
         r flushall
-        r rset radix path field value
+        r raxset radix path fields 1 field value
         start_server {start-other-server 1 config "minimal.conf"} {
             set old_replica [srv 0 client]
             start_server {} {
@@ -102,7 +102,7 @@ start_server {tags {"repl needs:other-server external:skip"}} {
                 $new_replica replicaof $primary_host $primary_port
                 wait_for_sync $new_replica 500 100
                 wait_for_log_messages -2 [list {*Can't store key 'radix'*}] 0 50 100
-                assert_equal value [$new_replica rget radix path field]
+                assert_equal value [$new_replica raxget radix path field]
                 assert_match {*master_link_status:up*} [$new_replica info replication]
                 assert_match {*master_link_status:down*} [$old_replica info replication]
             }
@@ -114,12 +114,12 @@ start_server {tags {"repl needs:other-server external:skip"}} {
             skip "Replica $old_replica_version doesn't support Radix"
         }
         r flushall
-        r rset radix path field value
+        r raxset radix path fields 1 field value
         start_server {start-other-server 1 config "minimal.conf"} {
             set old_replica [srv 0 client]
             $old_replica replicaof $primary_host $primary_port
             wait_for_sync $old_replica 500 100
-            assert_equal value [$old_replica rget radix path field]
+            assert_equal value [$old_replica raxget radix path field]
         }
     }
 }

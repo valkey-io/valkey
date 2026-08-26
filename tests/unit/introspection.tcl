@@ -2087,12 +2087,13 @@ test {CONFIG hash-seed is immutable and settable at startup} {
 } {} {external:skip}
 
 start_server {overrides {forkless-infrastructure-enabled yes} tags {"introspection" "external:skip"}} {
-    foreach bgsave_type {"" "fork" "forkless"} {
+    foreach bgsave_type {"fork" "forkless"} {
         test "CLIENT KILL close the client connection during bgsave - $bgsave_type" {
             r flushall
             r set k v
             r config set rdb-key-save-delay 10000000
-            r bgsave {*}$bgsave_type
+            r config set default-bgsave-method $bgsave_type
+            r bgsave
             wait_for_condition 1000 10 {
                 [s rdb_bgsave_in_progress] eq 1
             } else {

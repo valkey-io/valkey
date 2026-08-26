@@ -754,12 +754,13 @@ close $tempFileId
 file delete $tempFileName
 
 start_server {overrides {forkless-infrastructure-enabled yes} tags {"other" "external:skip"}} {
-    foreach bgsave_type {"" "fork" "forkless"} {
+    foreach bgsave_type {"fork" "forkless"} {
         test "BGSAVE $bgsave_type" {
             r flushall
             r save
             r set x 10
-            r bgsave {*}$bgsave_type
+            r config set default-bgsave-method $bgsave_type
+            r bgsave
             waitForBgsave r
 
             set expected_type [expr {$bgsave_type eq "forkless" ? "forkless" : "fork"}]
@@ -773,7 +774,8 @@ start_server {overrides {forkless-infrastructure-enabled yes} tags {"other" "ext
             r flushdb
             r set x 10
             r expire x 1000
-            r bgsave {*}$bgsave_type
+            r config set default-bgsave-method $bgsave_type
+            r bgsave
             waitForBgsave r
             r debug reload
             set ttl [r ttl x]

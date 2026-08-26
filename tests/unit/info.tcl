@@ -597,7 +597,7 @@ start_server {tags {"info" "external:skip"} overrides {save "" forkless-infrastr
         
         # Start slow forkless save
         r config set rdb-key-save-delay 100000
-        r config set default-bgsave-method forkless
+        r config set bgsave-default-method forkless
         r bgsave
         
         wait_for_condition 50 100 {
@@ -635,7 +635,7 @@ start_server {tags {"info" "external:skip"} overrides {save "" forkless-infrastr
         
         # Start slow forkless save
         r config set rdb-key-save-delay 50000
-        r config set default-bgsave-method forkless
+        r config set bgsave-default-method forkless
         r bgsave
         
         wait_for_condition 50 100 {
@@ -677,7 +677,7 @@ start_server {tags {"info" "external:skip"} overrides {save "" forkless-infrastr
         
         # Start very slow forkless save - 2 seconds per key
         r config set rdb-key-save-delay 2000000
-        r config set default-bgsave-method forkless
+        r config set bgsave-default-method forkless
         r bgsave
         
         wait_for_condition 50 100 {
@@ -711,7 +711,7 @@ start_server {tags {"info" "external:skip"} overrides {save "" forkless-infrastr
         # Set 1 second delay per key
         r config set rdb-key-save-delay 1000000
         waitForBgsave r
-        r config set default-bgsave-method forkless
+        r config set bgsave-default-method forkless
         r bgsave
         
         wait_for_condition 50 100 {
@@ -746,7 +746,7 @@ start_server {tags {"info" "external:skip"} overrides {save "" forkless-infrastr
         
         # Start and complete a fast forkless save
         r config set rdb-key-save-delay 0
-        r config set default-bgsave-method forkless
+        r config set bgsave-default-method forkless
         r bgsave
         waitForBgsave r
         
@@ -771,7 +771,7 @@ start_server {tags {"info" "external:skip"} overrides {save "" forkless-infrastr
         
         # Start slow forkless save
         r config set rdb-key-save-delay 100000
-        r config set default-bgsave-method forkless
+        r config set bgsave-default-method forkless
         r bgsave
         
         wait_for_condition 50 100 {

@@ -4223,12 +4223,12 @@ void bgsaveCommand(client *c) {
 
     /* If user didn't explicitly specify save type, let the system choose */
     if (chosen_save_type == RDB_BGSAVE_TYPE_NONE) {
-        chosen_save_type = (server.default_bgsave_method == RDB_BGSAVE_TYPE_FORKLESS && server.forkless_infrastructure_enabled && moduleAllDatatypesHandleForklessSave())
+        chosen_save_type = (server.default_bgsave_method == RDB_BGSAVE_TYPE_FORKLESS && server.forkless_infrastructure_enabled && moduleAllModulesHandleForkless())
                                ? RDB_BGSAVE_TYPE_FORKLESS
                                : RDB_BGSAVE_TYPE_FORK;
-    } else if (chosen_save_type == RDB_BGSAVE_TYPE_FORKLESS && !moduleAllDatatypesHandleForklessSave()) {
+    } else if (chosen_save_type == RDB_BGSAVE_TYPE_FORKLESS && !moduleAllModulesHandleForkless()) {
         addReplyError(c, "Can't use forkless save: one or more loaded modules have not declared "
-                         "VALKEYMODULE_OPTIONS_HANDLE_FORKLESS_SAVE");
+                         "VALKEYMODULE_OPTIONS_HANDLE_FORKLESS");
         return;
     }
 

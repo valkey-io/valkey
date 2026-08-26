@@ -7698,17 +7698,20 @@ int moduleVerifyAllAllowAtomicSlotMigrationOrReply(client *c) {
     return C_OK;
 }
 
-/* Returns 0 if any module with registered data types did not declare
- * VALKEYMODULE_OPTIONS_HANDLE_FORKLESS_SAVE, in which case forkless save should be
- * blocked because the module's RDB save callbacks may not be thread-safe. */
-int moduleAllDatatypesHandleForklessSave(void) {
+/* Returns 0 if any loaded module did not declare
+ * VALKEYMODULE_OPTIONS_HANDLE_FORKLESS, in which case forkless operations
+ * should be blocked. Every module must opt in: a module that accesses a key for
+ * write during a forkless operation must acknowledge the possible behavior
+ * change, and a module that registers a data type must also confirm its RDB save
+ * callback is thread-safe. */
+int moduleAllModulesHandleForkless(void) {
     listIter li;
     listNode *ln;
 
     listRewind(modules, &li);
     while ((ln = listNext(&li)) != NULL) {
         struct ValkeyModule *module = listNodeValue(ln);
-        if (listLength(module->types) && !(module->options & VALKEYMODULE_OPTIONS_HANDLE_FORKLESS_SAVE)) {
+        if (!(module->options & VALKEYMODULE_OPTIONS_HANDLE_FORKLESS)) {
             return 0;
         }
     }

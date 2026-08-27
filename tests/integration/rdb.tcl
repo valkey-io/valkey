@@ -293,8 +293,17 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
         test "bgsave $bgsave_type metrics are correct after failure" {
             set saves_before [s rdb_saves]
             populate 1000 "" 16
-            r config set rdb-key-save-delay 10000000
             r config set bgsave-default-method $bgsave_type
+            r config set rdb-key-save-delay 10000000
+            if {$bgsave_type eq "forkless"} {
+                # Inject a failure to make the save fail: a directory whose name
+                # collides with the RDB file makes the final rename fail. We
+                # can't just kill -9 like fork-based bgsave since there is no
+                # child process.
+                set rdb_path [file join [lindex [r config get dir] 1] [lindex [r config get dbfilename] 1]]
+                file delete -force $rdb_path
+                file mkdir $rdb_path
+            }
             r bgsave
             wait_for_condition 50 100 {
                 [s rdb_bgsave_in_progress] == 1
@@ -304,9 +313,8 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
             if {$bgsave_type eq "fork"} {
                 set pid [get_child_pid 0]
                 catch {exec kill -9 $pid}
-            } else {
-                r flushdb
             }
+            r config set rdb-key-save-delay 0
             waitForBgsave r
             assert {[s rdb_last_bgsave_time_sec] >= 0 && [s rdb_last_bgsave_time_sec] < 3600}
             assert_equal [s rdb_last_bgsave_status] "err"
@@ -316,6 +324,10 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
             assert {[s current_save_keys_processed] == 0}
             assert {[s current_save_keys_total] == 0}
             r config set rdb-key-save-delay 0
+            if {$bgsave_type eq "forkless"} {
+                # Remove the directory so later saves in this server can succeed.
+                file delete [file join [lindex [r config get dir] 1] [lindex [r config get dbfilename] 1]]
+            }
         }
     }
 
@@ -405,17 +417,17 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
 }
 
 start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
-    test "FLUSHDB during single-db forkless bgsave causes save to fail" {
+    test "FLUSHDB during single-db forkless bgsave aborts the save without failing it" {
         
         # Populate database with complex dataset
-        createComplexDataset r 100
+        createComplexDataset r 1000
         
         # Get initial key count
         set initial_keys [r dbsize]
         assert {$initial_keys > 0}
         
         # Start forkless save with very slow save (high delay per key)
-        r config set rdb-key-save-delay 10000
+        r config set rdb-key-save-delay 100000
         r config set bgsave-default-method forkless
         r bgsave
         wait_for_condition 50 100 {
@@ -424,7 +436,6 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
             fail "forkless bgsave did not start"
         }
         
-        # FLUSHDB should cancel the save
         r flushdb
         assert_equal [r dbsize] 0
         
@@ -437,27 +448,29 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
             fail "forkless bgsave did not abort"
         }
         
-        # Verify save failed
-        assert_equal [s rdb_last_bgsave_status] err
-        assert_equal [s rdb_last_bgsave_type] forkless
+        # A flush aborts the save the way FLUSHALL aborts a fork save: it is not
+        # a failure, so writes stay allowed.
+        assert {[s rdb_last_bgsave_status] ne "err"}
+        r set k v
+        assert_equal [r get k] v
     } {} {needs:debug}
 }
 
 start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
-    test "FLUSHDB during multi-db forkless bgsave causes save to fail" {
+    test "FLUSHDB during multi-db forkless bgsave aborts the save without failing it" {
         
         # Populate multiple databases
-        for {set i 0} {$i < 100} {incr i} {
+        for {set i 0} {$i < 1000} {incr i} {
             r set key$i val$i
         }
         r select 1
-        for {set i 0} {$i < 100} {incr i} {
+        for {set i 0} {$i < 1000} {incr i} {
             r set key$i val$i
         }
         r select 0
         
         # Start slow forkless save
-        r config set rdb-key-save-delay 10000
+        r config set rdb-key-save-delay 100000
         r config set bgsave-default-method forkless
         r bgsave
         wait_for_condition 50 100 {
@@ -483,8 +496,10 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
             fail "forkless bgsave did not abort"
         }
         
-        # Forkless save should have failed
-        assert_equal [s rdb_last_bgsave_status] err
+        # A flush aborts the save; it is not a failure, so writes stay allowed.
+        assert {[s rdb_last_bgsave_status] ne "err"}
+        r set k v
+        assert_equal [r get k] v
     } {} {needs:debug}
 }
 
@@ -1581,15 +1596,26 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
             populate 1000
             r set x x
             r config set bgsave-default-method $bgsave_type
+            if {$bgsave_type eq "forkless"} {
+                # Inject a failure to make the save fail: a directory whose name
+                # collides with the RDB file makes the final rename fail. We
+                # can't just kill -9 like fork-based bgsave since there is no
+                # child process.
+                set rdb_path [file join [lindex [r config get dir] 1] [lindex [r config get dbfilename] 1]]
+                file delete -force $rdb_path
+                file mkdir $rdb_path
+            }
             r bgsave
-            
+            wait_for_condition 50 100 {
+                [s rdb_bgsave_in_progress] == 1
+            } else {
+                fail "$bgsave_type bgsave didn't start"
+            }
             if {$bgsave_type ne "forkless"} {
                 set pid1 [get_child_pid 0]
                 catch {exec kill -9 $pid1}
-            } else {
-                # For forkless save, cancel it to simulate failure
-                r bgsave cancel
             }
+            r config set rdb-key-save-delay 0
             waitForBgsave r
 
             # make sure a read command succeeds
@@ -1619,6 +1645,10 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
             ]
 
             r config set rdb-key-save-delay 0
+            if {$bgsave_type eq "forkless"} {
+                # Remove the blocking directory so the recovery save can succeed.
+                file delete [file join [lindex [r config get dir] 1] [lindex [r config get dbfilename] 1]]
+            }
             r config set bgsave-default-method $bgsave_type
             r bgsave
             waitForBgsave r

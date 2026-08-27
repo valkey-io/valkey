@@ -116,9 +116,12 @@ static void *forklessSaveProcessor(void *arg) {
         }
     }
 
-    if (err != C_OK && bgIteratorIsTerminating(saveInfo->iterator)) {
-        /* We recognized termination before receiving the TERMINATED event */
+    if (err != C_OK && bgIteratorIsTerminating(saveInfo->iterator) && !rioGetWriteError(&saveInfo->save_rio)) {
+        /* The write returned an error because the abort check stopped it, not
+         * from a real I/O failure (no RIO write error is set). Treat it as a
+         * cancel. */
         terminated = true;
+        err = C_OK;
     }
 
     char *message = "";
@@ -135,17 +138,25 @@ static void *forklessSaveProcessor(void *arg) {
 }
 
 static void cleanupSaveInfoAndEmitEndMetrics(forklessSaveInfo *saveInfo) {
-    if (saveInfo->terminated && saveInfo->err_code == C_OK) saveInfo->err_code = C_ERR;
-    rdbRecordEndMetrics(RDB_BGSAVE_TYPE_FORKLESS, saveInfo->err_code, time(NULL));
+    bool cancelled = saveInfo->terminated && saveInfo->err_code == C_OK;
+    bool success = !saveInfo->terminated && saveInfo->err_code == C_OK;
+
+    /* A cancel must not count as a failed save, so skip the metrics that set
+     * lastbgsave_status (like the fork child's SIGUSR1 whitelist). */
+    if (!cancelled) rdbRecordEndMetrics(RDB_BGSAVE_TYPE_FORKLESS, saveInfo->err_code, time(NULL));
+    /* startSaving() fired the persistence start event in this process, so a
+     * terminal event must be emitted even on cancel to balance it. */
+    stopSaving(success);
+    /* Finalize the save state in any case. */
     rdbClearSaveState(time(NULL));
-    if (saveInfo->err_code == C_OK) {
+
+    if (cancelled) {
+        serverLog(LL_WARNING, "forkless-save: forkless save cancelled. %lld seconds.", (long long)server.rdb_save_time_last);
+    } else if (success) {
         serverLog(LL_NOTICE, "forkless-save: forkless save complete. %lld seconds.", (long long)server.rdb_save_time_last);
-    } else if (saveInfo->terminated) {
-        serverLog(LL_WARNING, "forkless-save: forkless save terminated. %lld seconds.", (long long)server.rdb_save_time_last);
     } else {
         serverLog(LL_WARNING, "forkless-save: forkless save failed. %lld seconds.", (long long)server.rdb_save_time_last);
     }
-    stopSaving(saveInfo->err_code == C_OK);
     currentForklessSave = NULL;
     atomic_store_explicit(&server.stat_current_save_keys_processed, 0, memory_order_relaxed);
     atomic_store_explicit(&server.stat_current_save_keys_total, 0, memory_order_relaxed);

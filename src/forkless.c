@@ -194,7 +194,7 @@ static void forklessSaveCloseSnapshotFile(void *args[]) {
     }
 
     if (saveInfo->terminated || saveInfo->err_code != C_OK) {
-        rdbRemoveTempFile(getpid(), 0);
+        bg_unlink(saveInfo->temp_file);
     }
     sdsfree(saveInfo->temp_file);
     sdsfree(saveInfo->final_file);
@@ -297,8 +297,11 @@ int forklessSaveToDisk(const char *filename) {
 
     server.stat_rdb_saves++;
 
+    /* Use a forkless-specific name with a unique counter so the temp file can't
+     * collide with a fork-based rdbSave() (same process) or another forkless
+     * save. */
     char tmpfile[256];
-    snprintf(tmpfile, sizeof(tmpfile), "temp-%d.rdb", (int)getpid());
+    snprintf(tmpfile, sizeof(tmpfile), "temp-forkless-%lld.rdb", (long long)server.stat_rdb_saves);
 
     FILE *file = fopen(tmpfile, "wb");
     if (file == NULL) {

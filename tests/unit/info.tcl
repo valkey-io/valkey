@@ -579,7 +579,7 @@ start_server {tags {"info" "external:skip"} overrides {save "" forkless-infrastr
         set info [r info persistence]
         
         # When no forkless save is running, time metrics should be -1
-        assert_match "*forkless_current_item_millis:-1*" $info
+        assert_match "*forkless_current_item_ms:-1*" $info
         assert_match "*forkless_estimated_seconds_remaining:-1*" $info
         
         # Debug metrics should be 0
@@ -597,7 +597,7 @@ start_server {tags {"info" "external:skip"} overrides {save "" forkless-infrastr
         
         # Start slow forkless save
         r config set rdb-key-save-delay 100000
-        r config set default-bgsave-method forkless
+        r config set bgsave-default-method forkless
         r bgsave
         
         wait_for_condition 50 100 {
@@ -609,7 +609,7 @@ start_server {tags {"info" "external:skip"} overrides {save "" forkless-infrastr
         set info [r info persistence]
         
         # Verify time metrics are present in persistence section
-        assert_match "*forkless_current_item_millis:*" $info
+        assert_match "*forkless_current_item_ms:*" $info
         assert_match "*forkless_estimated_seconds_remaining:*" $info
         
         # Verify queue metrics are present in debug section
@@ -623,8 +623,8 @@ start_server {tags {"info" "external:skip"} overrides {save "" forkless-infrastr
         set target [getInfoProperty $dbg forkless_queue_length_target]
         assert {$target > 0}
         
-        r config set rdb-key-save-delay 0
         r bgsave cancel
+        r config set rdb-key-save-delay 0
         waitForBgsave r
     }
 
@@ -635,7 +635,7 @@ start_server {tags {"info" "external:skip"} overrides {save "" forkless-infrastr
         
         # Start slow forkless save
         r config set rdb-key-save-delay 50000
-        r config set default-bgsave-method forkless
+        r config set bgsave-default-method forkless
         r bgsave
         
         wait_for_condition 50 100 {
@@ -665,19 +665,19 @@ start_server {tags {"info" "external:skip"} overrides {save "" forkless-infrastr
         # At least one should have increased
         assert {$queued2 > $queued1 || $processed2 > $processed1}
         
-        r config set rdb-key-save-delay 0
         r bgsave cancel
+        r config set rdb-key-save-delay 0
         waitForBgsave r
     }
 
-    test {INFO forkless save current_item_millis is counted} {
+    test {INFO forkless save current_item_ms is counted} {
         r config set save ""
         r flushall
         r debug populate 10
         
         # Start very slow forkless save - 2 seconds per key
         r config set rdb-key-save-delay 2000000
-        r config set default-bgsave-method forkless
+        r config set bgsave-default-method forkless
         r bgsave
         
         wait_for_condition 50 100 {
@@ -688,18 +688,18 @@ start_server {tags {"info" "external:skip"} overrides {save "" forkless-infrastr
         
         # Wait until the item has been processing for at least 1 second
         wait_for_condition 50 100 {
-            [s forkless_current_item_millis] > 1000
+            [s forkless_current_item_ms] > 1000
         } else {
-            fail "forkless_current_item_millis never exceeded 1000"
+            fail "forkless_current_item_ms never exceeded 1000"
         }
         
-        set item_time [s forkless_current_item_millis]
+        set item_time [s forkless_current_item_ms]
         
         # Should be processing an item for ~1 second (1000+ ms)
         assert {$item_time > 1000}
         
-        r config set rdb-key-save-delay 0
         r bgsave cancel
+        r config set rdb-key-save-delay 0
         waitForBgsave r
     }
 
@@ -711,7 +711,7 @@ start_server {tags {"info" "external:skip"} overrides {save "" forkless-infrastr
         # Set 1 second delay per key
         r config set rdb-key-save-delay 1000000
         waitForBgsave r
-        r config set default-bgsave-method forkless
+        r config set bgsave-default-method forkless
         r bgsave
         
         wait_for_condition 50 100 {
@@ -734,8 +734,8 @@ start_server {tags {"info" "external:skip"} overrides {save "" forkless-infrastr
         # in the tens of seconds range. Use a wide band to avoid timing flakes.
         assert {$estimated > 0 && $estimated < 300}
         
-        r config set rdb-key-save-delay 0
         r bgsave cancel
+        r config set rdb-key-save-delay 0
         waitForBgsave r
     }
 
@@ -746,14 +746,14 @@ start_server {tags {"info" "external:skip"} overrides {save "" forkless-infrastr
         
         # Start and complete a fast forkless save
         r config set rdb-key-save-delay 0
-        r config set default-bgsave-method forkless
+        r config set bgsave-default-method forkless
         r bgsave
         waitForBgsave r
         
         set info [r info persistence]
         
         # After save completes, time metrics should be -1
-        assert_match "*forkless_current_item_millis:-1*" $info
+        assert_match "*forkless_current_item_ms:-1*" $info
         assert_match "*forkless_estimated_seconds_remaining:-1*" $info
         
         # Debug metrics should be 0
@@ -771,7 +771,7 @@ start_server {tags {"info" "external:skip"} overrides {save "" forkless-infrastr
         
         # Start slow forkless save
         r config set rdb-key-save-delay 100000
-        r config set default-bgsave-method forkless
+        r config set bgsave-default-method forkless
         r bgsave
         
         wait_for_condition 50 100 {
@@ -788,8 +788,8 @@ start_server {tags {"info" "external:skip"} overrides {save "" forkless-infrastr
             fail "rdb_current_bgsave_time_sec did not advance during forkless save"
         }
 
-        r config set rdb-key-save-delay 0
         r bgsave cancel
+        r config set rdb-key-save-delay 0
         waitForBgsave r
     }
 }

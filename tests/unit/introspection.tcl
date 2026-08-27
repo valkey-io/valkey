@@ -2092,7 +2092,7 @@ start_server {overrides {forkless-infrastructure-enabled yes} tags {"introspecti
             r flushall
             r set k v
             r config set rdb-key-save-delay 10000000
-            r config set default-bgsave-method $bgsave_type
+            r config set bgsave-default-method $bgsave_type
             r bgsave
             wait_for_condition 1000 10 {
                 [s rdb_bgsave_in_progress] eq 1

@@ -759,7 +759,7 @@ start_server {overrides {forkless-infrastructure-enabled yes} tags {"other" "ext
             r flushall
             r save
             r set x 10
-            r config set default-bgsave-method $bgsave_type
+            r config set bgsave-default-method $bgsave_type
             r bgsave
             waitForBgsave r
 
@@ -774,7 +774,7 @@ start_server {overrides {forkless-infrastructure-enabled yes} tags {"other" "ext
             r flushdb
             r set x 10
             r expire x 1000
-            r config set default-bgsave-method $bgsave_type
+            r config set bgsave-default-method $bgsave_type
             r bgsave
             waitForBgsave r
             r debug reload

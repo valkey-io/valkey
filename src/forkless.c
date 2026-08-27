@@ -205,7 +205,7 @@ static void forklessSaveCloseSnapshotFile(void *args[]) {
     }
 
     if (saveInfo->terminated || saveInfo->err_code != C_OK) {
-        rdbRemoveTempFile(getpid(), 0);
+        bg_unlink(saveInfo->temp_file);
     }
     sdsfree(saveInfo->temp_file);
     sdsfree(saveInfo->final_file);
@@ -308,8 +308,11 @@ int forklessSaveToDisk(const char *filename) {
 
     server.stat_rdb_saves++;
 
+    /* Use a forkless-specific name with a unique counter so the temp file can't
+     * collide with a fork-based rdbSave() (same process) or another forkless
+     * save. */
     char tmpfile[256];
-    snprintf(tmpfile, sizeof(tmpfile), "temp-%d.rdb", (int)getpid());
+    snprintf(tmpfile, sizeof(tmpfile), "temp-forkless-%d-%lld.rdb", (int)getpid(), (long long)server.stat_rdb_saves);
 
     FILE *file = fopen(tmpfile, "wb");
     if (file == NULL) {
@@ -386,14 +389,14 @@ int isForklessSaveInProgress(void) {
 /* Appends forkless save INFO metrics to the provided sds string. */
 sds forkless_catInfo(sds info) {
     long long estimated_seconds_remaining = -1;
-    long long current_item_millis = -1;
+    long long current_item_ms = -1;
 
     if (onValkeyMainThread()) {
         bgIterator *iter = bgIteratorFind(FORKLESS_SAVE_FILE_ITER_NAME);
         if (iter != NULL) {
             bgIteratorStatus status = {0};
             bgIteratorGetStatus(iter, &status);
-            current_item_millis = status.current_item_ms;
+            current_item_ms = status.current_item_ms;
 
             if (status.dbentries_processed > 0) {
                 long long total_keys =
@@ -408,9 +411,9 @@ sds forkless_catInfo(sds info) {
     }
 
     return sdscatprintf(info,
-                        "forkless_current_item_millis:%lld\r\n"
+                        "forkless_current_item_ms:%lld\r\n"
                         "forkless_estimated_seconds_remaining:%lld\r\n",
-                        current_item_millis,
+                        current_item_ms,
                         estimated_seconds_remaining);
 }
 

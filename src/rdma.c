@@ -1775,22 +1775,20 @@ static int rdmaHasPendingData(void) {
 }
 
 static int rdmaProcessPendingData(void) {
-    listIter li;
     listNode *ln;
     rdma_connection *rdma_conn;
     connection *conn;
     int processed = 0;
 
-    listRewind(pending_list, &li);
-    while ((ln = listNext(&li))) {
+    /* handle one head node at a time, nodes may be freed by handlers */
+    unsigned long remaining = listLength(pending_list);
+    while (remaining-- > 0 && (ln = listFirst(pending_list)) != NULL) {
         rdma_conn = listNodeValue(ln);
         conn = &rdma_conn->c;
 
         /* a connection can be disconnected by remote peer, CM event mark state as CONN_STATE_CLOSED, kick connection
          * read/write handler to close connection */
         if (conn->state == CONN_STATE_ERROR || conn->state == CONN_STATE_CLOSED) {
-            /* Unlink before callHandler: read_handler may schedule close and
-             * free the connection when refs drop to 0 */
             listDelNode(pending_list, ln);
             rdma_conn->pending_list_node = NULL;
 
@@ -1804,6 +1802,10 @@ static int rdmaProcessPendingData(void) {
             ++processed;
             continue;
         }
+
+        /* rotate to tail, the node can be deleted by the handler below */
+        listUnlinkNode(pending_list, ln);
+        listLinkNodeTail(pending_list, ln);
 
         connRdmaEventHandler(NULL, -1, rdma_conn, 0);
         ++processed;

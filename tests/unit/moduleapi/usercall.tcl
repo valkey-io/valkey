@@ -146,6 +146,38 @@ start_server {tags {"modules usercall network"}} {
         }
     }
 
+    # The commandlog attributes a command to the user it ran as. When a script
+    # reaches a module command that selects its own user (SetContextUser plus the
+    # 'C' flag), the inner call must be logged as that user, not as the user of
+    # the connection that started the script.
+    foreach cmd {call_with_user_flag call_argv_with_user_flag} {
+        test "test module commandlog reports the executing user with $cmd" {
+            set sha [r script load "#!lua
+server.call('usercall.$cmd','C','get','x')
+return 1"]
+
+            assert_equal [r usercall.reset_user] OK
+            assert_equal [r usercall.add_to_acl "~* &* +@all"] OK
+
+            r config set commandlog-execution-slower-than 0
+            r commandlog reset slow
+            assert_equal [r evalsha $sha 0] 1
+            r config set commandlog-execution-slower-than -1
+
+            # Newest first: the script, the module command, then the GET the module
+            # ran on behalf of its own user.
+            set entries [r commandlog get -1 slow]
+            assert_equal {evalsha} [lindex [lindex $entries 0] 3 0]
+            assert_equal "usercall.$cmd C get x" [lindex [lindex $entries 1] 3]
+            assert_equal {get x} [lindex [lindex $entries 2] 3]
+
+            assert_equal {module_user} [lindex [lindex $entries 2] 6]
+            # The script and the module command itself ran as the connection's user.
+            assert_equal {default} [lindex [lindex $entries 0] 6]
+            assert_equal {default} [lindex [lindex $entries 1] 6]
+        }
+    }
+
     start_server {tags {"wait aof external:skip"}} {
         set slave [srv 0 client]
         set slave_host [srv 0 host]

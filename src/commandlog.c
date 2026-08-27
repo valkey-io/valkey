@@ -74,7 +74,11 @@ static commandlogEntry *commandlogCreateEntry(client *c, robj **argv, int argc, 
     client *caller = scriptIsRunning() ? scriptGetCaller() : c;
     ce->peerid = sdsnew(getClientPeerId(caller));
     ce->cname = caller->name ? sdsnew(objectGetVal(caller->name)) : sdsempty();
-    ce->username = caller->user ? sdsdup(caller->user->name) : sdsnew("(superuser)");
+    /* The user comes from the executing client, not the caller: a module call may
+     * select its own user (VM_SetContextUser plus the 'C' flag), and that is the
+     * user the command was authorized as. A NULL user means an unrestricted
+     * client, rendered the way CLIENT INFO does. */
+    ce->username = c->user ? sdsdup(c->user->name) : sdsnew("(superuser)");
     return ce;
 }
 

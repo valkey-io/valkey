@@ -416,4 +416,17 @@ start_cluster 2 0 {overrides {cluster-node-timeout 1000}} {
     }
 }
 
+set testmodule [file normalize tests/modules/blockonkeys.so]
+set modules [list loadmodule $testmodule]
+start_cluster 1 0 [list config_lines $modules] {
+    test "Module blocking on keys from different slots is rejected" {
+        set k1 "{a}declared"
+        set k2 "{b}blocked1"
+        set k3 "{c}blocked2"
+        assert_error "ERR *different slots*" {r blockonkeys.block_multi_slot $k1 $k2 $k3}
+        assert_equal [r ping] "PONG"
+        assert_equal [s blocked_clients] 0
+    }
+}
+
 } ;# end tag

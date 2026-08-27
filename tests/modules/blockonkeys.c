@@ -663,6 +663,57 @@ static int blockonkeys_signal_ready(ValkeyModuleCtx *ctx, ValkeyModuleString **a
     return ValkeyModule_ReplyWithSimpleString(ctx, "OK");
 }
 
+static int blockonkeys_reply(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    VALKEYMODULE_NOT_USED(argv);
+    VALKEYMODULE_NOT_USED(argc);
+    return ValkeyModule_ReplyWithSimpleString(ctx, "UNBLOCKED");
+}
+
+static int blockonkeys_timeout(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    VALKEYMODULE_NOT_USED(argv);
+    VALKEYMODULE_NOT_USED(argc);
+    return ValkeyModule_ReplyWithSimpleString(ctx, "TIMEOUT");
+}
+
+/* BLOCKONKEYS.BLOCK_AND_UNBLOCK key timeout
+ *
+ * Blocks the client on a single key, then immediately unblocks it through the
+ * handle returned by BlockClientOnKeys. This is used to exercise the error
+ * paths of moduleBlockClient() that give up *after* the blocked handle has
+ * already been allocated (e.g. called from Lua/MULTI, or a timeout value that
+ * would overflow). In those cases BlockClientOnKeys returns an already-aborted
+ * handle (bc->client == NULL) and replies to the client with an error, and the
+ * module is still expected to call UnblockClient on the handle so that it is
+ * released cleanly instead of being leaked. */
+static int blockonkeys_block_and_unblock(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    if (argc != 3) return ValkeyModule_WrongArity(ctx);
+
+    long long timeout;
+    if (ValkeyModule_StringToLongLong(argv[2], &timeout) != VALKEYMODULE_OK)
+        return ValkeyModule_ReplyWithError(ctx, "ERR invalid timeout");
+
+    ValkeyModuleBlockedClient *bc = ValkeyModule_BlockClientOnKeys(ctx, blockonkeys_reply, blockonkeys_timeout,
+                                                                   NULL, timeout, &argv[1], 1, NULL);
+    ValkeyModule_UnblockClient(bc, NULL);
+    return VALKEYMODULE_OK;
+}
+
+/* BLOCKONKEYS.BLOCK_MULTI_SLOT declared_key blocked_key [blocked_key ...]
+ *
+ * The command's key spec declares only `declared_key` (firstkey=1), so the
+ * server computes c->slot from it. The module then blocks on the supplied
+ * `blocked_key`s, which the caller provides in a DIFFERENT slot. */
+static int blockonkeys_block_multi_slot(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    if (argc < 3) return ValkeyModule_WrongArity(ctx);
+
+    /* Block on every key from argv[2] onward. The command key spec only
+     * advertised argv[1], so c->slot is unrelated to these blocked keys. */
+    ValkeyModuleBlockedClient *bc = ValkeyModule_BlockClientOnKeys(ctx, blockonkeys_reply, blockonkeys_timeout,
+                                                                   NULL, 10000, &argv[2], argc - 2, NULL);
+    ValkeyModule_UnblockClient(bc, NULL);
+    return VALKEYMODULE_OK;
+}
+
 int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     VALKEYMODULE_NOT_USED(argv);
     VALKEYMODULE_NOT_USED(argc);
@@ -731,6 +782,14 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
 
     if (ValkeyModule_CreateCommand(ctx, "blockonkeys.signal_ready",
                                   blockonkeys_signal_ready, "write", 1, 1, 1) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+
+    if (ValkeyModule_CreateCommand(ctx, "blockonkeys.block_and_unblock",
+                                   blockonkeys_block_and_unblock, "write", 1, 1, 1) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+
+    if (ValkeyModule_CreateCommand(ctx, "blockonkeys.block_multi_slot",
+                                  blockonkeys_block_multi_slot, "write", 1, 1, 1) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
     return VALKEYMODULE_OK;

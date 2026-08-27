@@ -4291,7 +4291,6 @@ int processInputBuffer(client *c) {
             /* Parse error or partial command. */
             break;
         }
-        }
 
         if (c->argc == 0) {
             /* No command to process - continue parsing the query buf. */

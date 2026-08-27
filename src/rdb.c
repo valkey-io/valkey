@@ -1736,7 +1736,7 @@ int isSaveInProgress(void) {
  * module can handle a forkless save. Otherwise fall back to a fork-based save
  * and log why, so the fallback is not silent. */
 int resolveBgsaveType(void) {
-    if (server.default_bgsave_method != RDB_BGSAVE_TYPE_FORKLESS) return RDB_BGSAVE_TYPE_FORK;
+    if (server.bgsave_default_method != RDB_BGSAVE_TYPE_FORKLESS) return RDB_BGSAVE_TYPE_FORK;
 
     if (!server.forkless_infrastructure_enabled) {
         serverLog(LL_WARNING, "Falling back to fork-based save: forkless is configured but "

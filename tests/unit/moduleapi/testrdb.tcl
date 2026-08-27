@@ -311,7 +311,7 @@ start_server {tags {"modules"} overrides {forkless-infrastructure-enabled yes sa
 
         # Start slow forkless save
         r config set rdb-key-save-delay 200000
-        r config set default-bgsave-method forkless
+        r config set bgsave-default-method forkless
         r bgsave
 
         wait_for_condition 50 100 {

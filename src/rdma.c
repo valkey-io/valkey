@@ -740,7 +740,8 @@ static void connRdmaEventHandler(struct aeEventLoop *el, int fd, void *clientDat
         client *c = connGetPrivateData(conn);
         if (c && c->io_read_state == CLIENT_COMPLETED_IO) break;
 
-        if (conn->read_handler && (callHandler(conn, conn->read_handler) == C_ERR)) {
+        /* the connection may be freed inside the handler */
+        if (conn->read_handler && !callHandler(conn, conn->read_handler)) {
             return;
         }
     }
@@ -1250,6 +1251,12 @@ static void connRdmaClose(connection *conn) {
     rdma_connection *rdma_conn = (rdma_connection *)conn;
     struct rdma_cm_id *cm_id = rdma_conn->cm_id;
     RdmaContext *ctx;
+
+    /* unlink from pending_list before the connection gets freed */
+    if (rdma_conn->pending_list_node) {
+        listDelNode(pending_list, rdma_conn->pending_list_node);
+        rdma_conn->pending_list_node = NULL;
+    }
 
     if (conn->fd != -1) {
         aeDeleteFileEvent(server.el, conn->fd, AE_READABLE);

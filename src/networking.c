@@ -4269,8 +4269,6 @@ int processInputBuffer(client *c) {
         c->read_flags = isReplicatedClient(c) ? READ_FLAGS_REPLICATED : 0;
         c->read_flags |= authRequired(c) ? READ_FLAGS_AUTH_REQUIRED : 0;
 
-        /* A popped NEEDMORE is a queued partial; its completion bytes may already
-         * be in querybuf (read while blocked), so re-parse instead of waiting for I/O. */
         bool popped_from_queue;
         /* If commands are queued up, pop from the queue first */
         if (!consumeCommandQueue(c)) {
@@ -4285,9 +4283,14 @@ int processInputBuffer(client *c) {
         prefetchCommandQueueKeys(c);
 
         parseResult res = handleParseResults(c);
-        if (res != PARSE_OK) {
-            if (res == PARSE_ERR || !popped_from_queue) break;
+        if (res == PARSE_NEEDMORE && popped_from_queue) {
+            /* A queued partial; its completion bytes may already be in querybuf
+             * (read while blocked), so re-parse instead of waiting for I/O. */
             continue;
+        } else if (res != PARSE_OK) {
+            /* Parse error or partial command. */
+            break;
+        }
         }
 
         if (c->argc == 0) {

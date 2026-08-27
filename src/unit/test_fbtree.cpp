@@ -5525,7 +5525,7 @@ TEST_F(FbtreeTest, CompactLandsNearLimit) {
     /* Increasing limits on the same tree: compaction only ever reduces leaf
      * count, so each pass packs at least as tightly as the last. */
     const unsigned int limits[] = {(unsigned int)(cap * 0.60), (unsigned int)(cap * 0.75),
-                                    (unsigned int)(cap * 0.90)};
+                                   (unsigned int)(cap * 0.90)};
     double prev_lf = 0.0;
     for (unsigned int limit : limits) {
         unsigned long cursor = 0;

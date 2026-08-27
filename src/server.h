@@ -1986,7 +1986,7 @@ struct valkeyServer {
     /* fbtree ZSET background load-factor compaction. */
     int zset_compaction_enabled;                 /* master on/off switch */
     int zset_compaction_trigger_pct;             /* enqueue a set when its load factor < this % */
-    int zset_compaction_limit_pct;              /* compact leaves up to this % fill */
+    int zset_compaction_limit_pct;               /* compact leaves up to this % fill */
     int zset_compaction_min_length;              /* skip sets smaller than this many items */
     int zset_compaction_cycle_keys;              /* items processed per cron drain step */
     struct fifo *zset_compaction_queue;          /* pending (db,key) candidates */

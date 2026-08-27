@@ -2726,16 +2726,21 @@ int genericGetKeys(int storeKeyOfs,
     keys = getKeysPrepareResult(result, numkeys);
     result->numkeys = numkeys;
 
-    /* Add all key positions for argv[firstKeyOfs...n] to keys[] */
-    for (i = 0; i < num; i++) {
-        keys[i].pos = firstKeyOfs + (i * keyStep);
-        keys[i].flags = 0;
+    int keyIdx = 0;
+    /* If there's a destination key, put this first */
+    if (storeKeyOfs) {
+        keys[keyIdx].pos = storeKeyOfs;
+        keys[keyIdx].flags = 0;
+        keyIdx++;
     }
 
-    if (storeKeyOfs) {
-        keys[num].pos = storeKeyOfs;
-        keys[num].flags = 0;
+    /* Add all key positions for argv[firstKeyOfs...n] to keys[] */
+    for (i = 0; i < num; i++) {
+        keys[keyIdx].pos = firstKeyOfs + (i * keyStep);
+        keys[keyIdx].flags = 0;
+        keyIdx++;
     }
+
     return result->numkeys;
 }
 

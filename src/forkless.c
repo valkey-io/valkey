@@ -301,7 +301,7 @@ int forklessSaveToDisk(const char *filename) {
      * collide with a fork-based rdbSave() (same process) or another forkless
      * save. */
     char tmpfile[256];
-    snprintf(tmpfile, sizeof(tmpfile), "temp-forkless-%lld.rdb", (long long)server.stat_rdb_saves);
+    snprintf(tmpfile, sizeof(tmpfile), "temp-forkless-%d-%lld.rdb", (int)getpid(), (long long)server.stat_rdb_saves);
 
     FILE *file = fopen(tmpfile, "wb");
     if (file == NULL) {

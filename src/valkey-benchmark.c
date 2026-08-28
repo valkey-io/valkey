@@ -64,6 +64,7 @@
 #include "valkey-benchmark-dataset.h"
 
 #define UNUSED(V) ((void)V)
+#define DATA_SIZE_PHASES_MAX 32
 #define RANDPTR_INITIAL_SIZE 8
 #define DEFAULT_LATENCY_PRECISION 3
 #define MAX_LATENCY_PRECISION 4
@@ -172,6 +173,23 @@ static struct config {
     int template_argc;
     sds *template_argv;
     int has_field_placeholders;
+    /* Experimental: keep connections alive while cycling SET value sizes. */
+    struct {
+        int value_size;
+        int duration_sec;
+    } phases[DATA_SIZE_PHASES_MAX];
+    int num_phases;
+    int phase_index;
+    int phase_draining;
+    int phase_armed;
+    int phase_all_done;
+    long long phase_start;
+    long long workload_start;
+    _Atomic int phase_reconnects;
+    _Atomic int phase_errors;
+    char *phase_cmd;
+    int phase_cmd_len;
+    const char *key_tag;
 } config;
 
 /* Locations of the placeholders __rand_int__, __rand_1st__,
@@ -266,6 +284,8 @@ static void updateClusterSlotsConfiguration(void);
 static long long showThroughput(struct aeEventLoop *eventLoop, long long id, void *clientData);
 int runFuzzerClients(const char *host, int port, int max_commands, int parallel_clients, int cluster_mode, long long num_keys, cliSSLconfig *ssl_config, const char *log_level, int fuzz_flags);
 static int parseCommandTemplate(int argc, char **argv);
+static void genBenchmarkRandomData(char *data, int count);
+static int parseDataSizePhases(const char *spec);
 
 /* Dict callbacks */
 static uint64_t dictSdsHash(const void *key);
@@ -296,6 +316,9 @@ static bool isBenchmarkFinished(int request_count) {
     /* don't end in warmup period */
     int warmup_duration = atomic_load_explicit(&config.current_warmup_duration, memory_order_relaxed);
     if (warmup_duration > 0) return false;
+
+    /* Phase workload is finished only after the last phase drains. */
+    if (config.num_phases > 0) return config.phase_all_done != 0;
 
     if (config.duration > 0) {
         /* end after the specified duration */
@@ -567,6 +590,10 @@ static void freeClient(client c) {
     zfree(c);
     if (config.num_threads) pthread_mutex_lock(&(config.liveclients_mutex));
     config.liveclients--;
+    if (config.num_phases > 0 && !config.phase_all_done) {
+        atomic_fetch_add_explicit(&config.phase_reconnects, 1, memory_order_relaxed);
+        atomic_fetch_add_explicit(&config.phase_errors, 1, memory_order_relaxed);
+    }
     ln = listSearchKey(config.clients, c);
     assert(ln != NULL);
     listDelNode(config.clients, ln);
@@ -702,6 +729,15 @@ static void clientDone(client c) {
     if (isBenchmarkFinished(requests_finished)) {
         freeClient(c);
         if (!config.num_threads && config.el) aeStop(config.el);
+        return;
+    }
+    if (config.num_phases > 0 && (config.phase_draining ||
+                                  (config.phase_armed && (mstime() - config.phase_start) >=
+                                                             (config.phases[config.phase_index].duration_sec * 1000LL)))) {
+        /* Stay connected; do not issue another pipeline of the old size. */
+        aeEventLoop *el = CLIENT_GET_EVENTLOOP(c);
+        aeDeleteFileEvent(el, c->context->fd, AE_WRITABLE);
+        aeDeleteFileEvent(el, c->context->fd, AE_READABLE);
         return;
     }
     if (config.keepalive) {
@@ -904,6 +940,17 @@ static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
 
     /* Initialize request when nothing was written. */
     if (c->written == 0) {
+        if (config.num_phases > 0 && (config.phase_draining ||
+                                      (config.phase_armed && (mstime() - config.phase_start) >=
+                                                                 (config.phases[config.phase_index].duration_sec * 1000LL)))) {
+            /* resetClient already reserved the next pipeline in pending; it was
+             * not sent. Drop WRITABLE and clear pending so the phase can idle.
+             * Do not delete READABLE: in-flight replies use written > 0. */
+            aeDeleteFileEvent(el, c->context->fd, AE_WRITABLE);
+            c->pending = 0;
+            return;
+        }
+
         /* Enforce upper bound to number of requests. */
         int requests_issued = atomic_fetch_add_explicit(&config.requests_issued,
                                                         config.pipeline * c->seqlen,
@@ -1161,6 +1208,188 @@ static void createMissingClients(client c) {
     }
 }
 
+static int phaseDurationElapsed(void) {
+    if (!config.phase_armed || config.num_phases <= 0) return 0;
+    return (mstime() - config.phase_start) >= (config.phases[config.phase_index].duration_sec * 1000LL);
+}
+
+static int allPhaseClientsIdle(void) {
+    listIter li;
+    listNode *ln;
+    listRewind(config.clients, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        client c = ln->value;
+        if (c->pending > 0 || c->written > 0) return 0;
+    }
+    return 1;
+}
+
+static void rebuildClientCommandBuffer(client c, const char *cmd, int len) {
+    if (c->prefixlen > 0)
+        sdsrange(c->obuf, 0, c->prefixlen - 1);
+    else
+        sdssetlen(c->obuf, 0);
+    for (int j = 0; j < config.pipeline; j++) c->obuf = sdscatlen(c->obuf, cmd, len);
+    c->written = 0;
+    c->pending = config.pipeline * c->seqlen;
+    if (config.cluster_mode) scanClusterTags(c, c->obuf + c->prefixlen);
+}
+
+static void resetPhaseRdmaClientStats(void) {
+#ifdef USE_RDMA
+    listIter li;
+    listNode *ln;
+
+    if (config.ct != VALKEY_CONN_RDMA) return;
+    listRewind(config.clients, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        client c = ln->value;
+        valkeyResetRdmaStats(c->context);
+    }
+#endif
+}
+
+static void collectPhaseRdmaClientStats(uint64_t *tx_bytes, uint64_t *tx_wait_count, uint64_t *tx_wait_ns, uint64_t *rx_reannounce) {
+    *tx_bytes = 0;
+    *tx_wait_count = 0;
+    *tx_wait_ns = 0;
+    *rx_reannounce = 0;
+#ifdef USE_RDMA
+    listIter li;
+    listNode *ln;
+
+    if (config.ct != VALKEY_CONN_RDMA) return;
+    listRewind(config.clients, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        client c = ln->value;
+        valkeyRdmaStats stats;
+
+        if (valkeyGetRdmaStats(c->context, &stats) != VALKEY_OK) continue;
+        *tx_bytes += stats.tx_bytes;
+        *tx_wait_count += stats.tx_wait_for_rx_count;
+        *tx_wait_ns += stats.tx_wait_for_rx_ns;
+        *rx_reannounce += stats.rx_window_reannounce_count;
+    }
+#endif
+}
+
+static int buildPhaseSetCommand(int datasize, char **cmd_out) {
+    char *data = zmalloc((size_t)datasize + 1);
+    int len;
+    genBenchmarkRandomData(data, datasize);
+    data[datasize] = '\0';
+    len = valkeyFormatCommand(cmd_out, "SET key%s:__rand_int__ %s", config.key_tag ? config.key_tag : "", data);
+    zfree(data);
+    return len;
+}
+
+static void beginPhaseMeasurement(void) {
+    config.phase_start = mstime();
+    config.phase_armed = 1;
+    config.phase_draining = 0;
+    resetPhaseRdmaClientStats();
+    atomic_store_explicit(&config.requests_issued, 0, memory_order_relaxed);
+    atomic_store_explicit(&config.requests_finished, 0, memory_order_relaxed);
+    atomic_store_explicit(&config.previous_requests_finished, 0, memory_order_relaxed);
+    atomic_store_explicit(&config.phase_reconnects, 0, memory_order_relaxed);
+    atomic_store_explicit(&config.phase_errors, 0, memory_order_relaxed);
+    if (config.latency_histogram) hdr_reset(config.latency_histogram);
+    if (config.current_sec_latency_histogram) hdr_reset(config.current_sec_latency_histogram);
+    fprintf(stderr, "PHASE_BEGIN index=%d value_size=%d duration_sec=%d elapsed_ms=%lld\n", config.phase_index,
+            config.phases[config.phase_index].value_size, config.phases[config.phase_index].duration_sec,
+            config.phase_start - config.workload_start);
+    fflush(stderr);
+}
+
+static void reportPhaseEnd(void) {
+    long long now = mstime();
+    double measured_sec = (now - config.phase_start) / 1000.0;
+    int requests = atomic_load_explicit(&config.requests_finished, memory_order_relaxed);
+    int value_size = config.phases[config.phase_index].value_size;
+    double rps = (measured_sec > 0) ? (requests / measured_sec) : 0;
+    double payload_gbps = (measured_sec > 0) ? (requests * (double)value_size * 8.0 / measured_sec / 1e9) : 0;
+    double avg_us = config.latency_histogram ? hdr_mean(config.latency_histogram) : 0;
+    int64_t p50 = config.latency_histogram ? hdr_value_at_percentile(config.latency_histogram, 50.0) : 0;
+    int64_t p99 = config.latency_histogram ? hdr_value_at_percentile(config.latency_histogram, 99.0) : 0;
+    int reconnects = atomic_load_explicit(&config.phase_reconnects, memory_order_relaxed);
+    int errors = atomic_load_explicit(&config.phase_errors, memory_order_relaxed);
+    uint64_t tx_bytes, tx_wait_count, tx_wait_ns, rx_reannounce;
+    double gib, reannounces_per_gib, stall_ratio;
+
+    collectPhaseRdmaClientStats(&tx_bytes, &tx_wait_count, &tx_wait_ns, &rx_reannounce);
+    gib = tx_bytes / (double)(1ULL << 30);
+    reannounces_per_gib = (gib > 0.0) ? (rx_reannounce / gib) : 0.0;
+    stall_ratio = (measured_sec > 0.0 && config.numclients > 0)
+                      ? (tx_wait_ns / (measured_sec * 1e9 * config.numclients))
+                      : 0.0;
+
+    if (config.csv) {
+        printf("%d,%d,%d,%.6f,%d,%.3f,%.6f,%.3f,%.3f,%.3f,%d,%d,%llu,%llu,%llu,%llu,%.6f,%.6f\n",
+               config.phase_index, value_size, config.phases[config.phase_index].duration_sec, measured_sec, requests,
+               rps, payload_gbps, avg_us, (double)p50, (double)p99, reconnects, errors,
+               (unsigned long long)tx_bytes, (unsigned long long)tx_wait_count, (unsigned long long)tx_wait_ns,
+               (unsigned long long)rx_reannounce, reannounces_per_gib, stall_ratio);
+        fflush(stdout);
+    }
+    fprintf(stderr,
+            "PHASE_END index=%d value_size=%d measured_sec=%.6f requests=%d rps=%.3f payload_gbps=%.6f "
+            "avg_latency_us=%.3f p50_latency_us=%.3f p99_latency_us=%.3f reconnects=%d errors=%d "
+            "tx_bytes=%llu tx_wait_count=%llu tx_wait_ns=%llu rx_reannounce=%llu reannounces_per_gib=%.6f "
+            "stall_ratio=%.6f\n",
+            config.phase_index, value_size, measured_sec, requests, rps, payload_gbps, avg_us, (double)p50,
+            (double)p99, reconnects, errors, (unsigned long long)tx_bytes, (unsigned long long)tx_wait_count,
+            (unsigned long long)tx_wait_ns, (unsigned long long)rx_reannounce, reannounces_per_gib, stall_ratio);
+    fflush(stderr);
+}
+
+static void applyPhaseCommand(int datasize) {
+    char *cmd = NULL;
+    int len = buildPhaseSetCommand(datasize, &cmd);
+    listIter li;
+    listNode *ln;
+
+    initPlaceholders(cmd, len);
+    listRewind(config.clients, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        rebuildClientCommandBuffer(ln->value, cmd, len);
+    }
+    if (config.phase_cmd) free(config.phase_cmd);
+    config.phase_cmd = cmd;
+    config.phase_cmd_len = len;
+    config.datasize = datasize;
+}
+
+static void resumePhaseClients(void) {
+    listIter li;
+    listNode *ln;
+    listRewind(config.clients, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        resetClient(ln->value);
+    }
+}
+
+static int switchToNextPhase(void) {
+    int old_size = config.phases[config.phase_index].value_size;
+    int new_size;
+    long long elapsed;
+
+    reportPhaseEnd();
+    if (config.phase_index + 1 >= config.num_phases) {
+        config.phase_all_done = 1;
+        return 0;
+    }
+    config.phase_index++;
+    new_size = config.phases[config.phase_index].value_size;
+    elapsed = mstime() - config.workload_start;
+    fprintf(stderr, "PHASE_TRANSITION index=%d elapsed_ms=%lld old_value_size=%d new_value_size=%d\n",
+            config.phase_index, elapsed, old_size, new_size);
+    fflush(stderr);
+    applyPhaseCommand(new_size);
+    beginPhaseMeasurement();
+    resumePhaseClients();
+    return 1;
+}
+
 static void showRPSReport(void) {
     if (config.rps_histogram && config.rps_histogram->total_count > 0) {
         const float target_rps = (float)config.rps;
@@ -1337,14 +1566,43 @@ static void benchmarkSequence(const char *title, char *cmd, int len, int seqlen)
     c = createClient(cmd, len, seqlen, NULL, thread_id);
     createMissingClients(c);
 
+    if (config.num_phases > 0) {
+        config.phase_cmd = NULL;
+        config.phase_cmd_len = len;
+        config.workload_start = mstime();
+        config.phase_index = 0;
+        config.phase_draining = 0;
+        config.phase_armed = 0;
+        config.phase_all_done = 0;
+        fprintf(stderr, "PHASE_WORKLOAD pid=%d phases=%d clients=%d pipeline=%d keepalive=%d\n", getpid(),
+                config.num_phases, config.numclients, config.pipeline, config.keepalive);
+        fflush(stderr);
+        if (config.csv) {
+            printf("phase_index,value_size,duration,measured_sec,requests,rps,payload_gbps,avg_latency_us,"
+                   "p50_latency_us,p99_latency_us,reconnects,errors,tx_bytes,tx_wait_count,tx_wait_ns,"
+                   "rx_reannounce,reannounces_per_gib,stall_ratio\n");
+            fflush(stdout);
+        }
+    }
+
     config.start = mstime();
+    if (config.num_phases > 0) beginPhaseMeasurement();
     if (!config.num_threads) {
         aeMain(config.el);
     } else
         startBenchmarkThreads();
     config.totlatency = mstime() - config.start;
-    showReport();
+    if (config.num_phases == 0)
+        showReport();
+    else {
+        fprintf(stderr, "PHASE_WORKLOAD done phases=%d pid=%d\n", config.num_phases, getpid());
+        fflush(stderr);
+    }
     freeAllClients();
+    if (config.phase_cmd) {
+        free(config.phase_cmd);
+        config.phase_cmd = NULL;
+    }
     if (config.threads) freeBenchmarkThreads();
     if (config.current_sec_latency_histogram) hdr_close(config.current_sec_latency_histogram);
     if (config.latency_histogram) hdr_close(config.latency_histogram);
@@ -1709,6 +1967,40 @@ static void genBenchmarkRandomData(char *data, int count) {
     }
 }
 
+/* Parse "size:seconds[,size:seconds...]". Fills config.phases / num_phases. */
+static int parseDataSizePhases(const char *spec) {
+    const char *p = spec;
+    int n = 0;
+
+    if (!spec || !*spec) return -1;
+    while (*p) {
+        char *end = NULL;
+        long long size, dur;
+        const char *colon, *comma;
+
+        if (n >= DATA_SIZE_PHASES_MAX) return -1;
+        errno = 0;
+        size = strtoll(p, &end, 10);
+        if (errno || end == p || *end != ':' || size < 1 || size > 1024LL * 1024 * 1024) return -1;
+        colon = end;
+        errno = 0;
+        dur = strtoll(colon + 1, &end, 10);
+        if (errno || end == colon + 1 || dur < 1 || dur > 7 * 24 * 3600) return -1;
+        comma = end;
+        if (*comma != '\0' && *comma != ',') return -1;
+        config.phases[n].value_size = (int)size;
+        config.phases[n].duration_sec = (int)dur;
+        n++;
+        if (*comma == '\0') break;
+        p = comma + 1;
+        if (*p == '\0') return -1;
+    }
+    if (n < 1) return -1;
+    config.num_phases = n;
+    config.datasize = config.phases[0].value_size;
+    return 0;
+}
+
 /* Returns number of consumed options. */
 int parseOptions(int argc, char **argv) {
     int i;
@@ -1730,15 +2022,15 @@ int parseOptions(int argc, char **argv) {
             exit(0);
         } else if (!strcmp(argv[i], "-n")) {
             if (lastarg) goto invalid;
-            if (config.duration > 0) {
-                fprintf(stderr, "Options -n and --duration are mutually exclusive.\n");
+            if (config.duration > 0 || config.num_phases > 0) {
+                fprintf(stderr, "Options -n and --duration/--data-size-phases are mutually exclusive.\n");
                 exit(1);
             }
             config.requests = atoi(argv[++i]);
         } else if (!strcmp(argv[i], "--duration")) {
             if (lastarg) goto invalid;
-            if (config.requests > 0) {
-                fprintf(stderr, "Options -n and --duration are mutually exclusive.\n");
+            if (config.requests > 0 || config.num_phases > 0) {
+                fprintf(stderr, "Options --duration and -n/--data-size-phases are mutually exclusive.\n");
                 exit(1);
             }
             config.duration = atoi(argv[++i]);
@@ -1746,6 +2038,22 @@ int parseOptions(int argc, char **argv) {
             if (lastarg) goto invalid;
             config.warmup_duration = atoi(argv[++i]);
 
+        } else if (!strcmp(argv[i], "--data-size-phases")) {
+            if (lastarg) goto invalid;
+            if (config.requests > 0) {
+                fprintf(stderr, "Options -n and --data-size-phases are mutually exclusive.\n");
+                exit(1);
+            }
+            if (config.duration > 0) {
+                fprintf(stderr, "Options --duration and --data-size-phases are mutually exclusive.\n");
+                exit(1);
+            }
+            {
+                if (parseDataSizePhases(argv[++i]) != 0) {
+                    fprintf(stderr, "Invalid --data-size-phases spec (want size:seconds[,size:seconds...]).\n");
+                    exit(1);
+                }
+            }
         } else if (!strcmp(argv[i], "-k")) {
             if (lastarg) goto invalid;
             config.keepalive = atoi(argv[++i]);
@@ -2081,6 +2389,9 @@ usage:
         "                    then the full command sequence counts as one and -P controls\n"
         "                    the number of times the command sequence is sent in each\n"
         "                    pipeline.\n",
+        " --data-size-phases <size:sec[,size:sec...]>\n"
+        "                    Keep the same process and connections while cycling SET\n"
+        "                    value sizes (experimental). Mutually exclusive with -n/--duration.\n"
         " -q                 Quiet. Just show query/sec values\n"
         " --precision        Number of decimal places to display in latency output\n"
         "                    (default 0)\n"
@@ -2151,6 +2462,18 @@ long long showThroughput(struct aeEventLoop *eventLoop, long long id, void *clie
         fprintf(stderr, "All clients disconnected... aborting.\n");
         exit(1);
     }
+
+    if (config.num_phases > 0 && !config.phase_all_done) {
+        if (config.phase_armed && !config.phase_draining && phaseDurationElapsed()) {
+            config.phase_draining = 1;
+        } else if (config.phase_draining && allPhaseClientsIdle()) {
+            if (!switchToNextPhase()) {
+                aeStop(eventLoop);
+                if (config.num_threads) return AE_NOMORE;
+            }
+        }
+    }
+
     int warmup_duration = atomic_load_explicit(&config.current_warmup_duration, memory_order_relaxed);
     if (warmup_duration > 0) {
         if ((current_tick - config.start) >= (warmup_duration * 1000LL)) {
@@ -2333,6 +2656,16 @@ int main(int argc, char **argv) {
     config.template_argc = 0;
     config.template_argv = NULL;
     config.has_field_placeholders = 0;
+    config.num_phases = 0;
+    config.phase_index = 0;
+    config.phase_draining = 0;
+    config.phase_armed = 0;
+    config.phase_all_done = 0;
+    config.phase_cmd = NULL;
+    config.phase_cmd_len = 0;
+    config.key_tag = "";
+    atomic_store_explicit(&config.phase_reconnects, 0, memory_order_relaxed);
+    atomic_store_explicit(&config.phase_errors, 0, memory_order_relaxed);
     resetPlaceholders();
 
     i = parseOptions(argc, argv);
@@ -2376,9 +2709,46 @@ int main(int argc, char **argv) {
         }
     }
     /* Set default for requests if not specified */
-    if (config.requests < 0) config.requests = 100000;
+    if (config.num_phases > 0) {
+        if (config.num_threads) {
+            fprintf(stderr, "--data-size-phases requires --threads 0 (single event loop).\n");
+            exit(1);
+        }
+        if (config.keepalive == 0) {
+            fprintf(stderr, "--data-size-phases requires keepalive (do not pass -k 0).\n");
+            exit(1);
+        }
+        if (config.cluster_mode) {
+            fprintf(stderr, "--data-size-phases does not support --cluster.\n");
+            exit(1);
+        }
+        if (config.dataset_file) {
+            fprintf(stderr, "--data-size-phases cannot be combined with --dataset.\n");
+            exit(1);
+        }
+        if (config.idlemode || config.fuzz_mode || config.loop) {
+            fprintf(stderr, "--data-size-phases cannot be combined with -I, --fuzz, or -l.\n");
+            exit(1);
+        }
+        if (config.tests == NULL) {
+            config.tests = sdsnew(",set,");
+        } else if (strcmp(config.tests, ",set,") != 0) {
+            fprintf(stderr, "--data-size-phases only supports -t set.\n");
+            exit(1);
+        }
+        if (argc > 0) {
+            fprintf(stderr, "--data-size-phases does not support custom command sequences.\n");
+            exit(1);
+        }
+        config.requests = -1;
+        config.duration = -1;
+        config.warmup_duration = -1;
+    } else if (config.requests < 0) {
+        config.requests = 100000;
+    }
 
     tag = "";
+    config.key_tag = tag;
 
 #ifdef USE_OPENSSL
     if (config.tls) {
@@ -2551,6 +2921,7 @@ int main(int argc, char **argv) {
     if (argc > 0 && config.tests != NULL) {
         fprintf(stderr, "WARNING: Option -t is ignored.\n");
     }
+    config.key_tag = tag;
 
     if (config.idlemode) {
         printf("Creating %d idle connections and waiting forever (Ctrl+C when done)\n", config.numclients);
@@ -2567,7 +2938,7 @@ int main(int argc, char **argv) {
             aeMain(config.el);
         /* and will wait for every */
     }
-    if (config.csv) {
+    if (config.csv && config.num_phases == 0) {
         printf("\"test\",\"rps\",\"avg_latency_ms\",\"min_latency_ms\",\"p50_latency_ms\",\"p95_latency_ms\",\"p99_"
                "latency_ms\",\"max_latency_ms\"\n");
     }

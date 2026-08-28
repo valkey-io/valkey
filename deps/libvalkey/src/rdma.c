@@ -283,12 +283,38 @@ typedef struct RdmaContext {
      * VALKEY_RDMA_MAX_WQE ~ 2 * VALKEY_RDMA_MAX_WQE -1 for send buffer */
     valkeyRdmaCmd *cmd_buf;
     struct ibv_mr *cmd_mr;
+
+    uint64_t tx_bytes;
+    uint64_t tx_wait_for_rx_count;
+    uint64_t tx_wait_for_rx_ns;
+    uint64_t rx_window_reannounce_count;
+    int tx_waiting_for_rx;
+    int64_t tx_wait_start_ns;
 } RdmaContext;
 
 /* Apparently CHERI uintptr_t can be 128 bits */
 vk_static_assert(sizeof(uintptr_t) <= sizeof(uint64_t));
 
 static int valkeyRdmaCM(valkeyContext *c, long timeout);
+
+static inline int64_t vk_nsec_now(void) {
+    return vk_usec_now() * 1000LL;
+}
+
+static void rdmaEndTxWaitForRx(RdmaContext *ctx) {
+    if (!ctx->tx_waiting_for_rx)
+        return;
+    ctx->tx_wait_for_rx_ns += (uint64_t)(vk_nsec_now() - ctx->tx_wait_start_ns);
+    ctx->tx_waiting_for_rx = 0;
+}
+
+static void rdmaBeginTxWaitForRx(RdmaContext *ctx) {
+    if (ctx->tx_waiting_for_rx)
+        return;
+    ctx->tx_wait_start_ns = vk_nsec_now();
+    ctx->tx_waiting_for_rx = 1;
+    ctx->tx_wait_for_rx_count++;
+}
 
 static int valkeyRdmaSetFdBlocking(valkeyContext *c, int fd, int blocking) {
     int flags;
@@ -543,6 +569,10 @@ static int connRdmaHandleRecv(valkeyContext *c, RdmaContext *ctx, struct rdma_cm
 
     switch (ntohs(cmd->keepalive.opcode)) {
     case RegisterXferMemory:
+        /* Initial handoff has tx_length == 0; later announcements are RX re-registers. */
+        if (ctx->tx_length != 0)
+            ctx->rx_window_reannounce_count++;
+        rdmaEndTxWaitForRx(ctx);
         ctx->tx_addr = (char *)(uintptr_t)be64toh(cmd->memory.addr);
         ctx->tx_length = ntohl(cmd->memory.length);
         ctx->tx_key = ntohl(cmd->memory.key);
@@ -796,6 +826,7 @@ static size_t connRdmaSend(RdmaContext *ctx, struct rdma_cm_id *cm_id, const voi
     }
 
     ctx->tx_offset += data_len;
+    ctx->tx_bytes += data_len;
 
     return data_len;
 }
@@ -819,20 +850,27 @@ static ssize_t valkeyRdmaWrite(valkeyContext *c) {
     do {
         assert(ctx->tx_offset <= ctx->tx_length);
         if (ctx->tx_offset == ctx->tx_length) {
-            /* wait a new TX buffer */
+            /* wait a new TX buffer (server RX window exhausted) */
+            if (wrote >= data_len)
+                break;
+
+            rdmaBeginTxWaitForRx(ctx);
             elapsed = vk_msec_now() - start;
             if (elapsed >= timed) {
+                rdmaEndTxWaitForRx(ctx);
                 valkeySetError(c, VALKEY_ERR_IO, "RDMA: IO timeout");
                 return VALKEY_ERR;
             }
 
             if (valkeyRdmaWaitEvent(c, timed - elapsed) == VALKEY_ERR) {
+                rdmaEndTxWaitForRx(ctx);
                 return VALKEY_ERR;
             }
 
             continue;
         }
 
+        rdmaEndTxWaitForRx(ctx);
         towrite = valkeyMin(ctx->tx_length - ctx->tx_offset, data_len - wrote);
         ret = connRdmaSend(ctx, cm_id, c->obuf + wrote, towrite);
         if (ret == (size_t)VALKEY_ERR) {
@@ -865,6 +903,8 @@ static void valkeyRdmaClose(valkeyContext *c) {
     if (!ctx) {
         return; /* connect failed? */
     }
+
+    rdmaEndTxWaitForRx(ctx);
 
     cm_id = ctx->cm_id;
     connRdmaHandleCq(c);
@@ -1280,6 +1320,50 @@ int valkeyInitiateRdma(void) {
 #endif
     valkeyContextRegisterFuncs(&valkeyContextRdmaFuncs, VALKEY_CONN_RDMA);
 
+    return VALKEY_OK;
+}
+
+int valkeyGetRdmaStats(valkeyContext *c, valkeyRdmaStats *stats) {
+    RdmaContext *ctx;
+
+    if (!c || !stats || c->connection_type != VALKEY_CONN_RDMA) {
+        return VALKEY_ERR;
+    }
+
+    ctx = c->privctx;
+    if (!ctx) {
+        return VALKEY_ERR;
+    }
+
+    stats->tx_bytes = ctx->tx_bytes;
+    stats->tx_wait_for_rx_count = ctx->tx_wait_for_rx_count;
+    stats->tx_wait_for_rx_ns = ctx->tx_wait_for_rx_ns;
+    stats->rx_window_reannounce_count = ctx->rx_window_reannounce_count;
+    if (ctx->tx_waiting_for_rx) {
+        stats->tx_wait_for_rx_ns += (uint64_t)(vk_nsec_now() - ctx->tx_wait_start_ns);
+    }
+    return VALKEY_OK;
+}
+
+int valkeyResetRdmaStats(valkeyContext *c) {
+    RdmaContext *ctx;
+
+    if (!c || c->connection_type != VALKEY_CONN_RDMA) {
+        return VALKEY_ERR;
+    }
+
+    ctx = c->privctx;
+    if (!ctx) {
+        return VALKEY_ERR;
+    }
+
+    ctx->tx_bytes = 0;
+    ctx->tx_wait_for_rx_count = 0;
+    ctx->tx_wait_for_rx_ns = 0;
+    ctx->rx_window_reannounce_count = 0;
+    if (ctx->tx_waiting_for_rx) {
+        ctx->tx_wait_start_ns = vk_nsec_now();
+    }
     return VALKEY_OK;
 }
 

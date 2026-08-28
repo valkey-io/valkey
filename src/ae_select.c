@@ -108,7 +108,7 @@ static char *aeApiName(void) {
     return "select";
 }
 
-static int aeApiGetPollFd(aeEventLoop *eventLoop) {
-    UNUSED(eventLoop);
+static int aeApiGetPollFd(aeApiState *state) {
+    UNUSED(state);
     return -1;
 }

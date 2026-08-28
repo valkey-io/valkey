@@ -39,17 +39,18 @@
 #define AE_OK 0
 #define AE_ERR -1
 
-#define AE_NONE 0          /* No events registered. */
-#define AE_READABLE 1      /* Fire when descriptor is readable. */
-#define AE_WRITABLE 2      /* Fire when descriptor is writable. */
-#define AE_BARRIER 4       /* With WRITABLE, never fire the event if the      \
-                              READABLE event already fired in the same event  \
-                              loop iteration. Useful when you want to persist \
-                              things to disk before sending replies, and want \
-                              to do that in a group fashion. */
-#define AE_HIGH_PRIORITY 8 /* Virtual routing mask flag: when set in aeCreateFileEvent(), \
-                            * the event is registered on qos_el if available.             \
-                            * Stripped before passing to the underlying OS multiplexer. */
+#define AE_NONE 0                      /* No events registered. */
+#define AE_READABLE 1                  /* Fire when descriptor is readable. */
+#define AE_WRITABLE 2                  /* Fire when descriptor is writable. */
+#define AE_BARRIER 4                   /* With WRITABLE, never fire the event if the      \
+                                          READABLE event already fired in the same event  \
+                                          loop iteration. Useful when you want to persist \
+                                          things to disk before sending replies, and want \
+                                          to do that in a group fashion. */
+#define AE_HIGH_PRIORITY 8             /* Virtual routing mask flag: when set in aeCreateFileEvent(), \
+                                        * the event is registered on qos_apidata if available.        \
+                                        * Stripped before passing to the underlying OS multiplexer. */
+#define AE_QOS_PREEMPT_CHECK_MASK 0x03 /* Mask to check QoS preemption once every 4 iterations */
 
 #define AE_FILE_EVENTS (1 << 0)
 #define AE_TIME_EVENTS (1 << 1)
@@ -130,14 +131,15 @@ typedef struct aeEventLoop {
     int flags;
 
     /* Quality of Service (QoS):
-     * qos_el points to a secondary, nested event loop dedicated to critical
-     * internal channels (cluster bus, slot migration, replication). Sockets registered
-     * here are processed ahead of normal client traffic and periodically preempt
-     * normal event iterations. NULL if unsupported by the OS multiplexer or disabled. */
-    struct aeEventLoop *qos_el;
-    monotime qos_el_last_poll_us;              /* Timestamp (microseconds) when qos_el was last drained */
+     * Sockets registered with AE_HIGH_PRIORITY are tracked in qos_apidata.
+     * qos_fd is registered into apidata to wake the main loop when QoS traffic arrives.
+     * qos_fired holds fired events when draining QoS channels. */
+    aeApiState *qos_apidata;                   /* Dedicated QoS polling state */
+    int qos_fd;                                /* File descriptor of QoS polling backend (-1 if disabled) */
+    aeFiredEvent *qos_fired;                   /* Fired events buffer for QoS polling */
+    monotime qos_el_last_poll_us;              /* Timestamp (microseconds) when QoS was last drained */
     uint64_t qos_el_preempt_check_interval_us; /* Preemptive check interval in microseconds (0 = disabled) */
-    aeQoSStatsProc *qos_el_stats_callback;     /* Callback invoked with elapsed microseconds after draining qos_el */
+    aeQoSStatsProc *qos_el_stats_callback;     /* Callback invoked with elapsed microseconds after draining QoS */
 } aeEventLoop;
 
 /* Prototypes */

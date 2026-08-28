@@ -135,7 +135,6 @@ static char *aeApiName(void) {
     return "epoll";
 }
 
-static int aeApiGetPollFd(aeEventLoop *eventLoop) {
-    aeApiState *state = eventLoop->apidata;
-    return state->epfd;
+static int aeApiGetPollFd(aeApiState *state) {
+    return state ? state->epfd : -1;
 }

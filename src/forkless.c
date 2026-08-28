@@ -286,8 +286,7 @@ static void startBackgroundThread(forklessSaveInfo *saveInfo) {
     pthread_t thread_id;
     pthread_attr_t attr;
     int pthread_rc;
-    pthread_rc = pthread_attr_init(&attr);
-    serverAssert(pthread_rc == 0);
+    serverInitThreadAttribute(&attr);
     pthread_rc = pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
     serverAssert(pthread_rc == 0);
     pthread_rc = pthread_create(&thread_id, &attr, &forklessSaveProcessor, saveInfo);

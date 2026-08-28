@@ -389,14 +389,12 @@ int isForklessSaveInProgress(void) {
 /* Appends forkless save INFO metrics to the provided sds string. */
 sds forkless_catInfo(sds info) {
     long long estimated_seconds_remaining = -1;
-    long long current_item_ms = -1;
 
     if (onValkeyMainThread()) {
         bgIterator *iter = bgIteratorFind(FORKLESS_SAVE_FILE_ITER_NAME);
         if (iter != NULL) {
             bgIteratorStatus status = {0};
             bgIteratorGetStatus(iter, &status);
-            current_item_ms = status.current_item_ms;
 
             if (status.dbentries_processed > 0) {
                 long long total_keys =
@@ -410,27 +408,29 @@ sds forkless_catInfo(sds info) {
         }
     }
 
-    return sdscatprintf(info,
-                        "forkless_current_item_ms:%lld\r\n"
-                        "forkless_estimated_seconds_remaining:%lld\r\n",
-                        current_item_ms,
-                        estimated_seconds_remaining);
+    return sdscatprintf(info, "forkless_estimated_seconds_remaining:%lld\r\n", estimated_seconds_remaining);
 }
 
 /* Appends forkless debug metrics to the provided sds string. */
 sds forkless_catDebugInfo(sds info) {
     bgIteratorStatus status = {0};
+    long long current_item_ms = -1;
 
     if (onValkeyMainThread()) {
         bgIterator *iter = bgIteratorFind(FORKLESS_SAVE_FILE_ITER_NAME);
-        if (iter != NULL) bgIteratorGetStatus(iter, &status);
+        if (iter != NULL) {
+            bgIteratorGetStatus(iter, &status);
+            current_item_ms = status.current_item_ms;
+        }
     }
 
     return sdscatprintf(info,
+                        "forkless_current_item_ms:%lld\r\n"
                         "forkless_current_queue_length:%lu\r\n"
                         "forkless_queue_length_target:%lu\r\n"
                         "forkless_dbentries_queued:%lu\r\n"
                         "forkless_dbentries_processed:%lu\r\n",
+                        current_item_ms,
                         status.queue_length,
                         status.queue_length_target,
                         status.dbentries_queued,

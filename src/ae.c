@@ -97,7 +97,9 @@ aeEventLoop *aeCreateEventLoop(int setsize) {
     eventLoop->aftersleep = NULL;
     eventLoop->custompoll = NULL;
     eventLoop->flags = 0;
-    eventLoop->qos_el = NULL;
+    eventLoop->qos_apidata = NULL;
+    eventLoop->qos_fd = -1;
+    eventLoop->qos_fired = NULL;
     eventLoop->qos_el_last_poll_us = 0;
     eventLoop->qos_el_preempt_check_interval_us = 0;
     eventLoop->qos_el_stats_callback = NULL;
@@ -155,8 +157,9 @@ int aeResizeSetSize(aeEventLoop *eventLoop, int setsize) {
     if (eventLoop->maxfd >= setsize) goto err;
     if (aeApiResize(eventLoop->apidata, setsize) == -1) goto err;
 
-    if (eventLoop->qos_el) {
-        if (aeResizeSetSize(eventLoop->qos_el, setsize) == AE_ERR) goto err;
+    if (eventLoop->qos_apidata) {
+        if (aeApiResize(eventLoop->qos_apidata, setsize) == -1) goto err;
+        eventLoop->qos_fired = zrealloc(eventLoop->qos_fired, sizeof(aeFiredEvent) * setsize);
     }
 
     eventLoop->events = zrealloc(eventLoop->events, sizeof(aeFileEvent) * setsize);
@@ -176,10 +179,10 @@ done:
 }
 
 void aeDeleteEventLoop(aeEventLoop *eventLoop) {
-    if (eventLoop->qos_el) {
-        int qos_fd = aeApiGetPollFd(eventLoop->qos_el);
-        if (qos_fd != -1) aeDeleteFileEvent(eventLoop, qos_fd, AE_READABLE);
-        aeDeleteEventLoop(eventLoop->qos_el);
+    if (eventLoop->qos_apidata) {
+        if (eventLoop->qos_fd != -1) aeDeleteFileEvent(eventLoop, eventLoop->qos_fd, AE_READABLE);
+        aeApiFree(eventLoop->qos_apidata);
+        zfree(eventLoop->qos_fired);
     }
     aeApiFree(eventLoop->apidata);
     zfree(eventLoop->events);
@@ -201,14 +204,6 @@ void aeStop(aeEventLoop *eventLoop) {
 }
 
 int aeCreateFileEvent(aeEventLoop *eventLoop, int fd, int mask, aeFileProc *proc, void *clientData) {
-    if (mask & AE_HIGH_PRIORITY) {
-        if (eventLoop->qos_el) {
-            /* Register events on to QoS event loop */
-            return aeCreateFileEvent(eventLoop->qos_el, fd, mask & ~AE_HIGH_PRIORITY, proc, clientData);
-        }
-        /* If qos_el is not initialized, strip the high priority flag */
-        mask &= ~AE_HIGH_PRIORITY;
-    }
     AE_LOCK(eventLoop);
     int ret = AE_ERR;
 
@@ -218,9 +213,20 @@ int aeCreateFileEvent(aeEventLoop *eventLoop, int fd, int mask, aeFileProc *proc
     }
     aeFileEvent *fe = &eventLoop->events[fd];
 
+    int is_priority = 0;
+    if ((mask & AE_HIGH_PRIORITY) || (fe->mask & AE_HIGH_PRIORITY)) {
+        if (eventLoop->qos_apidata != NULL) {
+            is_priority = 1;
+            mask |= AE_HIGH_PRIORITY;
+        } else {
+            mask &= ~AE_HIGH_PRIORITY;
+        }
+    }
+    aeApiState *target_api = is_priority ? eventLoop->qos_apidata : eventLoop->apidata;
+
     int backend_add_mask = BACKEND_MASK(mask) & ~fe->mask; // just the meaningful additions
     if (backend_add_mask) {
-        if (aeApiAddEvent(eventLoop->apidata, fd, BACKEND_MASK(fe->mask), backend_add_mask) == -1) goto done;
+        if (aeApiAddEvent(target_api, fd, BACKEND_MASK(fe->mask), backend_add_mask) == -1) goto done;
     }
     fe->mask |= mask;
     if (mask & AE_READABLE) fe->rfileProc = proc;
@@ -236,20 +242,15 @@ done:
 }
 
 void aeDeleteFileEvent(aeEventLoop *eventLoop, int fd, int mask) {
-    if (eventLoop->qos_el) {
-        /* Check if the event exists in QoS loop first */
-        int qos_mask = aeGetFileEvents(eventLoop->qos_el, fd);
-        if (qos_mask != AE_NONE) {
-            aeDeleteFileEvent(eventLoop->qos_el, fd, mask);
-            return;
-        }
-    }
     AE_LOCK(eventLoop);
     mask &= ~AE_HIGH_PRIORITY;
     if (fd >= eventLoop->setsize) goto done;
 
     aeFileEvent *fe = &eventLoop->events[fd];
     if (fe->mask == AE_NONE) goto done;
+
+    int is_priority = (fe->mask & AE_HIGH_PRIORITY) && (eventLoop->qos_apidata != NULL);
+    aeApiState *target_api = is_priority ? eventLoop->qos_apidata : eventLoop->apidata;
 
     /* We want to always remove AE_BARRIER if set when AE_WRITABLE
      * is removed. */
@@ -260,6 +261,9 @@ void aeDeleteFileEvent(aeEventLoop *eventLoop, int fd, int mask) {
 
     int old_mask = fe->mask;
     fe->mask = fe->mask & ~mask;
+    if (!(fe->mask & (AE_READABLE | AE_WRITABLE))) {
+        fe->mask = AE_NONE;
+    }
     if (fd == eventLoop->maxfd && fe->mask == AE_NONE) {
         /* Update the max fd */
         int j;
@@ -274,7 +278,7 @@ void aeDeleteFileEvent(aeEventLoop *eventLoop, int fd, int mask) {
      * touching the actual events. */
     int backend_del_mask = BACKEND_MASK(mask); // just the meaningful deletions
     if (backend_del_mask) {
-        aeApiDelEvent(eventLoop->apidata, fd, BACKEND_MASK(old_mask), backend_del_mask);
+        aeApiDelEvent(target_api, fd, BACKEND_MASK(old_mask), backend_del_mask);
     }
 
 done:
@@ -282,12 +286,6 @@ done:
 }
 
 void *aeGetFileClientData(aeEventLoop *eventLoop, int fd) {
-    if (eventLoop->qos_el) {
-        int mask = aeGetFileEvents(eventLoop->qos_el, fd);
-        if (mask != AE_NONE) {
-            return aeGetFileClientData(eventLoop->qos_el, fd);
-        }
-    }
     if (fd >= eventLoop->setsize) return NULL;
     aeFileEvent *fe = &eventLoop->events[fd];
     if (fe->mask == AE_NONE) return NULL;
@@ -296,12 +294,6 @@ void *aeGetFileClientData(aeEventLoop *eventLoop, int fd) {
 }
 
 int aeGetFileEvents(aeEventLoop *eventLoop, int fd) {
-    if (eventLoop->qos_el) {
-        int mask = aeGetFileEvents(eventLoop->qos_el, fd);
-        if (mask != AE_NONE) {
-            return mask | AE_HIGH_PRIORITY;
-        }
-    }
     if (fd >= eventLoop->setsize) return 0;
     aeFileEvent *fe = &eventLoop->events[fd];
 
@@ -446,13 +438,72 @@ int aePoll(aeEventLoop *eventLoop, struct timeval *tvp) {
     return ret;
 }
 
+/* Fire the readable and/or writable event handlers for a given file descriptor,
+ * respecting the AE_BARRIER flag and protecting against re-entrancy issues
+ * (e.g. event loop resize or event deletion within callbacks). */
+static inline void aeFireFileEvent(aeEventLoop *eventLoop, int fd, int mask) {
+    aeFileEvent *fe = &eventLoop->events[fd];
+    int fired = 0; /* Number of events fired for current fd. */
+
+    /* Normally we execute the readable event first, and the writable
+     * event later. This is useful as sometimes we may be able
+     * to serve the reply of a query immediately after processing the
+     * query.
+     *
+     * However if AE_BARRIER is set in the mask, our application is
+     * asking us to do the reverse: never fire the writable event
+     * after the readable. In such a case, we invert the calls.
+     * This is useful when, for instance, we want to do things
+     * in the beforeSleep() hook, like fsyncing a file to disk,
+     * before replying to a client. */
+    int invert = fe->mask & AE_BARRIER;
+
+    /* Note the "fe->mask & mask & ..." code: maybe an already
+     * processed event removed an element that fired and we still
+     * didn't processed, so we check if the event is still valid.
+     *
+     * Fire the readable event if the call sequence is not
+     * inverted. */
+    if (!invert && (fe->mask & mask & AE_READABLE)) {
+        fe->rfileProc(eventLoop, fd, fe->clientData, mask);
+        fired++;
+        fe = &eventLoop->events[fd]; /* Refresh in case of resize. */
+    }
+
+    /* Fire the writable event. */
+    if (fe->mask & mask & AE_WRITABLE) {
+        if (!fired || fe->wfileProc != fe->rfileProc) {
+            fe->wfileProc(eventLoop, fd, fe->clientData, mask);
+            fired++;
+        }
+    }
+
+    /* If we have to invert the call, fire the readable event now
+     * after the writable one. */
+    if (invert) {
+        fe = &eventLoop->events[fd]; /* Refresh in case of resize. */
+        if ((fe->mask & mask & AE_READABLE) && (!fired || fe->wfileProc != fe->rfileProc)) {
+            fe->rfileProc(eventLoop, fd, fe->clientData, mask);
+            fired++;
+        }
+    }
+}
+
 /* Process all QoS events and invoke the stats callback
  * with the elapsed time in microseconds if registered. */
 static int aeProcessQoSEvents(aeEventLoop *eventLoop) {
     int processed = 0;
-    if (eventLoop->qos_el != NULL) {
+    if (eventLoop->qos_apidata != NULL) {
         monotime start = getMonotonicUs();
-        processed = aeProcessEvents(eventLoop->qos_el, AE_ALL_EVENTS | AE_DONT_WAIT);
+        struct timeval tv = {0, 0};
+        int numevents = aeApiPoll(eventLoop->qos_apidata, eventLoop->qos_fired, eventLoop->events,
+                                  eventLoop->setsize, eventLoop->maxfd, &tv);
+        for (int j = 0; j < numevents; j++) {
+            int fd = eventLoop->qos_fired[j].fd;
+            int mask = eventLoop->qos_fired[j].mask;
+            aeFireFileEvent(eventLoop, fd, mask);
+            processed++;
+        }
         eventLoop->qos_el_last_poll_us = getMonotonicUs();
         /* Update INFO stats if registered and QoS events were processed */
         if (eventLoop->qos_el_stats_callback != NULL && processed > 0) {
@@ -478,8 +529,8 @@ void aeSetQoSPreemptCheckInterval(aeEventLoop *eventLoop, uint64_t interval_us) 
 /* Preemptively processes QoS events if the elapsed time since the last poll
  * exceeds the qos_el_preempt_check_interval_us threshold (0 disables preemption). */
 int aeProcessQoSEventsPreemptively(aeEventLoop *eventLoop) {
-    /* Skip if the multiplexer backend doesn't support nested event loop or preemptive polling is disabled */
-    if (eventLoop->qos_el == NULL || eventLoop->qos_el_preempt_check_interval_us == 0) return 0;
+    /* Skip if QoS is disabled or preemptive polling is disabled */
+    if (eventLoop->qos_apidata == NULL || eventLoop->qos_el_preempt_check_interval_us == 0) return 0;
     if (elapsedUs(eventLoop->qos_el_last_poll_us) < eventLoop->qos_el_preempt_check_interval_us) return 0;
     return aeProcessQoSEvents(eventLoop);
 }
@@ -548,76 +599,30 @@ int aeProcessEvents(aeEventLoop *eventLoop, int flags) {
         /* After sleep callback. */
         if (eventLoop->aftersleep != NULL && flags & AE_CALL_AFTER_SLEEP) eventLoop->aftersleep(eventLoop, numevents);
 
-        /* Prioritize QoS event loop: if qos_fd fired, drain QoS events
+        /* Prioritize QoS events: if qos_fd fired, drain QoS events
          * immediately before processing normal events. */
-        int qos_fd = -1;
-        if (eventLoop->qos_el != NULL) {
-            qos_fd = aeApiGetPollFd(eventLoop->qos_el);
-            if (qos_fd != -1) {
-                for (j = 0; j < numevents; j++) {
-                    if (eventLoop->fired[j].fd == qos_fd) {
-                        processed += aeProcessQoSEvents(eventLoop);
-                        break;
-                    }
+        if (eventLoop->qos_fd != -1) {
+            for (j = 0; j < numevents; j++) {
+                if (eventLoop->fired[j].fd == eventLoop->qos_fd) {
+                    processed += aeProcessQoSEvents(eventLoop);
+                    break;
                 }
             }
         }
 
         for (j = 0; j < numevents; j++) {
             /* Periodic Preemptive Poll:
-             * If processing normal events is taking more than qos_el_preempt_check_interval_us, check for new QoS events. */
-            processed += aeProcessQoSEventsPreemptively(eventLoop);
+             * Sample monotonic clock once every 4 iterations (AE_QOS_PREEMPT_CHECK_MASK) to amortize vDSO overhead */
+            if ((j & AE_QOS_PREEMPT_CHECK_MASK) == 0 && eventLoop->qos_apidata != NULL) {
+                processed += aeProcessQoSEventsPreemptively(eventLoop);
+            }
 
             int fd = eventLoop->fired[j].fd;
             /* Skip processing QoS events here again as they were already processed above */
-            if (fd == qos_fd) continue;
-            aeFileEvent *fe = &eventLoop->events[fd];
+            if (fd == eventLoop->qos_fd) continue;
             int mask = eventLoop->fired[j].mask;
-            int fired = 0; /* Number of events fired for current fd. */
 
-            /* Normally we execute the readable event first, and the writable
-             * event later. This is useful as sometimes we may be able
-             * to serve the reply of a query immediately after processing the
-             * query.
-             *
-             * However if AE_BARRIER is set in the mask, our application is
-             * asking us to do the reverse: never fire the writable event
-             * after the readable. In such a case, we invert the calls.
-             * This is useful when, for instance, we want to do things
-             * in the beforeSleep() hook, like fsyncing a file to disk,
-             * before replying to a client. */
-            int invert = fe->mask & AE_BARRIER;
-
-            /* Note the "fe->mask & mask & ..." code: maybe an already
-             * processed event removed an element that fired and we still
-             * didn't processed, so we check if the event is still valid.
-             *
-             * Fire the readable event if the call sequence is not
-             * inverted. */
-            if (!invert && fe->mask & mask & AE_READABLE) {
-                fe->rfileProc(eventLoop, fd, fe->clientData, mask);
-                fired++;
-                fe = &eventLoop->events[fd]; /* Refresh in case of resize. */
-            }
-
-            /* Fire the writable event. */
-            if (fe->mask & mask & AE_WRITABLE) {
-                if (!fired || fe->wfileProc != fe->rfileProc) {
-                    fe->wfileProc(eventLoop, fd, fe->clientData, mask);
-                    fired++;
-                }
-            }
-
-            /* If we have to invert the call, fire the readable event now
-             * after the writable one. */
-            if (invert) {
-                fe = &eventLoop->events[fd]; /* Refresh in case of resize. */
-                if ((fe->mask & mask & AE_READABLE) && (!fired || fe->wfileProc != fe->rfileProc)) {
-                    fe->rfileProc(eventLoop, fd, fe->clientData, mask);
-                    fired++;
-                }
-            }
-
+            aeFireFileEvent(eventLoop, fd, mask);
             processed++;
         }
     }
@@ -682,23 +687,7 @@ void aeSetPollProtect(aeEventLoop *eventLoop, int protect) {
     }
 }
 
-/* Register a QoS event loop file descriptor in the main event loop,
- * which will awake main eventloop when the QoS event loop file descriptor is fired. */
-static int aeLinkQoSEventLoop(aeEventLoop *eventLoop, aeEventLoop *qos_el) {
-    assert(eventLoop != NULL && qos_el != NULL);
-    int qos_fd = aeApiGetPollFd(qos_el);
-    if (qos_fd == -1) return AE_ERR;
-    /* Register qos_fd with NULL callback: qos_fd is only used to wake up the main loop's
-     * multiplexer when QoS traffic arrives. aeProcessEvents() checks for qos_fd and drains
-     * qos_el directly before dispatching normal events, and explicitly skips callback
-     * dispatch for qos_fd. */
-    if (aeCreateFileEvent(eventLoop, qos_fd, AE_READABLE, NULL, NULL) == AE_ERR) {
-        return AE_ERR;
-    }
-    eventLoop->qos_el = qos_el;
-    return AE_OK;
-}
-/* Actuate QoS event loop if supported: creates a nested eventloop for internal
+/* Actuate QoS event loop if supported: creates a secondary multiplexer state for internal
  * connections (cluster bus, replication, and slot migration jobs). It installs
  * a preemptive polling mechanism that wakes the main event loop and processes
  * QoS events at regular interval. If qosPreemptPollIntervalUs is 0, standard
@@ -711,9 +700,35 @@ static int aeLinkQoSEventLoop(aeEventLoop *eventLoop, aeEventLoop *qos_el) {
 int aeActuateQoSEventLoopIfSupported(aeEventLoop *eventLoop, int setsize, uint64_t qosPreemptPollIntervalUs, aeQoSStatsProc *qosStatsCallback) {
     assert(eventLoop != NULL);
 
-    /* Create QoS event loop for internal connections (cluster bus, replication, and slot migration jobs) */
-    aeEventLoop *qos_el = aeCreateEventLoop(setsize);
-    if (qos_el == NULL) return AE_ERR;
+    /* Create QoS polling state for internal connections (cluster bus, replication, and slot migration jobs) */
+    aeApiState *qos_apidata = aeApiCreate(setsize);
+    if (qos_apidata == NULL) return AE_ERR;
+
+    int qos_fd = aeApiGetPollFd(qos_apidata);
+    if (qos_fd == -1) {
+        aeApiFree(qos_apidata);
+        return AE_ERR;
+    }
+
+    aeFiredEvent *qos_fired = zmalloc(sizeof(aeFiredEvent) * setsize);
+    if (qos_fired == NULL) {
+        aeApiFree(qos_apidata);
+        return AE_ERR;
+    }
+
+    /* Register qos_fd with NULL callback: qos_fd is only used to wake up the main loop's
+     * multiplexer when QoS traffic arrives. aeProcessEvents() checks for qos_fd and drains
+     * qos_apidata directly before dispatching normal events, and explicitly skips callback
+     * dispatch for qos_fd. */
+    if (aeCreateFileEvent(eventLoop, qos_fd, AE_READABLE, NULL, NULL) == AE_ERR) {
+        zfree(qos_fired);
+        aeApiFree(qos_apidata);
+        return AE_ERR;
+    }
+
+    eventLoop->qos_apidata = qos_apidata;
+    eventLoop->qos_fd = qos_fd;
+    eventLoop->qos_fired = qos_fired;
 
     /* Set the QoS event preemption check interval in microseconds. */
     aeSetQoSPreemptCheckInterval(eventLoop, qosPreemptPollIntervalUs);
@@ -721,13 +736,5 @@ int aeActuateQoSEventLoopIfSupported(aeEventLoop *eventLoop, int setsize, uint64
     /* Sets the stats callback invoked with elapsed duration whenever QoS events are processed. */
     aeSetQoSStatsCallback(eventLoop, qosStatsCallback);
 
-    /* Link QoS eventloop with main eventloop via nested multiplexer polling.
-     * If multiplexer nesting is unsupported (e.g. evport, select), gracefully
-     * free QoS eventloop and fall back to main eventloop event processing without QoS. */
-    if (aeLinkQoSEventLoop(eventLoop, qos_el) == AE_ERR) {
-        /* gracefully free QoS eventloop and fall back to main eventloop event processing without QoS */
-        aeDeleteEventLoop(qos_el);
-        return AE_ERR;
-    }
     return AE_OK;
 }

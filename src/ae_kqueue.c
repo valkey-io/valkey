@@ -181,7 +181,6 @@ static char *aeApiName(void) {
     return "kqueue";
 }
 
-static int aeApiGetPollFd(aeEventLoop *eventLoop) {
-    aeApiState *state = eventLoop->apidata;
-    return state->kqfd;
+static int aeApiGetPollFd(aeApiState *state) {
+    return state ? state->kqfd : -1;
 }

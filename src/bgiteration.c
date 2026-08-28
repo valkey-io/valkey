@@ -40,7 +40,7 @@ static bool hasMainThreadExclusivity(void) {
     /* Modules interact with the main thread using a mutex.  If a module owns the mutex, consider
      *  that equivalent to being on the main thread. */
     bool mightBeInModule = (atomic_load_explicit(&server.module_gil_acquired, memory_order_relaxed) == 0);
-    return onValkeyMainThread() || mightBeInModule;
+    return onServerMainThread() || mightBeInModule;
 }
 
 
@@ -2181,7 +2181,7 @@ bgIteratorItem *bgIteratorRead(bgIterator *it) {
          * Without this, a unit test could get stuck waiting on the completion event because
          * feed won't get invoked.  For production, feed is called regularly from the main thread.
          * Note - this is checking that the exact same thread is used and shouldn't count modules. */
-        if (onValkeyMainThread()) bgIteration_feedIterators_task(NULL, 0, NULL);
+        if (onServerMainThread()) bgIteration_feedIterators_task(NULL, 0, NULL);
     } else {
         it->client_is_active = true;
     }
@@ -2437,7 +2437,7 @@ void bgIteration_handleCommandReplication(int dbid,
     }
 
     if (!bgIteration_iterationActive()) return;
-    serverAssert(onValkeyMainThread());
+    serverAssert(onServerMainThread());
 
     /* Some commands are replicated which are not writes (like publish) these can be ignored.
      *  Be careful with MULTI which is not a write command, but must be replicated. */

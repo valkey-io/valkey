@@ -308,7 +308,7 @@ void scriptingEngineCallFreeFunction(scriptingEngine *engine,
                                      subsystemType type,
                                      compiledFunction *compiled_func) {
     serverAssert(type == VMSE_EVAL || type == VMSE_FUNCTION);
-    int is_async = !onValkeyMainThread();
+    int is_async = !onServerMainThread();
 
     /* We need to acquire the module GIL when running from an async thread while
      * flushing the script functions. */

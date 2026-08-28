@@ -450,12 +450,12 @@ ssize_t rdbSaveLzfStringObject(rio *rdb, unsigned char *s, size_t len) {
     /* We require at least four bytes compression for this to be worth it */
     if (len <= 4) return 0;
     outlen = len - 4;
-    if (outlen < LZF_STATIC_BUFFER_SIZE) {
-        if (!buffer) buffer = zmalloc(LZF_STATIC_BUFFER_SIZE);
-        out = buffer;
-    } else {
-        if ((out = zmalloc(outlen + 1)) == NULL) return 0;
-    }
+    // if (outlen < LZF_STATIC_BUFFER_SIZE) {
+    //     if (!buffer) buffer = zmalloc(LZF_STATIC_BUFFER_SIZE);
+    //     out = buffer;
+    // } else {
+    if ((out = zmalloc(outlen + 1)) == NULL) return 0;
+    // }
     comprlen = lzf_compress(s, len, out, outlen);
     ssize_t nwritten = comprlen ? rdbSaveLzfBlob(rdb, out, comprlen, len) : 0;
     if (out != buffer) zfree(out);

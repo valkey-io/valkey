@@ -1747,6 +1747,148 @@ bool hashtablePop(hashtable *ht, const void *key, void **popped) {
     return 0;
 }
 
+/* Removes multiple distinct entries known to be in the table and returns the
+ * number of entries removed. The entry destructor is not called. The caller
+ * must pass distinct entries that are present in the table, and `count` must
+ * not exceed HASHTABLE_POP_ENTRIES_STACK_MAX. `entries` is input-only. Batching
+ * avoids per-delete hole filling and shrink checks. */
+size_t hashtablePopKnownEntries(hashtable *ht, void **entries, size_t count) {
+    assert(count <= HASHTABLE_POP_ENTRIES_STACK_MAX);
+    if (count == 0 || hashtableSize(ht) == 0) return 0;
+
+    size_t bucket_index[HASHTABLE_POP_ENTRIES_STACK_MAX];
+    int table_index[HASHTABLE_POP_ENTRIES_STACK_MAX];
+    size_t affected_buckets = 0;
+    size_t removed = 0;
+
+    hashtablePauseRehashing(ht);
+    hashtablePauseAutoShrink(ht);
+
+    for (size_t i = 0; i < count; i++) {
+        void *entry = entries[i];
+        const void *key = entryGetKey(ht, entry);
+        uint64_t hash = hashKey(ht, key);
+        uint8_t h2 = highBits(hash);
+        bool deleted = false;
+
+        for (int table = 0; table <= 1 && !deleted; table++) {
+            if (ht->used[table] == 0) continue;
+            size_t mask = expToMask(ht->bucket_exp[table]);
+            size_t idx = hash & mask;
+            if (table == 0 && ht->rehash_idx >= 0 && idx < (size_t)ht->rehash_idx) {
+                continue;
+            }
+            bucket *top = &ht->tables[table][idx];
+            bucket *b = top;
+            do {
+                for (int pos = 0; pos < numBucketPositions(b); pos++) {
+                    if (isPositionFilled(b, pos) && b->hashes[pos] == h2 && b->entries[pos] == entry) {
+                        b->presence &= ~(1 << pos);
+                        ht->used[table]--;
+                        if (top->chained &&
+                            (affected_buckets == 0 || bucket_index[affected_buckets - 1] != idx || table_index[affected_buckets - 1] != table)) {
+                            bucket_index[affected_buckets] = idx;
+                            table_index[affected_buckets] = table;
+                            affected_buckets++;
+                        }
+                        removed++;
+                        deleted = true;
+                        break;
+                    }
+                }
+                b = deleted ? NULL : getChildBucket(b);
+            } while (b != NULL);
+        }
+    }
+
+    hashtableResumeRehashing(ht);
+    if (!hashtableIsRehashingPaused(ht)) {
+        for (size_t i = 0; i < affected_buckets; i++) {
+            compactBucketChain(ht, bucket_index[i], table_index[i]);
+        }
+    }
+    hashtableResumeAutoShrink(ht);
+
+    return removed;
+}
+
+/* Removes up to `count` arbitrary entries from the table, stores them in
+ * `entries`, and returns the number of removed entries. The entry destructor is
+ * not called. `entries` is output-only. If `cursor` is NULL, each call starts at
+ * the first eligible bucket; otherwise, the per-table cursor avoids rescanning
+ * the same empty bucket prefix when callers repeatedly drain a table in bounded
+ * batches. The cursor is an approximate offset relative to the currently
+ * eligible bucket range, so it remains safe across rehash progress and resizes
+ * even though it may point to a different absolute bucket later. */
+size_t hashtablePopAnyEntries(hashtable *ht, void **entries, size_t count, size_t cursor[2]) {
+    if (count == 0 || hashtableSize(ht) == 0) return 0;
+
+    size_t stack_bucket_index[HASHTABLE_POP_ENTRIES_STACK_MAX];
+    int stack_table_index[HASHTABLE_POP_ENTRIES_STACK_MAX];
+    bool use_stack = count <= HASHTABLE_POP_ENTRIES_STACK_MAX;
+    size_t *bucket_index = use_stack ? stack_bucket_index : zmalloc(sizeof(*bucket_index) * count);
+    int *table_index = use_stack ? stack_table_index : zmalloc(sizeof(*table_index) * count);
+    size_t affected_buckets = 0;
+    size_t removed = 0;
+
+    hashtablePauseRehashing(ht);
+    hashtablePauseAutoShrink(ht);
+
+    for (int table = 0; table <= 1 && removed < count; table++) {
+        if (ht->used[table] == 0) continue;
+        size_t first_idx = 0;
+        if (table == 0 && ht->rehash_idx > 0) first_idx = ht->rehash_idx;
+        size_t buckets = numBuckets(ht->bucket_exp[table]);
+        if (first_idx >= buckets) continue;
+        size_t bucket_count = buckets - first_idx;
+        size_t start_idx = first_idx;
+        if (cursor) start_idx += cursor[table] % bucket_count;
+        size_t next_offset = 0;
+
+        for (size_t bucket_offset = 0; bucket_offset < bucket_count && removed < count; bucket_offset++) {
+            size_t idx = first_idx + ((start_idx - first_idx + bucket_offset) % bucket_count);
+            bucket *top = &ht->tables[table][idx];
+            bool affected_chained_bucket = top->chained;
+            bool removed_from_bucket = false;
+            bucket *b = top;
+
+            do {
+                for (int pos = 0; pos < numBucketPositions(b) && removed < count; pos++) {
+                    if (!isPositionFilled(b, pos)) continue;
+                    entries[removed++] = b->entries[pos];
+                    b->presence &= ~(1 << pos);
+                    ht->used[table]--;
+                    removed_from_bucket = true;
+                }
+                b = getChildBucket(b);
+            } while (b != NULL && removed < count);
+
+            if (removed_from_bucket && affected_chained_bucket) {
+                bucket_index[affected_buckets] = idx;
+                table_index[affected_buckets] = table;
+                affected_buckets++;
+            }
+            next_offset = (idx - first_idx + (removed < count ? 1 : 0)) % bucket_count;
+        }
+        if (cursor) cursor[table] = next_offset;
+    }
+
+    hashtableResumeRehashing(ht);
+    if (!hashtableIsRehashingPaused(ht)) {
+        for (size_t i = 0; i < affected_buckets; i++) {
+            compactBucketChain(ht, bucket_index[i], table_index[i]);
+        }
+    }
+    hashtableResumeAutoShrink(ht);
+
+    if (!use_stack) {
+        zfree(table_index);
+        zfree(bucket_index);
+    }
+
+    return removed;
+}
+
 /* Deletes the entry with the matching key. Returns true if an entry was
  * deleted, false if no matching entry was found. */
 bool hashtableDelete(hashtable *ht, const void *key) {

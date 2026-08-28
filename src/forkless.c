@@ -61,7 +61,7 @@ static int writeDbSizeHints(forklessSaveInfo *saveInfo) {
  *  - The DB size hints have been written
  * This function is responsible for writing all of the dictionary entries. */
 static void *forklessSaveProcessor(void *arg) {
-    serverAssert(!onValkeyMainThread());
+    serverAssert(!onServerMainThread());
     forklessSaveInfo *saveInfo = arg;
 
     serverLog(LL_NOTICE, "forkless-save: background processor started");
@@ -169,7 +169,7 @@ static void cleanupSaveInfoAndEmitEndMetrics(forklessSaveInfo *saveInfo) {
  * Closing the file requires synchronously flushing the content to disk, which can
  * take some time. */
 static void forklessSaveCloseSnapshotFile(void *args[]) {
-    serverAssert(!onValkeyMainThread());
+    serverAssert(!onServerMainThread());
     forklessSaveInfo *saveInfo = (forklessSaveInfo *)args[0];
     /* Error or not, close the file... */
     /* Flush the RIO buffer to the OS before fsync, otherwise any bytes still
@@ -221,7 +221,7 @@ static void forklessSaveCloseSnapshotFile(void *args[]) {
 static long long snapshotEndMonitorTimeProc(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     UNUSED(eventLoop);
     UNUSED(id);
-    serverAssert(onValkeyMainThread());
+    serverAssert(onServerMainThread());
 
     forklessSaveInfo *saveInfo = (forklessSaveInfo *)clientData;
 
@@ -237,7 +237,7 @@ static long long snapshotEndMonitorTimeProc(struct aeEventLoop *eventLoop, long 
 }
 
 void forklessSaveComplete(bool terminated, void *privdata) {
-    serverAssert(onValkeyMainThread());
+    serverAssert(onServerMainThread());
     serverLog(LL_NOTICE, "forkless-save: completion proc - %s", (terminated) ? "terminated" : "ok");
 
     forklessSaveInfo *saveInfo = privdata;
@@ -264,7 +264,7 @@ void forklessSaveComplete(bool terminated, void *privdata) {
 }
 
 static int forklessSaveCommonStart(forklessSaveInfo *saveInfo) {
-    serverAssert(onValkeyMainThread());
+    serverAssert(onServerMainThread());
 
     saveInfo->cur_db = -1;
 
@@ -281,7 +281,7 @@ static int forklessSaveCommonStart(forklessSaveInfo *saveInfo) {
 }
 
 static void startBackgroundThread(forklessSaveInfo *saveInfo) {
-    serverAssert(onValkeyMainThread());
+    serverAssert(onServerMainThread());
 
     pthread_t thread_id;
     pthread_attr_t attr;
@@ -299,7 +299,7 @@ static void startBackgroundThread(forklessSaveInfo *saveInfo) {
  * The filename must be under the server's current working directory.
  * Writes to a temp file and renames to the final filename on completion. */
 int forklessSaveToDisk(const char *filename) {
-    serverAssert(onValkeyMainThread());
+    serverAssert(onServerMainThread());
     serverAssert(currentForklessSave == NULL);
     serverAssert(!isSaveInProgress());
     serverAssert(filename);
@@ -376,7 +376,7 @@ werr:
 
 /* Cancels the currently running forkless save, if one is in progress. */
 void forklessSaveCancel(void) {
-    serverAssert(onValkeyMainThread());
+    serverAssert(onServerMainThread());
     if (currentForklessSave == NULL) return;
     bgIteratorTerminate(currentForklessSave->iterator);
 }
@@ -389,7 +389,7 @@ int isForklessSaveInProgress(void) {
 sds forkless_catInfo(sds info) {
     long long estimated_seconds_remaining = -1;
 
-    if (onValkeyMainThread()) {
+    if (onServerMainThread()) {
         bgIterator *iter = bgIteratorFind(FORKLESS_SAVE_FILE_ITER_NAME);
         if (iter != NULL) {
             bgIteratorStatus status = {0};
@@ -415,7 +415,7 @@ sds forkless_catDebugInfo(sds info) {
     bgIteratorStatus status = {0};
     long long current_item_ms = -1;
 
-    if (onValkeyMainThread()) {
+    if (onServerMainThread()) {
         bgIterator *iter = bgIteratorFind(FORKLESS_SAVE_FILE_ITER_NAME);
         if (iter != NULL) {
             bgIteratorGetStatus(iter, &status);

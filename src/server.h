@@ -147,8 +147,6 @@ struct ValkeyModule;
 #define C_ERR -1
 #define C_RETRY -2
 
-#define onValkeyMainThread() (pthread_equal(server.main_thread_id, pthread_self()) != 0)
-
 /* Static server configuration */
 #define CONFIG_DEFAULT_HZ 10 /* Time interrupt calls/sec. */
 #define CONFIG_MIN_HZ 1
@@ -2880,6 +2878,11 @@ typedef struct clusterScanCtx {
  *----------------------------------------------------------------------------*/
 
 extern struct valkeyServer server;
+
+static inline bool onServerMainThread(void) {
+    return pthread_equal(server.main_thread_id, pthread_self()) != 0;
+}
+
 extern struct sharedObjectsStruct shared;
 extern dictType objectKeyPointerValueDictType;
 extern hashtableType objectHashtableType;

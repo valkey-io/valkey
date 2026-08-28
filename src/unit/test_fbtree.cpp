@@ -3026,6 +3026,86 @@ TEST_F(FbtreeTest, DeleteRangeByRankThenInsert) {
     EXPECT_EQ(all.size(), 20u);
 }
 
+/* A range delete that strips every sibling from an inner node leaves that node
+ * with a single child. If updateCommonPrefix() skips the recompute for such a
+ * node, it retains the prefix derived when the node still had >= 2 anchors,
+ * while innerNodeRefreshChildMeta() has just rewritten the surviving child-0
+ * anchor. Child 0's key range extends BELOW its own high key, so the refreshed
+ * anchor can fall below the retained prefix, breaking the "every anchor starts
+ * with the node prefix" invariant. This test guards that path.
+ *
+ * Needs a >= 3-level tree, and the delete must (a) start inside child 0 of a
+ * depth-1 inner node, (b) extend past the end of that node's subtree, and
+ * (c) stop short of the last root child so the node is not collapsed away.
+ * Keys are equal length, so the tree shape depends only on the element count:
+ * the first pass learns the shape, the second builds the triggering content. */
+TEST_F(FbtreeTest, RangeDeleteLeavingSingleChildKeepsPrefixValid) {
+    const int N = TEST_THREE_LEVEL_ITEMS * 3; /* comfortably 3 levels */
+
+    /* Pass 1: uniform keys, purely to locate a suitable depth-1 inner node. */
+    for (int i = 0; i < N; i++) {
+        char buf[32];
+        snprintf(buf, sizeof(buf), "b%08d", i);
+        fbtreeInsert(fbt, createString(buf));
+    }
+    ASSERT_FALSE(fbt->root->is_leaf);
+    ASSERT_GT(fbtreeHeight(fbt), 2UL) << "test needs a >= 3-level tree";
+
+    int flip = -1, del_start = -1, del_end = -1;
+    {
+        innerNode *root = (innerNode *)(void *)fbt->root;
+        size_t rank = 0;
+        for (int i = 0; i < root->header.num_items; i++) {
+            node *child = root->children[i];
+            size_t subtree = root->child_sizes[i];
+            /* Skip root child 0: its child 0 has no lower neighbour to dip into. */
+            if (i >= 1 && !child->is_leaf && flip < 0) {
+                innerNode *d = (innerNode *)(void *)child;
+                if (d->header.num_items >= 2) {
+                    size_t c0 = d->child_sizes[0];
+                    flip = (int)(rank + c0 / 2);     /* inside child 0 of this node */
+                    del_start = (int)(rank + 1);     /* keep >= 1 survivor in child 0 */
+                    del_end = (int)(rank + subtree); /* one past this subtree */
+                }
+            }
+            rank += subtree;
+        }
+    }
+    ASSERT_GE(flip, 0) << "no suitable depth-1 inner node found";
+
+    /* Pass 2: rebuild so the key prefix flips 'a' -> 'b' at `flip`. Ordering is
+     * still by index, so the shape is identical to pass 1. */
+    fbtreeFree(fbt);
+    fbt = fbtreeCreate();
+    for (int i = 0; i < N; i++) {
+        char buf[32];
+        snprintf(buf, sizeof(buf), "%c%08d", i < flip ? 'a' : 'b', i);
+        fbtreeInsert(fbt, createString(buf));
+    }
+    expectValid();
+
+    unsigned long deleted = fbtreeDeleteRangeByRank(fbt, del_start, del_end, NULL, NULL);
+    EXPECT_EQ(deleted, (unsigned long)(del_end - del_start + 1));
+
+    char errmsg[256];
+    ASSERT_TRUE(fbtreeDebugValidate(fbt, false, errmsg, sizeof(errmsg))) << errmsg;
+
+    /* The surviving elements must still be exactly the expected set, in order. */
+    fbtreeIterator it;
+    fbtreeInitIterator(&it, fbt);
+    const_sds pos;
+    for (int i = 0; i < N; i++) {
+        if (i >= del_start && i <= del_end) continue;
+        char buf[32];
+        snprintf(buf, sizeof(buf), "%c%08d", i < flip ? 'a' : 'b', i);
+        sds expected = createString(buf);
+        ASSERT_NE(pos = fbtreeNext(&it), nullptr) << "tree exhausted at index " << i;
+        EXPECT_EQ(sdscmp(pos, expected), 0);
+        sdsfree(expected);
+    }
+    EXPECT_EQ(pos = fbtreeNext(&it), nullptr);
+}
+
 TEST_F(FbtreeTest, DeleteRangeByRankDeepTree) {
     /* Build a 3+ level tree */
     const int N = TEST_THREE_LEVEL_ITEMS;

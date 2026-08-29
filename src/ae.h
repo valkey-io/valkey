@@ -137,7 +137,7 @@ typedef struct aeEventLoop {
     aeApiState *qos_apidata;                   /* Dedicated QoS polling state */
     int qos_fd;                                /* File descriptor of QoS polling backend (-1 if disabled) */
     aeFiredEvent *qos_fired;                   /* Fired events buffer for QoS polling */
-    monotime qos_el_last_poll_us;              /* Timestamp (microseconds) when QoS was last drained */
+    monotime qos_el_last_poll;                 /* Timestamp when QoS was last drained */
     uint64_t qos_el_preempt_check_interval_us; /* Preemptive check interval in microseconds (0 = disabled) */
     aeQoSStatsProc *qos_el_stats_callback;     /* Callback invoked with elapsed microseconds after draining QoS */
 } aeEventLoop;
@@ -170,7 +170,7 @@ int aeResizeSetSize(aeEventLoop *eventLoop, int setsize);
 void aeSetDontWait(aeEventLoop *eventLoop, int noWait);
 
 /* QoS event loop prototypes */
-int aeActuateQoSEventLoopIfSupported(aeEventLoop *eventLoop, int setsize, uint64_t qosPreemptPollIntervalUs, aeQoSStatsProc *qosStatsCallback);
+int aeActuateQoSEventLoopIfSupported(aeEventLoop *eventLoop, uint64_t qosPreemptPollIntervalUs, aeQoSStatsProc *qosStatsCallback);
 int aeProcessQoSEventsPreemptively(aeEventLoop *eventLoop);
 void aeSetQoSPreemptCheckInterval(aeEventLoop *eventLoop, uint64_t interval_us);
 

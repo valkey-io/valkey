@@ -86,7 +86,7 @@ static int g_normal_cb_count = 0;
 static void testNormalEventCallbackPreemptCheck(aeEventLoop *el, int fd, void *privdata, int mask) {
     testNormalEventCallback(el, fd, privdata, mask);
     g_normal_cb_count++;
-    /* Sleep > 2000 us on 2nd normal event and trigger 2nd QoS pipe so the next iteration immediately preempts and polls qos_el */
+    /* Sleep > 2000 us on 2nd normal event and trigger 2nd QoS pipe so the next iteration immediately preempts and polls QoS events */
     if (g_normal_cb_count == 2 && g_qos_pipe2_write_fd != -1) {
         usleep(2500);
         char c = 'x';
@@ -134,7 +134,7 @@ class SocketPrioritizationTest : public ::testing::Test {
 
         server.el = aeCreateEventLoop(1024);
         if (server.el) {
-            aeActuateQoSEventLoopIfSupported(server.el, 1024, 2000, NULL);
+            aeActuateQoSEventLoopIfSupported(server.el, 2000, NULL);
         }
         g_execution_count = 0;
     }
@@ -279,7 +279,7 @@ TEST_F(SocketPrioritizationTest, PreemptionOfNormalEventsByQoSLoop) {
     if (write(qos_pipe[1], &c, 1) < 0) {
     }
 
-    /* Ensure more than AE_QOS_DEFAULT_PREEMPT_CHECK_INTERVAL_US (2000 us) has elapsed for qos_el_last_poll_us */
+    /* Ensure more than AE_QOS_DEFAULT_PREEMPT_CHECK_INTERVAL_US (2000 us) has elapsed for qos_el_last_poll */
     advanceMockTime(1000000);
 
     g_execution_count = 0;
@@ -338,7 +338,7 @@ TEST_P(SocketPrioritizationConnTest, WriteHandlerPriorityPreemption) {
     ret = aeCreateFileEvent(server.el, normal_pipe[0], AE_READABLE, testNormalEventCallback, NULL);
     EXPECT_EQ(ret, AE_OK);
 
-    /* Register QoS write event on server.el->qos_el via connection wrapper */
+    /* Register QoS write event on QoS multiplexer via connection wrapper */
     ret = connSetWriteHandler(qos_conn, testQoSWriteCallback);
     EXPECT_EQ(ret, C_OK);
 
@@ -362,7 +362,7 @@ TEST_P(SocketPrioritizationConnTest, WriteHandlerPriorityPreemption) {
 }
 
 TEST_F(SocketPrioritizationTest, ImmediatePreemptionDuringNormalEventProcessing) {
-    /* Verify that preemption check immediately services qos_el on the next iteration when elapsed time threshold is crossed */
+    /* Verify that preemption check immediately services QoS events on the next iteration when elapsed time threshold is crossed */
     int normal_pipes[5][2];
     int qos_pipe[2];
     int qos_pipe2[2];
@@ -415,13 +415,12 @@ TEST_F(SocketPrioritizationTest, ImmediatePreemptionDuringNormalEventProcessing)
     EXPECT_NE(g_execution_order[1], 999);
     /* 2nd normal event (sleeps >2000us and writes to qos_pipe2) */
     EXPECT_NE(g_execution_order[2], 999);
-    /* 3rd and 4th normal events execute before mask check boundary (j & 0x03) */
+    /* 3rd, 4th, and 5th normal events execute before mask check boundary at end of iteration (j = 4) */
     EXPECT_NE(g_execution_order[3], 999);
     EXPECT_NE(g_execution_order[4], 999);
-    /* Preemptive polling services qos_pipe2 at mask check boundary (j = 4) */
-    EXPECT_EQ(g_execution_order[5], 999);
-    /* 5th normal event */
-    EXPECT_NE(g_execution_order[6], 999);
+    EXPECT_NE(g_execution_order[5], 999);
+    /* Preemptive polling services qos_pipe2 at mask check boundary (end of j = 4 iteration) */
+    EXPECT_EQ(g_execution_order[6], 999);
 
     g_qos_pipe2_write_fd = -1;
 
@@ -566,7 +565,7 @@ TEST_F(SocketPrioritizationTest, FallbackMaskSanitization) {
     int fds[2];
     ASSERT_EQ(pipe(fds), 0);
 
-    /* Register with AE_HIGH_PRIORITY on standalone event loop with no qos_el */
+    /* Register with AE_HIGH_PRIORITY on standalone event loop with no QoS state */
     int ret = aeCreateFileEvent(standalone_el, fds[0], AE_READABLE | AE_HIGH_PRIORITY, testNormalEventCallback, NULL);
     EXPECT_EQ(ret, AE_OK);
 
@@ -900,7 +899,7 @@ static void qosTestFileProc(aeEventLoop *el, int fd, void *privdata, int mask) {
 TEST_F(SocketPrioritizationTest, QoSEventLoopStatsMetrics) {
     aeEventLoop *main_loop = aeCreateEventLoop(64);
     ASSERT_NE(main_loop, (aeEventLoop *)NULL);
-    ASSERT_EQ(aeActuateQoSEventLoopIfSupported(main_loop, 64, 2000, qosMetricTestCb), AE_OK);
+    ASSERT_EQ(aeActuateQoSEventLoopIfSupported(main_loop, 2000, qosMetricTestCb), AE_OK);
 
     unsigned long long orig_cnt = server.duration_stats[EL_DURATION_TYPE_QOS_EL].cnt;
     unsigned long long orig_sum = server.duration_stats[EL_DURATION_TYPE_QOS_EL].sum;

@@ -3065,9 +3065,9 @@ void initServer(void) {
         serverLog(LL_WARNING, "Failed creating the event loop. Error message: '%s'", strerror(errno));
         exit(1);
     }
-    /* Setup QoS event loop if multiplexer backend supports nested event loop polling.
-     * If multiplexer nesting is unsupported (e.g. evport, select), gracefully fallback to main event loop event processing without QoS. */
-    if (aeActuateQoSEventLoopIfSupported(server.el, server.maxclients + CONFIG_FDSET_INCR, server.qos_preemptive_poll_interval_us, qosStatsCallback) == AE_ERR) {
+    /* Setup QoS event loop if multiplexer backend supports secondary polling.
+     * If secondary polling is unsupported (e.g. evport, select), gracefully fallback to standard event processing without QoS. */
+    if (aeActuateQoSEventLoopIfSupported(server.el, server.qos_preemptive_poll_interval_us, qosStatsCallback) == AE_ERR) {
         serverLog(LL_NOTICE, "QoS event prioritization not supported on %s multiplexer, falling back to standard event processing",
                   aeGetApiName());
     }

@@ -100,7 +100,7 @@ aeEventLoop *aeCreateEventLoop(int setsize) {
     eventLoop->qos_apidata = NULL;
     eventLoop->qos_fd = -1;
     eventLoop->qos_fired = NULL;
-    eventLoop->qos_el_last_poll_us = 0;
+    eventLoop->qos_el_last_poll = 0;
     eventLoop->qos_el_preempt_check_interval_us = 0;
     eventLoop->qos_el_stats_callback = NULL;
     /* Initialize the eventloop mutex with PTHREAD_MUTEX_ERRORCHECK type */
@@ -180,7 +180,6 @@ done:
 
 void aeDeleteEventLoop(aeEventLoop *eventLoop) {
     if (eventLoop->qos_apidata) {
-        if (eventLoop->qos_fd != -1) aeDeleteFileEvent(eventLoop, eventLoop->qos_fd, AE_READABLE);
         aeApiFree(eventLoop->qos_apidata);
         zfree(eventLoop->qos_fired);
     }
@@ -213,15 +212,8 @@ int aeCreateFileEvent(aeEventLoop *eventLoop, int fd, int mask, aeFileProc *proc
     }
     aeFileEvent *fe = &eventLoop->events[fd];
 
-    int is_priority = 0;
-    if ((mask & AE_HIGH_PRIORITY) || (fe->mask & AE_HIGH_PRIORITY)) {
-        if (eventLoop->qos_apidata != NULL) {
-            is_priority = 1;
-            mask |= AE_HIGH_PRIORITY;
-        } else {
-            mask &= ~AE_HIGH_PRIORITY;
-        }
-    }
+    bool is_priority = (eventLoop->qos_apidata != NULL) && ((mask | fe->mask) & AE_HIGH_PRIORITY);
+    if (!is_priority) mask &= ~AE_HIGH_PRIORITY;
     aeApiState *target_api = is_priority ? eventLoop->qos_apidata : eventLoop->apidata;
 
     int backend_add_mask = BACKEND_MASK(mask) & ~fe->mask; // just the meaningful additions
@@ -243,13 +235,13 @@ done:
 
 void aeDeleteFileEvent(aeEventLoop *eventLoop, int fd, int mask) {
     AE_LOCK(eventLoop);
-    mask &= ~AE_HIGH_PRIORITY;
+    mask &= ~AE_HIGH_PRIORITY; // Priority flag is removed implicitly when read & write have been removed
     if (fd >= eventLoop->setsize) goto done;
 
     aeFileEvent *fe = &eventLoop->events[fd];
     if (fe->mask == AE_NONE) goto done;
 
-    int is_priority = (fe->mask & AE_HIGH_PRIORITY) && (eventLoop->qos_apidata != NULL);
+    bool is_priority = (fe->mask & AE_HIGH_PRIORITY) && (eventLoop->qos_apidata != NULL);
     aeApiState *target_api = is_priority ? eventLoop->qos_apidata : eventLoop->apidata;
 
     /* We want to always remove AE_BARRIER if set when AE_WRITABLE
@@ -504,18 +496,13 @@ static int aeProcessQoSEvents(aeEventLoop *eventLoop) {
             aeFireFileEvent(eventLoop, fd, mask);
             processed++;
         }
-        eventLoop->qos_el_last_poll_us = getMonotonicUs();
+        eventLoop->qos_el_last_poll = getMonotonicUs();
         /* Update INFO stats if registered and QoS events were processed */
         if (eventLoop->qos_el_stats_callback != NULL && processed > 0) {
-            eventLoop->qos_el_stats_callback(eventLoop, eventLoop->qos_el_last_poll_us - start);
+            eventLoop->qos_el_stats_callback(eventLoop, eventLoop->qos_el_last_poll - start);
         }
     }
     return processed;
-}
-
-/* Set callback to receive elapsed duration of QoS event processing */
-static void aeSetQoSStatsCallback(aeEventLoop *eventLoop, aeQoSStatsProc *cb) {
-    eventLoop->qos_el_stats_callback = cb;
 }
 
 /* Set the preemptive poll interval in microseconds for QoS events.
@@ -531,7 +518,7 @@ void aeSetQoSPreemptCheckInterval(aeEventLoop *eventLoop, uint64_t interval_us) 
 int aeProcessQoSEventsPreemptively(aeEventLoop *eventLoop) {
     /* Skip if QoS is disabled or preemptive polling is disabled */
     if (eventLoop->qos_apidata == NULL || eventLoop->qos_el_preempt_check_interval_us == 0) return 0;
-    if (elapsedUs(eventLoop->qos_el_last_poll_us) < eventLoop->qos_el_preempt_check_interval_us) return 0;
+    if (elapsedUs(eventLoop->qos_el_last_poll) < eventLoop->qos_el_preempt_check_interval_us) return 0;
     return aeProcessQoSEvents(eventLoop);
 }
 
@@ -611,12 +598,6 @@ int aeProcessEvents(aeEventLoop *eventLoop, int flags) {
         }
 
         for (j = 0; j < numevents; j++) {
-            /* Periodic Preemptive Poll:
-             * Sample monotonic clock once every 4 iterations (AE_QOS_PREEMPT_CHECK_MASK) to amortize vDSO overhead */
-            if ((j & AE_QOS_PREEMPT_CHECK_MASK) == 0 && eventLoop->qos_apidata != NULL) {
-                processed += aeProcessQoSEventsPreemptively(eventLoop);
-            }
-
             int fd = eventLoop->fired[j].fd;
             /* Skip processing QoS events here again as they were already processed above */
             if (fd == eventLoop->qos_fd) continue;
@@ -624,6 +605,12 @@ int aeProcessEvents(aeEventLoop *eventLoop, int flags) {
 
             aeFireFileEvent(eventLoop, fd, mask);
             processed++;
+
+            /* Periodic Preemptive Poll:
+             * Sample monotonic clock once every 4 iterations (AE_QOS_PREEMPT_CHECK_MASK) to amortize vDSO overhead */
+            if ((j & AE_QOS_PREEMPT_CHECK_MASK) == 0) {
+                processed += aeProcessQoSEventsPreemptively(eventLoop);
+            }
         }
     }
     /* Check time events */
@@ -697,11 +684,11 @@ void aeSetPollProtect(aeEventLoop *eventLoop, int protect) {
  * Returns AE_OK on success, or AE_ERR if QoS eventloop actuation fails
  * (e.g., unsupported platform, memory allocation failure, or I/O error).
  */
-int aeActuateQoSEventLoopIfSupported(aeEventLoop *eventLoop, int setsize, uint64_t qosPreemptPollIntervalUs, aeQoSStatsProc *qosStatsCallback) {
+int aeActuateQoSEventLoopIfSupported(aeEventLoop *eventLoop, uint64_t qosPreemptPollIntervalUs, aeQoSStatsProc *qosStatsCallback) {
     assert(eventLoop != NULL);
 
     /* Create QoS polling state for internal connections (cluster bus, replication, and slot migration jobs) */
-    aeApiState *qos_apidata = aeApiCreate(setsize);
+    aeApiState *qos_apidata = aeApiCreate(eventLoop->setsize);
     if (qos_apidata == NULL) return AE_ERR;
 
     int qos_fd = aeApiGetPollFd(qos_apidata);
@@ -710,7 +697,7 @@ int aeActuateQoSEventLoopIfSupported(aeEventLoop *eventLoop, int setsize, uint64
         return AE_ERR;
     }
 
-    aeFiredEvent *qos_fired = zmalloc(sizeof(aeFiredEvent) * setsize);
+    aeFiredEvent *qos_fired = zmalloc(sizeof(aeFiredEvent) * eventLoop->setsize);
     if (qos_fired == NULL) {
         aeApiFree(qos_apidata);
         return AE_ERR;
@@ -729,12 +716,8 @@ int aeActuateQoSEventLoopIfSupported(aeEventLoop *eventLoop, int setsize, uint64
     eventLoop->qos_apidata = qos_apidata;
     eventLoop->qos_fd = qos_fd;
     eventLoop->qos_fired = qos_fired;
-
-    /* Set the QoS event preemption check interval in microseconds. */
-    aeSetQoSPreemptCheckInterval(eventLoop, qosPreemptPollIntervalUs);
-
-    /* Sets the stats callback invoked with elapsed duration whenever QoS events are processed. */
-    aeSetQoSStatsCallback(eventLoop, qosStatsCallback);
+    eventLoop->qos_el_stats_callback = qosStatsCallback;
+    eventLoop->qos_el_preempt_check_interval_us = qosPreemptPollIntervalUs;
 
     return AE_OK;
 }

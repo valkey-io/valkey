@@ -4003,6 +4003,161 @@ static inline int clusterExtractSlotFromWord(uint64_t *slot_word, size_t slot_wo
     return slot;
 }
 
+
+int clusterxProcessPacket(clusterLink *link) {
+    /* Validate that the packet is well-formed */
+    if (!clusterIsValidPacket(link)) {
+        clusterMsgHeader *hdr = (clusterMsgHeader *)link->rcvbuf;
+        uint16_t type = ntohs(hdr->type);
+        if (server.debug_cluster_close_link_on_packet_drop &&
+            (type == server.cluster_drop_packet_filter || server.cluster_drop_packet_filter == -2)) {
+            freeClusterLink(link);
+            serverLog(LL_WARNING, "Closing link for matching packet type %s", clusterGetMessageTypeString(type));
+            return 0;
+        }
+        return 1;
+    }
+
+    clusterMsgHeader *hdr = (clusterMsgHeader *)link->rcvbuf;
+    mstime_t now = mstime();
+    int is_light = IS_LIGHT_MESSAGE(ntohs(hdr->type));
+    uint16_t type = ntohs(hdr->type) & ~CLUSTERMSG_MODIFIER_MASK;
+
+    if (is_light) {
+        if (!link->node || nodeInHandshake(link->node)) {
+            serverLog(
+                LL_NOTICE,
+                "Closing link for node %.40s (%s) that sent a lightweight message of type %s as its first message on the link",
+                clusterLinkGetNodeName(link),
+                clusterLinkGetHumanNodeName(link),
+                clusterGetMessageTypeString(type));
+            freeClusterLink(link);
+            return 0;
+        }
+        clusterNode *sender = link->node;
+        sender->data_received = now;
+        clusterProcessLightPacket(sender, link, type);
+        return 1;
+    }
+
+    clusterMsg *msg = toClusterMsg(link->rcvbuf);
+    uint16_t flags = ntohs(msg->flags);
+    clusterNode *sender = getNodeFromLinkAndMsg(link, msg);
+    /* Nodes are managed by controller, must be known to each other. */
+    if (!sender) {
+        serverLog(
+                LL_WARNING,
+                "Closing link for node %.40s that sent a message of type %s on the link",
+                msg->sender,
+                clusterGetMessageTypeString(type));
+        freeClusterLink(link);
+        return 0;
+    }
+
+    /* We store this information at the link layer so that we can send extensions
+     * during the handshake even if we don't know the sender. */
+    if (msg->mflags[0] & CLUSTERMSG_FLAG0_EXT_DATA) {
+        link->flags |= CLUSTER_LINK_EXTENSIONS_SUPPORTED;
+    }
+
+    /* Store some flags about the sender. */
+    if (sender) {
+        /* Check if the node supports extensions. */
+        if (linkSupportsExtension(link)) {
+            sender->flags |= CLUSTER_NODE_EXTENSIONS_SUPPORTED;
+        }
+
+        /* Check if the node supports light publish message hdr */
+        if (flags & CLUSTER_NODE_LIGHT_HDR_PUBLISH_SUPPORTED) {
+            sender->flags |= CLUSTER_NODE_LIGHT_HDR_PUBLISH_SUPPORTED;
+        } else {
+            sender->flags &= ~CLUSTER_NODE_LIGHT_HDR_PUBLISH_SUPPORTED;
+        }
+
+        /* Check if the node supports light module message hdr */
+        if (flags & CLUSTER_NODE_LIGHT_HDR_MODULE_SUPPORTED) {
+            sender->flags |= CLUSTER_NODE_LIGHT_HDR_MODULE_SUPPORTED;
+        } else {
+            sender->flags &= ~CLUSTER_NODE_LIGHT_HDR_MODULE_SUPPORTED;
+        }
+
+        /* Check if the node can handle multi meet packet. */
+        if (flags & CLUSTER_NODE_MULTI_MEET_SUPPORTED) {
+            sender->flags |= CLUSTER_NODE_MULTI_MEET_SUPPORTED;
+        } else {
+            sender->flags &= ~CLUSTER_NODE_MULTI_MEET_SUPPORTED;
+        }
+
+        /* Check if the sender has marked its primary node as FAIL. */
+        if (flags & CLUSTER_NODE_MY_PRIMARY_FAIL) {
+            sender->flags |= CLUSTER_NODE_MY_PRIMARY_FAIL;
+        } else {
+            sender->flags &= ~CLUSTER_NODE_MY_PRIMARY_FAIL;
+        }
+    }
+
+    /* Update the last time we saw any data from this node. We
+     * use this in order to avoid detecting a timeout from a node that
+     * is just sending a lot of data in the cluster bus, for instance
+     * because of Pub/Sub. */
+    if (sender) sender->data_received = now;
+
+    if (sender && !nodeInHandshake(sender)) {
+        /* Update the replication offset info for this node. */
+        sender->repl_offset = ntohu64(msg->offset);
+    }
+
+    /* Initial processing of PING and MEET requests replying with a PONG. */
+    if (type == CLUSTERMSG_TYPE_PING || type == CLUSTERMSG_TYPE_MEET) {
+        if (sender->link && nodeExceedsHandshakeTimeout(sender, now)) {
+            /* The MEET packet is from a known node, after the handshake timeout, so the sender
+             * thinks that I do not know it.
+             * Free my outbound link to that node, triggering a reconnect and a PING over the
+             * new link.
+             * Once that node receives our PING, it should recognize the new connection as an
+             * inbound link from me. We should only free the outbound link if the node is known
+             * for more time than the handshake timeout, since during this time, the other side
+             * might still be trying to complete the handshake. */
+
+            /* We should always receive a MEET packet on an inbound link. */
+            serverAssert(link != sender->link);
+            serverLog(LL_NOTICE, "Freeing outbound link to node %.40s (%s) after receiving a MEET packet "
+                                 "from this known node",
+                      sender->name, humanNodename(sender));
+            freeClusterLink(sender->link);
+        }
+
+        /* Anyway reply with a PONG */
+        clusterSendPing(link, CLUSTERMSG_TYPE_PONG);
+    }
+
+    serverLog(LL_WARNING, "Node %.40s sent a message of type %s on the link", msg->sender, clusterGetMessageTypeString(type));
+
+    /* PING, PONG, MEET: process config information. */
+    if (type == CLUSTERMSG_TYPE_PING || type == CLUSTERMSG_TYPE_PONG || type == CLUSTERMSG_TYPE_MEET) {
+
+    } else if (type == CLUSTERMSG_TYPE_FAIL) {
+
+    } else if (type == CLUSTERMSG_TYPE_PUBLISH || type == CLUSTERMSG_TYPE_PUBLISHSHARD) {
+        if (!sender) return 1; /* We don't know that node. */
+        clusterProcessPublishPacket(&msg->data.publish.msg, type);
+    } else if (type == CLUSTERMSG_TYPE_FAILOVER_AUTH_REQUEST) {
+
+    } else if (type == CLUSTERMSG_TYPE_FAILOVER_AUTH_ACK) {
+
+    } else if (type == CLUSTERMSG_TYPE_MFSTART) {
+
+    } else if (type == CLUSTERMSG_TYPE_UPDATE) {
+
+    } else if (type == CLUSTERMSG_TYPE_MODULE) {
+        clusterProcessModulePacket(&msg->data.module.msg, sender);
+    } else {
+        serverLog(LL_WARNING, "Received unknown packet type: %d", type);
+    }
+    return 1;
+}
+
+
 /* When this function is called, there is a packet to process starting
  * at link->rcvbuf. Releasing the buffer is up to the caller, so this
  * function should just handle the higher level stuff of processing the
@@ -4014,7 +4169,7 @@ static inline int clusterExtractSlotFromWord(uint64_t *slot_word, size_t slot_wo
  * received from the wrong sender ID). */
 int clusterProcessPacket(clusterLink *link) {
 #ifdef ENABLE_CLUSTERX_FEATURE
-    return 1;
+    return clusterxProcessPacket(link);
 #endif
 
     /* Validate that the packet is well-formed */
@@ -6412,15 +6567,75 @@ static long long maxConnectionAttemptsPerCron(void) {
 }
 
 /* This is executed 10 times every second */
-void clusterCron(void) {
-#ifdef ENABLE_CLUSTERX_FEATURE
+void clusterxCron(void) {
+    dictIterator *di;
+    dictEntry *de;
+
+    mstime_t min_pong = 0, now = mstime();
+    clusterNode *min_pong_node = NULL;
+    static unsigned long long iteration = 0;
+    iteration++; /* Number of times this function was called so far. */
+
+    /* Clear so clusterNodeCronHandleReconnect can count the number of nodes in PFAIL. */
+    server.cluster->stats_pfail_nodes = 0;
+    /* Run through some of the operations we want to do on each cluster node. */
+    di = dictGetSafeIterator(server.cluster->nodes);
+    long long cluster_node_conn_attempts = maxConnectionAttemptsPerCron();
+    while ((de = dictNext(di)) != NULL) {
+        clusterNode *node = dictGetVal(de);
+        /* We free the inbound or outbound link to the node if the link has an
+         * oversized message send queue and immediately try reconnecting. */
+        clusterNodeCronFreeLinkOnBufferLimitReached(node);
+
+        /* Nodes are managed by controller, must be known to each other. */
+        if (nodeInHandshake(node)) {
+            serverLog(LL_WARNING, "Cluster bus found node %s:%d has handshake flag, remove it.", node->ip, node->cport);
+            node->flags &= ~CLUSTER_NODE_HANDSHAKE;
+        }
+        /* The protocol is that function(s) below return non-zero if the node was
+         * terminated.
+         */
+        if (!server.debug_cluster_disable_reconnection && clusterNodeCronHandleReconnect(node, now, &cluster_node_conn_attempts)) continue;
+    }
+    dictReleaseIterator(di);
+
+    /* Ping some random node 1 time every 10 iterations, so that we usually ping
+     * one random node every second. */
+    if (!server.debug_cluster_disable_random_ping && !(iteration % 10)) {
+        int j;
+
+        /* Check a few random nodes and ping the one with the oldest
+         * pong_received time. */
+        for (j = 0; j < 5; j++) {
+            de = dictGetRandomKey(server.cluster->nodes);
+            clusterNode *this = dictGetVal(de);
+
+            /* Don't ping nodes disconnected or with a ping currently active. */
+            if (this->link == NULL || this->ping_sent != 0) continue;
+            if (this->flags & (CLUSTER_NODE_MYSELF | CLUSTER_NODE_HANDSHAKE)) continue;
+            if (min_pong_node == NULL || min_pong > this->pong_received) {
+                min_pong_node = this;
+                min_pong = this->pong_received;
+            }
+        }
+        if (min_pong_node) {
+            serverLog(LL_DEBUG, "Pinging node %.40s (%s)", min_pong_node->name, humanNodename(min_pong_node));
+            clusterSendPing(min_pong_node->link, CLUSTERMSG_TYPE_PING);
+        }
+    }
+
     /* If we are a replica node but the replication is still turned off,
      * enable it if we know the address of our primary and it appears to
      * be up. */
     if (nodeIsReplica(myself) && server.primary_host == NULL && myself->replicaof && nodeHasAddr(myself->replicaof)) {
         replicationSetPrimary(myself->replicaof->ip, getNodeDefaultReplicationPort(myself->replicaof), 0, false);
     }
-    return;
+}
+
+/* This is executed 10 times every second */
+void clusterCron(void) {
+#ifdef ENABLE_CLUSTERX_FEATURE
+    return clusterxCron();
 #endif
 
     dictIterator *di;
@@ -7210,8 +7425,8 @@ sds clusterGenNodeDescription(client *c, clusterNode *node, int tls_primary) {
 
         /* Latency from the POV of this node, config epoch, link status */
 #ifdef ENABLE_CLUSTERX_FEATURE
-    ci = sdscatfmt(ci, " %I %I %U %s", (long long)node->ping_sent, (long long)node->pong_received,
-                   server.cluster->topologyVersion, "connected");
+    ci = sdscatfmt(ci, " %I %I %U %s", (long long)node->ping_sent, (long long)node->pong_received, server.cluster->topologyVersion,
+                   (node->link || node->flags & CLUSTER_NODE_MYSELF) ? "connected" : "disconnected");
 #else
     ci = sdscatfmt(ci, " %I %I %U %s", (long long)node->ping_sent, (long long)node->pong_received, nodeEpoch(node),
                    (node->link || node->flags & CLUSTER_NODE_MYSELF) ? "connected" : "disconnected");
@@ -8221,6 +8436,21 @@ void clusterCommandSetSlot(client *c) {
 }
 
 int clusterCommandSpecial(client *c) {
+#ifdef ENABLE_CLUSTERX_FEATURE
+    if (!strcasecmp(objectGetVal(c->argv[1]), "meet") || !strcasecmp(objectGetVal(c->argv[1]), "flushslots") ||
+        !strcasecmp(objectGetVal(c->argv[1]), "addslots") || !strcasecmp(objectGetVal(c->argv[1]), "delslots") ||
+        !strcasecmp(objectGetVal(c->argv[1]), "addslotsrange") || !strcasecmp(objectGetVal(c->argv[1]), "delslotsrange") ||
+        !strcasecmp(objectGetVal(c->argv[1]), "setslot") || !strcasecmp(objectGetVal(c->argv[1]), "bumpepoch") ||
+        !strcasecmp(objectGetVal(c->argv[1]), "forget") || !strcasecmp(objectGetVal(c->argv[1]), "replicate") ||
+        !strcasecmp(objectGetVal(c->argv[1]), "failover") || !strcasecmp(objectGetVal(c->argv[1]), "set-config-epoch") ||
+        !strcasecmp(objectGetVal(c->argv[1]), "reset") || !strcasecmp(objectGetVal(c->argv[1]), "flushslot") ||
+        !strcasecmp(objectGetVal(c->argv[1]), "migrateslots") || !strcasecmp(objectGetVal(c->argv[1]), "cancelslotmigrations") ||
+        !strcasecmp(objectGetVal(c->argv[1]), "syncslots")) {
+        addReplyError(c, "Command is not supported in clusterx feature mode");
+        return 1;
+    }
+#endif
+
     if (!strcasecmp(objectGetVal(c->argv[1]), "meet") && (c->argc == 4 || c->argc == 5)) {
         /* CLUSTER MEET <ip> <port> [cport] */
         long long port, cport;

@@ -13333,6 +13333,10 @@ int moduleFreeCommand(struct ValkeyModule *module, struct serverCommand *cmd) {
         hdr_close(cmd->latency_histogram);
         cmd->latency_histogram = NULL;
     }
+    if (cmd->latency_e2e_histogram) {
+        hdr_close(cmd->latency_e2e_histogram);
+        cmd->latency_e2e_histogram = NULL;
+    }
     for (int i = 0; i < RESP_CACHE_INDEX_MAX; i++) {
         if (cmd->info_cache[i]) {
             sdsfree(cmd->info_cache[i]);

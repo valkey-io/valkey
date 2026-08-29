@@ -727,6 +727,15 @@ typedef enum {
                                                  * LATENCY_HISTOGRAM_MAX_VALUE range. Value quantization within the range will thus be no larger than 1/100th \
                                                  * (or 1%) of any value. The total size per histogram should sit around 40 KiB Bytes. */
 
+/* End-to-end latency histogram per command init settings. */
+#define LATENCY_E2E_HISTOGRAM_MIN_VALUE 1L           /* >= 1 nanosec */
+#define LATENCY_E2E_HISTOGRAM_MAX_VALUE 10000000000L /* <= 10 secs */
+#define LATENCY_E2E_HISTOGRAM_PRECISION 2            /* 2 significant digits, as with the latency histogram. */
+
+/* Latency-tracking feature flags (server.latency_tracking_features). Select which latency metrics. */
+#define LATENCY_TRACK_CMD (1 << 0) /* command processing-time histogram */
+#define LATENCY_TRACK_E2E (1 << 1) /* per-command end-to-end (service) time histogram */
+
 /* Busy module flags, see busy_module_yield_flags */
 #define BUSY_MODULE_YIELD_NONE (0)
 #define BUSY_MODULE_YIELD_EVENTS (1 << 0)
@@ -1339,6 +1348,37 @@ typedef struct LastWrittenBuf {
 /* Forward declaration of slotMigrationJob */
 typedef struct slotMigrationJob slotMigrationJob;
 
+/* end to end latency structure & definitions. */
+#ifndef LATENCY_E2E_MAX_SLOTS
+/* Maximum number of unique commands tracked in a single batch. */
+/* Note: This is kept low to enable GCC optimization of unrolling the loop defined in latencyE2eRecordCommand. */
+#define LATENCY_E2E_MAX_SLOTS 8
+#endif
+
+/* Max number of aggregation tables per client.
+ * Each table is retired once its replies are fully written. */
+#define LATENCY_E2E_MAX_TABLES 4
+
+/* service time aggregation table. */
+typedef struct latencyE2eTable {
+    struct serverCommand *cmds[LATENCY_E2E_MAX_SLOTS];
+    int counts[LATENCY_E2E_MAX_SLOTS]; /* Number of samples per occupied slot. */
+    int nslots;                        /* Number of occupied slots. */
+    monotime cmd_read_time;            /* Arrival time of this table's commands. */
+    uint64_t boundary;                 /* reply_blocks_removed value at which this table's replies
+                                        * are fully written; -1ULL while the table is still accepting new samples. */
+} latencyE2eTable;
+
+typedef struct latencyE2e {
+    monotime cur_read_time;         /* Arrival time of the most recent socket read. */
+    monotime cur_cmd_time;          /* Current command batch read time. */
+    monotime cur_write_time;        /* The latest write time associated with the client. */
+    uint64_t reply_block_watermark; /* reply_blocks_removed value at which current responses are flushed out. */
+    uint64_t reply_blocks_removed;  /* Monotonic count of reply blocks drained from c->reply. */
+    list *tables;                   /* Lazily allocated aggregation tables. */
+    latencyE2eTable *open;          /* Current aggregation table. */
+} latencyE2e;
+
 typedef struct client {
     /* Basic client information and connection. */
     uint64_t id; /* Client incremental unique ID. */
@@ -1378,7 +1418,9 @@ typedef struct client {
     size_t buf_usable_size;              /* Usable size of buffer. */
     list *reply;                         /* List of reply objects to send to the client. */
     listNode *io_last_reply_block;       /* Last client reply block when sent to IO thread */
-    size_t io_last_bufpos;               /* The client's bufpos at the time it was sent to the IO thread */
+    size_t io_last_bufpos;               /* The client's bufpos at the time it was sent to the IO thread. */
+    size_t io_reply_len;                 /* Client reply block count when sent to IO thread.  */
+    monotime io_event_loop_wakeup_time;  /* Snapshot of the event loop wakeup_time. */
     LastWrittenBuf io_last_written;      /* Track state for last written buffer */
     unsigned long long reply_bytes;      /* Tot bytes of objects in reply list. */
     listNode clients_pending_write_node; /* list node in clients_pending_write or in clients_pending_io_write list */
@@ -1423,6 +1465,7 @@ typedef struct client {
     int slot;                                     /* The slot the client is executing against. Set to -1 if no slot is being used */
     listNode *mem_usage_bucket_node;
     clientMemUsageBucket *mem_usage_bucket;
+    latencyE2e latency_e2e;
     /* In updateClientMemoryUsage() we track the memory usage of
      * each client and add it to the sum of all the clients of a given type,
      * however we need to remember what was the old contribution of each
@@ -2046,6 +2089,9 @@ struct valkeyServer {
     int pause_cron;                            /* Don't run cron tasks (debug) */
     int dict_resizing;                         /* Whether to allow main dict and expired dict to be resized (debug) */
     int latency_tracking_enabled;              /* 1 if extended latency tracking is enabled, 0 otherwise. */
+    int latency_tracking_features;             /* Bitmask of LATENCY_TRACK_* metrics to record when tracking is enabled. */
+    int latency_tracking_enable_cmd;           /* Tracking of processing time is enabled. */
+    int latency_tracking_enable_e2e;           /* Tracking of end to end time is enabled. */
     double *latency_tracking_info_percentiles; /* Extended latency tracking info output percentile list configuration. */
     int latency_tracking_info_percentiles_len;
     unsigned int max_new_tls_conns_per_cycle; /* The maximum number of tls connections that will be accepted during each
@@ -2798,7 +2844,9 @@ struct serverCommand {
     sds fullname;     /* Includes parent name if any: "parentcmd|childcmd". Unchanged if command is renamed. */
     sds current_name; /* Same as fullname, becomes a separate string if command is renamed. */
     struct hdr_histogram
-        *latency_histogram;        /* Points to the command latency command histogram (unit of time nanosecond). */
+        *latency_histogram; /* Points to the command latency command histogram (unit of time nanosecond). */
+    struct hdr_histogram
+        *latency_e2e_histogram;    /* Points to the command end to end latency command histogram (unit of time nanosecond). */
     keySpec legacy_range_key_spec; /* The legacy (first,last,step) key spec is
                                     * still maintained (if applicable) so that
                                     * we can still support the reply format of
@@ -3583,8 +3631,13 @@ void forceCommandPropagation(client *c, int flags);
 void preventCommandPropagation(client *c);
 void preventCommandAOF(client *c);
 void preventCommandReplication(client *c);
+void latencyE2eRecordCommand(client *c, struct serverCommand *cmd);
+void latencyE2eRelease(client *c);
+void latencyE2ePostClientWrite(client *c);
+void latencyE2ePostReplicaWrite(client *c);
 void commandlogPushCurrentCommand(client *c, struct serverCommand *cmd);
 void updateCommandLatencyHistogram(struct hdr_histogram **latency_histogram, int64_t duration_hist);
+void updateCommandLatencyE2eHistogram(struct hdr_histogram **latency_e2e_histogram, int64_t duration_hist, long long count);
 int prepareForShutdown(client *c, int flags);
 void replyToClientsBlockedOnShutdown(void);
 int abortShutdown(void);
@@ -3771,6 +3824,7 @@ typedef enum {
 } configType;
 
 void loadServerConfig(char *filename, char config_from_stdin, char *options);
+int updateLatencyTrackingFlags(const char **err);
 void appendServerSaveParams(time_t seconds, int changes);
 void resetServerSaveParams(void);
 struct rewriteConfigState; /* Forward declaration to export API. */

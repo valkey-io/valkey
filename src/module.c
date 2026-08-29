@@ -897,20 +897,6 @@ static long long computeNextYieldTime(void) {
     }
 }
 
-static long long computeNextYieldTime(void) {
-    /* In loading we depend on the server hz, but in other cases we also wait
-     * for busy_reply_threshold.
-     * Note that in theory we could have started processing BUSY_MODULE_YIELD_EVENTS
-     * sooner, and only delay the processing for clients till the busy_reply_threshold,
-     * but this carries some overheads of frequently marking clients with BLOCKED_POSTPONE
-     * and releasing them, i.e. if modules only block for short periods. */
-    if (server.loading) {
-        return getMonotonicUs() + 1000000 / server.hz;
-    } else {
-        return getMonotonicUs() + server.busy_reply_threshold * 1000;
-    }
-}
-
 /* Create a module ctx and keep track of the nesting level.
  *
  * Note: When creating ctx for threads (VM_GetThreadSafeContext and

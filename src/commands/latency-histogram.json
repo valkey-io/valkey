@@ -1,6 +1,6 @@
 {
     "HISTOGRAM": {
-        "summary": "Returns the cumulative distribution of latencies of a subset or all commands.",
+        "summary": "Returns the cumulative distribution of latencies of a subset or all commands. With CMD (default) returns processing-time histograms; with E2E returns the per-command end-to-end latency histograms.",
         "complexity": "O(N) where N is the number of commands with latency information being retrieved.",
         "group": "server",
         "since": "7.0.0",
@@ -43,6 +43,24 @@
             }
         },
         "arguments": [
+            {
+                "name": "metric",
+                "type": "oneof",
+                "optional": true,
+                "since": "9.2.0",
+                "arguments": [
+                    {
+                        "name": "cmd",
+                        "type": "pure-token",
+                        "token": "CMD"
+                    },
+                    {
+                        "name": "e2e",
+                        "type": "pure-token",
+                        "token": "E2E"
+                    }
+                ]
+            },
             {
                 "name": "COMMAND",
                 "type": "string",

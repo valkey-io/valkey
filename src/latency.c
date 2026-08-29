@@ -529,20 +529,21 @@ void fillCommandCDF(client *c, struct hdr_histogram *histogram) {
 
 /* latencyCommand() helper to produce for all commands,
  * a per command cumulative distribution of latencies. */
-void latencyAllCommandsFillCDF(client *c, hashtable *commands, int *command_with_data) {
+void latencyAllCommandsFillCDF(client *c, hashtable *commands, int *command_with_data, int latency_e2e) {
     hashtableIterator iter;
     hashtableInitIterator(&iter, commands, HASHTABLE_ITER_SAFE);
     void *next;
     while (hashtableNext(&iter, &next)) {
         struct serverCommand *cmd = next;
-        if (cmd->latency_histogram) {
+        struct hdr_histogram *hist = latency_e2e ? cmd->latency_e2e_histogram : cmd->latency_histogram;
+        if (hist) {
             addReplyBulkCBuffer(c, cmd->fullname, sdslen(cmd->fullname));
-            fillCommandCDF(c, cmd->latency_histogram);
+            fillCommandCDF(c, hist);
             (*command_with_data)++;
         }
 
         if (cmd->subcommands) {
-            latencyAllCommandsFillCDF(c, cmd->subcommands_ht, command_with_data);
+            latencyAllCommandsFillCDF(c, cmd->subcommands_ht, command_with_data, latency_e2e);
         }
     }
     hashtableCleanupIterator(&iter);
@@ -550,19 +551,20 @@ void latencyAllCommandsFillCDF(client *c, hashtable *commands, int *command_with
 
 /* latencyCommand() helper to produce for a specific command set,
  * a per command cumulative distribution of latencies. */
-void latencySpecificCommandsFillCDF(client *c) {
+void latencySpecificCommandsFillCDF(client *c, int argstart, int latency_e2e) {
     void *replylen = addReplyDeferredLen(c);
     int command_with_data = 0;
-    for (int j = 2; j < c->argc; j++) {
+    for (int j = argstart; j < c->argc; j++) {
         struct serverCommand *cmd = lookupCommandBySds(objectGetVal(c->argv[j]));
         /* If the command does not exist we skip the reply */
         if (cmd == NULL) {
             continue;
         }
 
-        if (cmd->latency_histogram) {
+        struct hdr_histogram *hist = latency_e2e ? cmd->latency_e2e_histogram : cmd->latency_histogram;
+        if (hist) {
             addReplyBulkCBuffer(c, cmd->fullname, sdslen(cmd->fullname));
-            fillCommandCDF(c, cmd->latency_histogram);
+            fillCommandCDF(c, hist);
             command_with_data++;
         }
 
@@ -572,9 +574,10 @@ void latencySpecificCommandsFillCDF(client *c) {
             void *next;
             while (hashtableNext(&iter, &next)) {
                 struct serverCommand *sub = next;
-                if (sub->latency_histogram) {
+                struct hdr_histogram *subhist = latency_e2e ? sub->latency_e2e_histogram : sub->latency_histogram;
+                if (subhist) {
                     addReplyBulkCBuffer(c, sub->fullname, sdslen(sub->fullname));
-                    fillCommandCDF(c, sub->latency_histogram);
+                    fillCommandCDF(c, subhist);
                     command_with_data++;
                 }
             }
@@ -724,14 +727,28 @@ void latencyCommand(client *c) {
             addReplyLongLong(c, resets);
         }
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "histogram") && c->argc >= 2) {
-        /* LATENCY HISTOGRAM*/
-        if (c->argc == 2) {
+        /* LATENCY HISTOGRAM [CMD|E2E] [command ...]
+         * An optional metric selector chooses which per-command histograms to report:
+         *   CMD (default) - processing-time histograms.
+         *   E2E           - end-to-end histograms, incl. queue + block time.
+         * Any first token that isn't a selector is treated as a command-name filter. */
+        int latency_e2e = 0;
+        int argstart = 2;
+        if (c->argc >= 3) {
+            if (!strcasecmp(objectGetVal(c->argv[2]), "e2e")) {
+                latency_e2e = 1;
+                argstart = 3;
+            } else if (!strcasecmp(objectGetVal(c->argv[2]), "cmd")) {
+                argstart = 3;
+            }
+        }
+        if (c->argc == argstart) {
             int command_with_data = 0;
             void *replylen = addReplyDeferredLen(c);
-            latencyAllCommandsFillCDF(c, server.commands, &command_with_data);
+            latencyAllCommandsFillCDF(c, server.commands, &command_with_data, latency_e2e);
             setDeferredMapLen(c, replylen, command_with_data);
         } else {
-            latencySpecificCommandsFillCDF(c);
+            latencySpecificCommandsFillCDF(c, argstart, latency_e2e);
         }
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "help") && c->argc == 2) {
         const char *help[] = {
@@ -746,9 +763,11 @@ void latencyCommand(client *c) {
             "RESET [<event> ...]",
             "    Reset latency data of one or more <event> classes.",
             "    (default: reset all data for all event classes)",
-            "HISTOGRAM [COMMAND ...]",
+            "HISTOGRAM [CMD|E2E] [COMMAND ...]",
             "    Return a cumulative distribution of latencies in the format of a histogram for the specified command names.",
             "    If no commands are specified then all histograms are replied.",
+            "    With CMD (default), report processing-time histograms. "
+            "    With E2E, report the end-to-end latency histograms.",
             NULL,
         };
         addReplyHelp(c, help);

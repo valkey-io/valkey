@@ -326,6 +326,14 @@ static int isCopyAvoidPreferred(client *c, robj *obj) {
     return server.min_string_size_copy_avoid_threaded && sdslen(objectGetVal(obj)) >= (size_t)server.min_string_size_copy_avoid_threaded;
 }
 
+/* record write for end-to-end latency. */
+static inline void latencyE2eClientWrite(client *c) {
+    if (server.latency_tracking_enable_e2e && c->nwritten > 0) {
+        c->latency_e2e.cur_write_time = getMonotonicUs();
+        c->latency_e2e.reply_block_watermark = c->latency_e2e.reply_blocks_removed + (inMainThread() ? listLength(c->reply) : c->io_reply_len);
+    }
+}
+
 client *createClient(connection *conn) {
     client *c = zmalloc(sizeof(client));
 
@@ -424,9 +432,11 @@ client *createClient(connection *conn) {
     c->commands_processed = 0;
     c->io_last_reply_block = NULL;
     c->io_last_bufpos = 0;
+    c->io_reply_len = 0;
     c->io_last_written.buf = NULL;
     c->io_last_written.bufpos = 0;
     c->io_last_written.data_len = 0;
+    memset(&c->latency_e2e, 0, sizeof(c->latency_e2e));
     return c;
 }
 
@@ -2476,6 +2486,7 @@ int freeClient(client *c) {
     if (c->lib_ver) decrRefCount(c->lib_ver);
     freeClientMultiState(c);
     if (c->cob_trend) trendCalculator_free(c->cob_trend);
+    latencyE2eRelease(c);
     sdsfree(c->peerid);
     sdsfree(c->sockname);
     zfree(c);
@@ -3437,6 +3448,7 @@ static void _postWriteToClient(client *c) {
         if (last_written) return;
     }
 
+    unsigned long length = listLength(c->reply);
     listIter iter;
     listNode *next;
     listRewind(c->reply, &iter);
@@ -3463,8 +3475,11 @@ static void _postWriteToClient(client *c) {
             /* If completely written buffer is last written then reset last written state */
             if (last_written) resetLastWrittenBuf(c);
         }
-        if (last_written) return;
+        if (last_written) break;
     }
+
+    /* Count drained reply blocks. */
+    c->latency_e2e.reply_blocks_removed += (length - listLength(c->reply));
 }
 
 /* Updates the client's memory usage and bucket and server stats after writing.
@@ -3473,12 +3488,15 @@ static void _postWriteToClient(client *c) {
 int postWriteToClient(client *c) {
     c->io_last_reply_block = NULL;
     c->io_last_bufpos = 0;
+    c->io_reply_len = 0;
     /* Update total number of writes on server */
     server.stat_total_writes_processed++;
     if (getClientType(c) != CLIENT_TYPE_REPLICA) {
         _postWriteToClient(c);
+        latencyE2ePostClientWrite(c);
     } else {
         postWriteToReplica(c);
+        latencyE2ePostReplicaWrite(c);
     }
 
     if (c->write_flags & WRITE_FLAGS_WRITE_ERROR) {
@@ -3528,6 +3546,7 @@ int writeToClient(client *c) {
         writeToReplica(c);
     } else {
         _writeToClient(c);
+        latencyE2eClientWrite(c);
     }
 
     return postWriteToClient(c);
@@ -3855,6 +3874,7 @@ void resetClientIOState(client *c) {
     c->flag.pending_command = 0;
     c->io_last_bufpos = 0;
     c->io_last_reply_block = NULL;
+    c->io_reply_len = 0;
 }
 
 /* Initializes the shared query buffer to a new sds with the default capacity.
@@ -4717,6 +4737,11 @@ int processInputBuffer(client *c) {
     return C_OK;
 }
 
+static inline int latencyE2eTracks(client *c) {
+    if (c->flag.monitor) return 0;
+    return getClientType(c) == CLIENT_TYPE_NORMAL;
+}
+
 /* This function can be called from the main-thread or from the IO-thread.
  * The function allocates query-buf for the client if required and reads to it from the network.
  * It will set c->nread to the bytes read from the network.
@@ -4788,6 +4813,13 @@ static bool readToQueryBuf(client *c) {
     if (c->nread <= 0) {
         return false;
     }
+
+    /* 0 Is used to avoid future allocations on non-tracked clients. */
+    monotime wakeup_time = 0;
+    if (server.latency_tracking_enable_e2e && latencyE2eTracks(c)) {
+        wakeup_time = inMainThread() ? server.el->wakeup_time : c->io_event_loop_wakeup_time;
+    }
+    c->latency_e2e.cur_read_time = wakeup_time;
 
     sdsIncrLen(c->querybuf, c->nread);
     qblen = sdslen(c->querybuf);
@@ -7244,6 +7276,7 @@ void ioThreadWriteToClient(client *c) {
         writeToReplica(c);
     } else {
         _writeToClient(c);
+        latencyE2eClientWrite(c);
     }
 
     c->io_write_state = CLIENT_COMPLETED_IO;

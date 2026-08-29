@@ -5,8 +5,15 @@
  */
 
 #include "io_threads.h"
+#include "cluster_migrateslots.h"
+#include "connection.h"
 #include "queues.h"
+#include "server.h"
 #include <sys/resource.h>
+
+#define IO_MPSC_QUEUE_SIZE 16384
+#define IO_SPMC_QUEUE_SIZE 4096
+#define IO_SPSC_QUEUE_SIZE 4096
 
 static _Thread_local int thread_id = 0;
 static _Thread_local mpscTicket io_thread_ticket = {0};
@@ -44,8 +51,8 @@ static inline void untagJob(void *tagged_ptr, void **ptr, int *type) {
 /* Handler prototypes */
 void ioThreadReadQueryFromClient(client *c);
 void ioThreadWriteToClient(client *c);
-void IOThreadFreeArgv(robj **argv);
-void IOThreadPoll(aeEventLoop *el);
+void ioThreadFreeArgv(robj **argv);
+void ioThreadPoll(aeEventLoop *el);
 static void ioThreadAccept(client *c);
 
 int inMainThread(void) {
@@ -107,9 +114,6 @@ void waitForClientIO(client *c) {
 }
 
 void IOThreadsBeforeSleep(long long current_time) {
-#ifndef RUSAGE_THREAD
-    UNUSED(current_time);
-#endif
     if (server.io_threads_num == 1) return;
     serverAssert(inMainThread());
 
@@ -126,29 +130,23 @@ void IOThreadsBeforeSleep(long long current_time) {
         }
     }
 
-#ifdef RUSAGE_THREAD
-    /* If threads are not active track main thread CPU time for ignition decision */
+    /* If threads are not active, track main-thread active time for ignition decision */
     if (server.active_io_threads_num == 1) {
         static long long last_measurement_time = 0;
         if (current_time - last_measurement_time < 50000) return; /* Sample once in 50ms */
         last_measurement_time = current_time;
-        struct rusage ru;
-        if (getrusage(RUSAGE_THREAD, &ru) == 0) {
-            long long sys_time_us = ru.ru_stime.tv_sec * 1000000LL + ru.ru_stime.tv_usec;
-            long long user_time_us = ru.ru_utime.tv_sec * 1000000LL + ru.ru_utime.tv_usec;
-            trackInstantaneousMetric(STATS_METRIC_MAIN_THREAD_CPU_SYS, sys_time_us, current_time, 1000000);
-            trackInstantaneousMetric(STATS_METRIC_MAIN_THREAD_CPU_USER, user_time_us, current_time, 1000000);
-        }
+        trackInstantaneousMetric(STATS_METRIC_MAIN_THREAD_ACTIVE_TIME, server.stat_active_time, current_time, 1000000);
     }
-#endif
 }
 
 #define IO_COOLDOWN_MS 1000
 #define IO_SAMPLE_RATE_MS 10
 #define IO_IGNITION_EVENTS 4
-#define IO_IGNITION_CPU_SYS 30.0
-#define IO_IGNITION_CPU_SYS_LOW 5.0
-#define IO_IGNITION_CPU_USER 50.0
+/* Start using I/O threads when the main thread is active for more than the below
+ * defined percentage of the time. This number is picked somewhat arbitrarily but
+ * needed to be low enough to make sure we start the next thread quickly while not
+ * starting too many threads unnecessarily to avoid contention. */
+#define IO_IGNITION_MAIN_THREAD_ACTIVE_PERCENT 30
 #define BATCH_SIZE 32
 
 void IOThreadsAfterSleep(int numevents) {
@@ -171,15 +169,9 @@ void IOThreadsAfterSleep(int numevents) {
     /* Ignition Policy */
     if (server.active_io_threads_num == 1) {
         int should_ignite = 0;
-#ifdef RUSAGE_THREAD
-        float cpu_sys = (float)getInstantaneousMetric(STATS_METRIC_MAIN_THREAD_CPU_SYS) / 10000.0;
-        float cpu_user = (float)getInstantaneousMetric(STATS_METRIC_MAIN_THREAD_CPU_USER) / 10000.0;
-        /* Ignite IO threads if sys CPU > 30%, or if sys CPU > 5% and user CPU > 50% */
-        should_ignite = (cpu_sys > IO_IGNITION_CPU_SYS) ||
-                        (cpu_sys > IO_IGNITION_CPU_SYS_LOW && cpu_user > IO_IGNITION_CPU_USER);
-#else
-        should_ignite = (numevents >= IO_IGNITION_EVENTS);
-#endif
+        float main_thread_active_time = (float)getInstantaneousMetric(STATS_METRIC_MAIN_THREAD_ACTIVE_TIME) / 10000.0;
+        /* Ignite IO threads when main-thread active time exceeds the threshold (30%) */
+        should_ignite = (main_thread_active_time > (float)IO_IGNITION_MAIN_THREAD_ACTIVE_PERCENT);
         if (should_ignite) {
             pthread_mutex_unlock(&io_threads_mutex[1]);
             server.active_io_threads_num++;
@@ -243,7 +235,7 @@ void IOThreadsAfterSleep(int numevents) {
 
 /* This function performs polling on the given event loop and updates the server's
  * IO fired events count and poll state. */
-void IOThreadPoll(aeEventLoop *el) {
+void ioThreadPoll(aeEventLoop *el) {
     struct timeval tvp = {0, 0};
     int num_events = aePoll(el, &tvp);
     server.io_ae_fired_events = num_events;
@@ -326,10 +318,10 @@ static void *IOThreadMain(void *myid) {
 
                 switch (type) {
                 case JOB_REQ_FREE_ARGV:
-                    IOThreadFreeArgv((robj **)data);
+                    ioThreadFreeArgv((robj **)data);
                     break;
                 case JOB_REQ_POLL:
-                    IOThreadPoll((aeEventLoop *)data);
+                    ioThreadPoll((aeEventLoop *)data);
                     break;
                 default:
                     serverPanic("Invalid SPSC job type: %d", type);
@@ -338,10 +330,8 @@ static void *IOThreadMain(void *myid) {
             processed += batch_count;
         }
 
-        /*
-         * PRIORITY 2: Shared Global Queue (SPMC)
-         * Only checked after SPSC is drained.
-         */
+        /* PRIORITY 2: Shared Global Queue (SPMC)
+         * Only checked after SPSC is drained. */
         void *tagged_job = spmcDequeue(&io_shared_inbox);
         if (tagged_job) {
             void *data;
@@ -362,7 +352,7 @@ static void *IOThreadMain(void *myid) {
                 ioThreadAccept((client *)data);
                 break;
             case JOB_REQ_POLL:
-                IOThreadPoll((aeEventLoop *)data);
+                ioThreadPoll((aeEventLoop *)data);
                 break;
             default:
                 serverPanic("Invalid SPMC job type: %d", type);
@@ -398,12 +388,17 @@ static void createIOThread(int id) {
     serverAssert(id > 0 && id < server.io_threads_num);
 
     /* Initialize the private SPSC queue for this thread */
-    spscInit(&io_private_inbox[id]);
+    spscInit(&io_private_inbox[id], IO_SPSC_QUEUE_SIZE);
 
     pthread_t tid;
     pthread_mutex_init(&io_threads_mutex[id], NULL);
     pthread_mutex_lock(&io_threads_mutex[id]); /* Thread will be stopped. */
-    int err = pthread_create(&tid, NULL, IOThreadMain, (void *)(long)id);
+
+    pthread_attr_t attr;
+    serverInitThreadAttribute(&attr);
+
+    int err = pthread_create(&tid, &attr, IOThreadMain, (void *)(long)id);
+    pthread_attr_destroy(&attr);
     if (err) {
         serverLog(LL_WARNING, "Fatal: Can't initialize IO thread, pthread_create failed with: %s", strerror(err));
         exit(1);
@@ -458,7 +453,7 @@ int updateIOThreads(const char **err) {
      * in that state, we will deadlock (Main thread waits for worker, Worker waits for queue space). */
     size_t pending = getPendingIOResponsesCount();
 
-    if (pending > MPSC_QUEUE_SIZE) {
+    if (pending > io_shared_outbox.queue_size) {
         if (err) *err = "Can't update IO threads under load, try again later";
         return 0;
     }
@@ -497,8 +492,8 @@ void initIOThreads(int prev_threads_num) {
         server.active_io_threads_num = 1; /* We start with threads not active. */
         server.io_poll_state = AE_IO_STATE_NONE;
         server.io_ae_fired_events = 0;
-        spmcInit(&io_shared_inbox);
-        mpscInit(&io_shared_outbox);
+        spmcInit(&io_shared_inbox, IO_SPMC_QUEUE_SIZE);
+        mpscInit(&io_shared_outbox, IO_MPSC_QUEUE_SIZE);
         io_jobs_submitted = 0;
         atomic_init(&io_jobs_finished, 0);
         prefetchCommandsBatchInit();
@@ -513,8 +508,13 @@ void initIOThreads(int prev_threads_num) {
 
 int trySendReadToIOThreads(client *c) {
     if (server.active_io_threads_num <= 1) return C_ERR;
-    /* If IO thread is already reading, return C_OK to make sure the main thread will not handle it. */
-    if (c->io_read_state != CLIENT_IDLE) return C_OK;
+    /* Fake/teardown clients may have no connection; never offload those. */
+    if (!c->conn) return C_ERR;
+    /* If IO thread is still reading, return C_OK so the main thread does not race it. */
+    if (c->io_read_state == CLIENT_PENDING_IO) return C_OK;
+    /* A completed read must be finished by processClientIOReadsDone on the main thread
+     * before we try to offload another read; do not treat it like PENDING_IO. */
+    if (c->io_read_state == CLIENT_COMPLETED_IO) return C_ERR;
     if (c->io_write_state == CLIENT_PENDING_IO) return C_OK;
     /* For simplicity, don't offload replica clients reads as read traffic from replica is negligible */
     if (getClientType(c) == CLIENT_TYPE_REPLICA) return C_ERR;
@@ -529,7 +529,7 @@ int trySendReadToIOThreads(client *c) {
     c->read_flags |= isReplicatedClient(c) ? READ_FLAGS_REPLICATED : 0;
 
     c->io_read_state = CLIENT_PENDING_IO;
-    connSetPostponeUpdateState(c->conn, 1);
+    connSetPostponeUpdateState(c->conn, clientConnPostponeMaskFromIOState(c));
 
     if (unlikely(spmcEnqueue(&io_shared_inbox, tagJob(c, JOB_REQ_READ_CLIENT)) == false)) {
         c->read_flags = 0;
@@ -549,6 +549,7 @@ int trySendReadToIOThreads(client *c) {
  * or C_ERR if the client is not eligible for offloading. */
 int trySendWriteToIOThreads(client *c) {
     if (server.active_io_threads_num <= 1) return C_ERR;
+    if (!c->conn) return C_ERR;
     /* The I/O thread is already writing for this client. */
     if (c->io_write_state != CLIENT_IDLE) return C_OK;
     if (c->io_read_state == CLIENT_PENDING_IO) return C_ERR;
@@ -558,8 +559,14 @@ int trySendWriteToIOThreads(client *c) {
     if (getClientType(c) == CLIENT_TYPE_REPLICA && c->repl_data->repl_state != REPLICA_STATE_ONLINE) return C_ERR;
     /* We can't offload debugged clients as the main-thread may read at the same time  */
     if (c->flag.lua_debug) return C_ERR;
+    /* Avoid offloading writes to IO thread for the slot migration export job while snapshotting.
+     * During this phase, replies accumulate in the output buffer but must not be flushed
+     * as concurrent IO thread writes would race with the main thread processing incoming
+     * ACKs on the same client's query buffer. */
+    if (c->slot_migration_job && !clusterSlotMigrationShouldInstallWriteHandler(c)) return C_ERR;
 
     int is_replica = getClientType(c) == CLIENT_TYPE_REPLICA;
+    clientReplyBlock *block = NULL;
     if (is_replica) {
         c->io_last_reply_block = listLast(server.repl_buffer_blocks);
         replBufBlock *o = listNodeValue(c->io_last_reply_block);
@@ -571,23 +578,19 @@ int trySendWriteToIOThreads(client *c) {
          * threads from reading data that might be invalid in their local CPU cache. */
         c->io_last_reply_block = listLast(c->reply);
         if (c->io_last_reply_block) {
-            clientReplyBlock *block = (clientReplyBlock *)listNodeValue(c->io_last_reply_block);
+            block = (clientReplyBlock *)listNodeValue(c->io_last_reply_block);
             c->io_last_bufpos = block->used;
-            /* If buffer is encoded force new header */
-            if (block->flag.buf_encoded) block->last_header = NULL;
         } else {
             c->io_last_bufpos = (size_t)c->bufpos;
-            /* If buffer is encoded force new header */
-            if (c->flag.buf_encoded) c->last_header = NULL;
         }
     }
 
     serverAssert(c->bufpos > 0 || c->io_last_bufpos > 0 || is_replica);
 
     /* The main-thread will update the client state after the I/O thread completes the write. */
-    connSetPostponeUpdateState(c->conn, 1);
     c->write_flags = is_replica ? WRITE_FLAGS_IS_REPLICA : 0;
     c->io_write_state = CLIENT_PENDING_IO;
+    connSetPostponeUpdateState(c->conn, clientConnPostponeMaskFromIOState(c));
     void *job = tagJob(c, JOB_REQ_WRITE_CLIENT);
     if (unlikely(spmcEnqueue(&io_shared_inbox, job) == false)) {
         c->io_write_state = CLIENT_IDLE;
@@ -597,7 +600,15 @@ int trySendWriteToIOThreads(client *c) {
         c->io_last_bufpos = 0;
         return C_ERR;
     }
-
+    /* Force new header after successful enqueue so the main thread doesn't
+     * extend a header the I/O thread is currently reading. */
+    if (!is_replica) {
+        if (block) {
+            if (block->flag.buf_encoded) block->last_header = NULL;
+        } else {
+            if (c->flag.buf_encoded) c->last_header = NULL;
+        }
+    }
     if (c->flag.pending_write) {
         listUnlinkNode(server.clients_pending_write, &c->clients_pending_write_node);
         c->flag.pending_write = 0;
@@ -609,7 +620,7 @@ int trySendWriteToIOThreads(client *c) {
 }
 
 /* Internal function to free the client's argv in an IO thread. */
-void IOThreadFreeArgv(robj **argv) {
+void ioThreadFreeArgv(robj **argv) {
     int last_arg = 0;
     for (int i = 0;; i++) {
         robj *o = argv[i];
@@ -618,7 +629,7 @@ void IOThreadFreeArgv(robj **argv) {
         }
 
         /* The main-thread set the refcount to 0 to indicate that this is the last argument to free */
-        if (o->refcount == 0) {
+        if (objectGetRefcount(o) == 0) {
             last_arg = 1;
             o->refcount = 1;
         }
@@ -818,7 +829,7 @@ int trySendAcceptToIOThreads(connection *conn) {
 
     c->io_read_state = CLIENT_PENDING_IO;
     c->flag.pending_read = 1;
-    connSetPostponeUpdateState(c->conn, 1);
+    connSetPostponeUpdateState(c->conn, clientConnPostponeMaskFromIOState(c));
 
     void *job = tagJob(c, JOB_REQ_ACCEPT);
     if (unlikely(spmcEnqueue(&io_shared_inbox, job) == false)) {
@@ -834,20 +845,38 @@ int trySendAcceptToIOThreads(connection *conn) {
     return C_OK;
 }
 
+#define JOB_BATCH_SIZE (16)
+
 /* Function to handle read jobs */
 static void handleReadJobs(client **read_jobs, int read_count) {
     server.stat_io_reads_pending -= read_count;
     serverAssert(server.stat_io_reads_pending >= 0);
+    uint64_t read_client_ids[JOB_BATCH_SIZE];
+    int id_count = 0;
     /* process each client */
     for (int i = 0; i < read_count; i++) {
         client *c = read_jobs[i];
-        processClientIOReadsDone(c);
+        uint64_t id = c->id;
+        if (processClientIOReadsDone(c)) read_client_ids[id_count++] = id;
     }
 
     /* Process commands in batch if we processed any reads */
     if (read_count) {
         server.stat_io_reads_processed += read_count;
         processClientsCommandsBatch();
+
+        /* Resume transport after draining pending input and command queue. */
+        for (int i = 0; i < id_count; i++) {
+            client *c = lookupClientByID(read_client_ids[i]);
+            if (!c || !c->conn) continue;
+
+            if (processPendingCommandAndInputBuffer(c) == C_OK) beforeNextClient(c);
+
+            c = lookupClientByID(read_client_ids[i]);
+            if (!c || !c->conn) continue;
+            connSetPostponeUpdateState(c->conn, clientConnPostponeMask(c));
+            connUpdateState(c->conn);
+        }
     }
 }
 
@@ -863,7 +892,6 @@ static void handleWriteJobs(client **write_jobs, int write_count) {
     }
 }
 
-#define JOB_BATCH_SIZE (16)
 int processIOThreadsResponses(void) {
     /* We don't check for threads number  since some threads may return jobs then deactivate/shut-down */
 

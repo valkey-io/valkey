@@ -447,3 +447,7 @@ valkeyContext *valkeyConnectWrapper(enum valkeyConnectionType ct, const char *ip
 
     return valkeyConnectWithOptions(&options);
 }
+
+uint64_t rand62(void) {
+    return ((uint64_t)random() << 31) | (uint64_t)random();
+}

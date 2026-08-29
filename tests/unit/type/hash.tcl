@@ -78,7 +78,7 @@ start_server {tags {"hash"}} {
         assert_error {*value is out of range*} {r hrandfield myhash -9223372036854775808}
     } {}
 
-    test "HRANDFIELD with <count> against non existing key" {
+    test "HRANDFIELD with <count> against nonexistent key" {
         r hrandfield nonexisting_key 100
     } {}
 
@@ -89,7 +89,7 @@ start_server {tags {"hash"}} {
         r hrandfield myhash 0
     } {*0}
 
-    test "HRANDFIELD with <count> against non existing key - emptyarray" {
+    test "HRANDFIELD with <count> against nonexistent key - emptyarray" {
         r hrandfield nonexisting_key 100
     } {*0}
 
@@ -269,7 +269,7 @@ start_server {tags {"hash"}} {
         set _ $err
     } {}
 
-    test {HGET against non existing key} {
+    test {HGET against nonexistent key} {
         set rv {}
         lappend rv [r hget smallhash __123123123__]
         lappend rv [r hget bighash __123123123__]
@@ -342,9 +342,9 @@ start_server {tags {"hash"}} {
         r hmset bighash {*}$args
     } {OK}
 
-    test {HMGET against non existing key and fields} {
+    test {HMGET against nonexistent key and fields} {
         set rv {}
-        lappend rv [r hmget doesntexist __123123123__ __456456456__]
+        lappend rv [r hmget nonexistent __123123123__ __456456456__]
         lappend rv [r hmget smallhash __123123123__ __456456456__]
         lappend rv [r hmget bighash __123123123__ __456456456__]
         set _ $rv
@@ -512,7 +512,7 @@ start_server {tags {"hash"}} {
     }
 
     test {HGETDEL - check for syntax and type errors} {
-        assert_error "*value is not an integer or out of range" {r hgetdel myhash a b c}
+        assert_error "*ERR syntax error" {r hgetdel myhash a 1 c}
         assert_error "*value is not an integer or out of range" {r hgetdel myhash FIELDS a b c}
         assert_error "*numfields should be greater than 0 and match the provided number of fields" {r hgetdel myhash FIELDS 2 a b c}
         assert_error "*numfields should be greater than 0 and match the provided number of fields" {r hgetdel myhash FIELDS 4 a b c}
@@ -567,7 +567,7 @@ start_server {tags {"hash"}} {
         r debug object smallhash
     } {*hashtable*} {needs:debug}
 
-    test {HINCRBY against non existing database key} {
+    test {HINCRBY against nonexistent database key} {
         r del htest
         list [r hincrby htest foo 2]
     } {2}
@@ -579,7 +579,7 @@ start_server {tags {"hash"}} {
         assert_error "*value is not a*" {r hincrbyfloat incrhash field v}
     }
 
-    test {HINCRBY against non existing hash key} {
+    test {HINCRBY against nonexistent hash key} {
         set rv {}
         r hdel smallhash tmp
         r hdel bighash tmp
@@ -643,12 +643,12 @@ start_server {tags {"hash"}} {
         set e
     } {*overflow*}
 
-    test {HINCRBYFLOAT against non existing database key} {
+    test {HINCRBYFLOAT against nonexistent database key} {
         r del htest
         list [r hincrbyfloat htest foo 2.5]
     } {2.5}
 
-    test {HINCRBYFLOAT against non existing hash key} {
+    test {HINCRBYFLOAT against nonexistent hash key} {
         set rv {}
         r hdel smallhash tmp
         r hdel bighash tmp
@@ -739,7 +739,7 @@ start_server {tags {"hash"}} {
         set _ $err
     } {}
 
-    test {HSTRLEN against non existing field} {
+    test {HSTRLEN against nonexistent field} {
         set rv {}
         lappend rv [r hstrlen smallhash __123123123__]
         lappend rv [r hstrlen bighash __123123123__]

@@ -32,6 +32,7 @@
  * SPDX-License-Identifier: BSD-3-Clause
  */
 #include "server.h"
+#include "ordered_index.h"
 #include "connection.h"
 #include "monotonic.h"
 #include "cluster.h"
@@ -385,7 +386,7 @@ int dictSdsKeyCompare(const void *key1, const void *key2) {
     return memcmp(key1, key2, l1) == 0;
 }
 
-/* A case insensitive version used for the command lookup table and other
+/* A case-insensitive version used for the command lookup table and other
  * places where case insensitive non binary-safe comparison is needed. */
 int dictSdsKeyCaseCompare(const void *key1, const void *key2) {
     return strcasecmp(key1, key2) == 0;
@@ -466,7 +467,7 @@ int dictCStrKeyCompare(const void *key1, const void *key2) {
     return strcmp(key1, key2) == 0;
 }
 
-/* Dict case insensitive compare function for null terminated string */
+/* Dict case-insensitive compare function for null terminated string */
 int dictCStrKeyCaseCompare(const void *key1, const void *key2) {
     return strcasecmp(key1, key2) == 0;
 }
@@ -494,7 +495,7 @@ uint64_t dictEncObjHash(const void *key) {
 
     if (sdsEncodedObject(o)) {
         return dictGenHashFunction(objectGetVal(o), sdslen((sds)objectGetVal(o)));
-    } else if (o->encoding == OBJ_ENCODING_INT) {
+    } else if (objectGetEncoding(o) == OBJ_ENCODING_INT) {
         char buf[32];
         int len;
 
@@ -625,16 +626,50 @@ hashtableType setHashtableType = {
     .keyCompare = dictSdsKeyCompare,
     .entryDestructor = dictSdsDestructor};
 
-const void *zsetHashtableGetKey(const void *element) {
-    const zskiplistNode *node = element;
-    return zslGetNodeElement(node);
+/* Zset hashtable callbacks for fbtree backend.
+ * Stored entries are packed [8B score][element]. Lookup keys are plain sds
+ * marked via zsetMarkLookupKey. The callbacks extract the element portion
+ * based on whether the key is marked (plain sds) or unmarked (packed item). */
+
+#define FBTREE_SCORE_SIZE 8
+
+static const char *zsetExtractElement(const void *key, size_t *len) {
+    const_sds s = (const_sds)key;
+    if (zsetIsLookupKey(s)) {
+        /* Plain sds lookup key — use as-is.
+         * For SDS_TYPE_5 keys that were marked, sdslen is broken (type bits
+         * were overwritten), so read length directly from the flags byte. */
+        unsigned char flags = s[-1];
+        if ((flags & SDS_TYPE_MASK) == ZSET_LOOKUP_TYPE5_MARKER) {
+            *len = flags >> SDS_TYPE_BITS;
+        } else {
+            *len = sdslen(s);
+        }
+        return (const char *)s;
+    }
+    /* Packed fbtree item — skip 8-byte score prefix */
+    *len = sdslen(s) - FBTREE_SCORE_SIZE;
+    return (const char *)s + FBTREE_SCORE_SIZE;
 }
 
-/* Sorted sets hash (note: a skiplist is used in addition to the hash table) */
+static uint64_t zsetHashFunction(const void *key) {
+    size_t len;
+    const char *ptr = zsetExtractElement(key, &len);
+    return genHashFunctionConfigurableSeed(ptr, len);
+}
+
+static int zsetKeyCompare(const void *a, const void *b) {
+    size_t alen, blen;
+    const char *aptr = zsetExtractElement(a, &alen);
+    const char *bptr = zsetExtractElement(b, &blen);
+    if (alen != blen) return 0;
+    return memcmp(aptr, bptr, alen) == 0;
+}
+
+/* Sorted sets hash (an ordered index is used in addition to the hash table) */
 hashtableType zsetHashtableType = {
-    .hashFunction = sdsHashConfigurableSeed,
-    .entryGetKey = zsetHashtableGetKey,
-    .keyCompare = dictSdsKeyCompare,
+    .hashFunction = zsetHashFunction,
+    .keyCompare = zsetKeyCompare,
 };
 
 uint64_t hashtableSdsHash(const void *key) {
@@ -790,15 +825,6 @@ hashtableType kvstoreChannelHashtableType = {
     .getMetadataSize = kvstoreHashtableMetadataSize,
 };
 
-/* Modules system dictionary type. Keys are module name,
- * values are pointer to ValkeyModule struct. */
-dictType modulesDictType = {
-    .entryGetKey = dictEntryGetKey,
-    .hashFunction = dictSdsCaseHash,
-    .keyCompare = dictSdsKeyCaseCompare,
-    .entryDestructor = dictEntryDestructorSdsKey,
-};
-
 /* Migrate cache dict type. */
 dictType migrateCacheDictType = {
     .entryGetKey = dictEntryGetKey,
@@ -807,7 +833,7 @@ dictType migrateCacheDictType = {
     .entryDestructor = dictEntryDestructorSdsKey,
 };
 
-/* Dict for for case-insensitive search using null terminated C strings.
+/* Dict for case-insensitive search using null terminated C strings.
  * The keys stored in dict are sds though. */
 dictType stringSetDictType = {
     .entryGetKey = dictEntryGetKey,
@@ -816,7 +842,7 @@ dictType stringSetDictType = {
     .entryDestructor = dictEntryDestructorSdsKey,
 };
 
-/* Dict for for case-insensitive search using null terminated C strings.
+/* Dict for case-insensitive search using null terminated C strings.
  * The key and value do not have a destructor. */
 dictType externalStringType = {
     .entryGetKey = dictEntryGetKey,
@@ -1326,7 +1352,7 @@ void databasesCron(void) {
     monitorActiveDefrag();
 
     /* Perform hash tables rehashing if needed, but only if there are no
-     * other processes saving the DB on disk. Otherwise rehashing is bad
+     * other processes saving the DB on disk. Otherwise, rehashing is bad
      * as will cause a lot of copy-on-write of memory pages. */
     if (!hasActiveChildProcess()) {
         /* We use global counters so if we stop the computation at a given
@@ -1570,6 +1596,11 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
 
     cronUpdateMemoryStats();
 
+    /* Refresh the cached daylight-saving info periodically every 1 second.
+     * This is only used to render log timestamps, so it doesn't need to be
+     * updated on every event-loop wakeup. */
+    run_with_period(1000) updateCachedTime(1);
+
     /* We received a SIGTERM or SIGINT, shutting down here in a safe way, as it is
      * not ok doing so inside the signal handler. */
     if (server.shutdown_asap && !isShutdownInitiated()) {
@@ -1800,6 +1831,9 @@ void whileBlockedCron(void) {
     latencyStartMonitor(latency);
 
     defragWhileBlocked();
+
+    /* serverCron() doesn't run while blocked, so refresh the cached daylight-saving info here. */
+    updateCachedTime(1);
 
     /* Update memory stats during loading (excluding blocked scripts) */
     if (server.loading) cronUpdateMemoryStats();
@@ -2071,8 +2105,9 @@ void afterSleep(struct aeEventLoop *eventLoop, int numevents) {
         server.el_cmd_cnt_start = server.stat_numcommands;
     }
 
-    /* Update the time cache. */
-    updateCachedTime(1);
+    /* Update the time cache. Skip the (relatively expensive) daylight-saving
+     * refresh here since afterSleep() runs on every event-loop wakeup. */
+    updateCachedTime(0);
 
     /* Update command time snapshot in case it'll be required without a command
      * e.g. somehow used by module timers. Don't update it while yielding to a
@@ -2354,6 +2389,7 @@ void initServerConfig(void) {
     server.page_size = sysconf(_SC_PAGESIZE);
     server.extended_redis_compat = 0;
     server.pause_cron = 0;
+    server.debug_force_tls_write_error = 0;
     server.dict_resizing = 1;
     server.import_mode = 0;
 
@@ -2394,6 +2430,8 @@ void initServerConfig(void) {
     server.rdb_client_id = -1;
     server.loading_process_events_interval_ms = LOADING_PROCESS_EVENTS_INTERVAL_DEFAULT;
     server.loading_rio = NULL;
+    server.repl_full_sync_start_time = 0;
+    server.repl_full_sync_complete_duration_ms = -1;
 
     /* Replication partial resync backlog */
     server.repl_backlog = NULL;
@@ -2857,6 +2895,14 @@ void resetServerStats(void) {
     server.el_cmd_cnt_max = 0;
     server.stat_active_time = 0;
     server.el_iteration_active = false;
+    server.stat_total_prefetch_batches = 0;
+    server.stat_total_prefetch_entries = 0;
+    server.acl_info.invalid_cmd_accesses = 0;
+    server.acl_info.invalid_key_accesses = 0;
+    server.acl_info.user_auth_failures = 0;
+    server.acl_info.invalid_channel_accesses = 0;
+    server.acl_info.acl_access_denied_tls_cert = 0;
+    server.acl_info.invalid_db_accesses = 0;
     lazyfreeResetStats();
 }
 
@@ -2915,6 +2961,9 @@ serverDb *createDatabaseIfNeeded(int id) {
 void initServer(void) {
     signal(SIGHUP, SIG_IGN);
     signal(SIGPIPE, SIG_IGN);
+#ifdef USE_LIBBACKTRACE
+    initLibbacktraceFrameState();
+#endif
     setupSignalHandlers();
     ThreadsManager_init();
     makeThreadKillable();
@@ -2968,6 +3017,7 @@ void initServer(void) {
     server.client_mem_usage_buckets = NULL;
     server.debug_client_enforce_reply_list = 0;
     server.debug_force_free_primary_async = 0;
+    server.debug_pause_before_psync = 0;
     resetReplicationBuffer();
 
     /* Make sure the locale is set on startup based on the config file. */
@@ -3061,14 +3111,6 @@ void initServer(void) {
     server.aof_last_write_errno = 0;
     server.repl_good_replicas_count = 0;
     server.last_sig_received = 0;
-
-    /* Initiate acl info struct */
-    server.acl_info.invalid_cmd_accesses = 0;
-    server.acl_info.invalid_key_accesses = 0;
-    server.acl_info.user_auth_failures = 0;
-    server.acl_info.invalid_channel_accesses = 0;
-    server.acl_info.acl_access_denied_tls_cert = 0;
-    server.acl_info.invalid_db_accesses = 0;
 
     /* Create the timer callback, this is our way to process many background
      * operations incrementally, like eviction of unaccessed expired keys, etc. */
@@ -3344,7 +3386,7 @@ void commandAddSubcommand(struct serverCommand *parent, struct serverCommand *su
 
 /* Recursively populate the command structure.
  *
- * On success, the function return C_OK. Otherwise C_ERR is returned and we won't
+ * On success, the function return C_OK. Otherwise, C_ERR is returned and we won't
  * add this command in the commands dict. */
 int populateCommandStructure(struct serverCommand *c) {
     /* If the command marks with CMD_SENTINEL, it exists in sentinel. */
@@ -3883,6 +3925,14 @@ void call(client *c, int flags) {
     c->flag.force_aof = 0;
     c->flag.force_repl = 0;
     c->flag.prevent_prop = 0;
+
+    /* The redaction bitmap describes the argv of the command about to execute and
+     * is set on demand by the command itself. Clearing it here covers every case
+     * where one client executes several commands without an intervening
+     * resetClient(): the queued commands of a MULTI, RM_Call sequences issued on a
+     * reused module temp client, and the server.call() chain of a script. Stale
+     * bits would otherwise redact the wrong argument of a later command. */
+    c->redact_arg_bitmap = 0;
 
     /* The server core is in charge of propagation when the first entry point
      * of call() is processCommand().
@@ -4959,7 +5009,7 @@ int finishShutdown(void) {
         rsiptr = rdbPopulateSaveInfo(&rsi);
         /* Keep the page cache since it's likely to restart soon */
         if (rdbSave(REPLICA_REQ_NONE, server.rdb_filename, rsiptr, RDBFLAGS_KEEP_CACHE) != C_OK) {
-            /* Ooops.. error saving! The best we can do is to continue
+            /* Oops.. error saving! The best we can do is to continue
              * operating. Note that if there was a background saving process,
              * in the next cron() the server will be notified that the background
              * saving aborted, handling special stuff like replicas pending for
@@ -5381,7 +5431,10 @@ void addReplyCommandSubCommands(client *c,
                                 void (*reply_function)(client *, struct serverCommand *),
                                 int use_map) {
     if (!cmd->subcommands_ht) {
-        addReplySetLen(c, 0);
+        if (use_map)
+            addReplyMapLen(c, 0);
+        else
+            addReplyArrayLen(c, 0);
         return;
     }
 
@@ -6579,6 +6632,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                     "master_port:%d\r\n", server.primary_port,
                     "master_link_status:%s\r\n", (server.repl_state == REPL_STATE_CONNECTED) ? "up" : "down",
                     "master_last_io_seconds_ago:%d\r\n", server.primary ? ((int)(server.unixtime - server.primary->last_interaction)) : -1,
+                    "last_successful_sync_duration_ms:%lld\r\n", server.repl_full_sync_complete_duration_ms,
                     "master_sync_in_progress:%d\r\n", server.repl_state == REPL_STATE_TRANSFER,
                     "slave_read_repl_offset:%lld\r\n", replica_read_repl_offset,
                     "slave_repl_offset:%lld\r\n", replica_repl_offset,
@@ -6586,8 +6640,8 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                     "replicas_repl_buffer_peak:%zu\r\n", server.pending_repl_data.peak));
 
             if (server.repl_state == REPL_STATE_TRANSFER) {
-                int repl_transfer_size_stat;
-                int repl_transfer_read_stat;
+                off_t repl_transfer_size_stat;
+                off_t repl_transfer_read_stat;
                 if (atomic_load_explicit(&server.replica_bio_disk_save_state, memory_order_acquire) != REPL_BIO_DISK_SAVE_STATE_NONE) {
                     repl_transfer_size_stat = server.bio_repl_transfer_size;
                     repl_transfer_read_stat = server.bio_repl_transfer_read;
@@ -7492,6 +7546,17 @@ int iAmPrimary(void) {
             (server.cluster_enabled && clusterNodeIsPrimary(getMyClusterNode())));
 }
 
+/* Initialize thread attribute with a guarded stack size.
+ * Doubling the stack size until it is at least VALKEY_THREAD_STACK_SIZE. */
+void serverInitThreadAttribute(pthread_attr_t *attr) {
+    size_t stacksize;
+    pthread_attr_init(attr);
+    pthread_attr_getstacksize(attr, &stacksize);
+    if (!stacksize) stacksize = 1;
+    while (stacksize < VALKEY_THREAD_STACK_SIZE) stacksize *= 2;
+    pthread_attr_setstacksize(attr, stacksize);
+}
+
 /* Main is marked as weak so that unit tests can use their own main function. */
 __attribute__((weak)) int main(int argc, char **argv) {
     struct timeval tv;
@@ -7761,8 +7826,10 @@ __attribute__((weak)) int main(int argc, char **argv) {
     }
 
 #if defined(LUA_ENABLED) && STATIC_LUA
-    /* Initialize the LUA scripting engine on-startup only when LUA is built statically */
-    if (scriptingEngineManagerFind("lua") == NULL) {
+    /* Initialize the LUA scripting engine on-startup only when LUA is built statically.
+     * Sentinel does not support SCRIPTING commands nor the MODULE commands, so the Lua
+     * engine is not needed here. */
+    if (!server.sentinel_mode && scriptingEngineManagerFind("lua") == NULL) {
         if (moduleLoadStatic("lua", NULL, 0, 0) != C_OK) {
             serverPanic("Lua engine initialization failed, check the server logs.");
         }

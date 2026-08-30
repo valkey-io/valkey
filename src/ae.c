@@ -40,6 +40,7 @@
 #include <sys/types.h>
 #include <unistd.h>
 #include <stdlib.h>
+#include <stdbool.h>
 #include <poll.h>
 #include <string.h>
 #include <time.h>
@@ -212,13 +213,32 @@ int aeCreateFileEvent(aeEventLoop *eventLoop, int fd, int mask, aeFileProc *proc
     }
     aeFileEvent *fe = &eventLoop->events[fd];
 
-    bool is_priority = (eventLoop->qos_apidata != NULL) && ((mask | fe->mask) & AE_HIGH_PRIORITY);
-    if (!is_priority) mask &= ~AE_HIGH_PRIORITY;
-    aeApiState *target_api = is_priority ? eventLoop->qos_apidata : eventLoop->apidata;
+    bool old_is_priority = (fe->mask & AE_HIGH_PRIORITY) && (eventLoop->qos_apidata != NULL);
+    bool new_is_priority = (mask & AE_HIGH_PRIORITY) && (eventLoop->qos_apidata != NULL);
 
-    int backend_add_mask = BACKEND_MASK(mask) & ~fe->mask; // just the meaningful additions
-    if (backend_add_mask) {
-        if (aeApiAddEvent(target_api, fd, BACKEND_MASK(fe->mask), backend_add_mask) == -1) goto done;
+    /* Handle dynamic cross-multiplexer migration if the priority of an active socket is changed */
+    if (eventLoop->qos_apidata != NULL && old_is_priority != new_is_priority && fe->mask != AE_NONE) {
+        aeApiState *old_api = old_is_priority ? eventLoop->qos_apidata : eventLoop->apidata;
+        aeApiState *new_api = new_is_priority ? eventLoop->qos_apidata : eventLoop->apidata;
+
+        /* 1. Remove active event mask from the old multiplexer */
+        aeApiDelEvent(old_api, fd, BACKEND_MASK(fe->mask), BACKEND_MASK(fe->mask));
+
+        /* 2. Add combined event mask into the new multiplexer */
+        int combined_backend_mask = BACKEND_MASK(fe->mask | mask);
+        if (combined_backend_mask) {
+            if (aeApiAddEvent(new_api, fd, 0, combined_backend_mask) == -1) goto done;
+        }
+        fe->mask = (fe->mask & ~AE_HIGH_PRIORITY) | (new_is_priority ? AE_HIGH_PRIORITY : 0);
+    } else {
+        bool is_priority = new_is_priority || old_is_priority;
+        if (!is_priority) mask &= ~AE_HIGH_PRIORITY;
+        aeApiState *target_api = is_priority ? eventLoop->qos_apidata : eventLoop->apidata;
+
+        int backend_add_mask = BACKEND_MASK(mask) & ~fe->mask; // just the meaningful additions
+        if (backend_add_mask) {
+            if (aeApiAddEvent(target_api, fd, BACKEND_MASK(fe->mask), backend_add_mask) == -1) goto done;
+        }
     }
     fe->mask |= mask;
     if (mask & AE_READABLE) fe->rfileProc = proc;
@@ -586,28 +606,24 @@ int aeProcessEvents(aeEventLoop *eventLoop, int flags) {
         /* After sleep callback. */
         if (eventLoop->aftersleep != NULL && flags & AE_CALL_AFTER_SLEEP) eventLoop->aftersleep(eventLoop, numevents);
 
-        /* Prioritize QoS events: if qos_fd fired, drain QoS events
+        /* Prioritize QoS events: Always drain priority events
          * immediately before processing normal events. */
-        if (eventLoop->qos_fd != -1) {
-            for (j = 0; j < numevents; j++) {
-                if (eventLoop->fired[j].fd == eventLoop->qos_fd) {
-                    processed += aeProcessQoSEvents(eventLoop);
-                    break;
-                }
-            }
-        }
+        processed += aeProcessQoSEvents(eventLoop);
 
+        /* Process normal file events */
         for (j = 0; j < numevents; j++) {
             int fd = eventLoop->fired[j].fd;
-            /* Skip processing QoS events here again as they were already processed above */
+            /* Skip processing QoS FD events again as they were already processed above */
             if (fd == eventLoop->qos_fd) continue;
             int mask = eventLoop->fired[j].mask;
 
             aeFireFileEvent(eventLoop, fd, mask);
             processed++;
 
-            /* Periodic Preemptive Poll:
-             * Sample monotonic clock once every 4 iterations (AE_QOS_PREEMPT_CHECK_MASK) to amortize vDSO overhead */
+            /* Periodic Preemptive Polling of high priority events: This is to
+             * ensure that high priority events are processed in a timely manner
+             * even when there are long running normal events. */
+            /* Sample monotonic clock once every (AE_QOS_PREEMPT_CHECK_MASK) to amortize vDSO overhead. */
             if ((j & AE_QOS_PREEMPT_CHECK_MASK) == 0) {
                 processed += aeProcessQoSEventsPreemptively(eventLoop);
             }

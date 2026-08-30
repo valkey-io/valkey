@@ -1,3 +1,28 @@
+proc wait_for_io_threads_to_go_idle {} {
+    set io_threads_always_active [dict get [r config get io-threads-always-active] io-threads-always-active]
+    if {$io_threads_always_active eq {yes}} {
+        # Polling INFO while io-threads-always-active is enabled wakes the
+        # workers in afterSleep(), so observe the idle transition with that
+        # policy disabled and then restore the original test setting.
+        assert_equal {OK} [r config set io-threads-always-active no]
+    }
+
+    set errcode [catch {
+        wait_for_condition 1000 50 {
+            [getInfoProperty [r info server] io_threads_active] eq 0
+        } else {
+            fail "Failed to wait until no io_threads are active"
+        }
+    } result]
+
+    if {$io_threads_always_active eq {yes}} {
+        assert_equal {OK} [r config set io-threads-always-active yes]
+    }
+    if {$errcode != 0} {
+        return -code $errcode $result
+    }
+}
+
 proc activate_io_threads_and_wait {} {
     set server_pid [s process_id]
     set client_count 16
@@ -30,27 +55,22 @@ proc activate_io_threads_and_wait {} {
         $rd($i) close
     }
 
-    # Wait until active io_threads are no longer active
-    wait_for_condition 1000 50 {
-        [getInfoProperty [r info server] io_threads_active] eq 0
-    } else {
-        fail "Failed to wait until no io_threads are active"
-    }
+    wait_for_io_threads_to_go_idle
 }
 
 start_server {config "minimal.conf" tags {"external:skip" "valgrind:skip"} overrides {enable-debug-command {yes} io-threads 5}} {
     # Skip if non io-threads mode - as it is relevant only for io-threads mode
     assert_equal {io-threads 5} [r config get io-threads]
     test {Force the use of IO threads and assert active IO thread usage} {
+        # Ensure all configured IO threads activate on any event, bypassing CPU-based ignition thresholds.
+        r config set io-threads-always-active yes
         activate_io_threads_and_wait
         set info [r info]
         set io_threads_count [dict get [r config get io-threads] io-threads]
-        array set initial_active_times {}
         for {set i 1} {$i <= $io_threads_count} {incr i} {
             set used_active_time [getInfoProperty $info used_active_time_io_thread_$i]
             if {$i < $io_threads_count} {
                 assert_morethan $used_active_time 0
-                set initial_active_times($i) $used_active_time
             } else {
                 assert_equal $used_active_time {}
             }
@@ -59,11 +79,7 @@ start_server {config "minimal.conf" tags {"external:skip" "valgrind:skip"} overr
         # Adjust io-threads to a lower value and assert that active io_threads fields are >= values found initially
         assert_equal {OK} [r config set io-threads 1]
         set info [r info]
-        wait_for_condition 1000 50 {
-            [getInfoProperty [r info server] io_threads_active] eq 0
-        } else {
-            fail "Failed to wait until no io_threads are active"
-        }
+        wait_for_io_threads_to_go_idle
         set used_active_time_1 [getInfoProperty $info used_active_time_io_thread_1]
         assert_equal $used_active_time_1 {}
 
@@ -81,24 +97,77 @@ start_server {config "minimal.conf" tags {"external:skip" "valgrind:skip"} overr
             }
         }
 
-        # Sleep for a time duration that is significantly longer than how much
-        # time each of the io_threads would be active again when reactivated.
+        # Verify idle time is never attributed to used_active_time_io_thread:
+        # the counter must stay flat while the workers are parked, and
+        # reactivating them must not absorb the parked interval retroactively.
         set sleep_time_ms 1000
+        # Park the workers for the idle window. With io-threads-always-active
+        # enabled, the INFO reads below would wake them in afterSleep() (see
+        # #3509), so disable it while sampling.
+        assert_equal {OK} [r config set io-threads-always-active no]
+        wait_for_io_threads_to_go_idle
+        array set pre_sleep_active_times {}
+        set idle_start_ms [clock milliseconds]
+        set info [r info]
+        for {set i 1} {$i < $io_threads_count} {incr i} {
+            set pre_sleep_active_times($i) [getInfoProperty $info used_active_time_io_thread_$i]
+        }
         after $sleep_time_ms
 
-        # Reactivate io-threads and wait for execution
-        activate_io_threads_and_wait
-
+        # Step 1: parked workers must not accumulate active time (#3727).
         set info [r info]
         for {set i 1} {$i <= $io_threads_count} {incr i} {
             set used_active_time [getInfoProperty $info used_active_time_io_thread_$i]
             if {$i < $io_threads_count} {
-                assert {($used_active_time - $initial_active_times($i)) < ($sleep_time_ms/1000)}
-                # Assert that total active time is lower than the sleep duration assumed
-                assert {$used_active_time < ($sleep_time_ms/1000)}
+                assert {($used_active_time - $pre_sleep_active_times($i)) < ($sleep_time_ms/1000.0)}
             } else {
                 assert_equal $used_active_time {}
             }
         }
+
+        # Step 2: reactivate the workers and verify wakeup did not count the
+        # parked interval. Bound the delta by measured wall-clock time minus
+        # the parked window, so slow runs (sanitizer) inflate both sides.
+        assert_equal {OK} [r config set io-threads-always-active yes]
+        activate_io_threads_and_wait
+        set info [r info]
+        set elapsed_sec [expr {([clock milliseconds] - $idle_start_ms) / 1000.0}]
+        for {set i 1} {$i < $io_threads_count} {incr i} {
+            set used_active_time [getInfoProperty $info used_active_time_io_thread_$i]
+            assert {($used_active_time - $pre_sleep_active_times($i)) < ($elapsed_sec - $sleep_time_ms/1000.0)}
+        }
+    }
+}
+
+start_server {config "minimal.conf" tags {"external:skip" "valgrind:skip"} overrides {io-threads 5}} {
+    # A queued command whose argc violates its arity used to be handed to
+    # getKeysFromCommand() by the prefetch path, which assumes the arity check
+    # has already passed. GET with argc 1 panicked on the legacy range spec;
+    # EVAL and MIGRATE read past the end of argv.
+    test {Pipelined commands with bad arity do not reach the key prefetcher} {
+        assert_equal {OK} [r config set io-threads-always-active yes]
+        activate_io_threads_and_wait
+
+        set server_pid [s process_id]
+        set rd [valkey_deferring_client]
+
+        # Suspend the server so the whole pipeline arrives in a single read and
+        # is parsed into the client's command queue, which is the path that
+        # skipped the arity check.
+        pause_process $server_pid
+        $rd ping
+        $rd get
+        $rd eval x
+        $rd migrate a b
+        $rd flush
+        resume_process $server_pid
+
+        assert_equal {PONG} [$rd read]
+        assert_error "ERR wrong number of arguments*" {$rd read}
+        assert_error "ERR wrong number of arguments*" {$rd read}
+        assert_error "ERR wrong number of arguments*" {$rd read}
+        $rd close
+
+        assert_equal {PONG} [r ping]
     }
 }

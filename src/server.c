@@ -32,6 +32,7 @@
  * SPDX-License-Identifier: BSD-3-Clause
  */
 #include "server.h"
+#include "ordered_index.h"
 #include "connection.h"
 #include "monotonic.h"
 #include "cluster.h"
@@ -385,7 +386,7 @@ int dictSdsKeyCompare(const void *key1, const void *key2) {
     return memcmp(key1, key2, l1) == 0;
 }
 
-/* A case insensitive version used for the command lookup table and other
+/* A case-insensitive version used for the command lookup table and other
  * places where case insensitive non binary-safe comparison is needed. */
 int dictSdsKeyCaseCompare(const void *key1, const void *key2) {
     return strcasecmp(key1, key2) == 0;
@@ -425,6 +426,10 @@ void setConfigurableHashSeed(uint8_t *seed) {
     memcpy(configurable_hash_seed, seed, sizeof(configurable_hash_seed));
 }
 
+uint8_t *getConfigurableHashSeed(void) {
+    return configurable_hash_seed;
+}
+
 uint64_t genHashFunctionConfigurableSeed(const char *buf, size_t len) {
     return siphash((const uint8_t *)buf, len, configurable_hash_seed);
 }
@@ -462,7 +467,7 @@ int dictCStrKeyCompare(const void *key1, const void *key2) {
     return strcmp(key1, key2) == 0;
 }
 
-/* Dict case insensitive compare function for null terminated string */
+/* Dict case-insensitive compare function for null terminated string */
 int dictCStrKeyCaseCompare(const void *key1, const void *key2) {
     return strcasecmp(key1, key2) == 0;
 }
@@ -490,7 +495,7 @@ uint64_t dictEncObjHash(const void *key) {
 
     if (sdsEncodedObject(o)) {
         return dictGenHashFunction(objectGetVal(o), sdslen((sds)objectGetVal(o)));
-    } else if (o->encoding == OBJ_ENCODING_INT) {
+    } else if (objectGetEncoding(o) == OBJ_ENCODING_INT) {
         char buf[32];
         int len;
 
@@ -621,16 +626,50 @@ hashtableType setHashtableType = {
     .keyCompare = dictSdsKeyCompare,
     .entryDestructor = dictSdsDestructor};
 
-const void *zsetHashtableGetKey(const void *element) {
-    const zskiplistNode *node = element;
-    return zslGetNodeElement(node);
+/* Zset hashtable callbacks for fbtree backend.
+ * Stored entries are packed [8B score][element]. Lookup keys are plain sds
+ * marked via zsetMarkLookupKey. The callbacks extract the element portion
+ * based on whether the key is marked (plain sds) or unmarked (packed item). */
+
+#define FBTREE_SCORE_SIZE 8
+
+static const char *zsetExtractElement(const void *key, size_t *len) {
+    const_sds s = (const_sds)key;
+    if (zsetIsLookupKey(s)) {
+        /* Plain sds lookup key — use as-is.
+         * For SDS_TYPE_5 keys that were marked, sdslen is broken (type bits
+         * were overwritten), so read length directly from the flags byte. */
+        unsigned char flags = s[-1];
+        if ((flags & SDS_TYPE_MASK) == ZSET_LOOKUP_TYPE5_MARKER) {
+            *len = flags >> SDS_TYPE_BITS;
+        } else {
+            *len = sdslen(s);
+        }
+        return (const char *)s;
+    }
+    /* Packed fbtree item — skip 8-byte score prefix */
+    *len = sdslen(s) - FBTREE_SCORE_SIZE;
+    return (const char *)s + FBTREE_SCORE_SIZE;
 }
 
-/* Sorted sets hash (note: a skiplist is used in addition to the hash table) */
+static uint64_t zsetHashFunction(const void *key) {
+    size_t len;
+    const char *ptr = zsetExtractElement(key, &len);
+    return genHashFunctionConfigurableSeed(ptr, len);
+}
+
+static int zsetKeyCompare(const void *a, const void *b) {
+    size_t alen, blen;
+    const char *aptr = zsetExtractElement(a, &alen);
+    const char *bptr = zsetExtractElement(b, &blen);
+    if (alen != blen) return 0;
+    return memcmp(aptr, bptr, alen) == 0;
+}
+
+/* Sorted sets hash (an ordered index is used in addition to the hash table) */
 hashtableType zsetHashtableType = {
-    .hashFunction = sdsHashConfigurableSeed,
-    .entryGetKey = zsetHashtableGetKey,
-    .keyCompare = dictSdsKeyCompare,
+    .hashFunction = zsetHashFunction,
+    .keyCompare = zsetKeyCompare,
 };
 
 uint64_t hashtableSdsHash(const void *key) {
@@ -786,15 +825,6 @@ hashtableType kvstoreChannelHashtableType = {
     .getMetadataSize = kvstoreHashtableMetadataSize,
 };
 
-/* Modules system dictionary type. Keys are module name,
- * values are pointer to ValkeyModule struct. */
-dictType modulesDictType = {
-    .entryGetKey = dictEntryGetKey,
-    .hashFunction = dictSdsCaseHash,
-    .keyCompare = dictSdsKeyCaseCompare,
-    .entryDestructor = dictEntryDestructorSdsKey,
-};
-
 /* Migrate cache dict type. */
 dictType migrateCacheDictType = {
     .entryGetKey = dictEntryGetKey,
@@ -803,7 +833,7 @@ dictType migrateCacheDictType = {
     .entryDestructor = dictEntryDestructorSdsKey,
 };
 
-/* Dict for for case-insensitive search using null terminated C strings.
+/* Dict for case-insensitive search using null terminated C strings.
  * The keys stored in dict are sds though. */
 dictType stringSetDictType = {
     .entryGetKey = dictEntryGetKey,
@@ -812,7 +842,7 @@ dictType stringSetDictType = {
     .entryDestructor = dictEntryDestructorSdsKey,
 };
 
-/* Dict for for case-insensitive search using null terminated C strings.
+/* Dict for case-insensitive search using null terminated C strings.
  * The key and value do not have a destructor. */
 dictType externalStringType = {
     .entryGetKey = dictEntryGetKey,
@@ -1322,7 +1352,7 @@ void databasesCron(void) {
     monitorActiveDefrag();
 
     /* Perform hash tables rehashing if needed, but only if there are no
-     * other processes saving the DB on disk. Otherwise rehashing is bad
+     * other processes saving the DB on disk. Otherwise, rehashing is bad
      * as will cause a lot of copy-on-write of memory pages. */
     if (!hasActiveChildProcess()) {
         /* We use global counters so if we stop the computation at a given
@@ -1566,6 +1596,11 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
 
     cronUpdateMemoryStats();
 
+    /* Refresh the cached daylight-saving info periodically every 1 second.
+     * This is only used to render log timestamps, so it doesn't need to be
+     * updated on every event-loop wakeup. */
+    run_with_period(1000) updateCachedTime(1);
+
     /* We received a SIGTERM or SIGINT, shutting down here in a safe way, as it is
      * not ok doing so inside the signal handler. */
     if (server.shutdown_asap && !isShutdownInitiated()) {
@@ -1797,6 +1832,9 @@ void whileBlockedCron(void) {
 
     defragWhileBlocked();
 
+    /* serverCron() doesn't run while blocked, so refresh the cached daylight-saving info here. */
+    updateCachedTime(1);
+
     /* Update memory stats during loading (excluding blocked scripts) */
     if (server.loading) cronUpdateMemoryStats();
 
@@ -1855,14 +1893,14 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
      * events to handle. */
     if (ProcessingEventsWhileBlocked) {
         uint64_t processed = 0;
-        processed += processIOThreadsReadDone();
+        processed += processIOThreadsResponses();
         processed += connTypeProcessPendingData();
         if (server.aof_state == AOF_ON || server.aof_state == AOF_WAIT_REWRITE) flushAppendOnlyFile(0);
         processed += handleClientsWithPendingWrites();
         int last_processed = 0;
         do {
             /* Try to process all the pending IO events. */
-            last_processed = processIOThreadsReadDone() + processIOThreadsWriteDone();
+            last_processed = processIOThreadsResponses();
             processed += last_processed;
         } while (last_processed != 0);
         processed += freeClientsInAsyncFreeQueue();
@@ -1871,7 +1909,7 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     }
 
     /* We should handle pending reads clients ASAP after event loop. */
-    int io_responses = processIOThreadsReadDone();
+    int io_responses = processIOThreadsResponses();
     if (io_responses > 0) server.el_iteration_active = true;
 
     /* Handle pending data(typical TLS). (must be done before flushAppendOnlyFile) */
@@ -1972,7 +2010,7 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
 
     /* Try to process more IO reads that are ready to be processed. */
     if (server.aof_fsync != AOF_FSYNC_ALWAYS) {
-        int io_responses_after = processIOThreadsReadDone();
+        int io_responses_after = processIOThreadsResponses();
         if (io_responses_after > 0) {
             server.el_iteration_active = true;
 
@@ -1980,10 +2018,6 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
             handleClientsWithPendingWrites();
         }
     }
-
-    int io_writes = processIOThreadsWriteDone();
-    if (io_writes > 0) server.el_iteration_active = true;
-
     /* Record cron time in beforeSleep. This does not include the time consumed by AOF writing and IO writing above. */
     monotime cron_start_time_after_write = getMonotonicUs();
 
@@ -1998,11 +2032,12 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     evictClients();
 
     /* Record cron time in beforeSleep. */
-    monotime duration_after_write = getMonotonicUs() - cron_start_time_after_write;
+    monotime current_time = getMonotonicUs();
+    monotime duration_after_write = current_time - cron_start_time_after_write;
 
     /* Record eventloop latency. */
     if (server.el_start > 0) {
-        monotime el_duration = getMonotonicUs() - server.el_start;
+        monotime el_duration = current_time - server.el_start;
         durationAddSample(EL_DURATION_TYPE_EL, el_duration);
         latencyTraceIfNeeded(server, eventloop, el_duration);
 
@@ -2029,6 +2064,8 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     /* Don't sleep at all before the next beforeSleep() if needed (e.g. a
      * connection has pending data) */
     aeSetDontWait(server.el, dont_sleep);
+
+    IOThreadsBeforeSleep(current_time);
 
     /* Before we are going to sleep, let the threads access the dataset by
      * releasing the GIL. The server main thread will not touch anything at this
@@ -2068,8 +2105,9 @@ void afterSleep(struct aeEventLoop *eventLoop, int numevents) {
         server.el_cmd_cnt_start = server.stat_numcommands;
     }
 
-    /* Update the time cache. */
-    updateCachedTime(1);
+    /* Update the time cache. Skip the (relatively expensive) daylight-saving
+     * refresh here since afterSleep() runs on every event-loop wakeup. */
+    updateCachedTime(0);
 
     /* Update command time snapshot in case it'll be required without a command
      * e.g. somehow used by module timers. Don't update it while yielding to a
@@ -2078,7 +2116,7 @@ void afterSleep(struct aeEventLoop *eventLoop, int numevents) {
         server.cmd_time_snapshot = server.mstime;
     }
 
-    adjustIOThreadsByEventLoad(numevents, 0);
+    IOThreadsAfterSleep(numevents);
 }
 
 /* =========================== Server initialization ======================== */
@@ -2351,6 +2389,7 @@ void initServerConfig(void) {
     server.page_size = sysconf(_SC_PAGESIZE);
     server.extended_redis_compat = 0;
     server.pause_cron = 0;
+    server.debug_force_tls_write_error = 0;
     server.dict_resizing = 1;
     server.import_mode = 0;
 
@@ -2391,6 +2430,8 @@ void initServerConfig(void) {
     server.rdb_client_id = -1;
     server.loading_process_events_interval_ms = LOADING_PROCESS_EVENTS_INTERVAL_DEFAULT;
     server.loading_rio = NULL;
+    server.repl_full_sync_start_time = 0;
+    server.repl_full_sync_complete_duration_ms = -1;
 
     /* Replication partial resync backlog */
     server.repl_backlog = NULL;
@@ -2854,6 +2895,14 @@ void resetServerStats(void) {
     server.el_cmd_cnt_max = 0;
     server.stat_active_time = 0;
     server.el_iteration_active = false;
+    server.stat_total_prefetch_batches = 0;
+    server.stat_total_prefetch_entries = 0;
+    server.acl_info.invalid_cmd_accesses = 0;
+    server.acl_info.invalid_key_accesses = 0;
+    server.acl_info.user_auth_failures = 0;
+    server.acl_info.invalid_channel_accesses = 0;
+    server.acl_info.acl_access_denied_tls_cert = 0;
+    server.acl_info.invalid_db_accesses = 0;
     lazyfreeResetStats();
 }
 
@@ -2912,6 +2961,9 @@ serverDb *createDatabaseIfNeeded(int id) {
 void initServer(void) {
     signal(SIGHUP, SIG_IGN);
     signal(SIGPIPE, SIG_IGN);
+#ifdef USE_LIBBACKTRACE
+    initLibbacktraceFrameState();
+#endif
     setupSignalHandlers();
     ThreadsManager_init();
     makeThreadKillable();
@@ -2940,8 +2992,6 @@ void initServer(void) {
     server.replicas_waiting_psync = raxNew();
     server.wait_before_rdb_client_free = DEFAULT_WAIT_BEFORE_RDB_CLIENT_FREE;
     server.clients_pending_write = listCreate();
-    server.clients_pending_io_write = listCreate();
-    server.clients_pending_io_read = listCreate();
     server.clients_timeout_table = raxNew();
     server.replication_allowed = 1;
     server.replicas_eldb = -1; /* Force to emit the first SELECT command. */
@@ -2966,6 +3016,8 @@ void initServer(void) {
     server.reply_buffer_resizing_enabled = 1;
     server.client_mem_usage_buckets = NULL;
     server.debug_client_enforce_reply_list = 0;
+    server.debug_force_free_primary_async = 0;
+    server.debug_pause_before_psync = 0;
     resetReplicationBuffer();
 
     /* Make sure the locale is set on startup based on the config file. */
@@ -3059,14 +3111,6 @@ void initServer(void) {
     server.aof_last_write_errno = 0;
     server.repl_good_replicas_count = 0;
     server.last_sig_received = 0;
-
-    /* Initiate acl info struct */
-    server.acl_info.invalid_cmd_accesses = 0;
-    server.acl_info.invalid_key_accesses = 0;
-    server.acl_info.user_auth_failures = 0;
-    server.acl_info.invalid_channel_accesses = 0;
-    server.acl_info.acl_access_denied_tls_cert = 0;
-    server.acl_info.invalid_db_accesses = 0;
 
     /* Create the timer callback, this is our way to process many background
      * operations incrementally, like eviction of unaccessed expired keys, etc. */
@@ -3218,7 +3262,7 @@ void initListeners(void) {
  * see: https://sourceware.org/bugzilla/show_bug.cgi?id=19329 */
 void InitServerLast(void) {
     bioInit();
-    initIOThreads();
+    initIOThreads(1);
     set_jemalloc_bg_thread(server.jemalloc_bg_thread);
 
     /* First set initial_memory_usage to zero as baseline for getMemoryOverheadData(). */
@@ -3342,7 +3386,7 @@ void commandAddSubcommand(struct serverCommand *parent, struct serverCommand *su
 
 /* Recursively populate the command structure.
  *
- * On success, the function return C_OK. Otherwise C_ERR is returned and we won't
+ * On success, the function return C_OK. Otherwise, C_ERR is returned and we won't
  * add this command in the commands dict. */
 int populateCommandStructure(struct serverCommand *c) {
     /* If the command marks with CMD_SENTINEL, it exists in sentinel. */
@@ -3882,6 +3926,14 @@ void call(client *c, int flags) {
     c->flag.force_repl = 0;
     c->flag.prevent_prop = 0;
 
+    /* The redaction bitmap describes the argv of the command about to execute and
+     * is set on demand by the command itself. Clearing it here covers every case
+     * where one client executes several commands without an intervening
+     * resetClient(): the queued commands of a MULTI, RM_Call sequences issued on a
+     * reused module temp client, and the server.call() chain of a script. Stale
+     * bits would otherwise redact the wrong argument of a later command. */
+    c->redact_arg_bitmap = 0;
+
     /* The server core is in charge of propagation when the first entry point
      * of call() is processCommand().
      * The only other option to get to call() without having processCommand
@@ -3909,7 +3961,46 @@ void call(client *c, int flags) {
     monotime monotonic_start = 0;
     if (monotonicGetType() == MONOTONIC_CLOCK_HW) monotonic_start = getMonotonicUs();
 
+    /* We need to ensure that if the client does not own the argv array, then the command
+     * does not modify it. This is important for debugging purposes to catch any unintended
+     * modifications. */
+    robj **debug_argv_clone = NULL;
+    int debug_argc_clone = 0;
+    int *debug_argv_refcount = NULL;
+    if (c->flag.argv_borrowed && server.enable_debug_assert) {
+        debug_argc_clone = c->original_argv ? c->original_argc : c->argc;
+        debug_argv_clone = zmalloc(sizeof(robj *) * debug_argc_clone);
+        debug_argv_refcount = zmalloc(sizeof(int) * debug_argc_clone);
+        for (int i = 0; i < debug_argc_clone; i++) {
+            debug_argv_clone[i] = c->original_argv ? c->original_argv[i] : c->argv[i];
+            debug_argv_refcount[i] = c->original_argv ? c->original_argv[i]->refcount : c->argv[i]->refcount;
+        }
+    }
+
     c->cmd->proc(c);
+
+    if (c->flag.argv_borrowed && server.enable_debug_assert) {
+        robj **argv = c->original_argv ? c->original_argv : c->argv;
+        int argc = c->original_argv ? c->original_argc : c->argc;
+        if (argc != debug_argc_clone) {
+            serverLog(LL_WARNING, "Debug: command %s modified argc, original value: %d, new value: %d",
+                      c->cmd->current_name, debug_argc_clone, argc);
+        }
+        serverAssert(argc == debug_argc_clone);
+        for (int i = 0; i < debug_argc_clone; i++) {
+            if (argv[i] != debug_argv_clone[i]) {
+                serverLog(LL_WARNING, "Debug: command %s modified argv[%d]", c->cmd->current_name, i);
+            }
+            serverAssert(debug_argv_clone[i] == argv[i]);
+            if (argv[i]->refcount < debug_argv_refcount[i]) {
+                serverLog(LL_WARNING, "Debug: command %s modified argv[%d] refcount, original value: %d, new value: %d",
+                          c->cmd->current_name, i, debug_argv_refcount[i], argv[i]->refcount);
+            }
+            serverAssert(argv[i]->refcount >= debug_argv_refcount[i]);
+        }
+        zfree(debug_argv_clone);
+        zfree(debug_argv_refcount);
+    }
 
     exitExecutionUnit();
 
@@ -3932,13 +4023,18 @@ void call(client *c, int flags) {
 
     /* Update failed command calls if required. */
 
-    if (!incrCommandStatsOnError(real_cmd, ERROR_COMMAND_FAILED) && c->deferred_reply_errors) {
+    int command_failed = incrCommandStatsOnError(real_cmd, ERROR_COMMAND_FAILED);
+    if (!command_failed && c->deferred_reply_errors) {
         /* When call is used from a module client, error stats, and total_error_replies
          * isn't updated since these errors, if handled by the module, are internal,
          * and not reflected to users. however, the commandstats does show these calls
          * (made by RM_Call), so it should log if they failed or succeeded. */
         real_cmd->failed_calls++;
+        command_failed = 1;
     }
+
+    /* Fire command result event for subscribed modules. */
+    moduleFireCommandResultEvent(c, real_cmd, command_failed, duration, dirty);
 
     /* After executing command, we will close the client after writing entire
      * reply if it is set 'CLIENT_CLOSE_AFTER_COMMAND' flag. */
@@ -4080,8 +4176,9 @@ void call(client *c, int flags) {
  * If there's a transaction is flags it as dirty, and if the command is EXEC,
  * it aborts the transaction.
  * The duration is reset, since we reject the command, and it did not record.
- * Note: 'reply' is expected to end with \r\n */
-void rejectCommand(client *c, robj *reply) {
+ * Note: 'reply' is expected to end with \r\n.
+ * If notify_modules is non-zero, fires ValkeyModuleEvent_CommandResultRejected. */
+void rejectCommand(client *c, robj *reply, int notify_modules) {
     flagTransaction(c);
     c->duration = 0;
     if (c->cmd) c->cmd->rejected_calls++;
@@ -4091,12 +4188,16 @@ void rejectCommand(client *c, robj *reply) {
         /* using addReplyError* rather than addReply so that the error can be logged. */
         addReplyErrorObject(c, reply);
     }
+    if (notify_modules) moduleFireCommandRejectedEvent(c, objectGetVal(reply));
 }
 
-void rejectCommandSds(client *c, sds s) {
+/* notify_modules controls whether ValkeyModuleEvent_CommandResultRejected is fired.
+ * The event is fired before 's' is consumed so the string remains valid for callbacks. */
+void rejectCommandSds(client *c, sds s, int notify_modules) {
     flagTransaction(c);
     c->duration = 0;
     if (c->cmd) c->cmd->rejected_calls++;
+    if (notify_modules) moduleFireCommandRejectedEvent(c, s);
     if (c->cmd && c->cmd->proc == execCommand) {
         execCommandAbort(c, s);
         sdsfree(s);
@@ -4106,7 +4207,7 @@ void rejectCommandSds(client *c, sds s) {
     }
 }
 
-void rejectCommandFormat(client *c, const char *fmt, ...) {
+void rejectCommandFormat(client *c, int notify_modules, const char *fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
     sds s = sdscatvprintf(sdsempty(), fmt, ap);
@@ -4114,7 +4215,7 @@ void rejectCommandFormat(client *c, const char *fmt, ...) {
     /* Make sure there are no newlines in the string, otherwise invalid protocol
      * is emitted (The args come from the user, they may contain any character). */
     sdsmapchars(s, "\r\n", "  ", 2);
-    rejectCommandSds(c, s);
+    rejectCommandSds(c, s, notify_modules);
 }
 
 /* This is called after a command in call, we can do some maintenance job in it. */
@@ -4299,7 +4400,8 @@ int processCommand(client *c) {
             /* AUTH and HELLO and no auth commands are valid even in
              * non-authenticated state. */
             if (!c->cmd || !(c->cmd->flags & CMD_NO_AUTH)) {
-                rejectCommand(c, shared.noautherr);
+                rejectCommand(c, shared.noautherr, 0);
+                moduleFireCommandACLRejectedEvent(c, VALKEYMODULE_ACL_LOG_AUTH, -1);
                 return C_OK;
             }
         }
@@ -4308,13 +4410,13 @@ int processCommand(client *c) {
         sds err;
 
         if (!commandCheckExistence(c, &err)) {
-            rejectCommandSds(c, err);
+            rejectCommandSds(c, err, 1);
             return C_OK;
         }
         if (c->read_flags & READ_FLAGS_BAD_ARITY) {
             /* Already detected this, but do it again just to get the error message. */
             serverAssert(!commandCheckArity(c->cmd, c->argc, &err));
-            rejectCommandSds(c, err);
+            rejectCommandSds(c, err, 1);
             return C_OK;
         }
 
@@ -4322,12 +4424,15 @@ int processCommand(client *c) {
         if (c->cmd->flags & CMD_PROTECTED) {
             if ((c->cmd->proc == debugCommand && !allowProtectedAction(server.enable_debug_cmd, c)) ||
                 (c->cmd->proc == moduleCommand && !allowProtectedAction(server.enable_module_cmd, c))) {
-                rejectCommandFormat(c,
-                                    "%s command not allowed. If the %s option is set to \"local\", "
-                                    "you can run it from a local connection, otherwise you need to set this option "
-                                    "in the configuration file, and then restart the server.",
-                                    c->cmd->proc == debugCommand ? "DEBUG" : "MODULE",
-                                    c->cmd->proc == debugCommand ? "enable-debug-command" : "enable-module-command");
+                sds protected_err = sdscatprintf(
+                    sdsempty(),
+                    "%s command not allowed. If the %s option is set to \"local\", "
+                    "you can run it from a local connection, otherwise you need to set this option "
+                    "in the configuration file, and then restart the server.",
+                    c->cmd->proc == debugCommand ? "DEBUG" : "MODULE",
+                    c->cmd->proc == debugCommand ? "enable-debug-command" : "enable-module-command");
+                sdsmapchars(protected_err, "\r\n", "  ", 2);
+                rejectCommandSds(c, protected_err, 1);
                 return C_OK;
             }
         }
@@ -4352,7 +4457,10 @@ int processCommand(client *c) {
     const int obey_client = mustObeyClient(c);
 
     if (c->flag.multi && c->cmd->flags & CMD_NO_MULTI) {
-        rejectCommandFormat(c, "Command '%s' not allowed inside a transaction", c->cmd->fullname);
+        sds nomulti_err =
+            sdscatprintf(sdsempty(), "Command '%s' not allowed inside a transaction", c->cmd->fullname);
+        sdsmapchars(nomulti_err, "\r\n", "  ", 2);
+        rejectCommandSds(c, nomulti_err, 1);
         return C_OK;
     }
 
@@ -4364,8 +4472,16 @@ int processCommand(client *c) {
         addACLLogEntry(c, acl_retval, (c->flag.multi) ? ACL_LOG_CTX_MULTI : ACL_LOG_CTX_TOPLEVEL, acl_errpos, NULL,
                        NULL);
         sds msg = getAclErrorMessage(acl_retval, c->user, c->cmd, objectGetVal(c->argv[acl_errpos]), 0);
-        rejectCommandFormat(c, "-NOPERM %s", msg);
+        rejectCommandFormat(c, 0, "-NOPERM %s", msg);
         sdsfree(msg);
+        uint64_t acl_subevent;
+        switch (acl_retval) {
+        case ACL_DENIED_DB: acl_subevent = VALKEYMODULE_ACL_LOG_DB; break;
+        case ACL_DENIED_KEY: acl_subevent = VALKEYMODULE_ACL_LOG_KEY; break;
+        case ACL_DENIED_CHANNEL: acl_subevent = VALKEYMODULE_ACL_LOG_CHANNEL; break;
+        default: acl_subevent = VALKEYMODULE_ACL_LOG_CMD; break;
+        }
+        moduleFireCommandACLRejectedEvent(c, acl_subevent, acl_errpos);
         return C_OK;
     }
 
@@ -4373,8 +4489,8 @@ int processCommand(client *c) {
      * However we don't perform the redirection if:
      * 1) The sender of this command is our primary.
      * 2) The command has no key arguments. */
-    if (server.cluster_enabled && !obey_client &&
-        !(!(c->cmd->flags & CMD_MOVABLE_KEYS) && c->cmd->key_specs_num == 0 && c->cmd->proc != execCommand)) {
+    int is_keyless = (c->read_flags & READ_FLAGS_NO_KEYS) && c->cmd->proc != execCommand;
+    if (server.cluster_enabled && !obey_client && !is_keyless) {
         int error_code;
         clusterNode *n = getNodeByQuery(c, &error_code);
         if (n == NULL || !clusterNodeIsMyself(n)) {
@@ -4386,6 +4502,33 @@ int processCommand(client *c) {
             clusterRedirectClient(c, n, c->slot, error_code);
             c->duration = 0;
             c->cmd->rejected_calls++;
+            moduleFireCommandRejectedEvent(c, NULL);
+            return C_OK;
+        }
+    }
+
+    /* If the client has the redirect capability, redirect keyless
+     * commands to the primary when this is a replica and the client
+     * has not opted into replica reads with READONLY. EXEC with all-keyless
+     * queued commands is also considered keyless (c->slot remains -1 as set
+     * by prepareCommand when no keys are found). */
+    int is_keyless_exec = is_exec && c->slot == -1;
+    if (server.cluster_enabled && !obey_client && (is_keyless || is_keyless_exec) && (is_read_command || is_write_command) &&
+        (c->capa & CLIENT_CAPA_REDIRECT) && !c->flag.readonly) {
+        clusterNode *myself = getMyClusterNode();
+        if (clusterNodeIsReplica(myself)) {
+            clusterNode *primary = clusterNodeGetPrimary(myself);
+            if (is_keyless_exec) {
+                discardTransaction(c);
+            } else {
+                flagTransaction(c);
+            }
+            int port = clusterNodeClientPort(primary, connIsTLS(c->conn), c);
+            addReplyErrorSds(c, sdscatprintf(sdsempty(), "-REDIRECT %s:%d",
+                                             clusterNodePreferredEndpoint(primary, c), port));
+            c->duration = 0;
+            c->cmd->rejected_calls++;
+            moduleFireCommandRejectedEvent(c, "-REDIRECT");
             return C_OK;
         }
     }
@@ -4421,6 +4564,7 @@ int processCommand(client *c) {
             }
             c->duration = 0;
             c->cmd->rejected_calls++;
+            moduleFireCommandRejectedEvent(c, "-REDIRECT");
             addReplyErrorSds(c, sdscatprintf(sdsempty(), "-REDIRECT %s:%d", server.primary_host, server.primary_port));
         }
         return C_OK;
@@ -4460,7 +4604,7 @@ int processCommand(client *c) {
                 return C_ERR;
             }
 
-            rejectCommand(c, shared.oomerr);
+            rejectCommand(c, shared.oomerr, 1);
             return C_OK;
         }
 
@@ -4497,7 +4641,7 @@ int processCommand(client *c) {
             sds err = writeCommandsGetDiskErrorMessage(deny_write_type);
             /* remove the newline since rejectCommandSds adds it. */
             sdssubstr(err, 0, sdslen(err) - 2);
-            rejectCommandSds(c, err);
+            rejectCommandSds(c, err, 1);
             return C_OK;
         }
     }
@@ -4505,14 +4649,14 @@ int processCommand(client *c) {
     /* Don't accept write commands if there are not enough good replicas and
      * user configured the min-replicas-to-write option. */
     if (is_write_command && !checkGoodReplicasStatus()) {
-        rejectCommand(c, shared.noreplicaserr);
+        rejectCommand(c, shared.noreplicaserr, 1);
         return C_OK;
     }
 
     /* Don't accept write commands if this is a read only replica. But
      * accept write commands if this is our primary. */
     if (server.primary_host && server.repl_replica_ro && !obey_client && is_write_command) {
-        rejectCommand(c, shared.roreplicaerr);
+        rejectCommand(c, shared.roreplicaerr, 1);
         return C_OK;
     }
 
@@ -4522,10 +4666,12 @@ int processCommand(client *c) {
         c->cmd->proc != ssubscribeCommand && c->cmd->proc != unsubscribeCommand &&
         c->cmd->proc != sunsubscribeCommand && c->cmd->proc != psubscribeCommand &&
         c->cmd->proc != punsubscribeCommand && c->cmd->proc != quitCommand && c->cmd->proc != resetCommand) {
-        rejectCommandFormat(c,
-                            "Can't execute '%s': only (P|S)SUBSCRIBE / "
-                            "(P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context",
-                            c->cmd->fullname);
+        sds pubsub_err = sdscatprintf(sdsempty(),
+                                      "Can't execute '%s': only (P|S)SUBSCRIBE / "
+                                      "(P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context",
+                                      c->cmd->fullname);
+        sdsmapchars(pubsub_err, "\r\n", "  ", 2);
+        rejectCommandSds(c, pubsub_err, 1);
         return C_OK;
     }
 
@@ -4534,20 +4680,20 @@ int processCommand(client *c) {
      * link with primary. */
     if (server.primary_host && server.repl_state != REPL_STATE_CONNECTED && server.repl_serve_stale_data == 0 &&
         is_denystale_command) {
-        rejectCommand(c, shared.primarydownerr);
+        rejectCommand(c, shared.primarydownerr, 1);
         return C_OK;
     }
 
     /* Loading DB? Return an error if the command has not the
      * CMD_LOADING flag. */
     if (server.loading && !server.async_loading && is_denyloading_command) {
-        rejectCommand(c, shared.loadingerr);
+        rejectCommand(c, shared.loadingerr, 1);
         return C_OK;
     }
 
     /* During async-loading, block certain commands. */
     if (server.async_loading && is_deny_async_loading_command) {
-        rejectCommand(c, shared.loadingerr);
+        rejectCommand(c, shared.loadingerr, 1);
         return C_OK;
     }
 
@@ -4560,13 +4706,15 @@ int processCommand(client *c) {
      * executed, see Github PR #7022. */
     if (isInsideYieldingLongCommand() && !(c->cmd->flags & CMD_ALLOW_BUSY)) {
         if (server.busy_module_yield_flags && server.busy_module_yield_reply) {
-            rejectCommandFormat(c, "-BUSY %s", server.busy_module_yield_reply);
+            sds busy_err = sdscatprintf(sdsempty(), "-BUSY %s", server.busy_module_yield_reply);
+            sdsmapchars(busy_err, "\r\n", "  ", 2);
+            rejectCommandSds(c, busy_err, 1);
         } else if (server.busy_module_yield_flags) {
-            rejectCommand(c, shared.slowmoduleerr);
+            rejectCommand(c, shared.slowmoduleerr, 1);
         } else if (scriptIsEval()) {
-            rejectCommand(c, shared.slowevalerr);
+            rejectCommand(c, shared.slowevalerr, 1);
         } else {
-            rejectCommand(c, shared.slowscripterr);
+            rejectCommand(c, shared.slowscripterr, 1);
         }
         return C_OK;
     }
@@ -4575,7 +4723,8 @@ int processCommand(client *c) {
      * The main objective here is to prevent abuse of client pause check
      * from which replicas are exempt. */
     if (c->flag.replica && (is_may_replicate_command || is_write_command || is_read_command)) {
-        rejectCommandFormat(c, "Replica can't interact with the keyspace");
+        sds replica_err = sdsnew("Replica can't interact with the keyspace");
+        rejectCommandSds(c, replica_err, 1);
         return C_OK;
     }
 
@@ -4860,7 +5009,7 @@ int finishShutdown(void) {
         rsiptr = rdbPopulateSaveInfo(&rsi);
         /* Keep the page cache since it's likely to restart soon */
         if (rdbSave(REPLICA_REQ_NONE, server.rdb_filename, rsiptr, RDBFLAGS_KEEP_CACHE) != C_OK) {
-            /* Ooops.. error saving! The best we can do is to continue
+            /* Oops.. error saving! The best we can do is to continue
              * operating. Note that if there was a background saving process,
              * in the next cron() the server will be notified that the background
              * saving aborted, handling special stuff like replicas pending for
@@ -5282,7 +5431,10 @@ void addReplyCommandSubCommands(client *c,
                                 void (*reply_function)(client *, struct serverCommand *),
                                 int use_map) {
     if (!cmd->subcommands_ht) {
-        addReplySetLen(c, 0);
+        if (use_map)
+            addReplyMapLen(c, 0);
+        else
+            addReplyArrayLen(c, 0);
         return;
     }
 
@@ -6092,7 +6244,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "hz:%i\r\n", server.hz,
                 "configured_hz:%i\r\n", server.hz,
                 "clients_hz:%i\r\n", server.clients_hz,
-                "lru_clock:%u\r\n", server.unixtime & ((1 << LRULFU_BITS) - 1),
+                "lru_clock:%u\r\n", (unsigned int)(server.unixtime & ((1 << LRULFU_BITS) - 1)),
                 "executable:%s\r\n", server.executable ? server.executable : "",
                 "config_file:%s\r\n", server.configfile ? server.configfile : "",
                 "io_threads_active:%i\r\n", server.active_io_threads_num > 1,
@@ -6480,6 +6632,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                     "master_port:%d\r\n", server.primary_port,
                     "master_link_status:%s\r\n", (server.repl_state == REPL_STATE_CONNECTED) ? "up" : "down",
                     "master_last_io_seconds_ago:%d\r\n", server.primary ? ((int)(server.unixtime - server.primary->last_interaction)) : -1,
+                    "last_successful_sync_duration_ms:%lld\r\n", server.repl_full_sync_complete_duration_ms,
                     "master_sync_in_progress:%d\r\n", server.repl_state == REPL_STATE_TRANSFER,
                     "slave_read_repl_offset:%lld\r\n", replica_read_repl_offset,
                     "slave_repl_offset:%lld\r\n", replica_repl_offset,
@@ -6487,8 +6640,8 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                     "replicas_repl_buffer_peak:%zu\r\n", server.pending_repl_data.peak));
 
             if (server.repl_state == REPL_STATE_TRANSFER) {
-                int repl_transfer_size_stat;
-                int repl_transfer_read_stat;
+                off_t repl_transfer_size_stat;
+                off_t repl_transfer_read_stat;
                 if (atomic_load_explicit(&server.replica_bio_disk_save_state, memory_order_acquire) != REPL_BIO_DISK_SAVE_STATE_NONE) {
                     repl_transfer_size_stat = server.bio_repl_transfer_size;
                     repl_transfer_read_stat = server.bio_repl_transfer_read;
@@ -6720,7 +6873,9 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "eventloop_duration_aof_sum:%llu\r\n", server.duration_stats[EL_DURATION_TYPE_AOF].sum,
                 "eventloop_duration_cron_sum:%llu\r\n", server.duration_stats[EL_DURATION_TYPE_CRON].sum,
                 "eventloop_duration_max:%llu\r\n", server.duration_stats[EL_DURATION_TYPE_EL].max,
-                "eventloop_cmd_per_cycle_max:%lld\r\n", server.el_cmd_cnt_max));
+                "eventloop_cmd_per_cycle_max:%lld\r\n", server.el_cmd_cnt_max,
+                "io_threaded_reads_pending:%lld\r\n", server.stat_io_reads_pending,
+                "io_threaded_writes_pending:%lld\r\n", server.stat_io_writes_pending));
     }
 
     return info;
@@ -7391,6 +7546,17 @@ int iAmPrimary(void) {
             (server.cluster_enabled && clusterNodeIsPrimary(getMyClusterNode())));
 }
 
+/* Initialize thread attribute with a guarded stack size.
+ * Doubling the stack size until it is at least VALKEY_THREAD_STACK_SIZE. */
+void serverInitThreadAttribute(pthread_attr_t *attr) {
+    size_t stacksize;
+    pthread_attr_init(attr);
+    pthread_attr_getstacksize(attr, &stacksize);
+    if (!stacksize) stacksize = 1;
+    while (stacksize < VALKEY_THREAD_STACK_SIZE) stacksize *= 2;
+    pthread_attr_setstacksize(attr, stacksize);
+}
+
 /* Main is marked as weak so that unit tests can use their own main function. */
 __attribute__((weak)) int main(int argc, char **argv) {
     struct timeval tv;
@@ -7584,7 +7750,7 @@ __attribute__((weak)) int main(int argc, char **argv) {
      * hashes) or use the random seed if not configured. */
     if (server.hash_seed) {
         uint8_t seed[16] = {0};
-        getHashSeedFromString(seed, sizeof(seed), server.hash_seed);
+        getHashSeedFromString(seed, sizeof(seed), server.hash_seed, sdslen(server.hash_seed));
         setConfigurableHashSeed(seed);
     } else {
         setConfigurableHashSeed(hashtableGetHashFunctionSeed());
@@ -7659,16 +7825,22 @@ __attribute__((weak)) int main(int argc, char **argv) {
         clusterInitLast();
     }
 
-    /* Initialize the LUA scripting engine. */
-#ifdef LUA_ENABLED
-#define LUA_LIB_STR STRINGIFY(LUA_LIB)
-    if (scriptingEngineManagerFind("lua") == NULL) {
-        if (moduleLoad(LUA_LIB_STR, NULL, 0, 0) != C_OK) {
+#if defined(LUA_ENABLED) && STATIC_LUA
+    /* Initialize the LUA scripting engine on-startup only when LUA is built statically.
+     * Sentinel does not support SCRIPTING commands nor the MODULE commands, so the Lua
+     * engine is not needed here. */
+    if (!server.sentinel_mode && scriptingEngineManagerFind("lua") == NULL) {
+        if (moduleLoadStatic("lua", NULL, 0, 0) != C_OK) {
             serverPanic("Lua engine initialization failed, check the server logs.");
         }
     }
 #endif
 
+    /* Sync lua_insecure_api_current with the final config value after all
+     * config sources (default, config file, command-line args) have been
+     * applied, so that updateLuaEnableInsecureApi() can correctly detect
+     * subsequent changes via CONFIG SET. */
+    server.lua_insecure_api_current = server.lua_enable_insecure_api;
 
     InitServerLast();
 

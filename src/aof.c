@@ -28,6 +28,7 @@
  */
 
 #include "server.h"
+#include "ordered_index.h"
 #include "bio.h"
 #include "rio.h"
 #include "functions.h"
@@ -601,7 +602,7 @@ int persistAofManifest(aofManifest *am) {
     return ret;
 }
 
-/* Called in `loadAppendOnlyFiles` when we upgrade from a old version of the server.
+/* Called in `loadAppendOnlyFiles` when we upgrade from an old version of the server.
  *
  * 1) Create AOF directory use 'server.aof_dirname' as the name.
  * 2) Use 'server.aof_filename' to construct a BASE type aofInfo and add it to
@@ -1227,7 +1228,7 @@ void flushAppendOnlyFile(int force) {
                  * than two seconds this is still ok. Postpone again. */
                 return;
             }
-            /* Otherwise fall through, and go write since we can't wait
+            /* Otherwise, fall through, and go write since we can't wait
              * over two seconds. */
             server.aof_delayed_fsync++;
             serverLog(LL_NOTICE, "Asynchronous AOF fsync is taking too long (disk is busy?). Writing the AOF buffer "
@@ -1492,6 +1493,10 @@ struct client *createAOFClient(void) {
 
     c->id = CLIENT_ID_AOF; /* So modules can identify it's the AOF client. */
 
+    /* The AOF client is not subject to ACL checks because all commands present
+     * in the AOF file must be replayed. */
+    c->user = NULL;
+
     /*
      * The AOF client should never be blocked (unlike primary
      * replication connection).
@@ -1501,7 +1506,8 @@ struct client *createAOFClient(void) {
      * background processing there is a chance that the
      * command execution order will be violated.
      */
-    c->raw_flag = 0;
+    c->raw_flag1 = 0;
+    c->raw_flag2 = 0;
     c->flag.deny_blocking = 1;
     c->flag.fake = 1;
 
@@ -1587,8 +1593,9 @@ int loadSingleAppendOnlyFile(char *filename) {
             ret = AOF_FAILED;
             goto cleanup;
         } else {
-            loadingAbsProgress(ftello(fp));
-            last_progress_report_size = ftello(fp);
+            valid_up_to = ftello(fp);
+            loadingAbsProgress(valid_up_to);
+            last_progress_report_size = valid_up_to;
             if (old_style) serverLog(LL_NOTICE, "Reading the remaining AOF tail...");
         }
     }
@@ -1702,11 +1709,7 @@ int loadSingleAppendOnlyFile(char *filename) {
      * If the client is in the middle of a MULTI/EXEC, handle it as it was
      * a short read, even if technically the protocol is correct: we want
      * to remove the unprocessed tail and continue. */
-    if (fakeClient->flag.multi) {
-        serverLog(LL_WARNING, "Revert incomplete MULTI/EXEC transaction in AOF file %s", filename);
-        valid_up_to = valid_before_multi;
-        goto uxeof;
-    }
+    if (fakeClient->flag.multi) goto uxeof;
 
 loaded_ok: /* DB loaded, cleanup and return success (AOF_OK or AOF_TRUNCATED). */
     loadingIncrProgress(ftello(fp) - last_progress_report_size);
@@ -1721,6 +1724,10 @@ readerr: /* Read error. If feof(fp) is true, fall through to unexpected EOF. */
     }
 
 uxeof: /* Unexpected AOF end of file. */
+    if (fakeClient->flag.multi) {
+        serverLog(LL_WARNING, "Revert incomplete MULTI/EXEC transaction in AOF file %s", filename);
+        valid_up_to = valid_before_multi;
+    }
     if (server.aof_load_truncated) {
         serverLog(LL_WARNING, "!!! Warning: short read while loading the AOF file %s!!!", filename);
         serverLog(LL_WARNING, "!!! Truncating the AOF %s at offset %llu !!!", filename,
@@ -1984,7 +1991,7 @@ int rewriteSetObject(rio *r, robj *key, robj *o) {
 int rewriteSortedSetObject(rio *r, robj *key, robj *o) {
     long long count = 0, items = zsetLength(o);
 
-    if (o->encoding == OBJ_ENCODING_LISTPACK) {
+    if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) {
         unsigned char *zl = objectGetVal(o);
         unsigned char *eptr, *sptr;
         unsigned char *vstr;
@@ -2019,13 +2026,13 @@ int rewriteSortedSetObject(rio *r, robj *key, robj *o) {
             if (++count == AOF_REWRITE_ITEMS_PER_CMD) count = 0;
             items--;
         }
-    } else if (o->encoding == OBJ_ENCODING_SKIPLIST) {
+    } else if (objectGetEncoding(o) == OBJ_ENCODING_BTREE) {
         zset *zs = objectGetVal(o);
         hashtableIterator iter;
         hashtableInitIterator(&iter, zs->ht, 0);
         void *next;
         while (hashtableNext(&iter, &next)) {
-            zskiplistNode *node = next;
+            OrderedIndexItem *node = next;
             if (count == 0) {
                 int cmd_items = (items > AOF_REWRITE_ITEMS_PER_CMD) ? AOF_REWRITE_ITEMS_PER_CMD : items;
 
@@ -2035,8 +2042,10 @@ int rewriteSortedSetObject(rio *r, robj *key, robj *o) {
                     return 0;
                 }
             }
-            sds ele = zslGetNodeElement(node);
-            if (!rioWriteBulkDouble(r, node->score) || !rioWriteBulkString(r, ele, sdslen(ele))) {
+            const char *ele;
+            size_t ele_len;
+            orderedIndexItemGetElement(node, &ele, &ele_len);
+            if (!rioWriteBulkDouble(r, orderedIndexItemGetScore(node)) || !rioWriteBulkString(r, ele, ele_len)) {
                 hashtableCleanupIterator(&iter);
                 return 0;
             }
@@ -2364,24 +2373,24 @@ int rewriteObjectRio(rio *aof, robj *o, int db_num) {
     expiretime = objectGetExpire(o);
 
     /* Save the key and associated value */
-    if (o->type == OBJ_STRING) {
+    if (objectGetType(o) == OBJ_STRING) {
         /* Emit a SET command */
         char cmd[] = "*3\r\n$3\r\nSET\r\n";
         if (rioWrite(aof, cmd, sizeof(cmd) - 1) == 0) return C_ERR;
         /* Key and value */
         if (rioWriteBulkObject(aof, &key) == 0) return C_ERR;
         if (rioWriteBulkObject(aof, o) == 0) return C_ERR;
-    } else if (o->type == OBJ_LIST) {
+    } else if (objectGetType(o) == OBJ_LIST) {
         if (rewriteListObject(aof, &key, o) == 0) return C_ERR;
-    } else if (o->type == OBJ_SET) {
+    } else if (objectGetType(o) == OBJ_SET) {
         if (rewriteSetObject(aof, &key, o) == 0) return C_ERR;
-    } else if (o->type == OBJ_ZSET) {
+    } else if (objectGetType(o) == OBJ_ZSET) {
         if (rewriteSortedSetObject(aof, &key, o) == 0) return C_ERR;
-    } else if (o->type == OBJ_HASH) {
+    } else if (objectGetType(o) == OBJ_HASH) {
         if (rewriteHashObject(aof, &key, o) == 0) return C_ERR;
-    } else if (o->type == OBJ_STREAM) {
+    } else if (objectGetType(o) == OBJ_STREAM) {
         if (rewriteStreamObject(aof, &key, o) == 0) return C_ERR;
-    } else if (o->type == OBJ_MODULE) {
+    } else if (objectGetType(o) == OBJ_MODULE) {
         if (rewriteModuleObject(aof, &key, o, db_num) == 0) return C_ERR;
     } else {
         serverPanic("Unknown object type");

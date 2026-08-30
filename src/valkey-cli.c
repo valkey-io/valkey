@@ -91,6 +91,9 @@
 #define CLI_RCFILE_DEFAULT ".valkeyclirc"
 #define CLI_AUTH_ENV "VALKEYCLI_AUTH"
 #define OLD_CLI_AUTH_ENV "REDISCLI_AUTH"
+#define CLI_USER_ENV "VALKEYCLI_USER"
+#define CLI_HOST_ENV "VALKEYCLI_HOST"
+#define CLI_PORT_ENV "VALKEYCLI_PORT"
 #define CLI_CLUSTER_YES_ENV "VALKEYCLI_CLUSTER_YES"
 #define OLD_CLI_CLUSTER_YES_ENV "REDISCLI_CLUSTER_YES"
 
@@ -2379,7 +2382,7 @@ static int cliSendCommand(int argc, char **argv, long repeat) {
                           !strcasecmp(command, "sunsubscribe"));
     if (!strcasecmp(command, "sync") || !strcasecmp(command, "psync")) config.replica_mode = 1;
 
-    /* When the user manually calls SCRIPT DEBUG, setup the activation of
+    /* When the user manually calls SCRIPT DEBUG, set up the activation of
      * debugging mode on the next eval if needed. */
     if (argc == 3 && !strcasecmp(argv[0], "script") && !strcasecmp(argv[1], "debug")) {
         if (!strcasecmp(argv[2], "yes") || !strcasecmp(argv[2], "sync")) {
@@ -2395,7 +2398,7 @@ static int cliSendCommand(int argc, char **argv, long repeat) {
         config.output = OUTPUT_RAW;
     }
 
-    /* Setup argument length */
+    /* Set up argument length */
     argvlen = zmalloc(argc * sizeof(size_t));
     for (j = 0; j < argc; j++) argvlen[j] = sdslen(argv[j]);
 
@@ -2929,14 +2932,26 @@ static int parseOptions(int argc, char **argv) {
     return i;
 }
 
+/* Reads environment variables and overrides the global configuration */
 static void parseEnv(void) {
-    /* Set auth from env, but do not overwrite CLI arguments if passed */
     char *auth = getenv(CLI_AUTH_ENV);
     if (auth == NULL) {
         auth = getenv(OLD_CLI_AUTH_ENV);
     }
-    if (auth != NULL && config.conn_info.auth == NULL) {
+    if (auth != NULL) {
         config.conn_info.auth = auth;
+    }
+    char *user = getenv(CLI_USER_ENV);
+    if (user != NULL) {
+        config.conn_info.user = user;
+    }
+    char *host = getenv(CLI_HOST_ENV);
+    if (host != NULL) {
+        config.conn_info.hostip = sdsnew(host);
+    }
+    char *port = getenv(CLI_PORT_ENV);
+    if (port != NULL) {
+        config.conn_info.hostport = atoi(port);
     }
 
     /* Check for cluster yes flag with fallback to legacy env variable */
@@ -2985,8 +3000,10 @@ static void usage(int err) {
             "valkey-cli %s\n"
             "\n"
             "Usage: valkey-cli [OPTIONS] [cmd [arg [arg ...]]]\n"
-            "  -h <hostname>      Server hostname (default: 127.0.0.1).\n"
-            "  -p <port>          Server port (default: 6379).\n"
+            "  -h <hostname>      Server hostname. Default is 127.0.0.1, you can also use the\n"
+            "                     " CLI_HOST_ENV " environment variable.\n"
+            "  -p <port>          Server port. Default is 6379, you can also use the\n"
+            "                     " CLI_PORT_ENV " environment variable.\n"
             "  -t <timeout>       Server connection timeout in seconds (decimals allowed).\n"
             "                     Default timeout is 0, meaning no limit, depending on the OS.\n"
             "  -s <socket>        Server socket (overrides hostname and port).\n"
@@ -2995,6 +3012,8 @@ static void usage(int err) {
             "                     variable to pass this password more safely\n"
             "                     (if both are used, this argument takes precedence).\n"
             "  --user <username>  Used to send ACL style 'AUTH username pass'. Needs -a.\n"
+            "                     You can also use the " CLI_USER_ENV " environment variable\n"
+            "                     (if both are used, this argument takes precedence).\n"
             "  --pass <password>  Alias of -a for consistency with the new --user option.\n"
             "  --askpass          Force user to input password with mask from STDIN.\n"
             "                     If this argument is used, '-a' and " CLI_AUTH_ENV "\n"
@@ -3037,7 +3056,7 @@ static void usage(int err) {
     fprintf(target,
             "  --latency          Enter a special mode continuously sampling latency.\n"
             "                     If you use this mode in an interactive session it runs\n"
-            "                     forever displaying real-time stats. Otherwise if --raw or\n"
+            "                     forever displaying real-time stats. Otherwise, if --raw or\n"
             "                     --csv is specified, or if you redirect the output to a non\n"
             "                     TTY, it samples the latency for 1 second (you can use\n"
             "                     -i to change the interval), then produces a single output\n"
@@ -3756,7 +3775,7 @@ clusterManagerCommandDef clusterManagerCommands[] = {
     {"add-node", clusterManagerCommandAddNode, 2, "new_host:new_port existing_host:existing_port",
      "replica,primaries-id <arg>"},
     {"del-node", clusterManagerCommandDeleteNode, 2, "host:port node_id", NULL},
-    {"call", clusterManagerCommandCall, -2, "host:port command arg arg .. arg", "only-primaries,only-replicas"},
+    {"call", clusterManagerCommandCall, -2, "host:port command arg arg ... arg", "only-primaries,only-replicas"},
     {"set-timeout", clusterManagerCommandSetTimeout, 2, "host:port milliseconds", NULL},
     {"import", clusterManagerCommandImport, 1, "host:port",
      "from <arg>,from-user <arg>,from-pass <arg>,from-askpass,copy,replace"},
@@ -4288,7 +4307,6 @@ static void clusterManagerOptimizeAntiAffinity(clusterManagerNodeArray *ipnodes,
                           "for anti-affinity\n");
     int node_len = cluster_manager.nodes->len;
     int maxiter = 500 * node_len; // Effort is proportional to cluster size...
-    srand(time(NULL));
     while (maxiter > 0) {
         int offending_len = 0;
         if (offenders != NULL) {
@@ -6207,7 +6225,6 @@ static clusterManagerNode *clusterManagerNodePrimaryRandom(void) {
     }
 
     assert(primary_count > 0);
-    srand(time(NULL));
     idx = rand() % primary_count;
     listRewind(cluster_manager.nodes, &li);
     while ((ln = listNext(&li)) != NULL) {
@@ -8126,7 +8143,7 @@ static int clusterManagerCommandSetTimeout(int argc, char **argv) {
             err = "";
         else
             need_free = 1;
-        clusterManagerLogErr("ERR setting node-timeout for %s:%d: %s\n", n->ip, n->port, err);
+        clusterManagerLogErr("ERR setting cluster-node-timeout for %s:%d: %s\n", n->ip, n->port, err);
         if (need_free) zfree(err);
         err_count++;
     }
@@ -8929,8 +8946,10 @@ static void getRDB(clusterManagerNode *node) {
     }
     if (usemark) {
         payload = ULLONG_MAX - payload - RDB_EOF_MARK_SIZE;
-        if (!write_to_stdout && ftruncate(fd, payload) == -1)
+        if (!write_to_stdout && ftruncate(fd, payload) == -1) {
             fprintf(stderr, "ftruncate failed: %s.\n", strerror(errno));
+            exit(1);
+        }
         fprintf(stderr, "Transfer finished with success after %llu bytes\n", payload);
     } else {
         fprintf(stderr, "Transfer finished with success.\n");
@@ -8963,8 +8982,6 @@ static void pipeMode(void) {
     int done = 0;
     char magic[20]; /* Special reply we recognize. */
     time_t last_read_time = time(NULL);
-
-    srand(time(NULL));
 
     /* Use non blocking I/O. */
     if (anetNonBlock(aneterr, context->fd) == ANET_ERR) {
@@ -9823,7 +9840,6 @@ static void LRUTestMode(void) {
     long long start_cycle;
     int j;
 
-    srand(time(NULL) ^ getpid());
     while (1) {
         /* Perform cycles of 1 second with 50% writes and 50% reads.
          * We use pipelining batching writes / reads N times per cycle in order
@@ -10043,6 +10059,9 @@ int main(int argc, char **argv) {
     int firstarg;
     struct timeval tv;
 
+    srand(time(NULL) ^ getpid());
+
+    /* Valkey defaults */
     memset(&config.sslconfig, 0, sizeof(config.sslconfig));
     config.ct = VALKEY_CONN_TCP;
     config.conn_info.hostip = sdsnew("127.0.0.1");
@@ -10134,11 +10153,13 @@ int main(int argc, char **argv) {
     config.mb_delim = sdsnew("\n");
     config.cmd_delim = sdsnew("\n");
 
+    /* Override configuration based on environment variables */
+    parseEnv();
+
+    /* Override configuration based on explicit command-line arguments */
     firstarg = parseOptions(argc, argv);
     argc -= firstarg;
     argv += firstarg;
-
-    parseEnv();
 
     if (config.askpass) {
         config.conn_info.auth = askPassword("Please input password: ");

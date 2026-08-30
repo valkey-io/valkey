@@ -97,10 +97,14 @@ static void dictEntryDestructorSdsKeyEngineFunctionValue(void *entry) {
     zfree(de);
 }
 
+/* Must be case-insensitive to stay consistent with functionDictType (the
+ * global function dict). Otherwise, names differing only in case (e.g. "aaa"
+ * and "AAA") are stored as distinct entries here but collapse to one entry in
+ * the global dict, which later trips an assertion in libraryUnlink. */
 dictType libraryFunctionDictType = {
     .entryGetKey = dictEntryGetKey,
-    .hashFunction = dictSdsHash,
-    .keyCompare = dictSdsKeyCompare,
+    .hashFunction = dictCStrCaseHash,
+    .keyCompare = dictSdsKeyCaseCompare,
     .entryDestructor = dictEntryDestructorSdsKeyEngineFunctionValue,
 };
 
@@ -160,9 +164,9 @@ static void engineLibraryDispose(void *obj) {
 }
 
 /* Clear all the functions from the given library ctx */
-void functionsLibCtxClear(functionsLibCtx *lib_ctx, void(callback)(dict *)) {
-    dictEmpty(lib_ctx->functions, callback);
-    dictEmpty(lib_ctx->libraries, callback);
+void functionsLibCtxClear(functionsLibCtx *lib_ctx) {
+    dictEmpty(lib_ctx->functions, NULL);
+    dictEmpty(lib_ctx->libraries, NULL);
     dictIterator *iter = dictGetIterator(lib_ctx->engines_stats);
     dictEntry *entry = NULL;
     while ((entry = dictNext(iter))) {
@@ -184,13 +188,13 @@ static void resetEngineOrCollectResetCallbacks(scriptingEngine *engine, void *co
     }
 }
 
-void functionsLibCtxReleaseCurrent(int async, void(callback)(dict *)) {
+static void functionsLibCtxReleaseCurrent(int async) {
     if (async) {
         list *engine_callbacks = listCreate();
         scriptingEngineManagerForEachEngine(resetEngineOrCollectResetCallbacks, engine_callbacks);
         freeFunctionsAsync(curr_functions_lib_ctx, engine_callbacks);
     } else {
-        functionsLibCtxFree(curr_functions_lib_ctx, callback, NULL);
+        functionsLibCtxFree(curr_functions_lib_ctx, NULL);
         scriptingEngineManagerForEachEngine(resetEngineOrCollectResetCallbacks, NULL);
     }
 }
@@ -200,18 +204,18 @@ static void functionsLibCtxFreeGeneric(functionsLibCtx *functions_lib_ctx, int a
     if (async) {
         freeFunctionsAsync(functions_lib_ctx, NULL);
     } else {
-        functionsLibCtxFree(functions_lib_ctx, NULL, NULL);
+        functionsLibCtxFree(functions_lib_ctx, NULL);
     }
 }
 
-void functionReset(int async, void(callback)(dict *)) {
-    functionsLibCtxReleaseCurrent(async, callback);
+void functionReset(int async) {
+    functionsLibCtxReleaseCurrent(async);
     functionsInit();
 }
 
 /* Free the given functions ctx */
-void functionsLibCtxFree(functionsLibCtx *functions_lib_ctx, void(callback)(dict *), list *engine_callbacks) {
-    functionsLibCtxClear(functions_lib_ctx, callback);
+void functionsLibCtxFree(functionsLibCtx *functions_lib_ctx, list *engine_callbacks) {
+    functionsLibCtxClear(functions_lib_ctx);
     dictRelease(functions_lib_ctx->functions);
     dictRelease(functions_lib_ctx->libraries);
     dictRelease(functions_lib_ctx->engines_stats);
@@ -370,7 +374,7 @@ static void libraryLink(functionsLibCtx *lib_ctx, functionLibInfo *li) {
 
 /* Takes all libraries from lib_ctx_src and add to lib_ctx_dst.
  * On collision, if 'replace' argument is true, replace the existing library with the new one.
- * Otherwise abort and leave 'lib_ctx_dst' and 'lib_ctx_src' untouched.
+ * Otherwise, abort and leave 'lib_ctx_dst' and 'lib_ctx_src' untouched.
  * Return C_OK on success and C_ERR if aborted. If C_ERR is returned, set a relevant
  * error message on the 'err' out parameter.
  *  */
@@ -429,7 +433,7 @@ libraryJoin(functionsLibCtx *functions_lib_ctx_dst, functionsLibCtx *functions_l
     dictReleaseIterator(iter);
     iter = NULL;
 
-    functionsLibCtxClear(functions_lib_ctx_src, NULL);
+    functionsLibCtxClear(functions_lib_ctx_src);
     if (old_libraries_list) {
         listRelease(old_libraries_list);
         old_libraries_list = NULL;
@@ -768,7 +772,7 @@ void functionRestoreCommand(client *c) {
         return;
     }
 
-    restorePolicy restore_replicy = restorePolicy_Append; /* default policy: APPEND */
+    restorePolicy restore_policy = restorePolicy_Append; /* default policy: APPEND */
     sds data = objectGetVal(c->argv[2]);
     size_t data_len = sdslen(data);
     rio payload;
@@ -777,11 +781,11 @@ void functionRestoreCommand(client *c) {
     if (c->argc == 4) {
         const char *restore_policy_str = objectGetVal(c->argv[3]);
         if (!strcasecmp(restore_policy_str, "append")) {
-            restore_replicy = restorePolicy_Append;
+            restore_policy = restorePolicy_Append;
         } else if (!strcasecmp(restore_policy_str, "replace")) {
-            restore_replicy = restorePolicy_Replace;
+            restore_policy = restorePolicy_Replace;
         } else if (!strcasecmp(restore_policy_str, "flush")) {
-            restore_replicy = restorePolicy_Flush;
+            restore_policy = restorePolicy_Flush;
         } else {
             addReplyError(c, "Wrong restore policy given, value should be either FLUSH, APPEND or REPLACE.");
             return;
@@ -820,11 +824,11 @@ void functionRestoreCommand(client *c) {
         }
     }
 
-    if (restore_replicy == restorePolicy_Flush) {
+    if (restore_policy == restorePolicy_Flush) {
         functionsLibCtxSwapWithCurrent(functions_lib_ctx, server.lazyfree_lazy_user_flush);
         functions_lib_ctx = NULL; /* avoid releasing the f_ctx in the end */
     } else {
-        if (libraryJoin(curr_functions_lib_ctx, functions_lib_ctx, restore_replicy == restorePolicy_Replace, &err) !=
+        if (libraryJoin(curr_functions_lib_ctx, functions_lib_ctx, restore_policy == restorePolicy_Replace, &err) !=
             C_OK) {
             goto load_error;
         }
@@ -863,7 +867,7 @@ void functionFlushCommand(client *c) {
         return;
     }
 
-    functionReset(async, NULL);
+    functionReset(async);
 
     /* Indicate that the command changed the data so it will be replicated and
      * counted as a data change (for persistence configuration) */

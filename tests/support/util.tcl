@@ -738,8 +738,16 @@ proc process_is_paused pid {
 }
 
 # Wait until the process enters a paused state.
-proc wait_process_paused pid {
-    wait_for_condition 50 100 {
+#
+# Callers that arm a self-stopping debug point (DEBUG PAUSE-AFTER-FORK,
+# DEBUG PAUSE-BEFORE-PSYNC) also wait for the server to reach it, which under
+# valgrind can take longer than 5 seconds. Scale the budget for them, but only
+# under valgrind so normal runs keep failing fast.
+proc wait_process_paused {pid {retries auto}} {
+    if {$retries eq "auto"} {
+        if {$::valgrind} {set retries 1000} else {set retries 50}
+    }
+    wait_for_condition $retries 100 {
         [process_is_paused $pid]
     } else {
         puts [exec ps j $pid]
@@ -749,7 +757,8 @@ proc wait_process_paused pid {
 
 proc pause_process pid {
     exec kill -SIGSTOP $pid
-    wait_process_paused $pid
+    # We sent the signal, so the stop is near-immediate. Keep the short budget.
+    wait_process_paused $pid 50
 }
 
 proc resume_process pid {

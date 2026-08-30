@@ -200,9 +200,6 @@ int connSetPriority(connection *conn, bool is_priority) {
     bool old_priority = conn->is_priority;
     conn->is_priority = is_priority;
 
-    /* Delete existing registration (AE routes delete to the correct loop) */
-    aeDeleteFileEvent(server.el, conn->fd, AE_READABLE | AE_WRITABLE);
-
     /* If transport has custom state updater (e.g. TLS), delegate to it */
     if (conn->type && conn->type->update_state) {
         conn->type->update_state(conn);

@@ -11,6 +11,54 @@ Upgrade urgency levels:
 | CRITICAL | There is a critical bug affecting MOST USERS. Upgrade ASAP.         |
 | SECURITY | There are security fixes in the release.                            |
 
+Valkey 9.1.2  -  Released Mon 31 August 2026
+--------------------------------------------
+
+Upgrade urgency SECURITY: This release includes security fixes we recommend you apply as soon as possible.
+
+### Security Fixes
+* GHSA-jcj7-v34w-v9vv: Fix a use-after-free in RDMA connection handling that could allow an authenticated client to crash the server using CLIENT KILL. Only affects servers built with USE_RDMA and configured with an RDMA listener (#4534)
+* GHSA-fq2f-crmw-q97r: Fix an unauthenticated use-after-free of the Lua interpreter state, caused by a process-global script debugger command table that cached a raw pointer to a freed interpreter and was never invalidated (#4574)
+
+### Bug Fixes
+* Fix a double-free crash when a module timer callback stops its own timer with `ValkeyModule_StopTimer` by @quanyeyang (#4211)
+* Fix torn RESP3 push frames when a client publishes to a channel it is also subscribed to, which could desync client libraries by @quanyeyang (#4253)
+* Listpacks are now always validated on RDB load and RESTORE, preventing deferred assertion crashes; `sanitize-dump-payload` and its ACL flags become no-ops by @jjuleslasarte (#3721)
+* Fix crashes, hangs, and CPU spinning when the RDMA transport is used together with I/O threads by @quanyeyang (#3611)
+* RESET now clears the `CLIENT IMPORT-SOURCE` flag, so reused pooled connections return to normal expiration semantics by @tjade273 (#3973)
+* Truncate a partially written MULTI block from the AOF on short read, preventing loss of newer writes after a later restart by @chzhoo (#4342)
+* Fix an ACL bypass where duplicate STORE/STOREDIST options let GEORADIUS write or delete keys outside the user's permitted patterns by @tjade273 (#3971)
+* Fix command log redaction leaking between commands in a MULTI transaction and missing for commands executed from scripts by @madolson (#4323)
+* Fix a use-after-free crash when a module's cluster message type is received after the module is unloaded by @enjoy-binbin (#4360)
+* Fix out-of-bounds access for cluster module message type 255, which is now a valid, dispatchable message type by @enjoy-binbin (#4410)
+* AOF loading no longer performs ACL checks on replayed commands, preventing silent data loss when the default user is disabled by @lukepalmer (#3984)
+* Fix a client memory accounting leak on replicas that inflated the `mem_clients_normal` INFO field after primary disconnections by @enjoy-binbin (#4395)
+* Fix a permanent client deadlock when a blocking command like BLPOP is followed by a partially delivered pipelined command by @foobar (#4531)
+* HGETEX now requires write permission on the key, closing an ACL gap that let read-only users change field TTLs or delete fields by @ranshid (#4576)
+* Compare the whole TLS certificate CN during authentication, so an embedded NUL can no longer impersonate another ACL user by @madolson (#4577)
+* Fix atomic slot migration failures with I/O threads by not offloading the export job's writes while snapshotting by @satheeshaGowda (#4104)
+* Reject invalid slot import ranges when loading an RDB, so corrupted files can no longer create bad migration jobs by @enjoy-binbin (#4229)
+* Reject RDB slot import records with an invalid job name length, preventing an out-of-bounds read at startup by @quanyeyang (#4210)
+* MOVE and COPY now check ACL access to the current database, so users can no longer exfiltrate keys from an unauthorized DB by @cjx-zar (#4155)
+* Fix a crash on COPY with a trailing DB option during slot migration, and block cross-DB COPY regardless of option order by @madolson (#4301)
+* Fix a server panic when pipelined commands with invalid arity reach the key prefetcher with I/O threads enabled by @madolson (#4302)
+* HPERSIST, HTTL, HPTTL, HEXPIRETIME, and HPEXPIRETIME now return a syntax error when the FIELDS keyword is missing by @cjx-zar (#4300)
+* Fix a race between TLS I/O-thread writes and reads that could leave slot migration export jobs stuck until timeout by @jjuleslasarte (#4320)
+* Fix a signed overflow that let very large hash field expiration times (e.g. via HPEXPIREAT) crash the server by @ranshid (#4312)
+* Fix a frozen monotonic clock on hosts with unsynchronized TSC that stopped background tasks and key expiration by @quanyeyang (#4346)
+* Fix a stack overflow crash when retrying a failed TLS write with a large reply by @murphyjacob4 (#4307)
+* Fix the `--check-system` clocksource check to skip hosts using a hardware clock and suggest only actually available clocksources by @quanyeyang (#4272)
+* Fix an assertion failure with I/O threads when a blocked client's pending command was processed again before unblocking by @quanyeyang (#4376)
+* Sentinel no longer loads the built-in Lua scripting engine, removing a spurious warning at startup by @enjoy-binbin (#4327)
+* Validate channel, message, and module payload lengths in cluster bus packets, preventing forged packets from crashing nodes by @tjade273 (#3972)
+* Harden stream validation on RDB load and RESTORE so crafted payloads can no longer crash the server on later commands by @madolson (#3922)
+* Reject stream payloads with mismatched live/deleted record counts, preventing XDEL from destroying unaccounted entries by @roshkhatri (#4381)
+* Skip unnecessary post-read processing with I/O threads on socket and TLS connections, restoring small-payload throughput by @quanyeyang (#4401)
+* Fix a use-after-free crash when serving clients blocked on the same key if one client is freed during processing by @quanyeyang (#4212)
+* Avoid an unneeded client lookup per write completion with I/O threads on socket and TLS connections, improving pipelined throughput by @dgershko (#4440)
+* Fix CLUSTER SLOT-STATS ORDERBY returning wrong ordering when slot counters differ by more than 2^31 by @jzy1688 (#4459)
+* Fix slot migration failures with I/O threads and TLS by keeping the export job's ACK reads on the main thread while snapshotting by @satheeshaGowda (#4559)
+
 Valkey 9.1.1  -  Released Tue 21 July 2026
 ------------------------------------------
 
@@ -192,6 +240,7 @@ new features, performance improvements, and bug fixes.
 * Daejun Kim @djk1027
 * Daniil Kashapov @dvkashapov
 * Deepak Nandihalli @deepakrn
+* dgershko @dgershko
 * Diego Ciciani @diegociciani
 * eifrah-aws @eifrah-aws
 * Evgeny Barskiy @ebarskiy
@@ -211,6 +260,7 @@ new features, performance improvements, and bug fixes.
 * John @johnufida
 * Joseph Heyburn @jdheyburn
 * Jun Yeong Kim @junyeong0619
+* jzy1688 @jzy1688
 * Katie Holly @Fusl
 * Ken @otherscase
 * korjeek @korjeek
@@ -246,7 +296,7 @@ new features, performance improvements, and bug fixes.
 * Sachin Venkatesha Murthy @sachinvmurthy
 * sananes @yaronsananes
 * Sarthak Aggarwal @sarthakaggarwal97
-* Satheesha CH Gowda @satheesha
+* Satheesha CH Gowda @satheeshaGowda
 * Saurabh K @smkher
 * Seungmin Lee @sungming2
 * Shinobu Nunotaba @Ada-Church-Closure
@@ -257,7 +307,9 @@ new features, performance improvements, and bug fixes.
 * sushil paneru @sushilpaneru1
 * Taeknology @Taeknology
 * Ted Lyngmo @TedLyngmo
+* Tjaden Hess @tjade273
 * Tony Wooster @twooster
+* Tristan Su @foobar
 * uriyage @uriyage
 * Vadym Khoptynets @poiuj
 * Venkat Pamulapati @ChiliPaneer

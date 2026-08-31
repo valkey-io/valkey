@@ -11,6 +11,30 @@ Upgrade urgency levels:
 | CRITICAL | There is a critical bug affecting MOST USERS. Upgrade ASAP.         |
 | SECURITY | There are security fixes in the release.                            |
 
+Valkey 8.1.10  -  Released Mon 31 August 2026
+---------------------------------------------
+
+Upgrade urgency SECURITY: This release includes security fixes we recommend you apply as soon as possible.
+
+### Security Fixes
+* GHSA-jcj7-v34w-v9vv: Fix a use-after-free in RDMA connection handling that could allow an authenticated client to crash the server using CLIENT KILL. Only affects servers built with USE_RDMA and configured with an RDMA listener (#4534)
+
+### Bug Fixes
+* Fix a double free when a module timer callback stops its own timer with `ValkeyModule_StopTimer` by @quanyeyang (#4211)
+* RESET now clears the `CLIENT IMPORT-SOURCE` flag so reused pooled connections stop reading logically expired keys by @tjade273 (#3973)
+* Fix AOF recovery of a truncated MULTI/EXEC block that could cause new writes to be lost after a subsequent restart by @chzhoo (#4342)
+* Fix an ACL bypass where duplicate STORE/STOREDIST options in GEORADIUS commands escaped key write permission checks by @tjade273 (#3971)
+* Fix a use-after-free crash when a cluster message of a module-registered type arrives after the module is unloaded by @enjoy-binbin (#4360)
+* Fix out-of-bounds access when registering or receiving cluster module messages of type 255, which is now fully supported by @enjoy-binbin (#4410)
+* Skip ACL permission checks when replaying the AOF, preventing silent data loss when users are restricted or disabled by @lukepalmer (#3984)
+* Fix a client memory accounting leak that inflated `mem_clients_normal` on replicas after disconnecting from the primary by @enjoy-binbin (#4395)
+* Always validate listpacks on RDB load and RESTORE to prevent deferred crashes; `sanitize-dump-payload` and the related ACL flags are now deprecated no-ops by @jjuleslasarte (#3721)
+* Fix a stack overflow crash when retrying large TLS writes after an OpenSSL write error by @murphyjacob4 (#4307)
+* Validate PUBLISH and MODULE cluster bus packet lengths, preventing a crash from forged packets with oversized payload lengths by @tjade273 (#3972)
+* Reject crafted stream RESTORE/RDB payloads with inconsistent lengths or negative field counts that could crash the server by @madolson (#3922)
+* Fix a use-after-free crash when serving multiple clients blocked on the same key if one is freed during processing by @quanyeyang (#4212)
+* Fix CLUSTER SLOT-STATS ORDERBY sorting when slot statistics differ by more than 2^31 by @jzy1688 (#4459)
+
 Valkey 8.1.9  -  Released Tue 21 July 2026
 ------------------------------------------
 
@@ -402,10 +426,12 @@ We appreciate the efforts of all who contributed code to this release!
 * jjuleslasarte @jjuleslasarte
 * Josef Šimánek @simi
 * Jungwoo Song @bluayer
+* jzy1688 @jzy1688
 * Karthick Ariyaratnam @karthyuom
 * Karthik Subbarao @KarthikSubbarao
 * kronwerk @kronwerk
 * Lipeng Zhu @lipzhu
+* Luke Palmer @lukepalmer
 * Madelyn Olson @madolson
 * Marek Zoremba @zori-janea
 * Masahiro Ide @imasahiro
@@ -421,6 +447,7 @@ We appreciate the efforts of all who contributed code to this release!
 * Ping Xie @PingXie
 * pkhartsk @pkhartsk
 * Qu Chen @QuChen88
+* Quanye Yang @quanyeyang
 * Rain Valentine @rainsupreme
 * Ran Shidlansik @ranshid
 * Ray Cao @RayaCoo
@@ -446,6 +473,7 @@ We appreciate the efforts of all who contributed code to this release!
 * sushil paneru @sushilpaneru1
 * Tal Shachar @talxsha
 * Thalia Archibald @thaliaarchi
+* Tjaden Hess @tjade273
 * Uri Yagelnik @uriyage
 * Vadym Khoptynets @poiuj
 * Vanessa Tang @YueTang-Vanessa

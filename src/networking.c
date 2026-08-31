@@ -4271,16 +4271,26 @@ int processInputBuffer(client *c) {
         c->read_flags = isReplicatedClient(c) ? READ_FLAGS_REPLICATED : 0;
         c->read_flags |= authRequired(c) ? READ_FLAGS_AUTH_REQUIRED : 0;
 
+        bool popped_from_queue;
         /* If commands are queued up, pop from the queue first */
         if (!consumeCommandQueue(c)) {
             parseInputBuffer(c);
             prepareCommandQueue(c);
+            popped_from_queue = false;
+        } else {
+            popped_from_queue = true;
         }
 
         /* Prefetch keys for the next commands in queue, if not already done. */
         prefetchCommandQueueKeys(c);
 
-        if (handleParseResults(c) != PARSE_OK) {
+        parseResult res = handleParseResults(c);
+        if (res == PARSE_NEEDMORE && popped_from_queue) {
+            /* A queued partial; its completion bytes may already be in querybuf
+             * (read while blocked), so re-parse instead of waiting for I/O. */
+            continue;
+        } else if (res != PARSE_OK) {
+            /* Parse error or partial command. */
             break;
         }
 

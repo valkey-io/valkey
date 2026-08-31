@@ -13476,9 +13476,9 @@ static int moduleInitPostOnLoadResolved(ModuleLoadFunc onload,
         ACLRecomputeCommandBitsFromCommandRulesAllUsers();
     }
     if (is_static) {
-        serverLog(LL_NOTICE, "Static Module '%s' successfully loaded", ctx.module->name);
+        serverLog(LL_NOTICE, "Static Module '%s' (version %d) successfully loaded", ctx.module->name, ctx.module->ver);
     } else {
-        serverLog(LL_NOTICE, "Module '%s' loaded from %s", ctx.module->name, display_name);
+        serverLog(LL_NOTICE, "Module '%s' (version %d) loaded from %s", ctx.module->name, ctx.module->ver, display_name);
     }
     ctx.module->onload = 0;
 

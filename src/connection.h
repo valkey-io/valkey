@@ -167,28 +167,6 @@ typedef struct ConnectionType {
     int (*connIntegrityChecked)(void); // return 1 if connection type has built-in integrity checks
 } ConnectionType;
 
-/* Connection scheduling priority levels.
- *
- * High-priority connections receive preferential treatment across two subsystems:
- * 1. Event loop QoS (ae): Sockets registered with AE_HIGH_PRIORITY are tracked
- * in a dedicated QoS multiplexer state (qos_apidata) and processed ahead of
- * normal priority events in the event loop, with periodic preemption during
- * normal event batches to service newly arrived QoS events.
- * 2. I/O threads: Read and write tasks are dispatched to dedicated
- * high-priority queues (io_shared_inbox[CONN_PRIORITY_HIGH] and io_shared_outbox[CONN_PRIORITY_HIGH]),
- * and are processed ahead of normal priority queues (io_shared_inbox[CONN_PRIORITY_NORMAL]
- * and io_shared_outbox[CONN_PRIORITY_NORMAL]), when IO threads are enabled.
- */
-typedef enum {
-    /* Normal priority connections - used for normal client connections */
-    CONN_PRIORITY_NORMAL = 0,
-    /* High priority connections - used for critical internal communication such as
-     * cluster bus messages, slot migration, and replication streams */
-    CONN_PRIORITY_HIGH,
-    /* Number of priority levels */
-    CONN_PRIORITY_COUNT
-} connPriority;
-
 struct connection {
     ConnectionType *type;
     ConnectionState state;

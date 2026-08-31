@@ -1686,7 +1686,7 @@ int slotExportJobBeginSnapshotToTargetSocket(slotMigrationJob *job) {
 
         serverLog(LL_NOTICE, "Started child process %ld for slot migration %s", (long)childpid, job->description);
         close(slot_migration_pipe_write); /* close write in parent so that it can detect the close on the child. */
-        if (aeCreateFileEvent(server.el, server.slot_migration_pipe_read, AE_READABLE | AE_HIGH_PRIORITY, slotMigrationPipeReadHandler, NULL) == AE_ERR) {
+        if (aeCreateFileEvent(server.el, server.slot_migration_pipe_read, AE_READABLE, slotMigrationPipeReadHandler, NULL) == AE_ERR) {
             serverPanic("Unrecoverable error creating server.slot_migration_pipe_read file event.");
         }
         close(safe_to_exit_pipe);

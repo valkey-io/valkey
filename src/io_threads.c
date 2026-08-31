@@ -16,6 +16,21 @@
 #define IO_SPMC_QUEUE_SIZE 4096
 #define IO_SPSC_QUEUE_SIZE 4096
 
+/* QoS Swim Lanes for I/O threads
+ * High priority queues: reserved for critical internal communication such as
+ * cluster bus messages, slot migration, and replication streams
+ * Normal priority queues: used for normal client connections
+ */
+typedef enum {
+    /* Normal priority connections - used for normal client connections */
+    CONN_PRIORITY_NORMAL = 0,
+    /* High priority connections - used for critical internal communication such as
+     * cluster bus messages, slot migration, and replication streams */
+    CONN_PRIORITY_HIGH,
+    /* Number of priority levels */
+    CONN_PRIORITY_COUNT
+} connPriority;
+
 static _Thread_local int thread_id = 0;
 static _Thread_local mpscTicket io_thread_ticket[CONN_PRIORITY_COUNT] = {0};
 /* Backlog of responses when io_shared_outbox is full. Should be rare. */

@@ -1961,7 +1961,7 @@ void slotMigrationPipeWriteHandler(struct connection *conn) {
     /* Remove the write handler and set up the pipe read handler. */
     connSetWriteHandler(conn, NULL);
     target->repl_data->repl_last_partial_write = 0;
-    if (aeCreateFileEvent(server.el, server.slot_migration_pipe_read, AE_READABLE | AE_HIGH_PRIORITY, slotMigrationPipeReadHandler, NULL) == AE_ERR) {
+    if (aeCreateFileEvent(server.el, server.slot_migration_pipe_read, AE_READABLE, slotMigrationPipeReadHandler, NULL) == AE_ERR) {
         serverPanic("Unrecoverable error creating server.slot_migration_pipe_read file event.");
     }
 }

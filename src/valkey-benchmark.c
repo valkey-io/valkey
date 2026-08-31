@@ -952,20 +952,27 @@ static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
             /* Optimistically try to write before checking if the file descriptor
              * is actually writable. At worst we get EAGAIN. */
             const ssize_t nwritten = cliWriteConn(c->context, ptr, writeLen);
-            if (nwritten != writeLen) {
-                if (nwritten == -1 && errno != EAGAIN) {
-                    if (errno != EPIPE) fprintf(stderr, "Error writing to the server: %s\n", strerror(errno));
-                    freeClient(c);
-                    return;
-                } else if (nwritten > 0) {
-                    c->written += nwritten;
-                    return;
-                }
-            } else {
+            if (nwritten == writeLen) {
                 aeDeleteFileEvent(el, c->context->fd, AE_WRITABLE);
                 createFileEvent(el, c->context->fd, AE_READABLE, readHandler, c);
                 return;
             }
+
+            if (nwritten > 0) {
+                c->written += nwritten;
+                return;
+            }
+
+            if (nwritten == -1 && errno != EAGAIN) {
+                if (errno != EPIPE) fprintf(stderr, "Error writing to the server: %s\n", strerror(errno));
+                freeClient(c);
+                return;
+            }
+
+            /* cliWriteConn reports a nonblocking would-block as zero. Leave
+             * the writable event armed: retrying here would spin this worker
+             * and prevent it from servicing replies and benchmark timers. */
+            return;
         }
     }
 }

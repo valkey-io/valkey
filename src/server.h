@@ -2406,10 +2406,10 @@ struct valkeyServer {
     char *debug_context; /* A free-form string that has no impact on server except being included in a crash report. */
     int debug_force_tls_write_error;
     /* Hotkey parameters */
-    int hotkey_sampling_percentage; /* Percentage (1-100) of key accesses sampled for hot-key detection. */
-    int hotkey_top_k;               /* Number of top keys to track (Space-Saving K); 0 disables detection. */
-    int hotkey_window_seconds;      /* Length of the QPS accounting window in seconds. */
-    struct spaceSavingManager *hotkey_manager;
+    int hotkeys_sampling_percentage; /* Percentage (1-100) of key accesses sampled for hot-key detection. */
+    int hotkeys_top_k;               /* Number of top keys to track (Space-Saving K); 0 disables detection. */
+    int hotkeys_window_seconds;      /* Length of the QPS accounting window in seconds. */
+    struct spaceSavingManager *hotkeys_manager;
 };
 
 #define MAX_KEYS_BUFFER 256
@@ -3784,9 +3784,9 @@ int objectSetLRUOrLFU(robj *val, long long lfu_freq, long long lru_idle_secs);
 #define LOOKUP_NOSTATS (1 << 2)  /* Don't update keyspace hits/misses counters. */
 #define LOOKUP_WRITE (1 << 3)    /* Delete expired keys even in replicas. */
 #define LOOKUP_NOEXPIRE (1 << 4) /* Avoid deleting lazy expired keys. */
-#define LOOKUP_NOHOTKEY (1 << 5) /* Don't feed hot-key detection (introspection). */
+#define LOOKUP_NOHOTKEYS (1 << 5) /* Don't feed hot-key detection (introspection). */
 #define LOOKUP_NOEFFECTS \
-    (LOOKUP_NONOTIFY | LOOKUP_NOSTATS | LOOKUP_NOTOUCH | LOOKUP_NOEXPIRE | LOOKUP_NOHOTKEY) /* Avoid any effects from fetching the key */
+    (LOOKUP_NONOTIFY | LOOKUP_NOSTATS | LOOKUP_NOTOUCH | LOOKUP_NOEXPIRE | LOOKUP_NOHOTKEYS) /* Avoid any effects from fetching the key */
 
 void dbAdd(serverDb *db, robj *key, robj **valref);
 int dbAddRDBLoad(serverDb *db, sds key, robj **valref);

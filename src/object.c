@@ -1716,7 +1716,7 @@ int objectSetLRUOrLFU(robj *val, long long lfu_freq, long long lru_idle_secs) {
 /* This is a helper function for the OBJECT command. We need to lookup keys
  * without any modification of LRU or other parameters. */
 robj *objectCommandLookup(client *c, robj *key) {
-    return lookupKeyReadWithFlags(c->db, key, LOOKUP_NOTOUCH | LOOKUP_NONOTIFY | LOOKUP_NOHOTKEY);
+    return lookupKeyReadWithFlags(c->db, key, LOOKUP_NOTOUCH | LOOKUP_NONOTIFY | LOOKUP_NOHOTKEYS);
 }
 
 robj *objectCommandLookupOrReply(client *c, robj *key, robj *reply) {

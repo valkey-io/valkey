@@ -126,7 +126,7 @@ robj *lookupKey(serverDb *db, robj *key, int flags) {
 
     /* Charge this lookup to hot-key detection. All the policy (whether detection
      * is on, which lookups count, and sampling) lives in hotkeys.c. */
-    hotkeyRecordLookup(key, db->id, flags);
+    hotkeysRecordLookup(key, db->id, flags);
 
     return val;
 }
@@ -488,7 +488,7 @@ int dbGenericDeleteWithDictIndex(serverDb *db, robj *key, int async, int flags, 
     hashtablePosition pos;
     void **ref = kvstoreHashtableTwoPhasePopFindRef(db->keys, dict_index, objectGetVal(key), &pos);
     if (ref != NULL) {
-        hotkeyRecordDelete(key, db->id, flags);
+        hotkeysRecordDelete(key, db->id, flags);
         robj *val = *ref;
         /* VM_StringDMA may call dbUnshareStringValue which may free val, so we
          * need to incr to retain val */
@@ -697,11 +697,11 @@ long long emptyData(int dbnum, int flags, void(callback)(hashtable *)) {
     /* Empty the database structure. */
     removed = emptyDbStructure(server.db, dbnum, async, callback);
 
-    if (hotkeyEnabled()) {
+    if (hotkeysEnabled()) {
         if (dbnum == -1)
-            hotkeyPurgeAll();
+            hotkeysPurgeAll();
         else
-            hotkeyPurgeDb(dbnum);
+            hotkeysPurgeDb(dbnum);
     }
 
     if (dbnum == -1) flushReplicaKeysWithExpireList(async);

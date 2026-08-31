@@ -15,32 +15,32 @@
 typedef struct serverObject robj;
 
 /* Config callbacks (wired from config.c). */
-int hotKeySamplingCallback(const char **err);
-int hotKeyTopKCallback(const char **err);
-int hotKeyWindowCallback(const char **err);
+int hotkeysSamplingCallback(const char **err);
+int hotkeysTopKCallback(const char **err);
+int hotkeysWindowCallback(const char **err);
 
 /* Is hot-key detection currently enabled (hotkeys-top-k > 0)? */
-bool hotkeyEnabled(void);
+bool hotkeysEnabled(void);
 /* Number of sampled observations in the last completed window (N). */
-uint64_t hotkeyLastWindowSamples(void);
+uint64_t hotkeysLastWindowSamples(void);
 /* Real duration of the last completed window, in microseconds. */
-uint64_t hotkeyLastWindowDurationUs(void);
+uint64_t hotkeysLastWindowDurationUs(void);
 /* Create the manager at server startup if detection is enabled. */
-void hotkeyInit(void);
+void hotkeysInit(void);
 /* Periodic maintenance (call from serverCron): freeze elapsed windows on time. */
-void hotkeyCron(void);
+void hotkeysCron(void);
 
 /* Drop tracked keys: all, or scoped to a cluster slot / database. */
-void hotkeyPurgeAll(void);
-void hotkeyPurgeSlot(int slot);
-void hotkeyPurgeDb(int dbid);
+void hotkeysPurgeAll(void);
+void hotkeysPurgeSlot(int slot);
+void hotkeysPurgeDb(int dbid);
 
 /* Charge a sampled access of `key` in database `dbid` to hot-key detection.
  * Both apply the whole policy themselves (enabled, which activity counts,
  * sampling), so callers in the data path need no hot-key knowledge:
  *  - Lookup: `lookup_flags` are the LOOKUP_* flags of the lookup.
  *  - Delete: `del_flags` are the DB_FLAG_* deletion reasons. */
-void hotkeyRecordLookup(robj *key, int dbid, int lookup_flags);
-void hotkeyRecordDelete(robj *key, int dbid, int del_flags);
+void hotkeysRecordLookup(robj *key, int dbid, int lookup_flags);
+void hotkeysRecordDelete(robj *key, int dbid, int del_flags);
 
 #endif /* HOTKEYS_H */

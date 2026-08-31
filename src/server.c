@@ -1655,7 +1655,7 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
 
     /* Close any elapsed hot-key detection window on schedule, so a completed
      * window is frozen even with no traffic. */
-    hotkeyCron();
+    hotkeysCron();
 
     /* Start a scheduled AOF rewrite if this was requested by the user while
      * a BGSAVE was in progress. */
@@ -3180,7 +3180,7 @@ void initServer(void) {
     if (server.maxmemory_clients != 0) initServerClientMemUsageBuckets();
 
     /* Initialization hotkey */
-    hotkeyInit();
+    hotkeysInit();
 }
 
 void initListeners(void) {
@@ -6868,11 +6868,11 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
         /* N for the last completed window: only keys above N/K are guaranteed
          * tracked, so this gives operators the detection floor of a report. */
         info = sdscatprintf(info, "hotkeys_last_window_samples:%llu\r\n",
-                            (unsigned long long)hotkeyLastWindowSamples());
+                            (unsigned long long)hotkeysLastWindowSamples());
         /* The real span the report was measured over, which is the configured
          * window plus the rotation lag — and the QPS denominator. */
         info = sdscatprintf(info, "hotkeys_last_window_duration_ms:%llu\r\n",
-                            (unsigned long long)(hotkeyLastWindowDurationUs() / 1000));
+                            (unsigned long long)(hotkeysLastWindowDurationUs() / 1000));
     }
 
     /* Get info from modules.

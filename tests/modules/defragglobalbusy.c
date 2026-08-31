@@ -1,7 +1,7 @@
-/* A module whose global defrag callback never finishes: it consumes the whole
- * deadline on every invocation and always leaves a non-zero cursor. Used
- * together with defragtest to check that such a module does not starve the
- * global defrag callbacks of other modules (see defrag.tcl).
+/* A module whose global defrag callback never finishes: it consumes the whole deadline on every
+ * invocation and always leaves a non-zero cursor. Used by defrag.tcl to check that such a module
+ * does not starve the global callbacks of other modules, and that the server discards its cursor
+ * when a cycle is aborted or the module is unloaded.
  */
 
 #include "valkeymodule.h"
@@ -10,10 +10,9 @@
  * the test can confirm the busy module actually ran. */
 unsigned long long busy_calls = 0;
 
-/* Invocations that observed a cleared (zero) cursor, i.e. the start of a fresh pass. Since this
- * module stores a non-zero cursor on every call and never finishes, the only way it can see a
- * zero cursor again is if something discarded the saved one. That makes this a direct probe for
- * the cursor being cleared when a defrag cycle terminates abnormally. */
+/* Invocations that saw a zero cursor, i.e. the start of a fresh pass. This module stores a non-zero
+ * cursor on every call and never finishes, so it can only see zero again if the server discarded the
+ * saved one. That makes this a direct probe for the cursor's lifetime. */
 unsigned long long busy_fresh_starts = 0;
 
 static void defragBusyGlobal(ValkeyModuleDefragCtx *ctx) {

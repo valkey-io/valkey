@@ -968,14 +968,13 @@ static doneStatus defragModuleGlobals(monotime endtime, void *target, void *priv
     UNUSED(target);
     UNUSED(privdata);
     if (endtime == 0) {
-        // Init: clear each module's done flag so the stage visits every module again.
+        // Starting the stage, every module gets visited again
         moduleDefragGlobalsStart();
         return DEFRAG_NOT_DONE;
     }
-    /* Reschedule the stage if a module still has work (its cursor is non-zero, e.g. work
-     * queued on its own threads) or we ran out of time.  Modules already done this cycle are
-     * skipped on the next call, so we resume with the remaining ones. */
     int more_work = moduleDefragGlobals(endtime);
+    // Running out of time can leave modules unvisited, so the stage is only done once a full pass
+    // completed with no module reporting outstanding work.
     if (more_work || getMonotonicUs() >= endtime) return DEFRAG_NOT_DONE;
     return DEFRAG_DONE;
 }
@@ -1024,10 +1023,9 @@ static void endDefragCycle(bool normal_termination) {
     }
     defrag_later_cursor = 0;
 
-    /* Modules keep their own defrag cursor.  On a normal termination those are already 0, since
-     * the module stage only completes once no module reports outstanding work.  An abnormal
-     * termination interrupts modules mid-pass, so discard what they saved: the position may refer
-     * to state that is rebuilt before defrag runs again. */
+    /* An abnormal termination interrupts modules mid-pass, so discard the positions they saved:
+     * those may refer to state that is rebuilt before defrag runs again.  A normal termination has
+     * already released every module cursor. */
     if (!normal_termination) moduleDefragGlobalsAbort();
 
     size_t frag_bytes;

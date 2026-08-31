@@ -11,6 +11,7 @@
 #include "sds.h"
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 #ifndef __cplusplus
 #include <stdatomic.h>
 #endif
@@ -56,9 +57,13 @@ void datasetFree(dataset *ds);
 /* Get number of records */
 size_t datasetGetRecordCount(dataset *ds);
 
+/* Advance an independently owned benchmark random stream. Keeping one state
+ * per event loop avoids serialization in libc's process-wide random(). */
+uint64_t benchmarkNextRandom(uint64_t *state);
+
 #ifndef __cplusplus
 /* Generate complete command for given record index (caller must sdsfree) */
-sds datasetGenerateCommand(dataset *ds, int record_index, sds *template_argv, int template_argc, _Atomic uint64_t *seq_key, int replace_placeholders, long long keyspacelen, int sequential_replacement);
+sds datasetGenerateCommand(dataset *ds, int record_index, sds *template_argv, int template_argc, _Atomic uint64_t *seq_key, uint64_t *random_state, int replace_placeholders, long long keyspacelen, int sequential_replacement);
 #endif
 
 #endif /* VALKEY_BENCHMARK_DATASET_H */

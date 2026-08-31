@@ -8,7 +8,6 @@
 #include "fmacros.h"
 
 #include "valkey-benchmark-dataset.h"
-#include "cli_common.h"
 #include "zmalloc.h"
 #include <valkey/valkey.h>
 #include <stdbool.h>
@@ -34,7 +33,7 @@ static int findFieldIndex(dataset *ds, const char *field_name, size_t field_name
 static const char *extractDatasetFieldValue(dataset *ds, int field_idx, int record_index);
 static sds replaceOccurrence(sds processed_arg, const char *pos, const char *replacement);
 static sds processFieldsInArg(dataset *ds, sds arg, int record_index);
-static sds processRandPlaceholdersForDataSet(sds cmd, _Atomic uint64_t *seq_key, int replace_placeholders, long long keyspacelen, int sequential_replacement);
+static sds processRandPlaceholdersForDataSet(sds cmd, _Atomic uint64_t *seq_key, uint64_t *random_state, int replace_placeholders, long long keyspacelen, int sequential_replacement);
 
 dataset *datasetInit(const char *filename, int max_documents, int has_field_placeholders, sds *template_argv, int template_argc, int verbose) {
     if (!filename) return NULL;
@@ -161,7 +160,14 @@ size_t datasetGetRecordCount(dataset *ds) {
     return ds ? ds->record_count : 0;
 }
 
-sds datasetGenerateCommand(dataset *ds, int record_index, sds *template_argv, int template_argc, _Atomic uint64_t *seq_key, int replace_placeholders, long long keyspacelen, int sequential_replacement) {
+uint64_t benchmarkNextRandom(uint64_t *state) {
+    uint64_t value = (*state += 0x9e3779b97f4a7c15ULL);
+    value = (value ^ (value >> 30)) * 0xbf58476d1ce4e5b9ULL;
+    value = (value ^ (value >> 27)) * 0x94d049bb133111ebULL;
+    return value ^ (value >> 31);
+}
+
+sds datasetGenerateCommand(dataset *ds, int record_index, sds *template_argv, int template_argc, _Atomic uint64_t *seq_key, uint64_t *random_state, int replace_placeholders, long long keyspacelen, int sequential_replacement) {
     if (!ds || !template_argv) return NULL;
 
     sds *processed_argv = zmalloc(template_argc * sizeof(sds));
@@ -184,7 +190,7 @@ sds datasetGenerateCommand(dataset *ds, int record_index, sds *template_argv, in
     sds result = sdsnewlen(cmd, len);
     free(cmd);
 
-    result = processRandPlaceholdersForDataSet(result, seq_key, replace_placeholders,
+    result = processRandPlaceholdersForDataSet(result, seq_key, random_state, replace_placeholders,
                                                keyspacelen, sequential_replacement);
 
     for (int i = 0; i < template_argc; i++) {
@@ -415,7 +421,7 @@ static sds processFieldsInArg(dataset *ds, sds arg, int record_index) {
     return arg;
 }
 
-static sds processRandPlaceholdersForDataSet(sds cmd, _Atomic uint64_t *seq_key, int replace_placeholders, long long keyspacelen, int sequential_replacement) {
+static sds processRandPlaceholdersForDataSet(sds cmd, _Atomic uint64_t *seq_key, uint64_t *random_state, int replace_placeholders, long long keyspacelen, int sequential_replacement) {
     if (!replace_placeholders || keyspacelen == 0) return cmd;
 
     for (int ph = 0; ph < PLACEHOLDER_COUNT; ph++) {
@@ -428,7 +434,7 @@ static sds processRandPlaceholdersForDataSet(sds cmd, _Atomic uint64_t *seq_key,
             if (sequential_replacement) {
                 shared_key = atomic_fetch_add_explicit(&seq_key[ph], 1, memory_order_relaxed);
             } else {
-                shared_key = rand62();
+                shared_key = benchmarkNextRandom(random_state);
             }
             shared_key %= keyspacelen;
         }
@@ -442,7 +448,7 @@ static sds processRandPlaceholdersForDataSet(sds cmd, _Atomic uint64_t *seq_key,
                 if (sequential_replacement) {
                     key = atomic_fetch_add_explicit(&seq_key[ph], 1, memory_order_relaxed);
                 } else {
-                    key = rand62();
+                    key = benchmarkNextRandom(random_state);
                 }
                 key %= keyspacelen;
             }

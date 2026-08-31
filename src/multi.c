@@ -192,6 +192,65 @@ void execCommandAbort(client *c, sds error) {
     replicationFeedMonitors(c, server.monitors, c->db->id, c->argv, c->argc);
 }
 
+/* Pre-check ACL permissions for all commands queued inside a MULTI block
+ * against the current user and a simulated SELECT db walk. Returns C_OK if
+ * all commands pass, or C_ERR after replying to the client. Does not discard
+ * the transaction; the caller owns that. The client's argv/cmd state is
+ * restored after the check. */
+static int checkMultiExecACL(client *c) {
+    /* Start from the DB that is selected at EXEC time, then apply SELECT
+     * the same way queueMultiCommand() tracks transaction_db_id. SWAPDB
+     * has get_dbid_args but does not change the client's current db. */
+    int dbid = c->db->id;
+
+    robj **orig_argv = c->argv;
+    int orig_argv_len = c->argv_len;
+    int orig_argc = c->argc;
+    struct serverCommand *orig_cmd = c->cmd;
+
+    for (int j = 0; j < c->mstate->count; j++) {
+        c->argc = c->mstate->commands[j].argc;
+        c->argv = c->mstate->commands[j].argv;
+        c->argv_len = c->mstate->commands[j].argv_len;
+        c->cmd = c->mstate->commands[j].cmd;
+
+        int acl_errpos;
+        int acl_retval = ACLCheckAllUserCommandPerm(c->user, c->cmd, c->argv, c->argc, dbid, &acl_errpos);
+
+        if (acl_retval != ACL_OK) {
+            addACLLogEntry(c, acl_retval, ACL_LOG_CTX_MULTI, acl_errpos, NULL, NULL);
+            sds msg = getAclErrorMessage(acl_retval, c->user, c->cmd, objectGetVal(c->argv[acl_errpos]), 0);
+            addReplyErrorFormat(c, "-EXECABORT Transaction discarded because of: NOPERM %s", msg);
+            sdsfree(msg);
+
+            c->argv = orig_argv;
+            c->argv_len = orig_argv_len;
+            c->argc = orig_argc;
+            c->cmd = orig_cmd;
+            return C_ERR;
+        }
+
+        if (c->cmd->get_dbid_args && c->cmd->proc == selectCommand) {
+            int count = 0;
+            int *positions = c->cmd->get_dbid_args(c->argv, c->argc, &count);
+            if (positions) {
+                if (count > 0) {
+                    long long newdbid;
+                    serverAssert(getLongLongFromObject(c->argv[positions[0]], &newdbid) == C_OK);
+                    dbid = (int)newdbid;
+                }
+                zfree(positions);
+            }
+        }
+    }
+
+    c->argv = orig_argv;
+    c->argv_len = orig_argv_len;
+    c->argc = orig_argc;
+    c->cmd = orig_cmd;
+    return C_OK;
+}
+
 void execCommand(client *c) {
     int j;
     robj **orig_argv;
@@ -240,6 +299,22 @@ void execCommand(client *c) {
     orig_argc = c->argc;
     orig_cmd = c->cmd;
     c->mstate->transaction_db_id = c->db->id;
+
+    /* AOF / replica replay must not reject historically-authorized commands.
+     * AUTH / HELLO / ACL SETUSER|LOAD|DELUSER / module commands can change the
+     * effective ACL context mid-transaction, so they cannot be pre-validated;
+     * fall back to the per-command in-loop check for those transactions. */
+    int skip_acl = mustObeyClient(c) || c->flag.fake;
+    int changes_acl_context = c->mstate->cmd_flags & (CMD_CHANGES_ACL | CMD_MODULE);
+    int use_precheck = !skip_acl && !changes_acl_context;
+
+    if (use_precheck && checkMultiExecACL(c) == C_ERR) {
+        if (!(old_flags.deny_blocking)) c->flag.deny_blocking = 0;
+        discardTransaction(c);
+        server.in_exec = 0;
+        return;
+    }
+
     addReplyArrayLen(c, c->mstate->count);
     for (j = 0; j < c->mstate->count; j++) {
         c->argc = c->mstate->commands[j].argc;
@@ -247,29 +322,35 @@ void execCommand(client *c) {
         c->argv_len = c->mstate->commands[j].argv_len;
         c->cmd = c->realcmd = c->mstate->commands[j].cmd;
 
-        /* ACL permissions are also checked at the time of execution in case
-         * they were changed after the commands were queued. */
-        int acl_errpos;
-        int acl_retval = ACLCheckAllPerm(c, &acl_errpos);
-        if (acl_retval != ACL_OK) {
-            char *reason;
-            switch (acl_retval) {
-            case ACL_DENIED_CMD: reason = "no permission to execute the command or subcommand"; break;
-            case ACL_DENIED_KEY: reason = "no permission to touch the specified keys"; break;
-            case ACL_DENIED_CHANNEL:
-                reason = "no permission to access one of the channels used "
-                         "as arguments";
-                break;
-            default: reason = "no permission"; break;
+        int acl_denied = 0;
+        if (changes_acl_context && !skip_acl) {
+            /* ACL permissions are also checked at the time of execution in case
+             * they were changed after the commands were queued. */
+            int acl_errpos;
+            int acl_retval = ACLCheckAllPerm(c, &acl_errpos);
+            if (acl_retval != ACL_OK) {
+                char *reason;
+                switch (acl_retval) {
+                case ACL_DENIED_CMD: reason = "no permission to execute the command or subcommand"; break;
+                case ACL_DENIED_KEY: reason = "no permission to touch the specified keys"; break;
+                case ACL_DENIED_CHANNEL:
+                    reason = "no permission to access one of the channels used "
+                             "as arguments";
+                    break;
+                default: reason = "no permission"; break;
+                }
+                addACLLogEntry(c, acl_retval, ACL_LOG_CTX_MULTI, acl_errpos, NULL, NULL);
+                addReplyErrorFormat(c,
+                                    "-NOPERM ACLs rules changed between the moment the "
+                                    "transaction was accumulated and the EXEC call. "
+                                    "This command is no longer allowed for the "
+                                    "following reason: %s",
+                                    reason);
+                acl_denied = 1;
             }
-            addACLLogEntry(c, acl_retval, ACL_LOG_CTX_MULTI, acl_errpos, NULL, NULL);
-            addReplyErrorFormat(c,
-                                "-NOPERM ACLs rules changed between the moment the "
-                                "transaction was accumulated and the EXEC call. "
-                                "This command is no longer allowed for the "
-                                "following reason: %s",
-                                reason);
-        } else {
+        }
+
+        if (!acl_denied) {
             if (c->id == CLIENT_ID_AOF)
                 call(c, CMD_CALL_NONE);
             else

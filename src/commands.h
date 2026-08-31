@@ -34,6 +34,7 @@ typedef enum {
 #define CMD_ADMIN (1ULL << 4)
 #define CMD_PUBSUB (1ULL << 5)
 #define CMD_NOSCRIPT (1ULL << 6)
+#define CMD_CHANGES_ACL (1ULL << 7) /* Command may change effective ACL context. */
 #define CMD_BLOCKING (1ULL << 8) /* Has potential to block. */
 #define CMD_LOADING (1ULL << 9)
 #define CMD_STALE (1ULL << 10)

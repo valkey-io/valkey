@@ -732,7 +732,8 @@ static void connRdmaEventHandler(struct aeEventLoop *el, int fd, void *clientDat
 
     /* uplayer should read all */
     while (!(rdma_conn->flags & RDMA_CONN_FLAG_POSTPONE_UPDATE_STATE) && ctx->rx.pos < ctx->rx.offset) {
-        if (conn->read_handler && (callHandler(conn, conn->read_handler) == C_ERR)) {
+        /* the connection may be freed inside the handler */
+        if (conn->read_handler && !callHandler(conn, conn->read_handler)) {
             return;
         }
     }
@@ -1241,6 +1242,12 @@ static void connRdmaClose(connection *conn) {
     rdma_connection *rdma_conn = (rdma_connection *)conn;
     struct rdma_cm_id *cm_id = rdma_conn->cm_id;
     RdmaContext *ctx;
+
+    /* unlink from pending_list before the connection gets freed */
+    if (rdma_conn->pending_list_node) {
+        listDelNode(pending_list, rdma_conn->pending_list_node);
+        rdma_conn->pending_list_node = NULL;
+    }
 
     if (conn->fd != -1) {
         aeDeleteFileEvent(server.el, conn->fd, AE_READABLE);
@@ -1761,21 +1768,31 @@ static int rdmaHasPendingData(void) {
 }
 
 static int rdmaProcessPendingData(void) {
-    listIter li;
     listNode *ln;
     rdma_connection *rdma_conn;
     connection *conn;
     int processed = 0;
 
-    listRewind(pending_list, &li);
-    while ((ln = listNext(&li))) {
+    /* handle one head node at a time, nodes may be freed by handlers */
+    unsigned long remaining = listLength(pending_list);
+    while (remaining-- > 0 && (ln = listFirst(pending_list)) != NULL) {
         rdma_conn = listNodeValue(ln);
-        if (rdma_conn->flags & RDMA_CONN_FLAG_POSTPONE_UPDATE_STATE) continue;
+        if (rdma_conn->flags & RDMA_CONN_FLAG_POSTPONE_UPDATE_STATE) {
+            /* rotate to tail, so the rest of pending connections are still visited */
+            listUnlinkNode(pending_list, ln);
+            listLinkNodeTail(pending_list, ln);
+            continue;
+        }
         conn = &rdma_conn->c;
 
         /* a connection can be disconnected by remote peer, CM event mark state as CONN_STATE_CLOSED, kick connection
          * read/write handler to close connection */
         if (conn->state == CONN_STATE_ERROR || conn->state == CONN_STATE_CLOSED) {
+            /* Unlink before callHandler: read_handler may schedule close and
+             * free the connection when refs drop to 0 */
+            listDelNode(pending_list, ln);
+            rdma_conn->pending_list_node = NULL;
+
             /* Invoke both read_handler and write_handler, unless read_handler
                returns 0, indicating the connection has closed, in which case
                write_handler will be skipped. */
@@ -1783,12 +1800,13 @@ static int rdmaProcessPendingData(void) {
                 callHandler(conn, conn->write_handler);
             }
 
-            listDelNode(pending_list, ln);
-            rdma_conn->pending_list_node = NULL;
-
             ++processed;
             continue;
         }
+
+        /* rotate to tail, the node can be deleted by the handler below */
+        listUnlinkNode(pending_list, ln);
+        listLinkNodeTail(pending_list, ln);
 
         connRdmaEventHandler(NULL, -1, rdma_conn, 0);
         ++processed;

@@ -855,7 +855,11 @@ static long long awakenPausedClient(struct aeEventLoop *eventLoop, long long id,
         // When client acquires a token, try to write with `reuse`.
         c->paused = 0;
         c->reuse = 1;
-        writeHandler(eventLoop, c->context->fd, c, AE_WRITABLE);
+        /* writeHandler may make no progress (EAGAIN) or only partially write.
+         * The pause path removed AE_WRITABLE, so invoke it through the normal
+         * registration helper: TCP retains a future writable wakeup and RDMA
+         * keeps its required register-then-kick behavior. */
+        createFileEvent(eventLoop, c->context->fd, AE_WRITABLE, writeHandler, c);
         listDelNode(paused_clients, ln);
     }
 

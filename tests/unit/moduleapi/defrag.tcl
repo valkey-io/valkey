@@ -114,8 +114,16 @@ start_server {tags {"modules"} overrides {{save ""}}} {
                             defragglobalbusy_busy_fresh_starts]
             assert {$before > 0}
 
-            # Abnormal termination: this is the endDefragCycle(false) path.
+            # Abnormal termination: this is the endDefragCycle(false) path. Disabling only clears
+            # the flag; the abort happens on the next activeDefragTimeProc() call, so wait for the
+            # cycle to actually stop before re-enabling. Re-enabling too early lets the flag flip
+            # back before the timer fires, in which case no abort happens at all.
             r config set activedefrag no
+            wait_for_condition 50 100 {
+                [s active_defrag_running] eq 0
+            } else {
+                fail "active defrag did not stop after being disabled"
+            }
             r config set activedefrag yes
 
             wait_for_condition 50 100 {

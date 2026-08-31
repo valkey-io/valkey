@@ -15012,6 +15012,10 @@ static void moduleDefragCursorDestroy(moduleDefragCursor *cursor) {
  * Unlike the per-key callback, this one is invoked with a time limit: it should call
  * VM_DefragShouldStop() periodically, and save its position with VM_DefragCursorSet() so a later
  * invocation resumes where it stopped. See VM_DefragCursorSet().
+ *
+ * The callback MUST store a cursor of 0 once it has finished. A non-zero cursor keeps the defrag
+ * stage open, which prevents the cycle from completing and stops the server from defragmenting the
+ * keyspace or any other module until the callback converges.
  */
 int VM_RegisterDefragFunc(ValkeyModuleCtx *ctx, ValkeyModuleDefragFunc cb) {
     ctx->module->defrag_cb = cb;
@@ -15250,6 +15254,15 @@ int moduleDefragGlobals(monotime endtime) {
             struct ValkeyModule *module = listNodeValue(ln);
             if (!module->defrag_cb) continue;
             if (module->defrag_done_this_cycle) continue;
+
+            /* Check the deadline before invoking, as the kvstore stages do.  A callback entered
+             * with nothing left would stop on its first check and store position 0, which reads as
+             * "finished" and would exclude the module for the rest of the cycle. */
+            if (getMonotonicUs() >= endtime) {
+                defrag_module_start_idx = this_idx; /* this module hasn't run yet, resume here */
+                return 1;                           /* unvisited and not done, so work remains */
+            }
+
             /* The context points into the cursor, so VM_DefragCursorSet()/Get() read and write the
              * saved position. */
             if (!module->defrag_cursor) module->defrag_cursor = moduleDefragCursorCreate();
@@ -15261,10 +15274,6 @@ int moduleDefragGlobals(monotime endtime) {
                 /* Finished for this cycle: the pass is over, so its cursor goes with it. */
                 moduleDefragGlobalsReleaseCursor(module);
                 module->defrag_done_this_cycle = 1;
-            }
-            if (endtime != 0 && getMonotonicUs() >= endtime) {
-                defrag_module_start_idx = (this_idx + 1) % count;
-                return more_work;
             }
         }
     }

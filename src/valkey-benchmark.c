@@ -188,6 +188,7 @@ static struct placeholders {
 /* Set before a benchmark worker enters its event loop. The event loop owns all
  * accesses, and TLS keeps hot random state off cache lines shared by workers. */
 static _Thread_local uint64_t thread_random_state;
+static _Thread_local int thread_random_state_owner = -1;
 
 /* Sequence keys for dataset command generation */
 static _Atomic uint64_t dataset_seq_key[PLACEHOLDER_COUNT] = {0};
@@ -297,6 +298,18 @@ static long long nstime(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
+}
+
+static uint64_t *getClientRandomState(client c) {
+    if (c->thread_id < 0) return &config.random_state;
+
+    if (thread_random_state_owner == c->thread_id) return &thread_random_state;
+
+    /* RDMA registration can invoke writeHandler synchronously while clients
+     * are still being created on the main thread. Advance the worker seed in
+     * that case; pthread_create later publishes the updated value to the
+     * worker, which moves the hot state into TLS before its event loop starts. */
+    return &config.threads[c->thread_id]->random_seed;
 }
 
 static void seedBenchmarkRandom(uint64_t seed) {
@@ -627,7 +640,7 @@ static void scanClusterTags(client c, char *buffer_start) {
     }
 }
 
-static void setClusterKeyHashTag(client c) {
+static void setClusterKeyHashTag(client c, uint64_t *random_state) {
     assert(c->thread_id >= 0);
     clusterNode *node = c->cluster_node;
     assert(node);
@@ -639,7 +652,7 @@ static void setClusterKeyHashTag(client c) {
      * updateClusterSlotsConfiguration won't actually do anything, since
      * the updated_slots_count array will be already NULL. */
     if (is_updating_slots) updateClusterSlotsConfiguration();
-    int slot = node->slots[rand() % node->slots_count];
+    int slot = node->slots[benchmarkNextRandom(random_state) % node->slots_count];
     const char *tag = crc16_slot_table[slot];
     int taglen = strlen(tag);
     size_t i;
@@ -924,9 +937,7 @@ static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
             return;
         }
 
-        uint64_t *random_state = c->thread_id >= 0
-                                     ? &thread_random_state
-                                     : &config.random_state;
+        uint64_t *random_state = getClientRandomState(c);
 
         /* Dataset field access mode - completely independent command generation */
         if (config.has_field_placeholders && config.current_dataset && config.current_dataset->record_count > 0) {
@@ -955,7 +966,7 @@ static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
             }
         }
 
-        if (config.cluster_mode && c->staglen > 0) setClusterKeyHashTag(c);
+        if (config.cluster_mode && c->staglen > 0) setClusterKeyHashTag(c, random_state);
         c->slots_last_update = atomic_load_explicit(&config.slots_last_update, memory_order_relaxed);
         c->start = ustime();
         c->latency = -1;
@@ -1406,6 +1417,7 @@ static void freeBenchmarkThreads(void) {
 static void *execBenchmarkThread(void *ptr) {
     benchmarkThread *thread = (benchmarkThread *)ptr;
     thread_random_state = thread->random_seed;
+    thread_random_state_owner = thread->index;
     aeMain(thread->el);
     return NULL;
 }

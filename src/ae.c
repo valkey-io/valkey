@@ -73,6 +73,10 @@
         assert(pthread_mutex_unlock(&(eventLoop)->poll_mutex) == 0); \
     }
 
+/* Regardless of the flags used in AE, the only flags understood by the backend
+ * implementations are AE_READABLE & AE_WRITABLE. */
+#define BACKEND_MASK(mask) ((mask) & (AE_READABLE | AE_WRITABLE))
+
 aeEventLoop *aeCreateEventLoop(int setsize) {
     aeEventLoop *eventLoop;
     int i;
@@ -98,7 +102,7 @@ aeEventLoop *aeCreateEventLoop(int setsize) {
     pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_ERRORCHECK);
     if (pthread_mutex_init(&eventLoop->poll_mutex, &attr) != 0) goto err;
 
-    if (aeApiCreate(eventLoop) == -1) goto err;
+    if ((eventLoop->apidata = aeApiCreate(setsize)) == NULL) goto err;
     /* Events with mask == AE_NONE are not set. So let's initialize the
      * vector with it. */
     for (i = 0; i < setsize; i++) eventLoop->events[i].mask = AE_NONE;
@@ -144,7 +148,7 @@ int aeResizeSetSize(aeEventLoop *eventLoop, int setsize) {
 
     if (setsize == eventLoop->setsize) goto done;
     if (eventLoop->maxfd >= setsize) goto err;
-    if (aeApiResize(eventLoop, setsize) == -1) goto err;
+    if (aeApiResize(eventLoop->apidata, setsize) == -1) goto err;
 
     eventLoop->events = zrealloc(eventLoop->events, sizeof(aeFileEvent) * setsize);
     eventLoop->fired = zrealloc(eventLoop->fired, sizeof(aeFiredEvent) * setsize);
@@ -163,7 +167,7 @@ done:
 }
 
 void aeDeleteEventLoop(aeEventLoop *eventLoop) {
-    aeApiFree(eventLoop);
+    aeApiFree(eventLoop->apidata);
     zfree(eventLoop->events);
     zfree(eventLoop->fired);
 
@@ -192,7 +196,10 @@ int aeCreateFileEvent(aeEventLoop *eventLoop, int fd, int mask, aeFileProc *proc
     }
     aeFileEvent *fe = &eventLoop->events[fd];
 
-    if (aeApiAddEvent(eventLoop, fd, mask) == -1) goto done;
+    int backend_add_mask = BACKEND_MASK(mask) & ~fe->mask; // just the meaningful additions
+    if (backend_add_mask) {
+        if (aeApiAddEvent(eventLoop->apidata, fd, BACKEND_MASK(fe->mask), backend_add_mask) == -1) goto done;
+    }
     fe->mask |= mask;
     if (mask & AE_READABLE) fe->rfileProc = proc;
     if (mask & AE_WRITABLE) fe->wfileProc = proc;
@@ -220,7 +227,8 @@ void aeDeleteFileEvent(aeEventLoop *eventLoop, int fd, int mask) {
     /* Only remove attached events */
     mask = mask & fe->mask;
 
-    fe->mask = fe->mask & (~mask);
+    int old_mask = fe->mask;
+    fe->mask = fe->mask & ~mask;
     if (fd == eventLoop->maxfd && fe->mask == AE_NONE) {
         /* Update the max fd */
         int j;
@@ -233,10 +241,9 @@ void aeDeleteFileEvent(aeEventLoop *eventLoop, int fd, int mask) {
     /* Check whether there are events to be removed.
      * Note: user may remove the AE_BARRIER without
      * touching the actual events. */
-    if (mask & (AE_READABLE | AE_WRITABLE)) {
-        /* Must be invoked after the eventLoop mask is modified,
-         * which is required by evport and epoll */
-        aeApiDelEvent(eventLoop, fd, mask);
+    int backend_del_mask = BACKEND_MASK(mask); // just the meaningful deletions
+    if (backend_del_mask) {
+        aeApiDelEvent(eventLoop->apidata, fd, BACKEND_MASK(old_mask), backend_del_mask);
     }
 
 done:
@@ -390,7 +397,7 @@ static int processTimeEvents(aeEventLoop *eventLoop) {
 int aePoll(aeEventLoop *eventLoop, struct timeval *tvp) {
     AE_LOCK(eventLoop);
 
-    int ret = aeApiPoll(eventLoop, tvp);
+    int ret = aeApiPoll(eventLoop->apidata, eventLoop->fired, eventLoop->events, eventLoop->setsize, eventLoop->maxfd, tvp);
 
     AE_UNLOCK(eventLoop);
     return ret;
@@ -449,7 +456,7 @@ int aeProcessEvents(aeEventLoop *eventLoop, int flags) {
             }
             /* Call the multiplexing API, will return only on timeout or when
              * some event fires. */
-            numevents = aeApiPoll(eventLoop, tvp);
+            numevents = aeApiPoll(eventLoop->apidata, eventLoop->fired, eventLoop->events, eventLoop->setsize, eventLoop->maxfd, tvp);
         }
 
         /* Don't process file events if not requested. */

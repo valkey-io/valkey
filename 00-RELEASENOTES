@@ -11,6 +11,32 @@ Upgrade urgency levels:
 | CRITICAL | There is a critical bug affecting MOST USERS. Upgrade ASAP.         |
 | SECURITY | There are security fixes in the release.                            |
 
+Valkey 8.0.11  -  Released Mon 31 August 2026
+---------------------------------------------
+
+Upgrade urgency SECURITY: This release includes security fixes we recommend you apply as soon as possible.
+
+### Security Fixes
+* GHSA-jcj7-v34w-v9vv: Fix a use-after-free in RDMA connection handling that could allow an authenticated client to crash the server using CLIENT KILL. Only affects servers built with USE_RDMA and configured with an RDMA listener (#4534)
+
+### Bug Fixes
+* Fix a double-free crash when a module timer callback stops its own timer with `ValkeyModule_StopTimer` by @quanyeyang (#4211)
+* Fix AOF truncation after a partially persisted MULTI/EXEC block so writes made after recovery are not lost on a later restart by @chzhoo (#4342)
+* Fix an ACL bypass where duplicate STORE/STOREDIST options in GEORADIUS commands let users write keys outside their permitted patterns by @tjade273 (#3971)
+* Fix a use-after-free crash when a cluster message for a module-registered type arrives after the module is unloaded by @enjoy-binbin (#4360)
+* Fix out-of-bounds access on cluster module messages of type 255, which is now a valid message type by @enjoy-binbin (#4410)
+* Fix silent data loss where ACL checks were wrongly applied to commands replayed from the AOF file by @lukepalmer (#3984)
+* Fix a client memory accounting leak that inflated the `mem_clients_normal` INFO field on replicas by @enjoy-binbin (#4395)
+* Always deep-validate listpack payloads on RDB load and RESTORE, preventing deferred assertion crashes; `sanitize-dump-payload` is deprecated and now a no-op by @jjuleslasarte (#3721)
+* Fix module `VM_Yield` timing so repeated yields honor `busy-reply-threshold` instead of the server hz interval by @PingXie (#2131)
+* Fix a stack overflow crash when a large TLS write is retried after an OpenSSL write error by @murphyjacob4 (#4307)
+* Fix a crash caused by forged cluster bus PUBLISH or MODULE packets carrying oversized payload length fields by @tjade273 (#3972)
+* Reject crafted stream payloads in RDB load and RESTORE whose length or field-count metadata is inconsistent, preventing later server panics by @madolson (#3922)
+* Fix a cluster link disconnect loop after network failures that caused pub/sub messages between nodes to be lost by @dvkashapov (#2817)
+* Fix a use-after-free crash when a client blocked on a key is freed while other clients blocked on the same key are being served by @quanyeyang (#4212)
+* Reject crafted stream payloads that misstate live and deleted record counts, preventing data loss on XDEL by @roshkhatri (#4381)
+* Fix incorrect `CLUSTER SLOT-STATS ORDERBY` ordering when slot statistics differ by more than 2^31 by @jzy1688 (#4459)
+
 Valkey 8.0.10  -  Released Tue 21 July 2026
 -------------------------------------------
 
@@ -640,8 +666,10 @@ We appreciate the efforts of all who contributed code to this release!
 * Brennan @BCathcart
 * Chen Tianjie @CharlesChen888
 * chenshi @chenshi5012
+* chzhoo @chzhoo
 * Cui Fliter @cuishuang
 * Daniel House @daniel-house
+* Daniil Kashapov @dvkashapov
 * Darren Jiang @DarrenJiang13
 * David Carlier @devnexen
 * Debing Sun @sundb
@@ -655,6 +683,7 @@ We appreciate the efforts of all who contributed code to this release!
 * Guillaume Koenig @knggk
 * Guybe @guybe7
 * Harkrishn Patro @hpatro
+* Harry Lin @harrylin98
 * Hassaan Khan @hqkhan
 * Hwang Si Yeon @lowgiant
 * Ian Slang
@@ -677,6 +706,7 @@ We appreciate the efforts of all who contributed code to this release!
 * judeng @judeng
 * Juho Kim @AussieSeaweed
 * Jun Luo @luoos
+* jzy1688 @jzy1688
 * K.G. Wang @wkgcass
 * Karthick Ariyaratnam @karthyuom
 * Karthik Subbarao @KarthikSubbarao
@@ -687,6 +717,7 @@ We appreciate the efforts of all who contributed code to this release!
 * Lior Kogan @LiorKogan
 * Lior Lahav @llahav-amzn
 * Lipeng Zhu @zhulipeng
+* Luke Palmer @lukepalmer
 * Madelyn Olson @madolson
 * Makdon @MakDon
 * Maria Markova @markovamaria
@@ -700,6 +731,7 @@ We appreciate the efforts of all who contributed code to this release!
 * mwish @mapleFU
 * NAM UK KIM @namuk2004
 * Neal Gompa @Conan-Kudo
+* Nikhil Manglore @Nikhil-Manglore
 * Nir Rattner @nirrattner
 * nitaicaro @nitaicaro
 * Oran Agra @oranagra
@@ -712,10 +744,12 @@ We appreciate the efforts of all who contributed code to this release!
 * Ping Xie @PingXie
 * pkhartsk @pkhartsk
 * pshankinclarke @pshankinclarke
+* Quanye Yang @quanyeyang
 * Ran Shidlansik @ranshid
 * Rick Ramsay @rickrams
 * Ronen Kalish @ronen-kalish
 * Roshan Khatri @roshkhatri
+* Sakshi Yadav @ydsakshi
 * Samuel Adetunji @adetunjii
 * sananes @yaronsananes
 * Sankar @srgsanky
@@ -732,6 +766,7 @@ We appreciate the efforts of all who contributed code to this release!
 * Ted Lyngmo @TedLyngmo
 * Thomas Fline @fengtan
 * tison @tisonkun
+* Tjaden Hess @tjade273
 * Tom Morris @tommorris
 * Tyler Bream @tbbream
 * uriyage @uriyage

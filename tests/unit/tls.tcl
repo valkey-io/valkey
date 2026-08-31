@@ -186,6 +186,25 @@ start_server {tags {"tls"}} {
             $s close
         }
 
+        test {TLS: Certificate CN with an embedded NUL does not authenticate as the truncated user} {
+            r ACL SETUSER {Client-only} on allcommands allkeys
+            r CONFIG SET tls-auth-clients-user CN
+            set denied_before [s acl_access_denied_tls_cert]
+
+            # The CN is "Client-only\0attacker". Read as a C string it is "Client-only".
+            set s [valkey [srv 0 host] [srv 0 port]]
+            ::tls::import [$s channel] -cafile $::tlsdir/ca.crt \
+                -certfile $::tlsdir/client-nul-cn.crt -keyfile $::tlsdir/client-nul-cn.key
+            assert_equal "default" [$s ACL WHOAMI]
+            $s close
+
+            # The rejected identity reaches the ACL log.
+            assert_equal [expr $denied_before + 1] [s acl_access_denied_tls_cert]
+
+            r ACL DELUSER {Client-only}
+            r CONFIG SET tls-auth-clients-user off
+        }
+
         test {TLS: connTLSWritev stack overflow crash reproduction} {
             # Regression test for a bug where a previously failed OpenSSL write for a
             # small server response would trigger a stack overflow if immediately

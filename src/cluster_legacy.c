@@ -37,7 +37,7 @@
  */
 
 #include "server.h"
-#include "hotkey.h"
+#include "hotkeys.h"
 #include "cluster.h"
 #include "cluster_legacy.h"
 #include "cluster_slot_stats.h"

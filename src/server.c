@@ -32,7 +32,7 @@
  * SPDX-License-Identifier: BSD-3-Clause
  */
 #include "server.h"
-#include "hotkey.h"
+#include "hotkeys.h"
 #include "ordered_index.h"
 #include "connection.h"
 #include "monotonic.h"

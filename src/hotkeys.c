@@ -5,7 +5,7 @@
  */
 
 #include "server.h"
-#include "hotkey.h"
+#include "hotkeys.h"
 #include "cluster.h"
 #include "monotonic.h"
 #include "space_saving.h"
@@ -15,7 +15,7 @@
  *
  * A frozen-window Space-Saving manager (spaceSavingManager, see space_saving.h)
  * does the heavy lifting: it tracks the top-K (key, db) pairs, keeping a live
- * window accumulating the current `hotkey-window-seconds` and a frozen snapshot
+ * window accumulating the current `hotkeys-window-seconds` and a frozen snapshot
  * of the last completed window, which is what HOTKEYS GET reports. This file
  * supplies the policy around it: the sampling/enable configuration, the
  * invalidation predicates, and the HOTKEYS commands.
@@ -86,12 +86,50 @@ void hotkeyPurgeDb(int dbid) {
  * ==========================================================================*/
 
 /* Record one sampled access (read or write) of `key` in database `dbid`. */
-void recordHotKeySample(robj *key, int dbid) {
+static void recordHotKeySample(robj *key, int dbid) {
     spaceSavingManager *m = server.hotkey_manager;
     if (!m || !key) return;
     sds k = objectGetVal(key);
     if (!k) return;
     recordSpaceSavingManagerSample(m, k, dbid);
+}
+
+/* True when the current activity is a genuine client executing a command — a
+ * real client that is actually processing a command, and is not the replication
+ * link/AOF, and not RDB/AOF loading, and not an administrative bulk slot
+ * deletion (delKeysInSlot, e.g. CLUSTER FLUSHSLOT / slot migration — that is not
+ * user key access and must not feed or evict the sampler). Importing traffic is
+ * user-driven load and is counted. */
+static bool hotkeyShouldRecord(void) {
+    client *c = server.current_client;
+    return c != NULL && c->flag.executing_command && !mustObeyClient(c) && !server.loading &&
+           !server.server_del_keys_in_slot;
+}
+
+/* Charge a sampled read/write access of `key` in `dbid`, for a lookup carrying
+ * `lookup_flags` (LOOKUP_*).
+ *
+ * Lookups flagged LOOKUP_NOHOTKEY are skipped as introspection (OBJECT, DEBUG,
+ * the cluster redirect lookup). Note this tests that dedicated bit and NOT
+ * LOOKUP_NOEFFECTS, which is a mask of several flags: a lookup carrying only
+ * LOOKUP_NOTOUCH (EXISTS/TYPE/TTL, or any hit from a CLIENT NO-TOUCH client) is
+ * a genuine client access. */
+void hotkeyRecordLookup(robj *key, int dbid, int lookup_flags) {
+    if (!hotkeyEnabled() || (lookup_flags & LOOKUP_NOHOTKEY)) return;
+    if (!hotkeyShouldRecord()) return;
+    if (!bernoulliSampleHit(server.hotkey_sampling_percentage)) return;
+    recordHotKeySample(key, dbid);
+}
+
+/* Charge a sampled removal of `key` in `dbid`. `del_flags` are the DB_FLAG_*
+ * deletion reasons: only a genuine client-issued DEL/UNLINK counts, not passive
+ * expiry or eviction (DB_FLAG_KEY_EXPIRED / DB_FLAG_KEY_EVICTED). A deletion is
+ * activity on the key, so it is charged like any other access. */
+void hotkeyRecordDelete(robj *key, int dbid, int del_flags) {
+    if (!hotkeyEnabled() || !(del_flags & DB_FLAG_KEY_DELETED)) return;
+    if (!hotkeyShouldRecord()) return;
+    if (!bernoulliSampleHit(server.hotkey_sampling_percentage)) return;
+    recordHotKeySample(key, dbid);
 }
 
 /* ===========================================================================
@@ -133,7 +171,7 @@ static uint64_t hotkeyMulDivRound(uint64_t a, uint64_t b, uint64_t c) {
  * by 100/sample_percentage.
  *
  * The denominator is the window's MEASURED duration, not the configured
- * `hotkey-window-seconds`. Rotation is driven by serverCron, so a window is
+ * `hotkeys-window-seconds`. Rotation is driven by serverCron, so a window is
  * closed at or after its nominal boundary and holds the traffic of that whole
  * real interval; dividing by the nominal length would over-report by the
  * rotation lag (up to ~1/server.hz, i.e. ~10% at the default hz with a 1s
@@ -147,12 +185,16 @@ static uint64_t hotkeyEstimateQps(uint64_t count, uint64_t error, int sample_per
 }
 
 void hotkeysGetCommand(client *c) {
+    /* Report an empty result rather than an error when detection is off, as
+     * SLOWLOG GET and LATENCY HISTORY do: a polling client then has one shape to
+     * parse and does not have to match on an error string to tell "disabled"
+     * from "nothing is hot". */
     if (!hotkeyEnabled()) {
-        addReplyError(c, "Hotkey detection is disabled");
+        addReplyArrayLen(c, 0);
         return;
     }
     /* Detection is enabled, so the manager must already exist (created by
-     * hotkeyInit / the config callbacks whenever sampling is turned on). */
+     * hotkeyInit / the config callbacks whenever top-k is turned on). */
     spaceSavingManager *m = server.hotkey_manager;
     serverAssert(m != NULL);
 
@@ -167,21 +209,19 @@ void hotkeysGetCommand(client *c) {
     }
 
     hotkeyCollected *arr = zmalloc(cap * sizeof(hotkeyCollected));
-    int n = 0;
     /* Estimate with the sampling percentage that produced the frozen window (the
      * current config may have changed since) and the interval it really spanned. */
     int frozen_pct = spaceSavingManagerFrozenSamplingPercentage(m);
     uint64_t frozen_duration_us = spaceSavingManagerFrozenDurationUs(m);
     for (int i = 0; i < cap; i++) {
         uint64_t count, error;
-        spaceSavingManagerAt(m, i, &arr[n].key, &arr[n].dbid, &count, &error);
-        arr[n].qps = hotkeyEstimateQps(count, error, frozen_pct, frozen_duration_us);
-        n++;
+        spaceSavingManagerAt(m, i, &arr[i].key, &arr[i].dbid, &count, &error);
+        arr[i].qps = hotkeyEstimateQps(count, error, frozen_pct, frozen_duration_us);
     }
 
-    qsort(arr, n, sizeof(hotkeyCollected), hotkeyCollectedCmpDesc);
+    qsort(arr, cap, sizeof(hotkeyCollected), hotkeyCollectedCmpDesc);
 
-    int limit = n < server.hotkey_top_k ? n : server.hotkey_top_k;
+    int limit = cap < server.hotkey_top_k ? cap : server.hotkey_top_k;
     addReplyArrayLen(c, limit);
     for (int j = 0; j < limit; j++) {
         addReplyMapLen(c, 3);
@@ -196,12 +236,23 @@ void hotkeysGetCommand(client *c) {
 }
 
 void hotkeysResetCommand(client *c) {
-    if (!hotkeyEnabled()) {
-        addReplyError(c, "Hotkey detection is disabled");
-        return;
-    }
-    hotkeyPurgeAll();
+    /* Nothing to clear when detection is off; still report success, so callers
+     * need not special-case the disabled state. */
+    if (hotkeyEnabled()) hotkeyPurgeAll();
     addReply(c, shared.ok);
+}
+
+void hotkeysHelpCommand(client *c) {
+    const char *help[] = {
+        "GET",
+        "    Return the hottest keys of the last completed window, ordered by",
+        "    estimated accesses per second (descending). Each entry reports the",
+        "    key name, the database it was accessed in, and the estimated QPS.",
+        "RESET",
+        "    Clear all collected hot key statistics.",
+        NULL,
+    };
+    addReplyHelp(c, help);
 }
 
 /* ===========================================================================
@@ -209,10 +260,10 @@ void hotkeysResetCommand(client *c) {
  * ==========================================================================*/
 
 /* Is hot-key detection currently enabled? Tracking zero keys is the same thing
- * as not tracking, so `hotkey-top-k` doubles as the on/off switch: 0 disables
+ * as not tracking, so `hotkeys-top-k` doubles as the on/off switch: 0 disables
  * detection, any positive value enables it and sets the Space-Saving capacity.
  * The sampling percentage only sets how much traffic is sampled while enabled. */
-int hotkeyEnabled(void) {
+bool hotkeyEnabled(void) {
     return server.hotkey_top_k > 0;
 }
 

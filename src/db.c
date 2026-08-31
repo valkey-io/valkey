@@ -28,7 +28,7 @@
  */
 
 #include "server.h"
-#include "hotkey.h"
+#include "hotkeys.h"
 #include "ordered_index.h"
 #include "cluster.h"
 #include "cluster_migrateslots.h"
@@ -40,27 +40,6 @@
 #include "vector.h"
 #include "expire.h"
 #include "crc16_slottable.h"
-
-/* True when the current activity is a genuine client executing a command — a
- * real client that is actually processing a command, and is not the replication
- * link/AOF, and not RDB/AOF loading, and not an administrative bulk slot
- * deletion (delKeysInSlot, e.g. CLUSTER FLUSHSLOT / slot migration — that is not
- * user key access and must not feed or evict the sampler). Importing traffic is
- * user-driven load and should be counted. Hot-key detection charges only such
- * direct client activity. */
-static inline int hotkeyShouldRecord(void) {
-    client *c = server.current_client;
-    return c != NULL && c->flag.executing_command && !mustObeyClient(c) && !server.loading &&
-           !server.server_del_keys_in_slot;
-}
-
-/* Same as hotkeyShouldRecord(), but for the delete path:
- * additionally require the deletion reason to be a genuine removal (DEL/UNLINK)
- * rather than passive expiry or eviction (DB_FLAG_KEY_EXPIRED /
- * DB_FLAG_KEY_EVICTED). */
-static inline int hotkeyShouldRecordDelete(int flags) {
-    return (flags & DB_FLAG_KEY_DELETED) && hotkeyShouldRecord();
-}
 
 /*-----------------------------------------------------------------------------
  * C-level DB API
@@ -145,15 +124,9 @@ robj *lookupKey(serverDb *db, robj *key, int flags) {
         /* TODO: Use separate misses stats and notify event for WRITE */
     }
 
-    /* If the hot key detection function is enabled and the hot key sampling rate is reached,
-     * hot key statistics will be performed. Only lookups flagged LOOKUP_NOHOTKEY are skipped
-     * (introspection such as OBJECT/DEBUG). Note this must test that dedicated bit and not
-     * LOOKUP_NOEFFECTS, which is a mask of several flags: a lookup carrying only LOOKUP_NOTOUCH
-     * (EXISTS/TYPE/TTL, or any hit from a CLIENT NO-TOUCH client) is a genuine client access. */
-    if (hotkeyEnabled() && !(flags & LOOKUP_NOHOTKEY) && hotkeyShouldRecord() &&
-        bernoulliSampleHit(server.hotkey_sampling_percentage)) {
-        recordHotKeySample(key, db->id);
-    }
+    /* Charge this lookup to hot-key detection. All the policy (whether detection
+     * is on, which lookups count, and sampling) lives in hotkeys.c. */
+    hotkeyRecordLookup(key, db->id, flags);
 
     return val;
 }
@@ -515,13 +488,7 @@ int dbGenericDeleteWithDictIndex(serverDb *db, robj *key, int async, int flags, 
     hashtablePosition pos;
     void **ref = kvstoreHashtableTwoPhasePopFindRef(db->keys, dict_index, objectGetVal(key), &pos);
     if (ref != NULL) {
-        /* Charge a write access only for a genuine client-issued DEL/UNLINK —
-         * not passive expiry, eviction, the replication stream, or RDB/AOF
-         * loading. (Importing clients are counted, see hotkeyShouldRecord.) */
-        if (hotkeyEnabled() && hotkeyShouldRecordDelete(flags) &&
-            bernoulliSampleHit(server.hotkey_sampling_percentage)) {
-            recordHotKeySample(key, db->id);
-        }
+        hotkeyRecordDelete(key, db->id, flags);
         robj *val = *ref;
         /* VM_StringDMA may call dbUnshareStringValue which may free val, so we
          * need to incr to retain val */

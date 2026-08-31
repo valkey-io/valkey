@@ -512,7 +512,7 @@ ENGINE_SERVER_OBJ = \
     geohash.o \
     geohash_helper.o \
     hashtable.o \
-    hotkey.o \
+    hotkeys.o \
     space_saving.o \
     hyperloglog.o \
     intset.o \

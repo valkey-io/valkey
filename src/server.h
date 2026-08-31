@@ -4272,6 +4272,7 @@ void resetCommand(client *c);
 void failoverCommand(client *c);
 void hotkeysGetCommand(client *c);
 void hotkeysResetCommand(client *c);
+void hotkeysHelpCommand(client *c);
 
 /* Helper functions for getting database id args from argv, argc */
 int *selectDbIdArgs(robj **argv, int argc, int *count);

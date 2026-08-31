@@ -3905,7 +3905,7 @@ struct COMMAND_ARG HGETDEL_Args[] = {
 #ifndef SKIP_CMD_KEY_SPECS_TABLE
 /* HGETEX key specs */
 keySpec HGETEX_Keyspecs[1] = {
-{NULL,CMD_KEY_RW|CMD_KEY_ACCESS,KSPEC_BS_INDEX,.bs.index={1},KSPEC_FK_RANGE,.fk.range={0,1,0}}
+{NULL,CMD_KEY_RW|CMD_KEY_ACCESS|CMD_KEY_UPDATE,KSPEC_BS_INDEX,.bs.index={1},KSPEC_FK_RANGE,.fk.range={0,1,0}}
 };
 #endif
 

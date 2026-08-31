@@ -680,8 +680,13 @@ static void updateSSLState(connection *conn_) {
     updatePendingData(conn);
 }
 
-static int getCertFieldByName(X509 *cert, const char *field, char *out, size_t outlen) {
-    if (!cert || !field || !out || outlen == 0) return 0;
+/* Return the named field of cert's subject, or NULL if it is absent or empty.
+ * Caller frees.
+ *
+ * sds rather than a C string, so the caller sees what the CA signed even when
+ * the value contains a NUL. */
+static sds getCertFieldByName(X509 *cert, const char *field) {
+    if (!cert || !field) return NULL;
 
     int nid = -1;
 
@@ -691,35 +696,32 @@ static int getCertFieldByName(X509 *cert, const char *field, char *out, size_t o
         nid = NID_organizationName;
     /* Add more mappings here as needed */
 
-    if (nid == -1) return 0;
+    if (nid == -1) return NULL;
 
 #if OPENSSL_VERSION_NUMBER >= 0x30000000L
     const X509_NAME *subject = X509_get_subject_name(cert);
 #else
     X509_NAME *subject = X509_get_subject_name(cert);
 #endif
-    if (!subject) return 0;
+    if (!subject) return NULL;
 
-    /* X509_NAME_get_text_by_NID is deprecated in OpenSSL 4.0 */
+    /* Not X509_NAME_get_text_by_NID(): it NUL terminates into a caller buffer,
+     * hiding an embedded NUL and truncating a long value. Also deprecated in
+     * OpenSSL 4.0. */
     int idx = X509_NAME_get_index_by_NID(subject, nid, -1);
-    if (idx < 0) return 0;
+    if (idx < 0) return NULL;
 
     const X509_NAME_ENTRY *entry = X509_NAME_get_entry(subject, idx);
-    if (!entry) return 0;
+    if (!entry) return NULL;
 
     const ASN1_STRING *data = X509_NAME_ENTRY_get_data(entry);
-    if (!data) return 0;
+    if (!data) return NULL;
 
     const unsigned char *str = ASN1_STRING_get0_data(data);
-    int len = ASN1_STRING_length(data);
-    if (!str || len <= 0) return 0;
+    int str_len = ASN1_STRING_length(data);
+    if (!str || str_len <= 0) return NULL;
 
-    /* Copy to output buffer, ensuring null termination */
-    size_t copy_len = (size_t)len < outlen - 1 ? (size_t)len : outlen - 1;
-    memcpy(out, str, copy_len);
-    out[copy_len] = '\0';
-
-    return 1;
+    return sdsnewlen(str, str_len);
 }
 
 sds tlsGetPeerUsername(connection *conn_) {
@@ -741,12 +743,10 @@ sds tlsGetPeerUsername(connection *conn_) {
     X509 *cert = SSL_get_peer_certificate(conn->ssl);
     if (!cert) return NULL;
 
-    char field_value[256];
-    sds result = NULL;
-
-    if (getCertFieldByName(cert, field, field_value, sizeof(field_value))) {
-        result = sdsnew(field_value);
-    } else {
+    /* Handed back at full length, so "CN=admin\0attacker" does not match the
+     * user "admin" when the caller looks it up. */
+    sds result = getCertFieldByName(cert, field);
+    if (!result) {
         serverLog(LL_NOTICE, "TLS: Failed to extract field '%s' from certificate", field);
     }
 

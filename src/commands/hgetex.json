@@ -17,7 +17,8 @@
             {
                 "flags": [
                     "RW",
-                    "ACCESS"
+                    "ACCESS",
+                    "UPDATE"
                 ],
                 "begin_search": {
                     "index": {

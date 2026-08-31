@@ -656,7 +656,8 @@ static void connRdmaEventHandler(struct aeEventLoop *el, int fd, void *clientDat
 
     /* uplayer should read all */
     while (ctx->rx.pos < ctx->rx.offset) {
-        if (conn->read_handler && (callHandler(conn, conn->read_handler) == C_ERR)) {
+        /* the connection may be freed inside the handler */
+        if (conn->read_handler && !callHandler(conn, conn->read_handler)) {
             return;
         }
     }
@@ -1161,6 +1162,12 @@ static void connRdmaClose(connection *conn) {
     struct rdma_cm_id *cm_id = rdma_conn->cm_id;
     RdmaContext *ctx;
 
+    /* unlink from pending_list before the connection gets freed */
+    if (rdma_conn->pending_list_node) {
+        listDelNode(pending_list, rdma_conn->pending_list_node);
+        rdma_conn->pending_list_node = NULL;
+    }
+
     if (conn->fd != -1) {
         aeDeleteFileEvent(server.el, conn->fd, AE_READABLE);
         conn->fd = -1;
@@ -1627,7 +1634,6 @@ static int rdmaHasPendingData(void) {
 }
 
 static int rdmaProcessPendingData(void) {
-    listIter li;
     listNode *ln;
     rdma_connection *rdma_conn;
     connection *conn;
@@ -1635,8 +1641,9 @@ static int rdmaProcessPendingData(void) {
     int processed;
 
     processed = listLength(pending_list);
-    listRewind(pending_list, &li);
-    while ((ln = listNext(&li))) {
+    /* handle one head node at a time, nodes may be freed by handlers */
+    unsigned long remaining = listLength(pending_list);
+    while (remaining-- > 0 && (ln = listFirst(pending_list)) != NULL) {
         rdma_conn = listNodeValue(ln);
         conn = &rdma_conn->c;
         node = rdma_conn->pending_list_node;
@@ -1645,6 +1652,7 @@ static int rdmaProcessPendingData(void) {
          * read/write handler to close connection */
         if (conn->state == CONN_STATE_ERROR || conn->state == CONN_STATE_CLOSED) {
             listDelNode(pending_list, node);
+            rdma_conn->pending_list_node = NULL;
             /* do NOT call callHandler(conn, conn->read_handler) here, conn is freed in handler! */
             if (conn->read_handler) {
                 conn->read_handler(conn);
@@ -1654,6 +1662,10 @@ static int rdmaProcessPendingData(void) {
 
             continue;
         }
+
+        /* rotate to tail, the node can be deleted by the handler below */
+        listUnlinkNode(pending_list, ln);
+        listLinkNodeTail(pending_list, ln);
 
         connRdmaEventHandler(NULL, -1, rdma_conn, 0);
     }

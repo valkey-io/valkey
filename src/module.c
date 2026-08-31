@@ -6338,7 +6338,7 @@ const char *VM_CallReplyStringPtr(ValkeyModuleCallReply *reply, size_t *len) {
  * integer. Otherwise, (wrong reply type) return NULL. */
 ValkeyModuleString *VM_CreateStringFromCallReply(ValkeyModuleCallReply *reply) {
     ValkeyModuleCtx *ctx = callReplyGetPrivateData(reply);
-    size_t len;
+    size_t len = 0;
     const char *str;
     switch (callReplyType(reply)) {
     case VALKEYMODULE_REPLY_STRING:

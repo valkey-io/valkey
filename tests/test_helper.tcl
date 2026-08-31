@@ -108,34 +108,6 @@ proc expand_unit_spec {spec} {
     return $result
 }
 
-# Expand a unit specification (test name, file, or directory) into a list
-# of canonical unit names relative to the tests directory.
-proc expand_unit_spec {spec} {
-    set tests_dir [file normalize [file join [pwd] tests]]
-
-    if {[file isdirectory $spec]} {
-        set files [glob -nocomplain [file join [file normalize $spec] *.tcl]]
-    } elseif {[file exists $spec]} {
-        set files [list [file normalize $spec]]
-    } elseif {[file exists [file join $tests_dir "${spec}.tcl"]]} {
-        set files [list [file normalize [file join $tests_dir "${spec}.tcl"]]]
-    } else {
-        return [list $spec]
-    }
-
-    set result {}
-    foreach test_file $files {
-        set norm [file normalize $test_file]
-        if {[string match "$tests_dir/*" $norm]} {
-            set rel [string range $norm [expr {[string length $tests_dir]+1}] end]
-            lappend result [file rootname $rel]
-        } else {
-            lappend result [file rootname $norm]
-        }
-    }
-    return $result
-}
-
 # Set to 1 when we are running in client mode. The server test uses a
 # server-client model to run tests simultaneously. The server instance
 # runs the specified number of client instances that will actually run tests.

@@ -2678,6 +2678,9 @@ static int updateMaxmemory(const char **err) {
         }
         startEvictionTimeProc();
     }
+    /* maxmemory-scripts can be a percentage of maxmemory, in that case the
+     * scripts eviction limit changed together with maxmemory. */
+    if (server.maxmemory_scripts < 0) startScriptsEvictionTimeProc();
     return 1;
 }
 

@@ -28,6 +28,7 @@
  */
 
 #include "server.h"
+#include "memory_prefetch.h"
 #include "ordered_index.h"
 #include "cluster.h"
 #include "cluster_migrateslots.h"
@@ -878,8 +879,17 @@ void flushallCommand(client *c) {
 /* This command implements DEL and UNLINK. */
 void delGenericCommand(client *c, int lazy) {
     int numdel = 0, j;
+    /* Prime the software pipeline: prefetch upto initial batch size */
+    int prefetch_offset = server.prefetch_batch_max_size;
+    prefetchKeyBucketRange(c->db, c->argv, 1, c->argc, 1, prefetch_offset);
 
     for (j = 1; j < c->argc; j++) {
+        /* Sliding window prefetch asynchronously for the remaining keys */
+        int pidx = j + prefetch_offset;
+        if (prefetch_offset > 0 && pidx < c->argc) {
+            prefetchStringKey(c->db, c->argv[pidx]);
+        }
+
         if (expireIfNeeded(c->db, c->argv[j], NULL, 0) == KEY_DELETED) continue;
         int deleted = lazy ? dbAsyncDelete(c->db, c->argv[j]) : dbSyncDelete(c->db, c->argv[j]);
         if (deleted) {
@@ -905,8 +915,17 @@ void unlinkCommand(client *c) {
 void existsCommand(client *c) {
     long long count = 0;
     int j;
+    /* Prime the software pipeline: prefetch upto initial batch size */
+    int prefetch_offset = server.prefetch_batch_max_size;
+    prefetchKeyBucketRange(c->db, c->argv, 1, c->argc, 1, prefetch_offset);
 
     for (j = 1; j < c->argc; j++) {
+        /* Sliding window prefetch asynchronously for the remaining keys */
+        int pidx = j + prefetch_offset;
+        if (prefetch_offset > 0 && pidx < c->argc) {
+            prefetchStringKey(c->db, c->argv[pidx]);
+        }
+
         if (lookupKeyReadWithFlags(c->db, c->argv[j], LOOKUP_NOTOUCH)) count++;
     }
     addReplyLongLong(c, count);

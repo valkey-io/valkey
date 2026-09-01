@@ -34,6 +34,7 @@
 
 #include "server.h"
 #include <math.h> /* isnan(), isinf() */
+#include "memory_prefetch.h"
 
 /* Forward declarations */
 int getGenericCommand(client *c);
@@ -531,7 +532,18 @@ void mgetCommand(client *c) {
     int j;
 
     addReplyArrayLen(c, c->argc - 1);
+
+    /* Prime the software pipeline: prefetch upto initial batch size */
+    int prefetch_offset = server.prefetch_batch_max_size;
+    prefetchKeyBucketRange(c->db, c->argv, 1, c->argc, 1, prefetch_offset);
+
     for (j = 1; j < c->argc; j++) {
+        /* Sliding window prefetch asynchronously for the remaining keys */
+        int pidx = j + prefetch_offset;
+        if (prefetch_offset > 0 && pidx < c->argc) {
+            prefetchStringKey(c->db, c->argv[pidx]);
+        }
+
         robj *o = lookupKeyRead(c->db, c->argv[j]);
         if (o == NULL) {
             addReplyNull(c);
@@ -552,11 +564,19 @@ void msetGenericCommand(client *c, int nx) {
         addReplyErrorArity(c);
         return;
     }
+    /* Prime the software pipeline: prefetch upto initial batch size */
+    int prefetch_offset = server.prefetch_batch_max_size * 2;
+    prefetchKeyBucketRange(c->db, c->argv, 1, c->argc, 2, server.prefetch_batch_max_size);
 
     /* Handle the NX flag. The MSETNX semantic is to return zero and don't
      * set anything if at least one key already exists. */
     if (nx) {
         for (j = 1; j < c->argc; j += 2) {
+            /* Sliding window prefetch asynchronously for the remaining keys */
+            int pidx = j + prefetch_offset;
+            if (prefetch_offset > 0 && pidx < c->argc) {
+                prefetchStringKey(c->db, c->argv[pidx]);
+            }
             if (lookupKeyWrite(c->db, c->argv[j]) != NULL) {
                 addReply(c, shared.czero);
                 return;
@@ -566,6 +586,14 @@ void msetGenericCommand(client *c, int nx) {
 
     int setkey_flags = nx ? SETKEY_DOESNT_EXIST : 0;
     for (j = 1; j < c->argc; j += 2) {
+        /* Avoid duplicate sliding window prefetching if we already did it during the nx check. */
+        if (!nx) {
+            /* Sliding window prefetch asynchronously for the remaining keys */
+            int pidx = j + prefetch_offset;
+            if (prefetch_offset > 0 && pidx < c->argc) {
+                prefetchStringKey(c->db, c->argv[pidx]);
+            }
+        }
         robj *val = c->argv[j + 1];
         if (c->flag.argv_borrowed) {
             /* If the client does not own the argv, we need to ensure that the value
@@ -639,10 +667,19 @@ void msetexCommand(client *c) {
         return;
     }
 
+    /* Prime the software pipeline: prefetch upto initial batch size */
+    int prefetch_offset = server.prefetch_batch_max_size * 2;
+    prefetchKeyBucketRange(c->db, c->argv, 2, args_start_idx, 2, server.prefetch_batch_max_size);
+
     /* Check NX/XX key-level conditions before setting the keys.
      * All key-value pairs are located within the range [2, args_start_idx). */
     if (flags & (ARGS_SET_NX | ARGS_SET_XX)) {
         for (int j = 2; j < args_start_idx; j += 2) {
+            /* Sliding window prefetch asynchronously for the remaining keys */
+            int pidx = j + prefetch_offset;
+            if (prefetch_offset > 0 && pidx < args_start_idx) {
+                prefetchStringKey(c->db, c->argv[pidx]);
+            }
             robj *o = lookupKeyWrite(c->db, c->argv[j]);
             if (((flags & ARGS_SET_NX) && o != NULL) ||
                 ((flags & ARGS_SET_XX) && o == NULL)) {
@@ -657,9 +694,16 @@ void msetexCommand(client *c) {
      * When expire is not NULL, we avoid deleting the TTL so it can be updated
      * later instead of being deleted and then created again. */
     setkey_flags |= (flags & ARGS_KEEPTTL || expire) ? SETKEY_KEEPTTL : 0;
-
     /* MSET all the keys. */
     for (int j = 2; j < 2 + numkeys * 2; j += 2) {
+        /* Avoid duplicate sliding window prefetching if already done in NX/XX existence checks */
+        if (!(flags & (ARGS_SET_NX | ARGS_SET_XX))) {
+            /* Sliding window prefetch asynchronously for the remaining keys */
+            int pidx = j + prefetch_offset;
+            if (prefetch_offset > 0 && pidx < 2 + numkeys * 2) {
+                prefetchStringKey(c->db, c->argv[pidx]);
+            }
+        }
         robj *key = c->argv[j];
         robj *val = c->argv[j + 1];
         if (c->flag.argv_borrowed) {

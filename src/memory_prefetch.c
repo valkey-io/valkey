@@ -302,3 +302,34 @@ void removeClientFromPendingCommandsBatch(client *c) {
         }
     }
 }
+
+/* Helper function to prefetch memory required for a key lookup in multi-key loops.
+ * Performs a lightweight Stage 1 primary bucket prefetch, instructing the CPU memory
+ * controller to asynchronously load the 64-byte dictionary hash bucket into L1 cache,
+ * hiding memory latency while the caller processes prior keys. */
+void prefetchStringKey(serverDb *db, robj *keyobj) {
+    if (!db || !db->keys || !keyobj || keyobj->type != OBJ_STRING || !sdsEncodedObject(keyobj)) return;
+
+    sds key = (sds)objectGetVal(keyobj);
+    if (!key) return;
+
+    int dict_index = getKVStoreIndexForKey(key);
+    hashtable *ht = kvstoreGetHashtable(db->keys, dict_index);
+    if (!ht || hashtableSize(ht) == 0) return;
+
+    hashtableIncrementalFindState state;
+    hashtableIncrementalFindInit(&state, ht, key);
+    hashtableIncrementalFindStep(&state);
+}
+
+/* Helper function to prime the prefetch pipeline for a range of keys.
+ * If there is only one key to process in the range, it skips prefetching. */
+void prefetchKeyBucketRange(serverDb *db, robj **argv, int start, int end, int stride, int offset) {
+    if (!db || !db->keys || !argv || stride <= 0 || offset <= 0 || start >= end) return;
+    if ((end - start + stride - 1) / stride <= 1) return;
+    long long calc_limit = (long long)start + (long long)offset * stride;
+    int limit = (calc_limit > (long long)end) ? end : (int)calc_limit;
+    for (int i = start; i < limit; i += stride) {
+        prefetchStringKey(db, argv[i]);
+    }
+}

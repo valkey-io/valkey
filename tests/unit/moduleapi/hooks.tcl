@@ -1,4 +1,5 @@
 set testmodule [file normalize tests/modules/hooks.so]
+set authmodule [file normalize tests/modules/auth.so]
 
 tags "modules" {
     start_server [list overrides [list loadmodule "$testmodule" appendonly yes]] {
@@ -226,6 +227,69 @@ tags "modules" {
             assert_equal [r hooks.event_last flush-end] -1
         }
 
+        test {Test success authentication attempt hooks} {
+            r acl setuser testuser on >testpass ~* +@all
+            r auth testuser testpass
+            assert_equal [r hooks.event_last auth-attempt] "testuser"
+            assert {[r hooks.event_count auth-attempt-module] < 1}
+            assert_equal [r hooks.event_last auth-attempt-success] "1"
+        }
+
+        test {Test failed authentication attempt hooks} {
+            r acl setuser testuser on >testpass ~* +@all
+            catch {r auth testuser wrongpass} e
+            assert_match {*WRONGPASS invalid username-password*} $e
+            assert_equal [r hooks.event_last auth-attempt] "testuser"
+            assert {[r hooks.event_count auth-attempt-module] < 1}
+            assert_equal [r hooks.event_last auth-attempt-success] "0"
+        }
+
+        test {Test success module authentication attempt hooks} {
+            r module load $authmodule
+            r testmoduleone.rm_register_auth_cb
+            r acl setuser foo on >testpass ~* +@all
+            r auth foo allow
+            assert_equal [r hooks.event_last auth-attempt] "foo"
+            assert_equal [r hooks.event_last auth-attempt-module] "testacl"
+            assert_equal [r hooks.event_last auth-attempt-success] "1"
+            r module unload testacl
+        }
+
+        test {Test failed module authentication attempt hooks} {
+            r module load $authmodule
+            r testmoduleone.rm_register_auth_cb
+            r acl setuser foo on ~* +@all
+            catch {r auth foo deny} e
+            assert_match {*Auth denied by Misc Module*} $e
+            assert_equal [r hooks.event_last auth-attempt] "foo"
+            assert_equal [r hooks.event_last auth-attempt-module] "testacl"
+            assert_equal [r hooks.event_last auth-attempt-success] "0"
+            r module unload testacl
+        }
+
+        test {Test success module blocking authentication attempt hooks} {
+            r module load $authmodule
+            r testmoduleone.rm_register_blocking_auth_cb
+            r acl setuser foo on ~* +@all
+            r auth foo block_allow
+            assert_equal [r hooks.event_last auth-attempt] "foo"
+            assert_equal [r hooks.event_last auth-attempt-module] "testacl"
+            assert_equal [r hooks.event_last auth-attempt-success] "1"
+            r module unload testacl
+        }
+
+        test {Test failed module blocking authentication attempt hooks} {
+            r module load $authmodule
+            r testmoduleone.rm_register_blocking_auth_cb
+            r acl setuser foo on ~* +@all
+            catch {r auth foo block_deny} e
+            assert_match {*Auth denied by Misc Module*} $e
+            assert_equal [r hooks.event_last auth-attempt] "foo"
+            assert_equal [r hooks.event_last auth-attempt-module] "testacl"
+            assert_equal [r hooks.event_last auth-attempt-success] "0"
+            r module unload testacl
+        }
+
         # replication related tests
         set master [srv 0 client]
         set master_host [srv 0 host]
@@ -238,6 +302,10 @@ tags "modules" {
             $replica replicaof $master_host $master_port
 
             wait_replica_online $master
+            # In case of bio thread RDB download, there can be up to 1000ms
+            # (1 replication cron loop) delay until the rdb starts loading
+            after 1000
+            wait_done_loading r
 
             test {Test master link up hook} {
                 assert_equal [r hooks.event_count masterlink-up] 1
@@ -305,7 +373,7 @@ tags "modules" {
 
         # look into the log file of the server that just exited
         test {Test shutdown hook} {
-            assert_equal [string match {*module-event-shutdown*} [exec tail -5 < $replica_stdout]] 1
+            assert_equal [string match {*module-event-shutdown*} [exec tail -9 < $replica_stdout]] 1
         }
     }
 
@@ -314,6 +382,88 @@ tags "modules" {
             catch {r module load $testmodule noload}
             r flushall
             r ping
+        }
+    }
+
+    start_cluster 3 3 [list tags [list logreqres:skip external:skip cluster] overrides [list loadmodule "$testmodule"]] {
+        test {Test atomic slot migration hooks} {
+            assert_match "OK" [R 2 DEBUG SLOTMIGRATION PREVENT-PAUSE 1]
+            set node0_id [R 0 CLUSTER MYID]
+            set node2_id [R 2 CLUSTER MYID]
+
+            # Start a migration
+            assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id]
+            set job_name [dict get [lindex [R 2 CLUSTER GETSLOTMIGRATIONS] 0] name]
+
+            wait_for_condition 50 100 {
+                [R 0 hooks.event_last atomic-slot-migration-import-start-jobname] ne ""
+            } else {
+                fail "Import start event never triggered on primary"
+            }
+            wait_for_condition 50 100 {
+                [R 3 hooks.event_last atomic-slot-migration-import-start-jobname] ne ""
+            } else {
+                fail "Import start event never triggered on replica"
+            }
+            assert_equal [R 0 hooks.event_last atomic-slot-migration-import-start-numslotranges] "1"
+            assert_equal [R 0 hooks.event_last atomic-slot-migration-import-start-slotranges] "16383-16383"
+            assert_equal [R 3 hooks.event_last atomic-slot-migration-import-start-numslotranges] "1"
+            assert_equal [R 3 hooks.event_last atomic-slot-migration-import-start-slotranges] "16383-16383"
+            assert_equal [R 2 hooks.event_last atomic-slot-migration-export-start-numslotranges] "1"
+            assert_equal [R 2 hooks.event_last atomic-slot-migration-export-start-slotranges] "16383-16383"
+            assert_equal [R 0 hooks.event_last atomic-slot-migration-import-start-jobname] $job_name
+            assert_equal [R 3 hooks.event_last atomic-slot-migration-import-start-jobname] $job_name
+            assert_equal [R 2 hooks.event_last atomic-slot-migration-export-start-jobname] $job_name
+
+            # Abort the migration
+            assert_match "OK" [R 2 CLUSTER CANCELSLOTMIGRATIONS]
+
+            wait_for_condition 50 100 {
+                [R 0 hooks.event_last atomic-slot-migration-import-abort-jobname] ne ""
+            } else {
+                fail "Import abort event never triggered on primary"
+            }
+            wait_for_condition 50 100 {
+                [R 3 hooks.event_last atomic-slot-migration-import-abort-jobname] ne ""
+            } else {
+                fail "Import abort event never triggered on replica"
+            }
+            assert_equal [R 0 hooks.event_last atomic-slot-migration-import-abort-numslotranges] "1"
+            assert_equal [R 0 hooks.event_last atomic-slot-migration-import-abort-slotranges] "16383-16383"
+            assert_equal [R 3 hooks.event_last atomic-slot-migration-import-abort-numslotranges] "1"
+            assert_equal [R 3 hooks.event_last atomic-slot-migration-import-abort-slotranges] "16383-16383"
+            assert_equal [R 2 hooks.event_last atomic-slot-migration-export-abort-numslotranges] "1"
+            assert_equal [R 2 hooks.event_last atomic-slot-migration-export-abort-slotranges] "16383-16383"
+            assert_equal [R 0 hooks.event_last atomic-slot-migration-import-abort-jobname] $job_name
+            assert_equal [R 3 hooks.event_last atomic-slot-migration-import-abort-jobname] $job_name
+            assert_equal [R 2 hooks.event_last atomic-slot-migration-export-abort-jobname] $job_name
+
+            # Allow migration to complete
+            assert_match "OK" [R 2 DEBUG SLOTMIGRATION PREVENT-PAUSE 0]
+
+            # Start a migration again
+            assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id]
+            set job_name [dict get [lindex [R 2 CLUSTER GETSLOTMIGRATIONS] 0] name]
+
+            wait_for_condition 50 100 {
+                [R 0 hooks.event_last atomic-slot-migration-import-complete-jobname] ne ""
+            } else {
+                fail "Import complete event never triggered on primary"
+            }
+            wait_for_condition 50 100 {
+                [R 3 hooks.event_last atomic-slot-migration-import-complete-jobname] ne ""
+            } else {
+                fail "Import complete event never triggered on replica"
+            }
+            assert_equal [R 0 hooks.event_last atomic-slot-migration-import-complete-numslotranges] "1"
+            assert_equal [R 0 hooks.event_last atomic-slot-migration-import-complete-slotranges] "16383-16383"
+            assert_equal [R 3 hooks.event_last atomic-slot-migration-import-complete-numslotranges] "1"
+            assert_equal [R 3 hooks.event_last atomic-slot-migration-import-complete-slotranges] "16383-16383"
+            assert_equal [R 2 hooks.event_last atomic-slot-migration-export-complete-numslotranges] "1"
+            assert_equal [R 2 hooks.event_last atomic-slot-migration-export-complete-slotranges] "16383-16383"
+            assert_equal [R 0 hooks.event_last atomic-slot-migration-import-complete-jobname] $job_name
+            assert_equal [R 3 hooks.event_last atomic-slot-migration-import-complete-jobname] $job_name
+            assert_equal [R 2 hooks.event_last atomic-slot-migration-export-complete-jobname] $job_name
         }
     }
 }

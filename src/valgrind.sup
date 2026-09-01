@@ -17,10 +17,19 @@
 }
 
 {
-   <negative size allocatoin, see integration/corrupt-dump>
+   <negative size allocation, see integration/corrupt-dump>
    Memcheck:FishyValue
    malloc(size)
    fun:malloc
    fun:ztrymalloc_usable
    fun:ztrymalloc
+}
+
+{
+   <bio_job_in_flight_at_exit>
+   Memcheck:Leak
+   match-leak-kinds: definite
+   fun:malloc
+   ...
+   fun:allocBioJob
 }

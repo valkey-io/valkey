@@ -7,6 +7,12 @@
         "arity": 2,
         "container": "CLUSTER",
         "function": "clusterCommand",
+        "history": [
+            [
+                "9.1.0",
+                "Added shard level `id` field and node level `availability-zone` field."
+            ]
+        ],
         "command_flags": [
             "LOADING",
             "STALE"
@@ -78,12 +84,22 @@
                                             "const": "online"
                                         }
                                     ]
+                                },
+                                "availability-zone": {
+                                    "type": "string"
                                 }
                             }
                         }
+                    },
+                    "id": {
+                        "description": "A unique shard identifier.",
+                        "type": "string"
                     }
                 }
             }
-        }
+        },
+        "acl_categories": [
+            "SLOW"
+        ]
     }
 }

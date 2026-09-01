@@ -76,10 +76,18 @@
 #define HAVE_SYSCTL_KERN_SOMAXCONN 1
 #endif
 
-/* Test for backtrace() */
+/* Test for backtrace() via execinfo.h */
 #if defined(__APPLE__) || (defined(__linux__) && defined(__GLIBC__)) || defined(__FreeBSD__) ||    \
     ((defined(__OpenBSD__) || defined(__NetBSD__) || defined(__sun)) && defined(USE_BACKTRACE)) || \
     defined(__DragonFly__) || (defined(__UCLIBC__) && defined(__UCLIBC_HAS_BACKTRACE__))
+#define HAVE_BACKTRACE 1
+#define HAVE_EXECINFO 1
+#endif
+
+/* When libbacktrace is available (e.g. on musl/Alpine), enable backtrace
+ * support even without execinfo.h. libbacktrace provides its own frame
+ * collection via backtrace_simple(). */
+#if defined(USE_LIBBACKTRACE) && !defined(HAVE_BACKTRACE)
 #define HAVE_BACKTRACE 1
 #endif
 
@@ -182,6 +190,16 @@
 #endif
 #endif
 
+#if defined(__SANITIZE_THREAD__)
+/* GCC */
+#define VALKEY_THREAD_SANITIZER 1
+#elif defined(__has_feature)
+#if __has_feature(thread_sanitizer)
+/* Clang */
+#define VALKEY_THREAD_SANITIZER 1
+#endif
+#endif
+
 /* Define rdb_fsync_range to sync_file_range() on Linux, otherwise we use
  * the plain fsync() call. */
 #if (defined(__linux__) && defined(SYNC_FILE_RANGE_WAIT_BEFORE))
@@ -196,7 +214,7 @@
 
 /* Check if we can use setproctitle().
  * BSD systems have support for it, we provide an implementation for
- * Linux and osx. */
+ * Linux and macOS. */
 #if (defined __NetBSD__ || defined __FreeBSD__ || defined __OpenBSD__)
 #define USE_SETPROCTITLE
 #endif
@@ -374,7 +392,7 @@ void setcpuaffinity(const char *cpulist);
 #define valkey_prefetch(addr) ((void)(addr))
 #endif
 
-/* Check if we can compile SIMD code */
+/* Check if we can compile x86 SIMD code */
 #if defined(__x86_64__) && ((defined(__GNUC__) && __GNUC__ >= 5) || (defined(__clang__) && __clang_major__ >= 4)) && defined(__has_attribute) && __has_attribute(target)
 #define HAVE_X86_SIMD 1
 #else
@@ -389,6 +407,13 @@ void setcpuaffinity(const char *cpulist);
 #define ATTRIBUTE_TARGET_SSE2
 #define ATTRIBUTE_TARGET_AVX2
 #define ATTRIBUTE_TARGET_AVX512
+#endif
+
+/* Check if we can compile ARM SIMD code */
+#if defined(__aarch64__) && (defined(__ARM_NEON) || defined(__ARM_NEON__))
+#define HAVE_ARM_NEON 1
+#else
+#define HAVE_ARM_NEON 0
 #endif
 
 #if defined(__linux__) && defined(__GLIBC__) && (defined(__GNUC__) && (__GNUC__ > 4) || defined(__clang__) && (__clang_major__) > 5)

@@ -1,3 +1,9 @@
+/*
+ * Copyright (c) Valkey Contributors
+ * All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause
+ */
+
 /* Background I/O service for the server.
  *
  * This file implements operations that we need to perform in the background.
@@ -61,29 +67,48 @@
 
 
 #include "server.h"
+#include "connection.h"
+#include "cluster.h"
 #include "bio.h"
+#include "mutexqueue.h"
+#include "tls.h"
 #include <stdatomic.h>
-
-static char *bio_worker_title[] = {
-    "bio_close_file",
-    "bio_aof",
-    "bio_lazy_free",
-};
-
-#define BIO_WORKER_NUM (sizeof(bio_worker_title) / sizeof(*bio_worker_title))
 
 static unsigned int bio_job_to_worker[] = {
     [BIO_CLOSE_FILE] = 0,
     [BIO_AOF_FSYNC] = 1,
     [BIO_CLOSE_AOF] = 1,
     [BIO_LAZY_FREE] = 2,
+    [BIO_RDB_SAVE] = 3,
+    [BIO_TLS_RELOAD] = 4, /* only used when BUILD_TLS=yes */
+    [BIO_CLUSTER_SAVE] = 5,
 };
 
-static pthread_t bio_threads[BIO_WORKER_NUM];
-static pthread_mutex_t bio_mutex[BIO_WORKER_NUM];
-static pthread_cond_t bio_newjob_cond[BIO_WORKER_NUM];
-static list *bio_jobs[BIO_WORKER_NUM];
-static unsigned long bio_jobs_counter[BIO_NUM_OPS] = {0};
+typedef struct {
+    const char *const bio_worker_title;
+    pthread_t bio_thread_id;
+    mutexQueue *bio_jobs;
+} bio_worker_data;
+
+static bio_worker_data bio_workers[] = {
+    {"bio_close_file"},
+    {"bio_aof"},
+    {"bio_lazy_free"},
+    {"bio_rdb_save"},
+    {"bio_tls_reload"}, /* only used when BUILD_TLS=yes */
+    {"bio_cluster_config_save"},
+};
+static const bio_worker_data *const bio_worker_end = bio_workers + (sizeof bio_workers / sizeof *bio_workers);
+
+static size_t bioWorkerNum(const bio_worker_data *const bwd) {
+    /* Ensure the pointer is valid - casting to uintptr_t to not make the comparison itself UB in case
+     * the pointer is outside the valid range. It's a best effort thing anyway. */
+    serverAssert((uintptr_t)bwd >= (uintptr_t)bio_workers && (uintptr_t)bwd < (uintptr_t)bio_worker_end);
+    return (size_t)(bwd - bio_workers);
+}
+
+static _Atomic unsigned long bio_jobs_counter[BIO_NUM_OPS] = {0};
+static _Thread_local size_t bio_worker_num = 0;
 
 /* This structure represents a background Job. It is only used locally to this
  * file as the API does not expose the internals at all. */
@@ -108,63 +133,70 @@ typedef union bio_job {
         lazy_free_fn *free_fn; /* Function that will free the provided arguments */
         void *free_args[];     /* List of arguments to be passed to the free function */
     } free_args;
+
+    struct {
+        int type;
+        connection *conn;    /* Connection to download the RDB from */
+        int is_dual_channel; /* Single vs dual channel */
+    } save_to_disk_args;
+
+    struct {
+        int type;
+    } tls_reload_args;
+
+    struct {
+        int type;
+        sds content;   /* Cluster config file content. */
+        bool do_fsync; /* A flag to indicate that a fsync is required. */
+    } cluster_save_args;
 } bio_job;
 
 void *bioProcessBackgroundJobs(void *arg);
 
-/* Make sure we have enough stack to perform all the things we do in the
- * main thread. */
-#define VALKEY_THREAD_STACK_SIZE (1024 * 1024 * 4)
+/* Allocate a bio_job. Marked noinline so that it appears as a distinct frame in valgrind
+ * stack traces, allowing a targeted Valgrind suppression for BIO job leaks */
+__attribute__((noinline)) static bio_job *allocBioJob(size_t extra) {
+    return zmalloc(sizeof(bio_job) + extra);
+}
+
 
 /* Initialize the background system, spawning the thread. */
 void bioInit(void) {
     pthread_attr_t attr;
-    pthread_t thread;
-    size_t stacksize;
-    unsigned long j;
 
     /* Initialization of state vars and objects */
-    for (j = 0; j < BIO_WORKER_NUM; j++) {
-        pthread_mutex_init(&bio_mutex[j], NULL);
-        pthread_cond_init(&bio_newjob_cond[j], NULL);
-        bio_jobs[j] = listCreate();
+    for (bio_worker_data *bwd = bio_workers; bwd != bio_worker_end; ++bwd) {
+        bwd->bio_jobs = mutexQueueCreate();
     }
 
     /* Set the stack size as by default it may be small in some system */
-    pthread_attr_init(&attr);
-    pthread_attr_getstacksize(&attr, &stacksize);
-    if (!stacksize) stacksize = 1; /* The world is full of Solaris Fixes */
-    while (stacksize < VALKEY_THREAD_STACK_SIZE) stacksize *= 2;
-    pthread_attr_setstacksize(&attr, stacksize);
+    serverInitThreadAttribute(&attr);
 
     /* Ready to spawn our threads. We use the single argument the thread
-     * function accepts in order to pass the job ID the thread is
-     * responsible for. */
-    for (j = 0; j < BIO_WORKER_NUM; j++) {
-        void *arg = (void *)(unsigned long)j;
-        if (pthread_create(&thread, &attr, bioProcessBackgroundJobs, arg) != 0) {
-            serverLog(LL_WARNING, "Fatal: Can't initialize Background Jobs. Error message: %s", strerror(errno));
+     * function accepts in order to pass a pointer to the data that the
+     * thread is responsible for. */
+    for (bio_worker_data *bwd = bio_workers; bwd != bio_worker_end; ++bwd) {
+        int err = pthread_create(&bwd->bio_thread_id, &attr, bioProcessBackgroundJobs, (void *)bwd);
+        if (err) {
+            serverLog(LL_WARNING, "Fatal: Can't initialize Background Jobs. Error message: %s", strerror(err));
             exit(1);
         }
-        bio_threads[j] = thread;
     }
+    pthread_attr_destroy(&attr);
 }
 
 void bioSubmitJob(int type, bio_job *job) {
     job->header.type = type;
-    unsigned long worker = bio_job_to_worker[type];
-    pthread_mutex_lock(&bio_mutex[worker]);
-    listAddNodeTail(bio_jobs[worker], job);
-    bio_jobs_counter[type]++;
-    pthread_cond_signal(&bio_newjob_cond[worker]);
-    pthread_mutex_unlock(&bio_mutex[worker]);
+    bio_worker_data *const bwd = &bio_workers[bio_job_to_worker[type]];
+    mutexQueueAdd(bwd->bio_jobs, job);
+    atomic_fetch_add(&bio_jobs_counter[type], 1);
 }
 
 void bioCreateLazyFreeJob(lazy_free_fn free_fn, int arg_count, ...) {
     va_list valist;
     /* Allocate memory for the job structure and all required
      * arguments */
-    bio_job *job = zmalloc(sizeof(*job) + sizeof(void *) * (arg_count));
+    bio_job *job = allocBioJob(sizeof(void *) * (arg_count));
     job->free_args.free_fn = free_fn;
 
     va_start(valist, arg_count);
@@ -176,7 +208,7 @@ void bioCreateLazyFreeJob(lazy_free_fn free_fn, int arg_count, ...) {
 }
 
 void bioCreateCloseJob(int fd, int need_fsync, int need_reclaim_cache) {
-    bio_job *job = zmalloc(sizeof(*job));
+    bio_job *job = allocBioJob(0);
     job->fd_args.fd = fd;
     job->fd_args.need_fsync = need_fsync;
     job->fd_args.need_reclaim_cache = need_reclaim_cache;
@@ -185,7 +217,7 @@ void bioCreateCloseJob(int fd, int need_fsync, int need_reclaim_cache) {
 }
 
 void bioCreateCloseAofJob(int fd, long long offset, int need_reclaim_cache) {
-    bio_job *job = zmalloc(sizeof(*job));
+    bio_job *job = allocBioJob(0);
     job->fd_args.fd = fd;
     job->fd_args.offset = offset;
     job->fd_args.need_fsync = 1;
@@ -195,7 +227,7 @@ void bioCreateCloseAofJob(int fd, long long offset, int need_reclaim_cache) {
 }
 
 void bioCreateFsyncJob(int fd, long long offset, int need_reclaim_cache) {
-    bio_job *job = zmalloc(sizeof(*job));
+    bio_job *job = allocBioJob(0);
     job->fd_args.fd = fd;
     job->fd_args.offset = offset;
     job->fd_args.need_reclaim_cache = need_reclaim_cache;
@@ -203,42 +235,48 @@ void bioCreateFsyncJob(int fd, long long offset, int need_reclaim_cache) {
     bioSubmitJob(BIO_AOF_FSYNC, job);
 }
 
+void bioCreateSaveRDBToDiskJob(connection *conn, int is_dual_channel) {
+    bio_job *job = allocBioJob(0);
+    job->save_to_disk_args.conn = conn;
+    job->save_to_disk_args.is_dual_channel = is_dual_channel;
+    bioSubmitJob(BIO_RDB_SAVE, job);
+}
+
+void bioCreateTlsReloadJob(void) {
+    bio_job *job = allocBioJob(0);
+    bioSubmitJob(BIO_TLS_RELOAD, job);
+}
+
+void bioCreateClusterConfigSaveJob(sds content, bool do_fsync) {
+    bio_job *job = allocBioJob(0);
+    job->cluster_save_args.content = content;
+    job->cluster_save_args.do_fsync = do_fsync;
+    bioSubmitJob(BIO_CLUSTER_SAVE, job);
+}
+
+#define CONFIG_SAVE_LOG_ERROR_RATE 30 /* Seconds between errors logging. */
 void *bioProcessBackgroundJobs(void *arg) {
-    bio_job *job;
-    unsigned long worker = (unsigned long)arg;
+    bio_worker_data *const bwd = arg;
     sigset_t sigset;
 
-    /* Check that the worker is within the right interval. */
-    serverAssert(worker < BIO_WORKER_NUM);
-
-    valkey_set_thread_title(bio_worker_title[worker]);
+    valkey_set_thread_title(bwd->bio_worker_title);
 
     serverSetCpuAffinity(server.bio_cpulist);
 
     makeThreadKillable();
 
-    pthread_mutex_lock(&bio_mutex[worker]);
     /* Block SIGALRM so we are sure that only the main thread will
      * receive the watchdog signal. */
     sigemptyset(&sigset);
     sigaddset(&sigset, SIGALRM);
-    if (pthread_sigmask(SIG_BLOCK, &sigset, NULL))
-        serverLog(LL_WARNING, "Warning: can't mask SIGALRM in bio.c thread: %s", strerror(errno));
+    int err = pthread_sigmask(SIG_BLOCK, &sigset, NULL);
+    if (err)
+        serverLog(LL_WARNING, "Warning: can't mask SIGALRM in bio.c thread: %s", strerror(err));
+
+    bio_worker_num = bioWorkerNum(bwd);
 
     while (1) {
-        listNode *ln;
-
-        /* The loop always starts with the lock hold. */
-        if (listLength(bio_jobs[worker]) == 0) {
-            pthread_cond_wait(&bio_newjob_cond[worker], &bio_mutex[worker]);
-            continue;
-        }
-        /* Get the job from the queue. */
-        ln = listFirst(bio_jobs[worker]);
-        job = ln->value;
-        /* It is now possible to unlock the background system as we know have
-         * a stand alone job structure to process.*/
-        pthread_mutex_unlock(&bio_mutex[worker]);
+        bio_job *job = mutexQueuePop(bwd->bio_jobs, true);
 
         /* Process the job accordingly to its type. */
         int job_type = job->header.type;
@@ -278,40 +316,47 @@ void *bioProcessBackgroundJobs(void *arg) {
             if (job_type == BIO_CLOSE_AOF) close(job->fd_args.fd);
         } else if (job_type == BIO_LAZY_FREE) {
             job->free_args.free_fn(job->free_args.free_args);
+        } else if (job_type == BIO_RDB_SAVE) {
+            replicaReceiveRDBFromPrimaryToDisk(job->save_to_disk_args.conn, job->save_to_disk_args.is_dual_channel);
+        } else if (job_type == BIO_TLS_RELOAD) {
+#if defined(USE_OPENSSL) && USE_OPENSSL == 1 /* BUILD_YES */
+            tlsConfigureAsync();
+#else
+            serverPanic("BIO_TLS_RELOAD job type requires built-in TLS (BUILD_TLS=yes).");
+#endif
+        } else if (job_type == BIO_CLUSTER_SAVE) {
+            static time_t last_save_error_log = 0;
+            if (clusterSaveConfigFromBio(job->cluster_save_args.content, job->cluster_save_args.do_fsync) == C_ERR) {
+                /* Limit logging rate to 1 line per CONFIG_SAVE_LOG_ERROR_RATE seconds. */
+                if ((server.unixtime - last_save_error_log) > CONFIG_SAVE_LOG_ERROR_RATE) {
+                    serverLog(LL_WARNING, "Failed to save the cluster config file in background. Cluster config "
+                                          "updated even though writing the cluster config file to disk failed.");
+                    last_save_error_log = server.unixtime;
+                }
+                atomic_store_explicit(&server.cluster_config_save_status, C_ERR, memory_order_relaxed);
+            } else {
+                atomic_store_explicit(&server.cluster_config_save_status, C_OK, memory_order_relaxed);
+                atomic_store_explicit(&server.cluster_config_last_save_time, time(NULL), memory_order_relaxed);
+                last_save_error_log = 0;
+            }
         } else {
             serverPanic("Wrong job type in bioProcessBackgroundJobs().");
         }
         zfree(job);
-
-        /* Lock again before reiterating the loop, if there are no longer
-         * jobs to process we'll block again in pthread_cond_wait(). */
-        pthread_mutex_lock(&bio_mutex[worker]);
-        listDelNode(bio_jobs[worker], ln);
-        bio_jobs_counter[job_type]--;
-        pthread_cond_signal(&bio_newjob_cond[worker]);
+        atomic_fetch_sub(&bio_jobs_counter[job_type], 1);
     }
 }
 
 /* Return the number of pending jobs of the specified type. */
 unsigned long bioPendingJobsOfType(int type) {
-    unsigned int worker = bio_job_to_worker[type];
-
-    pthread_mutex_lock(&bio_mutex[worker]);
-    unsigned long val = bio_jobs_counter[type];
-    pthread_mutex_unlock(&bio_mutex[worker]);
-
-    return val;
+    return atomic_load(&bio_jobs_counter[type]);
 }
 
 /* Wait for the job queue of the worker for jobs of specified type to become empty. */
-void bioDrainWorker(int job_type) {
-    unsigned long worker = bio_job_to_worker[job_type];
-
-    pthread_mutex_lock(&bio_mutex[worker]);
-    while (listLength(bio_jobs[worker]) > 0) {
-        pthread_cond_wait(&bio_newjob_cond[worker], &bio_mutex[worker]);
+void bioDrainWorker(int type) {
+    while (bioPendingJobsOfType(type) > 0) {
+        usleep(100);
     }
-    pthread_mutex_unlock(&bio_mutex[worker]);
 }
 
 /* Kill the running bio threads in an unclean way. This function should be
@@ -320,16 +365,19 @@ void bioDrainWorker(int job_type) {
  * to perform a fast memory check without other threads messing with memory. */
 void bioKillThreads(void) {
     int err;
-    unsigned long j;
 
-    for (j = 0; j < BIO_WORKER_NUM; j++) {
-        if (bio_threads[j] == pthread_self()) continue;
-        if (bio_threads[j] && pthread_cancel(bio_threads[j]) == 0) {
-            if ((err = pthread_join(bio_threads[j], NULL)) != 0) {
-                serverLog(LL_WARNING, "Bio worker thread #%lu can not be joined: %s", j, strerror(err));
+    for (bio_worker_data *bwd = bio_workers; bwd != bio_worker_end; ++bwd) {
+        if (pthread_equal(bwd->bio_thread_id, pthread_self())) continue;
+        if (bwd->bio_thread_id && pthread_cancel(bwd->bio_thread_id) == 0) {
+            if ((err = pthread_join(bwd->bio_thread_id, NULL)) != 0) {
+                serverLog(LL_WARNING, "Bio worker thread #%zu can not be joined: %s", bioWorkerNum(bwd), strerror(err));
             } else {
-                serverLog(LL_WARNING, "Bio worker thread #%lu terminated", j);
+                serverLog(LL_WARNING, "Bio worker thread #%zu terminated", bioWorkerNum(bwd));
             }
         }
     }
+}
+
+int inBioThread(void) {
+    return bio_worker_num != 0;
 }

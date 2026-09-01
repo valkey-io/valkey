@@ -23,6 +23,9 @@
                 "type": "integer",
                 "optional": true
             }
+        ],
+        "acl_categories": [
+            "SLOW"
         ]
     }
 }

@@ -5,7 +5,7 @@ extend-exclude = [
     ".git/",
     "deps/",
     # crc16_slottable is primarily pre-generated random strings.
-    "src/crc16_slottable.h",
+    "src/crc16_slottable.c",
 ]
 ignore-hidden = false
 
@@ -14,6 +14,16 @@ exat = "exat"
 optin = "optin"
 smove = "smove"
 Parth = "Parth" # seems like the spellchecker does not like it is similar to "Path"
+Collet = "Collet" # LZ4 author Yann Collet
+nd = "nd"
+Ba = "Ba"
+Addd = "Addd"
+
+[default]
+extend-ignore-re = [
+    "SELECTed",
+    "WATCHed",
+]
 
 [type.c]
 extend-ignore-re = [
@@ -33,7 +43,6 @@ extend-ignore-re = [
 advices = "advices"
 clen = "clen"
 fle = "fle"
-nd = "nd"
 ot = "ot"
 
 [type.tcl.extend-identifiers]
@@ -53,6 +62,7 @@ arange = "arange"
 fo = "fo"
 frst = "frst"
 limite = "limite"
+pathc = "pathc"
 pn = "pn"
 seeked = "seeked"
 tre = "tre"
@@ -64,3 +74,6 @@ ake = "ake"
 [type.tcl.extend-words]
 fo = "fo"
 tre = "tre"
+
+[type.cpp.extend-words]
+fo = "fo"

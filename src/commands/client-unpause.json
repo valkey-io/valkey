@@ -15,7 +15,10 @@
             "SENTINEL"
         ],
         "acl_categories": [
-            "CONNECTION"
+            "ADMIN",
+            "CONNECTION",
+            "DANGEROUS",
+            "SLOW"
         ],
         "reply_schema": {
             "const": "OK"

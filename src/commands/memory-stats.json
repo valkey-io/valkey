@@ -29,6 +29,9 @@
                 "replication.backlog": {
                     "type": "integer"
                 },
+                "replicas.repl.buffer": {
+                    "type": "integer"
+                },
                 "clients.slaves": {
                     "type": "integer"
                 },
@@ -36,6 +39,12 @@
                     "type": "integer"
                 },
                 "cluster.links": {
+                    "type": "integer"
+                },
+                "cluster.slot_import": {
+                    "type": "integer"
+                },
+                "cluster.slot_export": {
                     "type": "integer"
                 },
                 "aof.buffer": {
@@ -125,6 +134,9 @@
                     "additionalProperties": false
                 }
             }
-        }
+        },
+        "acl_categories": [
+            "SLOW"
+        ]
     }
 }

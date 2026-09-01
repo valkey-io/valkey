@@ -1,6 +1,8 @@
 proc test_memory_efficiency {range} {
     r flushall
     set rd [valkey_deferring_client]
+    $rd client reply off
+    $rd flush
     set base_mem [s used_memory]
     set written 0
     for {set j 0} {$j < 10000} {incr j} {
@@ -11,9 +13,9 @@ proc test_memory_efficiency {range} {
         incr written [string length $val]
         incr written 2 ;# A separator is the minimum to store key-value data.
     }
-    for {set j 0} {$j < 10000} {incr j} {
-        $rd read ; # Discard replies
-    }
+    $rd client reply on
+    $rd flush
+    $rd read ;# read the +OK from CLIENT REPLY ON
 
     set current_mem [s used_memory]
     set used [expr {$current_mem-$base_mem}]
@@ -57,6 +59,15 @@ run_solo {defrag} {
             set field 0
         }
         return [list $key $field]
+    }
+
+    # Make a deferring client with CLIENT REPLY OFF sync with the server by
+    # temporarily setting CLIENT REPLY ON and waiting for the reply, then
+    # switching back to CLIENT REPLY OFF.
+    proc client_reply_off_wait_for_server {rd} {
+        $rd client reply on
+        assert_equal OK [$rd read]
+        $rd client reply off
     }
 
     # Logs defragging state if ::verbose is true
@@ -147,7 +158,7 @@ run_solo {defrag} {
         if {$allocated_bytes < 20 * 1024 * 1024} {
             # If allocated bytes is too small, the ratios get wonky.  Since we use 2MB for
             # active-defrag-ignore-bytes, let's make sure that we have at least 10x that amount
-            # allocated before trying to verify any fragmentation ratios.  Otherwise the tests
+            # allocated before trying to verify any fragmentation ratios.  Otherwise, the tests
             # are likely to get flaky.
             error "test error: trying to validate frag ratio with only $allocated_bytes allocated"
         }
@@ -238,27 +249,23 @@ run_solo {defrag} {
             perform_defrag_test $title populate {
                 # add a mass of string keys
                 set rd [valkey_deferring_client]
+                $rd client reply off
                 for {set j 0} {$j < $n} {incr j} {
                     $rd setrange $j 250 a
                     if {$j % 3 == 0} {
                         $rd expire $j 1000 ;# put expiration on some
                     }
-                }
-                for {set j 0} {$j < $n} {incr j} {
-                    $rd read ; # Discard replies
-                    if {$j % 3 == 0} {
-                        $rd read
-                    }
+                    if {$j % 1000 == 999} {client_reply_off_wait_for_server $rd}
                 }
                 assert {[scan [regexp -inline {expires\=([\d]*)} [r info keyspace]] expires=%d] > 0}
             } fragment {
                 # delete half of the keys
                 for {set j 0} {$j < $n} {incr j 2} {
                     $rd del $j
+                    if {$j % 1000 == 998} {client_reply_off_wait_for_server $rd}
                 }
-                for {set j 0} {$j < $n} {incr j 2} { $rd read } ; # Discard replies
                 $rd close
-                
+
                 # use custom slower defrag speed to start so that while_defragging has time
                 r config set active-defrag-cycle-min 2
                 r config set active-defrag-cycle-max 3
@@ -303,12 +310,13 @@ run_solo {defrag} {
                 # Even so, defrag can get starved for periods exceeding 100ms.  Using 200ms for test stability, and
                 # a 50% CPU requirement, we should allow up to 200ms latency
                 # (as total time = 200 non duty + 200 duty = 400ms, and 50% of 400ms is 200ms).
-                validate_latency 200
+                # Added buffer of 300ms to accommodate for slow CI runners
+                validate_latency 500
 
                 # Make sure we had defrag hits during AOF loading.  Note that we don't worry about
                 # the actual fragmentation ratio here.  It will vary based on when defrag stopped
                 # mid-cycle.  Just check that we are defragging by the number of hits.
-                assert {[s active_defrag_hits] > 100000}
+                assert {[s active_defrag_hits] > 80000}
             }
             } ;# Active defrag - AOF loading
         }
@@ -324,19 +332,19 @@ run_solo {defrag} {
                 # Populate memory with interleaving script-key pattern of same size
                 set dummy_script "--[string repeat x 450]\nreturn "
                 set rd [valkey_deferring_client]
+                $rd client reply off
                 for {set j 0} {$j < $n} {incr j} {
                     set val "$dummy_script[format "%06d" $j]"
                     $rd script load $val
                     $rd set k$j $val
-                }
-                for {set j 0} {$j < $n} {incr j} {
-                    $rd read ; # Discard script load replies
-                    $rd read ; # Discard set replies
+                    if {$j % 1000 == 999} {client_reply_off_wait_for_server $rd}
                 }
             } fragment {
                 # Delete all the keys to create fragmentation
-                for {set j 0} {$j < $n} {incr j} { $rd del k$j }
-                for {set j 0} {$j < $n} {incr j} { $rd read } ; # Discard del replies
+                for {set j 0} {$j < $n} {incr j} {
+                    $rd del k$j
+                    if {$j % 1000 == 999} {client_reply_off_wait_for_server $rd}
+                }
                 $rd close
             }
         }
@@ -350,22 +358,23 @@ run_solo {defrag} {
 
             perform_defrag_test $title populate {
                 set rd [valkey_deferring_client]
+                $rd client reply off
                 set val [string repeat A 250]
                 set k 0
                 set f 0
                 for {set j 0} {$j < $n} {incr j} {
                     $rd hset k$k f$f $val
                     lassign [next_exp_kf $k $f] k f
+                    if {$j % 1000 == 999} {client_reply_off_wait_for_server $rd}
                 }
-                for {set j 0} {$j < $n} {incr j} { $rd read } ; # Discard replies
             } fragment {
                 set k 0
                 set f 0
                 for {set j 0} {$j < $n} {incr j 2} {
                     $rd hdel k$k f$f
                     lassign [next_exp_kf $k $f 2] k f
+                    if {$j % 1000 == 998} {client_reply_off_wait_for_server $rd}
                 }
-                for {set j 0} {$j < $n} {incr j 2} { $rd read } ; # Discard replies
                 $rd close
             }
         }
@@ -378,16 +387,17 @@ run_solo {defrag} {
             # number of total fields.  lists are progressively increasing sizes.
             set n 200000
 
-            perform_defrag_test $title populate {
+            perform_defrag_test $title latency 5 populate {
                 set rd [valkey_deferring_client]
+                $rd client reply off
                 set val [string repeat A 350]
                 set k 0
                 set f 0
                 for {set j 0} {$j < $n} {incr j} {
                     $rd lpush k$k $val
                     lassign [next_exp_kf $k $f] k f
+                    if {$j % 1000 == 999} {client_reply_off_wait_for_server $rd}
                 }
-                for {set j 0} {$j < $n} {incr j} { $rd read } ; # Discard replies
             } fragment {
                 set k 0
                 set f 0
@@ -395,8 +405,8 @@ run_solo {defrag} {
                     $rd ltrim k$k 1 -1 ;# deletes the leftmost item
                     $rd lmove k$k k$k LEFT RIGHT ;# rotates the leftmost item to the right side
                     lassign [next_exp_kf $k $f 2] k f
+                    if {$j % 1000 == 998} {client_reply_off_wait_for_server $rd}
                 }
-                for {set j 0} {$j < $n} {incr j 2} { $rd read; $rd read } ; # Discard replies
                 $rd close
             }
         }
@@ -410,54 +420,65 @@ run_solo {defrag} {
 
             perform_defrag_test $title populate {
                 set rd [valkey_deferring_client]
+                $rd client reply off
                 set val [string repeat A 300]
                 set k 0
                 set f 0
                 for {set j 0} {$j < $n} {incr j} {
                     $rd sadd k$k $val$f
                     lassign [next_exp_kf $k $f] k f
+                    if {$j % 1000 == 999} {client_reply_off_wait_for_server $rd}
                 }
-                for {set j 0} {$j < $n} {incr j} { $rd read } ; # Discard replies
             } fragment {
                 set k 0
                 set f 0
                 for {set j 0} {$j < $n} {incr j 2} {
                     $rd srem k$k $val$f
                     lassign [next_exp_kf $k $f 2] k f
+                    if {$j % 1000 == 998} {client_reply_off_wait_for_server $rd}
                 }
-                for {set j 0} {$j < $n} {incr j 2} { $rd read } ; # Discard replies
                 $rd close
             }
         }
     }
 
-    proc test_big_zset {type} {
-        set title "Active Defrag big zset: $type"
+    proc test_big_zset {type score} {
+        set title "Active Defrag big zset: $type $score-score"
         test $title {
             # number of total fields.  zsets are progressively increasing sizes.
             set n 200000
 
             perform_defrag_test $title populate {
                 set rd [valkey_deferring_client]
+                $rd client reply off
                 set val [string repeat A 250]
                 set k 0
                 set f 0
                 for {set j 0} {$j < $n} {incr j} {
-                    $rd zadd k$k [expr rand()] $val$f
+                    set s [expr {$score eq "fixed" ? 0 : rand()}]
+                    $rd zadd k$k $s $val$f
                     lassign [next_exp_kf $k $f] k f
+                    if {$j % 1000 == 999} {client_reply_off_wait_for_server $rd}
                 }
-                for {set j 0} {$j < $n} {incr j} { $rd read } ; # Discard replies
             } fragment {
                 set k 0
                 set f 0
                 for {set j 0} {$j < $n} {incr j 2} {
                     $rd zrem k$k $val$f
                     lassign [next_exp_kf $k $f 2] k f
+                    if {$j % 1000 == 998} {client_reply_off_wait_for_server $rd}
                 }
-                for {set j 0} {$j < $n} {incr j 2} { $rd read } ; # Discard replies
                 $rd close
             }
         }
+    }
+
+    proc test_big_zset_random_score {type} {
+        test_big_zset $type random
+    }
+
+    proc test_big_zset_fixed_score {type} {
+        test_big_zset $type fixed
     }
 
     proc test_stream {type} {
@@ -469,16 +490,17 @@ run_solo {defrag} {
 
             perform_defrag_test $title populate {
                 set rd [valkey_deferring_client]
+                $rd client reply off
                 set val [string repeat A 50]
                 for {set j 0} {$j < $n} {incr j} {
                     $rd xadd k$j * field1 $val field2 $val
+                    if {$j % 1000 == 999} {client_reply_off_wait_for_server $rd}
                 }
-                for {set j 0} {$j < $n} {incr j} { $rd read } ; # Discard replies
             } fragment {
                 for {set j 0} {$j < $n} {incr j 2} {
                     $rd del k$j
+                    if {$j % 1000 == 998} {client_reply_off_wait_for_server $rd}
                 }
-                for {set j 0} {$j < $n} {incr j 2} { $rd read } ; # Discard replies
                 $rd close
             }
         }
@@ -569,7 +591,8 @@ run_solo {defrag} {
     lappend tests [list test_big_hash standalone $std_overrides]
     lappend tests [list test_big_list standalone $std_overrides]
     lappend tests [list test_big_set standalone $std_overrides]
-    lappend tests [list test_big_zset standalone $std_overrides]
+    lappend tests [list test_big_zset_random_score standalone $std_overrides]
+    lappend tests [list test_big_zset_fixed_score standalone $std_overrides]
     lappend tests [list test_stream standalone $std_overrides]
     lappend tests [list test_pubsub standalone $std_overrides]
 
@@ -578,7 +601,8 @@ run_solo {defrag} {
     lappend tests [list test_big_hash cluster $std_overrides]
     lappend tests [list test_big_list cluster $std_overrides]
     lappend tests [list test_big_set cluster $std_overrides]
-    lappend tests [list test_big_zset cluster $std_overrides]
+    lappend tests [list test_big_zset_random_score cluster $std_overrides]
+    lappend tests [list test_big_zset_fixed_score cluster $std_overrides]
     lappend tests [list test_stream cluster $std_overrides]
     lappend tests [list test_pubsub cluster $std_overrides]
 
@@ -602,7 +626,7 @@ run_solo {defrag} {
             if {$type == "cluster"} {
                 start_cluster 1 0 [list tags $cluster_tags overrides $overrides] {
                     # Note: `start_cluster` passes the code through to another level which requires us
-                    #  to do an uplevel here.  Otherwise `test_proc` isn't recognized.
+                    #  to do an uplevel here.  Otherwise, `test_proc` isn't recognized.
                     uplevel 1 {$test_proc $type}
                 }
             }

@@ -12,6 +12,7 @@
             "STALE"
         ],
         "acl_categories": [
+            "SLOW",
             "STREAM"
         ],
         "reply_schema": {

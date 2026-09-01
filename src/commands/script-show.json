@@ -8,10 +8,12 @@
         "container": "SCRIPT",
         "function": "scriptCommand",
         "command_flags": [
-            "NOSCRIPT"
+            "NOSCRIPT",
+            "STALE"
         ],
         "acl_categories": [
-            "SCRIPTING"
+            "SCRIPTING",
+            "SLOW"
         ],
         "arguments": [
             {

@@ -44,6 +44,7 @@ set(LUA_SRCS
 add_library(lualib STATIC "${LUA_SRCS}")
 target_include_directories(lualib PUBLIC "${LUA_SRC_DIR}")
 target_compile_definitions(lualib PRIVATE ENABLE_CJSON_GLOBAL)
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fPIC")
 
 # Use mkstemp if available
 check_function_exists(mkstemp HAVE_MKSTEMP)

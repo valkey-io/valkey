@@ -13,7 +13,7 @@
                 "Added the `TIMEOUT` option."
             ]
         ],
-         "command_flags": [
+        "command_flags": [
             "NO_ASYNC_LOADING",
             "ADMIN",
             "STALE",
@@ -64,6 +64,11 @@
         ],
         "reply_schema": {
             "const": "OK"
-        }
+        },
+        "acl_categories": [
+            "ADMIN",
+            "DANGEROUS",
+            "SLOW"
+        ]
     }
 }

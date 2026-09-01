@@ -11,7 +11,9 @@
             "MAY_REPLICATE"
         ],
         "acl_categories": [
-            "HYPERLOGLOG"
+            "HYPERLOGLOG",
+            "READ",
+            "SLOW"
         ],
         "key_specs": [
             {

@@ -11,7 +11,9 @@
             "DENYOOM"
         ],
         "acl_categories": [
-            "STRING"
+            "SLOW",
+            "STRING",
+            "WRITE"
         ],
         "key_specs": [
             {

@@ -28,10 +28,10 @@ timeout 5s ./simulated-valkey.pl -p 7401 -d --sigcont $syncpid1 <<'EOF' &
 EXPECT CONNECT
 EXPECT ["CLUSTER", "SLOTS"]
 SEND [[0, 16383, ["localhost", 7401, "nodeid1", ["ip", "192.168.254.254"]]]]
-EXPECT CLOSE
+EXPECT ["GET", "foo"]
+SEND "bar"
 
 # Verify ASK redirect
-EXPECT CONNECT
 EXPECT ["GET", "foo"]
 SEND -ASK 12182 localhost:7402
 
@@ -64,7 +64,12 @@ wait $syncpid1 $syncpid2;
 
 # Run client
 timeout 3s "$clientprog" localhost:7401 > "$testname.out" <<'EOF'
+# Trigger initial slotmap update
 GET foo
+!sleep
+# Verify ASK redirect
+GET foo
+# Verify MOVED redirect
 GET foo
 EOF
 clientexit=$?
@@ -88,7 +93,7 @@ if [ $clientexit -ne 0 ]; then
 fi
 
 # Check the output from clusterclient
-printf 'bar\nbar\n' | cmp "$testname.out" - || exit 99
+printf 'bar\nbar\nbar\n' | cmp "$testname.out" - || exit 99
 
 # Clean up
 rm "$testname.out"

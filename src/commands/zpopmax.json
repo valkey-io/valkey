@@ -11,7 +11,9 @@
             "FAST"
         ],
         "acl_categories": [
-            "SORTEDSET"
+            "FAST",
+            "SORTEDSET",
+            "WRITE"
         ],
         "key_specs": [
             {

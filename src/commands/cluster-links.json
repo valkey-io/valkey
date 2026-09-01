@@ -55,6 +55,9 @@
                 },
                 "additionalProperties": false
             }
-        }
+        },
+        "acl_categories": [
+            "SLOW"
+        ]
     }
 }

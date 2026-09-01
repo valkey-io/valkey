@@ -28,10 +28,14 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include "hashtable.h"
 #include "server.h"
+#include "ordered_index.h"
 #include "serverassert.h"
 #include "functions.h"
 #include "intset.h" /* Compact integer set structure */
+#include "util.h"
+#include "vset.h"
 #include "zmalloc.h"
 #include "sds.h"
 #include "module.h"
@@ -46,14 +50,45 @@
  * so if expire is set later, we don't need to reallocate the object. */
 #define KEY_SIZE_TO_INCLUDE_EXPIRE_THRESHOLD 128
 
+/* ===================== Accessor functions for serverObject fields ==================== */
+
+int objectGetType(const robj *o) {
+    return o->type;
+}
+
+void objectSetType(robj *o, int type) {
+    o->type = type;
+}
+
+int objectGetEncoding(const robj *o) {
+    return o->encoding;
+}
+
+void objectSetEncoding(robj *o, int encoding) {
+    o->encoding = encoding;
+}
+
+unsigned int objectGetRefcount(const robj *o) {
+    return o->refcount;
+}
+
+unsigned int objectGetLRU(const robj *o) {
+    return o->lru;
+}
+
+void objectSetLRU(robj *o, unsigned int lru) {
+    o->lru = lru;
+}
+
 /* ===================== Creation and parsing of objects ==================== */
 
 /* Creates an object, optionally with embedded key and expire fields. The key
- * and expire fields can be omitted by passing NULL and -1, respectively. */
-robj *createObjectWithKeyAndExpire(int type, void *ptr, const sds key, long long expire) {
+ * and expire fields can be omitted by passing NULL and EXPIRY_NONE, respectively.
+ * This function never embeds value. */
+static robj *createUnembeddedObjectWithKeyAndExpire(int type, void *val, const_sds key, long long expire) {
     /* Calculate sizes */
     int has_embkey = key != NULL;
-    int has_expire = (expire != -1 ||
+    int has_expire = (expire != EXPIRY_NONE ||
                       (has_embkey && sdslen(key) >= KEY_SIZE_TO_INCLUDE_EXPIRE_THRESHOLD));
     size_t key_sds_len = has_embkey ? sdslen(key) : 0;
     char key_sds_type = has_embkey ? sdsReqType(key_sds_len) : 0;
@@ -69,12 +104,13 @@ robj *createObjectWithKeyAndExpire(int type, void *ptr, const sds key, long long
     /* Allocate and set the declared fields. */
     size_t bufsize = 0;
     robj *o = zmalloc_usable(min_size, &bufsize);
-    o->type = type;
-    o->encoding = OBJ_ENCODING_RAW;
-    o->ptr = ptr;
+    objectSetType(o, type);
+    objectSetEncoding(o, OBJ_ENCODING_RAW);
     o->refcount = 1;
-    o->lru = 0;
+    objectSetLRU(o, 0);
     o->hasembkey = has_embkey;
+    o->hasembval = 0;
+    o->val_ptr = val;
 
     /* If the allocation has enough space for an expire field, add it even if we
      * don't need it now. Then we don't need to realloc if it's needed later. */
@@ -102,20 +138,14 @@ robj *createObjectWithKeyAndExpire(int type, void *ptr, const sds key, long long
     return o;
 }
 
-robj *createObject(int type, void *ptr) {
-    return createObjectWithKeyAndExpire(type, ptr, NULL, -1);
+/* Creates an object of the specified type. The value is never embedded. */
+robj *createObject(int type, void *val) {
+    return createUnembeddedObjectWithKeyAndExpire(type, val, NULL, EXPIRY_NONE);
 }
 
 void initObjectLRUOrLFU(robj *o) {
-    if (o->refcount == OBJ_SHARED_REFCOUNT) return;
-    /* Set the LRU to the current lruclock (minutes resolution), or
-     * alternatively the LFU counter. */
-    if (server.maxmemory_policy & MAXMEMORY_FLAG_LFU) {
-        o->lru = (LFUGetTimeInMinutes() << 8) | LFU_INIT_VAL;
-    } else {
-        o->lru = LRU_CLOCK();
-    }
-    return;
+    if (objectGetRefcount(o) == OBJ_SHARED_REFCOUNT) return;
+    objectSetLRU(o, lrulfu_init());
 }
 
 /* Set a special refcount in the object to make it "shared":
@@ -130,7 +160,7 @@ void initObjectLRUOrLFU(robj *o) {
  *
  */
 robj *makeObjectShared(robj *o) {
-    serverAssert(o->refcount == 1);
+    serverAssert(objectGetRefcount(o) == 1);
     o->refcount = OBJ_SHARED_REFCOUNT;
     return o;
 }
@@ -141,11 +171,18 @@ robj *createRawStringObject(const char *ptr, size_t len) {
     return createObject(OBJ_STRING, sdsnewlen(ptr, len));
 }
 
-/* Creates a new embedded string object and copies the content of key, val and
- * expire to the new object. LRU is set to 0. */
+/* Get beginning of embedded data, which may contain expire, key, and/or value. Embedded data flags must be accurate when called. */
+static unsigned char *objectEmbeddedData(const robj *o) {
+    unsigned char *data = (void *)(o + 1);
+    if (o->hasembval) data -= sizeof(void *);
+    return data;
+}
+
+/* Creates a new embedded string object and copies the content of key, val_ptr
+ * and expire to the new object. LRU is set to 0. */
 static robj *createEmbeddedStringObjectWithKeyAndExpire(const char *val_ptr,
                                                         size_t val_len,
-                                                        const sds key,
+                                                        const_sds key,
                                                         long long expire) {
     /* Calculate sizes */
     int has_embkey = (key != NULL);
@@ -153,24 +190,31 @@ static robj *createEmbeddedStringObjectWithKeyAndExpire(const char *val_ptr,
     char key_sds_type = has_embkey ? sdsReqType(key_sds_len) : 0;
     size_t key_sds_size = has_embkey ? sdsReqSize(key_sds_len, key_sds_type) : 0;
     size_t val_sds_size = sdsReqSize(val_len, SDS_TYPE_8);
-    size_t min_size = sizeof(robj) + val_sds_size;
-    if (expire != -1) {
+    if (val_sds_size < sizeof(void *)) {
+        val_sds_size = sizeof(void *); /* Ensure it's possible to "unembed" value later */
+    }
+
+    /* We don't need 'val_ptr' when val is embedded, so we can overwrite `val_ptr` memory to reduce memory usage. */
+    size_t min_size = sizeof(robj) - sizeof(void *);
+    if (expire != EXPIRY_NONE) {
         min_size += sizeof(long long);
     }
     if (has_embkey) {
         /* Size of embedded key, incl. 1 byte for prefixed sds hdr size. */
         min_size += 1 + key_sds_size;
     }
+    min_size += val_sds_size;
 
     /* Allocate and set the declared fields. */
     size_t bufsize = 0;
     robj *o = zmalloc_usable(min_size, &bufsize);
-    o->type = OBJ_STRING;
-    o->encoding = OBJ_ENCODING_EMBSTR;
+    objectSetType(o, OBJ_STRING);
+    objectSetEncoding(o, OBJ_ENCODING_EMBSTR);
     o->refcount = 1;
-    o->lru = 0;
-    o->hasexpire = (expire != -1);
+    objectSetLRU(o, 0);
+    o->hasexpire = (expire != EXPIRY_NONE);
     o->hasembkey = has_embkey;
+    o->hasembval = 1;
 
     /* If the allocation has enough space for an expire field, add it even if we
      * don't need it now. Then we don't need to realloc if it's needed later. */
@@ -180,7 +224,7 @@ static robj *createEmbeddedStringObjectWithKeyAndExpire(const char *val_ptr,
     }
 
     /* The memory after the struct where we embedded data. */
-    char *data = (void *)(o + 1);
+    char *data = (char *)objectEmbeddedData(o);
 
     /* Set the expire field. */
     if (o->hasexpire) {
@@ -198,7 +242,10 @@ static robj *createEmbeddedStringObjectWithKeyAndExpire(const char *val_ptr,
     /* Copy embedded value (EMBSTR) always as SDS TYPE 8. Account for unused
      * memory in the SDS alloc field. */
     size_t remaining_size = bufsize - (data - (char *)(void *)o);
-    o->ptr = sdswrite(data, remaining_size, SDS_TYPE_8, val_ptr, val_len);
+
+    assert(val_len <= sdsTypeMaxSize(SDS_TYPE_8));
+    assert(remaining_size <= sdsTypeMaxSize(SDS_TYPE_8));
+    sdswrite(data, remaining_size, SDS_TYPE_8, val_ptr, val_len);
 
     return o;
 }
@@ -206,49 +253,72 @@ static robj *createEmbeddedStringObjectWithKeyAndExpire(const char *val_ptr,
 /* Create a string object with encoding OBJ_ENCODING_EMBSTR, that is
  * an object where the sds string is actually an unmodifiable string
  * allocated in the same chunk as the object itself. */
-robj *createEmbeddedStringObject(const char *ptr, size_t len) {
-    return createEmbeddedStringObjectWithKeyAndExpire(ptr, len, NULL, -1);
+static robj *createEmbeddedStringObject(const char *ptr, size_t len) {
+    return createEmbeddedStringObjectWithKeyAndExpire(ptr, len, NULL, EXPIRY_NONE);
 }
 
-/* Create a string object with EMBSTR encoding if it is smaller than
- * OBJ_ENCODING_EMBSTR_SIZE_LIMIT, otherwise the RAW encoding is
- * used.
- *
- * The current limit of 44 is chosen so that the biggest string object
- * we allocate as EMBSTR will still fit into the 64 byte arena of jemalloc. */
-#define OBJ_ENCODING_EMBSTR_SIZE_LIMIT 44
+static bool shouldEmbedStringObject(size_t val_len, const_sds key, long long expire) {
+    /* When to embed? Embed when the sum is up to 128 bytes. (2 cache lines on most systems) */
+    if (val_len > sdsTypeMaxSize(SDS_TYPE_8)) return false;
+
+    size_t size = sizeof(robj) - sizeof(void *); /* reusing 'ptr' memory when embedding */
+    if (key) {
+        size_t key_len = sdslen(key);
+        size += sdsReqSize(key_len, sdsReqType(key_len)) + 1; /* 1 byte for prefixed sds hdr size */
+    }
+    size += (expire != EXPIRY_NONE) * sizeof(long long);
+    size += sdsReqSize(val_len, SDS_TYPE_8);
+    return size <= 128;
+}
+
+/* Create a string object with EMBSTR encoding if it is small, otherwise RAW encoding */
 robj *createStringObject(const char *ptr, size_t len) {
-    if (len <= OBJ_ENCODING_EMBSTR_SIZE_LIMIT)
+    if (shouldEmbedStringObject(len, NULL, EXPIRY_NONE))
         return createEmbeddedStringObject(ptr, len);
     else
         return createRawStringObject(ptr, len);
 }
 
-robj *createStringObjectWithKeyAndExpire(const char *ptr, size_t len, const sds key, long long expire) {
-    /* When to embed? Embed when the sum is up to 64 bytes. There may be better
-     * heuristics, e.g. we can look at the jemalloc sizes (16-byte intervals up
-     * to 128 bytes). */
-    size_t size = sizeof(robj);
-    if (key) {
-        size_t key_len = sdslen(key);
-        size += sdsReqSize(key_len, sdsReqType(key_len)) + 1; /* 1 byte for prefixed sds hdr size */
-    }
-    size += (expire != -1) * sizeof(long long);
-    size += sdsReqSize(len, SDS_TYPE_8);
-    if (size <= 64) {
+/* Similar to createStringObject() but takes an existing SDS as input. */
+robj *createStringObjectFromSds(const_sds s) {
+    return createStringObject(s, sdslen(s));
+}
+
+static robj *createStringObjectWithKeyAndExpire(const char *ptr, size_t len, const_sds key, long long expire) {
+    if (shouldEmbedStringObject(len, key, expire)) {
         return createEmbeddedStringObjectWithKeyAndExpire(ptr, len, key, expire);
     } else {
-        return createObjectWithKeyAndExpire(OBJ_STRING, sdsnewlen(ptr, len), key, expire);
+        return createUnembeddedObjectWithKeyAndExpire(OBJ_STRING, sdsnewlen(ptr, len), key, expire);
     }
 }
 
-sds objectGetKey(const robj *val) {
-    unsigned char *data = (void *)(val + 1);
-    if (val->hasexpire) {
+void *objectGetVal(const robj *o) {
+    if (o->hasembval) {
+        unsigned char *data = objectEmbeddedData(o);
+        if (o->hasexpire) {
+            /* Skip expire field */
+            data += sizeof(long long);
+        }
+        if (o->hasembkey) {
+            /* Skip embedded key */
+            uint8_t hdr_size = *(uint8_t *)data;
+            data += 1 + hdr_size;                /* +1 for header size byte */
+            data += sdslen((const_sds)data) + 1; /* +1 for null terminator */
+        }
+        assert(objectGetEncoding(o) == OBJ_ENCODING_EMBSTR);
+        return data + sdsHdrSize(SDS_TYPE_8);
+    } else {
+        return o->val_ptr;
+    }
+}
+
+sds objectGetKey(const robj *o) {
+    const unsigned char *data = objectEmbeddedData((robj *)o);
+    if (o->hasexpire) {
         /* Skip expire field */
         data += sizeof(long long);
     }
-    if (val->hasembkey) {
+    if (o->hasembkey) {
         uint8_t hdr_size = *(uint8_t *)data;
         data += 1 + hdr_size;
         return (sds)data;
@@ -256,64 +326,94 @@ sds objectGetKey(const robj *val) {
     return NULL;
 }
 
-long long objectGetExpire(const robj *val) {
-    unsigned char *data = (void *)(val + 1);
-    if (val->hasexpire) {
+/* Return the expire time in ms of the specified robj, or EXPIRY_NONE if no expire
+ * is associated with this robj (i.e. the robj is non volatile) */
+mstime_t objectGetExpire(const robj *o) {
+    if (o->hasexpire) {
+        const unsigned char *data = objectEmbeddedData((robj *)o);
         return *(long long *)data;
     } else {
-        return -1;
+        return EXPIRY_NONE;
     }
 }
 
 /* This functions may reallocate the value. The new allocation is returned and
  * the old object's reference counter is decremented and possibly freed. Use the
- * returned object instead of 'val' after calling this function. */
-robj *objectSetExpire(robj *val, long long expire) {
-    if (val->hasexpire) {
+ * returned object instead of 'o' after calling this function. */
+robj *objectSetExpire(robj *o, long long expire) {
+    if (o->hasexpire) {
         /* Update existing expire field. */
-        unsigned char *data = (void *)(val + 1);
+        unsigned char *data = objectEmbeddedData(o);
         *(long long *)data = expire;
-        return val;
-    } else if (expire == -1) {
-        return val;
+        return o;
+    } else if (expire == EXPIRY_NONE) {
+        return o;
     } else {
-        return objectSetKeyAndExpire(val, objectGetKey(val), expire);
+        return objectSetKeyAndExpire(o, objectGetKey(o), expire);
     }
+}
+
+/* Caller is responsible for ensuring that robj does not have an embedded value */
+void objectSetVal(robj *o, void *val) {
+    assert(!o->hasembval);
+    o->val_ptr = val;
+}
+
+/* Sometimes it's necessary to grow an object's value without reallocating it.
+ * The old embedded value memory becomes wasted for the remaining lifetime of this
+ * object. Consider using dbUnshareStringValue() or similar if at all possible */
+void objectUnembedVal(robj *o) {
+    assert(o->hasembval);
+    assert(objectGetEncoding(o) == OBJ_ENCODING_EMBSTR);
+
+    const_sds embedded_sds = objectGetVal(o);
+    assert(sdsAllocSize(embedded_sds) >= sizeof(void *));
+
+    sds new_val = sdsnewlen(embedded_sds, sdslen(embedded_sds));
+
+    /* shift remaining embedded data out of val_ptr location */
+    ptrdiff_t embedded_data_size = (unsigned char *)embedded_sds - objectEmbeddedData(o);
+    embedded_data_size -= sdsHdrSize(SDS_TYPE_8);
+    memmove(objectEmbeddedData(o) + sizeof(void *), objectEmbeddedData(o), embedded_data_size);
+
+    o->hasembval = 0;
+    objectSetEncoding(o, OBJ_ENCODING_RAW);
+    o->val_ptr = new_val;
 }
 
 /* This functions may reallocate the value. The new allocation is returned and
  * the old object's reference counter is decremented and possibly freed. Use the
- * returned object instead of 'val' after calling this function. */
-robj *objectSetKeyAndExpire(robj *val, sds key, long long expire) {
-    if (val->type == OBJ_STRING && val->encoding == OBJ_ENCODING_EMBSTR) {
-        robj *new = createStringObjectWithKeyAndExpire(val->ptr, sdslen(val->ptr), key, expire);
-        new->lru = val->lru;
-        decrRefCount(val);
+ * returned object instead of 'o' after calling this function. */
+robj *objectSetKeyAndExpire(robj *o, const_sds key, long long expire) {
+    if (objectGetType(o) == OBJ_STRING && objectGetEncoding(o) == OBJ_ENCODING_EMBSTR) {
+        robj *new = createStringObjectWithKeyAndExpire(objectGetVal(o), sdslen(objectGetVal(o)), key, expire);
+        objectSetLRU(new, objectGetLRU(o));
+        decrRefCount(o);
         return new;
     }
 
     /* Create a new object with embedded key. Reuse ptr if possible. */
     void *ptr;
-    if (val->refcount == 1) {
-        /* Reuse the ptr. There are no other references to val. */
-        ptr = val->ptr;
-        val->ptr = NULL;
-    } else if (val->type == OBJ_STRING && val->encoding == OBJ_ENCODING_INT) {
+    if (objectGetRefcount(o) == 1) {
+        /* Reuse the ptr. There are no other references to o. */
+        ptr = o->val_ptr;
+        o->val_ptr = NULL;
+    } else if (objectGetType(o) == OBJ_STRING && objectGetEncoding(o) == OBJ_ENCODING_INT) {
         /* The pointer is not allocated memory. We can just copy the pointer. */
-        ptr = val->ptr;
-    } else if (val->type == OBJ_STRING && val->encoding == OBJ_ENCODING_RAW) {
+        ptr = o->val_ptr;
+    } else if (objectGetType(o) == OBJ_STRING && objectGetEncoding(o) == OBJ_ENCODING_RAW) {
         /* Dup the string. */
-        ptr = sdsdup(val->ptr);
+        ptr = sdsdup(o->val_ptr);
     } else {
-        serverAssert(val->type != OBJ_STRING);
+        serverAssert(objectGetType(o) != OBJ_STRING);
         /* There are multiple references to this non-string object. Most types
          * can be duplicated, but for a module type is not always possible. */
         serverPanic("Not implemented");
     }
-    robj *new = createObjectWithKeyAndExpire(val->type, ptr, key, expire);
-    new->encoding = val->encoding;
-    new->lru = val->lru;
-    decrRefCount(val);
+    robj *new = createUnembeddedObjectWithKeyAndExpire(objectGetType(o), ptr, key, expire);
+    objectSetEncoding(new, objectGetEncoding(o));
+    objectSetLRU(new, objectGetLRU(o));
+    decrRefCount(o);
     return new;
 }
 
@@ -326,7 +426,7 @@ robj *tryCreateRawStringObject(const char *ptr, size_t len) {
 
 /* Same as createStringObject, can return NULL if allocation fails */
 robj *tryCreateStringObject(const char *ptr, size_t len) {
-    if (len <= OBJ_ENCODING_EMBSTR_SIZE_LIMIT)
+    if (shouldEmbedStringObject(len, NULL, EXPIRY_NONE))
         return createEmbeddedStringObject(ptr, len);
     else
         return tryCreateRawStringObject(ptr, len);
@@ -344,8 +444,8 @@ robj *createStringObjectFromLongLongWithOptions(long long value, int flag) {
     } else {
         if ((value >= LONG_MIN && value <= LONG_MAX) && flag != LL2STROBJ_NO_INT_ENC) {
             o = createObject(OBJ_STRING, NULL);
-            o->encoding = OBJ_ENCODING_INT;
-            o->ptr = (void *)((long)value);
+            objectSetEncoding(o, OBJ_ENCODING_INT);
+            o->val_ptr = (void *)((long)value);
         } else {
             char buf[LONG_STR_SIZE];
             int len = ll2string(buf, sizeof(buf), value);
@@ -375,7 +475,7 @@ robj *createStringObjectFromLongLongWithSds(long long value) {
 
 /* Create a string object from a long double. If humanfriendly is non-zero
  * it does not use exponential format and trims trailing zeroes at the end,
- * however this results in loss of precision. Otherwise exp format is used
+ * however this results in loss of precision. Otherwise, exp format is used
  * and the output of snprintf() is not modified.
  *
  * The 'humanfriendly' option is used for INCRBYFLOAT and HINCRBYFLOAT. */
@@ -396,15 +496,15 @@ robj *createStringObjectFromLongDouble(long double value, int humanfriendly) {
 robj *dupStringObject(const robj *o) {
     robj *d;
 
-    serverAssert(o->type == OBJ_STRING);
+    serverAssert(objectGetType(o) == OBJ_STRING);
 
-    switch (o->encoding) {
-    case OBJ_ENCODING_RAW: return createRawStringObject(o->ptr, sdslen(o->ptr));
-    case OBJ_ENCODING_EMBSTR: return createEmbeddedStringObject(o->ptr, sdslen(o->ptr));
+    switch (objectGetEncoding(o)) {
+    case OBJ_ENCODING_RAW: return createRawStringObject(objectGetVal(o), sdslen(objectGetVal(o)));
+    case OBJ_ENCODING_EMBSTR: return createEmbeddedStringObject(objectGetVal(o), sdslen(objectGetVal(o)));
     case OBJ_ENCODING_INT:
         d = createObject(OBJ_STRING, NULL);
         d->encoding = OBJ_ENCODING_INT;
-        d->ptr = o->ptr;
+        d->val_ptr = o->val_ptr;
         return d;
     default: serverPanic("Wrong encoding."); break;
     }
@@ -413,42 +513,42 @@ robj *dupStringObject(const robj *o) {
 robj *createQuicklistObject(int fill, int compress) {
     quicklist *l = quicklistNew(fill, compress);
     robj *o = createObject(OBJ_LIST, l);
-    o->encoding = OBJ_ENCODING_QUICKLIST;
+    objectSetEncoding(o, OBJ_ENCODING_QUICKLIST);
     return o;
 }
 
 robj *createListListpackObject(void) {
     unsigned char *lp = lpNew(0);
     robj *o = createObject(OBJ_LIST, lp);
-    o->encoding = OBJ_ENCODING_LISTPACK;
+    objectSetEncoding(o, OBJ_ENCODING_LISTPACK);
     return o;
 }
 
 robj *createSetObject(void) {
     hashtable *ht = hashtableCreate(&setHashtableType);
     robj *o = createObject(OBJ_SET, ht);
-    o->encoding = OBJ_ENCODING_HASHTABLE;
+    objectSetEncoding(o, OBJ_ENCODING_HASHTABLE);
     return o;
 }
 
 robj *createIntsetObject(void) {
     intset *is = intsetNew();
     robj *o = createObject(OBJ_SET, is);
-    o->encoding = OBJ_ENCODING_INTSET;
+    objectSetEncoding(o, OBJ_ENCODING_INTSET);
     return o;
 }
 
 robj *createSetListpackObject(void) {
     unsigned char *lp = lpNew(0);
     robj *o = createObject(OBJ_SET, lp);
-    o->encoding = OBJ_ENCODING_LISTPACK;
+    objectSetEncoding(o, OBJ_ENCODING_LISTPACK);
     return o;
 }
 
 robj *createHashObject(void) {
     unsigned char *zl = lpNew(0);
     robj *o = createObject(OBJ_HASH, zl);
-    o->encoding = OBJ_ENCODING_LISTPACK;
+    objectSetEncoding(o, OBJ_ENCODING_LISTPACK);
     return o;
 }
 
@@ -457,23 +557,23 @@ robj *createZsetObject(void) {
     robj *o;
 
     zs->ht = hashtableCreate(&zsetHashtableType);
-    zs->zsl = zslCreate();
+    zs->oi = orderedIndexCreate();
     o = createObject(OBJ_ZSET, zs);
-    o->encoding = OBJ_ENCODING_SKIPLIST;
+    objectSetEncoding(o, OBJ_ENCODING_BTREE);
     return o;
 }
 
 robj *createZsetListpackObject(void) {
     unsigned char *lp = lpNew(0);
     robj *o = createObject(OBJ_ZSET, lp);
-    o->encoding = OBJ_ENCODING_LISTPACK;
+    objectSetEncoding(o, OBJ_ENCODING_LISTPACK);
     return o;
 }
 
 robj *createStreamObject(void) {
     stream *s = streamNew();
     robj *o = createObject(OBJ_STREAM, s);
-    o->encoding = OBJ_ENCODING_STREAM;
+    objectSetEncoding(o, OBJ_ENCODING_STREAM);
     return o;
 }
 
@@ -485,78 +585,81 @@ robj *createModuleObject(moduleType *mt, void *value) {
 }
 
 void freeStringObject(robj *o) {
-    if (o->encoding == OBJ_ENCODING_RAW) {
-        sdsfree(o->ptr);
+    if (objectGetEncoding(o) == OBJ_ENCODING_RAW) {
+        sdsfree(objectGetVal(o));
     }
 }
 
 void freeListObject(robj *o) {
-    if (o->encoding == OBJ_ENCODING_QUICKLIST) {
-        quicklistRelease(o->ptr);
-    } else if (o->encoding == OBJ_ENCODING_LISTPACK) {
-        lpFree(o->ptr);
+    if (objectGetEncoding(o) == OBJ_ENCODING_QUICKLIST) {
+        quicklistRelease(objectGetVal(o));
+    } else if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) {
+        lpFree(objectGetVal(o));
     } else {
         serverPanic("Unknown list encoding type");
     }
 }
 
 void freeSetObject(robj *o) {
-    switch (o->encoding) {
-    case OBJ_ENCODING_HASHTABLE: hashtableRelease((hashtable *)o->ptr); break;
+    switch (objectGetEncoding(o)) {
+    case OBJ_ENCODING_HASHTABLE: hashtableRelease((hashtable *)objectGetVal(o)); break;
     case OBJ_ENCODING_INTSET:
-    case OBJ_ENCODING_LISTPACK: zfree(o->ptr); break;
+    case OBJ_ENCODING_LISTPACK: zfree(objectGetVal(o)); break;
     default: serverPanic("Unknown set encoding type");
     }
 }
 
 void freeZsetObject(robj *o) {
     zset *zs;
-    switch (o->encoding) {
-    case OBJ_ENCODING_SKIPLIST:
-        zs = o->ptr;
+    switch (objectGetEncoding(o)) {
+    case OBJ_ENCODING_BTREE:
+        zs = objectGetVal(o);
         hashtableRelease(zs->ht);
-        zslFree(zs->zsl);
+        orderedIndexFree(zs->oi);
         zfree(zs);
         break;
-    case OBJ_ENCODING_LISTPACK: zfree(o->ptr); break;
+    case OBJ_ENCODING_LISTPACK: zfree(objectGetVal(o)); break;
     default: serverPanic("Unknown sorted set encoding");
     }
 }
 
 void freeHashObject(robj *o) {
-    switch (o->encoding) {
-    case OBJ_ENCODING_HASHTABLE: hashtableRelease((hashtable *)o->ptr); break;
-    case OBJ_ENCODING_LISTPACK: lpFree(o->ptr); break;
+    switch (objectGetEncoding(o)) {
+    case OBJ_ENCODING_HASHTABLE:
+        hashTypeFreeVolatileSet(o);
+        hashtableRelease((hashtable *)objectGetVal(o));
+        break;
+    case OBJ_ENCODING_LISTPACK: lpFree(objectGetVal(o)); break;
     default: serverPanic("Unknown hash encoding type"); break;
     }
 }
 
 void freeModuleObject(robj *o) {
-    moduleValue *mv = o->ptr;
+    moduleValue *mv = objectGetVal(o);
     mv->type->free(mv->value);
     zfree(mv);
 }
 
 void freeStreamObject(robj *o) {
-    freeStream(o->ptr);
+    freeStream(objectGetVal(o));
 }
 
 void incrRefCount(robj *o) {
-    if (o->refcount < OBJ_FIRST_SPECIAL_REFCOUNT) {
+    if (objectGetRefcount(o) < OBJ_FIRST_SPECIAL_REFCOUNT) {
         o->refcount++;
     } else {
-        if (o->refcount == OBJ_SHARED_REFCOUNT) {
+        if (objectGetRefcount(o) == OBJ_SHARED_REFCOUNT) {
             /* Nothing to do: this refcount is immutable. */
-        } else if (o->refcount == OBJ_STATIC_REFCOUNT) {
+        } else if (objectGetRefcount(o) == OBJ_STATIC_REFCOUNT) {
             serverPanic("You tried to retain an object allocated in the stack");
         }
     }
 }
 
 void decrRefCount(robj *o) {
-    if (o->refcount == 1) {
-        if (o->ptr != NULL) {
-            switch (o->type) {
+    if (objectGetRefcount(o) == 1) {
+        if (objectGetVal(o) != NULL) {
+            switch (objectGetType(o)) {
             case OBJ_STRING: freeStringObject(o); break;
             case OBJ_LIST: freeListObject(o); break;
             case OBJ_SET: freeSetObject(o); break;
@@ -569,8 +672,8 @@ void decrRefCount(robj *o) {
         }
         zfree(o);
     } else {
-        if (o->refcount <= 0) serverPanic("decrRefCount against refcount <= 0");
-        if (o->refcount != OBJ_SHARED_REFCOUNT) o->refcount--;
+        if (objectGetRefcount(o) <= 0) serverPanic("decrRefCount against refcount <= 0");
+        if (objectGetRefcount(o) != OBJ_SHARED_REFCOUNT) o->refcount--;
     }
 }
 
@@ -586,15 +689,15 @@ void dismissSds(sds s) {
 
 /* See dismissObject() */
 void dismissStringObject(robj *o) {
-    if (o->encoding == OBJ_ENCODING_RAW) {
-        dismissSds(o->ptr);
+    if (objectGetEncoding(o) == OBJ_ENCODING_RAW) {
+        dismissSds(objectGetVal(o));
     }
 }
 
 /* See dismissObject() */
 void dismissListObject(robj *o, size_t size_hint) {
-    if (o->encoding == OBJ_ENCODING_QUICKLIST) {
-        quicklist *ql = o->ptr;
+    if (objectGetEncoding(o) == OBJ_ENCODING_QUICKLIST) {
+        quicklist *ql = objectGetVal(o);
         serverAssert(ql->len != 0);
         /* We iterate all nodes only when average node size is bigger than a
          * page size, and there's a high chance we'll actually dismiss something. */
@@ -609,8 +712,8 @@ void dismissListObject(robj *o, size_t size_hint) {
                 node = node->next;
             }
         }
-    } else if (o->encoding == OBJ_ENCODING_LISTPACK) {
-        dismissMemory(o->ptr, lpBytes((unsigned char *)o->ptr));
+    } else if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) {
+        dismissMemory(objectGetVal(o), lpBytes((unsigned char *)objectGetVal(o)));
     } else {
         serverPanic("Unknown list encoding type");
     }
@@ -618,8 +721,8 @@ void dismissListObject(robj *o, size_t size_hint) {
 
 /* See dismissObject() */
 void dismissSetObject(robj *o, size_t size_hint) {
-    if (o->encoding == OBJ_ENCODING_HASHTABLE) {
-        hashtable *ht = o->ptr;
+    if (objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE) {
+        hashtable *ht = objectGetVal(o);
         serverAssert(hashtableSize(ht) != 0);
         /* We iterate all nodes only when average member size is bigger than a
          * page size, and there's a high chance we'll actually dismiss something. */
@@ -631,14 +734,14 @@ void dismissSetObject(robj *o, size_t size_hint) {
                 sds item = next;
                 dismissSds(item);
             }
-            hashtableResetIterator(&iter);
+            hashtableCleanupIterator(&iter);
         }
 
         dismissHashtable(ht);
-    } else if (o->encoding == OBJ_ENCODING_INTSET) {
-        dismissMemory(o->ptr, intsetBlobLen((intset *)o->ptr));
-    } else if (o->encoding == OBJ_ENCODING_LISTPACK) {
-        dismissMemory(o->ptr, lpBytes((unsigned char *)o->ptr));
+    } else if (objectGetEncoding(o) == OBJ_ENCODING_INTSET) {
+        dismissMemory(objectGetVal(o), intsetBlobLen((intset *)objectGetVal(o)));
+    } else if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) {
+        dismissMemory(objectGetVal(o), lpBytes((unsigned char *)objectGetVal(o)));
     } else {
         serverPanic("Unknown set encoding type");
     }
@@ -646,23 +749,19 @@ void dismissSetObject(robj *o, size_t size_hint) {
 
 /* See dismissObject() */
 void dismissZsetObject(robj *o, size_t size_hint) {
-    if (o->encoding == OBJ_ENCODING_SKIPLIST) {
-        zset *zs = o->ptr;
-        zskiplist *zsl = zs->zsl;
-        serverAssert(zsl->length != 0);
+    if (objectGetEncoding(o) == OBJ_ENCODING_BTREE) {
+        zset *zs = objectGetVal(o);
+        unsigned long len = orderedIndexLength(zs->oi);
+        serverAssert(len != 0);
         /* We iterate all nodes only when average member size is bigger than a
          * page size, and there's a high chance we'll actually dismiss something. */
-        if (size_hint / zsl->length >= server.page_size) {
-            zskiplistNode *zn = zsl->tail;
-            while (zn != NULL) {
-                dismissSds(zn->ele);
-                zn = zn->backward;
-            }
+        if (size_hint / len >= server.page_size) {
+            orderedIndexDismissMemory(zs->oi);
         }
 
         dismissHashtable(zs->ht);
-    } else if (o->encoding == OBJ_ENCODING_LISTPACK) {
-        dismissMemory(o->ptr, lpBytes((unsigned char *)o->ptr));
+    } else if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) {
+        dismissMemory(objectGetVal(o), lpBytes((unsigned char *)objectGetVal(o)));
     } else {
         serverPanic("Unknown zset encoding type");
     }
@@ -670,8 +769,8 @@ void dismissZsetObject(robj *o, size_t size_hint) {
 
 /* See dismissObject() */
 void dismissHashObject(robj *o, size_t size_hint) {
-    if (o->encoding == OBJ_ENCODING_HASHTABLE) {
-        hashtable *ht = o->ptr;
+    if (objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE) {
+        hashtable *ht = objectGetVal(o);
         serverAssert(hashtableSize(ht) != 0);
         /* We iterate all fields only when average field/value size is bigger than
          * a page size, and there's a high chance we'll actually dismiss something. */
@@ -680,14 +779,14 @@ void dismissHashObject(robj *o, size_t size_hint) {
             hashtableInitIterator(&iter, ht, 0);
             void *next;
             while (hashtableNext(&iter, &next)) {
-                dismissHashTypeEntry(next);
+                entryDismissMemory(next);
             }
-            hashtableResetIterator(&iter);
+            hashtableCleanupIterator(&iter);
         }
 
         dismissHashtable(ht);
-    } else if (o->encoding == OBJ_ENCODING_LISTPACK) {
-        dismissMemory(o->ptr, lpBytes((unsigned char *)o->ptr));
+    } else if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) {
+        dismissMemory(objectGetVal(o), lpBytes((unsigned char *)objectGetVal(o)));
     } else {
         serverPanic("Unknown hash encoding type");
     }
@@ -695,7 +794,7 @@ void dismissHashObject(robj *o, size_t size_hint) {
 
 /* See dismissObject() */
 void dismissStreamObject(robj *o, size_t size_hint) {
-    stream *s = o->ptr;
+    stream *s = objectGetVal(o);
     rax *rax = s->rax;
     if (raxSize(rax) == 0) return;
 
@@ -733,8 +832,8 @@ void dismissObject(robj *o, size_t size_hint) {
         /* Currently we use zmadvise_dontneed only when we use jemalloc with Linux.
          * so we avoid these pointless loops when they're not going to do anything. */
 #if defined(USE_JEMALLOC) && defined(__linux__)
-    if (o->refcount != 1) return;
-    switch (o->type) {
+    if (objectGetRefcount(o) != 1) return;
+    switch (objectGetType(o)) {
     case OBJ_STRING: dismissStringObject(o); break;
     case OBJ_LIST: dismissListObject(o, size_hint); break;
     case OBJ_SET: dismissSetObject(o, size_hint); break;
@@ -751,7 +850,7 @@ void dismissObject(robj *o, size_t size_hint) {
 
 int checkType(client *c, robj *o, int type) {
     /* A NULL is considered an empty key */
-    if (o && o->type != type) {
+    if (o && objectGetType(o) != type) {
         addReplyErrorObject(c, shared.wrongtypeerr);
         return 1;
     }
@@ -763,28 +862,28 @@ int isSdsRepresentableAsLongLong(sds s, long long *llval) {
 }
 
 int isObjectRepresentableAsLongLong(robj *o, long long *llval) {
-    serverAssertWithInfo(NULL, o, o->type == OBJ_STRING);
-    if (o->encoding == OBJ_ENCODING_INT) {
-        if (llval) *llval = (long)o->ptr;
+    serverAssertWithInfo(NULL, o, objectGetType(o) == OBJ_STRING);
+    if (objectGetEncoding(o) == OBJ_ENCODING_INT) {
+        if (llval) *llval = (long)objectGetVal(o);
         return C_OK;
     } else {
-        return isSdsRepresentableAsLongLong(o->ptr, llval);
+        return isSdsRepresentableAsLongLong(objectGetVal(o), llval);
     }
 }
 
 /* Optimize the SDS string inside the string object to require little space,
  * in case there is more than 10% of free space at the end of the SDS. */
 void trimStringObjectIfNeeded(robj *o, int trim_small_values) {
-    if (o->encoding != OBJ_ENCODING_RAW) return;
+    if (objectGetEncoding(o) != OBJ_ENCODING_RAW) return;
     /* A string may have free space in the following cases:
      * 1. When an arg len is greater than PROTO_MBULK_BIG_ARG the query buffer may be used directly as the SDS string.
      * 2. When utilizing the argument caching mechanism in Lua.
      * 3. When calling from RM_TrimStringAllocation (trim_small_values is true). */
-    size_t len = sdslen(o->ptr);
+    size_t len = sdslen(o->val_ptr);
     if (len >= PROTO_MBULK_BIG_ARG || trim_small_values ||
         (server.executing_client && server.executing_client->flag.script && len < LUA_CMD_OBJCACHE_MAX_LEN)) {
-        if (sdsavail(o->ptr) > len / 10) {
-            o->ptr = sdsRemoveFreeSpace(o->ptr, 0);
+        if (sdsavail(o->val_ptr) > len / 10) {
+            o->val_ptr = sdsRemoveFreeSpace(o->val_ptr, 0);
         }
     }
 }
@@ -792,14 +891,14 @@ void trimStringObjectIfNeeded(robj *o, int trim_small_values) {
 /* Try to encode a string object in order to save space */
 robj *tryObjectEncodingEx(robj *o, int try_trim) {
     long value;
-    sds s = o->ptr;
+    sds s = objectGetVal(o);
     size_t len;
 
     /* Make sure this is a string object, the only type we encode
      * in this function. Other types use encoded memory efficient
      * representations but are handled by the commands implementing
      * the type. */
-    serverAssertWithInfo(NULL, o, o->type == OBJ_STRING);
+    serverAssertWithInfo(NULL, o, objectGetType(o) == OBJ_STRING);
 
     /* We try some specialized encoding only for objects that are
      * RAW or EMBSTR encoded, in other words objects that are still
@@ -809,7 +908,7 @@ robj *tryObjectEncodingEx(robj *o, int try_trim) {
     /* It's not safe to encode shared objects: shared objects can be shared
      * everywhere in the "object space" of the server and may end in places where
      * they are not handled. We handle them only as values in the keyspace. */
-    if (o->refcount > 1) return o;
+    if (objectGetRefcount(o) > 1) return o;
 
     /* Check if we can represent this string as a long integer.
      * Note that we are sure that a string larger than 20 chars is not
@@ -817,12 +916,12 @@ robj *tryObjectEncodingEx(robj *o, int try_trim) {
     len = sdslen(s);
     if (len <= 20 && string2l(s, len, &value)) {
         /* This object is encodable as a long. */
-        if (o->encoding == OBJ_ENCODING_RAW) {
-            sdsfree(o->ptr);
-            o->encoding = OBJ_ENCODING_INT;
-            o->ptr = (void *)value;
+        if (objectGetEncoding(o) == OBJ_ENCODING_RAW) {
+            sdsfree(objectGetVal(o));
+            objectSetEncoding(o, OBJ_ENCODING_INT);
+            o->val_ptr = (void *)value;
             return o;
-        } else if (o->encoding == OBJ_ENCODING_EMBSTR) {
+        } else if (objectGetEncoding(o) == OBJ_ENCODING_EMBSTR) {
             decrRefCount(o);
             return createStringObjectFromLongLongForValue(value);
         }
@@ -832,11 +931,9 @@ robj *tryObjectEncodingEx(robj *o, int try_trim) {
      * try the EMBSTR encoding which is more efficient.
      * In this representation the object and the SDS string are allocated
      * in the same chunk of memory to save space and cache misses. */
-    if (len <= OBJ_ENCODING_EMBSTR_SIZE_LIMIT) {
-        robj *emb;
-
-        if (o->encoding == OBJ_ENCODING_EMBSTR) return o;
-        emb = createEmbeddedStringObject(s, sdslen(s));
+    if (shouldEmbedStringObject(len, NULL, EXPIRY_NONE)) {
+        if (objectGetEncoding(o) == OBJ_ENCODING_EMBSTR) return o;
+        robj *emb = createEmbeddedStringObject(s, sdslen(s));
         decrRefCount(o);
         return emb;
     }
@@ -862,10 +959,10 @@ robj *getDecodedObject(robj *o) {
         incrRefCount(o);
         return o;
     }
-    if (o->type == OBJ_STRING && o->encoding == OBJ_ENCODING_INT) {
+    if (objectGetType(o) == OBJ_STRING && objectGetEncoding(o) == OBJ_ENCODING_INT) {
         char buf[32];
 
-        ll2string(buf, 32, (long)o->ptr);
+        ll2string(buf, 32, (long)objectGetVal(o));
         dec = createStringObject(buf, strlen(buf));
         return dec;
     } else {
@@ -891,17 +988,17 @@ int compareStringObjectsWithFlags(const robj *a, const robj *b, int flags) {
 
     if (a == b) return 0;
     if (sdsEncodedObject(a)) {
-        astr = a->ptr;
+        astr = objectGetVal(a);
         alen = sdslen(astr);
     } else {
-        alen = ll2string(bufa, sizeof(bufa), (long)a->ptr);
+        alen = ll2string(bufa, sizeof(bufa), (long)objectGetVal(a));
         astr = bufa;
     }
     if (sdsEncodedObject(b)) {
-        bstr = b->ptr;
+        bstr = objectGetVal(b);
         blen = sdslen(bstr);
     } else {
-        blen = ll2string(bufb, sizeof(bufb), (long)b->ptr);
+        blen = ll2string(bufb, sizeof(bufb), (long)objectGetVal(b));
         bstr = bufb;
     }
     if (flags & STRING_COMPARE_COLL) {
@@ -934,10 +1031,10 @@ int equalStringObjects(robj *a, robj *b) {
     if (a->encoding == OBJ_ENCODING_INT && b->encoding == OBJ_ENCODING_INT) {
         /* If both strings are integer encoded just check if the stored
          * long is the same. */
-        return a->ptr == b->ptr;
+        return objectGetVal(a) == objectGetVal(b);
     } else if (a->encoding != OBJ_ENCODING_INT &&
                b->encoding != OBJ_ENCODING_INT &&
-               sdslen(a->ptr) != sdslen(b->ptr)) {
+               sdslen(objectGetVal(a)) != sdslen(objectGetVal(b))) {
         return 0;
     } else {
         return compareStringObjects(a, b) == 0;
@@ -945,11 +1042,11 @@ int equalStringObjects(robj *a, robj *b) {
 }
 
 size_t stringObjectLen(robj *o) {
-    serverAssertWithInfo(NULL, o, o->type == OBJ_STRING);
+    serverAssertWithInfo(NULL, o, objectGetType(o) == OBJ_STRING);
     if (sdsEncodedObject(o)) {
-        return sdslen(o->ptr);
+        return sdslen(objectGetVal(o));
     } else {
-        return sdigits10((long)o->ptr);
+        return sdigits10((long)objectGetVal(o));
     }
 }
 
@@ -959,11 +1056,11 @@ int getDoubleFromObject(const robj *o, double *target) {
     if (o == NULL) {
         value = 0;
     } else {
-        serverAssertWithInfo(NULL, o, o->type == OBJ_STRING);
+        serverAssertWithInfo(NULL, o, objectGetType(o) == OBJ_STRING);
         if (sdsEncodedObject(o)) {
-            if (!string2d(o->ptr, sdslen(o->ptr), &value)) return C_ERR;
-        } else if (o->encoding == OBJ_ENCODING_INT) {
-            value = (long)o->ptr;
+            if (!string2d(objectGetVal(o), sdslen(objectGetVal(o)), &value)) return C_ERR;
+        } else if (objectGetEncoding(o) == OBJ_ENCODING_INT) {
+            value = (long)objectGetVal(o);
         } else {
             serverPanic("Unknown string encoding");
         }
@@ -992,11 +1089,11 @@ int getLongDoubleFromObject(robj *o, long double *target) {
     if (o == NULL) {
         value = 0;
     } else {
-        serverAssertWithInfo(NULL, o, o->type == OBJ_STRING);
+        serverAssertWithInfo(NULL, o, objectGetType(o) == OBJ_STRING);
         if (sdsEncodedObject(o)) {
-            if (!string2ld(o->ptr, sdslen(o->ptr), &value)) return C_ERR;
-        } else if (o->encoding == OBJ_ENCODING_INT) {
-            value = (long)o->ptr;
+            if (!string2ld(objectGetVal(o), sdslen(objectGetVal(o)), &value)) return C_ERR;
+        } else if (objectGetEncoding(o) == OBJ_ENCODING_INT) {
+            value = (long)objectGetVal(o);
         } else {
             serverPanic("Unknown string encoding");
         }
@@ -1025,11 +1122,11 @@ int getLongLongFromObject(robj *o, long long *target) {
     if (o == NULL) {
         value = 0;
     } else {
-        serverAssertWithInfo(NULL, o, o->type == OBJ_STRING);
+        serverAssertWithInfo(NULL, o, objectGetType(o) == OBJ_STRING);
         if (sdsEncodedObject(o)) {
-            if (string2ll(o->ptr, sdslen(o->ptr), &value) == 0) return C_ERR;
-        } else if (o->encoding == OBJ_ENCODING_INT) {
-            value = (long)o->ptr;
+            if (string2ll(objectGetVal(o), sdslen(objectGetVal(o)), &value) == 0) return C_ERR;
+        } else if (objectGetEncoding(o) == OBJ_ENCODING_INT) {
+            value = (long)objectGetVal(o);
         } else {
             serverPanic("Unknown string encoding");
         }
@@ -1106,7 +1203,7 @@ char *strEncoding(int encoding) {
     case OBJ_ENCODING_QUICKLIST: return "quicklist";
     case OBJ_ENCODING_LISTPACK: return "listpack";
     case OBJ_ENCODING_INTSET: return "intset";
-    case OBJ_ENCODING_SKIPLIST: return "skiplist";
+    case OBJ_ENCODING_BTREE: return "btree";
     case OBJ_ENCODING_EMBSTR: return "embstr";
     case OBJ_ENCODING_STREAM: return "stream";
     default: return "unknown";
@@ -1122,37 +1219,34 @@ char *strEncoding(int encoding) {
  * are checked and averaged to estimate the total size. */
 #define OBJ_COMPUTE_SIZE_DEF_SAMPLES 5 /* Default sample size. */
 size_t objectComputeSize(robj *key, robj *o, size_t sample_size, int dbid) {
-    size_t asize = 0, elesize = 0, samples = 0;
+    size_t elesize = 0, samples = 0;
+    size_t asize = zmalloc_size((void *)o);
 
-    if (o->type == OBJ_STRING) {
-        if (o->encoding == OBJ_ENCODING_INT) {
-            asize = sizeof(*o);
-        } else if (o->encoding == OBJ_ENCODING_RAW) {
-            asize = sdsAllocSize(o->ptr) + sizeof(*o);
-        } else if (o->encoding == OBJ_ENCODING_EMBSTR) {
-            asize = zmalloc_size((void *)o);
-        } else {
+    if (objectGetType(o) == OBJ_STRING) {
+        if (objectGetEncoding(o) == OBJ_ENCODING_RAW) {
+            asize += sdsAllocSize(objectGetVal(o));
+        } else if (objectGetEncoding(o) != OBJ_ENCODING_INT && objectGetEncoding(o) != OBJ_ENCODING_EMBSTR) {
             serverPanic("Unknown string encoding");
         }
-    } else if (o->type == OBJ_LIST) {
-        if (o->encoding == OBJ_ENCODING_QUICKLIST) {
-            quicklist *ql = o->ptr;
+    } else if (objectGetType(o) == OBJ_LIST) {
+        if (objectGetEncoding(o) == OBJ_ENCODING_QUICKLIST) {
+            quicklist *ql = objectGetVal(o);
             quicklistNode *node = ql->head;
-            asize = sizeof(*o) + sizeof(quicklist);
+            asize += sizeof(quicklist);
             do {
                 elesize += sizeof(quicklistNode) + zmalloc_size(node->entry);
                 samples++;
             } while ((node = node->next) && samples < sample_size);
             asize += (double)elesize / samples * ql->len;
-        } else if (o->encoding == OBJ_ENCODING_LISTPACK) {
-            asize = sizeof(*o) + zmalloc_size(o->ptr);
+        } else if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) {
+            asize += zmalloc_size(objectGetVal(o));
         } else {
             serverPanic("Unknown list encoding");
         }
-    } else if (o->type == OBJ_SET) {
-        if (o->encoding == OBJ_ENCODING_HASHTABLE) {
-            hashtable *ht = o->ptr;
-            asize = sizeof(*o) + hashtableMemUsage(ht);
+    } else if (objectGetType(o) == OBJ_SET) {
+        if (objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE) {
+            hashtable *ht = objectGetVal(o);
+            asize += hashtableMemUsage(ht);
 
             hashtableIterator iter;
             hashtableInitIterator(&iter, ht, 0);
@@ -1162,56 +1256,60 @@ size_t objectComputeSize(robj *key, robj *o, size_t sample_size, int dbid) {
                 elesize += sdsAllocSize(element);
                 samples++;
             }
-            hashtableResetIterator(&iter);
+            hashtableCleanupIterator(&iter);
             if (samples) asize += (double)elesize / samples * hashtableSize(ht);
-        } else if (o->encoding == OBJ_ENCODING_INTSET) {
-            asize = sizeof(*o) + zmalloc_size(o->ptr);
-        } else if (o->encoding == OBJ_ENCODING_LISTPACK) {
-            asize = sizeof(*o) + zmalloc_size(o->ptr);
+        } else if (objectGetEncoding(o) == OBJ_ENCODING_INTSET) {
+            asize += zmalloc_size(objectGetVal(o));
+        } else if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) {
+            asize += zmalloc_size(objectGetVal(o));
         } else {
             serverPanic("Unknown set encoding");
         }
-    } else if (o->type == OBJ_ZSET) {
-        if (o->encoding == OBJ_ENCODING_LISTPACK) {
-            asize = sizeof(*o) + zmalloc_size(o->ptr);
-        } else if (o->encoding == OBJ_ENCODING_SKIPLIST) {
-            hashtable *ht = ((zset *)o->ptr)->ht;
-            zskiplist *zsl = ((zset *)o->ptr)->zsl;
-            zskiplistNode *znode = zsl->header->level[0].forward;
-            asize = sizeof(*o) + sizeof(zset) + sizeof(zskiplist) +
-                    hashtableMemUsage(ht) + zmalloc_size(zsl->header);
-            while (znode != NULL && samples < sample_size) {
-                elesize += sdsAllocSize(znode->ele);
-                elesize += zmalloc_size(znode);
+    } else if (objectGetType(o) == OBJ_ZSET) {
+        if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) {
+            asize += zmalloc_size(objectGetVal(o));
+        } else if (objectGetEncoding(o) == OBJ_ENCODING_BTREE) {
+            zset *zs = objectGetVal(o);
+            hashtableIterator iter;
+            hashtableInitIterator(&iter, zs->ht, 0);
+            void *next;
+
+            asize += sizeof(zset) + orderedIndexEstimateStructureMemory(zs->oi) + hashtableMemUsage(zs->ht);
+            /* The hashtable entries are the packed items shared with the
+             * ordered index, so sampling them covers the member payloads. */
+            while (hashtableNext(&iter, &next) && samples < sample_size) {
+                elesize += sdsAllocSize((sds)next);
                 samples++;
-                znode = znode->level[0].forward;
             }
-            if (samples) asize += (double)elesize / samples * hashtableSize(ht);
+            hashtableCleanupIterator(&iter);
+            if (samples) asize += (double)elesize / samples * hashtableSize(zs->ht);
         } else {
             serverPanic("Unknown sorted set encoding");
         }
-    } else if (o->type == OBJ_HASH) {
-        if (o->encoding == OBJ_ENCODING_LISTPACK) {
-            asize = sizeof(*o) + zmalloc_size(o->ptr);
-        } else if (o->encoding == OBJ_ENCODING_HASHTABLE) {
-            hashtable *ht = o->ptr;
+    } else if (objectGetType(o) == OBJ_HASH) {
+        if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) {
+            asize += zmalloc_size(objectGetVal(o));
+        } else if (objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE) {
+            hashtable *ht = objectGetVal(o);
             hashtableIterator iter;
+            vset *volatile_fields = hashtableMetadata(ht);
             hashtableInitIterator(&iter, ht, 0);
             void *next;
 
-            asize = sizeof(*o) + hashtableMemUsage(ht);
+            asize += hashtableMemUsage(ht);
             while (hashtableNext(&iter, &next) && samples < sample_size) {
-                elesize += hashTypeEntryMemUsage(next);
+                elesize += entryMemUsage(next);
                 samples++;
             }
-            hashtableResetIterator(&iter);
+            hashtableCleanupIterator(&iter);
             if (samples) asize += (double)elesize / samples * hashtableSize(ht);
+            if (vsetIsValid(volatile_fields)) asize += vsetMemUsage(volatile_fields);
         } else {
             serverPanic("Unknown hash encoding");
         }
-    } else if (o->type == OBJ_STREAM) {
-        stream *s = o->ptr;
-        asize = sizeof(*o) + sizeof(*s);
+    } else if (objectGetType(o) == OBJ_STREAM) {
+        stream *s = objectGetVal(o);
+        asize += sizeof(*s);
         asize += raxAllocSize(s->rax);
 
         /* Now we have to add the listpacks. The last listpack is often non
@@ -1280,8 +1378,8 @@ size_t objectComputeSize(robj *key, robj *o, size_t sample_size, int dbid) {
             raxStop(&ri);
             if (samples) asize += (double)elesize / samples * raxSize(s->cgroups);
         }
-    } else if (o->type == OBJ_MODULE) {
-        asize = moduleGetMemUsage(key, o, sample_size, dbid);
+    } else if (objectGetType(o) == OBJ_MODULE) {
+        asize += moduleGetMemUsage(key, o, sample_size, dbid);
     } else {
         serverPanic("Unknown object type");
     }
@@ -1336,7 +1434,9 @@ struct serverMemOverhead *getMemoryOverheadData(void) {
         mh->repl_backlog += server.repl_backlog->blocks_index->numnodes * sizeof(raxNode) +
                             raxSize(server.repl_backlog->blocks_index) * sizeof(void *);
     }
+    mh->replicas_repl_buffer = server.pending_repl_data.mem;
     mem_total += mh->repl_backlog;
+    mem_total += mh->replicas_repl_buffer;
     mem_total += mh->clients_replicas;
 
     /* Computing the memory used by the clients would be O(N) if done
@@ -1346,6 +1446,10 @@ struct serverMemOverhead *getMemoryOverheadData(void) {
                          server.stat_clients_type_memory[CLIENT_TYPE_PUBSUB] +
                          server.stat_clients_type_memory[CLIENT_TYPE_NORMAL];
     mem_total += mh->clients_normal;
+
+    mh->cluster_slot_import = server.stat_clients_type_memory[CLIENT_TYPE_SLOT_IMPORT];
+    mh->cluster_slot_export = server.stat_clients_type_memory[CLIENT_TYPE_SLOT_EXPORT];
+    mem_total += mh->cluster_slot_import + mh->cluster_slot_export;
 
     mh->cluster_links = server.stat_cluster_links_memory;
     mem_total += mh->cluster_links;
@@ -1365,7 +1469,7 @@ struct serverMemOverhead *getMemoryOverheadData(void) {
 
     for (j = 0; j < server.dbnum; j++) {
         serverDb *db = server.db[j];
-        if (db == NULL || !kvstoreNumAllocatedHashtables(db->keys)) continue;
+        if (db == NULL) continue;
 
         unsigned long long keyscount = kvstoreSize(db->keys);
 
@@ -1535,7 +1639,9 @@ sds getMemoryDoctorReport(void) {
             s = sdscatprintf(
                 s, " * High process RSS overhead: This instance has non-allocator RSS memory overhead is greater than "
                    "1.1 (this means that the Resident Set Size of the Valkey process is much larger than the RSS the "
-                   "allocator holds). This problem may be due to Lua scripts or Modules.\n\n");
+                   "allocator holds). This problem may be due to Lua scripts, Modules, or, on glibc systems, memory "
+                   "retained in the libc main arena (the [heap] segment) by libc-internal allocations such as "
+                   "getaddrinfo(3), pthread internals or NSS. Try the MEMORY PURGE command to reclaim it.\n\n");
         }
         if (big_replica_buf) {
             s = sdscat(s,
@@ -1567,32 +1673,39 @@ sds getMemoryDoctorReport(void) {
     return s;
 }
 
+/* Return the LFU frequency for an object. */
+uint8_t objectGetLFUFrequency(robj *o) {
+    uint8_t freq;
+    objectSetLRU(o, lfu_getFrequency(objectGetLRU(o), &freq));
+    return freq;
+}
+
+/* Return the LRU idle time for an object. */
+uint32_t objectGetLRUIdleSecs(robj *o) {
+    return lru_getIdleSecs(objectGetLRU(o));
+}
+
+/* Return an indication of idleness.  Larger numbers are more idle. */
+uint32_t objectGetIdleness(robj *o) {
+    uint32_t idleness;
+    objectSetLRU(o, lrulfu_getIdleness(objectGetLRU(o), &idleness));
+    return idleness;
+}
+
 /* Set the object LRU/LFU depending on server.maxmemory_policy.
  * The lfu_freq arg is only relevant if policy is MAXMEMORY_FLAG_LFU.
  * The lru_idle and lru_clock args are only relevant if policy
  * is MAXMEMORY_FLAG_LRU.
  * Either or both of them may be <0, in that case, nothing is set. */
-int objectSetLRUOrLFU(robj *val, long long lfu_freq, long long lru_idle, long long lru_clock, int lru_multiplier) {
-    if (server.maxmemory_policy & MAXMEMORY_FLAG_LFU) {
+int objectSetLRUOrLFU(robj *val, long long lfu_freq, long long lru_idle_secs) {
+    if (lrulfu_isUsingLFU()) {
         if (lfu_freq >= 0) {
-            serverAssert(lfu_freq <= 255);
-            val->lru = (LFUGetTimeInMinutes() << 8) | lfu_freq;
+            serverAssert(lfu_freq <= UINT8_MAX);
+            val->lru = lfu_import((uint8_t)lfu_freq);
             return 1;
         }
-    } else if (lru_idle >= 0) {
-        /* Provided LRU idle time is in seconds. Scale
-         * according to the LRU clock resolution this
-         * instance was compiled with (normally 1000 ms, so the
-         * below statement will expand to lru_idle*1000/1000. */
-        lru_idle = lru_idle * lru_multiplier / LRU_CLOCK_RESOLUTION;
-        long lru_abs = lru_clock - lru_idle; /* Absolute access time. */
-        /* If the LRU field underflows (since lru_clock is a wrapping clock),
-         * we need to make it positive again. This will be handled by the unwrapping
-         * code in estimateObjectIdleTime. I.e. imagine a day when lru_clock
-         * wrap arounds (happens once in some 6 months), and becomes a low
-         * value, like 10, an lru_idle of 1000 should be near LRU_CLOCK_MAX. */
-        if (lru_abs < 0) lru_abs += LRU_CLOCK_MAX;
-        val->lru = lru_abs;
+    } else if (lru_idle_secs >= 0) {
+        val->lru = lru_import(lru_idle_secs);
         return 1;
     }
     return 0;
@@ -1603,7 +1716,7 @@ int objectSetLRUOrLFU(robj *val, long long lfu_freq, long long lru_idle, long lo
 /* This is a helper function for the OBJECT command. We need to lookup keys
  * without any modification of LRU or other parameters. */
 robj *objectCommandLookup(client *c, robj *key) {
-    return lookupKeyReadWithFlags(c->db, key, LOOKUP_NOTOUCH | LOOKUP_NONOTIFY);
+    return lookupKeyReadWithFlags(c->db, key, LOOKUP_NOTOUCH | LOOKUP_NONOTIFY | LOOKUP_NOHOTKEYS);
 }
 
 robj *objectCommandLookupOrReply(client *c, robj *key, robj *reply) {
@@ -1617,7 +1730,7 @@ robj *objectCommandLookupOrReply(client *c, robj *key, robj *reply) {
 void objectCommand(client *c) {
     robj *o;
 
-    if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr, "help")) {
+    if (c->argc == 2 && !strcasecmp(objectGetVal(c->argv[1]), "help")) {
         const char *help[] = {"ENCODING <key>",
                               "    Return the kind of internal representation used in order to store the value",
                               "    associated with a <key>.",
@@ -1632,21 +1745,21 @@ void objectCommand(client *c) {
                               "    <key>.",
                               NULL};
         addReplyHelp(c, help);
-    } else if (!strcasecmp(c->argv[1]->ptr, "refcount") && c->argc == 3) {
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "refcount") && c->argc == 3) {
         if ((o = objectCommandLookupOrReply(c, c->argv[2], shared.null[c->resp])) == NULL) return;
-        addReplyLongLong(c, o->refcount);
-    } else if (!strcasecmp(c->argv[1]->ptr, "encoding") && c->argc == 3) {
+        addReplyLongLong(c, objectGetRefcount(o));
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "encoding") && c->argc == 3) {
         if ((o = objectCommandLookupOrReply(c, c->argv[2], shared.null[c->resp])) == NULL) return;
-        addReplyBulkCString(c, strEncoding(o->encoding));
-    } else if (!strcasecmp(c->argv[1]->ptr, "idletime") && c->argc == 3) {
+        addReplyBulkCString(c, strEncoding(objectGetEncoding(o)));
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "idletime") && c->argc == 3) {
         if ((o = objectCommandLookupOrReply(c, c->argv[2], shared.null[c->resp])) == NULL) return;
         if (server.maxmemory_policy & MAXMEMORY_FLAG_LFU) {
             addReplyError(c, "An LFU maxmemory policy is selected, idle time not tracked. Please note that when "
                              "switching between policies at runtime LRU and LFU data will take some time to adjust.");
             return;
         }
-        addReplyLongLong(c, estimateObjectIdleTime(o) / 1000);
-    } else if (!strcasecmp(c->argv[1]->ptr, "freq") && c->argc == 3) {
+        addReplyLongLong(c, lru_getIdleSecs(objectGetLRU(o)));
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "freq") && c->argc == 3) {
         if ((o = objectCommandLookupOrReply(c, c->argv[2], shared.null[c->resp])) == NULL) return;
         if (!(server.maxmemory_policy & MAXMEMORY_FLAG_LFU)) {
             addReplyError(c,
@@ -1654,11 +1767,7 @@ void objectCommand(client *c) {
                           "when switching between policies at runtime LRU and LFU data will take some time to adjust.");
             return;
         }
-        /* LFUDecrAndReturn should be called
-         * in case of the key has not been accessed for a long time,
-         * because we update the access time only
-         * when the key is read or overwritten. */
-        addReplyLongLong(c, LFUDecrAndReturn(o));
+        addReplyLongLong(c, objectGetLFUFrequency(o));
     } else {
         addReplySubcommandSyntaxError(c);
     }
@@ -1669,14 +1778,16 @@ void objectCommand(client *c) {
  *
  * Usage: MEMORY usage <key> */
 void memoryCommand(client *c) {
-    if (!strcasecmp(c->argv[1]->ptr, "help") && c->argc == 2) {
+    if (!strcasecmp(objectGetVal(c->argv[1]), "help") && c->argc == 2) {
         const char *help[] = {
             "DOCTOR",
             "    Return memory problems reports.",
             "MALLOC-STATS",
             "    Return internal statistics report from the memory allocator.",
             "PURGE",
-            "    Attempt to purge dirty pages for reclamation by the allocator.",
+            "    Attempt to purge dirty pages so they can be reclaimed by the allocator.",
+            "    On glibc systems this also releases free pages from the libc main arena",
+            "    (the process [heap] segment) back to the OS via malloc_trim(3).",
             "STATS",
             "    Return information about the memory usage of the server.",
             "USAGE <key> [SAMPLES <count>]",
@@ -1685,10 +1796,10 @@ void memoryCommand(client *c) {
             NULL,
         };
         addReplyHelp(c, help);
-    } else if (!strcasecmp(c->argv[1]->ptr, "usage") && c->argc >= 3) {
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "usage") && c->argc >= 3) {
         long long samples = OBJ_COMPUTE_SIZE_DEF_SAMPLES;
         for (int j = 3; j < c->argc; j++) {
-            if (!strcasecmp(c->argv[j]->ptr, "samples") && j + 1 < c->argc) {
+            if (!strcasecmp(objectGetVal(c->argv[j]), "samples") && j + 1 < c->argc) {
                 if (getLongLongFromObjectOrReply(c, c->argv[j + 1], &samples, NULL) == C_ERR) return;
                 if (samples < 0) {
                     addReplyErrorObject(c, shared.syntaxerr);
@@ -1701,17 +1812,17 @@ void memoryCommand(client *c) {
                 return;
             }
         }
-        robj *obj = dbFind(c->db, c->argv[2]->ptr);
+        robj *obj = dbFind(c->db, objectGetVal(c->argv[2]));
         if (obj == NULL) {
             addReplyNull(c);
             return;
         }
         size_t usage = objectComputeSize(c->argv[2], obj, samples, c->db->id);
         addReplyLongLong(c, usage);
-    } else if (!strcasecmp(c->argv[1]->ptr, "stats") && c->argc == 2) {
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "stats") && c->argc == 2) {
         struct serverMemOverhead *mh = getMemoryOverheadData();
 
-        addReplyMapLen(c, 31 + mh->num_dbs);
+        addReplyMapLen(c, 34 + mh->num_dbs);
 
         addReplyBulkCString(c, "peak.allocated");
         addReplyLongLong(c, mh->peak_allocated);
@@ -1725,6 +1836,9 @@ void memoryCommand(client *c) {
         addReplyBulkCString(c, "replication.backlog");
         addReplyLongLong(c, mh->repl_backlog);
 
+        addReplyBulkCString(c, "replicas.repl.buffer");
+        addReplyLongLong(c, mh->replicas_repl_buffer);
+
         addReplyBulkCString(c, "clients.slaves");
         addReplyLongLong(c, mh->clients_replicas);
 
@@ -1733,6 +1847,12 @@ void memoryCommand(client *c) {
 
         addReplyBulkCString(c, "cluster.links");
         addReplyLongLong(c, mh->cluster_links);
+
+        addReplyBulkCString(c, "cluster.slot_import");
+        addReplyLongLong(c, mh->cluster_slot_import);
+
+        addReplyBulkCString(c, "cluster.slot_export");
+        addReplyLongLong(c, mh->cluster_slot_export);
 
         addReplyBulkCString(c, "aof.buffer");
         addReplyLongLong(c, mh->aof_buffer);
@@ -1820,7 +1940,7 @@ void memoryCommand(client *c) {
         addReplyLongLong(c, mh->total_frag_bytes);
 
         freeMemoryOverheadData(mh);
-    } else if (!strcasecmp(c->argv[1]->ptr, "malloc-stats") && c->argc == 2) {
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "malloc-stats") && c->argc == 2) {
 #if defined(USE_JEMALLOC)
         sds info = sdsempty();
         je_malloc_stats_print(inputCatSds, &info, NULL);
@@ -1829,12 +1949,12 @@ void memoryCommand(client *c) {
 #else
         addReplyBulkCString(c, "Stats not supported for the current allocator");
 #endif
-    } else if (!strcasecmp(c->argv[1]->ptr, "doctor") && c->argc == 2) {
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "doctor") && c->argc == 2) {
         sds report = getMemoryDoctorReport();
         addReplyVerbatim(c, report, sdslen(report), "txt");
         sdsfree(report);
-    } else if (!strcasecmp(c->argv[1]->ptr, "purge") && c->argc == 2) {
-        if (jemalloc_purge() == 0)
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "purge") && c->argc == 2) {
+        if (zmalloc_purge() == 0)
             addReply(c, shared.ok);
         else
             addReplyError(c, "Error purging dirty pages");

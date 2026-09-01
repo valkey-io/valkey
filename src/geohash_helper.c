@@ -296,7 +296,7 @@ double geohashGetDistance(double lon1d, double lat1d, double lon2d, double lat2d
     v = sin((lon2r - lon1r) / 2);
     /* Reflects about 6nm on earth for comparing longitudes. */
     const double GEO_EPSILON = 1e-15;
-    /* if v == 0, or practically 0, we can avoid doing expensive math when lons are practically the same */
+    /* if v == 0, or practically 0, we can avoid doing expensive math when longitudes are practically the same */
     if (fabs(v) <= GEO_EPSILON) return geohashGetLatDistance(lat1d, lat2d);
     lat1r = deg_rad(lat1d);
     lat2r = deg_rad(lat2d);
@@ -349,7 +349,7 @@ int geohashGetDistanceIfInRectangle(double width_m,
  * The Polygon's centroid's lon lat coordinates are `centroidLon` and `centroidLat`.
  * The algorithm is based on PNPOLY - Point Inclusion in Polygon Test by W. Randolph Franklin (WRF).
  * See: https://wrfranklin.org/Research/Short_Notes/pnpoly.html
- * Returns 1 if inside the polyon and returns 0 otherwise. */
+ * Returns 1 if inside the polygon and returns 0 otherwise. */
 int geohashGetDistanceIfInPolygon(double centroidLon, double centroidLat, double *point, double (*vertices)[2], int num_vertices, double *distance) {
     int i, j;
     int inside = 0;

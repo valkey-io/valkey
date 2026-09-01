@@ -10,7 +10,9 @@
             "READONLY"
         ],
         "acl_categories": [
-            "SET"
+            "READ",
+            "SET",
+            "SLOW"
         ],
         "command_tips": [
             "NONDETERMINISTIC_OUTPUT_ORDER"

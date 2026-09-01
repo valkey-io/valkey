@@ -8,7 +8,13 @@ foreach_sentinel_id id {
     S $id sentinel debug publish-period 1000
 }
 
+set ::user "sentinel-user"
+set ::password "sentinel-password"
+
+
 test "Manual failover works" {
+    configure_sentinel_user_acl $::user $::password
+
     set old_port [RPort $master_id]
     set addr [S 0 SENTINEL GET-PRIMARY-ADDR-BY-NAME mymaster]
     assert {[lindex $addr 1] == $old_port}
@@ -60,6 +66,7 @@ test "The old primary eventually gets reconfigured as a slave" {
     } else {
         fail "Old master not reconfigured as slave of new master"
     }
+    reset_sentinel_user_acl $::user
 }
 
 foreach flag {crash-after-election crash-after-promotion} {

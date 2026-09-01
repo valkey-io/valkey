@@ -12,7 +12,10 @@
             "WRITE"
         ],
         "acl_categories": [
-            "STREAM"
+            "BLOCKING",
+            "SLOW",
+            "STREAM",
+            "WRITE"
         ],
         "key_specs": [
             {

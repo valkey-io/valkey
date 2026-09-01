@@ -12,7 +12,9 @@
             "FAST"
         ],
         "acl_categories": [
-            "HASH"
+            "FAST",
+            "HASH",
+            "WRITE"
         ],
         "key_specs": [
             {

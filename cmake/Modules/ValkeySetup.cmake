@@ -50,13 +50,13 @@ endif ()
 
 # Helper function for creating symbolic link so that: link -> source
 macro (valkey_create_symlink source link)
-    install(
-        CODE "execute_process(                      \
-    COMMAND /bin/bash ${CMAKE_BINARY_DIR}/CreateSymlink.sh \
-    ${source} \
-    ${link}   \
-    )"
-        COMPONENT "valkey")
+  add_custom_command(
+    TARGET ${source} POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E create_symlink
+            "$<TARGET_FILE_NAME:${source}>"
+            "$<TARGET_FILE_DIR:${source}>/${link}"
+    VERBATIM
+  )
 endmacro ()
 
 # Install a binary
@@ -78,28 +78,24 @@ macro (valkey_build_and_install_bin target sources ld_flags libs link_name)
         OR USE_TCMALLOC
         OR USE_TCMALLOC_MINIMAL)
         # Using custom allocator
-        target_link_libraries(${target} ${ALLOCATOR_LIB})
+        target_link_libraries(${target} PRIVATE ${ALLOCATOR_LIB})
     endif ()
 
     # Place this line last to ensure that ${ld_flags} is placed last on the linker line
-    target_link_libraries(${target} ${libs} ${ld_flags})
-    target_link_libraries(${target} valkey::valkey)
+    target_link_libraries(${target} PRIVATE ${libs} ${ld_flags})
+    target_link_libraries(${target} PRIVATE valkey::valkey)
     if (USE_TLS)
         # Add required libraries needed for TLS
-        target_link_libraries(${target} OpenSSL::SSL valkey::valkey_tls)
+        target_link_libraries(${target} PRIVATE OpenSSL::SSL valkey::valkey_tls)
     endif ()
 
     if (USE_RDMA)
         # Add required libraries needed for RDMA
-        # Bug in libvalkey 0.1.0: The order is important and we need to link
-        # valkey::valkey after valkey::valkey_rdma. This will be fixed upstream.
-        # TODO: Next time we lift libvalkey, remove valkey::valkey from
-        # the next line.
-        target_link_libraries(${target} valkey::valkey_rdma valkey::valkey)
+        target_link_libraries(${target} PRIVATE valkey::valkey_rdma)
     endif ()
 
     if (IS_FREEBSD)
-        target_link_libraries(${target} execinfo)
+        target_link_libraries(${target} PRIVATE execinfo)
     endif ()
 
     # Enable all warnings + fail on warning
@@ -240,7 +236,7 @@ if (BUILDING_ARM64)
 endif ()
 
 if (APPLE)
-    add_valkey_server_linker_option("-rdynamic")
+    add_valkey_server_linker_option("-Wl,-export_dynamic")
     add_valkey_server_linker_option("-ldl")
 elseif (UNIX)
     add_valkey_server_linker_option("-rdynamic")
@@ -282,10 +278,11 @@ if (BUILD_SANITIZER)
 endif ()
 
 include_directories("${CMAKE_SOURCE_DIR}/deps/libvalkey/include")
+include_directories("${CMAKE_SOURCE_DIR}/src/modules/lua")
 include_directories("${CMAKE_SOURCE_DIR}/deps/linenoise")
-include_directories("${CMAKE_SOURCE_DIR}/deps/lua/src")
 include_directories("${CMAKE_SOURCE_DIR}/deps/hdr_histogram")
 include_directories("${CMAKE_SOURCE_DIR}/deps/fpconv")
+include_directories("${CMAKE_SOURCE_DIR}/deps/lz4")
 
 add_subdirectory("${CMAKE_SOURCE_DIR}/deps")
 
@@ -296,6 +293,10 @@ endif ()
 
 # Common compiler flags
 add_valkey_server_compiler_options("-pedantic")
+
+if (NOT BUILD_LUA)
+    message(STATUS "Lua scripting engine is disabled")
+endif()
 
 # ----------------------------------------------------
 # Build options (allocator, tls, rdma et al) - end
@@ -330,22 +331,10 @@ if (PYTHON_EXE)
         COMMAND touch ${CMAKE_BINARY_DIR}/fmtargs_generated
         WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/src")
     add_custom_target(generate_fmtargs_h DEPENDS ${CMAKE_BINARY_DIR}/fmtargs_generated)
-
-    # Rule for generating test_files.h
-    message(STATUS "Adding target generate_test_files_h")
-    file(GLOB UNIT_TEST_SRCS "${CMAKE_SOURCE_DIR}/src/unit/*.c")
-    add_custom_command(
-        OUTPUT ${CMAKE_BINARY_DIR}/test_files_generated
-        DEPENDS "${UNIT_TEST_SRCS};${CMAKE_SOURCE_DIR}/utils/generate-unit-test-header.py"
-        COMMAND ${PYTHON_EXE} ${CMAKE_SOURCE_DIR}/utils/generate-unit-test-header.py
-        COMMAND touch ${CMAKE_BINARY_DIR}/test_files_generated
-        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/src")
-    add_custom_target(generate_test_files_h DEPENDS ${CMAKE_BINARY_DIR}/test_files_generated)
 else ()
     # Fake targets
     add_custom_target(generate_commands_def)
     add_custom_target(generate_fmtargs_h)
-    add_custom_target(generate_test_files_h)
 endif ()
 
 # Generate release.h file (always)

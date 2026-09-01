@@ -13,7 +13,10 @@
             "ADMIN"
         ],
         "acl_categories": [
-            "HYPERLOGLOG"
+            "ADMIN",
+            "DANGEROUS",
+            "HYPERLOGLOG",
+            "SLOW"
         ],
         "reply_schema": {
             "const": "OK"

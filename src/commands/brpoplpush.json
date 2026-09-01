@@ -1,6 +1,6 @@
 {
     "BRPOPLPUSH": {
-        "summary": "Pops an element from a list, pushes it to another list and returns it. Block until an element is available otherwise. Deletes the list if the last element was popped.",
+        "summary": "Pops an element from a list, pushes it to another list and returns it. Blocks until an element is available otherwise. Deletes the list if the last element was popped.",
         "complexity": "O(1)",
         "group": "list",
         "since": "2.2.0",
@@ -12,18 +12,16 @@
                 "`timeout` is interpreted as a double instead of an integer."
             ]
         ],
-        "deprecated_since": "6.2.0",
-        "replaced_by": "`BLMOVE` with the `RIGHT` and `LEFT` arguments",
-        "doc_flags": [
-            "DEPRECATED"
-        ],
         "command_flags": [
             "WRITE",
             "DENYOOM",
             "BLOCKING"
         ],
         "acl_categories": [
-            "LIST"
+            "BLOCKING",
+            "LIST",
+            "SLOW",
+            "WRITE"
         ],
         "key_specs": [
             {

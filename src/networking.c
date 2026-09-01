@@ -30,6 +30,7 @@
 #include "server.h"
 #include "cluster.h"
 #include "cluster_slot_stats.h"
+#include "cluster_migrateslots.h"
 #include "script.h"
 #include "intset.h"
 #include "sds.h"
@@ -37,6 +38,8 @@
 #include "fmtargs.h"
 #include "io_threads.h"
 #include "module.h"
+#include "connection.h"
+#include "zmalloc.h"
 #include <strings.h>
 #include <sys/socket.h>
 #include <sys/uio.h>
@@ -51,38 +54,50 @@
 typedef struct {
     /* A set of client IDs to filter. If NULL, no ID filtering is applied. */
     intset *ids;
+    intset *not_ids;
     /* Maximum age (in seconds) of a client connection for filtering.
      * Connections younger than this value will not match.
      * A value of 0 means no age filtering. */
     long long max_age;
     /* Address/port of the client. If NULL, no address filtering is applied. */
     char *addr;
+    char *not_addr;
     /* Remote address/port of the client. If NULL, no address filtering is applied. */
     char *laddr;
+    char *not_laddr;
     /* Filtering clients by authentication user. If NULL, no user-based filtering is applied. */
     user *user;
+    user *not_user;
     /* Client type to filter. If set to -1, no type filtering is applied. */
     int type;
+    int not_type;
     /* Boolean flag to determine if the current client (`me`) should be filtered. 1 means "skip me", 0 means otherwise. */
     int skipme;
     /* Client name to filter. If NULL, no name filtering is applied. */
     char *name;
+    char *not_name;
     /* Idle time (in seconds) of a client connection for filtering.
      * Connections with idle time more than this value will match.
      * A value of 0 means no idle time filtering. */
     long long idle;
     /* Client flags for filtering. If NULL, no filtering is applied. */
     sds flags;
+    sds not_flags;
     /* Library name to filter. If NULL, no library name filtering is applied. */
     robj *lib_name;
+    robj *not_lib_name;
     /* Library version to filter. If NULL, no library version filtering is applied. */
     robj *lib_ver;
+    robj *not_lib_ver;
     /* Database index to filter. If set to -1, no DB number filtering is applied. */
     int db_number;
+    int not_db_number;
     /* Client capa for filtering. If NULL, no filtering is applied. */
     sds capa;
+    sds not_capa;
     /* Client ip for filtering. If NULL, no filtering is applied. */
     sds ip;
+    sds not_ip;
 } clientFilter;
 
 /* Types of payloads in reply buffers (c->buf and c->reply)
@@ -99,10 +114,16 @@ typedef enum {
  * The packed attribute is specified because buffer is accessed at arbitrary offsets,
  * so no benefit in data structure padding and applying packed saves the space in the buffer  */
 typedef struct __attribute__((__packed__)) payloadHeader {
-    size_t payload_len;   /* payload length in a reply buffer */
-    size_t reply_len;     /* actual reply length for non-plain payloads */
-    uint8_t payload_type; /* one of payloadType */
-    int16_t slot;         /* to report network-bytes-out for BULK_STR_REF chunks */
+    size_t payload_len;       /* payload length in a reply buffer */
+    size_t reply_len;         /* actual reply length for non-plain payloads */
+    int16_t slot;             /* to report network-bytes-out for BULK_STR_REF chunks */
+    uint8_t payload_type : 1; /* one of payloadType */
+    uint8_t track_bytes : 1;  /* 1 if net bytes tracking was enabled when reply was added */
+    uint8_t reserved : 6;     /* reserved */
+    /* tracked_for_cob is placed after the bitfield byte so it is byte aligned.
+     * _Atomic(uint8_t) has alignment 1, this is safe inside __packed__
+     * because the compiler will not insert padding before it */
+    _Atomic(uint8_t) tracked_for_cob; /* 1 if this header's reply_len has been tracked in io_tracked_reply_len */
 } payloadHeader;
 
 /* To avoid copy of whole string in reply buffer
@@ -114,6 +135,8 @@ typedef struct __attribute__((__packed__)) bulkStrRef {
 
 static void setProtocolError(const char *errstr, client *c);
 static void pauseClientsByClient(mstime_t end, int isPauseClientAll);
+static void trackBufReferences(char *buf, size_t bufpos, client *c);
+static void releaseBufReferences(char *buf, size_t bufpos, client *c);
 int postponeClientRead(client *c);
 char *getClientSockname(client *c);
 static int parseClientFiltersOrReply(client *c, int index, clientFilter *filter);
@@ -125,9 +148,16 @@ static int clientMatchesFlagFilter(client *c, sds flag_filter);
 static int clientMatchesIpFilter(client *c, sds ip);
 static int clientMatchesCapaFilter(client *c, sds capa_filter);
 static void freeClientFilter(clientFilter *filter);
+static bool consumeCommandQueue(client *c);
+static int parseMultibulk(client *c,
+                          int *argc,
+                          robj ***argv,
+                          int *argv_len,
+                          size_t *argv_len_sum,
+                          unsigned long long *net_input_bytes_curr_cmd);
 
 int ProcessingEventsWhileBlocked = 0; /* See processEventsWhileBlocked(). */
-__thread sds thread_shared_qb = NULL;
+_Thread_local sds thread_shared_qb = NULL;
 
 typedef enum {
     PARSE_OK = 0,
@@ -135,37 +165,62 @@ typedef enum {
     PARSE_NEEDMORE = -2,
 } parseResult;
 
+#define COMMAND_QUEUE_MIN_CAPACITY 16
+
 /* Return the amount of memory used by the sds string at object->ptr
  * for a string object. This includes internal fragmentation. */
 size_t getStringObjectSdsUsedMemory(robj *o) {
     serverAssertWithInfo(NULL, o, o->type == OBJ_STRING);
-    if (o->encoding != OBJ_ENCODING_INT) {
-        return sdsAllocSize(o->ptr);
+    if (objectGetEncoding(o) != OBJ_ENCODING_INT) {
+        return sdsAllocSize(objectGetVal(o));
     }
     return 0;
+}
+
+/* Return the total memory used by a string object, including the robj
+ * structure and the sds string overhead (internal fragmentation). */
+size_t getStringObjectMemory(robj *o) {
+    return sizeof(robj) + getStringObjectSdsUsedMemory(o);
 }
 
 /* Return the length of a string object.
  * This does NOT include internal fragmentation or sds unused space. */
 size_t getStringObjectLen(robj *o) {
     serverAssertWithInfo(NULL, o, o->type == OBJ_STRING);
-    switch (o->encoding) {
-    case OBJ_ENCODING_RAW: return sdslen(o->ptr);
-    case OBJ_ENCODING_EMBSTR: return sdslen(o->ptr);
+    switch (objectGetEncoding(o)) {
+    case OBJ_ENCODING_RAW: return sdslen(objectGetVal(o));
+    case OBJ_ENCODING_EMBSTR: return sdslen(objectGetVal(o));
     default: return 0; /* Just integer encoding for now. */
     }
 }
 
+/* Actual allocated size of a client reply block */
+static size_t clientReplyAllocSize(clientReplyBlock *block) {
+    return sizeof(clientReplyBlock) + block->size;
+}
+
+/* Postpone mask from client input/command state. Hold READ only while parsed pipeline
+ * commands are still in cmd_queue (must be consumed via processInputBuffer, not a new
+ * parseInputBuffer). Do not use multibulklen or pending_command here: incomplete parses
+ * and not-yet-run commands still need the read path (or processPendingCommandAndInputBuffer)
+ * to make progress. */
+int clientConnPostponeMask(client *c) {
+    int mask = clientConnPostponeMaskFromIOState(c);
+    if (c->cmd_queue.off < c->cmd_queue.len) mask |= CONN_POSTPONE_READ;
+    return mask;
+}
+
 /* Client.reply list dup and free methods. */
 void *dupClientReplyValue(void *o) {
-    clientReplyBlock *old = o;
-    clientReplyBlock *buf = zmalloc(sizeof(clientReplyBlock) + old->size);
-    memcpy(buf, o, sizeof(clientReplyBlock) + old->size);
+    size_t bufsize = clientReplyAllocSize((clientReplyBlock *)o);
+    clientReplyBlock *buf = zmalloc(bufsize);
+    memcpy(buf, o, bufsize);
     return buf;
 }
 
 void freeClientReplyValue(void *o) {
-    zfree(o);
+    if (!o) return;
+    zfree_with_size(o, clientReplyAllocSize((clientReplyBlock *)o));
 }
 
 /* This function links the client to the global linked list of clients.
@@ -215,12 +270,29 @@ static inline int isReplicaReadyForReplData(client *replica) {
            !(replica->flag.close_asap);
 }
 
+/* The subscribe / unsubscribe command family has a push as a reply,
+ * or in other words, it responds with a push (or several of them
+ * depending on how many arguments it got), and has no reply. */
+int cmdHasPushAsReply(struct serverCommand *cmd) {
+    if (!cmd) return 0;
+    return cmd->proc == subscribeCommand || cmd->proc == unsubscribeCommand || cmd->proc == psubscribeCommand ||
+           cmd->proc == punsubscribeCommand || cmd->proc == ssubscribeCommand || cmd->proc == sunsubscribeCommand;
+}
+
+/* Publish-to-self push must wait until after the command reply. */
+static int shouldDeferPushMessage(client *c) {
+    return c->flag.pushing && c == server.current_client && server.executing_client &&
+           !cmdHasPushAsReply(server.executing_client->cmd);
+}
+
 /* Decides if copy avoidance is preferred according to client type, number of I/O threads, object size
  * Maybe called with NULL obj for evaluation with no regard to object size
  * Copy avoidance can be allowed only for regular Valkey clients
  * that use _writeToClient handler to write replies to client connection */
 static int isCopyAvoidPreferred(client *c, robj *obj) {
     if (c->flag.fake || isDeferredReplyEnabled(c)) return 0;
+    /* Skip copy avoidance when push bytes would be deferred into pending_push_messages. */
+    if (shouldDeferPushMessage(c)) return 0;
 
     int type = getClientType(c);
     if (type != CLIENT_TYPE_NORMAL && type != CLIENT_TYPE_PUBSUB) return 0;
@@ -238,10 +310,10 @@ static int isCopyAvoidPreferred(client *c, robj *obj) {
     /* Main thread only. No I/O threads */
     if (server.io_threads_num == 1) {
         /* Copy avoidance is preferred starting certain string size */
-        return server.min_string_size_copy_avoid && sdslen(obj->ptr) >= (size_t)server.min_string_size_copy_avoid;
+        return server.min_string_size_copy_avoid && sdslen(objectGetVal(obj)) >= (size_t)server.min_string_size_copy_avoid;
     }
     /* Main thread + I/O threads */
-    return server.min_string_size_copy_avoid_threaded && sdslen(obj->ptr) >= (size_t)server.min_string_size_copy_avoid_threaded;
+    return server.min_string_size_copy_avoid_threaded && sdslen(objectGetVal(obj)) >= (size_t)server.min_string_size_copy_avoid_threaded;
 }
 
 client *createClient(connection *conn) {
@@ -275,6 +347,7 @@ client *createClient(connection *conn) {
     c->buf_peak = c->buf_usable_size;
     c->buf_peak_last_reset_time = server.unixtime;
     c->qb_pos = 0;
+    c->qb_applied = 0;
     c->querybuf = NULL;
     c->querybuf_peak = 0;
     c->reqtype = 0;
@@ -284,19 +357,24 @@ client *createClient(connection *conn) {
     c->argv_len_sum = 0;
     c->original_argc = 0;
     c->original_argv = NULL;
+    c->redact_arg_bitmap = 0;
     c->nread = 0;
     c->read_flags = 0;
     c->write_flags = 0;
+    c->cmd_queue.cmds = NULL;
+    c->cmd_queue.len = c->cmd_queue.off = c->cmd_queue.cap = 0;
     c->cmd = c->lastcmd = c->realcmd = c->parsed_cmd = NULL;
     c->cur_script = NULL;
     c->multibulklen = 0;
     c->bulklen = -1;
-    c->raw_flag = 0;
+    c->raw_flag1 = 0;
+    c->raw_flag2 = 0;
     c->capa = 0;
     c->slot = -1;
     c->ctime = c->last_interaction = server.unixtime;
     c->duration = 0;
     clientSetDefaultAuth(c);
+    c->slot_migration_job = NULL;
     c->reply = listCreate();
     c->deferred_reply = NULL;
     c->deferred_reply_errors = NULL;
@@ -320,7 +398,6 @@ client *createClient(connection *conn) {
     c->last_memory_usage = 0;
     c->last_memory_type = CLIENT_TYPE_NORMAL;
     listInitNode(&c->clients_pending_write_node, c);
-    listInitNode(&c->pending_read_list_node, c);
     c->mem_usage_bucket = NULL;
     c->mem_usage_bucket_node = NULL;
     if (conn) linkClient(c);
@@ -328,6 +405,7 @@ client *createClient(connection *conn) {
     c->net_input_bytes_curr_cmd = 0;
     c->net_output_bytes = 0;
     c->net_output_bytes_curr_cmd = 0;
+    c->io_tracked_reply_len = 0;
     c->commands_processed = 0;
     c->io_last_reply_block = NULL;
     c->io_last_bufpos = 0;
@@ -366,7 +444,8 @@ void putClientInPendingWriteQueue(client *c) {
     if (!c->flag.pending_write &&
         (!c->repl_data ||
          c->repl_data->repl_state == REPL_STATE_NONE ||
-         (isReplicaReadyForReplData(c) && !c->repl_data->repl_start_cmd_stream_on_ack))) {
+         (isReplicaReadyForReplData(c) && !c->repl_data->repl_start_cmd_stream_on_ack)) &&
+        clusterSlotMigrationShouldInstallWriteHandler(c)) {
         /* Here instead of installing the write handler, we just flag the
          * client and put it into a list of clients that have something
          * to write to the socket. This way before re-entering the event
@@ -430,17 +509,21 @@ int prepareClientToWrite(client *c) {
     return C_OK;
 }
 
-/* Returns everything in the client reply linked list in a SDS format.
+/* Returns everything in the client reply buffer and linked list in a SDS format.
  * This should only be used only with a caching client. */
 sds aggregateClientOutputBuffer(client *c) {
     sds cmd_response = sdsempty();
+
+    /* First, collect from the fixed buffer if any */
+    if (c->bufpos > 0) {
+        cmd_response = sdscatlen(cmd_response, c->buf, c->bufpos);
+    }
+
+    /* Then, collect from the reply list */
     listIter li;
     listNode *ln;
     clientReplyBlock *val_block;
     listRewind(c->reply, &li);
-
-    /* Here, c->buf is not used, thus we confirm c->bufpos remains 0. */
-    serverAssert(c->bufpos == 0);
     while ((ln = listNext(&li)) != NULL) {
         val_block = (clientReplyBlock *)listNodeValue(ln);
         cmd_response = sdscatlen(cmd_response, val_block->buf, val_block->used);
@@ -473,13 +556,34 @@ void deleteCachedResponseClient(client *recording_client) {
     freeClient(recording_client);
 }
 
+/* Return the reply list that new reply data should be appended to.
+ * When the deferred reply buffer is active, replies go to
+ * c->deferred_reply; otherwise they go to c->reply. */
+static inline list *clientGetReplyList(client *c) {
+    return isDeferredReplyEnabled(c) ? c->deferred_reply : c->reply;
+}
+
+/* Return the reply bytes for the client.
+ * When the deferred reply buffer is active, replies go to
+ * c->deferred_reply_bytes; otherwise they go to c->reply_bytes. */
+static inline unsigned long long *clientGetReplyBytesPtr(client *c) {
+    return isDeferredReplyEnabled(c) ? &c->deferred_reply_bytes : &c->reply_bytes;
+}
+
 /* -----------------------------------------------------------------------------
  * Low level functions to add more data to output buffers.
  * -------------------------------------------------------------------------- */
 
 /* Updates an existing header, if possible; otherwise inserts a new one
  * Returns the length of data that can be added to the reply buffer (i.e. min(available, requested)) */
-static size_t upsertPayloadHeader(char *buf, size_t *bufpos, payloadHeader **last_header, uint8_t type, size_t len, int slot, size_t available) {
+static size_t upsertPayloadHeader(char *buf,
+                                  size_t *bufpos,
+                                  payloadHeader **last_header,
+                                  uint8_t type,
+                                  size_t len,
+                                  int slot,
+                                  int track_bytes,
+                                  size_t available) {
     /* Enforce min len for BULK_STR_REF chunks as whole pointers must be written to the buffer */
     size_t min_len = (type == BULK_STR_REF ? len : 1);
     if (min_len > available) return 0;
@@ -489,7 +593,9 @@ static size_t upsertPayloadHeader(char *buf, size_t *bufpos, payloadHeader **las
     if (!clusterSlotStatsEnabled(slot)) slot = -1;
 
     /* Try to add payload to last chunk if possible */
-    if (*last_header != NULL && (*last_header)->payload_type == type && (*last_header)->slot == slot) {
+    if (*last_header != NULL && (*last_header)->payload_type == type && (*last_header)->slot == slot &&
+        (*last_header)->track_bytes == track_bytes &&
+        !atomic_load_explicit(&(*last_header)->tracked_for_cob, memory_order_acquire)) {
         (*last_header)->payload_len += allowed_len;
         return allowed_len;
     }
@@ -506,6 +612,9 @@ static size_t upsertPayloadHeader(char *buf, size_t *bufpos, payloadHeader **las
     (*last_header)->payload_len = allowed_len;
     (*last_header)->slot = slot;
     (*last_header)->reply_len = 0;
+    (*last_header)->track_bytes = track_bytes;
+    (*last_header)->tracked_for_cob = 0;
+    (*last_header)->reserved = 0;
 
     *bufpos += sizeof(payloadHeader);
 
@@ -529,7 +638,8 @@ static size_t _addReplyPayloadToBuffer(client *c, const void *payload, size_t le
     size_t available = c->buf_usable_size - c->bufpos;
     size_t reply_len = min(available, len);
     if (c->flag.buf_encoded) {
-        reply_len = upsertPayloadHeader(c->buf, &c->bufpos, &c->last_header, payload_type, len, c->slot, available);
+        int track_bytes = (server.commandlog[COMMANDLOG_TYPE_LARGE_REPLY].threshold != -1);
+        reply_len = upsertPayloadHeader(c->buf, &c->bufpos, &c->last_header, payload_type, len, c->slot, track_bytes, available);
     }
     if (!reply_len) return 0;
 
@@ -579,7 +689,8 @@ static void _addReplyPayloadToList(client *c, list *reply_list, const char *payl
         size_t copy = avail >= len ? len : avail;
 
         if (tail->flag.buf_encoded) {
-            copy = upsertPayloadHeader(tail->buf, &tail->used, &tail->last_header, payload_type, len, c->slot, avail);
+            int track_bytes = (server.commandlog[COMMANDLOG_TYPE_LARGE_REPLY].threshold != -1);
+            copy = upsertPayloadHeader(tail->buf, &tail->used, &tail->last_header, payload_type, len, c->slot, track_bytes, avail);
         } else if (encoded) {
             /* If encoded buffer is required but tail is unencoded then pretend nothing can be added to it
              * and, as consequence, cause addition of a new tail */
@@ -607,12 +718,13 @@ static void _addReplyPayloadToList(client *c, list *reply_list, const char *payl
         tail->flag.buf_encoded = encoded;
         tail->last_header = NULL;
         if (tail->flag.buf_encoded) {
-            upsertPayloadHeader(tail->buf, &tail->used, &tail->last_header, payload_type, len, c->slot, tail->size);
+            int track_bytes = (server.commandlog[COMMANDLOG_TYPE_LARGE_REPLY].threshold != -1);
+            upsertPayloadHeader(tail->buf, &tail->used, &tail->last_header, payload_type, len, c->slot, track_bytes, tail->size);
         }
         memcpy(tail->buf + tail->used, payload, len);
         tail->used += len;
         listAddNodeTail(reply_list, tail);
-        unsigned long long *reply_bytes = (isDeferredReplyEnabled(c)) ? &c->deferred_reply_bytes : &c->reply_bytes;
+        unsigned long long *reply_bytes = clientGetReplyBytesPtr(c);
         *reply_bytes += tail->size;
 
         closeClientOnOutputBufferLimitReached(c, 1);
@@ -627,15 +739,6 @@ void _addReplyProtoToList(client *c, list *reply_list, const char *s, size_t len
 /* Adds bulk string reference (i.e. pointer to object and pointer to string itself) to reply list */
 static void _addBulkStrRefToToList(client *c, const void *payload, size_t len) {
     _addReplyPayloadToList(c, c->reply, payload, len, BULK_STR_REF);
-}
-
-/* The subscribe / unsubscribe command family has a push as a reply,
- * or in other words, it responds with a push (or several of them
- * depending on how many arguments it got), and has no reply. */
-int cmdHasPushAsReply(struct serverCommand *cmd) {
-    if (!cmd) return 0;
-    return cmd->proc == subscribeCommand || cmd->proc == unsubscribeCommand || cmd->proc == psubscribeCommand ||
-           cmd->proc == punsubscribeCommand || cmd->proc == ssubscribeCommand || cmd->proc == sunsubscribeCommand;
 }
 
 void _addReplyToBufferOrList(client *c, const char *s, size_t len) {
@@ -663,8 +766,7 @@ void _addReplyToBufferOrList(client *c, const char *s, size_t len) {
      * the SUBSCRIBE command family, which (currently) have a push message instead of a proper reply.
      * The check for executing_client also avoids affecting push messages that are part of eviction.
      * Check CLIENT_PUSHING first to avoid race conditions, as it's absent in module's fake client. */
-    int defer_push_message = c->flag.pushing && c == server.current_client && server.executing_client &&
-                             !cmdHasPushAsReply(server.executing_client->cmd);
+    int defer_push_message = shouldDeferPushMessage(c);
     if (defer_push_message == 0 && isDeferredReplyEnabled(c)) {
         _addReplyProtoToList(c, c->deferred_reply, s, len);
         return;
@@ -675,7 +777,12 @@ void _addReplyToBufferOrList(client *c, const char *s, size_t len) {
         return;
     }
     size_t reply_len = _addReplyToBuffer(c, s, len);
-    if (len > reply_len) _addReplyProtoToList(c, c->reply, s + reply_len, len - reply_len);
+    if (len > reply_len) {
+        /* Content spilled to reply list. Clear c->last_header to prevent
+         * reuse of stale pointer and avoid double-tracking. */
+        c->last_header = NULL;
+        _addReplyProtoToList(c, c->reply, s + reply_len, len - reply_len);
+    }
 }
 
 /* Increment reference to object and add pointer to object and
@@ -686,8 +793,11 @@ static void _addBulkStrRefToBufferOrList(client *c, robj *obj) {
     /* Refcount will be decremented in write completion handler by the main thread */
     incrRefCount(obj);
 
-    bulkStrRef str_ref = {.obj = obj, .str = obj->ptr};
+    bulkStrRef str_ref = {.obj = obj, .str = objectGetVal(obj)};
     if (!_addBulkStrRefToBuffer(c, (void *)&str_ref, sizeof(str_ref))) {
+        /* Content spilled to reply list. Clear c->last_header since
+         * it points into c->buf and should not be reused. */
+        c->last_header = NULL;
         _addBulkStrRefToToList(c, (void *)&str_ref, sizeof(str_ref));
     }
 }
@@ -702,13 +812,13 @@ void addReply(client *c, robj *obj) {
     if (prepareClientToWrite(c) != C_OK) return;
 
     if (sdsEncodedObject(obj)) {
-        _addReplyToBufferOrList(c, obj->ptr, sdslen(obj->ptr));
+        _addReplyToBufferOrList(c, objectGetVal(obj), sdslen(objectGetVal(obj)));
     } else if (obj->encoding == OBJ_ENCODING_INT) {
         /* For integer encoded strings we just convert it into a string
          * using our optimized function, and attach the resulting string
          * to the output buffer. */
         char buf[32];
-        size_t len = ll2string(buf, sizeof(buf), (long)obj->ptr);
+        size_t len = ll2string(buf, sizeof(buf), (long)objectGetVal(obj));
         _addReplyToBufferOrList(c, buf, len);
     } else {
         serverPanic("Wrong obj->encoding in addReply()");
@@ -731,8 +841,8 @@ void addReplySds(client *c, sds s) {
  * client buffer, trying the static buffer initially, and using the string
  * of objects if not possible.
  *
- * It is efficient because does not create an SDS object nor an Object
- * if not needed. The object will only be created by calling
+ * It is efficient because it does not needlessly create an SDS object
+ * or an Object. The object will only be created by calling
  * _addReplyProtoToList() if we fail to extend the existing tail object
  * in the list of objects. */
 void addReplyProto(client *c, const char *s, size_t len) {
@@ -751,7 +861,7 @@ void addReplyProto(client *c, const char *s, size_t len) {
  * Note that 's' must NOT end with \r\n. */
 void addReplyErrorLength(client *c, const char *s, size_t len) {
     /* If the string already starts with "-..." then the error code
-     * is provided by the caller. Otherwise we use "-ERR". */
+     * is provided by the caller. Otherwise, we use "-ERR". */
     if (!len || s[0] != '-') addReplyProto(c, "-ERR ", 5);
     addReplyProto(c, s, len);
     addReplyProto(c, "\r\n", 2);
@@ -780,11 +890,11 @@ void afterErrorReply(client *c, const char *s, size_t len, int flags) {
         server.stat_total_error_replies++;
         /* Increment the error stats
          * If the string already starts with "-..." then the error prefix
-         * is provided by the caller (we limit the search to 32 chars). Otherwise we use "-ERR". */
+         * is provided by the caller (we limit the search to 32 chars). Otherwise, we use "-ERR". */
         char *err_prefix = "ERR";
         size_t prefix_len = 3;
         if (s[0] == '-') {
-            char *spaceloc = memchr(s, ' ', len < 32 ? len : 32);
+            const char *spaceloc = memchr(s, ' ', len < 32 ? len : 32);
             /* If we cannot retrieve the error prefix, use the default: "ERR". */
             if (spaceloc) {
                 const size_t errEndPos = (size_t)(spaceloc - s);
@@ -816,7 +926,7 @@ void afterErrorReply(client *c, const char *s, size_t len, int flags) {
      * the commands sent by the primary. However it is useful to log such events since
      * they are rare and may hint at errors in a script or a bug in the server. */
     int ctype = getClientType(c);
-    if (ctype == CLIENT_TYPE_PRIMARY || ctype == CLIENT_TYPE_REPLICA || c->id == CLIENT_ID_AOF) {
+    if (ctype == CLIENT_TYPE_PRIMARY || ctype == CLIENT_TYPE_REPLICA || c->id == CLIENT_ID_AOF || ctype == CLIENT_TYPE_SLOT_IMPORT || ctype == CLIENT_TYPE_SLOT_EXPORT) {
         char *to, *from;
 
         if (c->id == CLIENT_ID_AOF) {
@@ -825,9 +935,17 @@ void afterErrorReply(client *c, const char *s, size_t len, int flags) {
         } else if (ctype == CLIENT_TYPE_PRIMARY) {
             to = "primary";
             from = "replica";
-        } else {
+        } else if (ctype == CLIENT_TYPE_REPLICA) {
             to = "replica";
             from = "primary";
+        } else if (ctype == CLIENT_TYPE_SLOT_IMPORT) {
+            to = "slot-import-source";
+            from = "slot-import-target";
+        } else if (ctype == CLIENT_TYPE_SLOT_EXPORT) {
+            to = "slot-export-target";
+            from = "slot-export-source";
+        } else {
+            serverAssert(0);
         }
 
         if (len > 4096) len = 4096;
@@ -856,6 +974,9 @@ void afterErrorReply(client *c, const char *s, size_t len, int flags) {
                         " after processing the command '%s'",
                         from, to, cmdname ? cmdname : "<unknown>");
         }
+        if (ctype == CLIENT_TYPE_SLOT_IMPORT || ctype == CLIENT_TYPE_SLOT_EXPORT) {
+            clusterHandleSlotMigrationErrorResponse(c->slot_migration_job);
+        }
     }
 }
 
@@ -863,7 +984,7 @@ void afterErrorReply(client *c, const char *s, size_t len, int flags) {
  * Unlike addReplyErrorSds and others alike which rely on addReplyErrorLength. */
 void addReplyErrorObject(client *c, robj *err) {
     addReply(c, err);
-    afterErrorReply(c, err->ptr, sdslen(err->ptr) - 2, 0); /* Ignore trailing \r\n */
+    afterErrorReply(c, objectGetVal(err), sdslen(objectGetVal(err)) - 2, 0); /* Ignore trailing \r\n */
 }
 
 /* Sends either a reply or an error reply by checking the first char.
@@ -873,7 +994,7 @@ void addReplyErrorObject(client *c, robj *err) {
  * logging and stats update. */
 void addReplyOrErrorObject(client *c, robj *reply) {
     serverAssert(sdsEncodedObject(reply));
-    sds rep = reply->ptr;
+    sds rep = objectGetVal(reply);
     if (sdslen(rep) > 1 && rep[0] == '-') {
         addReplyErrorObject(c, reply);
     } else {
@@ -909,13 +1030,23 @@ void addReplyErrorSdsSafe(client *c, sds err) {
     addReplyErrorSdsEx(c, err, 0);
 }
 
+/* Add error reply to the given client.
+ * Supported flags:
+ * ERR_REPLY_FLAG_NO_STATS_UPDATE - indicate not to perform any error stats updates
+ * As a side effect the SDS string is freed. */
+void addReplyErrorSdsExSafe(client *c, sds err, int flags) {
+    err = sdstrim(err, "\r\n");
+    err = sdsmapchars(err, "\r\n", "  ", 2);
+    addReplyErrorSdsEx(c, err, flags);
+}
+
 /* Internal function used by addReplyErrorFormat, addReplyErrorFormatEx and RM_ReplyWithErrorFormat.
  * Refer to afterErrorReply for more information about the flags. */
 void addReplyErrorFormatInternal(client *c, int flags, const char *fmt, va_list ap) {
-    va_list cpy;
-    va_copy(cpy, ap);
-    sds s = sdscatvprintf(sdsempty(), fmt, cpy);
-    va_end(cpy);
+    va_list copy;
+    va_copy(copy, ap);
+    sds s = sdscatvprintf(sdsempty(), fmt, copy);
+    va_end(copy);
     /* Trim any newlines at the end (ones will be added by addReplyErrorLength) */
     s = sdstrim(s, "\r\n");
     /* Make sure there are no newlines in the middle of the string, otherwise
@@ -973,8 +1104,9 @@ void addReplyStatusFormat(client *c, const char *fmt, ...) {
  * the previous one, when that happens, we wanna try to trim the unused space
  * at the end of the last reply node which we won't use anymore. */
 void trimReplyUnusedTailSpace(client *c) {
-    listNode *ln = listLast(c->reply);
+    listNode *ln = listLast(clientGetReplyList(c));
     clientReplyBlock *tail = ln ? listNodeValue(ln) : NULL;
+    unsigned long long *reply_bytes = clientGetReplyBytesPtr(c);
 
     /* Note that 'tail' may be NULL even if we have a tail node, because when
      * addReplyDeferredLen() is used */
@@ -983,16 +1115,31 @@ void trimReplyUnusedTailSpace(client *c) {
     /* We only try to trim the space is relatively high (more than a 1/4 of the
      * allocation), otherwise there's a high chance realloc will NOP.
      * Also, to avoid large memmove which happens as part of realloc, we only do
-     * that if the used part is small.  */
+     * that if the used part is small.
+     *
+     * Two conditions gate the realloc, for two distinct reasons:
+     *  - io_write_state != CLIENT_PENDING_IO: while an IO thread is writing it
+     *    concurrently walks the whole reply list, so mutating any block races
+     *    with it. This is a thread-safety requirement, independent of which
+     *    block we touch.
+     *  - tail->buf != io_last_written.buf: never free/move the block the write
+     *    bookmark points at. If we did, the allocator could hand the same
+     *    address back for a new reply block; the bookmark would then match an
+     *    unrelated, shorter block while its data_len still claims more bytes
+     *    were sent, and the next write would over-skip (empty IOV) and drop the
+     *    reply's leading bytes. A pointer check is NOT enough at the consumer
+     *    side because that recycle reuses the same address (ABA); the only
+     *    robust fix is to not free the bookmarked block in the first place.
+     * See https://github.com/valkey-io/valkey/pull/4060 */
     if (tail->size - tail->used > tail->size / 4 && tail->used < PROTO_REPLY_CHUNK_BYTES &&
-        c->io_write_state != CLIENT_PENDING_IO && !tail->flag.buf_encoded) {
+        c->io_write_state != CLIENT_PENDING_IO && tail->buf != c->io_last_written.buf && !tail->flag.buf_encoded) {
         size_t usable_size;
         size_t old_size = tail->size;
         tail = zrealloc_usable(tail, tail->used + sizeof(clientReplyBlock), &usable_size);
         /* take over the allocation's internal fragmentation (at least for
          * memory usage tracking) */
         tail->size = usable_size - sizeof(clientReplyBlock);
-        c->reply_bytes = c->reply_bytes + tail->size - old_size;
+        *reply_bytes = *reply_bytes + tail->size - old_size;
         listNodeValue(ln) = tail;
     }
 }
@@ -1020,9 +1167,15 @@ void *addReplyDeferredLen(client *c) {
      * buffer offset (see function comment) */
     reqresSaveClientReplyOffset(c);
 
+    /* When the deferred reply buffer is active, the placeholder must go into
+     * the same list that subsequent ReplyWith* calls will append to.
+     * Otherwise, setDeferredReply will fill the placeholder in c->reply while
+     * the array elements live in c->deferred_reply, producing a malformed
+     * response after commitDeferredReplyBuffer joins the two lists. */
+    list *reply_list = clientGetReplyList(c);
     trimReplyUnusedTailSpace(c);
-    listAddNodeTail(c->reply, NULL); /* NULL is our placeholder. */
-    return listLast(c->reply);
+    listAddNodeTail(reply_list, NULL); /* NULL is our placeholder. */
+    return listLast(reply_list);
 }
 
 void setDeferredReply(client *c, void *node, const char *s, size_t length) {
@@ -1033,6 +1186,11 @@ void setDeferredReply(client *c, void *node, const char *s, size_t length) {
      * we return NULL in addReplyDeferredLen() */
     if (node == NULL) return;
     serverAssert(!listNodeValue(ln));
+
+    /* The placeholder node may live in c->deferred_reply when the deferred
+     * reply buffer is active.  Use the same list for deletion/accounting. */
+    list *reply_list = clientGetReplyList(c);
+    unsigned long long *reply_bytes = clientGetReplyBytesPtr(c);
 
     /* Normally we fill this dummy NULL node, added by addReplyDeferredLen(),
      * with a new buffer structure containing the protocol needed to specify
@@ -1045,9 +1203,13 @@ void setDeferredReply(client *c, void *node, const char *s, size_t length) {
      * - The next node is non-NULL,
      * - It has enough room already allocated
      * - And not too large (avoid large memmove)
-     * - And the client is not in a pending I/O state */
+     * - And it is safe to mutate the target node: the client is not
+     *   CLIENT_PENDING_IO (an IO thread is not concurrently walking the reply
+     *   list) AND the target node is not the one io_last_written references
+     *   (mutating the bookmarked block desyncs the write bookmark).
+     *   See https://github.com/valkey-io/valkey/pull/4060 */
     if (ln->prev != NULL && (prev = listNodeValue(ln->prev)) && prev->size > prev->used &&
-        c->io_write_state != CLIENT_PENDING_IO && !prev->flag.buf_encoded) {
+        c->io_write_state != CLIENT_PENDING_IO && prev->buf != c->io_last_written.buf && !prev->flag.buf_encoded) {
         size_t len_to_copy = prev->size - prev->used;
         if (len_to_copy > length) len_to_copy = length;
         memcpy(prev->buf + prev->used, s, len_to_copy);
@@ -1055,19 +1217,20 @@ void setDeferredReply(client *c, void *node, const char *s, size_t length) {
         prev->used += len_to_copy;
         length -= len_to_copy;
         if (length == 0) {
-            listDelNode(c->reply, ln);
+            listDelNode(reply_list, ln);
             return;
         }
         s += len_to_copy;
     }
 
     if (ln->next != NULL && (next = listNodeValue(ln->next)) && next->size - next->used >= length &&
-        next->used < PROTO_REPLY_CHUNK_BYTES * 4 && c->io_write_state != CLIENT_PENDING_IO && !next->flag.buf_encoded) {
+        next->used < PROTO_REPLY_CHUNK_BYTES * 4 && c->io_write_state != CLIENT_PENDING_IO &&
+        next->buf != c->io_last_written.buf && !next->flag.buf_encoded) {
         memmove(next->buf + length, next->buf, next->used);
         memcpy(next->buf, s, length);
         c->net_output_bytes_curr_cmd += length;
         next->used += length;
-        listDelNode(c->reply, ln);
+        listDelNode(reply_list, ln);
     } else {
         /* Create a new node */
         size_t usable_size;
@@ -1079,7 +1242,7 @@ void setDeferredReply(client *c, void *node, const char *s, size_t length) {
         memcpy(buf->buf, s, length);
         c->net_output_bytes_curr_cmd += length;
         listNodeValue(ln) = buf;
-        c->reply_bytes += buf->size;
+        *reply_bytes += buf->size;
 
         closeClientOnOutputBufferLimitReached(c, 1);
     }
@@ -1099,15 +1262,15 @@ void setDeferredAggregateLen(client *c, void *node, long length, char prefix) {
     const size_t hdr_len = OBJ_SHARED_HDR_STRLEN(length);
     const int opt_hdr = length < OBJ_SHARED_BULKHDR_LEN;
     if (prefix == '*' && opt_hdr) {
-        setDeferredReply(c, node, shared.mbulkhdr[length]->ptr, hdr_len);
+        setDeferredReply(c, node, objectGetVal(shared.mbulkhdr[length]), hdr_len);
         return;
     }
     if (prefix == '%' && opt_hdr) {
-        setDeferredReply(c, node, shared.maphdr[length]->ptr, hdr_len);
+        setDeferredReply(c, node, objectGetVal(shared.maphdr[length]), hdr_len);
         return;
     }
     if (prefix == '~' && opt_hdr) {
-        setDeferredReply(c, node, shared.sethdr[length]->ptr, hdr_len);
+        setDeferredReply(c, node, objectGetVal(shared.sethdr[length]), hdr_len);
         return;
     }
 
@@ -1229,16 +1392,16 @@ static void _addReplyLongLongWithPrefix(client *c, long long ll, char prefix) {
     const int opt_hdr = ll < OBJ_SHARED_BULKHDR_LEN && ll >= 0;
     const size_t hdr_len = OBJ_SHARED_HDR_STRLEN(ll);
     if (prefix == '*' && opt_hdr) {
-        _addReplyToBufferOrList(c, shared.mbulkhdr[ll]->ptr, hdr_len);
+        _addReplyToBufferOrList(c, objectGetVal(shared.mbulkhdr[ll]), hdr_len);
         return;
     } else if (prefix == '$' && opt_hdr) {
-        _addReplyToBufferOrList(c, shared.bulkhdr[ll]->ptr, hdr_len);
+        _addReplyToBufferOrList(c, objectGetVal(shared.bulkhdr[ll]), hdr_len);
         return;
     } else if (prefix == '%' && opt_hdr) {
-        _addReplyToBufferOrList(c, shared.maphdr[ll]->ptr, hdr_len);
+        _addReplyToBufferOrList(c, objectGetVal(shared.maphdr[ll]), hdr_len);
         return;
     } else if (prefix == '~' && opt_hdr) {
-        _addReplyToBufferOrList(c, shared.sethdr[ll]->ptr, hdr_len);
+        _addReplyToBufferOrList(c, objectGetVal(shared.sethdr[ll]), hdr_len);
         return;
     }
 
@@ -1353,7 +1516,20 @@ static int tryAvoidBulkStrCopyToReply(client *c, robj *obj) {
 
 /* Add an Object as a bulk reply */
 void addReplyBulk(client *c, robj *obj) {
-    if (tryAvoidBulkStrCopyToReply(c, obj) == C_OK) return;
+    if (tryAvoidBulkStrCopyToReply(c, obj) == C_OK) {
+        /* If copy avoidance allowed, then we explicitly maintain net_output_bytes_curr_cmd.
+         * We determine per-reply if tracking is enabled by checking the config in the main thread. */
+        if (server.commandlog[COMMANDLOG_TYPE_LARGE_REPLY].threshold != -1) {
+            serverAssert(obj->encoding == OBJ_ENCODING_RAW);
+            size_t str_len = sdslen(objectGetVal(obj));
+            uint32_t num_len = digits10(str_len);
+            /* RESP encodes bulk strings as $<length>\r\n<data>\r\n */
+            c->net_output_bytes_curr_cmd += (num_len + 3); /* $<length>\r\n */
+            c->net_output_bytes_curr_cmd += str_len;       /* <data> */
+            c->net_output_bytes_curr_cmd += 2;             /* \r\n */
+        }
+        return;
+    }
     addReplyBulkLen(c, obj);
     addReply(c, obj);
     addReplyProto(c, "\r\n", 2);
@@ -1465,7 +1641,7 @@ void addReplyVerbatim(client *c, const char *s, size_t len, const char *ext) {
  * specific subcommands in `extended_help`.
  */
 void addExtendedReplyHelp(client *c, const char **help, const char **extended_help) {
-    sds cmd = sdsnew((char *)c->argv[0]->ptr);
+    sds cmd = sdsnew((char *)objectGetVal(c->argv[0]));
     void *blenp = addReplyDeferredLen(c);
     int blen = 0;
     int idx = 0;
@@ -1500,10 +1676,10 @@ void addReplyHelp(client *c, const char **help) {
  * This function is typically invoked by from commands that support
  * subcommands in response to an unknown subcommand or argument error. */
 void addReplySubcommandSyntaxError(client *c) {
-    sds cmd = sdsnew((char *)c->argv[0]->ptr);
+    sds cmd = sdsnew((char *)objectGetVal(c->argv[0]));
     sdstoupper(cmd);
     addReplyErrorFormat(c, "unknown subcommand or wrong number of arguments for '%.128s'. Try %s HELP.",
-                        (char *)c->argv[1]->ptr, cmd);
+                        (char *)objectGetVal(c->argv[1]), cmd);
     sdsfree(cmd);
 }
 
@@ -1519,7 +1695,10 @@ inline int isDeferredReplyEnabled(client *c) {
  * callback. */
 void initDeferredReplyBuffer(client *c) {
     if (moduleNotifyKeyspaceSubscribersCnt() == 0) return;
-    if (c->deferred_reply == NULL) c->deferred_reply = listCreate();
+    if (c->deferred_reply == NULL) {
+        c->deferred_reply = listCreate();
+        listSetFreeMethod(c->deferred_reply, freeClientReplyValue);
+    }
     if (!isDeferredReplyEnabled(c)) c->deferred_reply_bytes = 0;
 }
 
@@ -1682,6 +1861,19 @@ void clientAcceptHandler(connection *conn) {
         }
     }
 
+    /* Auto-authenticate from cert user field if set */
+    sds cert_username = NULL;
+    user *u = connGetPeerUser(conn, &cert_username);
+    if (u) {
+        clientSetUser(c, u, 1);
+        moduleNotifyUserChanged(c);
+        serverLog(LL_VERBOSE, "TLS: Auto-authenticated client as %s",
+                  server.hide_user_data_from_log ? "*redacted*" : u->name);
+    } else if (cert_username) {
+        addACLLogEntry(c, ACL_INVALID_TLS_CERT_AUTH, ACL_LOG_CTX_TOPLEVEL, 0, cert_username, NULL);
+    }
+    sdsfree(cert_username);
+
     server.stat_numconnections++;
     moduleFireServerEvent(VALKEYMODULE_EVENT_CLIENT_CHANGE, VALKEYMODULE_SUBEVENT_CLIENT_CHANGE_CONNECTED, c);
 }
@@ -1693,7 +1885,7 @@ void acceptCommonHandler(connection *conn, struct ClientFlags flags, char *ip) {
     char addr[CONN_ADDR_STR_LEN] = {0};
     char laddr[CONN_ADDR_STR_LEN] = {0};
     connFormatAddr(conn, addr, sizeof(addr), 1);
-    connFormatAddr(conn, laddr, sizeof(addr), 0);
+    connFormatAddr(conn, laddr, sizeof(laddr), 0);
 
     if (connGetState(conn) != CONN_STATE_ACCEPTING) {
         serverLog(LL_VERBOSE, "Accepted client connection in error state: %s (addr=%s laddr=%s)",
@@ -1758,6 +1950,13 @@ void freeClientOriginalArgv(client *c) {
     /* We didn't rewrite this client */
     if (!c->original_argv) return;
 
+    /* Client does not own the original argv, it just borrowed it. */
+    if (c->flag.argv_borrowed) {
+        c->original_argv = NULL;
+        c->original_argc = 0;
+        return;
+    }
+
     if (tryOffloadFreeArgvToIOThreads(c, c->original_argc, c->original_argv) == C_ERR) {
         for (int j = 0; j < c->original_argc; j++) decrRefCount(c->original_argv[j]);
         zfree(c->original_argv);
@@ -1768,12 +1967,18 @@ void freeClientOriginalArgv(client *c) {
 }
 
 void freeClientArgv(client *c) {
+    if (c->flag.argv_borrowed && !c->original_argv) {
+        /* Client does not own the argv, and there is no original argv, so just clear the fields. */
+        goto clear;
+    }
+
     /* If original_argv exists, 'c->argv' was allocated by the main thread,
      * so it's more efficient to free it directly here rather than offloading to IO threads */
     if (c->original_argv || tryOffloadFreeArgvToIOThreads(c, c->argc, c->argv) == C_ERR) {
         for (int j = 0; j < c->argc; j++) decrRefCount(c->argv[j]);
         zfree(c->argv);
     }
+clear:
     c->argc = 0;
     c->cmd = NULL;
     c->parsed_cmd = NULL;
@@ -1790,7 +1995,10 @@ void disconnectReplicas(void) {
     listNode *ln;
     listRewind(server.replicas, &li);
     while ((ln = listNext(&li))) {
-        freeClient((client *)ln->value);
+        client *replica = (client *)ln->value;
+        /* If we are going to disconnect all replicas, there is no need to protect the rdb channel. */
+        replica->flag.protected_rdb_channel = 0;
+        freeClient(replica);
     }
 }
 
@@ -1799,9 +2007,6 @@ void disconnectReplicas(void) {
  * This is used by freeClient() and replicationCachePrimary(). */
 void unlinkClient(client *c) {
     listNode *ln;
-
-    /* Wait for IO operations to be done before unlinking the client. */
-    waitForClientIO(c);
 
     /* If this is marked as current client unset it. */
     if (c->conn && server.current_client == c) server.current_client = NULL;
@@ -1820,8 +2025,14 @@ void unlinkClient(client *c) {
         removeClientFromPendingCommandsBatch(c);
 
         /* Check if this is a replica waiting for diskless replication (rdb pipe),
-         * in which case it needs to be cleaned from that list */
-        if (c->repl_data && c->flag.replica && c->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_END && server.rdb_pipe_conns) {
+         * in which case it needs to be cleaned from that list.
+         *
+         * Alternatively, if this is a slot migration job for an export operation, we need to
+         * always check if this was the target. The state of the migration isn't relevant since the
+         * snapshot child may take some time to die, during which the migration will continue past
+         * the snapshot state. */
+        if (c->repl_data && server.rdb_pipe_conns &&
+            ((c->flag.replica && c->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_END))) {
             int i;
             int still_alive = 0;
             for (i = 0; i < server.rdb_pipe_numconns; i++) {
@@ -1836,6 +2047,13 @@ void unlinkClient(client *c) {
                 killRDBChild();
             }
         }
+        /* Check if this is the slot migration client we are writing to in a
+         * child process*/
+        if (server.slot_migration_pipe_conn == c->conn) {
+            server.slot_migration_pipe_conn = NULL;
+            serverLog(LL_NOTICE, "Slot migration target dropped, killing fork child.");
+            killSlotMigrationChild();
+        }
         /* Only use shutdown when the fork is active and we are the parent. */
         if (server.child_type && !c->flag.repl_rdb_channel) {
             connShutdown(c->conn);
@@ -1848,21 +2066,12 @@ void unlinkClient(client *c) {
 
     /* Remove from the list of pending writes if needed. */
     if (c->flag.pending_write) {
-        if (c->io_write_state == CLIENT_IDLE) {
-            listUnlinkNode(server.clients_pending_write, &c->clients_pending_write_node);
-        } else {
-            listUnlinkNode(server.clients_pending_io_write, &c->clients_pending_write_node);
-        }
+        serverAssert(server.clients_pending_write->len > 0);
+        listUnlinkNode(server.clients_pending_write, &c->clients_pending_write_node);
         c->flag.pending_write = 0;
     }
 
-    /* Remove from the list of pending reads if needed. */
     serverAssert(c->io_read_state != CLIENT_PENDING_IO && c->io_write_state != CLIENT_PENDING_IO);
-    if (c->flag.pending_read) {
-        listUnlinkNode(server.clients_pending_io_read, &c->pending_read_list_node);
-        c->flag.pending_read = 0;
-    }
-
 
     /* When client was just unblocked because of a blocking operation,
      * remove it from the list of unblocked clients. */
@@ -1893,7 +2102,7 @@ void clearClientConnectionState(client *c) {
         c->flag.replica = 0;
     }
 
-    serverAssert(!(c->flag.replica || c->flag.primary));
+    serverAssert(!(c->flag.replica || c->flag.primary || c->slot_migration_job));
 
     if (c->flag.tracking) disableTracking(c);
     selectDb(c, 0);
@@ -1923,20 +2132,29 @@ void clearClientConnectionState(client *c) {
     c->flag.reply_skip_next = 0;
     c->flag.no_touch = 0;
     c->flag.no_evict = 0;
+    c->flag.import_source = 0;
 }
 
-void freeClient(client *c) {
+/* Free the client structure and all the data associated with it.
+ * Returns 0 if the client was not freed immediately, but scheduled for
+ * asynchronous freeing, and 1 if the client was freed immediately. */
+int freeClient(client *c) {
     listNode *ln;
 
     /* If a client is protected, yet we need to free it right now, make sure
      * to at least use asynchronous freeing. */
-    if (c->flag.protected || c->flag.protected_rdb_channel) {
+    if (c->flag.protected || c->flag.protected_rdb_channel || clientHasPendingIO(c)) {
         freeClientAsync(c);
-        return;
+        return 0;
     }
 
-    /* Wait for IO operations to be done before proceeding */
-    waitForClientIO(c);
+    /* Debug: force async free for the primary client to deterministically
+     * reproduce the deferred-free replication state clobber race. */
+    if (server.debug_force_free_primary_async && c->flag.primary) {
+        server.debug_force_free_primary_async = 0;
+        freeClientAsync(c);
+        return 0;
+    }
 
     /* For connected clients, call the disconnection event of modules hooks. */
     if (c->conn) {
@@ -1968,7 +2186,7 @@ void freeClient(client *c) {
             c->flag.close_asap = 0;
             c->flag.close_after_reply = 0;
             replicationCachePrimary(c);
-            return;
+            return 0;
         }
     }
 
@@ -1978,6 +2196,11 @@ void freeClient(client *c) {
             dualChannelServerLog(LL_NOTICE, "Replica %s rdb channel disconnected.", replicationGetReplicaName(c));
         else
             serverLog(LL_NOTICE, "Connection with replica %s lost.", replicationGetReplicaName(c));
+    }
+
+    /* Handle slot migration connection closed. */
+    if (c->slot_migration_job) {
+        clusterHandleSlotMigrationClientClose(c->slot_migration_job);
     }
 
     /* Free the query buffer */
@@ -2006,6 +2229,7 @@ void freeClient(client *c) {
 
     freeClientArgv(c);
     freeClientOriginalArgv(c);
+    discardCommandQueue(c);
     if (c->deferred_reply_errors) listRelease(c->deferred_reply_errors);
     c->deferred_reply_errors = NULL;
 #ifdef LOG_REQ_RES
@@ -2014,7 +2238,16 @@ void freeClient(client *c) {
 
     /* Remove the contribution that this client gave to our
      * incrementally computed memory usage. */
-    if (c->conn) server.stat_clients_type_memory[c->last_memory_type] -= c->last_memory_usage;
+    if (c->last_memory_usage) {
+        /* A client is only ever accounted while it has a live connection,
+         * see updateClientMemoryUsage() for details.
+         *
+         * So at this point either c->conn is still set, or we are releasing
+         * a cached_primary whose conn was already NULLed by unlinkClient()
+         * during replicationCachePrimary(). */
+        debugServerAssert(c->conn || c == server.cached_primary);
+        server.stat_clients_type_memory[c->last_memory_type] -= c->last_memory_usage;
+    }
 
     /* Unlink the client: this will close the socket, remove the I/O
      * handlers, and remove references of the client from different
@@ -2038,6 +2271,7 @@ void freeClient(client *c) {
     sdsfree(c->peerid);
     sdsfree(c->sockname);
     zfree(c);
+    return 1;
 }
 
 /* Schedule a client to free it at a safe time in the beforeSleep() function.
@@ -2050,6 +2284,22 @@ void freeClientAsync(client *c) {
     debugServerAssertWithInfo(c, NULL, listSearchKey(server.clients_to_close, c) == NULL);
     listAddNodeTail(server.clients_to_close, c);
 }
+/* Helper function to free a client or flag it for closure after current command.
+ * We can't free the current client right now because that would trigger an
+ * assert in prepareClientToWrite() when the server tries to write the response.
+ * So instead flag it for closure after the current command completes. */
+void freeClientOrCloseLater(client *c, int async) {
+    if (c == server.current_client) {
+        c->flag.close_after_command = 1;
+    } else {
+        if (async) {
+            freeClientAsync(c);
+        } else {
+            freeClient(c);
+        }
+    }
+}
+
 
 /* Log errors for invalid use and free the client in async way.
  * We will add additional information about the client to the message. */
@@ -2083,6 +2333,7 @@ void resetSharedQueryBuf(client *c) {
     c->querybuf = NULL;
     sdsclear(thread_shared_qb);
     c->qb_pos = 0;
+    c->qb_applied = 0;
 }
 
 /* Trims the client query buffer to the current position. */
@@ -2100,6 +2351,7 @@ void trimClientQueryBuffer(client *c) {
     if (c->qb_pos > 0) {
         sdsrange(c->querybuf, c->qb_pos, -1);
         c->qb_pos = 0;
+        c->qb_applied = 0;
     }
 }
 
@@ -2114,8 +2366,8 @@ void beforeNextClient(client *c) {
      * blocked client as well */
 
     /* Trim the query buffer to the current position. */
-    if (c->flag.primary) {
-        /* If the client is a primary, trim the querybuf to repl_applied,
+    if (isReplicatedClient(c)) {
+        /* If the client is replicated, trim the querybuf to repl_applied,
          * since primary client is very special, its querybuf not only
          * used to parse command, but also proxy to sub-replicas.
          *
@@ -2130,6 +2382,11 @@ void beforeNextClient(client *c) {
         if (c->repl_data->repl_applied) {
             sdsrange(c->querybuf, c->repl_data->repl_applied, -1);
             c->qb_pos -= c->repl_data->repl_applied;
+            /* qb_applied is an absolute offset, shift it together with the trimmed
+             * querybuf. commandProcessed() advances repl_applied to qb_applied after
+             * each command, so qb_applied >= repl_applied should always true here. */
+            serverAssert(c->qb_applied >= (size_t)c->repl_data->repl_applied);
+            c->qb_applied -= c->repl_data->repl_applied;
             c->repl_data->repl_applied = 0;
         }
     } else {
@@ -2138,7 +2395,7 @@ void beforeNextClient(client *c) {
     /* Handle async frees */
     /* Note: this doesn't make the server.clients_to_close list redundant because of
      * cases where we want an async free of a client other than myself. For example
-     * in ACL modifications we disconnect clients authenticated to non-existent
+     * in ACL modifications we disconnect clients authenticated to nonexistent
      * users (see ACL LOAD). */
     if (c->flag.close_asap) {
         freeClient(c);
@@ -2184,7 +2441,7 @@ int freeClientsInAsyncFreeQueue(void) {
             c->flag.protected_rdb_channel = 0;
         }
 
-        if (c->flag.protected) continue;
+        if (c->flag.protected || clientHasPendingIO(c)) continue;
 
         c->flag.close_asap = 0;
         freeClient(c);
@@ -2277,6 +2534,11 @@ static void writeToReplica(client *c) {
         size_t start = (cur_node == first_node) ? c->repl_data->ref_block_pos : 0;
         size_t len = (cur_node == last_node) ? bufpos : cur_block->used;
         len -= start;
+
+        /* For TLS, we should not call SSL_write() with num=0 */
+        if (unlikely(len == 0)) {
+            continue;
+        }
 
         iov[iovcnt].iov_base = cur_block->buf + start;
         iov[iovcnt].iov_len = len;
@@ -2534,6 +2796,9 @@ static int writevToClient(client *c) {
     /* If the static reply buffer is not empty,
      * add it to the iov array for writev() as well. */
     if (bufpos > 0) {
+        if (c->flag.buf_encoded) {
+            trackBufReferences(c->buf, bufpos, c);
+        }
         addBufferToReplyIOV(c->flag.buf_encoded, c->buf, bufpos, &reply, &buf_metadata[bufcnt++]);
     }
 
@@ -2554,6 +2819,10 @@ static int writevToClient(client *c) {
             if (used == 0) { /* empty node, skip over it. */
                 if (next == lastblock) break;
                 continue;
+            }
+
+            if (o->flag.buf_encoded) {
+                trackBufReferences(o->buf, used, c);
             }
 
             addBufferToReplyIOV(o->flag.buf_encoded, o->buf, used, &reply, &buf_metadata[bufcnt]);
@@ -2656,15 +2925,67 @@ void resetLastWrittenBuf(client *c) {
     c->io_last_written.data_len = 0;
 }
 
-/* Release references to string objects inside an encoded buffer */
-static void releaseBufReferences(char *buf, size_t bufpos) {
+/* Track BULK_STR_REF sizes.
+ * Calculates reply_len for BULK_STR_REFs if not already set, and adds to client's tracking counter.
+ * This is called from I/O thread before writing to account for actual reply sizes. */
+static void trackBufReferences(char *buf, size_t bufpos, client *c) {
+    serverAssert(c);
+
     char *ptr = buf;
     while (ptr < buf + bufpos) {
         payloadHeader *header = (payloadHeader *)ptr;
         ptr += sizeof(payloadHeader);
 
         if (header->payload_type == BULK_STR_REF) {
-            clusterSlotStatsAddNetworkBytesOutForSlot(header->slot, header->reply_len);
+            uint8_t expected = 0;
+            if (atomic_compare_exchange_strong_explicit(&header->tracked_for_cob, &expected, 1,
+                                                        memory_order_acq_rel, memory_order_acquire)) {
+                /* We claimed tracking rights */
+                bulkStrRef *str_ref = (bulkStrRef *)ptr;
+                size_t len = header->payload_len;
+                size_t total_reply_len = 0;
+                while (len > 0) {
+                    size_t str_len = sdslen(str_ref->str);
+                    uint32_t num_len = digits10(str_len);
+                    /* RESP encodes bulk strings as $<length>\r\n<data>\r\n */
+                    total_reply_len += (num_len + 3) + str_len + 2;
+                    str_ref++;
+                    len -= sizeof(bulkStrRef);
+                }
+                /* reply_len must be set here because addEncodedBufferToReplyIOV
+                 * stops early on partial writes (limit_reached) and may not check
+                 * headers after write boundary */
+                header->reply_len = total_reply_len;
+                atomic_fetch_add_explicit(&c->io_tracked_reply_len, total_reply_len, memory_order_relaxed);
+            }
+        }
+
+        ptr += header->payload_len;
+    }
+    serverAssert(ptr == buf + bufpos);
+}
+
+/* Release references to string objects inside an encoded buffer */
+static void releaseBufReferences(char *buf, size_t bufpos, client *c) {
+    char *ptr = buf;
+    while (ptr < buf + bufpos) {
+        payloadHeader *header = (payloadHeader *)ptr;
+        ptr += sizeof(payloadHeader);
+
+        if (header->payload_type == BULK_STR_REF) {
+            /* Decrement tracked reply size only if it was previously tracked.
+             * Use atomic exchange to ensure we only decrement once. */
+            if (c && atomic_exchange_explicit(&header->tracked_for_cob, 0, memory_order_acq_rel)) {
+                atomic_fetch_sub_explicit(&c->io_tracked_reply_len, header->reply_len, memory_order_relaxed);
+            }
+
+            /* When net byte tracking was disabled in the main thread (commandlog-reply-larger-than -1)
+             * at the time this reply was added, we account for cluster slot stats here in the IO thread
+             * after writing the reply. When tracking was enabled, it's already accounted in the main thread
+             * via afterCommand() -> clusterSlotStatsAddNetworkBytesOutForUserClient(). */
+            if (!header->track_bytes) {
+                clusterSlotStatsAddNetworkBytesOutForSlot(header->slot, header->reply_len);
+            }
 
             bulkStrRef *str_ref = (bulkStrRef *)ptr;
             size_t len = header->payload_len;
@@ -2684,7 +3005,7 @@ static void releaseBufReferences(char *buf, size_t bufpos) {
 
 void releaseReplyReferences(client *c) {
     if (c->bufpos > 0 && c->flag.buf_encoded) {
-        releaseBufReferences(c->buf, c->bufpos);
+        releaseBufReferences(c->buf, c->bufpos, c);
     }
 
     listIter iter;
@@ -2693,29 +3014,40 @@ void releaseReplyReferences(client *c) {
     while ((next = listNext(&iter))) {
         clientReplyBlock *o = (clientReplyBlock *)listNodeValue(next);
         if (o->flag.buf_encoded) {
-            releaseBufReferences(o->buf, o->used);
+            releaseBufReferences(o->buf, o->used, c);
         }
     }
 }
 
 static void _postWriteToClient(client *c) {
     if (c->nwritten <= 0) return;
-    server.stat_net_output_bytes += c->nwritten;
+    if (getClientType(c) == CLIENT_TYPE_SLOT_EXPORT) {
+        server.stat_net_cluster_slot_export_bytes += c->nwritten;
+    } else {
+        server.stat_net_output_bytes += c->nwritten;
+    }
 
     int last_written = 0;
     if (c->bufpos > 0) {
         /* Is this buffer is last written? */
         last_written = (c->buf == c->io_last_written.buf);
+        /* Bookmark desync detector (debug builds only); see the comment in the
+         * reply-list loop below and https://github.com/valkey-io/valkey/pull/4060 */
+        if (last_written) {
+            debugServerAssert(c->io_last_written.bufpos == 0 || c->io_last_written.bufpos <= c->bufpos);
+        }
         /* If buffer is completely written */
         if (!last_written || c->bufpos == c->io_last_written.bufpos) {
             /* If encoded then release references to bulk string objects */
-            if (c->flag.buf_encoded) releaseBufReferences(c->buf, c->bufpos);
+            if (c->flag.buf_encoded) releaseBufReferences(c->buf, c->bufpos, c);
             /* Reset buffer metadata */
             c->bufpos = 0;
             c->flag.buf_encoded = 0;
             c->last_header = NULL;
             /* If completely written buffer is last written then reset last written state */
             if (last_written) resetLastWrittenBuf(c);
+        } else {
+            c->last_header = NULL;
         }
         if (last_written) return;
     }
@@ -2727,11 +3059,21 @@ static void _postWriteToClient(client *c) {
         clientReplyBlock *o = listNodeValue(next);
         /* Is this buffer is last written? */
         last_written = (o->buf == c->io_last_written.buf);
+        /* Bookmark desync detector (debug builds only): for the bookmarked
+         * block, the recorded in-memory write position (bufpos) must never
+         * exceed the block's current content (used); a violation means the
+         * block was freed/shrunk/recycled while the bookmark was live. Catches
+         * any complete-write desync (plain or encoded); a partial write stores
+         * bufpos == 0 and is intentionally not checked here. See the PR for the
+         * full rationale: https://github.com/valkey-io/valkey/pull/4060 */
+        if (last_written) {
+            debugServerAssert(c->io_last_written.bufpos == 0 || c->io_last_written.bufpos <= o->used);
+        }
         /* If buffer is completely written */
         if (!last_written || o->used == c->io_last_written.bufpos) {
             c->reply_bytes -= o->size;
             /* If encoded then release references to bulk string objects */
-            if (o->flag.buf_encoded) releaseBufReferences(o->buf, o->used);
+            if (o->flag.buf_encoded) releaseBufReferences(o->buf, o->used, c);
             listDelNode(c->reply, next);
             /* If completely written buffer is last written then reset last written state */
             if (last_written) resetLastWrittenBuf(c);
@@ -2763,11 +3105,11 @@ int postWriteToClient(client *c) {
     }
     if (c->nwritten > 0) {
         c->net_output_bytes += c->nwritten;
-        /* For clients representing primaries we don't count sending data
-         * as an interaction, since we always send REPLCONF ACK commands
+        /* For replicated clients we don't count sending data
+         * as an interaction, since we always send ACK commands
          * that take some time to just fill the socket output buffer.
          * We just rely on data / pings received for timeout detection. */
-        if (!c->flag.primary) c->last_interaction = server.unixtime;
+        if (!isReplicatedClient(c)) c->last_interaction = server.unixtime;
     }
     if (!clientHasPendingReplies(c)) {
         resetLastWrittenBuf(c);
@@ -2815,9 +3157,13 @@ void sendReplyToClient(connection *conn) {
 
 void handleQbLimitReached(client *c) {
     sds ci = catClientInfoString(sdsempty(), c, server.hide_user_data_from_log), bytes = sdsempty();
-    bytes = sdscatrepr(bytes, c->querybuf, 64);
-    serverLog(LL_WARNING, "Closing client that reached max query buffer length: %s (qbuf initial bytes: %s)", ci,
-              bytes);
+    if (server.hide_user_data_from_log) {
+        serverLog(LL_WARNING, "Closing client that reached max query buffer length: %s", ci);
+    } else {
+        bytes = sdscatrepr(bytes, c->querybuf, 64);
+        serverLog(LL_WARNING, "Closing client that reached max query buffer length: %s (qbuf initial bytes: %s)", ci,
+                  bytes);
+    }
     sdsfree(ci);
     sdsfree(bytes);
     freeClientAsync(c);
@@ -2855,9 +3201,13 @@ int handleReadResult(client *c) {
 
     c->last_interaction = server.unixtime;
     c->net_input_bytes += c->nread;
-    if (c->flag.primary) {
+    if (isReplicatedClient(c)) {
         c->repl_data->read_reploff += c->nread;
-        server.stat_net_repl_input_bytes += c->nread;
+        if (getClientType(c) == CLIENT_TYPE_PRIMARY) {
+            server.stat_net_repl_input_bytes += c->nread;
+        } else {
+            server.stat_net_cluster_slot_import_bytes += c->nread;
+        }
     } else {
         server.stat_net_input_bytes += c->nread;
     }
@@ -2900,10 +3250,19 @@ void handleParseError(client *c) {
     } else if (flags & READ_FLAGS_ERROR_UNBALANCED_QUOTES) {
         addReplyError(c, "Protocol error: unbalanced quotes in request");
         setProtocolError("unbalanced quotes in inline request", c);
-    } else if (flags & READ_FLAGS_ERROR_UNEXPECTED_INLINE_FROM_PRIMARY) {
-        serverLog(LL_WARNING, "WARNING: Receiving inline protocol from primary, primary stream corruption? Closing the "
-                              "primary connection and discarding the cached primary.");
-        setProtocolError("Master using the inline protocol. Desync?", c);
+    } else if (flags & READ_FLAGS_ERROR_INVALID_CRLF) {
+        addReplyError(c, "Protocol error: invalid CRLF in request");
+        setProtocolError("invalid CRLF in request", c);
+    } else if (flags & READ_FLAGS_ERROR_UNEXPECTED_INLINE_FROM_REPLICATED_CLIENT) {
+        if (getClientType(c) == CLIENT_TYPE_SLOT_IMPORT) {
+            serverLog(LL_WARNING, "WARNING: Receiving inline protocol from slot import, import stream corruption? Closing the "
+                                  "slot import connection.");
+            setProtocolError("Import using the inline protocol. Desync?", c);
+        } else {
+            serverLog(LL_WARNING, "WARNING: Receiving inline protocol from primary, primary stream corruption? Closing the "
+                                  "primary connection and discarding the cached primary.");
+            setProtocolError("Master using the inline protocol. Desync?", c);
+        }
     } else {
         serverAssertWithInfo(c, NULL, "Unknown parsing error");
     }
@@ -2914,7 +3273,8 @@ int isParsingError(client *c) {
                             READ_FLAGS_ERROR_INVALID_MULTIBULK_LEN | READ_FLAGS_ERROR_UNAUTHENTICATED_MULTIBULK_LEN |
                             READ_FLAGS_ERROR_UNAUTHENTICATED_BULK_LEN | READ_FLAGS_ERROR_MBULK_INVALID_BULK_LEN |
                             READ_FLAGS_ERROR_BIG_BULK_COUNT | READ_FLAGS_ERROR_MBULK_UNEXPECTED_CHARACTER |
-                            READ_FLAGS_ERROR_UNEXPECTED_INLINE_FROM_PRIMARY | READ_FLAGS_ERROR_UNBALANCED_QUOTES);
+                            READ_FLAGS_ERROR_UNEXPECTED_INLINE_FROM_REPLICATED_CLIENT | READ_FLAGS_ERROR_UNBALANCED_QUOTES |
+                            READ_FLAGS_ERROR_INVALID_CRLF);
 }
 
 /* This function is called after the query-buffer was parsed.
@@ -2934,12 +3294,14 @@ parseResult handleParseResults(client *c) {
         /* in case the client's query was an empty line we will ignore it and proceed to process the rest of the buffer
          * if any */
         resetClient(c);
+        c->reqtype = 0;
         return PARSE_OK;
     }
 
     if (c->read_flags & READ_FLAGS_PARSING_NEGATIVE_MBULK_LEN) {
         /* Multibulk processing could see a <= 0 length. */
         resetClient(c);
+        c->reqtype = 0;
         return PARSE_OK;
     }
 
@@ -2954,67 +3316,43 @@ parseResult handleParseResults(client *c) {
  * This function handles various post-write tasks, including updating client state,
  * allow_async_writes - A flag indicating whether I/O threads can handle pending writes for this client.
  * returns 1 if processing completed successfully, 0 if processing is skipped. */
-int processClientIOWriteDone(client *c, int allow_async_writes) {
-    /* memory barrier acquire to get the latest client state */
-    atomic_thread_fence(memory_order_acquire);
-    /* If a client is protected, don't proceed to check the write results as it may trigger conn close. */
-    if (c->flag.protected) return 0;
-
-    listUnlinkNode(server.clients_pending_io_write, &c->clients_pending_write_node);
-    c->flag.pending_write = 0;
+void processClientIOWriteDone(client *c) {
+    if (c->io_write_state == CLIENT_IDLE) return; /* Already handled */
+    serverAssert(c->io_write_state == CLIENT_COMPLETED_IO);
     c->io_write_state = CLIENT_IDLE;
 
     /* Don't post-process-writes to clients that are going to be closed anyway. */
-    if (c->flag.close_asap) return 0;
+    if (c->flag.close_asap) return;
 
-    /* Update processed count on server */
-    server.stat_io_writes_processed += 1;
+    int mask = 0;
+    if (c->io_read_state == CLIENT_PENDING_IO || c->io_read_state == CLIENT_COMPLETED_IO)
+        mask |= CONN_POSTPONE_READ;
 
-    connSetPostponeUpdateState(c->conn, 0);
+    connSetPostponeUpdateState(c->conn, mask);
+    if (postWriteToClient(c) == C_ERR) return;
+
+    /* connUpdateState may sync-invoke handlers for some transports (e.g. RDMA)
+     * and free the client; only then re-fetch it by id after the update. */
+    int may_invoke_handlers = connUpdateStateMayInvokeHandlers(c->conn);
+    uint64_t id = c->id;
     connUpdateState(c->conn);
-    if (postWriteToClient(c) == C_ERR) {
-        return 1;
+    if (may_invoke_handlers) {
+        c = lookupClientByID(id);
+        if (!c || !c->conn) return;
     }
 
-    if (clientHasPendingReplies(c)) {
-        if (c->write_flags & WRITE_FLAGS_WRITE_ERROR) {
-            /* Install the write handler if there are pending writes in some of the clients as a result of not being
-             * able to write everything in one go. */
-            installClientWriteHandler(c);
-        } else {
-            /* If we can send the client to the I/O thread, let it handle the write. */
-            if (allow_async_writes && trySendWriteToIOThreads(c) == C_OK) return 1;
-            /* Try again in the next eventloop */
-            putClientInPendingWriteQueue(c);
-        }
+    if (!clientHasPendingReplies(c)) return;
+
+    if (c->write_flags & WRITE_FLAGS_WRITE_ERROR) {
+        /* Install the write handler if there are pending writes in some of the clients as a result of not being
+         * able to write everything in one go. */
+        installClientWriteHandler(c);
+    } else {
+        /* If we can send the client to the I/O thread, let it handle the write. */
+        if (trySendWriteToIOThreads(c) == C_OK) return;
+        /* Try again in the next eventloop */
+        putClientInPendingWriteQueue(c);
     }
-
-    return 1;
-}
-
-/* This function handles the post-processing of I/O write operations that have been
- * completed for clients. It iterates through the list of clients with pending I/O
- * writes and performs necessary actions based on their current state.
- *
- * Returns The number of clients processed during this function call. */
-int processIOThreadsWriteDone(void) {
-    if (listLength(server.clients_pending_io_write) == 0) return 0;
-    int processed = 0;
-    listNode *ln;
-
-    listNode *next = listFirst(server.clients_pending_io_write);
-    while (next) {
-        ln = next;
-        next = listNextNode(ln);
-        client *c = listNodeValue(ln);
-
-        /* Client is still waiting for a pending I/O - skip it */
-        if (c->io_write_state == CLIENT_PENDING_IO || c->io_read_state == CLIENT_PENDING_IO) continue;
-
-        processed += processClientIOWriteDone(c, 1);
-    }
-
-    return processed;
 }
 
 /* This function is called just before entering the event loop, in the hope
@@ -3026,17 +3364,12 @@ int handleClientsWithPendingWrites(void) {
     int pending_writes = listLength(server.clients_pending_write);
     if (pending_writes == 0) return processed; /* Return ASAP if there are no clients. */
 
-    /* Adjust the number of I/O threads based on the number of pending writes this is required in case pending_writes >
-     * poll_events (for example in pubsub) */
-    adjustIOThreadsByEventLoad(pending_writes, 1);
-
     listIter li;
     listNode *ln;
     listRewind(server.clients_pending_write, &li);
     while ((ln = listNext(&li))) {
         client *c = listNodeValue(ln);
-        c->flag.pending_write = 0;
-        listUnlinkNode(server.clients_pending_write, ln);
+        serverAssert(c->flag.pending_write);
 
         /* If a client is protected, don't do anything,
          * that may trigger write error or recreate handler. */
@@ -3045,13 +3378,18 @@ int handleClientsWithPendingWrites(void) {
         /* Don't write to clients that are going to be closed anyway. */
         if (c->flag.close_asap) continue;
 
+        if (c->io_read_state == CLIENT_PENDING_IO) continue;
+
+        c->flag.pending_write = 0;
+        listUnlinkNode(server.clients_pending_write, ln);
+
         if (!clientHasPendingReplies(c)) continue;
 
         /* If we can send the client to the I/O thread, let it handle the write. */
         if (trySendWriteToIOThreads(c) == C_OK) continue;
 
         /* We can't write to the client while IO operation is in progress. */
-        if (c->io_write_state != CLIENT_IDLE || c->io_read_state != CLIENT_IDLE) continue;
+        if (c->io_write_state != CLIENT_IDLE) continue;
 
         processed++;
 
@@ -3074,11 +3412,9 @@ void resetClient(client *c) {
 
     freeClientArgv(c);
     freeClientOriginalArgv(c);
+    c->redact_arg_bitmap = 0;
     c->cur_script = NULL;
-    c->reqtype = 0;
-    c->multibulklen = 0;
     c->net_input_bytes_curr_cmd = 0;
-    c->bulklen = -1;
     c->slot = -1;
     c->flag.executing_command = 0;
     c->flag.replication_done = 0;
@@ -3113,6 +3449,11 @@ void resetClient(client *c) {
         c->flag.reply_skip = 1;
         c->flag.reply_skip_next = 0;
     }
+
+    /* Clear the borrowed-argv flag: the argv array was only borrowed for the
+     * duration of a single VM_CallArgv dispatch; after execution it no longer
+     * points to the caller's array. */
+    c->flag.argv_borrowed = 0;
 }
 
 void resetClientIOState(client *c) {
@@ -3132,8 +3473,7 @@ void initSharedQueryBuf(void) {
     sdsclear(thread_shared_qb);
 }
 
-void freeSharedQueryBuf(void *dummy) {
-    UNUSED(dummy);
+void freeSharedQueryBuf(void) {
     sdsfree(thread_shared_qb);
     thread_shared_qb = NULL;
 }
@@ -3171,16 +3511,16 @@ void unprotectClient(client *c) {
     }
 }
 
-/* Like processMultibulkBuffer(), but for the inline protocol instead of RESP,
+/* Like parseMultibulkBuffer(), but for the inline protocol instead of RESP,
  * this function consumes the client query buffer and creates a command ready
  * to be executed inside the client structure.
  * Sets the client read_flags to indicate the parsing outcome. */
-void processInlineBuffer(client *c) {
+void parseInlineBuffer(client *c) {
     char *newline;
     int argc, j, linefeed_chars = 1;
-    sds *argv, aux;
+    sds *argv;
     size_t querylen;
-    int is_primary = c->read_flags & READ_FLAGS_PRIMARY;
+    int is_replicated = c->read_flags & READ_FLAGS_REPLICATED;
 
     /* Search for end of line */
     newline = strchr(c->querybuf + c->qb_pos, '\n');
@@ -3198,9 +3538,7 @@ void processInlineBuffer(client *c) {
 
     /* Split the input buffer up to the \r\n */
     querylen = newline - (c->querybuf + c->qb_pos);
-    aux = sdsnewlen(c->querybuf + c->qb_pos, querylen);
-    argv = sdssplitargs(aux, &argc);
-    sdsfree(aux);
+    argv = sdsnsplitargs(c->querybuf + c->qb_pos, querylen, &argc);
     if (argv == NULL) {
         c->read_flags |= READ_FLAGS_ERROR_UNBALANCED_QUOTES;
         return;
@@ -3217,16 +3555,16 @@ void processInlineBuffer(client *c) {
      *
      * However there is an exception: primaries may send us just a newline
      * to keep the connection active. */
-    if (querylen != 0 && is_primary) {
+    if (querylen != 0 && is_replicated) {
         sdsfreesplitres(argv, argc);
-        c->read_flags |= READ_FLAGS_ERROR_UNEXPECTED_INLINE_FROM_PRIMARY;
+        c->read_flags |= READ_FLAGS_ERROR_UNEXPECTED_INLINE_FROM_REPLICATED_CLIENT;
         return;
     }
 
     /* Move querybuffer position to the next query in the buffer. */
     c->qb_pos += querylen + linefeed_chars;
 
-    /* Setup argv array on client structure */
+    /* Set up argv array on client structure */
     if (argc) {
         if (c->argv) zfree(c->argv);
         c->argv_len = argc;
@@ -3259,6 +3597,9 @@ void processInlineBuffer(client *c) {
      * */
     c->net_input_bytes_curr_cmd = (c->argv_len_sum + (c->argc - 1) + 2);
     c->read_flags |= READ_FLAGS_PARSING_COMPLETED;
+    /* Record qb_pos so commandProcessed() can update reploff precisely. */
+    c->qb_applied = c->qb_pos;
+    c->reqtype = 0;
 }
 
 /* Helper function. Record protocol error details in server log,
@@ -3266,7 +3607,7 @@ void processInlineBuffer(client *c) {
  * CLIENT_PROTOCOL_ERROR. */
 #define PROTO_DUMP_LEN 128
 static void setProtocolError(const char *errstr, client *c) {
-    if (server.verbosity <= LL_VERBOSE || c->flag.primary) {
+    if (server.verbosity <= LL_VERBOSE || isReplicatedClient(c)) {
         sds client = catClientInfoString(sdsempty(), c, server.hide_user_data_from_log);
 
         /* Sample some protocol to given an idea about what was inside. */
@@ -3291,7 +3632,7 @@ static void setProtocolError(const char *errstr, client *c) {
             }
         }
         /* Log all the client and protocol info. */
-        int loglevel = (c->flag.primary) ? LL_WARNING : LL_VERBOSE;
+        int loglevel = (isReplicatedClient(c)) ? LL_WARNING : LL_VERBOSE;
         serverLog(loglevel, "Protocol error (%s) from client: %s. Query buffer: %s", errstr, client, buf);
         sdsfree(client);
     }
@@ -3300,34 +3641,101 @@ static void setProtocolError(const char *errstr, client *c) {
 }
 
 /* Process the query buffer for client 'c', setting up the client argument
- * vector for command execution.
+ * vector for command execution and parses additional commands into a queue.
  * Sets the client's read_flags to indicate the parsing outcome.
  *
  * This function is called if processInputBuffer() detects that the next
  * command is in RESP format, so the first byte in the command is found
- * to be '*'. Otherwise for inline commands processInlineBuffer() is called. */
-void processMultibulkBuffer(client *c) {
+ * to be '*'. Otherwise, for inline commands parseInlineBuffer() is called. */
+void parseMultibulkBuffer(client *c) {
+    int flag = parseMultibulk(c, &c->argc, &c->argv, &c->argv_len,
+                              &c->argv_len_sum, &c->net_input_bytes_curr_cmd);
+    c->read_flags |= flag;
+
+    /* Record qb_pos for commandProcessed(). Written unconditionally because a
+     * client may become replicated mid-command (e.g. CLUSTER SYNCSLOTS ESTABLISH
+     * installs slot_migration_job inside its own handler). */
+    if (c->read_flags & READ_FLAGS_PARSING_COMPLETED) c->qb_applied = c->qb_pos;
+
+    if (c->read_flags & READ_FLAGS_AUTH_REQUIRED) {
+        /* Execute client's AUTH command before parsing more, because it affects
+         * parser limits for max allowed bulk and multibulk lengths. */
+        return;
+    }
+
+    /* Try parsing pipelined commands. */
+    cmdQueue *queue = &c->cmd_queue;
+    serverAssert(queue->len == 0);
+    while ((flag & READ_FLAGS_PARSING_COMPLETED) &&
+           sdslen(c->querybuf) > c->qb_pos &&
+           c->querybuf[c->qb_pos] == '*') {
+        c->reqtype = PROTO_REQ_MULTIBULK;
+        /* Push a new parser state to the command queue */
+        if (queue->len == queue->cap) {
+            if (queue->cap == 0) {
+                queue->cap = COMMAND_QUEUE_MIN_CAPACITY;
+            } else if (queue->cap <= 512) {
+                queue->cap *= 2;
+            } else {
+                break; /* Limit the length of the command queue. */
+            }
+            queue->cmds = zrealloc(queue->cmds, queue->cap * sizeof(parsedCommand));
+        }
+        parsedCommand *p = &queue->cmds[queue->len++];
+        memset(p, 0, sizeof(*p));
+        flag = parseMultibulk(c, &p->argc, &p->argv, &p->argv_len,
+                              &p->argv_len_sum, &p->input_bytes);
+        p->read_flags = flag;
+        p->slot = -1;
+    }
+}
+
+/* Incremental parsing of a command in the client's query buffer.
+ *
+ * Parser state related to the input buffer are per client and stored in the
+ * client struct: querybuf, qb_len, multibulklen, bulklen, querybuf_peak.
+ *
+ * Parser state for the command structures is supplied using pointer arguments,
+ * which are also used for returning the parsed command or error: argv,
+ * argv_len, argc, read_flag.
+ *
+ * Returns a non-zero if parsing is complete (either error or success) and zero
+ * if the input buffer doesn't contain a enough data to parse a complete
+ * command. If non-zero is returned, the returned value is a read flag, either
+ * READ_FLAGS_PARSING_COMPLETED on success or one of the READ_FLAGS_ERROR_(...)
+ * values on parse error. */
+static int parseMultibulk(client *c,
+                          int *argc,
+                          robj ***argv,
+                          int *argv_len,
+                          size_t *argv_len_sum,
+                          unsigned long long *net_input_bytes_curr_cmd) {
     char *newline = NULL;
     int ok;
     long long ll;
-    int is_primary = c->read_flags & READ_FLAGS_PRIMARY;
+    int is_replicated = c->read_flags & READ_FLAGS_REPLICATED;
     int auth_required = c->read_flags & READ_FLAGS_AUTH_REQUIRED;
 
     if (c->multibulklen == 0) {
-        /* The client should have been reset */
-        serverAssertWithInfo(c, NULL, c->argc == 0);
+        /* The client (argc) should have been reset */
+        serverAssertWithInfo(c, NULL, *argc == 0);
 
         /* Multi bulk length cannot be read without a \r\n */
         newline = memchr(c->querybuf + c->qb_pos, '\r', sdslen(c->querybuf) - c->qb_pos);
         if (newline == NULL) {
             if (sdslen(c->querybuf) - c->qb_pos > PROTO_INLINE_MAX_SIZE) {
-                c->read_flags |= READ_FLAGS_ERROR_BIG_MULTIBULK;
+                return READ_FLAGS_ERROR_BIG_MULTIBULK;
             }
-            return;
+            return 0;
         }
 
         /* Buffer should also contain \n */
-        if (newline - (c->querybuf + c->qb_pos) > (ssize_t)(sdslen(c->querybuf) - c->qb_pos - 2)) return;
+        if (newline - (c->querybuf + c->qb_pos) > (ssize_t)(sdslen(c->querybuf) - c->qb_pos - 2)) return 0;
+
+        /* Check that what follows \r is a real \n */
+        if (unlikely(newline[1] != '\n')) {
+            return READ_FLAGS_ERROR_INVALID_CRLF;
+        }
 
         /* We know for sure there is a whole line since newline != NULL,
          * so go ahead and find out the multi bulk length. */
@@ -3335,27 +3743,25 @@ void processMultibulkBuffer(client *c) {
         size_t multibulklen_slen = newline - (c->querybuf + 1 + c->qb_pos);
         ok = string2ll(c->querybuf + 1 + c->qb_pos, multibulklen_slen, &ll);
         if (!ok || ll > INT_MAX) {
-            c->read_flags |= READ_FLAGS_ERROR_INVALID_MULTIBULK_LEN;
-            return;
+            return READ_FLAGS_ERROR_INVALID_MULTIBULK_LEN;
         } else if (ll > 10 && auth_required) {
-            c->read_flags |= READ_FLAGS_ERROR_UNAUTHENTICATED_MULTIBULK_LEN;
-            return;
+            return READ_FLAGS_ERROR_UNAUTHENTICATED_MULTIBULK_LEN;
         }
 
         c->qb_pos = (newline - c->querybuf) + 2;
 
         if (ll <= 0) {
-            c->read_flags |= READ_FLAGS_PARSING_NEGATIVE_MBULK_LEN;
-            return;
+            return READ_FLAGS_PARSING_NEGATIVE_MBULK_LEN;
         }
 
         c->multibulklen = ll;
+        c->bulklen = -1;
 
-        /* Setup argv array on client structure */
-        if (c->argv) zfree(c->argv);
-        c->argv_len = min(c->multibulklen, 1024);
-        c->argv = zmalloc(sizeof(robj *) * c->argv_len);
-        c->argv_len_sum = 0;
+        /* Set up argv array */
+        if (*argv) zfree(*argv);
+        *argv_len = min(c->multibulklen, 1024);
+        *argv = zmalloc(sizeof(robj *) * *argv_len);
+        *argv_len_sum = 0;
 
         /* Per-slot network bytes-in calculation.
          *
@@ -3388,7 +3794,7 @@ void processMultibulkBuffer(client *c) {
          *
          * The 1st component is calculated within the below line.
          * */
-        c->net_input_bytes_curr_cmd += (multibulklen_slen + 3);
+        *net_input_bytes_curr_cmd += (multibulklen_slen + 3);
     }
 
     serverAssertWithInfo(c, NULL, c->multibulklen > 0);
@@ -3398,33 +3804,34 @@ void processMultibulkBuffer(client *c) {
             newline = memchr(c->querybuf + c->qb_pos, '\r', sdslen(c->querybuf) - c->qb_pos);
             if (newline == NULL) {
                 if (sdslen(c->querybuf) - c->qb_pos > PROTO_INLINE_MAX_SIZE) {
-                    c->read_flags |= READ_FLAGS_ERROR_BIG_BULK_COUNT;
-                    return;
+                    return READ_FLAGS_ERROR_BIG_BULK_COUNT;
                 }
                 break;
             }
 
             /* Buffer should also contain \n */
-            if (newline - (c->querybuf + c->qb_pos) > (ssize_t)(sdslen(c->querybuf) - c->qb_pos - 2)) break;
+            if (newline - (c->querybuf + c->qb_pos) > (ssize_t)(sdslen(c->querybuf) - c->qb_pos - 2)) return 0;
 
             if (c->querybuf[c->qb_pos] != '$') {
-                c->read_flags |= READ_FLAGS_ERROR_MBULK_UNEXPECTED_CHARACTER;
-                return;
+                return READ_FLAGS_ERROR_MBULK_UNEXPECTED_CHARACTER;
+            }
+
+            /* Check that what follows \r is a real \n */
+            if (unlikely(newline[1] != '\n')) {
+                return READ_FLAGS_ERROR_INVALID_CRLF;
             }
 
             size_t bulklen_slen = newline - (c->querybuf + c->qb_pos + 1);
             ok = string2ll(c->querybuf + c->qb_pos + 1, bulklen_slen, &ll);
-            if (!ok || ll < 0 || (!(is_primary) && ll > server.proto_max_bulk_len)) {
-                c->read_flags |= READ_FLAGS_ERROR_MBULK_INVALID_BULK_LEN;
-                return;
+            if (!ok || ll < 0 || (!(is_replicated) && ll > server.proto_max_bulk_len)) {
+                return READ_FLAGS_ERROR_MBULK_INVALID_BULK_LEN;
             } else if (ll > 16384 && auth_required) {
-                c->read_flags |= READ_FLAGS_ERROR_UNAUTHENTICATED_BULK_LEN;
-                return;
+                return READ_FLAGS_ERROR_UNAUTHENTICATED_BULK_LEN;
             }
 
             c->qb_pos = newline - c->querybuf + 2;
-            if (!(is_primary) && ll >= PROTO_MBULK_BIG_ARG) {
-                /* When the client is not a primary client (because primary
+            if (!(is_replicated) && ll >= PROTO_MBULK_BIG_ARG) {
+                /* When the client is not a replicated client (because replicated
                  * client's querybuf can only be trimmed after data applied
                  * and sent to replicas).
                  *
@@ -3444,6 +3851,7 @@ void processMultibulkBuffer(client *c) {
                     }
                     sdsrange(c->querybuf, c->qb_pos, -1);
                     c->qb_pos = 0;
+                    c->qb_applied = 0;
                     /* Hint the sds library about the amount of bytes this string is
                      * going to contain. */
                     c->querybuf = sdsMakeRoomForNonGreedy(c->querybuf, ll + 2 - sdslen(c->querybuf));
@@ -3454,7 +3862,7 @@ void processMultibulkBuffer(client *c) {
             }
             c->bulklen = ll;
             /* Per-slot network bytes-in calculation, 2nd component. */
-            c->net_input_bytes_curr_cmd += (bulklen_slen + 3);
+            *net_input_bytes_curr_cmd += (bulklen_slen + 3);
         }
 
         /* Read bulk argument */
@@ -3463,26 +3871,33 @@ void processMultibulkBuffer(client *c) {
             break;
         } else {
             /* Check if we have space in argv, grow if needed */
-            if (c->argc >= c->argv_len) {
-                c->argv_len = min(c->argv_len < INT_MAX / 2 ? c->argv_len * 2 : INT_MAX, c->argc + c->multibulklen);
-                c->argv = zrealloc(c->argv, sizeof(robj *) * c->argv_len);
+            if (*argc >= *argv_len) {
+                *argv_len = min(*argv_len < INT_MAX / 2 ? (*argv_len) * 2 : INT_MAX,
+                                *argc + c->multibulklen);
+                *argv = zrealloc(*argv, sizeof(robj *) * (*argv_len));
             }
 
-            /* Optimization: if a non-primary client's buffer contains JUST our bulk element
+            /* Check that what follows argv is a real \r\n */
+            if (unlikely(c->querybuf[c->qb_pos + c->bulklen] != '\r' ||
+                         c->querybuf[c->qb_pos + c->bulklen + 1] != '\n')) {
+                return READ_FLAGS_ERROR_INVALID_CRLF;
+            }
+
+            /* Optimization: if a non-replicated client's buffer contains JUST our bulk element
              * instead of creating a new object by *copying* the sds we
              * just use the current sds string. */
-            if (!is_primary && c->qb_pos == 0 && c->bulklen >= PROTO_MBULK_BIG_ARG &&
+            if (!is_replicated && c->qb_pos == 0 && c->bulklen >= PROTO_MBULK_BIG_ARG &&
                 sdslen(c->querybuf) == (size_t)(c->bulklen + 2)) {
-                c->argv[c->argc++] = createObject(OBJ_STRING, c->querybuf);
-                c->argv_len_sum += c->bulklen;
+                (*argv)[(*argc)++] = createObject(OBJ_STRING, c->querybuf);
+                *argv_len_sum += c->bulklen;
                 sdsIncrLen(c->querybuf, -2); /* remove CRLF */
                 /* Assume that if we saw a fat argument we'll see another one
                  * likely... */
                 c->querybuf = sdsnewlen(SDS_NOINIT, c->bulklen + 2);
                 sdsclear(c->querybuf);
             } else {
-                c->argv[c->argc++] = createStringObject(c->querybuf + c->qb_pos, c->bulklen);
-                c->argv_len_sum += c->bulklen;
+                (*argv)[(*argc)++] = createStringObject(c->querybuf + c->qb_pos, c->bulklen);
+                *argv_len_sum += c->bulklen;
                 c->qb_pos += c->bulklen + 2;
             }
             c->bulklen = -1;
@@ -3490,12 +3905,14 @@ void processMultibulkBuffer(client *c) {
         }
     }
 
-    /* We're done when c->multibulk == 0 */
+    /* We're done when c->multibulklen == 0 */
     if (c->multibulklen == 0) {
         /* Per-slot network bytes-in calculation, 3rd and 4th components. */
-        c->net_input_bytes_curr_cmd += (c->argv_len_sum + (c->argc * 2));
-        c->read_flags |= READ_FLAGS_PARSING_COMPLETED;
+        *net_input_bytes_curr_cmd += (*argv_len_sum + (*argc * 2));
+        c->reqtype = 0;
+        return READ_FLAGS_PARSING_COMPLETED;
     }
+    return 0;
 }
 
 /* Perform necessary tasks after a command was executed:
@@ -3520,18 +3937,26 @@ void commandProcessed(client *c) {
     if (!c->repl_data) return;
 
     long long prev_offset = c->repl_data->reploff;
-    if (c->flag.primary && !c->flag.multi) {
-        /* Update the applied replication offset of our primary. */
-        c->repl_data->reploff = c->repl_data->read_reploff - sdslen(c->querybuf) + c->qb_pos;
+    if (isReplicatedClient(c) && !c->flag.multi) {
+        /* Advance reploff by exactly this command's bytes. Use qb_applied
+         * (current command's right boundary) instead of qb_pos, which may
+         * have run ahead due to multi-command parsing. */
+        c->repl_data->reploff = c->repl_data->read_reploff - sdslen(c->querybuf) + c->qb_applied;
+        /* Every applied non-MULTI command should consume >0 bytes from the
+         * replication stream, so reploff must strictly advance. A no-op
+         * advance means qb_applied was not maintained for the command we
+         * just processed (e.g. a command was backfilled into querybuf without
+         * updating qb_applied). */
+        serverAssert(c->repl_data->reploff > prev_offset);
     }
 
-    /* If the client is a primary we need to compute the difference
+    /* If the client is replicated we need to compute the difference
      * between the applied offset before and after processing the buffer,
      * to understand how much of the replication stream was actually
-     * applied to the primary state: this quantity, and its corresponding
+     * applied to the state: this quantity, and its corresponding
      * part of the replication stream, will be propagated to the
      * sub-replicas and to the replication backlog. */
-    if (c->flag.primary) {
+    if (isReplicatedClient(c)) {
         long long applied = c->repl_data->reploff - prev_offset;
         if (applied) {
             replicationFeedStreamFromPrimaryStream(c->querybuf + c->repl_data->repl_applied, applied);
@@ -3579,6 +4004,10 @@ int processCommandAndResetClient(client *c) {
  * the client. Returns C_ERR if the client is no longer valid after executing
  * the command, and C_OK for all other cases. */
 int processPendingCommandAndInputBuffer(client *c) {
+    /* Blocked clients are resumed via processUnblockedClients(); skip them here
+     * to avoid re-entering processCommand() while pending_command is intentionally left set. */
+    if (c->flag.blocked) return C_OK;
+
     /* Notice, this code is also called from 'processUnblockedClients'.
      * But in case of a module blocked client (see RM_Call 'K' flag) we do not reach this code path.
      * So whenever we change the code here we need to consider if we need this change on module
@@ -3590,23 +4019,34 @@ int processPendingCommandAndInputBuffer(client *c) {
         }
     }
 
-    /* Now process client if it has more data in it's buffer.
+    /* Now process client if it has more commands queued and/or more data in
+     * it's buffer.
      *
      * Note: when a primary client steps into this function,
      * it can always satisfy this condition, because its querybuf
      * contains data not applied. */
-    if (c->querybuf && sdslen(c->querybuf) > 0) {
+    if ((c->querybuf && sdslen(c->querybuf) > 0) || c->cmd_queue.off < c->cmd_queue.len) {
         return processInputBuffer(c);
     }
     return C_OK;
 }
 
-/* Parse a single command from the query buf.
+/* Parse one or more commands from the query buf.
  *
  * This function may be called from the main thread or from the I/O thread.
  *
- * Sets the client's read_flags to indicate the parsing outcome */
-void parseCommand(client *c) {
+ * Sets the client's read_flags to indicate the parsing outcome. If multiple
+ * commands could be parsed, additional parsed commands are stored in the
+ * client's command queue. */
+void parseInputBuffer(client *c) {
+    /* The command queue must be emptied before parsing. */
+    serverAssert(c->cmd_queue.len == 0);
+
+    /* Hold off transport read handlers for the duration of parsing (RDMA update_state
+     * may otherwise re-enter readQueryFromClient and corrupt cmd_queue). */
+    connection *conn = c->conn;
+    if (conn) connSetPostponeUpdateState(conn, clientConnPostponeMaskFromIOState(c) | CONN_POSTPONE_READ);
+
     /* Determine request type when unknown. */
     if (!c->reqtype) {
         if (c->querybuf[c->qb_pos] == '*') {
@@ -3617,11 +4057,40 @@ void parseCommand(client *c) {
     }
 
     if (c->reqtype == PROTO_REQ_INLINE) {
-        processInlineBuffer(c);
+        parseInlineBuffer(c);
     } else if (c->reqtype == PROTO_REQ_MULTIBULK) {
-        processMultibulkBuffer(c);
+        parseMultibulkBuffer(c);
     } else {
         serverPanic("Unknown request type");
+    }
+
+    /* Restore only IO-state postpone; do not hold READ for cmd_queue here.
+     * Pipeline commands are drained by processInputBuffer; leaving READ postponed
+     * without a later handleReadJobs/connUpdateState clear stalls RDMA rx. */
+    if (conn) connSetPostponeUpdateState(conn, clientConnPostponeMaskFromIOState(c));
+}
+
+/* Free unused memory in a client's queue of parsed commands. */
+void trimCommandQueue(client *c) {
+    if (c->flag.close_asap) return; /* Prevent concurrent access with
+                                       freeClientAsync(). */
+    cmdQueue *queue = &c->cmd_queue;
+    if (queue->cmds != NULL) {
+        if (queue->len == 0) {
+            zfree(queue->cmds);
+            queue->cmds = NULL;
+            queue->cap = 0;
+        } else {
+            /* Try shrink to the next power of two >= len */
+            const int bits = CHAR_BIT * sizeof(unsigned int);
+            uint16_t cap = queue->len == 1 ? 1 : 1 << (bits - __builtin_clz(queue->len - 1));
+            serverAssert(cap >= queue->len);
+            cap = max(cap, COMMAND_QUEUE_MIN_CAPACITY);
+            if (cap < queue->cap) {
+                queue->cap = cap;
+                queue->cmds = zrealloc(queue->cmds, cap * sizeof(parsedCommand));
+            }
+        }
     }
 }
 
@@ -3635,11 +4104,11 @@ int canParseCommand(client *c) {
      * commands to execute in c->argv. */
     if (c->flag.pending_command) return 0;
 
-    /* Don't process input from the primary while there is a busy script
-     * condition on the replica. We want just to accumulate the replication
+    /* Don't process input from replicated clients while there is a busy script
+     * condition on this node. We want just to accumulate the replication
      * stream (instead of replying -BUSY like we do with other clients) and
      * later resume the processing. */
-    if (isInsideYieldingLongCommand() && c->flag.primary) return 0;
+    if (isInsideYieldingLongCommand() && isReplicatedClient(c)) return 0;
 
     /* CLIENT_CLOSE_AFTER_REPLY closes the connection once the reply is
      * written to the client. Make sure to not let the reply grow after
@@ -3651,19 +4120,175 @@ int canParseCommand(client *c) {
     return 1;
 }
 
+/* Pops a command from the command queue and sets it as the client's current
+ * command. Returns true on success and false if the queue was empty. */
+static bool consumeCommandQueue(client *c) {
+    cmdQueue *queue = &c->cmd_queue;
+    if (queue->off >= queue->len) return false;
+    parsedCommand *p = &queue->cmds[queue->off++];
+    /* Combine the command's read flags with the client's read flags. Some read
+     * flags describe the client state (AUTH_REQUIRED) while others describe the
+     * command parsing outcome (PARSING_COMPLETED). */
+    c->read_flags |= p->read_flags;
+    c->argc = p->argc;
+    c->argv = p->argv;
+    c->argv_len = p->argv_len;
+    c->argv_len_sum = p->argv_len_sum;
+    c->net_input_bytes_curr_cmd = p->input_bytes;
+    c->parsed_cmd = p->cmd;
+    c->slot = p->slot;
+    c->qb_applied += p->input_bytes;
+    if (queue->off == queue->len) {
+        /* The queue is empty. Don't free it here, because if parsing is done in
+         * I/O threads, we want to free it in I/O threads too, to avoid
+         * fragmentation. */
+        queue->off = queue->len = 0;
+    }
+    return true;
+}
+
+void discardCommandQueue(client *c) {
+    cmdQueue *queue = &c->cmd_queue;
+    while (queue->off < queue->len) {
+        parsedCommand *p = &queue->cmds[queue->off++];
+        for (int j = 0; j < p->argc; j++) {
+            decrRefCount(p->argv[j]);
+        }
+        zfree(p->argv);
+    }
+    zfree(queue->cmds);
+    queue->cmds = NULL;
+    queue->off = queue->len = queue->cap = 0;
+}
+
+/* Returns the number of keys in the the incr_states array after adding keys. */
+static int addKeysToIncrFindBatch(client *c,
+                                  struct serverCommand *cmd,
+                                  robj **argv,
+                                  int argc,
+                                  hashtableIncrementalFindState *incr_states,
+                                  int num,
+                                  int max) {
+    getKeysResult result;
+    initGetKeysResult(&result);
+    int numkeys = getKeysFromCommand(cmd, argv, argc, &result);
+    if (numkeys) {
+        int kvstore_idx = 0;
+        if (server.cluster_enabled) {
+            robj *first_key = argv[result.keys[0].pos];
+            kvstore_idx = keyHashSlot(objectGetVal(first_key), sdslen(objectGetVal(first_key)));
+        }
+        hashtable *ht = kvstoreGetHashtable(c->db->keys, kvstore_idx);
+        if (ht != NULL) {
+            for (int i = 0; i < numkeys && num < max; i++) {
+                hashtableIncrementalFindState *incr_state = &incr_states[num++];
+                robj *keyobj = argv[result.keys[i].pos];
+                hashtableIncrementalFindInit(incr_state, ht, objectGetVal(keyobj));
+            }
+        }
+    }
+    getKeysFreeResult(&result);
+    return num;
+}
+
+/* Prefetches the keys for the commands queued up in the client.
+ *
+ * TODO: Avoid the logic duplicated with the code in memory_prefetch.c which
+ * is used with I/O threading. */
+static void prefetchCommandQueueKeys(client *c) {
+    if (c->read_flags & READ_FLAGS_PREFETCHED) return;
+    c->read_flags |= READ_FLAGS_PREFETCHED;
+
+    /* Prefetching states */
+    const int max_keys = server.prefetch_batch_max_size;
+    int num_keys = 0;
+    hashtableIncrementalFindState key_incr_states[max_keys];
+    if (max_keys <= 1) return; /* No point to prefetch a single key */
+
+    /* If the command is valid, add keys to incremental find batch. */
+    if (c->parsed_cmd != NULL && !(c->read_flags & READ_FLAGS_BAD_ARITY)) {
+        num_keys = addKeysToIncrFindBatch(c, c->parsed_cmd, c->argv, c->argc,
+                                          key_incr_states, num_keys, max_keys);
+    } else {
+        /* Command is already found to be incomplete, non-existing, etc. */
+        debugServerAssert(!(c->read_flags & READ_FLAGS_PARSING_COMPLETED) ||
+                          c->argc == 0 ||
+                          (c->read_flags & READ_FLAGS_COMMAND_NOT_FOUND) ||
+                          (c->read_flags & READ_FLAGS_BAD_ARITY));
+    }
+
+    cmdQueue *queue = &c->cmd_queue;
+    for (int i = queue->off; i < queue->len; i++) {
+        if (num_keys >= max_keys) break;
+        parsedCommand *p = &queue->cmds[i];
+        p->read_flags |= READ_FLAGS_PREFETCHED;
+        if (p->cmd == NULL || p->read_flags & READ_FLAGS_BAD_ARITY) {
+            /* Command is already found to be incomplete, non-existing, etc. */
+            debugServerAssert(!(p->read_flags & READ_FLAGS_PARSING_COMPLETED) ||
+                              p->argc == 0 ||
+                              (p->read_flags & READ_FLAGS_COMMAND_NOT_FOUND) ||
+                              (p->read_flags & READ_FLAGS_BAD_ARITY));
+            continue;
+        }
+        num_keys = addKeysToIncrFindBatch(c, p->cmd, p->argv, p->argc,
+                                          key_incr_states, num_keys, max_keys);
+    }
+    if (num_keys <= 1) return; /* No point to prefetch a single key */
+
+    /* Batch-lookup the keys. */
+    int not_complete_count;
+    do {
+        not_complete_count = 0;
+        for (int i = 0; i < num_keys; i++) {
+            not_complete_count += hashtableIncrementalFindStep(&key_incr_states[i]);
+        }
+    } while (not_complete_count != 0);
+
+    /* Prefetch value pointers. */
+    for (int i = 0; i < num_keys; i++) {
+        void *entry;
+        if (hashtableIncrementalFindGetResult(&key_incr_states[i], &entry)) {
+            robj *val = entry;
+            /* TODO? Prefetch all types and encodings except OBJ_ENCODING_EMBSTR
+             * and OBJ_ENCODING_INT. */
+            if (val->encoding == OBJ_ENCODING_RAW && val->type == OBJ_STRING) {
+                valkey_prefetch(objectGetVal(val));
+            }
+        }
+    }
+}
+
 int processInputBuffer(client *c) {
-    /* Parse the query buffer. */
-    while (c->querybuf && c->qb_pos < sdslen(c->querybuf)) {
+    /* Parse the query buffer and/or execute already parsed commands. */
+    while ((c->querybuf && c->qb_pos < sdslen(c->querybuf)) ||
+           c->cmd_queue.off < c->cmd_queue.len) {
         if (!canParseCommand(c)) {
             break;
         }
 
-        c->read_flags = c->flag.primary ? READ_FLAGS_PRIMARY : 0;
+        c->read_flags = isReplicatedClient(c) ? READ_FLAGS_REPLICATED : 0;
         c->read_flags |= authRequired(c) ? READ_FLAGS_AUTH_REQUIRED : 0;
 
-        parseCommand(c);
+        bool popped_from_queue;
+        /* If commands are queued up, pop from the queue first */
+        if (!consumeCommandQueue(c)) {
+            parseInputBuffer(c);
+            prepareCommandQueue(c);
+            popped_from_queue = false;
+        } else {
+            popped_from_queue = true;
+        }
 
-        if (handleParseResults(c) != PARSE_OK) {
+        /* Prefetch keys for the next commands in queue, if not already done. */
+        prefetchCommandQueueKeys(c);
+
+        parseResult res = handleParseResults(c);
+        if (res == PARSE_NEEDMORE && popped_from_queue) {
+            /* A queued partial; its completion bytes may already be in querybuf
+             * (read while blocked), so re-parse instead of waiting for I/O. */
+            continue;
+        } else if (res != PARSE_OK) {
+            /* Parse error or partial command. */
             break;
         }
 
@@ -3678,9 +4303,6 @@ int processInputBuffer(client *c) {
              * the shared qb for other clients during processEventsWhileBlocked */
             resetSharedQueryBuf(c);
         }
-
-        /* Lookup command, check arity, calculate cluster slot. */
-        prepareCommand(c);
 
         /* We are finally ready to execute the command. */
         if (processCommandAndResetClient(c) == C_ERR) {
@@ -3703,9 +4325,12 @@ static bool readToQueryBuf(client *c) {
     size_t qblen, readlen;
 
     /* If the replica RDB client is marked as closed ASAP, do not try to read from it */
-    if (c->flag.close_asap) return false;
+    if (c->flag.close_asap) {
+        c->nread = 0;
+        return false;
+    }
 
-    int is_primary = c->read_flags & READ_FLAGS_PRIMARY;
+    int is_replicated = c->read_flags & READ_FLAGS_REPLICATED;
 
     readlen = PROTO_IOBUF_LEN;
     qblen = c->querybuf ? sdslen(c->querybuf) : 0;
@@ -3713,7 +4338,7 @@ static bool readToQueryBuf(client *c) {
      * that is large enough, try to maximize the probability that the query
      * buffer contains exactly the SDS string representing the object, even
      * at the risk of requiring more read(2) calls. This way the function
-     * processMultibulkBuffer() can avoid copying buffers to create the
+     * parseMultibulkBuffer() can avoid copying buffers to create the
      * robj representing the argument. */
 
     if (c->reqtype == PROTO_REQ_MULTIBULK && c->multibulklen && c->bulklen != -1 && c->bulklen >= PROTO_MBULK_BIG_ARG) {
@@ -3724,9 +4349,9 @@ static bool readToQueryBuf(client *c) {
          * for example once we resume a blocked client after CLIENT PAUSE. */
         if (remaining > 0) readlen = remaining;
 
-        /* Primary client needs expand the readlen when meet BIG_ARG(see #9100),
+        /* Replicated client needs expand the readlen when meet BIG_ARG(see #9100),
          * but doesn't need align to the next arg, we can read more data. */
-        if (c->flag.primary && readlen < PROTO_IOBUF_LEN) readlen = PROTO_IOBUF_LEN;
+        if (isReplicatedClient(c) && readlen < PROTO_IOBUF_LEN) readlen = PROTO_IOBUF_LEN;
     }
 
     if (c->querybuf == NULL) {
@@ -3739,7 +4364,7 @@ static bool readToQueryBuf(client *c) {
      * Although we have ensured that c->querybuf will not be expanded in the current
      * thread_shared_qb, we still add this check for code robustness. */
     int use_thread_shared_qb = (c->querybuf == thread_shared_qb) ? 1 : 0;
-    if (!is_primary && // primary client's querybuf can grow greedy.
+    if (!is_replicated && // replicated clients' querybuf can grow greedy.
         (big_arg || sdsalloc(c->querybuf) < PROTO_IOBUF_LEN)) {
         /* When reading a BIG_ARG we won't be reading more than that one arg
          * into the query buffer, so we don't need to pre-allocate more than we
@@ -3766,7 +4391,7 @@ static bool readToQueryBuf(client *c) {
     sdsIncrLen(c->querybuf, c->nread);
     qblen = sdslen(c->querybuf);
     if (c->querybuf_peak < qblen) c->querybuf_peak = qblen;
-    if (!is_primary) {
+    if (!is_replicated) {
         /* The commands cached in the MULTI/EXEC queue have not been executed yet,
          * so they are also considered a part of the query buffer in a broader sense.
          *
@@ -3794,6 +4419,7 @@ void readQueryFromClient(connection *conn) {
         bool full_read = readToQueryBuf(c);
         if (handleReadResult(c) == C_OK) {
             if (processInputBuffer(c) == C_ERR) return;
+            trimCommandQueue(c);
         }
         repeat = (c->flag.primary &&
                   !c->flag.close_asap &&
@@ -3850,11 +4476,17 @@ int isClientConnIpV6(client *c) {
     /* The cached client peer id is on the form "[IPv6]:port" for IPv6
      * addresses, so we just check for '[' here. */
     if (c->flag.fake && server.current_client) {
-        /* Fake client? Use current client instead.
-         * Noted that in here we are assuming server.current_client is set
-         * and real (aof has already violated this in loadSingleAppendOnlyFil). */
+        /* Fake client? Use current client instead, if we have one. */
         c = server.current_client;
     }
+
+    if (c->flag.fake || !c->conn) {
+        /* If we still don't have a client with a real connection (e.g., called
+         * from module timer with no real current client), default to IPv4 to
+         * avoid crashing. */
+        return 0;
+    }
+
     return getClientPeerId(c)[0] == '[';
 }
 
@@ -3888,6 +4520,8 @@ sds catClientInfoString(sds s, client *client, int hide_user_data) {
     if (client->flag.no_evict) *p++ = 'e';
     if (client->flag.no_touch) *p++ = 'T';
     if (client->flag.import_source) *p++ = 'I';
+    if (client->slot_migration_job && isImportSlotMigrationJob(client->slot_migration_job)) *p++ = 'i';
+    if (client->slot_migration_job && !isImportSlotMigrationJob(client->slot_migration_job)) *p++ = 'E';
     if (p == flags) *p++ = 'N';
     *p++ = '\0';
 
@@ -3918,7 +4552,7 @@ sds catClientInfoString(sds s, client *client, int hide_user_data) {
             " addr=%s", getClientPeerId(client),
             " laddr=%s", getClientSockname(client),
             " %s", connGetInfo(client->conn, conninfo, sizeof(conninfo)),
-            " name=%s", hide_user_data ? "*redacted*" : (client->name ? (char *)client->name->ptr : ""),
+            " name=%s", hide_user_data ? "*redacted*" : (client->name ? (char *)objectGetVal(client->name) : ""),
             " age=%I", (long long)(commandTimeSnapshot() / 1000 - client->ctime),
             " idle=%I", (long long)(server.unixtime - client->last_interaction),
             " flags=%s", flags,
@@ -3944,8 +4578,8 @@ sds catClientInfoString(sds s, client *client, int hide_user_data) {
             " user=%s", hide_user_data ? "*redacted*" : (client->user ? client->user->name : "(superuser)"),
             " redir=%I", (client->flag.tracking) ? (long long)client->pubsub_data->client_tracking_redirection : -1,
             " resp=%i", client->resp,
-            " lib-name=%s", client->lib_name ? (char *)client->lib_name->ptr : "",
-            " lib-ver=%s", client->lib_ver ? (char *)client->lib_ver->ptr : "",
+            " lib-name=%s", client->lib_name ? (char *)objectGetVal(client->lib_name) : "",
+            " lib-ver=%s", client->lib_ver ? (char *)objectGetVal(client->lib_ver) : "",
             " tot-net-in=%U", client->net_input_bytes,
             " tot-net-out=%U", client->net_output_bytes,
             " tot-cmds=%U", client->commands_processed));
@@ -3968,10 +4602,10 @@ sds catClientInfoShortString(sds s, client *client, int hide_user_data) {
             " addr=%s", getClientPeerId(client),
             " laddr=%s", getClientSockname(client),
             " %s", connGetInfo(client->conn, conninfo, sizeof(conninfo)),
-            " name=%s", hide_user_data ? "*redacted*" : (client->name ? (char *)client->name->ptr : ""),
+            " name=%s", hide_user_data ? "*redacted*" : (client->name ? (char *)objectGetVal(client->name) : ""),
             " user=%s", hide_user_data ? "*redacted*" : (client->user ? client->user->name : "(superuser)"),
-            " lib-name=%s", client->lib_name ? (char *)client->lib_name->ptr : "",
-            " lib-ver=%s", client->lib_ver ? (char *)client->lib_ver->ptr : ""));
+            " lib-name=%s", client->lib_name ? (char *)objectGetVal(client->lib_name) : "",
+            " lib-ver=%s", client->lib_ver ? (char *)objectGetVal(client->lib_ver) : ""));
     return ret;
 }
 
@@ -4024,10 +4658,10 @@ int validateClientAttr(const char *val) {
 /* Returns C_OK if the name is valid. Returns C_ERR & sets `err` (when provided) otherwise. */
 int validateClientName(robj *name, const char **err) {
     const char *err_msg = "Client names cannot contain spaces, newlines or special characters.";
-    int len = (name != NULL) ? sdslen(name->ptr) : 0;
+    int len = (name != NULL) ? sdslen(objectGetVal(name)) : 0;
     /* We allow setting the client name to an empty string. */
     if (len == 0) return C_OK;
-    if (validateClientAttr(name->ptr) == C_ERR) {
+    if (validateClientAttr(objectGetVal(name)) == C_ERR) {
         if (err) *err = err_msg;
         return C_ERR;
     }
@@ -4039,7 +4673,7 @@ int clientSetName(client *c, robj *name, const char **err) {
     if (validateClientName(name, err) == C_ERR) {
         return C_ERR;
     }
-    int len = (name != NULL) ? sdslen(name->ptr) : 0;
+    int len = (name != NULL) ? sdslen(objectGetVal(name)) : 0;
     /* Setting the client name to an empty string actually removes
      * the current name. */
     if (len == 0) {
@@ -4073,9 +4707,9 @@ int clientSetNameOrReply(client *c, robj *name) {
 
 /* Set client or connection related info */
 void clientSetinfoCommand(client *c) {
-    sds attr = c->argv[2]->ptr;
+    sds attr = objectGetVal(c->argv[2]);
     robj *valob = c->argv[3];
-    sds val = valob->ptr;
+    sds val = objectGetVal(valob);
     robj **destvar = NULL;
     if (!strcasecmp(attr, "lib-name")) {
         destvar = &c->lib_name;
@@ -4130,7 +4764,7 @@ static int parseClientFiltersOrReply(client *c, int index, clientFilter *filter)
     while (index < c->argc) {
         int moreargs = c->argc > index + 1;
 
-        if (!strcasecmp(c->argv[index]->ptr, "id")) {
+        if (!strcasecmp(objectGetVal(c->argv[index]), "id")) {
             if (filter->ids == NULL) {
                 /* Initialize the intset for IDs */
                 filter->ids = intsetNew();
@@ -4140,7 +4774,7 @@ static int parseClientFiltersOrReply(client *c, int index, clientFilter *filter)
             /* Process all IDs until a non-numeric argument or end of args */
             while (index < c->argc) {
                 long long id;
-                if (!string2ll(c->argv[index]->ptr, sdslen(c->argv[index]->ptr), &id)) {
+                if (!string2ll(objectGetVal(c->argv[index]), sdslen(objectGetVal(c->argv[index])), &id)) {
                     break; /* Stop processing IDs if a non-numeric argument is encountered */
                 }
                 if (id < 1) {
@@ -4152,7 +4786,29 @@ static int parseClientFiltersOrReply(client *c, int index, clientFilter *filter)
                 filter->ids = intsetAdd(filter->ids, id, &added);
                 index++; /* Move to the next argument */
             }
-        } else if (!strcasecmp(c->argv[index]->ptr, "maxage") && moreargs) {
+        } else if (!strcasecmp(objectGetVal(c->argv[index]), "not-id")) {
+            if (filter->not_ids == NULL) {
+                /* Initialize the intset for NOT-IDs */
+                filter->not_ids = intsetNew();
+            }
+            index++; /* Move to the first ID after "NOT-ID" */
+
+            /* Process all NOT-IDs until a non-numeric argument or end of args */
+            while (index < c->argc) {
+                long long not_id;
+                if (!string2ll(objectGetVal(c->argv[index]), sdslen(objectGetVal(c->argv[index])), &not_id)) {
+                    break; /* Stop processing NOT-IDs if a non-numeric argument is encountered */
+                }
+                if (not_id < 1) {
+                    addReplyError(c, "client-id should be greater than 0");
+                    return C_ERR;
+                }
+
+                uint8_t added;
+                filter->not_ids = intsetAdd(filter->not_ids, not_id, &added);
+                index++; /* Move to the next argument */
+            }
+        } else if (!strcasecmp(objectGetVal(c->argv[index]), "maxage") && moreargs) {
             long long maxage;
 
             if (getLongLongFromObjectOrReply(c, c->argv[index + 1], &maxage,
@@ -4165,37 +4821,57 @@ static int parseClientFiltersOrReply(client *c, int index, clientFilter *filter)
 
             filter->max_age = maxage;
             index += 2;
-        } else if (!strcasecmp(c->argv[index]->ptr, "type") && moreargs) {
-            filter->type = getClientTypeByName(c->argv[index + 1]->ptr);
+        } else if (!strcasecmp(objectGetVal(c->argv[index]), "type") && moreargs) {
+            filter->type = getClientTypeByName(objectGetVal(c->argv[index + 1]));
             if (filter->type == -1) {
-                addReplyErrorFormat(c, "Unknown client type '%s'", (char *)c->argv[index + 1]->ptr);
+                addReplyErrorFormat(c, "Unknown client type '%s'", (char *)objectGetVal(c->argv[index + 1]));
                 return C_ERR;
             }
             index += 2;
-        } else if (!strcasecmp(c->argv[index]->ptr, "addr") && moreargs) {
-            filter->addr = c->argv[index + 1]->ptr;
+        } else if (!strcasecmp(objectGetVal(c->argv[index]), "not-type") && moreargs) {
+            filter->not_type = getClientTypeByName(objectGetVal(c->argv[index + 1]));
+            if (filter->not_type == -1) {
+                addReplyErrorFormat(c, "Unknown client type '%s'", (char *)objectGetVal(c->argv[index + 1]));
+                return C_ERR;
+            }
             index += 2;
-        } else if (!strcasecmp(c->argv[index]->ptr, "laddr") && moreargs) {
-            filter->laddr = c->argv[index + 1]->ptr;
+        } else if (!strcasecmp(objectGetVal(c->argv[index]), "addr") && moreargs) {
+            filter->addr = objectGetVal(c->argv[index + 1]);
             index += 2;
-        } else if (!strcasecmp(c->argv[index]->ptr, "user") && moreargs) {
-            filter->user = ACLGetUserByName(c->argv[index + 1]->ptr, sdslen(c->argv[index + 1]->ptr));
+        } else if (!strcasecmp(objectGetVal(c->argv[index]), "not-addr") && moreargs) {
+            filter->not_addr = objectGetVal(c->argv[index + 1]);
+            index += 2;
+        } else if (!strcasecmp(objectGetVal(c->argv[index]), "laddr") && moreargs) {
+            filter->laddr = objectGetVal(c->argv[index + 1]);
+            index += 2;
+        } else if (!strcasecmp(objectGetVal(c->argv[index]), "not-laddr") && moreargs) {
+            filter->not_laddr = objectGetVal(c->argv[index + 1]);
+            index += 2;
+        } else if (!strcasecmp(objectGetVal(c->argv[index]), "user") && moreargs) {
+            filter->user = ACLGetUserByName(objectGetVal(c->argv[index + 1]), sdslen(objectGetVal(c->argv[index + 1])));
             if (filter->user == NULL) {
-                addReplyErrorFormat(c, "No such user '%s'", (char *)c->argv[index + 1]->ptr);
+                addReplyErrorFormat(c, "No such user '%s'", (char *)objectGetVal(c->argv[index + 1]));
                 return C_ERR;
             }
             index += 2;
-        } else if (!strcasecmp(c->argv[index]->ptr, "skipme") && moreargs) {
-            if (!strcasecmp(c->argv[index + 1]->ptr, "yes")) {
+        } else if (!strcasecmp(objectGetVal(c->argv[index]), "not-user") && moreargs) {
+            filter->not_user = ACLGetUserByName(objectGetVal(c->argv[index + 1]), sdslen(objectGetVal(c->argv[index + 1])));
+            if (filter->not_user == NULL) {
+                addReplyErrorFormat(c, "No such user '%s'", (char *)objectGetVal(c->argv[index + 1]));
+                return C_ERR;
+            }
+            index += 2;
+        } else if (!strcasecmp(objectGetVal(c->argv[index]), "skipme") && moreargs) {
+            if (!strcasecmp(objectGetVal(c->argv[index + 1]), "yes")) {
                 filter->skipme = 1;
-            } else if (!strcasecmp(c->argv[index + 1]->ptr, "no")) {
+            } else if (!strcasecmp(objectGetVal(c->argv[index + 1]), "no")) {
                 filter->skipme = 0;
             } else {
                 addReplyErrorObject(c, shared.syntaxerr);
                 return C_ERR;
             }
             index += 2;
-        } else if (!strcasecmp(c->argv[index]->ptr, "idle") && moreargs) {
+        } else if (!strcasecmp(objectGetVal(c->argv[index]), "idle") && moreargs) {
             long long idle_time;
 
             if (getLongLongFromObjectOrReply(c, c->argv[index + 1], &idle_time,
@@ -4208,25 +4884,67 @@ static int parseClientFiltersOrReply(client *c, int index, clientFilter *filter)
 
             filter->idle = idle_time;
             index += 2;
-        } else if (!strcasecmp(c->argv[index]->ptr, "flags") && moreargs) {
-            filter->flags = sdsnew(c->argv[index + 1]->ptr);
+        } else if (!strcasecmp(objectGetVal(c->argv[index]), "flags") && moreargs) {
+            if (filter->flags) {
+                sdsfree(filter->flags);
+                filter->flags = NULL;
+            }
+            filter->flags = sdsnew(objectGetVal(c->argv[index + 1]));
             if (validateClientFlagFilter(filter->flags) == C_ERR) {
                 addReplyErrorFormat(c, "Unknown flags found in the provided filter: %s", filter->flags);
                 return C_ERR;
             }
             index += 2;
-        } else if (!strcasecmp(c->argv[index]->ptr, "name") && moreargs) {
-            filter->name = c->argv[index + 1]->ptr;
+        } else if (!strcasecmp(objectGetVal(c->argv[index]), "not-flags") && moreargs) {
+            if (filter->not_flags) {
+                sdsfree(filter->not_flags);
+                filter->not_flags = NULL;
+            }
+            filter->not_flags = sdsnew(objectGetVal(c->argv[index + 1]));
+            if (validateClientFlagFilter(filter->not_flags) == C_ERR) {
+                addReplyErrorFormat(c, "Unknown flags found in the NOT-FLAGS filter: %s", filter->not_flags);
+                return C_ERR;
+            }
             index += 2;
-        } else if (!strcasecmp(c->argv[index]->ptr, "lib-name") && moreargs) {
+        } else if (!strcasecmp(objectGetVal(c->argv[index]), "name") && moreargs) {
+            filter->name = objectGetVal(c->argv[index + 1]);
+            index += 2;
+        } else if (!strcasecmp(objectGetVal(c->argv[index]), "not-name") && moreargs) {
+            filter->not_name = objectGetVal(c->argv[index + 1]);
+            index += 2;
+        } else if (!strcasecmp(objectGetVal(c->argv[index]), "lib-name") && moreargs) {
+            if (filter->lib_name) {
+                decrRefCount(filter->lib_name);
+                filter->lib_name = NULL;
+            }
             filter->lib_name = c->argv[index + 1];
             incrRefCount(filter->lib_name);
             index += 2;
-        } else if (!strcasecmp(c->argv[index]->ptr, "lib-ver") && moreargs) {
+        } else if (!strcasecmp(objectGetVal(c->argv[index]), "not-lib-name") && moreargs) {
+            if (filter->not_lib_name) {
+                decrRefCount(filter->not_lib_name);
+                filter->not_lib_name = NULL;
+            }
+            filter->not_lib_name = c->argv[index + 1];
+            incrRefCount(filter->not_lib_name);
+            index += 2;
+        } else if (!strcasecmp(objectGetVal(c->argv[index]), "lib-ver") && moreargs) {
+            if (filter->lib_ver) {
+                decrRefCount(filter->lib_ver);
+                filter->lib_ver = NULL;
+            }
             filter->lib_ver = c->argv[index + 1];
             incrRefCount(filter->lib_ver);
             index += 2;
-        } else if (!strcasecmp(c->argv[index]->ptr, "db") && moreargs) {
+        } else if (!strcasecmp(objectGetVal(c->argv[index]), "not-lib-ver") && moreargs) {
+            if (filter->not_lib_ver) {
+                decrRefCount(filter->not_lib_ver);
+                filter->not_lib_ver = NULL;
+            }
+            filter->not_lib_ver = c->argv[index + 1];
+            incrRefCount(filter->not_lib_ver);
+            index += 2;
+        } else if (!strcasecmp(objectGetVal(c->argv[index]), "db") && moreargs) {
             int db_id;
             if (getIntFromObjectOrReply(c, c->argv[index + 1], &db_id,
                                         "DB is not an integer or out of range") != C_OK)
@@ -4237,15 +4955,52 @@ static int parseClientFiltersOrReply(client *c, int index, clientFilter *filter)
             }
             filter->db_number = db_id;
             index += 2;
-        } else if (!strcasecmp(c->argv[index]->ptr, "capa") && moreargs) {
-            filter->capa = sdsnew(c->argv[index + 1]->ptr);
+        } else if (!strcasecmp(objectGetVal(c->argv[index]), "not-db") && moreargs) {
+            int not_db_id;
+            if (getIntFromObjectOrReply(c, c->argv[index + 1], &not_db_id,
+                                        "NOT-DB is not an integer or out of range") != C_OK)
+                return C_ERR;
+            if (not_db_id < 0 || not_db_id >= server.dbnum) {
+                addReplyErrorFormat(c, "NOT-DB number should be between 0 and %d", server.dbnum - 1);
+                return C_ERR;
+            }
+            filter->not_db_number = not_db_id;
+            index += 2;
+        } else if (!strcasecmp(objectGetVal(c->argv[index]), "capa") && moreargs) {
+            if (filter->capa) {
+                sdsfree(filter->capa);
+                filter->capa = NULL;
+            }
+            filter->capa = sdsnew(objectGetVal(c->argv[index + 1]));
             if (validateClientCapaFilter(filter->capa) == C_ERR) {
                 addReplyErrorFormat(c, "Unknown capa found in the provided filter: %s", filter->capa);
                 return C_ERR;
             }
             index += 2;
-        } else if (!strcasecmp(c->argv[index]->ptr, "ip") && moreargs) {
-            filter->ip = sdsnew(c->argv[index + 1]->ptr);
+        } else if (!strcasecmp(objectGetVal(c->argv[index]), "not-capa") && moreargs) {
+            if (filter->not_capa) {
+                sdsfree(filter->not_capa);
+                filter->not_capa = NULL;
+            }
+            filter->not_capa = sdsnew(objectGetVal(c->argv[index + 1]));
+            if (validateClientCapaFilter(filter->not_capa) == C_ERR) {
+                addReplyErrorFormat(c, "Unknown capa found in the NOT-CAPA filter: %s", filter->not_capa);
+                return C_ERR;
+            }
+            index += 2;
+        } else if (!strcasecmp(objectGetVal(c->argv[index]), "ip") && moreargs) {
+            if (filter->ip) {
+                sdsfree(filter->ip);
+                filter->ip = NULL;
+            }
+            filter->ip = sdsnew(objectGetVal(c->argv[index + 1]));
+            index += 2;
+        } else if (!strcasecmp(objectGetVal(c->argv[index]), "not-ip") && moreargs) {
+            if (filter->not_ip) {
+                sdsfree(filter->not_ip);
+                filter->not_ip = NULL;
+            }
+            filter->not_ip = sdsnew(objectGetVal(c->argv[index + 1]));
             index += 2;
         } else {
             addReplyErrorObject(c, shared.syntaxerr);
@@ -4291,6 +5046,8 @@ static int validateClientFlagFilter(sds flag_filter) {
         case 'e':
         case 'T':
         case 'I':
+        case 'i':
+        case 'E':
         case 'N':
             /* Valid flag, do nothing. */
             break;
@@ -4314,7 +5071,7 @@ static int clientMatchesFilter(client *client, clientFilter *client_filter) {
     if (client_filter->idle != 0 && (long long)(commandTimeSnapshot() / 1000 - client->last_interaction) < client_filter->idle) return 0;
     if (client_filter->flags && clientMatchesFlagFilter(client, client_filter->flags) == 0) return 0;
     if (client_filter->name) {
-        if (!client->name || !client->name->ptr || strcmp(client->name->ptr, client_filter->name) != 0) {
+        if (!client->name || !objectGetVal(client->name) || strcmp(objectGetVal(client->name), client_filter->name) != 0) {
             return 0;
         }
     }
@@ -4323,6 +5080,24 @@ static int clientMatchesFilter(client *client, clientFilter *client_filter) {
     if (client_filter->db_number != -1 && client->db->id != client_filter->db_number) return 0;
     if (client_filter->capa && clientMatchesCapaFilter(client, client_filter->capa) == 0) return 0;
     if (client_filter->ip && clientMatchesIpFilter(client, client_filter->ip) == 0) return 0;
+
+    /* Check each negative filter condition and return false if the client matches. */
+    if (client_filter->not_addr && strcmp(getClientPeerId(client), client_filter->not_addr) == 0) return 0;
+    if (client_filter->not_laddr && strcmp(getClientSockname(client), client_filter->not_laddr) == 0) return 0;
+    if (client_filter->not_type != -1 && getClientType(client) == client_filter->not_type) return 0;
+    if (client_filter->not_ids && intsetFind(client_filter->not_ids, client->id)) return 0;
+    if (client_filter->not_user && client->user == client_filter->not_user) return 0;
+    if (client_filter->not_flags && clientMatchesFlagFilter(client, client_filter->not_flags) != 0) return 0;
+    if (client_filter->not_name) {
+        if (client->name && objectGetVal(client->name) && strcmp(objectGetVal(client->name), client_filter->not_name) == 0) {
+            return 0;
+        }
+    }
+    if (client_filter->not_lib_name && (client->lib_name && compareStringObjects(client->lib_name, client_filter->not_lib_name) == 0)) return 0;
+    if (client_filter->not_lib_ver && (client->lib_ver && compareStringObjects(client->lib_ver, client_filter->not_lib_ver) == 0)) return 0;
+    if (client_filter->not_db_number != -1 && client->db->id == client_filter->not_db_number) return 0;
+    if (client_filter->not_capa && clientMatchesCapaFilter(client, client_filter->not_capa) != 0) return 0;
+    if (client_filter->not_ip && clientMatchesIpFilter(client, client_filter->not_ip) != 0) return 0;
 
     /* If all conditions are satisfied, the client matches the filter. */
     return 1;
@@ -4427,16 +5202,22 @@ static int clientMatchesFlagFilter(client *c, sds flag_filter) {
         case 'I': /* Import source flag */
             if (!c->flag.import_source) return 0;
             break;
+        case 'i': /* Slot migration import flag */
+            if (!c->slot_migration_job || !isImportSlotMigrationJob(c->slot_migration_job)) return 0;
+            break;
+        case 'E': /* Slot migration export flag */
+            if (!c->slot_migration_job || isImportSlotMigrationJob(c->slot_migration_job)) return 0;
+            break;
         case 'N': /* Check for no flags */
-            if (!c->flag.replica && !c->flag.primary && !c->flag.pubsub &&
-                !c->flag.multi && !c->flag.blocked && !c->flag.tracking &&
-                !c->flag.tracking_broken_redir && !c->flag.tracking_bcast &&
-                !c->flag.dirty_cas && !c->flag.close_after_reply &&
-                !c->flag.unblocked && !c->flag.close_asap &&
-                !c->flag.unix_socket && !c->flag.readonly &&
-                !c->flag.no_evict && !c->flag.no_touch &&
-                !c->flag.import_source) {
-                return 1; /* Matches 'N' */
+            if (c->flag.replica || c->flag.primary || c->flag.pubsub ||
+                c->flag.multi || c->flag.blocked || c->flag.tracking ||
+                c->flag.tracking_broken_redir || c->flag.tracking_bcast ||
+                c->flag.dirty_cas || c->flag.close_after_reply ||
+                c->flag.unblocked || c->flag.close_asap ||
+                c->flag.unix_socket || c->flag.readonly ||
+                c->flag.no_evict || c->flag.no_touch ||
+                c->flag.import_source || c->slot_migration_job) {
+                return 0;
             }
             break;
         default:
@@ -4456,7 +5237,7 @@ void clientHelpCommand(client *c) {
         "CAPA <option> [options...]",
         "    The client claims its some capability options. Options are:",
         "    * REDIRECT",
-        "      The client can handle redirection during primary and replica failover in standalone mode.",
+        "      The client can handle redirection (standalone failover and keyless commands on replicas).",
         "GETREDIR",
         "    Return the client ID we are redirecting to when tracking is enabled.",
         "GETNAME",
@@ -4578,7 +5359,12 @@ void clientListCommand(client *c) {
     sds response = NULL;
 
     if (c->argc > 3) {
-        clientFilter filter = {.ids = NULL, .max_age = 0, .idle = 0, .addr = NULL, .laddr = NULL, .user = NULL, .type = -1, .skipme = 0, .db_number = -1};
+        clientFilter filter = {0};
+        filter.type = -1;
+        filter.not_type = -1;
+        filter.db_number = -1;
+        filter.not_db_number = -1;
+
         int i = 2;
 
         if (parseClientFiltersOrReply(c, i, &filter) != C_OK) {
@@ -4599,13 +5385,13 @@ void clientListCommand(client *c) {
 
 void clientReplyCommand(client *c) {
     /* CLIENT REPLY ON|OFF|SKIP */
-    if (!strcasecmp(c->argv[2]->ptr, "on")) {
+    if (!strcasecmp(objectGetVal(c->argv[2]), "on")) {
         c->flag.reply_skip = 0;
         c->flag.reply_off = 0;
         addReply(c, shared.ok);
-    } else if (!strcasecmp(c->argv[2]->ptr, "off")) {
+    } else if (!strcasecmp(objectGetVal(c->argv[2]), "off")) {
         c->flag.reply_off = 1;
-    } else if (!strcasecmp(c->argv[2]->ptr, "skip")) {
+    } else if (!strcasecmp(objectGetVal(c->argv[2]), "skip")) {
         if (!c->flag.reply_off) c->flag.reply_skip_next = 1;
     } else {
         addReplyErrorObject(c, shared.syntaxerr);
@@ -4615,11 +5401,11 @@ void clientReplyCommand(client *c) {
 
 void clientNoEvictCommand(client *c) {
     /* CLIENT NO-EVICT ON|OFF */
-    if (!strcasecmp(c->argv[2]->ptr, "on")) {
+    if (!strcasecmp(objectGetVal(c->argv[2]), "on")) {
         c->flag.no_evict = 1;
         removeClientFromMemUsageBucket(c, 0);
         addReply(c, shared.ok);
-    } else if (!strcasecmp(c->argv[2]->ptr, "off")) {
+    } else if (!strcasecmp(objectGetVal(c->argv[2]), "off")) {
         c->flag.no_evict = 0;
         updateClientMemUsageAndBucket(c);
         addReply(c, shared.ok);
@@ -4636,21 +5422,18 @@ void clientKillCommand(client *c) {
     listNode *ln;
     listIter li;
 
-    clientFilter client_filter = {.ids = NULL,
-                                  .max_age = 0,
-                                  .idle = 0,
-                                  .addr = NULL,
-                                  .laddr = NULL,
-                                  .user = NULL,
-                                  .type = -1,
-                                  .skipme = 1,
-                                  .db_number = -1};
+    clientFilter client_filter = {0};
+    client_filter.type = -1;
+    client_filter.not_type = -1;
+    client_filter.db_number = -1;
+    client_filter.not_db_number = -1;
+    client_filter.skipme = 1;
 
     int killed = 0, close_this_client = 0;
 
     if (c->argc == 3) {
         /* Old style syntax: CLIENT KILL <addr> */
-        client_filter.addr = c->argv[2]->ptr;
+        client_filter.addr = objectGetVal(c->argv[2]);
         client_filter.skipme = 0; /* With the old form, you can kill yourself. */
     } else if (c->argc > 3) {
         int i = 2; /* Next option index. */
@@ -4723,6 +5506,31 @@ static void freeClientFilter(clientFilter *filter) {
         decrRefCount(filter->lib_ver);
         filter->lib_ver = NULL;
     }
+
+    if (filter->not_ids != NULL) {
+        zfree(filter->not_ids);
+        filter->not_ids = NULL;
+    }
+    if (filter->not_flags != NULL) {
+        sdsfree(filter->not_flags);
+        filter->not_flags = NULL;
+    }
+    if (filter->not_capa != NULL) {
+        sdsfree(filter->not_capa);
+        filter->not_capa = NULL;
+    }
+    if (filter->not_ip != NULL) {
+        sdsfree(filter->not_ip);
+        filter->not_ip = NULL;
+    }
+    if (filter->not_lib_name) {
+        decrRefCount(filter->not_lib_name);
+        filter->not_lib_name = NULL;
+    }
+    if (filter->not_lib_ver) {
+        decrRefCount(filter->not_lib_ver);
+        filter->not_lib_ver = NULL;
+    }
 }
 
 
@@ -4732,9 +5540,9 @@ void clientUnblockCommand(client *c) {
     int unblock_error = 0;
 
     if (c->argc == 4) {
-        if (!strcasecmp(c->argv[3]->ptr, "timeout")) {
+        if (!strcasecmp(objectGetVal(c->argv[3]), "timeout")) {
             unblock_error = 0;
-        } else if (!strcasecmp(c->argv[3]->ptr, "error")) {
+        } else if (!strcasecmp(objectGetVal(c->argv[3]), "error")) {
             unblock_error = 1;
         } else {
             addReplyError(c, "CLIENT UNBLOCK reason should be TIMEOUT or ERROR");
@@ -4785,9 +5593,9 @@ void clientPauseCommand(client *c) {
     mstime_t end;
     int isPauseClientAll = 1;
     if (c->argc == 4) {
-        if (!strcasecmp(c->argv[3]->ptr, "write")) {
+        if (!strcasecmp(objectGetVal(c->argv[3]), "write")) {
             isPauseClientAll = 0;
-        } else if (strcasecmp(c->argv[3]->ptr, "all")) {
+        } else if (strcasecmp(objectGetVal(c->argv[3]), "all")) {
             addReplyError(c, "CLIENT PAUSE mode must be WRITE or ALL");
             return;
         }
@@ -4811,7 +5619,7 @@ void clientTrackingCommand(client *c) {
     for (int j = 3; j < c->argc; j++) {
         int moreargs = (c->argc - 1) - j;
 
-        if (!strcasecmp(c->argv[j]->ptr, "redirect") && moreargs) {
+        if (!strcasecmp(objectGetVal(c->argv[j]), "redirect") && moreargs) {
             j++;
             if (redir != 0) {
                 addReplyError(c, "A client can only redirect to a single "
@@ -4833,15 +5641,15 @@ void clientTrackingCommand(client *c) {
                 zfree(prefix);
                 return;
             }
-        } else if (!strcasecmp(c->argv[j]->ptr, "bcast")) {
+        } else if (!strcasecmp(objectGetVal(c->argv[j]), "bcast")) {
             options.tracking_bcast = 1;
-        } else if (!strcasecmp(c->argv[j]->ptr, "optin")) {
+        } else if (!strcasecmp(objectGetVal(c->argv[j]), "optin")) {
             options.tracking_optin = 1;
-        } else if (!strcasecmp(c->argv[j]->ptr, "optout")) {
+        } else if (!strcasecmp(objectGetVal(c->argv[j]), "optout")) {
             options.tracking_optout = 1;
-        } else if (!strcasecmp(c->argv[j]->ptr, "noloop")) {
+        } else if (!strcasecmp(objectGetVal(c->argv[j]), "noloop")) {
             options.tracking_noloop = 1;
-        } else if (!strcasecmp(c->argv[j]->ptr, "prefix") && moreargs) {
+        } else if (!strcasecmp(objectGetVal(c->argv[j]), "prefix") && moreargs) {
             j++;
             prefix = zrealloc(prefix, sizeof(robj *) * (numprefix + 1));
             prefix[numprefix++] = c->argv[j];
@@ -4853,7 +5661,7 @@ void clientTrackingCommand(client *c) {
     }
 
     /* Options are ok: enable or disable the tracking for this client. */
-    if (!strcasecmp(c->argv[2]->ptr, "on")) {
+    if (!strcasecmp(objectGetVal(c->argv[2]), "on")) {
         /* Before enabling tracking, make sure options are compatible
          * among each other and with the current state of the client. */
         if (!(options.tracking_bcast) && numprefix) {
@@ -4903,7 +5711,7 @@ void clientTrackingCommand(client *c) {
         }
 
         enableTracking(c, redir, options, prefix, numprefix);
-    } else if (!strcasecmp(c->argv[2]->ptr, "off")) {
+    } else if (!strcasecmp(objectGetVal(c->argv[2]), "off")) {
         disableTracking(c);
     } else {
         zfree(prefix);
@@ -4922,7 +5730,7 @@ void clientCachingCommand(client *c) {
         return;
     }
 
-    char *opt = c->argv[2]->ptr;
+    char *opt = objectGetVal(c->argv[2]);
     if (!strcasecmp(opt, "yes")) {
         if (c->flag.tracking_optin) {
             c->flag.tracking_caching = 1;
@@ -5020,10 +5828,10 @@ void clientTrackingInfoCommand(client *c) {
 
 void clientNoTouchCommand(client *c) {
     /* CLIENT NO-TOUCH ON|OFF */
-    if (!strcasecmp(c->argv[2]->ptr, "on")) {
+    if (!strcasecmp(objectGetVal(c->argv[2]), "on")) {
         c->flag.no_touch = 1;
         addReply(c, shared.ok);
-    } else if (!strcasecmp(c->argv[2]->ptr, "off")) {
+    } else if (!strcasecmp(objectGetVal(c->argv[2]), "off")) {
         c->flag.no_touch = 0;
         addReply(c, shared.ok);
     } else {
@@ -5033,7 +5841,7 @@ void clientNoTouchCommand(client *c) {
 
 void clientCapaCommand(client *c) {
     for (int i = 2; i < c->argc; i++) {
-        if (!strcasecmp(c->argv[i]->ptr, "redirect")) {
+        if (!strcasecmp(objectGetVal(c->argv[i]), "redirect")) {
             c->capa |= CLIENT_CAPA_REDIRECT;
         }
     }
@@ -5042,14 +5850,14 @@ void clientCapaCommand(client *c) {
 
 void clientImportSourceCommand(client *c) {
     /* CLIENT IMPORT-SOURCE ON|OFF */
-    if (!server.import_mode && strcasecmp(c->argv[2]->ptr, "off")) {
+    if (!server.import_mode && strcasecmp(objectGetVal(c->argv[2]), "off")) {
         addReplyError(c, "Server is not in import mode");
         return;
     }
-    if (!strcasecmp(c->argv[2]->ptr, "on")) {
+    if (!strcasecmp(objectGetVal(c->argv[2]), "on")) {
         c->flag.import_source = 1;
         addReply(c, shared.ok);
-    } else if (!strcasecmp(c->argv[2]->ptr, "off")) {
+    } else if (!strcasecmp(objectGetVal(c->argv[2]), "off")) {
         c->flag.import_source = 0;
         addReply(c, shared.ok);
     } else {
@@ -5084,7 +5892,7 @@ void helloCommand(client *c) {
     robj *clientname = NULL;
     for (int j = next_arg; j < c->argc; j++) {
         int moreargs = (c->argc - 1) - j;
-        const char *opt = c->argv[j]->ptr;
+        const char *opt = objectGetVal(c->argv[j]);
         if (!strcasecmp(opt, "AUTH") && moreargs >= 2) {
             redactClientCommandArgument(c, j + 1);
             redactClientCommandArgument(c, j + 2);
@@ -5253,17 +6061,24 @@ static void backupAndUpdateClientArgv(client *c, int new_argc, robj **new_argv) 
     }
 }
 
+bool clientCommandArgShouldBeRedacted(client *c, int arg_index) {
+    if (arg_index < 1) return false;
+    if (arg_index >= 32) return c->redact_arg_bitmap & 1U;
+    return (c->redact_arg_bitmap >> arg_index) & 1;
+}
+
 /* Redact a given argument to prevent it from being shown
- * in the commandlog. This information is stored in the
- * original_argv array. */
+ * in the commandlog. The argument index is recorded in a bitmap.
+ * For indices in the range [1, 31] the corresponding bit is set.
+ * For indices >= 32, bit 0 is set as a sentinel to indicate that all
+ * arguments beyond the bitmap range should also be redacted. */
 void redactClientCommandArgument(client *c, int argc) {
-    backupAndUpdateClientArgv(c, c->argc, NULL);
-    if (c->original_argv[argc] == shared.redacted) {
-        /* This argument has already been redacted */
-        return;
+    serverAssert(argc >= 1);
+    if (argc < 32) {
+        c->redact_arg_bitmap |= (1U << argc);
+    } else {
+        c->redact_arg_bitmap |= 1U;
     }
-    decrRefCount(c->original_argv[argc]);
-    c->original_argv[argc] = shared.redacted;
 }
 
 /* Rewrite the command vector of the client. All the new objects ref count
@@ -5355,6 +6170,9 @@ size_t getClientOutputBufferMemoryUsage(client *c) {
         usage += c->deferred_reply_bytes +
                  (list_item_size * listLength(c->deferred_reply));
     }
+
+    usage += atomic_load_explicit(&c->io_tracked_reply_len, memory_order_relaxed);
+
     return usage;
 }
 
@@ -5372,36 +6190,19 @@ size_t getClientMemoryUsage(client *c, size_t *output_buffer_mem_usage) {
      * i.e. unused sds space and internal fragmentation, just the string length. but this is enough to
      * spot problematic clients. */
     mem += c->argv_len_sum + sizeof(robj *) * c->argc;
+
+    /* Add memory overhead of multi. */
     mem += multiStateMemOverhead(c);
 
-    /* Add memory overhead of pubsub channels and patterns. Note: this is just the overhead of the robj pointers
-     * to the strings themselves because they aren't stored per client. */
+    /* Add memory overhead of pubsub channels and patterns. */
     mem += pubsubMemOverhead(c);
 
     /* Add memory overhead of the tracking prefixes, this is an underestimation so we don't need to traverse the entire
      * rax */
     if (c->pubsub_data && c->pubsub_data->client_tracking_prefixes)
-        mem += c->pubsub_data->client_tracking_prefixes->numnodes * (sizeof(raxNode) * sizeof(raxNode *));
+        mem += c->pubsub_data->client_tracking_prefixes->numnodes * (sizeof(raxNode) + sizeof(raxNode *));
 
     return mem;
-}
-
-/* Get the class of a client, used in order to enforce limits to different
- * classes of clients.
- *
- * The function will return one of the following:
- * CLIENT_TYPE_NORMAL -> Normal client, including MONITOR
- * CLIENT_TYPE_REPLICA  -> replica
- * CLIENT_TYPE_PUBSUB -> Client subscribed to Pub/Sub channels
- * CLIENT_TYPE_PRIMARY -> The client representing our replication primary.
- */
-int getClientType(client *c) {
-    if (c->flag.primary) return CLIENT_TYPE_PRIMARY;
-    /* Even though MONITOR clients are marked as replicas, we
-     * want the expose them as normal clients. */
-    if (c->flag.replica && !c->flag.monitor) return CLIENT_TYPE_REPLICA;
-    if (c->flag.pubsub) return CLIENT_TYPE_PUBSUB;
-    return CLIENT_TYPE_NORMAL;
 }
 
 int getClientTypeByName(char *name) {
@@ -5419,12 +6220,14 @@ int getClientTypeByName(char *name) {
         return -1;
 }
 
-char *getClientTypeName(int class) {
-    switch (class) {
+char *getClientTypeName(int client_class) {
+    switch (client_class) {
     case CLIENT_TYPE_NORMAL: return "normal";
     case CLIENT_TYPE_REPLICA: return "slave";
     case CLIENT_TYPE_PUBSUB: return "pubsub";
     case CLIENT_TYPE_PRIMARY: return "master";
+    case CLIENT_TYPE_SLOT_IMPORT: return "slot-import";
+    case CLIENT_TYPE_SLOT_EXPORT: return "slot-export";
     default: return NULL;
     }
 }
@@ -5434,7 +6237,7 @@ char *getClientTypeName(int class) {
  * a side effect.
  *
  * Return value: non-zero if the client reached the soft or the hard limit.
- *               Otherwise zero is returned. */
+ *               Otherwise, zero is returned. */
 int checkClientOutputBufferLimits(client *c) {
     int soft = 0, hard = 0, class;
     unsigned long used_mem = getClientOutputBufferMemoryUsage(c);
@@ -5449,6 +6252,12 @@ int checkClientOutputBufferLimits(client *c) {
      * like normal clients. */
     if (class == CLIENT_TYPE_PRIMARY) class = CLIENT_TYPE_NORMAL;
 
+    /* Slot import clients are treated as normal as well */
+    if (class == CLIENT_TYPE_SLOT_IMPORT) class = CLIENT_TYPE_NORMAL;
+
+    /* Slot export clients are treated as replicas */
+    if (class == CLIENT_TYPE_SLOT_EXPORT) class = CLIENT_TYPE_REPLICA;
+
     /* Note that it doesn't make sense to set the replica clients output buffer
      * limit lower than the repl-backlog-size config (partial sync will succeed
      * and then replica will get disconnected).
@@ -5456,12 +6265,13 @@ int checkClientOutputBufferLimits(client *c) {
      * This doesn't have memory consumption implications since the replica client
      * will share the backlog buffers memory. */
     size_t hard_limit_bytes = server.client_obuf_limits[class].hard_limit_bytes;
+    size_t soft_limit_bytes = server.client_obuf_limits[class].soft_limit_bytes;
     if (class == CLIENT_TYPE_REPLICA && hard_limit_bytes && (long long)hard_limit_bytes < server.repl_backlog_size)
         hard_limit_bytes = server.repl_backlog_size;
+    if (class == CLIENT_TYPE_REPLICA && soft_limit_bytes && (long long)soft_limit_bytes < server.repl_backlog_size)
+        soft_limit_bytes = server.repl_backlog_size;
     if (server.client_obuf_limits[class].hard_limit_bytes && used_mem >= hard_limit_bytes) hard = 1;
-    if (server.client_obuf_limits[class].soft_limit_bytes &&
-        used_mem >= server.client_obuf_limits[class].soft_limit_bytes)
-        soft = 1;
+    if (server.client_obuf_limits[class].soft_limit_bytes && used_mem >= soft_limit_bytes) soft = 1;
 
     /* We need to check if the soft limit is reached continuously for the
      * specified amount of seconds. */
@@ -5501,7 +6311,8 @@ int closeClientOnOutputBufferLimitReached(client *c, int async) {
     serverAssert(c->reply_bytes < SIZE_MAX - (1024 * 64));
     /* Note that c->reply_bytes is irrelevant for replica clients
      * (they use the global repl buffers). */
-    if ((c->reply_bytes == 0 && getClientType(c) != CLIENT_TYPE_REPLICA) ||
+    size_t tracked_len = atomic_load_explicit(&c->io_tracked_reply_len, memory_order_relaxed);
+    if ((c->reply_bytes == 0 && tracked_len == 0 && getClientType(c) != CLIENT_TYPE_REPLICA) ||
         (c->flag.close_asap && !(c->flag.protected_rdb_channel)))
         return 0;
     if (checkClientOutputBufferLimits(c)) {
@@ -5566,6 +6377,8 @@ char *getPausedReason(pause_purpose purpose) {
         return "shutdown_in_progress";
     case PAUSE_DURING_FAILOVER:
         return "failover_in_progress";
+    case PAUSE_DURING_SLOT_MIGRATION:
+        return "slot_migration_in_progress";
     case NUM_PAUSE_PURPOSES:
         return "none";
     default:
@@ -5690,6 +6503,10 @@ uint32_t isPausedActionsWithUpdate(uint32_t actions_bitmask) {
     return (server.paused_actions & actions_bitmask);
 }
 
+uint32_t getPausedActionsWithPurpose(pause_purpose purpose) {
+    return server.client_pause_per_purpose[purpose].paused_actions;
+}
+
 /* This function is called by the server in order to process a few events from
  * time to time while blocked into some not interruptible operation.
  * This allows to reply to clients with the -LOADING error while loading the
@@ -5751,91 +6568,73 @@ int postponeClientRead(client *c) {
     return (trySendReadToIOThreads(c) == C_OK);
 }
 
-int processIOThreadsReadDone(void) {
+/* Returns non-zero if connUpdateState must run again after processClientsCommandsBatch(). */
+int processClientIOReadsDone(client *c) {
+    serverAssert(c->io_read_state == CLIENT_COMPLETED_IO);
+
     if (ProcessingEventsWhileBlocked) {
         /* When ProcessingEventsWhileBlocked we may call processIOThreadsReadDone recursively.
          * In this case, there may be some clients left in the batch waiting to be processed. */
         processClientsCommandsBatch();
     }
 
-    if (listLength(server.clients_pending_io_read) == 0) return 0;
-    int processed = 0;
-    listNode *ln;
+    c->flag.pending_read = 0;
+    c->io_read_state = CLIENT_IDLE;
 
-    listNode *next = listFirst(server.clients_pending_io_read);
-    while (next) {
-        ln = next;
-        next = listNextNode(ln);
-        client *c = listNodeValue(ln);
+    /* Don't post-process-reads from clients that are going to be closed anyway. */
+    if (c->flag.close_asap) return 0;
 
-        /* Client is still waiting for a pending I/O - skip it */
-        if (c->io_write_state == CLIENT_PENDING_IO || c->io_read_state == CLIENT_PENDING_IO) continue;
-        /* If the write job is done, process it ASAP to free the buffer and handle connection errors */
-        if (c->io_write_state == CLIENT_COMPLETED_IO) {
-            int allow_async_writes = 0; /* Don't send writes for the client to IO threads before processing the reads */
-            processClientIOWriteDone(c, allow_async_writes);
+    /* If a client is protected, don't do anything,
+     * that may trigger read/write error or recreate handler. */
+    if (c->flag.protected) return 0;
+
+    /* Save the current conn state, as connUpdateState may modify it */
+    int in_accept_state = (connGetState(c->conn) == CONN_STATE_ACCEPTING);
+    int needs_post_read_update = 0;
+
+    /* Defer the post-batch update only when update_state may sync-invoke
+     * handlers. Always call update_state, including ACCEPTING. */
+    if (c->conn) {
+        int mask = 0;
+        if (!in_accept_state && connUpdateStateMayInvokeHandlers(c->conn)) {
+            mask = CONN_POSTPONE_READ;
+            if (c->io_write_state != CLIENT_IDLE) mask |= CONN_POSTPONE_WRITE;
+            needs_post_read_update = 1;
         }
-        /* memory barrier acquire to get the updated client state */
-        atomic_thread_fence(memory_order_acquire);
-
-        listUnlinkNode(server.clients_pending_io_read, ln);
-        c->flag.pending_read = 0;
-        c->io_read_state = CLIENT_IDLE;
-
-        /* Don't post-process-reads from clients that are going to be closed anyway. */
-        if (c->flag.close_asap) continue;
-
-        /* If a client is protected, don't do anything,
-         * that may trigger read/write error or recreate handler. */
-        if (c->flag.protected) continue;
-
-        processed++;
-        server.stat_io_reads_processed++;
-
-        /* Save the current conn state, as connUpdateState may modify it */
-        int in_accept_state = (connGetState(c->conn) == CONN_STATE_ACCEPTING);
-        connSetPostponeUpdateState(c->conn, 0);
+        connSetPostponeUpdateState(c->conn, mask);
         connUpdateState(c->conn);
+    }
 
-        /* In accept state, no client's data was read - stop here. */
-        if (in_accept_state) continue;
+    /* In accept state, no client's data was read - stop here. */
+    if (in_accept_state) return 0;
 
-        /* On read error - stop here. */
-        if (handleReadResult(c) == C_ERR) {
-            continue;
-        }
+    /* On read error - stop here. */
+    if (handleReadResult(c) == C_ERR) {
+        return needs_post_read_update;
+    }
 
-        if (!(c->read_flags & READ_FLAGS_DONT_PARSE)) {
-            parseResult res = handleParseResults(c);
-            /* On parse error - stop here. */
-            if (res == PARSE_ERR) {
-                continue;
-            } else if (res == PARSE_NEEDMORE) {
-                beforeNextClient(c);
-                continue;
-            }
-        }
-
-        if (c->argc > 0) {
-            c->flag.pending_command = 1;
-        }
-
-        size_t list_length_before_command_execute = listLength(server.clients_pending_io_read);
-        /* try to add the command to the batch */
-        int ret = addCommandToBatchAndProcessIfFull(c);
-        /* If the command was not added to the commands batch, process it immediately */
-        if (ret == C_ERR) {
-            if (processPendingCommandAndInputBuffer(c) == C_OK) beforeNextClient(c);
-        }
-        if (list_length_before_command_execute != listLength(server.clients_pending_io_read)) {
-            /* A client was unlink from the list possibly making the next node invalid */
-            next = listFirst(server.clients_pending_io_read);
+    if (!(c->read_flags & READ_FLAGS_DONT_PARSE)) {
+        parseResult res = handleParseResults(c);
+        /* On parse error - stop here. */
+        if (res == PARSE_ERR) {
+            return needs_post_read_update;
+        } else if (res == PARSE_NEEDMORE) {
+            beforeNextClient(c);
+            return needs_post_read_update;
         }
     }
 
-    processClientsCommandsBatch();
+    if (c->argc > 0) {
+        c->flag.pending_command = 1;
+    }
 
-    return processed;
+    /* try to add the command to the batch */
+    int ret = addCommandToBatchAndProcessIfFull(c);
+    /* If the command was not added to the commands batch, process it immediately */
+    if (ret == C_ERR) {
+        if (processPendingCommandAndInputBuffer(c) == C_OK) beforeNextClient(c);
+    }
+    return needs_post_read_update;
 }
 
 /* Returns the actual client eviction limit based on current configuration or
@@ -5868,16 +6667,34 @@ void evictClients(void) {
     listRewind(server.client_mem_usage_buckets[curr_bucket].clients, &bucket_iter);
     size_t client_eviction_limit = getClientEvictionLimit();
     if (client_eviction_limit == 0) return;
-    while (server.stat_clients_type_memory[CLIENT_TYPE_NORMAL] + server.stat_clients_type_memory[CLIENT_TYPE_PUBSUB] >=
-           client_eviction_limit) {
+
+    /* Variable to track memory of clients marked for close but not yet freed */
+    size_t pending_freed = 0;
+
+    while (server.stat_clients_type_memory[CLIENT_TYPE_NORMAL] +
+               server.stat_clients_type_memory[CLIENT_TYPE_PUBSUB] >
+           client_eviction_limit + pending_freed) {
         listNode *ln = listNext(&bucket_iter);
         if (ln) {
             client *c = ln->value;
+            if (c->flag.close_asap) {
+                /* Already scheduled to close. Count memory as freed and skip. */
+                pending_freed += c->last_memory_usage;
+                continue;
+            }
             sds ci = catClientInfoString(sdsempty(), c, server.hide_user_data_from_log);
             serverLog(LL_NOTICE, "Evicting client: %s", ci);
-            freeClient(c);
             sdsfree(ci);
             server.stat_evictedclients++;
+
+            if (freeClient(c) == 0) {
+                /* Client was only scheduled for asynchronous free (e.g. protected
+                 * or has pending IO) - its memory won't drop from the stats above
+                 * until that completes. Count it as freed here so we don't keep
+                 * evicting further clients while waiting for it. */
+                pending_freed += c->last_memory_usage;
+                continue;
+            }
         } else {
             curr_bucket--;
             if (curr_bucket < 0) {
@@ -5891,12 +6708,15 @@ void evictClients(void) {
 
 /* IO threads functions */
 
-void ioThreadReadQueryFromClient(void *data) {
-    client *c = data;
+void ioThreadReadQueryFromClient(client *c) {
     serverAssert(c->io_read_state == CLIENT_PENDING_IO);
 
     /* Read */
     readToQueryBuf(c);
+
+    if (c->flag.close_asap) {
+        goto done;
+    }
 
     /* Check for read errors. */
     if (c->nread <= 0) {
@@ -5913,7 +6733,9 @@ void ioThreadReadQueryFromClient(void *data) {
         goto done;
     }
 
-    parseCommand(c);
+    parseInputBuffer(c);
+    trimCommandQueue(c);
+    prepareCommandQueue(c);
 
     /* Parsing was not completed - let the main-thread handle it. */
     if (!(c->read_flags & READ_FLAGS_PARSING_COMPLETED)) {
@@ -5925,21 +6747,19 @@ void ioThreadReadQueryFromClient(void *data) {
         goto done;
     }
 
-    /* Lookup command and cluster slot calculation. */
-    prepareCommand(c);
-
 done:
     /* Only trim query buffer for non-primary clients
      * Primary client's buffer is handled by main thread using repl_applied position */
-    if (!(c->read_flags & READ_FLAGS_PRIMARY)) {
+    if (!(c->read_flags & READ_FLAGS_REPLICATED)) {
         trimClientQueryBuffer(c);
     }
-    atomic_thread_fence(memory_order_release);
+
     c->io_read_state = CLIENT_COMPLETED_IO;
+    c->cur_tid = getCurTid();
+    sendToMainThread(c, JOB_RES_READ_CLIENT);
 }
 
-void ioThreadWriteToClient(void *data) {
-    client *c = data;
+void ioThreadWriteToClient(client *c) {
     serverAssert(c->io_write_state == CLIENT_PENDING_IO);
     c->nwritten = 0;
     if (c->write_flags & WRITE_FLAGS_IS_REPLICA) {
@@ -5948,6 +6768,78 @@ void ioThreadWriteToClient(void *data) {
         _writeToClient(c);
     }
 
-    atomic_thread_fence(memory_order_release);
     c->io_write_state = CLIENT_COMPLETED_IO;
+    sendToMainThread(c, JOB_RES_WRITE_CLIENT);
+}
+
+/* ========================== Wrapper Functions for Testing ========================== */
+/* These wrapper functions expose static functions for use in GoogleTest unit tests.
+ * They are non-static wrappers that simply call the corresponding static functions. */
+
+void testOnlyPostWriteToReplica(client *c) {
+    postWriteToReplica(c);
+}
+
+void testOnlyWriteToReplica(client *c) {
+    writeToReplica(c);
+}
+
+void testOnlyBackupAndUpdateClientArgv(client *c, int new_argc, robj **new_argv) {
+    backupAndUpdateClientArgv(c, new_argc, new_argv);
+}
+
+size_t testOnlyUpsertPayloadHeader(char *buf, size_t *bufpos, payloadHeader **last_header, uint8_t type, size_t len, int slot, size_t available) {
+    return upsertPayloadHeader(buf, bufpos, last_header, type, len, slot, 0, available);
+}
+
+int testOnlyIsCopyAvoidPreferred(client *c, robj *obj) {
+    return isCopyAvoidPreferred(c, obj);
+}
+
+size_t testOnlyAddReplyPayloadToBuffer(client *c, const void *payload, size_t len, uint8_t payload_type) {
+    return _addReplyPayloadToBuffer(c, payload, len, payload_type);
+}
+
+size_t testOnlyAddBulkStrRefToBuffer(client *c, const void *payload, size_t len) {
+    return _addBulkStrRefToBuffer(c, payload, len);
+}
+
+void testOnlyAddReplyPayloadToList(client *c, list *reply_list, const char *payload, size_t len, uint8_t payload_type) {
+    _addReplyPayloadToList(c, reply_list, payload, len, payload_type);
+}
+
+void testOnlyAddBulkStrRefToToList(client *c, const void *payload, size_t len) {
+    _addBulkStrRefToToList(c, payload, len);
+}
+
+void testOnlyAddBulkStrRefToBufferOrList(client *c, robj *obj) {
+    _addBulkStrRefToBufferOrList(c, obj);
+}
+
+void testOnlyInitReplyIOV(client *c, int iovsize, struct iovec *iov_arr, char (*prefixes)[BULK_STR_LEN_PREFIX_MAX_SIZE], char *crlf, replyIOV *reply) {
+    initReplyIOV(c, iovsize, iov_arr, prefixes, crlf, reply);
+}
+
+void testOnlyAddPlainBufferToReplyIOV(char *buf, size_t buf_len, replyIOV *reply, bufWriteMetadata *metadata) {
+    addPlainBufferToReplyIOV(buf, buf_len, reply, metadata);
+}
+
+void testOnlyAddBulkStringToReplyIOV(char *buf, size_t buf_len, replyIOV *reply, bufWriteMetadata *metadata) {
+    addBulkStringToReplyIOV(buf, buf_len, reply, metadata);
+}
+
+void testOnlyAddEncodedBufferToReplyIOV(char *buf, size_t bufpos, replyIOV *reply, bufWriteMetadata *metadata) {
+    addEncodedBufferToReplyIOV(buf, bufpos, reply, metadata);
+}
+
+void testOnlyAddBufferToReplyIOV(int encoded, char *buf, size_t bufpos, replyIOV *reply, bufWriteMetadata *metadata) {
+    addBufferToReplyIOV(encoded, buf, bufpos, reply, metadata);
+}
+
+void testOnlySaveLastWrittenBuf(client *c, bufWriteMetadata *metadata, int bufcnt, size_t totlen, size_t totwritten) {
+    saveLastWrittenBuf(c, metadata, bufcnt, totlen, totwritten);
+}
+
+void testOnlyTrimReplyUnusedTailSpace(client *c) {
+    trimReplyUnusedTailSpace(c);
 }

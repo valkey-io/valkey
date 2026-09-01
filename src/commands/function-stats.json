@@ -12,7 +12,8 @@
             "ALLOW_BUSY"
         ],
         "acl_categories": [
-            "SCRIPTING"
+            "SCRIPTING",
+            "SLOW"
         ],
         "command_tips": [
             "NONDETERMINISTIC_OUTPUT",

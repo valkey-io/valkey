@@ -17,6 +17,8 @@
             "FAST"
         ],
         "acl_categories": [
+            "FAST",
+            "READ",
             "SORTEDSET"
         ],
         "key_specs": [

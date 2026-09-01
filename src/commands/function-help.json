@@ -12,7 +12,8 @@
             "STALE"
         ],
         "acl_categories": [
-            "SCRIPTING"
+            "SCRIPTING",
+            "SLOW"
         ],
         "reply_schema": {
             "type": "array",

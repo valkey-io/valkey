@@ -70,7 +70,7 @@ proc cluster_find_available_replica {first} {
 
 proc fix_cluster {addr} {
     set code [catch {
-        exec src/valkey-cli {*}[valkeycli_tls_config "./tests"] --cluster fix $addr << yes
+        exec $::VALKEY_CLI_BIN {*}[valkeycli_tls_config "./tests"] --cluster fix $addr << yes
     } result]
     if {$code != 0} {
         puts "valkey-cli --cluster fix returns non-zero exit code, output below:\n$result"
@@ -79,7 +79,7 @@ proc fix_cluster {addr} {
     # but we can ignore that and rely on the check below.
     wait_for_cluster_state ok
     wait_for_condition 100 100 {
-        [catch {exec src/valkey-cli {*}[valkeycli_tls_config "./tests"] --cluster check $addr} result] == 0
+        [catch {exec $::VALKEY_CLI_BIN {*}[valkeycli_tls_config "./tests"] --cluster check $addr} result] == 0
     } else {
         puts "valkey-cli --cluster check returns non-zero exit code, output below:\n$result"
         fail "Cluster could not settle with configuration"
@@ -126,7 +126,7 @@ proc cluster_size_consistent {cluster_size} {
 
 # Wait for cluster configuration to propagate and be consistent across nodes.
 proc wait_for_cluster_propagation {} {
-    wait_for_condition 1000 50 {
+    wait_for_condition 1200 50 {
         [cluster_config_consistent] eq 1
     } else {
         for {set j 0} {$j < [llength $::servers]} {incr j} {
@@ -148,6 +148,7 @@ proc wait_for_cluster_size {cluster_size} {
 # Check that cluster nodes agree about "state", or raise an error.
 proc wait_for_cluster_state {state} {
     for {set j 0} {$j < [llength $::servers]} {incr j} {
+        if {![process_is_alive [srv -$j pid]]} continue
         if {[process_is_paused [srv -$j pid]]} continue
         wait_for_condition 1000 50 {
             [CI $j cluster_state] eq $state
@@ -209,11 +210,23 @@ proc cluster_allocate_replicas {masters replicas} {
 
 # Setup method to be executed to configure the cluster before the
 # tests run.
-proc cluster_setup {masters replicas node_count slot_allocator replica_allocator code} {
+proc cluster_setup {masters replicas node_count slot_allocator replica_allocator options} {
+    # Make it easier to understand how a particular server interacts
+    # with other nodes when reading the server logs by assigning human
+    # nodenames R0, R1, R2 etc.
+    set cluster_setup_default_human_nodename 1
+    # Disable it if the user has explicitly assigned nodenames
+    if {[dict exists $options overrides cluster-announce-human-nodename]} {
+        set cluster_setup_default_human_nodename 0
+    }
+
     set config_epoch 1
     for {set i 0} {$i < $node_count} {incr i} {
         R $i CLUSTER SET-CONFIG-EPOCH $config_epoch
         incr config_epoch
+        if {$cluster_setup_default_human_nodename} {
+            R $i CONFIG SET cluster-announce-human-nodename "R$i"
+        }
     }
 
     # Have all nodes meet
@@ -223,12 +236,12 @@ proc cluster_setup {masters replicas node_count slot_allocator replica_allocator
     if {$::tls && !$tls_cluster} {
         for {set i 1} {$i < $node_count} {incr i} {
             R 0 CLUSTER MEET [srv -$i host] [srv -$i pport]
-        }         
+        }
     } else {
         for {set i 1} {$i < $node_count} {incr i} {
             R 0 CLUSTER MEET [srv -$i host] [srv -$i port]
         }
-    }  
+    }
 
     $slot_allocator $masters $replicas
 
@@ -248,8 +261,6 @@ proc cluster_setup {masters replicas node_count slot_allocator replica_allocator
 
     wait_for_cluster_propagation
     wait_for_cluster_state "ok"
-
-    uplevel 1 $code
 }
 
 # Start a cluster with the given number of masters and replicas. Replicas
@@ -258,16 +269,18 @@ proc start_cluster {masters replicas options code {slot_allocator continuous_slo
     set node_count [expr $masters + $replicas]
 
     # Set the final code to be the tests + cluster setup
-    set code [list cluster_setup $masters $replicas $node_count $slot_allocator $replica_allocator $code]
+    set setup_code [list cluster_setup $masters $replicas $node_count $slot_allocator $replica_allocator $options]
+    set teardown_code {}
+    set code [list test_fixture "start_cluster" $setup_code $teardown_code $code]
 
     # Configure the starting of multiple servers. Set cluster node timeout
-    # aggressively since many tests depend on ping/pong messages. 
+    # aggressively since many tests depend on ping/pong messages.
 
-    set cluster_options [list overrides [list cluster-enabled yes cluster-ping-interval 100 cluster-node-timeout 3000 cluster-databases 16 cluster-slot-stats-enabled yes]]
+    set cluster_options [list overrides [list cluster-enabled yes cluster-ping-interval 100 cluster-node-timeout 3000 cluster-databases 16 cluster-slot-stats-enabled yes latency-monitor-threshold 1]]
     set options [concat $cluster_options $options]
 
     # Cluster mode only supports a single database, so before executing the tests
-    # it needs to be configured correctly and needs to be reset after the tests. 
+    # it needs to be configured correctly and needs to be reset after the tests.
     set old_singledb $::singledb
     set ::singledb 1
     start_multiple_servers $node_count $options $code
@@ -277,6 +290,20 @@ proc start_cluster {masters replicas options code {slot_allocator continuous_slo
 # Test node for flag.
 proc cluster_has_flag {node flag} {
     expr {[lsearch -exact [dict get $node flags] $flag] != -1}
+}
+
+# Returns 1 only when every server instance in `srv_idxs` sees every
+# node id in `node_ids` carrying `flag` in its CLUSTER NODES output.
+proc cluster_all_see_flag {srv_idxs node_ids flag} {
+    foreach idx $srv_idxs {
+        foreach id $node_ids {
+            set node [cluster_get_node_by_id $idx $id]
+            if {![cluster_has_flag $node $flag]} {
+                return 0
+            }
+        }
+    }
+    return 1
 }
 
 # Returns the parsed "myself" node entry as a dictionary.
@@ -382,9 +409,16 @@ proc are_hostnames_propagated {match_string} {
     return 1
 }
 
-# Check if cluster's announced IPs are consistent and match a pattern
+# Check if cluster's announced IPs or ports are consistent and come from a predefined list
 # Optionally, a list of clients can be supplied.
-proc are_cluster_announced_ips_propagated {match_string {clients {}}} {
+proc are_cluster_announced_values_propagated {type expected_values {clients {}}} {
+    if {$type eq "ip"} {
+        set value_index 0
+    } elseif {$type eq "port"} {
+        set value_index 1
+    } else {
+        fail "Unknown announced value type $type for node"
+    }
     for {set j 0} {$j < [llength $::servers]} {incr j} {
         if {$clients eq {}} {
             set client [srv [expr -1*$j] "client"]
@@ -394,7 +428,7 @@ proc are_cluster_announced_ips_propagated {match_string {clients {}}} {
         set cfg [$client cluster slots]
         foreach node $cfg {
             for {set i 2} {$i < [llength $node]} {incr i} {
-                if {! [string match $match_string [lindex [lindex $node $i] 0]] } {
+                if {[lsearch -exact $expected_values [lindex [lindex $node $i] $value_index]] < 0} {
                     return 0
                 }
             }
@@ -432,4 +466,22 @@ proc check_cluster_node_mark {flag ref_node_index instance_id_to_check} {
 
 proc get_slot_field {slot_output shard_id node_id attrib_id} {
     return [lindex [lindex [lindex $slot_output $shard_id] $node_id] $attrib_id]
+}
+
+proc get_open_slots {srv_idx} {
+    set slots [dict get [cluster_get_myself $srv_idx] slots]
+    if {[regexp {\[.*} $slots slots]} {
+        set slots [regsub -all {[{}]} $slots ""]
+        return $slots
+    } else {
+        return {}
+    }
+}
+
+proc wait_for_slot_state {srv_idx pattern} {
+    wait_for_condition 100 100 {
+        [get_open_slots $srv_idx] eq $pattern
+    } else {
+        fail "incorrect slot state on R $srv_idx: expected $pattern; got [get_open_slots $srv_idx]"
+    }
 }

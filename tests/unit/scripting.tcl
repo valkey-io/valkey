@@ -368,12 +368,6 @@ start_server {tags {"scripting"}} {
         set e
     } {*against a key*}
 
-    test {EVAL - JSON string encoding a string larger than 2GB} {
-        run_script {
-            local s = string.rep("a", 1024 * 1024 * 1024)
-            return #cjson.encode(s..s..s)
-        } 0
-    } {3221225474} {large-memory} ;# length includes two double quotes at both ends
 
     test {EVAL - JSON numeric decoding} {
         # We must return the table as a string because otherwise
@@ -618,13 +612,123 @@ start_server {tags {"scripting"}} {
         assert_error {NOSCRIPT*} {r evalsha fd758d1589d044dd850a6f05d52f2eefd27f033f 1 mykey}
     }
 
+
+    test {EVAL - Test table unpack with invalid indexes} {
+        catch {r eval { return {unpack({1,2,3}, -2, 2147483647)} } 0} e
+        assert_match {*too many results to unpack*} $e
+        catch {r eval { return {unpack({1,2,3}, 0, 2147483647)} } 0} e
+        assert_match {*too many results to unpack*} $e
+        catch {r eval { return {unpack({1,2,3}, -2147483648, -2)} } 0} e
+        assert_match {*too many results to unpack*} $e
+        set res [r eval { return {unpack({1,2,3}, -1, -2)} } 0]
+        assert_match {} $res
+        set res [r eval { return {unpack({1,2,3}, 1, -1)} } 0]
+        assert_match {} $res
+
+        # unpack with range -1 to 5, verify nil indexes
+        set res [r eval {
+             local function unpack_to_list(t, i, j)
+               local n, v = select('#', unpack(t, i, j)), {unpack(t, i, j)}
+               for i = 1, n do v[i] = v[i] or '_NIL_' end
+               v.n = n
+               return v
+             end
+
+            return unpack_to_list({1,2,3}, -1, 5)
+        } 0]
+        assert_match {_NIL_ _NIL_ 1 2 3 _NIL_ _NIL_} $res
+
+        # unpack with negative range, verify nil indexes
+        set res [r eval {
+             local function unpack_to_list(t, i, j)
+               local n, v = select('#', unpack(t, i, j)), {unpack(t, i, j)}
+               for i = 1, n do v[i] = v[i] or '_NIL_' end
+               v.n = n
+               return v
+             end
+
+            return unpack_to_list({1,2,3}, -2147483648, -2147483646)
+        } 0]
+        assert_match {_NIL_ _NIL_ _NIL_} $res
+    } {}
+
+    test "Try trick readonly table on basic types metatable" {
+        # Run the following scripts for basic types. Either getmetatable()
+        # should return nil or the metatable must be readonly.
+        set scripts {
+            {getmetatable(nil).__index = function() return 1 end}
+            {getmetatable('').__index = function() return 1 end}
+            {getmetatable(123.222).__index = function() return 1 end}
+            {getmetatable(true).__index = function() return 1 end}
+            {getmetatable(function() return 1 end).__index = function() return 1 end}
+            {getmetatable(coroutine.create(function() return 1 end)).__index = function() return 1 end}
+        }
+
+        foreach code $scripts {
+            catch {r eval $code 0} e
+            assert {
+                [string match "*attempt to index a nil value*" $e] ||
+                [string match "*Attempt to modify a readonly table*" $e]
+            }
+        }
+    }
+
+    test {Dynamic reset of lua engine with insecure API config change} {
+        # Ensure insecure API is not available by default
+        assert_error {*Script attempted to access nonexistent global variable 'getfenv'*} {
+            r eval "return getfenv()" 0
+        }
+
+        # Verify that enabling the config `lua-enable-insecure-api` allows insecure API access
+        r config set lua-enable-insecure-api yes
+        assert_equal {} [r eval "return getfenv()" 0]
+
+        r config set lua-enable-insecure-api no
+        assert_error {*Script attempted to access nonexistent global variable 'getfenv'*} {
+            r eval "return getfenv()" 0
+        }
+    } {} {external:skip}
+
+    start_server {tags {"scripting external:skip"} overrides {lua-enable-insecure-api yes}} {
+        test {Dynamic reset of lua engine with insecure API config change - default yes} {
+            # Ensure insecure API is available by default
+            assert_equal {} [r eval "return getfenv()" 0]
+
+            # Verify that disabling the config `lua-enable-insecure-api` disallows insecure API access
+            r config set lua-enable-insecure-api no
+            assert_error {*Script attempted to access nonexistent global variable 'getfenv'*} {
+                r eval "return getfenv()" 0
+            }
+
+            r config set lua-enable-insecure-api yes
+            assert_equal {} [r eval "return getfenv()" 0]
+        }
+    }
+
+    start_server {tags {"scripting external:skip"} config {default.conf} overrides {lua-enable-insecure-api no} args {--lua-enable-insecure-api yes}} {
+        test {Dynamic reset of lua engine with insecure API config change - command line yes} {
+            # Ensure insecure API is available by default
+            assert_equal {} [r eval "return getfenv()" 0]
+
+            # Verify that disabling the config `lua-enable-insecure-api` disallows insecure API access
+            r config set lua-enable-insecure-api no
+            assert_error {*Script attempted to access nonexistent global variable 'getfenv'*} {
+                r eval "return getfenv()" 0
+            }
+
+            r config set lua-enable-insecure-api yes
+            assert_equal {} [r eval "return getfenv()" 0]
+        }
+    }
+
     test {SCRIPTING FLUSH ASYNC} {
+        r script flush sync
         for {set j 0} {$j < 100} {incr j} {
             r script load "return $j"
         }
-        assert { [string match "*number_of_cached_scripts:100*" [r info Memory]] }
+        assert_match "*number_of_cached_scripts:100*" [r info Memory]
         r script flush async
-        assert { [string match "*number_of_cached_scripts:0*" [r info Memory]] }
+        assert_match "*number_of_cached_scripts:0*" [r info Memory]
     }
 
     test {SCRIPT EXISTS - can detect already defined scripts?} {
@@ -865,7 +969,7 @@ start_server {tags {"scripting"}} {
         # still this test isn't able to trigger the issue, but we keep it anyway.
         start_server {tags {"scripting"}} {
             set repl [attach_to_replication_stream]
-            # a command with 5 argsument
+            # a command with 5 arguments
             r eval {redis.call('hmget', KEYS[1], 1, 2, 3)} 1 key
             # then a command with 3 that is replicated as one with 4
             r eval {redis.call('incrbyfloat', KEYS[1], 1)} 1 key
@@ -919,6 +1023,33 @@ start_server {tags {"scripting"}} {
     test {Scripts can handle commands with incorrect arity} {
         assert_error "ERR Wrong number of args calling command from script*" {run_script "redis.call('set','invalid')" 0}
         assert_error "ERR Wrong number of args calling command from script*" {run_script "redis.call('incr')" 0}
+    }
+
+    test {Lua-emitted errors carry the ERR prefix (issue #3663)} {
+        # All errors raised from the Lua engine should be tagged with an
+        # error code so clients that switch on `-ERR ...` keep working.
+        # redis.call() bubbles the error up as the reply; pcall variants
+        # surface it as an err-table string starting with the error code.
+        assert_error "ERR Please specify at least one argument*" {
+            run_script "return redis.call()" 0
+        }
+        assert_match "ERR RESP version must be 2 or 3.*" \
+            [run_script "local ok, err = pcall(redis.setresp, 4); return err" 0]
+        assert_match "ERR *server.log() requires two arguments or more.*" \
+            [run_script "local ok, err = pcall(redis.log, 1); return err" 0]
+        assert_match "ERR Invalid log level.*" \
+            [run_script "local ok, err = pcall(redis.log, 10, 'msg'); return err" 0]
+        assert_match "ERR *server.set_repl() requires one argument.*" \
+            [run_script "local ok, err = pcall(redis.set_repl); return err" 0]
+
+        # Errors that already carry their own code (e.g. WRONGTYPE) must not
+        # be wrapped with a second "ERR " prefix. Set a string and call a
+        # hash command on it through Lua; the error should keep its code.
+        r set scriptkey:wt "string"
+        assert_error "WRONGTYPE *" {
+            run_script "return redis.call('HGET','scriptkey:wt','f')" 1 scriptkey:wt
+        }
+        r del scriptkey:wt
     }
 
     test {Correct handling of reused argv (issue #1939)} {
@@ -1155,6 +1286,55 @@ start_server {tags {"scripting"}} {
     } {*Script attempted to access nonexistent global variable 'print'*}
 }
 
+start_server {tags {"scripting external:skip large-memory"}} {
+    test {EVAL - JSON string encoding a string larger than 2GB} {
+        run_script {
+            local s = string.rep("a", 750 * 1024 * 1024)
+            return #cjson.encode(s..s..s)
+        } 0
+    } {2359296002} ;# length includes two double quotes at both ends
+}
+
+start_server {tags {"scripting external:skip large-memory"}} {
+    test {EVAL - Test long escape sequences for strings} {
+        r eval {
+            -- Generate 1gb '==...==' separator
+            local s = string.rep('=', 1024 * 1024)
+            local t = {} for i=1,1024 do t[i] = s end
+            local sep = table.concat(t)
+            collectgarbage('collect')
+
+            local code = table.concat({'return [',sep,'[x]',sep,']'})
+            collectgarbage('collect')
+
+            -- Load the code and run it. Script will return the string length.
+            -- Escape sequence: [=....=[ to ]=...=] will be ignored
+            -- Actual string is a single character: 'x'. Script will return 1
+            local func = loadstring(code)
+            return #func()
+        } 0
+    } {1}
+}
+
+start_server {tags {"scripting external:skip large-memory"}} {
+    test {EVAL - Lua can parse string with too many new lines} {
+        # Create a long string consisting only of newline characters. When Lua
+        # fails to parse a string, it typically includes a snippet like
+        # "... near ..." in the error message to indicate the last recognizable
+        # token. In this test, since the input contains only newlines, there
+        # should be no identifiable token, so the error message should contain
+        # only the actual error, without a near clause.
+
+        r eval {
+           local s = string.rep('\n', 1024 * 1024)
+           local t = {} for i=1,2048 do t[#t+1] = s end
+           local lines = table.concat(t)
+           local fn, err = loadstring(lines)
+           return err
+        } 0
+    } {*chunk has too many lines}
+}
+
 # Start a new server since the last test in this stanza will kill the
 # instance at all.
 start_server {tags {"scripting"}} {
@@ -1203,7 +1383,7 @@ start_server {tags {"scripting"}} {
         set rd [valkey_deferring_client]
         r config set lua-time-limit 10
 
-        # senging (in a pipeline):
+        # sending (in a pipeline):
         # 1. eval "while 1 do redis.call('ping') end" 0
         # 2. ping
         if {$is_eval == 1} {
@@ -1537,9 +1717,11 @@ start_server {tags {"scripting repl external:skip"}} {
 
 if {$is_eval eq 1 && $script_compatibility_api == "redis"} {
 start_server {tags {"scripting external:skip"}} {
-    r script debug sync
-    r eval {return 'hello'} 0
-    r eval {return 'hello'} 0
+    test {Test scripting debug smoke} {
+        r script debug sync
+        r eval {return 'hello'} 0
+        r eval {return 'hello'} 0
+    }
 }
 
 start_server {tags {"scripting needs:debug external:skip"}} {
@@ -1547,13 +1729,13 @@ start_server {tags {"scripting needs:debug external:skip"}} {
         r script debug sync
         r eval {return 'hello'} 0
         catch {r 'hello\0world'} e
-        assert_match {*Unknown Lua debugger command*} $e
+        assert_match {*Unknown debugger command*} $e
         catch {r 'hello\0'} e
-        assert_match {*Unknown Lua debugger command*} $e
+        assert_match {*Unknown debugger command*} $e
         catch {r '\0hello'} e
-        assert_match {*Unknown Lua debugger command*} $e
+        assert_match {*Unknown debugger command*} $e
         catch {r '\0hello\0'} e
-        assert_match {*Unknown Lua debugger command*} $e
+        assert_match {*Unknown debugger command*} $e
     }
 
     test {Test scripting debug lua stack overflow} {
@@ -1580,6 +1762,39 @@ start_server {tags {"scripting needs:debug external:skip"}} {
         assert_match {*PONG*} $ret
         reconnect
         assert_equal [r ping] {PONG}
+    }
+
+    test {Test scripting debug session survives SCRIPT FLUSH ASYNC that recreates the Lua state} {
+        # First debug session, Lua state is created.
+        r script debug sync
+        r eval {return 'hello'} 0
+        set cmd "*2\r\n\$6\r\nserver\r\n\$4\r\nping\r\n"
+        r write $cmd
+        r flush
+        assert_match {*PONG*} [r read]
+        reconnect
+
+        # Recreate the Lua engine.
+        r script flush async
+
+        # Second debug session must dispatch against the recreated Lua state.
+        r script debug sync
+        r eval {return 'hello'} 0
+        set cmd "*2\r\n\$6\r\nserver\r\n\$4\r\nping\r\n"
+        r write $cmd
+        r flush
+        assert_match {*PONG*} [r read]
+        reconnect
+    }
+
+    test {Test scripting debug print does not use-after-free the logged value} {
+        r script debug sync
+        r eval {return 'hello'} 1 somekey somearg
+        set cmd "*2\r\n\$5\r\nprint\r\n\$4\r\nARGV\r\n"
+        r write $cmd
+        r flush
+        assert_match {*<value>*somearg*} [r read]
+        reconnect
     }
 }
 
@@ -2406,6 +2621,24 @@ start_server {tags {"scripting"}} {
         assert_equal [errorrstat MY_ERR_CODE r] {} ;# error stats were not incremented
     }
 
+    test "LUA redis.error_reply API sanitation" {
+        r config resetstat
+        assert_error {ERR*} {
+            r eval {error(redis.error_reply("-ERR\r\n-ERR FAKE"))} 0
+        }
+        assert_equal PONG [r ping]
+        assert_equal [errorrstat ERR r] {count=1}
+    }
+
+    test "LUA error function API sanitation" {
+        r config resetstat
+        assert_error {ERR*} {
+            r eval {error("-ERR\r\n-ERR FAKE")} 0
+        }
+        assert_equal PONG [r ping]
+        assert_equal [errorrstat ERR r] {count=1}
+    }
+
     test "LUA test pcall" {
         assert_equal [
             r eval {local status, res = pcall(function() return 1 end); return 'status: ' .. tostring(status) .. ' result: ' .. res} 0
@@ -2480,5 +2713,64 @@ start_server {tags {"scripting"}} {
         assert_error {ERR unknown error script: *} {
             r eval "error({})" 0
         }
+    }
+
+    test {EVAL - SELECT inside script affects subsequent commands in same script} {
+        r select 0
+        r del testkey
+        r set testkey "db0_value"
+        
+        # Run script that:
+        # 1. Reads from DB 0
+        # 2. Switches to DB 1
+        # 3. Sets a key in DB 1
+        # 4. Returns the value from DB 1
+        set result [run_script {
+            local db0_val = server.call('get', 'testkey')
+            server.call('select', '1')
+            server.call('set', 'testkey', 'db1_value')
+            return server.call('get', 'testkey')
+        } 1 testkey]
+        
+        # Script returned the DB 1 value
+        assert_equal "db1_value" $result
+        
+        # Verify we're back in DB 0 after script
+        assert_equal "db0_value" [r get testkey]
+        
+        # Verify DB 1 has the new value that was set by the script
+        r select 1
+        assert_equal "db1_value" [r get testkey]
+        
+        # Cleanup
+        r del testkey
+        r select 0
+        r del testkey
+        set _ {}
+    } {} {singledb:skip}
+
+    test "Don't stop the dirty scripts when an OOM occurs midway through execution" {
+        r flushall
+        r config set maxmemory 1
+        r eval {
+            server.call('get', KEYS[1])
+            server.call('del', KEYS[1])
+            server.call('set', KEYS[1], ARGV[1])
+        } 1 foo bar
+       assert_equal bar [r get foo]
+       r config set maxmemory 0
+    }
+
+    test "Stop the non-dirty scripts when an OOM occurs midway through execution" {
+        r flushall
+        r config set maxmemory 1
+        assert_error {OOM *} {
+            r eval {
+                server.call('get', KEYS[1])
+                server.call('set', KEYS[1], ARGV[1])
+            } 1 foo bar
+        }
+       assert_equal {} [r get foo]
+       r config set maxmemory 0
     }
 }

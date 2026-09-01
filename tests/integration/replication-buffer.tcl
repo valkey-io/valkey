@@ -279,6 +279,16 @@ test "Partial resynchronization is successful even client-output-buffer-limit is
             }
             assert_equal [s sync_full] {1}
             assert_equal [s sync_partial_ok] $psync_count
+            verify_no_log_message 0 "*closed for overcoming of output buffer limits*" 0
+
+            # Take this opportunity to test the soft limit, we won't encounter the COB limit.
+            set loglines [count_log_lines 0]
+            r config set client-output-buffer-limit "replica 0 512k 0"
+            pause_process [srv -1 pid]
+            r set key $big_str
+            after 1100
+            resume_process [srv -1 pid]
+            verify_no_log_message 0 "*closed for overcoming of output buffer limits*" $loglines
         }
     }
 }

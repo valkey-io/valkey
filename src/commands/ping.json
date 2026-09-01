@@ -11,7 +11,8 @@
             "SENTINEL"
         ],
         "acl_categories": [
-            "CONNECTION"
+            "CONNECTION",
+            "FAST"
         ],
         "command_tips": [
             "REQUEST_POLICY:ALL_SHARDS",

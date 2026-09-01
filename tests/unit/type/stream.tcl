@@ -488,7 +488,7 @@ start_server {
         r XADD "\{lestream\}2" 2-0 k2 v5
         r XADD "\{lestream\}2" 3-0 k3 v6
 
-        # read last element from 3 streams (2 with enetries, 1 non-existent)
+        # read last element from 3 streams (2 with entries, 1 nonexistent)
         # verify the last element from the two existing streams were returned
         set res [r XREAD STREAMS "\{lestream\}1" "\{lestream\}2" "\{lestream\}3" + + +]
         assert_equal $res {{{{lestream}1} {{3-0 {k3 v3}}}} {{{lestream}2} {{3-0 {k3 v6}}}}}
@@ -719,6 +719,18 @@ start_server {
         assert {[r XLEN mystream] == 400}
     }
 
+    test {XTRIM with MAXLEN 0 keeps an empty stream key} {
+        r DEL mystream
+        r XADD mystream 1-0 f v
+        r XADD mystream 2-0 f v
+        assert_equal 2 [r XTRIM mystream MAXLEN = 0]
+        assert_equal 1 [r EXISTS mystream]
+        set reply [r XINFO STREAM mystream]
+        assert_equal 0 [dict get $reply length]
+        assert_equal "2-0" [dict get $reply last-generated-id]
+        assert_equal "0-0" [dict get $reply recorded-first-entry-id]
+    }
+
     test {XADD with LIMIT consecutive calls} {
         r del mystream
         r config set stream-node-max-entries 10
@@ -771,6 +783,35 @@ start_server {
         }
         assert {[r XTRIM mystream MAXLEN ~ 0 LIMIT 1] == 0}
         assert {[r XTRIM mystream MAXLEN ~ 0 LIMIT 2] == 2}
+    }
+
+    test {XTRIM MINID marking last entry in listpack as deleted} {
+        # Regression test: when XTRIM marks the last entry in a listpack
+        # node as deleted, the pointer past the lp-count field is NULL
+        # (EOF). The delta recalculation after lpReplaceInteger must
+        # handle this to avoid listpack corruption.
+        r del mystream
+        r config set stream-node-max-entries 3
+
+        # Add 4 entries: first 3 go into node 1, 4th into node 2.
+        r XADD mystream 1-0 f v
+        r XADD mystream 2-0 f v
+        r XADD mystream 3-0 f v
+        r XADD mystream 4-0 f v
+
+        # Exact MINID trim: marks entries 1-0 and 2-0 as deleted inside
+        # node 1. Entry 3-0 is the last entry in that node, so after
+        # skipping its lp-count the pointer hits EOF (NULL).
+        r XTRIM mystream MINID = 4-0
+
+        # Verify the stream is intact and XREAD works.
+        assert_equal [r XLEN mystream] 1
+        set result [r XRANGE mystream - +]
+        assert_equal $result {{4-0 {f v}}}
+        set result [r XREAD COUNT 10 STREAMS mystream 0-0]
+        assert_equal $result {{mystream {{4-0 {f v}}}}}
+
+        r config set stream-node-max-entries 100
     }
 }
 
@@ -879,6 +920,34 @@ start_server {tags {"stream needs:debug"} overrides {appendonly yes stream-node-
         r XADD mystream * xitem v
         incr j
         assert {[r xlen mystream] == 91}
+        r flushall
+    }
+
+    test {XADD/XTRIM strip redundant LIMIT when rewriting for propagation} {
+        set aof [get_last_incr_aof_path r]
+        r config set stream-node-max-entries 10
+
+        for {set j 0} {$j < 100} {incr j} {
+            r XADD mystream * xitem v
+        }
+        assert_equal 100 [r xlen mystream]
+
+        r XADD mystream MAXLEN ~ 55 LIMIT 30 * xitem v
+        assert_equal 71 [r xlen mystream]
+
+        set len_before_trim [r xlen mystream]
+        set trimmed [r XTRIM mystream MAXLEN ~ 50 LIMIT 30]
+        assert {$trimmed > 0 && $trimmed <= 30}
+        assert_equal [expr {$len_before_trim - $trimmed}] [r xlen mystream]
+
+        set fp [open $aof r]
+        fconfigure $fp -translation binary
+        set blob [read $fp]
+        close $fp
+        assert_equal -1 [string first "LIMIT" $blob]
+
+        r debug loadaof
+        assert_equal [expr {$len_before_trim - $trimmed}] [r xlen mystream]
     }
 }
 
@@ -902,7 +971,7 @@ start_server {tags {"stream"}} {
         set err
     } {ERR *smaller*}
 
-    test {XSETID cannot SETID on non-existent key} {
+    test {XSETID cannot SETID on nonexistent key} {
         catch {r XSETID stream 1-1} err
         set _ $err
     } {ERR no such key}
@@ -917,7 +986,7 @@ start_server {tags {"stream"}} {
         set _ $err
     } {ERR syntax error}
 
-    test {XSETID errors on negstive offset} {
+    test {XSETID errors on negative offset} {
         catch {r XSETID stream 1-1 ENTRIESADDED -1 MAXDELETEDID 0-0} err
         set _ $err
     } {ERR *must be positive}
@@ -1012,7 +1081,7 @@ start_server {tags {"stream"}} {
         assert_equal [dict get $reply max-deleted-entry-id] "2-0"
     }
 
-    test {XADD with artial ID with maximal seq} {
+    test {XADD with partial ID with maximal seq} {
         r DEL x
         r XADD x 1-18446744073709551615 f1 v1
         assert_error {*The ID specified in XADD is equal or smaller*} {r XADD x 1-* f2 v2}

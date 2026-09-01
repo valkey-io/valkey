@@ -56,6 +56,24 @@ start_server {tags {"modules"}} {
         assert_equal {} [r test.gettimer $id]
     }
 
+    test {RM_StopTimer: stopping the currently firing timer is safe} {
+        # Regression for double-free when a timer callback calls
+        # ValkeyModule_StopTimer() on its own timer ID.
+        r set "timer-selfstop-key" 0
+        set id [r test.selfstoptimer 10 timer-selfstop-key]
+
+        wait_for_condition 50 100 {
+            [r get timer-selfstop-key] == 1
+        } else {
+            fail "Self-stopping timer callback did not run"
+        }
+
+        # Timer was freed by StopTimer inside the callback; id must be gone
+        # and the server must still be responsive (no double free crash).
+        assert_equal {} [r test.gettimer $id]
+        assert_equal {PONG} [r ping]
+    }
+
     test "Module can be unloaded when timer was finished" {
         r set "timer-incr-key" 0
         r test.createtimer 500 timer-incr-key

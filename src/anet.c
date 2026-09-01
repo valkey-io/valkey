@@ -52,8 +52,6 @@
 #include "util.h"
 #include "serverassert.h"
 
-#define UNUSED(x) (void)(x)
-
 static void anetSetError(char *err, const char *fmt, ...) {
     va_list ap;
 
@@ -659,6 +657,37 @@ int anetUnixServer(char *err, char *path, mode_t perm, int backlog, char *group)
     return s;
 }
 
+/* For some error cases indicates transient errors and accept can be retried
+ * in order to serve other pending connections. This function should be called with the last errno,
+ * right after anetTcpaccept or anetUnixAccept returned an error in order to retry them. */
+int anetRetryAcceptOnError(int err) {
+    /* This is a transient error which can happen, for example, when
+     * a client initiates a TCP handshake (SYN),
+     * the server receives and queues it in the pending connections queue (the SYN queue),
+     * but before accept() is called, the connection is aborted.
+     * in such cases we can continue accepting other connections. ß*/
+    if (err == ECONNABORTED)
+        return 1;
+
+#if defined(__linux__)
+    /* https://www.man7.org/linux/man-pages/man2/accept4.2 suggests that:
+     * Linux accept() (and accept4()) passes already-pending network
+       errors on the new socket as an error code from accept().  This
+       behavior differs from other BSD socket implementations.  For
+       reliable operation the application should detect the network
+       errors defined for the protocol after accept() and treat them like
+       EAGAIN by retrying.  In the case of TCP/IP, these are ENETDOWN,
+       EPROTO, ENOPROTOOPT, EHOSTDOWN, ENONET, EHOSTUNREACH, EOPNOTSUPP,
+       and ENETUNREACH. */
+    if (err == ENETDOWN || err == EPROTO || err == ENOPROTOOPT ||
+        err == EHOSTDOWN || err == ENONET || err == EHOSTUNREACH ||
+        err == EOPNOTSUPP || err == ENETUNREACH) {
+        return 1;
+    }
+#endif
+    return 0;
+}
+
 /* Accept a connection and also make sure the socket is non-blocking, and CLOEXEC.
  * returns the new socket FD, or -1 on error. */
 static int anetGenericAccept(char *err, int s, struct sockaddr *sa, socklen_t *len) {
@@ -781,7 +810,7 @@ int anetPipe(int fds[2], int read_flags, int write_flags) {
      * There is no harm to set O_CLOEXEC to prevent fd leaks. */
     pipe_flags = O_CLOEXEC | (read_flags & write_flags);
     if (pipe2(fds, pipe_flags)) {
-        /* Fail on real failures, and fallback to simple pipe if pipe2 is unsupported. */
+        /* Fail on real failures, and fall back to simple pipe if pipe2 is unsupported. */
         if (errno != ENOSYS && errno != EINVAL) return -1;
         pipe_flags = 0;
     } else {

@@ -12,7 +12,9 @@
             "FAST"
         ],
         "acl_categories": [
-            "STRING"
+            "FAST",
+            "STRING",
+            "WRITE"
         ],
         "key_specs": [
             {

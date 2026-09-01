@@ -26,7 +26,7 @@ start_server {tags {"scripting"}} {
         set _ $e
     } {*already exists*}
 
-    test {FUNCTION - Create an already exiting library raise error (case insensitive)} {
+    test {FUNCTION - Create an already exiting library raise error (case-insensitive)} {
         catch {
             r function load [get_function_code LUA test test {return 'hello1'}]
         } e
@@ -59,9 +59,28 @@ start_server {tags {"scripting"}} {
         r fcall test 0
     } {hello1}
 
-    test {FUNCTION - test function case insensitive} {
+    test {FUNCTION - test function case-insensitive} {
         r fcall TEST 0
     } {hello1}
+
+    test {FUNCTION - registering names differing only in case is rejected} {
+        catch {
+            r function load {#!lua name=casecollision
+                server.register_function('myfunc', function() return 1 end)
+                server.register_function('MYFUNC', function() return 2 end)}
+        } e
+        set _ $e
+    } {*Function already exists in the library*}
+
+    test {FUNCTION - delete after case collision attempt does not crash server} {
+        # Before the fix, the rejected case-collision above could leave the
+        # library and the global function dict inconsistent and crash the
+        # server on the next delete. Confirm the server is still responsive.
+        r function load REPLACE {#!lua name=casecollision
+            server.register_function('safefunc', function() return 1 end)}
+        assert_equal {OK} [r function delete casecollision]
+        r ping
+    } {PONG}
 
     test {FUNCTION - test replace argument with failure keeps old libraries} {
         catch {r function load REPLACE [get_function_code LUA test test {error}]} e
@@ -298,6 +317,41 @@ start_server {tags {"scripting"}} {
         assert_match {{library_name test engine LUA functions {{name test description {} flags {}}}}} [r function list]
         r function flush sync
         assert_match {} [r function list]
+    }
+
+    test {FUNCTION - test function flush will re-create the lua engine} {
+        for {set i 0} {$i < 60} {incr i} {
+            r function load [get_function_code lua test_$i test_$i {local a = 1 while true do a = a + 1 end}]
+        }
+        set before_flush_memory [s used_memory_vm_functions]
+        r function flush sync
+        set after_flush_memory [s used_memory_vm_functions]
+        assert_lessthan $after_flush_memory $before_flush_memory
+
+        for {set i 0} {$i < 100} {incr i} {
+            r function load [get_function_code lua test_$i test_$i {local a = 1 while true do a = a + 1 end}]
+        }
+        set before_flush_memory [s used_memory_vm_functions]
+        r function flush async
+        set after_flush_memory [s used_memory_vm_functions]
+        assert_lessthan $after_flush_memory $before_flush_memory
+    }
+
+    test {FUNCTION - test loading function during the flush async} {
+        for {set i 0} {$i < 10000} {incr i} {
+            r function load [get_function_code LUA test_$i test_$i {return 'hello'}]
+        }
+        r function flush sync
+
+        for {set i 0} {$i < 10000} {incr i} {
+            r function load [get_function_code LUA test_$i test_$i {return 'hello'}]
+        }
+        r function flush async
+
+        for {set i 0} {$i < 10000} {incr i} {
+            r function load [get_function_code LUA test_$i test_$i {return 'hello'}]
+        }
+        r function flush
     }
 
     test {FUNCTION - test function wrong argument} {
@@ -985,7 +1039,7 @@ start_server {tags {"scripting"}} {
         r config set maxmemory 0
     } {OK} {needs:config-maxmemory}
 
-    test {FUNCTION - verify allow-omm allows running any command} {
+    test {FUNCTION - verify allow-oom allows running any command} {
         r FUNCTION load replace {#!lua name=f1
             server.register_function{
                 function_name='f1',
@@ -1237,4 +1291,44 @@ start_server {tags {"scripting"}} {
         set _ $e
     } {*Script attempted to access nonexistent global variable 'getmetatable'*}
 
+}
+
+start_multiple_servers 2 {tags {"repl scripting external:skip needs:debug"}} {
+    test "Full sync events are not processed during the replica slow script" {
+        set primary [srv -1 client]
+        set primary_host [srv -1 host]
+        set primary_port [srv -1 port]
+
+        set replica [srv 0 client]
+        $replica config set busy-reply-threshold 1
+        $replica config set loading-process-events-interval-bytes 1024
+        $replica config set repl-diskless-load flush-before-load
+
+        # Load a `while true` function.
+        $primary function load [get_no_writes_function_code lua test test {while true do end}]
+
+        # Setup the replication
+        $replica replicaof $primary_host $primary_port
+        wait_for_sync $replica
+
+        # Replica executes the function and make sure it enters the BUSY state.
+        set rd [valkey_deferring_client]
+        $rd fcall_ro test 0
+        set loglines [wait_for_log_messages 0 {"*Slow script detected*"} 0 1000 10]
+        assert_error {BUSY*} {$replica ping}
+
+        # Trigger a full sync.
+        $primary debug change-repl-id
+        $primary client kill type replica
+        wait_replica_online $primary
+
+        # Replica is still running the function and it is OK
+        assert_error {BUSY*} {$replica ping}
+        $replica function kill
+        after 200 ; # Give some time to Lua to call the hook again...
+        wait_for_sync $replica
+        $replica ping
+
+        $rd close
+    }
 }

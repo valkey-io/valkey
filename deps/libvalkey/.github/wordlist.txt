@@ -7,7 +7,7 @@ antirez
 api
 APIs
 ASYNC
-asyncronous
+asynchronous
 atomicity
 AUTOFREE
 autoload

@@ -43,13 +43,15 @@ static commandlogEntry *commandlogCreateEntry(client *c, robj **argv, int argc, 
             ce->argv[j] =
                 createObject(OBJ_STRING, sdscatprintf(sdsempty(), "... (%d more arguments)", argc - ceargc + 1));
         } else {
-            /* Trim too long strings as well... */
-            if (argv[j]->type == OBJ_STRING && sdsEncodedObject(argv[j]) &&
-                sdslen(argv[j]->ptr) > COMMANDLOG_ENTRY_MAX_STRING) {
-                sds s = sdsnewlen(argv[j]->ptr, COMMANDLOG_ENTRY_MAX_STRING);
+            if (clientCommandArgShouldBeRedacted(c, j)) {
+                ce->argv[j] = shared.redacted;
+                /* Trim too long strings as well... */
+            } else if (argv[j]->type == OBJ_STRING && sdsEncodedObject(argv[j]) &&
+                       sdslen(objectGetVal(argv[j])) > COMMANDLOG_ENTRY_MAX_STRING) {
+                sds s = sdsnewlen(objectGetVal(argv[j]), COMMANDLOG_ENTRY_MAX_STRING);
 
                 s = sdscatprintf(s, "... (%lu more bytes)",
-                                 (unsigned long)sdslen(argv[j]->ptr) - COMMANDLOG_ENTRY_MAX_STRING);
+                                 (unsigned long)sdslen(objectGetVal(argv[j])) - COMMANDLOG_ENTRY_MAX_STRING);
                 ce->argv[j] = createObject(OBJ_STRING, s);
             } else if (argv[j]->refcount == OBJ_SHARED_REFCOUNT) {
                 ce->argv[j] = argv[j];
@@ -67,8 +69,11 @@ static commandlogEntry *commandlogCreateEntry(client *c, robj **argv, int argc, 
     ce->time = time(NULL);
     ce->value = value;
     ce->id = server.commandlog[type].entry_id++;
-    ce->peerid = sdsnew(getClientPeerId(c));
-    ce->cname = c->name ? sdsnew(c->name->ptr) : sdsempty();
+    /* For commands executed from a script, the executing client is a fake
+     * client with no connection, so attribute the entry to the calling client. */
+    client *caller = scriptIsRunning() ? scriptGetCaller() : c;
+    ce->peerid = sdsnew(getClientPeerId(caller));
+    ce->cname = caller->name ? sdsnew(objectGetVal(caller->name)) : sdsempty();
     return ce;
 }
 
@@ -152,12 +157,10 @@ void commandlogPushCurrentCommand(client *c, struct serverCommand *cmd) {
     robj **argv = c->original_argv ? c->original_argv : c->argv;
     int argc = c->original_argv ? c->original_argc : c->argc;
 
-    /* If a script is currently running, the client passed in is a
-     * fake client. Or the client passed in is the original client
-     * if this is a EVAL or alike, doesn't matter. In this case,
-     * use the original client to get the client information. */
-    c = scriptIsRunning() ? scriptGetCaller() : c;
-
+    /* 'c' is the client that executed the command: for a command called from a
+     * script this is the fake client, whose argv, metrics and redaction bitmap
+     * describe the executed command. Entry creation resolves the calling client
+     * for the connection identity fields. */
     commandlogPushEntryIfNeeded(c, argv, argc, c->duration, COMMANDLOG_TYPE_SLOW);
     commandlogPushEntryIfNeeded(c, argv, argc, c->net_input_bytes_curr_cmd, COMMANDLOG_TYPE_LARGE_REQUEST);
     commandlogPushEntryIfNeeded(c, argv, argc, c->net_output_bytes_curr_cmd, COMMANDLOG_TYPE_LARGE_REPLY);
@@ -166,7 +169,7 @@ void commandlogPushCurrentCommand(client *c, struct serverCommand *cmd) {
 /* The SLOWLOG command. Implements all the subcommands needed to handle the
  * slow log. */
 void slowlogCommand(client *c) {
-    if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr, "help")) {
+    if (c->argc == 2 && !strcasecmp(objectGetVal(c->argv[1]), "help")) {
         const char *help[] = {
             "GET [<count>]",
             "    Return top <count> entries from the slowlog (default: 10, -1 mean all).",
@@ -180,12 +183,12 @@ void slowlogCommand(client *c) {
             NULL,
         };
         addReplyHelp(c, help);
-    } else if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr, "reset")) {
+    } else if (c->argc == 2 && !strcasecmp(objectGetVal(c->argv[1]), "reset")) {
         commandlogReset(COMMANDLOG_TYPE_SLOW);
         addReply(c, shared.ok);
-    } else if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr, "len")) {
+    } else if (c->argc == 2 && !strcasecmp(objectGetVal(c->argv[1]), "len")) {
         addReplyLongLong(c, listLength(server.commandlog[COMMANDLOG_TYPE_SLOW].entries));
-    } else if ((c->argc == 2 || c->argc == 3) && !strcasecmp(c->argv[1]->ptr, "get")) {
+    } else if ((c->argc == 2 || c->argc == 3) && !strcasecmp(objectGetVal(c->argv[1]), "get")) {
         long count = 10;
 
         if (c->argc == 3) {
@@ -208,9 +211,9 @@ void slowlogCommand(client *c) {
 }
 
 static int commandlogGetTypeOrReply(client *c, robj *o) {
-    if (!strcasecmp(o->ptr, "slow")) return COMMANDLOG_TYPE_SLOW;
-    if (!strcasecmp(o->ptr, "large-request")) return COMMANDLOG_TYPE_LARGE_REQUEST;
-    if (!strcasecmp(o->ptr, "large-reply")) return COMMANDLOG_TYPE_LARGE_REPLY;
+    if (!strcasecmp(objectGetVal(o), "slow")) return COMMANDLOG_TYPE_SLOW;
+    if (!strcasecmp(objectGetVal(o), "large-request")) return COMMANDLOG_TYPE_LARGE_REQUEST;
+    if (!strcasecmp(objectGetVal(o), "large-reply")) return COMMANDLOG_TYPE_LARGE_REPLY;
     addReplyError(c, "type should be one of the following: slow, large-request, large-reply");
     return -1;
 }
@@ -219,7 +222,7 @@ static int commandlogGetTypeOrReply(client *c, robj *o) {
  * command log. */
 void commandlogCommand(client *c) {
     int type;
-    if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr, "help")) {
+    if (c->argc == 2 && !strcasecmp(objectGetVal(c->argv[1]), "help")) {
         const char *help[] = {
             "GET <count> <type>",
             "    Return top <count> entries of the specified <type> from the commandlog (-1 mean all).",
@@ -237,14 +240,14 @@ void commandlogCommand(client *c) {
             NULL,
         };
         addReplyHelp(c, help);
-    } else if (c->argc == 3 && !strcasecmp(c->argv[1]->ptr, "reset")) {
+    } else if (c->argc == 3 && !strcasecmp(objectGetVal(c->argv[1]), "reset")) {
         if ((type = commandlogGetTypeOrReply(c, c->argv[2])) == -1) return;
         commandlogReset(type);
         addReply(c, shared.ok);
-    } else if (c->argc == 3 && !strcasecmp(c->argv[1]->ptr, "len")) {
+    } else if (c->argc == 3 && !strcasecmp(objectGetVal(c->argv[1]), "len")) {
         if ((type = commandlogGetTypeOrReply(c, c->argv[2])) == -1) return;
         addReplyLongLong(c, listLength(server.commandlog[type].entries));
-    } else if (c->argc == 4 && !strcasecmp(c->argv[1]->ptr, "get")) {
+    } else if (c->argc == 4 && !strcasecmp(objectGetVal(c->argv[1]), "get")) {
         long count;
 
         /* Consume count arg. */

@@ -1,6 +1,7 @@
 name: Crash report
 description: Submit a crash report
 title: '[CRASH] <short description>'
+labels: ['bug']
 body:
   - type: markdown
     attributes:

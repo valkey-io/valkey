@@ -46,7 +46,6 @@ typedef struct dictEntry dictEntry; /* opaque */
 typedef struct dictType {
     uint64_t (*hashFunction)(const void *key);
     void *(*keyDup)(const void *key);
-    void *(*valDup)(const void *obj);
     int (*keyCompare)(const void *key1, const void *key2);
     void (*keyDestructor)(void *key);
     void (*valDestructor)(void *obj);

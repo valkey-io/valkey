@@ -15,6 +15,11 @@
         "reply_schema": {
             "description": "Node ID of the sentinel instance.",
             "type": "string"
-        }
+        },
+        "acl_categories": [
+            "ADMIN",
+            "DANGEROUS",
+            "SLOW"
+        ]
     }
 }

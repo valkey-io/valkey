@@ -10,8 +10,10 @@
             "READONLY"
         ],
         "acl_categories": [
+            "DANGEROUS",
             "KEYSPACE",
-            "DANGEROUS"
+            "READ",
+            "SLOW"
         ],
         "command_tips": [
             "REQUEST_POLICY:ALL_SHARDS",

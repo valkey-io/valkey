@@ -6,11 +6,25 @@ start_server {tags {"protocol network"}} {
         assert_equal "PONG" [r ping]
     }
 
+    test "Handle an empty query in pipeline" {
+        reconnect
+        r write "\r\n*1\r\n\$4\r\nping\r\n"
+        r flush
+        assert_equal PONG [r read]
+    }
+
     test "Negative multibulk length" {
         reconnect
         r write "*-10\r\n"
         r flush
         assert_equal PONG [r ping]
+    }
+
+    test "Negative multibulk length in pipeline" {
+        reconnect
+        r write "*-10\r\n*1\r\n\$4\r\nping\r\n"
+        r flush
+        assert_equal PONG [r read]
     }
 
     test "Out of range multibulk length" {
@@ -85,6 +99,62 @@ start_server {tags {"protocol network"}} {
         assert_error "*unbalanced*" {r read}
     }
 
+    test "Check CRLF when parsing the querybuf" {
+        # Command) SET key value
+        # RESP) *3\r\n$3\r\nSET\r\n$3\r\nkey\r\n$5\r\nvalue\r\n
+        # We need to strictly check these \r\n characters.
+        set proto "*3\r\n\$3\r\nSET\r\n\$3\r\nkey\r\n\$5\r\nvalue\r\n"
+        reconnect; r write $proto; r flush; assert_equal "OK" [r read]
+
+        # Check if multibulklen `*3\r\n` is followed by `\r\n`
+        set proto1 "*3x\n\$3\r\nSET\r\n\$3\r\nkey\r\n\$5\r\nvalue\r\n"
+        set proto2 "*3\rx\$3\r\nSET\r\n\$3\r\nkey\r\n\$5\r\nvalue\r\n"
+        set proto3 "*3xx\$3\r\nSET\r\n\$3\r\nkey\r\n\$5\r\nvalue\r\n"
+        r write $proto1; r flush; assert_error "*invalid multibulk length*" {r read}; reconnect
+        r write $proto2; r flush; assert_error "*invalid CRLF in request*" {r read}; reconnect
+        r write $proto3; r flush; assert_error "*invalid multibulk length*" {r read}; reconnect
+
+        # Check if bulklen `$3\r\n` is followed by `\r\n`
+        set proto1 "*3\r\n\$3x\nSET\r\n\$3\r\nkey\r\n\$5\r\nvalue\r\n"
+        set proto2 "*3\r\n\$3\rxSET\r\n\$3\r\nkey\r\n\$5\r\nvalue\r\n"
+        set proto3 "*3\r\n\$3xxSET\r\n\$3\r\nkey\r\n\$5\r\nvalue\r\n"
+        r write $proto1; r flush; assert_error "*invalid bulk length*" {r read}; reconnect
+        r write $proto2; r flush; assert_error "*invalid CRLF in request*" {r read}; reconnect
+        r write $proto3; r flush; assert_error "*invalid bulk length*" {r read}; reconnect
+
+        # Check if `SET\r\n` is followed by `\r\n`
+        set proto1 "*3\r\n\$3\r\nSET\rx\$3\r\nkey\r\n\$5\r\nvalue\r\n"
+        set proto2 "*3\r\n\$3\r\nSETx\n\$3\r\nkey\r\n\$5\r\nvalue\r\n"
+        set proto3 "*3\r\n\$3\r\nSETxx\$3\r\nkey\r\n\$5\r\nvalue\r\n"
+        r write $proto1; r flush; assert_error "*invalid CRLF in request*" {r read}; reconnect
+        r write $proto2; r flush; assert_error "*invalid CRLF in request*" {r read}; reconnect
+        r write $proto3; r flush; assert_error "*invalid CRLF in request*" {r read}; reconnect
+
+        # Check if `key\r\n` is followed by `\r\n`
+        set proto1 "*3\r\n\$3\r\nSET\r\n\$3\r\nkeyx\n\$5\r\nvalue\r\n"
+        set proto2 "*3\r\n\$3\r\nSET\r\n\$3\r\nkey\rx\$5\r\nvalue\r\n"
+        set proto3 "*3\r\n\$3\r\nSET\r\n\$3\r\nkeyxx\$5\r\nvalue\r\n"
+        r write $proto1; r flush; assert_error "*invalid CRLF in request*" {r read}; reconnect
+        r write $proto2; r flush; assert_error "*invalid CRLF in request*" {r read}; reconnect
+        r write $proto3; r flush; assert_error "*invalid CRLF in request*" {r read}; reconnect
+
+        # Check if bulklen `$5\r\n` is followed by `\r\n`
+        set proto1 "*3\r\n\$3\r\nSET\r\n\$3\r\nkey\r\n\$5x\nvalue\r\n"
+        set proto2 "*3\r\n\$3\r\nSET\r\n\$3\r\nkey\r\n\$5\rxvalue\r\n"
+        set proto3 "*3\r\n\$3\r\nSET\r\n\$3\r\nkey\r\n\$5xxvalue\r\n"
+        r write $proto1; r flush; assert_error "*invalid bulk length*" {r read}; reconnect
+        r write $proto2; r flush; assert_error "*invalid CRLF in request*" {r read}; reconnect
+        r write $proto3; r flush; assert_error "*invalid bulk length*" {r read}; reconnect
+
+        # Check if `value\r\n` is followed by `\r\n`
+        set proto1 "*3\r\n\$3\r\nSET\r\n\$3\r\nkey\r\n\$5\r\nvaluex\n"
+        set proto2 "*3\r\n\$3\r\nSET\r\n\$3\r\nkey\r\n\$5\r\nvalue\rx"
+        set proto3 "*3\r\n\$3\r\nSET\r\n\$3\r\nkey\r\n\$5\r\nvaluexx"
+        r write $proto1; r flush; assert_error "*invalid CRLF in request*" {r read}; reconnect
+        r write $proto2; r flush; assert_error "*invalid CRLF in request*" {r read}; reconnect
+        r write $proto3; r flush; assert_error "*invalid CRLF in request*" {r read}; reconnect
+    }
+
     set c 0
     foreach seq [list "\x00" "*\x00" "$\x00" "*1\r\n$\x00"] {
         incr c
@@ -94,6 +164,7 @@ start_server {tags {"protocol network"}} {
             } else {
                 set s [socket [srv 0 host] [srv 0 port]]
             }
+            fconfigure $s -translation binary
             puts -nonewline $s $seq
             # PROTO_INLINE_MAX_SIZE is hardcoded in Valkey code to 64K. doing the same here 
             # since we would like to validate it is enforced. 
@@ -243,9 +314,31 @@ start_server {tags {"protocol network"}} {
         assert_equal [r exec] 2
     }
 
+    test "Partial command after blocking command is completed on unblock" {
+        reconnect
+        set rd [valkey_deferring_client]
+        $rd client id
+        set cid [$rd read]
+        $rd write "*3\r\n\$5\r\nBLPOP\r\n\$6\r\nmylist\r\n\$1\r\n0\r\n*3\r\n\$3\r\nSET\r\n\$3\r\n"
+        $rd flush
+        wait_for_blocked_client
+        $rd write "key\r\n\$5\r\nvalue\r\n"
+        $rd flush
+        wait_for_condition 50 100 {
+            [regexp {qbuf=([1-9][0-9]*)} [r client list id $cid]]
+        } else {
+            fail "completion bytes never reached the query buffer"
+        }
+        r rpush mylist item
+        assert_equal {mylist item} [$rd read]
+        assert_equal "OK" [$rd read]
+        assert_equal "value" [r get key]
+        $rd close
+    }
+
 }
 
-start_server {tags {"protocol hello logreqres:skip"}} {
+start_server {tags {"protocol hello"}} {
     test {HELLO without protover} {
         set reply [r HELLO 3]
         assert_equal [dict get $reply proto] 3
@@ -254,10 +347,10 @@ start_server {tags {"protocol hello logreqres:skip"}} {
         assert_equal [dict get $reply proto] 3
 
         set reply [r HELLO 2]
-        assert_equal [dict get $reply proto] 2
+        assert_equal [dict get $reply proto] [expr $::force_resp3 ? 3 : 2]
 
         set reply [r HELLO]
-        assert_equal [dict get $reply proto] 2
+        assert_equal [dict get $reply proto] [expr $::force_resp3 ? 3 : 2]
     }
 
     test {HELLO and availability-zone} {
@@ -280,6 +373,13 @@ start_server {tags {"protocol hello logreqres:skip"}} {
 }
 
 start_server {tags {"regression"}} {
+    test "Regression for a crash on zero-length multibulk" {
+        reconnect
+        r write "*0\r\nPING\r\n"
+        r flush
+        assert_equal "PONG" [r ping]
+    }
+
     test "Regression for a crash with blocking ops and pipelining" {
         set rd [valkey_deferring_client]
         set fd [r channel]

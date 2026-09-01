@@ -1,5 +1,5 @@
 #!/bin/sh
 
-find examples include libvalkey src tests \
+find examples include src tests \
     \( -name '*.c' -or -name '*.cpp' -or -name '*.h' \) \
     -exec clang-format -i {} + ;

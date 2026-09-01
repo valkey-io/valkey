@@ -34,7 +34,7 @@
 #include <sys/types.h>
 #include <regex.h>
 #include <libgen.h>
-
+#include <stdint.h>
 #define AOF_CHECK_OK 0
 #define AOF_CHECK_EMPTY 1
 #define AOF_CHECK_TRUNCATED 2
@@ -63,7 +63,7 @@ static long long line = 1;
 static time_t to_timestamp = 0;
 
 int consumeNewline(char *buf) {
-    if (strncmp(buf, "\r\n", 2) != 0) {
+    if (buf[0] != '\r' || buf[1] != '\n') {
         ERROR("Expected \\r\\n, got: %02x%02x", buf[0], buf[1]);
         return 0;
     }
@@ -193,14 +193,14 @@ int processAnnotations(FILE *fp, char *filename, int last_file) {
         }
         if (ts <= to_timestamp) return 1;
         if (epos == 0) {
-            printf("AOF %s has nothing before timestamp %ld, "
+            printf("AOF %s has nothing before timestamp %jd, "
                    "aborting...\n",
-                   filename, to_timestamp);
+                   filename, (intmax_t)to_timestamp);
             exit(1);
         }
         if (!last_file) {
-            printf("Failed to truncate AOF %s to timestamp %ld to offset %ld because it is not the last file.\n",
-                   filename, to_timestamp, (long int)epos);
+            printf("Failed to truncate AOF %s to timestamp %jd to offset %lld because it is not the last file.\n",
+                   filename, (intmax_t)to_timestamp, (long long)epos);
             printf(
                 "If you insist, please delete all files after this file according to the manifest "
                 "file and delete the corresponding records in manifest file manually. Then re-run valkey-check-aof.\n");
@@ -208,7 +208,7 @@ int processAnnotations(FILE *fp, char *filename, int last_file) {
         }
         /* Truncate remaining AOF if exceeding 'to_timestamp' */
         if (ftruncate(fileno(fp), epos) == -1) {
-            printf("Failed to truncate AOF %s to timestamp %ld\n", filename, to_timestamp);
+            printf("Failed to truncate AOF %s to timestamp %jd\n", filename, (intmax_t)to_timestamp);
             exit(1);
         } else {
             return 0;
@@ -296,7 +296,7 @@ int checkSingleAof(char *aof_filename, char *aof_filepath, int last_file, int fi
 
     /* In truncate-to-timestamp mode, just exit if there is nothing to truncate. */
     if (diff == 0 && to_timestamp) {
-        printf("Truncate nothing in AOF %s to timestamp %ld\n", aof_filename, to_timestamp);
+        printf("Truncate nothing in AOF %s to timestamp %jd\n", aof_filename, (intmax_t)to_timestamp);
         fclose(fp);
         return AOF_CHECK_OK;
     }
@@ -334,7 +334,7 @@ int checkSingleAof(char *aof_filename, char *aof_filepath, int last_file, int fi
     return AOF_CHECK_OK;
 }
 
-/* Used to determine whether the file is a RDB file. These two possibilities:
+/* Used to determine whether the file is an RDB file. These two possibilities:
  * 1. The file is an old style RDB-preamble AOF
  * 2. The file is a BASE AOF in Multi Part AOF
  * */
@@ -446,7 +446,7 @@ void printAofStyle(int ret, char *aofFileName, char *aofType) {
     } else if (ret == AOF_CHECK_EMPTY) {
         printf("%s %s is empty\n", aofType, aofFileName);
     } else if (ret == AOF_CHECK_TIMESTAMP_TRUNCATED) {
-        printf("Successfully truncated AOF %s to timestamp %ld\n", aofFileName, to_timestamp);
+        printf("Successfully truncated AOF %s to timestamp %jd\n", aofFileName, (intmax_t)to_timestamp);
     } else if (ret == AOF_CHECK_TRUNCATED) {
         printf("Successfully truncated AOF %s\n", aofFileName);
     }
@@ -477,10 +477,10 @@ void checkMultiPartAof(char *dirpath, char *manifest_filepath, int fix) {
         sds aof_filename = am->base_aof_info->file_name;
         sds aof_filepath = makePath(dirpath, aof_filename);
         last_file = ++aof_num == total_num;
-        int aof_preable = fileIsRDB(aof_filepath);
+        int aof_preamble = fileIsRDB(aof_filepath);
 
-        printf("Start to check BASE AOF (%s format).\n", aof_preable ? "RDB" : "RESP");
-        ret = checkSingleAof(aof_filename, aof_filepath, last_file, fix, aof_preable);
+        printf("Start to check BASE AOF (%s format).\n", aof_preamble ? "RDB" : "RESP");
+        ret = checkSingleAof(aof_filename, aof_filepath, last_file, fix, aof_preamble);
         printAofStyle(ret, aof_filename, (char *)"BASE AOF");
         sdsfree(aof_filepath);
     }

@@ -17,7 +17,9 @@
             "FAST"
         ],
         "acl_categories": [
-            "SET"
+            "FAST",
+            "SET",
+            "WRITE"
         ],
         "command_tips": [
             "NONDETERMINISTIC_OUTPUT"

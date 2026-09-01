@@ -47,6 +47,16 @@ LTTNG_UST_TRACEPOINT_EVENT_CLASS(
 
 LTTNG_UST_TRACEPOINT_EVENT_INSTANCE(
     /* Name of the tracepoint class provider */
+    valkey_aof, valkey_aof_class, valkey_aof, fork,
+
+    /* List of tracepoint arguments (input) */
+    LTTNG_UST_TP_ARGS(
+      uint64_t, duration
+    )
+)
+
+LTTNG_UST_TRACEPOINT_EVENT_INSTANCE(
+    /* Name of the tracepoint class provider */
     valkey_aof, valkey_aof_class, valkey_aof, aof_write_pending_fsync,
 
     /* List of tracepoint arguments (input) */

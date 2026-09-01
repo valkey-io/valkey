@@ -35,8 +35,7 @@
 #include "cluster.h"
 
 #include "valkey_strtod.h"
-
-zskiplistNode *zslGetElementByRank(zskiplist *zsl, unsigned long rank);
+#include "ordered_index.h"
 
 serverSortOperation *createSortOperation(int type, robj *pattern) {
     serverSortOperation *so = zmalloc(sizeof(*so));
@@ -74,17 +73,17 @@ robj *lookupKeyByPattern(serverDb *db, robj *pattern, robj *subst) {
 
     /* If the pattern is "#" return the substitution object itself in order
      * to implement the "SORT ... GET #" feature. */
-    spat = pattern->ptr;
+    spat = objectGetVal(pattern);
     if (isReturnSubstPattern(spat)) {
         incrRefCount(subst);
         return subst;
     }
 
     /* The substitution object may be specially encoded. If so we create
-     * a decoded object on the fly. Otherwise getDecodedObject will just
+     * a decoded object on the fly. Otherwise, getDecodedObject will just
      * increment the ref count, that we'll decrement later. */
     subst = getDecodedObject(subst);
-    ssub = subst->ptr;
+    ssub = objectGetVal(subst);
 
     /* If we can't find '*' in the pattern we return NULL as to GET a
      * fixed key does not make sense. */
@@ -107,7 +106,7 @@ robj *lookupKeyByPattern(serverDb *db, robj *pattern, robj *subst) {
     sublen = sdslen(ssub);
     postfixlen = sdslen(spat) - (prefixlen + 1) - (fieldlen ? fieldlen + 2 : 0);
     keyobj = createStringObject(NULL, prefixlen + sublen + postfixlen);
-    k = keyobj->ptr;
+    k = objectGetVal(keyobj);
     memcpy(k, spat, prefixlen);
     memcpy(k + prefixlen, ssub, sublen);
     memcpy(k + prefixlen + sublen, p + 1, postfixlen);
@@ -118,13 +117,13 @@ robj *lookupKeyByPattern(serverDb *db, robj *pattern, robj *subst) {
     if (o == NULL) goto noobj;
 
     if (fieldobj) {
-        if (o->type != OBJ_HASH) goto noobj;
+        if (objectGetType(o) != OBJ_HASH) goto noobj;
 
         /* Retrieve value from hash by the field name. The returned object
          * is a new object with refcount already incremented. */
-        o = hashTypeGetValueObject(o, fieldobj->ptr);
+        o = hashTypeGetValueObject(o, objectGetVal(fieldobj));
     } else {
-        if (o->type != OBJ_STRING) goto noobj;
+        if (objectGetType(o) != OBJ_STRING) goto noobj;
 
         /* Every object that this function returns needs to have its refcount
          * increased. sortCommand decreases it again. */
@@ -177,7 +176,7 @@ int sortCompare(const void *s1, const void *s2) {
                 } else {
                     /* Here we can use strcoll() directly as we are sure that
                      * the objects are decoded string objects. */
-                    cmp = strcoll(so1->u.cmpobj->ptr, so2->u.cmpobj->ptr);
+                    cmp = strcoll(objectGetVal(so1->u.cmpobj), objectGetVal(so2->u.cmpobj));
                 }
             }
         } else {
@@ -212,40 +211,41 @@ void sortCommandGeneric(client *c, int readonly) {
     listSetFreeMethod(operations, zfree);
     j = 2; /* options start at argv[2] */
 
+    int dbid = (c->flag.multi) ? c->mstate->transaction_db_id : c->db->id;
     user_has_full_key_access =
-        ACLUserCheckCmdWithUnrestrictedKeyAccess(c->user, c->cmd, c->argv, c->argc, CMD_KEY_ACCESS);
+        ACLUserCheckCmdWithUnrestrictedKeyAccess(c->user, c->cmd, c->argv, c->argc, dbid, CMD_KEY_ACCESS);
 
     /* The SORT command has an SQL-alike syntax, parse it */
     while (j < c->argc) {
         int leftargs = c->argc - j - 1;
-        if (!strcasecmp(c->argv[j]->ptr, "asc")) {
+        if (!strcasecmp(objectGetVal(c->argv[j]), "asc")) {
             desc = 0;
-        } else if (!strcasecmp(c->argv[j]->ptr, "desc")) {
+        } else if (!strcasecmp(objectGetVal(c->argv[j]), "desc")) {
             desc = 1;
-        } else if (!strcasecmp(c->argv[j]->ptr, "alpha")) {
+        } else if (!strcasecmp(objectGetVal(c->argv[j]), "alpha")) {
             alpha = 1;
-        } else if (!strcasecmp(c->argv[j]->ptr, "limit") && leftargs >= 2) {
+        } else if (!strcasecmp(objectGetVal(c->argv[j]), "limit") && leftargs >= 2) {
             if ((getLongFromObjectOrReply(c, c->argv[j + 1], &limit_start, NULL) != C_OK) ||
                 (getLongFromObjectOrReply(c, c->argv[j + 2], &limit_count, NULL) != C_OK)) {
                 syntax_error++;
                 break;
             }
             j += 2;
-        } else if (readonly == 0 && !strcasecmp(c->argv[j]->ptr, "store") && leftargs >= 1) {
+        } else if (readonly == 0 && !strcasecmp(objectGetVal(c->argv[j]), "store") && leftargs >= 1) {
             storekey = c->argv[j + 1];
             j++;
-        } else if (!strcasecmp(c->argv[j]->ptr, "by") && leftargs >= 1) {
+        } else if (!strcasecmp(objectGetVal(c->argv[j]), "by") && leftargs >= 1) {
             sortby = c->argv[j + 1];
             /* If the BY pattern does not contain '*', i.e. it is constant,
              * we don't need to sort nor to lookup the weight keys. */
-            if (strchr(c->argv[j + 1]->ptr, '*') == NULL) {
+            if (strchr(objectGetVal(c->argv[j + 1]), '*') == NULL) {
                 dontsort = 1;
             } else {
                 /* If BY is specified with a real pattern, we can't accept it in cluster mode,
                  * unless we can make sure the keys formed by the pattern are in the same slot
                  * as the key to sort. */
                 if (server.cluster_enabled &&
-                    patternHashSlot(sortby->ptr, sdslen(sortby->ptr)) != getKeySlot(c->argv[1]->ptr)) {
+                    patternHashSlot(objectGetVal(sortby), sdslen(objectGetVal(sortby))) != getCachedKeySlot(objectGetVal(c->argv[1]))) {
                     addReplyError(c, "BY option of SORT denied in Cluster mode when "
                                      "keys formed by the pattern may be in different slots.");
                     syntax_error++;
@@ -260,13 +260,13 @@ void sortCommandGeneric(client *c, int readonly) {
                 }
             }
             j++;
-        } else if (!strcasecmp(c->argv[j]->ptr, "get") && leftargs >= 1) {
+        } else if (!strcasecmp(objectGetVal(c->argv[j]), "get") && leftargs >= 1) {
             /* If GET is specified with a real pattern, we can't accept it in cluster mode,
              * unless we can make sure the keys formed by the pattern are in the same slot
              * as the key to sort. */
             if (server.cluster_enabled &&
-                !isReturnSubstPattern(c->argv[j + 1]->ptr) &&
-                patternHashSlot(c->argv[j + 1]->ptr, sdslen(c->argv[j + 1]->ptr)) != getKeySlot(c->argv[1]->ptr)) {
+                !isReturnSubstPattern(objectGetVal(c->argv[j + 1])) &&
+                patternHashSlot(objectGetVal(c->argv[j + 1]), sdslen(objectGetVal(c->argv[j + 1]))) != getCachedKeySlot(objectGetVal(c->argv[1]))) {
                 addReplyError(c, "GET option of SORT denied in Cluster mode when "
                                  "keys formed by the pattern may be in different slots.");
                 syntax_error++;
@@ -324,13 +324,13 @@ void sortCommandGeneric(client *c, int readonly) {
     }
 
     /* Destructively convert encoded sorted sets for SORT. */
-    if (sortval->type == OBJ_ZSET) zsetConvert(sortval, OBJ_ENCODING_SKIPLIST);
+    if (sortval->type == OBJ_ZSET) zsetConvert(sortval, OBJ_ENCODING_BTREE);
 
     /* Obtain the length of the object to sort. */
     switch (sortval->type) {
     case OBJ_LIST: vectorlen = listTypeLength(sortval); break;
     case OBJ_SET: vectorlen = setTypeSize(sortval); break;
-    case OBJ_ZSET: vectorlen = hashtableSize(((zset *)sortval->ptr)->ht); break;
+    case OBJ_ZSET: vectorlen = hashtableSize(((zset *)objectGetVal(sortval))->ht); break;
     default: vectorlen = 0; serverPanic("Bad SORT type"); /* Avoid GCC warning */
     }
 
@@ -415,48 +415,53 @@ void sortCommandGeneric(client *c, int readonly) {
          * Note that in this case we also handle LIMIT here in a direct
          * way, just getting the required range, as an optimization. */
 
-        zset *zs = sortval->ptr;
-        zskiplist *zsl = zs->zsl;
-        zskiplistNode *ln;
-        sds sdsele;
+        zset *zs = objectGetVal(sortval);
+        OrderedIndexIterator iter;
+        orderedIndexInitIterator(&iter, zs->oi);
+        OrderedIndexItem *ln;
         int rangelen = vectorlen;
 
         /* Check if starting point is trivial, before doing log(N) lookup. */
         if (desc) {
-            long zsetlen = hashtableSize(((zset *)sortval->ptr)->ht);
-
-            ln = zsl->tail;
-            if (start > 0) ln = zslGetElementByRank(zsl, zsetlen - start);
+            long zsetlen = hashtableSize(((zset *)objectGetVal(sortval))->ht);
+            orderedIndexSeekToIndex(&iter, zsetlen - start);
+            ln = orderedIndexPrev(&iter);
         } else {
-            ln = zsl->header->level[0].forward;
-            if (start > 0) ln = zslGetElementByRank(zsl, start + 1);
+            if (start > 0) {
+                orderedIndexSeekToIndex(&iter, start);
+            }
+            ln = orderedIndexNext(&iter);
         }
 
         while (rangelen--) {
             serverAssertWithInfo(c, sortval, ln != NULL);
-            sdsele = ln->ele;
-            vector[j].obj = createStringObject(sdsele, sdslen(sdsele));
+            const char *ele;
+            size_t ele_len;
+            orderedIndexItemGetElement(ln, &ele, &ele_len);
+            vector[j].obj = createStringObject(ele, ele_len);
             vector[j].u.score = 0;
             vector[j].u.cmpobj = NULL;
             j++;
-            ln = desc ? ln->backward : ln->level[0].forward;
+            ln = desc ? orderedIndexPrev(&iter) : orderedIndexNext(&iter);
         }
         /* Fix start/end: output code is not aware of this optimization. */
         end -= start;
         start = 0;
     } else if (sortval->type == OBJ_ZSET) {
-        hashtable *ht = ((zset *)sortval->ptr)->ht;
+        hashtable *ht = ((zset *)objectGetVal(sortval))->ht;
         hashtableIterator iter;
         hashtableInitIterator(&iter, ht, 0);
         void *next;
         while (hashtableNext(&iter, &next)) {
-            zskiplistNode *node = next;
-            vector[j].obj = createStringObject(node->ele, sdslen(node->ele));
+            const char *ele;
+            size_t ele_len;
+            orderedIndexItemGetElement((const OrderedIndexItem *)next, &ele, &ele_len);
+            vector[j].obj = createStringObject(ele, ele_len);
             vector[j].u.score = 0;
             vector[j].u.cmpobj = NULL;
             j++;
         }
-        hashtableResetIterator(&iter);
+        hashtableCleanupIterator(&iter);
     } else {
         serverPanic("Unknown type");
     }
@@ -481,7 +486,7 @@ void sortCommandGeneric(client *c, int readonly) {
                 if (sdsEncodedObject(byval)) {
                     char *eptr;
                     errno = 0;
-                    vector[j].u.score = valkey_strtod(byval->ptr, &eptr);
+                    vector[j].u.score = valkey_strtod_sds(objectGetVal(byval), &eptr);
                     if (eptr[0] != '\0' || errno == ERANGE || errno == EINVAL || isnan(vector[j].u.score)) {
                         int_conversion_error = 1;
                     }
@@ -489,7 +494,7 @@ void sortCommandGeneric(client *c, int readonly) {
                     /* Don't need to decode the object if it's
                      * integer-encoded (the only encoding supported) so
                      * far. We can just cast it */
-                    vector[j].u.score = (long)byval->ptr;
+                    vector[j].u.score = (long)objectGetVal(byval);
                 } else {
                     serverAssertWithInfo(c, sortval, 1 != 1);
                 }
@@ -506,10 +511,14 @@ void sortCommandGeneric(client *c, int readonly) {
         server.sort_alpha = alpha;
         server.sort_bypattern = sortby ? 1 : 0;
         server.sort_store = storekey ? 1 : 0;
-        if (sortby && (start != 0 || end != vectorlen - 1))
-            pqsort(vector, vectorlen, sizeof(serverSortObject), sortCompare, start, end);
-        else
-            qsort(vector, vectorlen, sizeof(serverSortObject), sortCompare);
+        /* If the source keys are empty, we will have a vector length of zero,
+         * so no need to sort. */
+        if (vectorlen != 0) {
+            if (sortby && (start != 0 || end != vectorlen - 1))
+                pqsort(vector, vectorlen, sizeof(serverSortObject), sortCompare, start, end);
+            else
+                qsort(vector, vectorlen, sizeof(serverSortObject), sortCompare);
+        }
     }
 
     /* Send command output to the output buffer, performing the specified

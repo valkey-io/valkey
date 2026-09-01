@@ -11,7 +11,9 @@
             "DENYOOM"
         ],
         "acl_categories": [
-            "STRING"
+            "SLOW",
+            "STRING",
+            "WRITE"
         ],
         "command_tips": [
             "REQUEST_POLICY:MULTI_SHARD",

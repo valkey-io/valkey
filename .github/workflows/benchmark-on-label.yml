@@ -1,0 +1,191 @@
+name: On-Demand Labeled Benchmark
+
+on:
+  pull_request_target:
+    types: [labeled]
+
+concurrency:
+  group: benchmark-${{ github.event.pull_request.number }}-${{ github.event.label.name }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: "bash -Eeuo pipefail -x {0}"
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  benchmark:
+    if: |
+      github.event.action == 'labeled' &&
+      (github.event.label.name == 'run-benchmark' || github.event.label.name == 'run-cluster-benchmark') &&
+      github.repository == 'valkey-io/valkey'
+
+    runs-on: ["self-hosted", "ec2-al-2023-pr-benchmarking-arm64"]
+    timeout-minutes: 7200
+    steps:
+      - name: Checkout valkey
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          path: valkey
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          persist-credentials: false
+
+      - name: Checkout valkey-perf-benchmark
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ${{ github.repository_owner }}/valkey-perf-benchmark
+          path: valkey-perf-benchmark
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Checkout valkey for latest benchmark.
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: valkey-io/valkey
+          ref: "unstable"
+          path: valkey_latest
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: kishaningithub/setup-python-amazon-linux@a326cdc792983fe0fbd04c81d3d62b59b6123a6c # v1.1.0
+        with:
+          python-version: "3.10"
+          cache: "pip"
+
+      - name: Install dependencies
+        working-directory: valkey-perf-benchmark
+        run: |
+          sudo dnf groupinstall "Development Tools" -y
+          sudo dnf install -y gcc gcc-c++ make \
+              python3-devel \
+              openssl-devel \
+              bzip2-devel \
+              libffi-devel \
+              jq
+          pip install --require-hashes -r requirements.txt
+
+      - name: Build latest valkey_latest
+        working-directory: valkey_latest
+        run: |
+          echo "Building latest valkey-benchmark for latest benchmark executable..."
+          make distclean || true
+          make -j
+          if [[ -f "src/valkey-benchmark" ]]; then
+            echo "Successfully built latest valkey-benchmark"
+            ls -la src/valkey-benchmark
+            ./src/valkey-benchmark --version || echo "Version check completed"
+          else
+            echo "Failed to build valkey-benchmark"
+            exit 1
+          fi
+          VALKEY_BENCHMARK_PATH="$(pwd)/src/valkey-benchmark"
+          echo "VALKEY_BENCHMARK_PATH=$VALKEY_BENCHMARK_PATH" >> $GITHUB_ENV
+          echo "Latest valkey-benchmark path: $VALKEY_BENCHMARK_PATH"
+
+      - name: Filter data_sizes > 1024 from benchmark config
+        working-directory: valkey-perf-benchmark
+        run: |
+          CONFIG_FILE="configs/benchmark-config-arm.json"
+          jq '[.[] | .data_sizes = [.data_sizes[] | select(. <= 1024)]]' "$CONFIG_FILE" > tmp.json && mv tmp.json "$CONFIG_FILE"
+
+      - name: Enable cluster mode in benchmark config
+        working-directory: valkey-perf-benchmark
+        if: github.event.label.name == 'run-cluster-benchmark'
+        run: |
+          CONFIG_FILE="configs/benchmark-config-arm.json"
+          sed -i 's/"cluster_mode": false/"cluster_mode": true/g' "$CONFIG_FILE"
+          echo "Updated config for cluster mode:"
+          cat "$CONFIG_FILE"
+
+      - name: Run benchmarks
+        working-directory: valkey-perf-benchmark
+        run: |
+          CONFIG_FILE="configs/benchmark-config-arm.json"
+
+          # Base benchmark arguments
+          BENCHMARK_ARGS=(
+            --config "$CONFIG_FILE"
+            --commits "${{ github.event.pull_request.merge_commit_sha }}"
+            --baseline "${{ github.event.pull_request.base.ref }}"
+            --valkey-benchmark-path "$VALKEY_BENCHMARK_PATH"
+            --target-ip ${{ secrets.EC2_ARM64_IP }}
+            --valkey-path "../valkey"
+            --results-dir "results"
+            --runs 3
+          )
+
+          # Run benchmark
+          python ./benchmark.py "${BENCHMARK_ARGS[@]}"
+
+      - name: Compare results
+        working-directory: valkey-perf-benchmark
+        run: |
+          python ./utils/compare_benchmark_results.py \
+            --baseline ./results/${{ github.event.pull_request.base.ref }}/metrics.json \
+            --new ./results/${{ github.event.pull_request.merge_commit_sha }}/metrics.json \
+            --output ../comparison.md \
+            --metrics rps
+
+      - name: Upload artifacts
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: ${{ github.event.label.name }}-results
+          path: |
+            ./valkey-perf-benchmark/results/
+            comparison.md
+
+      - name: Comment PR with results
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('fs');
+            const body = fs.readFileSync('comparison.md', 'utf8');
+            const {owner, repo} = context.repo;
+            const sha = '${{ github.event.pull_request.head.sha }}';
+            const short = sha.slice(0,7);
+            const link = `[\`${short}\`](https://github.com/${owner}/${repo}/commit/${sha})`
+            const label = '${{ github.event.label.name }}';
+            const prefix = label === 'run-cluster-benchmark' ? 'Cluster Benchmark' : 'Benchmark';
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner,
+              repo,
+              body: `**${prefix} ran on this commit:** ${link}\n\n${body}`
+            });
+
+      - name: Cleanup any running valkey processes
+        if: always()
+        continue-on-error: true
+        run: |
+          rm -rf comparison.md valkey*
+          pkill -f valkey
+          exit_code=$?
+          if [ $exit_code -eq 0 ]; then
+            echo "Killed running valkey processes"
+          elif [ $exit_code -eq 1 ]; then
+            echo "No valkey processes found to kill"
+          else
+            echo "Warning: pkill failed with exit code $exit_code"
+          fi
+
+      - name: Remove ${{ github.event.label.name }} label
+        if: always() && (github.event.label.name == 'run-benchmark' || github.event.label.name == 'run-cluster-benchmark')
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            await github.rest.issues.removeLabel({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              name: '${{ github.event.label.name }}'
+            }).catch(err => console.log('label not present', err.message));

@@ -9,10 +9,10 @@
         "command_flags": [
             "NOSCRIPT",
             "LOADING",
-            "STALE",
-            "SKIP_COMMANDLOG"
+            "STALE"
         ],
         "acl_categories": [
+            "SLOW",
             "TRANSACTION"
         ],
         "reply_schema": {

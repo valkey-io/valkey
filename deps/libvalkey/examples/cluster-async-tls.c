@@ -51,10 +51,7 @@ void disconnectCallback(const valkeyAsyncContext *ac, int status) {
     printf("Disconnected from %s:%d\n", ac->c.tcp.host, ac->c.tcp.port);
 }
 
-int main(int argc, char **argv) {
-    UNUSED(argc);
-    UNUSED(argv);
-
+int main(void) {
     valkeyTLSContext *tls;
     valkeyTLSContextError tls_error;
 

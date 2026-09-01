@@ -22,7 +22,7 @@ start_server {} {
         if {$debug_msg} {puts "Log file: [srv [expr 0-$j] stdout]"}
     }
 
-    # Setup the replication and backlog parameters
+    # Set up the replication and backlog parameters
     test "PSYNC2 #3899 regression: setup" {
         $R(1) slaveof $R_host(0) $R_port(0)
         $R(2) slaveof $R_host(0) $R_port(0)
@@ -40,7 +40,7 @@ start_server {} {
     }
 
     set cycle_start_time [clock milliseconds]
-    set bench_pid [exec src/valkey-benchmark -s $R_unixsocket(0) -n 10000000 -r 1000 incr __rand_int__ > /dev/null &]
+    set bench_pid [exec $::VALKEY_BENCHMARK_BIN -s $R_unixsocket(0) -n 10000000 -r 1000 incr __rand_int__ > /dev/null &]
     while 1 {
         set elapsed [expr {[clock milliseconds]-$cycle_start_time}]
         if {$elapsed > $duration*1000} break

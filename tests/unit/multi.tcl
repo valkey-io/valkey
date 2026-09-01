@@ -35,7 +35,7 @@ start_server {tags {"multi"}} {
 
     test {Nested MULTI are not allowed} {
         r multi
-        assert_error "ERR*" {r multi}
+        assert_error "ERR Command 'multi' not allowed inside a transaction*" {r multi}
         assert_error "EXECABORT*" {r exec}
     }
 
@@ -48,7 +48,7 @@ start_server {tags {"multi"}} {
 
     test {WATCH inside MULTI is not allowed} {
         r multi
-        assert_error "ERR*" {r watch}
+        assert_error "ERR Command 'watch' not allowed inside a transaction*" {r watch x}
         assert_error "EXECABORT*" {r exec}
     }
 
@@ -370,6 +370,66 @@ start_server {tags {"multi"}} {
         r exec
     } {}
 
+    test {WATCH same key multiple times should be fine} {
+        r set x 10
+        r watch x
+        r watch x x
+        r watch x x x
+        assert_equal 1 [get_field_in_client_info [r client info] "watch"]
+        r multi
+        r incr x
+        r exec
+        assert_equal {11} [r get x]
+        assert_equal 0 [get_field_in_client_info [r client info] "watch"]
+    }
+
+    test {WATCH same key name in different DBs} {
+        set rd0 [valkey_client]
+        set rd1 [valkey_client]
+
+        # Set up two keys with the same name in different DBs
+        r select 0
+        r set key value
+        r select 1
+        r set key value
+
+        # rd0 and rd1 are watching the same key in different DBs
+        $rd0 select 0
+        $rd0 watch key
+        $rd0 multi
+        $rd1 select 1
+        $rd1 watch key
+        $rd1 multi
+
+        # Modify key in DB 0, should only affect DB 0's watch, that is, only affect rd0
+        r select 0
+        r set key modified
+
+        # Transaction should fail because key in DB 0 was touched
+        $rd0 set key new_value
+        assert_equal {} [$rd0 exec]
+
+        # Transaction should succeed because key in DB 1 was not touched
+        $rd1 set key new_value
+        assert_equal {OK} [$rd1 exec]
+
+        $rd0 close
+        $rd1 close
+    } {0} {singledb:skip}
+
+    test {WATCH with large number of keys} {
+        set elements {}
+        for {set i 0} {$i < 50000} {incr i} {
+            lappend elements key{t}-$i
+        }
+        r watch {*}$elements
+        r watch {*}$elements
+        assert_equal 50000 [get_field_in_client_info [r client info] "watch"]
+
+        r unwatch
+        assert_equal 0 [get_field_in_client_info [r client info] "watch"]
+    }
+
     test {DISCARD should clear the WATCH dirty flag on the client} {
         r watch x
         r set x 10
@@ -657,7 +717,7 @@ start_server {tags {"multi"}} {
         # check that GET and PING are disallowed on stale replica, even if the replica becomes stale only after queuing.
         r multi
         r get xx
-        $r1 replicaof localhsot 0
+        $r1 replicaof localhost_ 0
         catch {r exec} e
         assert_match {*EXECABORT*MASTERDOWN*} $e
 
@@ -666,7 +726,7 @@ start_server {tags {"multi"}} {
 
         r multi
         r ping
-        $r1 replicaof localhsot 0
+        $r1 replicaof localhost_ 0
         catch {r exec} e
         assert_match {*EXECABORT*MASTERDOWN*} $e
 
@@ -807,7 +867,7 @@ start_server {tags {"multi"}} {
             r XADD mystream * foo3 bar3
             r XGROUP CREATE mystream mygroup 0
 
-            # make sure the XCALIM (propagated by XREADGROUP) is indeed inside MULTI/EXEC
+            # make sure the XCLAIM (propagated by XREADGROUP) is indeed inside MULTI/EXEC
             r multi
             r XREADGROUP GROUP mygroup consumer1 COUNT 2 STREAMS mystream ">"
             r XREADGROUP GROUP mygroup consumer1 STREAMS mystream ">"
@@ -836,12 +896,11 @@ start_server {tags {"multi"}} {
             r del foo
             r multi
             r set foo bar
-            catch {r $cmd} e1
-            catch {r exec} e2
-            assert_match {*Command not allowed inside a transaction*} $e1
-            assert_match {EXECABORT*} $e2
-            r get foo
-        } {}
+            set cmd_lower [string tolower $cmd]
+            assert_error "ERR Command '$cmd_lower' not allowed inside a transaction*" {r $cmd}
+            assert_error "EXECABORT Transaction discarded because of previous errors*" {r exec}
+            assert_equal [r get foo] {}
+        }
     }
 
     test "MULTI with BGREWRITEAOF" {
@@ -900,19 +959,20 @@ start_server {tags {"multi"}} {
         r watch b{t} a{t}
         r flushall
         r ping
+        r unwatch
      }
 
     test {MULTI is rejected when CLIENT REPLY is ON/OFF/SKIP} {
         r multi
-        assert_error "ERR Command not allowed inside a transaction" {r client reply on}
+        assert_error "ERR Command 'client|reply' not allowed inside a transaction" {r client reply on}
         assert_error "EXECABORT *" {r exec}
 
         r multi
-        assert_error "ERR Command not allowed inside a transaction" {r client reply skip}
+        assert_error "ERR Command 'client|reply' not allowed inside a transaction" {r client reply skip}
         assert_error "EXECABORT *" {r exec}
 
         r multi
-        assert_error "ERR Command not allowed inside a transaction" {r client reply off}
+        assert_error "ERR Command 'client|reply' not allowed inside a transaction" {r client reply off}
         assert_error "EXECABORT *" {r exec}
 
         r client reply on
@@ -955,6 +1015,12 @@ start_server {tags {"multi"}} {
         $rd close
     }
 
+    test "AUTH errored inside MULTI will add the reply" {
+        r config set requirepass ""
+        r multi
+        r auth no-user foobar
+        assert_error {WRONGPASS invalid username-password pair or user is disabled.} {r exec}
+    }
 }
 
 start_server {overrides {appendonly {yes} appendfilename {appendonly.aof} appendfsync always} tags {external:skip}} {
@@ -984,5 +1050,25 @@ start_cluster 1 0 {tags {"external:skip cluster"}} {
         R 0 DEL FOO
         R 0 RANDOMKEY
         assert_equal [R 0 EXEC] {1 FIZZ}
+    }
+}
+
+start_cluster 1 0 {tags {"external:skip cluster needs:debug"} overrides {appendonly yes}} {
+    test "Regression test for #2995: MULTI/EXEC with different slot keys should not duplicate on AOF reload" {
+        R 0 SET k0 a
+        R 0 BGREWRITEAOF
+        waitForBgrewriteaof [srv 0 client]
+
+        R 0 SET k1 b
+        R 0 MULTI
+        R 0 SET k0 c
+        R 0 APPEND k0 d
+        assert_equal [R 0 EXEC] {OK 2}
+
+        R 0 DEBUG LOADAOF
+
+        assert_equal [llength [R 0 KEYS *]] 2
+        assert_equal [R 0 GET k0] "cd"
+        assert_equal [R 0 GET k1] "b"
     }
 }

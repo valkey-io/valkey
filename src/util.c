@@ -52,14 +52,12 @@
 #include "config.h"
 #include "zmalloc.h"
 #include "serverassert.h"
-
 #include "valkey_strtod.h"
+#include "monotonic.h"
 
 #if HAVE_X86_SIMD
 #include <immintrin.h>
 #endif
-
-#define UNUSED(x) ((void)(x))
 
 /* Glob-style pattern matching. */
 static int stringmatchlen_impl(const char *pattern,
@@ -199,6 +197,20 @@ int stringmatch(const char *pattern, const char *string, int nocase) {
     return stringmatchlen(pattern, strlen(pattern), string, strlen(string), nocase);
 }
 
+int prefixmatchlen(const char *pattern, int patternLen, const char *string, int stringLen, int nocase) {
+    if (patternLen == 1 && pattern[0] == '*') {
+        /* Minor optimization: fast path: avoid calling "stringmatchlen" if the input pattern is exactly "*":
+         * We always return 1 in this case. */
+        return 1;
+    } else if (patternLen > 0 && pattern[patternLen - 1] != '*') {
+        /* Reject the pattern if it doesn't end with '*' */
+        return 0;
+    } else {
+        /* Call existing string match algorithm */
+        return stringmatchlen(pattern, patternLen, string, stringLen, nocase);
+    }
+}
+
 /* Fuzz stringmatchlen() trying to crash it with bad input. */
 int stringmatchlen_fuzz_test(void) {
     char str[32];
@@ -271,7 +283,7 @@ unsigned long long memtoull(const char *p, int *err) {
     char *endptr;
     errno = 0;
     val = strtoull(buf, &endptr, 10);
-    if ((val == 0 && errno == EINVAL) || *endptr != '\0') {
+    if ((errno == ERANGE) || (val == 0 && errno == EINVAL) || *endptr != '\0') {
         if (err) *err = 1;
         return 0;
     }
@@ -399,8 +411,7 @@ int ull2string(char *dst, size_t dstlen, unsigned long long value) {
     while (value >= 100) {
         int const i = (value % 100) * 2;
         value /= 100;
-        dst[next] = digits[i + 1];
-        dst[next - 1] = digits[i];
+        memcpy(dst + next - 1, digits + i, 2);
         next -= 2;
     }
 
@@ -409,8 +420,7 @@ int ull2string(char *dst, size_t dstlen, unsigned long long value) {
         dst[next] = '0' + (uint32_t)value;
     } else {
         int i = (uint32_t)value * 2;
-        dst[next] = digits[i + 1];
-        dst[next - 1] = digits[i];
+        memcpy(dst + next - 1, digits + i, 2);
     }
     return length;
 err:
@@ -425,9 +435,9 @@ err:
 #define MULTIPLIER_10E16 10000000000000000ULL
 
 /**
- * Convert a string into an signed 64-bit integer using AVX-512 instructions.
+ * Convert a string into a signed 64-bit integer using AVX-512 instructions.
  *
- * This function parses a string of digits and converts it into an signed
+ * This function parses a string of digits and converts it into a signed
  * 64-bit integer. It leverages AVX-512 SIMD instructions for optimized
  * processing and performs strict validation to ensure the input string
  * represents a valid signed integer.
@@ -625,7 +635,9 @@ static int string2llScalar(const char *s, size_t slen, long long *value) {
 }
 
 #if HAVE_IFUNC && HAVE_X86_SIMD
-__attribute__((no_sanitize_address, used)) static int (*string2ll_resolver(void))(const char *, size_t, long long *) {
+VALKEY_NO_SANITIZE("address")
+VALKEY_NO_SANITIZE("thread")
+__attribute__((used)) static int (*string2ll_resolver(void))(const char *, size_t, long long *) {
     /* Ifunc resolvers run before ASan initialization and before CPU detection
      * is initialized, so disable ASan and init CPU detection here. */
     __builtin_cpu_init();
@@ -696,20 +708,20 @@ static int base_16_char_type(char c) {
     return -1;
 }
 
-/** This is an async-signal safe version of string2l to convert unsigned long to string.
+/** This is an async-signal-safe function to convert a hexadecimal string to an unsigned long long.
  * The function translates @param src until it reaches a value that is not 0-9, a-f or A-F, or @param we read slen
- * characters. On successes writes the result to @param result_output and returns 1. if the string represents an
- * overflow value, return -1. */
-int string2ul_base16_async_signal_safe(const char *src, size_t slen, unsigned long *result_output) {
+ * characters. On success, it writes the result to @param result_output and returns 1. If the string represents an
+ * overflow value, it returns -1. */
+int string2ull_base16_async_signal_safe(const char *src, size_t slen, unsigned long long *result_output) {
     static char ascii_to_dec[] = {'0', 'a' - 10, 'A' - 10};
 
     int char_type = 0;
     size_t curr_char_idx = 0;
-    unsigned long result = 0;
+    unsigned long long result = 0;
     int base = 16;
-    while ((-1 != (char_type = base_16_char_type(src[curr_char_idx]))) && curr_char_idx < slen) {
-        unsigned long curr_val = src[curr_char_idx] - ascii_to_dec[char_type];
-        if ((result > ULONG_MAX / base) || (result > (ULONG_MAX - curr_val) / base)) /* Overflow. */
+    while (curr_char_idx < slen && (-1 != (char_type = base_16_char_type(src[curr_char_idx])))) {
+        unsigned long long curr_val = src[curr_char_idx] - ascii_to_dec[char_type];
+        if ((result > ULLONG_MAX / base) || (result > (ULLONG_MAX - curr_val) / base)) /* Overflow. */
             return -1;
         result = result * base + curr_val;
         ++curr_char_idx;
@@ -756,7 +768,7 @@ int string2ld(const char *s, size_t slen, long double *dp) {
 int string2d(const char *s, size_t slen, double *dp) {
     errno = 0;
     char *eptr;
-    *dp = valkey_strtod(s, &eptr);
+    *dp = valkey_strtod_n(s, slen, &eptr);
     if (slen == 0 || isspace(((const char *)s)[0]) || (size_t)(eptr - (char *)s) != slen ||
         (errno == ERANGE && (*dp == HUGE_VAL || *dp == -HUGE_VAL || fpclassify(*dp) == FP_ZERO)) || isnan(*dp) || errno == EINVAL) {
         errno = 0;
@@ -854,7 +866,7 @@ int d2string(char *buf, size_t len, double value) {
  */
 int fixedpoint_d2string(char *dst, size_t dstlen, double dvalue, int fractional_digits) {
     if (fractional_digits < 1 || fractional_digits > 17) goto err;
-    /* min size of 2 ( due to 0. ) + n fractional_digitits + \0 */
+    /* min size of 2 ( due to 0. ) + n fractional_digits + \0 */
     if ((int)dstlen < (fractional_digits + 3)) goto err;
     if (dvalue == 0) {
         dst[0] = '0';
@@ -1038,6 +1050,20 @@ err:
     /* force add Null termination */
     if (len > 0) buf[0] = '\0';
     return 0;
+}
+
+/* Populate the provided seed array by hashing the provided string with SHA256
+ * and copying the first outlen bytes of the digest into the seed buffer. */
+void getHashSeedFromString(unsigned char *seed_array, size_t outlen, const char *value, size_t value_len) {
+    SHA256_CTX ctx;
+    unsigned char digest[SHA256_BLOCK_SIZE];
+
+    sha256_init(&ctx);
+    sha256_update(&ctx, (const BYTE *)value, value_len);
+    sha256_final(&ctx, digest);
+
+    if (outlen > SHA256_BLOCK_SIZE) outlen = SHA256_BLOCK_SIZE;
+    memcpy(seed_array, digest, outlen);
 }
 
 /* Parses a version string on the form "major.minor.patch" and returns an
@@ -1569,4 +1595,93 @@ int snprintf_async_signal_safe(char *to, size_t n, const char *fmt, ...) {
     result = vsnprintf_async_signal_safe(to, n, fmt, args);
     va_end(args);
     return result;
+}
+
+/* Return the UNIX time in microseconds */
+long long ustime(void) {
+    static long long ust = 0;
+    static monotime mono_at_last_timeofday = 0;
+
+    /* Fast path. Only call gettimeofday() periodically and add monotonic delta.
+     * This avoids a syscall if we have a no-syscall monotonic clock. */
+    if (getMonotonicUs != NULL && monotonicGetType() == MONOTONIC_CLOCK_HW) {
+        monotime mono_now = getMonotonicUs();
+        monotime mono_since_gettimeofday = mono_now - mono_at_last_timeofday;
+        if (mono_since_gettimeofday < 1000) return ust + mono_since_gettimeofday;
+
+        /* Use time of day. */
+        mono_at_last_timeofday = mono_now;
+    }
+
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    ust = ((long long)tv.tv_sec) * 1000000;
+    ust += tv.tv_usec;
+    return ust;
+}
+
+/* Return the UNIX time in milliseconds */
+mstime_t mstime(void) {
+    return ustime() / 1000;
+}
+
+/* Writes a pointer into an 8 bytes field, padding with zeros on 32bit targets
+ * to ensure a consistent fixed width encoding. */
+void writePointerWithPadding(unsigned char *buf, const void *ptr) {
+    size_t ptr_size = sizeof(ptr); /* 4 on 32‑bit, 8 on 64‑bit */
+    memcpy(buf, &ptr, ptr_size);
+    /* if it is 32-bit system, pad the remaining 4 bytes with zero */
+    if (ptr_size == 4) memset(buf + ptr_size, 0, ptr_size);
+}
+
+/*
+ * Escape a Unicode string for JSON output, following RFC 7159:
+ * https://datatracker.ietf.org/doc/html/rfc7159#section-7
+ */
+sds escapeJsonString(sds s, const char *p, size_t len) {
+    s = sdscatlen(s, "\"", 1);
+    while (len--) {
+        switch (*p) {
+        case '\\':
+        case '"': s = sdscatprintf(s, "\\%c", *p); break;
+        case '\n': s = sdscatlen(s, "\\n", 2); break;
+        case '\f': s = sdscatlen(s, "\\f", 2); break;
+        case '\r': s = sdscatlen(s, "\\r", 2); break;
+        case '\t': s = sdscatlen(s, "\\t", 2); break;
+        case '\b': s = sdscatlen(s, "\\b", 2); break;
+        default: s = sdscatprintf(s, *(unsigned char *)p <= 0x1f ? "\\u%04x" : "%c", *p);
+        }
+        p++;
+    }
+    return sdscatlen(s, "\"", 1);
+}
+
+/* Tomas Wang's 64 bit integer hash */
+uint64_t wangHash64(uint64_t hash) {
+    hash = (~hash) + (hash << 21); /* hash = (hash << 21) - hash - 1; */
+    hash = hash ^ (hash >> 24);
+    hash = (hash + (hash << 3)) + (hash << 8); /* hash * 265 */
+    hash = hash ^ (hash >> 14);
+    hash = (hash + (hash << 2)) + (hash << 4); /* hash * 21 */
+    hash = hash ^ (hash >> 28);
+    hash = hash + (hash << 31);
+    return hash;
+}
+
+/* Lock-free, per-thread Bernoulli sampler: advances a thread-local xorshift64*
+ * PRNG and returns 1 with probability `percentage`/100, using only a multiply +
+ * compare (no modulo, and no glibc rand() internal lock) so it stays cheap on
+ * hot paths that call it for every event. */
+int bernoulliSampleHit(int percentage) {
+    static __thread uint64_t s = 0;
+    if (s == 0) {
+        s = (uint64_t)(uintptr_t)&s ^ 0x9E3779B97F4A7C15ULL; /* seed from stack address; multiplier from Vigna's xorshift64* paper */
+        s |= 1;                                              /* xorshift64 needs a nonzero state */
+    }
+    s ^= s >> 12;
+    s ^= s << 25;
+    s ^= s >> 27;
+    uint32_t r = (uint32_t)((s * 0x2545F4914F6CDD1DULL) >> 32); /* multiplier from Vigna's xorshift64* paper */
+    /* r/2^32 < pct/100  <=>  r*100 < pct*2^32  (no division). */
+    return (uint64_t)r * 100 < ((uint64_t)percentage << 32);
 }

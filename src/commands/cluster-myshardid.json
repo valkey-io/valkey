@@ -17,6 +17,9 @@
         "reply_schema": {
             "description": "The node's shard id.",
             "type": "string"
-        }
+        },
+        "acl_categories": [
+            "SLOW"
+        ]
     }
 }

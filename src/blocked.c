@@ -104,8 +104,8 @@ void freeClientBlockingState(client *c) {
  * flag is set client query buffer is not longer processed, but accumulated,
  * and will be processed when the client is unblocked. */
 void blockClient(client *c, int btype) {
-    /* Primary client should never be blocked unless pause or module */
-    serverAssert(!(c->flag.primary && btype != BLOCKED_MODULE && btype != BLOCKED_POSTPONE));
+    /* Replicated clients should never be blocked unless pause or module */
+    serverAssert(!(isReplicatedClient(c) && btype != BLOCKED_MODULE && btype != BLOCKED_POSTPONE));
 
     initClientBlockingState(c);
 
@@ -318,9 +318,12 @@ void replyToClientsBlockedOnShutdown(void) {
  * in an instance which turns from primary to replica is unsafe, so this function
  * is called when a primary turns into a replica.
  *
- * The semantics is to send an -UNBLOCKED error to the client, disconnecting
- * it at the same time. */
-void disconnectAllBlockedClients(void) {
+ * The semantics are as follows:
+ * - If the client is read-only, and blocked by a read command we can handle, we do not unblock it.
+ * - Send a -MOVED to the client in cluster-enabled mode.
+ * - Send a -REDIRECT when the client has redirect capability in standalone mode.
+ * - Otherwise, send a -UNBLOCKED error to the client while disconnecting it at the same time. */
+void disconnectOrRedirectAllBlockedClients(void) {
     listNode *ln;
     listIter li;
 
@@ -335,9 +338,24 @@ void disconnectAllBlockedClients(void) {
              * which the command is already in progress in a way. */
             if (c->bstate->btype == BLOCKED_POSTPONE) continue;
 
-            unblockClientOnError(c, "-UNBLOCKED force unblock from blocking operation, "
-                                    "instance state changed (master -> replica?)");
-            c->flag.close_after_reply = 1;
+            if (server.cluster_enabled) {
+                if (clusterRedirectBlockedClientIfNeeded(c))
+                    unblockClientOnError(c, NULL);
+            } else {
+                /* if the client is read-only and blocked by a read command, we do not unblock it */
+                if (c->flag.readonly && !(c->lastcmd->flags & CMD_WRITE)) continue;
+                if (clientSupportStandAloneRedirect(c) && (c->bstate->btype == BLOCKED_LIST || c->bstate->btype == BLOCKED_ZSET ||
+                                                           c->bstate->btype == BLOCKED_STREAM || c->bstate->btype == BLOCKED_MODULE)) {
+                    if (c->bstate->btype == BLOCKED_MODULE && !moduleClientIsBlockedOnKeys(c)) continue;
+                    /* Client has redirect capability and blocked on keys */
+                    addReplyErrorSds(c, sdscatprintf(sdsempty(), "-REDIRECT %s:%d", server.primary_host, server.primary_port));
+                    unblockClientOnError(c, NULL);
+                } else {
+                    unblockClientOnError(c, "-UNBLOCKED force unblock from blocking operation, "
+                                            "instance state changed (master -> replica?)");
+                    c->flag.close_after_reply = 1;
+                }
+            }
         }
     }
 }
@@ -611,14 +629,24 @@ static void handleClientsBlockedOnKey(readyList *rl) {
     if (de) {
         list *clients = dictGetVal(de);
         listNode *ln;
-        listIter li;
-        listRewind(clients, &li);
-
+        client *receiver;
+        long count = listLength(clients);
         /* Avoid processing more than the initial count so that we're not stuck
          * in an endless loop in case the reprocessing of the command blocks again. */
-        long count = listLength(clients);
-        while ((ln = listNext(&li)) && count--) {
-            client *receiver = listNodeValue(ln);
+        while (count-- > 0) {
+            /* Re-resolve the entry each round: serving a client may free this
+             * whole blocking_keys entry or re-create it, so a saved entry would
+             * dangle. */
+            de = dictFind(rl->db->blocking_keys, rl->key);
+            if (de == NULL) break;
+            clients = dictGetVal(de);
+
+            /* Process the head, then rotate it to the tail, so we can fairly
+             * iterate all receivers step by step without a dangling iterator. */
+            ln = listFirst(clients);
+            receiver = listNodeValue(ln);
+            listRotateHeadToTail(clients);
+
             robj *o = lookupKeyReadWithFlags(rl->db, rl->key, LOOKUP_NOEFFECTS);
             /* 1. In case new key was added/touched we need to verify it satisfy the
              *    blocked type, since we might process the wrong key type.
@@ -627,7 +655,7 @@ static void handleClientsBlockedOnKey(readyList *rl) {
              *    module is trying to accomplish right now.
              * 3. In case of XREADGROUP call we will want to unblock on any change in object type
              *    or in case the key was deleted, since the group is no longer valid. */
-            if ((o != NULL && (receiver->bstate->btype == getBlockedTypeByType(o->type))) ||
+            if ((o != NULL && (receiver->bstate->btype == getBlockedTypeByType(objectGetType(o)))) ||
                 (o != NULL && (receiver->bstate->btype == BLOCKED_MODULE)) || (receiver->bstate->unblock_on_nokey)) {
                 if (receiver->bstate->btype != BLOCKED_MODULE)
                     unblockClientOnKey(receiver, rl->key);
@@ -639,7 +667,7 @@ static void handleClientsBlockedOnKey(readyList *rl) {
 }
 
 /* block a client for replica acknowledgement */
-void blockClientForReplicaAck(client *c, mstime_t timeout, long long offset, long numreplicas, int numlocal) {
+void blockClientForReplicaAck(client *c, mstime_t timeout, long long offset, int numreplicas, int numlocal) {
     initClientBlockingState(c);
     c->bstate->timeout = timeout;
     c->bstate->reploffset = offset;
@@ -706,7 +734,13 @@ static void unblockClientOnKey(client *c, robj *key) {
         client *old_client = server.current_client;
         server.current_client = c;
         enterExecutionUnit(1, 0);
-        processCommandAndResetClient(c);
+        if (processCommandAndResetClient(c) == C_ERR) {
+            /* Client was freed during command processing, exit immediately */
+            exitExecutionUnit();
+            server.current_client = old_client;
+            return;
+        }
+
         if (!c->flag.blocked) {
             if (c->flag.module) {
                 moduleCallCommandUnblockedHandler(c);

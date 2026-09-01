@@ -14,6 +14,11 @@
         "reply_schema": {
             "description": "A simple string reply indicating that the rewriting started or is about to start ASAP",
             "type": "string"
-        }
+        },
+        "acl_categories": [
+            "ADMIN",
+            "DANGEROUS",
+            "SLOW"
+        ]
     }
 }

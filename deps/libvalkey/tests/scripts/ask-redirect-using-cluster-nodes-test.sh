@@ -48,7 +48,7 @@ server2=$!
 wait $syncpid1 $syncpid2;
 
 # Run client
-timeout 3s "$clientprog" --use-cluster-nodes 127.0.0.1:7400 > "$testname.out" <<'EOF'
+timeout 3s "$clientprog" --blocking-initial-update --use-cluster-nodes 127.0.0.1:7400 > "$testname.out" <<'EOF'
 GET foo
 GET foo
 EOF

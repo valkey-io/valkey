@@ -28,6 +28,11 @@
                     "pattern": "^STILL [0-9]*$"
                 }
             ]
-        }
+        },
+        "acl_categories": [
+            "ADMIN",
+            "DANGEROUS",
+            "SLOW"
+        ]
     }
 }

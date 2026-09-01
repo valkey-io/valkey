@@ -17,17 +17,14 @@
                 "Added support for uppercase unit names."
             ]
         ],
-        "deprecated_since": "6.2.0",
-        "replaced_by": "`GEOSEARCH` and `GEOSEARCHSTORE` with the `BYRADIUS` and `FROMMEMBER` arguments",
-        "doc_flags": [
-            "DEPRECATED"
-        ],
         "command_flags": [
             "WRITE",
             "DENYOOM"
         ],
         "acl_categories": [
-            "GEO"
+            "GEO",
+            "SLOW",
+            "WRITE"
         ],
         "key_specs": [
             {
@@ -51,7 +48,8 @@
             {
                 "flags": [
                     "OW",
-                    "UPDATE"
+                    "UPDATE",
+                    "VARIABLE_FLAGS"
                 ],
                 "begin_search": {
                     "keyword": {
@@ -70,7 +68,8 @@
             {
                 "flags": [
                     "OW",
-                    "UPDATE"
+                    "UPDATE",
+                    "VARIABLE_FLAGS"
                 ],
                 "begin_search": {
                     "keyword": {

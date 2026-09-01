@@ -6,6 +6,9 @@ foreach_sentinel_id id {
     S $id sentinel debug default-down-after 1000
 }
 
+set ::user "sentinel-user"
+set ::password "sentinel-password"
+
 if {$::simulate_error} {
     test "This test will fail" {
         fail "Simulated error"
@@ -76,6 +79,10 @@ test "SENTINEL SIMULATE-FAILURE HELP list supported flags" {
 }
 
 test "Basic failover works if the primary is down" {
+    # Explicitly forbid the FAILOVER command to ensure backward compatibility with
+    # ACLs that were documented for Valkey < 9.0
+    configure_sentinel_user_acl $::user $::password 0
+
     set old_port [RPort $master_id]
     set addr [S 0 SENTINEL GET-PRIMARY-ADDR-BY-NAME mymaster]
     assert {[lindex $addr 1] == $old_port}
@@ -116,9 +123,11 @@ test "The old primary eventually gets reconfigured as a slave" {
     } else {
         fail "Old master not reconfigured as slave of new master"
     }
+    reset_sentinel_user_acl $::user
 }
 
 test "ODOWN is not possible without N (quorum) Sentinels reports" {
+    set sentinels [llength $::sentinel_instances]
     foreach_sentinel_id id {
         S $id SENTINEL SET mymaster quorum [expr $sentinels+1]
     }
@@ -127,13 +136,14 @@ test "ODOWN is not possible without N (quorum) Sentinels reports" {
     assert {[lindex $addr 1] == $old_port}
     kill_instance valkey $master_id
 
-    # Make sure failover did not happened.
+    # Make sure failover did not happen.
     set addr [S 0 SENTINEL GET-PRIMARY-ADDR-BY-NAME mymaster]
     assert {[lindex $addr 1] == $old_port}
     restart_instance valkey $master_id
 }
 
 test "Failover is not possible without majority agreement" {
+    set quorum [expr {$sentinels/2 + 1}]
     foreach_sentinel_id id {
         S $id SENTINEL SET mymaster quorum $quorum
     }
@@ -146,7 +156,7 @@ test "Failover is not possible without majority agreement" {
     # Kill the current master
     kill_instance valkey $master_id
 
-    # Make sure failover did not happened.
+    # Make sure failover did not happen.
     set addr [S $quorum SENTINEL GET-PRIMARY-ADDR-BY-NAME mymaster]
     assert {[lindex $addr 1] == $old_port}
     restart_instance valkey $master_id
@@ -194,7 +204,7 @@ test "New primary [join $addr {:}] role matches" {
     assert {[RI $master_id role] eq {master}}
 }
 
-test "SENTINEL RESET can resets the primary" {
+test "SENTINEL RESET can reset the primary" {
     # After SENTINEL RESET, sometimes the sentinel can sense the primary again,
     # causing the test to fail. Here we give it a few more chances.
     for {set j 0} {$j < 10} {incr j} {

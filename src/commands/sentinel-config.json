@@ -89,33 +89,38 @@
         },
         "arguments": [
             {
-                "name":"action",
-                "type":"oneof",
-                "arguments":[
+                "name": "action",
+                "type": "oneof",
+                "arguments": [
                     {
-                        "name":"set",
-                        "token":"SET",
-                        "type":"block",
+                        "name": "set",
+                        "token": "SET",
+                        "type": "block",
                         "multiple": true,
-                        "arguments":[
+                        "arguments": [
                             {
-                                "name":"parameter",
-                                "type":"string"
+                                "name": "parameter",
+                                "type": "string"
                             },
                             {
-                                "name":"value",
-                                "type":"string"
+                                "name": "value",
+                                "type": "string"
                             }
                         ]
                     },
                     {
-                        "token":"GET",
-                        "name":"parameter",
-                        "type":"string",
+                        "token": "GET",
+                        "name": "parameter",
+                        "type": "string",
                         "multiple": true
                     }
                 ]
             }
+        ],
+        "acl_categories": [
+            "ADMIN",
+            "DANGEROUS",
+            "SLOW"
         ]
     }
 }

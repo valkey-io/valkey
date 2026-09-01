@@ -13,7 +13,8 @@
             "SENTINEL"
         ],
         "acl_categories": [
-            "CONNECTION"
+            "CONNECTION",
+            "SLOW"
         ],
         "reply_schema": {
             "description": "List of keys from the given command.",

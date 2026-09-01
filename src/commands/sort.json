@@ -12,10 +12,12 @@
             "DENYOOM"
         ],
         "acl_categories": [
-            "SET",
-            "SORTEDSET",
+            "DANGEROUS",
             "LIST",
-            "DANGEROUS"
+            "SET",
+            "SLOW",
+            "SORTEDSET",
+            "WRITE"
         ],
         "key_specs": [
             {

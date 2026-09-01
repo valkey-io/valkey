@@ -7,13 +7,15 @@ start_cluster 2 2 {tags {external:skip cluster} overrides {cluster-replica-no-fa
     }
 
     test "Set cluster announced IPv4 and check that it propagates" {
+        set announced_ips {}
         for {set j 0} {$j < [llength $::servers]} {incr j} {
             set res [R $j config set cluster-announce-client-ipv4 "111.222.111.$j"]
+            lappend announced_ips "111.222.111.$j"
         }
 
         # CLUSTER SLOTS
         wait_for_condition 50 100 {
-            [are_cluster_announced_ips_propagated {111.222.111.*}]
+            [are_cluster_announced_values_propagated "ip" $announced_ips]
         } else {
             fail "cluster-announce-client-ipv4 were not propagated"
         }
@@ -54,7 +56,7 @@ start_cluster 2 2 {tags {external:skip cluster} overrides {cluster-replica-no-fa
         }
 
         wait_for_condition 50 100 {
-            [are_cluster_announced_ips_propagated "127.0.0.1"] eq 1
+            [are_cluster_announced_values_propagated "ip" {"127.0.0.1"}] eq 1
         } else {
             fail "Cleared cluster-announce-client-ipv4 were not propagated"
         }
@@ -82,13 +84,15 @@ start_cluster 2 2 {tags {external:skip cluster ipv6} overrides {cluster-replica-
     }
 
     test "Set cluster announced IPv6 and check that it propagates" {
+        set announced_ips {}
         for {set j 0} {$j < [llength $::servers]} {incr j} {
             R $j config set cluster-announce-client-ipv6 "cafe:1234::$j"
+            lappend announced_ips "cafe:1234::$j"
         }
 
         # CLUSTER SLOTS
         wait_for_condition 50 100 {
-            [are_cluster_announced_ips_propagated "cafe:1234::*" $clients] eq 1
+            [are_cluster_announced_values_propagated "ip" $announced_ips $clients] eq 1
         } else {
             fail "cluster-announce-client-ipv6 were not propagated"
         }
@@ -129,7 +133,7 @@ start_cluster 2 2 {tags {external:skip cluster ipv6} overrides {cluster-replica-
         }
 
         wait_for_condition 50 100 {
-            [are_cluster_announced_ips_propagated "127.0.0.1" $clients] eq 1
+            [are_cluster_announced_values_propagated "ip" {"127.0.0.1"} $clients] eq 1
         } else {
             fail "Cleared cluster-announce-client-ipv6 were not propagated"
         }

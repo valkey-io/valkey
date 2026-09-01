@@ -61,14 +61,16 @@ static uint64_t getSlotStat(int slot, slotStatType stat_type) {
     return slot_stat;
 }
 
-/* Compare by stat in ascending order. If stat is the same, compare by slot in ascending order. */
+/* Compare by stat in ascending order. If stat is the same, compare by slot in ascending order.
+ * Note: subtraction of uint64_t values cast to int truncates when the difference exceeds
+ * INT_MAX, potentially inverting the sort order. Use three-way comparison instead. */
 static int slotStatForSortAscCmp(const void *a, const void *b) {
     slotStatForSort entry_a = *((slotStatForSort *)a);
     slotStatForSort entry_b = *((slotStatForSort *)b);
     if (entry_a.stat == entry_b.stat) {
         return entry_a.slot - entry_b.slot;
     }
-    return entry_a.stat - entry_b.stat;
+    return (entry_a.stat > entry_b.stat) - (entry_a.stat < entry_b.stat);
 }
 
 /* Compare by stat in descending order. If stat is the same, compare by slot in ascending order. */
@@ -78,7 +80,7 @@ static int slotStatForSortDescCmp(const void *a, const void *b) {
     if (entry_b.stat == entry_a.stat) {
         return entry_a.slot - entry_b.slot;
     }
-    return entry_b.stat - entry_a.stat;
+    return (entry_b.stat > entry_a.stat) - (entry_b.stat < entry_a.stat);
 }
 
 static void collectAndSortSlotStats(slotStatForSort slot_stats[], slotStatType order_by, int desc) {
@@ -235,14 +237,6 @@ void clusterSlotStatsAddCpuDuration(client *c, ustime_t duration) {
     server.cluster->slot_stats[c->slot].cpu_usec += duration;
 }
 
-/* For cross-slot scripting, its caller client's slot must be invalidated,
- * such that its slot-stats aggregation is bypassed. */
-void clusterSlotStatsInvalidateSlotIfApplicable(scriptRunCtx *ctx) {
-    if (!(ctx->flags & SCRIPT_ALLOW_CROSS_SLOT)) return;
-
-    ctx->original_client->slot = -1;
-}
-
 static int canAddNetworkBytesIn(client *c) {
     /* First, cluster mode must be enabled.
      * Second, command should target a specific slot.
@@ -290,7 +284,7 @@ void clusterSlotStatsCommand(client *c) {
     }
 
     /* Parse additional arguments. */
-    if (c->argc == 5 && !strcasecmp(c->argv[2]->ptr, "slotsrange")) {
+    if (c->argc == 5 && !strcasecmp(objectGetVal(c->argv[2]), "slotsrange")) {
         /* CLUSTER SLOT-STATS SLOTSRANGE start-slot end-slot */
         int startslot, endslot;
         if ((startslot = getSlotOrReply(c, c->argv[3])) == -1 ||
@@ -306,21 +300,21 @@ void clusterSlotStatsCommand(client *c) {
         int assigned_slots_count = markSlotsAssignedToMyShard(assigned_slots, startslot, endslot);
         addReplySlotsRange(c, assigned_slots, startslot, endslot, assigned_slots_count);
 
-    } else if (c->argc >= 4 && !strcasecmp(c->argv[2]->ptr, "orderby")) {
+    } else if (c->argc >= 4 && !strcasecmp(objectGetVal(c->argv[2]), "orderby")) {
         /* CLUSTER SLOT-STATS ORDERBY metric [LIMIT limit] [ASC | DESC] */
         int desc = 1;
         slotStatType order_by = INVALID;
-        if (!strcasecmp(c->argv[3]->ptr, "key-count")) {
+        if (!strcasecmp(objectGetVal(c->argv[3]), "key-count")) {
             order_by = KEY_COUNT;
-        } else if (!strcasecmp(c->argv[3]->ptr, "cpu-usec") && server.cluster_slot_stats_enabled) {
+        } else if (!strcasecmp(objectGetVal(c->argv[3]), "cpu-usec") && server.cluster_slot_stats_enabled) {
             order_by = CPU_USEC;
-        } else if (!strcasecmp(c->argv[3]->ptr, "network-bytes-in") && server.cluster_slot_stats_enabled) {
+        } else if (!strcasecmp(objectGetVal(c->argv[3]), "network-bytes-in") && server.cluster_slot_stats_enabled) {
             order_by = NETWORK_BYTES_IN;
-        } else if (!strcasecmp(c->argv[3]->ptr, "network-bytes-out") && server.cluster_slot_stats_enabled) {
+        } else if (!strcasecmp(objectGetVal(c->argv[3]), "network-bytes-out") && server.cluster_slot_stats_enabled) {
             order_by = NETWORK_BYTES_OUT;
-        } else if (!strcasecmp(c->argv[3]->ptr, "keyspace-hits")) {
+        } else if (!strcasecmp(objectGetVal(c->argv[3]), "keyspace-hits")) {
             order_by = KEYSPACE_HITS;
-        } else if (!strcasecmp(c->argv[3]->ptr, "keyspace-misses")) {
+        } else if (!strcasecmp(objectGetVal(c->argv[3]), "keyspace-misses")) {
             order_by = KEYSPACE_MISSES;
         } else {
             addReplyError(c, "Unrecognized sort metric for ORDERBY.");
@@ -331,7 +325,7 @@ void clusterSlotStatsCommand(client *c) {
         long limit = CLUSTER_SLOTS;
         while (i < c->argc) {
             int moreargs = c->argc > i + 1;
-            if (!strcasecmp(c->argv[i]->ptr, "limit") && moreargs) {
+            if (!strcasecmp(objectGetVal(c->argv[i]), "limit") && moreargs) {
                 if (getRangeLongFromObjectOrReply(
                         c, c->argv[i + 1], 1, CLUSTER_SLOTS, &limit,
                         "Limit has to lie in between 1 and 16384 (maximum number of slots).") != C_OK) {
@@ -339,10 +333,10 @@ void clusterSlotStatsCommand(client *c) {
                 }
                 i++;
                 limit_counter++;
-            } else if (!strcasecmp(c->argv[i]->ptr, "asc")) {
+            } else if (!strcasecmp(objectGetVal(c->argv[i]), "asc")) {
                 desc = 0;
                 asc_desc_counter++;
-            } else if (!strcasecmp(c->argv[i]->ptr, "desc")) {
+            } else if (!strcasecmp(objectGetVal(c->argv[i]), "desc")) {
                 desc = 1;
                 asc_desc_counter++;
             } else {
@@ -364,4 +358,12 @@ void clusterSlotStatsCommand(client *c) {
 
 int clusterSlotStatsEnabled(int slot) {
     return server.cluster_slot_stats_enabled && server.cluster_enabled && slot != -1;
+}
+
+int testOnlySlotStatForSortAscCmp(const void *a, const void *b) {
+    return slotStatForSortAscCmp(a, b);
+}
+
+int testOnlySlotStatForSortDescCmp(const void *a, const void *b) {
+    return slotStatForSortDescCmp(a, b);
 }

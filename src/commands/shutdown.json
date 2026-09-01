@@ -10,6 +10,10 @@
             [
                 "7.0.0",
                 "Added the `NOW`, `FORCE` and `ABORT` modifiers."
+            ],
+            [
+                "9.0.0",
+                "Added the `SAFE` and `FAILOVER` modifiers."
             ]
         ],
         "command_flags": [
@@ -61,6 +65,20 @@
                                 "token": "FORCE",
                                 "optional": true,
                                 "since": "7.0.0"
+                            },
+                            {
+                                "name": "safe",
+                                "type": "pure-token",
+                                "token": "SAFE",
+                                "optional": true,
+                                "since": "9.0.0"
+                            },
+                            {
+                                "name": "failover",
+                                "type": "pure-token",
+                                "token": "FAILOVER",
+                                "optional": true,
+                                "since": "9.0.0"
                             }
                         ]
                     },
@@ -76,6 +94,11 @@
         "reply_schema": {
             "description": "OK if ABORT was specified and shutdown was aborted. On successful shutdown, nothing is returned since the server quits and the connection is closed. On failure, an error is returned.",
             "const": "OK"
-        }
+        },
+        "acl_categories": [
+            "ADMIN",
+            "DANGEROUS",
+            "SLOW"
+        ]
     }
 }

@@ -2,12 +2,17 @@
 
 source "../tests/includes/init-tests.tcl"
 
+set ::user "sentinel-user"
+set ::password "sentinel-password"
+
 foreach_sentinel_id id {
     S $id sentinel debug info-period 2000
     S $id sentinel debug publish-period 1000
 }
 
 test "Manual coordinated failover works" {
+    configure_sentinel_user_acl $::user $::password
+
     set old_port [RPort $master_id]
     set addr [S 0 SENTINEL GET-PRIMARY-ADDR-BY-NAME mymaster]
     assert {[lindex $addr 1] == $old_port}
@@ -133,6 +138,7 @@ test "No change after failed failover: All sentinels agree on primary" {
     foreach_sentinel_id id {
         assert {[lindex [S $id SENTINEL GET-PRIMARY-ADDR-BY-NAME mymaster] 1] == [lindex $addr 1]}
     }
+    reset_sentinel_user_acl $::user
 }
 
 foreach flag {crash-after-election crash-after-promotion} {

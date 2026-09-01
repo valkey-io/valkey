@@ -9,7 +9,6 @@
 # $c get foo
 # $c close
 
-package require Tcl 8.5
 package provide valkey_cluster 0.1
 
 namespace eval valkey_cluster {}
@@ -34,7 +33,7 @@ set ::valkey_cluster::plain_commands {
     hgetall hexists hscan incrby decrby incrbyfloat getset move
     expire expireat pexpire pexpireat type ttl pttl persist restore
     dump bitcount bitpos pfadd pfcount cluster ssubscribe spublish
-    sunsubscribe
+    sunsubscribe clusterscan
 }
 
 # Create a cluster client. The nodes are given as a list of host:port. The TLS
@@ -52,9 +51,9 @@ proc valkey_cluster {nodes {tls -1}} {
 
 # Totally reset the slots / nodes state for the client, calls
 # CLUSTER NODES in the first startup node available, populates the
-# list of nodes ::valkey_cluster::nodes($id) with an hash mapping node
+# list of nodes ::valkey_cluster::nodes($id) with a hash mapping node
 # ip:port to a representation of the node (another hash), and finally
-# maps ::valkey_cluster::slots($id) with an hash mapping slot numbers
+# maps ::valkey_cluster::slots($id) with a hash mapping slot numbers
 # to node IDs.
 #
 # This function is called when a new Cluster client is initialized
@@ -117,7 +116,7 @@ proc ::valkey_cluster::__method__refresh_nodes_map {id} {
         set tls $::valkey_cluster::tls($id)
         catch {set link [valkey $host $port 0 $tls]}
 
-        # Build this node description as an hash.
+        # Build this node description as a hash.
         set node [dict create \
             id $nodeid \
             internal_id $id \

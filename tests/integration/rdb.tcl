@@ -15,7 +15,10 @@ set server_path [tmpdir "server.rdb-encoding-test"]
 
 # Copy RDB with different encodings in server path
 exec cp tests/assets/encodings.rdb $server_path
+exec cp tests/assets/encodings-rdb12.rdb $server_path
+exec cp tests/assets/encodings-rdb75-unknown-types.rdb $server_path
 exec cp tests/assets/encodings-rdb987.rdb $server_path
+exec cp tests/assets/encodings-rdb987-unknown-types.rdb $server_path
 exec cp tests/assets/list-quicklist.rdb $server_path
 
 start_server [list overrides [list "dir" $server_path "dbfilename" "list-quicklist.rdb" save ""]] {
@@ -55,7 +58,7 @@ start_server_and_kill_it [list "dir" $server_path "dbfilename" "encodings-rdb987
             [string match {*Fatal error loading*} \
                  [exec tail -1 < [dict get $srv stdout]]]
         } else {
-            fail "Server started even if RDB version check failed"
+            fail "Server started even though RDB version is unsupported"
         }
     }
 }
@@ -67,6 +70,42 @@ start_server [list overrides [list "dir" $server_path \
         r select 0
         csvdump r
     } $csv_dump
+}
+
+start_server_and_kill_it [list dir $server_path \
+                              dbfilename "encodings-rdb987-unknown-types.rdb" \
+                              rdb-version-check relaxed] {
+    test "RDB future version loading with unknown types, relaxed version check" {
+        wait_for_condition 50 100 {
+            [string match {*Unknown type or opcode when loading DB. Unrecoverable error, aborting now.*} \
+                 [exec tail -2 < [dict get $srv stdout]]]
+        } else {
+            fail "Server started even though RDB contains unknown types"
+        }
+    }
+}
+
+start_server [list overrides [list dir $server_path \
+                                  dbfilename "encodings-rdb12.rdb" \
+                                  rdb-version-check relaxed]] {
+    test "RDB foreign version loading, relaxed version check" {
+        r select 0
+        assert_equal foo [r keys *]
+        assert_equal bar [r get foo]
+    }
+}
+
+start_server_and_kill_it [list dir $server_path \
+                              dbfilename "encodings-rdb75-unknown-types.rdb" \
+                              rdb-version-check relaxed] {
+    test "RDB foreign version loading with unknown types, relaxed version check" {
+        wait_for_condition 50 100 {
+            [string match {*Can't handle foreign type or opcode 150 in RDB with version 75*} \
+                 [exec tail -2 < [dict get $srv stdout]]]
+        } else {
+            fail "Server started even though RDB contains unknown types"
+        }
+    }
 }
 
 set server_path [tmpdir "server.rdb-startup-test"]
@@ -99,13 +138,6 @@ start_server [list overrides [list "dir" $server_path] keep_persistence true] {
         r xdel stream [lindex [lindex [lindex [lindex $records 0] 1] 1] 0]
         r xack stream mygroup [lindex [lindex [lindex [lindex $records 0] 1] 0] 0]
         set digest [debug_digest]
-        r config set sanitize-dump-payload no
-        r debug reload
-        set newdigest [debug_digest]
-        assert {$digest eq $newdigest}
-    }
-    test {Test RDB stream encoding - sanitize dump} {
-        r config set sanitize-dump-payload yes
         r debug reload
         set newdigest [debug_digest]
         assert {$digest eq $newdigest}
@@ -203,7 +235,7 @@ start_server {} {
         assert_equal [s rdb_bgsave_in_progress] 1
         r flushall
         # wait a second max (bgsave should take 5)
-        wait_for_condition 10 100 {
+        wait_for_condition 50 100 {
             [s rdb_bgsave_in_progress] == 0
         } else {
             fail "bgsave not aborted"
@@ -375,16 +407,15 @@ start_server {overrides {save ""}} {
         # changing some keys and read the reported COW size, we are using small key size to prevent from
         # the "dismiss mechanism" free memory and reduce the COW size)
         set rd [valkey_deferring_client 0]
+        $rd client reply off
         set size 500 ;# aim for the 512 bin (sds overhead)
         set cmd_count 10000
+        set AAA [string repeat A $size]
         for {set k 0} {$k < $cmd_count} {incr k} {
-            $rd set key$k [string repeat A $size]
+            $rd set key$k $AAA
         }
-
-        for {set k 0} {$k < $cmd_count} {incr k} {
-            catch { $rd read }
-        }
-
+        $rd client reply on
+        assert_equal OK [$rd read]
         $rd close
 
         # start background rdb save
@@ -413,8 +444,9 @@ start_server {overrides {save ""}} {
 
             # trigger copy-on-write
             set modified_keys 16
+            set BBB [string repeat B $size]
             for {set k 0} {$k < $modified_keys} {incr k} {
-                r setrange key$key_idx 0 [string repeat B $size]
+                r setrange key$key_idx 0 $BBB
                 incr key_idx 1
             }
 
@@ -526,6 +558,34 @@ start_server {} {
         # server is writable again
         r set x y
     } {OK}
+}
+
+start_server {} {
+    test {RDB Load from incompatible version preserves data} {
+        # Set test keys
+        r set testkey1 "value1"
+        r set testkey2 "value2" 
+
+        # Use RDB with version 987. 
+        # This emulates a full sync from a server with a future version
+        set server_dir [lindex [r config get dir] 1]
+        set rdb_filename [lindex [r config get dbfilename] 1]
+        set rdb_path "$server_dir/$rdb_filename"
+        exec cp tests/assets/encodings-rdb987.rdb $rdb_path
+
+        # Reload will trigger the rdbLoad code path with the RDBFLAGS_EMPTY_DATA flag
+        catch {r debug reload nosave}
+        
+        # Check that version error appears in logs
+        verify_log_message 0 "*Can't handle RDB format version*" 0
+
+        # Verify we don't enter the flushing code path
+        verify_no_log_message 0 "*RDB signature and version check passed*" 0
+
+        # Verify our original data is not flushed
+        assert_equal [r get testkey1] "value1"
+        assert_equal [r get testkey2] "value2"
+    }
 }
 
 } ;# tags

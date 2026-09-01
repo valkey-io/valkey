@@ -43,7 +43,7 @@
 #
 # /!\ This script should be run as root
 #
-# NOTE: This script will not work on Mac OSX.
+# NOTE: This script will not work on macOS.
 #       It supports Debian and Ubuntu Linux.
 #
 ################################################################################

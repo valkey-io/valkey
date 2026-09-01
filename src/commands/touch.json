@@ -11,7 +11,9 @@
             "FAST"
         ],
         "acl_categories": [
-            "KEYSPACE"
+            "FAST",
+            "KEYSPACE",
+            "READ"
         ],
         "command_tips": [
             "REQUEST_POLICY:MULTI_SHARD",

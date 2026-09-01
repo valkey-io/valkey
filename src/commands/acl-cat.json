@@ -37,6 +37,9 @@
                 "type": "string",
                 "optional": true
             }
+        ],
+        "acl_categories": [
+            "SLOW"
         ]
     }
 }

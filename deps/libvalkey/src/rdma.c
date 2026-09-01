@@ -47,9 +47,164 @@
 #include <netdb.h>
 #include <poll.h>
 #include <rdma/rdma_cma.h>
+#include <stdint.h>
+#include <sys/epoll.h>
+#include <sys/eventfd.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <unistd.h>
+
+#ifdef DLOPEN_RDMA
+#include <dlfcn.h>
+#include <stdio.h>
+
+/* ====================================================================
+ * RDMA Dynamic Symbol Table
+ * ====================================================================
+ * * Why wrap these in a struct and use #define macros?
+ * * We must include <rdma/rdma_cma.h> and <infiniband/verbs.h> to access
+ * essential data structures. However, these headers also contain the 
+ * native function prototypes. If we declare global function pointers 
+ * with the exact same names, the compiler will throw a redeclaration 
+ * error (symbol conflict).
+ * * By wrapping them in a struct and using #define macros *after* the
+ * includes, we cleanly intercept the function calls without violating
+ * C namespace rules, leaving all original call sites completely untouched.
+ * ==================================================================== */
+static struct rdma_dyn_syms {
+    /* ====================================================================
+     * Symbols from: <rdma/rdma_cma.h>
+     * Compatible shared library: librdmacm.so.1
+     * ==================================================================== */
+
+    struct rdma_event_channel *(*rdma_create_event_channel)(void);
+    void (*rdma_destroy_event_channel)(struct rdma_event_channel *channel);
+    int (*rdma_create_id)(struct rdma_event_channel *channel, struct rdma_cm_id **id, void *context, enum rdma_port_space ps);
+    int (*rdma_create_qp)(struct rdma_cm_id *id, struct ibv_pd *pd, struct ibv_qp_init_attr *qp_init_attr);
+    int (*rdma_destroy_id)(struct rdma_cm_id *id);
+    int (*rdma_bind_addr)(struct rdma_cm_id *id, struct sockaddr *addr);
+    int (*rdma_resolve_addr)(struct rdma_cm_id *id, struct sockaddr *src_addr, struct sockaddr *dst_addr, int timeout_ms);
+    int (*rdma_resolve_route)(struct rdma_cm_id *id, int timeout_ms);
+    int (*rdma_connect)(struct rdma_cm_id *id, struct rdma_conn_param *conn_param);
+    int (*rdma_disconnect)(struct rdma_cm_id *id);
+    int (*rdma_get_cm_event)(struct rdma_event_channel *channel, struct rdma_cm_event **event);
+    int (*rdma_ack_cm_event)(struct rdma_cm_event *event);
+    int (*rdma_getaddrinfo)(const char *node, const char *service, struct rdma_addrinfo *hints, struct rdma_addrinfo **res);
+    void (*rdma_freeaddrinfo)(struct rdma_addrinfo *res);
+    const char *(*rdma_event_str)(enum rdma_cm_event_type event);
+
+    /* ====================================================================
+     * Symbols from: <infiniband/verbs.h>
+     * Compatible shared library: libibverbs.so.1
+     * ==================================================================== */
+
+    struct ibv_pd *(*ibv_alloc_pd)(struct ibv_context *context);
+    int (*ibv_dealloc_pd)(struct ibv_pd *pd);
+    struct ibv_comp_channel *(*ibv_create_comp_channel)(struct ibv_context *context);
+    int (*ibv_destroy_comp_channel)(struct ibv_comp_channel *channel);
+    struct ibv_cq *(*ibv_create_cq)(struct ibv_context *context, int cqe, void *cq_context, struct ibv_comp_channel *channel, int comp_vector);
+    int (*ibv_destroy_cq)(struct ibv_cq *cq);
+    struct ibv_mr *(*ibv_reg_mr)(struct ibv_pd *pd, void *addr, size_t length, int access);
+    int (*ibv_dereg_mr)(struct ibv_mr *mr);
+    int (*ibv_get_cq_event)(struct ibv_comp_channel *channel, struct ibv_cq **cq, void **cq_context);
+    void (*ibv_ack_cq_events)(struct ibv_cq *cq, unsigned int nevents);
+    int (*ibv_destroy_qp)(struct ibv_qp *qp);
+} rdma_syms;
+
+static void *rdmacm_handle = NULL;
+static void *ibverbs_handle = NULL;
+
+#define LOAD_SYM(handle, name)                                              \
+    do {                                                                    \
+        void *tmp_sym = dlsym(handle, #name);                               \
+        if (!tmp_sym) {                                                     \
+            fprintf(stderr, "RDMA Init Error: missing symbol %s\n", #name); \
+            return -1;                                                      \
+        }                                                                   \
+        *(void **)(&rdma_syms.name) = tmp_sym;                              \
+    } while (0)
+
+static int rdma_dyn_load_libs(void) {
+    if (rdmacm_handle && ibverbs_handle)
+        return 0;
+
+    const char *rdmacm_candidates[] = {"librdmacm.so.1", "librdmacm.so", NULL};
+    const char *verbs_candidates[] = {"libibverbs.so.1", "libibverbs.so", NULL};
+
+    for (int i = 0; !rdmacm_handle && rdmacm_candidates[i]; i++)
+        rdmacm_handle = dlopen(rdmacm_candidates[i], RTLD_NOW);
+    for (int i = 0; !ibverbs_handle && verbs_candidates[i]; i++)
+        ibverbs_handle = dlopen(verbs_candidates[i], RTLD_NOW);
+
+    if (!rdmacm_handle || !ibverbs_handle) {
+        fprintf(stderr, "Error: Required RDMA libraries (librdmacm/libibverbs) not found on this system.\n");
+        return -1;
+    }
+
+    LOAD_SYM(rdmacm_handle, rdma_create_event_channel);
+    LOAD_SYM(rdmacm_handle, rdma_destroy_event_channel);
+    LOAD_SYM(rdmacm_handle, rdma_create_id);
+    LOAD_SYM(rdmacm_handle, rdma_create_qp);
+    LOAD_SYM(rdmacm_handle, rdma_destroy_id);
+    LOAD_SYM(rdmacm_handle, rdma_bind_addr);
+    LOAD_SYM(rdmacm_handle, rdma_resolve_addr);
+    LOAD_SYM(rdmacm_handle, rdma_resolve_route);
+    LOAD_SYM(rdmacm_handle, rdma_connect);
+    LOAD_SYM(rdmacm_handle, rdma_disconnect);
+    LOAD_SYM(rdmacm_handle, rdma_get_cm_event);
+    LOAD_SYM(rdmacm_handle, rdma_ack_cm_event);
+    LOAD_SYM(rdmacm_handle, rdma_getaddrinfo);
+    LOAD_SYM(rdmacm_handle, rdma_freeaddrinfo);
+    LOAD_SYM(rdmacm_handle, rdma_event_str);
+
+    LOAD_SYM(ibverbs_handle, ibv_alloc_pd);
+    LOAD_SYM(ibverbs_handle, ibv_dealloc_pd);
+    LOAD_SYM(ibverbs_handle, ibv_create_comp_channel);
+    LOAD_SYM(ibverbs_handle, ibv_destroy_comp_channel);
+    LOAD_SYM(ibverbs_handle, ibv_create_cq);
+    LOAD_SYM(ibverbs_handle, ibv_destroy_cq);
+    LOAD_SYM(ibverbs_handle, ibv_reg_mr);
+    LOAD_SYM(ibverbs_handle, ibv_dereg_mr);
+    LOAD_SYM(ibverbs_handle, ibv_get_cq_event);
+    LOAD_SYM(ibverbs_handle, ibv_ack_cq_events);
+    LOAD_SYM(ibverbs_handle, ibv_destroy_qp);
+
+    return 0;
+}
+
+#define rdma_create_event_channel rdma_syms.rdma_create_event_channel
+#define rdma_destroy_event_channel rdma_syms.rdma_destroy_event_channel
+#define rdma_create_id rdma_syms.rdma_create_id
+#define rdma_create_qp rdma_syms.rdma_create_qp
+#define rdma_destroy_id rdma_syms.rdma_destroy_id
+#define rdma_bind_addr rdma_syms.rdma_bind_addr
+#define rdma_resolve_addr rdma_syms.rdma_resolve_addr
+#define rdma_resolve_route rdma_syms.rdma_resolve_route
+#define rdma_connect rdma_syms.rdma_connect
+#define rdma_disconnect rdma_syms.rdma_disconnect
+#define rdma_get_cm_event rdma_syms.rdma_get_cm_event
+#define rdma_ack_cm_event rdma_syms.rdma_ack_cm_event
+#define rdma_getaddrinfo rdma_syms.rdma_getaddrinfo
+#define rdma_freeaddrinfo rdma_syms.rdma_freeaddrinfo
+#define rdma_event_str rdma_syms.rdma_event_str
+
+#ifdef ibv_reg_mr
+#undef ibv_reg_mr
+#endif
+
+#define ibv_alloc_pd rdma_syms.ibv_alloc_pd
+#define ibv_dealloc_pd rdma_syms.ibv_dealloc_pd
+#define ibv_create_comp_channel rdma_syms.ibv_create_comp_channel
+#define ibv_destroy_comp_channel rdma_syms.ibv_destroy_comp_channel
+#define ibv_create_cq rdma_syms.ibv_create_cq
+#define ibv_destroy_cq rdma_syms.ibv_destroy_cq
+#define ibv_reg_mr rdma_syms.ibv_reg_mr
+#define ibv_dereg_mr rdma_syms.ibv_dereg_mr
+#define ibv_get_cq_event rdma_syms.ibv_get_cq_event
+#define ibv_ack_cq_events rdma_syms.ibv_ack_cq_events
+#define ibv_destroy_qp rdma_syms.ibv_destroy_qp
+
+#endif /* DLOPEN_RDMA */
 
 static valkeyContextFuncs valkeyContextRdmaFuncs;
 
@@ -105,6 +260,7 @@ typedef struct RdmaContext {
     struct ibv_comp_channel *comp_channel;
     struct ibv_cq *cq;
     struct ibv_pd *pd;
+    int evfd;
 
     /* TX */
     char *tx_addr;
@@ -129,6 +285,9 @@ typedef struct RdmaContext {
     struct ibv_mr *cmd_mr;
 } RdmaContext;
 
+/* Apparently CHERI uintptr_t can be 128 bits */
+vk_static_assert(sizeof(uintptr_t) <= sizeof(uint64_t));
+
 static int valkeyRdmaCM(valkeyContext *c, long timeout);
 
 static int valkeyRdmaSetFdBlocking(valkeyContext *c, int fd, int blocking) {
@@ -152,6 +311,52 @@ static int valkeyRdmaSetFdBlocking(valkeyContext *c, int fd, int blocking) {
     return 0;
 }
 
+static int valkeyRdmaAddEpoll(int epfd, int fd) {
+    struct epoll_event event = {0};
+
+    /* EPOLLIN only by default */
+    event.events = EPOLLIN | EPOLLET;
+    event.data.fd = fd;
+
+    if (epoll_ctl(epfd, EPOLL_CTL_ADD, fd, &event)) {
+        return VALKEY_ERR;
+    }
+
+    return VALKEY_OK;
+}
+
+static inline int rdmaEventKick(int evfd) {
+    uint64_t u = 1;
+    ssize_t ret;
+
+    ret = write(evfd, &u, sizeof(u));
+    if (ret == sizeof(uint64_t)) {
+        return VALKEY_OK;
+    } else {
+        if (errno == EAGAIN) {
+            return VALKEY_OK;
+        }
+    }
+
+    return VALKEY_ERR;
+}
+
+static inline int rdmaEventAck(int evfd) {
+    uint64_t u = 1;
+    ssize_t ret;
+
+    ret = read(evfd, &u, sizeof(u));
+    if (ret == sizeof(uint64_t)) {
+        return VALKEY_OK;
+    } else {
+        if (errno == EAGAIN) {
+            return VALKEY_OK;
+        }
+    }
+
+    return VALKEY_ERR;
+}
+
 static int rdmaPostRecv(RdmaContext *ctx, struct rdma_cm_id *cm_id, valkeyRdmaCmd *cmd) {
     struct ibv_sge sge;
     size_t length = sizeof(valkeyRdmaCmd);
@@ -161,7 +366,7 @@ static int rdmaPostRecv(RdmaContext *ctx, struct rdma_cm_id *cm_id, valkeyRdmaCm
     sge.length = length;
     sge.lkey = ctx->cmd_mr->lkey;
 
-    recv_wr.wr_id = (uint64_t)cmd;
+    recv_wr.wr_id = (uint64_t)(uintptr_t)cmd;
     recv_wr.sg_list = &sge;
     recv_wr.num_sge = 1;
     recv_wr.next = NULL;
@@ -302,7 +507,7 @@ static int rdmaSendCommand(valkeyContext *c, struct rdma_cm_id *cm_id, valkeyRdm
 
     send_wr.sg_list = &sge;
     send_wr.num_sge = 1;
-    send_wr.wr_id = (uint64_t)_cmd;
+    send_wr.wr_id = (uint64_t)(uintptr_t)_cmd;
     send_wr.opcode = IBV_WR_SEND;
     send_wr.send_flags = IBV_SEND_SIGNALED;
     send_wr.next = NULL;
@@ -320,7 +525,7 @@ static int connRdmaRegisterRx(valkeyContext *c, struct rdma_cm_id *cm_id) {
     valkeyRdmaCmd cmd = {0};
 
     cmd.memory.opcode = htons(RegisterXferMemory);
-    cmd.memory.addr = htobe64((uint64_t)ctx->recv_buf);
+    cmd.memory.addr = htobe64((uint64_t)(uintptr_t)ctx->recv_buf);
     cmd.memory.length = htonl(ctx->recv_length);
     cmd.memory.key = htonl(ctx->recv_mr->rkey);
 
@@ -338,7 +543,7 @@ static int connRdmaHandleRecv(valkeyContext *c, RdmaContext *ctx, struct rdma_cm
 
     switch (ntohs(cmd->keepalive.opcode)) {
     case RegisterXferMemory:
-        ctx->tx_addr = (char *)be64toh(cmd->memory.addr);
+        ctx->tx_addr = (char *)(uintptr_t)be64toh(cmd->memory.addr);
         ctx->tx_length = ntohl(cmd->memory.length);
         ctx->tx_key = ntohl(cmd->memory.key);
         ctx->tx_offset = 0;
@@ -390,7 +595,12 @@ static int connRdmaHandleCq(valkeyContext *c) {
             valkeySetError(c, VALKEY_ERR_OTHER, "RDMA: get cq event failed");
             return VALKEY_ERR;
         }
-    } else if (ibv_req_notify_cq(ev_cq, 0)) {
+
+        return VALKEY_OK;
+    }
+
+    ibv_ack_cq_events(ctx->cq, 1);
+    if (ibv_req_notify_cq(ev_cq, 0)) {
         valkeySetError(c, VALKEY_ERR_OTHER, "RDMA: notify cq failed");
         return VALKEY_ERR;
     }
@@ -403,8 +613,6 @@ pollcq:
     } else if (ret == 0) {
         return VALKEY_OK;
     }
-
-    ibv_ack_cq_events(ctx->cq, 1);
 
     if (wc.status != IBV_WC_SUCCESS) {
         valkeySetError(c, VALKEY_ERR_OTHER, "RDMA: send/recv failed");
@@ -450,91 +658,113 @@ pollcq:
     return VALKEY_OK;
 }
 
-/* There are two FD(s) in use:
+/* There are three FD(s) in epollfd:
  * - fd of CM channel: handle CM event. Return error on Disconnected.
  * - fd of completion channel: handle CQ event.
- * Return OK on CQ event ready, then CQ event should be handled outside.
+ * - fd of eventfd: handle event EPOLLIN event.
+ * Return VALKEY_ERR on failure
  */
-static int valkeyRdmaPollCqCm(valkeyContext *c, long timed) {
-#define VALKEY_RDMA_POLLFD_CM 0
-#define VALKEY_RDMA_POLLFD_CQ 1
-#define VALKEY_RDMA_POLLFD_MAX 2
-    struct pollfd pfd[VALKEY_RDMA_POLLFD_MAX];
+static int valkeyRdmaWaitEvent(valkeyContext *c, long timed) {
     RdmaContext *ctx = c->privctx;
-    long now = vk_msec_now();
+    struct epoll_event events[3];
+    int nevent, i, fd;
     int ret;
 
-    if (now >= timed) {
-        valkeySetError(c, VALKEY_ERR_IO, "RDMA: IO timeout");
+    while (1) {
+        nevent = epoll_wait(c->fd, events, sizeof(events) / sizeof(events[0]), timed);
+        if (nevent > 0) {
+            break;
+        }
+
+        if (!nevent) {
+            if (!timed) {
+                return VALKEY_OK;
+            } else {
+                valkeySetError(c, VALKEY_ERR_IO, "Resource temporarily unavailable");
+                return VALKEY_ERR;
+            }
+        }
+
+        if (errno == EINTR) {
+            continue;
+        }
+
+        valkeySetError(c, VALKEY_ERR_IO, "RDMA: epoll wait failed");
         return VALKEY_ERR;
     }
 
-    /* pfd[0] for CM event */
-    pfd[VALKEY_RDMA_POLLFD_CM].fd = ctx->cm_channel->fd;
-    pfd[VALKEY_RDMA_POLLFD_CM].events = POLLIN;
-    pfd[VALKEY_RDMA_POLLFD_CM].revents = 0;
+    for (i = 0; i < nevent; i++) {
+        fd = events[i].data.fd;
 
-    /* pfd[1] for CQ event */
-    pfd[VALKEY_RDMA_POLLFD_CQ].fd = ctx->comp_channel->fd;
-    pfd[VALKEY_RDMA_POLLFD_CQ].events = POLLIN;
-    pfd[VALKEY_RDMA_POLLFD_CQ].revents = 0;
-    ret = poll(pfd, VALKEY_RDMA_POLLFD_MAX, timed - now);
-    if (ret < 0) {
-        valkeySetError(c, VALKEY_ERR_IO, "RDMA: Poll CQ/CM failed");
-        return VALKEY_ERR;
-    } else if (ret == 0) {
-        valkeySetError(c, VALKEY_ERR_IO, "Resource temporarily unavailable");
-        return VALKEY_ERR;
-    }
-
-    if (pfd[VALKEY_RDMA_POLLFD_CM].revents & POLLIN) {
-        valkeyRdmaCM(c, 0);
-        if (!(c->flags & VALKEY_CONNECTED)) {
-            valkeySetError(c, VALKEY_ERR_EOF, "Server closed the connection");
-            return VALKEY_ERR;
+        if (fd == ctx->comp_channel->fd) {
+            ret = connRdmaHandleCq(c);
+            if (ret == VALKEY_ERR) {
+                return VALKEY_ERR;
+            }
+        } else if (fd == ctx->evfd) {
+            ret = rdmaEventAck(ctx->evfd);
+            if (ret == VALKEY_ERR) {
+                valkeySetError(c, VALKEY_ERR_IO, "Failed to ACK eventfd");
+                return VALKEY_ERR;
+            }
+        } else if (fd == ctx->cm_channel->fd) {
+            valkeyRdmaCM(c, 0);
+            if (!(c->flags & VALKEY_CONNECTED)) {
+                valkeySetError(c, VALKEY_ERR_EOF, "Server closed the connection");
+                return VALKEY_ERR;
+            }
+        } else {
+            assert(0); /* this should never happed */
         }
     }
 
     return VALKEY_OK;
 }
 
-static ssize_t valkeyRdmaRead(valkeyContext *c, char *buf, size_t bufcap) {
+static ssize_t valkeyRdmaReadZC(valkeyContext *c, char **buf) {
     RdmaContext *ctx = c->privctx;
-    struct rdma_cm_id *cm_id = ctx->cm_id;
-    long timed, end;
-    uint32_t toread, remained;
+    long start = vk_msec_now(), timed, elapsed;
+    uint32_t remained;
 
     if (valkeyCommandTimeoutMsec(c, &timed)) {
         return VALKEY_ERR;
     }
 
-    end = vk_msec_now() + timed;
-
-pollcq:
-    /* try to poll a CQ first */
-    if (connRdmaHandleCq(c) == VALKEY_ERR) {
+    /* typically invoked by POLLIN/EPOLLIN event, handle events */
+    if (valkeyRdmaWaitEvent(c, 0) == VALKEY_ERR) {
         return VALKEY_ERR;
     }
 
-    if (ctx->recv_offset < ctx->rx_offset) {
-        remained = ctx->rx_offset - ctx->recv_offset;
-        toread = valkeyMin(remained, bufcap);
-
-        memcpy(buf, ctx->recv_buf + ctx->recv_offset, toread);
-        ctx->recv_offset += toread;
-
-        if (ctx->recv_offset == ctx->recv_length) {
-            connRdmaRegisterRx(c, cm_id);
+    while (1) {
+        if (ctx->recv_offset < ctx->rx_offset) {
+            remained = ctx->rx_offset - ctx->recv_offset;
+            *buf = ctx->recv_buf + ctx->recv_offset;
+            ctx->recv_offset = ctx->rx_offset;
+            return remained;
         }
 
-        return toread;
+        elapsed = vk_msec_now() - start;
+        if (elapsed >= timed) {
+            valkeySetError(c, VALKEY_ERR_IO, "RDMA: IO timeout");
+            break;
+        }
+
+        if (valkeyRdmaWaitEvent(c, timed - elapsed) == VALKEY_ERR) {
+            return VALKEY_ERR;
+        }
     }
 
-    if (valkeyRdmaPollCqCm(c, end) == VALKEY_OK) {
-        goto pollcq;
-    } else {
-        return VALKEY_ERR;
+    return VALKEY_ERR;
+}
+
+static ssize_t valkeyRdmaReadZCDone(valkeyContext *c) {
+    RdmaContext *ctx = c->privctx;
+    struct rdma_cm_id *cm_id = ctx->cm_id;
+
+    if (ctx->recv_offset == ctx->recv_length) {
+        return connRdmaRegisterRx(c, cm_id);
     }
+    return VALKEY_OK;
 }
 
 static size_t connRdmaSend(RdmaContext *ctx, struct rdma_cm_id *cm_id, const void *data, size_t data_len) {
@@ -574,7 +804,7 @@ static ssize_t valkeyRdmaWrite(valkeyContext *c) {
     RdmaContext *ctx = c->privctx;
     struct rdma_cm_id *cm_id = ctx->cm_id;
     size_t data_len = sdslen(c->obuf);
-    long timed, end;
+    long start = vk_msec_now(), timed, elapsed;
     uint32_t towrite, wrote = 0;
     size_t ret;
 
@@ -582,39 +812,44 @@ static ssize_t valkeyRdmaWrite(valkeyContext *c) {
         return VALKEY_ERR;
     }
 
-    end = vk_msec_now() + timed;
-
-pollcq:
-    if (connRdmaHandleCq(c) == VALKEY_ERR) {
+    if (valkeyRdmaWaitEvent(c, 0) == VALKEY_ERR) {
         return VALKEY_ERR;
     }
 
-    assert(ctx->tx_offset <= ctx->tx_length);
-    if (ctx->tx_offset == ctx->tx_length) {
-        /* wait a new TX buffer */
-        goto waitcq;
+    do {
+        assert(ctx->tx_offset <= ctx->tx_length);
+        if (ctx->tx_offset == ctx->tx_length) {
+            /* wait a new TX buffer */
+            elapsed = vk_msec_now() - start;
+            if (elapsed >= timed) {
+                valkeySetError(c, VALKEY_ERR_IO, "RDMA: IO timeout");
+                return VALKEY_ERR;
+            }
+
+            if (valkeyRdmaWaitEvent(c, timed - elapsed) == VALKEY_ERR) {
+                return VALKEY_ERR;
+            }
+
+            continue;
+        }
+
+        towrite = valkeyMin(ctx->tx_length - ctx->tx_offset, data_len - wrote);
+        ret = connRdmaSend(ctx, cm_id, c->obuf + wrote, towrite);
+        if (ret == (size_t)VALKEY_ERR) {
+            return VALKEY_ERR;
+        }
+
+        wrote += ret;
+    } while (wrote < data_len);
+
+    if (ctx->recv_offset < ctx->rx_offset) {
+        rdmaEventKick(ctx->evfd); /* schedule a new EPOLLIN/POLLIN event to wake up read handler */
     }
 
-    towrite = valkeyMin(ctx->tx_length - ctx->tx_offset, data_len - wrote);
-    ret = connRdmaSend(ctx, cm_id, c->obuf + wrote, towrite);
-    if (ret == (size_t)VALKEY_ERR) {
-        return VALKEY_ERR;
-    }
-
-    wrote += ret;
-    if (wrote == data_len) {
-        return data_len;
-    }
-
-waitcq:
-    if (valkeyRdmaPollCqCm(c, end) == VALKEY_OK) {
-        goto pollcq;
-    } else {
-        return VALKEY_ERR;
-    }
+    return data_len;
 }
 
-/* RDMA has no POLLOUT event supported, so it could't work well with valkey async mechanism */
+/* RDMA has no POLLOUT event supported, so it couldn't work well with valkey async mechanism */
 static void valkeyRdmaAsyncRead(VALKEY_UNUSED valkeyAsyncContext *ac) {
     assert("valkey async mechanism can't work with RDMA" == NULL);
 }
@@ -642,6 +877,8 @@ static void valkeyRdmaClose(valkeyContext *c) {
     rdma_destroy_id(cm_id);
 
     rdma_destroy_event_channel(ctx->cm_channel);
+    close(ctx->evfd);
+    close(c->fd);
 }
 
 static void valkeyRdmaFree(void *privctx) {
@@ -673,6 +910,11 @@ static int valkeyRdmaConnect(valkeyContext *c, struct rdma_cm_id *cm_id) {
 
     if (valkeyRdmaSetFdBlocking(c, comp_channel->fd, 0) != VALKEY_OK) {
         valkeySetError(c, VALKEY_ERR_OTHER, "RDMA: set recv comp channel fd non-block failed");
+        goto error;
+    }
+
+    if (valkeyRdmaAddEpoll(c->fd, comp_channel->fd)) {
+        valkeySetError(c, VALKEY_ERR_OTHER, "RDMA: failed to add comp channel fd into epollfd");
         goto error;
     }
 
@@ -736,12 +978,9 @@ error:
 }
 
 static int valkeyRdmaEstablished(valkeyContext *c, struct rdma_cm_id *cm_id) {
-    RdmaContext *ctx = c->privctx;
-
-    /* it's time to tell redis we have already connected */
+    /* it's time to tell upper layer we have already connected */
     c->flags |= VALKEY_CONNECTED;
     c->funcs = &valkeyContextRdmaFuncs;
-    c->fd = ctx->comp_channel->fd;
 
     return connRdmaRegisterRx(c, cm_id);
 }
@@ -795,9 +1034,10 @@ static int valkeyRdmaCM(valkeyContext *c, long timeout) {
 }
 
 static int valkeyRdmaWaitConn(valkeyContext *c, long timeout) {
-    struct pollfd pfd;
     long now, end;
     RdmaContext *ctx = c->privctx;
+    struct epoll_event events[1], *event;
+    int nevent;
 
     assert(timeout >= 0);
     end = vk_msec_now() + timeout;
@@ -808,13 +1048,22 @@ static int valkeyRdmaWaitConn(valkeyContext *c, long timeout) {
             break;
         }
 
-        pfd.fd = ctx->cm_channel->fd;
-        pfd.events = POLLIN;
-        pfd.revents = 0;
-        if (poll(&pfd, 1, end - now) < 0) {
+        nevent = epoll_wait(c->fd, events, sizeof(events) / sizeof(events[0]), end - now);
+        if (!nevent) {
+            break;
+        }
+
+        if (nevent < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+
+            valkeySetError(c, VALKEY_ERR_IO, "RDMA: epoll wait failed");
             return VALKEY_ERR;
         }
 
+        event = &events[0];
+        assert(event->data.fd == ctx->cm_channel->fd); /* CM channel fd wakes up only now */
         if (valkeyRdmaCM(c, end - now) == VALKEY_ERR) {
             return VALKEY_ERR;
         }
@@ -842,6 +1091,7 @@ static int valkeyContextConnectRdma(valkeyContext *c, const valkeyOptions *optio
     c->connection_type = VALKEY_CONN_RDMA;
     c->tcp.port = port;
     c->flags &= ~VALKEY_CONNECTED;
+    c->fd = -1;
 
     if (port < 0 || port > UINT16_MAX) {
         valkeySetError(c, VALKEY_ERR_OTHER, "RDMA: Port number must be between 0-65535");
@@ -943,6 +1193,28 @@ static int valkeyContextConnectRdma(valkeyContext *c, const valkeyOptions *optio
         goto error;
     }
 
+    ctx->evfd = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
+    if (ctx->evfd == -1) {
+        valkeySetError(c, VALKEY_ERR_OTHER, "RDMA: failed to create eventfd");
+        goto error;
+    }
+
+    c->fd = epoll_create1(0);
+    if (c->fd == -1) {
+        valkeySetError(c, VALKEY_ERR_OTHER, "RDMA: failed to create epollfd");
+        goto error;
+    }
+
+    if (valkeyRdmaAddEpoll(c->fd, ctx->evfd)) {
+        valkeySetError(c, VALKEY_ERR_OTHER, "RDMA: failed to add eventfd into epollfd");
+        goto error;
+    }
+
+    if (valkeyRdmaAddEpoll(c->fd, ctx->cm_channel->fd)) {
+        valkeySetError(c, VALKEY_ERR_OTHER, "RDMA: failed to add RDMA CM channel FD into epollfd");
+        goto error;
+    }
+
     timed = vk_msec_now() - start;
     if (timed >= timeout_msec) {
         valkeySetError(c, VALKEY_ERR_TIMEOUT, "RDMA: resolving timeout");
@@ -964,8 +1236,16 @@ error:
             rdma_destroy_event_channel(ctx->cm_channel);
         }
 
+        if (ctx->evfd > 0) {
+            close(ctx->evfd);
+        }
+
         vk_free(ctx);
         c->privctx = NULL;
+    }
+
+    if (c->fd > 0) {
+        close(c->fd);
     }
 
 end:
@@ -987,11 +1267,17 @@ static valkeyContextFuncs valkeyContextRdmaFuncs = {
     .free_privctx = valkeyRdmaFree,
     .async_read = valkeyRdmaAsyncRead,
     .async_write = valkeyRdmaAsyncWrite,
-    .read = valkeyRdmaRead,
+    .read_zc = valkeyRdmaReadZC,
+    .read_zc_done = valkeyRdmaReadZCDone,
     .write = valkeyRdmaWrite,
     .set_timeout = valkeyRdmaSetTimeout};
 
 int valkeyInitiateRdma(void) {
+#ifdef DLOPEN_RDMA
+    if (rdma_dyn_load_libs() != 0) {
+        return VALKEY_ERR;
+    }
+#endif
     valkeyContextRegisterFuncs(&valkeyContextRdmaFuncs, VALKEY_CONN_RDMA);
 
     return VALKEY_OK;

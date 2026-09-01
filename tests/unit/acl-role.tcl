@@ -344,6 +344,22 @@ start_server {tags {"acl external:skip"}} {
         assert_match {*I/O error*} $err
     }
 
+    test {SETROLE restricting channels kills shard pubsub clients} {
+        r ACL SETROLE shardrole +ssubscribe &shard:* ~*
+        r ACL SETUSER sharduser on >shardpass +@role:shardrole
+        set rd [valkey_deferring_client]
+        $rd AUTH sharduser shardpass
+        $rd read
+        $rd SSUBSCRIBE shard:one
+        assert_match {ssubscribe shard:one 1} [$rd read]
+
+        r ACL SETROLE shardrole resetchannels +ssubscribe &other:* ~*
+
+        catch {$rd read} err
+        catch {$rd close}
+        assert_match {*I/O error*} $err
+    }
+
     test {SETUSER removing role kills pubsub clients using role channels} {
         r ACL SETROLE subrole +subscribe &events:* ~*
         r ACL SETUSER subuser on >subpass +@role:subrole
@@ -364,12 +380,76 @@ start_server {tags {"acl external:skip"}} {
 
     # --- User reset ---
 
+    test {ACL DELUSER removes the user from the role member list} {
+        r ACL SETROLE delrole ~* +get
+        r ACL SETUSER deluser1 on >p +@role:delrole
+        r ACL SETUSER deluser2 on >p +@role:delrole
+
+        set info [r ACL GETROLE delrole]
+        set idx [lsearch $info "members"]
+        assert_equal {deluser1 deluser2} [lsort [lindex $info [expr {$idx + 1}]]]
+
+        r ACL DELUSER deluser1
+        set info [r ACL GETROLE delrole]
+        set idx [lsearch $info "members"]
+        assert_equal {deluser2} [lindex $info [expr {$idx + 1}]]
+
+        # With the last member gone the role becomes deletable.
+        r ACL DELUSER deluser2
+        assert_equal 1 [r ACL DELROLE delrole]
+    }
+
     test {User reset clears role memberships} {
         r ACL SETUSER carol reset
         set info [r ACL GETUSER carol]
         set idx [lsearch $info "roles"]
         set roles [lindex $info [expr {$idx + 1}]]
         assert_equal $roles {}
+    }
+
+    # --- Roles are not users ---
+
+    test {A role cannot be authenticated against or read as a user} {
+        r ACL SETROLE notauser ~* +@all
+        catch {r AUTH notauser anything} err
+        assert_match {*WRONGPASS*} $err
+
+        # Roles live in their own table, so the user commands must not see them
+        # and the role commands must not see users.
+        assert_equal {} [r ACL GETUSER notauser]
+        assert_equal {} [r ACL GETROLE default]
+        assert_equal -1 [lsearch -exact [r ACL USERS] notauser]
+        assert_equal -1 [lsearch -exact [r ACL ROLES] default]
+        r ACL DELROLE notauser
+    }
+
+    test {Role subcommands require admin permissions} {
+        r ACL SETROLE probed ~* +get
+        r ACL SETUSER plain on >p ~* +@all -@admin -@dangerous
+
+        assert_match {*no permissions*} [r ACL DRYRUN plain ACL SETROLE x +get]
+        assert_match {*no permissions*} [r ACL DRYRUN plain ACL DELROLE probed]
+        assert_match {*no permissions*} [r ACL DRYRUN plain ACL GETROLE probed]
+        assert_match {*no permissions*} [r ACL DRYRUN plain ACL ROLES]
+        r ACL DELROLE probed
+    }
+
+    test {ACL LOG records a denial for a user whose access comes from a role} {
+        r ACL LOG RESET
+        r ACL SETROLE logrole ~allowed:* +get
+        r ACL SETUSER loguser on >logpass +@role:logrole
+
+        set rd [valkey_client]
+        $rd AUTH loguser logpass
+        catch {$rd GET denied:key} err
+        assert_match {*NOPERM*} $err
+        $rd close
+
+        set entry [lindex [r ACL LOG] 0]
+        assert_equal [dict get $entry username] {loguser}
+        assert_equal [dict get $entry context] {toplevel}
+        assert_equal [dict get $entry reason] {key}
+        assert_equal [dict get $entry object] {denied:key}
     }
 
     # --- Case sensitivity of role and user names ---
@@ -549,39 +629,23 @@ test {Invalid role name in config on startup fails} {
     catch {exec $::VALKEY_SERVER_BIN --role "" +get} err
     assert_match {*Role names can't be empty*} $err
 
-    set tmpdir [tmpdir "role-invalid-name.acl"]
-    set fd [open "$tmpdir/role.acl" w]
-    puts $fd {role q"x +get}
-    close $fd
-    catch {exec $::VALKEY_SERVER_BIN --aclfile "$tmpdir/role.acl"} err
+    catch {exec $::VALKEY_SERVER_BIN --aclfile tests/assets/role-invalid-name.acl} err
     assert_match {*invalid role name*quotes or backslashes*} $err
 } {} {external:skip}
 
 # Test invalid role rule in config on startup
 test {Invalid role rule in config on startup fails} {
-    set tmpdir [tmpdir "badrole.conf"]
-    set fd [open "$tmpdir/valkey.conf" w]
-    puts $fd "role badrole >password"
-    close $fd
-    catch {exec $::VALKEY_SERVER_BIN "$tmpdir/valkey.conf"} err
+    catch {exec $::VALKEY_SERVER_BIN tests/assets/role-invalid-rule.conf} err
     assert_match {*Error in role declaration*} $err
 } {} {external:skip}
 
 # Test role name conflicting with category/command in config on startup
 test {Role name conflicting with category in config on startup fails} {
-    set tmpdir [tmpdir "role-category-conflict.conf"]
-    set fd [open "$tmpdir/valkey.conf" w]
-    puts $fd "role read +@all"
-    close $fd
-    catch {exec $::VALKEY_SERVER_BIN "$tmpdir/valkey.conf"} err
+    catch {exec $::VALKEY_SERVER_BIN tests/assets/role-category-conflict.conf} err
     assert_match {*conflicts with a command or category*} $err
 } {} {external:skip}
 
 test {Role name conflicting with command in config on startup fails} {
-    set tmpdir [tmpdir "role-command-conflict.conf"]
-    set fd [open "$tmpdir/valkey.conf" w]
-    puts $fd "role get +@all"
-    close $fd
-    catch {exec $::VALKEY_SERVER_BIN "$tmpdir/valkey.conf"} err
+    catch {exec $::VALKEY_SERVER_BIN tests/assets/role-command-conflict.conf} err
     assert_match {*conflicts with a command or category*} $err
 } {} {external:skip}

@@ -1429,3 +1429,29 @@ proc json_escape_string {s} {
     }
     return $out
 }
+
+proc read_file {path} {
+    set fd [open $path r]
+    set data [read $fd]
+    close $fd
+    return $data
+}
+
+proc write_file {path content} {
+    set fd [open $path w]
+    puts $fd $content
+    close $fd
+}
+
+proc file_has_pattern {path pattern} {
+    if {![file exists $path]} {
+        return 0
+    }
+    return [regexp $pattern [read_file $path]]
+}
+
+proc cluster_nodes_conf_path {id} {
+    set dir [lindex [R $id config get dir] 1]
+    set conf [lindex [R $id config get cluster-config-file] 1]
+    return [file join $dir $conf]
+}

@@ -2,8 +2,6 @@
 #define _CUSTOM_MATCHERS_HPP_
 
 #include "wrappers.h"
-#include "gmock/gmock.h"
-#include "gtest/gtest.h"
 #include <string>
 
 /* Matchers can be used for complex comparisons inside of EXPECT_THAT(val, matcher)

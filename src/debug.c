@@ -455,6 +455,14 @@ void debugCommand(client *c) {
             "    Disable sending cluster ping to a random node every second.",
             "DISABLE-CLUSTER-RECONNECTION <0|1>",
             "    Disable cluster reconnection of cluster nodes.",
+            "CLUSTER-FAILOVER-DELAY <delay-ms>",
+            "    Override the failover delay. -1 is the default value, meaning don't",
+            "    override, values >= 0 will be used for the failover delay.",
+            "CLUSTER-FAILOVER-EPOCH <epoch>",
+            "    Force the next failover election started by this replica to run in",
+            "    the given epoch instead of currentEpoch+1. -1 (default) disables the",
+            "    override. It is consumed once: subsequent retries use currentEpoch+1",
+            "    again. Useful to make several replicas contend in the same epoch.",
             "OOM",
             "    Crash the server simulating an out-of-memory error.",
             "PANIC",
@@ -544,6 +552,8 @@ void debugCommand(client *c) {
             "    Protect a client from being freed, forcing deferred close.",
             "FORCE-TLS-WRITE-ERROR <0|1>",
             "    Force TLS write error for testing.",
+            "BIO-DRAIN <type>",
+            "    Wait for the specified bio job queue to become empty.",
             NULL};
         addExtendedReplyHelp(c, help, clusterDebugCommandExtendedHelp());
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "segfault")) {
@@ -652,6 +662,24 @@ void debugCommand(client *c) {
         addReply(c, shared.ok);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "disable-cluster-reconnection") && c->argc == 3) {
         server.debug_cluster_disable_reconnection = atoi(objectGetVal(c->argv[2]));
+        addReply(c, shared.ok);
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "cluster-failover-delay") && c->argc == 3) {
+        int delay_ms;
+        if (getIntFromObjectOrReply(c, c->argv[2], &delay_ms, NULL) != C_OK) return;
+        if (delay_ms < -1) {
+            addReplyError(c, "delay-ms must be -1 (default) or a non-negative value in ms");
+            return;
+        }
+        server.debug_cluster_failover_delay = delay_ms;
+        addReply(c, shared.ok);
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "cluster-failover-epoch") && c->argc == 3) {
+        long long epoch;
+        if (getLongLongFromObjectOrReply(c, c->argv[2], &epoch, NULL) != C_OK) return;
+        if (epoch < -1) {
+            addReplyError(c, "epoch must be -1 (default) or a non-negative value");
+            return;
+        }
+        server.debug_cluster_failover_epoch = epoch;
         addReply(c, shared.ok);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "slotmigration")) {
         if (!strcasecmp(objectGetVal(c->argv[2]), "prevent-pause")) {
@@ -1119,6 +1147,17 @@ void debugCommand(client *c) {
 #else
         addReplyError(c, "TLS is not enabled");
 #endif
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "bio-drain") && c->argc == 3) {
+        int type;
+        const char *name = objectGetVal(c->argv[2]);
+        if (!strcasecmp(name, "BIO_CLUSTER_SAVE")) {
+            type = BIO_CLUSTER_SAVE;
+        } else {
+            addReplySubcommandSyntaxError(c);
+            return;
+        }
+        bioDrainWorker(type);
+        addReply(c, shared.ok);
     } else if (!handleDebugClusterCommand(c)) {
         addReplySubcommandSyntaxError(c);
         return;

@@ -5193,8 +5193,8 @@ void waitaofCommand(client *c) {
         return;
     }
 
-    /* Otherwise block the client and put it into our list of clients
-     * waiting for ack from replicas. WAIT handles its own reply in
+    /* Otherwise, block the client and put it into our list of clients
+     * waiting for ack from replicas. WAITAOF handles its own reply in
      * processClientsWaitingReplicas, so clear pending_command to avoid
      * being mistaken for a command that needs re-execution. */
     c->flag.pending_command = 0;

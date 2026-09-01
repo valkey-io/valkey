@@ -37,6 +37,9 @@
 #include "fpconv_dtoa.h"
 #include "fmtargs.h"
 #include "io_threads.h"
+#include "throttle.h"
+#include "throttle_repl.h"
+#include "stat_calc.h"
 #include "module.h"
 #include "connection.h"
 #include "zmalloc.h"
@@ -384,6 +387,10 @@ client *createClient(connection *conn) {
     listSetFreeMethod(c->reply, freeClientReplyValue);
     listSetDupMethod(c->reply, dupClientReplyValue);
     c->repl_data = NULL;
+    c->throttler = NULL;
+    c->throttle_node = NULL;
+    c->throttle_start = 0;
+    c->cob_trend = NULL;
     c->bstate = NULL;
     c->pubsub_data = NULL;
     c->module_data = NULL;
@@ -2064,6 +2071,8 @@ void unlinkClient(client *c) {
         c->conn = NULL;
     }
 
+    throttle_removeClient(c);
+
     /* Remove from the list of pending writes if needed. */
     if (c->flag.pending_write) {
         serverAssert(server.clients_pending_write->len > 0);
@@ -2242,7 +2251,16 @@ int freeClient(client *c) {
 
     /* Remove the contribution that this client gave to our
      * incrementally computed memory usage. */
-    if (c->conn) server.stat_clients_type_memory[c->last_memory_type] -= c->last_memory_usage;
+    if (c->last_memory_usage) {
+        /* A client is only ever accounted while it has a live connection,
+         * see updateClientMemoryUsage() for details.
+         *
+         * So at this point either c->conn is still set, or we are releasing
+         * a cached_primary whose conn was already NULLed by unlinkClient()
+         * during replicationCachePrimary(). */
+        debugServerAssert(c->conn || c == server.cached_primary);
+        server.stat_clients_type_memory[c->last_memory_type] -= c->last_memory_usage;
+    }
 
     /* Unlink the client: this will close the socket, remove the I/O
      * handlers, and remove references of the client from different
@@ -2263,6 +2281,7 @@ int freeClient(client *c) {
     if (c->lib_name) decrRefCount(c->lib_name);
     if (c->lib_ver) decrRefCount(c->lib_ver);
     freeClientMultiState(c);
+    if (c->cob_trend) trendCalculator_free(c->cob_trend);
     sdsfree(c->peerid);
     sdsfree(c->sockname);
     zfree(c);
@@ -3325,11 +3344,16 @@ void processClientIOWriteDone(client *c) {
 
     connSetPostponeUpdateState(c->conn, mask);
     if (postWriteToClient(c) == C_ERR) return;
+
+    /* connUpdateState may sync-invoke handlers for some transports (e.g. RDMA)
+     * and free the client; only then re-fetch it by id after the update. */
+    int may_invoke_handlers = connUpdateStateMayInvokeHandlers(c->conn);
     uint64_t id = c->id;
     connUpdateState(c->conn);
-
-    c = lookupClientByID(id);
-    if (!c || !c->conn) return;
+    if (may_invoke_handlers) {
+        c = lookupClientByID(id);
+        if (!c || !c->conn) return;
+    }
 
     if (!clientHasPendingReplies(c)) return;
 
@@ -3410,6 +3434,7 @@ void resetClient(client *c) {
     c->flag.replication_done = 0;
     c->flag.buffered_reply = 0;
     c->flag.keyspace_notified = 0;
+    c->flag.throttle_checked = 0;
     c->net_output_bytes_curr_cmd = 0;
 
     /* Make sure the duration has been recorded to some command. */
@@ -3918,7 +3943,7 @@ void commandProcessed(client *c) {
      *    The client will be reset in unblockClient().
      * 2. Don't update replication offset or propagate commands to replicas,
      *    since we have not applied the command. */
-    if (c->flag.blocked) return;
+    if (c->flag.blocked || c->flag.throttled) return;
 
     c->flag.pending_command = 0;
     reqresAppendResponse(c);
@@ -4260,16 +4285,26 @@ int processInputBuffer(client *c) {
         c->read_flags = isReplicatedClient(c) ? READ_FLAGS_REPLICATED : 0;
         c->read_flags |= authRequired(c) ? READ_FLAGS_AUTH_REQUIRED : 0;
 
+        bool popped_from_queue;
         /* If commands are queued up, pop from the queue first */
         if (!consumeCommandQueue(c)) {
             parseInputBuffer(c);
             prepareCommandQueue(c);
+            popped_from_queue = false;
+        } else {
+            popped_from_queue = true;
         }
 
         /* Prefetch keys for the next commands in queue, if not already done. */
         prefetchCommandQueueKeys(c);
 
-        if (handleParseResults(c) != PARSE_OK) {
+        parseResult res = handleParseResults(c);
+        if (res == PARSE_NEEDMORE && popped_from_queue) {
+            /* A queued partial; its completion bytes may already be in querybuf
+             * (read while blocked), so re-parse instead of waiting for I/O. */
+            continue;
+        } else if (res != PARSE_OK) {
+            /* Parse error or partial command. */
             break;
         }
 
@@ -4476,7 +4511,7 @@ int isClientConnIpV6(client *c) {
  * readable format, into the sds string 's'. */
 sds catClientInfoString(sds s, client *client, int hide_user_data) {
     if (!server.crashed) waitForClientIO(client);
-    char flags[17], events[3], capa[9], conninfo[CONN_INFO_LEN], *p;
+    char flags[18], events[3], capa[9], conninfo[CONN_INFO_LEN], *p;
 
     p = flags;
     if (client->flag.replica) {
@@ -4501,6 +4536,7 @@ sds catClientInfoString(sds s, client *client, int hide_user_data) {
     if (client->flag.readonly) *p++ = 'r';
     if (client->flag.no_evict) *p++ = 'e';
     if (client->flag.no_touch) *p++ = 'T';
+    if (client->flag.throttled) *p++ = 'h';
     if (client->flag.import_source) *p++ = 'I';
     if (client->slot_migration_job && isImportSlotMigrationJob(client->slot_migration_job)) *p++ = 'i';
     if (client->slot_migration_job && !isImportSlotMigrationJob(client->slot_migration_job)) *p++ = 'E';
@@ -5027,6 +5063,7 @@ static int validateClientFlagFilter(sds flag_filter) {
         case 'r':
         case 'e':
         case 'T':
+        case 'h':
         case 'I':
         case 'i':
         case 'E':
@@ -5181,6 +5218,9 @@ static int clientMatchesFlagFilter(client *c, sds flag_filter) {
         case 'T': /* client will not touch the LRU/LFU of the keys it accesses */
             if (!c->flag.no_touch) return 0;
             break;
+        case 'h': /* client is throttled */
+            if (!c->flag.throttled) return 0;
+            break;
         case 'I': /* Import source flag */
             if (!c->flag.import_source) return 0;
             break;
@@ -5197,7 +5237,7 @@ static int clientMatchesFlagFilter(client *c, sds flag_filter) {
                 c->flag.dirty_cas || c->flag.close_after_reply ||
                 c->flag.unblocked || c->flag.close_asap ||
                 c->flag.unix_socket || c->flag.readonly ||
-                c->flag.no_evict || c->flag.no_touch ||
+                c->flag.no_evict || c->flag.no_touch || c->flag.throttled ||
                 c->flag.import_source || c->slot_migration_job) {
                 return 0;
             }
@@ -6273,6 +6313,10 @@ int checkClientOutputBufferLimits(client *c) {
     } else {
         c->obuf_soft_limit_reached_time = 0;
     }
+    /* The steady-state throttle may exempt a replica from the soft limit to give throttling
+     * time to converge; the hard limit is never suppressed, so a replica that reaches it is
+     * always disconnected. */
+    if (soft && !hard && throttleRepl_isClientExemptFromCobLimits(c)) return 0;
     return soft || hard;
 }
 

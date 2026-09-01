@@ -1824,3 +1824,47 @@ test "SYNC/PSYNC returns NOMASTERLINK with replica-serve-stale-data yes/no and m
         }
     }
 }
+
+start_server {tags {"repl external:skip cluster:skip"}} {
+    set primary [srv 0 client]
+    set primary_host [srv 0 host]
+    set primary_port [srv 0 port]
+    set bigstr [string repeat x 1000000]
+
+    start_server {} {
+        set replica [srv 0 client]
+
+        test "Cached primary discard must not leak stat_clients_type_memory" {
+            $replica replicaof no one
+            $replica replicaof $primary_host $primary_port
+            wait_for_sync $replica
+
+            # We set the replica's hz to a high value so that the replica can
+            # invoke clientsCron() more frequently for updates.
+            $replica config set hz 500
+
+            for {set j 0} {$j < 30} {incr j} {
+                # Each iteration changes the primary replid (forcing a full resync)
+                # and uses "replicaof no one" to disconnect the primary, which caches
+                # the primary client as a cached_primary and then discards it.
+                $primary debug change-repl-id
+                $replica replicaof no one
+                $replica replicaof $primary_host $primary_port
+                wait_for_sync $replica
+
+                # Use bigstr to inflate the primary client's querybuf on the replica,
+                # so its memory is accounted under mem_clients_normal.
+                $primary set foo $bigstr
+                wait_for_ofs_sync $primary $replica
+            }
+
+            # The replica no longer holds the large querybuf; wait for clientsCron()
+            # to shrink it and let mem_clients_normal drop back to a small value.
+            wait_for_condition 1000 50 {
+                [status $replica mem_clients_normal] < 1000000
+            } else {
+                fail "mem_clients_normal leaked: expected < 1000000 but got [status $replica mem_clients_normal]"
+            }
+        }
+    }
+}

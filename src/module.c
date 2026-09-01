@@ -13525,9 +13525,9 @@ static int moduleInitPostOnLoadResolved(ModuleLoadFunc onload,
         ACLRecomputeCommandBitsFromCommandRulesAllUsers();
     }
     if (is_static) {
-        serverLog(LL_NOTICE, "Static Module '%s' successfully loaded", ctx.module->name);
+        serverLog(LL_NOTICE, "Static Module '%s' successfully loaded (version %d)", ctx.module->name, ctx.module->ver);
     } else {
-        serverLog(LL_NOTICE, "Module '%s' loaded from %s", ctx.module->name, display_name);
+        serverLog(LL_NOTICE, "Module '%s' loaded from %s (version %d)", ctx.module->name, display_name, ctx.module->ver);
     }
     ctx.module->onload = 0;
 
@@ -14663,7 +14663,8 @@ ValkeyModuleScriptingEngineExecutionState VM_GetFunctionExecutionState(
  * These messages are buffered in memory, and are only sent to the client when
  * `ValkeyModule_VM_ScriptingEngineDebuggerFlushLogs` is called.
  *
- * - `msg`: the message to send.
+ * - `msg`: the message to send. Ownership of `msg` is transferred to the
+ *   debugger log. The caller must not free it or access it after this call.
  *
  * - `truncate`: if set to 1, the message will be truncated to the maximum length
  *   configured in the debugger settings.

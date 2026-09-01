@@ -63,8 +63,11 @@
 #include <sys/stat.h>
 #include <sys/param.h>
 
-/* Size of the static buffer used for rdbcompression */
-#define LZF_STATIC_BUFFER_SIZE (8 * 1024)
+/* Minimum size of the rdbcompression output buffer. Short-lived temporaries are
+ * over-allocated to a fixed size so they come from a single jemalloc bin; sizing
+ * them exactly spreads allocations across bins and inflates copy-on-write in
+ * fork children. */
+#define LZF_MIN_BUFFER_SIZE (8 * 1024)
 
 /* This macro is called when the internal RDB structure is corrupt */
 #define rdbReportCorruptRDB(...) rdbReportError(1, __LINE__, __VA_ARGS__)
@@ -445,20 +448,18 @@ writeerr:
 ssize_t rdbSaveLzfStringObject(rio *rdb, unsigned char *s, size_t len) {
     size_t comprlen, outlen;
     void *out;
-    static void *buffer = NULL;
 
     /* We require at least four bytes compression for this to be worth it */
     if (len <= 4) return 0;
     outlen = len - 4;
-    if (outlen < LZF_STATIC_BUFFER_SIZE) {
-        if (!buffer) buffer = zmalloc(LZF_STATIC_BUFFER_SIZE);
-        out = buffer;
-    } else {
-        if ((out = zmalloc(outlen + 1)) == NULL) return 0;
-    }
+    /* Over-allocate to a fixed minimum so every allocation is served from the
+     * same jemalloc bin. Exact-sized allocations spread across many bins, and in
+     * a fork child that reuses pages still shared with the parent, driving
+     * copy-on-write up to roughly the size of the dataset. */
+    out = zmalloc(outlen + 1 > LZF_MIN_BUFFER_SIZE ? outlen + 1 : LZF_MIN_BUFFER_SIZE);
     comprlen = lzf_compress(s, len, out, outlen);
     ssize_t nwritten = comprlen ? rdbSaveLzfBlob(rdb, out, comprlen, len) : 0;
-    if (out != buffer) zfree(out);
+    zfree(out);
     return nwritten;
 }
 

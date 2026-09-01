@@ -28,6 +28,7 @@
  */
 
 #include "server.h"
+#include "hotkeys.h"
 #include "ordered_index.h"
 #include "cluster.h"
 #include "cluster_migrateslots.h"
@@ -125,6 +126,10 @@ robj *lookupKey(serverDb *db, robj *key, int flags) {
         if (!(flags & (LOOKUP_NOSTATS | LOOKUP_WRITE))) server.stat_keyspace_misses++;
         /* TODO: Use separate misses stats and notify event for WRITE */
     }
+
+    /* Charge this lookup to hot-key detection. All the policy (whether detection
+     * is on, which lookups count, and sampling) lives in hotkeys.c. */
+    hotkeysRecordLookup(key, db->id, flags);
 
     return val;
 }
@@ -489,6 +494,7 @@ int dbGenericDeleteWithDictIndex(serverDb *db, robj *key, int async, int flags, 
     void **ref = kvstoreHashtableTwoPhasePopFindRef(db->keys, dict_index, objectGetVal(key), &pos);
     if (ref != NULL) {
         bgIteration_keyDelete(db->id, (sds)objectGetVal(key));
+        hotkeysRecordDelete(key, db->id, flags);
 
         robj *val = *ref;
         /* VM_StringDMA may call dbUnshareStringValue which may free val, so we
@@ -700,6 +706,13 @@ long long emptyData(int dbnum, int flags, void(callback)(hashtable *)) {
 
     /* Empty the database structure. */
     removed = emptyDbStructure(server.db, dbnum, async, callback);
+
+    if (hotkeysEnabled()) {
+        if (dbnum == -1)
+            hotkeysPurgeAll();
+        else
+            hotkeysPurgeDb(dbnum);
+    }
 
     if (dbnum == -1) flushReplicaKeysWithExpireList(async);
 
@@ -1993,10 +2006,16 @@ long long getExpire(serverDb *db, robj *key) {
     return getExpireWithDictIndex(db, key, dict_index);
 }
 
+/* Delete the specified expired key and propagate expire.
+ *
+ * This function does not incr the dirty counter since we don't want to
+ * propagate the read command on lazy expire. Caller needs to increment
+ * it themselves if necessary. */
 void deleteExpiredKeyAndPropagateWithDictIndex(serverDb *db, robj *keyobj, int dict_index) {
     mstime_t expire_latency;
     latencyStartMonitor(expire_latency);
-    dbGenericDeleteWithDictIndex(db, keyobj, server.lazyfree_lazy_expire, DB_FLAG_KEY_EXPIRED, dict_index);
+    int deleted = dbGenericDeleteWithDictIndex(db, keyobj, server.lazyfree_lazy_expire, DB_FLAG_KEY_EXPIRED, dict_index);
+    serverAssertWithInfo(NULL, keyobj, deleted);
     latencyEndMonitor(expire_latency);
     latencyAddSampleIfNeeded("expire-del", expire_latency);
     latencyTraceIfNeeded(db, expire_del, expire_latency);
@@ -2125,8 +2144,10 @@ size_t dbReclaimExpiredFields(robj *o, serverDb *db, mstime_t now, unsigned long
             dbDelete(db, keyobj);
             propagateDeletion(db, keyobj, server.lazyfree_lazy_expire, didx);
             notifyKeyspaceEvent(NOTIFY_GENERIC, "del", keyobj, db->id);
+            server.dirty++;
         } else {
             if (!hashTypeHasVolatileFields(o)) dbUntrackKeyWithVolatileItems(db, o);
+            server.dirty += (long long)expired;
         }
         signalModifiedKey(NULL, db, keyobj);
         exitExecutionUnit();

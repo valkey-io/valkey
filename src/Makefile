@@ -136,7 +136,7 @@ ifeq ($(DEBUG_FORCE_DEFRAG), yes)
 	SERVER_CFLAGS +=-DHAVE_DEFRAG -DDEBUG_FORCE_DEFRAG
 endif
 
-FINAL_CFLAGS=$(STD) $(WARN) $(OPT) $(DEBUG) $(CFLAGS) $(SERVER_CFLAGS)
+FINAL_CFLAGS=$(STD) $(WARN) $(OPT) $(DEBUG) $(CFLAGS) $(SERVER_CFLAGS) $(CPPFLAGS)
 FINAL_LDFLAGS=$(LDFLAGS) $(OPT) $(SERVER_LDFLAGS) $(DEBUG)
 FINAL_LIBS=-lm
 DEBUG=-g -ggdb
@@ -514,6 +514,8 @@ ENGINE_SERVER_OBJ = \
     geohash.o \
     geohash_helper.o \
     hashtable.o \
+    hotkeys.o \
+    space_saving.o \
     hyperloglog.o \
     intset.o \
     io_threads.o \
@@ -588,7 +590,11 @@ ENGINE_SERVER_OBJ = \
     ziplist.o \
     zipmap.o \
     zmalloc.o \
-    queues.o
+    queues.o \
+    throttle_token_bucket.o \
+    stat_calc.o \
+    throttle_repl.o \
+    throttle.o
 ENGINE_SERVER_OBJ+=$(ENGINE_TRACE_OBJ)
 ENGINE_CLI_NAME=$(ENGINE_NAME)-cli$(PROG_SUFFIX)
 ENGINE_CLI_OBJ = \
@@ -692,6 +698,7 @@ persist-settings: distclean
 	echo LIBBACKTRACE_PREFIX=$(LIBBACKTRACE_PREFIX) >> .make-settings
 	echo CFLAGS=$(CFLAGS) >> .make-settings
 	echo LDFLAGS=$(LDFLAGS) >> .make-settings
+	echo CPPFLAGS=$(CPPFLAGS) >> .make-settings
 	echo SERVER_CFLAGS=$(SERVER_CFLAGS) >> .make-settings
 	echo SERVER_LDFLAGS=$(SERVER_LDFLAGS) >> .make-settings
 	echo PREV_FINAL_CFLAGS=$(FINAL_CFLAGS) >> .make-settings

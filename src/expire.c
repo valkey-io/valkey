@@ -73,6 +73,7 @@ int activeExpireCycleTryExpire(serverDb *db, robj *val, mstime_t now, int didx) 
         robj *keyobj = createStringObject(key, sdslen(key));
         deleteExpiredKeyAndPropagateWithDictIndex(db, keyobj, didx);
         decrRefCount(keyobj);
+        server.dirty++;
         exitExecutionUnit();
         return 1;
     } else {

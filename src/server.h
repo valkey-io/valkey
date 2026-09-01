@@ -661,7 +661,7 @@ typedef enum {
 /* Cluster persist config mode. */
 typedef enum {
     CLUSTER_CONFIGFILE_SAVE_BEHAVIOR_SYNC = 0,    /* Perform a synchronous save, exit the process if it fails. */
-    CLUSTER_CONFIGFILE_SAVE_BEHAVIOR_BEST_EFFORT, /* Attempt to save on a "best-effort" basis, process will not exit if it fails. */
+    CLUSTER_CONFIGFILE_SAVE_BEHAVIOR_BEST_EFFORT, /* Save asynchronously via BIO thread on a "best-effort" basis, process will not exit if it fails. */
 } cluster_persist_config_mode;
 
 /* RDB write target type. */
@@ -745,20 +745,24 @@ typedef enum {
 
 /* Generic set command string object set flags */
 #define ARGS_NO_FLAGS 0
-#define ARGS_SET_NX (1 << 0)   /* Set if key not exists. */
-#define ARGS_SET_XX (1 << 1)   /* Set if key exists. */
-#define ARGS_EX (1 << 2)       /* Set if time in seconds is given */
-#define ARGS_PX (1 << 3)       /* Set if time in ms in given */
-#define ARGS_KEEPTTL (1 << 4)  /* Set and keep the ttl */
-#define ARGS_SET_GET (1 << 5)  /* Set if want to get key before set */
-#define ARGS_EXAT (1 << 6)     /* Set if timestamp in second is given */
-#define ARGS_PXAT (1 << 7)     /* Set if timestamp in ms is given */
-#define ARGS_PERSIST (1 << 8)  /* Set if we need to remove the ttl */
-#define ARGS_SET_IFEQ (1 << 9) /* Set if we need compare and set */
-#define ARGS_ARGV3 (1 << 10)   /* Set if the value is at argv[3]; otherwise it's \
-                                * at argv[2]. */
-#define ARGS_SET_FNX (1 << 11) /* Set if key item not exists. */
-#define ARGS_SET_FXX (1 << 12) /* Set if key item exists. */
+#define ARGS_SET_NX (1 << 0)    /* Set if key not exists. */
+#define ARGS_SET_XX (1 << 1)    /* Set if key exists. */
+#define ARGS_EX (1 << 2)        /* Set if time in seconds is given */
+#define ARGS_PX (1 << 3)        /* Set if time in ms in given */
+#define ARGS_KEEPTTL (1 << 4)   /* Set and keep the ttl */
+#define ARGS_SET_GET (1 << 5)   /* Set if want to get key before set */
+#define ARGS_EXAT (1 << 6)      /* Set if timestamp in second is given */
+#define ARGS_PXAT (1 << 7)      /* Set if timestamp in ms is given */
+#define ARGS_PERSIST (1 << 8)   /* Set if we need to remove the ttl */
+#define ARGS_SET_IFEQ (1 << 9)  /* Set if we need compare and set */
+#define ARGS_ARGV3 (1 << 10)    /* Set if the value is at argv[3]; otherwise it's \
+                                 * at argv[2]. */
+#define ARGS_SET_FNX (1 << 11)  /* Set if key item not exists. */
+#define ARGS_SET_FXX (1 << 12)  /* Set if key item exists. */
+#define ARGS_SET_IFNE (1 << 13) /* Set only if values are not equal */
+
+#define ARGS_SET_CONDITIONAL \
+    (ARGS_SET_NX | ARGS_SET_XX | ARGS_SET_IFEQ | ARGS_SET_IFNE)
 
 /* An Object, that is a type able to hold a string / list / set */
 
@@ -1230,6 +1234,9 @@ typedef struct ClientFlags {
     uint64_t keyspace_notified : 1;        /* Indicates that a keyspace notification was triggered during the execution of the
                                               current command. */
     uint64_t argv_borrowed : 1;            /* The argv array and its elements are borrowed from the caller (VM_CallArgv) and must not be freed. */
+    uint64_t throttled : 1;                /* Currently queued in a throttler */
+    uint64_t throttle_checked : 1;         /* Already passed throttle check for this command */
+    uint64_t throttle_multi : 1;           /* Matches multiple throttlers */
 } ClientFlags;
 /* Ensure ClientFlags never silently grows beyond two uint64_t words.
  * If this fires, move a flag to a separate field or widen the limit. */
@@ -1439,6 +1446,11 @@ typedef struct client {
     list *deferred_reply;                    /* List of reply objects to be sent to the client, typically after
                                                 the client has been unblocked. */
     unsigned long long deferred_reply_bytes; /* Total bytes of objects in the blocked client pending list.*/
+    /* Throttling */
+    struct throttler *throttler;       /* Current throttler this client is queued in, or NULL */
+    listNode *throttle_node;           /* Node in throttler's client_queue */
+    monotime throttle_start;           /* When this client was queued for throttling */
+    struct trendCalculator *cob_trend; /* Per-replica COB size trend (NULL if not replica) */
 #ifdef LOG_REQ_RES
     clientReqResInfo reqres;
 #endif
@@ -2314,6 +2326,8 @@ struct valkeyServer {
     int cluster_message_gossip_perc;                       /* A configuration for setting the percentage of peer nodes to be gossiped in ping/pong messages. */
     char *cluster_configfile;                              /* Cluster auto-generated config file name. */
     int cluster_configfile_save_behavior;                  /* Cluster config file save behavior. */
+    _Atomic(int) cluster_config_save_status;               /* Status of cluster config save. */
+    _Atomic(time_t) cluster_config_last_save_time;         /* Unix time of last successful cluster config save. */
     struct clusterState *cluster;                          /* State of the cluster */
     int cluster_migration_barrier;                         /* Cluster replicas migration barrier. */
     int cluster_allow_replica_migration;                   /* Automatic replica migrations to orphaned primaries and from empty primaries */
@@ -2369,6 +2383,11 @@ struct valkeyServer {
     /* Debug config to expose intermediary slot migration states. */
     uint32_t debug_slot_migration_prevent_pause : 1;
     uint32_t debug_slot_migration_prevent_failover : 1;
+    /* Debug config to override the failover delay (in ms). */
+    int debug_cluster_failover_delay;
+    /* Debug config to force the next failover election to run in a specific
+     * epoch (testing only). -1 means don't override; consumed once. */
+    long long debug_cluster_failover_epoch;
     sds cached_cluster_slot_info[CACHE_CONN_TYPE_MAX]; /* Index in array is a bitwise or of CACHE_CONN_TYPE_* */
     /* Scripting */
     mstime_t busy_reply_threshold;  /* Script / module timeout in milliseconds */
@@ -2435,6 +2454,11 @@ struct valkeyServer {
     char *locale_collate;
     char *debug_context; /* A free-form string that has no impact on server except being included in a crash report. */
     int debug_force_tls_write_error;
+    /* Hot key detection parameters */
+    int hotkeys_sampling_percentage; /* Percentage (1-100) of key accesses sampled for hot-key detection. */
+    int hotkeys_top_k;               /* Number of top keys to track (Space-Saving K); 0 disables detection. */
+    int hotkeys_window_seconds;      /* Length of the QPS accounting window in seconds. */
+    struct spaceSavingManager *hotkeys_manager;
 };
 
 #define MAX_KEYS_BUFFER 256
@@ -3823,13 +3847,14 @@ robj *objectCommandLookup(client *c, robj *key);
 robj *objectCommandLookupOrReply(client *c, robj *key, robj *reply);
 int objectSetLRUOrLFU(robj *val, long long lfu_freq, long long lru_idle_secs);
 #define LOOKUP_NONE 0
-#define LOOKUP_NOTOUCH (1 << 0)  /* Don't update LRU. */
-#define LOOKUP_NONOTIFY (1 << 1) /* Don't trigger keyspace event on key misses. */
-#define LOOKUP_NOSTATS (1 << 2)  /* Don't update keyspace hits/misses counters. */
-#define LOOKUP_WRITE (1 << 3)    /* Delete expired keys even in replicas. */
-#define LOOKUP_NOEXPIRE (1 << 4) /* Avoid deleting lazy expired keys. */
+#define LOOKUP_NOTOUCH (1 << 0)   /* Don't update LRU. */
+#define LOOKUP_NONOTIFY (1 << 1)  /* Don't trigger keyspace event on key misses. */
+#define LOOKUP_NOSTATS (1 << 2)   /* Don't update keyspace hits/misses counters. */
+#define LOOKUP_WRITE (1 << 3)     /* Delete expired keys even in replicas. */
+#define LOOKUP_NOEXPIRE (1 << 4)  /* Avoid deleting lazy expired keys. */
+#define LOOKUP_NOHOTKEYS (1 << 5) /* Don't feed hot-key detection (introspection). */
 #define LOOKUP_NOEFFECTS \
-    (LOOKUP_NONOTIFY | LOOKUP_NOSTATS | LOOKUP_NOTOUCH | LOOKUP_NOEXPIRE) /* Avoid any effects from fetching the key */
+    (LOOKUP_NONOTIFY | LOOKUP_NOSTATS | LOOKUP_NOTOUCH | LOOKUP_NOEXPIRE | LOOKUP_NOHOTKEYS) /* Avoid any effects from fetching the key */
 
 void dbAdd(serverDb *db, robj *key, robj **valref);
 int dbAddRDBLoad(serverDb *db, sds key, robj **valref);
@@ -4319,6 +4344,9 @@ void lcsCommand(client *c);
 void quitCommand(client *c);
 void resetCommand(client *c);
 void failoverCommand(client *c);
+void hotkeysGetCommand(client *c);
+void hotkeysResetCommand(client *c);
+void hotkeysHelpCommand(client *c);
 
 /* Helper functions for getting database id args from argv, argc */
 int *selectDbIdArgs(robj **argv, int argc, int *count);

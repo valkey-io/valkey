@@ -32,6 +32,7 @@
  * SPDX-License-Identifier: BSD-3-Clause
  */
 #include "server.h"
+#include "hotkeys.h"
 #include "ordered_index.h"
 #include "connection.h"
 #include "monotonic.h"
@@ -1417,6 +1418,10 @@ void databasesCron(void) {
             }
         }
     }
+
+    /* Close any elapsed hot-key detection window, so a completed window is
+     * frozen on schedule even when there is no traffic. */
+    hotkeysCron();
 }
 
 static inline void updateCachedTimeWithUs(int update_daylight_info, const ustime_t ustime) {
@@ -2410,6 +2415,8 @@ void initServerConfig(void) {
     server.shutdown_flags = 0;
     server.shutdown_mstime = 0;
     server.cluster_module_flags = CLUSTER_MODULE_FLAG_NONE;
+    atomic_store_explicit(&server.cluster_config_save_status, C_OK, memory_order_relaxed);
+    atomic_store_explicit(&server.cluster_config_last_save_time, time(NULL), memory_order_relaxed);
     server.migrate_cached_sockets = dictCreate(&migrateCacheDictType);
     server.next_client_id = 1; /* Client IDs, start from 1 .*/
     server.page_size = sysconf(_SC_PAGESIZE);
@@ -3038,6 +3045,8 @@ void initServer(void) {
     server.cluster_drop_packet_filter = -1;
     server.debug_cluster_disable_random_ping = 0;
     server.debug_cluster_disable_reconnection = 0;
+    server.debug_cluster_failover_delay = -1;
+    server.debug_cluster_failover_epoch = -1;
     server.reply_buffer_peak_reset_time = REPLY_BUFFER_DEFAULT_PEAK_RESET_TIME;
     server.reply_buffer_resizing_enabled = 1;
     server.client_mem_usage_buckets = NULL;
@@ -3200,6 +3209,9 @@ void initServer(void) {
     applyWatchdogPeriod();
 
     if (server.maxmemory_clients != 0) initServerClientMemUsageBuckets();
+
+    /* Initialization hotkey */
+    hotkeysInit();
 }
 
 void initListeners(void) {
@@ -6882,6 +6894,13 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
         }
     }
 
+    /* Hotkeys */
+    if (all_sections || (dictFind(section_dict, "hotkeys") != NULL)) {
+        if (sections++) info = sdscat(info, "\r\n");
+        info = sdscatprintf(info, "# Hotkeys\r\n");
+        info = genHotkeysInfoString(info);
+    }
+
     /* Throttling */
     if (all_sections || (dictFind(section_dict, "throttling") != NULL)) {
         if (sections++) info = sdscat(info, "\r\n");
@@ -7965,13 +7984,13 @@ int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_
         /* clang-format off */
         if ((opt[0] == 'n' || opt[0] == 'N') &&
             (opt[1] == 'x' || opt[1] == 'X') && opt[2] == '\0' &&
-            !(*flags & ARGS_SET_XX || *flags & ARGS_SET_IFEQ) &&
+            !(*flags & (ARGS_SET_CONDITIONAL & ~ARGS_SET_NX)) && /* Repeated NX allowed */
             (command_type == COMMAND_SET || command_type == COMMAND_HSET || command_type == COMMAND_MSET))
         {
             *flags |= ARGS_SET_NX;
         } else if ((opt[0] == 'x' || opt[0] == 'X') &&
                    (opt[1] == 'x' || opt[1] == 'X') && opt[2] == '\0' &&
-                   !(*flags & ARGS_SET_NX || *flags & ARGS_SET_IFEQ) &&
+                   !(*flags & (ARGS_SET_CONDITIONAL & ~ARGS_SET_XX)) && /* Repeated XX allowed */
                    (command_type == COMMAND_SET || command_type == COMMAND_HSET || command_type == COMMAND_MSET))
         {
             *flags |= ARGS_SET_XX;
@@ -7992,9 +8011,19 @@ int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_
                    (opt[2] == 'e' || opt[2] == 'E') &&
                    (opt[3] == 'q' || opt[3] == 'Q') && opt[4] == '\0' &&
                    next &&
-                   !(*flags & ARGS_SET_NX || *flags & ARGS_SET_XX || *flags & ARGS_SET_IFEQ) && (command_type == COMMAND_SET))
+                   !(*flags & ARGS_SET_CONDITIONAL) && (command_type == COMMAND_SET))
         {
             *flags |= ARGS_SET_IFEQ;
+            *compare_val = next;
+            j++;
+        } else if ((opt[0] == 'i' || opt[0] == 'I') &&
+                   (opt[1] == 'f' || opt[1] == 'F') &&
+                   (opt[2] == 'n' || opt[2] == 'N') &&
+                   (opt[3] == 'e' || opt[3] == 'E') && opt[4] == '\0' &&
+                   next &&
+                   !(*flags & ARGS_SET_CONDITIONAL) && (command_type == COMMAND_SET))
+        {
+            *flags |= ARGS_SET_IFNE;
             *compare_val = next;
             j++;
         } else if ((opt[0] == 'g' || opt[0] == 'G') &&

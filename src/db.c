@@ -28,6 +28,7 @@
  */
 
 #include "server.h"
+#include "hotkeys.h"
 #include "ordered_index.h"
 #include "cluster.h"
 #include "cluster_migrateslots.h"
@@ -122,6 +123,10 @@ robj *lookupKey(serverDb *db, robj *key, int flags) {
         if (!(flags & (LOOKUP_NOSTATS | LOOKUP_WRITE))) server.stat_keyspace_misses++;
         /* TODO: Use separate misses stats and notify event for WRITE */
     }
+
+    /* Charge this lookup to hot-key detection. All the policy (whether detection
+     * is on, which lookups count, and sampling) lives in hotkeys.c. */
+    hotkeysRecordLookup(key, db->id, flags);
 
     return val;
 }
@@ -483,6 +488,7 @@ int dbGenericDeleteWithDictIndex(serverDb *db, robj *key, int async, int flags, 
     hashtablePosition pos;
     void **ref = kvstoreHashtableTwoPhasePopFindRef(db->keys, dict_index, objectGetVal(key), &pos);
     if (ref != NULL) {
+        hotkeysRecordDelete(key, db->id, flags);
         robj *val = *ref;
         /* VM_StringDMA may call dbUnshareStringValue which may free val, so we
          * need to incr to retain val */
@@ -690,6 +696,13 @@ long long emptyData(int dbnum, int flags, void(callback)(hashtable *)) {
 
     /* Empty the database structure. */
     removed = emptyDbStructure(server.db, dbnum, async, callback);
+
+    if (hotkeysEnabled()) {
+        if (dbnum == -1)
+            hotkeysPurgeAll();
+        else
+            hotkeysPurgeDb(dbnum);
+    }
 
     if (dbnum == -1) flushReplicaKeysWithExpireList(async);
 

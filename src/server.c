@@ -3014,6 +3014,8 @@ void initServer(void) {
     server.cluster_drop_packet_filter = -1;
     server.debug_cluster_disable_random_ping = 0;
     server.debug_cluster_disable_reconnection = 0;
+    server.debug_cluster_failover_delay = -1;
+    server.debug_cluster_failover_epoch = -1;
     server.reply_buffer_peak_reset_time = REPLY_BUFFER_DEFAULT_PEAK_RESET_TIME;
     server.reply_buffer_resizing_enabled = 1;
     server.client_mem_usage_buckets = NULL;

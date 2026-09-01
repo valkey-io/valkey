@@ -2341,6 +2341,11 @@ struct valkeyServer {
     /* Debug config to expose intermediary slot migration states. */
     uint32_t debug_slot_migration_prevent_pause : 1;
     uint32_t debug_slot_migration_prevent_failover : 1;
+    /* Debug config to override the failover delay (in ms). */
+    int debug_cluster_failover_delay;
+    /* Debug config to force the next failover election to run in a specific
+     * epoch (testing only). -1 means don't override; consumed once. */
+    long long debug_cluster_failover_epoch;
     sds cached_cluster_slot_info[CACHE_CONN_TYPE_MAX]; /* Index in array is a bitwise or of CACHE_CONN_TYPE_* */
     /* Scripting */
     mstime_t busy_reply_threshold;  /* Script / module timeout in milliseconds */

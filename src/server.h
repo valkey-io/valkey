@@ -723,20 +723,24 @@ typedef enum {
 
 /* Generic set command string object set flags */
 #define ARGS_NO_FLAGS 0
-#define ARGS_SET_NX (1 << 0)   /* Set if key not exists. */
-#define ARGS_SET_XX (1 << 1)   /* Set if key exists. */
-#define ARGS_EX (1 << 2)       /* Set if time in seconds is given */
-#define ARGS_PX (1 << 3)       /* Set if time in ms in given */
-#define ARGS_KEEPTTL (1 << 4)  /* Set and keep the ttl */
-#define ARGS_SET_GET (1 << 5)  /* Set if want to get key before set */
-#define ARGS_EXAT (1 << 6)     /* Set if timestamp in second is given */
-#define ARGS_PXAT (1 << 7)     /* Set if timestamp in ms is given */
-#define ARGS_PERSIST (1 << 8)  /* Set if we need to remove the ttl */
-#define ARGS_SET_IFEQ (1 << 9) /* Set if we need compare and set */
-#define ARGS_ARGV3 (1 << 10)   /* Set if the value is at argv[3]; otherwise it's \
-                                * at argv[2]. */
-#define ARGS_SET_FNX (1 << 11) /* Set if key item not exists. */
-#define ARGS_SET_FXX (1 << 12) /* Set if key item exists. */
+#define ARGS_SET_NX (1 << 0)    /* Set if key not exists. */
+#define ARGS_SET_XX (1 << 1)    /* Set if key exists. */
+#define ARGS_EX (1 << 2)        /* Set if time in seconds is given */
+#define ARGS_PX (1 << 3)        /* Set if time in ms in given */
+#define ARGS_KEEPTTL (1 << 4)   /* Set and keep the ttl */
+#define ARGS_SET_GET (1 << 5)   /* Set if want to get key before set */
+#define ARGS_EXAT (1 << 6)      /* Set if timestamp in second is given */
+#define ARGS_PXAT (1 << 7)      /* Set if timestamp in ms is given */
+#define ARGS_PERSIST (1 << 8)   /* Set if we need to remove the ttl */
+#define ARGS_SET_IFEQ (1 << 9)  /* Set if we need compare and set */
+#define ARGS_ARGV3 (1 << 10)    /* Set if the value is at argv[3]; otherwise it's \
+                                 * at argv[2]. */
+#define ARGS_SET_FNX (1 << 11)  /* Set if key item not exists. */
+#define ARGS_SET_FXX (1 << 12)  /* Set if key item exists. */
+#define ARGS_SET_IFNE (1 << 13) /* Set only if values are not equal */
+
+#define ARGS_SET_CONDITIONAL \
+    (ARGS_SET_NX | ARGS_SET_XX | ARGS_SET_IFEQ | ARGS_SET_IFNE)
 
 /* An Object, that is a type able to hold a string / list / set */
 

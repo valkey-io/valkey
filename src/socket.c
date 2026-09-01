@@ -156,8 +156,11 @@ static void connSocketClose(connection *conn) {
 }
 
 static int connSocketWrite(connection *conn, const void *data, size_t data_len) {
-    /* Assert the main thread is not writing to a connection that is currently offloaded. */
-    debugServerAssert(!(conn->flags & CONN_FLAG_ALLOW_ACCEPT_OFFLOAD) || !inMainThread() ||
+    /* Assert the main thread is not writing to a connection that is currently offloaded.
+     * Only applies to client-owned connections; cluster-link-owned connections use
+     * separate dispatch functions and do not carry client io_write_state. */
+    debugServerAssert(connGetOwnerKind(conn) != CONN_OWNER_CLIENT ||
+                      !(conn->flags & CONN_FLAG_ALLOW_ACCEPT_OFFLOAD) || !inMainThread() ||
                       ((client *)connGetPrivateData(conn))->io_write_state != CLIENT_PENDING_IO);
 
     int ret = write(conn->fd, data, data_len);
@@ -188,8 +191,11 @@ static int connSocketWritev(connection *conn, const struct iovec *iov, int iovcn
 }
 
 static int connSocketRead(connection *conn, void *buf, size_t buf_len) {
-    /* Assert the main thread is not reading from a connection that is currently offloaded. */
-    debugServerAssert(!(conn->flags & CONN_FLAG_ALLOW_ACCEPT_OFFLOAD) || !inMainThread() ||
+    /* Assert the main thread is not reading from a connection that is currently offloaded.
+     * Only applies to client-owned connections; cluster-link-owned connections use
+     * separate dispatch functions and do not carry client io_read_state. */
+    debugServerAssert(connGetOwnerKind(conn) != CONN_OWNER_CLIENT ||
+                      !(conn->flags & CONN_FLAG_ALLOW_ACCEPT_OFFLOAD) || !inMainThread() ||
                       ((client *)connGetPrivateData(conn))->io_read_state != CLIENT_PENDING_IO);
 
 

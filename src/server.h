@@ -1933,6 +1933,10 @@ struct valkeyServer {
     double stat_module_progress;                        /* Module save progress. */
     size_t stat_clients_type_memory[CLIENT_TYPE_COUNT]; /* Mem usage by type */
     size_t stat_cluster_links_memory;                   /* Mem usage by cluster links */
+    long long stat_cluster_threaded_reads_processed;    /* Cluster reads completed by I/O threads */
+    long long stat_cluster_threaded_writes_processed;   /* Cluster writes completed by I/O threads */
+    long long stat_cluster_threaded_accepts_processed;  /* Cluster accepts completed by I/O threads */
+    long long stat_cluster_io_main_thread_fallbacks;    /* Cluster I/O ops handled on the main thread because dispatch failed */
     long long
         stat_unexpected_error_replies;                 /* Number of unexpected (aof-loading, replica to primary, etc.) error replies */
     long long stat_total_error_replies;                /* Total number of issued error replies ( command + rejected errors ) */
@@ -2310,7 +2314,7 @@ struct valkeyServer {
     int cluster_allow_reads_when_down;                     /* Are reads allowed when the cluster
                                                             is down? */
     int cluster_config_file_lock_fd;                       /* cluster config fd, will be flocked. */
-    unsigned long long cluster_link_msg_queue_limit_bytes; /* Memory usage limit on individual link msg queue */
+    unsigned long long cluster_link_msg_queue_limit_bytes; /* Memory usage limit on individual link buffers */
     int cluster_drop_packet_filter;                        /* Debug config that allows tactically
                                                             * dropping packets of a specific type */
     unsigned long cluster_blacklist_ttl;                   /* Duration in seconds that a node is denied re-entry into

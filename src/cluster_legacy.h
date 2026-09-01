@@ -2,6 +2,15 @@
 #define CLUSTER_LEGACY_H
 
 #include <stdint.h>
+#ifndef __cplusplus
+#include <stdatomic.h>
+typedef _Atomic(size_t) atomic_size_t;
+typedef _Atomic(mstime_t) atomic_mstime_t;
+#else
+typedef size_t atomic_size_t __attribute__((aligned(sizeof(size_t))));
+typedef mstime_t atomic_mstime_t __attribute__((aligned(sizeof(mstime_t))));
+#endif
+
 #define CLUSTER_PORT_INCR 10000 /* Cluster port = baseport + PORT_INCR */
 
 /* The following defines are amount of time, sometimes expressed as
@@ -28,6 +37,22 @@
 #define CLUSTER_TODO_BROADCAST_ALL (1 << 5)
 #define CLUSTER_TODO_HANDLE_SLOT_MIGRATION (1 << 6)
 
+/* I/O state for threaded cluster bus offload. */
+typedef enum {
+    CLUSTER_LINK_IO_IDLE = 0,
+    CLUSTER_LINK_IO_PENDING,
+} clusterLinkIOState;
+
+/* Result codes for cluster I/O jobs. */
+typedef enum {
+    CLUSTER_IO_OK = 0,
+    CLUSTER_IO_BAD_HEADER,
+    CLUSTER_IO_BAD_LENGTH,
+    CLUSTER_IO_READ_ERROR,
+    CLUSTER_IO_EOF,
+    CLUSTER_IO_WRITE_ERROR,
+} clusterIOResult;
+
 /* clusterLink encapsulates everything needed to talk with a remote node. */
 typedef struct clusterLink {
     mstime_t ctime;                        /* Link creation time */
@@ -36,11 +61,34 @@ typedef struct clusterLink {
     size_t head_msg_send_offset;           /* Number of bytes already sent of message at head of queue */
     unsigned long long send_msg_queue_mem; /* Memory in bytes used by message queue */
     char *rcvbuf;                          /* Packet reception buffer */
-    size_t rcvbuf_len;                     /* Used size of rcvbuf */
+    atomic_size_t rcvbuf_len;              /* Used size of rcvbuf */
     size_t rcvbuf_alloc;                   /* Allocated size of rcvbuf */
     clusterNode *node;                     /* Node related to this link. Initialized to NULL when unknown */
     int inbound;                           /* 1 if this link is an inbound link accepted from the related node */
     int flags;                             /* CLUSTER_LINK_... */
+
+    /* Threaded I/O state (main-thread owned, except where noted) */
+    int io_read_state;         /* clusterLinkIOState: read job state */
+    int io_write_state;        /* clusterLinkIOState: write job state */
+    int async_close;           /* 1 if teardown requested while jobs in flight */
+    int io_refs;               /* Count of in-flight I/O jobs */
+    clusterIOResult io_result; /* Result code from last I/O job (written by I/O thread).
+                                * Shared by read/write jobs because they are mutually exclusive per link. */
+
+    /* Async write snapshot/result */
+    listNode *io_last_send_block; /* Last queue node visible to current write job */
+    size_t io_head_offset;        /* Snapshot/result offset into queue head */
+    int io_nodes_sent;            /* Number of fully-sent head nodes (set by I/O thread) */
+
+    /* Timestamp for failure detection (cross-thread) */
+    atomic_mstime_t last_io_read_time; /* Updated by I/O thread on successful read */
+
+    /* Pre-dispatch rcvbuf_alloc for memory accounting on completion */
+    size_t rcvbuf_alloc_at_dispatch; /* rcvbuf_alloc when read job was dispatched */
+
+    /* Async read framing/result */
+    size_t io_complete_bytes;   /* Bytes at the start of rcvbuf framed as complete packets */
+    size_t io_complete_packets; /* Number of complete packets in io_complete_bytes */
 } clusterLink;
 
 /* Cluster link flags and macros. */
@@ -507,5 +555,18 @@ struct clusterState {
     /* Struct used for storing slot statistics, for all slots owned by the current shard. */
     slotStat slot_stats[CLUSTER_SLOTS];
 };
+
+/* Cluster I/O completion handlers called from processIOThreadsResponses().
+ * For read/write, the tagged pointer is the clusterLink* itself.
+ * For accept, the tagged pointer is the connection* (no clusterLink exists yet).
+ * Implemented in cluster_legacy.c. */
+void clusterHandleReadCompletion(clusterLink *link);
+void clusterHandleWriteCompletion(clusterLink *link);
+void clusterHandleAcceptCompletion(connection *conn);
+void clusterReadJob(clusterLink *link);
+void clusterWriteJob(clusterLink *link);
+
+void testOnlyFreeClusterLinkOnBufferLimitReached(clusterLink *link);
+void clusterAcceptJob(connection *conn);
 
 #endif // CLUSTER_LEGACY_H

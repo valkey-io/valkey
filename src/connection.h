@@ -61,9 +61,17 @@ typedef enum {
     CONN_STATE_ERROR
 } ConnectionState;
 
-#define CONN_FLAG_CLOSE_SCHEDULED (1 << 0)      /* Closed scheduled by a handler */
-#define CONN_FLAG_WRITE_BARRIER (1 << 1)        /* Write barrier requested */
-#define CONN_FLAG_ALLOW_ACCEPT_OFFLOAD (1 << 2) /* Connection accept can be offloaded to IO threads. */
+/* Identifies the type of owner stored in conn->private_data.
+ * Used by connection-layer safety assertions to avoid unsafe casts. */
+typedef enum {
+    CONN_OWNER_CLIENT = 0,   /* private_data points to a client (default) */
+    CONN_OWNER_CLUSTER_LINK, /* private_data points to a clusterLink */
+} ConnectionOwnerKind;
+
+#define CONN_FLAG_CLOSE_SCHEDULED (1 << 0)        /* Closed scheduled by a handler */
+#define CONN_FLAG_WRITE_BARRIER (1 << 1)          /* Write barrier requested */
+#define CONN_FLAG_ALLOW_ACCEPT_OFFLOAD (1 << 2)   /* Connection accept can be offloaded to IO threads. */
+#define CONN_FLAG_ACCEPT_OFFLOAD_PENDING (1 << 3) /* Accept offload job is currently in flight. */
 
 #define CONN_POSTPONE_READ (1 << 0)
 #define CONN_POSTPONE_WRITE (1 << 1)
@@ -171,6 +179,7 @@ struct connection {
     short int flags;
     short int refs;
     unsigned short int iovcnt;
+    ConnectionOwnerKind owner_kind;
     void *private_data;
     ConnectionCallbackFunc conn_handler;
     ConnectionCallbackFunc write_handler;
@@ -405,6 +414,16 @@ static inline void connSetPrivateData(connection *conn, void *data) {
 /* Get the associated private data pointer */
 static inline void *connGetPrivateData(connection *conn) {
     return conn->private_data;
+}
+
+/* Set the owner kind for the connection */
+static inline void connSetOwnerKind(connection *conn, ConnectionOwnerKind kind) {
+    conn->owner_kind = kind;
+}
+
+/* Get the owner kind for the connection */
+static inline ConnectionOwnerKind connGetOwnerKind(connection *conn) {
+    return conn->owner_kind;
 }
 
 /* Return a text that describes the connection, suitable for inclusion

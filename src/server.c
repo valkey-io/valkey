@@ -2890,6 +2890,10 @@ void resetServerStats(void) {
     server.stat_dump_payload_sanitizations = 0;
     server.aof_delayed_fsync = 0;
     server.stat_reply_buffer_shrinks = 0;
+    server.stat_cluster_threaded_reads_processed = 0;
+    server.stat_cluster_threaded_writes_processed = 0;
+    server.stat_cluster_threaded_accepts_processed = 0;
+    server.stat_cluster_io_main_thread_fallbacks = 0;
     server.stat_reply_buffer_expands = 0;
     memset(server.duration_stats, 0, sizeof(durationStats) * EL_DURATION_TYPE_NUM);
     server.el_cmd_cnt_max = 0;
@@ -3101,6 +3105,10 @@ void initServer(void) {
     server.stat_module_progress = 0;
     for (int j = 0; j < CLIENT_TYPE_COUNT; j++) server.stat_clients_type_memory[j] = 0;
     server.stat_cluster_links_memory = 0;
+    server.stat_cluster_threaded_reads_processed = 0;
+    server.stat_cluster_threaded_writes_processed = 0;
+    server.stat_cluster_threaded_accepts_processed = 0;
+    server.stat_cluster_io_main_thread_fallbacks = 0;
     server.cron_malloc_stats.zmalloc_used = 0;
     server.cron_malloc_stats.process_rss = 0;
     server.cron_malloc_stats.allocator_allocated = 0;

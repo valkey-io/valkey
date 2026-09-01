@@ -196,6 +196,41 @@ policy: ignite when main-thread active time crosses
 non-empty, scale down after `IO_COOLDOWN_MS` of idle. `io-threads-always-active`
 disables the policy and keeps all configured workers awake.
 
+## Cluster Bus I/O
+
+Cluster bus reads, writes, and TLS accepts run on the same worker pool as
+client I/O. The main thread alone applies cluster packets and mutates
+cluster state; workers do transport work only.
+
+Key design decisions:
+
+- **Read framing boundary.** Workers read into `clusterLink->rcvbuf`, scan
+  the prefix of complete packets, and publish `io_complete_bytes` /
+  `io_complete_packets`. The main thread drains exactly that prefix
+  on completion.
+- **Write snapshot boundary.** A single canonical `send_msg_queue` is shared
+  with the worker via `io_last_send_block` + `io_head_offset`. New messages
+  enqueued while a write is in flight are picked up by the next dispatch.
+- **Read and write are mutually exclusive per link.**
+- **Deferred teardown.** `freeClusterLink()` defers final free via
+  `io_refs > 0` + `async_close = 1`; the last completion drops the ref and
+  frees the link.
+- **Accept serialization.** `CONN_FLAG_ACCEPT_OFFLOAD_PENDING` ensures only
+  one accept job is in flight per connection across TLS retries. The
+  generic accept path uses `ConnectionOwnerKind` to route cluster-owned
+  connections back to the cluster dispatcher. Only TLS accepts are
+  offloaded; a plain TCP accept does no real work.
+- **Dispatch is skipped while connecting.** A link whose TCP connect or TLS
+  handshake is still in progress is left to the connection layer, which
+  drives the read/write handler once the connection is established.
+- **Fallback.** If dispatch returns `C_ERR`, the caller runs the I/O on
+  the main thread and increments `cluster_io_main_thread_fallbacks`.
+
+`CLUSTER INFO` reports `cluster_io_threaded_reads_processed`,
+`cluster_io_threaded_writes_processed`,
+`cluster_io_threaded_accepts_processed` (all counted when a worker job
+completes) and `cluster_io_main_thread_fallbacks`.
+
 ## Relevant Code
 
 - `src/io_threads.{c,h}` — main thread dispatch helpers, worker loop,

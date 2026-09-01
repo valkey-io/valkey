@@ -6,6 +6,8 @@
 
 #include "generated_wrappers.hpp"
 
+#include "fake_connection.hpp"
+
 #include <climits>
 #include <cstdio>
 #include <cstring>
@@ -82,72 +84,11 @@ void testOnlyTrimReplyUnusedTailSpace(client *c);
 void setDeferredReply(client *c, void *node, const char *s, size_t length);
 }
 
-/* Fake structures and functions */
-typedef struct fakeConnection {
-    connection conn;
-    int error;
-    char *buffer;
-    size_t buf_size;
-    size_t written;
-} fakeConnection;
-
-/* Fake connWrite function */
-static int fake_connWrite(connection *conn, const void *data, size_t size) {
-    fakeConnection *fake_conn = (fakeConnection *)conn;
-    if (fake_conn->error) return -1;
-
-    size_t to_write = size;
-    if (fake_conn->written + to_write > fake_conn->buf_size) {
-        to_write = fake_conn->buf_size - fake_conn->written;
-    }
-
-    memcpy(fake_conn->buffer + fake_conn->written, data, to_write);
-    fake_conn->written += to_write;
-    return (int)to_write;
-}
-
-/* Fake connWritev function */
-static int fake_connWritev(connection *conn, const struct iovec *iov, int iovcnt) {
-    fakeConnection *fake_conn = (fakeConnection *)conn;
-    if (fake_conn->error) return -1;
-
-    size_t total = 0;
-    for (int i = 0; i < iovcnt; i++) {
-        size_t to_write = iov[i].iov_len;
-        if (fake_conn->written + to_write > fake_conn->buf_size) {
-            to_write = fake_conn->buf_size - fake_conn->written;
-        }
-        if (to_write == 0) break;
-
-        memcpy(fake_conn->buffer + fake_conn->written, iov[i].iov_base, to_write);
-        fake_conn->written += to_write;
-        total += to_write;
-    }
-    return (int)total;
-}
-
-/* Fake connection type - initialized in SetUpTestSuite */
-static ConnectionType CT_Fake;
-
-static fakeConnection *connCreateFake(void) {
-    fakeConnection *conn = (fakeConnection *)(zcalloc(sizeof(fakeConnection)));
-    conn->conn.type = &CT_Fake;
-    conn->conn.fd = -1;
-    conn->conn.iovcnt = IOV_MAX;
-    return conn;
-}
-
-/* Test fixture for networking tests - minimal fixture with no setup/teardown */
+/* Test fixture for networking tests - minimal fixture with no setup/teardown.
+ * The fake connection itself lives in fake_connection.hpp, shared with the
+ * other unit tests that need one. */
 class NetworkingTest : public ::testing::Test {
   protected:
-    static void SetUpTestSuite() {
-        /* Initialize CT_Fake explicitly by field name to avoid dependency
-         * on field order (designated initializers require C++20). */
-        memset(&CT_Fake, 0, sizeof(CT_Fake));
-        CT_Fake.write = fake_connWrite;
-        CT_Fake.writev = fake_connWritev;
-    }
-
     void SetUp() override {
         /* Initialize server fields that are accessed by networking functions */
         server.commandlog[COMMANDLOG_TYPE_LARGE_REPLY].threshold = -1; /* Disable tracking */
@@ -167,9 +108,7 @@ TEST_F(NetworkingTest, TestWriteToReplica) {
     c->reply = listCreate();
     /* Test 1: Single block write */
     {
-        fakeConnection *fake_conn = connCreateFake();
-        fake_conn->buffer = (char *)zmalloc(1024);
-        fake_conn->buf_size = 1024;
+        fakeConnection *fake_conn = connCreateFake(1024);
         c->conn = (connection *)fake_conn;
 
         /* Create replication buffer block */
@@ -193,19 +132,14 @@ TEST_F(NetworkingTest, TestWriteToReplica) {
         ASSERT_EQ((c->write_flags & WRITE_FLAGS_WRITE_ERROR), 0);
 
         /* Cleanup */
-        zfree(fake_conn->buffer);
-        zfree(fake_conn);
+        connFreeFake(fake_conn);
         zfree(block);
         listEmpty(server.repl_buffer_blocks);
     }
 
     /* Test 2: Multiple blocks write */
     {
-        fakeConnection *fake_conn = connCreateFake();
-        fake_conn->error = 0;
-        fake_conn->written = 0;
-        fake_conn->buffer = (char *)zmalloc(1024);
-        fake_conn->buf_size = 1024;
+        fakeConnection *fake_conn = connCreateFake(1024);
         c->conn = (connection *)fake_conn;
 
         /* Create multiple replication buffer blocks */
@@ -236,8 +170,7 @@ TEST_F(NetworkingTest, TestWriteToReplica) {
         ASSERT_EQ((c->write_flags & WRITE_FLAGS_WRITE_ERROR), 0);
 
         /* Cleanup */
-        zfree(fake_conn->buffer);
-        zfree(fake_conn);
+        connFreeFake(fake_conn);
         zfree(block1);
         zfree(block2);
         listEmpty(server.repl_buffer_blocks);
@@ -245,11 +178,8 @@ TEST_F(NetworkingTest, TestWriteToReplica) {
 
     /* Test 3: Write error */
     {
-        fakeConnection *fake_conn = connCreateFake();
+        fakeConnection *fake_conn = connCreateFake(1024);
         fake_conn->error = 1; /* Simulate write error */
-        fake_conn->buffer = (char *)zmalloc(1024);
-        fake_conn->buf_size = 1024;
-        fake_conn->written = 0;
         c->conn = (connection *)fake_conn;
 
         /* Create replication buffer block */
@@ -272,8 +202,7 @@ TEST_F(NetworkingTest, TestWriteToReplica) {
 
         /* Cleanup */
         listEmpty(server.repl_buffer_blocks);
-        zfree(fake_conn->buffer);
-        zfree(fake_conn);
+        connFreeFake(fake_conn);
         zfree(block);
         c->repl_data->ref_repl_buf_node = nullptr;
     }

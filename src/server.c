@@ -53,6 +53,8 @@
 #include "sds.h"
 #include "module.h"
 #include "scripting_engine.h"
+#include "throttle.h"
+#include "throttle_repl.h"
 #include "util.h"
 
 #include "eval.h"
@@ -1215,6 +1217,27 @@ void getExpensiveClientsInfo(size_t *in_usage, size_t *out_usage) {
     *out_usage = o;
 }
 
+/* Detect and free zombie connections whose read handler was removed (e.g.
+ * BLOCKED_INUSE). Without a read handler the event loop won't notice the
+ * remote side closing, so these fds would leak until the fd limit is hit. */
+static bool clientsCronTcpIsClosing(client *c) {
+    if (!c->conn) return false;
+
+    /* If the fd is still watched by the event loop, it detects the close and frees the client itself. */
+    if (connHasReadHandler(c->conn) || connHasWriteHandler(c->conn)) return false;
+
+    if (!connIsClosing(c->conn)) return false;
+
+    if (server.verbosity <= LL_VERBOSE) {
+        sds client_info = catClientInfoString(sdsempty(), c, server.hide_user_data_from_log);
+        serverLog(LL_VERBOSE, "Client closed connection while blocked %s", client_info);
+        sdsfree(client_info);
+    }
+
+    freeClientAsync(c);
+    return true;
+}
+
 /* This function is called by clientsTimeProc() and is used in order to perform
  * operations on clients that are important to perform constantly. For instance
  * we use this function in order to disconnect clients after a timeout, including
@@ -1266,6 +1289,7 @@ static void clientsCron(int clients_this_cycle) {
          * The protocol is that they return non-zero if the client was
          * terminated. */
         if (clientsCronHandleTimeout(c, now)) continue;
+        if (clientsCronTcpIsClosing(c)) continue;
         if (clientsCronResizeQueryBuffer(c)) continue;
         if (clientsCronResizeOutputBuffer(c, now)) continue;
         if (clientsCronTrackExpensiveClients(c, curr_peak_mem_usage_slot)) continue;
@@ -1733,6 +1757,8 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
     } else {
         run_with_period(1000) replicationCron();
     }
+
+    run_with_period(100) throttleRepl_adjustThrottling();
 
     /* Run the Cluster cron. */
     if (server.cluster_enabled) {
@@ -3166,6 +3192,7 @@ void initServer(void) {
 
     commandlogInit();
     latencyMonitorInit();
+    throttle_init();
     initSharedQueryBuf();
 
     /* Initialize ACL default password if it exists */
@@ -4747,6 +4774,8 @@ int processCommand(client *c) {
         blockPostponeClient(c);
         return C_OK;
     }
+
+    if (throttle_throttleClientIfNeeded(c)) return C_OK;
 
     /* Exec the command */
     if (c->flag.multi && c->cmd->proc != execCommand && c->cmd->proc != discardCommand &&
@@ -6872,6 +6901,14 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
         info = genHotkeysInfoString(info);
     }
 
+    /* Throttling */
+    if (all_sections || (dictFind(section_dict, "throttling") != NULL)) {
+        if (sections++) info = sdscat(info, "\r\n");
+        info = sdscat(info, "# Throttling\r\n");
+        info = throttle_sdscatInfoMetrics(info);
+        info = throttleRepl_sdscatInfoMetrics(info);
+    }
+
     /* Get info from modules.
      * Returned when the user asked for "everything", "modules", or a specific module section.
      * We're not aware of the module section names here, and we rather avoid the search when we can.
@@ -6895,6 +6932,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "eventloop_cmd_per_cycle_max:%lld\r\n", server.el_cmd_cnt_max,
                 "io_threaded_reads_pending:%lld\r\n", server.stat_io_reads_pending,
                 "io_threaded_writes_pending:%lld\r\n", server.stat_io_writes_pending));
+        info = throttleRepl_sdscatInfoDebugMetrics(info);
     }
 
     return info;

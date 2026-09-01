@@ -4,6 +4,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "sds.h"
+
 /*
  * Server-side hot key detection. The Space-Saving algorithm, its frozen-window
  * manager and the tracked (key, db) item live in space_saving.{c,h}; this module
@@ -21,10 +23,8 @@ int hotkeysWindowCallback(const char **err);
 
 /* Is hot-key detection currently enabled (hotkeys-top-k > 0)? */
 bool hotkeysEnabled(void);
-/* Number of sampled observations in the last completed window (N). */
-uint64_t hotkeysLastWindowSamples(void);
-/* Real duration of the last completed window, in microseconds. */
-uint64_t hotkeysLastWindowDurationUs(void);
+/* Append the INFO "hotkeys" section fields (the caller emits the header). */
+sds genHotkeysInfoString(sds info);
 /* Create the manager at server startup if detection is enabled. */
 void hotkeysInit(void);
 /* Periodic maintenance (call from serverCron): freeze elapsed windows on time. */

@@ -1394,6 +1394,10 @@ void databasesCron(void) {
             }
         }
     }
+
+    /* Close any elapsed hot-key detection window, so a completed window is
+     * frozen on schedule even when there is no traffic. */
+    hotkeysCron();
 }
 
 static inline void updateCachedTimeWithUs(int update_daylight_info, const ustime_t ustime) {
@@ -1652,10 +1656,6 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
 
     /* Handle background operations on databases. */
     databasesCron();
-
-    /* Close any elapsed hot-key detection window on schedule, so a completed
-     * window is frozen even with no traffic. */
-    hotkeysCron();
 
     /* Start a scheduled AOF rewrite if this was requested by the user while
      * a BGSAVE was in progress. */
@@ -6865,14 +6865,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
     if (all_sections || (dictFind(section_dict, "hotkeys") != NULL)) {
         if (sections++) info = sdscat(info, "\r\n");
         info = sdscatprintf(info, "# Hotkeys\r\n");
-        /* N for the last completed window: only keys above N/K are guaranteed
-         * tracked, so this gives operators the detection floor of a report. */
-        info = sdscatprintf(info, "hotkeys_last_window_samples:%llu\r\n",
-                            (unsigned long long)hotkeysLastWindowSamples());
-        /* The real span the report was measured over, which is the configured
-         * window plus the rotation lag — and the QPS denominator. */
-        info = sdscatprintf(info, "hotkeys_last_window_duration_ms:%llu\r\n",
-                            (unsigned long long)(hotkeysLastWindowDurationUs() / 1000));
+        info = genHotkeysInfoString(info);
     }
 
     /* Get info from modules.

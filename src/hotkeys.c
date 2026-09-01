@@ -271,19 +271,29 @@ bool hotkeysEnabled(void) {
  * Space-Saving guarantee is stated relative to N: only keys with frequency
  * above N/K are guaranteed tracked, so operators use it to gauge the detection
  * floor and how much to trust a given entry. 0 when detection is disabled. */
-uint64_t hotkeysLastWindowSamples(void) {
+static uint64_t hotkeysLastWindowSamples(void) {
     return server.hotkeys_manager ? spaceSavingManagerFrozenTotal(server.hotkeys_manager) : 0;
 }
 
-/* Real duration of the last completed window, in microseconds. Reported in INFO
- * so an operator can tell an empty report apart from one measured over an
- * unusually short or long window (rotation runs on the serverCron tick, so the
- * span is the configured length plus that lag). 0 means there is no completed
- * window: detection was just enabled or reset, or the last window was dropped
- * for spanning more than twice the configured length — those cases are not
- * distinguishable from this field alone. */
-uint64_t hotkeysLastWindowDurationUs(void) {
+/* Real duration of the last completed window, in microseconds. 0 means there is
+ * no completed window: detection was just enabled or reset, or the last window
+ * was dropped for spanning more than twice the configured length — those cases
+ * are not distinguishable from this value alone. */
+static uint64_t hotkeysLastWindowDurationUs(void) {
     return server.hotkeys_manager ? spaceSavingManagerFrozenDurationUs(server.hotkeys_manager) : 0;
+}
+
+/* Append the fields of the INFO "hotkeys" section. The caller emits the section
+ * header; this owns which fields the section carries. */
+sds genHotkeysInfoString(sds info) {
+    /* N for the last completed window: only keys above N/K are guaranteed
+     * tracked, so this gives operators the detection floor of a report. */
+    info = sdscatprintf(info, "hotkeys_last_window_samples:%llu\r\n", (unsigned long long)hotkeysLastWindowSamples());
+    /* The real span the report was measured over, which is the configured window
+     * plus the rotation lag — and the QPS denominator. */
+    info = sdscatprintf(info, "hotkeys_last_window_duration_ms:%llu\r\n",
+                        (unsigned long long)(hotkeysLastWindowDurationUs() / 1000));
+    return info;
 }
 
 /* Reconfigure the manager in place from the current config: the in-progress

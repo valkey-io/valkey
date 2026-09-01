@@ -37,6 +37,7 @@
  */
 
 #include "server.h"
+#include "hotkeys.h"
 #include "cluster.h"
 #include "cluster_legacy.h"
 #include "cluster_slot_stats.h"
@@ -1769,6 +1770,7 @@ void clusterReset(int hard) {
     resetManualFailover();
 
     /* Unassign all the slots. */
+    hotkeysPurgeAll(); /* Bulk purge before individual clusterDelSlot calls */
     for (j = 0; j < CLUSTER_SLOTS; j++) clusterDelSlot(j);
 
     /* Recreate shards dict */
@@ -2750,7 +2752,7 @@ void clearNodeFailureIfNeeded(clusterNode *node) {
         serverLog(LL_NOTICE, "Clear FAIL state for node %.40s (%s): %s is reachable again.", node->name,
                   humanNodename(node), nodeIsReplica(node) ? "replica" : "primary without slots");
         node->flags &= ~CLUSTER_NODE_FAIL;
-        if (nodeIsReplica(myself) && myself->replicaof == node) node->flags &= ~CLUSTER_NODE_MY_PRIMARY_FAIL;
+        if (nodeIsReplica(myself) && myself->replicaof == node) myself->flags &= ~CLUSTER_NODE_MY_PRIMARY_FAIL;
         clusterDoBeforeSleep(CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_SAVE_CONFIG);
     }
 
@@ -2765,7 +2767,7 @@ void clearNodeFailureIfNeeded(clusterNode *node) {
             "Clear FAIL state for node %.40s (%s): is reachable again and nobody is serving its slots after some time.",
             node->name, humanNodename(node));
         node->flags &= ~CLUSTER_NODE_FAIL;
-        if (nodeIsReplica(myself) && myself->replicaof == node) node->flags &= ~CLUSTER_NODE_MY_PRIMARY_FAIL;
+        if (nodeIsReplica(myself) && myself->replicaof == node) myself->flags &= ~CLUSTER_NODE_MY_PRIMARY_FAIL;
         clusterDoBeforeSleep(CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_SAVE_CONFIG);
     }
 }
@@ -3128,6 +3130,7 @@ void clusterSetNodeAsPrimary(clusterNode *n) {
     n->replicaof = NULL;
 
     if (n == myself) {
+        myself->flags &= ~CLUSTER_NODE_MY_PRIMARY_FAIL;
         replicationUnsetPrimary();
     }
 
@@ -6887,6 +6890,7 @@ int clusterDelSlot(int slot) {
     /* Make owner_not_claiming_slot flag consistent with slot ownership information. */
     bitmapClearBit(server.cluster->owner_not_claiming_slot, slot);
     clusterSlotStatReset(slot);
+    hotkeysPurgeSlot(slot);
     return C_OK;
 }
 
@@ -7207,6 +7211,10 @@ static void clusterSetPrimary(clusterNode *n, int closeSlots, int full_sync_requ
     }
     if (closeSlots) clusterCloseAllSlots();
     myself->replicaof = n;
+    if (nodeFailed(n))
+        myself->flags |= CLUSTER_NODE_MY_PRIMARY_FAIL;
+    else
+        myself->flags &= ~CLUSTER_NODE_MY_PRIMARY_FAIL;
     updateShardId(myself, n->shard_id);
     clusterNodeAddReplica(n, myself);
     replicationSetPrimary(n->ip, getNodeDefaultReplicationPort(n), full_sync_required, true);
@@ -7875,6 +7883,10 @@ unsigned int delKeysInSlot(unsigned int hashslot, int lazy, bool propagate_del, 
         kvstoreReleaseHashtableIterator(kvs_di);
     }
 
+    /* The slot's keys have been removed locally (flushed or migrated away), so
+     * drop their hot-key state too. Sampling was suppressed during the loop via
+     * server_del_keys_in_slot (see hotkeysShouldRecord). */
+    hotkeysPurgeSlot(hashslot);
     server.server_del_keys_in_slot = 0;
     serverAssert(server.execution_nesting == before_execution_nesting);
     return j;

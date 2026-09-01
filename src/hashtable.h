@@ -92,7 +92,7 @@ typedef enum {
 typedef void (*hashtableScanFunction)(void *privdata, void *entry);
 
 /* Constants */
-#define HASHTABLE_BUCKET_SIZE 64 /* bytes, the most common cache line size */
+#define HASHTABLE_BUCKET_SIZE 64         /* bytes, the most common cache line size */
 #define HASHTABLE_FIND_BATCH_MAX_SIZE 32 /* Limited by the result bitmap size. */
 
 /* Scan flags */

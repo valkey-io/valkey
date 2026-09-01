@@ -32,6 +32,7 @@
  * SPDX-License-Identifier: BSD-3-Clause
  */
 #include "server.h"
+#include "hotkeys.h"
 #include "ordered_index.h"
 #include "connection.h"
 #include "monotonic.h"
@@ -1393,6 +1394,10 @@ void databasesCron(void) {
             }
         }
     }
+
+    /* Close any elapsed hot-key detection window, so a completed window is
+     * frozen on schedule even when there is no traffic. */
+    hotkeysCron();
 }
 
 static inline void updateCachedTimeWithUs(int update_daylight_info, const ustime_t ustime) {
@@ -3177,6 +3182,9 @@ void initServer(void) {
     applyWatchdogPeriod();
 
     if (server.maxmemory_clients != 0) initServerClientMemUsageBuckets();
+
+    /* Initialization hotkey */
+    hotkeysInit();
 }
 
 void initListeners(void) {
@@ -6855,6 +6863,13 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                                     db->expiry[KEYS].avg_ttl, keysvitems);
             }
         }
+    }
+
+    /* Hotkeys */
+    if (all_sections || (dictFind(section_dict, "hotkeys") != NULL)) {
+        if (sections++) info = sdscat(info, "\r\n");
+        info = sdscatprintf(info, "# Hotkeys\r\n");
+        info = genHotkeysInfoString(info);
     }
 
     /* Get info from modules.

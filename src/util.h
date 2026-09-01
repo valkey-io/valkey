@@ -124,5 +124,6 @@ mstime_t mstime(void);
 void writePointerWithPadding(unsigned char *buf, const void *ptr);
 sds escapeJsonString(sds s, const char *p, size_t len);
 uint64_t wangHash64(uint64_t hash);
+int bernoulliSampleHit(int percentage);
 
 #endif

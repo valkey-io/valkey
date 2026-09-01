@@ -163,7 +163,7 @@ bool hashtableReplaceReallocatedEntry(hashtable *ht, const void *old_entry, void
 void hashtableIncrementalFindInit(hashtableIncrementalFindState *state, hashtable *ht, const void *key);
 bool hashtableIncrementalFindStep(hashtableIncrementalFindState *state);
 bool hashtableIncrementalFindGetResult(hashtableIncrementalFindState *state, void **found);
-void hashtableFindBatch(hashtable *ht, hashtableFindBatchItem *items, size_t count);
+uint32_t hashtableFindBatch(hashtable *ht, int numkeys, const void **keys, void **found_entries);
 
 /* Iteration & scan */
 size_t hashtableScan(hashtable *ht, size_t cursor, hashtableScanFunction fn, void *privdata);

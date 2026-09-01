@@ -38,6 +38,6 @@ long long getIOThreadActiveTimeMicroseconds(int id);
 int clientHasPendingIO(struct client *c);
 int processIOThreadsResponses(void);
 int getCurTid(void);
-void sendToMainThread(void *data, int type);
+void sendToMainThread(client *c, int type);
 
 #endif /* IO_THREADS_H */

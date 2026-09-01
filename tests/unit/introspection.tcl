@@ -1694,7 +1694,7 @@ start_server {tags {"introspection"}} {
                 # Get the tot-net-out of the replica before sending the command.
                 set info_list [$primary client list]
                 foreach info [split $info_list "\r\n"] {
-                    if {[string match "* flags=S *" $info]} {
+                    if {[string match "* flags=*S* *" $info]} {
                         set out_before [get_field_in_client_info $info "tot-net-out"]
                         break
                     }
@@ -1707,7 +1707,7 @@ start_server {tags {"introspection"}} {
                 # Get the tot-net-out of the replica after sending the command.
                 set info_list [$primary client list]
                 foreach info [split $info_list "\r\n"] {
-                    if {[string match "* flags=S *" $info]} {
+                    if {[string match "* flags=*S* *" $info]} {
                         set out_after [get_field_in_client_info $info "tot-net-out"]
                         break
                     }

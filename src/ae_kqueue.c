@@ -180,3 +180,7 @@ static int aeApiPoll(aeApiState *state, aeFiredEvent *fired, aeFileEvent *events
 static char *aeApiName(void) {
     return "kqueue";
 }
+
+static int aeApiGetPollFd(aeApiState *state) {
+    return state ? state->kqfd : -1;
+}

@@ -1993,6 +1993,9 @@ void clusterAcceptHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
         }
 
         connection *conn = connCreateAccepted(connTypeOfCluster(), cfd, &require_auth);
+        /* Tag inbound cluster bus link as high-priority so cluster gossip and heartbeats
+         * are processed via QoS ahead of normal client traffic. */
+        connSetPriority(conn, true);
 
         /* Make sure connection is not in an error state */
         if (connGetState(conn) != CONN_STATE_ACCEPTING) {
@@ -6473,6 +6476,9 @@ static int clusterNodeCronHandleReconnect(clusterNode *node, mstime_t now, long 
         (*cluster_conn_attempts)--;
         clusterLink *link = createClusterLink(node);
         link->conn = connCreate(connTypeOfCluster());
+        /* Tag outbound cluster bus link as high-priority so node reconnects, gossip ping/pong,
+         * and failure detection heartbeats operate with QoS priority. */
+        connSetPriority(link->conn, true);
         connSetPrivateData(link->conn, link);
         if (connConnect(link->conn, node->ip, node->cport, server.bind_source_addr, 0, clusterLinkConnectHandler) ==
             C_ERR) {
@@ -7456,7 +7462,7 @@ sds clusterGenNodesDescription(client *c, int filter, int tls_primary) {
 /* Add to the output buffer of the given client the description of the given cluster link.
  * The description is a map with each entry being an attribute of the link. */
 void addReplyClusterLinkDescription(client *c, clusterLink *link) {
-    addReplyMapLen(c, 6);
+    addReplyMapLen(c, 7);
 
     addReplyBulkCString(c, "direction");
     addReplyBulkCString(c, link->inbound ? "from" : "to");
@@ -7488,6 +7494,9 @@ void addReplyClusterLinkDescription(client *c, clusterLink *link) {
 
     addReplyBulkCString(c, "send-buffer-used");
     addReplyLongLong(c, link->send_msg_queue_mem);
+
+    addReplyBulkCString(c, "qos");
+    addReplyBulkCString(c, connIsPriority(link->conn) ? "prioritized" : "normal");
 }
 
 /* Add to the output buffer of the given client an array of cluster link descriptions,

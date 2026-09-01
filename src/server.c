@@ -1592,6 +1592,10 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
                                  factor);
         trackInstantaneousMetric(STATS_METRIC_EL_DURATION, server.duration_stats[EL_DURATION_TYPE_EL].sum,
                                  server.duration_stats[EL_DURATION_TYPE_EL].cnt, 1);
+        trackInstantaneousMetric(STATS_METRIC_QOS_EL_CYCLE, server.duration_stats[EL_DURATION_TYPE_QOS_EL].cnt, current_time,
+                                 factor);
+        trackInstantaneousMetric(STATS_METRIC_QOS_EL_DURATION, server.duration_stats[EL_DURATION_TYPE_QOS_EL].sum,
+                                 server.duration_stats[EL_DURATION_TYPE_QOS_EL].cnt, 1);
     }
 
     cronUpdateMemoryStats();
@@ -2117,6 +2121,21 @@ void afterSleep(struct aeEventLoop *eventLoop, int numevents) {
     }
 
     IOThreadsAfterSleep(numevents);
+}
+
+/* Callback invoked by the event loop after draining QoS events.
+ * Records QoS eventloop duration and updates peak commands executed per QoS cycle. */
+static void qosStatsCallback(struct aeEventLoop *el, uint64_t duration_us) {
+    UNUSED(el);
+    durationAddSample(EL_DURATION_TYPE_QOS_EL, duration_us);
+    unsigned long long qos_cmds = server.duration_stats[EL_DURATION_TYPE_QOS_CMD].cnt;
+    if (qos_cmds > (unsigned long long)server.qos_el_cmd_cnt_prev) {
+        long long el_cmd_cnt = qos_cmds - server.qos_el_cmd_cnt_prev;
+        if (el_cmd_cnt > server.qos_el_cmd_cnt_max) {
+            server.qos_el_cmd_cnt_max = el_cmd_cnt;
+        }
+        server.qos_el_cmd_cnt_prev = qos_cmds;
+    }
 }
 
 /* =========================== Server initialization ======================== */
@@ -2895,6 +2914,8 @@ void resetServerStats(void) {
     server.stat_reply_buffer_expands = 0;
     memset(server.duration_stats, 0, sizeof(durationStats) * EL_DURATION_TYPE_NUM);
     server.el_cmd_cnt_max = 0;
+    server.qos_el_cmd_cnt_max = 0;
+    server.qos_el_cmd_cnt_prev = 0;
     server.stat_active_time = 0;
     server.el_iteration_active = false;
     server.stat_total_prefetch_batches = 0;
@@ -3048,7 +3069,12 @@ void initServer(void) {
         serverLog(LL_WARNING, "Failed creating the event loop. Error message: '%s'", strerror(errno));
         exit(1);
     }
-
+    /* Setup QoS event loop if multiplexer backend supports secondary polling.
+     * If secondary polling is unsupported (e.g. evport, select), gracefully fallback to standard event processing without QoS. */
+    if (aeActuateQoSEventLoopIfSupported(server.el, server.qos_preemptive_poll_interval_us, qosStatsCallback) == AE_ERR) {
+        serverLog(LL_NOTICE, "QoS event prioritization not supported on %s multiplexer, falling back to standard event processing",
+                  aeGetApiName());
+    }
     server.dbnum = server.cluster_enabled ? server.config_databases_cluster : server.config_databases;
     server.db = zcalloc(sizeof(serverDb *) * server.dbnum);
     createDatabaseIfNeeded(0); /* The default database should always exist */
@@ -4062,7 +4088,13 @@ void call(client *c, int flags) {
         } else {
             latencyTraceIfNeeded(server, command, duration);
         }
-        if (server.execution_nesting == 0) durationAddSample(EL_DURATION_TYPE_CMD, duration);
+        if (server.execution_nesting == 0) {
+            durationAddSample(EL_DURATION_TYPE_CMD, duration);
+            /* Attribute command execution latency for high-priority client connections. */
+            if (connIsPriority(c->conn)) {
+                durationAddSample(EL_DURATION_TYPE_QOS_CMD, duration);
+            }
+        }
     }
 
     /* Log the command into the commandlog if needed.
@@ -6606,7 +6638,12 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "eventloop_duration_sum:%llu\r\n", server.duration_stats[EL_DURATION_TYPE_EL].sum,
                 "eventloop_duration_cmd_sum:%llu\r\n", server.duration_stats[EL_DURATION_TYPE_CMD].sum,
                 "instantaneous_eventloop_cycles_per_sec:%llu\r\n", getInstantaneousMetric(STATS_METRIC_EL_CYCLE),
-                "instantaneous_eventloop_duration_usec:%llu\r\n", getInstantaneousMetric(STATS_METRIC_EL_DURATION)));
+                "instantaneous_eventloop_duration_usec:%llu\r\n", getInstantaneousMetric(STATS_METRIC_EL_DURATION),
+                "qos_eventloop_cycles:%llu\r\n", server.duration_stats[EL_DURATION_TYPE_QOS_EL].cnt,
+                "qos_eventloop_duration_sum:%llu\r\n", server.duration_stats[EL_DURATION_TYPE_QOS_EL].sum,
+                "qos_eventloop_duration_cmd_sum:%llu\r\n", server.duration_stats[EL_DURATION_TYPE_QOS_CMD].sum,
+                "instantaneous_qos_eventloop_cycles_per_sec:%llu\r\n", getInstantaneousMetric(STATS_METRIC_QOS_EL_CYCLE),
+                "instantaneous_qos_eventloop_duration_usec:%llu\r\n", getInstantaneousMetric(STATS_METRIC_QOS_EL_DURATION)));
         info = genValkeyInfoStringACLStats(info);
     }
 
@@ -6878,6 +6915,8 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "eventloop_duration_cron_sum:%llu\r\n", server.duration_stats[EL_DURATION_TYPE_CRON].sum,
                 "eventloop_duration_max:%llu\r\n", server.duration_stats[EL_DURATION_TYPE_EL].max,
                 "eventloop_cmd_per_cycle_max:%lld\r\n", server.el_cmd_cnt_max,
+                "qos_eventloop_duration_max:%llu\r\n", server.duration_stats[EL_DURATION_TYPE_QOS_EL].max,
+                "qos_eventloop_cmd_per_cycle_max:%lld\r\n", server.qos_el_cmd_cnt_max,
                 "io_threaded_reads_pending:%lld\r\n", server.stat_io_reads_pending,
                 "io_threaded_writes_pending:%lld\r\n", server.stat_io_writes_pending));
     }

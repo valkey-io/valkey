@@ -356,8 +356,12 @@ start_server {tags {"info" "external:skip" "debug_defrag:skip"}} {
             # make sure debug info is hidden
             set info [r info]
             assert_equal [getInfoProperty $info eventloop_duration_aof_sum] {}
+            assert_equal [getInfoProperty $info qos_eventloop_duration_max] {}
+            assert_equal [getInfoProperty $info qos_eventloop_cmd_per_cycle_max] {}
             set info_all [r info all]
             assert_equal [getInfoProperty $info_all eventloop_duration_aof_sum] {}
+            assert_equal [getInfoProperty $info_all qos_eventloop_duration_max] {}
+            assert_equal [getInfoProperty $info_all qos_eventloop_cmd_per_cycle_max] {}
 
             set info1 [r info debug]
 
@@ -369,6 +373,10 @@ start_server {tags {"info" "external:skip" "debug_defrag:skip"}} {
             assert {$cycle_max1 > 0}
             set duration_max1 [getInfoProperty $info1 eventloop_duration_max]
             assert {$duration_max1 > 0}
+            set qos_duration_max1 [getInfoProperty $info1 qos_eventloop_duration_max]
+            assert {$qos_duration_max1 >= 0}
+            set qos_cycle_max1 [getInfoProperty $info1 qos_eventloop_cmd_per_cycle_max]
+            assert {$qos_cycle_max1 >= 0}
 
             after 110 ;# hz is 10, wait for a cron tick.
             set info2 [r info debug]

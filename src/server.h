@@ -205,6 +205,8 @@ typedef enum {
     STATS_METRIC_EL_DURATION,             /* Eventloop duration. */
     STATS_METRIC_IO_WAIT,                 /* IO queue size */
     STATS_METRIC_MAIN_THREAD_ACTIVE_TIME, /* Main-thread active time */
+    STATS_METRIC_QOS_EL_CYCLE,            /* Number of QoS eventloop cycles per sec. */
+    STATS_METRIC_QOS_EL_DURATION,         /* QoS eventloop duration in microseconds. */
     STATS_METRIC_COUNT                    /* Total count */
 } instantaneous_metric_type;
 
@@ -1772,31 +1774,31 @@ struct valkeyServer {
     hashtable *commands;                              /* Command table */
     hashtable *orig_commands;                         /* Command table before command renaming. */
     sds command_response_cache[RESP_CACHE_INDEX_MAX]; /* Cached COMMAND response: [0]=RESP2, [1]=RESP3 */
-    aeEventLoop *el;
-    _Atomic(AeIoState) io_poll_state;    /* Indicates the state of the IO polling. */
-    int io_ae_fired_events;              /* Number of poll events received by the IO thread. */
-    rax *errors;                         /* Errors table */
-    volatile sig_atomic_t shutdown_asap; /* Shutdown ordered by signal handler. */
-    mstime_t shutdown_mstime;            /* Timestamp to limit graceful shutdown. */
-    int last_sig_received;               /* Indicates the last SIGNAL received, if any (e.g., SIGINT or SIGTERM). */
-    int shutdown_flags;                  /* Flags passed to prepareForShutdown(). */
-    int activerehashing;                 /* Incremental rehash in serverCron() */
-    int active_defrag_cpu_percent;       /* Current desired CPU percentage for active defrag */
-    char *pidfile;                       /* PID file path */
-    int arch_bits;                       /* 32 or 64 depending on sizeof(long) */
-    int cronloops;                       /* Number of times the cron function run */
-    char runid[CONFIG_RUN_ID_SIZE + 1];  /* ID always different at every exec. */
-    int sentinel_mode;                   /* True if this instance is a Sentinel. */
-    size_t initial_memory_usage;         /* Bytes used after initialization. */
-    int always_show_logo;                /* Show logo even for non-stdout logging. */
-    int in_exec;                         /* Are we inside EXEC? */
-    int busy_module_yield_flags;         /* Are we inside a busy module? (triggered by RM_Yield). see BUSY_MODULE_YIELD_ flags. */
-    const char *busy_module_yield_reply; /* When non-null, we are inside RM_Yield. */
-    char *ignore_warnings;               /* Config: warnings that should be ignored. */
-    int client_pause_in_transaction;     /* Was a client pause executed during this Exec? */
-    int server_del_keys_in_slot;         /* The server is deleting the keys in the dirty slot. */
-    int thp_enabled;                     /* If true, THP is enabled. */
-    size_t page_size;                    /* The page size of OS. */
+    aeEventLoop *el;                                  /* Main event loop */
+    _Atomic(AeIoState) io_poll_state;                 /* Indicates the state of the IO polling. */
+    int io_ae_fired_events;                           /* Number of poll events received by the IO thread. */
+    rax *errors;                                      /* Errors table */
+    volatile sig_atomic_t shutdown_asap;              /* Shutdown ordered by signal handler. */
+    mstime_t shutdown_mstime;                         /* Timestamp to limit graceful shutdown. */
+    int last_sig_received;                            /* Indicates the last SIGNAL received, if any (e.g., SIGINT or SIGTERM). */
+    int shutdown_flags;                               /* Flags passed to prepareForShutdown(). */
+    int activerehashing;                              /* Incremental rehash in serverCron() */
+    int active_defrag_cpu_percent;                    /* Current desired CPU percentage for active defrag */
+    char *pidfile;                                    /* PID file path */
+    int arch_bits;                                    /* 32 or 64 depending on sizeof(long) */
+    int cronloops;                                    /* Number of times the cron function run */
+    char runid[CONFIG_RUN_ID_SIZE + 1];               /* ID always different at every exec. */
+    int sentinel_mode;                                /* True if this instance is a Sentinel. */
+    size_t initial_memory_usage;                      /* Bytes used after initialization. */
+    int always_show_logo;                             /* Show logo even for non-stdout logging. */
+    int in_exec;                                      /* Are we inside EXEC? */
+    int busy_module_yield_flags;                      /* Are we inside a busy module? (triggered by RM_Yield). see BUSY_MODULE_YIELD_ flags. */
+    const char *busy_module_yield_reply;              /* When non-null, we are inside RM_Yield. */
+    char *ignore_warnings;                            /* Config: warnings that should be ignored. */
+    int client_pause_in_transaction;                  /* Was a client pause executed during this Exec? */
+    int server_del_keys_in_slot;                      /* The server is deleting the keys in the dirty slot. */
+    int thp_enabled;                                  /* If true, THP is enabled. */
+    size_t page_size;                                 /* The page size of OS. */
     /* Modules */
     dict *moduleapi;                   /* Exported core APIs dictionary for modules. */
     dict *sharedapi;                   /* Like moduleapi but containing the APIs that
@@ -1968,6 +1970,9 @@ struct valkeyServer {
      * Note that commands in transactions are also counted. */
     long long el_cmd_cnt_start;
     long long el_cmd_cnt_max;
+    /* Record the previous baseline and peak number of QoS commands executed in one QoS cycle. */
+    long long qos_el_cmd_cnt_prev;
+    long long qos_el_cmd_cnt_max;
     /* The sum of active-expire, active-defrag and all other tasks done by cron and beforeSleep,
        but excluding read, write and AOF, which are counted by other sets of metrics. */
     monotime el_cron_duration;
@@ -2011,9 +2016,10 @@ struct valkeyServer {
     double *latency_tracking_info_percentiles; /* Extended latency tracking info output percentile list configuration. */
     int latency_tracking_info_percentiles_len;
     unsigned int max_new_tls_conns_per_cycle; /* The maximum number of tls connections that will be accepted during each
-                                                 invocation of the event loop. */
+                                                    invocation of the event loop. */
     unsigned int max_new_conns_per_cycle;     /* The maximum number of tcp connections that will be accepted during each
-                                                 invocation of the event loop. */
+                                                    invocation of the event loop. */
+    int qos_preemptive_poll_interval_us;      /* QoS event loop preemptive poll interval in microseconds */
     /* AOF persistence */
     int aof_enabled;                    /* AOF configuration */
     int aof_state;                      /* AOF_(ON|OFF|WAIT_REWRITE) */

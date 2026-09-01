@@ -296,9 +296,9 @@ int test_reclaimFilePageCache(int argc, char **argv, int flags) {
 #if defined(__linux__)
     struct statfs stats;
 
-    /* Check if /tmp is memory-backed (e.g., tmpfs) */
+    /* fadvise(FADV_DONTNEED) has no effect on memory-backed filesystems */
     if (statfs("/tmp", &stats) == 0) {
-        if (stats.f_type != TMPFS_MAGIC) { // Not tmpfs, use /tmp
+        if (stats.f_type == TMPFS_MAGIC) {
             return 0;
         }
     }

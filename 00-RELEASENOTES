@@ -11,6 +11,47 @@ Upgrade urgency levels:
 | CRITICAL | There is a critical bug affecting MOST USERS. Upgrade ASAP.         |
 | SECURITY | There are security fixes in the release.                            |
 
+Valkey 9.0.6  -  Released Tue 01 September 2026
+-----------------------------------------------
+
+Upgrade urgency SECURITY: This release includes security fixes we recommend you apply as soon as possible.
+
+### Security Fixes
+* GHSA-jcj7-v34w-v9vv: Fix a use-after-free in RDMA connection handling that could allow an authenticated client to crash the server using CLIENT KILL. Only affects servers built with USE_RDMA and configured with an RDMA listener (#4534)
+
+### Bug Fixes
+* Fix crashes, assertion failures, and hangs when using RDMA together with IO threads by @quanyeyang (#3335)
+* Fix a double free when a module timer callback stops its own timer with ValkeyModule_StopTimer by @quanyeyang (#4211)
+* Fix torn RESP3 push frames when a client publishes a large message to a channel it is also subscribed to by @quanyeyang (#4253)
+* RESET now clears CLIENT IMPORT-SOURCE state so reused pooled connections regain normal key expiration semantics by @tjade273 (#3973)
+* Truncated AOF files now discard an incomplete MULTI block entirely, preventing loss of later writes after another restart by @chzhoo (#4342)
+* Fix an ACL bypass in GEORADIUS and GEORADIUSBYMEMBER where duplicate STORE options checked only the first destination key by @tjade273 (#3971)
+* Fix a use-after-free crash when a cluster message arrives for a message type registered by an unloaded module by @enjoy-binbin (#4360)
+* Always deep-validate payloads on RDB load and RESTORE, preventing deferred assertion crashes; sanitize-dump-payload is now a deprecated no-op by @jjuleslasarte (#3721)
+* Fix out-of-bounds memory access when registering or receiving cluster module messages of type 255, which is now a valid type by @enjoy-binbin (#4410)
+* AOF loading no longer applies ACL checks, preventing silent data loss when replaying commands with a disabled default user by @lukepalmer (#3984)
+* Fix a client memory accounting leak that inflated the mem_clients_normal INFO field on replicas after primary disconnects by @enjoy-binbin (#4395)
+* Fix a permanent client hang when a blocking command such as BLPOP is pipelined with a partially received next command by @foobar (#4531)
+* HGETEX now requires write permission on the key, so read-only ACL users can no longer change field TTLs or delete fields by @ranshid (#4576)
+* Compare the full TLS certificate CN when authenticating, so an embedded NUL cannot impersonate a truncated ACL username by @madolson (#4577)
+* Restore read performance with IO threads on TCP/TLS by applying extra read-completion handling only to RDMA connections by @quanyeyang (#4414)
+* Restore write performance with IO threads on TCP/TLS by limiting post-write safety checks to RDMA connections by @quanyeyang (#4452)
+* Fix atomic slot migration protocol errors with IO threads by not offloading export connection writes while snapshotting by @satheeshaGowda (#4104)
+* Reject invalid slot import ranges when loading an RDB, preventing corrupted files from creating bad migration state by @enjoy-binbin (#4229)
+* Reject RDB slot-import records with an invalid job name length, fixing an out-of-bounds read during startup by @quanyeyang (#4210)
+* Fix a crash when COPY ends with a bare DB token during slot migration, and block cross-DB COPY regardless of option order by @madolson (#4301)
+* HPERSIST, HTTL, HPTTL, HEXPIRETIME, and HPEXPIRETIME now return a syntax error when the FIELDS keyword is missing by @cjx-zar (#4300)
+* Fix a TLS and IO threads race that could leave slot migration export jobs stuck until timeout by @jjuleslasarte (#4320)
+* Fix a server crash when hash field expirations are set near the maximum timestamp, for example via HPEXPIREAT by @ranshid (#4312)
+* Fix a stack overflow crash on TLS connections when retrying a failed write of large replies by @murphyjacob4 (#4307)
+* Validate cluster bus PUBLISH and MODULE packet payload lengths, preventing a remote crash from forged length fields by @tjade273 (#3972)
+* Fix a use-after-free crash when serving blocked clients if handling one client frees another blocked on the same key by @quanyeyang (#4212)
+* Fix a server panic with IO threads when pipelined commands with a wrong number of arguments reached the key prefetcher by @madolson (#4302)
+* Reject crafted stream RESTORE and RDB payloads with inconsistent lengths or negative field counts that could crash the server by @madolson (#3922)
+* Reject stream payloads with mismatched live and deleted entry counts that could make XDEL destroy live entries by @roshkhatri (#4381)
+* Fix CLUSTER SLOT-STATS ORDERBY returning wrong ordering once cumulative slot counters differ by more than 2^31 by @jzy1688 (#4459)
+* Fix atomic slot migration failures with TLS and IO threads by not offloading export connection reads while snapshotting by @satheeshaGowda (#4559)
+
 Valkey 9.0.5  -  Released Tue 21 July 2026
 ------------------------------------------
 
@@ -394,6 +435,7 @@ as well as a whole host of new items as listed below.
 * jjuleslasarte @jjuleslasarte
 * Joe Heyburn @jdheyburn
 * Josh Soref @jsoref
+* jzy1688 @jzy1688
 * KarthikSubbarao @KarthikSubbarao
 * Katie Holly @Fusl
 * kronwerk @kronwerk
@@ -425,6 +467,7 @@ as well as a whole host of new items as listed below.
 * Roshan Khatri @roshkhatri
 * sananes @yaronsananes
 * Sarthak Aggarwal @sarthakaggarwal97
+* Satheesha CH Gowda @satheeshaGowda
 * Saurabh K @smkher
 * secwall @secwall
 * Sergey Kolosov @skolosov-snap
@@ -435,7 +478,9 @@ as well as a whole host of new items as listed below.
 * Stav Ben-Tov @stav-bentov
 * sushil paneru @sushilpaneru1
 * Thalia Archibald @thaliaarchi
+* Tjaden Hess @tjade273
 * Tony Wooster @twooster
+* Tristan Su @foobar
 * uriyage @uriyage
 * Vadym Khoptynets @poiuj
 * Viktor Söderqvist @zuiderkwast

@@ -1411,6 +1411,16 @@ static void updateAnnouncedClientTlsPort(clusterNode *node, int value) {
     clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG);
 }
 
+static void updateCommandLatencyStats(clusterNode *node, uint32_t current_rtt) {
+    node->max_round_trip_time = max(node->max_round_trip_time, current_rtt);
+
+    if (node->avg_round_trip_time == 0) {
+        node->avg_round_trip_time = current_rtt;
+    } else {
+        node->avg_round_trip_time = (node->avg_round_trip_time * server.load_factor_historic_rtt_latency + current_rtt) / server.sliding_window_length_rtt_latency_stats;
+    }
+}
+
 static void updateShardId(clusterNode *node, const char *shard_id) {
     /* Ensure replica shard IDs match their primary's to maintain cluster consistency.
      *
@@ -1842,6 +1852,7 @@ clusterLink *createClusterLink(clusterNode *node) {
         node->link = link;
     }
     link->flags = 0;
+    link->ping_echo_time = 0;
     return link;
 }
 
@@ -2043,6 +2054,8 @@ clusterNode *createClusterNode(char *nodename, int flags) {
     node->orphaned_time = 0;
     node->repl_offset = 0;
     node->is_node_healthy = 0;
+    node->max_round_trip_time = 0;
+    node->avg_round_trip_time = 0;
     node->replica_priority = 0;
     return node;
 }
@@ -3518,6 +3531,20 @@ writePortPingExtIfNonzero(uint32_t *totlen_ptr, clusterMsgPingExt **cursor_ptr, 
     return 1;
 }
 
+static uint32_t
+writePingTimeExtIfNonzero(uint32_t *totlen_ptr, clusterMsgPingExt **cursor_ptr, clusterMsgPingtypes type, uint64_t value) {
+    if (value == 0) return 0;
+    size_t size = getAlignedPingExtSize(sizeof(clusterMsgPingExtEchoTime));
+    if (*cursor_ptr != NULL) {
+        void *ext = preparePingExt(*cursor_ptr, type, size);
+        value = htonu64(value);
+        memcpy(ext, &value, sizeof(value));
+        *cursor_ptr = getNextPingExt(*cursor_ptr);
+    }
+    *totlen_ptr += size;
+    return 1;
+}
+
 /* 1. If a NULL hdr is provided, compute the extension size;
  * 2. If a non-NULL hdr is provided, write the ping
  *    extensions at the start of the cursor. This function
@@ -3548,6 +3575,40 @@ static uint32_t writePingExtensions(clusterMsg *hdr, int gossipcount) {
     extensions +=
         writeSdsPingExtIfNonempty(&totlen, &cursor, CLUSTERMSG_EXT_TYPE_AVAILABILITY_ZONE, myself->availability_zone);
 
+
+    if (server.cluster_nodes_latency_stats_enabled) {
+        if (hdr == NULL) {
+            totlen += sizeof(clusterMsgPingExt) + sizeof(clusterMsgPingExtEchoTime);
+            extensions++;
+        } else {
+            uint16_t msg_type = ntohs(hdr->type);
+
+            if (msg_type == CLUSTERMSG_TYPE_PING || msg_type == CLUSTERMSG_TYPE_MEET) {
+                // pass on fresh ts
+                uint64_t current_time = mstime();
+                extensions += writePingTimeExtIfNonzero(&totlen, &cursor, CLUSTERMSG_EXT_TYPE_PING_ECHO_TIME, current_time);
+            } else if (msg_type == CLUSTERMSG_TYPE_PONG) {
+                clusterNode *node = clusterLookupNode(hdr->sender, CLUSTER_NAMELEN);
+                if (node) {
+                    uint64_t extracted_echo_time = 0;
+                    clusterLink *active_link = NULL;
+
+                    if (node->inbound_link && node->inbound_link->ping_echo_time != 0) {
+                        active_link = node->inbound_link;
+                        extracted_echo_time = node->inbound_link->ping_echo_time;
+                    } else if (node->link && node->link->ping_echo_time != 0) {
+                        active_link = node->link;
+                        extracted_echo_time = node->link->ping_echo_time;
+                    }
+
+                    if (extracted_echo_time != 0) {
+                        extensions += writePingTimeExtIfNonzero(&totlen, &cursor, CLUSTERMSG_EXT_TYPE_PING_ECHO_TIME, extracted_echo_time);
+                        active_link->ping_echo_time = 0; // reset the echo time after sending it in PONG
+                    }
+                }
+            }
+        }
+    }
 
     /* Gossip forgotten nodes */
     if (dictSize(server.cluster->nodes_black_list) > 0) {
@@ -3620,6 +3681,10 @@ int clusterProcessPingExtensions(clusterMsg *hdr, clusterLink *link) {
     int ext_clienttlsport = 0;
     char *ext_shardid = NULL;
     unsigned int ext_replica_priority = 0;
+    uint32_t round_trip_time = 0;
+    uint64_t ping_echo_time = 0;
+
+
     uint16_t extensions = ntohs(hdr->extensions);
     /* Loop through all the extensions and process them */
     clusterMsgPingExt *ext = getInitialPingExt(hdr, ntohs(hdr->count));
@@ -3673,6 +3738,11 @@ int clusterProcessPingExtensions(clusterMsg *hdr, clusterLink *link) {
         } else if (type == CLUSTERMSG_EXT_TYPE_REPLICA_PRIORITY) {
             clusterMsgPingExtReplicaPriority *priority_ext = (clusterMsgPingExtReplicaPriority *)&(ext->ext[0].replica_priority);
             ext_replica_priority = ntohl(priority_ext->replica_priority);
+        } else if (type == CLUSTERMSG_EXT_TYPE_PING_ECHO_TIME) {
+            clusterMsgPingExtEchoTime *ping_echo_time_ext =
+                (clusterMsgPingExtEchoTime *)&(ext->ext[0].ping_echo_time);
+            if (link)
+                link->ping_echo_time = ping_echo_time_ext->ping_echo_time;
         } else {
             /* Unknown type, we will ignore it but log what happened. */
             serverLog(LL_WARNING, "Received unknown extension type %d", type);
@@ -4595,6 +4665,17 @@ int clusterProcessPacket(clusterLink *link) {
             if (!clusterProcessGossipSection(msg, link)) return 0;
             if (!clusterProcessPingExtensions(msg, link)) return 0;
         }
+
+        if (type == CLUSTERMSG_TYPE_PONG && link && link->ping_echo_time != 0) {
+            uint64_t echo_time_bytes = ntohu64(link->ping_echo_time);
+            mstime_t current_rtt = mstime() - (mstime_t)echo_time_bytes;
+            if (link->node) {
+                updateCommandLatencyStats(link->node, current_rtt);
+            }
+            link->ping_echo_time = 0; /* Clear immediately */
+        }
+
+
     } else if (type == CLUSTERMSG_TYPE_FAIL) {
         clusterNode *failing;
 
@@ -7498,6 +7579,19 @@ void addNodeDetailsToShardReply(client *c, clusterNode *node) {
         addReplyBulkCString(c, "availability-zone");
         addReplyBulkCBuffer(c, node->availability_zone, sdslen(node->availability_zone));
         reply_count++;
+    }
+
+    if (server.cluster_nodes_latency_stats_enabled) {
+        // if (node->max_round_trip_time) {
+        addReplyBulkCString(c, "max-round-trip-time");
+        addReplyLongLong(c, node->max_round_trip_time);
+        reply_count++;
+        // }
+        // if (node->avg_round_trip_time) {
+        addReplyBulkCString(c, "avg-round-trip-time");
+        addReplyLongLong(c, node->avg_round_trip_time);
+        reply_count++;
+        // }
     }
 
     setDeferredMapLen(c, node_replylen, reply_count);

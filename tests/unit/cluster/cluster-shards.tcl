@@ -83,6 +83,51 @@ proc cluster_ensure_master {id} {
     }
 }
 
+
+start_cluster 4 5 {tags {external:skip cluster} overrides {cluster-allow-replica-migration no cluster-nodes-latency-stats-enabled yes} } {
+
+set ::cluster_master_nodes 4
+set ::cluster_replica_nodes 4
+
+test "Cluster should start ok with latency metrics flag enabled" {
+    wait_for_cluster_state ok
+}
+
+test "Verify latency metrics are present per node in CLUSTER SHARDS output" {
+    
+    
+    for {set i 0} {$i < $::cluster_master_nodes} {incr i} {
+        catch {R $i SET "testkey-$i" "value-$i"}
+        catch {R $i GET "testkey-$i"}
+    }
+
+    for {set i 0} {$i < $::cluster_master_nodes + $::cluster_replica_nodes} {incr i} {
+
+        set shards [R $i CLUSTER SHARDS]
+
+        # Print the raw structure to your terminal log
+        puts "=== NODE $i CLUSTER SHARDS OUTPUT ==="
+        puts $shards
+        puts "====================================="
+
+        foreach shard $shards {
+        
+        set shard_dict [dict create {*}$shard]
+        assert {[dict exists $shard_dict nodes]}
+
+        set nodes_list [dict get $shard_dict nodes]
+
+        foreach node_data $nodes_list {
+            set node_dict [dict create {*}$node_data]
+            assert {[dict exists $node_dict "max-round-trip-time"]}
+            assert {[dict exists $node_dict "avg-round-trip-time"]} 
+        }
+        }
+    }
+}
+} split_slot_allocation split_slot_replica_allocation
+#
+#
 # start_cluster 4 masters + 5 nodes (4 replicas + 1 standalone R8)
 # Disable automatic replica migration: this block manually attaches an extra
 # replica (R8) to a primary, which would otherwise let a replica migrate to a

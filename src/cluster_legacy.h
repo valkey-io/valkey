@@ -41,6 +41,7 @@ typedef struct clusterLink {
     clusterNode *node;                     /* Node related to this link. Initialized to NULL when unknown */
     int inbound;                           /* 1 if this link is an inbound link accepted from the related node */
     int flags;                             /* CLUSTER_LINK_... */
+    uint64_t ping_echo_time;               /* The ping echo time received from the remote node, in milliseconds.*/
 } clusterLink;
 
 /* Cluster link flags and macros. */
@@ -179,6 +180,7 @@ typedef enum {
     CLUSTERMSG_EXT_TYPE_CLIENT_TLS_PORT,
     CLUSTERMSG_EXT_TYPE_AVAILABILITY_ZONE,
     CLUSTERMSG_EXT_TYPE_REPLICA_PRIORITY,
+    CLUSTERMSG_EXT_TYPE_PING_ECHO_TIME
 } clusterMsgPingtypes;
 
 /* Helper function for making sure extensions are eight byte aligned. */
@@ -228,6 +230,10 @@ typedef struct {
 } clusterMsgPingExtReplicaPriority;
 
 typedef struct {
+    uint64_t ping_echo_time; /* The ping echo time, in milliseconds. */
+} clusterMsgPingExtEchoTime;
+
+typedef struct {
     uint32_t length; /* Total length of this extension message (including this header) */
     uint16_t type;   /* Type of this extension message (see clusterMsgPingtypes) */
     uint16_t unused; /* 16 bits of padding to make this structure 8 byte aligned. */
@@ -242,6 +248,7 @@ typedef struct {
         clusterMsgPingExtClientTlsPort announce_client_tls_port;
         clusterMsgPingExtAvailabilityZone availability_zone;
         clusterMsgPingExtReplicaPriority replica_priority;
+        clusterMsgPingExtEchoTime ping_echo_time;
     } ext[]; /* Actual extension information, formatted so that the data is 8
               * byte aligned, regardless of its content. */
 } clusterMsgPingExt;
@@ -427,6 +434,8 @@ struct _clusterNode {
     int is_node_healthy;                    /* Boolean indicating the cached node health.
                                                Update with updateAndCountChangedNodeHealth(). */
     unsigned int replica_priority;          /* Replica priority used for auto failover ranking. */
+    uint32_t max_round_trip_time;           /* The maximum round trip time (in milliseconds) measured for this node. */
+    uint32_t avg_round_trip_time;           /* The average round trip time (in milliseconds) measured for this node. */
 };
 
 /* Struct used for storing slot statistics. */

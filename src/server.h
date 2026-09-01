@@ -2317,6 +2317,12 @@ struct valkeyServer {
                                                             * the cluster after it is forgotten with CLUSTER FORGET. */
     sds hash_seed;                                         /* Configurable DB hash seed */
     int cluster_slot_stats_enabled;                        /* Cluster slot usage statistics tracking enabled. */
+    int cluster_nodes_latency_stats_enabled;               /* 1 if latency statistics for cluster nodes are enabled, 0 otherwise. */
+
+    int sliding_window_length_rtt_latency_stats;           /* The length of the sliding window used to track RTT latency stats for cluster nodes. */
+    int load_factor_historic_rtt_latency;                  /* load factor to determine how much historic RTT latency data should affect the avg latency(EMA) for cluster nodes. */
+
+    int cluster_slot_stats_enabled;                        /* Cluster slot usage statistics tracking enabled. */
     mstime_t cluster_mf_timeout;                           /* Milliseconds to do a manual failover. */
     unsigned int cluster_replica_priority;                 /* Replica priority from cluster-replica-priority. */
     unsigned long cluster_slot_migration_log_max_len;      /* Maximum count of migrations to display in the

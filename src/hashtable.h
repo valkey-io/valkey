@@ -91,14 +91,9 @@ typedef enum {
 
 typedef void (*hashtableScanFunction)(void *privdata, void *entry);
 
-typedef struct {
-    const void *key;
-    void *entry;
-    bool found;
-} hashtableFindBatchItem;
-
 /* Constants */
 #define HASHTABLE_BUCKET_SIZE 64 /* bytes, the most common cache line size */
+#define HASHTABLE_FIND_BATCH_MAX_SIZE 32 /* Limited by the result bitmap size. */
 
 /* Scan flags */
 #define HASHTABLE_SCAN_EMIT_REF (1 << 0)
@@ -150,6 +145,7 @@ void hashtableSetCanAbortShrink(bool can_abort);
 
 /* Entries */
 bool hashtableFind(hashtable *ht, const void *key, void **found);
+uint32_t hashtableFindBatch(hashtable *ht, int numkeys, const void **keys, void **found_entries);
 void **hashtableFindRef(hashtable *ht, const void *key);
 bool hashtableAdd(hashtable *ht, void *entry);
 bool hashtableAddOrFind(hashtable *ht, void *entry, void **existing);
@@ -163,7 +159,6 @@ bool hashtableReplaceReallocatedEntry(hashtable *ht, const void *old_entry, void
 void hashtableIncrementalFindInit(hashtableIncrementalFindState *state, hashtable *ht, const void *key);
 bool hashtableIncrementalFindStep(hashtableIncrementalFindState *state);
 bool hashtableIncrementalFindGetResult(hashtableIncrementalFindState *state, void **found);
-uint32_t hashtableFindBatch(hashtable *ht, int numkeys, const void **keys, void **found_entries);
 
 /* Iteration & scan */
 size_t hashtableScan(hashtable *ht, size_t cursor, hashtableScanFunction fn, void *privdata);

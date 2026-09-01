@@ -78,10 +78,9 @@ start_server {
         assert_match {*ERR*wrong*number*arg*} $e
     }
 
+    set original_max [lindex [r config get set-max-listpack-entries] 1]
+    r config set set-max-listpack-entries 0
     test {SMISMEMBER uses hashtable batch lookup} {
-        set original_max [lindex [r config get set-max-listpack-entries] 1]
-        r config set set-max-listpack-entries 0
-
         r del smismembertest
         for {set i 1} {$i <= 128} {incr i} {
             r sadd smismembertest [format "m%02d" $i]
@@ -98,9 +97,8 @@ start_server {
             lappend expected 1
         }
         assert_equal $expected [r smismember smismembertest {*}$members]
-
-        r config set set-max-listpack-entries $original_max
     }
+    r config set set-max-listpack-entries $original_max
 
     test {SADD against non set} {
         r lpush mylist foo

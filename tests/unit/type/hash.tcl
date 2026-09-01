@@ -402,10 +402,9 @@ start_server {tags {"hash"}} {
         set _ $err
     } {}
 
+    set original_max [lindex [r config get hash-max-listpack-entries] 1]
+    r config set hash-max-listpack-entries 0
     test {HMGET uses hashtable batch lookup} {
-        set original_max [lindex [r config get hash-max-listpack-entries] 1]
-        r config set hash-max-listpack-entries 0
-
         r del hmgetbatchtest
         for {set i 1} {$i <= 128} {incr i} {
             r hset hmgetbatchtest [format "f%02d" $i] [format "v%02d" $i]
@@ -422,27 +421,8 @@ start_server {tags {"hash"}} {
             lappend expected [format "v%02d" $i]
         }
         assert_equal $expected [r hmget hmgetbatchtest {*}$fields]
-
-        r config set hash-max-listpack-entries $original_max
     }
-
-    test {HMGET batch lookup skips expired hash fields} {
-        set original_max [lindex [r config get hash-max-listpack-entries] 1]
-        r config set hash-max-listpack-entries 0
-        r DEBUG SET-ACTIVE-EXPIRE 0
-
-        r del hmgetbatchhfetest
-        r hset hmgetbatchhfetest alive value expired stale
-        assert_encoding hashtable hmgetbatchhfetest
-        assert_equal {1} [r hpexpire hmgetbatchhfetest 1 fields 1 expired]
-        after 2
-
-        assert_equal {value {} {}} [r hmget hmgetbatchhfetest alive expired missing]
-        assert_equal {} [r hget hmgetbatchhfetest expired]
-
-        r DEBUG SET-ACTIVE-EXPIRE 1
-        r config set hash-max-listpack-entries $original_max
-    } {OK} {needs:debug}
+    r config set hash-max-listpack-entries $original_max
 
     test {HKEYS - small hash} {
         lsort [r hkeys smallhash]

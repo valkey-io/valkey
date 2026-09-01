@@ -3139,21 +3139,24 @@ void zscoreCommand(client *c) {
 }
 
 #define ZMSCORE_FIND_BATCH_SIZE 16
+static_assert(ZMSCORE_FIND_BATCH_SIZE <= HASHTABLE_FIND_BATCH_MAX_SIZE,
+              "ZMSCORE batch size exceeds hashtable batch lookup limit");
 
 static void zmscoreReplyWithHashtable(client *c, hashtable *ht, robj **members, size_t count) {
-    hashtableFindBatchItem items[ZMSCORE_FIND_BATCH_SIZE];
+    const void *keys[ZMSCORE_FIND_BATCH_SIZE];
+    void *found_entries[ZMSCORE_FIND_BATCH_SIZE];
     while (count) {
         size_t batch = count > ZMSCORE_FIND_BATCH_SIZE ? ZMSCORE_FIND_BATCH_SIZE : count;
 
         for (size_t i = 0; i < batch; i++) {
-            items[i].key = objectGetVal(members[i]);
+            keys[i] = objectGetVal(members[i]);
         }
 
-        hashtableFindBatch(ht, items, batch);
+        uint32_t result = hashtableFindBatch(ht, (int)batch, keys, found_entries);
 
         for (size_t i = 0; i < batch; i++) {
-            if (items[i].found) {
-                zskiplistNode *node = items[i].entry;
+            if ((result >> i) & 1) {
+                zskiplistNode *node = found_entries[i];
                 addReplyDouble(c, node->score);
             } else {
                 addReplyNull(c);
@@ -3162,21 +3165,6 @@ static void zmscoreReplyWithHashtable(client *c, hashtable *ht, robj **members, 
 
         members += batch;
         count -= batch;
-    }
-}
-
-static void zmscoreReply(client *c, robj *zobj, robj **members, size_t count) {
-    addReplyArrayLen(c, count);
-
-    /* Prefer hashtable batch lookup to improve performance. */
-    if (zobj->encoding == OBJ_ENCODING_SKIPLIST && count > 1) {
-        zset *zs = objectGetVal(zobj);
-        zmscoreReplyWithHashtable(c, zs->ht, members, count);
-        return;
-    }
-
-    for (size_t i = 0; i < count; i++) {
-        zscoreReply(c, zobj, members[i]);
     }
 }
 
@@ -3194,7 +3182,19 @@ void zmscoreCommand(client *c) {
     }
     if (checkType(c, zobj, OBJ_ZSET)) return;
 
-    zmscoreReply(c, zobj, c->argv + 2, c->argc - 2);
+    size_t count = c->argc - 2;
+    addReplyArrayLen(c, count);
+
+    /* Prefer hashtable batch lookup to improve performance. */
+    if (zobj->encoding == OBJ_ENCODING_SKIPLIST && count > 1) {
+        zset *zs = objectGetVal(zobj);
+        zmscoreReplyWithHashtable(c, zs->ht, c->argv + 2, count);
+        return;
+    }
+
+    for (size_t i = 0; i < count; i++) {
+        zscoreReply(c, zobj, c->argv[i + 2]);
+    }
 }
 
 void zrankGenericCommand(client *c, int reverse) {

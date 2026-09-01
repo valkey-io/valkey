@@ -701,42 +701,31 @@ void smoveCommand(client *c) {
 }
 
 #define SMISMEMBER_FIND_BATCH_SIZE 16
+static_assert(SMISMEMBER_FIND_BATCH_SIZE <= HASHTABLE_FIND_BATCH_MAX_SIZE,
+              "SMISMEMBER batch size exceeds hashtable batch lookup limit");
 
 static void sismemberReply(client *c, robj *set, robj *member) {
     addReply(c, setTypeIsMember(set, objectGetVal(member)) ? shared.cone : shared.czero);
 }
 
 static void smismemberReplyWithHashtable(client *c, hashtable *ht, robj **members, size_t count) {
-    hashtableFindBatchItem items[SMISMEMBER_FIND_BATCH_SIZE];
+    const void *keys[SMISMEMBER_FIND_BATCH_SIZE];
+    void *found_entries[SMISMEMBER_FIND_BATCH_SIZE];
     while (count) {
         size_t batch = count > SMISMEMBER_FIND_BATCH_SIZE ? SMISMEMBER_FIND_BATCH_SIZE : count;
 
         for (size_t i = 0; i < batch; i++) {
-            items[i].key = objectGetVal(members[i]);
+            keys[i] = objectGetVal(members[i]);
         }
 
-        hashtableFindBatch(ht, items, batch);
+        uint32_t result = hashtableFindBatch(ht, (int)batch, keys, found_entries);
 
         for (size_t i = 0; i < batch; i++) {
-            addReply(c, items[i].found ? shared.cone : shared.czero);
+            addReply(c, (result >> i) & 1 ? shared.cone : shared.czero);
         }
 
         members += batch;
         count -= batch;
-    }
-}
-
-static void smismemberReply(client *c, robj *set, robj **members, size_t count) {
-    addReplyArrayLen(c, count);
-
-    /* Prefer hashtable batch lookup to improve performance. */
-    if (set->encoding == OBJ_ENCODING_HASHTABLE && count > 1) {
-        smismemberReplyWithHashtable(c, objectGetVal(set), members, count);
-        return;
-    }
-
-    for (size_t i = 0; i < count; i++) {
-        sismemberReply(c, set, members[i]);
     }
 }
 
@@ -763,7 +752,18 @@ void smismemberCommand(client *c) {
     }
     if (checkType(c, set, OBJ_SET)) return;
 
-    smismemberReply(c, set, c->argv + 2, c->argc - 2);
+    size_t count = c->argc - 2;
+    addReplyArrayLen(c, count);
+
+    /* Prefer hashtable batch lookup to improve performance. */
+    if (set->encoding == OBJ_ENCODING_HASHTABLE && count > 1) {
+        smismemberReplyWithHashtable(c, objectGetVal(set), c->argv + 2, count);
+        return;
+    }
+
+    for (size_t i = 0; i < count; i++) {
+        sismemberReply(c, set, c->argv[i + 2]);
+    }
 }
 
 void scardCommand(client *c) {

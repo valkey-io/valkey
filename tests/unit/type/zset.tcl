@@ -1755,10 +1755,9 @@ start_server {tags {"zset"}} {
         r zmscore zmscoretest x
     } {10}
 
+    set original_max [lindex [r config get zset-max-listpack-entries] 1]
+    r config set zset-max-listpack-entries 0
     test {ZMSCORE uses hashtable batch lookup} {
-        set original_max [lindex [r config get zset-max-listpack-entries] 1]
-        r config set zset-max-listpack-entries 0
-
         r del zmscoretest
         for {set i 1} {$i <= 128} {incr i} {
             r zadd zmscoretest $i [format "m%02d" $i]
@@ -1775,9 +1774,8 @@ start_server {tags {"zset"}} {
             lappend expected $i
         }
         assert_equal $expected [r zmscore zmscoretest {*}$members]
-
-        r config set zset-max-listpack-entries $original_max
     }
+    r config set zset-max-listpack-entries $original_max
 
     test {ZMSCORE retrieve requires one or more members} {
         r del zmscoretest

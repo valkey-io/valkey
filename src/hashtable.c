@@ -1990,37 +1990,35 @@ bool hashtableIncrementalFindGetResult(hashtableIncrementalFindState *state, voi
     }
 }
 
-#define HASHTABLE_FIND_BATCH_SIZE 16
-
 /* Provides batch lookup. Compared with serial single-key lookups, it can improve
- * performance by parallelizing memory accesses. */
-void hashtableFindBatch(hashtable *ht, hashtableFindBatchItem *items, size_t count) {
-    if (count == 0) return;
+ * performance by parallelizing memory accesses. Each bit in the returned bitmap
+ * indicates whether the key at the same index was found. */
+uint32_t hashtableFindBatch(hashtable *ht, int numkeys, const void **keys, void **found_entries) {
+    assert(numkeys >= 0 && numkeys <= HASHTABLE_FIND_BATCH_MAX_SIZE);
+    if (numkeys == 0) return 0;
 
     rehashStepOnReadIfNeeded(ht);
 
-    hashtableIncrementalFindState states[HASHTABLE_FIND_BATCH_SIZE];
-    for (size_t base = 0; base < count; base += HASHTABLE_FIND_BATCH_SIZE) {
-        size_t batch = count - base;
-        if (batch > HASHTABLE_FIND_BATCH_SIZE) batch = HASHTABLE_FIND_BATCH_SIZE;
+    hashtableIncrementalFindState states[numkeys];
+    for (int i = 0; i < numkeys; i++) {
+        hashtableIncrementalFindInit(&states[i], ht, keys[i]);
+    }
 
-        for (size_t i = 0; i < batch; i++) {
-            hashtableIncrementalFindInit(&states[i], ht, items[base + i].key);
+    size_t incomplete;
+    do {
+        incomplete = 0;
+        for (int i = 0; i < numkeys; i++) {
+            incomplete += hashtableIncrementalFindStep(&states[i]);
         }
+    } while (incomplete != 0);
 
-        size_t incomplete;
-        do {
-            incomplete = 0;
-            for (size_t i = 0; i < batch; i++) {
-                incomplete += hashtableIncrementalFindStep(&states[i]);
-            }
-        } while (incomplete != 0);
-
-        for (size_t i = 0; i < batch; i++) {
-            items[base + i].entry = NULL;
-            items[base + i].found = hashtableIncrementalFindGetResult(&states[i], &items[base + i].entry);
+    uint32_t result = 0;
+    for (int i = 0; i < numkeys; i++) {
+        if (hashtableIncrementalFindGetResult(&states[i], &found_entries[i])) {
+            result |= (uint32_t)1 << i;
         }
     }
+    return result;
 }
 
 /* --- Scan --- */

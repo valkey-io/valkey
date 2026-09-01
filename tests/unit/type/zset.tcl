@@ -1763,7 +1763,7 @@ start_server {tags {"zset"}} {
             r zadd zmscoretest $i [format "m%02d" $i]
         }
 
-        assert_encoding skiplist zmscoretest
+        assert_encoding btree zmscoretest
         assert_equal {1} [r zmscore zmscoretest m01]
         assert_equal {1 {} 1 4} [r zmscore zmscoretest m01 missing m01 m04]
 

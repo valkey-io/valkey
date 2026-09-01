@@ -1100,7 +1100,7 @@ static void addHashFieldToReply(client *c, robj *o, sds field) {
 static_assert(HMGET_FIND_BATCH_SIZE <= HASHTABLE_FIND_BATCH_MAX_SIZE,
               "HMGET batch size exceeds hashtable batch lookup limit");
 
-static void addHashEntryToReply(client *c, void *hash_entry) {
+static void addHashEntryToReply(client *c, const entry *hash_entry) {
     if (hash_entry == NULL) {
         addReplyNull(c);
         return;

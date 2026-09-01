@@ -3148,16 +3148,25 @@ static void zmscoreReplyWithHashtable(client *c, hashtable *ht, robj **members, 
     while (count) {
         size_t batch = count > ZMSCORE_FIND_BATCH_SIZE ? ZMSCORE_FIND_BATCH_SIZE : count;
 
+        /* The same SDS may appear more than once, so only mark it once. */
         for (size_t i = 0; i < batch; i++) {
-            keys[i] = objectGetVal(members[i]);
+            sds member = objectGetVal(members[i]);
+            if (!zsetIsLookupKey(member)) zsetMarkLookupKey(member);
+            keys[i] = member;
         }
 
         uint32_t result = hashtableFindBatch(ht, (int)batch, keys, found_entries);
 
+        /* Unmark each SDS once; later duplicates are already unmarked. */
+        for (size_t i = 0; i < batch; i++) {
+            sds member = objectGetVal(members[i]);
+            if (zsetIsLookupKey(member)) zsetUnmarkLookupKey(member);
+        }
+
         for (size_t i = 0; i < batch; i++) {
             if ((result >> i) & 1) {
-                zskiplistNode *node = found_entries[i];
-                addReplyDouble(c, node->score);
+                OrderedIndexItem *node = found_entries[i];
+                addReplyDouble(c, orderedIndexItemGetScore(node));
             } else {
                 addReplyNull(c);
             }
@@ -3186,7 +3195,7 @@ void zmscoreCommand(client *c) {
     addReplyArrayLen(c, count);
 
     /* Prefer hashtable batch lookup to improve performance. */
-    if (zobj->encoding == OBJ_ENCODING_SKIPLIST && count > 1) {
+    if (zobj->encoding == OBJ_ENCODING_BTREE && count > 1) {
         zset *zs = objectGetVal(zobj);
         zmscoreReplyWithHashtable(c, zs->ht, c->argv + 2, count);
         return;

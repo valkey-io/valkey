@@ -1121,6 +1121,7 @@ static int clusterSaveConfigImpl(sds content, bool from_bio, bool do_fsync) {
     size_t content_size, offset = 0;
     ssize_t written_bytes;
     int fd = -1;
+    int close_errno = 0;
     int retval = C_ERR;
     mstime_t latency;
     content_size = sdslen(content);
@@ -1158,6 +1159,22 @@ static int clusterSaveConfigImpl(sds content, bool from_bio, bool do_fsync) {
         latencyEndMonitor(latency);
         if (!from_bio) latencyAddSampleIfNeeded("cluster-config-fsync", latency);
         if (!from_bio) latencyTraceIfNeeded(cluster, cluster_config_fsync, latency);
+    }
+
+    /* Close the temp file before publishing it with rename(). A write error the
+     * kernel deferred is reported by close() and by nothing before it, so a
+     * truncated temp file would otherwise be renamed over a good nodes.conf,
+     * and clusterLoadConfig() panics on a corrupt file at the next start.
+     * ACLSaveToFile() closes before renaming for the same reason. */
+    latencyStartMonitor(latency);
+    close_errno = close(fd) == -1 ? errno : 0;
+    fd = -1;
+    latencyEndMonitor(latency);
+    if (!from_bio) latencyAddSampleIfNeeded("cluster-config-close", latency);
+    if (!from_bio) latencyTraceIfNeeded(cluster, cluster_config_close, latency);
+    if (close_errno) {
+        serverLog(LL_WARNING, "Could not close tmp cluster config file %s: %s", tmpfilename, strerror(close_errno));
+        goto cleanup;
     }
 
     latencyStartMonitor(latency);

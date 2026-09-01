@@ -125,6 +125,12 @@ proc remove_nodes_conf_folder {srv_idx} {
     exec rm -rf $cluster_conf_path
 }
 
+# The temp files a save leaves behind, if any. A save writes one and renames it
+# over the cluster config file, so none should survive a completed save.
+proc leftover_nodes_conf_tmp_files {srv_idx} {
+    return [glob -nocomplain "[get_nodes_conf_path $srv_idx].tmp-*"]
+}
+
 start_cluster 1 1 {tags {external:skip cluster} overrides {cluster-config-save-behavior sync}} {
     test {cluster-config-save-behavior sync mode - node exits when config save fails} {
         # Create folder that can cause the rename fail.
@@ -199,6 +205,13 @@ start_cluster 1 1 {tags {external:skip cluster} overrides {cluster-config-save-b
         assert_equal [count_log_message 0 "Cluster config updated even though writing the cluster config file to disk failed"] 1
         assert_morethan_equal [count_log_message -1 "Could not rename tmp cluster config file"] 2
         assert_equal [count_log_message -1 "Cluster config updated even though writing the cluster config file to disk failed"] 1
+
+        # A node whose renames keep failing must not accumulate temp files. This
+        # holds before this commit too; it is here to keep the invariant from
+        # regressing as the save path is reordered. The bio jobs were drained
+        # above, so no save is still in flight.
+        assert_equal {} [leftover_nodes_conf_tmp_files 0]
+        assert_equal {} [leftover_nodes_conf_tmp_files 1]
 
         # Check the info field is err.
         assert_equal "err" [getInfoProperty [R 0 cluster info] cluster_config_save_status]

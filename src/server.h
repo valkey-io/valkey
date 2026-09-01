@@ -648,7 +648,7 @@ typedef enum {
 /* Cluster persist config mode. */
 typedef enum {
     CLUSTER_CONFIGFILE_SAVE_BEHAVIOR_SYNC = 0,    /* Perform a synchronous save, exit the process if it fails. */
-    CLUSTER_CONFIGFILE_SAVE_BEHAVIOR_BEST_EFFORT, /* Attempt to save on a "best-effort" basis, process will not exit if it fails. */
+    CLUSTER_CONFIGFILE_SAVE_BEHAVIOR_BEST_EFFORT, /* Save asynchronously via BIO thread on a "best-effort" basis, process will not exit if it fails. */
 } cluster_persist_config_mode;
 
 /* RDB active child save type. */
@@ -2284,6 +2284,8 @@ struct valkeyServer {
     int cluster_message_gossip_perc;                       /* A configuration for setting the percentage of peer nodes to be gossiped in ping/pong messages. */
     char *cluster_configfile;                              /* Cluster auto-generated config file name. */
     int cluster_configfile_save_behavior;                  /* Cluster config file save behavior. */
+    _Atomic(int) cluster_config_save_status;               /* Status of cluster config save. */
+    _Atomic(time_t) cluster_config_last_save_time;         /* Unix time of last successful cluster config save. */
     struct clusterState *cluster;                          /* State of the cluster */
     int cluster_migration_barrier;                         /* Cluster replicas migration barrier. */
     int cluster_allow_replica_migration;                   /* Automatic replica migrations to orphaned primaries and from empty primaries */

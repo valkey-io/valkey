@@ -44,6 +44,7 @@
 #include "endianconv.h"
 #include "connection.h"
 #include "module.h"
+#include "bio.h"
 
 #include <stdlib.h>
 #include <sys/types.h>
@@ -1083,6 +1084,16 @@ fmterr:
     serverPanic("Unrecoverable error: corrupted cluster config file \"%s\".", line);
 }
 
+/* Get the nodes description and concatenate our "vars" directive to
+ * save currentEpoch and lastVoteEpoch. */
+static sds clusterGenNodesConfContent(void) {
+    sds content = clusterGenNodesDescription(NULL, CLUSTER_NODE_HANDSHAKE, 0);
+    content = sdscatfmt(content, "vars currentEpoch %U lastVoteEpoch %U\n",
+                        (unsigned long long)server.cluster->currentEpoch,
+                        (unsigned long long)server.cluster->lastVoteEpoch);
+    return content;
+}
+
 /* Cluster node configuration is exactly the same as CLUSTER NODES output.
  *
  * This function writes the node config and returns C_OK, on error C_ERR
@@ -1094,24 +1105,21 @@ fmterr:
  * new one. Since we have the full payload to write available we can use
  * a single write to write the whole file. If the preexisting file was
  * bigger we pad our payload with newlines that are anyway ignored and truncate
- * the file afterward. */
-int clusterSaveConfig(int do_fsync) {
-    sds ci, tmpfilename;
+ * the file afterward.
+ *
+ * This function will be called by either the main thread or a bio thread.
+ * When called from a bio thread, latency is not recorded because it is not
+ * thread-safe.
+ *
+ * This function take ownership of the 'content' SDS string and will free it. */
+static int clusterSaveConfigImpl(sds content, bool from_bio, bool do_fsync) {
+    sds tmpfilename;
     size_t content_size, offset = 0;
     ssize_t written_bytes;
     int fd = -1;
     int retval = C_ERR;
     mstime_t latency;
-
-    server.cluster->todo_before_sleep &= ~CLUSTER_TODO_SAVE_CONFIG;
-
-    /* Get the nodes description and concatenate our "vars" directive to
-     * save currentEpoch and lastVoteEpoch. */
-    ci = clusterGenNodesDescription(NULL, CLUSTER_NODE_HANDSHAKE, 0);
-    ci = sdscatfmt(ci, "vars currentEpoch %U lastVoteEpoch %U\n",
-                   (unsigned long long)server.cluster->currentEpoch,
-                   (unsigned long long)server.cluster->lastVoteEpoch);
-    content_size = sdslen(ci);
+    content_size = sdslen(content);
 
     /* Create a temp file with the new content. */
     tmpfilename = sdscatfmt(sdsempty(), "%s.tmp-%i-%I", server.cluster_configfile, (int)getpid(), mstime());
@@ -1121,11 +1129,11 @@ int clusterSaveConfig(int do_fsync) {
         goto cleanup;
     }
     latencyEndMonitor(latency);
-    latencyAddSampleIfNeeded("cluster-config-open", latency);
-    latencyTraceIfNeeded(cluster, cluster_config_open, latency);
+    if (!from_bio) latencyAddSampleIfNeeded("cluster-config-open", latency);
+    if (!from_bio) latencyTraceIfNeeded(cluster, cluster_config_open, latency);
     latencyStartMonitor(latency);
     while (offset < content_size) {
-        written_bytes = write(fd, ci + offset, content_size - offset);
+        written_bytes = write(fd, content + offset, content_size - offset);
         if (written_bytes <= 0) {
             if (errno == EINTR) continue;
             serverLog(LL_WARNING, "Failed after writing (%zd) bytes to tmp cluster config file: %s", offset,
@@ -1135,18 +1143,17 @@ int clusterSaveConfig(int do_fsync) {
         offset += written_bytes;
     }
     latencyEndMonitor(latency);
-    latencyAddSampleIfNeeded("cluster-config-write", latency);
-    latencyTraceIfNeeded(cluster, cluster_config_write, latency);
+    if (!from_bio) latencyAddSampleIfNeeded("cluster-config-write", latency);
+    if (!from_bio) latencyTraceIfNeeded(cluster, cluster_config_write, latency);
     if (do_fsync) {
         latencyStartMonitor(latency);
-        server.cluster->todo_before_sleep &= ~CLUSTER_TODO_FSYNC_CONFIG;
         if (valkey_fsync(fd) == -1) {
             serverLog(LL_WARNING, "Could not sync tmp cluster config file: %s", strerror(errno));
             goto cleanup;
         }
         latencyEndMonitor(latency);
-        latencyAddSampleIfNeeded("cluster-config-fsync", latency);
-        latencyTraceIfNeeded(cluster, cluster_config_fsync, latency);
+        if (!from_bio) latencyAddSampleIfNeeded("cluster-config-fsync", latency);
+        if (!from_bio) latencyTraceIfNeeded(cluster, cluster_config_fsync, latency);
     }
 
     latencyStartMonitor(latency);
@@ -1155,8 +1162,8 @@ int clusterSaveConfig(int do_fsync) {
         goto cleanup;
     }
     latencyEndMonitor(latency);
-    latencyAddSampleIfNeeded("cluster-config-rename", latency);
-    latencyTraceIfNeeded(cluster, cluster_config_rename, latency);
+    if (!from_bio) latencyAddSampleIfNeeded("cluster-config-rename", latency);
+    if (!from_bio) latencyTraceIfNeeded(cluster, cluster_config_rename, latency);
     if (do_fsync) {
         latencyStartMonitor(latency);
         if (fsyncFileDir(server.cluster_configfile) == -1) {
@@ -1164,8 +1171,8 @@ int clusterSaveConfig(int do_fsync) {
             goto cleanup;
         }
         latencyEndMonitor(latency);
-        latencyAddSampleIfNeeded("cluster-config-dir-fsync", latency);
-        latencyTraceIfNeeded(cluster, cluster_config_dir_fsync, latency);
+        if (!from_bio) latencyAddSampleIfNeeded("cluster-config-dir-fsync", latency);
+        if (!from_bio) latencyTraceIfNeeded(cluster, cluster_config_dir_fsync, latency);
     }
     retval = C_OK; /* If we reached this point, everything is fine. */
 
@@ -1174,41 +1181,65 @@ cleanup:
         latencyStartMonitor(latency);
         close(fd);
         latencyEndMonitor(latency);
-        latencyAddSampleIfNeeded("cluster-config-close", latency);
-        latencyTraceIfNeeded(cluster, cluster_config_close, latency);
+        if (!from_bio) latencyAddSampleIfNeeded("cluster-config-close", latency);
+        if (!from_bio) latencyTraceIfNeeded(cluster, cluster_config_close, latency);
     }
     if (retval == C_ERR) {
         latencyStartMonitor(latency);
         unlink(tmpfilename);
         latencyEndMonitor(latency);
-        latencyAddSampleIfNeeded("cluster-config-unlink", latency);
-        latencyTraceIfNeeded(cluster, cluster_config_unlink, latency);
+        if (!from_bio) latencyAddSampleIfNeeded("cluster-config-unlink", latency);
+        if (!from_bio) latencyTraceIfNeeded(cluster, cluster_config_unlink, latency);
     }
     sdsfree(tmpfilename);
-    sdsfree(ci);
+    sdsfree(content);
     return retval;
 }
 
+/* Save cluster config file.
+ *
+ * This function writes the node config and returns C_OK, on error C_ERR
+ * is returned. It is possible to use bio, which can move I/O latency into
+ * the bio thread. If bio is used, it always returns C_OK. */
+static int clusterSaveConfig(bool use_bio, bool do_fsync) {
+    server.cluster->todo_before_sleep &= ~CLUSTER_TODO_SAVE_CONFIG;
+    if (do_fsync) server.cluster->todo_before_sleep &= ~CLUSTER_TODO_FSYNC_CONFIG;
+
+    /* The subsequent function will take ownership of the string and be responsible for freeing it. */
+    sds content = clusterGenNodesConfContent();
+    if (use_bio) {
+        /* We can actually always fsync the file in bio, but anyway lets follow the old code. */
+        bioCreateClusterConfigSaveJob(content, do_fsync);
+        return C_OK;
+    } else {
+        int res = clusterSaveConfigImpl(content, false, do_fsync);
+        if (res == C_OK) {
+            atomic_store_explicit(&server.cluster_config_save_status, C_OK, memory_order_relaxed);
+            atomic_store_explicit(&server.cluster_config_last_save_time, time(NULL), memory_order_relaxed);
+        } else {
+            atomic_store_explicit(&server.cluster_config_save_status, C_ERR, memory_order_relaxed);
+        }
+        return res;
+    }
+}
+
+/* Save the cluster file, it is called from the bio thread. */
+int clusterSaveConfigFromBio(sds content, bool do_fsync) {
+    return clusterSaveConfigImpl(content, true, do_fsync);
+}
+
 /* Save the cluster configuration file. If the save fails, exit the process. */
-void clusterSaveConfigOrDie(int do_fsync) {
-    if (clusterSaveConfig(do_fsync) == C_ERR) {
+void clusterSaveConfigOrDie(bool fsync) {
+    if (clusterSaveConfig(false, fsync) == C_ERR) {
         serverLog(LL_WARNING, "Fatal: can't update cluster config file.");
         exit(1);
     }
 }
 
-/* Save the cluster configuration file. If the save fails, print the log. */
-#define CONFIG_SAVE_LOG_ERROR_RATE 30 /* Seconds between errors logging. */
-void clusterSaveConfigOrLog(int do_fsync) {
-    if (clusterSaveConfig(do_fsync) == C_ERR) {
-        static time_t last_save_error_log = 0;
-        /* Limit logging rate to 1 line per CONFIG_SAVE_LOG_ERROR_RATE seconds. */
-        if ((server.unixtime - last_save_error_log) > CONFIG_SAVE_LOG_ERROR_RATE) {
-            serverLog(LL_WARNING, "Cluster config updated even though writing "
-                                  "the cluster config file to disk failed.");
-            last_save_error_log = server.unixtime;
-        }
-    }
+/* Save the cluster configuration file in bio thread. */
+static void clusterSaveConfigBackground(bool do_fsync) {
+    int res = clusterSaveConfig(true, do_fsync);
+    serverAssert(res == C_OK);
 }
 
 /* Lock the cluster config using flock(), and retain the file descriptor used to
@@ -1554,7 +1585,7 @@ void clusterInit(void) {
         clusterAddNodeToShard(myself->shard_id, myself);
         saveconf = 1;
     }
-    if (saveconf) clusterSaveConfigOrDie(1);
+    if (saveconf) clusterSaveConfigOrDie(true);
 
     /* Port sanity check II
      * The other handshake port check is triggered too late to stop
@@ -1692,7 +1723,8 @@ void clusterHandleServerShutdown(bool auto_failover) {
 
     /* The error logs have been logged in the save function if the save fails. */
     serverLog(LL_NOTICE, "Saving the cluster configuration file before exiting.");
-    clusterSaveConfig(1);
+    bioDrainWorker(BIO_CLUSTER_SAVE);
+    clusterSaveConfig(false, true);
 
 #if !defined(__sun)
     /* Unlock the cluster config file before shutdown, see clusterLockConfig.
@@ -6602,13 +6634,15 @@ void clusterBeforeSleep(void) {
 
     /* Save the config, possibly using fsync. */
     if (flags & CLUSTER_TODO_SAVE_CONFIG) {
-        int fsync = flags & CLUSTER_TODO_FSYNC_CONFIG;
+        bool fsync = flags & CLUSTER_TODO_FSYNC_CONFIG;
         if (server.cluster_configfile_save_behavior == CLUSTER_CONFIGFILE_SAVE_BEHAVIOR_SYNC) {
             /* Sync mode: exit the process if saving fails. */
+            bioDrainWorker(BIO_CLUSTER_SAVE);
             clusterSaveConfigOrDie(fsync);
         } else if (server.cluster_configfile_save_behavior == CLUSTER_CONFIGFILE_SAVE_BEHAVIOR_BEST_EFFORT) {
-            /* Best-effort mode: log (don't exit) if saving fails and wait for the next retry. */
-            clusterSaveConfigOrLog(fsync);
+            /* Best-effort mode: save asynchronously via BIO thread; failures are logged (not fatal)
+             * and the save will be retried on the next config change. */
+            clusterSaveConfigBackground(fsync);
         }
     }
 
@@ -7016,7 +7050,10 @@ int verifyClusterConfigWithData(void) {
             delKeysInSlot(j, server.lazyfree_lazy_server_del, true, false);
         }
     }
-    if (update_config) clusterSaveConfigOrDie(1);
+    if (update_config) {
+        bioDrainWorker(BIO_CLUSTER_SAVE);
+        clusterSaveConfigOrDie(true);
+    }
     return C_OK;
 }
 
@@ -7591,6 +7628,9 @@ sds genClusterInfoString(sds info) {
     }
     dictReleaseIterator(di);
 
+    int config_save_status = atomic_load_explicit(&server.cluster_config_save_status, memory_order_relaxed);
+    time_t config_last_save_time = atomic_load_explicit(&server.cluster_config_last_save_time, memory_order_relaxed);
+
     info = sdscatfmt(info,
                      "cluster_state:%s\r\n"
                      "cluster_slots_assigned:%i\r\n"
@@ -7604,11 +7644,15 @@ sds genClusterInfoString(sds info) {
                      "cluster_known_nodes:%U\r\n"
                      "cluster_size:%i\r\n"
                      "cluster_current_epoch:%U\r\n"
-                     "cluster_my_epoch:%U\r\n",
+                     "cluster_my_epoch:%U\r\n"
+                     "cluster_config_save_status:%s\r\n"
+                     "cluster_config_last_save_time:%I\r\n",
                      statestr[server.cluster->state], slots_assigned, slots_ok, slots_pfail, slots_fail,
                      nodes_pfail, nodes_fail, voting_nodes_pfail, voting_nodes_fail,
                      (unsigned long long)dictSize(server.cluster->nodes), server.cluster->size,
-                     (unsigned long long)server.cluster->currentEpoch, (unsigned long long)my_epoch);
+                     (unsigned long long)server.cluster->currentEpoch, (unsigned long long)my_epoch,
+                     (config_save_status == C_OK) ? "ok" : "err",
+                     (long long)config_last_save_time);
 
     /* Show stats about messages sent and received. */
     long long tot_msg_sent = 0;
@@ -8306,7 +8350,8 @@ int clusterCommandSpecial(client *c) {
                               (unsigned long long)myself->configEpoch);
         addReplySds(c, reply);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "saveconfig") && c->argc == 2) {
-        int retval = clusterSaveConfig(1);
+        bioDrainWorker(BIO_CLUSTER_SAVE);
+        int retval = clusterSaveConfig(false, true);
 
         if (retval == C_OK)
             addReply(c, shared.ok);

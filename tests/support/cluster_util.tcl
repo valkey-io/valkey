@@ -276,7 +276,7 @@ proc start_cluster {masters replicas options code {slot_allocator continuous_slo
     # Configure the starting of multiple servers. Set cluster node timeout
     # aggressively since many tests depend on ping/pong messages.
 
-    set cluster_options [list overrides [list cluster-enabled yes cluster-ping-interval 100 cluster-node-timeout 3000 cluster-databases 16 cluster-slot-stats-enabled yes]]
+    set cluster_options [list overrides [list cluster-enabled yes cluster-ping-interval 100 cluster-node-timeout 3000 cluster-databases 16 cluster-slot-stats-enabled yes latency-monitor-threshold 1]]
     set options [concat $cluster_options $options]
 
     # Cluster mode only supports a single database, so before executing the tests

@@ -2384,6 +2384,8 @@ void initServerConfig(void) {
     server.shutdown_flags = 0;
     server.shutdown_mstime = 0;
     server.cluster_module_flags = CLUSTER_MODULE_FLAG_NONE;
+    atomic_store_explicit(&server.cluster_config_save_status, C_OK, memory_order_relaxed);
+    atomic_store_explicit(&server.cluster_config_last_save_time, time(NULL), memory_order_relaxed);
     server.migrate_cached_sockets = dictCreate(&migrateCacheDictType);
     server.next_client_id = 1; /* Client IDs, start from 1 .*/
     server.page_size = sysconf(_SC_PAGESIZE);

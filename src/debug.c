@@ -544,6 +544,8 @@ void debugCommand(client *c) {
             "    Protect a client from being freed, forcing deferred close.",
             "FORCE-TLS-WRITE-ERROR <0|1>",
             "    Force TLS write error for testing.",
+            "BIO-DRAIN <type>",
+            "    Wait for the specified bio job queue to become empty.",
             NULL};
         addExtendedReplyHelp(c, help, clusterDebugCommandExtendedHelp());
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "segfault")) {
@@ -1119,6 +1121,17 @@ void debugCommand(client *c) {
 #else
         addReplyError(c, "TLS is not enabled");
 #endif
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "bio-drain") && c->argc == 3) {
+        int type;
+        const char *name = objectGetVal(c->argv[2]);
+        if (!strcasecmp(name, "BIO_CLUSTER_SAVE")) {
+            type = BIO_CLUSTER_SAVE;
+        } else {
+            addReplySubcommandSyntaxError(c);
+            return;
+        }
+        bioDrainWorker(type);
+        addReply(c, shared.ok);
     } else if (!handleDebugClusterCommand(c)) {
         addReplySubcommandSyntaxError(c);
         return;

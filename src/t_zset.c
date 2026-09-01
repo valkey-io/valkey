@@ -3118,6 +3118,7 @@ void zcardCommand(client *c) {
     addReplyLongLong(c, zsetLength(zobj));
 }
 
+/* Adds the member's score as a reply to the client. */
 static void zscoreReply(client *c, robj *zobj, robj *member) {
     double score;
 

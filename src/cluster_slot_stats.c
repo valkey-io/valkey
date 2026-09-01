@@ -101,7 +101,7 @@ static void addReplySlotStat(client *c, int slot) {
                              * and 1st index represents (map) usage statistics. */
     addReplyLongLong(c, slot);
     addReplyMapLen(c, (server.cluster_slot_stats_enabled) ? SLOT_STAT_COUNT
-                                                          : 3); /* Nested map representing slot usage statistics. */
+                                                          : 1); /* Nested map representing slot usage statistics. */
     addReplyBulkCString(c, "key-count");
     addReplyLongLong(c, (long long)getSlotStat(slot, KEY_COUNT));
 
@@ -114,12 +114,11 @@ static void addReplySlotStat(client *c, int slot) {
         addReplyLongLong(c, (long long)getSlotStat(slot, NETWORK_BYTES_IN));
         addReplyBulkCString(c, "network-bytes-out");
         addReplyLongLong(c, (long long)getSlotStat(slot, NETWORK_BYTES_OUT));
+        addReplyBulkCString(c, "keyspace-hits");
+        addReplyLongLong(c, (long long)getSlotStat(slot, KEYSPACE_HITS));
+        addReplyBulkCString(c, "keyspace-misses");
+        addReplyLongLong(c, (long long)getSlotStat(slot, KEYSPACE_MISSES));
     }
-
-    addReplyBulkCString(c, "keyspace-hits");
-    addReplyLongLong(c, (long long)getSlotStat(slot, KEYSPACE_HITS));
-    addReplyBulkCString(c, "keyspace-misses");
-    addReplyLongLong(c, (long long)getSlotStat(slot, KEYSPACE_MISSES));
 }
 
 /* Adds reply for the SLOTSRANGE variant.
@@ -312,9 +311,9 @@ void clusterSlotStatsCommand(client *c) {
             order_by = NETWORK_BYTES_IN;
         } else if (!strcasecmp(objectGetVal(c->argv[3]), "network-bytes-out") && server.cluster_slot_stats_enabled) {
             order_by = NETWORK_BYTES_OUT;
-        } else if (!strcasecmp(objectGetVal(c->argv[3]), "keyspace-hits")) {
+        } else if (!strcasecmp(objectGetVal(c->argv[3]), "keyspace-hits") && server.cluster_slot_stats_enabled) {
             order_by = KEYSPACE_HITS;
-        } else if (!strcasecmp(objectGetVal(c->argv[3]), "keyspace-misses")) {
+        } else if (!strcasecmp(objectGetVal(c->argv[3]), "keyspace-misses") && server.cluster_slot_stats_enabled) {
             order_by = KEYSPACE_MISSES;
         } else {
             addReplyError(c, "Unrecognized sort metric for ORDERBY.");

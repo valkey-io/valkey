@@ -113,6 +113,22 @@ tags {"valgrind:skip"} {
         }
     }
 
+    if {[catch {exec grep -a "initLibbacktraceFrameState" $::VALKEY_SERVER_BIN}] == 0} {
+        set server_path [tmpdir server4.log]
+        start_server [list overrides [list dir $server_path]] {
+            test "Raw stacktrace generated when libbacktrace symbolization times out" {
+                set pid [s process_id]
+                r debug libbacktrace-wait-iterations 0
+                exec kill -SIGALRM $pid
+                wait_for_log_messages 0 [list "*libbacktrace symbolization timed out*"] 0 100 100
+                wait_for_log_messages 0 [list "*complete raw trace follows*"] 0 100 100
+                wait_for_log_messages 0 [list "*<unresolved>*"] 0 100 100
+                wait_for_log_messages 0 [list "* STACK TRACE DONE *"] 0 100 100
+                assert_equal "PONG" [r ping]
+            }
+        }
+    }
+
     # test hide-user-data-from-log
     set server_path [tmpdir server5.log]
     start_server [list overrides [list dir $server_path crash-memcheck-enabled no hide-user-data-from-log no]] {

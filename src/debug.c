@@ -525,6 +525,8 @@ void debugCommand(client *c) {
             "    Stop the server's main process after fork.",
             "PAUSE-BEFORE-PSYNC <0|1>",
             "    Stop the server's main process before sending PSYNC.",
+            "LIBBACKTRACE-WAIT-ITERATIONS <iterations>",
+            "    Set the number of 10ms waits for a libbacktrace symbolizer child.",
             "DELAY-RDB-CLIENT-FREE-SECONDS <seconds>",
             "    Grace period in seconds for replica main channel to establish psync.",
             "DICT-RESIZING <0|1>",
@@ -1076,6 +1078,15 @@ void debugCommand(client *c) {
         addReply(c, shared.ok);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "pause-before-psync") && c->argc == 3) {
         server.debug_pause_before_psync = atoi(objectGetVal(c->argv[2]));
+        addReply(c, shared.ok);
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "libbacktrace-wait-iterations") && c->argc == 3) {
+        long iterations;
+        if (getLongFromObjectOrReply(c, c->argv[2], &iterations, NULL) != C_OK) return;
+        if (iterations < 0 || iterations > INT_MAX) {
+            addReplyError(c, "iterations must be between 0 and INT_MAX");
+            return;
+        }
+        server.debug_libbacktrace_wait_iterations = iterations;
         addReply(c, shared.ok);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "delay-rdb-client-free-seconds") && c->argc == 3) {
         server.wait_before_rdb_client_free = atoi(objectGetVal(c->argv[2]));
@@ -1870,6 +1881,17 @@ static int libbacktrace_full_cb(void *data, uintptr_t pc, const char *filename, 
     return 0;
 }
 
+static void writeRawStacktrace(void **trace, int trace_size, int fd, int uplevel) {
+    char buf[64];
+
+    for (int i = uplevel; i < trace_size; i++) {
+        int len = snprintf_async_signal_safe(buf, sizeof(buf), "#%d 0x%lx <unresolved>\n",
+                                             i - uplevel, (unsigned long)trace[i]);
+        if (len > 0 && write(fd, buf, len) == -1) { /* Avoid warning. */
+        }
+    }
+}
+
 /* Fork and symbolize using libbacktrace (signal-safe approach) */
 static void symbolizeWithLibbacktrace(void **trace, int trace_size, int fd, int uplevel) {
     pid_t pid = fork();
@@ -1892,9 +1914,10 @@ static void symbolizeWithLibbacktrace(void **trace, int trace_size, int fd, int 
                 }
                 backtrace_symbols_fd(trace + uplevel, trace_size - uplevel, fd);
 #else
-                char *msg = "\n(no symbol information available for these frames)\n";
+                char *msg = "\n(no symbol information available; complete raw trace follows)\n";
                 if (write(fd, msg, strlen(msg)) == -1) { /* Avoid warning. */
                 }
+                writeRawStacktrace(trace, trace_size, fd, uplevel);
 #endif
             }
         } else {
@@ -1902,9 +1925,10 @@ static void symbolizeWithLibbacktrace(void **trace, int trace_size, int fd, int 
 #ifdef HAVE_EXECINFO
             backtrace_symbols_fd(trace + uplevel, trace_size - uplevel, fd);
 #else
-            char *msg = "(libbacktrace state creation failed, no fallback available)\n";
+            char *msg = "(libbacktrace state creation failed; complete raw trace follows)\n";
             if (write(fd, msg, strlen(msg)) == -1) { /* Avoid warning. */
             }
+            writeRawStacktrace(trace, trace_size, fd, uplevel);
 #endif
         }
         _exit(0);
@@ -1912,8 +1936,8 @@ static void symbolizeWithLibbacktrace(void **trace, int trace_size, int fd, int 
         /* Parent process - wait for child with timeout */
         int status;
         int waited = 0;
-        pid_t ret;
-        while (waited < 50) {
+        pid_t ret = 0;
+        while (waited < server.debug_libbacktrace_wait_iterations) {
             ret = waitpid(pid, &status, WNOHANG);
             if (ret > 0) break;                     /* Child exited */
             if (ret == -1 && errno != EINTR) break; /* Real error */
@@ -1924,15 +1948,25 @@ static void symbolizeWithLibbacktrace(void **trace, int trace_size, int fd, int 
             /* Timeout or still interrupted - kill child */
             kill(pid, SIGKILL);
             waitpid(pid, NULL, 0);
+            char *msg = "(libbacktrace symbolization timed out; preceding output may be partial; complete raw trace follows)\n";
+            if (write(fd, msg, strlen(msg)) == -1) { /* Avoid warning. */
+            }
+            writeRawStacktrace(trace, trace_size, fd, uplevel);
+        } else if (ret == -1 || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+            char *msg = "(libbacktrace symbolizer exited abnormally; complete raw trace follows)\n";
+            if (write(fd, msg, strlen(msg)) == -1) { /* Avoid warning. */
+            }
+            writeRawStacktrace(trace, trace_size, fd, uplevel);
         }
     } else {
         /* Fork failed, fall back to backtrace_symbols_fd */
 #ifdef HAVE_EXECINFO
         backtrace_symbols_fd(trace + uplevel, trace_size - uplevel, fd);
 #else
-        char *msg = "(fork failed, no fallback available)\n";
+        char *msg = "(fork failed; complete raw trace follows)\n";
         if (write(fd, msg, strlen(msg)) == -1) { /* Avoid warning. */
         }
+        writeRawStacktrace(trace, trace_size, fd, uplevel);
 #endif
     }
 }

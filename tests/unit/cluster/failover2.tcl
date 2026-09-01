@@ -171,6 +171,16 @@ proc test_replica_config_epoch_failover {type} {
         pause_process [srv 0 pid]
         R 3 DEBUG DROP-CLUSTER-PACKET-FILTER $CLUSTER_PACKET_TYPE_NONE
         R 3 DEBUG CLOSE-CLUSTER-LINK-ON-PACKET-DROP 0
+
+        # Wait until the replica's cluster links to R1 and R2 are connected.
+        # This ensures retries of the failover command can be delivered.
+        wait_for_condition 2000 50 {
+            [llength [split [R 3 cluster links] "\n"]] >= 2 &&
+            [string match "*connected*" [R 3 cluster links]]
+        } else {
+            fail "Replica did not re-establish cluster links"
+        }
+
         wait_for_condition 1000 50 {
             [CI 1 cluster_state] == "fail" &&
             [CI 2 cluster_state] == "fail" &&
@@ -179,11 +189,21 @@ proc test_replica_config_epoch_failover {type} {
             fail "Cluster does not fail"
         }
 
-        # Make sure both the automatic and the manual failover will fail in the first time.
         if {$type == "automatic"} {
             wait_for_log_messages -3 {"*Failover attempt expired*"} 0 1200 50
         } elseif {$type == "manual"} {
-            R 3 cluster failover force
+            # Retry the manual failover until both primaries have actually seen
+            # (and denied) the request. This handles the case where the initial
+            # broadcast is dropped because cluster links were still being rebuilt.
+            wait_for_condition 50 100 {
+                catch {R 3 cluster failover force}
+                # Use count_log_message to avoid resetting log cursors.
+                [count_log_message -1 "reqConfigEpoch"] > 0 &&
+                [count_log_message -2 "reqConfigEpoch"] > 0
+            } else {
+                fail "The primaries did not receive the failover auth request"
+            }
+            # Now the timeout message must appear in R3's log.
             wait_for_log_messages -3 {"*Manual failover timed out*"} 0 1200 50
         }
 
@@ -195,7 +215,7 @@ proc test_replica_config_epoch_failover {type} {
 
         # Make sure the replica has updated the config epoch.
         wait_for_condition 1000 10 {
-            $R0_config_epoch == [dict get [cluster_get_node_by_id 1 $R0_nodeid] config_epoch]
+            $R0_config_epoch == [dict get [cluster_get_node_by_id 3 $R0_nodeid] config_epoch]
         } else {
             fail "The replica does not update the config epoch"
         }

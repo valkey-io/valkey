@@ -1382,8 +1382,9 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
 
                 r config set bgsave-default-method $second_type
                 assert_error "ERR Background save already in progress" {r bgsave}
-                
+
                 r bgsave cancel
+                r config set rdb-key-save-delay 0
                 waitForBgsave r
             }
         }

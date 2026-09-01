@@ -1989,6 +1989,7 @@ start_server {tags {"scripting external:skip"}} {
         # maxmemory-scripts percentage value is not working if maxmemory is 0
         r config set maxmemory 0
         r config set maxmemory-scripts 1%
+        set padding [string repeat x 100000]
         for {set j 1} {$j <= 500} {incr j} {
             r script load "--$padding\nreturn $j"
         }

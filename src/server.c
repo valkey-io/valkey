@@ -2468,6 +2468,12 @@ void initServerConfig(void) {
 
     /* Debugging */
     server.watchdog_period = 0;
+
+    /* QoS Initialization */
+    server.qos_subnet_sources = NULL;
+    server.qos_reserved_min_clients = 0;
+    server.stat_rejected_priority_conn = 0;
+    server.stat_num_active_clients_prioritized = 0;
 }
 
 extern char **environ;
@@ -2617,8 +2623,7 @@ void adjustOpenFilesLimit(void) {
 
     if (getrlimit(RLIMIT_NOFILE, &limit) == -1) {
         serverLog(LL_WARNING,
-                  "Unable to obtain the current NOFILE limit (%s), assuming 1024 and setting the max clients "
-                  "configuration accordingly.",
+                  "Unable to obtain the current NOFILE limit (%s), assuming 1024 setting for max clients.",
                   strerror(errno));
         server.maxclients = 1024 - CONFIG_MIN_RESERVED_FDS;
     } else {
@@ -2857,6 +2862,7 @@ void resetServerStats(void) {
     server.stat_fork_rate = 0;
     server.stat_total_forks = 0;
     server.stat_rejected_conn = 0;
+    server.stat_rejected_priority_conn = 0;
     server.stat_sync_full = 0;
     server.stat_sync_partial_ok = 0;
     server.stat_sync_partial_err = 0;
@@ -6317,6 +6323,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "connected_clients:%lu\r\n", listLength(server.clients) - listLength(server.replicas),
                 "cluster_connections:%lu\r\n", getClusterConnectionsCount(),
                 "maxclients:%u\r\n", server.maxclients,
+                "connected_clients_prioritized:%lld\r\n", server.stat_num_active_clients_prioritized,
                 "client_recent_max_input_buffer:%zu\r\n", maxin,
                 "client_recent_max_output_buffer:%zu\r\n", maxout,
                 "blocked_clients:%d\r\n", server.blocked_clients,
@@ -6550,6 +6557,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "instantaneous_input_repl_kbps:%.2f\r\n", (float)getInstantaneousMetric(STATS_METRIC_NET_INPUT_REPLICATION) / 1024,
                 "instantaneous_output_repl_kbps:%.2f\r\n", (float)getInstantaneousMetric(STATS_METRIC_NET_OUTPUT_REPLICATION) / 1024,
                 "rejected_connections:%lld\r\n", server.stat_rejected_conn,
+                "rejected_priority_connections:%lld\r\n", server.stat_rejected_priority_conn,
                 "sync_full:%lld\r\n", server.stat_sync_full,
                 "sync_partial_ok:%lld\r\n", server.stat_sync_partial_ok,
                 "sync_partial_err:%lld\r\n", server.stat_sync_partial_err,

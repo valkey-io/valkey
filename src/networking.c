@@ -40,6 +40,7 @@
 #include "module.h"
 #include "connection.h"
 #include "zmalloc.h"
+#include "qos.h"
 #include <strings.h>
 #include <sys/socket.h>
 #include <sys/uio.h>
@@ -233,6 +234,12 @@ void linkClient(client *c) {
     c->client_list_node = listLast(server.clients);
     uint64_t id = htonu64(c->id);
     raxInsert(server.clients_index, (unsigned char *)&id, sizeof(id), c, NULL);
+
+    /* Increment active client counters. These counters are paired with decrements
+     * in unlinkClient() and track connected clients in the global active clients list. */
+    if (connIsPriority(c->conn)) {
+        server.stat_num_active_clients_prioritized++;
+    }
 }
 
 /* Initialize client authentication state. */
@@ -1878,9 +1885,28 @@ void clientAcceptHandler(connection *conn) {
     moduleFireServerEvent(VALKEYMODULE_EVENT_CLIENT_CHANGE, VALKEYMODULE_SUBEVENT_CLIENT_CHANGE_CONNECTED, c);
 }
 
+/* QoS Admission Control:
+ * 1. Normal clients are capped at (maxclients - qos-reserved-min-clients) connections.
+ * 2. Administrative clients originating from qos-subnet-sources can take up to maxclients if available.
+ * 3. Minimum of qos-reserved-min-clients connections guaranteed for administrative clients.
+ */
+static bool hasMaxClientsLimitReached(bool is_prioritized) {
+    long long total_clients = (long long)listLength(server.clients) +
+                              (long long)getClusterConnectionsCount();
+    if (is_prioritized) {
+        return total_clients >= (long long)server.maxclients;
+    }
+
+    unsigned int reserved = 0;
+    if (server.qos_reserved_min_clients > 0 && hasQosSubnetSources()) {
+        reserved = server.qos_reserved_min_clients;
+    }
+    long long normal_limit = (long long)server.maxclients - (long long)reserved;
+    return total_clients >= normal_limit;
+}
+
 void acceptCommonHandler(connection *conn, struct ClientFlags flags, char *ip) {
     client *c;
-    UNUSED(ip);
 
     char addr[CONN_ADDR_STR_LEN] = {0};
     char laddr[CONN_ADDR_STR_LEN] = {0};
@@ -1899,13 +1925,17 @@ void acceptCommonHandler(connection *conn, struct ClientFlags flags, char *ip) {
      * Admission control will happen before a client is created and connAccept()
      * called, because we don't want to even start transport-level negotiation
      * if rejected. */
-    if (listLength(server.clients) + getClusterConnectionsCount() >= server.maxclients) {
+    bool is_prioritized = isIpQosPrioritized(ip);
+    if (hasMaxClientsLimitReached(is_prioritized)) {
         char *err;
-        if (server.cluster_enabled)
+        if (is_prioritized) {
+            err = "-ERR max number of priority clients reached\r\n";
+        } else if (server.cluster_enabled) {
             err = "-ERR max number of clients + cluster "
                   "connections reached\r\n";
-        else
+        } else {
             err = "-ERR max number of clients reached\r\n";
+        }
 
         /* That's a best effort error message, don't check write errors.
          * Note that for TLS connections, no handshake was done yet so nothing
@@ -1913,11 +1943,16 @@ void acceptCommonHandler(connection *conn, struct ClientFlags flags, char *ip) {
         if (connWrite(conn, err, strlen(err)) == -1) {
             /* Nothing to do, Just to avoid the warning... */
         }
-        server.stat_rejected_conn++;
+        if (is_prioritized)
+            server.stat_rejected_priority_conn++;
+        else
+            server.stat_rejected_conn++;
         connClose(conn);
         return;
     }
 
+    /* Set the priority of the connection */
+    connSetPriority(conn, is_prioritized);
     /* Create connection and client */
     if ((c = createClient(conn)) == NULL) {
         serverLog(LL_WARNING, "Error registering fd event for the new client connection: %s (addr=%s laddr=%s)",
@@ -2021,6 +2056,13 @@ void unlinkClient(client *c) {
             raxRemove(server.clients_index, (unsigned char *)&id, sizeof(id), NULL);
             listDelNode(server.clients, c->client_list_node);
             c->client_list_node = NULL;
+
+            /* Decrement active client counters. Fake clients (where c->conn is NULL)
+             * and unlinked clients (c->client_list_node is NULL) do not increment these
+             * counters on creation, so we only decrement here for linked, active connections. */
+            if (connIsPriority(c->conn)) {
+                server.stat_num_active_clients_prioritized--;
+            }
         }
         removeClientFromPendingCommandsBatch(c);
 

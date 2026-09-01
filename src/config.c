@@ -38,6 +38,7 @@
 #include "cluster_migrateslots.h"
 #include "eval.h"
 #include "lrulfu.h"
+#include "qos.h"
 
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -2555,6 +2556,31 @@ static int isValidAnnouncedIp(char *val, const char **err) {
     return 1;
 }
 
+static int isValidQosSubnetSources(char *val, const char **err) {
+    return validateQosSubnetSources(val, err) == C_OK;
+}
+
+static int updateQosSubnetSourcesConfig(const char **err) {
+    UNUSED(err);
+    return updateQosSubnetSources(server.qos_subnet_sources) == C_OK;
+}
+
+static int isValidQosReservedMinClients(long long val, const char **err) {
+    if (val < 0 || (unsigned long long)val >= server.maxclients) {
+        *err = "qos-reserved-min-clients must be less than maxclients";
+        return 0;
+    }
+    return 1;
+}
+
+static int isValidMaxclients(long long val, const char **err) {
+    if (val <= 0 || (unsigned long long)val <= server.qos_reserved_min_clients) {
+        *err = "maxclients must be greater than qos-reserved-min-clients";
+        return 0;
+    }
+    return 1;
+}
+
 static int isValidAnnouncedHostname(char *val, const char **err) {
     if (strlen(val) >= NET_HOST_STR_LEN) {
         *err = "Hostnames must be less than " STRINGIFY(NET_HOST_STR_LEN) " characters";
@@ -3428,6 +3454,8 @@ standardConfig static_configs[] = {
     createStringConfig("proc-title-template", NULL, MODIFIABLE_CONFIG, ALLOW_EMPTY_STRING, server.proc_title_template, CONFIG_DEFAULT_PROC_TITLE_TEMPLATE, isValidProcTitleTemplate, updateProcTitleTemplate),
     createStringConfig("bind-source-addr", NULL, MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, server.bind_source_addr, NULL, NULL, NULL),
     createStringConfig("logfile", NULL, IMMUTABLE_CONFIG, ALLOW_EMPTY_STRING, server.logfile, "", NULL, NULL),
+    createStringConfig("qos-subnet-sources", NULL, MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, server.qos_subnet_sources, NULL, isValidQosSubnetSources, updateQosSubnetSourcesConfig),
+
 #ifdef LOG_REQ_RES
     createStringConfig("req-res-logfile", NULL, IMMUTABLE_CONFIG | HIDDEN_CONFIG, EMPTY_STRING_IS_NULL, server.req_res_logfile, NULL, NULL, NULL),
 #endif
@@ -3514,8 +3542,10 @@ standardConfig static_configs[] = {
     createIntConfig("rdma-completion-vector", NULL, IMMUTABLE_CONFIG, -1, 1024, server.rdma_ctx_config.completion_vector, -1, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("cluster-message-gossip-perc", NULL, MODIFIABLE_CONFIG | HIDDEN_CONFIG, 1, 100, server.cluster_message_gossip_perc, 10, INTEGER_CONFIG, NULL, NULL),
 
+
     /* Unsigned int configs */
-    createUIntConfig("maxclients", NULL, MODIFIABLE_CONFIG, 1, UINT_MAX, server.maxclients, 10000, INTEGER_CONFIG, NULL, updateMaxclients),
+    createUIntConfig("maxclients", NULL, MODIFIABLE_CONFIG, 1, UINT_MAX, server.maxclients, 10000, INTEGER_CONFIG, isValidMaxclients, updateMaxclients),
+    createUIntConfig("qos-reserved-min-clients", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, server.qos_reserved_min_clients, 0, INTEGER_CONFIG, isValidQosReservedMinClients, NULL),
     createUIntConfig("unixsocketperm", NULL, IMMUTABLE_CONFIG, 0, 0777, server.unix_ctx_config.perm, 0, OCTAL_CONFIG, NULL, NULL),
     createUIntConfig("socket-mark-id", NULL, IMMUTABLE_CONFIG, 0, UINT_MAX, server.socket_mark_id, 0, INTEGER_CONFIG, NULL, NULL),
     createUIntConfig("max-new-connections-per-cycle", NULL, MODIFIABLE_CONFIG, 1, 1000, server.max_new_conns_per_cycle, 10, INTEGER_CONFIG, NULL, NULL),

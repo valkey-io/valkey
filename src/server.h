@@ -1909,6 +1909,8 @@ struct valkeyServer {
     double stat_fork_rate;                         /* Fork rate in GB/sec. */
     long long stat_total_forks;                    /* Total count of fork. */
     long long stat_rejected_conn;                  /* Clients rejected because of maxclients */
+    long long stat_rejected_priority_conn;         /* Prioritized clients rejected because of maxclients */
+    long long stat_num_active_clients_prioritized; /* Number of active prioritized clients */
     long long stat_sync_full;                      /* Number of full resyncs with replicas. */
     long long stat_sync_partial_ok;                /* Number of accepted PSYNC requests. */
     long long stat_sync_partial_err;               /* Number of unaccepted PSYNC requests. */
@@ -2220,6 +2222,8 @@ struct valkeyServer {
     int get_ack_from_replicas;  /* If true we send REPLCONF GETACK. */
     /* Limits */
     unsigned int maxclients;                    /* Max number of simultaneous clients */
+    char *qos_subnet_sources;                   /* Raw qos-subnet-sources string config */
+    unsigned int qos_reserved_min_clients;      /* Minimum client connection slots reserved for QoS subnet sources */
     unsigned long long maxmemory;               /* Max number of memory bytes to use */
     ssize_t maxmemory_clients;                  /* Memory limit for total client buffers */
     int maxmemory_policy;                       /* Policy for key eviction */

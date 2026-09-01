@@ -548,6 +548,9 @@ ENGINE_SERVER_OBJ = \
     rdma.o \
     release.o \
     replication.o \
+    reply_blocking.o \
+    post_commit_task.o \
+    uncommitted_keys.o \
     resp_parser.o \
     rio.o \
     script.o \

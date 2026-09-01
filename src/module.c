@@ -6949,6 +6949,16 @@ static void moduleCallCommandHelper(ValkeyModuleCtx *ctx, client *c, robj **argv
         if (!(flags & VALKEYMODULE_CALL_ARGV_NO_AOF)) call_flags |= CMD_CALL_PROPAGATE_AOF;
         if (!(flags & VALKEYMODULE_CALL_ARGV_NO_REPLICAS)) call_flags |= CMD_CALL_PROPAGATE_REPL;
     }
+
+    /* Module commands may observe dirty (not-yet-durably-committed) reads.
+     * When reply-blocking is enabled we withhold user-facing replies in the
+     * COB until the write is acked, but a module consumes a VM_Call reply
+     * synchronously here in C, so there is nothing left to hold once call()
+     * returns. This matches stock Valkey under `appendfsync always`, where a
+     * module's VM_Call reply is likewise returned before the fsync. Gating
+     * module reads on durability is a future opt-in feature (see the unused
+     * module_cmd_blocking_offset hook); for now we neither reject nor block. */
+
     call(c, call_flags);
 
     /* Propagate database changes from the temporary client back to the context client
@@ -6999,7 +7009,7 @@ static void moduleCallCommandHelper(ValkeyModuleCtx *ctx, client *c, robj **argv
     }
 
 cleanup:
-    if ((flags & VALKEYMODULE_CALL_ARGV_SCRIPT_MODE) && errno) {
+    if ((flags & VALKEYMODULE_CALL_ARGV_SCRIPT_MODE) && errno && reply_error_msg) {
         afterErrorReply(c, reply_error_msg, sdslen(reply_error_msg), 0);
         incrCommandStatsOnError(c->cmd, ERROR_COMMAND_REJECTED);
     }

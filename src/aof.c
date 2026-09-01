@@ -52,6 +52,9 @@ aofManifest *aofLoadManifestFromFile(sds am_filepath);
 void aofManifestFreeAndUpdate(aofManifest *am);
 void aof_background_fsync_and_close(int fd);
 
+static void processAofBioFlushResult(void);
+static int tryOffloadAofFlushToBio(void);
+
 /* ----------------------------------------------------------------------------
  * AOF Manifest file implementation.
  *
@@ -953,6 +956,9 @@ void stopAppendOnly(void) {
     server.aof_last_incr_size = 0;
     server.aof_last_incr_fsync_offset = 0;
     server.fsynced_reploff = -1;
+    atomic_store_explicit(&server.aof_bio_flush_state, AOF_BIO_FLUSH_IDLE, memory_order_relaxed);
+    atomic_store_explicit(&server.aof_bio_flush_errno, 0, memory_order_relaxed);
+    atomic_store_explicit(&server.aof_bio_flush_size, 0, memory_order_relaxed);
     atomic_store_explicit(&server.fsynced_reploff_pending, 0, memory_order_relaxed);
     killAppendOnlyChild();
     sdsfree(server.aof_buf);
@@ -1003,6 +1009,9 @@ int startAppendOnly(void) {
         serverLog(LL_WARNING, "AOF reopen, just ignore the last error.");
         server.aof_last_write_status = C_OK;
     }
+    atomic_store_explicit(&server.aof_bio_flush_state, AOF_BIO_FLUSH_IDLE, memory_order_relaxed);
+    atomic_store_explicit(&server.aof_bio_flush_errno, 0, memory_order_relaxed);
+    atomic_store_explicit(&server.aof_bio_flush_size, 0, memory_order_relaxed);
     return C_OK;
 }
 
@@ -1157,6 +1166,70 @@ ssize_t aofWrite(int fd, const char *buf, size_t len) {
     return totwritten;
 }
 
+int aofIOFlushInProgress(void) {
+    return atomic_load_explicit(&server.aof_bio_flush_state, memory_order_acquire) == AOF_BIO_FLUSH_PENDING;
+}
+
+static void processAofBioFlushResult(void) {
+    int state = atomic_load_explicit(&server.aof_bio_flush_state, memory_order_acquire);
+    switch (state) {
+    case AOF_BIO_FLUSH_IDLE:
+    case AOF_BIO_FLUSH_PENDING:
+        /* Nothing to reap: no offloaded flush has completed yet. */
+        return;
+
+    case AOF_BIO_FLUSH_DONE: {
+        off_t nwritten = atomic_load_explicit(&server.aof_bio_flush_size, memory_order_relaxed);
+        server.aof_current_size += nwritten;
+        server.aof_last_incr_size += nwritten;
+        server.aof_last_incr_fsync_offset = server.aof_last_incr_size;
+        server.aof_last_fsync = server.mstime;
+        atomic_store_explicit(&server.aof_bio_flush_state, AOF_BIO_FLUSH_IDLE, memory_order_release);
+        notifyReplyBlockingProgress();
+        return;
+    }
+
+    case AOF_BIO_FLUSH_ERR: {
+        int err = atomic_load_explicit(&server.aof_bio_flush_errno, memory_order_relaxed);
+        server.aof_last_write_errno = err;
+        atomic_store_explicit(&server.aof_bio_flush_state, AOF_BIO_FLUSH_IDLE, memory_order_release);
+
+        serverLog(LL_WARNING, "Can't persist AOF for fsync policy 'always': %s. Exiting...", strerror(err));
+        exit(1);
+    }
+
+    default: serverPanic("Unknown AOF bio flush state: %d", state);
+    }
+}
+
+void aofPipeReadable(aeEventLoop *el, int fd, void *privdata, int mask) {
+    UNUSED(el);
+    UNUSED(privdata);
+    UNUSED(mask);
+    char buf[64];
+    while (read(fd, buf, sizeof(buf)) == (ssize_t)sizeof(buf));
+    processAofBioFlushResult();
+}
+
+static int tryOffloadAofFlushToBio(void) {
+    if (server.aof_fsync != AOF_FSYNC_ALWAYS || sdslen(server.aof_buf) == 0 || aofIOFlushInProgress()) {
+        return C_ERR;
+    }
+
+    if (atomic_load_explicit(&server.aof_bio_flush_state, memory_order_acquire) != AOF_BIO_FLUSH_IDLE) {
+        return C_ERR;
+    }
+
+    atomic_store_explicit(&server.aof_bio_flush_errno, 0, memory_order_relaxed);
+    atomic_store_explicit(&server.aof_bio_flush_size, 0, memory_order_relaxed);
+    atomic_store_explicit(&server.aof_bio_flush_state, AOF_BIO_FLUSH_PENDING, memory_order_release);
+
+    bioCreateAofFsyncNotifyJob(server.aof_fd, server.aof_buf, server.primary_repl_offset);
+    server.aof_buf = sdsempty();
+    server.aof_flush_postponed_start = 0;
+    return C_OK;
+}
+
 /* Write the append only file buffer on disk.
  *
  * Since we are required to write the AOF before replying to the client,
@@ -1180,6 +1253,18 @@ void flushAppendOnlyFile(int force) {
     ssize_t nwritten;
     int sync_in_progress = 0;
     mstime_t latency;
+
+    processAofBioFlushResult();
+    if (aofIOFlushInProgress()) {
+        /* If not forced, return now. The next beforeSleep iteration will flush
+         * the accumulated in-memory buffer once this offloaded flush completes. */
+        if (!force) return;
+
+        /* Forced callers (shutdown, CONFIG appendonly no, AOF rewrite) need the
+         * data on disk now, so drain the bio worker synchronously. */
+        bioDrainWorker(BIO_AOF_FSYNC);
+        processAofBioFlushResult();
+    }
 
     if (sdslen(server.aof_buf) == 0) {
         /* Check if we need to do fsync even the aof buffer is empty,
@@ -1235,6 +1320,11 @@ void flushAppendOnlyFile(int force) {
                                  "without waiting for fsync to complete, this may slow down the server.");
         }
     }
+
+    if (server.bio_aof_offload_enabled && server.aof_fsync == AOF_FSYNC_ALWAYS && !force && tryOffloadAofFlushToBio() == C_OK) {
+        return;
+    }
+
     /* We want to perform a single write. This should be guaranteed atomic
      * at least if the filesystem we are writing is a real physical one.
      * While this will save us against the server being killed I don't think

@@ -1088,6 +1088,43 @@ void debugCommand(client *c) {
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "client-enforce-reply-list") && c->argc == 3) {
         server.debug_client_enforce_reply_list = atoi(objectGetVal(c->argv[2]));
         addReply(c, shared.ok);
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "reply-blocking-pause") && c->argc == 3) {
+        if (!strcasecmp(objectGetVal(c->argv[2]), "aof")) {
+            pauseAofReplyBlocking();
+            addReply(c, shared.ok);
+        } else {
+            addReplyError(c, "No such reply-blocking provider");
+        }
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "reply-blocking-resume") && c->argc == 3) {
+        if (!strcasecmp(objectGetVal(c->argv[2]), "aof")) {
+            resumeAofReplyBlocking();
+            addReply(c, shared.ok);
+        } else {
+            addReplyError(c, "No such reply-blocking provider");
+        }
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "set-io-last-written") && c->argc == 5) {
+        /* DEBUG set-io-last-written <client-id> <bufpos> <data_len>
+         * Simulate a partial write state on a target client for testing.
+         * Sets io_last_written.buf to target->buf, bufpos and data_len to the given values.
+         * This allows injecting the post-partial-write state that triggers the
+         * data_len vs bufpos divergence with copy avoidance. */
+        long long client_id, bufpos_val, data_len_val;
+        if (getLongLongFromObjectOrReply(c, c->argv[2], &client_id, NULL) != C_OK) return;
+        if (getLongLongFromObjectOrReply(c, c->argv[3], &bufpos_val, NULL) != C_OK) return;
+        if (getLongLongFromObjectOrReply(c, c->argv[4], &data_len_val, NULL) != C_OK) return;
+        if (bufpos_val < 0 || data_len_val < 0) {
+            addReplyError(c, "bufpos and data_len must be non-negative");
+            return;
+        }
+        client *target = lookupClientByID((uint64_t)client_id);
+        if (target == NULL) {
+            addReplyError(c, "No such client");
+            return;
+        }
+        target->io_last_written.buf = target->buf;
+        target->io_last_written.bufpos = (size_t)bufpos_val;
+        target->io_last_written.data_len = (size_t)data_len_val;
+        addReply(c, shared.ok);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "force-free-primary-async") && c->argc == 3) {
         server.debug_force_free_primary_async = atoi(objectGetVal(c->argv[2]));
         addReply(c, shared.ok);

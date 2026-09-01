@@ -10,6 +10,9 @@ set(VALKEY_SERVER_SRCS
     ${CMAKE_SOURCE_DIR}/src/quicklist.c
     ${CMAKE_SOURCE_DIR}/src/ae.c
     ${CMAKE_SOURCE_DIR}/src/anet.c
+    ${CMAKE_SOURCE_DIR}/src/reply_blocking.c
+    ${CMAKE_SOURCE_DIR}/src/post_commit_task.c
+    ${CMAKE_SOURCE_DIR}/src/uncommitted_keys.c
     ${CMAKE_SOURCE_DIR}/src/hashtable.c
     ${CMAKE_SOURCE_DIR}/src/kvstore.c
     ${CMAKE_SOURCE_DIR}/src/sds.c

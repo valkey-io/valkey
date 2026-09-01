@@ -412,6 +412,9 @@ client *createClient(connection *conn) {
     c->io_last_written.buf = NULL;
     c->io_last_written.bufpos = 0;
     c->io_last_written.data_len = 0;
+    memset(&c->reply_blocking_state, 0, sizeof(c->reply_blocking_state));
+    replyBlockingClientInit(c);
+
     return c;
 }
 
@@ -1717,10 +1720,12 @@ void commitDeferredReplyBuffer(client *c, int skip_if_blocked) {
         return;
     }
 
+    replyBlockingSnapshotBeforeDeferredReplyCommit(c);
     listJoin(c->reply, c->deferred_reply);
     c->reply_bytes += c->deferred_reply_bytes;
 
     resetDeferredReplyBuffer(c);
+    replyBlockingApplyDeferredReplyBoundary(c);
     if (prepareClientToWrite(c) != C_OK) {
         return;
     }
@@ -1799,6 +1804,29 @@ void copyReplicaOutputBuffer(client *dst, client *src) {
 /* Return true if the specified client has pending reply buffers to write to
  * the socket. */
 int clientHasPendingReplies(client *c) {
+    if (isClientReplyBufferLimited(c)) {
+        /* Check if our first allowed reply boundary is in a position that comes
+         * after the current position that valkey has written up to in the COB. */
+        const blockedResponse *n = listNodeValue(listFirst(c->reply_blocking_state.blocked_responses));
+        if ((c->bufpos && n->disallowed_reply_block == NULL) ||
+            (c->bufpos == 0 && n->disallowed_reply_block != NULL && listFirst(c->reply) == n->disallowed_reply_block)) {
+            /* The comparison is only valid when the write cursor (io_last_written)
+             * and the boundary are measured against the same buffer. That holds
+             * because: (a) the static buf only fills while c->reply is empty, (b)
+             * _postWriteToClient zeroes bufpos once a write passes the static buf,
+             * and (c) it frees every reply block before io_last_written.buf. Assert
+             * it so a future change that breaks these invariants fails tests rather
+             * than silently comparing offsets across different buffers. */
+            debugServerAssert(c->io_last_written.buf == NULL ||
+                              c->io_last_written.buf == (n->disallowed_reply_block == NULL
+                                                             ? c->buf
+                                                             : ((clientReplyBlock *)listNodeValue(n->disallowed_reply_block))->buf));
+            /* Both positions are pointing both at the initial 16KB buffer or the
+             * first reply block, compare the sentlen with the last allowed byte offset. */
+            return c->io_last_written.bufpos < n->disallowed_byte_offset;
+        }
+    }
+
     if (getClientType(c) == CLIENT_TYPE_REPLICA) {
         /* Replicas use global shared replication buffer instead of
          * private output buffer. */
@@ -2007,6 +2035,9 @@ void disconnectReplicas(void) {
  * This is used by freeClient() and replicationCachePrimary(). */
 void unlinkClient(client *c) {
     listNode *ln;
+
+    replyBlockingClientReset(c);
+
 
     /* If this is marked as current client unset it. */
     if (c->conn && server.current_client == c) server.current_client = NULL;
@@ -2793,6 +2824,24 @@ static int writevToClient(client *c) {
     replyIOV reply;
     initReplyIOV(c, iovmax, iov_arr, prefixes, crlf, &reply);
 
+    /* Cap the iov at disallowed_byte_offset when reply blocking is active. */
+    listNode *disallowed_block = NULL;
+    size_t disallowed_offset = 0;
+    if (isClientReplyBufferLimited(c)) {
+        const blockedResponse *br = listNodeValue(listFirst(c->reply_blocking_state.blocked_responses));
+        if (br->disallowed_reply_block == NULL) {
+            /* Boundary is in c->buf — cap bufpos and skip reply blocks. */
+            if (br->disallowed_byte_offset < bufpos) {
+                bufpos = br->disallowed_byte_offset;
+            }
+            lastblock = NULL;
+        } else {
+            /* Boundary is in a reply block — remember it for capping below. */
+            disallowed_block = br->disallowed_reply_block;
+            disallowed_offset = br->disallowed_byte_offset;
+        }
+    }
+
     /* If the static reply buffer is not empty,
      * add it to the iov array for writev() as well. */
     if (bufpos > 0) {
@@ -2816,8 +2865,13 @@ static int writevToClient(client *c) {
              * that may not yet be visible to the current thread*/
             if (!inMainThread() && next == lastblock) used = c->io_last_bufpos;
 
+            /* Cap at disallowed_byte_offset if this is the disallowed block. */
+            if (next == disallowed_block) {
+                if (disallowed_offset < used) used = disallowed_offset;
+            }
+
             if (used == 0) { /* empty node, skip over it. */
-                if (next == lastblock) break;
+                if (next == lastblock || next == disallowed_block) break;
                 continue;
             }
 
@@ -2829,7 +2883,7 @@ static int writevToClient(client *c) {
             if (!buf_metadata[bufcnt].data_len) break;
             bufcnt++;
 
-            if (next == lastblock) break;
+            if (next == lastblock || next == disallowed_block) break;
 
             if (reply.iovcnt == reply.iovsize) {
                 reply.limit_reached = 1;
@@ -2897,6 +2951,16 @@ int _writeToClient(client *c) {
 
     /* If io_last_written_data_len is nonzero it must relate to c->buf */
     serverAssert(c->io_last_written.data_len == 0 || c->io_last_written.buf == c->buf);
+
+    /* Cap bufpos at disallowed_byte_offset when reply blocking is active and
+     * the boundary is in c->buf (disallowed_reply_block == NULL). */
+    if (isClientReplyBufferLimited(c)) {
+        const blockedResponse *br = listNodeValue(listFirst(c->reply_blocking_state.blocked_responses));
+        if (br->disallowed_reply_block == NULL && br->disallowed_byte_offset < bufpos) {
+            bufpos = br->disallowed_byte_offset;
+        }
+    }
+
     ssize_t bytes_to_write = bufpos - c->io_last_written.data_len;
     ssize_t tot_written = 0;
 

@@ -1186,6 +1186,16 @@ int getPositiveLongFromObjectOrReply(client *c, robj *o, long *target, const cha
     }
 }
 
+int getIntFromObject(robj *o, int *target) {
+    long long value;
+
+    if (getLongLongFromObject(o, &value) != C_OK) return C_ERR;
+    if (value < INT_MIN || value > INT_MAX) return C_ERR;
+
+    *target = value;
+    return C_OK;
+}
+
 int getIntFromObjectOrReply(client *c, robj *o, int *target, const char *msg) {
     long value;
 

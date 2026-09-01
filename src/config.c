@@ -2702,6 +2702,9 @@ static int updateAppendOnly(const char **err) {
             return 0;
         }
     }
+    /* Reply-blocking is implied by appendfsync always + AOF on, so toggling
+     * appendonly may enable or disable it. */
+    replyBlockingReset();
     return 1;
 }
 
@@ -2791,6 +2794,15 @@ int updateAppendFsync(const char **err) {
          * worker thread. */
         bioDrainWorker(BIO_AOF_FSYNC);
     }
+    /* Reply-blocking is implied by appendfsync always + AOF on, so toggling
+     * appendfsync may enable or disable it. */
+    replyBlockingReset();
+    return 1;
+}
+
+static int updateBioAofOffloadEnabled(const char **err) {
+    UNUSED(err);
+    replyBlockingReset();
     return 1;
 }
 
@@ -3402,6 +3414,7 @@ standardConfig static_configs[] = {
     createBoolConfig("lua-enable-insecure-api", "lua-enable-deprecated-api", MODIFIABLE_CONFIG | HIDDEN_CONFIG | PROTECTED_CONFIG, server.lua_enable_insecure_api, 0, NULL, updateLuaEnableInsecureApi),
     createBoolConfig("import-mode", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, server.import_mode, 0, NULL, NULL),
     createBoolConfig("io-threads-always-active", NULL, MODIFIABLE_CONFIG | HIDDEN_CONFIG, server.io_threads_always_active, 0, NULL, NULL),
+    createBoolConfig("bio-aof-offload-enabled", NULL, MODIFIABLE_CONFIG | HIDDEN_CONFIG, server.bio_aof_offload_enabled, 0, NULL, updateBioAofOffloadEnabled),
 
     /* String Configs */
     createStringConfig("aclfile", NULL, IMMUTABLE_CONFIG, ALLOW_EMPTY_STRING, server.acl_filename, "", NULL, NULL),

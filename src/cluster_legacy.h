@@ -493,6 +493,10 @@ struct clusterState {
                                                                     excluding nodes without address. */
     unsigned long long stat_cluster_links_buffer_limit_exceeded; /* Total number of cluster links freed due to exceeding
                                                                     buffer limit */
+    unsigned long long stat_cluster_links_established_inbound;   /* Total number of inbound cluster links
+                                                                    successfully established via accept. */
+    unsigned long long stat_cluster_links_established_outbound;  /* Total number of outbound cluster links
+                                                                    successfully established via connect. */
 
     /* Bit map for slots that are no longer claimed by the owner in cluster PING
      * messages. During slot migration, the owner will stop claiming the slot after

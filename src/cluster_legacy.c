@@ -1927,6 +1927,10 @@ static void clusterConnAcceptHandler(connection *conn) {
 
     /* Register read handler */
     connSetReadHandler(conn, clusterReadHandler);
+
+    /* Count a successfully accepted (inbound) cluster link. This reflects
+     * how often peers (re)establish connections to us. */
+    server.cluster->stat_cluster_links_established_inbound++;
 }
 
 void clusterAcceptHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
@@ -4752,6 +4756,10 @@ void clusterLinkConnectHandler(connection *conn) {
 
     /* Register a read handler from now on */
     connSetReadHandler(conn, clusterReadHandler);
+
+    /* Count a successfully connected (outbound) cluster link. This reflects
+     * how often we (re)connect to peers. */
+    server.cluster->stat_cluster_links_established_outbound++;
 
     /* Queue a PING in the new connection ASAP: this is crucial
      * to avoid false positives in failure detection.
@@ -7635,8 +7643,13 @@ sds genClusterInfoString(sds info) {
                      (unsigned long long)server.cluster->stats_bus_module_bytes_sent,
                      (unsigned long long)server.cluster->stats_bus_module_bytes_received);
 
-    info = sdscatfmt(info, "total_cluster_links_buffer_limit_exceeded:%U\r\n",
-                     (unsigned long long)server.cluster->stat_cluster_links_buffer_limit_exceeded);
+    info = sdscatfmt(info,
+                     "total_cluster_links_buffer_limit_exceeded:%U\r\n"
+                     "total_cluster_links_established_inbound:%U\r\n"
+                     "total_cluster_links_established_outbound:%U\r\n",
+                     (unsigned long long)server.cluster->stat_cluster_links_buffer_limit_exceeded,
+                     (unsigned long long)server.cluster->stat_cluster_links_established_inbound,
+                     (unsigned long long)server.cluster->stat_cluster_links_established_outbound);
 
     return info;
 }

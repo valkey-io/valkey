@@ -1045,7 +1045,8 @@ static int findAndExecuteCommand(robj **argv, size_t argc) {
         return CONTINUE_READ_NEXT_COMMAND;
     }
 
-    return cmd->handler(argv, argc, cmd->context);
+    /* Fall back to the engine's own context, which handlers can cast back to their engine context type. */
+    return cmd->handler(argv, argc, cmd->context ? cmd->context : ds.engine->impl.ctx);
 }
 
 void scriptingEngineDebuggerProcessCommands(int *client_disconnected, robj **err) {

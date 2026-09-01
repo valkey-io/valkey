@@ -2771,7 +2771,7 @@ static size_t get_ready_to_signal_threads_tids(int sig_num, pid_t tids[TIDS_MAX_
 
             /* the thread's directory name is equivalent to its tid. */
             long tid = 0;
-            string2l(entry->d_name, strlen(entry->d_name), &tid);
+            if (!string2l(entry->d_name, strlen(entry->d_name), &tid)) continue;
 
             if (!is_thread_ready_to_signal(path_buff, entry->d_name, sig_num)) continue;
 

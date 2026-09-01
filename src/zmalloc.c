@@ -72,6 +72,11 @@ void zlibc_free(void *ptr) {
  */
 #define MALLOC_MIN_SIZE(x) ((x) > 0 ? (x) : sizeof(long))
 
+#ifndef HAVE_MALLOC_SIZE
+#define ZMALLOC_CACHE_ALIGNED_FLAG ((size_t)1 << (sizeof(size_t) * 8 - 1))
+#define ZMALLOC_CACHE_ALIGNED_SIZE_MASK (~ZMALLOC_CACHE_ALIGNED_FLAG)
+#endif
+
 /* Explicitly override malloc/free etc when using tcmalloc. */
 #if defined(USE_TCMALLOC)
 #define malloc(size) tc_malloc(size)
@@ -141,6 +146,17 @@ static void zmalloc_default_oom(size_t size) {
 
 static void (*zmalloc_oom_handler)(size_t) = zmalloc_default_oom;
 
+#ifndef HAVE_MALLOC_SIZE
+static inline int zmallocIsCacheAlignedAllocation(size_t size) {
+    return (size & ZMALLOC_CACHE_ALIGNED_FLAG) != 0;
+}
+
+static inline size_t zmallocCacheAlignedDataSize(size_t size) {
+    return size & ZMALLOC_CACHE_ALIGNED_SIZE_MASK;
+}
+#endif
+
+
 #ifdef HAVE_MALLOC_SIZE
 void *extend_to_usable(void *ptr, size_t size) {
     UNUSED(size);
@@ -185,6 +201,58 @@ void *zmalloc(size_t size) {
     void *ptr = ztrymalloc_usable_internal(size, NULL);
     if (!ptr) zmalloc_oom_handler(size);
     return ptr;
+}
+
+/* Allocate CACHE_LINE_SIZE-aligned memory or panic.
+ * The returned pointer can be freed with zfree(). */
+void *zmalloc_cache_aligned(size_t size) {
+    size_t alloc_size = MALLOC_MIN_SIZE(size);
+
+    if (alloc_size >= SIZE_MAX / 2) {
+        zmalloc_oom_handler(size);
+        return NULL;
+    }
+
+#ifndef HAVE_MALLOC_SIZE
+    if (alloc_size & ZMALLOC_CACHE_ALIGNED_FLAG) {
+        zmalloc_oom_handler(size);
+        return NULL;
+    }
+
+    size_t extra = CACHE_LINE_SIZE - 1;
+    if (extra > SIZE_MAX - PREFIX_SIZE - sizeof(void *)) {
+        zmalloc_oom_handler(size);
+        return NULL;
+    }
+    extra += PREFIX_SIZE + sizeof(void *);
+    if (alloc_size > SIZE_MAX - extra) {
+        zmalloc_oom_handler(size);
+        return NULL;
+    }
+
+    unsigned char *raw = malloc(alloc_size + extra);
+    if (!raw) zmalloc_oom_handler(size);
+
+    uintptr_t aligned =
+        ((uintptr_t)(raw + sizeof(void *) + PREFIX_SIZE + CACHE_LINE_SIZE - 1)) & ~((uintptr_t)CACHE_LINE_SIZE - 1);
+    void *ptr = (void *)aligned;
+
+    *((void **)((unsigned char *)ptr - PREFIX_SIZE - sizeof(void *))) = raw;
+    *((size_t *)((unsigned char *)ptr - PREFIX_SIZE)) = alloc_size | ZMALLOC_CACHE_ALIGNED_FLAG;
+
+    update_zmalloc_stat_alloc(alloc_size + PREFIX_SIZE);
+    return ptr;
+#else
+    void *ptr = NULL;
+#ifdef USE_JEMALLOC
+    int ret = je_posix_memalign(&ptr, CACHE_LINE_SIZE, alloc_size);
+#else
+    int ret = posix_memalign(&ptr, CACHE_LINE_SIZE, alloc_size);
+#endif
+    if (ret != 0 || !ptr) zmalloc_oom_handler(size);
+    update_zmalloc_stat_alloc(zmalloc_size(ptr));
+    return ptr;
+#endif
 }
 
 /* Try allocating memory, and return NULL if failed. */
@@ -376,6 +444,7 @@ void *zrealloc_usable(void *ptr, size_t size, size_t *usable) {
 size_t zmalloc_size(void *ptr) {
     void *realptr = (char *)ptr - PREFIX_SIZE;
     size_t size = *((size_t *)realptr);
+    size = zmallocCacheAlignedDataSize(size);
     return size + PREFIX_SIZE;
 }
 size_t zmalloc_usable_size(void *ptr) {
@@ -407,8 +476,15 @@ void zfree(void *ptr) {
 #ifdef HAVE_MALLOC_SIZE
     size_t size = zmalloc_size(ptr);
 #else
-    ptr = (char *)ptr - PREFIX_SIZE;
-    size_t data_size = *((size_t *)ptr);
+    unsigned char *prefix = (unsigned char *)ptr - PREFIX_SIZE;
+    size_t data_size = *((size_t *)prefix);
+    if (zmallocIsCacheAlignedAllocation(data_size)) {
+        size_t size = zmallocCacheAlignedDataSize(data_size) + PREFIX_SIZE;
+        void *raw = *((void **)(prefix - sizeof(void *)));
+        zfree_internal(raw, size);
+        return;
+    }
+    ptr = prefix;
     size_t size = data_size + PREFIX_SIZE;
 #endif
 
@@ -420,7 +496,12 @@ void zfree_with_size(void *ptr, size_t size) {
     if (ptr == NULL) return;
 
 #ifndef HAVE_MALLOC_SIZE
-    ptr = (char *)ptr - PREFIX_SIZE;
+    unsigned char *prefix = (unsigned char *)ptr - PREFIX_SIZE;
+    if (zmallocIsCacheAlignedAllocation(*((size_t *)prefix))) {
+        ptr = *((void **)(prefix - sizeof(void *)));
+    } else {
+        ptr = prefix;
+    }
     size += PREFIX_SIZE;
 #endif
 
@@ -485,6 +566,22 @@ void zmadvise_dontneed(void *ptr, size_t size_hint) {
 #else
     (void)(ptr);
     (void)(size_hint);
+#endif
+}
+
+/* Release pages back to the OS using MADV_DONTNEED for a specific address range.
+ * Unlike zmadvise_dontneed(), this function does not query the allocator for
+ * the allocation size, and does not perform any pointer alignment. The caller
+ * must ensure that 'ptr' is page-aligned and 'size' is a multiple of page size.
+ * This is useful when we want to release a portion of a larger allocation that
+ * is no longer needed. */
+void zmadvise_dontneed_range(void *ptr, size_t size) {
+#if defined(USE_JEMALLOC) && defined(__linux__)
+    if (ptr == NULL || size == 0) return;
+    madvise(ptr, size, MADV_DONTNEED);
+#else
+    (void)(ptr);
+    (void)(size);
 #endif
 }
 
@@ -719,18 +816,6 @@ void set_jemalloc_bg_thread(int enable) {
     je_mallctl("background_thread", NULL, 0, &val, 1);
 }
 
-int jemalloc_purge(void) {
-    /* return all unused (reserved) pages to the OS */
-    char tmp[32];
-    unsigned narenas = 0;
-    size_t sz = sizeof(unsigned);
-    if (!je_mallctl("arenas.narenas", &narenas, &sz, NULL, 0)) {
-        snprintf(tmp, sizeof(tmp), "arena.%d.purge", narenas);
-        if (!je_mallctl(tmp, NULL, 0, NULL, 0)) return 0;
-    }
-    return -1;
-}
-
 #else
 
 int zmalloc_get_allocator_info(size_t *allocated, size_t *active, size_t *resident, size_t *retained, size_t *muzzy) {
@@ -744,13 +829,29 @@ void set_jemalloc_bg_thread(int enable) {
     ((void)(enable));
 }
 
-int jemalloc_purge(void) {
-    return 0;
-}
-
 #endif
 
-/* This function provides us access to the libc malloc_trim(). */
+int zmalloc_purge(void) {
+    int ret = 0;
+#if defined(USE_JEMALLOC)
+    /* Return all unused (reserved) jemalloc pages to the OS. */
+    char tmp[32];
+    unsigned narenas = 0;
+    size_t sz = sizeof(unsigned);
+    ret = -1;
+    if (!je_mallctl("arenas.narenas", &narenas, &sz, NULL, 0)) {
+        snprintf(tmp, sizeof(tmp), "arena.%d.purge", narenas);
+        if (!je_mallctl(tmp, NULL, 0, NULL, 0)) ret = 0;
+    }
+#endif
+    zlibc_trim();
+    return ret;
+}
+
+/* Release free pages of the libc main arena back to the OS via malloc_trim(3).
+ * Even with jemalloc, libc-internal allocations (getaddrinfo(3), NSS, pthread,
+ * stdio, or modules calling malloc() directly) live in the [heap] segment and
+ * are otherwise rarely returned to the OS. */
 void zlibc_trim(void) {
 #if defined(__GLIBC__) && !defined(USE_LIBC)
     malloc_trim(0);

@@ -84,7 +84,7 @@ static inline char sdsReqType(size_t string_size) {
  * end of the string. However the string is binary safe and can contain
  * \0 characters in the middle, as the length is stored in the sds header. */
 sds sdsnewlen(const void *init, size_t initlen) {
-    void *sh;
+    void *s_hdr;
     sds s;
     char type = sdsReqType(initlen);
     /* Empty strings are usually created in order to append. Use type 8
@@ -96,12 +96,12 @@ sds sdsnewlen(const void *init, size_t initlen) {
 
     if (hdrlen + initlen + 1 <= initlen)
         return NULL; /* Catch size_t overflow */
-    sh = s_malloc(hdrlen + initlen + 1);
-    if (sh == NULL)
+    s_hdr = s_malloc(hdrlen + initlen + 1);
+    if (s_hdr == NULL)
         return NULL;
     if (!init)
-        memset(sh, 0, hdrlen + initlen + 1);
-    s = (char *)sh + hdrlen;
+        memset(s_hdr, 0, hdrlen + initlen + 1);
+    s = (char *)s_hdr + hdrlen;
     fp = ((unsigned char *)s) - 1;
     switch (type) {
     case SDS_TYPE_5: {
@@ -329,7 +329,7 @@ void *sdsAllocPtr(sds s) {
  * ... check for nread <= 0 and handle it ...
  * sdsIncrLen(s, nread);
  */
-void sdsIncrLen(sds s, int incr) {
+void sdsIncrLen(sds s, ssize_t incr) {
     unsigned char flags = s[-1];
     size_t len;
     switch (flags & SDS_TYPE_MASK) {
@@ -453,7 +453,7 @@ static uint32_t digits10(uint64_t v) {
         return 2;
     if (v < 1000)
         return 3;
-    if (v < 1000000000000UL) {
+    if (v < 1000000000000ULL) {
         if (v < 100000000UL) {
             if (v < 1000000) {
                 if (v < 10000)
@@ -462,12 +462,12 @@ static uint32_t digits10(uint64_t v) {
             }
             return 7 + (v >= 10000000UL);
         }
-        if (v < 10000000000UL) {
+        if (v < 10000000000ULL) {
             return 9 + (v >= 1000000000UL);
         }
-        return 11 + (v >= 100000000000UL);
+        return 11 + (v >= 100000000000ULL);
     }
-    return 12 + digits10(v / 1000000000000UL);
+    return 12 + digits10(v / 1000000000000ULL);
 }
 
 /* Convert a unsigned long long into a string. Returns the number of
@@ -487,13 +487,16 @@ static int ull2string(char *dst, size_t dstlen, unsigned long long value) {
 
     /* Check length. */
     uint32_t length = digits10(value);
-    if (length >= dstlen)
+    if (length == 0 || length >= dstlen)
         goto err;
 
     /* Null term. */
-    uint32_t next = length - 1;
+    int next = length - 1;
     dst[next + 1] = '\0';
-    while (value >= 100) {
+    while (next >= 1) {
+        /* value should not be 0 while next >= 1 */
+        if (value == 0)
+            goto err;
         int const i = (value % 100) * 2;
         value /= 100;
         dst[next] = digits[i + 1];
@@ -501,14 +504,18 @@ static int ull2string(char *dst, size_t dstlen, unsigned long long value) {
         next -= 2;
     }
 
-    /* Handle last 1-2 digits. */
-    if (value < 10) {
+    /* still have digits to process, but out of room */
+    if (value > 0 && next < 0)
+        goto err;
+
+    /* even number of digits should have been processed in the loop */
+    if (value >= 10)
+        goto err;
+
+    /* if next is 0, process last digit */
+    if (next == 0)
         dst[next] = '0' + (uint32_t)value;
-    } else {
-        int i = (uint32_t)value * 2;
-        dst[next] = digits[i + 1];
-        dst[next - 1] = digits[i];
-    }
+
     return length;
 err:
     /* force add Null termination */

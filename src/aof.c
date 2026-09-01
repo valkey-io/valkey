@@ -28,6 +28,7 @@
  */
 
 #include "server.h"
+#include "ordered_index.h"
 #include "bio.h"
 #include "rio.h"
 #include "functions.h"
@@ -601,7 +602,7 @@ int persistAofManifest(aofManifest *am) {
     return ret;
 }
 
-/* Called in `loadAppendOnlyFiles` when we upgrade from a old version of the server.
+/* Called in `loadAppendOnlyFiles` when we upgrade from an old version of the server.
  *
  * 1) Create AOF directory use 'server.aof_dirname' as the name.
  * 2) Use 'server.aof_filename' to construct a BASE type aofInfo and add it to
@@ -1005,6 +1006,131 @@ int startAppendOnly(void) {
     return C_OK;
 }
 
+/* Try to restart AOF after replica full sync by adopting `server.rdb_filename`
+ * as the new BASE file (RDB preamble mode), avoiding a redundant AOFRW.
+ * Returns C_OK on success; on C_ERR caller should fallback to
+ * restartAOFAfterSYNC(). */
+int restartAOFWithSyncRdb(void) {
+    serverAssert(server.aof_state == AOF_OFF);
+
+    int ret = C_ERR;
+    int newfd = -1, rdbfile_renamed = 0;
+    sds new_base_filename = NULL;
+    sds new_base_filepath = NULL;
+    sds new_incr_filename = NULL;
+    sds new_incr_filepath = NULL;
+    aofManifest *temp_am = NULL;
+
+    if (dirCreateIfMissing(server.aof_dirname) == -1) {
+        serverLog(LL_WARNING, "Can't open or create append-only dir %s: %s", server.aof_dirname, strerror(errno));
+        goto cleanup;
+    }
+
+    serverAssert(server.aof_manifest != NULL);
+    temp_am = aofManifestDup(server.aof_manifest);
+
+    new_base_filename = getNewBaseFileNameAndMarkPreAsHistory(temp_am, server.aof_use_rdb_preamble);
+    serverAssert(new_base_filename != NULL);
+    new_base_filepath = makePath(server.aof_dirname, new_base_filename);
+
+    if (rename(server.rdb_filename, new_base_filepath) == -1) {
+        serverLog(LL_WARNING, "Error trying to rename the RDB file %s into %s: %s", server.rdb_filename,
+                  new_base_filepath, strerror(errno));
+        goto cleanup;
+    }
+    rdbfile_renamed = 1;
+
+    /* Mark existing incr AOF files as history BEFORE creating the new one,
+     * so the new incr entry is not inadvertently moved to history. */
+    markRewrittenIncrAofAsHistory(temp_am);
+
+    new_incr_filename = getNewIncrAofName(temp_am);
+    new_incr_filepath = makePath(server.aof_dirname, new_incr_filename);
+    newfd = open(new_incr_filepath, O_WRONLY | O_TRUNC | O_CREAT, 0666);
+    if (newfd == -1) {
+        serverLog(LL_WARNING, "Can't open the append-only file %s: %s", new_incr_filename, strerror(errno));
+        goto cleanup;
+    }
+
+    if (persistAofManifest(temp_am) == C_ERR) {
+        goto cleanup;
+    }
+
+    aofManifestFreeAndUpdate(temp_am);
+    temp_am = NULL;
+
+    aofDelHistoryFiles();
+
+    sdsfree(new_base_filepath);
+    new_base_filepath = NULL;
+    sdsfree(new_incr_filepath);
+    new_incr_filepath = NULL;
+
+    /* Drain pending fsync jobs from the previous AOF before publishing the new
+     * fsynced offset to avoid races on fsynced_reploff_pending. */
+    bioDrainWorker(BIO_AOF_FSYNC);
+    atomic_store_explicit(&server.fsynced_reploff_pending, server.primary_repl_offset, memory_order_relaxed);
+    server.fsynced_reploff =
+        atomic_load_explicit(&server.fsynced_reploff_pending, memory_order_relaxed);
+
+    int aof_bio_fsync_status = atomic_load_explicit(&server.aof_bio_fsync_status, memory_order_relaxed);
+    if (aof_bio_fsync_status == C_ERR) {
+        serverLog(LL_WARNING, "AOF reopen, just ignore the AOF fsync error in bio job");
+        atomic_store_explicit(&server.aof_bio_fsync_status, C_OK, memory_order_relaxed);
+    }
+
+    if (server.aof_last_write_status == C_ERR) {
+        serverLog(LL_WARNING, "AOF reopen, just ignore the last error.");
+        server.aof_last_write_status = C_OK;
+    }
+
+    server.aof_lastbgrewrite_status = C_OK;
+    server.stat_aofrw_consecutive_failures = 0;
+
+    server.aof_last_fsync = server.mstime;
+    server.aof_last_incr_size = 0;
+    server.aof_last_incr_fsync_offset = 0;
+    server.aof_rewrite_base_size = getAppendOnlyFileSize(new_base_filename, NULL);
+    server.aof_current_size = server.aof_rewrite_base_size;
+
+    server.aof_fd = newfd;
+    server.aof_state = AOF_ON;
+
+    serverLog(LL_NOTICE, "Reused RDB file from primary sync as AOF base file: %s", new_base_filename);
+    ret = C_OK;
+    return ret;
+
+cleanup:
+    if (rdbfile_renamed) {
+        if (rename(new_base_filepath, server.rdb_filename) == -1) {
+            serverLog(LL_WARNING,
+                      "Failed to rename AOF base back to RDB file %s: %s. "
+                      "Orphan file may remain at %s",
+                      server.rdb_filename, strerror(errno), new_base_filepath);
+        } else {
+            rdbfile_renamed = 0;
+        }
+    }
+    if (server.rdb_del_sync_files && allPersistenceDisabled()) {
+        serverLog(LL_NOTICE, "Removing the RDB file obtained from "
+                             "the primary. This replica has persistence "
+                             "disabled");
+        if (rdbfile_renamed) {
+            bg_unlink(new_base_filepath);
+        } else {
+            bg_unlink(server.rdb_filename);
+        }
+    }
+    if (newfd != -1) close(newfd);
+    if (new_incr_filepath) {
+        bg_unlink(new_incr_filepath);
+        sdsfree(new_incr_filepath);
+    }
+    if (temp_am) aofManifestFree(temp_am);
+    if (new_base_filepath) sdsfree(new_base_filepath);
+    return ret;
+}
+
 /* This is a wrapper to the write syscall in order to retry on short writes
  * or if the syscall gets interrupted. It could look strange that we retry
  * on short writes given that we are writing to a block device: normally if
@@ -1102,7 +1228,7 @@ void flushAppendOnlyFile(int force) {
                  * than two seconds this is still ok. Postpone again. */
                 return;
             }
-            /* Otherwise fall through, and go write since we can't wait
+            /* Otherwise, fall through, and go write since we can't wait
              * over two seconds. */
             server.aof_delayed_fsync++;
             serverLog(LL_NOTICE, "Asynchronous AOF fsync is taking too long (disk is busy?). Writing the AOF buffer "
@@ -1367,6 +1493,10 @@ struct client *createAOFClient(void) {
 
     c->id = CLIENT_ID_AOF; /* So modules can identify it's the AOF client. */
 
+    /* The AOF client is not subject to ACL checks because all commands present
+     * in the AOF file must be replayed. */
+    c->user = NULL;
+
     /*
      * The AOF client should never be blocked (unlike primary
      * replication connection).
@@ -1376,7 +1506,8 @@ struct client *createAOFClient(void) {
      * background processing there is a chance that the
      * command execution order will be violated.
      */
-    c->raw_flag = 0;
+    c->raw_flag1 = 0;
+    c->raw_flag2 = 0;
     c->flag.deny_blocking = 1;
     c->flag.fake = 1;
 
@@ -1462,8 +1593,9 @@ int loadSingleAppendOnlyFile(char *filename) {
             ret = AOF_FAILED;
             goto cleanup;
         } else {
-            loadingAbsProgress(ftello(fp));
-            last_progress_report_size = ftello(fp);
+            valid_up_to = ftello(fp);
+            loadingAbsProgress(valid_up_to);
+            last_progress_report_size = valid_up_to;
             if (old_style) serverLog(LL_NOTICE, "Reading the remaining AOF tail...");
         }
     }
@@ -1577,11 +1709,7 @@ int loadSingleAppendOnlyFile(char *filename) {
      * If the client is in the middle of a MULTI/EXEC, handle it as it was
      * a short read, even if technically the protocol is correct: we want
      * to remove the unprocessed tail and continue. */
-    if (fakeClient->flag.multi) {
-        serverLog(LL_WARNING, "Revert incomplete MULTI/EXEC transaction in AOF file %s", filename);
-        valid_up_to = valid_before_multi;
-        goto uxeof;
-    }
+    if (fakeClient->flag.multi) goto uxeof;
 
 loaded_ok: /* DB loaded, cleanup and return success (AOF_OK or AOF_TRUNCATED). */
     loadingIncrProgress(ftello(fp) - last_progress_report_size);
@@ -1596,6 +1724,10 @@ readerr: /* Read error. If feof(fp) is true, fall through to unexpected EOF. */
     }
 
 uxeof: /* Unexpected AOF end of file. */
+    if (fakeClient->flag.multi) {
+        serverLog(LL_WARNING, "Revert incomplete MULTI/EXEC transaction in AOF file %s", filename);
+        valid_up_to = valid_before_multi;
+    }
     if (server.aof_load_truncated) {
         serverLog(LL_WARNING, "!!! Warning: short read while loading the AOF file %s!!!", filename);
         serverLog(LL_WARNING, "!!! Truncating the AOF %s at offset %llu !!!", filename,
@@ -1859,7 +1991,7 @@ int rewriteSetObject(rio *r, robj *key, robj *o) {
 int rewriteSortedSetObject(rio *r, robj *key, robj *o) {
     long long count = 0, items = zsetLength(o);
 
-    if (o->encoding == OBJ_ENCODING_LISTPACK) {
+    if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) {
         unsigned char *zl = objectGetVal(o);
         unsigned char *eptr, *sptr;
         unsigned char *vstr;
@@ -1894,13 +2026,13 @@ int rewriteSortedSetObject(rio *r, robj *key, robj *o) {
             if (++count == AOF_REWRITE_ITEMS_PER_CMD) count = 0;
             items--;
         }
-    } else if (o->encoding == OBJ_ENCODING_SKIPLIST) {
+    } else if (objectGetEncoding(o) == OBJ_ENCODING_BTREE) {
         zset *zs = objectGetVal(o);
         hashtableIterator iter;
         hashtableInitIterator(&iter, zs->ht, 0);
         void *next;
         while (hashtableNext(&iter, &next)) {
-            zskiplistNode *node = next;
+            OrderedIndexItem *node = next;
             if (count == 0) {
                 int cmd_items = (items > AOF_REWRITE_ITEMS_PER_CMD) ? AOF_REWRITE_ITEMS_PER_CMD : items;
 
@@ -1910,8 +2042,10 @@ int rewriteSortedSetObject(rio *r, robj *key, robj *o) {
                     return 0;
                 }
             }
-            sds ele = zslGetNodeElement(node);
-            if (!rioWriteBulkDouble(r, node->score) || !rioWriteBulkString(r, ele, sdslen(ele))) {
+            const char *ele;
+            size_t ele_len;
+            orderedIndexItemGetElement(node, &ele, &ele_len);
+            if (!rioWriteBulkDouble(r, orderedIndexItemGetScore(node)) || !rioWriteBulkString(r, ele, ele_len)) {
                 hashtableCleanupIterator(&iter);
                 return 0;
             }
@@ -2239,24 +2373,24 @@ int rewriteObjectRio(rio *aof, robj *o, int db_num) {
     expiretime = objectGetExpire(o);
 
     /* Save the key and associated value */
-    if (o->type == OBJ_STRING) {
+    if (objectGetType(o) == OBJ_STRING) {
         /* Emit a SET command */
         char cmd[] = "*3\r\n$3\r\nSET\r\n";
         if (rioWrite(aof, cmd, sizeof(cmd) - 1) == 0) return C_ERR;
         /* Key and value */
         if (rioWriteBulkObject(aof, &key) == 0) return C_ERR;
         if (rioWriteBulkObject(aof, o) == 0) return C_ERR;
-    } else if (o->type == OBJ_LIST) {
+    } else if (objectGetType(o) == OBJ_LIST) {
         if (rewriteListObject(aof, &key, o) == 0) return C_ERR;
-    } else if (o->type == OBJ_SET) {
+    } else if (objectGetType(o) == OBJ_SET) {
         if (rewriteSetObject(aof, &key, o) == 0) return C_ERR;
-    } else if (o->type == OBJ_ZSET) {
+    } else if (objectGetType(o) == OBJ_ZSET) {
         if (rewriteSortedSetObject(aof, &key, o) == 0) return C_ERR;
-    } else if (o->type == OBJ_HASH) {
+    } else if (objectGetType(o) == OBJ_HASH) {
         if (rewriteHashObject(aof, &key, o) == 0) return C_ERR;
-    } else if (o->type == OBJ_STREAM) {
+    } else if (objectGetType(o) == OBJ_STREAM) {
         if (rewriteStreamObject(aof, &key, o) == 0) return C_ERR;
-    } else if (o->type == OBJ_MODULE) {
+    } else if (objectGetType(o) == OBJ_MODULE) {
         if (rewriteModuleObject(aof, &key, o, db_num) == 0) return C_ERR;
     } else {
         serverPanic("Unknown object type");

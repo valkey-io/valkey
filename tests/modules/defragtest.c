@@ -148,7 +148,7 @@ int FragDefrag(ValkeyModuleDefragCtx *ctx, ValkeyModuleString *key, void **value
     int dbid = ValkeyModule_GetDbIdFromDefragCtx(ctx);
     ValkeyModule_Assert(dbid != -1);
 
-    /* Attempt to get cursor, validate it's what we're exepcting */
+    /* Attempt to get cursor, validate it's what we're expecting */
     if (ValkeyModule_DefragCursorGet(ctx, &i) == VALKEYMODULE_OK) {
         if (i > 0) datatype_resumes++;
 

@@ -43,9 +43,11 @@ static commandlogEntry *commandlogCreateEntry(client *c, robj **argv, int argc, 
             ce->argv[j] =
                 createObject(OBJ_STRING, sdscatprintf(sdsempty(), "... (%d more arguments)", argc - ceargc + 1));
         } else {
-            /* Trim too long strings as well... */
-            if (argv[j]->type == OBJ_STRING && sdsEncodedObject(argv[j]) &&
-                sdslen(objectGetVal(argv[j])) > COMMANDLOG_ENTRY_MAX_STRING) {
+            if (clientCommandArgShouldBeRedacted(c, j)) {
+                ce->argv[j] = shared.redacted;
+                /* Trim too long strings as well... */
+            } else if (argv[j]->type == OBJ_STRING && sdsEncodedObject(argv[j]) &&
+                       sdslen(objectGetVal(argv[j])) > COMMANDLOG_ENTRY_MAX_STRING) {
                 sds s = sdsnewlen(objectGetVal(argv[j]), COMMANDLOG_ENTRY_MAX_STRING);
 
                 s = sdscatprintf(s, "... (%lu more bytes)",
@@ -67,8 +69,11 @@ static commandlogEntry *commandlogCreateEntry(client *c, robj **argv, int argc, 
     ce->time = time(NULL);
     ce->value = value;
     ce->id = server.commandlog[type].entry_id++;
-    ce->peerid = sdsnew(getClientPeerId(c));
-    ce->cname = c->name ? sdsnew(objectGetVal(c->name)) : sdsempty();
+    /* For commands executed from a script, the executing client is a fake
+     * client with no connection, so attribute the entry to the calling client. */
+    client *caller = scriptIsRunning() ? scriptGetCaller() : c;
+    ce->peerid = sdsnew(getClientPeerId(caller));
+    ce->cname = caller->name ? sdsnew(objectGetVal(caller->name)) : sdsempty();
     return ce;
 }
 
@@ -152,21 +157,13 @@ void commandlogPushCurrentCommand(client *c, struct serverCommand *cmd) {
     robj **argv = c->original_argv ? c->original_argv : c->argv;
     int argc = c->original_argv ? c->original_argc : c->argc;
 
-    /* In script, client will be replaced with its caller, so commandlog needs to use the metrics
-     * of the client that currently executing the command. */
-    long duration = c->duration;
-    unsigned long long net_input_bytes_curr_cmd = c->net_input_bytes_curr_cmd;
-    unsigned long long net_output_bytes_curr_cmd = c->net_output_bytes_curr_cmd;
-
-    /* If a script is currently running, the client passed in is a
-     * fake client. Or the client passed in is the original client
-     * if this is a EVAL or alike, doesn't matter. In this case,
-     * use the original client to get the client information. */
-    c = scriptIsRunning() ? scriptGetCaller() : c;
-
-    commandlogPushEntryIfNeeded(c, argv, argc, duration, COMMANDLOG_TYPE_SLOW);
-    commandlogPushEntryIfNeeded(c, argv, argc, net_input_bytes_curr_cmd, COMMANDLOG_TYPE_LARGE_REQUEST);
-    commandlogPushEntryIfNeeded(c, argv, argc, net_output_bytes_curr_cmd, COMMANDLOG_TYPE_LARGE_REPLY);
+    /* 'c' is the client that executed the command: for a command called from a
+     * script this is the fake client, whose argv, metrics and redaction bitmap
+     * describe the executed command. Entry creation resolves the calling client
+     * for the connection identity fields. */
+    commandlogPushEntryIfNeeded(c, argv, argc, c->duration, COMMANDLOG_TYPE_SLOW);
+    commandlogPushEntryIfNeeded(c, argv, argc, c->net_input_bytes_curr_cmd, COMMANDLOG_TYPE_LARGE_REQUEST);
+    commandlogPushEntryIfNeeded(c, argv, argc, c->net_output_bytes_curr_cmd, COMMANDLOG_TYPE_LARGE_REPLY);
 }
 
 /* The SLOWLOG command. Implements all the subcommands needed to handle the

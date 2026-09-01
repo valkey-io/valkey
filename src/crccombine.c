@@ -219,7 +219,7 @@ void init_combine_cache(uint64_t poly, uint8_t dim) {
  * WARNING: if you enable USE_STATIC_COMBINE_CACHE to make this fast, you MUST
  * ALWAYS USE THE SAME POLYNOMIAL, otherwise you will get the wrong results.
  * You MAY bzero() the even/odd static arrays, which will induce a re-cache on
- * next call as a work-around, but ... maybe just parameterize the cached
+ * next call as a workaround, but ... maybe just parameterize the cached
  * models at that point like Mark Adler does in modern crcany/crc.c .
  */
 

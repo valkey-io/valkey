@@ -1,4 +1,5 @@
 [![codecov](https://codecov.io/gh/valkey-io/valkey/graph/badge.svg?token=KYYSJAYC5F)](https://codecov.io/gh/valkey-io/valkey)
+[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/valkey-io/valkey/badge)](https://securityscorecards.dev/viewer/?uri=github.com/valkey-io/valkey)
 
 This project was forked from the open source Redis project right before the transition to their new source available licenses.
 
@@ -52,12 +53,10 @@ as libsystemd-dev on Debian/Ubuntu or systemd-devel on CentOS) and run:
 
     % make USE_SYSTEMD=yes
 
-Since Valkey version 8.1, `fast_float` has been introduced as an optional
-dependency, which can speed up sorted sets and other commands that use
-the double datatype. To build with `fast_float` support, you'll need a
-C++ compiler and run:
+To build with enhanced stack traces that include file names and line numbers
+for all functions (including static functions), use libbacktrace:
 
-    % make USE_FAST_FLOAT=yes
+    % make USE_LIBBACKTRACE=yes
 
 To build Valkey without the Lua engine:
 
@@ -143,14 +142,18 @@ To compile against jemalloc on Mac OS X systems, use:
 
 ## Monotonic clock
 
-By default, Valkey will build using the POSIX clock_gettime function as the
-monotonic clock source.  On most modern systems, the internal processor clock
-can be used to improve performance.  Cautions can be found here:
+By default, Valkey uses the processor's internal instruction clock (TSC on x86,
+CNTVCT on ARM) for monotonic time tracking, which provides approximately 3x
+faster time access compared to POSIX clock_gettime (~10-30ns vs ~100ns).
+This is enabled by default on supported architectures (x86_64 Linux and aarch64)
+and automatically falls back to POSIX clock_gettime on unsupported systems.
+
+For more information about processor clock usage, see:
     http://oliveryang.net/2015/09/pitfalls-of-TSC-usage/
 
-To build with support for the processor's internal instruction clock, use:
+To disable the processor clock and force POSIX clock_gettime, use:
 
-    % make CFLAGS="-DUSE_PROCESSOR_CLOCK"
+    % make CFLAGS="-DNO_PROCESSOR_CLOCK"
 
 ## Verbose build
 
@@ -332,7 +335,7 @@ Other options supported by Valkey's `CMake` build system:
 - `-DBUILD_RDMA=<no|module>` enable RDMA module build (only module mode supported). Default: `no`
 - `-DBUILD_MALLOC=<libc|jemalloc|tcmalloc|tcmalloc_minimal>` choose the allocator to use. Default on Linux: `jemalloc`, for other OS: `libc`
 - `-DBUILD_SANITIZER=<address|thread|undefined>` build with address sanitizer enabled. Default: disabled (no sanitizer)
-- `-DBUILD_UNIT_TESTS=[yes|no]`  when set, the build will produce the executable `valkey-unit-tests`. Default: `no`
+- `-DBUILD_UNIT_GTESTS=[yes|no]`  when set, the build will produce unit tests executable `valkey-unit-gtests`. Default: `no`
 - `-DBUILD_TEST_MODULES=[yes|no]`  when set, the build will include the modules located under the `tests/modules` folder. Default: `no`
 - `-DBUILD_EXAMPLE_MODULES=[yes|no]`  when set, the build will include the example modules located under the `src/modules` folder. Default: `no`
 

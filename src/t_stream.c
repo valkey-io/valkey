@@ -140,7 +140,7 @@ int streamDecrID(streamID *id) {
 
 /* Generate the next stream item ID given the previous one. If the current
  * milliseconds Unix time is greater than the previous one, just use this
- * as time part and start with sequence part of zero. Otherwise we use the
+ * as time part and start with sequence part of zero. Otherwise, we use the
  * previous time (and never go backward) and increment the sequence. */
 void streamNextID(streamID *last_id, streamID *new_id) {
     uint64_t ms = commandTimeSnapshot();
@@ -161,7 +161,7 @@ void streamNextID(streamID *last_id, streamID *new_id) {
 robj *streamDup(robj *o) {
     robj *sobj;
 
-    serverAssert(o->type == OBJ_STREAM);
+    serverAssert(objectGetType(o) == OBJ_STREAM);
 
     switch (o->encoding) {
     case OBJ_ENCODING_STREAM: sobj = createStreamObject(); break;
@@ -670,6 +670,9 @@ typedef struct {
     /* XADD + XTRIM common options */
     int trim_strategy;         /* TRIM_STRATEGY_* */
     int trim_strategy_arg_idx; /* Index of the count in MAXLEN/MINID, for rewriting. */
+    int limit_arg_idx;         /* Index of the LIMIT token in argv if it was given,
+                                * 0 otherwise. Used to strip the redundant LIMIT
+                                * option when rewriting the command for propagation. */
     int approx_trim;           /* If 1 only delete whole radix tree nodes, so
                                 * the trim argument is not applied verbatim. */
     long long limit;           /* Maximum amount of entries to trim. If 0, no limitation
@@ -716,6 +719,15 @@ int64_t streamTrim(stream *s, streamAddTrimArgs *args) {
 
     if (trim_strategy == TRIM_STRATEGY_NONE) return 0;
     if (trim_strategy == TRIM_STRATEGY_MAXLEN && s->length <= maxlen) return 0;
+    if (trim_strategy == TRIM_STRATEGY_MAXLEN && maxlen == 0 && !approx && limit == 0) {
+        int64_t deleted = s->length;
+        raxFreeWithCallback(s->rax, lpFreeVoid);
+        s->rax = raxNew();
+        s->length = 0;
+        s->first_id.ms = 0;
+        s->first_id.seq = 0;
+        return deleted;
+    }
 
     raxIterator ri;
     raxStart(&ri, s->rax);
@@ -819,12 +831,12 @@ int64_t streamTrim(stream *s, streamAddTrimArgs *args) {
 
             /* Mark the entry as deleted. */
             if (!(flags & STREAM_ITEM_FLAG_DELETED)) {
-                intptr_t delta = p - lp;
+                ptrdiff_t delta = p ? p - lp : 0;
                 flags |= STREAM_ITEM_FLAG_DELETED;
                 lp = lpReplaceInteger(lp, &pcopy, flags);
+                if (p) p = lp + delta;
                 deleted_from_lp++;
                 s->length--;
-                p = lp + delta;
             }
         }
         deleted += deleted_from_lp;
@@ -960,6 +972,8 @@ static int streamParseAddOrTrimArgsOrReply(client *c, streamAddTrimArgs *args, i
                 return -1;
             }
             limit_given = 1;
+            args->limit_arg_idx = i; /* Remember LIMIT position so the rewrite path
+                                      * can drop the two-arg LIMIT option entirely. */
             i++;
         } else if (xadd && !strcasecmp(opt, "nomkstream")) {
             args->no_mkstream = 1;
@@ -1040,34 +1054,41 @@ static int streamParseAddOrTrimArgsOrReply(client *c, streamAddTrimArgs *args, i
  *  }
  *  streamIteratorStop(&myiterator); */
 void streamIteratorStart(streamIterator *si, stream *s, streamID *start, streamID *end, int rev) {
-    /* Initialize the iterator and translates the iteration start/stop
-     * elements into a 128 big big-endian number. */
+    /* Initialize the iterator and store the iteration range. */
     if (start) {
-        streamEncodeID(si->start_key, start);
+        si->start_id.ms = start->ms;
+        si->start_id.seq = start->seq;
     } else {
-        si->start_key[0] = 0;
-        si->start_key[1] = 0;
+        si->start_id.ms = 0;
+        si->start_id.seq = 0;
     }
 
     if (end) {
-        streamEncodeID(si->end_key, end);
+        si->end_id.ms = end->ms;
+        si->end_id.seq = end->seq;
     } else {
-        si->end_key[0] = UINT64_MAX;
-        si->end_key[1] = UINT64_MAX;
+        si->end_id.ms = UINT64_MAX;
+        si->end_id.seq = UINT64_MAX;
     }
 
     /* Seek the correct node in the radix tree. */
     raxStart(&si->ri, s->rax);
     if (!rev) {
         if (start && (start->ms || start->seq)) {
-            raxSeek(&si->ri, "<=", (unsigned char *)si->start_key, sizeof(si->start_key));
+            uint64_t start_key[2];
+            start_key[0] = htonu64(start->ms);
+            start_key[1] = htonu64(start->seq);
+            raxSeek(&si->ri, "<=", (unsigned char *)start_key, sizeof(start_key));
             if (raxEOF(&si->ri)) raxSeek(&si->ri, "^", NULL, 0);
         } else {
             raxSeek(&si->ri, "^", NULL, 0);
         }
     } else {
         if (end && (end->ms || end->seq)) {
-            raxSeek(&si->ri, "<=", (unsigned char *)si->end_key, sizeof(si->end_key));
+            uint64_t end_key[2];
+            end_key[0] = htonu64(end->ms);
+            end_key[1] = htonu64(end->seq);
+            raxSeek(&si->ri, "<=", (unsigned char *)end_key, sizeof(end_key));
             if (raxEOF(&si->ri)) raxSeek(&si->ri, "$", NULL, 0);
         } else {
             raxSeek(&si->ri, "$", NULL, 0);
@@ -1162,8 +1183,6 @@ int streamIteratorGetID(streamIterator *si, streamID *id, int64_t *numfields) {
             si->lp_ele = lpNext(si->lp, si->lp_ele);
             id->seq += lpGetInteger(si->lp_ele);
             si->lp_ele = lpNext(si->lp, si->lp_ele);
-            unsigned char buf[sizeof(streamID)];
-            streamEncodeID(buf, id);
 
             /* The number of entries is here or not depending on the
              * flags. */
@@ -1178,17 +1197,17 @@ int streamIteratorGetID(streamIterator *si, streamID *id, int64_t *numfields) {
             /* If current >= start, and the entry is not marked as
              * deleted or tombstones are included, emit it. */
             if (!si->rev) {
-                if (memcmp(buf, si->start_key, sizeof(streamID)) >= 0 &&
+                if (streamCompareID(id, &si->start_id) >= 0 &&
                     (!si->skip_tombstones || !(flags & STREAM_ITEM_FLAG_DELETED))) {
-                    if (memcmp(buf, si->end_key, sizeof(streamID)) > 0) return 0; /* We are already out of range. */
+                    if (streamCompareID(id, &si->end_id) > 0) return 0; /* We are already out of range. */
                     si->entry_flags = flags;
                     if (flags & STREAM_ITEM_FLAG_SAMEFIELDS) si->primary_fields_ptr = si->primary_fields_start;
                     return 1; /* Valid item returned. */
                 }
             } else {
-                if (memcmp(buf, si->end_key, sizeof(streamID)) <= 0 &&
+                if (streamCompareID(id, &si->end_id) <= 0 &&
                     (!si->skip_tombstones || !(flags & STREAM_ITEM_FLAG_DELETED))) {
-                    if (memcmp(buf, si->start_key, sizeof(streamID)) < 0) return 0; /* We are already out of range. */
+                    if (streamCompareID(id, &si->start_id) < 0) return 0; /* We are already out of range. */
                     si->entry_flags = flags;
                     if (flags & STREAM_ITEM_FLAG_SAMEFIELDS) si->primary_fields_ptr = si->primary_fields_start;
                     return 1; /* Valid item returned. */
@@ -1287,11 +1306,11 @@ void streamIteratorRemoveEntry(streamIterator *si, streamID *current) {
     /* Re-seek the iterator to fix the now messed up state. */
     streamID start, end;
     if (si->rev) {
-        streamDecodeID(si->start_key, &start);
+        start = si->start_id;
         end = *current;
     } else {
         start = *current;
-        streamDecodeID(si->end_key, &end);
+        end = si->end_id;
     }
     streamIteratorStop(si);
     streamIteratorStart(si, si->stream, &start, &end, si->rev);
@@ -1353,11 +1372,23 @@ void streamLastValidID(stream *s, streamID *maxid) {
  * allocator's 48 bytes bin. */
 #define STREAM_ID_STR_LEN 44
 
+/* Write a stream ID into a buffer.
+ * The buffer must be pre-allocated with at least STREAM_ID_STR_LEN bytes.
+ * It is much faster than:
+ * sdscatfmt(sds,"%U-%U", id->ms,id->seq);
+ */
+int streamID2string(char *s, streamID *id) {
+    char *p = s;
+    p += ull2string(p, LONG_STR_SIZE, id->ms);
+    *p++ = '-';
+    p += ull2string(p, LONG_STR_SIZE, id->seq);
+    return p - s;
+}
+
 sds createStreamIDString(streamID *id) {
-    /* Optimization: pre-allocate a big enough buffer to avoid reallocs. */
-    sds str = sdsnewlen(SDS_NOINIT, STREAM_ID_STR_LEN);
-    sdssetlen(str, 0);
-    return sdscatfmt(str, "%U-%U", id->ms, id->seq);
+    char buf[STREAM_ID_STR_LEN];
+    int len = streamID2string(buf, id);
+    return sdsnewlen(buf, len);
 }
 
 /* Emit a reply in the client output buffer by formatting a Stream ID
@@ -1674,6 +1705,8 @@ size_t streamReplyWithRange(client *c,
         return streamReplyWithRangeFromConsumerPEL(c, s, start, end, count, consumer);
     }
 
+    char replyid[STREAM_ID_STR_LEN];
+
     if (!(flags & STREAM_RWR_RAWENTRIES)) arraylen_ptr = addReplyDeferredLen(c);
     streamIteratorStart(&si, s, start, end, rev);
     while (streamIteratorGetID(&si, &id, &numfields)) {
@@ -1700,7 +1733,8 @@ size_t streamReplyWithRange(client *c,
         /* Emit a two elements array for each item. The first is
          * the ID, the second is an array of field-value pairs. */
         addReplyArrayLen(c, 2);
-        addReplyStreamID(c, &id);
+        int idlen = streamID2string(replyid, &id);
+        addReplyBulkCBuffer(c, replyid, idlen);
 
         addReplyArrayLen(c, numfields * 2);
 
@@ -1728,7 +1762,7 @@ size_t streamReplyWithRange(client *c,
 
             /* Try to add a new NACK. Most of the time this will work and
              * will not require extra lookups. We'll fix the problem later
-             * if we find that there is already a entry for this ID. */
+             * if we find that there is already an entry for this ID. */
             streamNACK *nack = streamCreateNACK(consumer);
             int group_inserted = raxTryInsert(group->pel, buf, sizeof(buf), nack, NULL);
             int consumer_inserted = raxTryInsert(consumer->pel, buf, sizeof(buf), nack, NULL);
@@ -1979,6 +2013,41 @@ void streamRewriteTrimArgument(client *c, stream *s, int trim_strategy, int idx)
     decrRefCount(arg);
 }
 
+/* Drop the two-argument "LIMIT <count>" option from the rewritten command.
+ *
+ * Once we have rewritten "MAXLEN ~ N" to "MAXLEN = <resulting-len>",
+ * the trim that will run on the replay side is fully deterministic
+ * and the LIMIT cap can no longer fire.
+ * More critically, when the migration tool sends the rewritten command
+ * without marking it as 'mustObeyClient', the destination DB will return an error.*/
+void streamRewriteStripLimit(client *c, int limit_idx) {
+    /* limit_idx points at the "LIMIT" token; limit_idx + 1 is the count. */
+    serverAssert(limit_idx > 0 && limit_idx + 1 < c->argc);
+    serverAssert(c->argv != c->original_argv);
+
+    robj *limit_tok = c->argv[limit_idx];
+    robj *limit_val = c->argv[limit_idx + 1];
+
+    c->argv_len_sum -= getStringObjectLen(limit_tok);
+    c->argv_len_sum -= getStringObjectLen(limit_val);
+
+    /* Intentionally shrink the argv vector by dropping the two "LIMIT <count>" slots,
+     * shifting the tail (everything after them) two slots left. */
+    int tail = c->argc - (limit_idx + 2);
+    if (tail > 0) {
+        memmove(&c->argv[limit_idx],
+                &c->argv[limit_idx + 2],
+                sizeof(robj *) * tail);
+    }
+
+    c->argc -= 2;
+    c->argv[c->argc] = NULL;
+    c->argv[c->argc + 1] = NULL;
+
+    decrRefCount(limit_tok);
+    decrRefCount(limit_val);
+}
+
 /* XADD key [(MAXLEN [~|=] <count> | MINID [~|=] <id>) [LIMIT <entries>]] [NOMKSTREAM] <ID or *> [field value] [field
  * value] ... */
 void xaddCommand(client *c) {
@@ -2047,6 +2116,12 @@ void xaddCommand(client *c) {
              * way LIMIT is given without the ~ option. */
             streamRewriteApproxSpecifier(c, parsed_args.trim_strategy_arg_idx - 1);
             streamRewriteTrimArgument(c, s, parsed_args.trim_strategy, parsed_args.trim_strategy_arg_idx);
+
+            if (parsed_args.limit_arg_idx) {
+                serverAssert(parsed_args.limit_arg_idx < idpos);
+                streamRewriteStripLimit(c, parsed_args.limit_arg_idx);
+                idpos -= 2;
+            }
         }
     }
 
@@ -2150,7 +2225,7 @@ void xlenCommand(client *c) {
  * on replicas, XREADGROUP is not. */
 #define XREAD_BLOCKED_DEFAULT_COUNT 1000
 void xreadCommand(client *c) {
-    long long timeout = -1; /* -1 means, no BLOCK argument given. */
+    mstime_t timeout = -1; /* -1 means, no BLOCK argument given. */
     long long count = 0;
     int streams_count = 0;
     int streams_arg = 0;
@@ -3071,7 +3146,7 @@ void xpendingCommand(client *c) {
  *      Creates the pending message entry in the PEL even if certain
  *      specified IDs are not already in the PEL assigned to a different
  *      client. However the message must be exist in the stream, otherwise
- *      the IDs of non existing messages are ignored.
+ *      the IDs of nonexistent messages are ignored.
  *
  * 5. JUSTID:
  *      Return just an array of IDs of messages successfully claimed,
@@ -3239,7 +3314,7 @@ void xclaimCommand(client *c) {
              * by the caller is satisfied by this entry.
              *
              * Note that the nack could be created by FORCE, in this
-             * case there was no pre-existing entry and minidle should
+             * case there was no preexisting entry and minidle should
              * be ignored, but in that case nack->consumer is NULL. */
             if (nack->consumer && minidle) {
                 mstime_t this_idle = now - nack->delivery_time;
@@ -3586,6 +3661,10 @@ void xtrimCommand(client *c) {
              * way LIMIT is given without the ~ option. */
             streamRewriteApproxSpecifier(c, parsed_args.trim_strategy_arg_idx - 1);
             streamRewriteTrimArgument(c, s, parsed_args.trim_strategy, parsed_args.trim_strategy_arg_idx);
+
+            if (parsed_args.limit_arg_idx) {
+                streamRewriteStripLimit(c, parsed_args.limit_arg_idx);
+            }
         }
 
         /* Propagate the write. */
@@ -3908,17 +3987,18 @@ void xinfoCommand(client *c) {
 
 /* Validate the integrity stream listpack entries structure. Both in term of a
  * valid listpack, but also that the structure of the entries matches a valid
- * stream. return 1 if valid 0 if not valid. */
-int streamValidateListpackIntegrity(unsigned char *lp, size_t size, int deep) {
+ * stream. return 1 if valid 0 if not valid.
+ *
+ * If 'valid_count' is not NULL, the number of non-deleted (non-tombstone)
+ * entries in this listpack is added to it. Callers use this to validate the
+ * stream length loaded from an RDB payload against the entries actually
+ * present. */
+int streamValidateListpackIntegrity(unsigned char *lp, size_t size, uint64_t *valid_count) {
     int valid_record;
     unsigned char *p, *next;
 
-    /* Since we don't want to run validation of all records twice, we'll
-     * run the listpack validation of just the header and do the rest here. */
-    if (!lpValidateIntegrity(lp, size, 0, NULL, NULL)) return 0;
-
-    /* In non-deep mode we just validated the listpack header (encoded size) */
-    if (!deep) return 1;
+    /* Validate the listpack structure (header + all entries). */
+    if (!lpValidateIntegrity(lp, size, NULL, NULL)) return 0;
 
     next = p = lpValidateFirst(lp);
     if (!lpValidateNext(lp, &next, size)) return 0;
@@ -3926,19 +4006,23 @@ int streamValidateListpackIntegrity(unsigned char *lp, size_t size, int deep) {
 
     /* entry count */
     int64_t entry_count = lpGetIntegerIfValid(p, &valid_record);
-    if (!valid_record) return 0;
+    if (!valid_record || entry_count < 0) return 0;
     p = next;
     if (!lpValidateNext(lp, &next, size)) return 0;
 
+    /* The master entry count is the number of live (non-deleted) entries in
+     * this listpack. Accumulate it so the caller can verify the stream length. */
+    if (valid_count) *valid_count += entry_count;
+
     /* deleted */
     int64_t deleted_count = lpGetIntegerIfValid(p, &valid_record);
-    if (!valid_record) return 0;
+    if (!valid_record || deleted_count < 0) return 0;
     p = next;
     if (!lpValidateNext(lp, &next, size)) return 0;
 
     /* num-of-fields */
     int64_t primary_fields = lpGetIntegerIfValid(p, &valid_record);
-    if (!valid_record) return 0;
+    if (!valid_record || primary_fields < 0) return 0;
     p = next;
     if (!lpValidateNext(lp, &next, size)) return 0;
 
@@ -3954,12 +4038,24 @@ int streamValidateListpackIntegrity(unsigned char *lp, size_t size, int deep) {
     p = next;
     if (!lpValidateNext(lp, &next, size)) return 0;
 
+    /* Only the sum of the two header counts is validated by the traversal
+     * below, so count the live and deleted records actually present and
+     * reconcile both. streamIteratorRemoveEntry() frees the whole node once the
+     * declared live count reaches 1, so a header that understates it makes XDEL
+     * destroy the records it failed to account for. */
+    int64_t declared_live = entry_count, declared_deleted = deleted_count;
+    uint64_t live_records = 0, deleted_records = 0;
+
     entry_count += deleted_count;
     while (entry_count--) {
         if (!p) return 0;
         int64_t fields = primary_fields, extra_fields = 3;
         int64_t flags = lpGetIntegerIfValid(p, &valid_record);
         if (!valid_record) return 0;
+        if (flags & STREAM_ITEM_FLAG_DELETED)
+            deleted_records++;
+        else
+            live_records++;
         p = next;
         if (!lpValidateNext(lp, &next, size)) return 0;
 
@@ -3976,7 +4072,7 @@ int streamValidateListpackIntegrity(unsigned char *lp, size_t size, int deep) {
         if (!(flags & STREAM_ITEM_FLAG_SAMEFIELDS)) {
             /* num-of-fields */
             fields = lpGetIntegerIfValid(p, &valid_record);
-            if (!valid_record) return 0;
+            if (!valid_record || fields < 0) return 0;
             p = next;
             if (!lpValidateNext(lp, &next, size)) return 0;
 
@@ -4004,6 +4100,7 @@ int streamValidateListpackIntegrity(unsigned char *lp, size_t size, int deep) {
     }
 
     if (next) return 0;
+    if (live_records != (uint64_t)declared_live || deleted_records != (uint64_t)declared_deleted) return 0;
 
     return 1;
 }

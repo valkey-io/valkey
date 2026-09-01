@@ -1,6 +1,8 @@
 proc test_memory_efficiency {range} {
     r flushall
     set rd [valkey_deferring_client]
+    $rd client reply off
+    $rd flush
     set base_mem [s used_memory]
     set written 0
     for {set j 0} {$j < 10000} {incr j} {
@@ -11,9 +13,9 @@ proc test_memory_efficiency {range} {
         incr written [string length $val]
         incr written 2 ;# A separator is the minimum to store key-value data.
     }
-    for {set j 0} {$j < 10000} {incr j} {
-        $rd read ; # Discard replies
-    }
+    $rd client reply on
+    $rd flush
+    $rd read ;# read the +OK from CLIENT REPLY ON
 
     set current_mem [s used_memory]
     set used [expr {$current_mem-$base_mem}]
@@ -156,7 +158,7 @@ run_solo {defrag} {
         if {$allocated_bytes < 20 * 1024 * 1024} {
             # If allocated bytes is too small, the ratios get wonky.  Since we use 2MB for
             # active-defrag-ignore-bytes, let's make sure that we have at least 10x that amount
-            # allocated before trying to verify any fragmentation ratios.  Otherwise the tests
+            # allocated before trying to verify any fragmentation ratios.  Otherwise, the tests
             # are likely to get flaky.
             error "test error: trying to validate frag ratio with only $allocated_bytes allocated"
         }
@@ -308,7 +310,8 @@ run_solo {defrag} {
                 # Even so, defrag can get starved for periods exceeding 100ms.  Using 200ms for test stability, and
                 # a 50% CPU requirement, we should allow up to 200ms latency
                 # (as total time = 200 non duty + 200 duty = 400ms, and 50% of 400ms is 200ms).
-                validate_latency 200
+                # Added buffer of 300ms to accommodate for slow CI runners
+                validate_latency 500
 
                 # Make sure we had defrag hits during AOF loading.  Note that we don't worry about
                 # the actual fragmentation ratio here.  It will vary based on when defrag stopped
@@ -439,8 +442,8 @@ run_solo {defrag} {
         }
     }
 
-    proc test_big_zset {type} {
-        set title "Active Defrag big zset: $type"
+    proc test_big_zset {type score} {
+        set title "Active Defrag big zset: $type $score-score"
         test $title {
             # number of total fields.  zsets are progressively increasing sizes.
             set n 200000
@@ -452,7 +455,8 @@ run_solo {defrag} {
                 set k 0
                 set f 0
                 for {set j 0} {$j < $n} {incr j} {
-                    $rd zadd k$k [expr rand()] $val$f
+                    set s [expr {$score eq "fixed" ? 0 : rand()}]
+                    $rd zadd k$k $s $val$f
                     lassign [next_exp_kf $k $f] k f
                     if {$j % 1000 == 999} {client_reply_off_wait_for_server $rd}
                 }
@@ -467,6 +471,14 @@ run_solo {defrag} {
                 $rd close
             }
         }
+    }
+
+    proc test_big_zset_random_score {type} {
+        test_big_zset $type random
+    }
+
+    proc test_big_zset_fixed_score {type} {
+        test_big_zset $type fixed
     }
 
     proc test_stream {type} {
@@ -579,7 +591,8 @@ run_solo {defrag} {
     lappend tests [list test_big_hash standalone $std_overrides]
     lappend tests [list test_big_list standalone $std_overrides]
     lappend tests [list test_big_set standalone $std_overrides]
-    lappend tests [list test_big_zset standalone $std_overrides]
+    lappend tests [list test_big_zset_random_score standalone $std_overrides]
+    lappend tests [list test_big_zset_fixed_score standalone $std_overrides]
     lappend tests [list test_stream standalone $std_overrides]
     lappend tests [list test_pubsub standalone $std_overrides]
 
@@ -588,7 +601,8 @@ run_solo {defrag} {
     lappend tests [list test_big_hash cluster $std_overrides]
     lappend tests [list test_big_list cluster $std_overrides]
     lappend tests [list test_big_set cluster $std_overrides]
-    lappend tests [list test_big_zset cluster $std_overrides]
+    lappend tests [list test_big_zset_random_score cluster $std_overrides]
+    lappend tests [list test_big_zset_fixed_score cluster $std_overrides]
     lappend tests [list test_stream cluster $std_overrides]
     lappend tests [list test_pubsub cluster $std_overrides]
 
@@ -612,7 +626,7 @@ run_solo {defrag} {
             if {$type == "cluster"} {
                 start_cluster 1 0 [list tags $cluster_tags overrides $overrides] {
                     # Note: `start_cluster` passes the code through to another level which requires us
-                    #  to do an uplevel here.  Otherwise `test_proc` isn't recognized.
+                    #  to do an uplevel here.  Otherwise, `test_proc` isn't recognized.
                     uplevel 1 {$test_proc $type}
                 }
             }

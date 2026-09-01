@@ -40,7 +40,7 @@
  * If callback is given the function is called in order for caller to do some work
  * before the list conversion. */
 static void listTypeTryConvertListpack(robj *o, robj **argv, int start, int end, beforeConvertCB fn, void *data) {
-    serverAssert(o->encoding == OBJ_ENCODING_LISTPACK);
+    serverAssert(objectGetEncoding(o) == OBJ_ENCODING_LISTPACK);
 
     size_t add_bytes = 0;
     size_t add_length = 0;
@@ -66,7 +66,7 @@ static void listTypeTryConvertListpack(robj *o, robj **argv, int start, int end,
         else
             lpFree(objectGetVal(o));
         objectSetVal(o, ql);
-        o->encoding = OBJ_ENCODING_QUICKLIST;
+        objectSetEncoding(o, OBJ_ENCODING_QUICKLIST);
     }
 }
 
@@ -80,7 +80,7 @@ static void listTypeTryConvertListpack(robj *o, robj **argv, int start, int end,
  * If callback is given the function is called in order for caller to do some work
  * before the list conversion. */
 static void listTypeTryConvertQuicklist(robj *o, int shrinking, beforeConvertCB fn, void *data) {
-    serverAssert(o->encoding == OBJ_ENCODING_QUICKLIST);
+    serverAssert(objectGetEncoding(o) == OBJ_ENCODING_QUICKLIST);
 
     size_t sz_limit;
     unsigned int count_limit;
@@ -125,10 +125,10 @@ static void listTypeTryConvertQuicklist(robj *o, int shrinking, beforeConvertCB 
  *                       order to avoid repeated conversions on every list change. */
 static void
 listTypeTryConversionRaw(robj *o, list_conv_type lct, robj **argv, int start, int end, beforeConvertCB fn, void *data) {
-    if (o->encoding == OBJ_ENCODING_QUICKLIST) {
+    if (objectGetEncoding(o) == OBJ_ENCODING_QUICKLIST) {
         if (lct == LIST_CONV_GROWING) return; /* Growing has nothing to do with quicklist */
         listTypeTryConvertQuicklist(o, lct == LIST_CONV_SHRINKING, fn, data);
-    } else if (o->encoding == OBJ_ENCODING_LISTPACK) {
+    } else if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) {
         if (lct == LIST_CONV_SHRINKING) return; /* Shrinking has nothing to do with listpack */
         listTypeTryConvertListpack(o, argv, start, end, fn, data);
     } else {
@@ -288,7 +288,7 @@ int listTypeNext(listTypeIterator *li, listTypeEntry *entry) {
 
 /* Get entry value at the current position of the iterator.
  * When the function returns NULL, it populates the integer value by
- * reference in 'lval'. Otherwise a pointer to the string is returned,
+ * reference in 'lval'. Otherwise, a pointer to the string is returned,
  * and 'vlen' is set to the length of the string. */
 unsigned char *listTypeGetValue(listTypeEntry *entry, size_t *vlen, long long *lval) {
     unsigned char *vstr = NULL;
@@ -371,10 +371,10 @@ int listTypeReplaceAtIndex(robj *o, int index, robj *value) {
     size_t vlen = sdslen(vstr);
     int replaced = 0;
 
-    if (o->encoding == OBJ_ENCODING_QUICKLIST) {
+    if (objectGetEncoding(o) == OBJ_ENCODING_QUICKLIST) {
         quicklist *ql = objectGetVal(o);
         replaced = quicklistReplaceAtIndex(ql, index, vstr, vlen);
-    } else if (o->encoding == OBJ_ENCODING_LISTPACK) {
+    } else if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) {
         unsigned char *p = lpSeek(objectGetVal(o), index);
         if (p) {
             objectSetVal(o, lpReplace(objectGetVal(o), &p, (unsigned char *)vstr, vlen));
@@ -721,9 +721,9 @@ void addListRangeReply(client *c, robj *o, long start, long end, int reverse) {
     rangelen = (end - start) + 1;
 
     int from = reverse ? end : start;
-    if (o->encoding == OBJ_ENCODING_QUICKLIST)
+    if (objectGetEncoding(o) == OBJ_ENCODING_QUICKLIST)
         addListQuicklistRangeReply(c, o, from, rangelen, reverse);
-    else if (o->encoding == OBJ_ENCODING_LISTPACK)
+    else if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK)
         addListListpackRangeReply(c, o, from, rangelen, reverse);
     else
         serverPanic("Unknown list encoding");
@@ -894,10 +894,10 @@ void ltrimCommand(client *c) {
     }
 
     /* Remove list elements to perform the trim */
-    if (o->encoding == OBJ_ENCODING_QUICKLIST) {
+    if (objectGetEncoding(o) == OBJ_ENCODING_QUICKLIST) {
         quicklistDelRange(objectGetVal(o), 0, ltrim);
         quicklistDelRange(objectGetVal(o), -rtrim, rtrim);
-    } else if (o->encoding == OBJ_ENCODING_LISTPACK) {
+    } else if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) {
         objectSetVal(o, lpDeleteRange(objectGetVal(o), 0, ltrim));
         objectSetVal(o, lpDeleteRange(objectGetVal(o), -rtrim, rtrim));
     } else {
@@ -1109,28 +1109,22 @@ void lmoveGenericCommand(client *c, int wherefrom, int whereto) {
     if ((sobj = lookupKeyWriteOrReply(c, c->argv[1], shared.null[c->resp])) == NULL || checkType(c, sobj, OBJ_LIST))
         return;
 
-    if (listTypeLength(sobj) == 0) {
-        /* This may only happen after loading very old RDB files. Recent
-         * versions of the server delete keys of empty lists. */
-        addReplyNull(c);
-    } else {
-        robj *dobj = lookupKeyWrite(c->db, c->argv[2]);
-        robj *touchedkey = c->argv[1];
+    robj *dobj = lookupKeyWrite(c->db, c->argv[2]);
+    robj *touchedkey = c->argv[1];
 
-        if (checkType(c, dobj, OBJ_LIST)) return;
-        value = listTypePop(sobj, wherefrom);
-        serverAssert(value); /* assertion for valgrind (avoid NPD) */
-        lmoveHandlePush(c, c->argv[2], dobj, value, whereto);
-        listElementsRemoved(c, touchedkey, wherefrom, sobj, 1, NULL);
+    if (checkType(c, dobj, OBJ_LIST)) return;
+    value = listTypePop(sobj, wherefrom);
+    serverAssert(value); /* assertion for valgrind (avoid NPD) */
+    lmoveHandlePush(c, c->argv[2], dobj, value, whereto);
+    listElementsRemoved(c, touchedkey, wherefrom, sobj, 1, NULL);
 
-        /* listTypePop returns an object with its refcount incremented */
-        decrRefCount(value);
+    /* listTypePop returns an object with its refcount incremented */
+    decrRefCount(value);
 
-        if (c->cmd->proc == blmoveCommand) {
-            rewriteClientCommandVector(c, 5, shared.lmove, c->argv[1], c->argv[2], c->argv[3], c->argv[4]);
-        } else if (c->cmd->proc == brpoplpushCommand) {
-            rewriteClientCommandVector(c, 3, shared.rpoplpush, c->argv[1], c->argv[2]);
-        }
+    if (c->cmd->proc == blmoveCommand) {
+        rewriteClientCommandVector(c, 5, shared.lmove, c->argv[1], c->argv[2], c->argv[3], c->argv[4]);
+    } else if (c->cmd->proc == brpoplpushCommand) {
+        rewriteClientCommandVector(c, 3, shared.rpoplpush, c->argv[1], c->argv[2]);
     }
 }
 

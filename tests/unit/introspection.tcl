@@ -19,6 +19,125 @@ start_server {tags {"introspection"}} {
         r client info
     } {id=* addr=*:* laddr=*:* fd=* name=* age=* idle=* flags=N capa= db=* sub=0 psub=0 ssub=0 multi=-1 watch=0 qbuf=0 qbuf-free=* argv-mem=* multi-mem=0 rbs=* rbp=* obl=0 oll=0 omem=0 tot-mem=* events=r cmd=client|info user=* redir=-1 resp=* lib-name=* lib-ver=* tot-net-in=* tot-net-out=* tot-cmds=*}
 
+    test {Multiple clients WATCH same key} {
+        set rd1 [valkey_client]
+        set rd2 [valkey_client]
+        set rd3 [valkey_client]
+
+        # Watch the same key.
+        r del mykey
+        $rd1 watch mykey
+        $rd2 watch mykey
+        $rd3 watch mykey
+
+        # Have rd3 unwatch, and have rd1/rd2 unwatch via multi.
+        $rd3 unwatch
+        r set mykey value
+        foreach rd [list $rd1 $rd2] {
+            $rd multi
+            $rd set mykey other
+            $rd exec
+        }
+
+        # The multi must have been discarded, so the key keeps its value.
+        assert_equal {value} [r get mykey]
+
+        $rd1 close
+        $rd2 close
+        $rd3 close
+    }
+
+    foreach {subscribe unsubscribe publish check_registered} {
+        subscribe   unsubscribe   publish   {llength [r pubsub channels $channel]}
+        psubscribe  punsubscribe  publish   {r pubsub numpat}
+        ssubscribe  sunsubscribe  spublish  {llength [r pubsub shardchannels $channel]}
+    } {
+        test "Multiple clients $subscribe to same name" {
+            set rd1 [valkey_deferring_client]
+            set rd2 [valkey_deferring_client]
+            set rd3 [valkey_deferring_client]
+
+            # Subscribe to the same channel.
+            set channel "shared-channel"
+            $rd1 $subscribe $channel
+            $rd1 read
+            $rd2 $subscribe $channel
+            $rd2 read
+            $rd3 $subscribe $channel
+            $rd3 read
+
+            # The name is registered exactly once, no matter how many clients
+            # subscribe to it (all of them share the same robj).
+            assert_equal 1 [eval $check_registered]
+
+            # Every subscriber receives the published message. The delivery
+            # payload is the last element of the reply for all messages.
+            r $publish $channel hello
+            assert_equal hello [lindex [$rd1 read] end]
+            assert_equal hello [lindex [$rd2 read] end]
+            assert_equal hello [lindex [$rd3 read] end]
+
+            $rd1 $unsubscribe $channel
+            $rd1 read
+            $rd2 $unsubscribe $channel
+            $rd2 read
+            $rd3 $unsubscribe $channel
+            $rd3 read
+
+            # No subscriber left.
+            assert_equal 0 [eval $check_registered]
+
+            $rd1 close
+            $rd2 close
+            $rd3 close
+        }
+    }
+
+    # Get client tot-mem excluding query buffer (qbuf + qbuf-free)
+    proc get_client_mem_no_qbuf {info} {
+        set tot [get_field_in_client_info $info "tot-mem"]
+        set qbuf [get_field_in_client_info $info "qbuf"]
+        set qbuf_free [get_field_in_client_info $info "qbuf-free"]
+        return [expr {$tot - $qbuf - $qbuf_free}]
+    }
+
+    test {CLIENT INFO tot-mem includes watched key memory} {
+        set mem1 [get_client_mem_no_qbuf [r client info]]
+
+        r watch [string repeat "x" 50000]
+        set mem2 [get_client_mem_no_qbuf [r client info]]
+        assert_morethan_equal [expr $mem2 - $mem1] 10000
+
+        r unwatch
+        set mem3 [get_client_mem_no_qbuf [r client info]]
+        assert_morethan_equal [expr $mem2 - $mem3] 10000
+    }
+
+    foreach {subscribe unsubscribe} {subscribe unsubscribe psubscribe punsubscribe ssubscribe sunsubscribe} {
+        test "CLIENT INFO tot-mem includes pubsub channel/pattern memory - $subscribe $unsubscribe" {
+            set rd [valkey_deferring_client]
+            $rd client id
+            set rd_id [$rd read]
+
+            set info1 [lsearch -inline [split [r client list] "\r\n"] "id=$rd_id *"]
+            set mem1 [get_client_mem_no_qbuf $info1]
+
+            $rd $subscribe [string repeat "x" 50000]
+            $rd read
+            set info2 [lsearch -inline [split [r client list] "\r\n"] "id=$rd_id *"]
+            set mem2 [get_client_mem_no_qbuf $info2]
+            assert_morethan_equal [expr $mem2 - $mem1] 10000
+
+            $rd $unsubscribe
+            $rd read
+            set info3 [lsearch -inline [split [r client list] "\r\n"] "id=$rd_id *"]
+            set mem3 [get_client_mem_no_qbuf $info3]
+            assert_morethan_equal [expr $mem2 - $mem3] 10000
+
+            $rd close
+        }
+    }
+
     test {CLIENT LIST with ADDR filter} {
         set client_info [r client info]
         regexp {addr=([^ ]+)} $client_info match myaddr
@@ -247,6 +366,7 @@ start_server {tags {"introspection"}} {
 
         set output [r client list capa r capa r]
         assert_match *client-with-r* $output
+
         catch {$c1 close}
     }
 
@@ -285,9 +405,8 @@ start_server {tags {"introspection"}} {
         $c1 client setname "killme-capa"
         $c1 client capa redirect
 
-        # Kill using capa filter
+        # Kill using capa r filter
         r client kill capa r skipme yes
-
         assert_error "*I/O error*" {$c1 ping}
     } {}
 
@@ -1379,7 +1498,7 @@ start_server {tags {"introspection"}} {
             lappend backups $c [lindex [r config get $c] 1]
         }
 
-        # multi config set and veirfy
+        # multi config set and verify
         assert_equal [eval "r config set $some_configs"] "OK"
         dict for {c val} $some_configs {
             assert_equal [lindex [r config get $c] 1] $val
@@ -1961,6 +2080,31 @@ test {CONFIG REWRITE handles alias config properly} {
         restart_server 0 true false
 
         assert_equal [r config get hash-max-listpack-entries] {hash-max-listpack-entries 100}
+    }
+} {} {external:skip}
+
+test {CONFIG REWRITE handles large unsigned memory config values} {
+    start_server {tags {"introspection"}} {
+        r config set maxmemory 9223372036854775808
+        r config set maxmemory-clients 100%
+
+        r config rewrite
+        restart_server 0 true false
+
+        assert_equal [lindex [r config get maxmemory] 1] 9223372036854775808
+        assert_equal [lindex [r config get maxmemory-clients] 1] 100%
+    }
+} {} {external:skip}
+
+test {SIGNED MEMORY CONFIG allows negative number} {
+    start_server {tags {"introspection"}} {
+        r config set slot-migration-max-failover-repl-bytes -1
+        assert_equal [lindex [r config get slot-migration-max-failover-repl-bytes] 1] -1
+        assert_error {*argument must be between -1 and *} {r config set slot-migration-max-failover-repl-bytes -2}
+
+        r config rewrite
+        restart_server 0 true false
+        assert_equal [lindex [r config get slot-migration-max-failover-repl-bytes] 1] -1
     }
 } {} {external:skip}
 

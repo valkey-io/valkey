@@ -8,13 +8,13 @@ start_server {tags {"modules"}} {
         set rd [valkey_deferring_client]
 
         # LAZYFREE_THRESHOLD is 64
+        $rd client reply off
         for {set i 0} {$i < 10000} {incr i} {
             $rd lazyfreelink.insert lazykey $i
+            if {$i % 1000 == 0} {$rd flush}
         }
-
-        for {set j 0} {$j < 10000} {incr j} {
-            $rd read 
-        }
+        $rd client reply on
+        assert_equal OK [$rd read]
 
         assert {[r lazyfreelink.len lazykey] == 10000}
 

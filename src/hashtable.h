@@ -125,11 +125,12 @@ size_t hashtableSize(const hashtable *ht);
 size_t hashtableBuckets(hashtable *ht);
 size_t hashtableChainedBuckets(hashtable *ht, int table);
 unsigned hashtableEntriesPerBucket(void);
-size_t hashtableMemUsage(hashtable *ht);
+size_t hashtableMemUsage(const hashtable *ht);
 void hashtablePauseAutoShrink(hashtable *ht);
 void hashtableResumeAutoShrink(hashtable *ht);
 bool hashtableIsRehashing(hashtable *ht);
 bool hashtableIsRehashingPaused(hashtable *ht);
+ssize_t hashtableGetRehashingIndex(hashtable *ht);
 void hashtableRehashingInfo(hashtable *ht, size_t *from_size, size_t *to_size);
 int hashtableRehashMicroseconds(hashtable *ht, uint64_t us);
 bool hashtableExpand(hashtable *ht, size_t size);
@@ -139,6 +140,7 @@ bool hashtableShrinkIfNeeded(hashtable *ht);
 bool hashtableRightsizeIfNeeded(hashtable *ht);
 hashtable *hashtableDefragTables(hashtable *ht, void *(*defragfn)(void *));
 void dismissHashtable(hashtable *ht);
+void hashtableSetCanAbortShrink(bool can_abort);
 
 /* Entries */
 bool hashtableFind(hashtable *ht, const void *key, void **found);
@@ -159,6 +161,7 @@ bool hashtableIncrementalFindGetResult(hashtableIncrementalFindState *state, voi
 /* Iteration & scan */
 size_t hashtableScan(hashtable *ht, size_t cursor, hashtableScanFunction fn, void *privdata);
 size_t hashtableScanDefrag(hashtable *ht, size_t cursor, hashtableScanFunction fn, void *privdata, void *(*defragfn)(void *), int flags);
+bool hashtableScanHasPassedKey(hashtable *ht, const void *key, size_t cursor);
 void hashtableInitIterator(hashtableIterator *iter, hashtable *ht, uint8_t flags);
 void hashtableRetargetIterator(hashtableIterator *iterator, hashtable *ht);
 void hashtableCleanupIterator(hashtableIterator *iter);

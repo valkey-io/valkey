@@ -50,6 +50,18 @@ start_server {tags {"modules"}} {
         r lrange log-key 0 -1
     } "{ping @log}"
 
+    test {Command Filter applies on Lua redis.call() with arg replacing} {
+        r del mylist
+        r eval "redis.call('rpush', 'mylist', 'elem1', '@replaceme', 'elem2')" 0
+        r lrange mylist 0 -1
+    } {elem1 --replaced-- elem2}
+
+    test {Command Filter applies on Lua redis.call() with arg deletion} {
+        r del mylist
+        r eval "redis.call('rpush', 'mylist', 'elem1', '@delme', 'elem2')" 0
+        r lrange mylist 0 -1
+    } {elem1 elem2}
+
     test {Command Filter strings can be retained} {
         r commandfilter.retained
     } {my-retained-string}

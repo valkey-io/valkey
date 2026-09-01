@@ -6,12 +6,12 @@
  * Entry Implementation
  *----------------------------------------------------------------------------*/
 
-/* There are 3 different formats for the "entry".  In all cases, the "entry" pointer points into the
+/* There are some different formats for the "entry".  In all cases, the "entry" pointer points into the
  * allocation and is identical to the "field" sds pointer.
  *
  * Type 1: Field sds type is an SDS_TYPE_5
- *     With this type, both the key and value are embedded in the entry.  Expiration is not allowed
- *     as the SDS_TYPE_5 (on field) doesn't contain any aux bits to encode the existence of an
+ *     With this type, both the field and value are embedded in the entry.  Expiration is not allowed
+ *     as the sdshdr5 (on field) doesn't contain any aux bits to encode the existence of an
  *     expiration.  Extra padding is included in the value to the size of the physical block.
  *
  *             entry
@@ -25,7 +25,7 @@
  *
  *
  * Type 2: Field sds type is an SDS_TYPE_8 type
- *     With this type, both the key and value are embedded.  Extra bits in the sdshdr8 (on field)
+ *     With this type, both the field and value are embedded.  Extra bits in the sdshdr8 (on field)
  *     are used to encode aux flags which may indicate the presence of an optional expiration.
  *     Extra padding is included in the value to the size of the physical block.
  *
@@ -33,14 +33,14 @@
  *                              |
  *     +--------------+---------V------------+----------------------------+
  *     | Expire (opt) |       Field          |      Value                 |
- *     |  long long   | sdshdr8 | "foo" \0   | sdshdr8 "bar" \0 (padding) |
+ *     |  mstime_t    | sdshdr8 | "foo" \0   | sdshdr8 "bar" \0 (padding) |
  *     +--------------+---------+------------+----------------------------+
  *
- *     Identified by: sds type is SDS_TYPE_8  AND  has embedded value
+ *     Identified by: field sds type is SDS_TYPE_8  AND  has embedded value
  *
  *
  * Type 3: Value is an sds, referenced by pointer
- *     With this type, the key is embedded, and the value is an sds, referenced by pointer.  Extra
+ *     With this type, the field is embedded, and the value is an sds, referenced by pointer.  Extra
  *     bits in the sdshdr8(+) are used to encode aux flags which indicate the presence of a value by
  *     pointer.  An aux bit may indicate the presence of an optional expiration.  Note that the
  *     "field" is not padded, so there's no direct way to identify the length of the allocation.
@@ -49,14 +49,16 @@
  *                                               |
  *     +--------------+---------------+----------V----------+--------+
  *     | Expire (opt) |     Value     |        Field        | / / / /|
- *     |  long long   | sds (pointer) | sdshdr8+ | "foo" \0 |/ / / / |
+ *     |  mstime_t    | sds (pointer) | sdshdr8+ | "foo" \0 |/ / / / |
  *     +--------------+-------+-------+----------+----------+--------+
  *                            |
  *                            +-> sds value
  *
+ *     Identified by: Does not have embedded value, value is an sds, referenced by pointer.
+ *
  *
  * Type 4: Value is an stringRef, referenced by pointer
- *     With this type, the key is embedded, and the value is a stringRef, referenced by pointer.  Extra
+ *     With this type, the field is embedded, and the value is a stringRef, referenced by pointer.  Extra
  *     bits in the sdshdr8(+) are used to encode aux flags which indicate the presence of a value by
  *     pointer.  An aux bit may indicate the presence of an optional expiration.  Note that the
  *     "field" is not padded, so there's no direct way to identify the length of the allocation.
@@ -67,26 +69,29 @@
  *                                                     |
  *     +--------------+---------------------+----------V----------+--------+
  *     | Expire (opt) |        Value        |        Field        | / / / /|
- *     |  long long   | stringRef (pointer) | sdshdr8+ | "foo" \0 |/ / / / |
+ *     |  mstime_t    | stringRef (pointer) | sdshdr8+ | "foo" \0 |/ / / / |
  *     +--------------+----------+----------+----------+----------+--------+
  *                               |
  *                               |
  *                               +-> stringRef value
  *                                              |
- *                                   +----------V-----------+
- *                                   | buffer   | buffer    |
- *                                   | pointer  | length    |
- *                                   +----------+-----------+
+ *                             +----------------V---------------+
+ *                             | buffer pointer | buffer length |
+ *                             +----------------+---------------+
+ *
+ *     Identified by: Does not have embedded value, value is a stringRef, referenced by pointer.
  */
 
 enum {
     /* SDS aux flag. If set, it indicates that the entry has TTL metadata set. */
     FIELD_SDS_AUX_BIT_ENTRY_HAS_EXPIRY = 0,
     /* SDS aux flag. If set, it indicates that the entry has an embedded value
-     * pointer located in memory before the embedded field. If unset, the entry
+     * pointer (sds or stringRef) located in memory before the embedded field. If unset, the entry
      * instead has an embedded value located after the embedded field. */
     FIELD_SDS_AUX_BIT_ENTRY_HAS_VALUE_PTR = 1,
-    /* SDS aux flag.  If set, it indicates that the hash entry has a reference to the value.
+    /* SDS aux flag. If set, it indicates that the entry has an embedded value
+     * pointer (stringRef) located in memory before the embedded field.
+     * If set, it indicates that the hash entry has a reference to the value.
      * The hash entry does not own the string reference and will not free it upon
      * entry destruction. The primary usecase is to avoid memory duplication
      * between the core and a module. */
@@ -112,11 +117,12 @@ bool entryHasEmbeddedValue(const entry *entry) {
     return (!entryHasValuePtr(entry));
 }
 
-/* Returns true in case the entry holds a reference of the value.
+/* Returns true in case the entry holds a stringRef reference of the value.
  * Returns false otherwise. */
 bool entryHasStringRef(const entry *entry) {
     return entryHasValuePtr(entry) && sdsGetAuxBit(entryGetField(entry), FIELD_SDS_AUX_BIT_ENTRY_HAS_STRING_REF);
 }
+
 /* Returns true in case the entry has expiration timestamp.
  * Returns false otherwise. */
 bool entryHasExpiry(const entry *entry) {
@@ -183,31 +189,32 @@ static void entrySetValueSds(entry *e, sds value) {
     sds *value_ref = entryGetSdsValueRef(e);
     *value_ref = value;
 }
+
 /* Returns the address of the entry allocation. */
 static void *entryGetAllocPtr(const entry *entry) {
     char *buf = sdsAllocPtr(entryGetField(entry));
     if (entryHasValuePtr(entry)) buf -= sizeof(void *);
-    if (entryHasExpiry(entry)) buf -= sizeof(long long);
+    if (entryHasExpiry(entry)) buf -= sizeof(mstime_t);
     return buf;
 }
 
 /**************************************** Entry Expiry API *****************************************/
 /* Returns the location of a pointer to the expiry */
-static long long *entryGetExpiryRef(const entry *entry) {
-    debugServerAssert(entryHasExpiry(entry));
+static mstime_t *entryGetExpiryRef(const entry *entry) {
+    serverAssert(entryHasExpiry(entry));
     char *buf = entryGetAllocPtr(entry);
-    return (long long *)buf;
+    return (mstime_t *)buf;
 }
 
 /* Returns the entry expiration timestamp.
  * In case this entry has no expiration time, will return EXPIRE_NONE. */
-long long entryGetExpiry(const entry *entry) {
+mstime_t entryGetExpiry(const entry *entry) {
     if (entryHasExpiry(entry)) return *entryGetExpiryRef(entry);
     return EXPIRY_NONE;
 }
 
 /* Modify the expiration time of this entry and return a pointer to the (potentially new) entry. */
-entry *entrySetExpiry(entry *e, long long expiry) {
+entry *entrySetExpiry(entry *e, mstime_t expiry) {
     if (expiry != EXPIRY_NONE && entryHasExpiry(e)) {
         *entryGetExpiryRef(e) = expiry;
         return e;
@@ -219,11 +226,15 @@ entry *entrySetExpiry(entry *e, long long expiry) {
     return entryUpdate(e, NULL, expiry);
 }
 
-/* Return true in case the entry has assigned expiration or false otherwise. */
+/* Return true in case the entry has assigned expiration and has already expired,
+ * or false otherwise. */
 bool entryIsExpired(entry *entry) {
-    return timestampIsExpired(entryGetExpiry(entry));
+    mstime_t entry_expiry = entryGetExpiry(entry);
+    if (entry_expiry == EXPIRY_NONE) return false;
+    return timestampIsExpired(entry_expiry);
 }
 /**************************************** Entry Expiry API - End *****************************************/
+
 void entryFree(entry *entry) {
     if (entryHasValuePtr(entry)) entryFreeValuePtr(entry);
     zfree(entryGetAllocPtr(entry));
@@ -231,13 +242,13 @@ void entryFree(entry *entry) {
 
 static inline size_t entryReqSize(size_t field_len,
                                   size_t value_len,
-                                  long long expiry,
+                                  mstime_t expiry,
                                   bool *is_value_embedded,
                                   int *field_sds_type,
                                   size_t *field_size,
                                   size_t *expiry_size,
                                   size_t *embedded_value_size) {
-    size_t expiry_alloc_size = (expiry == EXPIRY_NONE) ? 0 : sizeof(long long);
+    size_t expiry_alloc_size = (expiry == EXPIRY_NONE) ? 0 : sizeof(mstime_t);
     int embedded_field_sds_type = sdsReqType(field_len);
     if (embedded_field_sds_type == SDS_TYPE_5 && (expiry_alloc_size > 0)) {
         embedded_field_sds_type = SDS_TYPE_8;
@@ -292,7 +303,7 @@ static entry *entryConstruct(size_t alloc_size,
                              const_sds field,
                              sds sds_value,
                              stringRef *stringref_value,
-                             long long expiry,
+                             mstime_t expiry,
                              bool embed_value,
                              int embedded_field_sds_type,
                              size_t expiry_size,
@@ -303,17 +314,20 @@ static entry *entryConstruct(size_t alloc_size,
     /* allocate the buffer */
     char *buf = zmalloc_usable(alloc_size, &buf_size);
 
-    /* Set The expiry if exists */
+    /* Set the expiry if exists */
     if (expiry_size) {
-        *(long long *)buf = expiry;
+        *(mstime_t *)buf = expiry;
         buf += expiry_size;
         buf_size -= expiry_size;
     }
+    /* Set the value if exists */
     if (!embed_value) {
+        /* The value is not embedded, the value pointer is written before the field data. */
         *(void **)buf = sds_value ? (void *)sds_value : (void *)stringref_value;
         buf += sizeof(void *);
         buf_size -= sizeof(void *);
     } else if (sds_value) {
+        /* The value is embedded, the value data is written after the field data. */
         sdswrite(buf + embedded_field_sds_size, buf_size - embedded_field_sds_size, SDS_TYPE_8, sds_value, sdslen(sds_value));
         sdsfree(sds_value);
         buf_size -= embedded_value_sds_size;
@@ -333,7 +347,7 @@ static entry *entryConstruct(size_t alloc_size,
 }
 
 /* Takes ownership of value. does not take ownership of field */
-entry *entryCreate(const_sds field, sds value, long long expiry) {
+entry *entryCreate(const_sds field, sds value, mstime_t expiry) {
     bool embed_value = false;
     int embedded_field_sds_type;
     size_t expiry_size, embedded_value_sds_size, embedded_field_sds_size;
@@ -346,8 +360,8 @@ entry *entryCreate(const_sds field, sds value, long long expiry) {
  * The reference points to the provided `buf` but does not assume ownership.
  * It is assumed that an external mechanism will handle releasing any memory which
  * may have been associated with value->buf */
-entry *entryUpdateAsStringRef(entry *e, const char *buf, size_t len, long long expiry) {
-    long long entry_expiry = entryGetExpiry(e);
+entry *entryUpdateAsStringRef(entry *e, const char *buf, size_t len, mstime_t expiry) {
+    mstime_t entry_expiry = entryGetExpiry(e);
     // Check for toggling expiration
     bool expiry_add_remove = (expiry != entry_expiry) && (entry_expiry == EXPIRY_NONE || expiry == EXPIRY_NONE);
     if (entryHasValuePtr(e) && !expiry_add_remove) {
@@ -383,11 +397,12 @@ entry *entryUpdateAsStringRef(entry *e, const char *buf, size_t len, long long e
     sdsSetAuxBit(entryGetField(new_entry), FIELD_SDS_AUX_BIT_ENTRY_HAS_STRING_REF, 1);
     return new_entry;
 }
+
 /* Modify the entry's value and/or expiration time.
  * In case the provided value is NULL, will use the existing value.
  * Note that the value ownership is moved to this function and the caller should assume the
  * value is no longer usable after calling this function. */
-entry *entryUpdate(entry *e, sds value, long long expiry) {
+entry *entryUpdate(entry *e, sds value, mstime_t expiry) {
     sds field = entryGetField(e);
     entry *new_entry = NULL;
 
@@ -397,7 +412,7 @@ entry *entryUpdate(entry *e, sds value, long long expiry) {
         return entryUpdateAsStringRef(e, value->buf, value->len, expiry);
     }
     bool update_value = value ? true : false;
-    long long curr_expiration_time = entryGetExpiry(e);
+    mstime_t curr_expiration_time = entryGetExpiry(e);
     bool update_expiry = (expiry != curr_expiration_time) ? true : false;
     /* Just a sanity check. If nothing changes, lets just return */
     if (!update_value && !update_expiry) return e;
@@ -432,7 +447,7 @@ entry *entryUpdate(entry *e, sds value, long long expiry) {
         if (update_expiry) {
             serverAssert(entryHasExpiry(e));
             char *buf = entryGetAllocPtr(e);
-            *(long long *)buf = expiry;
+            *(mstime_t *)buf = expiry;
         }
         /* In this case we are sure we do not have to allocate new entry, so value must already be set or we have enough room to embed it. */
         if (update_value) {
@@ -475,14 +490,14 @@ entry *entryUpdate(entry *e, sds value, long long expiry) {
     return new_entry;
 }
 
-/* Returns memory usage of a entry, including all allocations owned by
+/* Returns memory usage of an entry, including all allocations owned by
  * the entry. */
 size_t entryMemUsage(entry *entry) {
     size_t mem = 0;
 
     if (entryHasEmbeddedValue(entry)) {
         mem += sdsReqSize(sdslen(entryGetField(entry)), sdsType(entryGetField(entry)));
-        if (entryHasExpiry(entry)) mem += sizeof(long long);
+        if (entryHasExpiry(entry)) mem += sizeof(mstime_t);
     } else {
         /* In case the value is not embedded we might not be able to sum all the allocation sizes since the field
          * header could be too small for holding the real allocation size. */
@@ -496,7 +511,7 @@ size_t entryMemUsage(entry *entry) {
     return mem;
 }
 
-/* Defragments a hashtable entry (field-value pair) if needed, using the
+/* Defragments an entry (field-value pair) if needed, using the
  * provided defrag functions. The defrag functions return NULL if the allocation
  * was not moved, otherwise they return a pointer to the new memory location.
  * A separate sds defrag function is needed because of the unique memory layout

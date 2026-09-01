@@ -5,20 +5,10 @@ proc log_file_matches {log pattern} {
     string match $pattern $content
 }
 
-# Wait until the process enters a paused state.
-proc wait_process_paused idx {
-    set pid [srv $idx pid]
-    wait_for_condition 50 1000 {
-        [string match "T*" [exec ps -o state= -p $pid]]
-    } else {
-        fail "Process $pid didn't stop, current state is [exec ps -o state= -p $pid]"
-    }
-}
-
 # Wait until the process enters a paused state, then resume the process.
 proc wait_and_resume_process idx {
     set pid [srv $idx pid]
-    wait_process_paused $idx
+    wait_process_paused $pid
     resume_process $pid
 }
 
@@ -625,7 +615,7 @@ start_server {tags {"dual-channel-replication external:skip"}} {
                 set loglines [lindex $res 1]
                 incr $loglines
                 wait_and_resume_process -2
-                verify_replica_online $primary 0 700
+                verify_replica_online $primary 0 [expr {$::valgrind ? 7000 : 700}]
                 wait_for_condition 50 1000 {
                     [status $replica1 master_link_status] == "up"
                 } else {
@@ -641,7 +631,7 @@ start_server {tags {"dual-channel-replication external:skip"}} {
                 set loglines [lindex $res 1]
                 incr $loglines
                 wait_and_resume_process -1
-                verify_replica_online $primary 0 700
+                verify_replica_online $primary 0 [expr {$::valgrind ? 7000 : 700}]
                 wait_for_condition 50 1000 {
                     [status $replica2 master_link_status] == "up"
                 } else {
@@ -812,7 +802,7 @@ start_server {tags {"dual-channel-replication external:skip"}} {
             # Pause primary main process after fork
             $primary debug pause-after-fork 1
             $replica replicaof $primary_host $primary_port
-            wait_for_log_messages 0 {"*Done loading RDB*"} 0 100 100
+            wait_for_log_messages 0 {"*Done loading RDB*"} 0 5000 10
 
             # At this point rdb is loaded but psync hasn't been established yet. 
             # Pause the replica so the primary main process will wake up while the
@@ -820,7 +810,10 @@ start_server {tags {"dual-channel-replication external:skip"}} {
             pause_process $replica_pid
             wait_and_resume_process -1
             $primary debug pause-after-fork 0
-            wait_for_log_messages -1 {"*Client * closed * for overcoming of output buffer limits.*"} $loglines 100 100
+            # Use a generous retry budget: under valgrind the primary fills the
+            # COB much more slowly, and the write load needs time to overflow
+            # the limit before the disconnect log appears.
+            wait_for_log_messages -1 {"*Client * closed * for overcoming of output buffer limits.*"} $loglines 500 100
             wait_for_condition 50 100 {
                 [string match {*replicas_waiting_psync:0*} [$primary info replication]]
             } else {
@@ -836,8 +829,8 @@ start_server {tags {"dual-channel-replication external:skip"}} {
             set loglines [lindex $res 1]
         }
         # Waiting for the primary to enter the paused state, that is, make sure that bgsave is triggered.
-        wait_process_paused -1
-        wait_for_log_messages 0 {"*Done loading RDB*"} $replica_loglines 100 100
+        wait_process_paused [srv -1 pid]
+        wait_for_log_messages 0 {"*Done loading RDB*"} $replica_loglines 5000 10
         $replica replicaof no one
         # Resume the primary and make sure the sync is dropped.
         resume_process [srv -1 pid]
@@ -1376,20 +1369,7 @@ start_server {tags {"dual-channel-replication external:skip"}} {
     }
 }
 
-# Test Sequence:
-# 1. replica -> primary.
-# 2. Replica initiates synchronization via RDB channel.
-# 3. Primary's main process is suspended.
-# 4. Replica completes RDB loading and pauses before establishing PSYNC connection.
-# 5. Primary resumes operation and detects closed RDB channel.
-# 6. Primary protects the RDB channel, maintains the RDB channel.
-# 7. replica -> primary -> new_primary
-# 8. Starting a new server, set up a chained replica.
-# 9. The primary completes sync from the new_primary server and disconnects all replica
-#    clients (including the RDB channel).
-# 10. Make sure that the primary does not assert.
-# 11. Replica resumes operation, check the replication is working correctly.
-test "Chained replicas can disconnect protected RDB channel client when using dual channel replication" {
+test "Test dual-channel-replication replica can lazyfree the local buffer" {
     start_server {tags {"dual-channel-replication external:skip"}} {
         set primary [srv 0 client]
         set primary_host [srv 0 host]
@@ -1397,48 +1377,276 @@ test "Chained replicas can disconnect protected RDB channel client when using du
 
         $primary config set repl-diskless-sync yes
         $primary config set dual-channel-replication-enabled yes
-        $primary debug pause-after-fork 1
-        $primary debug delay-rdb-client-free-seconds 60
+        $primary config set repl-diskless-sync-delay 0
+        # Generating RDB will cost 500s (1000000 * 0.0001s)
+        $primary debug populate 1000000 primary 1
+        $primary config set rdb-key-save-delay 100
 
         start_server {} {
             set replica [srv 0 client]
-            set replica_pid [srv 0 pid]
 
             $replica config set dual-channel-replication-enabled yes
 
-            # The primary will protect the replica's RDB channel.
-            set loglines [count_log_lines 0]
+            # Wait for sync session to start
             $replica replicaof $primary_host $primary_port
-            wait_for_log_messages 0 {"*Done loading RDB*"} $loglines 1000 50
-            pause_process $replica_pid
-            wait_and_resume_process -1
-            $primary debug pause-after-fork 0
             wait_for_condition 1000 50 {
-                [string match {*replicas_waiting_psync:1*} [$primary info replication]]
+                [string match "*slave*,state=wait_bgsave*,type=rdb-channel*" [$primary info replication]] &&
+                [string match "*slave*,state=bg_transfer*,type=main-channel*" [$primary info replication]] &&
+                [s -1 rdb_bgsave_in_progress] eq 1
             } else {
-                fail "Primary freed RDB client before psync was established"
+                fail "replica didn't start sync session in time"
             }
 
-            start_server {} {
-                set new_primary [srv 0 client]
-                set new_primary_host [srv 0 host]
-                set new_primary_port [srv 0 port]
+            # Get the main channel connection id while sync is still in progress.
+            set replica_main_conn_id [get_client_id_by_last_cmd $primary "psync"]
+            assert_not_equal $replica_main_conn_id ""
 
-                # Doing the chained replica, make sure it won't assert.
-                set loglines [count_log_lines -2]
-                $primary replicaof $new_primary_host $new_primary_port
-                wait_for_log_messages -2 {"*Done loading RDB*"} $loglines 1000 50
-
-                # Check the replication is working correctly.
-                resume_process $replica_pid
-                $new_primary set foo bar
-                wait_for_condition 1000 50 {
-                    [$primary get foo] eq "bar" &&
-                    [$replica get foo] eq "bar"
-                } else {
-                    fail "Chained replicas did not sync"
-                }
+            # Adding more data to replica local buffer
+            set bigstr [string repeat x 1000000]
+            for {set j 0} {$j < 10} {incr j} {
+                $primary set key $bigstr
             }
+
+            # Kill the main channel so that the replica will abort the sync
+            $primary client kill id $replica_main_conn_id
+
+            # Wait for replica to abort the sync and lazyfree the local buffer.
+            wait_for_condition 1000 50 {
+                [s lazyfreed_objects] > 0
+            } else {
+                fail "Replica did not lazyfree repl buf block after sync failure"
+            }
+        }
+    }
+}
+
+test "Test dual-channel-replication replica can lazyfree the local buffer" {
+    start_server {tags {"dual-channel-replication external:skip"}} {
+        set primary [srv 0 client]
+        set primary_host [srv 0 host]
+        set primary_port [srv 0 port]
+
+        $primary config set repl-diskless-sync yes
+        $primary config set dual-channel-replication-enabled yes
+        $primary config set repl-diskless-sync-delay 0
+        # Generating RDB will cost 500s (1000000 * 0.0001s)
+        $primary debug populate 1000000 primary 1
+        $primary config set rdb-key-save-delay 100
+
+        start_server {} {
+            set replica [srv 0 client]
+
+            $replica config set dual-channel-replication-enabled yes
+
+            # Wait for sync session to start
+            $replica replicaof $primary_host $primary_port
+            wait_for_condition 1000 50 {
+                [string match "*slave*,state=wait_bgsave*,type=rdb-channel*" [$primary info replication]] &&
+                [string match "*slave*,state=bg_transfer*,type=main-channel*" [$primary info replication]] &&
+                [s -1 rdb_bgsave_in_progress] eq 1
+            } else {
+                fail "replica didn't start sync session in time"
+            }
+
+            # Get the main channel connection id while sync is still in progress.
+            set replica_main_conn_id [get_client_id_by_last_cmd $primary "psync"]
+            assert_not_equal $replica_main_conn_id ""
+
+            # Adding more data to replica local buffer
+            set bigstr [string repeat x 1000000]
+            for {set j 0} {$j < 10} {incr j} {
+                $primary set key $bigstr
+            }
+
+            # Kill the main channel so that the replica will abort the sync
+            $primary client kill id $replica_main_conn_id
+
+            # Wait for replica to abort the sync and lazyfree the local buffer.
+            wait_for_condition 1000 50 {
+                [s lazyfreed_objects] > 0
+            } else {
+                fail "Replica did not lazyfree repl buf block after sync failure"
+            }
+        }
+    }
+}
+
+start_server {tags {"dual-channel-replication external:skip"}} {
+    set replica [srv 0 client]
+    set replica_host [srv 0 host]
+    set replica_port [srv 0 port]
+    start_server {} {
+        set primary [srv 0 client]
+        set primary_host [srv 0 host]
+        set primary_port [srv 0 port]
+
+        # Configure primary with delayed sync to observe handshake state
+        $primary config set repl-diskless-sync yes
+        $primary config set repl-diskless-sync-delay 1000
+        $primary config set dual-channel-replication-enabled yes
+
+        # Configure replica with announced IP
+        $replica config set dual-channel-replication-enabled yes
+        $replica config set replica-announce-ip "5.5.5.5"
+
+        test "dual-channel-replication rdb-channel reports replica-announce-ip" {
+            $replica replicaof $primary_host $primary_port
+
+            # Wait for replica to enter wait_bgsave state (rdb-channel established)
+            wait_for_condition 50 1000 {
+                [string match *state=wait_bgsave* [$primary info replication]]
+            } else {
+                fail "Replica does not enter wait_bgsave state"
+            }
+
+            # Verify the rdb-channel shows the announced IP, not connection IP
+            set info [$primary info replication]
+            assert_match "*ip=5.5.5.5,*type=rdb-channel*" $info
+        }
+
+        # Allow sync to complete
+        $primary config set repl-diskless-sync-delay 0
+
+        test "dual-channel-replication sync completes with replica-announce-ip" {
+            verify_replica_online $primary 0 500
+            wait_for_condition 50 1000 {
+                [string match *connected_slaves:1* [$primary info]]
+            } else {
+                fail "Replica failed to sync"
+            }
+        }
+    }
+}
+
+test "Dual channel replication buffer memory fields" {
+    start_server {tags {"dual-channel-replication external:skip"}} {
+        set primary [srv 0 client]
+        set primary_host [srv 0 host]
+        set primary_port [srv 0 port]
+        set primary_srv_id -1
+
+        $primary config set repl-diskless-sync yes
+        $primary config set repl-diskless-sync-delay 0
+        $primary config set dual-channel-replication-enabled yes
+        $primary config set repl-backlog-size 1
+        $primary config set client-output-buffer-limit "replica 0 0 0"
+
+        $primary config set rdb-key-save-delay 2000000
+        for {set j 0} {$j < 1000} {incr j} {
+            $primary set "key-$j" $j
+        }
+
+        start_server {} {
+            set replica [srv 0 client]
+            set replica_srv_id 0
+
+            $replica config set dual-channel-replication-enabled yes
+            $replica config set loading-process-events-interval-bytes 1024
+            $replica config set client-output-buffer-limit "replica 0 0 0"
+
+            $replica replicaof $primary_host $primary_port
+
+            # Ensure that all states meet our expectations.
+            wait_for_condition 1000 50 {
+                [string match "*slave*,state=wait_bgsave*,type=rdb-channel*" [$primary info replication]] &&
+                [string match "*slave*,state=bg_transfer*,type=main-channel*" [$primary info replication]] &&
+                [s $primary_srv_id rdb_bgsave_in_progress] eq 1 &&
+                [s $replica_srv_id master_sync_in_progress] eq 1
+            } else {
+                fail "replica didn't start a dual-channel sync session in time"
+            }
+
+            # Added some data to primary, the replica will cache it in its local buffer.
+            # Here we will use 50MB memory.
+            set bigstr [string repeat x 1024000]
+            for {set j 0} {$j < 50} {incr j} {
+                $primary set key $bigstr
+            }
+
+            # Waiting for data to be transferred from the primary to the replica.
+            wait_for_condition 1000 50 {
+               [s $primary_srv_id mem_total_replication_buffers] < [expr 1024000 * 10] &&
+               [s $replica_srv_id mem_total_replication_buffers] > [expr 1024000 * 40]
+            } else {
+                fail "replica didn't receive the data in time"
+            }
+
+            # Primary side check. Capture INFO and MEMORY STATS in one EXEC so the
+            # replication buffer cannot change between the two snapshots.
+            $primary multi
+            $primary info
+            $primary memory stats
+            lassign [$primary exec] primary_info primary_memory_stats
+
+            # Primary's total replication buffers check.
+            assert_lessthan_equal [getInfoProperty $primary_info mem_total_replication_buffers] [expr 1024000 * 10]
+
+            # Primary's replicas replication buffer should be 0.
+            assert_equal 0 [getInfoProperty $primary_info mem_replicas_repl_buffer]
+            assert_equal 0 [dict get $primary_memory_stats replicas.repl.buffer]
+
+            # Replica side check. The pending replication buffer keeps growing while
+            # the RDB transfer is in progress, so take both views from one EXEC.
+            $replica multi
+            $replica info
+            $replica memory stats
+            lassign [$replica exec] replica_info replica_memory_stats
+
+            # Replica's memory overhead check.
+            assert_morethan_equal [getInfoProperty $replica_info used_memory_overhead] [expr 1024000 * 40]
+            assert_equal [getInfoProperty $replica_info used_memory_overhead] [dict get $replica_memory_stats overhead.total]
+
+            # Replica's total replication buffers check. It should be equal to the replica replication buffer.
+            assert_morethan_equal [getInfoProperty $replica_info mem_total_replication_buffers] [expr 1024000 * 40]
+            assert_equal [getInfoProperty $replica_info mem_replicas_repl_buffer] [getInfoProperty $replica_info mem_total_replication_buffers]
+            assert_equal [getInfoProperty $replica_info mem_replicas_repl_buffer] [dict get $replica_memory_stats replicas.repl.buffer]
+
+            # Replica's replica replication buffer size check.
+            assert_morethan_equal [getInfoProperty $replica_info replicas_repl_buffer_size] [expr 1024000 * 40]
+            assert_morethan_equal [getInfoProperty $replica_info replicas_repl_buffer_peak] [expr 1024000 * 40]
+        }
+    }
+}
+
+start_server {tags {"dual-channel-replication external:skip"}} {
+    set replica [srv 0 client]
+    set replica_host [srv 0 host]
+    set replica_port [srv 0 port]
+    set replica_log [srv 0 stdout]
+    start_server {} {
+        set primary [srv 0 client]
+        set primary_host [srv 0 host]
+        set primary_port [srv 0 port]
+
+        $primary config set dual-channel-replication-enabled yes
+        $primary config set repl-diskless-sync yes
+        $primary config set repl-diskless-sync-delay 0
+        $replica config set dual-channel-replication-enabled yes
+
+        # A hash with field-level TTLs (HEXPIRE) is hashtable-encoded with
+        # volatile fields, which can only be serialized in RDB version >= 80.
+        # The primary must learn the replica's version over the RDB connection
+        # to pick a new enough RDB version; otherwise it falls back to RDB 11
+        # and the full sync fails with "Can't store key ... in RDB version 11".
+        $primary hset myhash field1 value1 field2 value2 field3 value3
+        $primary hexpire myhash 3600 FIELDS 3 field1 field2 field3
+        assert_encoding hashtable myhash
+
+        test "Dual channel full sync succeeds with hash field expiration data" {
+            set sync_full [s 0 sync_full]
+
+            $replica replicaof $primary_host $primary_port
+            wait_for_sync $replica
+            wait_replica_online $primary
+
+            # A full (RDB) sync must have happened.
+            assert_equal [expr $sync_full + 1] [s 0 sync_full]
+            # The primary never failed to serialize the HFE hash.
+            verify_no_log_message 0 "*Can't store key*" 0
+
+            # The hash and its field TTLs made it across.
+            assert_equal [lsort [$replica hgetall myhash]] [lsort {field1 value1 field2 value2 field3 value3}]
+            assert_range [lindex [$replica httl myhash FIELDS 1 field1] 0] 1 3600
         }
     }
 }

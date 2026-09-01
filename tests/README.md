@@ -39,7 +39,7 @@ match different external server configurations. All options are listed by
 Running with TLS requires the following preparations:
 
 * Build Valkey is TLS support, e.g. using `make BUILD_TLS=yes`, or `make BUILD_TLS=module`.
-* Run `./utils/gen-test-certs.sh` to generate a root CA and a server certificate.
+* Run `./utils/gen-test-certs.sh` to generate a root CA, server certificates, and invalid certificates for testing.
 * Install TLS support for TCL, e.g. the `tcl-tls` package on Debian/Ubuntu.
 
 Additional tests
@@ -84,6 +84,8 @@ Tags can be applied in different context levels:
 * `tags` context that bundles several tests together
 * A single test context.
 
+Some tags are restricted to top-level use only. These tags are `large-memory`, `needs:other-server`, `compatible-redis` and `network`.
+
 The following compatibility and capability tags are currently used:
 
 | Tag                       | Indicates |
@@ -103,10 +105,16 @@ The following compatibility and capability tags are currently used:
 | `needs:reset`             | Uses `RESET` to reset client connections. |
 | `needs:save`              | Uses `SAVE` or `BGSAVE` to create an RDB file. |
 | `needs:other-server`      | Requires `--other-server-path`. |
+| `compatible-redis`        | Tests that run against Redis (compatibility tests). |
+| `network`                 | Tests that require network operations. |
 | `singledb`                | Test runs as if `--singledb` was given. |
+| `valgrind:skip`           | Not compatible with `--valgrind`. |
 
 When using an external server (`--host` and `--port`), filtering using the
 `external:skip` tags is done automatically.
+
+When using `--valgrind`, filtering using the `valgrind:skip` tag is done
+automatically.
 
 When using `--cluster-mode`, filtering using the `cluster:skip` tag is done
 automatically.

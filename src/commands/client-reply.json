@@ -8,6 +8,7 @@
         "container": "CLIENT",
         "function": "clientReplyCommand",
         "command_flags": [
+            "ALLOW_BUSY",
             "NOSCRIPT",
             "NO_MULTI",
             "LOADING",

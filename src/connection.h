@@ -48,6 +48,7 @@
 #define NET_HOST_PORT_STR_LEN (NET_HOST_STR_LEN + 32) /* Must be enough for hostname:port */
 
 struct aeEventLoop;
+struct user;
 typedef struct connection connection;
 typedef struct connListener connListener;
 
@@ -63,6 +64,9 @@ typedef enum {
 #define CONN_FLAG_CLOSE_SCHEDULED (1 << 0)      /* Closed scheduled by a handler */
 #define CONN_FLAG_WRITE_BARRIER (1 << 1)        /* Write barrier requested */
 #define CONN_FLAG_ALLOW_ACCEPT_OFFLOAD (1 << 2) /* Connection accept can be offloaded to IO threads. */
+
+#define CONN_POSTPONE_READ (1 << 0)
+#define CONN_POSTPONE_WRITE (1 << 1)
 
 typedef enum {
     CONN_TYPE_INVALID = -1,
@@ -140,15 +144,20 @@ typedef struct ConnectionType {
 
     /* Postpone update state - with IO threads & TLS we don't want the IO threads to update the event loop events - let
      * the main-thread do it */
-    void (*postpone_update_state)(struct connection *conn, int);
+    void (*postpone_update_state)(struct connection *conn, int postpone_mask);
     /* Called by the main-thread */
     void (*update_state)(struct connection *conn);
+    /* 1 if update_state may synchronously invoke read/write handlers.
+     * When set, processClientIOReadsDone defers clearing postpone until after
+     * command batching; leave 0 for transports that do not need that. */
+    int sync_handlers_in_update_state;
 
     /* TLS specified methods */
     sds (*get_peer_cert)(struct connection *conn);
 
-    /* Get peer username based on connection type */
-    sds (*get_peer_username)(connection *conn);
+    /* Get peer user based on connection type. If cert_username is non-NULL,
+     * it is set to the extracted certificate field value. */
+    struct user *(*get_peer_user)(connection *conn, sds *cert_username);
 
     /* Miscellaneous */
     int (*connIntegrityChecked)(void); // return 1 if connection type has built-in integrity checks
@@ -170,7 +179,7 @@ struct connection {
 
 #define CONFIG_BINDADDR_MAX 16
 
-/* Setup a listener by a connection type */
+/* Set up a listener by a connection type */
 struct connListener {
     int fd[CONFIG_BINDADDR_MAX];
     int count;
@@ -424,10 +433,11 @@ static inline sds connGetPeerCert(connection *conn) {
     return NULL;
 }
 
-/* Get Peer username based on connection type */
-static inline sds connGetPeerUsername(connection *conn) {
-    if (conn->type && conn->type->get_peer_username) {
-        return conn->type->get_peer_username(conn);
+/* Get peer user based on connection type. If cert_username is non-NULL,
+ * it is set to the extracted certificate field value. */
+static inline struct user *connGetPeerUser(connection *conn, sds *cert_username) {
+    if (conn->type && conn->type->get_peer_user) {
+        return conn->type->get_peer_user(conn, cert_username);
     }
     return NULL;
 }
@@ -514,10 +524,14 @@ static inline void connUpdateState(connection *conn) {
     }
 }
 
-static inline void connSetPostponeUpdateState(connection *conn, int on) {
-    if (conn->type->postpone_update_state) {
-        conn->type->postpone_update_state(conn, on);
+static inline void connSetPostponeUpdateState(connection *conn, int postpone_mask) {
+    if (conn && conn->type && conn->type->postpone_update_state) {
+        conn->type->postpone_update_state(conn, postpone_mask);
     }
+}
+
+static inline int connUpdateStateMayInvokeHandlers(connection *conn) {
+    return conn && conn->type && conn->type->sync_handlers_in_update_state;
 }
 
 static inline int connIsIntegrityChecked(connection *conn) {

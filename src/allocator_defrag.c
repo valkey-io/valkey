@@ -24,7 +24,7 @@
  * - **zmalloc**: An abstraction layer over the memory allocator, providing
  *   a uniform allocation interface to the application code. It can delegate
  *   to various underlying allocators (e.g., libc, tcmalloc, jemalloc, or others).
- *   It is not dependant on defrag implementation logic and it's possible to use jemalloc
+ *   It is not dependent on defrag implementation logic and it's possible to use jemalloc
  *   version that does not support defrag.
  * - **allocator_defrag**: This file contains allocator-specific logic for
  *   defragmentation, invoked from `defrag.c` when memory defragmentation is needed.
@@ -279,9 +279,9 @@ int allocatorDefragInit(void) {
     je_res = je_mallctl("arenas.nbins", &je_cb.nbins, &sz, NULL, 0);
     assert(je_res == 0 && je_cb.nbins != 0);
 
-    je_cb.bin_info = je_calloc(je_cb.nbins, sizeof(jeBinInfo));
+    je_cb.bin_info = zcalloc_num(je_cb.nbins, sizeof(jeBinInfo));
     assert(je_cb.bin_info != NULL);
-    je_usage_info = je_calloc(je_cb.nbins, sizeof(jemallocBinUsageData));
+    je_usage_info = zcalloc_num(je_cb.nbins, sizeof(jemallocBinUsageData));
     assert(je_usage_info != NULL);
 
     for (unsigned j = 0; j < je_cb.nbins; j++) {

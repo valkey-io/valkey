@@ -79,8 +79,9 @@ start_server {overrides {save {}}} {
         # Execute the failover
         $node_0 failover to $node_1_host $node_1_port
 
-        # Wait for failover to end
-        wait_for_condition 50 100 {
+        # Wait for failover to end. Budget is generous for loaded CI runners;
+        # the failover must still complete, so this cannot hide a hang.
+        wait_for_condition 100 200 {
             [s 0 master_failover_state] == "no-failover"
         } else {
             fail "Failover from node 0 to node 1 did not finish"

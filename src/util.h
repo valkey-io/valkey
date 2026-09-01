@@ -54,7 +54,7 @@
  * This should be the size of the buffer for sprintf with %f */
 #define MAX_DOUBLE_CHARS 400
 
-/* The maximum number of characters needed to for d2string/fpconv_dtoa call.
+/* The maximum number of characters needed for d2string/fpconv_dtoa call.
  * Since it uses %g and not %f, some 40 chars should be enough. */
 #define MAX_D2STRING_CHARS 128
 
@@ -85,14 +85,14 @@ int ull2string(char *s, size_t len, unsigned long long value);
 int string2ll(const char *s, size_t slen, long long *value);
 int string2ull(const char *s, size_t slen, unsigned long long *value);
 int string2l(const char *s, size_t slen, long *value);
-int string2ul_base16_async_signal_safe(const char *src, size_t slen, unsigned long *result_output);
+int string2ull_base16_async_signal_safe(const char *src, size_t slen, unsigned long long *result_output);
 int string2ld(const char *s, size_t slen, long double *dp);
 int string2d(const char *s, size_t slen, double *dp);
 int trimDoubleString(char *buf, size_t len);
 int d2string(char *buf, size_t len, double value);
 int fixedpoint_d2string(char *dst, size_t dstlen, double dvalue, int fractional_digits);
 int ld2string(char *buf, size_t len, long double value, ld2string_mode mode);
-void getHashSeedFromString(unsigned char *seed_array, size_t len, const char *value);
+void getHashSeedFromString(unsigned char *seed_array, size_t len, const char *value, size_t value_len);
 int double2ll(double d, long long *out);
 int version2num(const char *version);
 int yesnotoi(char *s);
@@ -123,5 +123,6 @@ long long ustime(void);
 mstime_t mstime(void);
 void writePointerWithPadding(unsigned char *buf, const void *ptr);
 sds escapeJsonString(sds s, const char *p, size_t len);
+uint64_t wangHash64(uint64_t hash);
 
 #endif

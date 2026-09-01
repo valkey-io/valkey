@@ -7,6 +7,7 @@
 #include "scripting_engine.h"
 #include "bio.h"
 #include "dict.h"
+#include "eval.h"
 #include "functions.h"
 #include "module.h"
 #include "server.h"
@@ -65,17 +66,11 @@ static engineManager engineMgr = {
     .total_memory_overhead = 0,
 };
 
-static uint64_t dictStrCaseHash(const void *key) {
-    return dictGenCaseHashFunction((unsigned char *)key, strlen((char *)key));
-}
-
 dictType engineDictType = {
-    dictStrCaseHash,       /* hash function */
-    NULL,                  /* key dup */
-    dictSdsKeyCaseCompare, /* key compare */
-    NULL,                  /* key destructor */
-    NULL,                  /* val destructor */
-    NULL                   /* allow to expand */
+    .entryGetKey = dictEntryGetKey,
+    .hashFunction = dictCStrCaseHash,
+    .keyCompare = dictSdsKeyCaseCompare,
+    .entryDestructor = zfree,
 };
 
 static int isCalledFromAsyncThread(void) {
@@ -184,18 +179,22 @@ int scriptingEngineManagerUnregister(const char *engine_name) {
     scriptingEngine *e = dictGetVal(entry);
 
     functionsRemoveLibFromEngine(e);
+    evalRemoveScriptsFromEngine(e);
 
     engineMemoryInfo mem_info = scriptingEngineCallGetMemoryInfo(e, VMSE_ALL);
     engineMgr.total_memory_overhead -= zmalloc_size(e) +
                                        sdsAllocSize(e->name) +
                                        mem_info.engine_memory_overhead;
 
-    sdsfree(e->name);
-
     /* We need to ensure that any pending async flush of eval scripts or
-     * functions have completed before freeing the module context cache, which
-     * may be used by the async jobs. */
+     * functions have completed before freeing the engine resources, which
+     * may be used by the async jobs. Release the GIL first since the lazy
+     * free jobs need to acquire it to call scriptingEngineCallFreeFunction. */
+    moduleReleaseGIL();
     bioDrainWorker(BIO_LAZY_FREE);
+    moduleAcquireGIL();
+
+    sdsfree(e->name);
 
     for (size_t i = 0; i < MODULE_CTX_CACHE_SIZE; i++) {
         serverAssert(e->module_ctx_cache[i] != NULL);
@@ -210,7 +209,7 @@ int scriptingEngineManagerUnregister(const char *engine_name) {
 
 /*
  * Lookups the engine with `engine_name` in the engine manager and returns it if
- * it exists. Otherwise returns `NULL`.
+ * it exists. Otherwise, returns `NULL`.
  */
 scriptingEngine *scriptingEngineManagerFind(const char *engine_name) {
     dictEntry *entry = dictFind(engineMgr.engines, engine_name);
@@ -1046,7 +1045,8 @@ static int findAndExecuteCommand(robj **argv, size_t argc) {
         return CONTINUE_READ_NEXT_COMMAND;
     }
 
-    return cmd->handler(argv, argc, cmd->context);
+    /* Fall back to the engine's own context, which handlers can cast back to their engine context type. */
+    return cmd->handler(argv, argc, cmd->context ? cmd->context : ds.engine->impl.ctx);
 }
 
 void scriptingEngineDebuggerProcessCommands(int *client_disconnected, robj **err) {

@@ -4,7 +4,7 @@ set testmodule [file normalize tests/modules/crash.so]
 set backtrace_supported [system_backtrace_supported]
 
 # Valgrind will complain that the process terminated by a signal, skip it.
-if {!$::valgrind} {
+tags {"valgrind:skip"} {
     start_server {tags {"modules"}} {
         r module load $testmodule assert
         test {Test module crash when info crashes with an assertion } {
@@ -24,7 +24,10 @@ if {!$::valgrind} {
             if {$backtrace_supported} {
                 # Make sure the crash trace is printed twice. There will be 3 instances of,
                 # assertCrash 1 in the first stack trace and 2 in the second.
-                assert_equal 3 [count_log_message 0 "assertCrash"]
+                # Skip when using libbacktrace where symbol resolution may be inconsistent
+                if {[catch {exec grep -a "initLibbacktraceFrameState" $::VALKEY_SERVER_BIN}] != 0} {
+                    assert_equal 3 [count_log_message 0 "assertCrash"]
+                }
             }
             assert_equal 1 [count_log_message 0 "RECURSIVE ASSERTION FAILED"]
             assert_equal 1 [count_log_message 0 "=== .* BUG REPORT START: Cut & paste starting from here ==="]
@@ -55,7 +58,10 @@ if {!$::valgrind} {
                 assert_equal 2 [count_log_message 0 "Crashed running the instruction at"]
                 # Make sure the crash trace is printed twice. There will be 3 instances of 
                 # modulesCollectInfo, 1 in the first stack trace and 2 in the second.
-                assert_equal 3 [count_log_message 0 "modulesCollectInfo"]
+                # Skip when using libbacktrace where symbol resolution may be inconsistent
+                if {[catch {exec grep -a "initLibbacktraceFrameState" $::VALKEY_SERVER_BIN}] != 0} {
+                    assert_equal 3 [count_log_message 0 "modulesCollectInfo"]
+                }
             }
             assert_equal 1 [count_log_message 0 "=== .* BUG REPORT START: Cut & paste starting from here ==="]
         }

@@ -22,7 +22,7 @@ proc get_addr_replica_serving_slot slot {
 
 test "Migrate a slot, verify client receives sunsubscribe on primary serving the slot." {
 
-    # Setup the to and from node
+    # Set up the to and from node
     set channelname mychannel
     set slot [$cluster cluster keyslot $channelname]
     array set nodefrom [$cluster masternode_for_slot $slot]
@@ -55,7 +55,7 @@ test "Migrate a slot, verify client receives sunsubscribe on primary serving the
 
 test "Client subscribes to multiple channels, migrate a slot, verify client receives sunsubscribe on primary serving the slot." {
 
-    # Setup the to and from node
+    # Set up the to and from node
     set channelname ch3
     set anotherchannelname ch7
     set slot [$cluster cluster keyslot $channelname]
@@ -101,7 +101,7 @@ test "Client subscribes to multiple channels, migrate a slot, verify client rece
 
 test "Migrate a slot, verify client receives sunsubscribe on replica serving the slot." {
 
-    # Setup the to and from node
+    # Set up the to and from node
     set channelname mychannel1
     set slot [$cluster cluster keyslot $channelname]
     array set nodefrom [$cluster masternode_for_slot $slot]
@@ -136,7 +136,7 @@ test "Migrate a slot, verify client receives sunsubscribe on replica serving the
 }
 
 test "Move a replica to another primary, verify client receives sunsubscribe on replica serving the slot." {
-    # Setup the to and from node
+    # Set up the to and from node
     set channelname mychannel2
     set slot [$cluster cluster keyslot $channelname]
 

@@ -1,6 +1,6 @@
 {
     "SPUBLISH": {
-        "summary": "Post a message to a shard channel",
+        "summary": "Posts a message to a shard channel.",
         "complexity": "O(N) where N is the number of clients subscribed to the receiving shard channel.",
         "group": "pubsub",
         "since": "7.0.0",

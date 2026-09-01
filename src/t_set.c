@@ -43,7 +43,7 @@
 void sunionDiffGenericCommand(client *c, robj **setkeys, int setnum, robj *dstkey, int op);
 
 /* Factory method to return a set that *can* hold "value". When the object has
- * an integer-encodable value, an intset will be returned. Otherwise a listpack
+ * an integer-encodable value, an intset will be returned. Otherwise, a listpack
  * or a regular hash table.
  *
  * The size hint indicates approximately how many items will be added which is
@@ -407,7 +407,7 @@ sds setTypeNextObject(setTypeIterator *si) {
 
 /* Return random element from a non empty set.
  * The returned element can be an int64_t value if the set is encoded
- * as an "intset" blob of integers, or an string.
+ * as an "intset" blob of integers, or a string.
  *
  * The caller provides three pointers to be populated with the right
  * object. The return value of the function is the object->encoding
@@ -559,24 +559,24 @@ robj *setTypeDup(robj *o) {
     robj *set;
     setTypeIterator *si;
 
-    serverAssert(o->type == OBJ_SET);
+    serverAssert(objectGetType(o) == OBJ_SET);
 
     /* Create a new set object that have the same encoding as the original object's encoding */
-    if (o->encoding == OBJ_ENCODING_INTSET) {
+    if (objectGetEncoding(o) == OBJ_ENCODING_INTSET) {
         intset *is = objectGetVal(o);
         size_t size = intsetBlobLen(is);
         intset *newis = zmalloc(size);
         memcpy(newis, is, size);
         set = createObject(OBJ_SET, newis);
         set->encoding = OBJ_ENCODING_INTSET;
-    } else if (o->encoding == OBJ_ENCODING_LISTPACK) {
+    } else if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) {
         unsigned char *lp = objectGetVal(o);
         size_t sz = lpBytes(lp);
         unsigned char *new_lp = zmalloc(sz);
         memcpy(new_lp, lp, sz);
         set = createObject(OBJ_SET, new_lp);
         set->encoding = OBJ_ENCODING_LISTPACK;
-    } else if (o->encoding == OBJ_ENCODING_HASHTABLE) {
+    } else if (objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE) {
         set = createSetObject();
         hashtable *ht = objectGetVal(o);
         hashtableExpand(objectGetVal(set), hashtableSize(ht));
@@ -625,6 +625,7 @@ void sremCommand(client *c) {
 
     if ((set = lookupKeyWriteOrReply(c, c->argv[1], shared.czero)) == NULL || checkType(c, set, OBJ_SET)) return;
 
+    if (set->encoding == OBJ_ENCODING_HASHTABLE) hashtablePauseAutoShrink(objectGetVal(set));
     for (j = 2; j < c->argc; j++) {
         if (setTypeRemove(set, objectGetVal(c->argv[j]))) {
             deleted++;
@@ -635,6 +636,8 @@ void sremCommand(client *c) {
             }
         }
     }
+    if (!keyremoved && set->encoding == OBJ_ENCODING_HASHTABLE) hashtableResumeAutoShrink(objectGetVal(set));
+
     if (deleted) {
         signalModifiedKey(c, c->db, c->argv[1]);
         notifyKeyspaceEvent(NOTIFY_SET, "srem", c->argv[1], c->db->id);
@@ -1473,7 +1476,7 @@ void sunionDiffGenericCommand(client *c, robj **setkeys, int setnum, robj *dstke
          * 'dstset_encoding' is used to determine which kind of encoding to use when initialize 'dstset'.
          *
          * If all sets are all OBJ_ENCODING_INTSET encoding or 'dstkey' is not null, keep 'dstset'
-         * OBJ_ENCODING_INTSET encoding when initialize. Otherwise it is not efficient to create the 'dstset'
+         * OBJ_ENCODING_INTSET encoding when initialize. Otherwise, it is not efficient to create the 'dstset'
          * from intset and then convert to listpack or hashtable.
          *
          * If one of the set is OBJ_ENCODING_LISTPACK, let's set 'dstset' to hashtable default encoding,
@@ -1534,7 +1537,7 @@ void sunionDiffGenericCommand(client *c, robj **setkeys, int setnum, robj *dstke
         /* Union is trivial, just add every element of every set to the
          * temporary set. */
         for (j = 0; j < setnum; j++) {
-            if (!sets[j]) continue; /* non existing keys are like empty sets */
+            if (!sets[j]) continue; /* nonexistent keys are like empty sets */
 
             si = setTypeInitIterator(sets[j]);
             while ((encoding = setTypeNext(si, &str, &len, &llval)) != -1) {
@@ -1575,7 +1578,7 @@ void sunionDiffGenericCommand(client *c, robj **setkeys, int setnum, robj *dstke
          * This is O(N) where N is the sum of all the elements in every
          * set. */
         for (j = 0; j < setnum; j++) {
-            if (!sets[j]) continue; /* non existing keys are like empty sets */
+            if (!sets[j]) continue; /* nonexistent keys are like empty sets */
 
             si = setTypeInitIterator(sets[j]);
             while ((encoding = setTypeNext(si, &str, &len, &llval)) != -1) {

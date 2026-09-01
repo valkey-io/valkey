@@ -68,6 +68,7 @@
 
 #include "server.h"
 #include "connection.h"
+#include "cluster.h"
 #include "bio.h"
 #include "mutexqueue.h"
 #include "tls.h"
@@ -79,9 +80,8 @@ static unsigned int bio_job_to_worker[] = {
     [BIO_CLOSE_AOF] = 1,
     [BIO_LAZY_FREE] = 2,
     [BIO_RDB_SAVE] = 3,
-#if defined(USE_OPENSSL) && USE_OPENSSL == 1 /* BUILD_YES */
-    [BIO_TLS_RELOAD] = 4,
-#endif
+    [BIO_TLS_RELOAD] = 4, /* only used when BUILD_TLS=yes */
+    [BIO_CLUSTER_SAVE] = 5,
 };
 
 typedef struct {
@@ -95,9 +95,8 @@ static bio_worker_data bio_workers[] = {
     {"bio_aof"},
     {"bio_lazy_free"},
     {"bio_rdb_save"},
-#if defined(USE_OPENSSL) && USE_OPENSSL == 1 /* BUILD_YES */
-    {"bio_tls_reload"},
-#endif
+    {"bio_tls_reload"}, /* only used when BUILD_TLS=yes */
+    {"bio_cluster_config_save"},
 };
 static const bio_worker_data *const bio_worker_end = bio_workers + (sizeof bio_workers / sizeof *bio_workers);
 
@@ -144,18 +143,26 @@ typedef union bio_job {
     struct {
         int type;
     } tls_reload_args;
+
+    struct {
+        int type;
+        sds content;   /* Cluster config file content. */
+        bool do_fsync; /* A flag to indicate that a fsync is required. */
+    } cluster_save_args;
 } bio_job;
 
 void *bioProcessBackgroundJobs(void *arg);
 
-/* Make sure we have enough stack to perform all the things we do in the
- * main thread. */
-#define VALKEY_THREAD_STACK_SIZE (1024 * 1024 * 4)
+/* Allocate a bio_job. Marked noinline so that it appears as a distinct frame in valgrind
+ * stack traces, allowing a targeted Valgrind suppression for BIO job leaks */
+__attribute__((noinline)) static bio_job *allocBioJob(size_t extra) {
+    return zmalloc(sizeof(bio_job) + extra);
+}
+
 
 /* Initialize the background system, spawning the thread. */
 void bioInit(void) {
     pthread_attr_t attr;
-    size_t stacksize;
 
     /* Initialization of state vars and objects */
     for (bio_worker_data *bwd = bio_workers; bwd != bio_worker_end; ++bwd) {
@@ -163,11 +170,7 @@ void bioInit(void) {
     }
 
     /* Set the stack size as by default it may be small in some system */
-    pthread_attr_init(&attr);
-    pthread_attr_getstacksize(&attr, &stacksize);
-    if (!stacksize) stacksize = 1; /* The world is full of Solaris Fixes */
-    while (stacksize < VALKEY_THREAD_STACK_SIZE) stacksize *= 2;
-    pthread_attr_setstacksize(&attr, stacksize);
+    serverInitThreadAttribute(&attr);
 
     /* Ready to spawn our threads. We use the single argument the thread
      * function accepts in order to pass a pointer to the data that the
@@ -179,6 +182,7 @@ void bioInit(void) {
             exit(1);
         }
     }
+    pthread_attr_destroy(&attr);
 }
 
 void bioSubmitJob(int type, bio_job *job) {
@@ -192,7 +196,7 @@ void bioCreateLazyFreeJob(lazy_free_fn free_fn, int arg_count, ...) {
     va_list valist;
     /* Allocate memory for the job structure and all required
      * arguments */
-    bio_job *job = zmalloc(sizeof(*job) + sizeof(void *) * (arg_count));
+    bio_job *job = allocBioJob(sizeof(void *) * (arg_count));
     job->free_args.free_fn = free_fn;
 
     va_start(valist, arg_count);
@@ -204,7 +208,7 @@ void bioCreateLazyFreeJob(lazy_free_fn free_fn, int arg_count, ...) {
 }
 
 void bioCreateCloseJob(int fd, int need_fsync, int need_reclaim_cache) {
-    bio_job *job = zmalloc(sizeof(*job));
+    bio_job *job = allocBioJob(0);
     job->fd_args.fd = fd;
     job->fd_args.need_fsync = need_fsync;
     job->fd_args.need_reclaim_cache = need_reclaim_cache;
@@ -213,7 +217,7 @@ void bioCreateCloseJob(int fd, int need_fsync, int need_reclaim_cache) {
 }
 
 void bioCreateCloseAofJob(int fd, long long offset, int need_reclaim_cache) {
-    bio_job *job = zmalloc(sizeof(*job));
+    bio_job *job = allocBioJob(0);
     job->fd_args.fd = fd;
     job->fd_args.offset = offset;
     job->fd_args.need_fsync = 1;
@@ -223,7 +227,7 @@ void bioCreateCloseAofJob(int fd, long long offset, int need_reclaim_cache) {
 }
 
 void bioCreateFsyncJob(int fd, long long offset, int need_reclaim_cache) {
-    bio_job *job = zmalloc(sizeof(*job));
+    bio_job *job = allocBioJob(0);
     job->fd_args.fd = fd;
     job->fd_args.offset = offset;
     job->fd_args.need_reclaim_cache = need_reclaim_cache;
@@ -232,17 +236,25 @@ void bioCreateFsyncJob(int fd, long long offset, int need_reclaim_cache) {
 }
 
 void bioCreateSaveRDBToDiskJob(connection *conn, int is_dual_channel) {
-    bio_job *job = zmalloc(sizeof(*job));
+    bio_job *job = allocBioJob(0);
     job->save_to_disk_args.conn = conn;
     job->save_to_disk_args.is_dual_channel = is_dual_channel;
     bioSubmitJob(BIO_RDB_SAVE, job);
 }
 
 void bioCreateTlsReloadJob(void) {
-    bio_job *job = zmalloc(sizeof(*job));
+    bio_job *job = allocBioJob(0);
     bioSubmitJob(BIO_TLS_RELOAD, job);
 }
 
+void bioCreateClusterConfigSaveJob(sds content, bool do_fsync) {
+    bio_job *job = allocBioJob(0);
+    job->cluster_save_args.content = content;
+    job->cluster_save_args.do_fsync = do_fsync;
+    bioSubmitJob(BIO_CLUSTER_SAVE, job);
+}
+
+#define CONFIG_SAVE_LOG_ERROR_RATE 30 /* Seconds between errors logging. */
 void *bioProcessBackgroundJobs(void *arg) {
     bio_worker_data *const bwd = arg;
     sigset_t sigset;
@@ -264,7 +276,6 @@ void *bioProcessBackgroundJobs(void *arg) {
     bio_worker_num = bioWorkerNum(bwd);
 
     while (1) {
-        /* Get job - blocking until available */
         bio_job *job = mutexQueuePop(bwd->bio_jobs, true);
 
         /* Process the job accordingly to its type. */
@@ -313,6 +324,21 @@ void *bioProcessBackgroundJobs(void *arg) {
 #else
             serverPanic("BIO_TLS_RELOAD job type requires built-in TLS (BUILD_TLS=yes).");
 #endif
+        } else if (job_type == BIO_CLUSTER_SAVE) {
+            static time_t last_save_error_log = 0;
+            if (clusterSaveConfigFromBio(job->cluster_save_args.content, job->cluster_save_args.do_fsync) == C_ERR) {
+                /* Limit logging rate to 1 line per CONFIG_SAVE_LOG_ERROR_RATE seconds. */
+                if ((server.unixtime - last_save_error_log) > CONFIG_SAVE_LOG_ERROR_RATE) {
+                    serverLog(LL_WARNING, "Failed to save the cluster config file in background. Cluster config "
+                                          "updated even though writing the cluster config file to disk failed.");
+                    last_save_error_log = server.unixtime;
+                }
+                atomic_store_explicit(&server.cluster_config_save_status, C_ERR, memory_order_relaxed);
+            } else {
+                atomic_store_explicit(&server.cluster_config_save_status, C_OK, memory_order_relaxed);
+                atomic_store_explicit(&server.cluster_config_last_save_time, time(NULL), memory_order_relaxed);
+                last_save_error_log = 0;
+            }
         } else {
             serverPanic("Wrong job type in bioProcessBackgroundJobs().");
         }

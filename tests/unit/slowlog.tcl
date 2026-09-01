@@ -172,17 +172,41 @@ start_server {tags {"slowlog"} overrides {slowlog-log-slower-than 1000000}} {
         lindex $e 3
     } {sadd set foo {AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA... (1 more bytes)}}
 
-    test {SLOWLOG - EXEC is not logged, just executed commands} {
+    test {SLOWLOG - EXEC is logged alongside slow inner commands} {
         r config set slowlog-log-slower-than 100000
         r slowlog reset
         assert_equal [r slowlog len] 0
         r multi
         r debug sleep 0.2
         r exec
-        assert_equal [r slowlog len] 1
-        set e [lindex [r slowlog get] 0]
-        assert_equal [lindex $e 3] {debug sleep 0.2}
+        assert_equal [r slowlog len] 2
+        set entries [r slowlog get]
+        assert_equal [lindex [lindex $entries 0] 3] {exec}
+        assert_equal [lindex [lindex $entries 1] 3] {debug sleep 0.2}
     } {} {needs:debug}
+
+    test {SLOWLOG - EXEC records total transaction time when inner commands are individually fast} {
+        r config set slowlog-log-slower-than 100000
+        r slowlog reset
+        r multi
+        for {set i 0} {$i < 10} {incr i} {
+            r debug sleep 0.03
+        }
+        r exec
+        set e [lindex [r slowlog get 1] 0]
+        assert_equal [lindex $e 3] {exec}
+        assert {[lindex $e 2] >= 100000}
+    } {} {needs:debug}
+
+    test {SLOWLOG - EXEC is not logged when transaction is below threshold} {
+        r config set slowlog-log-slower-than 100000
+        r slowlog reset
+        r multi
+        r set foo bar
+        r get foo
+        r exec
+        assert_equal [r slowlog len] 0
+    }
 
     test {SLOWLOG - can clean older entries} {
         r client setname lastentry_client

@@ -4,9 +4,9 @@ on:
     - cron: '0 6 * * 0'
   workflow_dispatch: {}
 permissions:
-  actions: read
+  actions: write
   contents: read
-  pull-requests: write
+  pull-requests: read
 concurrency:
   group: weekly-release-tests
   cancel-in-progress: false
@@ -20,7 +20,7 @@ jobs:
     steps:
       - name: Collect release branches
         id: release-branches
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
@@ -50,11 +50,15 @@ jobs:
   run-daily-for-release-branches:
     needs: determine-release-branches
     if: needs.determine-release-branches.outputs.has-branches == 'true' && github.repository == 'valkey-io/valkey'
+    permissions:
+      actions: write
+      contents: read
+      pull-requests: read
     strategy:
       fail-fast: false
       matrix:
         release-branch: ${{ fromJson(needs.determine-release-branches.outputs.branches) }}
-      max-parallel: 1
+      max-parallel: 2
     uses: ./.github/workflows/daily.yml
     with:
       use_repo: valkey-io/valkey

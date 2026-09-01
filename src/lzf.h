@@ -83,7 +83,7 @@ lzf_compress (const void *const in_data,  size_t in_len,
  * will be stored at out_data up to a maximum of out_len characters.
  *
  * If the output buffer is not large enough to hold the decompressed
- * data, a 0 is returned and errno is set to E2BIG. Otherwise the number
+ * data, a 0 is returned and errno is set to E2BIG. Otherwise, the number
  * of decompressed bytes (i.e. the original length of the data) is
  * returned.
  *

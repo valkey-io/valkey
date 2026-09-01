@@ -356,7 +356,7 @@ void feedReplicationBufferWithObject(robj *o) {
     void *p;
     size_t len;
 
-    if (o->encoding == OBJ_ENCODING_INT) {
+    if (objectGetEncoding(o) == OBJ_ENCODING_INT) {
         len = ll2string(llstr, sizeof(llstr), (long)objectGetVal(o));
         p = llstr;
     } else {
@@ -551,6 +551,25 @@ void feedReplicationBuffer(char *s, size_t len) {
     }
 }
 
+/* Bulk values larger than this threshold bypass the staging buffer in
+ * replicationFeedReplicas() and are handed to feedReplicationBuffer() directly.
+ * Below it, the extra memcpy through the staging buffer is cheaper than the
+ * fixed per-call cost of feedReplicationBuffer (replica-list walk, slot stats
+ * accounting, backlog tail lookup, output-buffer-limit checks). */
+#define REPL_BULK_INLINE_THRESHOLD 256
+
+/* Append the RESP bulk-length prefix `$<len>\r\n` for a payload of `len` bytes.
+ * Uses ll2string explicitly so 64-bit lengths are encoded correctly regardless
+ * of sdscatfmt's specifier choice. */
+static sds catReplicationBulkLen(sds frame, size_t len) {
+    char aux[LONG_STR_SIZE + 3];
+    aux[0] = '$';
+    int n = ll2string(aux + 1, sizeof(aux) - 1, (long long)len);
+    aux[n + 1] = '\r';
+    aux[n + 2] = '\n';
+    return sdscatlen(frame, aux, n + 3);
+}
+
 /* Propagate write commands to replication stream.
  *
  * This function is used if the instance is a primary: we use the commands
@@ -558,8 +577,6 @@ void feedReplicationBuffer(char *s, size_t len) {
  * Instead if the instance is a replica and has sub-replicas attached, we use
  * replicationFeedStreamFromPrimaryStream() */
 void replicationFeedReplicas(int dictid, robj **argv, int argc) {
-    int j, len;
-
     /* In case we propagate a command that doesn't touch keys (PING, REPLCONF) we
      * pass dbid=-1 that indicate there is no need to replicate `select` command. */
     serverAssert(dictid == -1 || (dictid >= 0 && dictid < server.dbnum));
@@ -603,30 +620,44 @@ void replicationFeedReplicas(int dictid, robj **argv, int argc) {
         server.replicas_eldb = dictid;
     }
 
-    /* Write the command to the replication buffer if any. */
-    char aux[LONG_STR_SIZE + 3];
-
+    /* Build the RESP frame for this command in a staging buffer, then push it
+     * to feedReplicationBuffer in as few calls as possible. Collapses the
+     * fragmented calls to feedReplicationBuffer into one call
+     * for typical commands.
+     *
+     * For bulks larger than REPL_BULK_INLINE_THRESHOLD we flush the staging
+     * buffer and feed the bulk bytes directly, avoiding an extra full-buffer
+     * memcpy. */
+    sds frame = sdsempty();
     /* Add the multi bulk reply length. */
-    aux[0] = '*';
-    len = ll2string(aux + 1, sizeof(aux) - 1, argc);
-    aux[len + 1] = '\r';
-    aux[len + 2] = '\n';
-    feedReplicationBuffer(aux, len + 3);
+    frame = sdscatfmt(frame, "*%i\r\n", argc);
 
-    for (j = 0; j < argc; j++) {
-        long objlen = stringObjectLen(argv[j]);
-
-        /* We need to feed the buffer with the object as a bulk reply
-         * not just as a plain string, so create the $..CRLF payload len
-         * and add the final CRLF */
-        aux[0] = '$';
-        len = ll2string(aux + 1, sizeof(aux) - 1, objlen);
-        aux[len + 1] = '\r';
-        aux[len + 2] = '\n';
-        feedReplicationBuffer(aux, len + 3);
-        feedReplicationBufferWithObject(argv[j]);
-        feedReplicationBuffer(aux + len + 1, 2);
+    for (int j = 0; j < argc; j++) {
+        robj *o = argv[j];
+        if (o->encoding == OBJ_ENCODING_INT) {
+            char aux[LONG_STR_SIZE];
+            size_t dlen = ll2string(aux, sizeof(aux), (long)objectGetVal(o));
+            frame = catReplicationBulkLen(frame, dlen);
+            frame = sdscatlen(frame, aux, dlen);
+            frame = sdscatlen(frame, "\r\n", 2);
+        } else {
+            size_t objlen = stringObjectLen(o);
+            frame = catReplicationBulkLen(frame, objlen);
+            if (objlen > REPL_BULK_INLINE_THRESHOLD) {
+                /* Zero-copy path: flush header bytes accumulated so far,
+                 * then feed the bulk payload straight from the object. */
+                feedReplicationBuffer(frame, sdslen(frame));
+                sdsclear(frame);
+                feedReplicationBuffer(objectGetVal(o), objlen);
+                frame = sdscatlen(frame, "\r\n", 2);
+            } else {
+                frame = sdscatlen(frame, objectGetVal(o), objlen);
+                frame = sdscatlen(frame, "\r\n", 2);
+            }
+        }
     }
+    feedReplicationBuffer(frame, sdslen(frame));
+    sdsfree(frame);
 }
 
 /* This is a debugging function that gets called when we detect something
@@ -712,7 +743,9 @@ void replicationFeedMonitors(client *c, list *monitors, int dictid, robj **argv,
     }
 
     for (j = 0; j < argc; j++) {
-        if (argv[j]->encoding == OBJ_ENCODING_INT) {
+        if (clientCommandArgShouldBeRedacted(c, j)) {
+            cmdrepr = sdscatrepr(cmdrepr, (char *)objectGetVal(shared.redacted), sdslen(objectGetVal(shared.redacted)));
+        } else if (argv[j]->encoding == OBJ_ENCODING_INT) {
             cmdrepr = sdscatprintf(cmdrepr, "\"%ld\"", (long)objectGetVal(argv[j]));
         } else {
             cmdrepr = sdscatrepr(cmdrepr, (char *)objectGetVal(argv[j]), sdslen(objectGetVal(argv[j])));
@@ -806,7 +839,7 @@ long long getPsyncInitialOffset(void) {
 }
 
 /* Send a FULLRESYNC reply in the specific case of a full resynchronization,
- * as a side effect setup the replica for a full sync in different ways:
+ * as a side effect set up the replica for a full sync in different ways:
  *
  * 1) Remember, into the replica client structure, the replication offset
  *    we sent here, so that if new replicas will later attach to the same
@@ -1053,7 +1086,7 @@ int startBgsaveForReplication(int mincapa, int req, int rdbver) {
     }
 
     /* If the target is socket, rdbSaveToReplicasSockets() already setup
-     * the replicas for a full resync. Otherwise for disk target do it now.*/
+     * the replicas for a full resync. Otherwise, for disk target do it now.*/
     if (!socket_target) {
         listRewind(server.replicas, &li);
         while ((ln = listNext(&li))) {
@@ -1188,7 +1221,7 @@ void syncCommand(client *c) {
     /* Full resynchronization. */
     server.stat_sync_full++;
 
-    /* Setup the replica as one waiting for BGSAVE to start. The following code
+    /* Set up the replica as one waiting for BGSAVE to start. The following code
      * paths will change the state if we handle the replica differently. */
     c->repl_data->repl_state = REPLICA_STATE_WAIT_BGSAVE_START;
     if (server.repl_disable_tcp_nodelay) anetDisableTcpNoDelay(NULL, c->conn->fd); /* Non critical if it fails. */
@@ -1385,7 +1418,7 @@ void freeClientReplicationData(client *c) {
  * The replica reports its version.
  *
  * - rdb-channel <1|0>
- * Used to identify the client as a replica's rdb connection in an dual channel
+ * Used to identify the client as a replica's rdb connection in a dual channel
  * sync session.
  *
  * - set-rdb-client-id <client-id>
@@ -1615,6 +1648,14 @@ void replicaStartCommandStream(client *replica) {
     serverAssert(!(replica->flag.repl_rdbonly));
     replica->repl_data->repl_start_cmd_stream_on_ack = 0;
 
+    /* If the replication stream is empty, send a PING so that replication
+     * offset becomes non-zero. In cluster mode, this allows replicas to be
+     * reported as available in CLUSTER SLOTS/SHARDS right away. */
+    if (server.primary_repl_offset == 0) {
+        robj *ping_argv[1] = {shared.ping};
+        replicationFeedReplicas(-1, ping_argv, 1);
+    }
+
     putClientInPendingWriteQueue(replica);
 }
 
@@ -1625,7 +1666,7 @@ void replicaStartCommandStream(client *replica) {
  * environments. */
 void removeRDBUsedToSyncReplicas(void) {
     /* If the feature is disabled, return ASAP but also clear the
-     * RDBGeneratedByReplication flag in case it was set. Otherwise if the
+     * RDBGeneratedByReplication flag in case it was set. Otherwise, if the
      * feature was enabled, but gets disabled later with CONFIG SET, the
      * flag may remain set to one: then next time the feature is re-enabled
      * via CONFIG SET we have it set even if no RDB was generated
@@ -1712,8 +1753,16 @@ void sendBulkToReplica(connection *conn) {
         }
     }
 
-    /* If the preamble was already transferred, send the RDB bulk data. */
-    lseek(replica->repl_data->repldbfd, replica->repl_data->repldboff, SEEK_SET);
+    /* If the preamble was already transferred, send the RDB bulk data.
+     *
+     * Each replica holds its own private fd (opened independently via open()),
+     * so in the normal case (full write succeeds) read() advances the file
+     * offset by exactly buflen and repldboff is incremented by the same amount,
+     * keeping them in sync without needing lseek().
+     *
+     * We only need to lseek() on the retry paths where the file offset has
+     * drifted ahead of repldboff (EAGAIN or short write). Error paths that
+     * call freeClient() don't need recovery since the fd will be closed. */
     buflen = read(replica->repl_data->repldbfd, buf, PROTO_IOBUF_LEN);
     if (buflen <= 0) {
         serverLog(LL_WARNING, "Read error sending DB to replica: %s",
@@ -1725,11 +1774,30 @@ void sendBulkToReplica(connection *conn) {
         if (connGetState(conn) != CONN_STATE_CONNECTED) {
             serverLog(LL_WARNING, "Write error sending DB to replica: %s", connGetLastError(conn));
             freeClient(replica);
+        } else {
+            /* EAGAIN: write blocked, but read() already advanced the file
+             * offset by buflen. Seek back to repldboff so the next invocation
+             * re-reads the same chunk. */
+            if (lseek(replica->repl_data->repldbfd, replica->repl_data->repldboff, SEEK_SET) == -1) {
+                serverLog(LL_WARNING, "Seek error sending DB to replica: %s", strerror(errno));
+                freeClient(replica);
+                return;
+            }
         }
         return;
     }
     replica->repl_data->repldboff += nwritten;
     server.stat_net_repl_output_bytes += nwritten;
+    if (nwritten < buflen) {
+        /* Short write: only part of the data was sent. The file offset is
+         * now at repldboff_old + buflen, but we need it at the new repldboff
+         * (repldboff_old + nwritten) for the next read. Seek back. */
+        if (lseek(replica->repl_data->repldbfd, replica->repl_data->repldboff, SEEK_SET) == -1) {
+            serverLog(LL_WARNING, "Seek error sending DB to replica: %s", strerror(errno));
+            freeClient(replica);
+            return;
+        }
+    }
     if (replica->repl_data->repldboff == replica->repl_data->repldbsize) {
         closeRepldbfd(replica);
         connSetWriteHandler(replica->conn, NULL);
@@ -1885,7 +1953,7 @@ void slotMigrationPipeWriteHandler(struct connection *conn) {
         }
     }
 
-    /* Remove the write handler and setup the pipe read handler. */
+    /* Remove the write handler and set up the pipe read handler. */
     connSetWriteHandler(conn, NULL);
     target->repl_data->repl_last_partial_write = 0;
     if (aeCreateFileEvent(server.el, server.slot_migration_pipe_read, AE_READABLE, slotMigrationPipeReadHandler, NULL) == AE_ERR) {
@@ -1984,7 +2052,7 @@ void updateReplicasWaitingBgsave(int bgsaveerr, int type) {
             }
 
             /* If this was an RDB on disk save, we have to prepare to send
-             * the RDB from disk to the replica socket. Otherwise if this was
+             * the RDB from disk to the replica socket. Otherwise, if this was
              * already an RDB -> Replicas socket transfer, used in the case of
              * diskless replication, our work is trivial, we can just put
              * the replica online. */
@@ -2226,7 +2294,7 @@ void disklessLoadDiscardTempDb(serverDb **tempDb) {
     discardTempDb(tempDb);
 }
 
-/* Helper function for to initialize temp function lib context.
+/* Helper function to initialize temp function lib context.
  * The temp ctx may be populated by functionsLibCtxSwapWithCurrent or
  * freed by disklessLoadDiscardFunctionsLibCtx later. */
 functionsLibCtx *disklessLoadFunctionsLibCtxCreate(void) {
@@ -2340,7 +2408,15 @@ void replicaBeforeLoadPrimaryRDB(connection *conn, int use_diskless_load) {
     connSetReadHandler(conn, NULL);
 }
 
-void replicaAfterLoadPrimaryRDB(connection *conn, rdbSaveInfo *rsi) {
+/* Helper function to update the full sync duration metric for both single/dual channel replication. */
+static void captureReplFullSyncCompleteDuration(void) {
+    if (server.repl_full_sync_start_time) {
+        server.repl_full_sync_complete_duration_ms = elapsedMs(server.repl_full_sync_start_time);
+        server.repl_full_sync_start_time = 0;
+    }
+}
+
+void replicaAfterLoadPrimaryRDB(connection *conn, rdbSaveInfo *rsi, int disk_based_sync) {
     /* Final setup of the connected replica <- primary link */
     if (conn == server.repl_rdb_transfer_s) {
         dualChannelSyncHandleRdbLoadCompletion();
@@ -2350,6 +2426,9 @@ void replicaAfterLoadPrimaryRDB(connection *conn, rdbSaveInfo *rsi) {
         server.repl_down_since = 0;
         /* Send the initial ACK immediately to put this replica in online state. */
         replicationSendAck();
+        /* Finalize full sync duration here for single channel replication.
+         * Exclude backlog draining/streaming time for simplicity. */
+        captureReplFullSyncCompleteDuration();
     }
 
     /* Fire the primary link modules event. */
@@ -2375,10 +2454,21 @@ void replicaAfterLoadPrimaryRDB(connection *conn, rdbSaveInfo *rsi) {
                                  "in read-write mode.\n");
     }
 
-    /* Restart the AOF subsystem now that we finished the sync. This
-     * will trigger an AOF rewrite, and when done will start appending
-     * to the new file. */
-    if (server.aof_enabled) restartAOFAfterSYNC();
+    /* Restart the AOF subsystem now that we finished the sync.
+     *
+     * When disk-based sync was used and aof-use-rdb-preamble is enabled,
+     * reuse the RDB file received from the primary as the AOF base file
+     * directly, avoiding a redundant bgrewriteaof. Otherwise (diskless
+     * sync or rdb-preamble disabled), fall back to bgrewriteaof. */
+    if (server.aof_enabled) {
+        if (disk_based_sync && server.aof_use_rdb_preamble) {
+            if (restartAOFWithSyncRdb() == C_ERR) {
+                restartAOFAfterSYNC();
+            }
+        } else {
+            restartAOFAfterSYNC();
+        }
+    }
 
     /* In case of dual channel replication sync we want to close the RDB connection
      * once the connection is established */
@@ -2581,8 +2671,11 @@ int replicaLoadPrimaryRDBFromDisk(rdbSaveInfo *rsi) {
         return C_ERR;
     }
 
-    /* Cleanup. */
-    if (server.rdb_del_sync_files && allPersistenceDisabled()) {
+    /* Cleanup. When aof-use-rdb-preamble is enabled and AOF is on, keep the
+     * RDB file so it can be reused as the AOF base file, avoiding a redundant
+     * bgrewriteaof that would produce an almost identical snapshot. */
+    if (!(server.aof_enabled && server.aof_use_rdb_preamble) &&
+        server.rdb_del_sync_files && allPersistenceDisabled()) {
         serverLog(LL_NOTICE, "Removing the RDB file obtained from "
                              "the primary. This replica has persistence "
                              "disabled");
@@ -2599,6 +2692,11 @@ int replicaLoadPrimaryRDBFromDisk(rdbSaveInfo *rsi) {
 /* Asynchronously read the SYNC payload we receive from a primary, parse it,
  * and load it directly to memory without going through the disk */
 void replicaReceiveRDBFromPrimaryToMemory(connection *conn) {
+    /* During full sync, the functions engine is freed right before loading
+     * the RDB. To avoid this happening while a function is still running,
+     * delay full sync processing until it finishes. */
+    if (isInsideYieldingLongCommand()) return;
+
     char buf[PROTO_IOBUF_LEN];
     int ret;
     rdbSaveInfo rsi = RDB_SAVE_INFO_INIT;
@@ -2642,7 +2740,7 @@ read_from_socket:
         cancelReplicationHandshake(1);
         return;
     }
-    replicaAfterLoadPrimaryRDB(conn, &rsi);
+    replicaAfterLoadPrimaryRDB(conn, &rsi, 0);
 }
 
 int tryReadBulkPayload(connection *conn, char *buf, int usemark, ssize_t *nread_out) {
@@ -2689,6 +2787,10 @@ void replicaReceiveRDBFromPrimaryToDisk(connection *conn, int is_dual_channel) {
     /* Put the socket in blocking mode to simplify RDB transfer.
      * We'll restore it when the RDB is received. */
     connBlock(conn);
+    /* Bound this read with the short repl_syncio_timeout (as the other sync
+     * replication reads do), not the large repl-timeout: the abort flag is only
+     * checked between reads, so on a silent primary this stalls the main thread
+     * in cancelReplicationHandshake() for at most repl_syncio_timeout. */
     connRecvTimeout(conn, server.repl_syncio_timeout * 1000);
 
     atomic_store_explicit(&server.replica_bio_disk_save_state, REPL_BIO_DISK_SAVE_STATE_IN_PROGRESS, memory_order_release);
@@ -2915,8 +3017,9 @@ sds getReplicaPortString(void) {
 /* Replication: Replica side.
  * Free replica's local replication buffer */
 void freePendingReplDataBuf(void) {
-    listRelease(server.pending_repl_data.blocks);
+    if (server.pending_repl_data.blocks) freePendingReplDataBufAsync(server.pending_repl_data.blocks);
     server.pending_repl_data.blocks = NULL;
+    server.pending_repl_data.mem = 0;
     server.pending_repl_data.len = 0;
 }
 
@@ -2963,6 +3066,7 @@ void replicationAbortDualChannelSyncTransfer(void) {
     server.repl_provisional_primary.conn = NULL;
     server.repl_provisional_primary.dbid = -1;
     server.rdb_client_id = -1;
+    server.repl_full_sync_start_time = 0;
     freePendingReplDataBuf();
     return;
 }
@@ -3024,12 +3128,21 @@ static int dualChannelReplHandleHandshake(connection *conn, sds *err) {
     }
     /* Send replica listening port to primary for clarification */
     sds portstr = getReplicaPortString();
+    /* Also inform the primary of our (replica) version */
     *err = sendCommand(conn, "REPLCONF", "capa", "eof", "rdb-only", "1", "rdb-channel", "1", "listening-port", portstr,
-                       NULL);
+                       "version", VALKEY_VERSION, NULL);
     sdsfree(portstr);
     if (*err) {
         dualChannelServerLog(LL_WARNING, "Sending command to primary in dual channel replication handshake: %s", *err);
         return C_ERR;
+    }
+
+    if (server.replica_announce_ip) {
+        *err = sendCommand(conn, "REPLCONF", "ip-address", server.replica_announce_ip, NULL);
+        if (*err) {
+            dualChannelServerLog(LL_WARNING, "Sending command to primary in dual channel replication handshake: %s", *err);
+            return C_ERR;
+        }
     }
 
     if (connSetReadHandler(conn, dualChannelFullSyncWithPrimary) == C_ERR) {
@@ -3067,6 +3180,22 @@ static int dualChannelReplHandleReplconfReply(connection *conn, sds *err) {
                              *err);
         return C_ERR;
     }
+
+    /* If replica-announce-ip is configured, we sent an additional REPLCONF ip-address command
+     * and need to read its response as well. */
+    if (server.replica_announce_ip) {
+        sdsfree(*err);
+        *err = receiveSynchronousResponse(conn);
+        if (*err == NULL) {
+            dualChannelServerLog(LL_WARNING, "Primary did not respond to REPLCONF ip-address command during SYNC handshake");
+            return C_ERR;
+        }
+        if ((*err)[0] == '-') {
+            dualChannelServerLog(LL_WARNING, "Primary rejected REPLCONF ip-address: %s", *err);
+            return C_ERR;
+        }
+    }
+
     if (connSyncWrite(conn, "SYNC\r\n", 6, server.repl_syncio_timeout * 1000) == -1) {
         dualChannelServerLog(LL_WARNING, "I/O error writing to Primary: %s", connGetLastError(conn));
         return C_ERR;
@@ -3197,6 +3326,7 @@ error:
  * itself once we need it */
 void replDataBufInit(void) {
     serverAssert(server.pending_repl_data.blocks == NULL);
+    server.pending_repl_data.mem = 0;
     server.pending_repl_data.len = 0;
     server.pending_repl_data.peak = 0;
     server.pending_repl_data.blocks = listCreate();
@@ -3280,6 +3410,7 @@ void bufferReplData(connection *conn) {
             tail->size = usable_size - sizeof(replDataBufBlock);
             tail->used = 0;
             listAddNodeTail(server.pending_repl_data.blocks, tail);
+            server.pending_repl_data.mem += (usable_size + sizeof(listNode));
             server.pending_repl_data.len += tail->size;
             /* Update buffer's peak */
             if (server.pending_repl_data.peak < server.pending_repl_data.len)
@@ -3314,6 +3445,7 @@ int streamReplDataBufToDb(client *c) {
         c->querybuf = sdscatlen(c->querybuf, o->buf, used);
         c->repl_data->read_reploff += used;
         processInputBuffer(c);
+        server.pending_repl_data.mem -= (used + sizeof(replDataBufBlock) + sizeof(listNode));
         server.pending_repl_data.len -= used;
         offset += used;
         listDelNode(server.pending_repl_data.blocks, cur);
@@ -3335,6 +3467,8 @@ int streamReplDataBufToDb(client *c) {
 void dualChannelSyncSuccess(void) {
     server.primary_initial_offset = server.repl_provisional_primary.reploff;
     replicationResurrectProvisionalPrimary();
+    /* Finalize full sync duration here to exclude backlog draining/streaming time to be consistent with single channel. */
+    captureReplFullSyncCompleteDuration();
     /* Wait for the accumulated buffer to be processed before reading any more replication updates */
     if (server.pending_repl_data.blocks && streamReplDataBufToDb(server.primary) == C_ERR) {
         /* Sync session aborted during repl data streaming. */
@@ -3567,7 +3701,7 @@ int replicaProcessPsyncReply(connection *conn) {
             }
         }
 
-        /* Setup the replication to continue. */
+        /* Set up the replication to continue. */
         sdsfree(reply);
         replicationResurrectCachedPrimary(conn);
 
@@ -3585,7 +3719,12 @@ int replicaProcessPsyncReply(connection *conn) {
      * Return PSYNC_NOT_SUPPORTED on errors we don't understand, otherwise
      * return PSYNC_TRY_LATER if we believe this is a transient error. */
 
-    if (!strncmp(reply, "-NOMASTERLINK", 13) || !strncmp(reply, "-LOADING", 8)) {
+    /* The primary replied with a transient error: it cannot serve a PSYNC
+     * right now, but will be able to in the future. Retry PSYNC later instead
+     * of falling back to the legacy SYNC command, because a SYNC full resync
+     * does not carry the +FULLRESYNC offset baseline, which would leave the
+     * replica in pre_psync mode (no ACKs, breaking WAIT / psync / failover). */
+    if (!strncmp(reply, "-NOMASTERLINK", 13) || !strncmp(reply, "-LOADING", 8) || !strncmp(reply, "-BUSY", 5)) {
         serverLog(LL_NOTICE,
                   "Primary is currently unable to PSYNC "
                   "but should be in the future: %s",
@@ -3792,7 +3931,7 @@ int syncWithPrimaryHandleSendHandshakeState(connection *conn) {
      *                    Inform the primary of this capa only during diskless sync
      *                    using a connection that has integrity checks (such as TLS).
      *                    In non-diskless sync, or non-integrity-checked connection, there is more
-     *                    concern for data corruprion so we keep this extra layer of detection.
+     *                    concern for data corruption so we keep this extra layer of detection.
      *
      * The primary will ignore capabilities it does not understand. */
 
@@ -3930,6 +4069,14 @@ int syncWithPrimaryHandleReceiveNodeIDReplyState(connection *conn) {
 }
 
 int syncWithPrimaryHandleSendPsyncState(connection *conn) {
+    /* Debug hook: pause the replica right before it sends PSYNC to its
+     * primary, so a test can put the primary into a transient (e.g. BUSY)
+     * state and deterministically reproduce the PSYNC -> SYNC downgrade race. */
+    if (server.debug_pause_before_psync) {
+        server.debug_pause_before_psync = 0;
+        debugPauseProcess();
+    }
+
     if (replicaSendPsyncCommand(conn) == PSYNC_WRITE_ERROR) {
         sds err = sdsnew("Write error sending the PSYNC command.");
         abortFailover(err);
@@ -4168,7 +4315,7 @@ void syncWithPrimary(connection *conn) {
         }
     }
 
-    /* If the primary is in an transient error, we should try to PSYNC
+    /* If the primary is in a transient error, we should try to PSYNC
      * from scratch later, so go to the error path. This happens when
      * the server is loading the dataset or is not connected with its
      * primary and so forth. */
@@ -4189,7 +4336,10 @@ void syncWithPrimary(connection *conn) {
         return;
     }
 
-    /* Fall back to SYNC if needed. Otherwise psync_result == PSYNC_FULLRESYNC
+    /* Mark the beginning of the full sync */
+    elapsedStart(&server.repl_full_sync_start_time);
+
+    /* Fall back to SYNC if needed. Otherwise, psync_result == PSYNC_FULLRESYNC
      * and the server.primary_replid and primary_initial_offset are
      * already populated. */
     if (psync_result == PSYNC_NOT_SUPPORTED) {
@@ -4259,7 +4409,7 @@ void syncWithPrimary(connection *conn) {
             return;
         }
     } else {
-        /* Setup the non blocking download of the bulk file. */
+        /* Set up the non blocking download of the bulk file. */
         if (connSetReadHandler(conn, replicaReceiveRDBFromPrimaryToMemory) == C_ERR) {
             char conninfo[CONN_INFO_LEN];
             serverLog(LL_WARNING, "Can't create readable event for SYNC: %s (%s)", strerror(errno),
@@ -4329,6 +4479,7 @@ void undoConnectWithPrimary(void) {
 
     connClose(server.repl_transfer_s);
     server.repl_transfer_s = NULL;
+    server.repl_full_sync_start_time = 0;
 }
 
 /* Abort the async download of the bulk dataset while SYNC-ing with primary.
@@ -4337,6 +4488,7 @@ void undoConnectWithPrimary(void) {
 void replicationAbortSyncTransfer(void) {
     undoConnectWithPrimary();
     cleanupTransferResources();
+    server.repl_full_sync_start_time = 0;
 }
 
 /* This function aborts a non blocking replication attempt if there is one
@@ -4346,9 +4498,12 @@ void replicationAbortSyncTransfer(void) {
  * If there was a replication handshake in progress 1 is returned and
  * the replication state (server.repl_state) set to REPL_STATE_CONNECT.
  *
- * Otherwise zero is returned and no operation is performed at all. */
+ * Otherwise, zero is returned and no operation is performed at all. */
 int cancelReplicationHandshake(int reconnect) {
     if (bioPendingJobsOfType(BIO_RDB_SAVE)) {
+        /* Wait for the disk-saving bio thread to notice the abort flag
+         * and exit. If it is blocked in a socket read this stalls the
+         * main thread for up to repl_syncio_timeout. */
         server.replica_bio_abort_save = 1;
         bioDrainWorker(BIO_RDB_SAVE);
         server.replica_bio_abort_save = 0;
@@ -4476,12 +4631,15 @@ void replicationUnsetPrimary(void) {
 
     /* Once we turn from replica to primary, we consider the starting time without
      * replicas (that is used to count the replication backlog time to live) as
-     * starting from now. Otherwise the backlog will be freed after a
+     * starting from now. Otherwise, the backlog will be freed after a
      * failover if replicas do not connect immediately. */
     server.repl_no_replicas_since = server.unixtime;
 
     /* Reset down time so it'll be ready for when we turn into replica again. */
     server.repl_down_since = 0;
+
+    /* Reset full sync complete duration since we are no longer a replica */
+    server.repl_full_sync_complete_duration_ms = -1;
 
     /* Fire the role change modules event. */
     moduleFireServerEvent(VALKEYMODULE_EVENT_REPLICATION_ROLE_CHANGED, VALKEYMODULE_EVENT_REPLROLECHANGED_NOW_PRIMARY,
@@ -4503,15 +4661,32 @@ void replicationHandlePrimaryDisconnection(void) {
         moduleFireServerEvent(VALKEYMODULE_EVENT_PRIMARY_LINK_CHANGE, VALKEYMODULE_SUBEVENT_PRIMARY_LINK_DOWN, NULL);
 
     server.primary = NULL;
-    server.repl_state = REPL_STATE_CONNECT;
-    server.repl_down_since = server.unixtime;
+
+    /* freeClient(primary) can be deferred via freeClientAsync when the client
+     * has pending IO. By the time we run in that deferred context,
+     * replicationUnsetPrimary()/replicationSetPrimary() may have already
+     * finalized replication state. Only transition to REPL_STATE_CONNECT if
+     * we were genuinely connected (REPL_STATE_CONNECTED) and primary_host is
+     * still set. Otherwise, this is a stale deferred free and we must not
+     * clobber the current state. */
+    if (server.repl_state == REPL_STATE_CONNECTED && server.primary_host) {
+        server.repl_state = REPL_STATE_CONNECT;
+        server.repl_down_since = server.unixtime;
+    } else if (server.repl_state == REPL_STATE_CONNECTED) {
+        /* primary_host is NULL: deliberate unset in progress. */
+        server.repl_state = REPL_STATE_NONE;
+        server.repl_down_since = server.unixtime;
+    }
+    /* Any other repl_state means the state machine already moved on
+     * (e.g. REPL_STATE_CONNECT, CONNECTING, NONE) — leave it untouched. */
+
     /* We lost connection with our primary, don't disconnect replicas yet,
      * maybe we'll be able to PSYNC with our primary later. We'll disconnect
      * the replicas only if we'll have to do a full resync with our primary. */
 
     /* Try to re-connect immediately rather than wait for replicationCron
      * waiting 1 second may risk backlog being recycled. */
-    if (server.primary_host) {
+    if (server.repl_state == REPL_STATE_CONNECT && server.primary_host) {
         serverLog(LL_NOTICE, "Reconnecting to PRIMARY %s:%d", server.primary_host, server.primary_port);
         connectWithPrimary();
     }
@@ -4531,7 +4706,7 @@ void replicaofCommand(client *c) {
     }
 
     /* The special host/port combination "NO" "ONE" turns the instance
-     * into a primary. Otherwise the new primary address is set. */
+     * into a primary. Otherwise, the new primary address is set. */
     if (!strcasecmp(objectGetVal(c->argv[1]), "no") && !strcasecmp(objectGetVal(c->argv[2]), "one")) {
         if (server.primary_host) {
             replicationUnsetPrimary();
@@ -4690,6 +4865,7 @@ void replicationCachePrimary(client *c) {
      * pending outputs to the primary. */
     sdsclear(server.primary->querybuf);
     server.primary->qb_pos = 0;
+    server.primary->qb_applied = 0;
     server.primary->repl_data->repl_applied = 0;
     server.primary->repl_data->read_reploff = server.primary->repl_data->reploff;
     if (c->flag.multi) discardTransaction(c);
@@ -4790,7 +4966,7 @@ void establishPrimaryConnection(void) {
  * Turn the cached primary into the current primary, using the file descriptor
  * passed as argument as the socket for the new primary.
  *
- * This function is called when successfully setup a partial resynchronization
+ * This function is called when successfully setting up a partial resynchronization
  * so the stream of data that we'll receive will start from where this
  * primary left. */
 void replicationResurrectCachedPrimary(connection *conn) {
@@ -4962,7 +5138,7 @@ void waitCommand(client *c) {
     }
 
     /* Argument parsing. */
-    if (getLongFromObjectOrReply(c, c->argv[1], &numreplicas, NULL) != C_OK) return;
+    if (getRangeLongFromObjectOrReply(c, c->argv[1], 0, INT_MAX, &numreplicas, NULL) != C_OK) return;
     if (getTimeoutFromObjectOrReply(c, c->argv[2], &timeout, UNIT_MILLISECONDS) != C_OK) return;
 
     /* First try without blocking at all. */
@@ -4972,7 +5148,7 @@ void waitCommand(client *c) {
         return;
     }
 
-    /* Otherwise block the client and put it into our list of clients
+    /* Otherwise, block the client and put it into our list of clients
      * waiting for ack from replicas. */
     blockClientForReplicaAck(c, timeout, offset, numreplicas, 0);
 
@@ -4989,7 +5165,7 @@ void waitaofCommand(client *c) {
 
     /* Argument parsing. */
     if (getRangeLongFromObjectOrReply(c, c->argv[1], 0, 1, &numlocal, NULL) != C_OK) return;
-    if (getPositiveLongFromObjectOrReply(c, c->argv[2], &numreplicas, NULL) != C_OK) return;
+    if (getRangeLongFromObjectOrReply(c, c->argv[2], 0, INT_MAX, &numreplicas, NULL) != C_OK) return;
     if (getTimeoutFromObjectOrReply(c, c->argv[3], &timeout, UNIT_MILLISECONDS) != C_OK) return;
 
     if (server.primary_host) {
@@ -5014,7 +5190,7 @@ void waitaofCommand(client *c) {
         return;
     }
 
-    /* Otherwise block the client and put it into our list of clients
+    /* Otherwise, block the client and put it into our list of clients
      * waiting for ack from replicas. */
     blockClientForReplicaAck(c, timeout, offset, numreplicas, numlocal);
 
@@ -5146,8 +5322,8 @@ void handleBioThreadFinishedRDBDownload(void) {
     debugServerAssert(bio_save_state == REPL_BIO_DISK_SAVE_STATE_FINISHED);
 
     /* Bio termination detected - we can get rid of the state vars */
-    int bio_repl_transfer_size = server.bio_repl_transfer_size;
-    int bio_repl_transfer_read = server.bio_repl_transfer_read;
+    off_t bio_repl_transfer_size = server.bio_repl_transfer_size;
+    off_t bio_repl_transfer_read = server.bio_repl_transfer_read;
     resetBioRDBSaveState();
 
     serverLog(LL_NOTICE, "Replica main thread detected RDB download completion in Bio thread");
@@ -5172,7 +5348,7 @@ void handleBioThreadFinishedRDBDownload(void) {
         cancelReplicationHandshake(1);
         return;
     }
-    replicaAfterLoadPrimaryRDB(conn, &rsi);
+    replicaAfterLoadPrimaryRDB(conn, &rsi, 1);
     server.repl_transfer_size = bio_repl_transfer_size;
     server.repl_transfer_read = bio_repl_transfer_read;
 }
@@ -5247,7 +5423,7 @@ void replicationCron(void) {
     /* Second, send a newline to all the replicas in pre-synchronization
      * stage, that is, replicas waiting for the primary to create the RDB file.
      *
-     * Also send the a newline to all the chained replicas we have, if we lost
+     * Also send a newline to all the chained replicas we have, if we lost
      * connection from our primary, to keep the replicas aware that their
      * primary is online. This is needed since sub-replicas only receive proxied
      * data from top-level primaries, so there is no explicit pinging in order

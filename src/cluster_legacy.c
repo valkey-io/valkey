@@ -1106,10 +1106,11 @@ static sds clusterGenNodesConfContent(void) {
  * Note: we need to write the file in an atomic way from the point of view
  * of the POSIX filesystem semantics, so that if the server is stopped
  * or crashes during the write, we'll end with either the old file or the
- * new one. Since we have the full payload to write available we can use
- * a single write to write the whole file. If the preexisting file was
- * bigger we pad our payload with newlines that are anyway ignored and truncate
- * the file afterward.
+ * new one. We get that by writing the whole payload to a temp file and
+ * publishing it with rename(), so every save installs a new inode under the
+ * configured name. Nothing here may hold a descriptor on either file across
+ * the rename: the lock guarding the config lives on a separate file for that
+ * reason, see clusterLockConfig().
  *
  * This function will be called by either the main thread or a bio thread.
  * When called from a bio thread, latency is not recorded because it is not
@@ -1266,9 +1267,16 @@ static void clusterSaveConfigBackground(bool do_fsync) {
 /* Lock the cluster config using flock(), and retain the file descriptor used to
  * acquire the lock so that the file will be locked as long as the process is up.
  *
- * This works because we always update nodes.conf with a new version
- * in-place, reopening the file, and writing to it in place (later adjusting
- * the length with ftruncate()).
+ * The lock is taken on a sibling file, nodes.conf.lock, rather than on nodes.conf
+ * itself. flock() applies to the inode and not to the name, and
+ * clusterSaveConfig() publishes every new version with rename(), so a lock held
+ * on nodes.conf stops protecting it the moment the first save installs a
+ * different inode under the name. The lock file is only ever created, never
+ * replaced, so its inode is stable for as long as the directory lives.
+ *
+ * Keeping the lock off nodes.conf also leaves no descriptor open on the rename
+ * destination, which filesystems with Windows semantics, such as SMB, refuse to
+ * replace.
  *
  * On success C_OK is returned, otherwise an error is logged and
  * the function returns C_ERR to signal a lock was not acquired. */
@@ -1281,9 +1289,11 @@ int clusterLockConfig(char *filename) {
     /* To lock it, we need to open the file in a way it is created if
      * it does not exist, otherwise there is a race condition with other
      * processes. */
-    int fd = open(filename, O_WRONLY | O_CREAT | O_CLOEXEC, 0644);
+    sds lockfile = sdscatfmt(sdsempty(), "%s.lock", filename);
+    int fd = open(lockfile, O_WRONLY | O_CREAT | O_CLOEXEC, 0644);
     if (fd == -1) {
-        serverLog(LL_WARNING, "Can't open %s in order to acquire a lock: %s", filename, strerror(errno));
+        serverLog(LL_WARNING, "Can't open %s in order to acquire a lock: %s", lockfile, strerror(errno));
+        sdsfree(lockfile);
         return C_ERR;
     }
 
@@ -1296,11 +1306,14 @@ int clusterLockConfig(char *filename) {
                       "files.",
                       filename);
         } else {
-            serverLog(LL_WARNING, "Impossible to lock %s: %s", filename, strerror(errno));
+            serverLog(LL_WARNING, "Impossible to lock %s: %s", lockfile, strerror(errno));
         }
         close(fd);
+        sdsfree(lockfile);
         return C_ERR;
     }
+    sdsfree(lockfile);
+
     /* Lock acquired: leak the 'fd' by not closing it until shutdown time, so that
      * we'll retain the lock to the file as long as the process exists.
      *

@@ -41,6 +41,7 @@ set(VALKEY_SERVER_SRCS
     ${CMAKE_SOURCE_DIR}/src/pubsub.c
     ${CMAKE_SOURCE_DIR}/src/multi.c
     ${CMAKE_SOURCE_DIR}/src/debug.c
+    ${CMAKE_SOURCE_DIR}/src/dolly_save_clean_state.c
     ${CMAKE_SOURCE_DIR}/src/sort.c
     ${CMAKE_SOURCE_DIR}/src/intset.c
     ${CMAKE_SOURCE_DIR}/src/syncio.c

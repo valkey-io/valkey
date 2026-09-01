@@ -501,6 +501,7 @@ ENGINE_SERVER_OBJ = \
     db.o \
     debug.o \
     defrag.o \
+    dolly_save_clean_state.o \
     entry.o \
     eval.o \
     evict.o \

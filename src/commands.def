@@ -7215,6 +7215,23 @@ struct COMMAND_ARG BGSAVE_Args[] = {
 {MAKE_ARG("operation",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_OPTIONAL,2,NULL),.subargs=BGSAVE_operation_Subargs},
 };
 
+/********** CLEAN_STATE_FOR_DOLLY_SAVE ********************/
+
+#ifndef SKIP_CMD_HISTORY_TABLE
+/* CLEAN_STATE_FOR_DOLLY_SAVE history */
+#define CLEAN_STATE_FOR_DOLLY_SAVE_History NULL
+#endif
+
+#ifndef SKIP_CMD_TIPS_TABLE
+/* CLEAN_STATE_FOR_DOLLY_SAVE tips */
+#define CLEAN_STATE_FOR_DOLLY_SAVE_Tips NULL
+#endif
+
+#ifndef SKIP_CMD_KEY_SPECS_TABLE
+/* CLEAN_STATE_FOR_DOLLY_SAVE key specs */
+#define CLEAN_STATE_FOR_DOLLY_SAVE_Keyspecs NULL
+#endif
+
 /********** COMMAND COUNT ********************/
 
 #ifndef SKIP_CMD_HISTORY_TABLE
@@ -12052,6 +12069,7 @@ struct COMMAND_STRUCT serverCommandTable[] = {
 {MAKE_CMD("acl","A container for Access List Control commands.","Depends on subcommand.","6.0.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,ACL_History,0,ACL_Tips,0,NULL,-2,CMD_SENTINEL,ACL_CATEGORY_SLOW,NULL,ACL_Keyspecs,0,NULL,0),.subcommands=ACL_Subcommands},
 {MAKE_CMD("bgrewriteaof","Asynchronously rewrites the append-only file to disk.","O(1)","1.0.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,BGREWRITEAOF_History,0,BGREWRITEAOF_Tips,0,bgrewriteaofCommand,1,CMD_NO_ASYNC_LOADING|CMD_ADMIN|CMD_NOSCRIPT,ACL_CATEGORY_ADMIN|ACL_CATEGORY_DANGEROUS|ACL_CATEGORY_SLOW,NULL,BGREWRITEAOF_Keyspecs,0,NULL,0)},
 {MAKE_CMD("bgsave","Asynchronously saves the database(s) to disk.","O(1)","1.0.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,BGSAVE_History,2,BGSAVE_Tips,0,bgsaveCommand,-1,CMD_NO_ASYNC_LOADING|CMD_ADMIN|CMD_NOSCRIPT,ACL_CATEGORY_ADMIN|ACL_CATEGORY_DANGEROUS|ACL_CATEGORY_SLOW,NULL,BGSAVE_Keyspecs,0,NULL,1),.args=BGSAVE_Args},
+{MAKE_CMD("clean_state_for_dolly_save","Clears machine-identity state before a CRIU snapshot for migration.","O(N) where N is the number of known cluster nodes.","8.2.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,CLEAN_STATE_FOR_DOLLY_SAVE_History,0,CLEAN_STATE_FOR_DOLLY_SAVE_Tips,0,cleanStateForDollySaveCommand,1,CMD_ADMIN|CMD_NOSCRIPT|CMD_LOADING|CMD_STALE,ACL_CATEGORY_ADMIN|ACL_CATEGORY_DANGEROUS|ACL_CATEGORY_SLOW,NULL,CLEAN_STATE_FOR_DOLLY_SAVE_Keyspecs,0,NULL,0)},
 {MAKE_CMD("command","Returns detailed information about all commands.","O(N) where N is the total number of commands","2.8.13",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,COMMAND_History,0,COMMAND_Tips,1,commandCommand,-1,CMD_LOADING|CMD_STALE|CMD_SENTINEL,ACL_CATEGORY_CONNECTION|ACL_CATEGORY_SLOW,NULL,COMMAND_Keyspecs,0,NULL,0),.subcommands=COMMAND_Subcommands},
 {MAKE_CMD("commandlog","A container for command log commands.","Depends on subcommand.","8.1.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,COMMANDLOG_History,0,COMMANDLOG_Tips,0,NULL,-2,0,ACL_CATEGORY_SLOW,NULL,COMMANDLOG_Keyspecs,0,NULL,0),.subcommands=COMMANDLOG_Subcommands},
 {MAKE_CMD("config","A container for server configuration commands.","Depends on subcommand.","2.0.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,CONFIG_History,0,CONFIG_Tips,0,NULL,-2,0,ACL_CATEGORY_SLOW,NULL,CONFIG_Keyspecs,0,NULL,0),.subcommands=CONFIG_Subcommands},

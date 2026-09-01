@@ -1353,10 +1353,10 @@ start_server [list overrides [list "dir" $server_path "aclfile" "user.acl"] tags
     
     test {Test loading duplicate users in config on startup} {
         catch {exec $::VALKEY_SERVER_BIN --user foo --user foo} err
-        assert_match {*Duplicate definition*} $err
+        assert_match {*Duplicate user*} $err
 
         catch {exec $::VALKEY_SERVER_BIN --user default --user default} err
-        assert_match {*Duplicate definition*} $err
+        assert_match {*Duplicate user*} $err
     } {} {external:skip}
 }
 

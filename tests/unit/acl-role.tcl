@@ -53,7 +53,23 @@ start_server {tags {"acl external:skip"}} {
 
     test {ACL SETROLE - role name validation - no spaces} {
         catch {r ACL SETROLE "bad name" +@all} err
-        assert_match {*can't contain spaces*} $err
+        assert_match {*Role names can't contain spaces or null characters*} $err
+    }
+
+    test {ACL SETROLE - rejects an empty role name} {
+        # An empty name survives ACL SETROLE but not a config round trip:
+        # sdssplitargs() collapses the whitespace, so the first rule would come
+        # back as the role name and the server would refuse to start.
+        catch {r ACL SETROLE "" +get ~*} err
+        assert_match {*Role names can't be empty*} $err
+        assert_equal {} [lsearch -all -inline [r ACL ROLES] {}]
+    }
+
+    test {ACL SETROLE - rejects quotes and backslashes in a role name} {
+        foreach name {q"x q'x {q\x}} {
+            catch {r ACL SETROLE $name +get ~*} err
+            assert_match {*Role names can't contain quotes or backslashes*} $err
+        }
     }
 
     test {ACL SETROLE - rejects role name that conflicts with category} {
@@ -131,6 +147,15 @@ start_server {tags {"acl external:skip"}} {
 
         catch {r ACL SETUSER alice -@role:} err
         assert_match {*Error*} $err
+    }
+
+    test {ACL SETUSER - removing a role the user does not hold fails} {
+        r ACL SETROLE unheldrole +get ~*
+        r ACL SETUSER notamember on >p
+        catch {r ACL SETUSER notamember -@role:unheldrole} err
+        assert_match {*not a member*} $err
+        r ACL DELUSER notamember
+        r ACL DELROLE unheldrole
     }
 
     # --- ACL GETUSER ---
@@ -457,7 +482,6 @@ start_server [list overrides [list "dir" $server_path "aclfile" "role.acl"] tags
     test {ACL LOAD - role with invalid rules fails} {
         set fd [open "$server_path/role.acl" w]
         puts $fd "role badrole >password"
-        puts $fd "user default on nopass ~* &* +@all"
         close $fd
         catch {r ACL LOAD} err
         assert_match {*Error*} $err
@@ -466,7 +490,6 @@ start_server [list overrides [list "dir" $server_path "aclfile" "role.acl"] tags
     test {ACL LOAD - role line without name fails} {
         set fd [open "$server_path/role.acl" w]
         puts $fd "role"
-        puts $fd "user default on nopass ~* &* +@all"
         close $fd
         catch {r ACL LOAD} err
         assert_match {*requires a role name*} $err
@@ -476,7 +499,6 @@ start_server [list overrides [list "dir" $server_path "aclfile" "role.acl"] tags
         set fd [open "$server_path/role.acl" w]
         puts $fd "role dup ~* +@all"
         puts $fd "role dup ~* +@read"
-        puts $fd "user default on nopass ~* &* +@all"
         close $fd
         catch {r ACL LOAD} err
         assert_match {*Duplicate role*} $err
@@ -519,7 +541,20 @@ start_server [list config_lines $conf_lines tags [list "external:skip"]] {
 # Test duplicate role in config on startup
 test {Duplicate role in config on startup fails} {
     catch {exec $::VALKEY_SERVER_BIN --role dup --role dup} err
-    assert_match {*Duplicate definition*} $err
+    assert_match {*Duplicate role*} $err
+} {} {external:skip}
+
+# Test invalid role name in config on startup
+test {Invalid role name in config on startup fails} {
+    catch {exec $::VALKEY_SERVER_BIN --role "" +get} err
+    assert_match {*Role names can't be empty*} $err
+
+    set tmpdir [tmpdir "role-invalid-name.acl"]
+    set fd [open "$tmpdir/role.acl" w]
+    puts $fd {role q"x +get}
+    close $fd
+    catch {exec $::VALKEY_SERVER_BIN --aclfile "$tmpdir/role.acl"} err
+    assert_match {*invalid role name*quotes or backslashes*} $err
 } {} {external:skip}
 
 # Test invalid role rule in config on startup

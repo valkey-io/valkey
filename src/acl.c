@@ -286,6 +286,17 @@ static int ACLStringHasSpaces(const char *s, size_t len) {
     return 0;
 }
 
+/* Return an error string if the role name cannot be written to, and read back
+ * from, the ACL file or valkey.conf, or NULL if it is fine. */
+static const char *ACLRoleNameError(const char *name, size_t len) {
+    if (len == 0) return "Role names can't be empty";
+    if (ACLStringHasSpaces(name, len)) return "Role names can't contain spaces or null characters";
+    for (size_t i = 0; i < len; i++) {
+        if (name[i] == '"' || name[i] == '\'' || name[i] == '\\') return "Role names can't contain quotes or backslashes";
+    }
+    return NULL;
+}
+
 /* Return 1 if the role name conflicts with a command or category name. */
 static int ACLRoleNameConflicts(const char *name) {
     if (ACLGetCommandCategoryFlagByName(name)) return 1;
@@ -536,7 +547,10 @@ void ACLFreeUser(user *u) {
     }
     if (u->passwords) listRelease(u->passwords);
     listRelease(u->selectors);
-    if (u->members) dictRelease(u->members);
+    if (u->members) {
+        serverAssert(dictSize(u->members) == 0);
+        dictRelease(u->members);
+    }
     zfree(u);
 }
 
@@ -1757,6 +1771,10 @@ int ACLSetUser(user *u, const char *op, ssize_t oplen) {
         /* Add user to a role */
         const char *rolename = op + 7;
         size_t rolenamelen = oplen - 7;
+        if (rolenamelen == 0) {
+            errno = EINVAL;
+            return C_ERR;
+        }
         user *r = ACLGetRoleByName(rolename, rolenamelen);
         if (!r) {
             errno = ESRCH;
@@ -1769,13 +1787,20 @@ int ACLSetUser(user *u, const char *op, ssize_t oplen) {
         /* Remove user from a role */
         const char *rolename = op + 7;
         size_t rolenamelen = oplen - 7;
+        if (rolenamelen == 0) {
+            errno = EINVAL;
+            return C_ERR;
+        }
         user *r = ACLGetRoleByName(rolename, rolenamelen);
         if (!r) {
             errno = ESRCH;
             return C_ERR;
         }
-        dictDelete(u->roles, r);
-        dictDelete(r->members, u);
+        if (dictDelete(u->roles, r) != DICT_OK) {
+            errno = ENOTSUP;
+            return C_ERR;
+        }
+        serverAssert(dictDelete(r->members, u) == DICT_OK);
     } else {
         aclSelector *selector = ACLUserGetRootSelector(u);
         if (ACLSetSelector(selector, op, oplen) == C_ERR) {
@@ -1810,8 +1835,14 @@ const char *ACLSetStringError(void) {
         errmsg = "The password hash must be exactly 64 characters and contain "
                  "only lowercase hexadecimal characters";
     else if (errno == EALREADY)
-        errmsg = "Duplicate definition found. A user or role can only be defined once in "
+        errmsg = "Duplicate user found. A user can only be defined once in "
                  "config files";
+    else if (errno == EBUSY)
+        errmsg = "Duplicate role found. A role can only be defined once in "
+                 "config files";
+    else if (errno == EILSEQ)
+        errmsg = "Role names can't be empty, or contain spaces, quotes or "
+                 "backslashes";
     else if (errno == ECHILD)
         errmsg = "Allowing first-arg of a subcommand is not supported";
     else if (errno == ERANGE)
@@ -1820,6 +1851,8 @@ const char *ACLSetStringError(void) {
         errmsg = "The specified ACL role does not exist";
     else if (errno == EDOM)
         errmsg = "Role name conflicts with a command or category name";
+    else if (errno == ENOTSUP)
+        errmsg = "The user is not a member of the specified ACL role";
     return errmsg;
 }
 
@@ -2261,20 +2294,47 @@ static int ACLSelectorCheckCmd(aclSelector *selector,
     return ACL_OK;
 }
 
-/* Returns ACL_OK if any selector in selectors grants the requested access to
- * key, ACL_DENIED_KEY otherwise. */
-static int ACLSelectorsCheckKey(list *selectors, const char *key, int keylen, int flags, bool is_prefix) {
-    listIter li;
-    listNode *ln;
+/* Iterates the selectors that apply to a user: its own first, then those of every
+ * role it belongs to. Roles carry no roles of their own, so iterating one just
+ * walks its selectors. Call ACLSelectorIteratorCleanup() before returning early. */
+typedef struct {
+    user *u;
+    listIter li;       /* Position within the selector list being walked. */
+    dictIterator *rdi; /* Position within u->roles, NULL until the roles are reached. */
+    int done;
+} aclSelectorIterator;
 
-    listRewind(selectors, &li);
-    while ((ln = listNext(&li))) {
-        aclSelector *s = (aclSelector *)listNodeValue(ln);
-        if (ACLSelectorCheckKey(s, key, keylen, flags, is_prefix) == ACL_OK) {
-            return ACL_OK;
+static void ACLSelectorIteratorInit(aclSelectorIterator *it, user *u) {
+    it->u = u;
+    it->rdi = NULL;
+    it->done = 0;
+    listRewind(u->selectors, &it->li);
+}
+
+static aclSelector *ACLSelectorIteratorNext(aclSelectorIterator *it) {
+    if (it->done) return NULL;
+    while (1) {
+        listNode *ln = listNext(&it->li);
+        if (ln) return (aclSelector *)listNodeValue(ln);
+        if (!it->u->roles) {
+            it->done = 1;
+            return NULL;
         }
+        if (!it->rdi) it->rdi = dictGetIterator(it->u->roles);
+        dictEntry *de = dictNext(it->rdi);
+        if (!de) {
+            it->done = 1;
+            return NULL;
+        }
+        listRewind(((user *)dictGetVal(de))->selectors, &it->li);
     }
-    return ACL_DENIED_KEY;
+}
+
+static void ACLSelectorIteratorCleanup(aclSelectorIterator *it) {
+    if (it->rdi) {
+        dictReleaseIterator(it->rdi);
+        it->rdi = NULL;
+    }
 }
 
 /* Checks whether the given user has permission to access a specified key.
@@ -2304,46 +2364,17 @@ int ACLUserCheckKeyPerm(user *u, const char *key, int keylen, int flags, bool is
     /* If there is no associated user, the connection can run anything. */
     if (u == NULL) return ACL_OK;
 
-    /* Check the user's own selectors, then the selectors of each of its roles:
-     * access is granted as soon as any of them allows the key. */
-    if (ACLSelectorsCheckKey(u->selectors, key, keylen, flags, is_prefix) == ACL_OK) return ACL_OK;
-
-    if (u->roles) {
-        dictIterator *di = dictGetIterator(u->roles);
-        dictEntry *de;
-        while ((de = dictNext(di))) {
-            user *r = (user *)dictGetVal(de);
-            if (ACLSelectorsCheckKey(r->selectors, key, keylen, flags, is_prefix) == ACL_OK) {
-                dictReleaseIterator(di);
-                return ACL_OK;
-            }
+    aclSelectorIterator it;
+    aclSelector *s;
+    ACLSelectorIteratorInit(&it, u);
+    while ((s = ACLSelectorIteratorNext(&it))) {
+        if (ACLSelectorCheckKey(s, key, keylen, flags, is_prefix) == ACL_OK) {
+            ACLSelectorIteratorCleanup(&it);
+            return ACL_OK;
         }
-        dictReleaseIterator(di);
     }
+    ACLSelectorIteratorCleanup(&it);
     return ACL_DENIED_KEY;
-}
-
-/* Returns 1 if any selector in selectors both allows the command and has the
- * unrestricted key access specified by flags. The key result cache is passed
- * in so that it can be shared across several selector lists. */
-static int ACLSelectorsCheckCmdWithUnrestrictedKeyAccess(list *selectors,
-                                                         struct serverCommand *cmd,
-                                                         robj **argv,
-                                                         int argc,
-                                                         int dbid,
-                                                         int flags,
-                                                         aclKeyResultCache *cache) {
-    listIter li;
-    listNode *ln;
-    int local_idxptr;
-
-    listRewind(selectors, &li);
-    while ((ln = listNext(&li))) {
-        aclSelector *s = (aclSelector *)listNodeValue(ln);
-        int acl_retval = ACLSelectorCheckCmd(s, cmd, argv, argc, &local_idxptr, cache, dbid);
-        if (acl_retval == ACL_OK && ACLSelectorHasUnrestrictedKeyAccess(s, flags)) return 1;
-    }
-    return 0;
 }
 
 /* Checks if the user can execute the given command with the added restriction
@@ -2353,6 +2384,8 @@ static int ACLSelectorsCheckCmdWithUnrestrictedKeyAccess(list *selectors,
  * if the user has access or 0 otherwise.
  */
 int ACLUserCheckCmdWithUnrestrictedKeyAccess(user *u, struct serverCommand *cmd, robj **argv, int argc, int dbid, int flags) {
+    int local_idxptr;
+
     /* If there is no associated user, the connection can run anything. */
     if (u == NULL) return 1;
 
@@ -2361,41 +2394,20 @@ int ACLUserCheckCmdWithUnrestrictedKeyAccess(user *u, struct serverCommand *cmd,
     aclKeyResultCache cache;
     initACLKeyResultCache(&cache);
 
-    /* Check the user's own selectors, then the selectors of each of its roles. */
-    int retval = ACLSelectorsCheckCmdWithUnrestrictedKeyAccess(u->selectors, cmd, argv, argc, dbid, flags, &cache);
-
-    if (!retval && u->roles) {
-        dictIterator *di = dictGetIterator(u->roles);
-        dictEntry *de;
-        while (!retval && (de = dictNext(di))) {
-            user *r = (user *)dictGetVal(de);
-            retval = ACLSelectorsCheckCmdWithUnrestrictedKeyAccess(r->selectors, cmd, argv, argc, dbid, flags, &cache);
+    aclSelectorIterator it;
+    aclSelector *s;
+    ACLSelectorIteratorInit(&it, u);
+    while ((s = ACLSelectorIteratorNext(&it))) {
+        int acl_retval = ACLSelectorCheckCmd(s, cmd, argv, argc, &local_idxptr, &cache, dbid);
+        if (acl_retval == ACL_OK && ACLSelectorHasUnrestrictedKeyAccess(s, flags)) {
+            ACLSelectorIteratorCleanup(&it);
+            cleanupACLKeyResultCache(&cache);
+            return 1;
         }
-        dictReleaseIterator(di);
     }
-
+    ACLSelectorIteratorCleanup(&it);
     cleanupACLKeyResultCache(&cache);
-    return retval;
-}
-
-/* Returns ACL_OK if any selector in selectors grants access to channel,
- * ACL_DENIED_CHANNEL otherwise. */
-static int ACLSelectorsCheckChannel(list *selectors, sds channel, int is_pattern) {
-    listIter li;
-    listNode *ln;
-
-    listRewind(selectors, &li);
-    while ((ln = listNext(&li))) {
-        aclSelector *s = (aclSelector *)listNodeValue(ln);
-        /* The selector can run any keys */
-        if (s->flags & SELECTOR_FLAG_ALLCHANNELS) return ACL_OK;
-
-        /* Otherwise, loop over the selectors list and check each channel */
-        if (ACLCheckChannelAgainstList(s->channels, channel, sdslen(channel), is_pattern) == ACL_OK) {
-            return ACL_OK;
-        }
-    }
-    return ACL_DENIED_CHANNEL;
+    return 0;
 }
 
 /* Check if the channel can be accessed by the client according to
@@ -2407,21 +2419,18 @@ int ACLUserCheckChannelPerm(user *u, sds channel, int is_pattern) {
     /* If there is no associated user, the connection can run anything. */
     if (u == NULL) return ACL_OK;
 
-    /* Check the user's own selectors, then the selectors of each of its roles. */
-    if (ACLSelectorsCheckChannel(u->selectors, channel, is_pattern) == ACL_OK) return ACL_OK;
-
-    if (u->roles) {
-        dictIterator *di = dictGetIterator(u->roles);
-        dictEntry *de;
-        while ((de = dictNext(di))) {
-            user *r = (user *)dictGetVal(de);
-            if (ACLSelectorsCheckChannel(r->selectors, channel, is_pattern) == ACL_OK) {
-                dictReleaseIterator(di);
-                return ACL_OK;
-            }
+    aclSelectorIterator it;
+    aclSelector *s;
+    ACLSelectorIteratorInit(&it, u);
+    while ((s = ACLSelectorIteratorNext(&it))) {
+        /* The selector can run any channel, or names this one. */
+        if ((s->flags & SELECTOR_FLAG_ALLCHANNELS) ||
+            ACLCheckChannelAgainstList(s->channels, channel, sdslen(channel), is_pattern) == ACL_OK) {
+            ACLSelectorIteratorCleanup(&it);
+            return ACL_OK;
         }
-        dictReleaseIterator(di);
     }
+    ACLSelectorIteratorCleanup(&it);
     return ACL_DENIED_CHANNEL;
 }
 
@@ -2431,9 +2440,6 @@ int ACLUserCheckChannelPerm(user *u, sds channel, int is_pattern) {
  * causes the failure, either 0 if the command itself fails or the idx of the key/channel
  * that causes the failure */
 int ACLCheckAllUserCommandPerm(user *u, struct serverCommand *cmd, robj **argv, int argc, int dbid, int *idxptr) {
-    listIter li;
-    listNode *ln;
-
     /* If there is no associated user, the connection can run anything. */
     if (u == NULL) return ACL_OK;
 
@@ -2449,11 +2455,13 @@ int ACLCheckAllUserCommandPerm(user *u, struct serverCommand *cmd, robj **argv, 
     initACLKeyResultCache(&cache);
 
     /* Check each selector sequentially */
-    listRewind(u->selectors, &li);
-    while ((ln = listNext(&li))) {
-        aclSelector *s = (aclSelector *)listNodeValue(ln);
+    aclSelectorIterator it;
+    aclSelector *s;
+    ACLSelectorIteratorInit(&it, u);
+    while ((s = ACLSelectorIteratorNext(&it))) {
         int acl_retval = ACLSelectorCheckCmd(s, cmd, argv, argc, &local_idxptr, &cache, dbid);
         if (acl_retval == ACL_OK) {
+            ACLSelectorIteratorCleanup(&it);
             cleanupACLKeyResultCache(&cache);
             return ACL_OK;
         }
@@ -2462,32 +2470,7 @@ int ACLCheckAllUserCommandPerm(user *u, struct serverCommand *cmd, robj **argv, 
             last_idx = local_idxptr;
         }
     }
-
-    /* Check role selectors */
-    if (u->roles && dictSize(u->roles) > 0) {
-        dictIterator *rdi = dictGetIterator(u->roles);
-        dictEntry *rde;
-        while ((rde = dictNext(rdi))) {
-            user *r = (user *)dictGetVal(rde);
-            listIter sli;
-            listNode *sln;
-            listRewind(r->selectors, &sli);
-            while ((sln = listNext(&sli))) {
-                aclSelector *s = (aclSelector *)listNodeValue(sln);
-                int acl_retval = ACLSelectorCheckCmd(s, cmd, argv, argc, &local_idxptr, &cache, dbid);
-                if (acl_retval == ACL_OK) {
-                    cleanupACLKeyResultCache(&cache);
-                    dictReleaseIterator(rdi);
-                    return ACL_OK;
-                }
-                if (acl_retval > relevant_error || (acl_retval == relevant_error && local_idxptr > last_idx)) {
-                    relevant_error = acl_retval;
-                    last_idx = local_idxptr;
-                }
-            }
-        }
-        dictReleaseIterator(rdi);
-    }
+    ACLSelectorIteratorCleanup(&it);
 
     *idxptr = last_idx;
     cleanupACLKeyResultCache(&cache);
@@ -2502,31 +2485,16 @@ int ACLCheckAllPerm(client *c, int *idxptr) {
 
 /* Check if user has allchannels permission from own or role selectors. */
 static int ACLUserHasAllChannels(user *u) {
-    listIter li;
-    listNode *ln;
-    listRewind(u->selectors, &li);
-    while ((ln = listNext(&li))) {
-        aclSelector *s = (aclSelector *)listNodeValue(ln);
-        if (s->flags & SELECTOR_FLAG_ALLCHANNELS) return 1;
-    }
-    if (u->roles) {
-        dictIterator *di = dictGetIterator(u->roles);
-        dictEntry *de;
-        while ((de = dictNext(di))) {
-            user *r = (user *)dictGetVal(de);
-            listIter sli;
-            listNode *sln;
-            listRewind(r->selectors, &sli);
-            while ((sln = listNext(&sli))) {
-                aclSelector *s = (aclSelector *)listNodeValue(sln);
-                if (s->flags & SELECTOR_FLAG_ALLCHANNELS) {
-                    dictReleaseIterator(di);
-                    return 1;
-                }
-            }
+    aclSelectorIterator it;
+    aclSelector *s;
+    ACLSelectorIteratorInit(&it, u);
+    while ((s = ACLSelectorIteratorNext(&it))) {
+        if (s->flags & SELECTOR_FLAG_ALLCHANNELS) {
+            ACLSelectorIteratorCleanup(&it);
+            return 1;
         }
-        dictReleaseIterator(di);
     }
+    ACLSelectorIteratorCleanup(&it);
     return 0;
 }
 
@@ -2534,39 +2502,22 @@ static int ACLUserHasAllChannels(user *u) {
  * Caller must listRelease() the returned list. */
 static list *ACLUserGetChannels(user *u) {
     list *channels = listCreate();
-    listIter li, lpi;
-    listNode *ln, *lpn;
-    listRewind(u->selectors, &li);
-    while ((ln = listNext(&li))) {
-        aclSelector *s = (aclSelector *)listNodeValue(ln);
+    listIter lpi;
+    listNode *lpn;
+
+    aclSelectorIterator it;
+    aclSelector *s;
+    ACLSelectorIteratorInit(&it, u);
+    while ((s = ACLSelectorIteratorNext(&it))) {
         listRewind(s->channels, &lpi);
         while ((lpn = listNext(&lpi))) {
             listAddNodeTail(channels, listNodeValue(lpn));
         }
     }
-    if (u->roles) {
-        dictIterator *di = dictGetIterator(u->roles);
-        dictEntry *de;
-        while ((de = dictNext(di))) {
-            user *r = (user *)dictGetVal(de);
-            listIter sli;
-            listNode *sln;
-            listRewind(r->selectors, &sli);
-            while ((sln = listNext(&sli))) {
-                aclSelector *s = (aclSelector *)listNodeValue(sln);
-                listRewind(s->channels, &lpi);
-                while ((lpn = listNext(&lpi))) {
-                    listAddNodeTail(channels, listNodeValue(lpn));
-                }
-            }
-        }
-        dictReleaseIterator(di);
-    }
+    ACLSelectorIteratorCleanup(&it);
     return channels;
 }
 
-/* If 'new' can access all channels 'original' could then return NULL;
-   Otherwise, return a list of channels that the new user can access */
 static list *getUpcomingChannelList(user *new, user *original) {
     listIter li, lpi;
     listNode *ln, *lpn;
@@ -2952,7 +2903,13 @@ int ACLAppendRoleForLoading(sds *argv, int argc, int *argc_err) {
 
     if (listSearchKey(RolesToLoad, argv[1])) {
         if (argc_err) *argc_err = 1;
-        errno = EALREADY;
+        errno = EBUSY;
+        return C_ERR;
+    }
+
+    if (ACLRoleNameError(argv[1], sdslen(argv[1]))) {
+        if (argc_err) *argc_err = 1;
+        errno = EILSEQ;
         return C_ERR;
     }
 
@@ -3033,6 +2990,49 @@ static int ACLLoadConfiguredRoles(void) {
         }
     }
     return C_OK;
+}
+
+/* Move role memberships of users not replaced by ACL LOAD, i.e. module users, to
+ * the new role of the same name, or drop them if it is gone. Called after the old
+ * users are freed, so only such survivors are left on the old member lists. */
+static void ACLRemapSurvivingRoleMembers(rax *old_roles) {
+    raxIterator ri;
+    raxStart(&ri, old_roles);
+    raxSeek(&ri, "^", NULL, 0);
+    while (raxNext(&ri)) {
+        user *old_role = ri.data;
+        if (!old_role->members || dictSize(old_role->members) == 0) continue;
+
+        /* Snapshot the members before mutating the dict. */
+        int count = 0, numsurvivors = dictSize(old_role->members);
+        user **survivors = zmalloc(sizeof(user *) * numsurvivors);
+        dictIterator *di = dictGetIterator(old_role->members);
+        dictEntry *de;
+        while ((de = dictNext(di))) survivors[count++] = dictGetVal(de);
+        dictReleaseIterator(di);
+
+        user *new_role = ACLGetRoleByName(old_role->name, sdslen(old_role->name));
+        for (int j = 0; j < numsurvivors; j++) {
+            user *u = survivors[j];
+            dictDelete(u->roles, old_role);
+            dictDelete(old_role->members, u);
+            if (new_role) {
+                serverAssert(dictAdd(u->roles, new_role, new_role) == DICT_OK);
+                serverAssert(dictAdd(new_role->members, u, u) == DICT_OK);
+            } else {
+                serverLog(LL_NOTICE,
+                          "The ACL role '%s' held by the user '%s' no longer exists after reloading the ACLs, "
+                          "the membership was dropped.",
+                          old_role->name, u->name);
+            }
+            if (u->acl_string) {
+                decrRefCount(u->acl_string);
+                u->acl_string = NULL;
+            }
+        }
+        zfree(survivors);
+    }
+    raxStop(&ri);
 }
 
 /* This function loads the ACL from the specified filename: every line
@@ -3126,9 +3126,10 @@ static sds ACLLoadFromFile(const char *filename) {
             continue;
         }
 
-        if (ACLStringHasSpaces(argv[1], sdslen(argv[1]))) {
-            errors = sdscatprintf(errors, "%s:%d: role name '%s' contains invalid characters. ",
-                                  server.acl_filename, linenum, argv[1]);
+        const char *nameerr = ACLRoleNameError(argv[1], sdslen(argv[1]));
+        if (nameerr) {
+            errors = sdscatprintf(errors, "%s:%d: invalid role name '%s': %s. ",
+                                  server.acl_filename, linenum, argv[1], nameerr);
             sdsfreesplitres(argv, argc);
             continue;
         }
@@ -3302,6 +3303,7 @@ static sds ACLLoadFromFile(const char *filename) {
 
         if (user_channels) raxFreeWithCallback(user_channels, listReleaseVoid);
         raxFreeWithCallback(old_users, ACLFreeUserVoid);
+        ACLRemapSurvivingRoleMembers(old_roles);
         raxFreeWithCallback(old_roles, ACLFreeUserVoid);
         sdsfree(errors);
         return NULL;
@@ -4071,14 +4073,15 @@ void aclCommand(client *c) {
     } else if (!strcasecmp(sub, "setrole") && c->argc >= 3) {
         sds rolename = objectGetVal(c->argv[2]);
         /* Check role name validity. */
-        if (ACLStringHasSpaces(rolename, sdslen(rolename))) {
-            addReplyError(c, "Role names can't contain spaces or null characters");
+        const char *nameerr = ACLRoleNameError(rolename, sdslen(rolename));
+        if (nameerr) {
+            addReplyError(c, nameerr);
             return;
         }
 
         user *r = ACLGetRoleByName(rolename, sdslen(rolename));
 
-        sds *temp_argv = zmalloc((c->argc - 3) * sizeof(sds));
+        sds *temp_argv = zmalloc(c->argc * sizeof(sds));
         for (int i = 3; i < c->argc; i++) temp_argv[i - 3] = objectGetVal(c->argv[i]);
 
         sds error = ACLStringSetRole(r, rolename, temp_argv, c->argc - 3);

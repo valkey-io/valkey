@@ -160,4 +160,7 @@ int clusterAddSlot(clusterNode *n, int slot);
 int clusterBumpConfigEpochWithoutConsensus(void);
 void clusterDoBeforeSleep(int flags);
 
+int setClusterNodes(client *c, sds nodes_str, long long version);
+int parseClusterNodes(client *c, sds nodes_str, dict *new_nodes, char slots_nodes[][CLUSTER_NAMELEN]);
+
 #endif /* __CLUSTER_H */

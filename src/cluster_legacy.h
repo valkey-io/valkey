@@ -387,6 +387,7 @@ struct _clusterNode {
     mstime_t ctime;                         /* Node object creation time. */
     char name[CLUSTER_NAMELEN];             /* Node name, hex string, sha1-size */
     char shard_id[CLUSTER_NAMELEN];         /* shard id, hex string, sha1-size */
+    char master_id[CLUSTER_NAMELEN];        /* master id */
     int flags;                              /* CLUSTER_NODE_... */
     uint64_t configEpoch;                   /* Last configEpoch observed for this node */
     unsigned char slots[CLUSTER_SLOTS / 8]; /* slots handled by this node */
@@ -506,6 +507,9 @@ struct clusterState {
     unsigned char owner_not_claiming_slot[CLUSTER_SLOTS / 8];
     /* Struct used for storing slot statistics, for all slots owned by the current shard. */
     slotStat slot_stats[CLUSTER_SLOTS];
+
+    /* ClusterX */
+    uint64_t topologyVersion;
 };
 
 #endif // CLUSTER_LEGACY_H

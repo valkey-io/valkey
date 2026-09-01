@@ -27,6 +27,9 @@
 #include "server.h"
 #include "connection.h"
 
+#include <arpa/inet.h>
+#include <ifaddrs.h>
+
 static ConnectionType *connTypes[CONN_TYPE_MAX];
 
 int connTypeRegister(ConnectionType *ct) {
@@ -167,4 +170,77 @@ sds getListensInfoString(sds info) {
     }
 
     return info;
+}
+
+int stringArrayContains(char **arr, int count, const char *s) {
+    if (!arr || !s) return 0;
+
+    for (int i = 0; i < count; i++) {
+        if (arr[i] && strcmp(arr[i], s) == 0) {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+int matchListeningIP(char **bindaddr, int bind_count, const char *ip, sds *local_ips, int local_ip_count) {
+    if (!ip || !local_ips) return 0;
+
+    if (stringArrayContains(bindaddr, bind_count, ip)) {
+        return 1;
+    }
+
+    if (!stringArrayContains(bindaddr, bind_count, "0.0.0.0") &&
+        !stringArrayContains(bindaddr, bind_count, "::")) {
+        return 0;
+    }
+
+    for (int i = 0; i < local_ip_count; i++) {
+        if (strcmp(local_ips[i], ip) == 0) {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+sds *getLocalIPAddresses(int *count_out) {
+    sds *ip_array = NULL;
+    struct ifaddrs *if_addr_struct;
+    int ip_count = 0;
+
+    if (count_out) *count_out = 0;
+
+    if (getifaddrs(&if_addr_struct) == -1) {
+        return NULL;
+    }
+
+    for (struct ifaddrs *ifa = if_addr_struct; ifa; ifa = ifa->ifa_next) {
+        char buf[INET6_ADDRSTRLEN];
+
+        if (!ifa->ifa_addr) continue;
+
+        if (ifa->ifa_addr->sa_family == AF_INET) {
+            struct sockaddr_in *sa = (struct sockaddr_in *)ifa->ifa_addr;
+            if (!inet_ntop(AF_INET, &sa->sin_addr, buf, sizeof(buf)))
+                continue;
+        } else if (ifa->ifa_addr->sa_family == AF_INET6) {
+            struct sockaddr_in6 *sa6 = (struct sockaddr_in6 *)ifa->ifa_addr;
+            if (IN6_IS_ADDR_LINKLOCAL(&sa6->sin6_addr)) continue;
+            if (!inet_ntop(AF_INET6, &sa6->sin6_addr, buf, sizeof(buf)))
+                continue;
+        } else {
+            continue;
+        }
+
+        ip_array = zrealloc(ip_array, (ip_count + 1) * sizeof(sds));
+        ip_array[ip_count++] = sdsnew(buf);
+    }
+
+    freeifaddrs(if_addr_struct);
+
+    if (count_out) *count_out = ip_count;
+
+    return ip_array;
 }

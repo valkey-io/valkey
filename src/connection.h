@@ -538,4 +538,8 @@ static inline int connIsIntegrityChecked(connection *conn) {
     return conn->type->connIntegrityChecked && conn->type->connIntegrityChecked();
 }
 
+/* Return 1 if bindaddr contains ip, 0 if otherwise. */
+int matchListeningIP(char **bindaddr, int bind_count, const char *ip, sds *local_ips, int local_ip_count);
+sds *getLocalIPAddresses(int *count_out);
+
 #endif /* __REDIS_CONNECTION_H */

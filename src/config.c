@@ -2596,6 +2596,73 @@ static int isValidMptcp(int val, const char **err) {
     return 1;
 }
 
+/* Validate trusted-sources is a space-separated list of valid IP/CIDR entries. */
+static int isValidTrustedSources(sds val, const char **err) {
+    if (sdslen(val) == 0) return 1;
+
+    char *copy = sdsdup(val);
+    char *saveptr;
+    char *token = strtok_r(copy, " ", &saveptr);
+    int ret = 1;
+
+    while (token && ret) {
+        char *slash = strchr(token, '/');
+        char addr[NET_IP_STR_LEN];
+        int prefix_len = -1;
+
+        if (slash) {
+            size_t len = slash - token;
+            if (len >= sizeof(addr)) {
+                *err = "IP address too long in trusted-sources";
+                ret = 0;
+                break;
+            }
+            memcpy(addr, token, len);
+            addr[len] = '\0';
+            char *endptr;
+            errno = 0;
+            long parsed = strtol(slash + 1, &endptr, 10);
+            /* Reject empty, trailing garbage, negative, out-of-range
+             * (ERANGE), or any value beyond the widest possible prefix (128
+             * for IPv6) before narrowing to int -- otherwise a huge value
+             * could wrap on the cast and slip past the per-family checks
+             * below. */
+            if (endptr == slash + 1 || *endptr != '\0' || parsed < 0 || errno == ERANGE || parsed > 128) {
+                *err = "Invalid CIDR prefix in trusted-sources";
+                ret = 0;
+                break;
+            }
+            prefix_len = (int)parsed;
+        } else {
+            strncpy(addr, token, sizeof(addr) - 1);
+            addr[sizeof(addr) - 1] = '\0';
+        }
+
+        struct in_addr addr4;
+        struct in6_addr addr6;
+
+        if (inet_pton(AF_INET, addr, &addr4) == 1) {
+            if (prefix_len > 32) {
+                *err = "Invalid IPv4 CIDR prefix length in trusted-sources";
+                ret = 0;
+            }
+        } else if (inet_pton(AF_INET6, addr, &addr6) == 1) {
+            if (prefix_len > 128) {
+                *err = "Invalid IPv6 CIDR prefix length in trusted-sources";
+                ret = 0;
+            }
+        } else {
+            *err = "Invalid IP address in trusted-sources";
+            ret = 0;
+        }
+
+        token = strtok_r(NULL, " ", &saveptr);
+    }
+
+    sdsfree(copy);
+    return ret;
+}
+
 /* Validate specified string is a valid proc-title-template */
 static int isValidProcTitleTemplate(char *val, const char **err) {
     if (!validateProcTitleTemplate(val)) {
@@ -2682,6 +2749,23 @@ static int updateMaxmemory(const char **err) {
     return 1;
 }
 
+/* trusted-maxclients now reserves capacity out of maxclients instead of
+ * adding to it, so it must always leave room for at least one non-trusted
+ * connection. Called both when trusted-maxclients changes and when
+ * maxclients changes, since either can invalidate the relationship. */
+static int updateTrustedMaxclients(const char **err) {
+    if (server.trusted_maxclients >= server.maxclients) {
+        static char msg[160];
+        snprintf(msg, sizeof(msg),
+                 "trusted-maxclients (%u) must be less than maxclients (%u), "
+                 "since it reserves capacity out of maxclients rather than adding to it",
+                 server.trusted_maxclients, server.maxclients);
+        *err = msg;
+        return 0;
+    }
+    return 1;
+}
+
 static int updateGoodReplicas(const char **err) {
     UNUSED(err);
     refreshGoodReplicasCount();
@@ -2747,7 +2831,9 @@ static int updateMaxclients(const char **err) {
             return 0;
         }
     }
-    return 1;
+    /* maxclients may have been lowered below trusted-maxclients; re-validate
+     * since trusted-maxclients reserves capacity out of maxclients. */
+    return updateTrustedMaxclients(err);
 }
 
 static int updateOOMScoreAdj(const char **err) {
@@ -3402,6 +3488,7 @@ standardConfig static_configs[] = {
     createBoolConfig("hide-user-data-from-log", NULL, MODIFIABLE_CONFIG, server.hide_user_data_from_log, 1, NULL, NULL),
     createBoolConfig("lua-enable-insecure-api", "lua-enable-deprecated-api", MODIFIABLE_CONFIG | HIDDEN_CONFIG | PROTECTED_CONFIG, server.lua_enable_insecure_api, 0, NULL, updateLuaEnableInsecureApi),
     createBoolConfig("import-mode", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, server.import_mode, 0, NULL, NULL),
+    createBoolConfig("trust-unix-sockets", NULL, MODIFIABLE_CONFIG, server.trust_unix_sockets, 0, NULL, NULL),
     createBoolConfig("io-threads-always-active", NULL, MODIFIABLE_CONFIG | HIDDEN_CONFIG, server.io_threads_always_active, 0, NULL, NULL),
 
     /* String Configs */
@@ -3438,6 +3525,7 @@ standardConfig static_configs[] = {
     /* SDS Configs */
     createSDSConfig("primaryauth", "masterauth", MODIFIABLE_CONFIG | SENSITIVE_CONFIG, EMPTY_STRING_IS_NULL, server.primary_auth, NULL, NULL, NULL),
     createSDSConfig("requirepass", NULL, MODIFIABLE_CONFIG | SENSITIVE_CONFIG, EMPTY_STRING_IS_NULL, server.requirepass, NULL, NULL, updateRequirePass),
+    createSDSConfig("trusted-sources", NULL, MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, server.trusted_sources, NULL, isValidTrustedSources, NULL),
     createSDSConfig("availability-zone", NULL, MODIFIABLE_CONFIG, ALLOW_EMPTY_STRING, server.availability_zone, "", NULL, updateClusterAvailabilityZone),
     createSDSConfig("hash-seed", NULL, IMMUTABLE_CONFIG, EMPTY_STRING_IS_NULL, server.hash_seed, NULL, isValidDbHashSeed, NULL),
 
@@ -3520,6 +3608,7 @@ standardConfig static_configs[] = {
 
     /* Unsigned int configs */
     createUIntConfig("maxclients", NULL, MODIFIABLE_CONFIG, 1, UINT_MAX, server.maxclients, 10000, INTEGER_CONFIG, NULL, updateMaxclients),
+    createUIntConfig("trusted-maxclients", NULL, MODIFIABLE_CONFIG, 0, UINT_MAX, server.trusted_maxclients, 0, INTEGER_CONFIG, NULL, updateTrustedMaxclients),
     createUIntConfig("unixsocketperm", NULL, IMMUTABLE_CONFIG, 0, 0777, server.unix_ctx_config.perm, 0, OCTAL_CONFIG, NULL, NULL),
     createUIntConfig("socket-mark-id", NULL, IMMUTABLE_CONFIG, 0, UINT_MAX, server.socket_mark_id, 0, INTEGER_CONFIG, NULL, NULL),
     createUIntConfig("max-new-connections-per-cycle", NULL, MODIFIABLE_CONFIG, 1, 1000, server.max_new_conns_per_cycle, 10, INTEGER_CONFIG, NULL, NULL),

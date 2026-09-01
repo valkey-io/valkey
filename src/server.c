@@ -2864,6 +2864,7 @@ void resetServerStats(void) {
     server.stat_fork_rate = 0;
     server.stat_total_forks = 0;
     server.stat_rejected_conn = 0;
+    server.stat_rejected_trusted_conn = 0;
     server.stat_sync_full = 0;
     server.stat_sync_partial_ok = 0;
     server.stat_sync_partial_err = 0;
@@ -2994,6 +2995,7 @@ void initServer(void) {
     server.clients = listCreate();
     server.clients_index = raxNew();
     server.clients_to_close = listCreate();
+    server.trusted_clients = 0;
     server.replicas = listCreate();
     server.monitors = listCreate();
     server.replicas_waiting_psync = raxNew();
@@ -6329,6 +6331,8 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "connected_clients:%lu\r\n", listLength(server.clients) - listLength(server.replicas),
                 "cluster_connections:%lu\r\n", getClusterConnectionsCount(),
                 "maxclients:%u\r\n", server.maxclients,
+                "trusted_connections:%u\r\n", server.trusted_clients,
+                "trusted_maxclients:%u\r\n", server.trusted_maxclients,
                 "client_recent_max_input_buffer:%zu\r\n", maxin,
                 "client_recent_max_output_buffer:%zu\r\n", maxout,
                 "blocked_clients:%d\r\n", server.blocked_clients,
@@ -6562,6 +6566,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "instantaneous_input_repl_kbps:%.2f\r\n", (float)getInstantaneousMetric(STATS_METRIC_NET_INPUT_REPLICATION) / 1024,
                 "instantaneous_output_repl_kbps:%.2f\r\n", (float)getInstantaneousMetric(STATS_METRIC_NET_OUTPUT_REPLICATION) / 1024,
                 "rejected_connections:%lld\r\n", server.stat_rejected_conn,
+                "rejected_trusted_connections:%lld\r\n", server.stat_rejected_trusted_conn,
                 "sync_full:%lld\r\n", server.stat_sync_full,
                 "sync_partial_ok:%lld\r\n", server.stat_sync_partial_ok,
                 "sync_partial_err:%lld\r\n", server.stat_sync_partial_err,

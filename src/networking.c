@@ -47,6 +47,7 @@
 #include <ctype.h>
 #include <stdatomic.h>
 #include <stdbool.h>
+#include <arpa/inet.h>
 
 /* This struct is used to encapsulate filtering criteria for operations on clients
  * such as identifying specific clients to kill or retrieve. Each field in the struct
@@ -1878,9 +1879,83 @@ void clientAcceptHandler(connection *conn) {
     moduleFireServerEvent(VALKEYMODULE_EVENT_CLIENT_CHANGE, VALKEYMODULE_SUBEVENT_CLIENT_CHANGE_CONNECTED, c);
 }
 
+/* Check if the given IP address matches a CIDR notation (e.g. "10.0.0.0/16" or "::1/128"). */
+static int cidrMatch(const char *ip, const char *cidr) {
+    char buf[NET_IP_STR_LEN];
+    char *slash = strchr(cidr, '/');
+    int prefix_len = -1;
+    struct in_addr addr4, net4;
+    struct in6_addr addr6, net6;
+
+    if (slash) {
+        size_t len = slash - cidr;
+        if (len >= sizeof(buf)) return 0;
+        memcpy(buf, cidr, len);
+        buf[len] = '\0';
+        char *endptr;
+        prefix_len = strtol(slash + 1, &endptr, 10);
+        if (endptr == slash + 1 || *endptr != '\0') return 0;
+    } else {
+        strncpy(buf, cidr, sizeof(buf) - 1);
+        buf[sizeof(buf) - 1] = '\0';
+    }
+
+    if (inet_pton(AF_INET, ip, &addr4) == 1 && inet_pton(AF_INET, buf, &net4) == 1) {
+        int plen = (prefix_len >= 0) ? prefix_len : 32;
+        if (plen < 0 || plen > 32) return 0;
+        uint32_t mask = plen ? htonl(~((1U << (32 - plen)) - 1)) : 0;
+        return (addr4.s_addr & mask) == (net4.s_addr & mask);
+    }
+
+    if (inet_pton(AF_INET6, ip, &addr6) == 1 && inet_pton(AF_INET6, buf, &net6) == 1) {
+        int plen = (prefix_len >= 0) ? prefix_len : 128;
+        if (plen < 0 || plen > 128) return 0;
+        unsigned char mask[16];
+        int i;
+        for (i = 0; i < 16; i++) {
+            int bits = plen - i * 8;
+            if (bits >= 8)
+                mask[i] = 0xff;
+            else if (bits <= 0)
+                mask[i] = 0;
+            else
+                mask[i] = (unsigned char)(0xff << (8 - bits));
+        }
+        for (i = 0; i < 16; i++) {
+            if ((addr6.s6_addr[i] & mask[i]) != (net6.s6_addr[i] & mask[i]))
+                return 0;
+        }
+        return 1;
+    }
+
+    return 0;
+}
+
+/* Check if a connection comes from a trusted source. */
+static int isConnTrusted(connection *conn, struct ClientFlags flags, const char *ip) {
+    UNUSED(conn);
+    if (flags.unix_socket && server.trust_unix_sockets) return 1;
+
+    if (!ip || !server.trusted_sources || sdslen(server.trusted_sources) == 0) return 0;
+
+    char *copy = sdsdup(server.trusted_sources);
+    char *saveptr;
+    char *token = strtok_r(copy, " ", &saveptr);
+    int matched = 0;
+    while (token) {
+        if (cidrMatch(ip, token)) {
+            matched = 1;
+            break;
+        }
+        token = strtok_r(NULL, " ", &saveptr);
+    }
+    sdsfree(copy);
+    return matched;
+}
+
 void acceptCommonHandler(connection *conn, struct ClientFlags flags, char *ip) {
     client *c;
-    UNUSED(ip);
+    int is_trusted;
 
     char addr[CONN_ADDR_STR_LEN] = {0};
     char laddr[CONN_ADDR_STR_LEN] = {0};
@@ -1894,28 +1969,66 @@ void acceptCommonHandler(connection *conn, struct ClientFlags flags, char *ip) {
         return;
     }
 
+    is_trusted = isConnTrusted(conn, flags, ip);
+
     /* Limit the number of connections we take at the same time.
+     *
+     * trusted-maxclients reserves capacity for trusted connections *out of*
+     * maxclients rather than adding to it -- the total number of connections
+     * Valkey will ever admit is still bounded by maxclients (and therefore by
+     * whatever the OS file-descriptor limit / event loop were sized for at
+     * startup). Non-trusted connections can only use the unreserved portion
+     * of that pool, so operators only ever need to size maxclients, not
+     * maxclients + trusted-maxclients.
      *
      * Admission control will happen before a client is created and connAccept()
      * called, because we don't want to even start transport-level negotiation
      * if rejected. */
-    if (listLength(server.clients) + getClusterConnectionsCount() >= server.maxclients) {
-        char *err;
-        if (server.cluster_enabled)
-            err = "-ERR max number of clients + cluster "
-                  "connections reached\r\n";
-        else
-            err = "-ERR max number of clients reached\r\n";
+    unsigned int total_connected = listLength(server.clients) + getClusterConnectionsCount();
+    if (is_trusted) {
+        /* Trusted clients are bounded by two limits: their own reserved
+         * pool (trusted-maxclients), and the overall maxclients ceiling that
+         * the OS file-descriptor limit and event loop were sized for. Both
+         * must hold. Without the trusted_maxclients check a flood of trusted
+         * connections could consume the entire maxclients pool, starving the
+         * normal clients that the reservation was meant to leave room for. */
+        if (server.trusted_clients >= server.trusted_maxclients || total_connected >= server.maxclients) {
+            char *err = "-ERR max number of trusted clients reached\r\n";
 
-        /* That's a best effort error message, don't check write errors.
-         * Note that for TLS connections, no handshake was done yet so nothing
-         * is written and the connection will just drop. */
-        if (connWrite(conn, err, strlen(err)) == -1) {
-            /* Nothing to do, Just to avoid the warning... */
+            if (connWrite(conn, err, strlen(err)) == -1) {
+                /* Nothing to do, Just to avoid the warning... */
+            }
+            server.stat_rejected_trusted_conn++;
+            connClose(conn);
+            return;
         }
-        server.stat_rejected_conn++;
-        connClose(conn);
-        return;
+    } else {
+        /* Non-trusted connections may not use the slots reserved for trusted
+         * connections, even if trusted clients aren't currently using them --
+         * otherwise a burst of normal traffic could starve out the admin/
+         * monitoring path this feature exists to protect. The reservation is
+         * clamped to leave at least one slot for normal clients, so an
+         * over-large trusted-maxclients can never lock everyone out. */
+        unsigned int reserved_for_trusted = server.trusted_maxclients;
+        if (reserved_for_trusted >= server.maxclients)
+            reserved_for_trusted = server.maxclients - 1;
+        unsigned int normal_maxclients = server.maxclients - reserved_for_trusted;
+
+        if (total_connected >= normal_maxclients) {
+            char *err;
+            if (server.cluster_enabled)
+                err = "-ERR max number of clients + cluster "
+                      "connections reached\r\n";
+            else
+                err = "-ERR max number of clients reached\r\n";
+
+            if (connWrite(conn, err, strlen(err)) == -1) {
+                /* Nothing to do, Just to avoid the warning... */
+            }
+            server.stat_rejected_conn++;
+            connClose(conn);
+            return;
+        }
     }
 
     /* Create connection and client */
@@ -1928,6 +2041,10 @@ void acceptCommonHandler(connection *conn, struct ClientFlags flags, char *ip) {
 
     /* Last chance to keep flags */
     if (flags.unix_socket) c->flag.unix_socket = 1;
+    if (is_trusted) {
+        c->flag.trusted = 1;
+        server.trusted_clients++;
+    }
 
     /* Initiate accept.
      *
@@ -2248,6 +2365,8 @@ int freeClient(client *c) {
         debugServerAssert(c->conn || c == server.cached_primary);
         server.stat_clients_type_memory[c->last_memory_type] -= c->last_memory_usage;
     }
+
+    if (c->flag.trusted) server.trusted_clients--;
 
     /* Unlink the client: this will close the socket, remove the I/O
      * handlers, and remove references of the client from different

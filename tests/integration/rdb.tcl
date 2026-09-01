@@ -1135,7 +1135,7 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
         createComplexDatasetForVerification r 1000
         
         # Start save with slow speed to keep it running during modifications
-        r config set rdb-key-save-delay 1000000
+        r config set rdb-key-save-delay 1000
         r config set bgsave-default-method forkless
         r bgsave        
         wait_for_condition 50 100 {
@@ -1144,8 +1144,10 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
             fail "bgsave didn't start"
         }
         
-        # Overwrite keys during save - all data types (pipelined to avoid blocking)
+        # Overwrite keys during save - all data types.
         set rd [valkey_deferring_client]
+        set outstanding 0
+        set saw_save_in_progress 0
         for {set i 0} {$i < 1000} {incr i} {
             $rd append before_$i "value_after_$i"
             $rd incr int_$i
@@ -1163,16 +1165,26 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
             $rd xadd stream_$i "*" D1 V2
             $rd xreadgroup GROUP group_$i consumer_after_$i COUNT 1 STREAMS stream_$i >
             $rd hsetex hashttl_$i EX 10000 FIELDS 1 HTTL1 a
+            # There is a chance that our client is blocked but we don't know it, because
+            # as a deferring client we never read replies.  If we are blocked we would
+            # keep sending commands forever, which accumulate on the server side and can
+            # overflow the buffers.  So stop periodically and consume replies - that is
+            # the mechanism that waits until we are unblocked.
+            incr outstanding 16
+            if {$outstanding >= 320} {
+                for {set j 0} {$j < $outstanding} {incr j} { $rd read }
+                set outstanding 0
+                if {[s rdb_bgsave_in_progress] == 1} { set saw_save_in_progress 1 }
+            }
         }
         
-        # Verify changes happened and save still in progress
+        # Verify changes happened while the save was running
         assert {[s rdb_changes_since_last_save] > 0}
-        assert_equal [s rdb_bgsave_in_progress] 1
+        assert_equal $saw_save_in_progress 1
         
         # Speed up save and wait for completion
         r config set rdb-key-save-delay 0
         waitForBgsave r
-        # Drain pipelined responses
         $rd close
         
         # Verify snapshot contains original keys

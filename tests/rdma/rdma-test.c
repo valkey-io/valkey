@@ -166,7 +166,7 @@ static int rdmaPostRecv(RdmaContext *ctx, struct rdma_cm_id *cm_id, valkeyRdmaCm
     recv_wr.next = NULL;
 
     ret = ibv_post_recv(cm_id->qp, &recv_wr, &bad_wr);
-    if (ret && ret != EAGAIN) {
+    if (ret) {
         rdmaFatalf("RDMA: post recv failed: %s (%d)", strerror(ret), ret);
         return -1;
     }

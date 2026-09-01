@@ -5098,3 +5098,56 @@ start_server {tags {"hashexpire"}} {
         r DEL myhash
     } {1}
 }
+
+start_server {tags {"hashexpire external:skip"}} {
+    # HGETEX changes field TTLs (and can delete a field via a past EXAT/PXAT),
+    # so its key spec requires both read and write permission on the key.
+    set r2 [valkey_client]
+
+    test {HGETEX under a read-only (%R~) ACL grant is denied} {
+        r DEL myhash
+        r HSET myhash f1 v1 f2 v2
+
+        r ACL SETUSER hgetex-ro on nopass %R~myhash* +@all
+        $r2 auth hgetex-ro password
+        assert_equal PONG [$r2 PING]
+
+        assert_equal "User hgetex-ro has no permissions to access the 'myhash' key" \
+            [r ACL DRYRUN hgetex-ro HGETEX myhash FIELDS 1 f1]
+
+        assert_error {*NOPERM*key*} {$r2 HGETEX myhash FIELDS 1 f1}
+        assert_error {*NOPERM*key*} {$r2 HGETEX myhash PERSIST FIELDS 1 f1}
+        assert_error {*NOPERM*key*} {$r2 HGETEX myhash EX 100 FIELDS 1 f1}
+        assert_error {*NOPERM*key*} {$r2 HGETEX myhash EXAT 1 FIELDS 1 f1}
+
+        assert_equal 2 [r HLEN myhash]
+        assert_equal v1 [r HGET myhash f1]
+        assert_equal -1 [r HTTL myhash FIELDS 1 f1]
+    }
+
+    test {HGETEX under a write-only (%W~) ACL grant is denied} {
+        r DEL myhash
+        r HSET myhash f1 v1
+
+        r ACL SETUSER hgetex-wo on nopass %W~myhash* +@all
+        $r2 auth hgetex-wo password
+        assert_equal PONG [$r2 PING]
+
+        assert_error {*NOPERM*key*} {$r2 HGETEX myhash EX 100 FIELDS 1 f1}
+    }
+
+    test {HGETEX with read+write (%RW~) ACL grant is permitted} {
+        r DEL myhash
+        r HSET myhash f1 v1 f2 v2
+
+        r ACL SETUSER hgetex-rw on nopass %RW~myhash* +@all
+        $r2 auth hgetex-rw password
+        assert_equal PONG [$r2 PING]
+
+        assert_equal v1 [$r2 HGETEX myhash FIELDS 1 f1]
+        assert_equal v1 [$r2 HGETEX myhash EX 1000 FIELDS 1 f1]
+        assert_morethan [r HTTL myhash FIELDS 1 f1] 0
+    }
+
+    $r2 close
+}

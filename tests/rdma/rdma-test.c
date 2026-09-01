@@ -729,7 +729,8 @@ static int valkeyRdmaCM(RdmaContext *ctx, int timeout) {
         case RDMA_CM_EVENT_DISCONNECTED:
         case RDMA_CM_EVENT_ADDR_CHANGE:
         default:
-            snprintf(errorstr, sizeof(errorstr), "RDMA: connect failed - %s", rdma_event_str(event->event));
+            snprintf(errorstr, sizeof(errorstr), "RDMA: connect failed - %s (status %d)",
+                     rdma_event_str(event->event), event->status);
             rdmaFatal(errorstr);
             ret = -1;
             break;

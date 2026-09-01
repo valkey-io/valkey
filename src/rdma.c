@@ -813,7 +813,9 @@ static int rdmaHandleConnect(aeEventLoop *el, char *err, struct rdma_cm_event *e
 
     ret = rdma_accept(cm_id, &conn_param);
     if (ret) {
-        serverRdmaError(err, "RDMA: accept failed");
+        int accept_errno = errno;
+        serverRdmaError(err, "RDMA: accept failed: %s (%d)",
+                        strerror(accept_errno), accept_errno);
         goto free_rdma;
     }
 

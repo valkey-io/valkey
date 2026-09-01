@@ -166,7 +166,7 @@ static int rdmaPostRecv(RdmaContext *ctx, struct rdma_cm_id *cm_id, valkeyRdmaCm
     recv_wr.next = NULL;
 
     ret = ibv_post_recv(cm_id->qp, &recv_wr, &bad_wr);
-    if (ret) {
+    if (ret && ret != EAGAIN) {
         rdmaFatalf("RDMA: post recv failed: %s (%d)", strerror(ret), ret);
         return -1;
     }
@@ -458,6 +458,7 @@ static ssize_t valkeyRdmaRead(RdmaContext *ctx, char *buf, size_t data_len) {
     long timed = 1000;
     long start = valkeyNowMs();
     uint32_t toread, remained;
+    int ret;
 
 copy:
     if (ctx->recv_offset < ctx->rx_offset) {
@@ -487,7 +488,13 @@ pollcq:
     pfd.fd = ctx->comp_channel->fd;
     pfd.events = POLLIN;
     pfd.revents = 0;
-    if (poll(&pfd, 1, 1000) < 0) {
+    ret = poll(&pfd, 1, 1000);
+    if (ret < 0) {
+        rdmaFatalf("RDMA: poll completion channel failed: %s (%d)", strerror(errno), errno);
+        return -1;
+    }
+    if (pfd.revents & (POLLERR | POLLHUP | POLLNVAL)) {
+        rdmaFatalf("RDMA: completion channel poll returned revents 0x%x", pfd.revents);
         return -1;
     }
 
@@ -550,6 +557,7 @@ static ssize_t valkeyRdmaWrite(RdmaContext *ctx, char *buf, size_t data_len) {
     long start = valkeyNowMs();
     uint32_t towrite, wrote = 0;
     size_t ret;
+    int poll_ret;
 
     /* try to pollcq to */
     goto pollcq;
@@ -558,7 +566,13 @@ waitcq:
     pfd.fd = ctx->comp_channel->fd;
     pfd.events = POLLIN;
     pfd.revents = 0;
-    if (poll(&pfd, 1, 1) < 0) {
+    poll_ret = poll(&pfd, 1, 1);
+    if (poll_ret < 0) {
+        rdmaFatalf("RDMA: poll completion channel failed: %s (%d)", strerror(errno), errno);
+        return -1;
+    }
+    if (pfd.revents & (POLLERR | POLLHUP | POLLNVAL)) {
+        rdmaFatalf("RDMA: completion channel poll returned revents 0x%x", pfd.revents);
         return -1;
     }
 
@@ -762,7 +776,7 @@ static int valkeyRdmaCM(RdmaContext *ctx, int timeout) {
 }
 
 static int valkeyRdmaWaitConn(RdmaContext *ctx, long timeout) {
-    int timed;
+    int ret, timed;
     struct pollfd pfd;
     long now = valkeyNowMs();
     long start = now;
@@ -773,7 +787,17 @@ static int valkeyRdmaWaitConn(RdmaContext *ctx, long timeout) {
         pfd.fd = ctx->cm_channel->fd;
         pfd.events = POLLIN;
         pfd.revents = 0;
-        if (poll(&pfd, 1, timed) < 0) {
+        ret = poll(&pfd, 1, timed);
+        if (ret < 0) {
+            rdmaFatalf("RDMA: poll CM channel failed: %s (%d)", strerror(errno), errno);
+            return -1;
+        }
+        if (ret == 0) {
+            rdmaFatalf("RDMA: poll CM channel timed out after %d ms", timed);
+            return -1;
+        }
+        if (pfd.revents & (POLLERR | POLLHUP | POLLNVAL)) {
+            rdmaFatalf("RDMA: CM channel poll returned revents 0x%x", pfd.revents);
             return -1;
         }
 
@@ -788,6 +812,7 @@ static int valkeyRdmaWaitConn(RdmaContext *ctx, long timeout) {
         now = valkeyNowMs();
     }
 
+    rdmaFatalf("RDMA: CM connection timed out after %ld ms", timeout);
     return -1;
 }
 

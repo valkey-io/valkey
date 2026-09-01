@@ -38,8 +38,8 @@ typedef struct streamIterator {
     int entry_flags;                     /* Flags of entry we are emitting. */
     int rev;                             /* True if iterating end to start (reverse). */
     int skip_tombstones;                 /* True if not emitting tombstone entries. */
-    uint64_t start_key[2];               /* Start key as 128 bit big endian. */
-    uint64_t end_key[2];                 /* End key as 128 bit big endian. */
+    streamID start_id;                   /* Start id for the range */
+    streamID end_id;                     /* End id for the range */
     raxIterator ri;                      /* Rax iterator. */
     unsigned char *lp;                   /* Current listpack. */
     unsigned char *lp_ele;               /* Current listpack cursor. */
@@ -140,6 +140,7 @@ streamConsumer *streamLookupConsumer(streamCG *cg, sds name);
 streamConsumer *streamCreateConsumer(streamCG *cg, sds name, robj *key, int dbid, int flags);
 streamCG *streamCreateCG(stream *s, char *name, size_t namelen, streamID *id, long long entries_read);
 streamNACK *streamCreateNACK(streamConsumer *consumer);
+void streamEncodeID(void *buf, streamID *id);
 void streamDecodeID(void *buf, streamID *id);
 int streamCompareID(streamID *a, streamID *b);
 void streamFreeNACK(streamNACK *na);
@@ -147,7 +148,7 @@ int streamIncrID(streamID *id);
 int streamDecrID(streamID *id);
 void streamPropagateConsumerCreation(client *c, robj *key, robj *groupname, sds consumername);
 robj *streamDup(robj *o);
-int streamValidateListpackIntegrity(unsigned char *lp, size_t size, int deep);
+int streamValidateListpackIntegrity(unsigned char *lp, size_t size, uint64_t *valid_count);
 int streamParseID(const robj *o, streamID *id);
 robj *createObjectFromStreamID(streamID *id);
 int streamAppendItem(stream *s, robj **argv, int64_t numfields, streamID *added_id, streamID *use_id, int seq_given);

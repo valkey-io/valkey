@@ -10,30 +10,42 @@ message(STATUS "CFLAGS: ${CMAKE_C_FLAGS}")
 get_valkey_server_linker_option(VALKEY_SERVER_LDFLAGS)
 list(APPEND SERVER_LIBS "fpconv")
 list(APPEND SERVER_LIBS "hdr_histogram")
+list(APPEND SERVER_LIBS "ffc")
+list(APPEND SERVER_LIBS "lz4")
 valkey_build_and_install_bin(valkey-server "${VALKEY_SERVER_SRCS}" "${VALKEY_SERVER_LDFLAGS}" "${SERVER_LIBS}"
                              "redis-server")
 add_dependencies(valkey-server generate_commands_def)
 add_dependencies(valkey-server generate_fmtargs_h)
 add_dependencies(valkey-server release_header)
 
-if (BUILD_LUA)
+if (NOT BUILD_LUA STREQUAL "no")
     message(STATUS "Build Lua scripting engine module")
+    if (BUILD_LUA STREQUAL "static")
+        add_compile_definitions(STATIC_LUA=1)
+        message(STATUS "Building LUA as a STATIC module")
+    else ()
+        add_compile_definitions(STATIC_LUA=0)
+        message(STATUS "Building LUA as a DYNAMIC module")
+    endif ()
     add_subdirectory(modules/lua)
-    add_dependencies(valkey-server valkeylua)
+    if (BUILD_LUA STREQUAL "static")
+        target_link_libraries(valkey-server PRIVATE $<LINK_LIBRARY:WHOLE_ARCHIVE,valkeylua>)
+    else ()
+        add_dependencies(valkey-server valkeylua)
+    endif ()
     target_compile_definitions(valkey-server PRIVATE LUA_ENABLED)
     if (UNIX AND NOT APPLE)
         target_compile_definitions(valkey-server PRIVATE LUA_LIB=libvalkeylua.so)
-        target_link_options(valkey-server PRIVATE -Wl,--disable-new-dtags)
     else ()
         target_compile_definitions(valkey-server PRIVATE LUA_LIB=libvalkeylua.dylib)
     endif ()
     set(VALKEY_INSTALL_RPATH "")
-    set_target_properties(valkey-server PROPERTIES
-        INSTALL_RPATH "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR};${CMAKE_LIBRARY_OUTPUT_DIRECTORY}"
-        INSTALL_RPATH_USE_LINK_PATH TRUE
-        BUILD_WITH_INSTALL_RPATH TRUE
-    )
-endif()
+    set_target_properties(
+        valkey-server
+        PROPERTIES INSTALL_RPATH "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR};${CMAKE_LIBRARY_OUTPUT_DIRECTORY}"
+                   INSTALL_RPATH_USE_LINK_PATH TRUE
+                   BUILD_WITH_INSTALL_RPATH TRUE)
+endif ()
 unset(BUILD_LUA CACHE)
 
 if (VALKEY_RELEASE_BUILD)
@@ -48,9 +60,8 @@ if (DEBUG_FORCE_DEFRAG)
 endif ()
 
 if (BUILD_SANITIZER)
-    # 'BUILD_SANITIZER' is defined in ValkeySetup module (based on user input)
-    # If defined, the variables 'VALKEY_SANITAIZER_CFLAGS' and 'VALKEY_SANITAIZER_LDFLAGS'
-    # are set with the link & compile flags required
+    # 'BUILD_SANITIZER' is defined in ValkeySetup module (based on user input) If defined, the variables
+    # 'VALKEY_SANITAIZER_CFLAGS' and 'VALKEY_SANITAIZER_LDFLAGS' are set with the link & compile flags required
     message(STATUS "Adding sanitizer flags for target valkey-server")
     target_compile_options(valkey-server PRIVATE ${VALKEY_SANITAIZER_CFLAGS})
     target_link_options(valkey-server PRIVATE ${VALKEY_SANITAIZER_LDFLAGS})
@@ -60,17 +71,21 @@ unset(BUILD_SANITIZER CACHE)
 # Target: valkey-cli
 list(APPEND CLI_LIBS "fpconv")
 list(APPEND CLI_LIBS "linenoise")
+list(APPEND CLI_LIBS "ffc")
 valkey_build_and_install_bin(valkey-cli "${VALKEY_CLI_SRCS}" "${VALKEY_SERVER_LDFLAGS}" "${CLI_LIBS}" "redis-cli")
 add_dependencies(valkey-cli generate_commands_def)
 add_dependencies(valkey-cli generate_fmtargs_h)
+add_dependencies(valkey-cli release_header)
 
 # Target: valkey-benchmark
 list(APPEND BENCH_LIBS "fpconv")
 list(APPEND BENCH_LIBS "hdr_histogram")
+list(APPEND BENCH_LIBS "ffc")
 valkey_build_and_install_bin(valkey-benchmark "${VALKEY_BENCHMARK_SRCS}" "${VALKEY_SERVER_LDFLAGS}" "${BENCH_LIBS}"
                              "redis-benchmark")
 add_dependencies(valkey-benchmark generate_commands_def)
 add_dependencies(valkey-benchmark generate_fmtargs_h)
+add_dependencies(valkey-benchmark release_header)
 
 # Targets: valkey-sentinel, valkey-check-aof and valkey-check-rdb are just symbolic links
 valkey_create_symlink("valkey-server" "valkey-sentinel")
@@ -83,7 +98,7 @@ if (BUILD_RDMA_MODULE)
     message(STATUS "Building RDMA module")
     add_library(${MODULE_NAME} SHARED "${VALKEY_RDMA_MODULE_SRCS}")
     target_compile_options(${MODULE_NAME} PRIVATE -DBUILD_RDMA_MODULE=2 -DUSE_RDMA=1)
-    target_link_libraries(${MODULE_NAME} "${RDMA_LIBS}")
+    target_link_libraries(${MODULE_NAME} PRIVATE "${RDMA_LIBS}")
     # remove the "lib" prefix from the module
     set_target_properties(${MODULE_NAME} PROPERTIES PREFIX "")
     valkey_install_bin(${MODULE_NAME})
@@ -115,10 +130,10 @@ endif ()
 
 # Friendly hint like the Makefile one
 file(RELATIVE_PATH _CMAKE_DIR_RELATIVE_PATH "${CMAKE_SOURCE_DIR}" "${CMAKE_BINARY_DIR}")
-add_custom_target(hint ALL
+add_custom_target(
+    hint ALL
     DEPENDS valkey-server valkey-cli valkey-benchmark
     COMMAND ${CMAKE_COMMAND} -E echo ""
     COMMAND ${CMAKE_COMMAND} -E echo "Hint: It is a good idea to run tests with your CMake-built binaries \\;\\)"
     COMMAND ${CMAKE_COMMAND} -E echo "      ./${_CMAKE_DIR_RELATIVE_PATH}/runtest"
-    COMMAND ${CMAKE_COMMAND} -E echo ""
-)
+    COMMAND ${CMAKE_COMMAND} -E echo "")

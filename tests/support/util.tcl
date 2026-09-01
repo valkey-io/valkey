@@ -22,6 +22,31 @@ proc randstring {min max {type binary}} {
     return $output
 }
 
+# Read and write files without applying Tcl text translations. These helpers
+# are shared by persistence tests that inspect or mutate serialized data.
+proc read_binary_file_prefix {path count} {
+    set fd [open $path r]
+    fconfigure $fd -translation binary
+    set prefix [read $fd $count]
+    close $fd
+    return $prefix
+}
+
+proc read_binary_file {path} {
+    set fd [open $path r]
+    fconfigure $fd -translation binary
+    set data [read $fd]
+    close $fd
+    return $data
+}
+
+proc write_binary_file {path data} {
+    set fd [open $path w]
+    fconfigure $fd -translation binary
+    puts -nonewline $fd $data
+    close $fd
+}
+
 # Useful for some test
 proc zlistAlikeSort {a b} {
     if {[lindex $a 0] > [lindex $b 0]} {return 1}
@@ -201,7 +226,7 @@ proc verify_log_message {srv_idx pattern from_line} {
     incr from_line
     set result [exec tail -n +$from_line < [srv $srv_idx stdout]]
     if {![string match $pattern $result]} {
-        fail "expected pattern found in log file: $pattern, but instead got: $result"
+        fail "expected pattern found in srv $srv_idx log file: $pattern, but instead got: $result"
     }
 }
 
@@ -210,7 +235,7 @@ proc verify_no_log_message {srv_idx pattern from_line} {
     incr from_line
     set result [exec tail -n +$from_line < [srv $srv_idx stdout]]
     if {[string match $pattern $result]} {
-        fail "expected message found in log file: $pattern"
+        fail "expected pattern not found in srv $srv_idx log file: $pattern, but instead got: $result"
     }
 }
 
@@ -712,14 +737,19 @@ proc process_is_paused pid {
     return [string match {*T*} [lindex [exec ps j $pid] 16]]
 }
 
-proc pause_process pid {
-    exec kill -SIGSTOP $pid
+# Wait until the process enters a paused state.
+proc wait_process_paused pid {
     wait_for_condition 50 100 {
-        [string match {*T*} [lindex [exec ps j $pid] 16]]
+        [process_is_paused $pid]
     } else {
         puts [exec ps j $pid]
         fail "process didn't stop"
     }
+}
+
+proc pause_process pid {
+    exec kill -SIGSTOP $pid
+    wait_process_paused $pid
 }
 
 proc resume_process pid {
@@ -1223,7 +1253,13 @@ proc system_backtrace_supported {} {
         return 0
     }
 
-    # libmusl does not support backtrace. Also return 0 on
+    # Check if built with USE_LIBBACKTRACE (for musl/Alpine)
+    # Look for libbacktrace function symbol in the binary
+    if {[catch {exec grep -a "initLibbacktraceFrameState" $::VALKEY_SERVER_BIN} buildinfo] == 0} {
+        return 1
+    }
+
+    # libmusl does not support backtrace natively. Also return 0 on
     # static binaries (ldd exit code 1) where we can't detect libmusl
     catch {
         set ldd [exec ldd $::VALKEY_SERVER_BIN]
@@ -1298,4 +1334,88 @@ proc version_greater_or_equal {a b} {
     } else {
         return 1
     }
+}
+
+proc memcmp {string1 string2} {
+    set len1 [string length $string1]
+    set len2 [string length $string2]
+    set minLen [expr min($len1, $len2)]
+
+    for {set i 0} {$i < $minLen} {incr i} {
+        set char1 [scan [string index $string1 $i] %c]
+        set char2 [scan [string index $string2 $i] %c]
+        if {$char1 != $char2} {
+            return [expr {$char1 - $char2}]
+        }
+    }
+    return [expr {$len1 - $len2}]
+}
+
+# Execute body with a temporary config override, restoring the original
+# value even if the body fails.
+proc with_config {config value body} {
+    set old [lindex [r config get $config] 1]
+    r config set $config $value
+    catch {uplevel 1 $body} result opts
+    r config set $config $old
+    dict incr opts -level
+    return -options $opts $result
+}
+
+# Execute body and always run cleanup, preserving the body's completion status.
+proc with_cleanup {body cleanup} {
+    catch {uplevel 1 $body} result opts
+    uplevel 1 $cleanup
+    dict incr opts -level
+    return -options $opts $result
+}
+
+# Escape a string for use as a JSON string value.
+#
+# Beyond the characters with a short escape, every C0 control character has to
+# be escaped: JSON forbids them raw, and one raw byte makes the whole file
+# unparsable, taking every failure in the run with it. Failure messages carry
+# server output and memory-tool reports, which do contain control bytes, and an
+# incomplete ANSI sequence survives colour stripping.
+proc json_escape_string {s} {
+    set s [string map {
+        "\\" "\\\\" "\"" "\\\"" "\n" "\\n" "\r" "\\r"
+        "\t" "\\t" "\b" "\\b" "\f" "\\f"
+    } $s]
+    set out ""
+    foreach ch [split $s ""] {
+        scan $ch %c code
+        if {$code < 0x20} {
+            append out [format {\u%04x} $code]
+        } else {
+            append out $ch
+        }
+    }
+    return $out
+}
+
+proc read_file {path} {
+    set fd [open $path r]
+    set data [read $fd]
+    close $fd
+    return $data
+}
+
+proc write_file {path content} {
+    set fd [open $path w]
+    puts $fd $content
+    close $fd
+}
+
+proc file_has_pattern {path pattern} {
+    if {![file exists $path]} {
+        return 0
+    }
+    return [regexp $pattern [read_file $path]]
+}
+
+proc cluster_nodes_conf_path {id} {
+    set dir [lindex [R $id config get dir] 1]
+    set conf [lindex [R $id config get cluster-config-file] 1]
+    return [file join $dir $conf]
 }

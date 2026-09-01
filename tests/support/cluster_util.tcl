@@ -126,7 +126,7 @@ proc cluster_size_consistent {cluster_size} {
 
 # Wait for cluster configuration to propagate and be consistent across nodes.
 proc wait_for_cluster_propagation {} {
-    wait_for_condition 1000 50 {
+    wait_for_condition 1200 50 {
         [cluster_config_consistent] eq 1
     } else {
         for {set j 0} {$j < [llength $::servers]} {incr j} {
@@ -148,6 +148,7 @@ proc wait_for_cluster_size {cluster_size} {
 # Check that cluster nodes agree about "state", or raise an error.
 proc wait_for_cluster_state {state} {
     for {set j 0} {$j < [llength $::servers]} {incr j} {
+        if {![process_is_alive [srv -$j pid]]} continue
         if {[process_is_paused [srv -$j pid]]} continue
         wait_for_condition 1000 50 {
             [CI $j cluster_state] eq $state
@@ -209,7 +210,7 @@ proc cluster_allocate_replicas {masters replicas} {
 
 # Setup method to be executed to configure the cluster before the
 # tests run.
-proc cluster_setup {masters replicas node_count slot_allocator replica_allocator code options} {
+proc cluster_setup {masters replicas node_count slot_allocator replica_allocator options} {
     # Make it easier to understand how a particular server interacts
     # with other nodes when reading the server logs by assigning human
     # nodenames R0, R1, R2 etc.
@@ -260,8 +261,6 @@ proc cluster_setup {masters replicas node_count slot_allocator replica_allocator
 
     wait_for_cluster_propagation
     wait_for_cluster_state "ok"
-
-    uplevel 1 $code
 }
 
 # Start a cluster with the given number of masters and replicas. Replicas
@@ -270,12 +269,14 @@ proc start_cluster {masters replicas options code {slot_allocator continuous_slo
     set node_count [expr $masters + $replicas]
 
     # Set the final code to be the tests + cluster setup
-    set code [list cluster_setup $masters $replicas $node_count $slot_allocator $replica_allocator $code $options]
+    set setup_code [list cluster_setup $masters $replicas $node_count $slot_allocator $replica_allocator $options]
+    set teardown_code {}
+    set code [list test_fixture "start_cluster" $setup_code $teardown_code $code]
 
     # Configure the starting of multiple servers. Set cluster node timeout
     # aggressively since many tests depend on ping/pong messages.
 
-    set cluster_options [list overrides [list cluster-enabled yes cluster-ping-interval 100 cluster-node-timeout 3000 cluster-databases 16 cluster-slot-stats-enabled yes]]
+    set cluster_options [list overrides [list cluster-enabled yes cluster-ping-interval 100 cluster-node-timeout 3000 cluster-databases 16 cluster-slot-stats-enabled yes latency-monitor-threshold 1]]
     set options [concat $cluster_options $options]
 
     # Cluster mode only supports a single database, so before executing the tests
@@ -289,6 +290,20 @@ proc start_cluster {masters replicas options code {slot_allocator continuous_slo
 # Test node for flag.
 proc cluster_has_flag {node flag} {
     expr {[lsearch -exact [dict get $node flags] $flag] != -1}
+}
+
+# Returns 1 only when every server instance in `srv_idxs` sees every
+# node id in `node_ids` carrying `flag` in its CLUSTER NODES output.
+proc cluster_all_see_flag {srv_idxs node_ids flag} {
+    foreach idx $srv_idxs {
+        foreach id $node_ids {
+            set node [cluster_get_node_by_id $idx $id]
+            if {![cluster_has_flag $node $flag]} {
+                return 0
+            }
+        }
+    }
+    return 1
 }
 
 # Returns the parsed "myself" node entry as a dictionary.

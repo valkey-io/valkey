@@ -1,11 +1,12 @@
 /*
  * Copyright Valkey Contributors.
  * All rights reserved.
- * SPDX-License-Identifier: BSD 3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause
  */
 
 #include "cluster_migrateslots.h"
 #include "bio.h"
+#include "io_threads.h"
 #include "module.h"
 #include "functions.h"
 
@@ -390,16 +391,25 @@ int clusterRDBSaveSlotImports(rio *rdb, int rdbver) {
 
 /* Load a single slot import from the RDB. */
 int clusterRDBLoadSlotImport(rio *rdb) {
-    robj *job_name;
+    robj *job_name = NULL;
     list *slot_ranges = createSlotRangeList();
     uint64_t num_slot_ranges;
     if ((job_name = rdbLoadStringObject(rdb)) == NULL) goto err;
+    if (sdslen(objectGetVal(job_name)) != CLUSTER_NAMELEN) {
+        serverLog(LL_WARNING, "Invalid slot import job name length in RDB");
+        goto err;
+    }
     if ((num_slot_ranges = rdbLoadLen(rdb, NULL)) == RDB_LENERR) goto err;
     for (uint64_t i = 0; i < num_slot_ranges; i++) {
         uint64_t start_slot;
         uint64_t end_slot;
         if ((start_slot = rdbLoadLen(rdb, NULL)) == RDB_LENERR) goto err;
         if ((end_slot = rdbLoadLen(rdb, NULL)) == RDB_LENERR) goto err;
+        if (start_slot >= CLUSTER_SLOTS || end_slot >= CLUSTER_SLOTS || start_slot > end_slot) {
+            serverLog(LL_WARNING, "Invalid slot import range in RDB: start=%llu end=%llu",
+                      (unsigned long long)start_slot, (unsigned long long)end_slot);
+            goto err;
+        }
 
         slotRange *slot_range = zmalloc(sizeof(slotRange));
         slot_range->start_slot = start_slot;
@@ -764,7 +774,6 @@ void clusterCommandSyncSlotsFinish(client *c) {
         return;
     }
 
-    addReply(c, shared.ok);
     slotMigrationJob *job = clusterLookupMigrationJob(name);
     if (!job) {
         addReplyError(c, "No such slot migration job");
@@ -781,6 +790,7 @@ void clusterCommandSyncSlotsFinish(client *c) {
         return;
     }
 
+    addReply(c, shared.ok);
     forceCommandPropagation(c, PROPAGATE_REPL | PROPAGATE_AOF);
     finishSlotMigrationJob(job, target_state, message);
 }
@@ -835,6 +845,9 @@ slotMigrationJob *createSlotImportJob(client *c,
     if (!job->client->querybuf) {
         job->client->querybuf = generateSyncSlotsEstablishCommand(job);
         job->client->qb_pos = sdslen(job->client->querybuf);
+        /* The backfilled ESTABLISH command is already applied, so qb_applied
+         * must match qb_pos for commandProcessed() to advance reploff. */
+        job->client->qb_applied = job->client->qb_pos;
     }
     job->client->repl_data->read_reploff = sdslen(job->client->querybuf);
 
@@ -939,9 +952,10 @@ void clusterUpdateSlotImportsOnOwnershipChange(void) {
             finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_FAILED,
                                    "Slots were unexpectedly assigned to myself "
                                    "during import");
+        } else {
+            finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_FAILED,
+                                   "Slots are no longer owned by source node");
         }
-        finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_FAILED,
-                               "Slots are no longer owned by source node");
     }
 }
 
@@ -1303,6 +1317,13 @@ void slotExportConnectHandler(connection *conn) {
  * the job as private data. */
 int connectSlotExportJob(slotMigrationJob *job) {
     clusterNode *n = clusterLookupNode(job->target_node_name, CLUSTER_NAMELEN);
+    if (n == NULL) {
+        serverLog(LL_WARNING,
+                  "Slot migration %s: target node %.40s not found in cluster, "
+                  "aborting connection attempt.",
+                  job->description, job->target_node_name);
+        return C_ERR;
+    }
     int port = getNodeDefaultReplicationPort(n);
     serverLog(LL_NOTICE, "Connecting slot migration %s (ip: %s, port %d)",
               job->description,
@@ -1448,8 +1469,8 @@ int slotExportTryDoPause(slotMigrationJob *job) {
         return C_ERR;
     }
     serverLog(LL_NOTICE,
-              "Pausing writes to allow slot migration %s to finalize failover.",
-              job->description);
+              "Pausing writes (remaining_repl_size is %lld) to allow slot migration %s to finalize failover.",
+              job->client->reply_bytes, job->description);
     job->mf_end = mstime() + server.cluster_mf_timeout * CLUSTER_MF_PAUSE_MULT;
     pauseActions(PAUSE_DURING_SLOT_MIGRATION, job->mf_end,
                  PAUSE_ACTIONS_CLIENT_WRITE_SET);
@@ -1575,6 +1596,15 @@ int childSnapshotForSyncSlot(rio *aof, slotMigrationJob *job) {
 void killSlotMigrationChild(void) {
     /* No slot migration child? return. */
     if (server.child_type != CHILD_TYPE_SLOT_MIGRATION) return;
+
+    /* If we already closed the exit pipe, the child is already exiting.
+     * Sending SIGUSR1 now might cause a race condition/deadlock in the child,
+     * especially when compiled with coverage. */
+    if (server.slot_migration_child_exit_pipe == -1) {
+        serverLog(LL_NOTICE, "Slot migration child %ld is already exiting, not killing.", (long)server.child_pid);
+        return;
+    }
+
     serverLog(LL_NOTICE, "Killing running slot migration child: %ld", (long)server.child_pid);
 
     /* Because we are not using here waitpid (like we have in killAppendOnlyChild
@@ -1879,6 +1909,14 @@ slotMigrationJob *createSlotExportJob(clusterNode *target_node,
  * success. If there is an error, fail the migration with the error message. */
 void slotMigrationJobReadEstablishResponse(connection *conn) {
     client *c = (client *)connGetPrivateData(conn);
+
+    /* Don't read while an IO thread may be concurrently writing on this
+     * connection (e.g. flushing the ESTABLISH command). Concurrent read and
+     * write on the same connection is not safe with TLS. Events are
+     * level-triggered, so this handler will fire again once the write is
+     * done. Matches the guard in readQueryFromClient(). */
+    if (clientHasPendingIO(c)) return;
+
     slotMigrationJob *job = c->slot_migration_job;
     if (c->flag.close_asap || !isSlotMigrationJobInProgress(job)) {
         return;
@@ -1995,10 +2033,11 @@ void proceedWithSlotMigration(slotMigrationJob *job) {
                 status = proceedWithSlotExportJobConnecting(job, &completed);
             }
             if (status == C_ERR) {
+                const char *conn_err = job->conn ? connGetLastError(job->conn) : "target node not found";
                 sds status_msg =
                     sdscatfmt(sdsempty(),
                               "Unable to connect to target node: %s",
-                              connGetLastError(job->conn));
+                              conn_err);
                 finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_FAILED,
                                        status_msg);
                 sdsfree(status_msg);
@@ -2042,7 +2081,9 @@ void proceedWithSlotMigration(slotMigrationJob *job) {
              * resulting in premature flush of the output buffer and data
              * consistency issues. To prevent this, we defer snapshot until
              * there are no pending writes. */
-            if (hasActiveChildProcess() || job->client->flag.pending_write) {
+            if (hasActiveChildProcess() || job->client->flag.pending_write ||
+                job->client->io_write_state != CLIENT_IDLE ||
+                job->client->io_read_state != CLIENT_IDLE) {
                 run_with_period(5000) {
                     serverLog(LL_NOTICE,
                               "Slot migration %s waiting before snapshotting "
@@ -2050,7 +2091,9 @@ void proceedWithSlotMigration(slotMigrationJob *job) {
                               job->description,
                               hasActiveChildProcess()
                                   ? "active child process"
-                                  : "pending writes in output buffer");
+                                  : (job->client->flag.pending_write
+                                         ? "pending writes in output buffer"
+                                         : "pending IO operations"));
                 }
                 return;
             }
@@ -2145,6 +2188,7 @@ void resetSlotMigrationJob(slotMigrationJob *job) {
     /* Only one of client or conn should be set. */
     serverAssert(!job->client || !job->conn);
     if (job->client) {
+        job->client->slot_migration_job = NULL;
         freeClientAsync(job->client);
         job->client = NULL;
     } else if (job->conn) {

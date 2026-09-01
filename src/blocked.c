@@ -629,14 +629,24 @@ static void handleClientsBlockedOnKey(readyList *rl) {
     if (de) {
         list *clients = dictGetVal(de);
         listNode *ln;
-        listIter li;
-        listRewind(clients, &li);
-
+        client *receiver;
+        long count = listLength(clients);
         /* Avoid processing more than the initial count so that we're not stuck
          * in an endless loop in case the reprocessing of the command blocks again. */
-        long count = listLength(clients);
-        while ((ln = listNext(&li)) && count--) {
-            client *receiver = listNodeValue(ln);
+        while (count-- > 0) {
+            /* Re-resolve the entry each round: serving a client may free this
+             * whole blocking_keys entry or re-create it, so a saved entry would
+             * dangle. */
+            de = dictFind(rl->db->blocking_keys, rl->key);
+            if (de == NULL) break;
+            clients = dictGetVal(de);
+
+            /* Process the head, then rotate it to the tail, so we can fairly
+             * iterate all receivers step by step without a dangling iterator. */
+            ln = listFirst(clients);
+            receiver = listNodeValue(ln);
+            listRotateHeadToTail(clients);
+
             robj *o = lookupKeyReadWithFlags(rl->db, rl->key, LOOKUP_NOEFFECTS);
             /* 1. In case new key was added/touched we need to verify it satisfy the
              *    blocked type, since we might process the wrong key type.
@@ -645,7 +655,7 @@ static void handleClientsBlockedOnKey(readyList *rl) {
              *    module is trying to accomplish right now.
              * 3. In case of XREADGROUP call we will want to unblock on any change in object type
              *    or in case the key was deleted, since the group is no longer valid. */
-            if ((o != NULL && (receiver->bstate->btype == getBlockedTypeByType(o->type))) ||
+            if ((o != NULL && (receiver->bstate->btype == getBlockedTypeByType(objectGetType(o)))) ||
                 (o != NULL && (receiver->bstate->btype == BLOCKED_MODULE)) || (receiver->bstate->unblock_on_nokey)) {
                 if (receiver->bstate->btype != BLOCKED_MODULE)
                     unblockClientOnKey(receiver, rl->key);
@@ -657,7 +667,7 @@ static void handleClientsBlockedOnKey(readyList *rl) {
 }
 
 /* block a client for replica acknowledgement */
-void blockClientForReplicaAck(client *c, mstime_t timeout, long long offset, long numreplicas, int numlocal) {
+void blockClientForReplicaAck(client *c, mstime_t timeout, long long offset, int numreplicas, int numlocal) {
     initClientBlockingState(c);
     c->bstate->timeout = timeout;
     c->bstate->reploffset = offset;
@@ -724,7 +734,13 @@ static void unblockClientOnKey(client *c, robj *key) {
         client *old_client = server.current_client;
         server.current_client = c;
         enterExecutionUnit(1, 0);
-        processCommandAndResetClient(c);
+        if (processCommandAndResetClient(c) == C_ERR) {
+            /* Client was freed during command processing, exit immediately */
+            exitExecutionUnit();
+            server.current_client = old_client;
+            return;
+        }
+
         if (!c->flag.blocked) {
             if (c->flag.module) {
                 moduleCallCommandUnblockedHandler(c);

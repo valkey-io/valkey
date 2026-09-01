@@ -35,8 +35,7 @@
 #include "cluster.h"
 
 #include "valkey_strtod.h"
-
-zskiplistNode *zslGetElementByRank(zskiplist *zsl, unsigned long rank);
+#include "ordered_index.h"
 
 serverSortOperation *createSortOperation(int type, robj *pattern) {
     serverSortOperation *so = zmalloc(sizeof(*so));
@@ -81,7 +80,7 @@ robj *lookupKeyByPattern(serverDb *db, robj *pattern, robj *subst) {
     }
 
     /* The substitution object may be specially encoded. If so we create
-     * a decoded object on the fly. Otherwise getDecodedObject will just
+     * a decoded object on the fly. Otherwise, getDecodedObject will just
      * increment the ref count, that we'll decrement later. */
     subst = getDecodedObject(subst);
     ssub = objectGetVal(subst);
@@ -118,13 +117,13 @@ robj *lookupKeyByPattern(serverDb *db, robj *pattern, robj *subst) {
     if (o == NULL) goto noobj;
 
     if (fieldobj) {
-        if (o->type != OBJ_HASH) goto noobj;
+        if (objectGetType(o) != OBJ_HASH) goto noobj;
 
         /* Retrieve value from hash by the field name. The returned object
          * is a new object with refcount already incremented. */
         o = hashTypeGetValueObject(o, objectGetVal(fieldobj));
     } else {
-        if (o->type != OBJ_STRING) goto noobj;
+        if (objectGetType(o) != OBJ_STRING) goto noobj;
 
         /* Every object that this function returns needs to have its refcount
          * increased. sortCommand decreases it again. */
@@ -246,7 +245,7 @@ void sortCommandGeneric(client *c, int readonly) {
                  * unless we can make sure the keys formed by the pattern are in the same slot
                  * as the key to sort. */
                 if (server.cluster_enabled &&
-                    patternHashSlot(objectGetVal(sortby), sdslen(objectGetVal(sortby))) != getKeySlot(objectGetVal(c->argv[1]))) {
+                    patternHashSlot(objectGetVal(sortby), sdslen(objectGetVal(sortby))) != getCachedKeySlot(objectGetVal(c->argv[1]))) {
                     addReplyError(c, "BY option of SORT denied in Cluster mode when "
                                      "keys formed by the pattern may be in different slots.");
                     syntax_error++;
@@ -267,7 +266,7 @@ void sortCommandGeneric(client *c, int readonly) {
              * as the key to sort. */
             if (server.cluster_enabled &&
                 !isReturnSubstPattern(objectGetVal(c->argv[j + 1])) &&
-                patternHashSlot(objectGetVal(c->argv[j + 1]), sdslen(objectGetVal(c->argv[j + 1]))) != getKeySlot(objectGetVal(c->argv[1]))) {
+                patternHashSlot(objectGetVal(c->argv[j + 1]), sdslen(objectGetVal(c->argv[j + 1]))) != getCachedKeySlot(objectGetVal(c->argv[1]))) {
                 addReplyError(c, "GET option of SORT denied in Cluster mode when "
                                  "keys formed by the pattern may be in different slots.");
                 syntax_error++;
@@ -325,7 +324,7 @@ void sortCommandGeneric(client *c, int readonly) {
     }
 
     /* Destructively convert encoded sorted sets for SORT. */
-    if (sortval->type == OBJ_ZSET) zsetConvert(sortval, OBJ_ENCODING_SKIPLIST);
+    if (sortval->type == OBJ_ZSET) zsetConvert(sortval, OBJ_ENCODING_BTREE);
 
     /* Obtain the length of the object to sort. */
     switch (sortval->type) {
@@ -417,31 +416,33 @@ void sortCommandGeneric(client *c, int readonly) {
          * way, just getting the required range, as an optimization. */
 
         zset *zs = objectGetVal(sortval);
-        zskiplist *zsl = zs->zsl;
-        zskiplistNode *ln;
-        sds sdsele;
+        OrderedIndexIterator iter;
+        orderedIndexInitIterator(&iter, zs->oi);
+        OrderedIndexItem *ln;
         int rangelen = vectorlen;
 
         /* Check if starting point is trivial, before doing log(N) lookup. */
         if (desc) {
             long zsetlen = hashtableSize(((zset *)objectGetVal(sortval))->ht);
-
-            ln = zslGetTail(zsl);
-            if (start > 0) ln = zslGetElementByRank(zsl, zsetlen - start);
+            orderedIndexSeekToIndex(&iter, zsetlen - start);
+            ln = orderedIndexPrev(&iter);
         } else {
-            zskiplistNode *zheader = zslGetHeader(zsl);
-            ln = zheader->level[0].forward;
-            if (start > 0) ln = zslGetElementByRank(zsl, start + 1);
+            if (start > 0) {
+                orderedIndexSeekToIndex(&iter, start);
+            }
+            ln = orderedIndexNext(&iter);
         }
 
         while (rangelen--) {
             serverAssertWithInfo(c, sortval, ln != NULL);
-            sdsele = zslGetNodeElement(ln);
-            vector[j].obj = createStringObject(sdsele, sdslen(sdsele));
+            const char *ele;
+            size_t ele_len;
+            orderedIndexItemGetElement(ln, &ele, &ele_len);
+            vector[j].obj = createStringObject(ele, ele_len);
             vector[j].u.score = 0;
             vector[j].u.cmpobj = NULL;
             j++;
-            ln = desc ? ln->backward : ln->level[0].forward;
+            ln = desc ? orderedIndexPrev(&iter) : orderedIndexNext(&iter);
         }
         /* Fix start/end: output code is not aware of this optimization. */
         end -= start;
@@ -452,9 +453,10 @@ void sortCommandGeneric(client *c, int readonly) {
         hashtableInitIterator(&iter, ht, 0);
         void *next;
         while (hashtableNext(&iter, &next)) {
-            zskiplistNode *node = next;
-            sds sdsele = zslGetNodeElement(node);
-            vector[j].obj = createStringObject(sdsele, sdslen(sdsele));
+            const char *ele;
+            size_t ele_len;
+            orderedIndexItemGetElement((const OrderedIndexItem *)next, &ele, &ele_len);
+            vector[j].obj = createStringObject(ele, ele_len);
             vector[j].u.score = 0;
             vector[j].u.cmpobj = NULL;
             j++;
@@ -484,7 +486,7 @@ void sortCommandGeneric(client *c, int readonly) {
                 if (sdsEncodedObject(byval)) {
                     char *eptr;
                     errno = 0;
-                    vector[j].u.score = valkey_strtod(objectGetVal(byval), &eptr);
+                    vector[j].u.score = valkey_strtod_sds(objectGetVal(byval), &eptr);
                     if (eptr[0] != '\0' || errno == ERANGE || errno == EINVAL || isnan(vector[j].u.score)) {
                         int_conversion_error = 1;
                     }

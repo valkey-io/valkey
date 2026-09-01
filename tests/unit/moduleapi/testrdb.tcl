@@ -225,6 +225,12 @@ tags "modules" {
                     $replica debug populate 200 slave 10
                     $master debug populate 1000 master 100000
                     $master config set rdbcompression no
+                    
+                    if {$testType eq "Aborted"} {
+                        # Set master with a slow rdb generation, so that we can easily intercept loading
+                        # 10ms per key, with 1000 keys is 10 seconds
+                        $master config set rdb-key-save-delay 10000
+                    }
 
                     # Force the replica to try another full sync (this time it will have matching master replid)
                     $master multi
@@ -238,10 +244,6 @@ tags "modules" {
 
                     switch $testType {
                         "Aborted" {
-                            # Set master with a slow rdb generation, so that we can easily intercept loading
-                            # 10ms per key, with 1000 keys is 10 seconds
-                            $master config set rdb-key-save-delay 10000
-
                             test {Diskless load swapdb RedisModuleEvent_ReplAsyncLoad handling: during loading, can keep module variable same as before} {
                                 # Wait for the replica to start reading the rdb and module for acknowledgement
                                 # We wanna abort only after the temp db was populated by REDISMODULE_AUX_BEFORE_RDB

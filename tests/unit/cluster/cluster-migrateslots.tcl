@@ -46,6 +46,18 @@ proc get_migration_by_name {node_idx name} {
     return ""
 }
 
+proc wait_for_migration_registered {node_idx jobname} {
+    # A job in a terminal state stops guarding its slots against a competing
+    # migration, so require the job to be registered and still live.
+    wait_for_condition 100 100 {
+        [get_migration_by_name $node_idx $jobname] ne "" &&
+        [dict get [get_migration_by_name $node_idx $jobname] state] ni {failed cancelled success}
+    } else {
+        set curr_state [get_migration_by_name $node_idx $jobname]
+        fail "Migration $jobname was not registered and live on node $node_idx within 10000 ms (currently $curr_state)"
+    }
+}
+
 proc wait_for_migration_field {node_idx jobname field value} {
     wait_for_condition 100 100 {
         [get_migration_by_name $node_idx $jobname] ne "" && [dict get [get_migration_by_name $node_idx $jobname] $field] eq $value
@@ -64,13 +76,13 @@ proc wait_for_countkeysinslot {node_idx slot value} {
     }
 }
 
-proc wait_for_migration {node_idx slot} {
+proc wait_for_migration {node_idx slot {maxtries 100}} {
     set target_id [R $node_idx CLUSTER MYID]
-    wait_for_condition 100 100 {
+    wait_for_condition $maxtries 100 {
         [is_slot_migrated $node_idx $slot]
     } else {
         set nodes [get_cluster_nodes $node_idx]
-        fail "Cluster node $target_id did not get slot $slot within 10000 ms (current $nodes)"
+        fail "Cluster node $target_id did not get slot $slot within [expr {$maxtries * 100}] ms (current $nodes)"
     }
     wait_for_cluster_propagation
 }
@@ -173,7 +185,7 @@ proc do_node_restart {idx} {
 }
 
 # Disable replica migration to prevent empty nodes from joining other shards.
-start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {cluster-allow-replica-migration no cluster-node-timeout 15000 cluster-databases 16}} {
+start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides {cluster-allow-replica-migration no cluster-node-timeout 15000 cluster-databases 16}} {
 
     set node0_id [R 0 CLUSTER MYID]
     set node1_id [R 1 CLUSTER MYID]
@@ -1533,11 +1545,15 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {cluste
             # Unknown field
             assert_error "*syntax error*" {R 0 CLUSTER SYNCSLOTS ESTABLISH SOURCE $node2_id NAME $fake_jobname SLOTSRANGE 16383 16383 BAD_FIELD bad_value}
 
-            # Already importing
+            # Already importing. The slot is rejected as soon as the import job
+            # is registered on the target, so only wait for that. Waiting for a
+            # later state such as waiting-for-paused would make this test depend
+            # on the source finishing its snapshot, which can take much longer
+            # than the wait budget on instrumented builds.
             set_debug_prevent_pause 1
             assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id]
             set jobname [get_job_name 2 16383]
-            wait_for_migration_field 0 $jobname state waiting-for-paused
+            wait_for_migration_registered 0 $jobname
             assert_error "*Slot is already being imported on the target by a different migration*" {R 0 CLUSTER SYNCSLOTS ESTABLISH SOURCE $node2_id NAME $fake_jobname SLOTSRANGE 16383 16383}
             assert_match "OK" [R 2 CLUSTER CANCELSLOTMIGRATIONS]
             wait_for_migration_field 0 $jobname state failed
@@ -1943,36 +1959,54 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {cluste
 
     test "Migration not cancelled when snapshot takes more time than repl-timeout" {
         assert_does_not_resync {
+            # The target must not kill the import link while the source's
+            # snapshot is quiet for longer than repl-timeout (the source
+            # cannot send ACKs while its child is snapshotting).
             R 2 CONFIG SET repl-timeout 2
 
-            # Load keys before the snapshot to target a snapshot time > 2sec
-            # 50 * 100ms = 5 sec
-            R 2 CONFIG SET rdb-key-save-delay 100000
+            # Load keys before the snapshot to target a snapshot time > 2sec.
+            # 50 * 100ms = 5 sec. The delay must be on node 0: it is the
+            # source of this migration and runs the snapshot.
+            R 0 CONFIG SET rdb-key-save-delay 100000
             populate 50 "$0_slot_tag:1:" 1000 -0
 
-            assert_match "OK" [R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 0 0 NODE $node2_id]
-            set jobname [get_job_name 0 0]
+            set errcode [catch {
+                assert_match "OK" [R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 0 0 NODE $node2_id]
+                set jobname [get_job_name 0 0]
 
-            wait_for_migration 2 0
+                # The snapshot is designed to take at least 5 seconds, and
+                # instrumented (gcov) builds add tens of seconds on top, so
+                # the default 10 second budget has no headroom. Give the
+                # migration two minutes to complete.
+                wait_for_migration 2 0 1200
 
-            # Keys successfully migrated
-            assert_match "50" [R 2 CLUSTER COUNTKEYSINSLOT 0]
-            assert_match "0" [R 0 CLUSTER COUNTKEYSINSLOT 0]
+                # Keys successfully migrated
+                assert_match "50" [R 2 CLUSTER COUNTKEYSINSLOT 0]
+                assert_match "0" [R 0 CLUSTER COUNTKEYSINSLOT 0]
 
-            # Also eventually reflected in replicas
-            wait_for_countkeysinslot 5 0 50
-            wait_for_countkeysinslot 3 0 0
+                # Also eventually reflected in replicas
+                wait_for_countkeysinslot 5 0 50
+                wait_for_countkeysinslot 3 0 0
 
-            # Migration log shows success on both ends
-            assert {[dict get [get_migration_by_name 0 $jobname] state] eq "success"}
-            assert {[dict get [get_migration_by_name 2 $jobname] state] eq "success"}
+                # Migration log shows success on both ends
+                assert {[dict get [get_migration_by_name 0 $jobname] state] eq "success"}
+                assert {[dict get [get_migration_by_name 2 $jobname] state] eq "success"}
+            } errmsg options]
+
+            # These must be restored even if the block above failed. Leaking
+            # the key save delay makes later tests' snapshots take minutes,
+            # which cascades into aborting the whole file. Also cancel the
+            # migration in case it is still running (in the happy path it
+            # already finished, so ignore the error).
+            R 2 CONFIG SET repl-timeout 60
+            R 0 CONFIG SET rdb-key-save-delay 0
+            catch {R 0 CLUSTER CANCELSLOTMIGRATIONS}
+            if {$errcode} { return -options $options $errmsg }
 
             # Cleanup for next test
             assert_match "OK" [R 2 FLUSHDB SYNC]
             assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 0 0 NODE $node0_id]
             wait_for_migration 0 0
-            R 2 CONFIG SET repl-timeout 60
-            R 2 CONFIG SET rdb-key-save-delay 0
         }
     }
 
@@ -2138,7 +2172,7 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {cluste
     }
 }
 
-start_cluster 3 0 {tags {logreqres:skip external:skip cluster}} {
+start_cluster 3 0 {tags {logreqres:skip external:skip cluster network}} {
     set 16383_slot_tag "{6ZJ}"
     set node0_id [R 0 CLUSTER MYID]
 
@@ -2174,7 +2208,7 @@ start_cluster 3 0 {tags {logreqres:skip external:skip cluster}} {
     }
 }
 
-start_cluster 3 6 {tags {logreqres:skip external:skip cluster}} {
+start_cluster 3 6 {tags {logreqres:skip external:skip cluster network}} {
     set node0_id [R 0 CLUSTER MYID]
     set node1_id [R 1 CLUSTER MYID]
     set node2_id [R 2 CLUSTER MYID]
@@ -2230,7 +2264,7 @@ start_cluster 3 6 {tags {logreqres:skip external:skip cluster}} {
     }
 }
 
-start_cluster 3 0 {tags {logreqres:skip external:skip cluster}} {
+start_cluster 3 0 {tags {logreqres:skip external:skip cluster network}} {
 
     set node0_id [R 0 CLUSTER MYID]
     set node1_id [R 1 CLUSTER MYID]
@@ -2295,7 +2329,7 @@ start_cluster 3 0 {tags {logreqres:skip external:skip cluster}} {
 
 }
 
-start_cluster 3 3 {tags {logreqres:skip external:skip cluster aofrw} overrides {appendonly yes auto-aof-rewrite-percentage 0}} {
+start_cluster 3 3 {tags {logreqres:skip external:skip cluster aofrw network} overrides {appendonly yes auto-aof-rewrite-percentage 0}} {
     set node0_id [R 0 CLUSTER MYID]
     set node1_id [R 1 CLUSTER MYID]
     set node2_id [R 2 CLUSTER MYID]
@@ -2445,12 +2479,12 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster aofrw} overrides {
     }
 }
 
-start_cluster 3 0 {tags {logreqres:skip external:skip cluster} overrides {cluster-require-full-coverage no slot-migration-max-failover-repl-bytes 0}} {
+start_cluster 3 0 {tags {logreqres:skip external:skip cluster network} overrides {cluster-require-full-coverage no slot-migration-max-failover-repl-bytes 0 repl-timeout 3600}} {
     test "Slot migration remaining_repl_size on the source node" {
         set 16383_slot_tag "{6ZJ}"
         set_debug_prevent_pause 1
 
-        # Move 16383 from R0 to R2
+        # Move 16383 from R2 to R0.
         assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE [R 0 CLUSTER MYID]]
         set jobname [get_job_name 2 16383]
         wait_for_migration_field 2 $jobname state waiting-to-pause
@@ -2465,7 +2499,7 @@ start_cluster 3 0 {tags {logreqres:skip external:skip cluster} overrides {cluste
         pause_process [srv 0 pid]
         set bigstr [string repeat x 1024000]
         for {set j 0} {$j < 50} {incr j} {
-            R 2 set "$16383_slot_tag:key:" $bigstr
+            R 2 set "$16383_slot_tag:key" $bigstr
         }
 
         # Check R0 remaining repl size is OK.
@@ -2482,5 +2516,53 @@ start_cluster 3 0 {tags {logreqres:skip external:skip cluster} overrides {cluste
         set export_migration [get_migration_by_name 2 $jobname]
         assert_equal [dict get $export_migration remaining_repl_size] 0
         assert_equal [dict get $import_migration remaining_repl_size] 0
+
+        # Check the remaining_repl_size log is OK.
+        verify_log_message -2 "*Pausing writes (remaining_repl_size is 0) to allow slot migration*" 0
+    }
+}
+
+start_cluster 3 0 {tags {logreqres:skip external:skip cluster network} overrides {cluster-require-full-coverage no slot-migration-max-failover-repl-bytes -1 repl-timeout 3600}} {
+    test "slot-migration-max-failover-repl-bytes -1 disables repl bytes limit" {
+        set 16383_slot_tag "{6ZJ}"
+
+        # Use PREVENT-PAUSE to hold the migration at the waiting-to-pause
+        # state so we can fill the replication buffer first.
+        R 2 DEBUG SLOTMIGRATION PREVENT-PAUSE 1
+
+        # Move slot 16383 from R2 to R0.
+        assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE [R 0 CLUSTER MYID]]
+        set jobname [get_job_name 2 16383]
+        wait_for_migration_field 2 $jobname state waiting-to-pause
+
+        # Pause the target (R0) process and generate data to fill the
+        # replication buffer on the source (R2).
+        pause_process [srv 0 pid]
+        set bigstr [string repeat x 1024000]
+        for {set j 0} {$j < 50} {incr j} {
+            R 2 set "$16383_slot_tag:key" $bigstr
+        }
+
+        # Confirm the replication buffer has accumulated data.
+        set export_migration [get_migration_by_name 2 $jobname]
+        set remaining_repl_size [dict get $export_migration remaining_repl_size]
+        assert_morethan $remaining_repl_size [expr 1024000 * 25]
+
+        # Resume the PREVENT-PAUSE.
+        # With slot-migration-max-failover-repl-bytes -1, the source (R2) should proceed
+        # to pause writes regardless of the large remaining_repl_size.
+        R 2 DEBUG SLOTMIGRATION PREVENT-PAUSE 0
+        # The logged remaining_repl_size is racy: the migration cron appends
+        # SYNCSLOTS ACKs to the same job->client buffer and R0 is paused so it
+        # never drains. Assert a lower bound against the snapshot.
+        set log_line [lindex [wait_for_log_messages -2 {"*Pausing writes*"} 0 1000 10] 0]
+        if {![regexp {remaining_repl_size is (\d+)} $log_line _ actual_repl_size]} {
+            fail "could not parse remaining_repl_size from log line: $log_line"
+        }
+        assert_morethan_equal $actual_repl_size $remaining_repl_size
+
+        # Resume R0 and wait for R0 to finish the migration.
+        resume_process [srv 0 pid]
+        wait_for_migration 0 16383
     }
 }

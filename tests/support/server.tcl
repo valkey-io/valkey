@@ -77,7 +77,7 @@ proc kill_server config {
     }
 
     # check for leaks
-    if {![dict exists $config "skipleaks"]} {
+    if {$::leaks && ![dict exists $config "skipleaks"]} {
         catch {
             if {[string match {*Darwin*} [exec uname -a]]} {
                 tags {"leaks"} {
@@ -364,8 +364,9 @@ proc spawn_server {executable config_file stdout stderr args} {
         read stdin 1
     }
 
-    # Tell the test server about this new instance.
-    send_data_packet $::test_server_fd server-spawned "$pid - $::curfile"
+    # Tell the test server about this new instance. Send the log path too so
+    # the orchestrator can dump it if the test times out.
+    send_data_packet $::test_server_fd server-spawned [list $pid $stdout $::curfile]
     return $pid
 }
 
@@ -448,7 +449,7 @@ proc run_external_server_test {code overrides} {
         dict set saved_config $param [lindex [r config get $param] 1]
         r config set $param $val
 
-        # If we enable appendonly, wait for for rewrite to complete. This is
+        # If we enable appendonly, wait for rewrite to complete. This is
         # required for tests that begin with a bg* command which will fail if
         # the rewriteaof operation is not completed at this point.
         if {$param == "appendonly" && $val == "yes"} {
@@ -588,7 +589,7 @@ proc start_server {options {code undefined}} {
 
     if {$::io_threads} {
         dict set config "io-threads" 2
-        dict set config "events-per-io-thread" 0
+        dict set config "io-threads-always-active" yes
         dict set config "min-io-threads-avoid-copy-reply" 2
     }
 
@@ -709,6 +710,8 @@ proc start_server {options {code undefined}} {
             set err {}
             append err [exec cat $stdout] "\n" [exec cat $stderr]
             start_server_error $executable $config_file $err
+            set ::singledb $old_singledb
+            set ::tags [lrange $::tags 0 end-[llength $tags]]
             return
         }
         set server_started 1

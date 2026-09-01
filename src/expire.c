@@ -57,7 +57,7 @@ static double avg_ttl_factor[16] = {0.98, 0.9604, 0.941192, 0.922368, 0.903921, 
  * This function will try to expire the key-value entry 'val'.
  *
  * If the key is found to be expired, it is removed from the database and
- * 1 is returned. Otherwise no operation is performed and 0 is returned.
+ * 1 is returned. Otherwise, no operation is performed and 0 is returned.
  *
  * When a key is expired, server.stat_expiredkeys is incremented.
  *
@@ -72,6 +72,7 @@ int activeExpireCycleTryExpire(serverDb *db, robj *val, mstime_t now, int didx) 
         robj *keyobj = createStringObject(key, sdslen(key));
         deleteExpiredKeyAndPropagateWithDictIndex(db, keyobj, didx);
         decrRefCount(keyobj);
+        server.dirty++;
         exitExecutionUnit();
         return 1;
     } else {
@@ -338,7 +339,7 @@ static ustime_t activeExpireCycleJob(enum activeExpiryType jobType, int cycleTyp
 
             while (data.sampled < num && checked_buckets < max_buckets) {
                 unsigned long cursor = db->expiry[jobType].cursor;
-                cursor = kvstoreScan(kvs, cursor, -1, scan_cb,
+                cursor = kvstoreScan(kvs, cursor, -1, -1, scan_cb,
                                      expireShouldSkipTableForSamplingCb, &data);
                 if (!data.has_more_expired_entries) db->expiry[jobType].cursor = cursor;
                 if (db->expiry[jobType].cursor == 0 && !data.has_more_expired_entries) {
@@ -605,15 +606,14 @@ void expireReplicaKeys(void) {
 
 /* Track keys that received an EXPIRE or similar command in the context
  * of a writable replica. */
+
 void rememberReplicaKeyWithExpire(serverDb *db, robj *key) {
     if (replicaKeysWithExpire == NULL) {
         static dictType dt = {
-            dictSdsHash,       /* hash function */
-            NULL,              /* key dup */
-            dictSdsKeyCompare, /* key compare */
-            dictSdsDestructor, /* key destructor */
-            NULL,              /* val destructor */
-            NULL               /* allow to expand */
+            .entryGetKey = dictEntryGetKey,
+            .hashFunction = dictSdsHash,
+            .keyCompare = dictSdsKeyCompare,
+            .entryDestructor = dictEntryDestructorSdsKey,
         };
         replicaKeysWithExpire = dictCreate(&dt);
     }

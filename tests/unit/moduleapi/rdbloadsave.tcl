@@ -141,6 +141,33 @@ start_server {tags {"modules"}} {
         r config set rdb-key-save-delay 0
     }
 
+    test "Module rdbsave cleans up after an LZ4 write error" {
+        set dir [lindex [r config get dir] 1]
+        set failed_rdb [file join $dir failed-lz4-save.rdb]
+        r config set rdbcompression lz4
+        r flushdb
+        r set lz4:write-error [read_binary_file_prefix /dev/urandom [expr {1024 * 1024}]]
+
+        with_cleanup {
+            file delete -force $failed_rdb
+            exec mkfifo $failed_rdb
+            # Closing the FIFO reader after one byte forces a write error while
+            # rdbSaveRio is emitting the streaming-compressed RDB.
+            exec dd if=$failed_rdb of=/dev/null bs=1 count=1 2>/dev/null &
+
+            set loglines [count_log_lines 0]
+            set failed [catch {r test.rdbsave $failed_rdb}]
+            assert_equal 1 $failed
+            verify_log_message 0 "*Write error while saving DB to the disk(rdbSaveRio):*" $loglines
+            assert_equal 0 [file exists $failed_rdb]
+            assert_equal PONG [r ping]
+        } {
+            file delete -force $failed_rdb
+            catch {r config set rdbcompression yes}
+            catch {r flushdb}
+        }
+    }
+
     test "Unload the module - rdbloadsave" {
         assert_equal {OK} [r module unload rdbloadsave]
     }

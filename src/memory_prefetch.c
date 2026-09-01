@@ -274,7 +274,9 @@ int addCommandToBatchAndProcessIfFull(client *c) {
     /* Commands in the queue. */
     for (int j = c->cmd_queue.off; j < c->cmd_queue.len && batch->key_count < batch->max_prefetch_size; j++) {
         parsedCommand *p = &c->cmd_queue.cmds[j];
-        if (!p->cmd) continue; /* Error or incomplete command. */
+        /* Error, incomplete command, or a command whose argc violates its arity. The latter must be
+         * skipped because getKeysFromCommand() assumes the arity check has already passed. */
+        if (!p->cmd || p->read_flags & READ_FLAGS_BAD_ARITY) continue;
         p->read_flags |= READ_FLAGS_PREFETCHED;
         addCommandToBatch(p->cmd, p->argv, p->argc, c->db, p->slot);
     }

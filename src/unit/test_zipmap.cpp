@@ -66,6 +66,31 @@ TEST_F(ZipmapTest, zipmapIterateWithLargeKey) {
     }
 }
 
+TEST_F(ZipmapTest, zipmapLargeKeyLengthDecoding) {
+    /* The 4-byte LE length field \xfe\x00\x02\x00\x00 should decode to 512 */
+    char zm[] = "\x01"
+                "\xfe\x00\x02\x00\x00"
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                "\x01\x00"
+                "v"
+                "\xff";
+    ASSERT_TRUE(zipmapValidateIntegrity((unsigned char *)zm, sizeof zm - 1, 1));
+
+    unsigned char *p = zipmapRewind((unsigned char *)zm);
+    unsigned char *key, *value;
+    unsigned int klen, vlen;
+    p = zipmapNext(p, &key, &klen, &value, &vlen);
+    ASSERT_NE(p, nullptr);
+    ASSERT_EQ(klen, 512u); /* Verify LE decoding of 4-byte length */
+}
+
 TEST_F(ZipmapTest, zipmapIterateThroughElements) {
     char zm[] = "\x06"
                 "\x04"

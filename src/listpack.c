@@ -136,8 +136,6 @@
         assert((p) >= (lp) + LP_HDR_SIZE && (p) + (len) < (lp) + lpGetTotalBytes((lp))); \
     } while (0)
 
-static inline void lpAssertValidEntry(unsigned char *lp, size_t lpbytes, unsigned char *p);
-
 /* Don't let listpacks grow over 1GB in any case, don't wanna risk overflow in
  * Total Bytes header field */
 #define LISTPACK_MAX_SAFETY_SIZE (1 << 30)
@@ -236,7 +234,7 @@ static inline void lpEncodeIntegerGetType(int64_t v, unsigned char *intenc, uint
 
 /* Given an element 'ele' of size 'size', determine if the element can be
  * represented inside the listpack encoded as integer, and returns
- * LP_ENCODING_INT if so. Otherwise returns LP_ENCODING_STR if no integer
+ * LP_ENCODING_INT if so. Otherwise, returns LP_ENCODING_STR if no integer
  * encoding is possible.
  *
  * If the LP_ENCODING_INT is returned, the function stores the integer encoded
@@ -270,20 +268,20 @@ static inline unsigned long lpEncodeBacklen(unsigned char *buf, uint64_t l) {
     if (l <= 127) {
         if (buf) buf[0] = l;
         return 1;
-    } else if (l < 16383) {
+    } else if (l <= 16383) {
         if (buf) {
             buf[0] = l >> 7;
             buf[1] = (l & 127) | 128;
         }
         return 2;
-    } else if (l < 2097151) {
+    } else if (l <= 2097151) {
         if (buf) {
             buf[0] = l >> 14;
             buf[1] = ((l >> 7) & 127) | 128;
             buf[2] = (l & 127) | 128;
         }
         return 3;
-    } else if (l < 268435455) {
+    } else if (l <= 268435455) {
         if (buf) {
             buf[0] = l >> 21;
             buf[1] = ((l >> 14) & 127) | 128;
@@ -396,13 +394,12 @@ unsigned char *lpSkip(unsigned char *p) {
 unsigned char *lpNext(unsigned char *lp, unsigned char *p) {
     assert(p);
     p = lpSkip(p);
-    size_t bytes = lpBytes(lp);
     if (unlikely(p[0] == LP_EOF)) {
+        size_t bytes = lpBytes(lp);
         /* EOF must only appear at the end of a listpack. */
         assert(p + 1 == lp + bytes);
         return NULL;
     }
-    lpAssertValidEntry(lp, bytes, p);
     return p;
 }
 
@@ -416,7 +413,6 @@ unsigned char *lpPrev(unsigned char *lp, unsigned char *p) {
     uint64_t prevlen = lpDecodeBacklen(p);
     prevlen += lpEncodeBacklen(NULL, prevlen);
     p -= prevlen - 1; /* Seek the first byte of the previous entry. */
-    lpAssertValidEntry(lp, lpBytes(lp), p);
     return p;
 }
 
@@ -424,13 +420,12 @@ unsigned char *lpPrev(unsigned char *lp, unsigned char *p) {
  * listpack has no elements. */
 unsigned char *lpFirst(unsigned char *lp) {
     unsigned char *p = lp + LP_HDR_SIZE; /* Skip the header. */
-    size_t bytes = lpBytes(lp);
     if (unlikely(p[0] == LP_EOF)) {
+        size_t bytes = lpBytes(lp);
         /* EOF must only appear at the end of a listpack. */
         assert(p + 1 == lp + bytes);
         return NULL;
     }
-    lpAssertValidEntry(lp, bytes, p);
     return p;
 }
 
@@ -471,7 +466,7 @@ unsigned long lpLength(unsigned char *lp) {
  * Specifically, if 'intbuf' is NULL:
  *
  * If the element is internally encoded as an integer, the function returns
- * NULL and populates the integer value by reference in 'count'. Otherwise if
+ * NULL and populates the integer value by reference in 'count'. Otherwise, if
  * the element is encoded as a string a pointer to the string (pointing inside
  * the listpack itself) is returned, and 'count' is set to the length of the
  * string.
@@ -495,7 +490,7 @@ unsigned long lpLength(unsigned char *lp) {
  * If the function is called against a badly encoded ziplist, so that there
  * is no valid way to parse it, the function returns like if there was an
  * integer encoded with value 12345678900000000 + <unrecognized byte>, this may
- * be an hint to understand that something is wrong. To crash in this case is
+ * be a hint to understand that something is wrong. To crash in this case is
  * not sensible because of the different requirements of the application using
  * this lib.
  *
@@ -586,7 +581,7 @@ unsigned char *lpGet(unsigned char *p, int64_t *count, unsigned char *intbuf) {
 
 /* This is just a wrapper to lpGet() that is able to get entry value directly.
  * When the function returns NULL, it populates the integer value by reference in 'lval'.
- * Otherwise if the element is encoded as a string a pointer to the string (pointing
+ * Otherwise, if the element is encoded as a string a pointer to the string (pointing
  * inside the listpack itself) is returned, and 'slen' is set to the length of the
  * string. */
 unsigned char *lpGetValue(unsigned char *p, unsigned int *slen, long long *lval) {
@@ -652,17 +647,11 @@ unsigned char *lpFind(unsigned char *lp, unsigned char *p, unsigned char *s, uin
             /* Skip entry */
             skipcnt--;
 
-            /* Move to next entry, avoid use `lpNext` due to `lpAssertValidEntry` in
-             * `lpNext` will call `lpBytes`, will cause performance degradation */
+            /* Move to next entry. */
             p = lpSkip(p);
         }
 
-        /* The next call to lpGetWithSize could read at most 8 bytes past `p`
-         * We use the slower validation call only when necessary. */
-        if (p + 8 >= lp + lp_bytes)
-            lpAssertValidEntry(lp, lp_bytes, p);
-        else
-            assert(p >= lp + LP_HDR_SIZE && p < lp + lp_bytes);
+        assert(p >= lp + LP_HDR_SIZE && p < lp + lp_bytes);
         if (unlikely(p[0] == LP_EOF)) {
             /* EOF must only appear at the end of a listpack. */
             assert(p + 1 == lp + lp_bytes);
@@ -738,7 +727,7 @@ unsigned char *lpInsert(unsigned char *lp,
         /* Calling lpEncodeGetType() results into the encoded version of the
          * element to be stored into 'intenc' in case it is representable as
          * an integer: in that case, the function returns LP_ENCODING_INT.
-         * Otherwise if LP_ENCODING_STR is returned, we'll have to call
+         * Otherwise, if LP_ENCODING_STR is returned, we'll have to call
          * lpEncodeString() to actually write the encoded string on place later.
          *
          * Whatever the returned encoding is, 'enclen' is populated with the
@@ -782,7 +771,7 @@ unsigned char *lpInsert(unsigned char *lp,
         dst = lp + poff;
     }
 
-    /* Setup the listpack relocating the elements to make the exact room
+    /* Set up the listpack relocating the elements to make the exact room
      * we need to store the new one. */
     if (where == LP_BEFORE) {
         memmove(dst + enclen + backlen_size, dst, old_listpack_bytes - poff);
@@ -940,7 +929,6 @@ unsigned char *lpDeleteRangeWithEntry(unsigned char *lp, unsigned char **p, unsi
             assert(tail + 1 == lp + bytes);
             break;
         }
-        lpAssertValidEntry(lp, bytes, tail);
     }
 
     /* Store the offset of the element 'first', so that we can obtain its
@@ -1251,15 +1239,9 @@ int lpValidateNext(unsigned char *lp, unsigned char **pp, size_t lpbytes) {
 #undef OUT_OF_RANGE
 }
 
-/* Validate that the entry doesn't reach outside the listpack allocation. */
-static inline void lpAssertValidEntry(unsigned char *lp, size_t lpbytes, unsigned char *p) {
-    assert(lpValidateNext(lp, &p, lpbytes));
-}
-
 /* Validate the integrity of the data structure.
- * when `deep` is 0, only the integrity of the header is validated.
- * when `deep` is 1, we scan all the entries one by one. */
-int lpValidateIntegrity(unsigned char *lp, size_t size, int deep, listpackValidateEntryCB entry_cb, void *cb_userdata) {
+ * Validates the header and scans all entries one by one. */
+int lpValidateIntegrity(unsigned char *lp, size_t size, listpackValidateEntryCB entry_cb, void *cb_userdata) {
     /* Check that we can actually read the header. (and EOF) */
     if (size < LP_HDR_SIZE + 1) return 0;
 
@@ -1269,8 +1251,6 @@ int lpValidateIntegrity(unsigned char *lp, size_t size, int deep, listpackValida
 
     /* The last byte must be the terminator. */
     if (lp[size - 1] != LP_EOF) return 0;
-
-    if (!deep) return 1;
 
     /* Validate the individual entries. */
     uint32_t count = 0;

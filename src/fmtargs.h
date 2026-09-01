@@ -1,7 +1,7 @@
 /*
  * Copyright Redis Contributors.
  * All rights reserved.
- * SPDX-License-Identifier: BSD 3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause
  *
  * To make it easier to map each part of the format string with each argument,
  * this file provides a way to write

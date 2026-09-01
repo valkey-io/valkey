@@ -466,6 +466,17 @@ static int tlsPasswordCallback(char *buf, int size, int rwflag, void *u) {
 /* Check a single X509 certificate validity */
 static bool isCertValid(X509 *cert) {
     if (!cert) return false;
+#if OPENSSL_VERSION_NUMBER >= 0x40000000L
+    int error = 0;
+    if (X509_check_certificate_times(NULL, cert, &error) != 1) {
+        if (error == X509_V_ERR_ERROR_IN_CERT_NOT_BEFORE_FIELD) {
+            serverLog(LL_WARNING, "Certificate has an invalid notBefore field");
+        } else if (error == X509_V_ERR_ERROR_IN_CERT_NOT_AFTER_FIELD) {
+            serverLog(LL_WARNING, "Certificate has an invalid notAfter field");
+        }
+        return false;
+    }
+#else
     const ASN1_TIME *not_before = X509_get0_notBefore(cert);
     const ASN1_TIME *not_after = X509_get0_notAfter(cert);
     if (!not_before || !not_after) return false;
@@ -473,6 +484,7 @@ static bool isCertValid(X509 *cert) {
         X509_cmp_current_time(not_after) < 0) {
         return false;
     }
+#endif
     return true;
 }
 
@@ -1199,9 +1211,9 @@ static void registerSSLEvent(tls_connection *conn) {
     }
 }
 
-static void postPoneUpdateSSLState(connection *conn_, int postpone) {
+static void postPoneUpdateSSLState(connection *conn_, int postpone_mask) {
     tls_connection *conn = (tls_connection *)conn_;
-    if (postpone) {
+    if (postpone_mask) {
         conn->flags |= TLS_CONN_FLAG_POSTPONE_UPDATE_STATE;
     } else {
         conn->flags &= ~TLS_CONN_FLAG_POSTPONE_UPDATE_STATE;
@@ -1225,7 +1237,7 @@ static void updatePendingData(tls_connection *conn) {
 }
 
 void updateSSLPendingFlag(tls_connection *conn) {
-    if (SSL_pending(conn->ssl) > 0) {
+    if (conn->ssl && SSL_pending(conn->ssl) > 0) {
         conn->flags |= TLS_CONN_FLAG_HAS_PENDING;
     } else {
         conn->flags &= ~TLS_CONN_FLAG_HAS_PENDING;
@@ -1236,8 +1248,8 @@ static void updateSSLEvent(tls_connection *conn) {
     if (conn->flags & TLS_CONN_FLAG_POSTPONE_UPDATE_STATE) return;
 
     int mask = aeGetFileEvents(server.el, conn->c.fd);
-    int need_read = conn->c.read_handler || (conn->flags & TLS_CONN_FLAG_WRITE_WANT_READ);
-    int need_write = conn->c.write_handler || (conn->flags & TLS_CONN_FLAG_READ_WANT_WRITE);
+    int need_read = conn->c.read_handler || (conn->c.write_handler && (conn->flags & TLS_CONN_FLAG_WRITE_WANT_READ));
+    int need_write = conn->c.write_handler || (conn->c.read_handler && (conn->flags & TLS_CONN_FLAG_READ_WANT_WRITE));
 
     if (need_read && !(mask & AE_READABLE))
         aeCreateFileEvent(server.el, conn->c.fd, AE_READABLE, tlsEventHandler, conn);
@@ -1278,8 +1290,13 @@ static void updateSSLState(connection *conn_) {
     updatePendingData(conn);
 }
 
-static int getCertSubjectFieldByName(X509 *cert, const char *field, char *out, size_t outlen) {
-    if (!cert || !field || !out) return 0;
+/* Return the named field of cert's subject, or NULL if it is absent or empty.
+ * Caller frees.
+ *
+ * sds rather than a C string, so the caller sees what the CA signed even when
+ * the value contains a NUL. */
+static sds getCertSubjectFieldByName(X509 *cert, const char *field) {
+    if (!cert || !field) return NULL;
 
     int nid = -1;
 
@@ -1289,12 +1306,32 @@ static int getCertSubjectFieldByName(X509 *cert, const char *field, char *out, s
         nid = NID_organizationName;
     /* Add more mappings here as needed */
 
-    if (nid == -1) return 0;
+    if (nid == -1) return NULL;
 
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+    const X509_NAME *subject = X509_get_subject_name(cert);
+#else
     X509_NAME *subject = X509_get_subject_name(cert);
-    if (!subject) return 0;
+#endif
+    if (!subject) return NULL;
 
-    return X509_NAME_get_text_by_NID(subject, nid, out, outlen) > 0;
+    /* Not X509_NAME_get_text_by_NID(): it NUL terminates into a caller buffer,
+     * hiding an embedded NUL and truncating a long value. Also deprecated in
+     * OpenSSL 4.0. */
+    int idx = X509_NAME_get_index_by_NID(subject, nid, -1);
+    if (idx < 0) return NULL;
+
+    const X509_NAME_ENTRY *entry = X509_NAME_get_entry(subject, idx);
+    if (!entry) return NULL;
+
+    const ASN1_STRING *data = X509_NAME_ENTRY_get_data(entry);
+    if (!data) return NULL;
+
+    const unsigned char *str = ASN1_STRING_get0_data(data);
+    int str_len = ASN1_STRING_length(data);
+    if (!str || str_len <= 0) return NULL;
+
+    return sdsnewlen(str, str_len);
 }
 
 /* Extract URI from Subject Alternative Name extension and return the first
@@ -1368,16 +1405,28 @@ user *tlsGetPeerUser(connection *conn_, sds *cert_username) {
         break;
 
     case TLS_CLIENT_FIELD_CN: {
-        char field_value[256];
-        if (getCertSubjectFieldByName(cert, "CN", field_value, sizeof(field_value))) {
-            if (cert_username) *cert_username = sdsnew(field_value);
-            result = ACLGetUserByName(field_value, strlen(field_value));
-            if (!result || !(result->flags & USER_FLAG_ENABLED)) {
-                serverLog(LL_VERBOSE, "TLS: No matching user found for certificate CN '%s'", field_value);
-                result = NULL;
-            }
-        } else {
+        sds cn = getCertSubjectFieldByName(cert, "CN");
+        if (!cn) {
             serverLog(LL_DEBUG, "TLS: Failed to extract CN in certificate subject");
+            break;
+        }
+
+        /* Compared over the whole CN, so "CN=admin\0attacker" does not match the
+         * user "admin". */
+        result = ACLGetUserByName(cn, sdslen(cn));
+        if (!result || !(result->flags & USER_FLAG_ENABLED)) {
+            sds repr = server.hide_user_data_from_log ? NULL : sdscatrepr(sdsempty(), cn, sdslen(cn));
+            serverLog(LL_VERBOSE, "TLS: No matching user found for certificate CN %s",
+                      repr ? repr : "*redacted*");
+            sdsfree(repr);
+            result = NULL;
+        }
+
+        /* Hand over the CN even when it does not match, so it reaches the ACL log. */
+        if (cert_username) {
+            *cert_username = cn;
+        } else {
+            sdsfree(cn);
         }
         break;
     }
@@ -1444,10 +1493,12 @@ static void tlsHandleEvent(tls_connection *conn, int mask) {
         if (connTLSAccept((connection *)conn, NULL) == C_ERR || conn->c.state != CONN_STATE_CONNECTED) return;
         break;
     case CONN_STATE_CONNECTED: {
-        int call_read = ((mask & AE_READABLE) && conn->c.read_handler) ||
-                        ((mask & AE_WRITABLE) && (conn->flags & TLS_CONN_FLAG_READ_WANT_WRITE));
-        int call_write = ((mask & AE_WRITABLE) && conn->c.write_handler) ||
-                         ((mask & AE_READABLE) && (conn->flags & TLS_CONN_FLAG_WRITE_WANT_READ));
+        int call_read = conn->c.read_handler &&
+                        ((mask & AE_READABLE) ||
+                         ((mask & AE_WRITABLE) && (conn->flags & TLS_CONN_FLAG_READ_WANT_WRITE)));
+        int call_write = conn->c.write_handler &&
+                         ((mask & AE_WRITABLE) ||
+                          ((mask & AE_READABLE) && (conn->flags & TLS_CONN_FLAG_WRITE_WANT_READ)));
 
         /* Normally we execute the readable event first, and the writable
          * event laster. This is useful as sometimes we may be able
@@ -1603,6 +1654,7 @@ static int connTLSConnect(connection *conn_,
     unsigned char addr_buf[sizeof(struct in6_addr)];
 
     if (conn->c.state != CONN_STATE_NONE) return C_ERR;
+    if (addr == NULL) return C_ERR;
     ERR_clear_error();
 
     /* Check whether addr is an IP address, if not, use the value for Server Name Indication */
@@ -1624,6 +1676,14 @@ static int connTLSWrite(connection *conn_, const void *data, size_t data_len) {
     int ret;
 
     if (conn->c.state != CONN_STATE_CONNECTED) return -1;
+    if (server.debug_force_tls_write_error) {
+        conn->last_failed_write_data_len = data_len;
+        conn->flags &= ~(TLS_CONN_FLAG_WRITE_WANT_READ | TLS_CONN_FLAG_READ_WANT_WRITE);
+        conn->flags |= TLS_CONN_FLAG_READ_WANT_WRITE;
+        updateSSLEvent(conn);
+        errno = EAGAIN;
+        return -1;
+    }
     ERR_clear_error();
     /* In case when last write failed due to some internal reason, retry has to provide
      * at least the same amount of bytes (https://docs.openssl.org/master/man3/SSL_write).
@@ -1644,11 +1704,10 @@ static int connTLSWritev(connection *conn_, const struct iovec *iov, int iovcnt)
     tls_connection *conn = (tls_connection *)conn_;
     if (iovcnt == 1) return connTLSWrite(conn_, iov[0].iov_base, iov[0].iov_len);
 
-    /* Accumulate the amount of bytes of each buffer and check if it exceeds NET_MAX_WRITES_PER_EVENT. */
-    size_t iov_bytes_len = 0;
+    /* Accumulate the total amount of bytes of all buffers. */
+    size_t total_len = 0;
     for (int i = 0; i < iovcnt; i++) {
-        iov_bytes_len += iov[i].iov_len;
-        if (iov_bytes_len > NET_MAX_WRITES_PER_EVENT) break;
+        total_len += iov[i].iov_len;
     }
 
     /* In case the amount of all buffers is greater than NET_MAX_WRITES_PER_EVENT,
@@ -1657,9 +1716,9 @@ static int connTLSWritev(connection *conn_, const struct iovec *iov, int iovcnt)
      * However, in case when last write failed we still have to repeat sending last_failed_write_data_len
      * bytes. Because of openssl implementation we cannot repeat sending writes with length smaller than
      * the last failed write (https://docs.openssl.org/master/man3/SSL_write) so in case the first io buffer
-     * does not provide at least the same amount of bytes as previous failed write, we will have to fallback to
+     * does not provide at least the same amount of bytes as previous failed write, we will have to fall back to
      * memory copy to a static buffer before calling SSL_write. */
-    if (iov_bytes_len > NET_MAX_WRITES_PER_EVENT && iovcnt > 0 && iov[0].iov_len >= conn->last_failed_write_data_len) {
+    if (total_len > NET_MAX_WRITES_PER_EVENT && iovcnt > 0 && iov[0].iov_len >= conn->last_failed_write_data_len) {
         ssize_t tot_sent = 0;
         for (int i = 0; i < iovcnt; i++) {
             ssize_t sent = connTLSWrite(conn_, iov[i].iov_base, iov[i].iov_len);
@@ -1670,21 +1729,36 @@ static int connTLSWritev(connection *conn_, const struct iovec *iov, int iovcnt)
         return tot_sent;
     }
 
-    /* The amount of all buffers is less than NET_MAX_WRITES_PER_EVENT,
-     * which is worth doing more memory copies in exchange for fewer system calls,
-     * so concatenate these scattered buffers into a contiguous piece of memory
-     * and send it away by one call to connTLSWrite().
-     * However, code can fallback here in case when last write failed and first
-     * element of io is buffer not big enough to provide required amount of bytes
-     * to retry, so iov_bytes_len may exceed NET_MAX_WRITES_PER_EVENT by the amount
-     * of remaining bytes from last taken io. */
-    char buf[iov_bytes_len];
-    size_t offset = 0;
-    for (int i = 0; i < iovcnt && offset < iov_bytes_len; i++) {
-        memcpy(buf + offset, iov[i].iov_base, iov[i].iov_len);
-        offset += iov[i].iov_len;
+    /* We concatenate scattered buffers into a contiguous piece of memory
+     * and send it away by one call to connTLSWrite() to reduce system calls.
+     * To avoid stack overflow (VLA) and heap allocation, we use a fixed-size buffer
+     * of NET_MAX_WRITES_PER_EVENT and copy only up to this limit. The remaining
+     * data will be sent in subsequent socket writable events (partial writes). */
+    char buf[NET_MAX_WRITES_PER_EVENT];
+    size_t to_write = 0;
+
+    for (int i = 0; i < iovcnt && to_write < NET_MAX_WRITES_PER_EVENT; i++) {
+        size_t available = NET_MAX_WRITES_PER_EVENT - to_write;
+        size_t copy_len = iov[i].iov_len;
+        if (copy_len > available) {
+            copy_len = available;
+        }
+        memcpy(buf + to_write, iov[i].iov_base, copy_len);
+        to_write += copy_len;
     }
-    return connTLSWrite(conn_, buf, iov_bytes_len);
+
+    /* Verify OpenSSL retry constraint: we must have copied at least the amount
+     * of bytes that failed in the previous write attempt. */
+    if (to_write < conn->last_failed_write_data_len) {
+        serverLog(LL_WARNING, "connTLSWritev: cannot satisfy last_failed_write_data_len (%zu < %zu)",
+                  to_write, conn->last_failed_write_data_len);
+        conn->c.last_errno = EIO;
+        conn->c.state = CONN_STATE_ERROR;
+        errno = EIO;
+        return -1;
+    }
+
+    return connTLSWrite(conn_, buf, to_write);
 }
 
 static int connTLSRead(connection *conn_, void *buf, size_t buf_len) {
@@ -1775,6 +1849,9 @@ static ssize_t connTLSSyncWrite(connection *conn_, char *ptr, ssize_t size, long
         unsetBlockingTimeout(conn);
     }
 
+    if (ret < 0) {
+        conn->c.last_errno = errno;
+    }
     return ret;
 }
 
@@ -1790,6 +1867,9 @@ static ssize_t connTLSSyncRead(connection *conn_, char *ptr, ssize_t size, long 
         unsetBlockingTimeout(conn);
     }
 
+    if (ret < 0) {
+        conn->c.last_errno = errno;
+    }
     return ret;
 }
 
@@ -1827,6 +1907,9 @@ exit:
     if (!blocking) {
         unsetBlockingTimeout(conn);
     }
+    if (nread < 0) {
+        conn->c.last_errno = errno;
+    }
     return nread;
 }
 
@@ -1840,14 +1923,27 @@ static int tlsHasPendingData(void) {
 }
 
 static int tlsProcessPendingData(void) {
-    listIter li;
     listNode *ln;
 
     int processed = 0;
-    listRewind(pending_list, &li);
-    while ((ln = listNext(&li))) {
+    /* Pop each connection off the list before handling it. A handler may
+     * synchronously free another pending connection (e.g. CLIENT KILL ->
+     * freeClient -> connTLSClose -> listDelNode), so we must not hold an
+     * iterator into a node that could be freed out from under us.
+     *
+     * Connections with buffered data re-add themselves to the tail, so the
+     * length captured on entry bounds the loop and guarantees termination. */
+    unsigned long remaining = listLength(pending_list);
+    while (remaining-- > 0 && (ln = listFirst(pending_list)) != NULL) {
         tls_connection *conn = listNodeValue(ln);
-        if (conn->flags & TLS_CONN_FLAG_POSTPONE_UPDATE_STATE) continue;
+        listDelNode(pending_list, ln);
+        conn->pending_list_node = NULL;
+        if (conn->flags & TLS_CONN_FLAG_POSTPONE_UPDATE_STATE) {
+            /* Not handled now, but keep it pending for a later call. */
+            listAddNodeTail(pending_list, conn);
+            conn->pending_list_node = listLast(pending_list);
+            continue;
+        }
         tlsHandleEvent(conn, AE_READABLE);
         processed++;
     }

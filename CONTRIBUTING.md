@@ -11,7 +11,6 @@ The Valkey project is led by a Technical Steering Committee, whose responsibilit
 
 * Have a question? Ask it on
   [GitHub Discussions](https://github.com/valkey-io/valkey/discussions)
-  or [Valkey's Discord](https://discord.gg/zbcPa5umUB)
   or [Valkey's Matrix](https://matrix.to/#/#valkey:matrix.org)
 * Found a bug? [Report it here](https://github.com/valkey-io/valkey/issues/new?template=bug_report.md&title=%5BBUG%5D)
 * Valkey crashed? [Submit a crash report here](https://github.com/valkey-io/valkey/issues/new?template=crash_report.md&title=%5BCRASH%5D+%3Cshort+description%3E)
@@ -107,6 +106,47 @@ which includes documentation about various best practices for writing Valkey cod
 
 To link a pull request to an existing issue, please write "Fixes #xyz" somewhere
 in the pull request description, where xyz is the issue number.
+
+## Code formatting with clang-format
+
+Valkey enforces code formatting using `clang-format-18`. A CI check runs on
+every pull request and will fail if your code is not formatted correctly.
+
+### Install clang-format-18
+
+**Option A — pip (any platform):**
+
+```bash
+pip install clang-format==18.1.8
+```
+
+**Option B — apt (Debian/Ubuntu):**
+
+```bash
+sudo apt-get install software-properties-common -y
+wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | gpg --dearmor | sudo tee /usr/share/keyrings/llvm-toolchain.gpg > /dev/null
+echo "deb [signed-by=/usr/share/keyrings/llvm-toolchain.gpg] http://apt.llvm.org/$(lsb_release -cs)/ llvm-toolchain-$(lsb_release -cs)-18 main" | sudo tee /etc/apt/sources.list.d/llvm.list
+sudo apt-get update -y
+sudo apt-get install clang-format-18 -y
+```
+
+### Format your changes
+
+Run clang-format on the files you modified:
+
+```bash
+clang-format-18 -i src/file_you_changed.c src/file_you_changed.h
+```
+
+To format all source files at once:
+
+```bash
+clang-format-18 -i src/*.c src/*.h
+```
+
+The formatting configuration lives in `src/.clang-format`. Use version 18
+specifically — different versions may produce different output and cause the
+CI check to fail.
 
 ## Running the daily workflow on demand for your branch
 

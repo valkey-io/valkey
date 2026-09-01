@@ -69,7 +69,7 @@ fi
 
 expected="Event: connect to 127.0.0.1:7401
 OK
-MOVED 12182 127.0.0.1:7402
+Error: MOVED 12182 127.0.0.1:7402
 Event: disconnect from 127.0.0.1:7401
 error: disconnecting"
 

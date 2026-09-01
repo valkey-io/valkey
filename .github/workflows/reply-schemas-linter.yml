@@ -23,7 +23,8 @@ jobs:
       - name: Setup nodejs
         uses: actions/setup-node@6044e13b5dc448c55e2357c09f80417699197238 # v6.2.0
       - name: Install packages
-        run: npm install ajv
+        working-directory: utils/reply-schema-linter
+        run: npm ci --ignore-scripts
       - name: linter
-        run: node ./utils/reply_schema_linter.js
+        run: NODE_PATH=utils/reply-schema-linter/node_modules node ./utils/reply_schema_linter.js
 

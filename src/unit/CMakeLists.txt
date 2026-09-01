@@ -40,9 +40,11 @@ FetchContent_MakeAvailable(googletest)
 
 # Build Valkey sources as a static library for the test (C code compiled with C compiler)
 add_library(valkeylib-gtest STATIC ${VALKEY_SERVER_SRCS})
+add_dependencies(valkeylib-gtest release_header)
 target_compile_options(valkeylib-gtest PRIVATE -Og -g -fno-lto)
 target_compile_definitions(valkeylib-gtest PRIVATE "${COMPILE_DEFINITIONS}")
 target_include_directories(valkeylib-gtest PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/deps)
+target_link_libraries(valkeylib-gtest PRIVATE ffc)
 
 # Generate wrapper files from wrappers.h
 set(GENERATED_WRAPPERS_DIR ${CMAKE_BINARY_DIR}/gtest_generated)
@@ -84,8 +86,11 @@ target_compile_options(valkey-unit-gtests PRIVATE -Og -g)
 target_compile_options(valkey-unit-gtests PRIVATE
     -Wno-deprecated-declarations
     -Wno-write-strings
-    -fno-var-tracking-assignments
 )
+# -fno-var-tracking-assignments is only supported by GCC
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    target_compile_options(valkey-unit-gtests PRIVATE -fno-var-tracking-assignments)
+endif()
 
 # Include directories for C++ compilation
 target_include_directories(valkey-unit-gtests PRIVATE
@@ -123,19 +128,21 @@ endif ()
 
 if (USE_JEMALLOC)
     # Using jemalloc - link to both the static library and the executable
-    target_link_libraries(valkeylib-gtest jemalloc)
-    target_link_libraries(valkey-unit-gtests jemalloc)
+    target_link_libraries(valkeylib-gtest PRIVATE jemalloc)
+    target_link_libraries(valkey-unit-gtests PRIVATE jemalloc)
 endif ()
 
 if (IS_FREEBSD)
-    target_link_libraries(valkey-unit-gtests execinfo)
+    target_link_libraries(valkey-unit-gtests PRIVATE execinfo)
 endif ()
 
 # Link with GoogleTest using target names
 target_link_libraries(
     valkey-unit-gtests
+    PRIVATE
     valkeylib-gtest
     fpconv
+    lz4
     lualib
     hdr_histogram
     valkey::valkey
@@ -146,7 +153,7 @@ target_link_libraries(
 
 if (USE_TLS)
     # Add required libraries needed for TLS
-    target_link_libraries(valkey-unit-gtests OpenSSL::SSL valkey::valkey_tls)
+    target_link_libraries(valkey-unit-gtests PRIVATE OpenSSL::SSL valkey::valkey_tls)
 endif ()
 
 # Enable testing and discover tests
@@ -156,8 +163,14 @@ gtest_discover_tests(valkey-unit-gtests)
 
 # Add custom test target using gtest-parallel
 add_custom_target(test-unit
-    COMMAND python3 ${CMAKE_SOURCE_DIR}/deps/gtest-parallel/gtest_parallel.py $<TARGET_FILE:valkey-unit-gtests>
+    COMMAND sh -c "TEST_ARGS=''; \
+        [ -n \"$accurate\" ] && TEST_ARGS=\"$TEST_ARGS --accurate\"; \
+        [ -n \"$large_memory\" ] && TEST_ARGS=\"$TEST_ARGS --large-memory\"; \
+        [ -n \"$valgrind\" ] && TEST_ARGS=\"$TEST_ARGS --valgrind\"; \
+        [ -n \"$seed\" ] && TEST_ARGS=\"$TEST_ARGS --seed $seed\"; \
+        python3 ${CMAKE_SOURCE_DIR}/deps/gtest-parallel/gtest_parallel.py $<TARGET_FILE:valkey-unit-gtests> --gtest_filter=\"$UNIT_TEST_PATTERN\"* -- $TEST_ARGS"
     DEPENDS valkey-unit-gtests
     WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
     COMMENT "Running tests with gtest-parallel"
+    VERBATIM
 )

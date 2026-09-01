@@ -78,7 +78,7 @@ unsigned int keyHashSlot(const char *key, int keylen) {
 
 /* If it can be inferred that the given glob-style pattern, as implemented in
  * stringmatchlen() in util.c, only can match keys belonging to a single slot,
- * that slot is returned. Otherwise -1 is returned. */
+ * that slot is returned. Otherwise, -1 is returned. */
 int patternHashSlot(char *pattern, int length) {
     int s = -1; /* index of the first '{' */
 
@@ -333,7 +333,7 @@ typedef struct migrateCachedSocket {
  *
  * This function is responsible of sending errors to the client if a
  * connection can't be established. In this case -1 is returned.
- * Otherwise on success the socket is returned, and the caller should not
+ * Otherwise, on success the socket is returned, and the caller should not
  * attempt to free it after usage.
  *
  * If the caller detects an error while using the socket, migrateCloseSocket()
@@ -773,16 +773,15 @@ int verifyClusterNodeId(const char *name, int length) {
     return C_OK;
 }
 
-int isValidAuxChar(int c) {
-    /* Return true if the character is alphanumeric */
-    if (isalnum(c)) {
-        return 1;
-    }
+static int isValidAuxChar(unsigned char c) {
+    /* Reject everything up through ',' (0x2C) inclusive: control characters
+     * (0x00-0x1F), space !"#$%&'()*+, (0x20-0x2C), and DEL (0x7F). */
+    if (c <= ',' || c == 0x7F) return 0;
 
-    /* List of invalid characters */
-    static const char *invalid_charset = "!#$%&()*+;<>?@[]^{|}~";
+    /* Reject additional characters above 0x2C (comma) that are format-significant in
+     * nodes.conf or otherwise unsafe. */
+    static const char *invalid_charset = ";<=>?@[]^{|}~\\";
 
-    /* Return true if the character is NOT in the invalid charset */
     return strchr(invalid_charset, c) == NULL;
 }
 
@@ -1123,7 +1122,7 @@ clusterNode *getNodeByQuery(client *c, int *error_code) {
      *
      *   1. Go over all the keys to count existing keys and missing keys that we
      *      need for TRYAGAIN and ASK redirects.
-     *   2. Check for some commands that are forbiddedn during slot migration.
+     *   2. Check for some commands that are forbidden during slot migration.
      *
      * Skip this if we're not importing or migrating this slot. */
     if (!migrating_slot && !importing_slot) goto after_checking_each_key;
@@ -1200,14 +1199,21 @@ clusterNode *getNodeByQuery(client *c, int *error_code) {
 
             /* Block the COPY command if it's cross-DB to keep the code simple.
              * Allowing cross-DB COPY is possible, but it would require looking up the second key in the target DB.
-             * The command should only be allowed if the key exists. We may revisit this decision in the future. */
-            if (mcmd->proc == copyCommand &&
-                margc >= 4 && !strcasecmp(objectGetVal(margv[3]), "db")) {
-                long long value;
-                if (getLongLongFromObject(margv[4], &value) != C_OK || value != currentDb->id) {
-                    if (error_code) *error_code = CLUSTER_REDIR_UNSTABLE;
-                    getKeysFreeResult(&result);
-                    return NULL;
+             * The command should only be allowed if the key exists. We may revisit this decision in the future.
+             *
+             * The DB and REPLACE tokens are optional and order-independent, and DB may appear more than once, so
+             * scan every DB clause the way copyCommand does. A DB token without a value is left to copyCommand to
+             * reject as a syntax error. */
+            if (mcmd->proc == copyCommand) {
+                for (int k = 3; k + 1 < margc; k++) {
+                    if (strcasecmp(objectGetVal(margv[k]), "db")) continue;
+                    long long value;
+                    if (getLongLongFromObject(margv[k + 1], &value) != C_OK || value != currentDb->id) {
+                        if (error_code) *error_code = CLUSTER_REDIR_UNSTABLE;
+                        getKeysFreeResult(&result);
+                        return NULL;
+                    }
+                    k++; /* Consume the dbid. */
                 }
             }
 
@@ -1347,7 +1353,7 @@ void clusterRedirectClient(client *c, clusterNode *n, int hashslot, int error_co
  *
  * If the client is found to be blocked into a hash slot this node no
  * longer handles, the client is sent a redirection error, and the function
- * returns 1. Otherwise 0 is returned and no operation is performed. */
+ * returns 1. Otherwise, 0 is returned and no operation is performed. */
 int clusterRedirectBlockedClientIfNeeded(client *c) {
     clusterNode *myself = getMyClusterNode();
     if (c->flag.blocked && (c->bstate->btype == BLOCKED_LIST || c->bstate->btype == BLOCKED_ZSET ||
@@ -1434,6 +1440,11 @@ void addNodeToNodeReply(client *c, clusterNode *node) {
         hostname[0] != '\0') {
         length++;
     }
+
+    if (sdslen(node->availability_zone) != 0) {
+        length++;
+    }
+
     addReplyMapLen(c, length);
 
     if (server.cluster_preferred_endpoint_type != CLUSTER_ENDPOINT_TYPE_IP) {
@@ -1447,6 +1458,13 @@ void addNodeToNodeReply(client *c, clusterNode *node) {
         addReplyBulkCString(c, hostname);
         length--;
     }
+
+    if (sdslen(node->availability_zone) != 0) {
+        addReplyBulkCString(c, "availability-zone");
+        addReplyBulkCString(c, node->availability_zone);
+        length--;
+    }
+
     serverAssert(length == 0);
 }
 
@@ -1611,7 +1629,15 @@ void resetClusterStats(void) {
 
     memset(server.cluster->stats_bus_messages_sent, 0, sizeof(server.cluster->stats_bus_messages_sent));
     memset(server.cluster->stats_bus_messages_received, 0, sizeof(server.cluster->stats_bus_messages_received));
+    server.cluster->stats_bus_bytes_sent = 0;
+    server.cluster->stats_bus_bytes_received = 0;
+    server.cluster->stats_bus_pubsub_bytes_sent = 0;
+    server.cluster->stats_bus_pubsub_bytes_received = 0;
+    server.cluster->stats_bus_module_bytes_sent = 0;
+    server.cluster->stats_bus_module_bytes_received = 0;
     server.cluster->stat_cluster_links_buffer_limit_exceeded = 0;
+    server.cluster->stat_cluster_links_established_inbound = 0;
+    server.cluster->stat_cluster_links_established_outbound = 0;
 }
 
 void clusterCommandFlushslot(client *c) {
@@ -1643,7 +1669,7 @@ void clusterCommandFlushslot(client *c) {
  * but additional factors (e.g., hash table type) can be mixed in later.
  *
  * Fingerprint is encoded using consecutive ASCII values starting from '0'
- * (48 to 111), each represenenting 6 bits. This encoding avoids '-', '{', '}'
+ * (48 to 111), each representing 6 bits. This encoding avoids '-', '{', '}'
  * which are part of the cursor.
  *
  * Returns a non zero 32-bit fingerprint. 0 is reserved for cross-node cursor */
@@ -1651,7 +1677,10 @@ static const char *clusterscanFingerprint(void) {
     static char cached_fp[7];
     if (cached_fp[0]) return cached_fp;
 
-    uint64_t *seed = (uint64_t *)hashtableGetHashFunctionSeed();
+    /* Use configurable_hash_seed (derived from hash-seed config) so that nodes
+     * sharing the same hash-seed produce the same fingerprint, allowing cursors
+     * to survive failover without restarting the scan. */
+    uint64_t *seed = (uint64_t *)getConfigurableHashSeed();
     uint64_t hash = wangHash64(seed[0] ^ seed[1]);
 
     /* Truncating to 32 bit instead of 64 bit */
@@ -1728,44 +1757,32 @@ void clusterscanCommand(client *c) {
 
     int slot;
     unsigned long long cursor;
-    int input_slot = -1;
+    scanOptions opts;
+    int skip_scan = 0;
 
-    /* Parse all arguments together so that values of MATCH/COUNT/SLOT/TYPE are
-     * not mistaken for the option names.*/
-    for (int i = 2; i < c->argc; i++) {
-        int remaining = c->argc - i;
-        char *opt = objectGetVal(c->argv[i]);
+    if (parseScanOptionsOrReply(c, NULL, 2, true, &opts) != C_OK) return;
 
-        if (!strcasecmp(opt, "slot") && remaining >= 2) {
-            if (input_slot != -1) {
-                addReplyError(c, "SLOT option can only be specified once");
-                return;
-            }
-            if ((input_slot = getSlotOrReply(c, c->argv[i + 1])) == -1) return;
-            i++;
-        } else if ((!strcasecmp(opt, "count") || !strcasecmp(opt, "match") ||
-                    !strcasecmp(opt, "type")) &&
-                   remaining >= 2) {
-            i++; /* Let scanGenericCommand parse this */
-        } else {
-            addReplyErrorObject(c, shared.syntaxerr);
-            return;
-        }
-    }
+    /* SLOT and single slot MATCH target different slots hence conclude the scan */
+    skip_scan = opts.input_slot != -1 && opts.match_slot != -1 && opts.input_slot != opts.match_slot;
 
     /* Handle cursor "0" case. If slot information is provided we return
      * the updated cursor to scan input slot, else scan from slot 0. */
     if (strcmp(objectGetVal(c->argv[1]), "0") == 0) {
-        if (input_slot != -1) {
-            slot = input_slot;
+        if (opts.input_slot != -1) {
+            slot = opts.input_slot;
+        } else if (opts.match_slot != -1) {
+            slot = opts.match_slot; /* If match maps to a particular slot, start scan from there */
         } else {
             slot = 0;
         }
 
-        sds new_cursor = sdscatfmt(sdsempty(), "0-{%s}-0", crc16_slot_table[slot]);
-
         addReplyArrayLen(c, 2);
-        addReplyBulkSds(c, new_cursor);
+        if (skip_scan) {
+            addReplyBulkCString(c, "0");
+        } else {
+            sds new_cursor = sdscatfmt(sdsempty(), "0-{%s}-0", crc16_slot_table[slot]);
+            addReplyBulkSds(c, new_cursor);
+        }
         addReplyArrayLen(c, 0);
         return;
     } else {
@@ -1774,30 +1791,43 @@ void clusterscanCommand(client *c) {
             return;
         }
 
-        if (input_slot != -1 && slot != input_slot) {
+        if (opts.input_slot != -1 && slot != opts.input_slot) {
             addReplyError(c, "Cursor slot mismatch with SLOT argument");
+            return;
+        }
+
+        if (opts.match_slot != -1 && slot != opts.match_slot) {
+            /* Advance cursor to the slot matched by MATCH if required but do not go back. */
+            addReplyArrayLen(c, 2);
+            if (!skip_scan && opts.match_slot > slot) {
+                sds new_cursor = sdscatfmt(sdsempty(), "0-{%s}-0", crc16_slot_table[opts.match_slot]);
+                addReplyBulkSds(c, new_cursor);
+            } else {
+                addReplyBulkCString(c, "0");
+            }
+            addReplyArrayLen(c, 0);
             return;
         }
     }
 
-    /* Scan the slot using scanGenericCommand */
-    sds cursor_prefix = sdscatfmt(sdsempty(), "%s-{%s}-", clusterscanFingerprint(), crc16_slot_table[slot]);
-    sds finished_cursor_prefix = NULL;
-
-    /* If SLOT argument was provided, don't advance to next slot then return 0 cursor.
-     * Else, advance to next slot for full cluster scan */
-    if (input_slot != -1) {
-        finished_cursor_prefix = sdsnew("");
-    } else {
-        int next_slot = slot + 1;
-        if (next_slot >= CLUSTER_SLOTS) {
-            finished_cursor_prefix = sdsnew("");
-        } else {
-            finished_cursor_prefix = sdscatfmt(sdsempty(), "0-{%s}-", crc16_slot_table[next_slot]);
+    /* If SLOT argument was provided or implied by MATCH, scan only that slot.
+     * Otherwise, scan the continuous range of slots owned by this node. */
+    int final_slot = slot;
+    bool advance_to_next_slot = false;
+    if (opts.input_slot == -1 && opts.match_slot == -1) {
+        clusterNode *owner = getNodeBySlot(slot);
+        while (final_slot + 1 < CLUSTER_SLOTS && getNodeBySlot(final_slot + 1) == owner) {
+            final_slot++;
         }
+        advance_to_next_slot = true;
     }
 
-    scanGenericCommand(c, NULL, cursor, slot, cursor_prefix, finished_cursor_prefix);
-    sdsfree(cursor_prefix);
-    sdsfree(finished_cursor_prefix);
+    serverAssert(slot >= 0 && slot < CLUSTER_SLOTS);
+    clusterScanCtx cluster_ctx = {
+        .slot = slot,
+        .final_slot = final_slot,
+        .advance_to_next_slot = advance_to_next_slot,
+        .fp = clusterscanFingerprint(),
+    };
+    scanGenericCommandWithOptions(c, NULL, cursor, &opts, &cluster_ctx);
 }

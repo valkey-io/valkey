@@ -26,6 +26,8 @@
  * See: wrapper_util.py, generate-wrappers.py
  */
 
+#include "gmock/gmock.h"
+#include "gtest/gtest.h"
 #include <sched.h>
 #ifdef __cplusplus
 extern "C" {
@@ -37,12 +39,14 @@ extern "C" {
 // Some C keywords or built-in types (e.g., _Atomic, _Bool) are not
 // recognized or have different meanings in C++. To allow C headers
 // to be included in C++ code without errors, we redefine them appropriately.
-#define _Atomic              /* _Atomic is not a C++ keyword; define empty */
-#define _Bool bool           /* Replace C _Bool with C++ bool */
-#define typename _typename   /* Avoid conflict with C++ 'typename' keyword */
-#define protected protected_ /* Avoid conflict with C++ 'protected' keyword */
+#define _Atomic(type) alignas(sizeof(type)) type /* Preserve alignment in C++ builds */
+#define _Alignas alignas                         /* Replace C _Alignas with C++ alignas */
+#define _Bool bool                               /* Replace C _Bool with C++ bool */
+#define typename _typename                       /* Avoid conflict with C++ 'typename' keyword */
+#define protected protected_                     /* Avoid conflict with C++ 'protected' keyword */
 
 #include "ae.h"
+#include "compression.h"
 #include "server.h"
 
 /**
@@ -59,6 +63,8 @@ extern "C" {
  *       Example: serverLog(int level, const char *fmt, ...) should NOT be mocked.
  */
 long long __wrap_aeCreateTimeEvent(aeEventLoop *eventLoop, long long milliseconds, aeTimeProc *proc, void *clientData, aeEventFinalizerProc *finalizerProc);
+ssize_t __wrap_streamDecompressorFeed(streamDecompressor *decompressor, uint8_t *output, size_t output_capacity, const uint8_t *input, size_t input_len, size_t *input_consumed);
+void __wrap_zmadvise_dontneed(void *ptr, size_t size_hint);
 #undef protected
 #undef _Bool
 #undef typename

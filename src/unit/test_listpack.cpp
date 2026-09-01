@@ -482,7 +482,7 @@ TEST_F(ListpackTest, listpackBatchDelete) {
     lp = lpBatchDelete(lp, ps, 3);
     ASSERT_EQ(lpLength(lp), 1u);
     verifyEntry(lpFirst(lp), (unsigned char *)mixlist[2], strlen(mixlist[2]));
-    ASSERT_EQ(lpValidateIntegrity(lp, lpBytes(lp), 1, nullptr, nullptr), 1);
+    ASSERT_EQ(lpValidateIntegrity(lp, lpBytes(lp), nullptr, nullptr), 1);
     lpFree(lp);
 }
 
@@ -946,7 +946,7 @@ TEST_F(ListpackTest, listpackLpValidateIntegrity) {
 
     lp = createList();
     long count = 0;
-    ASSERT_EQ(lpValidateIntegrity(lp, lpBytes(lp), 1, lpValidation, &count), 1);
+    ASSERT_EQ(lpValidateIntegrity(lp, lpBytes(lp), lpValidation, &count), 1);
     lpFree(lp);
 }
 
@@ -1131,7 +1131,7 @@ TEST_F(ListpackBenchmark, DISABLED_listpackBenchmarkLpValidateIntegrity) {
     /* Benchmark lpValidateIntegrity */
     unsigned long long start = usec();
     for (int i = 0; i < 2000; i++) {
-        lpValidateIntegrity(lp, lpBytes(lp), 1, nullptr, nullptr);
+        lpValidateIntegrity(lp, lpBytes(lp), nullptr, nullptr);
     }
     printf("Done. usec=%lld\n", usec() - start);
 }

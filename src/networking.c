@@ -119,7 +119,11 @@ typedef struct __attribute__((__packed__)) payloadHeader {
     int16_t slot;             /* to report network-bytes-out for BULK_STR_REF chunks */
     uint8_t payload_type : 1; /* one of payloadType */
     uint8_t track_bytes : 1;  /* 1 if net bytes tracking was enabled when reply was added */
-    uint8_t reserved : 6;
+    uint8_t reserved : 6;     /* reserved */
+    /* tracked_for_cob is placed after the bitfield byte so it is byte aligned.
+     * _Atomic(uint8_t) has alignment 1, this is safe inside __packed__
+     * because the compiler will not insert padding before it */
+    _Atomic(uint8_t) tracked_for_cob; /* 1 if this header's reply_len has been tracked in io_tracked_reply_len */
 } payloadHeader;
 
 /* To avoid copy of whole string in reply buffer
@@ -131,6 +135,8 @@ typedef struct __attribute__((__packed__)) bulkStrRef {
 
 static void setProtocolError(const char *errstr, client *c);
 static void pauseClientsByClient(mstime_t end, int isPauseClientAll);
+static void trackBufReferences(char *buf, size_t bufpos, client *c);
+static void releaseBufReferences(char *buf, size_t bufpos, client *c);
 int postponeClientRead(client *c);
 char *getClientSockname(client *c);
 static int parseClientFiltersOrReply(client *c, int index, clientFilter *filter);
@@ -165,17 +171,23 @@ typedef enum {
  * for a string object. This includes internal fragmentation. */
 size_t getStringObjectSdsUsedMemory(robj *o) {
     serverAssertWithInfo(NULL, o, o->type == OBJ_STRING);
-    if (o->encoding != OBJ_ENCODING_INT) {
+    if (objectGetEncoding(o) != OBJ_ENCODING_INT) {
         return sdsAllocSize(objectGetVal(o));
     }
     return 0;
+}
+
+/* Return the total memory used by a string object, including the robj
+ * structure and the sds string overhead (internal fragmentation). */
+size_t getStringObjectMemory(robj *o) {
+    return sizeof(robj) + getStringObjectSdsUsedMemory(o);
 }
 
 /* Return the length of a string object.
  * This does NOT include internal fragmentation or sds unused space. */
 size_t getStringObjectLen(robj *o) {
     serverAssertWithInfo(NULL, o, o->type == OBJ_STRING);
-    switch (o->encoding) {
+    switch (objectGetEncoding(o)) {
     case OBJ_ENCODING_RAW: return sdslen(objectGetVal(o));
     case OBJ_ENCODING_EMBSTR: return sdslen(objectGetVal(o));
     default: return 0; /* Just integer encoding for now. */
@@ -185,6 +197,17 @@ size_t getStringObjectLen(robj *o) {
 /* Actual allocated size of a client reply block */
 static size_t clientReplyAllocSize(clientReplyBlock *block) {
     return sizeof(clientReplyBlock) + block->size;
+}
+
+/* Postpone mask from client input/command state. Hold READ only while parsed pipeline
+ * commands are still in cmd_queue (must be consumed via processInputBuffer, not a new
+ * parseInputBuffer). Do not use multibulklen or pending_command here: incomplete parses
+ * and not-yet-run commands still need the read path (or processPendingCommandAndInputBuffer)
+ * to make progress. */
+int clientConnPostponeMask(client *c) {
+    int mask = clientConnPostponeMaskFromIOState(c);
+    if (c->cmd_queue.off < c->cmd_queue.len) mask |= CONN_POSTPONE_READ;
+    return mask;
 }
 
 /* Client.reply list dup and free methods. */
@@ -247,12 +270,29 @@ static inline int isReplicaReadyForReplData(client *replica) {
            !(replica->flag.close_asap);
 }
 
+/* The subscribe / unsubscribe command family has a push as a reply,
+ * or in other words, it responds with a push (or several of them
+ * depending on how many arguments it got), and has no reply. */
+int cmdHasPushAsReply(struct serverCommand *cmd) {
+    if (!cmd) return 0;
+    return cmd->proc == subscribeCommand || cmd->proc == unsubscribeCommand || cmd->proc == psubscribeCommand ||
+           cmd->proc == punsubscribeCommand || cmd->proc == ssubscribeCommand || cmd->proc == sunsubscribeCommand;
+}
+
+/* Publish-to-self push must wait until after the command reply. */
+static int shouldDeferPushMessage(client *c) {
+    return c->flag.pushing && c == server.current_client && server.executing_client &&
+           !cmdHasPushAsReply(server.executing_client->cmd);
+}
+
 /* Decides if copy avoidance is preferred according to client type, number of I/O threads, object size
  * Maybe called with NULL obj for evaluation with no regard to object size
  * Copy avoidance can be allowed only for regular Valkey clients
  * that use _writeToClient handler to write replies to client connection */
 static int isCopyAvoidPreferred(client *c, robj *obj) {
     if (c->flag.fake || isDeferredReplyEnabled(c)) return 0;
+    /* Skip copy avoidance when push bytes would be deferred into pending_push_messages. */
+    if (shouldDeferPushMessage(c)) return 0;
 
     int type = getClientType(c);
     if (type != CLIENT_TYPE_NORMAL && type != CLIENT_TYPE_PUBSUB) return 0;
@@ -307,6 +347,7 @@ client *createClient(connection *conn) {
     c->buf_peak = c->buf_usable_size;
     c->buf_peak_last_reset_time = server.unixtime;
     c->qb_pos = 0;
+    c->qb_applied = 0;
     c->querybuf = NULL;
     c->querybuf_peak = 0;
     c->reqtype = 0;
@@ -316,6 +357,7 @@ client *createClient(connection *conn) {
     c->argv_len_sum = 0;
     c->original_argc = 0;
     c->original_argv = NULL;
+    c->redact_arg_bitmap = 0;
     c->nread = 0;
     c->read_flags = 0;
     c->write_flags = 0;
@@ -325,7 +367,8 @@ client *createClient(connection *conn) {
     c->cur_script = NULL;
     c->multibulklen = 0;
     c->bulklen = -1;
-    c->raw_flag = 0;
+    c->raw_flag1 = 0;
+    c->raw_flag2 = 0;
     c->capa = 0;
     c->slot = -1;
     c->ctime = c->last_interaction = server.unixtime;
@@ -355,7 +398,6 @@ client *createClient(connection *conn) {
     c->last_memory_usage = 0;
     c->last_memory_type = CLIENT_TYPE_NORMAL;
     listInitNode(&c->clients_pending_write_node, c);
-    listInitNode(&c->pending_read_list_node, c);
     c->mem_usage_bucket = NULL;
     c->mem_usage_bucket_node = NULL;
     if (conn) linkClient(c);
@@ -363,6 +405,7 @@ client *createClient(connection *conn) {
     c->net_input_bytes_curr_cmd = 0;
     c->net_output_bytes = 0;
     c->net_output_bytes_curr_cmd = 0;
+    c->io_tracked_reply_len = 0;
     c->commands_processed = 0;
     c->io_last_reply_block = NULL;
     c->io_last_bufpos = 0;
@@ -513,6 +556,20 @@ void deleteCachedResponseClient(client *recording_client) {
     freeClient(recording_client);
 }
 
+/* Return the reply list that new reply data should be appended to.
+ * When the deferred reply buffer is active, replies go to
+ * c->deferred_reply; otherwise they go to c->reply. */
+static inline list *clientGetReplyList(client *c) {
+    return isDeferredReplyEnabled(c) ? c->deferred_reply : c->reply;
+}
+
+/* Return the reply bytes for the client.
+ * When the deferred reply buffer is active, replies go to
+ * c->deferred_reply_bytes; otherwise they go to c->reply_bytes. */
+static inline unsigned long long *clientGetReplyBytesPtr(client *c) {
+    return isDeferredReplyEnabled(c) ? &c->deferred_reply_bytes : &c->reply_bytes;
+}
+
 /* -----------------------------------------------------------------------------
  * Low level functions to add more data to output buffers.
  * -------------------------------------------------------------------------- */
@@ -537,7 +594,8 @@ static size_t upsertPayloadHeader(char *buf,
 
     /* Try to add payload to last chunk if possible */
     if (*last_header != NULL && (*last_header)->payload_type == type && (*last_header)->slot == slot &&
-        (*last_header)->track_bytes == track_bytes) {
+        (*last_header)->track_bytes == track_bytes &&
+        !atomic_load_explicit(&(*last_header)->tracked_for_cob, memory_order_acquire)) {
         (*last_header)->payload_len += allowed_len;
         return allowed_len;
     }
@@ -555,6 +613,7 @@ static size_t upsertPayloadHeader(char *buf,
     (*last_header)->slot = slot;
     (*last_header)->reply_len = 0;
     (*last_header)->track_bytes = track_bytes;
+    (*last_header)->tracked_for_cob = 0;
     (*last_header)->reserved = 0;
 
     *bufpos += sizeof(payloadHeader);
@@ -665,7 +724,7 @@ static void _addReplyPayloadToList(client *c, list *reply_list, const char *payl
         memcpy(tail->buf + tail->used, payload, len);
         tail->used += len;
         listAddNodeTail(reply_list, tail);
-        unsigned long long *reply_bytes = (isDeferredReplyEnabled(c)) ? &c->deferred_reply_bytes : &c->reply_bytes;
+        unsigned long long *reply_bytes = clientGetReplyBytesPtr(c);
         *reply_bytes += tail->size;
 
         closeClientOnOutputBufferLimitReached(c, 1);
@@ -680,15 +739,6 @@ void _addReplyProtoToList(client *c, list *reply_list, const char *s, size_t len
 /* Adds bulk string reference (i.e. pointer to object and pointer to string itself) to reply list */
 static void _addBulkStrRefToToList(client *c, const void *payload, size_t len) {
     _addReplyPayloadToList(c, c->reply, payload, len, BULK_STR_REF);
-}
-
-/* The subscribe / unsubscribe command family has a push as a reply,
- * or in other words, it responds with a push (or several of them
- * depending on how many arguments it got), and has no reply. */
-int cmdHasPushAsReply(struct serverCommand *cmd) {
-    if (!cmd) return 0;
-    return cmd->proc == subscribeCommand || cmd->proc == unsubscribeCommand || cmd->proc == psubscribeCommand ||
-           cmd->proc == punsubscribeCommand || cmd->proc == ssubscribeCommand || cmd->proc == sunsubscribeCommand;
 }
 
 void _addReplyToBufferOrList(client *c, const char *s, size_t len) {
@@ -716,8 +766,7 @@ void _addReplyToBufferOrList(client *c, const char *s, size_t len) {
      * the SUBSCRIBE command family, which (currently) have a push message instead of a proper reply.
      * The check for executing_client also avoids affecting push messages that are part of eviction.
      * Check CLIENT_PUSHING first to avoid race conditions, as it's absent in module's fake client. */
-    int defer_push_message = c->flag.pushing && c == server.current_client && server.executing_client &&
-                             !cmdHasPushAsReply(server.executing_client->cmd);
+    int defer_push_message = shouldDeferPushMessage(c);
     if (defer_push_message == 0 && isDeferredReplyEnabled(c)) {
         _addReplyProtoToList(c, c->deferred_reply, s, len);
         return;
@@ -728,7 +777,12 @@ void _addReplyToBufferOrList(client *c, const char *s, size_t len) {
         return;
     }
     size_t reply_len = _addReplyToBuffer(c, s, len);
-    if (len > reply_len) _addReplyProtoToList(c, c->reply, s + reply_len, len - reply_len);
+    if (len > reply_len) {
+        /* Content spilled to reply list. Clear c->last_header to prevent
+         * reuse of stale pointer and avoid double-tracking. */
+        c->last_header = NULL;
+        _addReplyProtoToList(c, c->reply, s + reply_len, len - reply_len);
+    }
 }
 
 /* Increment reference to object and add pointer to object and
@@ -741,6 +795,9 @@ static void _addBulkStrRefToBufferOrList(client *c, robj *obj) {
 
     bulkStrRef str_ref = {.obj = obj, .str = objectGetVal(obj)};
     if (!_addBulkStrRefToBuffer(c, (void *)&str_ref, sizeof(str_ref))) {
+        /* Content spilled to reply list. Clear c->last_header since
+         * it points into c->buf and should not be reused. */
+        c->last_header = NULL;
         _addBulkStrRefToToList(c, (void *)&str_ref, sizeof(str_ref));
     }
 }
@@ -784,8 +841,8 @@ void addReplySds(client *c, sds s) {
  * client buffer, trying the static buffer initially, and using the string
  * of objects if not possible.
  *
- * It is efficient because does not create an SDS object nor an Object
- * if not needed. The object will only be created by calling
+ * It is efficient because it does not needlessly create an SDS object
+ * or an Object. The object will only be created by calling
  * _addReplyProtoToList() if we fail to extend the existing tail object
  * in the list of objects. */
 void addReplyProto(client *c, const char *s, size_t len) {
@@ -804,7 +861,7 @@ void addReplyProto(client *c, const char *s, size_t len) {
  * Note that 's' must NOT end with \r\n. */
 void addReplyErrorLength(client *c, const char *s, size_t len) {
     /* If the string already starts with "-..." then the error code
-     * is provided by the caller. Otherwise we use "-ERR". */
+     * is provided by the caller. Otherwise, we use "-ERR". */
     if (!len || s[0] != '-') addReplyProto(c, "-ERR ", 5);
     addReplyProto(c, s, len);
     addReplyProto(c, "\r\n", 2);
@@ -833,7 +890,7 @@ void afterErrorReply(client *c, const char *s, size_t len, int flags) {
         server.stat_total_error_replies++;
         /* Increment the error stats
          * If the string already starts with "-..." then the error prefix
-         * is provided by the caller (we limit the search to 32 chars). Otherwise we use "-ERR". */
+         * is provided by the caller (we limit the search to 32 chars). Otherwise, we use "-ERR". */
         char *err_prefix = "ERR";
         size_t prefix_len = 3;
         if (s[0] == '-') {
@@ -1047,8 +1104,9 @@ void addReplyStatusFormat(client *c, const char *fmt, ...) {
  * the previous one, when that happens, we wanna try to trim the unused space
  * at the end of the last reply node which we won't use anymore. */
 void trimReplyUnusedTailSpace(client *c) {
-    listNode *ln = listLast(c->reply);
+    listNode *ln = listLast(clientGetReplyList(c));
     clientReplyBlock *tail = ln ? listNodeValue(ln) : NULL;
+    unsigned long long *reply_bytes = clientGetReplyBytesPtr(c);
 
     /* Note that 'tail' may be NULL even if we have a tail node, because when
      * addReplyDeferredLen() is used */
@@ -1057,16 +1115,31 @@ void trimReplyUnusedTailSpace(client *c) {
     /* We only try to trim the space is relatively high (more than a 1/4 of the
      * allocation), otherwise there's a high chance realloc will NOP.
      * Also, to avoid large memmove which happens as part of realloc, we only do
-     * that if the used part is small.  */
+     * that if the used part is small.
+     *
+     * Two conditions gate the realloc, for two distinct reasons:
+     *  - io_write_state != CLIENT_PENDING_IO: while an IO thread is writing it
+     *    concurrently walks the whole reply list, so mutating any block races
+     *    with it. This is a thread-safety requirement, independent of which
+     *    block we touch.
+     *  - tail->buf != io_last_written.buf: never free/move the block the write
+     *    bookmark points at. If we did, the allocator could hand the same
+     *    address back for a new reply block; the bookmark would then match an
+     *    unrelated, shorter block while its data_len still claims more bytes
+     *    were sent, and the next write would over-skip (empty IOV) and drop the
+     *    reply's leading bytes. A pointer check is NOT enough at the consumer
+     *    side because that recycle reuses the same address (ABA); the only
+     *    robust fix is to not free the bookmarked block in the first place.
+     * See https://github.com/valkey-io/valkey/pull/4060 */
     if (tail->size - tail->used > tail->size / 4 && tail->used < PROTO_REPLY_CHUNK_BYTES &&
-        c->io_write_state != CLIENT_PENDING_IO && !tail->flag.buf_encoded) {
+        c->io_write_state != CLIENT_PENDING_IO && tail->buf != c->io_last_written.buf && !tail->flag.buf_encoded) {
         size_t usable_size;
         size_t old_size = tail->size;
         tail = zrealloc_usable(tail, tail->used + sizeof(clientReplyBlock), &usable_size);
         /* take over the allocation's internal fragmentation (at least for
          * memory usage tracking) */
         tail->size = usable_size - sizeof(clientReplyBlock);
-        c->reply_bytes = c->reply_bytes + tail->size - old_size;
+        *reply_bytes = *reply_bytes + tail->size - old_size;
         listNodeValue(ln) = tail;
     }
 }
@@ -1094,9 +1167,15 @@ void *addReplyDeferredLen(client *c) {
      * buffer offset (see function comment) */
     reqresSaveClientReplyOffset(c);
 
+    /* When the deferred reply buffer is active, the placeholder must go into
+     * the same list that subsequent ReplyWith* calls will append to.
+     * Otherwise, setDeferredReply will fill the placeholder in c->reply while
+     * the array elements live in c->deferred_reply, producing a malformed
+     * response after commitDeferredReplyBuffer joins the two lists. */
+    list *reply_list = clientGetReplyList(c);
     trimReplyUnusedTailSpace(c);
-    listAddNodeTail(c->reply, NULL); /* NULL is our placeholder. */
-    return listLast(c->reply);
+    listAddNodeTail(reply_list, NULL); /* NULL is our placeholder. */
+    return listLast(reply_list);
 }
 
 void setDeferredReply(client *c, void *node, const char *s, size_t length) {
@@ -1107,6 +1186,11 @@ void setDeferredReply(client *c, void *node, const char *s, size_t length) {
      * we return NULL in addReplyDeferredLen() */
     if (node == NULL) return;
     serverAssert(!listNodeValue(ln));
+
+    /* The placeholder node may live in c->deferred_reply when the deferred
+     * reply buffer is active.  Use the same list for deletion/accounting. */
+    list *reply_list = clientGetReplyList(c);
+    unsigned long long *reply_bytes = clientGetReplyBytesPtr(c);
 
     /* Normally we fill this dummy NULL node, added by addReplyDeferredLen(),
      * with a new buffer structure containing the protocol needed to specify
@@ -1119,9 +1203,13 @@ void setDeferredReply(client *c, void *node, const char *s, size_t length) {
      * - The next node is non-NULL,
      * - It has enough room already allocated
      * - And not too large (avoid large memmove)
-     * - And the client is not in a pending I/O state */
+     * - And it is safe to mutate the target node: the client is not
+     *   CLIENT_PENDING_IO (an IO thread is not concurrently walking the reply
+     *   list) AND the target node is not the one io_last_written references
+     *   (mutating the bookmarked block desyncs the write bookmark).
+     *   See https://github.com/valkey-io/valkey/pull/4060 */
     if (ln->prev != NULL && (prev = listNodeValue(ln->prev)) && prev->size > prev->used &&
-        c->io_write_state != CLIENT_PENDING_IO && !prev->flag.buf_encoded) {
+        c->io_write_state != CLIENT_PENDING_IO && prev->buf != c->io_last_written.buf && !prev->flag.buf_encoded) {
         size_t len_to_copy = prev->size - prev->used;
         if (len_to_copy > length) len_to_copy = length;
         memcpy(prev->buf + prev->used, s, len_to_copy);
@@ -1129,19 +1217,20 @@ void setDeferredReply(client *c, void *node, const char *s, size_t length) {
         prev->used += len_to_copy;
         length -= len_to_copy;
         if (length == 0) {
-            listDelNode(c->reply, ln);
+            listDelNode(reply_list, ln);
             return;
         }
         s += len_to_copy;
     }
 
     if (ln->next != NULL && (next = listNodeValue(ln->next)) && next->size - next->used >= length &&
-        next->used < PROTO_REPLY_CHUNK_BYTES * 4 && c->io_write_state != CLIENT_PENDING_IO && !next->flag.buf_encoded) {
+        next->used < PROTO_REPLY_CHUNK_BYTES * 4 && c->io_write_state != CLIENT_PENDING_IO &&
+        next->buf != c->io_last_written.buf && !next->flag.buf_encoded) {
         memmove(next->buf + length, next->buf, next->used);
         memcpy(next->buf, s, length);
         c->net_output_bytes_curr_cmd += length;
         next->used += length;
-        listDelNode(c->reply, ln);
+        listDelNode(reply_list, ln);
     } else {
         /* Create a new node */
         size_t usable_size;
@@ -1153,7 +1242,7 @@ void setDeferredReply(client *c, void *node, const char *s, size_t length) {
         memcpy(buf->buf, s, length);
         c->net_output_bytes_curr_cmd += length;
         listNodeValue(ln) = buf;
-        c->reply_bytes += buf->size;
+        *reply_bytes += buf->size;
 
         closeClientOnOutputBufferLimitReached(c, 1);
     }
@@ -1861,6 +1950,13 @@ void freeClientOriginalArgv(client *c) {
     /* We didn't rewrite this client */
     if (!c->original_argv) return;
 
+    /* Client does not own the original argv, it just borrowed it. */
+    if (c->flag.argv_borrowed) {
+        c->original_argv = NULL;
+        c->original_argc = 0;
+        return;
+    }
+
     if (tryOffloadFreeArgvToIOThreads(c, c->original_argc, c->original_argv) == C_ERR) {
         for (int j = 0; j < c->original_argc; j++) decrRefCount(c->original_argv[j]);
         zfree(c->original_argv);
@@ -1871,12 +1967,18 @@ void freeClientOriginalArgv(client *c) {
 }
 
 void freeClientArgv(client *c) {
+    if (c->flag.argv_borrowed && !c->original_argv) {
+        /* Client does not own the argv, and there is no original argv, so just clear the fields. */
+        goto clear;
+    }
+
     /* If original_argv exists, 'c->argv' was allocated by the main thread,
      * so it's more efficient to free it directly here rather than offloading to IO threads */
     if (c->original_argv || tryOffloadFreeArgvToIOThreads(c, c->argc, c->argv) == C_ERR) {
         for (int j = 0; j < c->argc; j++) decrRefCount(c->argv[j]);
         zfree(c->argv);
     }
+clear:
     c->argc = 0;
     c->cmd = NULL;
     c->parsed_cmd = NULL;
@@ -1905,9 +2007,6 @@ void disconnectReplicas(void) {
  * This is used by freeClient() and replicationCachePrimary(). */
 void unlinkClient(client *c) {
     listNode *ln;
-
-    /* Wait for IO operations to be done before unlinking the client. */
-    waitForClientIO(c);
 
     /* If this is marked as current client unset it. */
     if (c->conn && server.current_client == c) server.current_client = NULL;
@@ -1950,8 +2049,7 @@ void unlinkClient(client *c) {
         }
         /* Check if this is the slot migration client we are writing to in a
          * child process*/
-        if (c->slot_migration_job && !isImportSlotMigrationJob(c->slot_migration_job) &&
-            server.slot_migration_pipe_conn == c->conn) {
+        if (server.slot_migration_pipe_conn == c->conn) {
             server.slot_migration_pipe_conn = NULL;
             serverLog(LL_NOTICE, "Slot migration target dropped, killing fork child.");
             killSlotMigrationChild();
@@ -1968,21 +2066,12 @@ void unlinkClient(client *c) {
 
     /* Remove from the list of pending writes if needed. */
     if (c->flag.pending_write) {
-        if (c->io_write_state == CLIENT_IDLE) {
-            listUnlinkNode(server.clients_pending_write, &c->clients_pending_write_node);
-        } else {
-            listUnlinkNode(server.clients_pending_io_write, &c->clients_pending_write_node);
-        }
+        serverAssert(server.clients_pending_write->len > 0);
+        listUnlinkNode(server.clients_pending_write, &c->clients_pending_write_node);
         c->flag.pending_write = 0;
     }
 
-    /* Remove from the list of pending reads if needed. */
     serverAssert(c->io_read_state != CLIENT_PENDING_IO && c->io_write_state != CLIENT_PENDING_IO);
-    if (c->flag.pending_read) {
-        listUnlinkNode(server.clients_pending_io_read, &c->pending_read_list_node);
-        c->flag.pending_read = 0;
-    }
-
 
     /* When client was just unblocked because of a blocking operation,
      * remove it from the list of unblocked clients. */
@@ -2043,20 +2132,29 @@ void clearClientConnectionState(client *c) {
     c->flag.reply_skip_next = 0;
     c->flag.no_touch = 0;
     c->flag.no_evict = 0;
+    c->flag.import_source = 0;
 }
 
-void freeClient(client *c) {
+/* Free the client structure and all the data associated with it.
+ * Returns 0 if the client was not freed immediately, but scheduled for
+ * asynchronous freeing, and 1 if the client was freed immediately. */
+int freeClient(client *c) {
     listNode *ln;
 
     /* If a client is protected, yet we need to free it right now, make sure
      * to at least use asynchronous freeing. */
-    if (c->flag.protected || c->flag.protected_rdb_channel) {
+    if (c->flag.protected || c->flag.protected_rdb_channel || clientHasPendingIO(c)) {
         freeClientAsync(c);
-        return;
+        return 0;
     }
 
-    /* Wait for IO operations to be done before proceeding */
-    waitForClientIO(c);
+    /* Debug: force async free for the primary client to deterministically
+     * reproduce the deferred-free replication state clobber race. */
+    if (server.debug_force_free_primary_async && c->flag.primary) {
+        server.debug_force_free_primary_async = 0;
+        freeClientAsync(c);
+        return 0;
+    }
 
     /* For connected clients, call the disconnection event of modules hooks. */
     if (c->conn) {
@@ -2088,7 +2186,7 @@ void freeClient(client *c) {
             c->flag.close_asap = 0;
             c->flag.close_after_reply = 0;
             replicationCachePrimary(c);
-            return;
+            return 0;
         }
     }
 
@@ -2140,7 +2238,16 @@ void freeClient(client *c) {
 
     /* Remove the contribution that this client gave to our
      * incrementally computed memory usage. */
-    if (c->conn) server.stat_clients_type_memory[c->last_memory_type] -= c->last_memory_usage;
+    if (c->last_memory_usage) {
+        /* A client is only ever accounted while it has a live connection,
+         * see updateClientMemoryUsage() for details.
+         *
+         * So at this point either c->conn is still set, or we are releasing
+         * a cached_primary whose conn was already NULLed by unlinkClient()
+         * during replicationCachePrimary(). */
+        debugServerAssert(c->conn || c == server.cached_primary);
+        server.stat_clients_type_memory[c->last_memory_type] -= c->last_memory_usage;
+    }
 
     /* Unlink the client: this will close the socket, remove the I/O
      * handlers, and remove references of the client from different
@@ -2164,6 +2271,7 @@ void freeClient(client *c) {
     sdsfree(c->peerid);
     sdsfree(c->sockname);
     zfree(c);
+    return 1;
 }
 
 /* Schedule a client to free it at a safe time in the beforeSleep() function.
@@ -2225,6 +2333,7 @@ void resetSharedQueryBuf(client *c) {
     c->querybuf = NULL;
     sdsclear(thread_shared_qb);
     c->qb_pos = 0;
+    c->qb_applied = 0;
 }
 
 /* Trims the client query buffer to the current position. */
@@ -2242,6 +2351,7 @@ void trimClientQueryBuffer(client *c) {
     if (c->qb_pos > 0) {
         sdsrange(c->querybuf, c->qb_pos, -1);
         c->qb_pos = 0;
+        c->qb_applied = 0;
     }
 }
 
@@ -2272,6 +2382,11 @@ void beforeNextClient(client *c) {
         if (c->repl_data->repl_applied) {
             sdsrange(c->querybuf, c->repl_data->repl_applied, -1);
             c->qb_pos -= c->repl_data->repl_applied;
+            /* qb_applied is an absolute offset, shift it together with the trimmed
+             * querybuf. commandProcessed() advances repl_applied to qb_applied after
+             * each command, so qb_applied >= repl_applied should always true here. */
+            serverAssert(c->qb_applied >= (size_t)c->repl_data->repl_applied);
+            c->qb_applied -= c->repl_data->repl_applied;
             c->repl_data->repl_applied = 0;
         }
     } else {
@@ -2280,7 +2395,7 @@ void beforeNextClient(client *c) {
     /* Handle async frees */
     /* Note: this doesn't make the server.clients_to_close list redundant because of
      * cases where we want an async free of a client other than myself. For example
-     * in ACL modifications we disconnect clients authenticated to non-existent
+     * in ACL modifications we disconnect clients authenticated to nonexistent
      * users (see ACL LOAD). */
     if (c->flag.close_asap) {
         freeClient(c);
@@ -2326,7 +2441,7 @@ int freeClientsInAsyncFreeQueue(void) {
             c->flag.protected_rdb_channel = 0;
         }
 
-        if (c->flag.protected) continue;
+        if (c->flag.protected || clientHasPendingIO(c)) continue;
 
         c->flag.close_asap = 0;
         freeClient(c);
@@ -2681,6 +2796,9 @@ static int writevToClient(client *c) {
     /* If the static reply buffer is not empty,
      * add it to the iov array for writev() as well. */
     if (bufpos > 0) {
+        if (c->flag.buf_encoded) {
+            trackBufReferences(c->buf, bufpos, c);
+        }
         addBufferToReplyIOV(c->flag.buf_encoded, c->buf, bufpos, &reply, &buf_metadata[bufcnt++]);
     }
 
@@ -2701,6 +2819,10 @@ static int writevToClient(client *c) {
             if (used == 0) { /* empty node, skip over it. */
                 if (next == lastblock) break;
                 continue;
+            }
+
+            if (o->flag.buf_encoded) {
+                trackBufReferences(o->buf, used, c);
             }
 
             addBufferToReplyIOV(o->flag.buf_encoded, o->buf, used, &reply, &buf_metadata[bufcnt]);
@@ -2803,14 +2925,60 @@ void resetLastWrittenBuf(client *c) {
     c->io_last_written.data_len = 0;
 }
 
-/* Release references to string objects inside an encoded buffer */
-static void releaseBufReferences(char *buf, size_t bufpos) {
+/* Track BULK_STR_REF sizes.
+ * Calculates reply_len for BULK_STR_REFs if not already set, and adds to client's tracking counter.
+ * This is called from I/O thread before writing to account for actual reply sizes. */
+static void trackBufReferences(char *buf, size_t bufpos, client *c) {
+    serverAssert(c);
+
     char *ptr = buf;
     while (ptr < buf + bufpos) {
         payloadHeader *header = (payloadHeader *)ptr;
         ptr += sizeof(payloadHeader);
 
         if (header->payload_type == BULK_STR_REF) {
+            uint8_t expected = 0;
+            if (atomic_compare_exchange_strong_explicit(&header->tracked_for_cob, &expected, 1,
+                                                        memory_order_acq_rel, memory_order_acquire)) {
+                /* We claimed tracking rights */
+                bulkStrRef *str_ref = (bulkStrRef *)ptr;
+                size_t len = header->payload_len;
+                size_t total_reply_len = 0;
+                while (len > 0) {
+                    size_t str_len = sdslen(str_ref->str);
+                    uint32_t num_len = digits10(str_len);
+                    /* RESP encodes bulk strings as $<length>\r\n<data>\r\n */
+                    total_reply_len += (num_len + 3) + str_len + 2;
+                    str_ref++;
+                    len -= sizeof(bulkStrRef);
+                }
+                /* reply_len must be set here because addEncodedBufferToReplyIOV
+                 * stops early on partial writes (limit_reached) and may not check
+                 * headers after write boundary */
+                header->reply_len = total_reply_len;
+                atomic_fetch_add_explicit(&c->io_tracked_reply_len, total_reply_len, memory_order_relaxed);
+            }
+        }
+
+        ptr += header->payload_len;
+    }
+    serverAssert(ptr == buf + bufpos);
+}
+
+/* Release references to string objects inside an encoded buffer */
+static void releaseBufReferences(char *buf, size_t bufpos, client *c) {
+    char *ptr = buf;
+    while (ptr < buf + bufpos) {
+        payloadHeader *header = (payloadHeader *)ptr;
+        ptr += sizeof(payloadHeader);
+
+        if (header->payload_type == BULK_STR_REF) {
+            /* Decrement tracked reply size only if it was previously tracked.
+             * Use atomic exchange to ensure we only decrement once. */
+            if (c && atomic_exchange_explicit(&header->tracked_for_cob, 0, memory_order_acq_rel)) {
+                atomic_fetch_sub_explicit(&c->io_tracked_reply_len, header->reply_len, memory_order_relaxed);
+            }
+
             /* When net byte tracking was disabled in the main thread (commandlog-reply-larger-than -1)
              * at the time this reply was added, we account for cluster slot stats here in the IO thread
              * after writing the reply. When tracking was enabled, it's already accounted in the main thread
@@ -2837,7 +3005,7 @@ static void releaseBufReferences(char *buf, size_t bufpos) {
 
 void releaseReplyReferences(client *c) {
     if (c->bufpos > 0 && c->flag.buf_encoded) {
-        releaseBufReferences(c->buf, c->bufpos);
+        releaseBufReferences(c->buf, c->bufpos, c);
     }
 
     listIter iter;
@@ -2846,7 +3014,7 @@ void releaseReplyReferences(client *c) {
     while ((next = listNext(&iter))) {
         clientReplyBlock *o = (clientReplyBlock *)listNodeValue(next);
         if (o->flag.buf_encoded) {
-            releaseBufReferences(o->buf, o->used);
+            releaseBufReferences(o->buf, o->used, c);
         }
     }
 }
@@ -2863,16 +3031,23 @@ static void _postWriteToClient(client *c) {
     if (c->bufpos > 0) {
         /* Is this buffer is last written? */
         last_written = (c->buf == c->io_last_written.buf);
+        /* Bookmark desync detector (debug builds only); see the comment in the
+         * reply-list loop below and https://github.com/valkey-io/valkey/pull/4060 */
+        if (last_written) {
+            debugServerAssert(c->io_last_written.bufpos == 0 || c->io_last_written.bufpos <= c->bufpos);
+        }
         /* If buffer is completely written */
         if (!last_written || c->bufpos == c->io_last_written.bufpos) {
             /* If encoded then release references to bulk string objects */
-            if (c->flag.buf_encoded) releaseBufReferences(c->buf, c->bufpos);
+            if (c->flag.buf_encoded) releaseBufReferences(c->buf, c->bufpos, c);
             /* Reset buffer metadata */
             c->bufpos = 0;
             c->flag.buf_encoded = 0;
             c->last_header = NULL;
             /* If completely written buffer is last written then reset last written state */
             if (last_written) resetLastWrittenBuf(c);
+        } else {
+            c->last_header = NULL;
         }
         if (last_written) return;
     }
@@ -2884,11 +3059,21 @@ static void _postWriteToClient(client *c) {
         clientReplyBlock *o = listNodeValue(next);
         /* Is this buffer is last written? */
         last_written = (o->buf == c->io_last_written.buf);
+        /* Bookmark desync detector (debug builds only): for the bookmarked
+         * block, the recorded in-memory write position (bufpos) must never
+         * exceed the block's current content (used); a violation means the
+         * block was freed/shrunk/recycled while the bookmark was live. Catches
+         * any complete-write desync (plain or encoded); a partial write stores
+         * bufpos == 0 and is intentionally not checked here. See the PR for the
+         * full rationale: https://github.com/valkey-io/valkey/pull/4060 */
+        if (last_written) {
+            debugServerAssert(c->io_last_written.bufpos == 0 || c->io_last_written.bufpos <= o->used);
+        }
         /* If buffer is completely written */
         if (!last_written || o->used == c->io_last_written.bufpos) {
             c->reply_bytes -= o->size;
             /* If encoded then release references to bulk string objects */
-            if (o->flag.buf_encoded) releaseBufReferences(o->buf, o->used);
+            if (o->flag.buf_encoded) releaseBufReferences(o->buf, o->used, c);
             listDelNode(c->reply, next);
             /* If completely written buffer is last written then reset last written state */
             if (last_written) resetLastWrittenBuf(c);
@@ -2972,9 +3157,13 @@ void sendReplyToClient(connection *conn) {
 
 void handleQbLimitReached(client *c) {
     sds ci = catClientInfoString(sdsempty(), c, server.hide_user_data_from_log), bytes = sdsempty();
-    bytes = sdscatrepr(bytes, c->querybuf, 64);
-    serverLog(LL_WARNING, "Closing client that reached max query buffer length: %s (qbuf initial bytes: %s)", ci,
-              bytes);
+    if (server.hide_user_data_from_log) {
+        serverLog(LL_WARNING, "Closing client that reached max query buffer length: %s", ci);
+    } else {
+        bytes = sdscatrepr(bytes, c->querybuf, 64);
+        serverLog(LL_WARNING, "Closing client that reached max query buffer length: %s (qbuf initial bytes: %s)", ci,
+                  bytes);
+    }
     sdsfree(ci);
     sdsfree(bytes);
     freeClientAsync(c);
@@ -3127,67 +3316,43 @@ parseResult handleParseResults(client *c) {
  * This function handles various post-write tasks, including updating client state,
  * allow_async_writes - A flag indicating whether I/O threads can handle pending writes for this client.
  * returns 1 if processing completed successfully, 0 if processing is skipped. */
-int processClientIOWriteDone(client *c, int allow_async_writes) {
-    /* memory barrier acquire to get the latest client state */
-    atomic_thread_fence(memory_order_acquire);
-    /* If a client is protected, don't proceed to check the write results as it may trigger conn close. */
-    if (c->flag.protected) return 0;
-
-    listUnlinkNode(server.clients_pending_io_write, &c->clients_pending_write_node);
-    c->flag.pending_write = 0;
+void processClientIOWriteDone(client *c) {
+    if (c->io_write_state == CLIENT_IDLE) return; /* Already handled */
+    serverAssert(c->io_write_state == CLIENT_COMPLETED_IO);
     c->io_write_state = CLIENT_IDLE;
 
     /* Don't post-process-writes to clients that are going to be closed anyway. */
-    if (c->flag.close_asap) return 0;
+    if (c->flag.close_asap) return;
 
-    /* Update processed count on server */
-    server.stat_io_writes_processed += 1;
+    int mask = 0;
+    if (c->io_read_state == CLIENT_PENDING_IO || c->io_read_state == CLIENT_COMPLETED_IO)
+        mask |= CONN_POSTPONE_READ;
 
-    connSetPostponeUpdateState(c->conn, 0);
+    connSetPostponeUpdateState(c->conn, mask);
+    if (postWriteToClient(c) == C_ERR) return;
+
+    /* connUpdateState may sync-invoke handlers for some transports (e.g. RDMA)
+     * and free the client; only then re-fetch it by id after the update. */
+    int may_invoke_handlers = connUpdateStateMayInvokeHandlers(c->conn);
+    uint64_t id = c->id;
     connUpdateState(c->conn);
-    if (postWriteToClient(c) == C_ERR) {
-        return 1;
+    if (may_invoke_handlers) {
+        c = lookupClientByID(id);
+        if (!c || !c->conn) return;
     }
 
-    if (clientHasPendingReplies(c)) {
-        if (c->write_flags & WRITE_FLAGS_WRITE_ERROR) {
-            /* Install the write handler if there are pending writes in some of the clients as a result of not being
-             * able to write everything in one go. */
-            installClientWriteHandler(c);
-        } else {
-            /* If we can send the client to the I/O thread, let it handle the write. */
-            if (allow_async_writes && trySendWriteToIOThreads(c) == C_OK) return 1;
-            /* Try again in the next eventloop */
-            putClientInPendingWriteQueue(c);
-        }
+    if (!clientHasPendingReplies(c)) return;
+
+    if (c->write_flags & WRITE_FLAGS_WRITE_ERROR) {
+        /* Install the write handler if there are pending writes in some of the clients as a result of not being
+         * able to write everything in one go. */
+        installClientWriteHandler(c);
+    } else {
+        /* If we can send the client to the I/O thread, let it handle the write. */
+        if (trySendWriteToIOThreads(c) == C_OK) return;
+        /* Try again in the next eventloop */
+        putClientInPendingWriteQueue(c);
     }
-
-    return 1;
-}
-
-/* This function handles the post-processing of I/O write operations that have been
- * completed for clients. It iterates through the list of clients with pending I/O
- * writes and performs necessary actions based on their current state.
- *
- * Returns The number of clients processed during this function call. */
-int processIOThreadsWriteDone(void) {
-    if (listLength(server.clients_pending_io_write) == 0) return 0;
-    int processed = 0;
-    listNode *ln;
-
-    listNode *next = listFirst(server.clients_pending_io_write);
-    while (next) {
-        ln = next;
-        next = listNextNode(ln);
-        client *c = listNodeValue(ln);
-
-        /* Client is still waiting for a pending I/O - skip it */
-        if (c->io_write_state == CLIENT_PENDING_IO || c->io_read_state == CLIENT_PENDING_IO) continue;
-
-        processed += processClientIOWriteDone(c, 1);
-    }
-
-    return processed;
 }
 
 /* This function is called just before entering the event loop, in the hope
@@ -3199,17 +3364,12 @@ int handleClientsWithPendingWrites(void) {
     int pending_writes = listLength(server.clients_pending_write);
     if (pending_writes == 0) return processed; /* Return ASAP if there are no clients. */
 
-    /* Adjust the number of I/O threads based on the number of pending writes this is required in case pending_writes >
-     * poll_events (for example in pubsub) */
-    adjustIOThreadsByEventLoad(pending_writes, 1);
-
     listIter li;
     listNode *ln;
     listRewind(server.clients_pending_write, &li);
     while ((ln = listNext(&li))) {
         client *c = listNodeValue(ln);
-        c->flag.pending_write = 0;
-        listUnlinkNode(server.clients_pending_write, ln);
+        serverAssert(c->flag.pending_write);
 
         /* If a client is protected, don't do anything,
          * that may trigger write error or recreate handler. */
@@ -3218,13 +3378,18 @@ int handleClientsWithPendingWrites(void) {
         /* Don't write to clients that are going to be closed anyway. */
         if (c->flag.close_asap) continue;
 
+        if (c->io_read_state == CLIENT_PENDING_IO) continue;
+
+        c->flag.pending_write = 0;
+        listUnlinkNode(server.clients_pending_write, ln);
+
         if (!clientHasPendingReplies(c)) continue;
 
         /* If we can send the client to the I/O thread, let it handle the write. */
         if (trySendWriteToIOThreads(c) == C_OK) continue;
 
         /* We can't write to the client while IO operation is in progress. */
-        if (c->io_write_state != CLIENT_IDLE || c->io_read_state != CLIENT_IDLE) continue;
+        if (c->io_write_state != CLIENT_IDLE) continue;
 
         processed++;
 
@@ -3247,6 +3412,7 @@ void resetClient(client *c) {
 
     freeClientArgv(c);
     freeClientOriginalArgv(c);
+    c->redact_arg_bitmap = 0;
     c->cur_script = NULL;
     c->net_input_bytes_curr_cmd = 0;
     c->slot = -1;
@@ -3283,6 +3449,11 @@ void resetClient(client *c) {
         c->flag.reply_skip = 1;
         c->flag.reply_skip_next = 0;
     }
+
+    /* Clear the borrowed-argv flag: the argv array was only borrowed for the
+     * duration of a single VM_CallArgv dispatch; after execution it no longer
+     * points to the caller's array. */
+    c->flag.argv_borrowed = 0;
 }
 
 void resetClientIOState(client *c) {
@@ -3302,8 +3473,7 @@ void initSharedQueryBuf(void) {
     sdsclear(thread_shared_qb);
 }
 
-void freeSharedQueryBuf(void *dummy) {
-    UNUSED(dummy);
+void freeSharedQueryBuf(void) {
     sdsfree(thread_shared_qb);
     thread_shared_qb = NULL;
 }
@@ -3394,7 +3564,7 @@ void parseInlineBuffer(client *c) {
     /* Move querybuffer position to the next query in the buffer. */
     c->qb_pos += querylen + linefeed_chars;
 
-    /* Setup argv array on client structure */
+    /* Set up argv array on client structure */
     if (argc) {
         if (c->argv) zfree(c->argv);
         c->argv_len = argc;
@@ -3427,6 +3597,8 @@ void parseInlineBuffer(client *c) {
      * */
     c->net_input_bytes_curr_cmd = (c->argv_len_sum + (c->argc - 1) + 2);
     c->read_flags |= READ_FLAGS_PARSING_COMPLETED;
+    /* Record qb_pos so commandProcessed() can update reploff precisely. */
+    c->qb_applied = c->qb_pos;
     c->reqtype = 0;
 }
 
@@ -3474,22 +3646,20 @@ static void setProtocolError(const char *errstr, client *c) {
  *
  * This function is called if processInputBuffer() detects that the next
  * command is in RESP format, so the first byte in the command is found
- * to be '*'. Otherwise for inline commands parseInlineBuffer() is called. */
+ * to be '*'. Otherwise, for inline commands parseInlineBuffer() is called. */
 void parseMultibulkBuffer(client *c) {
     int flag = parseMultibulk(c, &c->argc, &c->argv, &c->argv_len,
                               &c->argv_len_sum, &c->net_input_bytes_curr_cmd);
     c->read_flags |= flag;
 
+    /* Record qb_pos for commandProcessed(). Written unconditionally because a
+     * client may become replicated mid-command (e.g. CLUSTER SYNCSLOTS ESTABLISH
+     * installs slot_migration_job inside its own handler). */
+    if (c->read_flags & READ_FLAGS_PARSING_COMPLETED) c->qb_applied = c->qb_pos;
+
     if (c->read_flags & READ_FLAGS_AUTH_REQUIRED) {
         /* Execute client's AUTH command before parsing more, because it affects
          * parser limits for max allowed bulk and multibulk lengths. */
-        return;
-    }
-
-    if (isReplicatedClient(c)) {
-        /* TODO: some change is required for replication offset which is
-         * computed from c->qb_pos, assuming we only parse one command at a
-         * time. Disable multi-command parsing for replication for now. */
         return;
     }
 
@@ -3587,7 +3757,7 @@ static int parseMultibulk(client *c,
         c->multibulklen = ll;
         c->bulklen = -1;
 
-        /* Setup argv array */
+        /* Set up argv array */
         if (*argv) zfree(*argv);
         *argv_len = min(c->multibulklen, 1024);
         *argv = zmalloc(sizeof(robj *) * *argv_len);
@@ -3681,6 +3851,7 @@ static int parseMultibulk(client *c,
                     }
                     sdsrange(c->querybuf, c->qb_pos, -1);
                     c->qb_pos = 0;
+                    c->qb_applied = 0;
                     /* Hint the sds library about the amount of bytes this string is
                      * going to contain. */
                     c->querybuf = sdsMakeRoomForNonGreedy(c->querybuf, ll + 2 - sdslen(c->querybuf));
@@ -3767,8 +3938,16 @@ void commandProcessed(client *c) {
 
     long long prev_offset = c->repl_data->reploff;
     if (isReplicatedClient(c) && !c->flag.multi) {
-        /* Update the applied replication offset of our primary. */
-        c->repl_data->reploff = c->repl_data->read_reploff - sdslen(c->querybuf) + c->qb_pos;
+        /* Advance reploff by exactly this command's bytes. Use qb_applied
+         * (current command's right boundary) instead of qb_pos, which may
+         * have run ahead due to multi-command parsing. */
+        c->repl_data->reploff = c->repl_data->read_reploff - sdslen(c->querybuf) + c->qb_applied;
+        /* Every applied non-MULTI command should consume >0 bytes from the
+         * replication stream, so reploff must strictly advance. A no-op
+         * advance means qb_applied was not maintained for the command we
+         * just processed (e.g. a command was backfilled into querybuf without
+         * updating qb_applied). */
+        serverAssert(c->repl_data->reploff > prev_offset);
     }
 
     /* If the client is replicated we need to compute the difference
@@ -3825,6 +4004,10 @@ int processCommandAndResetClient(client *c) {
  * the client. Returns C_ERR if the client is no longer valid after executing
  * the command, and C_OK for all other cases. */
 int processPendingCommandAndInputBuffer(client *c) {
+    /* Blocked clients are resumed via processUnblockedClients(); skip them here
+     * to avoid re-entering processCommand() while pending_command is intentionally left set. */
+    if (c->flag.blocked) return C_OK;
+
     /* Notice, this code is also called from 'processUnblockedClients'.
      * But in case of a module blocked client (see RM_Call 'K' flag) we do not reach this code path.
      * So whenever we change the code here we need to consider if we need this change on module
@@ -3859,6 +4042,11 @@ void parseInputBuffer(client *c) {
     /* The command queue must be emptied before parsing. */
     serverAssert(c->cmd_queue.len == 0);
 
+    /* Hold off transport read handlers for the duration of parsing (RDMA update_state
+     * may otherwise re-enter readQueryFromClient and corrupt cmd_queue). */
+    connection *conn = c->conn;
+    if (conn) connSetPostponeUpdateState(conn, clientConnPostponeMaskFromIOState(c) | CONN_POSTPONE_READ);
+
     /* Determine request type when unknown. */
     if (!c->reqtype) {
         if (c->querybuf[c->qb_pos] == '*') {
@@ -3875,6 +4063,11 @@ void parseInputBuffer(client *c) {
     } else {
         serverPanic("Unknown request type");
     }
+
+    /* Restore only IO-state postpone; do not hold READ for cmd_queue here.
+     * Pipeline commands are drained by processInputBuffer; leaving READ postponed
+     * without a later handleReadJobs/connUpdateState clear stalls RDMA rx. */
+    if (conn) connSetPostponeUpdateState(conn, clientConnPostponeMaskFromIOState(c));
 }
 
 /* Free unused memory in a client's queue of parsed commands. */
@@ -3944,6 +4137,7 @@ static bool consumeCommandQueue(client *c) {
     c->net_input_bytes_curr_cmd = p->input_bytes;
     c->parsed_cmd = p->cmd;
     c->slot = p->slot;
+    c->qb_applied += p->input_bytes;
     if (queue->off == queue->len) {
         /* The queue is empty. Don't free it here, because if parsing is done in
          * I/O threads, we want to free it in I/O threads too, to avoid
@@ -4075,16 +4269,26 @@ int processInputBuffer(client *c) {
         c->read_flags = isReplicatedClient(c) ? READ_FLAGS_REPLICATED : 0;
         c->read_flags |= authRequired(c) ? READ_FLAGS_AUTH_REQUIRED : 0;
 
+        bool popped_from_queue;
         /* If commands are queued up, pop from the queue first */
         if (!consumeCommandQueue(c)) {
             parseInputBuffer(c);
             prepareCommandQueue(c);
+            popped_from_queue = false;
+        } else {
+            popped_from_queue = true;
         }
 
         /* Prefetch keys for the next commands in queue, if not already done. */
         prefetchCommandQueueKeys(c);
 
-        if (handleParseResults(c) != PARSE_OK) {
+        parseResult res = handleParseResults(c);
+        if (res == PARSE_NEEDMORE && popped_from_queue) {
+            /* A queued partial; its completion bytes may already be in querybuf
+             * (read while blocked), so re-parse instead of waiting for I/O. */
+            continue;
+        } else if (res != PARSE_OK) {
+            /* Parse error or partial command. */
             break;
         }
 
@@ -4121,7 +4325,10 @@ static bool readToQueryBuf(client *c) {
     size_t qblen, readlen;
 
     /* If the replica RDB client is marked as closed ASAP, do not try to read from it */
-    if (c->flag.close_asap) return false;
+    if (c->flag.close_asap) {
+        c->nread = 0;
+        return false;
+    }
 
     int is_replicated = c->read_flags & READ_FLAGS_REPLICATED;
 
@@ -5030,7 +5237,7 @@ void clientHelpCommand(client *c) {
         "CAPA <option> [options...]",
         "    The client claims its some capability options. Options are:",
         "    * REDIRECT",
-        "      The client can handle redirection during primary and replica failover in standalone mode.",
+        "      The client can handle redirection (standalone failover and keyless commands on replicas).",
         "GETREDIR",
         "    Return the client ID we are redirecting to when tracking is enabled.",
         "GETNAME",
@@ -5854,17 +6061,24 @@ static void backupAndUpdateClientArgv(client *c, int new_argc, robj **new_argv) 
     }
 }
 
+bool clientCommandArgShouldBeRedacted(client *c, int arg_index) {
+    if (arg_index < 1) return false;
+    if (arg_index >= 32) return c->redact_arg_bitmap & 1U;
+    return (c->redact_arg_bitmap >> arg_index) & 1;
+}
+
 /* Redact a given argument to prevent it from being shown
- * in the commandlog. This information is stored in the
- * original_argv array. */
+ * in the commandlog. The argument index is recorded in a bitmap.
+ * For indices in the range [1, 31] the corresponding bit is set.
+ * For indices >= 32, bit 0 is set as a sentinel to indicate that all
+ * arguments beyond the bitmap range should also be redacted. */
 void redactClientCommandArgument(client *c, int argc) {
-    backupAndUpdateClientArgv(c, c->argc, NULL);
-    if (c->original_argv[argc] == shared.redacted) {
-        /* This argument has already been redacted */
-        return;
+    serverAssert(argc >= 1);
+    if (argc < 32) {
+        c->redact_arg_bitmap |= (1U << argc);
+    } else {
+        c->redact_arg_bitmap |= 1U;
     }
-    decrRefCount(c->original_argv[argc]);
-    c->original_argv[argc] = shared.redacted;
 }
 
 /* Rewrite the command vector of the client. All the new objects ref count
@@ -5956,6 +6170,9 @@ size_t getClientOutputBufferMemoryUsage(client *c) {
         usage += c->deferred_reply_bytes +
                  (list_item_size * listLength(c->deferred_reply));
     }
+
+    usage += atomic_load_explicit(&c->io_tracked_reply_len, memory_order_relaxed);
+
     return usage;
 }
 
@@ -5973,10 +6190,11 @@ size_t getClientMemoryUsage(client *c, size_t *output_buffer_mem_usage) {
      * i.e. unused sds space and internal fragmentation, just the string length. but this is enough to
      * spot problematic clients. */
     mem += c->argv_len_sum + sizeof(robj *) * c->argc;
+
+    /* Add memory overhead of multi. */
     mem += multiStateMemOverhead(c);
 
-    /* Add memory overhead of pubsub channels and patterns. Note: this is just the overhead of the robj pointers
-     * to the strings themselves because they aren't stored per client. */
+    /* Add memory overhead of pubsub channels and patterns. */
     mem += pubsubMemOverhead(c);
 
     /* Add memory overhead of the tracking prefixes, this is an underestimation so we don't need to traverse the entire
@@ -5985,25 +6203,6 @@ size_t getClientMemoryUsage(client *c, size_t *output_buffer_mem_usage) {
         mem += c->pubsub_data->client_tracking_prefixes->numnodes * (sizeof(raxNode) + sizeof(raxNode *));
 
     return mem;
-}
-
-/* Get the class of a client, used in order to enforce limits to different
- * classes of clients.
- *
- * The function will return one of the following:
- * CLIENT_TYPE_NORMAL -> Normal client, including MONITOR
- * CLIENT_TYPE_REPLICA  -> replica
- * CLIENT_TYPE_PUBSUB -> Client subscribed to Pub/Sub channels
- * CLIENT_TYPE_PRIMARY -> The client representing our replication primary.
- */
-int getClientType(client *c) {
-    if (c->flag.primary) return CLIENT_TYPE_PRIMARY;
-    /* Even though MONITOR clients are marked as replicas, we
-     * want the expose them as normal clients. */
-    if (c->flag.replica && !c->flag.monitor) return CLIENT_TYPE_REPLICA;
-    if (c->flag.pubsub) return CLIENT_TYPE_PUBSUB;
-    if (c->slot_migration_job) return isImportSlotMigrationJob(c->slot_migration_job) ? CLIENT_TYPE_SLOT_IMPORT : CLIENT_TYPE_SLOT_EXPORT;
-    return CLIENT_TYPE_NORMAL;
 }
 
 int getClientTypeByName(char *name) {
@@ -6038,7 +6237,7 @@ char *getClientTypeName(int client_class) {
  * a side effect.
  *
  * Return value: non-zero if the client reached the soft or the hard limit.
- *               Otherwise zero is returned. */
+ *               Otherwise, zero is returned. */
 int checkClientOutputBufferLimits(client *c) {
     int soft = 0, hard = 0, class;
     unsigned long used_mem = getClientOutputBufferMemoryUsage(c);
@@ -6112,7 +6311,8 @@ int closeClientOnOutputBufferLimitReached(client *c, int async) {
     serverAssert(c->reply_bytes < SIZE_MAX - (1024 * 64));
     /* Note that c->reply_bytes is irrelevant for replica clients
      * (they use the global repl buffers). */
-    if ((c->reply_bytes == 0 && getClientType(c) != CLIENT_TYPE_REPLICA) ||
+    size_t tracked_len = atomic_load_explicit(&c->io_tracked_reply_len, memory_order_relaxed);
+    if ((c->reply_bytes == 0 && tracked_len == 0 && getClientType(c) != CLIENT_TYPE_REPLICA) ||
         (c->flag.close_asap && !(c->flag.protected_rdb_channel)))
         return 0;
     if (checkClientOutputBufferLimits(c)) {
@@ -6368,91 +6568,73 @@ int postponeClientRead(client *c) {
     return (trySendReadToIOThreads(c) == C_OK);
 }
 
-int processIOThreadsReadDone(void) {
+/* Returns non-zero if connUpdateState must run again after processClientsCommandsBatch(). */
+int processClientIOReadsDone(client *c) {
+    serverAssert(c->io_read_state == CLIENT_COMPLETED_IO);
+
     if (ProcessingEventsWhileBlocked) {
         /* When ProcessingEventsWhileBlocked we may call processIOThreadsReadDone recursively.
          * In this case, there may be some clients left in the batch waiting to be processed. */
         processClientsCommandsBatch();
     }
 
-    if (listLength(server.clients_pending_io_read) == 0) return 0;
-    int processed = 0;
-    listNode *ln;
+    c->flag.pending_read = 0;
+    c->io_read_state = CLIENT_IDLE;
 
-    listNode *next = listFirst(server.clients_pending_io_read);
-    while (next) {
-        ln = next;
-        next = listNextNode(ln);
-        client *c = listNodeValue(ln);
+    /* Don't post-process-reads from clients that are going to be closed anyway. */
+    if (c->flag.close_asap) return 0;
 
-        /* Client is still waiting for a pending I/O - skip it */
-        if (c->io_write_state == CLIENT_PENDING_IO || c->io_read_state == CLIENT_PENDING_IO) continue;
-        /* If the write job is done, process it ASAP to free the buffer and handle connection errors */
-        if (c->io_write_state == CLIENT_COMPLETED_IO) {
-            int allow_async_writes = 0; /* Don't send writes for the client to IO threads before processing the reads */
-            processClientIOWriteDone(c, allow_async_writes);
+    /* If a client is protected, don't do anything,
+     * that may trigger read/write error or recreate handler. */
+    if (c->flag.protected) return 0;
+
+    /* Save the current conn state, as connUpdateState may modify it */
+    int in_accept_state = (connGetState(c->conn) == CONN_STATE_ACCEPTING);
+    int needs_post_read_update = 0;
+
+    /* Defer the post-batch update only when update_state may sync-invoke
+     * handlers. Always call update_state, including ACCEPTING. */
+    if (c->conn) {
+        int mask = 0;
+        if (!in_accept_state && connUpdateStateMayInvokeHandlers(c->conn)) {
+            mask = CONN_POSTPONE_READ;
+            if (c->io_write_state != CLIENT_IDLE) mask |= CONN_POSTPONE_WRITE;
+            needs_post_read_update = 1;
         }
-        /* memory barrier acquire to get the updated client state */
-        atomic_thread_fence(memory_order_acquire);
-
-        listUnlinkNode(server.clients_pending_io_read, ln);
-        c->flag.pending_read = 0;
-        c->io_read_state = CLIENT_IDLE;
-
-        /* Don't post-process-reads from clients that are going to be closed anyway. */
-        if (c->flag.close_asap) continue;
-
-        /* If a client is protected, don't do anything,
-         * that may trigger read/write error or recreate handler. */
-        if (c->flag.protected) continue;
-
-        processed++;
-        server.stat_io_reads_processed++;
-
-        /* Save the current conn state, as connUpdateState may modify it */
-        int in_accept_state = (connGetState(c->conn) == CONN_STATE_ACCEPTING);
-        connSetPostponeUpdateState(c->conn, 0);
+        connSetPostponeUpdateState(c->conn, mask);
         connUpdateState(c->conn);
+    }
 
-        /* In accept state, no client's data was read - stop here. */
-        if (in_accept_state) continue;
+    /* In accept state, no client's data was read - stop here. */
+    if (in_accept_state) return 0;
 
-        /* On read error - stop here. */
-        if (handleReadResult(c) == C_ERR) {
-            continue;
-        }
+    /* On read error - stop here. */
+    if (handleReadResult(c) == C_ERR) {
+        return needs_post_read_update;
+    }
 
-        if (!(c->read_flags & READ_FLAGS_DONT_PARSE)) {
-            parseResult res = handleParseResults(c);
-            /* On parse error - stop here. */
-            if (res == PARSE_ERR) {
-                continue;
-            } else if (res == PARSE_NEEDMORE) {
-                beforeNextClient(c);
-                continue;
-            }
-        }
-
-        if (c->argc > 0) {
-            c->flag.pending_command = 1;
-        }
-
-        size_t list_length_before_command_execute = listLength(server.clients_pending_io_read);
-        /* try to add the command to the batch */
-        int ret = addCommandToBatchAndProcessIfFull(c);
-        /* If the command was not added to the commands batch, process it immediately */
-        if (ret == C_ERR) {
-            if (processPendingCommandAndInputBuffer(c) == C_OK) beforeNextClient(c);
-        }
-        if (list_length_before_command_execute != listLength(server.clients_pending_io_read)) {
-            /* A client was unlink from the list possibly making the next node invalid */
-            next = listFirst(server.clients_pending_io_read);
+    if (!(c->read_flags & READ_FLAGS_DONT_PARSE)) {
+        parseResult res = handleParseResults(c);
+        /* On parse error - stop here. */
+        if (res == PARSE_ERR) {
+            return needs_post_read_update;
+        } else if (res == PARSE_NEEDMORE) {
+            beforeNextClient(c);
+            return needs_post_read_update;
         }
     }
 
-    processClientsCommandsBatch();
+    if (c->argc > 0) {
+        c->flag.pending_command = 1;
+    }
 
-    return processed;
+    /* try to add the command to the batch */
+    int ret = addCommandToBatchAndProcessIfFull(c);
+    /* If the command was not added to the commands batch, process it immediately */
+    if (ret == C_ERR) {
+        if (processPendingCommandAndInputBuffer(c) == C_OK) beforeNextClient(c);
+    }
+    return needs_post_read_update;
 }
 
 /* Returns the actual client eviction limit based on current configuration or
@@ -6485,16 +6667,34 @@ void evictClients(void) {
     listRewind(server.client_mem_usage_buckets[curr_bucket].clients, &bucket_iter);
     size_t client_eviction_limit = getClientEvictionLimit();
     if (client_eviction_limit == 0) return;
-    while (server.stat_clients_type_memory[CLIENT_TYPE_NORMAL] + server.stat_clients_type_memory[CLIENT_TYPE_PUBSUB] >
-           client_eviction_limit) {
+
+    /* Variable to track memory of clients marked for close but not yet freed */
+    size_t pending_freed = 0;
+
+    while (server.stat_clients_type_memory[CLIENT_TYPE_NORMAL] +
+               server.stat_clients_type_memory[CLIENT_TYPE_PUBSUB] >
+           client_eviction_limit + pending_freed) {
         listNode *ln = listNext(&bucket_iter);
         if (ln) {
             client *c = ln->value;
+            if (c->flag.close_asap) {
+                /* Already scheduled to close. Count memory as freed and skip. */
+                pending_freed += c->last_memory_usage;
+                continue;
+            }
             sds ci = catClientInfoString(sdsempty(), c, server.hide_user_data_from_log);
             serverLog(LL_NOTICE, "Evicting client: %s", ci);
-            freeClient(c);
             sdsfree(ci);
             server.stat_evictedclients++;
+
+            if (freeClient(c) == 0) {
+                /* Client was only scheduled for asynchronous free (e.g. protected
+                 * or has pending IO) - its memory won't drop from the stats above
+                 * until that completes. Count it as freed here so we don't keep
+                 * evicting further clients while waiting for it. */
+                pending_freed += c->last_memory_usage;
+                continue;
+            }
         } else {
             curr_bucket--;
             if (curr_bucket < 0) {
@@ -6508,12 +6708,15 @@ void evictClients(void) {
 
 /* IO threads functions */
 
-void ioThreadReadQueryFromClient(void *data) {
-    client *c = data;
+void ioThreadReadQueryFromClient(client *c) {
     serverAssert(c->io_read_state == CLIENT_PENDING_IO);
 
     /* Read */
     readToQueryBuf(c);
+
+    if (c->flag.close_asap) {
+        goto done;
+    }
 
     /* Check for read errors. */
     if (c->nread <= 0) {
@@ -6550,12 +6753,13 @@ done:
     if (!(c->read_flags & READ_FLAGS_REPLICATED)) {
         trimClientQueryBuffer(c);
     }
-    atomic_thread_fence(memory_order_release);
+
     c->io_read_state = CLIENT_COMPLETED_IO;
+    c->cur_tid = getCurTid();
+    sendToMainThread(c, JOB_RES_READ_CLIENT);
 }
 
-void ioThreadWriteToClient(void *data) {
-    client *c = data;
+void ioThreadWriteToClient(client *c) {
     serverAssert(c->io_write_state == CLIENT_PENDING_IO);
     c->nwritten = 0;
     if (c->write_flags & WRITE_FLAGS_IS_REPLICA) {
@@ -6564,8 +6768,8 @@ void ioThreadWriteToClient(void *data) {
         _writeToClient(c);
     }
 
-    atomic_thread_fence(memory_order_release);
     c->io_write_state = CLIENT_COMPLETED_IO;
+    sendToMainThread(c, JOB_RES_WRITE_CLIENT);
 }
 
 /* ========================== Wrapper Functions for Testing ========================== */
@@ -6634,4 +6838,8 @@ void testOnlyAddBufferToReplyIOV(int encoded, char *buf, size_t bufpos, replyIOV
 
 void testOnlySaveLastWrittenBuf(client *c, bufWriteMetadata *metadata, int bufcnt, size_t totlen, size_t totwritten) {
     saveLastWrittenBuf(c, metadata, bufcnt, totlen, totwritten);
+}
+
+void testOnlyTrimReplyUnusedTailSpace(client *c) {
+    trimReplyUnusedTailSpace(c);
 }

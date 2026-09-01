@@ -1765,6 +1765,13 @@ TEST_F(QuicklistTest, quicklistCompressAndDecompressQuicklistListpackNode) {
 TEST_F(QuicklistTest, quicklistCompressAndDecomressQuicklistPlainNodeLargeThanUINT32MAX) {
     if (!large_memory) GTEST_SKIP() << "Skipping large memory test";
 
+#ifdef VALKEY_ADDRESS_SANITIZER
+    /* Skip under ASAN: compression requires both original (4GB) and output
+     * buffer (~4GB) simultaneously, totaling ~8GB. With ASAN's 2-3x memory
+     * overhead, peak usage reaches ~16-24GB, exceeding GitHub runner limits. */
+    GTEST_SKIP() << "Skipping large memory test under address sanitizer";
+#endif
+
 #if ULONG_MAX >= 0xffffffffffffffff
 
     size_t sz = (1ull << 32);

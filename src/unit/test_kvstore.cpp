@@ -20,7 +20,7 @@ uint64_t hashConflictTestCallback(const void *key) {
 }
 
 int cmpTestCallback(const void *k1, const void *k2) {
-    return strcmp((const char *)k1, (const char *)k2);
+    return strcmp((const char *)k1, (const char *)k2) == 0;
 }
 
 void freeTestCallback(void *val) {

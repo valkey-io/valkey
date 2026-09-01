@@ -108,7 +108,8 @@ test "Node #10 should eventually replicate node #5" {
     # Valgrind runs are significantly slower and occasionally need more time
     # for the cluster to propagate the new primary. Use a larger timeout to
     # avoid spurious failures in slow environments.
-    wait_for_condition 2000 50 {
+    set iterations [expr {$::valgrind ? 4000 : 2000}]
+    wait_for_condition $iterations 50 {
         ([lindex [R 10 role] 2] == $port5) &&
         ([lindex [R 10 role] 3] eq {connected})
     } else {
@@ -120,7 +121,7 @@ test "Node #10 should eventually replicate node #5" {
 
 # Create a cluster with 3 master and 15 slaves, so that we have 5
 # slaves for each master.
-start_cluster 3 15 {tags {external:skip cluster}} {
+start_cluster 3 15 {tags {external:skip cluster} overrides {cluster-ping-interval 1000 cluster-node-timeout 5000}} {
 
 test "Cluster is up" {
     wait_for_cluster_state ok
@@ -167,6 +168,8 @@ proc master_detected {instances} {
 
 test "New Master down consecutively" {
     set instances [dict create 0 1 3 1 6 1 9 1 12 1 15 1]
+    set failover_iterations [expr {$::valgrind ? 4000 : 2000}]
+    set cluster_iterations [expr {$::valgrind ? 2000 : 1000}]
 
     set loops [expr {[dict size $instances]-1}]
     for {set i 0} {$i < $loops} {incr i} {
@@ -186,7 +189,7 @@ test "New Master down consecutively" {
 
         set paused_pid [srv [expr $master_id * -1] pid]
         pause_process $paused_pid
-        wait_for_condition 2000 50 {
+        wait_for_condition $failover_iterations 50 {
             [master_detected $instances]
         } else {
             fail "No failover detected when master $master_id fails"
@@ -194,7 +197,7 @@ test "New Master down consecutively" {
 
         for {set j 0} {$j < [llength $::servers]} {incr j} {
             if {[process_is_paused [srv -$j pid]]} continue
-            wait_for_condition 1000 50 {
+            wait_for_condition $cluster_iterations 50 {
                 [CI $j cluster_state] eq "ok"
             } else {
                 fail "Cluster node $j cluster_state:[CI $j cluster_state]"

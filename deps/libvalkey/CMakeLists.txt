@@ -46,19 +46,16 @@ set(valkey_sources
     src/command.c
     src/conn.c
     src/crc16.c
+    src/dict.c
     src/net.c
     src/read.c
     src/sockcompat.c
     src/valkey.c
     src/vkutil.c)
 
-# Allow the libvalkey provided sds and dict types to be replaced by
+# Allow the libvalkey provided sds type to be replaced by
 # compatible implementations (like Valkey's).
 # A replaced type is not included in a built archive or shared library.
-if(NOT DICT_INCLUDE_DIR)
-  set(valkey_sources ${valkey_sources} src/dict.c)
-  set(DICT_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src)
-endif()
 if(NOT SDS_INCLUDE_DIR)
   set(valkey_sources ${valkey_sources} src/sds.c)
   set(SDS_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src)
@@ -107,7 +104,6 @@ TARGET_INCLUDE_DIRECTORIES(valkey
         $<INSTALL_INTERFACE:include>
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include/valkey>
     PRIVATE
-        $<BUILD_INTERFACE:${DICT_INCLUDE_DIR}>
         $<BUILD_INTERFACE:${SDS_INCLUDE_DIR}>
 )
 
@@ -212,7 +208,6 @@ IF(ENABLE_TLS)
         PRIVATE
             $<INSTALL_INTERFACE:include>
             $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include/valkey>
-            $<BUILD_INTERFACE:${DICT_INCLUDE_DIR}>
             $<BUILD_INTERFACE:${SDS_INCLUDE_DIR}>
     )
 
@@ -289,7 +284,6 @@ if(ENABLE_RDMA)
         PRIVATE
             $<INSTALL_INTERFACE:include>
             $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include/valkey>
-            $<BUILD_INTERFACE:${DICT_INCLUDE_DIR}>
             $<BUILD_INTERFACE:${SDS_INCLUDE_DIR}>
     )
 

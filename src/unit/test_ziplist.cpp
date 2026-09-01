@@ -209,6 +209,30 @@ TEST_F(ZiplistTest, ziplistCreateIntList) {
     zfree(zl);
 }
 
+TEST_F(ZiplistTest, ziplistHeaderRawByteLayout) {
+    unsigned char *zl = ziplistNew();
+    zl = ziplistPush(zl, (unsigned char *)("test"), 4, ZIPLIST_TAIL);
+
+    /* Verify header fields are stored as little-endian */
+    uint32_t zlbytes, zltail;
+    uint16_t zllen;
+    memcpy(&zlbytes, zl, sizeof(uint32_t));
+    memcpy(&zltail, zl + 4, sizeof(uint32_t));
+    memcpy(&zllen, zl + 8, sizeof(uint16_t));
+
+    /* On any architecture, raw bytes should be LE - use intrev to get host value */
+    ASSERT_EQ(intrev32ifbe(zlbytes), ziplistBlobLen(zl));
+    ASSERT_EQ(intrev16ifbe(zllen), 1u);
+
+    /* Verify raw byte order is LE by checking low byte is at offset 0 */
+    unsigned char *raw = zl;
+    uint32_t expected_len = ziplistBlobLen(zl);
+    ASSERT_EQ(raw[0], (expected_len & 0xFF));
+    ASSERT_EQ(raw[1], ((expected_len >> 8) & 0xFF));
+
+    zfree(zl);
+}
+
 TEST_F(ZiplistTest, ziplistPop) {
     unsigned char *zl, *p;
 

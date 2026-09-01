@@ -1,6 +1,6 @@
 {
     "LOLWUT": {
-        "summary": "Displays computer art and the server version",
+        "summary": "Displays computer art and the server version.",
         "group": "server",
         "since": "5.0.0",
         "arity": -1,

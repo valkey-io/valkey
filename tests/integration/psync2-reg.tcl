@@ -22,7 +22,7 @@ start_server {} {
         if {$debug_msg} {puts "Log file: [srv [expr 0-$j] stdout]"}
     }
 
-    # Setup the replication and backlog parameters
+    # Set up the replication and backlog parameters
     test "PSYNC2 #3899 regression: setup" {
         $R(1) slaveof $R_host(0) $R_port(0)
         $R(2) slaveof $R_host(0) $R_port(0)

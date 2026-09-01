@@ -34,6 +34,7 @@ proc setup_throttle_replication {primary replica primary_host primary_port} {
     $primary flushall
     $primary config set repl-throttling-enabled yes
     $primary config set client-output-buffer-limit "replica 1024mb 64kb 3600"
+    $primary config set repl-timeout 1800
     $replica replicaof no one
     $replica flushall
     $replica replicaof $primary_host $primary_port

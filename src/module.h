@@ -99,9 +99,6 @@ typedef struct moduleValue {
 typedef int (*ModuleLoadFunc)(void *, void **, int);
 typedef int (*ModuleUnLoadFunc)(void *);
 
-/* Resume state for a module's global defrag pass, defined in module.c. */
-typedef struct moduleDefragCursor moduleDefragCursor;
-
 /* This structure represents a module inside the system. */
 typedef struct ValkeyModule {
     void *handle;                         /* Module dlopen() handle. */
@@ -120,8 +117,6 @@ typedef struct ValkeyModule {
     int blocked_clients;                  /* Count of ValkeyModuleBlockedClient in this module. */
     ValkeyModuleInfoFunc info_cb;         /* Callback for module to add INFO fields. */
     ValkeyModuleDefragFunc defrag_cb;     /* Callback for global data defrag. */
-    moduleDefragCursor *defrag_cursor;    /* Global defrag: resume state for the current pass. */
-    int defrag_done_this_cycle;           /* Global defrag: module is done this cycle, skip until next cycle. */
     struct moduleLoadQueueEntry *loadmod; /* Module load arguments for config rewrite. */
     int num_commands_with_acl_categories; /* Number of commands in this module included in acl categories */
     int onload;                           /* Flag to identify if the call is being made from Onload (0 or 1) */
@@ -247,10 +242,7 @@ size_t moduleGetMemUsage(robj *key, robj *val, size_t sample_size, int dbid);
 robj *moduleTypeDupOrReply(client *c, robj *fromkey, robj *tokey, int todb, robj *value);
 int moduleDefragValue(robj *key, robj *obj, int dbid);
 int moduleLateDefrag(robj *key, robj *value, unsigned long *cursor, monotime endtime, int dbid);
-void moduleDefragGlobalsStart(void);
-void moduleDefragGlobalsAbort(void);
-void moduleDefragGlobalsReleaseCursor(struct ValkeyModule *module);
-int moduleDefragGlobals(monotime endtime);
+bool moduleDefragGlobals(monotime endtime);
 void *moduleGetHandleByName(char *modulename);
 int moduleIsModuleCommand(void *module_handle, struct serverCommand *cmd);
 void freeClientModuleData(client *c);

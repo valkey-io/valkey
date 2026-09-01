@@ -967,15 +967,7 @@ static doneStatus defragLuaScripts(monotime endtime, void *target, void *privdat
 static doneStatus defragModuleGlobals(monotime endtime, void *target, void *privdata) {
     UNUSED(target);
     UNUSED(privdata);
-    if (endtime == 0) {
-        // Starting the stage, every module gets visited again
-        moduleDefragGlobalsStart();
-        return DEFRAG_NOT_DONE;
-    }
-    int more_work = moduleDefragGlobals(endtime);
-    // Running out of time can leave modules unvisited, so require a full pass with no work left.
-    if (more_work || getMonotonicUs() >= endtime) return DEFRAG_NOT_DONE;
-    return DEFRAG_DONE;
+    return moduleDefragGlobals(endtime) ? DEFRAG_NOT_DONE : DEFRAG_DONE;
 }
 
 
@@ -1021,10 +1013,6 @@ static void endDefragCycle(bool normal_termination) {
         defrag_later = NULL;
     }
     defrag_later_cursor = 0;
-
-    /* An abnormal termination interrupts modules mid-pass; discard the positions they saved.  A
-     * normal termination has already released every module cursor. */
-    if (!normal_termination) moduleDefragGlobalsAbort();
 
     size_t frag_bytes;
     float frag_pct = getAllocatorFragmentation(&frag_bytes);

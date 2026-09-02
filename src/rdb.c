@@ -3203,7 +3203,9 @@ void rdbLoadProgressCallback(rio *r, const void *buf, size_t len) {
         processEventsWhileBlocked();
         processModuleLoadingProgressEvent(0);
     }
-    if (server.repl_state == REPL_STATE_TRANSFER && rioCheckType(r) == RIO_TYPE_CONN) {
+    /* Dual-channel loads on the rdb channel before REPL_STATE_TRANSFER, so count those bytes too. */
+    if ((server.repl_state == REPL_STATE_TRANSFER || server.repl_rdb_channel_state == REPL_DUAL_CHANNEL_RDB_LOAD) &&
+        rioCheckType(r) == RIO_TYPE_CONN) {
         server.stat_net_repl_input_bytes += len;
     }
 }

@@ -146,6 +146,9 @@ struct ValkeyModule;
 #define PROTO_SHARED_SELECT_CMDS 10
 #define OBJ_SHARED_INTEGERS 10000
 #define OBJ_SHARED_BULKHDR_LEN 32
+
+/* Maximum number of hash fields to active-expire per replicated HDEL command. */
+#define HASH_FIELD_EXPIRE_BULK_LIMIT ((size_t)1024)
 #define OBJ_SHARED_HDR_STRLEN(_len_) (((_len_) < 10) ? 4 : 5) /* see shared.mbulkhdr etc. */
 #define LOG_MAX_LEN 1024                                      /* Default maximum length of syslog messages.*/
 #define AOF_REWRITE_ITEMS_PER_CMD 64

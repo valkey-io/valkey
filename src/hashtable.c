@@ -65,6 +65,8 @@
 #include <arm_neon.h>
 #endif
 
+#define HASHTABLE_POP_ENTRIES_STACK_MAX 128
+
 /* The default hashing function uses the SipHash implementation in siphash.c. */
 
 uint64_t siphash(const uint8_t *in, const size_t inlen, const uint8_t *k);
@@ -1747,19 +1749,13 @@ bool hashtablePop(hashtable *ht, const void *key, void **popped) {
     return 0;
 }
 
-/* Removes multiple distinct entries known to be in the table and returns the
- * number of entries removed. The entry destructor is not called. The caller
- * must pass distinct entries that are present in the table, and `count` must
- * not exceed HASHTABLE_POP_ENTRIES_STACK_MAX. `entries` is input-only. Batching
- * avoids per-delete hole filling and shrink checks. */
-size_t hashtablePopKnownEntries(hashtable *ht, void **entries, size_t count) {
+static size_t hashtablePopKnownEntriesBatch(hashtable *ht, void **entries, size_t count) {
     assert(count <= HASHTABLE_POP_ENTRIES_STACK_MAX);
-    if (count == 0 || hashtableSize(ht) == 0) return 0;
+    if (count == 0) return 0;
 
     size_t bucket_index[HASHTABLE_POP_ENTRIES_STACK_MAX];
     int table_index[HASHTABLE_POP_ENTRIES_STACK_MAX];
     size_t affected_buckets = 0;
-    size_t removed = 0;
 
     hashtablePauseRehashing(ht);
     hashtablePauseAutoShrink(ht);
@@ -1791,7 +1787,6 @@ size_t hashtablePopKnownEntries(hashtable *ht, void **entries, size_t count) {
                             table_index[affected_buckets] = table;
                             affected_buckets++;
                         }
-                        removed++;
                         deleted = true;
                         break;
                     }
@@ -1799,6 +1794,7 @@ size_t hashtablePopKnownEntries(hashtable *ht, void **entries, size_t count) {
                 b = deleted ? NULL : getChildBucket(b);
             } while (b != NULL);
         }
+        assert(deleted);
     }
 
     hashtableResumeRehashing(ht);
@@ -1811,6 +1807,22 @@ size_t hashtablePopKnownEntries(hashtable *ht, void **entries, size_t count) {
         }
     }
     hashtableResumeAutoShrink(ht);
+
+    return count;
+}
+
+/* Removes multiple distinct entries known to be in the table and returns the
+ * number of entries removed. The entry destructor is not called. The caller
+ * must pass distinct entries that are present in the table. `entries` is
+ * input-only. Batching avoids per-delete hole filling and shrink checks. */
+size_t hashtablePopKnownEntries(hashtable *ht, void **entries, size_t count) {
+    size_t removed = 0;
+
+    for (size_t offset = 0; offset < count; offset += HASHTABLE_POP_ENTRIES_STACK_MAX) {
+        size_t remaining = count - offset;
+        size_t batch = remaining < HASHTABLE_POP_ENTRIES_STACK_MAX ? remaining : HASHTABLE_POP_ENTRIES_STACK_MAX;
+        removed += hashtablePopKnownEntriesBatch(ht, &entries[offset], batch);
+    }
 
     return removed;
 }

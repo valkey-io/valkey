@@ -209,6 +209,103 @@ TEST_F(HashtableTest, pop_known_entries) {
     ASSERT_EQ(zmalloc_used_memory(), used_memory_before);
 }
 
+TEST_F(HashtableTest, pop_known_entries_multiple_batches) {
+    size_t used_memory_before = zmalloc_used_memory();
+    hashtableType type = keyval_type;
+    type.entryDestructor = freekeyvalCounting;
+    keyval_destructor_calls = 0;
+
+    hashtable *ht = hashtableCreate(&type);
+    const int count = 600;
+    const int pop_count = 300;
+    keyval *entries[count];
+    void *known[pop_count];
+
+    for (int j = 0; j < count; j++) {
+        char key[32], val[32];
+        snprintf(key, sizeof(key), "%d", j);
+        snprintf(val, sizeof(val), "%d", j + 1000);
+        entries[j] = create_keyval(key, val);
+        ASSERT_TRUE(hashtableAdd(ht, entries[j]));
+    }
+    for (int j = 0; j < pop_count; j++) {
+        known[j] = entries[j * 2];
+    }
+
+    ASSERT_EQ(hashtablePopKnownEntries(ht, known, pop_count), (size_t)pop_count);
+    ASSERT_EQ(keyval_destructor_calls, 0u);
+    ASSERT_EQ(hashtableSize(ht), (size_t)(count - pop_count));
+
+    for (int j = 0; j < count; j++) {
+        char key[32];
+        void *found = NULL;
+        snprintf(key, sizeof(key), "%d", j);
+        if (j % 2 == 0) {
+            ASSERT_FALSE(hashtableFind(ht, key, &found));
+            free(entries[j]);
+        } else {
+            ASSERT_TRUE(hashtableFind(ht, key, &found));
+            ASSERT_EQ(found, entries[j]);
+        }
+    }
+
+    hashtableRelease(ht);
+    ASSERT_EQ(keyval_destructor_calls, (size_t)(count - pop_count));
+    ASSERT_EQ(zmalloc_used_memory(), used_memory_before);
+}
+
+TEST_F(HashtableTest, pop_known_entries_completes_shrink_rehash) {
+    size_t used_memory_before = zmalloc_used_memory();
+    hashtableType type = keyval_type;
+    type.entryDestructor = freekeyvalCounting;
+    keyval_destructor_calls = 0;
+
+    hashtable *ht = hashtableCreate(&type);
+    const int count = 2000;
+    const int remaining = 20;
+    const int pop_count = count - remaining;
+    keyval *entries[count];
+    void *known[pop_count];
+
+    for (int j = 0; j < count; j++) {
+        char key[32], val[32];
+        snprintf(key, sizeof(key), "%d", j);
+        snprintf(val, sizeof(val), "%d", j + 1000);
+        entries[j] = create_keyval(key, val);
+        ASSERT_TRUE(hashtableAdd(ht, entries[j]));
+    }
+    while (hashtableIsRehashing(ht)) {
+        hashtableRehashMicroseconds(ht, 1000);
+    }
+    size_t mem_before_pop = hashtableMemUsage(ht);
+
+    for (int j = 0; j < pop_count; j++) {
+        known[j] = entries[j];
+    }
+
+    ASSERT_EQ(hashtablePopKnownEntries(ht, known, pop_count), (size_t)pop_count);
+    ASSERT_FALSE(hashtableIsRehashing(ht));
+    ASSERT_EQ(hashtableSize(ht), (size_t)remaining);
+    ASSERT_LT(hashtableMemUsage(ht), mem_before_pop);
+
+    for (int j = 0; j < count; j++) {
+        char key[32];
+        void *found = NULL;
+        snprintf(key, sizeof(key), "%d", j);
+        if (j < pop_count) {
+            ASSERT_FALSE(hashtableFind(ht, key, &found));
+            free(entries[j]);
+        } else {
+            ASSERT_TRUE(hashtableFind(ht, key, &found));
+            ASSERT_EQ(found, entries[j]);
+        }
+    }
+
+    hashtableRelease(ht);
+    ASSERT_EQ(keyval_destructor_calls, (size_t)remaining);
+    ASSERT_EQ(zmalloc_used_memory(), used_memory_before);
+}
+
 TEST_F(HashtableTest, pop_any_entries) {
     size_t used_memory_before = zmalloc_used_memory();
     hashtableType type = keyval_type;

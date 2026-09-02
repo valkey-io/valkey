@@ -2398,9 +2398,10 @@ void hrandfieldCommand(client *c) {
 
 /* Context structure for tracking expiry operations on hash fields. */
 typedef struct {
-    robj *key;              /* the hash object */
-    unsigned long n_fields; /* number of entries processed */
-    robj **fields;          /* array of expired entries to replicate later */
+    robj *key;               /* the hash object */
+    unsigned long field_cap; /* maximum number of fields that can be queued */
+    unsigned long n_fields;  /* number of entries processed */
+    robj **fields;           /* array of expired entries to replicate later */
 } expiryContext;
 
 /* Callback for popping expired entries from the volatile set.
@@ -2413,16 +2414,16 @@ static void hashTypeExpireEntries(void **entries, size_t count, void *c) {
     expiryContext *ctx = c;
     hashtable *ht = objectGetVal(ctx->key);
 
-    for (size_t offset = 0; offset < count; offset += HASHTABLE_POP_ENTRIES_STACK_MAX) {
-        size_t batch = min(count - offset, HASHTABLE_POP_ENTRIES_STACK_MAX);
-        size_t deleted_count = hashtablePopKnownEntries(ht, &entries[offset], batch);
-        /* The volatile set and the hash table body must contain the same entry pointers. */
-        serverAssert(deleted_count == batch);
-    }
+    size_t deleted_count = hashtablePopKnownEntries(ht, entries, count);
+    /* The volatile set and the hash table body must contain the same entry pointers. */
+    serverAssert(deleted_count == count);
 
     for (size_t i = 0; i < count; i++) {
         entry *expired = entries[i];
-        if (ctx->fields) ctx->fields[ctx->n_fields++] = createStringObjectFromSds(entryGetField(expired));
+        if (ctx->fields) {
+            serverAssert(ctx->n_fields < ctx->field_cap);
+            ctx->fields[ctx->n_fields++] = createStringObjectFromSds(entryGetField(expired));
+        }
         server.stat_expiredfields++;
         entryFree(expired);
     }
@@ -2440,15 +2441,11 @@ size_t hashTypeDeleteExpiredFields(robj *o, mstime_t now, unsigned long max_fiel
 
     serverAssert(!vsetIsEmpty(vset));
     serverAssert(hashtableSize(objectGetVal(o)) > 0);
-    /* skip TTL checks temporarily (to allow hashtable pops) */
-    hashTypeIgnoreTTL(o, true);
-    expiryContext ctx = {.key = o, .fields = out_entries, .n_fields = 0};
+    expiryContext ctx = {.key = o, .field_cap = max_fields, .n_fields = 0, .fields = out_entries};
     size_t expired = vsetRemoveExpired(vset, entryGetExpiryVsetFunc, hashTypeExpireEntries, now, max_fields, &ctx);
     serverAssert(ctx.n_fields <= max_fields);
     if (vsetIsEmpty(vset)) {
         hashTypeFreeVolatileSet(o);
-    } else {
-        hashTypeIgnoreTTL(o, false);
     }
     return expired;
 }

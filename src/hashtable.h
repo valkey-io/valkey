@@ -93,7 +93,6 @@ typedef void (*hashtableScanFunction)(void *privdata, void *entry);
 
 /* Constants */
 #define HASHTABLE_BUCKET_SIZE 64 /* bytes, the most common cache line size */
-#define HASHTABLE_POP_ENTRIES_STACK_MAX 128
 
 /* Scan flags */
 #define HASHTABLE_SCAN_EMIT_REF (1 << 0)

@@ -2046,8 +2046,6 @@ void propagateDeletion(serverDb *db, robj *key, int lazy, int slot) {
     server.replication_allowed = prev_replication_allowed;
 }
 
-#define EXPIRE_BULK_LIMIT ((size_t)1024) /* Maximum number of fields to active-expire (per replicated HDEL command */
-
 /* Propagate HDEL commands for deleted hash fields to AOF and replicas.
  *
  * This function builds and propagates a single HDEL command with multiple fields
@@ -2058,8 +2056,8 @@ int propagateFieldsDeletion(serverDb *db, robj *o, size_t n_fields, robj *fields
     int prev_replication_allowed = server.replication_allowed;
     server.replication_allowed = 1;
 
-    robj *argv[EXPIRE_BULK_LIMIT + 2]; /* HDEL + key + fields */
-    if (n_fields > EXPIRE_BULK_LIMIT) n_fields = EXPIRE_BULK_LIMIT;
+    robj *argv[HASH_FIELD_EXPIRE_BULK_LIMIT + 2]; /* HDEL + key + fields */
+    if (n_fields > HASH_FIELD_EXPIRE_BULK_LIMIT) n_fields = HASH_FIELD_EXPIRE_BULK_LIMIT;
 
     int argc = 0;
     robj *keyobj = createStringObjectFromSds(objectGetKey(o));
@@ -2094,8 +2092,8 @@ size_t dbReclaimExpiredFields(robj *o, serverDb *db, mstime_t now, unsigned long
 
     while (max_entries > 0) {
         /* Process in batches to avoid large stack allocations. */
-        unsigned long batch_size = max_entries > EXPIRE_BULK_LIMIT ? EXPIRE_BULK_LIMIT : max_entries;
-        robj *entries[EXPIRE_BULK_LIMIT];
+        unsigned long batch_size = max_entries > HASH_FIELD_EXPIRE_BULK_LIMIT ? HASH_FIELD_EXPIRE_BULK_LIMIT : max_entries;
+        robj *entries[HASH_FIELD_EXPIRE_BULK_LIMIT];
         size_t expired = hashTypeDeleteExpiredFields(o, now, batch_size, entries);
         if (expired == 0) break;
 

@@ -1909,7 +1909,7 @@ start_server {tags {"scripting external:skip"}} {
         }
         set mem_after [s used_memory_scripts_eval]
 
-        # Each script differs by at least 40 SHAs + 24 listNodes.
+        # Each script differs by at least 40 bytes SHA + 24 bytes listNode.
         assert_morethan [expr $mem_before - $mem_after] [expr 64 * 500]
     }
 }

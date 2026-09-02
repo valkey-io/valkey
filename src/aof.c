@@ -564,6 +564,20 @@ int writeAofManifestFile(sds buf) {
         goto cleanup;
     }
 
+    /* Close the temp file before publishing it with rename(). A write error the
+     * kernel deferred is reported by close() and by nothing before it, so a
+     * truncated manifest would otherwise replace a good one, and
+     * aofLoadManifestFromFile() refuses to start on a corrupt manifest. */
+    if (close(fd) != 0) {
+        int close_errno = errno;
+        fd = -1;
+        serverLog(LL_WARNING, "Fail to close the temp AOF manifest file %s: %s.", tmp_am_name, strerror(close_errno));
+
+        ret = C_ERR;
+        goto cleanup;
+    }
+    fd = -1;
+
     if (rename(tmp_am_filepath, am_filepath) != 0) {
         serverLog(LL_WARNING, "Error trying to rename the temporary AOF manifest file %s into %s: %s", tmp_am_name,
                   am_name, strerror(errno));

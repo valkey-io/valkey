@@ -2405,6 +2405,10 @@ typedef struct {
 
 /* Callback for popping expired entries from the volatile set.
  * Deletes the entry from the hash table and tracks it in the expiry context.
+ *
+ * This function does not incr the dirty counter. Caller needs to increment
+ * it themselves if necessary.
+ *
  * Returns 1 if deleted, 0 if nothing to do. */
 static int hashTypeExpireEntry(void *entry, void *c) {
     expiryContext *ctx = c;

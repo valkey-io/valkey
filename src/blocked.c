@@ -165,6 +165,7 @@ void processUnblockedClients(void) {
         c = ln->value;
         listDelNode(server.unblocked_clients, ln);
         c->flag.unblocked = 0;
+        serverAssert(!c->flag.throttled);
 
         if (c->flag.module) {
             if (!c->flag.blocked) {
@@ -478,10 +479,10 @@ void blockForKeys(client *c, int btype, robj **keys, int numkeys, mstime_t timeo
         }
     }
     c->bstate->unblock_on_nokey = unblock_on_nokey;
-    /* Currently we assume key blocking will require reprocessing the command.
-     * However in case of modules, they have a different way to handle the reprocessing
-     * which does not require setting the pending command flag */
-    if (btype != BLOCKED_MODULE) c->flag.pending_command = 1;
+    /* Key-blocked clients require pending_command for reprocessing on unblock.
+     * The caller must have set it (processInputBuffer for real clients,
+     * RM_Call for module fake clients). */
+    serverAssert(c->flag.pending_command == 1);
     blockClient(c, btype);
 }
 
@@ -618,21 +619,6 @@ void signalDeletedKeyAsReady(serverDb *db, robj *key, int type) {
     signalKeyAsReadyLogic(db, key, type, 1);
 }
 
-/* Find a waiter for rl->key by client id (real or RM_Call fake clients). */
-static client *getClientFromBlockingKeysList(readyList *rl, uint64_t id) {
-    list *client_list = dictFetchValue(rl->db->blocking_keys, rl->key);
-    listNode *ln;
-    listIter li;
-
-    if (client_list == NULL) return NULL;
-    listRewind(client_list, &li);
-    while ((ln = listNext(&li)) != NULL) {
-        client *c = listNodeValue(ln);
-        if (c->id == id) return c;
-    }
-    return NULL;
-}
-
 /* Helper function for handleClientsBlockedOnKeys(). This function is called
  * whenever a key is ready. we iterate over all the clients blocked on this key
  * and try to re-execute the command (in case the key is still available). */
@@ -644,28 +630,23 @@ static void handleClientsBlockedOnKey(readyList *rl) {
     if (de) {
         list *clients = dictGetVal(de);
         listNode *ln;
-        listIter li;
+        client *receiver;
         long count = listLength(clients);
-        long snapshot_len = 0;
-        uint64_t *ids;
-        long i;
-
-        /* Snapshot ids: serve may freeClient() another waiter and invalidate
-         * a listIter successor. Re-resolve each id from the live list. */
-        ids = zmalloc(sizeof(*ids) * count);
-        listRewind(clients, &li);
-        while ((ln = listNext(&li)) != NULL && snapshot_len < count) {
-            client *c = listNodeValue(ln);
-            ids[snapshot_len++] = c->id;
-        }
-
         /* Avoid processing more than the initial count so that we're not stuck
          * in an endless loop in case the reprocessing of the command blocks again. */
-        for (i = 0; i < snapshot_len; i++) {
-            client *receiver = getClientFromBlockingKeysList(rl, ids[i]);
+        while (count-- > 0) {
+            /* Re-resolve the entry each round: serving a client may free this
+             * whole blocking_keys entry or re-create it, so a saved entry would
+             * dangle. */
+            de = dictFind(rl->db->blocking_keys, rl->key);
+            if (de == NULL) break;
+            clients = dictGetVal(de);
 
-            /* Freed / unlinked mid-loop: skip. Still on the waiter list: serve. */
-            if (receiver == NULL) continue;
+            /* Process the head, then rotate it to the tail, so we can fairly
+             * iterate all receivers step by step without a dangling iterator. */
+            ln = listFirst(clients);
+            receiver = listNodeValue(ln);
+            listRotateHeadToTail(clients);
 
             robj *o = lookupKeyReadWithFlags(rl->db, rl->key, LOOKUP_NOEFFECTS);
             /* 1. In case new key was added/touched we need to verify it satisfy the
@@ -683,7 +664,6 @@ static void handleClientsBlockedOnKey(readyList *rl) {
                     moduleUnblockClientOnKey(receiver, rl->key);
             }
         }
-        zfree(ids);
     }
 }
 
@@ -713,8 +693,7 @@ void blockPostponeClient(client *c) {
     listAddNodeTail(server.postponed_clients, c);
     serverAssert(c->bstate->postponed_list_node == NULL);
     c->bstate->postponed_list_node = listLast(server.postponed_clients);
-    /* Mark this client to execute its command */
-    c->flag.pending_command = 1;
+    serverAssert(c->flag.pending_command == 1);
 }
 
 /* Block client due to shutdown command */
@@ -745,7 +724,6 @@ static void unblockClientOnKey(client *c, robj *key) {
     /* In case this client was blocked on keys during command
      * we need to re process the command again */
     if (c->flag.pending_command) {
-        c->flag.pending_command = 0;
         c->flag.reexecuting_command = 1;
         /* We want the command processing and the unblock handler (see RM_Call 'K' option)
          * to run atomically, this is why we must enter the execution unit here before

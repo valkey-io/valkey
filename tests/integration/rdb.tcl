@@ -1728,4 +1728,20 @@ start_server {overrides {bgsave-default-method fork}} {
     }
 }
 
+start_server {overrides {save ""}} {
+    test {bgsave-default-method forkless is rejected without forkless-infrastructure-enabled} {
+        # forkless-infrastructure-enabled defaults to no here.
+        assert_error "*forkless-infrastructure-enabled yes*" {
+            r config set bgsave-default-method forkless
+        }
+        # The value is unchanged and remains fork.
+        assert_equal [lindex [r config get bgsave-default-method] 1] "fork"
+    }
+}
+
+test {Server refuses to start with bgsave-default-method forkless and no forkless-infrastructure-enabled} {
+    catch {exec $::VALKEY_SERVER_BIN --bgsave-default-method forkless} err
+    assert_match {*forkless-infrastructure-enabled yes*} $err
+}
+
 } ;# tags

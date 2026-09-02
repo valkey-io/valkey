@@ -2452,6 +2452,15 @@ static void numericConfigRewrite(standardConfig *config, const char *name, struc
     {.type = SPECIAL_CONFIG,                                                           \
      embedCommonConfig(name, alias, modifiable) embedConfigInterface(NULL, setfn, getfn, rewritefn, applyfn)}
 
+static int isValidBgsaveDefaultMethod(int val, const char **err) {
+    if (val == RDB_BGSAVE_TYPE_FORKLESS && !server.forkless_infrastructure_enabled) {
+        *err = "'forkless' can only be selected when the server was started with "
+               "'forkless-infrastructure-enabled yes'";
+        return 0;
+    }
+    return 1;
+}
+
 static int isValidActiveDefrag(int val, const char **err) {
 #ifndef HAVE_DEFRAG
     if (val) {
@@ -3363,7 +3372,7 @@ standardConfig static_configs[] = {
     createBoolConfig("rdb-del-sync-files", NULL, MODIFIABLE_CONFIG, server.rdb_del_sync_files, 0, NULL, NULL),
     createBoolConfig("activerehashing", NULL, MODIFIABLE_CONFIG, server.activerehashing, 1, NULL, NULL),
     createBoolConfig("stop-writes-on-bgsave-error", NULL, MODIFIABLE_CONFIG, server.stop_writes_on_bgsave_err, 1, NULL, NULL),
-    createEnumConfig("bgsave-default-method", NULL, MODIFIABLE_CONFIG, bgsave_method_enum, server.bgsave_default_method, RDB_BGSAVE_TYPE_FORK, NULL, NULL),
+    createEnumConfig("bgsave-default-method", NULL, MODIFIABLE_CONFIG, bgsave_method_enum, server.bgsave_default_method, RDB_BGSAVE_TYPE_FORK, isValidBgsaveDefaultMethod, NULL),
     createBoolConfig("set-proc-title", NULL, IMMUTABLE_CONFIG, server.set_proc_title, 1, NULL, NULL), /* Should setproctitle be used? */
     createBoolConfig("lazyfree-lazy-eviction", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, server.lazyfree_lazy_eviction, 1, NULL, NULL),
     createBoolConfig("lazyfree-lazy-expire", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, server.lazyfree_lazy_expire, 1, NULL, NULL),

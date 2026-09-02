@@ -139,3 +139,40 @@ start_cluster 2 1 {tags {external:skip cluster needs:debug}} {
         assert_equal 1 [R 2 DBSIZE]
     }
 }
+
+proc lost_ping_peer {id peer_id} {
+    foreach n [get_cluster_nodes $id] {
+        if {[dict get $n id] eq $peer_id} {return $n}
+    }
+    fail "Peer $peer_id is missing"
+}
+
+start_cluster 2 0 {tags {cluster external:skip needs:debug}} {
+    test "An outstanding PING recovers while the peer keeps sending PINGs" {
+        set peer_id [R 1 cluster myid]
+        R 0 config set cluster-node-timeout 1500
+        R 1 config set cluster-node-timeout 1500
+
+        # Discard PONGs while allowing the peer's PINGs to refresh data_received.
+        # Unlike newer lines, 7.2 does not have the drop-all packet filter.
+        R 0 debug drop-cluster-packet-filter 1
+        wait_for_condition 1000 50 {
+            [dict get [lost_ping_peer 0 $peer_id] ping_sent] != 0
+        } else {
+            fail "R 0 did not send a PING"
+        }
+        set pings [CI 0 cluster_stats_messages_ping_received]
+        wait_for_condition 1000 50 {
+            [CI 0 cluster_stats_messages_ping_received] > $pings
+        } else {
+            fail "R 0 did not receive peer traffic"
+        }
+        R 0 debug drop-cluster-packet-filter -1
+        wait_for_condition 1000 50 {
+            [dict get [lost_ping_peer 0 $peer_id] ping_sent] == 0
+        } else {
+            fail "Outstanding PING did not recover despite incoming peer traffic"
+        }
+        wait_for_cluster_state ok
+    }
+}

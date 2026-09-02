@@ -279,3 +279,61 @@ start_cluster 3 0 {tags {external:skip cluster} overrides {cluster-require-full-
         wait_for_cluster_state ok
     }
 }
+
+start_cluster 2 0 {tags {cluster external:skip needs:debug}} {
+    test "A lost PING does not leave a node stuck in PFAIL when the peer keeps sending PINGs" {
+        set CLUSTER_PACKET_TYPE_MEET 2
+        set CLUSTER_PACKET_TYPE_NONE -1
+        set CLUSTER_PACKET_TYPE_ALL -2
+        set R1_nodeid [R 1 cluster myid]
+
+        # Configure different timeout values to better reproduce the issue.
+        R 0 config set cluster-node-timeout 15000
+        R 1 config set cluster-node-timeout 1500
+
+        # Drop all packets on R0 and wait for pfail.
+        R 0 debug drop-cluster-packet-filter $CLUSTER_PACKET_TYPE_ALL
+        wait_for_condition 1000 50 {
+           [cluster_has_flag [cluster_get_node_by_id 0 $R1_nodeid] "fail?"]
+        } else {
+            puts "R 0 cluster nodes:"
+            puts [R 0 cluster nodes]
+            fail "R0 did not mark R1 as PFAIL"
+        }
+
+        # Remember some information after the PFAIL.
+        set R0_ping_sent [dict get [cluster_get_node_by_id 0 $R1_nodeid] ping_sent]
+        set R0_ping_received [CI 0 cluster_stats_messages_ping_received]
+
+        # Restore the DEBUG setting on R0, but exclude MEET first to avoid
+        # multiple MEET reconnections. We will restore it after R0 receives
+        # the PING and refreshes data_received.
+        R 0 debug drop-cluster-packet-filter $CLUSTER_PACKET_TYPE_MEET
+        wait_for_condition 1000 50 {
+           [CI 0 cluster_stats_messages_ping_received] > $R0_ping_received
+        } else {
+            fail "R0 did not receive the PING"
+        }
+        R 0 debug drop-cluster-packet-filter $CLUSTER_PACKET_TYPE_NONE
+
+        # Ensure ping_sent does not get stuck and R0 can send PINGs.
+        wait_for_condition 1000 50 {
+           [dict get [cluster_get_node_by_id 0 $R1_nodeid] ping_sent] != $R0_ping_sent
+        } else {
+            puts "R 0 cluster nodes:"
+            puts [R 0 cluster nodes]
+            fail "R0 did not send the PING"
+        }
+
+        # All packets are being sent and received normally, and R0 should be
+        # able to remove the PFAIL flag.
+        wait_for_condition 1000 50 {
+            ![cluster_has_flag [cluster_get_node_by_id 0 $R1_nodeid] "fail?"]
+        } else {
+            puts "R 0 cluster nodes:"
+            puts [R 0 cluster nodes]
+            fail "R0 did not remove the PFAIL flag"
+        }
+        wait_for_cluster_state ok
+    }
+}

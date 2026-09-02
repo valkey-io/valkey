@@ -1367,6 +1367,43 @@ static void addHashFieldToReply(client *c, robj *o, sds field) {
     }
 }
 
+#define HMGET_FIND_BATCH_SIZE 16
+static_assert(HMGET_FIND_BATCH_SIZE <= HASHTABLE_FIND_BATCH_MAX_SIZE,
+              "HMGET batch size exceeds hashtable batch lookup limit");
+
+static void addHashEntryToReply(client *c, const entry *hash_entry) {
+    if (hash_entry == NULL) {
+        addReplyNull(c);
+        return;
+    }
+
+    size_t len = 0;
+    char *value = entryGetValue(hash_entry, &len);
+    serverAssert(value != NULL);
+    addReplyBulkCBuffer(c, value, len);
+}
+
+static void hmgetReplyWithHashtable(client *c, hashtable *ht, robj **fields, size_t count) {
+    const void *keys[HMGET_FIND_BATCH_SIZE];
+    void *found_entries[HMGET_FIND_BATCH_SIZE];
+    while (count) {
+        size_t batch = count > HMGET_FIND_BATCH_SIZE ? HMGET_FIND_BATCH_SIZE : count;
+
+        for (size_t i = 0; i < batch; i++) {
+            keys[i] = objectGetVal(fields[i]);
+        }
+
+        uint32_t result = hashtableFindBatch(ht, (int)batch, keys, found_entries);
+
+        for (size_t i = 0; i < batch; i++) {
+            addHashEntryToReply(c, (result >> i) & 1 ? found_entries[i] : NULL);
+        }
+
+        fields += batch;
+        count -= batch;
+    }
+}
+
 void hgetCommand(client *c) {
     robj *o;
 
@@ -1376,7 +1413,7 @@ void hgetCommand(client *c) {
 
 void hmgetCommand(client *c) {
     robj *o;
-    int i;
+    size_t count = c->argc - 2;
 
     /* Don't abort when the key cannot be found. Non-existing keys are empty
      * hashes, where HMGET should respond with a series of null bulks. */
@@ -1384,12 +1421,23 @@ void hmgetCommand(client *c) {
 
     if (checkType(c, o, OBJ_HASH)) return;
 
-    addReplyArrayLen(c, c->argc - 2);
-    for (i = 2; i < c->argc; i++) {
-        addHashFieldToReply(c, o, objectGetVal(c->argv[i]));
+    addReplyArrayLen(c, count);
+
+    if (o == NULL) {
+        for (size_t i = 0; i < count; i++) {
+            addReplyNull(c);
+        }
+        return;
     }
-    if (o && hashTypeLength(o) == 0) {
-        dbDelete(c->db, c->argv[1]);
+
+    /* Prefer hashtable batch lookup to improve performance. */
+    if (o->encoding == OBJ_ENCODING_HASHTABLE && count > 1) {
+        hmgetReplyWithHashtable(c, objectGetVal(o), c->argv + 2, count);
+        return;
+    }
+
+    for (size_t i = 0; i < count; i++) {
+        addHashFieldToReply(c, o, objectGetVal(c->argv[i + 2]));
     }
 }
 

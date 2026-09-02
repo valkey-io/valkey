@@ -965,14 +965,13 @@ void trySendPollJobToIOThreads(void) {
         return;
     }
 
-    void *job = tagJob(server.el, JOB_REQ_POLL);
-
     server.io_poll_state = AE_IO_STATE_POLL;
     aeSetPollProtect(server.el, 1);
 
-    /* Use SPMC to minimize polling overhead. At high thread counts, use private SPSC queues for lower latency. */
+    /* Use SPMC to minimize polling overhead. At high thread counts, use private SPSC queues for lower latency.
+     * The two queues carry independent tag namespaces, so the job must be tagged for the queue it goes on. */
     if (server.active_io_threads_num <= 9) {
-        if (unlikely(spmcEnqueue(&io_shared_inbox, job) == false)) {
+        if (unlikely(spmcEnqueue(&io_shared_inbox, tagJob(server.el, JOB_REQ_POLL)) == false)) {
             server.io_poll_state = AE_IO_STATE_NONE;
             aeSetPollProtect(server.el, 0);
             return;
@@ -984,7 +983,7 @@ void trySendPollJobToIOThreads(void) {
             aeSetPollProtect(server.el, 0);
             return;
         }
-        spscEnqueue(&io_private_inbox[cur_epoll_thread], job, true);
+        spscEnqueue(&io_private_inbox[cur_epoll_thread], tagJob(server.el, JOB_SPSC_POLL), true);
     }
 
     aeSetCustomPollProc(server.el, getIOThreadPollResults);

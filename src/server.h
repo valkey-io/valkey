@@ -2365,6 +2365,7 @@ struct valkeyServer {
     int script_disable_deny_script; /* Allow running commands marked "noscript" inside a script. */
     int lua_enable_insecure_api;    /* Config to enable insecure api */
     int lua_insecure_api_current;   /* Current value of if insecure apis are enabled, used to determine if flush is needed. */
+    int script_cache_per_db;        /* Scope the EVAL/SCRIPT script cache per selected DB. */
     /* Lazy free */
     int lazyfree_lazy_eviction;
     int lazyfree_lazy_expire;
@@ -3913,7 +3914,9 @@ void freeEvalScriptsAsync(dict *scripts, list *scripts_lru_list, list *engine_ca
 void freeFunctionsAsync(functionsLibCtx *lib_ctx, list *engine_callbacks);
 void sha1hex(char *digest, char *script, size_t len);
 unsigned long evalMemory(void);
-dict *evalScriptsDict(void);
+unsigned long evalScriptsCount(void);
+int evalScriptsDictCount(void);
+dict *evalScriptsDictAt(int index);
 unsigned long evalScriptsMemory(void);
 uint64_t evalGetCommandFlags(client *c, uint64_t orig_flags);
 uint64_t fcallGetCommandFlags(client *c, uint64_t orig_flags);

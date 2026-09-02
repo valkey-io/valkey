@@ -6430,7 +6430,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "used_memory_vm_eval:%lld\r\n", memory_lua,
                 "used_memory_lua_human:%s\r\n", used_memory_lua_hmem, /* deprecated */
                 "used_memory_scripts_eval:%lld\r\n", (long long)mh->lua_caches,
-                "number_of_cached_scripts:%zu\r\n", dictSize(evalScriptsDict()),
+                "number_of_cached_scripts:%lu\r\n", evalScriptsCount(),
                 "number_of_functions:%lu\r\n", functionsNum(),
                 "number_of_libraries:%lu\r\n", functionsLibNum(),
                 "used_memory_vm_functions:%lld\r\n", memory_functions,
@@ -6470,6 +6470,19 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "lazyfree_pending_objects:%zu\r\n", lazyfreeGetPendingObjectsCount(),
                 "lazyfreed_objects:%zu\r\n", lazyfreeGetFreedObjectsCount()));
         freeMemoryOverheadData(mh);
+
+        /* Per-DB script cache breakdown, only meaningful (and only shown) when the
+         * cache is actually scoped per DB; otherwise it's one shared cache and
+         * 'number_of_cached_scripts' above already covers it. */
+        if (server.script_cache_per_db) {
+            int n = evalScriptsDictCount();
+            for (j = 0; j < n; j++) {
+                unsigned long db_scripts = dictSize(evalScriptsDictAt(j));
+                if (db_scripts) {
+                    info = sdscatprintf(info, "db%d_cached_scripts:%lu\r\n", j, db_scripts);
+                }
+            }
+        }
     }
 
     /* Persistence */

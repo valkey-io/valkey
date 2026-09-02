@@ -4928,6 +4928,15 @@ void clusterCron(void) {
             freeClusterLink(node->link);
         }
 
+        /* Peer traffic can refresh data_received while our PING stays
+         * unanswered. Reconnect after a full node timeout regardless of
+         * incoming traffic so a fresh PING can clear the stale state. */
+        if (node->link &&
+            now - node->link->ctime > server.cluster_node_timeout &&
+            node->ping_sent && ping_delay > server.cluster_node_timeout) {
+            freeClusterLink(node->link);
+        }
+
         /* If we have currently no active ping in this instance, and the
          * received PONG is older than half the cluster timeout, send
          * a new ping now, to ensure all the nodes are pinged without

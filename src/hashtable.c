@@ -1912,6 +1912,11 @@ bool hashtableIncrementalFindStep(hashtableIncrementalFindState *state) {
                 /* It's a match. */
                 data->state = HASHTABLE_FOUND;
                 return false;
+            if (compareKeys(ht, data->key, elem_key)) {
+                /* It's a match. */
+                data->state = validateElementIfNeeded(ht, entry) ?
+                    HASHTABLE_FOUND : HASHTABLE_NOT_FOUND;
+                return false;
             }
             /* No match. Look for next candidate entry in the bucket. */
             data->pos++;

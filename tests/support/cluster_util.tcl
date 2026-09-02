@@ -361,6 +361,13 @@ proc get_myself id {
     return {}
 }
 
+# Returns 1 if the instance 'instance_id' agrees that the node 'replica_id' is a
+# replica and is a replica of the node 'primary_id'.
+proc cluster_node_is_replica_of {instance_id replica_id primary_id} {
+    set node [cluster_get_node_by_id $instance_id $replica_id]
+    expr {[cluster_has_flag $node slave] && [dict get $node slaveof] eq $primary_id}
+}
+
 # Returns 1 if no node knows node_id, 0 if any node knows it.
 proc node_is_forgotten {node_id} {
     for {set j 0} {$j < [llength $::servers]} {incr j} {

@@ -46,17 +46,10 @@ proc test_zero_offset_replica {sync_type} {
         # replica of R0).
         R 3 cluster replicate [R 0 CLUSTER MYID]
         wait_for_condition 1000 50 {
-            [cluster_has_flag [cluster_get_node_by_id 3 $R3_nodeid] slave] eq 1 &&
-            [dict get [cluster_get_node_by_id 3 $R3_nodeid] slaveof] eq $R0_nodeid &&
-
-            [cluster_has_flag [cluster_get_node_by_id 0 $R3_nodeid] slave] eq 1 &&
-            [dict get [cluster_get_node_by_id 0 $R3_nodeid] slaveof] eq $R0_nodeid &&
-
-            [cluster_has_flag [cluster_get_node_by_id 1 $R3_nodeid] slave] eq 1 &&
-            [dict get [cluster_get_node_by_id 1 $R3_nodeid] slaveof] eq $R0_nodeid &&
-
-            [cluster_has_flag [cluster_get_node_by_id 2 $R3_nodeid] slave] eq 1 &&
-            [dict get [cluster_get_node_by_id 2 $R3_nodeid] slaveof] eq $R0_nodeid
+            [cluster_node_is_replica_of 0 $R3_nodeid $R0_nodeid] &&
+            [cluster_node_is_replica_of 1 $R3_nodeid $R0_nodeid] &&
+            [cluster_node_is_replica_of 2 $R3_nodeid $R0_nodeid] &&
+            [cluster_node_is_replica_of 3 $R3_nodeid $R0_nodeid]
         } else {
             for {set j 0} {$j < [llength $::servers]} {incr j} {
                 puts "R $j cluster nodes output: [R $j cluster nodes]"

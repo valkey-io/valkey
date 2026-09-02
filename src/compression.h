@@ -30,16 +30,15 @@ const char *compressionAlgoName(compressionAlgo algo);
 
 /* ===== Compressor ===== */
 
+#define STREAM_CHECKSUM_BLOCK (1u << 0)
+#define STREAM_CHECKSUM_CONTENT (1u << 1)
+
 typedef struct {
     compressionAlgo algo;
     int level; /* 0 selects the codec default. */
     void *ctx;
     bool stream_started;
-    bool codec_checksum;
-    bool content_checksum; /* Whole-frame checksum; defaults to codec_checksum. Off for
-                            * streams that never end their frame (it would be computed
-                            * on every byte but never emitted or validated). Written into
-                            * the frame header: must not change once stream_started. */
+    uint8_t checksum_flags;
 } streamCompressor;
 
 /* Compressor lifecycle. Codec dispatch used by streamWriter and by the

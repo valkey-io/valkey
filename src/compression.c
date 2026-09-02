@@ -32,8 +32,7 @@ int streamCompressorInit(streamCompressor *compressor,
     memset(compressor, 0, sizeof(*compressor));
     compressor->algo = algo;
     compressor->level = level;
-    compressor->codec_checksum = codec_checksum;
-    compressor->content_checksum = codec_checksum;
+    compressor->checksum_flags = codec_checksum ? STREAM_CHECKSUM_BLOCK | STREAM_CHECKSUM_CONTENT : 0;
 
     switch (algo) {
     case ALGO_LZ4:

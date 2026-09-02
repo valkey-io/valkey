@@ -167,10 +167,7 @@ static int replicaEnableCompressionIfNegotiated(client *c) {
         serverLog(LL_WARNING, "Failed to initialize compression for replica %s", replicationGetReplicaName(c));
         return C_ERR;
     }
-    /* Per-block checksums (codec_checksum above) are the frame's integrity
-     * check. The whole-content checksum is off: a repl frame never ends, so
-     * it would be computed on every byte yet never emitted or validated. */
-    compressor->stream.content_checksum = false;
+    compressor->stream.checksum_flags &= (uint8_t)~STREAM_CHECKSUM_CONTENT;
     compressor->out_buf = sdsempty();
 
     c->repl_data->repl_compressor = compressor;

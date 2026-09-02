@@ -72,10 +72,10 @@ ssize_t compressionLz4CompressFeed(streamCompressor *compressor,
     if (!compressor->stream_started) {
         LZ4F_preferences_t prefs = lz4f_prefs;
         prefs.compressionLevel = compressor->level;
-        prefs.frameInfo.blockChecksumFlag = compressor->codec_checksum
+        prefs.frameInfo.blockChecksumFlag = compressor->checksum_flags & STREAM_CHECKSUM_BLOCK
                                                 ? LZ4F_blockChecksumEnabled
                                                 : LZ4F_noBlockChecksum;
-        prefs.frameInfo.contentChecksumFlag = compressor->content_checksum
+        prefs.frameInfo.contentChecksumFlag = compressor->checksum_flags & STREAM_CHECKSUM_CONTENT
                                                   ? LZ4F_contentChecksumEnabled
                                                   : LZ4F_noContentChecksum;
         size_t r = LZ4F_compressBegin(cctx, output, output_capacity, &prefs);

@@ -1340,7 +1340,7 @@ static void fillIncompressible(unsigned char *buf, size_t n, uint32_t seed) {
 static void initReplCompressState(replicaCompressState *rc) {
     memset(rc, 0, sizeof(*rc));
     ASSERT_EQ(streamCompressorInit(&rc->stream, ALGO_LZ4, 0, true), C_OK);
-    rc->stream.content_checksum = false;
+    rc->stream.checksum_flags &= (uint8_t)~STREAM_CHECKSUM_CONTENT;
     rc->out_buf = sdsempty();
 }
 

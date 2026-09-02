@@ -1909,8 +1909,14 @@ start_server {tags {"scripting external:skip"}} {
         }
         set mem_after [s used_memory_scripts_eval]
 
-        # Each script differs by at least 40 bytes SHA + 24 bytes listNode.
-        assert_morethan [expr $mem_before - $mem_after] [expr 64 * 500]
+        # Each script differs by at least 40 bytes SHA + 24 (or 12) bytes listNode.
+        set arch_bits [s arch_bits]
+        set diff [expr $mem_before - $mem_after]
+        if {$arch_bits == 64} {
+            assert_morethan $diff [expr 64 * 500]
+        } elseif {$arch_bits == 32} {
+            assert_morethan $diff [expr 52 * 500]
+        }
     }
 }
 

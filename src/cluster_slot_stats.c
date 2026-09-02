@@ -263,14 +263,14 @@ void clusterSlotStatsAddNetworkBytesInForUserClient(client *c) {
 }
 
 void clusterSlotStatsAddKeyspaceHits(int slot) {
-    if (!server.cluster_enabled) return;
+    if (!clusterSlotStatsEnabled(slot)) return;
 
     serverAssert(slot >= 0 && slot < CLUSTER_SLOTS);
     server.cluster->slot_stats[slot].keyspace_hits++;
 }
 
 void clusterSlotStatsAddKeyspaceMisses(int slot) {
-    if (!server.cluster_enabled) return;
+    if (!clusterSlotStatsEnabled(slot)) return;
 
     serverAssert(slot >= 0 && slot < CLUSTER_SLOTS);
     server.cluster->slot_stats[slot].keyspace_misses++;

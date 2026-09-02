@@ -150,7 +150,7 @@ bool hashtableAddOrFind(hashtable *ht, void *entry, void **existing);
 bool hashtableFindPositionForInsert(hashtable *ht, void *key, hashtablePosition *position, void **existing);
 void hashtableInsertAtPosition(hashtable *ht, void *entry, hashtablePosition *position);
 bool hashtablePop(hashtable *ht, const void *key, void **popped);
-size_t hashtablePopKnownEntries(hashtable *ht, void **entries, size_t count);
+void hashtablePopKnownEntries(hashtable *ht, void **entries, size_t count);
 size_t hashtablePopAnyEntries(hashtable *ht, void **entries, size_t count, size_t cursor[2]);
 bool hashtableDelete(hashtable *ht, const void *key);
 void **hashtableTwoPhasePopFindRef(hashtable *ht, const void *key, hashtablePosition *position);

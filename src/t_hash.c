@@ -2414,9 +2414,7 @@ static void hashTypeExpireEntries(void **entries, size_t count, void *c) {
     expiryContext *ctx = c;
     hashtable *ht = objectGetVal(ctx->key);
 
-    size_t deleted_count = hashtablePopKnownEntries(ht, entries, count);
-    /* The volatile set and the hash table body must contain the same entry pointers. */
-    serverAssert(deleted_count == count);
+    hashtablePopKnownEntries(ht, entries, count);
 
     for (size_t i = 0; i < count; i++) {
         entry *expired = entries[i];
@@ -2443,7 +2441,6 @@ size_t hashTypeDeleteExpiredFields(robj *o, mstime_t now, unsigned long max_fiel
     serverAssert(hashtableSize(objectGetVal(o)) > 0);
     expiryContext ctx = {.key = o, .field_cap = max_fields, .n_fields = 0, .fields = out_entries};
     size_t expired = vsetRemoveExpired(vset, entryGetExpiryVsetFunc, hashTypeExpireEntries, now, max_fields, &ctx);
-    serverAssert(ctx.n_fields <= max_fields);
     if (vsetIsEmpty(vset)) {
         hashTypeFreeVolatileSet(o);
     }

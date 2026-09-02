@@ -187,7 +187,7 @@ TEST_F(HashtableTest, pop_known_entries) {
         known[j] = entries[j * 2];
     }
 
-    ASSERT_EQ(hashtablePopKnownEntries(ht, known, 20), 20u);
+    hashtablePopKnownEntries(ht, known, 20);
     ASSERT_EQ(keyval_destructor_calls, 0u);
     ASSERT_EQ(hashtableSize(ht), 20u);
 
@@ -232,7 +232,7 @@ TEST_F(HashtableTest, pop_known_entries_multiple_batches) {
         known[j] = entries[j * 2];
     }
 
-    ASSERT_EQ(hashtablePopKnownEntries(ht, known, pop_count), (size_t)pop_count);
+    hashtablePopKnownEntries(ht, known, pop_count);
     ASSERT_EQ(keyval_destructor_calls, 0u);
     ASSERT_EQ(hashtableSize(ht), (size_t)(count - pop_count));
 
@@ -283,7 +283,7 @@ TEST_F(HashtableTest, pop_known_entries_completes_shrink_rehash) {
         known[j] = entries[j];
     }
 
-    ASSERT_EQ(hashtablePopKnownEntries(ht, known, pop_count), (size_t)pop_count);
+    hashtablePopKnownEntries(ht, known, pop_count);
     ASSERT_FALSE(hashtableIsRehashing(ht));
     ASSERT_EQ(hashtableSize(ht), (size_t)remaining);
     ASSERT_LT(hashtableMemUsage(ht), mem_before_pop);
@@ -435,7 +435,7 @@ TEST_F(HashtableTest, pop_known_entries_during_rehash) {
         known[j] = entries[j * 3];
     }
 
-    ASSERT_EQ(hashtablePopKnownEntries(ht, known, pop_count), (size_t)pop_count);
+    hashtablePopKnownEntries(ht, known, pop_count);
     ASSERT_TRUE(hashtableIsRehashing(ht));
 
     for (int j = 0; j < count; j++) {

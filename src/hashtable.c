@@ -1749,9 +1749,9 @@ bool hashtablePop(hashtable *ht, const void *key, void **popped) {
     return 0;
 }
 
-static size_t hashtablePopKnownEntriesBatch(hashtable *ht, void **entries, size_t count) {
+static void hashtablePopKnownEntriesBatch(hashtable *ht, void **entries, size_t count) {
     assert(count <= HASHTABLE_POP_ENTRIES_STACK_MAX);
-    if (count == 0) return 0;
+    if (count == 0) return;
 
     size_t bucket_index[HASHTABLE_POP_ENTRIES_STACK_MAX];
     int table_index[HASHTABLE_POP_ENTRIES_STACK_MAX];
@@ -1807,42 +1807,26 @@ static size_t hashtablePopKnownEntriesBatch(hashtable *ht, void **entries, size_
         }
     }
     hashtableResumeAutoShrink(ht);
-
-    return count;
 }
 
-/* Removes multiple distinct entries known to be in the table and returns the
- * number of entries removed. The entry destructor is not called. The caller
- * must pass distinct entries that are present in the table. `entries` is
- * input-only. Batching avoids per-delete hole filling and shrink checks. */
-size_t hashtablePopKnownEntries(hashtable *ht, void **entries, size_t count) {
-    size_t removed = 0;
-
+/* Removes multiple distinct entries known to be in the table. The entry
+ * destructor is not called. The caller must pass distinct entries that are
+ * present in the table. `entries` is input-only. Batching avoids per-delete
+ * hole filling and shrink checks. */
+void hashtablePopKnownEntries(hashtable *ht, void **entries, size_t count) {
     for (size_t offset = 0; offset < count; offset += HASHTABLE_POP_ENTRIES_STACK_MAX) {
         size_t remaining = count - offset;
         size_t batch = remaining < HASHTABLE_POP_ENTRIES_STACK_MAX ? remaining : HASHTABLE_POP_ENTRIES_STACK_MAX;
-        removed += hashtablePopKnownEntriesBatch(ht, &entries[offset], batch);
+        hashtablePopKnownEntriesBatch(ht, &entries[offset], batch);
     }
-
-    return removed;
 }
 
-/* Removes up to `count` arbitrary entries from the table, stores them in
- * `entries`, and returns the number of removed entries. The entry destructor is
- * not called. `entries` is output-only. If `cursor` is NULL, each call starts at
- * the first eligible bucket; otherwise, the per-table cursor avoids rescanning
- * the same empty bucket prefix when callers repeatedly drain a table in bounded
- * batches. The cursor is an approximate offset relative to the currently
- * eligible bucket range, so it remains safe across rehash progress and resizes
- * even though it may point to a different absolute bucket later. */
-size_t hashtablePopAnyEntries(hashtable *ht, void **entries, size_t count, size_t cursor[2]) {
+static size_t hashtablePopAnyEntriesBatch(hashtable *ht, void **entries, size_t count, size_t cursor[2]) {
+    assert(count <= HASHTABLE_POP_ENTRIES_STACK_MAX);
     if (count == 0 || hashtableSize(ht) == 0) return 0;
 
-    size_t stack_bucket_index[HASHTABLE_POP_ENTRIES_STACK_MAX];
-    int stack_table_index[HASHTABLE_POP_ENTRIES_STACK_MAX];
-    bool use_stack = count <= HASHTABLE_POP_ENTRIES_STACK_MAX;
-    size_t *bucket_index = use_stack ? stack_bucket_index : zmalloc(sizeof(*bucket_index) * count);
-    int *table_index = use_stack ? stack_table_index : zmalloc(sizeof(*table_index) * count);
+    size_t bucket_index[HASHTABLE_POP_ENTRIES_STACK_MAX];
+    int table_index[HASHTABLE_POP_ENTRIES_STACK_MAX];
     size_t affected_buckets = 0;
     size_t removed = 0;
 
@@ -1896,9 +1880,26 @@ size_t hashtablePopAnyEntries(hashtable *ht, void **entries, size_t count, size_
     }
     hashtableResumeAutoShrink(ht);
 
-    if (!use_stack) {
-        zfree(table_index);
-        zfree(bucket_index);
+    return removed;
+}
+
+/* Removes up to `count` arbitrary entries from the table, stores them in
+ * `entries`, and returns the number of removed entries. The entry destructor is
+ * not called. `entries` is output-only. If `cursor` is NULL, each call starts at
+ * the first eligible bucket; otherwise, the per-table cursor avoids rescanning
+ * the same empty bucket prefix when callers repeatedly drain a table in bounded
+ * batches. The cursor is an approximate offset relative to the currently
+ * eligible bucket range, so it remains safe across rehash progress and resizes
+ * even though it may point to a different absolute bucket later. */
+size_t hashtablePopAnyEntries(hashtable *ht, void **entries, size_t count, size_t cursor[2]) {
+    size_t removed = 0;
+
+    while (removed < count) {
+        size_t remaining = count - removed;
+        size_t batch = remaining < HASHTABLE_POP_ENTRIES_STACK_MAX ? remaining : HASHTABLE_POP_ENTRIES_STACK_MAX;
+        size_t got = hashtablePopAnyEntriesBatch(ht, &entries[removed], batch, cursor);
+        if (got == 0) break;
+        removed += got;
     }
 
     return removed;

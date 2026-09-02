@@ -1537,9 +1537,9 @@ static inline size_t vsetBucketRemoveExpired_HASHTABLE(vsetBucket **bucket, vset
         count += got;
     }
 
-    /* hashtablePopAnyEntries replaces a safe iterator over this vset bucket;
-     * that path also paused rehashing during deletion, so no extra rehash
-     * progress is needed here for parity. */
+    /* hashtablePopAnyEntries replaces a safe iterator over this vset bucket.
+     * The old path paused rehashing on the first hashtableNext() call, so
+     * deletions under that iterator did not advance rehashing either. */
 
     /* Collapse or downgrade the bucket based on how many entries remain.
      *

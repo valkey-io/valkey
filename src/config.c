@@ -651,6 +651,11 @@ void loadServerConfigFromString(sds config) {
         err = "replicaof directive not allowed in cluster mode";
         goto loaderr;
     }
+    if (server.bgsave_default_method == RDB_BGSAVE_TYPE_FORKLESS && !server.forkless_infrastructure_enabled) {
+        err = "'bgsave-default-method forkless' can only be selected when the server was started with "
+              "'forkless-infrastructure-enabled yes'";
+        goto loaderr;
+    }
 
     /* To ensure backward compatibility and work while hz is out of range */
     if (server.hz < CONFIG_MIN_HZ) server.hz = CONFIG_MIN_HZ;
@@ -2453,6 +2458,10 @@ static void numericConfigRewrite(standardConfig *config, const char *name, struc
      embedCommonConfig(name, alias, modifiable) embedConfigInterface(NULL, setfn, getfn, rewritefn, applyfn)}
 
 static int isValidBgsaveDefaultMethod(int val, const char **err) {
+    /* During startup config parsing the directives are applied one by one, so
+     * forkless-infrastructure-enabled may not have been read yet when this
+     * value is set. We will check it when loading the config string */
+    if (reading_config_file) return 1;
     if (val == RDB_BGSAVE_TYPE_FORKLESS && !server.forkless_infrastructure_enabled) {
         *err = "'forkless' can only be selected when the server was started with "
                "'forkless-infrastructure-enabled yes'";

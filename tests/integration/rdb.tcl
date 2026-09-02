@@ -1744,4 +1744,10 @@ test {Server refuses to start with bgsave-default-method forkless and no forkles
     assert_match {*forkless-infrastructure-enabled yes*} $err
 }
 
+test {Server starts with bgsave-default-method before forkless-infrastructure-enabled yes} {
+    start_server {overrides {bgsave-default-method forkless forkless-infrastructure-enabled yes save ""}} {
+        assert_equal [lindex [r config get bgsave-default-method] 1] "forkless"
+    }
+}
+
 } ;# tags

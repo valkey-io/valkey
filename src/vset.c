@@ -1529,17 +1529,17 @@ static inline size_t vsetBucketRemoveExpired_HASHTABLE(vsetBucket **bucket, vset
     pointerHashtableMetadata *metadata = hashtableMetadata(ht);
     size_t count = 0;
 
+    /* hashtablePopAnyEntries replaces a safe iterator over this vset bucket.
+     * The old path paused rehashing on the first hashtableNext() call, so
+     * deletions under that iterator did not advance rehashing either. */
     while (count < max_count && hashtableSize(ht) > 0) {
+        /* Limit each pop to the stack_entries output buffer size. */
         size_t want = min(max_count - count, (size_t)VSET_EXPIRE_STACK_ENTRIES);
         size_t got = hashtablePopAnyEntries(ht, stack_entries, want, metadata->pop_scan_cursor);
         if (got == 0) break;
         if (expiryFunc) expiryFunc(stack_entries, got, ctx);
         count += got;
     }
-
-    /* hashtablePopAnyEntries replaces a safe iterator over this vset bucket.
-     * The old path paused rehashing on the first hashtableNext() call, so
-     * deletions under that iterator did not advance rehashing either. */
 
     /* Collapse or downgrade the bucket based on how many entries remain.
      *

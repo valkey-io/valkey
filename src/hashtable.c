@@ -1908,14 +1908,9 @@ bool hashtableIncrementalFindStep(hashtableIncrementalFindState *state) {
             hashtable *ht = data->hashtable;
             void *entry = data->bucket->entries[data->pos];
             const void *elem_key = entryGetKey(ht, entry);
-            if (compareKeys(ht, data->key, elem_key) && validateElementIfNeeded(ht, entry)) {
-                /* It's a match. */
-                data->state = HASHTABLE_FOUND;
-                return false;
             if (compareKeys(ht, data->key, elem_key)) {
                 /* It's a match. */
-                data->state = validateElementIfNeeded(ht, entry) ?
-                    HASHTABLE_FOUND : HASHTABLE_NOT_FOUND;
+                data->state = validateElementIfNeeded(ht, entry) ? HASHTABLE_FOUND : HASHTABLE_NOT_FOUND;
                 return false;
             }
             /* No match. Look for next candidate entry in the bucket. */

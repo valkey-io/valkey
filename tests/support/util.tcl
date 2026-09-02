@@ -83,6 +83,11 @@ proc createComplexDatasetForVerification {r count {prefix ""}} {
     }
 }
 
+# Path of the RDB file a server saves to (dir + dbfilename).
+proc server_rdb_path {client} {
+    return [file join [lindex [$client config get dir] 1] [lindex [$client config get dbfilename] 1]]
+}
+
 # Useful for some test
 proc zlistAlikeSort {a b} {
     if {[lindex $a 0] > [lindex $b 0]} {return 1}

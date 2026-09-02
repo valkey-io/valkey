@@ -491,10 +491,24 @@ TEST_F(ClusterIOOffloadTest, DispatchDeferredWhileJobInFlight) {
 
 /* --- Buffer limit and deferred teardown ------------------------------- */
 
-TEST_F(ClusterIOOffloadTest, BufferLimitCountsAtomicRcvbufLen) {
+/* 'cluster-link-sendbuf-limit' bounds the send queue only. A link holding a
+ * large receive buffer is not a slow peer and must survive, otherwise an
+ * offloaded read that got ahead of the main thread would tear down a healthy
+ * inbound link. */
+TEST_F(ClusterIOOffloadTest, BufferLimitIgnoresRcvbuf) {
     clusterLink *link = makeLink();
     link->send_msg_queue_mem = 8;
     link->rcvbuf_len = 4096;
+    server.cluster_link_msg_queue_limit_bytes = 64;
+
+    testOnlyFreeClusterLinkOnBufferLimitReached(link);
+
+    EXPECT_EQ(server.cluster->stat_cluster_links_buffer_limit_exceeded, 0ULL);
+}
+
+TEST_F(ClusterIOOffloadTest, BufferLimitCountsSendQueue) {
+    clusterLink *link = makeLink();
+    link->send_msg_queue_mem = 4096;
     server.cluster_link_msg_queue_limit_bytes = 64;
 
     testOnlyFreeClusterLinkOnBufferLimitReached(link);

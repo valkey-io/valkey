@@ -2314,7 +2314,7 @@ struct valkeyServer {
     int cluster_allow_reads_when_down;                     /* Are reads allowed when the cluster
                                                             is down? */
     int cluster_config_file_lock_fd;                       /* cluster config fd, will be flocked. */
-    unsigned long long cluster_link_msg_queue_limit_bytes; /* Memory usage limit on individual link buffers */
+    unsigned long long cluster_link_msg_queue_limit_bytes; /* Memory usage limit on individual link msg queue */
     int cluster_drop_packet_filter;                        /* Debug config that allows tactically
                                                             * dropping packets of a specific type */
     unsigned long cluster_blacklist_ttl;                   /* Duration in seconds that a node is denied re-entry into

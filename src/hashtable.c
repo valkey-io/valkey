@@ -1806,6 +1806,9 @@ size_t hashtablePopKnownEntries(hashtable *ht, void **entries, size_t count) {
         for (size_t i = 0; i < affected_buckets; i++) {
             compactBucketChain(ht, bucket_index[i], table_index[i]);
         }
+        for (size_t i = 0; i < count && hashtableIsRehashing(ht); i++) {
+            rehashStepOnReadIfNeeded(ht);
+        }
     }
     hashtableResumeAutoShrink(ht);
 

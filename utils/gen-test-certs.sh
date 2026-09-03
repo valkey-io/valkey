@@ -8,7 +8,8 @@
 #   tests/tls/ca-notyet/                         Directory containing not-yet-valid CA certificate.
 #   tests/tls/ca-multi.crt                       CA bundle with multiple certs.
 #   tests/tls/ca-dir/                            CA directory with hashed links.
-#   tests/tls/valkey.{crt,key}                   A certificate with no key usage/policy restrictions.
+#   tests/tls/valkey{,-pw}.{crt,key}             A certificate with no key usage/policy restrictions. With and without a passphrase.
+#   tests/tls/valkey-mldsa{,-pw}.{crt,key}       A PQC certificate with no key usage/policy restrictions. With and without a passphrase.
 #   tests/tls/client.{crt,key}                   A certificate restricted for SSL client usage.
 #   tests/tls/client-{expired,notyet}.crt        Invalid certificates restricted for SSL client usage.
 #   tests/tls/server.{crt,key}                   A certificate restricted for SSL server usage.
@@ -28,7 +29,7 @@ generate_cert() {
     openssl req \
         -new -sha256 \
         -subj "/O=Valkey Test/CN=$cn" \
-        -key $keyfile | \
+        -key "$keyfile" | \
         openssl x509 \
             -req -sha256 \
             -CA tests/tls/ca.crt \
@@ -37,7 +38,7 @@ generate_cert() {
             -CAcreateserial \
             -days 365 \
             $opts \
-            -out $certfile
+            -out "$certfile"
 }
 
 mkdir -p tests/tls
@@ -67,6 +68,37 @@ _END_
 generate_cert server "Server-only" "-extfile tests/tls/openssl.cnf -extensions server_cert"
 generate_cert client "Client-only" "-extfile tests/tls/openssl.cnf -extensions client_cert"
 generate_cert valkey "Generic-cert" "-extfile tests/tls/openssl.cnf -extensions generic_cert"
+
+openssl req \
+    -x509 \
+    -newkey rsa:2048 \
+    -keyout tests/tls/valkey-pw.key \
+    -subj "/O=Valkey Test/CN=Generic-cert" \
+    -CA tests/tls/ca.crt \
+    -CAkey tests/tls/ca.key \
+    -days 365 \
+    -passout pass:1234 \
+    -out tests/tls/valkey-pw.crt
+openssl req \
+    -x509 \
+    -newkey mldsa65 \
+    -keyout tests/tls/valkey-mldsa.key \
+    -subj "/O=Valkey Test/CN=Generic-cert" \
+    -CA tests/tls/ca.crt \
+    -CAkey tests/tls/ca.key \
+    -days 365 \
+    -nodes \
+    -out tests/tls/valkey-mldsa.crt
+openssl req \
+    -x509 \
+    -newkey mldsa65 \
+    -keyout tests/tls/valkey-mldsa-pw.key \
+    -subj "/O=Valkey Test/CN=Generic-cert" \
+    -CA tests/tls/ca.crt \
+    -CAkey tests/tls/ca.key \
+    -days 365 \
+    -passout pass:1234 \
+    -out tests/tls/valkey-mldsa-pw.crt
 
 # A client certificate with the CN "Client-only\0attacker", which anything
 # reading the CN as a C string sees as "Client-only".

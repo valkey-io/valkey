@@ -127,6 +127,119 @@ start_server {tags {"tls"}} {
             }
         }
 
+        test {TLS: basic dual certificates support} {
+            # backup current certificates
+            set orig_server_crt [lindex [r config get tls-cert-file] 1]
+            set orig_server_key [lindex [r config get tls-key-file] 1]
+            set orig_server_alt_crt [lindex [r config get tls-alt-cert-file] 1]
+            set orig_server_alt_key [lindex [r config get tls-alt-key-file] 1]
+            set ca_file [lindex [r config get tls-ca-cert-file] 1]
+
+            set valkey_crt [format "%s/tests/tls/valkey.crt" [pwd]]
+            set valkey_key [format "%s/tests/tls/valkey.key" [pwd]]
+            set valkey_pqc_crt [format "%s/tests/tls/valkey-mldsa.crt" [pwd]]
+            set valkey_pqc_key [format "%s/tests/tls/valkey-mldsa.key" [pwd]]
+            r CONFIG SET tls-cert-file $valkey_pqc_crt tls-key-file $valkey_pqc_key tls-alt-cert-file $valkey_crt tls-alt-key-file $valkey_key
+            set s [valkey_client]
+            assert_equal "PONG" [$s PING]
+            $s close
+            # also test connecting with openssl without pqc ciphers support
+            set port [lindex [r config get tls-port] 1]
+            catch {exec /usr/bin/openssl s_client -connect localhost:$port -CAfile $valkey_crt -sigalgs "rsa_pss_pss_sha256:rsa_pss_rsae_sha256" < /dev/null} out
+            assert_match {*Peer signature type: rsa_pss_rsae_sha256*} $out
+
+            #cleanup
+            r CONFIG SET tls-cert-file $orig_server_crt tls-key-file $orig_server_key tls-alt-cert-file $orig_server_alt_crt tls-alt-key-file $orig_server_alt_key
+        }
+
+        test {TLS: alt cert and key files must be provided together} {
+            # backup current certificates
+            set orig_server_crt [lindex [r config get tls-cert-file] 1]
+            set orig_server_key [lindex [r config get tls-key-file] 1]
+            set orig_server_alt_crt [lindex [r config get tls-alt-cert-file] 1]
+            set orig_server_alt_key [lindex [r config get tls-alt-key-file] 1]
+
+            r CONFIG SET tls-cert-file $orig_server_crt tls-key-file $orig_server_key tls-alt-cert-file "" tls-alt-key-file ""
+
+            catch {r CONFIG SET tls-alt-cert-file $orig_server_crt} e
+            assert_match {*related to argument 'tls-alt-cert-file'*} $e
+            catch {r CONFIG SET tls-alt-key-file $orig_server_key} e
+            assert_match {**related to argument 'tls-alt-key-file'*} $e
+
+            #cleanup
+            r CONFIG SET tls-cert-file $orig_server_crt tls-key-file $orig_server_key tls-alt-cert-file $orig_server_alt_crt tls-alt-key-file $orig_server_alt_key
+        }
+
+        test {TLS: the same certificate twice not allowed} {
+            # backup current certificates
+            set orig_server_crt [lindex [r config get tls-cert-file] 1]
+            set orig_server_key [lindex [r config get tls-key-file] 1]
+            set orig_server_alt_crt [lindex [r config get tls-alt-cert-file] 1]
+            set orig_server_alt_key [lindex [r config get tls-alt-key-file] 1]
+
+            catch {r CONFIG SET tls-alt-cert-file $orig_server_crt tls-alt-key-file $orig_server_key} e
+            assert_match {*Unable to update TLS configuration*} $e
+
+            #cleanup
+            r CONFIG SET tls-cert-file $orig_server_crt tls-key-file $orig_server_key tls-alt-cert-file $orig_server_alt_crt tls-alt-key-file $orig_server_alt_key
+        }
+
+        test {TLS: Two certificates of the same type not allowed} {
+            # backup current certificates
+            set orig_server_crt [lindex [r config get tls-cert-file] 1]
+            set orig_server_key [lindex [r config get tls-key-file] 1]
+            set orig_server_alt_crt [lindex [r config get tls-alt-cert-file] 1]
+            set orig_server_alt_key [lindex [r config get tls-alt-key-file] 1]
+
+            set valkey_crt [format "%s/tests/tls/valkey.crt" [pwd]]
+            set valkey_key [format "%s/tests/tls/valkey.key" [pwd]]
+            set valkey_pqc_crt [format "%s/tests/tls/valkey-mldsa.crt" [pwd]]
+            set valkey_pqc_key [format "%s/tests/tls/valkey-mldsa.key" [pwd]]
+            set valkey_pw_crt [format "%s/tests/tls/valkey-pw.crt" [pwd]]
+            set valkey_pw_key [format "%s/tests/tls/valkey-pw.key" [pwd]]
+            set valkey_pqc_pw_crt [format "%s/tests/tls/valkey-mldsa-pw.crt" [pwd]]
+            set valkey_pqc_pw_key [format "%s/tests/tls/valkey-mldsa-pw.key" [pwd]]
+
+            r CONFIG SET tls-cert-file $valkey_pqc_crt tls-key-file $valkey_pqc_key tls-alt-cert-file $valkey_crt tls-alt-key-file $valkey_key
+            set s [valkey_client]
+            assert_equal "PONG" [$s PING]
+            $s close
+            catch {r CONFIG SET tls-alt-cert-file $valkey_pqc_pw_crt tls-alt-key-file $valkey_pqc_pw_key tls-key-file-pass 1234} e
+            assert_match {*Unable to update TLS configuration*} $e
+            catch {r CONFIG SET tls-cert-file $valkey_pw_crt tls-key-file $valkey_pw_key tls-key-file-pass 1234} e
+            assert_match {*Unable to update TLS configuration*} $e
+
+            #cleanup
+            r CONFIG SET tls-cert-file $orig_server_crt tls-key-file $orig_server_key tls-alt-cert-file $orig_server_alt_crt tls-alt-key-file $orig_server_alt_key tls-key-file-pass ""
+        }
+
+        test {TLS: Dual certificates with passphrases} {
+            # backup current certificates
+            set orig_server_crt [lindex [r config get tls-cert-file] 1]
+            set orig_server_key [lindex [r config get tls-key-file] 1]
+            set orig_server_alt_crt [lindex [r config get tls-alt-cert-file] 1]
+            set orig_server_alt_key [lindex [r config get tls-alt-key-file] 1]
+
+            set valkey_crt [format "%s/tests/tls/valkey.crt" [pwd]]
+            set valkey_key [format "%s/tests/tls/valkey.key" [pwd]]
+            set valkey_pqc_crt [format "%s/tests/tls/valkey-mldsa.crt" [pwd]]
+            set valkey_pqc_key [format "%s/tests/tls/valkey-mldsa.key" [pwd]]
+            set valkey_pw_crt [format "%s/tests/tls/valkey-pw.crt" [pwd]]
+            set valkey_pw_key [format "%s/tests/tls/valkey-pw.key" [pwd]]
+            set valkey_pqc_pw_crt [format "%s/tests/tls/valkey-mldsa-pw.crt" [pwd]]
+            set valkey_pqc_pw_key [format "%s/tests/tls/valkey-mldsa-pw.key" [pwd]]
+
+            r CONFIG SET tls-cert-file $valkey_pqc_pw_crt tls-key-file $valkey_pqc_pw_key tls-alt-cert-file $valkey_crt tls-alt-key-file $valkey_key tls-key-file-pass 1234
+            set s [valkey_client]
+            assert_equal "PONG" [$s PING]
+            $s close
+            r CONFIG SET tls-cert-file $valkey_pqc_pw_crt tls-key-file $valkey_pqc_pw_key tls-alt-cert-file $valkey_pw_crt tls-alt-key-file $valkey_pw_key
+            r CONFIG SET tls-cert-file $valkey_pqc_crt tls-key-file $valkey_pqc_key tls-alt-cert-file $valkey_pw_crt tls-alt-key-file $valkey_pw_key
+
+            #cleanup
+            r CONFIG SET tls-cert-file $orig_server_crt tls-key-file $orig_server_key tls-alt-cert-file $orig_server_alt_crt tls-alt-key-file $orig_server_alt_key tls-key-file-pass ""
+        }
+
         test {TLS: switch between tcp and tls ports} {
             set srv_port [srv 0 port]
 

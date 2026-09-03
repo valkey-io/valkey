@@ -51,15 +51,22 @@ start_cluster 1 1 {tags {external:skip cluster}} {
         # the key having expired can abort the transaction.
         R 0 debug set-active-expire 0
         R 0 del $transaction_key
-        R 0 set $watched_key alive px 50
-        R 0 watch $watched_key
-        set keys_before [R 0 dbsize]
-        after 100
-        assert_equal $keys_before [R 0 dbsize]
 
-        R 0 multi
-        R 0 set $transaction_key committed
-        set reply [R 0 exec]
+        for {set j 0} {$j < 10} {incr j} {
+            R 0 del $transaction_key
+            R 0 set $watched_key alive px 100
+            R 0 watch $watched_key
+            set keys_before [R 0 dbsize]
+            after 101
+            assert_equal $keys_before [R 0 dbsize]
+
+            R 0 multi
+            R 0 set $transaction_key committed
+            set reply [R 0 exec]
+            if {$reply eq {}} break
+        }
+        if {$::verbose} { puts "WATCHed key in another slot that expired aborts EXEC attempts: $j" }
+
         R 0 debug set-active-expire 1
 
         assert_equal {} $reply

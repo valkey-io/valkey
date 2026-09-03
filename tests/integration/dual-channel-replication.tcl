@@ -212,7 +212,7 @@ start_server {tags {"dual-channel-replication external:skip"}} {
             set primary_port [srv 0 port]
 
             $primary config set repl-diskless-sync yes
-            # Set primary shared replication buffer size to a bit more then the size of 
+            # Set primary shared replication buffer size to a bit more than the size of
             # a replication buffer block.
             $primary config set client-output-buffer-limit "replica 1100k 0 0"
             $primary config set dual-channel-replication-enabled $enable

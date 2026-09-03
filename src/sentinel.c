@@ -273,7 +273,7 @@ struct sentinelState {
     int tilt;                          /* Are we in TILT mode? */
     int total_tilt;                    /* Number of tilt. */
     int running_scripts;               /* Number of scripts in execution right now. */
-    mstime_t tilt_start_time;          /* When TITL started. */
+    mstime_t tilt_start_time;          /* When TILT started. */
     mstime_t previous_time;            /* Last time we ran the time handler. */
     list *scripts_queue;               /* Queue of user scripts to execute. */
     char *announce_ip;                 /* IP addr that is gossiped to other sentinels if
@@ -921,7 +921,7 @@ void sentinelCollectTerminatedScripts(void) {
 
 /* Kill scripts in timeout, they'll be collected by the
  * sentinelCollectTerminatedScripts() function. */
-void sentinelKillTimedoutScripts(void) {
+void sentinelKillTimedOutScripts(void) {
     listNode *ln;
     listIter li;
     mstime_t now = mstime();
@@ -5468,7 +5468,7 @@ void sentinelTimer(void) {
     sentinelHandleDictOfValkeyInstances(sentinel.primaries);
     sentinelRunPendingScripts();
     sentinelCollectTerminatedScripts();
-    sentinelKillTimedoutScripts();
+    sentinelKillTimedOutScripts();
 
     /* We continuously change the frequency of the server "timer interrupt"
      * in order to desynchronize every Sentinel from every other.

@@ -5453,7 +5453,7 @@ void replicationCron(void) {
         }
     }
 
-    /* Disconnect timedout replicas. */
+    /* Disconnect timed out replicas. */
     if (listLength(server.replicas)) {
         listIter li;
         listNode *ln;

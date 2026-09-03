@@ -165,7 +165,7 @@ int geohashBoundingBox(GeoShape *shape, double *bounds) {
 
 /* Calculate a set of areas (center + 8) that are able to cover a range query
  * for the specified position and shape (see geohash.h GeoShape).
- * the bounding box saved in shaple.bounds */
+ * the bounding box saved in shape.bounds */
 GeoHashRadius geohashCalculateAreasByShapeWGS84(GeoShape *shape) {
     GeoHashRange long_range, lat_range;
     GeoHashRadius radius;

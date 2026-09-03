@@ -43,24 +43,24 @@ scriptFlag scripts_flags_def[] = {
 /* On script invocation, holding the current run context */
 static scriptRunCtx *curr_run_ctx = NULL;
 
-static void exitScriptTimedoutMode(scriptRunCtx *run_ctx) {
+static void exitScriptTimedOutMode(scriptRunCtx *run_ctx) {
     serverAssert(run_ctx == curr_run_ctx);
-    serverAssert(scriptIsTimedout());
+    serverAssert(scriptIsTimedOut());
     run_ctx->flags &= ~SCRIPT_TIMEDOUT;
     blockingOperationEnds();
     /* if we are a replica and we have an active primary, set it for continue processing */
     if (server.primary_host && server.primary) queueClientForReprocessing(server.primary);
 }
 
-static void enterScriptTimedoutMode(scriptRunCtx *run_ctx) {
+static void enterScriptTimedOutMode(scriptRunCtx *run_ctx) {
     serverAssert(run_ctx == curr_run_ctx);
-    serverAssert(!scriptIsTimedout());
-    /* Mark script as timedout */
+    serverAssert(!scriptIsTimedOut());
+    /* Mark script as timed out */
     run_ctx->flags |= SCRIPT_TIMEDOUT;
     blockingOperationStarts();
 }
 
-int scriptIsTimedout(void) {
+int scriptIsTimedOut(void) {
     return scriptIsRunning() && (curr_run_ctx->flags & SCRIPT_TIMEDOUT);
 }
 
@@ -74,7 +74,7 @@ client *scriptGetCaller(void) {
  * and also check if the run should be terminated. */
 int scriptInterrupt(scriptRunCtx *run_ctx) {
     if (run_ctx->flags & SCRIPT_TIMEDOUT) {
-        /* script already timedout
+        /* script already timed out
            we just need to process some events and return */
         processEventsWhileBlocked();
         return (run_ctx->flags & SCRIPT_KILLED) ? SCRIPT_KILL : SCRIPT_CONTINUE;
@@ -94,7 +94,7 @@ int scriptInterrupt(scriptRunCtx *run_ctx) {
               "You can try killing the script using the %s command. Script name is: %s.",
               elapsed, (run_ctx->flags & SCRIPT_EVAL_MODE) ? "SCRIPT KILL" : "FUNCTION KILL", run_ctx->funcname);
 
-    enterScriptTimedoutMode(run_ctx);
+    enterScriptTimedOutMode(run_ctx);
     /* Once the script timeouts we reenter the event loop to permit others
      * some commands execution. For this reason
      * we need to mask the client executing the script from the event loop.
@@ -248,8 +248,8 @@ int scriptPrepareForRun(scriptRunCtx *run_ctx,
 void scriptResetRun(scriptRunCtx *run_ctx) {
     serverAssert(curr_run_ctx);
 
-    if (scriptIsTimedout()) {
-        exitScriptTimedoutMode(run_ctx);
+    if (scriptIsTimedOut()) {
+        exitScriptTimedOutMode(run_ctx);
         /* Restore the client that was protected when the script timeout
          * was detected. */
         unprotectClient(run_ctx->original_client);

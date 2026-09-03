@@ -840,7 +840,7 @@ int raxGenericInsert(rax *rax, unsigned char *s, size_t len, void *data, void **
         size_t oldalloc = rax_ptr_alloc_size(h);
 
         /* If this node is going to have a single child, and there
-         * are other characters, so that that would result in a chain
+         * are other characters, so that would result in a chain
          * of single-childed nodes, turn it into a compressed node. */
         if (h->size == 0 && len - i > 1) {
             debugf("Inserting compressed node\n");
@@ -1047,7 +1047,7 @@ int raxRemove(rax *rax, unsigned char *s, size_t len, void **old) {
             rax_free(child);
             rax->numnodes--;
             h = raxStackPop(&ts);
-            /* If this node has more then one child, or actually holds
+            /* If this node has more than one child, or actually holds
              * a key, stop here. */
             if (h->iskey || (!h->iscompr && h->size != 1)) break;
         }

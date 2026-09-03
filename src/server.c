@@ -928,7 +928,7 @@ int isMutuallyExclusiveChildType(int type) {
 
 /* Returns true when we're inside a long command that yielded to the event loop. */
 int isInsideYieldingLongCommand(void) {
-    return scriptIsTimedout() || server.busy_module_yield_flags;
+    return scriptIsTimedOut() || server.busy_module_yield_flags;
 }
 
 /* Return true if this instance has persistence completely turned off:
@@ -1770,7 +1770,7 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
 
     /* Cleanup expired MIGRATE cached sockets. */
     run_with_period(1000) {
-        migrateCloseTimedoutSockets();
+        migrateCloseTimedOutSockets();
     }
 
     /* Resize tracking keys table if needed. This is also done at every
@@ -4390,10 +4390,10 @@ void unprepareCommand(client *c) {
  * other operations can be performed by the caller. Otherwise
  * if C_ERR is returned the client was destroyed (i.e. after QUIT). */
 int processCommand(client *c) {
-    if (!scriptIsTimedout()) {
+    if (!scriptIsTimedOut()) {
         /* Both EXEC and scripts call call() directly so there should be
          * no way in_exec or scriptIsRunning() is 1.
-         * That is unless lua_timedout, in which case client may run
+         * That is unless lua_timed out, in which case client may run
          * some commands. */
         serverAssert(!server.in_exec);
         serverAssert(!scriptIsRunning());

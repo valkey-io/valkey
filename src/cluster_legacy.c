@@ -3358,7 +3358,7 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
                     /* A primary reason why we are here is likely due to my primary crashing during the
                      * slot finalization process, leading me to become the new primary without
                      * inheriting the slot ownership, while the source shard continued and relinquished
-                     * theslot to its old primary. Under such circumstances, the node would undergo
+                     * the slot to its old primary. Under such circumstances, the node would undergo
                      * an election and have its config epoch increased with consensus. That said, we
                      * will still explicitly bump the config epoch here to be consistent with the
                      * existing practice.

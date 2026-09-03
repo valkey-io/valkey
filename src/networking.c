@@ -5571,7 +5571,7 @@ void clientUnblockCommand(client *c) {
     /* Note that we never try to unblock a client blocked on a module command,
      * or a client blocked by CLIENT PAUSE or some other blocking type which
      * doesn't have a timeout callback (even in the case of UNBLOCK ERROR).
-     * The reason is that we assume that if a command doesn't expect to be timedout,
+     * The reason is that we assume that if a command doesn't expect to be timed out,
      * it also doesn't expect to be unblocked by CLIENT UNBLOCK */
     if (target && target->flag.blocked && blockedClientMayTimeout(target)) {
         if (unblock_error)

@@ -27,6 +27,20 @@ void fbtreeFree(fbtreeIndex *fbt);
 unsigned long fbtreeLength(fbtreeIndex *fbt);
 size_t fbtreeEstimateStructureMemory(fbtreeIndex *fbt);
 unsigned long fbtreeHeight(const fbtreeIndex *fbt);
+/* Number of leaf nodes (for load-factor tracking). */
+unsigned long fbtreeNumLeaves(fbtreeIndex *fbt);
+/* Leaf load factor = items / (num_leaves * NODE_SIZE); returns 1.0 when empty. */
+double fbtreeLoadFactor(fbtreeIndex *fbt);
+/* Incremental load-factor compaction. Re-packs the leaves under bottom inner
+ * nodes to an even fill of ~`target` items per leaf, starting at rank `cursor`
+ * and processing roughly `budget` items per call. Returns the next cursor, or 0
+ * when the sweep is complete. Only ever reduces leaf count (never splits) and
+ * is idempotent. Only sds pointers move -- items are not reallocated, so
+ * companion-hashtable references stay valid. */
+unsigned long fbtreeCompactStep(fbtreeIndex *fbt, unsigned long cursor, unsigned int limit, unsigned long budget);
+/* Maximum items a leaf can hold (the fanout). Lets callers express a compaction
+ * target as a fill fraction of leaf capacity. */
+unsigned int fbtreeLeafCapacity(void);
 void fbtreeInitIterator(fbtreeIterator *iterator, fbtreeIndex *fbt);
 void fbtreeResetIterator(fbtreeIterator *iterator);
 fbtreeIndex *fbtreeIteratorGetIndex(fbtreeIterator *iterator);

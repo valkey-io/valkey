@@ -2590,9 +2590,9 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
                 return NULL;
             }
             /* See the RDB_TYPE_ZSET_LISTPACK case: a NAN score would crash the
-             * server when the zset is converted to a skiplist. The legacy
-             * ziplist format is converted to a listpack above, so apply the
-             * same NAN check on the resulting listpack. */
+             * server when the zset is converted to the B+ tree ordered index.
+             * The legacy ziplist format is converted to a listpack above, so
+             * apply the same NAN check on the resulting listpack. */
             if (!zzlValidateScores(lp)) {
                 rdbReportCorruptRDB("Zset ziplist with NAN score detected");
                 zfree(lp);
@@ -2627,8 +2627,8 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
                 return NULL;
             }
             /* A NAN score would crash the server when the zset is converted to
-             * a skiplist (zslInsertNode asserts the score is not NAN). The
-             * skiplist RDB format rejects NAN scores at load time; do the same
+             * the B+ tree ordered index, whose ordering comparisons require
+             * totally-ordered (non-NAN) scores. Reject NAN scores at load time
              * for the listpack format. */
             if (!zzlValidateScores(encoded)) {
                 rdbReportCorruptRDB("Zset listpack with NAN score detected");

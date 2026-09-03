@@ -52,6 +52,7 @@
 
 #include "server.h"
 #include "ordered_index.h"
+#include "fifo.h"
 #include "intset.h" /* Compact integer set structure */
 #include "mt19937-64.h"
 #include <math.h>
@@ -702,6 +703,7 @@ void zsetConvertAndExpand(robj *zobj, int encoding, unsigned long cap) {
         zs = zmalloc(sizeof(*zs));
         zs->ht = hashtableCreate(&zsetHashtableType);
         zs->oi = orderedIndexCreate();
+        zs->compact_queued = 0;
 
         /* Presize the dict to avoid rehashing */
         hashtableExpand(zs->ht, cap);
@@ -1313,6 +1315,113 @@ void zincrbyCommand(client *c) {
     zaddGenericCommand(c, ZADD_IN_INCR);
 }
 
+/* ===== Background load-factor compaction ===== */
+
+/* A sorted set flagged for background compaction, boxed onto a fifo of pending
+ * (db, key) candidates. The key is an owned copy, freed when the candidate is
+ * drained. The fifo holds key NAMES, never live object pointers, so a candidate
+ * that is deleted or refilled before it drains is handled safely at drain time. */
+typedef struct zsetCompactCandidate {
+    int dbid;
+    sds key;
+} zsetCompactCandidate;
+
+/* A B+tree set is worth enqueuing when it holds at least min-length items and
+ * its load factor has fallen below the configured trigger fraction.
+ *
+ * Guard against a churning misconfiguration: if the target fill is not strictly
+ * above the trigger, a set compacted to ~limit would still sit at/under the
+ * trigger and be re-enqueued on the next delete. Rather than cross-validate two
+ * independent config knobs, we simply treat limit <= trigger as "off". */
+static int zsetShouldQueueCompaction(zset *zs) {
+    if (server.zset_compaction_limit_pct <= server.zset_compaction_trigger_pct) return 0;
+    if (orderedIndexLength(zs->oi) < (unsigned long)server.zset_compaction_min_length) return 0;
+    return orderedIndexLoadFactor(zs->oi) < server.zset_compaction_trigger_pct / 100.0;
+}
+
+/* After a delete shrinks a B+tree-encoded sorted set, enqueue it for background
+ * compaction if its load factor has dropped below the configured trigger. A
+ * one-bit flag on the zset de-duplicates while a candidate is pending. */
+void zsetMaybeQueueCompaction(serverDb *db, robj *key, robj *zobj) {
+    if (!server.zset_compaction_enabled) return;
+    if (zobj->encoding != OBJ_ENCODING_BTREE) return;
+    zset *zs = objectGetVal(zobj);
+    if (zs->compact_queued) return;
+    if (!zsetShouldQueueCompaction(zs)) return;
+
+    if (!server.zset_compaction_queue) server.zset_compaction_queue = fifoCreate();
+    zsetCompactCandidate *cand = zmalloc(sizeof(*cand));
+    cand->dbid = db->id;
+    cand->key = sdsdup(objectGetVal(key)); /* owned copy of the key name */
+    fifoPush(server.zset_compaction_queue, cand);
+    zs->compact_queued = 1;
+}
+
+/* Drain one throttled compaction step from serverCron. Resumes an in-progress
+ * candidate, else pops the next, and runs orderedIndexCompactStep with a bounded
+ * budget. Stale candidates (key deleted or no longer B+tree-encoded) are dropped
+ * via a fresh keyspace lookup -- the queue only holds key NAMES, never live
+ * pointers, so this is lifecycle-safe. A refilled set self-heals: compaction
+ * never expands, so an already-packed tree finishes in one no-op step. */
+void zsetCompactionCron(void) {
+    if (!server.zset_compaction_queue) return;
+
+    /* Pick up the next candidate if currently idle. */
+    if (server.zset_compaction_cur_key == NULL) {
+        void *item;
+        if (!fifoPop(server.zset_compaction_queue, &item)) return;
+        zsetCompactCandidate *cand = item;
+        server.zset_compaction_cur_db = cand->dbid;
+        server.zset_compaction_cur_key = cand->key; /* take ownership of the sds */
+        server.zset_compaction_cursor = 0;
+        zfree(cand);
+    }
+
+    serverDb *db = server.db[server.zset_compaction_cur_db];
+    robj *keyobj = createStringObject(server.zset_compaction_cur_key, sdslen(server.zset_compaction_cur_key));
+    robj *zobj = lookupKeyReadWithFlags(db, keyobj, LOOKUP_NONOTIFY | LOOKUP_NOTOUCH);
+    decrRefCount(keyobj);
+
+    int done = 1;
+    if (zobj && zobj->encoding == OBJ_ENCODING_BTREE) {
+        zset *zs = objectGetVal(zobj);
+        double limit = server.zset_compaction_limit_pct / 100.0;
+        unsigned long budget = (unsigned long)server.zset_compaction_cycle_keys;
+        unsigned long next = orderedIndexCompactStep(zs->oi, server.zset_compaction_cursor, limit, budget);
+        if (next != 0) {
+            server.zset_compaction_cursor = next; /* more to do next tick */
+            done = 0;
+        } else {
+            zs->compact_queued = 0; /* finished: allow future re-enqueue */
+        }
+    }
+
+    if (done) {
+        sdsfree(server.zset_compaction_cur_key);
+        server.zset_compaction_cur_key = NULL;
+        server.zset_compaction_cursor = 0;
+    }
+}
+
+/* Release the compaction queue and any in-progress candidate. Called on
+ * shutdown so a leak sanitizer sees a clean teardown. */
+void zsetCompactionCleanup(void) {
+    if (server.zset_compaction_queue) {
+        void *item;
+        while (fifoPop(server.zset_compaction_queue, &item)) {
+            zsetCompactCandidate *cand = item;
+            sdsfree(cand->key);
+            zfree(cand);
+        }
+        fifoRelease(server.zset_compaction_queue);
+        server.zset_compaction_queue = NULL;
+    }
+    if (server.zset_compaction_cur_key) {
+        sdsfree(server.zset_compaction_cur_key);
+        server.zset_compaction_cur_key = NULL;
+    }
+}
+
 void zremCommand(client *c) {
     robj *key = c->argv[1];
     robj *zobj;
@@ -1336,6 +1445,7 @@ void zremCommand(client *c) {
         if (keyremoved) notifyKeyspaceEvent(NOTIFY_GENERIC, "del", key, c->db->id);
         signalModifiedKey(c, c->db, key);
         server.dirty += deleted;
+        if (!keyremoved) zsetMaybeQueueCompaction(c->db, key, zobj);
     }
     addReplyLongLong(c, deleted);
 }
@@ -1444,6 +1554,7 @@ void zremrangeGenericCommand(client *c, zrange_type rangetype) {
         notifyKeyspaceEvent(NOTIFY_ZSET, notify_type, key, c->db->id);
         if (keyremoved) notifyKeyspaceEvent(NOTIFY_GENERIC, "del", key, c->db->id);
         server.dirty += deleted;
+        if (!keyremoved) zsetMaybeQueueCompaction(c->db, key, zobj);
     }
     addReplyLongLong(c, deleted);
 
@@ -3416,12 +3527,15 @@ void genericZpopCommand(client *c,
         ++result_count;
     } while (--rangelen);
 
-    /* Remove the key, if indeed needed. */
+    /* Remove the key, if indeed needed; otherwise the surviving B+tree zset just
+     * shrank, so consider it for background load-factor compaction. */
     if (zsetLength(zobj) == 0) {
         if (deleted) *deleted = 1;
 
         dbDelete(c->db, key);
         notifyKeyspaceEvent(NOTIFY_GENERIC, "del", key, c->db->id);
+    } else {
+        zsetMaybeQueueCompaction(c->db, key, zobj);
     }
     signalModifiedKey(c, c->db, key);
 

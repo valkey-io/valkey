@@ -1523,6 +1523,7 @@ typedef struct OrderedIndex OrderedIndex;
 typedef struct zset {
     hashtable *ht;
     OrderedIndex *oi;
+    int compact_queued; /* 1 if queued for background load-factor compaction */
 } zset;
 
 /* Lookup-key marking for fbtree hashtable disambiguation.
@@ -1994,6 +1995,16 @@ struct valkeyServer {
     int active_expire_effort;    /* From 1 (default) to 10, active effort. */
     int lazy_expire_disabled;    /* If > 0, don't trigger lazy expire */
     int active_defrag_enabled;
+    /* fbtree ZSET background load-factor compaction. */
+    int zset_compaction_enabled;                 /* master on/off switch */
+    int zset_compaction_trigger_pct;             /* enqueue a set when its load factor < this % */
+    int zset_compaction_limit_pct;               /* compact leaves up to this % fill */
+    int zset_compaction_min_length;              /* skip sets smaller than this many items */
+    int zset_compaction_cycle_keys;              /* items processed per cron drain step */
+    struct fifo *zset_compaction_queue;          /* pending (db,key) candidates */
+    int zset_compaction_cur_db;                  /* in-progress candidate db (resume across ticks) */
+    sds zset_compaction_cur_key;                 /* in-progress candidate key, NULL when idle */
+    unsigned long zset_compaction_cursor;        /* in-progress compaction cursor */
     int skip_checksum_validation;                /* Disable checksum validation for RDB and RESTORE payload. */
     int rdb_version_check;                       /* Try to load RDB produced by a future version. */
     int jemalloc_bg_thread;                      /* Enable jemalloc background thread */
@@ -4105,6 +4116,10 @@ void msetCommand(client *c);
 void msetnxCommand(client *c);
 void msetexCommand(client *c);
 void zaddCommand(client *c);
+/* Background load-factor compaction (compaction.c / t_zset.c). */
+void zsetMaybeQueueCompaction(serverDb *db, robj *key, robj *zobj);
+void zsetCompactionCron(void);
+void zsetCompactionCleanup(void);
 void zincrbyCommand(client *c);
 void zrangeCommand(client *c);
 void zrangebyscoreCommand(client *c);

@@ -4368,7 +4368,7 @@ TEST_F(FbtreeTest, Height) {
     EXPECT_GT(fbtreeHeight(fbt), 2u);
 }
 
-/* ==========================================================================
+/* ===================================================================
  * Active-defrag scan tests. A defragfn that unconditionally relocates every
  * allocation (copy to a fresh block, free the original) lets LeakSanitizer and
  * AddressSanitizer catch stale references the real jemalloc-hinted path would
@@ -5274,5 +5274,336 @@ TEST(FeatureSearchTest, typical_node_size) {
     };
     for (int i = 0; i < 8; i++) {
         testAllImpls(features, 61, targets[i]);
+    }
+}
+
+/* ========== Load-Factor / Leaf-Count Tracking Tests ========== */
+
+/* Ground-truth leaf count: walk the doubly-linked leaf list from the head.
+ * Used to cross-check the cached fbt->num_leaves counter. */
+static size_t walkLeafCount(fbtreeIndex *fbt) {
+    size_t n = 0;
+    for (leafNode *leaf = fbt->leftmost_leaf; leaf != nullptr; leaf = leaf->next) n++;
+    return n;
+}
+
+TEST_F(FbtreeTest, NumLeavesEmptyTree) {
+    EXPECT_EQ(fbtreeNumLeaves(fbt), 0u);
+    EXPECT_EQ(walkLeafCount(fbt), 0u);
+    /* Empty tree has no slack to reclaim. */
+    EXPECT_DOUBLE_EQ(fbtreeLoadFactor(fbt), 1.0);
+}
+
+TEST_F(FbtreeTest, NumLeavesSingleLeaf) {
+    insert("a");
+    insert("b");
+    insert("c");
+    EXPECT_EQ(fbtreeNumLeaves(fbt), 1u);
+    EXPECT_EQ(walkLeafCount(fbt), 1u);
+    EXPECT_DOUBLE_EQ(fbtreeLoadFactor(fbt), 3.0 / NODE_SIZE);
+    expectValid();
+}
+
+TEST_F(FbtreeTest, NumLeavesMatchesWalkAfterSplits) {
+    /* Enough to force multiple leaf splits across more than one level. */
+    for (size_t i = 0; i < (size_t)TEST_TWO_LEVEL_ITEMS + 100; i++) {
+        fbtreeInsert(fbt, createBase26TestString("k", "", i, 5));
+    }
+    expectValid();
+    EXPECT_GT(fbtreeNumLeaves(fbt), 1u);
+    EXPECT_EQ(fbtreeNumLeaves(fbt), walkLeafCount(fbt));
+}
+
+TEST_F(FbtreeTest, LoadFactorComputation) {
+    for (size_t i = 0; i < (size_t)TEST_TWO_LEVEL_ITEMS + 100; i++) {
+        fbtreeInsert(fbt, createBase26TestString("k", "", i, 5));
+    }
+    double expected = (double)fbtreeLength(fbt) / ((double)fbtreeNumLeaves(fbt) * NODE_SIZE);
+    EXPECT_DOUBLE_EQ(fbtreeLoadFactor(fbt), expected);
+    EXPECT_GT(fbtreeLoadFactor(fbt), 0.4);
+    EXPECT_LE(fbtreeLoadFactor(fbt), 1.0);
+}
+
+TEST_F(FbtreeTest, NumLeavesAfterSingleDeletes) {
+    std::vector<sds> items;
+    for (size_t i = 0; i < (size_t)TEST_TWO_LEVEL_ITEMS + 100; i++) {
+        items.push_back(fbtreeInsert(fbt, createBase26TestString("k", "", i, 5)));
+    }
+    /* Delete every other item; some leaves empty out and get reclaimed. */
+    for (size_t i = 0; i < items.size(); i += 2) {
+        fbtreeDelete(fbt, items[i]);
+    }
+    expectValid();
+    EXPECT_EQ(fbtreeNumLeaves(fbt), walkLeafCount(fbt));
+}
+
+TEST_F(FbtreeTest, NumLeavesAfterRangeDelete) {
+    size_t total = (size_t)TEST_TWO_LEVEL_ITEMS + 200;
+    for (size_t i = 0; i < total; i++) {
+        fbtreeInsert(fbt, createBase26TestString("k", "", i, 5));
+    }
+    size_t before = fbtreeNumLeaves(fbt);
+    /* Delete a large middle rank range, removing many whole leaves. */
+    fbtreeDeleteRangeByRank(fbt, total / 4, (3 * total) / 4, nullptr, nullptr);
+    expectValid();
+    EXPECT_EQ(fbtreeNumLeaves(fbt), walkLeafCount(fbt));
+    EXPECT_LT(fbtreeNumLeaves(fbt), before);
+}
+
+TEST_F(FbtreeTest, NumLeavesAfterDeleteAllItems) {
+    std::vector<sds> items;
+    for (size_t i = 0; i < (size_t)NODE_SIZE * 3; i++) {
+        items.push_back(fbtreeInsert(fbt, createBase26TestString("k", "", i, 4)));
+    }
+    for (sds it : items) fbtreeDelete(fbt, it);
+    /* All items gone -> tree empty -> zero leaves. */
+    EXPECT_EQ(fbtreeNumLeaves(fbt), 0u);
+    EXPECT_EQ(walkLeafCount(fbt), 0u);
+    EXPECT_DOUBLE_EQ(fbtreeLoadFactor(fbt), 1.0);
+    expectValid();
+}
+
+TEST_F(FbtreeTest, NumLeavesResetOnEmpty) {
+    for (size_t i = 0; i < (size_t)NODE_SIZE * 2; i++) {
+        fbtreeInsert(fbt, createBase26TestString("k", "", i, 4));
+    }
+    EXPECT_GT(fbtreeNumLeaves(fbt), 1u);
+    fbtreeEmpty(fbt);
+    EXPECT_EQ(fbtreeNumLeaves(fbt), 0u);
+    EXPECT_EQ(walkLeafCount(fbt), 0u);
+    /* Reuse after empty must rebuild the counter from zero. */
+    fbtreeInsert(fbt, createString("x"));
+    EXPECT_EQ(fbtreeNumLeaves(fbt), 1u);
+    expectValid();
+}
+
+TEST_F(FbtreeTest, NumLeavesPopMinMax) {
+    for (size_t i = 0; i < (size_t)NODE_SIZE * 3; i++) {
+        fbtreeInsert(fbt, createBase26TestString("k", "", i, 4));
+    }
+    /* Pop from both ends until empty; leaves should be reclaimed to zero. */
+    while (fbtreeLength(fbt) > 0) {
+        sds mn = fbtreePopMin(fbt);
+        if (mn) sdsfree(mn);
+        if (fbtreeLength(fbt) == 0) break;
+        sds mx = fbtreePopMax(fbt);
+        if (mx) sdsfree(mx);
+    }
+    EXPECT_EQ(fbtreeNumLeaves(fbt), 0u);
+    EXPECT_EQ(fbtreeNumLeaves(fbt), walkLeafCount(fbt));
+    expectValid();
+}
+
+/* ========== Compaction Primitive Tests ========== */
+
+static constexpr unsigned int kCompactTarget = 45; /* ~74% of NODE_SIZE (61) */
+
+/* Insert n ordered items, then delete every other one, leaving many
+ * ~50%-full leaves (a sparse, low-load-factor tree). */
+static void buildSparseTree(fbtreeIndex *fbt, size_t n) {
+    std::vector<sds> ins;
+    ins.reserve(n);
+    for (size_t i = 0; i < n; i++) {
+        ins.push_back(fbtreeInsert(fbt, createBase26TestString("k", "", i, 5)));
+    }
+    for (size_t i = 0; i < ins.size(); i += 2) {
+        fbtreeDelete(fbt, ins[i]);
+    }
+}
+
+/* Drain compaction to completion with the given per-call budget. */
+static void compactToCompletion(fbtreeIndex *fbt, unsigned long budget) {
+    unsigned long cursor = 0;
+    int guard = 0;
+    do {
+        cursor = fbtreeCompactStep(fbt, cursor, kCompactTarget, budget);
+        ASSERT_LT(guard++, 1000000) << "compaction did not terminate";
+    } while (cursor != 0);
+}
+
+TEST_F(FbtreeTest, CompactReducesLeavesPreservesItems) {
+    buildSparseTree(fbt, (size_t)TEST_TWO_LEVEL_ITEMS + 500);
+    expectValid();
+
+    std::vector<std::string> before = collectForward();
+    size_t leaves_before = fbtreeNumLeaves(fbt);
+    double lf_before = fbtreeLoadFactor(fbt);
+
+    compactToCompletion(fbt, 1000000UL);
+
+    expectValid();
+    EXPECT_EQ(collectForward(), before);                 /* items + order preserved */
+    EXPECT_EQ(fbtreeNumLeaves(fbt), walkLeafCount(fbt)); /* counter stays exact */
+    EXPECT_LT(fbtreeNumLeaves(fbt), leaves_before);      /* fewer leaves */
+    EXPECT_GT(fbtreeLoadFactor(fbt), lf_before);         /* higher load factor */
+    EXPECT_GT(fbtreeLoadFactor(fbt), 0.6);
+
+    /* Rank navigation still correct after compaction. */
+    std::vector<std::string> items = collectForward();
+    for (size_t r = 0; r < items.size(); r += 97) {
+        const_sds at = fbtreeGetAtRank(fbt, r);
+        ASSERT_NE(at, nullptr);
+        EXPECT_EQ(std::string(at, sdslen(at)), items[r]);
+    }
+}
+
+TEST_F(FbtreeTest, CompactIdempotent) {
+    buildSparseTree(fbt, (size_t)TEST_TWO_LEVEL_ITEMS + 300);
+    compactToCompletion(fbt, 1000000UL);
+
+    std::vector<std::string> after1 = collectForward();
+    size_t leaves1 = fbtreeNumLeaves(fbt);
+
+    /* A second full pass must change nothing. */
+    compactToCompletion(fbt, 1000000UL);
+    expectValid();
+    EXPECT_EQ(collectForward(), after1);
+    EXPECT_EQ(fbtreeNumLeaves(fbt), leaves1);
+
+    /* And a single step from cursor 0 should report "done" immediately. */
+    EXPECT_EQ(fbtreeCompactStep(fbt, 0, kCompactTarget, 1000000UL), 0u);
+    EXPECT_EQ(fbtreeNumLeaves(fbt), leaves1);
+}
+
+TEST_F(FbtreeTest, CompactPartialResume) {
+    buildSparseTree(fbt, (size_t)TEST_TWO_LEVEL_ITEMS + 400);
+    std::vector<std::string> before = collectForward();
+    size_t leaves_before = fbtreeNumLeaves(fbt);
+
+    /* Tiny budget forces many resume steps across calls. */
+    compactToCompletion(fbt, 50UL);
+
+    expectValid();
+    EXPECT_EQ(collectForward(), before);
+    EXPECT_EQ(fbtreeNumLeaves(fbt), walkLeafCount(fbt));
+    EXPECT_LT(fbtreeNumLeaves(fbt), leaves_before);
+}
+
+TEST_F(FbtreeTest, CompactSingleLeafNoop) {
+    for (size_t i = 0; i < 10; i++) {
+        fbtreeInsert(fbt, createBase26TestString("k", "", i, 3));
+    }
+    EXPECT_EQ(fbtreeNumLeaves(fbt), 1u);
+    EXPECT_EQ(fbtreeCompactStep(fbt, 0, kCompactTarget, 1000000UL), 0u);
+    EXPECT_EQ(fbtreeNumLeaves(fbt), 1u);
+    EXPECT_EQ(fbtreeLength(fbt), 10u);
+    expectValid();
+}
+
+TEST_F(FbtreeTest, CompactEmptyTreeNoop) {
+    EXPECT_EQ(fbtreeCompactStep(fbt, 0, kCompactTarget, 1000000UL), 0u);
+    EXPECT_EQ(fbtreeNumLeaves(fbt), 0u);
+    expectValid();
+}
+
+TEST_F(FbtreeTest, CompactAlreadyPackedNoop) {
+    /* Sequential inserts pack leaves near-full already; compaction should not
+     * loosen them (needed >= current leaf count => skip). */
+    size_t n = (size_t)TEST_TWO_LEVEL_ITEMS + 200;
+    for (size_t i = 0; i < n; i++) {
+        fbtreeInsert(fbt, createBase26TestString("k", "", i, 5));
+    }
+    size_t leaves_before = fbtreeNumLeaves(fbt);
+    std::vector<std::string> before = collectForward();
+
+    compactToCompletion(fbt, 1000000UL);
+    expectValid();
+    EXPECT_EQ(collectForward(), before);
+    /* Packed input: compaction must not increase the leaf count. */
+    EXPECT_LE(fbtreeNumLeaves(fbt), leaves_before);
+}
+
+/* Compaction lands at (just under) the requested limit fill, never above it,
+ * and is monotonic in the limit -- while conserving items and staying valid.
+ * This pins the "desired load factor" contract, not just "load factor rose". */
+TEST_F(FbtreeTest, CompactLandsNearLimit) {
+    const double cap = (double)NODE_SIZE;
+    buildSparseTree(fbt, (size_t)TEST_TWO_LEVEL_ITEMS + 500);
+    std::vector<std::string> before = collectForward();
+    ASSERT_LT(fbtreeLoadFactor(fbt), 0.6); /* starts sparse */
+
+    /* Increasing limits on the same tree: compaction only ever reduces leaf
+     * count, so each pass packs at least as tightly as the last. */
+    const unsigned int limits[] = {(unsigned int)(cap * 0.60), (unsigned int)(cap * 0.75),
+                                   (unsigned int)(cap * 0.90)};
+    double prev_lf = 0.0;
+    for (unsigned int limit : limits) {
+        unsigned long cursor = 0;
+        int guard = 0;
+        do {
+            cursor = fbtreeCompactStep(fbt, cursor, limit, 1000000UL);
+            ASSERT_LT(guard++, 1000000) << "compaction did not terminate";
+        } while (cursor != 0);
+
+        expectValid();
+        EXPECT_EQ(collectForward(), before); /* items + order conserved every pass */
+
+        double expected = (double)limit / cap;
+        double lf = fbtreeLoadFactor(fbt);
+        /* Never packs beyond the requested fill (leaves have headroom), and lands
+         * within one partial boundary-leaf-per-bottom-node of it below. */
+        EXPECT_LE(lf, expected + 0.02) << "limit=" << limit << " lf=" << lf;
+        EXPECT_GE(lf, expected - 0.15) << "limit=" << limit << " lf=" << lf;
+        /* Monotonic: a higher limit yields at least as high a load factor. */
+        EXPECT_GE(lf, prev_lf - 1e-9) << "limit=" << limit << " lf=" << lf;
+        prev_lf = lf;
+    }
+}
+
+/* ========== Load-Factor Benchmark (DISABLED: run on demand) ==========
+ * Reproduces a 50/50 add/delete steady state (no-merge baseline), then sweeps
+ * the compaction limit to report the achievable load factor + leaf reduction.
+ * Run with: --gtest_also_run_disabled_tests --gtest_filter=*CompactionLoadFactorSweep
+ */
+TEST_F(FbtreeTest, DISABLED_CompactionLoadFactorSweep) {
+    const int LIVE = 8000;
+    const int CHURN = 40000; /* enough to reach no-merge steady state */
+    const int limits_pct[] = {70, 80, 90};
+
+    for (size_t ti = 0; ti < sizeof(limits_pct) / sizeof(limits_pct[0]); ti++) {
+        fbtreeEmpty(fbt);
+
+        /* Seed LIVE distinct keys, tracking the stored item pointers. */
+        sds *live = (sds *)zmalloc(sizeof(sds) * LIVE);
+        unsigned long ctr = 0;
+
+        for (int i = 0; i < LIVE; i++) {
+            char b[24];
+            int len = snprintf(b, sizeof(b), "k%012lu", ctr++);
+            live[i] = fbtreeInsert(fbt, sdsnewlen(b, (size_t)len));
+        }
+
+        /* 50/50 churn: delete a pseudo-random live key, insert a fresh one. */
+        unsigned long long rng = 0x9e3779b97f4a7c15ULL;
+        for (int i = 0; i < CHURN; i++) {
+            rng = rng * 6364136223846793005ULL + 1442695040888963407ULL;
+            int idx = (int)((rng >> 33) % (unsigned)LIVE);
+            fbtreeDelete(fbt, live[idx]);
+            char b[24];
+            int len = snprintf(b, sizeof(b), "k%012lu", ctr++);
+            live[idx] = fbtreeInsert(fbt, sdsnewlen(b, (size_t)len));
+        }
+
+        double baseline_lf = fbtreeLoadFactor(fbt);
+        unsigned long leaves_before = fbtreeNumLeaves(fbt);
+        unsigned long len_before = fbtreeLength(fbt);
+
+        unsigned int limit_items = (unsigned int)(limits_pct[ti] / 100.0 * NODE_SIZE);
+        unsigned long cursor = 0;
+        do {
+            cursor = fbtreeCompactStep(fbt, cursor, limit_items, 1000000UL);
+        } while (cursor != 0);
+
+        double after_lf = fbtreeLoadFactor(fbt);
+        unsigned long leaves_after = fbtreeNumLeaves(fbt);
+
+        fprintf(stderr,
+                "[sweep] limit=%d%% (%u/leaf)  items=%lu  leaves %lu->%lu  LF %.3f -> %.3f\n",
+                limits_pct[ti], limit_items, len_before, leaves_before, leaves_after, baseline_lf,
+                after_lf);
+
+        EXPECT_EQ(fbtreeLength(fbt), len_before); /* count conserved */
+        EXPECT_GT(after_lf, baseline_lf);
+        zfree(live);
     }
 }

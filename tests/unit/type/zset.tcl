@@ -3499,3 +3499,88 @@ start_server {tags {"zset" "cluster:skip"}} {
         }
     }
 }
+
+start_server {tags {"zset" "needs:debug"} overrides {save ""}} {
+    # Read the B+tree load factor exposed by DEBUG OBJECT (bt_load_factor field).
+    proc zset_load_factor {key} {
+        assert {[regexp {bt_load_factor:(\S+)} [r debug object $key] -> lf]}
+        return $lf
+    }
+
+    # Enable aggressive background compaction so the serverCron drain acts within
+    # the test window. min-length 1 + high cycle budget => one drain compacts fully.
+    proc set_aggressive_compaction_params {} {
+        r config set zset-compaction-min-length 1
+        r config set zset-compaction-trigger-percent 70
+        r config set zset-compaction-limit-percent 80
+        r config set zset-compaction-cycle-keys 100000
+    }
+
+    test {ZSET btree background compaction raises load factor after sparse deletes} {
+        r config set zset-max-ziplist-entries 0
+
+        # Phase 1: build a sparse btree zset with compaction OFF, so no serverCron
+        # drain interferes while we establish -- and assert -- the low load factor.
+        r config set zset-compaction no
+        r del z
+        for {set i 0} {$i < 2000} {incr i} { r zadd z $i m$i }
+        assert_encoding btree z
+        for {set i 0} {$i < 2000} {incr i 2} { r zrem z m$i } ; # delete every other -> sparse
+        assert_equal 1000 [r zcard z]
+        assert {[zset_load_factor z] < 0.6}
+
+        # Phase 2: enable compaction. Nothing is queued yet (the deletes above ran
+        # while it was off), so one more delete crosses the trigger and enqueues the
+        # still-sparse set; the serverCron drain then compacts it toward the limit.
+        set_aggressive_compaction_params
+        r config set zset-compaction yes
+        r zrem z m1 ; # LF still < trigger => enqueue
+        assert_equal 999 [r zcard z]
+
+        wait_for_condition 50 100 {
+            [zset_load_factor z] > 0.70
+        } else {
+            fail "compaction did not raise load factor (lf=[zset_load_factor z])"
+        }
+
+        # Data intact after compaction; survivors are the remaining odd-index members.
+        assert_equal 999 [r zcard z]
+        assert_encoding btree z
+        assert_equal {m3 m5 m7} [r zrange z 0 2]
+        assert_equal 1999 [r zscore z m1999]
+        assert_equal 998 [r zrank z m1999]
+    }
+
+    test {ZSET btree compaction works on listpack-to-btree converted sets} {
+        # Regression: zsetConvertAndExpand did not init compact_queued, so a
+        # converted zset carried garbage in the field and might never compact.
+        r config set zset-max-ziplist-entries 128
+
+        # Phase 1: build set that starts as listpack and converts to btree.
+        r config set zset-compaction no
+        r del z
+        for {set i 0} {$i < 2000} {incr i} { r zadd z $i m$i }
+        assert_encoding btree z
+
+        # Sparse-delete to drive load factor well below trigger.
+        for {set i 0} {$i < 2000} {incr i 2} { r zrem z m$i }
+        assert_equal 1000 [r zcard z]
+        assert {[zset_load_factor z] < 0.6}
+
+        # Phase 2: enable compaction and trigger with one more delete.
+        set_aggressive_compaction_params
+        r config set zset-compaction yes
+        r zrem z m1
+        assert_equal 999 [r zcard z]
+
+        wait_for_condition 50 100 {
+            [zset_load_factor z] > 0.70
+        } else {
+            fail "compaction did not fire on converted zset (lf=[zset_load_factor z])"
+        }
+
+        # Data intact.
+        assert_equal 999 [r zcard z]
+        assert_encoding btree z
+    }
+}

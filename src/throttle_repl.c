@@ -145,9 +145,9 @@ bool throttleRepl_isClientExemptFromCobLimits(client *c) {
  * adjusts throttling as needed. */
 void throttleRepl_adjustThrottling(void) {
     /* Tear down and stop if we're no longer the primary (e.g. after failover), replication
-     * throttling was disabled, or no COB limit is configured. */
+     * throttling was disabled, no COB limit is configured, or the last replica disconnected. */
     if (!iAmPrimary() || !throttleRepl_config.repl_throttling_enabled ||
-        getReplicaSteadyStateCobTargetSize() <= 0) {
+        getReplicaSteadyStateCobTargetSize() <= 0 || listLength(server.replicas) == 0) {
         if (isThrottlerActive()) uninstallThrottler();
         return;
     }

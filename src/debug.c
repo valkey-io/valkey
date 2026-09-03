@@ -653,9 +653,11 @@ void debugCommand(client *c) {
         long packet_type;
         if (getLongFromObjectOrReply(c, c->argv[2], &packet_type, NULL) != C_OK) return;
         server.cluster_drop_packet_filter = packet_type;
+        serverLog(LL_NOTICE, "Setting drop-cluster-packet-filter to %ld", packet_type);
         addReply(c, shared.ok);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "close-cluster-link-on-packet-drop") && c->argc == 3) {
         server.debug_cluster_close_link_on_packet_drop = atoi(objectGetVal(c->argv[2]));
+        serverLog(LL_NOTICE, "Setting close-cluster-link-on-packet-drop to %d", atoi(objectGetVal(c->argv[2])));
         addReply(c, shared.ok);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "disable-cluster-random-ping") && c->argc == 3) {
         server.debug_cluster_disable_random_ping = atoi(objectGetVal(c->argv[2]));

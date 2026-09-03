@@ -34,6 +34,7 @@ proc setup_throttle_replication {primary replica primary_host primary_port} {
     $primary flushall
     $primary config set repl-throttling-enabled yes
     $primary config set client-output-buffer-limit "replica 1024mb 64kb 3600"
+    $primary config set repl-timeout 1800
     $replica replicaof no one
     $replica flushall
     $replica replicaof $primary_host $primary_port
@@ -106,24 +107,75 @@ start_server {tags {"throttle repl external:skip"}} {
             assert_equal [$primary dbsize] [$replica dbsize]
         }
 
-        test {Hard COB limit disconnects a lagging replica while throttling} {
+        test {Throttling protects a replica above the soft COB limit} {
             setup_throttle_replication $primary $replica $primary_host $primary_port
-            $primary config set client-output-buffer-limit "replica 4mb 64kb 3600"
+            $primary config set repl-backlog-size 1mb
+            $primary config set client-output-buffer-limit "replica 4mb 1mb 10000"
+
+            set writer [valkey_deferring_client]
+            $writer CLIENT ID
+            set wid [$writer read]
+            set soft_limit [expr {1 * 1024 * 1024}]
+            set hard_limit [expr {4 * 1024 * 1024}]
 
             pause_process $replica_pid
-            set writer [valkey_deferring_client]
 
-            # Use large values to make the COB past the hard limit.
-            for {set i 0} {$i < 500} {incr i} {
-                $writer set hkey:$i [string repeat y 100000]
+            # Flood large values to grow the replica's COB above the soft limit
+            # but below the hard limit; the repl throttler stays active and the
+            # replica is protected while in this range.
+            set replica_cob 0
+            for {set i 0} {$i < 2000} {incr i} {
+                $writer set key:$i [string repeat x 100000]
+                regexp {omem=([0-9]+)} [$primary client list type replica] -> replica_cob
+                if {$replica_cob >= $soft_limit && $replica_cob < $hard_limit} {
+                    break
+                }
             }
 
-            # Once COB exceeds the hard limit, the replica is disconnected.
-            wait_for_condition 100 100 {
-                [status $primary connected_slaves] == 0
+            wait_for_condition 50 100 {
+                [throttle_rate $primary] >= 0
             } else {
                 resume_process $replica_pid
-                fail "replica was not disconnected after exceeding the hard COB limit"
+                fail "throttle did not activate while the replica's COB was growing"
+            }
+            if {![wait_throttled_client $primary $writer $wid]} {
+                resume_process $replica_pid
+                fail "client was not throttled while the replica's COB was growing"
+            }
+            if {[status $primary connected_slaves] != 1} {
+                resume_process $replica_pid
+                fail "replica was disconnected while above soft but below hard COB limit"
+            }
+
+            $writer close
+            resume_process $replica_pid
+        }
+
+        test {Throttling not protect a replica above the hard COB limit} {
+            setup_throttle_replication $primary $replica $primary_host $primary_port
+            $primary config set repl-backlog-size 1mb
+            $primary config set client-output-buffer-limit "replica 2mb 1mb 10000"
+
+            set writer [valkey_deferring_client]
+            $writer CLIENT ID
+            set wid [$writer read]
+
+            pause_process $replica_pid
+
+            # Flood large values to push the replica's COB past the hard limit.
+            # Once it crosses, clientsCron evicts the replica.
+            for {set i 0} {$i < 2000} {incr i} {
+                $writer set key:$i [string repeat x 100000]
+                if {[status $primary connected_slaves] == 0} {
+                    break
+                }
+            }
+
+            wait_for_condition 50 100 {
+                [throttle_rate $primary] == -1 && ![client_throttled $primary $wid]
+            } else {
+                resume_process $replica_pid
+                fail "throttle did not tear down after the replica was disconnected"
             }
 
             $writer close

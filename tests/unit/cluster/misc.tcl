@@ -103,14 +103,26 @@ start_cluster 1 1 {tags {external:skip cluster}} {
     }
 }
 
-# Create a folder called "nodes.conf" to trigger temp nodes.conf rename
-# failure and it will cause cluster config file save to fail at the rename.
-proc create_nodes_conf_folder {srv_idx} {
+# Get the path to the cluster config file.
+proc get_nodes_conf_path {srv_idx} {
     set dir [lindex [R $srv_idx config get dir] 1]
     set cluster_conf [lindex [R $srv_idx config get cluster-config-file] 1]
     set cluster_conf_path [file join $dir $cluster_conf]
-    if {[file exists $cluster_conf_path]} { exec rm -f $cluster_conf_path }
+    return $cluster_conf_path
+}
+
+# Create a folder called "nodes.conf" to trigger temp nodes.conf rename
+# failure and it will cause cluster config file save to fail at the rename.
+proc create_nodes_conf_folder {srv_idx} {
+    set cluster_conf_path [get_nodes_conf_path $srv_idx]
+    if {[file exists $cluster_conf_path]} { exec rm -rf $cluster_conf_path }
     exec mkdir -p $cluster_conf_path
+}
+
+# Remove the folder (or nodes.conf) that we created from create_nodes_conf_folder.
+proc remove_nodes_conf_folder {srv_idx} {
+    set cluster_conf_path [get_nodes_conf_path $srv_idx]
+    exec rm -rf $cluster_conf_path
 }
 
 start_cluster 1 1 {tags {external:skip cluster} overrides {cluster-config-save-behavior sync}} {
@@ -136,6 +148,15 @@ start_cluster 1 1 {tags {external:skip cluster} overrides {cluster-config-save-b
 
 start_cluster 1 1 {tags {external:skip cluster} overrides {cluster-config-save-behavior best-effort}} {
     test {cluster-config-save-behavior best-effort mode - node continues running when config save fails} {
+        assert_equal "ok" [getInfoProperty [R 0 cluster info] cluster_config_save_status]
+        assert_equal "ok" [getInfoProperty [R 1 cluster info] cluster_config_save_status]
+
+        # cluster_config_last_save_time should be set to a non-zero unix time on startup.
+        set last_save_time_0 [getInfoProperty [R 0 cluster info] cluster_config_last_save_time]
+        set last_save_time_1 [getInfoProperty [R 1 cluster info] cluster_config_last_save_time]
+        assert_morethan $last_save_time_0 0
+        assert_morethan $last_save_time_1 0
+
         # Create folder that can cause the rename fail.
         create_nodes_conf_folder 0
         create_nodes_conf_folder 1
@@ -156,6 +177,8 @@ start_cluster 1 1 {tags {external:skip cluster} overrides {cluster-config-save-b
         assert_equal 1 [process_is_alive [srv -1 pid]]
 
         # Make sure relevant logs are printed.
+        R 0 debug bio-drain BIO_CLUSTER_SAVE
+        R 1 debug bio-drain BIO_CLUSTER_SAVE
         verify_log_message 0 "*Could not rename tmp cluster config file*" 0
         verify_log_message -1 "*Could not rename tmp cluster config file*" 0
         verify_log_message 0 "*Cluster config updated even though writing the cluster config file to disk failed*" 0
@@ -170,10 +193,61 @@ start_cluster 1 1 {tags {external:skip cluster} overrides {cluster-config-save-b
         } else {
             fail "The failover does not happen"
         }
+        R 0 debug bio-drain BIO_CLUSTER_SAVE
+        R 1 debug bio-drain BIO_CLUSTER_SAVE
         assert_morethan_equal [count_log_message 0 "Could not rename tmp cluster config file"] 2
         assert_equal [count_log_message 0 "Cluster config updated even though writing the cluster config file to disk failed"] 1
         assert_morethan_equal [count_log_message -1 "Could not rename tmp cluster config file"] 2
         assert_equal [count_log_message -1 "Cluster config updated even though writing the cluster config file to disk failed"] 1
+
+        # Check the info field is err.
+        assert_equal "err" [getInfoProperty [R 0 cluster info] cluster_config_save_status]
+        assert_equal "err" [getInfoProperty [R 1 cluster info] cluster_config_save_status]
+
+        # Remove the test folder to trigger a config save again.
+        remove_nodes_conf_folder 0
+        remove_nodes_conf_folder 1
+
+        # Trigger a takeover so that cluster will need to update the config file.
+        R 1 cluster failover takeover
+        wait_for_condition 1000 50 {
+            [s 0 role] eq {slave} &&
+            [s -1 role] eq {master}
+        } else {
+            fail "The failover does not happen"
+        }
+
+        # Check the info field is ok.
+        wait_for_condition 1000 50 {
+            [getInfoProperty [R 0 cluster info] cluster_config_save_status] eq "ok" &&
+            [getInfoProperty [R 1 cluster info] cluster_config_save_status] eq "ok"
+        } else {
+            fail "The config save status is not ok"
+        }
+
+        # Create folder that can cause the rename fail.
+        create_nodes_conf_folder 0
+        create_nodes_conf_folder 1
+
+        # saveconfig will fail and info field is err.
+        assert_error {ERR *} {R 0 CLUSTER saveconfig}
+        assert_error {ERR *} {R 1 CLUSTER saveconfig}
+        assert_equal "err" [getInfoProperty [R 0 cluster info] cluster_config_save_status]
+        assert_equal "err" [getInfoProperty [R 1 cluster info] cluster_config_save_status]
+
+        # Remove the test folder to trigger a config save again.
+        remove_nodes_conf_folder 0
+        remove_nodes_conf_folder 1
+
+        # saveconfig will success and info field is ok.
+        assert_equal {OK} [R 0 CLUSTER saveconfig]
+        assert_equal {OK} [R 1 CLUSTER saveconfig]
+        assert_equal "ok" [getInfoProperty [R 0 cluster info] cluster_config_save_status]
+        assert_equal "ok" [getInfoProperty [R 1 cluster info] cluster_config_save_status]
+
+        # cluster_config_last_save_time must have advanced after a successful save.
+        assert_morethan_equal [getInfoProperty [R 0 cluster info] cluster_config_last_save_time] $last_save_time_0
+        assert_morethan_equal [getInfoProperty [R 1 cluster info] cluster_config_last_save_time] $last_save_time_1
     }
 }
 
@@ -202,6 +276,64 @@ start_cluster 3 0 {tags {external:skip cluster} overrides {cluster-require-full-
 
         # Resume the paused primary to bring the cluster back to OK.
         resume_process [srv 0 pid]
+        wait_for_cluster_state ok
+    }
+}
+
+start_cluster 2 0 {tags {cluster external:skip needs:debug}} {
+    test "A lost PING does not leave a node stuck in PFAIL when the peer keeps sending PINGs" {
+        set CLUSTER_PACKET_TYPE_MEET 2
+        set CLUSTER_PACKET_TYPE_NONE -1
+        set CLUSTER_PACKET_TYPE_ALL -2
+        set R1_nodeid [R 1 cluster myid]
+
+        # Configure different timeout values to better reproduce the issue.
+        R 0 config set cluster-node-timeout 15000
+        R 1 config set cluster-node-timeout 1500
+
+        # Drop all packets on R0 and wait for pfail.
+        R 0 debug drop-cluster-packet-filter $CLUSTER_PACKET_TYPE_ALL
+        wait_for_condition 1000 50 {
+           [cluster_has_flag [cluster_get_node_by_id 0 $R1_nodeid] "fail?"]
+        } else {
+            puts "R 0 cluster nodes:"
+            puts [R 0 cluster nodes]
+            fail "R0 did not mark R1 as PFAIL"
+        }
+
+        # Remember some information after the PFAIL.
+        set R0_ping_sent [dict get [cluster_get_node_by_id 0 $R1_nodeid] ping_sent]
+        set R0_ping_received [CI 0 cluster_stats_messages_ping_received]
+
+        # Restore the DEBUG setting on R0, but exclude MEET first to avoid
+        # multiple MEET reconnections. We will restore it after R0 receives
+        # the PING and refreshes data_received.
+        R 0 debug drop-cluster-packet-filter $CLUSTER_PACKET_TYPE_MEET
+        wait_for_condition 1000 50 {
+           [CI 0 cluster_stats_messages_ping_received] > $R0_ping_received
+        } else {
+            fail "R0 did not receive the PING"
+        }
+        R 0 debug drop-cluster-packet-filter $CLUSTER_PACKET_TYPE_NONE
+
+        # Ensure ping_sent does not get stuck and R0 can send PINGs.
+        wait_for_condition 1000 50 {
+           [dict get [cluster_get_node_by_id 0 $R1_nodeid] ping_sent] != $R0_ping_sent
+        } else {
+            puts "R 0 cluster nodes:"
+            puts [R 0 cluster nodes]
+            fail "R0 did not send the PING"
+        }
+
+        # All packets are being sent and received normally, and R0 should be
+        # able to remove the PFAIL flag.
+        wait_for_condition 1000 50 {
+            ![cluster_has_flag [cluster_get_node_by_id 0 $R1_nodeid] "fail?"]
+        } else {
+            puts "R 0 cluster nodes:"
+            puts [R 0 cluster nodes]
+            fail "R0 did not remove the PFAIL flag"
+        }
         wait_for_cluster_state ok
     }
 }

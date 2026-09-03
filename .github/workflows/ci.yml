@@ -176,6 +176,7 @@ jobs:
       - name: test
         run: sudo ./runtest-rdma --install-rxe
       - name: show-kernel-log
+        if: always()
         run: sudo dmesg -c
 
   test-tls-only:

@@ -475,13 +475,11 @@ static int updateClientOutputBufferLimit(sds *args, int arg_len, const char **er
     return 1;
 }
 
-/* Note this is here to support detecting we're running a config set from
- * within conf file parsing. This is only needed to support the deprecated
- * abnormal aggregate `save T C` functionality. Remove in the future. */
-static int reading_config_file;
-
 /* Nesting depth of loadServerConfigFromString(), which recurses for `include`
- * directives. Only the outermost parse has seen the whole configuration. */
+ * directives. Non-zero means we are parsing a config file rather than running a
+ * CONFIG SET, which the deprecated aggregate `save T C` functionality needs to
+ * tell apart. Only once it drops back to zero has the whole configuration been
+ * seen, so checks that span more than one config wait for that. */
 static int config_parse_depth;
 
 /* Verification to make sure forkless is not set as the default behavior without the
@@ -513,7 +511,6 @@ void loadServerConfigFromString(sds config) {
     sds *argv = NULL;
     int argc;
 
-    reading_config_file = 1;
     config_parse_depth++;
     lines = sdssplitlen(config, sdslen(config), "\n", 1, &totlines);
 
@@ -680,7 +677,6 @@ void loadServerConfigFromString(sds config) {
     if (server.hz > CONFIG_MAX_HZ) server.hz = CONFIG_MAX_HZ;
 
     sdsfreesplitres(lines, totlines);
-    reading_config_file = 0;
     return;
 
 loaderr:
@@ -2999,7 +2995,7 @@ static int setConfigSaveOption(standardConfig *config, sds *argv, int argc, cons
         }
     }
     /* Finally set the new config */
-    if (!reading_config_file) {
+    if (!config_parse_depth) {
         resetServerSaveParams();
     } else {
         /* We don't reset save params before loading, because if they're not part

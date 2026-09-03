@@ -1302,6 +1302,14 @@ start_server {tags {"introspection"}} {
         start_server {config "default.conf" overrides {save {900 1}} args {--save {}}} {
             assert_match [r config get save] {save {}}
         }
+
+        # A "save" keyword after an include is still part of the same config file
+        set included_config [file normalize [tmpfile save-included.conf]]
+        write_file $included_config "maxmemory 0\n"
+        start_server [list config "default.conf" overrides [list save {900 1}] \
+                           config_lines [list "include" $included_config "save" "100 100"]] {
+            assert_match [r config get save] {save {900 1 100 100}}
+        }
     } {} {external:skip}
 
     test {CONFIG sanity} {

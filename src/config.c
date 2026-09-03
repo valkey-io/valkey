@@ -480,6 +480,10 @@ static int updateClientOutputBufferLimit(sds *args, int arg_len, const char **er
  * abnormal aggregate `save T C` functionality. Remove in the future. */
 static int reading_config_file;
 
+/* Nesting depth of loadServerConfigFromString(), which recurses for `include`
+ * directives. Only the outermost parse has seen the whole configuration. */
+static int config_parse_depth;
+
 /* Verification to make sure forkless is not set as the default behavior without the
  * underlying infrastructure supporting it. */
 static int applyBgsaveDefaultMethod(const char **err) {
@@ -510,6 +514,7 @@ void loadServerConfigFromString(sds config) {
     int argc;
 
     reading_config_file = 1;
+    config_parse_depth++;
     lines = sdssplitlen(config, sdslen(config), "\n", 1, &totlines);
 
     for (i = 0; i < totlines; i++) {
@@ -657,12 +662,18 @@ void loadServerConfigFromString(sds config) {
         fclose(logfp);
     }
 
-    /* Sanity checks. */
-    if (server.cluster_enabled && server.primary_host) {
-        err = "replicaof directive not allowed in cluster mode";
-        goto loaderr;
+    /* Sanity checks. These span more than one config, so they can only run once
+     * the outermost parse is done: an `include` is parsed by a nested call, and
+     * both the directives following it and the command line options appended
+     * after the file are meant to override what the included file set. */
+    config_parse_depth--;
+    if (config_parse_depth == 0) {
+        if (server.cluster_enabled && server.primary_host) {
+            err = "replicaof directive not allowed in cluster mode";
+            goto loaderr;
+        }
+        if (!applyBgsaveDefaultMethod(&err)) goto loaderr;
     }
-    if (!applyBgsaveDefaultMethod(&err)) goto loaderr;
 
     /* To ensure backward compatibility and work while hz is out of range */
     if (server.hz < CONFIG_MIN_HZ) server.hz = CONFIG_MIN_HZ;

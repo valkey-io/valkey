@@ -1750,4 +1750,19 @@ test {Server starts with bgsave-default-method before forkless-infrastructure-en
     }
 }
 
+# An `include` is parsed by a nested call, so the infrastructure is only enabled
+# once the outermost parse is done.
+set included_config [file normalize [tmpfile forkless-included.conf]]
+write_file $included_config "maxmemory 0\n"
+set config_lines {}
+lappend config_lines "bgsave-default-method" "forkless"
+lappend config_lines "include" $included_config
+lappend config_lines "forkless-infrastructure-enabled" "yes"
+
+start_server [list overrides {save ""} config_lines $config_lines] {
+    test {Server starts with forkless-infrastructure-enabled yes set after an include} {
+        assert_equal [lindex [r config get bgsave-default-method] 1] "forkless"
+    }
+}
+
 } ;# tags

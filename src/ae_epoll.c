@@ -33,53 +33,50 @@
 
 typedef struct aeApiState {
     int epfd;
+    int events_size;
     struct epoll_event *events;
 } aeApiState;
 
-static int aeApiCreate(aeEventLoop *eventLoop) {
+static aeApiState *aeApiCreate(int setsize) {
     aeApiState *state = zmalloc(sizeof(aeApiState));
 
-    if (!state) return -1;
-    state->events = zmalloc(sizeof(struct epoll_event) * eventLoop->setsize);
+    if (!state) return NULL;
+    state->events = zmalloc(sizeof(struct epoll_event) * setsize);
     if (!state->events) {
         zfree(state);
-        return -1;
+        return NULL;
     }
+    state->events_size = setsize;
     state->epfd = epoll_create(1024); /* 1024 is just a hint for the kernel */
     if (state->epfd == -1) {
         zfree(state->events);
         zfree(state);
-        return -1;
+        return NULL;
     }
     anetCloexec(state->epfd);
-    eventLoop->apidata = state;
-    return 0;
+    return state;
 }
 
-static int aeApiResize(aeEventLoop *eventLoop, int setsize) {
-    aeApiState *state = eventLoop->apidata;
-
+static int aeApiResize(aeApiState *state, int setsize) {
     state->events = zrealloc(state->events, sizeof(struct epoll_event) * setsize);
+    state->events_size = setsize;
     return 0;
 }
 
-static void aeApiFree(aeEventLoop *eventLoop) {
-    aeApiState *state = eventLoop->apidata;
-
+static void aeApiFree(aeApiState *state) {
     close(state->epfd);
     zfree(state->events);
     zfree(state);
 }
 
-static int aeApiAddEvent(aeEventLoop *eventLoop, int fd, int mask) {
-    aeApiState *state = eventLoop->apidata;
+static int aeApiAddEvent(aeApiState *state, int fd, int curr_mask, int add_mask) {
     struct epoll_event ee = {0}; /* avoid valgrind warning */
     /* If the fd was already monitored for some event, we need a MOD
      * operation. Otherwise, we need an ADD operation. */
-    int op = eventLoop->events[fd].mask == AE_NONE ? EPOLL_CTL_ADD : EPOLL_CTL_MOD;
+    int op = (curr_mask & (AE_READABLE | AE_WRITABLE)) ? EPOLL_CTL_MOD : EPOLL_CTL_ADD;
 
     ee.events = 0;
-    mask |= eventLoop->events[fd].mask; /* Merge old events */
+    int mask = curr_mask | add_mask;
     if (mask & AE_READABLE) ee.events |= EPOLLIN;
     if (mask & AE_WRITABLE) ee.events |= EPOLLOUT;
     ee.data.fd = fd;
@@ -87,12 +84,10 @@ static int aeApiAddEvent(aeEventLoop *eventLoop, int fd, int mask) {
     return 0;
 }
 
-static void aeApiDelEvent(aeEventLoop *eventLoop, int fd, int mask) {
-    aeApiState *state = eventLoop->apidata;
+static void aeApiDelEvent(aeApiState *state, int fd, int curr_mask, int del_mask) {
     struct epoll_event ee = {0}; /* avoid valgrind warning */
 
-    /* We rely on the fact that our caller has already updated the mask in the eventLoop. */
-    mask = eventLoop->events[fd].mask;
+    int mask = curr_mask & ~del_mask;
 
     ee.events = 0;
     if (mask & AE_READABLE) ee.events |= EPOLLIN;
@@ -107,11 +102,12 @@ static void aeApiDelEvent(aeEventLoop *eventLoop, int fd, int mask) {
     }
 }
 
-static int aeApiPoll(aeEventLoop *eventLoop, struct timeval *tvp) {
-    aeApiState *state = eventLoop->apidata;
+static int aeApiPoll(aeApiState *state, aeFiredEvent *fired, aeFileEvent *events, int setsize, int maxfd, struct timeval *tvp) {
+    AE_NOTUSED(events);
+    AE_NOTUSED(maxfd);
     int retval, numevents = 0;
 
-    retval = epoll_wait(state->epfd, state->events, eventLoop->setsize,
+    retval = epoll_wait(state->epfd, state->events, MIN(state->events_size, setsize),
                         tvp ? (tvp->tv_sec * 1000 + (tvp->tv_usec + 999) / 1000) : -1);
     if (retval > 0) {
         int j;
@@ -125,8 +121,8 @@ static int aeApiPoll(aeEventLoop *eventLoop, struct timeval *tvp) {
             if (e->events & EPOLLOUT) mask |= AE_WRITABLE;
             if (e->events & EPOLLERR) mask |= AE_WRITABLE | AE_READABLE;
             if (e->events & EPOLLHUP) mask |= AE_WRITABLE | AE_READABLE;
-            eventLoop->fired[j].fd = e->data.fd;
-            eventLoop->fired[j].mask = mask;
+            fired[j].fd = e->data.fd;
+            fired[j].mask = mask;
         }
     } else if (retval == -1 && errno != EINTR) {
         panic("aeApiPoll: epoll_wait, %s", strerror(errno));

@@ -3118,35 +3118,91 @@ void zcardCommand(client *c) {
     addReplyLongLong(c, zsetLength(zobj));
 }
 
-void zscoreCommand(client *c) {
-    robj *key = c->argv[1];
-    robj *zobj;
+/* Adds the member's score as a reply to the client. */
+static void zscoreReply(client *c, robj *zobj, robj *member) {
     double score;
 
-    if ((zobj = lookupKeyReadOrReply(c, key, shared.null[c->resp])) == NULL || checkType(c, zobj, OBJ_ZSET)) return;
-
-    if (zsetScore(zobj, objectGetVal(c->argv[2]), &score) == C_ERR) {
+    if (zsetScore(zobj, objectGetVal(member), &score) == C_ERR) {
         addReplyNull(c);
     } else {
         addReplyDouble(c, score);
     }
 }
 
+void zscoreCommand(client *c) {
+    robj *key = c->argv[1];
+    robj *zobj;
+
+    if ((zobj = lookupKeyReadOrReply(c, key, shared.null[c->resp])) == NULL || checkType(c, zobj, OBJ_ZSET)) return;
+
+    zscoreReply(c, zobj, c->argv[2]);
+}
+
+#define ZMSCORE_FIND_BATCH_SIZE 16
+static_assert(ZMSCORE_FIND_BATCH_SIZE <= HASHTABLE_FIND_BATCH_MAX_SIZE,
+              "ZMSCORE batch size exceeds hashtable batch lookup limit");
+
+static void zmscoreReplyWithHashtable(client *c, hashtable *ht, robj **members, size_t count) {
+    const void *keys[ZMSCORE_FIND_BATCH_SIZE];
+    void *found_entries[ZMSCORE_FIND_BATCH_SIZE];
+    while (count) {
+        size_t batch = count > ZMSCORE_FIND_BATCH_SIZE ? ZMSCORE_FIND_BATCH_SIZE : count;
+
+        /* The same SDS may appear more than once, so only mark it once. */
+        for (size_t i = 0; i < batch; i++) {
+            sds member = objectGetVal(members[i]);
+            if (!zsetIsLookupKey(member)) zsetMarkLookupKey(member);
+            keys[i] = member;
+        }
+
+        uint32_t result = hashtableFindBatch(ht, (int)batch, keys, found_entries);
+
+        /* Unmark each SDS once; later duplicates are already unmarked. */
+        for (size_t i = 0; i < batch; i++) {
+            sds member = objectGetVal(members[i]);
+            if (zsetIsLookupKey(member)) zsetUnmarkLookupKey(member);
+        }
+
+        for (size_t i = 0; i < batch; i++) {
+            if ((result >> i) & 1) {
+                OrderedIndexItem *node = found_entries[i];
+                addReplyDouble(c, orderedIndexItemGetScore(node));
+            } else {
+                addReplyNull(c);
+            }
+        }
+
+        members += batch;
+        count -= batch;
+    }
+}
+
 void zmscoreCommand(client *c) {
     robj *key = c->argv[1];
     robj *zobj;
-    double score;
+
     zobj = lookupKeyRead(c->db, key);
+    if (zobj == NULL) {
+        addReplyArrayLen(c, c->argc - 2);
+        for (int j = 2; j < c->argc; j++) {
+            addReplyNull(c);
+        }
+        return;
+    }
     if (checkType(c, zobj, OBJ_ZSET)) return;
 
-    addReplyArrayLen(c, c->argc - 2);
-    for (int j = 2; j < c->argc; j++) {
-        /* Treat a missing set the same way as an empty set */
-        if (zobj == NULL || zsetScore(zobj, objectGetVal(c->argv[j]), &score) == C_ERR) {
-            addReplyNull(c);
-        } else {
-            addReplyDouble(c, score);
-        }
+    size_t count = c->argc - 2;
+    addReplyArrayLen(c, count);
+
+    /* Prefer hashtable batch lookup to improve performance. */
+    if (zobj->encoding == OBJ_ENCODING_BTREE && count > 1) {
+        zset *zs = objectGetVal(zobj);
+        zmscoreReplyWithHashtable(c, zs->ht, c->argv + 2, count);
+        return;
+    }
+
+    for (size_t i = 0; i < count; i++) {
+        zscoreReply(c, zobj, c->argv[i + 2]);
     }
 }
 

@@ -6949,6 +6949,9 @@ static void moduleCallCommandHelper(ValkeyModuleCtx *ctx, client *c, robj **argv
         if (!(flags & VALKEYMODULE_CALL_ARGV_NO_AOF)) call_flags |= CMD_CALL_PROPAGATE_AOF;
         if (!(flags & VALKEYMODULE_CALL_ARGV_NO_REPLICAS)) call_flags |= CMD_CALL_PROPAGATE_REPL;
     }
+    /* Mirror processInputBuffer: set pending_command so that if the command
+     * blocks on keys, unblockClientOnKey will reprocess it on unblock. */
+    c->flag.pending_command = 1;
     call(c, call_flags);
 
     /* Propagate database changes from the temporary client back to the context client
@@ -8441,6 +8444,10 @@ ValkeyModuleBlockedClient *moduleBlockClient(ValkeyModuleCtx *ctx,
             c->bstate->timeout = timeout;
             blockClient(c, BLOCKED_MODULE);
         }
+        /* Module handles its own reply on unblock, so clear pending_command
+         * to prevent re-execution. Auth clients are the exception — they
+         * need re-execution after auth completes. */
+        if (!auth_reply_callback) c->flag.pending_command = 0;
         /* Defer response until after being unblocked for a context originated from
          * keyspace notification events */
         if (is_keyspace_notification) {
@@ -13476,9 +13483,9 @@ static int moduleInitPostOnLoadResolved(ModuleLoadFunc onload,
         ACLRecomputeCommandBitsFromCommandRulesAllUsers();
     }
     if (is_static) {
-        serverLog(LL_NOTICE, "Static Module '%s' successfully loaded", ctx.module->name);
+        serverLog(LL_NOTICE, "Static Module '%s' successfully loaded (version %d)", ctx.module->name, ctx.module->ver);
     } else {
-        serverLog(LL_NOTICE, "Module '%s' loaded from %s", ctx.module->name, display_name);
+        serverLog(LL_NOTICE, "Module '%s' loaded from %s (version %d)", ctx.module->name, display_name, ctx.module->ver);
     }
     ctx.module->onload = 0;
 
@@ -14607,7 +14614,8 @@ ValkeyModuleScriptingEngineExecutionState VM_GetFunctionExecutionState(
  * These messages are buffered in memory, and are only sent to the client when
  * `ValkeyModule_VM_ScriptingEngineDebuggerFlushLogs` is called.
  *
- * - `msg`: the message to send.
+ * - `msg`: the message to send. Ownership of `msg` is transferred to the
+ *   debugger log. The caller must not free it or access it after this call.
  *
  * - `truncate`: if set to 1, the message will be truncated to the maximum length
  *   configured in the debugger settings.

@@ -93,6 +93,10 @@ start_server {tags {"throttle repl external:skip"}} {
             $writer close
             resume_process $replica_pid
 
+            # The replica must be fully synced and hold the same dataset.
+            wait_for_ofs_sync $primary $replica
+            assert_equal [$primary dbsize] [$replica dbsize]
+
             # As the replica catches up, the throttler ramps its rate back to
             # unlimited and uninstalls, reporting an inactive rate (-1) again. The
             # ramp-up is gradual climbing back, so allow a generous window.
@@ -101,10 +105,6 @@ start_server {tags {"throttle repl external:skip"}} {
             } else {
                 fail "throttle did not release after the replica caught up"
             }
-
-            # The replica must be fully synced and hold the same dataset.
-            wait_for_ofs_sync $primary $replica
-            assert_equal [$primary dbsize] [$replica dbsize]
         }
 
         test {Throttling protects a replica above the soft COB limit} {
@@ -125,7 +125,7 @@ start_server {tags {"throttle repl external:skip"}} {
             # replica is protected while in this range.
             set replica_cob 0
             for {set i 0} {$i < 2000} {incr i} {
-                $writer set key:$i [string repeat x 100000]
+                $writer set key [string repeat x 1000000]
                 regexp {omem=([0-9]+)} [$primary client list type replica] -> replica_cob
                 if {$replica_cob >= $soft_limit && $replica_cob < $hard_limit} {
                     break
@@ -154,7 +154,7 @@ start_server {tags {"throttle repl external:skip"}} {
         test {Throttling not protect a replica above the hard COB limit} {
             setup_throttle_replication $primary $replica $primary_host $primary_port
             $primary config set repl-backlog-size 1mb
-            $primary config set client-output-buffer-limit "replica 2mb 1mb 10000"
+            $primary config set client-output-buffer-limit "replica 1mb 512kb 10000"
 
             set writer [valkey_deferring_client]
             $writer CLIENT ID
@@ -165,7 +165,7 @@ start_server {tags {"throttle repl external:skip"}} {
             # Flood large values to push the replica's COB past the hard limit.
             # Once it crosses, clientsCron evicts the replica.
             for {set i 0} {$i < 2000} {incr i} {
-                $writer set key:$i [string repeat x 100000]
+                $writer set key [string repeat x 1000000]
                 if {[status $primary connected_slaves] == 0} {
                     break
                 }

@@ -1834,7 +1834,7 @@ clusterLink *createClusterLink(clusterNode *node) {
     link->head_msg_send_offset = 0;
     link->send_msg_queue_mem = sizeof(list);
     link->rcvbuf = zmalloc(link->rcvbuf_alloc = RCVBUF_INIT_LEN);
-    atomic_store_explicit(&link->rcvbuf_len, 0, memory_order_relaxed);
+    link->rcvbuf_len = 0;
 
     /* Threaded I/O state */
     link->io_read_state = CLUSTER_LINK_IO_IDLE;
@@ -3900,7 +3900,7 @@ int clusterIsValidPacket(clusterLink *link) {
 
     /* Perform sanity checks */
     if (totlen < 16) return 0; /* At least signature, version, totlen, count. */
-    if (totlen > atomic_load_explicit(&link->rcvbuf_len, memory_order_relaxed)) return 0;
+    if (totlen > link->rcvbuf_len) return 0;
 
     if (ntohs(hdr->ver) != CLUSTER_PROTO_VER) {
         /* Can't handle messages of different versions. */
@@ -4766,7 +4766,7 @@ static int clusterDrainCompletePackets(clusterLink *link) {
     while (link->io_complete_bytes > 0) {
         clusterMsgHeader *hdr = (clusterMsgHeader *)link->rcvbuf;
         uint32_t totlen = ntohl(hdr->totlen);
-        size_t saved_rcvbuf_len = atomic_load_explicit(&link->rcvbuf_len, memory_order_relaxed);
+        size_t saved_rcvbuf_len = link->rcvbuf_len;
 
         serverAssert(link->io_complete_bytes >= totlen);
         serverAssert(link->io_complete_packets > 0);
@@ -4774,13 +4774,13 @@ static int clusterDrainCompletePackets(clusterLink *link) {
         link->io_complete_bytes -= totlen;
         link->io_complete_packets--;
 
-        atomic_store_explicit(&link->rcvbuf_len, totlen, memory_order_relaxed);
+        link->rcvbuf_len = totlen;
         if (!clusterProcessPacket(link)) {
             return 0;
         }
 
         memmove(link->rcvbuf, link->rcvbuf + totlen, saved_rcvbuf_len - totlen);
-        atomic_store_explicit(&link->rcvbuf_len, saved_rcvbuf_len - totlen, memory_order_relaxed);
+        link->rcvbuf_len = saved_rcvbuf_len - totlen;
     }
 
     return 1;
@@ -4993,7 +4993,7 @@ void clusterReadHandler(connection *conn) {
     if (trySendClusterReadToIOThreads(link) == C_OK) return;
 
     while (1) { /* Read as long as there is data to read. */
-        rcvbuflen = atomic_load_explicit(&link->rcvbuf_len, memory_order_relaxed);
+        rcvbuflen = link->rcvbuf_len;
         if (rcvbuflen < RCVBUF_MIN_READ_LEN) {
             /* First, obtain the first 16 bytes to get the full message
              * length and type. */
@@ -5038,18 +5038,17 @@ void clusterReadHandler(connection *conn) {
             return;
         } else {
             /* Read data and recast the pointer to the new buffer. */
-            size_t current_rcvbuf_len = atomic_load_explicit(&link->rcvbuf_len, memory_order_relaxed);
-            size_t unused = link->rcvbuf_alloc - current_rcvbuf_len;
+            size_t unused = link->rcvbuf_alloc - link->rcvbuf_len;
             if ((size_t)nread > unused) {
-                size_t required = current_rcvbuf_len + nread;
+                size_t required = link->rcvbuf_len + nread;
                 size_t prev_rcvbuf_alloc = link->rcvbuf_alloc;
                 /* If less than 1mb, grow to twice the needed size, if larger grow by 1mb. */
                 link->rcvbuf_alloc = required < RCVBUF_MAX_PREALLOC ? required * 2 : required + RCVBUF_MAX_PREALLOC;
                 link->rcvbuf = zrealloc(link->rcvbuf, link->rcvbuf_alloc);
                 server.stat_cluster_links_memory += link->rcvbuf_alloc - prev_rcvbuf_alloc;
             }
-            memcpy(link->rcvbuf + current_rcvbuf_len, buf, nread);
-            atomic_store_explicit(&link->rcvbuf_len, current_rcvbuf_len + nread, memory_order_relaxed);
+            memcpy(link->rcvbuf + link->rcvbuf_len, buf, nread);
+            link->rcvbuf_len += nread;
             hdr = (clusterMsgHeader *)link->rcvbuf;
             rcvbuflen += nread;
         }
@@ -5057,7 +5056,7 @@ void clusterReadHandler(connection *conn) {
         /* Total length obtained? Process this packet. */
         if (rcvbuflen >= RCVBUF_MIN_READ_LEN && rcvbuflen == ntohl(hdr->totlen)) {
             if (clusterProcessPacket(link)) {
-                atomic_store_explicit(&link->rcvbuf_len, 0, memory_order_relaxed);
+                link->rcvbuf_len = 0;
                 clusterShrinkRcvbuf(link);
             } else {
                 return; /* Link no longer valid. */
@@ -9010,7 +9009,7 @@ void clusterReadJob(clusterLink *link) {
     /* Read loop: pull as many bytes as the kernel has ready. */
     while (1) {
         /* Ensure at least some space in rcvbuf. */
-        size_t rcvbuf_len = atomic_load_explicit(&link->rcvbuf_len, memory_order_relaxed);
+        size_t rcvbuf_len = link->rcvbuf_len;
         if (rcvbuf_len == link->rcvbuf_alloc) {
             size_t required = link->rcvbuf_alloc + 1;
             link->rcvbuf_alloc = required < RCVBUF_MAX_PREALLOC ? required * 2 : required + RCVBUF_MAX_PREALLOC;
@@ -9021,7 +9020,7 @@ void clusterReadJob(clusterLink *link) {
         ssize_t nread = connRead(conn, link->rcvbuf + rcvbuf_len, avail);
 
         if (nread > 0) {
-            atomic_store_explicit(&link->rcvbuf_len, rcvbuf_len + nread, memory_order_relaxed);
+            link->rcvbuf_len = rcvbuf_len + nread;
             total_read += nread;
             continue;
         }
@@ -9050,7 +9049,7 @@ void clusterReadJob(clusterLink *link) {
         clusterIOResult frame_result;
         serverAssert(link->io_complete_bytes == 0);
         serverAssert(link->io_complete_packets == 0);
-        clusterFindCompletePackets(link->rcvbuf, atomic_load_explicit(&link->rcvbuf_len, memory_order_relaxed),
+        clusterFindCompletePackets(link->rcvbuf, link->rcvbuf_len,
                                    &complete_bytes, &complete_packets, &frame_result);
         link->io_complete_bytes = complete_bytes;
         link->io_complete_packets = complete_packets;
@@ -9201,7 +9200,7 @@ void clusterHandleReadCompletion(clusterLink *link) {
 
     if (!clusterDrainCompletePackets(link)) return;
 
-    if (atomic_load_explicit(&link->rcvbuf_len, memory_order_relaxed) == 0) {
+    if (link->rcvbuf_len == 0) {
         clusterShrinkRcvbuf(link);
     }
 

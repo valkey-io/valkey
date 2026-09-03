@@ -85,6 +85,8 @@ void setGenericCommand(client *c,
     mstime_t milliseconds = 0; /* initialized to avoid any harmness warning */
     int found = 0;
     int setkey_flags = 0;
+    /* Tracks either an explicit or server-default expiration to apply. */
+    int set_expire = expire != NULL;
 
     if (expire && getExpireMillisecondsOrReply(c, expire, flags, unit, &milliseconds) != C_OK) {
         return;
@@ -135,6 +137,13 @@ void setGenericCommand(client *c,
         goto cleanup;
     }
 
+    /* Apply the server default only after all conditions have succeeded and
+     * only when the command did not explicitly choose expiration semantics. */
+    if (!expire && !(flags & (ARGS_KEEPTTL | ARGS_PERSIST))) {
+        milliseconds = getDefaultTTLMSExpireTime(c);
+        set_expire = milliseconds != -1;
+    }
+
     /* If the `milliseconds` have expired, then we don't need to set it into the
      * database, and then wait for the active expire to delete it, it is wasteful.
      * If the key already exists, delete it. */
@@ -144,9 +153,9 @@ void setGenericCommand(client *c,
         goto cleanup;
     }
 
-    /* When expire is not NULL, we avoid deleting the TTL so it can be updated later instead of being deleted and then
-     * created again. */
-    setkey_flags |= ((flags & ARGS_KEEPTTL) || expire) ? SETKEY_KEEPTTL : 0;
+    /* When an expiration will be set, avoid deleting the old TTL before it is
+     * updated. */
+    setkey_flags |= ((flags & ARGS_KEEPTTL) || set_expire) ? SETKEY_KEEPTTL : 0;
     setkey_flags |= found ? SETKEY_ALREADY_EXIST : SETKEY_DOESNT_EXIST;
 
     if (c->flag.argv_borrowed) {
@@ -155,7 +164,7 @@ void setGenericCommand(client *c,
         incrRefCount(val);
     }
     setKey(c, c->db, key, &val, setkey_flags);
-    if (expire) val = setExpire(c, c->db, key, milliseconds);
+    if (set_expire) val = setExpire(c, c->db, key, milliseconds);
 
     /* By setting the reallocated value back into argv, we can avoid duplicating
      * a large string value when adding it to the db.
@@ -172,7 +181,7 @@ void setGenericCommand(client *c,
     server.dirty++;
     notifyKeyspaceEvent(NOTIFY_STRING, "set", key, c->db->id);
 
-    if (expire) {
+    if (set_expire) {
         /* Propagate as SET Key Value PXAT millisecond-timestamp if there is
          * EX/PX/EXAT flag. */
         if (!(flags & ARGS_PXAT)) {
@@ -197,7 +206,7 @@ void setGenericCommand(client *c,
 
     /* Propagate without the GET argument (Isn't needed if we had expire since in that case we completely re-written the
      * command argv) */
-    if ((flags & ARGS_SET_GET) && !expire) {
+    if ((flags & ARGS_SET_GET) && !set_expire) {
         int argc = 0;
         int j;
         robj **argv = zmalloc((c->argc - 1) * sizeof(robj *));

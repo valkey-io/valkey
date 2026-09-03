@@ -139,8 +139,7 @@ struct ValkeyModule;
 #define CONFIG_DEFAULT_HZ 10 /* Time interrupt calls/sec. */
 #define CONFIG_MIN_HZ 1
 #define CONFIG_MAX_HZ 500
-/* Leave stable headroom for adding the epoch time so an accepted TTL cannot
- * age into an overflow risk. */
+/* Leave headroom for adding the epoch time so it cannot exceed I64 MAX and cause overflow risk. */
 #define DEFAULT_TTL_MS_MAX (LLONG_MAX / 2)
 #define CRON_DBS_PER_CALL 16
 #define CRON_DICTS_PER_DB 16

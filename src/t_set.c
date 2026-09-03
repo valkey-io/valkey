@@ -700,33 +700,69 @@ void smoveCommand(client *c) {
     addReply(c, shared.cone);
 }
 
+#define SMISMEMBER_FIND_BATCH_SIZE 16
+static_assert(SMISMEMBER_FIND_BATCH_SIZE <= HASHTABLE_FIND_BATCH_MAX_SIZE,
+              "SMISMEMBER batch size exceeds hashtable batch lookup limit");
+
+static void sismemberReply(client *c, robj *set, robj *member) {
+    addReply(c, setTypeIsMember(set, objectGetVal(member)) ? shared.cone : shared.czero);
+}
+
+static void smismemberReplyWithHashtable(client *c, hashtable *ht, robj **members, size_t count) {
+    const void *keys[SMISMEMBER_FIND_BATCH_SIZE];
+    void *found_entries[SMISMEMBER_FIND_BATCH_SIZE];
+    while (count) {
+        size_t batch = count > SMISMEMBER_FIND_BATCH_SIZE ? SMISMEMBER_FIND_BATCH_SIZE : count;
+
+        for (size_t i = 0; i < batch; i++) {
+            keys[i] = objectGetVal(members[i]);
+        }
+
+        uint32_t result = hashtableFindBatch(ht, (int)batch, keys, found_entries);
+
+        for (size_t i = 0; i < batch; i++) {
+            addReply(c, (result >> i) & 1 ? shared.cone : shared.czero);
+        }
+
+        members += batch;
+        count -= batch;
+    }
+}
+
 void sismemberCommand(client *c) {
     robj *set;
 
     if ((set = lookupKeyReadOrReply(c, c->argv[1], shared.czero)) == NULL || checkType(c, set, OBJ_SET)) return;
 
-    if (setTypeIsMember(set, objectGetVal(c->argv[2])))
-        addReply(c, shared.cone);
-    else
-        addReply(c, shared.czero);
+    sismemberReply(c, set, c->argv[2]);
 }
 
 void smismemberCommand(client *c) {
     robj *set;
-    int j;
 
     /* Don't abort when the key cannot be found. Non-existing keys are empty
      * sets, where SMISMEMBER should respond with a series of zeros. */
     set = lookupKeyRead(c->db, c->argv[1]);
-    if (set && checkType(c, set, OBJ_SET)) return;
-
-    addReplyArrayLen(c, c->argc - 2);
-
-    for (j = 2; j < c->argc; j++) {
-        if (set && setTypeIsMember(set, objectGetVal(c->argv[j])))
-            addReply(c, shared.cone);
-        else
+    if (set == NULL) {
+        addReplyArrayLen(c, c->argc - 2);
+        for (int j = 2; j < c->argc; j++) {
             addReply(c, shared.czero);
+        }
+        return;
+    }
+    if (checkType(c, set, OBJ_SET)) return;
+
+    size_t count = c->argc - 2;
+    addReplyArrayLen(c, count);
+
+    /* Prefer hashtable batch lookup to improve performance. */
+    if (set->encoding == OBJ_ENCODING_HASHTABLE && count > 1) {
+        smismemberReplyWithHashtable(c, objectGetVal(set), c->argv + 2, count);
+        return;
+    }
+
+    for (size_t i = 0; i < count; i++) {
+        sismemberReply(c, set, c->argv[i + 2]);
     }
 }
 

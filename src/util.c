@@ -1667,3 +1667,21 @@ uint64_t wangHash64(uint64_t hash) {
     hash = hash + (hash << 31);
     return hash;
 }
+
+/* Lock-free, per-thread Bernoulli sampler: advances a thread-local xorshift64*
+ * PRNG and returns 1 with probability `percentage`/100, using only a multiply +
+ * compare (no modulo, and no glibc rand() internal lock) so it stays cheap on
+ * hot paths that call it for every event. */
+int bernoulliSampleHit(int percentage) {
+    static __thread uint64_t s = 0;
+    if (s == 0) {
+        s = (uint64_t)(uintptr_t)&s ^ 0x9E3779B97F4A7C15ULL; /* seed from stack address; multiplier from Vigna's xorshift64* paper */
+        s |= 1;                                              /* xorshift64 needs a nonzero state */
+    }
+    s ^= s >> 12;
+    s ^= s << 25;
+    s ^= s >> 27;
+    uint32_t r = (uint32_t)((s * 0x2545F4914F6CDD1DULL) >> 32); /* multiplier from Vigna's xorshift64* paper */
+    /* r/2^32 < pct/100  <=>  r*100 < pct*2^32  (no division). */
+    return (uint64_t)r * 100 < ((uint64_t)percentage << 32);
+}

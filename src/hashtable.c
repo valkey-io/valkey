@@ -1910,7 +1910,7 @@ bool hashtableIncrementalFindStep(hashtableIncrementalFindState *state) {
             const void *elem_key = entryGetKey(ht, entry);
             if (compareKeys(ht, data->key, elem_key)) {
                 /* It's a match. */
-                data->state = HASHTABLE_FOUND;
+                data->state = validateElementIfNeeded(ht, entry) ? HASHTABLE_FOUND : HASHTABLE_NOT_FOUND;
                 return false;
             }
             /* No match. Look for next candidate entry in the bucket. */
@@ -1988,6 +1988,37 @@ bool hashtableIncrementalFindGetResult(hashtableIncrementalFindState *state, voi
         assert(data->state == HASHTABLE_NOT_FOUND);
         return false;
     }
+}
+
+/* Provides batch lookup. Compared with serial single-key lookups, it can improve
+ * performance by parallelizing memory accesses. Each bit in the returned bitmap
+ * indicates whether the key at the same index was found. */
+uint32_t hashtableFindBatch(hashtable *ht, int numkeys, const void **keys, void **found_entries) {
+    assert(numkeys >= 0 && numkeys <= HASHTABLE_FIND_BATCH_MAX_SIZE);
+    if (numkeys == 0) return 0;
+
+    rehashStepOnReadIfNeeded(ht);
+
+    hashtableIncrementalFindState states[numkeys];
+    for (int i = 0; i < numkeys; i++) {
+        hashtableIncrementalFindInit(&states[i], ht, keys[i]);
+    }
+
+    size_t incomplete;
+    do {
+        incomplete = 0;
+        for (int i = 0; i < numkeys; i++) {
+            incomplete += hashtableIncrementalFindStep(&states[i]);
+        }
+    } while (incomplete != 0);
+
+    uint32_t result = 0;
+    for (int i = 0; i < numkeys; i++) {
+        if (hashtableIncrementalFindGetResult(&states[i], &found_entries[i])) {
+            result |= (uint32_t)1 << i;
+        }
+    }
+    return result;
 }
 
 /* --- Scan --- */

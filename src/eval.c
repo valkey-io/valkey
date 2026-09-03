@@ -158,6 +158,12 @@ void freeEvalScripts(dict *scripts, list *scripts_lru_list, list *engine_callbac
     }
 }
 
+static void scriptsLRUDeleteNode(listNode *node) {
+    sds sha = listNodeValue(node);
+    evalCtx.scripts_mem -= sdsAllocSize(sha);
+    listDelNode(evalCtx.scripts_lru_list, node);
+}
+
 static void resetEngineEvalEnvCallback(scriptingEngine *engine, void *context) {
     int async = context != NULL;
     callableLazyEnvReset *callback = scriptingEngineCallResetEnvFunc(engine, VMSE_EVAL, async);
@@ -193,7 +199,8 @@ void evalRemoveScriptsFromEngine(scriptingEngine *engine) {
             sds sha = dictGetKey(entry);
             evalCtx.scripts_mem -= sdsAllocSize(sha) + getStringObjectSdsUsedMemory(es->body);
             if (es->node) {
-                listDelNode(evalCtx.scripts_lru_list, es->node);
+                scriptsLRUDeleteNode(es->node);
+                es->node = NULL;
             }
             dictDelete(evalCtx.scripts, sha);
         }
@@ -366,12 +373,14 @@ static listNode *scriptsLRUAdd(sds sha) {
         listNode *ln = listFirst(evalCtx.scripts_lru_list);
         sds oldest = listNodeValue(ln);
         evalDeleteScript(oldest);
-        listDelNode(evalCtx.scripts_lru_list, ln);
+        scriptsLRUDeleteNode(ln);
         server.stat_evictedscripts++;
     }
 
     /* Add current. */
-    listAddNodeTail(evalCtx.scripts_lru_list, sdsdup(sha));
+    sds lru_sha = sdsdup(sha);
+    listAddNodeTail(evalCtx.scripts_lru_list, lru_sha);
+    evalCtx.scripts_mem += sdsAllocSize(lru_sha);
     return listLast(evalCtx.scripts_lru_list);
 }
 
@@ -505,7 +514,7 @@ static int evalRegisterNewScript(client *c, robj *body, char **sha) {
         if (entry != NULL) {
             evalScript *es = dictGetVal(entry);
             if (es->node) {
-                listDelNode(evalCtx.scripts_lru_list, es->node);
+                scriptsLRUDeleteNode(es->node);
                 es->node = NULL;
             }
 

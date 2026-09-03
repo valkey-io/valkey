@@ -1885,7 +1885,6 @@ start_server {tags {"scripting external:skip"}} {
 
     test {Lua scripts promoted from eval to script load} {
         r script flush
-        r config resetstat
 
         r eval "return 'hello world'" 0
         set sha [r script load "return 'hello world'"]
@@ -1894,6 +1893,30 @@ start_server {tags {"scripting external:skip"}} {
             r eval "return 'str_$j'" 0
         }
         assert_equal {hello world} [r evalsha $sha 0]
+    }
+
+    test {Lua scripts memory for LRU script SHA copies} {
+        r script flush
+
+        # Perform 500 EVAL cycles, then use script to load the same data to
+        # discard all LRU list nodes.
+        for {set j 1} {$j <= 500} {incr j} {
+            r eval "return $j" 0
+        }
+        set mem_before [s used_memory_scripts_eval]
+        for {set j 1} {$j <= 500} {incr j} {
+            r script load "return $j"
+        }
+        set mem_after [s used_memory_scripts_eval]
+
+        # Each script differs by at least 40 bytes SHA + 24 (or 12) bytes listNode.
+        set arch_bits [s arch_bits]
+        set diff [expr $mem_before - $mem_after]
+        if {$arch_bits == 64} {
+            assert_morethan $diff [expr 64 * 500]
+        } elseif {$arch_bits == 32} {
+            assert_morethan $diff [expr 52 * 500]
+        }
     }
 
     test {maxmemory-scripts does not change the EVAL script count limit} {

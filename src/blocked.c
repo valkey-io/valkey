@@ -165,6 +165,7 @@ void processUnblockedClients(void) {
         c = ln->value;
         listDelNode(server.unblocked_clients, ln);
         c->flag.unblocked = 0;
+        serverAssert(!c->flag.throttled);
 
         if (c->flag.module) {
             if (!c->flag.blocked) {
@@ -478,10 +479,10 @@ void blockForKeys(client *c, int btype, robj **keys, int numkeys, mstime_t timeo
         }
     }
     c->bstate->unblock_on_nokey = unblock_on_nokey;
-    /* Currently we assume key blocking will require reprocessing the command.
-     * However in case of modules, they have a different way to handle the reprocessing
-     * which does not require setting the pending command flag */
-    if (btype != BLOCKED_MODULE) c->flag.pending_command = 1;
+    /* Key-blocked clients require pending_command for reprocessing on unblock.
+     * The caller must have set it (processInputBuffer for real clients,
+     * RM_Call for module fake clients). */
+    serverAssert(c->flag.pending_command == 1);
     blockClient(c, btype);
 }
 
@@ -692,8 +693,7 @@ void blockPostponeClient(client *c) {
     listAddNodeTail(server.postponed_clients, c);
     serverAssert(c->bstate->postponed_list_node == NULL);
     c->bstate->postponed_list_node = listLast(server.postponed_clients);
-    /* Mark this client to execute its command */
-    c->flag.pending_command = 1;
+    serverAssert(c->flag.pending_command == 1);
 }
 
 /* Block client due to shutdown command */
@@ -724,7 +724,6 @@ static void unblockClientOnKey(client *c, robj *key) {
     /* In case this client was blocked on keys during command
      * we need to re process the command again */
     if (c->flag.pending_command) {
-        c->flag.pending_command = 0;
         c->flag.reexecuting_command = 1;
         /* We want the command processing and the unblock handler (see RM_Call 'K' option)
          * to run atomically, this is why we must enter the execution unit here before

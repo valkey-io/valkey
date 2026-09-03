@@ -450,9 +450,8 @@ void setKey(client *c, serverDb *db, robj *key, robj **valref, int flags) {
 /* Return the policy's absolute expiry, or -1 when this write must not use it. */
 mstime_t getDefaultTTLMSExpireTime(client *c) {
     if (server.default_ttl_ms == 0 || c == NULL || mustObeyClient(c)) return -1;
-    mstime_t now = commandTimeSnapshot();
-    serverAssert(server.default_ttl_ms <= LLONG_MAX - now);
-    return now + server.default_ttl_ms;
+    serverAssert(server.default_ttl_ms <= DEFAULT_TTL_MS_MAX);
+    return commandTimeSnapshot() + server.default_ttl_ms;
 }
 
 /* Apply the default expiry after an eligible write and report its timestamp. */

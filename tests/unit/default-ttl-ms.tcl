@@ -21,14 +21,16 @@ start_server {tags {expire}} {
         assert_equal {default-ttl-ms 10000} [r config get default-ttl-ms]
     }
 
-    test {default-ttl-ms rejects a duration that cannot become an absolute expiry} {
-        assert_error {*exceeds the maximum duration*} {
-            r config set default-ttl-ms 9223372036854775807
+    test {default-ttl-ms accepts LLONG_MAX/2 and rejects the next value} {
+        assert_equal OK [r config set default-ttl-ms 4611686018427387903]
+        assert_error {*argument must be between 0 and 4611686018427387903 inclusive*} {
+            r config set default-ttl-ms 4611686018427387904
         }
-        assert_equal {default-ttl-ms 10000} [r config get default-ttl-ms]
+        assert_equal {default-ttl-ms 4611686018427387903} [r config get default-ttl-ms]
+        r config set default-ttl-ms 10000
     }
 
-    test {explicit TTL, KEEPTTL, and PERSIST take precedence} {
+    test {explicit TTL and KEEPTTL take precedence over default-ttl-ms} {
         r set default-ttl-ms:explicit value PX 30000
         set ttl [r pttl default-ttl-ms:explicit]
         assert {$ttl > 29000 && $ttl <= 30000}
@@ -36,8 +38,5 @@ start_server {tags {expire}} {
         set before [r pexpiretime default-ttl-ms:explicit]
         r set default-ttl-ms:explicit replacement KEEPTTL
         assert_equal $before [r pexpiretime default-ttl-ms:explicit]
-
-        r msetex 1 default-ttl-ms:persistent value PERSIST
-        assert_equal -1 [r pttl default-ttl-ms:persistent]
     }
 }

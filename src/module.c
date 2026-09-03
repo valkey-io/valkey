@@ -15022,8 +15022,11 @@ int VM_DefragShouldStop(ValkeyModuleDefragCtx *ctx) {
 
 /* Store an arbitrary cursor value for future re-use.
  *
- * A cursor is always available to the global defrag callback. For data type keys
- * it is reserved to cases where late defrag is performed. Late
+ * For a data type callback, this should only be called if VM_DefragShouldStop()
+ * has returned a non-zero value and the defrag callback is about to exit without
+ * fully iterating its data type.
+ *
+ * This behavior is reserved to cases where late defrag is performed. Late
  * defrag is selected for keys that implement the `free_effort` callback and
  * return a `free_effort` value that is larger than the defrag
  * 'active-defrag-max-scan-fields' configuration directive.
@@ -15039,7 +15042,8 @@ int VM_DefragShouldStop(ValkeyModuleDefragCtx *ctx) {
  * a guarantee that concurrent defragmentation of multiple keys will
  * not be performed.
  *
- * A global callback's cursor is also how it reports completion: 0, the value a
+ * A global callback (registered with VM_RegisterDefragFunc) always has a cursor
+ * available, and the cursor is also how it reports completion: 0, the value a
  * fresh pass starts from, means done, and non-zero means it will be invoked
  * again. The server discards the cursor once the callback completes or the pass
  * is interrupted, so a position saved before an interruption is never handed

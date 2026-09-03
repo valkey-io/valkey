@@ -480,13 +480,8 @@ static int updateClientOutputBufferLimit(sds *args, int arg_len, const char **er
  * abnormal aggregate `save T C` functionality. Remove in the future. */
 static int reading_config_file;
 
-/* Invariants that span two configs can't be checked in a per-config validation
- * function: config file directives and CONFIG SET arguments are applied one at a
- * time, in whatever order they appear, so a validation function sees a partially
- * updated state.  They belong in an apply function instead, which runs only
- * after every value of a CONFIG SET has been set and whose failure rolls the
- * whole command back.  Apply functions don't run at startup, so this is also
- * called from the sanity checks below, once the config file has been parsed. */
+/* Verification to make sure forkless is not set as the default behavior without the
+ * underlying infrastructure supporting it. */
 static int applyBgsaveDefaultMethod(const char **err) {
     if (server.bgsave_default_method == RDB_BGSAVE_TYPE_FORKLESS && !server.forkless_infrastructure_enabled) {
         *err = "'bgsave-default-method forkless' requires the server to be started with "

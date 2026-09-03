@@ -234,7 +234,6 @@ jobs:
 
           python utils/modify_config.py "${ARGS[@]}" --print
 
-
       - name: Run benchmarks
         working-directory: valkey-perf-benchmark
         run: |

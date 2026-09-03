@@ -135,6 +135,15 @@ class ClusterIOOffloadTest : public ::testing::Test {
         return raw;
     }
 
+    /* A packet of arbitrary length. FAILOVER_AUTH_ACK is length-checked exactly,
+     * so an unknown type is used instead: clusterIsValidPacket() accepts any
+     * totlen for one, and the stats index is guarded by CLUSTERMSG_TYPE_COUNT. */
+    unsigned char *buildOversizedPacket(uint32_t totlen) {
+        unsigned char *raw = buildRawPacket(totlen);
+        ((clusterMsgHeader *)(void *)raw)->type = htons(CLUSTERMSG_TYPE_COUNT + 1);
+        return raw;
+    }
+
     /* Exactly one complete packet, nothing after it. */
     void seedOneCompletePacket(fakeConnection *fc) {
         unsigned char *pkt = buildRawPacket(CLUSTERMSG_MIN_LEN);
@@ -167,6 +176,30 @@ class ClusterIOOffloadTest : public ::testing::Test {
         buf[CLUSTERMSG_MIN_LEN] = 'T';
         fakeConnSetReadData(fc, buf, CLUSTERMSG_MIN_LEN + 1);
         zfree(pkt);
+        zfree(buf);
+    }
+
+    /* Three complete packets plus a partial tail. The middle packet is larger
+     * than the first so that sliding it to the front is an overlapping copy.
+     * Each packet carries a distinct type, so a packet landing at the wrong
+     * offset shows up as a wrong per-type counter. */
+    void seedThreePacketsAndTail(fakeConnection *fc) {
+        const uint32_t small = CLUSTERMSG_MIN_LEN;
+        const uint32_t large = CLUSTERMSG_MIN_LEN + 512;
+        size_t len = small + large + small + 1;
+        unsigned char *buf = (unsigned char *)zcalloc(len);
+        unsigned char *p1 = buildRawPacket(small);
+        unsigned char *p2 = buildOversizedPacket(large);
+        unsigned char *p3 = buildRawPacket(small);
+        ((clusterMsgHeader *)(void *)p3)->type = htons(CLUSTERMSG_TYPE_FAILOVER_AUTH_REQUEST);
+        memcpy(buf, p1, small);
+        memcpy(buf + small, p2, large);
+        memcpy(buf + small + large, p3, small);
+        buf[small + large + small] = 'T';
+        fakeConnSetReadData(fc, buf, len);
+        zfree(p1);
+        zfree(p2);
+        zfree(p3);
         zfree(buf);
     }
 
@@ -267,6 +300,25 @@ TEST_F(ClusterIOOffloadTest, ReadOffloadOnProtocolErrorDrainsValidPrefixThenClos
 }
 
 /* --- Write path ------------------------------------------------------- */
+
+TEST_F(ClusterIOOffloadTest, ReadOffloadDrainsMultiplePacketsAndCompactsTail) {
+    clusterLink *link = makeLink();
+    fakeConnection *fc = (fakeConnection *)link->conn;
+    seedThreePacketsAndTail(fc);
+
+    ASSERT_EQ(trySendClusterReadToIOThreads(link), C_OK);
+    runInlineWorkerAndDrain(clusterReadJob, link);
+
+    /* Each packet must be seen exactly once, in its own right: a wrong slide
+     * offset would put some other packet's header at rcvbuf[0]. */
+    EXPECT_EQ(server.cluster->stats_bus_messages_received[CLUSTERMSG_TYPE_FAILOVER_AUTH_ACK], 1LL);
+    EXPECT_EQ(server.cluster->stats_bus_messages_received[CLUSTERMSG_TYPE_FAILOVER_AUTH_REQUEST], 1LL);
+    EXPECT_EQ(link->io_complete_bytes, 0u);
+    EXPECT_EQ(link->io_complete_packets, 0u);
+    /* Only the unparsed tail survives, compacted to the front. */
+    EXPECT_EQ(link->rcvbuf_len, 1u);
+    EXPECT_EQ(link->rcvbuf[0], 'T');
+}
 
 TEST_F(ClusterIOOffloadTest, WriteDispatchSnapshotsBoundary) {
     clusterLink *link = makeLink();

@@ -4757,16 +4757,19 @@ int clusterProcessPacket(clusterLink *link) {
 /* Drain complete packets queued at the start of rcvbuf.
  *
  * io_complete_bytes marks the bytes the I/O thread determined contain
- * only complete packets. The main thread processes those packets in place,
- * removing each one from the front of rcvbuf after it is applied.
+ * only complete packets. clusterProcessPacket() reads from the front of
+ * rcvbuf, so each packet is slid down to offset 0 in turn and the unparsed
+ * tail is compacted once at the end.
  *
  * Returns 1 if the link is still valid after all packets were applied, or
  * 0 if packet processing freed the link. */
 static int clusterDrainCompletePackets(clusterLink *link) {
+    size_t buf_len = link->rcvbuf_len;
+    size_t consumed = 0;
+
     while (link->io_complete_bytes > 0) {
-        clusterMsgHeader *hdr = (clusterMsgHeader *)link->rcvbuf;
+        clusterMsgHeader *hdr = (clusterMsgHeader *)(link->rcvbuf + consumed);
         uint32_t totlen = ntohl(hdr->totlen);
-        size_t saved_rcvbuf_len = link->rcvbuf_len;
 
         serverAssert(link->io_complete_bytes >= totlen);
         serverAssert(link->io_complete_packets > 0);
@@ -4774,13 +4777,21 @@ static int clusterDrainCompletePackets(clusterLink *link) {
         link->io_complete_bytes -= totlen;
         link->io_complete_packets--;
 
+        /* Copy just this packet, not the whole remaining tail, which would make
+         * the drain quadratic. Safe because the copy writes [0, totlen) while
+         * the bytes not yet consumed start at consumed + totlen. */
+        if (consumed > 0) memmove(link->rcvbuf, link->rcvbuf + consumed, totlen);
+        consumed += totlen;
+
         link->rcvbuf_len = totlen;
         if (!clusterProcessPacket(link)) {
             return 0;
         }
+    }
 
-        memmove(link->rcvbuf, link->rcvbuf + totlen, saved_rcvbuf_len - totlen);
-        link->rcvbuf_len = saved_rcvbuf_len - totlen;
+    link->rcvbuf_len = buf_len - consumed;
+    if (consumed > 0 && link->rcvbuf_len > 0) {
+        memmove(link->rcvbuf, link->rcvbuf + consumed, link->rcvbuf_len);
     }
 
     return 1;

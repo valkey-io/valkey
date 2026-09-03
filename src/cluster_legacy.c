@@ -9147,7 +9147,6 @@ void clusterHandleReadCompletion(clusterLink *link) {
     if (conn) {
         connSetPostponeUpdateState(conn, 0);
         connUpdateState(conn);
-        connDecrRefs(conn);
     }
 
     /* Transition back to idle and release the I/O ref. */
@@ -9216,7 +9215,6 @@ void clusterHandleWriteCompletion(clusterLink *link) {
     if (conn) {
         connSetPostponeUpdateState(conn, 0);
         connUpdateState(conn);
-        connDecrRefs(conn);
     }
 
     /* Transition back to idle and release the I/O ref. */
@@ -9302,6 +9300,10 @@ void clusterHandleAcceptCompletion(connection *conn) {
     connSetPostponeUpdateState(conn, 0);
     connUpdateState(conn);
     connDecrRefs(conn);
+    if ((conn->flags & CONN_FLAG_CLOSE_SCHEDULED) && !connHasRefs(conn)) {
+        connClose(conn);
+        return;
+    }
 
     /* TLS handshake may still be in progress (SSL_accept needs more
      * event-loop iterations). Keep the connection open; TLS event handling

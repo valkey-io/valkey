@@ -711,7 +711,6 @@ int trySendClusterReadToIOThreads(struct clusterLink *link) {
 
     /* Postpone connection state updates while the I/O thread operates. */
     connSetPostponeUpdateState(link->conn, 1);
-    connIncrRefs(link->conn);
 
     /* Transition link to pending-read state. */
     link->io_read_state = CLUSTER_LINK_IO_PENDING;
@@ -723,7 +722,6 @@ int trySendClusterReadToIOThreads(struct clusterLink *link) {
         /* Rollback on enqueue failure. */
         link->io_read_state = CLUSTER_LINK_IO_IDLE;
         link->io_refs--;
-        connDecrRefs(link->conn);
         connSetPostponeUpdateState(link->conn, 0);
         server.stat_cluster_io_main_thread_fallbacks++;
         return C_ERR;
@@ -786,7 +784,6 @@ int trySendClusterWriteToIOThreads(struct clusterLink *link) {
 
     /* Postpone connection state updates while the I/O thread operates. */
     connSetPostponeUpdateState(link->conn, 1);
-    connIncrRefs(link->conn);
 
     /* Snapshot the canonical queue for one write job. */
     link->io_last_send_block = last_send_block;
@@ -804,7 +801,6 @@ int trySendClusterWriteToIOThreads(struct clusterLink *link) {
         link->io_last_send_block = NULL;
         link->io_head_offset = 0;
         link->io_nodes_sent = 0;
-        connDecrRefs(link->conn);
         connSetPostponeUpdateState(link->conn, 0);
         server.stat_cluster_io_main_thread_fallbacks++;
         return C_ERR;

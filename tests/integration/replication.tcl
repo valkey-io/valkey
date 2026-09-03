@@ -766,20 +766,15 @@ proc stop_fake_primary {pid} {
 }
 
 proc test_fake_primary_bulk_length {bulk_payload expect_rejection {diskless_load swapdb}} {
-    # The metadata is parsed before the load path is chosen, so run the cases
-    # with both repl-diskless-load swapdb (in-memory load) and the default
-    # disabled (the RDB is written to disk from the bio thread).
     start_server [list tags {repl external:skip tls:skip} \
                       overrides [list save {} repl-diskless-load $diskless_load]] {
         set replica [srv 0 client]
         set fake_port [find_available_port $::baseport $::portcount]
         set tclsh [info nameofexecutable]
         set script "tests/helpers/fake_redis_node.tcl"
-        # Encode the reply so binary metadata, including NUL, survives exec argv.
         set fullresync_reply "+FULLRESYNC [string repeat a 40] 0\n$bulk_payload"
         binary scan $fullresync_reply H* encoded_reply
         set encoded_reply "hex:$encoded_reply"
-        # Socket output translation converts each newline to exactly CRLF.
         set fake_pid [exec $tclsh $script $fake_port \
             "PING" "+PONG" \
             "REPLCONF listening-port [srv 0 port]" "+OK" \
@@ -835,16 +830,9 @@ foreach {description bulk_payload} [list \
 }
 
 test {Diskless replica accepts valid fake primary bulk length} {
-    # Socket output translates each newline to CRLF.
     test_fake_primary_bulk_length "\$1\nx" 0
 }
 
-# This only asserts that a bulk length above 2^32 is accepted and that loading
-# starts. It does NOT cover the 32-bit size_t narrowing bug: before the fix, a
-# 32-bit build narrowed 4294967296 to 0, and RIO treats a 0 read limit as
-# unlimited, so loading started there too and this test still passed. The
-# overflow-safe arithmetic itself is covered by RioConnOverflowTest in
-# src/unit/test_rio.cpp.
 test {Diskless replica accepts fake primary bulk length above 2^32} {
     test_fake_primary_bulk_length {$4294967296} 0
 }

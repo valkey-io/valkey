@@ -2756,6 +2756,7 @@ int tryReadBulkPayload(connection *conn, char *buf, int usemark, ssize_t *nread_
         readlen = sizeof(buf[0]) * PROTO_IOBUF_LEN;
     } else {
         left = server.bio_repl_transfer_size - server.bio_repl_transfer_read;
+        if (left <= 0) return C_ERR;
         readlen = (left < (signed)(sizeof(buf[0]) * PROTO_IOBUF_LEN)) ? left : (signed)(sizeof(buf[0]) * PROTO_IOBUF_LEN);
     }
 

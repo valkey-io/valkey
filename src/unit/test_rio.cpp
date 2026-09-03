@@ -14,27 +14,11 @@ extern "C" {
 #include "server.h"
 }
 
-/* Tests for the overflow-safe read accounting in rioConnRead().
- *
- * These tests cover the 64-bit arithmetic only. They cannot reproduce the
- * 32-bit size_t narrowing of a replication bulk length (where 4294967296
- * truncates to 0 and RIO then treats the limit as unlimited), because size_t
- * is 64 bits wide on the hosts these tests run on. What they do verify is that
- * rioInitWithConn() keeps the limit at full 64-bit width and that the guards
- * in rioConnRead() reject requests that would wrap around.
- *
- * All three checks are evaluated before rioConnRead() ever calls connRead(),
- * so a zeroed stub connection is enough and no socket is needed. The
- * requested lengths are kept small so that the buffer preallocated by
- * rioInitWithConn() is never grown. */
-
 static ConnectionType CT_Stub;
 
 class RioConnOverflowTest : public ::testing::Test {
   protected:
     static void SetUpTestSuite() {
-        /* A zeroed connection type is sufficient: none of its callbacks are
-         * reached by the tests below. */
         memset(&CT_Stub, 0, sizeof(CT_Stub));
     }
 
@@ -47,8 +31,6 @@ class RioConnOverflowTest : public ::testing::Test {
     connection conn;
 };
 
-/* The read limit is stored at full 64-bit width, not narrowed to size_t of a
- * smaller build or truncated to 0. */
 TEST_F(RioConnOverflowTest, InitKeepsFullWidthReadLimit) {
     rio r;
     rioInitWithConn(&r, &conn, UINT64_C(4294967296));
@@ -57,22 +39,43 @@ TEST_F(RioConnOverflowTest, InitKeepsFullWidthReadLimit) {
     rioFreeConn(&r, NULL);
 }
 
-/* A request that would push the running total past UINT64_MAX is rejected
- * with EOVERFLOW, even when no read limit is set. */
-TEST_F(RioConnOverflowTest, ReadRejectsWrapAroundOfReadSoFar) {
+TEST_F(RioConnOverflowTest, ReadChecksRemainingFullWidthLimit) {
     rio r;
-    char buf[64];
+    char buf[8];
 
-    rioInitWithConn(&r, &conn, 0);
-    r.io.conn.read_so_far = UINT64_MAX - 10;
+    rioInitWithConn(&r, &conn, UINT64_C(4294967296));
+    r.io.conn.read_so_far = UINT64_C(4294967292);
     errno = 0;
-    EXPECT_EQ(rioRead(&r, buf, 64), 0);
+    EXPECT_EQ(rioRead(&r, buf, sizeof(buf)), 0u);
     EXPECT_EQ(errno, EOVERFLOW);
     rioFreeConn(&r, NULL);
 }
 
-/* A running total that already exceeds the read limit is rejected with
- * EOVERFLOW instead of computing a negative remainder. */
+TEST_F(RioConnOverflowTest, ReadRejectsLimitBeforeGrowingBuffer) {
+    rio r;
+    char buf[PROTO_IOBUF_LEN + 1];
+
+    rioInitWithConn(&r, &conn, PROTO_IOBUF_LEN);
+    size_t initial_alloc = sdsalloc(r.io.conn.buf);
+    errno = 0;
+    EXPECT_EQ(rioRead(&r, buf, PROTO_IOBUF_LEN + 1), 0u);
+    EXPECT_EQ(errno, EOVERFLOW);
+    EXPECT_EQ(sdsalloc(r.io.conn.buf), initial_alloc);
+    rioFreeConn(&r, NULL);
+}
+
+TEST_F(RioConnOverflowTest, ReadRejectsOffTOverflow) {
+    rio r;
+    char buf[64];
+
+    rioInitWithConn(&r, &conn, 0);
+    r.io.conn.read_so_far = INT64_MAX - 10;
+    errno = 0;
+    EXPECT_EQ(rioRead(&r, buf, 64), 0u);
+    EXPECT_EQ(errno, EOVERFLOW);
+    rioFreeConn(&r, NULL);
+}
+
 TEST_F(RioConnOverflowTest, ReadRejectsReadSoFarBeyondReadLimit) {
     rio r;
     char buf[8];
@@ -80,7 +83,7 @@ TEST_F(RioConnOverflowTest, ReadRejectsReadSoFarBeyondReadLimit) {
     rioInitWithConn(&r, &conn, 100);
     r.io.conn.read_so_far = 200;
     errno = 0;
-    EXPECT_EQ(rioRead(&r, buf, 8), 0);
+    EXPECT_EQ(rioRead(&r, buf, 8), 0u);
     EXPECT_EQ(errno, EOVERFLOW);
     rioFreeConn(&r, NULL);
 }

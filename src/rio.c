@@ -219,6 +219,14 @@ static size_t rioConnWrite(rio *r, const void *buf, size_t len) {
 static size_t rioConnRead(rio *r, void *buf, size_t len) {
     size_t avail = sdslen(r->io.conn.buf) - r->io.conn.pos;
 
+    /* Validate before allocation and keep rioConnTell() representable. */
+    if (r->io.conn.read_so_far > INT64_MAX || len > (uint64_t)INT64_MAX - r->io.conn.read_so_far ||
+        (r->io.conn.read_limit != 0 &&
+         (r->io.conn.read_so_far > r->io.conn.read_limit || len > r->io.conn.read_limit - r->io.conn.read_so_far))) {
+        errno = EOVERFLOW;
+        return 0;
+    }
+
     /* If the buffer is too small for the entire request: realloc. */
     if (sdslen(r->io.conn.buf) + sdsavail(r->io.conn.buf) < len)
         r->io.conn.buf = sdsMakeRoomFor(r->io.conn.buf, len - sdslen(r->io.conn.buf));
@@ -230,16 +238,6 @@ static size_t rioConnRead(rio *r, void *buf, size_t len) {
         r->io.conn.pos = 0;
     }
 
-    /* Make sure the caller didn't request to read past the limit.
-     * If they didn't we'll buffer till the limit, if they did, we'll
-     * return an error. */
-    if (len > UINT64_MAX - r->io.conn.read_so_far ||
-        (r->io.conn.read_limit != 0 &&
-         (r->io.conn.read_so_far > r->io.conn.read_limit || len > r->io.conn.read_limit - r->io.conn.read_so_far))) {
-        errno = EOVERFLOW;
-        return 0;
-    }
-
     /* If we don't already have all the data in the sds, read more */
     while (len > sdslen(r->io.conn.buf) - r->io.conn.pos) {
         size_t buffered = sdslen(r->io.conn.buf) - r->io.conn.pos;
@@ -249,11 +247,8 @@ static size_t rioConnRead(rio *r, void *buf, size_t len) {
         size_t toread = needs < PROTO_IOBUF_LEN ? PROTO_IOBUF_LEN : needs;
         if (toread > sdsavail(r->io.conn.buf)) toread = sdsavail(r->io.conn.buf);
         if (r->io.conn.read_limit != 0) {
-            uint64_t remaining = r->io.conn.read_limit - r->io.conn.read_so_far;
-            if (buffered > remaining || (remaining -= buffered) == 0) {
-                errno = EOVERFLOW;
-                return 0;
-            }
+            /* The precheck and loop condition guarantee buffered < remaining. */
+            uint64_t remaining = r->io.conn.read_limit - r->io.conn.read_so_far - buffered;
             if (toread > remaining) toread = (size_t)remaining;
         }
         int retval = connRead(r->io.conn.conn, (char *)r->io.conn.buf + sdslen(r->io.conn.buf), toread);

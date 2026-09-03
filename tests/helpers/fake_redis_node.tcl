@@ -41,14 +41,7 @@ proc read_command {sock} {
 
 proc accept {sock host port} {
     global expected_traffic
-    # Treat the socket as a byte stream so binary replies are written verbatim
-    # instead of being re-encoded by the system encoding. Under a UTF-8 locale
-    # any byte >= 0x80 would otherwise be written as a multi-byte sequence, and
-    # depending on the Tcl version U+0000 may be written as the modified UTF-8
-    # sequence 0xC0 0x80 rather than a real NUL. Do not use
-    # "-translation binary": these replies are written with puts and the
-    # existing users of this helper rely on the CRLF that the default output
-    # translation appends.
+    # Preserve binary reply bytes while retaining the default CRLF translation.
     fconfigure $sock -encoding iso8859-1
     foreach {expect_cmd reply} $expected_traffic {
         if {[eof $sock]} {break}

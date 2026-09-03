@@ -4003,6 +4003,94 @@ static inline int clusterExtractSlotFromWord(uint64_t *slot_word, size_t slot_wo
     return slot;
 }
 
+/* Process the gossip section of PING or PONG packets.
+ * Note that this function assumes that the packet is already sanity-checked
+ * by the caller, not in the content of the gossip section, but in the
+ * length. Returns 1 if the link is still valid after processing, or 0 if
+ * the link was freed due to invalid data. */
+int clusterxProcessGossipSection(clusterMsg *hdr, clusterLink *link) {
+    uint16_t count = ntohs(hdr->count);
+    clusterMsgDataGossip *g = (clusterMsgDataGossip *)hdr->data.ping.gossip;
+    clusterNode *sender = link->node ? link->node : clusterLookupNode(hdr->sender, CLUSTER_NAMELEN);
+
+    /* Abort if the gossip contains invalid node IDs to avoid adding incorrect information to
+     * the nodes dictionary. An invalid ID indicates memory corruption on the sender side. */
+    int invalid_ids = verifyGossipSectionNodeIds(g, count);
+    if (invalid_ids) {
+        if (sender) {
+            serverLog(LL_WARNING,
+                      "Node %.40s (%s) gossiped %d nodes with invalid IDs. "
+                      "Dropping the link to protect cluster state.",
+                      sender->name, humanNodename(sender), invalid_ids);
+        } else {
+            serverLog(LL_WARNING,
+                      "Unknown node gossiped %d nodes with invalid IDs. "
+                      "Dropping the link to protect cluster state.",
+                      invalid_ids);
+        }
+        freeClusterLink(link);
+        return 0;
+    }
+
+    while (count--) {
+        uint16_t flags = ntohs(g->flags);
+        clusterNode *node;
+        sds ci;
+
+        if (server.verbosity == LL_DEBUG) {
+            ci = representClusterNodeFlags(sdsempty(), flags);
+            serverLog(LL_DEBUG, "GOSSIP %.40s %s:%d@%d %s", g->nodename, g->ip, ntohs(g->port), ntohs(g->cport), ci);
+            sdsfree(ci);
+        }
+
+        /* Update our state accordingly to the gossip sections */
+        node = clusterLookupNode(g->nodename, CLUSTER_NAMELEN);
+        /* Ignore gossips about self. */
+        if (node && node != myself) {
+            /* We already know this node.
+             * Handle failure reports, the report is added only if the sender is a voting primary,
+             * and deletion of a failure report is not restricted. */
+            if (sender) {
+                if (flags & (CLUSTER_NODE_FAIL | CLUSTER_NODE_PFAIL)) {
+                    if (clusterNodeIsVotingPrimary(sender) && clusterNodeAddFailureReport(node, sender)) {
+                        serverLog(LL_VERBOSE, "Node %.40s (%s) reported node %.40s (%s) as not reachable.", sender->name,
+                                  humanNodename(sender), node->name, humanNodename(node));
+                    }
+                    markNodeAsFailingIfNeeded(node);
+                } else {
+                    if (clusterNodeDelFailureReport(node, sender)) {
+                        serverLog(LL_VERBOSE, "Node %.40s (%s) reported node %.40s (%s) is back online.", sender->name,
+                                  humanNodename(sender), node->name, humanNodename(node));
+                    }
+                }
+            }
+
+            /* If from our POV the node is up (no failure flags are set),
+             * we have no pending ping for the node, nor we have failure
+             * reports for this node, update the last pong time with the
+             * one we see from the other nodes. */
+            if (!(flags & (CLUSTER_NODE_FAIL | CLUSTER_NODE_PFAIL)) &&
+                nodeInNormalState(node) &&
+                node->ping_sent == 0 &&
+                clusterNodeFailureReportsCount(node) == 0) {
+                mstime_t pongtime = ntohl(g->pong_received);
+                pongtime *= 1000; /* Convert back to milliseconds. */
+
+                /* Replace the pong time with the received one only if
+                 * it's greater than our view but is not in the future
+                 * (with 500 milliseconds tolerance) from the POV of our
+                 * clock. */
+                if (pongtime <= (server.mstime + 500) && pongtime > node->pong_received) {
+                    node->pong_received = pongtime;
+                }
+            }
+        }
+
+        /* Next node */
+        g++;
+    }
+    return 1;
+}
 
 int clusterxProcessPacket(clusterLink *link) {
     /* Validate that the packet is well-formed */
@@ -4109,7 +4197,7 @@ int clusterxProcessPacket(clusterLink *link) {
 
     /* Initial processing of PING and MEET requests replying with a PONG. */
     if (type == CLUSTERMSG_TYPE_PING || type == CLUSTERMSG_TYPE_MEET) {
-        if (sender->link && nodeExceedsHandshakeTimeout(sender, now)) {
+        if (type == CLUSTERMSG_TYPE_MEET && sender->link && nodeExceedsHandshakeTimeout(sender, now)) {
             /* The MEET packet is from a known node, after the handshake timeout, so the sender
              * thinks that I do not know it.
              * Free my outbound link to that node, triggering a reconnect and a PING over the
@@ -4131,13 +4219,99 @@ int clusterxProcessPacket(clusterLink *link) {
         clusterSendPing(link, CLUSTERMSG_TYPE_PONG);
     }
 
-    serverLog(LL_WARNING, "Node %.40s sent a message of type %s on the link", msg->sender, clusterGetMessageTypeString(type));
-
     /* PING, PONG, MEET: process config information. */
     if (type == CLUSTERMSG_TYPE_PING || type == CLUSTERMSG_TYPE_PONG || type == CLUSTERMSG_TYPE_MEET) {
+        if (sender && nodeInMeetState(sender)) {
+            /* Once we get a response for MEET from the sender, we can stop sending more MEET. */
+            sender->flags &= ~CLUSTER_NODE_MEET;
+            serverLog(LL_NOTICE, "Successfully completed handshake with %.40s (%s)", sender->name,
+                      humanNodename(sender));
+        }
+        if (!link->inbound) {
+            if (memcmp(link->node->name, msg->sender, CLUSTER_NAMELEN) != 0) {
+                /* If the reply has a non matching node ID we
+                 * disconnect this node and set it as not having an associated
+                 * address. This can happen if the node did CLUSTER RESET and changed
+                 * its node ID. In this case, the old node ID will not come back. */
+                clusterNode *noaddr_node = link->node;
+                serverLog(LL_NOTICE,
+                          "PONG contains mismatching sender ID. About node %.40s (%s) in shard %.40s added %d ms ago, "
+                          "having flags %d",
+                          link->node->name, humanNodename(link->node), link->node->shard_id,
+                          (int)(now - (link->node->ctime)), link->node->flags);
+                link->node->flags |= CLUSTER_NODE_NOADDR;
+                link->node->ip[0] = '\0';
+                link->node->tcp_port = 0;
+                link->node->tls_port = 0;
+                link->node->cport = 0;
+                freeClusterLink(link);
+                /* We will also mark the node as fail because we have disconnected from it,
+                 * and will not reconnect, and obviously we will not gossip NOADDR nodes.
+                 * Marking it as FAIL can help us advance the state, such as the cluster
+                 * state becomes FAIL or the replica can do the failover. Otherwise, the
+                 * NOADDR node will provide an invalid address in redirection and confuse
+                 * the clients, and the replica will never initiate a failover since the
+                 * node is not actually in FAIL state. */
+                if (!nodeFailed(noaddr_node)) {
+                    markNodeAsFailing(noaddr_node);
+                    clusterSendFail(noaddr_node->name);
+                }
+                clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE);
+                return 0;
+            }
+        }
 
+        /* Copy the CLUSTER_NODE_NOFAILOVER flag from what the sender
+         * announced. This is a dynamic flag that we receive from the
+         * sender, and the latest status must be trusted. We need it to
+         * be propagated because the replica ranking used to understand the
+         * delay of each replica in the voting process, needs to know
+         * what are the instances really competing. */
+        if (sender) {
+            int nofailover = flags & CLUSTER_NODE_NOFAILOVER;
+            if (nofailover != clusterNodeIsNoFailover(sender)) {
+                clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG);
+            }
+            sender->flags &= ~CLUSTER_NODE_NOFAILOVER;
+            sender->flags |= nofailover;
+        }
+
+        /* Update our info about the node */
+        if (!link->inbound && type == CLUSTERMSG_TYPE_PONG) {
+            link->node->pong_received = now;
+            link->node->ping_sent = 0;
+
+            /* The PFAIL condition can be reversed without external
+             * help if it is momentary (that is, if it does not
+             * turn into a FAIL state).
+             *
+             * The FAIL condition is also reversible under specific
+             * conditions detected by clearNodeFailureIfNeeded(). */
+            if (nodeTimedOut(link->node)) {
+                link->node->flags &= ~CLUSTER_NODE_PFAIL;
+                clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE);
+            } else if (nodeFailed(link->node)) {
+                clearNodeFailureIfNeeded(link->node);
+            }
+        }
+
+        /* Get info from the gossip section */
+        if (sender) {
+            if (!clusterxProcessGossipSection(msg, link)) return 0;
+        }
     } else if (type == CLUSTERMSG_TYPE_FAIL) {
-
+        clusterNode *failing;
+        if (sender) {
+            failing = clusterLookupNode(msg->data.fail.about.nodename, CLUSTER_NAMELEN);
+            if (failing && !(failing->flags & (CLUSTER_NODE_FAIL | CLUSTER_NODE_MYSELF))) {
+                serverLog(LL_NOTICE, "FAIL message received from %.40s (%s) about %.40s (%s)", msg->sender,
+                          humanNodename(sender), msg->data.fail.about.nodename, humanNodename(failing));
+                markNodeAsFailing(failing);
+            }
+        } else {
+            serverLog(LL_NOTICE, "Ignoring FAIL message from unknown node %.40s about %.40s", msg->sender,
+                      msg->data.fail.about.nodename);
+        }
     } else if (type == CLUSTERMSG_TYPE_PUBLISH || type == CLUSTERMSG_TYPE_PUBLISHSHARD) {
         if (!sender) return 1; /* We don't know that node. */
         clusterProcessPublishPacket(&msg->data.publish.msg, type);
@@ -6259,6 +6433,10 @@ void clusterHandleReplicaFailover(void) {
  * Additional conditions for migration are examined inside the function.
  */
 void clusterHandleReplicaMigration(int max_replicas) {
+#ifdef ENABLE_CLUSTERX_FEATURE
+    return;
+#endif
+
     int j, ok_replicas = 0;
     clusterNode *my_primary = myself->replicaof, *target = NULL, *candidate = NULL;
     dictIterator *di;
@@ -6591,6 +6769,7 @@ void clusterxCron(void) {
         if (nodeInHandshake(node)) {
             serverLog(LL_WARNING, "Cluster bus found node %s:%d has handshake flag, remove it.", node->ip, node->cport);
             node->flags &= ~CLUSTER_NODE_HANDSHAKE;
+            clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG);
         }
         /* The protocol is that function(s) below return non-zero if the node was
          * terminated.
@@ -6630,6 +6809,67 @@ void clusterxCron(void) {
     if (nodeIsReplica(myself) && server.primary_host == NULL && myself->replicaof && nodeHasAddr(myself->replicaof)) {
         replicationSetPrimary(myself->replicaof->ip, getNodeDefaultReplicationPort(myself->replicaof), 0, false);
     }
+
+    di = dictGetSafeIterator(server.cluster->nodes);
+    while ((de = dictNext(di)) != NULL) {
+        clusterNode *node = dictGetVal(de);
+        now = mstime(); /* Use an updated time at every iteration. */
+
+        if (node->flags & (CLUSTER_NODE_MYSELF | CLUSTER_NODE_NOADDR | CLUSTER_NODE_HANDSHAKE)) continue;
+
+        /* If we are not receiving any data for more than half the cluster
+         * timeout, reconnect the link: maybe there is a connection
+         * issue even if the node is alive. */
+        mstime_t ping_delay = now - node->ping_sent;
+        mstime_t data_delay = now - node->data_received;
+        if (node->link &&                                            /* is connected */
+            now - node->link->ctime > server.cluster_node_timeout && /* was not already reconnected */
+            node->ping_sent &&                                       /* we already sent a ping */
+            /* and we are waiting for the pong more than timeout/2 */
+            ping_delay > server.cluster_node_timeout / 2 &&
+            /* and in such interval we are not seeing any traffic at all. */
+            data_delay > server.cluster_node_timeout / 2) {
+            /* Disconnect the link, it will be reconnected automatically. */
+            freeClusterLink(node->link);
+        }
+
+        /* If we have currently no active ping in this instance, and the
+         * received PONG is older than half the cluster timeout, send
+         * a new ping now, to ensure all the nodes are pinged without
+         * a too big delay. */
+        mstime_t ping_interval =
+            server.cluster_ping_interval ? server.cluster_ping_interval : server.cluster_node_timeout / 2;
+        if (node->link && node->ping_sent == 0 && (now - node->pong_received) > ping_interval) {
+            clusterSendPing(node->link, CLUSTERMSG_TYPE_PING);
+            continue;
+        }
+
+        /* Check only if we have an active ping for this instance. */
+        if (node->ping_sent == 0) continue;
+
+        /* Check if this node looks unreachable.
+         * Note that if we already received the PONG, then node->ping_sent
+         * is zero, so can't reach this code at all, so we don't risk of
+         * checking for a PONG delay if we didn't sent the PING.
+         *
+         * We also consider every incoming data as proof of liveness, since
+         * our cluster bus link is also used for data: under heavy data
+         * load pong delays are possible. */
+        mstime_t node_delay = (ping_delay < data_delay) ? ping_delay : data_delay;
+
+        if (node_delay > server.cluster_node_timeout) {
+            /* Timeout reached. Set the node as possibly failing if it is
+             * not already in this state. */
+            if (!(node->flags & (CLUSTER_NODE_PFAIL | CLUSTER_NODE_FAIL))) {
+                serverLog(LL_NOTICE, "NODE %.40s (%s) possibly failing.", node->name, humanNodename(node));
+                node->flags |= CLUSTER_NODE_PFAIL;
+                if (clusterNodeIsVotingPrimary(myself)) {
+                    markNodeAsFailingIfNeeded(node);
+                }
+            }
+        }
+    }
+    dictReleaseIterator(di);
 }
 
 /* This is executed 10 times every second */
@@ -9209,6 +9449,8 @@ int setClusterNodes(client *c, sds nodes_str, long long version) {
         server.cluster->slots[i] = clusterLookupNode(slots_nodes[i], CLUSTER_NAMELEN);
     }
 
+    clusterCloseAllSlots();
+
     if (old_nodes) {
         freeClusterNodesMemory(old_nodes);
     }
@@ -9221,7 +9463,6 @@ int setClusterNodes(client *c, sds nodes_str, long long version) {
         }
     }
 
-    clusterCloseAllSlots();
     zfree(slots_nodes);
     clusterSaveConfigOrDie(1);
     return C_OK;

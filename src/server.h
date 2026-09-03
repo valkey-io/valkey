@@ -1992,6 +1992,7 @@ struct valkeyServer {
     int tcpkeepalive;            /* Set SO_KEEPALIVE if non-zero. */
     int active_expire_enabled;   /* Can be disabled for testing purposes. */
     int active_expire_effort;    /* From 1 (default) to 10, active effort. */
+    mstime_t default_ttl_ms;     /* Default TTL for eligible top-level key writes, in milliseconds. */
     int lazy_expire_disabled;    /* If > 0, don't trigger lazy expire */
     int active_defrag_enabled;
     int skip_checksum_validation;                /* Disable checksum validation for RDB and RESTORE payload. */
@@ -3817,6 +3818,10 @@ void dbReplaceValue(serverDb *db, robj *key, robj **valref);
 #define SETKEY_DOESNT_EXIST 8
 #define SETKEY_ADD_OR_UPDATE 16 /* Key most likely doesn't exists */
 void setKey(client *c, serverDb *db, robj *key, robj **valref, int flags);
+mstime_t getDefaultTTLMSExpireTime(client *c);
+robj *applyDefaultTTLMS(client *c, serverDb *db, robj *key, mstime_t *expire_at);
+void setKeyWithDefaultTTLMS(client *c, serverDb *db, robj *key, robj **valref, int flags, mstime_t *expire_at);
+void propagateCommandWithDefaultTTLMS(client *c, serverDb *db, robj **keys, mstime_t *expire_at, size_t key_count);
 robj *dbRandomKey(serverDb *db);
 int dbGenericDelete(serverDb *db, robj *key, int async, int flags);
 int dbSyncDelete(serverDb *db, robj *key);

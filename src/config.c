@@ -3350,6 +3350,15 @@ static int isValidDbHashSeed(sds val, const char **err) {
     return 1;
 }
 
+/* Reject durations that cannot be converted to an absolute expiration safely. */
+static int isValidDefaultTTLMS(long long val, const char **err) {
+    if (val > LLONG_MAX - commandTimeSnapshot()) {
+        *err = "duration exceeds the maximum duration representable as an absolute expiration";
+        return 0;
+    }
+    return 1;
+}
+
 standardConfig static_configs[] = {
     /* Bool configs */
     createBoolConfig("rdbchecksum", NULL, IMMUTABLE_CONFIG, server.rdb_checksum, 1, NULL, NULL),
@@ -3545,6 +3554,7 @@ standardConfig static_configs[] = {
     createLongLongConfig("busy-reply-threshold", "lua-time-limit", MODIFIABLE_CONFIG, 0, LONG_MAX, server.busy_reply_threshold, 5000, INTEGER_CONFIG, NULL, NULL), /* milliseconds */
     createLongLongConfig("cluster-node-timeout", NULL, MODIFIABLE_CONFIG, 0, LLONG_MAX, server.cluster_node_timeout, 15000, INTEGER_CONFIG, NULL, NULL),
     createLongLongConfig("cluster-ping-interval", NULL, MODIFIABLE_CONFIG | HIDDEN_CONFIG, 0, LLONG_MAX, server.cluster_ping_interval, 0, INTEGER_CONFIG, NULL, NULL),
+    createLongLongConfig("default-ttl-ms", NULL, MODIFIABLE_CONFIG, 0, LLONG_MAX, server.default_ttl_ms, 0, INTEGER_CONFIG, isValidDefaultTTLMS, NULL),
     createLongLongConfig("commandlog-execution-slower-than", "slowlog-log-slower-than", MODIFIABLE_CONFIG, -1, LLONG_MAX, server.commandlog[COMMANDLOG_TYPE_SLOW].threshold, 10000, INTEGER_CONFIG, NULL, NULL),
     createLongLongConfig("commandlog-request-larger-than", NULL, MODIFIABLE_CONFIG, -1, LLONG_MAX, server.commandlog[COMMANDLOG_TYPE_LARGE_REQUEST].threshold, 1024 * 1024, MEMORY_CONFIG | SIGNED_MEMORY_CONFIG, NULL, NULL),
     createLongLongConfig("commandlog-reply-larger-than", NULL, MODIFIABLE_CONFIG, -1, LLONG_MAX, server.commandlog[COMMANDLOG_TYPE_LARGE_REPLY].threshold, 1024 * 1024, MEMORY_CONFIG | SIGNED_MEMORY_CONFIG, NULL, NULL),

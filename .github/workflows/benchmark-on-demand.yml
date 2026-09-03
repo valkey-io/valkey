@@ -13,27 +13,27 @@ on:
         type: string
         default: "SET,GET"
       arbitrary_command:
-        description: "Arbitrary command to benchmark, e.g. 'SET key:__rand_int__ __data__' or 'GETRANGE key:__rand_int__ 0 100'. Takes precedence over 'commands'. Supports __rand_int__ (random int within keyspacelen) and __data__ (payload of data_size bytes)."
+        description: "Command to benchmark, e.g. 'GETRANGE key:__rand_int__ 0 100'. Takes precedence over commands. Supports __rand_int__ and __data__."
         required: false
         type: string
         default: ""
       populate_command:
-        description: "Write command used to load the keyspace before an arbitrary read command, e.g. 'SET key:__rand_int__ __data__'. Runs sequentially over the whole keyspace first. Use the SAME key pattern as arbitrary_command, otherwise the reads will miss. Requires arbitrary_command."
+        description: "Seeds the keyspace before an arbitrary read, e.g. 'SET key:__rand_int__ __data__'. Requires arbitrary_command and the SAME key pattern, or the reads will miss."
         required: false
         type: string
         default: ""
       write_command:
-        description: "Write side of a concurrent mixed load, e.g. 'SET key:__rand_int__ __data__' or just 'SET'. Requires read_command. Mutually exclusive with commands, arbitrary_command and populate_command."
+        description: "Write side of a concurrent mixed load, e.g. 'SET key:__rand_int__ __data__' or 'SET'. Requires read_command. Not for use with arbitrary_command or populate_command."
         required: false
         type: string
         default: ""
       read_command:
-        description: "Read side of a concurrent mixed load, e.g. 'GET key:__rand_int__' or just 'GET'. Requires write_command. Use the SAME key pattern as write_command, otherwise the reads will miss."
+        description: "Read side of a concurrent mixed load, e.g. 'GET key:__rand_int__' or 'GET'. Requires write_command and the SAME key pattern, or the reads will miss."
         required: false
         type: string
         default: ""
       write_ratio:
-        description: "Percentage of clients driving write_command in a mixed load. Range: 1-99, default 50. The rest drive read_command; the total client count is unchanged."
+        description: "Percentage of clients driving write_command; the rest drive read_command. Range: 1-99, default 50."
         required: false
         type: string
         default: ""
@@ -48,7 +48,7 @@ on:
         type: string
         default: ""
       benchmark_threads:
-        description: "Client thread count for valkey-benchmark (equivalent to '--threads'). Overrides the config value. Range: 1-96 (size of the client CPU pool)."
+        description: "Client thread count for valkey-benchmark ('--threads'). Range: 1-96."
         required: false
         type: string
         default: ""
@@ -201,15 +201,16 @@ jobs:
           INPUT_PIPELINES: ${{ github.event.inputs.pipelines }}
           INPUT_CLUSTER_MODE: ${{ github.event.inputs.cluster_mode }}
         run: |
-          # utils/modify_config.py owns the config schema: it validates every
-          # input, derives server_cpu_range from io-threads, and converts the
-          # entry to scenario format when an arbitrary command is supplied.
-          # Inputs are read from the environment rather than interpolated, so
-          # quoting cannot break, and each optional flag is only passed when
-          # its input is non-empty.
+          # utils/modify_config.py owns the config schema and validates inputs.
           ARGS=(--config configs/benchmark-config-arm.json)
 
-          [[ -n "$INPUT_COMMANDS" ]]          && ARGS+=(--commands "$INPUT_COMMANDS")
+          # commands has a default, and the script rejects it alongside a
+          # generated mode, so only pass it when no generated mode is selected.
+          if [[ -n "$INPUT_COMMANDS" && -z "$INPUT_ARBITRARY_COMMAND" \
+                && -z "$INPUT_WRITE_COMMAND" && -z "$INPUT_READ_COMMAND" ]]; then
+            ARGS+=(--commands "$INPUT_COMMANDS")
+          fi
+
           [[ -n "$INPUT_ARBITRARY_COMMAND" ]] && ARGS+=(--arbitrary-command "$INPUT_ARBITRARY_COMMAND")
           [[ -n "$INPUT_POPULATE_COMMAND" ]]  && ARGS+=(--populate-command "$INPUT_POPULATE_COMMAND")
           [[ -n "$INPUT_WRITE_COMMAND" ]]     && ARGS+=(--write-command "$INPUT_WRITE_COMMAND")
@@ -220,8 +221,8 @@ jobs:
           [[ -n "$INPUT_BENCHMARK_THREADS" ]] && ARGS+=(--benchmark-threads "$INPUT_BENCHMARK_THREADS")
           [[ -n "$INPUT_PIPELINES" ]]         && ARGS+=(--pipelines "$INPUT_PIPELINES")
 
-          # The boolean input is always one of the two explicit forms, so an
-          # unchecked box turns cluster mode off rather than inheriting it.
+          # Always explicit, so an unchecked box turns cluster mode off rather
+          # than inheriting the base config's value.
           if [[ "$INPUT_CLUSTER_MODE" == "true" ]]; then
             ARGS+=(--cluster-mode)
           else

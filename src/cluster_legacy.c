@@ -5906,6 +5906,7 @@ void clusterLogCantFailover(int reason) {
     case CLUSTER_CANT_FAILOVER_WAITING_DELAY: msg = "Waiting the delay before I can start a new failover."; break;
     case CLUSTER_CANT_FAILOVER_EXPIRED: msg = "Failover attempt expired."; break;
     case CLUSTER_CANT_FAILOVER_WAITING_VOTES: msg = "Waiting for votes, but majority still not reached."; break;
+    case CLUSTER_CANT_FAILOVER_SYNC_FROM_REPLICA: msg = "Replica is still syncing from a sibling."; break;
     default: serverPanic("Unknown cant failover reason code.");
     }
     lastlog_time = time(NULL);
@@ -6015,6 +6016,12 @@ void clusterHandleReplicaFailover(void) {
         /* There are no reasons to failover, so we set the reason why we
          * are returning without failing over to NONE. */
         server.cluster->cant_failover_reason = CLUSTER_CANT_FAILOVER_NONE;
+        return;
+    }
+
+    /* A replica still syncing from a sibling cannot be promoted safely. */
+    if (server.cluster_syncing_from_sibling) {
+        clusterLogCantFailover(CLUSTER_CANT_FAILOVER_SYNC_FROM_REPLICA);
         return;
     }
 
@@ -7209,11 +7216,31 @@ static inline void removeAllNotOwnedShardChannelSubscriptions(void) {
  * REPLICA nodes handling
  * -------------------------------------------------------------------------- */
 
+/* Discard a transient sync-from-replica sibling sync when a topology change
+ * supersedes it. Invoked from both the cluster reconfiguration path
+ * (clusterSetPrimary) and the CLUSTER REPLICATE NO ONE promotion path; each
+ * establishes its own replication target right after (replicationSetPrimary()
+ * and replicationUnsetPrimary() respectively), so the sibling state is
+ * discarded rather than redirected. This avoids relying on
+ * replicationUnsetPrimary()'s internal cleanup, which does not clear the guard
+ * flag in every replication state (e.g. REPL_STATE_CONNECT). Safe to call when
+ * no sibling sync is in progress. */
+static void clusterDiscardSiblingSyncIfActive(void) {
+    if (server.cluster_syncing_from_sibling) {
+        serverLog(LL_NOTICE, "Sync-from-replica: discarding sibling sync because the topology changed");
+        replicationDiscardSiblingSync();
+    }
+}
+
 /* Set the specified node 'n' as primary for this node.
  * If this node is currently a primary, it is turned into a replica. */
 static void clusterSetPrimary(clusterNode *n, int closeSlots, int full_sync_required) {
     serverAssert(n != myself);
     serverAssert(myself->numslots == 0);
+
+    /* Topology changes supersede the transient sibling sync target;
+     * replicationSetPrimary() below establishes the new target. */
+    clusterDiscardSiblingSyncIfActive();
 
     if (clusterNodeIsPrimary(myself)) {
         myself->flags &= ~(CLUSTER_NODE_PRIMARY | CLUSTER_NODE_MIGRATE_TO);
@@ -8543,6 +8570,12 @@ int clusterCommandSpecial(client *c) {
             sds client = catClientInfoShortString(sdsempty(), c, server.hide_user_data_from_log);
             serverLog(LL_NOTICE, "Stop replication and turning myself into empty primary (request from '%s').", client);
             sdsfree(client);
+            /* Leaving replica mode: clear any transient sibling sync target.
+             * Unlike clusterSetPrimary(), this promotion path does not go
+             * through replicationSetPrimary(), and replicationUnsetPrimary()
+             * does not clear the guard flag in every replication state (e.g.
+             * REPL_STATE_CONNECT), so discard the sibling sync explicitly here. */
+            clusterDiscardSiblingSyncIfActive();
             clusterSetNodeAsPrimary(myself);
             flushAllDataAndResetRDB(server.repl_replica_lazy_flush ? EMPTYDB_ASYNC : EMPTYDB_NO_FLAGS);
             verifyClusterConfigWithData();
@@ -8601,6 +8634,76 @@ int clusterCommandSpecial(client *c) {
          * In these both cases, myself as a replica has to do a full sync. */
         clusterSetPrimary(n, 1, 1);
         clusterDoBeforeSleep(CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_BROADCAST_ALL);
+
+        /* Try to seed this replica from a sibling while keeping the cluster
+         * topology pointed at n. The final reconnect to n uses PSYNC with n's
+         * replication ID.
+         *
+         * Selection deterministically picks the sibling with the greatest
+         * gossiped repl_offset, so several nodes joining around the same time
+         * converge on the same sibling and serialize behind its BGSAVEs
+         * (e.g. fleet patching that replaces several replicas of one shard in
+         * quick succession). Joiners arriving within the
+         * repl-diskless-sync-delay window still share one fork. Spreading the
+         * load (randomized tie-breaking among near-tied offsets, or
+         * primary-side selection) is future work. */
+        if (server.cluster_prefer_sync_from_replica && n->num_replicas > 0 && n->replicas) {
+            clusterNode *best_sibling = NULL;
+            long long best_offset = -1;
+
+            for (int j = 0; j < n->num_replicas; j++) {
+                clusterNode *s = n->replicas[j];
+                if (s == myself) continue;
+                if (nodeFailed(s) || nodeTimedOut(s)) continue;
+                if (s->repl_offset == 0) continue;
+
+                if (s->repl_offset > best_offset) {
+                    best_offset = s->repl_offset;
+                    best_sibling = s;
+                }
+            }
+
+            if (best_sibling) {
+                int sibling_port = getNodeDefaultReplicationPort(best_sibling);
+                serverLog(LL_NOTICE,
+                          "Sync-from-replica: selected sibling %.40s (%s) at offset %lld "
+                          "(primary %.40s at offset %lld, gap %lld)",
+                          best_sibling->name, humanNodename(best_sibling), best_offset,
+                          n->name, (long long)n->repl_offset,
+                          (long long)(n->repl_offset - best_offset));
+
+                /* Replace the initial async connection to n with a transient
+                 * connection to the sibling. */
+                cancelReplicationHandshake(0);
+                sdsfree(server.primary_host);
+                server.primary_host = sdsnew(best_sibling->ip);
+                server.primary_port = sibling_port;
+                /* cancelReplicationHandshake() may clear this flag. */
+                server.cluster_syncing_from_sibling = true;
+                server.cluster_sync_sibling_initial_offset = -1;
+                server.cluster_sync_sibling_target_offset = -1;
+                serverLog(LL_NOTICE,
+                          "Sync-from-replica: redirecting replication to sibling %s:%d",
+                          best_sibling->ip, sibling_port);
+                if (connectWithPrimary() == C_ERR) {
+                    serverLog(LL_WARNING,
+                              "Sync-from-replica: failed to connect to sibling, "
+                              "falling back to primary");
+                    if (replicationAbortSiblingSync() == C_OK && server.primary_host) {
+                        if (connectWithPrimary() == C_ERR) {
+                            serverLog(LL_WARNING,
+                                      "Sync-from-replica: failed to connect to primary after sibling fallback");
+                        }
+                    }
+                }
+            } else {
+                serverLog(LL_NOTICE,
+                          "Sync-from-replica: no eligible sibling found for primary %.40s (%s), "
+                          "using normal full sync from primary",
+                          n->name, humanNodename(n));
+            }
+        }
+
         addReply(c, shared.ok);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "count-failure-reports") && c->argc == 3) {
         /* CLUSTER COUNT-FAILURE-REPORTS <NODE ID> */
@@ -8640,6 +8743,13 @@ int clusterCommandSpecial(client *c) {
         if (replicaid != NULL && memcmp(objectGetVal(replicaid), myself->name, CLUSTER_NAMELEN) != 0) {
             /* Ignore this command, including the sanity check and the process. */
             addReply(c, shared.ok);
+            return 1;
+        }
+
+        /* Sibling sync leaves this replica temporarily incomplete, so reject
+         * manual failover, including FORCE and TAKEOVER. */
+        if (server.cluster_syncing_from_sibling) {
+            addReplyError(c, "Node is syncing from sibling, cannot failover");
             return 1;
         }
 

@@ -647,6 +647,9 @@ void loadServerConfigFromString(sds config) {
         err = "replicaof directive not allowed in cluster mode";
         goto loaderr;
     }
+    if (server.cluster_prefer_sync_from_replica && !server.cluster_enabled) {
+        serverLog(LL_WARNING, "cluster-prefer-sync-from-replica has no effect when cluster mode is disabled");
+    }
 
     /* To ensure backward compatibility and work while hz is out of range */
     if (server.hz < CONFIG_MIN_HZ) server.hz = CONFIG_MIN_HZ;
@@ -2834,6 +2837,17 @@ static int updateClusterState(const char **err) {
     return 1;
 }
 
+static int updateClusterPreferSyncFromReplica(const char **err) {
+    UNUSED(err);
+    /* Sibling discovery relies on cluster gossip, so outside cluster mode the
+     * config is a no-op; warn instead of failing so a shared config file can
+     * still be used for standalone instances. */
+    if (server.cluster_prefer_sync_from_replica && !server.cluster_enabled) {
+        serverLog(LL_WARNING, "cluster-prefer-sync-from-replica has no effect when cluster mode is disabled");
+    }
+    return 1;
+}
+
 int updateClusterFlags(const char **err) {
     UNUSED(err);
     clusterUpdateMyselfFlags();
@@ -3394,6 +3408,7 @@ standardConfig static_configs[] = {
     createBoolConfig("use-exit-on-panic", NULL, MODIFIABLE_CONFIG | HIDDEN_CONFIG, server.use_exit_on_panic, 0, NULL, NULL),
     createBoolConfig("disable-thp", NULL, IMMUTABLE_CONFIG, server.disable_thp, 1, NULL, NULL),
     createBoolConfig("cluster-allow-replica-migration", NULL, MODIFIABLE_CONFIG, server.cluster_allow_replica_migration, 1, NULL, NULL),
+    createBoolConfig("cluster-prefer-sync-from-replica", NULL, MODIFIABLE_CONFIG, server.cluster_prefer_sync_from_replica, 0, NULL, updateClusterPreferSyncFromReplica),
     createBoolConfig("replica-announced", NULL, MODIFIABLE_CONFIG, server.replica_announced, 1, NULL, NULL),
     createBoolConfig("latency-tracking", NULL, MODIFIABLE_CONFIG, server.latency_tracking_enabled, 1, NULL, NULL),
     createBoolConfig("aof-disable-auto-gc", NULL, MODIFIABLE_CONFIG | HIDDEN_CONFIG, server.aof_disable_auto_gc, 0, NULL, updateAofAutoGCEnabled),

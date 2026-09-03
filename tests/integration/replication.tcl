@@ -1719,6 +1719,100 @@ start_server {tags {"repl external:skip"}} {
     }
 }
 
+# rdb-only sync requests must never attach to an in-progress BGSAVE: they skip
+# the output-buffer copy that makes the FULLRESYNC offset describe the RDB
+# snapshot, so a shared BGSAVE could pair a stale offset with newer RDB
+# contents (duplicating non-idempotent commands on a later PSYNC).
+start_server {tags {"repl" "external:skip"}} {
+    set primary [srv 0 client]
+
+    # Force disk-target BGSAVE: the attach path only exists for disk saves.
+    $primary config set repl-diskless-sync no
+    $primary config set save ""
+    $primary debug populate 10000 primary: 100
+
+    test "rdb-only sync does not attach to a non-rdb-only BGSAVE in progress" {
+        # Slow the RDB child so the second SYNC arrives while the first
+        # requester still waits on the same BGSAVE.
+        $primary config set rdb-key-save-delay 100
+
+        set lines [count_log_lines 0]
+        set forks_before [s 0 total_forks]
+
+        # First requester: a plain (non-rdb-only) SYNC triggers a BGSAVE.
+        set repl [valkey_deferring_client]
+        $repl sync
+        wait_for_condition 50 100 {
+            [s 0 rdb_bgsave_in_progress] == 1
+        } else {
+            fail "Primary did not start BGSAVE for the first SYNC"
+        }
+
+        # Second requester: an rdb-only client must not share that BGSAVE.
+        set rdbonly [valkey_deferring_client]
+        $rdbonly replconf rdb-only 1
+        assert_equal {OK} [$rdbonly read]
+        $rdbonly sync
+
+        wait_for_log_messages 0 {"*rdb-only sync cannot share an in-progress BGSAVE*"} $lines 1000 10
+
+        # Let both complete: the plain SYNC from the first BGSAVE, the
+        # rdb-only client from a dedicated fresh one.
+        $primary config set rdb-key-save-delay 0
+        wait_for_condition 100 100 {
+            [s 0 total_forks] == $forks_before + 2 &&
+            [s 0 rdb_bgsave_in_progress] == 0
+        } else {
+            fail "rdb-only sync did not trigger a dedicated BGSAVE"
+        }
+
+        $rdbonly close
+        $repl close
+        wait_for_condition 50 100 {
+            [s 0 connected_slaves] == 0
+        } else {
+            fail "replica connections were not released"
+        }
+    }
+
+    test "same-requirement replicas still share one BGSAVE" {
+        $primary config set rdb-key-save-delay 100
+        set lines [count_log_lines 0]
+        set forks_before [s 0 total_forks]
+
+        set repl1 [valkey_deferring_client]
+        set repl2 [valkey_deferring_client]
+        $repl1 sync
+        wait_for_condition 50 100 {
+            [s 0 rdb_bgsave_in_progress] == 1
+        } else {
+            fail "Primary did not start BGSAVE for the first SYNC"
+        }
+        $repl2 sync
+
+        # The second requester attaches to the in-progress BGSAVE instead of
+        # waiting for a new one.
+        wait_for_log_messages 0 {"*Waiting for end of BGSAVE for SYNC*"} $lines 1000 10
+
+        $primary config set rdb-key-save-delay 0
+        wait_for_condition 100 100 {
+            [s 0 rdb_bgsave_in_progress] == 0
+        } else {
+            fail "shared BGSAVE did not complete"
+        }
+        # Exactly one fork served both requesters.
+        assert_equal [expr {$forks_before + 1}] [s 0 total_forks]
+
+        $repl1 close
+        $repl2 close
+        wait_for_condition 50 100 {
+            [s 0 connected_slaves] == 0
+        } else {
+            fail "replica connections were not released"
+        }
+    }
+}
+
 test "SYNC/PSYNC returns NOMASTERLINK with replica-serve-stale-data yes/no and master link down" {
     start_server {tags {"repl external:skip"}} {
         set replica [srv 0 client]

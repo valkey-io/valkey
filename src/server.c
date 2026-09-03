@@ -2453,6 +2453,9 @@ void initServerConfig(void) {
     server.primary_initial_offset = -1;
     server.repl_state = REPL_STATE_NONE;
     server.repl_rdb_channel_state = REPL_DUAL_CHANNEL_STATE_NONE;
+    server.cluster_syncing_from_sibling = false;
+    server.cluster_sync_sibling_initial_offset = -1;
+    server.cluster_sync_sibling_target_offset = -1;
     server.repl_transfer_tmpfile = NULL;
     server.repl_transfer_fd = -1;
     server.repl_transfer_s = NULL;
@@ -3194,7 +3197,6 @@ void initServer(void) {
     latencyMonitorInit();
     throttle_init();
     initSharedQueryBuf();
-
     /* Initialize ACL default password if it exists */
     ACLUpdateDefaultUserPassword(server.requirepass);
 
@@ -6213,6 +6215,17 @@ void totalNumberOfStatefulKeys(unsigned long *blocking_keys,
     if (watched_keys) *watched_keys = wkeys;
 }
 
+/* Report coarse sync-from-replica phases from server.repl_state. The default
+ * "rdb_loading" covers local loading states between transfer completion and
+ * connected stream catch-up that are not represented by a single repl_state. */
+static const char *syncFromReplicaPhase(void) {
+    if (!server.cluster_syncing_from_sibling) return "none";
+    if (server.repl_state == REPL_STATE_TRANSFER) return "rdb_transfer";
+    if (server.repl_state >= REPL_STATE_CONNECTING && server.repl_state < REPL_STATE_TRANSFER) return "handshake";
+    if (server.repl_state == REPL_STATE_CONNECTED) return "stream_catchup";
+    return "rdb_loading";
+}
+
 /* Create the string returned by the INFO command. This is decoupled
  * by the INFO command itself as we need to report the same information
  * on memory corruption problems. */
@@ -6767,7 +6780,9 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "repl_backlog_active:%d\r\n", server.repl_backlog != NULL,
                 "repl_backlog_size:%lld\r\n", server.repl_backlog_size,
                 "repl_backlog_first_byte_offset:%lld\r\n", server.repl_backlog ? server.repl_backlog->offset : 0,
-                "repl_backlog_histlen:%lld\r\n", server.repl_backlog ? server.repl_backlog->histlen : 0));
+                "repl_backlog_histlen:%lld\r\n", server.repl_backlog ? server.repl_backlog->histlen : 0,
+                "sync_from_replica_in_progress:%d\r\n", server.cluster_syncing_from_sibling,
+                "sync_from_replica_phase:%s\r\n", syncFromReplicaPhase()));
     }
 
     /* CPU */

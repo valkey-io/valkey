@@ -2092,7 +2092,7 @@ void unlinkClient(client *c) {
     }
 
     /* Clear the tracking status. */
-    if (c->flag.tracking) disableTracking(c);
+    if (c->flag.tracking) disableTracking(c, 0);
 }
 
 /* Clear the client state to resemble a newly connected client. */
@@ -2113,7 +2113,7 @@ void clearClientConnectionState(client *c) {
 
     serverAssert(!(c->flag.replica || c->flag.primary || c->slot_migration_job));
 
-    if (c->flag.tracking) disableTracking(c);
+    if (c->flag.tracking) disableTracking(c, 0);
     selectDb(c, 0);
 #ifdef LOG_REQ_RES
     c->resp = server.client_default_resp;
@@ -5729,7 +5729,7 @@ void clientTrackingCommand(client *c) {
 
         enableTracking(c, redir, options, prefix, numprefix);
     } else if (!strcasecmp(objectGetVal(c->argv[2]), "off")) {
-        disableTracking(c);
+        disableTracking(c, 1);
     } else {
         zfree(prefix);
         addReplyErrorObject(c, shared.syntaxerr);

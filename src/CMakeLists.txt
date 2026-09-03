@@ -63,8 +63,8 @@ if (BUILD_SANITIZER)
     # 'BUILD_SANITIZER' is defined in ValkeySetup module (based on user input) If defined, the variables
     # 'VALKEY_SANITAIZER_CFLAGS' and 'VALKEY_SANITAIZER_LDFLAGS' are set with the link & compile flags required
     message(STATUS "Adding sanitizer flags for target valkey-server")
-    target_compile_options(valkey-server PRIVATE ${VALKEY_SANITAIZER_CFLAGS})
-    target_link_options(valkey-server PRIVATE ${VALKEY_SANITAIZER_LDFLAGS})
+    target_compile_options(valkey-server PRIVATE ${VALKEY_SANITIZER_CFLAGS})
+    target_link_options(valkey-server PRIVATE ${VALKEY_SANITIZER_LDFLAGS})
 endif ()
 unset(BUILD_SANITIZER CACHE)
 

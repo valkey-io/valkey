@@ -1791,7 +1791,7 @@ static int ACLSelectorCheckKey(aclSelector *selector, const char *key, int keyle
     return ACL_DENIED_KEY;
 }
 
-/* Checks if the provided selector selector has access specified in flags
+/* Checks if the provided selector has access specified in flags
  * to all keys in the keyspace. For example, CMD_KEY_READ access requires either
  * '%R~*', '~*', or allkeys to be granted to the selector. Returns 1 if all
  * the access flags are satisfied with this selector or 0 otherwise.

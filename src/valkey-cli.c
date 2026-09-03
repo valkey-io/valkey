@@ -2438,7 +2438,7 @@ static int cliSendCommand(int argc, char **argv, long repeat) {
             replicaMode(0);
             config.replica_mode = 0;
             zfree(argvlen);
-            return VALKEY_ERR; /* Error = replilcaMode lost connection to primary */
+            return VALKEY_ERR; /* Error = replicaMode lost connection to primary */
         }
 
         /* Read response, possibly skipping pubsub/push messages. */

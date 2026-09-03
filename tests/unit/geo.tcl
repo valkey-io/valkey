@@ -770,7 +770,7 @@ start_server {tags {"geo"}} {
                     }
                 }
 
-                # Make sure this is a real error and not a rounidng issue.
+                # Make sure this is a real error and not a rounding issue.
                 if {[llength $diff] == $rounding_errors} {
                     set res $res2; # Error silenced
                 }

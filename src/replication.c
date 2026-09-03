@@ -3663,7 +3663,7 @@ int replicaProcessPsyncReply(connection *conn) {
 
     if (!strncmp(reply, "+CONTINUE", 9)) {
         if (server.repl_rdb_channel_state != REPL_DUAL_CHANNEL_STATE_NONE) {
-            /* During dual channel sync sesseion, primary struct is already initialized. */
+            /* During dual channel sync session, primary struct is already initialized. */
             sdsfree(reply);
             return PSYNC_CONTINUE;
         }

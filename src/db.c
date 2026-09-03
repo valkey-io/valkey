@@ -1304,7 +1304,7 @@ void scanGenericCommandWithOptions(client *c, robj *o, unsigned long long cursor
          * 4. data.pattern: the pattern string;
          * 5. data.sampled: the maxiteration limit is there in case we're
          * working on an empty dict, one with a lot of empty buckets, and
-         * for the buckets are not empty, we need to limit the spampled number
+         * for the buckets are not empty, we need to limit the sampled number
          * to prevent a long hang time caused by filtering too many keys;
          * 6. data.only_keys: to control whether values will be returned or
          * only keys are returned. */

@@ -25,9 +25,10 @@ dbe = "dbe"
 
 [default]
 extend-ignore-re = [
-    "[A-Z]{2,}",   # Acronyms (all caps)
-    "[A-Z]{2,}ed", # SELECTed, WATCHed, etc.
-    "[A-Z]{2,}s",  # SELECTs, etc.
+    "SELECTed",
+    "SELECTs",
+    "WATCHed",
+    "AIMD",
 ]
 
 [type.c]

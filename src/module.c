@@ -15183,8 +15183,11 @@ bool moduleDefragGlobals(monotime endtime) {
         return true;
     }
 
-    listNode *ln;
-    while ((ln = listIndex(modules, defrag_module_position)) != NULL) {
+    /* Resolve the resume position to a node once; walking with listIndex per step would be quadratic
+     * in the number of loaded modules.  The list can't change during a single call (defrag is
+     * single-threaded), so the node stays valid until we return. */
+    listNode *ln = listIndex(modules, defrag_module_position);
+    while (ln != NULL) {
         if (getMonotonicUs() >= endtime) return true;
 
         struct ValkeyModule *module = listNodeValue(ln);
@@ -15196,6 +15199,7 @@ bool moduleDefragGlobals(monotime endtime) {
         /* This module is done (or has no callback): advance and start the next one at cursor 0. */
         defrag_module_position++;
         defrag_module_cursor = 0;
+        ln = ln->next;
     }
     return false;
 }

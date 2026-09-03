@@ -89,6 +89,9 @@ typedef struct clusterLink {
     /* Async read framing/result */
     size_t io_complete_bytes;   /* Bytes at the start of rcvbuf framed as complete packets */
     size_t io_complete_packets; /* Number of complete packets in io_complete_bytes */
+
+    /* Read/write fairness */
+    int io_read_deferred; /* Read skipped while a write was in flight; next write dispatch yields */
 } clusterLink;
 
 /* Cluster link flags and macros. */

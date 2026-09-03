@@ -491,10 +491,8 @@ TEST_F(ClusterIOOffloadTest, DispatchDeferredWhileJobInFlight) {
 
 /* --- Buffer limit and deferred teardown ------------------------------- */
 
-/* 'cluster-link-sendbuf-limit' bounds the send queue only. A link holding a
- * large receive buffer is not a slow peer and must survive, otherwise an
- * offloaded read that got ahead of the main thread would tear down a healthy
- * inbound link. */
+/* 'cluster-link-sendbuf-limit' bounds the send queue only, so a link holding a
+ * large receive buffer must survive. */
 TEST_F(ClusterIOOffloadTest, BufferLimitIgnoresRcvbuf) {
     clusterLink *link = makeLink();
     link->send_msg_queue_mem = 8;
@@ -515,6 +513,50 @@ TEST_F(ClusterIOOffloadTest, BufferLimitCountsSendQueue) {
     releaseLinkOwnership(link);
 
     EXPECT_EQ(server.cluster->stat_cluster_links_buffer_limit_exceeded, 1ULL);
+}
+
+/* Without the fairness yield, a link whose send queue never drains re-claims the
+ * link on every iteration and inbound packets are never applied. */
+TEST_F(ClusterIOOffloadTest, BusySendQueueDoesNotStarveReads) {
+    clusterLink *link = makeLink();
+    fakeConnection *fc = (fakeConnection *)link->conn;
+    fc->buf_size = 8; /* Smaller than the message, so the queue stays backlogged. */
+    seedReadableSocket(fc);
+    enqueueFakeMsg(link);
+
+    ASSERT_EQ(trySendClusterWriteToIOThreads(link), C_OK);
+    ASSERT_EQ(link->io_write_state, CLUSTER_LINK_IO_PENDING);
+
+    ASSERT_EQ(trySendClusterReadToIOThreads(link), C_OK);
+    ASSERT_EQ(link->io_read_state, CLUSTER_LINK_IO_IDLE);
+    ASSERT_EQ(link->io_read_deferred, 1);
+
+    runInlineWorkerAndDrain(clusterWriteJob, link);
+    ASSERT_EQ(listLength(link->send_msg_queue), 1UL);
+
+    /* The write yields one turn, so the read gets the link and applies the packet. */
+    EXPECT_EQ(trySendClusterWriteToIOThreads(link), C_OK);
+    EXPECT_EQ(link->io_write_state, CLUSTER_LINK_IO_IDLE);
+    EXPECT_EQ(link->io_read_deferred, 0);
+
+    EXPECT_EQ(trySendClusterReadToIOThreads(link), C_OK);
+    EXPECT_EQ(link->io_read_state, CLUSTER_LINK_IO_PENDING);
+    runInlineWorkerAndDrain(clusterReadJob, link);
+    EXPECT_EQ(server.cluster->stats_bus_messages_received[CLUSTERMSG_TYPE_FAILOVER_AUTH_ACK], 1LL);
+}
+
+/* The yield is one-shot: with no read waiting, writes dispatch back to back. */
+TEST_F(ClusterIOOffloadTest, WriteDispatchNotYieldedWithoutDeferredRead) {
+    clusterLink *link = makeLink();
+    enqueueFakeMsg(link);
+
+    ASSERT_EQ(trySendClusterWriteToIOThreads(link), C_OK);
+    runInlineWorkerAndDrain(clusterWriteJob, link);
+
+    enqueueFakeMsg(link);
+    EXPECT_EQ(trySendClusterWriteToIOThreads(link), C_OK);
+    EXPECT_EQ(link->io_write_state, CLUSTER_LINK_IO_PENDING);
+    runInlineWorkerAndDrain(clusterWriteJob, link);
 }
 
 TEST_F(ClusterIOOffloadTest, FreeClusterLinkDefersWhenIoRefOutstanding) {

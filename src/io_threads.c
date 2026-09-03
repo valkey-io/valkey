@@ -685,7 +685,11 @@ int trySendClusterReadToIOThreads(struct clusterLink *link) {
     /* If any I/O job is already in flight for this link, return C_OK
      * so the caller does NOT fall back to synchronous I/O. */
     if (link->io_read_state != CLUSTER_LINK_IO_IDLE) return C_OK;
-    if (link->io_write_state != CLUSTER_LINK_IO_IDLE) return C_OK;
+    if (link->io_write_state != CLUSTER_LINK_IO_IDLE) {
+        link->io_read_deferred = 1;
+        return C_OK;
+    }
+    link->io_read_deferred = 0;
 
     /* Invariant: io_refs must be 0 when both states are IDLE. */
     serverAssert(link->io_refs == 0);
@@ -768,6 +772,13 @@ int trySendClusterWriteToIOThreads(struct clusterLink *link) {
     if (server.active_io_threads_num <= 1) {
         server.stat_cluster_io_main_thread_fallbacks++;
         return C_ERR;
+    }
+
+    /* Yield one dispatch to a read skipped earlier: WRITE_BARRIER fires writable
+     * first, so a never-empty send queue would re-claim the link and never read. */
+    if (link->io_read_deferred) {
+        link->io_read_deferred = 0;
+        return C_OK;
     }
 
     last_send_block = listLast(link->send_msg_queue);
@@ -968,8 +979,7 @@ void trySendPollJobToIOThreads(void) {
     server.io_poll_state = AE_IO_STATE_POLL;
     aeSetPollProtect(server.el, 1);
 
-    /* Use SPMC to minimize polling overhead. At high thread counts, use private SPSC queues for lower latency.
-     * The two queues carry independent tag namespaces, so the job must be tagged for the queue it goes on. */
+    /* Use SPMC to minimize polling overhead. At high thread counts, use private SPSC queues for lower latency. */
     if (server.active_io_threads_num <= 9) {
         if (unlikely(spmcEnqueue(&io_shared_inbox, tagJob(server.el, JOB_REQ_POLL)) == false)) {
             server.io_poll_state = AE_IO_STATE_NONE;

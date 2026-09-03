@@ -1854,6 +1854,7 @@ clusterLink *createClusterLink(clusterNode *node) {
     link->rcvbuf_alloc_at_dispatch = 0;
     link->io_complete_bytes = 0;
     link->io_complete_packets = 0;
+    link->io_read_deferred = 0;
 
     server.stat_cluster_links_memory += link->rcvbuf_alloc + link->send_msg_queue_mem;
     link->conn = NULL;

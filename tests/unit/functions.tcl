@@ -1039,7 +1039,7 @@ start_server {tags {"scripting"}} {
         r config set maxmemory 0
     } {OK} {needs:config-maxmemory}
 
-    test {FUNCTION - verify allow-omm allows running any command} {
+    test {FUNCTION - verify allow-oom allows running any command} {
         r FUNCTION load replace {#!lua name=f1
             server.register_function{
                 function_name='f1',

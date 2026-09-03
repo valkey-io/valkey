@@ -708,20 +708,20 @@ static int base_16_char_type(char c) {
     return -1;
 }
 
-/** This is an async-signal safe version of string2l to convert unsigned long to string.
+/** This is an async-signal-safe function to convert a hexadecimal string to an unsigned long long.
  * The function translates @param src until it reaches a value that is not 0-9, a-f or A-F, or @param we read slen
- * characters. On successes writes the result to @param result_output and returns 1. if the string represents an
- * overflow value, return -1. */
-int string2ul_base16_async_signal_safe(const char *src, size_t slen, unsigned long *result_output) {
+ * characters. On success, it writes the result to @param result_output and returns 1. If the string represents an
+ * overflow value, it returns -1. */
+int string2ull_base16_async_signal_safe(const char *src, size_t slen, unsigned long long *result_output) {
     static char ascii_to_dec[] = {'0', 'a' - 10, 'A' - 10};
 
     int char_type = 0;
     size_t curr_char_idx = 0;
-    unsigned long result = 0;
+    unsigned long long result = 0;
     int base = 16;
-    while ((-1 != (char_type = base_16_char_type(src[curr_char_idx]))) && curr_char_idx < slen) {
-        unsigned long curr_val = src[curr_char_idx] - ascii_to_dec[char_type];
-        if ((result > ULONG_MAX / base) || (result > (ULONG_MAX - curr_val) / base)) /* Overflow. */
+    while (curr_char_idx < slen && (-1 != (char_type = base_16_char_type(src[curr_char_idx])))) {
+        unsigned long long curr_val = src[curr_char_idx] - ascii_to_dec[char_type];
+        if ((result > ULLONG_MAX / base) || (result > (ULLONG_MAX - curr_val) / base)) /* Overflow. */
             return -1;
         result = result * base + curr_val;
         ++curr_char_idx;
@@ -1666,4 +1666,22 @@ uint64_t wangHash64(uint64_t hash) {
     hash = hash ^ (hash >> 28);
     hash = hash + (hash << 31);
     return hash;
+}
+
+/* Lock-free, per-thread Bernoulli sampler: advances a thread-local xorshift64*
+ * PRNG and returns 1 with probability `percentage`/100, using only a multiply +
+ * compare (no modulo, and no glibc rand() internal lock) so it stays cheap on
+ * hot paths that call it for every event. */
+int bernoulliSampleHit(int percentage) {
+    static __thread uint64_t s = 0;
+    if (s == 0) {
+        s = (uint64_t)(uintptr_t)&s ^ 0x9E3779B97F4A7C15ULL; /* seed from stack address; multiplier from Vigna's xorshift64* paper */
+        s |= 1;                                              /* xorshift64 needs a nonzero state */
+    }
+    s ^= s >> 12;
+    s ^= s << 25;
+    s ^= s >> 27;
+    uint32_t r = (uint32_t)((s * 0x2545F4914F6CDD1DULL) >> 32); /* multiplier from Vigna's xorshift64* paper */
+    /* r/2^32 < pct/100  <=>  r*100 < pct*2^32  (no division). */
+    return (uint64_t)r * 100 < ((uint64_t)percentage << 32);
 }

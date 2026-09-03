@@ -335,7 +335,7 @@ raxNode *raxAddChild(raxNode *n, unsigned char c, raxNode **childptr, raxNode **
     /* Move the pointers to the left of the insertion position as well. Often
      * we don't need to do anything if there was already some padding to use. In
      * that case the final destination of the pointers will be the same, however
-     * in our example there was no pre-existing padding, so we added one byte
+     * in our example there was no preexisting padding, so we added one byte
      * plus three bytes of padding. After the next memmove() things will look
      * like that:
      *
@@ -1299,7 +1299,7 @@ void raxIteratorDelChars(raxIterator *it, size_t count) {
  * lexicographically smaller children, and the current node is already assumed
  * to be the parent of the last key node, so the first operation to go back to
  * the parent will be skipped. This option is used by raxSeek() when
- * implementing seeking a non existing element with the ">" or "<" options:
+ * implementing seeking a nonexistent element with the ">" or "<" options:
  * the starting node is not a key in that particular case, so we start the scan
  * from a node that does not represent the key set.
  *

@@ -276,7 +276,7 @@ proc start_cluster {masters replicas options code {slot_allocator continuous_slo
     # Configure the starting of multiple servers. Set cluster node timeout
     # aggressively since many tests depend on ping/pong messages.
 
-    set cluster_options [list overrides [list cluster-enabled yes cluster-ping-interval 100 cluster-node-timeout 3000 cluster-databases 16 cluster-slot-stats-enabled yes]]
+    set cluster_options [list overrides [list cluster-enabled yes cluster-ping-interval 100 cluster-node-timeout 3000 cluster-databases 16 cluster-slot-stats-enabled yes latency-monitor-threshold 1]]
     set options [concat $cluster_options $options]
 
     # Cluster mode only supports a single database, so before executing the tests
@@ -290,6 +290,20 @@ proc start_cluster {masters replicas options code {slot_allocator continuous_slo
 # Test node for flag.
 proc cluster_has_flag {node flag} {
     expr {[lsearch -exact [dict get $node flags] $flag] != -1}
+}
+
+# Returns 1 only when every server instance in `srv_idxs` sees every
+# node id in `node_ids` carrying `flag` in its CLUSTER NODES output.
+proc cluster_all_see_flag {srv_idxs node_ids flag} {
+    foreach idx $srv_idxs {
+        foreach id $node_ids {
+            set node [cluster_get_node_by_id $idx $id]
+            if {![cluster_has_flag $node $flag]} {
+                return 0
+            }
+        }
+    }
+    return 1
 }
 
 # Returns the parsed "myself" node entry as a dictionary.

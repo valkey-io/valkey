@@ -67,7 +67,7 @@ start_server {tags {"expire"}} {
         list [r ttl x] [r persist x] [r ttl x] [r get x]
     } {50 1 -1 foo}
 
-    test {PERSIST returns 0 against non existing or non volatile keys} {
+    test {PERSIST returns 0 against nonexistent or non volatile keys} {
         r set x foo
         list [r persist foo] [r persist nokeyatall]
     } {0 0}
@@ -610,7 +610,7 @@ start_server {tags {"expire"}} {
             }
         }
 
-        test {expired key which is created in writeable replicas should be deleted by active expiry} {
+        test {expired key which is created in writable replicas should be deleted by active expiry} {
             $primary flushall
             $replica config set replica-read-only no
             foreach {yes_or_no} {yes no} {
@@ -791,7 +791,7 @@ start_server {tags {"expire"}} {
         assert_equal [r TTL foo] -2
     } {}
 
-    test {EXPIRE with negative expiry on a non-valitale key} {
+    test {EXPIRE with negative expiry on a non-volatile key} {
         r SET foo bar
         assert_equal [r EXPIRE foo -10 LT] 1
         assert_equal [r TTL foo] -2

@@ -8,7 +8,7 @@
         "function": "moveCommand",
         "history": [
             [
-                "10.0.0",
+                "9.2.0",
                 "added REPLACE option."
             ]
         ],
@@ -57,7 +57,7 @@
                 "name": "replace",
                 "token": "REPLACE",
                 "type": "pure-token",
-                "since": "10.0.0",
+                "since": "9.2.0",
                 "optional": true
             }
         ],

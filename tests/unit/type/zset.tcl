@@ -216,7 +216,7 @@ start_server {tags {"zset"}} {
             set err
         } {ERR*}
 
-        test "ZADD NX with non existing key - $encoding" {
+        test "ZADD NX with nonexistent key - $encoding" {
             r del ztmp
             r zadd ztmp nx 10 x 20 y 30 z
             assert {[r zcard ztmp] == 3}
@@ -346,7 +346,7 @@ start_server {tags {"zset"}} {
             r del ztmp
             r zadd ztmp 10 a 20 b 30 c
             assert_equal 3 [r zcard ztmp]
-            assert_equal 0 [r zcard zdoesntexist]
+            assert_equal 0 [r zcard znonexistent]
         }
 
         test "ZREM removes key after last element is removed - $encoding" {
@@ -1528,7 +1528,7 @@ start_server {tags {"zset"}} {
 
             r readraw 1
 
-            # ZPOP against non existing key.
+            # ZPOP against nonexistent key.
             assert_equal {*0} [r zpopmin zset{t}]
             assert_equal {*0} [r zpopmin zset{t} 1]
 
@@ -1596,7 +1596,7 @@ start_server {tags {"zset"}} {
 
             r readraw 1
 
-            # ZMPOP against non existing key.
+            # ZMPOP against nonexistent key.
             verify_nil_response $resp [r zmpop 1 zset{t} min]
             verify_nil_response $resp [r zmpop 1 zset{t} max count 1]
             verify_nil_response $resp [r zmpop 2 zset{t} zset2{t} min]
@@ -1754,6 +1754,28 @@ start_server {tags {"zset"}} {
 
         r zmscore zmscoretest x
     } {10}
+
+    set original_max [lindex [r config get zset-max-listpack-entries] 1]
+    r config set zset-max-listpack-entries 0
+    test {ZMSCORE uses hashtable batch lookup} {
+        r del zmscoretest
+        for {set i 1} {$i <= 128} {incr i} {
+            r zadd zmscoretest $i [format "m%02d" $i]
+        }
+
+        assert_encoding btree zmscoretest
+        assert_equal {1} [r zmscore zmscoretest m01]
+        assert_equal {1 {} 1 4} [r zmscore zmscoretest m01 missing m01 m04]
+
+        set members {missing}
+        set expected [list {}]
+        for {set i 1} {$i <= 19} {incr i} {
+            lappend members [format "m%02d" $i]
+            lappend expected $i
+        }
+        assert_equal $expected [r zmscore zmscoretest {*}$members]
+    }
+    r config set zset-max-listpack-entries $original_max
 
     test {ZMSCORE retrieve requires one or more members} {
         r del zmscoretest
@@ -2815,7 +2837,7 @@ start_server {tags {"zset"}} {
         r zrandmember myzset 0
     } {}
 
-    test "ZRANDMEMBER with <count> against non existing key" {
+    test "ZRANDMEMBER with <count> against nonexistent key" {
         r zrandmember nonexisting_key 100
     } {}
 
@@ -2833,7 +2855,7 @@ start_server {tags {"zset"}} {
         r zrandmember myzset 0
     } {*0}
 
-    test "ZRANDMEMBER with <count> against non existing key - emptyarray" {
+    test "ZRANDMEMBER with <count> against nonexistent key - emptyarray" {
         r zrandmember nonexisting_key 100
     } {*0}
 

@@ -93,6 +93,7 @@ tags {"external:skip"} {
             append_to_manifest "file appendonly.aof.3.incr.aof seq 3 type i\n"
         }
 
+        close [open $server_path/stdout "w"]
         start_server_aof_ex [list dir $server_path] [list wait_ready false] {
             wait_for_condition 100 50 {
                 ! [is_alive [srv pid]]
@@ -179,6 +180,7 @@ tags {"external:skip"} {
             append_to_manifest "file appendonly.aof.1.incr.aof seq 1 type i\n"
         }
 
+        close [open $server_path/stdout "w"]
         start_server_aof_ex [list dir $server_path] [list wait_ready false] {
             wait_for_condition 100 50 {
                 ! [is_alive [srv pid]]
@@ -186,7 +188,7 @@ tags {"external:skip"} {
                 fail "AOF loading didn't fail"
             }
 
-            assert_equal 2 [count_message_lines $server_path/stdout "Invalid AOF manifest file format"]
+            assert_equal 1 [count_message_lines $server_path/stdout "Invalid AOF manifest file format"]
         }
 
         clean_aof_persistence $aof_dirpath
@@ -206,6 +208,7 @@ tags {"external:skip"} {
             append_to_manifest "file appendonly.aof.1.incr.aof type i\n"
         }
 
+        close [open $server_path/stdout "w"]
         start_server_aof_ex [list dir $server_path] [list wait_ready false] {
             wait_for_condition 100 50 {
                 ! [is_alive [srv pid]]
@@ -213,7 +216,7 @@ tags {"external:skip"} {
                 fail "AOF loading didn't fail"
             }
 
-            assert_equal 3 [count_message_lines $server_path/stdout "Invalid AOF manifest file format"]
+            assert_equal 1 [count_message_lines $server_path/stdout "Invalid AOF manifest file format"]
         }
 
         clean_aof_persistence $aof_dirpath
@@ -260,6 +263,7 @@ tags {"external:skip"} {
             append_to_manifest "file appendonly.aof.1.incr.aof seq 1 type i newkey\n"
         }
 
+        close [open $server_path/stdout "w"]
         start_server_aof_ex [list dir $server_path] [list wait_ready false] {
             wait_for_condition 100 50 {
                 ! [is_alive [srv pid]]
@@ -267,7 +271,7 @@ tags {"external:skip"} {
                 fail "AOF loading didn't fail"
             }
 
-            assert_equal 4 [count_message_lines $server_path/stdout "Invalid AOF manifest file format"]
+            assert_equal 1 [count_message_lines $server_path/stdout "Invalid AOF manifest file format"]
         }
 
         clean_aof_persistence $aof_dirpath
@@ -627,7 +631,7 @@ tags {"external:skip"} {
         clean_aof_persistence $aof_dirpath
     }
 
-    test {Multi Part AOF can upgrade when when two servers share the same server dir} {
+    test {Multi Part AOF can upgrade when two servers share the same server dir} {
         create_aof $server_path $aof_old_name_old_path {
             append_to_aof [formatCommand set k1 v1]
             append_to_aof [formatCommand set k2 v2]
@@ -646,7 +650,7 @@ tags {"external:skip"} {
             start_server [list overrides [list dir $server_path appendonly yes appendfilename appendonly.aof2]] {
                 set valkey2 [valkey [srv host] [srv port] 0 $::tls]
 
-                test "Multi Part AOF can upgrade when when two servers share the same server dir (server1)" {
+                test "Multi Part AOF can upgrade when two servers share the same server dir (server1)" {
                     wait_done_loading $valkey1
                     assert_equal v1 [$valkey1 get k1]
                     assert_equal v2 [$valkey1 get k2]
@@ -677,7 +681,7 @@ tags {"external:skip"} {
                     assert {$d1 eq $d2}
                 }
 
-                test "Multi Part AOF can upgrade when when two servers share the same server dir (server2)" {
+                test "Multi Part AOF can upgrade when two servers share the same server dir (server2)" {
                     wait_done_loading $valkey2
 
                     assert_equal 0 [$valkey2 exists k1]

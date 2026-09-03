@@ -867,7 +867,7 @@ start_server {tags {"multi"}} {
             r XADD mystream * foo3 bar3
             r XGROUP CREATE mystream mygroup 0
 
-            # make sure the XCALIM (propagated by XREADGROUP) is indeed inside MULTI/EXEC
+            # make sure the XCLAIM (propagated by XREADGROUP) is indeed inside MULTI/EXEC
             r multi
             r XREADGROUP GROUP mygroup consumer1 COUNT 2 STREAMS mystream ">"
             r XREADGROUP GROUP mygroup consumer1 STREAMS mystream ">"

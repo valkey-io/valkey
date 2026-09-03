@@ -143,7 +143,7 @@ start_server {tags {"geo"}} {
         verify_geo_edge_response_generic "WRONGTYPE*"
     }
 
-    test {GEO with non existing src key} {
+    test {GEO with nonexistent src key} {
         r del src{t}
 
         verify_geo_edge_response_bylonlat {} 0
@@ -157,7 +157,7 @@ start_server {tags {"geo"}} {
         verify_geo_edge_response_bylonlat {} 0
     }
 
-    test {GEO BYMEMBER with non existing member} {
+    test {GEO BYMEMBER with nonexistent member} {
         r del src{t}
         r geoadd src{t} 13.361389 38.115556 "Palermo" 15.087269 37.502669 "Catania"
 

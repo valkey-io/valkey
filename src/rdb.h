@@ -32,6 +32,7 @@
 
 #include <stdio.h>
 #include "rio.h"
+#include "compression_stream.h"
 
 /* TBD: include only necessary headers. */
 #include "server.h"
@@ -221,6 +222,24 @@ int rdbSaveBinaryFloatValue(rio *rdb, float val);
 int rdbLoadBinaryFloatValue(rio *rdb, float *val);
 int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi);
 int rdbLoadRioWithLoadingCtxScopedRdb(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadingCtx *rdb_loading_ctx);
+bool rdbRioHasCorruptCompressedInput(rio *rdb);
+bool rdbRioHasInternalStreamReaderError(rio *rdb);
+
+typedef enum {
+    RDB_STREAM_READER_INIT_ERROR = -1,
+    RDB_STREAM_READER_INIT_OK = 0,
+    RDB_STREAM_READER_INIT_INCOMPATIBLE = 1,
+} rdbStreamReaderInitResult;
+
+/* Attaches a probing stream reader that accepts both plain and VCS-wrapped
+ * RDB input. When non-NULL, algo receives the detected codec or ALGO_NONE for
+ * plain input. The caller must detach and release a successfully initialized
+ * reader with rdbFreeStreamReader. */
+rdbStreamReaderInitResult rdbInitStreamReader(rio *rdb,
+                                              streamReader *reader,
+                                              bool skip_codec_checksum_validation,
+                                              compressionAlgo *algo);
+void rdbFreeStreamReader(rio *rdb, streamReader *reader);
 int rdbFunctionLoad(rio *rdb, int ver, functionsLibCtx *lib_ctx, int rdbflags, sds *err);
 int rdbSaveRio(int req, int rdbver, rio *rdb, int *error, int rdbflags, rdbSaveInfo *rsi);
 ssize_t rdbSaveFunctions(rio *rdb);

@@ -142,7 +142,7 @@ start_server {tags {"dump"}} {
         assert_equal {bar} [r get foo]
     }
 
-    test {DUMP of non existing key returns nil} {
+    test {DUMP of nonexistent key returns nil} {
         r dump nonexisting_key
     } {}
 

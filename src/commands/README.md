@@ -183,7 +183,7 @@ Each element in this array is an object with the following keys:
     command line. The first key is the argument after the keyword.
   * `{"unknown": null}`: Finding the keys of this command is too complicated to
     explain.
-* `"find_keys"`: How to find the remainnig keys of this key spec. It's an object
+* `"find_keys"`: How to find the remaining keys of this key spec. It's an object
   on one of these forms:
   * `{"range": {"lastkey": LAST, "step": STEP, "limit": LIMIT}}`: A range of keys.
     * LAST: If LAST is positive, it's the index of the last key relative to the

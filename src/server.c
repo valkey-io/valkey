@@ -32,6 +32,7 @@
  * SPDX-License-Identifier: BSD-3-Clause
  */
 #include "server.h"
+#include "hotkeys.h"
 #include "ordered_index.h"
 #include "connection.h"
 #include "monotonic.h"
@@ -52,6 +53,8 @@
 #include "sds.h"
 #include "module.h"
 #include "scripting_engine.h"
+#include "throttle.h"
+#include "throttle_repl.h"
 #include "util.h"
 
 #include "eval.h"
@@ -1214,6 +1217,27 @@ void getExpensiveClientsInfo(size_t *in_usage, size_t *out_usage) {
     *out_usage = o;
 }
 
+/* Detect and free zombie connections whose read handler was removed (e.g.
+ * BLOCKED_INUSE). Without a read handler the event loop won't notice the
+ * remote side closing, so these fds would leak until the fd limit is hit. */
+static bool clientsCronTcpIsClosing(client *c) {
+    if (!c->conn) return false;
+
+    /* If the fd is still watched by the event loop, it detects the close and frees the client itself. */
+    if (connHasReadHandler(c->conn) || connHasWriteHandler(c->conn)) return false;
+
+    if (!connIsClosing(c->conn)) return false;
+
+    if (server.verbosity <= LL_VERBOSE) {
+        sds client_info = catClientInfoString(sdsempty(), c, server.hide_user_data_from_log);
+        serverLog(LL_VERBOSE, "Client closed connection while blocked %s", client_info);
+        sdsfree(client_info);
+    }
+
+    freeClientAsync(c);
+    return true;
+}
+
 /* This function is called by clientsTimeProc() and is used in order to perform
  * operations on clients that are important to perform constantly. For instance
  * we use this function in order to disconnect clients after a timeout, including
@@ -1265,6 +1289,7 @@ static void clientsCron(int clients_this_cycle) {
          * The protocol is that they return non-zero if the client was
          * terminated. */
         if (clientsCronHandleTimeout(c, now)) continue;
+        if (clientsCronTcpIsClosing(c)) continue;
         if (clientsCronResizeQueryBuffer(c)) continue;
         if (clientsCronResizeOutputBuffer(c, now)) continue;
         if (clientsCronTrackExpensiveClients(c, curr_peak_mem_usage_slot)) continue;
@@ -1393,6 +1418,10 @@ void databasesCron(void) {
             }
         }
     }
+
+    /* Close any elapsed hot-key detection window, so a completed window is
+     * frozen on schedule even when there is no traffic. */
+    hotkeysCron();
 }
 
 static inline void updateCachedTimeWithUs(int update_daylight_info, const ustime_t ustime) {
@@ -1728,6 +1757,8 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
     } else {
         run_with_period(1000) replicationCron();
     }
+
+    run_with_period(100) throttleRepl_adjustThrottling();
 
     /* Run the Cluster cron. */
     if (server.cluster_enabled) {
@@ -2384,6 +2415,8 @@ void initServerConfig(void) {
     server.shutdown_flags = 0;
     server.shutdown_mstime = 0;
     server.cluster_module_flags = CLUSTER_MODULE_FLAG_NONE;
+    atomic_store_explicit(&server.cluster_config_save_status, C_OK, memory_order_relaxed);
+    atomic_store_explicit(&server.cluster_config_last_save_time, time(NULL), memory_order_relaxed);
     server.migrate_cached_sockets = dictCreate(&migrateCacheDictType);
     server.next_client_id = 1; /* Client IDs, start from 1 .*/
     server.page_size = sysconf(_SC_PAGESIZE);
@@ -2430,6 +2463,8 @@ void initServerConfig(void) {
     server.rdb_client_id = -1;
     server.loading_process_events_interval_ms = LOADING_PROCESS_EVENTS_INTERVAL_DEFAULT;
     server.loading_rio = NULL;
+    server.repl_full_sync_start_time = 0;
+    server.repl_full_sync_complete_duration_ms = -1;
 
     /* Replication partial resync backlog */
     server.repl_backlog = NULL;
@@ -3010,6 +3045,8 @@ void initServer(void) {
     server.cluster_drop_packet_filter = -1;
     server.debug_cluster_disable_random_ping = 0;
     server.debug_cluster_disable_reconnection = 0;
+    server.debug_cluster_failover_delay = -1;
+    server.debug_cluster_failover_epoch = -1;
     server.reply_buffer_peak_reset_time = REPLY_BUFFER_DEFAULT_PEAK_RESET_TIME;
     server.reply_buffer_resizing_enabled = 1;
     server.client_mem_usage_buckets = NULL;
@@ -3155,6 +3192,7 @@ void initServer(void) {
 
     commandlogInit();
     latencyMonitorInit();
+    throttle_init();
     initSharedQueryBuf();
 
     /* Initialize ACL default password if it exists */
@@ -3171,6 +3209,9 @@ void initServer(void) {
     applyWatchdogPeriod();
 
     if (server.maxmemory_clients != 0) initServerClientMemUsageBuckets();
+
+    /* Initialization hotkey */
+    hotkeysInit();
 }
 
 void initListeners(void) {
@@ -4734,6 +4775,8 @@ int processCommand(client *c) {
         return C_OK;
     }
 
+    if (throttle_throttleClientIfNeeded(c)) return C_OK;
+
     /* Exec the command */
     if (c->flag.multi && c->cmd->proc != execCommand && c->cmd->proc != discardCommand &&
         c->cmd->proc != quitCommand &&
@@ -5007,7 +5050,7 @@ int finishShutdown(void) {
         rsiptr = rdbPopulateSaveInfo(&rsi);
         /* Keep the page cache since it's likely to restart soon */
         if (rdbSave(REPLICA_REQ_NONE, server.rdb_filename, rsiptr, RDBFLAGS_KEEP_CACHE) != C_OK) {
-            /* Ooops.. error saving! The best we can do is to continue
+            /* Oops.. error saving! The best we can do is to continue
              * operating. Note that if there was a background saving process,
              * in the next cron() the server will be notified that the background
              * saving aborted, handling special stuff like replicas pending for
@@ -6630,6 +6673,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                     "master_port:%d\r\n", server.primary_port,
                     "master_link_status:%s\r\n", (server.repl_state == REPL_STATE_CONNECTED) ? "up" : "down",
                     "master_last_io_seconds_ago:%d\r\n", server.primary ? ((int)(server.unixtime - server.primary->last_interaction)) : -1,
+                    "last_successful_sync_duration_ms:%lld\r\n", server.repl_full_sync_complete_duration_ms,
                     "master_sync_in_progress:%d\r\n", server.repl_state == REPL_STATE_TRANSFER,
                     "slave_read_repl_offset:%lld\r\n", replica_read_repl_offset,
                     "slave_repl_offset:%lld\r\n", replica_repl_offset,
@@ -6850,6 +6894,21 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
         }
     }
 
+    /* Hotkeys */
+    if (all_sections || (dictFind(section_dict, "hotkeys") != NULL)) {
+        if (sections++) info = sdscat(info, "\r\n");
+        info = sdscatprintf(info, "# Hotkeys\r\n");
+        info = genHotkeysInfoString(info);
+    }
+
+    /* Throttling */
+    if (all_sections || (dictFind(section_dict, "throttling") != NULL)) {
+        if (sections++) info = sdscat(info, "\r\n");
+        info = sdscat(info, "# Throttling\r\n");
+        info = throttle_sdscatInfoMetrics(info);
+        info = throttleRepl_sdscatInfoMetrics(info);
+    }
+
     /* Get info from modules.
      * Returned when the user asked for "everything", "modules", or a specific module section.
      * We're not aware of the module section names here, and we rather avoid the search when we can.
@@ -6873,6 +6932,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "eventloop_cmd_per_cycle_max:%lld\r\n", server.el_cmd_cnt_max,
                 "io_threaded_reads_pending:%lld\r\n", server.stat_io_reads_pending,
                 "io_threaded_writes_pending:%lld\r\n", server.stat_io_writes_pending));
+        info = throttleRepl_sdscatInfoDebugMetrics(info);
     }
 
     return info;
@@ -7924,13 +7984,13 @@ int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_
         /* clang-format off */
         if ((opt[0] == 'n' || opt[0] == 'N') &&
             (opt[1] == 'x' || opt[1] == 'X') && opt[2] == '\0' &&
-            !(*flags & ARGS_SET_XX || *flags & ARGS_SET_IFEQ) &&
+            !(*flags & (ARGS_SET_CONDITIONAL & ~ARGS_SET_NX)) && /* Repeated NX allowed */
             (command_type == COMMAND_SET || command_type == COMMAND_HSET || command_type == COMMAND_MSET))
         {
             *flags |= ARGS_SET_NX;
         } else if ((opt[0] == 'x' || opt[0] == 'X') &&
                    (opt[1] == 'x' || opt[1] == 'X') && opt[2] == '\0' &&
-                   !(*flags & ARGS_SET_NX || *flags & ARGS_SET_IFEQ) &&
+                   !(*flags & (ARGS_SET_CONDITIONAL & ~ARGS_SET_XX)) && /* Repeated XX allowed */
                    (command_type == COMMAND_SET || command_type == COMMAND_HSET || command_type == COMMAND_MSET))
         {
             *flags |= ARGS_SET_XX;
@@ -7951,9 +8011,19 @@ int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_
                    (opt[2] == 'e' || opt[2] == 'E') &&
                    (opt[3] == 'q' || opt[3] == 'Q') && opt[4] == '\0' &&
                    next &&
-                   !(*flags & ARGS_SET_NX || *flags & ARGS_SET_XX || *flags & ARGS_SET_IFEQ) && (command_type == COMMAND_SET))
+                   !(*flags & ARGS_SET_CONDITIONAL) && (command_type == COMMAND_SET))
         {
             *flags |= ARGS_SET_IFEQ;
+            *compare_val = next;
+            j++;
+        } else if ((opt[0] == 'i' || opt[0] == 'I') &&
+                   (opt[1] == 'f' || opt[1] == 'F') &&
+                   (opt[2] == 'n' || opt[2] == 'N') &&
+                   (opt[3] == 'e' || opt[3] == 'E') && opt[4] == '\0' &&
+                   next &&
+                   !(*flags & ARGS_SET_CONDITIONAL) && (command_type == COMMAND_SET))
+        {
+            *flags |= ARGS_SET_IFNE;
             *compare_val = next;
             j++;
         } else if ((opt[0] == 'g' || opt[0] == 'G') &&

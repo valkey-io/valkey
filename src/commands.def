@@ -2370,7 +2370,7 @@ struct COMMAND_ARG MIGRATE_Args[] = {
 #ifndef SKIP_CMD_HISTORY_TABLE
 /* MOVE history */
 commandHistory MOVE_History[] = {
-{"10.0.0","added REPLACE option."},
+{"9.2.0","added REPLACE option."},
 };
 #endif
 
@@ -2390,7 +2390,7 @@ keySpec MOVE_Keyspecs[1] = {
 struct COMMAND_ARG MOVE_Args[] = {
 {MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("db",ARG_TYPE_INTEGER,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("replace",ARG_TYPE_PURE_TOKEN,-1,"REPLACE",NULL,"10.0.0",CMD_ARG_OPTIONAL,0,NULL)},
+{MAKE_ARG("replace",ARG_TYPE_PURE_TOKEN,-1,"REPLACE",NULL,"9.2.0",CMD_ARG_OPTIONAL,0,NULL)},
 };
 
 /********** OBJECT ENCODING ********************/
@@ -3905,7 +3905,7 @@ struct COMMAND_ARG HGETDEL_Args[] = {
 #ifndef SKIP_CMD_KEY_SPECS_TABLE
 /* HGETEX key specs */
 keySpec HGETEX_Keyspecs[1] = {
-{NULL,CMD_KEY_RW|CMD_KEY_ACCESS,KSPEC_BS_INDEX,.bs.index={1},KSPEC_FK_RANGE,.fk.range={0,1,0}}
+{NULL,CMD_KEY_RW|CMD_KEY_ACCESS|CMD_KEY_UPDATE,KSPEC_BS_INDEX,.bs.index={1},KSPEC_FK_RANGE,.fk.range={0,1,0}}
 };
 #endif
 
@@ -6877,6 +6877,23 @@ struct COMMAND_ARG ACL_DELUSER_Args[] = {
 {MAKE_ARG("username",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_MULTIPLE,0,NULL)},
 };
 
+/********** ACL DIGEST ********************/
+
+#ifndef SKIP_CMD_HISTORY_TABLE
+/* ACL DIGEST history */
+#define ACL_DIGEST_History NULL
+#endif
+
+#ifndef SKIP_CMD_TIPS_TABLE
+/* ACL DIGEST tips */
+#define ACL_DIGEST_Tips NULL
+#endif
+
+#ifndef SKIP_CMD_KEY_SPECS_TABLE
+/* ACL DIGEST key specs */
+#define ACL_DIGEST_Keyspecs NULL
+#endif
+
 /********** ACL DRYRUN ********************/
 
 #ifndef SKIP_CMD_HISTORY_TABLE
@@ -7118,6 +7135,7 @@ struct COMMAND_ARG ACL_SETUSER_Args[] = {
 struct COMMAND_STRUCT ACL_Subcommands[] = {
 {MAKE_CMD("cat","Lists the ACL categories, or the commands inside a category.","O(1) since the categories and commands are a fixed set.","6.0.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,ACL_CAT_History,0,ACL_CAT_Tips,0,aclCommand,-2,CMD_NOSCRIPT|CMD_LOADING|CMD_STALE|CMD_SENTINEL,ACL_CATEGORY_SLOW,NULL,ACL_CAT_Keyspecs,0,NULL,1),.args=ACL_CAT_Args},
 {MAKE_CMD("deluser","Deletes ACL users, and terminates their connections.","O(1) amortized time considering the typical user.","6.0.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,ACL_DELUSER_History,0,ACL_DELUSER_Tips,2,aclCommand,-3,CMD_ADMIN|CMD_NOSCRIPT|CMD_LOADING|CMD_STALE|CMD_SENTINEL,ACL_CATEGORY_ADMIN|ACL_CATEGORY_DANGEROUS|ACL_CATEGORY_SLOW,NULL,ACL_DELUSER_Keyspecs,0,NULL,1),.args=ACL_DELUSER_Args},
+{MAKE_CMD("digest","Returns a fingerprint of the ACL rules currently in effect.","O(N). Where N is the number of configured users.","9.2.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,ACL_DIGEST_History,0,ACL_DIGEST_Tips,0,aclCommand,2,CMD_ADMIN|CMD_NOSCRIPT|CMD_LOADING|CMD_STALE|CMD_SENTINEL,ACL_CATEGORY_ADMIN|ACL_CATEGORY_DANGEROUS|ACL_CATEGORY_SLOW,NULL,ACL_DIGEST_Keyspecs,0,NULL,0)},
 {MAKE_CMD("dryrun","Simulates the execution of a command by a user, without executing the command.","O(1).","7.0.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,ACL_DRYRUN_History,0,ACL_DRYRUN_Tips,0,aclCommand,-4,CMD_ADMIN|CMD_NOSCRIPT|CMD_LOADING|CMD_STALE|CMD_SENTINEL,ACL_CATEGORY_ADMIN|ACL_CATEGORY_DANGEROUS|ACL_CATEGORY_SLOW,NULL,ACL_DRYRUN_Keyspecs,0,NULL,3),.args=ACL_DRYRUN_Args},
 {MAKE_CMD("genpass","Generates a pseudorandom, secure password that can be used to identify ACL users.","O(1)","6.0.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,ACL_GENPASS_History,0,ACL_GENPASS_Tips,0,aclCommand,-2,CMD_NOSCRIPT|CMD_LOADING|CMD_STALE|CMD_SENTINEL,ACL_CATEGORY_SLOW,NULL,ACL_GENPASS_Keyspecs,0,NULL,1),.args=ACL_GENPASS_Args},
 {MAKE_CMD("getuser","Lists the ACL rules of a user.","O(N). Where N is the number of password, command and pattern rules that the user has.","6.0.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,ACL_GETUSER_History,3,ACL_GETUSER_Tips,0,aclCommand,3,CMD_ADMIN|CMD_NOSCRIPT|CMD_LOADING|CMD_STALE|CMD_SENTINEL,ACL_CATEGORY_ADMIN|ACL_CATEGORY_DANGEROUS|ACL_CATEGORY_SLOW,NULL,ACL_GETUSER_Keyspecs,0,NULL,1),.args=ACL_GETUSER_Args},
@@ -7670,7 +7688,7 @@ struct COMMAND_ARG CONFIG_SET_Args[] = {
 struct COMMAND_STRUCT CONFIG_Subcommands[] = {
 {MAKE_CMD("get","Returns the effective values of configuration parameters.","O(N) when N is the number of configuration parameters provided","2.0.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,CONFIG_GET_History,1,CONFIG_GET_Tips,0,configGetCommand,-3,CMD_ADMIN|CMD_NOSCRIPT|CMD_LOADING|CMD_STALE,ACL_CATEGORY_ADMIN|ACL_CATEGORY_DANGEROUS|ACL_CATEGORY_SLOW,NULL,CONFIG_GET_Keyspecs,0,NULL,1),.args=CONFIG_GET_Args},
 {MAKE_CMD("help","Returns helpful text about the different subcommands.","O(1)","5.0.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,CONFIG_HELP_History,0,CONFIG_HELP_Tips,0,configHelpCommand,2,CMD_LOADING|CMD_STALE,ACL_CATEGORY_SLOW,NULL,CONFIG_HELP_Keyspecs,0,NULL,0)},
-{MAKE_CMD("info","Returns information about configuration parameters matching the given patterns.","O(N) when N is the number of configuration parameters provided","10.0.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,CONFIG_INFO_History,0,CONFIG_INFO_Tips,0,configInfoCommand,-3,CMD_ADMIN|CMD_NOSCRIPT|CMD_LOADING|CMD_STALE,ACL_CATEGORY_ADMIN|ACL_CATEGORY_DANGEROUS|ACL_CATEGORY_SLOW,NULL,CONFIG_INFO_Keyspecs,0,NULL,1),.args=CONFIG_INFO_Args},
+{MAKE_CMD("info","Returns information about configuration parameters matching the given patterns.","O(N) when N is the number of configuration parameters provided","9.2.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,CONFIG_INFO_History,0,CONFIG_INFO_Tips,0,configInfoCommand,-3,CMD_ADMIN|CMD_NOSCRIPT|CMD_LOADING|CMD_STALE,ACL_CATEGORY_ADMIN|ACL_CATEGORY_DANGEROUS|ACL_CATEGORY_SLOW,NULL,CONFIG_INFO_Keyspecs,0,NULL,1),.args=CONFIG_INFO_Args},
 {MAKE_CMD("resetstat","Resets the server's statistics.","O(1)","2.0.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,CONFIG_RESETSTAT_History,0,CONFIG_RESETSTAT_Tips,2,configResetStatCommand,2,CMD_ADMIN|CMD_NOSCRIPT|CMD_LOADING|CMD_STALE,ACL_CATEGORY_ADMIN|ACL_CATEGORY_DANGEROUS|ACL_CATEGORY_SLOW,NULL,CONFIG_RESETSTAT_Keyspecs,0,NULL,0)},
 {MAKE_CMD("rewrite","Persists the effective configuration to file.","O(1)","2.8.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,CONFIG_REWRITE_History,0,CONFIG_REWRITE_Tips,2,configRewriteCommand,2,CMD_ADMIN|CMD_NOSCRIPT|CMD_LOADING|CMD_STALE,ACL_CATEGORY_ADMIN|ACL_CATEGORY_DANGEROUS|ACL_CATEGORY_SLOW,NULL,CONFIG_REWRITE_Keyspecs,0,NULL,0)},
 {MAKE_CMD("set","Sets configuration parameters in-flight.","O(N) when N is the number of configuration parameters provided","2.0.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,CONFIG_SET_History,1,CONFIG_SET_Tips,2,configSetCommand,-4,CMD_ADMIN|CMD_NOSCRIPT|CMD_LOADING|CMD_STALE,ACL_CATEGORY_ADMIN|ACL_CATEGORY_DANGEROUS|ACL_CATEGORY_SLOW,NULL,CONFIG_SET_Keyspecs,0,NULL,1),.args=CONFIG_SET_Args},
@@ -7829,6 +7847,82 @@ struct COMMAND_ARG FLUSHDB_flush_type_Subargs[] = {
 struct COMMAND_ARG FLUSHDB_Args[] = {
 {MAKE_ARG("flush-type",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_OPTIONAL,2,NULL),.subargs=FLUSHDB_flush_type_Subargs},
 };
+
+/********** HOTKEYS GET ********************/
+
+#ifndef SKIP_CMD_HISTORY_TABLE
+/* HOTKEYS GET history */
+#define HOTKEYS_GET_History NULL
+#endif
+
+#ifndef SKIP_CMD_TIPS_TABLE
+/* HOTKEYS GET tips */
+#define HOTKEYS_GET_Tips NULL
+#endif
+
+#ifndef SKIP_CMD_KEY_SPECS_TABLE
+/* HOTKEYS GET key specs */
+#define HOTKEYS_GET_Keyspecs NULL
+#endif
+
+/********** HOTKEYS HELP ********************/
+
+#ifndef SKIP_CMD_HISTORY_TABLE
+/* HOTKEYS HELP history */
+#define HOTKEYS_HELP_History NULL
+#endif
+
+#ifndef SKIP_CMD_TIPS_TABLE
+/* HOTKEYS HELP tips */
+#define HOTKEYS_HELP_Tips NULL
+#endif
+
+#ifndef SKIP_CMD_KEY_SPECS_TABLE
+/* HOTKEYS HELP key specs */
+#define HOTKEYS_HELP_Keyspecs NULL
+#endif
+
+/********** HOTKEYS RESET ********************/
+
+#ifndef SKIP_CMD_HISTORY_TABLE
+/* HOTKEYS RESET history */
+#define HOTKEYS_RESET_History NULL
+#endif
+
+#ifndef SKIP_CMD_TIPS_TABLE
+/* HOTKEYS RESET tips */
+#define HOTKEYS_RESET_Tips NULL
+#endif
+
+#ifndef SKIP_CMD_KEY_SPECS_TABLE
+/* HOTKEYS RESET key specs */
+#define HOTKEYS_RESET_Keyspecs NULL
+#endif
+
+/* HOTKEYS command table */
+struct COMMAND_STRUCT HOTKEYS_Subcommands[] = {
+{MAKE_CMD("get","Get the hottest keys from the last completed window, ordered by estimated QPS descending","O(N) where N is the number of hot keys in the history","9.2.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,HOTKEYS_GET_History,0,HOTKEYS_GET_Tips,0,hotkeysGetCommand,2,CMD_ADMIN|CMD_LOADING|CMD_STALE,ACL_CATEGORY_ADMIN|ACL_CATEGORY_DANGEROUS|ACL_CATEGORY_SLOW,NULL,HOTKEYS_GET_Keyspecs,0,NULL,0)},
+{MAKE_CMD("help","Shows helpful text about the different subcommands","O(1)","9.2.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,HOTKEYS_HELP_History,0,HOTKEYS_HELP_Tips,0,hotkeysHelpCommand,2,CMD_LOADING|CMD_STALE,ACL_CATEGORY_SLOW,NULL,HOTKEYS_HELP_Keyspecs,0,NULL,0)},
+{MAKE_CMD("reset","Reset all hot key statistics and history","O(N) where N is the number of keys to remove from history and statistics","9.2.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,HOTKEYS_RESET_History,0,HOTKEYS_RESET_Tips,0,hotkeysResetCommand,2,CMD_ADMIN|CMD_LOADING|CMD_STALE,ACL_CATEGORY_ADMIN|ACL_CATEGORY_DANGEROUS|ACL_CATEGORY_SLOW,NULL,HOTKEYS_RESET_Keyspecs,0,NULL,0)},
+{0}
+};
+
+/********** HOTKEYS ********************/
+
+#ifndef SKIP_CMD_HISTORY_TABLE
+/* HOTKEYS history */
+#define HOTKEYS_History NULL
+#endif
+
+#ifndef SKIP_CMD_TIPS_TABLE
+/* HOTKEYS tips */
+#define HOTKEYS_Tips NULL
+#endif
+
+#ifndef SKIP_CMD_KEY_SPECS_TABLE
+/* HOTKEYS key specs */
+#define HOTKEYS_Keyspecs NULL
+#endif
 
 /********** INFO ********************/
 
@@ -11626,6 +11720,7 @@ commandHistory SET_History[] = {
 {"6.2.0","Added the `GET`, `EXAT` and `PXAT` option."},
 {"7.0.0","Allowed the `NX` and `GET` options to be used together."},
 {"8.1.0","Added the `IFEQ` option."},
+{"9.2.0","Added the `IFNE` option."},
 };
 #endif
 
@@ -11646,6 +11741,7 @@ struct COMMAND_ARG SET_condition_Subargs[] = {
 {MAKE_ARG("nx",ARG_TYPE_PURE_TOKEN,-1,"NX",NULL,"2.6.12",CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("xx",ARG_TYPE_PURE_TOKEN,-1,"XX",NULL,"2.6.12",CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("comparison-value",ARG_TYPE_STRING,-1,"IFEQ","Sets the key's value only if the current value matches the specified comparison value.","8.1.0",CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("comparison-not-equal",ARG_TYPE_STRING,-1,"IFNE","Sets the key's value only if the current value does not match the specified comparison value.","9.2.0",CMD_ARG_NONE,0,NULL)},
 };
 
 /* SET expiration argument table */
@@ -11661,7 +11757,7 @@ struct COMMAND_ARG SET_expiration_Subargs[] = {
 struct COMMAND_ARG SET_Args[] = {
 {MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("value",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("condition",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_OPTIONAL,3,NULL),.subargs=SET_condition_Subargs},
+{MAKE_ARG("condition",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_OPTIONAL,4,NULL),.subargs=SET_condition_Subargs},
 {MAKE_ARG("get",ARG_TYPE_PURE_TOKEN,-1,"GET",NULL,"6.2.0",CMD_ARG_OPTIONAL,0,NULL)},
 {MAKE_ARG("expiration",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_OPTIONAL,5,NULL),.subargs=SET_expiration_Subargs},
 };
@@ -12042,6 +12138,7 @@ struct COMMAND_STRUCT serverCommandTable[] = {
 {MAKE_CMD("failover","Starts a coordinated failover from a server to one of its replicas.","O(1)","6.2.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,FAILOVER_History,0,FAILOVER_Tips,0,failoverCommand,-1,CMD_ADMIN|CMD_NOSCRIPT|CMD_STALE,ACL_CATEGORY_ADMIN|ACL_CATEGORY_DANGEROUS|ACL_CATEGORY_SLOW,NULL,FAILOVER_Keyspecs,0,NULL,3),.args=FAILOVER_Args},
 {MAKE_CMD("flushall","Removes all keys from all databases.","O(N) where N is the total number of keys in all databases","1.0.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,FLUSHALL_History,2,FLUSHALL_Tips,2,flushallCommand,-1,CMD_WRITE|CMD_ALL_DBS,ACL_CATEGORY_DANGEROUS|ACL_CATEGORY_KEYSPACE|ACL_CATEGORY_SLOW|ACL_CATEGORY_WRITE,NULL,FLUSHALL_Keyspecs,0,NULL,1),.args=FLUSHALL_Args},
 {MAKE_CMD("flushdb","Removes all keys from the current database.","O(N) where N is the number of keys in the selected database","1.0.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,FLUSHDB_History,2,FLUSHDB_Tips,2,flushdbCommand,-1,CMD_WRITE,ACL_CATEGORY_DANGEROUS|ACL_CATEGORY_KEYSPACE|ACL_CATEGORY_SLOW|ACL_CATEGORY_WRITE,NULL,FLUSHDB_Keyspecs,0,NULL,1),.args=FLUSHDB_Args},
+{MAKE_CMD("hotkeys","A container for hot key commands","Depends on subcommand.","9.2.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,HOTKEYS_History,0,HOTKEYS_Tips,0,NULL,-2,0,ACL_CATEGORY_SLOW,NULL,HOTKEYS_Keyspecs,0,NULL,0),.subcommands=HOTKEYS_Subcommands},
 {MAKE_CMD("info","Returns information and statistics about the server.","O(1)","1.0.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,INFO_History,1,INFO_Tips,3,infoCommand,-1,CMD_LOADING|CMD_STALE|CMD_SENTINEL,ACL_CATEGORY_DANGEROUS|ACL_CATEGORY_SLOW,NULL,INFO_Keyspecs,0,NULL,1),.args=INFO_Args},
 {MAKE_CMD("lastsave","Returns the Unix timestamp of the last successful save to disk.","O(1)","1.0.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,LASTSAVE_History,0,LASTSAVE_Tips,1,lastsaveCommand,1,CMD_LOADING|CMD_STALE|CMD_FAST,ACL_CATEGORY_ADMIN|ACL_CATEGORY_DANGEROUS|ACL_CATEGORY_FAST,NULL,LASTSAVE_Keyspecs,0,NULL,0)},
 {MAKE_CMD("latency","A container for latency diagnostics commands.","Depends on subcommand.","2.8.13",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,LATENCY_History,0,LATENCY_Tips,0,NULL,-2,0,ACL_CATEGORY_SLOW,NULL,LATENCY_Keyspecs,0,NULL,0),.subcommands=LATENCY_Subcommands},
@@ -12150,7 +12247,7 @@ struct COMMAND_STRUCT serverCommandTable[] = {
 {MAKE_CMD("msetex","Atomically creates or modifies the string values of one or more keys, and optionally set their expiration.","O(N) where N is the number of keys to set.","9.1.0",CMD_DOC_NONE,NULL,NULL,"string",COMMAND_GROUP_STRING,MSETEX_History,0,MSETEX_Tips,2,msetexCommand,-4,CMD_WRITE|CMD_DENYOOM,ACL_CATEGORY_STRING|ACL_CATEGORY_WRITE|ACL_CATEGORY_SLOW,NULL,MSETEX_Keyspecs,1,NULL,4),.args=MSETEX_Args},
 {MAKE_CMD("msetnx","Atomically modifies the string values of one or more keys only when all keys don't exist.","O(N) where N is the number of keys to set.","1.0.1",CMD_DOC_NONE,NULL,NULL,"string",COMMAND_GROUP_STRING,MSETNX_History,0,MSETNX_Tips,0,msetnxCommand,-3,CMD_WRITE|CMD_DENYOOM,ACL_CATEGORY_SLOW|ACL_CATEGORY_STRING|ACL_CATEGORY_WRITE,NULL,MSETNX_Keyspecs,1,NULL,1),.args=MSETNX_Args},
 {MAKE_CMD("psetex","Sets both string value and expiration time in milliseconds of a key. The key is created if it doesn't exist.","O(1)","2.6.0",CMD_DOC_NONE,NULL,NULL,"string",COMMAND_GROUP_STRING,PSETEX_History,0,PSETEX_Tips,0,psetexCommand,4,CMD_WRITE|CMD_DENYOOM,ACL_CATEGORY_SLOW|ACL_CATEGORY_STRING|ACL_CATEGORY_WRITE,NULL,PSETEX_Keyspecs,1,NULL,3),.args=PSETEX_Args},
-{MAKE_CMD("set","Sets the string value of a key, ignoring its type. The key is created if it doesn't exist.","O(1)","1.0.0",CMD_DOC_NONE,NULL,NULL,"string",COMMAND_GROUP_STRING,SET_History,5,SET_Tips,0,setCommand,-3,CMD_WRITE|CMD_DENYOOM,ACL_CATEGORY_SLOW|ACL_CATEGORY_STRING|ACL_CATEGORY_WRITE,NULL,SET_Keyspecs,1,setGetKeys,5),.args=SET_Args},
+{MAKE_CMD("set","Sets the string value of a key, ignoring its type. The key is created if it doesn't exist.","O(1)","1.0.0",CMD_DOC_NONE,NULL,NULL,"string",COMMAND_GROUP_STRING,SET_History,6,SET_Tips,0,setCommand,-3,CMD_WRITE|CMD_DENYOOM,ACL_CATEGORY_SLOW|ACL_CATEGORY_STRING|ACL_CATEGORY_WRITE,NULL,SET_Keyspecs,1,setGetKeys,5),.args=SET_Args},
 {MAKE_CMD("setex","Sets the string value and expiration time of a key. Creates the key if it doesn't exist.","O(1)","2.0.0",CMD_DOC_NONE,NULL,NULL,"string",COMMAND_GROUP_STRING,SETEX_History,0,SETEX_Tips,0,setexCommand,4,CMD_WRITE|CMD_DENYOOM,ACL_CATEGORY_SLOW|ACL_CATEGORY_STRING|ACL_CATEGORY_WRITE,NULL,SETEX_Keyspecs,1,NULL,3),.args=SETEX_Args},
 {MAKE_CMD("setnx","Sets the string value of a key only when the key doesn't exist.","O(1)","1.0.0",CMD_DOC_NONE,NULL,NULL,"string",COMMAND_GROUP_STRING,SETNX_History,0,SETNX_Tips,0,setnxCommand,3,CMD_WRITE|CMD_DENYOOM|CMD_FAST,ACL_CATEGORY_FAST|ACL_CATEGORY_STRING|ACL_CATEGORY_WRITE,NULL,SETNX_Keyspecs,1,NULL,2),.args=SETNX_Args},
 {MAKE_CMD("setrange","Overwrites a part of a string value with another by an offset. Creates the key if it doesn't exist.","O(1), not counting the time taken to copy the new string in place. Usually, this string is very small so the amortized complexity is O(1). Otherwise, complexity is O(M) with M being the length of the value argument.","2.2.0",CMD_DOC_NONE,NULL,NULL,"string",COMMAND_GROUP_STRING,SETRANGE_History,0,SETRANGE_Tips,0,setrangeCommand,4,CMD_WRITE|CMD_DENYOOM,ACL_CATEGORY_SLOW|ACL_CATEGORY_STRING|ACL_CATEGORY_WRITE,NULL,SETRANGE_Keyspecs,1,NULL,3),.args=SETRANGE_Args},
@@ -12158,7 +12255,7 @@ struct COMMAND_STRUCT serverCommandTable[] = {
 {MAKE_CMD("substr","Returns a substring from a string value.","O(N) where N is the length of the returned string. The complexity is ultimately determined by the returned length, but because creating a substring from an existing string is very cheap, it can be considered O(1) for small strings.","1.0.0",CMD_DOC_NONE,NULL,NULL,"string",COMMAND_GROUP_STRING,SUBSTR_History,0,SUBSTR_Tips,0,getrangeCommand,4,CMD_READONLY,ACL_CATEGORY_READ|ACL_CATEGORY_SLOW|ACL_CATEGORY_STRING,NULL,SUBSTR_Keyspecs,1,NULL,3),.args=SUBSTR_Args},
 /* transactions */
 {MAKE_CMD("discard","Discards a transaction.","O(N), when N is the number of queued commands","2.0.0",CMD_DOC_NONE,NULL,NULL,"transactions",COMMAND_GROUP_TRANSACTIONS,DISCARD_History,0,DISCARD_Tips,0,discardCommand,1,CMD_NOSCRIPT|CMD_LOADING|CMD_STALE|CMD_FAST|CMD_ALLOW_BUSY,ACL_CATEGORY_FAST|ACL_CATEGORY_TRANSACTION,NULL,DISCARD_Keyspecs,0,NULL,0)},
-{MAKE_CMD("exec","Executes all commands in a transaction.","Depends on commands in the transaction","1.2.0",CMD_DOC_NONE,NULL,NULL,"transactions",COMMAND_GROUP_TRANSACTIONS,EXEC_History,0,EXEC_Tips,0,execCommand,1,CMD_NOSCRIPT|CMD_LOADING|CMD_STALE|CMD_SKIP_COMMANDLOG,ACL_CATEGORY_SLOW|ACL_CATEGORY_TRANSACTION,NULL,EXEC_Keyspecs,0,NULL,0)},
+{MAKE_CMD("exec","Executes all commands in a transaction.","Depends on commands in the transaction","1.2.0",CMD_DOC_NONE,NULL,NULL,"transactions",COMMAND_GROUP_TRANSACTIONS,EXEC_History,0,EXEC_Tips,0,execCommand,1,CMD_NOSCRIPT|CMD_LOADING|CMD_STALE,ACL_CATEGORY_SLOW|ACL_CATEGORY_TRANSACTION,NULL,EXEC_Keyspecs,0,NULL,0)},
 {MAKE_CMD("multi","Starts a transaction.","O(1)","1.2.0",CMD_DOC_NONE,NULL,NULL,"transactions",COMMAND_GROUP_TRANSACTIONS,MULTI_History,0,MULTI_Tips,0,multiCommand,1,CMD_NOSCRIPT|CMD_LOADING|CMD_STALE|CMD_FAST|CMD_NO_MULTI|CMD_ALLOW_BUSY,ACL_CATEGORY_FAST|ACL_CATEGORY_TRANSACTION,NULL,MULTI_Keyspecs,0,NULL,0)},
 {MAKE_CMD("unwatch","Forgets about watched keys of a transaction.","O(1)","2.2.0",CMD_DOC_NONE,NULL,NULL,"transactions",COMMAND_GROUP_TRANSACTIONS,UNWATCH_History,0,UNWATCH_Tips,0,unwatchCommand,1,CMD_NOSCRIPT|CMD_LOADING|CMD_STALE|CMD_FAST|CMD_ALLOW_BUSY,ACL_CATEGORY_FAST|ACL_CATEGORY_TRANSACTION,NULL,UNWATCH_Keyspecs,0,NULL,0)},
 {MAKE_CMD("watch","Monitors changes to keys to determine the execution of a transaction.","O(1) for every key.","2.2.0",CMD_DOC_NONE,NULL,NULL,"transactions",COMMAND_GROUP_TRANSACTIONS,WATCH_History,0,WATCH_Tips,0,watchCommand,-2,CMD_NOSCRIPT|CMD_LOADING|CMD_STALE|CMD_FAST|CMD_NO_MULTI|CMD_ALLOW_BUSY,ACL_CATEGORY_FAST|ACL_CATEGORY_TRANSACTION,NULL,WATCH_Keyspecs,1,NULL,1),.args=WATCH_Args},

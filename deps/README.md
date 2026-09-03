@@ -5,6 +5,7 @@ should be provided by the operating system.
 * **libvalkey** is the official C client library for Valkey. It is used by valkey-cli, valkey-benchmark and Valkey Sentinel. It is managed in a separate project and updated as needed.
 * **linenoise** is a readline replacement. It is developed by the same authors of Valkey but is managed as a separated project and updated as needed.
 * **lua** is Lua 5.1 with minor changes for security and additional libraries.
+* **LZ4** is the v1.10.0 streaming compression library.
 * **hdr_histogram** Used for per-command latency tracking histograms.
 * **ffc.h** is a C99 port of the fast_float library, used as a replacement for strtod to convert strings to floats efficiently.
 * **gtest-parallel** is a script for running googletest tests in parallel.
@@ -61,6 +62,26 @@ following:
 
 1. Remove the linenoise directory.
 2. Substitute it with the new linenoise source tree.
+
+LZ4
+---
+
+LZ4 is imported from the upstream release archive. The vendored version is
+defined by the `LZ4_VERSION_MAJOR`, `LZ4_VERSION_MINOR`, and
+`LZ4_VERSION_RELEASE` macros in `lz4.h`. `Makefile` and `CMakeLists.txt` are
+maintained locally for the Valkey build, and xxHash symbols are namespaced to
+avoid conflicts with modules loaded by Valkey.
+
+To upgrade LZ4:
+
+1. Download the new release archive from https://github.com/lz4/lz4/releases.
+2. Replace `lz4.c`, `lz4.h`, `lz4hc.c`, `lz4hc.h`, `lz4frame.c`,
+   `lz4frame.h`, `xxhash.c`, `xxhash.h`, and `LICENSE` with the versions from
+   the release's `lib` directory.
+3. Preserve the local `Makefile` and `CMakeLists.txt`, including the
+   `XXH_NAMESPACE` definition.
+4. Verify that the `LZ4_VERSION_*` macros in `lz4.h` match the imported release
+   and update the version in the dependency summary above.
 
 Lua
 ---

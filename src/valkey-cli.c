@@ -3775,7 +3775,7 @@ clusterManagerCommandDef clusterManagerCommands[] = {
     {"add-node", clusterManagerCommandAddNode, 2, "new_host:new_port existing_host:existing_port",
      "replica,primaries-id <arg>"},
     {"del-node", clusterManagerCommandDeleteNode, 2, "host:port node_id", NULL},
-    {"call", clusterManagerCommandCall, -2, "host:port command arg arg .. arg", "only-primaries,only-replicas"},
+    {"call", clusterManagerCommandCall, -2, "host:port command arg arg ... arg", "only-primaries,only-replicas"},
     {"set-timeout", clusterManagerCommandSetTimeout, 2, "host:port milliseconds", NULL},
     {"import", clusterManagerCommandImport, 1, "host:port",
      "from <arg>,from-user <arg>,from-pass <arg>,from-askpass,copy,replace"},
@@ -8143,7 +8143,7 @@ static int clusterManagerCommandSetTimeout(int argc, char **argv) {
             err = "";
         else
             need_free = 1;
-        clusterManagerLogErr("ERR setting node-timeout for %s:%d: %s\n", n->ip, n->port, err);
+        clusterManagerLogErr("ERR setting cluster-node-timeout for %s:%d: %s\n", n->ip, n->port, err);
         if (need_free) zfree(err);
         err_count++;
     }

@@ -490,7 +490,7 @@ unsigned long lpLength(unsigned char *lp) {
  * If the function is called against a badly encoded ziplist, so that there
  * is no valid way to parse it, the function returns like if there was an
  * integer encoded with value 12345678900000000 + <unrecognized byte>, this may
- * be an hint to understand that something is wrong. To crash in this case is
+ * be a hint to understand that something is wrong. To crash in this case is
  * not sensible because of the different requirements of the application using
  * this lib.
  *

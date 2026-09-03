@@ -85,7 +85,7 @@ int ull2string(char *s, size_t len, unsigned long long value);
 int string2ll(const char *s, size_t slen, long long *value);
 int string2ull(const char *s, size_t slen, unsigned long long *value);
 int string2l(const char *s, size_t slen, long *value);
-int string2ul_base16_async_signal_safe(const char *src, size_t slen, unsigned long *result_output);
+int string2ull_base16_async_signal_safe(const char *src, size_t slen, unsigned long long *result_output);
 int string2ld(const char *s, size_t slen, long double *dp);
 int string2d(const char *s, size_t slen, double *dp);
 int trimDoubleString(char *buf, size_t len);
@@ -124,5 +124,6 @@ mstime_t mstime(void);
 void writePointerWithPadding(unsigned char *buf, const void *ptr);
 sds escapeJsonString(sds s, const char *p, size_t len);
 uint64_t wangHash64(uint64_t hash);
+int bernoulliSampleHit(int percentage);
 
 #endif

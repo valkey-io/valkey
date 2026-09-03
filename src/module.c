@@ -763,7 +763,7 @@ void moduleReleaseTempClient(client *c) {
 
 /* Create an empty key of the specified type. `key` must point to a key object
  * opened for writing where the `.value` member is set to NULL because the
- * key was found to be non existing.
+ * key was found to be nonexistent.
  *
  * On success VALKEYMODULE_OK is returned and the key is populated with
  * the value of the specified type. The function fails and returns
@@ -776,7 +776,7 @@ void moduleReleaseTempClient(client *c) {
 int moduleCreateEmptyKey(ValkeyModuleKey *key, int type) {
     robj *obj;
 
-    /* The key must be open for writing and non existing to proceed. */
+    /* The key must be open for writing and nonexistent to proceed. */
     if (!(key->mode & VALKEYMODULE_WRITE) || key->value) return VALKEYMODULE_ERR;
 
     switch (type) {
@@ -6949,6 +6949,9 @@ static void moduleCallCommandHelper(ValkeyModuleCtx *ctx, client *c, robj **argv
         if (!(flags & VALKEYMODULE_CALL_ARGV_NO_AOF)) call_flags |= CMD_CALL_PROPAGATE_AOF;
         if (!(flags & VALKEYMODULE_CALL_ARGV_NO_REPLICAS)) call_flags |= CMD_CALL_PROPAGATE_REPL;
     }
+    /* Mirror processInputBuffer: set pending_command so that if the command
+     * blocks on keys, unblockClientOnKey will reprocess it on unblock. */
+    c->flag.pending_command = 1;
     call(c, call_flags);
 
     /* Propagate database changes from the temporary client back to the context client
@@ -8441,6 +8444,10 @@ ValkeyModuleBlockedClient *moduleBlockClient(ValkeyModuleCtx *ctx,
             c->bstate->timeout = timeout;
             blockClient(c, BLOCKED_MODULE);
         }
+        /* Module handles its own reply on unblock, so clear pending_command
+         * to prevent re-execution. Auth clients are the exception — they
+         * need re-execution after auth completes. */
+        if (!auth_reply_callback) c->flag.pending_command = 0;
         /* Defer response until after being unblocked for a context originated from
          * keyspace notification events */
         if (is_keyspace_notification) {
@@ -8771,7 +8778,7 @@ ValkeyModuleBlockedClient *VM_BlockClientOnAuth(ValkeyModuleCtx *ctx,
     return bc;
 }
 
-/* Get the private data that was previusely set on a blocked client */
+/* Get the private data that was previously set on a blocked client */
 void *VM_BlockClientGetPrivateData(ValkeyModuleBlockedClient *blocked_client) {
     return blocked_client->privdata;
 }
@@ -9612,8 +9619,10 @@ typedef struct moduleClusterNodeInfo {
 } moduleClusterNodeInfo;
 
 /* We have an array of message types: each bucket is a linked list of
- * configured receivers. */
-static moduleClusterReceiver *clusterReceivers[UINT8_MAX];
+ * configured receivers. The array covers the full uint8_t range, so
+ * every valid cluster message type (0..255) has a bucket. */
+#define NUM_CLUSTER_MESSAGE_TYPES (UINT8_MAX + 1)
+static moduleClusterReceiver *clusterReceivers[NUM_CLUSTER_MESSAGE_TYPES];
 
 /* Dispatch the message to the right module receiver. */
 void moduleCallClusterReceivers(const char *sender_id,
@@ -9644,7 +9653,10 @@ void moduleCallClusterReceivers(const char *sender_id,
  * will be invoked with details, including the 40-byte node ID of the sender.
  *
  * In Valkey 8.1 and later, the node ID is null-terminated. Prior to 8.1, it was
- * not null-terminated */
+ * not null-terminated.
+ *
+ * Note: Old versions of Valkey could not handle type 255. This was fixed in
+ * 9.1.2, 9.0.6, 8.1.10, 8.0.11 and 7.2.15. */
 void VM_RegisterClusterMessageReceiver(ValkeyModuleCtx *ctx,
                                        uint8_t type,
                                        ValkeyModuleClusterMessageReceiver callback) {
@@ -11900,7 +11912,7 @@ size_t VM_MallocSizeDict(ValkeyModuleDict *dict) {
     return size;
 }
 
-/* Return the a number between 0 to 1 indicating the amount of memory
+/* Return a number between 0 to 1 indicating the amount of memory
  * currently used, relative to the server "maxmemory" configuration.
  *
  * * 0 - No memory limit configured.
@@ -13099,7 +13111,7 @@ void moduleInitModulesSystem(void) {
 
     /* Create a pipe for module threads to be able to wake up the server main thread.
      * Make the pipe non blocking. This is just a best effort aware mechanism
-     * and we do not want to block not in the read nor in the write half.
+     * and we want to avoid blocking in both the read and write halves.
      * Enable close-on-exec flag on pipes in case of the fork-exec system calls in
      * sentinels or servers. */
     if (anetPipe(server.module_pipe, O_CLOEXEC | O_NONBLOCK, O_CLOEXEC | O_NONBLOCK) == -1) {
@@ -13330,6 +13342,30 @@ void moduleUnregisterCommands(struct ValkeyModule *module) {
     invalidateCommandCache();
 }
 
+/* Remove every cluster message receiver that belongs to the given module. */
+static void moduleUnregisterClusterReceivers(ValkeyModule *module) {
+    if (!server.cluster_enabled) return;
+
+    for (int type = 0; type < NUM_CLUSTER_MESSAGE_TYPES; type++) {
+        moduleClusterReceiver *r = clusterReceivers[type], *prev = NULL;
+        while (r) {
+            if (r->module == module) {
+                /* Unlink the receiver node from the linked list. A module
+                 * registers at most one receiver per type, so we can stop
+                 * scanning this type as soon as we removed it. */
+                if (prev)
+                    prev->next = r->next;
+                else
+                    clusterReceivers[type] = r->next;
+                zfree(r);
+                break;
+            }
+            prev = r;
+            r = r->next;
+        }
+    }
+}
+
 /* We parse argv to add sds "NAME VALUE" pairs to the server.module_configs_queue list of configs.
  * We also increment the module_argv pointer to just after ARGS if there are args, otherwise
  * we set it to NULL */
@@ -13382,6 +13418,7 @@ void moduleUnregisterCleanup(ValkeyModule *module) {
     moduleUnsubscribeAllServerEvents(module);
     moduleRemoveConfigs(module);
     moduleUnregisterAuthCBs(module);
+    moduleUnregisterClusterReceivers(module);
 }
 
 /* Common helper for moduleLoad and moduleLoadStatic.
@@ -13446,9 +13483,9 @@ static int moduleInitPostOnLoadResolved(ModuleLoadFunc onload,
         ACLRecomputeCommandBitsFromCommandRulesAllUsers();
     }
     if (is_static) {
-        serverLog(LL_NOTICE, "Static Module '%s' successfully loaded", ctx.module->name);
+        serverLog(LL_NOTICE, "Static Module '%s' successfully loaded (version %d)", ctx.module->name, ctx.module->ver);
     } else {
-        serverLog(LL_NOTICE, "Module '%s' loaded from %s", ctx.module->name, display_name);
+        serverLog(LL_NOTICE, "Module '%s' loaded from %s (version %d)", ctx.module->name, display_name, ctx.module->ver);
     }
     ctx.module->onload = 0;
 
@@ -14577,7 +14614,8 @@ ValkeyModuleScriptingEngineExecutionState VM_GetFunctionExecutionState(
  * These messages are buffered in memory, and are only sent to the client when
  * `ValkeyModule_VM_ScriptingEngineDebuggerFlushLogs` is called.
  *
- * - `msg`: the message to send.
+ * - `msg`: the message to send. Ownership of `msg` is transferred to the
+ *   debugger log. The caller must not free it or access it after this call.
  *
  * - `truncate`: if set to 1, the message will be truncated to the maximum length
  *   configured in the debugger settings.

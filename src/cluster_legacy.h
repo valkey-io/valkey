@@ -5,10 +5,8 @@
 #ifndef __cplusplus
 #include <stdatomic.h>
 typedef _Atomic(size_t) atomic_size_t;
-typedef _Atomic(mstime_t) atomic_mstime_t;
 #else
 typedef size_t atomic_size_t __attribute__((aligned(sizeof(size_t))));
-typedef mstime_t atomic_mstime_t __attribute__((aligned(sizeof(mstime_t))));
 #endif
 
 #define CLUSTER_PORT_INCR 10000 /* Cluster port = baseport + PORT_INCR */
@@ -79,9 +77,6 @@ typedef struct clusterLink {
     listNode *io_last_send_block; /* Last queue node visible to current write job */
     size_t io_head_offset;        /* Snapshot/result offset into queue head */
     int io_nodes_sent;            /* Number of fully-sent head nodes (set by I/O thread) */
-
-    /* Timestamp for failure detection (cross-thread) */
-    atomic_mstime_t last_io_read_time; /* Updated by I/O thread on successful read */
 
     /* Pre-dispatch rcvbuf_alloc for memory accounting on completion */
     size_t rcvbuf_alloc_at_dispatch; /* rcvbuf_alloc when read job was dispatched */

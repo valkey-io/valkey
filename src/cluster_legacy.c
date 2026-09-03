@@ -1848,9 +1848,6 @@ clusterLink *createClusterLink(clusterNode *node) {
     link->io_head_offset = 0;
     link->io_nodes_sent = 0;
 
-    /* Failure detection timestamp */
-    atomic_store_explicit(&link->last_io_read_time, 0, memory_order_relaxed);
-
     link->rcvbuf_alloc_at_dispatch = 0;
     link->io_complete_bytes = 0;
     link->io_complete_packets = 0;
@@ -6671,24 +6668,9 @@ void clusterCron(void) {
 
         /* If we are not receiving any data for more than half the cluster
          * timeout, reconnect the link: maybe there is a connection
-         * issue even if the node is alive.
-         *
-         * When I/O threads are active, bytes may have arrived on a link
-         * (updating last_io_read_time) but not yet been applied by the
-         * main thread (which updates node->data_received). Use the
-         * maximum of all available timestamps to avoid false PFAIL. */
+         * issue even if the node is alive. */
         mstime_t ping_delay = now - node->ping_sent;
-        mstime_t last_data = node->data_received;
-        if (node->link) {
-            mstime_t last_io_read_time = atomic_load_explicit(&node->link->last_io_read_time, memory_order_acquire);
-            if (last_io_read_time > last_data) last_data = last_io_read_time;
-        }
-        if (node->inbound_link) {
-            mstime_t last_io_read_time =
-                atomic_load_explicit(&node->inbound_link->last_io_read_time, memory_order_acquire);
-            if (last_io_read_time > last_data) last_data = last_io_read_time;
-        }
-        mstime_t data_delay = now - last_data;
+        mstime_t data_delay = now - node->data_received;
         if (node->link &&                                            /* is connected */
             now - node->link->ctime > server.cluster_node_timeout && /* was not already reconnected */
             node->ping_sent &&                                       /* we already sent a ping */
@@ -9077,9 +9059,6 @@ void clusterReadJob(clusterLink *link) {
         if (frame_result != CLUSTER_IO_OK) {
             result = frame_result;
         }
-
-        /* Record when we last successfully read bytes (wall-clock ms). */
-        atomic_store_explicit(&link->last_io_read_time, mstime(), memory_order_release);
     }
 
     /* Post result and completion to the main thread. */

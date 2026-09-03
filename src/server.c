@@ -6827,10 +6827,12 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
     }
 
     if (dictFind(section_dict, "debug") != NULL) {
+        size_t module_external_memory = zmalloc_used_external_memory();
         if (sections++) info = sdscat(info, "\r\n");
         info = sdscatprintf(
             info,
             "# Debug\r\n" FMTARGS(
+                "used_memory_module_external:%zu\r\n", module_external_memory,
                 "eventloop_duration_aof_sum:%llu\r\n", server.duration_stats[EL_DURATION_TYPE_AOF].sum,
                 "eventloop_duration_cron_sum:%llu\r\n", server.duration_stats[EL_DURATION_TYPE_CRON].sum,
                 "eventloop_duration_max:%llu\r\n", server.duration_stats[EL_DURATION_TYPE_EL].max,

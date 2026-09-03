@@ -605,6 +605,24 @@ char *VM_Strdup(const char *str) {
     return zstrdup(str);
 }
 
+/* Account for memory that a module allocated outside the server allocator. */
+int VM_IncrExternalMemory(size_t bytes) {
+    if (zmalloc_increase_used_memory_external(bytes) != 0) {
+        errno = ERANGE;
+        return VALKEYMODULE_ERR;
+    }
+    return VALKEYMODULE_OK;
+}
+
+/* Remove external memory from the module's accounting. */
+int VM_DecrExternalMemory(size_t bytes) {
+    if (zmalloc_decrease_used_memory_external(bytes) != 0) {
+        errno = ERANGE;
+        return VALKEYMODULE_ERR;
+    }
+    return VALKEYMODULE_OK;
+}
+
 /* --------------------------------------------------------------------------
  * Pool allocator
  * -------------------------------------------------------------------------- */
@@ -15131,6 +15149,8 @@ void moduleRegisterCoreAPI(void) {
     REGISTER_API(TryRealloc);
     REGISTER_API(Free);
     REGISTER_API(Strdup);
+    REGISTER_API(IncrExternalMemory);
+    REGISTER_API(DecrExternalMemory);
     REGISTER_API(CreateCommand);
     REGISTER_API(GetCommand);
     REGISTER_API(CreateSubcommand);

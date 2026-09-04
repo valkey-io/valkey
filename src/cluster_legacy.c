@@ -5967,6 +5967,57 @@ void clusterFailoverReplaceYourPrimary(void) {
     /* Since we have became a new primary node, we may rely on auth_time to
      * determine whether a failover is in progress, so it is best to reset it. */
     server.cluster->failover_auth_time = 0;
+
+    /* 7) Publish a Pub/Sub notification on the '+switch-master' channel so that
+     * cluster-aware clients can immediately update their slot cache without
+     * waiting for the next periodic topology refresh or an error-driven refresh.
+     *
+     * Message format (compatible with Sentinel's +switch-master event):
+     *   <shard_id> <old_master_ip> <old_master_port> <new_master_ip> <new_master_port>
+     *
+     * The message is published locally and propagated to every cluster node via
+     * the cluster bus so that all connected clients receive it regardless of
+     * which node they are subscribed to.
+     *
+     * Use the client-facing (announced) address and port when available so that
+     * the coordinates in the notification are usable by clients even behind NAT
+     * or a load balancer (cluster-announce-client-ipv4 / cluster-announce-client-port). */
+    {
+        /* Prefer the client-facing announced IP; fall back to the cluster-bus IP. */
+        const char *old_ip = (sdslen(old_primary->announce_client_ipv4) != 0)
+                                 ? old_primary->announce_client_ipv4
+                                 : (old_primary->ip[0] ? old_primary->ip : "?");
+        const char *new_ip = (sdslen(myself->announce_client_ipv4) != 0)
+                                 ? myself->announce_client_ipv4
+                                 : (myself->ip[0] ? myself->ip : "?");
+        /* Prefer the client-facing announced port; fall back to the cluster-bus port. */
+        int old_port = old_primary->announce_client_tcp_port
+                           ? old_primary->announce_client_tcp_port
+                           : (server.tls_cluster ? old_primary->tls_port : old_primary->tcp_port);
+        int new_port = myself->announce_client_tcp_port
+                           ? myself->announce_client_tcp_port
+                           : (server.tls_cluster ? myself->tls_port : myself->tcp_port);
+        char msg_buf[512];
+        int msg_len = snprintf(msg_buf, sizeof(msg_buf),
+                               "%.40s %s %d %s %d",
+                               old_primary->shard_id,
+                               old_ip, old_port,
+                               new_ip, new_port);
+        if (msg_len > 0 && msg_len < (int)sizeof(msg_buf)) {
+            /* Use sizeof()-1 to derive the length from the literal, avoiding
+             * hard-coded values that can silently go out of sync. */
+            robj *channel = createStringObject("+switch-master",
+                                               sizeof("+switch-master") - 1);
+            robj *message = createStringObject(msg_buf, msg_len);
+            /* Publish locally and propagate to all cluster nodes. */
+            pubsubPublishMessageAndPropagateToCluster(channel, message, 0);
+            serverLog(LL_NOTICE,
+                      "Cluster failover: published '+switch-master' notification: %s",
+                      msg_buf);
+            decrRefCount(channel);
+            decrRefCount(message);
+        }
+    }
 }
 
 /* This function is called if we are a replica node and our primary serving

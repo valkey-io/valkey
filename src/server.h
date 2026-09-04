@@ -764,6 +764,11 @@ typedef enum {
 #define ARGS_SET_CONDITIONAL \
     (ARGS_SET_NX | ARGS_SET_XX | ARGS_SET_IFEQ | ARGS_SET_IFNE)
 
+/* Generic del command string object del flags */
+#define ARGS_DELEX_IFEQ (2 << 0)
+#define ARGS_DELEX_IFNE (2 << 1)
+#define ARGS_DELEX_CONDITIONAL \
+    (ARGS_DELEX_IFEQ | ARGS_DELEX_IFNE)
 /* An Object, that is a type able to hold a string / list / set */
 
 /* The actual Object */
@@ -4065,6 +4070,9 @@ void setCommand(client *c);
 void setnxCommand(client *c);
 void setexCommand(client *c);
 void psetexCommand(client *c);
+
+void delexGenericCommand(client *c, int flag, robj *compare_value);
+void delexCommand(client *c);
 void delifeqCommand(client *c);
 void getCommand(client *c);
 void getexCommand(client *c);

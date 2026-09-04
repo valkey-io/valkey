@@ -72,7 +72,10 @@ typedef struct ValkeyModuleType {
     moduleTypeUnlinkFunc2 unlink2;
     moduleTypeCopyFunc2 copy2;
     moduleTypeAuxSaveFunc aux_save2;
+    moduleTypeAuxSaveFunc aux_save_aof;
+    moduleTypeAuxLoadFunc aux_load_aof;
     int aux_save_triggers;
+    int aux_save_aof_triggers;
     char name[10]; /* 9 bytes name + null term. Charset: A-Z a-z 0-9 _- */
 } moduleType;
 
@@ -225,6 +228,7 @@ void modulePostExecutionUnitOperations(void);
 void ModuleForkDoneHandler(int exitcode, int bysignal);
 int TerminateModuleForkChild(int child_pid, int wait);
 ssize_t rdbSaveModulesAux(rio *rdb, int when);
+int aofRewriteModulesAux(rio *aof, int when);
 int moduleAllDatatypesHandleErrors(void);
 int moduleAllModulesHandleReplAsyncLoad(void);
 int moduleAllModulesHandleForkless(void);

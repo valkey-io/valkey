@@ -3,7 +3,15 @@
 
 #include <valkey/valkey.h>
 #include "sds.h"
+#include "tls.h"
 #include <stdint.h>
+
+#if VALKEY_TLS_SUPPORTS_GROUPS
+#define CLI_TLS_SUPPORTS_GROUPS 1
+#define cliSslCtxSetGroupsList(ctx, list) valkeyTlsCtxSetGroupsList((ctx), (list))
+#else
+#define CLI_TLS_SUPPORTS_GROUPS 0
+#endif
 
 typedef struct cliSSLconfig {
     /* Requested SNI, or NULL */
@@ -22,6 +30,8 @@ typedef struct cliSSLconfig {
     char *ciphers;
     /* Preferred ciphersuites list, or NULL (applies only to TLSv1.3) */
     char *ciphersuites;
+    /* Preferred TLS named groups list, or NULL */
+    char *groups;
 } cliSSLconfig;
 
 

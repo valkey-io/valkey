@@ -30,6 +30,7 @@
 #define VALKEYMODULE_CORE_MODULE /* A module that's part of the server core, uses server.h too. */
 
 #include "server.h"
+#include "tls.h"
 #include "connhelpers.h"
 #include "adlist.h"
 #include "io_threads.h"
@@ -641,6 +642,18 @@ static SSL_CTX *createSSLContext(serverTLSContextConfig *ctx_config, int protoco
         goto error;
     }
 #endif
+
+    if (ctx_config->groups) {
+#if VALKEY_TLS_SUPPORTS_GROUPS
+        if (!valkeyTlsCtxSetGroupsList(ctx, ctx_config->groups)) {
+            serverLog(LL_WARNING, "Failed to configure TLS groups: %s", ctx_config->groups);
+            goto error;
+        }
+#else
+        serverLog(LL_WARNING, "Failed to configure TLS groups: not supported by this build");
+        goto error;
+#endif
+    }
 
     return ctx;
 

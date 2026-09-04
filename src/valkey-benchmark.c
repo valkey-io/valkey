@@ -1915,6 +1915,11 @@ int parseOptions(int argc, char **argv) {
             if (lastarg) goto invalid;
             config.sslconfig.ciphersuites = strdup(argv[++i]);
 #endif
+#if CLI_TLS_SUPPORTS_GROUPS
+        } else if (!strcmp(argv[i], "--tls-groups")) {
+            if (lastarg) goto invalid;
+            config.sslconfig.groups = strdup(argv[++i]);
+#endif
 #endif
 #ifdef USE_RDMA
         } else if (!strcmp(argv[i], "--rdma")) {
@@ -1987,6 +1992,10 @@ usage:
         "                    colon (\":\"). See the ciphers(1ssl) manpage for more\n"
         "                    information about the syntax of this string, and\n"
         "                    specifically for TLSv1.3 ciphersuites.\n"
+#endif
+#if CLI_TLS_SUPPORTS_GROUPS
+        " --tls-groups <list> Sets the list of preferred TLS groups\n"
+        "                    in order of preference from highest to lowest separated by colon (\":\").\n"
 #endif
 #endif
         "";

@@ -2,6 +2,11 @@ start_server {tags {"tls"}} {
     if {$::tls} {
         package require tls
 
+        set ::tls_groups 0
+        if {![catch {exec $::VALKEY_CLI_BIN --help} help]} {
+            set ::tls_groups [string match "*--tls-groups*" $help]
+        }
+
         proc check_client_stuck {control_client client_port {min_omem 1}} {
             set clients [$control_client CLIENT LIST]
             foreach client [split $clients "\n"] {
@@ -12,6 +17,16 @@ start_server {tags {"tls"}} {
                 }
             }
             return 0
+        }
+
+        if {$::tls_groups} {
+            proc tls_valkey_cli {host port groups} {
+                set cmd [valkeycli $host $port [list \
+                    --tls-ciphers ECDHE-RSA-AES128-GCM-SHA256 \
+                    --tls-groups $groups \
+                    PING]]
+                string trim [exec {*}$cmd 2>@1]
+            }
         }
 
         test {TLS: Not accepting non-TLS connections on a TLS port} {
@@ -104,6 +119,51 @@ start_server {tags {"tls"}} {
 
             r CONFIG SET tls-protocols ""
             r CONFIG SET tls-ciphers "DEFAULT"
+        }
+
+        test {TLS: Verify tls-groups validates group names} {
+            if {!$::tls_groups} {
+                skip "TLS named groups are not supported by this build"
+            }
+            assert_equal {OK} [r CONFIG SET tls-groups "prime256v1"]
+
+            catch {r CONFIG SET tls-groups "invalid-group"} e
+            assert_match {*Unable to update TLS configuration*} $e
+
+            r CONFIG SET tls-groups ""
+        }
+
+        test {TLS: Verify tls-groups with a common group} {
+            if {!$::tls_groups} {
+                skip "TLS named groups are not supported by this build"
+            }
+            set ecdhe_ciphers ECDHE-RSA-AES128-GCM-SHA256
+            r CONFIG SET tls-protocols TLSv1.2
+            r CONFIG SET tls-ciphers $ecdhe_ciphers
+            r CONFIG SET tls-groups prime256v1
+
+            assert_equal {PONG} [tls_valkey_cli [srv 0 host] [srv 0 port] prime256v1]
+
+            r CONFIG SET tls-groups ""
+            r CONFIG SET tls-protocols ""
+            r CONFIG SET tls-ciphers DEFAULT
+        }
+
+        test {TLS: Verify tls-groups with disjoint groups} {
+            if {!$::tls_groups} {
+                skip "TLS named groups are not supported by this build"
+            }
+            set ecdhe_ciphers ECDHE-RSA-AES128-GCM-SHA256
+            r CONFIG SET tls-protocols TLSv1.2
+            r CONFIG SET tls-ciphers $ecdhe_ciphers
+            r CONFIG SET tls-groups prime256v1
+
+            assert_equal 1 [catch {tls_valkey_cli [srv 0 host] [srv 0 port] secp384r1} e]
+            assert_no_match {*PONG*} $e
+
+            r CONFIG SET tls-groups ""
+            r CONFIG SET tls-protocols ""
+            r CONFIG SET tls-ciphers DEFAULT
         }
 
         test {TLS: Verify tls-cert-file is also used as a client cert if none specified} {

@@ -544,8 +544,11 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
             foreach slot_to_migrate {16381 16382 16383} {
                 # Perform one-shot migration
                 assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE $slot_to_migrate $slot_to_migrate NODE $node0_id]
+                set jobname [get_job_name 2 $slot_to_migrate]
                 wait_for_migration 0 $slot_to_migrate
-            
+                wait_for_migration_field 0 $jobname state success
+                wait_for_migration_field 2 $jobname state success
+
                 # Reflected in DBSIZE
                 assert_match "1000" [R 0 CLUSTER COUNTKEYSINSLOT $slot_to_migrate]
                 assert_match "0" [R 2 CLUSTER COUNTKEYSINSLOT $slot_to_migrate]
@@ -560,6 +563,8 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
                 assert_match "OK" [R 0 CLUSTER MIGRATESLOTS SLOTSRANGE $slot_to_migrate $slot_to_migrate NODE $node2_id]
                 set jobname [get_job_name 0 $slot_to_migrate]
                 wait_for_migration 2 $slot_to_migrate
+                wait_for_migration_field 0 $jobname state success
+                wait_for_migration_field 2 $jobname state success
 
                 # Reflected in DBSIZE
                 assert_equal "3000" [R 2 DBSIZE]

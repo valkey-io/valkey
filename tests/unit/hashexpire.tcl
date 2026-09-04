@@ -3513,10 +3513,12 @@ start_server {tags {"hashexpire external:skip"}} {
             
             # Try to expire non-existing fields
             r $command myhash [get_short_expire_value $command] FIELDS 2 f3 f4
-            
-            
-            # Wait to ensure no active expiry occurs
-            after 1500
+
+
+            # Wait past the TTL deadline to ensure no active expiry occurs.
+            # The HEXPIREAT/HPEXPIREAT deadline can be up to 2s away, so the
+            # wait must exceed that or this assertion passes vacuously.
+            after 2500
             assert [check_myhash_and_expired_subkeys r myhash 2 $initial_expired 0]
         }
 

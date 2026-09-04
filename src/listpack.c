@@ -662,6 +662,51 @@ unsigned char *lpFind(unsigned char *lp, unsigned char *p, unsigned char *s, uin
     return NULL;
 }
 
+/* Find pointer to the entry equal to the specified integer value. Skip 'skip'
+ * entries between every comparison. Returns NULL when the field could not be
+ * found. */
+unsigned char *lpFindInteger(unsigned char *lp, unsigned char *p, long long v, unsigned int skip) {
+    int skipcnt = 0;
+    unsigned char *value;
+    int64_t ll;
+    uint64_t entry_size = 123456789; /* initialized to avoid warning. */
+    uint32_t lp_bytes = lpBytes(lp);
+
+    assert(p);
+    while (p) {
+        if (skipcnt == 0) {
+            value = lpGetWithSize(p, &ll, NULL, &entry_size);
+            if (!value) {
+                /* Entry is an integer — compare directly, no string conversion. */
+                if (ll == (int64_t)v) return p;
+            }
+            /* If entry is a string, it cannot match an integer search — skip. */
+            skipcnt = skip;
+            p += entry_size;
+        } else {
+            /* Skip entry */
+            skipcnt--;
+
+            /* Move to next entry, avoid use `lpNext` due to `lpAssertValidEntry` in
+             * `lpNext` will call `lpBytes`, will cause performance degradation */
+            p = lpSkip(p);
+        }
+
+        /* The next call to lpGetWithSize could read at most 8 bytes past `p`
+         * We use the slower validation call only when necessary. */
+        if (p + 8 >= lp + lp_bytes)
+            lpAssertValidEntry(lp, lp_bytes, p);
+        else
+            assert(p >= lp + LP_HDR_SIZE && p < lp + lp_bytes);
+        if (unlikely(p[0] == LP_EOF)) {
+            /* EOF must only appear at the end of a listpack. */
+            assert(p + 1 == lp + lp_bytes);
+            break;
+        }
+    }
+    return NULL;
+}
+
 /* Insert, delete or replace the specified string element 'elestr' of length
  * 'size' or integer element 'eleint' at the specified position 'p', with 'p'
  * being a listpack element pointer obtained with lpFirst(), lpLast(), lpNext(),

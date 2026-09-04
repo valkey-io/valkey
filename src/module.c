@@ -9942,6 +9942,14 @@ const char *VM_ClusterCanonicalKeyNameInSlot(unsigned int slot) {
     return (slot < CLUSTER_SLOTS) ? crc16_slot_table[slot] : NULL;
 }
 
+/* Returns 1 if the specified cluster slot is currently being imported by an
+ * atomic slot migration, and 0 otherwise. Returns 0 if cluster mode is disabled
+ * or if the slot is not valid. */
+int VM_ClusterIsSlotImporting(unsigned int slot) {
+    if (!server.cluster_enabled || slot >= CLUSTER_SLOTS) return 0;
+    return clusterIsSlotImporting(slot);
+}
+
 /* --------------------------------------------------------------------------
  * ## Modules Timers API
  *
@@ -15515,6 +15523,7 @@ void moduleRegisterCoreAPI(void) {
     REGISTER_API(ClusterKeySlotC);
     REGISTER_API(ClusterKeySlot);
     REGISTER_API(ClusterCanonicalKeyNameInSlot);
+    REGISTER_API(ClusterIsSlotImporting);
     REGISTER_API(CreateDict);
     REGISTER_API(FreeDict);
     REGISTER_API(DictSize);

@@ -1601,6 +1601,7 @@ VALKEYMODULE_API int (*ValkeyModule_SetCommandInfo)(ValkeyModuleCommand *command
                                                     const ValkeyModuleCommandInfo *info) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_SetCommandACLCategories)(ValkeyModuleCommand *command,
                                                              const char *ctgrsflags) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_AddCommandACLCategories)(ValkeyModuleCtx *ctx, const char *cmdname, const char *aclflags) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_AddACLCategory)(ValkeyModuleCtx *ctx, const char *name) VALKEYMODULE_ATTR;
 VALKEYMODULE_API void (*ValkeyModule_SetModuleAttribs)(ValkeyModuleCtx *ctx, const char *name, int ver, int apiver)
     VALKEYMODULE_ATTR;
@@ -2355,6 +2356,7 @@ static int ValkeyModule_Init(ValkeyModuleCtx *ctx, const char *name, int ver, in
     VALKEYMODULE_GET_API(CreateSubcommand);
     VALKEYMODULE_GET_API(SetCommandInfo);
     VALKEYMODULE_GET_API(SetCommandACLCategories);
+    VALKEYMODULE_GET_API(AddCommandACLCategories);
     VALKEYMODULE_GET_API(AddACLCategory);
     VALKEYMODULE_GET_API(SetModuleAttribs);
     VALKEYMODULE_GET_API(IsModuleNameBusy);

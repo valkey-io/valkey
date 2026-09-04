@@ -1701,6 +1701,44 @@ int VM_SetCommandACLCategories(ValkeyModuleCommand *command, const char *aclflag
     return VALKEYMODULE_OK;
 }
 
+/* ValkeyModule_AddCommandACLCategories can be used to add ACL categories to an
+ * existing command by name (including non-module / built-in commands).
+ *
+ * The set of ACL categories should be passed as a space separated C string
+ * 'aclflags'. The specified categories are OR-ed into the command's existing
+ * ACL categories (i.e., this function adds categories and does not replace the
+ * previous ones).
+ *
+ * Example, the acl flags 'write slow' marks the command as part of the write and
+ * slow ACL categories, in addition to any categories it already belongs to.
+ *
+ * On success VALKEYMODULE_OK is returned. On error VALKEYMODULE_ERR is returned.
+ *
+ * This function can only be called during the ValkeyModule_OnLoad function. If called
+ * outside of this function, an error is returned.
+ *
+ * Note: Changing ACL categories may require ACL recomputation for existing users.
+ * The server will handle this when the module is loaded if at least one command had
+ * ACL categories modified by the module.
+ */
+int VM_AddCommandACLCategories(ValkeyModuleCtx *ctx, const char *cmdname, const char *aclflags) {
+    if (ctx == NULL || ctx->module == NULL || !ctx->module->onload) return VALKEYMODULE_ERR;
+    if (cmdname == NULL || cmdname[0] == '\0') return VALKEYMODULE_ERR;
+    if (aclflags == NULL || aclflags[0] == '\0') return VALKEYMODULE_ERR;
+
+    struct serverCommand *cmd = lookupCommandByCString(cmdname);
+    if (cmd == NULL) return VALKEYMODULE_ERR;
+
+    int64_t categories_flags = aclflags ? categoryFlagsFromString((char *)aclflags) : 0;
+    if (categories_flags == -1) return VALKEYMODULE_ERR;
+
+    drainIOThreadsQueue();
+    cmd->acl_categories |= categories_flags;
+    ctx->module->num_commands_with_acl_categories++;
+
+    return VALKEYMODULE_OK;
+}
+
 /* Set additional command information.
  *
  * Affects the output of `COMMAND`, `COMMAND INFO` and `COMMAND DOCS`, Cluster,
@@ -15287,6 +15325,7 @@ void moduleRegisterCoreAPI(void) {
     REGISTER_API(CreateSubcommand);
     REGISTER_API(SetCommandInfo);
     REGISTER_API(SetCommandACLCategories);
+    REGISTER_API(AddCommandACLCategories);
     REGISTER_API(AddACLCategory);
     REGISTER_API(SetModuleAttribs);
     REGISTER_API(IsModuleNameBusy);

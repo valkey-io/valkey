@@ -10612,6 +10612,41 @@ struct COMMAND_ARG XDEL_Args[] = {
 {MAKE_ARG("id",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_MULTIPLE,0,NULL)},
 };
 
+/********** XDELEX ********************/
+
+#ifndef SKIP_CMD_HISTORY_TABLE
+/* XDELEX history */
+#define XDELEX_History NULL
+#endif
+
+#ifndef SKIP_CMD_TIPS_TABLE
+/* XDELEX tips */
+#define XDELEX_Tips NULL
+#endif
+
+#ifndef SKIP_CMD_KEY_SPECS_TABLE
+/* XDELEX key specs */
+keySpec XDELEX_Keyspecs[1] = {
+{NULL,CMD_KEY_RW|CMD_KEY_UPDATE,KSPEC_BS_INDEX,.bs.index={1},KSPEC_FK_RANGE,.fk.range={0,1,0}}
+};
+#endif
+
+/* XDELEX mode argument table */
+struct COMMAND_ARG XDELEX_mode_Subargs[] = {
+{MAKE_ARG("keepref",ARG_TYPE_PURE_TOKEN,-1,"KEEPREF",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("delref",ARG_TYPE_PURE_TOKEN,-1,"DELREF",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("acked",ARG_TYPE_PURE_TOKEN,-1,"ACKED",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+};
+
+/* XDELEX argument table */
+struct COMMAND_ARG XDELEX_Args[] = {
+{MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("mode",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_OPTIONAL,3,NULL),.subargs=XDELEX_mode_Subargs},
+{MAKE_ARG("ids",ARG_TYPE_PURE_TOKEN,-1,"IDS",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("numids",ARG_TYPE_INTEGER,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("id",ARG_TYPE_STRING,-1,"IDS",NULL,NULL,CMD_ARG_MULTIPLE,0,NULL)},
+};
+
 /********** XGROUP CREATE ********************/
 
 #ifndef SKIP_CMD_HISTORY_TABLE
@@ -12218,6 +12253,7 @@ struct COMMAND_STRUCT serverCommandTable[] = {
 {MAKE_CMD("xautoclaim","Changes, or acquires, ownership of messages in a consumer group, as if the messages were delivered to a consumer group member.","O(1) if COUNT is small.","6.2.0",CMD_DOC_NONE,NULL,NULL,"stream",COMMAND_GROUP_STREAM,XAUTOCLAIM_History,1,XAUTOCLAIM_Tips,1,xautoclaimCommand,-6,CMD_WRITE|CMD_FAST,ACL_CATEGORY_FAST|ACL_CATEGORY_STREAM|ACL_CATEGORY_WRITE,NULL,XAUTOCLAIM_Keyspecs,1,NULL,7),.args=XAUTOCLAIM_Args},
 {MAKE_CMD("xclaim","Changes, or acquires, ownership of a message in a consumer group, as if the message was delivered to a consumer group member.","O(log N) with N being the number of messages in the PEL of the consumer group.","5.0.0",CMD_DOC_NONE,NULL,NULL,"stream",COMMAND_GROUP_STREAM,XCLAIM_History,0,XCLAIM_Tips,1,xclaimCommand,-6,CMD_WRITE|CMD_FAST,ACL_CATEGORY_FAST|ACL_CATEGORY_STREAM|ACL_CATEGORY_WRITE,NULL,XCLAIM_Keyspecs,1,NULL,11),.args=XCLAIM_Args},
 {MAKE_CMD("xdel","Returns the number of messages after removing them from a stream.","O(1) for each single item to delete in the stream, regardless of the stream size.","5.0.0",CMD_DOC_NONE,NULL,NULL,"stream",COMMAND_GROUP_STREAM,XDEL_History,0,XDEL_Tips,0,xdelCommand,-3,CMD_WRITE|CMD_FAST,ACL_CATEGORY_FAST|ACL_CATEGORY_STREAM|ACL_CATEGORY_WRITE,NULL,XDEL_Keyspecs,1,NULL,2),.args=XDEL_Args},
+{MAKE_CMD("xdelex","Delete stream message(s) with extended options","O(1)","10.0.0",CMD_DOC_NONE,NULL,NULL,"stream",COMMAND_GROUP_STREAM,XDELEX_History,0,XDELEX_Tips,0,xdelexCommand,-5,CMD_WRITE|CMD_FAST,ACL_CATEGORY_FAST|ACL_CATEGORY_WRITE|ACL_CATEGORY_STREAM,NULL,XDELEX_Keyspecs,1,NULL,5),.args=XDELEX_Args},
 {MAKE_CMD("xgroup","A container for consumer groups commands.","Depends on subcommand.","5.0.0",CMD_DOC_NONE,NULL,NULL,"stream",COMMAND_GROUP_STREAM,XGROUP_History,0,XGROUP_Tips,0,NULL,-2,0,ACL_CATEGORY_SLOW,NULL,XGROUP_Keyspecs,0,NULL,0),.subcommands=XGROUP_Subcommands},
 {MAKE_CMD("xinfo","A container for stream introspection commands.","Depends on subcommand.","5.0.0",CMD_DOC_NONE,NULL,NULL,"stream",COMMAND_GROUP_STREAM,XINFO_History,0,XINFO_Tips,0,NULL,-2,0,ACL_CATEGORY_SLOW,NULL,XINFO_Keyspecs,0,NULL,0),.subcommands=XINFO_Subcommands},
 {MAKE_CMD("xlen","Returns the number of messages in a stream.","O(1)","5.0.0",CMD_DOC_NONE,NULL,NULL,"stream",COMMAND_GROUP_STREAM,XLEN_History,0,XLEN_Tips,0,xlenCommand,2,CMD_READONLY|CMD_FAST,ACL_CATEGORY_FAST|ACL_CATEGORY_READ|ACL_CATEGORY_STREAM,NULL,XLEN_Keyspecs,1,NULL,1),.args=XLEN_Args},

@@ -1479,6 +1479,108 @@ start_server {
         }
     }
 
+    start_server {tags {"external:skip"}} {
+        set master [srv -1 client]
+        set master_host [srv -1 host]
+        set master_port [srv -1 port]
+        set replica [srv 0 client]
+
+        test {XDELEX replication: KEEPREF deletes stream entry but keeps dangling PEL ref on replica} {
+            $replica replicaof $master_host $master_port
+            wait_for_condition 50 100 {
+                [s 0 master_link_status] eq {up}
+            } else {
+                fail "Replication not started."
+            }
+
+            $master DEL stream
+            $master XADD stream 1-0 f v
+            $master XADD stream 2-0 f v
+            $master XGROUP CREATE stream grp 0
+            $master XREADGROUP GROUP grp alice COUNT 1 STREAMS stream >
+
+            wait_for_ofs_sync $master $replica
+
+            # Replica has both entries and grp's PEL contains 1-0
+            assert_equal 2 [$replica XLEN stream]
+            assert_equal 1 [llength [$replica XPENDING stream grp - + 10]]
+
+            # KEEPREF: deletes entry from stream but leaves PEL reference intact
+            $master XDELEX stream KEEPREF IDS 1 1-0
+
+            wait_for_ofs_sync $master $replica
+
+            # Stream entry gone on replica, PEL reference still present
+            assert_equal 1 [$replica XLEN stream]
+            assert_equal 1 [llength [$replica XPENDING stream grp - + 10]]
+        }
+
+        test {XDELEX replication: DELREF deletes stream entry and clears PEL on replica} {
+            $replica replicaof $master_host $master_port
+            wait_for_condition 50 100 {
+                [s 0 master_link_status] eq {up}
+            } else {
+                fail "Replication not started."
+            }
+
+            $master DEL stream
+            $master XADD stream 1-0 f v
+            $master XADD stream 2-0 f v
+            $master XGROUP CREATE stream grp 0
+            $master XREADGROUP GROUP grp alice COUNT 1 STREAMS stream >
+
+            wait_for_ofs_sync $master $replica
+
+            # Replica has both entries and grp's PEL contains 1-0
+            assert_equal 2 [$replica XLEN stream]
+            assert_equal 1 [llength [$replica XPENDING stream grp - + 10]]
+
+            # DELREF: deletes entry from stream AND removes it from all PELs
+            $master XDELEX stream DELREF IDS 1 1-0
+
+            wait_for_ofs_sync $master $replica
+
+            # Stream entry gone and PEL cleared on replica
+            assert_equal 1 [$replica XLEN stream]
+            assert_equal 0 [llength [$replica XPENDING stream grp - + 10]]
+        }
+
+        test {XDELEX replication: ACKED skips pending entries, deletes only after all groups ack} {
+            $replica replicaof $master_host $master_port
+            wait_for_condition 50 100 {
+                [s 0 master_link_status] eq {up}
+            } else {
+                fail "Replication not started."
+            }
+
+            $master DEL stream
+            $master XADD stream 1-0 f v
+            $master XGROUP CREATE stream grp 0
+            $master XREADGROUP GROUP grp alice COUNT 1 STREAMS stream >
+
+            wait_for_ofs_sync $master $replica
+
+            # Entry is pending; ACKED mode should not delete it
+            $master XDELEX stream ACKED IDS 1 1-0
+
+            wait_for_ofs_sync $master $replica
+
+            # Entry still present on replica since it was not acked
+            assert_equal 1 [$replica XLEN stream]
+            assert_equal 1 [llength [$replica XPENDING stream grp - + 10]]
+
+            # Now ack the entry and retry XDELEX ACKED
+            $master XACK stream grp 1-0
+            $master XDELEX stream ACKED IDS 1 1-0
+
+            wait_for_ofs_sync $master $replica
+
+            # Entry deleted on replica after all groups have acked
+            assert_equal 0 [$replica XLEN stream]
+            assert_equal 0 [llength [$replica XPENDING stream grp - + 10]]
+        }
+    }
+
     start_server {tags {"stream needs:debug"} overrides {appendonly yes aof-use-rdb-preamble no}} {
         test {Empty stream with no lastid can be rewrite into AOF correctly} {
             r XGROUP CREATE mystream group-name $ MKSTREAM

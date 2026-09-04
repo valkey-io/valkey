@@ -1,0 +1,94 @@
+{
+    "XDELEX": {
+        "summary": "Delete stream message(s) with extended options",
+        "complexity": "O(1)",
+        "group": "stream",
+        "since": "10.0.0",
+        "arity": -5,
+        "function": "xdelexCommand",
+        "command_flags": [
+            "WRITE",
+            "FAST"
+        ],
+        "acl_categories": [
+            "FAST",
+            "WRITE",
+            "STREAM"
+        ],
+        "key_specs": [
+            {
+                "flags": [
+                    "RW",
+                    "UPDATE"
+                ],
+                "begin_search": {
+                    "index": {
+                        "pos": 1
+                    }
+                },
+                "find_keys": {
+                    "range": {
+                        "lastkey": 0,
+                        "step": 1,
+                        "limit": 0
+                    }
+                }
+            }
+        ],
+        "arguments": [
+            {
+                "name": "key",
+                "type": "key",
+                "key_spec_index": 0
+            },
+            {
+                "name": "mode",
+                "type": "oneof",
+                "optional": true,
+                "arguments": [
+                    {
+                        "name": "keepref",
+                        "type": "pure-token",
+                        "token": "KEEPREF"
+                    },
+                    {
+                        "name": "delref",
+                        "type": "pure-token",
+                        "token": "DELREF"
+                    },
+                    {
+                        "name": "acked",
+                        "type": "pure-token",
+                        "token": "ACKED"
+                    }
+                ]
+            },
+            {
+                "name": "ids",
+                "token": "IDS",
+                "type": "pure-token"
+            },
+            {
+                "name": "numids",
+                "type": "integer"
+            },
+            {
+                "name": "id",
+                "token": "IDS",
+                "type": "string",
+                "multiple": true
+            }
+        ],
+        "reply_schema": {
+            "description": "The command returns an integer for each stream message: -1=message not found, 1=message was deleted, 2=message was not deleted due to existing references (ACKED mode).",
+            "type": "array",
+            "minItems": 0,
+            "items": {
+                "description": "Status of the stream message, -1=message not found, 1=message was deleted, 2=message was not deleted due to existing references (ACKED mode).",
+                "type": "integer",
+                "minimum": -1,
+                "maximum": 2
+            }
+        }
+    }
+}

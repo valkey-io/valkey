@@ -3613,6 +3613,212 @@ cleanup:
     if (ids != static_ids) zfree(ids);
 }
 
+/* XDELEX <key> [KEEPREF | DELREF | ACKED] IDS num [<ID1> <ID2> ... <IDN>]
+ */
+void xdelexCommand(client *c) {
+    robj *o = lookupKeyRead(c->db, c->argv[1]);
+    if (o) {
+        if (checkType(c, o, OBJ_STREAM)) return; /* Type error. */
+    }
+
+    /* Check what mode is set, if any.
+     * ex. [KEEPREF | DELREF | ACKED] IDS n [ID ...]
+     */
+    int argi = 2;
+    int mode = 0; /* 0=keepref, 1=delref, 2=acked */
+    if (strcasecmp(objectGetVal(c->argv[argi]), "KEEPREF") == 0) {
+        argi += 1;
+        mode = 0;
+    } else if (strcasecmp(objectGetVal(c->argv[argi]), "DELREF") == 0) {
+        argi += 1;
+        mode = 1;
+    } else if (strcasecmp(objectGetVal(c->argv[argi]), "ACKED") == 0) {
+        argi += 1;
+        mode = 2;
+    } else if (strcasecmp(objectGetVal(c->argv[argi]), "IDS") != 0) {
+        addReplyError(c, "xdelex mode not recognized");
+        return;
+    }
+
+    /* Expect IDS token. */
+    if (strcasecmp(objectGetVal(c->argv[argi]), "IDS") != 0) {
+        addReplyError(c, "syntax error");
+        return;
+    }
+    argi++; /* past IDS */
+
+    /* Parse and validate numids: must be a positive integer. */
+    long long id_count;
+    if (getLongLongFromObject(c->argv[argi], &id_count) != C_OK || id_count <= 0) {
+        addReplyError(c, "Number of IDs must be a positive integer");
+        return;
+    }
+    argi++; /* past numids */
+
+    /* Validate numids matches remaining arg count. */
+    long long actual_ids = c->argc - argi;
+    if (id_count > actual_ids) {
+        addReplyError(c, "numids parameter must match the number of IDs provided");
+        return;
+    } else if (id_count < actual_ids) {
+        addReplyError(c, "syntax error");
+        return;
+    }
+
+    /* Start parsing the IDs, so that we abort ASAP if there is a syntax
+     * error: the return value of this command cannot be an error in case
+     * the client successfully acknowledged some messages, so it should be
+     * executed in a "all or nothing" fashion. */
+    streamID static_ids[STREAMID_STATIC_VECTOR_LEN];
+    int static_resps[STREAMID_STATIC_VECTOR_LEN];
+    streamID *ids = static_ids;
+    int *resps = static_resps;
+    if (id_count > STREAMID_STATIC_VECTOR_LEN) {
+        ids = zmalloc(sizeof(streamID) * id_count);
+        resps = zmalloc(sizeof(int) * id_count);
+    }
+    for (int j = argi; j < c->argc; j++) {
+        if (streamParseStrictIDOrReply(c, c->argv[j], &ids[j - argi], 0, NULL) != C_OK) goto cleanup;
+
+        /* Default to 1 (will be deleted). Changed to 2 (can't delete yet) or -1
+         * (not found) if we discover a blocking condition. */
+        resps[j - argi] = 1;
+    }
+
+    /* If missing stream, return -1 for each ID. */
+    if (o == NULL) {
+        addReplyArrayLen(c, id_count);
+        for (int i = 0; i < id_count; i++) {
+            addReplyLongLong(c, -1);
+        }
+        goto cleanup;
+    }
+
+    stream *s = objectGetVal(o);
+
+    /* True if DELREF removed any PEL references. PEL-only changes still modify
+     * the stream metadata, so they should signal WATCH/tracking and emit a
+     * keyspace event just like a stream-entry deletion (see issue #3429). */
+    bool pel_modified = 0;
+
+    /* For ACKED and DELREF modes: loop over consumer groups (outer) then messages
+     * (inner). This opens the iterator once instead of once per message, and
+     * allows inner-loop skips via the resps array. */
+    if ((mode == 1 || mode == 2) && s->cgroups != NULL) {
+        bool first_loop = 1;
+        raxIterator ri_cgroups;
+        raxStart(&ri_cgroups, s->cgroups);
+        raxSeek(&ri_cgroups, "^", NULL, 0);
+        while (raxNext(&ri_cgroups)) {
+            streamCG *cg = ri_cgroups.data;
+
+            for (int j = 0; j < id_count; j++) {
+                /* Skip messages already finalized. For ACKED, 2 means another
+                 * group already has a pending ref so deletion is blocked. */
+                if (resps[j] == -1) continue;
+                if (mode == 2 && resps[j] == 2) continue;
+
+                streamID *id = &ids[j];
+                unsigned char buf[sizeof(streamID)];
+                streamEncodeID(buf, id);
+
+                /* Group hasn't claimed this message yet; it can't have a PEL
+                 * entry for it either, so there's nothing to remove. */
+                if (streamCompareID(id, &cg->last_id) > 0) {
+                    if (mode == 2) {
+                        /* ACKED: can't delete until this group has seen it. */
+                        resps[j] = streamEntryExists(s, id) ? 2 : -1;
+                    }
+                    continue;
+                }
+
+                void *result;
+                if (raxFind(cg->pel, buf, sizeof(buf), &result)) {
+                    if (mode == 1) {
+                        /* DELREF: remove PEL entry from this group. */
+                        streamNACK *nack = result;
+                        raxRemove(cg->pel, buf, sizeof(buf), NULL);
+                        raxRemove(nack->consumer->pel, buf, sizeof(buf), NULL);
+                        streamFreeNACK(nack);
+                        server.dirty++;
+                        pel_modified = 1;
+                    } else {
+                        /* ACKED: still pending in this group, cannot delete. */
+                        resps[j] = 2;
+                    }
+                } else if (mode == 2 && first_loop && !streamEntryExists(s, id)) {
+                    /* Message doesn't exist in the stream; check once and skip
+                     * iterating the remaining groups. */
+                    resps[j] = -1;
+                }
+            }
+            first_loop = 0;
+        }
+        raxStop(&ri_cgroups);
+    }
+
+    /* Based on the response calculated above for each stream message, delete
+     * the messages if needed (catching not found messages and adjusting the
+     * response).
+     *
+     * This step doesn't enqueue the response yet, because we need to do stream
+     * metadata bookkeeping and send signals first to meet the module keyspace
+     * API contract (matching xdel, xtrim & other stream commands, see
+     * issue #3429). */
+    int deleted = 0;
+    bool first_entry = 0;
+    for (int j = 0; j < id_count; j++) {
+        if (resps[j] == 1) {
+            streamID *id = &ids[j];
+            if (streamDeleteItem(s, id)) {
+                /* Track whether the first stream entry was removed so we can
+                 * update s->first_id below. */
+                if (streamCompareID(id, &s->first_id) == 0) {
+                    first_entry = 1;
+                }
+                /* Update the stream's maximal tombstone if needed. */
+                if (streamCompareID(id, &s->max_deleted_entry_id) > 0) {
+                    s->max_deleted_entry_id = *id;
+                }
+                deleted++;
+            } else {
+                /* If the message does not exist, use -1 response code.
+                 * Necessary here b/c in KEEPREF mode, we skip checking above. */
+                resps[j] = -1;
+            }
+        }
+    }
+
+    /* Update the stream's first ID. */
+    if (deleted) {
+        if (s->length == 0) {
+            s->first_id.ms = 0;
+            s->first_id.seq = 0;
+        } else if (first_entry) {
+            streamGetEdgeID(s, 1, 1, &s->first_id);
+        }
+    }
+
+    /* Either deleting entries or a PEL-only change mutate consumer-group state
+     * on this key, so we need to signal in either case to WATCH-ers & keyspace
+     * subscribers (see issue #3429). */
+    if (deleted || pel_modified) {
+        signalModifiedKey(c, c->db, c->argv[1]);
+        notifyKeyspaceEvent(NOTIFY_STREAM, "xdel", c->argv[1], c->db->id);
+        server.dirty += deleted;
+    }
+
+    /* Emit the array of per-ID results after the mutation has been signaled. */
+    addReplyArrayLen(c, id_count);
+    for (int j = 0; j < id_count; j++) {
+        addReplyLongLong(c, resps[j]);
+    }
+
+cleanup:
+    if (ids != static_ids) zfree(ids);
+    if (resps != static_resps) zfree(resps);
+}
+
 /* General form: XTRIM <key> [... options ...]
  *
  * List of options:

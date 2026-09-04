@@ -1655,7 +1655,7 @@ void clusterInitLast(void) {
     listener->bindaddr_count = server.bindaddr_count;
     listener->port = server.cluster_port ? server.cluster_port : port + CLUSTER_PORT_INCR;
     listener->ct = connTypeOfCluster();
-    if (connListen(listener) == C_ERR) {
+    if (adoptInheritedFdsForListener(listener, CONN_TYPE_CLUSTER_BUS) == 0 && connListen(listener) == C_ERR) {
         /* Note: the following log text is matched by the test suite. */
         serverLog(LL_WARNING, "Failed listening on port %u (cluster), aborting.", listener->port);
         exit(1);

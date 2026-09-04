@@ -2943,6 +2943,11 @@ long long serverPopcount(void *s, long count);
 int serverSetProcTitle(char *title);
 int validateProcTitleTemplate(const char *templ);
 int serverCommunicateSystemd(const char *sd_notify_msg);
+void inheritSystemdListenFds(void);
+/* Sentinel for the cluster bus in adoptInheritedFdsForListener(), since the
+ * cluster bus has no ConnectionType and isn't in server.listeners[]. */
+#define CONN_TYPE_CLUSTER_BUS CONN_TYPE_MAX
+int adoptInheritedFdsForListener(connListener *listener, int sd_conn_type);
 void serverSetCpuAffinity(const char *cpulist);
 void dictVanillaFree(void *val);
 

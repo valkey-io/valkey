@@ -188,7 +188,8 @@ struct connListener {
     int bindaddr_count;
     int port;
     ConnectionType *ct;
-    void *priv; /* used by connection type specified data */
+    void *priv;    /* used by connection type specified data */
+    int inherited; /* 1 if fds were passed by systemd socket activation */
 };
 
 /* The connection module does not deal with listening and accepting sockets,

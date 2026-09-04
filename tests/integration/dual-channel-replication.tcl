@@ -1556,19 +1556,36 @@ test "Dual channel replication buffer memory fields" {
                 fail "replica didn't start a dual-channel sync session in time"
             }
 
-            # Added some data to primary, the replica will cache it in its local buffer.
-            # Here we will use 50MB memory.
-            set bigstr [string repeat x 1024000]
-            for {set j 0} {$j < 50} {incr j} {
+            # Add data until the replica has cached enough in its local buffer.
+            # A fixed number of writes is flaky on slower TLS and IO-thread
+            # configurations because some data can still be in transit.
+            set value_size 1024000
+            set target_buffer_size [expr $value_size * 40]
+            set max_data_size [expr $target_buffer_size * 2]
+            set bigstr [string repeat x $value_size]
+            set sent_data_size 0
+            while {$sent_data_size < $max_data_size} {
                 $primary set key $bigstr
+                incr sent_data_size $value_size
+                if {[s $replica_srv_id mem_total_replication_buffers] > $target_buffer_size} {
+                    break
+                }
             }
 
-            # Waiting for data to be transferred from the primary to the replica.
+            # The send budget can run out while data is still in transit, so
+            # wait for the replica to buffer it instead of failing right away.
             wait_for_condition 1000 50 {
-               [s $primary_srv_id mem_total_replication_buffers] < [expr 1024000 * 10] &&
-               [s $replica_srv_id mem_total_replication_buffers] > [expr 1024000 * 40]
+                [s $replica_srv_id mem_total_replication_buffers] > $target_buffer_size
             } else {
-                fail "replica didn't receive the data in time"
+                fail "replica didn't buffer $target_buffer_size bytes after sending $sent_data_size bytes"
+            }
+
+            # Wait for the primary to release the data it has transferred.
+            wait_for_condition 1000 50 {
+               [s $primary_srv_id mem_total_replication_buffers] < [expr $value_size * 10] &&
+               [s $replica_srv_id mem_total_replication_buffers] > $target_buffer_size
+            } else {
+                fail "replication buffers did not reach expected state (primary=[s $primary_srv_id mem_total_replication_buffers], expected primary<[expr $value_size * 10]; replica=[s $replica_srv_id mem_total_replication_buffers], expected replica>$target_buffer_size)"
             }
 
             # Primary side check. Capture INFO and MEMORY STATS in one EXEC so the
@@ -1579,7 +1596,7 @@ test "Dual channel replication buffer memory fields" {
             lassign [$primary exec] primary_info primary_memory_stats
 
             # Primary's total replication buffers check.
-            assert_lessthan_equal [getInfoProperty $primary_info mem_total_replication_buffers] [expr 1024000 * 10]
+            assert_lessthan_equal [getInfoProperty $primary_info mem_total_replication_buffers] [expr $value_size * 10]
 
             # Primary's replicas replication buffer should be 0.
             assert_equal 0 [getInfoProperty $primary_info mem_replicas_repl_buffer]
@@ -1593,17 +1610,17 @@ test "Dual channel replication buffer memory fields" {
             lassign [$replica exec] replica_info replica_memory_stats
 
             # Replica's memory overhead check.
-            assert_morethan_equal [getInfoProperty $replica_info used_memory_overhead] [expr 1024000 * 40]
+            assert_morethan_equal [getInfoProperty $replica_info used_memory_overhead] $target_buffer_size
             assert_equal [getInfoProperty $replica_info used_memory_overhead] [dict get $replica_memory_stats overhead.total]
 
             # Replica's total replication buffers check. It should be equal to the replica replication buffer.
-            assert_morethan_equal [getInfoProperty $replica_info mem_total_replication_buffers] [expr 1024000 * 40]
+            assert_morethan_equal [getInfoProperty $replica_info mem_total_replication_buffers] $target_buffer_size
             assert_equal [getInfoProperty $replica_info mem_replicas_repl_buffer] [getInfoProperty $replica_info mem_total_replication_buffers]
             assert_equal [getInfoProperty $replica_info mem_replicas_repl_buffer] [dict get $replica_memory_stats replicas.repl.buffer]
 
             # Replica's replica replication buffer size check.
-            assert_morethan_equal [getInfoProperty $replica_info replicas_repl_buffer_size] [expr 1024000 * 40]
-            assert_morethan_equal [getInfoProperty $replica_info replicas_repl_buffer_peak] [expr 1024000 * 40]
+            assert_morethan_equal [getInfoProperty $replica_info replicas_repl_buffer_size] $target_buffer_size
+            assert_morethan_equal [getInfoProperty $replica_info replicas_repl_buffer_peak] $target_buffer_size
         }
     }
 }

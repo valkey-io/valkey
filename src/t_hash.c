@@ -322,6 +322,7 @@ bool hashTypeHasStringRef(robj *o, sds field) {
     if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) return false;
     hashtable *ht = objectGetVal(o);
     void **entry_ref = hashtableFindRef(ht, field);
+    if (!entry_ref) return false;
     return (entryHasStringRef(*entry_ref));
 }
 

@@ -2811,7 +2811,10 @@ struct serverCommand {
 };
 
 struct serverError {
-    long long count;
+    long long count; /* total occurrences of this error */
+    /* Per-command breakdown: radix tree mapping command fullname -> long long *
+     * counter. NULL when no command context was available for any occurrence. */
+    rax *codes;
 };
 
 struct serverFunctionSym {
@@ -3607,7 +3610,8 @@ void populateCommandTable(void);
 void resetCommandTableStats(hashtable *commands);
 void resetErrorTableStats(void);
 void adjustOpenFilesLimit(void);
-void incrementErrorCount(const char *fullerr, size_t namelen);
+void incrementErrorCount(const char *fullerr, size_t namelen, client *c);
+void freeServerError(void *ptr);
 void closeListeningSockets(int unlink_unix_socket);
 void updateCachedTime(int update_daylight_info);
 void bytesToHuman(char *s, size_t size, unsigned long long n);

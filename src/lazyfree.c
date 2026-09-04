@@ -48,7 +48,7 @@ void lazyFreeTrackingTable(void *args[]) {
 void lazyFreeErrors(void *args[]) {
     rax *errors = args[0];
     size_t len = errors->numele;
-    raxFreeWithCallback(errors, zfree);
+    raxFreeWithCallback(errors, freeServerError);
     atomic_fetch_sub_explicit(&lazyfree_objects, len, memory_order_relaxed);
     atomic_fetch_add_explicit(&lazyfreed_objects, len, memory_order_relaxed);
 }
@@ -242,7 +242,7 @@ void freeErrorsRadixTreeAsync(rax *errors) {
         atomic_fetch_add_explicit(&lazyfree_objects, errors->numele, memory_order_relaxed);
         bioCreateLazyFreeJob(lazyFreeErrors, 1, errors);
     } else {
-        raxFreeWithCallback(errors, zfree);
+        raxFreeWithCallback(errors, freeServerError);
     }
 }
 

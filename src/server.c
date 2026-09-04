@@ -4911,16 +4911,43 @@ int processCommand(client *c) {
 
 /* ====================== Error lookup and execution ===================== */
 
-void incrementErrorCount(const char *fullerr, size_t namelen) {
+/* Increment the error count for the given error prefix. If `c` is non-NULL
+ * and has an associated command (c->realcmd), also increment the per-command
+ * breakdown counter stored in the error's `codes` radix tree, keyed by the
+ * command's full name (e.g. "get" or "client|setname"). */
+void incrementErrorCount(const char *fullerr, size_t namelen, client *c) {
     void *result;
+    struct serverError *e;
     if (!raxFind(server.errors, (unsigned char *)fullerr, namelen, &result)) {
-        struct serverError *error = zmalloc(sizeof(*error));
-        error->count = 1;
-        raxInsert(server.errors, (unsigned char *)fullerr, namelen, error, NULL);
+        e = zmalloc(sizeof(*e));
+        e->count = 0;
+        e->codes = NULL;
+        raxInsert(server.errors, (unsigned char *)fullerr, namelen, e, NULL);
     } else {
-        struct serverError *error = result;
-        error->count++;
+        e = result;
     }
+    e->count++;
+    if (c && c->realcmd) {
+        if (!e->codes) e->codes = raxNew();
+        sds cmdname = c->realcmd->fullname;
+        void *cmd_result;
+        if (!raxFind(e->codes, (unsigned char *)cmdname, sdslen(cmdname), &cmd_result)) {
+            long long *cptr = zmalloc(sizeof(long long));
+            *cptr = 1;
+            raxInsert(e->codes, (unsigned char *)cmdname, sdslen(cmdname), cptr, NULL);
+        } else {
+            long long *cptr = cmd_result;
+            (*cptr)++;
+        }
+    }
+}
+
+/* Free a serverError entry, releasing both the per-command breakdown radix
+ * tree (and the long long counters it holds) and the entry itself. */
+void freeServerError(void *ptr) {
+    struct serverError *e = ptr;
+    if (e->codes) raxFreeWithCallback(e->codes, zfree);
+    zfree(e);
 }
 
 /*================================== Shutdown =============================== */
@@ -6979,9 +7006,29 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
         while (raxNext(&ri)) {
             char *tmpsafe;
             e = (struct serverError *)ri.data;
-            info = sdscatprintf(info, "errorstat_%.*s:count=%lld\r\n", (int)ri.key_len,
+            info = sdscatprintf(info, "errorstat_%.*s:count=%lld", (int)ri.key_len,
                                 getSafeInfoString((char *)ri.key, ri.key_len, &tmpsafe), e->count);
             if (tmpsafe != NULL) zfree(tmpsafe);
+
+            /* Command breakdown */
+            if (e->codes) {
+                info = sdscat(info, "(");
+                raxIterator cri;
+                raxStart(&cri, e->codes);
+                raxSeek(&cri, "^", NULL, 0);
+                bool first = true;
+                while (raxNext(&cri)) {
+                    if (!first) info = sdscat(info, ",");
+                    sds cmdname = sdsnewlen(cri.key, cri.key_len);
+                    sdstoupper(cmdname);
+                    info = sdscatprintf(info, "%s=%lld", cmdname, *(long long *)cri.data);
+                    sdsfree(cmdname);
+                    first = false;
+                }
+                raxStop(&cri);
+                info = sdscat(info, ")");
+            }
+            info = sdscat(info, "\r\n");
         }
         raxStop(&ri);
     }

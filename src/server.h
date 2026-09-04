@@ -2267,6 +2267,10 @@ struct valkeyServer {
     int maxmemory_policy;                       /* Policy for key eviction */
     int maxmemory_samples;                      /* Precision of random sampling */
     int maxmemory_eviction_tenacity;            /* Aggressiveness of eviction processing */
+    int script_check_maxmemory;                 /* Keep enforcing the maxmemory (OOM) check for every write
+                                                 * command executed during a script, so a runaway script can be
+                                                 * aborted early instead of growing memory without bound. This
+                                                 * trades script atomicity for protection against OOM. */
     long long proto_max_bulk_len;               /* Protocol bulk length maximum size. */
     int oom_score_adj_values[CONFIG_OOM_COUNT]; /* Linux oom_score_adj configuration */
     int oom_score_adj;                          /* If true, oom_score_adj is managed */

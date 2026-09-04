@@ -4304,11 +4304,6 @@ void call(client *c, int flags) {
         server.stat_numcommands++;
     }
 
-    /* Record peak memory after each command and before the eviction that runs
-     * before the next command. */
-    size_t zmalloc_used = zmalloc_used_memory();
-    if (zmalloc_used > server.stat_peak_memory) server.stat_peak_memory = zmalloc_used;
-
     /* Do some maintenance job and cleanup */
     afterCommand(c);
 

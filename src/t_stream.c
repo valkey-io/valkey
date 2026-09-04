@@ -2657,7 +2657,7 @@ void xgroupCommand(client *c) {
                        i + 1 < c->argc) {
                 if (getLongLongFromObjectOrReply(c, c->argv[i + 1], &entries_read, NULL) != C_OK) return;
                 if (entries_read < 0 && entries_read != SCG_INVALID_ENTRIES_READ) {
-                    addReplyError(c, "value for ENTRIESREAD must be positive or -1");
+                    addReplyError(c, "value for ENTRIESREAD must be non-negative, or -1 for unknown");
                     return;
                 }
                 i += 2;

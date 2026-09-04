@@ -4497,6 +4497,51 @@ void unprepareCommand(client *c) {
     c->slot = -1;
 }
 
+/* Check if the command will access at least one key (or has a "key-like"
+   argument like a sharded pub/sub command) */
+int commandHasKey(client *c, struct serverCommand *cmd, robj **argv, int argc) {
+    multiState *ms, _ms;
+    multiCmd mc;
+    int i;
+
+    if (cmd->proc == execCommand) {
+        /* If CLIENT_MULTI flag is not set EXEC is just going to return an
+         * error later. */
+        if (!c->flag.multi) return 0;
+        ms = c->mstate;
+    } else {
+        /* In order to have a single codepath create a fake Multi State
+         * structure if the client is not in MULTI/EXEC state, this way
+         * we have a single codepath below. */
+        ms = &_ms;
+        _ms.commands = &mc;
+        _ms.count = 1;
+        mc.argv = argv;
+        mc.argc = argc;
+        mc.cmd = cmd;
+    }
+
+    /* Check if the command accesses a key */
+    for (i = 0; i < ms->count; i++) {
+        struct serverCommand *mcmd;
+        robj **margv;
+        int margc, numkeys;
+
+        mcmd = ms->commands[i].cmd;
+        margc = ms->commands[i].argc;
+        margv = ms->commands[i].argv;
+
+        getKeysResult result;
+        initGetKeysResult(&result);
+        numkeys = getKeysFromCommand(mcmd, margv, margc, &result);
+        getKeysFreeResult(&result);
+        if (numkeys > 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /* If this function gets called we already read a whole
  * command, arguments are in the client argv/argc fields.
  * processCommand() execute the command or prepare the
@@ -4610,6 +4655,7 @@ int processCommand(client *c) {
     int is_denyloading_command = (combined_inv_flags & CMD_LOADING);
     int is_may_replicate_command = (combined_flags & (CMD_WRITE | CMD_MAY_REPLICATE));
     int is_deny_async_loading_command = (combined_flags & CMD_NO_ASYNC_LOADING);
+    int is_pubsub_command = (combined_flags & CMD_PUBSUB);
 
     const int obey_client = mustObeyClient(c);
 
@@ -4691,7 +4737,7 @@ int processCommand(client *c) {
     }
 
     if (clientSupportStandAloneRedirect(c) && !obey_client &&
-        (is_write_command || (is_read_command && !c->flag.readonly))) {
+        commandHasKey(c, c->cmd, c->argv, c->argc) && (is_write_command || (!c->flag.readonly && !is_pubsub_command))) {
         if (server.failover_state == FAILOVER_IN_PROGRESS) {
             /* During the FAILOVER process, when conditions are met (such as
              * when the force time is reached or the primary and replica offsets

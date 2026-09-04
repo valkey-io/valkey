@@ -914,6 +914,16 @@ static doneStatus defragStageKvstoreHelper(monotime endtime,
 }
 
 
+/* Test seam: declared locally by src/unit/test_defrag.cpp (not in a header -- it exists only for
+ * that test). Drives defragStageKvstoreHelper() over `kvs` using a
+ * count-only scan callback, so it exercises the incremental-iteration + endtime-yield contract
+ * without depending on live object defrag or a fragmented heap. Returns 1 for DEFRAG_DONE,
+ * 0 for DEFRAG_NOT_DONE (yielded). */
+int defragTestRunKvstoreStage(monotime endtime, kvstore *kvs) {
+    return defragStageKvstoreHelper(endtime, kvs, scanHashtableCallbackCountScanned, NULL, NULL) == DEFRAG_DONE;
+}
+
+
 // Target is a DBID
 static doneStatus defragStageDbKeys(monotime endtime, void *target, void *privdata) {
     UNUSED(privdata);
@@ -1040,6 +1050,38 @@ static void endDefragCycle(bool normal_termination) {
 }
 
 
+/* Compute the defrag duty-cycle time.  Extracted from computeDefragCycleUs() so it can be
+ * unit-tested without server state or a clock. */
+long defragComputeDutyCycleUs(int targetCpuPercent, long cycleUs, long waitedUs, long *overageUs) {
+    /* Given the elapsed wait time between calls, compute the necessary duty time needed to
+     *  achieve the desired CPU percentage.
+     *  With:  D = duty time, W = wait time, P = percent
+     *  Solve:    D          P
+     *          -----   =  -----
+     *          D + W       100
+     *  Solving for D:
+     *     D = P * W / (100 - P)
+     *
+     * Note that dutyCycleUs addresses starvation.  If the wait time was long, we will compensate
+     *  with a proportionately long duty-cycle.  This won't significantly affect perceived
+     *  latency, because clients are already being impacted by the long cycle time which caused
+     *  the starvation of the timer. */
+    long dutyCycleUs = targetCpuPercent * waitedUs / (100 - targetCpuPercent);
+
+    // Also adjust for any accumulated overage.
+    dutyCycleUs -= *overageUs;
+    *overageUs = 0;
+
+    if (dutyCycleUs < cycleUs) {
+        /* We never reduce our cycle time, that would increase overhead.  Instead, we track this
+         *  as part of the overage, and increase wait time between cycles. */
+        *overageUs = cycleUs - dutyCycleUs;
+        dutyCycleUs = cycleUs;
+    }
+    return dutyCycleUs;
+}
+
+
 /* Must be called at the start of the timeProc as it measures the delay from the end of the previous
  * timeProc invocation when performing the computation. */
 static int computeDefragCycleUs(void) {
@@ -1064,31 +1106,8 @@ static int computeDefragCycleUs(void) {
         dutyCycleUs = server.active_defrag_cycle_us;
     } else {
         long waitedUs = getMonotonicUs() - defrag.timeproc_end_time;
-        /* Given the elapsed wait time between calls, compute the necessary duty time needed to
-         *  achieve the desired CPU percentage.
-         *  With:  D = duty time, W = wait time, P = percent
-         *  Solve:    D          P
-         *          -----   =  -----
-         *          D + W       100
-         *  Solving for D:
-         *     D = P * W / (100 - P)
-         *
-         * Note that dutyCycleUs addresses starvation.  If the wait time was long, we will compensate
-         *  with a proportionately long duty-cycle.  This won't significantly affect perceived
-         *  latency, because clients are already being impacted by the long cycle time which caused
-         *  the starvation of the timer. */
-        dutyCycleUs = targetCpuPercent * waitedUs / (100 - targetCpuPercent);
-
-        // Also adjust for any accumulated overage.
-        dutyCycleUs -= defrag.timeproc_overage_us;
-        defrag.timeproc_overage_us = 0;
-
-        if (dutyCycleUs < server.active_defrag_cycle_us) {
-            /* We never reduce our cycle time, that would increase overhead.  Instead, we track this
-             *  as part of the overage, and increase wait time between cycles. */
-            defrag.timeproc_overage_us = server.active_defrag_cycle_us - dutyCycleUs;
-            dutyCycleUs = server.active_defrag_cycle_us;
-        }
+        dutyCycleUs = defragComputeDutyCycleUs(targetCpuPercent, server.active_defrag_cycle_us,
+                                               waitedUs, &defrag.timeproc_overage_us);
     }
     return dutyCycleUs;
 }
@@ -1121,6 +1140,35 @@ static int computeDelayMs(monotime intendedEndtime) {
 }
 
 
+/* Run defrag stages until the time budget (endtime, monotonic microseconds) is exhausted or all
+ * stages are complete.  Returns true if work remains (the cycle yielded), false if the cycle is
+ * complete.  Extracted from the timer proc so it and the test seam exercise identical scheduling. */
+static bool defragRunStages(monotime endtime) {
+    bool haveMoreWork = true;
+    do {
+        if (!defrag.current_stage) {
+            defrag.current_stage = listNodeValue(listFirst(defrag.remaining_stages));
+            listDelNode(defrag.remaining_stages, listFirst(defrag.remaining_stages));
+            // Initialize the stage with endtime==0
+            doneStatus status = defrag.current_stage->stage_fn(0, defrag.current_stage->target, defrag.current_stage->privdata);
+            serverAssert(status == DEFRAG_NOT_DONE); // Initialization should always return DEFRAG_NOT_DONE
+        }
+
+        doneStatus status = defrag.current_stage->stage_fn(endtime, defrag.current_stage->target, defrag.current_stage->privdata);
+        if (status == DEFRAG_DONE) {
+            zfree(defrag.current_stage);
+            defrag.current_stage = NULL;
+        }
+
+        haveMoreWork = (defrag.current_stage || listLength(defrag.remaining_stages) > 0);
+        /* If we've completed a stage early, and still have a standard time allotment remaining,
+         * we'll start another stage.  This can happen when defrag is running infrequently, and
+         * starvation protection has increased the duty-cycle. */
+    } while (haveMoreWork && getMonotonicUs() <= endtime - server.active_defrag_cycle_us);
+    return haveMoreWork;
+}
+
+
 /* An independent time proc for defrag.  While defrag is running, this is called much more often
  *  than the server cron.  Frequent short calls provides low latency impact. */
 static long long activeDefragTimeProc(struct aeEventLoop *eventLoop, long long id, void *clientData) {
@@ -1146,31 +1194,10 @@ static long long activeDefragTimeProc(struct aeEventLoop *eventLoop, long long i
     monotime starttime = getMonotonicUs();
     int dutyCycleUs = computeDefragCycleUs();
     monotime endtime = starttime + dutyCycleUs;
-    bool haveMoreWork = true;
-
     mstime_t latency;
     latencyStartMonitor(latency);
 
-    do {
-        if (!defrag.current_stage) {
-            defrag.current_stage = listNodeValue(listFirst(defrag.remaining_stages));
-            listDelNode(defrag.remaining_stages, listFirst(defrag.remaining_stages));
-            // Initialize the stage with endtime==0
-            doneStatus status = defrag.current_stage->stage_fn(0, defrag.current_stage->target, defrag.current_stage->privdata);
-            serverAssert(status == DEFRAG_NOT_DONE); // Initialization should always return DEFRAG_NOT_DONE
-        }
-
-        doneStatus status = defrag.current_stage->stage_fn(endtime, defrag.current_stage->target, defrag.current_stage->privdata);
-        if (status == DEFRAG_DONE) {
-            zfree(defrag.current_stage);
-            defrag.current_stage = NULL;
-        }
-
-        haveMoreWork = (defrag.current_stage || listLength(defrag.remaining_stages) > 0);
-        /* If we've completed a stage early, and still have a standard time allotment remaining,
-         * we'll start another stage.  This can happen when defrag is running infrequently, and
-         * starvation protection has increased the duty-cycle. */
-    } while (haveMoreWork && getMonotonicUs() <= endtime - server.active_defrag_cycle_us);
+    bool haveMoreWork = defragRunStages(endtime);
 
     latencyEndMonitor(latency);
     latencyAddSampleIfNeeded("active-defrag-cycle", latency);
@@ -1207,9 +1234,9 @@ void defragWhileBlocked(void) {
 }
 
 
-static void beginDefragCycle(void) {
-    serverAssert(!defragIsRunning());
-
+/* Build the list of defrag stages for a new cycle and reset per-cycle state.  Does NOT register the
+ * event-loop timer -- shared by beginDefragCycle() and the test seam (defragRunCycleForTest). */
+static void defragSetupCycleStages(void) {
     serverAssert(defrag.remaining_stages == NULL);
     defrag.remaining_stages = listCreate();
 
@@ -1237,9 +1264,52 @@ static void beginDefragCycle(void) {
     defrag.start_defrag_hits = server.stat_active_defrag_hits;
     defrag.timeproc_end_time = 0;
     defrag.timeproc_overage_us = 0;
-    defrag.timeproc_id = aeCreateTimeEvent(server.el, 0, activeDefragTimeProc, NULL, NULL);
-
+    /* endDefragCycle() accumulates elapsedUs(stat_last_active_defrag_time) into the total, so
+     * every cycle setup path must start the clock -- not just the timer-proc path. */
     elapsedStart(&server.stat_last_active_defrag_time);
+}
+
+
+static void beginDefragCycle(void) {
+    serverAssert(!defragIsRunning());
+    defragSetupCycleStages();
+    defrag.timeproc_id = aeCreateTimeEvent(server.el, 0, activeDefragTimeProc, NULL, NULL);
+}
+
+
+/* Test seam (declared locally by src/unit/test_defrag.cpp): run one full defrag cycle bounded by
+ * `endtime` (monotonic
+ * microseconds), using the same stage setup and scheduling code as the timer proc but WITHOUT
+ * registering an event-loop timer, so a test can drive it deterministically with a mocked clock.
+ * On the first call of a cycle it sets up the stages; each call runs stages until the budget is
+ * exhausted.  Returns 1 if the cycle completed (and tears it down), 0 if it yielded with work
+ * remaining (call again to continue). */
+int defragRunCycleForTest(monotime endtime) {
+    if (defrag.remaining_stages == NULL && defrag.current_stage == NULL) {
+        defragSetupCycleStages();
+    }
+    bool haveMoreWork = defragRunStages(endtime);
+    if (!haveMoreWork) {
+        endDefragCycle(true);
+        return 1;
+    }
+    return 0;
+}
+
+
+/* Test seam (declared locally by src/unit/test_defrag.cpp): expose whether a defrag cycle is in
+ * progress, so a test driving defragWhileBlocked() can loop until the cycle completes. */
+int defragTestIsRunning(void) {
+    return defragIsRunning();
+}
+
+
+/* Test seam (declared locally by src/unit/test_defrag.cpp): begin a defrag cycle exactly as
+ * production does -- including registering the event-loop timer that defragIsRunning() keys on --
+ * so a test can drive the cycle through defragWhileBlocked(). The test never runs the event loop;
+ * defragWhileBlocked() itself simulates the timer proc and deregisters the timer on completion. */
+void defragTestBeginCycle(void) {
+    beginDefragCycle();
 }
 
 

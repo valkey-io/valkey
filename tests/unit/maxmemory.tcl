@@ -609,3 +609,86 @@ start_server {tags {"maxmemory" "external:skip"}} {
         assert_equal [r dbsize] {0}
     }
 }
+
+start_server {tags {"maxmemory" "external:skip"}} {
+    test {SUBSCRIBE, PSUBSCRIBE, SSUBSCRIBE and WATCH should be denied with OOM with noeviction} {
+        r flushall sync
+        r config set maxmemory 100MB
+        r config set maxmemory-policy noeviction
+
+        r set smallkey hello
+        r set bigkey [string repeat x 1000000]
+
+        r config set maxmemory 1
+        assert_error {OOM command not allowed*} {r subscribe test_channel}
+        assert_error {OOM command not allowed*} {r psubscribe test_pattern*}
+        assert_error {OOM command not allowed*} {r ssubscribe test_shardchannel}
+        assert_error {OOM command not allowed*} {r watch test_key}
+
+        # Keys are never evicted under noeviction, so they are all still there.
+        assert_equal [r dbsize] 2
+
+        r config set maxmemory 0
+        r config set maxmemory-policy noeviction
+    } {OK} {needs:config-maxmemory}
+
+    test {SUBSCRIBE, PSUBSCRIBE, SSUBSCRIBE and WATCH should be denied with OOM even when eviction cannot free enough memory} {
+        r flushall sync
+        r config set maxmemory 100MB
+        r config set maxmemory-policy allkeys-lru
+
+        r set smallkey hello
+        r set bigkey [string repeat x 1000000]
+
+        # maxmemory is far too low to ever be reached by eviction, so the
+        # denyoom commands must still be rejected even with an eviction policy.
+        r config set maxmemory 1
+        assert_error {OOM command not allowed*} {r subscribe test_channel}
+        assert_error {OOM command not allowed*} {r psubscribe test_pattern*}
+        assert_error {OOM command not allowed*} {r ssubscribe test_shardchannel}
+        assert_error {OOM command not allowed*} {r watch test_key}
+
+        # Eviction was attempted on every command above and emptied the dataset.
+        assert_equal [r dbsize] 0
+
+        r config set maxmemory 0
+        r config set maxmemory-policy noeviction
+    } {OK} {needs:config-maxmemory}
+
+    test {SUBSCRIBE, PSUBSCRIBE, SSUBSCRIBE and WATCH are allowed when below maxmemory} {
+        r flushall sync
+        r config set maxmemory 100MB
+        r config set maxmemory-policy noeviction
+
+        set rd [valkey_deferring_client]
+        assert_equal {1} [subscribe $rd test_channel]
+        assert_equal {2} [psubscribe $rd test_pattern*]
+        assert_equal {1} [ssubscribe $rd test_shardchannel]
+        $rd close
+
+        assert_equal {OK} [r watch test_key]
+        assert_equal {OK} [r unwatch]
+
+        r config set maxmemory 0
+    } {OK} {needs:config-maxmemory}
+
+    test {UNSUBSCRIBE, PUNSUBSCRIBE, SUNSUBSCRIBE, UNWATCH, PUBLISH and SPUBLISH are not denied with OOM} {
+        r flushall sync
+        r config set maxmemory 100MB
+        r config set maxmemory-policy noeviction
+
+        r set bigkey [string repeat x 1000000]
+
+        # These commands do not carry the DENYOOM flag (they don't grow memory),
+        # so they must keep working even when the server is out of memory.
+        r config set maxmemory 1
+        assert_equal {OK} [r unwatch]
+        assert_equal {unsubscribe {} 0} [r unsubscribe]
+        assert_equal {punsubscribe {} 0} [r punsubscribe]
+        assert_equal {sunsubscribe {} 0} [r sunsubscribe]
+        assert_equal {0} [r publish test_channel hello]
+        assert_equal {0} [r spublish test_shardchannel hello]
+
+        r config set maxmemory 0
+    } {OK} {needs:config-maxmemory}
+}

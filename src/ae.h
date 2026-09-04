@@ -116,6 +116,7 @@ typedef struct aeEventLoop {
     aeFileEvent *events; /* Registered events */
     aeFiredEvent *fired; /* Fired events */
     aeTimeEvent *timeEventHead;
+    aeTimeEvent *earliestTimer; /* cached earliest valid timer for O(1) lookup */
     int stop;
     aeApiState *apidata; /* Polling API specific state (owned by the backend) */
     aeBeforeSleepProc *beforesleep;

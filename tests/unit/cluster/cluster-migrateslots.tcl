@@ -184,6 +184,163 @@ proc do_node_restart {idx} {
     }
 }
 
+proc has_active_slot_migration {node_idx} {
+    set migrations {}
+    catch {set migrations [R $node_idx CLUSTER GETSLOTMIGRATIONS]}
+    foreach migration $migrations {
+        if {[dict get $migration state] ni {success cancelled failed}} {
+            return 1
+        }
+    }
+    return 0
+}
+
+# Record which shard owns each slot, so a failed test that dies
+# mid-migration can have slot ownership restored by the recovery barrier.
+# Ownership is tracked per shard rather than per node: a failover inside a
+# test moves slots to the promoted replica, and the restore only needs slots
+# back on the right shard, whichever member is currently its primary.
+proc capture_canonical_slot_layout {} {
+    # Node IDs are how CLUSTER SLOTS reports owners, but tests address nodes
+    # by R index -- record the mapping for every node, including replicas,
+    # so owners can be resolved after a failover promotes one.
+    set ::node_id_to_idx {}
+    for {set n 0} {$n < [llength $::servers]} {incr n} {
+        dict set ::node_id_to_idx [R $n CLUSTER MYID] $n
+    }
+    # Each CLUSTER SLOTS entry is {start end {ip port id ...} ...} listing
+    # the owning primary first and its replicas after it. Every member of a
+    # shard maps to the same canonical shard, identified by the R index of
+    # the shard's primary at capture time.
+    set ::idx_to_shard {}
+    # -1 marks slots with no recorded owner; the restore skips them.
+    for {set s 0} {$s < 16384} {incr s} {set ::canonical_slot_owner($s) -1}
+    foreach entry [R 0 CLUSTER SLOTS] {
+        set primary_id [lindex [lindex $entry 2] 2]
+        if {![dict exists $::node_id_to_idx $primary_id]} continue
+        set shard [dict get $::node_id_to_idx $primary_id]
+        foreach member [lrange $entry 2 end] {
+            set member_id [lindex $member 2]
+            if {[dict exists $::node_id_to_idx $member_id]} {
+                dict set ::idx_to_shard [dict get $::node_id_to_idx $member_id] $shard
+            }
+        }
+        for {set s [lindex $entry 0]} {$s <= [lindex $entry 1]} {incr s} {
+            set ::canonical_slot_owner($s) $shard
+        }
+    }
+}
+
+# Resolve the R index of the node currently acting as primary for a shard,
+# or -1 if none is found. After a failover this may be a different node than
+# the shard's primary at capture time.
+proc current_shard_primary {shard} {
+    for {set n 0} {$n < [llength $::servers]} {incr n} {
+        if {[dict exists $::idx_to_shard $n] &&
+            [dict get $::idx_to_shard $n] == $shard &&
+            [lindex [R $n ROLE] 0] eq "master"} {
+            return $n
+        }
+    }
+    return -1
+}
+
+# Migrate any slots displaced from the canonical layout back to their
+# canonical shard. Contiguous displaced slots with the same source and
+# destination move as a single range.
+proc restore_canonical_slot_layout {} {
+    if {![info exists ::canonical_slot_owner]} return
+    # Build the current per-slot owner map at shard granularity. Owners
+    # reported by CLUSTER SLOTS are primaries by definition, which may be
+    # promoted replicas rather than the capture-time primaries.
+    set current {}
+    foreach entry [R 0 CLUSTER SLOTS] {
+        set owner_id [lindex [lindex $entry 2] 2]
+        if {![dict exists $::node_id_to_idx $owner_id]} continue
+        set owner_idx [dict get $::node_id_to_idx $owner_id]
+        if {![dict exists $::idx_to_shard $owner_idx]} continue
+        set owner_shard [dict get $::idx_to_shard $owner_idx]
+        for {set s [lindex $entry 0]} {$s <= [lindex $entry 1]} {incr s} {
+            dict set current $s [list $owner_idx $owner_shard]
+        }
+    }
+    # Sweep all slots, run-length grouping consecutive displaced slots that
+    # share the same current owner and canonical shard, and migrate each
+    # group back as a single range. A run ends when the slot is no longer
+    # mismatched or its source/destination pair changes; the sweep
+    # deliberately goes one past the last slot (16384) so a run ending at
+    # slot 16383 is flushed. Slots with no canonical owner recorded (-1) or
+    # currently unserved (absent from CLUSTER SLOTS) are never treated as
+    # mismatched.
+    set run_start -1
+    for {set s 0} {$s <= 16384} {incr s} {
+        set mismatch 0
+        if {$s < 16384 && [dict exists $current $s]} {
+            set want $::canonical_slot_owner($s)
+            lassign [dict get $current $s] have_idx have_shard
+            if {$want >= 0 && $have_shard != $want} {set mismatch 1}
+        }
+        if {$mismatch && $run_start == -1} {
+            set run_start $s
+            set run_have_idx $have_idx
+            set run_want $want
+        } elseif {$run_start != -1 && (!$mismatch || $have_idx != $run_have_idx || $want != $run_want)} {
+            # The destination must be whichever member of the canonical
+            # shard is currently its primary, which after a failover is not
+            # necessarily the capture-time primary.
+            set dst [current_shard_primary $run_want]
+            if {$dst >= 0} {
+                set want_id [R $dst CLUSTER MYID]
+                # Best-effort: the barrier must never raise from block level.
+                catch {
+                    assert_match "OK" [R $run_have_idx CLUSTER MIGRATESLOTS SLOTSRANGE $run_start [expr {$s - 1}] NODE $want_id]
+                    wait_for_migration $dst $run_start
+                }
+            }
+            set run_start [expr {$mismatch ? $s : -1}]
+            if {$mismatch} {set run_have_idx $have_idx; set run_want $want}
+        }
+    }
+}
+
+# Recovery barrier for tests that start slot migrations. When such a test
+# fails an assertion mid-flight, it leaks state: an in-flight migration,
+# DEBUG SLOTMIGRATION PREVENT-* flags, and config tweaks. The next test to
+# call CLUSTER MIGRATESLOTS then hits a non-assertion error such as
+# "ERR I am already migrating slot", which aborts the whole test client and
+# discards the rest of the run. Calling this barrier after a
+# migration-starting test contains a failure to that single test. After
+# migrations drain, slot ownership displaced by the failed test is migrated
+# back to the canonical layout captured at cluster setup. All steps are
+# best-effort so the barrier itself cannot abort the
+# client from block level.
+proc recover_slot_migration_state {} {
+    catch {set_debug_prevent_pause 0}
+    catch {set_debug_prevent_failover 0}
+    for {set i 0} {$i < [llength $::servers]} {incr i} {
+        catch {R $i CONFIG SET rdb-key-save-delay 0}
+        catch {R $i CONFIG SET repl-timeout 60}
+        catch {R $i CONFIG SET hz 10}
+    }
+    # Cancel and drain on every node: after a failover inside a test, the
+    # primary holding a migration job may be a promoted replica.
+    for {set n 0} {$n < [llength $::servers]} {incr n} {
+        catch {R $n CLUSTER CANCELSLOTMIGRATIONS}
+    }
+    catch {
+        for {set n 0} {$n < [llength $::servers]} {incr n} {
+            wait_for_condition 100 100 {
+                ![has_active_slot_migration $n]
+            } else {
+                fail "Node $n still has an active slot migration after recovery"
+            }
+        }
+        restore_canonical_slot_layout
+        wait_for_cluster_propagation
+    }
+}
+
+
 # Disable replica migration to prevent empty nodes from joining other shards.
 start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides {cluster-allow-replica-migration no cluster-node-timeout 15000 cluster-databases 16}} {
 
@@ -191,6 +348,7 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
     set node1_id [R 1 CLUSTER MYID]
     set node2_id [R 2 CLUSTER MYID]
     set fake_jobname "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    capture_canonical_slot_layout
 
     test "General command interface" {
         assert_error "*wrong number of arguments*" {R 0 CLUSTER MIGRATESLOTS}
@@ -661,6 +819,7 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
             wait_for_migration 2 16383
         }
     }
+    recover_slot_migration_state
 
     test "Import with hz set to 1" {
         assert_does_not_resync {
@@ -696,6 +855,7 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
             R 2 CONFIG SET hz $old_hz
         }
     }
+    recover_slot_migration_state
 
     # Catch-all test for covering commands sent during incremental replication
     test "Single source import - Incremental Command Coverage" {
@@ -1165,6 +1325,7 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
             assert_match "OK" [R 2 FLUSHDB SYNC]
         }
     }
+    recover_slot_migration_state
 
     test "Partial data removed on cancel" {
         assert_does_not_resync {
@@ -1561,6 +1722,7 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
             set_debug_prevent_pause 0
         }
     }
+    recover_slot_migration_state
 
     test "FLUSH on target during import" {
         assert_does_not_resync {
@@ -1895,6 +2057,7 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
             wait_for_migration 2 16383
         }
     }
+    recover_slot_migration_state
 
     test "Export client buffer excluded from maxmemory" {
         assert_does_not_resync {
@@ -2010,6 +2173,7 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
             wait_for_migration 0 0
         }
     }
+    recover_slot_migration_state
 
     foreach testcase [list \
         [list 0 0 1] \
@@ -2170,6 +2334,7 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
             # Since we are restarting primaries, we need to ensure the cluster becomes stable
             wait_for_cluster_state ok
         }
+        recover_slot_migration_state
     }
 }
 

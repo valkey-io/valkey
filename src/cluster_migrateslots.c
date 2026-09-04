@@ -220,7 +220,7 @@ void delKeysNotOwnedByMyself(list *slot_ranges) {
         slotRange *range = ln->value;
         for (int i = range->start_slot; i <= range->end_slot; i++) {
             if (server.cluster->slots[i] != server.cluster->myself) {
-                delKeysInSlot(i, 1, true, false);
+                delKeysInSlot(i, 1, true, false, true);
             }
         }
     }

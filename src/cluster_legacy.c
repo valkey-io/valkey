@@ -6725,6 +6725,24 @@ void clusterCron(void) {
     }
 
     if (update_state || server.cluster->state == CLUSTER_FAIL) clusterUpdateState();
+
+    /* Log cluster info and nodes information for better debugability of the transient cluster state */
+    if (server.verbosity <= LL_VERBOSE) {
+        run_with_period(5000) {
+            sds cluster_info = genClusterInfoString();
+            sds cluster_nodes = clusterGenNodesDescription(NULL, 0, 0);
+
+            sds infostring = sdscatprintf(sdsempty(), "\r\n# Cluster info\r\n");
+            infostring = sdscatsds(infostring, cluster_info);
+            infostring = sdscatprintf(infostring, "\n------ CLUSTER NODES OUTPUT ------\n");
+            infostring = sdscatsds(infostring, cluster_nodes);
+            serverLog(LL_VERBOSE, "%s", infostring);
+
+            sdsfree(cluster_info);
+            sdsfree(cluster_nodes);
+            sdsfree(infostring);
+        }
+    }
 }
 
 /* This function is called before the event handler returns to sleep for

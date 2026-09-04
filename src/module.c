@@ -597,6 +597,20 @@ void *VM_TryRealloc(void *ptr, size_t bytes) {
     return ztryrealloc_usable(ptr, bytes, NULL);
 }
 
+/* Use like posix_memalign(). Memory allocated with this function is reported in
+ * INFO memory, used for keys eviction according to maxmemory settings
+ * and in general is taken into account as memory allocated by the server.
+ * You should avoid using posix_memalign() directly. */
+void *VM_Memalign(size_t alignment, size_t bytes) {
+    return zmemalign_usable(alignment, bytes, NULL);
+}
+
+/* Similar to VM_Memalign, but returns NULL in case of allocation failure,
+ * instead of panicking. */
+void *VM_TryMemalign(size_t alignment, size_t bytes) {
+    return ztrymemalign_usable(alignment, bytes, NULL);
+}
+
 /* Use like free() for memory obtained by ValkeyModule_Alloc() and
  * ValkeyModule_Realloc(). However you should never try to free with
  * ValkeyModule_Free() memory allocated with malloc() inside your module. */
@@ -15280,6 +15294,8 @@ void moduleRegisterCoreAPI(void) {
     REGISTER_API(TryCalloc);
     REGISTER_API(Realloc);
     REGISTER_API(TryRealloc);
+    REGISTER_API(Memalign);
+    REGISTER_API(TryMemalign);
     REGISTER_API(Free);
     REGISTER_API(Strdup);
     REGISTER_API(CreateCommand);

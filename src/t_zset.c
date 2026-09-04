@@ -108,7 +108,9 @@ static int zslParseRange(robj *min, robj *max, zrangespec *spec) {
     } else {
         char *s = objectGetVal(min);
         size_t len = sdslen(s);
+        if (len == 0) return C_ERR;
         if (s[0] == '(') {
+            if (len == 1) return C_ERR; /* bare "(" with no score */
             spec->min = valkey_strtod_n(s + 1, len - 1, &eptr);
             if (eptr[0] != '\0' || isnan(spec->min)) return C_ERR;
             spec->minex = 1;
@@ -122,7 +124,9 @@ static int zslParseRange(robj *min, robj *max, zrangespec *spec) {
     } else {
         char *s = objectGetVal(max);
         size_t len = sdslen(s);
+        if (len == 0) return C_ERR;
         if (s[0] == '(') {
+            if (len == 1) return C_ERR; /* bare "(" with no score */
             spec->max = valkey_strtod_n(s + 1, len - 1, &eptr);
             if (eptr[0] != '\0' || isnan(spec->max)) return C_ERR;
             spec->maxex = 1;

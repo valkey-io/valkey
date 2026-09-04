@@ -1,0 +1,95 @@
+name: Start Release
+run-name: "Start ${{ inputs.intent }} release on ${{ inputs.branch }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: "Release line, e.g. 9.1"
+        required: true
+        type: string
+      intent:
+        description: Release kind
+        required: true
+        type: choice
+        options: [rc, ga, patch]
+      urgency:
+        description: Upgrade urgency
+        required: true
+        type: choice
+        options: [LOW, MODERATE, HIGH, CRITICAL, SECURITY]
+      dry_run:
+        description: Derive and display only; do not open a PR
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-start-${{ inputs.branch }}
+  cancel-in-progress: false
+
+jobs:
+  start:
+    name: Hand off to the release controller
+    if: github.repository == 'valkey-io/valkey' && github.ref == 'refs/heads/unstable'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # No reviewer is configured here, so this adds no click. The environment
+    # exists only to expose the App key to the exact unstable branch; a workflow
+    # pushed to an arbitrary branch cannot mint the cross-repository token.
+    environment: release-control
+    steps:
+      - name: Validate inputs
+        env:
+          BRANCH: ${{ inputs.branch }}
+          INITIATOR: ${{ github.triggering_actor }}
+        run: |
+          set -euo pipefail
+          [[ "$BRANCH" =~ ^[0-9]+\.[0-9]+$ ]] || { echo "branch must be MAJOR.MINOR" >&2; exit 1; }
+          [[ "$INITIATOR" =~ ^[A-Za-z0-9-]{1,39}$ ]] || { echo "invalid initiator login" >&2; exit 1; }
+
+      # This reuses the release-control App; there is no relay service,
+      # HMAC key, repository_dispatch receiver, or separate relay App.
+      # Its installation grant on valkey-ci-agent needs only Actions:write
+      # and Metadata:read, so compromise can start preparation but cannot
+      # publish a release or bypass either protected approval.
+      - name: Create controller dispatch token
+        id: token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.VALKEY_RELEASE_CONTROL_APP_ID }}
+          private-key: ${{ secrets.VALKEY_RELEASE_CONTROL_APP_PRIVATE_KEY }}
+          owner: valkey-io
+          repositories: valkey-ci-agent
+          permission-actions: write
+          permission-metadata: read
+
+      - name: Start controller workflow
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          BRANCH: ${{ inputs.branch }}
+          INTENT: ${{ inputs.intent }}
+          URGENCY: ${{ inputs.urgency }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          INITIATOR: ${{ github.triggering_actor }}
+        run: |
+          set -euo pipefail
+          gh workflow run release-prepare.yml \
+            --repo valkey-io/valkey-ci-agent \
+            --ref main \
+            -f branch="$BRANCH" \
+            -f intent="$INTENT" \
+            -f urgency="$URGENCY" \
+            -f dry_run="$DRY_RUN" \
+            -f initiator="$INITIATOR"
+
+          {
+            echo "## Release preparation started"
+            echo
+            echo "The controller will derive the exact release, open the notes PR, and create the maintainer dashboard."
+            echo
+            echo "[Open release controller runs](https://github.com/valkey-io/valkey-ci-agent/actions/workflows/release-prepare.yml)"
+          } >> "$GITHUB_STEP_SUMMARY"

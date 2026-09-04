@@ -1,3 +1,6 @@
+# Do NOT add a run-name to this workflow: the release controller correlates
+# the release-event run by its default display title (the bare tag), and a
+# custom run-name would make release runs invisible to the controller.
 name: Trigger Build Release
 
 permissions:
@@ -25,25 +28,112 @@ jobs:
     steps:
       - name: Determine version and environment
         id: determine-vars
+        # Untrusted values (a release tag name, manual inputs) enter only
+        # through env, never interpolated into shell source, and the
+        # version is validated before anything downstream consumes it.
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_ENVIRONMENT: ${{ inputs.environment }}
         run: |
-          if [[ "${{ github.event_name }}" == "release" ]]; then
+          set -euo pipefail
+          if [[ "${EVENT_NAME}" == "release" ]]; then
             echo "Triggered by a release event."
-            VERSION=${{ github.event.release.tag_name }}
+            VERSION="${RELEASE_TAG}"
             ENVIRONMENT="prod"
           else
             echo "Triggered manually (workflow_dispatch)."
-            VERSION=${{ inputs.version }}
-            ENVIRONMENT=${{ inputs.environment }}
+            VERSION="${INPUT_VERSION}"
+            ENVIRONMENT="${INPUT_ENVIRONMENT}"
           fi
+          if [[ ! "${VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?$ && "${VERSION}" != "unstable" ]]; then
+            echo "::error::Invalid version: ${VERSION}"
+            exit 1
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "environment=${ENVIRONMENT}" >> "$GITHUB_OUTPUT"
 
-          # Set the outputs for version and environment
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "environment=$ENVIRONMENT" >> $GITHUB_OUTPUT
+      - name: Resolve version tag to its commit
+        id: resolve-sha
+        # The build pipeline pins its checkout to source_sha instead of
+        # trusting the moving tag at build time, so resolve the tag to the
+        # exact commit it points at. Annotated tags are peeled to the
+        # underlying commit SHA via the object.type check. Untrusted values
+        # enter only through env, never interpolated into shell source.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          REPO: ${{ github.repository }}
+          VERSION: ${{ steps.determine-vars.outputs.version }}
+          ENVIRONMENT: ${{ steps.determine-vars.outputs.environment }}
+        run: |
+          set -euo pipefail
+          resolve_tag() {
+            local tag="$1" level="$2" ref_json obj_json obj_type obj_sha
+            ref_json=$(gh api "repos/${REPO}/git/ref/tags/${tag}") || return 1
+            obj_type=$(jq -r '.object.type' <<< "$ref_json")
+            obj_sha=$(jq -r '.object.sha' <<< "$ref_json")
+            if [[ "$obj_type" == "tag" ]]; then
+              # Annotated tag: peel to the commit it points at.
+              obj_json=$(gh api "repos/${REPO}/git/tags/${obj_sha}") || return 1
+              obj_type=$(jq -r '.object.type' <<< "$obj_json")
+              obj_sha=$(jq -r '.object.sha' <<< "$obj_json")
+            fi
+            if [[ "$obj_type" != "commit" ]]; then
+              echo "::${level}::Tag ${tag} does not peel to a commit (got object type '${obj_type}')." >&2
+              return 1
+            fi
+            printf '%s' "$obj_sha"
+          }
+          if [[ "$EVENT_NAME" == "release" ]]; then
+            # A published release ALWAYS has a resolvable tag, so any API
+            # failure here is a real fault: fail closed rather than
+            # dispatching an unpinned build.
+            SOURCE_SHA=$(resolve_tag "$VERSION" error)
+          elif [[ "$ENVIRONMENT" == "prod" ]]; then
+            # A prod dispatch must build a pinned, existing tag. ANY
+            # resolve failure (including a 404: a prod dispatch for a
+            # nonexistent tag is an operator error) fails the job rather
+            # than silently reintroducing the moving-tag build.
+            if ! SOURCE_SHA=$(resolve_tag "$VERSION" error); then
+              echo "::error::Could not resolve tag ${VERSION} to a commit; a prod dispatch requires an existing, resolvable tag."
+              exit 1
+            fi
+          else
+            # Dev dispatch: the version may not be tagged (yet), or may
+            # be 'unstable'. Resolve when the tag exists, else send empty;
+            # anything resolve_tag reports on this tolerated path is a
+            # warning, not an error.
+            SOURCE_SHA=$(resolve_tag "$VERSION" warning) || SOURCE_SHA=""
+          fi
+          if [[ -n "$SOURCE_SHA" && ! "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Resolved source_sha is not a full lowercase 40-hex commit: ${SOURCE_SHA}"
+            exit 1
+          fi
+          echo "source_sha=${SOURCE_SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Compose dispatch payload
+        id: compose-payload
+        # jq builds the JSON so every value is properly quoted; nothing is
+        # spliced into a JSON literal by expression interpolation.
+        env:
+          VERSION: ${{ steps.determine-vars.outputs.version }}
+          ENVIRONMENT: ${{ steps.determine-vars.outputs.environment }}
+          SOURCE_SHA: ${{ steps.resolve-sha.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+          PAYLOAD=$(jq -cn \
+            --arg version "$VERSION" \
+            --arg environment "$ENVIRONMENT" \
+            --arg source_sha "$SOURCE_SHA" \
+            '{version: $version, environment: $environment, source_sha: $source_sha}')
+          echo "payload=${PAYLOAD}" >> "$GITHUB_OUTPUT"
 
       - name: Generate token
         id: generate-token
         if: github.repository_owner == 'valkey-io'
-        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1.12.0
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           app-id: ${{ secrets.VALKEYRIE_BOT_APP_ID }}
           private-key: ${{ secrets.VALKEYRIE_BOT_PRIVATE_KEY }}
@@ -57,8 +147,4 @@ jobs:
           token: ${{ github.repository_owner == 'valkey-io' && steps.generate-token.outputs.token || secrets.AUTOMATION_PAT }}
           repository: ${{ github.repository_owner }}/valkey-release-automation
           event-type: build-release
-          client-payload: >
-            {
-              "version": "${{ steps.determine-vars.outputs.version }}",
-              "environment": "${{ steps.determine-vars.outputs.environment }}"
-            }
+          client-payload: ${{ steps.compose-payload.outputs.payload }}

@@ -7535,10 +7535,23 @@ int checkForSentinelMode(int argc, char **argv, char *exec_name) {
 void loadDataFromDisk(void) {
     ustime_t start = ustime();
     if (server.aof_state == AOF_ON) {
-        int ret = loadAppendOnlyFiles(server.aof_manifest);
+        rdbSaveInfo rsi = RDB_SAVE_INFO_INIT;
+        int ret = loadAppendOnlyFiles(server.aof_manifest, &rsi);
         if (ret == AOF_FAILED || ret == AOF_OPEN_ERR) exit(1);
         if (ret != AOF_NOT_EXIST)
             serverLog(LL_NOTICE, "DB loaded from append only file: %.3f seconds", (float)(ustime() - start) / 1000000);
+
+        /* Restore the replication ID / offset read from the AOF base file, so
+         * that a replica which reloaded its dataset from AOF can still attempt
+         * a partial resynchronization with its primary instead of always
+         * falling back to a full sync (see rsi handling in the RDB branch
+         * below for the primary-side equivalent). */
+        if (!iAmPrimary() && rsi.repl_id_is_set && rsi.repl_offset != -1 && rsi.repl_stream_db != -1) {
+            memcpy(server.replid, rsi.repl_id, sizeof(server.replid));
+            server.primary_repl_offset = rsi.repl_offset;
+            replicationCachePrimaryUsingMyself();
+            selectDb(server.cached_primary, rsi.repl_stream_db);
+        }
     } else {
         rdbSaveInfo rsi = RDB_SAVE_INFO_INIT;
         int rsi_is_valid = 0;

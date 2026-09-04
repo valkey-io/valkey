@@ -52,10 +52,11 @@ ifneq (,$(filter $(BUILD_TLS),yes module))
     LIBVALKEY_MAKE_FLAGS += USE_TLS=1
 endif
 
+USE_DLOPEN_RDMA?=1
 ifneq (,$(filter $(BUILD_RDMA),yes module))
     LIBVALKEY_MAKE_FLAGS += USE_RDMA=1
 	ifneq (,$(filter $(BUILD_RDMA),module))
-		LIBVALKEY_MAKE_FLAGS += USE_DLOPEN_RDMA=1
+		LIBVALKEY_MAKE_FLAGS += USE_DLOPEN_RDMA=$(USE_DLOPEN_RDMA)
 	endif
 endif
 

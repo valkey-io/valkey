@@ -1789,6 +1789,7 @@ int rewriteConfigOverwriteFile(char *configfile, sds content) {
     size_t offset = 0;
     ssize_t written_bytes = 0;
     int old_errno;
+    int close_errno = 0;
 
     int tmp_path_len = snprintf(tmp_conffile, sizeof(tmp_conffile), "%s%s", configfile, tmp_suffix);
     if (tmp_path_len <= 0 || (unsigned int)tmp_path_len >= sizeof(tmp_conffile)) {
@@ -1819,22 +1820,39 @@ int rewriteConfigOverwriteFile(char *configfile, sds content) {
         offset += written_bytes;
     }
 
-    if (fsync(fd))
+    if (fsync(fd)) {
         serverLog(LL_WARNING, "Could not sync tmp config file to disk (%s)", strerror(errno));
-    else if (fchmod(fd, 0644 & ~server.umask) == -1)
-        serverLog(LL_WARNING, "Could not chmod config file (%s)", strerror(errno));
-    else if (rename(tmp_conffile, configfile) == -1)
-        serverLog(LL_WARNING, "Could not rename tmp config file (%s)", strerror(errno));
-    else if (fsyncFileDir(configfile) == -1)
-        serverLog(LL_WARNING, "Could not sync config file dir (%s)", strerror(errno));
-    else {
-        retval = 0;
-        serverLog(LL_DEBUG, "Rewritten config file (%s) successfully", configfile);
+        goto cleanup;
     }
+    if (fchmod(fd, 0644 & ~server.umask) == -1) {
+        serverLog(LL_WARNING, "Could not chmod config file (%s)", strerror(errno));
+        goto cleanup;
+    }
+    /* Close the temp file before publishing it with rename(). A write error the
+     * kernel deferred is reported by close() and by nothing before it, so a
+     * truncated config would otherwise replace a good one. The chmod above
+     * needs the descriptor, so this is the earliest the close can happen. */
+    close_errno = close(fd) == -1 ? errno : 0;
+    fd = -1;
+    if (close_errno) {
+        serverLog(LL_WARNING, "Could not close tmp config file (%s)", strerror(close_errno));
+        errno = close_errno;
+        goto cleanup;
+    }
+    if (rename(tmp_conffile, configfile) == -1) {
+        serverLog(LL_WARNING, "Could not rename tmp config file (%s)", strerror(errno));
+        goto cleanup;
+    }
+    if (fsyncFileDir(configfile) == -1) {
+        serverLog(LL_WARNING, "Could not sync config file dir (%s)", strerror(errno));
+        goto cleanup;
+    }
+    retval = 0;
+    serverLog(LL_DEBUG, "Rewritten config file (%s) successfully", configfile);
 
 cleanup:
     old_errno = errno;
-    close(fd);
+    if (fd != -1) close(fd);
     if (retval) unlink(tmp_conffile);
     errno = old_errno;
     return retval;

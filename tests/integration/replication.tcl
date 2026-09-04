@@ -1868,3 +1868,49 @@ start_server {tags {"repl external:skip cluster:skip"}} {
         }
     }
 }
+
+# replicaLoadPrimaryRDBFromDisk() closes the transfer descriptor before it
+# renames the temp RDB into place, so that a write error the kernel only
+# reports at close() cannot publish a truncated RDB. The descriptor and its
+# filename have to be released together, because cleanupTransferResources()
+# asserts on that pairing while the handshake is being cancelled. Turning the
+# replica's dbfilename into a directory makes the rename fail with EISDIR,
+# which reaches that teardown with the descriptor already closed.
+start_server {tags {"repl external:skip"}} {
+    start_server {} {
+        set primary [srv -1 client]
+        set primary_host [srv -1 host]
+        set primary_port [srv -1 port]
+        set replica [srv 0 client]
+
+        $primary set k v
+
+        test {Replica survives a full sync whose RDB rename fails} {
+            $replica config set save {}
+            $replica config set repl-diskless-load disabled
+
+            set replica_dir [lindex [$replica config get dir] 1]
+            set rdb_path [file join $replica_dir [lindex [$replica config get dbfilename] 1]]
+            file delete -force $rdb_path
+            file mkdir $rdb_path
+
+            set loglines [count_log_lines 0]
+            $replica replicaof $primary_host $primary_port
+            wait_for_log_messages 0 {"*Failed trying to rename the temp DB*"} $loglines 100 100
+
+            # The replica has to survive the failed sync: no assertion, no crash.
+            assert_equal {PONG} [$replica ping]
+
+            # Clearing the obstruction lets the retry through, which shows the
+            # aborted attempt left the replication state usable.
+            $replica replicaof no one
+            file delete -force $rdb_path
+            $replica replicaof $primary_host $primary_port
+            wait_for_sync $replica
+            assert_equal v [$replica get k]
+
+            # The abandoned temp file must not be left behind either.
+            assert_equal {} [glob -nocomplain [file join $replica_dir temp-*.rdb]]
+        }
+    }
+}

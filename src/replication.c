@@ -2615,16 +2615,42 @@ int replicaLoadPrimaryRDBFromDisk(rdbSaveInfo *rsi) {
         return C_ERR;
     }
 
+    /* Close the temp file before publishing it with rename(). A write error the
+     * kernel deferred is reported by close() and by nothing before it, so a
+     * truncated RDB would otherwise be renamed over a good one. rdbLoad() below
+     * reopens the file by name, so the descriptor is not needed past this point.
+     *
+     * repl_transfer_fd and repl_transfer_tmpfile have to be unset together or
+     * the assertions in cleanupTransferResources() fire on the error paths
+     * below, so take ownership of the name here and clear both at once. */
+    char *tmpfilename = server.repl_transfer_tmpfile;
+    int close_errno = close(server.repl_transfer_fd) == -1 ? errno : 0;
+    server.repl_transfer_fd = -1;
+    server.repl_transfer_tmpfile = NULL;
+
+    if (close_errno) {
+        serverLog(LL_WARNING,
+                  "Failed trying to close the temp DB in "
+                  "PRIMARY <-> REPLICA synchronization: %s",
+                  strerror(close_errno));
+        bg_unlink(tmpfilename);
+        zfree(tmpfilename);
+        return C_ERR;
+    }
+
     /* Rename rdb like renaming rewrite aof asynchronously. */
     int old_rdb_fd = open(server.rdb_filename, O_RDONLY | O_NONBLOCK);
-    if (rename(server.repl_transfer_tmpfile, server.rdb_filename) == -1) {
+    if (rename(tmpfilename, server.rdb_filename) == -1) {
         serverLog(LL_WARNING,
                   "Failed trying to rename the temp DB into %s in "
                   "PRIMARY <-> REPLICA synchronization: %s",
                   server.rdb_filename, strerror(errno));
         if (old_rdb_fd != -1) close(old_rdb_fd);
+        bg_unlink(tmpfilename);
+        zfree(tmpfilename);
         return C_ERR;
     }
+    zfree(tmpfilename);
     /* Close old rdb asynchronously. */
     if (old_rdb_fd != -1) bioCreateCloseJob(old_rdb_fd, 0, 0);
 
@@ -2682,10 +2708,8 @@ int replicaLoadPrimaryRDBFromDisk(rdbSaveInfo *rsi) {
         bg_unlink(server.rdb_filename);
     }
 
-    zfree(server.repl_transfer_tmpfile);
-    close(server.repl_transfer_fd);
-    server.repl_transfer_fd = -1;
-    server.repl_transfer_tmpfile = NULL;
+    /* The transfer file descriptor and its name were already released before
+     * the rename above. */
     return C_OK;
 }
 

@@ -2785,7 +2785,14 @@ static int ACLSaveToFile(const char *filename) {
         serverLog(LL_WARNING, "Syncing ACL file for ACL SAVE: %s", strerror(errno));
         goto cleanup;
     }
-    close(fd);
+    /* A write error the kernel deferred is reported by close() and by nothing
+     * before it, so the result has to be checked before the temp file is
+     * published, or a truncated file replaces a good one. */
+    if (close(fd) == -1) {
+        fd = -1;
+        serverLog(LL_WARNING, "Failed to close temp ACL file for ACL SAVE. %s.", strerror(errno));
+        goto cleanup;
+    }
     fd = -1;
 
     /* Let's replace the new file with the old one. */

@@ -605,7 +605,17 @@ char *VM_Strdup(const char *str) {
     return zstrdup(str);
 }
 
-/* Account for memory that a module allocated outside the server allocator. */
+/* Report memory obtained outside the server allocator, such as an mmap()ed
+ * region, so it counts toward used_memory and maxmemory. Does not allocate.
+ *
+ * Report only resident memory, and only memory not already obtained from
+ * ValkeyModule_Alloc(). Each call must be matched by
+ * ValkeyModule_DecrExternalMemory() of the same size.
+ *
+ * May be called from a command callback or a thread-safe context.
+ *
+ * Returns VALKEYMODULE_OK, or VALKEYMODULE_ERR with errno set to ERANGE if the
+ * total would overflow, leaving the accounting unchanged. */
 int VM_IncrExternalMemory(size_t bytes) {
     if (zmalloc_increase_used_memory_external(bytes) != 0) {
         errno = ERANGE;
@@ -614,7 +624,11 @@ int VM_IncrExternalMemory(size_t bytes) {
     return VALKEYMODULE_OK;
 }
 
-/* Remove external memory from the module's accounting. */
+/* Stop accounting for memory reported with ValkeyModule_IncrExternalMemory().
+ * Frees nothing.
+ *
+ * Returns VALKEYMODULE_OK, or VALKEYMODULE_ERR with errno set to ERANGE if
+ * `bytes` exceeds the reported total, leaving the accounting unchanged. */
 int VM_DecrExternalMemory(size_t bytes) {
     if (zmalloc_decrease_used_memory_external(bytes) != 0) {
         errno = ERANGE;

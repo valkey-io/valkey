@@ -4879,7 +4879,7 @@ int processCommand(client *c) {
     /* Prevent a replica from sending commands that access the keyspace.
      * The main objective here is to prevent abuse of client pause check
      * from which replicas are exempt. */
-    if (c->flag.replica && (is_may_replicate_command || is_write_command || is_read_command)) {
+    if (c->flag.replica_or_monitor && (is_may_replicate_command || is_write_command || is_read_command)) {
         sds replica_err = sdsnew("Replica can't interact with the keyspace");
         rejectCommandSds(c, replica_err, 1);
         return C_OK;
@@ -4887,7 +4887,7 @@ int processCommand(client *c) {
 
     /* If the server is paused, block the client until the pause has ended. Replicas and slot
      * export clients are never paused to allow failover/slot migration to succeed. */
-    if (!c->flag.replica && (!c->slot_migration_job || isImportSlotMigrationJob(c->slot_migration_job)) &&
+    if (!c->flag.replica_or_monitor && (!c->slot_migration_job || isImportSlotMigrationJob(c->slot_migration_job)) &&
         ((isPausedActions(PAUSE_ACTION_CLIENT_ALL)) || ((isPausedActions(PAUSE_ACTION_CLIENT_WRITE)) && is_may_replicate_command))) {
         blockPostponeClient(c);
         return C_OK;
@@ -7109,11 +7109,11 @@ void monitorCommand(client *c) {
     }
 
     /* ignore MONITOR if already replica or in monitor mode */
-    if (c->flag.replica) return;
+    if (c->flag.replica_or_monitor) return;
 
     initClientReplicationData(c);
 
-    c->flag.replica = 1;
+    c->flag.replica_or_monitor = 1;
     c->flag.monitor = 1;
     listAddNodeTail(server.monitors, c);
     addReply(c, shared.ok);

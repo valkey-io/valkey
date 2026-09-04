@@ -949,7 +949,7 @@ int primaryTryPartialResynchronization(client *c, long long psync_offset) {
      * 3) Inform the client we can continue with +CONTINUE
      * 4) Send the backlog data (from the offset to the end) to the replica. */
     waitForClientIO(c);
-    c->flag.replica = 1;
+    c->flag.replica_or_monitor = 1;
     if (c->repl_data->associated_rdb_client_id && lookupRdbClientByID(c->repl_data->associated_rdb_client_id)) {
         c->repl_data->repl_state = REPLICA_STATE_BG_RDB_LOAD;
         removeReplicaFromPsyncWait(c);
@@ -1076,7 +1076,7 @@ int startBgsaveForReplication(int mincapa, int req, int rdbver) {
 
             if (replica->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_START) {
                 replica->repl_data->repl_state = REPL_STATE_NONE;
-                replica->flag.replica = 0;
+                replica->flag.replica_or_monitor = 0;
                 listDelNode(server.replicas, ln);
                 addReplyError(replica, "BGSAVE failed, replication can't continue");
                 replica->flag.close_after_reply = 1;
@@ -1107,7 +1107,7 @@ int startBgsaveForReplication(int mincapa, int req, int rdbver) {
 /* SYNC and PSYNC command implementation. */
 void syncCommand(client *c) {
     /* ignore SYNC if already replica or in monitor mode */
-    if (c->flag.replica) return;
+    if (c->flag.replica_or_monitor) return;
 
     initClientReplicationData(c);
 
@@ -1226,7 +1226,7 @@ void syncCommand(client *c) {
     c->repl_data->repl_state = REPLICA_STATE_WAIT_BGSAVE_START;
     if (server.repl_disable_tcp_nodelay) anetDisableTcpNoDelay(NULL, c->conn->fd); /* Non critical if it fails. */
     c->repl_data->repldbfd = -1;
-    c->flag.replica = 1;
+    c->flag.replica_or_monitor = 1;
     listAddNodeTail(server.replicas, c);
 
     /* Create the replication backlog if needed. */
@@ -1335,7 +1335,7 @@ void freeClientReplicationData(client *c) {
     freeReplicaReferencedReplBuffer(c);
     /* Primary/replica cleanup Case 1:
      * we lost the connection with a replica. */
-    if (c->flag.replica) {
+    if (c->flag.replica_or_monitor) {
         /* If there is no any other replica waiting dumping RDB finished, the
          * current child process need not continue to dump RDB, then we kill it.
          * So child process won't use more memory, and we also can fork a new
@@ -1483,7 +1483,7 @@ void replconfCommand(client *c) {
              * internal only command that normal clients should never use. */
             long long offset;
 
-            if (!c->flag.replica) return;
+            if (getClientType(c) != CLIENT_TYPE_REPLICA) return;
             if ((getLongLongFromObject(c->argv[j + 1], &offset) != C_OK)) return;
             if (offset > c->repl_data->repl_ack_off) c->repl_data->repl_ack_off = offset;
             if (c->argc > j + 3 && !strcasecmp(objectGetVal(c->argv[j + 2]), "fack")) {
@@ -4717,7 +4717,7 @@ void replicaofCommand(client *c) {
     } else {
         long port;
 
-        if (c->flag.replica) {
+        if (c->flag.replica_or_monitor) {
             /* If a client is already a replica they cannot run this command,
              * because it involves flushing all replicas (including this
              * client) */

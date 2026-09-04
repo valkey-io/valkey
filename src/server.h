@@ -1152,8 +1152,8 @@ typedef enum {
 
 typedef struct ClientFlags {
     uint64_t primary : 1;                  /* This client is a primary */
-    uint64_t replica : 1;                  /* This client is a replica */
-    uint64_t monitor : 1;                  /* This client is a replica monitor, see MONITOR */
+    uint64_t replica_or_monitor : 1;       /* Replica *or* MONITOR, see getClientType() */
+    uint64_t monitor : 1;                  /* This client is in MONITOR mode, see MONITOR */
     uint64_t multi : 1;                    /* This client is in a MULTI context */
     uint64_t blocked : 1;                  /* The client is waiting in a blocking operation */
     uint64_t dirty_cas : 1;                /* Watched keys modified. EXEC will fail. */
@@ -1475,12 +1475,18 @@ static inline int clientConnPostponeMaskFromIOState(client *c) {
  * CLIENT_TYPE_REPLICA  -> replica
  * CLIENT_TYPE_PUBSUB -> Client subscribed to Pub/Sub channels
  * CLIENT_TYPE_PRIMARY -> The client representing our replication primary.
+ *
+ * This is the right way to ask "is this an actual replica". MONITOR clients reuse
+ * the replica plumbing (they set flag.replica_or_monitor, are exempt from the idle
+ * timeout and from client pause, and are torn down through
+ * freeClientReplicationData()), so reading flag.replica_or_monitor directly also
+ * matches monitors.
  */
 static inline int getClientType(client *c) {
     if (unlikely(c->flag.primary)) return CLIENT_TYPE_PRIMARY;
-    /* Even though MONITOR clients are marked as replicas, we
+    /* Even though MONITOR clients share the replica flag, we
      * want the expose them as normal clients. */
-    if (unlikely(c->flag.replica) && !c->flag.monitor) return CLIENT_TYPE_REPLICA;
+    if (unlikely(c->flag.replica_or_monitor) && !c->flag.monitor) return CLIENT_TYPE_REPLICA;
     if (c->flag.pubsub) return CLIENT_TYPE_PUBSUB;
     if (unlikely(c->slot_migration_job)) return isImportSlotMigrationJob(c->slot_migration_job) ? CLIENT_TYPE_SLOT_IMPORT : CLIENT_TYPE_SLOT_EXPORT;
     return CLIENT_TYPE_NORMAL;

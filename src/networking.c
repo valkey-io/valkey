@@ -2039,7 +2039,7 @@ void unlinkClient(client *c) {
          * snapshot child may take some time to die, during which the migration will continue past
          * the snapshot state. */
         if (c->repl_data && server.rdb_pipe_conns &&
-            ((c->flag.replica && c->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_END))) {
+            ((getClientType(c) == CLIENT_TYPE_REPLICA && c->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_END))) {
             int i;
             int still_alive = 0;
             for (i = 0; i < server.rdb_pipe_numconns; i++) {
@@ -2103,8 +2103,8 @@ void unlinkClient(client *c) {
 void clearClientConnectionState(client *c) {
     listNode *ln;
 
-    /* MONITOR clients are also marked with CLIENT_REPLICA, we need to
-     * distinguish between the two.
+    /* MONITOR clients share the replica_or_monitor flag, so clear both of them
+     * here. The assert below then only fires for actual replicas and primaries.
      */
     if (c->flag.monitor) {
         ln = listSearchKey(server.monitors, c);
@@ -2112,10 +2112,10 @@ void clearClientConnectionState(client *c) {
         listDelNode(server.monitors, ln);
 
         c->flag.monitor = 0;
-        c->flag.replica = 0;
+        c->flag.replica_or_monitor = 0;
     }
 
-    serverAssert(!(c->flag.replica || c->flag.primary || c->slot_migration_job));
+    serverAssert(!(c->flag.replica_or_monitor || c->flag.primary || c->slot_migration_job));
 
     if (c->flag.tracking) disableTracking(c);
     selectDb(c, 0);
@@ -4514,12 +4514,10 @@ sds catClientInfoString(sds s, client *client, int hide_user_data) {
     char flags[18], events[3], capa[9], conninfo[CONN_INFO_LEN], *p;
 
     p = flags;
-    if (client->flag.replica) {
-        if (client->flag.monitor)
-            *p++ = 'O';
-        else
-            *p++ = 'S';
-    }
+    if (client->flag.monitor)
+        *p++ = 'O';
+    else if (client->flag.replica_or_monitor)
+        *p++ = 'S';
 
     if (client->flag.primary) *p++ = 'M';
     if (client->flag.pubsub) *p++ = 'P';
@@ -4754,16 +4752,16 @@ void clientSetinfoCommand(client *c) {
 /* Reset the client state to resemble a newly connected client.
  */
 void resetCommand(client *c) {
-    /* MONITOR clients are also marked with CLIENT_REPLICA, we need to
-     * distinguish between the two.
+    /* MONITOR clients share the replica_or_monitor flag, and RESET is allowed for
+     * them, so mask both flags off before deciding whether this is a real replica.
      */
     struct ClientFlags flags = c->flag;
     if (flags.monitor) {
         flags.monitor = 0;
-        flags.replica = 0;
+        flags.replica_or_monitor = 0;
     }
 
-    if (flags.replica || flags.primary || flags.module) {
+    if (flags.replica_or_monitor || flags.primary || flags.module) {
         addReplyError(c, "can only reset normal client connections");
         return;
     }
@@ -5168,10 +5166,10 @@ static int clientMatchesFlagFilter(client *c, sds flag_filter) {
         /* Check each flag */
         switch (flag) {
         case 'O': /* client in MONITOR mode */
-            if (!(c->flag.replica && c->flag.monitor)) return 0;
+            if (!c->flag.monitor) return 0;
             break;
         case 'S': /* client is a replica node connection to this instance */
-            if (!c->flag.replica) return 0;
+            if (getClientType(c) != CLIENT_TYPE_REPLICA) return 0;
             break;
         case 'M': /* client is a primary */
             if (!c->flag.primary) return 0;
@@ -5231,7 +5229,7 @@ static int clientMatchesFlagFilter(client *c, sds flag_filter) {
             if (!c->slot_migration_job || isImportSlotMigrationJob(c->slot_migration_job)) return 0;
             break;
         case 'N': /* Check for no flags */
-            if (c->flag.replica || c->flag.primary || c->flag.pubsub ||
+            if (c->flag.replica_or_monitor || c->flag.primary || c->flag.pubsub ||
                 c->flag.multi || c->flag.blocked || c->flag.tracking ||
                 c->flag.tracking_broken_redir || c->flag.tracking_bcast ||
                 c->flag.dirty_cas || c->flag.close_after_reply ||

@@ -7818,13 +7818,15 @@ __attribute__((weak)) int main(int argc, char **argv) {
         initSentinel();
     }
 
-    /* Check if we need to start in valkey-check-rdb/aof mode. We just execute
+    /* Check if we need to start in valkey-check-rdb/aof/acl mode. We just execute
      * the program main. However the program is part of the server executable
      * so that we can easily execute an RDB check on loading errors. */
     if (strstr(exec_name, "valkey-check-rdb") != NULL)
         redis_check_rdb_main(argc, argv, NULL);
     else if (strstr(exec_name, "valkey-check-aof") != NULL)
         redis_check_aof_main(argc, argv);
+    else if (strstr(exec_name, "valkey-check-acl") != NULL)
+        exit(valkey_check_acl_main(argc, argv));
 
     /* valkey may install symlinks like
      * redis-server -> valkey-server, redis-check-rdb -> valkey-check-rdb,
@@ -7833,6 +7835,8 @@ __attribute__((weak)) int main(int argc, char **argv) {
         redis_check_rdb_main(argc, argv, NULL);
     else if (strstr(exec_name, "redis-check-aof") != NULL)
         redis_check_aof_main(argc, argv);
+    else if (strstr(exec_name, "redis-check-acl") != NULL)
+        exit(valkey_check_acl_main(argc, argv));
 
     if (argc >= 2) {
         j = 1; /* First option to parse in argv[] */

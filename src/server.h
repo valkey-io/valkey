@@ -3470,6 +3470,7 @@ robj *ACLDescribeUser(user *u);
 void ACLLoadUsersAtStartup(void);
 void addReplyCommandCategories(client *c, struct serverCommand *cmd);
 user *ACLCreateUnlinkedUser(void);
+void ACLFreeUser(user *u);
 void ACLFreeUserAndKillClients(user *u);
 void addACLLogEntry(client *c, int reason, int context, int argpos, sds username, sds object);
 sds getAclErrorMessage(int acl_res, user *user, struct serverCommand *cmd, sds errored_val, int verbose);
@@ -3956,6 +3957,9 @@ void sentinelRoleCommand(client *c);
 int redis_check_rdb(char *rdbfilename, FILE *fp);
 int redis_check_rdb_main(int argc, char **argv, FILE *fp);
 int redis_check_aof_main(int argc, char **argv);
+
+/* valkey-check-acl */
+int valkey_check_acl_main(int argc, char **argv);
 
 /* Scripting */
 void freeEvalScripts(dict *scripts, list *scripts_lru_list, list *engine_callbacks);

@@ -91,6 +91,7 @@ add_dependencies(valkey-benchmark release_header)
 valkey_create_symlink("valkey-server" "valkey-sentinel")
 valkey_create_symlink("valkey-server" "valkey-check-rdb")
 valkey_create_symlink("valkey-server" "valkey-check-aof")
+valkey_create_symlink("valkey-server" "valkey-check-acl")
 
 # Target valkey-rdma
 if (BUILD_RDMA_MODULE)

@@ -7790,7 +7790,16 @@ __attribute__((weak)) int main(int argc, char **argv) {
     umask(server.umask = umask(0777));
 
     uint8_t hashseed[16];
-    getRandomBytes(hashseed, sizeof(hashseed));
+    if (!getSecureRandomBytes(hashseed, sizeof(hashseed))) {
+        /* This runs before initServerConfig(), so server.logfile is still NULL
+         * and serverLog()/serverPanic() would crash before printing anything.
+         * Write the diagnostic directly and refuse to start. */
+        fprintf(stderr,
+                "FATAL: could not obtain secure random bytes for the hash seed.\n"
+                "The configured OpenSSL provider did not supply randomness. Check that the\n"
+                "provider named in openssl.cnf is installed, loadable, and passing its self tests.\n");
+        exit(1);
+    }
     hashtableSetHashFunctionSeed(hashseed);
 
     char *exec_name = strrchr(argv[0], '/');

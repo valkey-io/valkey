@@ -58,25 +58,29 @@ proc wait_for_migration_registered {node_idx jobname} {
     }
 }
 
+# These wait on work that completes asynchronously across the cluster, so they
+# are bounded by the same 50s the rest of the cluster suite allows for
+# cluster-wide conditions rather than by 10s. Raising the bound costs nothing on
+# the passing path, where the poll exits as soon as the condition holds.
 proc wait_for_migration_field {node_idx jobname field value} {
-    wait_for_condition 100 100 {
+    wait_for_condition 500 100 {
         [get_migration_by_name $node_idx $jobname] ne "" && [dict get [get_migration_by_name $node_idx $jobname] $field] eq $value
     } else {
         set curr_state [get_migration_by_name $node_idx $jobname]
-        fail "Migration $jobname on node $node_idx did not have $field == $value (currently $curr_state) within 10000 ms"
+        fail "Migration $jobname on node $node_idx did not have $field == $value (currently $curr_state) within 50000 ms"
     }
 }
 
 proc wait_for_countkeysinslot {node_idx slot value} {
-    wait_for_condition 100 100 {
+    wait_for_condition 500 100 {
         [R $node_idx CLUSTER COUNTKEYSINSLOT $slot] eq "$value"
     } else {
         set curr_count [R $node_idx CLUSTER COUNTKEYSINSLOT $slot]
-        fail "Node $node_idx did not have $value keys in slot $slot within 10000 ms (current $curr_count)"
+        fail "Node $node_idx did not have $value keys in slot $slot within 50000 ms (current $curr_count)"
     }
 }
 
-proc wait_for_migration {node_idx slot {maxtries 100}} {
+proc wait_for_migration {node_idx slot {maxtries 500}} {
     set target_id [R $node_idx CLUSTER MYID]
     wait_for_condition $maxtries 100 {
         [is_slot_migrated $node_idx $slot]

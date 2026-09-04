@@ -383,6 +383,166 @@ start_server {tags {"modules"}} {
         assert_equal $result 145
     }
 
+    test {Test eval with more than one value on the stack at RETURN} {
+        assert_error {ERR malformed script: RETURN requires exactly one stack value} {
+            r eval "#!hello\nFUNCTION foo\nCONSTI 1\nCONSTI 2\nRETURN" 0
+        }
+        assert_equal [r ping] {PONG}
+    }
+
+    test {Test eval with no value on the stack at RETURN} {
+        assert_error {ERR malformed script: RETURN requires exactly one stack value} {
+            r eval "#!hello\nFUNCTION foo\nRETURN" 0
+        }
+        assert_equal [r ping] {PONG}
+    }
+
+    test {Test eval with too many values pushed before RETURN} {
+        set script "#!hello\nFUNCTION foo\n[string repeat "CONSTI 1\n" 65]RETURN"
+        assert_error {ERR malformed script: stack overflow: too many values pushed before RETURN} {
+            r eval $script 0
+        }
+        assert_equal [r ping] {PONG}
+    }
+
+    test {Test eval with SLEEP on an empty stack} {
+        assert_error {ERR malformed script: SLEEP requires a value on the stack} {
+            r eval "#!hello\nFUNCTION foo\nSLEEP\nRETURN" 0
+        }
+        assert_equal [r ping] {PONG}
+    }
+
+    test {Test eval with ARGS index out of range for the supplied arguments} {
+        assert_error {ERR malformed script: ARGS index is out of range for the number of arguments supplied} {
+            r eval "#!hello\nFUNCTION foo\nARGS 0\nRETURN" 0
+        }
+        assert_equal [r ping] {PONG}
+    }
+
+    test {Test eval with a function missing RETURN is rejected at parse time} {
+        assert_error {ERR Function 'foo' is missing RETURN} {
+            r eval "#!hello\nFUNCTION foo\nCONSTI 1" 0
+        }
+        assert_equal [r ping] {PONG}
+    }
+
+    test {Test eval with too many functions defined} {
+        set funcs {}
+        for {set i 0} {$i < 17} {incr i} {
+            append funcs "FUNCTION f$i\nRETURN\n"
+        }
+        set script "#!hello\n$funcs"
+        assert_error {ERR Too many functions defined} {
+            r eval $script 0
+        }
+        assert_equal [r ping] {PONG}
+    }
+
+    test {Test eval with too many instructions in one function} {
+        set script "#!hello\nFUNCTION foo\n[string repeat "CONSTI 1\n" 257]RETURN"
+        assert_error {ERR Function 'foo' has too many instructions} {
+            r eval $script 0
+        }
+        assert_equal [r ping] {PONG}
+    }
+
+    test {Test eval frees a CONSTS operand on a later parse error} {
+        assert_error {ERR Failed to parse integer parameter: 'abc'} {
+            r eval "#!hello\nFUNCTION foo\nCONSTS leaked\nCONSTI abc" 0
+        }
+        assert_equal [r ping] {PONG}
+    }
+
+    test {Test eval frees a CALL command name on a later parse error} {
+        assert_error {ERR Failed to parse integer parameter: 'abc'} {
+            r eval "#!hello\nFUNCTION foo\nCALL leaked\nCONSTI abc" 0
+        }
+        assert_equal [r ping] {PONG}
+    }
+
+    test {Test eval with a second FUNCTION before the previous one's RETURN} {
+        assert_error {ERR Function 'foo' is missing RETURN} {
+            r eval "#!hello\nFUNCTION foo\nFUNCTION bar\nRETURN" 0
+        }
+        assert_equal [r ping] {PONG}
+    }
+
+    test {Test eval with an instruction before any FUNCTION} {
+        assert_error {ERR Instruction 'CONSTI' found before any FUNCTION} {
+            r eval "#!hello\nCONSTI 1\nRETURN" 0
+        }
+        assert_equal [r ping] {PONG}
+    }
+
+    test {Test eval with FUNCTION and no name} {
+        assert_error {ERR FUNCTION requires a name} {
+            r eval "#!hello\nFUNCTION" 0
+        }
+        assert_equal [r ping] {PONG}
+    }
+
+    test {Test eval with CONSTI and no operand} {
+        assert_error {ERR Failed to parse integer parameter: '(missing)'} {
+            r eval "#!hello\nFUNCTION foo\nCONSTI" 0
+        }
+        assert_equal [r ping] {PONG}
+    }
+
+    test {Test eval with CONSTI and a non-numeric operand} {
+        assert_error {ERR Failed to parse integer parameter: 'abc'} {
+            r eval "#!hello\nFUNCTION foo\nCONSTI abc" 0
+        }
+        assert_equal [r ping] {PONG}
+    }
+
+    test {Test eval with CONSTS and no operand} {
+        assert_error {ERR CONSTS requires a string operand} {
+            r eval "#!hello\nFUNCTION foo\nCONSTS" 0
+        }
+        assert_equal [r ping] {PONG}
+    }
+
+    test {Test eval with CALL and no command name} {
+        assert_error {ERR CALL requires a command name} {
+            r eval "#!hello\nFUNCTION foo\nCALL" 0
+        }
+        assert_equal [r ping] {PONG}
+    }
+
+    test {Test eval with ARGS and no operand} {
+        assert_error {ERR Failed to parse integer parameter: '(missing)'} {
+            r eval "#!hello\nFUNCTION foo\nARGS" 0
+        }
+        assert_equal [r ping] {PONG}
+    }
+
+    test {Test eval with ARGS and a non-numeric operand} {
+        assert_error {ERR Failed to parse integer parameter: 'abc'} {
+            r eval "#!hello\nFUNCTION foo\nARGS abc" 0
+        }
+        assert_equal [r ping] {PONG}
+    }
+
+    test {Test eval with SLEEP on a non-integer stack value} {
+        assert_error {ERR malformed script: SLEEP value must be an integer} {
+            r eval "#!hello\nFUNCTION foo\nCONSTS abc\nSLEEP\nRETURN" 0
+        }
+        assert_equal [r ping] {PONG}
+    }
+
+    test {Test eval with ARGS on an empty-string argument is accepted} {
+        set result [r eval "#!hello\nFUNCTION foo\nARGS 0\nRETURN" 0 ""]
+        assert_equal $result {}
+        assert_equal [r ping] {PONG}
+    }
+
+    test {Test function load with a parser error leaves the server alive} {
+        assert_error {ERR Function 'foo' is missing RETURN} {
+            r function load "#!hello name=mylib_missing_return\nFUNCTION foo\nCONSTI 1"
+        }
+        assert_equal [r ping] {PONG}
+    }
+
     test {Test evalsha execution} {
         set sha [r script load "#!hello\nFUNCTION foo\nARGS 0\nRETURN"]
         set result [r evalsha $sha 0 167]

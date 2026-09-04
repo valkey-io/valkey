@@ -154,45 +154,42 @@ typedef struct HelloLangCtx {
 static HelloLangCtx *hello_ctx = NULL;
 
 
-static Value parseValue(const char *str) {
+/* Parses str into *out. Returns 1 on success. Returns 0 (leaving *out
+ * untouched) only if str is NULL -- a missing token, never a legitimate
+ * runtime value. Empty strings are valid VALUE_STRING content, not errors. */
+static int parseValue(const char *str, Value *out) {
+    if (!str) return 0;
+
     char *end;
     errno = 0;
-    Value result;
-
-    // Check for NULL or empty string
-    if (!str || *str == '\0') {
-        ValkeyModule_Log(NULL, "error", "Failed to parse argument: NULL or empty string");
-        ValkeyModule_Assert(0);
-        return result;
-    }
 
     unsigned long val = strtoul(str, &end, 10);
 
-    // Check if no digits were found
+    // Check if no digits were found (this also covers the empty string case)
     if (end == str) {
-        result.type = VALUE_STRING;
-        result.string = str;
-        return result;
+        out->type = VALUE_STRING;
+        out->string = str;
+        return 1;
     }
 
     // Check for trailing characters (non-digits after the number)
     if (*end != '\0') {
-        result.type = VALUE_STRING;
-        result.string = str;
-        return result;
+        out->type = VALUE_STRING;
+        out->string = str;
+        return 1;
     }
 
     // Check for overflow
     if (errno == ERANGE || val > UINT32_MAX) {
-        result.type = VALUE_STRING;
-        result.string = str;
-        return result;
+        out->type = VALUE_STRING;
+        out->string = str;
+        return 1;
     }
 
     // Success case
-    result.type = VALUE_INT;
-    result.integer = (uint32_t)val;
-    return result;
+    out->type = VALUE_INT;
+    out->integer = (uint32_t)val;
+    return 1;
 }
 
 /*
@@ -210,60 +207,74 @@ static HelloInstKind helloLangParseInstruction(const char *token) {
 /*
  * Parses the function param.
  */
-static void helloLangParseFunction(HelloFunc *func, int read_only) {
+static int helloLangParseFunction(HelloFunc *func, int read_only, ValkeyModuleString **err) {
     char *token = strtok(NULL, " \n");
-    ValkeyModule_Assert(token != NULL);
+    if (token == NULL) {
+        *err = ValkeyModule_CreateStringPrintf(NULL, "FUNCTION requires a name");
+        return -1;
+    }
     func->name = ValkeyModule_Alloc(sizeof(char) * strlen(token) + 1);
     strcpy(func->name, token);
     func->read_only = read_only;
+    return 0;
 }
 
 /*
  * Parses an integer parameter.
  */
-static void helloLangParseIntegerParam(HelloFunc *func) {
+static int helloLangParseIntegerParam(HelloFunc *func, ValkeyModuleString **err) {
     char *token = strtok(NULL, " \n");
-    Value parsed = parseValue(token);
-    if (parsed.type == VALUE_INT) {
-        func->instructions[func->num_instructions].param.integer = parsed.integer;
-    } else {
-        ValkeyModule_Log(NULL, "error", "Failed to parse integer parameter: '%s'", token);
-        ValkeyModule_Assert(0); // Parse error
+    Value parsed;
+    if (!parseValue(token, &parsed) || parsed.type != VALUE_INT) {
+        *err = ValkeyModule_CreateStringPrintf(NULL, "Failed to parse integer parameter: '%s'", token ? token : "(missing)");
+        return -1;
     }
+    func->instructions[func->num_instructions].param.integer = parsed.integer;
+    return 0;
 }
 
 /*
  * Parses the CONSTI instruction parameter.
  */
-static void helloLangParseConstI(HelloFunc *func) {
-    helloLangParseIntegerParam(func);
+static int helloLangParseConstI(HelloFunc *func, ValkeyModuleString **err) {
+    if (helloLangParseIntegerParam(func, err) < 0) return -1;
     func->num_instructions++;
+    return 0;
 }
 /*
  * Parses the CONSTS instruction parameter.
  */
-static void helloLangParseConstS(HelloFunc *func) {
+static int helloLangParseConstS(HelloFunc *func, ValkeyModuleString **err) {
     char *token = strtok(NULL, " \n");
-    ValkeyModule_Assert(token != NULL);
+    if (token == NULL) {
+        *err = ValkeyModule_CreateStringPrintf(NULL, "CONSTS requires a string operand");
+        return -1;
+    }
     func->instructions[func->num_instructions].param.string = ValkeyModule_Alloc(sizeof(char) * strlen(token) + 1);
     strcpy(func->instructions[func->num_instructions].param.string, token);
     func->num_instructions++;
+    return 0;
 }
 
 /*
  * Parses the ARGS instruction parameter.
  */
-static void helloLangParseArgs(HelloFunc *func) {
-    helloLangParseIntegerParam(func);
+static int helloLangParseArgs(HelloFunc *func, ValkeyModuleString **err) {
+    if (helloLangParseIntegerParam(func, err) < 0) return -1;
     func->num_instructions++;
+    return 0;
 }
 
-static void helloLangParseCall(HelloFunc *func) {
+static int helloLangParseCall(HelloFunc *func, ValkeyModuleString **err) {
     char *token = strtok(NULL, " \n");
-    ValkeyModule_Assert(token != NULL);
+    if (token == NULL) {
+        *err = ValkeyModule_CreateStringPrintf(NULL, "CALL requires a command name");
+        return -1;
+    }
     func->instructions[func->num_instructions].param.string = ValkeyModule_Alloc(sizeof(char) * strlen(token) + 1);
     strcpy(func->instructions[func->num_instructions].param.string, token);
     func->num_instructions++;
+    return 0;
 }
 
 /*
@@ -281,42 +292,71 @@ static int helloLangParseCode(const char *code,
     while (token != NULL) {
         HelloInstKind kind = helloLangParseInstruction(token);
 
+        if (currentFunc == NULL && kind != FUNCTION && kind != RFUNCTION && kind != _NUM_INSTRUCTIONS) {
+            *err = ValkeyModule_CreateStringPrintf(NULL, "Instruction '%s' found before any FUNCTION", token);
+            ValkeyModule_Free(_code);
+            return -1;
+        }
+
         if (currentFunc != NULL) {
+            if (currentFunc->num_instructions >= (uint32_t)(sizeof(currentFunc->instructions) / sizeof(currentFunc->instructions[0]))) {
+                *err = ValkeyModule_CreateStringPrintf(NULL, "Function '%s' has too many instructions", currentFunc->name);
+                ValkeyModule_Free(_code);
+                return -1;
+            }
             currentFunc->instructions[currentFunc->num_instructions].kind = kind;
         }
 
         switch (kind) {
         case FUNCTION:
         case RFUNCTION:
-            ValkeyModule_Assert(currentFunc == NULL);
+            if (currentFunc != NULL) {
+                *err = ValkeyModule_CreateStringPrintf(NULL, "Function '%s' is missing RETURN", currentFunc->name);
+                ValkeyModule_Free(_code);
+                return -1;
+            }
+            if (program->num_functions >= (uint32_t)(sizeof(program->functions) / sizeof(program->functions[0]))) {
+                *err = ValkeyModule_CreateStringPrintf(NULL, "Too many functions defined");
+                ValkeyModule_Free(_code);
+                return -1;
+            }
             currentFunc = ValkeyModule_Alloc(sizeof(HelloFunc));
             memset(currentFunc, 0, sizeof(HelloFunc));
             currentFunc->index = program->num_functions;
             program->functions[program->num_functions++] = currentFunc;
-            helloLangParseFunction(currentFunc, kind == RFUNCTION);
+            if (helloLangParseFunction(currentFunc, kind == RFUNCTION, err) < 0) {
+                ValkeyModule_Free(_code);
+                return -1;
+            }
             break;
         case CONSTI:
-            ValkeyModule_Assert(currentFunc != NULL);
-            helloLangParseConstI(currentFunc);
+            if (helloLangParseConstI(currentFunc, err) < 0) {
+                ValkeyModule_Free(_code);
+                return -1;
+            }
             break;
         case CONSTS:
-            ValkeyModule_Assert(currentFunc != NULL);
-            helloLangParseConstS(currentFunc);
+            if (helloLangParseConstS(currentFunc, err) < 0) {
+                ValkeyModule_Free(_code);
+                return -1;
+            }
             break;
         case ARGS:
-            ValkeyModule_Assert(currentFunc != NULL);
-            helloLangParseArgs(currentFunc);
+            if (helloLangParseArgs(currentFunc, err) < 0) {
+                ValkeyModule_Free(_code);
+                return -1;
+            }
             break;
         case SLEEP:
-            ValkeyModule_Assert(currentFunc != NULL);
             currentFunc->num_instructions++;
             break;
         case CALL:
-            ValkeyModule_Assert(currentFunc != NULL);
-            helloLangParseCall(currentFunc);
+            if (helloLangParseCall(currentFunc, err) < 0) {
+                ValkeyModule_Free(_code);
+                return -1;
+            }
             break;
         case RETURN:
-            ValkeyModule_Assert(currentFunc != NULL);
             currentFunc->num_instructions++;
             currentFunc = NULL;
             break;
@@ -327,6 +367,12 @@ static int helloLangParseCode(const char *code,
         }
 
         token = strtok(NULL, " \n");
+    }
+
+    if (currentFunc != NULL) {
+        *err = ValkeyModule_CreateStringPrintf(NULL, "Function '%s' is missing RETURN", currentFunc->name);
+        ValkeyModule_Free(_code);
+        return -1;
     }
 
     ValkeyModule_Free(_code);
@@ -355,18 +401,45 @@ static ValkeyModuleScriptingEngineExecutionState executeSleepInst(ValkeyModuleSc
     return state;
 }
 
-static void executeCallInst(ValkeyModuleCtx *module_ctx,
-                            const char *cmd_name,
-                            Value *stack,
-                            int *sp) {
+/* Pushes a value onto the interpreter stack. Returns 1 on success. If the
+ * stack is already at capacity, sets *malformed_reason to a static
+ * description and returns 0 without writing. */
+static int helloStackPush(Value *stack, int *sp, int capacity, Value v, const char **malformed_reason) {
+    if (*sp >= capacity) {
+        *malformed_reason = "stack overflow: too many values pushed before RETURN";
+        return 0;
+    }
+    stack[(*sp)++] = v;
+    return 1;
+}
+
+/* Executes a CALL instruction. Returns 1 on success. If the script is
+ * malformed (stack underflow/type mismatch for the argument count), sets
+ * *malformed_reason to a static description and returns 0 without calling
+ * out to the server. */
+static int executeCallInst(ValkeyModuleCtx *module_ctx,
+                           const char *cmd_name,
+                           Value *stack,
+                           int *sp,
+                           int capacity,
+                           const char **malformed_reason) {
     ValkeyModule_Assert(stack != NULL);
     ValkeyModule_Assert(sp != NULL);
     ValkeyModuleCallReply *rep = NULL;
     errno = 0;
-    ValkeyModule_Assert(*sp > 0);
+    if (*sp <= 0) {
+        *malformed_reason = "CALL requires a value on the stack for the argument count";
+        return 0;
+    }
     Value numargs = stack[--(*sp)];
-    ValkeyModule_Assert(numargs.type == VALUE_INT);
-    ValkeyModule_Assert(numargs.integer <= (uint32_t)(*sp));
+    if (numargs.type != VALUE_INT) {
+        *malformed_reason = "CALL argument count must be an integer";
+        return 0;
+    }
+    if (numargs.integer > (uint32_t)(*sp)) {
+        *malformed_reason = "CALL argument count exceeds the values available on the stack";
+        return 0;
+    }
     if (numargs.integer > 0) {
         ValkeyModuleString **cmd_args = ValkeyModule_Alloc(sizeof(ValkeyModuleString *) * numargs.integer);
         int bp = *sp - numargs.integer;
@@ -392,25 +465,31 @@ static void executeCallInst(ValkeyModuleCtx *module_ctx,
     ValkeyModuleString *response_str = ValkeyModule_CreateStringFromCallReply(rep);
     const char *resp_cstr = ValkeyModule_StringPtrLen(response_str, NULL);
 
+    Value result_val;
     if (type == VALKEYMODULE_REPLY_ERROR) {
-        stack[*sp].type = VALUE_ERROR;
-        stack[(*sp)++].string = resp_cstr;
+        result_val = (Value){.type = VALUE_ERROR, .string = resp_cstr};
     } else if (type == VALKEYMODULE_REPLY_ARRAY_NULL) {
-        stack[(*sp)].type = VALUE_STRING;
-        stack[(*sp)++].string = "(null array)";
+        result_val = (Value){.type = VALUE_STRING, .string = "(null array)"};
     } else if (type == VALKEYMODULE_REPLY_NULL) {
-        stack[(*sp)].type = VALUE_STRING;
-        stack[(*sp)++].string = "(null string)";
+        result_val = (Value){.type = VALUE_STRING, .string = "(null string)"};
+    } else if (response_str != NULL) {
+        /* resp_cstr is derived from a non-NULL ValkeyModuleString, so it can
+         * never itself be NULL; parseValue() can only fail on a NULL input. */
+        ValkeyModule_Assert(parseValue(resp_cstr, &result_val));
     } else {
-        if (response_str != NULL) {
-            stack[(*sp)++] = parseValue(resp_cstr);
-        } else {
-            stack[(*sp)].type = VALUE_STRING;
-            stack[(*sp)++].string = "OK";
-        }
+        result_val = (Value){.type = VALUE_STRING, .string = "OK"};
     }
 
     ValkeyModule_FreeCallReply(rep);
+
+    /* CALL only ever pops (the argument-count marker plus its arguments) and
+     * pushes a single result, so net stack depth cannot exceed what it was
+     * on entry; this check is defense-in-depth rather than reachable in
+     * practice, given every other push already enforces capacity. */
+    if (!helloStackPush(stack, sp, capacity, result_val, malformed_reason)) {
+        return 0;
+    }
+    return 1;
 }
 
 static void helloDebuggerLogCurrentInstr(uint32_t pc, HelloInst *instr) {
@@ -465,6 +544,7 @@ typedef enum {
     FINISHED,
     KILLED,
     ABORTED,
+    MALFORMED,
 } HelloExecutionState;
 
 /*
@@ -476,10 +556,12 @@ static HelloExecutionState executeHelloLangFunction(ValkeyModuleCtx *module_ctx,
                                                     HelloFunc *func,
                                                     ValkeyModuleString **args,
                                                     int nargs,
-                                                    Value *result) {
+                                                    Value *result,
+                                                    const char **malformed_reason) {
     ValkeyModule_Assert(result != NULL);
     Value stack[64];
     int sp = 0;
+    const int stack_capacity = (int)(sizeof(stack) / sizeof(stack[0]));
 
     for (uint32_t pc = 0; pc < func->num_instructions; pc++) {
         HelloInst instr = func->instructions[pc];
@@ -495,27 +577,40 @@ static HelloExecutionState executeHelloLangFunction(ValkeyModuleCtx *module_ctx,
         }
         switch (instr.kind) {
         case CONSTI: {
-            stack[sp].type = VALUE_INT;
-            stack[sp++].integer = instr.param.integer;
+            Value v = {.type = VALUE_INT, .integer = instr.param.integer};
+            if (!helloStackPush(stack, &sp, stack_capacity, v, malformed_reason)) return MALFORMED;
             break;
         }
         case CONSTS: {
-            stack[sp].type = VALUE_STRING;
-            stack[sp++].string = instr.param.string;
+            Value v = {.type = VALUE_STRING, .string = instr.param.string};
+            if (!helloStackPush(stack, &sp, stack_capacity, v, malformed_reason)) return MALFORMED;
             break;
         }
         case ARGS: {
             uint32_t idx = instr.param.integer;
-            ValkeyModule_Assert(idx < (uint32_t)nargs);
+            if (idx >= (uint32_t)nargs) {
+                *malformed_reason = "ARGS index is out of range for the number of arguments supplied";
+                return MALFORMED;
+            }
             size_t len;
             const char *argStr = ValkeyModule_StringPtrLen(args[idx], &len);
-            stack[sp++] = parseValue(argStr);
+            /* argStr is derived from a non-NULL ValkeyModuleString, so it can
+             * never itself be NULL; parseValue() can only fail on a NULL input. */
+            Value v;
+            ValkeyModule_Assert(parseValue(argStr, &v));
+            if (!helloStackPush(stack, &sp, stack_capacity, v, malformed_reason)) return MALFORMED;
             break;
 	    }
         case SLEEP: {
-            ValkeyModule_Assert(sp > 0);
+            if (sp <= 0) {
+                *malformed_reason = "SLEEP requires a value on the stack";
+                return MALFORMED;
+            }
             Value sleepVal = stack[--sp];
-            ValkeyModule_Assert(sleepVal.type == VALUE_INT);
+            if (sleepVal.type != VALUE_INT) {
+                *malformed_reason = "SLEEP value must be an integer";
+                return MALFORMED;
+            }
             if (executeSleepInst(server_ctx, sleepVal.integer) == VMSE_STATE_KILLED) {
                 return KILLED;
             }
@@ -523,14 +618,17 @@ static HelloExecutionState executeHelloLangFunction(ValkeyModuleCtx *module_ctx,
 	    }
         case CALL: {
             const char *cmd_name = instr.param.string;
-            executeCallInst(module_ctx, cmd_name, stack, &sp);
+            if (!executeCallInst(module_ctx, cmd_name, stack, &sp, stack_capacity, malformed_reason)) {
+                return MALFORMED;
+            }
             break;
         }
         case RETURN: {
-            ValkeyModule_Assert(sp > 0);
-            Value returnVal = stack[--sp];
-            ValkeyModule_Assert(sp == 0);
-            *result = returnVal;
+            if (sp != 1) {
+                *malformed_reason = "RETURN requires exactly one stack value";
+                return MALFORMED;
+            }
+            *result = stack[--sp];
             return FINISHED;
 	    }
         case FUNCTION:
@@ -540,6 +638,9 @@ static HelloExecutionState executeHelloLangFunction(ValkeyModuleCtx *module_ctx,
         }
     }
 
+    /* Unreachable: helloLangParseCode() rejects any function that reaches
+     * end-of-input without RETURN, so every compiled function's last
+     * instruction is RETURN. */
     ValkeyModule_Assert(0);
     return ABORTED;
 }
@@ -632,6 +733,12 @@ static ValkeyModuleScriptingEngineCompiledFunction **createHelloLangEngine(Valke
     if (ret < 0) {
         for (uint32_t i = 0; i < ctx->program->num_functions; i++) {
             HelloFunc *func = ctx->program->functions[i];
+            for (uint32_t j = 0; j < func->num_instructions; j++) {
+                HelloInst instr = func->instructions[j];
+                if (instr.kind == CONSTS || instr.kind == CALL) {
+                    ValkeyModule_Free(instr.param.string);
+                }
+            }
             ValkeyModule_Free(func->name);
             ValkeyModule_Free(func);
             ctx->program->functions[i] = NULL;
@@ -682,6 +789,7 @@ callHelloLangFunction(ValkeyModuleCtx *module_ctx,
     HelloLangCtx *ctx = (HelloLangCtx *)engine_ctx;
     HelloFunc *func = (HelloFunc *)compiled_function->function;
     Value result;
+    const char *malformed_reason = NULL;
     HelloExecutionState state = executeHelloLangFunction(
         module_ctx,
         server_ctx,
@@ -689,8 +797,9 @@ callHelloLangFunction(ValkeyModuleCtx *module_ctx,
         func,
         args,
         nargs,
-        &result);
-    ValkeyModule_Assert(state == KILLED || state == FINISHED || state == ABORTED);
+        &result,
+        &malformed_reason);
+    ValkeyModule_Assert(state == KILLED || state == FINISHED || state == ABORTED || state == MALFORMED);
 
     if (state == KILLED) {
         if (type == VMSE_EVAL) {
@@ -704,6 +813,10 @@ callHelloLangFunction(ValkeyModuleCtx *module_ctx,
     }
     else if (state == ABORTED) {
         ValkeyModule_ReplyWithCustomErrorFormat(module_ctx, 1, "ERR execution aborted during debugging session");
+    }
+    else if (state == MALFORMED) {
+        ValkeyModule_Assert(malformed_reason != NULL);
+        ValkeyModule_ReplyWithCustomErrorFormat(module_ctx, 1, "ERR malformed script: %s", malformed_reason);
     }
     else {
         if (result.type == VALUE_INT) {

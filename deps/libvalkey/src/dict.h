@@ -33,8 +33,8 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef __DICT_H
-#define __DICT_H
+#ifndef VALKEY_DICT_H
+#define VALKEY_DICT_H
 
 #include <stdint.h>
 

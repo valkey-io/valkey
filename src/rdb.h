@@ -27,8 +27,8 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef __RDB_H
-#define __RDB_H
+#ifndef VALKEY_RDB_H
+#define VALKEY_RDB_H
 
 #include <stdio.h>
 #include "rio.h"

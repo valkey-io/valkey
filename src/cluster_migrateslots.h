@@ -1,5 +1,5 @@
-#ifndef __CLUSTER_MIGRATESLOTS_H
-#define __CLUSTER_MIGRATESLOTS_H
+#ifndef VALKEY_CLUSTER_MIGRATESLOTS_H
+#define VALKEY_CLUSTER_MIGRATESLOTS_H
 
 #include "server.h"
 #include "cluster.h"

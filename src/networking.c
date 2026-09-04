@@ -3617,6 +3617,31 @@ void parseInlineBuffer(client *c) {
     c->reqtype = 0;
 }
 
+/* Helper function.
+ * 1. Remove the non printable chars,
+ * 2. Add single quotes to both sides of the dest string
+ * 3. Add the character \0 at the end of the dest string
+ *
+ * The remaining space of dest needs to be greater than len + 3
+ * The return value points to \0 at the end of the dest string.
+ */
+static char *removeNonPrintableChar(char *dest, const char *src, int len) {
+    int i = 0;
+    dest[0] = '\'';
+    dest = dest + 1;
+    while (i < len) {
+        if (isprint(src[i])) {
+            dest[i] = src[i];
+        } else {
+            dest[i] = '.';
+        }
+        i++;
+    }
+    dest[i++] = '\'';
+    dest[i] = '\0';
+    return dest + len + 1;
+}
+
 /* Helper function. Record protocol error details in server log,
  * and set the client as CLIENT_CLOSE_AFTER_REPLY and
  * CLIENT_PROTOCOL_ERROR. */
@@ -3627,23 +3652,17 @@ static void setProtocolError(const char *errstr, client *c) {
 
         /* Sample some protocol to given an idea about what was inside. */
         char buf[256];
+        char *dest;
         buf[0] = '\0';
         if (server.hide_user_data_from_log) {
             snprintf(buf, sizeof(buf), "*redacted*");
         } else {
             if (c->querybuf && sdslen(c->querybuf) - c->qb_pos < PROTO_DUMP_LEN) {
-                snprintf(buf, sizeof(buf), "'%s'", c->querybuf + c->qb_pos);
+                removeNonPrintableChar(buf, c->querybuf + c->qb_pos, sdslen(c->querybuf) - c->qb_pos);
             } else if (c->querybuf) {
-                snprintf(buf, sizeof(buf), "'%.*s' (... more %zu bytes ...) '%.*s'",
-                         PROTO_DUMP_LEN / 2, c->querybuf + c->qb_pos, sdslen(c->querybuf) - c->qb_pos - PROTO_DUMP_LEN,
-                         PROTO_DUMP_LEN / 2, c->querybuf + sdslen(c->querybuf) - PROTO_DUMP_LEN / 2);
-            }
-
-            /* Remove non printable chars. */
-            char *p = buf;
-            while (*p != '\0') {
-                if (!isprint(*p)) *p = '.';
-                p++;
+                dest = removeNonPrintableChar(buf, c->querybuf + c->qb_pos, PROTO_DUMP_LEN / 2);
+                dest = dest + snprintf(dest, PROTO_DUMP_LEN, " (... more %zu bytes ...) ", sdslen(c->querybuf) - c->qb_pos - PROTO_DUMP_LEN);
+                removeNonPrintableChar(dest, c->querybuf + sdslen(c->querybuf) - PROTO_DUMP_LEN / 2, PROTO_DUMP_LEN / 2);
             }
         }
         /* Log all the client and protocol info. */

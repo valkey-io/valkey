@@ -1,5 +1,5 @@
-#ifndef _EVAL_H_
-#define _EVAL_H_
+#ifndef EVAL_H
+#define EVAL_H
 
 typedef struct scriptingEngine scriptingEngine;
 
@@ -8,4 +8,4 @@ void evalReset(int async);
 void evalRemoveScriptsFromEngine(scriptingEngine *engine);
 void *evalActiveDefragScript(void *ptr);
 
-#endif /* _EVAL_H_ */
+#endif /* EVAL_H */

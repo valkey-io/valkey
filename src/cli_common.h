@@ -1,5 +1,5 @@
-#ifndef __CLICOMMON_H
-#define __CLICOMMON_H
+#ifndef CLICOMMON_H
+#define CLICOMMON_H
 
 #include <valkey/valkey.h>
 #include "sds.h"
@@ -58,4 +58,4 @@ valkeyContext *valkeyConnectWrapper(enum valkeyConnectionType ct, const char *ip
  * state is unlocked and callers are multi-threaded. Seed via srandom(). */
 uint64_t rand62(void);
 
-#endif /* __CLICOMMON_H */
+#endif /* CLICOMMON_H */

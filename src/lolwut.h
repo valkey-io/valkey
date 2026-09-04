@@ -35,8 +35,8 @@
  * It's up to each LOLWUT versions to translate what they draw to the
  * screen, depending on the result to accomplish. */
 
-#ifndef __LOLWUT_H
-#define __LOLWUT_H
+#ifndef LOLWUT_H
+#define LOLWUT_H
 
 typedef struct lwCanvas {
     int width;

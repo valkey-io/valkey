@@ -1,5 +1,5 @@
-#ifndef __INTRINSICS_H
-#define __INTRINSICS_H
+#ifndef INTRINSICS_H
+#define INTRINSICS_H
 
 #include <stdint.h>
 
@@ -18,4 +18,4 @@ static inline int32_t builtin_ctzll(uint64_t value) {
 #endif
 }
 
-#endif /* __INTRINSICS_H */
+#endif /* INTRINSICS_H */

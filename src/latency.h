@@ -31,8 +31,8 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef __LATENCY_H
-#define __LATENCY_H
+#ifndef LATENCY_H
+#define LATENCY_H
 
 #include "trace/trace.h"
 
@@ -113,4 +113,4 @@ typedef enum {
 
 void durationAddSample(int type, monotime duration);
 
-#endif /* __LATENCY_H */
+#endif /* LATENCY_H */

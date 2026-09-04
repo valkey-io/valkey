@@ -36,8 +36,8 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef __TESTHELP_H
-#define __TESTHELP_H
+#ifndef TESTHELP_H
+#define TESTHELP_H
 
 #define TEST_ACCURATE (1 << 0)
 #define TEST_LARGE_MEMORY (1 << 1)

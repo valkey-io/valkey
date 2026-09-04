@@ -28,8 +28,8 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef __ZMALLOC_H
-#define __ZMALLOC_H
+#ifndef ZMALLOC_H
+#define ZMALLOC_H
 
 #include <stddef.h>
 
@@ -168,4 +168,4 @@ __attribute__((alloc_size(2), noinline)) void *extend_to_usable(void *ptr, size_
 
 int get_proc_stat_ll(int i, long long *res);
 
-#endif /* __ZMALLOC_H */
+#endif /* ZMALLOC_H */

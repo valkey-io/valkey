@@ -822,17 +822,18 @@ void signalFlushedDb(int dbid, int async) {
  * no option: determine sync or async according to the value of lazyfree-lazy-user-flush.
  *
  * On success C_OK is returned and the flags are stored in *flags, otherwise
- * C_ERR is returned and the function sends an error to the client. */
-int getFlushCommandFlags(client *c, int *flags) {
+ * C_ERR is returned and if reply_when_error is set, the function sends an error
+ * to the client. */
+int getFlushCommandFlags(client *c, bool reply_when_error, int *flags) {
     /* Parse the optional ASYNC option. */
     if (c->argc == 2 && !strcasecmp(objectGetVal(c->argv[1]), "sync")) {
-        *flags = EMPTYDB_NO_FLAGS;
+        if (flags) *flags = EMPTYDB_NO_FLAGS;
     } else if (c->argc == 2 && !strcasecmp(objectGetVal(c->argv[1]), "async")) {
-        *flags = EMPTYDB_ASYNC;
+        if (flags) *flags = EMPTYDB_ASYNC;
     } else if (c->argc == 1) {
-        *flags = server.lazyfree_lazy_user_flush ? EMPTYDB_ASYNC : EMPTYDB_NO_FLAGS;
+        if (flags) *flags = server.lazyfree_lazy_user_flush ? EMPTYDB_ASYNC : EMPTYDB_NO_FLAGS;
     } else {
-        addReplyErrorObject(c, shared.syntaxerr);
+        if (reply_when_error) addReplyErrorObject(c, shared.syntaxerr);
         return C_ERR;
     }
     return C_OK;
@@ -864,7 +865,7 @@ void flushAllDataAndResetRDB(int flags) {
 void flushdbCommand(client *c) {
     int flags;
 
-    if (getFlushCommandFlags(c, &flags) == C_ERR) return;
+    if (getFlushCommandFlags(c, true, &flags) == C_ERR) return;
 
     /* flushdb should not flush the functions */
     server.dirty += emptyData(c->db->id, flags | EMPTYDB_NOFUNCTIONS, NULL);
@@ -888,7 +889,7 @@ void flushdbCommand(client *c) {
  * Flushes the whole server data set. */
 void flushallCommand(client *c) {
     int flags;
-    if (getFlushCommandFlags(c, &flags) == C_ERR) return;
+    if (getFlushCommandFlags(c, true, &flags) == C_ERR) return;
 
     /* flushall should not flush the functions */
     flushAllDataAndResetRDB(flags | EMPTYDB_NOFUNCTIONS);

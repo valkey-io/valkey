@@ -238,7 +238,11 @@ start_server {overrides {forkless-infrastructure-enabled yes save ""}} {
             # Verify we're testing the right save type while it's running
             set expected_type [expr {$bgsave_type eq "forkless" ? "forkless" : "fork"}]
             assert_equal [s rdb_current_bgsave_type] $expected_type
-            
+
+            # Use this opportunity to also test the "bad arg" reply.
+            assert_error {ERR*} {r flushall bad_arg}
+            assert_equal [r ping] "PONG"
+
             r flushall
             # wait a second max (bgsave should take 5)
             wait_for_condition 50 100 {

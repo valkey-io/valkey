@@ -72,10 +72,10 @@ ssize_t compressionLz4CompressFeed(streamCompressor *compressor,
     if (!compressor->stream_started) {
         LZ4F_preferences_t prefs = lz4f_prefs;
         prefs.compressionLevel = compressor->level;
-        prefs.frameInfo.blockChecksumFlag = compressor->codec_checksum
+        prefs.frameInfo.blockChecksumFlag = compressor->checksum_flags & STREAM_CHECKSUM_BLOCK
                                                 ? LZ4F_blockChecksumEnabled
                                                 : LZ4F_noBlockChecksum;
-        prefs.frameInfo.contentChecksumFlag = compressor->codec_checksum
+        prefs.frameInfo.contentChecksumFlag = compressor->checksum_flags & STREAM_CHECKSUM_CONTENT
                                                   ? LZ4F_contentChecksumEnabled
                                                   : LZ4F_noContentChecksum;
         size_t r = LZ4F_compressBegin(cctx, output, output_capacity, &prefs);
@@ -94,6 +94,14 @@ ssize_t compressionLz4CompressFeed(streamCompressor *compressor,
     switch (flush_mode) {
     case COMPRESS_FLUSH_CONTINUE:
         break;
+    case COMPRESS_FLUSH_SYNC: {
+        /* Replication batch path caller: drain buffered codec bytes, keep frame open. */
+        if (offset >= output_capacity) return -1;
+        size_t r = LZ4F_flush(cctx, output + offset, output_capacity - offset, NULL);
+        if (LZ4F_isError(r)) return -1;
+        offset += r;
+        break;
+    }
     case COMPRESS_FLUSH_END: {
         if (offset >= output_capacity) return -1;
         size_t r = LZ4F_compressEnd(cctx, output + offset, output_capacity - offset, NULL);

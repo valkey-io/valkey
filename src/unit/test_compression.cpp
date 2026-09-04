@@ -160,7 +160,7 @@ TEST(CompressionTest, streamCompressorOutputBound) {
     for (size_t i = 0; i < sizeof(input_sizes) / sizeof(input_sizes[0]); i++) {
         for (size_t j = 0; j < sizeof(flush_modes) / sizeof(flush_modes[0]); j++) {
             streamCompressor compressor;
-            ASSERT_EQ(streamCompressorInit(&compressor, ALGO_LZ4, 0, false), C_OK);
+            ASSERT_EQ(streamCompressorInit(&compressor, ALGO_LZ4, 0, 0), C_OK);
             size_t bound = streamCompressorOutputBound(&compressor, input_sizes[i]);
             uint8_t *output = (uint8_t *)zmalloc(bound);
 
@@ -484,7 +484,8 @@ static int encodeRoundTripPayload(testCompressionLayer layer,
 
     if (layer == TEST_COMPRESSION_LAYER_CODEC) {
         streamCompressor compressor;
-        if (streamCompressorInit(&compressor, ALGO_LZ4, 0, true) == C_ERR) return C_ERR;
+        if (streamCompressorInit(&compressor, ALGO_LZ4, 0, STREAM_CHECKSUM_BLOCK | STREAM_CHECKSUM_CONTENT) == C_ERR)
+            return C_ERR;
 
         size_t bound = streamCompressorOutputBound(&compressor, payload_len);
         sds output = sdsMakeRoomFor(sdsempty(), bound);
@@ -1320,4 +1321,324 @@ TEST(CompressionTest, streamWriterWriteAfterFinish) {
     streamDecompressorFree(&sd);
     streamWriterFree(&t);
     dynamicBufFree(&db);
+}
+
+/* ===== Replication push reader and repl-frame policy ===== */
+
+static void fillIncompressible(unsigned char *buf, size_t n, uint32_t seed) {
+    uint32_t x = seed;
+    for (size_t i = 0; i < n; i++) {
+        x ^= x << 13;
+        x ^= x >> 17;
+        x ^= x << 5;
+        buf[i] = (unsigned char)(x >> 24);
+    }
+}
+
+/* Build a repl-style compress state: block checksums on, content checksum
+ * off, compressing straight into the staging sds — the same setup replication
+ * uses for a compressed replica link. */
+static void initReplCompressState(replicaCompressionState *rc) {
+    memset(rc, 0, sizeof(*rc));
+    ASSERT_EQ(streamCompressorInit(&rc->stream, ALGO_LZ4, 0, STREAM_CHECKSUM_BLOCK), C_OK);
+    rc->out_buf = sdsempty();
+}
+
+static void freeReplCompressState(replicaCompressionState *rc) {
+    streamCompressorFree(&rc->stream);
+    sdsfree(rc->out_buf);
+}
+
+/* Mirror of the production write path's feed (replicaCompressToOutBuf in
+ * networking.c — keep in sync): VCS_STREAM_REPL envelope ahead of the frame's
+ * first bytes, then codec output appended to out_buf. COMPRESS_FLUSH_SYNC with
+ * len 0 drains the codec while keeping the frame open; COMPRESS_FLUSH_END
+ * closes the frame (a live link never does). */
+static int replFeed(replicaCompressionState *rc, const void *buf, size_t len, compressFlushMode flush_mode) {
+    if (!rc->stream.stream_started) {
+        uint8_t envelope[VCS_ENVELOPE_SIZE];
+        if (vcsBuildEnvelope(envelope, rc->stream.algo, VCS_STREAM_REPL) == C_ERR) return C_ERR;
+        rc->out_buf = sdscatlen(rc->out_buf, envelope, sizeof(envelope));
+    }
+    size_t bound = streamCompressorOutputBound(&rc->stream, len);
+    if (bound == 0) return C_ERR;
+    rc->out_buf = sdsMakeRoomFor(rc->out_buf, bound);
+    ssize_t compressed = streamCompressorFeed(&rc->stream, (uint8_t *)rc->out_buf + sdslen(rc->out_buf),
+                                              sdsavail(rc->out_buf), (const uint8_t *)buf, len, flush_mode);
+    if (compressed < 0) return C_ERR;
+    sdsIncrLen(rc->out_buf, (size_t)compressed);
+    return C_OK;
+}
+
+/* LZ4 frame FLG byte (follows the 4-byte frame magic): bit 2 = content
+ * checksum present, bit 4 = block checksums present. Frozen wire format.
+ * replFrameOmitsContentChecksum and rdbFrameKeepsContentChecksum verify wire
+ * bytes deliberately: "content checksum off on a never-ending frame" has no
+ * black-box observable (it is CPU silently wasted hashing bytes that are never
+ * validated), so the frame header is the only place the policy can regress
+ * visibly. */
+#define LZ4F_FLG_CONTENT_CHECKSUM 0x04
+#define LZ4F_FLG_BLOCK_CHECKSUM 0x10
+
+/* Assert the VCS envelope prefix at its documented offsets, so a future
+ * envelope-layout change fails here loudly instead of silently shifting the
+ * frame bytes the caller is about to inspect. Returns the offset of the
+ * LZ4 frame FLG byte. */
+static size_t assertVcsEnvelopeAnchor(const unsigned char *stream, uint8_t expected_kind) {
+    EXPECT_EQ(stream[0], VCS_MAGIC_0);
+    EXPECT_EQ(stream[1], VCS_MAGIC_1);
+    EXPECT_EQ(stream[2], VCS_MAGIC_2);
+    EXPECT_EQ(stream[VCS_OFFSET_VERSION], VCS_VERSION);
+    EXPECT_EQ(stream[VCS_OFFSET_CODEC], VCS_CODEC_LZ4);
+    EXPECT_EQ(stream[VCS_OFFSET_RESERVED], 0x00);
+    EXPECT_EQ(stream[VCS_OFFSET_STREAM_KIND], expected_kind);
+    /* LZ4 frame magic 0x184D2204 (little-endian) right after the envelope. */
+    EXPECT_EQ(stream[VCS_ENVELOPE_SIZE + 0], 0x04);
+    EXPECT_EQ(stream[VCS_ENVELOPE_SIZE + 1], 0x22);
+    EXPECT_EQ(stream[VCS_ENVELOPE_SIZE + 2], 0x4D);
+    EXPECT_EQ(stream[VCS_ENVELOPE_SIZE + 3], 0x18);
+    return VCS_ENVELOPE_SIZE + 4; /* FLG byte offset. */
+}
+
+TEST(replCompression, replFrameOmitsContentChecksum) {
+    /* A repl frame never ends, so its content checksum would be computed on
+     * every byte but never emitted or validated. It must be off in the frame
+     * header while block checksums stay on. */
+    replicaCompressionState rc;
+    initReplCompressState(&rc);
+    const char payload[] = "content-checksum-off-for-repl";
+    ASSERT_EQ(replFeed(&rc, payload, sizeof(payload), COMPRESS_FLUSH_CONTINUE), C_OK);
+    ASSERT_EQ(replFeed(&rc, NULL, 0, COMPRESS_FLUSH_SYNC), C_OK);
+    const unsigned char *stream = (const unsigned char *)rc.out_buf;
+    ASSERT_GE(sdslen(rc.out_buf), (size_t)(VCS_ENVELOPE_SIZE + 5));
+    size_t flg_offset = assertVcsEnvelopeAnchor(stream, VCS_STREAM_REPL);
+    unsigned char flg = stream[flg_offset];
+    EXPECT_EQ(flg & LZ4F_FLG_CONTENT_CHECKSUM, 0x00);
+    EXPECT_EQ(flg & LZ4F_FLG_BLOCK_CHECKSUM, LZ4F_FLG_BLOCK_CHECKSUM);
+
+    /* Round-trip: the reader learns checksum presence from the frame header,
+     * so it needs no matching configuration. */
+    streamPushReader reader;
+    streamPushReaderInit(&reader, VCS_STREAM_REPL);
+    sds out = sdsempty();
+    ASSERT_EQ(streamPushReaderFeed(&reader, rc.out_buf, sdslen(rc.out_buf), &out, 1024 * 1024), STREAM_PUSH_READER_OK);
+    ASSERT_EQ(sdslen(out), sizeof(payload));
+    EXPECT_EQ(memcmp(out, payload, sizeof(payload)), 0);
+    EXPECT_EQ(reader.state, STREAM_PUSH_READER_COMPRESSED);
+
+    streamPushReaderFree(&reader);
+    sdsfree(out);
+    freeReplCompressState(&rc);
+}
+
+TEST(replCompression, rdbFrameKeepsContentChecksum) {
+    /* Contrast: the default (RDB) stream kind finishes its frame, so the
+     * content checksum stays on. */
+    streamWriter writer;
+    DynamicBuf out;
+    dynamicBufInit(&out);
+    ASSERT_EQ(streamWriterInit(&writer, ALGO_LZ4, true, emitToDynamicBuf, &out), C_OK);
+    ASSERT_EQ(streamWriterWrite(&writer, "rdb-bytes", 9), C_OK);
+    const unsigned char *stream = (const unsigned char *)out.data;
+    ASSERT_GE(sdslen((sds)out.data), (size_t)(VCS_ENVELOPE_SIZE + 5));
+    size_t flg_offset = assertVcsEnvelopeAnchor(stream, VCS_STREAM_RDB);
+    unsigned char flg = stream[flg_offset];
+    EXPECT_EQ(flg & LZ4F_FLG_CONTENT_CHECKSUM, LZ4F_FLG_CONTENT_CHECKSUM);
+    EXPECT_EQ(flg & LZ4F_FLG_BLOCK_CHECKSUM, LZ4F_FLG_BLOCK_CHECKSUM);
+    streamWriterFree(&writer);
+    dynamicBufFree(&out);
+}
+
+TEST(replCompression, pushReaderFrameDoneOnLiveLink) {
+    replicaCompressionState rc;
+    initReplCompressState(&rc);
+    const char payload[] = "frame-done-on-live-link";
+    ASSERT_EQ(replFeed(&rc, payload, sizeof(payload), COMPRESS_FLUSH_CONTINUE), C_OK);
+    /* Finish ends the frame; a live replication link must never see that. */
+    ASSERT_EQ(replFeed(&rc, NULL, 0, COMPRESS_FLUSH_END), C_OK);
+
+    streamPushReader reader;
+    streamPushReaderInit(&reader, VCS_STREAM_REPL);
+    sds out = sdsempty();
+    EXPECT_EQ(streamPushReaderFeed(&reader, rc.out_buf, sdslen(rc.out_buf), &out, 1024 * 1024),
+              STREAM_PUSH_READER_FRAME_DONE);
+    ASSERT_EQ(sdslen(out), sizeof(payload));
+    EXPECT_EQ(memcmp(out, payload, sizeof(payload)), 0);
+
+    streamPushReaderFree(&reader);
+    sdsfree(out);
+    freeReplCompressState(&rc);
+}
+
+TEST(replCompression, pushReaderOverflowGuard) {
+    replicaCompressionState rc;
+    initReplCompressState(&rc);
+    const size_t n = 64 * 1024;
+    unsigned char *buf = (unsigned char *)zmalloc(n);
+    fillIncompressible(buf, n, 0x12345678u);
+    ASSERT_EQ(replFeed(&rc, buf, n, COMPRESS_FLUSH_CONTINUE), C_OK);
+    ASSERT_EQ(replFeed(&rc, NULL, 0, COMPRESS_FLUSH_SYNC), C_OK);
+
+    streamPushReader reader;
+    streamPushReaderInit(&reader, VCS_STREAM_REPL);
+    sds out = sdsempty();
+    EXPECT_EQ(streamPushReaderFeed(&reader, rc.out_buf, sdslen(rc.out_buf), &out, 1024),
+              STREAM_PUSH_READER_OVERFLOW);
+    EXPECT_LE(sdslen(out), (size_t)1024);
+
+    streamPushReaderFree(&reader);
+    sdsfree(out);
+    zfree(buf);
+    freeReplCompressState(&rc);
+}
+
+TEST(replCompression, pushReaderEnvelopeSplitAcrossFeeds) {
+    replicaCompressionState rc;
+    initReplCompressState(&rc);
+    const size_t n = 10 * 1024;
+    unsigned char *payload = (unsigned char *)zmalloc(n);
+    memset(payload, 'A', n);
+    ASSERT_EQ(replFeed(&rc, payload, n, COMPRESS_FLUSH_CONTINUE), C_OK);
+    ASSERT_EQ(replFeed(&rc, NULL, 0, COMPRESS_FLUSH_SYNC), C_OK);
+    const unsigned char *stream = (const unsigned char *)rc.out_buf;
+    const size_t stream_len = sdslen(rc.out_buf);
+    ASSERT_GT(stream_len, (size_t)VCS_ENVELOPE_SIZE);
+
+    streamPushReader reader;
+    streamPushReaderInit(&reader, VCS_STREAM_REPL);
+    const char prefix[] = "existing:";
+    const size_t prefix_len = sizeof(prefix) - 1;
+    sds out = sdsnewlen(prefix, prefix_len);
+
+    /* A partial envelope neither classifies the stream nor changes output. */
+    ASSERT_EQ(streamPushReaderFeed(&reader, stream, 1, &out, 1024 * 1024), STREAM_PUSH_READER_OK);
+    EXPECT_EQ(sdslen(out), prefix_len);
+    ASSERT_EQ(streamPushReaderFeed(&reader, stream + 1, 2, &out, 1024 * 1024), STREAM_PUSH_READER_OK);
+    EXPECT_EQ(sdslen(out), prefix_len);
+
+    /* Decoded bytes append after existing caller-owned output. */
+    ASSERT_EQ(streamPushReaderFeed(&reader, stream + 3, stream_len - 3, &out, 1024 * 1024),
+              STREAM_PUSH_READER_OK);
+    ASSERT_EQ(sdslen(out), prefix_len + n);
+    EXPECT_EQ(memcmp(out, prefix, prefix_len), 0);
+    EXPECT_EQ(memcmp(out + prefix_len, payload, n), 0);
+
+    streamPushReaderFree(&reader);
+    sdsfree(out);
+    zfree(payload);
+    freeReplCompressState(&rc);
+}
+
+TEST(replCompression, pushReaderPassthroughReplaysPrefix) {
+    streamPushReader reader;
+    streamPushReaderInit(&reader, VCS_STREAM_REPL);
+    sds out = sdsempty();
+    /* "V" alone could still open the VCS magic: buffered, nothing emitted. */
+    ASSERT_EQ(streamPushReaderFeed(&reader, "V", 1, &out, 1024), STREAM_PUSH_READER_OK);
+    EXPECT_EQ(sdslen(out), (size_t)0);
+    EXPECT_EQ(reader.state, STREAM_PUSH_READER_PROBE);
+    /* "X" rules out the magic: the buffered "V" replays ahead of the new bytes. */
+    ASSERT_EQ(streamPushReaderFeed(&reader, "XYZ", 3, &out, 1024), STREAM_PUSH_READER_OK);
+    EXPECT_EQ(reader.state, STREAM_PUSH_READER_PASSTHROUGH);
+    ASSERT_EQ(sdslen(out), (size_t)4);
+    EXPECT_EQ(memcmp(out, "VXYZ", 4), 0);
+    streamPushReaderFree(&reader);
+    sdsfree(out);
+}
+
+TEST(replCompression, pushReaderRejectsWrongStreamKind) {
+    /* A valid RDB envelope must not activate a replication reader. */
+    unsigned char envelope[VCS_ENVELOPE_SIZE];
+    ASSERT_EQ(vcsBuildEnvelope(envelope, ALGO_LZ4, VCS_STREAM_RDB), C_OK);
+
+    streamPushReader reader;
+    streamPushReaderInit(&reader, VCS_STREAM_REPL);
+    sds out = sdsempty();
+    EXPECT_EQ(streamPushReaderFeed(&reader, envelope, sizeof(envelope), &out, 1024), STREAM_PUSH_READER_ERR);
+    EXPECT_EQ(sdslen(out), (size_t)0);
+    streamPushReaderFree(&reader);
+    sdsfree(out);
+}
+
+TEST(replCompression, pushReaderErrOnCorruptPayload) {
+    unsigned char stream[VCS_ENVELOPE_SIZE + 64];
+    ASSERT_EQ(vcsBuildEnvelope(stream, ALGO_LZ4, VCS_STREAM_REPL), C_OK);
+    memset(stream + VCS_ENVELOPE_SIZE, 0xFF, 64);
+
+    streamPushReader reader;
+    streamPushReaderInit(&reader, VCS_STREAM_REPL);
+    sds out = sdsempty();
+    EXPECT_EQ(streamPushReaderFeed(&reader, stream, sizeof(stream), &out, 1024 * 1024),
+              STREAM_PUSH_READER_ERR);
+    EXPECT_EQ(sdslen(out), (size_t)0);
+
+    streamPushReaderFree(&reader);
+    sdsfree(out);
+}
+
+TEST(replCompression, pushReaderDrainsBufferedOutputWithoutMoreInput) {
+    /* The writer emits 64KB LZ4 blocks while the reader offers 16KB of room
+     * per iteration, so LZ4F decodes a compressed block into its internal
+     * buffer and can report the block's input consumed with output still
+     * undelivered. Once input runs out the reader must keep draining with
+     * empty input; otherwise the tail is stranded inside the codec until
+     * later transport bytes arrive. The payload ends with a compressible run:
+     * a stored (incompressible) block streams straight to the caller's buffer
+     * and would not strand. */
+    const size_t incompressible = 36 * 1024;
+    const size_t compressible = 64 * 1024;
+    const size_t n = incompressible + compressible; /* ~100KB: multiple blocks */
+    unsigned char *payload = (unsigned char *)zmalloc(n);
+    fillIncompressible(payload, incompressible, 0xC0FFEE42u);
+    memset(payload + incompressible, 'A', compressible);
+
+    replicaCompressionState rc;
+    initReplCompressState(&rc);
+    ASSERT_EQ(replFeed(&rc, payload, n, COMPRESS_FLUSH_CONTINUE), C_OK);
+    ASSERT_EQ(replFeed(&rc, NULL, 0, COMPRESS_FLUSH_SYNC), C_OK); /* frame stays open */
+
+    /* All compressed bytes in ONE call: no later input can push out whatever
+     * the codec buffered, so the feed itself must drain it. */
+    streamPushReader reader;
+    streamPushReaderInit(&reader, VCS_STREAM_REPL);
+    sds out = sdsempty();
+    ASSERT_EQ(streamPushReaderFeed(&reader, rc.out_buf, sdslen(rc.out_buf), &out, 4 * 1024 * 1024), STREAM_PUSH_READER_OK);
+    ASSERT_EQ(sdslen(out), n);
+    EXPECT_EQ(memcmp(out, payload, n), 0);
+
+    streamPushReaderFree(&reader);
+    sdsfree(out);
+    freeReplCompressState(&rc);
+    zfree(payload);
+}
+
+TEST(replCompression, pushReaderLz4HighRatioOutputFitsProductionCap) {
+    /* Feed paths hand the reader at most PROTO_IOBUF_LEN (16KB) per call and
+     * LZ4 expansion is bounded, so one call's output stays far under the 16MB
+     * overflow cap (REPL_DECODE_MAX_OUTPUT_PER_FEED in replication.c) for a
+     * high-ratio input. */
+    const size_t n = 4 * 1024 * 1024; /* 4MB of one byte: near-max ratio */
+    unsigned char *payload = (unsigned char *)zmalloc(n);
+    memset(payload, 'Z', n);
+
+    replicaCompressionState rc;
+    initReplCompressState(&rc);
+    ASSERT_EQ(replFeed(&rc, payload, n, COMPRESS_FLUSH_CONTINUE), C_OK);
+    ASSERT_EQ(replFeed(&rc, NULL, 0, COMPRESS_FLUSH_SYNC), C_OK);
+
+    /* One feed receives one production-sized wire read; a 255x expansion
+     * bound remains below the 16MB cap. */
+    const size_t chunk = PROTO_IOBUF_LEN;
+    ASSERT_GE(sdslen(rc.out_buf), chunk);
+    streamPushReader reader;
+    streamPushReaderInit(&reader, VCS_STREAM_REPL);
+    sds out = sdsempty();
+    ASSERT_EQ(streamPushReaderFeed(&reader, rc.out_buf, chunk, &out, 16 * 1024 * 1024), STREAM_PUSH_READER_OK);
+    EXPECT_GT(sdslen(out), (size_t)1024 * 1024); /* high ratio actually exercised */
+    EXPECT_LT(sdslen(out), (size_t)16 * 1024 * 1024);
+
+    streamPushReaderFree(&reader);
+    sdsfree(out);
+    freeReplCompressState(&rc);
+    zfree(payload);
 }

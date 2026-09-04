@@ -8,6 +8,7 @@
 #define COMPRESSION_STREAM_H
 
 #include "compression.h"
+#include "sds.h"
 
 /* VCS envelope:
  *   [0..2] magic "VCS"
@@ -37,6 +38,8 @@
 
 /* Identifies an RDB payload in the envelope. */
 #define VCS_STREAM_RDB 0x01
+/* Identifies a replication stream payload in the envelope. */
+#define VCS_STREAM_REPL 0x02
 
 typedef int (*streamWriterWriteFn)(void *ctx, const uint8_t *data, size_t len);
 /* Returns >0 bytes read, 0 on EOF, -1 on error. Partial reads allowed. */
@@ -71,10 +74,14 @@ int streamWriterFinish(streamWriter *writer);
 /* Releases resources without implicitly finalizing the frame. */
 void streamWriterFree(streamWriter *writer);
 
+/* Build a 7-byte VCS envelope in a producer-owned output buffer.
+ * Returns C_ERR when algo has no wire codec id. */
+int vcsBuildEnvelope(uint8_t *buf, compressionAlgo algo, uint8_t stream_kind);
+
 /* ===== Reader ===== */
 
 /* Default decompressed-output buffer size. Tiny caller values are clamped up
- * so the decoder can always make forward progress without growing internal
+ * so the reader can always make forward progress without growing internal
  * state. The compressed-input buffer only needs to hold one LZ4 block. */
 #define STREAM_READER_BUFFER_SIZE_DEFAULT (1024 * 1024)
 #define STREAM_READER_BUFFER_SIZE_MIN (128 * 1024)
@@ -140,5 +147,47 @@ ssize_t streamReaderRead(streamReader *reader, void *buf, size_t len);
  * Returns C_OK/C_ERR. */
 int streamReaderFinish(streamReader *reader);
 void streamReaderFree(streamReader *reader);
+
+/* ===== Push reader ===== */
+
+/* Push-mode counterpart of streamReader for callers that receive bytes from a
+ * non-blocking source (event loop) instead of pulling through a read callback.
+ * The stream's leading bytes classify it: a VCS envelope of the expected
+ * stream kind activates the codec; anything else switches to passthrough and
+ * bytes are forwarded verbatim. Output is appended to a caller-provided sds. */
+
+typedef enum {
+    STREAM_PUSH_READER_OK = 0,          /* Input consumed; output (possibly 0 bytes) appended. */
+    STREAM_PUSH_READER_ERR = -1,        /* Envelope or codec error. */
+    STREAM_PUSH_READER_FRAME_DONE = -2, /* The compressed frame ended. */
+    STREAM_PUSH_READER_OVERFLOW = -3,   /* Output for one feed call exceeded the caller's cap. */
+} streamPushReaderResult;
+
+typedef enum {
+    STREAM_PUSH_READER_PROBE = 0,   /* Still classifying the leading bytes. */
+    STREAM_PUSH_READER_COMPRESSED,  /* VCS envelope seen; codec active. */
+    STREAM_PUSH_READER_PASSTHROUGH, /* Non-VCS stream; bytes forwarded as-is. */
+} streamPushReaderState;
+
+typedef struct streamPushReader {
+    streamDecompressor decompressor; /* Valid once state == COMPRESSED. */
+    streamPushReaderState state;
+    uint8_t stream_kind;                 /* Expected VCS stream kind. */
+    uint8_t envelope[VCS_ENVELOPE_SIZE]; /* Leading bytes gathered during probe. */
+    size_t envelope_len;
+} streamPushReader;
+
+/* Push reader API. Init never fails (codec state is created lazily once the
+ * envelope is parsed); Free releases codec state and is safe to call in any
+ * state. Feed consumes len source bytes and appends decoded (or passthrough)
+ * output to *out, which may be reallocated. output_max caps the bytes one
+ * feed call may append, as a decompression-bomb guard. On STREAM_PUSH_READER_OK
+ * a zero-length append means a partial envelope or compressed block was
+ * buffered; resume when more input arrives. Any other result is terminal:
+ * input may be partially consumed and output partially appended, and the only
+ * valid next call on the reader is streamPushReaderFree(). */
+void streamPushReaderInit(streamPushReader *pr, uint8_t stream_kind);
+void streamPushReaderFree(streamPushReader *pr);
+streamPushReaderResult streamPushReaderFeed(streamPushReader *pr, const void *src, size_t len, sds *out, size_t output_max);
 
 #endif /* COMPRESSION_STREAM_H */

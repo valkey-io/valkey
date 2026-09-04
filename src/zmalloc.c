@@ -93,7 +93,6 @@ void zlibc_free(void *ptr) {
 
 #define thread_local _Thread_local
 
-#define PADDING_ELEMENT_NUM (CACHE_LINE_SIZE / sizeof(size_t) - 1)
 #define MAX_THREADS_NUM (IO_THREADS_MAX_NUM + 3 + 1)
 /* A thread-local storage which keep the current thread's index in the used_memory_thread array. */
 static thread_local int thread_index = -1;
@@ -103,14 +102,22 @@ static thread_local int thread_index = -1;
  * the reader will see the inconsistency memory on non x86 architecture potentially.
  * For the ARM and PowerPC platform, we can solve this issue by make the memory aligned.
  * For the other architecture, lets fall back to the atomic operation to keep safe. */
+/* Each thread's counter lives on its own cache line. Without this, adjacent
+ * threads' counters share a cache line and every allocation's counter update
+ * causes false sharing across all allocating threads (and with the main
+ * thread, which sums these counters in zmalloc_used_memory() after every
+ * command). */
 #if defined(__i386__) || defined(__x86_64__) || defined(__amd64__) || defined(__POWERPC__) || defined(__arm__) || \
     defined(__arm64__)
-static __attribute__((aligned(CACHE_LINE_SIZE))) size_t used_memory_thread_padded[MAX_THREADS_NUM + PADDING_ELEMENT_NUM];
-static size_t *used_memory_thread = &used_memory_thread_padded[PADDING_ELEMENT_NUM];
+typedef struct {
+    __attribute__((aligned(CACHE_LINE_SIZE))) size_t value;
+} used_memory_entry;
 #else
-static __attribute__((aligned(CACHE_LINE_SIZE))) _Atomic size_t used_memory_thread_padded[MAX_THREADS_NUM + PADDING_ELEMENT_NUM];
-static _Atomic size_t *used_memory_thread = &used_memory_thread_padded[PADDING_ELEMENT_NUM];
+typedef struct {
+    __attribute__((aligned(CACHE_LINE_SIZE))) _Atomic size_t value;
+} used_memory_entry;
 #endif
+static used_memory_entry used_memory_thread[MAX_THREADS_NUM];
 static atomic_int total_active_threads = 0;
 /* This is a simple protection. It's used only if some modules create a lot of threads. */
 static atomic_size_t used_memory_for_additional_threads = 0;
@@ -125,7 +132,7 @@ static inline void update_zmalloc_stat_alloc(size_t size) {
     if (unlikely(thread_index >= MAX_THREADS_NUM)) {
         atomic_fetch_add_explicit(&used_memory_for_additional_threads, size, memory_order_relaxed);
     } else {
-        used_memory_thread[thread_index] += size;
+        used_memory_thread[thread_index].value += size;
     }
 }
 
@@ -134,7 +141,7 @@ static inline void update_zmalloc_stat_free(size_t size) {
     if (unlikely(thread_index >= MAX_THREADS_NUM)) {
         atomic_fetch_sub_explicit(&used_memory_for_additional_threads, size, memory_order_relaxed);
     } else {
-        used_memory_thread[thread_index] -= size;
+        used_memory_thread[thread_index].value -= size;
     }
 }
 
@@ -524,7 +531,7 @@ size_t zmalloc_used_memory(void) {
         threads_num = MAX_THREADS_NUM;
     }
     for (int i = 0; i < threads_num; i++) {
-        um += used_memory_thread[i];
+        um += used_memory_thread[i].value;
     }
     return um;
 }

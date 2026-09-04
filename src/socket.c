@@ -123,7 +123,11 @@ static int connSocketConnect(connection *conn,
     conn->state = CONN_STATE_CONNECTING;
 
     conn->conn_handler = connect_handler;
-    aeCreateFileEvent(server.el, conn->fd, AE_WRITABLE, conn->type->ae_handler, conn);
+    if (aeCreateFileEvent(server.el, conn->fd, AE_WRITABLE, conn->type->ae_handler, conn) == AE_ERR) {
+        conn->state = CONN_STATE_ERROR;
+        conn->last_errno = errno;
+        return C_ERR
+    }
 
     return C_OK;
 }
@@ -329,6 +333,11 @@ static void connSocketAcceptHandler(aeEventLoop *el, int fd, void *privdata, int
         if (cfd == ANET_ERR) {
             if (anetRetryAcceptOnError(errno)) continue;
             if (errno != EWOULDBLOCK) serverLog(LL_WARNING, "Accepting client connection: %s", server.neterr);
+            return;
+        }
+        if (cfd >= (int)server.maxclients + CONFIG_FDSET_INCR) {
+            close(cfd);
+            serverLog(LL_WARNING, "Accept %s:%d failed, the cfd is overflow.", cip, cport);
             return;
         }
         serverLog(LL_VERBOSE, "Accepted %s:%d", cip, cport);

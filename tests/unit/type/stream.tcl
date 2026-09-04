@@ -991,7 +991,7 @@ start_server {tags {"stream"}} {
     test {XSETID errors on negative offset} {
         catch {r XSETID stream 1-1 ENTRIESADDED -1 MAXDELETEDID 0-0} err
         set _ $err
-    } {ERR *must be positive}
+    } {ERR *must be non-negative}
 
     test {XSETID cannot set the maximal tombstone with larger ID} {
         r DEL x

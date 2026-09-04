@@ -32,6 +32,7 @@
 
 #include "fmacros.h"
 #include "config.h"
+#include "compression.h"
 #include "solarisfixes.h"
 #include "rio.h"
 #include "commands.h"
@@ -465,9 +466,11 @@ typedef enum {
 #define REPLICA_CAPA_PSYNC2 (1 << 1)            /* Supports PSYNC2 protocol. */
 #define REPLICA_CAPA_DUAL_CHANNEL (1 << 2)      /* Supports dual channel replication sync */
 #define REPLICA_CAPA_SKIP_RDB_CHECKSUM (1 << 3) /* Supports skipping RDB checksum for sync requests. */
+#define REPLICA_CAPA_COMPRESS_SYNC (1 << 4)     /* Can decode a compressed full-sync RDB payload (any streaming codec; one bit covers all). */
 
 /* Replica capability strings */
 #define REPLICA_CAPA_SKIP_RDB_CHECKSUM_STR "skip-rdb-checksum" /* Supports skipping RDB checksum for sync requests. */
+#define REPLICA_CAPA_COMPRESS_SYNC_STR "compress-sync"         /* Can decode a compressed full-sync RDB payload. */
 
 /* Replica requirements */
 #define REPLICA_REQ_NONE 0
@@ -1669,9 +1672,10 @@ typedef struct rdbSaveInfo {
     int repl_id_is_set;                   /* True if repl_id field is set. */
     char repl_id[CONFIG_RUN_ID_SIZE + 1]; /* Replication ID. */
     long long repl_offset;                /* Replication offset. */
+    bool loaded_compressed;               /* True if rdbLoad() read a streaming-compressed file. */
 } rdbSaveInfo;
 
-#define RDB_SAVE_INFO_INIT {-1, 0, "0000000000000000000000000000000000000000", -1}
+#define RDB_SAVE_INFO_INIT {-1, 0, "0000000000000000000000000000000000000000", -1, false}
 
 struct malloc_stats {
     size_t zmalloc_used;
@@ -2113,6 +2117,7 @@ struct valkeyServer {
     rdbWriteTarget rdb_write_target;      /* Type of save by active child. */
     rdbBgsaveType cur_bgsave_type;        /* Current bgsave type. */
     rdbBgsaveType lastbgsave_type;        /* Last completed bgsave type. */
+    compressionAlgo rdb_child_sync_algo;  /* Streaming compression used by the active replication disk child. */
     int lastbgsave_status;                /* C_OK or C_ERR */
     int stop_writes_on_bgsave_err;        /* Don't allow writes if can't BGSAVE */
     int rdb_pipe_read;                    /* RDB pipe used to transfer the rdb data */
@@ -3348,6 +3353,9 @@ const char *getFailoverStateString(void);
 sds getReplicaPortString(void);
 int sendCurrentOffsetToReplica(client *replica);
 int replicaRdbVersion(client *replica);
+/* Full-sync compression policy: select the codec and gate replica eligibility on capability. */
+compressionAlgo replSelectFullSyncCompression(int replica_capa);
+bool replicaCanUseFullSyncFormat(int replica_capa, compressionAlgo compression_algo);
 void addRdbReplicaToPsyncWait(client *replica);
 void initClientReplicationData(client *c);
 void freeClientReplicationData(client *c);

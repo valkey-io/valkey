@@ -349,6 +349,8 @@ start_server {tags {"rdb-compression repl external:skip"} overrides {save ""}} {
 
             $primary config set repl-diskless-sync-delay 0
             $replica config set repl-diskless-load swapdb
+            # Keep the replica non-capable so this covers the cohort downgrade.
+            $replica config set rdbcompression no
 
             foreach diskless {no yes} {
                 $replica replicaof no one

@@ -995,6 +995,19 @@ need_full_resync:
     return C_ERR;
 }
 
+/* A single compress-sync capability covers every streaming codec, so adding a
+ * new codec does not require a new capability bit. */
+bool replicaCanUseFullSyncFormat(int replica_capa, compressionAlgo compression_algo) {
+    return compression_algo == ALGO_NONE || (replica_capa & REPLICA_CAPA_COMPRESS_SYNC);
+}
+
+compressionAlgo replSelectFullSyncCompression(int replica_capa) {
+    /* Only whole-stream LZ4 can frame a sync payload; rdbcompression yes and lzf
+     * select per-string LZF, which is not a stream codec. */
+    compressionAlgo configured_algo = server.rdb_compression == RDB_COMPRESSION_LZ4 ? ALGO_LZ4 : ALGO_NONE;
+    return replicaCanUseFullSyncFormat(replica_capa, configured_algo) ? configured_algo : ALGO_NONE;
+}
+
 /* Start a BGSAVE for replication goals, which is, selecting the disk or
  * socket target depending on the configuration, and making sure that
  * the script cache is flushed before to start.
@@ -1019,6 +1032,7 @@ need_full_resync:
 int startBgsaveForReplication(int mincapa, int req, int rdbver) {
     int retval;
     int socket_target = 0;
+    compressionAlgo sync_compression_algo = ALGO_NONE;
     listIter li;
     listNode *ln;
 
@@ -1048,6 +1062,12 @@ int startBgsaveForReplication(int mincapa, int req, int rdbver) {
         if (socket_target)
             retval = rdbSaveToReplicasSockets(req, rdbver, rsiptr);
         else {
+            /* mincapa is the trigger's own mask on the eager path but the group AND on the cron path, so a mixed group downgrades to plain. */
+            sync_compression_algo = replSelectFullSyncCompression(mincapa);
+            if (sync_compression_algo != ALGO_NONE)
+                serverLog(LL_NOTICE, "Disk-based full sync with compression: %s", compressionAlgoName(sync_compression_algo));
+            /* The forked child reads this global to pick the sync codec. */
+            server.rdb_child_sync_algo = sync_compression_algo;
             /* Keep the page cache since it'll get used soon */
             retval = rdbSaveBackground(req, server.rdb_filename, rsiptr, RDBFLAGS_REPLICATION | RDBFLAGS_KEEP_CACHE);
         }
@@ -1096,6 +1116,10 @@ int startBgsaveForReplication(int mincapa, int req, int rdbver) {
                 /* Check replica has the exact requirements */
                 if (replica->repl_data->replica_req != req) continue;
                 if (replicaRdbVersion(replica) != rdbver) continue;
+                /* A non-capable waiter must not receive a compressed sync; it
+                 * stays parked and the next cron round, whose AND includes it,
+                 * is plain. A capable waiter may still join a plain round. */
+                if (!replicaCanUseFullSyncFormat(replica->repl_data->replica_capa, sync_compression_algo)) continue;
                 replicationSetupReplicaForFullResync(replica, getPsyncInitialOffset());
             }
         }
@@ -1262,10 +1286,15 @@ void syncCommand(client *c) {
                 break;
         }
         /* To attach this replica, we check that it has at least all the
-         * capabilities of the replica that triggered the current BGSAVE
-         * and its exact requirements. */
-        if (ln && ((c->repl_data->replica_capa & replica->repl_data->replica_capa) == replica->repl_data->replica_capa) &&
-            c->repl_data->replica_req == replica->repl_data->replica_req) {
+         * capabilities of the replica that triggered the current BGSAVE and its
+         * exact requirements. Compression is asymmetric: a plain running save is
+         * joinable by anyone, but a compressed one only by a capable replica.
+         * compress-sync is masked out of the capability superset check so a
+         * capable newcomer can still join a plain running save. */
+        int trigger_capa = ln ? (replica->repl_data->replica_capa & ~REPLICA_CAPA_COMPRESS_SYNC) : 0;
+        if (ln && ((c->repl_data->replica_capa & trigger_capa) == trigger_capa) &&
+            c->repl_data->replica_req == replica->repl_data->replica_req &&
+            replicaCanUseFullSyncFormat(c->repl_data->replica_capa, server.rdb_child_sync_algo)) {
             /* Perfect, the server is already registering differences for
              * another replica. Set the right state, and copy the buffer.
              * We don't copy buffer if clients don't want. */
@@ -1389,13 +1418,14 @@ void freeClientReplicationData(client *c) {
  * the primary can accurately lists replicas and their listening ports in the
  * INFO output.
  *
- * - capa <eof|psync2|dual-channel|skip-rdb-checksum>
+ * - capa <eof|psync2|dual-channel|skip-rdb-checksum|compress-sync>
  * What is the capabilities of this instance.
  * eof: supports EOF-style RDB transfer for diskless replication.
  * psync2: supports PSYNC v2, so understands +CONTINUE <new repl ID>.
  * dual-channel: supports full sync using rdb channel.
  * skip-rdb-checksum: supports skipping RDB checksum calculations during diskless sync using
  *                    a connection that has integrity checks (such as TLS).
+ * compress-sync: can decode a compressed full-sync RDB payload.
  *
  * - ack <offset> [fack <aofofs>]
  * Replica informs the primary the amount of replication stream that it
@@ -1477,6 +1507,9 @@ void replconfCommand(client *c) {
                 }
             } else if (!strcasecmp(objectGetVal(c->argv[j + 1]), REPLICA_CAPA_SKIP_RDB_CHECKSUM_STR))
                 c->repl_data->replica_capa |= REPLICA_CAPA_SKIP_RDB_CHECKSUM;
+            /* "compress-sync": the replica can decode a compressed full-sync RDB payload. */
+            else if (!strcasecmp(objectGetVal(c->argv[j + 1]), REPLICA_CAPA_COMPRESS_SYNC_STR))
+                c->repl_data->replica_capa |= REPLICA_CAPA_COMPRESS_SYNC;
         } else if (!strcasecmp(objectGetVal(c->argv[j]), "ack")) {
             /* REPLCONF ACK is used by replica to inform the primary the amount
              * of replication stream that it processed so far. It is an
@@ -2461,11 +2494,17 @@ void replicaAfterLoadPrimaryRDB(connection *conn, rdbSaveInfo *rsi, int disk_bas
      * directly, avoiding a redundant bgrewriteaof. Otherwise (diskless
      * sync or rdb-preamble disabled), fall back to bgrewriteaof. */
     if (server.aof_enabled) {
-        if (disk_based_sync && server.aof_use_rdb_preamble) {
+        bool aof_rdb_base_candidate = disk_based_sync && server.aof_use_rdb_preamble;
+        if (aof_rdb_base_candidate && !rsi->loaded_compressed) {
             if (restartAOFWithSyncRdb() == C_ERR) {
                 restartAOFAfterSYNC();
             }
         } else {
+            if (aof_rdb_base_candidate) {
+                serverLog(LL_NOTICE,
+                          "Sync RDB file %s is streaming-compressed, falling back to BGREWRITEAOF instead of reusing it as an AOF base",
+                          server.rdb_filename);
+            }
             restartAOFAfterSYNC();
         }
     }
@@ -2480,6 +2519,9 @@ void replicaAfterLoadPrimaryRDB(connection *conn, rdbSaveInfo *rsi, int disk_bas
 
 int replicaLoadPrimaryRDBFromSocket(connection *conn, char *buf, char *eofmark, int *usemark, rdbSaveInfo *rsi) {
     rio rdb;
+    streamReader stream_reader;
+    bool stream_reader_initialized = false;
+    compressionAlgo compression_algo = ALGO_NONE;
     serverDb **dbarray;
     functionsLibCtx *functions_lib_ctx;
     serverDb **diskless_load_tempDb = NULL;
@@ -2522,26 +2564,84 @@ int replicaLoadPrimaryRDBFromSocket(connection *conn, char *buf, char *eofmark, 
     startLoading(server.repl_transfer_size, RDBFLAGS_REPLICATION, asyncLoading);
     if (replicationSupportSkipRDBChecksum(conn, 1, *usemark)) rdb.flags |= RIO_FLAG_SKIP_RDB_CHECKSUM;
     int loadingFailed = 0;
+    int retval = RDB_FAILED;
+    /* Always attach a stream reader that probes the envelope: decode a compressed RDB, or pass through plaintext. */
+    bool skip_codec_checksum = (rdb.flags & RIO_FLAG_SKIP_RDB_CHECKSUM) != 0;
+    rdbStreamReaderInitResult init_rc =
+        rdbInitStreamReader(&rdb, &stream_reader, skip_codec_checksum, &compression_algo);
+    if (init_rc == RDB_STREAM_READER_INIT_INCOMPATIBLE) {
+        serverLog(LL_WARNING,
+                  "Unsupported RDB stream envelope from primary. This replica "
+                  "cannot decode it; a Valkey version with streaming RDB "
+                  "compression support may be required on the replica.");
+        /* Nothing loaded yet: take the data-preserving incompatibility path below. */
+        retval = RDB_INCOMPATIBLE;
+        loadingFailed = 1;
+    } else if (init_rc == RDB_STREAM_READER_INIT_ERROR) {
+        serverLog(LL_WARNING, "Failed to initialize RDB stream reader from primary");
+        loadingFailed = 1;
+    } else {
+        stream_reader_initialized = true;
+        /* rdbInitStreamReader sets RIO_FLAG_SKIP_RDB_CHECKSUM on a codec match. */
+        if (compression_algo != ALGO_NONE)
+            serverLog(LL_NOTICE, "Loading compressed RDB (algo=%s) from primary", compressionAlgoName(compression_algo));
+    }
     rdbLoadingCtx loadingCtx = {.dbarray = dbarray, .functions_lib_ctx = functions_lib_ctx};
     /* If we aren't using the swapdb method, then we want to empty the data before loading the rdb */
     int flags = RDBFLAGS_REPLICATION;
     if (server.repl_diskless_load != REPL_DISKLESS_LOAD_SWAPDB) flags |= RDBFLAGS_EMPTY_DATA;
-    int retval = rdbLoadRioWithLoadingCtxScopedRdb(&rdb, flags, rsi, &loadingCtx);
+    if (!loadingFailed) retval = rdbLoadRioWithLoadingCtxScopedRdb(&rdb, flags, rsi, &loadingCtx);
     if (retval != RDB_OK) {
         /* RDB loading failed. */
         serverLog(LL_WARNING, "Failed trying to load the PRIMARY synchronization DB "
                               "from socket, check server logs.");
         loadingFailed = 1;
-    } else if (*usemark) {
-        /* Verify the end mark is correct. */
-        if (!rioRead(&rdb, buf, RDB_EOF_MARK_SIZE) || memcmp(buf, eofmark, RDB_EOF_MARK_SIZE) != 0) {
-            serverLog(LL_WARNING, "Replication stream EOF marker is broken");
-            loadingFailed = 1;
+    } else {
+        if (compression_algo != ALGO_NONE) {
+            /* Close the compressed frame; streamReaderFinish stops at the frame boundary. */
+            int finish_rc = streamReaderFinish(&stream_reader);
+            if (finish_rc == C_ERR) {
+                if (stream_reader.error_kind == STREAM_READER_ERROR_TRUNCATED) {
+                    serverLog(LL_WARNING, "Compressed RDB stream from primary was truncated; will resync");
+                } else if (stream_reader.error_kind == STREAM_READER_ERROR_CORRUPT) {
+                    /* Same fatal path as parse-time corruption, so a corrupt stream cannot retry-loop. */
+                    rdbReportCorruptCompressedStream("primary socket");
+                } else {
+                    serverLog(LL_WARNING, "Compressed RDB stream from primary did not end cleanly");
+                }
+                loadingFailed = 1;
+            }
+        }
+        if (!loadingFailed) {
+            /* Detach so trailing-framing reads hit the raw socket. */
+            if (stream_reader_initialized) {
+                rdbFreeStreamReader(&rdb, &stream_reader);
+                stream_reader_initialized = false;
+            }
+            if (*usemark) {
+                /* Verify the end mark is correct (plaintext, follows any frame). */
+                if (!rioRead(&rdb, buf, RDB_EOF_MARK_SIZE) || memcmp(buf, eofmark, RDB_EOF_MARK_SIZE) != 0) {
+                    serverLog(LL_WARNING, "Replication stream EOF marker is broken");
+                    loadingFailed = 1;
+                }
+            } else if (compression_algo != ALGO_NONE) {
+                /* Size-framed compressed: consumed wire bytes must equal the announced
+                 * transfer size; an early close otherwise looks like success. */
+                if (rdb.io.conn.read_so_far != rdb.io.conn.read_limit) {
+                    serverLog(LL_WARNING,
+                              "Compressed RDB stream from primary ended before the announced "
+                              "transfer size; got %llu of %llu bytes",
+                              (unsigned long long)rdb.io.conn.read_so_far,
+                              (unsigned long long)rdb.io.conn.read_limit);
+                    loadingFailed = 1;
+                }
+            }
         }
     }
 
     if (loadingFailed) {
         stopLoading(0);
+        if (stream_reader_initialized) rdbFreeStreamReader(&rdb, &stream_reader);
         rioFreeConn(&rdb, NULL);
 
         if (server.repl_diskless_load == REPL_DISKLESS_LOAD_SWAPDB) {
@@ -2597,6 +2697,7 @@ int replicaLoadPrimaryRDBFromSocket(connection *conn, char *buf, char *eofmark, 
 
     /* Cleanup and restore the socket to the original state to continue
      * with the normal replication. */
+    if (stream_reader_initialized) rdbFreeStreamReader(&rdb, &stream_reader);
     rioFreeConn(&rdb, NULL);
     connNonBlock(conn);
     connRecvTimeout(conn, 0);
@@ -3128,9 +3229,15 @@ static int dualChannelReplHandleHandshake(connection *conn, sds *err) {
     }
     /* Send replica listening port to primary for clarification */
     sds portstr = getReplicaPortString();
-    /* Also inform the primary of our (replica) version */
-    *err = sendCommand(conn, "REPLCONF", "capa", "eof", "rdb-only", "1", "rdb-channel", "1", "listening-port", portstr,
-                       "version", VALKEY_VERSION, NULL);
+    /* Also inform the primary of our (replica) version, and advertise compressed
+     * full-sync support when this replica's own rdbcompression is lz4. */
+    if (server.rdb_compression == RDB_COMPRESSION_LZ4) {
+        *err = sendCommand(conn, "REPLCONF", "capa", "eof", "rdb-only", "1", "rdb-channel", "1", "listening-port",
+                           portstr, "version", VALKEY_VERSION, "capa", REPLICA_CAPA_COMPRESS_SYNC_STR, NULL);
+    } else {
+        *err = sendCommand(conn, "REPLCONF", "capa", "eof", "rdb-only", "1", "rdb-channel", "1", "listening-port",
+                           portstr, "version", VALKEY_VERSION, NULL);
+    }
     sdsfree(portstr);
     if (*err) {
         dualChannelServerLog(LL_WARNING, "Sending command to primary in dual channel replication handshake: %s", *err);
@@ -3937,8 +4044,8 @@ int syncWithPrimaryHandleSendHandshakeState(connection *conn) {
 
     // we can ignore primary's conditions when sending capa (is_primary_stream_verified=1)
     int send_skip_rdb_checksum_capa = replicationSupportSkipRDBChecksum(conn, useDisklessLoad(), 1);
-    char *argv[9] = {"REPLCONF", "capa", "eof", "capa", "psync2", NULL, NULL, NULL, NULL};
-    size_t lens[9] = {8, 4, 3, 4, 6, 0, 0, 0, 0};
+    char *argv[11] = {"REPLCONF", "capa", "eof", "capa", "psync2", NULL, NULL, NULL, NULL, NULL, NULL};
+    size_t lens[11] = {8, 4, 3, 4, 6, 0, 0, 0, 0, 0, 0};
     int argc = 5;
     if (send_skip_rdb_checksum_capa) {
         argv[argc] = "capa";
@@ -3954,6 +4061,15 @@ int syncWithPrimaryHandleSendHandshakeState(connection *conn) {
         argc++;
         argv[argc] = "dual-channel";
         lens[argc] = strlen("dual-channel");
+        argc++;
+    }
+    /* Advertise compressed full-sync support when this replica's own rdbcompression is lz4. */
+    if (server.rdb_compression == RDB_COMPRESSION_LZ4) {
+        argv[argc] = "capa";
+        lens[argc] = strlen("capa");
+        argc++;
+        argv[argc] = REPLICA_CAPA_COMPRESS_SYNC_STR;
+        lens[argc] = strlen(REPLICA_CAPA_COMPRESS_SYNC_STR);
         argc++;
     }
     err = sendCommandArgv(conn, argc, argv, lens);

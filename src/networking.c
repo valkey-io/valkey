@@ -2515,7 +2515,7 @@ static void postWriteToReplica(client *c) {
     /* Check compression error first; the IO thread may have flagged it in
      * write_flags, the same channel that carries WRITE_FLAGS_WRITE_ERROR
      * from the IO thread to the post-write handler. */
-    replicaCompressState *compressor = c->repl_data->repl_compressor;
+    replicaCompressionState *compressor = c->repl_data->repl_compressor;
     /* Only the compressed write path sets the flag, and the compressor
      * outlives the dispatch (destroy waits for in-flight IO). */
     if (c->write_flags & WRITE_FLAGS_COMPRESSION_ERROR) {
@@ -2583,7 +2583,7 @@ static bool getReplicaPendingRange(client *c, listNode **last_node, size_t *bufp
  * codec-buffered bytes at batch end while keeping the frame open.
  * Keep in sync with replFeed in unit/test_compression.cpp, which mirrors this
  * feed to prove the frame layout it produces. */
-static int replicaCompressToOutBuf(replicaCompressState *compressor,
+static int replicaCompressToOutBuf(replicaCompressionState *compressor,
                                    const uint8_t *buf,
                                    size_t len,
                                    compressFlushMode flush_mode) {
@@ -2605,7 +2605,7 @@ static int replicaCompressToOutBuf(replicaCompressState *compressor,
 
 /* Compressed write path for replicas on either the IO thread or the main thread. */
 static void writeToReplicaCompressed(client *c) {
-    replicaCompressState *compressor = c->repl_data->repl_compressor;
+    replicaCompressionState *compressor = c->repl_data->repl_compressor;
 
     /* Finish sending the previous batch's leftover first; compressed bytes
      * must reach the socket in order. */
@@ -6408,7 +6408,7 @@ size_t getClientOutputBufferMemoryUsage(client *c) {
          * out_buf. The shared-buffer lag term still drives COB enforcement.
          * Codec context memory is small and fixed; only the staging SDS is measured. */
         if (c->repl_data->repl_compressor && c->io_write_state != CLIENT_PENDING_IO) {
-            replicaCompressState *compressor = c->repl_data->repl_compressor;
+            replicaCompressionState *compressor = c->repl_data->repl_compressor;
             compressor_size = sizeof(*compressor) + sdsalloc(compressor->out_buf);
         }
         return repl_buf_size + (repl_node_size * repl_node_num) + compressor_size;

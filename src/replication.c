@@ -86,13 +86,23 @@ ConnectionType *connTypeOfReplication(void) {
  * IP address and its listening port which is more clear for the user, for
  * example: "Closing connection with replica 10.1.2.3:6380". */
 
+static compressionAlgo replCompressionConfiguredAlgo(void) {
+    switch ((repl_compression_mode)server.repl_compression) {
+    case REPL_COMPRESSION_NO: return ALGO_NONE;
+    case REPL_COMPRESSION_YES:
+    case REPL_COMPRESSION_LZ4: return ALGO_LZ4;
+    default: serverPanic("Unknown repl compression mode: %d", server.repl_compression);
+    }
+}
+
 /* True when the replica's live transport no longer matches what the current
- * config would negotiate for it (a compressor's existence implies the replica
- * advertised the capability). Shared by the cron reconcile scan and the
+ * config would negotiate for it. Shared by the cron reconcile scan and the
  * put-online convergence check so the two can never drift. */
 static int replicaCompressionMismatch(client *replica) {
-    int want = (server.repl_compression != REPL_COMPRESSION_NO) && (replica->repl_data->replica_capa & REPLICA_CAPA_COMPRESS_STREAM);
-    return want != (replica->repl_data->repl_compressor != NULL);
+    compressionAlgo configured = replCompressionConfiguredAlgo();
+    compressionAlgo expected = (replica->repl_data->replica_capa & REPLICA_CAPA_COMPRESS_REPL) ? configured : ALGO_NONE;
+    compressionAlgo active = replica->repl_data->repl_compressor ? replica->repl_data->repl_compressor->stream.algo : ALGO_NONE;
+    return expected != active;
 }
 
 /* Runtime repl-compression changes converge by reconnect, since a live link
@@ -124,19 +134,25 @@ static void reconcileReplicaCompression(void) {
     }
 }
 
-/* Drop the upstream primary link so the reconnect re-advertises the
- * capability with the current setting. Edge-triggered (runs once per config
- * change): what this node advertised at handshake is not stored, so the drop
- * cannot be re-derived from live state the way the replica scan is. */
+/* Drop the upstream primary link when its advertised capability no longer
+ * matches the current configuration. Before the capability is sent, the
+ * in-progress handshake will use the current configuration directly. */
 static void reconcileUpstreamCompression(void) {
     if (!server.primary_host) return;
+    if (server.repl_compression_advertised == REPL_COMPRESSION_CAPA_UNKNOWN) return;
+
+    int configured = replCompressionConfiguredAlgo() != ALGO_NONE;
+    if (configured == server.repl_compression_advertised) return;
+
     if (server.primary) {
         serverLog(LL_NOTICE, "Disconnecting from primary to renegotiate replication compression (now %s)",
-                  server.repl_compression != REPL_COMPRESSION_NO ? "enabled" : "disabled");
+                  configured ? "enabled" : "disabled");
+        server.repl_compression_advertised = REPL_COMPRESSION_CAPA_UNKNOWN;
         freeClientAsync(server.primary);
     } else if (cancelReplicationHandshake(1)) {
         serverLog(LL_NOTICE, "Restarting sync with primary to renegotiate replication compression (now %s)",
-                  server.repl_compression != REPL_COMPRESSION_NO ? "enabled" : "disabled");
+                  configured ? "enabled" : "disabled");
+        server.repl_compression_advertised = REPL_COMPRESSION_CAPA_UNKNOWN;
     }
 }
 
@@ -147,21 +163,13 @@ static void reconcileUpstreamCompression(void) {
  * compressed (dual-channel reaches both the +CONTINUE and put-online paths).
  * Returns C_ERR when initialization failed; the caller drops the link. */
 static int replicaEnableCompressionIfNegotiated(client *c) {
-    if (server.repl_compression == REPL_COMPRESSION_NO || !(c->repl_data->replica_capa & REPLICA_CAPA_COMPRESS_STREAM)) return C_OK;
+    compressionAlgo algo = replCompressionConfiguredAlgo();
+    if (algo == ALGO_NONE || !(c->repl_data->replica_capa & REPLICA_CAPA_COMPRESS_REPL)) return C_OK;
     if (c->repl_data->repl_compressor) return C_OK;
 
     serverAssert(c->io_write_state == CLIENT_IDLE);
 
-    /* Resolve the configured mode to a codec, mirroring the RDB path: an
-     * unknown mode fails loudly instead of silently picking a default. */
-    compressionAlgo algo;
-    switch ((repl_compression_mode)server.repl_compression) {
-    case REPL_COMPRESSION_YES:
-    case REPL_COMPRESSION_LZ4: algo = ALGO_LZ4; break;
-    default: serverPanic("Unknown repl compression mode: %d", server.repl_compression);
-    }
-
-    replicaCompressState *compressor = zcalloc(sizeof(*compressor));
+    replicaCompressionState *compressor = zcalloc(sizeof(*compressor));
     if (streamCompressorInit(&compressor->stream, algo, 0, true) != C_OK) {
         zfree(compressor);
         serverLog(LL_WARNING, "Failed to initialize compression for replica %s", replicationGetReplicaName(c));
@@ -185,7 +193,7 @@ void replicaDestroyCompression(client *c) {
     if (c->repl_data->repl_compressor) {
         waitForClientIO(c);
 
-        replicaCompressState *compressor = c->repl_data->repl_compressor;
+        replicaCompressionState *compressor = c->repl_data->repl_compressor;
         streamCompressorFree(&compressor->stream);
         sdsfree(compressor->out_buf);
         zfree(compressor);
@@ -1597,14 +1605,14 @@ void freeClientReplicationData(client *c) {
  * the primary can accurately lists replicas and their listening ports in the
  * INFO output.
  *
- * - capa <eof|psync2|dual-channel|skip-rdb-checksum|compress-stream>
+ * - capa <eof|psync2|dual-channel|skip-rdb-checksum|compress-repl>
  * What is the capabilities of this instance.
  * eof: supports EOF-style RDB transfer for diskless replication.
  * psync2: supports PSYNC v2, so understands +CONTINUE <new repl ID>.
  * dual-channel: supports full sync using rdb channel.
  * skip-rdb-checksum: supports skipping RDB checksum calculations during diskless sync using
  *                    a connection that has integrity checks (such as TLS).
- * compress-stream: can decode a compressed incremental replication stream.
+ * compress-repl: can decode a compressed incremental replication stream.
  *
  * - ack <offset> [fack <aofofs>]
  * Replica informs the primary the amount of replication stream that it
@@ -1686,12 +1694,12 @@ void replconfCommand(client *c) {
                 }
             } else if (!strcasecmp(objectGetVal(c->argv[j + 1]), REPLICA_CAPA_SKIP_RDB_CHECKSUM_STR))
                 c->repl_data->replica_capa |= REPLICA_CAPA_SKIP_RDB_CHECKSUM;
-            /* "compress-stream": the replica can decode a compressed
+            /* "compress-repl": the replica can decode a compressed
              * incremental replication stream. The primary compresses only
              * when both sides enable repl-compression; a primary that does
              * not understand the capability ignores it. */
-            else if (!strcasecmp(objectGetVal(c->argv[j + 1]), REPLICA_CAPA_COMPRESS_STREAM_STR))
-                c->repl_data->replica_capa |= REPLICA_CAPA_COMPRESS_STREAM;
+            else if (!strcasecmp(objectGetVal(c->argv[j + 1]), REPLICA_CAPA_COMPRESS_REPL_STR))
+                c->repl_data->replica_capa |= REPLICA_CAPA_COMPRESS_REPL;
         } else if (!strcasecmp(objectGetVal(c->argv[j]), "ack")) {
             /* REPLCONF ACK is used by replica to inform the primary the amount
              * of replication stream that it processed so far. It is an
@@ -4208,16 +4216,18 @@ int syncWithPrimaryHandleSendHandshakeState(connection *conn) {
      * an operator can keep a specific replica plaintext. The reader does not
      * depend on this: it classifies the incoming stream from its leading bytes,
      * so a config change after the handshake cannot desync the link. */
-    if (server.repl_compression != REPL_COMPRESSION_NO) {
+    int advertise_compression = replCompressionConfiguredAlgo() != ALGO_NONE;
+    if (advertise_compression) {
         argv[argc] = "capa";
         lens[argc] = strlen("capa");
         argc++;
-        argv[argc] = REPLICA_CAPA_COMPRESS_STREAM_STR;
-        lens[argc] = strlen(REPLICA_CAPA_COMPRESS_STREAM_STR);
+        argv[argc] = REPLICA_CAPA_COMPRESS_REPL_STR;
+        lens[argc] = strlen(REPLICA_CAPA_COMPRESS_REPL_STR);
         argc++;
     }
     err = sendCommandArgv(conn, argc, argv, lens);
     if (err) goto err;
+    server.repl_compression_advertised = advertise_compression;
 
     /* Inform the primary of our (replica) version. */
     err = sendCommand(conn, "REPLCONF", "version", VALKEY_VERSION, NULL);
@@ -4689,6 +4699,7 @@ void syncWithPrimary(connection *conn) {
 }
 
 int connectWithPrimary(void) {
+    server.repl_compression_advertised = REPL_COMPRESSION_CAPA_UNKNOWN;
     server.repl_transfer_s = connCreate(connTypeOfReplication());
     if (connConnect(server.repl_transfer_s, server.primary_host, server.primary_port, server.bind_source_addr,
                     server.repl_mptcp, syncWithPrimary) == C_ERR) {
@@ -5634,16 +5645,9 @@ void replicationCron(void) {
 
     /* Converge replication transports to the current repl-compression
      * setting (see the reconcile functions for the model). Paused during
-     * failover so a transport change never disconnects the failover target;
-     * the change flag stays set until the failover resolves. Runs before
-     * this tick's updateFailoverStatus, so a failover state transition made
-     * there is observed on the next tick, delaying convergence by at most
-     * one tick. */
+     * failover so a transport change never disconnects the failover target. */
     if (server.failover_state == NO_FAILOVER) {
-        if (server.repl_compression_changed) {
-            server.repl_compression_changed = 0;
-            reconcileUpstreamCompression();
-        }
+        reconcileUpstreamCompression();
         reconcileReplicaCompression();
     }
 

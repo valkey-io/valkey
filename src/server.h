@@ -466,11 +466,11 @@ typedef enum {
 #define REPLICA_CAPA_PSYNC2 (1 << 1)            /* Supports PSYNC2 protocol. */
 #define REPLICA_CAPA_DUAL_CHANNEL (1 << 2)      /* Supports dual channel replication sync */
 #define REPLICA_CAPA_SKIP_RDB_CHECKSUM (1 << 3) /* Supports skipping RDB checksum for sync requests. */
-#define REPLICA_CAPA_COMPRESS_STREAM (1 << 4)   /* Can decode a compressed incremental replication stream. */
+#define REPLICA_CAPA_COMPRESS_REPL (1 << 4)     /* Can decode a compressed incremental replication stream. */
 
 /* Replica capability strings */
 #define REPLICA_CAPA_SKIP_RDB_CHECKSUM_STR "skip-rdb-checksum" /* Supports skipping RDB checksum for sync requests. */
-#define REPLICA_CAPA_COMPRESS_STREAM_STR "compress-stream"     /* Can decode a compressed incremental replication stream. */
+#define REPLICA_CAPA_COMPRESS_REPL_STR "compress-repl"         /* Can decode a compressed incremental replication stream. */
 
 /* Replica requirements */
 #define REPLICA_REQ_NONE 0
@@ -631,6 +631,8 @@ typedef enum {
     REPL_COMPRESSION_YES,    /* Use the default compression algorithm. */
     REPL_COMPRESSION_LZ4     /* Pin whole-stream LZ4 compression. */
 } repl_compression_mode;
+
+#define REPL_COMPRESSION_CAPA_UNKNOWN -1
 
 /* Structure representing a non-owning view of a buffer.
  * A stringRef struct does not manage the underlying memory, so its destruction
@@ -1273,12 +1275,12 @@ typedef struct ClientPubSubData {
 /* Incremental replication compression state for one replica link (primary
  * side). The write path compresses backlog bytes directly into out_buf via
  * the codec (VCS_STREAM_REPL envelope first), then drains it to the socket. */
-typedef struct replicaCompressState {
+typedef struct replicaCompressionState {
     streamCompressor stream; /* Codec state; the frame stays open for the link's lifetime. */
     sds out_buf;             /* Compressed bytes staged for the socket. */
     size_t out_buf_pos;      /* Next unsent byte offset within out_buf. */
     size_t batch_raw_bytes;  /* Raw backlog bytes represented by out_buf. */
-} replicaCompressState;
+} replicaCompressionState;
 
 typedef struct ClientReplicationData {
     int repl_state;                      /* Replication state if this is a replica. */
@@ -1312,7 +1314,7 @@ typedef struct ClientReplicationData {
                                            i.e. the next offset to send. */
     sds replica_nodeid;                  /* Node id in cluster mode. */
     /* Incremental replication compression state (primary side, per replica). */
-    replicaCompressState *repl_compressor; /* Per-replica replication compressor (NULL if uncompressed). */
+    replicaCompressionState *repl_compressor; /* Per-replica replication compressor (NULL if uncompressed). */
     /* Compression metrics (primary side, per replica). */
     long long repl_compressed_bytes_total;   /* Total compressed bytes sent (main thread only). */
     long long repl_uncompressed_bytes_total; /* Total raw bytes before compression (main thread only). */
@@ -2130,10 +2132,8 @@ struct valkeyServer {
     char *rdb_filename;                   /* Name of RDB file */
     int rdb_compression;                  /* RDB compression mode */
     int repl_compression;                 /* Replication compression mode */
-    int repl_compression_changed;         /* repl-compression changed at runtime; consumed once by
-                                           * replicationCron to drop the upstream link for
-                                           * renegotiation. Replica links reconcile from live state
-                                           * every tick and do not read this flag. */
+    int repl_compression_advertised;      /* Compression capability advertised in the current upstream handshake,
+                                           * or REPL_COMPRESSION_CAPA_UNKNOWN before REPLCONF capa. */
     int rdb_checksum;                     /* Use RDB checksum? */
     int rdb_del_sync_files;               /* Remove RDB files used only for SYNC if
                                              the instance does not use persistence. */

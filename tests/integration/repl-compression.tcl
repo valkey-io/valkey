@@ -399,13 +399,24 @@ start_server {tags {"repl"} overrides {save ""}} {
             set full_before [status $primary sync_full]
             set partial_before [status $primary sync_partial_ok]
 
-            # A later invalid parameter fails during CONFIG SET validation,
-            # before any apply callback runs, so the whole command aborts and
-            # repl-compression is not half-applied: the compressed link stays up.
+            # The whole command rolls back, so the compressed link stays up.
             assert_error {*argument 'maxmemory-policy'*} {
                 $replica config set repl-compression no maxmemory-policy not-a-policy
             }
             assert_equal lz4 [lindex [$replica config get repl-compression] 1]
+            after 1500
+            assert_equal $partial_before [status $primary sync_partial_ok]
+            assert_equal 1 [regexp -all {compression=lz4} [$primary info replication]]
+
+            # Returning to the advertised state before cron runs does not
+            # require renegotiating the existing link.
+            $replica debug pause-cron 1
+            try {
+                $replica config set repl-compression no
+                $replica config set repl-compression lz4
+            } finally {
+                $replica debug pause-cron 0
+            }
             after 1500
             assert_equal $partial_before [status $primary sync_partial_ok]
             assert_equal 1 [regexp -all {compression=lz4} [$primary info replication]]

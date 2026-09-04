@@ -1337,14 +1337,14 @@ static void fillIncompressible(unsigned char *buf, size_t n, uint32_t seed) {
 /* Build a repl-style compress state: block checksums on, content checksum
  * off, compressing straight into the staging sds — the same setup replication
  * uses for a compressed replica link. */
-static void initReplCompressState(replicaCompressState *rc) {
+static void initReplCompressState(replicaCompressionState *rc) {
     memset(rc, 0, sizeof(*rc));
     ASSERT_EQ(streamCompressorInit(&rc->stream, ALGO_LZ4, 0, true), C_OK);
     rc->stream.checksum_flags &= (uint8_t)~STREAM_CHECKSUM_CONTENT;
     rc->out_buf = sdsempty();
 }
 
-static void freeReplCompressState(replicaCompressState *rc) {
+static void freeReplCompressState(replicaCompressionState *rc) {
     streamCompressorFree(&rc->stream);
     sdsfree(rc->out_buf);
 }
@@ -1354,7 +1354,7 @@ static void freeReplCompressState(replicaCompressState *rc) {
  * first bytes, then codec output appended to out_buf. COMPRESS_FLUSH_SYNC with
  * len 0 drains the codec while keeping the frame open; COMPRESS_FLUSH_END
  * closes the frame (a live link never does). */
-static int replFeed(replicaCompressState *rc, const void *buf, size_t len, compressFlushMode flush_mode) {
+static int replFeed(replicaCompressionState *rc, const void *buf, size_t len, compressFlushMode flush_mode) {
     if (!rc->stream.stream_started) {
         uint8_t envelope[VCS_ENVELOPE_SIZE];
         if (vcsBuildEnvelope(envelope, rc->stream.algo, VCS_STREAM_REPL) == C_ERR) return C_ERR;
@@ -1404,7 +1404,7 @@ TEST(replCompression, replFrameOmitsContentChecksum) {
     /* A repl frame never ends, so its content checksum would be computed on
      * every byte but never emitted or validated. It must be off in the frame
      * header while block checksums stay on. */
-    replicaCompressState rc;
+    replicaCompressionState rc;
     initReplCompressState(&rc);
     const char payload[] = "content-checksum-off-for-repl";
     ASSERT_EQ(replFeed(&rc, payload, sizeof(payload), COMPRESS_FLUSH_CONTINUE), C_OK);
@@ -1450,7 +1450,7 @@ TEST(replCompression, rdbFrameKeepsContentChecksum) {
 }
 
 TEST(replCompression, pushReaderFrameDoneOnLiveLink) {
-    replicaCompressState rc;
+    replicaCompressionState rc;
     initReplCompressState(&rc);
     const char payload[] = "frame-done-on-live-link";
     ASSERT_EQ(replFeed(&rc, payload, sizeof(payload), COMPRESS_FLUSH_CONTINUE), C_OK);
@@ -1471,7 +1471,7 @@ TEST(replCompression, pushReaderFrameDoneOnLiveLink) {
 }
 
 TEST(replCompression, pushReaderOverflowGuard) {
-    replicaCompressState rc;
+    replicaCompressionState rc;
     initReplCompressState(&rc);
     const size_t n = 64 * 1024;
     unsigned char *buf = (unsigned char *)zmalloc(n);
@@ -1493,7 +1493,7 @@ TEST(replCompression, pushReaderOverflowGuard) {
 }
 
 TEST(replCompression, pushReaderEnvelopeSplitAcrossFeeds) {
-    replicaCompressState rc;
+    replicaCompressionState rc;
     initReplCompressState(&rc);
     const size_t n = 10 * 1024;
     unsigned char *payload = (unsigned char *)zmalloc(n);
@@ -1592,7 +1592,7 @@ TEST(replCompression, pushReaderDrainsBufferedOutputWithoutMoreInput) {
     fillIncompressible(payload, incompressible, 0xC0FFEE42u);
     memset(payload + incompressible, 'A', compressible);
 
-    replicaCompressState rc;
+    replicaCompressionState rc;
     initReplCompressState(&rc);
     ASSERT_EQ(replFeed(&rc, payload, n, COMPRESS_FLUSH_CONTINUE), C_OK);
     ASSERT_EQ(replFeed(&rc, NULL, 0, COMPRESS_FLUSH_SYNC), C_OK); /* frame stays open */
@@ -1621,7 +1621,7 @@ TEST(replCompression, pushReaderLz4HighRatioOutputFitsProductionCap) {
     unsigned char *payload = (unsigned char *)zmalloc(n);
     memset(payload, 'Z', n);
 
-    replicaCompressState rc;
+    replicaCompressionState rc;
     initReplCompressState(&rc);
     ASSERT_EQ(replFeed(&rc, payload, n, COMPRESS_FLUSH_CONTINUE), C_OK);
     ASSERT_EQ(replFeed(&rc, NULL, 0, COMPRESS_FLUSH_SYNC), C_OK);

@@ -80,7 +80,7 @@ start_server {tags {"modules"}} {
 
         # Make sure the Timer has not been fired
         assert_equal 0 [r get timer-incr-key]
-        # Module can not be unloaded since the timer was ongoing
+        # Module cannot be unloaded since the timer was ongoing
         catch {r module unload timer} err
         assert_match {*the module holds timer that is not fired*} $err
 
@@ -100,7 +100,7 @@ start_server {tags {"modules"}} {
         r set "timer-incr-key" 0
         set id [r test.createtimer 5000 timer-incr-key]
 
-        # Module can not be unloaded since the timer was ongoing
+        # Module cannot be unloaded since the timer was ongoing
         catch {r module unload timer} err
         assert_match {*the module holds timer that is not fired*} $err
 

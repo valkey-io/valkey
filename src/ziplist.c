@@ -101,7 +101,7 @@
  *      Integer encoded as 8 bit signed (1 byte).
  * |1111xxxx| - (with xxxx between 0001 and 1101) immediate 4 bit integer.
  *      Unsigned integer from 0 to 12. The encoded value is actually from
- *      1 to 13 because 0000 and 1111 can not be used, so 1 should be
+ *      1 to 13 because 0000 and 1111 cannot be used, so 1 should be
  *      subtracted from the encoded 4 bit value to obtain the right value.
  * |11111111| - End of ziplist special entry.
  *

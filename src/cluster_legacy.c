@@ -6351,7 +6351,7 @@ void manualFailoverCanStart(void) {
          * manual failover again when the previous manual failover timed out.
          * Otherwise, if the previous election timed out (see auth_timeout) and
          * before the next retry (see auth_retry_time), the new manual failover
-         * will pause the primary and replica can not do anything to advance the
+         * will pause the primary and replica cannot do anything to advance the
          * manual failover, and then the manual failover eventually times out. */
         server.cluster->failover_auth_time = 0;
         serverLog(LL_WARNING,

@@ -731,7 +731,7 @@ static void freeValkeyModuleAsyncRMCallPromise(ValkeyModuleAsyncRMCallPromise *p
     if (--promise->ref_count > 0) {
         return;
     }
-    /* When the promise is finally freed it can not have a client attached to it.
+    /* When the promise is finally freed it cannot have a client attached to it.
      * Either releasing the client or VM_CallReplyPromiseAbort would have removed it. */
     serverAssert(!promise->c);
     zfree(promise);
@@ -1607,7 +1607,7 @@ int populateArgsStructure(struct serverCommandArg *args) {
 
 /* ValkeyModule_AddACLCategory can be used to add new ACL command categories. Category names
  * can only contain alphanumeric characters, underscores, or dashes. Categories can only be added
- * during the ValkeyModule_OnLoad function. Once a category has been added, it can not be removed.
+ * during the ValkeyModule_OnLoad function. Once a category has been added, it cannot be removed.
  * Any module can register a command to any added categories using ValkeyModule_SetCommandACLCategories.
  *
  * Returns:
@@ -2992,7 +2992,7 @@ ValkeyModuleString *VM_HoldString(ValkeyModuleCtx *ctx, ValkeyModuleString *str)
          * be 2 and we will decrease the ref count twice and free the
          * object in the auto memory free function.
          *
-         * Why we can not do the same trick of just remove the object
+         * Why we cannot do the same trick of just remove the object
          * from the auto memory (like in VM_RetainString)?
          * This code shows the issue:
          *
@@ -6292,13 +6292,13 @@ void VM_CallReplyPromiseSetUnblockHandler(ValkeyModuleCallReply *reply,
  * If the execution was aborted successfully, it is promised that the unblock handler will not be called.
  * That said, it is possible that the abort operation will successes but the operation will still continue.
  * This can happened if, for example, a module implements some blocking command and does not respect the
- * disconnect callback. For server-provided commands this can not happened.*/
+ * disconnect callback. For server-provided commands this cannot happened.*/
 int VM_CallReplyPromiseAbort(ValkeyModuleCallReply *reply, void **private_data) {
     ValkeyModuleAsyncRMCallPromise *promise = callReplyGetPrivateData(reply);
     serverAssert(!promise->from_call_argv);
     if (!promise->c)
-        return VALKEYMODULE_ERR;                              /* Promise can not be aborted, either already aborted or already finished. */
-    if (!(promise->c->flag.blocked)) return VALKEYMODULE_ERR; /* Client is not blocked anymore, can not abort it. */
+        return VALKEYMODULE_ERR;                              /* Promise cannot be aborted, either already aborted or already finished. */
+    if (!(promise->c->flag.blocked)) return VALKEYMODULE_ERR; /* Client is not blocked anymore, cannot abort it. */
 
     /* Client is still blocked, remove it from any blocking state and release it. */
     if (private_data) *private_data = promise->private_data;
@@ -6767,7 +6767,7 @@ static void moduleCallCommandHelper(ValkeyModuleCtx *ctx, client *c, robj **argv
         if (cmd_flags & CMD_DENYOOM) {
             int oom_state;
             if (ctx->flags & VALKEYMODULE_CTX_THREAD_SAFE) {
-                /* On background thread we can not count on server.pre_command_oom_state.
+                /* On background thread we cannot count on server.pre_command_oom_state.
                  * Because it is only set on the main thread, in such case we will check
                  * the actual memory usage. */
                 oom_state = (getMaxmemoryState(NULL, NULL, NULL, NULL) == C_ERR);
@@ -6841,13 +6841,13 @@ static void moduleCallCommandHelper(ValkeyModuleCtx *ctx, client *c, robj **argv
             if (error_code == CLUSTER_REDIR_DOWN_RO_STATE) {
                 if (error_as_call_replies) {
                     reply_error_msg = sdscatfmt(sdsempty(),
-                                                "Can not execute a write command '%S' while the cluster is down and readonly",
+                                                "Cannot execute a write command '%S' while the cluster is down and readonly",
                                                 c->cmd->fullname);
                 }
                 errno = EROFS;
             } else if (error_code == CLUSTER_REDIR_DOWN_STATE) {
                 if (error_as_call_replies) {
-                    reply_error_msg = sdscatfmt(sdsempty(), "Can not execute a command '%S' while the cluster is down",
+                    reply_error_msg = sdscatfmt(sdsempty(), "Cannot execute a command '%S' while the cluster is down",
                                                 c->cmd->fullname);
                 }
                 errno = ENETDOWN;
@@ -9419,7 +9419,7 @@ void moduleReleaseGIL(void) {
  *  - VALKEYMODULE_NOTIFY_LOADED: A special notification available only for modules,
  *                               indicates that the key was loaded from persistence.
  *                               Notice, when this event fires, the given key
- *                               can not be retained, use VM_CreateStringFromString
+ *                               cannot be retained, use VM_CreateStringFromString
  *                               instead.
  *
  * We do not distinguish between key events and keyspace events, and it is up
@@ -9435,7 +9435,7 @@ void moduleReleaseGIL(void) {
  * time. The event string is the actual command being executed, and key is the
  * relevant key.
  *
- * Notification callback gets executed with a context that can not be
+ * Notification callback gets executed with a context that cannot be
  * used to send anything to the client, and has the db number where the event
  * occurred as its selected db number.
  *
@@ -10843,7 +10843,7 @@ int VM_DeauthenticateAndCloseClient(ValkeyModuleCtx *ctx, uint64_t client_id) {
  * never being written to server logs. This command may be called multiple times on the
  * same position.
  *
- * Note that the command name, position 0, can not be redacted.
+ * Note that the command name, position 0, cannot be redacted.
  *
  * Returns VALKEYMODULE_OK if the argument was redacted and VALKEYMODULE_ERR if there
  * was an invalid parameter passed in or the position is outside the client

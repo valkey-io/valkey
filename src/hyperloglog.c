@@ -92,7 +92,7 @@
  * "E" is one byte encoding, currently set to HLL_DENSE or
  * HLL_SPARSE. N/U are three not used bytes.
  *
- * The "Cardin." field is a 64 bit integer stored in little endian format
+ * The "Cardin." field is a 64 bit integer stored in little-endian format
  * with the latest cardinality computed that can be reused if the data
  * structure was not modified since the last computation (this is useful
  * because there are high probabilities that HLLADD operations don't
@@ -200,7 +200,7 @@ struct hllhdr {
     char magic[4];       /* "HYLL" */
     uint8_t encoding;    /* HLL_DENSE or HLL_SPARSE. */
     uint8_t notused[3];  /* Reserved for future use, must be zero. */
-    uint8_t card[8];     /* Cached cardinality, little endian. */
+    uint8_t card[8];     /* Cached cardinality, little-endian. */
     uint8_t registers[]; /* Data bytes. */
 };
 
@@ -434,7 +434,7 @@ static int simd_enabled = 1;
 
 /* Our hash function is MurmurHash2, 64 bit version.
  * It was modified in order to provide the same result in
- * big and little endian archs (endian neutral). */
+ * big- and little-endian archs (endian neutral). */
 VALKEY_NO_SANITIZE("alignment")
 uint64_t MurmurHash64A(const void *key, int len, unsigned int seed) {
     const uint64_t m = 0xc6a4a7935bd1e995;
@@ -1175,7 +1175,7 @@ void hllMergeDenseAVX2(uint8_t *reg_raw, const uint8_t *reg_dense) {
      * {AAA0|BBB0|CCC0|DDD0|EEE0|FFF0|GGG0|HHH0}
      * {bbaaaaaa|ccccbbbb|ddddddcc|00000000} x8
      *
-     * AVX2 is little endian, each of the 8 groups is a little-endian int32.
+     * AVX2 is little-endian, each of the 8 groups is a little-endian int32.
      * A group (int32) contains 3 valid bytes (4 registers) and a zero byte.
      *
      * extract registers in each group with AND and SHIFT:
@@ -1441,7 +1441,7 @@ void hllDenseCompressAVX2(uint8_t *reg_dense, const uint8_t *reg_raw) {
      * LOAD 32 bytes (32 registers) per iteration:
      * {00aaaaaa|00bbbbbb|00cccccc|00dddddd} x8
      *
-     * AVX2 is little endian, each of the 8 groups is a little-endian int32.
+     * AVX2 is little-endian, each of the 8 groups is a little-endian int32.
      * A group (int32) contains 4 registers.
      *
      * move the registers to correct positions with AND and SHIFT:
@@ -1888,7 +1888,7 @@ void pfselftestCommand(client *c) {
      * structure are accessible and that setting their values both result in
      * the correct value to be retained and not affect adjacent values. */
     for (j = 0; j < HLL_TEST_CYCLES; j++) {
-        /* Set the HLL counters and an array of unsigned byes of the
+        /* Set the HLL counters and an array of unsigned bytes of the
          * same size to the same set of random values. */
         for (i = 0; i < HLL_REGISTERS; i++) {
             unsigned int r = rand() & HLL_REGISTER_MAX;

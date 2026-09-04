@@ -124,7 +124,7 @@ start_server {tags {"maxmemory external:skip"}} {
             }
 
             foreach rr $clients {
-                $rr subscribe bla
+                $rr subscribe blah
             }
 
             # Generate client output buffers via PUBLISH until we can observe some effect on 
@@ -132,7 +132,7 @@ start_server {tags {"maxmemory external:skip"}} {
             set bigstr [string repeat x 100000]
             set t [clock seconds]
             while {![check_eviction_test $client_eviction] && [expr [clock seconds] - $t] < 20} {
-                if {[catch { r publish bla $bigstr } err]} {
+                if {[catch { r publish blah $bigstr } err]} {
                     if $::verbose {
                         puts "Error publishing: $err"
                     }

@@ -223,21 +223,21 @@ time_t rdbLoadTime(rio *rdb) {
 
 ssize_t rdbSaveMillisecondTime(rio *rdb, long long t) {
     int64_t t64 = (int64_t)t;
-    memrev64ifbe(&t64); /* Store in little endian. */
+    memrev64ifbe(&t64); /* Store in little-endian. */
     return rdbWriteRaw(rdb, &t64, 8);
 }
 
 /* This function loads a time from the RDB file. It gets the version of the
  * RDB because, unfortunately, before Redis OSS 5 (RDB version 9), the function
- * failed to convert data to/from little endian, so RDB files with keys having
- * expires could not be shared between big endian and little endian systems
+ * failed to convert data to/from little-endian, so RDB files with keys having
+ * expires could not be shared between big-endian and little-endian systems
  * (because the expire time will be totally wrong). The fix for this is just
  * to call memrev64ifbe(), however if we fix this for all the RDB versions,
- * this call will introduce an incompatibility for big endian systems:
+ * this call will introduce an incompatibility for big-endian systems:
  * after upgrading to Redis OSS version 5 they will no longer be able to load their
  * own old RDB files. Because of that, we instead fix the function only for new
  * RDB versions, and load older RDB versions as we used to do in the past,
- * allowing big endian systems to load their own old RDB files.
+ * allowing big-endian systems to load their own old RDB files.
  *
  * On I/O error the function returns LLONG_MAX, however if this is also a
  * valid stored value, the caller should use rioGetReadError() to check for
@@ -246,7 +246,7 @@ long long rdbLoadMillisecondTime(rio *rdb, int rdbver) {
     int64_t t64;
     if (rioRead(rdb, &t64, 8) == 0) return LLONG_MAX;
     if (rdbver >= 9)        /* Check the top comment of this function. */
-        memrev64ifbe(&t64); /* Convert in big endian if the system is BE. */
+        memrev64ifbe(&t64); /* Convert in big-endian if the system is BE. */
     return (long long)t64;
 }
 
@@ -708,7 +708,7 @@ int rdbLoadDoubleValue(rio *rdb, double *val) {
 }
 
 /* Saves a double for RDB 8 or greater, where IE754 binary64 format is assumed.
- * We just make sure the integer is always stored in little endian, otherwise
+ * We just make sure the integer is always stored in little-endian, otherwise
  * the value is copied verbatim from memory to disk.
  *
  * Return -1 on error, the size of the serialized value on success. */
@@ -812,7 +812,7 @@ ssize_t rdbSaveStreamPEL(rio *rdb, rax *pel, int nacks) {
     raxStart(&ri, pel);
     raxSeek(&ri, "^", NULL, 0);
     while (raxNext(&ri)) {
-        /* We store IDs in raw form as 128 big big endian numbers, like
+        /* We store IDs in raw form as 128 bit big-endian numbers, like
          * they are inside the radix tree key. */
         if ((n = rdbWriteRaw(rdb, ri.key, sizeof(streamID))) == -1) {
             raxStop(&ri);

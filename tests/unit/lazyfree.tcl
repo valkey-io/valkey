@@ -78,8 +78,8 @@ start_server {tags {"lazyfree"}} {
     test "lazy free a stream with deleted cgroup" {
         r config resetstat
         r xadd s * a b
-        r xgroup create s bla $
-        r xgroup destroy s bla
+        r xgroup create s blah $
+        r xgroup destroy s blah
         r unlink s
 
         # make sure it was not lazy freed

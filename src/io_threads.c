@@ -10,6 +10,10 @@
 #include "queues.h"
 #include "server.h"
 #include <sys/resource.h>
+#ifdef __linux__
+#include <linux/futex.h>
+#include <sys/syscall.h>
+#endif
 
 #define IO_MPSC_QUEUE_SIZE 16384
 #define IO_SPMC_QUEUE_SIZE 4096
@@ -240,6 +244,13 @@ void ioThreadPoll(aeEventLoop *el) {
     int num_events = aePoll(el, &tvp);
     server.io_ae_fired_events = num_events;
     atomic_store_explicit(&server.io_poll_state, AE_IO_STATE_DONE, memory_order_release);
+
+#ifdef __linux__
+    /* Wake main thread via futex only if it's actually waiting. */
+    if (atomic_load_explicit(&server.io_poll_waiting, memory_order_acquire)) {
+        syscall(SYS_futex, &server.io_poll_state, FUTEX_WAKE_PRIVATE, 1, NULL, NULL, 0);
+    }
+#endif
 }
 
 static void flushPendingIOResponses(int blocking) {
@@ -492,6 +503,7 @@ void initIOThreads(int prev_threads_num) {
         server.active_io_threads_num = 1; /* We start with threads not active. */
         server.io_poll_state = AE_IO_STATE_NONE;
         server.io_ae_fired_events = 0;
+        atomic_init(&server.io_poll_waiting, 0);
         spmcInit(&io_shared_inbox, IO_SPMC_QUEUE_SIZE);
         mpscInit(&io_shared_outbox, IO_MPSC_QUEUE_SIZE);
         io_jobs_submitted = 0;
@@ -725,6 +737,21 @@ static int getIOThreadPollResults(aeEventLoop *eventLoop) {
     io_state = atomic_load_explicit(&server.io_poll_state, memory_order_acquire);
     if (io_state == AE_IO_STATE_POLL) {
         /* IO thread is still processing poll events. */
+#ifdef __linux__
+        /* Decide whether to spin or block based on pending response count. */
+        int pending = getPendingIOResponsesCount();
+        if (pending < server.io_poll_block_threshold) {
+            /* Low pending count - block on futex to save CPU. */
+            atomic_store_explicit(&server.io_poll_waiting, 1, memory_order_release);
+            struct timespec ts = {0, 20000}; /* 20µs timeout */
+            syscall(SYS_futex, &server.io_poll_state, FUTEX_WAIT_PRIVATE, AE_IO_STATE_POLL, &ts, NULL, 0);
+            atomic_store_explicit(&server.io_poll_waiting, 0, memory_order_release);
+            server.stat_io_poll_blocked++;
+        } else {
+            /* High pending count - spin to minimize latency. */
+            server.stat_io_poll_spinning++;
+        }
+#endif
         return 0;
     }
 

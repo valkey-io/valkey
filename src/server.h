@@ -1809,8 +1809,12 @@ struct valkeyServer {
     hashtable *orig_commands;                         /* Command table before command renaming. */
     sds command_response_cache[RESP_CACHE_INDEX_MAX]; /* Cached COMMAND response: [0]=RESP2, [1]=RESP3 */
     aeEventLoop *el;
-    _Atomic(AeIoState) io_poll_state;    /* Indicates the state of the IO polling. */
+    _Atomic(AeIoState) io_poll_state;    /* Indicates the state of the IO polling. Also used as futex. */
     int io_ae_fired_events;              /* Number of poll events received by the IO thread. */
+    _Atomic(int) io_poll_waiting;        /* 1 if main thread is blocked on futex. */
+    long long stat_io_poll_blocked;      /* Times main thread blocked on futex (low pending). */
+    long long stat_io_poll_spinning;     /* Times main thread chose to spin (high pending). */
+    int io_poll_block_threshold;         /* Pending count threshold for blocking vs spinning. */
     rax *errors;                         /* Errors table */
     volatile sig_atomic_t shutdown_asap; /* Shutdown ordered by signal handler. */
     mstime_t shutdown_mstime;            /* Timestamp to limit graceful shutdown. */

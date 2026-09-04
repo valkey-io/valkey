@@ -1862,7 +1862,7 @@ robj *rdbLoadCheckModuleValue(rio *rdb, char *modulename) {
 static int _ziplistPairsEntryConvertAndValidate(unsigned char *p, unsigned int head_count, void *userdata) {
     unsigned char *str;
     unsigned int slen;
-    long long vll;
+    long long vll = 0;
 
     struct {
         long count;
@@ -1924,7 +1924,7 @@ static int _ziplistEntryConvertAndValidate(unsigned char *p, unsigned int head_c
     UNUSED(head_count);
     unsigned char *str;
     unsigned int slen;
-    long long vll;
+    long long vll = 0;
     unsigned char **lp = (unsigned char **)userdata;
 
     if (!ziplistGet(p, &str, &slen, &vll)) return 0;
@@ -1943,7 +1943,7 @@ static int _listZiplistEntryConvertAndValidate(unsigned char *p, unsigned int he
     UNUSED(head_count);
     unsigned char *str;
     unsigned int slen;
-    long long vll;
+    long long vll = 0;
     char longstr[32] = {0};
     quicklist *ql = (quicklist *)userdata;
 

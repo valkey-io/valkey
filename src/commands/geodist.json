@@ -42,7 +42,7 @@
             },
             {
                 "name": "member1",
-                "type": "string"
+                "type": "member"
             },
             {
                 "name": "member2",

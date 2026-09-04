@@ -3384,7 +3384,7 @@ void flushAppendOnlyFile(int force);
 void feedAppendOnlyFile(int dictid, robj **argv, int argc);
 void aofRemoveTempFile(pid_t childpid, int from_signal);
 int rewriteAppendOnlyFileBackground(void);
-int loadAppendOnlyFiles(aofManifest *am);
+int loadAppendOnlyFiles(aofManifest *am, rdbSaveInfo *rsi);
 void stopAppendOnly(void);
 int startAppendOnly(void);
 int restartAOFWithSyncRdb(void);

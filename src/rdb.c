@@ -4309,6 +4309,16 @@ rdbSaveInfo *rdbPopulateSaveInfo(rdbSaveInfo *rsi) {
         rsi->repl_stream_db = server.cached_primary->db->id;
         return rsi;
     }
+
+    /* If the instance is a replica but has no active primary connection
+     * and no cached primary (e.g., during a clean shutdown where the
+     * primary client was freed before the RDB save), we can still save
+     * the replication info using the server's current state. This allows
+     * a restarted replica to attempt partial resynchronization. */
+    if (server.primary_host) {
+        rsi->repl_stream_db = 0;  /* Safe default, SELECT will be sent */
+        return rsi;
+    }
     return NULL;
 }
 

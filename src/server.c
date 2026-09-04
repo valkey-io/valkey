@@ -7535,10 +7535,45 @@ int checkForSentinelMode(int argc, char **argv, char *exec_name) {
 void loadDataFromDisk(void) {
     ustime_t start = ustime();
     if (server.aof_state == AOF_ON) {
-        int ret = loadAppendOnlyFiles(server.aof_manifest);
+        rdbSaveInfo rsi = RDB_SAVE_INFO_INIT;
+        int rsi_is_valid = 0;
+        int ret = loadAppendOnlyFiles(server.aof_manifest, &rsi);
         if (ret == AOF_FAILED || ret == AOF_OPEN_ERR) exit(1);
-        if (ret != AOF_NOT_EXIST)
+        if (ret != AOF_NOT_EXIST) {
             serverLog(LL_NOTICE, "DB loaded from append only file: %.3f seconds", (float)(ustime() - start) / 1000000);
+            /* Restore the replication ID / offset from the AOF file's RDB preamble. */
+            if (rsi.repl_id_is_set && rsi.repl_offset != -1 &&
+                rsi.repl_stream_db != -1) {
+                rsi_is_valid = 1;
+                if (!iAmPrimary()) {
+                    memcpy(server.replid, rsi.repl_id, sizeof(server.replid));
+                    server.primary_repl_offset = rsi.repl_offset;
+                    /* If this is a replica, create a cached primary from this
+                     * information, in order to allow partial resynchronizations
+                     * with primaries. */
+                    replicationCachePrimaryUsingMyself();
+                    selectDb(server.cached_primary, rsi.repl_stream_db);
+                } else {
+                    /* If this is a primary, we can save the replication info
+                     * as secondary ID and offset, in order to allow replicas
+                     * to partial resynchronizations with primaries. */
+                    memcpy(server.replid2, rsi.repl_id, sizeof(server.replid));
+                    server.second_replid_offset = rsi.repl_offset + 1;
+                    /* Rebase primary_repl_offset from rsi.repl_offset. */
+                    server.primary_repl_offset += rsi.repl_offset;
+                    serverAssert(server.repl_backlog);
+                    server.repl_backlog->offset = server.primary_repl_offset - server.repl_backlog->histlen + 1;
+                    rebaseReplicationBuffer(rsi.repl_offset);
+                    server.repl_no_replicas_since = time(NULL);
+                }
+            }
+        }
+        /* We always create replication backlog if server is a primary, we need
+         * it because we put DELs in it when loading expired keys in RDB, but
+         * if AOF doesn't have replication info or there is no AOF, it is not
+         * possible to support partial resynchronization, to avoid extra memory
+         * of replication backlog, we drop it. */
+        if (!rsi_is_valid && server.repl_backlog) freeReplicationBacklog();
     } else {
         rdbSaveInfo rsi = RDB_SAVE_INFO_INIT;
         int rsi_is_valid = 0;

@@ -2669,6 +2669,14 @@ int clusterBlacklistExists(char *nodeid, size_t len) {
  * CLUSTER messages exchange - PING/PONG and gossip
  * -------------------------------------------------------------------------- */
 
+/* Drop a sticky auto-MEET. The flag is only cleared when the peer answers, and
+ * clusterLinkConnectHandler sends MEET as the first packet of every new outbound
+ * link while it is set, so a recycled address would still receive it. The cron
+ * re-arms MEET if the peer returns and answers. Not called for HANDSHAKE. */
+static void clusterNodeClearMeetFlag(clusterNode *node) {
+    node->flags &= ~CLUSTER_NODE_MEET;
+}
+
 /* Marks a node as FAIL. Apart from clusterLoadConfig, this is the only way we mark a
  * node as FAIL during runtime. */
 void markNodeAsFailing(clusterNode *node) {
@@ -2677,6 +2685,7 @@ void markNodeAsFailing(clusterNode *node) {
     node->fail_time = mstime();
     /* Remove the PFAIL flag. */
     node->flags &= ~CLUSTER_NODE_PFAIL;
+    clusterNodeClearMeetFlag(node);
 
     /* Immediately check if the failing node is our primary node. */
     if (nodeIsReplica(myself) && myself->replicaof == node) {
@@ -4341,6 +4350,7 @@ int clusterProcessPacket(clusterLink *link) {
                           link->node->name, humanNodename(link->node), link->node->shard_id,
                           (int)(now - (link->node->ctime)), link->node->flags);
                 link->node->flags |= CLUSTER_NODE_NOADDR;
+                clusterNodeClearMeetFlag(link->node);
                 link->node->ip[0] = '\0';
                 link->node->tcp_port = 0;
                 link->node->tls_port = 0;
@@ -6449,13 +6459,27 @@ static int clusterNodeCronHandleReconnect(clusterNode *node, mstime_t now, long 
     }
     if (nodeInNormalState(node) && node->link != NULL && node->inbound_link == NULL &&
         now - node->inbound_link_freed_time > getHandshakeTimeout() &&
-        now - node->meet_sent > getHandshakeTimeout() &&
-        nodeSupportsMultiMeet(node)) {
+        now - node->meet_sent > getHandshakeTimeout() && nodeSupportsMultiMeet(node) &&
+        node->pong_received >= node->link->ctime && now - node->pong_received <= server.cluster_node_timeout) {
         /* Node has an outbound link, but no inbound link for more than the handshake timeout.
          * This probably means this node does not know us yet, whereas we know it.
          * So we send it a MEET packet to do a handshake with it and correct the inconsistent cluster view.
          * We make sure to not re-send a MEET packet more than once every handshake timeout period, so as to
-         * leave the other node time to complete the handshake. */
+         * leave the other node time to complete the handshake.
+         *
+         * We also require proof that the peer on *this* connection is the node we expect:
+         * a PONG received on the current link, and recently enough. nodeInNormalState() alone
+         * is not enough, it only says we have not declared the node failed *yet*, and the two
+         * clocks involved do not start together -- inbound_link_freed_time is initialized to
+         * node->ctime and, for a peer that never opened an inbound link to us, is long expired
+         * before the peer goes away, while the PFAIL clock only starts at the first unanswered
+         * ping. A node that simply died would otherwise still get a MEET armed for it. PFAIL/FAIL
+         * now drop CLUSTER_NODE_MEET, but the flag used to survive until the peer responded and
+         * was re-sent on every reconnect, so a recycled address could still receive it.
+         * Requiring pong_received >= link->ctime rules that out: the reconnect to the departed
+         * address creates a new link, and a peer answering on a reassigned address cannot
+         * satisfy it either, because a PONG carrying a mismatching sender ID frees the link and
+         * marks the node NOADDR before pong_received is updated. */
         node->flags |= CLUSTER_NODE_MEET;
         serverLog(LL_NOTICE, "Sending MEET packet to node %.40s (%s) because there is no inbound link for it",
                   node->name, humanNodename(node));
@@ -6692,6 +6716,7 @@ void clusterCron(void) {
             if (!(node->flags & (CLUSTER_NODE_PFAIL | CLUSTER_NODE_FAIL))) {
                 serverLog(LL_NOTICE, "NODE %.40s (%s) possibly failing.", node->name, humanNodename(node));
                 node->flags |= CLUSTER_NODE_PFAIL;
+                clusterNodeClearMeetFlag(node);
                 update_state = 1;
                 if (clusterNodeIsVotingPrimary(myself)) {
                     markNodeAsFailingIfNeeded(node);

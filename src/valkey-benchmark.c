@@ -123,6 +123,8 @@ static struct config {
     int replace_placeholders;
     long long keyspacelen;
     int sequential_replacement;
+    uint64_t random_state;
+    uint64_t random_stream_state;
     int keepalive;
     int pipeline;
     long long start;
@@ -183,6 +185,11 @@ static struct placeholders {
     size_t *index_data;                 /* allocation holding all index data */
 } placeholders;
 
+/* Set before a benchmark worker enters its event loop. The event loop owns all
+ * accesses, and TLS keeps hot random state off cache lines shared by workers. */
+static _Thread_local uint64_t thread_random_state;
+static _Thread_local int thread_random_state_owner = -1;
+
 /* Sequence keys for dataset command generation */
 static _Atomic uint64_t dataset_seq_key[PLACEHOLDER_COUNT] = {0};
 
@@ -215,6 +222,7 @@ typedef struct benchmarkThread {
     pthread_t thread;
     aeEventLoop *el;
     list *paused_clients;
+    uint64_t random_seed;
 } benchmarkThread;
 
 /* Cluster. */
@@ -290,6 +298,23 @@ static long long nstime(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
+}
+
+static uint64_t *getClientRandomState(client c) {
+    if (c->thread_id < 0) return &config.random_state;
+
+    if (thread_random_state_owner == c->thread_id) return &thread_random_state;
+
+    /* RDMA registration can invoke writeHandler synchronously while clients
+     * are still being created on the main thread. Advance the worker seed in
+     * that case; pthread_create later publishes the updated value to the
+     * worker, which moves the hot state into TLS before its event loop starts. */
+    return &config.threads[c->thread_id]->random_seed;
+}
+
+static void seedBenchmarkRandom(uint64_t seed) {
+    config.random_state = seed;
+    config.random_stream_state = seed ^ 0xd1b54a32d192ed03ULL;
 }
 
 static bool isBenchmarkFinished(int request_count) {
@@ -482,7 +507,7 @@ void initPlaceholders(const char *cmd, size_t cmd_len) {
     return;
 }
 
-static void replacePlaceholder(const size_t *indices, const size_t count, char *cmd, _Atomic uint64_t *key_counter) {
+static void replacePlaceholder(const size_t *indices, const size_t count, char *cmd, _Atomic uint64_t *key_counter, uint64_t *random_state) {
     if (count == 0) return;
 
     uint64_t key = 0;
@@ -490,7 +515,7 @@ static void replacePlaceholder(const size_t *indices, const size_t count, char *
         if (config.sequential_replacement) {
             key = atomic_fetch_add_explicit(key_counter, 1, memory_order_relaxed);
         } else {
-            key = rand62();
+            key = benchmarkNextRandom(random_state);
         }
         key %= config.keyspacelen;
     }
@@ -510,7 +535,7 @@ static void replacePlaceholder(const size_t *indices, const size_t count, char *
     }
 }
 
-static void replacePlaceholders(char *cmd_data, int cmd_count) {
+static void replacePlaceholders(char *cmd_data, int cmd_count, uint64_t *random_state) {
     static _Atomic uint64_t seq_key[PLACEHOLDER_COUNT] = {0};
 
     for (int cmd_index = 0; cmd_index < cmd_count; cmd_index++) {
@@ -520,7 +545,7 @@ static void replacePlaceholders(char *cmd_data, int cmd_count) {
         size_t *indices = placeholders.indices[0];
         _Atomic uint64_t *key_counter = &seq_key[0];
         for (size_t i = 0; i < placeholders.count[0]; i++) {
-            replacePlaceholder(indices + i, 1, cmd, key_counter);
+            replacePlaceholder(indices + i, 1, cmd, key_counter, random_state);
         }
 
         /* For other placeholders, multiple occurrences within the command will
@@ -529,7 +554,7 @@ static void replacePlaceholders(char *cmd_data, int cmd_count) {
             size_t *indices = placeholders.indices[placeholder];
             size_t count = placeholders.count[placeholder];
             _Atomic uint64_t *key_counter = &seq_key[placeholder];
-            replacePlaceholder(indices, count, cmd, key_counter);
+            replacePlaceholder(indices, count, cmd, key_counter, random_state);
         }
     }
 }
@@ -615,7 +640,7 @@ static void scanClusterTags(client c, char *buffer_start) {
     }
 }
 
-static void setClusterKeyHashTag(client c) {
+static void setClusterKeyHashTag(client c, uint64_t *random_state) {
     assert(c->thread_id >= 0);
     clusterNode *node = c->cluster_node;
     assert(node);
@@ -627,7 +652,7 @@ static void setClusterKeyHashTag(client c) {
      * updateClusterSlotsConfiguration won't actually do anything, since
      * the updated_slots_count array will be already NULL. */
     if (is_updating_slots) updateClusterSlotsConfiguration();
-    int slot = node->slots[rand() % node->slots_count];
+    int slot = node->slots[benchmarkNextRandom(random_state) % node->slots_count];
     const char *tag = crc16_slot_table[slot];
     int taglen = strlen(tag);
     size_t i;
@@ -912,6 +937,8 @@ static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
             return;
         }
 
+        uint64_t *random_state = getClientRandomState(c);
+
         /* Dataset field access mode - completely independent command generation */
         if (config.has_field_placeholders && config.current_dataset && config.current_dataset->record_count > 0) {
             static _Atomic uint64_t record_counter = 0;
@@ -922,7 +949,7 @@ static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
                 uint64_t record_index = atomic_fetch_add_explicit(&record_counter, 1, memory_order_relaxed) % config.current_dataset->record_count;
                 sds complete_cmd = datasetGenerateCommand(config.current_dataset, record_index,
                                                           config.template_argv, config.template_argc,
-                                                          dataset_seq_key, config.replace_placeholders,
+                                                          dataset_seq_key, random_state, config.replace_placeholders,
                                                           config.keyspacelen, config.sequential_replacement);
                 c->obuf = sdscatlen(c->obuf, complete_cmd, sdslen(complete_cmd));
                 sdsfree(complete_cmd);
@@ -935,11 +962,11 @@ static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
         } else {
             /* Standard mode */
             if (config.replace_placeholders) {
-                replacePlaceholders(c->obuf + c->prefixlen, config.pipeline);
+                replacePlaceholders(c->obuf + c->prefixlen, config.pipeline, random_state);
             }
         }
 
-        if (config.cluster_mode && c->staglen > 0) setClusterKeyHashTag(c);
+        if (config.cluster_mode && c->staglen > 0) setClusterKeyHashTag(c, random_state);
         c->slots_last_update = atomic_load_explicit(&config.slots_last_update, memory_order_relaxed);
         c->start = ustime();
         c->latency = -1;
@@ -1362,6 +1389,9 @@ static benchmarkThread *createBenchmarkThread(int index) {
     benchmarkThread *thread = zmalloc(sizeof(*thread));
     if (thread == NULL) return NULL;
     thread->index = index;
+    /* Threads are created by the main thread before their event loops start,
+     * so assigning independent streams here requires no synchronization. */
+    thread->random_seed = benchmarkNextRandom(&config.random_stream_state);
     thread->el = aeCreateEventLoop(1024 * 10);
     thread->paused_clients = listCreate();
     aeCreateTimeEvent(thread->el, 1, showThroughput, (void *)thread, NULL);
@@ -1386,6 +1416,8 @@ static void freeBenchmarkThreads(void) {
 
 static void *execBenchmarkThread(void *ptr) {
     benchmarkThread *thread = (benchmarkThread *)ptr;
+    thread_random_state = thread->random_seed;
+    thread_random_state_owner = thread->index;
     aeMain(thread->el);
     return NULL;
 }
@@ -1828,6 +1860,7 @@ int parseOptions(int argc, char **argv) {
             int rand_seed = atoi(argv[++i]);
             srandom(rand_seed);
             init_genrand64(rand_seed);
+            seedBenchmarkRandom((uint64_t)rand_seed);
         } else if (!strcmp(argv[i], "-t")) {
             if (lastarg) goto invalid;
             /* We get the list of tests to run as a string in the form
@@ -2275,8 +2308,10 @@ int main(int argc, char **argv) {
     size_t *argvlen = NULL;
     int seq_len = 0; /* Total number of commands in the sequence. */
 
-    srandom(time(NULL) ^ getpid());
+    uint64_t random_seed = time(NULL) ^ getpid();
+    srandom(random_seed);
     init_genrand64(ustime() ^ getpid());
+    seedBenchmarkRandom(random_seed);
     signal(SIGHUP, SIG_IGN);
     signal(SIGPIPE, SIG_IGN);
 

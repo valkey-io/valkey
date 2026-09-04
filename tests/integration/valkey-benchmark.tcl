@@ -161,6 +161,15 @@ tags {"benchmark network external:skip logreqres:skip"} {
             assert_equal  {keys=50} [regexp -inline {keys=[\d]*} [r info keyspace]]
         }
 
+        test {benchmark: seed reproduces random key selection} {
+            set cmd [valkeybenchmark $master_host $master_port "-c 1 -n 100 -r 1000 --seed 42 -t set"]
+            common_bench_setup $cmd
+            set first_run_keys [lsort [r keys *]]
+
+            common_bench_setup $cmd
+            assert_equal $first_run_keys [lsort [r keys *]]
+        }
+
         test {benchmark: keyspace covered by sequential option} {
             set cmd [valkeybenchmark $master_host $master_port "-r 50 -t set -n 50 --sequential"]
             common_bench_setup $cmd

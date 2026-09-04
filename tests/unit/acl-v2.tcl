@@ -106,6 +106,34 @@ start_server {tags {"acl external:skip"}} {
         assert_match "*NOPERM*key*" $err
     }
 
+    test {EXEC conditions require read permission} {
+        r ACL SETUSER exec-condition-write-only on nopass %W~write* +@all
+        r set writecondition value
+        r del writelist
+        $r2 auth exec-condition-write-only password
+
+        $r2 multi
+        $r2 lpush writelist value
+        catch {$r2 exec ifeq writecondition value} err
+        assert_match "*NOPERM*key*" $err
+
+        $r2 multi
+        $r2 lpush writelist value
+        catch {$r2 exec ifne writecondition other} err
+        assert_match "*NOPERM*key*" $err
+
+        $r2 multi
+        $r2 lpush writelist value
+        catch {$r2 exec nx writecondition} err
+        assert_match "*NOPERM*key*" $err
+
+        $r2 multi
+        $r2 lpush writelist value
+        catch {$r2 exec xx writecondition} err
+        assert_match "*NOPERM*key*" $err
+        assert_equal 0 [r llen writelist]
+    }
+
     test {Test separate read and write permissions} {
         r ACL SETUSER key-permission-RW on nopass %R~read* %W~write* +@all
         $r2 auth key-permission-RW password

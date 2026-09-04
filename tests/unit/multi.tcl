@@ -21,6 +21,57 @@ start_server {tags {"multi"}} {
         list $v1 $v2 $v3
     } {QUEUED QUEUED {{a b c} PONG}}
 
+    test {EXEC conditions} {
+        r del condition{t} destination{t}
+        r set condition{t} value
+
+        r multi
+        r set destination{t} committed
+        set committed [r exec ifeq condition{t} value ifne condition{t} other xx condition{t} nx missing{t}]
+
+        r multi
+        r set destination{t} not-committed
+        set ifeq_failed [r exec ifeq condition{t} other]
+
+        r multi
+        r set destination{t} not-committed
+        set ifne_failed [r exec ifne condition{t} value]
+
+        r multi
+        r set destination{t} not-committed
+        set nx_failed [r exec nx condition{t}]
+
+        list $committed $ifeq_failed $ifne_failed $nx_failed [r get destination{t}]
+    } {OK {} {} {} committed}
+
+    test {EXEC IFNE matches a missing key} {
+        r del condition{t} destination{t}
+        r multi
+        r set destination{t} committed
+        list [r exec ifne condition{t} value] [r get destination{t}]
+    } {OK committed}
+
+    test {EXEC string comparisons do not match non-string keys} {
+        r del condition{t} destination{t}
+        r lpush condition{t} value
+        r multi
+        r set destination{t} not-committed
+        set ifeq_result [r exec ifeq condition{t} value]
+        r multi
+        r set destination{t} not-committed
+        set ifne_result [r exec ifne condition{t} value]
+        list $ifeq_result $ifne_result [r get destination{t}]
+    } {{} {} {}}
+
+    test {EXEC condition syntax errors leave the transaction open} {
+        r del condition{t} destination{t}
+        r set condition{t} value
+        r multi
+        r set destination{t} committed
+        assert_error {ERR syntax error} {r exec ifeq condition{t}}
+        list [r exec ifeq condition{t} value] [r get destination{t}]
+    } {OK committed}
+
     test {DISCARD} {
         r del mylist
         r rpush mylist a

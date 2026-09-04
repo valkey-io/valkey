@@ -1,11 +1,12 @@
 {
     "EXEC": {
-        "summary": "Executes all commands in a transaction.",
-        "complexity": "Depends on commands in the transaction",
+        "summary": "Executes all commands in a transaction if conditions match.",
+        "complexity": "O(N) for N conditions, plus the complexity of commands in the transaction",
         "group": "transactions",
         "since": "1.2.0",
-        "arity": 1,
+        "arity": -1,
         "function": "execCommand",
+        "get_keys_function": "execGetKeys",
         "command_flags": [
             "NOSCRIPT",
             "LOADING",
@@ -15,6 +16,56 @@
             "SLOW",
             "TRANSACTION"
         ],
+        "arguments": [
+            {
+                "name": "condition",
+                "type": "oneof",
+                "optional": true,
+                "multiple": true,
+                "arguments": [
+                    {
+                        "token": "IFEQ",
+                        "name": "ifeq",
+                        "type": "block",
+                        "arguments": [
+                            {
+                                "name": "key",
+                                "type": "key"
+                            },
+                            {
+                                "name": "value",
+                                "type": "string"
+                            }
+                        ]
+                    },
+                    {
+                        "token": "IFNE",
+                        "name": "ifne",
+                        "type": "block",
+                        "arguments": [
+                            {
+                                "name": "key",
+                                "type": "key"
+                            },
+                            {
+                                "name": "value",
+                                "type": "string"
+                            }
+                        ]
+                    },
+                    {
+                        "token": "NX",
+                        "name": "nx",
+                        "type": "key"
+                    },
+                    {
+                        "token": "XX",
+                        "name": "xx",
+                        "type": "key"
+                    }
+                ]
+            }
+        ],
         "reply_schema": {
             "oneOf": [
                 {
@@ -22,7 +73,7 @@
                     "type": "array"
                 },
                 {
-                    "description": "The transaction was aborted because a `WATCH`ed key was touched",
+                    "description": "The transaction was aborted because a `WATCH`ed key was touched or an EXEC condition did not match",
                     "type": "null"
                 }
             ]

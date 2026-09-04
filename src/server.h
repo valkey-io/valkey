@@ -3171,6 +3171,7 @@ void touchAllWatchedKeysInDb(serverDb *emptied, serverDb *replaced_with);
 void discardTransaction(client *c);
 void flagTransaction(client *c);
 void execCommandAbort(client *c, sds error);
+int execGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result);
 
 /* Object implementation */
 void decrRefCount(robj *o);

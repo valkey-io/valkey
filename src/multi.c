@@ -192,6 +192,101 @@ void execCommandAbort(client *c, sds error) {
     replicationFeedMonitors(c, server.monitors, c->db->id, c->argv, c->argc);
 }
 
+typedef enum {
+    EXEC_CONDITION_IFEQ,
+    EXEC_CONDITION_IFNE,
+    EXEC_CONDITION_NX,
+    EXEC_CONDITION_XX,
+} execCondition;
+
+/* Parse the next condition in an EXEC command. */
+static int parseExecCondition(robj **argv, int argc, int *index, execCondition *condition) {
+    const char *token = objectGetVal(argv[*index]);
+    int args;
+
+    if (!strcasecmp(token, "ifeq")) {
+        *condition = EXEC_CONDITION_IFEQ;
+        args = 2;
+    } else if (!strcasecmp(token, "ifne")) {
+        *condition = EXEC_CONDITION_IFNE;
+        args = 2;
+    } else if (!strcasecmp(token, "nx")) {
+        *condition = EXEC_CONDITION_NX;
+        args = 1;
+    } else if (!strcasecmp(token, "xx")) {
+        *condition = EXEC_CONDITION_XX;
+        args = 1;
+    } else {
+        return C_ERR;
+    }
+
+    if (*index + args >= argc) return C_ERR;
+    *index += args + 1;
+    return C_OK;
+}
+
+/* Return the condition keys in EXEC arguments for ACL and cluster routing. */
+int execGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result) {
+    UNUSED(cmd);
+    int index = 1;
+    int numkeys = 0;
+    keyReference *keys;
+
+    while (index < argc) {
+        int key_index = index + 1;
+        execCondition condition;
+
+        if (parseExecCondition(argv, argc, &index, &condition) != C_OK) {
+            result->numkeys = 0;
+            return 0;
+        }
+        keys = getKeysPrepareResult(result, numkeys + 1);
+        keys[numkeys].pos = key_index;
+        keys[numkeys].flags = CMD_KEY_RO | CMD_KEY_ACCESS;
+        numkeys++;
+    }
+    result->numkeys = numkeys;
+    return numkeys;
+}
+
+/* Check whether every condition supplied to EXEC matches the current database. */
+static int checkExecConditions(client *c) {
+    int index = 1;
+
+    while (index < c->argc) {
+        int condition_index = index;
+        execCondition condition;
+        robj *key, *value = NULL, *o;
+        int matches;
+
+        if (parseExecCondition(c->argv, c->argc, &index, &condition) != C_OK) {
+            addReplyErrorObject(c, shared.syntaxerr);
+            return -1;
+        }
+
+        key = c->argv[condition_index + 1];
+        if (condition == EXEC_CONDITION_IFEQ || condition == EXEC_CONDITION_IFNE) {
+            value = c->argv[condition_index + 2];
+        }
+        o = lookupKeyReadWithFlags(c->db, key, LOOKUP_NOTOUCH);
+
+        switch (condition) {
+        case EXEC_CONDITION_IFEQ:
+            matches = o && o->type == OBJ_STRING && equalStringObjects(o, value);
+            break;
+        case EXEC_CONDITION_IFNE:
+            matches = !o || (o->type == OBJ_STRING && !equalStringObjects(o, value));
+            break;
+        case EXEC_CONDITION_NX: matches = !o; break;
+        case EXEC_CONDITION_XX: matches = o != NULL; break;
+        default: serverPanic("Unknown EXEC condition");
+        }
+
+        if (!matches) return 0;
+    }
+    return 1;
+}
+
 void execCommand(client *c) {
     int j;
     robj **orig_argv;
@@ -202,6 +297,9 @@ void execCommand(client *c) {
         addReplyError(c, "EXEC without MULTI");
         return;
     }
+
+    int conditions_match = checkExecConditions(c);
+    if (conditions_match == -1) return;
 
     /* EXEC with expired watched key is disallowed*/
     if (isWatchedKeyExpired(c)) {
@@ -214,7 +312,7 @@ void execCommand(client *c) {
      * A failed EXEC in the first case returns a multi bulk nil object
      * (technically it is not an error but a special behavior), while
      * in the second an EXECABORT error is returned. */
-    if (c->flag.dirty_cas || c->flag.dirty_exec) {
+    if (!conditions_match || c->flag.dirty_cas || c->flag.dirty_exec) {
         if (c->flag.dirty_exec) {
             addReplyErrorObject(c, shared.execaborterr);
         } else {

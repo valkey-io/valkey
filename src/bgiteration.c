@@ -1897,6 +1897,7 @@ static bool anIteratorWillReplicateForThisCommand(void) {
 
 static bool expediteKeysForMultiExec(client *c, hashtable *waitingOnKeys) {
     serverAssert(c->cmd->proc == execCommand);
+    if (c->mstate == NULL) return false; // EXEC without MULTI
 
     /* For MULTI/EXEC, Valkey buffers all of the commands until hitting the EXEC.
      * At this point, the client holds all of the commands to be executed.  This function searches

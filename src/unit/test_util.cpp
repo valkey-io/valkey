@@ -344,6 +344,64 @@ TEST_F(UtilTest, TestReclaimFilePageCache) {
 #endif
 }
 
+TEST_F(UtilTest, TestStringmatchlenCharClass) {
+    /* Basic class membership */
+    ASSERT_EQ(1, stringmatchlen("[abc]", 5, "a", 1, 0));
+    ASSERT_EQ(1, stringmatchlen("[abc]", 5, "b", 1, 0));
+    ASSERT_EQ(0, stringmatchlen("[abc]", 5, "d", 1, 0));
+    /* Range */
+    ASSERT_EQ(1, stringmatchlen("[a-z]", 5, "m", 1, 0));
+    ASSERT_EQ(0, stringmatchlen("[a-z]", 5, "A", 1, 0));
+    /* Negation */
+    ASSERT_EQ(0, stringmatchlen("[^abc]", 6, "a", 1, 0));
+    ASSERT_EQ(1, stringmatchlen("[^abc]", 6, "d", 1, 0));
+    /* nocase */
+    ASSERT_EQ(1, stringmatchlen("[a-z]", 5, "A", 1, 1));
+    ASSERT_EQ(1, stringmatchlen("[\\A]", 4, "a", 1, 1));
+    /* Large class: correctness preserved, not just the first 256 */
+    char large_pat[40010];
+    large_pat[0] = '[';
+    /* Place 'z' past byte 256 so a parser that stops at 256 would miss it. */
+    memset(large_pat + 1, 'a', 39999);
+    large_pat[40000] = 'z';
+    large_pat[40001] = ']';
+    large_pat[40002] = '\0';
+    ASSERT_EQ(1, stringmatchlen(large_pat, 40002, "z", 1, 0));
+    ASSERT_EQ(1, stringmatchlen(large_pat, 40002, "a", 1, 0));
+    ASSERT_EQ(0, stringmatchlen(large_pat, 40002, "b", 1, 0));
+    /* Glob with large class: *[40000×z] against various strings.
+     * The bitmask is built once and cached across '*' backtrack positions,
+     * so O(class_size + string_len) not O(class_size * string_len). */
+    large_pat[0] = '*';
+    large_pat[1] = '[';
+    memset(large_pat + 2, 'z', 40000);
+    large_pat[40002] = ']';
+    large_pat[40003] = '\0';
+    ASSERT_EQ(1, stringmatchlen(large_pat, 40003, "z", 1, 0));
+    ASSERT_EQ(0, stringmatchlen(large_pat, 40003, "abc", 3, 0));
+    /* Long non-matching string: without the cache this would be O(N*L). */
+    char long_str[256];
+    memset(long_str, 'a', sizeof(long_str));
+    ASSERT_EQ(0, stringmatchlen(large_pat, 40003, long_str, (int)sizeof(long_str), 0));
+    /* Long string ending with z: must match. */
+    long_str[255] = 'z';
+    ASSERT_EQ(1, stringmatchlen(large_pat, 40003, long_str, (int)sizeof(long_str), 0));
+    /* Two large classes: *[40000×a]*[40000×z]
+     * The first class matches 'a'; the second fails (string is all 'a').
+     * Both classes must be cached independently — the second must not
+     * overwrite the first cache entry. */
+    char pat2[80010];
+    pat2[0] = '*'; pat2[1] = '[';
+    memset(pat2 + 2, 'a', 40000);
+    pat2[40002] = ']'; pat2[40003] = '*'; pat2[40004] = '[';
+    memset(pat2 + 40005, 'z', 40000);
+    pat2[80005] = ']'; pat2[80006] = '\0';
+    memset(long_str, 'a', sizeof(long_str));  /* reset: prior block left [255]='z' */
+    ASSERT_EQ(0, stringmatchlen(pat2, 80006, long_str, (int)sizeof(long_str), 0));
+    long_str[255] = 'z';
+    ASSERT_EQ(1, stringmatchlen(pat2, 80006, long_str, (int)sizeof(long_str), 0));
+}
+
 TEST_F(UtilTest, TestWritePointerWithPadding) {
     unsigned char buf[8];
     static int dummy;

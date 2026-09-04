@@ -59,6 +59,31 @@
 #include <immintrin.h>
 #endif
 
+/*
+ * Per-class cache entry.  Keyed on the pattern pointer to '[' so that the same
+ * [...] body is compiled at most once per stringmatchlen() call, regardless of
+ * how many '*' backtracking positions reach it.
+ */
+typedef struct {
+    const char    *start;
+    int            total;   /* bytes '[' through ']' inclusive */
+    unsigned char  bitmask[32];
+    int            not_op;
+} StringmatchClassEntry;
+
+/*
+ * Up to 8 compiled classes per call chain.  Patterns with more than 8 distinct
+ * [...] groups fall back to rebuilding for the overflow entries — the primary
+ * attack vector (*[<N chars>]) uses one class, so this is sufficient in practice.
+ * ponytail: linear-scan lookup over 8 slots; bump STRINGMATCH_CLASS_CACHE_MAX
+ * if profiling shows real patterns hitting the limit.
+ */
+#define STRINGMATCH_CLASS_CACHE_MAX 8
+typedef struct {
+    StringmatchClassEntry entries[STRINGMATCH_CLASS_CACHE_MAX];
+    int                   count;
+} StringmatchClassCache;
+
 /* Glob-style pattern matching. */
 static int stringmatchlen_impl(const char *pattern,
                                int patternLen,
@@ -66,7 +91,8 @@ static int stringmatchlen_impl(const char *pattern,
                                int stringLen,
                                int nocase,
                                int *skipLongerMatches,
-                               int nesting) {
+                               int nesting,
+                               StringmatchClassCache *cc) {
     /* Protection against abusive patterns. */
     if (nesting > 1000) return 0;
 
@@ -80,7 +106,7 @@ static int stringmatchlen_impl(const char *pattern,
             if (patternLen == 1) return 1; /* match */
             while (stringLen) {
                 if (stringmatchlen_impl(pattern + 1, patternLen - 1, string, stringLen, nocase, skipLongerMatches,
-                                        nesting + 1))
+                                        nesting + 1, cc))
                     return 1;                     /* match */
                 if (*skipLongerMatches) return 0; /* no match */
                 string++;
@@ -104,53 +130,89 @@ static int stringmatchlen_impl(const char *pattern,
             stringLen--;
             break;
         case '[': {
+            unsigned char bitmask[32];
             int not_op, match;
 
-            pattern++;
-            patternLen--;
-            not_op = patternLen && pattern[0] == '^';
-            if (not_op) {
-                pattern++;
-                patternLen--;
-            }
-            match = 0;
-            while (1) {
-                if (patternLen >= 2 && pattern[0] == '\\') {
-                    pattern++;
-                    patternLen--;
-                    if (pattern[0] == string[0]) match = 1;
-                } else if (patternLen == 0) {
-                    pattern--;
-                    patternLen++;
-                    break;
-                } else if (pattern[0] == ']') {
-                    break;
-                } else if (patternLen >= 3 && pattern[1] == '-') {
-                    int start = pattern[0];
-                    int end = pattern[2];
-                    int c = string[0];
-                    if (start > end) {
-                        int t = start;
-                        start = end;
-                        end = t;
-                    }
-                    if (nocase) {
-                        start = tolower(start);
-                        end = tolower(end);
-                        c = tolower(c);
-                    }
-                    pattern += 2;
-                    patternLen -= 2;
-                    if (c >= start && c <= end) match = 1;
-                } else {
-                    if (!nocase) {
-                        if (pattern[0] == string[0]) match = 1;
-                    } else {
-                        if (tolower((int)pattern[0]) == tolower((int)string[0])) match = 1;
+            /* Look up this class in the multi-entry cache. */
+            StringmatchClassEntry *ce = NULL;
+            if (cc) {
+                for (int i = 0; i < cc->count; i++) {
+                    if (cc->entries[i].start == pattern) {
+                        ce = &cc->entries[i];
+                        break;
                     }
                 }
+            }
+
+            if (ce) {
+                /* Reuse cached bitmask — skip past the class body.
+                 * ce->total covers '[' ... ']' inclusive; the outer loop's
+                 * pattern++/patternLen-- will advance one more byte (past ']'),
+                 * so we advance by (total - 1) here. */
+                memcpy(bitmask, ce->bitmask, sizeof(bitmask));
+                not_op = ce->not_op;
+                pattern    += ce->total - 1;
+                patternLen -= ce->total - 1;
+            } else {
+                /* Build a 256-bit membership bitmask from the class body. */
+                const char *class_start = pattern;
+                memset(bitmask, 0, sizeof(bitmask));
                 pattern++;
                 patternLen--;
+                not_op = patternLen && pattern[0] == '^';
+                if (not_op) {
+                    pattern++;
+                    patternLen--;
+                }
+                while (patternLen) {
+                    if (pattern[0] == ']') break;
+                    if (patternLen >= 2 && pattern[0] == '\\') {
+                        pattern++;
+                        patternLen--;
+                        unsigned char c = nocase ? (unsigned char)tolower((unsigned char)pattern[0])
+                                                 : (unsigned char)pattern[0];
+                        bitmask[c >> 3] |= (unsigned char)(1u << (c & 7));
+                    } else if (patternLen >= 3 && pattern[1] == '-') {
+                        int start = pattern[0];
+                        int end = pattern[2];
+                        if (nocase) {
+                            start = tolower(start);
+                            end = tolower(end);
+                        }
+                        if (start > end) {
+                            int t = start;
+                            start = end;
+                            end = t;
+                        }
+                        for (int c = start; c <= end; c++)
+                            bitmask[(unsigned char)c >> 3] |= (unsigned char)(1u << ((unsigned char)c & 7));
+                        pattern += 2;
+                        patternLen -= 2;
+                    } else {
+                        unsigned char c = nocase ? (unsigned char)tolower((unsigned char)pattern[0])
+                                                 : (unsigned char)pattern[0];
+                        bitmask[c >> 3] |= (unsigned char)(1u << (c & 7));
+                    }
+                    pattern++;
+                    patternLen--;
+                }
+                if (!patternLen) {
+                    pattern--;
+                    patternLen++;
+                }
+                /* pattern[0] is ']'; store in cache if space remains. */
+                if (cc && cc->count < STRINGMATCH_CLASS_CACHE_MAX) {
+                    ce = &cc->entries[cc->count++];
+                    ce->start  = class_start;
+                    ce->total  = (int)(pattern - class_start) + 1;
+                    memcpy(ce->bitmask, bitmask, sizeof(bitmask));
+                    ce->not_op = not_op;
+                }
+            }
+            {
+                unsigned char sc = nocase ? (unsigned char)tolower((unsigned char)string[0])
+                                          : (unsigned char)string[0];
+                match = (bitmask[sc >> 3] >> (sc & 7)) & 1;
             }
             if (not_op) match = !match;
             if (!match) return 0; /* no match */
@@ -190,7 +252,9 @@ static int stringmatchlen_impl(const char *pattern,
 
 int stringmatchlen(const char *pattern, int patternLen, const char *string, int stringLen, int nocase) {
     int skipLongerMatches = 0;
-    return stringmatchlen_impl(pattern, patternLen, string, stringLen, nocase, &skipLongerMatches, 0);
+    StringmatchClassCache cc;
+    cc.count = 0;
+    return stringmatchlen_impl(pattern, patternLen, string, stringLen, nocase, &skipLongerMatches, 0, &cc);
 }
 
 int stringmatch(const char *pattern, const char *string, int nocase) {

@@ -590,7 +590,7 @@ static int evalRegisterNewScript(client *c, robj *body, char **sha) {
     es->flags = script_flags;
     sds _sha = sdsnew(*sha);
     if (!is_script_load) {
-        /* Script LUR eviction only applies to EVAL, not SCRIPT LOAD. */
+        /* Script LRU eviction only applies to EVAL, not SCRIPT LOAD. */
         es->node = scriptsLRUAdd(_sha);
     }
     es->body = body;

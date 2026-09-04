@@ -2633,6 +2633,8 @@ static sds ACLLoadFromFile(const char *filename) {
         if (!acl_args) {
             errors = sdscatprintf(errors, "%s:%d: Unmatched parenthesis in selector definition.", server.acl_filename,
                                   linenum);
+            sdsfreesplitres(argv, argc);
+            continue;
         }
 
         int syntax_error = 0;

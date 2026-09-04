@@ -89,6 +89,10 @@ typedef struct slotMigrationJob {
     /* State needed during client establishment */
     connection *conn; /* Connection to slot import source node. */
     sds response_buf;
+
+    /* Authentication for migrating slot */
+    sds auth_username;
+    sds auth_password;
 } slotMigrationJob;
 
 static bool isSlotMigrationJobFinished(slotMigrationJob *job);
@@ -1176,8 +1180,34 @@ void clusterCommandMigrateSlots(client *c) {
     list *new_slot_migrations = listCreate();
     listSetFreeMethod(new_slot_migrations, freeSlotMigrationJob);
     list *slot_ranges = NULL;
+    sds auth_username = NULL;
+    sds auth_password = NULL;
 
     while (curr_index < c->argc) {
+        /* The credentials, if given, trail every migration group and are used
+         * for all of them. */
+        if (!strcasecmp(objectGetVal(c->argv[curr_index]), "auth")) {
+            if (curr_index + 1 >= c->argc) {
+                addReplyErrorObject(c, shared.syntaxerr);
+                goto cleanup;
+            }
+            auth_password = objectGetVal(c->argv[curr_index + 1]);
+            redactClientCommandArgument(c, curr_index + 1);
+            curr_index += 2;
+            break;
+        } else if (!strcasecmp(objectGetVal(c->argv[curr_index]), "auth2")) {
+            if (curr_index + 2 >= c->argc) {
+                addReplyErrorObject(c, shared.syntaxerr);
+                goto cleanup;
+            }
+            auth_username = objectGetVal(c->argv[curr_index + 1]);
+            redactClientCommandArgument(c, curr_index + 1);
+            auth_password = objectGetVal(c->argv[curr_index + 2]);
+            redactClientCommandArgument(c, curr_index + 2);
+            curr_index += 3;
+            break;
+        }
+
         if (strcasecmp(objectGetVal(c->argv[curr_index]), "slotsrange")) {
             addReplyErrorObject(c, shared.syntaxerr);
             goto cleanup;
@@ -1247,10 +1277,30 @@ void clusterCommandMigrateSlots(client *c) {
         slot_ranges = NULL;
     }
 
+    /* Parsing the credentials breaks out of the loop above, so anything left
+     * over is trailing garbage. */
+    if (curr_index < c->argc) {
+        addReplyErrorObject(c, shared.syntaxerr);
+        goto cleanup;
+    }
+
+    /* Credentials without any migration group to apply them to. */
+    if (listLength(new_slot_migrations) == 0) {
+        addReplyErrorObject(c, shared.syntaxerr);
+        goto cleanup;
+    }
+
     /* If we reach here, we have successfully parsed all arguments */
     listIter li;
     listRewind(new_slot_migrations, &li);
     listNode *ln;
+    while ((ln = listNext(&li))) {
+        slotMigrationJob *job = ln->value;
+        if (auth_username) job->auth_username = sdsdup(auth_username);
+        if (auth_password) job->auth_password = sdsdup(auth_password);
+    }
+
+    listRewind(new_slot_migrations, &li);
     sds client_info = catClientInfoShortString(sdsempty(), c,
                                                server.hide_user_data_from_log);
     while ((ln = listNext(&li))) {
@@ -1397,9 +1447,28 @@ void slotMigrationJobReadAuthResponse(connection *conn) {
  * job's connection. */
 void slotMigrationJobSendAuth(slotMigrationJob *job) {
     serverAssert(job->type == SLOT_MIGRATION_EXPORT);
-    serverAssert(server.primary_auth);
 
-    sds err = replicationSendAuth(job->conn);
+    sds err = NULL;
+    if (job->auth_password) {
+        /* Credentials given to CLUSTER MIGRATESLOTS take precedence over the
+         * primary auth configuration. */
+        err = sendAuthCommand(job->conn, job->auth_username, job->auth_password);
+    } else if (server.primary_auth) {
+        err = replicationSendAuth(job->conn);
+    } else {
+        /* The auth configuration was cleared after this job entered the
+         * SLOT_EXPORT_SEND_AUTH state. There is nothing to authenticate with,
+         * so move on and let the target node reject us if it still wants
+         * credentials. */
+        serverLog(LL_WARNING,
+                  "No credentials available to authenticate slot migration %s, "
+                  "skipping the AUTH command.",
+                  job->description);
+        updateSlotMigrationJobState(job, SLOT_EXPORT_SEND_ESTABLISH);
+        proceedWithSlotMigration(job);
+        return;
+    }
+
     if (err) {
         sds status_msg = sdscatfmt(sdsempty(), "Failed to send AUTH command to target node: %s", err);
         finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_FAILED, status_msg);
@@ -2055,7 +2124,7 @@ void proceedWithSlotMigration(slotMigrationJob *job) {
             if (!completed) return;
             serverLog(LL_NOTICE, "Slot migration %s connection established.",
                       job->description);
-            if (server.primary_auth) {
+            if (job->auth_password || server.primary_auth) {
                 updateSlotMigrationJobState(job, SLOT_EXPORT_SEND_AUTH);
             } else {
                 updateSlotMigrationJobState(job, SLOT_EXPORT_SEND_ESTABLISH);
@@ -2217,6 +2286,8 @@ void freeSlotMigrationJob(void *o) {
     sdsfree(job->status_msg);
     sdsfree(job->response_buf);
     sdsfree(job->description);
+    sdsfree(job->auth_username);
+    sdsfree(job->auth_password);
     zfree(o);
 }
 

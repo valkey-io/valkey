@@ -3352,6 +3352,7 @@ void addRdbReplicaToPsyncWait(client *replica);
 void initClientReplicationData(client *c);
 void freeClientReplicationData(client *c);
 void replicaReceiveRDBFromPrimaryToDisk(connection *conn, int is_dual_channel);
+sds sendAuthCommand(connection *conn, char *user, sds password);
 sds replicationSendAuth(connection *conn);
 sds receiveSynchronousResponse(connection *conn);
 ConnectionType *connTypeOfReplication(void);

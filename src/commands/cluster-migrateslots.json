@@ -53,6 +53,37 @@
                         "description": "40 character node name of the node to migrate to"
                     }
                 ]
+            },
+            {
+                "name": "authentication",
+                "type": "oneof",
+                "optional": true,
+                "description": "Credentials used to authenticate against every target node of this command",
+                "arguments": [
+                    {
+                        "token": "AUTH",
+                        "name": "auth",
+                        "display": "password",
+                        "type": "string",
+                        "since": "10.0.0"
+                    },
+                    {
+                        "token": "AUTH2",
+                        "name": "auth2",
+                        "type": "block",
+                        "since": "10.0.0",
+                        "arguments": [
+                            {
+                                "name": "username",
+                                "type": "string"
+                            },
+                            {
+                                "name": "password",
+                                "type": "string"
+                            }
+                        ]
+                    }
+                ]
             }
         ],
         "reply_schema": {

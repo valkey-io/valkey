@@ -212,6 +212,15 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
         assert_error "*Slot ranges in migrations overlap*" {R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 1 1 NODE $node1_id SLOTSRANGE 0 2 NODE $node2_id}
         assert_error "*Slot ranges in migrations overlap*" {R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 0 0 2 2 NODE $node1_id SLOTSRANGE 2 2 NODE $node2_id}
 
+        # AUTH and AUTH2 must be complete, and must trail every migration group.
+        assert_error "*syntax error*" {R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 0 0 NODE $node1_id AUTH}
+        assert_error "*syntax error*" {R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 0 0 NODE $node1_id AUTH2}
+        assert_error "*syntax error*" {R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 0 0 NODE $node1_id AUTH2 user}
+        assert_error "*syntax error*" {R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 0 0 NODE $node1_id AUTH pass EXTRA}
+        assert_error "*syntax error*" {R 0 CLUSTER MIGRATESLOTS AUTH pass SLOTSRANGE 0 0 NODE $node1_id}
+        assert_error "*syntax error*" {R 0 CLUSTER MIGRATESLOTS AUTH pass}
+        assert_error "*syntax error*" {R 0 CLUSTER MIGRATESLOTS AUTH2 user pass}
+
         set source_node_id [R 0 CLUSTER MYID]
         set target_node_id [R 1 CLUSTER MYID]
         R 0 CLUSTER SETSLOT 0 MIGRATING $target_node_id
@@ -2565,5 +2574,63 @@ start_cluster 3 0 {tags {logreqres:skip external:skip cluster network} overrides
         # Resume R0 and wait for R0 to finish the migration.
         resume_process [srv 0 pid]
         wait_for_migration 0 16383
+    }
+}
+
+start_cluster 2 0 {tags {logreqres:skip external:skip cluster}} {
+    set sourcenode 0
+    set targetnode 1
+
+    test "CLUSTER MIGRATESLOTS AUTH credentials are redacted in the command log" {
+        R $sourcenode CONFIG SET commandlog-execution-slower-than 0
+        R $sourcenode COMMANDLOG RESET SLOW
+
+        # Both fail on the missing migration group, but only after the
+        # credentials have been parsed and redacted.
+        assert_error "*syntax error*" {R $sourcenode CLUSTER MIGRATESLOTS AUTH topsecret}
+        assert_error "*syntax error*" {R $sourcenode CLUSTER MIGRATESLOTS AUTH2 someuser topsecret}
+
+        R $sourcenode CONFIG SET commandlog-execution-slower-than -1
+        set entries [R $sourcenode COMMANDLOG GET -1 SLOW]
+        assert_equal {CLUSTER MIGRATESLOTS AUTH (redacted)} [lindex [lindex $entries 1] 3]
+        assert_equal {CLUSTER MIGRATESLOTS AUTH2 (redacted) (redacted)} [lindex [lindex $entries 0] 3]
+    }
+
+    test "CLUSTER MIGRATESLOTS with AUTH/AUTH2 arguments" {
+        set target_id [R $targetnode CLUSTER MYID]
+
+        # A non-default user, so that AUTH2 exercises the username path.
+        R $targetnode ACL SETUSER migrator on >migratorpass ~* &* +@all
+
+        # Require authentication on the target node. This also de-authenticates
+        # our own connection to it, so authenticate again before using it.
+        R $targetnode CONFIG SET requirepass "mypassword"
+        R $targetnode AUTH mypassword
+
+        # Without credentials the job cannot authenticate and ends up failed. A
+        # failed job is finished, so it does not block later migrations and does
+        # not need to be cancelled. Each case uses its own slot so that
+        # get_job_name cannot match a job from a previous case.
+        assert_match "OK" [R $sourcenode CLUSTER MIGRATESLOTS SLOTSRANGE 1000 1000 NODE $target_id]
+        set jobname [get_job_name $sourcenode 1000]
+        wait_for_migration_field $sourcenode $jobname state failed
+
+        # A wrong password fails too, and reports why.
+        assert_match "OK" [R $sourcenode CLUSTER MIGRATESLOTS SLOTSRANGE 1003 1003 NODE $target_id AUTH "wrongpassword"]
+        set jobname [get_job_name $sourcenode 1003]
+        wait_for_migration_field $sourcenode $jobname state failed
+        assert_match "*WRONGPASS*" [dict get [get_migration_by_name $sourcenode $jobname] message]
+
+        # AUTH with the correct password migrates the slot.
+        assert_match "OK" [R $sourcenode CLUSTER MIGRATESLOTS SLOTSRANGE 1001 1001 NODE $target_id AUTH "mypassword"]
+        wait_for_migration $targetnode 1001
+
+        # AUTH2 with a dedicated ACL user migrates the slot.
+        assert_match "OK" [R $sourcenode CLUSTER MIGRATESLOTS SLOTSRANGE 1002 1002 NODE $target_id AUTH2 migrator "migratorpass"]
+        wait_for_migration $targetnode 1002
+
+        # Reset password to clear test environment
+        R $targetnode CONFIG SET requirepass ""
+        R $targetnode ACL DELUSER migrator
     }
 }

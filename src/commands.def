@@ -3439,6 +3439,7 @@ struct COMMAND_ARG GEORADIUS_RO_Args[] = {
 commandHistory GEOSEARCH_History[] = {
 {"7.0.0","Added support for uppercase unit names."},
 {"9.0.0","Added support for the BYPOLYGON option."},
+{"10.0.0","Added support for the BYPATH option."},
 };
 #endif
 
@@ -3507,11 +3508,34 @@ struct COMMAND_ARG GEOSEARCH_by_polygon_Subargs[] = {
 {MAKE_ARG("vertices",ARG_TYPE_BLOCK,-1,NULL,NULL,NULL,CMD_ARG_MULTIPLE,2,NULL),.subargs=GEOSEARCH_by_polygon_vertices_Subargs},
 };
 
+/* GEOSEARCH by path points argument table */
+struct COMMAND_ARG GEOSEARCH_by_path_points_Subargs[] = {
+{MAKE_ARG("longitude",ARG_TYPE_DOUBLE,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("latitude",ARG_TYPE_DOUBLE,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+};
+
+/* GEOSEARCH by path unit argument table */
+struct COMMAND_ARG GEOSEARCH_by_path_unit_Subargs[] = {
+{MAKE_ARG("m",ARG_TYPE_PURE_TOKEN,-1,"M",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("km",ARG_TYPE_PURE_TOKEN,-1,"KM",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("ft",ARG_TYPE_PURE_TOKEN,-1,"FT",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("mi",ARG_TYPE_PURE_TOKEN,-1,"MI",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+};
+
+/* GEOSEARCH by path argument table */
+struct COMMAND_ARG GEOSEARCH_by_path_Subargs[] = {
+{MAKE_ARG("num-points",ARG_TYPE_INTEGER,-1,"BYPATH",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("points",ARG_TYPE_BLOCK,-1,NULL,NULL,NULL,CMD_ARG_MULTIPLE,2,NULL),.subargs=GEOSEARCH_by_path_points_Subargs},
+{MAKE_ARG("distance",ARG_TYPE_DOUBLE,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("unit",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_NONE,4,NULL),.subargs=GEOSEARCH_by_path_unit_Subargs},
+};
+
 /* GEOSEARCH by argument table */
 struct COMMAND_ARG GEOSEARCH_by_Subargs[] = {
 {MAKE_ARG("circle",ARG_TYPE_BLOCK,-1,NULL,NULL,NULL,CMD_ARG_NONE,2,NULL),.subargs=GEOSEARCH_by_circle_Subargs},
 {MAKE_ARG("box",ARG_TYPE_BLOCK,-1,NULL,NULL,NULL,CMD_ARG_NONE,3,NULL),.subargs=GEOSEARCH_by_box_Subargs},
 {MAKE_ARG("polygon",ARG_TYPE_BLOCK,-1,NULL,NULL,"9.0.0",CMD_ARG_NONE,2,NULL),.subargs=GEOSEARCH_by_polygon_Subargs},
+{MAKE_ARG("path",ARG_TYPE_BLOCK,-1,NULL,NULL,"10.0.0",CMD_ARG_NONE,4,NULL),.subargs=GEOSEARCH_by_path_Subargs},
 };
 
 /* GEOSEARCH order argument table */
@@ -3530,11 +3554,12 @@ struct COMMAND_ARG GEOSEARCH_count_block_Subargs[] = {
 struct COMMAND_ARG GEOSEARCH_Args[] = {
 {MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("from",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_OPTIONAL,2,NULL),.subargs=GEOSEARCH_from_Subargs},
-{MAKE_ARG("by",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_NONE,3,NULL),.subargs=GEOSEARCH_by_Subargs},
+{MAKE_ARG("by",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_NONE,4,NULL),.subargs=GEOSEARCH_by_Subargs},
 {MAKE_ARG("order",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_OPTIONAL,2,NULL),.subargs=GEOSEARCH_order_Subargs},
 {MAKE_ARG("count-block",ARG_TYPE_BLOCK,-1,NULL,NULL,NULL,CMD_ARG_OPTIONAL,2,NULL),.subargs=GEOSEARCH_count_block_Subargs},
 {MAKE_ARG("withcoord",ARG_TYPE_PURE_TOKEN,-1,"WITHCOORD",NULL,NULL,CMD_ARG_OPTIONAL,0,NULL)},
 {MAKE_ARG("withdist",ARG_TYPE_PURE_TOKEN,-1,"WITHDIST",NULL,NULL,CMD_ARG_OPTIONAL,0,NULL)},
+{MAKE_ARG("withpathdist",ARG_TYPE_PURE_TOKEN,-1,"WITHPATHDIST",NULL,"10.0.0",CMD_ARG_OPTIONAL,0,NULL)},
 {MAKE_ARG("withhash",ARG_TYPE_PURE_TOKEN,-1,"WITHHASH",NULL,NULL,CMD_ARG_OPTIONAL,0,NULL)},
 };
 
@@ -3545,6 +3570,7 @@ struct COMMAND_ARG GEOSEARCH_Args[] = {
 commandHistory GEOSEARCHSTORE_History[] = {
 {"7.0.0","Added support for uppercase unit names."},
 {"9.0.0","Added support for the BYPOLYGON option."},
+{"10.0.0","Added support for the BYPATH option."},
 };
 #endif
 
@@ -3613,11 +3639,34 @@ struct COMMAND_ARG GEOSEARCHSTORE_by_polygon_Subargs[] = {
 {MAKE_ARG("vertices",ARG_TYPE_BLOCK,-1,NULL,NULL,NULL,CMD_ARG_MULTIPLE,2,NULL),.subargs=GEOSEARCHSTORE_by_polygon_vertices_Subargs},
 };
 
+/* GEOSEARCHSTORE by path points argument table */
+struct COMMAND_ARG GEOSEARCHSTORE_by_path_points_Subargs[] = {
+{MAKE_ARG("longitude",ARG_TYPE_DOUBLE,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("latitude",ARG_TYPE_DOUBLE,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+};
+
+/* GEOSEARCHSTORE by path unit argument table */
+struct COMMAND_ARG GEOSEARCHSTORE_by_path_unit_Subargs[] = {
+{MAKE_ARG("m",ARG_TYPE_PURE_TOKEN,-1,"M",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("km",ARG_TYPE_PURE_TOKEN,-1,"KM",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("ft",ARG_TYPE_PURE_TOKEN,-1,"FT",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("mi",ARG_TYPE_PURE_TOKEN,-1,"MI",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+};
+
+/* GEOSEARCHSTORE by path argument table */
+struct COMMAND_ARG GEOSEARCHSTORE_by_path_Subargs[] = {
+{MAKE_ARG("num-points",ARG_TYPE_INTEGER,-1,"BYPATH",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("points",ARG_TYPE_BLOCK,-1,NULL,NULL,NULL,CMD_ARG_MULTIPLE,2,NULL),.subargs=GEOSEARCHSTORE_by_path_points_Subargs},
+{MAKE_ARG("distance",ARG_TYPE_DOUBLE,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("unit",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_NONE,4,NULL),.subargs=GEOSEARCHSTORE_by_path_unit_Subargs},
+};
+
 /* GEOSEARCHSTORE by argument table */
 struct COMMAND_ARG GEOSEARCHSTORE_by_Subargs[] = {
 {MAKE_ARG("circle",ARG_TYPE_BLOCK,-1,NULL,NULL,NULL,CMD_ARG_NONE,2,NULL),.subargs=GEOSEARCHSTORE_by_circle_Subargs},
 {MAKE_ARG("box",ARG_TYPE_BLOCK,-1,NULL,NULL,NULL,CMD_ARG_NONE,3,NULL),.subargs=GEOSEARCHSTORE_by_box_Subargs},
 {MAKE_ARG("polygon",ARG_TYPE_BLOCK,-1,NULL,NULL,"9.0.0",CMD_ARG_NONE,2,NULL),.subargs=GEOSEARCHSTORE_by_polygon_Subargs},
+{MAKE_ARG("path",ARG_TYPE_BLOCK,-1,NULL,NULL,"10.0.0",CMD_ARG_NONE,4,NULL),.subargs=GEOSEARCHSTORE_by_path_Subargs},
 };
 
 /* GEOSEARCHSTORE order argument table */
@@ -3637,7 +3686,7 @@ struct COMMAND_ARG GEOSEARCHSTORE_Args[] = {
 {MAKE_ARG("destination",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("source",ARG_TYPE_KEY,1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("from",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_OPTIONAL,2,NULL),.subargs=GEOSEARCHSTORE_from_Subargs},
-{MAKE_ARG("by",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_NONE,3,NULL),.subargs=GEOSEARCHSTORE_by_Subargs},
+{MAKE_ARG("by",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_NONE,4,NULL),.subargs=GEOSEARCHSTORE_by_Subargs},
 {MAKE_ARG("order",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_OPTIONAL,2,NULL),.subargs=GEOSEARCHSTORE_order_Subargs},
 {MAKE_ARG("count-block",ARG_TYPE_BLOCK,-1,NULL,NULL,NULL,CMD_ARG_OPTIONAL,2,NULL),.subargs=GEOSEARCHSTORE_count_block_Subargs},
 {MAKE_ARG("storedist",ARG_TYPE_PURE_TOKEN,-1,"STOREDIST",NULL,NULL,CMD_ARG_OPTIONAL,0,NULL)},
@@ -12045,8 +12094,8 @@ struct COMMAND_STRUCT serverCommandTable[] = {
 {MAKE_CMD("georadiusbymember","Queries a geospatial index for members within a distance from a member, optionally stores the result.","O(N+log(M)) where N is the number of elements inside the bounding box of the circular area delimited by center and radius and M is the number of items inside the index.","3.2.0",CMD_DOC_NONE,NULL,NULL,"geo",COMMAND_GROUP_GEO,GEORADIUSBYMEMBER_History,2,GEORADIUSBYMEMBER_Tips,0,georadiusbymemberCommand,-5,CMD_WRITE|CMD_DENYOOM,ACL_CATEGORY_GEO|ACL_CATEGORY_SLOW|ACL_CATEGORY_WRITE,NULL,GEORADIUSBYMEMBER_Keyspecs,3,georadiusGetKeys,10),.args=GEORADIUSBYMEMBER_Args},
 {MAKE_CMD("georadiusbymember_ro","Returns members from a geospatial index that are within a distance from a member.","O(N+log(M)) where N is the number of elements inside the bounding box of the circular area delimited by center and radius and M is the number of items inside the index.","3.2.10",CMD_DOC_NONE,NULL,NULL,"geo",COMMAND_GROUP_GEO,GEORADIUSBYMEMBER_RO_History,2,GEORADIUSBYMEMBER_RO_Tips,0,georadiusbymemberroCommand,-5,CMD_READONLY,ACL_CATEGORY_GEO|ACL_CATEGORY_READ|ACL_CATEGORY_SLOW,NULL,GEORADIUSBYMEMBER_RO_Keyspecs,1,NULL,9),.args=GEORADIUSBYMEMBER_RO_Args},
 {MAKE_CMD("georadius_ro","Returns members from a geospatial index that are within a distance from a coordinate.","O(N+log(M)) where N is the number of elements inside the bounding box of the circular area delimited by center and radius and M is the number of items inside the index.","3.2.10",CMD_DOC_NONE,NULL,NULL,"geo",COMMAND_GROUP_GEO,GEORADIUS_RO_History,2,GEORADIUS_RO_Tips,0,georadiusroCommand,-6,CMD_READONLY,ACL_CATEGORY_GEO|ACL_CATEGORY_READ|ACL_CATEGORY_SLOW,NULL,GEORADIUS_RO_Keyspecs,1,NULL,10),.args=GEORADIUS_RO_Args},
-{MAKE_CMD("geosearch","Queries a geospatial index for members inside an area of a box, circle, or a polygon.","O(N+log(M)) where N is the number of elements in the grid-aligned bounding box area around the shape provided as the filter and M is the number of items inside the shape","6.2.0",CMD_DOC_NONE,NULL,NULL,"geo",COMMAND_GROUP_GEO,GEOSEARCH_History,2,GEOSEARCH_Tips,0,geosearchCommand,-7,CMD_READONLY,ACL_CATEGORY_GEO|ACL_CATEGORY_READ|ACL_CATEGORY_SLOW,NULL,GEOSEARCH_Keyspecs,1,NULL,8),.args=GEOSEARCH_Args},
-{MAKE_CMD("geosearchstore","Queries a geospatial index for members inside an area of a box, a circle, or a polygon, optionally stores the result.","O(N+log(M)) where N is the number of elements in the grid-aligned bounding box area around the shape provided as the filter and M is the number of items inside the shape","6.2.0",CMD_DOC_NONE,NULL,NULL,"geo",COMMAND_GROUP_GEO,GEOSEARCHSTORE_History,2,GEOSEARCHSTORE_Tips,0,geosearchstoreCommand,-8,CMD_WRITE|CMD_DENYOOM,ACL_CATEGORY_GEO|ACL_CATEGORY_SLOW|ACL_CATEGORY_WRITE,NULL,GEOSEARCHSTORE_Keyspecs,2,NULL,7),.args=GEOSEARCHSTORE_Args},
+{MAKE_CMD("geosearch","Queries a geospatial index for members inside an area of a box, circle, polygon, or along a path.","O(N+log(M)) where N is the number of elements in the grid-aligned bounding box area around the shape provided as the filter and M is the number of items inside the shape","6.2.0",CMD_DOC_NONE,NULL,NULL,"geo",COMMAND_GROUP_GEO,GEOSEARCH_History,3,GEOSEARCH_Tips,0,geosearchCommand,-7,CMD_READONLY,ACL_CATEGORY_GEO|ACL_CATEGORY_READ|ACL_CATEGORY_SLOW,NULL,GEOSEARCH_Keyspecs,1,NULL,9),.args=GEOSEARCH_Args},
+{MAKE_CMD("geosearchstore","Queries a geospatial index for members inside an area of a box, a circle, a polygon, or along a path, optionally stores the result.","O(N+log(M)) where N is the number of elements in the grid-aligned bounding box area around the shape provided as the filter and M is the number of items inside the shape","6.2.0",CMD_DOC_NONE,NULL,NULL,"geo",COMMAND_GROUP_GEO,GEOSEARCHSTORE_History,3,GEOSEARCHSTORE_Tips,0,geosearchstoreCommand,-8,CMD_WRITE|CMD_DENYOOM,ACL_CATEGORY_GEO|ACL_CATEGORY_SLOW|ACL_CATEGORY_WRITE,NULL,GEOSEARCHSTORE_Keyspecs,2,NULL,7),.args=GEOSEARCHSTORE_Args},
 /* hash */
 {MAKE_CMD("hdel","Deletes one or more fields and their values from a hash. Deletes the hash if no fields remain.","O(N) where N is the number of fields to be removed.","2.0.0",CMD_DOC_NONE,NULL,NULL,"hash",COMMAND_GROUP_HASH,HDEL_History,1,HDEL_Tips,0,hdelCommand,-3,CMD_WRITE|CMD_FAST,ACL_CATEGORY_FAST|ACL_CATEGORY_HASH|ACL_CATEGORY_WRITE,NULL,HDEL_Keyspecs,1,NULL,2),.args=HDEL_Args},
 {MAKE_CMD("hexists","Determines whether a field exists in a hash.","O(1)","2.0.0",CMD_DOC_NONE,NULL,NULL,"hash",COMMAND_GROUP_HASH,HEXISTS_History,0,HEXISTS_Tips,0,hexistsCommand,3,CMD_READONLY|CMD_FAST,ACL_CATEGORY_FAST|ACL_CATEGORY_HASH|ACL_CATEGORY_READ,NULL,HEXISTS_Keyspecs,1,NULL,2),.args=HEXISTS_Args},

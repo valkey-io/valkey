@@ -1,6 +1,6 @@
 {
     "GEOSEARCH": {
-        "summary": "Queries a geospatial index for members inside an area of a box, circle, or a polygon.",
+        "summary": "Queries a geospatial index for members inside an area of a box, circle, polygon, or along a path.",
         "complexity": "O(N+log(M)) where N is the number of elements in the grid-aligned bounding box area around the shape provided as the filter and M is the number of items inside the shape",
         "group": "geo",
         "since": "6.2.0",
@@ -14,6 +14,10 @@
             [
                 "9.0.0",
                 "Added support for the BYPOLYGON option."
+            ],
+            [
+                "10.0.0",
+                "Added support for the BYPATH option."
             ]
         ],
         "command_flags": [
@@ -185,6 +189,63 @@
                                 ]
                             }
                         ]
+                    },
+                    {
+                        "name": "path",
+                        "since": "10.0.0",
+                        "type": "block",
+                        "arguments": [
+                            {
+                                "token": "BYPATH",
+                                "name": "num-points",
+                                "type": "integer"
+                            },
+                            {
+                                "name": "points",
+                                "type": "block",
+                                "multiple": true,
+                                "arguments": [
+                                    {
+                                        "name": "longitude",
+                                        "type": "double"
+                                    },
+                                    {
+                                        "name": "latitude",
+                                        "type": "double"
+                                    }
+                                ]
+                            },
+                            {
+                                "name": "distance",
+                                "type": "double"
+                            },
+                            {
+                                "name": "unit",
+                                "type": "oneof",
+                                "arguments": [
+                                    {
+                                        "name": "m",
+                                        "type": "pure-token",
+                                        "token": "m"
+                                    },
+                                    {
+                                        "name": "km",
+                                        "type": "pure-token",
+                                        "token": "km"
+                                    },
+                                    {
+                                        "name": "ft",
+                                        "type": "pure-token",
+                                        "token": "ft"
+                                    },
+                                    {
+                                        "name": "mi",
+                                        "type": "pure-token",
+                                        "token": "mi"
+                                    }
+                                ]
+                            }
+                        ]
                     }
                 ]
             },
@@ -234,6 +295,13 @@
                 "token": "WITHDIST",
                 "type": "pure-token",
                 "optional": true
+            },
+            {
+                "name": "withpathdist",
+                "token": "WITHPATHDIST",
+                "type": "pure-token",
+                "optional": true,
+                "since": "10.0.0"
             },
             {
                 "name": "withhash",

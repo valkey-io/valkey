@@ -6,6 +6,7 @@
         "since": "2.0.0",
         "arity": 3,
         "function": "hgetCommand",
+        "prefetch_function": "hashValuePrefetchCallback",
         "command_flags": [
             "READONLY",
             "FAST"

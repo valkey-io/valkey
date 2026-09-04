@@ -2567,3 +2567,27 @@ size_t hashTypeScanDefrag(robj *ob, size_t cursor, void *(*defragAllocfn)(void *
     }
     return (long)vset_cursor;
 }
+
+/* Prefetch callback for hash values with hashtable encoding.
+ * implements a 3-phase state machine for incremental prefetching. */
+bool hashValuePrefetchCallback(client *c, ValuePrefetchInfo *info, robj *val) {
+    if (val->type != OBJ_HASH || val->encoding != OBJ_ENCODING_HASHTABLE) return false;
+
+    if (info->state == HASHTABLE_PREFETCH_ENTRY) {
+        /* Phase 1: Prefetch the hashtable pointer itself */
+        valkey_prefetch(objectGetVal(val));
+        info->state = HASHTABLE_PREFETCH_INIT;
+        return true;
+    }
+    if (info->state == HASHTABLE_PREFETCH_INIT) {
+        /* Phase 2: Initialize incremental find in the hash hashtable
+         * c->argv[2] is the field name for both HGET and HSET */
+        hashtableIncrementalFindInit(&info->data.hashtab_state,
+                                     objectGetVal(val),
+                                     objectGetVal(c->argv[2]));
+        info->state = HASHTABLE_PREFETCH_VALUE;
+        return true;
+    }
+    /* Phase 3: Step through incremental find */
+    return hashtableIncrementalFindStep(&info->data.hashtab_state);
+}

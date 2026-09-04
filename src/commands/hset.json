@@ -6,6 +6,7 @@
         "since": "2.0.0",
         "arity": -4,
         "function": "hsetCommand",
+        "prefetch_function": "hashValuePrefetchCallback",
         "history": [
             [
                 "4.0.0",

@@ -2643,6 +2643,8 @@ typedef int serverGetKeysProc(struct serverCommand *cmd, robj **argv, int argc, 
  * Caller should free the returned array. */
 typedef int *commandDbIdArgs(robj **argv, int argc, int *count);
 
+typedef bool serverValuePrefetchProc(client *c, ValuePrefetchInfo *info, robj *val);
+
 /* Command structure.
  *
  * Note that the command table is in commands.c and it is auto-generated.
@@ -2783,6 +2785,7 @@ struct serverCommand {
     struct serverCommand *subcommands;
     /* Array of arguments (may be NULL) */
     struct serverCommandArg *args;
+    serverValuePrefetchProc *prefetch_proc; /* Value prefetch callback (NULL if unused) */
 #ifdef LOG_REQ_RES
     /* Reply schema */
     struct jsonObject *reply_schema;
@@ -4353,6 +4356,9 @@ int *selectDbIdArgs(robj **argv, int argc, int *count);
 int *swapdbDbIdArgs(robj **argv, int argc, int *count);
 int *moveDbIdArgs(robj **argv, int argc, int *count);
 int *copyDbIdArgs(robj **argv, int argc, int *count);
+
+/* Helper functions for object memory prefecthing */
+bool hashValuePrefetchCallback(client *c, ValuePrefetchInfo *info, robj *val);
 
 #if defined(__GNUC__)
 void *calloc(size_t count, size_t size) __attribute__((deprecated));

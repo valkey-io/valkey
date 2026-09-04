@@ -6,6 +6,7 @@
                  num_history, tips, num_tips, function, arity, flags, acl, get_dbid_args, key_specs,            \
                  key_specs_num, get_keys, numargs)                                                              \
     name, summary, group, since, numargs
+#define ASSIGN_PREFETCH_PROC(fn)
 #define MAKE_ARG(name, type, key_spec_index, token, summary, since, flags, numsubargs, deprecated_since) \
     name, type, token, since, flags, numsubargs
 #define COMMAND_ARG cliCommandArg

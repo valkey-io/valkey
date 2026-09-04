@@ -1344,7 +1344,7 @@ proc bp {{s {}}} {
     } elseif {[lsearch -exact $::bp_skip $s]>=0} return
     if [catch {info level -1} who] {set who ::}
     while 1 {
-        puts -nonewline "$who/$s> "; flush stdout
+        puts -nonewline "> "; flush stdout
         gets stdin line
         if {$line=="c"} {puts "continuing.."; break}
         if {$line=="i"} {set line "info locals"}

@@ -6,6 +6,7 @@
                  key_specs_num, get_keys, numargs)                                                              \
     name, summary, complexity, since, doc_flags, replaced, deprecated, group_enum, history, num_history, tips,  \
         num_tips, function, arity, flags, acl, get_dbid_args, key_specs, key_specs_num, get_keys, numargs
+#define ASSIGN_PREFETCH_PROC(fn) .prefetch_proc = fn,
 #define MAKE_ARG(name, type, key_spec_index, token, summary, since, flags, numsubargs, deprecated_since) \
     name, type, key_spec_index, token, summary, since, flags, deprecated_since, numsubargs
 #define COMMAND_STRUCT serverCommand

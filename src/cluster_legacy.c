@@ -3200,178 +3200,216 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
     int first_migrated_slot = -1, last_migrated_slot = -1;
     clusterNode *migration_source_node = NULL;
 
-    for (j = 0; j < CLUSTER_SLOTS; j++) {
-        if (bitmapTestBit(slots, j)) {
-            sender_slots++;
+    for (size_t w = 0; w < CLUSTER_SLOT_WORDS; w++) {
+        uint64_t msg_word;
+        uint64_t old_word;
 
-            /* The slot is already bound to the sender of this message. */
-            if (server.cluster->slots[j] == sender) {
-                bitmapClearBit(server.cluster->owner_not_claiming_slot, j);
-                continue;
+        /* Load 64 slots at once from the incoming message */
+        memcpy(&msg_word, slots + SLOT_WORD_OFFSET(w), sizeof(msg_word));
+        memrev64ifbe(&msg_word);
+
+        /* Load our local record of sender's slots */
+        memcpy(&old_word, sender->slots + SLOT_WORD_OFFSET(w), sizeof(old_word));
+        memrev64ifbe(&old_word);
+
+        /* PERFORMANCE SHORTCUT:
+         * If the sender didn't own these slots before, and isn't claiming them now,
+         * we can't skip entirely because we might be migrating TO this sender.
+         * However, if the sender is not involved in these 64 slots at all,
+         * we only need to check if WE are migrating/importing. */
+        if (msg_word == 0 && old_word == 0) {
+            int skip_word = 1;
+            for (int i = 0; i < 64; i++) {
+                int slot_idx = (w * 64) + i;
+                if (slot_idx >= CLUSTER_SLOTS) break;
+
+                /* Use the helper functions to check dictionary existence */
+                if (getMigratingSlotDest(slot_idx) != NULL ||
+                    getImportingSlotSource(slot_idx) != NULL) {
+                    skip_word = 0;
+                    break;
+                }
             }
+            if (skip_word) continue;
+        }
 
-            /* We rebind the slot to the new node claiming it if the slot was
-             * unassigned or the new node claims it with a greater configEpoch.
-             *
-             * Additionally, note that during slot migration, if we have bumped
-             * our epoch recently (e.g. due to our own slot import) then it is
-             * possible the epoch on the target after bumping is <= our epoch.
-             * This would normally cause our node to prevent the topology change
-             * from being accepted. To counter this, if our node is aware of the
-             * migration, we will accept the topology update regardless of the
-             * epoch. */
-            if (isSlotUnclaimed(j) ||
-                server.cluster->slots[j]->configEpoch < senderConfigEpoch ||
-                clusterSlotFailoverGranted(j)) {
-                if (!isSlotUnclaimed(j) && !areInSameShard(server.cluster->slots[j], sender)) {
-                    if (first_migrated_slot == -1) {
-                        /* Delay-initialize the range of migrated slots. */
-                        first_migrated_slot = j;
-                        last_migrated_slot = j;
-                        migration_source_node = server.cluster->slots[j];
-                    } else if (migration_source_node == server.cluster->slots[j] && j == last_migrated_slot + 1) {
-                        /* Extend the range of migrated slots. */
-                        last_migrated_slot = j;
-                    } else {
-                        /* We have a gap in the range of migrated slots.
-                         * Log the previous range and start a new one. */
-                        clusterLogSlotRangeMigration(first_migrated_slot, last_migrated_slot,
-                                                     migration_source_node, sender);
-                        /* Reset the range for the next slot. */
-                        first_migrated_slot = j;
-                        last_migrated_slot = j;
-                        migration_source_node = server.cluster->slots[j];
+        /* If we are here, something is happening in these 64 slots. */
+        for (int i = 0; i < 64; i++) {
+            j = (w * 64) + i;
+            if (j >= CLUSTER_SLOTS) break;
+
+            if (bitmapTestBit(slots, j)) {
+                sender_slots++;
+
+                /* The slot is already bound to the sender of this message. */
+                if (server.cluster->slots[j] == sender) {
+                    bitmapClearBit(server.cluster->owner_not_claiming_slot, j);
+                    continue;
+                }
+
+                /* We rebind the slot to the new node claiming it if the slot was
+                 * unassigned or the new node claims it with a greater configEpoch.
+                 *
+                 * Additionally, note that during slot migration, if we have bumped
+                 * our epoch recently (e.g. due to our own slot import) then it is
+                 * possible the epoch on the target after bumping is <= our epoch.
+                 * This would normally cause our node to prevent the topology change
+                 * from being accepted. To counter this, if our node is aware of the
+                 * migration, we will accept the topology update regardless of the
+                 * epoch. */
+                if (isSlotUnclaimed(j) ||
+                    server.cluster->slots[j]->configEpoch < senderConfigEpoch ||
+                    clusterSlotFailoverGranted(j)) {
+                    if (!isSlotUnclaimed(j) && !areInSameShard(server.cluster->slots[j], sender)) {
+                        if (first_migrated_slot == -1) {
+                            /* Delay-initialize the range of migrated slots. */
+                            first_migrated_slot = j;
+                            last_migrated_slot = j;
+                            migration_source_node = server.cluster->slots[j];
+                        } else if (migration_source_node == server.cluster->slots[j] && j == last_migrated_slot + 1) {
+                            /* Extend the range of migrated slots. */
+                            last_migrated_slot = j;
+                        } else {
+                            /* We have a gap in the range of migrated slots.
+                             * Log the previous range and start a new one. */
+                            clusterLogSlotRangeMigration(first_migrated_slot, last_migrated_slot,
+                                                         migration_source_node, sender);
+                            /* Reset the range for the next slot. */
+                            first_migrated_slot = j;
+                            last_migrated_slot = j;
+                            migration_source_node = server.cluster->slots[j];
+                        }
                     }
-                }
 
-                /* Was this slot mine, and still contains keys? Mark it as
-                 * a dirty slot. */
-                if (server.cluster->slots[j] == myself && countKeysInSlot(j) && sender != myself) {
-                    dirty_slots[dirty_slots_count] = j;
-                    dirty_slots_count++;
-                }
-
-                if (clusterIsSlotExporting(j)) exporting_slots_count++;
-
-                if (clusterIsSlotImporting(j)) importing_slots_count++;
-
-                if (server.cluster->slots[j] == cur_primary) {
-                    new_primary = sender;
-                    migrated_our_slots++;
-                }
-
-                /* If the sender who claims this slot is not in the same shard,
-                 * it must be a result of deliberate operator actions. Therefore,
-                 * we should honor it and clear the outstanding migrating_slots_to
-                 * state for the slot. Otherwise, we are looking at a failover within
-                 * the same shard and we should retain the migrating_slots_to state
-                 * for the slot in question */
-                clusterNode *mn = getMigratingSlotDest(j);
-                if (mn != NULL) {
-                    if (!are_in_same_shard) {
-                        serverLog(LL_NOTICE, "Slot %d is no longer being migrated to node %.40s (%s) in shard %.40s.",
-                                  j, mn->name, humanNodename(mn), mn->shard_id);
-                        setMigratingSlotDest(j, NULL);
+                    /* Was this slot mine, and still contains keys? Mark it as
+                     * a dirty slot. */
+                    if (server.cluster->slots[j] == myself && countKeysInSlot(j) && sender != myself) {
+                        dirty_slots[dirty_slots_count] = j;
+                        dirty_slots_count++;
                     }
-                }
 
-                /* Handle the case where we are importing this slot and the ownership changes */
-                clusterNode *in = getImportingSlotSource(j);
-                if (in != NULL &&
-                    in != sender) {
-                    /* Update importing_slots_from to point to the sender, if it is in the
-                     * same shard as the previous slot owner */
-                    if (areInSameShard(sender, in)) {
-                        serverLog(LL_VERBOSE,
-                                  "Failover occurred in migration source. Update importing "
-                                  "source for slot %d to node %.40s (%s) in shard %.40s.",
-                                  j, sender->name, humanNodename(sender), sender->shard_id);
-                        setImportingSlotSource(j, sender);
-                    } else {
-                        /* If the sender is from a different shard, it must be a result
-                         * of deliberate operator actions. We should clear the importing
-                         * state to conform to the operator's will. */
-                        serverLog(LL_NOTICE, "Slot %d is no longer being imported from node %.40s (%s) in shard %.40s.",
-                                  j, in->name, humanNodename(in), in->shard_id);
-                        setImportingSlotSource(j, NULL);
+                    if (clusterIsSlotExporting(j)) exporting_slots_count++;
+
+                    if (clusterIsSlotImporting(j)) importing_slots_count++;
+
+                    if (server.cluster->slots[j] == cur_primary) {
+                        new_primary = sender;
+                        migrated_our_slots++;
                     }
-                }
 
-                clusterDelSlot(j);
-                clusterAddSlot(sender, j);
-                bitmapClearBit(server.cluster->owner_not_claiming_slot, j);
-                clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_FSYNC_CONFIG);
-            }
-        } else {
-            if (server.cluster->slots[j] == sender) {
-                /* The slot is currently bound to the sender but the sender is no longer
-                 * claiming it. We don't want to unbind the slot yet as it can cause the cluster
-                 * to move to FAIL state and also throw client error. Keeping the slot bound to
-                 * the previous owner will cause a few client side redirects, but won't throw
-                 * any errors. We will keep track of the uncertainty in ownership to avoid
-                 * propagating misinformation about this slot's ownership using UPDATE
-                 * messages. */
-                bitmapSetBit(server.cluster->owner_not_claiming_slot, j);
-            }
+                    /* If the sender who claims this slot is not in the same shard,
+                     * it must be a result of deliberate operator actions. Therefore,
+                     * we should honor it and clear the outstanding migrating_slots_to
+                     * state for the slot. Otherwise, we are looking at a failover within
+                     * the same shard and we should retain the migrating_slots_to state
+                     * for the slot in question */
+                    clusterNode *mn = getMigratingSlotDest(j);
+                    if (mn != NULL) {
+                        if (!are_in_same_shard) {
+                            serverLog(LL_NOTICE, "Slot %d is no longer being migrated to node %.40s (%s) in shard %.40s.",
+                                      j, mn->name, humanNodename(mn), mn->shard_id);
+                            setMigratingSlotDest(j, NULL);
+                        }
+                    }
 
-            /* If the sender doesn't claim the slot, check if we are migrating
-             * any slot to its shard and if there is a primaryship change in
-             * the shard. Update the migrating_slots_to state to point to the
-             * sender if it has just taken over the primary role. */
-            clusterNode *mn = getMigratingSlotDest(j);
-            if (mn != NULL && mn != sender &&
-                (mn->configEpoch < senderConfigEpoch ||
-                 nodeIsReplica(mn)) &&
-                areInSameShard(mn, sender)) {
-                serverLog(LL_VERBOSE,
-                          "Failover occurred in migration target."
-                          " Slot %d is now being migrated to node %.40s (%s) in shard %.40s.",
-                          j, sender->name, humanNodename(sender), sender->shard_id);
-                setMigratingSlotDest(j, sender);
-                clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_FSYNC_CONFIG);
-            }
+                    /* Handle the case where we are importing this slot and the ownership changes */
+                    clusterNode *in = getImportingSlotSource(j);
+                    if (in != NULL &&
+                        in != sender) {
+                        /* Update importing_slots_from to point to the sender, if it is in the
+                         * same shard as the previous slot owner */
+                        if (areInSameShard(sender, in)) {
+                            serverLog(LL_VERBOSE,
+                                      "Failover occurred in migration source. Update importing "
+                                      "source for slot %d to node %.40s (%s) in shard %.40s.",
+                                      j, sender->name, humanNodename(sender), sender->shard_id);
+                            setImportingSlotSource(j, sender);
+                        } else {
+                            /* If the sender is from a different shard, it must be a result
+                             * of deliberate operator actions. We should clear the importing
+                             * state to conform to the operator's will. */
+                            serverLog(LL_NOTICE, "Slot %d is no longer being imported from node %.40s (%s) in shard %.40s.",
+                                      j, in->name, humanNodename(in), in->shard_id);
+                            setImportingSlotSource(j, NULL);
+                        }
+                    }
 
-            /* If the sender is no longer the owner of the slot, and I am a primary
-             * and I am still in the process of importing the slot from the sender,
-             * there are two possibilities:
-             *
-             * 1. I could be a replica of the target primary and missed the slot
-             *    finalization step on my primary due to my primary crashing during
-             *    the slot migration process.
-             * 2. I could be the original primary and missed the slot finalization
-             *    step entirely.
-             *
-             * To ensure complete slot coverage in either case, the following steps
-             * will be taken:
-             *
-             * 1. Remove the importing state for the specific slot.
-             * 2. Finalize the slot's ownership, if I am not already the owner of
-             *    the slot. */
-            if (nodeIsPrimary(myself) && getImportingSlotSource(j) == sender) {
-                serverLog(LL_NOTICE,
-                          "Slot %d is no longer being imported from node %.40s (%s) in shard %.40s;"
-                          " Clear my importing source for the slot.",
-                          j, sender->name, humanNodename(sender), sender->shard_id);
-                setImportingSlotSource(j, NULL);
-                /* Take over the slot ownership if I am not the owner yet*/
-                if (server.cluster->slots[j] != myself) {
-                    /* A primary reason why we are here is likely due to my primary crashing during the
-                     * slot finalization process, leading me to become the new primary without
-                     * inheriting the slot ownership, while the source shard continued and relinquished
-                     * theslot to its old primary. Under such circumstances, the node would undergo
-                     * an election and have its config epoch increased with consensus. That said, we
-                     * will still explicitly bump the config epoch here to be consistent with the
-                     * existing practice.
-                     * Nevertheless, there are scenarios where the source shard may have transferred slot
-                     * to a different shard. In these cases, the bumping of the config epoch
-                     * could result in that slot assignment getting reverted. However, we consider
-                     * this as a very rare case and err on the side of being consistent with the current
-                     * practice. */
                     clusterDelSlot(j);
-                    clusterAddSlot(myself, j);
-                    clusterBumpConfigEpochWithoutConsensus();
-                    clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE |
-                                         CLUSTER_TODO_FSYNC_CONFIG);
+                    clusterAddSlot(sender, j);
+                    bitmapClearBit(server.cluster->owner_not_claiming_slot, j);
+                    clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_FSYNC_CONFIG);
+                }
+            } else {
+                if (server.cluster->slots[j] == sender) {
+                    /* The slot is currently bound to the sender but the sender is no longer
+                     * claiming it. We don't want to unbind the slot yet as it can cause the cluster
+                     * to move to FAIL state and also throw client error. Keeping the slot bound to
+                     * the previous owner will cause a few client side redirects, but won't throw
+                     * any errors. We will keep track of the uncertainty in ownership to avoid
+                     * propagating misinformation about this slot's ownership using UPDATE
+                     * messages. */
+                    bitmapSetBit(server.cluster->owner_not_claiming_slot, j);
+                }
+
+                /* If the sender doesn't claim the slot, check if we are migrating
+                 * any slot to its shard and if there is a primaryship change in
+                 * the shard. Update the migrating_slots_to state to point to the
+                 * sender if it has just taken over the primary role. */
+                clusterNode *mn = getMigratingSlotDest(j);
+                if (mn != NULL && mn != sender &&
+                    (mn->configEpoch < senderConfigEpoch ||
+                     nodeIsReplica(mn)) &&
+                    areInSameShard(mn, sender)) {
+                    serverLog(LL_VERBOSE,
+                              "Failover occurred in migration target."
+                              " Slot %d is now being migrated to node %.40s (%s) in shard %.40s.",
+                              j, sender->name, humanNodename(sender), sender->shard_id);
+                    setMigratingSlotDest(j, sender);
+                    clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_FSYNC_CONFIG);
+                }
+
+                /* If the sender is no longer the owner of the slot, and I am a primary
+                 * and I am still in the process of importing the slot from the sender,
+                 * there are two possibilities:
+                 *
+                 * 1. I could be a replica of the target primary and missed the slot
+                 *    finalization step on my primary due to my primary crashing during
+                 *    the slot migration process.
+                 * 2. I could be the original primary and missed the slot finalization
+                 *    step entirely.
+                 *
+                 * To ensure complete slot coverage in either case, the following steps
+                 * will be taken:
+                 *
+                 * 1. Remove the importing state for the specific slot.
+                 * 2. Finalize the slot's ownership, if I am not already the owner of
+                 *    the slot. */
+                if (nodeIsPrimary(myself) && getImportingSlotSource(j) == sender) {
+                    serverLog(LL_NOTICE,
+                              "Slot %d is no longer being imported from node %.40s (%s) in shard %.40s;"
+                              " Clear my importing source for the slot.",
+                              j, sender->name, humanNodename(sender), sender->shard_id);
+                    setImportingSlotSource(j, NULL);
+                    /* Take over the slot ownership if I am not the owner yet*/
+                    if (server.cluster->slots[j] != myself) {
+                        /* A primary reason why we are here is likely due to my primary crashing during the
+                         * slot finalization process, leading me to become the new primary without
+                         * inheriting the slot ownership, while the source shard continued and relinquished
+                         * theslot to its old primary. Under such circumstances, the node would undergo
+                         * an election and have its config epoch increased with consensus. That said, we
+                         * will still explicitly bump the config epoch here to be consistent with the
+                         * existing practice.
+                         * Nevertheless, there are scenarios where the source shard may have transferred slot
+                         * to a different shard. In these cases, the bumping of the config epoch
+                         * could result in that slot assignment getting reverted. However, we consider
+                         * this as a very rare case and err on the side of being consistent with the current
+                         * practice. */
+                        clusterDelSlot(j);
+                        clusterAddSlot(myself, j);
+                        clusterBumpConfigEpochWithoutConsensus();
+                        clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE |
+                                             CLUSTER_TODO_FSYNC_CONFIG);
+                    }
                 }
             }
         }

@@ -750,8 +750,14 @@ int redis_check_rdb(char *rdbfilename, FILE *fp) {
             uint64_t num_slot_ranges;
             if ((num_slot_ranges = rdbLoadLen(rdb, NULL)) == RDB_LENERR) goto eoferr;
             for (uint64_t i = 0; i < num_slot_ranges; i++) {
-                if (rdbLoadLen(rdb, NULL) == RDB_LENERR) goto eoferr;
-                if (rdbLoadLen(rdb, NULL) == RDB_LENERR) goto eoferr;
+                uint64_t start_slot, end_slot;
+                if ((start_slot = rdbLoadLen(rdb, NULL)) == RDB_LENERR) goto eoferr;
+                if ((end_slot = rdbLoadLen(rdb, NULL)) == RDB_LENERR) goto eoferr;
+                if (start_slot >= CLUSTER_SLOTS || end_slot >= CLUSTER_SLOTS || start_slot > end_slot) {
+                    rdbCheckError("Invalid slot import range in RDB: start=%llu end=%llu",
+                                  (unsigned long long)start_slot, (unsigned long long)end_slot);
+                    goto err;
+                }
             }
             continue; /* Read type again. */
         } else if (type == RDB_OPCODE_AUX) {

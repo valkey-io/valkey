@@ -455,6 +455,11 @@ tags "modules" {
             } else {
                 fail "Import complete event never triggered on replica"
             }
+            wait_for_condition 50 100 {
+                [R 2 hooks.event_last atomic-slot-migration-export-complete-jobname] ne ""
+            } else {
+                fail "Export complete event never triggered on primary"
+            }
             assert_equal [R 0 hooks.event_last atomic-slot-migration-import-complete-numslotranges] "1"
             assert_equal [R 0 hooks.event_last atomic-slot-migration-import-complete-slotranges] "16383-16383"
             assert_equal [R 3 hooks.event_last atomic-slot-migration-import-complete-numslotranges] "1"

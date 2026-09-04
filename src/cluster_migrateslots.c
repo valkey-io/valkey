@@ -27,8 +27,13 @@ typedef enum slotMigrationJobState {
     SLOT_EXPORT_CONNECTING,
     SLOT_EXPORT_SEND_AUTH,
     SLOT_EXPORT_READ_AUTH_RESPONSE,
-    SLOT_EXPORT_SEND_ESTABLISH,
-    SLOT_EXPORT_READ_ESTABLISH_RESPONSE,
+    SLOT_EXPORT_SEND_HANDSHAKE,
+    SLOT_EXPORT_READ_HANDSHAKE_RESPONSE,
+    SLOT_EXPORT_CONNECTING_SNAPSHOT,
+    SLOT_EXPORT_SEND_SNAPSHOT_AUTH,
+    SLOT_EXPORT_READ_SNAPSHOT_AUTH_RESPONSE,
+    SLOT_EXPORT_LINKING_SNAPSHOT,
+    SLOT_EXPORT_READ_LINK_RESPONSE,
     SLOT_EXPORT_WAITING_TO_SNAPSHOT,
     SLOT_EXPORT_SNAPSHOTTING,
     SLOT_EXPORT_STREAMING,
@@ -89,6 +94,9 @@ typedef struct slotMigrationJob {
     /* State needed during client establishment */
     connection *conn; /* Connection to slot import source node. */
     sds response_buf;
+    bool use_dual_channel;     /* True if dual channel is negotiated and used. */
+    connection *snapshot_conn; /* Source side: temporary connection for snapshot channel before passing to child. */
+    client *snapshot_client;   /* Client associated with the snapshot connection (used on both source and target sides). */
 } slotMigrationJob;
 
 static bool isSlotMigrationJobFinished(slotMigrationJob *job);
@@ -115,7 +123,11 @@ static sds generateSlotMigrationJobDescription(slotMigrationJob *job, clusterNod
 static void slotExportTryUnpause(void);
 static slotMigrationJob *clusterLookupMigrationJob(sds name);
 static sds generateSyncSlotsEstablishCommand(slotMigrationJob *job);
+static sds generateSyncSlotsLinkChannelCommand(slotMigrationJob *job);
 static void clusterCleanupSlotMigrationLog(size_t max_len);
+static bool isSlotMigrationControlClient(client *c);
+static void initMigrationClientReplication(client *c, sds backfill_cmd);
+static int readAndParseSimpleReply(connection *conn, slotMigrationJob *job, size_t *reply_len);
 
 /* Create an empty list of slot ranges. */
 list *createSlotRangeList(void) {
@@ -845,22 +857,26 @@ slotMigrationJob *createSlotImportJob(client *c,
     job->client = c;
     job->client->slot_migration_job = job;
 
-    /* We treat slot imports like primaries. Primaries are expected to have a
-     * dedicated query buffer and allocated replication data.
-     *
-     * We also backfill this job's establish command (which would have been
-     * lost, as we did not have a dedicated query buffer before this point). */
-    initClientReplicationData(job->client);
-    if (!job->client->querybuf) {
-        job->client->querybuf = generateSyncSlotsEstablishCommand(job);
-        job->client->qb_pos = sdslen(job->client->querybuf);
-        /* The backfilled ESTABLISH command is already applied, so qb_applied
-         * must match qb_pos for commandProcessed() to advance reploff. */
-        job->client->qb_applied = job->client->qb_pos;
-    }
-    job->client->repl_data->read_reploff = sdslen(job->client->querybuf);
+    initMigrationClientReplication(job->client, generateSyncSlotsEstablishCommand(job));
 
     return job;
+}
+
+/* We treat slot imports like primaries. Primaries are expected to have a
+ * dedicated query buffer and allocated replication data.
+ *
+ * We also backfill this job's establish command (which would have been
+ * lost, as we did not have a dedicated query buffer before this point). */
+static void initMigrationClientReplication(client *c, sds backfill_cmd) {
+    initClientReplicationData(c);
+    if (!c->querybuf) {
+        c->querybuf = backfill_cmd;
+        c->qb_pos = sdslen(c->querybuf);
+        c->qb_applied = c->qb_pos;
+    } else {
+        sdsfree(backfill_cmd);
+    }
+    c->repl_data->read_reploff = sdslen(c->querybuf);
 }
 
 /* This function implements the final part of manual slot failovers,
@@ -1354,11 +1370,11 @@ int connectSlotExportJob(slotMigrationJob *job) {
 /* Proceed with a previously started connection. If no problems have occurred,
  * C_OK is returned and completed is set. C_ERR will be returned if an issue was
  * encountered. */
-int proceedWithSlotExportJobConnecting(slotMigrationJob *job, bool *completed) {
-    serverAssert(job->type == SLOT_MIGRATION_EXPORT && job->conn);
+static int proceedWithConnectionEstablishment(connection *conn, bool *completed) {
+    serverAssert(conn);
     *completed = false;
 
-    switch (connGetState(job->conn)) {
+    switch (connGetState(conn)) {
     case CONN_STATE_CONNECTED:
         *completed = true;
         return C_OK;
@@ -1374,7 +1390,7 @@ int proceedWithSlotExportJobConnecting(slotMigrationJob *job, bool *completed) {
 void slotMigrationJobReadAuthResponse(connection *conn) {
     slotMigrationJob *job = (slotMigrationJob *)connGetPrivateData(conn);
 
-    sds err = receiveSynchronousResponse(job->conn);
+    sds err = receiveSynchronousResponse(conn);
     if (err == NULL) {
         finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_FAILED, "Target node did not respond to AUTH command");
         return;
@@ -1386,20 +1402,26 @@ void slotMigrationJobReadAuthResponse(connection *conn) {
         sdsfree(status_msg);
         return;
     }
-
     sdsfree(err);
-    serverLog(LL_NOTICE, "Successfully authenticated slot migration %s", job->description);
-    updateSlotMigrationJobState(job, SLOT_EXPORT_SEND_ESTABLISH);
+
+    if (job->state == SLOT_EXPORT_READ_AUTH_RESPONSE) {
+        serverLog(LL_NOTICE, "Successfully authenticated slot migration %s", job->description);
+        updateSlotMigrationJobState(job, SLOT_EXPORT_SEND_HANDSHAKE);
+    } else {
+        serverLog(LL_NOTICE, "Successfully authenticated slot migration snapshot channel %s", job->description);
+        updateSlotMigrationJobState(job, SLOT_EXPORT_LINKING_SNAPSHOT);
+    }
     proceedWithSlotMigration(job);
 }
 
 /* Perform the authentication steps needed to authenticate a slot migration
  * job's connection. */
-void slotMigrationJobSendAuth(slotMigrationJob *job) {
+void slotMigrationJobSendAuth(connection *conn) {
+    slotMigrationJob *job = (slotMigrationJob *)connGetPrivateData(conn);
     serverAssert(job->type == SLOT_MIGRATION_EXPORT);
     serverAssert(server.primary_auth);
 
-    sds err = replicationSendAuth(job->conn);
+    sds err = replicationSendAuth(conn);
     if (err) {
         sds status_msg = sdscatfmt(sdsempty(), "Failed to send AUTH command to target node: %s", err);
         finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_FAILED, status_msg);
@@ -1408,8 +1430,12 @@ void slotMigrationJobSendAuth(slotMigrationJob *job) {
         return;
     }
 
-    connSetReadHandler(job->conn, slotMigrationJobReadAuthResponse);
-    updateSlotMigrationJobState(job, SLOT_EXPORT_READ_AUTH_RESPONSE);
+    connSetReadHandler(conn, slotMigrationJobReadAuthResponse);
+    if (job->state == SLOT_EXPORT_SEND_AUTH) {
+        updateSlotMigrationJobState(job, SLOT_EXPORT_READ_AUTH_RESPONSE);
+    } else {
+        updateSlotMigrationJobState(job, SLOT_EXPORT_READ_SNAPSHOT_AUTH_RESPONSE);
+    }
 }
 
 /* Initialize the client for the slot migration job, which should already be
@@ -1447,12 +1473,22 @@ sds generateSyncSlotsEstablishCommand(slotMigrationJob *job) {
     return result;
 }
 
+static sds generateSyncSlotsLinkChannelCommand(slotMigrationJob *job) {
+    return sdscatprintf(sdsempty(), "*4\r\n$7\r\nCLUSTER\r\n$9\r\nSYNCSLOTS\r\n$12\r\nLINK-CHANNEL\r\n$40\r\n%.40s\r\n",
+                        job->name);
+}
+
 /* There are two potential triggers for streaming (whichever happens first):
  *   1. SYNCSLOTS REQUEST-PAUSE command
  *   2. BGSAVE child process completes
  */
 void slotExportBeginStreaming(slotMigrationJob *job) {
     serverAssert(job->type == SLOT_MIGRATION_EXPORT);
+    if (job->use_dual_channel && job->snapshot_client) {
+        job->snapshot_client->slot_migration_job = NULL;
+        freeClientAsync(job->snapshot_client);
+        job->snapshot_client = NULL;
+    }
     updateSlotMigrationJobState(job, SLOT_EXPORT_STREAMING);
 
     /* When the slot export is not ready, it will skip adding the client to the
@@ -1625,72 +1661,97 @@ void killSlotMigrationChild(void) {
 /* Begin the snapshot for the provided job in a child process. */
 int slotExportJobBeginSnapshotToTargetSocket(slotMigrationJob *job) {
     if (hasActiveChildProcess()) return C_ERR;
+    serverAssert(server.slot_migration_pipe_read == -1 && server.slot_migration_child_exit_pipe == -1);
 
     pid_t childpid;
     int pipefds[2], slot_migration_pipe_write = -1, safe_to_exit_pipe = -1;
-    serverAssert(server.slot_migration_pipe_read == -1 && server.slot_migration_child_exit_pipe == -1);
 
-    /* Before to fork, create a pipe that is used to transfer the slot data bytes to
-     * the parent, we can't let it write directly to the sockets, since in case
-     * of TLS we must let the parent handle a continuous TLS state when the
-     * child terminates and parent takes over. */
-    if (anetPipe(pipefds, O_NONBLOCK, 0) == -1) return C_ERR;
-    server.slot_migration_pipe_read = pipefds[0]; /* read end */
-    slot_migration_pipe_write = pipefds[1];       /* write end */
+    if (!job->use_dual_channel) {
+        /* Before to fork, create a pipe that is used to transfer the slot data bytes to
+         * the parent, we can't let it write directly to the sockets, since in case
+         * of TLS we must let the parent handle a continuous TLS state when the
+         * child terminates and parent takes over. */
+        if (anetPipe(pipefds, O_NONBLOCK, 0) == -1) return C_ERR;
+        server.slot_migration_pipe_read = pipefds[0]; /* read end */
+        slot_migration_pipe_write = pipefds[1];       /* write end */
 
-    /* create another pipe that is used by the parent to signal to the child
-     * that it can exit. */
-    if (anetPipe(pipefds, 0, 0) == -1) {
-        close(slot_migration_pipe_write);
-        close(server.slot_migration_pipe_read);
-        server.slot_migration_pipe_read = -1;
-        return C_ERR;
+        /* create another pipe that is used by the parent to signal to the child
+         * that it can exit. */
+        if (anetPipe(pipefds, 0, 0) == -1) {
+            close(slot_migration_pipe_write);
+            close(server.slot_migration_pipe_read);
+            server.slot_migration_pipe_read = -1;
+            return C_ERR;
+        }
+        safe_to_exit_pipe = pipefds[0];                     /* read end */
+        server.slot_migration_child_exit_pipe = pipefds[1]; /* write end */
+
+        server.slot_migration_pipe_conn = job->client->conn;
+    } else {
+        /* Put the socket in blocking mode to simplify transfer in child */
+        connBlock(job->snapshot_client->conn);
+        connSendTimeout(job->snapshot_client->conn, server.repl_timeout * 1000);
     }
-    safe_to_exit_pipe = pipefds[0];                     /* read end */
-    server.slot_migration_child_exit_pipe = pipefds[1]; /* write end */
-
-    server.slot_migration_pipe_conn = job->client->conn;
 
     if ((childpid = serverFork(CHILD_TYPE_SLOT_MIGRATION)) == 0) {
         /* Child */
         rio aof;
-        rioInitWithFd(&aof, slot_migration_pipe_write);
-        /* Close the reading part, so that if the parent crashes, the child will
-         * get a write error and exit. */
-        close(server.slot_migration_pipe_read);
+        int retval;
+        if (job->use_dual_channel) {
+            connection *conn = job->snapshot_client->conn;
+            rioInitWithConnset(&aof, &conn, 1);
+        } else {
+            rioInitWithFd(&aof, slot_migration_pipe_write);
+            /* Close the reading part, so that if the parent crashes, the child will
+             * get a write error and exit. */
+            close(server.slot_migration_pipe_read);
+        }
 
         serverSetProcTitle("valkey-slot-migration-to-target");
         serverSetCpuAffinity(server.bgsave_cpulist);
 
-        int retval = childSnapshotForSyncSlot(&aof, job);
+        retval = childSnapshotForSyncSlot(&aof, job);
         if (retval == C_OK && rioFlush(&aof) == 0) retval = C_ERR;
         if (retval == C_OK) {
             sendChildCowInfo(CHILD_INFO_TYPE_SLOT_MIGRATION_COW_SIZE, "Slot migration");
         }
-        rioFreeFd(&aof);
-        /* wake up the reader, tell it we're done. */
-        close(slot_migration_pipe_write);
-        close(server.slot_migration_child_exit_pipe); /* close write end so that we can detect the close on the parent. */
-        ssize_t dummy = read(safe_to_exit_pipe, pipefds, 1);
-        UNUSED(dummy);
+
+        if (job->use_dual_channel) {
+            rioFreeConnset(&aof);
+            /* Close the connection to the target so they know we are done.
+             * Note that we only block them, but did not duplicate the FDs, so
+             * closing them in the child will close them in the parent too. */
+            connClose(job->snapshot_client->conn);
+        } else {
+            rioFreeFd(&aof);
+            /* wake up the reader, tell it we're done. */
+            close(slot_migration_pipe_write);
+            close(server.slot_migration_child_exit_pipe); /* close write end so that we can detect the close on the parent. */
+            ssize_t dummy = read(safe_to_exit_pipe, pipefds, 1);
+            UNUSED(dummy);
+        }
         exitFromChild((retval == C_OK) ? 0 : 1);
     } else {
         /* Parent */
         if (childpid == -1) {
             serverLog(LL_WARNING, "Can't begin slot migration snapshot in background: fork: %s", strerror(errno));
-            close(slot_migration_pipe_write);
-            close(server.slot_migration_pipe_read);
-            close(server.slot_migration_child_exit_pipe);
-            server.slot_migration_pipe_conn = NULL;
+            if (!job->use_dual_channel) {
+                close(slot_migration_pipe_write);
+                close(server.slot_migration_pipe_read);
+                close(server.slot_migration_child_exit_pipe);
+                server.slot_migration_pipe_conn = NULL;
+            }
             return C_ERR;
         }
 
         serverLog(LL_NOTICE, "Started child process %ld for slot migration %s", (long)childpid, job->description);
-        close(slot_migration_pipe_write); /* close write in parent so that it can detect the close on the child. */
-        if (aeCreateFileEvent(server.el, server.slot_migration_pipe_read, AE_READABLE, slotMigrationPipeReadHandler, NULL) == AE_ERR) {
-            serverPanic("Unrecoverable error creating server.slot_migration_pipe_read file event.");
+        if (!job->use_dual_channel) {
+            close(slot_migration_pipe_write); /* close write in parent so that it can detect the close on the child. */
+            if (aeCreateFileEvent(server.el, server.slot_migration_pipe_read, AE_READABLE, slotMigrationPipeReadHandler, NULL) == AE_ERR) {
+                serverPanic("Unrecoverable error creating server.slot_migration_pipe_read file event.");
+            }
+            close(safe_to_exit_pipe);
         }
-        close(safe_to_exit_pipe);
         if (server.debug_pause_after_fork) debugPauseProcess();
         return C_OK;
     }
@@ -1906,17 +1967,148 @@ slotMigrationJob *createSlotExportJob(clusterNode *target_node,
     job->state = SLOT_EXPORT_CONNECTING;
     job->slot_ranges = slot_ranges;
     job->slot_ranges_str = representSlotRangeList(slot_ranges);
-    getRandomHexChars(job->name, sizeof(job->name));
+    getRandomHexChars(job->name, CLUSTER_NAMELEN);
     memcpy(job->target_node_name, target_node->name, CLUSTER_NAMELEN);
     memcpy(job->source_node_name, server.cluster->myself->name, CLUSTER_NAMELEN);
     job->description = generateSlotMigrationJobDescription(job, target_node);
     return job;
 }
 
-/* Read a response to the SYNCSLOTS ESTABLISH response, accumulating it in a
- * buffer, and moving to the next stage of the migration if the response is a
- * success. If there is an error, fail the migration with the error message. */
-void slotMigrationJobReadEstablishResponse(connection *conn) {
+/* Establish the secondary snapshot connection (snapshot channel) to the target node. */
+static int connectSlotExportSnapshotChannel(slotMigrationJob *job) {
+    clusterNode *n = clusterLookupNode(job->target_node_name, CLUSTER_NAMELEN);
+    if (n == NULL) return C_ERR;
+    int port = getNodeDefaultReplicationPort(n);
+
+    serverLog(LL_NOTICE, "Connecting slot migration snapshot channel %s (ip: %s, port %d)",
+              job->description, n->ip, port);
+
+    job->snapshot_conn = connCreate(connTypeOfReplication());
+    if (connConnect(job->snapshot_conn, n->ip, port, server.bind_source_addr,
+                    0, slotExportConnectHandler) == C_ERR) {
+        return C_ERR;
+    }
+    connSetPrivateData(job->snapshot_conn, job);
+    return C_OK;
+}
+
+static size_t nextSimpleReplyLen(const char *buf, size_t len) {
+    if (len < 3) return 0;
+    char *nl = memchr(buf, '\n', len);
+    if (nl && nl > buf && *(nl - 1) == '\r') {
+        return nl - buf + 1;
+    }
+    return 0;
+}
+
+/* Read from the connection and parse a single simple reply (e.g. +OK or -ERR).
+ *
+ * If a full reply is parsed, it returns C_OK and sets *reply_len to the length of the reply.
+ * If more data is needed to parse a full reply, it returns C_OK and sets *reply_len to 0.
+ * If a fatal connection error or buffer limit error occurs, it fails the migration job
+ * internally and returns C_ERR.
+ *
+ * This helper accumulates data in job->response_buf. Callers should consume/free the
+ * parsed reply from job->response_buf when *reply_len > 0. */
+static int readAndParseSimpleReply(connection *conn, slotMigrationJob *job, size_t *reply_len) {
+    *reply_len = 0;
+    if (job->response_buf) {
+        *reply_len = nextSimpleReplyLen(job->response_buf, sdslen(job->response_buf));
+        if (*reply_len > 0) {
+            return C_OK;
+        }
+    } else {
+        job->response_buf = sdsempty();
+        job->response_buf = sdsMakeRoomForNonGreedy(job->response_buf, PROTO_IOBUF_LEN);
+    }
+
+    int result = connRead(conn,
+                          ((char *)job->response_buf) + sdslen(job->response_buf),
+                          sdsavail(job->response_buf));
+    if (result > 0) {
+        sdsIncrLen(job->response_buf, result);
+    }
+    if (conn->state != CONN_STATE_CONNECTED) {
+        finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_FAILED, "Connection lost");
+        return C_ERR;
+    }
+
+    *reply_len = nextSimpleReplyLen(job->response_buf, sdslen(job->response_buf));
+    if (*reply_len == 0) {
+        if (sdsavail(job->response_buf) == 0) {
+            finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_FAILED,
+                                   "Response to command is larger than buffer limit");
+            return C_ERR;
+        }
+        return C_OK;
+    }
+    return C_OK;
+}
+
+/* Read and process the target node's response to the LINK-CHANNEL command. */
+static void slotMigrationJobReadLinkResponse(connection *conn) {
+    slotMigrationJob *job = (slotMigrationJob *)connGetPrivateData(conn);
+    if (!isSlotMigrationJobInProgress(job)) return;
+
+    size_t reply_len = 0;
+    if (readAndParseSimpleReply(conn, job, &reply_len) == C_ERR) return;
+    if (reply_len == 0) return;
+
+    if (job->response_buf[0] == '-') {
+        sds err = sdsnewlen(job->response_buf, reply_len);
+        sds status_msg = sdscatfmt(sdsempty(), "Link channel failed: %S", err);
+        finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_FAILED, status_msg);
+        sdsfree(err);
+        sdsfree(status_msg);
+    } else if (job->response_buf[0] == '+' && !strncasecmp(job->response_buf + 1, "OK", 2)) {
+        updateSlotMigrationJobState(job, SLOT_EXPORT_WAITING_TO_SNAPSHOT);
+        connSetReadHandler(job->snapshot_conn, NULL);
+
+        job->snapshot_client = createClient(job->snapshot_conn);
+        job->snapshot_conn = NULL;
+        clientSetUser(job->snapshot_client, NULL, 1);
+        job->snapshot_client->slot_migration_job = job;
+        initClientReplicationData(job->snapshot_client);
+    } else {
+        finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_FAILED, "Unexpected link reply");
+    }
+
+    sdsfree(job->response_buf);
+    job->response_buf = NULL;
+    clusterDoBeforeSleep(CLUSTER_TODO_HANDLE_SLOT_MIGRATION);
+}
+
+/* Parse capabilities response if present in the link response buffer. */
+static int handleCapaReplyIfPresent(slotMigrationJob *job, size_t *reply_len) {
+    size_t len = nextSimpleReplyLen(job->response_buf, sdslen(job->response_buf));
+    if (len == 0) return 0;
+
+    char *p = job->response_buf;
+    if (len >= 7 && p[0] == '+' && !strncasecmp(p + 1, "CAPA", 4)) {
+        /* CAPA succeeded. Parse capabilities. */
+        if (len >= 8 && p[5] == ' ') {
+            int count;
+            sds *tokens = sdssplitlen(p + 6, len - 8, " ", 1, &count);
+            if (tokens) {
+                for (int i = 0; i < count; i++) {
+                    if (!strcasecmp(tokens[i], "dual-channel")) {
+                        job->use_dual_channel = true;
+                    }
+                }
+                sdsfreesplitres(tokens, count);
+            }
+        }
+        *reply_len = len;
+        return 1;
+    }
+    return 0; /* Not CAPA reply */
+}
+
+/* Read the pipelined handshake responses (which may include a CAPA response
+ * and must include an ESTABLISH response) from the connection, accumulating
+ * them in a buffer. It processes the responses and moves the migration to the
+ * next stage if successful. If there is a fatal error, it fails the migration. */
+static void slotMigrationJobReadHandshakeResponse(connection *conn) {
     client *c = (client *)connGetPrivateData(conn);
 
     /* Don't read while an IO thread may be concurrently writing on this
@@ -1930,56 +2122,43 @@ void slotMigrationJobReadEstablishResponse(connection *conn) {
     if (c->flag.close_asap || !isSlotMigrationJobInProgress(job)) {
         return;
     }
-    if (!job->response_buf) {
-        job->response_buf = sdsempty();
-        job->response_buf = sdsMakeRoomForNonGreedy(job->response_buf,
-                                                    PROTO_IOBUF_LEN);
+
+    size_t reply_len = 0;
+    if (readAndParseSimpleReply(conn, job, &reply_len) == C_ERR) return;
+    if (reply_len == 0) return;
+
+    size_t capa_reply_len = 0;
+    int capa_res = handleCapaReplyIfPresent(job, &capa_reply_len);
+    if (capa_res == 1) {
+        /* Consume CAPA reply */
+        sdsrange(job->response_buf, capa_reply_len, -1);
+        if (readAndParseSimpleReply(conn, job, &reply_len) == C_ERR) return;
+        if (reply_len == 0) return;
     }
 
-    int result;
-    result = connRead(conn,
-                      ((char *)job->response_buf) + sdslen(job->response_buf),
-                      sdsavail(job->response_buf));
-    if (result > 0) {
-        sdsIncrLen(job->response_buf, result);
-    }
-    if (conn->state != CONN_STATE_CONNECTED) {
-        freeClientAsync(c);
-        return;
-    }
-    if (sdslen(job->response_buf) < 2 ||
-        job->response_buf[sdslen(job->response_buf) - 2] != '\r' ||
-        job->response_buf[sdslen(job->response_buf) - 1] != '\n') {
-        if (sdsavail(job->response_buf) == 0) {
-            /* We filled up the buffer, and we still have no response. Only
-             * choice is to stop the migration. */
-            finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_FAILED,
-                                   "Response to establish job is larger than "
-                                   "buffer limit");
-            return;
-        }
-        connSetReadHandler(conn, slotMigrationJobReadEstablishResponse);
-        return;
-    }
-    if (job->response_buf[0] == '-') {
-        sds err_msg = sdscatfmt(sdsempty(), "Received error during handshake "
-                                            "to target: %S",
-                                job->response_buf);
+    char *p = job->response_buf;
+    if (p[0] == '-') {
+        sds err = sdsnewlen(p, reply_len);
+        sds err_msg = sdscatfmt(sdsempty(), "Received error during handshake to target: %S", err);
         finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_FAILED, err_msg);
+        sdsfree(err);
         sdsfree(err_msg);
-        return;
+    } else if (p[0] == '+' && !strncasecmp(p + 1, "OK", 2)) {
+        sendSyncSlotsMessage(job, "ACK");
+        if (job->use_dual_channel) {
+            updateSlotMigrationJobState(job, SLOT_EXPORT_CONNECTING_SNAPSHOT);
+        } else {
+            updateSlotMigrationJobState(job, SLOT_EXPORT_WAITING_TO_SNAPSHOT);
+        }
+        connSetReadHandler(conn, readQueryFromClient);
+        proceedWithSlotMigration(job);
+    } else {
+        finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_FAILED, "Unexpected reply to handshake");
     }
-
-    updateSlotMigrationJobState(job, SLOT_EXPORT_WAITING_TO_SNAPSHOT);
-    connSetReadHandler(conn, readQueryFromClient);
-    clusterDoBeforeSleep(CLUSTER_TODO_HANDLE_SLOT_MIGRATION);
-
-    /* We need to send an ACK to take the import out of WAIT_ACK state. This
-     * will kickstart the health checks, effectively taking the job online. */
-    sendSyncSlotsMessage(job, "ACK");
 
     sdsfree(job->response_buf);
     job->response_buf = NULL;
+    clusterDoBeforeSleep(CLUSTER_TODO_HANDLE_SLOT_MIGRATION);
 }
 
 /* ----------------------------- TARGET & SOURCE ---------------------------- */
@@ -2038,8 +2217,9 @@ void proceedWithSlotMigration(slotMigrationJob *job) {
             bool completed = false;
             if (!job->conn) {
                 status = connectSlotExportJob(job);
-            } else {
-                status = proceedWithSlotExportJobConnecting(job, &completed);
+            }
+            if (status == C_OK) {
+                status = proceedWithConnectionEstablishment(job->conn, &completed);
             }
             if (status == C_ERR) {
                 const char *conn_err = job->conn ? connGetLastError(job->conn) : "target node not found";
@@ -2058,25 +2238,73 @@ void proceedWithSlotMigration(slotMigrationJob *job) {
             if (server.primary_auth) {
                 updateSlotMigrationJobState(job, SLOT_EXPORT_SEND_AUTH);
             } else {
-                updateSlotMigrationJobState(job, SLOT_EXPORT_SEND_ESTABLISH);
+                updateSlotMigrationJobState(job, SLOT_EXPORT_SEND_HANDSHAKE);
             }
             continue;
         }
         case SLOT_EXPORT_SEND_AUTH:
-            slotMigrationJobSendAuth(job);
-            continue;
+            slotMigrationJobSendAuth(job->conn);
+            return;
         case SLOT_EXPORT_READ_AUTH_RESPONSE:
             /* We are still reading back the response, nothing to do in cron */
             return;
-        case SLOT_EXPORT_SEND_ESTABLISH:
+        case SLOT_EXPORT_SEND_HANDSHAKE:
             initSlotExportJobClient(job);
+            if (server.cluster_slot_migration_dual_channel) {
+                addReplySds(job->client, sdscatprintf(sdsempty(),
+                                                      "*4\r\n$7\r\nCLUSTER\r\n$9\r\nSYNCSLOTS\r\n$4\r\nCAPA\r\n$12\r\ndual-channel\r\n"));
+            }
             addReplySds(job->client, generateSyncSlotsEstablishCommand(job));
             connSetReadHandler(job->client->conn,
-                               slotMigrationJobReadEstablishResponse);
+                               slotMigrationJobReadHandshakeResponse);
             updateSlotMigrationJobState(job,
-                                        SLOT_EXPORT_READ_ESTABLISH_RESPONSE);
+                                        SLOT_EXPORT_READ_HANDSHAKE_RESPONSE);
             return;
-        case SLOT_EXPORT_READ_ESTABLISH_RESPONSE:
+        case SLOT_EXPORT_READ_HANDSHAKE_RESPONSE:
+            /* We are still reading back the response, nothing to do in cron */
+            return;
+        case SLOT_EXPORT_CONNECTING_SNAPSHOT: {
+            int status = C_OK;
+            bool completed = false;
+            if (!job->snapshot_conn) {
+                status = connectSlotExportSnapshotChannel(job);
+            }
+            if (status == C_OK) {
+                status = proceedWithConnectionEstablishment(job->snapshot_conn, &completed);
+            }
+            if (status == C_ERR) {
+                finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_FAILED,
+                                       "Failed to connect snapshot channel");
+                return;
+            } else if (completed) {
+                if (server.primary_auth) {
+                    updateSlotMigrationJobState(job, SLOT_EXPORT_SEND_SNAPSHOT_AUTH);
+                } else {
+                    updateSlotMigrationJobState(job, SLOT_EXPORT_LINKING_SNAPSHOT);
+                }
+                continue;
+            }
+            return;
+        }
+        case SLOT_EXPORT_SEND_SNAPSHOT_AUTH:
+            slotMigrationJobSendAuth(job->snapshot_conn);
+            return;
+        case SLOT_EXPORT_READ_SNAPSHOT_AUTH_RESPONSE:
+            /* We are still reading back the response, nothing to do in cron */
+            return;
+        case SLOT_EXPORT_LINKING_SNAPSHOT: {
+            sds cmd = generateSyncSlotsLinkChannelCommand(job);
+            connSetReadHandler(job->snapshot_conn, slotMigrationJobReadLinkResponse);
+            int nwritten = connWrite(job->snapshot_conn, cmd, sdslen(cmd));
+            sdsfree(cmd);
+            if (nwritten < 0 && connGetState(job->snapshot_conn) != CONN_STATE_CONNECTED) {
+                finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_FAILED, "Failed to send link command");
+            } else {
+                updateSlotMigrationJobState(job, SLOT_EXPORT_READ_LINK_RESPONSE);
+            }
+            return;
+        }
+        case SLOT_EXPORT_READ_LINK_RESPONSE:
             /* We are still reading back the response, nothing to do in cron */
             return;
         case SLOT_EXPORT_WAITING_TO_SNAPSHOT:
@@ -2205,6 +2433,16 @@ void resetSlotMigrationJob(slotMigrationJob *job) {
         job->conn = NULL;
     }
 
+    if (job->snapshot_client) {
+        job->snapshot_client->slot_migration_job = NULL;
+        freeClientAsync(job->snapshot_client);
+        job->snapshot_client = NULL;
+    }
+    if (job->snapshot_conn) {
+        connClose(job->snapshot_conn);
+        job->snapshot_conn = NULL;
+    }
+
     sdsfree(job->response_buf);
     job->response_buf = NULL;
 }
@@ -2240,9 +2478,14 @@ const char *slotMigrationJobStateToString(slotMigrationJobState state) {
     case SLOT_EXPORT_CONNECTING: return "connecting";
     case SLOT_EXPORT_SEND_AUTH: return "sending-auth-command";
     case SLOT_EXPORT_READ_AUTH_RESPONSE: return "reading-auth-response";
-    case SLOT_EXPORT_SEND_ESTABLISH: return "sending-establish-command";
-    case SLOT_EXPORT_READ_ESTABLISH_RESPONSE:
+    case SLOT_EXPORT_SEND_HANDSHAKE: return "sending-establish-command";
+    case SLOT_EXPORT_READ_HANDSHAKE_RESPONSE:
         return "reading-establish-response";
+    case SLOT_EXPORT_CONNECTING_SNAPSHOT: return "connecting-snapshot-channel";
+    case SLOT_EXPORT_SEND_SNAPSHOT_AUTH: return "sending-snapshot-auth";
+    case SLOT_EXPORT_READ_SNAPSHOT_AUTH_RESPONSE: return "reading-snapshot-auth-response";
+    case SLOT_EXPORT_LINKING_SNAPSHOT: return "linking-snapshot-channel";
+    case SLOT_EXPORT_READ_LINK_RESPONSE: return "reading-link-response";
     case SLOT_EXPORT_WAITING_TO_SNAPSHOT: return "waiting-to-snapshot";
     case SLOT_EXPORT_SNAPSHOTTING: return "snapshotting";
     case SLOT_EXPORT_STREAMING: return "replicating";
@@ -2309,12 +2552,34 @@ void clusterHandleSlotMigrationErrorResponse(slotMigrationJob *job) {
 }
 
 /* Callback triggered when a client with a slot migration client is closed. */
-void clusterHandleSlotMigrationClientClose(slotMigrationJob *job) {
+void clusterHandleSlotMigrationClientClose(client *c) {
+    slotMigrationJob *job = c->slot_migration_job;
+    if (!job) return;
+
+    if (!isSlotMigrationControlClient(c)) {
+        job->snapshot_client = NULL;
+        c->slot_migration_job = NULL;
+        if (isSlotMigrationJobInProgress(job)) {
+            if (job->type == SLOT_MIGRATION_IMPORT &&
+                (job->state == SLOT_IMPORT_RECEIVE_SNAPSHOT || job->state == SLOT_IMPORT_WAIT_ACK)) {
+                serverLog(LL_NOTICE, "Slot migration %s snapshot connection lost unexpectedly", job->description);
+                finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_FAILED,
+                                       "Snapshot Connection lost during import snapshot phase");
+            } else if (job->type == SLOT_MIGRATION_EXPORT) {
+                serverLog(LL_NOTICE, "Slot migration %s snapshot connection lost unexpectedly", job->description);
+                finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_FAILED,
+                                       "Snapshot Connection lost to target.");
+            }
+        }
+        return;
+    }
+
     job->client = NULL;
+    c->slot_migration_job = NULL;
     if (!isSlotMigrationJobInProgress(job) || job->is_tracking_only) {
         return;
     }
-    serverLog(LL_NOTICE, "Slot migration %s connection lost", job->description);
+    serverLog(LL_NOTICE, "Slot migration %s control connection lost", job->description);
 
     /* If we have granted failover, the failover may have happened, but we don't
      * know. We keep the slot export around so that we remain paused until we
@@ -2324,12 +2589,12 @@ void clusterHandleSlotMigrationClientClose(slotMigrationJob *job) {
     if (job->state != SLOT_EXPORT_FAILOVER_GRANTED) {
         if (job->type == SLOT_MIGRATION_EXPORT) {
             finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_FAILED,
-                                   "Connection lost to target. Check CLUSTER "
+                                   "Control Connection lost to target. Check CLUSTER "
                                    "GETSLOTMIGRATIONS on the target node for "
                                    "more information.");
         } else {
             finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_FAILED,
-                                   "Connection lost to source. Check CLUSTER "
+                                   "Control Connection lost to source. Check CLUSTER "
                                    "GETSLOTMIGRATIONS on the source node for "
                                    "more information.");
         }
@@ -2432,6 +2697,11 @@ bool isImportSlotMigrationJob(slotMigrationJob *job) {
     return job->type == SLOT_MIGRATION_IMPORT;
 }
 
+static bool isSlotMigrationControlClient(client *c) {
+    if (!c->slot_migration_job) return false;
+    return c == c->slot_migration_job->client;
+}
+
 /* Synthesizes a view of ongoing and recently completed imports for an
  * operator. */
 void clusterCommandGetSlotMigrations(client *c) {
@@ -2523,8 +2793,8 @@ bool canSlotMigrationJobSendAck(slotMigrationJob *job) {
            job->state != SLOT_EXPORT_CONNECTING &&
            job->state != SLOT_EXPORT_SEND_AUTH &&
            job->state != SLOT_EXPORT_READ_AUTH_RESPONSE &&
-           job->state != SLOT_EXPORT_SEND_ESTABLISH &&
-           job->state != SLOT_EXPORT_READ_ESTABLISH_RESPONSE &&
+           job->state != SLOT_EXPORT_SEND_HANDSHAKE &&
+           job->state != SLOT_EXPORT_READ_HANDSHAKE_RESPONSE &&
            job->state != SLOT_IMPORT_OCCURRING_ON_PRIMARY;
 }
 
@@ -2613,10 +2883,50 @@ void clusterCommandSyncSlotsAck(client *c) {
 }
 
 void clusterCommandSyncSlotsCapa(client *c) {
-    UNUSED(c);
-    /* As of now there are no supported capa fields. We ignore unknown CAPA
-     * fields. */
-    return;
+    if (c->argc < 4) {
+        return;
+    }
+    sds capa = objectGetVal(c->argv[3]);
+    if (!strcasecmp(capa, "dual-channel") && server.cluster_slot_migration_dual_channel) {
+        addReplyStatus(c, "CAPA dual-channel");
+    }
+}
+
+void clusterCommandSyncSlotsLinkChannel(client *c) {
+    if (c->argc < 4) {
+        addReplyErrorObject(c, shared.syntaxerr);
+        return;
+    }
+    sds name = objectGetVal(c->argv[3]);
+    slotMigrationJob *job = clusterLookupMigrationJob(name);
+    if (!job) {
+        addReplyError(c, "No slot migration job found");
+        return;
+    }
+    if (job->type != SLOT_MIGRATION_IMPORT) {
+        addReplyError(c, "Job is not an import job");
+        return;
+    }
+    if (job->client == c) {
+        finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_FAILED,
+                               "Cannot link the control channel as snapshot channel");
+        return;
+    }
+    if (job->snapshot_client) {
+        addReplyError(c, "Snapshot channel already linked");
+        return;
+    }
+
+    job->snapshot_client = c;
+    c->slot_migration_job = job;
+    initMigrationClientReplication(c, generateSyncSlotsLinkChannelCommand(job));
+    clusterDoBeforeSleep(CLUSTER_TODO_HANDLE_SLOT_MIGRATION);
+
+    addReply(c, shared.ok);
+    c->flag.reply_off = 1;
+    if (job->state == SLOT_IMPORT_WAIT_ACK) {
+        updateSlotMigrationJobState(job, SLOT_IMPORT_RECEIVE_SNAPSHOT);
+    }
 }
 
 /* Sent by either the target or the source as a control message for progressing
@@ -2669,6 +2979,11 @@ void clusterCommandSyncSlots(client *c) {
     if (!strcasecmp(objectGetVal(c->argv[2]), "capa")) {
         /* CLUSTER SYNCSLOTS CAPA <field> [<field>...] */
         clusterCommandSyncSlotsCapa(c);
+        return;
+    }
+    if (!strcasecmp(objectGetVal(c->argv[2]), "link-channel")) {
+        /* CLUSTER SYNCSLOTS LINK-CHANNEL <name> */
+        clusterCommandSyncSlotsLinkChannel(c);
         return;
     }
     if (c->slot_migration_job &&

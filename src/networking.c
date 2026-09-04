@@ -2213,7 +2213,7 @@ int freeClient(client *c) {
 
     /* Handle slot migration connection closed. */
     if (c->slot_migration_job) {
-        clusterHandleSlotMigrationClientClose(c->slot_migration_job);
+        clusterHandleSlotMigrationClientClose(c);
     }
 
     /* Free the query buffer */

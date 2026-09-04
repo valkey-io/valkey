@@ -1,3 +1,12 @@
+# Rename original test proc to wrap it and append dual-channel state to test names
+rename test original_test
+proc test {name args} {
+    if {[info exists ::current_dual_channel]} {
+        set name "$name (dual-channel=$::current_dual_channel)"
+    }
+    uplevel 1 [list original_test $name {*}$args]
+}
+
 proc slot_ranges_contains_slot {slot_ranges slot} {
     set ranges [split $slot_ranges " "]
     foreach slot_range $ranges {
@@ -185,7 +194,15 @@ proc do_node_restart {idx} {
 }
 
 # Disable replica migration to prevent empty nodes from joining other shards.
-start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides {cluster-allow-replica-migration no cluster-node-timeout 15000 cluster-databases 16}} {
+foreach dual_channel {yes no} {
+    set ::current_dual_channel $dual_channel
+    set overrides [list \
+        cluster-allow-replica-migration no \
+        cluster-node-timeout 15000 \
+        cluster-databases 16 \
+        cluster-slot-migration-dual-channel $dual_channel \
+    ]
+    start_cluster 3 3 [list tags [list logreqres:skip external:skip cluster network dual-channel:$dual_channel] overrides $overrides] {
 
     set node0_id [R 0 CLUSTER MYID]
     set node1_id [R 1 CLUSTER MYID]
@@ -612,7 +629,7 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
         }
     }
 
-    proc verify_client_flag {idx flag expected_count} {
+    proc count_client_flag {idx flag} {
         set clients [split [string trim [R $idx client list]] "\r\n"]
         set found 0
         foreach client $clients {
@@ -620,7 +637,13 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
                 incr found
             }
         }
+        return $found
+    }
+
+    proc verify_client_flag {idx flag expected_count} {
+        set found [count_client_flag $idx $flag]
         if {$found ne $expected_count} {
+            set clients [R $idx client list]
             fail "Expected $flag to appear in client list $expected_count times, got $found: $clients"
         }
     }
@@ -634,9 +657,22 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
             wait_for_migration_field 2 $jobname state waiting-to-pause
 
             # Check the flags
+            if {$::current_dual_channel eq "yes"} {
+                # In dual-channel, snapshot channel might be closed or not yet closed, so 1 or 2 is fine.
+                set count0 [count_client_flag 0 "i"]
+                set count2 [count_client_flag 2 "E"]
+                if {($count0 != 1 && $count0 != 2) || ($count2 != 1 && $count2 != 2)} {
+                    set clients0 [R 0 client list]
+                    set clients2 [R 2 client list]
+                    fail "Expected 1 or 2 clients with flags in dual-channel: Node 0 (got $count0): $clients0, Node 2 (got $count2): $clients2"
+                }
+            } else {
+                # In single-channel, it must be 1.
+                verify_client_flag 0 "i" 1
+                verify_client_flag 2 "E" 1
+            }
+
             verify_client_flag 0 "E" 0
-            verify_client_flag 2 "E" 1
-            verify_client_flag 0 "i" 1
             verify_client_flag 2 "i" 0
             assert_match "id=*" [R 2 CLIENT LIST FLAGS E]
             assert_equal "" [R 2 CLIENT LIST FLAGS i]
@@ -659,6 +695,26 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
             # Cleanup for the next test
             assert_match "OK" [R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node2_id]
             wait_for_migration 2 16383
+        }
+    }
+
+    if {$::current_dual_channel eq "yes"} {
+        test "Slot migration dual-channel fallback negotiation (source supports, target doesn't)" {
+            assert_does_not_resync {
+                # Disable dual-channel on target (R0) only, keep it enabled on source (R2)
+                R 0 CONFIG SET cluster-slot-migration-dual-channel no
+
+                # Migrate slot 16383 from Node 2 to Node 0 (should fall back to single-channel)
+                assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id]
+                wait_for_migration 0 16383
+
+                # Cleanup for the next test (migrate back to Node 2)
+                assert_match "OK" [R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node2_id]
+                wait_for_migration 2 16383
+
+                # Restore target config to match loop default
+                R 0 CONFIG SET cluster-slot-migration-dual-channel yes
+            }
         }
     }
 
@@ -1503,6 +1559,10 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
                 $client CLUSTER SYNCSLOTS ESTABLISH SOURCE $node2_id NAME $fake_jobname SLOTSRANGE 16383 16383
                 $client CLUSTER SYNCSLOTS FAILOVER-GRANTED
             }
+            assert_causes_conn_drop 0 {
+                $client CLUSTER SYNCSLOTS ESTABLISH SOURCE $node2_id NAME $fake_jobname SLOTSRANGE 16383 16383
+                $client CLUSTER SYNCSLOTS LINK-CHANNEL $fake_jobname
+            }
         }
     }
 
@@ -2173,7 +2233,7 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
     }
 }
 
-start_cluster 3 0 {tags {logreqres:skip external:skip cluster network}} {
+start_cluster 3 0 [list tags {logreqres:skip external:skip cluster network} overrides [list cluster-slot-migration-dual-channel $dual_channel]] {
     set 16383_slot_tag "{6ZJ}"
     set node0_id [R 0 CLUSTER MYID]
 
@@ -2209,7 +2269,7 @@ start_cluster 3 0 {tags {logreqres:skip external:skip cluster network}} {
     }
 }
 
-start_cluster 3 6 {tags {logreqres:skip external:skip cluster network}} {
+start_cluster 3 6 [list tags {logreqres:skip external:skip cluster network} overrides [list cluster-slot-migration-dual-channel $dual_channel]] {
     set node0_id [R 0 CLUSTER MYID]
     set node1_id [R 1 CLUSTER MYID]
     set node2_id [R 2 CLUSTER MYID]
@@ -2265,7 +2325,7 @@ start_cluster 3 6 {tags {logreqres:skip external:skip cluster network}} {
     }
 }
 
-start_cluster 3 0 {tags {logreqres:skip external:skip cluster network}} {
+start_cluster 3 0 [list tags {logreqres:skip external:skip cluster network} overrides [list cluster-slot-migration-dual-channel $dual_channel]] {
 
     set node0_id [R 0 CLUSTER MYID]
     set node1_id [R 1 CLUSTER MYID]
@@ -2330,7 +2390,7 @@ start_cluster 3 0 {tags {logreqres:skip external:skip cluster network}} {
 
 }
 
-start_cluster 3 3 {tags {logreqres:skip external:skip cluster aofrw network} overrides {appendonly yes auto-aof-rewrite-percentage 0}} {
+start_cluster 3 3 [list tags {logreqres:skip external:skip cluster aofrw network} overrides [list appendonly yes auto-aof-rewrite-percentage 0 cluster-slot-migration-dual-channel $dual_channel]] {
     set node0_id [R 0 CLUSTER MYID]
     set node1_id [R 1 CLUSTER MYID]
     set node2_id [R 2 CLUSTER MYID]
@@ -2480,7 +2540,7 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster aofrw network} ove
     }
 }
 
-start_cluster 3 0 {tags {logreqres:skip external:skip cluster network} overrides {cluster-require-full-coverage no slot-migration-max-failover-repl-bytes 0 repl-timeout 3600}} {
+start_cluster 3 0 [list tags {logreqres:skip external:skip cluster network} overrides [list cluster-require-full-coverage no slot-migration-max-failover-repl-bytes 0 repl-timeout 3600 cluster-slot-migration-dual-channel $dual_channel]] {
     test "Slot migration remaining_repl_size on the source node" {
         set 16383_slot_tag "{6ZJ}"
         set_debug_prevent_pause 1
@@ -2523,7 +2583,7 @@ start_cluster 3 0 {tags {logreqres:skip external:skip cluster network} overrides
     }
 }
 
-start_cluster 3 0 {tags {logreqres:skip external:skip cluster network} overrides {cluster-require-full-coverage no slot-migration-max-failover-repl-bytes -1 repl-timeout 3600}} {
+start_cluster 3 0 [list tags {logreqres:skip external:skip cluster network} overrides [list cluster-require-full-coverage no slot-migration-max-failover-repl-bytes -1 repl-timeout 3600 cluster-slot-migration-dual-channel $dual_channel]] {
     test "slot-migration-max-failover-repl-bytes -1 disables repl bytes limit" {
         set 16383_slot_tag "{6ZJ}"
 
@@ -2567,3 +2627,9 @@ start_cluster 3 0 {tags {logreqres:skip external:skip cluster network} overrides
         wait_for_migration 0 16383
     }
 }
+}
+
+# Restore original test proc to avoid polluting other test files
+unset -nocomplain ::current_dual_channel
+rename test ""
+rename original_test test

@@ -1,0 +1,85 @@
+{
+    "LPUSHIF": {
+        "summary": "Prepends an element to a list only if the element currently at the beginning matches a given value.",
+        "complexity": "O(1)",
+        "group": "list",
+        "since": "9.0.0",
+        "arity": 5,
+        "function": "lpushifCommand",
+        "command_flags": [
+            "WRITE",
+            "DENYOOM",
+            "FAST"
+        ],
+        "acl_categories": [
+            "FAST",
+            "LIST",
+            "WRITE"
+        ],
+        "key_specs": [
+            {
+                "flags": [
+                    "RW",
+                    "ACCESS",
+                    "INSERT"
+                ],
+                "begin_search": {
+                    "index": {
+                        "pos": 1
+                    }
+                },
+                "find_keys": {
+                    "range": {
+                        "lastkey": 0,
+                        "step": 1,
+                        "limit": 0
+                    }
+                }
+            }
+        ],
+        "reply_schema": {
+            "oneOf": [
+                {
+                    "description": "The new list length after the push.",
+                    "type": "integer",
+                    "minimum": 1
+                },
+                {
+                    "description": "The key does not exist or the condition is not satisfied.",
+                    "const": 0
+                }
+            ]
+        },
+        "arguments": [
+            {
+                "name": "key",
+                "type": "key",
+                "key_spec_index": 0
+            },
+            {
+                "name": "flag",
+                "type": "oneof",
+                "arguments": [
+                    {
+                        "name": "eq",
+                        "type": "pure-token",
+                        "token": "EQ"
+                    },
+                    {
+                        "name": "ne",
+                        "type": "pure-token",
+                        "token": "NE"
+                    }
+                ]
+            },
+            {
+                "name": "expected",
+                "type": "string"
+            },
+            {
+                "name": "newvalue",
+                "type": "string"
+            }
+        ]
+    }
+}

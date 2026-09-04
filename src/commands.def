@@ -4982,6 +4982,38 @@ struct COMMAND_ARG LPOP_Args[] = {
 {MAKE_ARG("count",ARG_TYPE_INTEGER,-1,NULL,NULL,"6.2.0",CMD_ARG_OPTIONAL,0,NULL)},
 };
 
+/********** LPOPIF ********************/
+
+#ifndef SKIP_CMD_HISTORY_TABLE
+/* LPOPIF history */
+#define LPOPIF_History NULL
+#endif
+
+#ifndef SKIP_CMD_TIPS_TABLE
+/* LPOPIF tips */
+#define LPOPIF_Tips NULL
+#endif
+
+#ifndef SKIP_CMD_KEY_SPECS_TABLE
+/* LPOPIF key specs */
+keySpec LPOPIF_Keyspecs[1] = {
+{NULL,CMD_KEY_RW|CMD_KEY_ACCESS|CMD_KEY_DELETE,KSPEC_BS_INDEX,.bs.index={1},KSPEC_FK_RANGE,.fk.range={0,1,0}}
+};
+#endif
+
+/* LPOPIF flag argument table */
+struct COMMAND_ARG LPOPIF_flag_Subargs[] = {
+{MAKE_ARG("eq",ARG_TYPE_PURE_TOKEN,-1,"EQ",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("ne",ARG_TYPE_PURE_TOKEN,-1,"NE",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+};
+
+/* LPOPIF argument table */
+struct COMMAND_ARG LPOPIF_Args[] = {
+{MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("flag",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_NONE,2,NULL),.subargs=LPOPIF_flag_Subargs},
+{MAKE_ARG("value",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+};
+
 /********** LPOS ********************/
 
 #ifndef SKIP_CMD_HISTORY_TABLE
@@ -5035,6 +5067,39 @@ keySpec LPUSH_Keyspecs[1] = {
 struct COMMAND_ARG LPUSH_Args[] = {
 {MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("element",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_MULTIPLE,0,NULL)},
+};
+
+/********** LPUSHIF ********************/
+
+#ifndef SKIP_CMD_HISTORY_TABLE
+/* LPUSHIF history */
+#define LPUSHIF_History NULL
+#endif
+
+#ifndef SKIP_CMD_TIPS_TABLE
+/* LPUSHIF tips */
+#define LPUSHIF_Tips NULL
+#endif
+
+#ifndef SKIP_CMD_KEY_SPECS_TABLE
+/* LPUSHIF key specs */
+keySpec LPUSHIF_Keyspecs[1] = {
+{NULL,CMD_KEY_RW|CMD_KEY_ACCESS|CMD_KEY_INSERT,KSPEC_BS_INDEX,.bs.index={1},KSPEC_FK_RANGE,.fk.range={0,1,0}}
+};
+#endif
+
+/* LPUSHIF flag argument table */
+struct COMMAND_ARG LPUSHIF_flag_Subargs[] = {
+{MAKE_ARG("eq",ARG_TYPE_PURE_TOKEN,-1,"EQ",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("ne",ARG_TYPE_PURE_TOKEN,-1,"NE",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+};
+
+/* LPUSHIF argument table */
+struct COMMAND_ARG LPUSHIF_Args[] = {
+{MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("flag",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_NONE,2,NULL),.subargs=LPUSHIF_flag_Subargs},
+{MAKE_ARG("expected",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("newvalue",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 };
 
 /********** LPUSHX ********************/
@@ -5195,6 +5260,38 @@ struct COMMAND_ARG RPOP_Args[] = {
 {MAKE_ARG("count",ARG_TYPE_INTEGER,-1,NULL,NULL,"6.2.0",CMD_ARG_OPTIONAL,0,NULL)},
 };
 
+/********** RPOPIF ********************/
+
+#ifndef SKIP_CMD_HISTORY_TABLE
+/* RPOPIF history */
+#define RPOPIF_History NULL
+#endif
+
+#ifndef SKIP_CMD_TIPS_TABLE
+/* RPOPIF tips */
+#define RPOPIF_Tips NULL
+#endif
+
+#ifndef SKIP_CMD_KEY_SPECS_TABLE
+/* RPOPIF key specs */
+keySpec RPOPIF_Keyspecs[1] = {
+{NULL,CMD_KEY_RW|CMD_KEY_ACCESS|CMD_KEY_DELETE,KSPEC_BS_INDEX,.bs.index={1},KSPEC_FK_RANGE,.fk.range={0,1,0}}
+};
+#endif
+
+/* RPOPIF flag argument table */
+struct COMMAND_ARG RPOPIF_flag_Subargs[] = {
+{MAKE_ARG("eq",ARG_TYPE_PURE_TOKEN,-1,"EQ",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("ne",ARG_TYPE_PURE_TOKEN,-1,"NE",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+};
+
+/* RPOPIF argument table */
+struct COMMAND_ARG RPOPIF_Args[] = {
+{MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("flag",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_NONE,2,NULL),.subargs=RPOPIF_flag_Subargs},
+{MAKE_ARG("value",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+};
+
 /********** RPOPLPUSH ********************/
 
 #ifndef SKIP_CMD_HISTORY_TABLE
@@ -5245,6 +5342,39 @@ keySpec RPUSH_Keyspecs[1] = {
 struct COMMAND_ARG RPUSH_Args[] = {
 {MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("element",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_MULTIPLE,0,NULL)},
+};
+
+/********** RPUSHIF ********************/
+
+#ifndef SKIP_CMD_HISTORY_TABLE
+/* RPUSHIF history */
+#define RPUSHIF_History NULL
+#endif
+
+#ifndef SKIP_CMD_TIPS_TABLE
+/* RPUSHIF tips */
+#define RPUSHIF_Tips NULL
+#endif
+
+#ifndef SKIP_CMD_KEY_SPECS_TABLE
+/* RPUSHIF key specs */
+keySpec RPUSHIF_Keyspecs[1] = {
+{NULL,CMD_KEY_RW|CMD_KEY_ACCESS|CMD_KEY_INSERT,KSPEC_BS_INDEX,.bs.index={1},KSPEC_FK_RANGE,.fk.range={0,1,0}}
+};
+#endif
+
+/* RPUSHIF flag argument table */
+struct COMMAND_ARG RPUSHIF_flag_Subargs[] = {
+{MAKE_ARG("eq",ARG_TYPE_PURE_TOKEN,-1,"EQ",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("ne",ARG_TYPE_PURE_TOKEN,-1,"NE",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+};
+
+/* RPUSHIF argument table */
+struct COMMAND_ARG RPUSHIF_Args[] = {
+{MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("flag",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_NONE,2,NULL),.subargs=RPUSHIF_flag_Subargs},
+{MAKE_ARG("expected",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("newvalue",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 };
 
 /********** RPUSHX ********************/
@@ -12094,16 +12224,20 @@ struct COMMAND_STRUCT serverCommandTable[] = {
 {MAKE_CMD("lmove","Returns an element after popping it from one list and pushing it to another. Deletes the list if the last element was moved.","O(1)","6.2.0",CMD_DOC_NONE,NULL,NULL,"list",COMMAND_GROUP_LIST,LMOVE_History,0,LMOVE_Tips,0,lmoveCommand,5,CMD_WRITE|CMD_DENYOOM,ACL_CATEGORY_LIST|ACL_CATEGORY_SLOW|ACL_CATEGORY_WRITE,NULL,LMOVE_Keyspecs,2,NULL,4),.args=LMOVE_Args},
 {MAKE_CMD("lmpop","Returns multiple elements from a list after removing them. Deletes the list if the last element was popped.","O(N+M) where N is the number of provided keys and M is the number of elements returned.","7.0.0",CMD_DOC_NONE,NULL,NULL,"list",COMMAND_GROUP_LIST,LMPOP_History,0,LMPOP_Tips,0,lmpopCommand,-4,CMD_WRITE,ACL_CATEGORY_LIST|ACL_CATEGORY_SLOW|ACL_CATEGORY_WRITE,NULL,LMPOP_Keyspecs,1,lmpopGetKeys,4),.args=LMPOP_Args},
 {MAKE_CMD("lpop","Returns and removes one or more elements from the beginning of a list. Deletes the list if the last element was popped.","O(N) where N is the number of elements returned","1.0.0",CMD_DOC_NONE,NULL,NULL,"list",COMMAND_GROUP_LIST,LPOP_History,1,LPOP_Tips,0,lpopCommand,-2,CMD_WRITE|CMD_FAST,ACL_CATEGORY_FAST|ACL_CATEGORY_LIST|ACL_CATEGORY_WRITE,NULL,LPOP_Keyspecs,1,NULL,2),.args=LPOP_Args},
+{MAKE_CMD("lpopif","Returns and removes an element from the beginning of a list only if it matches a given value. Deletes the list if the last element was popped.","O(1)","9.0.0",CMD_DOC_NONE,NULL,NULL,"list",COMMAND_GROUP_LIST,LPOPIF_History,0,LPOPIF_Tips,0,lpopifCommand,4,CMD_WRITE|CMD_FAST,ACL_CATEGORY_FAST|ACL_CATEGORY_LIST|ACL_CATEGORY_WRITE,NULL,LPOPIF_Keyspecs,1,NULL,3),.args=LPOPIF_Args},
 {MAKE_CMD("lpos","Returns the index of matching elements in a list.","O(N) where N is the number of elements in the list, for the average case. When searching for elements near the head or the tail of the list, or when the MAXLEN option is provided, the command may run in constant time.","6.0.6",CMD_DOC_NONE,NULL,NULL,"list",COMMAND_GROUP_LIST,LPOS_History,0,LPOS_Tips,0,lposCommand,-3,CMD_READONLY,ACL_CATEGORY_LIST|ACL_CATEGORY_READ|ACL_CATEGORY_SLOW,NULL,LPOS_Keyspecs,1,NULL,5),.args=LPOS_Args},
 {MAKE_CMD("lpush","Prepends one or more elements to a list. Creates the key if it doesn't exist.","O(1) for each element added, so O(N) to add N elements when the command is called with multiple arguments.","1.0.0",CMD_DOC_NONE,NULL,NULL,"list",COMMAND_GROUP_LIST,LPUSH_History,1,LPUSH_Tips,0,lpushCommand,-3,CMD_WRITE|CMD_DENYOOM|CMD_FAST,ACL_CATEGORY_FAST|ACL_CATEGORY_LIST|ACL_CATEGORY_WRITE,NULL,LPUSH_Keyspecs,1,NULL,2),.args=LPUSH_Args},
+{MAKE_CMD("lpushif","Prepends an element to a list only if the element currently at the beginning matches a given value.","O(1)","9.0.0",CMD_DOC_NONE,NULL,NULL,"list",COMMAND_GROUP_LIST,LPUSHIF_History,0,LPUSHIF_Tips,0,lpushifCommand,5,CMD_WRITE|CMD_DENYOOM|CMD_FAST,ACL_CATEGORY_FAST|ACL_CATEGORY_LIST|ACL_CATEGORY_WRITE,NULL,LPUSHIF_Keyspecs,1,NULL,4),.args=LPUSHIF_Args},
 {MAKE_CMD("lpushx","Prepends one or more elements to a list only when the list exists.","O(1) for each element added, so O(N) to add N elements when the command is called with multiple arguments.","2.2.0",CMD_DOC_NONE,NULL,NULL,"list",COMMAND_GROUP_LIST,LPUSHX_History,1,LPUSHX_Tips,0,lpushxCommand,-3,CMD_WRITE|CMD_DENYOOM|CMD_FAST,ACL_CATEGORY_FAST|ACL_CATEGORY_LIST|ACL_CATEGORY_WRITE,NULL,LPUSHX_Keyspecs,1,NULL,2),.args=LPUSHX_Args},
 {MAKE_CMD("lrange","Returns a range of elements from a list.","O(S+N) where S is the distance of start offset from HEAD for small lists, from nearest end (HEAD or TAIL) for large lists; and N is the number of elements in the specified range.","1.0.0",CMD_DOC_NONE,NULL,NULL,"list",COMMAND_GROUP_LIST,LRANGE_History,0,LRANGE_Tips,0,lrangeCommand,4,CMD_READONLY,ACL_CATEGORY_LIST|ACL_CATEGORY_READ|ACL_CATEGORY_SLOW,NULL,LRANGE_Keyspecs,1,NULL,3),.args=LRANGE_Args},
 {MAKE_CMD("lrem","Removes elements from a list. Deletes the list if the last element was removed.","O(N+M) where N is the length of the list and M is the number of elements removed.","1.0.0",CMD_DOC_NONE,NULL,NULL,"list",COMMAND_GROUP_LIST,LREM_History,0,LREM_Tips,0,lremCommand,4,CMD_WRITE,ACL_CATEGORY_LIST|ACL_CATEGORY_SLOW|ACL_CATEGORY_WRITE,NULL,LREM_Keyspecs,1,NULL,3),.args=LREM_Args},
 {MAKE_CMD("lset","Sets the value of an element in a list by its index.","O(N) where N is the length of the list. Setting either the first or the last element of the list is O(1).","1.0.0",CMD_DOC_NONE,NULL,NULL,"list",COMMAND_GROUP_LIST,LSET_History,0,LSET_Tips,0,lsetCommand,4,CMD_WRITE|CMD_DENYOOM,ACL_CATEGORY_LIST|ACL_CATEGORY_SLOW|ACL_CATEGORY_WRITE,NULL,LSET_Keyspecs,1,NULL,3),.args=LSET_Args},
 {MAKE_CMD("ltrim","Removes elements from both ends of a list. Deletes the list if all elements were trimmed.","O(N) where N is the number of elements to be removed by the operation.","1.0.0",CMD_DOC_NONE,NULL,NULL,"list",COMMAND_GROUP_LIST,LTRIM_History,0,LTRIM_Tips,0,ltrimCommand,4,CMD_WRITE,ACL_CATEGORY_LIST|ACL_CATEGORY_SLOW|ACL_CATEGORY_WRITE,NULL,LTRIM_Keyspecs,1,NULL,3),.args=LTRIM_Args},
 {MAKE_CMD("rpop","Returns and removes one or more elements from the end of a list. Deletes the list if the last element was popped.","O(N) where N is the number of elements returned","1.0.0",CMD_DOC_NONE,NULL,NULL,"list",COMMAND_GROUP_LIST,RPOP_History,1,RPOP_Tips,0,rpopCommand,-2,CMD_WRITE|CMD_FAST,ACL_CATEGORY_FAST|ACL_CATEGORY_LIST|ACL_CATEGORY_WRITE,NULL,RPOP_Keyspecs,1,NULL,2),.args=RPOP_Args},
+{MAKE_CMD("rpopif","Returns and removes an element from the end of a list only if it matches a given value. Deletes the list if the last element was popped.","O(1)","9.0.0",CMD_DOC_NONE,NULL,NULL,"list",COMMAND_GROUP_LIST,RPOPIF_History,0,RPOPIF_Tips,0,rpopifCommand,4,CMD_WRITE|CMD_FAST,ACL_CATEGORY_FAST|ACL_CATEGORY_LIST|ACL_CATEGORY_WRITE,NULL,RPOPIF_Keyspecs,1,NULL,3),.args=RPOPIF_Args},
 {MAKE_CMD("rpoplpush","Returns the last element of a list after removing and pushing it to another list. Deletes the list if the last element was popped.","O(1)","1.2.0",CMD_DOC_NONE,NULL,NULL,"list",COMMAND_GROUP_LIST,RPOPLPUSH_History,0,RPOPLPUSH_Tips,0,rpoplpushCommand,3,CMD_WRITE|CMD_DENYOOM,ACL_CATEGORY_LIST|ACL_CATEGORY_SLOW|ACL_CATEGORY_WRITE,NULL,RPOPLPUSH_Keyspecs,2,NULL,2),.args=RPOPLPUSH_Args},
 {MAKE_CMD("rpush","Appends one or more elements to a list. Creates the key if it doesn't exist.","O(1) for each element added, so O(N) to add N elements when the command is called with multiple arguments.","1.0.0",CMD_DOC_NONE,NULL,NULL,"list",COMMAND_GROUP_LIST,RPUSH_History,1,RPUSH_Tips,0,rpushCommand,-3,CMD_WRITE|CMD_DENYOOM|CMD_FAST,ACL_CATEGORY_FAST|ACL_CATEGORY_LIST|ACL_CATEGORY_WRITE,NULL,RPUSH_Keyspecs,1,NULL,2),.args=RPUSH_Args},
+{MAKE_CMD("rpushif","Appends an element to a list only if the element currently at the end matches a given value.","O(1)","9.0.0",CMD_DOC_NONE,NULL,NULL,"list",COMMAND_GROUP_LIST,RPUSHIF_History,0,RPUSHIF_Tips,0,rpushifCommand,5,CMD_WRITE|CMD_DENYOOM|CMD_FAST,ACL_CATEGORY_FAST|ACL_CATEGORY_LIST|ACL_CATEGORY_WRITE,NULL,RPUSHIF_Keyspecs,1,NULL,4),.args=RPUSHIF_Args},
 {MAKE_CMD("rpushx","Appends one or more elements to a list only when the list exists.","O(1) for each element added, so O(N) to add N elements when the command is called with multiple arguments.","2.2.0",CMD_DOC_NONE,NULL,NULL,"list",COMMAND_GROUP_LIST,RPUSHX_History,1,RPUSHX_Tips,0,rpushxCommand,-3,CMD_WRITE|CMD_DENYOOM|CMD_FAST,ACL_CATEGORY_FAST|ACL_CATEGORY_LIST|ACL_CATEGORY_WRITE,NULL,RPUSHX_Keyspecs,1,NULL,2),.args=RPUSHX_Args},
 /* pubsub */
 {MAKE_CMD("psubscribe","Listens for messages published to channels that match one or more patterns.","O(N) where N is the number of patterns to subscribe to.","2.0.0",CMD_DOC_NONE,NULL,NULL,"pubsub",COMMAND_GROUP_PUBSUB,PSUBSCRIBE_History,0,PSUBSCRIBE_Tips,0,psubscribeCommand,-2,CMD_PUBSUB|CMD_NOSCRIPT|CMD_LOADING|CMD_STALE|CMD_SENTINEL,ACL_CATEGORY_PUBSUB|ACL_CATEGORY_SLOW,NULL,PSUBSCRIBE_Keyspecs,0,NULL,1),.args=PSUBSCRIBE_Args},

@@ -284,6 +284,64 @@ include_directories("${CMAKE_SOURCE_DIR}/deps/hdr_histogram")
 include_directories("${CMAKE_SOURCE_DIR}/deps/fpconv")
 include_directories("${CMAKE_SOURCE_DIR}/deps/lz4")
 
+if (NOT DEFINED BUILD_ZSTD OR "${BUILD_ZSTD}" STREQUAL "")
+    set(BUILD_ZSTD "auto")
+endif ()
+
+string(TOLOWER "${BUILD_ZSTD}" BUILD_ZSTD_LOWER)
+set(BUILD_WITH_ZSTD 0)
+unset(ZSTD_STATIC_LIBRARY CACHE)
+if ("${BUILD_ZSTD_LOWER}" STREQUAL "auto")
+    find_package(PkgConfig QUIET)
+    if (PkgConfig_FOUND)
+        pkg_check_modules(ZSTD QUIET IMPORTED_TARGET libzstd>=1.4.7)
+    endif ()
+    if (ZSTD_FOUND)
+        # Debian and Ubuntu ship libzstd.pc with libdir=/usr/lib while
+        # installing the archive to the multiarch directory, so search the
+        # default library paths in addition to the pkg-config directories.
+        find_library(
+            ZSTD_STATIC_LIBRARY
+            NAMES libzstd.a zstd_static.lib
+            HINTS ${ZSTD_LIBRARY_DIRS})
+        if (ZSTD_STATIC_LIBRARY)
+            set(BUILD_WITH_ZSTD 1)
+        endif ()
+    endif ()
+elseif (
+    "${BUILD_ZSTD_LOWER}" STREQUAL "yes"
+    OR "${BUILD_ZSTD_LOWER}" STREQUAL "1"
+    OR "${BUILD_ZSTD_LOWER}" STREQUAL "on")
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(ZSTD REQUIRED IMPORTED_TARGET libzstd>=1.4.7)
+    find_library(
+        ZSTD_STATIC_LIBRARY
+        NAMES libzstd.a zstd_static.lib
+        HINTS ${ZSTD_LIBRARY_DIRS})
+    if (NOT ZSTD_STATIC_LIBRARY)
+        message(FATAL_ERROR "BUILD_ZSTD=yes requires the static libzstd archive")
+    endif ()
+    set(BUILD_WITH_ZSTD 1)
+elseif (
+    "${BUILD_ZSTD_LOWER}" STREQUAL "no"
+    OR "${BUILD_ZSTD_LOWER}" STREQUAL "0"
+    OR "${BUILD_ZSTD_LOWER}" STREQUAL "off")
+    set(BUILD_WITH_ZSTD 0)
+else ()
+    message(FATAL_ERROR "BUILD_ZSTD can be one of: [auto | yes | no], but '${BUILD_ZSTD}' was provided")
+endif ()
+
+if (BUILD_WITH_ZSTD)
+    message(STATUS "Zstandard support is enabled")
+    add_valkey_server_compiler_options("-DHAVE_ZSTD")
+    add_library(valkey_zstd STATIC IMPORTED GLOBAL)
+    set_target_properties(
+        valkey_zstd
+        PROPERTIES IMPORTED_LOCATION "${ZSTD_STATIC_LIBRARY}" INTERFACE_INCLUDE_DIRECTORIES "${ZSTD_INCLUDE_DIRS}")
+else ()
+    message(STATUS "Zstandard support is disabled")
+endif ()
+
 add_subdirectory("${CMAKE_SOURCE_DIR}/deps")
 
 # Update linker flags for the allocator
@@ -362,6 +420,7 @@ unset(USE_TLS CACHE)
 unset(USE_RDMA CACHE)
 unset(BUILD_TLS CACHE)
 unset(BUILD_RDMA CACHE)
+unset(BUILD_ZSTD CACHE)
 unset(BUILD_MALLOC CACHE)
 unset(USE_JEMALLOC CACHE)
 unset(BUILD_TLS_MODULE CACHE)

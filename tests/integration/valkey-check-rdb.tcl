@@ -2,6 +2,13 @@ proc get_function_code {args} {
     return [format "#!%s name=%s\nserver.register_function('%s', function(KEYS, ARGV)\n %s \nend)" [lindex $args 0] [lindex $args 1] [lindex $args 2] [lindex $args 3]]
 }
 
+proc check_rdb_compression_supported {client mode} {
+    set old [lindex [$client config get rdbcompression] 1]
+    set supported [expr {[catch {$client config set rdbcompression $mode}] == 0}]
+    catch {$client config set rdbcompression $old}
+    return $supported
+}
+
 tags {"check-rdb external:skip logreqres:skip"} {
     test {Check old valid RDB} {
         catch {
@@ -71,6 +78,29 @@ tags {"check-rdb network external:skip logreqres:skip"} {
             }
         }
 
+        test "valkey-check-rdb validates the contents of a ZSTD-compressed RDB" {
+            if {![check_rdb_compression_supported r zstd]} {
+                skip "zstd is not supported by this build"
+            }
+
+            r flushall
+            r config set rdbcompression zstd
+            r set zstd:key [string repeat "payload " 200]
+            r save
+
+            set dump_rdb [file join [lindex [r config get dir] 1] dump.rdb]
+            set failed [catch {
+                exec $::VALKEY_CHECK_RDB_BIN $dump_rdb --stats --format info
+            } result]
+            r config set rdbcompression yes
+
+            assert_equal 0 $failed
+            assert_match {*RDB looks OK!*} $result
+            assert_match {*Logical RDB CRC64 skipped for streaming-compressed input*} $result
+            assert_match {*type.string.keys.total:1*} $result
+            assert_no_match {*Checksum OK*} $result
+        }
+
         test "valkey-check-rdb rejects an incompatible VCS envelope" {
             r config set rdbcompression lz4
             set dir [lindex [r config get dir] 1]
@@ -122,6 +152,33 @@ tags {"check-rdb network external:skip logreqres:skip"} {
                 file delete -force $truncated_rdb
                 catch {r config set rdbcompression yes}
             }
+        }
+
+        test "valkey-check-rdb rejects a ZSTD-compressed RDB with a truncated frame trailer" {
+            if {![check_rdb_compression_supported r zstd]} {
+                skip "zstd is not supported by this build"
+            }
+
+            r flushall
+            r config set rdbcompression zstd
+            r set zstd:truncated [string repeat "payload " 200]
+            r save
+
+            set dir [lindex [r config get dir] 1]
+            set dump_rdb [file join $dir dump.rdb]
+            set truncated_rdb [file join $dir truncated-zstd-vcs.rdb]
+            set data [read_binary_file $dump_rdb]
+            write_binary_file $truncated_rdb [string range $data 0 end-1]
+
+            set failed [catch {
+                exec $::VALKEY_CHECK_RDB_BIN $truncated_rdb
+            } result]
+            file delete -force $truncated_rdb
+            r config set rdbcompression yes
+
+            assert_equal 1 $failed
+            assert_match {*Compressed RDB stream did not end cleanly*} $result
+            assert_no_match {*RDB looks OK*} $result
         }
 
         test "valkey-check-rdb ignores trailing data after a compressed RDB" {

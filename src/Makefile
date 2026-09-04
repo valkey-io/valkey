@@ -120,8 +120,16 @@ endif
 endif
 endif
 
+# Capture explicit Zstandard overrides before loading generated settings. This
+# prevents pkg-config results from a previous build from becoming user input to
+# a later auto-detection pass.
+ZSTD_CFLAGS_OVERRIDE := $(ZSTD_CFLAGS)
+ZSTD_LIBS_OVERRIDE := $(ZSTD_LIBS)
+
 # Override default settings if possible
 -include .make-settings
+ZSTD_CFLAGS := $(ZSTD_CFLAGS_OVERRIDE)
+ZSTD_LIBS := $(ZSTD_LIBS_OVERRIDE)
 
 # For added compatibility REDIS_CFLAGS and REDIS_LDFLAGS are also supported.
 ifdef REDIS_CFLAGS
@@ -257,6 +265,54 @@ endif
 
 # Include paths to dependencies
 FINAL_CFLAGS+= -I../deps/libvalkey/include -I../deps/linenoise -I../deps/hdr_histogram -I../deps/fpconv -I../deps/fast_float -I../deps/lz4
+
+# Zstandard support is auto-detected by default. Use BUILD_ZSTD=yes to require
+# it, or BUILD_ZSTD=no to build without Zstandard support.
+BUILD_ZSTD ?= auto
+BUILD_WITH_ZSTD=no
+ZSTD_SERVER_OBJ=
+ZSTD_CFLAGS ?=
+ZSTD_LIBS ?=
+
+ifneq ($(filter $(BUILD_ZSTD),yes no auto),$(BUILD_ZSTD))
+$(error BUILD_ZSTD must be yes, no, or auto)
+endif
+
+ZSTD_PKGCONFIG_LIBDIR := $(shell $(PKG_CONFIG) --variable=libdir libzstd 2>/dev/null)
+ZSTD_PKGCONFIG_PCFILEDIR := $(shell $(PKG_CONFIG) --variable=pcfiledir libzstd 2>/dev/null)
+# Debian and Ubuntu ship libzstd.pc with libdir=/usr/lib while installing the
+# archive to the multiarch directory, so also probe next to the .pc file.
+ZSTD_STATIC_ARCHIVE := $(firstword $(wildcard \
+    $(if $(ZSTD_PKGCONFIG_LIBDIR),$(ZSTD_PKGCONFIG_LIBDIR)/libzstd.a) \
+    $(if $(ZSTD_PKGCONFIG_PCFILEDIR),$(abspath $(ZSTD_PKGCONFIG_PCFILEDIR)/..)/libzstd.a)))
+ZSTD_PKGCONFIG := $(shell $(PKG_CONFIG) --atleast-version=1.4.7 libzstd >/dev/null 2>&1 && test -n "$(ZSTD_STATIC_ARCHIVE)" && echo $$?)
+ifeq ($(BUILD_ZSTD),yes)
+	BUILD_WITH_ZSTD=yes
+else ifeq ($(BUILD_ZSTD),auto)
+ifeq ($(ZSTD_PKGCONFIG),0)
+	BUILD_WITH_ZSTD=yes
+endif
+ifneq ($(strip $(ZSTD_LIBS)),)
+	BUILD_WITH_ZSTD=yes
+endif
+endif
+
+ifeq ($(BUILD_WITH_ZSTD),yes)
+ifeq ($(ZSTD_PKGCONFIG),0)
+ifeq ($(strip $(ZSTD_CFLAGS)),)
+	ZSTD_CFLAGS := $(shell $(PKG_CONFIG) --cflags libzstd 2>/dev/null)
+endif
+ifeq ($(strip $(ZSTD_LIBS)),)
+	ZSTD_LIBS := $(ZSTD_STATIC_ARCHIVE) $(filter-out -lzstd,$(shell $(PKG_CONFIG) --libs --static libzstd 2>/dev/null))
+endif
+endif
+ifeq ($(strip $(ZSTD_LIBS)),)
+$(error Static Zstandard 1.4.7 or newer not found. Install the static libzstd archive or set ZSTD_CFLAGS and ZSTD_LIBS to a static build)
+endif
+	FINAL_CFLAGS += -DHAVE_ZSTD $(ZSTD_CFLAGS)
+	FINAL_LIBS += $(ZSTD_LIBS)
+	ZSTD_SERVER_OBJ=compression_zstd.o
+endif
 
 # Lua scripting engine module
 ifeq ($(BUILD_LUA),no)
@@ -491,6 +547,7 @@ ENGINE_SERVER_OBJ = \
     commands.o \
     compression.o \
     compression_lz4.o \
+    $(ZSTD_SERVER_OBJ) \
     compression_stream.o \
     config.o \
     connection.o \
@@ -692,6 +749,10 @@ persist-settings: distclean
 	echo MALLOC=$(MALLOC) >> .make-settings
 	echo BUILD_TLS=$(BUILD_TLS) >> .make-settings
 	echo BUILD_RDMA=$(BUILD_RDMA) >> .make-settings
+	echo BUILD_ZSTD=$(BUILD_ZSTD) >> .make-settings
+	echo BUILD_WITH_ZSTD=$(BUILD_WITH_ZSTD) >> .make-settings
+	echo ZSTD_CFLAGS=$(ZSTD_CFLAGS_OVERRIDE) >> .make-settings
+	echo ZSTD_LIBS=$(ZSTD_LIBS_OVERRIDE) >> .make-settings
 	echo USE_SYSTEMD=$(USE_SYSTEMD) >> .make-settings
 	echo BUILD_LUA=$(BUILD_LUA) >> .make-settings
 	echo USE_LIBBACKTRACE=$(USE_LIBBACKTRACE) >> .make-settings

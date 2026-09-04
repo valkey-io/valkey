@@ -96,6 +96,8 @@ static compressionAlgo rdbCompressionAlgorithm(rdb_compression_mode mode) {
         return ALGO_LZF;
     case RDB_COMPRESSION_LZ4:
         return ALGO_LZ4;
+    case RDB_COMPRESSION_ZSTD:
+        return ALGO_ZSTD;
     default:
         serverPanic("Unknown RDB compression mode: %d", mode);
     }
@@ -1563,7 +1565,7 @@ static int rdbSaveInternal(int req, const char *filename, rdbSaveInfo *rsi, int 
     int saved_errno;
     char *err_op; /* For a detailed log */
     compressionAlgo compression_algo = rdbCompressionAlgorithm(server.rdb_compression);
-    bool use_streaming_compression = compression_algo == ALGO_LZ4;
+    bool use_streaming_compression = compression_algo == ALGO_LZ4 || compression_algo == ALGO_ZSTD;
     /* Keep replication snapshots plain until full sync negotiates compression.
      * Disk-based sync snapshots can also become AOF bases, which currently do
      * not record whether the reused RDB has whole-stream compression. */
@@ -3855,7 +3857,7 @@ int rdbLoad(char *filename, rdbSaveInfo *rsi, int rdbflags) {
     /* Probe every on-disk RDB:
      *
      *   plain file: rewind probe, then rdbLoadRio -> rdb(file backend)
-     *   VCS file:   rdbLoadRio -> streamReader LZ4 decode  -> rdb(file backend)
+     *   VCS file:   rdbLoadRio -> streamReader codec decode -> rdb(file backend)
      *
      * Non-rewindable plain sources retain the streamReader passthrough path.
      * For VCS input the parser sees the header produced by the decoder. */

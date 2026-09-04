@@ -2739,6 +2739,7 @@ static sds ACLLoadFromFile(const char *filename) {
 static int ACLSaveToFile(const char *filename) {
     sds acl = sdsempty();
     int fd = -1;
+    struct stat original_st = {0};
     sds tmpfilename = NULL;
     int retval = C_ERR;
 
@@ -2789,6 +2790,10 @@ static int ACLSaveToFile(const char *filename) {
     fd = -1;
 
     /* Let's replace the new file with the old one. */
+    /* Save original file permissions before renaming. */
+    if (stat(filename, &original_st) == -1) {
+        memset(&original_st, 0, sizeof(original_st));
+    }
     if (rename(tmpfilename, filename) == -1) {
         serverLog(LL_WARNING, "Renaming ACL file for ACL SAVE: %s", strerror(errno));
         goto cleanup;
@@ -2796,6 +2801,10 @@ static int ACLSaveToFile(const char *filename) {
     if (fsyncFileDir(filename) == -1) {
         serverLog(LL_WARNING, "Syncing ACL directory for ACL SAVE: %s", strerror(errno));
         goto cleanup;
+    }
+    /* Preserve the original file permissions if the file already existed. */
+    if (original_st.st_mode != 0) {
+        chmod(filename, original_st.st_mode);
     }
     sdsfree(tmpfilename);
     tmpfilename = NULL;

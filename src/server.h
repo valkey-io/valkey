@@ -1379,7 +1379,6 @@ typedef struct client {
     list *reply;                         /* List of reply objects to send to the client. */
     listNode *io_last_reply_block;       /* Last client reply block when sent to IO thread */
     size_t io_last_bufpos;               /* The client's bufpos at the time it was sent to the IO thread */
-    LastWrittenBuf io_last_written;      /* Track state for last written buffer */
     unsigned long long reply_bytes;      /* Tot bytes of objects in reply list. */
     listNode clients_pending_write_node; /* list node in clients_pending_write or in clients_pending_io_write list */
     size_t bufpos;
@@ -1398,10 +1397,7 @@ typedef struct client {
     /* Cache Locality: Grouped with 'flag' for getClientType() hot path. */
     slotMigrationJob *slot_migration_job; /* Pointer to the slot migration job, or NULL. */
     uint16_t write_flags;                 /* Client Write flags - used to communicate the client write state. */
-    volatile uint8_t io_read_state;       /* Indicate the IO read state of the client */
-    volatile uint8_t io_write_state;      /* Indicate the IO write state of the client */
     uint8_t resp;                         /* RESP protocol version. Can be 2 or 3. */
-    uint8_t cur_tid;                      /* ID of IO thread currently performing IO for this client */
     /* In updateClientMemoryUsage() we track the memory usage of
      * each client and add it to the sum of all the clients of a given type,
      * however we need to remember what was the old contribution of each
@@ -1409,17 +1405,13 @@ typedef struct client {
      * before adding it the new value. */
     uint8_t last_memory_type;
     uint8_t capa; /* Client capabilities: CLIENT_CAPA* macros. */
-    /* Statistics and metrics */
+    /* Statistics and metrics (main-thread writers; see the I/O thread block
+     * below for counters the I/O threads update). */
     unsigned long long net_input_bytes;           /* Total network input bytes read from this client. */
-    unsigned long long net_input_bytes_curr_cmd;  /* Total network input bytes read for the* execution of this client's current command. */
     unsigned long long net_output_bytes;          /* Total network output bytes sent to this client. */
     unsigned long long commands_processed;        /* Total count of commands this client executed. */
     unsigned long long net_output_bytes_curr_cmd; /* Total network output bytes sent to this client, by the current command. */
-    _Atomic(size_t) io_tracked_reply_len;         /* Total size of BULK_STR_REF replies tracked by I/O threads. */
     size_t buf_peak;                              /* Peak used size of buffer in last 5 sec interval. */
-    int nwritten;                                 /* Number of bytes of the last write. */
-    int nread;                                    /* Number of bytes of the last read. */
-    int read_flags;                               /* Client Read flags - used to communicate the client read state. */
     int slot;                                     /* The slot the client is executing against. Set to -1 if no slot is being used */
     listNode *mem_usage_bucket_node;
     clientMemUsageBucket *mem_usage_bucket;
@@ -1429,8 +1421,23 @@ typedef struct client {
      * client, and in which category the client was, in order to remove it
      * before adding it the new value. */
     size_t last_memory_usage;
+    /* Fields written by the owning I/O thread during offloaded jobs. The main
+     * thread may append replies and update its own counters concurrently with
+     * an in-flight job (see writevToClient), so these live on a dedicated
+     * cache line: sharing one with any main-thread-written field makes every
+     * I/O syscall and every reply chunk trade that line between the two
+     * threads. Requires client allocations to be CACHE_LINE_SIZE-aligned. */
+    _Alignas(CACHE_LINE_SIZE) volatile uint8_t io_read_state; /* Indicate the IO read state of the client */
+    volatile uint8_t io_write_state;             /* Indicate the IO write state of the client */
+    uint8_t cur_tid;                             /* ID of IO thread currently performing IO for this client */
+    int read_flags;                              /* Client Read flags - used to communicate the client read state. */
+    int nread;                                   /* Number of bytes of the last read. */
+    int nwritten;                                /* Number of bytes of the last write. */
+    _Atomic(size_t) io_tracked_reply_len;        /* Total size of BULK_STR_REF replies tracked by I/O threads. */
+    unsigned long long net_input_bytes_curr_cmd; /* Total network input bytes read for the execution of this client's current command. */
+    LastWrittenBuf io_last_written;              /* Track state for last written buffer */
     /* Fields after this point are less frequently used */
-    listNode *client_list_node;        /* list node in client list */
+    _Alignas(CACHE_LINE_SIZE) listNode *client_list_node; /* list node in client list */
     mstime_t buf_peak_last_reset_time; /* keeps the last time the buffer peak value was reset */
     size_t querybuf_peak;              /* Recent (100ms or more) peak of querybuf size. */
     dictEntry *cur_script;             /* Cached pointer to the dictEntry of the script being executed. */

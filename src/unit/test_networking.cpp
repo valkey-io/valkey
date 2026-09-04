@@ -137,6 +137,14 @@ static fakeConnection *connCreateFake(void) {
     return conn;
 }
 
+/* client carries _Alignas(CACHE_LINE_SIZE) fields, so plain zmalloc/zcalloc
+ * would under-align it. */
+static client *allocTestClient(void) {
+    client *c = (client *)(zmalloc_cache_aligned(sizeof(client)));
+    memset(c, 0, sizeof(client));
+    return c;
+}
+
 /* Test fixture for networking tests - minimal fixture with no setup/teardown */
 class NetworkingTest : public ::testing::Test {
   protected:
@@ -156,7 +164,7 @@ class NetworkingTest : public ::testing::Test {
 };
 
 TEST_F(NetworkingTest, TestWriteToReplica) {
-    client *c = (client *)(zcalloc(sizeof(client)));
+    client *c = allocTestClient();
     initClientReplicationData(c);
     server.repl_buffer_blocks = listCreate();
     /* Ensure replicas list exists before creating backlog */
@@ -296,7 +304,7 @@ TEST_F(NetworkingTest, TestWriteToReplica) {
 }
 
 TEST_F(NetworkingTest, TestPostWriteToReplica) {
-    client *c = (client *)(zcalloc(sizeof(client)));
+    client *c = allocTestClient();
     initClientReplicationData(c);
     server.repl_buffer_blocks = listCreate();
     /* Ensure replicas list exists before creating backlog */
@@ -412,7 +420,7 @@ TEST_F(NetworkingTest, TestPostWriteToReplica) {
 }
 
 TEST_F(NetworkingTest, TestBackupAndUpdateClientArgv) {
-    client *c = (client *)(zmalloc(sizeof(client)));
+    client *c = allocTestClient();
     /* Test 1: Initial backup of arguments */
     c->argc = 2;
     robj **initial_argv = (robj **)(zmalloc(sizeof(robj *) * 2));
@@ -473,7 +481,7 @@ TEST_F(NetworkingTest, TestBackupAndUpdateClientArgv) {
 }
 
 TEST_F(NetworkingTest, TestRewriteClientCommandArgument) {
-    client *c = (client *)(zmalloc(sizeof(client)));
+    client *c = allocTestClient();
     c->argc = 3;
     robj **initial_argv = (robj **)(zmalloc(sizeof(robj *) * 3));
     c->argv = initial_argv;
@@ -526,7 +534,7 @@ TEST_F(NetworkingTest, TestRewriteClientCommandArgument) {
 
 /* Helper function to create test client */
 static client *createTestClient(void) {
-    client *c = (client *)(zcalloc(sizeof(client)));
+    client *c = allocTestClient();
 
     c->buf = (char *)zmalloc_usable(PROTO_REPLY_CHUNK_BYTES, &c->buf_usable_size);
     c->reply = listCreate();

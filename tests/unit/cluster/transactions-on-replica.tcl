@@ -49,7 +49,9 @@ test "Conditional EXEC rejects cross-slot condition keys" {
     set condition1 "{condition1}key"
     set condition2 "{condition2}key"
     set destination "{condition1}destination"
-    $primary DEL $condition1 $condition2 $destination
+    $primary DEL $condition1
+    $primary DEL $condition2
+    $primary DEL $destination
     $primary SET $condition1 value
     $primary MULTI
     $primary SET $destination should-not-execute

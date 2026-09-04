@@ -6500,6 +6500,8 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
         char hmem[64];
         char peak_hmem[64];
         char total_system_hmem[64];
+        char used_memory_overhead_hmem[64];
+        char used_memory_dataset_hmem[64];
         char used_memory_lua_hmem[64];
         char used_memory_vm_total_hmem[64];
         char used_memory_scripts_hmem[64];
@@ -6522,6 +6524,8 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
         bytesToHuman(peak_hmem, sizeof(peak_hmem), server.stat_peak_memory);
         bytesToHuman(total_system_hmem, sizeof(total_system_hmem), total_system_mem);
         bytesToHuman(used_memory_lua_hmem, sizeof(used_memory_lua_hmem), memory_lua);
+        bytesToHuman(used_memory_overhead_hmem, sizeof(used_memory_overhead_hmem), mh->overhead_total);
+        bytesToHuman(used_memory_dataset_hmem, sizeof(used_memory_dataset_hmem), mh->dataset);
         bytesToHuman(used_memory_vm_total_hmem, sizeof(used_memory_vm_total_hmem), memory_functions + memory_lua);
         bytesToHuman(used_memory_scripts_hmem, sizeof(used_memory_scripts_hmem), mh->lua_caches + mh->functions_caches);
         bytesToHuman(used_memory_rss_hmem, sizeof(used_memory_rss_hmem), server.cron_malloc_stats.process_rss);
@@ -6539,8 +6543,10 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "used_memory_peak_human:%s\r\n", peak_hmem,
                 "used_memory_peak_perc:%.2f%%\r\n", mh->peak_perc,
                 "used_memory_overhead:%zu\r\n", mh->overhead_total,
+                "used_memory_overhead_human:%s\r\n", used_memory_overhead_hmem,
                 "used_memory_startup:%zu\r\n", mh->startup_allocated,
                 "used_memory_dataset:%zu\r\n", mh->dataset,
+                "used_memory_dataset_human:%s\r\n", used_memory_dataset_hmem,
                 "used_memory_dataset_perc:%.2f%%\r\n", mh->dataset_perc,
                 "allocator_allocated:%zu\r\n", server.cron_malloc_stats.allocator_allocated,
                 "allocator_active:%zu\r\n", server.cron_malloc_stats.allocator_active,

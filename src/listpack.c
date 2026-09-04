@@ -38,6 +38,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdbool.h>
 
 #include "listpack.h"
 #include "listpack_malloc.h"
@@ -47,7 +48,6 @@
 
 #define LP_HDR_SIZE 6 /* 32 bit total len + 16 bit number of elements. */
 #define LP_HDR_NUMELE_UNKNOWN UINT16_MAX
-#define LP_MAX_INT_ENCODING_LEN 9
 #define LP_MAX_BACKLEN_SIZE 5
 #define LP_ENCODING_INT 0
 #define LP_ENCODING_STRING 1
@@ -94,15 +94,23 @@
 #define LP_ENCODING_32BIT_STR_MASK 0xFF
 #define LP_ENCODING_IS_32BIT_STR(byte) (((byte) & LP_ENCODING_32BIT_STR_MASK) == LP_ENCODING_32BIT_STR)
 
+/* Tagged (metadata) entry marker. The value is picked from the reserved
+ * single-byte sub-encoding band 0xF1-0xFE, which is unused by every existing
+ * encoding (7bit uint 0xxxxxxx, 6bit str 10xxxxxx, 13bit int 110xxxxx,
+ * multi-byte 1110xxxx/0xF0 and EOF 0xFF), so a tag byte can never be
+ * confused with the first byte of a regular element. The tag is an addition
+ * to, not a replacement of, the inner element's own encoding, which follows
+ * at p+1. */
+#define LP_ENCODING_TAGGED 0xF5
+#define LP_ENCODING_TAGGED_MASK 0xFF
+#define LP_ENCODING_IS_TAGGED(byte) (((byte) & LP_ENCODING_TAGGED_MASK) == LP_ENCODING_TAGGED)
+
 #define LP_EOF 0xFF
 
 #define LP_ENCODING_6BIT_STR_LEN(p) ((p)[0] & 0x3F)
 #define LP_ENCODING_12BIT_STR_LEN(p) ((((p)[0] & 0xF) << 8) | (p)[1])
 #define LP_ENCODING_32BIT_STR_LEN(p) \
     (((uint32_t)(p)[1] << 0) | ((uint32_t)(p)[2] << 8) | ((uint32_t)(p)[3] << 16) | ((uint32_t)(p)[4] << 24))
-
-#define lpGetTotalBytes(p) \
-    (((uint32_t)(p)[0] << 0) | ((uint32_t)(p)[1] << 8) | ((uint32_t)(p)[2] << 16) | ((uint32_t)(p)[3] << 24))
 
 #define lpGetNumElements(p) (((uint32_t)(p)[4] << 0) | ((uint32_t)(p)[5] << 8))
 #define lpSetTotalBytes(p, v)        \
@@ -164,6 +172,15 @@ void lpFree(unsigned char *lp) {
     lp_free(lp);
 }
 
+/* Get value stored in the metadata */
+long long lpGetMetadataValue(unsigned char *p) {
+    unsigned char *inner = p + 1;
+    unsigned int slen;
+    long long value = 0;
+    lpGetValue(inner, &slen, &value);
+    return value;
+}
+
 /* Same as lpFree, but useful for when you are passing the listpack
  * into a generic free function that expects (void *) */
 void lpFreeVoid(void *lp) {
@@ -181,7 +198,7 @@ unsigned char *lpShrinkToFit(unsigned char *lp) {
 }
 
 /* Stores the integer encoded representation of 'v' in the 'intenc' buffer. */
-static inline void lpEncodeIntegerGetType(int64_t v, unsigned char *intenc, uint64_t *enclen) {
+void lpEncodeIntegerGetType(int64_t v, unsigned char *intenc, uint64_t *enclen) {
     if (v >= 0 && v <= 127) {
         /* Single byte 0-127 integer. */
         intenc[0] = v;
@@ -355,6 +372,12 @@ static inline uint32_t lpCurrentEncodedSizeUnsafe(unsigned char *p) {
     if (LP_ENCODING_IS_64BIT_INT(p[0])) return 9;
     if (LP_ENCODING_IS_12BIT_STR(p[0])) return 2 + LP_ENCODING_12BIT_STR_LEN(p);
     if (LP_ENCODING_IS_32BIT_STR(p[0])) return 5 + LP_ENCODING_32BIT_STR_LEN(p);
+    if (LP_ENCODING_IS_TAGGED(p[0])) {
+        unsigned char *inner = p + 1;
+        uint32_t inner_size = lpCurrentEncodedSizeUnsafe(inner);
+        return inner_size + 1; /* tagged byte + inner element */
+    }
+
     if (p[0] == LP_EOF) return 1;
     return 0;
 }
@@ -373,6 +396,7 @@ static inline uint32_t lpCurrentEncodedSizeBytes(unsigned char *p) {
     if (LP_ENCODING_IS_64BIT_INT(p[0])) return 1;
     if (LP_ENCODING_IS_12BIT_STR(p[0])) return 2;
     if (LP_ENCODING_IS_32BIT_STR(p[0])) return 5;
+    if (LP_ENCODING_IS_TAGGED(p[0])) return 1;
     if (p[0] == LP_EOF) return 1;
     return 0;
 }
@@ -393,13 +417,20 @@ unsigned char *lpSkip(unsigned char *p) {
  * already pointed to the last element of the listpack. */
 unsigned char *lpNext(unsigned char *lp, unsigned char *p) {
     assert(p);
-    p = lpSkip(p);
-    if (unlikely(p[0] == LP_EOF)) {
-        size_t bytes = lpBytes(lp);
-        /* EOF must only appear at the end of a listpack. */
-        assert(p + 1 == lp + bytes);
-        return NULL;
-    }
+    do {
+        p = lpSkip(p);
+        if (unlikely(p[0] == LP_EOF)) {
+            size_t bytes = lpBytes(lp);
+            /* EOF must only appear at the end of a listpack. */
+            assert(p + 1 == lp + bytes);
+            return NULL;
+        }
+        /* Metadata (tagged) entries are logically part of the real element
+         * that precedes them and are invisible to logical iteration: they can
+         * only be reached through lpGetMetadata(). For listpacks without
+         * metadata this is a well-predicted not-taken branch on a byte that
+         * was just read for the EOF check. */
+    } while (unlikely(LP_ENCODING_IS_TAGGED(p[0])));
     return p;
 }
 
@@ -408,25 +439,33 @@ unsigned char *lpNext(unsigned char *lp, unsigned char *p) {
  * already pointed to the first element of the listpack. */
 unsigned char *lpPrev(unsigned char *lp, unsigned char *p) {
     assert(p);
-    if (p - lp == LP_HDR_SIZE) return NULL;
-    p--; /* Seek the first backlen byte of the last element. */
-    uint64_t prevlen = lpDecodeBacklen(p);
-    prevlen += lpEncodeBacklen(NULL, prevlen);
-    p -= prevlen - 1; /* Seek the first byte of the previous entry. */
-    return p;
+    while (p - lp != LP_HDR_SIZE) {
+        p--; /* Seek the first backlen byte of the last element. */
+        uint64_t prevlen = lpDecodeBacklen(p);
+        prevlen += lpEncodeBacklen(NULL, prevlen);
+        p -= prevlen - 1; /* Seek the first byte of the previous entry. */
+        /* Skip metadata entries, see lpNext(). */
+        if (likely(!LP_ENCODING_IS_TAGGED(p[0]))) return p;
+    }
+    return NULL;
 }
 
 /* Return a pointer to the first element of the listpack, or NULL if the
  * listpack has no elements. */
 unsigned char *lpFirst(unsigned char *lp) {
     unsigned char *p = lp + LP_HDR_SIZE; /* Skip the header. */
-    if (unlikely(p[0] == LP_EOF)) {
-        size_t bytes = lpBytes(lp);
-        /* EOF must only appear at the end of a listpack. */
-        assert(p + 1 == lp + bytes);
-        return NULL;
+    while (1) {
+        if (unlikely(p[0] == LP_EOF)) {
+            size_t bytes = lpBytes(lp);
+            /* EOF must only appear at the end of a listpack. */
+            assert(p + 1 == lp + bytes);
+            return NULL;
+        }
+        /* Skip metadata entries, see lpNext(). A metadata entry should never
+         * lead a listpack, this is just defensive. */
+        if (likely(!LP_ENCODING_IS_TAGGED(p[0]))) return p;
+        p = lpSkip(p);
     }
-    return p;
 }
 
 /* Return a pointer to the last element of the listpack, or NULL if the
@@ -458,6 +497,36 @@ unsigned long lpLength(unsigned char *lp) {
      * set it. */
     if (count < LP_HDR_NUMELE_UNKNOWN) lpSetNumElements(lp, count);
     return count;
+}
+
+/* Returns 1 if the element at 'p' is a metadata tagged element */
+int lpIsMetadata(unsigned char *p) {
+    if (p[0] == LP_EOF) return 0;
+    return LP_ENCODING_IS_TAGGED(p[0]);
+}
+
+/* If the real element pointed by 'p' is trailed by a metadata (tagged) entry,
+ * return a pointer to it, otherwise NULL. Metadata entries are logically
+ * coupled to the real element that precedes them and are skipped by the
+ * logical iterators (lpFirst/lpLast/lpNext/lpPrev/lpSeek); this accessor is
+ * the only way to reach them. */
+unsigned char *lpGetMetadata(unsigned char *lp, unsigned char *p) {
+    assert(p);
+    p = lpSkip(p);
+    if (unlikely(p[0] == LP_EOF)) {
+        /* EOF must only appear at the end of a listpack. */
+        assert(p + 1 == lp + lpBytes(lp));
+        return NULL;
+    }
+    return LP_ENCODING_IS_TAGGED(p[0]) ? p : NULL;
+}
+
+/* Pointer to the first physical entry (after the header). May point at a
+ * real element, a leading metadata entry, or the EOF terminator on an empty
+ * listpack. Unlike lpFirst() it does not skip metadata; use only with
+ * EOF/metadata-aware accessors. */
+unsigned char *lpStart(unsigned char *lp) {
+    return lp + LP_HDR_SIZE;
 }
 
 /* Return the listpack element pointed by 'p'.
@@ -609,6 +678,18 @@ unsigned char *lpFind(unsigned char *lp, unsigned char *p, unsigned char *s, uin
 
     assert(p);
     while (p) {
+        /* Check if we are reading a metadata entry if so skip it */
+        if (lpIsMetadata(p)) {
+            p = lpSkip(p);
+            if (unlikely(p[0] == LP_EOF)) {
+                /* EOF must only appear at the end of a listpack. */
+                assert(p + 1 == lp + lp_bytes);
+                break;
+            }
+            assert(p >= lp + LP_HDR_SIZE && p < lp + lp_bytes);
+            continue;
+        }
+
         if (skipcnt == 0) {
             value = lpGetWithSize(p, &ll, NULL, &entry_size);
             if (value) {
@@ -690,13 +771,22 @@ unsigned char *lpFind(unsigned char *lp, unsigned char *p, unsigned char *s, uin
  * For deletion operations (both 'elestr' and 'eleint' set to NULL) 'newp' is
  * set to the next element, on the right of the deleted one, or to NULL if the
  * deleted element was the last one. */
-unsigned char *lpInsert(unsigned char *lp,
-                        unsigned char *elestr,
-                        unsigned char *eleint,
-                        uint32_t size,
-                        unsigned char *p,
-                        int where,
-                        unsigned char **newp) {
+/* What kind of entry an insertion produces. LP_ENTRY_METADATA entries carry
+ * the LP_ENCODING_TAGGED marker, are skipped by the logical iterators and are
+ * not counted in the header numele field. */
+typedef enum {
+    LP_ENTRY_DATA = 0,
+    LP_ENTRY_METADATA
+} lpEntryType;
+
+static unsigned char *lpInsertImpl(unsigned char *lp,
+                                   unsigned char *elestr,
+                                   unsigned char *eleint,
+                                   uint32_t size,
+                                   unsigned char *p,
+                                   int where,
+                                   unsigned char **newp,
+                                   lpEntryType type) {
     unsigned char intenc[LP_MAX_INT_ENCODING_LEN];
     unsigned char backlen[LP_MAX_BACKLEN_SIZE];
 
@@ -707,6 +797,11 @@ unsigned char *lpInsert(unsigned char *lp,
      * zero-length element. So whatever we get passed as 'where', set
      * it to LP_REPLACE. */
     if (del_ele) where = LP_REPLACE;
+
+    /* Metadata (tagged) entries are not counted in the header numele field,
+     * which only tracks real elements. Determine before any memory movement
+     * whether this operation adds/removes a metadata entry. */
+    int ele_is_meta = del_ele ? LP_ENCODING_IS_TAGGED(p[0]) : (type == LP_ENTRY_METADATA);
 
     /* If we need to insert after the current element, we just jump to the
      * next element (that could be the EOF one) and handle the case of
@@ -723,7 +818,10 @@ unsigned char *lpInsert(unsigned char *lp,
     unsigned long poff = p - lp;
 
     int enctype;
-    if (elestr) {
+    if (type == LP_ENTRY_METADATA) {
+        enctype = LP_ENCODING_TAGGED;
+        enclen = size + 1; /* size is the encoded value +1 for the prefixed tag */
+    } else if (elestr) {
         /* Calling lpEncodeGetType() results into the encoded version of the
          * element to be stored into 'intenc' in case it is representable as
          * an integer: in that case, the function returns LP_ENCODING_INT.
@@ -795,6 +893,13 @@ unsigned char *lpInsert(unsigned char *lp,
     if (!del_ele) {
         if (enctype == LP_ENCODING_INT) {
             memcpy(dst, eleint, enclen);
+        } else if (enctype == LP_ENCODING_TAGGED) {
+            dst[0] = LP_ENCODING_TAGGED;
+            if (eleint) {
+                memcpy(dst + 1, eleint, size);
+            } else if (elestr) {
+                memcpy(dst + 1, elestr, size);
+            }
         } else if (elestr) {
             lpEncodeString(dst, elestr, size);
         } else {
@@ -805,8 +910,8 @@ unsigned char *lpInsert(unsigned char *lp,
         dst += backlen_size;
     }
 
-    /* Update header. */
-    if (where != LP_REPLACE || del_ele) {
+    /* Update header. Metadata entries are invisible to numele. */
+    if ((where != LP_REPLACE || del_ele) && !ele_is_meta) {
         uint32_t num_elements = lpGetNumElements(lp);
         if (num_elements != LP_HDR_NUMELE_UNKNOWN) {
             if (!del_ele)
@@ -837,6 +942,28 @@ unsigned char *lpInsert(unsigned char *lp,
 #endif
 
     return lp;
+}
+
+/* Public lpInsert(), inserting a regular (data) element. See lpInsertImpl()
+ * for the full contract. */
+unsigned char *lpInsert(unsigned char *lp,
+                        unsigned char *elestr,
+                        unsigned char *eleint,
+                        uint32_t size,
+                        unsigned char *p,
+                        int where,
+                        unsigned char **newp) {
+    return lpInsertImpl(lp, elestr, eleint, size, p, where, newp, LP_ENTRY_DATA);
+}
+
+/* Insert a metadata (tagged) entry holding the integer payload 'eleint' of
+ * length 'size' (as produced by lpEncodeIntegerGetType()). Metadata payloads
+ * are integer-only: the accessor lpGetMetadataValue() has no way to return a
+ * string. */
+unsigned char *
+lpInsertMetadata(unsigned char *lp, unsigned char *eleint, uint32_t size, unsigned char *p, int where, unsigned char **newp) {
+    assert(eleint != NULL);
+    return lpInsertImpl(lp, NULL, eleint, size, p, where, newp, LP_ENTRY_METADATA);
 }
 
 /* This is just a wrapper for lpInsert() to directly use a string. */
@@ -908,6 +1035,14 @@ unsigned char *lpDelete(unsigned char *lp, unsigned char *p, unsigned char **new
     return lpInsert(lp, NULL, NULL, 0, p, LP_REPLACE, newp);
 }
 
+/* This is just a wrapper around lpDelete to remove tagged metadata element
+ * from listpack. 'metadata_ptr' MUST be non-null and should point at a
+ * tagged entry */
+unsigned char *lpRemoveMetadata(unsigned char *lp, unsigned char *metadata_ptr) {
+    assert(lpIsMetadata(metadata_ptr));
+    return lpDelete(lp, metadata_ptr, NULL);
+}
+
 /* Delete a range of entries from the listpack start with the element pointed by 'p'. */
 unsigned char *lpDeleteRangeWithEntry(unsigned char *lp, unsigned char **p, unsigned long num) {
     size_t bytes = lpBytes(lp);
@@ -919,11 +1054,16 @@ unsigned char *lpDeleteRangeWithEntry(unsigned char *lp, unsigned char **p, unsi
     if (num == 0) return lp; /* Nothing to delete, return ASAP. */
 
     /* Find the next entry to the last entry that needs to be deleted.
+     * 'num' counts real elements; metadata (tagged) entries trailing a real
+     * element are logically coupled to it and are deleted along with it
+     * (they are not counted in 'deleted', which tracks numele adjustments).
      * lpLength may be unreliable due to corrupt data, so we cannot
      * treat 'num' as the number of elements to be deleted. */
     while (num--) {
         deleted++;
         tail = lpSkip(tail);
+        /* Consume metadata entries trailing the deleted element. */
+        while (tail[0] != LP_EOF && LP_ENCODING_IS_TAGGED(tail[0])) tail = lpSkip(tail);
         if (unlikely(tail[0] == LP_EOF)) {
             /* EOF must only appear at the end of a listpack. */
             assert(tail + 1 == lp + bytes);
@@ -1219,6 +1359,19 @@ int lpValidateNext(unsigned char *lp, unsigned char **pp, size_t lpbytes) {
     /* make sure the encoded entry length doesn't reach outside the edge of the listpack */
     if (OUT_OF_RANGE(p + lenbytes)) return 0;
 
+    /* For tagged (metadata) entries the size header lives in the inner
+     * element: lenbytes above only covers the tag byte, so before
+     * lpCurrentEncodedSizeUnsafe() recurses into the inner header we must
+     * validate that header's bytes are in range as well. Nested tags are
+     * invalid. */
+    if (LP_ENCODING_IS_TAGGED(p[0])) {
+        unsigned char *inner = p + 1;
+        if (LP_ENCODING_IS_TAGGED(inner[0])) return 0;
+        uint32_t inner_lenbytes = lpCurrentEncodedSizeBytes(inner);
+        if (!inner_lenbytes) return 0;
+        if (OUT_OF_RANGE(inner + inner_lenbytes)) return 0;
+    }
+
     /* get the entry length and encoded backlen. */
     unsigned long entrylen = lpCurrentEncodedSizeUnsafe(p);
     unsigned long encodedBacklen = lpEncodeBacklen(NULL, entrylen);
@@ -1241,7 +1394,7 @@ int lpValidateNext(unsigned char *lp, unsigned char **pp, size_t lpbytes) {
 
 /* Validate the integrity of the data structure.
  * Validates the header and scans all entries one by one. */
-int lpValidateIntegrity(unsigned char *lp, size_t size, listpackValidateEntryCB entry_cb, void *cb_userdata) {
+int lpValidateIntegrity(unsigned char *lp, size_t size, listpackValidateEntryCB entry_cb, void *cb_userdata, int allow_metadata) {
     /* Check that we can actually read the header. (and EOF) */
     if (size < LP_HDR_SIZE + 1) return 0;
 
@@ -1254,6 +1407,7 @@ int lpValidateIntegrity(unsigned char *lp, size_t size, listpackValidateEntryCB 
 
     /* Validate the individual entries. */
     uint32_t count = 0;
+    int seen_real = 0;
     uint32_t numele = lpGetNumElements(lp);
     unsigned char *p = lp + LP_HDR_SIZE;
     while (p && p[0] != LP_EOF) {
@@ -1263,10 +1417,20 @@ int lpValidateIntegrity(unsigned char *lp, size_t size, listpackValidateEntryCB 
          * to avoid callback crash due to corrupt listpack. */
         if (!lpValidateNext(lp, &p, bytes)) return 0;
 
+        /* Metadata (tagged) entries are only legal where the caller allows
+         * them (hash listpacks) and are not counted in numele. They must
+         * trail a real element, with one exception: a single tagged entry may
+         * lead the listpack as the owning type's aggregate header. */
+        if (lpIsMetadata(prev)) {
+            if (!allow_metadata) return 0;
+            if (!seen_real && !(prev == lpStart(lp))) return 0;
+        } else {
+            count++;
+            seen_real = 1;
+        }
+
         /* Optionally let the caller validate the entry too. */
         if (entry_cb && !entry_cb(prev, numele, cb_userdata)) return 0;
-
-        count++;
     }
 
     /* Make sure 'p' really does point to the end of the listpack. */

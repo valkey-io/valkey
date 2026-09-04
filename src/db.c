@@ -28,6 +28,7 @@
  */
 
 #include "server.h"
+#include "listpack.h"
 #include "hotkeys.h"
 #include "ordered_index.h"
 #include "cluster.h"
@@ -1369,7 +1370,8 @@ void scanGenericCommandWithOptions(client *c, robj *o, unsigned long long cursor
         setTypeReleaseIterator(si);
         cursor = 0;
     } else if ((objectGetType(o) == OBJ_HASH || o->type == OBJ_ZSET) && o->encoding == OBJ_ENCODING_LISTPACK) {
-        unsigned char *p = lpFirst(objectGetVal(o));
+        unsigned char *zl = objectGetVal(o);
+        unsigned char *p = lpFirst(zl);
         unsigned char *str;
         int64_t len;
         unsigned char intbuf[LP_INTBUF_SIZE];
@@ -1378,9 +1380,13 @@ void scanGenericCommandWithOptions(client *c, robj *o, unsigned long long cursor
             str = lpGet(p, &len, intbuf);
             /* point to the value */
             p = lpNext(objectGetVal(o), p);
+            unsigned char *vptr = p;
+            /* Skip fields not visible in the current context */
+            long long expiry = hashTypeListpackGetExpiry(zl, vptr);
+            int is_valid = hashTypeListpackFieldIsValid(expiry);
+            p = lpNext(zl, vptr);
+            if (!is_valid) continue;
             if (opts->use_pattern && !stringmatchlen(opts->pat, opts->patlen, (char *)str, len, 0)) {
-                /* jump to the next key/val pair */
-                p = lpNext(objectGetVal(o), p);
                 continue;
             }
             /* add key object */
@@ -1388,11 +1394,10 @@ void scanGenericCommandWithOptions(client *c, robj *o, unsigned long long cursor
             addScanDataItem(&result, (const char *)item, sdslen(item));
             /* add value object */
             if (!opts->only_keys) {
-                str = lpGet(p, &len, intbuf);
+                str = lpGet(vptr, &len, intbuf);
                 item = sdsnewlen(str, len);
                 addScanDataItem(&result, (const char *)item, sdslen(item));
             }
-            p = lpNext(objectGetVal(o), p);
         }
         cursor = 0;
     } else {

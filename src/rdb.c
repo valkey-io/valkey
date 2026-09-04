@@ -765,18 +765,16 @@ int rdbGetObjectType(robj *o, int rdbver) {
         else
             serverPanic("Unknown sorted set encoding");
     case OBJ_HASH:
-        if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK)
-            return RDB_TYPE_HASH_LISTPACK;
-        else if (objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE)
-            if (hashTypeHasVolatileFields(o))
-                if (rdbver >= 80)
-                    return RDB_TYPE_HASH_2;
-                else
-                    return -1; /* can't be stored in old RDB */
-            else
-                return RDB_TYPE_HASH;
-        else
-            serverPanic("Unknown hash encoding");
+        if (hashTypeHasVolatileFields(o)) {
+            /* Field TTLs need a TTL-capable RDB type: HASH_2 triplets for
+             * RDB 80 (9.0) and newer targets, regardless of the in-memory
+             * encoding; older targets can't store them. */
+            if (rdbver >= 80) return RDB_TYPE_HASH_2;
+            return -1; /* can't be stored in old RDB */
+        }
+        if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) return RDB_TYPE_HASH_LISTPACK;
+        if (objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE) return RDB_TYPE_HASH;
+        serverPanic("Unknown hash encoding");
     case OBJ_STREAM: return RDB_TYPE_STREAM_LISTPACKS_3;
     case OBJ_MODULE: return RDB_TYPE_MODULE_2;
     default: serverPanic("Unknown object type");
@@ -1010,7 +1008,34 @@ ssize_t rdbSaveObject(rio *rdb, robj *o, robj *key, int dbid, unsigned char rdbt
         }
     } else if (objectGetType(o) == OBJ_HASH) {
         /* Save a hash value */
-        if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) {
+        if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK && rdbtype == RDB_TYPE_HASH_2) {
+            /* A listpack hash with field TTLs: write the field/value/expiry
+             * triplet format without converting the in-memory object. */
+            unsigned char *zl = objectGetVal(o);
+            unsigned char field_intbuf[LP_INTBUF_SIZE], value_intbuf[LP_INTBUF_SIZE];
+
+            if ((n = rdbSaveLen(rdb, hashTypeLength(o))) == -1) return -1;
+            nwritten += n;
+
+            unsigned char *p = lpFirst(zl);
+            while (p) {
+                int64_t flen, vlen;
+                unsigned char *field = lpGet(p, &flen, field_intbuf);
+                unsigned char *vptr = lpNext(zl, p);
+                serverAssert(vptr != NULL);
+                unsigned char *value = lpGet(vptr, &vlen, value_intbuf);
+                long long expiry = hashTypeListpackGetExpiry(zl, vptr);
+
+                if ((n = rdbSaveRawString(rdb, field, flen)) == -1) return -1;
+                nwritten += n;
+                if ((n = rdbSaveRawString(rdb, value, vlen)) == -1) return -1;
+                nwritten += n;
+                if ((n = rdbSaveMillisecondTime(rdb, expiry)) == -1) return -1;
+                nwritten += n;
+
+                p = lpNext(zl, vptr);
+            }
+        } else if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) {
             size_t l = lpBytes((unsigned char *)objectGetVal(o));
 
             if ((n = rdbSaveRawString(rdb, objectGetVal(o), l)) == -1) return -1;
@@ -1961,9 +1986,30 @@ static int _listZiplistEntryConvertAndValidate(unsigned char *p, unsigned int he
 static int _lpEntryValidation(unsigned char *p, unsigned int head_count, void *userdata) {
     struct {
         int pairs;
+        int allow_metadata;
         long count;
+        long entries_seen;
+        long long expected_volatile;
+        long long seen_volatile;
         hashtable *fields;
     } *data = userdata;
+
+    /* Metadata (tagged) entries are only legal in hash listpacks. When allowed,
+     * skip them (they're not real field/value records); otherwise reject the
+     * listpack, since their presence in a set/zset payload indicates corruption.
+     * A tagged entry in the leading position is the aggregate header carrying
+     * the volatile-field count; every other one is a per-field expiry, tallied
+     * so the caller can cross-check the header. */
+    if (lpIsMetadata(p)) {
+        if (!data->allow_metadata) return 0;
+        if (data->entries_seen == 0)
+            data->expected_volatile = lpGetMetadataValue(p);
+        else
+            data->seen_volatile++;
+        data->entries_seen++;
+        return 1;
+    }
+    data->entries_seen++;
 
     if (data->fields == NULL) {
         data->fields = hashtableCreate(&setHashtableType);
@@ -1992,19 +2038,34 @@ static int _lpEntryValidation(unsigned char *p, unsigned int head_count, void *u
 
 /* Validate the integrity of the listpack structure and check for duplicates.
  * when `pairs` is 0, all elements need to be unique (it's a set)
- * when `pairs` is 1, odd elements need to be unique (it's a key-value map) */
-int lpValidateIntegrityAndDups(unsigned char *lp, size_t size, int pairs) {
+ * when `pairs` is 1, odd elements need to be unique (it's a key-value map)
+ * `allow_metadata` must only be set for hash listpacks, which may carry tagged
+ * metadata (field expiration) entries; for sets/zsets it stays 0 so that such
+ * entries are treated as corruption. */
+int lpValidateIntegrityAndDups(unsigned char *lp, size_t size, int pairs, int allow_metadata) {
     /* Keep track of the field names to locate duplicate ones */
     struct {
         int pairs;
+        int allow_metadata;
         long count;
+        long entries_seen;
+        long long expected_volatile; /* -1: no aggregate header present. */
+        long long seen_volatile;
         hashtable *fields; /* Initialisation at the first callback. */
-    } data = {pairs, 0, NULL};
+    } data = {pairs, allow_metadata, 0, 0, -1, 0, NULL};
 
-    int ret = lpValidateIntegrity(lp, size, _lpEntryValidation, &data);
+    int ret = lpValidateIntegrity(lp, size, _lpEntryValidation, &data, allow_metadata);
 
     /* make sure we have an even number of records. */
     if (pairs && data.count & 1) ret = 0;
+
+    /* Cross-check the aggregate volatile-count header against the per-field
+     * expiry entries actually present: a mismatch (or per-field entries with
+     * no header at all) indicates corruption. */
+    if (ret && allow_metadata) {
+        long long expected = (data.expected_volatile == -1) ? 0 : data.expected_volatile;
+        if (expected != data.seen_volatile) ret = 0;
+    }
 
     if (data.fields) hashtableRelease(data.fields);
     return ret;
@@ -2220,8 +2281,12 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
 
         o = createHashObject();
 
-        /* Too many entries or hash object contains elements with expiry? Use a hash table right from the start. */
-        if (len > server.hash_max_listpack_entries || rdbtype == RDB_TYPE_HASH_2)
+        /* Too many entries? Use a hash table right from the start. A HASH_2
+         * hash (field TTLs) that is small enough is loaded as a listpack with
+         * tagged metadata entries: the triplet format already carries the
+         * expiry, so no dedicated RDB type is needed to preserve the listpack
+         * encoding across a save/load cycle. */
+        if (len > server.hash_max_listpack_entries)
             hashTypeConvert(o, OBJ_ENCODING_HASHTABLE);
         else {
             /* Guarantee that the server won't crash later when the listpack
@@ -2233,6 +2298,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
 
 
         /* Load every field and value into the ziplist */
+        long long volatile_fields = 0; /* fields loaded into the listpack carrying a TTL */
         while (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK && len > 0) {
             len--;
             /* Load raw strings */
@@ -2248,6 +2314,19 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
                 return NULL;
             }
 
+            /* Also load the entry expiry */
+            long long itemexpiry = EXPIRY_NONE;
+            if (rdbtype == RDB_TYPE_HASH_2) {
+                itemexpiry = rdbLoadMillisecondTime(rdb, RDB_VERSION);
+                if (itemexpiry < EXPIRY_NONE || rioGetReadError(rdb)) {
+                    sdsfree(field);
+                    sdsfree(value);
+                    decrRefCount(o);
+                    if (dupSearchHashtable) hashtableRelease(dupSearchHashtable);
+                    return NULL;
+                }
+            }
+
             if (dupSearchHashtable) {
                 sds field_dup = sdsdup(field);
                 if (!hashtableAdd(dupSearchHashtable, field_dup)) {
@@ -2261,12 +2340,39 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
                 }
             }
 
-            /* Convert to hash table if size threshold is exceeded */
+            /* If this is a non-preamble RDB being loaded on the primary, and this
+             * field is already expired relative to 'now', skip it */
+            if (iAmPrimary() && !(rdbflags & RDBFLAGS_AOF_PREAMBLE) && now != 0 &&
+                itemexpiry != EXPIRY_NONE && itemexpiry < now) {
+                /* Emit HDEL to replicas. */
+                if ((rdbflags & RDBFLAGS_FEED_REPL) && server.repl_backlog) {
+                    robj keyobj, fieldobj;
+                    initStaticStringObject(keyobj, key);
+                    initStaticStringObject(fieldobj, field);
+                    robj *argv[3];
+                    argv[0] = shared.hdel;
+                    argv[1] = &keyobj;
+                    argv[2] = &fieldobj;
+                    replicationFeedReplicas(dbid, argv, 3);
+                }
+                sdsfree(field);
+                sdsfree(value);
+                continue;
+            }
+
+            /* Convert to hash table if size threshold is exceeded. A field
+             * carrying a TTL also adds a tagged metadata entry, which
+             * lpSafeToAdd knows nothing about, so account for its worst case
+             * here. */
+            size_t add_bytes = sdslen(field) + sdslen(value);
+            if (itemexpiry != EXPIRY_NONE) add_bytes += LP_METADATA_MAX_ENTRY_BYTES;
             if (objectGetEncoding(o) != OBJ_ENCODING_HASHTABLE &&
                 (sdslen(field) > server.hash_max_listpack_value || sdslen(value) > server.hash_max_listpack_value ||
-                 !lpSafeToAdd(objectGetVal(o), sdslen(field) + sdslen(value)))) {
+                 !lpSafeToAdd(objectGetVal(o), add_bytes))) {
+                /* hashTypeConvert carries the TTLs of the pairs already in the
+                 * listpack into the volatile set; no header is needed for that. */
                 hashTypeConvert(o, OBJ_ENCODING_HASHTABLE);
-                entry *entry = entryCreate(field, value, EXPIRY_NONE);
+                entry *entry = entryCreate(field, value, itemexpiry);
                 sdsfree(field);
                 if (!hashtableAdd((hashtable *)objectGetVal(o), entry)) {
                     rdbReportCorruptRDB("Duplicate hash fields detected");
@@ -2275,13 +2381,24 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
                     decrRefCount(o);
                     return NULL;
                 }
+                if (itemexpiry != EXPIRY_NONE) hashTypeTrackEntry(o, entry);
                 break;
             }
 
 
-            /* Add pair to listpack */
+            /* Add pair to listpack, with a trailing tagged metadata entry
+             * when the field carries a TTL. */
             objectSetVal(o, lpAppend(objectGetVal(o), (unsigned char *)field, sdslen(field)));
             objectSetVal(o, lpAppend(objectGetVal(o), (unsigned char *)value, sdslen(value)));
+            if (itemexpiry != EXPIRY_NONE) {
+                unsigned char intenc[LP_MAX_INT_ENCODING_LEN];
+                uint64_t enclen;
+                lpEncodeIntegerGetType(itemexpiry, intenc, &enclen);
+                unsigned char *zl = objectGetVal(o);
+                unsigned char *eofptr = zl + lpGetTotalBytes(zl) - 1;
+                objectSetVal(o, lpInsertMetadata(zl, intenc, enclen, eofptr, LP_BEFORE, NULL));
+                volatile_fields++;
+            }
 
             sdsfree(field);
             sdsfree(value);
@@ -2293,6 +2410,13 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
             hashtableRelease(dupSearchHashtable);
             dupSearchHashtable = NULL;
         }
+
+        /* Install the aggregate volatile-count header in one pass (per-pair
+         * updates would rewrite it on every insert). This must happen before
+         * any load-time reaping, which gates on the O(1) header peek in
+         * hashTypeHasVolatileFields(). */
+        if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK && volatile_fields > 0)
+            hashTypeUpdateVolatileCount(o, volatile_fields);
 
         if (objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE) {
             if (!hashtableTryExpand(objectGetVal(o), len)) {
@@ -2410,7 +2534,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
             if (rdbtype == RDB_TYPE_LIST_QUICKLIST_2) {
                 lp = data;
                 server.stat_dump_payload_sanitizations++;
-                if (!lpValidateIntegrity(lp, encoded_len, NULL, NULL)) {
+                if (!lpValidateIntegrity(lp, encoded_len, NULL, NULL, 0)) {
                     rdbReportCorruptRDB("Listpack integrity check failed.");
                     decrRefCount(o);
                     zfree(lp);
@@ -2555,7 +2679,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
             break;
         case RDB_TYPE_SET_LISTPACK:
             server.stat_dump_payload_sanitizations++;
-            if (!lpValidateIntegrityAndDups(encoded, encoded_len, 0)) {
+            if (!lpValidateIntegrityAndDups(encoded, encoded_len, 0, 0)) {
                 rdbReportCorruptRDB("Set listpack integrity check failed.");
                 zfree(encoded);
                 objectSetVal(o, NULL);
@@ -2613,7 +2737,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
         }
         case RDB_TYPE_ZSET_LISTPACK:
             server.stat_dump_payload_sanitizations++;
-            if (!lpValidateIntegrityAndDups(encoded, encoded_len, 1)) {
+            if (!lpValidateIntegrityAndDups(encoded, encoded_len, 1, 0)) {
                 rdbReportCorruptRDB("Zset listpack integrity check failed.");
                 zfree(encoded);
                 objectSetVal(o, NULL);
@@ -2666,9 +2790,11 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
                 objectSetVal(o, lpShrinkToFit(objectGetVal(o)));
             break;
         }
-        case RDB_TYPE_HASH_LISTPACK:
+        case RDB_TYPE_HASH_LISTPACK: {
+            /* Tagged metadata (field TTLs) never appears in this type;
+             * it indicates corruption. */
             server.stat_dump_payload_sanitizations++;
-            if (!lpValidateIntegrityAndDups(encoded, encoded_len, 1)) {
+            if (!lpValidateIntegrityAndDups(encoded, encoded_len, 1, 0)) {
                 rdbReportCorruptRDB("Hash listpack integrity check failed.");
                 zfree(encoded);
                 objectSetVal(o, NULL);
@@ -2677,6 +2803,9 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
             }
             objectSetType(o, OBJ_HASH);
             objectSetEncoding(o, OBJ_ENCODING_LISTPACK);
+
+            /* A hash that is already empty on load (e.g. an empty or corrupt
+             * dump) is skipped as an empty key, preserving historic behavior. */
             if (hashTypeLength(o) == 0) {
                 decrRefCount(o);
                 goto emptykey;
@@ -2684,6 +2813,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
 
             if (hashTypeLength(o) > server.hash_max_listpack_entries) hashTypeConvert(o, OBJ_ENCODING_HASHTABLE);
             break;
+        }
         default:
             /* totally unreachable */
             rdbReportCorruptRDB("Unknown RDB encoding type %d", rdbtype);

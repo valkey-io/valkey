@@ -1623,14 +1623,15 @@ start_server {tags {"dual-channel-replication external:skip"}} {
         $primary config set repl-diskless-sync-delay 0
         $replica config set dual-channel-replication-enabled yes
 
-        # A hash with field-level TTLs (HEXPIRE) is hashtable-encoded with
-        # volatile fields, which can only be serialized in RDB version >= 80.
+        # A small hash with field-level TTLs (HEXPIRE) keeps the listpack
+        # encoding with tagged expiry metadata, which can only be serialized
+        # in RDB version >= 81 (or as HASH_2 triplets for RDB 80 targets).
         # The primary must learn the replica's version over the RDB connection
         # to pick a new enough RDB version; otherwise it falls back to RDB 11
         # and the full sync fails with "Can't store key ... in RDB version 11".
         $primary hset myhash field1 value1 field2 value2 field3 value3
         $primary hexpire myhash 3600 FIELDS 3 field1 field2 field3
-        assert_encoding hashtable myhash
+        assert_encoding listpack myhash
 
         test "Dual channel full sync succeeds with hash field expiration data" {
             set sync_full [s 0 sync_full]

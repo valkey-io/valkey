@@ -2266,6 +2266,74 @@ size_t vsetMemUsage(vset *set) {
     return 0;
 }
 
+static inline size_t vsetBucketSize_NONE(vsetBucket *bucket) {
+    UNUSED(bucket);
+    return 0;
+}
+
+static inline size_t vsetBucketSize_SINGLE(vsetBucket *bucket) {
+    UNUSED(bucket);
+    return 1;
+}
+
+static inline size_t vsetBucketSize_VECTOR(vsetBucket *bucket) {
+    pVector *pv = vsetBucketVector(bucket);
+    assert(pv);
+    return pv->len;
+}
+
+static inline size_t vsetBucketSize_HASHTABLE(vsetBucket *bucket) {
+    hashtable *ht = vsetBucketHashtable(bucket);
+    return hashtableSize(ht);
+}
+
+static inline size_t vsetBucketSize_RAX(vsetBucket *bucket) {
+    rax *r = vsetBucketRax(bucket);
+    size_t numele = 0;
+    raxIterator it;
+    raxStart(&it, r);
+    assert(raxSeek(&it, "^", NULL, 0));
+    while (raxNext(&it)) {
+        switch (vsetBucketType(it.data)) {
+        case VSET_BUCKET_NONE:
+            numele += vsetBucketSize_NONE(it.data);
+            break;
+        case VSET_BUCKET_SINGLE:
+            numele += vsetBucketSize_SINGLE(it.data);
+            break;
+        case VSET_BUCKET_VECTOR:
+            numele += vsetBucketSize_VECTOR(it.data);
+            break;
+        case VSET_BUCKET_HT:
+            numele += vsetBucketSize_HASHTABLE(it.data);
+            break;
+        default:
+            panic("Unknown bucket type encountered in vsetBucketSize_RAX");
+        }
+    }
+    raxStop(&it);
+    return numele;
+}
+
+size_t vsetSize(vset *set) {
+    int bucket_type = vsetBucketType(*set);
+    switch (bucket_type) {
+    case VSET_BUCKET_NONE:
+        return vsetBucketSize_NONE(*set);
+    case VSET_BUCKET_SINGLE:
+        return vsetBucketSize_SINGLE(*set);
+    case VSET_BUCKET_VECTOR:
+        return vsetBucketSize_VECTOR(*set);
+    case VSET_BUCKET_HT:
+        panic("Unsupported hashtable bucket type for vset");
+    case VSET_BUCKET_RAX:
+        return vsetBucketSize_RAX(*set);
+    default:
+        panic("Unknown set type encountered in vsetSize");
+    }
+    return 0;
+}
+
 /* Initializes a volatile set iterator.
  *
  * This function prepares the iterator for scanning a volatile set from the beginning.

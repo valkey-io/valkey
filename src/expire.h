@@ -3,6 +3,7 @@
 
 /* Include feature-test macros early for unit tests that include expire.h
  * before server.h. */
+#include "dict.h"
 #include "fmacros.h"
 
 #include <stdbool.h>

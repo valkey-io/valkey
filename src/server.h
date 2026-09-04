@@ -808,6 +808,7 @@ typedef struct ValkeyModuleType moduleType;
 #define OBJ_ENCODING_QUICKLIST 9  /* Encoded as linked list of listpacks */
 #define OBJ_ENCODING_STREAM 10    /* Encoded as a radix tree of listpacks */
 #define OBJ_ENCODING_LISTPACK 11  /* Encoded as a listpack */
+#define OBJ_ENCODING_LISTPACK2 12 /* Encoded as a listpack with metadata tag */
 
 #define OBJ_REFCOUNT_BITS 29
 #define OBJ_SHARED_REFCOUNT ((1 << OBJ_REFCOUNT_BITS) - 1) /* Global object never destroyed. */
@@ -2858,6 +2859,13 @@ typedef struct {
     unsigned char *lpi; /* listpack iterator */
 } setTypeIterator;
 
+/* Enum for the available hashTypeIterator's */
+typedef enum {
+    HASH_ITER_ALL = 0,    /* Iterate all fields */
+    HASH_ITER_VOLATILE,   /* Iterate only fields which carry a ttl */
+    HASH_ITER_PERSISTENT, /* Iterate only fields which do not carry a ttl */
+} hashIteratorType;
+
 /* Structure to hold hash iteration abstraction. Note that iteration over
  * hashes involves both fields and values. Because it is possible that
  * not both are required, store pointers in the iterator to avoid
@@ -2865,7 +2873,7 @@ typedef struct {
 typedef struct {
     robj *subject;
     int encoding;
-    bool volatile_items_iter;
+    hashIteratorType iterator_type;
     unsigned char *fptr, *vptr;
 
     hashtableIterator iter;
@@ -3676,8 +3684,12 @@ robj *setTypeDup(robj *o);
 #define HASH_SET_COPY 0
 
 
-void hashTypeFreeVolatileSet(robj *o);          /* needed only for freeHashObject */
-void hashTypeTrackEntry(robj *o, entry *entry); /* needed only for rdbLoadObject */
+long long hashTypeVolatileCount(robj *o);                                    /* total volatile fields, incl. expired-unreaped */
+long long hashTypeListpackGetExpiry(unsigned char *zl, unsigned char *vptr); /* expiry of the pair whose value entry is vptr, or EXPIRY_NONE */
+bool hashTypeListpackFieldIsValid(long long expiry);                         /* listpack mirror of validateEntry: is a field with this expiry visible now */
+void hashTypeFreeVolatileSet(robj *o);                                       /* needed only for freeHashObject */
+void hashTypeTrackEntry(robj *o, entry *entry);                              /* needed only for rdbLoadObject */
+void hashTypeUpdateVolatileCount(robj *o, long delta);                       /* exported only for rdbLoadObject's HASH_2-to-listpack path */
 size_t hashTypeScanDefrag(robj *ob, size_t cursor, void *(*defragAlloc)(void *));
 size_t hashTypeDeleteExpiredFields(robj *o, mstime_t now, unsigned long max_fields, robj **out_fields);
 
@@ -3688,6 +3700,7 @@ bool hashTypeDelete(robj *o, sds key);
 unsigned long hashTypeLength(const robj *o);
 void hashTypeInitIterator(robj *subject, hashTypeIterator *hi);
 void hashTypeInitVolatileIterator(robj *subject, hashTypeIterator *hi);
+void hashTypeInitPersistentIterator(robj *subject, hashTypeIterator *hi);
 void hashTypeResetIterator(hashTypeIterator *hi);
 int hashTypeNext(hashTypeIterator *hi);
 void hashTypeCurrentFromListpack(hashTypeIterator *hi,
@@ -3697,6 +3710,7 @@ void hashTypeCurrentFromListpack(hashTypeIterator *hi,
                                  long long *vll);
 char *hashTypeCurrentFromHashTable(hashTypeIterator *hi, int what, size_t *len);
 sds hashTypeCurrentObjectNewSds(hashTypeIterator *hi, int what);
+long long hashTypeCurrentExpiry(robj *o, hashTypeIterator *hi);
 robj *hashTypeLookupWriteOrCreate(client *c, robj *key);
 robj *hashTypeGetValueObject(robj *o, sds field);
 int hashTypeSet(robj *o, sds field, sds value, mstime_t expiry, int flags, bool *expired_overwritten);

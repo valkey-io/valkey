@@ -4849,7 +4849,7 @@ start_server {tags {"hash"}} {
        r config set import-mode yes
        assert_equal [r hsetex myhash exat 0 fields 2 f2 v2 f3 v3] 1
        assert_equal [r hlen myhash] 3
-       assert_equal [r OBJECT ENCODING myhash] "hashtable"
+       assert_equal [r OBJECT ENCODING myhash] "listpack"
        r config set import-mode no
        wait_for_condition 30 100 {
            [r hlen myhash] == 1
@@ -4997,6 +4997,70 @@ start_server {tags {"hashexpire"}} {
         # Re-enable active expiration
         r DEBUG SET-ACTIVE-EXPIRE 1
     } {OK} {needs:debug}
+}
+
+start_server {tags {"hash expire listpack"}} {
+    r config set hash-max-listpack-entries 128
+
+    test "Volatile-count header tracks listpack expiry transitions" {
+        r del myhash
+        r hset myhash f1 v1 f2 v2 f3 v3
+        assert_encoding listpack myhash
+        assert_equal 0 [get_keys_with_volatile_items r]
+
+        # 0 -> 1: first expiry creates the aggregate header
+        assert_equal {1} [r hexpire myhash 1000 FIELDS 1 f1]
+        assert_equal 1 [get_keys_with_volatile_items r]
+
+        # 1 -> 2 -> 1: add another, then persist one
+        assert_equal {1} [r hexpire myhash 1000 FIELDS 1 f2]
+        assert_equal {1} [r hpersist myhash FIELDS 1 f1]
+        assert_equal 1 [get_keys_with_volatile_items r]
+
+        # 1 -> 0: last volatile field persisted, header removed
+        assert_equal {1} [r hpersist myhash FIELDS 1 f2]
+        assert_equal 0 [get_keys_with_volatile_items r]
+        assert_equal 3 [r hlen myhash]
+    }
+
+    test "Volatile-count header follows HDEL of a volatile field" {
+        r del myhash
+        r hset myhash f1 v1 f2 v2
+        r hexpire myhash 1000 FIELDS 1 f1
+        assert_equal 1 [get_keys_with_volatile_items r]
+        r hdel myhash f1
+        assert_equal 0 [get_keys_with_volatile_items r]
+        assert_equal {v2} [r hget myhash f2]
+    }
+
+    test "Volatile-count header survives RDB reload and DUMP/RESTORE" {
+        r del myhash
+        r hset myhash f1 v1 f2 v2
+        r hsetex myhash EX 1000 FIELDS 1 t1 x1
+        assert_encoding listpack myhash
+        r debug reload
+        assert_encoding listpack myhash
+        assert_equal 1 [get_keys_with_volatile_items r]
+        assert_range [lindex [r httl myhash FIELDS 1 t1] 0] 1 1000
+
+        set d [r dump myhash]
+        r del myhash
+        r restore myhash 0 $d
+        assert_equal 1 [get_keys_with_volatile_items r]
+        assert_range [lindex [r httl myhash FIELDS 1 t1] 0] 1 1000
+    } {} {needs:debug}
+
+    test "Volatile-count header cleared when active expiry reaps last field" {
+        r del myhash
+        r hset myhash f1 v1
+        r hpexpire myhash 50 FIELDS 1 f1
+        assert_equal 1 [get_keys_with_volatile_items r]
+        wait_for_condition 50 100 {
+            [get_keys_with_volatile_items r] == 0
+        } else {
+            fail "volatile tracking not cleared after reap"
+        }
+    }
 }
 
 start_server {tags {"hashexpire"}} {

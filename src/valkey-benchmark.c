@@ -113,6 +113,7 @@ static struct config {
     int duration;
     int warmup_duration;
     _Atomic int current_warmup_duration;
+    _Atomic int warmup_transition_claimed;
     _Atomic int requests_issued;
     _Atomic int requests_finished;
     _Atomic int previous_requests_finished;
@@ -125,7 +126,7 @@ static struct config {
     int sequential_replacement;
     int keepalive;
     int pipeline;
-    long long start;
+    _Atomic long long start;
     long long totlatency;
     const char *title;
     list *clients;
@@ -148,7 +149,12 @@ static struct config {
     int cluster_node_count;
     struct clusterNode **cluster_nodes;
     struct serverConfig *server_config;
-    struct hdr_histogram *latency_histogram;
+    struct hdr_histogram *_Atomic latency_histogram;
+    /* Pre-allocated replacement swapped in when the warmup period ends, so the
+     * histogram the recording threads are writing to is never cleared underneath
+     * them. Holds the retired warmup histogram afterwards, so both allocations
+     * stay reachable for hdr_close(). */
+    struct hdr_histogram *spare_latency_histogram;
     struct hdr_histogram *current_sec_latency_histogram;
     struct hdr_histogram *rps_histogram;
     _Atomic int is_fetching_slots;
@@ -294,7 +300,7 @@ static long long nstime(void) {
 
 static bool isBenchmarkFinished(int request_count) {
     /* don't end in warmup period */
-    int warmup_duration = atomic_load_explicit(&config.current_warmup_duration, memory_order_relaxed);
+    int warmup_duration = atomic_load_explicit(&config.current_warmup_duration, memory_order_acquire);
     if (warmup_duration > 0) return false;
 
     if (config.duration > 0) {
@@ -791,8 +797,13 @@ static void readHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
                 }
                 int requests_finished = atomic_fetch_add_explicit(&config.requests_finished, 1, memory_order_relaxed);
                 if (!isBenchmarkFinished(requests_finished)) {
+                    /* Loaded once: the warmup transition may swap this pointer, and
+                     * a thread that still holds the previous one simply records into
+                     * the retired warmup histogram, whose samples are discarded. */
+                    struct hdr_histogram *latency_histogram =
+                        atomic_load_explicit(&config.latency_histogram, memory_order_acquire);
                     if (config.num_threads == 0) {
-                        hdr_record_value(config.latency_histogram, // Histogram to record to
+                        hdr_record_value(latency_histogram, // Histogram to record to
                                          (long)c->latency <= CONFIG_LATENCY_HISTOGRAM_MAX_VALUE
                                              ? (long)c->latency
                                              : CONFIG_LATENCY_HISTOGRAM_MAX_VALUE); // Value to record
@@ -801,7 +812,7 @@ static void readHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
                                              ? (long)c->latency
                                              : CONFIG_LATENCY_HISTOGRAM_INSTANT_MAX_VALUE); // Value to record
                     } else {
-                        hdr_record_value_atomic(config.latency_histogram, // Histogram to record to
+                        hdr_record_value_atomic(latency_histogram, // Histogram to record to
                                                 (long)c->latency <= CONFIG_LATENCY_HISTOGRAM_MAX_VALUE
                                                     ? (long)c->latency
                                                     : CONFIG_LATENCY_HISTOGRAM_MAX_VALUE); // Value to record
@@ -1308,10 +1319,19 @@ static void benchmarkSequence(const char *title, char *cmd, int len, int seqlen)
     config.previous_requests_finished = 0;
     config.last_printed_bytes = 0;
     config.current_warmup_duration = config.warmup_duration;
-    hdr_init(CONFIG_LATENCY_HISTOGRAM_MIN_VALUE,         // Minimum value
-             CONFIG_LATENCY_HISTOGRAM_MAX_VALUE,         // Maximum value
-             config.precision,                           // Number of significant figures
-             &config.latency_histogram);                 // Pointer to initialise
+    config.warmup_transition_claimed = 0;
+    struct hdr_histogram *latency_histogram = NULL;
+    hdr_init(CONFIG_LATENCY_HISTOGRAM_MIN_VALUE, // Minimum value
+             CONFIG_LATENCY_HISTOGRAM_MAX_VALUE, // Maximum value
+             config.precision,                   // Number of significant figures
+             &latency_histogram);                // Pointer to initialise
+    atomic_store_explicit(&config.latency_histogram, latency_histogram, memory_order_relaxed);
+    config.spare_latency_histogram = NULL;
+    if (config.warmup_duration > 0) {
+        /* Swapped in at the end of the warmup period in place of hdr_reset(). */
+        hdr_init(CONFIG_LATENCY_HISTOGRAM_MIN_VALUE, CONFIG_LATENCY_HISTOGRAM_MAX_VALUE, config.precision,
+                 &config.spare_latency_histogram);
+    }
     hdr_init(CONFIG_LATENCY_HISTOGRAM_MIN_VALUE,         // Minimum value
              CONFIG_LATENCY_HISTOGRAM_INSTANT_MAX_VALUE, // Maximum value
              config.precision,                           // Number of significant figures
@@ -1348,6 +1368,7 @@ static void benchmarkSequence(const char *title, char *cmd, int len, int seqlen)
     if (config.threads) freeBenchmarkThreads();
     if (config.current_sec_latency_histogram) hdr_close(config.current_sec_latency_histogram);
     if (config.latency_histogram) hdr_close(config.latency_histogram);
+    if (config.spare_latency_histogram) hdr_close(config.spare_latency_histogram);
     if (config.rps_histogram) hdr_close(config.rps_histogram);
 }
 
@@ -2151,17 +2172,38 @@ long long showThroughput(struct aeEventLoop *eventLoop, long long id, void *clie
         fprintf(stderr, "All clients disconnected... aborting.\n");
         exit(1);
     }
-    int warmup_duration = atomic_load_explicit(&config.current_warmup_duration, memory_order_relaxed);
+    int warmup_duration = atomic_load_explicit(&config.current_warmup_duration, memory_order_acquire);
     if (warmup_duration > 0) {
         if ((current_tick - config.start) >= (warmup_duration * 1000LL)) {
-            /* exit the warmup period, clear all stats */
-            atomic_store_explicit(&config.current_warmup_duration, 0, memory_order_relaxed);
-
-            config.start = current_tick;
-            atomic_store_explicit(&config.requests_finished, 0, memory_order_relaxed);
-            atomic_store_explicit(&config.requests_issued, 0, memory_order_relaxed);
-            atomic_store_explicit(&config.previous_requests_finished, 0, memory_order_relaxed);
-            hdr_reset(config.latency_histogram);
+            /* Exit the warmup period and clear all stats. In multi-threaded mode
+             * showThroughput() runs on a timer in every thread, so the transition
+             * is claimed with a dedicated flag rather than by clearing the warmup
+             * duration itself: that value is also the gate which lets the recording
+             * threads write to the latency histogram, so it has to stay non-zero
+             * until every reset below has been published. */
+            int unclaimed = 0;
+            if (atomic_compare_exchange_strong_explicit(&config.warmup_transition_claimed, &unclaimed, 1,
+                                                        memory_order_acq_rel, memory_order_relaxed)) {
+                config.start = current_tick;
+                atomic_store_explicit(&config.requests_finished, 0, memory_order_relaxed);
+                atomic_store_explicit(&config.requests_issued, 0, memory_order_relaxed);
+                atomic_store_explicit(&config.previous_requests_finished, 0, memory_order_relaxed);
+                /* Swap in the spare histogram instead of resetting the live one.
+                 * hdr_reset() is a plain store followed by a memset, so running it
+                 * here would race with the hdr_record_value_atomic() calls still in
+                 * flight on the other threads and could leave total_count
+                 * disagreeing with the sum of the bucket counts. */
+                if (config.spare_latency_histogram != NULL) {
+                    struct hdr_histogram *retired =
+                        atomic_load_explicit(&config.latency_histogram, memory_order_relaxed);
+                    atomic_store_explicit(&config.latency_histogram, config.spare_latency_histogram,
+                                          memory_order_relaxed);
+                    config.spare_latency_histogram = retired;
+                }
+                /* Published last, with release ordering, so that any thread which
+                 * observes the warmup gate closed also observes everything above. */
+                atomic_store_explicit(&config.current_warmup_duration, 0, memory_order_release);
+            }
         }
     } else if (isBenchmarkFinished(requests_finished)) {
         aeStop(eventLoop);

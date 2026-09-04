@@ -114,6 +114,13 @@ We use a customized version based on master branch commit e4448cf6d1cd08fff51981
 2. Copy updated files from newer version onto files in /hdr_histogram.
 3. Apply the changes from 1 above to the updated files.
 
+Local modifications carried on top of upstream:
+1. `percentile_iter_next`, `iter_linear_next` and `log_iter_next` are bounded by the
+   end of the counts array, so that a histogram whose `total_count` disagrees with the
+   sum of its bucket counts terminates the iteration instead of spinning forever.
+   `has_next()` alone never becomes false on such a histogram. Upstream is still
+   affected; re-check before dropping this patch.
+
 ffc.h
 ---
 ffc.h is a pure C99 port of the fast_float library, providing fast string-to-double

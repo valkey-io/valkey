@@ -11296,20 +11296,27 @@ ValkeyModuleServerInfoData *VM_GetServerInfo(ValkeyModuleCtx *ctx, const char *s
     argv[0] = section ? createStringObject(section, strlen(section)) : NULL;
     dict *section_dict = genInfoSectionDict(argv, section ? 1 : 0, NULL, &all, &everything);
     sds info = genValkeyInfoString(section_dict, all, everything);
-    int totlines, i;
-    sds *lines = sdssplitlen(info, sdslen(info), "\r\n", 2, &totlines);
-    for (i = 0; i < totlines; i++) {
-        sds line = lines[i];
-        if (line[0] == '#') continue;
-        char *sep = strchr(line, ':');
-        if (!sep) continue;
-        unsigned char *key = (unsigned char *)line;
-        size_t keylen = (intptr_t)sep - (intptr_t)line;
-        sds val = sdsnewlen(sep + 1, sdslen(line) - ((intptr_t)sep - (intptr_t)line) - 1);
-        if (!raxTryInsert(d->rax, key, keylen, val, NULL)) sdsfree(val);
+    /* Parse the info string in-place to avoid per-line sds allocations. */
+    char *p = info;
+    char *end = info + sdslen(info);
+    while (p < end) {
+        char *eol = p;
+        while (eol + 1 < end && !(eol[0] == '\r' && eol[1] == '\n')) eol++;
+        char *line_end = (eol + 1 < end) ? eol : end;
+        char *next = (line_end == eol) ? eol + 2 : end;
+        size_t line_len = line_end - p;
+        if (line_len > 0 && p[0] != '#') {
+            char *sep = memchr(p, ':', line_len);
+            if (sep) {
+                unsigned char *key = (unsigned char *)p;
+                size_t keylen = sep - p;
+                sds val = sdsnewlen(sep + 1, line_end - (sep + 1));
+                if (!raxTryInsert(d->rax, key, keylen, val, NULL)) sdsfree(val);
+            }
+        }
+        p = next;
     }
     sdsfree(info);
-    sdsfreesplitres(lines, totlines);
     releaseInfoSectionDict(section_dict);
     if (argv[0]) decrRefCount(argv[0]);
     return d;

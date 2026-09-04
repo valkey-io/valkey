@@ -1049,7 +1049,15 @@ start_server {tags {"repl external:skip"} overrides {save ""}} {
                         }
                     }
                     if {$all_drop == "timeout"} {
-                        wait_for_log_messages -2 {"*Diskless rdb transfer, done reading from pipe, 1 replicas still up*"} $loglines 1 1
+                        # A full sync timeout removes the replica before pipe EOF,
+                        # while a streaming sync timeout happens after pipe EOF.
+                        if {[count_log_message -2 "Disconnecting timedout replica (full sync)"] == 1} {
+                            set expected_replicas 1
+                        } else {
+                            set expected_replicas 2
+                        }
+                        set expected_pipe_log [list "*Diskless rdb transfer, done reading from pipe, $expected_replicas replicas still up*"]
+                        wait_for_log_messages -2 $expected_pipe_log $loglines 1 1
                         # master disconnected the slow replica, remove from array
                         set replicas_alive [lreplace $replicas_alive 0 0]
                         # release it

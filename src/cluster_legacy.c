@@ -2594,6 +2594,21 @@ void clusterHandleConfigEpochCollision(clusterNode *sender) {
               humanNodename(sender), (unsigned long long)myself->configEpoch);
 }
 
+/* In some cases, we might first learn about other nodes through gossip and assign them
+ * a random shard_id, and then further learn the actual shard_id via a direct ping/pong
+ * message through ping extensions.
+ *
+ * Since the processing order is random, we may end up with multiple primary nodes
+ * in a shard, in this case, if the sender's config epoch is greater, we configure
+ * myself as its replica. */
+void clusterHandlePrimariesSameShardCollision(clusterNode *sender) {
+    serverLog(LL_NOTICE, "Two primaries in same shard, and the sender has a greater config epoch. "
+                         "Reconfiguring myself as a replica of %.40s (%s)",
+              sender->name, sender->human_nodename);
+    clusterSetPrimary(sender, 1, 0);
+    clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_FSYNC_CONFIG);
+}
+
 /* -----------------------------------------------------------------------------
  * CLUSTER nodes blacklist
  *
@@ -4127,6 +4142,15 @@ int clusterProcessPacket(clusterLink *link) {
         }
     }
 
+    /* We try to process extensions first, as we become more and more
+     * dependent on extensions. */
+    /* clusterProcessPingExtensions -> updateShardId may rely on node flag, but
+     * in here, we don't have the right node flag.
+    if (sender && (type == CLUSTERMSG_TYPE_PING || type == CLUSTERMSG_TYPE_PONG || type == CLUSTERMSG_TYPE_MEET)) {
+        clusterProcessPingExtensions(hdr, link);
+    }
+    */
+
     /* Update the last time we saw any data from this node. We
      * use this in order to avoid detecting a timeout from a node that
      * is just sending a lot of data in the cluster bus, for instance
@@ -4645,6 +4669,14 @@ int clusterProcessPacket(clusterLink *link) {
         if (sender) {
             if (!clusterProcessGossipSection(msg, link)) return 0;
             if (!clusterProcessPingExtensions(msg, link)) return 0;
+        }
+
+        /* If after processing everything, we find that myself and sender are on the
+         * same shard and are both primaries, if myself is a empty primary and myself
+         * config epoch is smaller, make it become a replica of sender. */
+        if (sender && nodeIsPrimary(myself) && nodeIsPrimary(sender) && areInSameShard(myself, sender) &&
+            myself->numslots == 0 && nodeEpoch(sender) > nodeEpoch(myself)) {
+            clusterHandlePrimariesSameShardCollision(sender);
         }
     } else if (type == CLUSTERMSG_TYPE_FAIL) {
         clusterNode *failing;

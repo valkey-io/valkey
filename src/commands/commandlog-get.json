@@ -7,6 +7,12 @@
         "arity": 4,
         "container": "COMMANDLOG",
         "function": "commandlogCommand",
+        "history": [
+            [
+                "9.2.0",
+                "Added the user name to the reply."
+            ]
+        ],
         "command_flags": [
             "ADMIN",
             "LOADING",
@@ -22,8 +28,8 @@
             "uniqueItems": true,
             "items": {
                 "type": "array",
-                "minItems": 6,
-                "maxItems": 6,
+                "minItems": 7,
+                "maxItems": 7,
                 "items": [
                     {
                         "type": "integer",
@@ -53,6 +59,10 @@
                     {
                         "type": "string",
                         "description": "Client name if set via the CLIENT SETNAME command."
+                    },
+                    {
+                        "type": "string",
+                        "description": "The name of the ACL user the client was authenticated as."
                     }
                 ]
             }

@@ -74,6 +74,11 @@ static commandlogEntry *commandlogCreateEntry(client *c, robj **argv, int argc, 
     client *caller = scriptIsRunning() ? scriptGetCaller() : c;
     ce->peerid = sdsnew(getClientPeerId(caller));
     ce->cname = caller->name ? sdsnew(objectGetVal(caller->name)) : sdsempty();
+    /* The user comes from the executing client, not the caller: a module call may
+     * select its own user (VM_SetContextUser plus the 'C' flag), and that is the
+     * user the command was authorized as. A NULL user means an unrestricted
+     * client, rendered the way CLIENT INFO does. */
+    ce->username = c->user ? sdsdup(c->user->name) : sdsnew("(superuser)");
     return ce;
 }
 
@@ -89,6 +94,7 @@ static void commandlogFreeEntry(void *ceptr) {
     zfree(ce->argv);
     sdsfree(ce->peerid);
     sdsfree(ce->cname);
+    sdsfree(ce->username);
     zfree(ce);
 }
 
@@ -135,7 +141,7 @@ static void commandlogGetReply(client *c, int type, long count) {
 
         ln = listNext(&li);
         ce = ln->value;
-        addReplyArrayLen(c, 6);
+        addReplyArrayLen(c, 7);
         addReplyLongLong(c, ce->id);
         addReplyLongLong(c, ce->time);
         addReplyLongLong(c, ce->value);
@@ -143,6 +149,7 @@ static void commandlogGetReply(client *c, int type, long count) {
         for (j = 0; j < ce->argc; j++) addReplyBulk(c, ce->argv[j]);
         addReplyBulkCBuffer(c, ce->peerid, sdslen(ce->peerid));
         addReplyBulkCBuffer(c, ce->cname, sdslen(ce->cname));
+        addReplyBulkCBuffer(c, ce->username, sdslen(ce->username));
     }
 }
 
@@ -175,7 +182,7 @@ void slowlogCommand(client *c) {
             "    Return top <count> entries from the slowlog (default: 10, -1 mean all).",
             "    Entries are made of:",
             "    id, timestamp, time in microseconds, arguments array, client IP and port,",
-            "    client name",
+            "    client name, user name",
             "LEN",
             "    Return the length of the slowlog.",
             "RESET",
@@ -232,7 +239,7 @@ void commandlogCommand(client *c) {
             "        or size in bytes for type of large-request,",
             "        or size in bytes for type of large-reply",
             "    arguments array, client IP and port,",
-            "    client name",
+            "    client name, user name",
             "LEN <type>",
             "    Return the length of the specified type of commandlog.",
             "RESET <type>",

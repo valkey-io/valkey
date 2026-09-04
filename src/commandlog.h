@@ -44,6 +44,7 @@ typedef struct commandlogEntry {
     time_t time;     /* Unix time at which the query was executed. */
     sds cname;       /* Client name. */
     sds peerid;      /* Client network address. */
+    sds username;    /* ACL user name the client was authenticated as. */
 } commandlogEntry;
 
 /* Exported API */

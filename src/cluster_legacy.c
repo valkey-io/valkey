@@ -6659,6 +6659,18 @@ void clusterCron(void) {
             freeClusterLink(node->link);
         }
 
+        /* In some situations the check above cannot disconnect the link,
+         * because data_received keeps being refreshed by the peer's own PINGs
+         * even though our PING was lost. If our PING stays outstanding for a
+         * full node timeout without a PONG, force a reconnect so a fresh PING
+         * is sent and the stale state clears. */
+        if (node->link &&
+            now - node->link->ctime > server.cluster_node_timeout &&
+            node->ping_sent && ping_delay > server.cluster_node_timeout) {
+            /* Disconnect the link, it will be reconnected automatically. */
+            freeClusterLink(node->link);
+        }
+
         /* If we have currently no active ping in this instance, and the
          * received PONG is older than half the cluster timeout, send
          * a new ping now, to ensure all the nodes are pinged without

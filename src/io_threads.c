@@ -873,7 +873,8 @@ static void handleReadJobs(client **read_jobs, int read_count) {
             client *c = lookupClientByID(read_client_ids[i]);
             if (!c || !c->conn) continue;
 
-            if (processPendingCommandAndInputBuffer(c) == C_OK) beforeNextClient(c);
+            if (processPendingCommandAndInputBuffer(c) == C_ERR) continue;
+            beforeNextClient(c);
 
             c = lookupClientByID(read_client_ids[i]);
             if (!c || !c->conn) continue;

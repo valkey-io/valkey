@@ -226,7 +226,21 @@ static inline void innerNodeMoveChildren(innerNode *node, int dst_idx, int src_i
 }
 
 static bool updateCommonPrefix(innerNode *inner) {
-    if (inner->header.num_items < 2) return false;
+    if (inner->header.num_items < 2) {
+        /* A node reduced to one child (by a range delete removing all its
+         * siblings) can still be holding the prefix it derived when it had
+         * >= 2 anchors. The surviving child is child 0, whose key range
+         * extends BELOW its own high key, so when the range delete truncates
+         * it innerNodeRefreshChildMeta() installs a smaller anchor that need
+         * not start with the retained prefix. Drop compression here:
+         * prefix_len 0 is trivially a prefix of every anchor. */
+        if (inner->prefix_len != 0) {
+            innerNodeSetPrefix(inner, "", 0);
+            recomputeFeatures(inner);
+            return true;
+        }
+        return false;
+    }
 
     /* Compute the common prefix of this node's first and last anchors.
      * Anchors are high keys of children, so this is the common prefix among
@@ -1524,7 +1538,7 @@ typedef struct {
  * Returns the leaf node reached.
  *
  * When called with a compile-time-constant function pointer (e.g.,
- * findChildByScoreWrapper), the compiler can inline both this helper and the
+ * findChildByValueWrapper), the compiler can inline both this helper and the
  * callback at -O2, producing specialized code with no indirect calls. */
 typedef int (*findChildFn)(innerNode *inner, const void *key);
 
@@ -1559,10 +1573,6 @@ static int findChildByValueWrapper(innerNode *inner, const void *key) {
 /* Comparison function for leaf-level index resolution.
  * Returns <0, 0, or >0 like memcmp/sdscmp. */
 typedef int (*leafCmpFn)(const_sds element, const void *key);
-
-static int leafCmpByScore(const_sds element, const void *key) {
-    return memcmp(element, key, SCORE_SIZE);
-}
 
 static int leafCmpByValue(const_sds element, const void *key) {
     return sdscmp(element, (const_sds)key);
@@ -2110,6 +2120,141 @@ unsigned long fbtreeDeleteRangeByRank(fbtreeIndex *fbt,
     return deleteRangeSameLeaf(fbt, &bp, callback, callback_ctx);
 }
 
+/* Lexicographically next 8-byte score prefix. Returns false when `in` is all
+ * 0xFF, i.e. no score prefix sorts above it. Incrementing the big-endian
+ * 8-byte value yields the next possible prefix in memcmp order, so an
+ * exclusive score bound can be rewritten as an inclusive bound on the next
+ * prefix. This is pure byte-string reasoning; it does not assume anything
+ * about how scores are normalized. */
+static bool scorePrefixNext(const char *in, char *out) {
+    memcpy(out, in, SCORE_SIZE);
+    for (int i = SCORE_SIZE - 1; i >= 0; i--) {
+        unsigned char c = (unsigned char)out[i];
+        if (c != 0xFF) {
+            out[i] = (char)(c + 1);
+            return true;
+        }
+        out[i] = 0;
+    }
+    return false;
+}
+
+/* Rank of the first element whose score prefix is >= `score`, or the tree
+ * length when no such element exists. This is a whole-tree lower bound: it
+ * stays correct when a run of elements sharing `score` spans several leaves.
+ * Used for the rare unbounded-upper edge (the upper bound reaches past the
+ * largest representable score prefix) where a shared two-boundary descent has
+ * no finite hi key. */
+static unsigned long lowerBoundRankByScore(fbtreeIndex *fbt, const char *score) {
+    fbtreeIterator iterator;
+    fbtreeInitIterator(&iterator, fbt);
+    long rank = fbtreeSeekToScore(score, &iterator);
+    /* fbtreeSeekToScore returns the count of elements before the position, so
+     * it is never negative (0 for an empty tree). */
+    assert(rank >= 0);
+    return (unsigned long)rank;
+}
+
+/* Turn a score range with inclusive/exclusive bounds into the half-open
+ * score-prefix window [lo, hi): every element with lo <= score(e) < hi is in
+ * range. Returns false when the window is provably empty. When the upper edge
+ * would exceed the largest representable prefix, *hi_unbounded is set (the
+ * window runs to the tree end) and hi is left unset.
+ *
+ * Both edges are expressed as lower-bound prefixes (the first prefix at or
+ * above a value), which is what makes the range duplicate-safe: a run of
+ * elements sharing a score is included or excluded as a unit even when it spans
+ * several leaves. */
+static bool scoreRangeBounds(const char *min_score,
+                             const char *max_score,
+                             int min_ex,
+                             int max_ex,
+                             char lo[SCORE_SIZE],
+                             char hi[SCORE_SIZE],
+                             bool *hi_unbounded) {
+    *hi_unbounded = false;
+
+    if (min_ex) {
+        if (!scorePrefixNext(min_score, lo)) return false; /* nothing sorts above min */
+    } else {
+        memcpy(lo, min_score, SCORE_SIZE);
+    }
+
+    if (max_ex) {
+        memcpy(hi, max_score, SCORE_SIZE);
+    } else if (!scorePrefixNext(max_score, hi)) {
+        *hi_unbounded = true; /* max is the largest possible prefix: no upper cut */
+    }
+
+    if (!*hi_unbounded && memcmp(lo, hi, SCORE_SIZE) >= 0) return false;
+    return true;
+}
+
+/* Two independent lower-bound searches (first element with score prefix >= key)
+ * over two DIFFERENT leaves, stepped in lockstep so both leaves' pointer-chase
+ * cache misses are outstanding at once (memory-level parallelism). Each
+ * values[mid] is a separately allocated sds, so every probe is a miss;
+ * interleaving the two searches and prefetching both payloads per step lets the
+ * out-of-order core overlap them instead of serializing 2*log2(leaf) misses.
+ * Mirrors resolveBothIdxPrefetch but resolves pure lower bounds (both edges are
+ * "first >= key"), which is the half-open form the score range needs. */
+static void lowerBoundBothByScore(const leafNode *lo_leaf, const char *lo, const leafNode *hi_leaf, const char *hi, int *out_lo_idx, int *out_hi_idx) {
+    int llo = 0, lhi = lo_leaf->header.num_items;
+    int hlo = 0, hhi = hi_leaf->header.num_items;
+    while (llo < lhi || hlo < hhi) {
+        int lmid = (llo + lhi) / 2;
+        int hmid = (hlo + hhi) / 2;
+        if (llo < lhi) __builtin_prefetch(lo_leaf->values[lmid]);
+        if (hlo < hhi) __builtin_prefetch(hi_leaf->values[hmid]);
+        if (llo < lhi) {
+            if (memcmp(lo_leaf->values[lmid], lo, SCORE_SIZE) < 0)
+                llo = lmid + 1;
+            else
+                lhi = lmid;
+        }
+        if (hlo < hhi) {
+            if (memcmp(hi_leaf->values[hmid], hi, SCORE_SIZE) < 0)
+                hlo = hmid + 1;
+            else
+                hhi = hmid;
+        }
+    }
+    *out_lo_idx = llo;
+    *out_hi_idx = hlo;
+}
+
+/* Resolve a finite half-open score window [lo, hi) with ONE shared tree descent
+ * (see buildBoundaryPaths). Fills `bp` with both boundary leaves and their
+ * sub-paths, records the lower-bound leaf indices (bp->start_idx = first element
+ * >= lo; the hi lower bound is returned via *out_hi_idx), and reports the global
+ * ranks of both edges. Returns whether both edges fall in the same leaf.
+ *
+ * Both leaf-local edges use lower-bound ("first element with score prefix >=
+ * key") resolution; the child_sizes accumulation in rankFromBoundaryPath turns
+ * each leaf-local index into a global rank, all from a single root->leaf
+ * descent. Because both edges are lower bounds the window is duplicate-score
+ * safe: hi marks the first element excluded from the range, so an equal-score
+ * run is kept or dropped as a unit even when it continues into the next leaf. */
+static bool scoreRangeSharedDescent(fbtreeIndex *fbt, const char *lo, const char *hi, BoundaryPaths *bp, int *out_hi_idx, unsigned long *out_start_rank, unsigned long *out_end_rank) {
+    bool same_leaf = buildBoundaryPaths(fbt, bp, lo, hi, findChildByScoreWrapper);
+
+    int lo_idx, hi_idx;
+    if (same_leaf) {
+        /* One leaf: nothing independent to overlap, resolve directly. */
+        lo_idx = leafNodeBinarySearchByScore(bp->start_leaf, lo);
+        hi_idx = leafNodeBinarySearchByScore(bp->end_leaf, hi);
+    } else {
+        /* Two leaves: software-pipeline the searches so the misses overlap. */
+        lowerBoundBothByScore(bp->start_leaf, lo, bp->end_leaf, hi, &lo_idx, &hi_idx);
+    }
+
+    bp->start_idx = lo_idx;
+    *out_hi_idx = hi_idx;
+    *out_start_rank = rankFromBoundaryPath(bp, false, lo_idx);
+    *out_end_rank = rankFromBoundaryPath(bp, true, hi_idx);
+    return same_leaf;
+}
+
 /* Delete elements with score prefix in [min_score, max_score].
  * min_ex/max_ex: if true, the corresponding bound is exclusive.
  * Score is an 8-byte big-endian normalized prefix (as stored in the tree).
@@ -2124,9 +2269,11 @@ unsigned long fbtreeDeleteRangeByScore(fbtreeIndex *fbt,
                                        void *callback_ctx) {
     if (!fbt->root) return 0;
 
-    /* Delete-all short-circuit */
-    sds first = leafNodeLowKey(fbt->leftmost_leaf);
-    sds last = leafNodeHighKey(fbt->rightmost_leaf);
+    /* Delete-all short-circuit: when both bounds fall outside the stored score
+     * range every element qualifies, so free the whole tree in one pass rather
+     * than descending for boundaries. */
+    const_sds first = leafNodeLowKey(fbt->leftmost_leaf);
+    const_sds last = leafNodeHighKey(fbt->rightmost_leaf);
     int min_covers = min_ex ? memcmp(min_score, first, SCORE_SIZE) < 0 : memcmp(min_score, first, SCORE_SIZE) <= 0;
     int max_covers = max_ex ? memcmp(max_score, last, SCORE_SIZE) > 0 : memcmp(max_score, last, SCORE_SIZE) >= 0;
     if (min_covers && max_covers) {
@@ -2135,15 +2282,34 @@ unsigned long fbtreeDeleteRangeByScore(fbtreeIndex *fbt,
         return count;
     }
 
-    /* Quick check: empty range */
-    int range_cmp = memcmp(min_score, max_score, SCORE_SIZE);
-    if (range_cmp > 0 || (range_cmp == 0 && (min_ex || max_ex))) return 0;
+    char lo[SCORE_SIZE], hi[SCORE_SIZE];
+    bool hi_unbounded;
+    if (!scoreRangeBounds(min_score, max_score, min_ex, max_ex, lo, hi, &hi_unbounded)) return 0;
 
-    /* Descend once to build the boundary paths, then delete. */
+    if (hi_unbounded) {
+        /* Range runs to the tree end: the upper bound reaches past the largest
+         * representable score prefix, so there is no finite hi key to anchor the
+         * right boundary of a shared descent. min is finite here (the fully
+         * covered range was handled by the delete-all short-circuit above). One
+         * lower-bound seek plus the rank-based delete. */
+        unsigned long start = lowerBoundRankByScore(fbt, lo);
+        unsigned long length = fbtreeLength(fbt);
+        if (length <= start) return 0;
+        return fbtreeDeleteRangeByRank(fbt, start, length - 1, callback, callback_ctx);
+    }
+
+    /* Single shared descent locates both boundary leaves and records the paths
+     * that deleteRangeCore / deleteRangeSameLeaf consume. The hi lower bound is
+     * the first element NOT in range, so the last element to delete sits one
+     * position before it (end_idx = hi_idx - 1). When hi_idx == 0 the end leaf
+     * holds no in-range element and end_idx becomes -1, the "end leaf untouched"
+     * case the delete engine handles for the value path as well. */
     BoundaryPaths bp;
-    bool same_leaf = buildBoundaryPaths(fbt, &bp, min_score, max_score, findChildByScoreWrapper);
-    bp.start_idx = resolveStartIdx(bp.start_leaf, min_score, min_ex, leafCmpByScore);
-    bp.end_idx = resolveEndIdx(bp.end_leaf, max_score, max_ex, leafCmpByScore);
+    int hi_idx;
+    unsigned long start_rank, end_rank;
+    bool same_leaf = scoreRangeSharedDescent(fbt, lo, hi, &bp, &hi_idx, &start_rank, &end_rank);
+    if (end_rank <= start_rank) return 0; /* empty range */
+    bp.end_idx = hi_idx - 1;
     return same_leaf ? deleteRangeSameLeaf(fbt, &bp, callback, callback_ctx)
                      : deleteRangeCore(fbt, &bp, callback, callback_ctx);
 }
@@ -2196,33 +2362,29 @@ unsigned long fbtreeCountRangeByScore(fbtreeIndex *fbt,
                                       int max_ex) {
     if (!fbt->root) return 0;
 
-    /* Whole-tree short-circuit */
-    sds first = leafNodeLowKey(fbt->leftmost_leaf);
-    sds last = leafNodeHighKey(fbt->rightmost_leaf);
+    /* Whole-tree short-circuit: when both bounds fall outside the stored score
+     * range every element qualifies, so answer with the tree length rather than
+     * paying for the two boundary descents. `ZCOUNT key -inf +inf` is the common
+     * case this serves. */
+    const_sds first = leafNodeLowKey(fbt->leftmost_leaf);
+    const_sds last = leafNodeHighKey(fbt->rightmost_leaf);
     int min_covers = min_ex ? memcmp(min_score, first, SCORE_SIZE) < 0 : memcmp(min_score, first, SCORE_SIZE) <= 0;
     int max_covers = max_ex ? memcmp(max_score, last, SCORE_SIZE) > 0 : memcmp(max_score, last, SCORE_SIZE) >= 0;
     if (min_covers && max_covers) return fbtreeLength(fbt);
 
-    /* Empty range */
-    int range_cmp = memcmp(min_score, max_score, SCORE_SIZE);
-    if (range_cmp > 0 || (range_cmp == 0 && (min_ex || max_ex))) return 0;
+    char lo[SCORE_SIZE], hi[SCORE_SIZE];
+    bool hi_unbounded;
+    if (!scoreRangeBounds(min_score, max_score, min_ex, max_ex, lo, hi, &hi_unbounded)) return 0;
 
+    /* Unbounded upper edge (upper bound reaches past the largest representable
+     * score prefix): one lower-bound seek; the rest of the tree is in range. */
+    if (hi_unbounded) return fbtreeLength(fbt) - lowerBoundRankByScore(fbt, lo);
+
+    /* Finite window: one shared descent yields both boundary ranks. */
     BoundaryPaths bp;
-    bool same_leaf = buildBoundaryPaths(fbt, &bp, min_score, max_score, findChildByScoreWrapper);
-    if (same_leaf) {
-        /* One leaf: nothing to overlap, resolve directly. */
-        bp.start_idx = resolveStartIdx(bp.start_leaf, min_score, min_ex, leafCmpByScore);
-        bp.end_idx = resolveEndIdx(bp.end_leaf, max_score, max_ex, leafCmpByScore);
-    } else {
-        /* Two leaves: software-pipeline the searches so both misses overlap. */
-        resolveBothIdxPrefetch(bp.start_leaf, min_score, min_ex, bp.end_leaf, max_score, max_ex,
-                               leafCmpByScore, &bp.start_idx, &bp.end_idx);
-    }
-
-    /* start_idx is the first in-range element; end_idx is the last in-range
-     * element (inclusive), so its one-past position is end_idx + 1. */
-    unsigned long start_rank = rankFromBoundaryPath(&bp, false, bp.start_idx);
-    unsigned long end_rank = rankFromBoundaryPath(&bp, true, bp.end_idx + 1);
+    int hi_idx;
+    unsigned long start_rank, end_rank;
+    scoreRangeSharedDescent(fbt, lo, hi, &bp, &hi_idx, &start_rank, &end_rank);
     return end_rank > start_rank ? end_rank - start_rank : 0;
 }
 

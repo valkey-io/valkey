@@ -1307,13 +1307,13 @@ start_server {tags {"zset"}} {
 
             test "$pop with negative count" {
                 r set zset foo
-                assert_error "ERR *must be positive" {r $pop zset -1}
+                assert_error "ERR *must be non-negative" {r $pop zset -1}
 
                 r del zset
-                assert_error "ERR *must be positive" {r $pop zset -2}
+                assert_error "ERR *must be non-negative" {r $pop zset -2}
 
                 r zadd zset 1 a 2 b 3 c
-                assert_error "ERR *must be positive" {r $pop zset -3}
+                assert_error "ERR *must be non-negative" {r $pop zset -3}
             }
         }
 

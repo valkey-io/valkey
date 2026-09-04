@@ -225,6 +225,7 @@ typedef enum {
 #define PROTO_REPLY_CHUNK_BYTES (16 * 1024) /* 16k output buffer */
 #define PROTO_INLINE_MAX_SIZE (1024 * 64)   /* Max size of inline reads */
 #define PROTO_MBULK_BIG_ARG (1024 * 32)
+#define PROTO_MAX_MULTIBULK_LEN (1024 * 1024)
 #define PROTO_RESIZE_THRESHOLD (1024 * 32)     /* Threshold for determining whether to resize query buffer */
 #define PROTO_REPLY_MIN_BYTES (1024)           /* the lower limit on reply buffer size */
 #define REDIS_AUTOSYNC_BYTES (1024 * 1024 * 4) /* Sync file every 4MB. */
@@ -2986,6 +2987,7 @@ void dictVanillaFree(void *val);
 #define READ_FLAGS_CROSSSLOT (1 << 20)
 #define READ_FLAGS_PREFETCHED (1 << 21)
 #define READ_FLAGS_ERROR_INVALID_CRLF (1 << 22)
+#define READ_FLAGS_ERROR_TOO_MANY_ARGS (1 << 23)
 
 /* Write flags for various write errors and states */
 #define WRITE_FLAGS_WRITE_ERROR (1 << 0)

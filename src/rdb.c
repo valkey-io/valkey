@@ -617,6 +617,11 @@ void *rdbGenericLoadStringObject(rio *rdb, int flags, size_t *lenptr) {
         }
     }
 
+    if (len > SIZE_MAX) {
+        rdbReportCorruptRDB("RDB string length %llu exceeds this platform's addressable size", len);
+        return NULL;
+    }
+
     if (plain || sds) {
         void *buf = plain ? ztrymalloc(len) : sdstrynewlen(SDS_NOINIT, len);
         if (!buf) {

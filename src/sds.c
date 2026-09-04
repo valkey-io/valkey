@@ -451,39 +451,46 @@ void *sdsAllocPtr(const_sds s) {
  * ... check for nread <= 0 and handle it ...
  * sdsIncrLen(s, nread);
  */
+static inline size_t sdsIncrLenAbs(ssize_t incr) {
+    return (size_t)(-(incr + 1)) + 1;
+}
+
 void sdsIncrLen(sds s, ssize_t incr) {
     size_t len;
     switch (sdsType(s)) {
     case SDS_TYPE_5: {
         unsigned char *fp = ((unsigned char *)s) - 1;
         unsigned char oldlen = SDS_TYPE_5_LEN(*fp);
-        assert((incr > 0 && oldlen + incr < 32) || (incr < 0 && oldlen >= (unsigned int)(-incr)));
+        assert((incr > 0 && oldlen + incr < 32) || (incr < 0 && oldlen >= sdsIncrLenAbs(incr)));
         *fp = SDS_TYPE_5 | ((oldlen + incr) << SDS_TYPE_BITS);
         len = oldlen + incr;
         break;
     }
     case SDS_TYPE_8: {
         SDS_HDR_VAR(8, s);
-        assert((incr >= 0 && sh->alloc - sh->len >= incr) || (incr < 0 && sh->len >= (unsigned int)(-incr)));
+        assert((incr >= 0 && sh->alloc - sh->len >= (size_t)incr) ||
+               (incr < 0 && sh->len >= sdsIncrLenAbs(incr)));
         len = (sh->len += incr);
         break;
     }
     case SDS_TYPE_16: {
         SDS_HDR_VAR(16, s);
-        assert((incr >= 0 && sh->alloc - sh->len >= incr) || (incr < 0 && sh->len >= (unsigned int)(-incr)));
+        assert((incr >= 0 && sh->alloc - sh->len >= (size_t)incr) ||
+               (incr < 0 && sh->len >= sdsIncrLenAbs(incr)));
         len = (sh->len += incr);
         break;
     }
     case SDS_TYPE_32: {
         SDS_HDR_VAR(32, s);
-        assert((incr >= 0 && sh->alloc - sh->len >= (unsigned int)incr) ||
-               (incr < 0 && sh->len >= (unsigned int)(-incr)));
+        assert((incr >= 0 && sh->alloc - sh->len >= (size_t)incr) ||
+               (incr < 0 && sh->len >= sdsIncrLenAbs(incr)));
         len = (sh->len += incr);
         break;
     }
     case SDS_TYPE_64: {
         SDS_HDR_VAR(64, s);
-        assert((incr >= 0 && sh->alloc - sh->len >= (uint64_t)incr) || (incr < 0 && sh->len >= (uint64_t)(-incr)));
+        assert((incr >= 0 && sh->alloc - sh->len >= (size_t)incr) ||
+               (incr < 0 && sh->len >= sdsIncrLenAbs(incr)));
         len = (sh->len += incr);
         break;
     }

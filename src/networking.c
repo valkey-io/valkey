@@ -3264,6 +3264,9 @@ void handleParseError(client *c) {
     } else if (flags & READ_FLAGS_ERROR_UNBALANCED_QUOTES) {
         addReplyError(c, "Protocol error: unbalanced quotes in request");
         setProtocolError("unbalanced quotes in inline request", c);
+    } else if (flags & READ_FLAGS_ERROR_TOO_MANY_ARGS) {
+        addReplyError(c, "Protocol error: too many arguments");
+        setProtocolError("too many arguments", c);
     } else if (flags & READ_FLAGS_ERROR_INVALID_CRLF) {
         addReplyError(c, "Protocol error: invalid CRLF in request");
         setProtocolError("invalid CRLF in request", c);
@@ -3288,7 +3291,7 @@ int isParsingError(client *c) {
                             READ_FLAGS_ERROR_UNAUTHENTICATED_BULK_LEN | READ_FLAGS_ERROR_MBULK_INVALID_BULK_LEN |
                             READ_FLAGS_ERROR_BIG_BULK_COUNT | READ_FLAGS_ERROR_MBULK_UNEXPECTED_CHARACTER |
                             READ_FLAGS_ERROR_UNEXPECTED_INLINE_FROM_REPLICATED_CLIENT | READ_FLAGS_ERROR_UNBALANCED_QUOTES |
-                            READ_FLAGS_ERROR_INVALID_CRLF);
+                            READ_FLAGS_ERROR_TOO_MANY_ARGS | READ_FLAGS_ERROR_INVALID_CRLF);
 }
 
 /* This function is called after the query-buffer was parsed.
@@ -3745,7 +3748,9 @@ static int parseMultibulk(client *c,
         }
 
         /* Buffer should also contain \n */
-        if (newline - (c->querybuf + c->qb_pos) > (ssize_t)(sdslen(c->querybuf) - c->qb_pos - 2)) return 0;
+        size_t remaining = sdslen(c->querybuf) - c->qb_pos;
+        size_t line_len = newline - (c->querybuf + c->qb_pos);
+        if (line_len + 2 > remaining) return 0;
 
         /* Check that what follows \r is a real \n */
         if (unlikely(newline[1] != '\n')) {
@@ -3759,6 +3764,8 @@ static int parseMultibulk(client *c,
         ok = string2ll(c->querybuf + 1 + c->qb_pos, multibulklen_slen, &ll);
         if (!ok || ll > INT_MAX) {
             return READ_FLAGS_ERROR_INVALID_MULTIBULK_LEN;
+        } else if (ll > PROTO_MAX_MULTIBULK_LEN) {
+            return READ_FLAGS_ERROR_TOO_MANY_ARGS;
         } else if (ll > 10 && auth_required) {
             return READ_FLAGS_ERROR_UNAUTHENTICATED_MULTIBULK_LEN;
         }
@@ -3775,7 +3782,8 @@ static int parseMultibulk(client *c,
         /* Set up argv array */
         if (*argv) zfree(*argv);
         *argv_len = min(c->multibulklen, 1024);
-        *argv = zmalloc(sizeof(robj *) * *argv_len);
+        *argv = ztrymalloc(sizeof(robj *) * *argv_len);
+        if (!*argv) return READ_FLAGS_ERROR_TOO_MANY_ARGS;
         *argv_len_sum = 0;
 
         /* Per-slot network bytes-in calculation.
@@ -3825,7 +3833,9 @@ static int parseMultibulk(client *c,
             }
 
             /* Buffer should also contain \n */
-            if (newline - (c->querybuf + c->qb_pos) > (ssize_t)(sdslen(c->querybuf) - c->qb_pos - 2)) return 0;
+            size_t remaining = sdslen(c->querybuf) - c->qb_pos;
+            size_t line_len = newline - (c->querybuf + c->qb_pos);
+            if (line_len + 2 > remaining) return 0;
 
             if (c->querybuf[c->qb_pos] != '$') {
                 return READ_FLAGS_ERROR_MBULK_UNEXPECTED_CHARACTER;
@@ -3889,7 +3899,9 @@ static int parseMultibulk(client *c,
             if (*argc >= *argv_len) {
                 *argv_len = min(*argv_len < INT_MAX / 2 ? (*argv_len) * 2 : INT_MAX,
                                 *argc + c->multibulklen);
-                *argv = zrealloc(*argv, sizeof(robj *) * (*argv_len));
+                robj **newargv = ztryrealloc(*argv, sizeof(robj *) * (*argv_len));
+                if (!newargv) return READ_FLAGS_ERROR_TOO_MANY_ARGS;
+                *argv = newargv;
             }
 
             /* Check that what follows argv is a real \r\n */

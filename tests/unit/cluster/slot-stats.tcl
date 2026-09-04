@@ -798,7 +798,7 @@ start_cluster 1 0 {tags {external:skip cluster}} {
 
 start_cluster 1 0 {tags {external:skip cluster} overrides {cluster-slot-stats-enabled yes}} {
 
-    set metrics [list "key-count" "cpu-usec" "network-bytes-in" "network-bytes-out"]
+    set metrics [list "key-count" "cpu-usec" "network-bytes-in" "network-bytes-out" "repl-stream-bytes"]
 
     # SET keys for target hashslots, to encourage ordering.
     set hash_tags [list 0 1 2 3 4]
@@ -888,6 +888,8 @@ start_cluster 1 0 {tags {external:skip cluster} overrides {cluster-slot-stats-en
         assert_error "ERR*" {R 0 CLUSTER SLOT-STATS ORDERBY $orderby}
         set orderby "network-bytes-out"
         assert_error "ERR*" {R 0 CLUSTER SLOT-STATS ORDERBY $orderby}
+        set orderby "repl-stream-bytes"
+        assert_error "ERR*" {R 0 CLUSTER SLOT-STATS ORDERBY $orderby}
     }
 
 }
@@ -915,7 +917,7 @@ start_cluster 1 1 {tags {external:skip cluster} overrides {cluster-slot-stats-en
     # * network-bytes-out will remain empty in the replica, since primary client do not receive replies, unless for replicationSendAck().
     set deterministic_metrics [list key-count network-bytes-in]
     set non_deterministic_metrics [list cpu-usec]
-    set empty_metrics [list network-bytes-out]
+    set empty_metrics [list network-bytes-out repl-stream-bytes]
 
     # Setup replication.
     assert {[s -1 role] eq {slave}}
@@ -1048,5 +1050,222 @@ start_cluster 1 0 {tags {external:skip cluster} overrides {cluster-slot-stats-en
         # Cleanup
         R 0 del $key
         R 0 config set min-string-size-avoid-copy-reply $copy_avoid
+    }
+}
+
+# -----------------------------------------------------------------------------
+# Test cases for CLUSTER SLOT-STATS repl-stream-bytes metric correctness.
+# -----------------------------------------------------------------------------
+
+start_cluster 1 1 {tags {external:skip cluster} overrides {cluster-slot-stats-enabled yes}} {
+
+    # Define shared variables.
+    set key "FOO"
+    set key_slot [R 0 CLUSTER KEYSLOT $key]
+    set metrics_to_assert [list repl-stream-bytes]
+
+    # Setup replication.
+    assert {[s -1 role] eq {slave}}
+    wait_for_condition 1000 50 {
+        [s -1 master_link_status] eq {up}
+    } else {
+        fail "Instance #1 master link status is not up"
+    }
+    R 1 readonly
+
+    test "CLUSTER SLOT-STATS repl-stream-bytes, counts write bytes and excludes the SELECT preamble." {
+        # This is the first write on the fresh replica link, so the replication
+        # stream contains a SELECT preamble followed by the SET command:
+        #   SELECT: *2\r\n$6\r\nSELECT\r\n$1\r\n0\r\n          --> 23 bytes
+        #   SET:    *3\r\n$3\r\nSET\r\n$3\r\nFOO\r\n$5\r\nVALUE\r\n --> 33 bytes
+        #   Total on the wire: 56 bytes.
+        # The slot counter must report only the SET (33), proving the SELECT
+        # preamble is deducted. The repl offset delta must be 56, proving the
+        # preamble genuinely reached the stream.
+        set offset_before [s 0 master_repl_offset]
+        assert_equal [R 0 SET $key VALUE] {OK}
+        set offset_after [s 0 master_repl_offset]
+
+        # Slot counter: only SET bytes attributed.
+        set slot_stats [R 0 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
+        set expected_slot_stats [
+            dict create $key_slot [
+                dict create repl-stream-bytes 33
+            ]
+        ]
+        assert_empty_slot_stats_with_exception $slot_stats $expected_slot_stats $metrics_to_assert
+
+        # Offset delta: SELECT (23) + SET (33) = 56.
+        assert_equal [expr {$offset_after - $offset_before}] 56
+    }
+    R 0 CONFIG RESETSTAT
+
+    test "CLUSTER SLOT-STATS repl-stream-bytes, value is 0 on replica." {
+        R 0 SET $key VALUE2
+        wait_for_condition 500 10 {
+            [R 1 EXISTS $key] == 1
+        } else {
+            fail "Key was not replicated"
+        }
+        # Slot stats already enabled on replica via overrides — this genuinely proves
+        # replicas do not increment the counter (not vacuously passing due to disabled stats).
+        set slot_stats [R 1 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
+        assert_empty_slot_stats $slot_stats $metrics_to_assert
+    }
+    R 0 CONFIG RESETSTAT
+
+    test "CLUSTER SLOT-STATS repl-stream-bytes, reset on slot ownership change." {
+        R 0 SET $key VALUE
+        set slot_stats [R 0 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
+        set slot_stats_dict [convert_array_into_dict $slot_stats]
+        assert {[dict get $slot_stats_dict $key_slot repl-stream-bytes] > 0}
+
+        R 0 CLUSTER DELSLOTS $key_slot
+        set slot_stats [R 0 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
+        assert_empty_slot_stats $slot_stats $metrics_to_assert
+
+        R 0 CLUSTER ADDSLOTS $key_slot
+        set slot_stats [R 0 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
+        assert_empty_slot_stats $slot_stats $metrics_to_assert
+    }
+    R 0 CONFIG RESETSTAT
+
+    test "CLUSTER SLOT-STATS repl-stream-bytes, CONFIG RESETSTAT clears counter." {
+        R 0 SET $key VALUE
+        set slot_stats [R 0 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
+        set slot_stats_dict [convert_array_into_dict $slot_stats]
+        assert {[dict get $slot_stats_dict $key_slot repl-stream-bytes] > 0}
+
+        R 0 CONFIG RESETSTAT
+        set slot_stats [R 0 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
+        assert_empty_slot_stats $slot_stats $metrics_to_assert
+    }
+    R 0 CONFIG RESETSTAT
+
+    test "CLUSTER SLOT-STATS repl-stream-bytes, non-slot commands produce no bytes." {
+        R 0 INFO
+        set slot_stats [R 0 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
+        assert_empty_slot_stats $slot_stats $metrics_to_assert
+    }
+    R 0 CONFIG RESETSTAT
+
+    test "CLUSTER SLOT-STATS repl-stream-bytes, MULTI/EXEC wrappers counted for multi-op transactions." {
+        # A MULTI transaction with >1 write command propagates the wrappers to
+        # the replication stream. Measured ground truth:
+        # MULTI:  *1\r\n$5\r\nMULTI\r\n                          --> 15 bytes
+        # SET a:  *3\r\n$3\r\nSET\r\n$6\r\na{FOO}\r\n$1\r\nx\r\n --> 32 bytes
+        # SET b:  *3\r\n$3\r\nSET\r\n$6\r\nb{FOO}\r\n$1\r\nx\r\n --> 32 bytes
+        # EXEC:   *1\r\n$4\r\nEXEC\r\n                           --> 14 bytes
+        # Total: 15 + 32 + 32 + 14 = 93 bytes.
+        set r1 [valkey_client]
+        $r1 MULTI
+        $r1 SET "a{FOO}" x
+        $r1 SET "b{FOO}" x
+        $r1 EXEC
+
+        set slot_stats [R 0 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
+        set expected_slot_stats [
+            dict create $key_slot [
+                dict create repl-stream-bytes 93
+            ]
+        ]
+        assert_empty_slot_stats_with_exception $slot_stats $expected_slot_stats $metrics_to_assert
+    }
+    R 0 CONFIG RESETSTAT
+
+    test "CLUSTER SLOT-STATS repl-stream-bytes, single-op transaction elides MULTI/EXEC wrappers." {
+        # When a transaction has exactly 1 write command (numops <= 1), the server
+        # optimises away the MULTI/EXEC wrappers and propagates only the inner command.
+        # SET:  *3\r\n$3\r\nSET\r\n$6\r\na{FOO}\r\n$1\r\nx\r\n --> 32 bytes (no wrappers).
+        set r1 [valkey_client]
+        $r1 MULTI
+        $r1 SET "a{FOO}" x
+        $r1 EXEC
+
+        set slot_stats [R 0 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
+        set expected_slot_stats [
+            dict create $key_slot [
+                dict create repl-stream-bytes 32
+            ]
+        ]
+        assert_empty_slot_stats_with_exception $slot_stats $expected_slot_stats $metrics_to_assert
+    }
+    R 0 CONFIG RESETSTAT
+
+    test "CLUSTER SLOT-STATS ORDERBY repl-stream-bytes, correct sorting." {
+        # Write different amounts to different slots to produce ordering.
+        set key_a "a{0}"
+        set key_b "b{1}"
+        set slot_a [R 0 CLUSTER KEYSLOT $key_a]
+        set slot_b [R 0 CLUSTER KEYSLOT $key_b]
+        R 0 SET $key_a [string repeat x 100]
+        R 0 SET $key_b [string repeat x 10]
+        set slot_stats [R 0 CLUSTER SLOT-STATS ORDERBY repl-stream-bytes DESC]
+        assert_slot_stats_monotonic_descent $slot_stats repl-stream-bytes
+        set slot_stats [R 0 CLUSTER SLOT-STATS ORDERBY repl-stream-bytes ASC]
+        assert_slot_stats_monotonic_ascent $slot_stats repl-stream-bytes
+    }
+}
+
+# Verify repl-stream-bytes does not multiply by replica count (unlike network-bytes-out).
+
+start_cluster 1 2 {tags {external:skip cluster} overrides {cluster-slot-stats-enabled yes}} {
+
+    set key "FOO"
+    set key_slot [R 0 CLUSTER KEYSLOT $key]
+
+    # Setup replication — wait for both replicas.
+    assert {[s -1 role] eq {slave}}
+    assert {[s -2 role] eq {slave}}
+    wait_for_condition 1000 50 {
+        [s -1 master_link_status] eq {up}
+    } else {
+        fail "Replica #1 master link status is not up"
+    }
+    wait_for_condition 1000 50 {
+        [s -2 master_link_status] eq {up}
+    } else {
+        fail "Replica #2 master link status is not up"
+    }
+    R 1 readonly
+    R 2 readonly
+
+    # Confirm exactly 2 replicas are connected.
+    wait_for_condition 500 10 {
+        [s 0 connected_slaves] == 2
+    } else {
+        fail "Primary does not have 2 connected replicas"
+    }
+
+    # Warmup write to consume the SELECT preamble, then reset stats.
+    R 0 SET $key WARMUP
+    wait_for_condition 500 10 {
+        [R 1 EXISTS $key] == 1
+    } else {
+        fail "Warmup key not replicated to replica 1"
+    }
+    wait_for_condition 500 10 {
+        [R 2 EXISTS $key] == 1
+    } else {
+        fail "Warmup key not replicated to replica 2"
+    }
+    R 0 CONFIG RESETSTAT
+
+    test "CLUSTER SLOT-STATS repl-stream-bytes is invariant to replica count (2 replicas)." {
+        R 0 SET $key VALUE
+        # Replication stream: *3\r\n$3\r\nSET\r\n$3\r\nFOO\r\n$5\r\nVALUE\r\n --> 33 bytes.
+        # Client reply:       +OK\r\n --> 5 bytes.
+        #
+        # network-bytes-out = replication (33 * 2 replicas) + client reply (5) = 71.
+        # repl-stream-bytes = replication counted once = 33.
+        #
+        # This divergence is the reason this field exists: it recovers the
+        # single-stream volume that network-bytes-out obscures with its
+        # replica-count multiplication.
+        set slot_stats [R 0 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
+        set slot_stats_dict [convert_array_into_dict $slot_stats]
+        set stats [dict get $slot_stats_dict $key_slot]
+        assert_equal [dict get $stats repl-stream-bytes] 33
+        assert_equal [dict get $stats network-bytes-out] 71
     }
 }

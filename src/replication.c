@@ -452,6 +452,7 @@ void feedReplicationBuffer(char *s, size_t len) {
     if (server.repl_backlog == NULL) return;
 
     clusterSlotStatsIncrNetworkBytesOutForReplication(len);
+    clusterSlotStatsIncrReplStreamBytes(len);
 
     while (len > 0) {
         size_t start_pos = 0;        /* The position of referenced block to start sending. */
@@ -614,6 +615,7 @@ void replicationFeedReplicas(int dictid, robj **argv, int argc) {
          * its per-slot network-bytes-out accumulation is made by the above function call.
          * To cancel-out this accumulation, below adjustment is made. */
         clusterSlotStatsDecrNetworkBytesOutForReplication(sdslen(objectGetVal(selectcmd)));
+        clusterSlotStatsDecrReplStreamBytes(sdslen(objectGetVal(selectcmd)));
 
         decrRefCount(selectcmd);
 

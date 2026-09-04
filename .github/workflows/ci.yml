@@ -35,24 +35,25 @@ jobs:
       - name: make
         # Fail build if there are warnings
         # build with TLS just for compilation coverage
+        # build with libc malloc and NO_MALLOC_USABLE_SIZE for allocator path coverage
         run: |
           sudo apt-get install pkg-config libgtest-dev libgmock-dev
-          make -j4 all-with-unit-tests SERVER_CFLAGS='-Werror' BUILD_TLS=yes USE_LIBBACKTRACE=yes
+          make -j4 all-with-unit-tests SERVER_CFLAGS='-Werror -DNO_MALLOC_USABLE_SIZE' BUILD_TLS=yes MALLOC=libc USE_LIBBACKTRACE=yes
       - name: test
         run: |
-          sudo apt-get install tcl8.6 tclx
+          sudo apt-get install -y tcl8.6 tclx
           ./runtest --verbose --tags -slow --dump-logs
       - name: module api test
-        run: CFLAGS='-Werror' ./runtest-moduleapi --verbose --dump-logs
+        run: CFLAGS='-Werror -DNO_MALLOC_USABLE_SIZE' ./runtest-moduleapi --verbose --dump-logs
       - name: validate commands.def up to date
         run: |
           touch src/commands/ping.json
-          make commands.def
+          make commands.def MALLOC=libc SERVER_CFLAGS='-Werror -DNO_MALLOC_USABLE_SIZE'
           dirty="$(git diff)"
           if [[ ! -z "$dirty" ]]; then echo "$dirty"; exit 1; fi
       - name: unit tests
         run: |
-          make test-unit
+          make test-unit MALLOC=libc SERVER_CFLAGS='-Werror -DNO_MALLOC_USABLE_SIZE'
 
   test-ubuntu-latest-compatibility:
     runs-on: ubuntu-latest
@@ -290,21 +291,6 @@ jobs:
           make test-unit \
             GTEST_CFLAGS="-I/usr/src/googletest/googletest/include -I/usr/src/googletest/googlemock/include" \
             GTEST_LIBS="/usr/lib32/libgtest.a /usr/lib32/libgmock.a"
-
-  build-libc-malloc:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Install libbacktrace
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          repository: ianlancetaylor/libbacktrace
-          ref: b9e40069c0b47a722286b94eb5231f7f05c08713
-          path: libbacktrace
-      - run: cd libbacktrace && ./configure && make && sudo make install
-      - name: Checkout Valkey
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - name: make
-        run: make -j4 SERVER_CFLAGS='-Werror' MALLOC=libc USE_LIBBACKTRACE=yes
 
   build-almalinux8-jemalloc:
     runs-on: ubuntu-latest

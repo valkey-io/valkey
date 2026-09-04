@@ -2655,15 +2655,21 @@ int main(int argc, char **argv) {
             free(cmd);
         }
 
+        if (test_is_selected("hset")) {
+            len = valkeyFormatCommand(&cmd, "HSET myhash%s element:__rand_int__ %s", tag, data);
+            benchmark("HSET", cmd, len);
+            free(cmd);
+        }
+
         if (test_is_selected("sadd")) {
             len = valkeyFormatCommand(&cmd, "SADD myset%s element:__rand_int__", tag);
             benchmark("SADD", cmd, len);
             free(cmd);
         }
 
-        if (test_is_selected("hset")) {
-            len = valkeyFormatCommand(&cmd, "HSET myhash%s element:__rand_int__ %s", tag, data);
-            benchmark("HSET", cmd, len);
+        if (test_is_selected("sismember")) {
+            len = valkeyFormatCommand(&cmd, "SISMEMBER myset%s element:__rand_int__", tag);
+            benchmark("SISMEMBER", cmd, len);
             free(cmd);
         }
 
@@ -2678,6 +2684,19 @@ int main(int argc, char **argv) {
             if (config.replace_placeholders) score = "__rand_int__";
             len = valkeyFormatCommand(&cmd, "ZADD myzset%s %s element:__rand_1st__", tag, score);
             benchmark("ZADD", cmd, len);
+            free(cmd);
+        }
+
+        if (test_is_selected("zscore")) {
+            len = valkeyFormatCommand(&cmd, "ZSCORE myzset%s element:__rand_1st__", tag);
+            benchmark("ZSCORE", cmd, len);
+            free(cmd);
+        }
+
+        if (test_is_selected("zrange")) {
+            int score_min = (config.keyspacelen != 0) ? (random() % config.keyspacelen) : 0;
+            len = valkeyFormatCommand(&cmd, "ZRANGE myzset%s %d +inf BYSCORE LIMIT 0 1", tag, score_min);
+            benchmark("ZRANGE", cmd, len);
             free(cmd);
         }
 

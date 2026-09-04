@@ -2327,9 +2327,9 @@ void replicationAttachToNewPrimary(void) {
 
 /* During replication, the primary sends sync metadata as the first line
  * which can be either a standard bulk format ($<count>) or an EOF-delimited
- * format ($EOF:<delimiter>) for diskless transfers. We need this data in order
- * to detect transfer completion. This function reads and parses that
- * metadata line.
+ * format ($EOF:<delimiter>) for diskless transfers. A size-based count must be
+ * a complete, positive decimal integer. We need this data in order to detect
+ * transfer completion. This function reads and parses that metadata line.
  * The primary may also send an error message starting with '-' or a ping
  * (newline) to keep the connection alive, in which case this function
  * should be called again later.
@@ -2341,18 +2341,28 @@ int tryReadBulkPayloadMetadata(connection *conn, char *buf, char *eofmark, char 
         return C_ERR;
     } else {
         /* nread here is returned by connSyncReadLine(), which calls syncReadLine() and
-         * convert "\r\n" to '\0' so 1 byte is lost. */
+         * converts "\r\n" to '\0' so 1 byte is lost. */
         if (inBioThread())
             server.bio_stat_net_repl_input_bytes += nread + 1;
         else
             server.stat_net_repl_input_bytes += nread + 1;
     }
 
-    /* Check the bulk payload header for errors */
-    if (buf[0] == '-') {
-        serverLog(LL_WARNING, "PRIMARY aborted replication with an error: %s", buf + 1);
+    size_t metadata_len = nread;
+    /* connSyncReadLine() turns a stripped CR into NUL but still counts it, so
+     * drop a trailing NUL before checking for one inside the line. */
+    if (metadata_len > 0 && buf[metadata_len - 1] == '\0') metadata_len--;
+
+    if (memchr(buf, '\0', metadata_len) != NULL) {
+        serverLog(LL_WARNING, "Invalid bulk metadata from PRIMARY: %.*s", (int)metadata_len, buf);
         return C_ERR;
-    } else if (buf[0] == '\0') {
+    }
+
+    /* Check the bulk payload header for errors */
+    if (metadata_len > 0 && buf[0] == '-') {
+        serverLog(LL_WARNING, "PRIMARY aborted replication with an error: %.*s", (int)metadata_len - 1, buf + 1);
+        return C_ERR;
+    } else if (metadata_len == 0) {
         /* At this stage just a newline works as a PING in order to take
          * the connection live. So we refresh our last interaction
          * timestamp. */
@@ -2360,23 +2370,29 @@ int tryReadBulkPayloadMetadata(connection *conn, char *buf, char *eofmark, char 
         return C_RETRY;
     } else if (buf[0] != '$') {
         serverLog(LL_WARNING,
-                  "Bad protocol from PRIMARY, the first byte is not '$' (we received '%s'), are you sure the host "
+                  "Bad protocol from PRIMARY, the first byte is not '$' (we received '%.*s'), are you sure the host "
                   "and port are right?",
-                  buf);
+                  (int)metadata_len, buf);
         return C_ERR;
     }
 
     /* Check if this is an EOF-based transfer ($EOF:<delimiter>) or size-based ($<size>) */
-    if (strncmp(buf + 1, "EOF:", 4) == 0 && strlen(buf + 5) >= RDB_EOF_MARK_SIZE) {
+    if (metadata_len >= 5 + RDB_EOF_MARK_SIZE && memcmp(buf + 1, "EOF:", 4) == 0) {
         /* EOF-based transfer: extract the delimiter */
         memcpy(eofmark, buf + 5, RDB_EOF_MARK_SIZE);
         memset(lastbytes, 0, RDB_EOF_MARK_SIZE);
         *usemark = true;
         *repl_transfer_size = 0;
     } else {
-        /* Size-based transfer: parse the size */
+        /* Size-based transfer: parse the size. 0 is reserved for the EOF form
+         * above, and a real RDB is never empty, so require a positive count. */
+        long long transfer_size;
+        if (!string2ll(buf + 1, metadata_len - 1, &transfer_size) || transfer_size <= 0) {
+            serverLog(LL_WARNING, "Invalid bulk metadata from PRIMARY: %.*s", (int)metadata_len, buf);
+            return C_ERR;
+        }
         *usemark = false;
-        *repl_transfer_size = strtol(buf + 1, NULL, 10);
+        *repl_transfer_size = transfer_size;
     }
 
     return C_OK;
@@ -2511,7 +2527,7 @@ int replicaLoadPrimaryRDBFromSocket(connection *conn, char *buf, char *eofmark, 
         functions_lib_ctx = functionsLibCtxGetCurrent();
     }
 
-    rioInitWithConn(&rdb, conn, server.repl_transfer_size);
+    rioInitWithConn(&rdb, conn, (uint64_t)server.repl_transfer_size);
 
     /* Put the socket in blocking mode to simplify RDB transfer.
      * We'll restore it when the RDB is received. */
@@ -2751,6 +2767,7 @@ int tryReadBulkPayload(connection *conn, char *buf, int usemark, ssize_t *nread_
         readlen = sizeof(buf[0]) * PROTO_IOBUF_LEN;
     } else {
         left = server.bio_repl_transfer_size - server.bio_repl_transfer_read;
+        if (left <= 0) return C_ERR;
         readlen = (left < (signed)(sizeof(buf[0]) * PROTO_IOBUF_LEN)) ? left : (signed)(sizeof(buf[0]) * PROTO_IOBUF_LEN);
     }
 

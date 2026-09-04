@@ -609,6 +609,38 @@ char *VM_Strdup(const char *str) {
     return zstrdup(str);
 }
 
+/* Report memory obtained outside the server allocator, such as an mmap()ed
+ * region, so it counts toward used_memory and maxmemory. Does not allocate.
+ *
+ * Report only resident memory, and only memory not already obtained from
+ * ValkeyModule_Alloc(). Each call must be matched by
+ * ValkeyModule_DecrExternalMemory() of the same size.
+ *
+ * May be called from a command callback or a thread-safe context.
+ *
+ * Returns VALKEYMODULE_OK, or VALKEYMODULE_ERR with errno set to ERANGE if the
+ * total would overflow, leaving the accounting unchanged. */
+int VM_IncrExternalMemory(size_t bytes) {
+    if (zmalloc_increase_used_memory_external(bytes) != 0) {
+        errno = ERANGE;
+        return VALKEYMODULE_ERR;
+    }
+    return VALKEYMODULE_OK;
+}
+
+/* Stop accounting for memory reported with ValkeyModule_IncrExternalMemory().
+ * Frees nothing.
+ *
+ * Returns VALKEYMODULE_OK, or VALKEYMODULE_ERR with errno set to ERANGE if
+ * `bytes` exceeds the reported total, leaving the accounting unchanged. */
+int VM_DecrExternalMemory(size_t bytes) {
+    if (zmalloc_decrease_used_memory_external(bytes) != 0) {
+        errno = ERANGE;
+        return VALKEYMODULE_ERR;
+    }
+    return VALKEYMODULE_OK;
+}
+
 /* --------------------------------------------------------------------------
  * Pool allocator
  * -------------------------------------------------------------------------- */
@@ -15282,6 +15314,8 @@ void moduleRegisterCoreAPI(void) {
     REGISTER_API(TryRealloc);
     REGISTER_API(Free);
     REGISTER_API(Strdup);
+    REGISTER_API(IncrExternalMemory);
+    REGISTER_API(DecrExternalMemory);
     REGISTER_API(CreateCommand);
     REGISTER_API(GetCommand);
     REGISTER_API(CreateSubcommand);

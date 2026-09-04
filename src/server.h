@@ -1920,6 +1920,8 @@ struct valkeyServer {
     long long stat_numcommands;                    /* Number of processed commands */
     long long stat_numconnections;                 /* Number of connections received */
     long long stat_expiredkeys;                    /* Number of expired keys */
+    long long stat_expire_lag_sum;                 /* Total expiration lag in ms */
+    long long stat_expire_lag_count;               /* Total expired keys tracked for lag */
     long long stat_expiredfields;                  /* Number of expired hash fields */
     double stat_expired_keys_stale_perc;           /* Percentage of keys probably expired */
     double stat_expired_keys_with_vola_stale_perc; /* Percentage of keys probably expired */

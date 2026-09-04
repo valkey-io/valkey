@@ -2881,6 +2881,8 @@ void resetServerStats(void) {
     server.stat_numcommands = 0;
     server.stat_numconnections = 0;
     server.stat_expiredkeys = 0;
+    server.stat_expire_lag_sum = 0;
+    server.stat_expire_lag_count = 0;
     server.stat_expiredfields = 0;
     server.stat_expired_keys_stale_perc = 0;
     server.stat_expired_keys_with_vola_stale_perc = 0;
@@ -6738,6 +6740,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "sync_partial_ok:%lld\r\n", server.stat_sync_partial_ok,
                 "sync_partial_err:%lld\r\n", server.stat_sync_partial_err,
                 "expired_keys:%lld\r\n", server.stat_expiredkeys,
+                "expired_time_cap_latency_avg_ms:%.2f\r\n", server.stat_expire_lag_count ? (double)server.stat_expire_lag_sum / server.stat_expire_lag_count : 0.0,
                 "expired_fields:%lld\r\n", server.stat_expiredfields,
                 "expired_stale_perc:%.2f\r\n", server.stat_expired_keys_stale_perc * 100,
                 "expired_keys_with_volatile_items_stale_perc:%.2f\r\n", server.stat_expired_keys_with_vola_stale_perc * 100,

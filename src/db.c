@@ -2216,6 +2216,14 @@ static keyStatus expireIfNeededWithDictIndex(serverDb *db, robj *key, robj *val,
         key = createStringObject(objectGetVal(key), sdslen(objectGetVal(key)));
     }
     /* Delete the key */
+    mstime_t expire_time = val ? objectGetExpire(val) : getExpireWithDictIndex(db, key, dict_index);
+    if (expire_time >= 0) {
+        mstime_t lag = mstime() - expire_time;
+        if (lag > 0) {
+            server.stat_expire_lag_sum += lag;
+            server.stat_expire_lag_count++;
+        }
+    }
     deleteExpiredKeyAndPropagateWithDictIndex(db, key, dict_index);
     if (static_key) {
         decrRefCount(key);

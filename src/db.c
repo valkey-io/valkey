@@ -2210,6 +2210,13 @@ static keyStatus expireIfNeededWithDictIndex(serverDb *db, robj *key, robj *val,
     else if (policy == POLICY_KEEP_EXPIRED) /* Treat expired keys as invalid, but do not delete them. */
         return KEY_EXPIRED;
 
+    /* Read the deadline before the key goes away, so we can record how long it
+     * outlived it. Only the caller that finds the key is in a position to know
+     * this, and only on this branch, where a deletion is about to happen. */
+    mstime_t expire_at = -1;
+    if (server.latency_tracking_enabled)
+        expire_at = val != NULL ? objectGetExpire(val) : getExpireWithDictIndex(db, key, dict_index);
+
     /* The key needs to be converted from static to heap before deleted */
     int static_key = key->refcount == OBJ_STATIC_REFCOUNT;
     if (static_key) {
@@ -2220,6 +2227,8 @@ static keyStatus expireIfNeededWithDictIndex(serverDb *db, robj *key, robj *val,
     if (static_key) {
         decrRefCount(key);
     }
+    if (expire_at > 0)
+        updateExpireLagHistogram(&server.expire_lag_lazy_histogram, expire_at, commandTimeSnapshot());
     return KEY_DELETED;
 }
 

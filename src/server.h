@@ -727,6 +727,14 @@ typedef enum {
                                                  * LATENCY_HISTOGRAM_MAX_VALUE range. Value quantization within the range will thus be no larger than 1/100th \
                                                  * (or 1%) of any value. The total size per histogram should sit around 40 KiB Bytes. */
 
+/* Expiration lag histogram init settings. The lag between a key's expiration
+ * deadline and its actual deletion is bounded by how often the sampler happens
+ * to draw that key, not by command execution time, so it needs a much wider
+ * range than the per command histograms above. */
+#define EXPIRE_LAG_HISTOGRAM_MIN_VALUE 1000LL          /* >= 1 microsec */
+#define EXPIRE_LAG_HISTOGRAM_MAX_VALUE 3600000000000LL /* <= 1 hour */
+#define EXPIRE_LAG_HISTOGRAM_PRECISION 2               /* 2 significant digits, as above. */
+
 /* Busy module flags, see busy_module_yield_flags */
 #define BUSY_MODULE_YIELD_NONE (0)
 #define BUSY_MODULE_YIELD_EVENTS (1 << 0)
@@ -1988,6 +1996,10 @@ struct valkeyServer {
     long long stat_client_outbuf_limit_disconnections; /* Total number of clients reached output buf length limit */
     long long stat_total_prefetch_entries;             /* Total number of prefetched dict entries */
     long long stat_total_prefetch_batches;             /* Total number of prefetched batches */
+    /* Nanoseconds a key spent between its expiration deadline and its actual
+     * deletion, split by whichever path did the deleting. */
+    struct hdr_histogram *expire_lag_active_histogram;
+    struct hdr_histogram *expire_lag_lazy_histogram;
     /* The following two are used to track instantaneous metrics, like
      * number of operations per second, network traffic. */
     struct {
@@ -3585,6 +3597,7 @@ void preventCommandAOF(client *c);
 void preventCommandReplication(client *c);
 void commandlogPushCurrentCommand(client *c, struct serverCommand *cmd);
 void updateCommandLatencyHistogram(struct hdr_histogram **latency_histogram, int64_t duration_hist);
+void updateExpireLagHistogram(struct hdr_histogram **lag_histogram, mstime_t expire_at, mstime_t deleted_at);
 int prepareForShutdown(client *c, int flags);
 void replyToClientsBlockedOnShutdown(void);
 int abortShutdown(void);

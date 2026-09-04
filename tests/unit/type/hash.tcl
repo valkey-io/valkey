@@ -960,4 +960,81 @@ start_server {tags {"hash"}} {
         assert_error "*value is NaN or Infinity*" {r hincrbyfloat hfoo field +inf}
         assert_equal 0 [r exists hfoo]
     } {} {valgrind:skip}
+
+    # The following tests target the exact-length reply header fast path of
+    # HGETALL/HKEYS/HVALS: when a hash has no volatile (TTL-bearing) fields the
+    # aggregate header is emitted up front instead of via a deferred node.
+    foreach proto {2 3} {
+        foreach enc {listpack hashtable} {
+            test "HGETALL/HKEYS/HVALS exact-length header - $enc - RESP$proto" {
+                r hello $proto
+                set original_max_entries [lindex [r config get hash-max-listpack-entries] 1]
+                set original_max_value [lindex [r config get hash-max-listpack-value] 1]
+                if {$enc eq "hashtable"} {
+                    r config set hash-max-listpack-entries 16
+                } else {
+                    r config set hash-max-listpack-entries 128
+                    r config set hash-max-listpack-value 64
+                }
+                r del myhash
+                unset -nocomplain expect
+                array set expect {}
+                for {set i 0} {$i < 100} {incr i} {
+                    r hset myhash field:$i value:$i
+                    set expect(field:$i) value:$i
+                }
+                assert_encoding $enc myhash
+                set res [r hgetall myhash]
+                assert_equal 100 [expr {[llength $res] / 2}]
+                foreach {k v} $res {
+                    assert_equal $expect($k) $v
+                }
+                assert_equal [lsort [array names expect]] [lsort [r hkeys myhash]]
+                assert_equal 100 [llength [r hvals myhash]]
+                r config set hash-max-listpack-entries $original_max_entries
+                r config set hash-max-listpack-value $original_max_value
+                r hello 2
+            }
+        }
+    }
+
+    test {HGETALL reply larger than the static reply buffer} {
+        # Each bulk string is ~1KB, so the total reply (~256KB) overflows the
+        # client's static output buffer and must spill into the reply list,
+        # exercising the fast path bail-out mid-command.
+        r del myhash
+        set big [string repeat x 1024]
+        for {set i 0} {$i < 128} {incr i} {
+            r hset myhash field:$i $big:$i
+        }
+        assert_encoding hashtable myhash
+        set res [r hgetall myhash]
+        assert_equal 128 [expr {[llength $res] / 2}]
+        foreach {k v} $res {
+            assert_equal "$big:[string range $k 6 end]" $v
+        }
+        set _ ok
+    } {ok}
+
+    test {HGETALL/HKEYS/HVALS on a hash with volatile fields (deferred header path)} {
+        set original_max_entries [lindex [r config get hash-max-listpack-entries] 1]
+        r config set hash-max-listpack-entries 16
+        r del myhash
+        for {set i 0} {$i < 100} {incr i} {
+            r hset myhash field:$i value:$i
+        }
+        assert_encoding hashtable myhash
+        # A TTL far in the future: the fields stay alive, but their presence
+        # forces the deferred-length slow path.
+        assert_equal {1} [r hexpire myhash 1000 FIELDS 1 field:0]
+        set res [r hgetall myhash]
+        assert_equal 100 [expr {[llength $res] / 2}]
+        foreach {k v} $res {
+            assert_equal "value:[string range $k 6 end]" $v
+        }
+        assert_equal 100 [llength [r hkeys myhash]]
+        assert_equal 100 [llength [r hvals myhash]]
+        r config set hash-max-listpack-entries $original_max_entries
+        set _ ok
+    } {ok}
 }

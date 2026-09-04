@@ -1823,19 +1823,115 @@ void hgetexCommand(client *c) {
     commitDeferredReplyBuffer(c, 1);
 }
 
+/* Number of hash entries prefetched at a time by the HGETALL fast path. */
+#define HGETALL_PREFETCH_BATCH 16
+
+/* Iterate a hashtable-encoded hash with no volatile fields, emitting fields
+ * and/or values as requested by 'flags'. Returns the number of bulk strings
+ * emitted.
+ *
+ * Walking the hash chases pointers into scattered heap allocations
+ * (bucket -> entry -> field/value sds). Emitting each reply as we reach the
+ * entry serializes those cache misses; collecting a batch of entries and
+ * prefetching them first lets the misses overlap. */
+static long hashTypeReplyNonVolatileHashtable(writePreparedClient *wpc, robj *o, int flags) {
+    hashtableIterator iter;
+    void *batch[HGETALL_PREFETCH_BATCH];
+    long count = 0;
+
+    hashtableInitIterator(&iter, objectGetVal(o), 0);
+    while (1) {
+        /* Phase 1: collect a batch of entry pointers and prefetch the entry
+         * structs themselves. We deliberately do not dereference them here,
+         * so the prefetches have time to land. */
+        int batch_count = 0;
+        while (batch_count < HGETALL_PREFETCH_BATCH) {
+            void *next;
+            if (!hashtableNext(&iter, &next)) break;
+            batch[batch_count++] = next;
+            valkey_prefetch(next);
+        }
+        if (batch_count == 0) break;
+
+        /* Phase 2: the entries are warm now, so prefetch the separately
+         * allocated value buffers. The field needs no prefetch - it is the
+         * entry pointer itself, already prefetched in phase 1. */
+        if (flags & OBJ_HASH_VALUE) {
+            for (int i = 0; i < batch_count; i++) {
+                size_t vlen;
+                valkey_prefetch(entryGetValue(batch[i], &vlen));
+            }
+        }
+
+        /* Phase 3: emit the replies against cache-warm data. */
+        for (int i = 0; i < batch_count; i++) {
+            if (flags & OBJ_HASH_FIELD) {
+                sds field = entryGetField(batch[i]);
+                addWritePreparedReplyBulkCBuffer(wpc, field, sdslen(field));
+                count++;
+            }
+            if (flags & OBJ_HASH_VALUE) {
+                size_t vlen;
+                char *val = entryGetValue(batch[i], &vlen);
+                addWritePreparedReplyBulkCBuffer(wpc, val, vlen);
+                count++;
+            }
+        }
+    }
+    hashtableCleanupIterator(&iter);
+    return count;
+}
+
 void genericHgetallCommand(client *c, int flags) {
     robj *o;
     hashTypeIterator hi;
-    int count = 0;
+    long count = 0;
 
     robj *emptyResp = (flags & OBJ_HASH_FIELD && flags & OBJ_HASH_VALUE) ? shared.emptymap[c->resp] : shared.emptyarray;
     if ((o = lookupKeyReadOrReply(c, c->argv[1], emptyResp)) == NULL || checkType(c, o, OBJ_HASH)) return;
 
     writePreparedClient *wpc = prepareClientForFutureWrites(c);
     if (!wpc) return;
-    /* We return a map if the user requested fields and values, like in the
-     * HGETALL case. Otherwise, to use a flat array makes more sense. */
-    void *replylen = addReplyDeferredLen(c);
+
+    /* If the hash has no volatile (TTL-bearing) fields, no field can expire
+     * mid-iteration, so the element count is known up front and we can emit a
+     * real aggregate header instead of a deferred one. That matters for more
+     * than the header itself: addReplyDeferredLen() parks a placeholder node
+     * on the reply list, and once that list is non-empty every subsequent
+     * reply bypasses the client's static buffer and goes through
+     * heap-allocated reply blocks. This holds for listpack-encoded hashes
+     * (which cannot hold volatile fields at all) as well as hashtable-encoded
+     * ones without volatile fields. */
+    unsigned long length = 0;
+    void *replylen = NULL;
+    bool exact_len = !hashTypeHasVolatileFields(o);
+    if (exact_len) {
+        length = hashTypeLength(o);
+        /* We return a map if the user requested fields and values, like in
+         * the HGETALL case. Otherwise, to use a flat array makes more sense. */
+        if (flags & OBJ_HASH_FIELD && flags & OBJ_HASH_VALUE) {
+            addWritePreparedReplyMapLen(wpc, length);
+        } else {
+            addWritePreparedReplyArrayLen(wpc, length);
+        }
+        if (objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE) {
+            /* Batched iteration with prefetching; see the helper above. */
+            count = hashTypeReplyNonVolatileHashtable(wpc, o, flags);
+            /* The header was written up front, so the element count must
+             * match it exactly or we have emitted a malformed reply. */
+            serverAssert((unsigned long)count ==
+                         ((flags & OBJ_HASH_FIELD && flags & OBJ_HASH_VALUE) ? length * 2 : length));
+            return;
+        }
+        /* Listpack entries live in one contiguous allocation, so plain
+         * iteration below is already cache-friendly. */
+    } else {
+        /* The hash has volatile fields, so its length may shrink
+         * mid-iteration as fields expire and isn't known until we've walked
+         * it: the aggregate header has to be deferred. */
+        replylen = addReplyDeferredLen(c);
+    }
+
     hashTypeInitIterator(o, &hi);
     while (hashTypeNext(&hi) != C_ERR) {
         if (flags & OBJ_HASH_FIELD) {
@@ -1850,7 +1946,10 @@ void genericHgetallCommand(client *c, int flags) {
 
     hashTypeResetIterator(&hi);
     /* Make sure we returned the right number of elements. */
-    if (flags & OBJ_HASH_FIELD && flags & OBJ_HASH_VALUE) {
+    if (exact_len) {
+        serverAssert((unsigned long)count ==
+                     ((flags & OBJ_HASH_FIELD && flags & OBJ_HASH_VALUE) ? length * 2 : length));
+    } else if (flags & OBJ_HASH_FIELD && flags & OBJ_HASH_VALUE) {
         setDeferredMapLen(c, replylen, count / 2);
     } else {
         setDeferredArrayLen(c, replylen, count);

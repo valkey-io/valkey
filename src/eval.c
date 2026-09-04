@@ -406,7 +406,7 @@ static int evalRegisterNewScript(client *c, robj *body, char **sha) {
     char *engine_name = NULL;
     if (evalExtractShebangFlags(objectGetVal(body), &engine_name, &script_flags, &shebang_len, &err) == C_ERR) {
         if (c != NULL) {
-            addReplyErrorSds(c, err);
+            addReplyErrorSdsSafe(c, err);
         }
         if (engine_name) {
             zfree(engine_name);

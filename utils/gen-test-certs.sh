@@ -6,6 +6,7 @@
 #   tests/tls/ca-{expired,notyet}.crt            Self signed invalid CA certificates.
 #   tests/tls/ca-expired/                        Directory containing expired CA certificate.
 #   tests/tls/ca-notyet/                         Directory containing not-yet-valid CA certificate.
+#   tests/tls/ca-empty/                          Empty directory for testing empty dir rejection.
 #   tests/tls/ca-multi.crt                       CA bundle with multiple certs.
 #   tests/tls/ca-dir/                            CA directory with hashed links.
 #   tests/tls/valkey.{crt,key}                   A certificate with no key usage/policy restrictions.
@@ -262,6 +263,7 @@ openssl ca -batch -config "$CA_CONFIG" \
 # Create CA certificate directories for testing tls-ca-cert-dir with invalid certs
 mkdir -p tests/tls/ca-expired
 mkdir -p tests/tls/ca-notyet
+mkdir -p tests/tls/ca-empty
 
 cp tests/tls/ca-expired.crt tests/tls/ca-expired/
 cp tests/tls/ca-notyet.crt tests/tls/ca-notyet/
@@ -269,6 +271,7 @@ cp tests/tls/ca-notyet.crt tests/tls/ca-notyet/
 echo "Created CA certificate test directories:"
 echo "  tests/tls/ca-expired/ (contains expired CA cert)"
 echo "  tests/tls/ca-notyet/ (contains not-yet-valid CA cert)"
+echo "  tests/tls/ca-empty/  (empty, for testing empty dir rejection)"
 
 # Clean up temporary files
 rm -f tests/tls/*-expired.csr tests/tls/*-notyet.csr tests/tls/ca-expired.csr tests/tls/ca-notyet.csr

@@ -509,6 +509,7 @@ static bool loadCaCertDir(SSL_CTX *ctx, const char *ca_cert_dir) {
         return false;
     }
 
+    int loaded = 0;
     while ((entry = readdir(dir)) != NULL) {
         if (!strcmp(entry->d_name, ".") || !strcmp(entry->d_name, "..")) continue;
 
@@ -531,10 +532,17 @@ static bool loadCaCertDir(SSL_CTX *ctx, const char *ca_cert_dir) {
                 ERR_clear_error();
             }
             X509_free(cert);
+            loaded++;
         }
     }
 
     closedir(dir);
+
+    if (loaded == 0) {
+        serverLog(LL_WARNING, "No CA certificates loaded from directory: %s", ca_cert_dir);
+        return false;
+    }
+
     return true;
 }
 

@@ -9079,7 +9079,9 @@ struct COMMAND_ARG SINTERSTORE_Args[] = {
 
 #ifndef SKIP_CMD_HISTORY_TABLE
 /* SISMEMBER history */
-#define SISMEMBER_History NULL
+commandHistory SISMEMBER_History[] = {
+{"9.1.0","Added the `XX` options."},
+};
 #endif
 
 #ifndef SKIP_CMD_TIPS_TABLE
@@ -9098,6 +9100,7 @@ keySpec SISMEMBER_Keyspecs[1] = {
 struct COMMAND_ARG SISMEMBER_Args[] = {
 {MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("member",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("xx",ARG_TYPE_PURE_TOKEN,-1,"XX",NULL,"9.1.0",CMD_ARG_OPTIONAL,0,NULL)},
 };
 
 /********** SMEMBERS ********************/
@@ -12166,7 +12169,7 @@ struct COMMAND_STRUCT serverCommandTable[] = {
 {MAKE_CMD("sinter","Returns the intersect of multiple sets.","O(N*M) worst case where N is the cardinality of the smallest set and M is the number of sets.","1.0.0",CMD_DOC_NONE,NULL,NULL,"set",COMMAND_GROUP_SET,SINTER_History,0,SINTER_Tips,1,sinterCommand,-2,CMD_READONLY,ACL_CATEGORY_READ|ACL_CATEGORY_SET|ACL_CATEGORY_SLOW,NULL,SINTER_Keyspecs,1,NULL,1),.args=SINTER_Args},
 {MAKE_CMD("sintercard","Returns the number of members of the intersect of multiple sets.","O(N*M) worst case where N is the cardinality of the smallest set and M is the number of sets.","7.0.0",CMD_DOC_NONE,NULL,NULL,"set",COMMAND_GROUP_SET,SINTERCARD_History,0,SINTERCARD_Tips,0,sinterCardCommand,-3,CMD_READONLY,ACL_CATEGORY_READ|ACL_CATEGORY_SET|ACL_CATEGORY_SLOW,NULL,SINTERCARD_Keyspecs,1,sintercardGetKeys,3),.args=SINTERCARD_Args},
 {MAKE_CMD("sinterstore","Stores the intersect of multiple sets in a key.","O(N*M) worst case where N is the cardinality of the smallest set and M is the number of sets.","1.0.0",CMD_DOC_NONE,NULL,NULL,"set",COMMAND_GROUP_SET,SINTERSTORE_History,0,SINTERSTORE_Tips,0,sinterstoreCommand,-3,CMD_WRITE|CMD_DENYOOM,ACL_CATEGORY_SET|ACL_CATEGORY_SLOW|ACL_CATEGORY_WRITE,NULL,SINTERSTORE_Keyspecs,2,NULL,2),.args=SINTERSTORE_Args},
-{MAKE_CMD("sismember","Determines whether a member belongs to a set.","O(1)","1.0.0",CMD_DOC_NONE,NULL,NULL,"set",COMMAND_GROUP_SET,SISMEMBER_History,0,SISMEMBER_Tips,0,sismemberCommand,3,CMD_READONLY|CMD_FAST,ACL_CATEGORY_FAST|ACL_CATEGORY_READ|ACL_CATEGORY_SET,NULL,SISMEMBER_Keyspecs,1,NULL,2),.args=SISMEMBER_Args},
+{MAKE_CMD("sismember","Determines whether a member belongs to a set.","O(1)","1.0.0",CMD_DOC_NONE,NULL,NULL,"set",COMMAND_GROUP_SET,SISMEMBER_History,1,SISMEMBER_Tips,0,sismemberCommand,-3,CMD_READONLY|CMD_FAST,ACL_CATEGORY_FAST|ACL_CATEGORY_READ|ACL_CATEGORY_SET,NULL,SISMEMBER_Keyspecs,1,NULL,3),.args=SISMEMBER_Args},
 {MAKE_CMD("smembers","Returns all members of a set.","O(N) where N is the set cardinality.","1.0.0",CMD_DOC_NONE,NULL,NULL,"set",COMMAND_GROUP_SET,SMEMBERS_History,0,SMEMBERS_Tips,1,sinterCommand,2,CMD_READONLY,ACL_CATEGORY_READ|ACL_CATEGORY_SET|ACL_CATEGORY_SLOW,NULL,SMEMBERS_Keyspecs,1,NULL,1),.args=SMEMBERS_Args},
 {MAKE_CMD("smismember","Determines whether multiple members belong to a set.","O(N) where N is the number of elements being checked for membership","6.2.0",CMD_DOC_NONE,NULL,NULL,"set",COMMAND_GROUP_SET,SMISMEMBER_History,0,SMISMEMBER_Tips,0,smismemberCommand,-3,CMD_READONLY|CMD_FAST,ACL_CATEGORY_FAST|ACL_CATEGORY_READ|ACL_CATEGORY_SET,NULL,SMISMEMBER_Keyspecs,1,NULL,2),.args=SMISMEMBER_Args},
 {MAKE_CMD("smove","Moves a member from one set to another.","O(1)","1.0.0",CMD_DOC_NONE,NULL,NULL,"set",COMMAND_GROUP_SET,SMOVE_History,0,SMOVE_Tips,0,smoveCommand,4,CMD_WRITE|CMD_FAST,ACL_CATEGORY_FAST|ACL_CATEGORY_SET|ACL_CATEGORY_WRITE,NULL,SMOVE_Keyspecs,2,NULL,3),.args=SMOVE_Args},

@@ -4,8 +4,14 @@
         "complexity": "O(1)",
         "group": "set",
         "since": "1.0.0",
-        "arity": 3,
+        "arity": -3,
         "function": "sismemberCommand",
+        "history": [
+            [
+                "9.1.0",
+                "Added the `XX` options."
+            ]
+        ],
         "command_flags": [
             "READONLY",
             "FAST"
@@ -38,11 +44,15 @@
             "oneOf": [
                 {
                     "const": 0,
-                    "description": "The element is not a member of the set, or the key does not exist."
+                    "description": "The element is not a member of the set, or the key does not exist (when `XX` option is not specified)."
                 },
                 {
                     "const": 1,
                     "description": "The element is a member of the set."
+                },
+                {
+                    "const": -1,
+                    "description": "The key does not exist (when `XX` option is specified)."
                 }
             ]
         },
@@ -55,6 +65,13 @@
             {
                 "name": "member",
                 "type": "string"
+            },
+            {
+                "name": "xx",
+                "token": "XX",
+                "type": "pure-token",
+                "since": "9.1.0",
+                "optional": true
             }
         ]
     }

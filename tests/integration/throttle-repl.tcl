@@ -33,13 +33,44 @@ proc setup_throttle_replication {primary replica primary_host primary_port} {
     $primary replicaof no one
     $primary flushall
     $primary config set repl-throttling-enabled yes
-    $primary config set client-output-buffer-limit "replica 1024mb 64kb 3600"
+    $primary config set repl-backlog-size 1mb
+    $primary config set client-output-buffer-limit "replica 1024mb 1mb 3600"
     $primary config set repl-timeout 1800
     $replica replicaof no one
     $replica flushall
     $replica replicaof $primary_host $primary_port
     wait_for_sync $replica
     wait_replica_online $primary
+    wait_for_condition 50 100 {
+        [throttle_rate $primary] == -1
+    } else {
+        fail "repl throttler doesn't setup correctly"
+    }
+}
+
+# Tear down after a test so the next test starts from a clean state.
+proc teardown_throttle_replication {primary replica} {
+
+    if {[catch {$primary ping} err]} {
+        fail "primary stopped responding during teardown: $err"
+    }
+
+    catch {$primary config set repl-throttling-enabled no}
+    wait_for_condition 100 100 {
+        [throttle_rate $primary] == -1 &&
+        [getInfoProperty [$primary info debug] repl_throttle_current_clients] == 0
+    } else {
+        fail "repl throttler didn't tear down after the test"
+    }
+
+    # The replica must be fully synced and hold the same dataset.
+    wait_for_sync $replica
+    wait_replica_online $primary
+    wait_for_ofs_sync $primary $replica
+    assert_equal [$primary dbsize] [$replica dbsize]
+
+    # Detach replication
+    catch {$replica replicaof no one}
 }
 
 start_server {tags {"throttle repl external:skip"}} {
@@ -93,45 +124,49 @@ start_server {tags {"throttle repl external:skip"}} {
             $writer close
             resume_process $replica_pid
 
-            # As the replica catches up, the throttler ramps its rate back to
-            # unlimited and uninstalls, reporting an inactive rate (-1) again. The
-            # ramp-up is gradual climbing back, so allow a generous window.
-            wait_for_condition 300 100 {
-                [throttle_rate $primary] == -1
-            } else {
-                fail "throttle did not release after the replica caught up"
-            }
-
-            # The replica must be fully synced and hold the same dataset.
-            wait_for_ofs_sync $primary $replica
-            assert_equal [$primary dbsize] [$replica dbsize]
+            teardown_throttle_replication $primary $replica
         }
 
         test {Throttling protects a replica above the soft COB limit} {
             setup_throttle_replication $primary $replica $primary_host $primary_port
-            $primary config set repl-backlog-size 1mb
-            $primary config set client-output-buffer-limit "replica 4mb 1mb 10000"
+            set soft_limit [expr {1 * 1024 * 1024}]
+            set hard_limit [expr {1024 * 1024 * 1024}]
+            $primary config set client-output-buffer-limit "replica ${hard_limit} ${soft_limit} 0"
 
             set writer [valkey_deferring_client]
             $writer CLIENT ID
             set wid [$writer read]
-            set soft_limit [expr {1 * 1024 * 1024}]
-            set hard_limit [expr {4 * 1024 * 1024}]
 
             pause_process $replica_pid
 
-            # Flood large values to grow the replica's COB above the soft limit
-            # but below the hard limit; the repl throttler stays active and the
-            # replica is protected while in this range.
-            set replica_cob 0
-            for {set i 0} {$i < 2000} {incr i} {
-                $writer set key:$i [string repeat x 100000]
-                regexp {omem=([0-9]+)} [$primary client list type replica] -> replica_cob
-                if {$replica_cob >= $soft_limit && $replica_cob < $hard_limit} {
-                    break
+            set activated 0
+            set payload [string repeat w 2000]
+            for {set i 0} {$i < 200 && !$activated} {incr i} {
+                for {set j 0} {$j < 200} {incr j} {
+                    $writer set key:$j $payload
+                }
+                if {[throttle_rate $primary] >= 0} {
+                    set activated 1
                 }
             }
+            if {!$activated} {
+                resume_process $replica_pid
+                fail "throttler never began queueing clients"
+            }
 
+            # Write 30MB total (30 x 1MB values). This is well above the 1mb
+            # soft limit and well below the 1024mb hard limit, so the replica's
+            # COB lands in between.
+            set value_size [expr {1 * 1024 * 1024}]
+            set num_writes 30
+            for {set i 0} {$i < $num_writes} {incr i} {
+                $writer set key:$i [string repeat x $value_size]
+            }
+
+            if {[status $primary connected_slaves] != 1} {
+                resume_process $replica_pid
+                fail "replica was disconnected while above soft but below hard COB limit"
+            }
             wait_for_condition 50 100 {
                 [throttle_rate $primary] >= 0
             } else {
@@ -142,44 +177,62 @@ start_server {tags {"throttle repl external:skip"}} {
                 resume_process $replica_pid
                 fail "client was not throttled while the replica's COB was growing"
             }
-            if {[status $primary connected_slaves] != 1} {
-                resume_process $replica_pid
-                fail "replica was disconnected while above soft but below hard COB limit"
-            }
 
             $writer close
             resume_process $replica_pid
+            teardown_throttle_replication $primary $replica
         }
 
         test {Throttling not protect a replica above the hard COB limit} {
             setup_throttle_replication $primary $replica $primary_host $primary_port
-            $primary config set repl-backlog-size 1mb
-            $primary config set client-output-buffer-limit "replica 2mb 1mb 10000"
+            $primary config set client-output-buffer-limit "replica 10mb 1mb 0"
 
             set writer [valkey_deferring_client]
             $writer CLIENT ID
             set wid [$writer read]
 
+            set activation_events_before [getInfoProperty [$primary info throttling] repl_throttle_activation_events]
+
             pause_process $replica_pid
 
-            # Flood large values to push the replica's COB past the hard limit.
-            # Once it crosses, clientsCron evicts the replica.
-            for {set i 0} {$i < 2000} {incr i} {
-                $writer set key:$i [string repeat x 100000]
-                if {[status $primary connected_slaves] == 0} {
-                    break
+            set activated 0
+            set payload [string repeat w 2000]
+            for {set i 0} {$i < 200 && !$activated} {incr i} {
+                for {set j 0} {$j < 200} {incr j} {
+                    $writer set key:$j $payload
                 }
+                if {[throttle_rate $primary] >= 0} {
+                    set activated 1
+                }
+            }
+            if {!$activated} {
+                resume_process $replica_pid
+                fail "throttler never began queueing clients"
+            }
+
+            # Write 100MB total (100 x 1MB values). This is well above the 10mb
+            # hard limit, so the replica will be disconnected.
+            set value_size [expr {1 * 1024 * 1024}]
+            set num_writes 100
+            for {set i 0} {$i < $num_writes} {incr i} {
+                $writer set key:$i [string repeat x $value_size]
             }
 
             wait_for_condition 50 100 {
-                [throttle_rate $primary] == -1 && ![client_throttled $primary $wid]
+                [throttle_rate $primary] == -1 &&
+                ![client_throttled $primary $wid] &&
+                [status $primary connected_slaves] == 0
             } else {
                 resume_process $replica_pid
                 fail "throttle did not tear down after the replica was disconnected"
             }
 
+            set activation_events_after [getInfoProperty [$primary info throttling] repl_throttle_activation_events]
+            assert {$activation_events_after > $activation_events_before}
+
             $writer close
             resume_process $replica_pid
+            teardown_throttle_replication $primary $replica
         }
 
         test {Throttling tears down when failover happened} {
@@ -218,6 +271,7 @@ start_server {tags {"throttle repl external:skip"}} {
 
             $writer close
             resume_process $replica_pid
+            teardown_throttle_replication $replica $primary
         }
 
         test {Throttling tears down when disabling config} {
@@ -255,6 +309,7 @@ start_server {tags {"throttle repl external:skip"}} {
 
             $writer close
             resume_process $replica_pid
+            teardown_throttle_replication $primary $replica
         }
 
         test {Client disconnect while throttling} {
@@ -303,6 +358,65 @@ start_server {tags {"throttle repl external:skip"}} {
             assert {$executed < 500}
 
             resume_process $replica_pid
+            teardown_throttle_replication $primary $replica
+        }
+
+        test {Client blocked before throttling and unblocked after throttling} {
+            setup_throttle_replication $primary $replica $primary_host $primary_port
+
+            # Block on a key BEFORE any repl throttler exists.
+            set blocker [valkey_deferring_client]
+            $blocker blpop mylist 0
+            wait_for_blocked_client
+            pause_process $replica_pid
+
+            # Drive the replica COB up with a deferring writer until the throttler
+            # queues this client.
+            set writer [valkey_deferring_client]
+            $writer CLIENT ID
+            set wid [$writer read]
+            set throttled 0
+            set payload [string repeat w 2000]
+            for {set i 0} {$i < 200 && !$throttled} {incr i} {
+                for {set j 0} {$j < 200} {incr j} {
+                    $writer set key:$j $payload
+                }
+                if {[client_throttled $primary $wid]} {
+                    set throttled 1
+                }
+            }
+            if {!$throttled} {
+                resume_process $replica_pid
+                fail "throttler never began queueing clients"
+            }
+
+            # Deferring hosers that never read their replies, so the token bucket
+            # is empty and the throttler queue is non-empty when the LPUSH lands.
+            set writers {}
+            for {set i 0} {$i < 4} {incr i} {
+                lappend writers [valkey_deferring_client]
+            }
+
+            # Nothing may be read from the primary between this burst and the
+            # LPUSH. Commands are processed in arrival order, so the LPUSH lands
+            # behind the burst.
+            foreach w $writers {
+                for {set j 0} {$j < 500} {incr j} {
+                    $w set key:$j $payload
+                }
+            }
+            set pusher [valkey_deferring_client]
+            $pusher lpush mylist v
+
+            resume_process $replica_pid
+            wait_for_sync $replica
+            wait_replica_online $primary
+
+            catch {$blocker close}
+            catch {$pusher close}
+            catch {$writer close}
+            foreach w $writers { catch {$w close} }
+            teardown_throttle_replication $primary $replica
         }
     }
 }

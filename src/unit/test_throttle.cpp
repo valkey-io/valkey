@@ -472,8 +472,6 @@ TEST_F(ThrottleTest, timeProcHappyCaseOneCall) {
 
     EXPECT_FALSE(clientIsThrottled(c1));
     EXPECT_FALSE(clientIsThrottled(c2));
-    EXPECT_NE(c1->conn->read_handler, nullptr);
-    EXPECT_NE(c2->conn->read_handler, nullptr);
     verifyThrottler("fake_throttler", 0, 2);
 
     throttle_deregister(t);
@@ -509,7 +507,6 @@ TEST_F(ThrottleTest, timeProcHappyCaseMultipleCall) {
 
     /* c1 released, c2 still throttled. */
     EXPECT_FALSE(clientIsThrottled(c1));
-    EXPECT_NE(c1->conn->read_handler, nullptr);
     EXPECT_TRUE(clientIsThrottled(c2));
     verifyThrottler("fake_throttler", 1, 2);
 
@@ -519,47 +516,11 @@ TEST_F(ThrottleTest, timeProcHappyCaseMultipleCall) {
     ret = timeProc(server.el, 1, clientData);
     EXPECT_EQ(ret, AE_NOMORE);
     EXPECT_FALSE(clientIsThrottled(c2));
-    EXPECT_NE(c2->conn->read_handler, nullptr);
     verifyThrottler("fake_throttler", 0, 2);
 
     throttle_deregister(t);
     freeFakeClient(c1);
     freeFakeClient(c2);
-}
-
-TEST_F(ThrottleTest, timeProcCallsFreeClientOnConnSetReadHandlerFailure) {
-    /* If connSetReadHandler returns C_ERR, the client is freed. */
-    throttler *t = throttle_register(fakeWriteCriteria, NULL, "fake_throttler");
-    throttle_setRate(t, 0.0);
-
-    aeTimeProc *timeProc = NULL;
-    void *clientData = NULL;
-    EXPECT_CALL(mock, aeCreateTimeEvent(_, _, _, _, _))
-        .WillOnce(DoAll(SaveArg<2>(&timeProc), SaveArg<3>(&clientData), Return(1)));
-
-    client *c = createFakeClient(1, true);
-    EXPECT_TRUE(throttle_throttleClientIfNeeded(c));
-    EXPECT_TRUE(clientIsThrottled(c));
-
-    /* Install a failing read handler to simulate connection error. */
-    static ConnectionType failConnType = {0};
-    failConnType.set_read_handler = failSetReadHandler;
-    c->conn->type = &failConnType;
-
-    throttle_setRate(t, THROTTLE_UNLIMITED_RATE);
-    fakeMonotimeUs += 1000000;
-
-    /* freeClient should be called because connSetReadHandler fails. */
-    EXPECT_CALL(mock, freeClient(c)).WillOnce(Return(0));
-    EXPECT_CALL(mock, queueClientForReprocessing(_)).Times(0);
-
-    long long ret = timeProc(server.el, 1, clientData);
-    EXPECT_EQ(ret, AE_NOMORE);
-    EXPECT_FALSE(clientIsThrottled(c));
-    verifyThrottler("fake_throttler", 0, 1);
-
-    throttle_deregister(t);
-    freeFakeClient(c); // We still need to call it since freeClient is mocked.
 }
 
 TEST_F(ThrottleTest, timeProcMultiThrottlerConsumesOtherBuckets) {

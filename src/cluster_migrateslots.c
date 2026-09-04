@@ -1600,19 +1600,12 @@ int childSnapshotForSyncSlot(rio *aof, slotMigrationJob *job) {
 }
 
 /* Kill the slot migration child using SIGUSR1 (so that the parent will know
- * the child did not exit for an error, but because we wanted), and performs
- * the cleanup needed. */
+ * the child did not exit for an error, but because we wanted). Closing the
+ * exit pipe only drops the parent's write end; the child may still be alive,
+ * so always signal. */
 void killSlotMigrationChild(void) {
     /* No slot migration child? return. */
     if (server.child_type != CHILD_TYPE_SLOT_MIGRATION) return;
-
-    /* If we already closed the exit pipe, the child is already exiting.
-     * Sending SIGUSR1 now might cause a race condition/deadlock in the child,
-     * especially when compiled with coverage. */
-    if (server.slot_migration_child_exit_pipe == -1) {
-        serverLog(LL_NOTICE, "Slot migration child %ld is already exiting, not killing.", (long)server.child_pid);
-        return;
-    }
 
     serverLog(LL_NOTICE, "Killing running slot migration child: %ld", (long)server.child_pid);
 

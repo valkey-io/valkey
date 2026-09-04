@@ -2090,6 +2090,8 @@ usage:
         "                    names are the same as the ones produced as output.\n"
         "                    The -t option is ignored if a specific command is supplied\n"
         "                    on the command line.\n"
+        "                    getpxt_simulated is not part of the default suite and\n"
+        "                    must be named here; it reports as MULTI/GET/PEXPIRETIME/EXEC.\n"
         " -I                 Idle mode. Just open N idle connections and wait.\n"
         " -x                 Read last argument from STDIN.\n"
         " --rps <requests>   Limit the total number of requests per second.\n"
@@ -2794,6 +2796,42 @@ int main(int argc, char **argv) {
 
             benchmark("FCALL", cmd, len);
             free(cmd);
+        }
+
+        if (test_is_selected("set_pxat")) {
+            len = valkeyFormatCommand(&cmd, "SET key%s:__rand_int__ %s PXAT 17344823940230", tag, data);
+            benchmark("SET w/ PXAT", cmd, len);
+            free(cmd);
+        }
+
+        if (test_is_selected("getpxt")) {
+            len = valkeyFormatCommand(&cmd, "GETPXT key%s:__rand_int__", tag);
+            benchmark("GETPXT", cmd, len);
+            free(cmd);
+        }
+
+        /* Deliberately excluded from the default suite: config.tests is NULL when
+         * no -t was given, and this test exists to compare against GETPXT rather
+         * than to measure the server, so it only runs when asked for by name. */
+        if (config.tests != NULL && test_is_selected("getpxt_simulated")) {
+            /* The GETPXT baseline: MULTI; GET key; PEXPIRETIME key; EXEC sent as
+             * a single round trip. __rand_1st__ makes both commands address the
+             * same key. The reported rps counts commands, not transactions, so
+             * the title spells out how many commands each transaction costs. */
+            const char *seq[] = {"MULTI", "GET key%s:__rand_1st__", "PEXPIRETIME key%s:__rand_1st__", "EXEC"};
+            const int seqlen = sizeof(seq) / sizeof(seq[0]);
+            sds pipeline = sdsempty();
+            char title[64];
+
+            for (i = 0; i < seqlen; i++) {
+                len = valkeyFormatCommand(&cmd, seq[i], tag);
+                pipeline = sdscatlen(pipeline, cmd, len);
+                free(cmd);
+            }
+
+            snprintf(title, sizeof(title), "MULTI/GET/PEXPIRETIME/EXEC (%d cmds/txn)", seqlen);
+            benchmarkSequence(title, pipeline, sdslen(pipeline), seqlen);
+            sdsfree(pipeline);
         }
 
         if (!config.csv) printf("\n");

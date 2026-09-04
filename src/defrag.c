@@ -982,6 +982,173 @@ static doneStatus defragModuleGlobals(monotime endtime, void *target, void *priv
 }
 
 
+/* Incrementally defragment the client-side-caching tracking table during an
+ * active-defrag cycle.
+ *
+ * The tracking table can hold up to tracking-table-max-keys entries (default
+ * 1,000,000), each owning its own inner radix tree, and a single
+ * never-modified key can accumulate an unbounded number of (dead) client IDs
+ * in that inner tree, so a synchronous pass over either dimension could stall
+ * the event loop. Like the kvstore stages, this stage is cursor-based, but
+ * the cursor is a (key, client-ID) pair: it walks the inner radix trees
+ * ID by ID, relocating nodes through the iterator's node callback, checks the
+ * deadline on the standard cadence, and returns DEFRAG_NOT_DONE to be resumed
+ * from the exact ID it stopped at. Inner radix trees hold client IDs as keys
+ * with no data values, so only their struct and nodes need relocation. */
+static doneStatus defragStageTrackingTable(monotime endtime, void *target, void *privdata) {
+    UNUSED(target);
+    UNUSED(privdata);
+
+    /* Resume state persisted across invocations. 'cursor' is an sds copy of
+     * the last visited outer key (NULL to (re)start a pass from the
+     * beginning); when the deadline hit inside that key's inner radix tree,
+     * 'in_key' is set and 'cursor_id' is the last visited client ID within
+     * it. 'initialized' records whether the outer rax struct and head node
+     * have been relocated for the current pass. */
+    static sds cursor = NULL;
+    static uint64_t cursor_id = 0;
+    static int in_key = 0;
+    static int initialized = 0;
+
+    if (endtime == 0) {
+        /* Required initialization at the start of each defrag cycle. */
+        if (cursor != NULL) {
+            sdsfree(cursor);
+            cursor = NULL;
+        }
+        in_key = 0;
+        initialized = 0;
+        return DEFRAG_NOT_DONE;
+    }
+
+    /* Tracking may never have been enabled, or may have been torn down (e.g.
+     * by a flush) mid-cycle; either way there is nothing left to defrag. */
+    rax **tracking_table = getTrackingTable();
+    if (*tracking_table == NULL) {
+        if (cursor != NULL) {
+            sdsfree(cursor);
+            cursor = NULL;
+        }
+        in_key = 0;
+        initialized = 0;
+        return DEFRAG_DONE;
+    }
+
+    /* Relocate the outer rax struct and its head node once per pass. If the
+     * table is freed AND recreated between invocations (flush followed by new
+     * tracking activity), 'initialized' stays set, so the new outer struct is
+     * not relocated until the next pass; its keys are still walked and their
+     * inner radix trees still defragged below. That one-pass gap is accepted
+     * to keep the resume logic simple. */
+    rax *rt = *tracking_table;
+    if (!initialized) {
+        rax *newrt = activeDefragAlloc(rt);
+        if (newrt) {
+            *tracking_table = newrt;
+            rt = newrt;
+        }
+        defragRaxNode(&rt->head);
+        initialized = 1;
+    }
+
+    raxIterator ri;
+    raxStart(&ri, rt);
+    if (cursor == NULL) {
+        /* Fresh pass: assign the node callback before the seek so the nodes
+         * walked before the first key are covered too. */
+        ri.node_cb = defragRaxNode;
+        raxSeek(&ri, "^", NULL, 0);
+    } else {
+        /* Resume at the cursor key itself when the deadline hit inside its
+         * inner radix tree, or strictly after it otherwise. Assign the node
+         * callback after the seek so nodes on the path to the cursor (already
+         * defragged on the invocation that walked them) aren't re-walked.
+         * Both seeks are safe even if the cursor key was removed since. */
+        raxSeek(&ri, in_key ? ">=" : ">", (unsigned char *)cursor, sdslen(cursor));
+        ri.node_cb = defragRaxNode;
+    }
+
+    unsigned int iterations = 0;
+    long long prev_defragged = server.stat_active_defrag_hits;
+    unsigned long long prev_scanned = server.stat_active_defrag_scanned;
+
+    while (raxNext(&ri)) {
+        rax *ids = ri.data;
+
+        /* Resume mid-key only if this is the exact key the deadline hit in;
+         * it may have been removed (and the seek landed on its successor), in
+         * which case we treat the landed-on key as freshly started. */
+        int resume_mid =
+            in_key && cursor != NULL && ri.key_len == sdslen(cursor) && memcmp(ri.key, cursor, ri.key_len) == 0;
+        in_key = 0;
+
+        /* Remember the key we are processing as the resume point. */
+        sdsfree(cursor);
+        cursor = sdsnewlen(ri.key, ri.key_len);
+
+        /* Starting this key (not resuming): relocate the inner rax struct and
+         * its head node, writing the possibly-moved pointer back to the outer
+         * entry. Node relocations during the walk below never move the rax
+         * struct itself. */
+        if (!resume_mid) {
+            rax *newids = activeDefragAlloc(ids);
+            if (newids) raxSetData(ri.node, ri.data = ids = newids);
+            defragRaxNode(&ids->head);
+        }
+
+        raxIterator idi;
+        raxStart(&idi, ids);
+        if (resume_mid) {
+            raxSeek(&idi, ">", (unsigned char *)&cursor_id, sizeof(cursor_id));
+            idi.node_cb = defragRaxNode;
+        } else {
+            idi.node_cb = defragRaxNode;
+            raxSeek(&idi, "^", NULL, 0);
+        }
+        while (raxNext(&idi)) {
+            server.stat_active_defrag_scanned++;
+            /* Deadline check inside the inner tree: one tracked key can hold
+             * an unbounded number of (dead) client IDs, so within-key
+             * progress must be interruptible too. */
+            if (++iterations > 16 || server.stat_active_defrag_hits > prev_defragged ||
+                server.stat_active_defrag_scanned - prev_scanned > 64) {
+                if (getMonotonicUs() >= endtime) {
+                    memcpy(&cursor_id, idi.key, sizeof(cursor_id));
+                    in_key = 1;
+                    raxStop(&idi);
+                    raxStop(&ri);
+                    return DEFRAG_NOT_DONE;
+                }
+                iterations = 0;
+                prev_defragged = server.stat_active_defrag_hits;
+                prev_scanned = server.stat_active_defrag_scanned;
+            }
+        }
+        raxStop(&idi);
+
+        /* Between-keys deadline check, mirroring the other stages. */
+        if (++iterations > 16 || server.stat_active_defrag_hits > prev_defragged ||
+            server.stat_active_defrag_scanned - prev_scanned > 64) {
+            if (getMonotonicUs() >= endtime) {
+                raxStop(&ri);
+                return DEFRAG_NOT_DONE;
+            }
+            iterations = 0;
+            prev_defragged = server.stat_active_defrag_hits;
+            prev_scanned = server.stat_active_defrag_scanned;
+        }
+    }
+    raxStop(&ri);
+
+    /* Completed a full pass over the table; reset for the next cycle. */
+    sdsfree(cursor);
+    cursor = NULL;
+    in_key = 0;
+    initialized = 0;
+    return DEFRAG_DONE;
+}
+
+
 static bool defragIsRunning(void) {
     return (defrag.timeproc_id > 0);
 }
@@ -1231,6 +1398,7 @@ static void beginDefragCycle(void) {
 
     addDefragStage(defragLuaScripts, NULL, NULL);
     addDefragStage(defragModuleGlobals, NULL, NULL);
+    addDefragStage(defragStageTrackingTable, NULL, NULL);
 
     defrag.current_stage = NULL;
     defrag.start_cycle = getMonotonicUs();

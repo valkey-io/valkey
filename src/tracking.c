@@ -546,6 +546,214 @@ void trackingLimitUsedSlots(void) {
     timeout_counter++;
 }
 
+/* Hard cap on client-ID liveness checks one sweep step performs, bounding the
+ * scratch space below. The effective per-step budget is the endtime deadline;
+ * this cap is a memory bound, not a tuning knob. */
+#define TRACKING_SWEEP_MAX_ITEMS_PER_STEP 1000
+
+/* Time budget for one scheduled sweep step, and the guardrails for the
+ * adaptive sweep period (see trackingSweepDeadClients below). */
+#define TRACKING_SWEEP_TIME_BUDGET_US 100
+#define TRACKING_SWEEP_MIN_PERIOD_MS 100
+#define TRACKING_SWEEP_MAX_PERIOD_MS 60000
+
+/* One bounded step of a table-wide sweep reclaiming disconnected clients'
+ * IDs. IDs are normally removed lazily when their key is next modified
+ * (trackingInvalidateKey); a client that disconnects while its keys are never
+ * touched again would leak them forever, and cleaning up on disconnect would
+ * break that path's O(1) guarantee. The resume cursor is a (key, id) pair so
+ * a single heavily-tracked key cannot blow the per-step budget.
+ *
+ * The step stops at the 'endtime' monotonic deadline (0 = no time limit) or
+ * after TRACKING_SWEEP_MAX_ITEMS_PER_STEP liveness checks, whichever comes
+ * first. Adds the number of removed IDs to '*removed' (may be NULL); returns
+ * 1 when the pass reached the end of the table, 0 when it stopped on budget.
+ *
+ * An ID is removed only if lookupClientByID(id) == NULL: IDs are never
+ * reused, so a connected client's ID can never be removed. Keys whose inner
+ * radix tree becomes empty are removed silently - nobody tracks them anymore,
+ * so no invalidation is owed. */
+int trackingSweepStep(monotime endtime, uint64_t *removed) {
+    /* Resume cursor: sds copy of the last visited key (NULL = start of a new
+     * pass) and, when the previous step stopped inside that key's inner radix
+     * tree, the last checked ID within it. Copies rather than iterator
+     * pointers: our removals may invalidate the iterator and the key memory
+     * it points to. */
+    static sds cursor_key = NULL;
+    static uint64_t cursor_id = 0;
+    static int cursor_in_key = 0;
+
+    if (TrackingTable == NULL) {
+        if (cursor_key != NULL) {
+            sdsfree(cursor_key);
+            cursor_key = NULL;
+        }
+        cursor_in_key = 0;
+        return 1;
+    }
+
+    /* Keys emptied during this step, with their (empty but still valid)
+     * inner rax. Freeing and removing them is deferred until the outer
+     * iteration ends: removing mid-iteration would invalidate the iterator,
+     * and deferring the raxFree keeps every outer entry valid for the walk.
+     *
+     * cap+1 entries suffice: every visited non-empty key consumes at least
+     * one unit of the cap, and at most one visited key (the resume key) can
+     * already be empty. The per-key dead batch is capped for the same
+     * reason. */
+    sds empty_keys[TRACKING_SWEEP_MAX_ITEMS_PER_STEP + 1];
+    rax *empty_ids[TRACKING_SWEEP_MAX_ITEMS_PER_STEP + 1];
+    uint64_t dead[TRACKING_SWEEP_MAX_ITEMS_PER_STEP];
+    int num_empty = 0;
+    int budget = TRACKING_SWEEP_MAX_ITEMS_PER_STEP;
+    unsigned int checks_since_clock = 0;
+    int out_of_time = 0;
+
+    raxIterator ri;
+    raxStart(&ri, TrackingTable);
+    if (cursor_key == NULL) {
+        raxSeek(&ri, "^", NULL, 0);
+    } else if (cursor_in_key) {
+        /* The previous call stopped inside cursor_key's inner radix tree:
+         * revisit the same key to finish it. ">=" also handles the key having
+         * been removed since (we then continue from the next key). */
+        raxSeek(&ri, ">=", (unsigned char *)cursor_key, sdslen(cursor_key));
+    } else {
+        /* Resume strictly after the last fully-processed key. Using ">" is
+         * safe even if that key was removed since the previous invocation. */
+        raxSeek(&ri, ">", (unsigned char *)cursor_key, sdslen(cursor_key));
+    }
+
+    while (budget > 0 && !out_of_time && raxNext(&ri)) {
+        rax *ids = ri.data;
+
+        /* Resume mid-key only if this is the exact key the previous call
+         * stopped in; it may have been removed (and the seek landed on its
+         * successor), in which case we start from the first ID. */
+        int resume_mid = cursor_in_key && cursor_key != NULL && ri.key_len == sdslen(cursor_key) &&
+                         memcmp(ri.key, cursor_key, ri.key_len) == 0;
+        cursor_in_key = 0;
+        int stopped_mid = 0;
+
+        /* Remember the key we are processing as the resume point. */
+        sdsfree(cursor_key);
+        cursor_key = sdsnewlen(ri.key, ri.key_len);
+
+        /* Gather the dead IDs first, then remove them, so we never mutate the
+         * inner radix tree while its iterator is live. */
+        size_t num_dead = 0;
+        raxIterator idi;
+        raxStart(&idi, ids);
+        if (resume_mid) {
+            raxSeek(&idi, ">", (unsigned char *)&cursor_id, sizeof(cursor_id));
+        } else {
+            raxSeek(&idi, "^", NULL, 0);
+        }
+        while (raxNext(&idi)) {
+            uint64_t id;
+            memcpy(&id, idi.key, sizeof(id));
+            /* Only a NULL lookup means the client is gone; a still-connected
+             * client is always preserved. */
+            if (lookupClientByID(id) == NULL) dead[num_dead++] = id;
+            budget--;
+            /* Check the deadline on a throttled cadence: reading the
+             * monotonic clock for every ID would cost more than the liveness
+             * check itself. */
+            if (endtime != 0 && ++checks_since_clock >= 16) {
+                checks_since_clock = 0;
+                if (getMonotonicUs() >= endtime) out_of_time = 1;
+            }
+            if (budget == 0 || out_of_time) {
+                /* Budget exhausted: resume within this key on the next step.
+                 * ">" on the saved ID is safe even if we remove it below. */
+                cursor_id = id;
+                cursor_in_key = 1;
+                stopped_mid = 1;
+                break;
+            }
+        }
+        raxStop(&idi);
+
+        for (size_t j = 0; j < num_dead; j++) {
+            if (raxRemove(ids, (unsigned char *)&dead[j], sizeof(dead[j]), NULL)) {
+                TrackingTableTotalItems--;
+                if (removed) (*removed)++;
+            }
+        }
+
+        /* Fully swept and now empty: schedule the key for removal after
+         * iteration (as trackingInvalidateKey does, minus the invalidation
+         * send). A key left empty at a budget boundary is reclaimed when the
+         * next step revisits it. */
+        if (!stopped_mid && raxSize(ids) == 0) {
+            empty_keys[num_empty] = sdsnewlen(ri.key, ri.key_len);
+            empty_ids[num_empty] = ids;
+            num_empty++;
+        }
+    }
+
+    /* raxEOF is true only if the iterator was exhausted (we reached the end of
+     * the table), as opposed to stopping because we ran out of budget. */
+    int reached_end = raxEOF(&ri) != 0;
+    raxStop(&ri);
+
+    for (int j = 0; j < num_empty; j++) {
+        raxFree(empty_ids[j]);
+        raxRemove(TrackingTable, (unsigned char *)empty_keys[j], sdslen(empty_keys[j]), NULL);
+        sdsfree(empty_keys[j]);
+    }
+
+    /* Full pass complete: restart from the beginning next time. */
+    if (reached_end) {
+        sdsfree(cursor_key);
+        cursor_key = NULL;
+        cursor_in_key = 0;
+    }
+    return reached_end;
+}
+
+/* Synchronously sweep the whole table until a full pass completes without
+ * removing anything, i.e. until every ID left references a live client.
+ * Driven by DEBUG SWEEP-TRACKING-TABLE; unbounded by design, debug only. */
+void trackingSweepFull(void) {
+    uint64_t removed;
+    do {
+        removed = 0;
+        while (!trackingSweepStep(0, &removed))
+            ;
+    } while (removed > 0);
+}
+
+/* Scheduled entry point, called on every serverCron tick. Runs one
+ * TRACKING_SWEEP_TIME_BUDGET_US step on an adaptive period: halved when a
+ * step reclaims something, doubled when it finds nothing, clamped to
+ * [TRACKING_SWEEP_MIN_PERIOD_MS, TRACKING_SWEEP_MAX_PERIOD_MS] and starting
+ * at the slow end - a quiet server pays one 100us scan per minute, a burst
+ * of disconnects quickly ramps reclamation up.
+ *
+ * Deliberately not gated on server.tracking_clients: the leak's typical
+ * shape is a table full of dead IDs after every tracking client has
+ * disconnected. */
+void trackingSweepDeadClients(void) {
+    static monotime next_run = 0;
+    static long long period_ms = TRACKING_SWEEP_MAX_PERIOD_MS;
+
+    monotime now = getMonotonicUs();
+    if (now < next_run) return;
+
+    uint64_t removed = 0;
+    trackingSweepStep(now + TRACKING_SWEEP_TIME_BUDGET_US, &removed);
+
+    if (removed > 0) {
+        period_ms /= 2;
+        if (period_ms < TRACKING_SWEEP_MIN_PERIOD_MS) period_ms = TRACKING_SWEEP_MIN_PERIOD_MS;
+    } else {
+        period_ms *= 2;
+        if (period_ms > TRACKING_SWEEP_MAX_PERIOD_MS) period_ms = TRACKING_SWEEP_MAX_PERIOD_MS;
+    }
+    next_run = now + (monotime)period_ms * 1000;
+}
+
 /* Generate RESP for an array containing all the key names
  * in the 'keys' radix tree. If the client is not NULL, the list will not
  * include keys that were modified the last time by this client, in order
@@ -654,6 +862,14 @@ uint64_t trackingGetTotalItems(void) {
 uint64_t trackingGetTotalKeys(void) {
     if (TrackingTable == NULL) return 0;
     return raxSize(TrackingTable);
+}
+
+/* Return the address of the global tracking table so that the active-defrag
+ * stage can relocate the outer radix tree (and its inner radix trees) and write
+ * back the possibly-relocated pointer. Returns a pointer to a NULL rax when
+ * tracking has never been enabled. */
+rax **getTrackingTable(void) {
+    return &TrackingTable;
 }
 
 uint64_t trackingGetTotalPrefixes(void) {

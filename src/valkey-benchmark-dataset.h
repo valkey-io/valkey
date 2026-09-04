@@ -22,6 +22,8 @@
 #define FIELD_PREFIX_LEN 8
 #define FIELD_SUFFIX "__"
 #define FIELD_SUFFIX_LEN 2
+#define BASE64_SUFFIX ":base64"
+#define BASE64_SUFFIX_LEN 7
 
 /* Dataset format types */
 typedef enum datasetFormat {

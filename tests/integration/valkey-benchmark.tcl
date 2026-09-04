@@ -442,6 +442,239 @@ tags {"benchmark network external:skip logreqres:skip"} {
             file delete $csv_file
         }
 
+        test {benchmark: dataset with base64 field decoding} {
+            # "AQIDBA==" -> 0x01020304 (4 bytes), "BQYHCAkK" -> 0x05060708090a (6 bytes)
+            set csv_data "id,title,embedding\n1,laptop,AQIDBA==\n2,phone,BQYHCAkK"
+            set csv_file [tmpfile "base64_dataset.csv"]
+            set fd [open $csv_file w]
+            puts $fd $csv_data
+            close $fd
+
+            set cmd [valkeybenchmark $master_host $master_port \
+                "--dataset $csv_file -n 2 -r 10 -- HSET doc:__rand_int__ title __field:title__ embedding __field:embedding:base64__"]
+            common_bench_setup $cmd
+            assert_match {*calls=2,*} [cmdstat hset]
+
+            # Verify data was stored
+            set keys [r keys "doc:*"]
+            assert {[llength $keys] > 0}
+
+            # ":base64" suffix must be stripped from the field name
+            set sample_key [lindex $keys 0]
+            set fields [lsort [r hkeys $sample_key]]
+            assert_equal [lsort {embedding title}] $fields
+
+            # title stays plain text
+            set title [r hget $sample_key title]
+            assert {$title eq "laptop" || $title eq "phone"}
+
+            # embedding is decoded to binary
+            set actual_emb [r hget $sample_key embedding]
+            if {$title eq "laptop"} {
+                assert_equal 4 [string length $actual_emb]
+                binary scan $actual_emb H* hex_value
+                assert_equal "01020304" $hex_value
+            } else {
+                assert_equal 6 [string length $actual_emb]
+                binary scan $actual_emb H* hex_value
+                assert_equal "05060708090a" $hex_value
+            }
+
+            file delete $csv_file
+        }
+
+        test {benchmark: dataset base64 field preserves null bytes} {
+            # "AQADAQk=" -> 0x0100030109 (5 bytes); the \x00 would truncate under strlen()
+            set csv_data "id,vector\n1,AQADAQk="
+            set csv_file [tmpfile "base64_nullbyte.csv"]
+            set fd [open $csv_file w]
+            puts $fd $csv_data
+            close $fd
+
+            set cmd [valkeybenchmark $master_host $master_port \
+                "--dataset $csv_file -n 2 -r 10 -- HSET doc:__rand_int__ vector __field:vector:base64__"]
+            common_bench_setup $cmd
+            assert_match {*calls=2,*} [cmdstat hset]
+
+            # Full binary must survive past the null byte (5 bytes, not 1)
+            set keys [r keys "doc:*"]
+            assert {[llength $keys] > 0}
+            set sample_key [lindex $keys 0]
+            set actual [r hget $sample_key vector]
+
+            assert_equal 5 [string length $actual]
+            binary scan $actual H* hex_value
+            assert_equal "0100030109" $hex_value
+
+            file delete $csv_file
+        }
+
+        test {benchmark: two placeholders in one arg, first decodes to a null byte} {
+            # Two placeholders in ONE arg token. First decodes to 0x0100030109 (\x00
+            # at byte 2); if the loop rescanned the rebuilt binary, strstr would stop
+            # there and the second placeholder would be left unsubstituted.
+            set csv_data "id,vector,label\n1,AQADAQk=,hello"
+            set csv_file [tmpfile "base64_multi.csv"]
+            set fd [open $csv_file w]
+            puts $fd $csv_data
+            close $fd
+
+            set cmd [valkeybenchmark $master_host $master_port \
+                "--dataset $csv_file -n 2 -r 10 -- SET doc:__rand_int__ __field:vector:base64____field:label__"]
+            common_bench_setup $cmd
+            assert_match {*calls=2,*} [cmdstat set]
+
+            set keys [r keys "doc:*"]
+            assert {[llength $keys] > 0}
+            set actual [r get [lindex $keys 0]]
+
+            # 5 decoded bytes + "hello"; the literal "__field:label__" must be gone
+            assert_equal 10 [string length $actual]
+            binary scan $actual H* hex_value
+            assert_equal "0100030109" [string range $hex_value 0 9]
+            assert_equal "hello" [string range $actual 5 end]
+
+            file delete $csv_file
+        }
+
+        test {benchmark: decoded base64 spelling a placeholder is not re-substituted} {
+            # "X19maWVsZDp2ZWN0b3JfXw==" decodes to the literal text "__field:vector__".
+            # If the loop rescanned the rebuilt buffer it would re-expand that against
+            # the mapped "vector" field and corrupt the value.
+            set csv_data "id,vector\n1,X19maWVsZDp2ZWN0b3JfXw=="
+            set csv_file [tmpfile "base64_selfplaceholder.csv"]
+            set fd [open $csv_file w]
+            puts $fd $csv_data
+            close $fd
+
+            set cmd [valkeybenchmark $master_host $master_port \
+                "--dataset $csv_file -n 2 -r 10 -- SET doc:__rand_int__ __field:vector:base64__"]
+            common_bench_setup $cmd
+            assert_match {*calls=2,*} [cmdstat set]
+
+            set keys [r keys "doc:*"]
+            assert {[llength $keys] > 0}
+            set actual [r get [lindex $keys 0]]
+
+            # Decoded bytes stored verbatim, not re-expanded as a placeholder
+            assert_equal "__field:vector__" $actual
+
+            file delete $csv_file
+        }
+
+        test {benchmark: dataset base64 field with malformed length is skipped safely} {
+            # "A=" length 2 is not a multiple of 4; the length guard must reject it
+            # (else the out_len math underflows size_t). Field is stored empty, no crash.
+            set csv_data "id,vector\n1,A=\n2,A="
+            set csv_file [tmpfile "base64_badlen.csv"]
+            set fd [open $csv_file w]
+            puts $fd $csv_data
+            close $fd
+
+            set cmd [valkeybenchmark $master_host $master_port \
+                "--dataset $csv_file -n 2 -r 10 -- HSET doc:__rand_int__ vector __field:vector:base64__"]
+            common_bench_setup $cmd
+            assert_match {*calls=2,*} [cmdstat hset]
+
+            # Malformed input decodes to an empty value
+            set keys [r keys "doc:*"]
+            assert {[llength $keys] > 0}
+            set actual [r hget [lindex $keys 0] vector]
+            assert_equal 0 [string length $actual]
+
+            file delete $csv_file
+        }
+
+        test {benchmark: dataset base64 field with invalid characters is skipped safely} {
+            # '!' and '@' are outside the base64 alphabet; field is stored empty, no crash.
+            set csv_data "id,vector\n1,AQ!@\n2,AQ!@"
+            set csv_file [tmpfile "base64_badchar.csv"]
+            set fd [open $csv_file w]
+            puts $fd $csv_data
+            close $fd
+
+            set cmd [valkeybenchmark $master_host $master_port \
+                "--dataset $csv_file -n 2 -r 10 -- HSET doc:__rand_int__ vector __field:vector:base64__"]
+            common_bench_setup $cmd
+            assert_match {*calls=2,*} [cmdstat hset]
+
+            set keys [r keys "doc:*"]
+            assert {[llength $keys] > 0}
+            set actual [r hget [lindex $keys 0] vector]
+            assert_equal 0 [string length $actual]
+
+            file delete $csv_file
+        }
+
+        test {benchmark: dataset base64 field with misplaced padding is skipped safely} {
+            # '=' is only legal in the final quartet's trailing slots. All three
+            # inputs violate that and must be rejected (stored empty), not decoded.
+            foreach bad {A=AA AA=A ====} {
+                set csv_data "id,vector\n1,$bad\n2,$bad"
+                set csv_file [tmpfile "base64_badpad.csv"]
+                set fd [open $csv_file w]
+                puts $fd $csv_data
+                close $fd
+
+                set cmd [valkeybenchmark $master_host $master_port \
+                    "--dataset $csv_file -n 2 -r 10 -- HSET doc:__rand_int__ vector __field:vector:base64__"]
+                common_bench_setup $cmd
+                assert_match {*calls=2,*} [cmdstat hset]
+
+                set keys [r keys "doc:*"]
+                assert {[llength $keys] > 0}
+                set actual [r hget [lindex $keys 0] vector]
+                assert_equal 0 [string length $actual]
+
+                file delete $csv_file
+            }
+        }
+
+        test {benchmark: dataset base64 field with non-canonical padding bits is skipped safely} {
+            # RFC 4648: bits discarded by padding must be zero. "AB==" leaves stray
+            # bits in raw[1], "AAB=" in raw[2] -- both must be rejected.
+            foreach bad {AB== AAB=} {
+                set csv_data "id,vector\n1,$bad\n2,$bad"
+                set csv_file [tmpfile "base64_noncanon.csv"]
+                set fd [open $csv_file w]
+                puts $fd $csv_data
+                close $fd
+
+                set cmd [valkeybenchmark $master_host $master_port \
+                    "--dataset $csv_file -n 2 -r 10 -- HSET doc:__rand_int__ vector __field:vector:base64__"]
+                common_bench_setup $cmd
+                assert_match {*calls=2,*} [cmdstat hset]
+
+                set keys [r keys "doc:*"]
+                assert {[llength $keys] > 0}
+                set actual [r hget [lindex $keys 0] vector]
+                assert_equal 0 [string length $actual]
+
+                file delete $csv_file
+            }
+        }
+
+        test {benchmark: dataset base64 field without suffix stays as text} {
+            # No ":base64" suffix -> value stored as the literal base64 string, not decoded
+            set csv_data "id,embedding\n1,AAAAAAAAAD8AAABAAACAQQ=="
+            set csv_file [tmpfile "base64_text.csv"]
+            set fd [open $csv_file w]
+            puts $fd $csv_data
+            close $fd
+
+            set cmd [valkeybenchmark $master_host $master_port \
+                "--dataset $csv_file -n 2 -r 10 -- SET doc:__rand_int__ __field:embedding__"]
+            common_bench_setup $cmd
+
+            # Value should be the literal 24-char base64 string
+            set keys [r keys "doc:*"]
+            assert {[llength $keys] > 0}
+            set value [r get [lindex $keys 0]]
+            assert_equal "AAAAAAAAAD8AAABAAACAQQ==" $value
+
+            file delete $csv_file
+        }
+
         test {benchmark: sequential zadd results in expected number of keys} {
             set cmd [valkeybenchmark $master_host $master_port "-r 50 -n 50 --sequential -t zadd"]
             common_bench_setup $cmd

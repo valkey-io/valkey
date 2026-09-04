@@ -69,10 +69,10 @@
 #define MAX_LATENCY_PRECISION 4
 #define MAX_THREADS 500
 #define CLUSTER_SLOTS 16384
-#define CONFIG_LATENCY_HISTOGRAM_MIN_VALUE 10L              /* >= 10 usecs */
-#define CONFIG_LATENCY_HISTOGRAM_MAX_VALUE 3000000L         /* <= 3 secs(us precision) */
-#define CONFIG_LATENCY_HISTOGRAM_INSTANT_MAX_VALUE 3000000L /* <= 3 secs(us precision) */
-#define SHOW_THROUGHPUT_INTERVAL 250                        /* 250ms */
+#define CONFIG_LATENCY_HISTOGRAM_MIN_VALUE 10L               /* >= 10 usecs */
+#define CONFIG_LATENCY_HISTOGRAM_MAX_VALUE 60000000L         /* <= 60 secs(us precision) */
+#define CONFIG_LATENCY_HISTOGRAM_INSTANT_MAX_VALUE 60000000L /* <= 60 secs(us precision) */
+#define SHOW_THROUGHPUT_INTERVAL 250                         /* 250ms */
 
 #define CLIENT_GET_EVENTLOOP(c) (c->thread_id >= 0 ? config.threads[c->thread_id]->el : config.el)
 

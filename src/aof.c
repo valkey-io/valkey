@@ -1443,17 +1443,26 @@ sds genAofTimestampAnnotationIfNeeded(int force) {
  *          to avoid writing `select` command in any case.
  * argv   - The command to write to the aof.
  * argc   - Number of values in argv
+ *
+ * If AOF is not actively writing (i.e. not AOF_ON, and not in an active
+ * rewrite), this function returns immediately without side effects.
  */
 void feedAppendOnlyFile(int dictid, robj **argv, int argc) {
-    sds buf = sdsempty();
-
     serverAssert(dictid == -1 || (dictid >= 0 && dictid < server.dbnum));
+
+    /* The caller (propagateNow) only checks AOF_OFF. We additionally skip
+     * AOF_WAIT_REWRITE without an active rewrite child, since aof_buf
+     * data has nowhere to be merged from in that transient state. */
+    if (!(server.aof_state == AOF_ON ||
+          (server.aof_state == AOF_WAIT_REWRITE && server.child_type == CHILD_TYPE_AOF))) {
+        return;
+    }
 
     /* Feed timestamp if needed */
     if (server.aof_timestamp_enabled) {
         sds ts = genAofTimestampAnnotationIfNeeded(0);
         if (ts != NULL) {
-            buf = sdscatsds(buf, ts);
+            server.aof_buf = sdscatsds(server.aof_buf, ts);
             sdsfree(ts);
         }
     }
@@ -1464,22 +1473,14 @@ void feedAppendOnlyFile(int dictid, robj **argv, int argc) {
         char seldb[64];
 
         snprintf(seldb, sizeof(seldb), "%d", dictid);
-        buf = sdscatprintf(buf, "*2\r\n$6\r\nSELECT\r\n$%lu\r\n%s\r\n", (unsigned long)strlen(seldb), seldb);
+        server.aof_buf =
+            sdscatprintf(server.aof_buf, "*2\r\n$6\r\nSELECT\r\n$%lu\r\n%s\r\n", (unsigned long)strlen(seldb), seldb);
         server.aof_selected_db = dictid;
     }
 
     /* All commands should be propagated the same way in AOF as in replication.
      * No need for AOF-specific translation. */
-    buf = catAppendOnlyGenericCommand(buf, argc, argv);
-
-    /* Append to the AOF buffer. This will be flushed on disk just before
-     * of re-entering the event loop, so before the client will get a
-     * positive reply about the operation performed. */
-    if (server.aof_state == AOF_ON || (server.aof_state == AOF_WAIT_REWRITE && server.child_type == CHILD_TYPE_AOF)) {
-        server.aof_buf = sdscatlen(server.aof_buf, buf, sdslen(buf));
-    }
-
-    sdsfree(buf);
+    server.aof_buf = catAppendOnlyGenericCommand(server.aof_buf, argc, argv);
 }
 
 /* ----------------------------------------------------------------------------

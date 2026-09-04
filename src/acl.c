@@ -28,6 +28,7 @@
  */
 
 #include "server.h"
+#include <sys/stat.h>
 #include "sha256.h"
 #include "module.h"
 #include "intset.h"
@@ -2765,7 +2766,12 @@ static int ACLSaveToFile(const char *filename) {
     /* Create a temp file with the new content. */
     tmpfilename = sdsnew(filename);
     tmpfilename = sdscatfmt(tmpfilename, ".tmp-%i-%I", (int)getpid(), commandTimeSnapshot());
-    if ((fd = open(tmpfilename, O_WRONLY | O_CREAT, 0644)) == -1) {
+    struct stat sb;
+    mode_t acl_mode = 0600; /* Safe default: user read/write only */
+    if (stat(filename, &sb) == 0) {
+        acl_mode = sb.st_mode & 07777;
+    }
+    if ((fd = open(tmpfilename, O_WRONLY | O_CREAT, acl_mode)) == -1) {
         serverLog(LL_WARNING, "Opening temp ACL file for ACL SAVE: %s", strerror(errno));
         goto cleanup;
     }

@@ -799,6 +799,7 @@ typedef struct {
     SSL_CTX *ctx;
     SSL_CTX *client_ctx;
     tlsMaterialsMetadata metadata;
+    unsigned long long generation;
 } tlsPendingReload;
 
 /* Last known (active) TLS materials metadata */
@@ -892,8 +893,26 @@ static int metadataChanged(const tlsMaterialsMetadata *old, const tlsMaterialsMe
 
 /* TLS background reload state */
 static _Atomic long long lastTlsConfigureTime = 0;
+static _Atomic unsigned long long tls_config_generation = 1;
 static tlsPendingReload pending_reload = {0};
 static pthread_mutex_t pending_reload_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+/* Caller must hold pending_reload_mutex. Use the unlocked wrapper unless the
+ * lock is already held by the current code path. */
+static void tlsDiscardPendingReloadLocked(const char *reason) {
+    if (pending_reload.ctx) {
+        SSL_CTX_free(pending_reload.ctx);
+        SSL_CTX_free(pending_reload.client_ctx);
+        memset(&pending_reload, 0, sizeof(pending_reload));
+        if (reason) serverLog(LL_DEBUG, "%s", reason);
+    }
+}
+
+static void tlsDiscardPendingReload(const char *reason) {
+    pthread_mutex_lock(&pending_reload_mutex);
+    tlsDiscardPendingReloadLocked(reason);
+    pthread_mutex_unlock(&pending_reload_mutex);
+}
 
 /* Attempt to configure/reconfigure TLS. This operation is atomic and will
  * leave the SSL_CTX unchanged if it fails.
@@ -921,6 +940,7 @@ static int tlsConfigure(void *priv, int reconfigure, bool background) {
 
     if (background && reconfigure) {
         tlsMaterialsMetadata new_metadata;
+        unsigned long long generation = atomic_load_explicit(&tls_config_generation, memory_order_acquire);
         captureMetadata(ctx_config, &new_metadata);
 
         if (!metadataChanged(&active_metadata, &new_metadata)) {
@@ -944,6 +964,7 @@ static int tlsConfigure(void *priv, int reconfigure, bool background) {
         pending_reload.ctx = ctx;
         pending_reload.client_ctx = client_ctx;
         pending_reload.metadata = new_metadata;
+        pending_reload.generation = generation;
         pthread_mutex_unlock(&pending_reload_mutex);
 
         serverLog(LL_DEBUG, "Background TLS reload parsed TLS materials successfully");
@@ -951,6 +972,10 @@ static int tlsConfigure(void *priv, int reconfigure, bool background) {
         if (tlsCreateContexts(ctx_config, &ctx, &client_ctx) == C_ERR) {
             return C_ERR;
         }
+
+        /* Synchronous reconfiguration wins over any staged background reloads. */
+        atomic_fetch_add_explicit(&tls_config_generation, 1, memory_order_acq_rel);
+        tlsDiscardPendingReload("Discarding stale pending TLS reload after synchronous reconfiguration");
 
         SSL_CTX_free(valkey_tls_ctx);
         SSL_CTX_free(valkey_tls_client_ctx);
@@ -982,18 +1007,22 @@ void tlsConfigureAsync(void) {
  * that just swaps pointers, updates metadata, and frees old contexts. */
 void tlsApplyPendingReload(void) {
     tlsPendingReload local_pending;
+    unsigned long long current_generation = atomic_load_explicit(&tls_config_generation, memory_order_acquire);
     pthread_mutex_lock(&pending_reload_mutex);
     if (!pending_reload.ctx) {
         pthread_mutex_unlock(&pending_reload_mutex);
         return;
     }
 
-    if (!metadataChanged(&active_metadata, &pending_reload.metadata)) {
-        SSL_CTX_free(pending_reload.ctx);
-        SSL_CTX_free(pending_reload.client_ctx);
-        memset(&pending_reload, 0, sizeof(pending_reload));
+    if (pending_reload.generation != current_generation) {
+        tlsDiscardPendingReloadLocked("Discarding stale pending TLS reload");
         pthread_mutex_unlock(&pending_reload_mutex);
-        serverLog(LL_DEBUG, "Discarding pending TLS reload with unchanged materials");
+        return;
+    }
+
+    if (!metadataChanged(&active_metadata, &pending_reload.metadata)) {
+        tlsDiscardPendingReloadLocked("Discarding pending TLS reload with unchanged materials");
+        pthread_mutex_unlock(&pending_reload_mutex);
         return;
     }
 

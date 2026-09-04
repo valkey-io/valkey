@@ -379,6 +379,67 @@ start_server {tags {"tls"}} {
             }
         }
 
+        test {TLS: CONFIG SET discards staged auto-reload results} {
+            if {$::tls_module} {
+                skip "Not supported with TLS built as a module"
+            }
+
+            set orig_server_crt [lindex [r config get tls-cert-file] 1]
+            set orig_server_key [lindex [r config get tls-key-file] 1]
+            set orig_loglevel [lindex [r config get loglevel] 1]
+            set orig_hz [lindex [r config get hz] 1]
+            set temp_crt "$orig_server_crt.temp"
+            set temp_key "$orig_server_key.temp"
+            file copy -force $orig_server_crt $temp_crt
+            file copy -force $orig_server_key $temp_key
+
+            try {
+                set valkey_crt [format "%s/tests/tls/valkey.crt" [pwd]]
+                set valkey_key [format "%s/tests/tls/valkey.key" [pwd]]
+
+                r CONFIG SET loglevel debug
+                r CONFIG SET hz 1
+                r CONFIG SET tls-cert-file $temp_crt tls-key-file $temp_key
+                r CONFIG SET tls-auto-reload-interval 1
+
+                set info1 [r info tls]
+                if {![regexp {tls_server_cert_serial:([^\r\n]+)} $info1 -> serial1]} {
+                    fail "INFO tls missing tls_server_cert_serial before staged reload"
+                }
+                assert {$serial1 ne "none"}
+
+                after 1100
+
+                set parsed_from_line [count_log_lines 0]
+                file copy -force $valkey_crt $temp_crt
+                file copy -force $valkey_key $temp_key
+                wait_for_log_messages 0 {"*Background TLS reload parsed TLS materials successfully*"} $parsed_from_line 200 10
+
+                # Replace the active TLS configuration after the background job staged a reload.
+                r CONFIG SET tls-cert-file $orig_server_crt tls-key-file $orig_server_key
+                assert_equal [list tls-cert-file $orig_server_crt] [r CONFIG GET tls-cert-file]
+                assert_equal [list tls-key-file $orig_server_key] [r CONFIG GET tls-key-file]
+
+                # Wait past the next cron cycle. The stale staged reload used to be applied here.
+                after 1200
+
+                set s [valkey_client]
+                assert_equal "PONG" [$s PING]
+                $s close
+
+                set info2 [r info tls]
+                if {![regexp {tls_server_cert_serial:([^\r\n]+)} $info2 -> serial2]} {
+                    fail "INFO tls missing tls_server_cert_serial after synchronous reconfiguration"
+                }
+                assert_equal $serial1 $serial2
+            } finally {
+                r CONFIG SET tls-auto-reload-interval 0
+                r CONFIG SET tls-cert-file $orig_server_crt tls-key-file $orig_server_key
+                r CONFIG SET hz $orig_hz loglevel $orig_loglevel
+                file delete -force $temp_crt $temp_key
+            }
+        }
+
         test {TLS: Auto-reload interval validation} {
             if {$::tls_module} {
                 # Auto-reload requires built-in TLS

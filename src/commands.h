@@ -24,6 +24,7 @@ typedef enum {
 #define COMMAND_HGET 2
 #define COMMAND_HSET 3
 #define COMMAND_MSET 4
+#define COMMAND_INCREX 5
 
 /* Command flags. Please check the definition of struct serverCommand in this file
  * for more information about the meaning of every flag. */

@@ -265,7 +265,7 @@ void setCommand(client *c) {
     int unit = UNIT_SECONDS;
     int flags = ARGS_NO_FLAGS;
 
-    if (parseExtendedCommandArgumentsOrReply(c, COMMAND_SET, 3, c->argc, &flags, &unit, NULL, &expire, &comparison) != C_OK) {
+    if (parseExtendedCommandArgumentsOrReply(c, COMMAND_SET, 3, c->argc, &flags, &unit, NULL, &expire, &comparison, NULL) != C_OK) {
         return;
     }
 
@@ -353,7 +353,7 @@ void getexCommand(client *c) {
     int unit = UNIT_SECONDS;
     int flags = ARGS_NO_FLAGS;
 
-    if (parseExtendedCommandArgumentsOrReply(c, COMMAND_GET, 2, c->argc, &flags, &unit, NULL, &expire, NULL) != C_OK) {
+    if (parseExtendedCommandArgumentsOrReply(c, COMMAND_GET, 2, c->argc, &flags, &unit, NULL, &expire, NULL, NULL) != C_OK) {
         return;
     }
 
@@ -635,7 +635,7 @@ void msetexCommand(client *c) {
         return;
     }
     if (parseExtendedCommandArgumentsOrReply(c, COMMAND_MSET, (int)args_start_idx, c->argc,
-                                             &flags, &unit, &expire_idx, &expire, NULL) != C_OK) {
+                                             &flags, &unit, &expire_idx, &expire, NULL, NULL) != C_OK) {
         return;
     }
 
@@ -797,6 +797,125 @@ void incrbyfloatCommand(client *c) {
     rewriteClientCommandArgument(c, 0, shared.set);
     rewriteClientCommandArgument(c, 2, new);
     rewriteClientCommandArgument(c, 3, shared.keepttl);
+}
+
+void increxCommand(client *c) {
+    robj *expire = NULL;
+    robj *incr_obj = NULL; /* value token for BYINT/BYFLOAT, if present */
+    int unit = UNIT_SECONDS;
+    int flags = ARGS_NO_FLAGS;
+    long long incr_ll = 1;
+    long double incr_ld = 1.0L;
+    int use_float = 0;
+
+    if (parseExtendedCommandArgumentsOrReply(c, COMMAND_INCREX, 2, c->argc, &flags, &unit, NULL, &expire, NULL, &incr_obj) != C_OK) {
+        return;
+    }
+
+    long long value_ll = 0, oldvalue_ll = 0;
+    long double value_ld = 0, oldvalue_ld = 0;
+    long long milliseconds = 0;
+    robj *o, *new;
+
+    if (expire &&
+        getExpireMillisecondsOrReply(c, expire, flags, unit, &milliseconds) != C_OK) {
+        return;
+    }
+
+    o = lookupKeyWrite(c->db, c->argv[1]);
+
+    if ((flags & ARGS_SET_NX) && o != NULL) {
+        addReplyNull(c);
+        return;
+    }
+    if ((flags & ARGS_SET_XX) && o == NULL) {
+        addReplyNull(c);
+        return;
+    }
+
+    if (flags & ARGS_BYINT) {
+        if (getLongLongFromObjectOrReply(c, incr_obj, &incr_ll, NULL) != C_OK) {
+            return;
+        }
+    } else if (flags & ARGS_BYFLOAT) {
+        if (getLongDoubleFromObjectOrReply(c, incr_obj, &incr_ld, NULL) != C_OK) {
+            return;
+        }
+        use_float = 1;
+    }
+
+    if (o) {
+        if (checkType(c, o, OBJ_STRING)) return;
+        if (use_float) {
+            if (getLongDoubleFromObjectOrReply(c, o, &oldvalue_ld, NULL) != C_OK) return;
+        } else {
+            if (getLongLongFromObjectOrReply(c, o, &oldvalue_ll, NULL) != C_OK) return;
+        }
+    }
+
+    /* If the `milliseconds` have expired, then we don't need to set it into the
+     * database, and then wait for the active expire to delete it, it is wasteful.
+     * If the key already exists, delete it. */
+    if (expire && checkAlreadyExpired(milliseconds)) {
+        if (o) deleteExpiredKeyFromOverwriteAndPropagate(c, c->argv[1]);
+        addReplyNull(c);
+        return;
+    }
+
+    if (use_float) {
+        value_ld = oldvalue_ld + incr_ld;
+        if (isnan(value_ld) || isinf(value_ld)) {
+            addReplyError(c, "increment would produce NaN or Infinity");
+            return;
+        }
+    } else {
+        value_ll = oldvalue_ll;
+        if ((incr_ll < 0 && value_ll < 0 && incr_ll < (LLONG_MIN - value_ll)) ||
+            (incr_ll > 0 && value_ll > 0 && incr_ll > (LLONG_MAX - value_ll))) {
+            addReplyError(c, "increment or decrement would overflow");
+            return;
+        }
+        value_ll += incr_ll;
+    }
+
+    if (!use_float && o && o->refcount == 1 && objectGetEncoding(o) == OBJ_ENCODING_INT &&
+        value_ll >= LONG_MIN && value_ll <= LONG_MAX) {
+        new = o;
+        objectSetVal(o, (void *)((long)value_ll));
+    } else {
+        new = use_float ? createStringObjectFromLongDouble(value_ld, 1)
+                        : createStringObjectFromLongLongForValue(value_ll);
+        if (o) {
+            dbReplaceValue(c->db, c->argv[1], &new);
+        } else {
+            dbAdd(c->db, c->argv[1], &new);
+        }
+    }
+
+    signalModifiedKey(c, c->db, c->argv[1]);
+    notifyKeyspaceEvent(NOTIFY_STRING, use_float ? "incrbyfloat" : "incrby", c->argv[1], c->db->id);
+    server.dirty++;
+
+    if (expire) {
+        robj *milliseconds_obj = createStringObjectFromLongLong(milliseconds);
+        rewriteClientCommandVector(c, 5, shared.set, c->argv[1], new, shared.pxat, milliseconds_obj);
+        decrRefCount(milliseconds_obj);
+        setExpire(c, c->db, c->argv[1], milliseconds);
+        notifyKeyspaceEvent(NOTIFY_GENERIC, "expire", c->argv[1], c->db->id);
+    } else if (use_float) {
+        /* BYFLOAT with no expire still needs rewriting to SET for
+         * deterministic replication - reuse `new`, the exact object
+         * that was stored, rather than re-deriving the string from
+         * value_ld a second time (which risks formatting drift
+         * between what the master stored and what it propagates). */
+        rewriteClientCommandVector(c, 4, shared.set, c->argv[1], new, shared.keepttl);
+    }
+
+    if (use_float) {
+        addReplyHumanLongDouble(c, value_ld);
+    } else {
+        addReplyLongLong(c, value_ll);
+    }
 }
 
 void appendCommand(client *c) {

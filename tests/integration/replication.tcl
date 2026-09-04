@@ -85,6 +85,94 @@ start_server {tags {"repl external:skip"}} {
             assert_equal [$A debug digest] [$B debug digest]
         }
 
+        test {INCREX replication, should not remove expire} {
+            r set test 1 EX 100
+            r increx test byint 1
+            wait_for_ofs_sync $A $B
+            assert_equal [$A debug digest] [$B debug digest]
+        }
+
+        test {INCREX BYFLOAT replication, should not remove expire} {
+            r set test 1 EX 100
+            r increx test byfloat 0.1
+            wait_for_ofs_sync $A $B
+            assert_equal [$A debug digest] [$B debug digest]
+        }
+
+        test {INCREX byint with EX propagates the correct TTL to replica} {
+            r del test
+            r increx test ex 100 byint 1
+            wait_for_ofs_sync $A $B
+            assert_equal [$A get test] [$B get test]
+            assert_range [$B ttl test] 1 100
+        }
+
+        test {INCREX byfloat with EX propagates the correct TTL to replica} {
+            r del test
+            r increx test ex 100 byfloat 1.1
+            wait_for_ofs_sync $A $B
+            assert_equal [$A get test] [$B get test]
+            assert_range [$B ttl test] 1 100
+        }
+
+        test {INCREX BYFLOAT without expire replicates deterministically} {
+            # Guards against float drift: BYFLOAT results must replicate as
+            # the resolved value, not as the literal INCREX/BYFLOAT command,
+            # the same way INCRBYFLOAT always rewrites to SET.
+            r del test
+            r increx test byfloat 0.1
+            r increx test byfloat 0.2
+            wait_for_ofs_sync $A $B
+            assert_equal [$A get test] [$B get test]
+            assert_equal [$A debug digest] [$B debug digest]
+        }
+
+        test {INCREX BYFLOAT with NX without expire replicates deterministically} {
+            # Guards against float drift: BYFLOAT results must replicate as
+            # the resolved value, not as the literal INCREX/BYFLOAT command,
+            # the same way INCRBYFLOAT always rewrites to SET.
+            r del test
+            r increx test byfloat 0.1 NX
+            wait_for_ofs_sync $A $B
+            assert_equal [$A get test] [$B get test]
+            assert_equal [$A debug digest] [$B debug digest]
+        }
+
+        test {INCREX BYFLOAT with XX without expire replicates deterministically} {
+            # Guards against float drift: BYFLOAT results must replicate as
+            # the resolved value, not as the literal INCREX/BYFLOAT command,
+            # the same way INCRBYFLOAT always rewrites to SET.
+            r del test
+            r increx test byfloat 0.1
+            r increx test byfloat 0.1 XX
+            wait_for_ofs_sync $A $B
+            assert_equal [$A get test] [$B get test]
+            assert_equal [$A debug digest] [$B debug digest]
+        }
+
+        test {INCREX against key holding a list, with already-expired EXAT} {
+            r del list_key
+            r rpush list_key a
+            assert_error {WRONGTYPE*} {r increx list_key exat 1}
+            r del list_key
+        } 
+
+        test {INCREX against non-numeric string value, with already-expired EXAT} {
+            r set str abc
+            assert_error {ERR*} {r increx str exat 1}
+            r del str
+        }
+
+        test {INCREX against nonexistent key with already-expired EXAT returns nil} {
+            r del non_existing
+            assert_equal [] [r increx non_existing exat 1]
+        }
+
+        test {INCREX BYINT with missing value is a syntax error} {
+            r del key
+            assert_error {ERR*} {r increx key byint}
+        }
+
         test {GETSET replication} {
             $A config resetstat
             $A config set loglevel debug
@@ -309,6 +397,60 @@ start_server {tags {"repl external:skip"}} {
                 {flushall}
                 {flushall}
                 {incr x}
+            }
+            close_replication_stream $repl
+        }
+
+        test {INCREX with expire propagates as SET with PXAT} {
+            r -1 del foo
+            set repl [attach_to_replication_stream]
+            r -1 increx foo ex 100 byint 5
+            assert_replication_stream $repl {
+                {set foo 5 PXAT *}
+            }
+            close_replication_stream $repl
+        }
+
+        test {INCREX BYFLOAT propagates as SET, not literal command} {
+            r -1 del foo
+            set repl [attach_to_replication_stream]
+            r -1 increx foo byfloat 0.1
+            assert_replication_stream $repl {
+                {set foo *}
+            }
+            close_replication_stream $repl
+        }
+
+        test {INCREX BYINT without expire propagates verbatim} {
+            # BYINT-only increments are deterministic, so unlike BYFLOAT they
+            # don't need rewriting to SET for replication safety.
+            r -1 del foo
+            set repl [attach_to_replication_stream]
+            r -1 increx foo byint 5
+            assert_replication_stream $repl {
+                {increx foo byint 5}
+            }
+            close_replication_stream $repl
+        }
+
+        test {INCREX NX no-op does not propagate} {
+            r -1 set foo bar
+            set repl [attach_to_replication_stream]
+            r -1 increx foo nx byint 1
+            r -1 set marker 1
+            assert_replication_stream $repl {
+                {set marker 1}
+            }
+            close_replication_stream $repl
+        }
+
+        test {INCREX XX no-op does not propagate} {
+            r -1 del foo
+            set repl [attach_to_replication_stream]
+            r -1 increx foo xx byint 1
+            r -1 set marker 1
+            assert_replication_stream $repl {
+                {set marker 1}
             }
             close_replication_stream $repl
         }

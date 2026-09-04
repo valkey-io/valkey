@@ -745,6 +745,7 @@ typedef enum {
 
 /* Generic set command string object set flags */
 #define ARGS_NO_FLAGS 0
+
 #define ARGS_SET_NX (1 << 0)    /* Set if key not exists. */
 #define ARGS_SET_XX (1 << 1)    /* Set if key exists. */
 #define ARGS_EX (1 << 2)        /* Set if time in seconds is given */
@@ -760,6 +761,8 @@ typedef enum {
 #define ARGS_SET_FNX (1 << 11)  /* Set if key item not exists. */
 #define ARGS_SET_FXX (1 << 12)  /* Set if key item exists. */
 #define ARGS_SET_IFNE (1 << 13) /* Set only if values are not equal */
+#define ARGS_BYINT (1 << 14)   /* Set if the value needs to be incremented by an integer. */
+#define ARGS_BYFLOAT (1 << 15) /* Set if the value needs to be incremented by a float. */
 
 #define ARGS_SET_CONDITIONAL \
     (ARGS_SET_NX | ARGS_SET_XX | ARGS_SET_IFEQ | ARGS_SET_IFNE)
@@ -3135,7 +3138,7 @@ void releaseReplyReferences(client *c);
 void resetLastWrittenBuf(client *c);
 int clientConnPostponeMask(client *c);
 
-int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_idx, int max_args, int *flags, int *unit, int *expire_idx, robj **expire, robj **compare_val);
+int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_idx, int max_args, int *flags, int *unit, int *expire_idx, robj **expire, robj **compare_val, robj **incrby_val);
 
 /* logreqres.c - logging of requests and responses */
 void reqresReset(client *c, int free_buf);
@@ -4083,6 +4086,7 @@ void decrCommand(client *c);
 void incrbyCommand(client *c);
 void decrbyCommand(client *c);
 void incrbyfloatCommand(client *c);
+void increxCommand(client *c);
 void selectCommand(client *c);
 void swapdbCommand(client *c);
 void randomkeyCommand(client *c);

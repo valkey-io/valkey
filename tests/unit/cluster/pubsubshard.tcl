@@ -47,6 +47,14 @@ test "client can't subscribe to multiple shard channels across different slots i
     assert_match {CROSSSLOT Keys*} $err
 }
 
+test "PUBSUB SHARDNUMSUB across different slots returns CROSSSLOT" {
+    # Send directly to a node: the cross-slot check runs before slot routing,
+    # so any node rejects shard channels that hash to different slots.
+    set node [valkey_client_by_addr $publishnode(host) $publishnode(port)]
+    assert_error "CROSSSLOT*" {$node pubsub shardnumsub channel.0 channel.1}
+    $node close
+}
+
 test "client can subscribe to multiple shard channels across different slots in separate call" {
     $cluster ssubscribe ch3
     $cluster ssubscribe ch7

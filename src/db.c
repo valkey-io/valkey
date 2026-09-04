@@ -449,49 +449,11 @@ void setKey(client *c, serverDb *db, robj *key, robj **valref, int flags) {
 
 /* Return the policy's absolute expiry, or -1 when this write must not use it. */
 mstime_t getDefaultTTLMSExpireTime(client *c) {
+    /* Replication, AOF replay, and slot migration apply authoritative history,
+     * so they must not gain this node's local default TTL. */
     if (server.default_ttl_ms == 0 || c == NULL || mustObeyClient(c)) return -1;
     serverAssert(server.default_ttl_ms <= DEFAULT_TTL_MS_MAX);
     return commandTimeSnapshot() + server.default_ttl_ms;
-}
-
-/* Apply the default expiry after an eligible write and report its timestamp. */
-robj *applyDefaultTTLMS(client *c, serverDb *db, robj *key, mstime_t *expire_at) {
-    mstime_t when;
-
-    *expire_at = -1;
-    if ((when = getDefaultTTLMSExpireTime(c)) == -1) return dbFind(db, objectGetVal(key));
-
-    robj *val = setExpire(c, db, key, when);
-    notifyKeyspaceEvent(NOTIFY_GENERIC, "expire", key, db->id);
-    *expire_at = when;
-    return val;
-}
-
-/* Store a value while preserving an old TTL until the policy replaces it. */
-void setKeyWithDefaultTTLMS(client *c, serverDb *db, robj *key, robj **valref, int flags, mstime_t *expire_at) {
-    if (getDefaultTTLMSExpireTime(c) != -1) flags |= SETKEY_KEEPTTL;
-    setKey(c, db, key, valref, flags);
-    *valref = applyDefaultTTLMS(c, db, key, expire_at);
-}
-
-/* Propagate the completed write followed by authoritative absolute expirations. */
-void propagateCommandWithDefaultTTLMS(client *c, serverDb *db, robj **keys, mstime_t *expire_at, size_t key_count) {
-    size_t i;
-
-    for (i = 0; i < key_count; i++) {
-        if (expire_at[i] != -1) break;
-    }
-    if (i == key_count) return;
-
-    alsoPropagate(db->id, c->argv, c->argc, PROPAGATE_AOF | PROPAGATE_REPL, c->slot);
-    for (i = 0; i < key_count; i++) {
-        if (expire_at[i] == -1) continue;
-
-        robj *argv[3] = {shared.pexpireat, keys[i], createStringObjectFromLongLong(expire_at[i])};
-        alsoPropagate(db->id, argv, 3, PROPAGATE_AOF | PROPAGATE_REPL, c->slot);
-        decrRefCount(argv[2]);
-    }
-    preventCommandPropagation(c);
 }
 
 /* Return a random key, in form of an Object.

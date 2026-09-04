@@ -523,6 +523,9 @@ int trySendReadToIOThreads(client *c) {
     /* For simplicity let the main-thread handle the blocked clients */
     if (c->flag.blocked || c->flag.unblocked) return C_ERR;
     if (c->flag.close_asap) return C_ERR;
+    /* Avoid offloading reads to IO thread for the slot migration export job while snapshotting.
+     * During this phase, the main thread writes snapshot data directly via connWrite(). */
+    if (c->slot_migration_job && !clusterSlotMigrationShouldInstallWriteHandler(c)) return C_ERR;
 
     c->read_flags = canParseCommand(c) ? 0 : READ_FLAGS_DONT_PARSE;
     c->read_flags |= authRequired(c) ? READ_FLAGS_AUTH_REQUIRED : 0;
@@ -870,7 +873,8 @@ static void handleReadJobs(client **read_jobs, int read_count) {
             client *c = lookupClientByID(read_client_ids[i]);
             if (!c || !c->conn) continue;
 
-            if (processPendingCommandAndInputBuffer(c) == C_OK) beforeNextClient(c);
+            if (processPendingCommandAndInputBuffer(c) == C_ERR) continue;
+            beforeNextClient(c);
 
             c = lookupClientByID(read_client_ids[i]);
             if (!c || !c->conn) continue;

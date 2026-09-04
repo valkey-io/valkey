@@ -1824,6 +1824,90 @@ start_server {tags {"repl external:skip"}} {
     }
 }
 
+# Verify that after a diskless (socket) replication sync, save metrics
+# are correctly reset and rdb_last_bgsave_time_sec is a plausible duration.
+start_server {tags {"repl external:skip"}} {
+    start_server {} {
+        test {diskless sync: save metrics are plausible after socket transfer} {
+            set master [srv -1 client]
+            set master_host [srv -1 host]
+            set master_port [srv -1 port]
+            set replica [srv 0 client]
+
+            $master config set repl-diskless-sync yes
+            $master config set repl-diskless-sync-delay 0
+            $master config set save ""
+            $replica config set save ""
+
+            $master debug populate 100
+
+            $replica replicaof $master_host $master_port
+
+            wait_for_condition 100 100 {
+                [string match {*master_link_status:up*} [$replica info replication]]
+            } else {
+                fail "Replica didn't complete sync"
+            }
+
+            # After diskless sync, master metrics should be sane
+            set time_sec [$master info persistence]
+            set bgsave_time [getInfoProperty $time_sec rdb_last_bgsave_time_sec]
+            assert {$bgsave_time >= 0 && $bgsave_time < 3600}
+
+            # Save state should be cleared
+            assert_equal [getInfoProperty $time_sec rdb_bgsave_in_progress] "0"
+            assert_equal [getInfoProperty $time_sec current_save_keys_processed] "0"
+            assert_equal [getInfoProperty $time_sec current_save_keys_total] "0"
+        }
+    }
+}
+
+start_server {tags {"repl external:skip"}} {
+    start_server {} {
+        test {diskless sync: save metrics are plausible after failed socket transfer} {
+            set master [srv -1 client]
+            set master_host [srv -1 host]
+            set master_port [srv -1 port]
+            set replica [srv 0 client]
+
+            $master config set repl-diskless-sync yes
+            $master config set repl-diskless-sync-delay 0
+            $master config set save ""
+            $replica config set save ""
+
+            $master debug populate 1000
+            $master config set rdb-key-save-delay 100000
+
+            $replica replicaof $master_host $master_port
+
+            # Wait for bgsave to start on master
+            wait_for_condition 100 100 {
+                [getInfoProperty [$master info persistence] rdb_bgsave_in_progress] == 1
+            } else {
+                fail "diskless bgsave didn't start"
+            }
+
+            # Kill the replica connection to abort the transfer
+            $replica replicaof no one
+
+            # Wait for bgsave to finish on master
+            wait_for_condition 100 100 {
+                [getInfoProperty [$master info persistence] rdb_bgsave_in_progress] == 0
+            } else {
+                fail "diskless bgsave didn't stop after replica disconnect"
+            }
+
+            # Metrics should still be sane after failure
+            set time_sec [$master info persistence]
+            set bgsave_time [getInfoProperty $time_sec rdb_last_bgsave_time_sec]
+            assert {$bgsave_time >= 0 && $bgsave_time < 3600}
+            assert_equal [getInfoProperty $time_sec current_save_keys_processed] "0"
+            assert_equal [getInfoProperty $time_sec current_save_keys_total] "0"
+
+            $master config set rdb-key-save-delay 0
+        }
+    }
+}
 start_server {tags {"repl external:skip"}} {
     set replica [srv 0 client]
     $replica config set repl-diskless-load disabled

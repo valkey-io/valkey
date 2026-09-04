@@ -31,6 +31,7 @@
 #include "io_threads.h"
 #include "sds.h"
 #include "server.h"
+#include "hotkeys.h"
 #include "cluster.h"
 #include "connection.h"
 #include "bio.h"
@@ -38,6 +39,7 @@
 #include "cluster_migrateslots.h"
 #include "eval.h"
 #include "lrulfu.h"
+#include "throttle_repl.h"
 
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -181,6 +183,10 @@ configEnum rdb_compression_enum[] = {{"no", RDB_COMPRESSION_NO},
                                      {"lzf", RDB_COMPRESSION_LZF},
                                      {"lz4", RDB_COMPRESSION_LZ4},
                                      {NULL, 0}};
+
+configEnum bgsave_method_enum[] = {{"fork", RDB_BGSAVE_TYPE_FORK},
+                                   {"forkless", RDB_BGSAVE_TYPE_FORKLESS},
+                                   {NULL, 0}};
 
 /* Output buffer limits presets. */
 clientBufferLimitsConfig clientBufferLimitsDefaults[CLIENT_TYPE_OBUF_COUNT] = {
@@ -643,6 +649,11 @@ void loadServerConfigFromString(sds config) {
     /* Sanity checks. */
     if (server.cluster_enabled && server.primary_host) {
         err = "replicaof directive not allowed in cluster mode";
+        goto loaderr;
+    }
+    if (server.bgsave_default_method == RDB_BGSAVE_TYPE_FORKLESS && !server.forkless_infrastructure_enabled) {
+        err = "'bgsave-default-method forkless' can only be selected when the server was started with "
+              "'forkless-infrastructure-enabled yes'";
         goto loaderr;
     }
 
@@ -2446,6 +2457,19 @@ static void numericConfigRewrite(standardConfig *config, const char *name, struc
     {.type = SPECIAL_CONFIG,                                                           \
      embedCommonConfig(name, alias, modifiable) embedConfigInterface(NULL, setfn, getfn, rewritefn, applyfn)}
 
+static int isValidBgsaveDefaultMethod(int val, const char **err) {
+    /* During startup config parsing the directives are applied one by one, so
+     * forkless-infrastructure-enabled may not have been read yet when this
+     * value is set. We will check it when loading the config string */
+    if (reading_config_file) return 1;
+    if (val == RDB_BGSAVE_TYPE_FORKLESS && !server.forkless_infrastructure_enabled) {
+        *err = "'forkless' can only be selected when the server was started with "
+               "'forkless-infrastructure-enabled yes'";
+        return 0;
+    }
+    return 1;
+}
+
 static int isValidActiveDefrag(int val, const char **err) {
 #ifndef HAVE_DEFRAG
     if (val) {
@@ -3357,6 +3381,7 @@ standardConfig static_configs[] = {
     createBoolConfig("rdb-del-sync-files", NULL, MODIFIABLE_CONFIG, server.rdb_del_sync_files, 0, NULL, NULL),
     createBoolConfig("activerehashing", NULL, MODIFIABLE_CONFIG, server.activerehashing, 1, NULL, NULL),
     createBoolConfig("stop-writes-on-bgsave-error", NULL, MODIFIABLE_CONFIG, server.stop_writes_on_bgsave_err, 1, NULL, NULL),
+    createEnumConfig("bgsave-default-method", NULL, MODIFIABLE_CONFIG, bgsave_method_enum, server.bgsave_default_method, RDB_BGSAVE_TYPE_FORK, isValidBgsaveDefaultMethod, NULL),
     createBoolConfig("set-proc-title", NULL, IMMUTABLE_CONFIG, server.set_proc_title, 1, NULL, NULL), /* Should setproctitle be used? */
     createBoolConfig("lazyfree-lazy-eviction", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, server.lazyfree_lazy_eviction, 1, NULL, NULL),
     createBoolConfig("lazyfree-lazy-expire", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, server.lazyfree_lazy_expire, 1, NULL, NULL),
@@ -3367,6 +3392,7 @@ standardConfig static_configs[] = {
     createBoolConfig("repl-mptcp", NULL, IMMUTABLE_CONFIG, server.repl_mptcp, 0, isValidMptcp, NULL),
     createBoolConfig("repl-diskless-sync", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, server.repl_diskless_sync, 1, NULL, NULL),
     createBoolConfig("dual-channel-replication-enabled", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, server.dual_channel_replication, 0, NULL, NULL),
+    createBoolConfig("repl-throttling-enabled", NULL, MODIFIABLE_CONFIG, throttleRepl_config.repl_throttling_enabled, 0, NULL, NULL),
     createBoolConfig("aof-rewrite-incremental-fsync", NULL, MODIFIABLE_CONFIG, server.aof_rewrite_incremental_fsync, 1, NULL, NULL),
     createBoolConfig("no-appendfsync-on-rewrite", NULL, MODIFIABLE_CONFIG, server.aof_no_fsync_on_rewrite, 0, NULL, NULL),
     createBoolConfig("cluster-require-full-coverage", NULL, MODIFIABLE_CONFIG, server.cluster_require_full_coverage, 1, NULL, updateClusterState),
@@ -3381,6 +3407,7 @@ standardConfig static_configs[] = {
     createBoolConfig("replica-ignore-maxmemory", "slave-ignore-maxmemory", MODIFIABLE_CONFIG, server.repl_replica_ignore_maxmemory, 1, NULL, NULL),
     createBoolConfig("jemalloc-bg-thread", NULL, MODIFIABLE_CONFIG, server.jemalloc_bg_thread, 1, NULL, updateJemallocBgThread),
     createBoolConfig("activedefrag", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, server.active_defrag_enabled, CONFIG_ACTIVE_DEFRAG_DEFAULT, isValidActiveDefrag, NULL),
+    createBoolConfig("forkless-infrastructure-enabled", NULL, IMMUTABLE_CONFIG, server.forkless_infrastructure_enabled, 0, NULL, NULL),
     createBoolConfig("syslog-enabled", NULL, IMMUTABLE_CONFIG, server.syslog_enabled, 0, NULL, NULL),
     createBoolConfig("cluster-enabled", NULL, IMMUTABLE_CONFIG, server.cluster_enabled, 0, NULL, NULL),
     createBoolConfig("appendonly", NULL, MODIFIABLE_CONFIG | DENY_LOADING_CONFIG, server.aof_enabled, 0, NULL, updateAppendOnly),
@@ -3513,6 +3540,9 @@ standardConfig static_configs[] = {
     createIntConfig("rdma-rx-size", NULL, IMMUTABLE_CONFIG, 64 * 1024, 16 * 1024 * 1024, server.rdma_ctx_config.rx_size, 1024 * 1024, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("rdma-completion-vector", NULL, IMMUTABLE_CONFIG, -1, 1024, server.rdma_ctx_config.completion_vector, -1, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("cluster-message-gossip-perc", NULL, MODIFIABLE_CONFIG | HIDDEN_CONFIG, 1, 100, server.cluster_message_gossip_perc, 10, INTEGER_CONFIG, NULL, NULL),
+    createIntConfig("hotkeys-sampling-percentage", NULL, MODIFIABLE_CONFIG, 1, 100, server.hotkeys_sampling_percentage, 1, INTEGER_CONFIG, NULL, hotkeysSamplingCallback),
+    createIntConfig("hotkeys-top-k", NULL, MODIFIABLE_CONFIG, 0, 1000, server.hotkeys_top_k, 0, INTEGER_CONFIG, NULL, hotkeysTopKCallback),
+    createIntConfig("hotkeys-window-seconds", NULL, MODIFIABLE_CONFIG, 1, 300, server.hotkeys_window_seconds, 1, INTEGER_CONFIG, NULL, hotkeysWindowCallback),
 
     /* Unsigned int configs */
     createUIntConfig("maxclients", NULL, MODIFIABLE_CONFIG, 1, UINT_MAX, server.maxclients, 10000, INTEGER_CONFIG, NULL, updateMaxclients),

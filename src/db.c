@@ -28,6 +28,7 @@
  */
 
 #include "server.h"
+#include "hotkeys.h"
 #include "ordered_index.h"
 #include "cluster.h"
 #include "cluster_migrateslots.h"
@@ -38,7 +39,10 @@
 #include "module.h"
 #include "vector.h"
 #include "expire.h"
+#include "bgiteration.h"
+#include "forkless.h"
 #include "crc16_slottable.h"
+#include "bgiteration.h"
 
 /*-----------------------------------------------------------------------------
  * C-level DB API
@@ -122,6 +126,10 @@ robj *lookupKey(serverDb *db, robj *key, int flags) {
         if (!(flags & (LOOKUP_NOSTATS | LOOKUP_WRITE))) server.stat_keyspace_misses++;
         /* TODO: Use separate misses stats and notify event for WRITE */
     }
+
+    /* Charge this lookup to hot-key detection. All the policy (whether detection
+     * is on, which lookups count, and sampling) lives in hotkeys.c. */
+    hotkeysRecordLookup(key, db->id, flags);
 
     return val;
 }
@@ -369,6 +377,7 @@ static void dbSetValue(serverDb *db, robj *key, robj **valref, int overwrite, vo
         objectSetLRU(val, objectGetLRU(old));
         long long expire = objectGetExpire(old);
         new = objectSetKeyAndExpire(val, objectGetVal(key), expire);
+        bgIteration_updateDbEntryPtr(old, new);
         *oldref = new;
         /* Replace the old value at its location in the expire space. */
         if (expire >= 0) {
@@ -438,6 +447,7 @@ void setKey(client *c, serverDb *db, robj *key, robj **valref, int flags) {
     } else {
         dbSetValue(db, key, valref, 1, NULL);
     }
+    bgIteration_dbEntryModified(*valref);
     if (!(flags & SETKEY_KEEPTTL)) removeExpire(db, key);
     if (!(flags & SETKEY_NO_SIGNAL)) signalModifiedKey(c, db, key);
 }
@@ -483,6 +493,9 @@ int dbGenericDeleteWithDictIndex(serverDb *db, robj *key, int async, int flags, 
     hashtablePosition pos;
     void **ref = kvstoreHashtableTwoPhasePopFindRef(db->keys, dict_index, objectGetVal(key), &pos);
     if (ref != NULL) {
+        bgIteration_keyDelete(db->id, (sds)objectGetVal(key));
+        hotkeysRecordDelete(key, db->id, flags);
+
         robj *val = *ref;
         /* VM_StringDMA may call dbUnshareStringValue which may free val, so we
          * need to incr to retain val */
@@ -672,6 +685,9 @@ long long emptyData(int dbnum, int flags, void(callback)(hashtable *)) {
         return -1;
     }
 
+    /* bgIteration must be notified for flushall. */
+    if (dbnum == -1) bgIteration_flushall();
+
     /* Fire the flushdb modules event. */
     moduleFireServerEvent(VALKEYMODULE_EVENT_FLUSHDB, VALKEYMODULE_SUBEVENT_FLUSHDB_START, &fi);
 
@@ -690,6 +706,13 @@ long long emptyData(int dbnum, int flags, void(callback)(hashtable *)) {
 
     /* Empty the database structure. */
     removed = emptyDbStructure(server.db, dbnum, async, callback);
+
+    if (hotkeysEnabled()) {
+        if (dbnum == -1)
+            hotkeysPurgeAll();
+        else
+            hotkeysPurgeDb(dbnum);
+    }
 
     if (dbnum == -1) flushReplicaKeysWithExpireList(async);
 
@@ -762,6 +785,7 @@ long long dbTotalServerKeyCount(void) {
 void signalModifiedKey(client *c, serverDb *db, robj *key) {
     touchWatchedKey(db, key);
     trackingInvalidateKey(c, key, 1);
+    bgIteration_keyModified(db->id, objectGetVal(key));
 }
 
 void signalFlushedDb(int dbid, int async) {
@@ -817,7 +841,8 @@ int getFlushCommandFlags(client *c, int *flags) {
 /* Flushes the whole server data set. */
 void flushAllDataAndResetRDB(int flags) {
     server.dirty += emptyData(-1, flags, NULL);
-    if (server.child_type == CHILD_TYPE_RDB) killRDBChild();
+    if (isForkBgsaveInProgress()) killRDBChild();
+    if (isForklessSaveInProgress()) forklessSaveCancel();
     if (server.child_type == CHILD_TYPE_SLOT_MIGRATION) killSlotMigrationChild();
     if (server.saveparamslen > 0) {
         rdbSaveInfo rsi, *rsiptr;
@@ -1495,6 +1520,8 @@ void shutdownCommand(client *c) {
         return;
     }
 
+    /* Clear pending_command to avoid re-execution. */
+    c->flag.pending_command = 0;
     blockClientShutdown(c);
     if (prepareForShutdown(c, flags) == C_OK) exit(0);
     /* If we're here, then shutdown is ongoing (the client is still blocked) or
@@ -2301,7 +2328,7 @@ robj *dbFindExpires(serverDb *db, sds key) {
 }
 
 unsigned long long dbSize(serverDb *db) {
-    return kvstoreSize(db->keys);
+    return (db->keys) ? kvstoreSize(db->keys) : 0;
 }
 
 unsigned long long dbScan(serverDb *db, unsigned long long cursor, kvstoreScanFunction scan_cb, void *privdata) {
@@ -2720,16 +2747,21 @@ int genericGetKeys(int storeKeyOfs,
     keys = getKeysPrepareResult(result, numkeys);
     result->numkeys = numkeys;
 
-    /* Add all key positions for argv[firstKeyOfs...n] to keys[] */
-    for (i = 0; i < num; i++) {
-        keys[i].pos = firstKeyOfs + (i * keyStep);
-        keys[i].flags = 0;
+    int keyIdx = 0;
+    /* If there's a destination key, put this first */
+    if (storeKeyOfs) {
+        keys[keyIdx].pos = storeKeyOfs;
+        keys[keyIdx].flags = 0;
+        keyIdx++;
     }
 
-    if (storeKeyOfs) {
-        keys[num].pos = storeKeyOfs;
-        keys[num].flags = 0;
+    /* Add all key positions for argv[firstKeyOfs...n] to keys[] */
+    for (i = 0; i < num; i++) {
+        keys[keyIdx].pos = firstKeyOfs + (i * keyStep);
+        keys[keyIdx].flags = 0;
+        keyIdx++;
     }
+
     return result->numkeys;
 }
 

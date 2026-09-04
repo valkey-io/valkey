@@ -103,7 +103,19 @@ static_assert(sizeof(off_t) >= 8, "off_t must be 64-bit; ensure _FILE_OFFSET_BIT
 #define dismissMemory zmadvise_dontneed
 
 #define VALKEYMODULE_CORE 1
-typedef struct serverObject robj;
+
+/* serverObject (aka robj) is currently overloaded for 2 purposes.  This is a legacy artifact.
+ *   1. It's carries a reference counted STRING (a keyless value) during parsing and command execution.
+ *   2. It's also used to carry a key/value pair which is inserted into the DB.  In this form, the
+ *      value is not limited to being a string.
+ *
+ * The typedef "dbEntry" is used to explicitly connote the latter form.  It indicates a key/value
+ * pair which is suitable to exist in the DB.  It might be active in the DB, or may be unlinked from
+ * the DB (but still contains a key/value).  The value may be any of the Valkey data types/encodings.
+ */
+typedef struct serverObject robj;    // A keyless string OR a key/value pair
+typedef struct serverObject dbEntry; // Explicitly a key/value pair
+
 #include "valkeymodule.h" /* Modules API defines. */
 
 /* Following includes allow test functions to be called from main() */
@@ -347,6 +359,7 @@ typedef enum blocking_type {
     BLOCKED_ZSET,     /* BZPOP et al. */
     BLOCKED_POSTPONE, /* Blocked by processCommand, re-try processing later. */
     BLOCKED_SHUTDOWN, /* SHUTDOWN. */
+    BLOCKED_INUSE,    /* Key in use by background thread. */
     BLOCKED_NUM,      /* Number of blocked states. */
     BLOCKED_END       /* End of enumeration */
 } blocking_type;
@@ -648,13 +661,22 @@ typedef enum {
 /* Cluster persist config mode. */
 typedef enum {
     CLUSTER_CONFIGFILE_SAVE_BEHAVIOR_SYNC = 0,    /* Perform a synchronous save, exit the process if it fails. */
-    CLUSTER_CONFIGFILE_SAVE_BEHAVIOR_BEST_EFFORT, /* Attempt to save on a "best-effort" basis, process will not exit if it fails. */
+    CLUSTER_CONFIGFILE_SAVE_BEHAVIOR_BEST_EFFORT, /* Save asynchronously via BIO thread on a "best-effort" basis, process will not exit if it fails. */
 } cluster_persist_config_mode;
 
-/* RDB active child save type. */
-#define RDB_CHILD_TYPE_NONE 0
-#define RDB_CHILD_TYPE_DISK 1   /* RDB is written to disk. */
-#define RDB_CHILD_TYPE_SOCKET 2 /* RDB is written to replica socket. */
+/* RDB write target type. */
+typedef enum {
+    RDB_WRITE_TARGET_NONE = 0,
+    RDB_WRITE_TARGET_DISK = 1,  /* RDB is written to disk. */
+    RDB_WRITE_TARGET_SOCKET = 2 /* RDB is written to replica socket. */
+} rdbWriteTarget;
+
+/* RDB bgsave type. */
+typedef enum {
+    RDB_BGSAVE_TYPE_NONE = 0,
+    RDB_BGSAVE_TYPE_FORK = 1,    /* Fork-based bgsave. */
+    RDB_BGSAVE_TYPE_FORKLESS = 2 /* Forkless bgsave. */
+} rdbBgsaveType;
 
 /* Keyspace changes notification classes. Every class is associated with a
  * character for configuration purposes. */
@@ -723,22 +745,27 @@ typedef enum {
 
 /* Generic set command string object set flags */
 #define ARGS_NO_FLAGS 0
-#define ARGS_SET_NX (1 << 0)   /* Set if key not exists. */
-#define ARGS_SET_XX (1 << 1)   /* Set if key exists. */
-#define ARGS_EX (1 << 2)       /* Set if time in seconds is given */
-#define ARGS_PX (1 << 3)       /* Set if time in ms in given */
-#define ARGS_KEEPTTL (1 << 4)  /* Set and keep the ttl */
-#define ARGS_SET_GET (1 << 5)  /* Set if want to get key before set */
-#define ARGS_EXAT (1 << 6)     /* Set if timestamp in second is given */
-#define ARGS_PXAT (1 << 7)     /* Set if timestamp in ms is given */
-#define ARGS_PERSIST (1 << 8)  /* Set if we need to remove the ttl */
-#define ARGS_SET_IFEQ (1 << 9) /* Set if we need compare and set */
-#define ARGS_ARGV3 (1 << 10)   /* Set if the value is at argv[3]; otherwise it's \
-                                * at argv[2]. */
-#define ARGS_SET_FNX (1 << 11) /* Set if key item not exists. */
-#define ARGS_SET_FXX (1 << 12) /* Set if key item exists. */
-#define ARGS_BYINT (1 << 13)   /* Set if the value needs to be incremented by an integer. */
-#define ARGS_BYFLOAT (1 << 14) /* Set if the value needs to be incremented by a float. */
+
+#define ARGS_SET_NX (1 << 0)    /* Set if key not exists. */
+#define ARGS_SET_XX (1 << 1)    /* Set if key exists. */
+#define ARGS_EX (1 << 2)        /* Set if time in seconds is given */
+#define ARGS_PX (1 << 3)        /* Set if time in ms in given */
+#define ARGS_KEEPTTL (1 << 4)   /* Set and keep the ttl */
+#define ARGS_SET_GET (1 << 5)   /* Set if want to get key before set */
+#define ARGS_EXAT (1 << 6)      /* Set if timestamp in second is given */
+#define ARGS_PXAT (1 << 7)      /* Set if timestamp in ms is given */
+#define ARGS_PERSIST (1 << 8)   /* Set if we need to remove the ttl */
+#define ARGS_SET_IFEQ (1 << 9)  /* Set if we need compare and set */
+#define ARGS_ARGV3 (1 << 10)    /* Set if the value is at argv[3]; otherwise it's \
+                                 * at argv[2]. */
+#define ARGS_SET_FNX (1 << 11)  /* Set if key item not exists. */
+#define ARGS_SET_FXX (1 << 12)  /* Set if key item exists. */
+#define ARGS_SET_IFNE (1 << 13) /* Set only if values are not equal */
+#define ARGS_BYINT (1 << 14)   /* Set if the value needs to be incremented by an integer. */
+#define ARGS_BYFLOAT (1 << 15) /* Set if the value needs to be incremented by a float. */
+
+#define ARGS_SET_CONDITIONAL \
+    (ARGS_SET_NX | ARGS_SET_XX | ARGS_SET_IFEQ | ARGS_SET_IFNE)
 
 /* An Object, that is a type able to hold a string / list / set */
 
@@ -801,25 +828,27 @@ typedef struct ValkeyModuleType moduleType;
  * The optional variable-sized embedded data has 2 possible layouts. If value is embedded (hasembval == 1)
  *  the `val_ptr` pointer is not used - instead the val data is embedded:
  *
- *    +------+----------+-----+------------+----------+--------+-----------------+---------+------------+
- *    | type | encoding | lru | has* flags | refcount | expire | key_header_size | key sds | value data |
- *    +------+----------+-----+------------+----------+--------+-----------------+---------+------------+
- *                                                      ^        ^                 ^         ^
- *                                                      |        |                 |         |
- *                                                      |        |                 |         +--- present because hasembval == 1
- *                                                      |        |                 |
- *                                                      |        +-----------------+--- present if hasembkey == 1
+ *    +------+----------+-----+------------+----------+--------+----------+-----------------+---------+------------+
+ *    | type | encoding | lru | has* flags | refcount | expire | metadata | key_header_size | key sds | value data |
+ *    +------+----------+-----+------------+----------+--------+----------+-----------------+---------+------------+
+ *                                                      ^        ^          ^                 ^         ^
+ *                                                      |        |          |                 |         |
+ *                                                      |        |          |                 |         +--- present because hasembval == 1
+ *                                                      |        |          |                 |
+ *                                                      |        +----------+-----------------+--- present if hasembkey == 1
+ *                                                      |
  *                                                      |
  *                                                      +--- present if hasexpire == 1
  *
  * Otherwise value is not embedded and we use the `val_ptr` pointer:
  *
- *    +------+----------+-----+------------+----------+---------+--------+-----------------+---------+
- *    | type | encoding | lru | has* flags | refcount | val_ptr | expire | key_header_size | key sds |
- *    +------+----------+-----+------------+----------+---------+--------+-----------------+---------+
- *                                                      ^         ^        ^                 ^
- *                                                      |         |        |                 |
- *                                                      |         |        +-----------------+--- present if hasembkey == 1
+ *    +------+----------+-----+------------+----------+---------+--------+----------+-----------------+---------+
+ *    | type | encoding | lru | has* flags | refcount | val_ptr | expire | metadata | key_header_size | key sds |
+ *    +------+----------+-----+------------+----------+---------+--------+----------+-----------------+---------+
+ *                                                      ^         ^        ^          ^                 ^
+ *                                                      |         |        |          |                 |
+ *                                                      |         |        +----------+-----------------+--- present if hasembkey == 1
+ *                                                      |         |
  *                                                      |         |
  *                                                      |         +--- present if hasexpire == 1
  *                                                      |
@@ -1208,6 +1237,9 @@ typedef struct ClientFlags {
     uint64_t keyspace_notified : 1;        /* Indicates that a keyspace notification was triggered during the execution of the
                                               current command. */
     uint64_t argv_borrowed : 1;            /* The argv array and its elements are borrowed from the caller (VM_CallArgv) and must not be freed. */
+    uint64_t throttled : 1;                /* Currently queued in a throttler */
+    uint64_t throttle_checked : 1;         /* Already passed throttle check for this command */
+    uint64_t throttle_multi : 1;           /* Matches multiple throttlers */
 } ClientFlags;
 /* Ensure ClientFlags never silently grows beyond two uint64_t words.
  * If this fires, move a flag to a separate field or widen the limit. */
@@ -1417,6 +1449,11 @@ typedef struct client {
     list *deferred_reply;                    /* List of reply objects to be sent to the client, typically after
                                                 the client has been unblocked. */
     unsigned long long deferred_reply_bytes; /* Total bytes of objects in the blocked client pending list.*/
+    /* Throttling */
+    struct throttler *throttler;       /* Current throttler this client is queued in, or NULL */
+    listNode *throttle_node;           /* Node in throttler's client_queue */
+    monotime throttle_start;           /* When this client was queued for throttling */
+    struct trendCalculator *cob_trend; /* Per-replica COB size trend (NULL if not replica) */
 #ifdef LOG_REQ_RES
     clientReqResInfo reqres;
 #endif
@@ -1792,6 +1829,7 @@ struct valkeyServer {
     size_t initial_memory_usage;         /* Bytes used after initialization. */
     int always_show_logo;                /* Show logo even for non-stdout logging. */
     int in_exec;                         /* Are we inside EXEC? */
+    int in_call;                         /* Nesting level within the call() function. */
     int busy_module_yield_flags;         /* Are we inside a busy module? (triggered by RM_Yield). see BUSY_MODULE_YIELD_ flags. */
     const char *busy_module_yield_reply; /* When non-null, we are inside RM_Yield. */
     char *ignore_warnings;               /* Config: warnings that should be ignored. */
@@ -1810,6 +1848,7 @@ struct valkeyServer {
     pid_t child_pid;                   /* PID of current child */
     int child_type;                    /* Type of current child */
     _Atomic(int) module_gil_acquiring; /* Indicates whether the GIL is being acquiring by the main thread. */
+    _Atomic(int) module_gil_acquired;  /* Indicates if the main thread has the GIL acquired. */
     /* Networking */
     int port;                              /* TCP listening port */
     int tls_port;                          /* TLS listening port */
@@ -1926,8 +1965,8 @@ struct valkeyServer {
     size_t stat_current_cow_peak;                       /* Peak size of copy on write bytes. */
     size_t stat_current_cow_bytes;                      /* Copy on write bytes while child is active. */
     monotime stat_current_cow_updated;                  /* Last update time of stat_current_cow_bytes */
-    size_t stat_current_save_keys_processed;            /* Processed keys while child is active. */
-    size_t stat_current_save_keys_total;                /* Number of keys when child started. */
+    _Atomic(size_t) stat_current_save_keys_processed;   /* Processed keys while save is active. */
+    _Atomic(size_t) stat_current_save_keys_total;       /* Number of keys when save started. */
     size_t stat_rdb_cow_bytes;                          /* Copy on write bytes during RDB saving. */
     size_t stat_aof_cow_bytes;                          /* Copy on write bytes during AOF rewrite. */
     size_t stat_module_cow_bytes;                       /* Copy on write bytes during module fork. */
@@ -2068,12 +2107,15 @@ struct valkeyServer {
     int rdb_checksum;                     /* Use RDB checksum? */
     int rdb_del_sync_files;               /* Remove RDB files used only for SYNC if
                                              the instance does not use persistence. */
+    int forkless_infrastructure_enabled;  /* Enable forkless options support. */
     time_t lastsave;                      /* Unix time of last successful save */
     time_t lastbgsave_try;                /* Unix time of last attempted bgsave */
     time_t rdb_save_time_last;            /* Time used by last RDB save run. */
     time_t rdb_save_time_start;           /* Current RDB save start time. */
-    int rdb_bgsave_scheduled;             /* BGSAVE when possible if true. */
-    int rdb_child_type;                   /* Type of save by active child. */
+    rdbBgsaveType rdb_bgsave_scheduled;   /* BGSAVE when possible if non-zero. */
+    rdbWriteTarget rdb_write_target;      /* Type of save by active child. */
+    rdbBgsaveType cur_bgsave_type;        /* Current bgsave type. */
+    rdbBgsaveType lastbgsave_type;        /* Last completed bgsave type. */
     int lastbgsave_status;                /* C_OK or C_ERR */
     int stop_writes_on_bgsave_err;        /* Don't allow writes if can't BGSAVE */
     int rdb_pipe_read;                    /* RDB pipe used to transfer the rdb data */
@@ -2087,6 +2129,7 @@ struct valkeyServer {
     int rdb_key_save_delay;               /* Delay in microseconds between keys while
                                            * writing aof or rdb. (for testings). negative
                                            * value means fractions of microseconds (on average). */
+    int bgsave_default_method;            /* Default bgsave method: RDB_BGSAVE_TYPE_FORK or RDB_BGSAVE_TYPE_FORKLESS */
     int key_load_delay;                   /* Delay in microseconds between keys while
                                            * loading aof or rdb. (for testings). negative
                                            * value means fractions of microseconds (on average). */
@@ -2286,6 +2329,8 @@ struct valkeyServer {
     int cluster_message_gossip_perc;                       /* A configuration for setting the percentage of peer nodes to be gossiped in ping/pong messages. */
     char *cluster_configfile;                              /* Cluster auto-generated config file name. */
     int cluster_configfile_save_behavior;                  /* Cluster config file save behavior. */
+    _Atomic(int) cluster_config_save_status;               /* Status of cluster config save. */
+    _Atomic(time_t) cluster_config_last_save_time;         /* Unix time of last successful cluster config save. */
     struct clusterState *cluster;                          /* State of the cluster */
     int cluster_migration_barrier;                         /* Cluster replicas migration barrier. */
     int cluster_allow_replica_migration;                   /* Automatic replica migrations to orphaned primaries and from empty primaries */
@@ -2341,6 +2386,11 @@ struct valkeyServer {
     /* Debug config to expose intermediary slot migration states. */
     uint32_t debug_slot_migration_prevent_pause : 1;
     uint32_t debug_slot_migration_prevent_failover : 1;
+    /* Debug config to override the failover delay (in ms). */
+    int debug_cluster_failover_delay;
+    /* Debug config to force the next failover election to run in a specific
+     * epoch (testing only). -1 means don't override; consumed once. */
+    long long debug_cluster_failover_epoch;
     sds cached_cluster_slot_info[CACHE_CONN_TYPE_MAX]; /* Index in array is a bitwise or of CACHE_CONN_TYPE_* */
     /* Scripting */
     mstime_t busy_reply_threshold;  /* Script / module timeout in milliseconds */
@@ -2407,6 +2457,11 @@ struct valkeyServer {
     char *locale_collate;
     char *debug_context; /* A free-form string that has no impact on server except being included in a crash report. */
     int debug_force_tls_write_error;
+    /* Hot key detection parameters */
+    int hotkeys_sampling_percentage; /* Percentage (1-100) of key accesses sampled for hot-key detection. */
+    int hotkeys_top_k;               /* Number of top keys to track (Space-Saving K); 0 disables detection. */
+    int hotkeys_window_seconds;      /* Length of the QPS accounting window in seconds. */
+    struct spaceSavingManager *hotkeys_manager;
 };
 
 #define MAX_KEYS_BUFFER 256
@@ -2677,6 +2732,9 @@ typedef int *commandDbIdArgs(robj **argv, int argc, int *count);
  *
  * CMD_ALL_DBS: The command works with all databases.
  *
+ * CMD_WRITE_FIRSTKEY_ONLY: The command must be CMD_WRITE.  It only modifies the first key.
+ *                          Other keys are read-only.  Example: SUNIONSTORE
+ *
  * The following additional flags are only used in order to put commands
  * in a specific ACL category. Commands can have multiple ACL categories.
  * See valkey.conf for the exact meaning of each.
@@ -2847,6 +2905,11 @@ typedef struct clusterScanCtx {
  *----------------------------------------------------------------------------*/
 
 extern struct valkeyServer server;
+
+static inline bool onServerMainThread(void) {
+    return pthread_equal(server.main_thread_id, pthread_self()) != 0;
+}
+
 extern struct sharedObjectsStruct shared;
 extern dictType objectKeyPointerValueDictType;
 extern hashtableType objectHashtableType;
@@ -2873,6 +2936,7 @@ extern list *modules;
 
 /* Command metadata */
 void populateCommandLegacyRangeSpec(struct serverCommand *c);
+void detectWriteFirstkeyOnlyCommand(struct serverCommand *c);
 
 /* Utils */
 mstime_t commandTimeSnapshot(void);
@@ -3228,6 +3292,11 @@ void objectSetEncoding(robj *o, int encoding);
 unsigned int objectGetRefcount(const robj *o);
 unsigned int objectGetLRU(const robj *o);
 void objectSetLRU(robj *o, unsigned int lru);
+/* Object metadata management */
+void objectSetMetadataSize(size_t size);
+size_t objectGetMetadataSize(const robj *o);
+void *objectGetMetadata(const robj *o);
+void objectCopyMetadata(robj *dst, const robj *src);
 
 /* Synchronous I/O with timeout */
 ssize_t syncWrite(int fd, char *ptr, ssize_t size, long long timeout);
@@ -3343,6 +3412,9 @@ void receiveChildInfo(void);
 /* Fork helpers */
 int serverFork(int purpose);
 int hasActiveChildProcess(void);
+int isSaveInProgress(void);
+int hasActiveSaveOrChild(void);
+int isForkBgsaveInProgress(void);
 void resetChildState(void);
 int isMutuallyExclusiveChildType(int type);
 
@@ -3548,6 +3620,8 @@ void resetServerStats(void);
 void monitorActiveDefrag(void);
 void defragWhileBlocked(void);
 const char *evictPolicyToString(void);
+size_t objectComputeSize(robj *key, robj *o, size_t sample_size, int dbid);
+robj *createStringObjectWithKeyAndExpire(const char *ptr, size_t len, const_sds key, long long expire);
 struct serverMemOverhead *getMemoryOverheadData(void);
 void freeMemoryOverheadData(struct serverMemOverhead *mh);
 void checkChildrenDone(void);
@@ -3776,13 +3850,14 @@ robj *objectCommandLookup(client *c, robj *key);
 robj *objectCommandLookupOrReply(client *c, robj *key, robj *reply);
 int objectSetLRUOrLFU(robj *val, long long lfu_freq, long long lru_idle_secs);
 #define LOOKUP_NONE 0
-#define LOOKUP_NOTOUCH (1 << 0)  /* Don't update LRU. */
-#define LOOKUP_NONOTIFY (1 << 1) /* Don't trigger keyspace event on key misses. */
-#define LOOKUP_NOSTATS (1 << 2)  /* Don't update keyspace hits/misses counters. */
-#define LOOKUP_WRITE (1 << 3)    /* Delete expired keys even in replicas. */
-#define LOOKUP_NOEXPIRE (1 << 4) /* Avoid deleting lazy expired keys. */
+#define LOOKUP_NOTOUCH (1 << 0)   /* Don't update LRU. */
+#define LOOKUP_NONOTIFY (1 << 1)  /* Don't trigger keyspace event on key misses. */
+#define LOOKUP_NOSTATS (1 << 2)   /* Don't update keyspace hits/misses counters. */
+#define LOOKUP_WRITE (1 << 3)     /* Delete expired keys even in replicas. */
+#define LOOKUP_NOEXPIRE (1 << 4)  /* Avoid deleting lazy expired keys. */
+#define LOOKUP_NOHOTKEYS (1 << 5) /* Don't feed hot-key detection (introspection). */
 #define LOOKUP_NOEFFECTS \
-    (LOOKUP_NONOTIFY | LOOKUP_NOSTATS | LOOKUP_NOTOUCH | LOOKUP_NOEXPIRE) /* Avoid any effects from fetching the key */
+    (LOOKUP_NONOTIFY | LOOKUP_NOSTATS | LOOKUP_NOTOUCH | LOOKUP_NOEXPIRE | LOOKUP_NOHOTKEYS) /* Avoid any effects from fetching the key */
 
 void dbAdd(serverDb *db, robj *key, robj **valref);
 int dbAddRDBLoad(serverDb *db, sds key, robj **valref);
@@ -3807,6 +3882,7 @@ typedef int(emptyDataHashtableFilter)(int didx);
 long long emptyData(int dbnum, int flags, void(callback)(hashtable *));
 long long emptyDbStructure(serverDb **dbarray, int dbnum, int async, void(callback)(hashtable *));
 void resetDbExpiryState(serverDb *db);
+int getFlushCommandFlags(client *c, int *flags);
 void flushAllDataAndResetRDB(int flags);
 long long dbTotalServerKeyCount(void);
 serverDb *initTempDb(int id);
@@ -3919,6 +3995,9 @@ void signalKeyAsReady(serverDb *db, robj *key, int type);
 void blockForKeys(client *c, int btype, robj **keys, int numkeys, mstime_t timeout, int unblock_on_nokey);
 void blockClientShutdown(client *c);
 void blockPostponeClient(client *c);
+void blockClientInUseOnKeys(client *c, int num_keys, robj *keys[]);
+void unblockClientsInUseOnKey(robj *key);
+void unblockClientsInUseOnAllKeys(void);
 void blockClientForReplicaAck(client *c, mstime_t timeout, long long offset, int numreplicas, int numlocal);
 void replicationRequestAckFromReplicas(void);
 void signalDeletedKeyAsReady(serverDb *db, robj *key, int type);
@@ -3949,11 +4028,13 @@ void startEvictionTimeProc(void);
 uint8_t *getConfigurableHashSeed(void);
 uint64_t dictSdsHash(const void *key);
 uint64_t dictSdsCaseHash(const void *key);
+uint64_t dictObjHash(const void *key);
 uint64_t dictCStrHash(const void *key);
 uint64_t dictCStrCaseHash(const void *key);
 uint64_t dictEncObjHash(const void *key);
 int dictSdsKeyCompare(const void *key1, const void *key2);
 int dictSdsKeyCaseCompare(const void *key1, const void *key2);
+int dictObjKeyCompare(const void *key1, const void *key2);
 int dictCStrKeyCompare(const void *key1, const void *key2);
 int dictCStrKeyCaseCompare(const void *key1, const void *key2);
 int dictEncObjKeyCompare(const void *key1, const void *key2);
@@ -4267,6 +4348,9 @@ void lcsCommand(client *c);
 void quitCommand(client *c);
 void resetCommand(client *c);
 void failoverCommand(client *c);
+void hotkeysGetCommand(client *c);
+void hotkeysResetCommand(client *c);
+void hotkeysHelpCommand(client *c);
 
 /* Helper functions for getting database id args from argv, argc */
 int *selectDbIdArgs(robj **argv, int argc, int *count);

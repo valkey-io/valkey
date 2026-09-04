@@ -1487,6 +1487,7 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
             assert_error "*ERR CLUSTER SYNCSLOTS PAUSED should only be used by slot migration clients*" {R 0 CLUSTER SYNCSLOTS PAUSED}
             assert_error "*ERR CLUSTER SYNCSLOTS FAILOVER-GRANTED should only be used by slot migration clients*" {R 0 CLUSTER SYNCSLOTS FAILOVER-GRANTED}
             assert_error "*ERR CLUSTER SYNCSLOTS ACK should only be used by slot migration clients*" {R 0 CLUSTER SYNCSLOTS ACK}
+            assert_error "*ERR CLUSTER SYNCSLOTS FINISH should only be used by slot migration clients*" {R 0 CLUSTER SYNCSLOTS FINISH STATE failed NAME $fake_jobname}
             assert_error "*syntax error*" {R 0 CLUSTER SYNCSLOTS UNKNOWN}
 
             assert_causes_conn_drop 0 {

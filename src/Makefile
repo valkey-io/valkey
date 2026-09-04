@@ -477,6 +477,7 @@ ENGINE_SERVER_OBJ = \
     allocator_defrag.o \
     anet.o \
     aof.o \
+	bgiteration.o \
     bio.o \
     bitops.o \
     blocked.o \
@@ -507,11 +508,14 @@ ENGINE_SERVER_OBJ = \
     expire.o \
     fbtree.o \
     fifo.o \
+	forkless.o \
     functions.o \
     geo.o \
     geohash.o \
     geohash_helper.o \
     hashtable.o \
+    hotkeys.o \
+    space_saving.o \
     hyperloglog.o \
     intset.o \
     io_threads.o \
@@ -586,7 +590,11 @@ ENGINE_SERVER_OBJ = \
     ziplist.o \
     zipmap.o \
     zmalloc.o \
-    queues.o
+    queues.o \
+    throttle_token_bucket.o \
+    stat_calc.o \
+    throttle_repl.o \
+    throttle.o
 ENGINE_SERVER_OBJ+=$(ENGINE_TRACE_OBJ)
 ENGINE_CLI_NAME=$(ENGINE_NAME)-cli$(PROG_SUFFIX)
 ENGINE_CLI_OBJ = \

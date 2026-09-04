@@ -18,11 +18,17 @@ Collet = "Collet" # LZ4 author Yann Collet
 nd = "nd"
 Ba = "Ba"
 Addd = "Addd"
+forkless = "forkless"
+
+[default.extend-identifiers]
+dbe = "dbe"
 
 [default]
 extend-ignore-re = [
     "SELECTed",
+    "SELECTs",
     "WATCHed",
+    "AIMD",
 ]
 
 [type.c]
@@ -59,6 +65,7 @@ seeked = "seeked"
 
 [type.c.extend-words]
 arange = "arange"
+Forkless = "Forkless"
 fo = "fo"
 frst = "frst"
 limite = "limite"
@@ -67,6 +74,9 @@ pn = "pn"
 seeked = "seeked"
 tre = "tre"
 
+[type.cpp.extend-words]
+fo = "fo"
+
 [type.systemd.extend-words]
 # systemd = .conf
 ake = "ake"
@@ -74,6 +84,3 @@ ake = "ake"
 [type.tcl.extend-words]
 fo = "fo"
 tre = "tre"
-
-[type.cpp.extend-words]
-fo = "fo"

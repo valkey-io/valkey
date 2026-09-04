@@ -437,6 +437,7 @@ static ValkeyModuleScriptingEngineDebuggerEnableRet luaEngineDebuggerEnable(Valk
                                                                             const ValkeyModuleScriptingEngineDebuggerCommand **commands,
                                                                             size_t *commands_len) {
     VALKEYMODULE_NOT_USED(module_ctx);
+    VALKEYMODULE_NOT_USED(engine_ctx);
 
     if (type != VMSE_EVAL) {
         return VMSE_DEBUG_NOT_SUPPORTED;
@@ -444,10 +445,7 @@ static ValkeyModuleScriptingEngineDebuggerEnableRet luaEngineDebuggerEnable(Valk
 
     ldbEnable();
 
-    luaEngineCtx *lua_engine_ctx = engine_ctx;
-    ldbGenerateDebuggerCommandsArray(lua_engine_ctx->eval_lua,
-                                     commands,
-                                     commands_len);
+    ldbGenerateDebuggerCommandsArray(commands, commands_len);
 
     return VMSE_DEBUG_ENABLED;
 }
@@ -504,7 +502,8 @@ LUA_MODULE_VISIBILITY int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx,
     }
 
     ValkeyModule_SetModuleOptions(ctx, VALKEYMODULE_OPTIONS_HANDLE_REPL_ASYNC_LOAD |
-                                           VALKEYMODULE_OPTIONS_HANDLE_ATOMIC_SLOT_MIGRATION);
+                                           VALKEYMODULE_OPTIONS_HANDLE_ATOMIC_SLOT_MIGRATION |
+                                           VALKEYMODULE_OPTIONS_HANDLE_FORKLESS);
 
     engine_ctx = createEngineContext(ctx);
 

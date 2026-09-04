@@ -10452,6 +10452,42 @@ struct COMMAND_ARG XACK_Args[] = {
 {MAKE_ARG("id",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_MULTIPLE,0,NULL)},
 };
 
+/********** XACKDEL ********************/
+
+#ifndef SKIP_CMD_HISTORY_TABLE
+/* XACKDEL history */
+#define XACKDEL_History NULL
+#endif
+
+#ifndef SKIP_CMD_TIPS_TABLE
+/* XACKDEL tips */
+#define XACKDEL_Tips NULL
+#endif
+
+#ifndef SKIP_CMD_KEY_SPECS_TABLE
+/* XACKDEL key specs */
+keySpec XACKDEL_Keyspecs[1] = {
+{NULL,CMD_KEY_RW|CMD_KEY_UPDATE,KSPEC_BS_INDEX,.bs.index={1},KSPEC_FK_RANGE,.fk.range={0,1,0}}
+};
+#endif
+
+/* XACKDEL mode argument table */
+struct COMMAND_ARG XACKDEL_mode_Subargs[] = {
+{MAKE_ARG("keepref",ARG_TYPE_PURE_TOKEN,-1,"KEEPREF",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("delref",ARG_TYPE_PURE_TOKEN,-1,"DELREF",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("acked",ARG_TYPE_PURE_TOKEN,-1,"ACKED",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+};
+
+/* XACKDEL argument table */
+struct COMMAND_ARG XACKDEL_Args[] = {
+{MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("group",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("mode",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_OPTIONAL,3,NULL),.subargs=XACKDEL_mode_Subargs},
+{MAKE_ARG("ids",ARG_TYPE_PURE_TOKEN,-1,"IDS",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("numids",ARG_TYPE_INTEGER,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("id",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_MULTIPLE,0,NULL)},
+};
+
 /********** XADD ********************/
 
 #ifndef SKIP_CMD_HISTORY_TABLE
@@ -12214,6 +12250,7 @@ struct COMMAND_STRUCT serverCommandTable[] = {
 {MAKE_CMD("zunionstore","Stores the union of multiple sorted sets in a key.","O(N)+O(M log(M)) with N being the sum of the sizes of the input sorted sets, and M being the number of elements in the resulting sorted set.","2.0.0",CMD_DOC_NONE,NULL,NULL,"sorted_set",COMMAND_GROUP_SORTED_SET,ZUNIONSTORE_History,0,ZUNIONSTORE_Tips,0,zunionstoreCommand,-4,CMD_WRITE|CMD_DENYOOM,ACL_CATEGORY_SLOW|ACL_CATEGORY_SORTEDSET|ACL_CATEGORY_WRITE,NULL,ZUNIONSTORE_Keyspecs,2,zunionInterDiffStoreGetKeys,5),.args=ZUNIONSTORE_Args},
 /* stream */
 {MAKE_CMD("xack","Returns the number of messages that were successfully acknowledged by the consumer group member of a stream.","O(1) for each message ID processed.","5.0.0",CMD_DOC_NONE,NULL,NULL,"stream",COMMAND_GROUP_STREAM,XACK_History,0,XACK_Tips,0,xackCommand,-4,CMD_WRITE|CMD_FAST,ACL_CATEGORY_FAST|ACL_CATEGORY_STREAM|ACL_CATEGORY_WRITE,NULL,XACK_Keyspecs,1,NULL,3),.args=XACK_Args},
+{MAKE_CMD("xackdel","Acknowledge and (if possible) delete stream message(s).","O(1)","10.0.0",CMD_DOC_NONE,NULL,NULL,"stream",COMMAND_GROUP_STREAM,XACKDEL_History,0,XACKDEL_Tips,0,xackdelCommand,-6,CMD_WRITE|CMD_FAST,ACL_CATEGORY_FAST|ACL_CATEGORY_WRITE|ACL_CATEGORY_STREAM,NULL,XACKDEL_Keyspecs,1,NULL,6),.args=XACKDEL_Args},
 {MAKE_CMD("xadd","Appends a new message to a stream. Creates the key if it doesn't exist.","O(1) when adding a new entry, O(N) when trimming where N being the number of entries evicted.","5.0.0",CMD_DOC_NONE,NULL,NULL,"stream",COMMAND_GROUP_STREAM,XADD_History,2,XADD_Tips,1,xaddCommand,-5,CMD_WRITE|CMD_DENYOOM|CMD_FAST,ACL_CATEGORY_FAST|ACL_CATEGORY_STREAM|ACL_CATEGORY_WRITE,NULL,XADD_Keyspecs,1,NULL,5),.args=XADD_Args},
 {MAKE_CMD("xautoclaim","Changes, or acquires, ownership of messages in a consumer group, as if the messages were delivered to a consumer group member.","O(1) if COUNT is small.","6.2.0",CMD_DOC_NONE,NULL,NULL,"stream",COMMAND_GROUP_STREAM,XAUTOCLAIM_History,1,XAUTOCLAIM_Tips,1,xautoclaimCommand,-6,CMD_WRITE|CMD_FAST,ACL_CATEGORY_FAST|ACL_CATEGORY_STREAM|ACL_CATEGORY_WRITE,NULL,XAUTOCLAIM_Keyspecs,1,NULL,7),.args=XAUTOCLAIM_Args},
 {MAKE_CMD("xclaim","Changes, or acquires, ownership of a message in a consumer group, as if the message was delivered to a consumer group member.","O(log N) with N being the number of messages in the PEL of the consumer group.","5.0.0",CMD_DOC_NONE,NULL,NULL,"stream",COMMAND_GROUP_STREAM,XCLAIM_History,0,XCLAIM_Tips,1,xclaimCommand,-6,CMD_WRITE|CMD_FAST,ACL_CATEGORY_FAST|ACL_CATEGORY_STREAM|ACL_CATEGORY_WRITE,NULL,XCLAIM_Keyspecs,1,NULL,11),.args=XCLAIM_Args},

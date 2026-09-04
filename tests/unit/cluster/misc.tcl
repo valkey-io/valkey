@@ -40,6 +40,36 @@ start_cluster 1 1 {tags {external:skip cluster}} {
         assert_error {CROSSSLOT *} {r exec}
     }
 
+    test {Conditional EXEC rejects cross-slot condition keys} {
+        set condition1 "{condition1}key"
+        set condition2 "{condition2}key"
+        set destination "{condition1}destination"
+        assert {[R 0 cluster keyslot $condition1] != [R 0 cluster keyslot $condition2]}
+
+        R 0 del $condition1
+        R 0 del $condition2
+        R 0 del $destination
+        R 0 set $condition1 value
+        R 0 multi
+        R 0 set $destination should-not-execute
+        assert_error {CROSSSLOT Keys*} {R 0 exec ifeq $condition1 value nx $condition2}
+        assert_equal 0 [R 0 exists $destination]
+    }
+
+    test {Conditional EXEC rejects a queued key in a different slot} {
+        set condition "{condition}key"
+        set destination "{destination}key"
+        assert {[R 0 cluster keyslot $condition] != [R 0 cluster keyslot $destination]}
+
+        R 0 del $condition
+        R 0 del $destination
+        R 0 set $condition value
+        R 0 multi
+        R 0 set $destination should-not-execute
+        assert_error {CROSSSLOT Keys*} {R 0 exec ifeq $condition value}
+        assert_equal 0 [R 0 exists $destination]
+    }
+
     # Regression tests for WATCHed keys that hash to a different slot than the transaction's commands. EXEC
     # committed such a transaction even when the WATCHed key had expired or had been removed.
     test {WATCHed key in another slot that expired aborts EXEC} {

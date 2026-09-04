@@ -663,6 +663,52 @@ void msetexCommand(client *c) {
         }
     }
 
+    /* If the `milliseconds` have already expired, avoid creating the values
+     * only to have active or lazy expiration delete them later.
+     *
+     * This mirrors SET's fast-path, but we must handle the multi-key case
+     * carefully: deleteExpiredKeyFromOverwriteAndPropagate() is a single-key
+     * helper that rewrites c->argv to [DEL, key] per call, which would
+     * invalidate subsequent c->argv[j] reads in this loop and also trip the
+     * "deleted" serverAssert for duplicate keys. Inline the delete and build
+     * one consolidated DEL/UNLINK vector to propagate. */
+    if (expire && checkAlreadyExpired(milliseconds)) {
+        robj *aux = server.lazyfree_lazy_expire ? shared.unlink : shared.del;
+        robj **newargv = zmalloc(sizeof(robj *) * (numkeys + 1));
+        newargv[0] = aux;
+        incrRefCount(aux);
+        int del_idx = 1;
+
+        for (int j = 2; j < args_start_idx; j += 2) {
+            robj *key = c->argv[j];
+            if (dbGenericDelete(c->db, key, server.lazyfree_lazy_expire,
+                                DB_FLAG_KEY_EXPIRED)) {
+                newargv[del_idx++] = key;
+                incrRefCount(key);
+                signalModifiedKey(c, c->db, key);
+                notifyKeyspaceEvent(NOTIFY_EXPIRED, "expired", key, c->db->id);
+                server.stat_expiredkeys++;
+                server.dirty++;
+            }
+        }
+
+        if (del_idx > 1) {
+            /* Replace the command so it propagates as a single
+             * DEL/UNLINK k1 k2 ... kN to replicas and the AOF. */
+            replaceClientCommandVector(c, del_idx, newargv);
+        } else {
+            /* No keys were present, so this fast-path did not modify the
+             * dataset. Make the no-propagation behavior explicit instead of
+             * relying on the command remaining clean. */
+            preventCommandPropagation(c);
+            decrRefCount(aux);
+            zfree(newargv);
+        }
+
+        addReply(c, shared.cone);
+        return;
+    }
+
     /* Setting KEEPTTL flag.
      *
      * When expire is not NULL, we avoid deleting the TTL so it can be updated

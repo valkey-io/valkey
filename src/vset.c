@@ -254,6 +254,10 @@ static inline uint32_t pvAlloc(pVector *vec) {
     return (vec ? vec->alloc : 0);
 }
 
+static inline size_t pvRequiredSize(size_t len) {
+    return len == 0 ? 0 : PV_HEADER_SIZE + len * sizeof(void *);
+}
+
 /* Ensures that a pVector has enough capacity to hold additional elements.
  *
  * This function guarantees that the given pVector `pv` has at least enough
@@ -279,7 +283,7 @@ static pVector *pvMakeRoomFor(pVector *pv, size_t additional) {
     /* Make sure we will have the capacity to store the extra number of elements */
     assert(pvLen(pv) + additional <= (1UL << PV_CARD_BITS) - 1);
 
-    size_t required = PV_HEADER_SIZE + (pvLen(pv) + additional) * sizeof(void *);
+    size_t required = pvRequiredSize(pvLen(pv) + additional);
 
     if (pvAlloc(pv) >= required) return pv;
 
@@ -324,7 +328,7 @@ static pVector *pvShrinkToFit(pVector *pv) {
     if (!pv) return NULL;
 
     size_t used = pvAlloc(pv);
-    size_t required = pvLen(pv) == 0 ? 0 : PV_HEADER_SIZE + pvLen(pv) * sizeof(void *);
+    size_t required = pvRequiredSize(pvLen(pv));
 
     if (used > required) {
         if (!required) {
@@ -334,6 +338,14 @@ static pVector *pvShrinkToFit(pVector *pv) {
         pv = zrealloc_usable(pv, required, &required);
         pv->alloc = required;
     }
+    return pv;
+}
+
+static pVector *pvShrinkIfWasteful(pVector *pv) {
+    size_t required = pvRequiredSize(pvLen(pv));
+    /* Avoid delete/reinsert thrashing: shrink only after more than
+     * half of the allocation is unused. */
+    if (pvAlloc(pv) > required * 2) return pvShrinkToFit(pv);
     return pv;
 }
 
@@ -539,7 +551,7 @@ uint32_t pvFind(const pVector *pv, const void *elem) {
 
 /* Removes the element at the specified index from the pVector.
  *
- * Shifts elements as necessary and optionally shrinks the vector if memory can be saved.
+ * Shifts elements as necessary and shrinks the vector if more than half of the allocation can be saved.
  * If this is the last element in the vector, the vector is freed and NULL is returned.
  *
  * Arguments:
@@ -559,7 +571,7 @@ pVector *pvRemoveAt(pVector *pv, uint32_t idx) {
     } else if (idx < pv->len - 1UL)
         memmove(&pv->data[idx], &pv->data[idx + 1], (pv->len - idx - 1) * sizeof(void *));
     pv->len--;
-    return pvShrinkToFit(pv);
+    return pvShrinkIfWasteful(pv);
 }
 
 /* Removes the first matching element from the pVector.

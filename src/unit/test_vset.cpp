@@ -818,6 +818,47 @@ TEST_F(VsetTest, TestVsetMemUsage) {
     vsetRelease(&set);
 }
 
+TEST_F(VsetTest, TestVsetRemoveKeepsVectorAllocationBounded) {
+    vset set;
+    vset tight_set;
+    vsetInit(&set);
+    vsetInit(&tight_set);
+
+    const int total_entries = 126;
+    const int remaining_entries = 3;
+    mock_entry *entries[total_entries];
+    mock_entry *tight_entries[remaining_entries];
+
+    for (int i = 0; i < total_entries; i++) {
+        char key[32];
+        snprintf(key, sizeof(key), "key_%d", i);
+        entries[i] = mockCreateEntry(key, 1000);
+        ASSERT_TRUE(vsetAddEntry(&set, mockGetExpiry, entries[i]));
+    }
+
+    for (int i = 0; i < remaining_entries; i++) {
+        char key[32];
+        snprintf(key, sizeof(key), "tight_%d", i);
+        tight_entries[i] = mockCreateEntry(key, 1000);
+        ASSERT_TRUE(vsetAddEntry(&tight_set, mockGetExpiry, tight_entries[i]));
+    }
+
+    for (int i = 0; i < total_entries - remaining_entries; i++) {
+        ASSERT_TRUE(vsetRemoveEntry(&set, mockGetExpiry, entries[i]));
+    }
+
+    size_t tight_mem = vsetMemUsage(&tight_set);
+    size_t shrunk_mem = vsetMemUsage(&set);
+    ASSERT_GT(tight_mem, 0u);
+    ASSERT_GT(shrunk_mem, 0u);
+    ASSERT_LE(shrunk_mem, tight_mem * 2);
+
+    vsetRelease(&set);
+    vsetRelease(&tight_set);
+    for (int i = 0; i < total_entries; i++) mockFreeEntry(entries[i]);
+    for (int i = 0; i < remaining_entries; i++) mockFreeEntry(tight_entries[i]);
+}
+
 TEST_F(VsetTest, TestVsetClear) {
     vset set;
     vsetInit(&set);

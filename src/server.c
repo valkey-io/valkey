@@ -6142,10 +6142,10 @@ sds genValkeyInfoStringCommandStats(sds info, hashtable *commands) {
         char *tmpsafe;
         if (c->calls || c->failed_calls || c->rejected_calls) {
             info = sdscatprintf(info,
-                                "cmdstat_%s:calls=%lld,usec=%lld,usec_per_call=%.2f"
+                                "cmdstat_%s:calls=%lld,usec=%lld,usec_per_call=%lld"
                                 ",rejected_calls=%lld,failed_calls=%lld\r\n",
                                 getSafeInfoString(c->fullname, sdslen(c->fullname), &tmpsafe), c->calls,
-                                c->microseconds, (c->calls == 0) ? 0 : ((float)c->microseconds / c->calls),
+                                c->microseconds, (c->calls == 0) ? 0 : (c->microseconds / c->calls),
                                 c->rejected_calls, c->failed_calls);
             if (tmpsafe != NULL) zfree(tmpsafe);
         }

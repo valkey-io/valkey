@@ -53,7 +53,7 @@
             },
             {
                 "name": "field",
-                "type": "string",
+                "type": "field",
                 "multiple": true
             }
         ]

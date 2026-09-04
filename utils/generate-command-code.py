@@ -6,6 +6,8 @@ import argparse
 
 ARG_TYPES = {
     "string": "ARG_TYPE_STRING",
+    "field": "ARG_TYPE_STRING",
+    "member": "ARG_TYPE_STRING",
     "integer": "ARG_TYPE_INTEGER",
     "double": "ARG_TYPE_DOUBLE",
     "key": "ARG_TYPE_KEY",
@@ -15,6 +17,8 @@ ARG_TYPES = {
     "oneof": "ARG_TYPE_ONEOF",
     "block": "ARG_TYPE_BLOCK",
 }
+
+MEMBER_ARG_TYPES = {"field", "member"}
 
 GROUPS = {
     "generic": "COMMAND_GROUP_GENERIC",
@@ -216,6 +220,36 @@ def verify_no_dup_names(container_fullname, args):
         exit(1)
 
 
+def argument_width(arg):
+    """Return argv entries consumed by a fixed argument shape, or None."""
+    if arg.type == "pure-token":
+        return 1
+
+    token_width = 1 if arg.desc.get("token") else 0
+
+    if arg.type == "oneof":
+        subarg_widths = set()
+        for subarg in arg.subargs:
+            subarg_width = argument_width(subarg)
+            if subarg_width is None:
+                return None
+            subarg_widths.add(subarg_width)
+        return token_width + subarg_widths.pop() if len(subarg_widths) == 1 else None
+    if arg.type == "block":
+        width = token_width
+        for subarg in arg.subargs:
+            subarg_width = argument_width(subarg)
+            if subarg_width is None:
+                return None
+            width += subarg_width
+        return width
+    return token_width + 1
+
+
+def is_fixed_width_argument(arg):
+    return arg.type != "oneof" and not arg.desc.get("optional", False)
+
+
 class Argument(object):
     def __init__(self, parent_name, desc):
         self.parent_name = parent_name
@@ -380,6 +414,33 @@ class Command(object):
         if "reply_schema" in self.desc:
             self.reply_schema = ReplySchema(self.reply_schema_name(), self.desc["reply_schema"])
 
+    def infer_member_arg_index(self):
+        """Infer the first inner field/member argv position from argument metadata."""
+
+        def visit_args(arg_list, argv_index, fixed):
+            for arg in arg_list:
+                if arg.type in MEMBER_ARG_TYPES:
+                    if not fixed:
+                        print("%s: %s position is not fixed" % (self.fullname(), arg.fullname()))
+                        exit(1)
+                    return argv_index
+
+                if arg.type == "block":
+                    subargv_index = argv_index + (1 if arg.desc.get("token") else 0)
+                    target = visit_args(arg.subargs, subargv_index, fixed and is_fixed_width_argument(arg))
+                    if target:
+                        return target
+
+                if arg.type == "oneof" or arg.desc.get("optional", False) or arg.desc.get("multiple", False):
+                    fixed = False
+                width = argument_width(arg)
+                if width is None:
+                    fixed = False
+                else:
+                    argv_index += width
+
+        return visit_args(self.args, 1, True)
+
     def fullname(self):
         return self.name.replace("-", "_").replace(":", "")
 
@@ -495,6 +556,10 @@ class Command(object):
 
         if self.args:
             s += ".args=%s," % self.arg_table_name()
+
+        member_arg_index = self.infer_member_arg_index()
+        if member_arg_index:
+            s += ".member_arg_index=%d," % member_arg_index
 
         if self.reply_schema and args.with_reply_schema:
             s += ".reply_schema=&%s," % self.reply_schema_name()

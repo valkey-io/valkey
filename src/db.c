@@ -987,11 +987,16 @@ void keysCommand(client *c) {
     } else {
         kvs_it = kvstoreIteratorInit(c->db->keys, HASHTABLE_ITER_SAFE);
     }
+    /* Prepare the pattern once instead of letting stringmatchlen() re-parse
+     * any "[...]" classes on every key: KEYS iterates the whole keyspace, so
+     * a per-key rebuild would multiply that cost by the number of keys in
+     * the database. */
+    stringmatchPrepared *prepared = allkeys ? NULL : stringmatchlen_prepare(pattern, plen, 0);
     void *next;
     while (kvs_di ? kvstoreHashtableIteratorNext(kvs_di, &next) : kvstoreIteratorNext(kvs_it, &next)) {
         robj *val = next;
         sds key = objectGetKey(val);
-        if (allkeys || stringmatchlen(pattern, plen, key, sdslen(key), 0)) {
+        if (allkeys || stringmatchlen_prepared(prepared, key, sdslen(key))) {
             if (!objectIsExpired(val)) {
                 addReplyBulkCBuffer(c, key, sdslen(key));
                 numkeys++;
@@ -999,6 +1004,7 @@ void keysCommand(client *c) {
         }
         if (c->flag.close_asap) break;
     }
+    stringmatchlen_prepared_free(prepared);
     if (kvs_di) kvstoreReleaseHashtableIterator(kvs_di);
     if (kvs_it) kvstoreIteratorRelease(kvs_it);
     setDeferredArrayLen(c, replylen, numkeys);

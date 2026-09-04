@@ -233,6 +233,20 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
         assert_error "*No migrations ongoing*" {R 0 CLUSTER CANCELSLOTMIGRATIONS}
     }
 
+    test "CLUSTER MIGRATESLOTS AUTH/AUTH2 syntax errors" {
+        # AUTH with no password
+        assert_error "*syntax error*" {R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 0 0 NODE $node1_id AUTH}
+
+        # AUTH2 with only a username and no password
+        assert_error "*syntax error*" {R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 0 0 NODE $node1_id AUTH2 onlyuser}
+
+        # Both AUTH and AUTH2 in the same group — parser sees AUTH2 where it expects SLOTSRANGE
+        assert_error "*syntax error*" {R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 0 0 NODE $node1_id AUTH pw AUTH2 u p}
+
+        # None of the above started a migration
+        assert_equal {} [R 0 CLUSTER GETSLOTMIGRATIONS]
+    }
+
     test "CLUSTER MIGRATESLOTS already migrating" {
         set_debug_prevent_pause 1
         assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id]
@@ -1764,6 +1778,210 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
             R 0 CONFIG SET requirepass ""
             R 2 CONFIG SET primaryauth ""
         }
+    }
+
+    test "CLUSTER MIGRATESLOTS with AUTH succeeds when target requires password" {
+        assert_does_not_resync {
+            R 0 CONFIG SET requirepass "targetpass"
+
+            # Populate data before migration
+            populate 1000 "$16383_slot_tag:" 1000 -2
+
+            assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id AUTH targetpass]
+            set jobname [get_job_name 2 16383]
+            wait_for_migration 0 16383
+
+            # Keys successfully migrated
+            assert_match "1000" [R 0 CLUSTER COUNTKEYSINSLOT 16383]
+            assert_match "0" [R 2 CLUSTER COUNTKEYSINSLOT 16383]
+
+            # Also eventually reflected in replicas
+            wait_for_countkeysinslot 3 16383 1000
+            wait_for_countkeysinslot 5 16383 0
+
+            # Migration log shows success on both ends
+            assert {[dict get [get_migration_by_name 0 $jobname] state] eq "success"}
+            assert {[dict get [get_migration_by_name 2 $jobname] state] eq "success"}
+
+            # Cleanup for next test
+            assert_match "OK" [R 0 FLUSHDB SYNC]
+            assert_match "OK" [R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node2_id]
+            wait_for_migration 2 16383
+            R 0 CONFIG SET requirepass ""
+        }
+    }
+
+    test "CLUSTER MIGRATESLOTS AUTH with WRONGPASS fails cleanly" {
+        assert_does_not_resync {
+            R 0 CONFIG SET requirepass "correctpass"
+
+            # Perform one-shot import with wrong password in AUTH option
+            assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id AUTH wrongpass]
+            set jobname [get_job_name 2 16383]
+
+            # Should be denied with clear error message
+            wait_for_migration_field 2 $jobname state failed
+            assert_match {*Failed to AUTH to target node*} [dict get [get_migration_by_name 2 $jobname] message]
+
+            # Cleanup for next test
+            R 0 CONFIG SET requirepass ""
+        }
+    }
+
+    test "CLUSTER MIGRATESLOTS with AUTH overrides primaryauth" {
+        assert_does_not_resync {
+            R 0 CONFIG SET requirepass "targetpass"
+            R 2 CONFIG SET primaryauth "wrongpass"
+
+            # Populate data before migration
+            populate 1000 "$16383_slot_tag:" 1000 -2
+
+            # AUTH keyword in command overrides primaryauth on source
+            assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id AUTH targetpass]
+            set jobname [get_job_name 2 16383]
+            wait_for_migration 0 16383
+
+            # Keys successfully migrated
+            assert_match "1000" [R 0 CLUSTER COUNTKEYSINSLOT 16383]
+            assert_match "0" [R 2 CLUSTER COUNTKEYSINSLOT 16383]
+
+            # Also eventually reflected in replicas
+            wait_for_countkeysinslot 3 16383 1000
+            wait_for_countkeysinslot 5 16383 0
+
+            # Migration log shows success on both ends
+            assert {[dict get [get_migration_by_name 0 $jobname] state] eq "success"}
+            assert {[dict get [get_migration_by_name 2 $jobname] state] eq "success"}
+
+            # Cleanup for next test
+            assert_match "OK" [R 0 FLUSHDB SYNC]
+            assert_match "OK" [R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node2_id]
+            wait_for_migration 2 16383
+            R 0 CONFIG SET requirepass ""
+            R 2 CONFIG SET primaryauth ""
+        }
+    }
+
+    test "CLUSTER MIGRATESLOTS with AUTH2 succeeds for ACL user" {
+        assert_does_not_resync {
+            R 0 CONFIG SET requirepass "mustauth"
+            R 0 ACL SETUSER alice on >s3cret ~* &* +@all
+
+            # Populate data before migration
+            populate 1000 "$16383_slot_tag:" 1000 -2
+
+            # AUTH2 authenticates as the ACL user; bare AUTH or no-auth would fail
+            assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id AUTH2 alice s3cret]
+            set jobname [get_job_name 2 16383]
+            wait_for_migration 0 16383
+
+            # Keys successfully migrated
+            assert_match "1000" [R 0 CLUSTER COUNTKEYSINSLOT 16383]
+            assert_match "0" [R 2 CLUSTER COUNTKEYSINSLOT 16383]
+
+            # Also eventually reflected in replicas
+            wait_for_countkeysinslot 3 16383 1000
+            wait_for_countkeysinslot 5 16383 0
+
+            # Migration log shows success on both ends
+            assert {[dict get [get_migration_by_name 0 $jobname] state] eq "success"}
+            assert {[dict get [get_migration_by_name 2 $jobname] state] eq "success"}
+
+            # Cleanup for next test
+            assert_match "OK" [R 0 FLUSHDB SYNC]
+            assert_match "OK" [R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node2_id]
+            wait_for_migration 2 16383
+            R 0 ACL DELUSER alice
+            R 0 CONFIG SET requirepass ""
+        }
+    }
+
+    test "CLUSTER MIGRATESLOTS per-target AUTH differs in single command" {
+        # Explicit AUTH pw0 for node0, primaryauth fallback pw1 for node1.
+        ensure_slot_on_node 2 16383
+        ensure_slot_on_node 2 16382
+        assert_does_not_resync {
+            R 0 CONFIG SET requirepass "pw0"
+            R 1 CONFIG SET requirepass "pw1"
+            R 2 CONFIG SET primaryauth "pw1"
+
+            populate 500 "$16383_slot_tag:" 1000 -2
+            populate 500 "$16382_slot_tag:" 1000 -2
+
+            # One command: explicit AUTH for node0, primaryauth fallback for node1
+            assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id AUTH pw0 SLOTSRANGE 16382 16382 NODE $node1_id]
+            set jobname0 [get_job_name 2 16383]
+            set jobname1 [get_job_name 2 16382]
+            wait_for_migration 0 16383
+            wait_for_migration 1 16382
+
+            # Keys migrated to correct targets
+            assert_match "500" [R 0 CLUSTER COUNTKEYSINSLOT 16383]
+            assert_match "0" [R 2 CLUSTER COUNTKEYSINSLOT 16383]
+            assert_match "500" [R 1 CLUSTER COUNTKEYSINSLOT 16382]
+            assert_match "0" [R 2 CLUSTER COUNTKEYSINSLOT 16382]
+
+            # Replicas reflect the migration
+            wait_for_countkeysinslot 3 16383 500
+            wait_for_countkeysinslot 4 16382 500
+            wait_for_countkeysinslot 5 16383 0
+            wait_for_countkeysinslot 5 16382 0
+
+            # Both migrations succeeded
+            assert {[dict get [get_migration_by_name 0 $jobname0] state] eq "success"}
+            assert {[dict get [get_migration_by_name 2 $jobname0] state] eq "success"}
+            assert {[dict get [get_migration_by_name 1 $jobname1] state] eq "success"}
+            assert {[dict get [get_migration_by_name 2 $jobname1] state] eq "success"}
+
+            # Cleanup for next test
+            assert_match "OK" [R 0 FLUSHDB SYNC]
+            assert_match "OK" [R 1 FLUSHDB SYNC]
+            assert_match "OK" [R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node2_id]
+            wait_for_migration 2 16383
+            assert_match "OK" [R 1 CLUSTER MIGRATESLOTS SLOTSRANGE 16382 16382 NODE $node2_id]
+            wait_for_migration 2 16382
+            R 0 CONFIG SET requirepass ""
+            R 1 CONFIG SET requirepass ""
+            R 2 CONFIG SET primaryauth ""
+        }
+    }
+
+    test "CLUSTER MIGRATESLOTS AUTH password is redacted in command log" {
+        ensure_slot_on_node 2 16383
+        ensure_slot_on_node 2 16382
+
+        # The commandlog entry is written synchronously when CLUSTER MIGRATESLOTS returns
+        # OK, before any async auth handshake with the target.  No requirepass on node 0
+        # means the async auth attempt will fail, which is fine — we only need the entry.
+        R 2 CONFIG SET commandlog-execution-slower-than 0
+        R 2 COMMANDLOG RESET slow
+        R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id AUTH authpwd
+        R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16382 16382 NODE $node0_id AUTH2 aclusr auth2pwd
+        set jobname0 [get_job_name 2 16383]
+        set jobname1 [get_job_name 2 16382]
+        R 2 CONFIG SET commandlog-execution-slower-than -1
+        set slowlog_resp [R 2 COMMANDLOG GET -1 slow]
+
+        # Flatten all logged command args into one searchable string
+        set log_text {}
+        foreach entry $slowlog_resp {
+            append log_text " " [join [lindex $entry 3] " "]
+        }
+
+        # Passwords (and AUTH2 username) must not appear verbatim
+        assert_no_match {*authpwd*} $log_text
+        assert_no_match {*aclusr*} $log_text
+        assert_no_match {*auth2pwd*} $log_text
+
+        # AUTH: password replaced with (redacted)
+        assert_match {*SLOTSRANGE 16383 16383 NODE * AUTH (redacted)*} $log_text
+
+        # AUTH2: username and password both replaced with (redacted)
+        assert_match {*SLOTSRANGE 16382 16382 NODE * AUTH2 (redacted) (redacted)*} $log_text
+
+        # Migrations fail as intended; wait for terminal state
+        wait_for_migration_field 2 $jobname0 state failed
+        wait_for_migration_field 2 $jobname1 state failed
     }
 
     test "Connection drop during import causes failure" {

@@ -773,17 +773,30 @@ struct COMMAND_ARG CLUSTER_MIGRATESLOTS_migration_group_range_Subargs[] = {
 {MAKE_ARG("end-slot",ARG_TYPE_INTEGER,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 };
 
+/* CLUSTER MIGRATESLOTS migration_group authentication auth2 argument table */
+struct COMMAND_ARG CLUSTER_MIGRATESLOTS_migration_group_authentication_auth2_Subargs[] = {
+{MAKE_ARG("username",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("password",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+};
+
+/* CLUSTER MIGRATESLOTS migration_group authentication argument table */
+struct COMMAND_ARG CLUSTER_MIGRATESLOTS_migration_group_authentication_Subargs[] = {
+{MAKE_ARG("auth",ARG_TYPE_STRING,-1,"AUTH",NULL,"9.1.0",CMD_ARG_NONE,0,NULL),.display_text="password"},
+{MAKE_ARG("auth2",ARG_TYPE_BLOCK,-1,"AUTH2",NULL,"9.1.0",CMD_ARG_NONE,2,NULL),.subargs=CLUSTER_MIGRATESLOTS_migration_group_authentication_auth2_Subargs},
+};
+
 /* CLUSTER MIGRATESLOTS migration_group argument table */
 struct COMMAND_ARG CLUSTER_MIGRATESLOTS_migration_group_Subargs[] = {
 {MAKE_ARG("slotsrange-token",ARG_TYPE_PURE_TOKEN,-1,"SLOTSRANGE",NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("range",ARG_TYPE_BLOCK,-1,NULL,NULL,NULL,CMD_ARG_MULTIPLE,2,NULL),.subargs=CLUSTER_MIGRATESLOTS_migration_group_range_Subargs},
 {MAKE_ARG("node-token",ARG_TYPE_PURE_TOKEN,-1,"NODE",NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("node-id",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("authentication",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_OPTIONAL,2,NULL),.subargs=CLUSTER_MIGRATESLOTS_migration_group_authentication_Subargs},
 };
 
 /* CLUSTER MIGRATESLOTS argument table */
 struct COMMAND_ARG CLUSTER_MIGRATESLOTS_Args[] = {
-{MAKE_ARG("migration-group",ARG_TYPE_BLOCK,-1,NULL,NULL,NULL,CMD_ARG_MULTIPLE,4,NULL),.subargs=CLUSTER_MIGRATESLOTS_migration_group_Subargs},
+{MAKE_ARG("migration-group",ARG_TYPE_BLOCK,-1,NULL,NULL,NULL,CMD_ARG_MULTIPLE,5,NULL),.subargs=CLUSTER_MIGRATESLOTS_migration_group_Subargs},
 };
 
 /********** CLUSTER MYID ********************/

@@ -33,6 +33,7 @@
  * SPDX-License-Identifier: BSD-3-Clause
  */
 
+#include "sds.h"
 #include "server.h"
 #include "cluster.h"
 #include "cluster_slot_stats.h"
@@ -43,6 +44,7 @@
 #include "cluster_migrateslots.h"
 
 #include <memory.h>
+#include <stddef.h>
 #include <sys/time.h>
 #include <unistd.h>
 #include <fcntl.h>
@@ -3089,17 +3091,17 @@ int sendCurrentOffsetToReplica(client *replica) {
     return C_OK;
 }
 
-sds replicationSendAuth(connection *conn) {
+sds replicationSendAuth(connection *conn, const char *user, size_t user_len, const char *pass, size_t pass_len) {
     char *args[] = {"AUTH", NULL, NULL};
     size_t lens[] = {4, 0, 0};
     int argc = 1;
-    if (server.primary_user) {
-        args[argc] = server.primary_user;
-        lens[argc] = strlen(server.primary_user);
+    if (user) {
+        args[argc] = (char *)user;
+        lens[argc] = user_len;
         argc++;
     }
-    args[argc] = server.primary_auth;
-    lens[argc] = sdslen(server.primary_auth);
+    args[argc] = (char *)pass;
+    lens[argc] = pass_len;
     argc++;
     return sendCommandArgv(conn, argc, args, lens);
 }
@@ -3120,7 +3122,9 @@ static int dualChannelReplHandleHandshake(connection *conn, sds *err) {
     dualChannelServerLog(LL_DEBUG, "Received first reply from primary using rdb connection.");
     /* AUTH with the primary if required. */
     if (server.primary_auth) {
-        *err = replicationSendAuth(conn);
+        const char *user = server.primary_user;
+        size_t user_len = user ? strlen(user) : 0;
+        *err = replicationSendAuth(conn, user, user_len, server.primary_auth, sdslen(server.primary_auth));
         if (*err) {
             dualChannelServerLog(LL_WARNING, "Sending command to primary in dual channel replication handshake: %s", *err);
             return C_ERR;
@@ -3902,7 +3906,9 @@ int syncWithPrimaryHandleSendHandshakeState(connection *conn) {
     sds err;
     /* AUTH with the primary if required. */
     if (server.primary_auth) {
-        err = replicationSendAuth(conn);
+        const char *user = server.primary_user;
+        size_t user_len = user ? strlen(user) : 0;
+        err = replicationSendAuth(conn, user, user_len, server.primary_auth, sdslen(server.primary_auth));
         if (err) goto err;
     }
 

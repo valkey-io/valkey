@@ -3352,7 +3352,7 @@ void addRdbReplicaToPsyncWait(client *replica);
 void initClientReplicationData(client *c);
 void freeClientReplicationData(client *c);
 void replicaReceiveRDBFromPrimaryToDisk(connection *conn, int is_dual_channel);
-sds replicationSendAuth(connection *conn);
+sds replicationSendAuth(connection *conn, const char *user, size_t user_len, const char *pass, size_t pass_len);
 sds receiveSynchronousResponse(connection *conn);
 ConnectionType *connTypeOfReplication(void);
 robj *generateSelectCommand(int dictid);

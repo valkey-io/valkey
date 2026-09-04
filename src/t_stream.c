@@ -64,7 +64,7 @@ size_t streamReplyWithRangeFromConsumerPEL(client *c,
                                            streamConsumer *consumer);
 int streamParseStrictIDOrReply(client *c, robj *o, streamID *id, uint64_t missing_seq, int *seq_given);
 int streamParseIDOrReply(client *c, robj *o, streamID *id, uint64_t missing_seq);
-
+static long long streamEstimateDistance(stream *s, streamCG *cg, streamID *next_id);
 /* -----------------------------------------------------------------------
  * Low level stream encoding: a radix tree of listpacks.
  * ----------------------------------------------------------------------- */
@@ -1421,11 +1421,6 @@ int streamIDEqZero(streamID *id) {
 int streamRangeHasTombstones(stream *s, streamID *start, streamID *end) {
     streamID start_id, end_id;
 
-    if (!s->length || streamIDEqZero(&s->max_deleted_entry_id)) {
-        /* The stream is empty or has no tombstones. */
-        return 0;
-    }
-
     if (start) {
         start_id = *start;
     } else {
@@ -1450,37 +1445,57 @@ int streamRangeHasTombstones(stream *s, streamID *start, streamID *end) {
     return 0;
 }
 
-/* Replies with a consumer group's current lag, that is the number of messages
- * in the stream that are yet to be delivered. In case that the lag isn't
- * available due to fragmentation, the reply to the client is a null. */
-void streamReplyWithCGLag(client *c, stream *s, streamCG *cg) {
+/* Replies with a consumer group's current lag, which is the number of messages in the stream
+ * that are yet to be delivered. Additionally, it includes an entries-read field that indicates
+ * the number of messages currently read. In case that the lag or entries-read isn't available
+ * due to fragmentation, the reply to the client is null. */
+void streamReplyWithCGLagAndEntriesRead(client *c, stream *s, streamCG *cg) {
     int valid = 0;
     long long lag = 0;
 
-    if (!s->entries_added) {
-        /* The lag of a newly-initialized stream is 0. */
-        lag = 0;
+    /* Attempt to retrieve the group's last ID logical read counter. */
+    long long entries_read = streamEstimateDistance(s, cg, &cg->last_id);
+    if (entries_read != SCG_INVALID_ENTRIES_READ) {
+        /* A valid counter was obtained. */
+        lag = (long long)s->entries_added - entries_read;
         valid = 1;
-    } else if (cg->entries_read != SCG_INVALID_ENTRIES_READ && !streamRangeHasTombstones(s, &cg->last_id, NULL)) {
-        /* No fragmentation ahead means that the group's logical reads counter
-         * is valid for performing the lag calculation. */
-        lag = (long long)s->entries_added - cg->entries_read;
-        valid = 1;
-    } else {
-        /* Attempt to retrieve the group's last ID logical read counter. */
-        long long entries_read = streamEstimateDistanceFromFirstEverEntry(s, &cg->last_id);
-        if (entries_read != SCG_INVALID_ENTRIES_READ) {
-            /* A valid counter was obtained. */
-            lag = (long long)s->entries_added - entries_read;
-            valid = 1;
-        }
     }
 
     if (valid) {
+        /* Read counter of the last delivered ID */
+        addReplyBulkCString(c, "entries-read");
+        addReplyLongLong(c, entries_read);
+        /* Group lag */
+        addReplyBulkCString(c, "lag");
         addReplyLongLong(c, lag);
     } else {
+        addReplyBulkCString(c, "entries-read");
+        addReplyNull(c);
+        addReplyBulkCString(c, "lag");
         addReplyNull(c);
     }
+}
+
+/* The function returns the logical read counter corresponding to next_id
+ * based on the information of the group.
+ */
+static long long streamEstimateDistance(stream *s, streamCG *cg, streamID *next_id) {
+    /* If the values of next_id and last_id are the same,
+     * it is considered that only the current value needs to be returned,
+     * otherwise it is considered to be the calculated value.
+     * This is used to align with the streamEstimateDistanceFromFirstEverEntry method.
+     */
+    if (streamCompareID(next_id, &s->last_id) == 0) {
+        return s->entries_added;
+    }
+    long long step = streamCompareID(&cg->last_id, next_id) == 0 ? 0 : 1;
+    if (cg->entries_read != SCG_INVALID_ENTRIES_READ && !streamRangeHasTombstones(s, &cg->last_id, NULL)) {
+        /* A valid counter and no future tombstones mean we can
+         * increment the read counter to keep tracking the group's
+         * progress. */
+        return cg->entries_read + step;
+    }
+    return streamEstimateDistanceFromFirstEverEntry(s, next_id);
 }
 
 /* This function returns a value that is the ID's logical read counter, or its
@@ -1515,11 +1530,6 @@ long long streamEstimateDistanceFromFirstEverEntry(stream *s, streamID *id) {
      * it can set to the current added_entries value. */
     if (!s->length && streamCompareID(id, &s->last_id) < 1) {
         return s->entries_added;
-    }
-
-    if (!streamIDEqZero(id) && streamCompareID(id, &s->max_deleted_entry_id) < 0) {
-        /* The ID is before the last tombstone, so the counter is unknown. */
-        return SCG_INVALID_ENTRIES_READ;
     }
 
     int cmp_last = streamCompareID(id, &s->last_id);
@@ -1712,16 +1722,7 @@ size_t streamReplyWithRange(client *c,
     while (streamIteratorGetID(&si, &id, &numfields)) {
         /* Update the group last_id if needed. */
         if (group && streamCompareID(&id, &group->last_id) > 0) {
-            if (group->entries_read != SCG_INVALID_ENTRIES_READ &&
-                streamCompareID(&group->last_id, &s->first_id) >= 0 &&
-                !streamRangeHasTombstones(s, &group->last_id, NULL)) {
-                /* A valid counter and no tombstones in the group's last-delivered-id and the stream's last-generated-id,
-                 * we can increment the read counter to keep tracking the group's progress. */
-                group->entries_read++;
-            } else if (s->entries_added) {
-                /* The group's counter may be invalid, so we try to obtain it. */
-                group->entries_read = streamEstimateDistanceFromFirstEverEntry(s, &id);
-            }
+            group->entries_read = streamEstimateDistance(s, group, &id);
             group->last_id = id;
             /* In the past, we would only set it when NOACK was specified. And in
              * #9127, XCLAIM did not propagate entries_read in ACK, which would
@@ -3771,16 +3772,7 @@ void xinfoReplyWithStreamInfo(client *c, stream *s) {
                 addReplyStreamID(c, &cg->last_id);
 
                 /* Read counter of the last delivered ID */
-                addReplyBulkCString(c, "entries-read");
-                if (cg->entries_read != SCG_INVALID_ENTRIES_READ) {
-                    addReplyLongLong(c, cg->entries_read);
-                } else {
-                    addReplyNull(c);
-                }
-
-                /* Group lag */
-                addReplyBulkCString(c, "lag");
-                streamReplyWithCGLag(c, s, cg);
+                streamReplyWithCGLagAndEntriesRead(c, s, cg);
 
                 /* Group PEL count */
                 addReplyBulkCString(c, "pel-count");
@@ -3967,14 +3959,7 @@ void xinfoCommand(client *c) {
             addReplyLongLong(c, raxSize(cg->pel));
             addReplyBulkCString(c, "last-delivered-id");
             addReplyStreamID(c, &cg->last_id);
-            addReplyBulkCString(c, "entries-read");
-            if (cg->entries_read != SCG_INVALID_ENTRIES_READ) {
-                addReplyLongLong(c, cg->entries_read);
-            } else {
-                addReplyNull(c);
-            }
-            addReplyBulkCString(c, "lag");
-            streamReplyWithCGLag(c, s, cg);
+            streamReplyWithCGLagAndEntriesRead(c, s, cg);
         }
         raxStop(&ri);
     } else if (!strcasecmp(opt, "STREAM")) {

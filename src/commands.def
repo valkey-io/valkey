@@ -11920,18 +11920,20 @@ struct COMMAND_ARG SUBSTR_Args[] = {
 
 #ifndef SKIP_CMD_KEY_SPECS_TABLE
 /* EXEC key specs */
-#define EXEC_Keyspecs NULL
+keySpec EXEC_Keyspecs[1] = {
+{"Condition keys are determined by EXEC condition tokens.",CMD_KEY_RO|CMD_KEY_ACCESS,KSPEC_BS_UNKNOWN,{{0}},KSPEC_FK_UNKNOWN,{{0}}}
+};
 #endif
 
 /* EXEC condition ifeq argument table */
 struct COMMAND_ARG EXEC_condition_ifeq_Subargs[] = {
-{MAKE_ARG("key",ARG_TYPE_KEY,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("value",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 };
 
 /* EXEC condition ifne argument table */
 struct COMMAND_ARG EXEC_condition_ifne_Subargs[] = {
-{MAKE_ARG("key",ARG_TYPE_KEY,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("value",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 };
 
@@ -11939,8 +11941,8 @@ struct COMMAND_ARG EXEC_condition_ifne_Subargs[] = {
 struct COMMAND_ARG EXEC_condition_Subargs[] = {
 {MAKE_ARG("ifeq",ARG_TYPE_BLOCK,-1,"IFEQ",NULL,NULL,CMD_ARG_NONE,2,NULL),.subargs=EXEC_condition_ifeq_Subargs},
 {MAKE_ARG("ifne",ARG_TYPE_BLOCK,-1,"IFNE",NULL,NULL,CMD_ARG_NONE,2,NULL),.subargs=EXEC_condition_ifne_Subargs},
-{MAKE_ARG("nx",ARG_TYPE_KEY,-1,"NX",NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("xx",ARG_TYPE_KEY,-1,"XX",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("nonexisting-key",ARG_TYPE_KEY,0,"NX",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("existing-key",ARG_TYPE_KEY,0,"XX",NULL,NULL,CMD_ARG_NONE,0,NULL)},
 };
 
 /* EXEC argument table */
@@ -12280,7 +12282,7 @@ struct COMMAND_STRUCT serverCommandTable[] = {
 {MAKE_CMD("substr","Returns a substring from a string value.","O(N) where N is the length of the returned string. The complexity is ultimately determined by the returned length, but because creating a substring from an existing string is very cheap, it can be considered O(1) for small strings.","1.0.0",CMD_DOC_NONE,NULL,NULL,"string",COMMAND_GROUP_STRING,SUBSTR_History,0,SUBSTR_Tips,0,getrangeCommand,4,CMD_READONLY,ACL_CATEGORY_READ|ACL_CATEGORY_SLOW|ACL_CATEGORY_STRING,NULL,SUBSTR_Keyspecs,1,NULL,3),.args=SUBSTR_Args},
 /* transactions */
 {MAKE_CMD("discard","Discards a transaction.","O(N), when N is the number of queued commands","2.0.0",CMD_DOC_NONE,NULL,NULL,"transactions",COMMAND_GROUP_TRANSACTIONS,DISCARD_History,0,DISCARD_Tips,0,discardCommand,1,CMD_NOSCRIPT|CMD_LOADING|CMD_STALE|CMD_FAST|CMD_ALLOW_BUSY,ACL_CATEGORY_FAST|ACL_CATEGORY_TRANSACTION,NULL,DISCARD_Keyspecs,0,NULL,0)},
-{MAKE_CMD("exec","Executes all commands in a transaction if conditions match.","O(N) for N conditions, plus the complexity of commands in the transaction","1.2.0",CMD_DOC_NONE,NULL,NULL,"transactions",COMMAND_GROUP_TRANSACTIONS,EXEC_History,0,EXEC_Tips,0,execCommand,-1,CMD_NOSCRIPT|CMD_LOADING|CMD_STALE,ACL_CATEGORY_SLOW|ACL_CATEGORY_TRANSACTION,NULL,EXEC_Keyspecs,0,execGetKeys,1),.args=EXEC_Args},
+{MAKE_CMD("exec","Executes all commands in a transaction if conditions match.","O(N) for N conditions, plus the complexity of commands in the transaction","1.2.0",CMD_DOC_NONE,NULL,NULL,"transactions",COMMAND_GROUP_TRANSACTIONS,EXEC_History,0,EXEC_Tips,0,execCommand,-1,CMD_NOSCRIPT|CMD_LOADING|CMD_NO_MANDATORY_KEYS|CMD_STALE,ACL_CATEGORY_SLOW|ACL_CATEGORY_TRANSACTION,NULL,EXEC_Keyspecs,1,execGetKeys,1),.args=EXEC_Args},
 {MAKE_CMD("multi","Starts a transaction.","O(1)","1.2.0",CMD_DOC_NONE,NULL,NULL,"transactions",COMMAND_GROUP_TRANSACTIONS,MULTI_History,0,MULTI_Tips,0,multiCommand,1,CMD_NOSCRIPT|CMD_LOADING|CMD_STALE|CMD_FAST|CMD_NO_MULTI|CMD_ALLOW_BUSY,ACL_CATEGORY_FAST|ACL_CATEGORY_TRANSACTION,NULL,MULTI_Keyspecs,0,NULL,0)},
 {MAKE_CMD("unwatch","Forgets about watched keys of a transaction.","O(1)","2.2.0",CMD_DOC_NONE,NULL,NULL,"transactions",COMMAND_GROUP_TRANSACTIONS,UNWATCH_History,0,UNWATCH_Tips,0,unwatchCommand,1,CMD_NOSCRIPT|CMD_LOADING|CMD_STALE|CMD_FAST|CMD_ALLOW_BUSY,ACL_CATEGORY_FAST|ACL_CATEGORY_TRANSACTION,NULL,UNWATCH_Keyspecs,0,NULL,0)},
 {MAKE_CMD("watch","Monitors changes to keys to determine the execution of a transaction.","O(1) for every key.","2.2.0",CMD_DOC_NONE,NULL,NULL,"transactions",COMMAND_GROUP_TRANSACTIONS,WATCH_History,0,WATCH_Tips,0,watchCommand,-2,CMD_NOSCRIPT|CMD_LOADING|CMD_STALE|CMD_FAST|CMD_NO_MULTI|CMD_ALLOW_BUSY,ACL_CATEGORY_FAST|ACL_CATEGORY_TRANSACTION,NULL,WATCH_Keyspecs,1,NULL,1),.args=WATCH_Args},

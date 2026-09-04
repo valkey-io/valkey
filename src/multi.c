@@ -259,7 +259,7 @@ static int checkExecConditions(client *c) {
         execCondition condition;
 
         if (parseExecCondition(c->argv, c->argc, &index, &condition) != C_OK) {
-            addReplyErrorObject(c, shared.syntaxerr);
+            execCommandAbort(c, "invalid check condition syntax");
             return -1;
         }
     }
@@ -277,14 +277,22 @@ static int checkExecConditions(client *c) {
         if (condition == EXEC_CONDITION_IFEQ || condition == EXEC_CONDITION_IFNE) {
             value = c->argv[condition_index + 2];
         }
-        o = lookupKeyReadWithFlags(c->db, key, LOOKUP_NOTOUCH | LOOKUP_NOEXPIRE);
+        o = lookupKeyReadWithFlags(c->db, key, LOOKUP_NOEFFECTS);
 
         switch (condition) {
         case EXEC_CONDITION_IFEQ:
-            matches = o && o->type == OBJ_STRING && equalStringObjects(o, value);
+            if (o && checkType(c, o, OBJ_STRING)) {
+                discardTransaction(c);
+                return -1;
+            }
+            matches = o && equalStringObjects(o, value);
             break;
         case EXEC_CONDITION_IFNE:
-            matches = !o || (o->type == OBJ_STRING && !equalStringObjects(o, value));
+            if (o && checkType(c, o, OBJ_STRING)) {
+                discardTransaction(c);
+                return -1;
+            }
+            matches = !o || !equalStringObjects(o, value);
             break;
         case EXEC_CONDITION_NX: matches = !o; break;
         case EXEC_CONDITION_XX: matches = o != NULL; break;
@@ -307,9 +315,6 @@ void execCommand(client *c) {
         return;
     }
 
-    int conditions_match = checkExecConditions(c);
-    if (conditions_match == -1) return;
-
     /* EXEC with expired watched key is disallowed*/
     if (isWatchedKeyExpired(c)) {
         c->flag.dirty_cas = 1;
@@ -321,13 +326,22 @@ void execCommand(client *c) {
      * A failed EXEC in the first case returns a multi bulk nil object
      * (technically it is not an error but a special behavior), while
      * in the second an EXECABORT error is returned. */
-    if (!conditions_match || c->flag.dirty_cas || c->flag.dirty_exec) {
+    if (c->flag.dirty_cas || c->flag.dirty_exec) {
         if (c->flag.dirty_exec) {
             addReplyErrorObject(c, shared.execaborterr);
         } else {
             addReply(c, shared.nullarray[c->resp]);
         }
 
+        discardTransaction(c);
+        return;
+    }
+
+    int conditions_match = checkExecConditions(c);
+    if (conditions_match == -1) return;
+
+    if (!conditions_match) {
+        addReply(c, shared.nullarray[c->resp]);
         discardTransaction(c);
         return;
     }

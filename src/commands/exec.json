@@ -10,11 +10,27 @@
         "command_flags": [
             "NOSCRIPT",
             "LOADING",
+            "NO_MANDATORY_KEYS",
             "STALE"
         ],
         "acl_categories": [
             "SLOW",
             "TRANSACTION"
+        ],
+        "key_specs": [
+            {
+                "notes": "Condition keys are determined by EXEC condition tokens.",
+                "flags": [
+                    "RO",
+                    "ACCESS"
+                ],
+                "begin_search": {
+                    "unknown": null
+                },
+                "find_keys": {
+                    "unknown": null
+                }
+            }
         ],
         "arguments": [
             {
@@ -30,7 +46,8 @@
                         "arguments": [
                             {
                                 "name": "key",
-                                "type": "key"
+                                "type": "key",
+                                "key_spec_index": 0
                             },
                             {
                                 "name": "value",
@@ -45,7 +62,8 @@
                         "arguments": [
                             {
                                 "name": "key",
-                                "type": "key"
+                                "type": "key",
+                                "key_spec_index": 0
                             },
                             {
                                 "name": "value",
@@ -55,13 +73,15 @@
                     },
                     {
                         "token": "NX",
-                        "name": "nx",
-                        "type": "key"
+                        "name": "nonexisting-key",
+                        "type": "key",
+                        "key_spec_index": 0
                     },
                     {
                         "token": "XX",
-                        "name": "xx",
-                        "type": "key"
+                        "name": "existing-key",
+                        "type": "key",
+                        "key_spec_index": 0
                     }
                 ]
             }

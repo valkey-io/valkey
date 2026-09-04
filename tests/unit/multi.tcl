@@ -41,8 +41,12 @@ start_server {tags {"multi"}} {
         r set destination{t} not-committed
         set nx_failed [r exec nx condition{t}]
 
-        list $committed $ifeq_failed $ifne_failed $nx_failed [r get destination{t}]
-    } {OK {} {} {} committed}
+        r multi
+        r set destination{t} not-committed
+        set xx_failed [r exec xx missing{t}]
+
+        list $committed $ifeq_failed $ifne_failed $nx_failed $xx_failed [r get destination{t}]
+    } {OK {} {} {} {} committed}
 
     test {EXEC IFNE matches a missing key} {
         r del condition{t} destination{t}
@@ -51,26 +55,47 @@ start_server {tags {"multi"}} {
         list [r exec ifne condition{t} value] [r get destination{t}]
     } {OK committed}
 
-    test {EXEC string comparisons do not match non-string keys} {
+    test {EXEC string comparisons return WRONGTYPE for non-string keys} {
         r del condition{t} destination{t}
         r lpush condition{t} value
         r multi
         r set destination{t} not-committed
-        set ifeq_result [r exec ifeq condition{t} value]
+        assert_error {WRONGTYPE*} {r exec ifeq condition{t} value}
         r multi
         r set destination{t} not-committed
-        set ifne_result [r exec ifne condition{t} value]
-        list $ifeq_result $ifne_result [r get destination{t}]
-    } {{} {} {}}
+        assert_error {WRONGTYPE*} {r exec ifne condition{t} value}
+        assert_equal {} [r get destination{t}]
+    }
 
-    test {EXEC condition syntax errors leave the transaction open} {
+    test {EXEC condition syntax errors abort the transaction} {
         r del condition{t} destination{t}
         r set condition{t} value
         r multi
         r set destination{t} committed
-        assert_error {ERR syntax error} {r exec ifeq condition{t}}
+        assert_error {EXECABORT*invalid check condition syntax*} {r exec ifeq condition{t}}
+        list [r ping] [r get destination{t}]
+    } {PONG {}}
+
+    test {EXEC skips conditions when WATCH already aborted the transaction} {
+        r del watched{t} condition{t} destination{t}
+        r set watched{t} value
+        r lpush condition{t} value
+        r watch watched{t}
+        r set watched{t} changed
+        r multi
+        r set destination{t} should-not-execute
         list [r exec ifeq condition{t} value] [r get destination{t}]
-    } {OK committed}
+    } {{} {}}
+
+    test {EXEC skips conditions when queueing already aborted the transaction} {
+        r del condition{t} destination{t}
+        r lpush condition{t} value
+        r multi
+        catch {r non-existing-command}
+        r set destination{t} should-not-execute
+        assert_error {EXECABORT*} {r exec ifeq condition{t} value}
+        assert_equal {} [r get destination{t}]
+    }
 
     test {DISCARD} {
         r del mylist

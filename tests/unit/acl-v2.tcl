@@ -134,9 +134,21 @@ start_server {tags {"acl external:skip"}} {
 
         $r2 multi
         $r2 lpush writelist value
-        assert_error "ERR syntax error" {$r2 exec ifeq writecondition other invalid}
-        $r2 discard
+        assert_error "EXECABORT*invalid check condition syntax*" {$r2 exec ifeq writecondition other invalid}
         assert_equal 0 [r llen writelist]
+    }
+
+    test {EXEC condition keys check permissions on the active database} {
+        r ACL SETUSER exec-db-selector-user on nopass (db=1 +@all ~*) (db=0 +@all ~public*)
+        r select 0
+        r set secret secret-value
+        $r2 auth exec-db-selector-user password
+        $r2 select 0
+        $r2 multi
+        $r2 select 1
+        catch {$r2 exec ifeq secret guessed-value} err
+        assert_match "*NOPERM*key*" $err
+        r del secret
     }
 
     test {Test separate read and write permissions} {

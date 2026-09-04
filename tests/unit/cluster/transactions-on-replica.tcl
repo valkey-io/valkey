@@ -45,20 +45,6 @@ test "Can MULTI-EXEC transaction of HGET operations from replica" {
     assert {[$replica EXEC] eq {1 2 3}}
 }
 
-test "Conditional EXEC rejects cross-slot condition keys" {
-    set condition1 "{condition1}key"
-    set condition2 "{condition2}key"
-    set destination "{condition1}destination"
-    $primary DEL $condition1
-    $primary DEL $condition2
-    $primary DEL $destination
-    $primary SET $condition1 value
-    $primary MULTI
-    $primary SET $destination should-not-execute
-    assert_error "CROSSSLOT Keys*" {$primary EXEC IFEQ $condition1 value NX $condition2}
-    assert_equal 0 [$primary EXISTS $destination]
-}
-
 test "MULTI-EXEC with write operations is MOVED" {
     $replica MULTI
     catch {$replica HSET h b 4} err

@@ -521,6 +521,7 @@ ENGINE_SERVER_OBJ = \
     io_threads.o \
     kvstore.o \
     latency.o \
+    service_time.o \
     lazyfree.o \
     listpack.o \
     localtime.o \

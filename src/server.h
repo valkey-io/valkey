@@ -1339,6 +1339,12 @@ typedef struct LastWrittenBuf {
 /* Forward declaration of slotMigrationJob */
 typedef struct slotMigrationJob slotMigrationJob;
 
+/* Entry for tracking per-command service time in a pipelined batch. */
+typedef struct serviceTimeCmdEntry {
+    struct serverCommand *cmd;
+    int count;
+} serviceTimeCmdEntry;
+
 typedef struct client {
     /* Basic client information and connection. */
     uint64_t id; /* Client incremental unique ID. */
@@ -1373,15 +1379,21 @@ typedef struct client {
     multiState *mstate;               /* MULTI/EXEC state, lazily initialized when first needed */
     blockingState *bstate;            /* Blocking state, lazily initialized when first needed */
     /* Output buffer and reply handling */
-    long duration;                       /* Current command duration. Used for measuring latency of blocking/non-blocking cmds */
-    char *buf;                           /* Output buffer */
-    size_t buf_usable_size;              /* Usable size of buffer. */
-    list *reply;                         /* List of reply objects to send to the client. */
-    listNode *io_last_reply_block;       /* Last client reply block when sent to IO thread */
-    size_t io_last_bufpos;               /* The client's bufpos at the time it was sent to the IO thread */
-    LastWrittenBuf io_last_written;      /* Track state for last written buffer */
-    unsigned long long reply_bytes;      /* Tot bytes of objects in reply list. */
-    listNode clients_pending_write_node; /* list node in clients_pending_write or in clients_pending_io_write list */
+    long duration; /* Current command duration. Used for measuring latency of blocking/non-blocking cmds */
+    /* Service time latency tracking */
+    monotime service_time_start;            /* Event-loop wake time when this client's current cmd batch started. */
+    serviceTimeCmdEntry service_time_entry; /* First distinct command (covers non-pipelined case). */
+#define SERVICE_TIME_PIPELINE_CAP 3
+    serviceTimeCmdEntry service_time_pipeline[SERVICE_TIME_PIPELINE_CAP]; /* 2nd-4th distinct commands. */
+    int service_time_pipeline_count;                                      /* Number of pipeline slots in use. */
+    char *buf;                                                            /* Output buffer */
+    size_t buf_usable_size;                                               /* Usable size of buffer. */
+    list *reply;                                                          /* List of reply objects to send to the client. */
+    listNode *io_last_reply_block;                                        /* Last client reply block when sent to IO thread */
+    size_t io_last_bufpos;                                                /* The client's bufpos at the time it was sent to the IO thread */
+    LastWrittenBuf io_last_written;                                       /* Track state for last written buffer */
+    unsigned long long reply_bytes;                                       /* Tot bytes of objects in reply list. */
+    listNode clients_pending_write_node;                                  /* list node in clients_pending_write or in clients_pending_io_write list */
     size_t bufpos;
     payloadHeader *last_header; /* Pointer to the last header in a buffer when using copy avoidance */
     int original_argc;          /* Num of arguments of original command if arguments were rewritten. */
@@ -2048,6 +2060,7 @@ struct valkeyServer {
     int latency_tracking_enabled;              /* 1 if extended latency tracking is enabled, 0 otherwise. */
     double *latency_tracking_info_percentiles; /* Extended latency tracking info output percentile list configuration. */
     int latency_tracking_info_percentiles_len;
+    int service_time_tracking_enabled;        /* 1 if service time latency tracking is enabled. */
     unsigned int max_new_tls_conns_per_cycle; /* The maximum number of tls connections that will be accepted during each
                                                  invocation of the event loop. */
     unsigned int max_new_conns_per_cycle;     /* The maximum number of tcp connections that will be accepted during each
@@ -2798,7 +2811,9 @@ struct serverCommand {
     sds fullname;     /* Includes parent name if any: "parentcmd|childcmd". Unchanged if command is renamed. */
     sds current_name; /* Same as fullname, becomes a separate string if command is renamed. */
     struct hdr_histogram
-        *latency_histogram;        /* Points to the command latency command histogram (unit of time nanosecond). */
+        *latency_histogram; /* Points to the command latency command histogram (unit of time nanosecond). */
+    struct hdr_histogram
+        *service_time_histogram;   /* Per-command service time histogram (event-loop wake to response write, nanosecond). */
     keySpec legacy_range_key_spec; /* The legacy (first,last,step) key spec is
                                     * still maintained (if applicable) so that
                                     * we can still support the reply format of

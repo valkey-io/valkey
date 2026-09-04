@@ -527,22 +527,26 @@ void fillCommandCDF(client *c, struct hdr_histogram *histogram) {
     setDeferredMapLen(c, replylen, samples);
 }
 
+static struct hdr_histogram *getCommandHistogram(struct serverCommand *cmd, int use_service_time) {
+    return use_service_time ? cmd->service_time_histogram : cmd->latency_histogram;
+}
+
 /* latencyCommand() helper to produce for all commands,
  * a per command cumulative distribution of latencies. */
-void latencyAllCommandsFillCDF(client *c, hashtable *commands, int *command_with_data) {
+void latencyAllCommandsFillCDF(client *c, hashtable *commands, int *command_with_data, int use_service_time) {
     hashtableIterator iter;
     hashtableInitIterator(&iter, commands, HASHTABLE_ITER_SAFE);
     void *next;
     while (hashtableNext(&iter, &next)) {
         struct serverCommand *cmd = next;
-        if (cmd->latency_histogram) {
+        struct hdr_histogram *h = getCommandHistogram(cmd, use_service_time);
+        if (h) {
             addReplyBulkCBuffer(c, cmd->fullname, sdslen(cmd->fullname));
-            fillCommandCDF(c, cmd->latency_histogram);
+            fillCommandCDF(c, h);
             (*command_with_data)++;
         }
-
         if (cmd->subcommands) {
-            latencyAllCommandsFillCDF(c, cmd->subcommands_ht, command_with_data);
+            latencyAllCommandsFillCDF(c, cmd->subcommands_ht, command_with_data, use_service_time);
         }
     }
     hashtableCleanupIterator(&iter);
@@ -550,19 +554,17 @@ void latencyAllCommandsFillCDF(client *c, hashtable *commands, int *command_with
 
 /* latencyCommand() helper to produce for a specific command set,
  * a per command cumulative distribution of latencies. */
-void latencySpecificCommandsFillCDF(client *c) {
+void latencySpecificCommandsFillCDF(client *c, int argc_end, int use_service_time) {
     void *replylen = addReplyDeferredLen(c);
     int command_with_data = 0;
-    for (int j = 2; j < c->argc; j++) {
+    for (int j = 2; j < argc_end; j++) {
         struct serverCommand *cmd = lookupCommandBySds(objectGetVal(c->argv[j]));
-        /* If the command does not exist we skip the reply */
-        if (cmd == NULL) {
-            continue;
-        }
+        if (cmd == NULL) continue;
 
-        if (cmd->latency_histogram) {
+        struct hdr_histogram *h = getCommandHistogram(cmd, use_service_time);
+        if (h) {
             addReplyBulkCBuffer(c, cmd->fullname, sdslen(cmd->fullname));
-            fillCommandCDF(c, cmd->latency_histogram);
+            fillCommandCDF(c, h);
             command_with_data++;
         }
 
@@ -572,9 +574,10 @@ void latencySpecificCommandsFillCDF(client *c) {
             void *next;
             while (hashtableNext(&iter, &next)) {
                 struct serverCommand *sub = next;
-                if (sub->latency_histogram) {
+                h = getCommandHistogram(sub, use_service_time);
+                if (h) {
                     addReplyBulkCBuffer(c, sub->fullname, sdslen(sub->fullname));
-                    fillCommandCDF(c, sub->latency_histogram);
+                    fillCommandCDF(c, h);
                     command_with_data++;
                 }
             }
@@ -724,14 +727,20 @@ void latencyCommand(client *c) {
             addReplyLongLong(c, resets);
         }
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "histogram") && c->argc >= 2) {
-        /* LATENCY HISTOGRAM*/
-        if (c->argc == 2) {
+        /* LATENCY HISTOGRAM [command ...] [SERVICE] */
+        int use_service_time = 0;
+        int argc_end = c->argc;
+        if (c->argc >= 3 && !strcasecmp(objectGetVal(c->argv[c->argc - 1]), "service")) {
+            use_service_time = 1;
+            argc_end = c->argc - 1;
+        }
+        if (argc_end == 2) {
             int command_with_data = 0;
             void *replylen = addReplyDeferredLen(c);
-            latencyAllCommandsFillCDF(c, server.commands, &command_with_data);
+            latencyAllCommandsFillCDF(c, server.commands, &command_with_data, use_service_time);
             setDeferredMapLen(c, replylen, command_with_data);
         } else {
-            latencySpecificCommandsFillCDF(c);
+            latencySpecificCommandsFillCDF(c, argc_end, use_service_time);
         }
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "help") && c->argc == 2) {
         const char *help[] = {
@@ -746,9 +755,10 @@ void latencyCommand(client *c) {
             "RESET [<event> ...]",
             "    Reset latency data of one or more <event> classes.",
             "    (default: reset all data for all event classes)",
-            "HISTOGRAM [COMMAND ...]",
+            "HISTOGRAM [COMMAND ...] [SERVICE]",
             "    Return a cumulative distribution of latencies in the format of a histogram for the specified command names.",
             "    If no commands are specified then all histograms are replied.",
+            "    Append SERVICE to get service time histograms instead of processing time.",
             NULL,
         };
         addReplyHelp(c, help);

@@ -31,6 +31,7 @@
 #include "cluster.h"
 #include "cluster_slot_stats.h"
 #include "cluster_migrateslots.h"
+#include "service_time.h"
 #include "script.h"
 #include "intset.h"
 #include "sds.h"
@@ -376,6 +377,10 @@ client *createClient(connection *conn) {
     c->slot = -1;
     c->ctime = c->last_interaction = server.unixtime;
     c->duration = 0;
+    c->service_time_start = 0;
+    c->service_time_entry.cmd = NULL;
+    c->service_time_entry.count = 0;
+    c->service_time_pipeline_count = 0;
     clientSetDefaultAuth(c);
     c->slot_migration_job = NULL;
     c->reply = listCreate();
@@ -895,6 +900,7 @@ void afterErrorReply(client *c, const char *s, size_t len, int flags) {
     if (!(flags & ERR_REPLY_FLAG_NO_STATS_UPDATE)) {
         /* Increment the global error counter */
         server.stat_total_error_replies++;
+        serviceTime_reset(c);
         /* Increment the error stats
          * If the string already starts with "-..." then the error prefix
          * is provided by the caller (we limit the search to 32 chars). Otherwise, we use "-ERR". */
@@ -3106,6 +3112,7 @@ int postWriteToClient(client *c) {
     server.stat_total_writes_processed++;
     if (getClientType(c) != CLIENT_TYPE_REPLICA) {
         _postWriteToClient(c);
+        serviceTime_recordLatencies(c);
     } else {
         postWriteToReplica(c);
     }
@@ -3423,6 +3430,8 @@ int handleClientsWithPendingWrites(void) {
 void resetClient(client *c) {
     serverCommandProc *prevcmd = c->cmd ? c->cmd->proc : NULL;
     serverCommandProc *prevParentCmd = c->cmd && c->cmd->parent ? c->cmd->parent->proc : NULL;
+
+    serviceTime_trackCmd(c);
 
     freeClientArgv(c);
     freeClientOriginalArgv(c);

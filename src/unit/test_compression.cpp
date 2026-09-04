@@ -160,7 +160,7 @@ TEST(CompressionTest, streamCompressorOutputBound) {
     for (size_t i = 0; i < sizeof(input_sizes) / sizeof(input_sizes[0]); i++) {
         for (size_t j = 0; j < sizeof(flush_modes) / sizeof(flush_modes[0]); j++) {
             streamCompressor compressor;
-            ASSERT_EQ(streamCompressorInit(&compressor, ALGO_LZ4, 0, false), C_OK);
+            ASSERT_EQ(streamCompressorInit(&compressor, ALGO_LZ4, 0, 0), C_OK);
             size_t bound = streamCompressorOutputBound(&compressor, input_sizes[i]);
             uint8_t *output = (uint8_t *)zmalloc(bound);
 
@@ -484,7 +484,8 @@ static int encodeRoundTripPayload(testCompressionLayer layer,
 
     if (layer == TEST_COMPRESSION_LAYER_CODEC) {
         streamCompressor compressor;
-        if (streamCompressorInit(&compressor, ALGO_LZ4, 0, true) == C_ERR) return C_ERR;
+        if (streamCompressorInit(&compressor, ALGO_LZ4, 0, STREAM_CHECKSUM_BLOCK | STREAM_CHECKSUM_CONTENT) == C_ERR)
+            return C_ERR;
 
         size_t bound = streamCompressorOutputBound(&compressor, payload_len);
         sds output = sdsMakeRoomFor(sdsempty(), bound);
@@ -1339,8 +1340,7 @@ static void fillIncompressible(unsigned char *buf, size_t n, uint32_t seed) {
  * uses for a compressed replica link. */
 static void initReplCompressState(replicaCompressionState *rc) {
     memset(rc, 0, sizeof(*rc));
-    ASSERT_EQ(streamCompressorInit(&rc->stream, ALGO_LZ4, 0, true), C_OK);
-    rc->stream.checksum_flags &= (uint8_t)~STREAM_CHECKSUM_CONTENT;
+    ASSERT_EQ(streamCompressorInit(&rc->stream, ALGO_LZ4, 0, STREAM_CHECKSUM_BLOCK), C_OK);
     rc->out_buf = sdsempty();
 }
 

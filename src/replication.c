@@ -95,14 +95,17 @@ static compressionAlgo replCompressionConfiguredAlgo(void) {
     }
 }
 
+static compressionAlgo replicaExpectedCompressionAlgo(client *replica) {
+    if (!(replica->repl_data->replica_capa & REPLICA_CAPA_COMPRESS_REPL)) return ALGO_NONE;
+    return replCompressionConfiguredAlgo();
+}
+
 /* True when the replica's live transport no longer matches what the current
  * config would negotiate for it. Shared by the cron reconcile scan and the
  * put-online convergence check so the two can never drift. */
 static int replicaCompressionMismatch(client *replica) {
-    compressionAlgo configured = replCompressionConfiguredAlgo();
-    compressionAlgo expected = (replica->repl_data->replica_capa & REPLICA_CAPA_COMPRESS_REPL) ? configured : ALGO_NONE;
     compressionAlgo active = replica->repl_data->repl_compressor ? replica->repl_data->repl_compressor->stream.algo : ALGO_NONE;
-    return expected != active;
+    return replicaExpectedCompressionAlgo(replica) != active;
 }
 
 /* Runtime repl-compression changes converge by reconnect, since a live link
@@ -163,19 +166,18 @@ static void reconcileUpstreamCompression(void) {
  * compressed (dual-channel reaches both the +CONTINUE and put-online paths).
  * Returns C_ERR when initialization failed; the caller drops the link. */
 static int replicaEnableCompressionIfNegotiated(client *c) {
-    compressionAlgo algo = replCompressionConfiguredAlgo();
-    if (algo == ALGO_NONE || !(c->repl_data->replica_capa & REPLICA_CAPA_COMPRESS_REPL)) return C_OK;
+    compressionAlgo algo = replicaExpectedCompressionAlgo(c);
+    if (algo == ALGO_NONE) return C_OK;
     if (c->repl_data->repl_compressor) return C_OK;
 
     serverAssert(c->io_write_state == CLIENT_IDLE);
 
     replicaCompressionState *compressor = zcalloc(sizeof(*compressor));
-    if (streamCompressorInit(&compressor->stream, algo, 0, true) != C_OK) {
+    if (streamCompressorInit(&compressor->stream, algo, 0, STREAM_CHECKSUM_BLOCK) != C_OK) {
         zfree(compressor);
         serverLog(LL_WARNING, "Failed to initialize compression for replica %s", replicationGetReplicaName(c));
         return C_ERR;
     }
-    compressor->stream.checksum_flags &= (uint8_t)~STREAM_CHECKSUM_CONTENT;
     compressor->out_buf = sdsempty();
 
     c->repl_data->repl_compressor = compressor;

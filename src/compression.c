@@ -28,11 +28,11 @@ const char *compressionAlgoName(compressionAlgo algo) {
 int streamCompressorInit(streamCompressor *compressor,
                          compressionAlgo algo,
                          int level,
-                         bool codec_checksum) {
+                         uint8_t checksum_flags) {
     memset(compressor, 0, sizeof(*compressor));
     compressor->algo = algo;
     compressor->level = level;
-    compressor->checksum_flags = codec_checksum ? STREAM_CHECKSUM_BLOCK | STREAM_CHECKSUM_CONTENT : 0;
+    compressor->checksum_flags = checksum_flags;
 
     switch (algo) {
     case ALGO_LZ4:

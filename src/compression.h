@@ -43,8 +43,9 @@ typedef struct {
 
 /* Compressor lifecycle. Codec dispatch used by streamWriter and by the
  * replication write path; callers own sticky error state while these
- * functions manage only codec state. */
-int streamCompressorInit(streamCompressor *compressor, compressionAlgo algo, int level, bool codec_checksum);
+ * functions manage only codec state. checksum_flags is a bitwise combination
+ * of STREAM_CHECKSUM_* values. */
+int streamCompressorInit(streamCompressor *compressor, compressionAlgo algo, int level, uint8_t checksum_flags);
 size_t streamCompressorOutputBound(const streamCompressor *compressor, size_t input_len);
 /* Feeds raw input into the compressor and writes compressed bytes to output.
  * Called repeatedly to build a complete frame: COMPRESS_FLUSH_CONTINUE keeps

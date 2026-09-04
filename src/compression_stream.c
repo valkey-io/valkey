@@ -80,7 +80,8 @@ int streamWriterInit(streamWriter *writer, compressionAlgo algo, bool codec_chec
     writer->write_cb = write_cb;
     writer->write_ctx = write_ctx;
 
-    if (streamCompressorInit(&writer->compressor, algo, 0, codec_checksum) == C_ERR) {
+    uint8_t checksum_flags = codec_checksum ? STREAM_CHECKSUM_BLOCK | STREAM_CHECKSUM_CONTENT : 0;
+    if (streamCompressorInit(&writer->compressor, algo, 0, checksum_flags) == C_ERR) {
         writer->state = STREAM_WRITER_STATE_ERROR;
         return C_ERR;
     }

@@ -932,7 +932,7 @@ void existsCommand(client *c) {
     int j;
 
     for (j = 1; j < c->argc; j++) {
-        if (lookupKeyReadWithFlags(c->db, c->argv[j], LOOKUP_NOTOUCH)) count++;
+        if (lookupKeyReadWithFlags(c->db, c->argv[j], LOOKUP_NOTOUCH | LOOKUP_NOSTATS)) count++;
     }
     addReplyLongLong(c, count);
 }

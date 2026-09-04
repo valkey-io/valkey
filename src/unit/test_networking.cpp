@@ -153,6 +153,33 @@ class NetworkingTest : public ::testing::Test {
         server.commandlog[COMMANDLOG_TYPE_LARGE_REPLY].threshold = -1; /* Disable tracking */
         server.debug_client_enforce_reply_list = 0;
     }
+
+    /* Release replication state parked on the global server struct. Runs
+     * even when a test body exits early on a fatal ASSERT_* failure, so no
+     * allocation leaks and no dangling state bleeds into subsequent tests
+     * (e.g. a leftover server.repl_backlog would trip the serverAssert in
+     * createReplicationBacklog). No-op for tests that allocate nothing. */
+    void TearDown() override {
+        if (server.repl_backlog) {
+            server.repl_backlog->ref_repl_buf_node = NULL;
+            raxFree(server.repl_backlog->blocks_index);
+            zfree(server.repl_backlog);
+            server.repl_backlog = NULL;
+        }
+        if (server.repl_buffer_blocks) {
+            /* Test bodies free blocks and empty the list on the pass path;
+             * set the free method (as production does, replication.c) so any
+             * blocks still in the list after a fatal assertion failure are
+             * freed along with it. */
+            listSetFreeMethod(server.repl_buffer_blocks, zfree);
+            listRelease(server.repl_buffer_blocks);
+            server.repl_buffer_blocks = NULL;
+        }
+        if (server.replicas) {
+            listRelease(server.replicas);
+            server.replicas = NULL;
+        }
+    }
 };
 
 TEST_F(NetworkingTest, TestWriteToReplica) {
@@ -278,21 +305,11 @@ TEST_F(NetworkingTest, TestWriteToReplica) {
         c->repl_data->ref_repl_buf_node = nullptr;
     }
 
-    /* Cleanup */
-    listRelease(server.repl_buffer_blocks);
+    /* Cleanup of client-local state; global replication state is released
+     * in TearDown(). */
     listRelease(c->reply);
     freeClientReplicationData(c);
     zfree(c);
-
-    /* Clean up replication backlog */
-    if (server.repl_backlog) {
-        if (server.repl_backlog->ref_repl_buf_node) {
-            server.repl_backlog->ref_repl_buf_node = NULL;
-        }
-        raxFree(server.repl_backlog->blocks_index);
-        zfree(server.repl_backlog);
-        server.repl_backlog = NULL;
-    }
 }
 
 TEST_F(NetworkingTest, TestPostWriteToReplica) {
@@ -402,11 +419,9 @@ TEST_F(NetworkingTest, TestPostWriteToReplica) {
         listEmpty(server.repl_buffer_blocks);
     }
 
-    /* Cleanup */
+    /* Cleanup of client-local state; global replication state is released
+     * in TearDown(). */
     freeClientReplicationData(c);
-    raxFree(server.repl_backlog->blocks_index);
-    zfree(server.repl_backlog);
-    listRelease(server.repl_buffer_blocks);
     listRelease(c->reply);
     zfree(c);
 }

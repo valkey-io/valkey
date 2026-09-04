@@ -548,7 +548,7 @@ static int scanLaterStreamListpacks(robj *ob, unsigned long *cursor, monotime en
 }
 
 /* optional callback used defrag each rax element (not including the element pointer itself) */
-typedef void *(raxDefragFunction)(raxIterator *ri, void *privdata);
+typedef void *(raxDefragFunction)(raxIterator * ri, void *privdata);
 
 /* defrag radix tree including:
  * 1) rax struct

@@ -7492,8 +7492,8 @@ void dismissMemoryInChild(void) {
     /* madvise(MADV_DONTNEED) may not work if Transparent Huge Pages is enabled. */
     if (server.thp_enabled) return;
 
-        /* Currently we use zmadvise_dontneed only when we use jemalloc with Linux.
-         * so we avoid these pointless loops when they're not going to do anything. */
+    /* Currently we use zmadvise_dontneed only when we use jemalloc with Linux.
+     * so we avoid these pointless loops when they're not going to do anything. */
 #if defined(USE_JEMALLOC) && defined(__linux__)
     listIter li;
     listNode *ln;
@@ -8106,6 +8106,7 @@ __attribute__((weak)) int main(int argc, char **argv) {
  * MSET specific command extended options - XX/NX
  * HGET specific command extended options - PERSIST
  * HSET specific command extended options - NX/XX/FXX/FNX
+ * DELEX specific command extended options - IFEQ/IFNE
  * Common command extended options - EX/EXAT/PX/PXAT/KEEPTTL
  *
  * Function takes pointers to client, flags, unit, expire_idx, pointer to pointer of expire obj,
@@ -8156,9 +8157,13 @@ int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_
                    (opt[2] == 'e' || opt[2] == 'E') &&
                    (opt[3] == 'q' || opt[3] == 'Q') && opt[4] == '\0' &&
                    next &&
-                   !(*flags & ARGS_SET_CONDITIONAL) && (command_type == COMMAND_SET))
+                   !(*flags & ARGS_SET_CONDITIONAL) && !(*flags & ARGS_DELEX_CONDITIONAL) && (command_type == COMMAND_SET || command_type == COMMAND_DELEX))
         {
-            *flags |= ARGS_SET_IFEQ;
+            if (command_type == COMMAND_SET) {
+                *flags |= ARGS_SET_IFEQ;
+            }else {
+                *flags |= ARGS_DELEX_IFEQ;
+            }
             *compare_val = next;
             j++;
         } else if ((opt[0] == 'i' || opt[0] == 'I') &&
@@ -8166,9 +8171,13 @@ int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_
                    (opt[2] == 'n' || opt[2] == 'N') &&
                    (opt[3] == 'e' || opt[3] == 'E') && opt[4] == '\0' &&
                    next &&
-                   !(*flags & ARGS_SET_CONDITIONAL) && (command_type == COMMAND_SET))
+                   !(*flags & ARGS_SET_CONDITIONAL) && !(*flags & ARGS_DELEX_CONDITIONAL) && (command_type == COMMAND_SET || command_type == COMMAND_DELEX))
         {
-            *flags |= ARGS_SET_IFNE;
+            if (command_type == COMMAND_SET) {
+                *flags |= ARGS_SET_IFNE;
+            }else {
+                *flags |= ARGS_DELEX_IFNE;
+            }
             *compare_val = next;
             j++;
         } else if ((opt[0] == 'g' || opt[0] == 'G') &&
@@ -8222,7 +8231,8 @@ int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_
             *expire = next;
             if (expire_idx) *expire_idx = j;
             j++;
-        } else if ((opt[0] == 'p' || opt[0] == 'P') &&
+        }
+        else if ((opt[0] == 'p' || opt[0] == 'P') &&
                    (opt[1] == 'x' || opt[1] == 'X') &&
                    (opt[2] == 'a' || opt[2] == 'A') &&
                    (opt[3] == 't' || opt[3] == 'T') && opt[4] == '\0' &&
@@ -8235,7 +8245,8 @@ int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_
             *expire = next;
             if (expire_idx) *expire_idx = j;
             j++;
-        } else {
+        }        
+        else {
             addReplyErrorObject(c, shared.syntaxerr);
             return C_ERR;
         }

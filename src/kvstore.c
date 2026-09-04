@@ -465,7 +465,7 @@ unsigned long long kvstoreScan(kvstore *kvs,
 }
 
 /*
- * This functions increases size of kvstore to match desired number.
+ * This function increases size of kvstore to match desired number.
  * It resizes all individual hash tables, unless predicate indicates otherwise.
  *
  * Based on the parameter `try_expand`, appropriate hashtable expand API is invoked.

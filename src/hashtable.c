@@ -1021,7 +1021,7 @@ static void fillBucketHole(hashtable *ht, bucket *b, int pos_in_bucket, int tabl
 }
 
 /* When entries are deleted while rehashing is paused, they leave empty holes in
- * the buckets. This functions attempts to fill the holes by moving entries from
+ * the buckets. This function attempts to fill the holes by moving entries from
  * the end of the bucket chain to fill the holes and free any empty buckets in
  * the end of the chain. */
 static void compactBucketChain(hashtable *ht, size_t bucket_index, int table_index) {

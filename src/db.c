@@ -3091,49 +3091,43 @@ int bitfieldGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysRes
 
 /* See commandDbIdArgs in server.h. Returns argv[1] (the dbid).
  * Caller should free the returned array. */
-int *selectDbIdArgs(robj **argv, int argc, int *count) {
-    if (argc < 2) return NULL;
 
-    long long dbid;
-    if (getLongLongFromObject(argv[1], &dbid) != C_OK) return NULL;
-    if (dbid < 0 || dbid >= server.dbnum) return NULL;
-
-    int *positions = zmalloc(sizeof(int));
-    positions[0] = 1;
-    *count = 1;
+static int *getDbIdArgsGeneric(robj **argv, int argc, int *indices, int num_indices, int *count) {
+    int valid_count = 0;
+    for (int i = 0; i < num_indices; i++) {
+        int idx = indices[i];
+        if (idx >= argc) return NULL;
+        long long dbid;
+        if (getLongLongFromObject(argv[idx], &dbid) != C_OK) return NULL;
+        if (dbid < 0 || dbid >= server.dbnum) return NULL;
+        valid_count++;
+    }
+    if (valid_count == 0) return NULL;
+    int *positions = zmalloc(valid_count * sizeof(int));
+    for (int i = 0; i < valid_count; i++) {
+        positions[i] = indices[i];
+    }
+    *count = valid_count;
     return positions;
+}
+
+int *selectDbIdArgs(robj **argv, int argc, int *count) {
+    int indices[] = {1};
+    return getDbIdArgsGeneric(argv, argc, indices, 1, count);
 }
 
 /* See commandDbIdArgs in server.h. Returns argv[1] and argv[2] (the two dbids).
  * Caller should free the returned array. */
 int *swapdbDbIdArgs(robj **argv, int argc, int *count) {
-    if (argc < 3) return NULL;
-
-    long long db1, db2;
-    if (getLongLongFromObject(argv[1], &db1) != C_OK ||
-        getLongLongFromObject(argv[2], &db2) != C_OK) return NULL;
-    if (db1 < 0 || db1 >= server.dbnum || db2 < 0 || db2 >= server.dbnum) return NULL;
-
-    int *positions = zmalloc(2 * sizeof(int));
-    positions[0] = 1;
-    positions[1] = 2;
-    *count = 2;
-    return positions;
+    int indices[] = {1, 2};
+    return getDbIdArgsGeneric(argv, argc, indices, 2, count);
 }
 
 /* See commandDbIdArgs in server.h. Returns argv[2] (the destination dbid).
  * Caller should free the returned array. */
 int *moveDbIdArgs(robj **argv, int argc, int *count) {
-    if (argc < 3) return NULL;
-
-    long long dbid;
-    if (getLongLongFromObject(argv[2], &dbid) != C_OK) return NULL;
-    if (dbid < 0 || dbid >= server.dbnum) return NULL;
-
-    int *positions = zmalloc(sizeof(int));
-    positions[0] = 2;
-    *count = 1;
-    return positions;
+    int indices[] = {2};
+    return getDbIdArgsGeneric(argv, argc, indices, 1, count);
 }
 
 /* COPY source destination [ DB destination-db ] [ REPLACE ]

@@ -1061,6 +1061,9 @@ typedef struct readyList {
                                         no AUTH is needed, and every         \
                                         connection is immediately            \
                                         authenticated. */
+#define USER_FLAG_ROLE (1 << 3)      /* This user entry represents a role, \
+                                        not a regular user. Stored in the  \
+                                        Roles rax instead of Users. */
 
 #define SELECTOR_FLAG_ROOT (1 << 0)        /* This is the root user permission \
                                             * selector. */
@@ -1074,10 +1077,12 @@ typedef struct readyList {
 typedef struct user {
     sds name;         /* The username as an SDS string. */
     uint32_t flags;   /* See USER_FLAG_* */
-    list *passwords;  /* A list of SDS valid passwords for this user. */
+    list *passwords;  /* A list of SDS valid passwords for this user (NULL for roles). */
     list *selectors;  /* A list of selectors this user validates commands
                          against. This list will always contain at least
                          one selector for backwards compatibility. */
+    dict *roles;      /* For users: dict mapping role name -> role ptr (NULL for roles). */
+    dict *members;    /* For roles: dict mapping user name -> user ptr (NULL for users). */
     robj *acl_string; /* cached string represent of ACLs */
 } user;
 
@@ -3417,6 +3422,7 @@ int isMutuallyExclusiveChildType(int type);
 
 /* acl.c -- Authentication related prototypes. */
 extern rax *Users;
+extern rax *Roles;
 extern user *DefaultUser;
 void ACLInit(void);
 int ACLModuleHasCommandRules(const struct ValkeyModule *module, sds *rule_out);
@@ -3465,7 +3471,7 @@ uint64_t ACLGetCommandCategoryFlagByName(const char *name);
 int ACLAddCommandCategory(const char *name, uint64_t flag);
 void ACLCleanupCategoriesOnFailure(size_t num_acl_categories_added);
 int ACLAppendUserForLoading(sds *argv, int argc, int *argc_err);
-const char *ACLSetUserStringError(void);
+const char *ACLSetStringError(void);
 robj *ACLDescribeUser(user *u);
 void ACLLoadUsersAtStartup(void);
 void addReplyCommandCategories(client *c, struct serverCommand *cmd);
@@ -3476,6 +3482,8 @@ sds getAclErrorMessage(int acl_res, user *user, struct serverCommand *cmd, sds e
 void ACLUpdateDefaultUserPassword(sds password);
 sds genValkeyInfoStringACLStats(sds info);
 void ACLRecomputeCommandBitsFromCommandRulesAllUsers(void);
+user *ACLGetRoleByName(const char *name, size_t namelen);
+int ACLAppendRoleForLoading(sds *argv, int argc, int *argc_err);
 
 /* Sorted sets data type */
 

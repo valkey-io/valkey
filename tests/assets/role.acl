@@ -1,0 +1,7 @@
+role customer ~* &* +@all -@admin -@dangerous -@scripting
+role viewer ~* &* +@read
+
+user alice on >alice +@role:customer
+user bob on >bob +@role:viewer
+user carol on >carol +@role:customer +eval
+user default on nopass ~* &* +@all +@role:viewer

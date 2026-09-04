@@ -1,0 +1,38 @@
+{
+    "DELROLE": {
+        "summary": "Deletes one or more ACL roles. Fails if any role has members.",
+        "complexity": "O(N). Where N is the number of roles to delete.",
+        "group": "server",
+        "since": "9.2.0",
+        "arity": -3,
+        "container": "ACL",
+        "function": "aclCommand",
+        "command_flags": [
+            "ADMIN",
+            "NOSCRIPT",
+            "LOADING",
+            "STALE",
+            "SENTINEL"
+        ],
+        "command_tips": [
+            "REQUEST_POLICY:ALL_NODES",
+            "RESPONSE_POLICY:ALL_SUCCEEDED"
+        ],
+        "reply_schema": {
+            "type": "integer",
+            "description": "The number of roles deleted."
+        },
+        "arguments": [
+            {
+                "name": "rolename",
+                "type": "string",
+                "multiple": true
+            }
+        ],
+        "acl_categories": [
+            "ADMIN",
+            "DANGEROUS",
+            "SLOW"
+        ]
+    }
+}

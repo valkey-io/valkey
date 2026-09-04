@@ -599,8 +599,16 @@ void loadServerConfigFromString(sds config) {
         } else if (!strcasecmp(argv[0], "user") && argc >= 2) {
             int argc_err;
             if (ACLAppendUserForLoading(argv, argc, &argc_err) == C_ERR) {
-                const char *errmsg = ACLSetUserStringError();
+                const char *errmsg = ACLSetStringError();
                 snprintf(buf, sizeof(buf), "Error in user declaration '%s': %s", argv[argc_err], errmsg);
+                err = buf;
+                goto loaderr;
+            }
+        } else if (!strcasecmp(argv[0], "role") && argc >= 2) {
+            int argc_err;
+            if (ACLAppendRoleForLoading(argv, argc, &argc_err) == C_ERR) {
+                const char *errmsg = ACLSetStringError();
+                snprintf(buf, sizeof(buf), "Error in role declaration '%s': %s", argv[argc_err], errmsg);
                 err = buf;
                 goto loaderr;
             }
@@ -1249,7 +1257,7 @@ struct rewriteConfigState *rewriteConfigReadOldFile(char *path) {
              /* The following is a list of config features that are only supported in
               * config file parsing and are not recognized by lookupConfig */
              strcasecmp(argv[0], "include") && strcasecmp(argv[0], "rename-command") && strcasecmp(argv[0], "user") &&
-             strcasecmp(argv[0], "loadmodule") && strcasecmp(argv[0], "sentinel"))) {
+             strcasecmp(argv[0], "role") && strcasecmp(argv[0], "loadmodule") && strcasecmp(argv[0], "sentinel"))) {
             /* The line is either unparsable for some reason, for
              * instance it may have unbalanced quotes, may contain a
              * config that doesn't exist anymore, for instance a module that got
@@ -1514,36 +1522,36 @@ void rewriteConfigSaveOption(standardConfig *config, const char *name, struct re
     rewriteConfigMarkAsProcessed(state, name);
 }
 
-/* Rewrite the user option. */
-void rewriteConfigUserOption(struct rewriteConfigState *state) {
+/* Rewrite the user or role option. */
+static void rewriteConfigAclOption(struct rewriteConfigState *state, const char *directive, rax *table) {
     /* If there is a user file defined we just mark this configuration
      * directive as processed, so that all the lines containing users
      * inside the config file gets discarded. */
     if (server.acl_filename[0] != '\0') {
-        rewriteConfigMarkAsProcessed(state, "user");
+        rewriteConfigMarkAsProcessed(state, directive);
         return;
     }
 
-    /* Otherwise, scan the list of users and rewrite every line. Note that
-     * in case the list here is empty, the effect will just be to comment
-     * all the users directive inside the config file. */
+    /* Otherwise, scan the table and rewrite every line. Note that in case the
+     * table here is empty, the effect will just be to comment all the matching
+     * directives inside the config file. */
     raxIterator ri;
-    raxStart(&ri, Users);
+    raxStart(&ri, table);
     raxSeek(&ri, "^", NULL, 0);
     while (raxNext(&ri)) {
         user *u = ri.data;
-        sds line = sdsnew("user ");
+        sds line = sdscatfmt(sdsempty(), "%s ", directive);
         line = sdscatsds(line, u->name);
         line = sdscatlen(line, " ", 1);
         robj *descr = ACLDescribeUser(u);
         line = sdscatsds(line, objectGetVal(descr));
         decrRefCount(descr);
-        rewriteConfigRewriteLine(state, "user", line, 1);
+        rewriteConfigRewriteLine(state, directive, line, 1);
     }
     raxStop(&ri);
 
-    /* Mark "user" as processed in case there are no defined users. */
-    rewriteConfigMarkAsProcessed(state, "user");
+    /* Mark the directive as processed in case the table is empty. */
+    rewriteConfigMarkAsProcessed(state, directive);
 }
 
 /* Rewrite the dir option, always using absolute paths.*/
@@ -1873,7 +1881,8 @@ int rewriteConfig(char *path, int force_write) {
     }
     dictReleaseIterator(di);
 
-    rewriteConfigUserOption(state);
+    rewriteConfigAclOption(state, "role", Roles);
+    rewriteConfigAclOption(state, "user", Users);
     rewriteConfigLoadmoduleOption(state);
 
     /* Rewrite Sentinel config if in Sentinel mode. */

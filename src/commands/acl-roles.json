@@ -1,0 +1,30 @@
+{
+    "ROLES": {
+        "summary": "Lists all ACL roles.",
+        "complexity": "O(N). Where N is the number of configured roles.",
+        "group": "server",
+        "since": "9.2.0",
+        "arity": 2,
+        "container": "ACL",
+        "function": "aclCommand",
+        "command_flags": [
+            "ADMIN",
+            "NOSCRIPT",
+            "LOADING",
+            "STALE",
+            "SENTINEL"
+        ],
+        "reply_schema": {
+            "type": "array",
+            "description": "List of existing ACL roles.",
+            "items": {
+                "type": "string"
+            }
+        },
+        "acl_categories": [
+            "ADMIN",
+            "DANGEROUS",
+            "SLOW"
+        ]
+    }
+}

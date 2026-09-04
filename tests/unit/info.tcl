@@ -570,3 +570,221 @@ start_server {tags {"info" "external:skip"}} {
         assert_equal [dict get $mem_stats db.dict.rehashing.count] {1}
     }
 }
+
+start_server {tags {"info" "external:skip"} overrides {save "" forkless-infrastructure-enabled yes}} {
+    test {INFO forkless save metrics show default values when no save is running} {
+        r config set save ""
+        r flushall
+        
+        # When no forkless save is running, time metrics should be -1
+        set dbg [r info debug]
+        assert_match "*forkless_current_item_ms:-1*" $dbg
+        assert_match "*forkless_estimated_seconds_remaining:-1*" [r info persistence]
+        
+        # Debug metrics should be 0
+        assert_match "*forkless_current_queue_length:0*" $dbg
+        assert_match "*forkless_queue_length_target:0*" $dbg
+        assert_match "*forkless_dbentries_queued:0*" $dbg
+        assert_match "*forkless_dbentries_processed:0*" $dbg
+    }
+
+    test {INFO forkless save metrics are present during active save} {
+        r config set save ""
+        r flushall
+        r debug populate 1000
+        
+        # Start slow forkless save
+        r config set rdb-key-save-delay 100000
+        r config set bgsave-default-method forkless
+        r bgsave
+        
+        wait_for_condition 50 100 {
+            [s rdb_bgsave_in_progress] == 1
+        } else {
+            fail "forkless save didn't start"
+        }
+        
+        set dbg [r info debug]
+        
+        # Verify time metrics are present in debug section
+        assert_match "*forkless_current_item_ms:*" $dbg
+        assert_match "*forkless_estimated_seconds_remaining:*" [r info persistence]
+        
+        # Verify queue metrics are present in debug section
+        assert_match "*forkless_current_queue_length:*" $dbg
+        assert_match "*forkless_queue_length_target:*" $dbg
+        assert_match "*forkless_dbentries_queued:*" $dbg
+        assert_match "*forkless_dbentries_processed:*" $dbg
+        
+        # Verify queue_length_target has a reasonable value
+        set target [getInfoProperty $dbg forkless_queue_length_target]
+        assert {$target > 0}
+        
+        r bgsave cancel
+        r config set rdb-key-save-delay 0
+        waitForBgsave r
+    }
+
+    test {INFO forkless save cumulative metrics increase during save} {
+        r config set save ""
+        r flushall
+        r debug populate 100
+        
+        # Start slow forkless save
+        r config set rdb-key-save-delay 50000
+        r config set bgsave-default-method forkless
+        r bgsave
+        
+        wait_for_condition 50 100 {
+            [s rdb_bgsave_in_progress] == 1
+        } else {
+            fail "forkless save didn't start"
+        }
+        
+        # Wait a bit for some processing
+        after 200
+        
+        set dbg [r info debug]
+        set queued1 [getInfoProperty $dbg forkless_dbentries_queued]
+        set processed1 [getInfoProperty $dbg forkless_dbentries_processed]
+        
+        # Wait more
+        after 200
+        
+        set dbg [r info debug]
+        set queued2 [getInfoProperty $dbg forkless_dbentries_queued]
+        set processed2 [getInfoProperty $dbg forkless_dbentries_processed]
+        
+        # Cumulative metrics should increase or stay same (never decrease)
+        assert {$queued2 >= $queued1}
+        assert {$processed2 >= $processed1}
+        
+        # At least one should have increased
+        assert {$queued2 > $queued1 || $processed2 > $processed1}
+        
+        r bgsave cancel
+        r config set rdb-key-save-delay 0
+        waitForBgsave r
+    }
+
+    test {INFO forkless save current_item_ms is counted} {
+        r config set save ""
+        r flushall
+        r debug populate 10
+        
+        # Start very slow forkless save - 2 seconds per key
+        r config set rdb-key-save-delay 2000000
+        r config set bgsave-default-method forkless
+        r bgsave
+        
+        wait_for_condition 50 100 {
+            [s rdb_bgsave_in_progress] == 1
+        } else {
+            fail "forkless save didn't start"
+        }
+        
+        # Wait until the item has been processing for at least 1 second
+        wait_for_condition 50 100 {
+            [getInfoProperty [r info debug] forkless_current_item_ms] > 1000
+        } else {
+            fail "forkless_current_item_ms never exceeded 1000"
+        }
+        
+        set item_time [getInfoProperty [r info debug] forkless_current_item_ms]
+        
+        # Should be processing an item for ~1 second (1000+ ms)
+        assert {$item_time > 1000}
+        
+        r bgsave cancel
+        r config set rdb-key-save-delay 0
+        waitForBgsave r
+    }
+
+    test {INFO forkless save estimated_seconds_remaining is reasonable} {
+        r config set save ""
+        r flushall
+        r debug populate 100
+        
+        # Set 1 second delay per key
+        r config set rdb-key-save-delay 1000000
+        waitForBgsave r
+        r config set bgsave-default-method forkless
+        r bgsave
+        
+        wait_for_condition 50 100 {
+            [s rdb_bgsave_in_progress] == 1
+        } else {
+            fail "forkless save didn't start"
+        }
+        
+        # Wait for ~1 key to be processed (1.2 seconds to be safe)
+        after 1200
+        
+        set dbg [r info debug]
+        set processed [getInfoProperty $dbg forkless_dbentries_processed]
+        set estimated [getInfoProperty [r info persistence] forkless_estimated_seconds_remaining]
+        
+        # Should have processed at least 1 key
+        assert {$processed >= 1}
+        
+        # With 100 keys and ~1 processed at 1sec/key, the estimate should be
+        # in the tens of seconds range. Use a wide band to avoid timing flakes.
+        assert {$estimated > 0 && $estimated < 300}
+        
+        r bgsave cancel
+        r config set rdb-key-save-delay 0
+        waitForBgsave r
+    }
+
+    test {INFO forkless save metrics show default values after save completes} {
+        r config set save ""
+        r flushall
+        r debug populate 100
+        
+        # Start and complete a fast forkless save
+        r config set rdb-key-save-delay 0
+        r config set bgsave-default-method forkless
+        r bgsave
+        waitForBgsave r
+        
+        # After save completes, time metrics should be -1
+        set dbg [r info debug]
+        assert_match "*forkless_current_item_ms:-1*" $dbg
+        assert_match "*forkless_estimated_seconds_remaining:-1*" [r info persistence]
+        
+        # Debug metrics should be 0
+        assert_match "*forkless_current_queue_length:0*" $dbg
+        assert_match "*forkless_queue_length_target:0*" $dbg
+        assert_match "*forkless_dbentries_queued:0*" $dbg
+        assert_match "*forkless_dbentries_processed:0*" $dbg
+    }
+
+    test {INFO rdb_current_bgsave_time_sec increases during forkless save} {
+        r config set save ""
+        r flushall
+        r debug populate 100
+        
+        # Start slow forkless save
+        r config set rdb-key-save-delay 100000
+        r config set bgsave-default-method forkless
+        r bgsave
+        
+        wait_for_condition 50 100 {
+            [s rdb_bgsave_in_progress] == 1
+        } else {
+            fail "forkless save didn't start"
+        }
+        
+        set time1 [s rdb_current_bgsave_time_sec]
+
+        wait_for_condition 50 100 {
+            [s rdb_current_bgsave_time_sec] >= $time1 + 2
+        } else {
+            fail "rdb_current_bgsave_time_sec did not advance during forkless save"
+        }
+
+        r bgsave cancel
+        r config set rdb-key-save-delay 0
+        waitForBgsave r
+    }
+}

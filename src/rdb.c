@@ -49,6 +49,7 @@
 #include "cluster_migrateslots.h"
 #include "compression.h"
 #include "compression_stream.h"
+#include "forkless.h"
 
 #include <math.h>
 #include <fcntl.h>
@@ -1431,36 +1432,15 @@ ssize_t rdbSaveDb(rio *rdb, int dbid, int rdbflags, int rdbver, long *key_counte
     if ((res = rdbSaveLen(rdb, dbid)) < 0) goto werr;
     written += res;
 
-    /* Write the RESIZE DB opcode. */
-    unsigned long long expires_size = kvstoreSize(db->expires) + kvstoreImportingSize(db->expires);
-    if ((res = rdbSaveType(rdb, RDB_OPCODE_RESIZEDB)) < 0) goto werr;
-    written += res;
-    if ((res = rdbSaveLen(rdb, db_size)) < 0) goto werr;
-    written += res;
-    if ((res = rdbSaveLen(rdb, expires_size)) < 0) goto werr;
+    /* Write the RESIZE DB opcode and slot-info hints. */
+    if ((res = rdbSaveDbSizeHints(rdb, db, 1)) < 0) goto werr;
     written += res;
 
     kvs_it = kvstoreIteratorInit(db->keys, HASHTABLE_ITER_SAFE | HASHTABLE_ITER_PREFETCH_VALUES | HASHTABLE_ITER_INCLUDE_IMPORTING);
-    int last_slot = -1;
     /* Iterate this DB writing every entry */
     void *next;
     while (kvstoreIteratorNext(kvs_it, &next)) {
         robj *o = next;
-        int curr_slot = kvstoreIteratorGetCurrentHashtableIndex(kvs_it);
-        /* Save slot info. */
-        if (server.cluster_enabled && curr_slot != last_slot) {
-            sds slot_info = sdscatprintf(sdsempty(), "%i,%lu,%lu,%lu", curr_slot,
-                                         kvstoreHashtableSize(db->keys, curr_slot),
-                                         kvstoreHashtableSize(db->expires, curr_slot),
-                                         kvstoreHashtableSize(db->keys_with_volatile_items, curr_slot));
-            if ((res = rdbSaveAuxFieldStrStr(rdb, "slot-info", slot_info)) < 0) {
-                sdsfree(slot_info);
-                goto werr;
-            }
-            written += res;
-            last_slot = curr_slot;
-            sdsfree(slot_info);
-        }
         sds keystr = objectGetKey(o);
         robj key;
         long long expire;
@@ -1505,22 +1485,10 @@ werr:
  * integer pointed by 'error' is set to the value of errno just after the I/O
  * error. */
 int rdbSaveRio(int req, int rdbver, rio *rdb, int *error, int rdbflags, rdbSaveInfo *rsi) {
-    char magic[10];
-    uint64_t cksum;
     long key_counter = 0;
     int j;
 
-    if (server.rdb_checksum && !(rdb->flags & RIO_FLAG_SKIP_RDB_CHECKSUM))
-        rdb->update_cksum = rioGenericUpdateChecksum;
-    const char *magic_prefix = rdbUseValkeyMagic(rdbver) ? "VALKEY" : "REDIS0";
-    serverAssert(rdbver >= 0 && rdbver <= RDB_VERSION);
-    snprintf(magic, sizeof(magic), "%s%03d", magic_prefix, rdbver);
-    if (rdbWriteRaw(rdb, magic, 9) == -1) goto werr;
-    if (rdbSaveInfoAuxFields(rdb, rdbflags, rsi) == -1) goto werr;
-    if (!(req & REPLICA_REQ_RDB_EXCLUDE_DATA) && rdbSaveModulesAux(rdb, VALKEYMODULE_AUX_BEFORE_RDB) == -1) goto werr;
-
-    /* save functions */
-    if (!(req & REPLICA_REQ_RDB_EXCLUDE_FUNCTIONS) && rdbSaveFunctions(rdb) == -1) goto werr;
+    if (rdbWriteHeader(rdb, req, rdbver, rdbflags, rsi) == C_ERR) goto werr;
 
     /* save all databases, skip this if we're in functions-only mode */
     if (!(req & REPLICA_REQ_RDB_EXCLUDE_DATA)) {
@@ -1532,16 +1500,7 @@ int rdbSaveRio(int req, int rdbver, rio *rdb, int *error, int rdbflags, rdbSaveI
         }
     }
 
-    if (!(req & REPLICA_REQ_RDB_EXCLUDE_DATA) && rdbSaveModulesAux(rdb, VALKEYMODULE_AUX_AFTER_RDB) == -1) goto werr;
-
-    /* EOF opcode */
-    if (rdbSaveType(rdb, RDB_OPCODE_EOF) == -1) goto werr;
-
-    /* RDB checksum field. It will be zero if checksum computation is disabled, the
-     * loading code skips the check in this case. */
-    cksum = rdb->cksum;
-    memrev64ifbe(&cksum);
-    if (rioWrite(rdb, &cksum, 8) == 0) goto werr;
+    if (rdbWriteFooter(rdb, req) == C_ERR) goto werr;
     return C_OK;
 
 werr:
@@ -1765,14 +1724,49 @@ int rdbSave(int req, char *filename, rdbSaveInfo *rsi, int rdbflags) {
     return C_OK;
 }
 
+int isForkBgsaveInProgress(void) {
+    return server.child_type == CHILD_TYPE_RDB;
+}
+
+int isSaveInProgress(void) {
+    return isForkBgsaveInProgress() || isForklessSaveInProgress();
+}
+
+/* Choose the background save method based on configuration. Returns forkless
+ * only when it is configured, the infrastructure is enabled, and every loaded
+ * module can handle a forkless save. Otherwise fall back to a fork-based save
+ * and log why, so the fallback is not silent. */
+int resolveBgsaveType(void) {
+    if (server.bgsave_default_method != RDB_BGSAVE_TYPE_FORKLESS) return RDB_BGSAVE_TYPE_FORK;
+
+    /* bgsave-default-method can only be set to forkless when the infrastructure
+     * is enabled (enforced by config validation), so it must be enabled here. */
+    serverAssert(server.forkless_infrastructure_enabled);
+
+    if (!moduleAllModulesHandleForkless()) {
+        serverLog(LL_WARNING, "Falling back to fork-based save: forkless is configured but a loaded "
+                              "module has not declared VALKEYMODULE_OPTIONS_HANDLE_FORKLESS");
+        return RDB_BGSAVE_TYPE_FORK;
+    }
+    return RDB_BGSAVE_TYPE_FORKLESS;
+}
+
+/* Start a background save, choosing fork or forkless based on bgsave_type. */
+int rdbStartBgsave(int bgsave_type) {
+    if (bgsave_type == RDB_BGSAVE_TYPE_FORKLESS) {
+        return forklessSaveToDisk(server.rdb_filename);
+    } else {
+        rdbSaveInfo rsi, *rsiptr;
+        rsiptr = rdbPopulateSaveInfo(&rsi);
+        return rdbSaveBackground(REPLICA_REQ_NONE, server.rdb_filename, rsiptr, RDBFLAGS_NONE);
+    }
+}
+
 int rdbSaveBackground(int req, char *filename, rdbSaveInfo *rsi, int rdbflags) {
     pid_t childpid;
 
     if (hasActiveChildProcess()) return C_ERR;
     server.stat_rdb_saves++;
-
-    server.dirty_before_bgsave = server.dirty;
-    server.lastbgsave_try = time(NULL);
 
     if ((childpid = serverFork(CHILD_TYPE_RDB)) == 0) {
         int retval;
@@ -1793,12 +1787,12 @@ int rdbSaveBackground(int req, char *filename, rdbSaveInfo *rsi, int rdbflags) {
         /* Parent */
         if (childpid == -1) {
             server.lastbgsave_status = C_ERR;
+            server.lastbgsave_try = time(NULL);
             serverLog(LL_WARNING, "Can't save in background: fork: %s", strerror(errno));
             return C_ERR;
         }
         serverLog(LL_NOTICE, "Background saving started by pid %ld", (long)childpid);
-        server.rdb_save_time_start = time(NULL);
-        server.rdb_child_type = RDB_CHILD_TYPE_DISK;
+        rdbRecordStartMetrics(RDB_BGSAVE_TYPE_FORK);
         return C_OK;
     }
     return C_OK; /* unreached */
@@ -3162,14 +3156,19 @@ void stopLoading(int success) {
 void startSaving(int rdbflags) {
     /* Fire the persistence modules start event. */
     int subevent;
-    if (rdbflags & RDBFLAGS_AOF_PREAMBLE && getpid() != server.pid)
-        subevent = VALKEYMODULE_SUBEVENT_PERSISTENCE_AOF_START;
-    else if (rdbflags & RDBFLAGS_AOF_PREAMBLE)
-        subevent = VALKEYMODULE_SUBEVENT_PERSISTENCE_SYNC_AOF_START;
-    else if (getpid() != server.pid)
-        subevent = VALKEYMODULE_SUBEVENT_PERSISTENCE_RDB_START;
-    else
-        subevent = VALKEYMODULE_SUBEVENT_PERSISTENCE_SYNC_RDB_START;
+    if (rdbflags & RDBFLAGS_AOF_PREAMBLE) {
+        if (getpid() != server.pid) {
+            subevent = VALKEYMODULE_SUBEVENT_PERSISTENCE_AOF_START;
+        } else {
+            subevent = VALKEYMODULE_SUBEVENT_PERSISTENCE_SYNC_AOF_START;
+        }
+    } else {
+        if (getpid() != server.pid || (rdbflags & RDBFLAGS_FORKLESS_SAVE)) {
+            subevent = VALKEYMODULE_SUBEVENT_PERSISTENCE_RDB_START;
+        } else {
+            subevent = VALKEYMODULE_SUBEVENT_PERSISTENCE_SYNC_RDB_START;
+        }
+    }
     moduleFireServerEvent(VALKEYMODULE_EVENT_PERSISTENCE, subevent, NULL);
 }
 
@@ -3906,14 +3905,13 @@ done:
 /* A background saving child (BGSAVE) terminated its work. Handle this.
  * This function covers the case of actual BGSAVEs. */
 static void backgroundSaveDoneHandlerDisk(int exitcode, int bysignal, time_t save_end) {
-    if (!bysignal && exitcode == 0) {
-        serverLog(LL_NOTICE, "Background saving terminated with success");
-        server.dirty = server.dirty - server.dirty_before_bgsave;
-        server.lastsave = save_end;
-        server.lastbgsave_status = C_OK;
-    } else if (!bysignal && exitcode != 0) {
-        serverLog(LL_WARNING, "Background saving error");
-        server.lastbgsave_status = C_ERR;
+    if (!bysignal) {
+        if (exitcode == 0) {
+            serverLog(LL_NOTICE, "Background saving terminated with success");
+        } else {
+            serverLog(LL_WARNING, "Background saving error");
+        }
+        rdbRecordEndMetrics(RDB_BGSAVE_TYPE_FORK, (exitcode == 0) ? C_OK : C_ERR, save_end);
     } else {
         mstime_t latency;
 
@@ -3925,7 +3923,7 @@ static void backgroundSaveDoneHandlerDisk(int exitcode, int bysignal, time_t sav
         latencyTraceIfNeeded(rdb, rdb_unlink_temp_file, latency);
         /* SIGUSR1 is whitelisted, so we have a way to kill a child without
          * triggering an error condition. */
-        if (bysignal != SIGUSR1) server.lastbgsave_status = C_ERR;
+        if (bysignal != SIGUSR1) rdbRecordEndMetrics(RDB_BGSAVE_TYPE_FORK, C_ERR, save_end);
     }
 }
 
@@ -3958,18 +3956,17 @@ static void backgroundSaveDoneHandlerSocket(int exitcode, int bysignal) {
 
 /* When a background RDB saving/transfer terminates, call the right handler. */
 void backgroundSaveDoneHandler(int exitcode, int bysignal) {
-    int type = server.rdb_child_type;
+    int type = server.rdb_write_target;
     time_t save_end = time(NULL);
 
-    switch (server.rdb_child_type) {
-    case RDB_CHILD_TYPE_DISK: backgroundSaveDoneHandlerDisk(exitcode, bysignal, save_end); break;
-    case RDB_CHILD_TYPE_SOCKET: backgroundSaveDoneHandlerSocket(exitcode, bysignal); break;
+    switch (server.rdb_write_target) {
+    case RDB_WRITE_TARGET_DISK: backgroundSaveDoneHandlerDisk(exitcode, bysignal, save_end); break;
+    case RDB_WRITE_TARGET_SOCKET: backgroundSaveDoneHandlerSocket(exitcode, bysignal); break;
     default: serverPanic("Unknown RDB child type."); break;
     }
 
-    server.rdb_child_type = RDB_CHILD_TYPE_NONE;
-    server.rdb_save_time_last = save_end - server.rdb_save_time_start;
-    server.rdb_save_time_start = -1;
+    rdbClearSaveState(save_end);
+
     /* Possibly there are replicas waiting for a BGSAVE in order to be served
      * (the first stage of SYNC is a bulk transfer of dump.rdb) */
     updateReplicasWaitingBgsave((!bysignal && exitcode == 0) ? C_OK : C_ERR, type);
@@ -4153,7 +4150,8 @@ int rdbSaveToReplicasSockets(int req, int rdbver, rdbSaveInfo *rsi) {
                       skip_rdb_checksum ? " while skipping RDB checksum for this transfer" : "");
 
             server.rdb_save_time_start = time(NULL);
-            server.rdb_child_type = RDB_CHILD_TYPE_SOCKET;
+            server.rdb_write_target = RDB_WRITE_TARGET_SOCKET;
+            server.cur_bgsave_type = RDB_BGSAVE_TYPE_FORK;
             if (dual_channel) {
                 /* For dual channel sync, the main process no longer requires these RDB connections. */
                 zfree(conns);
@@ -4172,7 +4170,7 @@ int rdbSaveToReplicasSockets(int req, int rdbver, rdbSaveInfo *rsi) {
 }
 
 void saveCommand(client *c) {
-    if (server.child_type == CHILD_TYPE_RDB) {
+    if (isSaveInProgress()) {
         addReplyError(c, "Background save already in progress");
         return;
     }
@@ -4188,25 +4186,38 @@ void saveCommand(client *c) {
     }
 }
 
-/* BGSAVE [SCHEDULE] */
+/* BGSAVE [SCHEDULE] | BGSAVE CANCEL */
 void bgsaveCommand(client *c) {
     int schedule = 0;
 
-    /* The SCHEDULE option changes the behavior of BGSAVE when an AOF rewrite
-     * is in progress. Instead of returning an error a BGSAVE gets scheduled. */
-    if (c->argc > 1) {
-        if (c->argc == 2 && !strcasecmp(objectGetVal(c->argv[1]), "schedule")) {
+    /* BGSAVE can be invoked with the following options:
+     * - CANCEL: terminates an in-progress or scheduled BGSAVE
+     * - SCHEDULE: schedules a BGSAVE when an AOF rewrite is in progress.
+     *             Instead of returning an error, the BGSAVE is scheduled to run
+     *             when the AOF rewrite completes. */
+    for (int i = 1; i < c->argc; i++) {
+        char *arg = objectGetVal(c->argv[i]);
+        if (!strcasecmp(arg, "schedule")) {
             schedule = 1;
-        } else if (c->argc == 2 && !strcasecmp(objectGetVal(c->argv[1]), "cancel")) {
+        } else if (!strcasecmp(arg, "cancel")) {
+            if (c->argc != 2) {
+                addReplyError(c, "Cancel cannot be combined with other options");
+                return;
+            }
             /* Terminates an in progress BGSAVE */
-            if (server.child_type == CHILD_TYPE_RDB) {
-                /* There is an ongoing bgsave */
-                serverLog(LL_NOTICE, "Background saving will be aborted due to user request");
+            if (isForkBgsaveInProgress()) {
+                /* There is an ongoing fork-based bgsave */
+                serverLog(LL_NOTICE, "Background saving (fork) will be aborted due to user request");
                 killRDBChild();
                 addReplyStatus(c, "Background saving cancelled");
-            } else if (server.rdb_bgsave_scheduled == 1) {
+            } else if (isForklessSaveInProgress()) {
+                /* There is an ongoing forkless save */
+                serverLog(LL_NOTICE, "Background saving (forkless) will be aborted due to user request");
+                forklessSaveCancel();
+                addReplyStatus(c, "Background saving cancelled");
+            } else if (server.rdb_bgsave_scheduled != RDB_BGSAVE_TYPE_NONE) {
                 serverLog(LL_NOTICE, "Scheduled background saving will be cancelled due to user request");
-                server.rdb_bgsave_scheduled = 0;
+                server.rdb_bgsave_scheduled = RDB_BGSAVE_TYPE_NONE;
                 addReplyStatus(c, "Scheduled background saving cancelled");
             } else {
                 addReplyError(c, "Background saving is currently not in progress or scheduled");
@@ -4218,14 +4229,16 @@ void bgsaveCommand(client *c) {
         }
     }
 
+    int chosen_save_type = resolveBgsaveType();
+
     rdbSaveInfo rsi, *rsiptr;
     rsiptr = rdbPopulateSaveInfo(&rsi);
 
-    if (server.child_type == CHILD_TYPE_RDB) {
+    if (isSaveInProgress()) {
         addReplyError(c, "Background save already in progress");
     } else if (hasActiveChildProcess() || server.in_exec) {
         if (schedule || server.in_exec) {
-            server.rdb_bgsave_scheduled = 1;
+            server.rdb_bgsave_scheduled = chosen_save_type;
             if (schedule) {
                 serverLog(LL_NOTICE, "Background saving scheduled due to user request");
             } else {
@@ -4236,6 +4249,12 @@ void bgsaveCommand(client *c) {
             addReplyError(c, "Another child process is active (AOF?): can't BGSAVE right now. "
                              "Use BGSAVE SCHEDULE in order to schedule a BGSAVE whenever "
                              "possible.");
+        }
+    } else if (chosen_save_type == RDB_BGSAVE_TYPE_FORKLESS) {
+        if (forklessSaveToDisk(server.rdb_filename) == C_OK) {
+            addReplyStatus(c, "Background saving started");
+        } else {
+            addReplyErrorObject(c, shared.err);
         }
     } else if (rdbSaveBackground(REPLICA_REQ_NONE, server.rdb_filename, rsiptr, RDBFLAGS_NONE) == C_OK) {
         addReplyStatus(c, "Background saving started");
@@ -4291,4 +4310,115 @@ rdbSaveInfo *rdbPopulateSaveInfo(rdbSaveInfo *rsi) {
         return rsi;
     }
     return NULL;
+}
+
+
+/* Write RESIZEDB and slot-info size hints for a single database.
+ * If include_importing is set, importing slot sizes are included (for fork-based save during migration).
+ * Returns bytes written on success, -1 on error. */
+ssize_t rdbSaveDbSizeHints(rio *rdb, serverDb *db, int include_importing) {
+    ssize_t res, written = 0;
+
+    unsigned long long db_size = kvstoreSize(db->keys);
+    unsigned long long expires_size = kvstoreSize(db->expires);
+    if (include_importing) {
+        db_size += kvstoreImportingSize(db->keys);
+        expires_size += kvstoreImportingSize(db->expires);
+    }
+
+    if ((res = rdbSaveType(rdb, RDB_OPCODE_RESIZEDB)) < 0) {
+        serverLog(LL_WARNING, "rdbSaveDbSizeHints: error writing OPCODE_RESIZEDB");
+        return -1;
+    }
+    written += res;
+    if ((res = rdbSaveLen(rdb, db_size)) < 0) {
+        serverLog(LL_WARNING, "rdbSaveDbSizeHints: error writing db_size");
+        return -1;
+    }
+    written += res;
+    if ((res = rdbSaveLen(rdb, expires_size)) < 0) {
+        serverLog(LL_WARNING, "rdbSaveDbSizeHints: error writing expires_size");
+        return -1;
+    }
+    written += res;
+
+    if (server.cluster_enabled) {
+        int slot = kvstoreGetFirstNonEmptyHashtableIndex(db->keys);
+        while (slot != -1) {
+            sds slot_info = sdscatprintf(sdsempty(), "%i,%lu,%lu,%lu", slot,
+                                         kvstoreHashtableSize(db->keys, slot),
+                                         kvstoreHashtableSize(db->expires, slot),
+                                         kvstoreHashtableSize(db->keys_with_volatile_items, slot));
+            if ((res = rdbSaveAuxFieldStrStr(rdb, "slot-info", slot_info)) < 0) {
+                serverLog(LL_WARNING, "rdbSaveDbSizeHints: error writing slot-info for slot %d", slot);
+                sdsfree(slot_info);
+                return -1;
+            }
+            written += res;
+            sdsfree(slot_info);
+            slot = kvstoreGetNextNonEmptyHashtableIndex(db->keys, slot);
+        }
+    }
+
+    return written;
+}
+
+/* Write the RDB header: magic string, aux fields, module aux (before RDB), and functions.
+ * Returns C_OK on success, C_ERR on error. */
+int rdbWriteHeader(rio *rdb, int req, int rdbver, int rdbflags, rdbSaveInfo *rsi) {
+    char magic[10];
+    if (server.rdb_checksum && !(rdb->flags & RIO_FLAG_SKIP_RDB_CHECKSUM)) {
+        rdb->update_cksum = rioGenericUpdateChecksum;
+    }
+
+    const char *magic_prefix = rdbUseValkeyMagic(rdbver) ? "VALKEY" : "REDIS0";
+    serverAssert(rdbver >= 0 && rdbver <= RDB_VERSION);
+    snprintf(magic, sizeof(magic), "%s%03d", magic_prefix, rdbver);
+    if (rdbWriteRaw(rdb, magic, 9) == -1) return C_ERR;
+    if (rdbSaveInfoAuxFields(rdb, rdbflags, rsi) == -1) return C_ERR;
+    if (!(req & REPLICA_REQ_RDB_EXCLUDE_DATA) && rdbSaveModulesAux(rdb, VALKEYMODULE_AUX_BEFORE_RDB) == -1) return C_ERR;
+    /* Save functions */
+    if (!(req & REPLICA_REQ_RDB_EXCLUDE_FUNCTIONS) && rdbSaveFunctions(rdb) == -1) return C_ERR;
+    return C_OK;
+}
+
+/* Write the RDB footer: module aux (after RDB), EOF opcode, and checksum.
+ * Returns C_OK on success, C_ERR on error. */
+int rdbWriteFooter(rio *rdb, int req) {
+    if (!(req & REPLICA_REQ_RDB_EXCLUDE_DATA) && rdbSaveModulesAux(rdb, VALKEYMODULE_AUX_AFTER_RDB) == -1) return C_ERR;
+    if (rdbSaveType(rdb, RDB_OPCODE_EOF) == -1) return C_ERR;
+    /* RDB checksum field. It will be zero if checksum computation is disabled, the
+     * loading code skips the check in this case. */
+    uint64_t cksum = rdb->cksum;
+    memrev64ifbe(&cksum);
+    if (rioWrite(rdb, &cksum, 8) == 0) return C_ERR;
+    return C_OK;
+}
+
+/* Common state updates when a background save starts. */
+void rdbRecordStartMetrics(int bgsave_type) {
+    server.dirty_before_bgsave = server.dirty;
+    server.lastbgsave_try = time(NULL);
+    server.rdb_save_time_start = time(NULL);
+    server.rdb_write_target = RDB_WRITE_TARGET_DISK;
+    server.cur_bgsave_type = bgsave_type;
+}
+
+/* Reset save timing and target state. Called after any background save or
+ * transfer completes, regardless of whether it was a persistence event. */
+void rdbClearSaveState(time_t save_end) {
+    server.rdb_save_time_last = save_end - server.rdb_save_time_start;
+    server.rdb_save_time_start = -1;
+    server.rdb_write_target = RDB_WRITE_TARGET_NONE;
+    server.cur_bgsave_type = RDB_BGSAVE_TYPE_NONE;
+}
+
+/* Record persistence metrics when a background save completes. */
+void rdbRecordEndMetrics(int bgsave_type, int status, time_t save_end) {
+    server.lastbgsave_status = status;
+    server.lastbgsave_type = bgsave_type;
+    if (status == C_OK) {
+        server.dirty = server.dirty - server.dirty_before_bgsave;
+        server.lastsave = save_end;
+    }
 }

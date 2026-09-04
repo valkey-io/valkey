@@ -477,6 +477,7 @@ ENGINE_SERVER_OBJ = \
     allocator_defrag.o \
     anet.o \
     aof.o \
+	bgiteration.o \
     bio.o \
     bitops.o \
     blocked.o \
@@ -507,6 +508,7 @@ ENGINE_SERVER_OBJ = \
     expire.o \
     fbtree.o \
     fifo.o \
+	forkless.o \
     functions.o \
     geo.o \
     geohash.o \

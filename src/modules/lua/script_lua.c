@@ -564,7 +564,7 @@ static uint32_t digits10(uint64_t v) {
     return 12 + digits10(v / 1000000000000UL);
 }
 
-/* Convert a unsigned long long into a string. Returns the number of
+/* Convert an unsigned long long into a string. Returns the number of
  * characters needed to represent the number.
  * If the buffer is not big enough to store the string, 0 is returned.
  *

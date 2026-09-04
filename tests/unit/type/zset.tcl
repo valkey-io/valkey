@@ -3229,7 +3229,7 @@ start_server [list overrides [list save ""] tags {"zset needs:debug external:ski
 
             # There are several possibilities here:
             # 1: One is that we finish the rehash during the add.
-            # 2. The second is that we finish the rehash after the last add and then trigger a expand.
+            # 2. The second is that we finish the rehash after the last add and then trigger an expand.
             # 3. The last one is the situation we want to test, ht1 reached MAX_FILL_PERCENT_HARD after
             #    adding 34 new elements.
             set htstats [r debug htstats-key myzset full]

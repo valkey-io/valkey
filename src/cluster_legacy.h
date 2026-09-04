@@ -455,6 +455,8 @@ typedef struct slotStat {
     uint64_t cpu_usec;
     uint64_t network_bytes_in;
     uint64_t network_bytes_out;
+    uint64_t keyspace_hits;
+    uint64_t keyspace_misses;
 } slotStat;
 
 typedef struct slotRange {

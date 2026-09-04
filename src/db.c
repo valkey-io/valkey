@@ -32,6 +32,7 @@
 #include "ordered_index.h"
 #include "cluster.h"
 #include "cluster_migrateslots.h"
+#include "cluster_slot_stats.h"
 #include "latency.h"
 #include "script.h"
 #include "functions.h"
@@ -119,11 +120,17 @@ robj *lookupKey(serverDb *db, robj *key, int flags) {
             val->lru = lrulfu_touch(val->lru);
         }
 
-        if (!(flags & (LOOKUP_NOSTATS | LOOKUP_WRITE))) server.stat_keyspace_hits++;
+        if (!(flags & (LOOKUP_NOSTATS | LOOKUP_WRITE))) {
+            server.stat_keyspace_hits++;
+            clusterSlotStatsAddKeyspaceHits(dict_index);
+        }
         /* TODO: Use separate hits stats for WRITE */
     } else {
         if (!(flags & (LOOKUP_NONOTIFY | LOOKUP_WRITE))) notifyKeyspaceEvent(NOTIFY_KEY_MISS, "keymiss", key, db->id);
-        if (!(flags & (LOOKUP_NOSTATS | LOOKUP_WRITE))) server.stat_keyspace_misses++;
+        if (!(flags & (LOOKUP_NOSTATS | LOOKUP_WRITE))) {
+            server.stat_keyspace_misses++;
+            clusterSlotStatsAddKeyspaceMisses(dict_index);
+        }
         /* TODO: Use separate misses stats and notify event for WRITE */
     }
 

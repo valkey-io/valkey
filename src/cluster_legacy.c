@@ -4260,7 +4260,15 @@ int clusterProcessPacket(clusterLink *link) {
                  * might still be trying to complete the handshake. */
 
                 /* We should always receive a MEET packet on an inbound link. */
-                serverAssert(link != sender->link);
+                if (link == sender->link) {
+                    /* This indicates a cluster state inconsistency. The link where we
+                     * received the MEET is our outbound link. We should free it
+                     * and return, as the link is no longer valid. */
+                    serverLog(LL_WARNING, "Received MEET from node %.40s on the outbound link. "
+                                          "Closing link to recover.", sender->name);
+                    freeClusterLink(link);
+                    return 0; /* Must return, link is now invalid. */
+                }
                 serverLog(LL_NOTICE, "Freeing outbound link to node %.40s (%s) after receiving a MEET packet "
                                      "from this known node",
                           sender->name, humanNodename(sender));

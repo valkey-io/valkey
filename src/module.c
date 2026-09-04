@@ -3649,7 +3649,6 @@ int VM_ReplyWithCallReply(ValkeyModuleCtx *ctx, ValkeyModuleCallReply *reply) {
  * `proto` must point to a valid, complete RESP-encoded reply of length
  * `proto_len`.  Returns VALKEYMODULE_OK.  If there is no client context
  * (script, timer, etc.) the call is a no-op and returns VALKEYMODULE_OK. */
-// NON-PUBLIC API: remove this line when making this API public.
 int VM_ReplyRaw(ValkeyModuleCtx *ctx, const char *proto, size_t proto_len) {
     client *c = moduleGetReplyClient(ctx);
     if (c == NULL) return VALKEYMODULE_OK;
@@ -6322,7 +6321,6 @@ int VM_CallReplyPromiseAbort(ValkeyModuleCallReply *reply, void **private_data) 
  * Note: as with VM_CallReplyPromiseAbort, if the underlying blocking command
  * belongs to a module that does not honour disconnect callbacks, the abort may
  * succeed internally without the command actually stopping. */
-// NON-PUBLIC API: remove this line when making this API public.
 int VM_CallArgvAbort(ValkeyModuleCallArgvBlockedHandle *handle) {
     ValkeyModuleAsyncRMCallPromise *promise = handle;
     serverAssert(promise->from_call_argv);
@@ -7097,7 +7095,6 @@ cleanup:
  * * ENOSPC: Write or deny-oom command is not allowed
  * * ESPIPE: Command not allowed on script mode
  */
-// NON-PUBLIC API: remove this line when making this API public.
 int VM_CallArgv(ValkeyModuleCtx *ctx,
                 ValkeyModuleString **argv,
                 int argc,
@@ -15316,6 +15313,7 @@ void moduleRegisterCoreAPI(void) {
     REGISTER_API(ReplyWithNull);
     REGISTER_API(ReplyWithBool);
     REGISTER_API(ReplyWithCallReply);
+    REGISTER_API(ReplyRaw);
     REGISTER_API(ReplyWithDouble);
     REGISTER_API(ReplyWithBigNumber);
     REGISTER_API(ReplyWithLongDouble);
@@ -15339,6 +15337,8 @@ void moduleRegisterCoreAPI(void) {
     REGISTER_API(StringToLongDouble);
     REGISTER_API(StringToStreamID);
     REGISTER_API(Call);
+    REGISTER_API(CallArgv);
+    REGISTER_API(CallArgvAbort);
     REGISTER_API(CallReplyProto);
     REGISTER_API(FreeCallReply);
     REGISTER_API(CallReplyInteger);

@@ -731,6 +731,15 @@ void clusterCommandSyncSlotsFailoverGranted(client *c) {
 /* Sent by a target primary to a replica in its shard to inform that an ongoing
  * slot import is now finished. */
 void clusterCommandSyncSlotsFinish(client *c) {
+    /* FINISH is sent within the slot migration replication stream, so it must
+     * originate from a slot migration client (primary/AOF). Reject any other
+     * client to prevent driving the import state machine to a terminal state. */
+    if (!mustObeyClient(c)) {
+        addReplyError(c, "CLUSTER SYNCSLOTS FINISH should only be used "
+                         "by slot migration clients");
+        return;
+    }
+
     char *name = NULL;
     char *state = NULL;
     char *message = NULL;

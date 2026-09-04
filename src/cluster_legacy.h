@@ -10,6 +10,7 @@
 #define CLUSTER_FAIL_UNDO_TIME_MULT 2        /* Undo fail if primary is back. */
 #define CLUSTER_MF_PAUSE_MULT 2              /* Primary pause manual failover mult. */
 #define CLUSTER_REPLICA_MIGRATION_DELAY 5000 /* Delay for replica migration. */
+#define CLUSTER_MEET_MAX_ATTEMPTS 5          /* Max MEETs sent to a known node with no inbound link to us. */
 
 /* Reasons why a replica is not able to failover. */
 #define CLUSTER_CANT_FAILOVER_NONE 0
@@ -425,6 +426,8 @@ struct _clusterNode {
     mstime_t pong_received;                 /* Unix time we received the pong */
     mstime_t data_received;                 /* Unix time we received any data */
     mstime_t meet_sent;                     /* Unix time we sent latest meet packet */
+    int meet_attempts;                      /* Number of MEET packets sent to this known node since
+                                               we last had an inbound link from it */
     mstime_t fail_time;                     /* Unix time when FAIL flag was set */
     mstime_t orphaned_time;                 /* Starting time of orphaned primary condition */
     mstime_t outbound_link_attempt_time;    /* Unix time we last tried to establish an outgoing link */

@@ -159,6 +159,48 @@ start_server {
         assert {[r xack s g $id1] eq 1}
     }
 
+    test {Stream consumer group commands should dirty WATCHed keys} {
+        r DEL mystream
+        r XADD mystream 1-0 f v
+        r XGROUP CREATE mystream mygroup 0
+
+        r WATCH mystream
+        r XGROUP CREATE mystream othergroup 0
+        r MULTI
+        r PING
+        assert_equal {} [r EXEC]
+
+        r WATCH mystream
+        r XGROUP SETID mystream mygroup 1-0
+        r MULTI
+        r PING
+        assert_equal {} [r EXEC]
+
+        r WATCH mystream
+        r XGROUP CREATECONSUMER mystream mygroup alice
+        r MULTI
+        r PING
+        assert_equal {} [r EXEC]
+
+        r WATCH mystream
+        r XGROUP DELCONSUMER mystream mygroup alice
+        r MULTI
+        r PING
+        assert_equal {} [r EXEC]
+
+        r WATCH mystream
+        r XSETID mystream 2-0
+        r MULTI
+        r PING
+        assert_equal {} [r EXEC]
+
+        r WATCH mystream
+        r XGROUP DESTROY mystream othergroup
+        r MULTI
+        r PING
+        assert_equal {} [r EXEC]
+    }
+
     test {PEL NACK reassignment after XGROUP SETID event} {
         r del events
         r xadd events * f1 v1
@@ -211,6 +253,59 @@ start_server {
         set res [r XREADGROUP GROUP mygroup myconsumer STREAMS mystream 0-1]
         assert {[lindex $res 0 1 0] == {1-0 {}}}
         assert {[lindex $res 0 1 1] == {2-0 {field1 B}}}
+    }
+
+    test {XREADGROUP, XACK, XCLAIM and XAUTOCLAIM should dirty WATCHed keys} {
+        r DEL mystream
+        set id1 [r XADD mystream 1-0 a 1]
+        set id2 [r XADD mystream 2-0 b 2]
+        r XGROUP CREATE mystream mygroup 0
+
+        r WATCH mystream
+        r XREADGROUP GROUP mygroup consumer1 COUNT 1 STREAMS mystream >
+        r MULTI
+        r PING
+        assert_equal {} [r EXEC]
+
+        r WATCH mystream
+        r XACK mystream mygroup $id1
+        r MULTI
+        r PING
+        assert_equal {} [r EXEC]
+
+        r XREADGROUP GROUP mygroup consumer1 COUNT 1 STREAMS mystream >
+        after 20
+
+        r WATCH mystream
+        r XCLAIM mystream mygroup consumer2 0 $id2
+        r MULTI
+        r PING
+        assert_equal {} [r EXEC]
+
+        after 20
+        r WATCH mystream
+        r XAUTOCLAIM mystream mygroup consumer1 0 0-0 COUNT 1
+        r MULTI
+        r PING
+        assert_equal {} [r EXEC]
+    }
+
+    test {Blocking XREADGROUP consumer creation should dirty WATCHed keys} {
+        r DEL mystream
+        r XGROUP CREATE mystream mygroup $ MKSTREAM
+
+        r WATCH mystream
+        set rd [valkey_deferring_client]
+        $rd XREADGROUP GROUP mygroup consumer1 BLOCK 0 NOACK STREAMS mystream ">"
+        wait_for_blocked_clients_count 1
+
+        r MULTI
+        r PING
+        assert_equal {} [r EXEC]
+
+        r XADD mystream * f v
+        $rd read
+        $rd close
     }
 
     test {Blocking XREADGROUP will not reply with an empty array} {

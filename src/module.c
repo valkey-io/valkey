@@ -3745,14 +3745,19 @@ int VM_ReplyWithLongDouble(ValkeyModuleCtx *ctx, long double ld) {
  *
  * #### Return value
  *
- * The command returns VALKEYMODULE_ERR if the format specifiers are invalid
- * or the command name does not belong to a known command. */
+ * The command returns VALKEYMODULE_ERR if the format specifiers are invalid,
+ * the command name does not belong to a known command, or the server is
+ * paused for replica traffic (e.g. during CLIENT PAUSE WRITE or CLUSTER
+ * FAILOVER). */
 int VM_Replicate(ValkeyModuleCtx *ctx, const char *cmdname, const char *fmt, ...) {
     struct serverCommand *cmd = NULL;
     robj **argv = NULL;
     int argc = 0, flags = 0, j;
     va_list ap;
     int slot = -1;
+
+    /* Reject replication when the server is paused for replica traffic. */
+    if (isPausedActions(PAUSE_ACTION_REPLICA)) return VALKEYMODULE_ERR;
 
     bool skip_validation = ctx->module &&
                            (ctx->module->options & VALKEYMODULE_OPTIONS_SKIP_COMMAND_VALIDATION);
@@ -3807,8 +3812,13 @@ int VM_Replicate(ValkeyModuleCtx *ctx, const char *cmdname, const char *fmt, ...
  * the command can just be re-executed to deterministically re-create the
  * new state starting from the old one.
  *
- * The function always returns VALKEYMODULE_OK. */
+ * The function returns VALKEYMODULE_ERR if the server is paused for
+ * replica traffic (e.g. during CLIENT PAUSE WRITE or CLUSTER FAILOVER),
+ * otherwise VALKEYMODULE_OK is returned. */
 int VM_ReplicateVerbatim(ValkeyModuleCtx *ctx) {
+    /* Reject replication when the server is paused for replica traffic. */
+    if (isPausedActions(PAUSE_ACTION_REPLICA)) return VALKEYMODULE_ERR;
+
     alsoPropagate(ctx->client->db->id, ctx->client->argv, ctx->client->argc, PROPAGATE_AOF | PROPAGATE_REPL, ctx->client->slot);
     server.dirty++;
     return VALKEYMODULE_OK;
@@ -6798,6 +6808,20 @@ static void moduleCallCommandHelper(ValkeyModuleCtx *ctx, client *c, robj **argv
             }
             goto cleanup;
         }
+    }
+
+    /* Reject write commands from modules when replica traffic is paused.
+     * This prevents module timer callbacks and thread-safe contexts from
+     * bypassing the pause and hitting the assertion in propagateNow(). */
+    if (replicate && (cmd_flags & (CMD_WRITE | CMD_MAY_REPLICATE)) && isPausedActions(PAUSE_ACTION_REPLICA)) {
+        errno = ENOSPC;
+        if (error_as_call_replies) {
+            reply_error_msg = sdscatfmt(sdsempty(),
+                                        "Write command '%S' was "
+                                        "called while the server is paused for writes.",
+                                        c->cmd->fullname);
+        }
+        goto cleanup;
     }
 
     /* Check if the user can run this command according to the current

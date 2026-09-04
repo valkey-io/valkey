@@ -1706,6 +1706,9 @@ typedef struct serverTLSContextConfig {
     char *client_cert_file;     /* Certificate to use as a client; if none, use cert_file */
     char *client_key_file;      /* Private key filename for client_cert_file */
     char *client_key_file_pass; /* Optional password for client_key_file */
+    char *alt_cert_file;        /* Secondary server side cert file name */
+    char *alt_key_file;         /* Private key filename for alt_cert_file */
+    char *alt_key_file_pass;    /* Optional password for alt_key_file */
     int client_auth_user;       /* Field to be used for automatic TLS authentication based on client TLS certificate */
     char *dh_params_file;
     char *ca_cert_file;
@@ -2422,9 +2425,11 @@ struct valkeyServer {
     int tls_auth_clients;
     serverTLSContextConfig tls_ctx_config;
     long long tls_server_cert_expire_time;
+    long long tls_server_alt_cert_expire_time;
     long long tls_client_cert_expire_time;
     long long tls_ca_cert_expire_time;
     sds tls_server_cert_serial;
+    sds tls_server_alt_cert_serial;
     sds tls_client_cert_serial;
     sds tls_ca_cert_serial;
     serverUnixContextConfig unix_ctx_config;

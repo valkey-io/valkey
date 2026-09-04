@@ -2447,9 +2447,11 @@ void initServerConfig(void) {
     server.latency_tracking_info_percentiles[2] = 99.9; /* p999 */
 
     server.tls_server_cert_expire_time = 0;
+    server.tls_server_alt_cert_expire_time = 0;
     server.tls_client_cert_expire_time = 0;
     server.tls_ca_cert_expire_time = 0;
     server.tls_server_cert_serial = NULL;
+    server.tls_server_alt_cert_serial = NULL;
     server.tls_client_cert_serial = NULL;
     server.tls_ca_cert_serial = NULL;
 
@@ -6431,6 +6433,11 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
             tls_server_seconds_remaining = server.tls_server_cert_expire_time - (long long)server.unixtime;
             if (tls_server_seconds_remaining < 0) tls_server_seconds_remaining = 0;
         }
+        long long tls_server_alt_seconds_remaining = 0;
+        if (server.tls_server_alt_cert_expire_time > 0) {
+            tls_server_alt_seconds_remaining = server.tls_server_alt_cert_expire_time - (long long)server.unixtime;
+            if (tls_server_alt_seconds_remaining < 0) tls_server_alt_seconds_remaining = 0;
+        }
         long long tls_client_seconds_remaining = 0;
         if (server.tls_client_cert_expire_time > 0) {
             tls_client_seconds_remaining = server.tls_client_cert_expire_time - (long long)server.unixtime;
@@ -6446,6 +6453,8 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
             "# TLS\r\n" FMTARGS(
                 "tls_server_cert_serial:%s\r\n", server.tls_server_cert_serial ? server.tls_server_cert_serial : "none",
                 "tls_server_cert_expires_in_seconds:%lld\r\n", tls_server_seconds_remaining,
+                "tls_server_alt_cert_serial:%s\r\n", server.tls_server_alt_cert_serial ? server.tls_server_alt_cert_serial : "none",
+                "tls_server_alt_cert_expires_in_seconds:%lld\r\n", tls_server_alt_seconds_remaining,
                 "tls_client_cert_serial:%s\r\n", server.tls_client_cert_serial ? server.tls_client_cert_serial : "none",
                 "tls_client_cert_expires_in_seconds:%lld\r\n", tls_client_seconds_remaining,
                 "tls_ca_cert_serial:%s\r\n", server.tls_ca_cert_serial ? server.tls_ca_cert_serial : "none",

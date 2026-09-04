@@ -8215,6 +8215,7 @@ __attribute__((weak)) int main(int argc, char **argv) {
  * MSET specific command extended options - XX/NX
  * HGET specific command extended options - PERSIST
  * HSET specific command extended options - NX/XX/FXX/FNX
+ * DELEX specific command extended options - IFEQ/IFNE
  * INCREX specific command extended options - BYINT/BYFLOAT
  * Common command extended options - EX/EXAT/PX/PXAT/KEEPTTL
  *
@@ -8267,9 +8268,13 @@ int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_
                    (opt[2] == 'e' || opt[2] == 'E') &&
                    (opt[3] == 'q' || opt[3] == 'Q') && opt[4] == '\0' &&
                    next &&
-                   !(*flags & ARGS_SET_CONDITIONAL) && (command_type == COMMAND_SET))
+                   !(*flags & ARGS_SET_CONDITIONAL) && !(*flags & ARGS_DELEX_CONDITIONAL) && (command_type == COMMAND_SET || command_type == COMMAND_DELEX))
         {
-            *flags |= ARGS_SET_IFEQ;
+            if (command_type == COMMAND_SET) {
+                *flags |= ARGS_SET_IFEQ;
+            }else {
+                *flags |= ARGS_DELEX_IFEQ;
+            }
             *compare_val = next;
             j++;
         } else if ((opt[0] == 'i' || opt[0] == 'I') &&
@@ -8277,9 +8282,13 @@ int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_
                    (opt[2] == 'n' || opt[2] == 'N') &&
                    (opt[3] == 'e' || opt[3] == 'E') && opt[4] == '\0' &&
                    next &&
-                   !(*flags & ARGS_SET_CONDITIONAL) && (command_type == COMMAND_SET))
+                   !(*flags & ARGS_SET_CONDITIONAL) && !(*flags & ARGS_DELEX_CONDITIONAL) && (command_type == COMMAND_SET || command_type == COMMAND_DELEX))
         {
-            *flags |= ARGS_SET_IFNE;
+            if (command_type == COMMAND_SET) {
+                *flags |= ARGS_SET_IFNE;
+            }else {
+                *flags |= ARGS_DELEX_IFNE;
+            }
             *compare_val = next;
             j++;
         } else if ((opt[0] == 'g' || opt[0] == 'G') &&
@@ -8304,7 +8313,7 @@ int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_
                    (opt[1] == 'x' || opt[1] == 'X') && opt[2] == '\0' &&
                    !(*flags & ARGS_KEEPTTL) && !(*flags & ARGS_PERSIST) &&
                    !(*flags & ARGS_EXAT) && !(*flags & ARGS_PX) &&
-                   !(*flags & ARGS_PXAT) && next)
+                   !(*flags & ARGS_PXAT) && command_type != COMMAND_DELEX && next)
         {
             *flags |= ARGS_EX;
             *expire = next;
@@ -8314,7 +8323,7 @@ int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_
                    (opt[1] == 'x' || opt[1] == 'X') && opt[2] == '\0' &&
                    !(*flags & ARGS_KEEPTTL) && !(*flags & ARGS_PERSIST) &&
                    !(*flags & ARGS_EX) && !(*flags & ARGS_EXAT) &&
-                   !(*flags & ARGS_PXAT) && next)
+                   !(*flags & ARGS_PXAT) && command_type != COMMAND_DELEX && next)
         {
             *flags |= ARGS_PX;
             *unit = UNIT_MILLISECONDS;
@@ -8327,7 +8336,7 @@ int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_
                    (opt[3] == 't' || opt[3] == 'T') && opt[4] == '\0' &&
                    !(*flags & ARGS_KEEPTTL) && !(*flags & ARGS_PERSIST) &&
                    !(*flags & ARGS_EX) && !(*flags & ARGS_PX) &&
-                   !(*flags & ARGS_PXAT) && next)
+                   !(*flags & ARGS_PXAT) && command_type != COMMAND_DELEX && next)
         {
             *flags |= ARGS_EXAT;
             *expire = next;
@@ -8339,7 +8348,7 @@ int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_
                    (opt[3] == 't' || opt[3] == 'T') && opt[4] == '\0' &&
                    !(*flags & ARGS_KEEPTTL) && !(*flags & ARGS_PERSIST) &&
                    !(*flags & ARGS_EX) && !(*flags & ARGS_EXAT) &&
-                   !(*flags & ARGS_PX) && next)
+                   !(*flags & ARGS_PX) && command_type != COMMAND_DELEX && next)
         {
             *flags |= ARGS_PXAT;
             *unit = UNIT_MILLISECONDS;

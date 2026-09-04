@@ -4104,6 +4104,8 @@ void lpushCommand(client *c);
 void rpushCommand(client *c);
 void lpushxCommand(client *c);
 void rpushxCommand(client *c);
+void lpushboundCommand(client *c);
+void rpushboundCommand(client *c);
 void linsertCommand(client *c);
 void lpopCommand(client *c);
 void rpopCommand(client *c);

@@ -3962,6 +3962,21 @@ static void propagatePendingCommands(void) {
     serverOpArrayFree(&server.also_propagate);
 }
 
+/* Whether any of the module-jobs / propagation / module-yield post-execution-
+ * unit work is pending. Shared by postExecutionUnitOperations() and
+ * afterCommand() so the "is there anything to do?" condition for these three
+ * sub-systems has a single home instead of being duplicated at both call
+ * sites - static inline costs nothing here since both callers are in this
+ * same translation unit. moduleHasPostExecUnitJobs() is a tiny cross-TU
+ * accessor rather than reaching into module.c's list directly, so this file
+ * doesn't need to know how the module subsystem tracks its pending jobs.
+ *
+ * Must stay an OR of every condition below - never drop one as an
+ * optimization, since that would silently skip real pending work. */
+static inline int hasPostExecutionUnitPendingWork(void) {
+    return moduleHasPostExecUnitJobs() || server.also_propagate.numops || server.busy_module_yield_flags;
+}
+
 /* Performs operations that should be performed after an execution unit ends.
  * Execution unit is a code that should be done atomically.
  * Execution units can be nested and do not necessarily start with a server command.
@@ -3979,14 +3994,27 @@ static void propagatePendingCommands(void) {
 void postExecutionUnitOperations(void) {
     if (server.execution_nesting) return;
 
-    firePostExecutionUnitJobs();
+    /* Combined pending-work gate: in the overwhelming majority of calls
+     * (e.g. after a plain read-only command like GET) none of the three
+     * sub-systems below have anything queued. Fold all of their "is there
+     * anything to do?" checks into a single branch here so the common case
+     * pays for one memory read + one branch instead of three separate
+     * (partly cross-translation-unit, non-inlinable) function calls.
+     *
+     * Deliberately NOT hinted unlikely() here: unlike the afterCommand()
+     * gate below, this function is also called right after queuing a
+     * propagation (expire.c, evict.c, db.c) where the condition is
+     * typically true, so a fixed hint would be wrong for those call sites. */
+    if (hasPostExecutionUnitPendingWork()) {
+        firePostExecutionUnitJobs();
 
-    /* If we are at the top-most call() and not inside an active module
-     * context (e.g. within a module timer) we can propagate what we accumulated. */
-    propagatePendingCommands();
+        /* If we are at the top-most call() and not inside an active module
+         * context (e.g. within a module timer) we can propagate what we accumulated. */
+        propagatePendingCommands();
 
-    /* Module subsystem post-execution-unit logic */
-    modulePostExecutionUnitOperations();
+        /* Module subsystem post-execution-unit logic */
+        modulePostExecutionUnitOperations();
+    }
 }
 
 /* Increment the command failure counters (either rejected_calls or failed_calls).
@@ -4376,18 +4404,37 @@ void rejectCommandFormat(client *c, int notify_modules, const char *fmt, ...) {
 /* This is called after a command in call, we can do some maintenance job in it. */
 void afterCommand(client *c) {
     UNUSED(c);
-    /* Should be done before trackingHandlePendingKeyInvalidations so that we
-     * reply to client before invalidating cache (makes more sense) */
-    postExecutionUnitOperations();
 
-    /* Flush pending tracking invalidations. */
-    trackingHandlePendingKeyInvalidations();
+    /* Combined pending-work gate for command-completion tail work.
+     * See postExecutionUnitOperations() for why each callee below still
+     * needs its own defensive check - this gate exists purely so the
+     * overwhelmingly common "nothing pending" case (e.g. after a plain
+     * GET, or after each sub-command of a MULTI/EXEC or script) short-
+     * circuits before paying for any of the calls below.
+     *
+     * Unlike the shared hasPostExecutionUnitPendingWork() conditions, the
+     * unlikely() hint here is safe: this is the single call site reached
+     * from a plain top-level command, where "nothing pending" genuinely
+     * dominates. clusterSlotStatsAddNetworkBytesOutForUserClient() is
+     * intentionally excluded from the gate: it is not deferred/queued
+     * work, it must run for every command whenever slot-stats accounting
+     * is enabled. */
+    if (server.execution_nesting == 0 &&
+        unlikely(hasPostExecutionUnitPendingWork() || trackingHasPendingKeyInvalidations() ||
+                 listLength(server.pending_push_messages))) {
+        /* Should be done before trackingHandlePendingKeyInvalidations so that we
+         * reply to client before invalidating cache (makes more sense) */
+        postExecutionUnitOperations();
+
+        /* Flush pending tracking invalidations. */
+        trackingHandlePendingKeyInvalidations();
+
+        /* Flush other pending push messages. Not interleaved with
+         * transaction response since we're already outside nesting here. */
+        listJoin(c->reply, server.pending_push_messages);
+    }
 
     clusterSlotStatsAddNetworkBytesOutForUserClient(c);
-
-    /* Flush other pending push messages. only when we are not in nested call.
-     * So the messages are not interleaved with transaction response. */
-    if (!server.execution_nesting) listJoin(c->reply, server.pending_push_messages);
 }
 
 /* Check if c->cmd exists, fills `err` with details in case it doesn't.

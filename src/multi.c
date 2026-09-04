@@ -253,22 +253,31 @@ int execGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult 
 static int checkExecConditions(client *c) {
     int index = 1;
 
+    /* Validate the complete condition list before reading any keys. This keeps
+     * malformed commands from exposing the result of an earlier condition. */
+    while (index < c->argc) {
+        execCondition condition;
+
+        if (parseExecCondition(c->argv, c->argc, &index, &condition) != C_OK) {
+            addReplyErrorObject(c, shared.syntaxerr);
+            return -1;
+        }
+    }
+
+    index = 1;
     while (index < c->argc) {
         int condition_index = index;
         execCondition condition;
         robj *key, *value = NULL, *o;
         int matches;
 
-        if (parseExecCondition(c->argv, c->argc, &index, &condition) != C_OK) {
-            addReplyErrorObject(c, shared.syntaxerr);
-            return -1;
-        }
+        serverAssert(parseExecCondition(c->argv, c->argc, &index, &condition) == C_OK);
 
         key = c->argv[condition_index + 1];
         if (condition == EXEC_CONDITION_IFEQ || condition == EXEC_CONDITION_IFNE) {
             value = c->argv[condition_index + 2];
         }
-        o = lookupKeyReadWithFlags(c->db, key, LOOKUP_NOTOUCH);
+        o = lookupKeyReadWithFlags(c->db, key, LOOKUP_NOTOUCH | LOOKUP_NOEXPIRE);
 
         switch (condition) {
         case EXEC_CONDITION_IFEQ:

@@ -131,6 +131,11 @@ start_server {tags {"acl external:skip"}} {
         $r2 lpush writelist value
         catch {$r2 exec xx writecondition} err
         assert_match "*NOPERM*key*" $err
+
+        $r2 multi
+        $r2 lpush writelist value
+        assert_error "ERR syntax error" {$r2 exec ifeq writecondition other invalid}
+        $r2 discard
         assert_equal 0 [r llen writelist]
     }
 

@@ -594,102 +594,138 @@ start_server {tags {"multi"}} {
     } {PONG} {needs:config-maxmemory}
 
     test {MULTI and script timeout} {
-        # check that if MULTI arrives during timeout, it is either refused, or
-        # allowed to pass, and we don't end up executing half of the transaction
+        # check that if MULTI arrives during timeout, execution is deferred
+        # until script is killed, and we don't end up executing half of the transaction
         set rd1 [valkey_deferring_client]
-        set r2 [valkey_client]
+        set rd2 [valkey_deferring_client]
         r config set lua-time-limit 10
-        r set xx 1
+        $rd2 set xx 1
+        assert_equal {OK} [$rd2 read]
         $rd1 eval {while true do end} 0
-        after 200
-        catch { $r2 multi; } e
-        catch { $r2 incr xx; } e
+        wait_for_script_busy
+        $rd2 multi
+        assert_equal {OK} [$rd2 read]
+        $rd2 incr xx
         r script kill
         after 200 ; # Give some time to Lua to call the hook again...
-        catch { $r2 incr xx; } e
-        catch { $r2 exec; } e
-        assert_match {EXECABORT*previous errors*} $e
-        set xx [r get xx]
-        # make sure that either the whole transaction passed or none of it (we actually expect none)
-        assert { $xx == 1 || $xx == 3}
+
+        # INCR commands should be queued
+        assert_equal {QUEUED} [$rd2 read]
+        $rd2 incr xx
+        assert_equal {QUEUED} [$rd2 read]
+        $rd2 exec
+
+        # make sure that the whole transaction passed
+        assert_equal {2 3} [$rd2 read] ; # EXEC result
+        $rd2 get xx; set xx [$rd2 read]
+        assert { $xx == 3 }
+
         # check that the connection is no longer in multi state
-        set pong [$r2 ping asdf]
-        assert_equal $pong "asdf"
-        $rd1 close; $r2 close
+        $rd2 ping asdf
+        assert_equal {asdf} [$rd2 read]
+        catch {$rd1 read} _
+        $rd1 close; $rd2 close
     }
 
     test {EXEC and script timeout} {
-        # check that if EXEC arrives during timeout, we don't end up executing
-        # half of the transaction, and also that we exit the multi state
+        # check that if EXEC arrives during timeout, execution is deferred
+        # until script is killed, and we don't end up executing half of the transaction
         set rd1 [valkey_deferring_client]
-        set r2 [valkey_client]
+        set rd2 [valkey_deferring_client]
         r config set lua-time-limit 10
-        r set xx 1
-        catch { $r2 multi; } e
-        catch { $r2 incr xx; } e
+        $rd2 set xx 1
+        assert_equal {OK} [$rd2 read]
+        $rd2 multi
+        assert_equal {OK} [$rd2 read]
+        $rd2 incr xx
+        assert_equal {QUEUED} [$rd2 read]
         $rd1 eval {while true do end} 0
-        after 200
-        catch { $r2 incr xx; } e
-        catch { $r2 exec; } e
-        assert_match {EXECABORT*BUSY*} $e
+        wait_for_script_busy
+        $rd2 incr xx
+        $rd2 exec
         r script kill
         after 200 ; # Give some time to Lua to call the hook again...
-        set xx [r get xx]
-        # make sure that either the whole transaction passed or none of it (we actually expect none)
-        assert { $xx == 1 || $xx == 3}
+
+        # INCR command should be queued, and EXEC should run the whole transaction
+        assert_equal {QUEUED} [$rd2 read]
+        assert_equal {2 3} [$rd2 read] ; # EXEC result
+
+        # make sure that the whole transaction passed
+        $rd2 get xx; set xx [$rd2 read]
+        assert { $xx == 3}
+
         # check that the connection is no longer in multi state
-        set pong [$r2 ping asdf]
-        assert_equal $pong "asdf"
-        $rd1 close; $r2 close
+        $rd2 ping asdf
+        assert_equal {asdf} [$rd2 read]
+        catch {$rd1 read} _
+        $rd1 close; $rd2 close
     }
 
     test {MULTI-EXEC body and script timeout} {
         # check that we don't run an incomplete transaction due to some commands
         # arriving during busy script
         set rd1 [valkey_deferring_client]
-        set r2 [valkey_client]
+        set rd2 [valkey_deferring_client]
         r config set lua-time-limit 10
-        r set xx 1
-        catch { $r2 multi; } e
-        catch { $r2 incr xx; } e
+        $rd2 set xx 1
+        assert_equal {OK} [$rd2 read]
+        $rd2 multi
+        assert_equal {OK} [$rd2 read]
+        $rd2 incr xx
+        assert_equal {QUEUED} [$rd2 read]
         $rd1 eval {while true do end} 0
-        after 200
-        catch { $r2 incr xx; } e
+        wait_for_script_busy
+        $rd2 incr xx
         r script kill
         after 200 ; # Give some time to Lua to call the hook again...
-        catch { $r2 exec; } e
-        assert_match {EXECABORT*previous errors*} $e
-        set xx [r get xx]
-        # make sure that either the whole transaction passed or none of it (we actually expect none)
-        assert { $xx == 1 || $xx == 3}
+
+        # INCR command should be queued
+        assert_equal {QUEUED} [$rd2 read]
+        $rd2 exec
+
+        # make sure that the whole transaction passed
+        assert_equal {2 3} [$rd2 read] ; # EXEC result
+        $rd2 get xx; set xx [$rd2 read]
+        assert { $xx == 3}
+
         # check that the connection is no longer in multi state
-        set pong [$r2 ping asdf]
-        assert_equal $pong "asdf"
-        $rd1 close; $r2 close
+        $rd2 ping asdf
+        assert_equal {asdf} [$rd2 read]
+        catch {$rd1 read} _
+        $rd1 close; $rd2 close
     }
 
     test {just EXEC and script timeout} {
         # check that if EXEC arrives during timeout, we don't end up executing
         # actual commands during busy script, and also that we exit the multi state
         set rd1 [valkey_deferring_client]
-        set r2 [valkey_client]
+        set rd2 [valkey_deferring_client]
+        set rd3 [valkey_deferring_client]
         r config set lua-time-limit 10
-        r set xx 1
-        catch { $r2 multi; } e
-        catch { $r2 incr xx; } e
+        $rd2 set xx 1
+        assert_equal {OK} [$rd2 read]
+        $rd2 multi
+        assert_equal {OK} [$rd2 read]
+        $rd2 incr xx
+        assert_equal {QUEUED} [$rd2 read]
         $rd1 eval {while true do end} 0
-        after 200
-        catch { $r2 exec; } e
-        assert_match {EXECABORT*BUSY*} $e
+        wait_for_script_busy
+        $rd3 get xx
+        $rd2 exec
         r script kill
         after 200 ; # Give some time to Lua to call the hook again...
-        set xx [r get xx]
-        # make we didn't execute the transaction
-        assert { $xx == 1}
+
+        # make sure we executed the transaction only after script was killed
+        assert_equal {1} [$rd3 read] ; # read before EXEC should return old value
+        assert_equal {2} [$rd2 read] ; # EXEC result
+        $rd2 get xx; set xx [$rd2 read]
+        assert { $xx == 2}
+
         # check that the connection is no longer in multi state
-        set pong [$r2 ping asdf]
-        assert_equal $pong "asdf"
-        $rd1 close; $r2 close
+        $rd2 ping asdf
+        assert_equal {asdf} [$rd2 read]
+        catch {$rd1 read} _
+        $rd1 close; $rd2 close
     }
 
     test {exec with write commands and state change} {

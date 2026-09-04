@@ -1342,9 +1342,7 @@ start_server {tags {"scripting"}} {
         set rd [valkey_deferring_client]
         r config set lua-time-limit 10
         run_script_on_connection $rd {while true do end} 0
-        after 200
-        catch {r ping} e
-        assert_match {BUSY*} $e
+        wait_for_script_busy
         kill_script
         after 200 ; # Give some time to Lua to call the hook again...
         assert_equal [r ping] "PONG"
@@ -1356,13 +1354,7 @@ start_server {tags {"scripting"}} {
         r config set lua-time-limit 10
         run_script_on_connection $rd {local f = function() while 1 do redis.call('ping') end end while 1 do pcall(f) end} 0
 
-        wait_for_condition 50 100 {
-            [catch {r ping} e] == 1
-        } else {
-            fail "Can't wait for script to start running"
-        }
-        catch {r ping} e
-        assert_match {BUSY*} $e
+        wait_for_script_busy
 
         kill_script
 
@@ -1397,13 +1389,7 @@ start_server {tags {"scripting"}} {
         $rd write $buf
         $rd flush
 
-        wait_for_condition 50 100 {
-            [catch {r ping} e] == 1
-        } else {
-            fail "Can't wait for script to start running"
-        }
-        catch {r ping} e
-        assert_match {BUSY*} $e
+        wait_for_script_busy
 
         kill_script
         wait_for_condition 50 100 {
@@ -1462,9 +1448,7 @@ start_server {tags {"scripting"}} {
             } 1 x
 
         # wait for the script to be busy
-        after 200
-        catch {r ping} e
-        assert_match {BUSY*} $e
+        wait_for_script_busy
 
         # run cause the script to abort, and run a command that could have processed
         # unblocked clients (due to a bug)
@@ -1485,26 +1469,46 @@ start_server {tags {"scripting"}} {
         set rd [valkey_deferring_client]
         r config set lua-time-limit 10
         run_script_on_connection $rd {redis.call('set',KEYS[1],'y'); while true do end} 1 x
-        after 200
-        catch {r ping} e
-        assert_match {BUSY*} $e
+        wait_for_script_busy
         catch {kill_script} e
         assert_match {UNKILLABLE*} $e
-        catch {r ping} e
-        assert_match {BUSY*} $e
+        wait_for_script_busy
     } {} {external:skip}
 
     # Note: keep this test at the end of this server stanza because it
     # kills the server.
     test {SHUTDOWN NOSAVE can kill a timedout script anyway} {
-        # The server should be still unresponding to normal commands.
-        catch {r ping} e
-        assert_match {BUSY*} $e
+        # The server should be still in script-timedout mode.
+        wait_for_script_busy
         catch {r shutdown nosave}
         # Make sure the server was killed
         catch {set rd [valkey_deferring_client]} e
         assert_match {*connection refused*} $e
     } {} {external:skip}
+}
+
+start_server {tags {"scripting"}} {
+    test {Commands sent during script timeout are deferred and executed after script ends} {
+        set rd [valkey_deferring_client]
+        set rd2 [valkey_deferring_client]
+        r config set lua-time-limit 10
+        run_script_on_connection $rd {while true do end} 0
+
+        wait_for_script_busy
+
+        # Send a command should be deferred during a busy script
+        $rd2 set deferredkey deferredval
+
+        kill_script
+
+        # After the script is killed, the deferred command executes
+        assert_equal {OK} [$rd2 read]
+        assert_equal {deferredval} [r get deferredkey]
+
+        catch {$rd read} _
+        $rd close
+        $rd2 close
+    } undefined {external:skip}
 }
 
     start_server {tags {"scripting repl needs:debug external:skip"}} {
@@ -2424,13 +2428,7 @@ start_server {tags {"scripting"}} {
             } 1 x
 
             # wait for the script to time out and yield
-            wait_for_condition 100 100 {
-                [catch {r -1 ping} e] == 1
-            } else {
-                fail "Can't wait for script to start running"
-            }
-            catch {r -1 ping} e
-            assert_match {BUSY*} $e
+            wait_for_script_busy -1
 
             # cause the replica to disconnect (triggering the busy script to exit)
             r slaveof no one

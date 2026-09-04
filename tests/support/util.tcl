@@ -1353,6 +1353,29 @@ proc bp {{s {}}} {
     }
 }
 
+# Returns 1 if a script/function is currently in timedout (busy) mode on the given server
+proc script_is_busy {{srv_index 0} {threshold}} {
+    if {[catch {r $srv_index function stats} stats]} {
+        return [string match {BUSY*} $stats]
+    }
+
+    set running_script [dict get $stats running_script]
+    if {$running_script eq {}} {
+        return 0
+    }
+
+    return [expr {[dict get $running_script duration_ms] >= $threshold}]
+}
+
+# Wait until a script/function enters busy mode on the given server
+proc wait_for_script_busy {{srv_index 0} {threshold 5000}} {
+    wait_for_condition 500 10 {
+        [script_is_busy $srv_index $threshold]
+    } else {
+        fail "Script never entered busy mode"
+    }
+}
+
 # Compares two version strings. Returns 1 if a >= b, 0 otherwise.
 proc version_greater_or_equal {a b} {
     regexp {^([0-9]+)\.([0-9]+)\.([0-9]+)$} $a -> a_major a_minor a_patch

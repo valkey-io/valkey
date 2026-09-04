@@ -4868,10 +4868,9 @@ int processCommand(client *c) {
             rejectCommandSds(c, busy_err, 1);
         } else if (server.busy_module_yield_flags) {
             rejectCommand(c, shared.slowmoduleerr, 1);
-        } else if (scriptIsEval()) {
-            rejectCommand(c, shared.slowevalerr, 1);
         } else {
-            rejectCommand(c, shared.slowscripterr, 1);
+            /* For long-running scripts, defer command execution instead of rejecting */
+            blockPostponeClient(c);
         }
         return C_OK;
     }

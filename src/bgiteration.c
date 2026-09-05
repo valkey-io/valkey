@@ -33,11 +33,6 @@ static bool isDeleteCmd(struct serverCommand *cmd) {
     return ((cmd->proc == delCommand) || (cmd->proc == unlinkCommand));
 }
 
-/* Returns true if the command is a flush based command (FLUSHDB or FLUSHALL) */
-static bool isFlushCmd(struct serverCommand *cmd) {
-    return ((cmd->proc == flushdbCommand) || (cmd->proc == flushallCommand));
-}
-
 /* This utility utilizes the main thread and background threads for processing.  The API is split,
  * with some of the functions intended for the main thread and others intended for the background
  * clients.  This sanity check ensures that we maintain thread safety, calling the API as intended. */
@@ -2320,7 +2315,6 @@ bool bgIteration_blockClientIfRequired(client *c) {
     iteratorReplicationFlagsWereUpdated = false;
     if (!bgIteration_iterationActive()) return false;
     if (!isWriteCmd(c->cmd)) return false;
-    if (isFlushCmd(c->cmd) && (getFlushCommandFlags(c, false, NULL) == C_ERR)) return false;
 
     if (BGITERATION_DEBUG) {
         sds sdsArgv = createSdsFromClientArgv(c->argc, c->argv);
@@ -2334,9 +2328,13 @@ bool bgIteration_blockClientIfRequired(client *c) {
     resetReplicationFlagForIterators(c);
     iteratorReplicationFlagsWereUpdated = true;
 
-    if (isFlushCmd(c->cmd)) {
+    if (c->cmd->proc == flushdbCommand || c->cmd->proc == flushallCommand) {
         // Handle flush commands prior to execution
-        handleFlushdb((c->cmd->proc == flushdbCommand) ? c->db->id : -1);
+        int flags;
+        if (getFlushCommandFlags(c, &flags) == C_OK) {
+            // The command parsed ok - we WILL flush
+            handleFlushdb((c->cmd->proc == flushdbCommand) ? c->db->id : -1);
+        }
     }
 
     bool mustBlock = false;

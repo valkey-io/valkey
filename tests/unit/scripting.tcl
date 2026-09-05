@@ -1918,6 +1918,121 @@ start_server {tags {"scripting external:skip"}} {
             assert_morethan $diff [expr 52 * 500]
         }
     }
+
+    test {maxmemory-scripts does not change the EVAL script count limit} {
+        r script flush
+        r config resetstat
+        r config set maxmemory-scripts 100MB
+
+        for {set j 1} {$j <= 501} {incr j} {
+            r eval "return $j" 0
+        }
+        assert_equal 500 [s number_of_cached_scripts]
+        assert_equal 1 [s evicted_scripts]
+
+        r config set maxmemory-scripts 0
+    }
+
+    test {maxmemory-scripts will trigger eviction during large EVAL scripts} {
+        r script flush
+        r config resetstat
+        r config set maxmemory-scripts 1MB
+
+        set padding [string repeat x 100000]
+        for {set j 1} {$j <= 500} {incr j} {
+            r eval "--$padding\nreturn $j" 0
+        }
+        assert_morethan [s evicted_scripts] 0
+        assert_lessthan [s number_of_cached_scripts] 500
+
+        r config set maxmemory-scripts 0
+    }
+
+    test {maxmemory-scripts set in runtime will trigger eviction - eval} {
+        r script flush
+        r config resetstat
+
+        set padding [string repeat x 100000]
+        for {set j 1} {$j <= 500} {incr j} {
+            r eval "--$padding\nreturn $j" 0
+        }
+        assert_equal 500 [s number_of_cached_scripts]
+
+        r config set maxmemory-scripts 1MB
+        wait_for_condition 1000 10 {
+            [s number_of_cached_scripts] < 500
+        } else {
+            fail "scripts eviction did not start in time"
+        }
+
+        r config set maxmemory-scripts 0
+    }
+
+    test {maxmemory-scripts will trigger eviction during the SCRIPT LOAD} {
+        r script flush
+        r config resetstat
+        r config set maxmemory-scripts 1MB
+
+        set padding [string repeat x 100000]
+        for {set j 1} {$j <= 500} {incr j} {
+            r script load "--$padding\nreturn $j"
+        }
+        assert_morethan [s evicted_scripts] 0
+        assert_lessthan [s number_of_cached_scripts] 500
+
+        r config set maxmemory-scripts 0
+    }
+
+    test {maxmemory-scripts set in runtime will trigger eviction - script load} {
+        r script flush
+        r config resetstat
+
+        set padding [string repeat x 100000]
+        for {set j 1} {$j <= 500} {incr j} {
+            r script load "--$padding\nreturn $j"
+        }
+        assert_equal 500 [s number_of_cached_scripts]
+
+        r config set maxmemory-scripts 1MB
+        wait_for_condition 1000 10 {
+            [s number_of_cached_scripts] < 500
+        } else {
+            fail "scripts eviction did not start in time"
+        }
+        assert_morethan [s evicted_scripts] 0
+        assert_lessthan [s number_of_cached_scripts] 500
+
+        r config set maxmemory-scripts 0
+    }
+
+    test {The combination of maxmemory-scripts and maxmemory} {
+        r script flush
+        r config resetstat
+
+        # maxmemory-scripts percentage value is not working if maxmemory is 0
+        r config set maxmemory 0
+        r config set maxmemory-scripts 1%
+        set padding [string repeat x 100000]
+        for {set j 1} {$j <= 500} {incr j} {
+            r script load "--$padding\nreturn $j"
+        }
+        assert_equal 500 [s number_of_cached_scripts]
+        assert_equal 0 [s evicted_scripts]
+
+        # maxmemory set in runtime will trigger eviction.
+        r config set maxmemory 100MB
+        puts [r config get maxmemory-scripts]
+        wait_for_condition 1000 10 {
+            [s number_of_cached_scripts] < 500
+        } else {
+            fail "scripts eviction did not start in time"
+        }
+        assert_morethan [s evicted_scripts] 0
+        assert_lessthan [s number_of_cached_scripts] 500
+
+        r config set maxmemory 0
+        r config set maxmemory-scripts 0
+    }
 }
 
 } ;# is_eval

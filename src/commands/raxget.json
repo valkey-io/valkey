@@ -1,0 +1,23 @@
+{
+    "RAXGET": {
+        "summary": "Returns one or more fields from an exact radix-tree path.",
+        "complexity": "O(L + F*U).",
+        "group": "radix",
+        "since": "9.2.0",
+        "arity": -4,
+        "function": "raxgetCommand",
+        "command_flags": ["READONLY", "FAST"],
+        "acl_categories": ["RADIX", "READ", "FAST"],
+        "key_specs": [{"flags": ["RO", "ACCESS"], "begin_search": {"index": {"pos": 1}}, "find_keys": {"range": {"lastkey": 0, "step": 1, "limit": 0}}}],
+        "reply_schema": {"oneOf": [
+            {"type": "string"},
+            {"type": "null"},
+            {"type": "array", "items": {"oneOf": [{"type": "string"}, {"type": "null"}]}}
+        ]},
+        "arguments": [
+            {"name": "key", "type": "key", "key_spec_index": 0},
+            {"name": "path", "type": "string"},
+            {"name": "field", "type": "string", "multiple": true}
+        ]
+    }
+}

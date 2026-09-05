@@ -1,0 +1,45 @@
+{
+    "RAXLONGEST": {
+        "summary": "Returns the longest stored radix path that prefixes a query.",
+        "complexity": "O(L + O).",
+        "group": "radix",
+        "since": "9.2.0",
+        "arity": -3,
+        "function": "raxlongestCommand",
+        "command_flags": ["READONLY"],
+        "acl_categories": ["RADIX", "READ", "SLOW"],
+        "key_specs": [{"flags": ["RO", "ACCESS"], "begin_search": {"index": {"pos": 1}}, "find_keys": {"range": {"lastkey": 0, "step": 1, "limit": 0}}}],
+        "reply_schema": {
+            "oneOf": [
+                {"description": "No stored path prefixes the query.", "type": "null"},
+                {"description": "The longest matching path.", "type": "string"},
+                {"description": "The byte length of the longest matching path when LENGTH is used.", "type": "integer"},
+                {
+                    "description": "The matching path or length and its selected values.",
+                    "type": "array",
+                    "minItems": 2,
+                    "maxItems": 2,
+                    "items": [
+                        {"oneOf": [{"type": "string"}, {"type": "integer"}]},
+                        {"oneOf": [
+                            {"description": "The field/value payload when WITHVALUES is used. In RESP2 this is returned as a flat array.", "type": "object", "additionalProperties": {"type": "string"}},
+                            {"description": "The values aligned to the requested field order when FIELDS is used.", "type": "array", "items": {"oneOf": [{"type": "string"}, {"type": "null"}]}}
+                        ]}
+                    ]
+                }
+            ]
+        },
+        "arguments": [
+            {"name": "key", "type": "key", "key_spec_index": 0},
+            {"name": "query", "type": "string"},
+            {"name": "length", "type": "pure-token", "token": "LENGTH", "optional": true},
+            {"name": "values", "type": "oneof", "optional": true, "arguments": [
+                {"name": "withvalues", "type": "pure-token", "token": "WITHVALUES"},
+                {"name": "fields", "type": "block", "token": "FIELDS", "arguments": [
+                    {"name": "numfields", "type": "integer"},
+                    {"name": "field", "type": "string", "multiple": true}
+                ]}
+            ]}
+        ]
+    }
+}

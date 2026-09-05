@@ -1,0 +1,18 @@
+{
+    "RAXDELPREFIX": {
+        "summary": "Deletes every stored radix path below a prefix.",
+        "complexity": "O(L + N).",
+        "group": "radix",
+        "since": "9.2.0",
+        "arity": 3,
+        "function": "raxdelprefixCommand",
+        "command_flags": ["WRITE"],
+        "acl_categories": ["RADIX", "WRITE", "SLOW"],
+        "key_specs": [{"flags": ["RW", "ACCESS", "DELETE"], "begin_search": {"index": {"pos": 1}}, "find_keys": {"range": {"lastkey": 0, "step": 1, "limit": 0}}}],
+        "reply_schema": {"type": "integer"},
+        "arguments": [
+            {"name": "key", "type": "key", "key_spec_index": 0},
+            {"name": "prefix", "type": "string"}
+        ]
+    }
+}

@@ -91,6 +91,7 @@ struct ACLCategoryItem {
     {"connection", ACL_CATEGORY_CONNECTION},
     {"transaction", ACL_CATEGORY_TRANSACTION},
     {"scripting", ACL_CATEGORY_SCRIPTING},
+    {"radix", ACL_CATEGORY_RADIX},
     {NULL, 0} /* Terminator. */
 };
 

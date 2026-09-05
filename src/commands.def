@@ -24,6 +24,7 @@ const char *COMMAND_GROUP_STR[] = {
     "geo",
     "stream",
     "bitmap",
+    "radix",
     "module"
 };
 
@@ -5606,6 +5607,392 @@ struct COMMAND_ARG SUNSUBSCRIBE_Args[] = {
 /* UNSUBSCRIBE argument table */
 struct COMMAND_ARG UNSUBSCRIBE_Args[] = {
 {MAKE_ARG("channel",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_OPTIONAL|CMD_ARG_MULTIPLE,0,NULL)},
+};
+
+/********** RAXCARD ********************/
+
+#ifndef SKIP_CMD_HISTORY_TABLE
+/* RAXCARD history */
+#define RAXCARD_History NULL
+#endif
+
+#ifndef SKIP_CMD_TIPS_TABLE
+/* RAXCARD tips */
+#define RAXCARD_Tips NULL
+#endif
+
+#ifndef SKIP_CMD_KEY_SPECS_TABLE
+/* RAXCARD key specs */
+keySpec RAXCARD_Keyspecs[1] = {
+{NULL,CMD_KEY_RO|CMD_KEY_ACCESS,KSPEC_BS_INDEX,.bs.index={1},KSPEC_FK_RANGE,.fk.range={0,1,0}}
+};
+#endif
+
+/* RAXCARD argument table */
+struct COMMAND_ARG RAXCARD_Args[] = {
+{MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+};
+
+/********** RAXDEL ********************/
+
+#ifndef SKIP_CMD_HISTORY_TABLE
+/* RAXDEL history */
+#define RAXDEL_History NULL
+#endif
+
+#ifndef SKIP_CMD_TIPS_TABLE
+/* RAXDEL tips */
+#define RAXDEL_Tips NULL
+#endif
+
+#ifndef SKIP_CMD_KEY_SPECS_TABLE
+/* RAXDEL key specs */
+keySpec RAXDEL_Keyspecs[1] = {
+{NULL,CMD_KEY_RW|CMD_KEY_ACCESS|CMD_KEY_DELETE,KSPEC_BS_INDEX,.bs.index={1},KSPEC_FK_RANGE,.fk.range={0,1,0}}
+};
+#endif
+
+/* RAXDEL argument table */
+struct COMMAND_ARG RAXDEL_Args[] = {
+{MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("path",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("field",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_OPTIONAL|CMD_ARG_MULTIPLE,0,NULL)},
+};
+
+/********** RAXDELPREFIX ********************/
+
+#ifndef SKIP_CMD_HISTORY_TABLE
+/* RAXDELPREFIX history */
+#define RAXDELPREFIX_History NULL
+#endif
+
+#ifndef SKIP_CMD_TIPS_TABLE
+/* RAXDELPREFIX tips */
+#define RAXDELPREFIX_Tips NULL
+#endif
+
+#ifndef SKIP_CMD_KEY_SPECS_TABLE
+/* RAXDELPREFIX key specs */
+keySpec RAXDELPREFIX_Keyspecs[1] = {
+{NULL,CMD_KEY_RW|CMD_KEY_ACCESS|CMD_KEY_DELETE,KSPEC_BS_INDEX,.bs.index={1},KSPEC_FK_RANGE,.fk.range={0,1,0}}
+};
+#endif
+
+/* RAXDELPREFIX argument table */
+struct COMMAND_ARG RAXDELPREFIX_Args[] = {
+{MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("prefix",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+};
+
+/********** RAXEXISTS ********************/
+
+#ifndef SKIP_CMD_HISTORY_TABLE
+/* RAXEXISTS history */
+#define RAXEXISTS_History NULL
+#endif
+
+#ifndef SKIP_CMD_TIPS_TABLE
+/* RAXEXISTS tips */
+#define RAXEXISTS_Tips NULL
+#endif
+
+#ifndef SKIP_CMD_KEY_SPECS_TABLE
+/* RAXEXISTS key specs */
+keySpec RAXEXISTS_Keyspecs[1] = {
+{NULL,CMD_KEY_RO|CMD_KEY_ACCESS,KSPEC_BS_INDEX,.bs.index={1},KSPEC_FK_RANGE,.fk.range={0,1,0}}
+};
+#endif
+
+/* RAXEXISTS argument table */
+struct COMMAND_ARG RAXEXISTS_Args[] = {
+{MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("path",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+};
+
+/********** RAXGET ********************/
+
+#ifndef SKIP_CMD_HISTORY_TABLE
+/* RAXGET history */
+#define RAXGET_History NULL
+#endif
+
+#ifndef SKIP_CMD_TIPS_TABLE
+/* RAXGET tips */
+#define RAXGET_Tips NULL
+#endif
+
+#ifndef SKIP_CMD_KEY_SPECS_TABLE
+/* RAXGET key specs */
+keySpec RAXGET_Keyspecs[1] = {
+{NULL,CMD_KEY_RO|CMD_KEY_ACCESS,KSPEC_BS_INDEX,.bs.index={1},KSPEC_FK_RANGE,.fk.range={0,1,0}}
+};
+#endif
+
+/* RAXGET argument table */
+struct COMMAND_ARG RAXGET_Args[] = {
+{MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("path",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("field",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_MULTIPLE,0,NULL)},
+};
+
+/********** RAXGETALL ********************/
+
+#ifndef SKIP_CMD_HISTORY_TABLE
+/* RAXGETALL history */
+#define RAXGETALL_History NULL
+#endif
+
+#ifndef SKIP_CMD_TIPS_TABLE
+/* RAXGETALL tips */
+const char *RAXGETALL_Tips[] = {
+"nondeterministic_output_order",
+};
+#endif
+
+#ifndef SKIP_CMD_KEY_SPECS_TABLE
+/* RAXGETALL key specs */
+keySpec RAXGETALL_Keyspecs[1] = {
+{NULL,CMD_KEY_RO|CMD_KEY_ACCESS,KSPEC_BS_INDEX,.bs.index={1},KSPEC_FK_RANGE,.fk.range={0,1,0}}
+};
+#endif
+
+/* RAXGETALL argument table */
+struct COMMAND_ARG RAXGETALL_Args[] = {
+{MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("path",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+};
+
+/********** RAXLONGEST ********************/
+
+#ifndef SKIP_CMD_HISTORY_TABLE
+/* RAXLONGEST history */
+#define RAXLONGEST_History NULL
+#endif
+
+#ifndef SKIP_CMD_TIPS_TABLE
+/* RAXLONGEST tips */
+#define RAXLONGEST_Tips NULL
+#endif
+
+#ifndef SKIP_CMD_KEY_SPECS_TABLE
+/* RAXLONGEST key specs */
+keySpec RAXLONGEST_Keyspecs[1] = {
+{NULL,CMD_KEY_RO|CMD_KEY_ACCESS,KSPEC_BS_INDEX,.bs.index={1},KSPEC_FK_RANGE,.fk.range={0,1,0}}
+};
+#endif
+
+/* RAXLONGEST values fields argument table */
+struct COMMAND_ARG RAXLONGEST_values_fields_Subargs[] = {
+{MAKE_ARG("numfields",ARG_TYPE_INTEGER,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("field",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_MULTIPLE,0,NULL)},
+};
+
+/* RAXLONGEST values argument table */
+struct COMMAND_ARG RAXLONGEST_values_Subargs[] = {
+{MAKE_ARG("withvalues",ARG_TYPE_PURE_TOKEN,-1,"WITHVALUES",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("fields",ARG_TYPE_BLOCK,-1,"FIELDS",NULL,NULL,CMD_ARG_NONE,2,NULL),.subargs=RAXLONGEST_values_fields_Subargs},
+};
+
+/* RAXLONGEST argument table */
+struct COMMAND_ARG RAXLONGEST_Args[] = {
+{MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("query",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("length",ARG_TYPE_PURE_TOKEN,-1,"LENGTH",NULL,NULL,CMD_ARG_OPTIONAL,0,NULL)},
+{MAKE_ARG("values",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_OPTIONAL,2,NULL),.subargs=RAXLONGEST_values_Subargs},
+};
+
+/********** RAXMGET ********************/
+
+#ifndef SKIP_CMD_HISTORY_TABLE
+/* RAXMGET history */
+#define RAXMGET_History NULL
+#endif
+
+#ifndef SKIP_CMD_TIPS_TABLE
+/* RAXMGET tips */
+#define RAXMGET_Tips NULL
+#endif
+
+#ifndef SKIP_CMD_KEY_SPECS_TABLE
+/* RAXMGET key specs */
+keySpec RAXMGET_Keyspecs[1] = {
+{NULL,CMD_KEY_RO|CMD_KEY_ACCESS,KSPEC_BS_INDEX,.bs.index={1},KSPEC_FK_RANGE,.fk.range={0,1,0}}
+};
+#endif
+
+/* RAXMGET data fields argument table */
+struct COMMAND_ARG RAXMGET_data_fields_Subargs[] = {
+{MAKE_ARG("numfields",ARG_TYPE_INTEGER,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("field",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_MULTIPLE,0,NULL)},
+};
+
+/* RAXMGET data argument table */
+struct COMMAND_ARG RAXMGET_data_Subargs[] = {
+{MAKE_ARG("path",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("fields",ARG_TYPE_BLOCK,-1,"FIELDS",NULL,NULL,CMD_ARG_NONE,2,NULL),.subargs=RAXMGET_data_fields_Subargs},
+};
+
+/* RAXMGET argument table */
+struct COMMAND_ARG RAXMGET_Args[] = {
+{MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("data",ARG_TYPE_BLOCK,-1,NULL,NULL,NULL,CMD_ARG_MULTIPLE,2,NULL),.subargs=RAXMGET_data_Subargs},
+};
+
+/********** RAXMSET ********************/
+
+#ifndef SKIP_CMD_HISTORY_TABLE
+/* RAXMSET history */
+#define RAXMSET_History NULL
+#endif
+
+#ifndef SKIP_CMD_TIPS_TABLE
+/* RAXMSET tips */
+#define RAXMSET_Tips NULL
+#endif
+
+#ifndef SKIP_CMD_KEY_SPECS_TABLE
+/* RAXMSET key specs */
+keySpec RAXMSET_Keyspecs[1] = {
+{NULL,CMD_KEY_RW|CMD_KEY_UPDATE,KSPEC_BS_INDEX,.bs.index={1},KSPEC_FK_RANGE,.fk.range={0,1,0}}
+};
+#endif
+
+/* RAXMSET data fields data argument table */
+struct COMMAND_ARG RAXMSET_data_fields_data_Subargs[] = {
+{MAKE_ARG("field",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("value",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+};
+
+/* RAXMSET data fields argument table */
+struct COMMAND_ARG RAXMSET_data_fields_Subargs[] = {
+{MAKE_ARG("numfields",ARG_TYPE_INTEGER,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("data",ARG_TYPE_BLOCK,-1,NULL,NULL,NULL,CMD_ARG_MULTIPLE,2,NULL),.subargs=RAXMSET_data_fields_data_Subargs},
+};
+
+/* RAXMSET data argument table */
+struct COMMAND_ARG RAXMSET_data_Subargs[] = {
+{MAKE_ARG("path",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("fields",ARG_TYPE_BLOCK,-1,"FIELDS",NULL,NULL,CMD_ARG_NONE,2,NULL),.subargs=RAXMSET_data_fields_Subargs},
+};
+
+/* RAXMSET argument table */
+struct COMMAND_ARG RAXMSET_Args[] = {
+{MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("data",ARG_TYPE_BLOCK,-1,NULL,NULL,NULL,CMD_ARG_MULTIPLE,2,NULL),.subargs=RAXMSET_data_Subargs},
+};
+
+/********** RAXPREFIXES ********************/
+
+#ifndef SKIP_CMD_HISTORY_TABLE
+/* RAXPREFIXES history */
+#define RAXPREFIXES_History NULL
+#endif
+
+#ifndef SKIP_CMD_TIPS_TABLE
+/* RAXPREFIXES tips */
+#define RAXPREFIXES_Tips NULL
+#endif
+
+#ifndef SKIP_CMD_KEY_SPECS_TABLE
+/* RAXPREFIXES key specs */
+keySpec RAXPREFIXES_Keyspecs[1] = {
+{NULL,CMD_KEY_RO|CMD_KEY_ACCESS,KSPEC_BS_INDEX,.bs.index={1},KSPEC_FK_RANGE,.fk.range={0,1,0}}
+};
+#endif
+
+/* RAXPREFIXES values fields argument table */
+struct COMMAND_ARG RAXPREFIXES_values_fields_Subargs[] = {
+{MAKE_ARG("numfields",ARG_TYPE_INTEGER,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("field",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_MULTIPLE,0,NULL)},
+};
+
+/* RAXPREFIXES values argument table */
+struct COMMAND_ARG RAXPREFIXES_values_Subargs[] = {
+{MAKE_ARG("withvalues",ARG_TYPE_PURE_TOKEN,-1,"WITHVALUES",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("fields",ARG_TYPE_BLOCK,-1,"FIELDS",NULL,NULL,CMD_ARG_NONE,2,NULL),.subargs=RAXPREFIXES_values_fields_Subargs},
+};
+
+/* RAXPREFIXES argument table */
+struct COMMAND_ARG RAXPREFIXES_Args[] = {
+{MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("query",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("lengths",ARG_TYPE_PURE_TOKEN,-1,"LENGTHS",NULL,NULL,CMD_ARG_OPTIONAL,0,NULL)},
+{MAKE_ARG("values",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_OPTIONAL,2,NULL),.subargs=RAXPREFIXES_values_Subargs},
+{MAKE_ARG("count",ARG_TYPE_INTEGER,-1,"COUNT",NULL,NULL,CMD_ARG_OPTIONAL,0,NULL)},
+{MAKE_ARG("max-path-bytes",ARG_TYPE_INTEGER,-1,"MAXLEN",NULL,NULL,CMD_ARG_OPTIONAL,0,NULL)},
+};
+
+/********** RAXSCAN ********************/
+
+#ifndef SKIP_CMD_HISTORY_TABLE
+/* RAXSCAN history */
+#define RAXSCAN_History NULL
+#endif
+
+#ifndef SKIP_CMD_TIPS_TABLE
+/* RAXSCAN tips */
+#define RAXSCAN_Tips NULL
+#endif
+
+#ifndef SKIP_CMD_KEY_SPECS_TABLE
+/* RAXSCAN key specs */
+keySpec RAXSCAN_Keyspecs[1] = {
+{NULL,CMD_KEY_RO|CMD_KEY_ACCESS,KSPEC_BS_INDEX,.bs.index={1},KSPEC_FK_RANGE,.fk.range={0,1,0}}
+};
+#endif
+
+/* RAXSCAN argument table */
+struct COMMAND_ARG RAXSCAN_Args[] = {
+{MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("cursor",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("prefix",ARG_TYPE_STRING,-1,"PREFIX",NULL,NULL,CMD_ARG_OPTIONAL,0,NULL)},
+{MAKE_ARG("count",ARG_TYPE_INTEGER,-1,"COUNT",NULL,NULL,CMD_ARG_OPTIONAL,0,NULL)},
+{MAKE_ARG("withvalues",ARG_TYPE_PURE_TOKEN,-1,"WITHVALUES",NULL,NULL,CMD_ARG_OPTIONAL,0,NULL)},
+};
+
+/********** RAXSET ********************/
+
+#ifndef SKIP_CMD_HISTORY_TABLE
+/* RAXSET history */
+#define RAXSET_History NULL
+#endif
+
+#ifndef SKIP_CMD_TIPS_TABLE
+/* RAXSET tips */
+#define RAXSET_Tips NULL
+#endif
+
+#ifndef SKIP_CMD_KEY_SPECS_TABLE
+/* RAXSET key specs */
+keySpec RAXSET_Keyspecs[1] = {
+{NULL,CMD_KEY_RW|CMD_KEY_UPDATE,KSPEC_BS_INDEX,.bs.index={1},KSPEC_FK_RANGE,.fk.range={0,1,0}}
+};
+#endif
+
+/* RAXSET condition argument table */
+struct COMMAND_ARG RAXSET_condition_Subargs[] = {
+{MAKE_ARG("fnx",ARG_TYPE_PURE_TOKEN,-1,"FNX",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("fxx",ARG_TYPE_PURE_TOKEN,-1,"FXX",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+};
+
+/* RAXSET fields data argument table */
+struct COMMAND_ARG RAXSET_fields_data_Subargs[] = {
+{MAKE_ARG("field",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("value",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+};
+
+/* RAXSET fields argument table */
+struct COMMAND_ARG RAXSET_fields_Subargs[] = {
+{MAKE_ARG("numfields",ARG_TYPE_INTEGER,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("data",ARG_TYPE_BLOCK,-1,NULL,NULL,NULL,CMD_ARG_MULTIPLE,2,NULL),.subargs=RAXSET_fields_data_Subargs},
+};
+
+/* RAXSET argument table */
+struct COMMAND_ARG RAXSET_Args[] = {
+{MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("path",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("condition",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_OPTIONAL,2,NULL),.subargs=RAXSET_condition_Subargs},
+{MAKE_ARG("fields",ARG_TYPE_BLOCK,-1,"FIELDS",NULL,NULL,CMD_ARG_NONE,2,NULL),.subargs=RAXSET_fields_Subargs},
 };
 
 /********** EVAL ********************/
@@ -12115,6 +12502,19 @@ struct COMMAND_STRUCT serverCommandTable[] = {
 {MAKE_CMD("subscribe","Listens for messages published to channels.","O(N) where N is the number of channels to subscribe to.","2.0.0",CMD_DOC_NONE,NULL,NULL,"pubsub",COMMAND_GROUP_PUBSUB,SUBSCRIBE_History,0,SUBSCRIBE_Tips,0,subscribeCommand,-2,CMD_PUBSUB|CMD_NOSCRIPT|CMD_LOADING|CMD_STALE|CMD_SENTINEL,ACL_CATEGORY_PUBSUB|ACL_CATEGORY_SLOW,NULL,SUBSCRIBE_Keyspecs,0,NULL,1),.args=SUBSCRIBE_Args},
 {MAKE_CMD("sunsubscribe","Stops listening to messages posted to shard channels.","O(N) where N is the number of shard channels to unsubscribe.","7.0.0",CMD_DOC_NONE,NULL,NULL,"pubsub",COMMAND_GROUP_PUBSUB,SUNSUBSCRIBE_History,0,SUNSUBSCRIBE_Tips,0,sunsubscribeCommand,-1,CMD_PUBSUB|CMD_NOSCRIPT|CMD_LOADING|CMD_STALE,ACL_CATEGORY_PUBSUB|ACL_CATEGORY_SLOW,NULL,SUNSUBSCRIBE_Keyspecs,1,NULL,1),.args=SUNSUBSCRIBE_Args},
 {MAKE_CMD("unsubscribe","Stops listening to messages posted to channels.","O(N) where N is the number of channels to unsubscribe.","2.0.0",CMD_DOC_NONE,NULL,NULL,"pubsub",COMMAND_GROUP_PUBSUB,UNSUBSCRIBE_History,0,UNSUBSCRIBE_Tips,0,unsubscribeCommand,-1,CMD_PUBSUB|CMD_NOSCRIPT|CMD_LOADING|CMD_STALE|CMD_SENTINEL,ACL_CATEGORY_PUBSUB|ACL_CATEGORY_SLOW,NULL,UNSUBSCRIBE_Keyspecs,0,NULL,1),.args=UNSUBSCRIBE_Args},
+/* radix */
+{MAKE_CMD("raxcard","Returns the number of logical paths in a radix tree.","O(1).","9.2.0",CMD_DOC_NONE,NULL,NULL,"radix",COMMAND_GROUP_RADIX,RAXCARD_History,0,RAXCARD_Tips,0,raxcardCommand,2,CMD_READONLY|CMD_FAST,ACL_CATEGORY_RADIX|ACL_CATEGORY_READ|ACL_CATEGORY_FAST,NULL,RAXCARD_Keyspecs,1,NULL,1),.args=RAXCARD_Args},
+{MAKE_CMD("raxdel","Deletes fields or the complete payload at a radix-tree path.","O(L + F*U).","9.2.0",CMD_DOC_NONE,NULL,NULL,"radix",COMMAND_GROUP_RADIX,RAXDEL_History,0,RAXDEL_Tips,0,raxdelCommand,-3,CMD_WRITE|CMD_FAST,ACL_CATEGORY_RADIX|ACL_CATEGORY_WRITE|ACL_CATEGORY_FAST,NULL,RAXDEL_Keyspecs,1,NULL,3),.args=RAXDEL_Args},
+{MAKE_CMD("raxdelprefix","Deletes every stored radix path below a prefix.","O(L + N).","9.2.0",CMD_DOC_NONE,NULL,NULL,"radix",COMMAND_GROUP_RADIX,RAXDELPREFIX_History,0,RAXDELPREFIX_Tips,0,raxdelprefixCommand,3,CMD_WRITE,ACL_CATEGORY_RADIX|ACL_CATEGORY_WRITE|ACL_CATEGORY_SLOW,NULL,RAXDELPREFIX_Keyspecs,1,NULL,2),.args=RAXDELPREFIX_Args},
+{MAKE_CMD("raxexists","Tests whether an exact logical path exists in a radix tree.","O(L), where L is the path length.","9.2.0",CMD_DOC_NONE,NULL,NULL,"radix",COMMAND_GROUP_RADIX,RAXEXISTS_History,0,RAXEXISTS_Tips,0,raxexistsCommand,3,CMD_READONLY|CMD_FAST,ACL_CATEGORY_RADIX|ACL_CATEGORY_READ|ACL_CATEGORY_FAST,NULL,RAXEXISTS_Keyspecs,1,NULL,2),.args=RAXEXISTS_Args},
+{MAKE_CMD("raxget","Returns one or more fields from an exact radix-tree path.","O(L + F*U).","9.2.0",CMD_DOC_NONE,NULL,NULL,"radix",COMMAND_GROUP_RADIX,RAXGET_History,0,RAXGET_Tips,0,raxgetCommand,-4,CMD_READONLY|CMD_FAST,ACL_CATEGORY_RADIX|ACL_CATEGORY_READ|ACL_CATEGORY_FAST,NULL,RAXGET_Keyspecs,1,NULL,3),.args=RAXGET_Args},
+{MAKE_CMD("raxgetall","Returns all field-value pairs at an exact radix-tree path.","O(L + O).","9.2.0",CMD_DOC_NONE,NULL,NULL,"radix",COMMAND_GROUP_RADIX,RAXGETALL_History,0,RAXGETALL_Tips,1,raxgetallCommand,3,CMD_READONLY,ACL_CATEGORY_RADIX|ACL_CATEGORY_READ|ACL_CATEGORY_SLOW,NULL,RAXGETALL_Keyspecs,1,NULL,2),.args=RAXGETALL_Args},
+{MAKE_CMD("raxlongest","Returns the longest stored radix path that prefixes a query.","O(L + O).","9.2.0",CMD_DOC_NONE,NULL,NULL,"radix",COMMAND_GROUP_RADIX,RAXLONGEST_History,0,RAXLONGEST_Tips,0,raxlongestCommand,-3,CMD_READONLY,ACL_CATEGORY_RADIX|ACL_CATEGORY_READ|ACL_CATEGORY_SLOW,NULL,RAXLONGEST_Keyspecs,1,NULL,4),.args=RAXLONGEST_Args},
+{MAKE_CMD("raxmget","Returns fields from multiple exact radix-tree paths.","O(sum(L) + M*U), where M is the total number of fields across all path groups.","9.2.0",CMD_DOC_NONE,NULL,NULL,"radix",COMMAND_GROUP_RADIX,RAXMGET_History,0,RAXMGET_Tips,0,raxmgetCommand,-6,CMD_READONLY|CMD_FAST,ACL_CATEGORY_RADIX|ACL_CATEGORY_READ|ACL_CATEGORY_FAST,NULL,RAXMGET_Keyspecs,1,NULL,2),.args=RAXMGET_Args},
+{MAKE_CMD("raxmset","Atomically sets fields across multiple radix-tree paths.","O(sum(L) + M*U), where M is the total number of fields across all path groups.","9.2.0",CMD_DOC_NONE,NULL,NULL,"radix",COMMAND_GROUP_RADIX,RAXMSET_History,0,RAXMSET_Tips,0,raxmsetCommand,-7,CMD_WRITE|CMD_DENYOOM|CMD_FAST,ACL_CATEGORY_RADIX|ACL_CATEGORY_WRITE|ACL_CATEGORY_FAST,NULL,RAXMSET_Keyspecs,1,NULL,2),.args=RAXMSET_Args},
+{MAKE_CMD("raxprefixes","Returns every stored radix path that prefixes a query.","O(L + O).","9.2.0",CMD_DOC_NONE,NULL,NULL,"radix",COMMAND_GROUP_RADIX,RAXPREFIXES_History,0,RAXPREFIXES_Tips,0,raxprefixesCommand,-3,CMD_READONLY,ACL_CATEGORY_RADIX|ACL_CATEGORY_READ|ACL_CATEGORY_SLOW,NULL,RAXPREFIXES_Keyspecs,1,NULL,6),.args=RAXPREFIXES_Args},
+{MAKE_CMD("raxscan","Incrementally traverses radix-tree paths in lexicographic order.","O(L + C + O) per call.","9.2.0",CMD_DOC_NONE,NULL,NULL,"radix",COMMAND_GROUP_RADIX,RAXSCAN_History,0,RAXSCAN_Tips,0,raxscanCommand,-3,CMD_READONLY,ACL_CATEGORY_RADIX|ACL_CATEGORY_READ|ACL_CATEGORY_SLOW,NULL,RAXSCAN_Keyspecs,1,NULL,5),.args=RAXSCAN_Args},
+{MAKE_CMD("raxset","Atomically sets one or more fields at a radix-tree path.","O(L + F*U), where L is the path length, F is the number of fields, and U is the payload field lookup cost.","9.2.0",CMD_DOC_NONE,NULL,NULL,"radix",COMMAND_GROUP_RADIX,RAXSET_History,0,RAXSET_Tips,0,raxsetCommand,-7,CMD_WRITE|CMD_DENYOOM|CMD_FAST,ACL_CATEGORY_RADIX|ACL_CATEGORY_WRITE|ACL_CATEGORY_FAST,NULL,RAXSET_Keyspecs,1,NULL,4),.args=RAXSET_Args},
 /* scripting */
 {MAKE_CMD("eval","Executes a server-side Lua script.","Depends on the script that is executed.","2.6.0",CMD_DOC_NONE,NULL,NULL,"scripting",COMMAND_GROUP_SCRIPTING,EVAL_History,0,EVAL_Tips,0,evalCommand,-3,CMD_NOSCRIPT|CMD_SKIP_MONITOR|CMD_MAY_REPLICATE|CMD_NO_MANDATORY_KEYS|CMD_STALE,ACL_CATEGORY_SCRIPTING|ACL_CATEGORY_SLOW,NULL,EVAL_Keyspecs,1,evalGetKeys,4),.args=EVAL_Args},
 {MAKE_CMD("evalsha","Executes a server-side Lua script by SHA1 digest.","Depends on the script that is executed.","2.6.0",CMD_DOC_NONE,NULL,NULL,"scripting",COMMAND_GROUP_SCRIPTING,EVALSHA_History,0,EVALSHA_Tips,0,evalShaCommand,-3,CMD_NOSCRIPT|CMD_SKIP_MONITOR|CMD_MAY_REPLICATE|CMD_NO_MANDATORY_KEYS|CMD_STALE,ACL_CATEGORY_SCRIPTING|ACL_CATEGORY_SLOW,NULL,EVALSHA_Keyspecs,1,evalGetKeys,4),.args=EVALSHA_Args},

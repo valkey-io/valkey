@@ -678,6 +678,13 @@ typedef enum {
     RDB_BGSAVE_TYPE_FORKLESS = 2 /* Forkless bgsave. */
 } rdbBgsaveType;
 
+/* Replica failover policy for server.cluster_replica_no_failover. */
+typedef enum {
+    CLUSTER_REPLICA_NO_FAILOVER_NO = 0,  /* Allow automatic failover (default). */
+    CLUSTER_REPLICA_NO_FAILOVER_YES,     /* Never start a failover; sets CLUSTER_NODE_NOFAILOVER. */
+    CLUSTER_REPLICA_NO_FAILOVER_NO_DATA, /* Refuse automatic failover only while offset is 0. */
+} cluster_replica_no_failover_policy;
+
 /* Keyspace changes notification classes. Every class is associated with a
  * character for configuration purposes. */
 #define NOTIFY_KEYSPACE (1 << 0)  /* K */
@@ -2334,8 +2341,7 @@ struct valkeyServer {
     int cluster_replica_validity_factor;                   /* Replica max data age for failover. */
     int cluster_require_full_coverage;                     /* If true, put the cluster down if
                                                               there is at least an uncovered slot.*/
-    int cluster_replica_no_failover;                       /* Prevent replica from starting a failover
-                                                            if the primary is in failure state. */
+    int cluster_replica_no_failover;                       /* Replica failover policy (NO/YES/NO_DATA). */
     char *cluster_announce_ip;                             /* IP address to announce on cluster bus. */
     char *cluster_announce_client_ipv4;                    /* IPv4 for clients, to announce on cluster bus. */
     char *cluster_announce_client_ipv6;                    /* IPv6 for clients, to announce on cluster bus. */

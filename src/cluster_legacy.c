@@ -1330,7 +1330,7 @@ void deriveAnnouncedPorts(int *announced_tcp_port,
 void clusterUpdateMyselfFlags(void) {
     if (!myself) return;
     int oldflags = myself->flags;
-    int nofailover = server.cluster_replica_no_failover ? CLUSTER_NODE_NOFAILOVER : 0;
+    int nofailover = server.cluster_replica_no_failover == CLUSTER_REPLICA_NO_FAILOVER_YES ? CLUSTER_NODE_NOFAILOVER : 0;
     myself->flags &= ~CLUSTER_NODE_NOFAILOVER;
     myself->flags |= nofailover;
     myself->flags |= CLUSTER_NODE_EXTENSIONS_SUPPORTED |
@@ -5906,6 +5906,10 @@ void clusterLogCantFailover(int reason) {
     case CLUSTER_CANT_FAILOVER_WAITING_DELAY: msg = "Waiting the delay before I can start a new failover."; break;
     case CLUSTER_CANT_FAILOVER_EXPIRED: msg = "Failover attempt expired."; break;
     case CLUSTER_CANT_FAILOVER_WAITING_VOTES: msg = "Waiting for votes, but majority still not reached."; break;
+    case CLUSTER_CANT_FAILOVER_NO_DATA:
+        msg = "Replication offset is 0 and no data has been received from the primary. "
+              "Please check the 'cluster-replica-no-failover' configuration option.";
+        break;
     default: serverPanic("Unknown cant failover reason code.");
     }
     lastlog_time = time(NULL);
@@ -6011,7 +6015,7 @@ void clusterHandleReplicaFailover(void) {
      *    not a manual failover. */
     if (clusterNodeIsPrimary(myself) || myself->replicaof == NULL ||
         (!nodeFailed(myself->replicaof) && !manual_failover) ||
-        (server.cluster_replica_no_failover && !manual_failover)) {
+        (server.cluster_replica_no_failover == CLUSTER_REPLICA_NO_FAILOVER_YES && !manual_failover)) {
         /* There are no reasons to failover, so we set the reason why we
          * are returning without failing over to NONE. */
         server.cluster->cant_failover_reason = CLUSTER_CANT_FAILOVER_NONE;
@@ -6042,6 +6046,19 @@ void clusterHandleReplicaFailover(void) {
             clusterLogCantFailover(CLUSTER_CANT_FAILOVER_DATA_AGE);
             return;
         }
+    }
+
+    /* Refuse to start an automatic failover if we have no data yet, when
+     * configured to do so. Such a replica has never received any data from
+     * its primary (e.g. it was just added and hasn't finished the initial
+     * sync, so its replication offset is 0), so promoting it would lose all
+     * the shard data.
+     *
+     * Check bypassed for manual failovers. */
+    if (server.cluster_replica_no_failover == CLUSTER_REPLICA_NO_FAILOVER_NO_DATA &&
+        !manual_failover && replicationGetReplicaOffset() == 0) {
+        clusterLogCantFailover(CLUSTER_CANT_FAILOVER_NO_DATA);
+        return;
     }
 
     /* If the previous failover attempt timeout and the retry time has

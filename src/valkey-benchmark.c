@@ -489,26 +489,6 @@ void initPlaceholders(const char *cmd, size_t cmd_len) {
     return;
 }
 
-/* Per-thread PRNG for key generation. rand62() is built on glibc random(),
- * which serializes every caller on a process-wide lock; with placeholder
- * replacement calling it per command from all benchmark threads it becomes
- * a global scalability bottleneck. Use an independent splitmix64 stream per
- * thread instead, seeded once per thread from the (--seed seedable) global
- * generator. Note: with --seed, per-thread streams are reproducible only up
- * to thread scheduling order of first use. */
-static _Thread_local uint64_t bench_rng_state = 0;
-
-static uint64_t benchThreadRand62(void) {
-    if (bench_rng_state == 0) {
-        bench_rng_state = ((uint64_t)random() << 31) ^ (uint64_t)random();
-        if (bench_rng_state == 0) bench_rng_state = 0x9E3779B97F4A7C15ULL;
-    }
-    uint64_t z = (bench_rng_state += 0x9E3779B97F4A7C15ULL);
-    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
-    z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
-    return (z ^ (z >> 31)) & ((1ULL << 62) - 1);
-}
-
 /* Batched per-thread accounting for config.requests_finished. A relaxed
  * fetch_add per completed command from every thread turns the counter's
  * cache line into a process-wide contention point at high rates (the same
@@ -524,8 +504,14 @@ static uint64_t benchThreadRand62(void) {
  * "stop recording latency at the end" gate can lag by up to
  * batch * num_threads commands, and a warmup-boundary reset can carry over
  * a residue of the same magnitude -- both are the same benign-race class
- * as the surrounding relaxed counter resets. Single-threaded mode keeps
- * the exact per-command path. */
+ * as the surrounding relaxed counter resets. The warmup carry-over is an
+ * intentional, documented trade-off: with --threads and --warmup, completion
+ * accounting around the warmup boundary is exact only to within
+ * batch * num_threads (an exact boundary would reintroduce cross-thread
+ * coordination on the completion path -- the contention this design
+ * removes). Runs whose -n is small enough for this to matter are far below
+ * any meaningful measurement size; the limitation is stated in the --warmup
+ * help text. Single-threaded mode keeps the exact per-command path. */
 #define REQUESTS_FINISHED_FLUSH_BATCH 256
 static _Thread_local int pending_requests_finished = 0;
 
@@ -553,7 +539,7 @@ static void replacePlaceholder(const size_t *indices, const size_t count, char *
         if (config.sequential_replacement) {
             key = atomic_fetch_add_explicit(key_counter, 1, memory_order_relaxed);
         } else {
-            key = benchThreadRand62();
+            key = rand62();
         }
         key %= config.keyspacelen;
     }
@@ -2123,7 +2109,10 @@ usage:
         "                    Run benchmark for specified number of seconds\n"
         "                    (mutually exclusive with -n)\n"
         " --warmup <seconds> Run benchmark for specified warmup period before\n"
-        "                    recording data\n"
+        "                    recording data. With --threads, completed-request\n"
+        "                    accounting is batched per thread: up to 256 pre-warmup\n"
+        "                    completions per thread may carry into the counted\n"
+        "                    total at the warmup boundary.\n"
         " -d <size>          Data size of SET/GET value in bytes (default 3)\n"
         " --dbnum <db>       SELECT the specified db number (default 0)\n"
         " -3                 Start session in RESP3 protocol mode.\n"

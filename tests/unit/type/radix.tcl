@@ -36,7 +36,7 @@ start_server {tags {radix}} {
 
     test {Exact path operations do not confuse ancestors and descendants} {
         r del tree
-        r raxmset tree a f one ab f two abc f three
+        r raxmset tree a fields 1 f one ab fields 1 f two abc fields 1 f three
         assert_equal one [r raxget tree a f]
         assert_equal two [r raxget tree ab f]
         assert_equal three [r raxget tree abc f]
@@ -47,21 +47,22 @@ start_server {tags {radix}} {
     test {RAXGET, RAXMGET, and RAXGETALL preserve field semantics} {
         r del tree
         r raxset tree path fields 2 f1 v1 f2 v2
-        r raxmset tree other f1 ignored third f3 v3 other f1 other-v1
+        r raxmset tree other fields 2 f1 ignored f1 other-v1 third fields 1 f3 v3
         set values [dict create {*}[r raxgetall tree path]]
         assert_equal v1 [dict get $values f1]
         assert_equal v2 [dict get $values f2]
         assert_equal {v2 {} v1} [r raxget tree path f2 missing f1]
-        assert_equal {v1 other-v1 v3 {} v2} \
-            [r raxmget tree path f1 other f1 third f3 missing f path f2]
-        assert_equal {v1} [r raxmget tree path f1]
+        assert_equal {v1 v2 other-v1 v3 {} v1} \
+            [r raxmget tree path fields 2 f1 f2 other fields 1 f1 \
+                third fields 1 f3 missing fields 1 f path fields 1 f1]
+        assert_equal {v2 {} v1} [r raxmget tree path fields 3 f2 missing f1]
         assert_equal {{} {}} [r raxget missing path f1 f2]
         assert_equal {} [r raxgetall tree missing]
     }
 
     test {RAXEXISTS checks exact logical paths only} {
         r del tree
-        r raxmset tree ab f one abcd f two
+        r raxmset tree ab fields 1 f one abcd fields 1 f two
         assert_equal 0 [r raxexists tree a]
         assert_equal 1 [r raxexists tree ab]
         assert_equal 0 [r raxexists tree abc]
@@ -149,11 +150,13 @@ start_server {tags {radix}} {
         assert_equal 1 [r raxcard tree]
         assert_equal child [r raxget tree ab f]
         assert_equal 1 [r raxdel tree ab]
-        assert_equal 0 [r exists tree]
+        assert_equal 1 [r exists tree]
+        assert_equal radix [r type tree]
+        assert_equal 0 [r raxcard tree]
         assert_equal 0 [r raxdel tree ab]
     }
 
-    test {RAXDELPREFIX deletes only descendants and empty prefix clears the key} {
+    test {RAXDELPREFIX deletes only descendants and empty prefix clears the tree} {
         r del tree
         foreach path {a ab abc ac b ba} {r raxset tree $path fields 1 f $path}
         assert_equal 2 [r raxdelprefix tree ab]
@@ -161,7 +164,9 @@ start_server {tags {radix}} {
         assert_equal 0 [lindex $result 0]
         assert_equal {a ac b ba} [lindex $result 1]
         assert_equal 4 [r raxdelprefix tree {}]
-        assert_equal 0 [r exists tree]
+        assert_equal 1 [r exists tree]
+        assert_equal radix [r type tree]
+        assert_equal 0 [r raxcard tree]
         assert_equal 0 [r raxdelprefix tree anything]
     }
 
@@ -169,9 +174,9 @@ start_server {tags {radix}} {
         r del tree
         set assignments {}
         for {set i 0} {$i < 600} {incr i} {
-            lappend assignments "delete:$i" f "value:$i"
+            lappend assignments "delete:$i" fields 1 f "value:$i"
         }
-        lappend assignments keep:a f one keep:b f two keep:c f three
+        lappend assignments keep:a fields 1 f one keep:b fields 1 f two keep:c fields 1 f three
         assert_equal OK [r raxmset tree {*}$assignments]
         assert_equal 603 [r raxcard tree]
         assert_equal 600 [r raxdelprefix tree delete:]
@@ -188,7 +193,8 @@ start_server {tags {radix}} {
         assert_equal {} [r raxset dirty-tree p fnx fields 2 f1 ignored missing ignored]
         assert_equal 2 [s rdb_changes_since_last_save]
 
-        assert_equal OK [r raxmset dirty-tree p f1 updated branch:a f one branch:b f two]
+        assert_equal OK [r raxmset dirty-tree p fields 1 f1 updated \
+            branch:a fields 1 f one branch:b fields 1 f two]
         assert_equal 5 [s rdb_changes_since_last_save]
         assert_equal 2 [r raxdel dirty-tree p f1 f2]
         assert_equal 7 [s rdb_changes_since_last_save]
@@ -197,7 +203,8 @@ start_server {tags {radix}} {
         assert_equal 0 [r raxdelprefix dirty-tree branch:]
         assert_equal 9 [s rdb_changes_since_last_save]
 
-        assert_equal OK [r raxmset empty-dirty-tree a f one b f two c f three]
+        assert_equal OK [r raxmset empty-dirty-tree a fields 1 f one \
+            b fields 1 f two c fields 1 f three]
         r save
         assert_equal 3 [r raxdelprefix empty-dirty-tree {}]
         assert_equal 3 [s rdb_changes_since_last_save]
@@ -249,9 +256,9 @@ start_server {tags {radix}} {
         r set notradix value
         foreach command {
             {raxset notradix p fields 1 f v}
-            {raxmset notradix p f v}
+            {raxmset notradix p fields 1 f v}
             {raxget notradix p f}
-            {raxmget notradix p f}
+            {raxmget notradix p fields 1 f}
             {raxgetall notradix p}
             {raxexists notradix p}
             {raxdel notradix p}
@@ -272,8 +279,14 @@ start_server {tags {radix}} {
         assert_error ERR*syntax* {r raxset tree p fields 2 f v}
         assert_error ERR*syntax* {r raxset tree p fields 1 f v extra}
         assert_error ERR*value*out*range* {r raxset tree p fields 0 f v}
-        assert_error ERR*syntax* {r raxmset tree p f v extra}
-        assert_error ERR*syntax* {r raxmget tree p f extra}
+        assert_error ERR*wrong*number* {r raxmset tree p f v}
+        assert_error ERR*value*out*range* {r raxmset tree p fields 0 f v}
+        assert_error ERR*syntax* {r raxmset tree p fields 2 f v}
+        assert_error ERR*syntax* {r raxmset tree p fields 1 f v broken}
+        assert_error ERR*wrong*number* {r raxmget tree p f}
+        assert_error ERR*value*out*range* {r raxmget tree p fields 0 f}
+        assert_error ERR*syntax* {r raxmget tree p fields 2 f}
+        assert_error ERR*syntax* {r raxmget tree p fields 1 f broken}
         assert_equal 0 [r exists tree]
         assert_error ERR*syntax* {r raxlongest tree p withvalues fields 1 f}
         assert_error ERR*syntax* {r raxlongest tree p lengths}
@@ -349,7 +362,7 @@ start_server {tags {radix}} {
             assert_equal {1} [psubscribe $rd1 *]
             assert_equal rK [lindex [r config get notify-keyspace-events] 1]
             r raxset notify-tree a fields 1 f one
-            r raxmset notify-tree ab f two
+            r raxmset notify-tree ab fields 1 f two
             r raxdel notify-tree a
             r raxdelprefix notify-tree a
             assert_match "pmessage * __keyspace@*__:notify-tree raxset" [$rd1 read]
@@ -361,6 +374,8 @@ start_server {tags {radix}} {
             assert_equal grK [lindex [r config get notify-keyspace-events] 1]
             r raxset notify-tree a fields 1 f one
             r raxdel notify-tree a
+            assert_equal 1 [r exists notify-tree]
+            r del notify-tree
             assert_match "pmessage * __keyspace@*__:notify-tree raxset" [$rd1 read]
             assert_match "pmessage * __keyspace@*__:notify-tree raxdel" [$rd1 read]
             assert_match "pmessage * __keyspace@*__:notify-tree del" [$rd1 read]
@@ -368,6 +383,8 @@ start_server {tags {radix}} {
             r raxset notify-tree a fields 1 f one
             r raxset notify-tree ab fields 1 f two
             r raxdelprefix notify-tree {}
+            assert_equal 1 [r exists notify-tree]
+            r del notify-tree
             assert_match "pmessage * __keyspace@*__:notify-tree raxset" [$rd1 read]
             assert_match "pmessage * __keyspace@*__:notify-tree raxset" [$rd1 read]
             assert_match "pmessage * __keyspace@*__:notify-tree raxdelprefix" [$rd1 read]
@@ -411,6 +428,37 @@ start_server {tags {radix}} {
         assert_equal OK [r restore $tree_restored 0 $dumped]
         assert_equal [r raxprefixes $tree abc withvalues] [r raxprefixes $tree_restored abc withvalues]
         assert {$digest_before ne ""}
+    } {} {needs:debug}
+
+    test {Empty Radix survives COPY, DUMP/RESTORE, and RDB reload} {
+        r del empty-tree empty-copy empty-restored
+        r raxset empty-tree path fields 1 field value
+        assert_equal 1 [r raxdel empty-tree path]
+        assert_equal 1 [r exists empty-tree]
+        assert_equal radix [r type empty-tree]
+        assert_equal 0 [r raxcard empty-tree]
+
+        assert_equal 1 [r copy empty-tree empty-copy]
+        assert_equal radix [r type empty-copy]
+        assert_equal 0 [r raxcard empty-copy]
+
+        set dumped [r dump empty-tree]
+        assert_equal OK [r restore empty-restored 0 $dumped]
+        assert_equal radix [r type empty-restored]
+        assert_equal 0 [r raxcard empty-restored]
+
+        r debug reload
+        foreach key {empty-tree empty-copy empty-restored} {
+            assert_equal 1 [r exists $key]
+            assert_equal radix [r type $key]
+            assert_equal 0 [r raxcard $key]
+            assert_equal {0 {}} [r raxscan $key 0]
+        }
+        assert_equal 1 [r del empty-tree]
+        assert_equal 1 [r unlink empty-copy]
+        assert_equal 0 [r exists empty-tree]
+        assert_equal 0 [r exists empty-copy]
+        assert_equal 1 [r exists empty-restored]
     } {} {needs:debug}
 
     test {RDB reload restores radix paths, binary data, root payload, and TTL} {
@@ -487,11 +535,13 @@ start_server {tags {radix}} {
 }
 
 start_server {tags {radix needs:debug} overrides {appendonly yes aof-use-rdb-preamble no}} {
-    test {AOF rewrite and reload preserve radix values} {
+    test {AOF rewrite and reload preserve populated and empty Radix values} {
         r raxset tree {} fields 1 root value
         r raxset tree abc fields 2 f1 v1 f2 v2
         r raxset tree abcd fields 1 child v3
         r raxdel tree abc f1
+        r raxset empty-tree path fields 1 field value
+        r raxdel empty-tree path
         r bgrewriteaof
         waitForBgrewriteaof r
         r debug loadaof
@@ -499,6 +549,9 @@ start_server {tags {radix needs:debug} overrides {appendonly yes aof-use-rdb-pre
         assert_equal value [r raxget tree {} root]
         assert_equal {{} v2} [r raxget tree abc f1 f2]
         assert_equal v3 [r raxget tree abcd child]
+        assert_equal 1 [r exists empty-tree]
+        assert_equal radix [r type empty-tree]
+        assert_equal 0 [r raxcard empty-tree]
     }
 }
 
@@ -518,13 +571,18 @@ start_server {tags {radix external:skip}} {
             }
 
             $primary raxset tree a fields 1 f one
-            $primary raxmset tree ab f two abc f three
+            $primary raxmset tree ab fields 1 f two abc fields 1 f three
             assert_equal {} [$primary raxset tree a fnx fields 1 f ignored]
             $primary raxdelprefix tree ab
+            $primary raxset empty-tree path fields 1 field value
+            $primary raxdel empty-tree path
             wait_for_ofs_sync $primary $replica
             assert_equal 1 [$replica raxcard tree]
             assert_equal one [$replica raxget tree a f]
             assert_equal {} [$replica raxget tree ab f]
+            assert_equal 1 [$replica exists empty-tree]
+            assert_equal radix [$replica type empty-tree]
+            assert_equal 0 [$replica raxcard empty-tree]
         }
     }
 }

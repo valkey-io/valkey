@@ -196,6 +196,38 @@ static void radixSetField(radixObject *radix, robj *payload, robj *field, robj *
     if (!updated) radix->num_fields++;
 }
 
+/* Validate one or more groups in the following form before the caller emits
+ * replies or applies mutations:
+ *
+ *     path FIELDS numfields field [value] [field [value] ...]
+ *
+ * Values are present for RAXMSET and omitted for RAXMGET. */
+static int radixValidateFieldGroups(client *c, int with_values, long long *total_fields) {
+    int stride = with_values ? 2 : 1;
+    int argpos = 2;
+    *total_fields = 0;
+
+    while (argpos < c->argc) {
+        if (argpos + 2 >= c->argc || strcasecmp(objectGetVal(c->argv[argpos + 1]), "fields")) goto syntax;
+
+        long numfields;
+        if (getRangeLongFromObjectOrReply(c, c->argv[argpos + 2], 1, LONG_MAX, &numfields, NULL) != C_OK)
+            return C_ERR;
+
+        int fields_index = argpos + 3;
+        int remaining = c->argc - fields_index;
+        if (numfields > remaining / stride) goto syntax;
+
+        argpos = fields_index + numfields * stride;
+        *total_fields += numfields;
+    }
+    return C_OK;
+
+syntax:
+    addReplyErrorObject(c, shared.syntaxerr);
+    return C_ERR;
+}
+
 void raxsetCommand(client *c) {
     int fnx = 0, fxx = 0;
     int argpos = 3;
@@ -262,11 +294,9 @@ void raxsetCommand(client *c) {
 }
 
 void raxmsetCommand(client *c) {
-    if ((c->argc - 2) % 3) {
-        addReplyErrorObject(c, shared.syntaxerr);
-        return;
-    }
-    long assignments = (c->argc - 2) / 3;
+    long long assignments;
+    if (radixValidateFieldGroups(c, 1, &assignments) != C_OK) return;
+
     robj *o = lookupKeyWrite(c->db, c->argv[1]);
     if (checkType(c, o, OBJ_RADIX)) return;
     int created_tree = 0;
@@ -275,17 +305,22 @@ void raxmsetCommand(client *c) {
         created_tree = 1;
     }
     radixObject *radix = objectGetVal(o);
-    for (int i = 2; i < c->argc; i += 3) {
-        robj *payload = radixLookupPayload(o, c->argv[i]);
+    for (int argpos = 2; argpos < c->argc;) {
+        long long numfields;
+        serverAssert(getLongLongFromObject(c->argv[argpos + 2], &numfields) == C_OK);
+        int fields_index = argpos + 3;
+        robj *payload = radixLookupPayload(o, c->argv[argpos]);
         if (payload == NULL) {
-            payload = radixCreatePayload(radix, c->argv[i]);
+            payload = radixCreatePayload(radix, c->argv[argpos]);
             if (payload == NULL) {
                 if (created_tree) decrRefCount(o);
                 addReplyError(c, "failed to allocate radix path");
                 return;
             }
         }
-        radixSetField(radix, payload, c->argv[i + 1], c->argv[i + 2]);
+        for (long long i = 0; i < numfields; i++)
+            radixSetField(radix, payload, c->argv[fields_index + i * 2], c->argv[fields_index + i * 2 + 1]);
+        argpos = fields_index + numfields * 2;
     }
     if (created_tree) dbAdd(c->db, c->argv[1], &o);
     signalModifiedKey(c, c->db, c->argv[1]);
@@ -305,16 +340,19 @@ void raxgetCommand(client *c) {
 }
 
 void raxmgetCommand(client *c) {
-    if ((c->argc - 2) & 1) {
-        addReplyErrorObject(c, shared.syntaxerr);
-        return;
-    }
+    long long total_fields;
+    if (radixValidateFieldGroups(c, 0, &total_fields) != C_OK) return;
+
     robj *o = lookupKeyRead(c->db, c->argv[1]);
     if (checkType(c, o, OBJ_RADIX)) return;
-    addReplyArrayLen(c, (c->argc - 2) / 2);
-    for (int i = 2; i < c->argc; i += 2) {
-        robj *payload = radixLookupPayload(o, c->argv[i]);
-        radixReplyField(c, payload, c->argv[i + 1]);
+    addReplyArrayLen(c, total_fields);
+    for (int argpos = 2; argpos < c->argc;) {
+        long long numfields;
+        serverAssert(getLongLongFromObject(c->argv[argpos + 2], &numfields) == C_OK);
+        int fields_index = argpos + 3;
+        robj *payload = radixLookupPayload(o, c->argv[argpos]);
+        for (long long i = 0; i < numfields; i++) radixReplyField(c, payload, c->argv[fields_index + i]);
+        argpos = fields_index + numfields;
     }
 }
 
@@ -366,13 +404,9 @@ void raxdelCommand(client *c) {
         serverAssert(raxRemove(radix->index, (unsigned char *)path, sdslen(path), &removed));
         decrRefCount(removed);
     }
-    int key_removed = 0;
-    if (raxSize(radix->index) == 0) key_removed = dbDelete(c->db, c->argv[1]);
-
     if (deleted) {
         signalModifiedKey(c, c->db, c->argv[1]);
         notifyKeyspaceEvent(NOTIFY_RADIX, "raxdel", c->argv[1], c->db->id);
-        if (key_removed) notifyKeyspaceEvent(NOTIFY_GENERIC, "del", c->argv[1], c->db->id);
         server.dirty += deleted;
     }
     addReplyLongLong(c, deleted);
@@ -556,11 +590,19 @@ void raxdelprefixCommand(client *c) {
     size_t prefix_len = sdslen(prefix);
     if (prefix_len == 0) {
         long long deleted = raxSize(radix->index);
-        dbDelete(c->db, c->argv[1]);
-        signalModifiedKey(c, c->db, c->argv[1]);
-        notifyKeyspaceEvent(NOTIFY_RADIX, "raxdelprefix", c->argv[1], c->db->id);
-        notifyKeyspaceEvent(NOTIFY_GENERIC, "del", c->argv[1], c->db->id);
-        server.dirty += deleted;
+        if (deleted) {
+            rax *empty = raxNew();
+            if (empty == NULL) {
+                addReplyError(c, "failed to allocate empty radix tree");
+                return;
+            }
+            raxFreeWithCallback(radix->index, freeRadixPayload);
+            radix->index = empty;
+            radix->num_fields = 0;
+            signalModifiedKey(c, c->db, c->argv[1]);
+            notifyKeyspaceEvent(NOTIFY_RADIX, "raxdelprefix", c->argv[1], c->db->id);
+            server.dirty += deleted;
+        }
         addReplyLongLong(c, deleted);
         return;
     }
@@ -588,12 +630,9 @@ void raxdelprefixCommand(client *c) {
         }
         deleted += chunk_len;
     }
-    int key_removed = 0;
-    if (raxSize(radix->index) == 0) key_removed = dbDelete(c->db, c->argv[1]);
     if (deleted) {
         signalModifiedKey(c, c->db, c->argv[1]);
         notifyKeyspaceEvent(NOTIFY_RADIX, "raxdelprefix", c->argv[1], c->db->id);
-        if (key_removed) notifyKeyspaceEvent(NOTIFY_GENERIC, "del", c->argv[1], c->db->id);
         server.dirty += deleted;
     }
     addReplyLongLong(c, deleted);
@@ -751,6 +790,19 @@ void raxcardCommand(client *c) {
 int rewriteRadixObject(rio *r, robj *key, robj *o) {
     radixObject *radix = objectGetVal(o);
     raxIterator paths;
+
+    if (raxSize(radix->index) == 0) {
+        /* As with XADD MAXLEN 0 for an empty stream, create a temporary
+         * logical path and remove it again to reconstruct an empty Radix. */
+        if (!rioWriteBulkCount(r, '*', 7) || !rioWriteBulkString(r, "RAXSET", 6) ||
+            !rioWriteBulkObject(r, key) || !rioWriteBulkString(r, "", 0) ||
+            !rioWriteBulkString(r, "FIELDS", 6) || !rioWriteBulkLongLong(r, 1) ||
+            !rioWriteBulkString(r, "", 0) || !rioWriteBulkString(r, "", 0) ||
+            !rioWriteBulkCount(r, '*', 3) || !rioWriteBulkString(r, "RAXDEL", 6) ||
+            !rioWriteBulkObject(r, key) || !rioWriteBulkString(r, "", 0))
+            return 0;
+        return 1;
+    }
 
     raxStart(&paths, radix->index);
     raxSeek(&paths, "^", NULL, 0);

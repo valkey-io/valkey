@@ -1,10 +1,10 @@
 {
     "RAXMSET": {
         "summary": "Atomically sets fields across multiple radix-tree paths.",
-        "complexity": "O(sum(L) + M*U), where M is the number of assignments.",
+        "complexity": "O(sum(L) + M*U), where M is the total number of fields across all path groups.",
         "group": "radix",
         "since": "9.2.0",
-        "arity": -5,
+        "arity": -7,
         "function": "raxmsetCommand",
         "command_flags": ["WRITE", "DENYOOM", "FAST"],
         "acl_categories": ["RADIX", "WRITE", "FAST"],
@@ -18,8 +18,13 @@
             {"name": "key", "type": "key", "key_spec_index": 0},
             {"name": "data", "type": "block", "multiple": true, "arguments": [
                 {"name": "path", "type": "string"},
-                {"name": "field", "type": "string"},
-                {"name": "value", "type": "string"}
+                {"name": "fields", "type": "block", "token": "FIELDS", "arguments": [
+                    {"name": "numfields", "type": "integer", "minimum": 1},
+                    {"name": "data", "type": "block", "multiple": true, "arguments": [
+                        {"name": "field", "type": "string"},
+                        {"name": "value", "type": "string"}
+                    ]}
+                ]}
             ]}
         ]
     }

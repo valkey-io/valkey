@@ -1489,9 +1489,7 @@ int isNodeAvailable(clusterNode *node) {
 void addNodeReplyForClusterSlot(client *c, clusterNode *node, int start_slot, int end_slot) {
     int i, nested_elements = 3; /* slots (2) + primary addr (1) */
     for (i = 0; i < clusterNodeNumReplicas(node); i++) {
-#ifndef ENABLE_CLUSTERX_FEATURE
         if (!isNodeAvailable(clusterNodeGetReplica(node, i))) continue;
-#endif
         nested_elements++;
     }
     addReplyArrayLen(c, nested_elements);
@@ -1503,9 +1501,7 @@ void addNodeReplyForClusterSlot(client *c, clusterNode *node, int start_slot, in
     for (i = 0; i < clusterNodeNumReplicas(node); i++) {
         /* This loop is copy/pasted from clusterGenNodeDescription()
          * with modifications for per-slot node aggregation. */
-#ifndef ENABLE_CLUSTERX_FEATURE
         if (!isNodeAvailable(clusterNodeGetReplica(node, i))) continue;
-#endif
         addNodeToNodeReply(c, clusterNodeGetReplica(node, i));
         nested_elements--;
     }

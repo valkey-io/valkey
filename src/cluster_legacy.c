@@ -2756,12 +2756,24 @@ void clearNodeFailureIfNeeded(clusterNode *node) {
         clusterDoBeforeSleep(CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_SAVE_CONFIG);
     }
 
+    /* If none of the replica can failover or it's primary only setup,
+     * then immediately mark the node as alive. */
+    int dont_wait = 1;
+    for (int j = 0; j < node->num_replicas; j++) {
+        if (!clusterNodeIsNoFailover(node->replicas[j])) {
+            dont_wait = 0;
+            break;
+        }
+    }
+
     /* If it is a primary and...
      * 1) The FAIL state is old enough.
      * 2) It is yet serving slots from our point of view (not failed over).
+     * 3) Failover is disabled on replica(s) via `cluster-replica-no-failover`.
+     * 4) There are no replica(s) in the shard.
      * Apparently no one is going to fix these slots, clear the FAIL flag. */
     if (clusterNodeIsVotingPrimary(node) &&
-        (now - node->fail_time) > (server.cluster_node_timeout * CLUSTER_FAIL_UNDO_TIME_MULT)) {
+        ((now - node->fail_time) > (server.cluster_node_timeout * CLUSTER_FAIL_UNDO_TIME_MULT) || dont_wait)) {
         serverLog(
             LL_NOTICE,
             "Clear FAIL state for node %.40s (%s): is reachable again and nobody is serving its slots after some time.",
@@ -5906,6 +5918,10 @@ void clusterLogCantFailover(int reason) {
     case CLUSTER_CANT_FAILOVER_WAITING_DELAY: msg = "Waiting the delay before I can start a new failover."; break;
     case CLUSTER_CANT_FAILOVER_EXPIRED: msg = "Failover attempt expired."; break;
     case CLUSTER_CANT_FAILOVER_WAITING_VOTES: msg = "Waiting for votes, but majority still not reached."; break;
+    case CLUSTER_CANT_FAILOVER_DISABLED:
+        msg = "Failover has been disabled. "
+              "Please check the 'cluster-replica-no-failover' configuration option.";
+        break;
     default: serverPanic("Unknown cant failover reason code.");
     }
     lastlog_time = time(NULL);
@@ -6006,15 +6022,19 @@ void clusterHandleReplicaFailover(void) {
     /* Pre conditions to run the function, that must be met both in case
      * of an automatic or manual failover:
      * 1) We are a replica.
-     * 2) Our primary is flagged as FAIL, or this is a manual failover.
-     * 3) We don't have the no failover configuration set, and this is
-     *    not a manual failover. */
+     * 2) Our primary is flagged as FAIL, or this is a manual failover. */
     if (clusterNodeIsPrimary(myself) || myself->replicaof == NULL ||
-        (!nodeFailed(myself->replicaof) && !manual_failover) ||
-        (server.cluster_replica_no_failover && !manual_failover)) {
+        (!nodeFailed(myself->replicaof) && !manual_failover)) {
         /* There are no reasons to failover, so we set the reason why we
          * are returning without failing over to NONE. */
         server.cluster->cant_failover_reason = CLUSTER_CANT_FAILOVER_NONE;
+        return;
+    }
+
+    /* We have the cluster-replica-no-failover configuration enabled, so can't failover. */
+    if (server.cluster_replica_no_failover && !manual_failover) {
+        server.cluster->cant_failover_reason = CLUSTER_CANT_FAILOVER_DISABLED;
+        clusterLogCantFailover(CLUSTER_CANT_FAILOVER_DISABLED);
         return;
     }
 
@@ -8048,7 +8068,7 @@ int clusterNodeIsFailing(clusterNode *node) {
 }
 
 int clusterNodeIsNoFailover(clusterNode *node) {
-    return node->flags & CLUSTER_NODE_NOFAILOVER;
+    return nodeCantFailover(node);
 }
 
 const char **clusterDebugCommandExtendedHelp(void) {

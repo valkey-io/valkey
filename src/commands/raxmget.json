@@ -1,20 +1,23 @@
 {
     "RAXMGET": {
         "summary": "Returns fields from multiple exact radix-tree paths.",
-        "complexity": "O(sum(L) + M*U).",
+        "complexity": "O(sum(L) + M*U), where M is the total number of fields across all path groups.",
         "group": "radix",
         "since": "9.2.0",
-        "arity": -4,
+        "arity": -6,
         "function": "raxmgetCommand",
         "command_flags": ["READONLY", "FAST"],
         "acl_categories": ["RADIX", "READ", "FAST"],
         "key_specs": [{"flags": ["RO", "ACCESS"], "begin_search": {"index": {"pos": 1}}, "find_keys": {"range": {"lastkey": 0, "step": 1, "limit": 0}}}],
-        "reply_schema": {"type": "array", "items": {"oneOf": [{"type": "string"}, {"type": "null"}]}},
+        "reply_schema": {"description": "Flat array of values in requested path-group and field order, with null for missing fields.", "type": "array", "items": {"oneOf": [{"type": "string"}, {"type": "null"}]}},
         "arguments": [
             {"name": "key", "type": "key", "key_spec_index": 0},
             {"name": "data", "type": "block", "multiple": true, "arguments": [
                 {"name": "path", "type": "string"},
-                {"name": "field", "type": "string"}
+                {"name": "fields", "type": "block", "token": "FIELDS", "arguments": [
+                    {"name": "numfields", "type": "integer", "minimum": 1},
+                    {"name": "field", "type": "string", "multiple": true}
+                ]}
             ]}
         ]
     }

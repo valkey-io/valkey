@@ -5820,10 +5820,16 @@ keySpec RAXMGET_Keyspecs[1] = {
 };
 #endif
 
+/* RAXMGET data fields argument table */
+struct COMMAND_ARG RAXMGET_data_fields_Subargs[] = {
+{MAKE_ARG("numfields",ARG_TYPE_INTEGER,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("field",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_MULTIPLE,0,NULL)},
+};
+
 /* RAXMGET data argument table */
 struct COMMAND_ARG RAXMGET_data_Subargs[] = {
 {MAKE_ARG("path",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("field",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("fields",ARG_TYPE_BLOCK,-1,"FIELDS",NULL,NULL,CMD_ARG_NONE,2,NULL),.subargs=RAXMGET_data_fields_Subargs},
 };
 
 /* RAXMGET argument table */
@@ -5851,17 +5857,28 @@ keySpec RAXMSET_Keyspecs[1] = {
 };
 #endif
 
+/* RAXMSET data fields data argument table */
+struct COMMAND_ARG RAXMSET_data_fields_data_Subargs[] = {
+{MAKE_ARG("field",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("value",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+};
+
+/* RAXMSET data fields argument table */
+struct COMMAND_ARG RAXMSET_data_fields_Subargs[] = {
+{MAKE_ARG("numfields",ARG_TYPE_INTEGER,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("data",ARG_TYPE_BLOCK,-1,NULL,NULL,NULL,CMD_ARG_MULTIPLE,2,NULL),.subargs=RAXMSET_data_fields_data_Subargs},
+};
+
 /* RAXMSET data argument table */
 struct COMMAND_ARG RAXMSET_data_Subargs[] = {
 {MAKE_ARG("path",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("field",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("value",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("fields",ARG_TYPE_BLOCK,-1,"FIELDS",NULL,NULL,CMD_ARG_NONE,2,NULL),.subargs=RAXMSET_data_fields_Subargs},
 };
 
 /* RAXMSET argument table */
 struct COMMAND_ARG RAXMSET_Args[] = {
 {MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("data",ARG_TYPE_BLOCK,-1,NULL,NULL,NULL,CMD_ARG_MULTIPLE,3,NULL),.subargs=RAXMSET_data_Subargs},
+{MAKE_ARG("data",ARG_TYPE_BLOCK,-1,NULL,NULL,NULL,CMD_ARG_MULTIPLE,2,NULL),.subargs=RAXMSET_data_Subargs},
 };
 
 /********** RAXPREFIXES ********************/
@@ -12397,8 +12414,8 @@ struct COMMAND_STRUCT serverCommandTable[] = {
 {MAKE_CMD("raxget","Returns one or more fields from an exact radix-tree path.","O(L + F*U).","9.2.0",CMD_DOC_NONE,NULL,NULL,"radix",COMMAND_GROUP_RADIX,RAXGET_History,0,RAXGET_Tips,0,raxgetCommand,-4,CMD_READONLY|CMD_FAST,ACL_CATEGORY_RADIX|ACL_CATEGORY_READ|ACL_CATEGORY_FAST,NULL,RAXGET_Keyspecs,1,NULL,3),.args=RAXGET_Args},
 {MAKE_CMD("raxgetall","Returns all field-value pairs at an exact radix-tree path.","O(L + O).","9.2.0",CMD_DOC_NONE,NULL,NULL,"radix",COMMAND_GROUP_RADIX,RAXGETALL_History,0,RAXGETALL_Tips,1,raxgetallCommand,3,CMD_READONLY,ACL_CATEGORY_RADIX|ACL_CATEGORY_READ|ACL_CATEGORY_SLOW,NULL,RAXGETALL_Keyspecs,1,NULL,2),.args=RAXGETALL_Args},
 {MAKE_CMD("raxlongest","Returns the longest stored radix path that prefixes a query.","O(L + O).","9.2.0",CMD_DOC_NONE,NULL,NULL,"radix",COMMAND_GROUP_RADIX,RAXLONGEST_History,0,RAXLONGEST_Tips,0,raxlongestCommand,-3,CMD_READONLY,ACL_CATEGORY_RADIX|ACL_CATEGORY_READ|ACL_CATEGORY_SLOW,NULL,RAXLONGEST_Keyspecs,1,NULL,4),.args=RAXLONGEST_Args},
-{MAKE_CMD("raxmget","Returns fields from multiple exact radix-tree paths.","O(sum(L) + M*U).","9.2.0",CMD_DOC_NONE,NULL,NULL,"radix",COMMAND_GROUP_RADIX,RAXMGET_History,0,RAXMGET_Tips,0,raxmgetCommand,-4,CMD_READONLY|CMD_FAST,ACL_CATEGORY_RADIX|ACL_CATEGORY_READ|ACL_CATEGORY_FAST,NULL,RAXMGET_Keyspecs,1,NULL,2),.args=RAXMGET_Args},
-{MAKE_CMD("raxmset","Atomically sets fields across multiple radix-tree paths.","O(sum(L) + M*U), where M is the number of assignments.","9.2.0",CMD_DOC_NONE,NULL,NULL,"radix",COMMAND_GROUP_RADIX,RAXMSET_History,0,RAXMSET_Tips,0,raxmsetCommand,-5,CMD_WRITE|CMD_DENYOOM|CMD_FAST,ACL_CATEGORY_RADIX|ACL_CATEGORY_WRITE|ACL_CATEGORY_FAST,NULL,RAXMSET_Keyspecs,1,NULL,2),.args=RAXMSET_Args},
+{MAKE_CMD("raxmget","Returns fields from multiple exact radix-tree paths.","O(sum(L) + M*U), where M is the total number of fields across all path groups.","9.2.0",CMD_DOC_NONE,NULL,NULL,"radix",COMMAND_GROUP_RADIX,RAXMGET_History,0,RAXMGET_Tips,0,raxmgetCommand,-6,CMD_READONLY|CMD_FAST,ACL_CATEGORY_RADIX|ACL_CATEGORY_READ|ACL_CATEGORY_FAST,NULL,RAXMGET_Keyspecs,1,NULL,2),.args=RAXMGET_Args},
+{MAKE_CMD("raxmset","Atomically sets fields across multiple radix-tree paths.","O(sum(L) + M*U), where M is the total number of fields across all path groups.","9.2.0",CMD_DOC_NONE,NULL,NULL,"radix",COMMAND_GROUP_RADIX,RAXMSET_History,0,RAXMSET_Tips,0,raxmsetCommand,-7,CMD_WRITE|CMD_DENYOOM|CMD_FAST,ACL_CATEGORY_RADIX|ACL_CATEGORY_WRITE|ACL_CATEGORY_FAST,NULL,RAXMSET_Keyspecs,1,NULL,2),.args=RAXMSET_Args},
 {MAKE_CMD("raxprefixes","Returns every stored radix path that prefixes a query.","O(L + O).","9.2.0",CMD_DOC_NONE,NULL,NULL,"radix",COMMAND_GROUP_RADIX,RAXPREFIXES_History,0,RAXPREFIXES_Tips,0,raxprefixesCommand,-3,CMD_READONLY,ACL_CATEGORY_RADIX|ACL_CATEGORY_READ|ACL_CATEGORY_SLOW,NULL,RAXPREFIXES_Keyspecs,1,NULL,6),.args=RAXPREFIXES_Args},
 {MAKE_CMD("raxscan","Incrementally traverses radix-tree paths in lexicographic order.","O(L + C + O) per call.","9.2.0",CMD_DOC_NONE,NULL,NULL,"radix",COMMAND_GROUP_RADIX,RAXSCAN_History,0,RAXSCAN_Tips,0,raxscanCommand,-3,CMD_READONLY,ACL_CATEGORY_RADIX|ACL_CATEGORY_READ|ACL_CATEGORY_SLOW,NULL,RAXSCAN_Keyspecs,1,NULL,5),.args=RAXSCAN_Args},
 {MAKE_CMD("raxset","Atomically sets one or more fields at a radix-tree path.","O(L + F*U), where L is the path length, F is the number of fields, and U is the payload field lookup cost.","9.2.0",CMD_DOC_NONE,NULL,NULL,"radix",COMMAND_GROUP_RADIX,RAXSET_History,0,RAXSET_Tips,0,raxsetCommand,-7,CMD_WRITE|CMD_DENYOOM|CMD_FAST,ACL_CATEGORY_RADIX|ACL_CATEGORY_WRITE|ACL_CATEGORY_FAST,NULL,RAXSET_Keyspecs,1,NULL,4),.args=RAXSET_Args},

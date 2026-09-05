@@ -129,19 +129,6 @@ static void consumeOtherThrottlers(client *c, throttler *except) {
     }
 }
 
-/* Hand an unthrottled client back to the event loop: restore its read handler and queue
- * it for reprocessing. */
-static void queueUnthrottledClientForReprocessing(client *c) {
-    serverAssert(c->argc > 0 && c->flag.pending_command && !c->flag.throttled);
-    if (c->conn && !connHasReadHandler(c->conn)) {
-        if (connSetReadHandler(c->conn, readQueryFromClient) == C_ERR) {
-            freeClient(c);
-            return;
-        }
-    }
-    queueClientForReprocessing(c);
-}
-
 /* Timer event handler: releases queued clients at the token bucket rate.
  * Processes clients until tokens are exhausted or time budget is spent. */
 static long long throttlerTimeProc(struct aeEventLoop *eventLoop, long long id, void *clientData) {
@@ -162,7 +149,8 @@ static long long throttlerTimeProc(struct aeEventLoop *eventLoop, long long id, 
             c->flag.throttle_multi = 0;
             consumeOtherThrottlers(c, t);
         }
-        queueUnthrottledClientForReprocessing(c);
+        serverAssert(c->argc > 0 && c->flag.pending_command && !c->flag.throttled);
+        queueClientForReprocessing(c); // Read handler will be installed during reprocessing.
     }
 
     if (listLength(t->client_queue) == 0) {
@@ -313,12 +301,12 @@ void throttle_removeClient(client *c) {
 }
 
 bool throttle_throttleClientIfNeeded(client *c) {
-    if (throttler_list == NULL || listLength(throttler_list) == 0) return false;
-
     /* Skip internal clients and clients already checked for this command.
      * Prevents re-throttling after unblocking. */
     if (!c->conn || c->flag.throttle_checked) return false;
     c->flag.throttle_checked = 1;
+
+    if (throttler_list == NULL || listLength(throttler_list) == 0) return false;
 
     bool need_throttle = false;
     int match_count = 0;

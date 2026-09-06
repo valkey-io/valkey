@@ -172,6 +172,11 @@ TEST_F(QosTest, MatchIpAgainstSubnetsEdgeCases) {
     EXPECT_TRUE(matchIpAgainstQosSubnetSources("2001:db8::1", &subnets[1], 1));
     EXPECT_TRUE(matchIpAgainstQosSubnetSources("::1", &subnets[1], 1));
     EXPECT_FALSE(matchIpAgainstQosSubnetSources("192.168.1.1", &subnets[1], 1));
+
+    // NULL IP (non-IP transports like UNIX domain sockets) safely returns false
+    EXPECT_FALSE(matchIpAgainstQosSubnetSources(NULL, subnets, 2));
+    EXPECT_FALSE(matchIpAgainstQosSubnetSources("192.168.1.1", NULL, 0));
+    EXPECT_FALSE(matchIpAgainstQosSubnetSources(NULL, NULL, 0));
 }
 
 TEST_F(QosTest, Ipv4MappedIpv6DualStack) {

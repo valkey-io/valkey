@@ -1430,7 +1430,8 @@ static void freeClusterNodes(void) {
 
 static clusterNode **addClusterNode(clusterNode *node) {
     int count = config.cluster_node_count + 1;
-    config.cluster_nodes = zrealloc(config.cluster_nodes, count * sizeof(*node));
+    config.cluster_nodes =
+        zrealloc(config.cluster_nodes, count * sizeof(*config.cluster_nodes));
     if (!config.cluster_nodes) return NULL;
     config.cluster_nodes[config.cluster_node_count++] = node;
     return config.cluster_nodes;

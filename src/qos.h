@@ -38,13 +38,32 @@ typedef struct qosSubnet {
     int prefix_len;
 } qosSubnet;
 
+/* Connection Priority Configuration */
+typedef struct qosConfig {
+    char *priority_subnets;           /* Raw priority-subnets string config */
+    unsigned int maxclients_reserved; /* Client connection slots reserved for priority subnets */
+} qosConfig;
+
+extern qosConfig qos_config;
+
+/* Connection Priority Telemetry / Metrics */
+typedef struct qosMetrics {
+    long long stat_rejected_priority_conn;         /* Prioritized clients rejected because of maxclients */
+    long long stat_num_active_clients_prioritized; /* Number of active prioritized clients */
+} qosMetrics;
+
+extern qosMetrics qos_metrics;
+
 /* QoS Subsystem Lifecycle */
-void qosInit(void);
 void qosFree(void);
+void qosResetStats(void);
 
 /* Low-level Subnet Primitives */
 int parseQosSubnetSource(const char *token, qosSubnet *subnet);
 int parseQosSubnetSourceList(const char *raw_sources, qosSubnet **subnets, int *count);
+/* matchIpAgainstQosSubnetSources checks if the given IP matches any subnet.
+ * Note: ip can be NULL for non-IP transports (e.g. UNIX domain sockets), in which
+ * case false is returned as non-IP connections cannot match IP subnets. */
 bool matchIpAgainstQosSubnetSources(const char *ip, const qosSubnet *subnets, int count);
 
 /* Configuration Validation & Updates */

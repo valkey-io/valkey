@@ -16,6 +16,28 @@
 static qosSubnet *qos_subnets = NULL;
 static int qos_subnets_count = 0;
 
+qosConfig qos_config = {
+    .priority_subnets = NULL,
+    .maxclients_reserved = 0,
+};
+
+qosMetrics qos_metrics = {
+    .stat_rejected_priority_conn = 0,
+    .stat_num_active_clients_prioritized = 0,
+};
+
+void qosFree(void) {
+    if (qos_subnets) {
+        zfree(qos_subnets);
+        qos_subnets = NULL;
+    }
+    qos_subnets_count = 0;
+}
+
+void qosResetStats(void) {
+    qos_metrics.stat_rejected_priority_conn = 0;
+}
+
 /* parseQosSubnetSource parses a subnet token in CIDR notation (e.g. "192.168.1.0/24")
  * and populates the qosSubnet structure.
  * Returns 0 on success, -1 on parsing/validation error. */
@@ -23,36 +45,23 @@ int parseQosSubnetSource(const char *token, qosSubnet *subnet) {
     if (!token || !subnet) return -1;
 
     const char *slash = strchr(token, '/');
-    char ip_part[100];
-    long prefix;
-    int family;
+    size_t ip_len = slash ? (size_t)(slash - token) : strlen(token);
+    if (ip_len == 0 || ip_len >= INET6_ADDRSTRLEN) return -1;
+
+    char ip_part[INET6_ADDRSTRLEN];
+    memcpy(ip_part, token, ip_len);
+    ip_part[ip_len] = '\0';
+
+    int family = strchr(ip_part, ':') ? AF_INET6 : AF_INET;
+    long max_prefix = (family == AF_INET) ? 32 : 128;
+    long prefix = max_prefix;
 
     if (slash) {
-        int ip_len = slash - token;
-        if (ip_len <= 0 || ip_len >= 100) return -1;
-
-        memcpy(ip_part, token, ip_len);
-        ip_part[ip_len] = '\0';
-
         char *endptr;
         prefix = strtol(slash + 1, &endptr, 10);
-        if (endptr == slash + 1 || *endptr != '\0') return -1;
-
-        family = strchr(ip_part, ':') ? AF_INET6 : AF_INET;
-        if (family == AF_INET) {
-            if (prefix < 0 || prefix > 32) return -1;
-        } else {
-            if (prefix < 0 || prefix > 128) return -1;
+        if (endptr == slash + 1 || *endptr != '\0' || prefix < 0 || prefix > max_prefix) {
+            return -1;
         }
-    } else {
-        int ip_len = strlen(token);
-        if (ip_len <= 0 || ip_len >= 100) return -1;
-
-        memcpy(ip_part, token, ip_len);
-        ip_part[ip_len] = '\0';
-
-        family = strchr(ip_part, ':') ? AF_INET6 : AF_INET;
-        prefix = (family == AF_INET) ? 32 : 128;
     }
 
     if (family == AF_INET) {
@@ -74,7 +83,7 @@ int parseQosSubnetSource(const char *token, qosSubnet *subnet) {
 
 /* parseQosSubnetSourceList parses a string containing a list of subnets separated by spaces, tabs, or commas.
  * On success, it allocates an array of qosSubnet, populates it, and sets *subnets and *count.
- * Returns 0 on success, and -1 on any parsing or allocation error.
+ * Returns 0 on success, and -1 on any parsing error.
  * Caller is responsible for freeing *subnets using zfree() if it is non-NULL. */
 int parseQosSubnetSourceList(const char *raw_sources, qosSubnet **subnets, int *count) {
     if (!subnets || !count) return -1;
@@ -87,7 +96,6 @@ int parseQosSubnetSourceList(const char *raw_sources, qosSubnet **subnets, int *
 
     /* First pass: count non-empty tokens */
     char *sources_to_count = zstrdup(raw_sources);
-    if (!sources_to_count) return -1;
     char *token;
     char *saveptr;
     int sources_count = 0;
@@ -106,13 +114,7 @@ int parseQosSubnetSourceList(const char *raw_sources, qosSubnet **subnets, int *
     }
 
     qosSubnet *new_subnets = zmalloc(sizeof(qosSubnet) * sources_count);
-    if (!new_subnets) return -1;
-
     char *sources_to_parse = zstrdup(raw_sources);
-    if (!sources_to_parse) {
-        zfree(new_subnets);
-        return -1;
-    }
 
     int source_index = 0;
     int success = 1;
@@ -138,11 +140,16 @@ int parseQosSubnetSourceList(const char *raw_sources, qosSubnet **subnets, int *
     return 0;
 }
 
-/* matchIpAgainstQosSubnetSources checks if the given IP address matches any of the
- * subnets in the list.
- * Returns true if matching any subnet, false otherwise. */
+/* Check if the given IP address matches any of the subnets in the list.
+ * Returns true if matching any subnet, false otherwise.
+ * Note: ip can be NULL for non-IP transports (e.g. UNIX domain sockets),
+ * in which case false is returned as non-IP connections cannot match IP subnets.*/
 bool matchIpAgainstQosSubnetSources(const char *ip, const qosSubnet *subnets, int count) {
-    if (!ip || !subnets || count <= 0) return false;
+    /* Non-IP connections (e.g. UNIX domain sockets) have no IP and cannot match IP subnets. */
+    if (!ip) return false;
+
+    /* No subnets configured or empty list. */
+    if (!subnets || count <= 0) return false;
 
     int family;
     union {
@@ -200,24 +207,11 @@ bool matchIpAgainstQosSubnetSources(const char *ip, const qosSubnet *subnets, in
     return false;
 }
 
-void qosInit(void) {
-    qos_subnets = NULL;
-    qos_subnets_count = 0;
-}
-
-void qosFree(void) {
-    if (qos_subnets) {
-        zfree(qos_subnets);
-        qos_subnets = NULL;
-    }
-    qos_subnets_count = 0;
-}
-
 int validateQosSubnetSources(const char *sources, const char **err) {
     qosSubnet *subnets = NULL;
     int count = 0;
     if (parseQosSubnetSourceList(sources, &subnets, &count) < 0) {
-        if (err) *err = "Invalid IP address or CIDR subnet in qos-subnet-sources";
+        if (err) *err = "Invalid IP address or CIDR subnet in priority-subnets";
         return C_ERR;
     }
     if (subnets) zfree(subnets);
@@ -230,7 +224,7 @@ int updateQosSubnetSources(const char *sources) {
     if (parseQosSubnetSourceList(sources, &new_subnets, &new_count) < 0) {
         return C_ERR;
     }
-    if (qos_subnets) zfree(qos_subnets);
+    qosFree();
     qos_subnets = new_subnets;
     qos_subnets_count = new_count;
     return C_OK;

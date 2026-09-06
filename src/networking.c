@@ -241,7 +241,7 @@ void linkClient(client *c) {
     /* Increment active client counters. These counters are paired with decrements
      * in unlinkClient() and track connected clients in the global active clients list. */
     if (connIsPriority(c->conn)) {
-        server.stat_num_active_clients_prioritized++;
+        qos_metrics.stat_num_active_clients_prioritized++;
     }
 }
 
@@ -1892,24 +1892,34 @@ void clientAcceptHandler(connection *conn) {
     moduleFireServerEvent(VALKEYMODULE_EVENT_CLIENT_CHANGE, VALKEYMODULE_SUBEVENT_CLIENT_CHANGE_CONNECTED, c);
 }
 
-/* QoS Admission Control:
- * 1. Normal clients are capped at (maxclients - qos-reserved-min-clients) connections.
- * 2. Administrative clients originating from qos-subnet-sources can take up to maxclients if available.
- * 3. Minimum of qos-reserved-min-clients connections guaranteed for administrative clients.
+/* Admission Control:
+ * 1. Total clients can never exceed maxclients.
+ * 2. Normal clients are capped at max(0, maxclients - maxclients-reserved).
+ * 3. Priority clients originating from priority-subnets can take up to maxclients.
+ * 4. maxclients-reserved connection slots are guaranteed for priority clients.
  */
 static bool hasMaxClientsLimitReached(bool is_prioritized) {
     long long total_clients = (long long)listLength(server.clients) +
                               (long long)getClusterConnectionsCount();
-    if (is_prioritized) {
-        return total_clients >= (long long)server.maxclients;
+    if (total_clients >= (long long)server.maxclients) {
+        return true;
     }
 
-    unsigned int reserved = 0;
-    if (server.qos_reserved_min_clients > 0 && hasQosSubnetSources()) {
-        reserved = server.qos_reserved_min_clients;
+    if (is_prioritized) {
+        return false;
     }
-    long long normal_limit = (long long)server.maxclients - (long long)reserved;
-    return total_clients >= normal_limit;
+
+    if (qos_config.maxclients_reserved > 0 && hasQosSubnetSources()) {
+        long long normal_limit = 0;
+        if (server.maxclients > qos_config.maxclients_reserved) {
+            normal_limit = (long long)server.maxclients - (long long)qos_config.maxclients_reserved;
+        }
+        long long prioritized_clients = qos_metrics.stat_num_active_clients_prioritized;
+        long long normal_clients = (total_clients > prioritized_clients) ? (total_clients - prioritized_clients) : 0;
+        return normal_clients >= normal_limit;
+    }
+
+    return false;
 }
 
 void acceptCommonHandler(connection *conn, struct ClientFlags flags, char *ip) {
@@ -1935,14 +1945,11 @@ void acceptCommonHandler(connection *conn, struct ClientFlags flags, char *ip) {
     bool is_prioritized = isIpQosPrioritized(ip);
     if (hasMaxClientsLimitReached(is_prioritized)) {
         char *err;
-        if (is_prioritized) {
-            err = "-ERR max number of priority clients reached\r\n";
-        } else if (server.cluster_enabled) {
+        if (server.cluster_enabled)
             err = "-ERR max number of clients + cluster "
                   "connections reached\r\n";
-        } else {
+        else
             err = "-ERR max number of clients reached\r\n";
-        }
 
         /* That's a best effort error message, don't check write errors.
          * Note that for TLS connections, no handshake was done yet so nothing
@@ -1951,7 +1958,7 @@ void acceptCommonHandler(connection *conn, struct ClientFlags flags, char *ip) {
             /* Nothing to do, Just to avoid the warning... */
         }
         if (is_prioritized)
-            server.stat_rejected_priority_conn++;
+            qos_metrics.stat_rejected_priority_conn++;
         else
             server.stat_rejected_conn++;
         connClose(conn);
@@ -2068,7 +2075,9 @@ void unlinkClient(client *c) {
              * and unlinked clients (c->client_list_node is NULL) do not increment these
              * counters on creation, so we only decrement here for linked, active connections. */
             if (connIsPriority(c->conn)) {
-                server.stat_num_active_clients_prioritized--;
+                if (qos_metrics.stat_num_active_clients_prioritized > 0) {
+                    qos_metrics.stat_num_active_clients_prioritized--;
+                }
             }
         }
         removeClientFromPendingCommandsBatch(c);
@@ -4553,7 +4562,7 @@ int isClientConnIpV6(client *c) {
  * readable format, into the sds string 's'. */
 sds catClientInfoString(sds s, client *client, int hide_user_data) {
     if (!server.crashed) waitForClientIO(client);
-    char flags[17], events[3], capa[9], conninfo[CONN_INFO_LEN], *p;
+    char flags[18], events[3], capa[9], conninfo[CONN_INFO_LEN], *p;
 
     p = flags;
     if (client->flag.replica) {

@@ -119,12 +119,4 @@ start_cluster 2 2 {tags {socket-prioritization external:skip cluster}} {
             fail "Slot 0 was not migrated to R1"
         }
     }
-
-    test "Verify cluster nodes connections are prioritized from beginning" {
-        set links [R 0 CLUSTER LINKS]
-        assert {[llength $links] > 0}
-        foreach link $links {
-            assert_equal "prioritized" [dict get $link qos]
-        }
-    }
 }

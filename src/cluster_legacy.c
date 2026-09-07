@@ -7689,7 +7689,7 @@ sds clusterGenNodesDescription(client *c, int filter, int tls_primary) {
 /* Add to the output buffer of the given client the description of the given cluster link.
  * The description is a map with each entry being an attribute of the link. */
 void addReplyClusterLinkDescription(client *c, clusterLink *link) {
-    addReplyMapLen(c, 7);
+    addReplyMapLen(c, 6);
 
     addReplyBulkCString(c, "direction");
     addReplyBulkCString(c, link->inbound ? "from" : "to");
@@ -7721,9 +7721,6 @@ void addReplyClusterLinkDescription(client *c, clusterLink *link) {
 
     addReplyBulkCString(c, "send-buffer-used");
     addReplyLongLong(c, link->send_msg_queue_mem);
-
-    addReplyBulkCString(c, "qos");
-    addReplyBulkCString(c, connIsPriority(link->conn) ? "prioritized" : "normal");
 }
 
 /* Add to the output buffer of the given client an array of cluster link descriptions,

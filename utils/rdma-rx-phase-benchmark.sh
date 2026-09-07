@@ -37,6 +37,7 @@ CREATED_NETDEV=0
 CREATED_RXE=0
 ROLE="all"
 RX_SIZE="${RX_SIZE:-1048576}"
+RX_MAX_SIZE="${RX_MAX_SIZE:-0}"
 RX_SIZES=""
 REPEATS=1
 CLIENTS=4
@@ -47,7 +48,7 @@ SMOKE=0
 SERVER_PID=""
 SERVER_LOG=""
 
-PHASES_CSV_HEADER='commit,run_id,rx_size,repeat,phase_index,value_size,duration,clients,pipeline,requests,rps,payload_gbps,avg_latency_us,p50_latency_us,p99_latency_us,reconnects,errors,tx_bytes,tx_wait_count,tx_wait_ns,rx_reannounce,reannounces_per_gib,stall_ratio'
+PHASES_CSV_HEADER='commit,run_id,rx_size,rx_max_size,repeat,phase_index,value_size,duration,clients,pipeline,requests,rps,payload_gbps,avg_latency_us,p50_latency_us,p99_latency_us,reconnects,errors,tx_bytes,tx_wait_count,tx_wait_ns,rx_reannounce,reannounces_per_gib,stall_ratio,tx_grow_request,tx_window_peak'
 
 log()  { printf '[%s] %s\n' "$(date +%H:%M:%S)" "$*"; }
 warn() { log "WARNING: $*"; }
@@ -62,6 +63,7 @@ Usage: $0 [--transport rxe|physical] [--smoke] [options]
   --server-host <ip>         client -h (defaults to bind ip)
   --port <port>              RDMA port (default 16379)
   --rx-size <bytes>          server rdma-rx-size (default 1048576)
+  --rx-max-size <bytes>      server rdma-rx-max-size (default 0 = static window)
   --rx-sizes <list>          comma list (bytes or 1M/4M/16M); restart server per size
   --repeats <n>              independent runs per rx-size (default 1)
   --static-bounds            rx=1M,4M,16M × 3 repeats, same KV sequence
@@ -98,6 +100,7 @@ parse_args() {
             --server-host) RDMA_SERVER_HOST="$2"; shift 2 ;;
             --port) RDMA_PORT="$2"; shift 2 ;;
             --rx-size) RX_SIZE="$(parse_bytes "$2")"; shift 2 ;;
+            --rx-max-size) RX_MAX_SIZE="$(parse_bytes "$2")"; shift 2 ;;
             --rx-sizes) RX_SIZES="$2"; shift 2 ;;
             --repeats) REPEATS="$2"; shift 2 ;;
             --static-bounds)
@@ -206,12 +209,13 @@ start_server() {
     VALKEY_RDMA_BENCH_STATS=1 ./src/valkey-server "$REPO_ROOT/valkey.conf" \
         --port 0 --protected-mode no --save "" --appendonly no --daemonize no \
         --rdma-bind "$RDMA_BIND_IP" --rdma-port "$RDMA_PORT" --rdma-rx-size "$RX_SIZE" \
+        --rdma-rx-max-size "$RX_MAX_SIZE" \
         >"$SERVER_LOG" 2>&1 &
     SERVER_PID=$!
     local i
     for i in $(seq 1 50); do
         if timeout 5 ./src/valkey-cli --rdma -h "$RDMA_BIND_IP" -p "$RDMA_PORT" PING 2>/dev/null | grep -q PONG; then
-            log "server up pid=$SERVER_PID rdma=$RDMA_BIND_IP:$RDMA_PORT rx-size=$RX_SIZE"
+            log "server up pid=$SERVER_PID rdma=$RDMA_BIND_IP:$RDMA_PORT rx-size=$RX_SIZE rx-max-size=$RX_MAX_SIZE"
             return 0
         fi
         kill -0 "$SERVER_PID" 2>/dev/null || die "server died; see $SERVER_LOG"
@@ -221,8 +225,8 @@ start_server() {
 }
 
 append_phases_csv() {
-    local err="$1" out="$2" rx="$3" rep="$4"
-    awk -v commit="$GIT_COMMIT" -v run="$RUN_ID" -v rx="$rx" -v rep="$rep" \
+    local err="$1" out="$2" rx="$3" rxmax="$4" rep="$5"
+    awk -v commit="$GIT_COMMIT" -v run="$RUN_ID" -v rx="$rx" -v rxmax="$rxmax" -v rep="$rep" \
         -v c="$CLIENTS" -v p="$PIPELINE" '
         /^PHASE_END / {
             split($0, a, " ")
@@ -231,15 +235,21 @@ append_phases_csv() {
                 n = index(a[i], "=")
                 if (n > 0) kv[substr(a[i], 1, n-1)] = substr(a[i], n+1)
             }
-            printf "%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n",
-                commit, run, rx, rep, kv["index"], kv["value_size"], kv["measured_sec"],
+            printf "%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n",
+                commit, run, rx, rxmax, rep, kv["index"], kv["value_size"], kv["measured_sec"],
                 c, p, kv["requests"], kv["rps"], kv["payload_gbps"],
                 kv["avg_latency_us"], kv["p50_latency_us"], kv["p99_latency_us"],
                 kv["reconnects"], kv["errors"],
                 kv["tx_bytes"], kv["tx_wait_count"], kv["tx_wait_ns"], kv["rx_reannounce"],
-                kv["reannounces_per_gib"], kv["stall_ratio"]
+                kv["reannounces_per_gib"], kv["stall_ratio"],
+                kv["tx_grow_request"], kv["tx_window_peak"]
         }
     ' "$err" >> "$out"
+}
+
+capture_rdma_info() {
+    local out="$1"
+    ./src/valkey-cli --rdma -h "$RDMA_BIND_IP" -p "$RDMA_PORT" INFO rdma >"$out" 2>/dev/null || true
 }
 
 check_run_ok() {
@@ -287,25 +297,25 @@ write_summary() {
     awk -F, '
         NR == 1 { next }
         {
-            k = $3 "," $5 "," $6
+            k = $3 "," $4 "," $6 "," $7
             n[k]++
-            gbps[k] += $12
-            stall[k] += $23
-            reann[k] += $22
-            rps[k] += $11
-            p50[k] += $14
+            gbps[k] += $13
+            stall[k] += $24
+            reann[k] += $23
+            rps[k] += $12
+            p50[k] += $15
         }
         END {
-            print "rx_size,phase_index,value_size,n,mean_rps,mean_payload_gbps,mean_p50_us,mean_reannounces_per_gib,mean_stall_ratio"
+            print "rx_size,rx_max_size,phase_index,value_size,n,mean_rps,mean_payload_gbps,mean_p50_us,mean_reannounces_per_gib,mean_stall_ratio"
             for (k in n) {
                 split(k, a, ",")
-                printf "%s,%s,%s,%d,%.3f,%.6f,%.3f,%.6f,%.6f\n",
-                    a[1], a[2], a[3], n[k],
+                printf "%s,%s,%s,%s,%d,%.3f,%.6f,%.3f,%.6f,%.6f\n",
+                    a[1], a[2], a[3], a[4], n[k],
                     rps[k] / n[k], gbps[k] / n[k], p50[k] / n[k],
                     reann[k] / n[k], stall[k] / n[k]
             }
         }
-    ' "$all" | (read -r hdr; echo "$hdr"; sort -t, -k1,1n -k2,2n) > "$out"
+    ' "$all" | (read -r hdr; echo "$hdr"; sort -t, -k1,1n -k2,2n -k3,3n) > "$out"
 }
 
 main() {
@@ -341,7 +351,7 @@ main() {
     git rev-parse HEAD > "$RESULTS_DIR/git-commit.txt"
     printf '%s\n' "$0 $*" > "$RESULTS_DIR/cmdline.txt"
     cat > "$RESULTS_DIR/metadata.json" <<EOF
-{"commit":"$GIT_COMMIT","transport":"$RDMA_TRANSPORT","bind":"$RDMA_BIND_IP","host":"$RDMA_SERVER_HOST","port":$RDMA_PORT,"rx_sizes":"$RX_SIZES","rx_size":$RX_SIZE,"repeats":$REPEATS,"clients":$CLIENTS,"pipeline":$PIPELINE,"threads":$THREADS,"phases":"$PHASES","role":"$ROLE"}
+{"commit":"$GIT_COMMIT","transport":"$RDMA_TRANSPORT","bind":"$RDMA_BIND_IP","host":"$RDMA_SERVER_HOST","port":$RDMA_PORT,"rx_sizes":"$RX_SIZES","rx_size":$RX_SIZE,"rx_max_size":$RX_MAX_SIZE,"repeats":$REPEATS,"clients":$CLIENTS,"pipeline":$PIPELINE,"threads":$THREADS,"phases":"$PHASES","role":"$ROLE"}
 EOF
 
     printf '%s\n' "$PHASES_CSV_HEADER" > "$RESULTS_DIR/phases.csv"
@@ -351,7 +361,7 @@ EOF
         RX_SIZE="$rx"
         for rep in $(seq 1 "$REPEATS"); do
             cell=$((cell + 1))
-            log "cell $cell/$total rx=$RX_SIZE repeat=$rep/$REPEATS"
+            log "cell $cell/$total rx=$RX_SIZE rx-max=$RX_MAX_SIZE repeat=$rep/$REPEATS"
             if [[ "$ROLE" == "all" ]]; then
                 stop_server
                 start_server "server-rx${RX_SIZE}-r${rep}.log"
@@ -361,7 +371,10 @@ EOF
             local rc=0
             run_one_benchmark "$csv" "$err" || rc=$?
             check_run_ok "$err" "${SERVER_LOG:-}" "$rc"
-            append_phases_csv "$err" "$RESULTS_DIR/phases.csv" "$RX_SIZE" "$rep"
+            append_phases_csv "$err" "$RESULTS_DIR/phases.csv" "$RX_SIZE" "$RX_MAX_SIZE" "$rep"
+            if [[ "$ROLE" == "all" ]]; then
+                capture_rdma_info "$RESULTS_DIR/raw/rx${RX_SIZE}-max${RX_MAX_SIZE}-r${rep}.info-rdma"
+            fi
         done
     done
 

@@ -69,6 +69,8 @@ typedef struct valkeyRdmaStats {
     uint64_t tx_wait_for_rx_count;
     uint64_t tx_wait_for_rx_ns;
     uint64_t rx_window_reannounce_count; /* RegisterXferMemory after the initial handoff */
+    uint64_t tx_grow_request_count;      /* chunks that signalled RX-window pressure */
+    uint32_t tx_window_peak;             /* max announced server RX window seen */
 } valkeyRdmaStats;
 
 struct valkeyContext;

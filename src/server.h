@@ -1737,6 +1737,7 @@ typedef struct serverRdmaContextConfig {
     int bindaddr_count;
     int port;
     int rx_size;
+    int rx_max_size; /* 0 = static window (capacity == rx_size) */
     int completion_vector;
 } serverRdmaContextConfig;
 

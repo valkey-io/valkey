@@ -1249,11 +1249,14 @@ static void resetPhaseRdmaClientStats(void) {
 #endif
 }
 
-static void collectPhaseRdmaClientStats(uint64_t *tx_bytes, uint64_t *tx_wait_count, uint64_t *tx_wait_ns, uint64_t *rx_reannounce) {
+static void collectPhaseRdmaClientStats(uint64_t *tx_bytes, uint64_t *tx_wait_count, uint64_t *tx_wait_ns,
+                                        uint64_t *rx_reannounce, uint64_t *tx_grow_request, uint32_t *tx_window_peak) {
     *tx_bytes = 0;
     *tx_wait_count = 0;
     *tx_wait_ns = 0;
     *rx_reannounce = 0;
+    *tx_grow_request = 0;
+    *tx_window_peak = 0;
 #ifdef USE_RDMA
     listIter li;
     listNode *ln;
@@ -1269,6 +1272,9 @@ static void collectPhaseRdmaClientStats(uint64_t *tx_bytes, uint64_t *tx_wait_co
         *tx_wait_count += stats.tx_wait_for_rx_count;
         *tx_wait_ns += stats.tx_wait_for_rx_ns;
         *rx_reannounce += stats.rx_window_reannounce_count;
+        *tx_grow_request += stats.tx_grow_request_count;
+        /* window size is a high-water mark per client: take the max, not the sum */
+        if (stats.tx_window_peak > *tx_window_peak) *tx_window_peak = stats.tx_window_peak;
     }
 #endif
 }
@@ -1313,10 +1319,12 @@ static void reportPhaseEnd(void) {
     int64_t p99 = config.latency_histogram ? hdr_value_at_percentile(config.latency_histogram, 99.0) : 0;
     int reconnects = atomic_load_explicit(&config.phase_reconnects, memory_order_relaxed);
     int errors = atomic_load_explicit(&config.phase_errors, memory_order_relaxed);
-    uint64_t tx_bytes, tx_wait_count, tx_wait_ns, rx_reannounce;
+    uint64_t tx_bytes, tx_wait_count, tx_wait_ns, rx_reannounce, tx_grow_request;
+    uint32_t tx_window_peak;
     double gib, reannounces_per_gib, stall_ratio;
 
-    collectPhaseRdmaClientStats(&tx_bytes, &tx_wait_count, &tx_wait_ns, &rx_reannounce);
+    collectPhaseRdmaClientStats(&tx_bytes, &tx_wait_count, &tx_wait_ns, &rx_reannounce, &tx_grow_request,
+                                &tx_window_peak);
     gib = tx_bytes / (double)(1ULL << 30);
     reannounces_per_gib = (gib > 0.0) ? (rx_reannounce / gib) : 0.0;
     stall_ratio = (measured_sec > 0.0 && config.numclients > 0)
@@ -1324,21 +1332,23 @@ static void reportPhaseEnd(void) {
                       : 0.0;
 
     if (config.csv) {
-        printf("%d,%d,%d,%.6f,%d,%.3f,%.6f,%.3f,%.3f,%.3f,%d,%d,%llu,%llu,%llu,%llu,%.6f,%.6f\n",
+        printf("%d,%d,%d,%.6f,%d,%.3f,%.6f,%.3f,%.3f,%.3f,%d,%d,%llu,%llu,%llu,%llu,%.6f,%.6f,%llu,%u\n",
                config.phase_index, value_size, config.phases[config.phase_index].duration_sec, measured_sec, requests,
                rps, payload_gbps, avg_us, (double)p50, (double)p99, reconnects, errors,
                (unsigned long long)tx_bytes, (unsigned long long)tx_wait_count, (unsigned long long)tx_wait_ns,
-               (unsigned long long)rx_reannounce, reannounces_per_gib, stall_ratio);
+               (unsigned long long)rx_reannounce, reannounces_per_gib, stall_ratio, (unsigned long long)tx_grow_request,
+               tx_window_peak);
         fflush(stdout);
     }
     fprintf(stderr,
             "PHASE_END index=%d value_size=%d measured_sec=%.6f requests=%d rps=%.3f payload_gbps=%.6f "
             "avg_latency_us=%.3f p50_latency_us=%.3f p99_latency_us=%.3f reconnects=%d errors=%d "
             "tx_bytes=%llu tx_wait_count=%llu tx_wait_ns=%llu rx_reannounce=%llu reannounces_per_gib=%.6f "
-            "stall_ratio=%.6f\n",
+            "stall_ratio=%.6f tx_grow_request=%llu tx_window_peak=%u\n",
             config.phase_index, value_size, measured_sec, requests, rps, payload_gbps, avg_us, (double)p50,
             (double)p99, reconnects, errors, (unsigned long long)tx_bytes, (unsigned long long)tx_wait_count,
-            (unsigned long long)tx_wait_ns, (unsigned long long)rx_reannounce, reannounces_per_gib, stall_ratio);
+            (unsigned long long)tx_wait_ns, (unsigned long long)rx_reannounce, reannounces_per_gib, stall_ratio,
+            (unsigned long long)tx_grow_request, tx_window_peak);
     fflush(stderr);
 }
 
@@ -1580,7 +1590,7 @@ static void benchmarkSequence(const char *title, char *cmd, int len, int seqlen)
         if (config.csv) {
             printf("phase_index,value_size,duration,measured_sec,requests,rps,payload_gbps,avg_latency_us,"
                    "p50_latency_us,p99_latency_us,reconnects,errors,tx_bytes,tx_wait_count,tx_wait_ns,"
-                   "rx_reannounce,reannounces_per_gib,stall_ratio\n");
+                   "rx_reannounce,reannounces_per_gib,stall_ratio,tx_grow_request,tx_window_peak\n");
             fflush(stdout);
         }
     }

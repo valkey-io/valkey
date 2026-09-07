@@ -189,6 +189,29 @@ def server_base_cmd(svrpath, tmpdir, ipaddr):
             "--rdma-port", str(RDMA_PORT), "--rdma-bind", ipaddr]
 
 
+def parse_info_rdma(text):
+    stats = {}
+    for line in text.splitlines():
+        if ":" not in line:
+            continue
+        key, val = line.split(":", 1)
+        if key.startswith("rx_"):
+            stats[key] = int(val)
+    return stats
+
+
+def fetch_info_rdma(clipath, ipaddr):
+    cmd = [clipath, "--rdma", "-h", ipaddr, "-p", str(RDMA_PORT), "INFO", "rdma"]
+    try:
+        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                timeout=10, text=True)
+    except subprocess.TimeoutExpired:
+        return None
+    if result.returncode:
+        return None
+    return parse_info_rdma(result.stdout)
+
+
 def test_rdma(ipaddr):
     valkeydir = os.path.dirname(os.path.abspath(__file__)) + "/../.."
     tmpdir = valkeydir + "/tests/rdma/tmp"
@@ -196,7 +219,8 @@ def test_rdma(ipaddr):
 
     svrpath = valkeydir + "/src/valkey-server"
     benchpath = valkeydir + "/src/valkey-benchmark"
-    clipath = valkeydir + "/tests/rdma/rdma-test"
+    clipath = valkeydir + "/src/valkey-cli"
+    rdma_test = valkeydir + "/tests/rdma/rdma-test"
     svr = None
     try:
         # Phase 1: basic RDMA CM/verbs smoke (no IO threads), same as upstream.
@@ -205,7 +229,7 @@ def test_rdma(ipaddr):
         if svr is None:
             return 1
 
-        clicmd = [clipath, "--thread", "4", "-h", ipaddr, "-p", str(RDMA_PORT)]
+        clicmd = [rdma_test, "--thread", "4", "-h", ipaddr, "-p", str(RDMA_PORT)]
         retval = run_cmd("rdma-test", clicmd, 60)
         if retval:
             print_server_log(svr_log, "rdma-test")
@@ -229,6 +253,49 @@ def test_rdma(ipaddr):
         if retval:
             print_server_log(svr_log, "valkey-benchmark")
             return retval
+        stop_server(svr)
+        svr = None
+
+        # Phase 3: dynamic RX window growth (new client + dynamic server).
+        svr_log = tmpdir + "/server-dynamic-grow.log"
+        svrcmd = server_base_cmd(svrpath, tmpdir, ipaddr) + [
+            "--rdma-rx-size", "65536", "--rdma-rx-max-size", "1048576"]
+        svr = start_server(svrcmd, svr_log)
+        if svr is None:
+            return 1
+
+        info_before = fetch_info_rdma(clipath, ipaddr)
+        if info_before is None:
+            print("Valkey Over RDMA INFO rdma before dynamic grow benchmark [FAILED]")
+            return 1
+
+        benchcmd = [benchpath, "-h", ipaddr, "-p", str(RDMA_PORT), "--rdma",
+                    "-d", "4096", "-c", "16", "-P", "16", "-n", "200000", "-t", "set,get"]
+        print("Valkey Over RDMA valkey-benchmark dynamic grow " + " ".join(benchcmd[1:]))
+        retval = run_cmd("valkey-benchmark dynamic grow", benchcmd, BENCH_TIMEOUT)
+        if retval:
+            print_server_log(svr_log, "valkey-benchmark dynamic grow")
+            return retval
+
+        info_after = fetch_info_rdma(clipath, ipaddr)
+        if info_after is None:
+            print("Valkey Over RDMA INFO rdma after dynamic grow benchmark [FAILED]")
+            return 1
+
+        grow_count = info_after.get("rx_window_grow_count", 0)
+        if grow_count < 16:
+            print("Valkey Over RDMA rx_window_grow_count=%d expected >= 16 [FAILED]" % grow_count)
+            return 1
+
+        mr_before = info_before.get("rx_mr_register_count", -1)
+        mr_after = info_after.get("rx_mr_register_count", -1)
+        if mr_before != mr_after or mr_before <= 0:
+            print("Valkey Over RDMA rx_mr_register_count changed (%d -> %d) [FAILED]"
+                  % (mr_before, mr_after))
+            return 1
+
+        print("Valkey Over RDMA dynamic grow rx_window_grow_count=%d "
+              "rx_mr_register_count=%d [OK]" % (grow_count, mr_after))
         return 0
     finally:
         stop_server(svr)

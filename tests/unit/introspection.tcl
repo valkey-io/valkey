@@ -1360,6 +1360,7 @@ start_server {tags {"introspection"}} {
             dual-channel-replication-enabled
             rdma-completion-vector
             rdma-rx-size
+            rdma-rx-max-size
             rdma-bind
             rdma-port
             forkless-infrastructure-enabled

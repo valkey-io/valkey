@@ -55,6 +55,7 @@ typedef struct qosMetrics {
 extern qosMetrics qos_metrics;
 
 /* QoS Subsystem Lifecycle */
+int qosInit(void);
 void qosFree(void);
 void qosResetStats(void);
 

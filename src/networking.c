@@ -1957,10 +1957,10 @@ void acceptCommonHandler(connection *conn, struct ClientFlags flags, char *ip) {
         if (connWrite(conn, err, strlen(err)) == -1) {
             /* Nothing to do, Just to avoid the warning... */
         }
-        if (is_prioritized)
+        server.stat_rejected_conn++;
+        if (is_prioritized) {
             qos_metrics.stat_rejected_priority_conn++;
-        else
-            server.stat_rejected_conn++;
+        }
         connClose(conn);
         return;
     }

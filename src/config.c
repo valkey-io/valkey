@@ -190,7 +190,7 @@ configEnum bgsave_method_enum[] = {{"fork", RDB_BGSAVE_TYPE_FORK},
 
 configEnum cluster_replica_no_failover_enum[] = {{"no", CLUSTER_REPLICA_NO_FAILOVER_NO},
                                                  {"yes", CLUSTER_REPLICA_NO_FAILOVER_YES},
-                                                 {"no-data", CLUSTER_REPLICA_NO_FAILOVER_NO_DATA},
+                                                 {"if-empty", CLUSTER_REPLICA_NO_FAILOVER_IF_EMPTY},
                                                  {NULL, 0}};
 
 /* Output buffer limits presets. */

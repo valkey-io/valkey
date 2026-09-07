@@ -6048,14 +6048,18 @@ void clusterHandleReplicaFailover(void) {
         }
     }
 
-    /* Refuse to start an automatic failover if we have no data yet, when
-     * configured to do so. Such a replica has never received any data from
+    /* Refuse to start an automatic failover while we are still empty, when
+     * configured to do so. An empty replica has never received any data from
      * its primary (e.g. it was just added and hasn't finished the initial
-     * sync, so its replication offset is 0), so promoting it would lose all
-     * the shard data.
+     * sync, so its replication offset is 0), so promoting it would make an
+     * empty dataset the new primary and lose all the data of the shard.
+     *
+     * Note that "empty" refers to the data received from the primary, not to
+     * the number of keys: a replica fully synced with an empty primary has a
+     * non-zero offset and is therefore not considered empty.
      *
      * Check bypassed for manual failovers. */
-    if (server.cluster_replica_no_failover == CLUSTER_REPLICA_NO_FAILOVER_NO_DATA &&
+    if (server.cluster_replica_no_failover == CLUSTER_REPLICA_NO_FAILOVER_IF_EMPTY &&
         !manual_failover && replicationGetReplicaOffset() == 0) {
         clusterLogCantFailover(CLUSTER_CANT_FAILOVER_NO_DATA);
         return;

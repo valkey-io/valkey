@@ -107,7 +107,7 @@ typedef struct ValkeyModule {
     int apiver;                           /* Module API version as requested during initialization.*/
     list *types;                          /* Module data types. */
     list *usedby;                         /* List of modules using APIs from this one. */
-    list *using;                          /* List of modules we use some APIs of. */
+    list *uses;                           /* List of modules we use some APIs of. */
     list *filters;                        /* List of filters the module has registered. */
     list *module_configs;                 /* List of configurations the module has registered */
     int configs_initialized;              /* Have the module configurations been initialized? */
@@ -227,6 +227,7 @@ int TerminateModuleForkChild(int child_pid, int wait);
 ssize_t rdbSaveModulesAux(rio *rdb, int when);
 int moduleAllDatatypesHandleErrors(void);
 int moduleAllModulesHandleReplAsyncLoad(void);
+int moduleAllModulesHandleForkless(void);
 int moduleVerifyAllAllowAtomicSlotMigrationOrReply(client *c);
 sds modulesCollectInfo(sds info, dict *sections_dict, int for_crash_report, int sections);
 void moduleFireServerEvent(uint64_t eid, int subid, void *data);

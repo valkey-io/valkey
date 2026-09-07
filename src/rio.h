@@ -72,6 +72,12 @@ struct _rio {
      * computation. */
     void (*update_cksum)(struct _rio *, const void *buf, size_t len);
 
+    /* Optional callback invoked between write chunks. If it returns
+     * non-zero, the write is aborted (rioWrite returns 0 to caller).
+     * Allows long-running operations that issue many writes (e.g.
+     * serializing a large collection) to be interrupted. */
+    int (*check_abort_between_writes)(struct _rio *);
+
     /* The current checksum and flags (see RIO_FLAG_*) */
     uint64_t cksum, flags;
 
@@ -168,6 +174,7 @@ static inline size_t rioWriteRaw(rio *r, const void *buf, size_t len) {
 static inline size_t rioWrite(rio *r, const void *buf, size_t len) {
     if (r->flags & RIO_FLAG_WRITE_ERROR || r->flags & RIO_FLAG_CLOSE_ASAP) return 0;
     while (len) {
+        if (r->check_abort_between_writes && r->check_abort_between_writes(r)) return 0;
         size_t bytes_to_write =
             (r->max_processing_chunk && r->max_processing_chunk < len) ? r->max_processing_chunk : len;
         if (r->update_cksum) r->update_cksum(r, buf, bytes_to_write);

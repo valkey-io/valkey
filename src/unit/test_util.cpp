@@ -312,10 +312,10 @@ TEST_F(UtilTest, TestReclaimFilePageCache) {
 #if defined(__linux__)
     struct statfs stats;
 
-    /* Check if /tmp is memory-backed (e.g., tmpfs) */
+    /* fadvise(FADV_DONTNEED) has no effect on memory-backed filesystems */
     if (statfs("/tmp", &stats) == 0) {
-        if (stats.f_type != TMPFS_MAGIC) { // Not tmpfs, use /tmp
-            GTEST_SKIP() << "Skipping test because /tmp is not tmpfs";
+        if (stats.f_type == TMPFS_MAGIC) {
+            GTEST_SKIP() << "Skipping test because /tmp is tmpfs";
         }
     }
 

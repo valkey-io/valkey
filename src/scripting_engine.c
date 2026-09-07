@@ -73,11 +73,6 @@ dictType engineDictType = {
     .entryDestructor = zfree,
 };
 
-static int isCalledFromAsyncThread(void) {
-    pthread_t curr_thread = pthread_self();
-    return !pthread_equal(server.main_thread_id, curr_thread);
-}
-
 /* Initializes the scripting engine manager.
  * The engine manager is responsible for managing the several scripting engines
  * that are loaded in the server and implemented by Valkey Modules.
@@ -313,7 +308,7 @@ void scriptingEngineCallFreeFunction(scriptingEngine *engine,
                                      subsystemType type,
                                      compiledFunction *compiled_func) {
     serverAssert(type == VMSE_EVAL || type == VMSE_FUNCTION);
-    int is_async = isCalledFromAsyncThread();
+    int is_async = !onServerMainThread();
 
     /* We need to acquire the module GIL when running from an async thread while
      * flushing the script functions. */

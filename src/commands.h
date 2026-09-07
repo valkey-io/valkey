@@ -70,8 +70,8 @@ typedef struct serverCommandArg {
     const char *summary;
     const char *since;
     int flags;
-    const char *deprecated_since;
     int num_args;
+    const char *deprecated_since;
     struct serverCommandArg *subargs;
     const char *display_text;
 } serverCommandArg;

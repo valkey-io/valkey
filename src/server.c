@@ -4234,7 +4234,7 @@ void call(client *c, int flags) {
     if (update_command_stats && !c->flag.blocked) {
         real_cmd->calls++;
         real_cmd->microseconds += c->duration;
-        if (server.latency_tracking_enabled && !c->flag.blocked)
+        if (server.latency_tracking_enabled)
             updateCommandLatencyHistogram(&(real_cmd->latency_histogram), c->duration * 1000);
         clusterSlotStatsAddCpuDuration(c, c->duration);
     }

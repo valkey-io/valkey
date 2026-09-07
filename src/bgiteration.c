@@ -2331,7 +2331,7 @@ bool bgIteration_blockClientIfRequired(client *c) {
     if (c->cmd->proc == flushdbCommand || c->cmd->proc == flushallCommand) {
         // Handle flush commands prior to execution
         int flags;
-        if (getFlushCommandFlags(c, &flags) == C_OK) {
+        if (parseFlushCommandFlags(c, &flags) == C_OK) {
             // The command parsed ok - we WILL flush
             handleFlushdb((c->cmd->proc == flushdbCommand) ? c->db->id : -1);
         }

@@ -52,6 +52,7 @@ start_cluster 1 1 {tags {external:skip cluster}} {
         R 0 debug set-active-expire 0
         R 0 del $transaction_key
 
+        # Retry if timing issues occur on slow CI runners
         for {set j 0} {$j < 10} {incr j} {
             R 0 del $transaction_key
             R 0 set $watched_key alive px 100

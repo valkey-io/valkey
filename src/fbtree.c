@@ -1802,12 +1802,22 @@ static unsigned long deleteRangeSameLeaf(fbtreeIndex *fbt,
 static unsigned long deleteRangeCore(fbtreeIndex *fbt, BoundaryPaths *bp, fbtreeItemCallback callback, void *callback_ctx) {
     /* Empty range check: score/value path builders can produce boundary
      * indices that fall outside the leaf (no matching elements in that leaf).
-     * Rank paths never hit this since ranks are pre-validated. */
-    if (bp->start_idx >= bp->start_leaf->header.num_items && bp->end_idx < 0) return 0;
+     * Rank paths never hit this since ranks are pre-validated.
+     *
+     * Both boundary leaves being untouched is necessary but NOT sufficient for
+     * the range to be empty: the split node's children strictly between the
+     * left and right boundary child indices (shared_left_idx+1 .. shared_right_idx-1)
+     * are middle subtrees wholly inside [min_key, max_key], and every live node
+     * in this tree holds at least one item, so a middle child's existence alone
+     * means the range is non-empty even when both boundary leaves are untouched.
+     * Only when the boundary children are adjacent (no middle child) does
+     * leaf-untouched-on-both-sides imply a truly empty range. */
+    int split_depth = bp->shared_depth - 1;
+    bool no_middle_child = bp->shared_right_idx[split_depth] <= bp->shared_left_idx[split_depth] + 1;
+    if (bp->start_idx >= bp->start_leaf->header.num_items && bp->end_idx < 0 && no_middle_child) return 0;
     if (bp->end_idx < 0 && bp->start_leaf == bp->end_leaf) return 0;
 
     /* --- Phase 1: Boundaries diverged. Process the split. --- */
-    int split_depth = bp->shared_depth - 1;
     innerNode *split_node = (innerNode *)bp->shared_path[split_depth];
     int li = bp->shared_left_idx[split_depth];
     int ri = bp->shared_right_idx[split_depth];

@@ -3340,6 +3340,55 @@ TEST_F(FbtreeTest, DeleteRangeByValueNoMatch) {
     expectValid();
 }
 
+/* Regression test for a false-empty short-circuit in deleteRangeCore.
+ *
+ * The tree spans multiple leaves (NODE_SIZE=61 forces this with 300+
+ * elements). After trimming the first leaf down to a single low member, a
+ * later range delete has BOTH boundaries land in leaves with no locally
+ * matching elements ("leaf-untouched") while the split node still has one
+ * or more middle children strictly between the boundary subtrees, wholly
+ * inside the deleted range and non-empty. The buggy guard only checked
+ * leaf-local untouched-ness and returned 0 (deleted nothing) even though
+ * those middle leaves' elements were still in range. */
+TEST_F(FbtreeTest, DeleteRangeByValueSkipsNoMiddleLeafFalseEmpty) {
+    /* Seed enough elements to force several leaves/levels: an empty-string
+     * low sentinel plus 300 zero-padded members "m0001".."m0300". */
+    insert("");
+    char buf[16];
+    for (int i = 1; i <= 300; i++) {
+        snprintf(buf, sizeof(buf), "m%04d", i);
+        insert(buf);
+    }
+    EXPECT_EQ(fbtreeLength(fbt), 301u);
+
+    /* Trim the first leaf down to just the empty-string member: removes
+     * [m0001, m0060] inclusive, leaving the low leaf with a single element
+     * and no members in the immediately following range. */
+    sds trim_min = createString("m0001");
+    sds trim_max = createString("m0060");
+    EXPECT_EQ(fbtreeDeleteRangeByValue(fbt, trim_min, trim_max, 0, 0, NULL, NULL), 60u);
+    sdsfree(trim_min);
+    sdsfree(trim_max);
+    expectValid();
+    EXPECT_EQ(fbtreeLength(fbt), 241u);
+
+    /* Exclusive lower bound just past the trimmed leaf's remaining element,
+     * and an upper bound landing in the gap just after "m0121" (no stored
+     * element equals "m0121x"). Both boundary leaves are leaf-locally
+     * untouched, but middle leaves fully inside the range still exist. */
+    sds range_min = createString("");
+    sds range_max = createString("m0121x");
+    unsigned long expected = fbtreeCountRangeByValue(fbt, range_min, range_max, 1, 0);
+    ASSERT_GT(expected, 0u) << "range must be non-empty for this regression to be meaningful";
+
+    unsigned long removed = fbtreeDeleteRangeByValue(fbt, range_min, range_max, 1, 0, NULL, NULL);
+    sdsfree(range_min);
+    sdsfree(range_max);
+    expectValid();
+
+    EXPECT_EQ(removed, expected) << "deleteRangeCore must not short-circuit to 0 when non-empty middle leaves lie between untouched boundary leaves";
+}
+
 TEST_F(FbtreeTest, DeleteRangeByValueExactMatch) {
     insert("aaa");
     insert("bbb");

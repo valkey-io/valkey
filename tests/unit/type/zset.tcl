@@ -2465,6 +2465,39 @@ start_server {tags {"zset"}} {
         }
     }
 
+    test {ZSET btree lex range delete does not skip non-empty middle leaves} {
+        with_config zset-max-ziplist-entries 0 {
+            r del zk
+            # Build a multi-leaf btree with enough members that a lex range
+            # spans several leaves under the boundary leaves.
+            r zadd zk 0 {}
+            for {set i 1} {$i <= 300} {incr i} {
+                r zadd zk 0 [format "m%04d" $i]
+            }
+            assert_encoding btree zk
+
+            # Trim the first leaf down to just the empty-string member: the
+            # start boundary of a later range will land in this now-mostly-
+            # empty leaf with no matching elements of its own (leaf-local
+            # "untouched"), while non-empty middle leaves still lie further
+            # to the right, inside the range about to be deleted.
+            r zremrangebylex zk \[m0001 \[m0060
+
+            # The exclusive lower bound "(" and the upper bound landing in a
+            # gap just past "m0121" (a value between two stored members)
+            # together make BOTH boundary leaves leaf-locally untouched, but
+            # the range still fully contains several middle leaves. The
+            # delete short-circuit must not treat this as an empty range.
+            set expected [r zlexcount zk \( \[m0121x]
+            assert {$expected > 0}
+            set removed [r zremrangebylex zk \( \[m0121x]
+            assert_equal $expected $removed
+
+            # Nothing in the deleted range should remain.
+            assert_equal 0 [r zlexcount zk \( \[m0121x]
+        }
+    }
+
     test {ZSET btree MEMORY USAGE reflects member sizes} {
         with_config zset-max-ziplist-entries 0 {
             r del zmem

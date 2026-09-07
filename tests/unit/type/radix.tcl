@@ -185,7 +185,8 @@ start_server {tags {radix}} {
     }
 
     test {Radix write commands account server dirty by logical mutations} {
-        r del dirty-tree empty-dirty-tree
+        r del dirty-tree
+        r del empty-dirty-tree
         r save
 
         assert_equal OK [r raxset dirty-tree p fields 2 f1 v1 f2 v2]
@@ -431,34 +432,37 @@ start_server {tags {radix}} {
     } {} {needs:debug}
 
     test {Empty Radix survives COPY, DUMP/RESTORE, and RDB reload} {
-        r del empty-tree empty-copy empty-restored
-        r raxset empty-tree path fields 1 field value
-        assert_equal 1 [r raxdel empty-tree path]
-        assert_equal 1 [r exists empty-tree]
-        assert_equal radix [r type empty-tree]
-        assert_equal 0 [r raxcard empty-tree]
+        set empty_tree {empty-tree:{radix-empty}}
+        set empty_copy {empty-copy:{radix-empty}}
+        set empty_restored {empty-restored:{radix-empty}}
+        r del $empty_tree $empty_copy $empty_restored
+        r raxset $empty_tree path fields 1 field value
+        assert_equal 1 [r raxdel $empty_tree path]
+        assert_equal 1 [r exists $empty_tree]
+        assert_equal radix [r type $empty_tree]
+        assert_equal 0 [r raxcard $empty_tree]
 
-        assert_equal 1 [r copy empty-tree empty-copy]
-        assert_equal radix [r type empty-copy]
-        assert_equal 0 [r raxcard empty-copy]
+        assert_equal 1 [r copy $empty_tree $empty_copy]
+        assert_equal radix [r type $empty_copy]
+        assert_equal 0 [r raxcard $empty_copy]
 
-        set dumped [r dump empty-tree]
-        assert_equal OK [r restore empty-restored 0 $dumped]
-        assert_equal radix [r type empty-restored]
-        assert_equal 0 [r raxcard empty-restored]
+        set dumped [r dump $empty_tree]
+        assert_equal OK [r restore $empty_restored 0 $dumped]
+        assert_equal radix [r type $empty_restored]
+        assert_equal 0 [r raxcard $empty_restored]
 
         r debug reload
-        foreach key {empty-tree empty-copy empty-restored} {
+        foreach key [list $empty_tree $empty_copy $empty_restored] {
             assert_equal 1 [r exists $key]
             assert_equal radix [r type $key]
             assert_equal 0 [r raxcard $key]
             assert_equal {0 {}} [r raxscan $key 0]
         }
-        assert_equal 1 [r del empty-tree]
-        assert_equal 1 [r unlink empty-copy]
-        assert_equal 0 [r exists empty-tree]
-        assert_equal 0 [r exists empty-copy]
-        assert_equal 1 [r exists empty-restored]
+        assert_equal 1 [r del $empty_tree]
+        assert_equal 1 [r unlink $empty_copy]
+        assert_equal 0 [r exists $empty_tree]
+        assert_equal 0 [r exists $empty_copy]
+        assert_equal 1 [r exists $empty_restored]
     } {} {needs:debug}
 
     test {RDB reload restores radix paths, binary data, root payload, and TTL} {

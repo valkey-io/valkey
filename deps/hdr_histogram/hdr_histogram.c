@@ -952,7 +952,15 @@ static bool percentile_iter_next(struct hdr_iter* iter)
     }
     while (basic_iter_next(iter));
 
-    return true;
+    /* The scan reached the end of the counts array without finding another value
+     * to report. On a well formed histogram this is unreachable: cumulative_count
+     * reaches total_count first and has_next() ends the iteration above. It
+     * becomes reachable when total_count disagrees with the recorded counts, in
+     * which case has_next() never returns false. Stop instead of returning true
+     * forever and leaving the caller spinning. Reporting a final percentile here
+     * would publish iter->highest_equivalent_value as left by the exhausted scan,
+     * which is the largest representable value rather than one that was recorded. */
+    return false;
 }
 
 void hdr_iter_percentile_init(struct hdr_iter* iter, const struct hdr_histogram* h, int32_t ticks_per_half_distance)
@@ -1045,9 +1053,14 @@ static bool iter_linear_next(struct hdr_iter* iter)
 
     linear->count_added_in_this_iteration_step = 0;
 
-    if (has_next(iter) ||
-        next_value_greater_than_reporting_level_upper_bound(
-            iter, linear->next_value_reporting_level_lowest_equivalent))
+    /* has_buckets() bounds the walk by the counts array. Without it a histogram
+     * whose total_count disagrees with the recorded counts keeps has_next() true,
+     * and move_next() below then returns true past the end of the array on every
+     * call, so the caller spins forever and counts_index grows without bound. */
+    if (has_buckets(iter) &&
+        (has_next(iter) ||
+         next_value_greater_than_reporting_level_upper_bound(
+             iter, linear->next_value_reporting_level_lowest_equivalent)))
     {
         do
         {
@@ -1107,9 +1120,14 @@ static bool log_iter_next(struct hdr_iter *iter)
 
     logarithmic->count_added_in_this_iteration_step = 0;
 
-    if (has_next(iter) ||
-        next_value_greater_than_reporting_level_upper_bound(
-            iter, logarithmic->next_value_reporting_level_lowest_equivalent))
+    /* has_buckets() bounds the walk by the counts array. Without it a histogram
+     * whose total_count disagrees with the recorded counts keeps has_next() true,
+     * and move_next() below then returns true past the end of the array on every
+     * call, so the caller spins forever and counts_index grows without bound. */
+    if (has_buckets(iter) &&
+        (has_next(iter) ||
+         next_value_greater_than_reporting_level_upper_bound(
+             iter, logarithmic->next_value_reporting_level_lowest_equivalent)))
     {
         do
         {

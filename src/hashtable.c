@@ -1749,7 +1749,7 @@ bool hashtablePop(hashtable *ht, const void *key, void **popped) {
     return 0;
 }
 
-static void hashtableBatchDeleteBatch(hashtable *ht, void **entries, size_t count) {
+static void hashtableBatchDeleteEntriesBatch(hashtable *ht, void **entries, size_t count) {
     assert(count <= HASHTABLE_POP_ENTRIES_STACK_MAX);
     if (count == 0) return;
 
@@ -1813,11 +1813,11 @@ static void hashtableBatchDeleteBatch(hashtable *ht, void **entries, size_t coun
  * destructor is not called. The caller must pass distinct entries that are
  * present in the table. `entries` is input-only. Batching avoids per-delete
  * hole filling and shrink checks. */
-void hashtableBatchDelete(hashtable *ht, void **entries, size_t count) {
+void hashtableBatchDeleteEntries(hashtable *ht, void **entries, size_t count) {
     for (size_t offset = 0; offset < count; offset += HASHTABLE_POP_ENTRIES_STACK_MAX) {
         size_t remaining = count - offset;
         size_t batch = remaining < HASHTABLE_POP_ENTRIES_STACK_MAX ? remaining : HASHTABLE_POP_ENTRIES_STACK_MAX;
-        hashtableBatchDeleteBatch(ht, &entries[offset], batch);
+        hashtableBatchDeleteEntriesBatch(ht, &entries[offset], batch);
     }
 }
 

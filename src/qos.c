@@ -1,8 +1,20 @@
-/* qos.c -- Quality of Service utilities
+/* qos.c -- Quality of Service and Connection Admission Control
  *
  * Copyright (c) Valkey Contributors
  * All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
+ *
+ * -----------------------------------------------------------------------------
+ * Module Purpose:
+ *   Provides connection admission control and prioritization (QoS).
+ *   Allows critical administrative traffic from trusted CIDR subnets to
+ *   connect when normal client capacity (maxclients - reserved) is full.
+ *
+ * Scope:
+ *   - Binary IP subnet compilation, CIDR normalization, and fast binary matching.
+ *   - QoS configuration lifecycle, validation, and atomicity.
+ *   - Connection admission control.
+ * -----------------------------------------------------------------------------
  */
 
 #include "qos.h"
@@ -25,6 +37,10 @@ qosMetrics qos_metrics = {
     .stat_rejected_priority_conn = 0,
     .stat_num_active_clients_prioritized = 0,
 };
+
+int qosInit(void) {
+    return updateQosSubnetSources(qos_config.priority_subnets);
+}
 
 void qosFree(void) {
     if (qos_subnets) {

@@ -227,3 +227,19 @@ TEST_F(QosTest, HasQosSubnetSources) {
     qosFree();
     EXPECT_FALSE(hasQosSubnetSources());
 }
+
+TEST_F(QosTest, QosInit) {
+    qosFree();
+    qos_config.priority_subnets = NULL;
+    EXPECT_EQ(qosInit(), 0);
+    EXPECT_FALSE(hasQosSubnetSources());
+
+    char subnets[] = "192.168.1.0/24";
+    qos_config.priority_subnets = subnets;
+    EXPECT_EQ(qosInit(), 0);
+    EXPECT_TRUE(hasQosSubnetSources());
+    EXPECT_TRUE(isIpQosPrioritized("192.168.1.10"));
+
+    qosFree();
+    qos_config.priority_subnets = NULL;
+}

@@ -28,6 +28,18 @@ start_server {tags {"qos"}} {
         }
     }
 
+    # Helper to match connection rejection error across plain, cluster, and TLS modes.
+    # In cluster mode, the error string is "-ERR max number of clients + cluster connections reached".
+    # In standalone mode, the error string is "-ERR max number of clients reached".
+    # In TLS mode, connection drops before handshake completing, resulting in I/O error.
+    proc get_maxclients_error_pattern {} {
+        if {$::tls} {
+            return "*I/O error*"
+        } else {
+            return "*max number of clients*reached*"
+        }
+    }
+
     proc can_bind_loopback_ip {ip} {
         if {[catch {
             set s [socket -myaddr $ip [srv 0 "host"] [srv 0 "port"]]
@@ -173,18 +185,27 @@ start_server {tags {"qos"}} {
 
         # Close p1 and verify active prioritized count decrements to 3
         $p1 close
-        set info_clients [r info clients]
-        assert_match "*connected_clients_prioritized:3*" $info_clients
+        wait_for_condition 50 100 {
+            [string match "*connected_clients_prioritized:3*" [r info clients]]
+        } else {
+            fail "connected_clients_prioritized did not decrement to 3 after closing p1"
+        }
 
         # Close p2 and verify active prioritized count decrements to 2
         $p2 close
-        set info_clients [r info clients]
-        assert_match "*connected_clients_prioritized:2*" $info_clients
+        wait_for_condition 50 100 {
+            [string match "*connected_clients_prioritized:2*" [r info clients]]
+        } else {
+            fail "connected_clients_prioritized did not decrement to 2 after closing p2"
+        }
 
         # Close c1 and verify active prioritized count decrements to 1 (only r remains)
         catch {$c1 close}
-        set info_clients [r info clients]
-        assert_match "*connected_clients_prioritized:1*" $info_clients
+        wait_for_condition 50 100 {
+            [string match "*connected_clients_prioritized:1*" [r info clients]]
+        } else {
+            fail "connected_clients_prioritized did not decrement to 1 after closing c1"
+        }
 
         # Clearing priority-subnets dynamically demotes r to normal
         r config set priority-subnets ""
@@ -202,11 +223,7 @@ start_server {tags {"qos"}} {
 
         # Active clients: r (1). Since reserved (10) >= maxclients (3),
         # normal limit is clamped to 0. Any new normal connection must be rejected.
-        if {$::tls} {
-            set expected_code "*I/O error*"
-        } else {
-            set expected_code "*max number of clients reached*"
-        }
+        set expected_code [get_maxclients_error_pattern]
         catch {
             set c_normal [valkey_deferring_client]
             $c_normal ping
@@ -228,11 +245,7 @@ start_server {tags {"qos"}} {
         assert_equal {PONG} [$p2 read]
 
         # Third prioritized client rejected at maxclients ceiling (3)
-        if {$::tls} {
-            set expected_p_code "*I/O error*"
-        } else {
-            set expected_p_code "*max number of clients reached*"
-        }
+        set expected_p_code [get_maxclients_error_pattern]
         catch {
             set p3 [valkey_deferring_client]
             $p3 ping
@@ -246,7 +259,7 @@ start_server {tags {"qos"}} {
         r config set priority-subnets ""
     }
 
-    test {Maxclients ceiling rejection with rejected_priority_connections stat} {
+    test {Maxclients ceiling rejection with rejected_connections_prioritized stat} {
         r config set maxclients 3
         r config set maxclients-reserved 1
         r config set priority-subnets [get_current_client_ip_with_mask]
@@ -263,11 +276,7 @@ start_server {tags {"qos"}} {
         r config resetstat
 
         # 3rd prioritized client should fail because total reached maxclients (3)
-        if {$::tls} {
-            set expected_code "*I/O error*"
-        } else {
-            set expected_code "*max number of clients reached*"
-        }
+        set expected_code [get_maxclients_error_pattern]
         catch {
             set p3 [valkey_deferring_client]
             $p3 ping
@@ -275,9 +284,10 @@ start_server {tags {"qos"}} {
         } err_p3
         assert_match $expected_code $err_p3
 
-        # Verify INFO stats contains rejected_priority_connections:1
+        # Verify INFO stats contains rejected_connections:1 and rejected_connections_prioritized:1
         set info_stats [r info stats]
-        assert_match "*rejected_priority_connections:1*" $info_stats
+        assert_match "*rejected_connections:1*" $info_stats
+        assert_match "*rejected_connections_prioritized:1*" $info_stats
 
         catch {$p1 close}
         catch {$p2 close}
@@ -419,7 +429,11 @@ start_server {tags {"qos"}} {
 
             # Step 5: Disconnect c_alt; prioritized count decrements to 2
             $c_alt close
-            assert_match "*connected_clients_prioritized:2*" [r info clients]
+            wait_for_condition 50 100 {
+                [string match "*connected_clients_prioritized:2*" [r info clients]]
+            } else {
+                fail "connected_clients_prioritized did not decrement to 2 after closing c_alt"
+            }
 
             # Step 6: Clear priority-subnets; remaining clients demoted to normal
             r config set priority-subnets ""
@@ -427,7 +441,11 @@ start_server {tags {"qos"}} {
 
             # Step 7: Disconnect c_normal; ensures no underflow desync
             $c_normal close
-            assert_match "*connected_clients_prioritized:0*" [r info clients]
+            wait_for_condition 50 100 {
+                [string match "*connected_clients_prioritized:0*" [r info clients]]
+            } else {
+                fail "connected_clients_prioritized did not remain 0 after closing c_normal"
+            }
 
             r config set maxclients-reserved 0
         }
@@ -453,11 +471,7 @@ start_server {tags {"qos"}} {
         # Now normal clients = 3 (r + c1 + c2) == normal_limit (3).
         # Total clients = 3 < maxclients (6).
         # A new normal client must be rejected because normal quota is full.
-        if {$::tls} {
-            set expected_code "*I/O error*"
-        } else {
-            set expected_code "*max number of clients reached*"
-        }
+        set expected_code [get_maxclients_error_pattern]
         catch {
             set c3 [valkey_deferring_client]
             $c3 ping
@@ -518,11 +532,7 @@ start_server {tags {"qos"}} {
         # Now switch loopback to normal.
         r config set priority-subnets "192.0.2.1/32"
 
-        if {$::tls} {
-            set expected_code "*I/O error*"
-        } else {
-            set expected_code "*max number of clients reached*"
-        }
+        set expected_code [get_maxclients_error_pattern]
         catch {
             set c1 [valkey_deferring_client]
             $c1 ping
@@ -578,11 +588,7 @@ start_server {tags {"qos"}} {
         assert_equal {PONG} [$c3 read]
 
         # New normal connection must be rejected because normal_clients (4) >= normal_limit (2)
-        if {$::tls} {
-            set expected_code "*I/O error*"
-        } else {
-            set expected_code "*max number of clients reached*"
-        }
+        set expected_code [get_maxclients_error_pattern]
         catch {
             set c4 [valkey_deferring_client]
             $c4 ping
@@ -625,11 +631,7 @@ start_server {tags {"qos"}} {
         assert_equal {PONG} [$c3 read]
 
         # 4th normal connection fails at maxclients
-        if {$::tls} {
-            set expected_code "*I/O error*"
-        } else {
-            set expected_code "*max number of clients reached*"
-        }
+        set expected_code [get_maxclients_error_pattern]
         catch {
             set c4 [valkey_deferring_client]
             $c4 ping
@@ -680,4 +682,19 @@ start_server {tags {"qos"}} {
         error $qos_test_script_err $::errorInfo
     }
 }
+
+start_server {tags {"qos external:skip"} overrides {priority-subnets {"127.0.0.0/8,::1/128"} maxclients 5 maxclients-reserved 2}} {
+    test {Priority subnets configured on startup enable priority admission} {
+        assert_match "*connected_clients_prioritized:1*" [r info clients]
+        set c1 [valkey_client]
+        assert_match "*connected_clients_prioritized:2*" [r info clients]
+        $c1 close
+        wait_for_condition 50 100 {
+            [string match "*connected_clients_prioritized:1*" [r info clients]]
+        } else {
+            fail "connected_clients_prioritized did not decrement to 1 after closing c1"
+        }
+    }
+}
+
 

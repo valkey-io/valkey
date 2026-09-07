@@ -437,6 +437,41 @@ start_server {tags {"modules"}} {
         assert_equal [r ping] {PONG}
     }
 
+    test {Test HELLO debugger help command wraps long unbreakable description safely} {
+        r script debug sync hello
+        r eval "#!hello\nFUNCTION foo\nARGS 0\nRETURN" 0 167
+        set cmd "*1\r\n\$4\r\nhelp\r\n"
+        r write $cmd
+        r flush
+        set ret [r read]
+        # The long description must remain visible after wrapping.
+        assert_match "*noop*" $ret
+        assert_match "*WrapTextHandling*" $ret
+
+        # A boundary space must not produce an empty wrapped line.
+        assert_match "*boundary*" $ret
+        assert_match "*QQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQ*" $ret
+        assert_match "*RRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRR*" $ret
+        assert_match "*RRRRRRRRRRR*" $ret
+
+        # Adjacent spaces at the boundary must not produce an empty line
+        # either (lastspace == line[max_len-1], next char also a space).
+        assert_match "*gap*" $ret
+        assert_match "*XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX*" $ret
+        assert_match "*YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY*" $ret
+
+        assert_equal -1 [lsearch -exact $ret {}]
+
+        set cmd "*1\r\n\$1\r\nc\r\n"
+        r write $cmd
+        r flush
+        set ret [r read]
+        assert_equal {<endsession>} $ret
+        r script debug off
+        reconnect
+        assert_equal [r ping] {PONG}
+    }
+
     test {Test INFO scriptingengines section} {
         # Get the scripting engines info section
         set info [r info scriptingengines]

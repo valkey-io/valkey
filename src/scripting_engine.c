@@ -824,9 +824,12 @@ static sds *wrapText(const char *text, size_t max_len, size_t *count) {
             char *lastspace = strrchr(line, ' ');
             if (lastspace != NULL) {
                 *lastspace = 0;
+                p += (lastspace - line) + 1;
+            } else {
+                /* No whitespace found; hard-split at max_len. */
+                p += max_len;
             }
-
-            p += (lastspace - line) + 1;
+            while (*p == ' ') p++;
         } else {
             p += len;
         }

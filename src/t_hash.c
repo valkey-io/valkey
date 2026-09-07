@@ -2414,7 +2414,7 @@ static void hashTypeExpireEntries(void **entries, size_t count, void *c) {
     expiryContext *ctx = c;
     hashtable *ht = objectGetVal(ctx->key);
 
-    hashtablePopKnownEntries(ht, entries, count);
+    hashtableBatchDelete(ht, entries, count);
 
     for (size_t i = 0; i < count; i++) {
         entry *expired = entries[i];

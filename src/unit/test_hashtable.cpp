@@ -164,7 +164,7 @@ class HashtableTest : public ::testing::Test {
     }
 };
 
-TEST_F(HashtableTest, pop_known_entries) {
+TEST_F(HashtableTest, batch_delete) {
     size_t used_memory_before = zmalloc_used_memory();
     hashtableType type = keyval_type;
     type.hashFunction = constant_hashfunc;
@@ -187,7 +187,7 @@ TEST_F(HashtableTest, pop_known_entries) {
         known[j] = entries[j * 2];
     }
 
-    hashtablePopKnownEntries(ht, known, 20);
+    hashtableBatchDelete(ht, known, 20);
     ASSERT_EQ(keyval_destructor_calls, 0u);
     ASSERT_EQ(hashtableSize(ht), 20u);
 
@@ -209,7 +209,7 @@ TEST_F(HashtableTest, pop_known_entries) {
     ASSERT_EQ(zmalloc_used_memory(), used_memory_before);
 }
 
-TEST_F(HashtableTest, pop_known_entries_multiple_batches) {
+TEST_F(HashtableTest, batch_delete_multiple_batches) {
     size_t used_memory_before = zmalloc_used_memory();
     hashtableType type = keyval_type;
     type.entryDestructor = freekeyvalCounting;
@@ -232,7 +232,7 @@ TEST_F(HashtableTest, pop_known_entries_multiple_batches) {
         known[j] = entries[j * 2];
     }
 
-    hashtablePopKnownEntries(ht, known, pop_count);
+    hashtableBatchDelete(ht, known, pop_count);
     ASSERT_EQ(keyval_destructor_calls, 0u);
     ASSERT_EQ(hashtableSize(ht), (size_t)(count - pop_count));
 
@@ -254,7 +254,7 @@ TEST_F(HashtableTest, pop_known_entries_multiple_batches) {
     ASSERT_EQ(zmalloc_used_memory(), used_memory_before);
 }
 
-TEST_F(HashtableTest, pop_known_entries_completes_shrink_rehash) {
+TEST_F(HashtableTest, batch_delete_completes_shrink_rehash) {
     size_t used_memory_before = zmalloc_used_memory();
     hashtableType type = keyval_type;
     type.entryDestructor = freekeyvalCounting;
@@ -283,7 +283,7 @@ TEST_F(HashtableTest, pop_known_entries_completes_shrink_rehash) {
         known[j] = entries[j];
     }
 
-    hashtablePopKnownEntries(ht, known, pop_count);
+    hashtableBatchDelete(ht, known, pop_count);
     ASSERT_FALSE(hashtableIsRehashing(ht));
     ASSERT_EQ(hashtableSize(ht), (size_t)remaining);
     ASSERT_LT(hashtableMemUsage(ht), mem_before_pop);
@@ -405,7 +405,7 @@ TEST_F(HashtableTest, pop_any_entries_keeps_cursor_on_partially_drained_bucket) 
     ASSERT_EQ(zmalloc_used_memory(), used_memory_before);
 }
 
-TEST_F(HashtableTest, pop_known_entries_during_rehash) {
+TEST_F(HashtableTest, batch_delete_during_rehash) {
     size_t used_memory_before = zmalloc_used_memory();
     hashtableType type = keyval_type;
     type.entryDestructor = freekeyvalCounting;
@@ -435,7 +435,7 @@ TEST_F(HashtableTest, pop_known_entries_during_rehash) {
         known[j] = entries[j * 3];
     }
 
-    hashtablePopKnownEntries(ht, known, pop_count);
+    hashtableBatchDelete(ht, known, pop_count);
     ASSERT_TRUE(hashtableIsRehashing(ht));
 
     for (int j = 0; j < count; j++) {

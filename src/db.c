@@ -40,7 +40,10 @@
 #include "module.h"
 #include "vector.h"
 #include "expire.h"
+#include "bgiteration.h"
+#include "forkless.h"
 #include "crc16_slottable.h"
+#include "bgiteration.h"
 
 /*-----------------------------------------------------------------------------
  * C-level DB API
@@ -375,6 +378,7 @@ static void dbSetValue(serverDb *db, robj *key, robj **valref, int overwrite, vo
         objectSetLRU(val, objectGetLRU(old));
         long long expire = objectGetExpire(old);
         new = objectSetKeyAndExpire(val, objectGetVal(key), expire);
+        bgIteration_updateDbEntryPtr(old, new);
         *oldref = new;
         /* Replace the old value at its location in the expire space. */
         if (expire >= 0) {
@@ -444,6 +448,7 @@ void setKey(client *c, serverDb *db, robj *key, robj **valref, int flags) {
     } else {
         dbSetValue(db, key, valref, 1, NULL);
     }
+    bgIteration_dbEntryModified(*valref);
     if (!(flags & SETKEY_KEEPTTL)) removeExpire(db, key);
     if (!(flags & SETKEY_NO_SIGNAL)) signalModifiedKey(c, db, key);
 }
@@ -489,7 +494,9 @@ int dbGenericDeleteWithDictIndex(serverDb *db, robj *key, int async, int flags, 
     hashtablePosition pos;
     void **ref = kvstoreHashtableTwoPhasePopFindRef(db->keys, dict_index, objectGetVal(key), &pos);
     if (ref != NULL) {
+        bgIteration_keyDelete(db->id, (sds)objectGetVal(key));
         hotkeysRecordDelete(key, db->id, flags);
+
         robj *val = *ref;
         /* VM_StringDMA may call dbUnshareStringValue which may free val, so we
          * need to incr to retain val */
@@ -679,6 +686,9 @@ long long emptyData(int dbnum, int flags, void(callback)(hashtable *)) {
         return -1;
     }
 
+    /* bgIteration must be notified for flushall. */
+    if (dbnum == -1) bgIteration_flushall();
+
     /* Fire the flushdb modules event. */
     moduleFireServerEvent(VALKEYMODULE_EVENT_FLUSHDB, VALKEYMODULE_SUBEVENT_FLUSHDB_START, &fi);
 
@@ -776,6 +786,7 @@ long long dbTotalServerKeyCount(void) {
 void signalModifiedKey(client *c, serverDb *db, robj *key) {
     touchWatchedKey(db, key);
     trackingInvalidateKey(c, key, 1);
+    bgIteration_keyModified(db->id, objectGetVal(key));
 }
 
 void signalFlushedDb(int dbid, int async) {
@@ -811,9 +822,8 @@ void signalFlushedDb(int dbid, int async) {
  * async: flushes the database in an async manner.
  * no option: determine sync or async according to the value of lazyfree-lazy-user-flush.
  *
- * On success C_OK is returned and the flags are stored in *flags, otherwise
- * C_ERR is returned and the function sends an error to the client. */
-int getFlushCommandFlags(client *c, int *flags) {
+ * On success the C_OK is returned, otherwise C_ERR is returned. */
+int parseFlushCommandFlags(client *c, int *flags) {
     /* Parse the optional ASYNC option. */
     if (c->argc == 2 && !strcasecmp(objectGetVal(c->argv[1]), "sync")) {
         *flags = EMPTYDB_NO_FLAGS;
@@ -822,16 +832,23 @@ int getFlushCommandFlags(client *c, int *flags) {
     } else if (c->argc == 1) {
         *flags = server.lazyfree_lazy_user_flush ? EMPTYDB_ASYNC : EMPTYDB_NO_FLAGS;
     } else {
-        addReplyErrorObject(c, shared.syntaxerr);
         return C_ERR;
     }
     return C_OK;
 }
 
+/* Parses the flush command flags and returns an error to the client on failure */
+int parseFlushCommandFlagsOrReply(client *c, int *flags) {
+    int result = parseFlushCommandFlags(c, flags);
+    if (result == C_ERR) addReplyErrorObject(c, shared.syntaxerr);
+    return result;
+}
+
 /* Flushes the whole server data set. */
 void flushAllDataAndResetRDB(int flags) {
     server.dirty += emptyData(-1, flags, NULL);
-    if (server.child_type == CHILD_TYPE_RDB) killRDBChild();
+    if (isForkBgsaveInProgress()) killRDBChild();
+    if (isForklessSaveInProgress()) forklessSaveCancel();
     if (server.child_type == CHILD_TYPE_SLOT_MIGRATION) killSlotMigrationChild();
     if (server.saveparamslen > 0) {
         rdbSaveInfo rsi, *rsiptr;
@@ -853,7 +870,7 @@ void flushAllDataAndResetRDB(int flags) {
 void flushdbCommand(client *c) {
     int flags;
 
-    if (getFlushCommandFlags(c, &flags) == C_ERR) return;
+    if (parseFlushCommandFlagsOrReply(c, &flags) == C_ERR) return;
 
     /* flushdb should not flush the functions */
     server.dirty += emptyData(c->db->id, flags | EMPTYDB_NOFUNCTIONS, NULL);
@@ -877,7 +894,7 @@ void flushdbCommand(client *c) {
  * Flushes the whole server data set. */
 void flushallCommand(client *c) {
     int flags;
-    if (getFlushCommandFlags(c, &flags) == C_ERR) return;
+    if (parseFlushCommandFlagsOrReply(c, &flags) == C_ERR) return;
 
     /* flushall should not flush the functions */
     flushAllDataAndResetRDB(flags | EMPTYDB_NOFUNCTIONS);
@@ -2321,7 +2338,7 @@ robj *dbFindExpires(serverDb *db, sds key) {
 }
 
 unsigned long long dbSize(serverDb *db) {
-    return kvstoreSize(db->keys);
+    return (db->keys) ? kvstoreSize(db->keys) : 0;
 }
 
 unsigned long long dbScan(serverDb *db, unsigned long long cursor, kvstoreScanFunction scan_cb, void *privdata) {
@@ -2740,16 +2757,21 @@ int genericGetKeys(int storeKeyOfs,
     keys = getKeysPrepareResult(result, numkeys);
     result->numkeys = numkeys;
 
-    /* Add all key positions for argv[firstKeyOfs...n] to keys[] */
-    for (i = 0; i < num; i++) {
-        keys[i].pos = firstKeyOfs + (i * keyStep);
-        keys[i].flags = 0;
+    int keyIdx = 0;
+    /* If there's a destination key, put this first */
+    if (storeKeyOfs) {
+        keys[keyIdx].pos = storeKeyOfs;
+        keys[keyIdx].flags = 0;
+        keyIdx++;
     }
 
-    if (storeKeyOfs) {
-        keys[num].pos = storeKeyOfs;
-        keys[num].flags = 0;
+    /* Add all key positions for argv[firstKeyOfs...n] to keys[] */
+    for (i = 0; i < num; i++) {
+        keys[keyIdx].pos = firstKeyOfs + (i * keyStep);
+        keys[keyIdx].flags = 0;
+        keyIdx++;
     }
+
     return result->numkeys;
 }
 

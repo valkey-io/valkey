@@ -342,10 +342,18 @@ typedef uint64_t ValkeyModuleTimerID;
  * slot migration must be used. */
 #define VALKEYMODULE_OPTIONS_HANDLE_ATOMIC_SLOT_MIGRATION (1 << 5)
 
+/* Declare that the module handles forkless operations. Opting in has a
+ * tradeoff: while a forkless operation is running, opening a key for write can
+ * return NULL if the key is currently in use, and the module must handle that
+ * NULL return. A module that registers a data type also declares that its RDB
+ * save callbacks are safe to run on a background thread. When any loaded module
+ * does not set this, forkless operations are blocked. */
+#define VALKEYMODULE_OPTIONS_HANDLE_FORKLESS (1 << 6)
+
 /* Next option flag, must be updated when adding new module flags above!
  * This flag should not be used directly by the module.
  * Use ValkeyModule_GetModuleOptionsAll instead. */
-#define _VALKEYMODULE_OPTIONS_FLAGS_NEXT (1 << 6)
+#define _VALKEYMODULE_OPTIONS_FLAGS_NEXT (1 << 7)
 
 /* Definitions for ValkeyModule_SetCommandInfo. */
 

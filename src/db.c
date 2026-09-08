@@ -2185,8 +2185,11 @@ static keyStatus expireIfNeededWithDictIndex(serverDb *db, robj *key, robj *val,
     if (static_key) {
         decrRefCount(key);
     }
-    if (expire_at > 0)
-        updateExpireLagHistogram(&server.expire_lag_lazy_histogram, expire_at, commandTimeSnapshot());
+    /* Read the clock here rather than taking commandTimeSnapshot(). The snapshot
+     * is frozen for the whole execution unit, so anything that waits inside a
+     * MULTI, a script or a nested RM_Call would be subtracted from the lag we
+     * report. The active cycle already passes its own current timestamp. */
+    if (expire_at > 0) updateExpireLagHistogram(&server.expire_lag_lazy_histogram, expire_at, mstime());
     return KEY_DELETED;
 }
 

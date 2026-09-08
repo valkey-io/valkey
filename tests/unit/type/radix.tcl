@@ -309,6 +309,8 @@ start_server {tags {radix}} {
         assert {[lsearch -exact [r acl cat radix] raxprefixes] >= 0}
         assert {[lsearch -exact [r acl cat radix] raxmset] >= 0}
         assert {[lsearch -exact [r acl cat radix] raxexists] >= 0}
+        assert {[lsearch -exact [r command list filterby aclcat slow] raxdel] >= 0}
+        assert {[lsearch -exact [r command list filterby aclcat fast] raxdel] < 0}
         r del tree
         r multi
         r raxset tree a fields 1 f one

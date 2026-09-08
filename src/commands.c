@@ -4,8 +4,8 @@
 #define MAKE_CMD(name, summary, complexity, since, doc_flags, replaced, deprecated, group, group_enum, history, \
                  num_history, tips, num_tips, function, arity, flags, acl, get_dbid_args, key_specs,            \
                  key_specs_num, get_keys, numargs)                                                              \
-    name, summary, complexity, since, doc_flags, replaced, deprecated, group_enum, history, num_history, tips,  \
-        num_tips, function, arity, flags, acl, get_dbid_args, key_specs, key_specs_num, get_keys, numargs
+    name, summary, complexity, since, replaced, deprecated, history, tips, function, flags, acl, get_dbid_args, \
+        key_specs, get_keys, doc_flags, group_enum, num_history, num_tips, arity, key_specs_num, numargs
 #define MAKE_ARG(name, type, key_spec_index, token, summary, since, flags, numsubargs, deprecated_since) \
     name, type, key_spec_index, token, summary, since, flags, deprecated_since, numsubargs
 #define COMMAND_STRUCT serverCommand

@@ -882,7 +882,7 @@ TEST(KqueueFairnessTest, KernelBehavior) {
 
 static void qosMetricTestCb(struct aeEventLoop *el, uint64_t duration_us) {
     (void)el;
-    durationAddSample(EL_DURATION_TYPE_QOS_EL, duration_us);
+    durationAddSample(EL_DURATION_TYPE_PRIORITY_EL, duration_us);
 }
 
 static void qosTestFileProc(aeEventLoop *el, int fd, void *privdata, int mask) {
@@ -901,8 +901,8 @@ TEST_F(SocketPrioritizationTest, QoSEventLoopStatsMetrics) {
     ASSERT_NE(main_loop, (aeEventLoop *)NULL);
     ASSERT_EQ(aeActuateQoSEventLoopIfSupported(main_loop, 2000, qosMetricTestCb), AE_OK);
 
-    unsigned long long orig_cnt = server.duration_stats[EL_DURATION_TYPE_QOS_EL].cnt;
-    unsigned long long orig_sum = server.duration_stats[EL_DURATION_TYPE_QOS_EL].sum;
+    unsigned long long orig_cnt = server.duration_stats[EL_DURATION_TYPE_PRIORITY_EL].cnt;
+    unsigned long long orig_sum = server.duration_stats[EL_DURATION_TYPE_PRIORITY_EL].sum;
 
     int fds[2];
     ASSERT_EQ(pipe(fds), 0);
@@ -912,8 +912,8 @@ TEST_F(SocketPrioritizationTest, QoSEventLoopStatsMetrics) {
     ASSERT_EQ(write(fds[1], &b, 1), 1);
     aeProcessEvents(main_loop, AE_DONT_WAIT | AE_ALL_EVENTS);
 
-    EXPECT_GT(server.duration_stats[EL_DURATION_TYPE_QOS_EL].cnt, orig_cnt);
-    EXPECT_GE(server.duration_stats[EL_DURATION_TYPE_QOS_EL].sum, orig_sum);
+    EXPECT_GT(server.duration_stats[EL_DURATION_TYPE_PRIORITY_EL].cnt, orig_cnt);
+    EXPECT_GE(server.duration_stats[EL_DURATION_TYPE_PRIORITY_EL].sum, orig_sum);
 
     close(fds[0]);
     close(fds[1]);

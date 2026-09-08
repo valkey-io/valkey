@@ -217,8 +217,6 @@ typedef enum {
     STATS_METRIC_EL_DURATION,             /* Eventloop duration. */
     STATS_METRIC_IO_WAIT,                 /* IO queue size */
     STATS_METRIC_MAIN_THREAD_ACTIVE_TIME, /* Main-thread active time */
-    STATS_METRIC_QOS_EL_CYCLE,            /* Number of QoS eventloop cycles per sec. */
-    STATS_METRIC_QOS_EL_DURATION,         /* QoS eventloop duration in microseconds. */
     STATS_METRIC_COUNT                    /* Total count */
 } instantaneous_metric_type;
 
@@ -2013,9 +2011,9 @@ struct valkeyServer {
      * Note that commands in transactions are also counted. */
     long long el_cmd_cnt_start;
     long long el_cmd_cnt_max;
-    /* Record the previous baseline and peak number of QoS commands executed in one QoS cycle. */
-    long long qos_el_cmd_cnt_prev;
-    long long qos_el_cmd_cnt_max;
+    /* Record the previous baseline and peak number of priority commands executed in one priority cycle. */
+    long long priority_el_cmd_cnt_prev;
+    long long priority_el_cmd_cnt_max;
     /* The sum of active-expire, active-defrag and all other tasks done by cron and beforeSleep,
        but excluding read, write and AOF, which are counted by other sets of metrics. */
     monotime el_cron_duration;

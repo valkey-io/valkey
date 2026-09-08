@@ -181,36 +181,36 @@ start_server {tags {"qos"}} {
 
         # Verify INFO clients metrics: all 4 clients (r, c1, p1, p2) are prioritized
         set info_clients [r info clients]
-        assert_match "*connected_clients_prioritized:4*" $info_clients
+        assert_match "*connected_priority_clients:4*" $info_clients
 
         # Close p1 and verify active prioritized count decrements to 3
         $p1 close
         wait_for_condition 50 100 {
-            [string match "*connected_clients_prioritized:3*" [r info clients]]
+            [string match "*connected_priority_clients:3*" [r info clients]]
         } else {
-            fail "connected_clients_prioritized did not decrement to 3 after closing p1"
+            fail "connected_priority_clients did not decrement to 3 after closing p1"
         }
 
         # Close p2 and verify active prioritized count decrements to 2
         $p2 close
         wait_for_condition 50 100 {
-            [string match "*connected_clients_prioritized:2*" [r info clients]]
+            [string match "*connected_priority_clients:2*" [r info clients]]
         } else {
-            fail "connected_clients_prioritized did not decrement to 2 after closing p2"
+            fail "connected_priority_clients did not decrement to 2 after closing p2"
         }
 
         # Close c1 and verify active prioritized count decrements to 1 (only r remains)
         catch {$c1 close}
         wait_for_condition 50 100 {
-            [string match "*connected_clients_prioritized:1*" [r info clients]]
+            [string match "*connected_priority_clients:1*" [r info clients]]
         } else {
-            fail "connected_clients_prioritized did not decrement to 1 after closing c1"
+            fail "connected_priority_clients did not decrement to 1 after closing c1"
         }
 
         # Clearing priority-subnets dynamically demotes r to normal
         r config set priority-subnets ""
         set info_clients [r info clients]
-        assert_match "*connected_clients_prioritized:0*" $info_clients
+        assert_match "*connected_priority_clients:0*" $info_clients
 
         r config set maxclients-reserved 0
     }
@@ -259,7 +259,7 @@ start_server {tags {"qos"}} {
         r config set priority-subnets ""
     }
 
-    test {Maxclients ceiling rejection with rejected_connections_prioritized stat} {
+    test {Maxclients ceiling rejection with rejected_priority_connections stat} {
         r config set maxclients 3
         r config set maxclients-reserved 1
         r config set priority-subnets [get_current_client_ip_with_mask]
@@ -284,10 +284,10 @@ start_server {tags {"qos"}} {
         } err_p3
         assert_match $expected_code $err_p3
 
-        # Verify INFO stats contains rejected_connections:1 and rejected_connections_prioritized:1
+        # Verify INFO stats contains rejected_connections:1 and rejected_priority_connections:1
         set info_stats [r info stats]
         assert_match "*rejected_connections:1*" $info_stats
-        assert_match "*rejected_connections_prioritized:1*" $info_stats
+        assert_match "*rejected_priority_connections:1*" $info_stats
 
         catch {$p1 close}
         catch {$p2 close}
@@ -310,7 +310,7 @@ start_server {tags {"qos"}} {
         assert_equal {PONG} [$p1 read]
         
         # r (1) + p1 (1) = 2 prioritized clients due to dynamic re-classification
-        assert_match "*connected_clients_prioritized:2*" [r info clients]
+        assert_match "*connected_priority_clients:2*" [r info clients]
 
         catch {$p1 close}
         
@@ -323,7 +323,7 @@ start_server {tags {"qos"}} {
         $p2 ping
         assert_equal {PONG} [$p2 read]
         
-        assert_match "*connected_clients_prioritized:2*" [r info clients]
+        assert_match "*connected_priority_clients:2*" [r info clients]
         
         catch {$p2 close}
         r config set maxclients-reserved 0
@@ -342,7 +342,7 @@ start_server {tags {"qos"}} {
         assert_equal {PONG} [$p1 read]
         
         # r (1) + p1 (1) = 2 prioritized clients
-        assert_match "*connected_clients_prioritized:2*" [r info clients]
+        assert_match "*connected_priority_clients:2*" [r info clients]
 
         catch {$p1 close}
         r config set maxclients-reserved 0
@@ -366,7 +366,7 @@ start_server {tags {"qos"}} {
             }
 
             # Active: r (normal from 127.0.0.1, 1) + 6 prioritized (from 127.0.0.2) = 7 total.
-            assert_match "*connected_clients_prioritized:6*" [r info clients]
+            assert_match "*connected_priority_clients:6*" [r info clients]
 
             # Normal limit is 10 - 5 = 5.
             # Current normal clients = 1 (r). Normal quota has 4 slots available.
@@ -380,7 +380,7 @@ start_server {tags {"qos"}} {
             assert_equal {PONG} [$c2 read]
 
             # Normal clients = 3 (r + c1 + c2), prioritized = 6, total = 9 <= 10
-            assert_match "*connected_clients_prioritized:6*" [r info clients]
+            assert_match "*connected_priority_clients:6*" [r info clients]
 
             catch {$c1 close}
             catch {$c2 close}
@@ -408,43 +408,43 @@ start_server {tags {"qos"}} {
             assert_equal {PONG} [$c_alt read]
 
             # r, c_normal (127.0.0.1) and c_alt (127.0.0.2) are all normal clients
-            assert_match "*connected_clients_prioritized:0*" [r info clients]
+            assert_match "*connected_priority_clients:0*" [r info clients]
 
             # Step 2: Configure priority-subnets to 127.0.0.2/32
             # Dynamic re-classification immediately promotes c_alt to prioritized;
             # r and c_normal remain normal.
             r config set priority-subnets "127.0.0.2/32"
-            assert_match "*connected_clients_prioritized:1*" [r info clients]
+            assert_match "*connected_priority_clients:1*" [r info clients]
 
             # Step 3: Switch priority-subnets to 127.0.0.1/32
             # Dynamic re-classification immediately promotes r and c_normal to prioritized,
             # and demotes c_alt back to normal.
             r config set priority-subnets "127.0.0.1/32"
-            assert_match "*connected_clients_prioritized:2*" [r info clients]
+            assert_match "*connected_priority_clients:2*" [r info clients]
 
             # Step 4: Include both subnets in priority-subnets
             # Dynamic re-classification promotes all 3 clients to prioritized.
             r config set priority-subnets "127.0.0.1/32 127.0.0.2/32"
-            assert_match "*connected_clients_prioritized:3*" [r info clients]
+            assert_match "*connected_priority_clients:3*" [r info clients]
 
             # Step 5: Disconnect c_alt; prioritized count decrements to 2
             $c_alt close
             wait_for_condition 50 100 {
-                [string match "*connected_clients_prioritized:2*" [r info clients]]
+                [string match "*connected_priority_clients:2*" [r info clients]]
             } else {
-                fail "connected_clients_prioritized did not decrement to 2 after closing c_alt"
+                fail "connected_priority_clients did not decrement to 2 after closing c_alt"
             }
 
             # Step 6: Clear priority-subnets; remaining clients demoted to normal
             r config set priority-subnets ""
-            assert_match "*connected_clients_prioritized:0*" [r info clients]
+            assert_match "*connected_priority_clients:0*" [r info clients]
 
             # Step 7: Disconnect c_normal; ensures no underflow desync
             $c_normal close
             wait_for_condition 50 100 {
-                [string match "*connected_clients_prioritized:0*" [r info clients]]
+                [string match "*connected_priority_clients:0*" [r info clients]]
             } else {
-                fail "connected_clients_prioritized did not remain 0 after closing c_normal"
+                fail "connected_priority_clients did not remain 0 after closing c_normal"
             }
 
             r config set maxclients-reserved 0
@@ -685,16 +685,75 @@ start_server {tags {"qos"}} {
 
 start_server {tags {"qos external:skip"} overrides {priority-subnets {"127.0.0.0/8,::1/128"} maxclients 5 maxclients-reserved 2}} {
     test {Priority subnets configured on startup enable priority admission} {
-        assert_match "*connected_clients_prioritized:1*" [r info clients]
+        assert_match "*connected_priority_clients:1*" [r info clients]
         set c1 [valkey_client]
-        assert_match "*connected_clients_prioritized:2*" [r info clients]
+        assert_match "*connected_priority_clients:2*" [r info clients]
         $c1 close
         wait_for_condition 50 100 {
-            [string match "*connected_clients_prioritized:1*" [r info clients]]
+            [string match "*connected_priority_clients:1*" [r info clients]]
         } else {
-            fail "connected_clients_prioritized did not decrement to 1 after closing c1"
+            fail "connected_priority_clients did not decrement to 1 after closing c1"
         }
     }
 }
+
+start_server {tags {"qos external:skip"}} {
+    test {CONFIG REWRITE and reload persists priority-subnets and maxclients-reserved} {
+        # Configure non-default settings
+        r config set priority-subnets "127.0.0.0/8,::1/128"
+        r config set maxclients-reserved 10
+        r config set maxclients 20
+
+        # Verify initial values
+        assert_equal {127.0.0.0/8,::1/128} [lindex [r config get priority-subnets] 1]
+        assert_equal 10 [lindex [r config get maxclients-reserved] 1]
+        assert_equal 20 [lindex [r config get maxclients] 1]
+
+        # Trigger CONFIG REWRITE to write changes to valkey.conf on disk
+        assert_equal "OK" [r config rewrite]
+        set config_file [srv 0 config_file]
+        assert_equal 1 [count_message_lines $config_file "priority-subnets"]
+        assert_equal 1 [count_message_lines $config_file "maxclients-reserved"]
+
+        # Restart server to reload configuration from disk
+        restart_server 0 true false
+
+        # Verify configuration is reloaded accurately from disk
+        assert_equal {127.0.0.0/8,::1/128} [lindex [r config get priority-subnets] 1]
+        assert_equal 10 [lindex [r config get maxclients-reserved] 1]
+        assert_equal 20 [lindex [r config get maxclients] 1]
+
+        # Verify priority admission control functions properly after config reload
+        assert_match "*connected_priority_clients:1*" [r info clients]
+        set c1 [valkey_client]
+        assert_match "*connected_priority_clients:2*" [r info clients]
+        $c1 close
+
+        # Reset to default (empty priority-subnets and 0 maxclients-reserved) and rewrite again
+        r config set priority-subnets ""
+        r config set maxclients-reserved 0
+        assert_equal "OK" [r config rewrite]
+
+        # Restart server to verify clearing config persists after reload
+        restart_server 0 true false
+        assert_equal {} [lindex [r config get priority-subnets] 1]
+        assert_equal 0 [lindex [r config get maxclients-reserved] 1]
+        assert_match "*connected_priority_clients:0*" [r info clients]
+
+        # Verify debug config-rewrite-force-all rewrite and reload
+        r config set priority-subnets "10.0.0.0/8"
+        r config set maxclients-reserved 5
+        assert_equal [r debug config-rewrite-force-all] "OK"
+        restart_server 0 true false
+        assert_equal {10.0.0.0/8} [lindex [r config get priority-subnets] 1]
+        assert_equal 5 [lindex [r config get maxclients-reserved] 1]
+
+        # Clean up
+        r config set priority-subnets ""
+        r config set maxclients-reserved 0
+        r config rewrite
+    }
+}
+
 
 

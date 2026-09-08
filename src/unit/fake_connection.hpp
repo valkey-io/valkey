@@ -121,8 +121,16 @@ inline void fakeConnPostponeUpdateState(connection *conn, int val) {
     ((fakeConnection *)conn)->postpone_state = val;
 }
 
+/* Mimics TLSHandleAcceptResult(): runs and clears conn_handler once the
+ * handshake is no longer in progress. */
 inline void fakeConnUpdateState(connection *conn) {
     ((fakeConnection *)conn)->update_calls++;
+    if (conn->state == CONN_STATE_ACCEPTING) return;
+    ConnectionCallbackFunc handler = conn->conn_handler;
+    if (handler) {
+        conn->conn_handler = NULL;
+        handler(conn);
+    }
 }
 
 inline void fakeConnClose(connection *conn) {

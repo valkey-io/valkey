@@ -551,6 +551,7 @@ struct clusterState {
 void clusterHandleReadCompletion(clusterLink *link);
 void clusterHandleWriteCompletion(clusterLink *link);
 void clusterHandleAcceptCompletion(connection *conn);
+void clusterConnAcceptHandler(connection *conn);
 void clusterReadJob(clusterLink *link);
 void clusterWriteJob(clusterLink *link);
 

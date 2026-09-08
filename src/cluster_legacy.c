@@ -1964,7 +1964,7 @@ void setClusterNodeToInboundClusterLink(clusterNode *node, clusterLink *link) {
     }
 }
 
-static void clusterConnAcceptHandler(connection *conn) {
+void clusterConnAcceptHandler(connection *conn) {
     clusterLink *link;
 
     if (connGetState(conn) != CONN_STATE_CONNECTED) {
@@ -2031,6 +2031,10 @@ void clusterAcceptHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
 
         /* Use non-blocking I/O for cluster messages. */
         serverLog(LL_VERBOSE, "Accepting cluster node connection from %s:%d", cip, cport);
+
+        /* Install before offloading: that path skips connAccept() below, and a
+         * TLS retry that cannot re-offload only ever invokes conn_handler. */
+        conn->conn_handler = clusterConnAcceptHandler;
 
         /* Try to offload the TLS accept handshake to an I/O thread.
          * If offload succeeds, the completion handler will create the
@@ -9308,20 +9312,11 @@ void clusterHandleWriteCompletion(clusterLink *link) {
 
 void clusterHandleAcceptCompletion(connection *conn) {
     conn->flags &= ~CONN_FLAG_ACCEPT_OFFLOAD_PENDING;
+    /* Runs conn_handler if the handshake finished, re-arms the TLS event if not. */
     connSetPostponeUpdateState(conn, 0);
     connUpdateState(conn);
     connDecrRefs(conn);
     if ((conn->flags & CONN_FLAG_CLOSE_SCHEDULED) && !connHasRefs(conn)) {
         connClose(conn);
-        return;
     }
-
-    /* TLS handshake may still be in progress (SSL_accept needs more
-     * event-loop iterations). Keep the connection open; TLS event handling
-     * will trigger the next offloaded accept step. */
-    if (connGetState(conn) == CONN_STATE_ACCEPTING) {
-        return;
-    }
-
-    clusterConnAcceptHandler(conn);
 }

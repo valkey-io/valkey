@@ -86,6 +86,13 @@ class ClusterIOOffloadTest : public ::testing::Test {
         return fc;
     }
 
+    /* As clusterAcceptHandler() leaves it: conn_handler installed before dispatch. */
+    fakeConnection *makeAcceptConn() {
+        fakeConnection *fc = makeConn(CONN_OWNER_CLUSTER_LINK);
+        fc->conn.conn_handler = clusterConnAcceptHandler;
+        return fc;
+    }
+
     clusterLink *makeLink() {
         clusterLink *link = createClusterLink(NULL);
         fakeConnection *fc = makeConn();
@@ -658,7 +665,7 @@ TEST_F(ClusterIOOffloadTest, AcceptDispatchRequiresOffloadAllowedFlag) {
 }
 
 TEST_F(ClusterIOOffloadTest, AcceptDispatchIsIdempotentWhilePending) {
-    fakeConnection *fc = makeConn(CONN_OWNER_CLUSTER_LINK);
+    fakeConnection *fc = makeAcceptConn();
     fc->conn.state = CONN_STATE_ACCEPTING;
     fc->conn.flags |= CONN_FLAG_ALLOW_ACCEPT_OFFLOAD;
 
@@ -678,15 +685,14 @@ TEST_F(ClusterIOOffloadTest, AcceptDispatchIsIdempotentWhilePending) {
 }
 
 TEST_F(ClusterIOOffloadTest, AcceptOffloadRoundTripCreatesLink) {
-    fakeConnection *fc = makeConn(CONN_OWNER_CLUSTER_LINK);
+    fakeConnection *fc = makeAcceptConn();
     fc->conn.flags |= CONN_FLAG_ALLOW_ACCEPT_OFFLOAD;
 
     ASSERT_EQ(trySendClusterAcceptToIOThreads(&fc->conn), C_OK);
     EXPECT_NE(fc->conn.flags & CONN_FLAG_ACCEPT_OFFLOAD_PENDING, 0);
     EXPECT_EQ(server.stat_cluster_threaded_accepts_processed, 0LL);
 
-    /* The fake connection has no accept callback, so the state stays CONNECTED
-     * and the completion handler creates the link. */
+    /* State ends CONNECTED, so applying the deferred state runs conn_handler. */
     clusterAcceptJob(&fc->conn);
     processIOThreadsResponses();
 
@@ -699,20 +705,21 @@ TEST_F(ClusterIOOffloadTest, AcceptOffloadRoundTripCreatesLink) {
 }
 
 TEST_F(ClusterIOOffloadTest, AcceptCompletionAcceptingKeepsConnectionOpen) {
-    fakeConnection *fc = makeConn(CONN_OWNER_CLUSTER_LINK);
+    fakeConnection *fc = makeAcceptConn();
     fc->conn.flags |= CONN_FLAG_ACCEPT_OFFLOAD_PENDING;
     fc->conn.state = CONN_STATE_ACCEPTING;
 
     clusterHandleAcceptCompletion(&fc->conn);
 
-    /* Handshake still in progress: no link yet, connection kept open. */
+    /* Handshake still pending: conn_handler must not have run. */
     EXPECT_EQ(fc->close_calls, 0);
     EXPECT_EQ(fc->conn.flags & CONN_FLAG_ACCEPT_OFFLOAD_PENDING, 0);
     EXPECT_EQ(connGetPrivateData(&fc->conn), (void *)NULL);
+    EXPECT_EQ(fc->conn.conn_handler, clusterConnAcceptHandler);
 }
 
 TEST_F(ClusterIOOffloadTest, AcceptCompletionConnectedCreatesLink) {
-    fakeConnection *fc = makeConn(CONN_OWNER_CLUSTER_LINK);
+    fakeConnection *fc = makeAcceptConn();
     fc->conn.flags |= CONN_FLAG_ACCEPT_OFFLOAD_PENDING;
 
     clusterHandleAcceptCompletion(&fc->conn);
@@ -723,7 +730,7 @@ TEST_F(ClusterIOOffloadTest, AcceptCompletionConnectedCreatesLink) {
 }
 
 TEST_F(ClusterIOOffloadTest, AcceptCompletionAssertsPrivateDataStillNull) {
-    fakeConnection *fc = makeConn(CONN_OWNER_CLUSTER_LINK);
+    fakeConnection *fc = makeAcceptConn();
     fc->conn.flags |= CONN_FLAG_ACCEPT_OFFLOAD_PENDING;
     connSetPrivateData(&fc->conn, (void *)0x1);
 

@@ -45,6 +45,7 @@
 #include <errno.h>
 #include <stdarg.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <grp.h>
 
 #include "anet.h"
@@ -868,4 +869,115 @@ int anetIsFifo(char *filepath) {
     struct stat sb;
     if (stat(filepath, &sb) == -1) return 0;
     return S_ISFIFO(sb.st_mode);
+}
+
+/* anetParseSubnet parses a subnet token in CIDR notation (e.g. "192.168.1.0/24")
+ * or raw IP and populates the anetSubnet structure.
+ * Returns ANET_OK on success, ANET_ERR on parsing/validation error. */
+int anetParseSubnet(char *err, const char *token, anetSubnet *subnet) {
+    if (!token || !subnet) {
+        anetSetError(err, "Invalid token or subnet pointer");
+        return ANET_ERR;
+    }
+
+    const char *slash = strchr(token, '/');
+    size_t ip_len = slash ? (size_t)(slash - token) : strlen(token);
+    if (ip_len == 0 || ip_len >= INET6_ADDRSTRLEN) {
+        anetSetError(err, "Invalid IP address length in subnet token: %s", token);
+        return ANET_ERR;
+    }
+
+    char ip_part[INET6_ADDRSTRLEN];
+    memcpy(ip_part, token, ip_len);
+    ip_part[ip_len] = '\0';
+
+    int family = strchr(ip_part, ':') ? AF_INET6 : AF_INET;
+    long max_prefix = (family == AF_INET) ? 32 : 128;
+    long prefix = max_prefix;
+
+    if (slash) {
+        char *endptr;
+        prefix = strtol(slash + 1, &endptr, 10);
+        if (endptr == slash + 1 || *endptr != '\0' || prefix < 0 || prefix > max_prefix) {
+            anetSetError(err, "Invalid prefix length in subnet token: %s", token);
+            return ANET_ERR;
+        }
+    }
+
+    if (family == AF_INET) {
+        if (inet_pton(AF_INET, ip_part, &subnet->addr.ipv4) != 1) {
+            anetSetError(err, "Invalid IPv4 address: %s", ip_part);
+            return ANET_ERR;
+        }
+    } else {
+        if (inet_pton(AF_INET6, ip_part, &subnet->addr.ipv6) != 1) {
+            anetSetError(err, "Invalid IPv6 address: %s", ip_part);
+            return ANET_ERR;
+        }
+        /* Normalize IPv4-mapped IPv6 subnet */
+        if (IN6_IS_ADDR_V4MAPPED(&subnet->addr.ipv6)) {
+            family = AF_INET;
+            subnet->addr.ipv4.s_addr = *(uint32_t *)(&subnet->addr.ipv6.s6_addr[12]);
+            prefix = (prefix > 96) ? (prefix - 96) : 0;
+        }
+    }
+
+    subnet->family = family;
+    subnet->prefix_len = (int)prefix;
+    return ANET_OK;
+}
+
+/* anetMatchIpSubnet checks if the given IP matches any subnet in subnets[].
+ * Returns 1 if matching, 0 otherwise.
+ * Note: ip can be NULL for non-IP transports (e.g. UNIX sockets), returning 0. */
+int anetMatchIpSubnet(const char *ip, const anetSubnet *subnets, int count) {
+    if (!ip || !subnets || count <= 0) return 0;
+
+    int family;
+    union {
+        struct in_addr ipv4;
+        struct in6_addr ipv6;
+    } ip_addr;
+
+    if (strchr(ip, ':')) {
+        family = AF_INET6;
+        if (inet_pton(AF_INET6, ip, &ip_addr.ipv6) != 1) return 0;
+        /* Normalize IPv4-mapped IPv6 address */
+        if (IN6_IS_ADDR_V4MAPPED(&ip_addr.ipv6)) {
+            family = AF_INET;
+            ip_addr.ipv4.s_addr = *(uint32_t *)(&ip_addr.ipv6.s6_addr[12]);
+        }
+    } else {
+        family = AF_INET;
+        if (inet_pton(AF_INET, ip, &ip_addr.ipv4) != 1) return 0;
+    }
+
+    for (int i = 0; i < count; i++) {
+        const anetSubnet *subnet = &subnets[i];
+        if (subnet->family != family) continue;
+
+        if (family == AF_INET) {
+            uint32_t subnet_val = ntohl(subnet->addr.ipv4.s_addr);
+            uint32_t ip_val = ntohl(ip_addr.ipv4.s_addr);
+            uint32_t mask = (subnet->prefix_len == 0) ? 0 : (0xFFFFFFFFU << (32 - subnet->prefix_len));
+            if ((ip_val & mask) == (subnet_val & mask)) return 1;
+        } else {
+            int bytes = subnet->prefix_len / 8;
+            int bits = subnet->prefix_len % 8;
+            int match = 1;
+            for (int j = 0; j < bytes; j++) {
+                if (ip_addr.ipv6.s6_addr[j] != subnet->addr.ipv6.s6_addr[j]) {
+                    match = 0;
+                    break;
+                }
+            }
+            if (match && bits > 0) {
+                uint8_t mask = (uint8_t)(0xFF << (8 - bits));
+                if ((ip_addr.ipv6.s6_addr[bytes] & mask) != (subnet->addr.ipv6.s6_addr[bytes] & mask))
+                    match = 0;
+            }
+            if (match) return 1;
+        }
+    }
+    return 0;
 }

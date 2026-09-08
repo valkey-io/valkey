@@ -32,7 +32,6 @@
  * SPDX-License-Identifier: BSD-3-Clause
  */
 #include "server.h"
-#include "qos.h"
 #include "hotkeys.h"
 #include "ordered_index.h"
 #include "connection.h"
@@ -2904,6 +2903,7 @@ void resetServerStats(void) {
     server.stat_fork_rate = 0;
     server.stat_total_forks = 0;
     server.stat_rejected_conn = 0;
+    server.stat_rejected_priority_conn = 0;
     server.stat_sync_full = 0;
     server.stat_sync_partial_ok = 0;
     server.stat_sync_partial_err = 0;
@@ -2950,7 +2950,6 @@ void resetServerStats(void) {
     server.acl_info.invalid_channel_accesses = 0;
     server.acl_info.acl_access_denied_tls_cert = 0;
     server.acl_info.invalid_db_accesses = 0;
-    qosResetStats();
     lazyfreeResetStats();
 }
 
@@ -3242,9 +3241,9 @@ void initServer(void) {
     /* Initialization hotkey */
     hotkeysInit();
 
-    /* Initialize QoS subsystem */
-    if (qosInit() == C_ERR) {
-        serverPanic("QoS initialization failed, check the server logs.");
+    /* Initialize priority subnets if configured */
+    if (updatePrioritySubnets(server.priority_subnets) != C_OK) {
+        serverPanic("Failed parsing priority-subnets on startup, check the server logs.");
     }
 }
 
@@ -6484,9 +6483,9 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
             info,
             "# Clients\r\n" FMTARGS(
                 "connected_clients:%lu\r\n", listLength(server.clients) - listLength(server.replicas),
+                "connected_priority_clients:%lld\r\n", server.stat_num_active_priority_clients,
                 "cluster_connections:%lu\r\n", getClusterConnectionsCount(),
                 "maxclients:%u\r\n", server.maxclients,
-                "connected_clients_prioritized:%lld\r\n", qos_metrics.stat_num_active_clients_prioritized,
                 "client_recent_max_input_buffer:%zu\r\n", maxin,
                 "client_recent_max_output_buffer:%zu\r\n", maxout,
                 "blocked_clients:%d\r\n", server.blocked_clients,
@@ -6741,7 +6740,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "instantaneous_input_repl_kbps:%.2f\r\n", (float)getInstantaneousMetric(STATS_METRIC_NET_INPUT_REPLICATION) / 1024,
                 "instantaneous_output_repl_kbps:%.2f\r\n", (float)getInstantaneousMetric(STATS_METRIC_NET_OUTPUT_REPLICATION) / 1024,
                 "rejected_connections:%lld\r\n", server.stat_rejected_conn,
-                "rejected_connections_prioritized:%lld\r\n", qos_metrics.stat_rejected_priority_conn,
+                "rejected_priority_connections:%lld\r\n", server.stat_rejected_priority_conn,
                 "sync_full:%lld\r\n", server.stat_sync_full,
                 "sync_partial_ok:%lld\r\n", server.stat_sync_partial_ok,
                 "sync_partial_err:%lld\r\n", server.stat_sync_partial_err,

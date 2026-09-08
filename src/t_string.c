@@ -86,7 +86,7 @@ void setGenericCommand(client *c,
     int found = 0;
     int setkey_flags = 0;
     /* Tracks either an explicit or server-default expiration to apply. */
-    int set_expire = expire != NULL;
+    bool set_expire = expire != NULL;
 
     if (expire && getExpireMillisecondsOrReply(c, expire, flags, unit, &milliseconds) != C_OK) {
         return;

@@ -925,6 +925,7 @@ start_server {tags {"stream needs:debug"} overrides {appendonly yes stream-node-
 
     test {XADD/XTRIM strip redundant LIMIT when rewriting for propagation} {
         set aof [get_last_incr_aof_path r]
+        set aof_offset [file size $aof]
         r config set stream-node-max-entries 10
 
         for {set j 0} {$j < 100} {incr j} {
@@ -942,6 +943,7 @@ start_server {tags {"stream needs:debug"} overrides {appendonly yes stream-node-
 
         set fp [open $aof r]
         fconfigure $fp -translation binary
+        seek $fp $aof_offset
         set blob [read $fp]
         close $fp
         assert_equal -1 [string first "LIMIT" $blob]

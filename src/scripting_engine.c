@@ -73,11 +73,6 @@ dictType engineDictType = {
     .entryDestructor = zfree,
 };
 
-static int isCalledFromAsyncThread(void) {
-    pthread_t curr_thread = pthread_self();
-    return !pthread_equal(server.main_thread_id, curr_thread);
-}
-
 /* Initializes the scripting engine manager.
  * The engine manager is responsible for managing the several scripting engines
  * that are loaded in the server and implemented by Valkey Modules.
@@ -313,7 +308,7 @@ void scriptingEngineCallFreeFunction(scriptingEngine *engine,
                                      subsystemType type,
                                      compiledFunction *compiled_func) {
     serverAssert(type == VMSE_EVAL || type == VMSE_FUNCTION);
-    int is_async = isCalledFromAsyncThread();
+    int is_async = !onServerMainThread();
 
     /* We need to acquire the module GIL when running from an async thread while
      * flushing the script functions. */
@@ -1045,7 +1040,8 @@ static int findAndExecuteCommand(robj **argv, size_t argc) {
         return CONTINUE_READ_NEXT_COMMAND;
     }
 
-    return cmd->handler(argv, argc, cmd->context);
+    /* Fall back to the engine's own context, which handlers can cast back to their engine context type. */
+    return cmd->handler(argv, argc, cmd->context ? cmd->context : ds.engine->impl.ctx);
 }
 
 void scriptingEngineDebuggerProcessCommands(int *client_disconnected, robj **err) {

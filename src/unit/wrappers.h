@@ -48,6 +48,9 @@ extern "C" {
 #include "ae.h"
 #include "compression.h"
 #include "server.h"
+#include "stat_calc.h"
+#include "throttle.h"
+#include "throttle_token_bucket.h"
 
 /**
  * The list of wrapper methods defined.  Each wrapper method must
@@ -63,8 +66,38 @@ extern "C" {
  *       Example: serverLog(int level, const char *fmt, ...) should NOT be mocked.
  */
 long long __wrap_aeCreateTimeEvent(aeEventLoop *eventLoop, long long milliseconds, aeTimeProc *proc, void *clientData, aeEventFinalizerProc *finalizerProc);
+int __wrap_aeDeleteTimeEvent(aeEventLoop *eventLoop, long long id);
+size_t __wrap_getClientOutputBufferMemoryUsage(client *c);
+int __wrap_getMaxmemoryState(size_t *total, size_t *logical, size_t *tofree, float *level);
+void __wrap_queueClientForReprocessing(client *c);
+int __wrap_freeClient(client *c);
 ssize_t __wrap_streamDecompressorFeed(streamDecompressor *decompressor, uint8_t *output, size_t output_capacity, const uint8_t *input, size_t input_len, size_t *input_consumed);
 void __wrap_zmadvise_dontneed(void *ptr, size_t size_hint);
+int __wrap_processPendingCommandAndInputBuffer(client *c);
+void __wrap_beforeNextClient(client *c);
+
+void __wrap_blockClientInUseOnKeys(client *c, int nKeys, robj **keys);
+void __wrap_unblockClientsInUseOnKey(robj *key);
+
+int __wrap_ACLCheckAllUserCommandPerm(user *u, struct serverCommand *cmd, robj **argv, int argc, int dbid, int *idxptr);
+
+size_t __wrap_hashtableScan(hashtable *ht, size_t cursor, hashtableScanFunction fn, void *privdata);
+bool __wrap_hashtableScanHasPassedKey(hashtable *ht, const void *key, size_t cursor);
+
+/* Throttler mocks */
+throttler *__wrap_throttle_register(throttleCriteriaProc *criteria_proc, void *priv_data, const char *metrics_name);
+void __wrap_throttle_deregister(throttler *t);
+double __wrap_throttle_adjustRate(throttler *t, double multiplier);
+void __wrap_throttle_getMetrics(const char *metrics_name, throttleMetrics *metrics);
+long __wrap_throttle_getGuardrailSecs(throttler *t);
+
+/* Token bucket mocks */
+bool __wrap_tokenBucket_tryConsume(tokenBucket *bucket, double tokens, bool force_consume);
+
+/* Statcalc mocks */
+double __wrap_tpsCalculator_averageTps(tpsCalculator *calc);
+double __wrap_trendCalculator_changePerSecShortTerm(trendCalculator *calc);
+
 #undef protected
 #undef _Bool
 #undef typename

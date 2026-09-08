@@ -186,7 +186,9 @@ void setGenericCommand(client *c,
          * EX/PX/EXAT flag. */
         if (!(flags & ARGS_PXAT)) {
             robj *milliseconds_obj = createStringObjectFromLongLong(milliseconds);
-            if (c->cmd->proc == setCommand && c->argc == 5) {
+            /* Five arguments can also be non-expiration forms such as NX GET;
+             * when receiving the server default, they require the full PXAT rewrite. */
+            if (c->cmd->proc == setCommand && c->argc == 5 && (flags & (ARGS_EX | ARGS_PX | ARGS_EXAT))) {
                 /* If the command is in the form of "SET key value EX/PX/EXAT ttl",
                  * then we don't need to rewrite the entire command vector. */
                 serverAssert(flags & (ARGS_EX | ARGS_PX | ARGS_EXAT));

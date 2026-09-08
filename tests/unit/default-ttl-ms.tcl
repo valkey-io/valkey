@@ -14,6 +14,13 @@ start_server {tags {expire}} {
         assert {$ttl > 9000 && $ttl <= 10000}
     }
 
+    test {default-ttl-ms applies to successful SET NX GET} {
+        assert_equal {} [r set default-ttl-ms:nx-get value NX GET]
+        assert_equal value [r get default-ttl-ms:nx-get]
+        set ttl [r pttl default-ttl-ms:nx-get]
+        assert {$ttl > 9000 && $ttl <= 10000}
+    }
+
     test {default-ttl-ms rejects negatives without changing its value} {
         assert_error {*argument must be between 0 and*} {
             r config set default-ttl-ms -1

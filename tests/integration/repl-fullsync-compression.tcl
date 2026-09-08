@@ -82,7 +82,8 @@ proc park_replicas_for_grouped_bgsave {primary replica1 replica2 primary_host pr
 # Disk-based full sync: ONE shared primary fixture. rdbcompression is MODIFIABLE,
 # so each test sets its mode and repopulates its own prefix; the compression-off
 # test restores the fixture default (lz4) at its end for later shared tests.
-# Replicas are per-test nested start_servers because their capability configs differ.
+# Replicas are per-test nested start_servers because their repl-compression
+# settings control whether they advertise the LZ4 capability.
 # ============================================================================
 
 start_server {tags {"repl rdb-compression external:skip needs:debug"} overrides {save "" enable-debug-command local}} {
@@ -94,7 +95,7 @@ start_server {tags {"repl rdb-compression external:skip needs:debug"} overrides 
     $primary config set rdbcompression lz4
     $primary config set rdb-del-sync-files no
 
-    start_server {overrides {save "" enable-debug-command local rdbcompression lz4}} {
+    start_server {overrides {save "" enable-debug-command local repl-compression lz4}} {
         set replica [srv 0 client]
 
         test {Disk full sync: all-capable group produces a compressed RDB that loads} {
@@ -116,18 +117,18 @@ start_server {tags {"repl rdb-compression external:skip needs:debug"} overrides 
         }
     }
 
-    # Both scenarios fall back to plaintext: the replica advertises LZ4
-    # per its own rdbcompression, and the primary's mode is set per iteration.
-    start_server {overrides {save "" enable-debug-command local rdbcompression lz4}} {
+    # Both scenarios fall back to plaintext: the primary must select LZ4 from
+    # rdbcompression and the replica must advertise it via repl-compression.
+    start_server {overrides {save "" enable-debug-command local repl-compression lz4}} {
         set replica [srv 0 client]
 
         foreach {scenario primary_mode replica_mode prefix} {
             primary-compression-off yes lz4 off
-            replica-not-capable     lz4 yes nocap
+            replica-not-capable     lz4 no  nocap
         } {
             test "Disk full sync: $scenario yields a plaintext RDB that loads" {
                 $primary config set rdbcompression $primary_mode
-                $replica config set rdbcompression $replica_mode
+                $replica config set repl-compression $replica_mode
                 populate_compressible_dataset $primary $prefix
 
                 $replica replicaof $primary_host $primary_port
@@ -146,7 +147,7 @@ start_server {tags {"repl rdb-compression external:skip needs:debug"} overrides 
     # directly from the socket via replicaLoadPrimaryRDBFromSocket. Decompression
     # was once gated on the EOF mark (usemark), so the VCS frame was read as a raw
     # RDB ("Wrong signature ... VCS"), causing an infinite resync loop.
-    start_server {overrides {save "" enable-debug-command local rdbcompression lz4 repl-diskless-load swapdb}} {
+    start_server {overrides {save "" enable-debug-command local repl-compression lz4 repl-diskless-load swapdb}} {
         set replica [srv 0 client]
 
         test {Disk-based compressed full sync is decompressed on a diskless-load (swapdb) replica} {
@@ -188,10 +189,10 @@ start_server {tags {"repl rdb-compression external:skip needs:debug"} overrides 
     # Enough keys so the manual BGSAVE stays alive for both replicas to register.
     populate_compressible_dataset $primary "grp" 800
 
-    start_server {overrides {save "" enable-debug-command local rdbcompression lz4}} {
+    start_server {overrides {save "" enable-debug-command local repl-compression lz4}} {
         set capable [srv 0 client]
 
-        start_server {overrides {save "" enable-debug-command local rdbcompression yes}} {
+        start_server {overrides {save "" enable-debug-command local repl-compression no}} {
             set noncap [srv 0 client]
 
             test {Disk full sync: a single grouped BGSAVE with a non-capable member is plaintext for all} {
@@ -224,7 +225,7 @@ start_server {tags {"repl rdb-compression external:skip needs:debug"} overrides 
 # format) x (joiner capability). A joiner attaches whenever it can load the
 # running save's format; a non-capable joiner must NOT attach to a compressed
 # save and waits for the next, plaintext, save. Capability is advertised from
-# rdbcompression at handshake time, so one shared replica pair serves every
+# repl-compression at handshake time, so one shared replica pair serves every
 # row via CONFIG SET. rdb-key-save-delay 13000 (~2s over 155 keys x 13ms: above
 # one PSYNC round trip, under wait_for_sync's ~5s budget on slow runners) keeps
 # the save in flight while the joiner arrives.
@@ -238,22 +239,22 @@ start_server {tags {"repl rdb-compression external:skip needs:debug"} overrides 
     $primary config set repl-diskless-sync no
     $primary config set rdb-del-sync-files no
 
-    start_server {overrides {save "" enable-debug-command local rdbcompression lz4}} {
+    start_server {overrides {save "" enable-debug-command local repl-compression lz4}} {
         set trigger [srv 0 client]
 
-        start_server {overrides {save "" enable-debug-command local rdbcompression lz4}} {
+        start_server {overrides {save "" enable-debug-command local repl-compression lz4}} {
             set joiner [srv 0 client]
 
             foreach {name primary_mode joiner_mode should_join expected_compressed} {
-                "plain save, non-capable joiner attaches"                   yes yes 1 0
+                "plain save, non-capable joiner attaches"                   yes no  1 0
                 "plain save, capable joiner attaches"                       yes lz4 1 0
-                "compressed save, non-capable joiner waits for a new save"  lz4 yes 0 0
+                "compressed save, non-capable joiner waits for a new save"  lz4 no  0 0
                 "compressed save, capable joiner attaches"                  lz4 lz4 1 1
             } {
                 test "Piggyback: $name" {
                     with_cleanup {
                         $primary config set rdbcompression $primary_mode
-                        $joiner config set rdbcompression $joiner_mode
+                        $joiner config set repl-compression $joiner_mode
                         $primary config set rdb-key-save-delay 13000
                         populate_compressible_dataset $primary piggy 150
                         set primary_loglines [count_log_lines -2]
@@ -299,7 +300,8 @@ start_server {tags {"repl rdb-compression external:skip needs:debug"} overrides 
 
 # ============================================================================
 # Cross-cutting transfer-path coverage: disk-receive (BIO) load, dual-channel,
-# diskless payload compression, and byte-accounting. Needs rdbcompression lz4.
+# diskless payload compression, and byte-accounting. Diskless compression is
+# deliberately enabled with repl-compression while rdbcompression is disabled.
 # ============================================================================
 
 tags {"repl external:skip"} {
@@ -309,20 +311,20 @@ tags {"repl external:skip"} {
 # repl-diskless-sync-max-replicas (both MODIFIABLE) at its start and restores them
 # at its end so the shared primary stays neutral for the other tests.
 
-start_server {overrides {save "" rdbcompression lz4 repl-diskless-sync yes repl-diskless-sync-delay 0 dual-channel-replication-enabled yes}} {
+start_server {overrides {save "" rdbcompression no repl-compression lz4 repl-diskless-sync yes repl-diskless-sync-delay 0 dual-channel-replication-enabled yes}} {
     set primary [srv 0 client]
     set primary_host [srv 0 host]
     set primary_port [srv 0 port]
 
     # Both load paths under dual-channel: disabled -> RDB to disk (BIO), rdbLoad()
     # decompresses; swapdb -> load compressed payload from the socket (also exercises
-    # capa-compression advertising in the dual-channel handshake).
+    # LZ4 capability advertising in the dual-channel handshake).
     foreach load_mode {disabled swapdb} {
         test "Dual-channel + compression full sync delivers identical data (repl-diskless-load $load_mode)" {
             set primary_loglines [count_log_lines 0]
             populate_compressible_dataset $primary "dc-$load_mode"
 
-            start_server [list overrides [list save "" rdbcompression lz4 repl-diskless-load $load_mode dual-channel-replication-enabled yes]] {
+            start_server [list overrides [list save "" repl-compression lz4 repl-diskless-load $load_mode dual-channel-replication-enabled yes]] {
                 set replica [srv 0 client]
                 set replica_loglines [count_log_lines 0]
                 $replica replicaof $primary_host $primary_port
@@ -352,10 +354,10 @@ start_server {overrides {save "" rdbcompression lz4 repl-diskless-sync yes repl-
         $primary config set repl-diskless-sync-max-replicas 2
         populate_compressible_dataset $primary agg 2000
 
-        start_server {overrides {save "" rdbcompression lz4 repl-diskless-load swapdb dual-channel-replication-enabled yes}} {
+        start_server {overrides {save "" repl-compression lz4 repl-diskless-load swapdb dual-channel-replication-enabled yes}} {
             set replica1 [srv 0 client]
 
-            start_server {overrides {save "" rdbcompression lz4 repl-diskless-load swapdb dual-channel-replication-enabled yes}} {
+            start_server {overrides {save "" repl-compression lz4 repl-diskless-load swapdb dual-channel-replication-enabled yes}} {
                 set replica2 [srv 0 client]
 
                 # Attach both within the delay window so one BGSAVE groups both channels into one connset.
@@ -405,7 +407,7 @@ start_server {overrides {save "" rdbcompression lz4 repl-diskless-sync yes repl-
 # Shared by the receive-to-disk (disabled) and direct-socket-load (swapdb) tests;
 # replicas differ only in repl-diskless-load so they stay per-test.
 
-start_server {overrides {save "" rdbcompression lz4 repl-diskless-sync yes repl-diskless-sync-delay 0}} {
+start_server {overrides {save "" rdbcompression no repl-compression lz4 repl-diskless-sync yes repl-diskless-sync-delay 0}} {
     set primary [srv 0 client]
     set primary_host [srv 0 host]
     set primary_port [srv 0 port]
@@ -415,7 +417,7 @@ start_server {overrides {save "" rdbcompression lz4 repl-diskless-sync yes repl-
         set primary_loglines [count_log_lines 0]
         populate_compressible_dataset $primary "diskrecv"
 
-        start_server {overrides {save "" rdbcompression lz4 repl-diskless-load disabled}} {
+        start_server {overrides {save "" repl-compression lz4 repl-diskless-load disabled}} {
             set replica [srv 0 client]
             set replica_loglines [count_log_lines 0]
             $replica replicaof $primary_host $primary_port
@@ -437,7 +439,7 @@ start_server {overrides {save "" rdbcompression lz4 repl-diskless-sync yes repl-
         set primary_loglines [count_log_lines 0]
         populate_compressible_dataset $primary diskless-full-sync
 
-        start_server {overrides {save "" rdbcompression lz4 repl-diskless-load swapdb}} {
+        start_server {overrides {save "" repl-compression lz4 repl-diskless-load swapdb}} {
             set replica [srv 0 client]
             set replica_loglines [count_log_lines 0]
             $replica replicaof $primary_host $primary_port
@@ -455,12 +457,32 @@ start_server {overrides {save "" rdbcompression lz4 repl-diskless-sync yes repl-
         }
     }
 
+    test {Diskless full sync follows repl-compression instead of rdbcompression} {
+        set primary_loglines [count_log_lines 0]
+        populate_compressible_dataset $primary diskless-policy
+
+        $primary config set rdbcompression lz4
+        $primary config set repl-compression no
+        start_server {overrides {save "" repl-compression lz4 repl-diskless-load swapdb}} {
+            set replica [srv 0 client]
+            $replica replicaof $primary_host $primary_port
+
+            assert_replica_synced $primary $replica "(diskless policy)"
+            wait_for_log_messages -1 {"*target: replicas sockets*"} $primary_loglines 50 100
+            verify_no_log_message -1 "*Diskless full sync with compression: lz4*" $primary_loglines
+
+            $replica replicaof no one
+        }
+        $primary config set rdbcompression no
+        $primary config set repl-compression lz4
+    }
+
 }
 
 # Checksum interaction: a compressed diskless full sync loads under rdbchecksum no.
 # Isolated because rdbchecksum is an immutable startup-only override.
 
-start_server {overrides {save "" rdbcompression lz4 repl-diskless-sync yes repl-diskless-sync-delay 0 rdbchecksum no}} {
+start_server {overrides {save "" rdbcompression no repl-compression lz4 repl-diskless-sync yes repl-diskless-sync-delay 0 rdbchecksum no}} {
     set primary [srv 0 client]
     set primary_host [srv 0 host]
     set primary_port [srv 0 port]
@@ -470,7 +492,7 @@ start_server {overrides {save "" rdbcompression lz4 repl-diskless-sync yes repl-
         set primary_loglines [count_log_lines 0]
         populate_compressible_dataset $primary "cksum-off"
 
-        start_server {overrides {save "" rdbcompression lz4 repl-diskless-load disabled}} {
+        start_server {overrides {save "" repl-compression lz4 repl-diskless-load disabled}} {
             set replica [srv 0 client]
             set replica_loglines [count_log_lines 0]
             $replica replicaof $primary_host $primary_port
@@ -493,7 +515,7 @@ start_server {overrides {save "" rdbcompression lz4 repl-diskless-sync yes repl-
 # almost instantly, so stretch the child with a per-key save delay over a large
 # dataset; watch the replica log (not INFO) since it is blocked in the synchronous load.
 
-start_server {overrides {save "" rdbcompression lz4 repl-diskless-sync yes repl-diskless-sync-delay 0}} {
+start_server {overrides {save "" rdbcompression no repl-compression lz4 repl-diskless-sync yes repl-diskless-sync-delay 0}} {
     set primary [srv 0 client]
     set primary_host [srv 0 host]
     set primary_port [srv 0 port]
@@ -502,7 +524,7 @@ start_server {overrides {save "" rdbcompression lz4 repl-diskless-sync yes repl-
         populate_compressible_dataset $primary "trunc" 2000
         set sync_full_before [status $primary sync_full]
 
-        start_server {overrides {save "" rdbcompression lz4 repl-diskless-load swapdb}} {
+        start_server {overrides {save "" repl-compression lz4 repl-diskless-load swapdb}} {
             set replica [srv 0 client]
             set replica_loglines [count_log_lines 0]
 
@@ -547,7 +569,7 @@ start_server {overrides {save "" rdbcompression lz4 repl-diskless-sync yes repl-
 # Mixed diskless cohort (one capable, one not) falls back to plaintext for all: the
 # group-AND clears the LZ4 capability. A slow manual BGSAVE occupies the child
 # slot so both replicas park in WAIT_BGSAVE_START together, exercising the AND deterministically.
-start_server {overrides {save "" rdbcompression lz4 repl-diskless-sync yes repl-diskless-sync-delay 0}} {
+start_server {overrides {save "" rdbcompression no repl-compression lz4 repl-diskless-sync yes repl-diskless-sync-delay 0}} {
     set primary [srv 0 client]
     set primary_host [srv 0 host]
     set primary_port [srv 0 port]
@@ -555,10 +577,10 @@ start_server {overrides {save "" rdbcompression lz4 repl-diskless-sync yes repl-
     # Enough keys so the manual BGSAVE stays alive for both replicas to register.
     populate_compressible_dataset $primary mixed-diskless 800
 
-    start_server {overrides {save "" rdbcompression lz4 repl-diskless-load swapdb}} {
+    start_server {overrides {save "" repl-compression lz4 repl-diskless-load swapdb}} {
         set replica_capable [srv 0 client]
 
-        start_server {overrides {save "" rdbcompression yes repl-diskless-load swapdb}} {
+        start_server {overrides {save "" repl-compression no repl-diskless-load swapdb}} {
             set replica_plain [srv 0 client]
 
             test {Mixed diskless cohort falls back to a plaintext RDB payload} {

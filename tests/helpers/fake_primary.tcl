@@ -1,24 +1,35 @@
-# A single-shot fake primary for full-sync negative tests. Answers the
+# A single-shot fake primary for replication negative tests. Answers the
 # replication handshake (PING -> +PONG, REPLCONF -> +OK each, PSYNC ->
 # +FULLRESYNC), announces a bulk transfer of ANNOUNCE_SIZE bytes, sends the
-# contents of PAYLOAD_FILE, then closes the connection and exits.
+# contents of PAYLOAD_FILE, then closes the connection and exits. When
+# STREAM_FILE is provided, its contents are sent after the RDB and the
+# connection stays open until the replica disconnects.
 #
-# Usage: tclsh fake_primary.tcl PORT PAYLOAD_FILE ANNOUNCE_SIZE
+# Usage: tclsh fake_primary.tcl PORT PAYLOAD_FILE ANNOUNCE_SIZE ?STREAM_FILE?
 
 set port [lindex $argv 0]
 set payload_file [lindex $argv 1]
 set announce_size [lindex $argv 2]
+set stream_file [lindex $argv 3]
 
 set fd [open $payload_file r]
 fconfigure $fd -translation binary
 set payload [read $fd]
 close $fd
 
+set stream_payload ""
+if {$stream_file ne ""} {
+    set fd [open $stream_file r]
+    fconfigure $fd -translation binary
+    set stream_payload [read $fd]
+    close $fd
+}
+
 # The replica sends RESP-encoded commands. Reading line by line and replying
 # once per command-name line keeps replies in step with pipelined commands;
 # RESP framing lines (*N, $N) and argument lines fall through unmatched.
 proc accept {sock host port} {
-    global payload announce_size done
+    global payload announce_size stream_payload done
     fconfigure $sock -translation binary -blocking 1
     set served 0
     catch {
@@ -35,6 +46,13 @@ proc accept {sock host port} {
                 puts -nonewline $sock "\$$announce_size\r\n"
                 puts -nonewline $sock $payload
                 flush $sock
+                if {$stream_payload ne ""} {
+                    puts -nonewline $sock $stream_payload
+                    flush $sock
+                    while {![eof $sock]} {
+                        read $sock 4096
+                    }
+                }
                 set served 1
                 break
             }

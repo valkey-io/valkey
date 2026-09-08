@@ -164,9 +164,10 @@ tags {"repl external:skip"} {
         }
     }
 
-    # A streaming-compressed disk-based sync RDB (rdbcompression lz4 on
-    # both ends) cannot be reused as an AOF base, so the replica falls back to
-    # BGREWRITEAOF. Inverse of the plaintext RDB-reuse tests above.
+    # A streaming-compressed disk-based sync RDB (rdbcompression lz4 on the
+    # primary and repl-compression lz4 on the replica for capability advertisement)
+    # cannot be reused as an AOF base, so the replica falls back to BGREWRITEAOF.
+    # Inverse of the plaintext RDB-reuse tests above.
     test "Disk-based full sync with rdbcompression lz4 falls back to BGREWRITEAOF for AOF base" {
         start_server {overrides {repl-diskless-sync no rdbcompression lz4 save ""}} {
             set primary [srv 0 client]
@@ -177,7 +178,7 @@ tags {"repl external:skip"} {
                 $primary set "rcomp-key:$i" "value:$i"
             }
 
-            start_server {overrides {appendonly yes aof-use-rdb-preamble yes repl-diskless-sync no rdbcompression lz4 save ""}} {
+            start_server {overrides {appendonly yes aof-use-rdb-preamble yes repl-diskless-sync no rdbcompression lz4 repl-compression lz4 save ""}} {
                 set replica [srv 0 client]
                 set replica_log [srv 0 stdout]
 

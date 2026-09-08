@@ -5089,12 +5089,7 @@ void clusterSendMessage(clusterLink *link, clusterMsgSendBlock *msgblock) {
     if (!link) {
         return;
     }
-    /* Only install the write handler if no I/O write job is in flight.
-     * If a write job is in flight, the completion handler will keep or
-     * reinstall the handler so the next writable event can drive another
-     * offload or synchronous fallback. */
-    if (link->io_write_state == CLUSTER_LINK_IO_IDLE && listLength(link->send_msg_queue) == 0 &&
-        getMessageFromSendBlock(msgblock)->totlen != 0)
+    if (listLength(link->send_msg_queue) == 0 && getMessageFromSendBlock(msgblock)->totlen != 0)
         connSetWriteHandlerWithBarrier(link->conn, clusterWriteHandler, 1);
 
     listAddNodeTail(link->send_msg_queue, msgblock);
@@ -5107,11 +5102,6 @@ void clusterSendMessage(clusterLink *link, clusterMsgSendBlock *msgblock) {
     /* Populate sent messages stats. */
     uint16_t type = ntohs(getMessageFromSendBlock(msgblock)->type) & ~CLUSTERMSG_MODIFIER_MASK;
     if (type < CLUSTERMSG_TYPE_COUNT) server.cluster->stats_bus_messages_sent[type]++;
-
-    /* Try to offload the write to an I/O thread. The write handler stays
-     * installed, but while a write job is pending clusterWriteHandler()
-     * will return before doing synchronous I/O. */
-    trySendClusterWriteToIOThreads(link);
 }
 
 /* Send a message to all the nodes that are part of the cluster having

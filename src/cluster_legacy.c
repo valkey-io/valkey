@@ -9086,6 +9086,7 @@ void clusterWriteJob(clusterLink *link) {
     int nodes_sent = 0;
     listNode *node = listFirst(link->send_msg_queue);
     size_t head_offset = link->io_head_offset;
+    size_t totwritten = 0;
 
     /* I/O thread invariant: we must be in PENDING state. */
     serverAssert(link->io_write_state == CLUSTER_LINK_IO_PENDING);
@@ -9094,7 +9095,10 @@ void clusterWriteJob(clusterLink *link) {
     /* See clusterReadJob(): link->conn outlives any in-flight I/O job. */
     serverAssert(conn != NULL);
 
-    while (node) {
+    /* Bounded like the synchronous path. A worker is shared, so a link with a
+     * large backlog must not hold it while other jobs wait; whatever is left
+     * goes out on the next writable event. */
+    while (node && totwritten < NET_MAX_WRITES_PER_EVENT) {
         clusterMsgSendBlock *msgblock = (clusterMsgSendBlock *)node->value;
         clusterMsg *msg = &msgblock->data[0].msg;
         size_t msg_len = ntohl(msg->totlen);
@@ -9110,6 +9114,7 @@ void clusterWriteJob(clusterLink *link) {
         }
 
         head_offset += nwritten;
+        totwritten += nwritten;
         if (head_offset < msg_len) {
             break; /* Partial write */
         }

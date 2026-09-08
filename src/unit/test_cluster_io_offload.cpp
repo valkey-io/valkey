@@ -8,6 +8,7 @@
 
 #include "fake_connection.hpp"
 
+#include <cstddef>
 #include <cstring>
 
 extern "C" {
@@ -115,11 +116,14 @@ class ClusterIOOffloadTest : public ::testing::Test {
         }
     }
 
-    /* Queue one message of msg_len wire bytes. */
+    /* Queue one message of msg_len wire bytes. The block is sized to hold the
+     * message, since the write job reads msg_len bytes starting at data[0]. */
     void enqueueFakeMsg(clusterLink *link, uint32_t msg_len = 64) {
-        TestMsgBlock *blk = (TestMsgBlock *)zcalloc(sizeof(TestMsgBlock));
+        size_t alloc = offsetof(TestMsgBlock, data) + msg_len;
+        if (alloc < sizeof(TestMsgBlock)) alloc = sizeof(TestMsgBlock);
+        TestMsgBlock *blk = (TestMsgBlock *)zcalloc(alloc);
         blk->refcount = 1;
-        blk->totlen = sizeof(TestMsgBlock);
+        blk->totlen = alloc;
         clusterMsg *msg = &blk->data[0].msg;
         memcpy(msg->sig, "RCmb", 4);
         msg->totlen = htonl(msg_len);
@@ -381,6 +385,37 @@ TEST_F(ClusterIOOffloadTest, WriteOffloadRoundTripPartialSendKeepsHandler) {
     EXPECT_EQ(link->io_write_state, CLUSTER_LINK_IO_IDLE);
     /* More to send, so the write handler must stay armed. */
     EXPECT_NE(link->conn->write_handler, (ConnectionCallbackFunc)NULL);
+}
+
+/* One job must not drain an arbitrarily large backlog: a worker is shared, so it
+ * stops at NET_MAX_WRITES_PER_EVENT and the rest goes out on the next event. */
+TEST_F(ClusterIOOffloadTest, WriteJobStopsAtWriteBudget) {
+    clusterLink *link = makeLink();
+    fakeConnection *fc = (fakeConnection *)link->conn;
+    /* A sink far larger than the budget, so only the budget bounds the job. */
+    zfree(fc->buffer);
+    fc->buf_size = NET_MAX_WRITES_PER_EVENT * 4;
+    fc->buffer = (char *)zmalloc(fc->buf_size);
+
+    const uint32_t msg_len = 16 * 1024;
+    const int msgs = NET_MAX_WRITES_PER_EVENT / msg_len + 4;
+    for (int i = 0; i < msgs; i++) enqueueFakeMsg(link, msg_len);
+
+    ASSERT_EQ(trySendClusterWriteToIOThreads(link), C_OK);
+    runInlineWorkerAndDrain(clusterWriteJob, link);
+
+    /* Stopped on the budget, so messages are left and the handler stays armed. */
+    EXPECT_LT(fc->written, (size_t)NET_MAX_WRITES_PER_EVENT + msg_len);
+    EXPECT_GT(listLength(link->send_msg_queue), 0UL);
+    EXPECT_NE(link->conn->write_handler, (ConnectionCallbackFunc)NULL);
+    EXPECT_EQ(link->io_write_state, CLUSTER_LINK_IO_IDLE);
+    EXPECT_EQ(link->io_refs, 0);
+
+    /* The next dispatch resumes from where it stopped and drains the rest. */
+    ASSERT_EQ(trySendClusterWriteToIOThreads(link), C_OK);
+    runInlineWorkerAndDrain(clusterWriteJob, link);
+    EXPECT_EQ(listLength(link->send_msg_queue), 0UL);
+    EXPECT_EQ(fc->written, (size_t)msg_len * msgs);
 }
 
 TEST_F(ClusterIOOffloadTest, WriteCompletionPopsOnlyVisibleNodes) {

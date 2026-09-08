@@ -3534,7 +3534,7 @@ void preventCommandAOF(client *c);
 void preventCommandReplication(client *c);
 void commandlogPushCurrentCommand(client *c, struct serverCommand *cmd);
 void updateCommandLatencyHistogram(struct hdr_histogram **latency_histogram, int64_t duration_hist);
-void updateExpireLagHistogram(struct hdr_histogram **lag_histogram, mstime_t expire_at, mstime_t deleted_at);
+void updateExpireLagHistogram(struct hdr_histogram **lag_histogram, mstime_t expire_at, mstime_t caught_at);
 int prepareForShutdown(client *c, int flags);
 void replyToClientsBlockedOnShutdown(void);
 int abortShutdown(void);

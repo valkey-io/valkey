@@ -2168,12 +2168,24 @@ static keyStatus expireIfNeededWithDictIndex(serverDb *db, robj *key, robj *val,
     else if (policy == POLICY_KEEP_EXPIRED) /* Treat expired keys as invalid, but do not delete them. */
         return KEY_EXPIRED;
 
-    /* Read the deadline before the key goes away, so we can record how long it
-     * outlived it. Only the caller that finds the key is in a position to know
-     * this, and only on this branch, where a deletion is about to happen. */
+    /* Read the deadline and the clock before the key goes away, so we can record
+     * how long it outlived it. Only the caller that finds the key is in a
+     * position to know this, and only on this branch, where a deletion is about
+     * to happen.
+     *
+     * mstime() rather than commandTimeSnapshot(), because the snapshot is frozen
+     * for the whole execution unit and anything that waits inside a MULTI, a
+     * script or a nested RM_Call would be subtracted from the lag. And read here
+     * rather than after the deletion, so that freeing the value does not land in
+     * this histogram: deleteExpiredKeyAndPropagateWithDictIndex() already reports
+     * that separately as the expire-del latency event, and the active cycle
+     * likewise passes a timestamp taken before it deletes. */
     mstime_t expire_at = -1;
-    if (server.latency_tracking_enabled)
+    mstime_t caught_at = 0;
+    if (server.latency_tracking_enabled) {
         expire_at = val != NULL ? objectGetExpire(val) : getExpireWithDictIndex(db, key, dict_index);
+        caught_at = mstime();
+    }
 
     /* The key needs to be converted from static to heap before deleted */
     int static_key = key->refcount == OBJ_STATIC_REFCOUNT;
@@ -2185,11 +2197,7 @@ static keyStatus expireIfNeededWithDictIndex(serverDb *db, robj *key, robj *val,
     if (static_key) {
         decrRefCount(key);
     }
-    /* Read the clock here rather than taking commandTimeSnapshot(). The snapshot
-     * is frozen for the whole execution unit, so anything that waits inside a
-     * MULTI, a script or a nested RM_Call would be subtracted from the lag we
-     * report. The active cycle already passes its own current timestamp. */
-    if (expire_at > 0) updateExpireLagHistogram(&server.expire_lag_lazy_histogram, expire_at, mstime());
+    if (expire_at > 0) updateExpireLagHistogram(&server.expire_lag_lazy_histogram, expire_at, caught_at);
     return KEY_DELETED;
 }
 

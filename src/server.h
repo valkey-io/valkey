@@ -4338,6 +4338,7 @@ void xclaimCommand(client *c);
 void xautoclaimCommand(client *c);
 void xinfoCommand(client *c);
 void xdelCommand(client *c);
+void xackdelCommand(client *c);
 void xtrimCommand(client *c);
 void lolwutCommand(client *c);
 void aclCommand(client *c);

@@ -3587,14 +3587,11 @@ void xackdelCommand(client *c) {
     } else if (strcasecmp(objectGetVal(c->argv[argi]), "ACKED") == 0) {
         argi += 1;
         mode = 2;
-    } else if (strcasecmp(objectGetVal(c->argv[argi]), "IDS") != 0) {
-        addReplyError(c, "xackdel mode not recognized");
-        return;
     }
 
     /* Expect IDS token. */
     if (strcasecmp(objectGetVal(c->argv[argi]), "IDS") != 0) {
-        addReplyError(c, "syntax error");
+        addReplyErrorObject(c, shared.syntaxerr);
         return;
     }
     argi++; /* past IDS */
@@ -3612,11 +3609,8 @@ void xackdelCommand(client *c) {
 
     /* Validate numids matches remaining arg count. */
     long long actual_ids = c->argc - argi;
-    if (id_count > actual_ids) {
-        addReplyError(c, "numids parameter must match the number of IDs provided");
-        return;
-    } else if (id_count < actual_ids) {
-        addReplyError(c, "syntax error");
+    if (id_count != actual_ids) {
+        addReplyErrorObject(c, shared.syntaxerr);
         return;
     }
 

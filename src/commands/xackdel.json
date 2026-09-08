@@ -3,7 +3,7 @@
         "summary": "Acknowledge and (if possible) delete stream message(s).",
         "complexity": "O(1)",
         "group": "stream",
-        "since": "10.0.0",
+        "since": "9.2.0",
         "arity": -6,
         "function": "xackdelCommand",
         "command_flags": [

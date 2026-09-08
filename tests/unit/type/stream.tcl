@@ -971,7 +971,7 @@ start_server {
         r DEL testxadstream
         r XADD testxadstream 1-0 f v
         r XGROUP CREATE testxadstream testxadgrp1 0
-        assert_error {*numids*parameter must match*} {r XACKDEL testxadstream testxadgrp1 IDS 3 1-0 2-0}
+        assert_error {*syntax error*} {r XACKDEL testxadstream testxadgrp1 IDS 3 1-0 2-0}
         assert_error {*syntax error*} {r XACKDEL testxadstream testxadgrp1 IDS 1 1-0 2-0}
     }
 

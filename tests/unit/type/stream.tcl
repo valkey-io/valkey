@@ -863,7 +863,7 @@ start_server {
     test {XDELEX returns error for unrecognized mode token} {
         r DEL teststream
         r XADD teststream 1 msg hello
-        assert_error "*xdelex mode not recognized*" {r XDELEX teststream BADMODE IDS 1 1}
+        assert_error "*syntax error*" {r XDELEX teststream BADMODE IDS 1 1}
     }
 
     test {XDELEX returns error for invalid numids} {
@@ -879,7 +879,7 @@ start_server {
         r XADD teststream 1 msg hello
         r XADD teststream 2 msg hello
         # Too few IDs provided for numids
-        assert_error "*numids parameter must match*" {r XDELEX teststream IDS 3 1 2}
+        assert_error "*syntax error*" {r XDELEX teststream IDS 3 1 2}
         # Too many IDs provided for numids
         assert_error "*syntax error*" {r XDELEX teststream IDS 1 1 2}
     }

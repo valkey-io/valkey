@@ -607,6 +607,9 @@ void raxdelprefixCommand(client *c) {
         return;
     }
 
+    /* Deletion invalidates the iterator, so collect a bounded number of path
+     * copies before removing them. This bounds temporary path copies only; the
+     * complete matching subtree is still deleted synchronously by this command. */
     long long deleted = 0;
     while (1) {
         sds paths[RADIX_DELETE_CHUNK_SIZE];

@@ -1,13 +1,13 @@
 {
     "RAXDEL": {
         "summary": "Deletes fields or the complete payload at a radix-tree path.",
-        "complexity": "O(L + F*U).",
+        "complexity": "O(L + F*U) when deleting specified fields, where L is the path length, F is the number of requested fields, and U is the payload field lookup cost. O(L + S) when deleting the complete payload, where S is the number of stored fields in the payload.",
         "group": "radix",
         "since": "9.2.0",
         "arity": -3,
         "function": "raxdelCommand",
-        "command_flags": ["WRITE", "FAST"],
-        "acl_categories": ["RADIX", "WRITE", "FAST"],
+        "command_flags": ["WRITE"],
+        "acl_categories": ["RADIX", "WRITE", "SLOW"],
         "key_specs": [{"flags": ["RW", "ACCESS", "DELETE"], "begin_search": {"index": {"pos": 1}}, "find_keys": {"range": {"lastkey": 0, "step": 1, "limit": 0}}}],
         "reply_schema": {"type": "integer"},
         "arguments": [

@@ -3120,6 +3120,51 @@ start_server {tags {"zset"}} {
     }
 }
 
+start_server {config "minimal.conf" tags {"zset" "external:skip"} overrides {io-threads 4 io-threads-always-active yes zset-max-listpack-entries 0}} {
+    test "Zset nested prefetch - ZSCORE correctness with pipelined commands" {
+        for {set i 0} {$i < 200} {incr i} {
+            r zadd myzset $i "member:$i"
+        }
+        assert_encoding btree myzset
+
+        set rd [valkey_deferring_client]
+        for {set i 0} {$i < 50} {incr i} {
+            $rd zscore myzset "member:$i"
+        }
+        $rd flush
+        for {set i 0} {$i < 50} {incr i} {
+            assert_equal $i [$rd read]
+        }
+        $rd close
+    }
+
+    test "Zset nested prefetch - short members are looked up safely" {
+        # The zset hashtable stores packed [score][element] items, so a plain sds
+        # lookup key must be marked before the hash/compare callbacks read it.
+        # An unmarked key takes the packed path (sdslen - 8), which underflows for
+        # members shorter than the 8 byte score prefix.
+        foreach m {a bb ccc dddd eeeee ffffff ggggggg} {
+            r zadd shortzset [string length $m] $m
+        }
+        for {set i 0} {$i < 200} {incr i} { r zadd shortzset $i "member:$i" }
+        assert_encoding btree shortzset
+
+        set clients {}
+        for {set c 0} {$c < 8} {incr c} {
+            set rd [valkey_deferring_client]
+            lappend clients $rd
+            foreach m {a bb ccc dddd eeeee ffffff ggggggg} { $rd zscore shortzset $m }
+            $rd flush
+        }
+        foreach rd $clients {
+            foreach m {a bb ccc dddd eeeee ffffff ggggggg} {
+                assert_equal [string length $m] [$rd read]
+            }
+            $rd close
+        }
+    }
+}
+
 start_server [list overrides [list save ""] tags {"zset needs:debug external:skip"}] {
     test {ZSET resize test - rehash more empty buckets in shrinking case} {
         if {[s arch_bits] != 64} {

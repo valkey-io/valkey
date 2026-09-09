@@ -3696,7 +3696,7 @@ static int streamParseModeAndIDCountOrReply(client *c, int argi, streamPELMode *
 /* XDELEX <key> [KEEPREF | DELREF | ACKED] IDS num [<ID1> <ID2> ... <IDN>]
  */
 void xdelexCommand(client *c) {
-    robj *o = lookupKeyRead(c->db, c->argv[1]);
+    robj *o = lookupKeyWrite(c->db, c->argv[1]);
     if (o) {
         if (checkType(c, o, OBJ_STREAM)) return; /* Type error. */
     }
@@ -3762,16 +3762,10 @@ void xdelexCommand(client *c) {
                 unsigned char buf[sizeof(streamID)];
                 streamEncodeID(buf, id);
 
-                /* Group hasn't claimed this message yet; it can't have a PEL
-                 * entry for it either, so there's nothing to remove. */
-                if (streamCompareID(id, &cg->last_id) > 0) {
-                    if (mode == PELMODE_ACKED) {
-                        /* ACKED: can't delete until this group has seen it. */
-                        resps[j] = streamEntryExists(s, id) ? 2 : -1;
-                    }
-                    continue;
-                }
-
+                /* Check the PEL before consulting cg->last_id: XGROUP SETID
+                 * can move last_id backward below IDs that are still pending
+                 * (or were pending and later acked), so last_id alone cannot
+                 * prove this group never claimed the message. */
                 void *result;
                 if (raxFind(cg->pel, buf, sizeof(buf), &result)) {
                     if (mode == PELMODE_DELREF) {
@@ -3786,10 +3780,16 @@ void xdelexCommand(client *c) {
                         /* ACKED: still pending in this group, cannot delete. */
                         resps[j] = 2;
                     }
-                } else if (mode == PELMODE_ACKED && first_loop && !streamEntryExists(s, id)) {
-                    /* Message doesn't exist in the stream; check once and skip
-                     * iterating the remaining groups. */
-                    resps[j] = -1;
+                } else if (mode == PELMODE_ACKED) {
+                    if (first_loop && !streamEntryExists(s, id)) {
+                        /* Message doesn't exist in the stream; check once and
+                         * skip iterating the remaining groups. */
+                        resps[j] = -1;
+                    } else if (streamCompareID(id, &cg->last_id) > 0) {
+                        /* Message may still be delivered to this group, so
+                         * block deletion (same as XACKDEL). */
+                        resps[j] = 2;
+                    }
                 }
             }
             first_loop = 0;
@@ -3841,7 +3841,7 @@ cleanup:
  * not deleted. */
 void xackdelCommand(client *c) {
     streamCG *group = NULL;
-    robj *o = lookupKeyRead(c->db, c->argv[1]);
+    robj *o = lookupKeyWrite(c->db, c->argv[1]);
     if (o) {
         if (checkType(c, o, OBJ_STREAM)) return; /* Type error. */
         group = streamLookupCG(objectGetVal(o), objectGetVal(c->argv[2]));

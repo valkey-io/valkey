@@ -74,7 +74,6 @@
             },
             {
                 "name": "id",
-                "token": "IDS",
                 "type": "string",
                 "multiple": true
             }

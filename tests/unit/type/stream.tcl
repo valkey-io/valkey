@@ -1151,6 +1151,84 @@ start_server {
         assert_equal 2 [ r XLEN teststream ]
     }
 
+    test {XDELEX ACKED blocks deletion for entries pending below a rewound last_id} {
+        r DEL testxadstream
+        r XADD testxadstream 1-0 f v1
+        r XADD testxadstream 5-0 f v5
+        r XGROUP CREATE testxadstream testxadgrp1 0
+
+        # Claim both entries: last_id advances to 5-0 and both land in the PEL.
+        r XREADGROUP GROUP testxadgrp1 testxadcnsmr COUNT 10 STREAMS testxadstream >
+
+        # Move last_id back before 5-0, which stays in the PEL (id > last_id).
+        r XGROUP SETID testxadstream testxadgrp1 1-0
+
+        # 5-0 is still pending in the group, so ACKED must not delete it.
+        set ids [r XDELEX testxadstream ACKED IDS 1 5-0]
+        assert_equal 2 [lindex $ids 0]
+        assert_equal 2 [r XLEN testxadstream]
+        set pend [r XPENDING testxadstream testxadgrp1]
+        assert_equal 2 [lindex $pend 0]
+
+        # After XACK drains the PEL entry, deletion stays blocked because the
+        # rewound delivery cursor means the group may still be served 5-0 by
+        # XREADGROUP "" (same fallback as XACKDEL ACKED).
+        r XACK testxadstream testxadgrp1 5-0
+        set ids [r XDELEX testxadstream ACKED IDS 1 5-0]
+        assert_equal 2 [lindex $ids 0]
+        assert_equal 2 [r XLEN testxadstream]
+
+        # Catching the cursor back up unblocks deletion.
+        r XGROUP SETID testxadstream testxadgrp1 5-0
+        set ids [r XDELEX testxadstream ACKED IDS 1 5-0]
+        assert_equal 1 [lindex $ids 0]
+        assert_equal 1 [r XLEN testxadstream]
+    }
+
+    test {XDELEX ACKED reports pending ref, not -1, when entry is deleted below a rewound last_id} {
+        r DEL testxadstream
+        r XADD testxadstream 1-0 f v1
+        r XADD testxadstream 5-0 f v5
+        r XGROUP CREATE testxadstream testxadgrp1 0
+
+        # Claim both entries, then rewind last_id below the still-pending 5-0.
+        r XREADGROUP GROUP testxadgrp1 testxadcnsmr COUNT 10 STREAMS testxadstream >
+        r XGROUP SETID testxadstream testxadgrp1 1-0
+
+        # Remove the stream entry, leaving 5-0 dangling in the PEL.
+        r XDEL testxadstream 5-0
+
+        # The dangling pending ref must block ACKED (2), like when the group
+        # cursor is ahead of the ID, instead of reporting -1 (not found).
+        set ids [r XDELEX testxadstream ACKED IDS 1 5-0]
+        assert_equal 2 [lindex $ids 0]
+        assert_equal 1 [r XLEN testxadstream]
+        set pend [r XPENDING testxadstream testxadgrp1]
+        assert_equal 2 [lindex $pend 0]
+    }
+
+    test {XDELEX DELREF clears PEL ref even when last_id was rewound below it} {
+        r DEL testxadstream
+        r XADD testxadstream 1-0 f v1
+        r XADD testxadstream 5-0 f v5
+        r XGROUP CREATE testxadstream testxadgrp1 0
+
+        # Claim both entries, then rewind last_id below the still-pending 5-0.
+        r XREADGROUP GROUP testxadgrp1 testxadcnsmr COUNT 10 STREAMS testxadstream >
+        r XGROUP SETID testxadstream testxadgrp1 1-0
+
+        # DELREF must remove the pending ref even though 5-0 > last_id.
+        set ids [r XDELEX testxadstream DELREF IDS 1 5-0]
+        assert_equal 1 [lindex $ids 0]
+        assert_equal 1 [r XLEN testxadstream]
+
+        # Only 1-0 remains pending; the 5-0 ref must be gone.
+        set pend [r XPENDING testxadstream testxadgrp1]
+        assert_equal 1 [lindex $pend 0]
+        assert_equal 1-0 [lindex $pend 1]
+        assert_equal 1-0 [lindex $pend 2]
+    }
+
     test {XDELEX w/ KEEPREF deletes all but keeps refs in consumer group PELs} {
         r DEL teststream
         r XADD teststream 1 msg helllo

@@ -3420,6 +3420,112 @@ TEST_F(FbtreeTest, DeleteRangeByValueNoMatch) {
     expectValid();
 }
 
+/* Regression test for a false-empty short-circuit in deleteRangeCore.
+ *
+ * The tree spans multiple leaves (NODE_SIZE=61 forces this with 300+
+ * elements). After trimming the first leaf down to a single low member, a
+ * later range delete has BOTH boundaries land in leaves with no locally
+ * matching elements ("leaf-untouched") while the split node still has one
+ * or more middle children strictly between the boundary subtrees, wholly
+ * inside the deleted range and non-empty. The buggy guard only checked
+ * leaf-local untouched-ness and returned 0 (deleted nothing) even though
+ * those middle leaves' elements were still in range. */
+TEST_F(FbtreeTest, DeleteRangeByValueSkipsNoMiddleLeafFalseEmpty) {
+    /* Seed enough elements to force several leaves/levels: an empty-string
+     * low sentinel plus 300 zero-padded members "m0001".."m0300". */
+    insert("");
+    char buf[16];
+    for (int i = 1; i <= 300; i++) {
+        snprintf(buf, sizeof(buf), "m%04d", i);
+        insert(buf);
+    }
+    EXPECT_EQ(fbtreeLength(fbt), 301u);
+
+    /* Trim the first leaf down to just the empty-string member: removes
+     * [m0001, m0060] inclusive, leaving the low leaf with a single element
+     * and no members in the immediately following range. */
+    sds trim_min = createString("m0001");
+    sds trim_max = createString("m0060");
+    EXPECT_EQ(fbtreeDeleteRangeByValue(fbt, trim_min, trim_max, 0, 0, NULL, NULL), 60u);
+    sdsfree(trim_min);
+    sdsfree(trim_max);
+    expectValid();
+    EXPECT_EQ(fbtreeLength(fbt), 241u);
+
+    /* Exclusive lower bound just past the trimmed leaf's remaining element,
+     * and an upper bound landing in the gap just after "m0121" (no stored
+     * element equals "m0121x"). Both boundary leaves are leaf-locally
+     * untouched, but middle leaves fully inside the range still exist. */
+    sds range_min = createString("");
+    sds range_max = createString("m0121x");
+    unsigned long expected = fbtreeCountRangeByValue(fbt, range_min, range_max, 1, 0);
+    ASSERT_GT(expected, 0u) << "range must be non-empty for this regression to be meaningful";
+
+    unsigned long removed = fbtreeDeleteRangeByValue(fbt, range_min, range_max, 1, 0, NULL, NULL);
+    sdsfree(range_min);
+    sdsfree(range_max);
+    expectValid();
+
+    EXPECT_EQ(removed, expected) << "deleteRangeCore must not short-circuit to 0 when non-empty middle leaves lie between untouched boundary leaves";
+}
+
+/* Regression test for a DEEPER false-empty short-circuit in deleteRangeCore
+ * than the one covered above. The prior fix's guard (no_middle_child) only
+ * checks adjacency of the SPLIT NODE's own boundary children (shared_left_idx
+ * / shared_right_idx at split_depth). It says nothing about levels below the
+ * split: when the split happens at the root and the root has exactly two
+ * children (a common shape once a two-level tree overflows into a third
+ * level), those two children are trivially "adjacent" (li=0, ri=1) even
+ * though each child is itself a whole inner-node subtree with many leaves.
+ * If the min boundary's descent path picks a non-rightmost child at some
+ * level under root->children[li], the right-siblings at that level are
+ * middle subtrees fully inside the deleted range that the split-node-only
+ * guard cannot see (symmetric on the right side under root->children[ri]).
+ *
+ * 5000 zero-padded members force height 3: NODE_SIZE=61 fans out to at most
+ * 61 leaves per level-2 inner node (61*61=3721 items per full level-2
+ * subtree), so 5000 items split across exactly two such level-2 subtrees
+ * under the root -- the shape this test needs.
+ *
+ * The chosen bounds land both boundaries in an untouched state at the LEAF
+ * level (exclusive bound resolves past/before the boundary leaf's members),
+ * which is exactly what makes the split-node guard's no_middle_child==true
+ * wrongly conclude the whole range is empty -- while leaves strictly between
+ * the min's leaf and the max's leaf, one level below the root, still hold
+ * thousands of in-range elements. */
+TEST_F(FbtreeTest, DeleteRangeByValueSkipsDeeperMiddleLeafFalseEmpty) {
+    /* 5000 zero-padded members "m00001".."m05000", forcing height 3. */
+    char buf[16];
+    for (int i = 1; i <= 5000; i++) {
+        snprintf(buf, sizeof(buf), "m%05d", i);
+        insert(buf);
+    }
+    EXPECT_EQ(fbtreeLength(fbt), 5000u);
+    EXPECT_EQ(fbtreeHeight(fbt), 3u);
+
+    /* Exclusive bounds discovered by direct probing of this exact 5000-item
+     * tree shape: min excludes "m00061" (the last member of the leftmost
+     * leaf, landing start_idx just past that leaf -- leaf-untouched), max
+     * excludes "m02868" (the first member of some leaf under the root's
+     * second child, landing end_idx just before that leaf -- also
+     * leaf-untouched). Both boundary leaves are untouched, root's two
+     * children are (trivially) adjacent, yet 2806 elements strictly between
+     * them are in range. */
+    sds range_min = createString("m00061");
+    sds range_max = createString("m02868");
+    unsigned long expected = fbtreeCountRangeByValue(fbt, range_min, range_max, 1, 1);
+    ASSERT_EQ(expected, 2806u) << "expected count must match the probed shape for this regression to be meaningful";
+
+    unsigned long removed = fbtreeDeleteRangeByValue(fbt, range_min, range_max, 1, 1, NULL, NULL);
+    sdsfree(range_min);
+    sdsfree(range_max);
+    expectValid();
+
+    EXPECT_EQ(removed, expected) << "deleteRangeCore must not short-circuit to 0 when non-empty middle "
+                                    "leaves lie one or more levels below the split node between "
+                                    "leaf-untouched boundaries";
+}
+
 TEST_F(FbtreeTest, DeleteRangeByValueExactMatch) {
     insert("aaa");
     insert("bbb");

@@ -1810,14 +1810,25 @@ static unsigned long deleteRangeSameLeaf(fbtreeIndex *fbt,
  * If callback is non-NULL, it is invoked for each deleted item before sdsfree.
  * Returns the number of elements deleted. */
 static unsigned long deleteRangeCore(fbtreeIndex *fbt, BoundaryPaths *bp, fbtreeItemCallback callback, void *callback_ctx) {
-    /* Empty range check: score/value path builders can produce boundary
-     * indices that fall outside the leaf (no matching elements in that leaf).
-     * Rank paths never hit this since ranks are pre-validated. */
-    if (bp->start_idx >= bp->start_leaf->header.num_items && bp->end_idx < 0) return 0;
+    /* No whole-range empty short-circuit is needed here for the
+     * leaf-untouched-on-both-sides case: unlike deleteRangeSameLeaf (where
+     * an out-of-range boundary index unambiguously means nothing to delete
+     * within that single leaf), a diverged-path range can still be
+     * non-empty even when both boundary leaves are untouched, because
+     * whole subtrees strictly between the two descent paths -- at the split
+     * node's own children, or at any level below either boundary's descent
+     * path -- may lie wholly inside [min_key, max_key]. Checking only the
+     * split node's immediate children (as an adjacency test) misses middle
+     * subtrees that appear one or more levels further down, so no local
+     * check here can be both cheap and correct. The splice and fixup below
+     * handle the truly-empty case naturally: when there is really nothing
+     * in range, every per-level loop below finds no boundary-untouched
+     * work and no middle children to free, and the function falls through
+     * having deleted (and returned) zero elements. */
+    int split_depth = bp->shared_depth - 1;
     if (bp->end_idx < 0 && bp->start_leaf == bp->end_leaf) return 0;
 
     /* --- Phase 1: Boundaries diverged. Process the split. --- */
-    int split_depth = bp->shared_depth - 1;
     innerNode *split_node = (innerNode *)bp->shared_path[split_depth];
     int li = bp->shared_left_idx[split_depth];
     int ri = bp->shared_right_idx[split_depth];

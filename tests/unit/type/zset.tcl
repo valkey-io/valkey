@@ -771,6 +771,22 @@ start_server {tags {"zset"}} {
             assert_equal {} [r zrevrangebylex zset (hill (omega]
         }
 
+        test "ZRANGEBYSCORE/ZRANGEBYLEX with a negative LIMIT offset - $encoding" {
+            create_default_zset
+            assert_equal {} [r zrangebyscore zset -inf +inf LIMIT -1 10]
+            assert_equal {} [r zrevrangebyscore zset +inf -inf LIMIT -1 10]
+            assert_equal {} [r zrange zset -inf +inf BYSCORE LIMIT -2 10]
+            assert_equal {} [r zrange zset +inf -inf BYSCORE REV LIMIT -2 10]
+            create_default_lex_zset
+            assert_equal {} [r zrangebylex zset - + LIMIT -1 10]
+            assert_equal {} [r zrevrangebylex zset + - LIMIT -1 10]
+            assert_equal {} [r zrange zset - + BYLEX LIMIT -2 10]
+            assert_equal {} [r zrange zset + - BYLEX REV LIMIT -2 10]
+            assert_equal {} [r zrangebylex zset - + LIMIT 100 10]
+            assert_equal 0 [r zrangestore dst zset - + BYLEX LIMIT -1 10]
+            assert_equal 0 [r exists dst]
+        }
+
         test "ZLEXCOUNT advanced - $encoding" {
             create_default_lex_zset
 

@@ -12261,7 +12261,7 @@ static void moduleScanKeyRawBorrowedHashtableCallback(void *privdata, void *entr
  * ValkeyModuleString with ValkeyModule_CreateString).
  *
  * The usage pattern, return value, errno semantics and iteration-safety notes
- * are identical to ValkeyModule_ScanKey; see that function above. */
+ * are identical to ValkeyModule_ScanKey. */
 int VM_ScanKeyRawBorrowed(ValkeyModuleKey *key, ValkeyModuleScanCursor *cursor, ValkeyModuleScanKeyRawBorrowedCB fn, void *privdata) {
     if (key == NULL || key->value == NULL) {
         errno = EINVAL;

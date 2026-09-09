@@ -3604,52 +3604,6 @@ void xautoclaimCommand(client *c) {
     preventCommandPropagation(c);
 }
 
-/* Maintain stream state by tracking the first entry & propagating keyspace
- * events for deleted entries and/or PEL modifications. Used when deleting or
- * acknowledging messages, as in XDEL, XDELEX, XACKDEL.
- */
-void streamTrackFirstEntryAndPropagate(client *c, stream *s, int deleted, bool pel_modified, bool first_entry) {
-    /* Update the stream's first ID. */
-    if (deleted) {
-        if (s->length == 0) {
-            s->first_id.ms = 0;
-            s->first_id.seq = 0;
-        } else if (first_entry) {
-            streamGetEdgeID(s, 1, 1, &s->first_id);
-        }
-    }
-
-    /* Either deleting entries or a PEL-only change mutate consumer-group state
-     * on this key, so we need to signal in either case to WATCH-ers & keyspace
-     * subscribers (see issue #3429). */
-    if (deleted || pel_modified) {
-        signalModifiedKey(c, c->db, c->argv[1]);
-        notifyKeyspaceEvent(NOTIFY_STREAM, "xdel", c->argv[1], c->db->id);
-        server.dirty += deleted;
-    }
-}
-
-/* Delete a stream entry & do bookkeeping for first entry, last deleted entry,
- * deleted count. Shared in XDEL & XDELEX. Returns 1 if entry was deleted,
- * otherwise 0. */
-int streamDeleteItemAndTrackFirstLast(stream *s, streamID *id, bool *first_entry, int *deleted) {
-    if (streamDeleteItem(s, id)) {
-        /* We want to know if the first entry in the stream was deleted
-         * so we can later set the new one. */
-        if (streamCompareID(id, &s->first_id) == 0) {
-            *first_entry = 1;
-        }
-        /* Update the stream's maximal tombstone if needed. */
-        if (streamCompareID(id, &s->max_deleted_entry_id) > 0) {
-            s->max_deleted_entry_id = *id;
-        }
-        (*deleted)++;
-        return 1;
-    };
-
-    return 0;
-}
-
 /* PEL handling modes shared by XDELEX & XACKDEL. */
 typedef enum {
     PELMODE_KEEPREF = 0,
@@ -3770,11 +3724,33 @@ void xdelCommand(client *c) {
     bool first_entry = 0;
     for (long long j = 0; j < id_count; j++) {
         streamID *id = &ids[j];
-        streamDeleteItemAndTrackFirstLast(s, id, &first_entry, &deleted);
+        if (streamDeleteItem(s, id)) {
+            deleted++;
+            /* We want to know if the first entry in the stream was deleted
+             * so we can later set the new one. */
+            if (streamCompareID(id, &s->first_id) == 0) first_entry = 1;
+            /* Update the stream's maximal tombstone if needed. */
+            if (streamCompareID(id, &s->max_deleted_entry_id) > 0) s->max_deleted_entry_id = *id;
+        }
     }
 
-    /* Stream bookkeeping. */
-    streamTrackFirstEntryAndPropagate(c, s, deleted, false, first_entry);
+    /* Update the stream's first ID. */
+    if (deleted) {
+        if (s->length == 0) {
+            s->first_id.ms = 0;
+            s->first_id.seq = 0;
+        } else if (first_entry) {
+            streamGetEdgeID(s, 1, 1, &s->first_id);
+        }
+    }
+
+    /* Deleting entries mutates consumer-group state on this key, so we need
+     * to signal to WATCH-ers & keyspace subscribers (see issue #3429). */
+    if (deleted) {
+        signalModifiedKey(c, c->db, c->argv[1]);
+        notifyKeyspaceEvent(NOTIFY_STREAM, "xdel", c->argv[1], c->db->id);
+        server.dirty += deleted;
+    }
 
     addReplyLongLong(c, deleted);
 cleanup:
@@ -3944,19 +3920,41 @@ void xdelexCommand(client *c) {
     for (int j = 0; j < id_count; j++) {
         if (resps[j] == 1) {
             streamID *id = &ids[j];
-            if (!streamDeleteItemAndTrackFirstLast(s, id, &first_entry, &deleted)) {
+            if (streamDeleteItem(s, id)) {
+                deleted++;
+                del_ids[del_count++] = *id;
+                /* We want to know if the first entry in the stream was deleted
+                 * so we can later set the new one. */
+                if (streamCompareID(id, &s->first_id) == 0) first_entry = 1;
+                /* Update the stream's maximal tombstone if needed. */
+                if (streamCompareID(id, &s->max_deleted_entry_id) > 0) s->max_deleted_entry_id = *id;
+            } else {
                 /* If the message does not exist, use -1 response code.
                  * Necessary here b/c in KEEPREF and DELREF modes, we don't
                  * check entry existence above. */
                 resps[j] = -1;
-            } else {
-                del_ids[del_count++] = *id;
             }
         }
     }
 
-    /* Stream bookkeeping. */
-    streamTrackFirstEntryAndPropagate(c, s, deleted, pel_modified, first_entry);
+    /* Stream bookkeeping: update the stream's first ID, and signal WATCHed
+     * keys & emit the keyspace event before replying. Either deleting entries
+     * or a PEL-only change mutates consumer-group state on this key, so we
+     * need to signal in either case to WATCH-ers & keyspace subscribers (see
+     * issue #3429). */
+    if (deleted) {
+        if (s->length == 0) {
+            s->first_id.ms = 0;
+            s->first_id.seq = 0;
+        } else if (first_entry) {
+            streamGetEdgeID(s, 1, 1, &s->first_id);
+        }
+    }
+    if (deleted || pel_modified) {
+        signalModifiedKey(c, c->db, c->argv[1]);
+        notifyKeyspaceEvent(NOTIFY_STREAM, "xdel", c->argv[1], c->db->id);
+        server.dirty += deleted;
+    }
 
     /* Propagate the effects as XACK/XDEL commands instead of XDELEX itself to
      * ensure compatibility with pre-9.2 replica. */
@@ -4223,8 +4221,24 @@ void xackdelCommand(client *c) {
     }
 
 sync:
-    /* Stream bookkeeping. */
-    streamTrackFirstEntryAndPropagate(c, s, deleted, acked, first_entry);
+    /* Stream bookkeeping: update the stream's first ID, and signal WATCHed
+     * keys & emit the keyspace event before replying. Either deleting entries
+     * or removing PEL references mutates consumer-group state on this key, so
+     * we need to signal in either case to WATCH-ers & keyspace subscribers
+     * (see issue #3429). */
+    if (deleted) {
+        if (s->length == 0) {
+            s->first_id.ms = 0;
+            s->first_id.seq = 0;
+        } else if (first_entry) {
+            streamGetEdgeID(s, 1, 1, &s->first_id);
+        }
+    }
+    if (deleted || acked) {
+        signalModifiedKey(c, c->db, c->argv[1]);
+        notifyKeyspaceEvent(NOTIFY_STREAM, "xdel", c->argv[1], c->db->id);
+        server.dirty += deleted;
+    }
 
     /* PEL entries can be removed without any stream deletion; keep the dirty
      * increment so save-point accounting reflects the mutation. */
@@ -4751,4 +4765,3 @@ int streamValidateListpackIntegrity(unsigned char *lp, size_t size, uint64_t *va
 
     return 1;
 }
-

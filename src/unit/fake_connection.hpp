@@ -29,8 +29,10 @@ extern "C" {
 typedef struct fakeConnection {
     connection conn;
 
-    /* Write sink. Writes are clamped to buf_size; set error to fail them. */
+    /* Write sink. Writes are clamped to buf_size; set error to fail them with
+     * EAGAIN, or fail_write for a hard error that also moves the state. */
     int error;
+    int fail_write;
     char *buffer;
     size_t buf_size;
     size_t written;
@@ -57,6 +59,10 @@ inline int fakeConnGetType(void) {
 
 inline int fakeConnWrite(connection *conn, const void *data, size_t size) {
     fakeConnection *fc = (fakeConnection *)conn;
+    if (fc->fail_write) {
+        conn->state = CONN_STATE_ERROR;
+        return -1;
+    }
     if (fc->error) return -1;
 
     size_t to_write = size;

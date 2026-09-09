@@ -483,6 +483,36 @@ TEST_F(ClusterIOOffloadTest, WriteJobStopsAtWriteBudget) {
     EXPECT_EQ(fc->written, (size_t)msg_len * msgs);
 }
 
+/* A hard write error must tear the link down. A -1 with the connection still
+ * CONNECTED is EAGAIN instead, which the completion has to tell apart. */
+TEST_F(ClusterIOOffloadTest, WriteOffloadHardErrorClosesLink) {
+    clusterLink *link = makeLink();
+    fakeConnection *fc = (fakeConnection *)link->conn;
+    enqueueFakeMsg(link);
+    fc->fail_write = 1;
+
+    ASSERT_EQ(trySendClusterWriteToIOThreads(link), C_OK);
+    runInlineWorkerAndDrain(clusterWriteJob, link);
+    releaseLinkOwnership(link);
+
+    EXPECT_GE(fc->close_calls, 1);
+}
+
+/* EAGAIN is not an error: the message stays queued and the link survives. */
+TEST_F(ClusterIOOffloadTest, WriteOffloadEagainKeepsLink) {
+    clusterLink *link = makeLink();
+    fakeConnection *fc = (fakeConnection *)link->conn;
+    enqueueFakeMsg(link);
+    fc->error = 1; /* connWrite returns -1 with the state left CONNECTED. */
+
+    ASSERT_EQ(trySendClusterWriteToIOThreads(link), C_OK);
+    runInlineWorkerAndDrain(clusterWriteJob, link);
+
+    EXPECT_EQ(fc->close_calls, 0);
+    EXPECT_EQ(listLength(link->send_msg_queue), 1UL);
+    EXPECT_NE(link->conn->write_handler, (ConnectionCallbackFunc)NULL);
+}
+
 TEST_F(ClusterIOOffloadTest, WriteCompletionPopsOnlyVisibleNodes) {
     clusterLink *link = makeLink();
     enqueueFakeMsg(link);

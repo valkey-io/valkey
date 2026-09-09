@@ -459,10 +459,31 @@ void listTypeDelRange(robj *subject, long start, long count) {
  * List Commands
  *----------------------------------------------------------------------------*/
 
+/* Apply the default TTL selected by the node that originated the write.
+ * An expire_at value of -1 means the policy does not apply, so normal command
+ * propagation remains unchanged. Otherwise, propagate the successful list
+ * command followed by PEXPIREAT so replicas and AOF replay receive the same
+ * absolute deadline instead of calculating their node-local default. */
+static void applyListDefaultTTLAndPropagate(client *c, robj *key, mstime_t expire_at) {
+    if (expire_at == -1) return;
+
+    setExpire(c, c->db, key, expire_at);
+    notifyKeyspaceEvent(NOTIFY_GENERIC, "expire", key, c->db->id);
+
+    alsoPropagate(c->db->id, c->argv, c->argc, PROPAGATE_AOF | PROPAGATE_REPL, c->slot);
+    robj *expire_obj = createStringObjectFromLongLong(expire_at);
+    robj *argv[3] = {shared.pexpireat, key, expire_obj};
+    alsoPropagate(c->db->id, argv, 3, PROPAGATE_AOF | PROPAGATE_REPL, c->slot);
+    decrRefCount(expire_obj);
+    /* The original command was queued above and must not be propagated twice. */
+    preventCommandPropagation(c);
+}
+
 /* Implements LPUSH/RPUSH/LPUSHX/RPUSHX.
  * 'xx': push if key exists. */
 void pushGenericCommand(client *c, int where, int xx) {
     int j;
+    mstime_t expire_at = -1;
 
     robj *lobj = lookupKeyWrite(c->db, c->argv[1]);
     if (checkType(c, lobj, OBJ_LIST)) return;
@@ -474,6 +495,8 @@ void pushGenericCommand(client *c, int where, int xx) {
 
         lobj = createListListpackObject();
         dbAdd(c->db, c->argv[1], &lobj);
+        /* Existing lists preserve their TTL; only creation selects a default. */
+        expire_at = getDefaultTTLMSExpireTime(c);
     }
 
     listTypeTryConversionAppend(lobj, c->argv, 2, c->argc - 1, NULL, NULL);
@@ -487,6 +510,7 @@ void pushGenericCommand(client *c, int where, int xx) {
     notifyKeyspaceEvent(NOTIFY_LIST, event, c->argv[1], c->db->id);
 
     addReplyLongLong(c, listTypeLength(lobj));
+    applyListDefaultTTLAndPropagate(c, c->argv[1], expire_at);
 }
 
 /* LPUSH <key> <element> [<element> ...] */
@@ -1111,6 +1135,8 @@ void lmoveGenericCommand(client *c, int wherefrom, int whereto) {
 
     robj *dobj = lookupKeyWrite(c->db, c->argv[2]);
     robj *touchedkey = c->argv[1];
+    /* Moving into an existing destination must not refresh its TTL. */
+    mstime_t expire_at = dobj == NULL ? getDefaultTTLMSExpireTime(c) : -1;
 
     if (checkType(c, dobj, OBJ_LIST)) return;
     value = listTypePop(sobj, wherefrom);
@@ -1126,6 +1152,8 @@ void lmoveGenericCommand(client *c, int wherefrom, int whereto) {
     } else if (c->cmd->proc == brpoplpushCommand) {
         rewriteClientCommandVector(c, 3, shared.rpoplpush, c->argv[1], c->argv[2]);
     }
+
+    applyListDefaultTTLAndPropagate(c, c->argv[2], expire_at);
 }
 
 /* LMOVE <source> <destination> (LEFT|RIGHT) (LEFT|RIGHT) */

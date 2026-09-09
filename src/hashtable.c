@@ -730,6 +730,27 @@ static inline void rehashStepOnReadIfNeeded(hashtable *ht) {
     rehashStep(ht);
 }
 
+static void rehashAfterBulkDelete(hashtable *ht, size_t max_steps) {
+    if (!hashtableIsRehashing(ht) || ht->pause_rehash) return;
+    if (resize_policy != HASHTABLE_RESIZE_ALLOW) return;
+    if (ht->bucket_exp[1] >= ht->bucket_exp[0]) return;
+
+    size_t max_empty_skips = max_steps * 128;
+    while (hashtableIsRehashing(ht)) {
+        while (hashtableIsRehashing(ht) && max_empty_skips > 0) {
+            size_t idx = ht->rehash_idx;
+            bucket *b = ht->tables[0] + idx;
+            if (b->presence != 0 || b->chained) break;
+            rehashStepFinalize(ht);
+            max_empty_skips--;
+        }
+        if (!hashtableIsRehashing(ht)) return;
+        if (max_steps == 0) return;
+        rehashStep(ht);
+        max_steps--;
+    }
+}
+
 /* When inserting or deleting, we first do a find (read) and rehash one step if
  * resize policy is set to ALLOW, so here we only do it if resize policy is
  * AVOID. The reason for doing it on insert and delete is to ensure that we
@@ -1749,75 +1770,82 @@ bool hashtablePop(hashtable *ht, const void *key, void **popped) {
     return 0;
 }
 
-static void hashtableBatchDeleteEntriesBatch(hashtable *ht, void **entries, size_t count) {
-    assert(count <= HASHTABLE_POP_ENTRIES_STACK_MAX);
-    if (count == 0) return;
-
-    size_t bucket_index[HASHTABLE_POP_ENTRIES_STACK_MAX];
-    int table_index[HASHTABLE_POP_ENTRIES_STACK_MAX];
-    size_t affected_buckets = 0;
-
-    hashtablePauseRehashing(ht);
-    hashtablePauseAutoShrink(ht);
-
-    for (size_t i = 0; i < count; i++) {
-        void *entry = entries[i];
-        const void *key = entryGetKey(ht, entry);
-        uint64_t hash = hashKey(ht, key);
-        uint8_t h2 = highBits(hash);
-        bool deleted = false;
-
-        for (int table = 0; table <= 1 && !deleted; table++) {
-            if (ht->used[table] == 0) continue;
-            size_t mask = expToMask(ht->bucket_exp[table]);
-            size_t idx = hash & mask;
-            if (table == 0 && ht->rehash_idx >= 0 && idx < (size_t)ht->rehash_idx) {
-                continue;
-            }
-            bucket *top = &ht->tables[table][idx];
-            bucket *b = top;
-            do {
-                for (int pos = 0; pos < numBucketPositions(b); pos++) {
-                    if (isPositionFilled(b, pos) && b->hashes[pos] == h2 && b->entries[pos] == entry) {
-                        b->presence &= ~(1 << pos);
-                        ht->used[table]--;
-                        if (top->chained &&
-                            (affected_buckets == 0 || bucket_index[affected_buckets - 1] != idx || table_index[affected_buckets - 1] != table)) {
-                            bucket_index[affected_buckets] = idx;
-                            table_index[affected_buckets] = table;
-                            affected_buckets++;
-                        }
-                        deleted = true;
-                        break;
-                    }
-                }
-                b = deleted ? NULL : getChildBucket(b);
-            } while (b != NULL);
-        }
-        assert(deleted);
-    }
-
-    hashtableResumeRehashing(ht);
-    if (!hashtableIsRehashingPaused(ht)) {
-        for (size_t i = 0; i < affected_buckets; i++) {
-            compactBucketChain(ht, bucket_index[i], table_index[i]);
-        }
-        for (size_t i = 0; i < count && hashtableIsRehashing(ht); i++) {
-            rehashStepOnReadIfNeeded(ht);
-        }
-    }
-    hashtableResumeAutoShrink(ht);
-}
-
-/* Removes multiple distinct entries known to be in the table. The entry
+/* Deletes multiple distinct entries known to be in the table. The entry
  * destructor is not called. The caller must pass distinct entries that are
  * present in the table. `entries` is input-only. Batching avoids per-delete
  * hole filling and shrink checks. */
-void hashtableBatchDeleteEntries(hashtable *ht, void **entries, size_t count) {
+void hashtableBatchDeleteEntries(hashtable *ht, void *const *entries, size_t count) {
     for (size_t offset = 0; offset < count; offset += HASHTABLE_POP_ENTRIES_STACK_MAX) {
         size_t remaining = count - offset;
         size_t batch = remaining < HASHTABLE_POP_ENTRIES_STACK_MAX ? remaining : HASHTABLE_POP_ENTRIES_STACK_MAX;
-        hashtableBatchDeleteEntriesBatch(ht, &entries[offset], batch);
+        void *const *batch_entries = &entries[offset];
+
+        size_t bucket_index[HASHTABLE_POP_ENTRIES_STACK_MAX];
+        int table_index[HASHTABLE_POP_ENTRIES_STACK_MAX];
+        uint64_t hashes[HASHTABLE_POP_ENTRIES_STACK_MAX];
+        uint8_t h2s[HASHTABLE_POP_ENTRIES_STACK_MAX];
+        size_t affected_buckets = 0;
+
+        hashtablePauseRehashing(ht);
+        hashtablePauseAutoShrink(ht);
+
+        for (size_t i = 0; i < batch; i++) {
+            if (i + 8 < batch) valkey_prefetch(batch_entries[i + 8]);
+            const void *key = entryGetKey(ht, batch_entries[i]);
+            hashes[i] = hashKey(ht, key);
+            h2s[i] = highBits(hashes[i]);
+            for (int table = 0; table <= 1; table++) {
+                if (ht->used[table] == 0) continue;
+                size_t idx = hashes[i] & expToMask(ht->bucket_exp[table]);
+                if (table == 0 && ht->rehash_idx >= 0 && idx < (size_t)ht->rehash_idx) continue;
+                valkey_prefetch(&ht->tables[table][idx]);
+            }
+        }
+
+        for (size_t i = 0; i < batch; i++) {
+            void *entry = batch_entries[i];
+            uint64_t hash = hashes[i];
+            uint8_t h2 = h2s[i];
+            bool deleted = false;
+
+            for (int table = 0; table <= 1 && !deleted; table++) {
+                if (ht->used[table] == 0) continue;
+                size_t mask = expToMask(ht->bucket_exp[table]);
+                size_t idx = hash & mask;
+                if (table == 0 && ht->rehash_idx >= 0 && idx < (size_t)ht->rehash_idx) {
+                    continue;
+                }
+                bucket *top = &ht->tables[table][idx];
+                bucket *b = top;
+                do {
+                    for (int pos = 0; pos < numBucketPositions(b); pos++) {
+                        if (isPositionFilled(b, pos) && b->hashes[pos] == h2 && b->entries[pos] == entry) {
+                            b->presence &= ~(1 << pos);
+                            ht->used[table]--;
+                            if (top->chained && (affected_buckets == 0 || bucket_index[affected_buckets - 1] != idx ||
+                                                 table_index[affected_buckets - 1] != table)) {
+                                bucket_index[affected_buckets] = idx;
+                                table_index[affected_buckets] = table;
+                                affected_buckets++;
+                            }
+                            deleted = true;
+                            break;
+                        }
+                    }
+                    b = deleted ? NULL : getChildBucket(b);
+                } while (b != NULL);
+            }
+            assert(deleted);
+        }
+
+        hashtableResumeRehashing(ht);
+        if (!hashtableIsRehashingPaused(ht)) {
+            for (size_t i = 0; i < affected_buckets; i++) {
+                compactBucketChain(ht, bucket_index[i], table_index[i]);
+            }
+            rehashAfterBulkDelete(ht, batch);
+        }
+        hashtableResumeAutoShrink(ht);
     }
 }
 
@@ -1877,6 +1905,7 @@ static size_t hashtablePopAnyEntriesBatch(hashtable *ht, void **entries, size_t 
         for (size_t i = 0; i < affected_buckets; i++) {
             compactBucketChain(ht, bucket_index[i], table_index[i]);
         }
+        rehashAfterBulkDelete(ht, removed);
     }
     hashtableResumeAutoShrink(ht);
 

@@ -1,0 +1,258 @@
+/*
+ * Copyright (c) 2009-2012, Redis Ltd.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are met:
+ *
+ *   * Redistributions of source code must retain the above copyright notice,
+ *     this list of conditions and the following disclaimer.
+ *   * Redistributions in binary form must reproduce the above copyright
+ *     notice, this list of conditions and the following disclaimer in the
+ *     documentation and/or other materials provided with the distribution.
+ *   * Neither the name of Redis nor the names of its contributors may be used
+ *     to endorse or promote products derived from this software without
+ *     specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
+ * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+ * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+ * POSSIBILITY OF SUCH DAMAGE.
+ */
+
+#ifndef __RDB_H
+#define __RDB_H
+
+#include <stdio.h>
+#include "rio.h"
+#include "compression_stream.h"
+
+/* TBD: include only necessary headers. */
+#include "server.h"
+
+/* The current RDB version. When the format changes in a way that is no longer
+ * backward compatible this number gets incremented.
+ *
+ * RDB 11 is the last open-source Redis RDB version, used by Valkey 7.x and 8.x.
+ *
+ * RDB 12-79 are reserved for Redis non-compatible RDB formats
+ *
+ * We start using high rdb version numbers since Valkey 9.0. This is in order to avoid
+ * collisions with non-OSS Redis RDB versions.
+ *
+ * In an RDB file/stream, we also check the magic string REDIS or VALKEY but in
+ * the DUMP/RESTORE format, there is only the RDB version number and no magic
+ * string. */
+#define RDB_VERSION 80
+
+/* Mapping between RDB version and the Valkey version where it was added. */
+static const int RDB_VERSION_MAP[][2] = {
+    /* {RDB version, added in Valkey version} from oldest to newest. */
+    {11, 0x070200},
+    {80, 0x090000},
+};
+
+/* Reserved range for foreign (unsupported, non-OSS) RDB format. */
+#define RDB_FOREIGN_VERSION_MIN 12
+#define RDB_FOREIGN_VERSION_MAX 79
+static_assert(RDB_VERSION < RDB_FOREIGN_VERSION_MIN || RDB_VERSION > RDB_FOREIGN_VERSION_MAX,
+              "RDB version in foreign version range");
+
+static inline bool rdbIsForeignVersion(int rdbver) {
+    return rdbver >= RDB_FOREIGN_VERSION_MIN && rdbver <= RDB_FOREIGN_VERSION_MAX;
+}
+
+static inline bool rdbUseValkeyMagic(int rdbver) {
+    return rdbver > RDB_FOREIGN_VERSION_MAX;
+}
+
+/* Defines related to the dump file format. To store 32 bits lengths for short
+ * keys requires a lot of space, so we check the most significant 2 bits of
+ * the first byte to interpreter the length:
+ *
+ * 00|XXXXXX => if the two MSB are 00 the len is the 6 bits of this byte
+ * 01|XXXXXX XXXXXXXX =>  01, the len is 14 bits, 6 bits + 8 bits of next byte
+ * 10|000000 [32 bit integer] => A full 32 bit len in net byte order will follow
+ * 10|000001 [64 bit integer] => A full 64 bit len in net byte order will follow
+ * 11|OBKIND this means: specially encoded object will follow. The six bits
+ *           number specify the kind of object that follows.
+ *           See the RDB_ENC_* defines.
+ *
+ * Lengths up to 63 are stored using a single byte, most DB keys, and may
+ * values, will fit inside. */
+#define RDB_6BITLEN 0
+#define RDB_14BITLEN 1
+#define RDB_32BITLEN 0x80
+#define RDB_64BITLEN 0x81
+#define RDB_ENCVAL 3
+#define RDB_LENERR UINT64_MAX
+
+/* When a length of a string object stored on disk has the first two bits
+ * set, the remaining six bits specify a special encoding for the object
+ * accordingly to the following defines: */
+#define RDB_ENC_INT8 0  /* 8 bit signed integer */
+#define RDB_ENC_INT16 1 /* 16 bit signed integer */
+#define RDB_ENC_INT32 2 /* 32 bit signed integer */
+#define RDB_ENC_LZF 3   /* string compressed with FASTLZ */
+
+/* Map object types to RDB object types. Macros starting with OBJ_ are for
+ * memory storage and may change. Instead RDB types must be fixed because
+ * we store them on disk. */
+enum RdbType {
+    RDB_TYPE_STRING = 0,
+    RDB_TYPE_LIST = 1,
+    RDB_TYPE_SET = 2,
+    RDB_TYPE_ZSET = 3,
+    RDB_TYPE_HASH = 4,
+    RDB_TYPE_ZSET_2 = 5,        /* ZSET version 2 with doubles stored in binary. */
+    RDB_TYPE_MODULE_PRE_GA = 6, /* Used in 4.0 release candidates */
+    RDB_TYPE_MODULE_2 = 7,      /* Module value with annotations for parsing without \
+                                    the generating module being loaded. */
+    RDB_TYPE_HASH_ZIPMAP = 9,
+    RDB_TYPE_LIST_ZIPLIST = 10,
+    RDB_TYPE_SET_INTSET = 11,
+    RDB_TYPE_ZSET_ZIPLIST = 12,
+    RDB_TYPE_HASH_ZIPLIST = 13,
+    RDB_TYPE_LIST_QUICKLIST = 14,
+    RDB_TYPE_STREAM_LISTPACKS = 15,
+    RDB_TYPE_HASH_LISTPACK = 16, /* Added in RDB 10 (7.0) */
+    RDB_TYPE_ZSET_LISTPACK = 17,
+    RDB_TYPE_LIST_QUICKLIST_2 = 18,
+    RDB_TYPE_STREAM_LISTPACKS_2 = 19,
+    RDB_TYPE_SET_LISTPACK = 20, /* Added in RDB 11 (7.2) */
+    RDB_TYPE_STREAM_LISTPACKS_3 = 21,
+    RDB_TYPE_HASH_2 = 22, /* Hash with field-level expiration, RDB 80 (9.0) */
+    RDB_TYPE_LAST
+};
+/* NOTE: WHEN ADDING NEW RDB TYPE, UPDATE rdb_type_string[] */
+
+/* When our RDB format diverges, we need to reject types/opcodes for which we
+ * may have assigned a different meaning compared to other implementations. */
+#define RDB_FOREIGN_TYPE_MIN 22
+#define RDB_FOREIGN_TYPE_MAX 243
+
+/* Test if a type is an object type. */
+#define rdbIsObjectType(t) (((t) >= 0 && (t) <= 7) || ((t) >= 9 && (t) < RDB_TYPE_LAST))
+
+/* Special RDB opcodes (saved/loaded with rdbSaveType/rdbLoadType).
+ * These are special RDB types, but they start from 255 and grow down. */
+#define RDB_OPCODE_SLOT_IMPORT 243     /* Slot import state (9.0). */
+#define RDB_OPCODE_SLOT_INFO 244       /* Foreign slot info, safe to ignore. */
+#define RDB_OPCODE_FUNCTION2 245       /* function library data */
+#define RDB_OPCODE_FUNCTION_PRE_GA 246 /* old function library data for 7.0 rc1 and rc2 */
+#define RDB_OPCODE_MODULE_AUX 247      /* Module auxiliary data. */
+#define RDB_OPCODE_IDLE 248            /* LRU idle time. */
+#define RDB_OPCODE_FREQ 249            /* LFU frequency. */
+#define RDB_OPCODE_AUX 250             /* RDB aux field. */
+#define RDB_OPCODE_RESIZEDB 251        /* Hash table resize hint. */
+#define RDB_OPCODE_EXPIRETIME_MS 252   /* Expire time in milliseconds. */
+#define RDB_OPCODE_EXPIRETIME 253      /* Old expire time in seconds. */
+#define RDB_OPCODE_SELECTDB 254        /* DB number of the following keys. */
+#define RDB_OPCODE_EOF 255             /* End of the RDB file. */
+
+/* Module serialized values sub opcodes */
+#define RDB_MODULE_OPCODE_EOF 0    /* End of module value. */
+#define RDB_MODULE_OPCODE_SINT 1   /* Signed integer. */
+#define RDB_MODULE_OPCODE_UINT 2   /* Unsigned integer. */
+#define RDB_MODULE_OPCODE_FLOAT 3  /* Float. */
+#define RDB_MODULE_OPCODE_DOUBLE 4 /* Double. */
+#define RDB_MODULE_OPCODE_STRING 5 /* String. */
+
+/* rdbLoad...() functions flags. */
+#define RDB_LOAD_NONE 0
+#define RDB_LOAD_ENC (1 << 0)
+#define RDB_LOAD_PLAIN (1 << 1)
+#define RDB_LOAD_SDS (1 << 2)
+
+/* flags on the purpose of rdb save or load */
+#define RDBFLAGS_NONE 0                 /* No special RDB loading or saving. */
+#define RDBFLAGS_AOF_PREAMBLE (1 << 0)  /* Load/save the RDB as AOF preamble. */
+#define RDBFLAGS_REPLICATION (1 << 1)   /* Load/save for SYNC. */
+#define RDBFLAGS_ALLOW_DUP (1 << 2)     /* Allow duplicated keys when loading.*/
+#define RDBFLAGS_FEED_REPL (1 << 3)     /* Feed replication stream when loading.*/
+#define RDBFLAGS_KEEP_CACHE (1 << 4)    /* Don't reclaim cache after rdb file is generated */
+#define RDBFLAGS_EMPTY_DATA (1 << 5)    /* Flush the database after validating magic and rdb version*/
+#define RDBFLAGS_FORKLESS_SAVE (1 << 6) /* Save is performed by forkless save (background thread). */
+
+/* When rdbLoadObject() returns NULL, the err flag is
+ * set to hold the type of error that occurred */
+#define RDB_LOAD_ERR_EMPTY_KEY 1         /* Error of empty key */
+#define RDB_LOAD_ERR_UNKNOWN_TYPE 2      /* Unknown type in file */
+#define RDB_LOAD_ERR_OTHER 3             /* Any other errors */
+#define RDB_LOAD_ERR_ALL_ITEMS_EXPIRED 4 /* All fields expired */
+
+bool rdbIsVersionAccepted(int rdbver, bool is_valkey_magic, bool is_redis_magic);
+ssize_t rdbWriteRaw(rio *rdb, void *p, size_t len);
+int rdbSaveType(rio *rdb, unsigned char type);
+int rdbLoadType(rio *rdb);
+time_t rdbLoadTime(rio *rdb);
+int rdbSaveLen(rio *rdb, uint64_t len);
+ssize_t rdbSaveMillisecondTime(rio *rdb, long long t);
+long long rdbLoadMillisecondTime(rio *rdb, int rdbver);
+uint64_t rdbLoadLen(rio *rdb, int *isencoded);
+int rdbLoadLenByRef(rio *rdb, int *isencoded, uint64_t *lenptr);
+int rdbGetObjectType(robj *o, int rdbver);
+int rdbLoadObjectType(rio *rdb);
+int rdbLoad(char *filename, rdbSaveInfo *rsi, int rdbflags);
+int rdbSaveBackground(int req, char *filename, rdbSaveInfo *rsi, int rdbflags);
+int rdbStartBgsave(int bgsave_type);
+int resolveBgsaveType(void);
+int rdbSaveToReplicasSockets(int req, int rdbver, rdbSaveInfo *rsi);
+void rdbRemoveTempFile(pid_t childpid, int from_signal);
+int rdbSaveToFile(const char *filename);
+int rdbSave(int req, char *filename, rdbSaveInfo *rsi, int rdbflags);
+ssize_t rdbSaveObject(rio *rdb, robj *o, robj *key, int dbid, unsigned char type);
+size_t rdbSavedObjectLen(robj *o, robj *key, int dbid);
+robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rdbflags, mstime_t now);
+void backgroundSaveDoneHandler(int exitcode, int bysignal);
+int rdbSaveKeyValuePair(rio *rdb, robj *key, robj *val, long long expiretime, int dbid, int rdbver);
+ssize_t rdbSaveSingleModuleAux(rio *rdb, int when, moduleType *mt);
+robj *rdbLoadCheckModuleValue(rio *rdb, char *modulename);
+robj *rdbLoadStringObject(rio *rdb);
+ssize_t rdbSaveStringObject(rio *rdb, robj *obj);
+ssize_t rdbSaveRawString(rio *rdb, unsigned char *s, size_t len);
+void *rdbGenericLoadStringObject(rio *rdb, int flags, size_t *lenptr);
+int rdbSaveBinaryDoubleValue(rio *rdb, double val);
+int rdbLoadBinaryDoubleValue(rio *rdb, double *val);
+int rdbSaveBinaryFloatValue(rio *rdb, float val);
+int rdbLoadBinaryFloatValue(rio *rdb, float *val);
+int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi);
+int rdbLoadRioWithLoadingCtxScopedRdb(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadingCtx *rdb_loading_ctx);
+bool rdbRioHasCorruptCompressedInput(rio *rdb);
+bool rdbRioHasInternalStreamReaderError(rio *rdb);
+
+typedef enum {
+    RDB_STREAM_READER_INIT_ERROR = -1,
+    RDB_STREAM_READER_INIT_OK = 0,
+    RDB_STREAM_READER_INIT_INCOMPATIBLE = 1,
+} rdbStreamReaderInitResult;
+
+/* Attaches a probing stream reader that accepts both plain and VCS-wrapped
+ * RDB input. When non-NULL, algo receives the detected codec or ALGO_NONE for
+ * plain input. The caller must detach and release a successfully initialized
+ * reader with rdbFreeStreamReader. */
+rdbStreamReaderInitResult rdbInitStreamReader(rio *rdb,
+                                              streamReader *reader,
+                                              bool skip_codec_checksum_validation,
+                                              compressionAlgo *algo);
+void rdbFreeStreamReader(rio *rdb, streamReader *reader);
+int rdbFunctionLoad(rio *rdb, int ver, functionsLibCtx *lib_ctx, int rdbflags, sds *err);
+int rdbSaveRio(int req, int rdbver, rio *rdb, int *error, int rdbflags, rdbSaveInfo *rsi);
+ssize_t rdbSaveFunctions(rio *rdb);
+rdbSaveInfo *rdbPopulateSaveInfo(rdbSaveInfo *rsi);
+void replicationEmptyDbCallback(hashtable *ht);
+ssize_t rdbSaveDbSizeHints(rio *rdb, serverDb *db, int include_importing);
+int rdbWriteHeader(rio *rdb, int req, int rdbver, int rdbflags, rdbSaveInfo *rsi);
+int rdbWriteFooter(rio *rdb, int req);
+void rdbRecordStartMetrics(int bgsave_type);
+void rdbRecordEndMetrics(int bgsave_type, int status, time_t save_end);
+void rdbClearSaveState(time_t save_end);
+
+#endif

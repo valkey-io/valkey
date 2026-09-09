@@ -1,0 +1,67 @@
+{
+    "BGSAVE": {
+        "summary": "Asynchronously saves the database(s) to disk.",
+        "complexity": "O(1)",
+        "group": "server",
+        "since": "1.0.0",
+        "arity": -1,
+        "function": "bgsaveCommand",
+        "history": [
+            [
+                "3.2.2",
+                "Added the `SCHEDULE` option."
+            ],
+            [
+                "8.1.0",
+                "Added the `CANCEL` option."
+            ]
+        ],
+        "command_flags": [
+            "NO_ASYNC_LOADING",
+            "ADMIN",
+            "NOSCRIPT"
+        ],
+        "arguments": [
+            {
+                "name": "operation",
+                "type": "oneof",
+                "optional": true,
+                "arguments": [
+                    {
+                        "name": "schedule",
+                        "token": "SCHEDULE",
+                        "type": "pure-token",
+                        "since": "3.2.2"
+                    },
+                    {
+                        "name": "cancel",
+                        "token": "CANCEL",
+                        "type": "pure-token",
+                        "since": "8.1.0"
+                    }
+                ]
+            }
+        ],
+        "reply_schema": {
+            "oneOf": [
+                {
+                    "const": "Background saving started"
+                },
+                {
+                    "const": "Background saving scheduled"
+                },
+                {
+                    "const": "Background saving cancelled"
+                },
+                {
+                    "const": "Scheduled background saving cancelled"
+                }
+            ]
+        },
+        "acl_categories": [
+            "ADMIN",
+            "DANGEROUS",
+            "SLOW"
+        ]
+    }
+}

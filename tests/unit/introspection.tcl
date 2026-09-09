@@ -1,0 +1,2122 @@
+start_server {tags {"introspection"}} {
+    test "PING" {
+        assert_equal {PONG} [r ping]
+        assert_equal {valkey} [r ping valkey]
+        assert_error {*wrong number of arguments for 'ping' command} {r ping hello valkey}
+    }
+
+    test {CLIENT LIST} {
+        r client list
+    } {id=* addr=*:* laddr=*:* fd=* name=* age=* idle=* flags=N capa= db=* sub=0 psub=0 ssub=0 multi=-1 watch=0 qbuf=0 qbuf-free=* argv-mem=* multi-mem=0 rbs=* rbp=* obl=0 oll=0 omem=0 tot-mem=* events=r cmd=client|list user=* redir=-1 resp=* lib-name=* lib-ver=* tot-net-in=* tot-net-out=* tot-cmds=*}
+
+    test {CLIENT LIST with IDs} {
+        set myid [r client id]
+        set cl [split [r client list id $myid] "\r\n"]
+        assert_match "id=$myid * cmd=client|list *" [lindex $cl 0]
+    }
+
+    test {CLIENT INFO} {
+        r client info
+    } {id=* addr=*:* laddr=*:* fd=* name=* age=* idle=* flags=N capa= db=* sub=0 psub=0 ssub=0 multi=-1 watch=0 qbuf=0 qbuf-free=* argv-mem=* multi-mem=0 rbs=* rbp=* obl=0 oll=0 omem=0 tot-mem=* events=r cmd=client|info user=* redir=-1 resp=* lib-name=* lib-ver=* tot-net-in=* tot-net-out=* tot-cmds=*}
+
+    test {Multiple clients WATCH same key} {
+        set rd1 [valkey_client]
+        set rd2 [valkey_client]
+        set rd3 [valkey_client]
+
+        # Watch the same key.
+        r del mykey
+        $rd1 watch mykey
+        $rd2 watch mykey
+        $rd3 watch mykey
+
+        # Have rd3 unwatch, and have rd1/rd2 unwatch via multi.
+        $rd3 unwatch
+        r set mykey value
+        foreach rd [list $rd1 $rd2] {
+            $rd multi
+            $rd set mykey other
+            $rd exec
+        }
+
+        # The multi must have been discarded, so the key keeps its value.
+        assert_equal {value} [r get mykey]
+
+        $rd1 close
+        $rd2 close
+        $rd3 close
+    }
+
+    foreach {subscribe unsubscribe publish check_registered} {
+        subscribe   unsubscribe   publish   {llength [r pubsub channels $channel]}
+        psubscribe  punsubscribe  publish   {r pubsub numpat}
+        ssubscribe  sunsubscribe  spublish  {llength [r pubsub shardchannels $channel]}
+    } {
+        test "Multiple clients $subscribe to same name" {
+            set rd1 [valkey_deferring_client]
+            set rd2 [valkey_deferring_client]
+            set rd3 [valkey_deferring_client]
+
+            # Subscribe to the same channel.
+            set channel "shared-channel"
+            $rd1 $subscribe $channel
+            $rd1 read
+            $rd2 $subscribe $channel
+            $rd2 read
+            $rd3 $subscribe $channel
+            $rd3 read
+
+            # The name is registered exactly once, no matter how many clients
+            # subscribe to it (all of them share the same robj).
+            assert_equal 1 [eval $check_registered]
+
+            # Every subscriber receives the published message. The delivery
+            # payload is the last element of the reply for all messages.
+            r $publish $channel hello
+            assert_equal hello [lindex [$rd1 read] end]
+            assert_equal hello [lindex [$rd2 read] end]
+            assert_equal hello [lindex [$rd3 read] end]
+
+            $rd1 $unsubscribe $channel
+            $rd1 read
+            $rd2 $unsubscribe $channel
+            $rd2 read
+            $rd3 $unsubscribe $channel
+            $rd3 read
+
+            # No subscriber left.
+            assert_equal 0 [eval $check_registered]
+
+            $rd1 close
+            $rd2 close
+            $rd3 close
+        }
+    }
+
+    # Get client tot-mem excluding query buffer (qbuf + qbuf-free)
+    proc get_client_mem_no_qbuf {info} {
+        set tot [get_field_in_client_info $info "tot-mem"]
+        set qbuf [get_field_in_client_info $info "qbuf"]
+        set qbuf_free [get_field_in_client_info $info "qbuf-free"]
+        return [expr {$tot - $qbuf - $qbuf_free}]
+    }
+
+    test {CLIENT INFO tot-mem includes watched key memory} {
+        set mem1 [get_client_mem_no_qbuf [r client info]]
+
+        r watch [string repeat "x" 50000]
+        set mem2 [get_client_mem_no_qbuf [r client info]]
+        assert_morethan_equal [expr $mem2 - $mem1] 10000
+
+        r unwatch
+        set mem3 [get_client_mem_no_qbuf [r client info]]
+        assert_morethan_equal [expr $mem2 - $mem3] 10000
+    }
+
+    foreach {subscribe unsubscribe} {subscribe unsubscribe psubscribe punsubscribe ssubscribe sunsubscribe} {
+        test "CLIENT INFO tot-mem includes pubsub channel/pattern memory - $subscribe $unsubscribe" {
+            set rd [valkey_deferring_client]
+            $rd client id
+            set rd_id [$rd read]
+
+            set info1 [lsearch -inline [split [r client list] "\r\n"] "id=$rd_id *"]
+            set mem1 [get_client_mem_no_qbuf $info1]
+
+            $rd $subscribe [string repeat "x" 50000]
+            $rd read
+            set info2 [lsearch -inline [split [r client list] "\r\n"] "id=$rd_id *"]
+            set mem2 [get_client_mem_no_qbuf $info2]
+            assert_morethan_equal [expr $mem2 - $mem1] 10000
+
+            $rd $unsubscribe
+            $rd read
+            set info3 [lsearch -inline [split [r client list] "\r\n"] "id=$rd_id *"]
+            set mem3 [get_client_mem_no_qbuf $info3]
+            assert_morethan_equal [expr $mem2 - $mem3] 10000
+
+            $rd close
+        }
+    }
+
+    test {CLIENT LIST with ADDR filter} {
+        set client_info [r client info]
+        regexp {addr=([^ ]+)} $client_info match myaddr
+        set cl [split [r client list addr $myaddr] "\r\n"]
+        regexp {addr=([^ ]+) .* cmd=([^ ]+)} [lindex $cl 0] _ actual_addr actual_cmd
+        assert_equal $myaddr $actual_addr
+        assert_equal "client|list" $actual_cmd
+    }
+
+    test {CLIENT LIST with LADDR filter} {
+        set client_info [r client info]
+        regexp {laddr=([^ ]+)} $client_info match myladdr
+        set cl [split [r client list laddr $myladdr] "\r\n"]
+
+        regexp {laddr=([^ ]+)} [lindex $cl 0] _ actual_laddr
+
+        assert_equal $myladdr $actual_laddr
+    }
+
+    test {CLIENT LIST with MAXAGE filter} {
+        set cl [split [r client list maxage 1000000] "\r\n"]
+
+        foreach line $cl {
+            regexp {age=([0-9]+)} $line _ age
+            assert {[expr {$age <= 1000000}]}
+        }
+    }
+
+    test {CLIENT LIST with TYPE filter} {
+        set cl [split [r client list type normal] "\r\n"]
+
+        foreach line $cl {
+            regexp {flags=([^ ]+)} $line _ flags
+            assert [regexp {.*N.*} $flags]
+        }
+    }
+
+    test {CLIENT LIST with USER filter} {
+        set client_info [r client info]
+        regexp {user=([^ ]+)} $client_info match myuser
+        set cl [split [r client list user $myuser] "\r\n"]
+
+        foreach line $cl {
+            regexp {user=([^ ]+)} $line _ actual_user
+            assert_equal $myuser $actual_user
+        }
+    }
+
+    test {CLIENT LIST with SKIPME filter} {
+        set cl [split [r client list skipme no] "\r\n"]
+
+        set found_self 0
+        foreach line $cl {
+            regexp {id=([0-9]+)} $line _ client_id
+            if {[expr {$client_id == [r client id]}]} {
+                set found_self 1
+            }
+        }
+
+        assert_equal $found_self 1
+    }
+
+    test {CLIENT LIST with multiple IDs and TYPE filter} {
+        # Create multiple clients
+        set c1 [valkey_client]
+        set c2 [valkey_client]
+        set c3 [valkey_client]
+
+        # Fetch their IDs
+        set id1 [$c1 client id]
+        set id2 [$c2 client id]
+        set id3 [$c3 client id]
+
+        # Filter by multiple IDs and TYPE
+        set cl [split [r client list id $id1 $id2 type normal] "\r\n"]
+
+        # Assert only c1 and c2 are present and match TYPE=N (NORMAL)
+        foreach line $cl {
+            regexp {id=([0-9]+).*flags=([^ ]+)} $line _ client_id flags
+            assert {[lsearch -exact "$id1 $id2" $client_id] != -1}
+            assert {[string match *N* $flags]}
+        }
+
+        # Close clients
+        $c1 close
+        $c2 close
+        $c3 close
+    }
+
+    test {CLIENT LIST with filters matching no clients} {
+        # Create multiple clients
+        set c1 [valkey_client]
+        set c2 [valkey_client]
+
+        # Use a filter that doesn't match any client (e.g., invalid user)
+        assert_error "ERR No such user 'invalid_user'" {r client list user invalid_user}
+
+        # Close clients
+        $c1 close
+        $c2 close
+    }
+
+
+    test {CLIENT LIST with NAME filter} {
+        r client setname mytestclient
+        set client_info [r client info]
+        regexp {name=([^ ]+)} $client_info match myname
+        set cl [split [r client list name $myname] "\r\n"]
+        regexp {name=([^ ]+) .* cmd=([^ ]+)} [lindex $cl 0] _ actual_name actual_cmd
+        assert_equal $myname $actual_name
+        assert_equal "client|list" $actual_cmd
+    }
+
+    # Test CLIENT LIST with FLAGS filter
+    test {CLIENT LIST with FLAGS filter} {
+        r client setname mytestclient
+        set cl [split [r client list flags N] "\r\n"]
+        set line [lindex $cl 0]
+        set info [dict create]
+        foreach pair [split $line " "] {
+            lassign [split $pair "="] key val
+            dict set info $key $val
+        }
+        assert_equal "N" [dict get $info flags]
+    }
+
+    # Test CLIENT LIST with TYPE filter
+    test {CLIENT LIST with TYPE filter} {
+        set cl [split [r client list type normal] "\r\n"]
+        set line [lindex $cl 0]
+        set info [dict create]
+        foreach pair [split $line " "] {
+            lassign [split $pair "="] key val
+            dict set info $key $val
+        }
+        assert {[string match *N* [dict get $info flags]]}
+    }
+
+    # Test CLIENT LIST with multiple filters
+    test {CLIENT LIST with multiple filters} {
+        r client setname mytestclient
+        set client_info [r client info]
+        set fields [split $client_info " "]
+        foreach pair $fields {
+            lassign [split $pair "="] key val
+            if {$key eq "id"} { set myid $val }
+            if {$key eq "name"} { set myname $val }
+        }
+
+        set cl [split [r client list id $myid name $myname] "\r\n"]
+        set line [lindex $cl 0]
+        set info [dict create]
+        foreach pair [split $line " "] {
+            lassign [split $pair "="] key val
+            dict set info $key $val
+        }
+
+        assert_equal $myid [dict get $info id]
+        assert_equal $myname [dict get $info name]
+        assert_equal "client|list" [dict get $info cmd]
+    }
+
+    test {CLIENT LIST with multiple filters} {
+        # Create multiple clients with different names and flags
+        set c1 [valkey_client]
+        set c2 [valkey_client]
+        set c3 [valkey_client]
+        $c1 client setname client1
+        $c2 client setname client1
+        $c3 client setname client2
+        $c3 multi
+
+        # Wait 1 second to ensure idle time
+        after 1000
+
+        # Fetch the client list filtered by name and flags
+        set cl [split [r client list name client1 flags N] "\r\n"]
+
+        # Assert the clients returned match the filters
+        foreach line $cl {
+            regexp {name=([^ ]+) .* flags=([^ ]+)} $line _ actual_name flags
+            assert {[string match *client1* $actual_name] || [string match *client2* $actual_name]}
+            assert {[string match *N* $flags]}
+        }
+
+        # Test error when inputting an invalid flag/s
+        assert_error "ERR Unknown flags found in the provided filter: Q" {r client list name client1 flags Q}
+        assert_error "ERR Unknown flags found in the provided filter: NZ" {r client list name client1 flags NZ}
+
+        # Close clients
+        $c1 close
+        $c2 close
+        $c3 close
+    }
+
+    test {CLIENT LIST with IP filter} {
+        r client setname "client-ip"
+
+        set client_info [r client info]
+        regexp {addr=([^:]+):} $client_info -> iponly
+
+        # Use the extracted IP for filtering.
+        set filtered [r client list ip $iponly ip $iponly]
+        assert_match *client-ip* $filtered
+    } {}
+
+    start_server {tags {"ipv6"} overrides {bind {127.0.0.1 ::1}}} {
+        test {CLIENT LIST with IPv6 filter} {
+            set c [valkey ::1 [srv 0 port] 0 $::tls]
+            $c client setname "client-ipv6"
+
+            set client_info [$c client info]
+
+            regexp {addr=\[([a-fA-F0-9:]+)\]:\d+} $client_info -> ipv6only
+            set filtered [$c client list ip $ipv6only]
+            assert_match *client-ipv6* $filtered
+
+            $c close
+        }
+    }
+
+    test {CLIENT LIST with CAPA filter} {
+        set c1 [valkey_client]
+        $c1 client setname "client-with-r"
+        $c1 client capa redirect
+
+        set output [r client list capa r capa r]
+        assert_match *client-with-r* $output
+
+        catch {$c1 close}
+    }
+
+    test {CLIENT KILL with IP filter} {
+        set c1 [valkey_client]
+        $c1 client setname "killme-ip"
+        r client setname "client-normal"
+
+        set client_info [$c1 client info]
+        regexp {addr=([^:]+):} $client_info -> iponly
+
+        # Kill client by IP only
+        r client kill ip $iponly skipme yes
+
+        assert_error "*I/O error*" {$c1 ping}
+    } {}
+
+    start_server {tags {"ipv6"} overrides {bind {127.0.0.1 ::1}}} {
+        test {CLIENT KILL with IPv6 filter} {
+            set c [valkey ::1 [srv 0 port] 0 $::tls]
+            $c client setname "client-ipv6"
+
+            set client_info [$c client info]
+
+            regexp {addr=\[([a-fA-F0-9:]+)\]:\d+} $client_info -> ipv6only
+            set filtered [r client kill ip $ipv6only]
+
+            assert_error "*I/O error*" {$c ping}
+
+            $c close
+        }
+    }
+
+    test {CLIENT KILL with CAPA filter} {
+        set c1 [valkey_client]
+        $c1 client setname "killme-capa"
+        $c1 client capa redirect
+
+        # Kill using capa r filter
+        r client kill capa r skipme yes
+        assert_error "*I/O error*" {$c1 ping}
+    } {}
+
+    test {CLIENT KILL with NAME filter} {
+        # Create a client and set its name
+        set c1 [valkey_client]
+        $c1 client setname mytestclient
+
+        # Kill the client by name - last filter value takes precedence
+        r client kill name myclient name mytestclient
+
+        # Assert the client was killed
+        assert_error "*I/O error*" {$c1 ping}
+
+        # Cleanup
+        catch {$c1 close}
+    }
+
+    test {CLIENT KILL with FLAGS filter} {
+        # Create a client and set its name
+        set c1 [valkey_client]
+        $c1 client setname mytestclient
+
+        # Kill the client by flag - last filter value takes precedence
+        r client kill flags O flags N
+
+        # Assert the client was killed
+        assert_error "*I/O error*" {$c1 ping}
+
+        # Cleanup
+        catch {$c1 close}
+    }
+
+    test {CLIENT KILL with TYPE filter} {
+        # Create a client
+        set c1 [valkey_client]
+
+        # Kill the client by type
+        r client kill type replica type normal
+
+        # Assert the client was killed
+        assert_error "*I/O error*" {$c1 ping}
+
+        # Cleanup
+        catch {$c1 close}
+    }
+
+    test {CLIENT KILL with multiple filters} {
+        # Create two clients
+        set c1 [valkey_client]
+        set c2 [valkey_client]
+        $c1 client setname client1
+        $c2 client setname client2
+
+        # Kill the client with name and flag filters
+        r client kill name client1 flags N
+
+        # Assert client1 was killed
+        set err1 [catch {$c1 ping} error_message1]
+        assert {$err1 == 1}
+        assert {[string match "*I/O error*" $error_message1]}
+
+        # Assert client2 is still alive
+        assert {[catch {$c2 ping}] == 0}
+
+        # Cleanup
+        catch {$c2 close}
+    }
+
+    test {CLIENT KILL with multiple filters including idle time} {
+        # Create two clients
+        set c1 [valkey_client]
+        set c2 [valkey_client]
+        $c1 client setname client1
+        $c2 client setname client2
+
+        # Wait 1 second to ensure idle time
+        after 1000
+
+        # Kill the client with name and idle time filters
+        r client kill name client1 idle 100 idle 1
+
+        # Assert client1 was killed
+        set err1 [catch {$c1 ping} error_message1]
+        assert {$err1 == 1}
+        assert {[string match "*I/O error*" $error_message1]}
+
+        # Assert client2 is still alive
+        assert {[catch {$c2 ping}] == 0}
+
+        # Cleanup
+        catch {$c2 close}
+    }
+
+    # Test CLIENT LIST with NOT-NAME filter
+    test {CLIENT LIST with NOT-NAME filter} {
+        r client setname mytestclient
+        set c1 [valkey_client]
+        $c1 client setname client1
+        set cl [r client list not-name mytestclient not-name mytestclient]
+        assert_match "*name=client1*" $cl
+        assert_no_match "*name=mytestclient*" $cl
+        catch {$c1 close}
+    }
+
+    # Test CLIENT LIST with NOT-FLAGS filter
+    test {CLIENT LIST with NOT-FLAGS filter} {
+        set c1 [valkey_client]
+        $c1 readonly
+        set cl [r client list not-flags r not-flags N]
+        assert_match "*flags=r*" $cl
+        assert_no_match "*flags=N*" $cl
+        catch {$c1 close}
+    }
+
+    # Test CLIENT LIST with NOT-TYPE filter
+    test {CLIENT LIST with NOT-TYPE filter} {
+        r client setname mytestclient
+        set c1 [valkey_client]
+        $c1 client setname client1
+        $c1 subscribe x
+        set cl [r client list not-type pubsub not-type normal]
+        assert_match "*name=client1*" $cl
+        assert_no_match "*name=mytestclient*" $cl
+        catch {$c1 close}
+    }
+
+    # Test CLIENT LIST with multiple negative filters
+    test {CLIENT LIST with multiple negative filters} {
+        r client setname mytestclient
+        set client_info [r client info]
+        set fields [split $client_info " "]
+        foreach pair $fields {
+            lassign [split $pair "="] key val
+            if {$key eq "id"} { set myid $val }
+            if {$key eq "name"} { set myname $val }
+        }
+
+        set c1 [valkey_client]
+        $c1 client setname client1
+
+        set cl [r client list not-id $myid not-name $myname]
+
+        assert_match "*name=client1*" $cl
+        assert_no_match "*name=mytestclient*" $cl
+        catch {$c1 close}
+    }
+
+    test {CLIENT LIST with multiple id filters} {
+        # Create multiple clients
+        set c1 [valkey_client]
+        set c2 [valkey_client]
+        set c3 [valkey_client]
+
+        # Fetch their IDs
+        set id1 [$c1 client id]
+        set id2 [$c2 client id]
+        set id3 [$c3 client id]
+
+        set result [r client list id $id1 id $id2 id $id3]
+        assert_match "*id=$id1*" $result
+        assert_match "*id=$id2*" $result
+        assert_match "*id=$id3*" $result
+
+        catch {$c1 close}
+        catch {$c2 close}
+        catch {$c3 close}
+    }
+
+    test {CLIENT KILL with multiple id filters} {
+        # Create multiple clients
+        set c1 [valkey_client]
+        set c2 [valkey_client]
+        set c3 [valkey_client]
+
+        # Fetch their IDs
+        set id1 [$c1 client id]
+        set id2 [$c2 client id]
+        set id3 [$c3 client id]
+
+        assert_equal [r client kill id $id1 id $id2 id $id3] 3
+    }
+
+    test {CLIENT LIST with multiple negative filters} {
+        # Create multiple clients with different names and flags
+        set c1 [valkey_client]
+        set c2 [valkey_client]
+        set c3 [valkey_client]
+        $c1 client setname client1
+        $c2 client setname client1
+        $c3 client setname client2
+        $c3 multi
+
+        # Wait 1 second to ensure idle time
+        after 1000
+
+        # Fetch the client list filtered by name and not-flags
+        set cl [split [r client list name client1 not-flags x] "\r\n"]
+
+        # Assert the clients returned match the filters
+        foreach line $cl {
+            regexp {name=([^ ]+) .* flags=([^ ]+)} $line _ actual_name flags
+            assert {[string match *client1* $actual_name] || [string match *client2* $actual_name]}
+            assert {[string match *N* $flags]}
+        }
+
+        # Close clients
+        $c1 close
+        $c2 close
+        $c3 close
+    }
+
+    test {CLIENT LIST with NOT-IP filter} {
+        r client setname "not-ip"
+
+        set client_info [r client info]
+        regexp {addr=([^:]+):} $client_info -> not_ip
+
+        # Use the extracted IP for filtering.
+        r client list not-ip $not_ip not-ip $not_ip
+    } {}
+
+    start_server {tags {"ipv6"} overrides {bind {127.0.0.1 ::1}}} {
+        test {CLIENT LIST with IPv6 negative filter} {
+            set c [valkey ::1 [srv 0 port] 0 $::tls]
+            $c client setname "client-ipv6"
+
+            set client_info [$c client info]
+
+            regexp {addr=\[([a-fA-F0-9:]+)\]:\d+} $client_info -> ipv6only
+            set filtered [$c client list not-ip "1.2.3.4" not-ip $ipv6only]
+            assert_no_match *client-ipv6* $filtered
+
+            $c close
+        }
+    }
+
+    test {CLIENT LIST with NOT-CAPA filter} {
+        r client setname mytestclient
+        set c1 [valkey_client]
+        $c1 client setname client-with-r
+        $c1 client capa redirect
+        set cl [r client list not-capa r not-capa r]
+        assert_match "*name=mytestclient*" $cl
+        assert_no_match "*name=client-with-r*" $cl
+        catch {$c1 close}
+    }
+
+    test {CLIENT KILL with NOT-IP filter} {
+        set c1 [valkey_client]
+        $c1 client setname "killme-not-ip"
+        r client setname "client-normal"
+
+        # Kill client by NOT-IP
+        r client kill not-ip "1.2.3.4" skipme yes
+
+        assert_error "*I/O error*" {$c1 ping}
+        catch {$c1 close}
+
+        set list_reply [r client list]
+        assert_match "*name=client-normal*" $list_reply
+        assert_no_match "*name=killme-not-ip*" $list_reply
+    }
+
+    test {CLIENT KILL with NOT-CAPA filter} {
+        set c1 [valkey_client]
+        $c1 client setname "killme-not-capa"
+        r client setname "client-normal"
+
+        # Kill using not-capa filter
+        r client kill not-capa r not-capa r skipme yes
+
+        assert_error "*I/O error*" {$c1 ping}
+        catch {$c1 close}
+
+        set cl [r client list]
+        assert_match "*name=client-normal*" $cl
+        assert_no_match "*name=killme-not-capa*" $cl
+    }
+
+    test {CLIENT KILL with NOT-NAME filter} {
+        r client setname "client-normal"
+        # Create a client and set its name
+        set c1 [valkey_client]
+        $c1 client setname "killme-not-name"
+
+        # Kill the client by not-name
+        r client kill not-name client-normal not-name client-normal
+
+        # Assert the client was killed
+        assert_error "*I/O error*" {$c1 ping}
+        catch {$c1 close}
+
+        set cl [r client list]
+        assert_match "*name=client-normal*" $cl
+        assert_no_match "*name=killme-not-name*" $cl
+    }
+
+    test {CLIENT KILL with NOT-FLAGS filter} {
+        r client setname "client-normal"
+        # Create a client and set its name
+        set c1 [valkey_client]
+        $c1 client setname "killme-not-flags"
+        $c1 readonly
+
+        # Kill the client by not-flag
+        r client kill not-flags N not-flags N
+
+        # Assert the client was killed
+        assert_error "*I/O error*" {$c1 ping}
+        catch {$c1 close}
+
+        set cl [r client list]
+        assert_match "*name=client-normal*" $cl
+        assert_no_match "*name=killme-not-flags*" $cl
+    }
+
+    test {CLIENT KILL with NOT-TYPE filter} {
+        r client setname "client-normal"
+        # Create a client
+        set c1 [valkey_client]
+        $c1 client setname "killme-not-type"
+        $c1 subscribe x
+
+        # Kill the client by not-type
+        r client kill not-type normal
+
+        # Assert the client was killed
+        assert_error "*I/O error*" {$c1 ping}
+        catch {$c1 close}
+
+        set cl [r client list]
+        assert_match "*name=client-normal*" $cl
+        assert_no_match "*name=killme-not-type*" $cl
+    }
+
+    test {CLIENT KILL with multiple negative filters} {
+        # Create two clients
+        set c1 [valkey_client]
+        set c2 [valkey_client]
+        $c1 client setname client1
+        $c2 client setname client2
+
+        # Kill the client with not-name and not-flag filters
+        r client kill not-name client2 not-flags x
+
+        # Assert client1 was killed
+        set err1 [catch {$c1 ping} error_message1]
+        assert {$err1 == 1}
+        assert {[string match "*I/O error*" $error_message1]}
+
+        # Assert client2 is still alive
+        assert {[catch {$c2 ping}] == 0}
+
+        # Cleanup
+        catch {$c2 close}
+    }
+
+    test {CLIENT KILL with both positive and negative filters including idle time} {
+        # Create two clients
+        set c1 [valkey_client]
+        set c2 [valkey_client]
+        $c1 client setname client1
+        $c2 client setname client2
+
+        # Wait 1 second to ensure idle time
+        after 1000
+
+        # Kill the client with not-name and idle filters
+        r client kill not-name client2 idle 1
+
+        # Assert client1 was killed
+        set err1 [catch {$c1 ping} error_message1]
+        assert {$err1 == 1}
+        assert {[string match "*I/O error*" $error_message1]}
+
+        # Assert client2 is still alive
+        assert {[catch {$c2 ping}] == 0}
+
+        # Cleanup
+        catch {$c2 close}
+    }
+
+    test {CLIENT LIST with illegal arguments} {
+        assert_error "ERR syntax error" {r client list id 10 wrong_arg}
+
+        assert_error "ERR syntax error" {r client list id str}
+        assert_error "ERR *greater than 0*" {r client list id -1}
+        assert_error "ERR *greater than 0*" {r client list id 0}
+
+        assert_error "ERR Unknown client type*" {r client list type wrong_type}
+
+        assert_error "ERR No such user*" {r client list user wrong_user}
+
+        assert_error "ERR syntax error*" {r client list skipme yes_or_no}
+
+        assert_error "ERR *not an integer or out of range*" {r client list maxage str}
+        assert_error "ERR *not an integer or out of range*" {r client list maxage 9999999999999999999}
+        assert_error "ERR *greater than 0*" {r client list maxage -1}
+
+        assert_error "ERR syntax error" {r client list not-id 10 wrong_arg}
+
+        assert_error "ERR syntax error" {r client list not-id str}
+        assert_error "ERR *greater than 0*" {r client list not-id -1}
+        assert_error "ERR *greater than 0*" {r client list not-id 0}
+
+        assert_error "ERR Unknown client type*" {r client list not-type wrong_type}
+
+        assert_error "ERR No such user*" {r client list not-user wrong_user}
+    }
+
+    proc get_client_tot_in_out_cmds {id} {
+        set info_list [r client list]
+        set in [get_field_in_client_list $id $info_list "tot-net-in"]
+        set out [get_field_in_client_list $id $info_list "tot-net-out"]
+        set cmds [get_field_in_client_list $id $info_list "tot-cmds"]
+        return [list $in $out $cmds]
+    }
+
+    test {client input output and command process statistics} {
+        set info1 [r client info]
+        set input1 [get_field_in_client_info $info1 "tot-net-in"]
+        set output1 [get_field_in_client_info $info1 "tot-net-out"]
+        set cmd1 [get_field_in_client_info $info1 "tot-cmds"]
+        set info2 [r client info]
+        set input2 [get_field_in_client_info $info2 "tot-net-in"]
+        set output2 [get_field_in_client_info $info2 "tot-net-out"]
+        set cmd2 [get_field_in_client_info $info2 "tot-cmds"]
+        assert_equal [expr $input1+26] $input2
+        assert {[expr $output1+300] < $output2}
+        assert_equal [expr $cmd1+1] $cmd2
+        # test blocking command
+        r del mylist
+        set rd [valkey_deferring_client]
+        $rd client id
+        set rd_id [$rd read]
+        set info_list [r client list]
+        set input3 [get_field_in_client_list $rd_id $info_list "tot-net-in"]
+        set output3 [get_field_in_client_list $rd_id $info_list "tot-net-out"]
+        set cmd3 [get_field_in_client_list $rd_id $info_list "tot-cmds"]
+        $rd blpop mylist 0
+        set input4 [expr $input3 + 34]
+        set output4 $output3
+        set cmd4 $cmd3
+        wait_for_condition 5 100 {
+            [list $input4 $output4 $cmd4] eq [get_client_tot_in_out_cmds $rd_id]
+        } else {
+            puts "--------- tot-net-in tot-net-out tot-cmds (4)"
+            puts "Expected: [list $input4 $output4 $cmd4]"
+            puts "Actual:   [get_client_tot_in_out_cmds $rd_id]"
+            fail "Blocked BLPOP didn't increment expected client fields"
+        }
+        r lpush mylist a
+        set input5 $input4
+        set output5 [expr $output4 + 23]
+        set cmd5 [expr $cmd4 + 1]
+        wait_for_condition 5 100 {
+            [list $input5 $output5 $cmd5] eq [get_client_tot_in_out_cmds $rd_id]
+        } else {
+            puts "--------- tot-net-in tot-net-out tot-cmds (5)"
+            puts "Expected: [list $input5 $output5 $cmd5]"
+            puts "Actual:   [get_client_tot_in_out_cmds $rd_id]"
+            fail "Unblocked BLPOP didn't increment expected client fields"
+        }
+        $rd close
+        # test recursive command
+        set info [r client info]
+        set cmd6 [get_field_in_client_info $info "tot-cmds"]
+        r eval "server.call('ping')" 0
+        set info [r client info]
+        set cmd7 [get_field_in_client_info $info "tot-cmds"]
+        assert_equal [expr $cmd6+3] $cmd7
+    }
+
+    test {CLIENT KILL with illegal arguments} {
+        assert_error "ERR wrong number of arguments for 'client|kill' command" {r client kill}
+        assert_error "ERR syntax error*" {r client kill id 10 wrong_arg}
+
+        assert_error "ERR syntax error*" {r client kill id str}
+        assert_error "ERR *greater than 0*" {r client kill id -1}
+        assert_error "ERR *greater than 0*" {r client kill id 0}
+
+        assert_error "ERR Unknown client type*" {r client kill type wrong_type}
+
+        assert_error "ERR No such user*" {r client kill user wrong_user}
+
+        assert_error "ERR syntax error*" {r client kill skipme yes_or_no}
+
+        assert_error "ERR *not an integer or out of range*" {r client kill maxage str}
+        assert_error "ERR *not an integer or out of range*" {r client kill maxage 9999999999999999999}
+        assert_error "ERR *greater than 0*" {r client kill maxage -1}
+    }
+
+    test {CLIENT KILL maxAGE will kill old clients} {
+        # This test is very likely to do a false positive if the execute time
+        # takes longer than the max age, so give it a few more chances. Go with
+        # 3 retries of increasing sleep_time, i.e. start with 2s, then go 4s, 8s.
+        set sleep_time 2
+        for {set i 0} {$i < 3} {incr i} {
+            set rd1 [valkey_deferring_client]
+            r debug sleep $sleep_time
+            set rd2 [valkey_deferring_client]
+            r acl setuser dummy on nopass +ping
+            $rd1 auth dummy ""
+            $rd1 read
+            $rd2 auth dummy ""
+            $rd2 read
+
+            # Should kill rd1 but not rd2
+            set max_age [expr $sleep_time / 2]
+            set res [r client kill user dummy maxage $max_age]
+            if {$res == 1} {
+                break
+            } else {
+                # Clean up and try again next time
+                set sleep_time [expr $sleep_time * 2]
+                $rd1 close
+                $rd2 close
+            }
+
+        } ;# for
+
+        if {$::verbose} { puts "CLIENT KILL maxAGE will kill old clients test attempts: $i" }
+        assert_equal $res 1
+
+        # rd2 should still be connected
+        $rd2 ping
+        assert_equal "PONG" [$rd2 read]
+
+        $rd1 close
+        $rd2 close
+    } {0} {"needs:debug"}
+
+    test {CLIENT KILL SKIPME YES/NO will kill all clients} {
+        # Kill all clients except `me`
+        set rd1 [valkey_deferring_client]
+        set rd2 [valkey_deferring_client]
+        set connected_clients [s connected_clients]
+        assert {$connected_clients >= 3}
+        set res [r client kill skipme yes]
+        assert {$res == $connected_clients - 1}
+
+        # Kill all clients, including `me`
+        set rd3 [valkey_deferring_client]
+        set rd4 [valkey_deferring_client]
+        set connected_clients [s connected_clients]
+        assert {$connected_clients == 3}
+        set res [r client kill skipme no]
+        assert_equal $res $connected_clients
+
+        # After killing `me`, the first ping will throw an error
+        assert_error "*I/O error*" {r ping}
+        assert_equal "PONG" [r ping]
+
+        $rd1 close
+        $rd2 close
+        $rd3 close
+        $rd4 close
+    }
+
+    test {CLIENT command unhappy path coverage} {
+        assert_error "ERR*wrong number of arguments*" {r client caching}
+        assert_error "ERR*when the client is in tracking mode*" {r client caching maybe}
+        assert_error "ERR*syntax*" {r client no-evict wrongInput}
+        assert_error "ERR*syntax*" {r client reply wrongInput}
+        assert_error "ERR*syntax*" {r client tracking wrongInput}
+        assert_error "ERR*syntax*" {r client tracking on wrongInput}
+        assert_error "ERR*when the client is in tracking mode*" {r client caching off}
+        assert_error "ERR*when the client is in tracking mode*" {r client caching on}
+
+        r CLIENT TRACKING ON optout
+        assert_error "ERR*syntax*" {r client caching on}
+
+        r CLIENT TRACKING off optout
+        assert_error "ERR*when the client is in tracking mode*" {r client caching on}
+
+        assert_error "ERR*No such*" {r client kill 000.123.321.567:0000}
+        assert_error "ERR*No such*" {r client kill 127.0.0.1:}
+
+        assert_error "ERR*timeout is not an integer*" {r client pause abc}
+        assert_error "ERR timeout is negative" {r client pause -1}
+    }
+
+
+
+    test "CLIENT REPLY OFF/ON: disable all commands reply" {
+        set rd [valkey_deferring_client]
+
+        # These replies were silenced.
+        $rd client reply off
+        $rd ping pong
+        $rd ping pong2
+
+        $rd client reply on
+        assert_equal {OK} [$rd read]
+        $rd ping pong3
+        assert_equal {pong3} [$rd read]
+
+        $rd close
+    }
+
+    test "CLIENT REPLY SKIP: skip the next command reply" {
+        set rd [valkey_deferring_client]
+
+        # The first pong reply was silenced.
+        $rd client reply skip
+        $rd ping pong
+
+        $rd ping pong2
+        assert_equal {pong2} [$rd read]
+
+        $rd close
+    }
+
+    test "CLIENT REPLY ON: unset SKIP flag" {
+        set rd [valkey_deferring_client]
+
+        $rd client reply skip
+        $rd client reply on
+        assert_equal {OK} [$rd read] ;# OK from CLIENT REPLY ON command
+
+        $rd ping
+        assert_equal {PONG} [$rd read]
+
+        $rd close
+    }
+
+    test {MONITOR can log executed commands} {
+        set rd [valkey_deferring_client]
+        $rd monitor
+        assert_match {*OK*} [$rd read]
+        r set foo bar
+        r get foo
+        set res [list [$rd read] [$rd read]]
+        $rd close
+        set _ $res
+    } {*"set" "foo"*"get" "foo"*}
+
+    test {MONITOR properly escapes special characters through sdscatrepr} {
+        set rd [valkey_deferring_client]
+        $rd monitor
+        assert_match {*OK*} [$rd read]
+        r echo "backslash\\quotes\"newline\ncarriagereturn\rtab\talert\abackspace\bhexnormal\x7Ahexspecial\x7F"
+        assert_match {*"echo" "backslash\\\\quotes\\"newline\\ncarriagereturn\\rtab\\talert\\abackspace\\bhexnormalzhexspecial\\x7f"*} [$rd read]
+        $rd close
+    }
+
+    test {MONITOR can log commands issued by the scripting engine} {
+        set rd [valkey_deferring_client]
+        $rd monitor
+        $rd read ;# Discard the OK
+        r eval {redis.call('set',KEYS[1],ARGV[1])} 1 foo bar
+        assert_match {*eval*} [$rd read]
+        assert_match {*lua*"set"*"foo"*"bar"*} [$rd read]
+        $rd close
+    }
+
+    test {MONITOR can log commands issued by functions} {
+        r function load replace {#!lua name=test
+            server.register_function('test', function() return redis.call('set', 'foo', 'bar') end)
+        }
+        set rd [valkey_deferring_client]
+        $rd monitor
+        $rd read ;# Discard the OK
+        r fcall test 0
+        assert_match {*fcall*test*} [$rd read]
+        assert_match {*lua*"set"*"foo"*"bar"*} [$rd read]
+        $rd close
+    }
+
+    test {MONITOR supports redacting command arguments} {
+        set rd [valkey_deferring_client]
+        $rd monitor
+        $rd read ; # Discard the OK
+
+        r migrate [srv 0 host] [srv 0 port] key 9 5000
+        r migrate [srv 0 host] [srv 0 port] key 9 5000 AUTH user
+        r migrate [srv 0 host] [srv 0 port] key 9 5000 AUTH2 user password
+        catch {r auth not-real} _
+        catch {r auth not-real not-a-password} _
+
+        assert_match {*"key"*"9"*"5000"*} [$rd read]
+        assert_match {*"key"*"9"*"5000"*"(redacted)"*} [$rd read]
+        assert_match {*"key"*"9"*"5000"*"(redacted)"*"(redacted)"*} [$rd read]
+        assert_match {*"auth"*"(redacted)"*} [$rd read]
+        assert_match {*"auth"*"(redacted)"*"(redacted)"*} [$rd read]
+
+        foreach resp {3 2} {
+            if {[lsearch $::denytags "resp3"] >= 0} {
+                if {$resp == 3} {continue}
+            } elseif {$::force_resp3} {
+                if {$resp == 2} {continue}
+            }
+            catch {r hello $resp AUTH not-real not-a-password} _
+            assert_match "*\"hello\"*\"$resp\"*\"AUTH\"*\"(redacted)\"*\"(redacted)\"*" [$rd read]
+        }
+        $rd close
+    } {0} {needs:repl}
+
+    test {MONITOR correctly handles multi-exec cases} {
+        set rd [valkey_deferring_client]
+        $rd monitor
+        $rd read ; # Discard the OK
+
+        # Make sure multi-exec statements are ordered
+        # correctly
+        r multi
+        r set foo bar
+        r exec
+        assert_match {*"multi"*} [$rd read]
+        assert_match {*"set"*"foo"*"bar"*} [$rd read]
+        assert_match {*"exec"*} [$rd read]
+
+        # Make sure we close multi statements on errors
+        r multi
+        catch {r syntax error} _
+        catch {r exec} _
+
+        assert_match {*"multi"*} [$rd read]
+        assert_match {*"exec"*} [$rd read]
+
+        $rd close
+    }
+
+    # This test verifies that MONITOR correctly records overwritten commands
+    # when executed within a MULTI-EXEC block. Specifically, it checks that even if
+    # the original SET-EX command arguments are overwritten for replica propagation, the MONITOR output
+    # still shows the original command.
+    test {MONITOR correctly records SET EX in MULTI-EXEC} {
+        # Start monitoring client
+        set rd [valkey_deferring_client]
+        $rd monitor
+        $rd read ; # Discard the OK
+    
+        # Execute multi-exec block with SET EX commands
+        r multi
+        r set "{slot}key1" value1 ex 3600
+        r set "{slot}key2" value2 ex 1800
+        r exec
+    
+        # Verify monitor output shows the original commands:
+        assert_match {*"multi"*} [$rd read]
+        assert_match {*"set"*"{slot}key1"*"value1"*"ex"*"3600"*} [$rd read]
+        assert_match {*"set"*"{slot}key2"*"value2"*"ex"*"1800"*} [$rd read]
+        assert_match {*"exec"*} [$rd read]
+    
+        # Clean up monitoring client
+        $rd close
+    }
+
+    test {MONITOR log blocked command only once} {
+        # need to reconnect in order to reset the clients state
+        reconnect
+
+        set rd [valkey_deferring_client]
+        set bc [valkey_deferring_client]
+        r del mylist
+
+        $rd monitor
+        $rd read ; # Discard the OK
+
+        $bc blpop mylist 0
+        wait_for_blocked_clients_count 1
+        r lpush mylist 1
+        wait_for_blocked_clients_count 0
+        r lpush mylist 2
+
+        # we scan out all the info commands
+        set monitor_output [$rd read]
+        while { [string match {*"info"*} $monitor_output] } {
+            set monitor_output [$rd read]
+        }
+
+        # we expect to see the blpop on the monitor first
+        assert_match {*"blpop"*"mylist"*"0"*} $monitor_output
+
+        # we scan out all the info commands on the monitor
+        set monitor_output [$rd read]
+        while { [string match {*"info"*} $monitor_output] } {
+            set monitor_output [$rd read]
+        }
+
+        # we expect to locate the lpush right when the client was unblocked
+        assert_match {*"lpush"*"mylist"*"1"*} $monitor_output
+
+        # we scan out all the info commands
+        set monitor_output [$rd read]
+        while { [string match {*"info"*} $monitor_output] } {
+            set monitor_output [$rd read]
+        }
+
+        # we expect to see the next lpush and not duplicate blpop command
+        assert_match {*"lpush"*"mylist"*"2"*} $monitor_output
+
+        $rd close
+        $bc close
+    }
+
+    test {CLIENT GETNAME should return NIL if name is not assigned} {
+        r client getname
+    } {}
+
+    test {CLIENT GETNAME check if name set correctly} {
+        r client setname testName
+        r client getName
+    } {testName}
+
+    test {CLIENT LIST shows empty fields for unassigned names} {
+        r client list
+    } {*name= *}
+
+    test {CLIENT SETNAME does not accept spaces} {
+        catch {r client setname "foo bar"} e
+        set e
+    } {ERR*}
+
+    test {CLIENT SETNAME can assign a name to this connection} {
+        assert_equal [r client setname myname] {OK}
+        r client list
+    } {*name=myname*}
+
+    test {CLIENT SETNAME can change the name of an existing connection} {
+        assert_equal [r client setname someothername] {OK}
+        r client list
+    } {*name=someothername*}
+
+    test {After CLIENT SETNAME, connection can still be closed} {
+        set rd [valkey_deferring_client]
+        $rd client setname foobar
+        assert_equal [$rd read] "OK"
+        assert_match {*foobar*} [r client list]
+        $rd close
+        # Now the client should no longer be listed
+        wait_for_condition 50 100 {
+            [string match {*foobar*} [r client list]] == 0
+        } else {
+            fail "Client still listed in CLIENT LIST after SETNAME."
+        }
+    }
+
+    test {CLIENT SETINFO can set a library name to this connection} {
+        r CLIENT SETINFO lib-name redis.py
+        r CLIENT SETINFO lib-ver 1.2.3
+        r client info
+    } {*lib-name=redis.py lib-ver=1.2.3*}
+
+    test {CLIENT SETINFO invalid args} {
+        assert_error {*wrong number of arguments*} {r CLIENT SETINFO lib-name}
+        assert_error {*cannot contain spaces*} {r CLIENT SETINFO lib-name "valkey py"}
+        assert_error {*newlines*} {r CLIENT SETINFO lib-name "redis.py\n"}
+        assert_error {*Unrecognized*} {r CLIENT SETINFO badger hamster}
+        # test that all of these didn't affect the previously set values
+        r client info
+    } {*lib-name=redis.py lib-ver=1.2.3*}
+
+    test {RESET does NOT clean library name} {
+        r reset
+        r client info
+    } {*lib-name=redis.py*} {needs:reset}
+
+    test {CLIENT SETINFO can clear library name} {
+        r CLIENT SETINFO lib-name ""
+        r client info
+    } {*lib-name= *}
+
+    test {CONFIG GET should return sorted output} {
+        set config [r config get *]
+        set keys {}
+        foreach {key value} $config {
+            lappend keys $key
+        }
+        assert_equal [lsort $keys] $keys
+    }
+
+    test {CONFIG save params special case handled properly} {
+        # No "save" keyword - defaults should apply
+        start_server {config "minimal.conf"} {
+            assert_match [r config get save] {save {3600 1 300 100 60 10000}}
+        }
+
+        # First "save" keyword overrides hard coded defaults
+        start_server {config "minimal.conf" overrides {save {100 100}}} {
+            # Defaults
+            assert_match [r config get save] {save {100 100}}
+        }
+
+        # First "save" keyword appends default from config file
+        start_server {config "default.conf" overrides {save {900 1}} args {--save 100 100}} {
+            assert_match [r config get save] {save {900 1 100 100}}
+        }
+
+        # Empty "save" keyword resets all
+        start_server {config "default.conf" overrides {save {900 1}} args {--save {}}} {
+            assert_match [r config get save] {save {}}
+        }
+    } {} {external:skip}
+
+    test {CONFIG sanity} {
+        # Do CONFIG GET, CONFIG SET and then CONFIG GET again
+        # Skip immutable configs, one with no get, and other complicated configs
+        set skip_configs {
+            rdbchecksum
+            daemonize
+            tcp-backlog
+            mptcp
+            repl-mptcp
+            always-show-logo
+            syslog-enabled
+            cluster-enabled
+            disable-thp
+            aclfile
+            unixsocket
+            hash-seed
+            pidfile
+            syslog-ident
+            appendfilename
+            appenddirname
+            supervised
+            syslog-facility
+            databases
+            cluster-databases
+            io-threads
+            logfile
+            unixsocketperm
+            unixsocketgroup
+            replicaof
+            slaveof
+            requirepass
+            server-cpulist
+            bio-cpulist
+            aof-rewrite-cpulist
+            bgsave-cpulist
+            server_cpulist
+            bio_cpulist
+            aof_rewrite_cpulist
+            bgsave_cpulist
+            set-proc-title
+            cluster-config-file
+            cluster-port
+            oom-score-adj
+            oom-score-adj-values
+            enable-protected-configs
+            enable-debug-command
+            enable-module-command
+            dbfilename
+            logfile
+            dir
+            socket-mark-id
+            req-res-logfile
+            client-default-resp
+            dual-channel-replication-enabled
+            rdma-completion-vector
+            rdma-rx-size
+            rdma-bind
+            rdma-port
+            forkless-infrastructure-enabled
+        }
+
+        if {!$::tls} {
+            append skip_configs {
+                tls-prefer-server-ciphers
+                tls-session-cache-timeout
+                tls-session-cache-size
+                tls-session-caching
+                tls-cert-file
+                tls-key-file
+                tls-client-cert-file
+                tls-client-key-file
+                tls-dh-params-file
+                tls-ca-cert-file
+                tls-ca-cert-dir
+                tls-protocols
+                tls-ciphers
+                tls-ciphersuites
+                tls-port
+            }
+        }
+
+        set configs {}
+        foreach {k v} [r config get *] {
+            if {[lsearch $skip_configs $k] != -1} {
+                continue
+            }
+            dict set configs $k $v
+            # try to set the config to the same value it already has
+            r config set $k $v
+        }
+
+        set newconfigs {}
+        foreach {k v} [r config get *] {
+            if {[lsearch $skip_configs $k] != -1} {
+                continue
+            }
+            dict set newconfigs $k $v
+        }
+
+        dict for {k v} $configs {
+            set vv [dict get $newconfigs $k]
+            if {$v != $vv} {
+                fail "config $k mismatch, expecting $v but got $vv"
+            }
+
+        }
+    }
+
+    # Do a force-all config rewrite and make sure we're able to parse
+    # it.
+    test {CONFIG REWRITE sanity} {
+        # Capture state of config before
+        set configs {}
+        foreach {k v} [r config get *] {
+            dict set configs $k $v
+        }
+
+        # Rewrite entire configuration, restart and confirm the
+        # server is able to parse it and start.
+        assert_equal [r debug config-rewrite-force-all] "OK"
+        restart_server 0 true false
+        wait_done_loading r
+
+        # Verify no changes were introduced
+        dict for {k v} $configs {
+            assert_equal $v [lindex [r config get $k] 1]
+        }
+    } {} {external:skip}
+
+    test {CONFIG REWRITE handles save and shutdown properly} {
+        r config set save "3600 1 300 100 60 10000"
+        r config set shutdown-on-sigterm "nosave now"
+        r config set shutdown-on-sigint "save"
+        r config rewrite
+        restart_server 0 true false
+        assert_equal [r config get save] {save {3600 1 300 100 60 10000}}
+        assert_equal [r config get shutdown-on-sigterm] {shutdown-on-sigterm {nosave now}}
+        assert_equal [r config get shutdown-on-sigint] {shutdown-on-sigint save}
+
+        r config set save ""
+        r config set shutdown-on-sigterm "default"
+        r config rewrite
+        restart_server 0 true false
+        assert_equal [r config get save] {save {}}
+        assert_equal [r config get shutdown-on-sigterm] {shutdown-on-sigterm default}
+
+        start_server {config "minimal.conf"} {
+            assert_equal [r config get save] {save {3600 1 300 100 60 10000}}
+            r config set save ""
+            r config rewrite
+            restart_server 0 true false
+            assert_equal [r config get save] {save {}}
+        }
+    } {} {external:skip}
+
+    test {CONFIG SET with multiple args} {
+        set some_configs {maxmemory 10000001 repl-backlog-size 10000002 save {3000 5}}
+
+        # Backup
+        set backups {}
+        foreach c [dict keys $some_configs] {
+            lappend backups $c [lindex [r config get $c] 1]
+        }
+
+        # multi config set and verify
+        assert_equal [eval "r config set $some_configs"] "OK"
+        dict for {c val} $some_configs {
+            assert_equal [lindex [r config get $c] 1] $val
+        }
+
+        # Restore backup
+        assert_equal [eval "r config set $backups"] "OK"
+    }
+
+    test {CONFIG SET rollback on set error} {
+        # This test passes an invalid percent value to maxmemory-clients which should cause an
+        # input verification failure during the "set" phase before trying to apply the
+        # configuration. We want to make sure the correct failure happens and everything
+        # is rolled back.
+        # backup maxmemory config
+        set mm_backup [lindex [r config get maxmemory] 1]
+        set mmc_backup [lindex [r config get maxmemory-clients] 1]
+        set qbl_backup [lindex [r config get client-query-buffer-limit] 1]
+        # Set some value to maxmemory
+        assert_equal [r config set maxmemory 10000002] "OK"
+        # Set another value to maxmemory together with another invalid config
+        assert_error "ERR CONFIG SET failed (possibly related to argument 'maxmemory-clients') - percentage argument must be less or equal to 100" {
+            r config set maxmemory 10000001 maxmemory-clients 200% client-query-buffer-limit invalid
+        }
+        # Validate we rolled back to original values
+        assert_equal [lindex [r config get maxmemory] 1] 10000002
+        assert_equal [lindex [r config get maxmemory-clients] 1] $mmc_backup
+        assert_equal [lindex [r config get client-query-buffer-limit] 1] $qbl_backup
+        # Make sure we revert back to the previous maxmemory
+        assert_equal [r config set maxmemory $mm_backup] "OK"
+    }
+
+    test {CONFIG SET rollback on apply error} {
+        # This test tries to configure a used port number in the server. This is expected
+        # to pass the `CONFIG SET` validity checking implementation but fail on
+        # actual "apply" of the setting. This will validate that after an "apply"
+        # failure we rollback to the previous values.
+        proc dummy_accept {chan addr port} {}
+
+        set some_configs {maxmemory 10000001 port 0 client-query-buffer-limit 10m}
+
+        # On Linux we also set the oom score adj which has an apply function. This is
+        # used to verify that even successful applies are rolled back if some other
+        # config's apply fails.
+        set oom_adj_avail [expr {!$::external && [exec uname] == "Linux"}]
+        if {$oom_adj_avail} {
+            proc get_oom_score_adj {} {
+                set pid [srv 0 pid]
+                set fd [open "/proc/$pid/oom_score_adj" "r"]
+                set val [gets $fd]
+                close $fd
+                return $val
+            }
+            set some_configs [linsert $some_configs 0 oom-score-adj yes oom-score-adj-values {1 1 1}]
+            set read_oom_adj [get_oom_score_adj]
+        }
+
+        # Backup
+        set backups {}
+        foreach c [dict keys $some_configs] {
+            lappend backups $c [lindex [r config get $c] 1]
+        }
+
+        set used_port [find_available_port $::baseport $::portcount]
+        dict set some_configs port $used_port
+
+        # Run a dummy server on used_port so we know we can't configure the server to
+        # use it. It's ok for this to fail because that means used_port is invalid
+        # anyway
+        catch {socket -server dummy_accept -myaddr 127.0.0.1 $used_port} e
+        if {$::verbose} { puts "dummy_accept: $e" }
+
+        # Try to listen on the used port, pass some more configs to make sure the
+        # returned failure message is for the first bad config and everything is rolled back.
+        assert_error "ERR CONFIG SET failed (possibly related to argument 'port') - Unable to listen on this port*" {
+            eval "r config set $some_configs"
+        }
+
+        # Make sure we reverted back to previous configs
+        dict for {conf val} $backups {
+            assert_equal [lindex [r config get $conf] 1] $val
+        }
+
+        if {$oom_adj_avail} {
+            assert_equal [get_oom_score_adj] $read_oom_adj
+        }
+
+        # Make sure we can still communicate with the server (on the original port)
+        set r1 [valkey_client]
+        assert_equal [$r1 ping] "PONG"
+        $r1 close
+    }
+
+    test {CONFIG SET duplicate configs} {
+        assert_error "ERR *duplicate*" {r config set maxmemory 10000001 maxmemory 10000002}
+    }
+
+    test {CONFIG SET set immutable} {
+        assert_error "ERR *immutable*" {r config set daemonize yes}
+    }
+
+    test {CONFIG GET hidden configs} {
+        set hidden_config "key-load-delay"
+
+        # When we use a pattern we shouldn't get the hidden config
+        assert {![dict exists [r config get *] $hidden_config]}
+
+        # When we explicitly request the hidden config we should get it
+        assert {[dict exists [r config get $hidden_config] "$hidden_config"]}
+    }
+
+    test {CONFIG GET multiple args} {
+        set res [r config get maxmemory maxmemory* bind *of]
+
+        # Verify there are no duplicates in the result
+        assert_equal [expr [llength [dict keys $res]]*2] [llength $res]
+
+        # Verify we got both name and alias in result
+        assert {[dict exists $res slaveof] && [dict exists $res replicaof]}
+
+        # Verify pattern found multiple maxmemory* configs
+        assert {[dict exists $res maxmemory] && [dict exists $res maxmemory-samples] && [dict exists $res maxmemory-clients]}
+
+        # Verify we also got the explicit config
+        assert {[dict exists $res bind]}
+    }
+
+    test {valkey-server command line arguments - error cases} {
+        # Take '--invalid' as the option.
+        catch {exec $::VALKEY_SERVER_BIN --invalid} err
+        assert_match {*Bad directive or wrong number of arguments*} $err
+
+        catch {exec $::VALKEY_SERVER_BIN --port} err
+        assert_match {*'port'*wrong number of arguments*} $err
+
+        catch {exec $::VALKEY_SERVER_BIN --port 6380 --loglevel} err
+        assert_match {*'loglevel'*wrong number of arguments*} $err
+
+        # Take `6379` and `6380` as the port option value.
+        catch {exec $::VALKEY_SERVER_BIN --port 6379 6380} err
+        assert_match {*'port "6379" "6380"'*wrong number of arguments*} $err
+
+        # Take `--loglevel` and `verbose` as the port option value.
+        catch {exec $::VALKEY_SERVER_BIN --port --loglevel verbose} err
+        assert_match {*'port "--loglevel" "verbose"'*wrong number of arguments*} $err
+
+        # Take `--bla` as the port option value.
+        catch {exec $::VALKEY_SERVER_BIN --port --bla --loglevel verbose} err
+        assert_match {*'port "--bla"'*argument couldn't be parsed into an integer*} $err
+
+        # Take `--bla` as the loglevel option value.
+        catch {exec $::VALKEY_SERVER_BIN --logfile --my--log--file --loglevel --bla} err
+        assert_match {*'loglevel "--bla"'*argument(s) must be one of the following*} $err
+
+        # Using MULTI_ARG's own check, empty option value
+        catch {exec $::VALKEY_SERVER_BIN --shutdown-on-sigint} err
+        assert_match {*'shutdown-on-sigint'*argument(s) must be one of the following*} $err
+        catch {exec $::VALKEY_SERVER_BIN --shutdown-on-sigint "now force" --shutdown-on-sigterm} err
+        assert_match {*'shutdown-on-sigterm'*argument(s) must be one of the following*} $err
+
+        # Something like `valkey-server --some-config --config-value1 --config-value2 --loglevel debug` would break,
+        # because if you want to pass a value to a config starting with `--`, it can only be a single value.
+        catch {exec $::VALKEY_SERVER_BIN --replicaof 127.0.0.1 abc} err
+        assert_match {*'replicaof "127.0.0.1" "abc"'*Invalid primary port*} $err
+        catch {exec $::VALKEY_SERVER_BIN --replicaof --127.0.0.1 abc} err
+        assert_match {*'replicaof "--127.0.0.1" "abc"'*Invalid primary port*} $err
+        catch {exec $::VALKEY_SERVER_BIN --replicaof --127.0.0.1 --abc} err
+        assert_match {*'replicaof "--127.0.0.1"'*wrong number of arguments*} $err
+    } {} {external:skip}
+
+    test {tot-net-out for replica client}  {
+        start_server {} {
+            start_server {} {
+                set primary [srv -1 client]
+                set primary_host [srv -1 host]
+                set primary_port [srv -1 port]
+                set primary_pid [srv -1 pid]
+                set replica [srv 0 client]
+                set replica_pid [srv 0 pid]
+
+                $replica replicaof $primary_host $primary_port
+
+                # Wait for replica to be connected before proceeding.
+                wait_replica_online $primary
+
+                # Avoid PINGs to make sure tot-net-out is stable.
+                $primary config set repl-ping-replica-period 3600
+
+                # Increase repl timeout to avoid replica disconnecting
+                $primary config set repl-timeout 3600
+                $replica config set repl-timeout 3600
+
+                # Get the tot-net-out of the replica before sending the command.
+                set info_list [$primary client list]
+                foreach info [split $info_list "\r\n"] {
+                    if {[string match "* flags=S *" $info]} {
+                        set out_before [get_field_in_client_info $info "tot-net-out"]
+                        break
+                    }
+                }
+
+                # Send a command to the primary.
+                set value_size 10000
+                $primary set foo [string repeat "a" $value_size]
+
+                # Get the tot-net-out of the replica after sending the command.
+                set info_list [$primary client list]
+                foreach info [split $info_list "\r\n"] {
+                    if {[string match "* flags=S *" $info]} {
+                        set out_after [get_field_in_client_info $info "tot-net-out"]
+                        break
+                    }
+                }
+
+                assert_morethan $out_before 0
+                assert_morethan $out_after 0
+                assert_lessthan $out_after [expr $out_before + $value_size + 1000] ; # + 1000 to account for protocol overhead etc
+            }
+        }
+    } {} {external:skip}
+
+
+    test {CLIENT LIST can filter by LIB-NAME} {
+        set c1 [valkey_client]
+        $c1 client setinfo lib-name test-lib
+        r CLIENT SETINFO lib-name mylib
+        set result [r client list lib-name test-lib lib-name mylib]
+        assert_match {*lib-name=mylib*} $result
+        assert_no_match {*lib-name=test-lib*} $result
+        catch {$c1 close}
+    }
+
+    test {CLIENT LIST can filter by LIB-VER} {
+        set c1 [valkey_client]
+        $c1 client setinfo lib-ver 3.2.1
+        r CLIENT SETINFO lib-ver 1.2.3
+        set result [r client list lib-ver 3.2.1 lib-ver 1.2.3]
+        assert_match {*lib-ver=1.2.3*} $result
+        assert_no_match {*lib-ver=3.2.1*} $result
+        catch {$c1 close}
+    }
+
+    test {CLIENT LIST can filter by DB number} {
+        set c1 [valkey_client]
+        $c1 select 0
+        r select 2
+        set result [r client list db 0 db 2]
+        assert_match {*db=2*} $result
+        assert_no_match {*db=0*} $result
+        catch {$c1 close}
+    }
+
+    test {CLIENT KILL can filter by DB} {
+        set c1 [valkey_client]
+
+        $c1 select 2
+        r select 0
+
+        r client kill db 0 db 2
+
+        set result [r client list]
+        assert_no_match {*db=2*} $result
+        assert_match {*db=0*} $result
+        catch {$c1 close}
+    }
+
+    test {CLIENT KILL can filter by LIB-NAME} {
+        r client setinfo lib-name ""
+        r client setinfo lib-ver ""
+        set c1 [valkey_client]
+        set c2 [valkey_client]
+
+        $c1 client setinfo lib-name mylib
+        $c2 client setinfo lib-name test
+        $c2 client kill lib-name test lib-name mylib
+
+        set result [$c2 client list]
+        assert {[string match {*lib-name=mylib*} $result] == 0}
+
+        catch {$c2 close}
+    }
+
+    test {CLIENT KILL can filter by LIB-VER} {
+        set c1 [valkey_client]
+        set c2 [valkey_client]
+
+        $c1 client setinfo lib-ver 1.2.3
+        $c2 client setinfo lib-ver 3.2.1
+        $c2 client kill lib-ver 3.2.1 lib-ver 1.2.3
+
+        set result [$c2 client list]
+        assert_no_match {*lib-ver=1.2.3*} $result
+        assert_match {*lib-ver=3.2.1*} $result
+        catch {$c1 close}
+        catch {$c2 close}
+    }
+
+    test {CLIENT LIST can filter by NOT-LIB-NAME} {
+        set c1 [valkey_client]
+        $c1 CLIENT SETINFO lib-name testlib
+        r CLIENT SETINFO lib-name mylib
+        set result [r client list not-lib-name testlib not-lib-name mylib]
+        assert_no_match {*lib-name=mylib*} $result
+        assert_match {*lib-name=testlib*} $result
+        catch {$c1 close}
+    }
+
+    test {CLIENT LIST can filter by NOT-LIB-VER} {
+        set c1 [valkey_client]
+        $c1 CLIENT SETINFO lib-ver 3.2.1
+        r CLIENT SETINFO lib-ver 1.2.3
+        set result [r client list not-lib-ver 3.2.1 not-lib-ver 1.2.3]
+        assert_no_match {*lib-ver=1.2.3*} $result
+        assert_match {*lib-ver=3.2.1*} $result
+        catch {$c1 close}
+    }
+
+    test {CLIENT LIST can filter by NOT-DB number} {
+        set c1 [valkey_client]
+        $c1 select 0
+        r select 2
+        set result [r client list not-db 0 not-db 2]
+        assert_no_match {*db=2*} $result
+        assert_match {*db=0*} $result
+        catch {$c1 close}
+    }
+
+    test {CLIENT KILL can filter by NOT-DB} {
+        set c1 [valkey_client]
+
+        $c1 select 2
+        r select 0
+
+        r client kill not-db 2 not-db 0
+
+        set result [r client list]
+        assert_no_match {*db=2*} $result
+        assert_match {*db=0*} $result
+    }
+
+    test {CLIENT KILL can filter by NOT-LIB-NAME} {
+        set c1 [valkey_client]
+        set c2 [valkey_client]
+
+        $c1 client setinfo lib-name mylib
+        $c2 client setinfo lib-name not-mylib
+        $c2 client kill not-lib-name mylib not-lib-name not-mylib
+
+        set result [$c2 client list]
+        assert_no_match {*lib-name=mylib*} $result
+        assert_match {*lib-name=not-mylib*} $result
+
+
+        catch {$c2 close}
+    }
+
+    test {CLIENT KILL can filter by NOT-LIB-VER} {
+        set c1 [valkey_client]
+        set c2 [valkey_client]
+
+        $c1 client setinfo lib-ver 1.2.3
+        $c2 client kill not-lib-ver 1.2.3 not-lib-ver 0.0.0
+
+        set result [$c2 client list]
+        assert {[string match {*lib-ver=1.2.3*} $result] == 0}
+
+        catch {$c2 close}
+    }
+
+    test {valkey-server command line arguments - allow passing option name and option value in the same arg} {
+        start_server {config "default.conf" args {"--maxmemory 700mb" "--maxmemory-policy volatile-lru"}} {
+            assert_match [r config get maxmemory] {maxmemory 734003200}
+            assert_match [r config get maxmemory-policy] {maxmemory-policy volatile-lru}
+        }
+    } {} {external:skip}
+
+    test {valkey-server command line arguments - wrong usage that we support anyway} {
+        start_server {config "default.conf" args {loglevel verbose "--maxmemory '700mb'" "--maxmemory-policy 'volatile-lru'"}} {
+            assert_match [r config get loglevel] {loglevel verbose}
+            assert_match [r config get maxmemory] {maxmemory 734003200}
+            assert_match [r config get maxmemory-policy] {maxmemory-policy volatile-lru}
+        }
+    } {} {external:skip}
+
+    test {valkey-server command line arguments - allow option value to use the `--` prefix} {
+        start_server {config "default.conf" args {--proc-title-template --my--title--template --loglevel verbose}} {
+            assert_match [r config get proc-title-template] {proc-title-template --my--title--template}
+            assert_match [r config get loglevel] {loglevel verbose}
+        }
+    } {} {external:skip}
+
+    test {valkey-server command line arguments - option name and option value in the same arg and `--` prefix} {
+        start_server {config "default.conf" args {"--proc-title-template --my--title--template" "--loglevel verbose"}} {
+            assert_match [r config get proc-title-template] {proc-title-template --my--title--template}
+            assert_match [r config get loglevel] {loglevel verbose}
+        }
+    } {} {external:skip}
+
+    test {valkey-server command line arguments - save with empty input} {
+        start_server {config "default.conf" args {--save --loglevel verbose}} {
+            assert_match [r config get save] {save {}}
+            assert_match [r config get loglevel] {loglevel verbose}
+        }
+
+        start_server {config "default.conf" args {--loglevel verbose --save}} {
+            assert_match [r config get save] {save {}}
+            assert_match [r config get loglevel] {loglevel verbose}
+        }
+
+        start_server {config "default.conf" args {--save {} --loglevel verbose}} {
+            assert_match [r config get save] {save {}}
+            assert_match [r config get loglevel] {loglevel verbose}
+        }
+
+        start_server {config "default.conf" args {--loglevel verbose --save {}}} {
+            assert_match [r config get save] {save {}}
+            assert_match [r config get loglevel] {loglevel verbose}
+        }
+
+        start_server {config "default.conf" args {--proc-title-template --save --save {} --loglevel verbose}} {
+            assert_match [r config get proc-title-template] {proc-title-template --save}
+            assert_match [r config get save] {save {}}
+            assert_match [r config get loglevel] {loglevel verbose}
+        }
+
+    } {} {external:skip}
+
+    test {valkey-server command line arguments - take one bulk string with spaces for MULTI_ARG configs parsing} {
+        start_server {config "default.conf" args {--shutdown-on-sigint nosave force now --shutdown-on-sigterm "nosave force"}} {
+            assert_match [r config get shutdown-on-sigint] {shutdown-on-sigint {nosave now force}}
+            assert_match [r config get shutdown-on-sigterm] {shutdown-on-sigterm {nosave force}}
+        }
+    } {} {external:skip}
+
+    test {valkey-server command line arguments - dir multiple times} {
+        start_server {config "default.conf" args {--dir "./" --dir "./"}} {
+            r config get dir
+            assert_equal {PONG} [r ping]
+        }
+    } {} {external:skip}
+
+    # Config file at this point is at a weird state, and includes all
+    # known keywords. Might be a good idea to avoid adding tests here.
+}
+
+start_server {tags {"introspection external:skip"} overrides {requirepass mypass enable-protected-configs {no} enable-debug-command {no}}} {
+    test {auth check before command existence check and command arity check} {
+        assert_error "NOAUTH *" {r non-existing-command}
+        assert_error "NOAUTH *" {r set key value wrong_arg}
+    }
+
+    test {cannot modify protected configuration - no} {
+        assert_error "NOAUTH *" {r config set dir somedir}
+        assert_error "NOAUTH *" {r DEBUG HELP}
+
+        r auth mypass
+        assert_error "ERR *protected*" {r config set dir somedir}
+        assert_error "ERR *DEBUG command not allowed*" {r DEBUG HELP}
+    } {} {needs:debug}
+}
+
+start_server {config "minimal.conf" tags {"introspection external:skip"} overrides {protected-mode {no} enable-protected-configs {local} enable-debug-command {local}}} {
+    test {cannot modify protected configuration - local} {
+        # verify that for local connection it doesn't error
+        r config set dbfilename somename
+        r DEBUG HELP
+
+        # Get a non-loopback address of this instance for this test.
+        set myaddr [get_nonloopback_addr]
+        if {$myaddr != "" && ![string match {127.*} $myaddr]} {
+            # Non-loopback client should fail
+            set r2 [get_nonloopback_client]
+            assert_error "ERR *protected*" {$r2 config set dir somedir}
+            assert_error "ERR *DEBUG command not allowed*" {$r2 DEBUG HELP}
+            assert_equal [$r2 close] 0
+        }
+    } {} {needs:debug}
+}
+
+test {config during loading} {
+    start_server [list overrides [list key-load-delay 50 loading-process-events-interval-bytes 1024 rdbcompression no save "900 1"]] {
+        # create a big rdb that will take long to load. it is important
+        # for keys to be big since the server processes events only once in 2mb.
+        # 100mb of rdb, 100k keys will load in more than 5 seconds
+        r debug populate 100000 key 1000
+
+        restart_server 0 false false
+
+        # make sure it's still loading
+        assert_equal [s loading] 1
+
+        # verify some configs are allowed during loading
+        r config set loglevel debug
+        assert_equal [lindex [r config get loglevel] 1] debug
+
+        # verify some configs are forbidden during loading
+        assert_error {LOADING*} {r config set dir asdf}
+
+        # make sure it's still loading
+        assert_equal [s loading] 1
+
+        # no need to keep waiting for loading to complete
+        exec kill [srv 0 pid]
+    }
+} {} {external:skip}
+
+test {MEMORY commands during loading} {
+    start_server [list overrides [list key-load-delay 50 loading-process-events-interval-bytes 1024]] {
+        # Set up some initial data
+        r debug populate 100000 key 1000
+
+        # Save and restart
+        r save
+        restart_server 0 false false
+
+        # At this point, keys are loaded one at time, busy looping 50usec
+        # between each. Further, other events are processed every 1024 bytes
+        # of RDB. We're sending all our commands deferred, so they have a
+        # chance to be processed all at once between loading two keys.
+
+        set rd [valkey_deferring_client]
+
+        # Allowed during loading
+        $rd memory help
+        $rd memory malloc-stats
+        $rd memory purge
+
+        # Disallowed during loading (because directly dependent on the dataset)
+        $rd memory doctor
+        $rd memory stats
+        $rd memory usage key:1
+
+        # memory help
+        assert_match {{MEMORY <subcommand> *}} [$rd read]
+        # memory malloc-stats
+        assert_match {*alloc*} [$rd read]
+        # memory purge
+        assert_match OK [$rd read]
+        # memory doctor
+        assert_error {*LOADING*} {$rd read}
+        # memory stats
+        assert_error {*LOADING*} {$rd read}
+        # memory usage key:1
+        assert_error {*LOADING*} {$rd read}
+
+        $rd close
+    }
+} {} {external:skip}
+
+test {CONFIG REWRITE handles rename-command properly} {
+    start_server {tags {"introspection"} overrides {rename-command {flushdb badger}}} {
+        assert_error {ERR unknown command*} {r flushdb}
+
+        r config rewrite
+        restart_server 0 true false
+
+        assert_error {ERR unknown command*} {r flushdb}
+    }
+} {} {external:skip}
+
+test {CONFIG REWRITE handles alias config properly} {
+    start_server {tags {"introspection"} overrides {hash-max-listpack-entries 20 hash-max-ziplist-entries 21}} {
+        assert_equal [r config get hash-max-listpack-entries] {hash-max-listpack-entries 21}
+        assert_equal [r config get hash-max-ziplist-entries] {hash-max-ziplist-entries 21}
+        r config set hash-max-listpack-entries 100
+
+        r config rewrite
+        restart_server 0 true false
+
+        assert_equal [r config get hash-max-listpack-entries] {hash-max-listpack-entries 100}
+    }
+    # test the order doesn't matter
+    start_server {tags {"introspection"} overrides {hash-max-ziplist-entries 20 hash-max-listpack-entries 21}} {
+        assert_equal [r config get hash-max-listpack-entries] {hash-max-listpack-entries 21}
+        assert_equal [r config get hash-max-ziplist-entries] {hash-max-ziplist-entries 21}
+        r config set hash-max-listpack-entries 100
+
+        r config rewrite
+        restart_server 0 true false
+
+        assert_equal [r config get hash-max-listpack-entries] {hash-max-listpack-entries 100}
+    }
+} {} {external:skip}
+
+test {CONFIG REWRITE handles large unsigned memory config values} {
+    start_server {tags {"introspection"}} {
+        r config set maxmemory 9223372036854775808
+        r config set maxmemory-clients 100%
+
+        r config rewrite
+        restart_server 0 true false
+
+        assert_equal [lindex [r config get maxmemory] 1] 9223372036854775808
+        assert_equal [lindex [r config get maxmemory-clients] 1] 100%
+    }
+} {} {external:skip}
+
+test {SIGNED MEMORY CONFIG allows negative number} {
+    start_server {tags {"introspection"}} {
+        r config set slot-migration-max-failover-repl-bytes -1
+        assert_equal [lindex [r config get slot-migration-max-failover-repl-bytes] 1] -1
+        assert_error {*argument must be between -1 and *} {r config set slot-migration-max-failover-repl-bytes -2}
+
+        r config rewrite
+        restart_server 0 true false
+        assert_equal [lindex [r config get slot-migration-max-failover-repl-bytes] 1] -1
+    }
+} {} {external:skip}
+
+test {CONFIG hash-seed is immutable and settable at startup} {
+    start_server {tags {"introspection"} overrides {hash-seed aabbccddeeffgghh}} {
+        assert_error "ERR CONFIG SET failed (possibly related to argument 'hash-seed') - can't set immutable config*" {
+            r config set hash-seed newseed
+        }
+    }
+} {} {external:skip}
+
+start_server {overrides {forkless-infrastructure-enabled yes} tags {"introspection" "external:skip"}} {
+    foreach bgsave_type {"fork" "forkless"} {
+        test "CLIENT KILL close the client connection during bgsave - $bgsave_type" {
+            r flushall
+            r set k v
+            r config set rdb-key-save-delay 10000000
+            r config set bgsave-default-method $bgsave_type
+            r bgsave
+            wait_for_condition 1000 10 {
+                [s rdb_bgsave_in_progress] eq 1
+            } else {
+                fail "bgsave did not start in time"
+            }
+
+            set expected_type [expr {$bgsave_type eq "forkless" ? "forkless" : "fork"}]
+            assert_equal [s rdb_current_bgsave_type] $expected_type
+
+            r client kill skipme no
+
+            assert_error "*I/O error*" {r ping}
+            assert_equal "PONG" [r ping]
+
+            assert_equal [s rdb_bgsave_in_progress] 1
+
+            r config set rdb-key-save-delay 0
+            r flushall
+            wait_for_condition 1000 10 {
+                [s rdb_bgsave_in_progress] eq 0
+            } else {
+                fail "bgsave did not stop in time"
+            }
+        } {} {needs:save}
+    }
+}

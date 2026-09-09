@@ -1,0 +1,17 @@
+BasedOnStyle: LLVM
+IndentWidth: 4
+TabWidth: 4
+ColumnLimit: 0
+MaxEmptyLinesToKeep: 2
+AllowShortCaseLabelsOnASingleLine: true
+AllowShortIfStatementsOnASingleLine: WithoutElse
+AllowShortLoopsOnASingleLine: true
+AllowShortFunctionsOnASingleLine: false
+KeepEmptyLinesAtTheStartOfBlocks: false
+CommentPragmas: '^\\s*\\*'
+SortIncludes: false
+AllowAllParametersOfDeclarationOnNextLine: false
+BinPackParameters: false
+InsertNewlineAtEOF: true
+AllowShortEnumsOnASingleLine: false
+AllowAllArgumentsOnNextLine: false

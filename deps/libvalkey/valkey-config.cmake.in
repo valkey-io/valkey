@@ -1,0 +1,13 @@
+@PACKAGE_INIT@
+
+set_and_check(valkey_INCLUDEDIR "@PACKAGE_INCLUDE_INSTALL_DIR@")
+
+IF (NOT TARGET valkey::@valkey_export_name@)
+	INCLUDE(${CMAKE_CURRENT_LIST_DIR}/valkey-targets.cmake)
+ENDIF()
+
+SET(valkey_LIBRARIES valkey::@valkey_export_name@)
+SET(valkey_INCLUDE_DIRS ${valkey_INCLUDEDIR})
+
+check_required_components(valkey)
+

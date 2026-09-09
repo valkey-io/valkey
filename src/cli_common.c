@@ -1,0 +1,470 @@
+/* CLI (command line interface) common methods
+ *
+ * Copyright (c) 2020, Redis Ltd.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are met:
+ *
+ *   * Redistributions of source code must retain the above copyright notice,
+ *     this list of conditions and the following disclaimer.
+ *   * Redistributions in binary form must reproduce the above copyright
+ *     notice, this list of conditions and the following disclaimer in the
+ *     documentation and/or other materials provided with the distribution.
+ *   * Neither the name of Redis nor the names of its contributors may be used
+ *     to endorse or promote products derived from this software without
+ *     specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
+ * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+ * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+ * POSSIBILITY OF SUCH DAMAGE.
+ */
+
+#include "fmacros.h"
+#include "cli_common.h"
+#include "version.h"
+
+#include <assert.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <fcntl.h>
+#include <errno.h>
+#include "sds.h"
+#include <unistd.h>
+#include <string.h>
+#include <ctype.h>
+#ifdef USE_OPENSSL
+#include <openssl/ssl.h>
+#include <openssl/err.h>
+#include <valkey/tls.h>
+#endif
+#ifdef USE_RDMA
+#include <valkey/rdma.h>
+#endif
+
+#define UNUSED(V) ((void)V)
+
+char *serverGitSHA1(void);
+char *serverGitDirty(void);
+
+/* Wrapper around valkeyInitiateTLS to avoid libvalkey_tls dependencies if
+ * not building with TLS support.
+ */
+int cliSecureConnection(valkeyContext *c, cliSSLconfig config, const char **err) {
+#ifdef USE_OPENSSL
+    static SSL_CTX *ssl_ctx = NULL;
+
+    if (!ssl_ctx) {
+        ssl_ctx = SSL_CTX_new(SSLv23_client_method());
+        if (!ssl_ctx) {
+            *err = "Failed to create SSL_CTX";
+            goto error;
+        }
+        SSL_CTX_set_options(ssl_ctx, SSL_OP_NO_SSLv2 | SSL_OP_NO_SSLv3);
+        SSL_CTX_set_verify(ssl_ctx, config.skip_cert_verify ? SSL_VERIFY_NONE : SSL_VERIFY_PEER, NULL);
+
+        if (config.cacert || config.cacertdir) {
+            if (!SSL_CTX_load_verify_locations(ssl_ctx, config.cacert, config.cacertdir)) {
+                *err = "Invalid CA Certificate File/Directory";
+                goto error;
+            }
+        } else {
+            if (!SSL_CTX_set_default_verify_paths(ssl_ctx)) {
+                *err = "Failed to use default CA paths";
+                goto error;
+            }
+        }
+
+        if (config.cert && !SSL_CTX_use_certificate_chain_file(ssl_ctx, config.cert)) {
+            *err = "Invalid client certificate";
+            goto error;
+        }
+
+        if (config.key && !SSL_CTX_use_PrivateKey_file(ssl_ctx, config.key, SSL_FILETYPE_PEM)) {
+            *err = "Invalid private key";
+            goto error;
+        }
+        if (config.ciphers && !SSL_CTX_set_cipher_list(ssl_ctx, config.ciphers)) {
+            *err = "Error while configuring ciphers";
+            goto error;
+        }
+#ifdef TLS1_3_VERSION
+        if (config.ciphersuites && !SSL_CTX_set_ciphersuites(ssl_ctx, config.ciphersuites)) {
+            *err = "Error while setting cypher suites";
+            goto error;
+        }
+#endif
+    }
+
+    SSL *ssl = SSL_new(ssl_ctx);
+    if (!ssl) {
+        *err = "Failed to create SSL object";
+        return VALKEY_ERR;
+    }
+
+    if (config.sni && !SSL_set_tlsext_host_name(ssl, config.sni)) {
+        *err = "Failed to configure SNI";
+        SSL_free(ssl);
+        return VALKEY_ERR;
+    }
+
+    return valkeyInitiateTLS(c, ssl);
+
+error:
+    SSL_CTX_free(ssl_ctx);
+    ssl_ctx = NULL;
+    return VALKEY_ERR;
+#else
+    (void)config;
+    (void)c;
+    (void)err;
+    return VALKEY_OK;
+#endif
+}
+
+/* Wrapper around libvalkey to allow arbitrary reads and writes.
+ *
+ * We piggybacks on top of libvalkey to achieve transparent TLS support,
+ * and use its internal buffers so it can co-exist with commands
+ * previously/later issued on the connection.
+ *
+ * Interface is close to enough to read()/write() so things should mostly
+ * work transparently.
+ */
+
+/* Write a raw buffer through a valkeyContext. If we already have something
+ * in the buffer (leftovers from libvalkey operations) it will be written
+ * as well.
+ */
+ssize_t cliWriteConn(valkeyContext *c, const char *buf, size_t buf_len) {
+    int done = 0;
+
+    /* Append data to buffer which is *usually* expected to be empty
+     * but we don't assume that, and write.
+     */
+    c->obuf = sdscatlen(c->obuf, buf, buf_len);
+    if (valkeyBufferWrite(c, &done) == VALKEY_ERR) {
+        if (!(c->flags & VALKEY_BLOCK)) errno = EAGAIN;
+
+        /* On error, we assume nothing was written and we roll back the
+         * buffer to its original state.
+         */
+        if (sdslen(c->obuf) > buf_len)
+            sdsrange(c->obuf, 0, -(buf_len + 1));
+        else
+            sdsclear(c->obuf);
+
+        return -1;
+    }
+
+    /* If we're done, free up everything. We may have written more than
+     * buf_len (if c->obuf was not initially empty) but we don't have to
+     * tell.
+     */
+    if (done) {
+        sdsclear(c->obuf);
+        return buf_len;
+    }
+
+    /* Write was successful but we have some leftovers which we should
+     * remove from the buffer.
+     *
+     * Do we still have data that was there prior to our buf? If so,
+     * restore buffer to it's original state and report no new data was
+     * written.
+     */
+    if (sdslen(c->obuf) > buf_len) {
+        sdsrange(c->obuf, 0, -(buf_len + 1));
+        return 0;
+    }
+
+    /* At this point we're sure no prior data is left. We flush the buffer
+     * and report how much we've written.
+     */
+    size_t left = sdslen(c->obuf);
+    sdsclear(c->obuf);
+    return buf_len - left;
+}
+
+/* Wrapper around OpenSSL (libssl and libcrypto) initialisation
+ */
+int cliSecureInit(void) {
+#ifdef USE_OPENSSL
+    ERR_load_crypto_strings();
+    SSL_load_error_strings();
+    SSL_library_init();
+#endif
+    return VALKEY_OK;
+}
+
+/* Create an sds from stdin */
+sds readArgFromStdin(void) {
+    char buf[1024];
+    sds arg = sdsempty();
+
+    while (1) {
+        int nread = read(fileno(stdin), buf, 1024);
+
+        if (nread == 0)
+            break;
+        else if (nread == -1) {
+            perror("Reading from standard input");
+            exit(1);
+        }
+        arg = sdscatlen(arg, buf, nread);
+    }
+    return arg;
+}
+
+/* Create an sds array from argv, either as-is or by dequoting every
+ * element. When quoted is non-zero, may return a NULL to indicate an
+ * invalid quoted string.
+ *
+ * The caller should free the resulting array of sds strings with
+ * sdsfreesplitres().
+ */
+sds *getSdsArrayFromArgv(int argc, char **argv, int quoted) {
+    sds *res = sds_malloc(sizeof(sds) * argc);
+
+    for (int j = 0; j < argc; j++) {
+        if (quoted) {
+            sds unquoted = unquoteCString(argv[j]);
+            if (!unquoted) {
+                while (--j >= 0) sdsfree(res[j]);
+                sds_free(res);
+                return NULL;
+            }
+            res[j] = unquoted;
+        } else {
+            res[j] = sdsnew(argv[j]);
+        }
+    }
+
+    return res;
+}
+
+/* Unquote a null-terminated string and return it as a binary-safe sds. */
+sds unquoteCString(char *str) {
+    int count;
+    sds *unquoted = sdssplitargs(str, &count);
+    sds res = NULL;
+
+    if (unquoted && count == 1) {
+        res = unquoted[0];
+        unquoted[0] = NULL;
+    }
+
+    if (unquoted) sdsfreesplitres(unquoted, count);
+
+    return res;
+}
+
+
+/* URL-style percent decoding. */
+#define isHexChar(c) (isdigit(c) || ((c) >= 'a' && (c) <= 'f'))
+#define decodeHexChar(c) (isdigit(c) ? (c) - '0' : (c) - 'a' + 10)
+#define decodeHex(h, l) ((decodeHexChar(h) << 4) + decodeHexChar(l))
+
+static sds percentDecode(const char *pe, size_t len) {
+    const char *end = pe + len;
+    sds ret = sdsempty();
+    const char *curr = pe;
+
+    while (curr < end) {
+        if (*curr == '%') {
+            if ((end - curr) < 2) {
+                fprintf(stderr, "Incomplete URI encoding\n");
+                exit(1);
+            }
+
+            char h = tolower(*(++curr));
+            char l = tolower(*(++curr));
+            if (!isHexChar(h) || !isHexChar(l)) {
+                fprintf(stderr, "Illegal character in URI encoding\n");
+                exit(1);
+            }
+            char c = decodeHex(h, l);
+            ret = sdscatlen(ret, &c, 1);
+            curr++;
+        } else {
+            ret = sdscatlen(ret, curr++, 1);
+        }
+    }
+
+    return ret;
+}
+
+/* Parse a URI and extract the server connection information.
+ * URI scheme is based on the provisional specification[1] excluding support
+ * for query parameters. Valid URIs are:
+ *   scheme:    "valkey://" or "valkeys://" or "redis://" or "rediss://"
+ *   authority: [[<username> ":"] <password> "@"] [<hostname> [":" <port>]]
+ *   path:      ["/" [<db>]]
+ *
+ *  [1]: https://www.iana.org/assignments/uri-schemes/prov/redis */
+void parseUri(const char *uri, const char *tool_name, cliConnInfo *connInfo, int *tls_flag) {
+#ifdef USE_OPENSSL
+    UNUSED(tool_name);
+#else
+    UNUSED(tls_flag);
+#endif
+
+    const char *scheme = "valkey://";
+    const char *tlsscheme = "valkeys://";
+    /* We need to support redis:// and rediss:// too for compatibility. */
+    const char *redisScheme = "redis://";
+    const char *redisTlsscheme = "rediss://";
+    const char *curr = uri;
+    const char *end = uri + strlen(uri);
+    const char *userinfo, *username, *port, *host, *path;
+
+    /* URI must start with a valid scheme. */
+    if (!strncasecmp(tlsscheme, curr, strlen(tlsscheme)) ||
+        !strncasecmp(redisTlsscheme, curr, strlen(redisTlsscheme))) {
+#ifdef USE_OPENSSL
+        *tls_flag = 1;
+        const char *del = strstr(curr, "://");
+        curr += (del - curr) + 3;
+#else
+        char *copy = strdup(curr);
+        char *curr_scheme = strtok(copy, "://");
+        fprintf(stderr, "%s:// is only supported when %s is compiled with OpenSSL\n", curr_scheme, tool_name);
+        free(copy);
+        exit(1);
+#endif
+    } else if (!strncasecmp(scheme, curr, strlen(scheme)) || !strncasecmp(redisScheme, curr, strlen(redisScheme))) {
+        const char *del = strstr(curr, "://");
+        curr += (del - curr) + 3;
+    } else {
+        fprintf(stderr, "Invalid URI scheme\n");
+        exit(1);
+    }
+    if (curr == end) return;
+
+    /* Extract user info. */
+    if ((userinfo = strchr(curr, '@'))) {
+        if ((username = strchr(curr, ':')) && username < userinfo) {
+            connInfo->user = percentDecode(curr, username - curr);
+            curr = username + 1;
+        }
+
+        connInfo->auth = percentDecode(curr, userinfo - curr);
+        curr = userinfo + 1;
+    }
+    if (curr == end) return;
+
+    /* Extract host and port. */
+    path = strchr(curr, '/');
+    if (*curr != '/') {
+        host = path ? path - 1 : end;
+        if (*curr == '[') {
+            curr += 1;
+            if ((port = strchr(curr, ']'))) {
+                if (*(port + 1) == ':') {
+                    connInfo->hostport = atoi(port + 2);
+                }
+                host = port - 1;
+            }
+        } else {
+            if ((port = strchr(curr, ':'))) {
+                connInfo->hostport = atoi(port + 1);
+                host = port - 1;
+            }
+        }
+        sdsfree(connInfo->hostip);
+        connInfo->hostip = sdsnewlen(curr, host - curr + 1);
+    }
+    curr = path ? path + 1 : end;
+    if (curr == end) return;
+
+    /* Extract database number. */
+    connInfo->input_dbnum = atoi(curr);
+}
+
+void freeCliConnInfo(cliConnInfo connInfo) {
+    if (connInfo.hostip) sdsfree(connInfo.hostip);
+    if (connInfo.auth) sdsfree(connInfo.auth);
+    if (connInfo.user) sdsfree(connInfo.user);
+}
+
+sds cliVersion(void) {
+    sds version = sdscatprintf(sdsempty(), "%s", VALKEY_VERSION);
+
+    /* Add git commit and working tree status when available. */
+    if (strtoll(serverGitSHA1(), NULL, 16)) {
+        version = sdscatprintf(version, " (git:%s", serverGitSHA1());
+        if (strtoll(serverGitDirty(), NULL, 10)) version = sdscatprintf(version, "-dirty");
+        version = sdscat(version, ")");
+    }
+    return version;
+}
+
+/* This is a wrapper to call valkeyConnect or valkeyConnectWithTimeout. */
+valkeyContext *valkeyConnectWrapper(enum valkeyConnectionType ct, const char *ip_or_path, int port, const struct timeval tv, int nonblock, int multipath) {
+    valkeyOptions options = {0};
+
+    switch (ct) {
+    case VALKEY_CONN_TCP:
+        VALKEY_OPTIONS_SET_TCP(&options, ip_or_path, port);
+        break;
+
+    case VALKEY_CONN_UNIX:
+        VALKEY_OPTIONS_SET_UNIX(&options, ip_or_path);
+        break;
+
+    case VALKEY_CONN_RDMA:
+#ifdef USE_RDMA
+        VALKEY_OPTIONS_SET_RDMA(&options, ip_or_path, port);
+        break;
+#else
+        assert(0); /* requesting RDMA connection without RDMA support??? */
+#endif
+
+    default:
+        assert(0); /* this should not happen */
+    }
+
+    if (tv.tv_sec || tv.tv_usec) {
+        options.connect_timeout = &tv;
+    }
+
+    if (nonblock) {
+        options.options |= VALKEY_OPT_NONBLOCK;
+    }
+
+    if (multipath) {
+        assert(ct == VALKEY_CONN_TCP); /* caller should make sure multipath is available for TCP only */
+        options.options |= VALKEY_OPT_MPTCP;
+    }
+
+    return valkeyConnectWithOptions(&options);
+}
+
+/* 62-bit thread-local PRNG. glibc random() serializes every caller on a
+ * process-wide lock, which makes it a scalability bottleneck when called
+ * per command from many threads (valkey-benchmark placeholder replacement,
+ * fuzzer worker threads). Each thread runs an independent splitmix64
+ * stream instead, seeded on first use from the global (srandom() seedable)
+ * generator. With a fixed srandom() seed, per-thread streams are seeded
+ * deterministically, but which stream a given thread receives depends on
+ * the scheduling order of first use. */
+static _Thread_local uint64_t rand62_state = 0;
+
+uint64_t rand62(void) {
+    if (rand62_state == 0) {
+        rand62_state = ((uint64_t)random() << 31) ^ (uint64_t)random();
+        if (rand62_state == 0) rand62_state = 0x9E3779B97F4A7C15ULL;
+    }
+    uint64_t z = (rand62_state += 0x9E3779B97F4A7C15ULL);
+    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
+    z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
+    return (z ^ (z >> 31)) & ((1ULL << 62) - 1);
+}

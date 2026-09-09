@@ -1,0 +1,37 @@
+# example systemd template service unit file for multiple valkey-servers
+#
+# You can use this file as a blueprint for your actual template service unit
+# file, if you intend to run multiple independent valkey-server instances in
+# parallel using systemd's "template unit files" feature. If you do, you will
+# want to choose a better basename for your service unit by renaming this file
+# when copying it.
+#
+# Please take a look at the provided "systemd-valkey_server.service" example
+# service unit file, too, if you choose to use this approach at managing
+# multiple valkey-server instances via systemd.
+
+[Unit]
+Description=Valkey data structure server - instance %i
+Documentation=https://github.com/valkey-io/valkey-doc
+# This template unit assumes your valkey-server configuration file(s)
+# to live at /etc/valkey/valkey_server_<INSTANCE_NAME>.conf
+AssertPathExists=/etc/valkey/valkey_server_%i.conf
+#Before=your_application.service another_example_application.service
+#AssertPathExists=/var/lib/valkey
+
+[Service]
+ExecStart=/usr/local/bin/valkey-server /etc/valkey/valkey_server_%i.conf
+LimitNOFILE=10032
+NoNewPrivileges=yes
+#OOMScoreAdjust=-900
+#PrivateTmp=yes
+Type=notify
+TimeoutStartSec=infinity
+TimeoutStopSec=infinity
+UMask=0077
+#User=valkey
+#Group=valkey
+#WorkingDirectory=/var/lib/valkey
+
+[Install]
+WantedBy=multi-user.target

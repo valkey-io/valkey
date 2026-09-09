@@ -1,0 +1,212 @@
+{
+    "DOCS": {
+        "summary": "Returns documentary information about one, multiple or all commands.",
+        "complexity": "O(N) where N is the number of commands to look up",
+        "group": "server",
+        "since": "7.0.0",
+        "arity": -2,
+        "container": "COMMAND",
+        "function": "commandDocsCommand",
+        "command_flags": [
+            "LOADING",
+            "STALE",
+            "SENTINEL"
+        ],
+        "acl_categories": [
+            "CONNECTION",
+            "SLOW"
+        ],
+        "command_tips": [
+            "NONDETERMINISTIC_OUTPUT_ORDER"
+        ],
+        "reply_schema": {
+            "description": "A map where each key is a command name, and each value is the documentary information",
+            "type": "object",
+            "additionalProperties": false,
+            "patternProperties": {
+                "^.*$": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "summary": {
+                            "description": "Short command description.",
+                            "type": "string"
+                        },
+                        "since": {
+                            "description": "The server version that added the command (or for module commands, the module version).",
+                            "type": "string"
+                        },
+                        "group": {
+                            "description": "The functional group to which the command belongs.",
+                            "oneOf": [
+                                {
+                                    "const": "bitmap"
+                                },
+                                {
+                                    "const": "cluster"
+                                },
+                                {
+                                    "const": "connection"
+                                },
+                                {
+                                    "const": "generic"
+                                },
+                                {
+                                    "const": "geo"
+                                },
+                                {
+                                    "const": "hash"
+                                },
+                                {
+                                    "const": "hyperloglog"
+                                },
+                                {
+                                    "const": "list"
+                                },
+                                {
+                                    "const": "module"
+                                },
+                                {
+                                    "const": "pubsub"
+                                },
+                                {
+                                    "const": "scripting"
+                                },
+                                {
+                                    "const": "sentinel"
+                                },
+                                {
+                                    "const": "server"
+                                },
+                                {
+                                    "const": "set"
+                                },
+                                {
+                                    "const": "sorted-set"
+                                },
+                                {
+                                    "const": "stream"
+                                },
+                                {
+                                    "const": "string"
+                                },
+                                {
+                                    "const": "transactions"
+                                }
+                            ]
+                        },
+                        "complexity": {
+                            "description": "A short explanation about the command's time complexity.",
+                            "type": "string"
+                        },
+                        "module": {
+                            "type": "string"
+                        },
+                        "doc_flags": {
+                            "description": "An array of documentation flags.",
+                            "type": "array",
+                            "items": {
+                                "oneOf": [
+                                    {
+                                        "description": "The command is deprecated.",
+                                        "const": "deprecated"
+                                    },
+                                    {
+                                        "description": "A system command that isn't meant to be called by users.",
+                                        "const": "syscmd"
+                                    }
+                                ]
+                            }
+                        },
+                        "deprecated_since": {
+                            "description": "The server version that deprecated the command (or for module commands, the module version).",
+                            "type": "string"
+                        },
+                        "replaced_by": {
+                            "description": "The alternative for a deprecated command.",
+                            "type": "string"
+                        },
+                        "history": {
+                            "description": "An array of historical notes describing changes to the command's behavior or arguments.",
+                            "type": "array",
+                            "items": {
+                                "type": "array",
+                                "minItems": 2,
+                                "maxItems": 2,
+                                "items": [
+                                    {
+                                        "type": "string",
+                                        "description": "The server version that the entry applies to."
+                                    },
+                                    {
+                                        "type": "string",
+                                        "description": "The description of the change."
+                                    }
+                                ]
+                            }
+                        },
+                        "arguments": {
+                            "description": "An array of maps that describe the command's arguments.",
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "properties": {
+                                    "name": {
+                                        "type": "string"
+                                    },
+                                    "type": {
+                                        "type": "string"
+                                    },
+                                    "display_text": {
+                                        "type": "string"
+                                    },
+                                    "key_spec_index": {
+                                        "type": "integer"
+                                    },
+                                    "token": {
+                                        "type": "string"
+                                    },
+                                    "summary": {
+                                        "type": "string"
+                                    },
+                                    "since": {
+                                        "type": "string"
+                                    },
+                                    "deprecated_since": {
+                                        "type": "string"
+                                    },
+                                    "flags": {
+                                        "type": "array",
+                                        "items": {
+                                            "type": "string"
+                                        }
+                                    },
+                                    "arguments": {
+                                        "type": "array"
+                                    }
+                                }
+                            }
+                        },
+                        "reply_schema": {
+                            "description": "Command reply schema.",
+                            "type": "object"
+                        },
+                        "subcommands": {
+                            "description": "A map where each key is a subcommand, and each value is the documentary information.",
+                            "$ref": "#"
+                        }
+                    }
+                }
+            }
+        },
+        "arguments": [
+            {
+                "name": "command-name",
+                "type": "string",
+                "optional": true,
+                "multiple": true
+            }
+        ]
+    }
+}

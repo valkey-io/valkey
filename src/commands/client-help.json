@@ -1,0 +1,27 @@
+{
+    "HELP": {
+        "summary": "Returns helpful text about the different subcommands.",
+        "complexity": "O(1)",
+        "group": "connection",
+        "since": "5.0.0",
+        "arity": 2,
+        "container": "CLIENT",
+        "function": "clientHelpCommand",
+        "command_flags": [
+            "LOADING",
+            "STALE",
+            "SENTINEL"
+        ],
+        "acl_categories": [
+            "CONNECTION",
+            "SLOW"
+        ],
+        "reply_schema": {
+            "type": "array",
+            "description": "Helpful text about subcommands.",
+            "items": {
+                "type": "string"
+            }
+        }
+    }
+}

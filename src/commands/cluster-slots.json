@@ -1,0 +1,144 @@
+{
+    "SLOTS": {
+        "summary": "Returns the mapping of cluster slots to nodes.",
+        "complexity": "O(N) where N is the total number of Cluster nodes",
+        "group": "cluster",
+        "since": "3.0.0",
+        "arity": 2,
+        "container": "CLUSTER",
+        "function": "clusterCommand",
+        "history": [
+            [
+                "4.0.0",
+                "Added node IDs."
+            ],
+            [
+                "7.0.0",
+                "Added additional networking metadata field."
+            ],
+            [
+                "9.1.0",
+                "Added `availability-zone` field inside the networking metadata."
+            ]
+        ],
+        "command_flags": [
+            "LOADING",
+            "STALE"
+        ],
+        "command_tips": [
+            "NONDETERMINISTIC_OUTPUT"
+        ],
+        "reply_schema": {
+            "description": "Nested list of slot ranges with networking information.",
+            "type": "array",
+            "items": {
+                "type": "array",
+                "minItems": 3,
+                "maxItems": 4294967295,
+                "items": [
+                    {
+                        "description": "Start slot number.",
+                        "type": "integer"
+                    },
+                    {
+                        "description": "End slot number.",
+                        "type": "integer"
+                    },
+                    {
+                        "type": "array",
+                        "description": "Primary node for the slot range.",
+                        "minItems": 4,
+                        "maxItems": 4,
+                        "items": [
+                            {
+                                "description": "Endpoint description.",
+                                "oneOf": [
+                                    {
+                                        "description": "Hostname or ip.",
+                                        "type": "string"
+                                    },
+                                    {
+                                        "description": "Unknown type.",
+                                        "type": "null"
+                                    }
+                                ]
+                            },
+                            {
+                                "description": "Port.",
+                                "type": "integer"
+                            },
+                            {
+                                "description": "Node name.",
+                                "type": "string"
+                            },
+                            {
+                                "description": "Map of additional networking metadata fields.",
+                                "type": "object",
+                                "additionalProperties": false,
+                                "properties": {
+                                    "hostname": {
+                                        "type": "string"
+                                    },
+                                    "ip": {
+                                        "type": "string"
+                                    },
+                                    "availability-zone": {
+                                        "type": "string"
+                                    }
+                                }
+                            }
+                        ]
+                    }
+                ],
+                "additionalItems": {
+                    "type": "array",
+                    "description": "Replica node for the slot range.",
+                    "minItems": 4,
+                    "maxItems": 4,
+                    "items": [
+                        {
+                            "description": "Endpoint description.",
+                            "oneOf": [
+                                {
+                                    "description": "Hostname or ip.",
+                                    "type": "string"
+                                },
+                                {
+                                    "description": "Unknown type.",
+                                    "type": "null"
+                                }
+                            ]
+                        },
+                        {
+                            "description": "Port.",
+                            "type": "integer"
+                        },
+                        {
+                            "description": "Node name.",
+                            "type": "string"
+                        },
+                        {
+                            "description": "Map of additional networking metadata fields.",
+                            "type": "object",
+                            "additionalProperties": false,
+                            "properties": {
+                                "hostname": {
+                                    "type": "string"
+                                },
+                                "ip": {
+                                    "type": "string"
+                                },
+                                "availability-zone": {
+                                    "type": "string"
+                                }
+                            }
+                        }
+                    ]
+                }
+            }
+        },
+        "acl_categories": [
+            "SLOW"
+        ]
+    }
+}

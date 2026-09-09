@@ -1,0 +1,346 @@
+name: On-Demand PR Benchmark
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "PR number to benchmark"
+        required: true
+        type: number
+      commands:
+        description: "Comma separated predefined commands(equivalent to '-t')  to benchmark (e.g. SET,GET,HSET,LPUSH)"
+        required: false
+        type: string
+        default: "SET,GET"
+      data_size:
+        description: "Comma separated data sizes in bytes (e.g. 16,96). Range: 1-1048576"
+        required: false
+        type: string
+        default: ""
+      io_threads:
+        description: "Comma separated io-threads values (e.g. 1,9). Range: 1-20"
+        required: false
+        type: string
+        default: ""
+      pipelines:
+        description: "Comma separated pipeline values (e.g. 1,10). Range: 1-1000"
+        required: false
+        type: string
+        default: ""
+      cluster_mode:
+        description: "Enable cluster mode"
+        required: false
+        type: boolean
+        default: false
+
+defaults:
+  run:
+    shell: "bash -Eeuo pipefail -x {0}"
+
+# Workflow-level permissions are minimal. Jobs grant additional scopes only
+# where they are actually needed (defense-in-depth).
+permissions:
+  contents: read
+
+jobs:
+  resolve-pr:
+    if: github.repository == 'valkey-io/valkey'
+    runs-on: ubuntu-latest
+    # Read-only access to the PR is enough to call pulls.get.
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      merge_commit_sha: ${{ steps.pr.outputs.merge_commit_sha }}
+      head_sha: ${{ steps.pr.outputs.head_sha }}
+      base_ref: ${{ steps.pr.outputs.base_ref }}
+    steps:
+      - name: Get PR details
+        id: pr
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const pr = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: ${{ github.event.inputs.pr_number }}
+            });
+
+            if (pr.data.state !== 'open') {
+              core.setFailed(`PR #${{ github.event.inputs.pr_number }} is not open`);
+              return;
+            }
+
+            // GitHub returns merge_commit_sha = null when the PR cannot be
+            // cleanly merged into its base branch, OR when GitHub has not
+            // yet computed the merge (race right after a push).
+            if (!pr.data.merge_commit_sha) {
+              core.setFailed("The PR has no mergeable commit (likely conflicts with the base branch, or merge not yet computed - try again in a moment).");
+              return;
+            }
+
+            core.setOutput('merge_commit_sha', pr.data.merge_commit_sha);
+            core.setOutput('head_sha', pr.data.head.sha);
+            core.setOutput('base_ref', pr.data.base.ref);
+
+  benchmark:
+    needs: resolve-pr
+    runs-on: ["self-hosted", "ec2-al-2023-pr-benchmarking-arm64"]
+    # Benchmark workload is ~5.5h; 7h gives buffer for slow runs/queueing.
+    timeout-minutes: 420
+    # Write access scoped to the job that posts the result comment.
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+    steps:
+      - name: Checkout valkey
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          path: valkey
+          fetch-depth: 0
+          ref: ${{ needs.resolve-pr.outputs.merge_commit_sha }}
+          persist-credentials: false
+
+      - name: Checkout valkey-perf-benchmark
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ${{ github.repository_owner }}/valkey-perf-benchmark
+          path: valkey-perf-benchmark
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Checkout valkey for latest benchmark
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: valkey-io/valkey
+          ref: "unstable"
+          path: valkey_latest
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: kishaningithub/setup-python-amazon-linux@a326cdc792983fe0fbd04c81d3d62b59b6123a6c # v1.1.0
+        with:
+          python-version: "3.10"
+          cache: "pip"
+
+      - name: Install dependencies
+        working-directory: valkey-perf-benchmark
+        run: |
+          sudo dnf groupinstall "Development Tools" -y
+          sudo dnf install -y gcc gcc-c++ make \
+            python3-devel \
+            openssl-devel \
+            bzip2-devel \
+            libffi-devel \
+            jq
+          pip install --require-hashes -r requirements.txt
+
+      - name: Build latest valkey_latest
+        working-directory: valkey_latest
+        run: |
+          echo "Building latest valkey-benchmark for latest benchmark executable..."
+          make distclean || true
+          make -j
+          if [[ -f "src/valkey-benchmark" ]]; then
+            echo "Successfully built latest valkey-benchmark"
+            ls -la src/valkey-benchmark
+            ./src/valkey-benchmark --version || echo "Version check completed"
+          else
+            echo "Failed to build valkey-benchmark"
+            exit 1
+          fi
+          VALKEY_BENCHMARK_PATH="$(pwd)/src/valkey-benchmark"
+          echo "VALKEY_BENCHMARK_PATH=$VALKEY_BENCHMARK_PATH" >> $GITHUB_ENV
+          echo "Latest valkey-benchmark path: $VALKEY_BENCHMARK_PATH"
+
+      - name: Generate benchmark config
+        working-directory: valkey-perf-benchmark
+        env:
+          INPUT_COMMANDS: ${{ github.event.inputs.commands }}
+          INPUT_DATA_SIZE: ${{ github.event.inputs.data_size }}
+          INPUT_IO_THREADS: ${{ github.event.inputs.io_threads }}
+          INPUT_PIPELINES: ${{ github.event.inputs.pipelines }}
+          INPUT_CLUSTER_MODE: ${{ github.event.inputs.cluster_mode }}
+        run: |
+          CONFIG_FILE="configs/benchmark-config-arm.json"
+
+          # Read user inputs from environment (safer than direct interpolation
+          # of ${{ github.event.inputs.* }} which can break quoting).
+          # Empty means use default from config.
+          COMMANDS="$INPUT_COMMANDS"
+          DATA_SIZE="$INPUT_DATA_SIZE"
+          IO_THREADS="$INPUT_IO_THREADS"
+          PIPELINES="$INPUT_PIPELINES"
+          CLUSTER_MODE="$INPUT_CLUSTER_MODE"
+
+          # Validate input bounds
+          if [[ -n "$DATA_SIZE" ]]; then
+            for val in $(echo "$DATA_SIZE" | tr ',' ' '); do
+              val=$(echo "$val" | xargs)
+              if ! [[ "$val" =~ ^[0-9]+$ ]] || [ "$val" -lt 1 ] || [ "$val" -gt 1048576 ]; then
+                echo "Error: data_size values must be between 1 and 1048576 (1MB). Got: $val"
+                exit 1
+              fi
+            done
+          fi
+
+          if [[ -n "$IO_THREADS" ]]; then
+            for val in $(echo "$IO_THREADS" | tr ',' ' '); do
+              val=$(echo "$val" | xargs)
+              if ! [[ "$val" =~ ^[0-9]+$ ]] || [ "$val" -lt 1 ] || [ "$val" -gt 20 ]; then
+                echo "Error: io_threads values must be between 1 and 20 (max CPUs on NUMA node). Got: $val"
+                exit 1
+              fi
+            done
+          fi
+
+          if [[ -n "$PIPELINES" ]]; then
+            for val in $(echo "$PIPELINES" | tr ',' ' '); do
+              val=$(echo "$val" | xargs)
+              if ! [[ "$val" =~ ^[0-9]+$ ]] || [ "$val" -lt 1 ] || [ "$val" -gt 1000 ]; then
+                echo "Error: pipelines values must be between 1 and 1000. Got: $val"
+                exit 1
+              fi
+            done
+          fi
+
+          # Build commands JSON array from comma-separated input
+          COMMANDS_JSON=$(echo "$COMMANDS" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | tr '[:lower:]' '[:upper:]' | jq -R . | jq -s .)
+
+          # Override config with user-provided parameters using jq
+          OVERRIDES=".[0].commands = $COMMANDS_JSON"
+
+          if [[ "$CLUSTER_MODE" == "true" ]]; then
+            OVERRIDES="$OVERRIDES | .[0].cluster_mode = true"
+          fi
+
+          if [[ -n "$DATA_SIZE" ]]; then
+            DATA_SIZE_JSON=$(echo "$DATA_SIZE" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | jq -R 'tonumber' | jq -s .)
+            OVERRIDES="$OVERRIDES | .[0].data_sizes = $DATA_SIZE_JSON"
+          fi
+
+          if [[ -n "$IO_THREADS" ]]; then
+            IO_THREADS_JSON=$(echo "$IO_THREADS" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | jq -R 'tonumber' | jq -s .)
+            MAX_IO_THREADS=$(echo "$IO_THREADS_JSON" | jq 'max')
+            SERVER_CPU_END=$((MAX_IO_THREADS - 1))
+            if [ "$SERVER_CPU_END" -gt 19 ]; then
+              SERVER_CPU_END=19
+            fi
+            OVERRIDES="$OVERRIDES | .[0].\"io-threads\" = $IO_THREADS_JSON | .[0].server_cpu_range = \"0-${SERVER_CPU_END}\""
+          fi
+
+          if [[ -n "$PIPELINES" ]]; then
+            PIPELINES_JSON=$(echo "$PIPELINES" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | jq -R 'tonumber' | jq -s .)
+            OVERRIDES="$OVERRIDES | .[0].pipelines = $PIPELINES_JSON"
+          fi
+
+          jq "$OVERRIDES" "$CONFIG_FILE" > config-override.json
+          mv config-override.json "$CONFIG_FILE"
+
+          echo "Final benchmark config:"
+          cat "$CONFIG_FILE"
+
+      - name: Run benchmarks
+        working-directory: valkey-perf-benchmark
+        run: |
+          CONFIG_FILE="configs/benchmark-config-arm.json"
+
+          BENCHMARK_ARGS=(
+            --config "$CONFIG_FILE"
+            --commits "${{ needs.resolve-pr.outputs.merge_commit_sha }}"
+            --baseline "${{ needs.resolve-pr.outputs.base_ref }}"
+            --valkey-benchmark-path "$VALKEY_BENCHMARK_PATH"
+            --target-ip ${{ secrets.EC2_ARM64_IP }}
+            --valkey-path "../valkey"
+            --results-dir "results"
+            --runs 3
+          )
+
+          python ./benchmark.py "${BENCHMARK_ARGS[@]}"
+
+      - name: Compare results
+        working-directory: valkey-perf-benchmark
+        run: |
+          python ./utils/compare_benchmark_results.py \
+            --baseline ./results/${{ needs.resolve-pr.outputs.base_ref }}/metrics.json \
+            --new ./results/${{ needs.resolve-pr.outputs.merge_commit_sha }}/metrics.json \
+            --output ../comparison.md \
+            --metrics rps
+
+      - name: Upload artifacts
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: on-demand-benchmark-pr-${{ github.event.inputs.pr_number }}
+          path: |
+            ./valkey-perf-benchmark/results/
+            comparison.md
+
+      - name: Comment PR with results
+        env:
+          INPUT_PR_NUMBER: ${{ github.event.inputs.pr_number }}
+          INPUT_COMMANDS: ${{ github.event.inputs.commands }}
+          INPUT_DATA_SIZE: ${{ github.event.inputs.data_size }}
+          INPUT_IO_THREADS: ${{ github.event.inputs.io_threads }}
+          INPUT_PIPELINES: ${{ github.event.inputs.pipelines }}
+          INPUT_CLUSTER_MODE: ${{ github.event.inputs.cluster_mode }}
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('fs');
+            const body = fs.readFileSync('comparison.md', 'utf8');
+            const {owner, repo} = context.repo;
+            const sha = '${{ needs.resolve-pr.outputs.head_sha }}';
+            const short = sha.slice(0,7);
+            const link = `[\`${short}\`](https://github.com/${owner}/${repo}/commit/${sha})`;
+            // Read user inputs from process.env (safer than direct
+            // interpolation of ${{ github.event.inputs.* }} into JS strings).
+            const prNumber = Number(process.env.INPUT_PR_NUMBER);
+            const commands = process.env.INPUT_COMMANDS;
+            const cluster = process.env.INPUT_CLUSTER_MODE === 'true' ? ' (Cluster Mode)' : '';
+            const runUrl = `https://github.com/${owner}/${repo}/actions/runs/${{ github.run_id }}`;
+
+            let header = `**On-Demand Benchmark${cluster} ran on commit:** ${link}\n`;
+            header += `**Commands:** \`${commands}\`\n`;
+
+            // Show overridden configs
+            const overrides = [];
+            const dataSize = process.env.INPUT_DATA_SIZE;
+            const ioThreads = process.env.INPUT_IO_THREADS;
+            const pipelines = process.env.INPUT_PIPELINES;
+            if (dataSize) overrides.push(`**Data Size:** \`${dataSize}\``);
+            if (ioThreads) overrides.push(`**IO Threads:** \`${ioThreads}\``);
+            if (pipelines) overrides.push(`**Pipelines:** \`${pipelines}\``);
+            if (overrides.length > 0) {
+              header += overrides.join(' | ') + '\n';
+            }
+
+            header += `**Runs:** 3 | [Workflow Run](${runUrl})\n\n`;
+
+            await github.rest.issues.createComment({
+              issue_number: prNumber,
+              owner,
+              repo,
+              body: header + body
+            });
+
+      - name: Cleanup any running valkey processes
+        if: always()
+        continue-on-error: true
+        run: |
+          rm -rf comparison.md valkey*
+          # pkill returns 1 when no processes match, which is the normal case.
+          # We need to capture the exit code without tripping `set -e`.
+          pkill -f valkey && exit_code=0 || exit_code=$?
+          if [ $exit_code -eq 0 ]; then
+            echo "Killed running valkey processes"
+          elif [ $exit_code -eq 1 ]; then
+            echo "No valkey processes found to kill"
+          else
+            echo "Warning: pkill failed with exit code $exit_code"
+          fi

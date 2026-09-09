@@ -1,0 +1,789 @@
+source tests/support/aofmanifest.tcl
+set defaults { appendonly {yes} appendfilename {appendonly.aof} appenddirname {appendonlydir} auto-aof-rewrite-percentage {0}}
+set server_path [tmpdir server.aof]
+set aof_dirname "appendonlydir"
+set aof_basename "appendonly.aof"
+set aof_dirpath "$server_path/$aof_dirname"
+set aof_base_file "$server_path/$aof_dirname/${aof_basename}.1$::base_aof_suffix$::aof_format_suffix"
+set aof_file "$server_path/$aof_dirname/${aof_basename}.1$::incr_aof_suffix$::aof_format_suffix"
+set aof_manifest_file "$server_path/$aof_dirname/$aof_basename$::manifest_suffix"
+
+tags {"aof external:skip logreqres:skip"} {
+    set db [expr {$::singledb ? 0 : 9}]
+
+    # Server can start when aof-load-truncated is set to yes and AOF
+    # is truncated, with an incomplete MULTI block.
+    create_aof $aof_dirpath $aof_file {
+        append_to_aof [formatCommand set foo hello]
+        append_to_aof [formatCommand multi]
+        append_to_aof [formatCommand set bar world]
+    }
+
+    create_aof_manifest $aof_dirpath $aof_manifest_file {
+        append_to_manifest "file appendonly.aof.1.incr.aof seq 1 type i\n"
+    }
+
+    start_server_aof [list dir $server_path aof-load-truncated yes] {
+        test "Unfinished MULTI: Server should start if load-truncated is yes" {
+            assert_equal 1 [is_alive [srv pid]]
+        }
+    }
+
+    create_aof $aof_dirpath $aof_file {
+        append_to_aof [formatCommand set foo hello]
+        append_to_aof [formatCommand multi]
+        append_to_aof [formatCommand set bar world]
+        append_to_aof [string range [formatCommand exec] 0 end-1]
+    }
+
+    start_server_aof [list dir $server_path aof-load-truncated yes] {
+        test "Short read in MULTI: Discard incomplete transaction and preserve subsequent writes across restart" {
+            assert_equal 1 [is_alive [srv pid]]
+            set client [valkey [srv host] [srv port] 0 $::tls]
+            wait_done_loading $client
+            assert_equal "hello" [$client get foo]
+            assert_equal {} [$client get bar]
+            assert_equal "OK" [$client set baz survived]
+            assert_equal "survived" [$client get baz]
+
+            restart_server 0 true false
+
+            assert_equal 1 [is_alive [srv pid]]
+            set client [valkey [srv host] [srv port] 0 $::tls]
+            wait_done_loading $client
+            assert_equal "hello" [$client get foo]
+            assert_equal {} [$client get bar]
+            assert_equal "survived" [$client get baz]
+        }
+    }
+
+    ## Should also start with truncated AOF without incomplete MULTI block.
+    create_aof $aof_dirpath $aof_file {
+        append_to_aof [formatCommand incr foo]
+        append_to_aof [formatCommand incr foo]
+        append_to_aof [formatCommand incr foo]
+        append_to_aof [formatCommand incr foo]
+        append_to_aof [formatCommand incr foo]
+        append_to_aof [string range [formatCommand incr foo] 0 end-1]
+    }
+
+    start_server_aof [list dir $server_path aof-load-truncated yes] {
+        test "Short read: Server should start if load-truncated is yes" {
+            assert_equal 1 [is_alive [srv pid]]
+        }
+
+        test "Truncated AOF loaded: we expect foo to be equal to 5" {
+            set client [valkey [srv host] [srv port] 0 $::tls]
+            wait_done_loading $client
+            assert {[$client get foo] eq "5"}
+        }
+
+        test "Append a new command after loading an incomplete AOF" {
+            $client incr foo
+        }
+    }
+
+    # Now the AOF file is expected to be correct
+    start_server_aof [list dir $server_path aof-load-truncated yes] {
+        test "Short read + command: Server should start" {
+            assert_equal 1 [is_alive [srv pid]]
+        }
+
+        test "Truncated AOF loaded: we expect foo to be equal to 6 now" {
+            set client [valkey [srv host] [srv port] 0 $::tls]
+            wait_done_loading $client
+            assert {[$client get foo] eq "6"}
+        }
+    }
+
+    ## Test that the server exits when the AOF contains a format error
+    create_aof $aof_dirpath $aof_file {
+        append_to_aof [formatCommand set foo hello]
+        append_to_aof "!!!"
+        append_to_aof [formatCommand set foo hello]
+    }
+
+    start_server_aof_ex [list dir $server_path aof-load-truncated yes] [list wait_ready false] {
+        test "Bad format: Server should have logged an error" {
+            wait_for_log_messages 0 {"*Bad file format reading the append only file*"} 0 10 1000
+        }
+    }
+
+    ## Test the server doesn't start when the AOF contains an unfinished MULTI
+    create_aof $aof_dirpath $aof_file {
+        append_to_aof [formatCommand set foo hello]
+        append_to_aof [formatCommand multi]
+        append_to_aof [formatCommand set bar world]
+    }
+
+    start_server_aof_ex [list dir $server_path aof-load-truncated no] [list wait_ready false] {
+        test "Unfinished MULTI: Server should have logged an error" {
+            wait_for_log_messages 0 {"*Unexpected end of file reading the append only file*"} 0 10 1000
+        }
+    }
+
+    ## Test that the server exits when the AOF contains a short read
+    create_aof $aof_dirpath $aof_file {
+        append_to_aof [formatCommand set foo hello]
+        append_to_aof [string range [formatCommand set bar world] 0 end-1]
+    }
+
+    start_server_aof_ex [list dir $server_path aof-load-truncated no] [list wait_ready false] {
+        test "Short read: Server should have logged an error" {
+            wait_for_log_messages 0 {"*Unexpected end of file reading the append only file*"} 0 10 1000
+        }
+    }
+
+    ## Test that valkey-check-aof indeed sees this AOF is not valid
+    test "Short read: Utility should confirm the AOF is not valid" {
+        catch {
+            exec $::VALKEY_CHECK_AOF_BIN $aof_manifest_file
+        } result
+        assert_match "*not valid*" $result
+    }
+
+    test "Short read: Utility should show the abnormal line num in AOF" {
+        create_aof $aof_dirpath $aof_file {
+            append_to_aof [formatCommand set foo hello]
+            append_to_aof "!!!"
+        }
+
+        catch {
+            exec $::VALKEY_CHECK_AOF_BIN $aof_manifest_file
+        } result
+        assert_match "*ok_up_to_line=8*" $result
+    }
+
+    test "Short read: Utility should be able to fix the AOF" {
+        set result [exec $::VALKEY_CHECK_AOF_BIN --fix $aof_manifest_file << "y\n"]
+        assert_match "*Successfully truncated AOF*" $result
+    }
+
+    ## Test that the server can be started using the truncated AOF
+    start_server_aof [list dir $server_path aof-load-truncated no] {
+        test "Fixed AOF: Server should have been started" {
+            assert_equal 1 [is_alive [srv pid]]
+        }
+
+        test "Fixed AOF: Keyspace should contain values that were parseable" {
+            set client [valkey [srv host] [srv port] 0 $::tls]
+            wait_done_loading $client
+            assert_equal "hello" [$client get foo]
+            assert_equal "" [$client get bar]
+        }
+    }
+
+    ## Test that SPOP (that modifies the client's argc/argv) is correctly free'd
+    create_aof $aof_dirpath $aof_file {
+        append_to_aof [formatCommand sadd set foo]
+        append_to_aof [formatCommand sadd set bar]
+        append_to_aof [formatCommand spop set]
+    }
+
+    start_server_aof [list dir $server_path aof-load-truncated no] {
+        test "AOF+SPOP: Server should have been started" {
+            assert_equal 1 [is_alive [srv pid]]
+        }
+
+        test "AOF+SPOP: Set should have 1 member" {
+            set client [valkey [srv host] [srv port] 0 $::tls]
+            wait_done_loading $client
+            assert_equal 1 [$client scard set]
+        }
+    }
+
+    ## Uses the alsoPropagate() API.
+    create_aof $aof_dirpath $aof_file {
+        append_to_aof [formatCommand sadd set foo]
+        append_to_aof [formatCommand sadd set bar]
+        append_to_aof [formatCommand sadd set gah]
+        append_to_aof [formatCommand spop set 2]
+    }
+
+    start_server_aof [list dir $server_path] {
+        test "AOF+SPOP: Server should have been started" {
+            assert_equal 1 [is_alive [srv pid]]
+        }
+
+        test "AOF+SPOP: Set should have 1 member" {
+            set client [valkey [srv host] [srv port] 0 $::tls]
+            wait_done_loading $client
+            assert_equal 1 [$client scard set]
+        }
+    }
+
+    ## Test that PEXPIREAT is loaded correctly
+    create_aof $aof_dirpath $aof_file {
+        append_to_aof [formatCommand rpush list foo]
+        append_to_aof [formatCommand pexpireat list 1000]
+        append_to_aof [formatCommand rpush list bar]
+    }
+
+    start_server_aof [list dir $server_path aof-load-truncated no] {
+        test "AOF+EXPIRE: Server should have been started" {
+            assert_equal 1 [is_alive [srv pid]]
+        }
+
+        test "AOF+EXPIRE: List should be empty" {
+            set client [valkey [srv host] [srv port] 0 $::tls]
+            wait_done_loading $client
+            assert_equal 0 [$client llen list]
+        }
+    }
+
+    start_server {overrides {appendonly {yes}}} {
+        test {Server should not try to convert DEL into EXPIREAT for EXPIRE -1} {
+            r set x 10
+            r expire x -1
+        }
+    }
+
+    start_server {overrides {appendonly {yes} appendfsync always}} {
+        test {AOF fsync always barrier issue} {
+            set rd [valkey_deferring_client]
+            # Set a sleep when aof is flushed, so that we have a chance to look
+            # at the aof size and detect if the response of an incr command
+            # arrives before the data was written (and hopefully fsynced)
+            # We create a big reply, which will hopefully not have room in the
+            # socket buffers, and will install a write handler, then we sleep
+            # a big and issue the incr command, hoping that the last portion of
+            # the output buffer write, and the processing of the incr will happen
+            # in the same event loop cycle.
+            # Since the socket buffers and timing are unpredictable, we fuzz this
+            # test with slightly different sizes and sleeps a few times.
+            for {set i 0} {$i < 10} {incr i} {
+                r debug aof-flush-sleep 0
+                r del x
+                r setrange x [expr {int(rand()*5000000)+10000000}] x
+                r debug aof-flush-sleep 500000
+                set aof [get_last_incr_aof_path r]
+                set size1 [file size $aof]
+                $rd get x
+                after [expr {int(rand()*30)}]
+                $rd incr new_value
+                $rd read
+                $rd read
+                set size2 [file size $aof]
+                assert {$size1 != $size2}
+            }
+        }
+    }
+
+    start_server {overrides {appendonly {yes}}} {
+        test {GETEX should not append to AOF} {
+            set aof [get_last_incr_aof_path r]
+            r set foo bar
+            set before [file size $aof]
+            r getex foo
+            set after [file size $aof]
+            assert_equal $before $after
+        }
+    }
+
+    ## Test that the server exits when the AOF contains a unknown command
+    create_aof $aof_dirpath $aof_file {
+        append_to_aof [formatCommand set foo hello]
+        append_to_aof [formatCommand bla foo hello]
+        append_to_aof [formatCommand set foo hello]
+    }
+
+    start_server_aof_ex [list dir $server_path aof-load-truncated yes] [list wait_ready false] {
+        test "Unknown command: Server should have logged an error" {
+            wait_for_log_messages 0 {"*unknown command 'bla'*"} 0 10 1000
+        }
+    }
+
+    # Test that LMPOP/BLMPOP work fine with AOF.
+    create_aof $aof_dirpath $aof_file {
+        append_to_aof [formatCommand lpush mylist a b c]
+        append_to_aof [formatCommand rpush mylist2 1 2 3]
+        append_to_aof [formatCommand lpush mylist3 a b c d e]
+    }
+
+    start_server_aof [list dir $server_path aof-load-truncated no] {
+        test "AOF+LMPOP/BLMPOP: pop elements from the list" {
+            set client [valkey [srv host] [srv port] 0 $::tls]
+            set client2 [valkey [srv host] [srv port] 1 $::tls]
+            wait_done_loading $client
+
+            # Pop all elements from mylist, should be blmpop delete mylist.
+            $client lmpop 1 mylist left count 1
+            $client blmpop 0 1 mylist left count 10
+
+            # Pop all elements from mylist2, should be lmpop delete mylist2.
+            $client blmpop 0 2 mylist mylist2 right count 10
+            $client lmpop 2 mylist mylist2 right count 2
+
+            # Blocking path, be blocked and then released.
+            $client2 blmpop 0 2 mylist mylist2 left count 2
+            after 100
+            $client lpush mylist2 a b c
+
+            # Pop up the last element in mylist2
+            $client blmpop 0 3 mylist mylist2 mylist3 left count 1
+
+            # Leave two elements in mylist3.
+            $client blmpop 0 3 mylist mylist2 mylist3 right count 3
+        }
+    }
+
+    start_server_aof [list dir $server_path aof-load-truncated no] {
+        test "AOF+LMPOP/BLMPOP: after pop elements from the list" {
+            set client [valkey [srv host] [srv port] 0 $::tls]
+            wait_done_loading $client
+
+            # mylist and mylist2 no longer exist.
+            assert_equal 0 [$client exists mylist mylist2]
+
+            # Length of mylist3 is two.
+            assert_equal 2 [$client llen mylist3]
+        }
+    }
+
+    # Test that ZMPOP/BZMPOP work fine with AOF.
+    create_aof $aof_dirpath $aof_file {
+        append_to_aof [formatCommand zadd myzset 1 one 2 two 3 three]
+        append_to_aof [formatCommand zadd myzset2 4 four 5 five 6 six]
+        append_to_aof [formatCommand zadd myzset3 1 one 2 two 3 three 4 four 5 five]
+    }
+
+    start_server_aof [list dir $server_path aof-load-truncated no] {
+        test "AOF+ZMPOP/BZMPOP: pop elements from the zset" {
+            set client [valkey [srv host] [srv port] 0 $::tls]
+            set client2 [valkey [srv host] [srv port] 1 $::tls]
+            wait_done_loading $client
+
+            # Pop all elements from myzset, should be bzmpop delete myzset.
+            $client zmpop 1 myzset min count 1
+            $client bzmpop 0 1 myzset min count 10
+
+            # Pop all elements from myzset2, should be zmpop delete myzset2.
+            $client bzmpop 0 2 myzset myzset2 max count 10
+            $client zmpop 2 myzset myzset2 max count 2
+
+            # Blocking path, be blocked and then released.
+            $client2 bzmpop 0 2 myzset myzset2 min count 2
+            after 100
+            $client zadd myzset2 1 one 2 two 3 three
+
+            # Pop up the last element in myzset2
+            $client bzmpop 0 3 myzset myzset2 myzset3 min count 1
+
+            # Leave two elements in myzset3.
+            $client bzmpop 0 3 myzset myzset2 myzset3 max count 3
+        }
+    }
+
+    start_server_aof [list dir $server_path aof-load-truncated no] {
+        test "AOF+ZMPOP/BZMPOP: after pop elements from the zset" {
+            set client [valkey [srv host] [srv port] 0 $::tls]
+            wait_done_loading $client
+
+            # myzset and myzset2 no longer exist.
+            assert_equal 0 [$client exists myzset myzset2]
+
+            # Length of myzset3 is two.
+            assert_equal 2 [$client zcard myzset3]
+        }
+    }
+
+    test {Generate timestamp annotations in AOF} {
+        start_server {overrides {appendonly {yes}}} {
+            r config set aof-timestamp-enabled yes
+            r config set aof-use-rdb-preamble no
+            set aof [get_last_incr_aof_path r]
+
+            r set foo bar
+            assert_match "#TS:*" [exec head -n 1 $aof]
+
+            r bgrewriteaof
+            waitForBgrewriteaof r
+
+            set aof [get_base_aof_path r]
+            assert_match "#TS:*" [exec head -n 1 $aof]
+        }
+    }
+
+    # A MULTI/EXEC block in the AOF must be replayed even when the default user
+    # is disabled. EXEC re-checks ACLs of the queued commands, but that check
+    # must not apply to the client used for loading the AOF, otherwise the
+    # transaction's writes are silently lost.
+    create_aof $aof_dirpath $aof_file {
+        append_to_aof [formatCommand set outside-tx 1]
+        append_to_aof [formatCommand multi]
+        append_to_aof [formatCommand set inside-tx-a 2]
+        append_to_aof [formatCommand set inside-tx-b 3]
+        append_to_aof [formatCommand exec]
+    }
+
+    set acl_config_lines {user {default off} user {someuser on nopass ~* &* +@all}}
+    start_server_aof_ex [list dir $server_path] [list wait_ready false config_lines $acl_config_lines] {
+        test {AOF with MULTI/EXEC is fully loaded when the default user is disabled} {
+            set c [valkey [srv host] [srv port] 0 $::tls]
+            $c auth someuser somepass
+            wait_done_loading $c
+            assert_equal 1 [$c get outside-tx]
+            assert_equal 2 [$c get inside-tx-a]
+            assert_equal 3 [$c get inside-tx-b]
+            $c close
+        }
+    }
+
+    # The server could load AOF which has timestamp annotations inside
+    create_aof $aof_dirpath $aof_file {
+        append_to_aof "#TS:1628217470\r\n"
+        append_to_aof [formatCommand set foo1 bar1]
+        append_to_aof "#TS:1628217471\r\n"
+        append_to_aof [formatCommand set foo2 bar2]
+        append_to_aof "#TS:1628217472\r\n"
+        append_to_aof "#TS:1628217473\r\n"
+        append_to_aof [formatCommand set foo3 bar3]
+        append_to_aof "#TS:1628217474\r\n"
+    }
+    start_server_aof [list dir $server_path] {
+        test {Successfully load AOF which has timestamp annotations inside} {
+            set c [valkey [srv host] [srv port] 0 $::tls]
+            wait_done_loading $c
+            assert_equal "bar1" [$c get foo1]
+            assert_equal "bar2" [$c get foo2]
+            assert_equal "bar3" [$c get foo3]
+        }
+    }
+
+    test {Truncate AOF to specific timestamp} {
+        # truncate to timestamp 1628217473
+        exec $::VALKEY_CHECK_AOF_BIN --truncate-to-timestamp 1628217473 $aof_manifest_file
+        start_server_aof [list dir $server_path] {
+            set c [valkey [srv host] [srv port] 0 $::tls]
+            wait_done_loading $c
+            assert_equal "bar1" [$c get foo1]
+            assert_equal "bar2" [$c get foo2]
+            assert_equal "bar3" [$c get foo3]
+        }
+
+        # truncate to timestamp 1628217471
+        exec $::VALKEY_CHECK_AOF_BIN --truncate-to-timestamp 1628217471 $aof_manifest_file
+        start_server_aof [list dir $server_path] {
+            set c [valkey [srv host] [srv port] 0 $::tls]
+            wait_done_loading $c
+            assert_equal "bar1" [$c get foo1]
+            assert_equal "bar2" [$c get foo2]
+            assert_equal "" [$c get foo3]
+        }
+
+        # truncate to timestamp 1628217470
+        exec $::VALKEY_CHECK_AOF_BIN --truncate-to-timestamp 1628217470 $aof_manifest_file
+        start_server_aof [list dir $server_path] {
+            set c [valkey [srv host] [srv port] 0 $::tls]
+            wait_done_loading $c
+            assert_equal "bar1" [$c get foo1]
+            assert_equal "" [$c get foo2]
+        }
+
+        # truncate to timestamp 1628217469
+        catch {exec $::VALKEY_CHECK_AOF_BIN --truncate-to-timestamp 1628217469 $aof_manifest_file} e
+        assert_match {*aborting*} $e
+    }
+
+    test {EVAL timeout with slow verbatim Lua script from AOF} {
+        start_server [list overrides [list dir $server_path appendonly yes lua-time-limit 1 aof-use-rdb-preamble no]] {
+            # generate a long running script that is propagated to the AOF as script
+            # make sure that the script times out during loading
+            create_aof $aof_dirpath $aof_file {
+                append_to_aof [formatCommand select $db]
+                append_to_aof [formatCommand eval {redis.call('set',KEYS[1],'y'); for i=1,1500000 do redis.call('ping') end return 'ok'} 1 x]
+            }
+            set rd [valkey_deferring_client]
+            $rd debug loadaof
+            $rd flush
+            wait_for_condition 100 10 {
+                [catch {r ping} e] == 1
+            } else {
+                fail "server didn't start loading"
+            }
+            assert_error {LOADING*} {r ping}
+            $rd read
+            $rd close
+            wait_for_log_messages 0 {"*Slow script detected*"} 0 100 100
+            assert_equal [r get x] y
+        }
+    }
+
+    test {EVAL can process writes from AOF in read-only replicas} {
+        create_aof_manifest $aof_dirpath $aof_manifest_file {
+            append_to_manifest "file appendonly.aof.1.incr.aof seq 1 type i\n"
+        }
+        create_aof $aof_dirpath $aof_file {
+            append_to_aof [formatCommand select $db]
+            append_to_aof [formatCommand eval {redis.call("set",KEYS[1],"100")} 1 foo]
+            append_to_aof [formatCommand eval {redis.call("incr",KEYS[1])} 1 foo]
+            append_to_aof [formatCommand eval {redis.call("incr",KEYS[1])} 1 foo]
+        }
+        start_server [list overrides [list dir $server_path appendonly yes replica-read-only yes replicaof "127.0.0.1 0"]] {
+            assert_equal [r get foo] 102
+        }
+    }
+
+    test {Test valkey-check-aof for old style resp AOF} {
+        create_aof $aof_dirpath $aof_file {
+            append_to_aof [formatCommand set foo hello]
+            append_to_aof [formatCommand set bar world]
+        }
+
+        catch {
+            exec $::VALKEY_CHECK_AOF_BIN $aof_file
+        } result
+        assert_match "*Start checking Old-Style AOF*is valid*" $result
+    }
+
+    test {Test valkey-check-aof for old style resp AOF - has data in the same format as manifest} {
+        create_aof $aof_dirpath $aof_file {
+            append_to_aof [formatCommand set file file]
+            append_to_aof [formatCommand set "file appendonly.aof.2.base.rdb seq 2 type b" "file appendonly.aof.2.base.rdb seq 2 type b"]
+        }
+
+        catch {
+            exec $::VALKEY_CHECK_AOF_BIN $aof_file
+        } result
+        assert_match "*Start checking Old-Style AOF*is valid*" $result
+    }
+
+    test {Test valkey-check-aof for old style rdb-preamble AOF} {
+        catch {
+            exec $::VALKEY_CHECK_AOF_BIN tests/assets/rdb-preamble.aof
+        } result
+        assert_match "*Start checking Old-Style AOF*RDB preamble is OK, proceeding with AOF tail*is valid*" $result
+    }
+
+    test {Test valkey-check-aof for Multi Part AOF with resp AOF base} {
+        create_aof $aof_dirpath $aof_base_file {
+            append_to_aof [formatCommand set foo hello]
+            append_to_aof [formatCommand set bar world]
+        }
+
+        create_aof $aof_dirpath $aof_file {
+            append_to_aof [formatCommand set foo hello]
+            append_to_aof [formatCommand set bar world]
+        }
+
+        create_aof_manifest $aof_dirpath $aof_manifest_file {
+            append_to_manifest "file appendonly.aof.1.base.aof seq 1 type b\n"
+            append_to_manifest "file appendonly.aof.1.incr.aof seq 1 type i\n"
+        }
+
+        catch {
+            exec $::VALKEY_CHECK_AOF_BIN $aof_manifest_file
+        } result
+        assert_match "*Start checking Multi Part AOF*Start to check BASE AOF (RESP format)*BASE AOF*is valid*Start to check INCR files*INCR AOF*is valid*All AOF files and manifest are valid*" $result
+    }
+
+    test {Test valkey-check-aof for Multi Part AOF with rdb-preamble AOF base} {
+        exec cp tests/assets/rdb-preamble.aof $aof_base_file
+
+        create_aof $aof_dirpath $aof_file {
+            append_to_aof [formatCommand set foo hello]
+            append_to_aof [formatCommand set bar world]
+        }
+
+        create_aof_manifest $aof_dirpath $aof_manifest_file {
+            append_to_manifest "file appendonly.aof.1.base.aof seq 1 type b\n"
+            append_to_manifest "file appendonly.aof.1.incr.aof seq 1 type i\n"
+        }
+
+        catch {
+            exec $::VALKEY_CHECK_AOF_BIN $aof_manifest_file
+        } result
+        assert_match "*Start checking Multi Part AOF*Start to check BASE AOF (RDB format)*DB preamble is OK, proceeding with AOF tail*BASE AOF*is valid*Start to check INCR files*INCR AOF*is valid*All AOF files and manifest are valid*" $result
+    }
+
+    test {Test valkey-check-aof for Multi Part AOF contains a format error} {
+        create_aof_manifest $aof_dirpath $aof_manifest_file {
+            append_to_manifest "file appendonly.aof.1.base.aof seq 1 type b\n"
+            append_to_manifest "file appendonly.aof.1.incr.aof seq 1 type i\n"
+            append_to_manifest "!!!\n"
+        }
+
+        catch {
+            exec $::VALKEY_CHECK_AOF_BIN $aof_manifest_file
+        } result
+        assert_match "*Invalid AOF manifest file format*" $result
+    }
+
+    test {Test valkey-check-aof only truncates the last file for Multi Part AOF in fix mode} {
+        create_aof $aof_dirpath $aof_base_file {
+            append_to_aof [formatCommand set foo hello]
+            append_to_aof [formatCommand multi]
+            append_to_aof [formatCommand set bar world]
+        }
+
+        create_aof $aof_dirpath $aof_file {
+            append_to_aof [formatCommand set foo hello]
+            append_to_aof [formatCommand set bar world]
+        }
+
+        create_aof_manifest $aof_dirpath $aof_manifest_file {
+            append_to_manifest "file appendonly.aof.1.base.aof seq 1 type b\n"
+            append_to_manifest "file appendonly.aof.1.incr.aof seq 1 type i\n"
+        }
+
+        catch {
+            exec $::VALKEY_CHECK_AOF_BIN $aof_manifest_file
+        } result
+        assert_match "*not valid*" $result
+
+        catch {
+            exec $::VALKEY_CHECK_AOF_BIN --fix $aof_manifest_file
+        } result
+        assert_match "*Failed to truncate AOF*because it is not the last file*" $result
+    }
+
+    test {Test valkey-check-aof only truncates the last file for Multi Part AOF in truncate-to-timestamp mode} {
+        create_aof $aof_dirpath $aof_base_file {
+            append_to_aof "#TS:1628217470\r\n"
+            append_to_aof [formatCommand set foo1 bar1]
+            append_to_aof "#TS:1628217471\r\n"
+            append_to_aof [formatCommand set foo2 bar2]
+            append_to_aof "#TS:1628217472\r\n"
+            append_to_aof "#TS:1628217473\r\n"
+            append_to_aof [formatCommand set foo3 bar3]
+            append_to_aof "#TS:1628217474\r\n"
+        }
+
+        create_aof $aof_dirpath $aof_file {
+            append_to_aof [formatCommand set foo hello]
+            append_to_aof [formatCommand set bar world]
+        }
+
+        create_aof_manifest $aof_dirpath $aof_manifest_file {
+            append_to_manifest "file appendonly.aof.1.base.aof seq 1 type b\n"
+            append_to_manifest "file appendonly.aof.1.incr.aof seq 1 type i\n"
+        }
+
+        catch {
+            exec $::VALKEY_CHECK_AOF_BIN --truncate-to-timestamp 1628217473 $aof_manifest_file
+        } result
+        assert_match "*Failed to truncate AOF*to timestamp*because it is not the last file*" $result
+    }
+
+    start_server {overrides {appendonly yes appendfsync always}} {
+        test {FLUSHDB / FLUSHALL should persist in AOF} {
+            set aof [get_last_incr_aof_path r]
+
+            r set key value
+            r flushdb
+            r set key value2
+            r flushdb
+
+            # DB is empty
+            r flushdb
+            r flushdb
+            r flushdb
+
+            r set key value
+            r flushall
+            r set key value2
+            r flushall
+
+            # DBs are empty.
+            r flushall
+            r flushall
+            r flushall
+
+            # Assert that each FLUSHDB command is persisted even the DB is empty.
+            # Assert that each FLUSHALL command is persisted even the DBs are empty.
+            assert_aof_content $aof {
+                {select *}
+                {set key value}
+                {flushdb}
+                {set key value2}
+                {flushdb}
+                {flushdb}
+                {flushdb}
+                {flushdb}
+                {set key value}
+                {flushall}
+                {set key value2}
+                {flushall}
+                {flushall}
+                {flushall}
+                {flushall}
+            }
+        }
+    }
+
+    start_server {} {
+        # This test is just a coverage test, it does not check anything.
+        test {Turning appendonly on and off within a transaction} {
+            r config set appendonly no
+            r multi
+            r config set appendonly yes
+            r config set appendonly no
+            r exec
+
+            r config set appendonly yes
+            r multi
+            r config set appendonly no
+            r config set appendonly yes
+            r exec
+        }
+    }
+}
+
+tags {"aof cluster external:skip singledb"} {
+    test {Test cluster slots / cluster shards in aof won't crash} {
+        create_aof $aof_dirpath $aof_file {
+            append_to_aof [formatCommand cluster slots]
+            append_to_aof [formatCommand cluster shards]
+        }
+
+        create_aof_manifest $aof_dirpath $aof_manifest_file {
+            append_to_manifest "file appendonly.aof.1.incr.aof seq 1 type i\n"
+        }
+
+        start_server_aof [list dir $server_path cluster-enabled yes cluster-port [find_available_port $::baseport $::portcount]] {
+            assert_equal [r ping] {PONG}
+        }
+        clean_aof_persistence $aof_dirpath
+    }
+
+    test {Test command check in aof won't crash} {
+        # cluster, wrong number of arguments for 'cluster' command
+        create_aof $aof_dirpath $aof_file { append_to_aof [formatCommand cluster] }
+        create_aof_manifest $aof_dirpath $aof_manifest_file { append_to_manifest "file appendonly.aof.1.incr.aof seq 1 type i\n" }
+        start_server_aof_ex [list dir $server_path] [list wait_ready false] {
+            wait_for_condition 100 50 {
+                ! [is_alive [srv pid]]
+            } else {
+                fail "AOF loading didn't fail"
+            }
+            assert_equal 1 [count_message_lines $server_path/stdout "wrong number of arguments for 'cluster' command"]
+        }
+        clean_aof_persistence $aof_dirpath
+
+        # cluster slots-xxx, unknown subcommand 'slots-xxx'
+        create_aof $aof_dirpath $aof_file { append_to_aof [formatCommand cluster slots-xxx] }
+        create_aof_manifest $aof_dirpath $aof_manifest_file { append_to_manifest "file appendonly.aof.1.incr.aof seq 1 type i\n" }
+        start_server_aof_ex [list dir $server_path] [list wait_ready false] {
+            wait_for_condition 100 50 {
+                ! [is_alive [srv pid]]
+            } else {
+                fail "AOF loading didn't fail"
+            }
+            assert_equal 1 [count_message_lines $server_path/stdout "unknown subcommand 'slots-xxx'"]
+        }
+        clean_aof_persistence $aof_dirpath
+
+        # cluster slots xxx, wrong number of arguments for 'cluster|slots' command
+        create_aof $aof_dirpath $aof_file { append_to_aof [formatCommand cluster slots xxx] }
+        create_aof_manifest $aof_dirpath $aof_manifest_file { append_to_manifest "file appendonly.aof.1.incr.aof seq 1 type i\n" }
+        start_server_aof_ex [list dir $server_path] [list wait_ready false] {
+            wait_for_condition 100 50 {
+                ![is_alive [srv pid]]
+            } else {
+                fail "AOF loading didn't fail"
+            }
+            assert_equal 1 [count_message_lines $server_path/stdout "wrong number of arguments for 'cluster|slots' command"]
+        }
+        clean_aof_persistence $aof_dirpath
+    }
+}

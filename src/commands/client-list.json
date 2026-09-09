@@ -1,0 +1,322 @@
+{
+    "LIST": {
+        "summary": "Lists open connections.",
+        "complexity": "O(N) where N is the number of client connections",
+        "group": "connection",
+        "since": "2.4.0",
+        "arity": -2,
+        "container": "CLIENT",
+        "function": "clientListCommand",
+        "history": [
+            [
+                "2.8.12",
+                "Added unique client `id` field."
+            ],
+            [
+                "5.0.0",
+                "Added optional `TYPE` filter."
+            ],
+            [
+                "6.0.0",
+                "Added `user` field."
+            ],
+            [
+                "6.2.0",
+                "Added `argv-mem`, `tot-mem`, `laddr` and `redir` fields and the optional `ID` filter."
+            ],
+            [
+                "7.0.0",
+                "Added `resp`, `multi-mem`, `rbs` and `rbp` fields."
+            ],
+            [
+                "7.0.3",
+                "Added `ssub` field."
+            ],
+            [
+                "8.0.0",
+                "Replaced `master` `TYPE` with `primary`. `master` still supported for backward compatibility."
+            ],
+            [
+                "8.1.0",
+                "Added filters USER, ADDR, LADDR, SKIPME, and MAXAGE."
+            ],
+            [
+                "9.0.0",
+                "Added filters NAME, IDLE, FLAGS, LIB-NAME, LIB-VER, DB, CAPA, and IP. And negative filters NOT-ID, NOT-TYPE, NOT-ADDR, NOT-LADDR, NOT-USER, NOT-FLAGS, NOT-NAME, NOT-LIB-NAME, NOT-LIB-VER, NOT-DB, NOT-CAPA, NOT-IP."
+            ]
+        ],
+        "command_flags": [
+            "ADMIN",
+            "NOSCRIPT",
+            "LOADING",
+            "STALE",
+            "SENTINEL"
+        ],
+        "acl_categories": [
+            "ADMIN",
+            "CONNECTION",
+            "DANGEROUS",
+            "SLOW"
+        ],
+        "command_tips": [
+            "NONDETERMINISTIC_OUTPUT"
+        ],
+        "reply_schema": {
+            "type": "string",
+            "description": "Information and statistics about client connections"
+        },
+        "arguments": [
+            {
+                "token": "TYPE",
+                "name": "client-type",
+                "type": "oneof",
+                "optional": true,
+                "since": "5.0.0",
+                "arguments": [
+                    {
+                        "name": "normal",
+                        "type": "pure-token",
+                        "token": "normal"
+                    },
+                    {
+                        "name": "master",
+                        "type": "pure-token",
+                        "token": "master"
+                    },
+                    {
+                        "name": "replica",
+                        "type": "pure-token",
+                        "token": "replica"
+                    },
+                    {
+                        "name": "pubsub",
+                        "type": "pure-token",
+                        "token": "pubsub"
+                    }
+                ]
+            },
+            {
+                "name": "client-id",
+                "token": "ID",
+                "type": "integer",
+                "optional": true,
+                "multiple": true,
+                "since": "6.2.0"
+            },
+            {
+                "token": "USER",
+                "name": "username",
+                "type": "string",
+                "optional": true,
+                "since": "8.1.0"
+            },
+            {
+                "token": "ADDR",
+                "name": "addr",
+                "display": "ip:port",
+                "type": "string",
+                "optional": true,
+                "since": "8.1.0"
+            },
+            {
+                "token": "LADDR",
+                "name": "laddr",
+                "display": "ip:port",
+                "type": "string",
+                "optional": true,
+                "since": "8.1.0"
+            },
+            {
+                "token": "SKIPME",
+                "name": "skipme",
+                "type": "oneof",
+                "optional": true,
+                "since": "8.1.0",
+                "arguments": [
+                    {
+                        "name": "yes",
+                        "type": "pure-token",
+                        "token": "YES"
+                    },
+                    {
+                        "name": "no",
+                        "type": "pure-token",
+                        "token": "NO"
+                    }
+                ]
+            },
+            {
+                "token": "MAXAGE",
+                "name": "maxage",
+                "type": "integer",
+                "optional": true,
+                "since": "8.1.0"
+            },
+            {
+                "token": "NAME",
+                "name": "name",
+                "type": "string",
+                "optional": true,
+                "since": "9.0.0"
+            },
+            {
+                "token": "IDLE",
+                "name": "idle",
+                "type": "integer",
+                "optional": true,
+                "since": "9.0.0"
+            },
+            {
+                "token": "FLAGS",
+                "name": "flags",
+                "type": "string",
+                "optional": true,
+                "since": "9.0.0"
+            },
+            {
+                "token": "LIB-NAME",
+                "name": "lib-name",
+                "type": "string",
+                "optional": true,
+                "since": "9.0.0"
+            },
+            {
+                "token": "LIB-VER",
+                "name": "lib-ver",
+                "type": "string",
+                "optional": true,
+                "since": "9.0.0"
+            },
+            {
+                "token": "DB",
+                "name": "db",
+                "type": "integer",
+                "optional": true,
+                "since": "9.0.0"
+            },
+            {
+                "token": "CAPA",
+                "name": "capa",
+                "type": "string",
+                "optional": true,
+                "since": "9.0.0"
+            },
+            {
+                "token": "IP",
+                "name": "ip",
+                "type": "string",
+                "optional": true,
+                "since": "9.0.0"
+            },
+            {
+                "token": "NOT-TYPE",
+                "name": "not-client-type",
+                "type": "oneof",
+                "optional": true,
+                "since": "9.0.0",
+                "arguments": [
+                    {
+                        "name": "normal",
+                        "type": "pure-token",
+                        "token": "normal"
+                    },
+                    {
+                        "name": "master",
+                        "type": "pure-token",
+                        "token": "master"
+                    },
+                    {
+                        "name": "replica",
+                        "type": "pure-token",
+                        "token": "replica"
+                    },
+                    {
+                        "name": "pubsub",
+                        "type": "pure-token",
+                        "token": "pubsub"
+                    }
+                ]
+            },
+            {
+                "name": "not-client-id",
+                "token": "NOT-ID",
+                "type": "integer",
+                "optional": true,
+                "multiple": true,
+                "since": "9.0.0"
+            },
+            {
+                "token": "NOT-USER",
+                "name": "not-username",
+                "type": "string",
+                "optional": true,
+                "since": "9.0.0"
+            },
+            {
+                "token": "NOT-ADDR",
+                "name": "not-addr",
+                "display": "ip:port",
+                "type": "string",
+                "optional": true,
+                "since": "9.0.0"
+            },
+            {
+                "token": "NOT-LADDR",
+                "name": "not-laddr",
+                "display": "ip:port",
+                "type": "string",
+                "optional": true,
+                "since": "9.0.0"
+            },
+            {
+                "token": "NOT-NAME",
+                "name": "not-name",
+                "type": "string",
+                "optional": true,
+                "since": "9.0.0"
+            },
+            {
+                "token": "NOT-FLAGS",
+                "name": "not-flags",
+                "type": "string",
+                "optional": true,
+                "since": "9.0.0"
+            },
+            {
+                "token": "NOT-LIB-NAME",
+                "name": "not-lib-name",
+                "type": "string",
+                "optional": true,
+                "since": "9.0.0"
+            },
+            {
+                "token": "NOT-LIB-VER",
+                "name": "not-lib-ver",
+                "type": "string",
+                "optional": true,
+                "since": "9.0.0"
+            },
+            {
+                "token": "NOT-DB",
+                "name": "not-db",
+                "type": "integer",
+                "optional": true,
+                "since": "9.0.0"
+            },
+            {
+                "token": "NOT-CAPA",
+                "name": "not-capa",
+                "type": "string",
+                "optional": true,
+                "since": "9.0.0"
+            },
+            {
+                "token": "NOT-IP",
+                "name": "not-ip",
+                "type": "string",
+                "optional": true,
+                "since": "9.0.0"
+            }
+        ]
+    }
+}

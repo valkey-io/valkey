@@ -1,0 +1,160 @@
+This directory contains all Valkey dependencies, except for the libc that
+should be provided by the operating system.
+
+* **Jemalloc** is our memory allocator, used as replacement for libc malloc on Linux by default. It has good performances and excellent fragmentation behavior. This component is upgraded from time to time.
+* **libvalkey** is the official C client library for Valkey. It is used by valkey-cli, valkey-benchmark and Valkey Sentinel. It is managed in a separate project and updated as needed.
+* **linenoise** is a readline replacement. It is developed by the same authors of Valkey but is managed as a separated project and updated as needed.
+* **lua** is Lua 5.1 with minor changes for security and additional libraries.
+* **LZ4** is the v1.10.0 streaming compression library.
+* **hdr_histogram** Used for per-command latency tracking histograms.
+* **ffc.h** is a C99 port of the fast_float library, used as a replacement for strtod to convert strings to floats efficiently.
+* **gtest-parallel** is a script for running googletest tests in parallel.
+
+How to upgrade the above dependencies
+===
+
+Jemalloc
+---
+
+Jemalloc is used mostly unmodified from upstream. Active defragmentation relies
+on jemalloc's native API rather than custom source patches (those were removed).
+The only source-level modification is in `include/jemalloc/jemalloc.sh`, which
+defines the `VALKEY_VENDORED_JEMALLOC` macro so Valkey can detect the vendored
+copy at build time. A `CMakeLists.txt` is added for the Valkey build system.
+
+We change Jemalloc settings via the `configure` script using the
+`--with-lg-quantum` option, setting it to the value of 3 instead of 4. This
+provides us with more size classes that better suit the Valkey data structures,
+in order to gain memory efficiency.
+
+#### Updating/upgrading jemalloc
+
+The jemalloc directory is pulled as a subtree from the upstream jemalloc github repo. To update it you should run from the project root:
+
+1. `git subtree pull --prefix deps/jemalloc https://github.com/jemalloc/jemalloc.git <version-tag> --squash`<br>
+This should hopefully merge the local changes into the new version.
+2. In case any conflicts arise you'll need to resolve them and commit.
+3. Reconfigure jemalloc:<br>
+```sh
+rm deps/jemalloc/VERSION deps/jemalloc/configure
+cd deps/jemalloc
+./autogen.sh --with-version=<version-tag>-0-g0
+```
+4. Update jemalloc's version in `deps/Makefile`: search for "`--with-version=<old-version-tag>-0-g0`" and update it accordingly.
+5. Commit the changes (VERSION,configure,Makefile).
+
+Libvalkey
+---
+
+Libvalkey is used by Sentinel, `valkey-cli` and `valkey-benchmark`.
+The library is built without its own version of the sds and dict type and uses the Valkey provided variant instead.
+
+1. `git subtree pull --prefix deps/libvalkey https://github.com/valkey-io/libvalkey.git <version-tag> --squash`<br>
+This should hopefully merge the local changes into the new version.
+2. Commit the changes.
+
+Linenoise
+---
+
+Linenoise is rarely upgraded as needed. The upgrade process is trivial since
+Valkey uses a non modified version of linenoise, so to upgrade just do the
+following:
+
+1. Remove the linenoise directory.
+2. Substitute it with the new linenoise source tree.
+
+LZ4
+---
+
+LZ4 is imported from the upstream release archive. The vendored version is
+defined by the `LZ4_VERSION_MAJOR`, `LZ4_VERSION_MINOR`, and
+`LZ4_VERSION_RELEASE` macros in `lz4.h`. `Makefile` and `CMakeLists.txt` are
+maintained locally for the Valkey build, and xxHash symbols are namespaced to
+avoid conflicts with modules loaded by Valkey.
+
+To upgrade LZ4:
+
+1. Download the new release archive from https://github.com/lz4/lz4/releases.
+2. Replace `lz4.c`, `lz4.h`, `lz4hc.c`, `lz4hc.h`, `lz4frame.c`,
+   `lz4frame.h`, `xxhash.c`, `xxhash.h`, and `LICENSE` with the versions from
+   the release's `lib` directory.
+3. Preserve the local `Makefile` and `CMakeLists.txt`, including the
+   `XXH_NAMESPACE` definition.
+4. Verify that the `LZ4_VERSION_*` macros in `lz4.h` match the imported release
+   and update the version in the dependency summary above.
+
+Lua
+---
+
+We use Lua 5.1 and no upgrade is planned currently, since we don't want to break
+Lua scripts for new Lua features: in the context of Valkey Lua scripts the
+capabilities of 5.1 are usually more than enough, the release is rock solid,
+and we definitely don't want to break old scripts.
+
+So upgrading of Lua is up to the Valkey project maintainers and should be a
+manual procedure performed by taking a diff between the different versions.
+
+Currently we have at least the following differences between official Lua 5.1
+and our version:
+
+1. Makefile and CMakeLists.txt are modified for the Valkey build system.
+2. We have the implementation source code, and directly link to the following external libraries: `lua_cjson.o`, `lua_struct.o`, `lua_cmsgpack.o` and `lua_bit.o`.
+3. There is a security fix in `ldo.c`: The check for `LUA_SIGNATURE[0]` is removed in order to avoid direct bytecode execution.
+4. In `lstring.c`, the `luaS_newlstr` function's hash calculation has been upgraded from a simple hash function to MurmurHash3, to enhance performance particularly for large strings.
+5. Support for readonly tables (`lua_enablereadonlytable` API) is added across `lapi.c`, `lvm.c`, `lobject.h`, and `ltable.c`.
+6. Protection of tables reachable from globals, with a globals whitelist.
+7. Multiple CVE security patches (CVE-2022-24834, CVE-2024-31449, CVE-2024-31227, CVE-2024-31228) in cjson, cmsgpack, and the parser.
+
+Hdr_Histogram
+---
+
+Updated source can be found here: https://github.com/HdrHistogram/HdrHistogram_c
+We use a customized version based on master branch commit e4448cf6d1cd08fff519812d3b1e58bd5a94ac42.
+1. Compare all changes under /hdr_histogram directory to upstream master commit e4448cf6d1cd08fff519812d3b1e58bd5a94ac42
+2. Copy updated files from newer version onto files in /hdr_histogram.
+3. Apply the changes from 1 above to the updated files.
+
+ffc.h
+---
+ffc.h is a pure C99 port of the fast_float library, providing fast string-to-double
+conversion without requiring a C++ compiler.
+
+To upgrade the library,
+1. Download the latest ffc.h from https://github.com/kolemannix/ffc.h/releases
+2. Copy ffc.h to "deps/fast_float/".
+
+gtest-parallel
+---
+
+The `deps/gtest-parallel` directory is imported from the upstream
+https://github.com/google/gtest-parallel repository as a subtree snapshot (not a real Git subtree).
+
+Current upstream version:
+- Upstream commit: `cd488bd` (from google/gtest-parallel)
+
+Updating gtest-parallel
+
+Run the following from the repository root.
+
+1. Add the remote and fetch upstream:
+   ```sh
+   git remote add gtest-parallel https://github.com/google/gtest-parallel.git
+   git fetch gtest-parallel master
+   ```
+
+2. Remove any previous import and commit (commit A):
+   ```sh
+   rm -rf deps/gtest-parallel
+   ```
+
+3. Update the subtree from upstream:
+   ```sh
+   git subtree add --prefix=deps/gtest-parallel gtest-parallel master --squash
+   ```
+
+4. Reset back to commit A with proper sign-off:
+   ```sh
+   git reset --soft <commit-A-hash>
+   ```
+
+5. Commit the changes.

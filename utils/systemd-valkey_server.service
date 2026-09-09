@@ -1,0 +1,43 @@
+# example systemd service unit file for valkey-server
+#
+# In order to use this as a template for providing a valkey service in your
+# environment, _at the very least_ make sure to adapt the valkey configuration
+# file you intend to use as needed (make sure to set "supervised systemd"), and
+# to set sane TimeoutStartSec and TimeoutStopSec property values in the unit's
+# "[Service]" section to fit your needs.
+#
+# Some properties, such as User= and Group=, are highly desirable for virtually
+# all deployments of valkey, but cannot be provided in a manner that fits all
+# expectable environments. Some of these properties have been commented out in
+# this example service unit file, but you are highly encouraged to set them to
+# fit your needs.
+#
+# Please refer to systemd.unit(5), systemd.service(5), and systemd.exec(5) for
+# more information.
+
+[Unit]
+Description=Valkey data structure server
+Documentation=https://github.com/valkey-io/valkey-doc
+#Before=your_application.service another_example_application.service
+#AssertPathExists=/var/lib/valkey
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/valkey-server --supervised systemd --daemonize no
+## Alternatively, have valkey-server load a configuration file:
+#ExecStart=/usr/local/bin/valkey-server /path/to/your/valkey.conf
+LimitNOFILE=10032
+NoNewPrivileges=yes
+#OOMScoreAdjust=-900
+#PrivateTmp=yes
+Type=notify
+TimeoutStartSec=infinity
+TimeoutStopSec=infinity
+UMask=0077
+#User=valkey
+#Group=valkey
+#WorkingDirectory=/var/lib/valkey
+
+[Install]
+WantedBy=multi-user.target

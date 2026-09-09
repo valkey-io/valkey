@@ -1,0 +1,12 @@
+{
+    "XGROUP": {
+        "summary": "A container for consumer groups commands.",
+        "complexity": "Depends on subcommand.",
+        "group": "stream",
+        "since": "5.0.0",
+        "arity": -2,
+        "acl_categories": [
+            "SLOW"
+        ]
+    }
+}

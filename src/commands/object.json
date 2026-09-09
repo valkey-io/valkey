@@ -1,0 +1,12 @@
+{
+    "OBJECT": {
+        "summary": "A container for object introspection commands.",
+        "complexity": "Depends on subcommand.",
+        "group": "generic",
+        "since": "2.2.3",
+        "arity": -2,
+        "acl_categories": [
+            "SLOW"
+        ]
+    }
+}

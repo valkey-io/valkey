@@ -1,0 +1,43 @@
+{
+    "CACHING": {
+        "summary": "Instructs the server whether to track the keys in the next request.",
+        "complexity": "O(1)",
+        "group": "connection",
+        "since": "6.0.0",
+        "arity": 3,
+        "container": "CLIENT",
+        "function": "clientCachingCommand",
+        "command_flags": [
+            "ALLOW_BUSY",
+            "NOSCRIPT",
+            "LOADING",
+            "STALE",
+            "SENTINEL"
+        ],
+        "acl_categories": [
+            "CONNECTION",
+            "SLOW"
+        ],
+        "reply_schema": {
+            "const": "OK"
+        },
+        "arguments": [
+            {
+                "name": "mode",
+                "type": "oneof",
+                "arguments": [
+                    {
+                        "name": "yes",
+                        "type": "pure-token",
+                        "token": "YES"
+                    },
+                    {
+                        "name": "no",
+                        "type": "pure-token",
+                        "token": "NO"
+                    }
+                ]
+            }
+        ]
+    }
+}

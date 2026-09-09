@@ -1,0 +1,77 @@
+{
+    "MOVE": {
+        "summary": "Moves a key to another database.",
+        "complexity": "O(1)",
+        "group": "generic",
+        "since": "1.0.0",
+        "arity": -3,
+        "function": "moveCommand",
+        "history": [
+            [
+                "9.2.0",
+                "added REPLACE option."
+            ]
+        ],
+        "command_flags": [
+            "WRITE",
+            "FAST"
+        ],
+        "acl_categories": [
+            "FAST",
+            "KEYSPACE",
+            "WRITE"
+        ],
+        "get_dbid_args": "moveDbIdArgs",
+        "key_specs": [
+            {
+                "flags": [
+                    "RW",
+                    "ACCESS",
+                    "UPDATE"
+                ],
+                "begin_search": {
+                    "index": {
+                        "pos": 1
+                    }
+                },
+                "find_keys": {
+                    "range": {
+                        "lastkey": 0,
+                        "step": 1,
+                        "limit": 0
+                    }
+                }
+            }
+        ],
+        "arguments": [
+            {
+                "name": "key",
+                "type": "key",
+                "key_spec_index": 0
+            },
+            {
+                "name": "db",
+                "type": "integer"
+            },
+            {
+                "name": "replace",
+                "token": "REPLACE",
+                "type": "pure-token",
+                "since": "9.2.0",
+                "optional": true
+            }
+        ],
+        "reply_schema": {
+            "oneOf": [
+                {
+                    "description": "Key was moved.",
+                    "const": 1
+                },
+                {
+                    "description": "Key wasn't moved. When key already exists in the destination database without REPLACE, or it does not exist in the source database",
+                    "const": 0
+                }
+            ]
+        }
+    }
+}

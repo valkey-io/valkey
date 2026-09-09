@@ -1,0 +1,30 @@
+{
+    "SELECT": {
+        "summary": "Changes the selected database.",
+        "complexity": "O(1)",
+        "group": "connection",
+        "since": "1.0.0",
+        "arity": 2,
+        "function": "selectCommand",
+        "command_flags": [
+            "ALLOW_BUSY",
+            "LOADING",
+            "STALE",
+            "FAST"
+        ],
+        "acl_categories": [
+            "CONNECTION",
+            "FAST"
+        ],
+        "get_dbid_args": "selectDbIdArgs",
+        "reply_schema": {
+            "const": "OK"
+        },
+        "arguments": [
+            {
+                "name": "index",
+                "type": "integer"
+            }
+        ]
+    }
+}

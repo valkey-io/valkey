@@ -1,0 +1,791 @@
+start_server {tags {"other"}} {
+    if {$::force_failure} {
+        # This is used just for test suite development purposes.
+        test {Failing test} {
+            format err
+        } {ok}
+    }
+
+    test {Coverage: HELP commands} {
+        assert_match "*OBJECT <subcommand> *" [r OBJECT HELP]
+        assert_match "*MEMORY <subcommand> *" [r MEMORY HELP]
+        assert_match "*PUBSUB <subcommand> *" [r PUBSUB HELP]
+        assert_match "*SLOWLOG <subcommand> *" [r SLOWLOG HELP]
+        assert_match "*COMMANDLOG <subcommand> *" [r COMMANDLOG HELP]
+        assert_match "*CLIENT <subcommand> *" [r CLIENT HELP]
+        assert_match "*COMMAND <subcommand> *" [r COMMAND HELP]
+        assert_match "*CONFIG <subcommand> *" [r CONFIG HELP]
+        assert_match "*FUNCTION <subcommand> *" [r FUNCTION HELP]
+        assert_match "*MODULE <subcommand> *" [r MODULE HELP]
+    }
+
+    test {CONFIG INFO with config name - enum type} {
+        set result [r CONFIG INFO repl-diskless-load]
+        assert_equal [llength $result] 1
+        set info [lindex $result 0]
+        assert_equal [dict get $info name] "repl-diskless-load"
+        assert_equal [dict get $info type] "enum"
+        assert_match "*disabled*" [dict get $info values]
+    }
+
+    test {CONFIG INFO with config name - numeric type} {
+        set result [r CONFIG INFO maxmemory]
+        assert_equal [llength $result] 1
+        set info [lindex $result 0]
+        assert_equal [dict get $info name] "maxmemory"
+        assert_equal [dict get $info type] "numeric"
+        assert_equal [llength [dict get $info range]] 2
+    }
+
+    test {CONFIG INFO with config name - bool type} {
+        set result [r CONFIG INFO activerehashing]
+        assert_equal [llength $result] 1
+        set info [lindex $result 0]
+        assert_equal [dict get $info name] "activerehashing"
+        assert_equal [dict get $info type] "bool"
+    }
+
+    test {CONFIG INFO with config name - string type} {
+        set result [r CONFIG INFO dbfilename]
+        assert_equal [llength $result] 1
+        set info [lindex $result 0]
+        assert_equal [dict get $info name] "dbfilename"
+        assert_equal [dict get $info type] "string"
+    }
+
+    test {CONFIG INFO with config name - special type} {
+        set result [r CONFIG INFO save]
+        assert_equal [llength $result] 1
+        set info [lindex $result 0]
+        assert_equal [dict get $info name] "save"
+        assert_equal [dict get $info type] "special"
+    }
+
+    test {CONFIG INFO with non-existent config} {
+        set result [r CONFIG INFO nonexistent]
+        assert_equal [llength $result] 0
+    }
+
+    test {CONFIG INFO with pattern matching multiple configs} {
+        set result [r CONFIG INFO max*]
+        assert {[llength $result] > 1}
+        set names [list]
+        foreach entry $result {
+            lappend names [dict get $entry name]
+        }
+        assert {[lsearch $names "maxmemory"] >= 0}
+        assert {[lsearch $names "maxclients"] >= 0}
+    }
+
+    test {CONFIG INFO with multiple patterns deduplicates results} {
+        set result [r CONFIG INFO max* maxmemory]
+        set names [list]
+        foreach entry $result {
+            lappend names [dict get $entry name]
+        }
+        # Count occurrences of maxmemory - should be exactly 1
+        set count 0
+        foreach name $names {
+            if {$name eq "maxmemory"} {
+                incr count
+            }
+        }
+        assert_equal $count 1
+    }
+
+    test {CONFIG INFO includes flags field} {
+        set result [r CONFIG INFO maxmemory]
+        set info [lindex $result 0]
+        assert {[dict exists $info flags]}
+    }
+
+    test {CONFIG INFO flags for immutable config} {
+        set result [r CONFIG INFO databases]
+        set info [lindex $result 0]
+        assert {[lsearch [dict get $info flags] "immutable"] >= 0}
+    }
+
+    test {CONFIG INFO flags for sensitive config} {
+        set result [r CONFIG INFO requirepass]
+        set info [lindex $result 0]
+        assert {[lsearch [dict get $info flags] "sensitive"] >= 0}
+    }
+
+    test {CONFIG INFO alias for config with alias} {
+        set result [r CONFIG INFO replicaof]
+        set info [lindex $result 0]
+        assert_equal [dict get $info alias] "slaveof"
+    }
+
+    test {CONFIG INFO looking up by alias name includes alias flag and points back to primary name} {
+        set result [r CONFIG INFO slaveof]
+        set info [lindex $result 0]
+        assert_equal [dict get $info name] "slaveof"
+        assert_equal [dict get $info alias] "replicaof"
+        assert {[lsearch [dict get $info flags] "alias"] >= 0}
+    }
+
+    test {CONFIG INFO config without alias omits alias field} {
+        set result [r CONFIG INFO maxmemory]
+        set info [lindex $result 0]
+        assert {![dict exists $info alias]}
+    }
+
+    test {CONFIG INFO ordering is consistent across calls} {
+        # Get initial ordering
+        set info1 [r CONFIG INFO a*]
+        set get1 [r CONFIG GET a*]
+        
+        set info_names1 [list]
+        foreach entry $info1 {
+            lappend info_names1 [dict get $entry name]
+        }
+        
+        set get_names1 [dict keys $get1]
+        
+        # Do some operations and call again
+        r SET foo bar
+        r GET foo
+        
+        set info2 [r CONFIG INFO a*]
+        set info_names2 [list]
+        foreach entry $info2 {
+            lappend info_names2 [dict get $entry name]
+        }
+        
+        # Restart server
+        if {!$::external} {
+            restart_server 0 true false
+            
+            set info3 [r CONFIG INFO a*]
+            set get3 [r CONFIG GET a*]
+            
+            set info_names3 [list]
+            foreach entry $info3 {
+                lappend info_names3 [dict get $entry name]
+            }
+            
+            set get_names3 [dict keys $get3]
+            
+            # Verify ordering after restart
+            assert_equal $info_names1 $info_names3
+            assert_equal $get_names1 $get_names3
+        }
+        
+        # All orderings should be identical
+        assert_equal $info_names1 $info_names2
+        assert_equal $info_names1 $get_names1
+    }
+
+    test {Coverage: MEMORY MALLOC-STATS} {
+        if {[string match {*jemalloc*} [s mem_allocator]]} {
+            assert_match "*jemalloc*" [r memory malloc-stats]
+        }
+    }
+
+    test {Coverage: MEMORY PURGE} {
+        if {[string match {*jemalloc*} [s mem_allocator]]} {
+            assert_equal {OK} [r memory purge]
+        }
+    }
+
+    test {Coverage: ECHO} {
+        assert_equal bang [r ECHO bang]
+    }
+
+    test {SAVE - make sure there are all the types as values} {
+        # Wait for a background saving in progress to terminate
+        waitForBgsave r
+        r lpush mysavelist hello
+        r lpush mysavelist world
+        r set myemptykey {}
+        r set mynormalkey {blablablba}
+        r zadd mytestzset 10 a
+        r zadd mytestzset 20 b
+        r zadd mytestzset 30 c
+        r save
+    } {OK} {needs:save}
+
+    tags {slow} {
+        if {$::accurate} {set iterations 10000} else {set iterations 1000}
+        foreach fuzztype {binary alpha compr} {
+            test "FUZZ stresser with data model $fuzztype" {
+                set err 0
+                for {set i 0} {$i < $iterations} {incr i} {
+                    set fuzz [randstring 0 512 $fuzztype]
+                    r set foo $fuzz
+                    set got [r get foo]
+                    if {$got ne $fuzz} {
+                        set err [list $fuzz $got]
+                        break
+                    }
+                }
+                set _ $err
+            } {0}
+        }
+    }
+
+    start_server {overrides {save ""} tags {external:skip}} {
+        test {FLUSHALL should not reset the dirty counter if we disable save} {
+            r set key value
+            r flushall
+            assert_morethan [s rdb_changes_since_last_save] 0
+        }
+
+        test {FLUSHALL should reset the dirty counter to 0 if we enable save} {
+            r config set save "3600 1 300 100 60 10000"
+            r set key value
+            r flushall
+            assert_equal [s rdb_changes_since_last_save] 0
+        }
+    }
+
+
+    test {SELECT an out of range DB} {
+        catch {r select 1000000} err
+        set _ $err
+    } {*index is out of range*} {cluster:skip}
+
+    tags {consistency} {
+        proc check_consistency {dumpname code} {
+            set dump [csvdump r]
+            set sha1 [debug_digest]
+
+            uplevel 1 $code
+
+            set sha1_after [debug_digest]
+            if {$sha1 eq $sha1_after} {
+                return 1
+            }
+
+            # Failed
+            set newdump [csvdump r]
+            puts "Consistency test failed!"
+            puts "You can inspect the two dumps in /tmp/${dumpname}*.txt"
+
+            set fd [open /tmp/${dumpname}1.txt w]
+            puts $fd $dump
+            close $fd
+            set fd [open /tmp/${dumpname}2.txt w]
+            puts $fd $newdump
+            close $fd
+
+            return 0
+        }
+
+        if {$::accurate} {set numops 10000} else {set numops 1000}
+        test {Check consistency of different data types after a reload} {
+            r flushdb
+            createComplexDataset r $numops usetag
+            if {$::ignoredigest} {
+                set _ 1
+            } else {
+                check_consistency {repldump} {
+                    r debug reload
+                }
+            }
+        } {1} {needs:debug}
+
+        test {Same dataset digest if saving/reloading as AOF?} {
+            if {$::ignoredigest} {
+                set _ 1
+            } else {
+                check_consistency {aofdump} {
+                    r config set aof-use-rdb-preamble no
+                    r bgrewriteaof
+                    waitForBgrewriteaof r
+                    r debug loadaof
+                }
+            }
+        } {1} {needs:debug}
+    }
+
+
+    test {EXPIRES after AOF reload (without rewrite)} {
+        r flushdb
+        r config set appendonly yes
+        r config set aof-use-rdb-preamble no
+        r set x somevalue
+        r expire x 1000
+        r setex y 2000 somevalue
+        r set z somevalue
+        r expireat z [expr {[clock seconds]+3000}]
+
+        # Milliseconds variants
+        r set px somevalue
+        r pexpire px 1000000
+        r psetex py 2000000 somevalue
+        r set pz somevalue
+        r pexpireat pz [expr {([clock seconds]+3000)*1000}]
+
+        # Reload and check
+        waitForBgrewriteaof r
+        # We need to wait two seconds to avoid false positives here, otherwise
+        # the DEBUG LOADAOF command may read a partial file.
+        # Another solution would be to set the fsync policy to no, since this
+        # prevents write() to be delayed by the completion of fsync().
+        after 2000
+        r debug loadaof
+        set ttl [r ttl x]
+        assert {$ttl > 900 && $ttl <= 1000}
+        set ttl [r ttl y]
+        assert {$ttl > 1900 && $ttl <= 2000}
+        set ttl [r ttl z]
+        assert {$ttl > 2900 && $ttl <= 3000}
+        set ttl [r ttl px]
+        assert {$ttl > 900 && $ttl <= 1000}
+        set ttl [r ttl py]
+        assert {$ttl > 1900 && $ttl <= 2000}
+        set ttl [r ttl pz]
+        assert {$ttl > 2900 && $ttl <= 3000}
+        r config set appendonly no
+    } {OK} {needs:debug}
+
+    tags {protocol} {
+        test {PIPELINING stresser (also a regression for the old epoll bug)} {
+            if {$::tls} {
+                set fd2 [::tls::socket [srv host] [srv port]]
+            } else {
+                set fd2 [socket [srv host] [srv port]]
+            }
+            fconfigure $fd2 -translation binary
+            if {!$::singledb} {
+                puts -nonewline $fd2 "SELECT 9\r\n"
+                flush $fd2
+                gets $fd2
+            }
+
+            for {set i 0} {$i < 100000} {incr i} {
+                set q {}
+                set val "0000${i}0000"
+                append q "SET key:$i $val\r\n"
+                puts -nonewline $fd2 $q
+                set q {}
+                append q "GET key:$i\r\n"
+                puts -nonewline $fd2 $q
+            }
+            flush $fd2
+
+            for {set i 0} {$i < 100000} {incr i} {
+                gets $fd2 line
+                gets $fd2 count
+                set count [string range $count 1 end]
+                set val [read $fd2 $count]
+                read $fd2 2
+            }
+            close $fd2
+            set _ 1
+        } {1}
+    }
+
+    test {APPEND basics} {
+        r del foo
+        list [r append foo bar] [r get foo] \
+             [r append foo 100] [r get foo]
+    } {3 bar 6 bar100}
+
+    test {APPEND basics, integer encoded values} {
+        set res {}
+        r del foo
+        r append foo 1
+        r append foo 2
+        lappend res [r get foo]
+        r set foo 1
+        r append foo 2
+        lappend res [r get foo]
+    } {12 12}
+
+    test {APPEND fuzzing} {
+        set err {}
+        foreach type {binary alpha compr} {
+            set buf {}
+            r del x
+            for {set i 0} {$i < 1000} {incr i} {
+                set bin [randstring 0 10 $type]
+                append buf $bin
+                r append x $bin
+            }
+            if {$buf != [r get x]} {
+                set err "Expected '$buf' found '[r get x]'"
+                break
+            }
+        }
+        set _ $err
+    } {}
+
+    # Leave the user with a clean DB before to exit
+    test {FLUSHDB} {
+        set aux {}
+        if {$::singledb} {
+            r flushdb
+            lappend aux 0 [r dbsize]
+        } else {
+            r select 9
+            r flushdb
+            lappend aux [r dbsize]
+            r select 10
+            r flushdb
+            lappend aux [r dbsize]
+        }
+    } {0 0}
+
+    test {Perform a final SAVE to leave a clean DB on disk} {
+        waitForBgsave r
+        r save
+    } {OK} {needs:save}
+
+    test {RESET clears client state} {
+        r client setname test-client
+        r client tracking on
+
+        assert_equal [r reset] "RESET"
+        set client [r client list]
+        assert_match {*name= *} $client
+        assert_match {*flags=N *} $client
+    } {} {needs:reset}
+
+    test {RESET clears MONITOR state} {
+        set rd [valkey_deferring_client]
+        $rd monitor
+        assert_equal [$rd read] "OK"
+
+        $rd reset
+        assert_equal [$rd read] "RESET"
+        $rd close
+
+        assert_no_match {*flags=O*} [r client list]
+    } {} {needs:reset}
+
+    test {RESET clears and discards MULTI state} {
+        r multi
+        r set key-a a
+
+        r reset
+        catch {r exec} err
+        assert_match {*EXEC without MULTI*} $err
+    } {} {needs:reset}
+
+    test {RESET clears Pub/Sub state} {
+        r subscribe channel-1
+        r reset
+
+        # confirm we're not subscribed by executing another command
+        r set key val
+    } {OK} {needs:reset}
+
+    test {RESET clears authenticated state} {
+        r acl setuser user1 on >secret +@all
+        r auth user1 secret
+        assert_equal [r acl whoami] user1
+
+        r reset
+
+        assert_equal [r acl whoami] default
+    } {} {needs:reset}
+
+    test "Subcommand syntax error crash (issue #10070)" {
+        assert_error {*unknown command*} {r GET|}
+        assert_error {*unknown command*} {r GET|SET}
+        assert_error {*unknown command*} {r GET|SET|OTHER}
+        assert_error {*unknown command*} {r CONFIG|GET GET_XX}
+        assert_error {*unknown subcommand*} {r CONFIG GET_XX}
+    }
+
+    test "Extended Redis Compatibility config" {
+        # This config is added in Valkey 8.0, shall be deprecated and have no
+        # effect in 9.x and be deleted in 10.0.
+        set hello [r hello 3]
+        set version [dict get $hello version]
+        if {[string match "11.*" $version]} {
+            # Check that the config doesn't exist anymore.
+            assert_error "ERR Unknown*" {r config set extended-redis-compatibility yes}
+            error "We shall also delete this test case"
+        } elseif {[string match "10.*" $version]} {
+            # This config is scheduled for removal. In 10.x it should still
+            # exists but have no effect.
+            r config set extended-redis-compatibility yes
+            set hello [r hello 3]
+            assert_equal valkey [dict get $hello server]
+            assert_equal $version [dict get $hello version]
+            r config set extended-redis-compatibility no
+        } elseif {[string match "8.*" $version] || [string match "9.*" $version] || ($version eq "255.255.255")} {
+            # In 8.x, the config shall work and affect HELLO server and version.
+            r config set extended-redis-compatibility yes
+            set hello [r hello 3]
+            assert_equal "redis" [dict get $hello server]
+            assert_match "7.2.*" [dict get $hello version]
+            set info [r info server]
+            assert_match "*redis_mode:*" $info
+            assert_no_match "*server_mode:*" $info
+            set lolwut_output [r lolwut version 5]
+            assert_match {*Redis ver.*} $lolwut_output
+            set lolwut_output [r lolwut version 6]
+            assert_match {*Redis ver.*} $lolwut_output
+            set lolwut_output [r lolwut version 9]
+            assert_match {*Redis ver.*} $lolwut_output
+            set lolwut_output [r lolwut]
+            assert_match {*Redis ver.*} $lolwut_output
+            r config set extended-redis-compatibility no
+            set hello [r hello 3]
+            assert_equal "valkey" [dict get $hello server]
+            assert_equal $version [dict get $hello version]
+            set info [r info server]
+            assert_no_match "*redis_mode:*" $info
+            assert_match "*server_mode:*" $info
+            set lolwut_output [r lolwut]
+            assert_match {*Valkey ver.*} $lolwut_output
+            set lolwut_output [r lolwut version 5]
+            assert_match {*Valkey ver.*} $lolwut_output
+            set lolwut_output [r lolwut version 6]
+            assert_match {*Valkey ver.*} $lolwut_output
+            set lolwut_output [r lolwut version 9]
+            assert_match {*Valkey ver.*} $lolwut_output
+        }
+    }
+}
+
+start_server {tags {"other external:skip"}} {
+    test {Don't rehash if server has child process} {
+        r config set save ""
+        r config set rdb-key-save-delay 1000000
+
+        # Populate some, then check table size and populate more up to one less
+        # than the soft maximum fill factor.
+        populate 2000 a 1
+        set table_size [main_hash_table_size]
+        populate [main_hash_table_keys_before_rehashing_starts] b 1
+
+        # Now we are close to resizing. Check that rehashing didn't start.
+        assert_equal $table_size [main_hash_table_size]
+        assert_no_match "*Hash table 1 stats*" [r debug htstats 9]
+
+        r bgsave
+        wait_for_condition 10 100 {
+            [s rdb_bgsave_in_progress] eq 1
+        } else {
+            fail "bgsave did not start in time"
+        }
+
+        r mset k1 v1 k2 v2
+        # Hash table should not rehash
+        assert_equal $table_size [main_hash_table_size]
+        assert_no_match "*Hash table 1 stats*" [r debug htstats 9]
+        exec kill -9 [get_child_pid 0]
+        waitForBgsave r
+
+        # Hash table should rehash since there is no child process,
+        # so the resize limit is restored.
+        wait_for_condition 50 100 {
+            [main_hash_table_size] > $table_size
+        } else {
+            fail "hash table did not rehash after child process killed"
+        }
+    } {} {needs:debug needs:local-process}
+}
+
+proc read_proc_title {pid} {
+    set fd [open "/proc/$pid/cmdline" "r"]
+    set cmdline [read $fd 1024]
+    close $fd
+
+    return $cmdline
+}
+
+start_server {tags {"other external:skip"}} {
+    test {Process title set as expected} {
+        # Test only on Linux where it's easy to get cmdline without relying on tools.
+        # Skip valgrind as it messes up the arguments.
+        set os [exec uname]
+        if {$os == "Linux" && !$::valgrind} {
+            # Set a custom template
+            r config set "proc-title-template" "TEST {title} {listen-addr} {port} {tls-port} {unixsocket} {config-file}"
+            set cmdline [read_proc_title [srv 0 pid]]
+
+            assert_equal "TEST" [lindex $cmdline 0]
+            assert_match "*/valkey-server" [lindex $cmdline 1]
+
+            if {$::tls} {
+                set expect_port [srv 0 pport]
+                set expect_tls_port [srv 0 port]
+                set port [srv 0 pport]
+            } else {
+                set expect_port [srv 0 port]
+                set expect_tls_port 0
+                set port [srv 0 port]
+            }
+
+            assert_equal "$::host:$port" [lindex $cmdline 2]
+            assert_equal $expect_port [lindex $cmdline 3]
+            assert_equal $expect_tls_port [lindex $cmdline 4]
+            assert_match "*/tests/tmp/server.*/socket" [lindex $cmdline 5]
+            assert_match "*/tests/tmp/valkey.conf.*" [lindex $cmdline 6]
+
+            # Try setting a bad template
+            catch {r config set "proc-title-template" "{invalid-var}"} err
+            assert_match {*template format is invalid*} $err
+        }
+    }
+}
+
+start_cluster 1 0 {tags {"other external:skip cluster slow"}} {
+    r config set hz 500
+    test "Server can trigger resizing" {
+        r flushall
+        # hashslot(foo) is 12182
+        for {set j 1} {$j <= 128} {incr j} {
+            r set "{foo}$j" a
+        }
+        set table_size [main_hash_table_size]
+
+        # disable resizing, the reason for not using slow bgsave is because
+        # it will hit the dict_force_resize_ratio.
+        r debug dict-resizing 0
+
+        # delete data to have lot's (96%) of empty buckets
+        for {set j 1} {$j <= 123} {incr j} {
+            r del "{foo}$j"
+        }
+        assert_equal $table_size [main_hash_table_size]
+
+        # enable resizing
+        r debug dict-resizing 1
+
+        # waiting for serverCron to resize the tables
+        wait_for_condition 1000 10 {
+            [main_hash_table_size] < $table_size
+        } else {
+            puts [r debug HTSTATS 0]
+            fail "hash tables weren't resize."
+        }
+    } {} {needs:debug}
+
+    test "Server can rewind and trigger smaller slot resizing" {
+        # hashslot(foo) is 12182
+        # hashslot(alice) is 749, smaller than hashslot(foo),
+        # attempt to trigger a resize on it, see details in #12802.
+        for {set j 1} {$j <= 128} {incr j} {
+            r set "{alice}$j" a
+        }
+        set table_size [main_hash_table_size]
+
+        # disable resizing, the reason for not using slow bgsave is because
+        # it will hit the dict_force_resize_ratio.
+        r debug dict-resizing 0
+
+        for {set j 1} {$j <= 123} {incr j} {
+            r del "{alice}$j"
+        }
+
+        # enable resizing
+        r debug dict-resizing 1
+
+        # waiting for serverCron to resize the tables
+        wait_for_condition 1000 10 {
+            [main_hash_table_size] < $table_size
+        } else {
+            puts [r debug HTSTATS 0]
+            fail "hash tables weren't resize."
+        }
+    } {} {needs:debug}
+
+    test "CLUSTER FORGET with invalid node ID" {
+         catch {r cluster forget 1} err
+         set _ $err
+    } {*ERR Unknown node*}
+}
+
+start_server {tags {"other external:skip"}} {
+    test "Server can resize empty dict" {
+        # Write and then delete 128 keys, creating an empty dict
+        r flushall
+        for {set j 1} {$j <= 128} {incr j} {
+            r set $j{b} a
+        }
+        for {set j 1} {$j <= 128} {incr j} {
+            r del $j{b}
+        }
+        # The dict containing 128 keys must have expanded,
+        # its hash table itself takes a lot more than 400 bytes
+        set dbnum [expr {$::singledb ? 0 : 9}]
+        wait_for_condition 100 50 {
+            [dict get [r memory stats] db.$dbnum overhead.hashtable.main] < 400
+        } else {
+            fail "dict did not resize in time"
+        }
+    }
+}
+
+start_server {tags {"other external:skip"}} {
+    test "test io-threads are runtime modifiable" {
+        # Each toggle spawns/joins real pthreads; too slow for 100 iterations under Valgrind.
+        set iterations [expr {$::valgrind ? 10 : 100}]
+        # Randomly set the number of threads between 1 and 5
+        for {set i 0} {$i < $iterations} {incr i} {
+            set random_num [expr {int(rand() * 5) + 1}]
+            r config set io-threads $random_num
+            set thread_num [lindex [r config get io-threads] 1]
+            assert_equal $random_num $thread_num
+        }
+    }
+}
+
+set tempFileName [file join [pwd] [pid]]
+if {$::verbose} {
+    puts "Creating temp file $tempFileName"
+}
+set tempFileId [open $tempFileName w]
+set group [dict get [file attributes $tempFileName] -group]
+if {$group != ""} {
+    set escaped_group "\"[string map {"\\" "\\\\"} $group]\""
+    start_server [list tags {"repl external:skip"} overrides [list unixsocketgroup $escaped_group unixsocketperm 744]] {
+        test {test unixsocket options are set correctly} {
+            set socketpath [lindex [r config get unixsocket] 1]
+            set attributes [file attributes $socketpath]
+            set permissions [string range [dict get $attributes -permissions] end-2 end]
+            assert_equal [dict get $attributes -group] $group
+            assert_equal 744 $permissions
+        }
+    }
+}
+if {$::verbose} {
+    puts "Deleting temp file: $tempFileName"
+}
+close $tempFileId
+file delete $tempFileName
+
+start_server {overrides {forkless-infrastructure-enabled yes} tags {"other" "external:skip"}} {
+    foreach bgsave_type {"fork" "forkless"} {
+        test "BGSAVE $bgsave_type" {
+            r flushall
+            r save
+            r set x 10
+            r config set bgsave-default-method $bgsave_type
+            r bgsave
+            waitForBgsave r
+
+            set expected_type [expr {$bgsave_type eq "forkless" ? "forkless" : "fork"}]
+            assert_equal [s rdb_last_bgsave_type] $expected_type
+
+            r debug reload
+            r get x
+        } {10} {needs:debug needs:save}
+
+        test "EXPIRES after a reload ($bgsave_type snapshot + append only file rewrite)" {
+            r flushdb
+            r set x 10
+            r expire x 1000
+            r config set bgsave-default-method $bgsave_type
+            r bgsave
+            waitForBgsave r
+            r debug reload
+            set ttl [r ttl x]
+            set e1 [expr {$ttl > 900 && $ttl <= 1000}]
+            r bgrewriteaof
+            waitForBgrewriteaof r
+            r debug loadaof
+            set ttl [r ttl x]
+            set e2 [expr {$ttl > 900 && $ttl <= 1000}]
+            list $e1 $e2
+        } {1 1} {needs:debug needs:save}
+    }
+}

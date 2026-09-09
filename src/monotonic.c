@@ -1,0 +1,200 @@
+#include "monotonic.h"
+#include <stddef.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <time.h>
+#include "serverassert.h"
+
+/* The function pointer for clock retrieval.  */
+monotime (*getMonotonicUs)(void) = NULL;
+
+static char monotonic_info_string[32];
+
+
+/* Using the processor clock (aka TSC on x86) can provide improved performance
+ * throughout the server wherever the monotonic clock is used.  The processor clock
+ * is significantly faster than calling 'clock_gettime' (POSIX).  While this is
+ * generally safe on modern systems, this link provides additional information
+ * about use of the x86 TSC: http://oliveryang.net/2015/09/pitfalls-of-TSC-usage
+ *
+ * The processor clock is now enabled by default. To disable it, build with
+ *   CFLAGS="-DNO_PROCESSOR_CLOCK"
+ */
+#ifndef NO_PROCESSOR_CLOCK
+#define USE_PROCESSOR_CLOCK
+#endif
+
+
+/* x86_64 TSC-based monotonic clock implementation.
+ *
+ * Requirements for enabling this optimized path:
+ *   USE_PROCESSOR_CLOCK: processor clock usage not explicitly disabled
+ *   __x86_64__: requires 64-bit x86 architecture (for rdtsc instruction and 128-bit arithmetic)
+ *   __linux__: needed to access /proc/cpuinfo for verifying 'constant_tsc' CPU flag
+ *   __SIZEOF_INT128__: requires compiler support for 128-bit integers to prevent wraparound
+ */
+#if defined(USE_PROCESSOR_CLOCK) && defined(__x86_64__) && defined(__linux__) && defined(__SIZEOF_INT128__)
+#include <regex.h>
+#include <x86intrin.h>
+
+#define TSC_CALIBRATION_ITERATIONS 3
+#define MONO_FPMULT_SHIFT 24
+
+static uint64_t mono_ticks_speed = UINT64_MAX; /* Fixed-point: (1 << MONO_FPMULT_SHIFT) / ticks_per_us */
+
+static monotime getMonotonicUs_x86(void) {
+    return ((__uint128_t)__rdtsc() * mono_ticks_speed) >> MONO_FPMULT_SHIFT;
+}
+
+static void monotonicInit_x86linux(void) {
+    const int bufflen = 256;
+    char buf[bufflen];
+    regex_t constTscRegex;
+    const size_t nmatch = 2;
+    regmatch_t pmatch[nmatch];
+    int constantTsc = 0;
+    int rc;
+
+    /* Calibrate TSC ticks per microsecond against CLOCK_MONOTONIC.
+     * This determines the actual TSC frequency regardless of what
+     * the processor model name reports. */
+    for (int i = 0; i < TSC_CALIBRATION_ITERATIONS; ++i) {
+        /* Calibrate TSC against CLOCK_MONOTONIC */
+        struct timespec start, end;
+        uint64_t tsc_start, tsc_end;
+
+        clock_gettime(CLOCK_MONOTONIC, &start);
+        tsc_start = __rdtsc();
+        usleep(10000); /* Sleep for 10ms */
+        tsc_end = __rdtsc();
+        clock_gettime(CLOCK_MONOTONIC, &end);
+
+        uint64_t elapsed_us = (end.tv_sec - start.tv_sec) * 1000000ULL + (end.tv_nsec - start.tv_nsec) / 1000;
+        /* Discard if TSC went backwards (core migration across unsynced TSCs). */
+        if (tsc_end <= tsc_start || elapsed_us == 0) continue;
+        uint64_t tsc_elapsed = tsc_end - tsc_start;
+        double sample_ticks_per_us = (double)tsc_elapsed / (double)elapsed_us;
+        uint64_t sample_mult = (uint64_t)((double)(1ULL << MONO_FPMULT_SHIFT) / sample_ticks_per_us);
+
+        /* Use the minimum out of TSC_CALIBRATION_ITERATIONS iterations for accuracy
+         * because mono_ticks_speed represents an inverse relationship of ticks_per_us.
+         * Skip a zero multiplier: it would always win the minimum and freeze the clock. */
+        if (sample_mult != 0 && sample_mult < mono_ticks_speed) {
+            mono_ticks_speed = sample_mult;
+        }
+    }
+
+    /* Check that the constant_tsc flag is present.  (It should be
+     * unless this is a really old CPU.)  */
+    rc = regcomp(&constTscRegex, "^flags\\s+:.* constant_tsc", REG_EXTENDED);
+    assert(rc == 0);
+
+    FILE *cpuinfo = fopen("/proc/cpuinfo", "r");
+    if (cpuinfo != NULL) {
+        while (fgets(buf, bufflen, cpuinfo) != NULL) {
+            if (regexec(&constTscRegex, buf, nmatch, pmatch, 0) == 0) {
+                constantTsc = 1;
+                break;
+            }
+        }
+        fclose(cpuinfo);
+    }
+    regfree(&constTscRegex);
+
+    if (mono_ticks_speed == UINT64_MAX || mono_ticks_speed == 0) {
+        fprintf(stderr, "monotonic: x86 linux, unable to determine clock rate");
+        return;
+    }
+    if (!constantTsc) {
+        fprintf(stderr, "monotonic: x86 linux, 'constant_tsc' flag not present");
+        return;
+    }
+
+    /* Convert back to ticks/us for human-readable display */
+    double ticks_per_us = (double)(1ULL << MONO_FPMULT_SHIFT) / (double)mono_ticks_speed;
+    snprintf(monotonic_info_string, sizeof(monotonic_info_string), "X86 TSC @ %.2f ticks/us", ticks_per_us);
+    getMonotonicUs = getMonotonicUs_x86;
+}
+#endif
+
+
+#if defined(USE_PROCESSOR_CLOCK) && defined(__aarch64__)
+static long mono_ticksPerMicrosecond = 0;
+
+/* Read the clock value.  */
+static inline uint64_t __cntvct(void) {
+    uint64_t virtual_timer_value;
+    __asm__ volatile("mrs %0, cntvct_el0" : "=r"(virtual_timer_value));
+    return virtual_timer_value;
+}
+
+/* Read the Count-timer Frequency.  */
+static inline uint32_t cntfrq_hz(void) {
+    uint64_t virtual_freq_value;
+    __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(virtual_freq_value));
+    return (uint32_t)virtual_freq_value; /* top 32 bits are reserved */
+}
+
+static monotime getMonotonicUs_aarch64(void) {
+    return __cntvct() / mono_ticksPerMicrosecond;
+}
+
+static void monotonicInit_aarch64(void) {
+    mono_ticksPerMicrosecond = (long)cntfrq_hz() / 1000L / 1000L;
+    if (mono_ticksPerMicrosecond == 0) {
+        fprintf(stderr, "monotonic: aarch64, unable to determine clock rate");
+        return;
+    }
+
+    snprintf(monotonic_info_string, sizeof(monotonic_info_string), "ARM CNTVCT @ %ld ticks/us",
+             mono_ticksPerMicrosecond);
+    getMonotonicUs = getMonotonicUs_aarch64;
+}
+#endif
+
+
+static monotime getMonotonicUs_posix(void) {
+    /* clock_gettime() is specified in POSIX.1b (1993).  Even so, some systems
+     * did not support this until much later.  CLOCK_MONOTONIC is technically
+     * optional and may not be supported - but it appears to be universal.
+     * If this is not supported, provide a system-specific alternate version.  */
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return ((uint64_t)ts.tv_sec) * 1000000 + ts.tv_nsec / 1000;
+}
+
+static void monotonicInit_posix(void) {
+    /* Ensure that CLOCK_MONOTONIC is supported.  This should be supported
+     * on any reasonably current OS.  If the assertion below fails, provide
+     * an appropriate alternate implementation.  */
+    struct timespec ts;
+    int rc = clock_gettime(CLOCK_MONOTONIC, &ts);
+    assert(rc == 0);
+
+    snprintf(monotonic_info_string, sizeof(monotonic_info_string), "POSIX clock_gettime");
+    getMonotonicUs = getMonotonicUs_posix;
+}
+
+
+const char *monotonicInit(void) {
+#if defined(USE_PROCESSOR_CLOCK) && defined(__x86_64__) && defined(__linux__) && defined(__SIZEOF_INT128__)
+    if (getMonotonicUs == NULL) monotonicInit_x86linux();
+#endif
+
+#if defined(USE_PROCESSOR_CLOCK) && defined(__aarch64__)
+    if (getMonotonicUs == NULL) monotonicInit_aarch64();
+#endif
+
+    if (getMonotonicUs == NULL) monotonicInit_posix();
+
+    return monotonic_info_string;
+}
+
+const char *monotonicInfoString(void) {
+    return monotonic_info_string;
+}
+
+monotonic_clock_type monotonicGetType(void) {
+    if (getMonotonicUs == getMonotonicUs_posix) return MONOTONIC_CLOCK_POSIX;
+    return MONOTONIC_CLOCK_HW;
+}

@@ -1,0 +1,86 @@
+# See https://github.com/crate-ci/typos/blob/master/docs/reference.md to configure typos
+
+[files]
+extend-exclude = [
+    ".git/",
+    "deps/",
+    # crc16_slottable is primarily pre-generated random strings.
+    "src/crc16_slottable.c",
+]
+ignore-hidden = false
+
+[default.extend-words]
+exat = "exat"
+optin = "optin"
+smove = "smove"
+Parth = "Parth" # seems like the spellchecker does not like it is similar to "Path"
+Collet = "Collet" # LZ4 author Yann Collet
+nd = "nd"
+Ba = "Ba"
+Addd = "Addd"
+forkless = "forkless"
+
+[default.extend-identifiers]
+dbe = "dbe"
+
+[default]
+extend-ignore-re = [
+    "SELECTed",
+    "SELECTs",
+    "WATCHed",
+    "AIMD",
+]
+
+[type.c]
+extend-ignore-re = [
+    "BA3E2571", # sha1.c
+    "D4C4DAA4", # sha1.c
+    "Georg Nees",
+    "\\[l\\]ist", # eval.c
+    '"LKE"', # test_rax.c
+]
+
+[type.tcl]
+extend-ignore-re = [
+    "DUMPed",
+]
+
+[type.c.extend-identifiers]
+advices = "advices"
+clen = "clen"
+fle = "fle"
+ot = "ot"
+
+[type.tcl.extend-identifiers]
+oll = "oll"
+stressers = "stressers"
+
+[type.sv.extend-identifiers]
+# sv = .h
+fo = "fo"
+
+[type.sv.extend-words]
+# sv = .h
+seeked = "seeked"
+
+[type.c.extend-words]
+arange = "arange"
+Forkless = "Forkless"
+fo = "fo"
+frst = "frst"
+limite = "limite"
+pathc = "pathc"
+pn = "pn"
+seeked = "seeked"
+tre = "tre"
+
+[type.cpp.extend-words]
+fo = "fo"
+
+[type.systemd.extend-words]
+# systemd = .conf
+ake = "ake"
+
+[type.tcl.extend-words]
+fo = "fo"
+tre = "tre"

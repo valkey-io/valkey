@@ -190,6 +190,25 @@ class ClusterIOOffloadTest : public ::testing::Test {
         zfree(buf);
     }
 
+    /* Two complete packets plus a partial tail larger than RCVBUF_INIT_LEN. */
+    size_t seedPacketsAndLargePartialTail(fakeConnection *fc) {
+        const uint32_t whole = CLUSTERMSG_MIN_LEN;
+        const size_t partial = RCVBUF_INIT_LEN + 512;
+        size_t len = whole * 2 + partial;
+        unsigned char *buf = (unsigned char *)zcalloc(len);
+        unsigned char *pkt = buildRawPacket(whole);
+        memcpy(buf, pkt, whole);
+        memcpy(buf + whole, pkt, whole);
+        /* A valid header whose packet has not fully arrived yet. */
+        unsigned char *tail = buildRawPacket(whole);
+        memcpy(buf + whole * 2, tail, partial);
+        fakeConnSetReadData(fc, buf, len);
+        zfree(pkt);
+        zfree(tail);
+        zfree(buf);
+        return partial;
+    }
+
     /* Three complete packets plus a partial tail. The middle packet is larger
      * than the first so that sliding it to the front is an overlapping copy.
      * Each packet carries a distinct type, so a packet landing at the wrong
@@ -329,6 +348,52 @@ TEST_F(ClusterIOOffloadTest, ReadOffloadDrainsMultiplePacketsAndCompactsTail) {
     /* Only the unparsed tail survives, compacted to the front. */
     EXPECT_EQ(link->rcvbuf_len, 1u);
     EXPECT_EQ(link->rcvbuf[0], 'T');
+}
+
+/* A leftover partial packet must not pin rcvbuf at its high-water mark. */
+TEST_F(ClusterIOOffloadTest, ReadCompletionShrinksAroundPartialTail) {
+    clusterLink *link = makeLink();
+    fakeConnection *fc = (fakeConnection *)link->conn;
+    /* Bigger than RCVBUF_INIT_LEN, as a real partial packet usually is. */
+    size_t partial = seedPacketsAndLargePartialTail(fc);
+    ASSERT_GT(partial, (size_t)RCVBUF_INIT_LEN);
+
+    ASSERT_EQ(trySendClusterReadToIOThreads(link), C_OK);
+    clusterReadJob(link);
+    size_t grown = link->rcvbuf_alloc;
+    ASSERT_GT(grown, partial + RCVBUF_INIT_LEN);
+    processIOThreadsResponses();
+
+    /* Both packets applied; the tail survives and the buffer shrank around it. */
+    EXPECT_EQ(server.cluster->stats_bus_messages_received[CLUSTERMSG_TYPE_FAILOVER_AUTH_ACK], 2LL);
+    EXPECT_EQ(link->rcvbuf_len, partial);
+    EXPECT_EQ(link->rcvbuf_alloc, partial + RCVBUF_INIT_LEN);
+    EXPECT_LT(link->rcvbuf_alloc, grown);
+    EXPECT_EQ(memcmp(link->rcvbuf, "RCmb", 4), 0);
+}
+
+/* One job must not read an unbounded stream; it stops on the budget. */
+TEST_F(ClusterIOOffloadTest, ReadJobStopsAtReadBudget) {
+    clusterLink *link = makeLink();
+    fakeConnection *fc = (fakeConnection *)link->conn;
+
+    const size_t stream = (size_t)RCVBUF_MAX_PREALLOC * 2;
+    unsigned char *buf = (unsigned char *)zcalloc(stream);
+    memset(buf, 'x', stream);
+    fakeConnSetReadData(fc, buf, stream);
+    zfree(buf);
+
+    ASSERT_EQ(trySendClusterReadToIOThreads(link), C_OK);
+    clusterReadJob(link);
+
+    /* Stopped on the budget rather than draining the whole stream. */
+    EXPECT_GE(fc->read_pos, (size_t)RCVBUF_MAX_PREALLOC);
+    EXPECT_LT(fc->read_pos, stream);
+
+    /* Garbage bytes, so framing reports a bad header and the link is torn down. */
+    EXPECT_EQ(link->io_result, CLUSTER_IO_BAD_HEADER);
+    processIOThreadsResponses();
+    releaseLinkOwnership(link);
 }
 
 TEST_F(ClusterIOOffloadTest, WriteDispatchSnapshotsBoundary) {

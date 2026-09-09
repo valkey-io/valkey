@@ -243,12 +243,9 @@ static inline char *clusterLinkGetHumanNodeName(clusterLink *link) {
 #define CLUSTER_SLOT_WORDS (CLUSTER_SLOTS / 64)
 #define SLOT_WORD_OFFSET(w) ((w) << 3)
 
-#define RCVBUF_INIT_LEN 1024
 #define RCVBUF_MIN_READ_LEN 14
 static_assert(offsetof(clusterMsg, type) + sizeof(uint16_t) == RCVBUF_MIN_READ_LEN,
               "Incorrect length to read to identify type");
-
-#define RCVBUF_MAX_PREALLOC (1 << 20) /* 1MB */
 
 /* Cluster nodes hash table, mapping nodes addresses 1.2.3.4:6379 to
  * clusterNode structures. */
@@ -4802,11 +4799,15 @@ static int clusterDrainCompletePackets(clusterLink *link) {
 }
 
 static void clusterShrinkRcvbuf(clusterLink *link) {
-    if (link->rcvbuf_alloc <= RCVBUF_INIT_LEN) return;
+    /* Shrink around any leftover partial packet, plus headroom. Requiring an
+     * empty buffer would pin a busy link at its high-water mark. */
+    size_t target = link->rcvbuf_len + RCVBUF_INIT_LEN;
+    if (target < RCVBUF_INIT_LEN) target = RCVBUF_INIT_LEN;
+    if (link->rcvbuf_alloc <= target) return;
 
     size_t prev_rcvbuf_alloc = link->rcvbuf_alloc;
-    zfree(link->rcvbuf);
-    link->rcvbuf = zmalloc(link->rcvbuf_alloc = RCVBUF_INIT_LEN);
+    link->rcvbuf = zrealloc(link->rcvbuf, target);
+    link->rcvbuf_alloc = target;
     server.stat_cluster_links_memory += link->rcvbuf_alloc - prev_rcvbuf_alloc;
 }
 
@@ -9011,8 +9012,9 @@ void clusterReadJob(clusterLink *link) {
      * connection alive until the last completion. */
     serverAssert(conn != NULL);
 
-    /* Read loop: pull as many bytes as the kernel has ready. */
-    while (1) {
+    /* Bounded so one job cannot balloon rcvbuf or hold a worker; the socket stays
+     * readable and the next event continues. */
+    while (total_read < (ssize_t)RCVBUF_MAX_PREALLOC) {
         /* Ensure at least some space in rcvbuf. */
         size_t rcvbuf_len = link->rcvbuf_len;
         if (rcvbuf_len == link->rcvbuf_alloc) {
@@ -9209,9 +9211,7 @@ void clusterHandleReadCompletion(clusterLink *link) {
 
     if (!clusterDrainCompletePackets(link)) return;
 
-    if (link->rcvbuf_len == 0) {
-        clusterShrinkRcvbuf(link);
-    }
+    clusterShrinkRcvbuf(link);
 
     if (result == CLUSTER_IO_READ_ERROR || result == CLUSTER_IO_EOF) {
         freeClusterLink(link);

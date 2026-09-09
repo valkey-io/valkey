@@ -5,6 +5,10 @@
 
 #define CLUSTER_PORT_INCR 10000 /* Cluster port = baseport + PORT_INCR */
 
+/* Receive buffer sizing for a cluster link. */
+#define RCVBUF_INIT_LEN 1024
+#define RCVBUF_MAX_PREALLOC (1 << 20) /* 1MB */
+
 /* The following defines are amount of time, sometimes expressed as
  * multipliers of the node timeout value (when ending with MULT). */
 #define CLUSTER_FAIL_REPORT_VALIDITY_MULT 2  /* Fail report validity. */

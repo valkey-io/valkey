@@ -3715,11 +3715,14 @@ void xdelexCommand(client *c) {
      * executed in a "all or nothing" fashion. */
     streamID static_ids[STREAMID_STATIC_VECTOR_LEN];
     int static_resps[STREAMID_STATIC_VECTOR_LEN];
+    unsigned char static_exists[STREAMID_STATIC_VECTOR_LEN];
     streamID *ids = static_ids;
     int *resps = static_resps;
+    unsigned char *exists = static_exists;
     if (id_count > STREAMID_STATIC_VECTOR_LEN) {
         ids = zmalloc(sizeof(streamID) * id_count);
         resps = zmalloc(sizeof(int) * id_count);
+        exists = zmalloc(sizeof(unsigned char) * id_count);
     }
     if (streamParseDelIDsOrReply(c, id_argi, id_count, ids, resps) != C_OK) {
         goto cleanup;
@@ -3745,7 +3748,14 @@ void xdelexCommand(client *c) {
      * (inner). This opens the iterator once instead of once per message, and
      * allows inner-loop skips via the resps array. */
     if ((mode == PELMODE_DELREF || mode == PELMODE_ACKED) && s->cgroups != NULL) {
-        bool first_loop = 1;
+        /* Determine stream message existance upfront to ensure we mark entry as
+         * "not found" for ACKED only after checking all groups' PELs. */
+        if (mode == PELMODE_ACKED) {
+            for (int j = 0; j < id_count; j++) {
+                exists[j] = streamEntryExists(s, &ids[j]);
+            }
+        }
+
         raxIterator ri_cgroups;
         raxStart(&ri_cgroups, s->cgroups);
         raxSeek(&ri_cgroups, "^", NULL, 0);
@@ -3753,9 +3763,7 @@ void xdelexCommand(client *c) {
             streamCG *cg = ri_cgroups.data;
 
             for (int j = 0; j < id_count; j++) {
-                /* Skip messages already finalized. For ACKED, 2 means another
-                 * group already has a pending ref so deletion is blocked. */
-                if (resps[j] == -1) continue;
+                /* Skip messages already finalized. */
                 if (mode == PELMODE_ACKED && resps[j] == 2) continue;
 
                 streamID *id = &ids[j];
@@ -3780,21 +3788,24 @@ void xdelexCommand(client *c) {
                         /* ACKED: still pending in this group, cannot delete. */
                         resps[j] = 2;
                     }
-                } else if (mode == PELMODE_ACKED) {
-                    if (first_loop && !streamEntryExists(s, id)) {
-                        /* Message doesn't exist in the stream; check once and
-                         * skip iterating the remaining groups. */
-                        resps[j] = -1;
-                    } else if (streamCompareID(id, &cg->last_id) > 0) {
-                        /* Message may still be delivered to this group, so
-                         * block deletion (same as XACKDEL). */
-                        resps[j] = 2;
-                    }
+                } else if (mode == PELMODE_ACKED && exists[j] &&
+                           streamCompareID(id, &cg->last_id) > 0) {
+                    /* Message exists and may still be delivered to this
+                     * group, so block deletion (same as XACKDEL). Entries
+                     * that no longer exist can't be re-delivered. */
+                    resps[j] = 2;
                 }
             }
-            first_loop = 0;
         }
         raxStop(&ri_cgroups);
+
+        /* ACKED: Entries that don't exist and that no group references return
+         * status "not found". */
+        if (mode == PELMODE_ACKED) {
+            for (int j = 0; j < id_count; j++) {
+                if (resps[j] == 1 && !exists[j]) resps[j] = -1;
+            }
+        }
     }
 
     /* Based on the response calculated above for each stream message, delete
@@ -3812,7 +3823,8 @@ void xdelexCommand(client *c) {
             streamID *id = &ids[j];
             if (!streamDeleteItemAndTrackFirstLast(s, id, &first_entry, &deleted)) {
                 /* If the message does not exist, use -1 response code.
-                 * Necessary here b/c in KEEPREF mode, we skip checking above. */
+                 * Necessary here b/c in KEEPREF and DELREF modes, we don't
+                 * check entry existence above. */
                 resps[j] = -1;
             }
         }
@@ -3830,6 +3842,7 @@ void xdelexCommand(client *c) {
 cleanup:
     if (ids != static_ids) zfree(ids);
     if (resps != static_resps) zfree(resps);
+    if (exists != static_exists) zfree(exists);
 }
 
 /* XACKDEL <key> <group> [KEEPREF | DELREF | ACKED] IDS num [<ID1> <ID2> ... <IDN>]

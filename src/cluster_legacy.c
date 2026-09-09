@@ -4008,6 +4008,21 @@ int clusterIsValidPacket(clusterLink *link) {
                               clusterGetMessageTypeString(type), (unsigned long long)totlen);
                     return 0;
                 }
+                uint16_t ext_type = ntohs(ext->type);
+                bool is_string_ext = ext_type == CLUSTERMSG_EXT_TYPE_HOSTNAME ||
+                                     ext_type == CLUSTERMSG_EXT_TYPE_HUMAN_NODENAME ||
+                                     ext_type == CLUSTERMSG_EXT_TYPE_CLIENT_IPV4 ||
+                                     ext_type == CLUSTERMSG_EXT_TYPE_CLIENT_IPV6 ||
+                                     ext_type == CLUSTERMSG_EXT_TYPE_AVAILABILITY_ZONE;
+                /* String extensions are consumed as C strings. Make sure those reads
+                 * cannot continue past the declared extension. */
+                if (is_string_ext &&
+                    (extlen <= sizeof(clusterMsgPingExt) ||
+                     memchr((char *)ext + sizeof(clusterMsgPingExt), '\0', extlen - sizeof(clusterMsgPingExt)) == NULL)) {
+                    serverLog(LL_WARNING, "Received invalid %s packet with unterminated string extension type %d",
+                              clusterGetMessageTypeString(type), (int)ext_type);
+                    return 0;
+                }
                 explen += extlen;
                 ext = getNextPingExt(ext);
             }

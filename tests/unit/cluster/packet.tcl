@@ -214,6 +214,39 @@ start_cluster 1 0 {tags {external:skip cluster tls:skip}} {
 }
 
 start_cluster 1 0 {tags {external:skip cluster tls:skip}} {
+    test "Reject unterminated string extensions in cluster bus packets" {
+        set base_port [srv 0 port]
+        set cluster_port [expr {$base_port + 10000}]
+        set sender_node_id [R 0 cluster myid]
+
+        foreach extension_type {0 1 4 5 8} {
+            set packet [create_cluster_meet_packet \
+                $sender_node_id $base_port $cluster_port 0 1 4]
+
+            # Append an aligned 16-byte string extension whose eight data bytes
+            # contain no NUL terminator.
+            append packet [binary format I 16]
+            append packet [binary format S $extension_type]
+            append packet [binary format S 0]
+            append packet "abcdefgh"
+            set packet [string replace $packet 4 7 [binary format I [string length $packet]]]
+
+            set loglines [count_log_lines 0]
+            set sock [socket 127.0.0.1 $cluster_port]
+            fconfigure $sock -translation binary -buffering none -blocking 1
+            puts -nonewline $sock $packet
+            flush $sock
+            close $sock
+
+            wait_for_log_messages 0 \
+                [list "*Received invalid meet packet with unterminated string extension type $extension_type*"] \
+                $loglines 1000 10
+            assert_equal "PONG" [R 0 ping]
+        }
+    }
+}
+
+start_cluster 1 0 {tags {external:skip cluster tls:skip}} {
     test "Packet with missing gossip messages don't cause invalid read" {
         set base_port [srv 0 port]
         set cluster_port [expr {$base_port + 10000}]

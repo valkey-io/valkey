@@ -1638,11 +1638,19 @@ start_server {tags {"hashexpire"}} {
             if {$cmd eq "RESTORE"} {
                 assert_equal 2 [get_keys r]
                 assert_equal 2 [get_keys_with_volatile_items r]
+                # RESTORE rebuilds the object; the listpack is byte-identical
+                # but with libc malloc the allocation's usable size (what
+                # MEMORY USAGE reports) can differ by an allocator chunk.
+                # Assert what matters: the encoding is preserved, and memory
+                # stays in the same ballpark.
+                assert_encoding listpack $newhash
+                assert_range $memory_after [expr {$mem_before - 16}] [expr {$mem_before + 16}]
             } else {
                 assert_equal 1 [get_keys r]
                 assert_equal 1 [get_keys_with_volatile_items r]
+                # RENAME does not touch the object: memory must be identical.
+                assert_equal $mem_before $memory_after
             }
-            assert_equal $mem_before $memory_after
         } {} {needs:debug}
     }
 

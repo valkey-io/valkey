@@ -2411,8 +2411,14 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
          * updates would rewrite it on every insert). This must happen before
          * any load-time reaping, which gates on the O(1) header peek in
          * hashTypeHasVolatileFields(). */
-        if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK && volatile_fields > 0)
-            hashTypeUpdateVolatileCount(o, volatile_fields);
+        if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) {
+            if (volatile_fields > 0) hashTypeUpdateVolatileCount(o, volatile_fields);
+            /* Normalize the allocation to the exact listpack size, like the
+             * blob-loading path does; the incremental build can leave a
+             * larger-than-needed chunk (visible via MEMORY USAGE with libc
+             * malloc). */
+            objectSetVal(o, lpShrinkToFit(objectGetVal(o)));
+        }
 
         if (objectGetEncoding(o) == OBJ_ENCODING_HASHTABLE) {
             if (!hashtableTryExpand(objectGetVal(o), len)) {

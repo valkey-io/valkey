@@ -4100,7 +4100,20 @@ void call(client *c, int flags) {
     long long old_primary_repl_offset = server.primary_repl_offset;
     incrCommandStatsOnError(NULL, 0);
 
-    const ustime_t call_timer = ustime();
+    /* Sample the clock once. On a hardware monotonic clock, 'call_timer' (the
+     * UNIX time snapshot for the execution unit) is derived from the same
+     * monotonic sample used to measure the command's duration, instead of
+     * being a separate clock read. The two values are identical to what two
+     * back-to-back reads would have produced. */
+    const int hw_clock = (monotonicGetType() == MONOTONIC_CLOCK_HW);
+    monotime monotonic_start = 0;
+    ustime_t call_timer;
+    if (hw_clock) {
+        monotonic_start = getMonotonicUs();
+        call_timer = ustimeFromMonotonic(monotonic_start);
+    } else {
+        call_timer = ustime();
+    }
     enterExecutionUnit(1, call_timer);
 
     /* setting the CLIENT_EXECUTING_COMMAND flag so we will avoid
@@ -4111,9 +4124,6 @@ void call(client *c, int flags) {
 
     c->flag.buffered_reply = 0;
     c->flag.keyspace_notified = 0;
-
-    monotime monotonic_start = 0;
-    if (monotonicGetType() == MONOTONIC_CLOCK_HW) monotonic_start = getMonotonicUs();
 
     /* We need to ensure that if the client does not own the argv array, then the command
      * does not modify it. This is important for debugging purposes to catch any unintended
@@ -4162,10 +4172,10 @@ void call(client *c, int flags) {
      * it means the execution is not yet completed and we MIGHT reprocess the command in the future. */
     if (!c->flag.blocked) c->flag.executing_command = 0;
 
-    /* In order to avoid performance implication due to querying the clock using a system call 3 times,
-     * we use a monotonic clock, when we are sure its cost is very low, and fall back to non-monotonic call otherwise. */
+    /* Measure the duration with the monotonic clock when it is a cheap hardware
+     * clock, falling back to the non-monotonic time of day otherwise. */
     ustime_t duration;
-    if (monotonicGetType() == MONOTONIC_CLOCK_HW)
+    if (hw_clock)
         duration = getMonotonicUs() - monotonic_start;
     else
         duration = ustime() - call_timer;

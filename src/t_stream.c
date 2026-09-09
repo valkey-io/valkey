@@ -63,7 +63,7 @@ size_t streamReplyWithRangeFromConsumerPEL(client *c,
                                            size_t count,
                                            streamConsumer *consumer);
 int streamParseStrictIDOrReply(client *c, robj *o, streamID *id, uint64_t missing_seq, int *seq_given);
-int streamParseStrictIDsOrReply(client *c, int argi, long long id_count, streamID *ids, int *resps);
+int streamParseStrictIDsOrReply(client *c, int argi, size_t id_count, streamID *ids, int *resps);
 int streamParseIDOrReply(client *c, robj *o, streamID *id, uint64_t missing_seq);
 
 /* -----------------------------------------------------------------------
@@ -2016,8 +2016,8 @@ int streamParseStrictIDOrReply(client *c, robj *o, streamID *id, uint64_t missin
 /* Parse IDS <numids> into array of stream message ids, ensuring each is a valid
  * stream message ID. Returns C_OK, or replies to the client on first invalid
  * ID and returns C_ERR. */
-int streamParseStrictIDsOrReply(client *c, int argi, long long id_count, streamID *ids, int *resps) {
-    for (long long j = 0; j < id_count; j++) {
+int streamParseStrictIDsOrReply(client *c, int argi, size_t id_count, streamID *ids, int *resps) {
+    for (size_t j = 0; j < id_count; j++) {
         if (streamParseStrictIDOrReply(c, c->argv[argi + j], &ids[j], 0, NULL) != C_OK) return C_ERR;
         if (resps != NULL) resps[j] = 1;
     }
@@ -3639,7 +3639,7 @@ typedef enum {
  * so each command keeps its own ID-array allocation strategy.
  *
  * Returns C_OK, or C_ERR with an error already replied to the client. */
-static int genericXDelCommand(client *c, bool has_group_arg, bool has_pelmode_arg, robj **o, streamCG **group, streamPELMode *mode, int *ids_argi, long long *id_count) {
+static int genericXDelCommand(client *c, bool has_group_arg, bool has_pelmode_arg, robj **o, streamCG **group, streamPELMode *mode, int *ids_argi, size_t *id_count) {
     *group = NULL;
     *o = lookupKeyWrite(c->db, c->argv[1]);
     if (*o && checkType(c, *o, OBJ_STREAM)) return C_ERR; /* Type error. */
@@ -3683,17 +3683,22 @@ static int genericXDelCommand(client *c, bool has_group_arg, bool has_pelmode_ar
     argi++; /* past IDS */
 
     /* Parse and validate numids: must be a positive integer. */
-    if (getLongLongFromObject(c->argv[argi], id_count) != C_OK || *id_count <= 0) {
+    long long ll;
+    if (getLongLongFromObject(c->argv[argi], &ll) != C_OK || ll <= 0) {
         addReplyError(c, "Number of IDs must be a positive integer");
         return C_ERR;
     }
     argi++; /* past numids */
 
     /* Validate numids matches remaining arg count. */
-    if (*id_count != c->argc - argi) {
+    if (ll != c->argc - argi) {
         addReplyErrorObject(c, shared.syntaxerr);
         return C_ERR;
     }
+
+    /* Cast is safe here b/c confirmed above for
+     * 0 <= id_count <= c->argc <= INT_MAX, so it always fits size_t. */
+    *id_count = (size_t)ll;
 
     *ids_argi = argi;
     return C_OK;
@@ -3707,7 +3712,7 @@ static int genericXDelCommand(client *c, bool has_group_arg, bool has_pelmode_ar
 void xdelCommand(client *c) {
     robj *o;
     int ids_argi;
-    long long id_count;
+    size_t id_count;
     streamCG *group;    /* Unused: XDEL has no group argument. */
     streamPELMode mode; /* Unused: XDEL has no PEL mode argument. */
     if (genericXDelCommand(c, false, false, &o, &group, &mode, &ids_argi, &id_count) != C_OK) return;
@@ -3732,7 +3737,7 @@ void xdelCommand(client *c) {
     /* Actually apply the command. */
     int deleted = 0;
     bool first_entry = 0;
-    for (long long j = 0; j < id_count; j++) {
+    for (size_t j = 0; j < id_count; j++) {
         streamID *id = &ids[j];
         if (streamDeleteItem(s, id)) {
             deleted++;
@@ -3772,7 +3777,7 @@ cleanup:
 void xdelexCommand(client *c) {
     robj *o;
     int ids_argi;
-    long long id_count;
+    size_t id_count;
     streamCG *group; /* Unused: XDELEX has no group argument. */
     streamPELMode mode;
     if (genericXDelCommand(c, false, true, &o, &group, &mode, &ids_argi, &id_count) != C_OK) {
@@ -3817,7 +3822,7 @@ void xdelexCommand(client *c) {
     /* If missing stream, return -1 for each ID. */
     if (o == NULL) {
         addReplyArrayLen(c, id_count);
-        for (int i = 0; i < id_count; i++) {
+        for (size_t i = 0; i < id_count; i++) {
             addReplyLongLong(c, -1);
         }
         goto cleanup;
@@ -3841,7 +3846,7 @@ void xdelexCommand(client *c) {
         /* Determine stream message existence upfront to ensure we mark entry as
          * "not found" for ACKED only after checking all groups' PELs. */
         if (mode == PELMODE_ACKED) {
-            for (int j = 0; j < id_count; j++) {
+            for (size_t j = 0; j < id_count; j++) {
                 exists[j] = streamEntryExists(s, &ids[j]);
             }
         }
@@ -3852,7 +3857,7 @@ void xdelexCommand(client *c) {
         while (raxNext(&ri_cgroups)) {
             streamCG *cg = ri_cgroups.data;
 
-            for (int j = 0; j < id_count; j++) {
+            for (size_t j = 0; j < id_count; j++) {
                 /* Skip messages already finalized. */
                 if (mode == PELMODE_ACKED && resps[j] == 2) continue;
 
@@ -3892,7 +3897,7 @@ void xdelexCommand(client *c) {
                  * XACK <key> <group> <ids> (see streamPropagateDelIDs for
                  * why effects are propagated as primitive commands). */
                 int ack_count = 0;
-                for (int j = 0; j < id_count; j++) {
+                for (size_t j = 0; j < id_count; j++) {
                     if (cleared[j]) {
                         ack_ids[ack_count++] = ids[j];
                         cleared[j] = 0;
@@ -3910,7 +3915,7 @@ void xdelexCommand(client *c) {
         /* ACKED: Entries that don't exist and that no group references return
          * status "not found". */
         if (mode == PELMODE_ACKED) {
-            for (int j = 0; j < id_count; j++) {
+            for (size_t j = 0; j < id_count; j++) {
                 if (resps[j] == 1 && !exists[j]) resps[j] = -1;
             }
         }
@@ -3926,7 +3931,7 @@ void xdelexCommand(client *c) {
      * issue #3429). */
     int deleted = 0;
     bool first_entry = 0;
-    for (int j = 0; j < id_count; j++) {
+    for (size_t j = 0; j < id_count; j++) {
         if (resps[j] == 1) {
             streamID *id = &ids[j];
             if (streamDeleteItem(s, id)) {
@@ -3972,7 +3977,7 @@ void xdelexCommand(client *c) {
 
     /* Emit the array of per-ID results after the mutation has been signaled. */
     addReplyArrayLen(c, id_count);
-    for (int j = 0; j < id_count; j++) {
+    for (size_t j = 0; j < id_count; j++) {
         addReplyLongLong(c, resps[j]);
     }
 
@@ -3995,7 +4000,7 @@ cleanup:
 void xackdelCommand(client *c) {
     robj *o;
     int ids_argi;
-    long long id_count;
+    size_t id_count;
     streamCG *group;
     streamPELMode mode;
     if (genericXDelCommand(c, true, true, &o, &group, &mode, &ids_argi, &id_count) != C_OK) {
@@ -4005,7 +4010,7 @@ void xackdelCommand(client *c) {
     /* If missing stream or group, return -1 for each ID. */
     if (o == NULL || group == NULL) {
         addReplyArrayLen(c, id_count);
-        for (long long i = 0; i < id_count; i++) {
+        for (size_t i = 0; i < id_count; i++) {
             addReplyLongLong(c, -1);
         }
         return;
@@ -4045,6 +4050,7 @@ void xackdelCommand(client *c) {
         ack_ids = zmalloc(sizeof(streamID) * id_count);
         del_ids = zmalloc(sizeof(streamID) * id_count);
     }
+
     memset(acked_flags, 0, id_count);
     memset(cleared, 0, id_count);
 
@@ -4062,7 +4068,7 @@ void xackdelCommand(client *c) {
      * group, we only need to loop over messages (and not consumers) and can set
      * responses inline. Thus, there's a separate setup for KEEPREF vs. ACKED/DELREF*/
     if (mode == PELMODE_KEEPREF) {
-        for (long long j = 0; j < id_count; j++) {
+        for (size_t j = 0; j < id_count; j++) {
             int response = -1;
             streamID *id = &ids[j];
 
@@ -4109,7 +4115,7 @@ void xackdelCommand(client *c) {
      * clearing a non-target's PEL entry before the target is confirmed to hold
      * the message, and in ACKED it ensures non-targets are only consulted to
      * block deletion of messages the target is acking. */
-    for (long long j = 0; j < id_count; j++) {
+    for (size_t j = 0; j < id_count; j++) {
         streamID *id = &ids[j];
 
         if (streamDeletePELEntry(group->pel, id)) {
@@ -4129,7 +4135,7 @@ void xackdelCommand(client *c) {
         /* Determine stream message existence upfront to ensure we mark entry as
          * "not found" for ACKED only after checking all groups' PELs. */
         if (mode == PELMODE_ACKED) {
-            for (long long j = 0; j < id_count; j++) {
+            for (size_t j = 0; j < id_count; j++) {
                 exists[j] = streamEntryExists(s, &ids[j]);
             }
         }
@@ -4144,7 +4150,7 @@ void xackdelCommand(client *c) {
                 continue;
             }
 
-            for (long long j = 0; j < id_count; j++) {
+            for (size_t j = 0; j < id_count; j++) {
                 if (resps[j] != 1) {
                     /* Skip when message wasn't found in target group (-1)
                      * or when the message can't be deleted b/c of ACKED (2). */
@@ -4186,7 +4192,7 @@ void xackdelCommand(client *c) {
                  * `XACK <key> <group> <ids>` to ensure compatibility with
                  * pre-9.2 replicas. */
                 int ack_count = 0;
-                for (long long j = 0; j < id_count; j++) {
+                for (size_t j = 0; j < id_count; j++) {
                     if (cleared[j]) {
                         ack_ids[ack_count++] = ids[j];
                         cleared[j] = 0;
@@ -4209,7 +4215,7 @@ void xackdelCommand(client *c) {
      * metadata bookkeeping and send signals first to meet the module keyspace
      * API contract (matching xdel, xtrim & other stream commands, see
      * issue #3429). */
-    for (long long j = 0; j < id_count; j++) {
+    for (size_t j = 0; j < id_count; j++) {
         /* Delete the message if needed. */
         if (resps[j] == 1) {
             streamID *id = &ids[j];
@@ -4264,7 +4270,7 @@ sync:
     preventCommandPropagation(c);
 
     int ack_count = 0;
-    for (long long j = 0; j < id_count; j++) {
+    for (size_t j = 0; j < id_count; j++) {
         if (acked_flags[j]) ack_ids[ack_count++] = ids[j];
     }
     streamPropagateAckIDs(c, c->argv[1], c->argv[2], ack_ids, ack_count);
@@ -4272,7 +4278,7 @@ sync:
 
     /* Emit the array of per-ID results after the mutation has been signaled. */
     addReplyArrayLen(c, id_count);
-    for (long long j = 0; j < id_count; j++) {
+    for (size_t j = 0; j < id_count; j++) {
         addReplyLongLong(c, resps[j]);
     }
 

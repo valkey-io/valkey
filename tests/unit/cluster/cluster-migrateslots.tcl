@@ -233,15 +233,15 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
         assert_error "*No migrations ongoing*" {R 0 CLUSTER CANCELSLOTMIGRATIONS}
     }
 
-    test "CLUSTER MIGRATESLOTS AUTH/AUTH2 syntax errors" {
-        # AUTH with no password
+    test "CLUSTER MIGRATESLOTS AUTH syntax errors" {
+        # AUTH with no username or password
         assert_error "*syntax error*" {R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 0 0 NODE $node1_id AUTH}
 
-        # AUTH2 with only a username and no password
-        assert_error "*syntax error*" {R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 0 0 NODE $node1_id AUTH2 onlyuser}
+        # AUTH with only a username and no password
+        assert_error "*syntax error*" {R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 0 0 NODE $node1_id AUTH onlyuser}
 
-        # Both AUTH and AUTH2 in the same group — parser sees AUTH2 where it expects SLOTSRANGE
-        assert_error "*syntax error*" {R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 0 0 NODE $node1_id AUTH pw AUTH2 u p}
+        # Duplicate AUTH in the same group
+        assert_error "*syntax error*" {R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 0 0 NODE $node1_id AUTH u p AUTH u p}
 
         # None of the above started a migration
         assert_equal {} [R 0 CLUSTER GETSLOTMIGRATIONS]
@@ -1787,7 +1787,7 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
             # Populate data before migration
             populate 1000 "$16383_slot_tag:" 1000 -2
 
-            assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id AUTH targetpass]
+            assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id AUTH default targetpass]
             set jobname [get_job_name 2 16383]
             wait_for_migration 0 16383
 
@@ -1816,7 +1816,7 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
             R 0 CONFIG SET requirepass "correctpass"
 
             # Perform one-shot import with wrong password in AUTH option
-            assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id AUTH wrongpass]
+            assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id AUTH default wrongpass]
             set jobname [get_job_name 2 16383]
 
             # Should be denied with clear error message
@@ -1828,16 +1828,17 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
         }
     }
 
-    test "CLUSTER MIGRATESLOTS with AUTH overrides primaryauth" {
+    test "CLUSTER MIGRATESLOTS with AUTH overrides primaryuser and primaryauth" {
         assert_does_not_resync {
             R 0 CONFIG SET requirepass "targetpass"
             R 2 CONFIG SET primaryauth "wrongpass"
+            R 2 CONFIG SET primaryuser "wronguser"
 
             # Populate data before migration
             populate 1000 "$16383_slot_tag:" 1000 -2
 
-            # AUTH keyword in command overrides primaryauth on source
-            assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id AUTH targetpass]
+            # AUTH overrides both configured credentials on the source
+            assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id AUTH default targetpass]
             set jobname [get_job_name 2 16383]
             wait_for_migration 0 16383
 
@@ -1859,10 +1860,11 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
             wait_for_migration 2 16383
             R 0 CONFIG SET requirepass ""
             R 2 CONFIG SET primaryauth ""
+            R 2 CONFIG SET primaryuser ""
         }
     }
 
-    test "CLUSTER MIGRATESLOTS with AUTH2 succeeds for ACL user" {
+    test "CLUSTER MIGRATESLOTS with AUTH succeeds for ACL user" {
         assert_does_not_resync {
             R 0 CONFIG SET requirepass "mustauth"
             R 0 ACL SETUSER alice on >s3cret ~* &* +@all
@@ -1870,8 +1872,8 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
             # Populate data before migration
             populate 1000 "$16383_slot_tag:" 1000 -2
 
-            # AUTH2 authenticates as the ACL user; bare AUTH or no-auth would fail
-            assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id AUTH2 alice s3cret]
+            # Authenticate as the named ACL user
+            assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id AUTH alice s3cret]
             set jobname [get_job_name 2 16383]
             wait_for_migration 0 16383
 
@@ -1897,7 +1899,7 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
     }
 
     test "CLUSTER MIGRATESLOTS per-target AUTH differs in single command" {
-        # Explicit AUTH pw0 for node0, primaryauth fallback pw1 for node1.
+        # Explicit AUTH default pw0 for node0, primaryauth fallback pw1 for node1.
         ensure_slot_on_node 2 16383
         ensure_slot_on_node 2 16382
         assert_does_not_resync {
@@ -1909,7 +1911,7 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
             populate 500 "$16382_slot_tag:" 1000 -2
 
             # One command: explicit AUTH for node0, primaryauth fallback for node1
-            assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id AUTH pw0 SLOTSRANGE 16382 16382 NODE $node1_id]
+            assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id AUTH default pw0 SLOTSRANGE 16382 16382 NODE $node1_id]
             set jobname0 [get_job_name 2 16383]
             set jobname1 [get_job_name 2 16382]
             wait_for_migration 0 16383
@@ -1946,19 +1948,16 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
         }
     }
 
-    test "CLUSTER MIGRATESLOTS AUTH password is redacted in command log" {
+    test "CLUSTER MIGRATESLOTS AUTH credentials are redacted in command log" {
         ensure_slot_on_node 2 16383
-        ensure_slot_on_node 2 16382
 
         # The commandlog entry is written synchronously when CLUSTER MIGRATESLOTS returns
         # OK, before any async auth handshake with the target.  No requirepass on node 0
         # means the async auth attempt will fail, which is fine — we only need the entry.
         R 2 CONFIG SET commandlog-execution-slower-than 0
         R 2 COMMANDLOG RESET slow
-        R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id AUTH authpwd
-        R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16382 16382 NODE $node0_id AUTH2 aclusr auth2pwd
-        set jobname0 [get_job_name 2 16383]
-        set jobname1 [get_job_name 2 16382]
+        R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id AUTH aclusr authpwd
+        set jobname [get_job_name 2 16383]
         R 2 CONFIG SET commandlog-execution-slower-than -1
         set slowlog_resp [R 2 COMMANDLOG GET -1 slow]
 
@@ -1968,20 +1967,15 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
             append log_text " " [join [lindex $entry 3] " "]
         }
 
-        # Passwords (and AUTH2 username) must not appear verbatim
+        # Neither credential may appear verbatim
         assert_no_match {*authpwd*} $log_text
         assert_no_match {*aclusr*} $log_text
-        assert_no_match {*auth2pwd*} $log_text
 
-        # AUTH: password replaced with (redacted)
-        assert_match {*SLOTSRANGE 16383 16383 NODE * AUTH (redacted)*} $log_text
+        # Username and password are both replaced with (redacted)
+        assert_match {*SLOTSRANGE 16383 16383 NODE * AUTH (redacted) (redacted)*} $log_text
 
-        # AUTH2: username and password both replaced with (redacted)
-        assert_match {*SLOTSRANGE 16382 16382 NODE * AUTH2 (redacted) (redacted)*} $log_text
-
-        # Migrations fail as intended; wait for terminal state
-        wait_for_migration_field 2 $jobname0 state failed
-        wait_for_migration_field 2 $jobname1 state failed
+        # Migration fails as intended; wait for terminal state
+        wait_for_migration_field 2 $jobname state failed
     }
 
     test "Connection drop during import causes failure" {

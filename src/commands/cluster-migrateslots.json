@@ -53,32 +53,19 @@
                         "description": "40 character node name of the node to migrate to"
                     },
                     {
-                        "name": "authentication",
-                        "type": "oneof",
+                        "token": "AUTH",
+                        "name": "auth",
+                        "type": "block",
                         "optional": true,
+                        "since": "9.2.0",
                         "arguments": [
                             {
-                                "token": "AUTH",
-                                "name": "auth",
-                                "display": "password",
-                                "type": "string",
-                                "since": "9.1.0"
+                                "name": "username",
+                                "type": "string"
                             },
                             {
-                                "token": "AUTH2",
-                                "name": "auth2",
-                                "type": "block",
-                                "since": "9.1.0",
-                                "arguments": [
-                                    {
-                                        "name": "username",
-                                        "type": "string"
-                                    },
-                                    {
-                                        "name": "password",
-                                        "type": "string"
-                                    }
-                                ]
+                                "name": "password",
+                                "type": "string"
                             }
                         ]
                     }

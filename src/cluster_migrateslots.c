@@ -1253,14 +1253,6 @@ void clusterCommandMigrateSlots(client *c) {
         if (curr_index < c->argc) {
             sds token = objectGetVal(c->argv[curr_index]);
             if (!strcasecmp(token, "auth")) {
-                if (curr_index + 1 >= c->argc) {
-                    addReplyErrorObject(c, shared.syntaxerr);
-                    goto cleanup;
-                }
-                auth_pass = sdsdup(objectGetVal(c->argv[curr_index + 1]));
-                redactClientCommandArgument(c, curr_index + 1);
-                curr_index += 2;
-            } else if (!strcasecmp(token, "auth2")) {
                 if (curr_index + 2 >= c->argc) {
                     addReplyErrorObject(c, shared.syntaxerr);
                     goto cleanup;
@@ -1435,16 +1427,19 @@ void slotMigrationJobReadAuthResponse(connection *conn) {
  * job's connection. */
 void slotMigrationJobSendAuth(slotMigrationJob *job) {
     serverAssert(job->type == SLOT_MIGRATION_EXPORT);
+    serverAssert((job->auth_user == NULL) == (job->auth_password == NULL));
     const char *user = NULL;
     size_t user_len = 0;
+    sds pass;
     if (job->auth_user) {
         user = job->auth_user;
         user_len = sdslen(job->auth_user);
-    } else if (server.primary_user) {
+        pass = job->auth_password;
+    } else {
         user = server.primary_user;
-        user_len = strlen(server.primary_user);
+        user_len = user ? strlen(server.primary_user) : 0;
+        pass = server.primary_auth;
     }
-    sds pass = job->auth_password ? job->auth_password : server.primary_auth;
     serverAssert(pass);
 
     sds err = replicationSendAuth(job->conn, user, user_len, pass, sdslen(pass));

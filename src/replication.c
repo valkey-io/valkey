@@ -33,8 +33,8 @@
  * SPDX-License-Identifier: BSD-3-Clause
  */
 
-#include "sds.h"
 #include "server.h"
+#include "sds.h"
 #include "cluster.h"
 #include "cluster_slot_stats.h"
 #include "bio.h"

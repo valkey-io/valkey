@@ -13369,6 +13369,8 @@ int moduleFreeCommand(struct ValkeyModule *module, struct serverCommand *cmd) {
 void moduleUnregisterCommands(struct ValkeyModule *module) {
     /* Drain IO queue before modifying commands dictionary to prevent concurrent access while modifying it. */
     drainIOThreadsQueue();
+    /* Purge any in-flight end-to-end latency samples (may contain commands that are freed below). */
+    latencyE2eModuleUnload();
     /* Unregister all the commands registered by this module. */
     hashtableIterator iter;
     void *next;

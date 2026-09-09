@@ -117,10 +117,11 @@ void latencyE2eFlushCompleted(client *c) {
 void latencyE2eRelease(client *c) {
     if (c->latency_e2e.tables == NULL) return;
     listRelease(c->latency_e2e.tables);
-    /* For simplicity clear the entire structure. */
-    memset(&c->latency_e2e, 0, sizeof(latencyE2e));
+    c->latency_e2e.tables = NULL;
+    c->latency_e2e.open = NULL;
 }
 
+/* After a client write: close the current aggregation table to edits and flush any table whose replies are fully written. */
 void latencyE2ePostClientWrite(client *c) {
     if (c->latency_e2e.tables == NULL || c->nwritten <= 0) return;
 
@@ -139,9 +140,23 @@ void latencyE2ePostClientWrite(client *c) {
     latencyE2eFlushCompleted(c);
 }
 
+/* After a replica write: replicas are never tracked, so free any tables allocated before the role was known. */
 void latencyE2ePostReplicaWrite(client *c) {
     if (c->latency_e2e.tables == NULL) return;
 
     /* Feature is not needed for replica clients, free memory. */
     latencyE2eRelease(c);
+    /* Avoid future tracking allocations. */
+    c->latency_e2e.cur_read_time = 0;
+}
+
+/* Called when a module is unloaded, before its registered commands are freed.
+ * Aggregation tables hold raw serverCommand* values which might are freed during the module unloading. */
+void latencyE2eModuleUnload(void) {
+    listIter li;
+    listNode *ln;
+    listRewind(server.clients, &li);
+    while ((ln = listNext(&li))) {
+        latencyE2eRelease(listNodeValue(ln));
+    }
 }

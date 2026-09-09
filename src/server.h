@@ -3635,6 +3635,7 @@ void latencyE2eRecordCommand(client *c, struct serverCommand *cmd);
 void latencyE2eRelease(client *c);
 void latencyE2ePostClientWrite(client *c);
 void latencyE2ePostReplicaWrite(client *c);
+void latencyE2eModuleUnload(void);
 void commandlogPushCurrentCommand(client *c, struct serverCommand *cmd);
 void updateCommandLatencyHistogram(struct hdr_histogram **latency_histogram, int64_t duration_hist);
 void updateCommandLatencyE2eHistogram(struct hdr_histogram **latency_e2e_histogram, int64_t duration_hist, long long count);

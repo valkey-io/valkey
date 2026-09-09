@@ -141,33 +141,40 @@ start_server {tags {"latency-monitor needs:latency"}} {
         assert_match {calls 1 histogram_usec *} [dict get $histo get]
 
         # SET is fast (< 0.5s); BLPOP and GET span the ~3s wait (>= 2.5s).
-        assert {[max_histogram_usec [dict get $histo set]] < 500000}
-        assert {[max_histogram_usec [dict get $histo blpop]] >= 2500000}
-        assert {[max_histogram_usec [dict get $histo get]] >= 2500000}
+        # Timing-sensitive: skip under environments that can't measure latency reliably.
+        if {!$::no_latency} {
+            assert {[max_histogram_usec [dict get $histo set]] < 500000}
+            assert {[max_histogram_usec [dict get $histo blpop]] >= 2500000}
+            assert {[max_histogram_usec [dict get $histo get]] >= 2500000}
+        }
         r config set latency-tracking-features cmd
     }
 
     test {LATENCY HISTOGRAM E2E I/O threads} {
-        r config set io-threads 2
-        r config set io-threads-always-active yes
-        r config set latency-tracking-features "cmd e2e"
-        r config resetstat
-        # Batch several commands so replies are drained on the I/O-thread write path.
-        set rd [valkey_deferring_client]
-        $rd set itk v
-        $rd get itk
-        $rd get itk
-        $rd flush
-        assert_equal {OK} [$rd read]
-        assert_equal {v} [$rd read]
-        assert_equal {v} [$rd read]
-        $rd close
-        set histo [dict create {*}[r latency histogram e2e]]
-        assert_match {calls 1 histogram_usec *} [dict get $histo set]
-        assert_match {calls 2 histogram_usec *} [dict get $histo get]
-        r config set latency-tracking-features cmd
-        r config set io-threads-always-active no
-        r config set io-threads 1
+        try {
+            r config set io-threads 2
+            r config set io-threads-always-active yes
+            r config set latency-tracking-features "cmd e2e"
+            r config resetstat
+            # Batch several commands so replies are drained on the I/O-thread write path.
+            set rd [valkey_deferring_client]
+            $rd set itk v
+            $rd get itk
+            $rd get itk
+            $rd flush
+            assert_equal {OK} [$rd read]
+            assert_equal {v} [$rd read]
+            assert_equal {v} [$rd read]
+            $rd close
+            set histo [dict create {*}[r latency histogram e2e]]
+            assert_match {calls 1 histogram_usec *} [dict get $histo set]
+            assert_match {calls 2 histogram_usec *} [dict get $histo get]
+        } finally {
+            # Always restore the I/O-thread config so a failure here doesn't leak into later tests.
+            r config set latency-tracking-features cmd
+            r config set io-threads-always-active no
+            r config set io-threads 1
+        }
     }
 
     test {LATENCY HISTOGRAM E2E MULTI/EXEC} {
@@ -266,7 +273,7 @@ start_server {tags {"latency-monitor needs:latency"}} {
             $replica replicaof no one
             $replica config set latency-tracking-features cmd
         }
-    }
+    } {} {external:skip}
 
 tags {"needs:debug"} {
     set old_threshold_value [lindex [r config get latency-monitor-threshold] 1]

@@ -1679,6 +1679,157 @@ start_server {
         }
     }
 
+    start_server {tags {"external:skip"}} {
+        set master [srv -1 client]
+        set master_host [srv -1 host]
+        set master_port [srv -1 port]
+        set replica [srv 0 client]
+
+        # Number of times 'cmd' was executed on the replica, or 0 if never
+        # called (INFO omits zero counters).
+        proc get_replica_calls {client cmd} {
+            set info [$client INFO commandstats]
+            foreach line [split $info "\n"] {
+                if {[string match "cmdstat_$cmd:*" $line]} {
+                    regexp {calls=(\d+)} $line -> count
+                    return $count
+                }
+            }
+            return 0
+        }
+
+        $replica replicaof $master_host $master_port
+        wait_for_condition 50 100 {
+            [s 0 master_link_status] eq {up}
+        } else {
+            fail "Replication not started."
+        }
+
+        test {XACKDEL ack-only propagates XACK but never XACKDEL or XDEL} {
+            $master DEL stream
+            $master XADD stream 1-0 f v
+            $master XGROUP CREATE stream grp1 0
+            $master XGROUP CREATE stream grp2 0
+            $master XREADGROUP GROUP grp1 alice COUNT 1 STREAMS stream >
+            $master XREADGROUP GROUP grp2 bob COUNT 1 STREAMS stream >
+            wait_for_ofs_sync $master $replica
+
+            set xack_before [get_replica_calls $replica xack]
+            set xdel_before [get_replica_calls $replica xdel]
+
+            # grp2 still holds the message pending, so nothing is deleted
+            $master XACKDEL stream grp1 ACKED IDS 1 1-0
+            wait_for_ofs_sync $master $replica
+
+            assert_equal 1 [expr {[get_replica_calls $replica xack] - $xack_before}]
+            assert_equal 0 [expr {[get_replica_calls $replica xdel] - $xdel_before}]
+            assert_equal 0 [get_replica_calls $replica xackdel]
+            assert_equal 1 [$replica XLEN stream]
+            assert_equal 0 [llength [$replica XPENDING stream grp1 - + 10]]
+        }
+
+        test {XACKDEL KEEPREF propagates XACK + XDEL but never XACKDEL} {
+            $master DEL stream
+            $master XADD stream 1-0 f v
+            $master XGROUP CREATE stream grp 0
+            $master XREADGROUP GROUP grp alice COUNT 1 STREAMS stream >
+            wait_for_ofs_sync $master $replica
+
+            set xack_before [get_replica_calls $replica xack]
+            set xdel_before [get_replica_calls $replica xdel]
+
+            $master XACKDEL stream grp KEEPREF IDS 1 1-0
+            wait_for_ofs_sync $master $replica
+
+            assert_equal 1 [expr {[get_replica_calls $replica xack] - $xack_before}]
+            assert_equal 1 [expr {[get_replica_calls $replica xdel] - $xdel_before}]
+            assert_equal 0 [get_replica_calls $replica xackdel]
+            assert_equal 0 [$replica XLEN stream]
+            assert_equal 0 [llength [$replica XPENDING stream grp - + 10]]
+        }
+
+        test {XACKDEL DELREF propagates per-group XACK + XDEL but never XACKDEL} {
+            $master DEL stream
+            $master XADD stream 1-0 f v
+            $master XGROUP CREATE stream grp1 0
+            $master XGROUP CREATE stream grp2 0
+            $master XREADGROUP GROUP grp1 alice COUNT 1 STREAMS stream >
+            $master XREADGROUP GROUP grp2 bob COUNT 1 STREAMS stream >
+            wait_for_ofs_sync $master $replica
+
+            set xack_before [get_replica_calls $replica xack]
+            set xdel_before [get_replica_calls $replica xdel]
+
+            $master XACKDEL stream grp1 DELREF IDS 1 1-0
+            wait_for_ofs_sync $master $replica
+
+            # One XACK for the target group + one for grp2's cleared PEL ref
+            assert_equal 2 [expr {[get_replica_calls $replica xack] - $xack_before}]
+            assert_equal 1 [expr {[get_replica_calls $replica xdel] - $xdel_before}]
+            assert_equal 0 [get_replica_calls $replica xackdel]
+            assert_equal 0 [$replica XLEN stream]
+            assert_equal 0 [llength [$replica XPENDING stream grp2 - + 10]]
+        }
+
+        test {XDELEX KEEPREF propagates XDEL only but never XDELEX} {
+            $master DEL stream
+            $master XADD stream 1-0 f v
+            wait_for_ofs_sync $master $replica
+
+            set xack_before [get_replica_calls $replica xack]
+            set xdel_before [get_replica_calls $replica xdel]
+
+            $master XDELEX stream KEEPREF IDS 1 1-0
+            wait_for_ofs_sync $master $replica
+
+            assert_equal 1 [expr {[get_replica_calls $replica xdel] - $xdel_before}]
+            assert_equal 0 [expr {[get_replica_calls $replica xack] - $xack_before}]
+            assert_equal 0 [get_replica_calls $replica xdelex]
+            assert_equal 0 [$replica XLEN stream]
+        }
+
+        test {XDELEX DELREF propagates XDEL + XACK but never XDELEX} {
+            $master DEL stream
+            $master XADD stream 1-0 f v
+            $master XGROUP CREATE stream grp 0
+            $master XREADGROUP GROUP grp alice COUNT 1 STREAMS stream >
+            wait_for_ofs_sync $master $replica
+
+            set xack_before [get_replica_calls $replica xack]
+            set xdel_before [get_replica_calls $replica xdel]
+
+            $master XDELEX stream DELREF IDS 1 1-0
+            wait_for_ofs_sync $master $replica
+
+            assert_equal 1 [expr {[get_replica_calls $replica xdel] - $xdel_before}]
+            assert_equal 1 [expr {[get_replica_calls $replica xack] - $xack_before}]
+            assert_equal 0 [get_replica_calls $replica xdelex]
+            assert_equal 0 [$replica XLEN stream]
+            assert_equal 0 [llength [$replica XPENDING stream grp - + 10]]
+        }
+
+        test {XDELEX ACKED with nothing deleted propagates nothing} {
+            $master DEL stream
+            $master XADD stream 1-0 f v
+            $master XGROUP CREATE stream grp 0
+            $master XREADGROUP GROUP grp alice COUNT 1 STREAMS stream >
+            wait_for_ofs_sync $master $replica
+
+            set xack_before [get_replica_calls $replica xack]
+            set xdel_before [get_replica_calls $replica xdel]
+
+            # Entry still pending in grp, so ACKED neither deletes nor clears
+            $master XDELEX stream ACKED IDS 1 1-0
+            wait_for_ofs_sync $master $replica
+
+            assert_equal 0 [expr {[get_replica_calls $replica xdel] - $xdel_before}]
+            assert_equal 0 [expr {[get_replica_calls $replica xack] - $xack_before}]
+            assert_equal 0 [get_replica_calls $replica xdelex]
+            assert_equal 1 [$replica XLEN stream]
+            assert_equal 1 [llength [$replica XPENDING stream grp - + 10]]
+        }
+    }
+
     start_server {tags {"stream needs:debug"} overrides {appendonly yes aof-use-rdb-preamble no}} {
         test {Empty stream with no lastid can be rewrite into AOF correctly} {
             r XGROUP CREATE mystream group-name $ MKSTREAM

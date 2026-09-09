@@ -3526,6 +3526,149 @@ TEST_F(FbtreeTest, DeleteRangeByValueSkipsDeeperMiddleLeafFalseEmpty) {
                                     "leaf-untouched boundaries";
 }
 
+/* Exclusive range bounds that land exactly on a real member sitting at a
+ * leaf's fill edge (the last member of the leaf below the bound, or the
+ * first member of the leaf above it) have repeatedly disagreed between
+ * fbtreeCountRangeByValue and fbtreeDeleteRangeByValue: excluding the
+ * actual last item of a leaf pushes the descent index past that leaf's
+ * item count, which upstream code has mistaken for "this side is out of
+ * range" even when whole leaves and subtrees strictly between the two
+ * boundaries remain in range. Synthetic between-member values do not
+ * reach this state -- they land at the next leaf's insertion point without
+ * ever aligning with a real fill edge -- so this sweep only uses bounds
+ * equal to real inserted members, concentrated at multiples of NODE_SIZE
+ * (61) where a leaf actually fills, plus a coarser stride for background
+ * coverage away from those edges. The score-comparison path is not swept
+ * here: probing it directly showed no equivalent alignment sensitivity,
+ * so it is omitted to keep the property scoped to the code path that is
+ * actually affected. */
+TEST_F(FbtreeTest, DeleteRangeMatchesCountAcrossExclusiveBounds) {
+    /* --- Tree A: 300 members, height 2. --- */
+    {
+        const int kTotalA = 300;
+        const int leaf_edges_a[] = {61, 122, 183, 244};
+        const int num_leaf_edges_a = 4;
+        const int stride_a = 23;
+        const int j_stride_a = 31;
+        const int j_extra_a[] = {122, 183, 244};
+        const int num_j_extra_a = 3;
+
+        int min_indexes[64];
+        int num_mins = 0;
+        for (int k = 0; k < num_leaf_edges_a; k++) min_indexes[num_mins++] = leaf_edges_a[k];
+        for (int i = stride_a; i < kTotalA; i += stride_a) {
+            int dup = 0;
+            for (int k = 0; k < num_mins; k++) {
+                if (min_indexes[k] == i) dup = 1;
+            }
+            if (!dup) min_indexes[num_mins++] = i;
+        }
+
+        int max_indexes[64];
+        int num_maxs = 0;
+        for (int j = j_stride_a; j < kTotalA; j += j_stride_a) max_indexes[num_maxs++] = j;
+        for (int k = 0; k < num_j_extra_a; k++) {
+            int dup = 0;
+            for (int m = 0; m < num_maxs; m++) {
+                if (max_indexes[m] == j_extra_a[k]) dup = 1;
+            }
+            if (!dup) max_indexes[num_maxs++] = j_extra_a[k];
+        }
+
+        int num_pairs_a = 0;
+        char buf[16];
+        for (int mi = 0; mi < num_mins; mi++) {
+            for (int mj = 0; mj < num_maxs; mj++) {
+                int i = min_indexes[mi];
+                int j = max_indexes[mj];
+                if (i >= j) continue;
+                if (num_pairs_a >= 120) continue;
+                num_pairs_a++;
+
+                fbtreeIndex *sweep_fbt = fbtreeCreate();
+                for (int n = 1; n <= kTotalA; n++) {
+                    snprintf(buf, sizeof(buf), "m%04d", n);
+                    fbtreeInsert(sweep_fbt, createString(buf));
+                }
+
+                snprintf(buf, sizeof(buf), "m%04d", i);
+                sds range_min = createString(buf);
+                snprintf(buf, sizeof(buf), "m%04d", j);
+                sds range_max = createString(buf);
+
+                unsigned long expected = fbtreeCountRangeByValue(sweep_fbt, range_min, range_max, 1, 1);
+                unsigned long removed = fbtreeDeleteRangeByValue(sweep_fbt, range_min, range_max, 1, 1, NULL, NULL);
+                EXPECT_EQ(removed, expected) << "tree A pair (i=" << i << ", j=" << j << ") disagreed";
+                ASSERT_TRUE(fbtreeDebugValidate(sweep_fbt, false, NULL, 0)) << "tree A pair (i=" << i << ", j=" << j
+                                                                            << ") left an invalid tree";
+
+                sdsfree(range_min);
+                sdsfree(range_max);
+                fbtreeFree(sweep_fbt);
+            }
+        }
+        ASSERT_GT(num_pairs_a, 0) << "tree A sweep must exercise at least one pair";
+    }
+
+    /* --- Tree B: 5000 members, height 3. Must include the known failing
+     * pair (61, 2868). --- */
+    {
+        const int leaf_edges_b[] = {61, 610, 1220, 2440, 3721};
+        const int num_leaf_edges_b = 5;
+        const int stride_b = 173;
+        const int known_max_b = 2868;
+
+        int min_indexes[64];
+        int num_mins = 0;
+        for (int k = 0; k < num_leaf_edges_b; k++) min_indexes[num_mins++] = leaf_edges_b[k];
+
+        int max_indexes[64];
+        int num_maxs = 0;
+        max_indexes[num_maxs++] = known_max_b;
+        for (int j = stride_b; j < 5000; j += stride_b) {
+            if (j == known_max_b) continue;
+            max_indexes[num_maxs++] = j;
+        }
+
+        int num_pairs_b = 0;
+        char buf[16];
+        int saw_known_pair = 0;
+        for (int mi = 0; mi < num_mins; mi++) {
+            for (int mj = 0; mj < num_maxs; mj++) {
+                int i = min_indexes[mi];
+                int j = max_indexes[mj];
+                if (i >= j) continue;
+                if (num_pairs_b >= 30) continue;
+                num_pairs_b++;
+                if (i == 61 && j == known_max_b) saw_known_pair = 1;
+
+                fbtreeIndex *sweep_fbt = fbtreeCreate();
+                for (int n = 1; n <= 5000; n++) {
+                    snprintf(buf, sizeof(buf), "m%05d", n);
+                    fbtreeInsert(sweep_fbt, createString(buf));
+                }
+
+                snprintf(buf, sizeof(buf), "m%05d", i);
+                sds range_min = createString(buf);
+                snprintf(buf, sizeof(buf), "m%05d", j);
+                sds range_max = createString(buf);
+
+                unsigned long expected = fbtreeCountRangeByValue(sweep_fbt, range_min, range_max, 1, 1);
+                unsigned long removed = fbtreeDeleteRangeByValue(sweep_fbt, range_min, range_max, 1, 1, NULL, NULL);
+                EXPECT_EQ(removed, expected) << "tree B pair (i=" << i << ", j=" << j << ") disagreed";
+                ASSERT_TRUE(fbtreeDebugValidate(sweep_fbt, false, NULL, 0)) << "tree B pair (i=" << i << ", j=" << j
+                                                                            << ") left an invalid tree";
+
+                sdsfree(range_min);
+                sdsfree(range_max);
+                fbtreeFree(sweep_fbt);
+            }
+        }
+        ASSERT_GT(num_pairs_b, 0) << "tree B sweep must exercise at least one pair";
+        ASSERT_TRUE(saw_known_pair) << "tree B sweep must include the known failing pair (61, 2868)";
+    }
+}
+
 TEST_F(FbtreeTest, DeleteRangeByValueExactMatch) {
     insert("aaa");
     insert("bbb");

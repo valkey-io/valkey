@@ -1982,17 +1982,21 @@ static int _listZiplistEntryConvertAndValidate(unsigned char *p, unsigned int he
     return 1;
 }
 
+/* State shared between lpValidateIntegrityAndDups and its per-entry
+ * callback _lpEntryValidation. */
+typedef struct lpValidationData {
+    int pairs;
+    int allow_metadata;
+    long count;
+    long entries_seen;
+    long long expected_volatile; /* -1: no aggregate header present. */
+    long long seen_volatile;
+    hashtable *fields; /* Initialisation at the first callback. */
+} lpValidationData;
+
 /* callback to check the listpack doesn't have duplicate records */
 static int _lpEntryValidation(unsigned char *p, unsigned int head_count, void *userdata) {
-    struct {
-        int pairs;
-        int allow_metadata;
-        long count;
-        long entries_seen;
-        long long expected_volatile;
-        long long seen_volatile;
-        hashtable *fields;
-    } *data = userdata;
+    lpValidationData *data = userdata;
 
     /* Metadata (tagged) entries are only legal in hash listpacks. When allowed,
      * skip them (they're not real field/value records); otherwise reject the
@@ -2044,15 +2048,7 @@ static int _lpEntryValidation(unsigned char *p, unsigned int head_count, void *u
  * entries are treated as corruption. */
 int lpValidateIntegrityAndDups(unsigned char *lp, size_t size, int pairs, int allow_metadata) {
     /* Keep track of the field names to locate duplicate ones */
-    struct {
-        int pairs;
-        int allow_metadata;
-        long count;
-        long entries_seen;
-        long long expected_volatile; /* -1: no aggregate header present. */
-        long long seen_volatile;
-        hashtable *fields; /* Initialisation at the first callback. */
-    } data = {pairs, allow_metadata, 0, 0, -1, 0, NULL};
+    lpValidationData data = {pairs, allow_metadata, 0, 0, -1, 0, NULL};
 
     int ret = lpValidateIntegrity(lp, size, _lpEntryValidation, &data, allow_metadata);
 

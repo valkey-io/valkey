@@ -94,13 +94,14 @@
 #define LP_ENCODING_32BIT_STR_MASK 0xFF
 #define LP_ENCODING_IS_32BIT_STR(byte) (((byte) & LP_ENCODING_32BIT_STR_MASK) == LP_ENCODING_32BIT_STR)
 
-/* Tagged (metadata) entry marker. The value is picked from the reserved
- * single-byte sub-encoding band 0xF1-0xFE, which is unused by every existing
- * encoding (7bit uint 0xxxxxxx, 6bit str 10xxxxxx, 13bit int 110xxxxx,
- * multi-byte 1110xxxx/0xF0 and EOF 0xFF), so a tag byte can never be
- * confused with the first byte of a regular element. The tag is an addition
- * to, not a replacement of, the inner element's own encoding, which follows
- * at p+1. */
+
+/* Tagged (metadata) entry marker (11110101).
+ *
+ * The tag is followed by an inner (metadata) element. A tagged element doesn't
+ * count in the listpack's number of elements and is skipped when traversing the
+ * listpack.
+ *
+ * Tagged Element: [F5][metadata_element][backlen] */
 #define LP_ENCODING_TAGGED 0xF5
 #define LP_ENCODING_TAGGED_MASK 0xFF
 #define LP_ENCODING_IS_TAGGED(byte) (((byte) & LP_ENCODING_TAGGED_MASK) == LP_ENCODING_TAGGED)

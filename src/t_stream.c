@@ -63,6 +63,7 @@ size_t streamReplyWithRangeFromConsumerPEL(client *c,
                                            size_t count,
                                            streamConsumer *consumer);
 int streamParseStrictIDOrReply(client *c, robj *o, streamID *id, uint64_t missing_seq, int *seq_given);
+int streamParseStrictIDsOrReply(client *c, int argi, long long id_count, streamID *ids, int *resps);
 int streamParseIDOrReply(client *c, robj *o, streamID *id, uint64_t missing_seq);
 
 /* -----------------------------------------------------------------------
@@ -2012,6 +2013,17 @@ int streamParseStrictIDOrReply(client *c, robj *o, streamID *id, uint64_t missin
     return streamGenericParseIDOrReply(c, o, id, missing_seq, 1, seq_given);
 }
 
+/* Parse IDS <numids> into array of stream message ids, ensuring each is a valid
+ * stream message ID. Returns C_OK, or replies to the client on first invalid
+ * ID and returns C_ERR. */
+int streamParseStrictIDsOrReply(client *c, int argi, long long id_count, streamID *ids, int *resps) {
+    for (long long j = 0; j < id_count; j++) {
+        if (streamParseStrictIDOrReply(c, c->argv[argi + j], &ids[j], 0, NULL) != C_OK) return C_ERR;
+        if (resps != NULL) resps[j] = 1;
+    }
+    return C_OK;
+}
+
 /* Helper for parsing a stream ID that is a range query interval. When the
  * exclude argument is NULL, streamParseIDOrReply() is called and the interval
  * is treated as close (inclusive). Otherwise, the exclude argument is set if
@@ -3592,17 +3604,6 @@ void xautoclaimCommand(client *c) {
     preventCommandPropagation(c);
 }
 
-/* Parse IDS <numids> into array of stream message ids, ensuring each is a valid
- * stream message ID. Returns C_OK, or replies to the client on first invalid
- * ID and returns C_ERR. */
-static int streamParseDelIDsOrReply(client *c, int argi, long long id_count, streamID *ids, int *resps) {
-    for (long long j = 0; j < id_count; j++) {
-        if (streamParseStrictIDOrReply(c, c->argv[argi + j], &ids[j], 0, NULL) != C_OK) return C_ERR;
-        if (resps != NULL) resps[j] = 1;
-    }
-    return C_OK;
-}
-
 /* Maintain stream state by tracking the first entry & propagating keyspace
  * events for deleted entries and/or PEL modifications. Used when deleting or
  * acknowledging messages, as in XDEL, XDELEX, XACKDEL.
@@ -3649,56 +3650,56 @@ int streamDeleteItemAndTrackFirstLast(stream *s, streamID *id, bool *first_entry
     return 0;
 }
 
-/* XDEL <key> [<ID1> <ID2> ... <IDN>]
- *
- * Removes the specified entries from the stream. Returns the number
- * of items actually deleted, that may be different from the number
- * of IDs passed in case certain IDs do not exist. */
-void xdelCommand(client *c) {
-    robj *o;
-
-    if ((o = lookupKeyWriteOrReply(c, c->argv[1], shared.czero)) == NULL || checkType(c, o, OBJ_STREAM)) return;
-    stream *s = objectGetVal(o);
-
-    /* We need to sanity check the IDs passed to start. Even if not
-     * a big issue, it is not great that the command is only partially
-     * executed because at some point an invalid ID is parsed. */
-    streamID static_ids[STREAMID_STATIC_VECTOR_LEN];
-    streamID *ids = static_ids;
-    int id_count = c->argc - 2;
-    if (id_count > STREAMID_STATIC_VECTOR_LEN) ids = zmalloc(sizeof(streamID) * id_count);
-    if (streamParseDelIDsOrReply(c, 2, id_count, ids, NULL) != C_OK) {
-        goto cleanup;
-    }
-
-    /* Actually apply the command. */
-    int deleted = 0;
-    bool first_entry = 0;
-    for (int j = 2; j < c->argc; j++) {
-        streamID *id = &ids[j - 2];
-        streamDeleteItemAndTrackFirstLast(s, id, &first_entry, &deleted);
-    }
-
-    /* Stream bookkeeping. */
-    streamTrackFirstEntryAndPropagate(c, s, deleted, false, first_entry);
-
-    addReplyLongLong(c, deleted);
-cleanup:
-    if (ids != static_ids) zfree(ids);
-}
-
+/* PEL handling modes shared by XDELEX & XACKDEL. */
 typedef enum {
     PELMODE_KEEPREF = 0,
     PELMODE_DELREF,
     PELMODE_ACKED
 } streamPELMode;
 
-/* Parse the "[KEEPREF | DELREF | ACKED] IDS <numids>" arguments shared by
- * XDELEX and XACKDEL. */
-static int streamParseModeAndIDCountOrReply(client *c, int argi, streamPELMode *mode, long long *id_count, int *ids_argi) {
+/* Shared argument parsing of the XDEL-like commands:
+ *
+ * XDEL    key <ID1> <ID2> ... <IDN>
+ * XDELEX  key [KEEPREF | DELREF | ACKED] IDS <numids> <ID1> ... <IDN>
+ * XACKDEL key <group> [KEEPREF | DELREF | ACKED] IDS <numids> <ID1> ... <IDN>
+ *
+ * Parsing options include 1) if the command has a group arg (ie. XACKDEL) and
+ * 2) if the command has PEL mode (XACKDEL/XDELEX).
+ *
+ * This only parses the number of arguments, not the actual array for 2 reasons:
+ * 1) different commands have different reply shapes in some circumstances and
+ * 2) this simplifies memory management of the allocated ids array.
+ *
+ * On success, 'ids_argi' points at the first ID argument and 'id_count'
+ * holds the number of IDs. The IDs themselves are parsed by the callers
+ * so each command keeps its own ID-array allocation strategy.
+ *
+ * Returns C_OK, or C_ERR with an error already replied to the client. */
+static int streamParseXDelArgsOrReply(client *c, bool has_group_arg, bool has_pelmode_arg, robj **o, streamCG **group, streamPELMode *mode, int *ids_argi, long long *id_count) {
+    *group = NULL;
+    *o = lookupKeyWrite(c->db, c->argv[1]);
+    if (*o && checkType(c, *o, OBJ_STREAM)) return C_ERR; /* Type error. */
+
+    int argi = 2;
+    if (has_group_arg) {
+        /* The group name is a positional argument: always consume it, even
+         * when the key is missing (the lookup simply yields a NULL group). */
+        if (*o) {
+            *group = streamLookupCG(objectGetVal(*o), objectGetVal(c->argv[argi]));
+        }
+        argi++; /* past group */
+    }
+
+    if (!has_pelmode_arg) {
+        /* XDEL has no IDS token, so the remaining args is the id count. */
+        *mode = PELMODE_KEEPREF;
+        *id_count = c->argc - argi;
+        *ids_argi = argi;
+        return C_OK;
+    }
+
     /* Check what mode is set, if any.
-     * ex. [KEEPREF | DELREF | ACKED] IDS n [ID ...]
-     */
+     * ex. [KEEPREF | DELREF | ACKED] IDS n [ID ...] */
     *mode = PELMODE_KEEPREF;
     if (strcasecmp(objectGetVal(c->argv[argi]), "KEEPREF") == 0) {
         argi += 1;
@@ -3734,19 +3735,61 @@ static int streamParseModeAndIDCountOrReply(client *c, int argi, streamPELMode *
     return C_OK;
 }
 
+/* XDEL <key> [<ID1> <ID2> ... <IDN>]
+ *
+ * Removes the specified entries from the stream. Returns the number
+ * of items actually deleted, that may be different from the number
+ * of IDs passed in case certain IDs do not exist. */
+void xdelCommand(client *c) {
+    robj *o;
+    int ids_argi;
+    long long id_count;
+    streamCG *group;    /* Unused: XDEL has no group argument. */
+    streamPELMode mode; /* Unused: XDEL has no PEL mode argument. */
+    if (streamParseXDelArgsOrReply(c, false, false, &o, &group, &mode, &ids_argi, &id_count) != C_OK) return;
+
+    /* Missing key: reply as if zero entries were deleted. */
+    if (o == NULL) {
+        addReply(c, shared.czero);
+        return;
+    }
+    stream *s = objectGetVal(o);
+
+    /* We need to sanity check the IDs passed to start. Even if not
+     * a big issue, it is not great that the command is only partially
+     * executed because at some point an invalid ID is parsed. */
+    streamID static_ids[STREAMID_STATIC_VECTOR_LEN];
+    streamID *ids = static_ids;
+    if (id_count > STREAMID_STATIC_VECTOR_LEN) ids = zmalloc(sizeof(streamID) * id_count);
+    if (streamParseStrictIDsOrReply(c, ids_argi, id_count, ids, NULL) != C_OK) {
+        goto cleanup;
+    }
+
+    /* Actually apply the command. */
+    int deleted = 0;
+    bool first_entry = 0;
+    for (long long j = 0; j < id_count; j++) {
+        streamID *id = &ids[j];
+        streamDeleteItemAndTrackFirstLast(s, id, &first_entry, &deleted);
+    }
+
+    /* Stream bookkeeping. */
+    streamTrackFirstEntryAndPropagate(c, s, deleted, false, first_entry);
+
+    addReplyLongLong(c, deleted);
+cleanup:
+    if (ids != static_ids) zfree(ids);
+}
+
 /* XDELEX <key> [KEEPREF | DELREF | ACKED] IDS num [<ID1> <ID2> ... <IDN>]
  */
 void xdelexCommand(client *c) {
-    robj *o = lookupKeyWrite(c->db, c->argv[1]);
-    if (o) {
-        if (checkType(c, o, OBJ_STREAM)) return; /* Type error. */
-    }
-
-    int argi = 2;
-    long long id_count = 0;
-    int id_argi = argi;
+    robj *o;
+    int ids_argi;
+    long long id_count;
+    streamCG *group; /* Unused: XDELEX has no group argument. */
     streamPELMode mode;
-    if (streamParseModeAndIDCountOrReply(c, argi, &mode, &id_count, &id_argi) != C_OK) {
+    if (streamParseXDelArgsOrReply(c, false, true, &o, &group, &mode, &ids_argi, &id_count) != C_OK) {
         return;
     }
 
@@ -3781,7 +3824,7 @@ void xdelexCommand(client *c) {
 
     /* Start parsing the IDs, so that we abort ASAP if there is a syntax
      * error giving "all or nothing" semantics. */
-    if (streamParseDelIDsOrReply(c, id_argi, id_count, ids, resps) != C_OK) {
+    if (streamParseStrictIDsOrReply(c, ids_argi, id_count, ids, resps) != C_OK) {
         goto cleanup;
     }
 
@@ -3809,7 +3852,7 @@ void xdelexCommand(client *c) {
          * propagate XACK's. Reset in loop after propagating each group. */
         memset(cleared, 0, id_count);
 
-        /* Determine stream message existance upfront to ensure we mark entry as
+        /* Determine stream message existence upfront to ensure we mark entry as
          * "not found" for ACKED only after checking all groups' PELs. */
         if (mode == PELMODE_ACKED) {
             for (int j = 0; j < id_count; j++) {
@@ -3943,18 +3986,12 @@ cleanup:
  * was acknowledged and deleted, and 2 means the message was acknowledged but
  * not deleted. */
 void xackdelCommand(client *c) {
-    streamCG *group = NULL;
-    robj *o = lookupKeyWrite(c->db, c->argv[1]);
-    if (o) {
-        if (checkType(c, o, OBJ_STREAM)) return; /* Type error. */
-        group = streamLookupCG(objectGetVal(o), objectGetVal(c->argv[2]));
-    }
-
-    int argi = 3;
-    long long id_count = 0;
-    int id_argi = argi;
+    robj *o;
+    int ids_argi;
+    long long id_count;
+    streamCG *group;
     streamPELMode mode;
-    if (streamParseModeAndIDCountOrReply(c, argi, &mode, &id_count, &id_argi) != C_OK) {
+    if (streamParseXDelArgsOrReply(c, true, true, &o, &group, &mode, &ids_argi, &id_count) != C_OK) {
         return;
     }
 
@@ -4002,7 +4039,7 @@ void xackdelCommand(client *c) {
 
     /* Start parsing the IDs, so that we abort ASAP if there is a syntax
      * error giving "all or nothing" semantics. */
-    if (streamParseDelIDsOrReply(c, id_argi, id_count, ids, resps) != C_OK) {
+    if (streamParseStrictIDsOrReply(c, ids_argi, id_count, ids, resps) != C_OK) {
         goto cleanup;
     }
 

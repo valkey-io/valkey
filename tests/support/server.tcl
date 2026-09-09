@@ -618,11 +618,7 @@ proc start_server {options {code undefined}} {
     }
 
     set unixsocket [file normalize [format "%s/%s" [dict get $config "dir"] "socket"]]
-    # Skip unix socket if path is too long. macOS/BSD sun_path limit is 104
-    # & linux sun_path limit is 108.
-    if {[string length $unixsocket] < 104} {
-        dict set config "unixsocket" $unixsocket
-    }
+    dict set config "unixsocket" $unixsocket
 
     # apply overrides from global space and arguments
     foreach {directive arguments} [concat $::global_overrides $overrides] {

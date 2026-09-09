@@ -1069,6 +1069,47 @@ start_server {tags {"hashexpire"}} {
         }
     }
 
+    test {Hash TTL batch lookup handles live, expired, persistent and missing fields} {
+        # Keep expired entries to test lookup filtering.
+        r DEBUG SET-ACTIVE-EXPIRE 0
+        r del ttlbatchtest
+        set live_fields {}
+        set expired_fields {}
+        set query_fields {}
+
+        for {set i 1} {$i <= 6} {incr i} {
+            r hset ttlbatchtest live$i value expired$i stale persistent$i value
+            lappend live_fields live$i
+            lappend expired_fields expired$i
+            lappend query_fields live$i expired$i persistent$i
+        }
+        lappend query_fields missing
+        set expire_at_sec [expr {[clock seconds] + 60}]
+        set expire_at_ms [expr {$expire_at_sec * 1000}]
+        r hpexpireat ttlbatchtest $expire_at_ms FIELDS 6 {*}$live_fields
+        r hpexpire ttlbatchtest 1 FIELDS 6 {*}$expired_fields
+        assert_encoding hashtable ttlbatchtest
+        after 2
+
+        foreach {cmd min max} [list \
+            HTTL 50 60 \
+            HPTTL 50000 60000 \
+            HEXPIRETIME $expire_at_sec $expire_at_sec \
+            HPEXPIRETIME $expire_at_ms $expire_at_ms] {
+            set result [r $cmd ttlbatchtest FIELDS 19 {*}$query_fields]
+            assert_equal 19 [llength $result]
+
+            # Groups: live, expired, persistent; missing is last.
+            foreach {ttl expired persistent} [lrange $result 0 end-1] {
+                assert_range $ttl $min $max
+                assert_equal -2 $expired
+                assert_equal -1 $persistent
+            }
+            assert_equal -2 [lindex $result end]
+        }
+        r DEBUG SET-ACTIVE-EXPIRE 1
+    } {OK} {needs:debug}
+
     ##### EXPIRETIME ######
 
     # Basic Expiry Functionality

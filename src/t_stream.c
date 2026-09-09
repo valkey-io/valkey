@@ -2573,6 +2573,21 @@ void streamFreeNACK(streamNACK *na) {
     zfree(na);
 }
 
+/* Delete a pending entry from the group PEL and from the PEL of the consumer
+ * owning it, freeing the NACK. Returns 1 if entry was pending and was deleted,
+ * 0 otherwise leaving both group & individual consumer PEL untouched. */
+static int streamDeletePELEntry(rax *pel, streamID *id) {
+    unsigned char buf[sizeof(streamID)];
+    streamEncodeID(buf, id);
+    void *result;
+    if (!raxFind(pel, buf, sizeof(buf), &result)) return 0;
+    streamNACK *nack = result;
+    raxRemove(pel, buf, sizeof(buf), NULL);
+    raxRemove(nack->consumer->pel, buf, sizeof(buf), NULL);
+    streamFreeNACK(nack);
+    return 1;
+}
+
 /* Free a consumer and associated data structures. Note that this function
  * will not reassign the pending messages associated with this consumer
  * nor will delete them from the stream, so when this function is called
@@ -2957,12 +2972,7 @@ void xackCommand(client *c) {
         /* Lookup the ID in the group PEL: it will have a reference to the
          * NACK structure that will have a reference to the consumer, so that
          * we are able to remove the entry from both PELs. */
-        void *result;
-        if (raxFind(group->pel, buf, sizeof(buf), &result)) {
-            streamNACK *nack = result;
-            raxRemove(group->pel, buf, sizeof(buf), NULL);
-            raxRemove(nack->consumer->pel, buf, sizeof(buf), NULL);
-            streamFreeNACK(nack);
+        if (streamDeletePELEntry(group->pel, &ids[j - 3])) {
             acknowledged++;
             server.dirty++;
         }
@@ -3847,34 +3857,33 @@ void xdelexCommand(client *c) {
                 if (mode == PELMODE_ACKED && resps[j] == 2) continue;
 
                 streamID *id = &ids[j];
-                unsigned char buf[sizeof(streamID)];
-                streamEncodeID(buf, id);
 
-                /* Check the PEL before consulting cg->last_id: XGROUP SETID
-                 * can move last_id backward below IDs that are still pending
-                 * (or were pending and later acked), so last_id alone cannot
-                 * prove this group never claimed the message. */
-                void *result;
-                if (raxFind(cg->pel, buf, sizeof(buf), &result)) {
-                    if (mode == PELMODE_DELREF) {
-                        /* DELREF: remove PEL entry from this group. */
-                        streamNACK *nack = result;
-                        raxRemove(cg->pel, buf, sizeof(buf), NULL);
-                        raxRemove(nack->consumer->pel, buf, sizeof(buf), NULL);
-                        streamFreeNACK(nack);
+                if (mode == PELMODE_DELREF) {
+                    /* DELREF: remove the PEL entry from this group. */
+                    if (streamDeletePELEntry(cg->pel, id)) {
                         server.dirty++;
                         pel_modified = 1;
                         cleared[j] = 1;
-                    } else {
-                        /* ACKED: still pending in this group, cannot delete. */
+                    }
+                } else {
+                    /* ACKED: check the PEL before consulting cg->last_id:
+                     * XGROUP SETID can move last_id backward below IDs that
+                     * are still pending (or were pending and later acked),
+                     * so last_id alone cannot prove this group never claimed
+                     * the message. */
+                    unsigned char buf[sizeof(streamID)];
+                    streamEncodeID(buf, id);
+                    void *result;
+                    if (raxFind(cg->pel, buf, sizeof(buf), &result)) {
+                        /* Still pending in this group, cannot delete. */
+                        resps[j] = 2;
+                    } else if (exists[j] &&
+                               streamCompareID(id, &cg->last_id) > 0) {
+                        /* Message exists and may still be delivered to this
+                         * group, so block deletion (same as XACKDEL). Entries
+                         * that no longer exist can't be re-delivered. */
                         resps[j] = 2;
                     }
-                } else if (mode == PELMODE_ACKED && exists[j] &&
-                           streamCompareID(id, &cg->last_id) > 0) {
-                    /* Message exists and may still be delivered to this
-                     * group, so block deletion (same as XACKDEL). Entries
-                     * that no longer exist can't be re-delivered. */
-                    resps[j] = 2;
                 }
             }
 
@@ -4052,16 +4061,9 @@ void xackdelCommand(client *c) {
         for (long long j = 0; j < id_count; j++) {
             int response = -1;
             streamID *id = &ids[j];
-            unsigned char buf[sizeof(streamID)];
-            streamEncodeID(buf, id);
 
             /* ACK for the target group (but not others) */
-            void *result;
-            if (raxFind(group->pel, buf, sizeof(buf), &result)) {
-                streamNACK *nack = result;
-                raxRemove(group->pel, buf, sizeof(buf), NULL);
-                raxRemove(nack->consumer->pel, buf, sizeof(buf), NULL);
-                streamFreeNACK(nack);
+            if (streamDeletePELEntry(group->pel, id)) {
                 response = 1;
                 acked++;
                 acked_flags[j] = 1;
@@ -4105,15 +4107,8 @@ void xackdelCommand(client *c) {
      * block deletion of messages the target is acking. */
     for (long long j = 0; j < id_count; j++) {
         streamID *id = &ids[j];
-        unsigned char buf[sizeof(streamID)];
-        streamEncodeID(buf, id);
 
-        void *result;
-        if (raxFind(group->pel, buf, sizeof(buf), &result)) {
-            streamNACK *nack = result;
-            raxRemove(group->pel, buf, sizeof(buf), NULL);
-            raxRemove(nack->consumer->pel, buf, sizeof(buf), NULL);
-            streamFreeNACK(nack);
+        if (streamDeletePELEntry(group->pel, id)) {
             acked++;
             acked_flags[j] = 1;
             /* resps[j] stays 1: eligible for deletion (ACKED may still block it). */
@@ -4145,28 +4140,25 @@ void xackdelCommand(client *c) {
                 }
 
                 streamID *id = &ids[j];
-                unsigned char buf[sizeof(streamID)];
-                streamEncodeID(buf, id);
 
-                void *result;
-                if (raxFind(cg->pel, buf, sizeof(buf), &result)) {
-                    if (mode == PELMODE_DELREF) {
-                        /* DELREF: remove PEL entry from this group. */
-                        streamNACK *nack = result;
-                        raxRemove(cg->pel, buf, sizeof(buf), NULL);
-                        raxRemove(nack->consumer->pel, buf, sizeof(buf), NULL);
-                        streamFreeNACK(nack);
+                if (mode == PELMODE_DELREF) {
+                    /* DELREF: remove the PEL entry from this group. */
+                    if (streamDeletePELEntry(cg->pel, id)) {
                         acked++;
                         cleared[j] = 1;
-                    } else {
+                    }
+                } else {
+                    unsigned char buf[sizeof(streamID)];
+                    streamEncodeID(buf, id);
+                    void *result;
+                    if (raxFind(cg->pel, buf, sizeof(buf), &result)) {
                         /* Another group still has it pending. */
                         resps[j] = 2;
+                    } else if (streamCompareID(id, &cg->last_id) > 0) {
+                        /* Non-target hasn't claimed it yet; may still need to
+                         * deliver it, so block deletion. */
+                        resps[j] = 2;
                     }
-                } else if (mode == PELMODE_ACKED &&
-                           streamCompareID(id, &cg->last_id) > 0) {
-                    /* Non-target hasn't claimed it yet; may still need to
-                     * deliver it, so block deletion. */
-                    resps[j] = 2;
                 }
             }
 

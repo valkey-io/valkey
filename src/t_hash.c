@@ -1147,16 +1147,9 @@ static int hashTypeRandomElement(robj *hashobj, unsigned long hashsize, listpack
     } else if (hashobj->encoding == OBJ_ENCODING_LISTPACK) {
         if (hashsize == 0) return C_ERR;
 
-        unsigned char *zl = objectGetVal(hashobj);
         if (!hashTypeHasVolatileFields(hashobj)) {
-            /* No volatile fields: every pair is live, seek directly. */
-            unsigned char *fptr = lpSeek(zl, 2 * (rand() % hashsize));
-            serverAssert(fptr != NULL);
-            field->sval = lpGetValue(fptr, &field->slen, &field->lval);
-            if (val) {
-                unsigned char *vptr = lpNext(zl, fptr);
-                val->sval = lpGetValue(vptr, &val->slen, &val->lval);
-            }
+            /* No volatile fields: every pair is live, fetch directly. */
+            lpRandomPair(objectGetVal(hashobj), hashsize, field, val);
             return C_OK;
         }
 
@@ -2478,6 +2471,41 @@ void hpexpiretimeCommand(client *c) {
  * the number of randoms per time. */
 #define HRANDFIELD_RANDOM_SAMPLE_LIMIT 1000
 
+/* Store the field (and optionally value) at the iterator cursor into
+ * listpackEntry structs, for either encoding. The entries alias the hash
+ * object's memory and stay valid as long as it isn't mutated. */
+static inline void hashTypeCurrentToEntry(hashTypeIterator *hi, int withvalues, listpackEntry *f, listpackEntry *v) {
+    if (hi->encoding == OBJ_ENCODING_LISTPACK) {
+        f->sval = lpGetValue(hi->fptr, &f->slen, &f->lval);
+        if (withvalues) v->sval = lpGetValue(hi->vptr, &v->slen, &v->lval);
+    } else {
+        size_t len;
+        f->sval = (unsigned char *)hashTypeCurrentFromHashTable(hi, OBJ_HASH_FIELD, &len);
+        f->slen = len;
+        f->lval = 0;
+        if (withvalues) {
+            v->sval = (unsigned char *)hashTypeCurrentFromHashTable(hi, OBJ_HASH_VALUE, &len);
+            v->slen = len;
+            v->lval = 0;
+        }
+    }
+}
+
+/* Collect every live (non-expired) field into the caller-provided arrays,
+ * which must have room for hashTypeLength(o) entries. Returns the number of
+ * live fields collected. */
+static unsigned long hashTypeCollectLive(robj *o, int withvalues, listpackEntry *fields, listpackEntry *values) {
+    hashTypeIterator hi;
+    unsigned long n = 0;
+    hashTypeInitIterator(o, &hi);
+    while (hashTypeNext(&hi) != C_ERR) {
+        hashTypeCurrentToEntry(&hi, withvalues, &fields[n], withvalues ? &values[n] : NULL);
+        n++;
+    }
+    hashTypeResetIterator(&hi);
+    return n;
+}
+
 void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
     unsigned long count, size;
     int uniq = 1;
@@ -2505,6 +2533,53 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
     void *replylen = addReplyDeferredLen(c);
     unsigned long reply_size = 0;
 
+    /* Hashes with volatile fields take one generic, ghost-aware path over
+     * hashTypeIterator (both encodings): expired-unreaped fields are skipped
+     * and the expiration policy is honored. Hashes without field TTLs (the
+     * common case) fall through to the original CASE 1-4 samplers, which are
+     * only valid when every field is live. */
+    if (hashTypeHasVolatileFields(hash)) {
+        if (!uniq) {
+            /* With replacement: collect the live fields once, then draw. */
+            listpackEntry *fields = zmalloc(sizeof(listpackEntry) * size);
+            listpackEntry *values = withvalues ? zmalloc(sizeof(listpackEntry) * size) : NULL;
+            unsigned long live = hashTypeCollectLive(hash, withvalues, fields, values);
+            while (live > 0 && count--) {
+                unsigned long idx = rand() % live;
+                hrandfieldReplyWithListpack(wpc, 1, &fields[idx], values ? &values[idx] : NULL);
+                if (c->flag.close_asap) break;
+                reply_size++;
+            }
+            zfree(fields);
+            if (values) zfree(values);
+        } else {
+            /* Distinct: reservoir sampling (Algorithm R) in one pass. Also
+             * covers count >= live, replying with every live field. */
+            if (count > size) count = size; /* live <= size: bound the reservoir */
+            listpackEntry *rf = zmalloc(sizeof(listpackEntry) * count);
+            listpackEntry *rv = withvalues ? zmalloc(sizeof(listpackEntry) * count) : NULL;
+            unsigned long seen = 0, filled = 0;
+            hashTypeIterator hi;
+            hashTypeInitIterator(hash, &hi);
+            while (hashTypeNext(&hi) != C_ERR) {
+                seen++;
+                if (filled < count) {
+                    hashTypeCurrentToEntry(&hi, withvalues, &rf[filled], withvalues ? &rv[filled] : NULL);
+                    filled++;
+                } else {
+                    unsigned long j = rand() % seen;
+                    if (j < count) hashTypeCurrentToEntry(&hi, withvalues, &rf[j], withvalues ? &rv[j] : NULL);
+                }
+            }
+            hashTypeResetIterator(&hi);
+            reply_size = filled;
+            hrandfieldReplyWithListpack(wpc, filled, rf, rv);
+            zfree(rf);
+            if (rv) zfree(rv);
+        }
+        goto set_deferred_response;
+    }
+
     /* CASE 1: The count was negative, so the extraction method is just:
      * "return N random elements" sampling the whole set every time.
      * This case is trivial and can be served without auxiliary data
@@ -2527,32 +2602,22 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
                 reply_size++;
             }
         } else if (hash->encoding == OBJ_ENCODING_LISTPACK) {
-            /* Gather the live pairs once, then sample from them with
-             * replacement; picking one random element per iteration would
-             * rescan the listpack every time. */
-            listpackEntry *fields = zmalloc(sizeof(listpackEntry) * size);
-            listpackEntry *values = withvalues ? zmalloc(sizeof(listpackEntry) * size) : NULL;
-            hashTypeIterator hi;
-            unsigned long live = 0;
-            hashTypeInitIterator(hash, &hi);
-            while (hashTypeNext(&hi) != C_ERR) {
-                fields[live].sval = lpGetValue(hi.fptr, &fields[live].slen, &fields[live].lval);
-                if (values) values[live].sval = lpGetValue(hi.vptr, &values[live].slen, &values[live].lval);
-                live++;
-            }
-            hashTypeResetIterator(&hi);
+            listpackEntry *fields, *vals = NULL;
+            unsigned long limit, sample_count;
 
-            while (live > 0 && count--) {
-                unsigned long idx = rand() % live;
-                /* A listpack field/value may be integer-encoded, in which case
-                 * 'sval' is NULL and the value is held in 'lval'. Use the helper
-                 * that handles both cases instead of assuming a string buffer. */
-                hrandfieldReplyWithListpack(wpc, 1, &fields[idx], values ? &values[idx] : NULL);
+            limit = count > HRANDFIELD_RANDOM_SAMPLE_LIMIT ? HRANDFIELD_RANDOM_SAMPLE_LIMIT : count;
+            fields = zmalloc(sizeof(listpackEntry) * limit);
+            if (withvalues) vals = zmalloc(sizeof(listpackEntry) * limit);
+            while (count) {
+                sample_count = count > limit ? limit : count;
+                count -= sample_count;
+                reply_size += sample_count;
+                lpRandomPairs(objectGetVal(hash), sample_count, fields, vals);
+                hrandfieldReplyWithListpack(wpc, sample_count, fields, vals);
                 if (c->flag.close_asap) break;
-                reply_size++;
             }
             zfree(fields);
-            if (values) zfree(values);
+            zfree(vals);
         }
         goto set_deferred_response;
     }
@@ -2584,41 +2649,14 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
      * And it is inefficient to repeatedly pick one random element from a
      * listpack in CASE 4. So we use this instead. */
     if (hash->encoding == OBJ_ENCODING_LISTPACK) {
-        listpackEntry *all_fields = zmalloc(sizeof(listpackEntry) * size);
-        listpackEntry *all_values = withvalues ? zmalloc(sizeof(listpackEntry) * size) : NULL;
-
-        hashTypeIterator hi;
-        hashTypeInitIterator(hash, &hi);
-        unsigned long actual_size = 0;
-        while (hashTypeNext(&hi) != C_ERR) {
-            all_fields[actual_size].sval = lpGetValue(hi.fptr, &all_fields[actual_size].slen, &all_fields[actual_size].lval);
-            if (all_values) {
-                all_values[actual_size].sval = lpGetValue(hi.vptr, &all_values[actual_size].slen, &all_values[actual_size].lval);
-            }
-            actual_size++;
-        }
-        hashTypeResetIterator(&hi);
-
-        /* adjust count if we have more than actual expired fields */
-        if (count > actual_size) count = actual_size;
-        reply_size = count;
-
-        /* Shuffle first count elements */
-        for (unsigned long i = 0; i < count; i++) {
-            unsigned long j = i + (rand() % (actual_size - i));
-            listpackEntry tmp = all_fields[i];
-            all_fields[i] = all_fields[j];
-            all_fields[j] = tmp;
-            if (all_values) {
-                tmp = all_values[i];
-                all_values[i] = all_values[j];
-                all_values[j] = tmp;
-            }
-        }
-        hrandfieldReplyWithListpack(wpc, count, all_fields, all_values);
-
-        zfree(all_fields);
-        if (all_values) zfree(all_values);
+        reply_size = count < size ? count : size;
+        listpackEntry *fields, *vals = NULL;
+        fields = zmalloc(sizeof(listpackEntry) * count);
+        if (withvalues) vals = zmalloc(sizeof(listpackEntry) * count);
+        serverAssert(lpRandomPairsUnique(objectGetVal(hash), count, fields, vals) == count);
+        hrandfieldReplyWithListpack(wpc, count, fields, vals);
+        zfree(fields);
+        zfree(vals);
         goto set_deferred_response;
     }
 

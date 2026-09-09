@@ -15045,12 +15045,10 @@ struct ValkeyModuleDefragCtx {
  * may allocate that is not tied to a specific data type.
  *
  * The callback is invoked with a time limit: it should call VM_DefragShouldStop() periodically, and
- * save its position with VM_DefragCursorSet() so a later invocation resumes where it stopped. See
- * VM_DefragCursorSet().
+ * save its position with VM_DefragCursorSet() so a later invocation can resume (using VM_DefragCursorGet).
  *
- * The callback MUST store a cursor of 0 once it has finished. A non-zero cursor keeps the defrag
- * stage open, which prevents the cycle from completing and stops the server from defragmenting the
- * keyspace or any other module until the callback converges.
+ * If a non-zero cursor is set (VM_DefragCursorSet) the function will be invoked repeatedly until a zero
+ * cursor is returned.
  */
 int VM_RegisterDefragFunc(ValkeyModuleCtx *ctx, ValkeyModuleDefragFunc cb) {
     ctx->module->defrag_cb = cb;
@@ -15102,9 +15100,10 @@ int VM_DefragShouldStop(ValkeyModuleDefragCtx *ctx) {
  * available, and the cursor is also how it reports completion: 0, the value a
  * fresh pass starts from, means done, and non-zero means it will be invoked
  * again. The server discards the cursor once the callback completes or the pass
- * is interrupted, so a position saved before an interruption is never handed
- * back. A flush or a database swap does not end the cycle, so within a pass a
- * module must still be able to restart when its saved position no longer applies.
+ * is interrupted, so a cursor saved before an interruption is never handed
+ * back. A flush or a database swap does not end defragmentation, so a
+ * module must still be able to restart when its cursor may be invalid,
+ * usually just returning a 0 cursor, indicating done.
  */
 int VM_DefragCursorSet(ValkeyModuleDefragCtx *ctx, unsigned long cursor) {
     if (!ctx->cursor) return VALKEYMODULE_ERR;

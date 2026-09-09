@@ -65,7 +65,7 @@ static void defragGlobalStrings(ValkeyModuleDefragCtx *ctx)
         /* Stop after maxstep strings, or when out of time, saving progress in
          * the cursor so the next invocation resumes here. */
         if ((global_maxstep && ++steps >= global_maxstep) ||
-            ((i % 64 == 0) && ValkeyModule_DefragShouldStop(ctx)))
+            ValkeyModule_DefragShouldStop(ctx))
         {
             ValkeyModule_DefragCursorSet(ctx, i + 1);
             last_set_global_cursor = i + 1;

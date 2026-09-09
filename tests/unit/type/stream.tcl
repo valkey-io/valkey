@@ -750,6 +750,56 @@ start_server {
         assert_equal {} [r xrange testxadstream 2 2]
     }
 
+    test {XACKDEL w/ ACKED acks dangling PEL reference after plain XDEL} {
+        r DEL testxadstream
+        r XADD testxadstream 1-0 msg hello
+        r XGROUP CREATE testxadstream testxadgrp1 0
+        r XGROUP CREATE testxadstream testxadgrp2 0
+
+        # Only group 1 delivers the message; group 2's last_id stays at 0-0.
+        r XREADGROUP GROUP testxadgrp1 testxadcnsmr COUNT 1 STREAMS testxadstream >
+        set pend [r XPENDING testxadstream testxadgrp1]
+        assert_equal 1-0 [lindex $pend 1]
+
+        # Plain XDEL removes the entry but leaves group 1's PEL reference dangling.
+        assert_equal 1 [r XDEL testxadstream 1-0]
+
+        # Acking the dangling reference replies 1 (acked, nothing left to
+        # delete), not 2 (blocked by group 2): the entry no longer exists and
+        # can never be delivered to group 2.
+        set ids [r XACKDEL testxadstream testxadgrp1 ACKED IDS 1 1-0]
+        assert_equal 1 [llength $ids]
+        assert_equal 1 [lindex $ids 0]
+
+        # The dangling reference is gone from group 1's PEL and the stream is
+        # still empty.
+        assert_equal 0 [r XLEN testxadstream]
+        assert_equal {} [lindex [r XPENDING testxadstream testxadgrp1] 1]
+        assert_equal {} [lindex [r XPENDING testxadstream testxadgrp2] 1]
+    }
+
+    test {XACKDEL w/ ACKED doesn't delete when 2nd group has message pending after plain XDEL} {
+        r DEL testxadstream
+        r XADD testxadstream 1-0 msg hello
+        r XGROUP CREATE testxadstream testxadgrp1 0
+        r XGROUP CREATE testxadstream testxadgrp2 0
+
+        # Both groups deliver the message, then plain XDEL removes the entry,
+        # leaving both PEL references dangling.
+        r XREADGROUP GROUP testxadgrp1 testxadcnsmr COUNT 1 STREAMS testxadstream >
+        r XREADGROUP GROUP testxadgrp2 testxadcnsmr COUNT 1 STREAMS testxadstream >
+        assert_equal 1 [r XDEL testxadstream 1-0]
+
+        # Group 2 still has the message pending, so deletion stays blocked (2).
+        set ids [r XACKDEL testxadstream testxadgrp1 ACKED IDS 1 1-0]
+        assert_equal 1 [llength $ids]
+        assert_equal 2 [lindex $ids 0]
+
+        # Group 1 was acked, group 2's reference is untouched.
+        assert_equal {} [lindex [r XPENDING testxadstream testxadgrp1] 1]
+        assert_equal 1-0 [lindex [r XPENDING testxadstream testxadgrp2] 1]
+    }
+
     test {XACKDEL w/ DELREF deletes from stream and 2nd consumer group's PEL even if not ACK'd} {
         r DEL testxadstream
         r XADD testxadstream 1 msg hello

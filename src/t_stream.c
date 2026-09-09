@@ -4023,6 +4023,9 @@ void xackdelCommand(client *c) {
     unsigned char static_acked_flags[STREAMID_STATIC_VECTOR_LEN];
     unsigned char *acked_flags = static_acked_flags;
 
+    unsigned char static_exists[STREAMID_STATIC_VECTOR_LEN];
+    unsigned char *exists = static_exists;
+
     unsigned char static_cleared[STREAMID_STATIC_VECTOR_LEN];
     unsigned char *cleared = static_cleared;
 
@@ -4037,6 +4040,7 @@ void xackdelCommand(client *c) {
         ids = zmalloc(sizeof(streamID) * id_count);
         resps = zmalloc(sizeof(int) * id_count);
         acked_flags = zmalloc(sizeof(unsigned char) * id_count);
+        exists = zmalloc(sizeof(unsigned char) * id_count);
         cleared = zmalloc(sizeof(unsigned char) * id_count);
         ack_ids = zmalloc(sizeof(streamID) * id_count);
         del_ids = zmalloc(sizeof(streamID) * id_count);
@@ -4122,6 +4126,14 @@ void xackdelCommand(client *c) {
          * propagate XACK's. Reset in loop after propagating each group. */
         memset(cleared, 0, id_count);
 
+        /* Determine stream message existence upfront to ensure we mark entry as
+         * "not found" for ACKED only after checking all groups' PELs. */
+        if (mode == PELMODE_ACKED) {
+            for (long long j = 0; j < id_count; j++) {
+                exists[j] = streamEntryExists(s, &ids[j]);
+            }
+        }
+
         raxIterator ri_cgroups;
         raxStart(&ri_cgroups, s->cgroups);
         raxSeek(&ri_cgroups, "^", NULL, 0);
@@ -4148,15 +4160,22 @@ void xackdelCommand(client *c) {
                         cleared[j] = 1;
                     }
                 } else {
+                    /* ACKED: check the PEL before consulting cg->last_id:
+                     * XGROUP SETID can move last_id backward below IDs that
+                     * are still pending (or were pending and later acked),
+                     * so last_id alone cannot prove this group never claimed
+                     * the message. */
                     unsigned char buf[sizeof(streamID)];
                     streamEncodeID(buf, id);
                     void *result;
                     if (raxFind(cg->pel, buf, sizeof(buf), &result)) {
                         /* Another group still has it pending. */
                         resps[j] = 2;
-                    } else if (streamCompareID(id, &cg->last_id) > 0) {
-                        /* Non-target hasn't claimed it yet; may still need to
-                         * deliver it, so block deletion. */
+                    } else if (exists[j] &&
+                               streamCompareID(id, &cg->last_id) > 0) {
+                        /* Message exists and may still be delivered to this
+                         * group, so block deletion (same as XACKDEL). Entries
+                         * that no longer exist can't be re-delivered. */
                         resps[j] = 2;
                     }
                 }
@@ -4261,6 +4280,7 @@ cleanup:
     if (ids != static_ids) zfree(ids);
     if (resps != static_resps) zfree(resps);
     if (acked_flags != static_acked_flags) zfree(acked_flags);
+    if (exists != static_exists) zfree(exists);
     if (cleared != static_cleared) zfree(cleared);
     if (ack_ids != static_ack_ids) zfree(ack_ids);
     if (del_ids != static_del_ids) zfree(del_ids);

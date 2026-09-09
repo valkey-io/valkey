@@ -1089,7 +1089,11 @@ start_server {tags {"hashexpire"}} {
         r hpexpireat ttlbatchtest $expire_at_ms FIELDS 6 {*}$live_fields
         r hpexpire ttlbatchtest 1 FIELDS 6 {*}$expired_fields
         assert_encoding hashtable ttlbatchtest
-        after 2
+        wait_for_condition 100 10 {
+            [r hpttl ttlbatchtest FIELDS 6 {*}$expired_fields] eq {-2 -2 -2 -2 -2 -2}
+        } else {
+            fail "Hash fields did not expire"
+        }
 
         foreach {cmd min max} [list \
             HTTL 50 60 \

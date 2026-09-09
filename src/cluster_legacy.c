@@ -3591,6 +3591,25 @@ static uint32_t getReplicaPriorityExtSize(void) {
     return getAlignedPingExtSize(sizeof(clusterMsgPingExtReplicaPriority));
 }
 
+/* Return the minimum encoded size for an extension type. Unknown extensions
+ * only require the common header to preserve forward compatibility. */
+static uint32_t getMinimumPingExtSize(uint16_t type) {
+    switch (type) {
+    case CLUSTERMSG_EXT_TYPE_HOSTNAME: return getAlignedPingExtSize(sizeof(clusterMsgPingExtHostname));
+    case CLUSTERMSG_EXT_TYPE_HUMAN_NODENAME: return getAlignedPingExtSize(sizeof(clusterMsgPingExtHumanNodename));
+    case CLUSTERMSG_EXT_TYPE_FORGOTTEN_NODE: return getForgottenNodeExtSize();
+    case CLUSTERMSG_EXT_TYPE_SHARDID: return getShardIdPingExtSize();
+    case CLUSTERMSG_EXT_TYPE_CLIENT_IPV4: return getAlignedPingExtSize(sizeof(clusterMsgPingExtClientIpV4));
+    case CLUSTERMSG_EXT_TYPE_CLIENT_IPV6: return getAlignedPingExtSize(sizeof(clusterMsgPingExtClientIpV6));
+    case CLUSTERMSG_EXT_TYPE_CLIENT_PORT: return getAlignedPingExtSize(sizeof(clusterMsgPingExtClientPort));
+    case CLUSTERMSG_EXT_TYPE_CLIENT_TLS_PORT: return getAlignedPingExtSize(sizeof(clusterMsgPingExtClientTlsPort));
+    case CLUSTERMSG_EXT_TYPE_AVAILABILITY_ZONE:
+        return getAlignedPingExtSize(sizeof(clusterMsgPingExtAvailabilityZone));
+    case CLUSTERMSG_EXT_TYPE_REPLICA_PRIORITY: return getReplicaPriorityExtSize();
+    default: return sizeof(clusterMsgPingExt);
+    }
+}
+
 static void *preparePingExt(clusterMsgPingExt *ext, uint16_t type, uint32_t length) {
     ext->type = htons(type);
     ext->length = htonl(length);
@@ -3997,6 +4016,14 @@ int clusterIsValidPacket(clusterLink *link) {
                 if (extlen % 8 != 0) {
                     serverLog(LL_WARNING, "Received a %s packet without proper padding (%d bytes)",
                               clusterGetMessageTypeString(type), (int)extlen);
+                    return 0;
+                }
+                uint16_t ext_type = ntohs(ext->type);
+                uint32_t min_extlen = getMinimumPingExtSize(ext_type);
+                if (extlen < min_extlen) {
+                    serverLog(LL_WARNING,
+                              "Received invalid %s packet with extension type %d that is %d bytes but requires at least %d",
+                              clusterGetMessageTypeString(type), (int)ext_type, (int)extlen, (int)min_extlen);
                     return 0;
                 }
                 /* Similar check to earlier, but we want to make sure the extension length is valid

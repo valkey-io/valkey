@@ -3675,7 +3675,7 @@ typedef enum {
  * so each command keeps its own ID-array allocation strategy.
  *
  * Returns C_OK, or C_ERR with an error already replied to the client. */
-static int streamParseXDelArgsOrReply(client *c, bool has_group_arg, bool has_pelmode_arg, robj **o, streamCG **group, streamPELMode *mode, int *ids_argi, long long *id_count) {
+static int genericXDelCommand(client *c, bool has_group_arg, bool has_pelmode_arg, robj **o, streamCG **group, streamPELMode *mode, int *ids_argi, long long *id_count) {
     *group = NULL;
     *o = lookupKeyWrite(c->db, c->argv[1]);
     if (*o && checkType(c, *o, OBJ_STREAM)) return C_ERR; /* Type error. */
@@ -3746,7 +3746,7 @@ void xdelCommand(client *c) {
     long long id_count;
     streamCG *group;    /* Unused: XDEL has no group argument. */
     streamPELMode mode; /* Unused: XDEL has no PEL mode argument. */
-    if (streamParseXDelArgsOrReply(c, false, false, &o, &group, &mode, &ids_argi, &id_count) != C_OK) return;
+    if (genericXDelCommand(c, false, false, &o, &group, &mode, &ids_argi, &id_count) != C_OK) return;
 
     /* Missing key: reply as if zero entries were deleted. */
     if (o == NULL) {
@@ -3789,7 +3789,7 @@ void xdelexCommand(client *c) {
     long long id_count;
     streamCG *group; /* Unused: XDELEX has no group argument. */
     streamPELMode mode;
-    if (streamParseXDelArgsOrReply(c, false, true, &o, &group, &mode, &ids_argi, &id_count) != C_OK) {
+    if (genericXDelCommand(c, false, true, &o, &group, &mode, &ids_argi, &id_count) != C_OK) {
         return;
     }
 
@@ -3991,7 +3991,7 @@ void xackdelCommand(client *c) {
     long long id_count;
     streamCG *group;
     streamPELMode mode;
-    if (streamParseXDelArgsOrReply(c, true, true, &o, &group, &mode, &ids_argi, &id_count) != C_OK) {
+    if (genericXDelCommand(c, true, true, &o, &group, &mode, &ids_argi, &id_count) != C_OK) {
         return;
     }
 
@@ -4751,3 +4751,4 @@ int streamValidateListpackIntegrity(unsigned char *lp, size_t size, uint64_t *va
 
     return 1;
 }
+

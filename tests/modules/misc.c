@@ -5,6 +5,7 @@
 #include <unistd.h>
 #include <errno.h>
 #include <limits.h>
+#include <stdint.h>
 
 #define UNUSED(x) (void)(x)
 
@@ -659,6 +660,103 @@ int test_malloc_api(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     return VALKEYMODULE_OK;
 }
 
+/* Exercises one of the aligned allocators over a range of alignments, checking
+ * that the returned pointer is aligned, that the whole requested range is
+ * usable, and that an invalid alignment is rejected instead of panicking.
+ * Returns NULL on success, or an error message naming the failing case. */
+static const char *check_aligned_alloc(void *(*alloc)(size_t, size_t)) {
+    static const size_t alignments[] = {1, 8, 16, 64, 128, 512, 4096};
+    static const size_t sizes[] = {1, 123, 1024, 8193};
+    size_t i, j;
+
+    for (i = 0; i < sizeof(alignments) / sizeof(alignments[0]); i++) {
+        for (j = 0; j < sizeof(sizes) / sizeof(sizes[0]); j++) {
+            size_t alignment = alignments[i];
+            size_t size = sizes[j];
+            void *p = alloc(alignment, size);
+
+            if (p == NULL) return "ERR aligned alloc returned NULL";
+            if ((uintptr_t)p % alignment != 0) {
+                ValkeyModule_Free(p);
+                return "ERR aligned alloc returned a misaligned pointer";
+            }
+            if (ValkeyModule_MallocUsableSize(p) < size) {
+                ValkeyModule_Free(p);
+                return "ERR aligned alloc usable size is too small";
+            }
+
+            memset(p, 0xa5, size);
+            ValkeyModule_Free(p);
+        }
+    }
+
+    /* An alignment that is zero or not a power of two must return NULL rather
+     * than panic. */
+    if (alloc(0, 128) != NULL) return "ERR aligned alloc accepted a zero alignment";
+    if (alloc(24, 128) != NULL) return "ERR aligned alloc accepted a non power of two alignment";
+
+    return NULL;
+}
+
+int test_aligned_alloc(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    UNUSED(argv);
+    UNUSED(argc);
+
+    const char *err = check_aligned_alloc(ValkeyModule_AlignedAlloc);
+    if (err != NULL) return ValkeyModule_ReplyWithError(ctx, err);
+
+    err = check_aligned_alloc(ValkeyModule_TryAlignedAlloc);
+    if (err != NULL) return ValkeyModule_ReplyWithError(ctx, err);
+
+    ValkeyModule_ReplyWithSimpleString(ctx, "OK");
+    return VALKEYMODULE_OK;
+}
+
+/* Holds a single aligned allocation across commands, so that the test suite can
+ * observe it in the server memory diagnostics. */
+static void *aligned_alloc_held = NULL;
+
+int test_aligned_alloc_hold(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    long long alignment, size;
+
+    if (argc != 3)
+        return ValkeyModule_WrongArity(ctx);
+    if (ValkeyModule_StringToLongLong(argv[1], &alignment) != VALKEYMODULE_OK ||
+        ValkeyModule_StringToLongLong(argv[2], &size) != VALKEYMODULE_OK)
+        return ValkeyModule_ReplyWithError(ctx, "ERR invalid alignment or size");
+    if (aligned_alloc_held != NULL)
+        return ValkeyModule_ReplyWithError(ctx, "ERR an allocation is already held");
+
+    aligned_alloc_held = ValkeyModule_AlignedAlloc((size_t)alignment, (size_t)size);
+    if (aligned_alloc_held == NULL)
+        return ValkeyModule_ReplyWithError(ctx, "ERR aligned alloc returned NULL");
+    if ((uintptr_t)aligned_alloc_held % (size_t)alignment != 0) {
+        ValkeyModule_Free(aligned_alloc_held);
+        aligned_alloc_held = NULL;
+        return ValkeyModule_ReplyWithError(ctx, "ERR aligned alloc returned a misaligned pointer");
+    }
+
+    /* Touch the memory so that it is really resident. */
+    memset(aligned_alloc_held, 0xa5, (size_t)size);
+
+    ValkeyModule_ReplyWithSimpleString(ctx, "OK");
+    return VALKEYMODULE_OK;
+}
+
+int test_aligned_alloc_release(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    UNUSED(argv);
+    UNUSED(argc);
+
+    if (aligned_alloc_held == NULL)
+        return ValkeyModule_ReplyWithError(ctx, "ERR no allocation is held");
+
+    ValkeyModule_Free(aligned_alloc_held);
+    aligned_alloc_held = NULL;
+
+    ValkeyModule_ReplyWithSimpleString(ctx, "OK");
+    return VALKEYMODULE_OK;
+}
+
 int test_keyslot(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     /* Static check of the ClusterKeySlot + ClusterCanonicalKeyNameInSlot
      * round-trip for all slots. */
@@ -754,6 +852,12 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
     if (ValkeyModule_CreateCommand(ctx, "test.clear_n_events", test_clear_n_events,"", 0, 0, 0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
     if (ValkeyModule_CreateCommand(ctx, "test.malloc_api", test_malloc_api,"", 0, 0, 0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx, "test.aligned_alloc", test_aligned_alloc,"", 0, 0, 0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx, "test.aligned_alloc_hold", test_aligned_alloc_hold,"", 0, 0, 0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx, "test.aligned_alloc_release", test_aligned_alloc_release,"", 0, 0, 0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
     if (ValkeyModule_CreateCommand(ctx, "test.keyslot", test_keyslot, "", 0, 0, 0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;

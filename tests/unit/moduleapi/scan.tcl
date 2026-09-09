@@ -134,6 +134,17 @@ start_server {tags {"modules"}} {
         lsort [r scan.scan_key_raw rs1]
     } {{a {}} {b {}} {c {}}}
 
+    test {Module scan_key_raw unsupported key type returns empty} {
+        # VM_ScanKeyRawBorrowed returns 0 with errno=EINVAL for a wrong-type key,
+        # so the command's scan loop terminates immediately and replies with an
+        # empty array rather than looping forever.
+        r del rstr rlist
+        r set rstr hello
+        r rpush rlist a b c
+        assert_equal {} [r scan.scan_key_raw rstr]
+        assert_equal {} [r scan.scan_key_raw rlist]
+    }
+
     test "Unload the module - scan" {
         assert_equal {OK} [r module unload scan]
     }

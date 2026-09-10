@@ -572,6 +572,7 @@ ENGINE_SERVER_OBJ = \
     syscheck.o \
     t_hash.o \
     t_list.o \
+    t_radix.o \
     t_set.o \
     t_stream.o \
     t_string.o \

@@ -37,6 +37,7 @@ set(VALKEY_SERVER_SRCS
     ${CMAKE_SOURCE_DIR}/src/fbtree.c
     ${CMAKE_SOURCE_DIR}/src/ordered_index.c
     ${CMAKE_SOURCE_DIR}/src/t_hash.c
+    ${CMAKE_SOURCE_DIR}/src/t_radix.c
     ${CMAKE_SOURCE_DIR}/src/config.c
     ${CMAKE_SOURCE_DIR}/src/aof.c
     ${CMAKE_SOURCE_DIR}/src/bgiteration.c

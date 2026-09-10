@@ -1,0 +1,19 @@
+{
+    "RAXGETALL": {
+        "summary": "Returns all field-value pairs at an exact radix-tree path.",
+        "complexity": "O(L + O).",
+        "group": "radix",
+        "since": "9.2.0",
+        "arity": 3,
+        "function": "raxgetallCommand",
+        "command_flags": ["READONLY"],
+        "acl_categories": ["RADIX", "READ", "SLOW"],
+        "command_tips": ["NONDETERMINISTIC_OUTPUT_ORDER"],
+        "key_specs": [{"flags": ["RO", "ACCESS"], "begin_search": {"index": {"pos": 1}}, "find_keys": {"range": {"lastkey": 0, "step": 1, "limit": 0}}}],
+        "reply_schema": {"description": "Map of fields and their values stored at the path, or an empty map when the path does not exist. In RESP2 this is returned as a flat array.", "type": "object", "additionalProperties": {"type": "string"}},
+        "arguments": [
+            {"name": "key", "type": "key", "key_spec_index": 0},
+            {"name": "path", "type": "string"}
+        ]
+    }
+}

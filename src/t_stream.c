@@ -1625,7 +1625,6 @@ void streamPropagateConsumerCreation(client *c, robj *key, robj *groupname, sds 
     decrRefCount(argv[4]);
 }
 
-
 /* Propagate the deletion of stream entries as
  *
  *  XDEL <key> <id1> <id2> ... <idn>
@@ -2012,7 +2011,6 @@ int streamParseIDOrReply(client *c, robj *o, streamID *id, uint64_t missing_seq)
 int streamParseStrictIDOrReply(client *c, robj *o, streamID *id, uint64_t missing_seq, int *seq_given) {
     return streamGenericParseIDOrReply(c, o, id, missing_seq, 1, seq_given);
 }
-
 
 /* Helper for parsing a stream ID that is a range query interval. When the
  * exclude argument is NULL, streamParseIDOrReply() is called and the interval
@@ -3629,7 +3627,7 @@ typedef enum {
  * XACKDEL is XDELEX scoped to a target consumer group: it acknowledges
  * entries in the target group first, then consults remaining groups. */
 static void xdelGenericCommand(client *c, xdelVariant variant) {
-    bool has_group   = (variant == XACKDEL_CMD);
+    bool has_group = (variant == XACKDEL_CMD);
     bool has_pelmode = (variant != XDEL_CMD);
     bool array_reply = (variant != XDEL_CMD);
 

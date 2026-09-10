@@ -122,6 +122,35 @@ start_server {tags {"modules"}} {
             assert_error {ERR no such key} {r zset.walk nokey lex - + n}
         }
 
+        test "Module zset range iteration steps to the neighbour in both directions - $enc" {
+            r del k lex
+            r zadd k 1 a 2 b 3 c 4 d 5 e
+            r zadd lex 0 a 0 b 0 c 0 d 0 e
+            assert_equal $enc [r object encoding k]
+            # Walk the range to its end and back to its start.
+            assert_equal {b c d END c b END} [r zset.walk k score 2 4 nnnppp]
+            assert_equal {b c d END c b END} [r zset.walk lex lex \[b \[d nnnppp]
+            # Reversing direction must not revisit the current element.
+            assert_equal {b c b c b} [r zset.walk k score 2 4 npnp]
+            assert_equal {b c b c b} [r zset.walk lex lex \[b \[d npnp]
+            # Stepping back from the first element ends the iteration and
+            # leaves the cursor usable.
+            assert_equal {b END c} [r zset.walk k score 2 4 pn]
+            assert_equal {b END c} [r zset.walk lex lex \[b \[d pn]
+            # Walking backwards from the last element of the range.
+            assert_equal {d c b END} [r zset.walk k score-last 2 4 ppp]
+            assert_equal {d c b END} [r zset.walk lex lex-last \[b \[d ppp]
+            assert_equal {d END c} [r zset.walk k score-last 2 4 np]
+        }
+
+        test "Module zset range end-reached flag follows the last step - $enc" {
+            r del k
+            r zadd k 1 a 2 b 3 c 4 d 5 e
+            assert_equal $enc [r object encoding k]
+            assert_equal {b 0 c d END 1 c 0 b END 1 c 0} [r zset.walk k score 2 4 ennnepeppene]
+            assert_equal {{} 1 END 1} [r zset.walk k score 10 20 ene]
+        }
+
         test "Module zset score range with a NaN bound is empty - $enc" {
             r del k
             r zadd k 1 a 2 b

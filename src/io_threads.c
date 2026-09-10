@@ -566,38 +566,44 @@ void initIOThreads(int prev_threads_num) {
 }
 
 void testOnlyInitIOThreadQueues(void) {
-    if (io_shared_inbox.buffer) spmcFree(&io_shared_inbox);
-    if (io_shared_outbox.buffer) mpscFree(&io_shared_outbox);
-    if (pending_io_responses) {
-        listRelease(pending_io_responses);
-        pending_io_responses = NULL;
+    for (int p = 0; p < JOB_PRIORITY_COUNT; p++) {
+        if (io_shared_inbox[p].buffer) spmcFree(&io_shared_inbox[p]);
+        if (io_shared_outbox[p].buffer) mpscFree(&io_shared_outbox[p]);
+        if (pending_io_responses[p]) {
+            listRelease(pending_io_responses[p]);
+            pending_io_responses[p] = NULL;
+        }
+        spmcInit(&io_shared_inbox[p], IO_SPMC_QUEUE_SIZE);
+        mpscInit(&io_shared_outbox[p], IO_MPSC_QUEUE_SIZE);
+        io_thread_ticket[p] = (mpscTicket){0};
     }
-    spmcInit(&io_shared_inbox, IO_SPMC_QUEUE_SIZE);
-    mpscInit(&io_shared_outbox, IO_MPSC_QUEUE_SIZE);
     io_jobs_submitted = 0;
     atomic_store_explicit(&io_jobs_finished, 0, memory_order_relaxed);
     cluster_io_pending_responses = 0;
-    io_thread_ticket = (mpscTicket){0};
 }
 
 void testOnlyFreeIOThreadQueues(void) {
-    if (pending_io_responses) {
-        listRelease(pending_io_responses);
-        pending_io_responses = NULL;
+    for (int p = 0; p < JOB_PRIORITY_COUNT; p++) {
+        if (pending_io_responses[p]) {
+            listRelease(pending_io_responses[p]);
+            pending_io_responses[p] = NULL;
+        }
+        spmcFree(&io_shared_inbox[p]);
+        mpscFree(&io_shared_outbox[p]);
+        io_thread_ticket[p] = (mpscTicket){0};
     }
-    spmcFree(&io_shared_inbox);
-    mpscFree(&io_shared_outbox);
     io_jobs_submitted = 0;
     atomic_store_explicit(&io_jobs_finished, 0, memory_order_relaxed);
     cluster_io_pending_responses = 0;
-    io_thread_ticket = (mpscTicket){0};
 }
 
 /* Fill the shared inbox so the next dispatch has to take its enqueue-failure
  * path. The queue is file-static, so tests cannot do this themselves. */
 void testOnlyFillIOThreadInbox(void) {
-    while (spmcEnqueue(&io_shared_inbox, (void *)-1)) {
-        /* Keep going until the queue rejects the push. */
+    for (int p = 0; p < JOB_PRIORITY_COUNT; p++) {
+        while (spmcEnqueue(&io_shared_inbox[p], (void *)-1)) {
+            /* Keep going until the queue rejects the push. */
+        }
     }
 }
 
@@ -769,7 +775,7 @@ int trySendClusterReadToIOThreads(struct clusterLink *link) {
     link->rcvbuf_alloc_at_dispatch = link->rcvbuf_alloc;
 
     /* Enqueue the read job. */
-    if (unlikely(spmcEnqueue(&io_shared_inbox, tagJob(link, JOB_REQ_CLUSTER_READ)) == false)) {
+    if (unlikely(spmcEnqueue(&io_shared_inbox[JOB_PRIORITY_HIGH], tagJob(link, JOB_REQ_CLUSTER_READ)) == false)) {
         /* Rollback on enqueue failure. */
         link->io_read_state = CLUSTER_LINK_IO_IDLE;
         link->io_refs--;
@@ -846,7 +852,7 @@ int trySendClusterWriteToIOThreads(struct clusterLink *link) {
     link->io_refs++;
 
     /* Enqueue the write job. */
-    if (unlikely(spmcEnqueue(&io_shared_inbox, tagJob(link, JOB_REQ_CLUSTER_WRITE)) == false)) {
+    if (unlikely(spmcEnqueue(&io_shared_inbox[JOB_PRIORITY_HIGH], tagJob(link, JOB_REQ_CLUSTER_WRITE)) == false)) {
         link->io_write_state = CLUSTER_LINK_IO_IDLE;
         link->io_refs--;
         link->io_last_send_block = NULL;
@@ -878,7 +884,7 @@ int trySendClusterAcceptToIOThreads(connection *conn) {
     connSetPostponeUpdateState(conn, 1);
     connIncrRefs(conn);
 
-    if (unlikely(spmcEnqueue(&io_shared_inbox, tagJob(conn, JOB_REQ_CLUSTER_ACCEPT)) == false)) {
+    if (unlikely(spmcEnqueue(&io_shared_inbox[JOB_PRIORITY_HIGH], tagJob(conn, JOB_REQ_CLUSTER_ACCEPT)) == false)) {
         connDecrRefs(conn);
         connSetPostponeUpdateState(conn, 0);
         conn->flags &= ~CONN_FLAG_ACCEPT_OFFLOAD_PENDING;
@@ -1052,6 +1058,8 @@ void sendToMainThread(void *data, int type) {
     if (type == JOB_RES_READ_CLIENT || type == JOB_RES_WRITE_CLIENT) {
         client *c = (client *)data;
         qidx = getJobPriority(c);
+    } else if (type == JOB_RES_CLUSTER_READ || type == JOB_RES_CLUSTER_WRITE || type == JOB_RES_CLUSTER_ACCEPT) {
+        qidx = JOB_PRIORITY_HIGH;
     }
     if (unlikely(pending_io_responses[qidx])) {
         flushPendingIOResponsesList(&pending_io_responses[qidx], &io_shared_outbox[qidx], &io_thread_ticket[qidx], 0);
@@ -1184,13 +1192,12 @@ static int processOutboxBatch(mpscQueue *outbox) {
 
     /* Try to dequeue JOB_BATCH_SIZE */
     while (received_responses < JOB_BATCH_SIZE) {
-        dequeued_count = mpscDequeueBatch(&io_shared_outbox, jobs, JOB_BATCH_SIZE - received_responses);
+        int dequeued_count = mpscDequeueBatch(outbox, jobs, JOB_BATCH_SIZE - received_responses);
 
         /* Stop if we can't get more jobs from the queue. */
         if (dequeued_count == 0) break;
 
         received_responses += dequeued_count;
-        total_processed += dequeued_count;
 
         for (int i = 0; i < dequeued_count; i++) {
             void *data;
@@ -1204,6 +1211,21 @@ static int processOutboxBatch(mpscQueue *outbox) {
                 client *c = (client *)data;
                 serverAssert(c->io_write_state == CLIENT_COMPLETED_IO);
                 write_jobs[write_count++] = c;
+            } else if (job_type == JOB_RES_CLUSTER_READ) {
+                serverAssert(cluster_io_pending_responses > 0);
+                cluster_io_pending_responses--;
+                server.stat_cluster_threaded_reads_processed++;
+                clusterHandleReadCompletion((struct clusterLink *)data);
+            } else if (job_type == JOB_RES_CLUSTER_WRITE) {
+                serverAssert(cluster_io_pending_responses > 0);
+                cluster_io_pending_responses--;
+                server.stat_cluster_threaded_writes_processed++;
+                clusterHandleWriteCompletion((struct clusterLink *)data);
+            } else if (job_type == JOB_RES_CLUSTER_ACCEPT) {
+                serverAssert(cluster_io_pending_responses > 0);
+                cluster_io_pending_responses--;
+                server.stat_cluster_threaded_accepts_processed++;
+                clusterHandleAcceptCompletion((connection *)data);
             } else {
                 serverPanic("Unknown job type %d", job_type);
             }

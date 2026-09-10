@@ -74,13 +74,13 @@ start_server {tags {"acl external:skip"}} {
         # the names in a `role=` list, and quotes and backslashes are special to
         # sdssplitargs(), which reads the ACL file and valkey.conf back.
         foreach {name reason} {
-            {bad name}  {*printable ASCII*}
-            "tab\there" {*printable ASCII*}
-            "caf\xc3\xa9" {*printable ASCII*}
-            a,b         {*can't contain commas*}
-            q"x         {*quotes or backslashes*}
-            q'x         {*quotes or backslashes*}
-            {q\x}       {*quotes or backslashes*}
+            {bad name}     {*printable ASCII*}
+            "tab\there"    {*printable ASCII*}
+            "test\xc3\xa9" {*printable ASCII*}
+            a,b            {*can't contain commas*}
+            q"x            {*quotes or backslashes*}
+            q'x            {*quotes or backslashes*}
+            {q\x}          {*quotes or backslashes*}
         } {
             catch {r ACL SETROLE $name +@all} err
             assert_match $reason $err

@@ -824,15 +824,6 @@ void increxCommand(client *c) {
 
     o = lookupKeyWrite(c->db, c->argv[1]);
 
-    if ((flags & ARGS_SET_NX) && o != NULL) {
-        addReplyNull(c);
-        return;
-    }
-    if ((flags & ARGS_SET_XX) && o == NULL) {
-        addReplyNull(c);
-        return;
-    }
-
     if (flags & ARGS_BYINT) {
         if (getLongLongFromObjectOrReply(c, incr_obj, &incr_ll, NULL) != C_OK) {
             return;
@@ -842,6 +833,15 @@ void increxCommand(client *c) {
             return;
         }
         use_float = 1;
+    }
+
+    if ((flags & ARGS_SET_NX) && o != NULL) {
+        addReplyNull(c);
+        return;
+    }
+    if ((flags & ARGS_SET_XX) && o == NULL) {
+        addReplyNull(c);
+        return;
     }
 
     if (o) {
@@ -897,10 +897,10 @@ void increxCommand(client *c) {
     server.dirty++;
 
     if (expire) {
+        new = setExpire(c, c->db, c->argv[1], milliseconds);
         robj *milliseconds_obj = createStringObjectFromLongLong(milliseconds);
         rewriteClientCommandVector(c, 5, shared.set, c->argv[1], new, shared.pxat, milliseconds_obj);
         decrRefCount(milliseconds_obj);
-        setExpire(c, c->db, c->argv[1], milliseconds);
         notifyKeyspaceEvent(NOTIFY_GENERIC, "expire", c->argv[1], c->db->id);
     } else if (use_float) {
         /* BYFLOAT with no expire still needs rewriting to SET for

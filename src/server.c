@@ -8139,7 +8139,6 @@ int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_
         /* clang-format off */
         if ((opt[0] == 'n' || opt[0] == 'N') &&
             (opt[1] == 'x' || opt[1] == 'X') && opt[2] == '\0' &&
-
             !(*flags & (ARGS_SET_CONDITIONAL & ~ARGS_SET_NX)) && /* Repeated NX allowed */
             (command_type == COMMAND_SET || command_type == COMMAND_HSET || command_type == COMMAND_MSET || command_type == COMMAND_INCREX))
         {

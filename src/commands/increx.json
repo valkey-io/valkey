@@ -88,7 +88,7 @@
                 ]
             },
             {
-                "name": "value",
+                "name": "increment",
                 "type": "oneof",
                 "optional": true,
                 "arguments": [
@@ -113,7 +113,7 @@
                 },
                 {
                     "description": "The value of key after the increment",
-                    "type": "string"
+                    "type": "number"
                 },
                 {
                     "description": "If the key was not set due to the NX|XX option or when the expiration is in the past, a null value is returned.",

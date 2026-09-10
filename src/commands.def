@@ -11619,8 +11619,8 @@ struct COMMAND_ARG INCREX_expiration_Subargs[] = {
 {MAKE_ARG("unix-time-milliseconds",ARG_TYPE_UNIX_TIME,-1,"PXAT",NULL,NULL,CMD_ARG_NONE,0,NULL)},
 };
 
-/* INCREX value argument table */
-struct COMMAND_ARG INCREX_value_Subargs[] = {
+/* INCREX increment argument table */
+struct COMMAND_ARG INCREX_increment_Subargs[] = {
 {MAKE_ARG("byint",ARG_TYPE_INTEGER,-1,"BYINT",NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("byfloat",ARG_TYPE_DOUBLE,-1,"BYFLOAT",NULL,NULL,CMD_ARG_NONE,0,NULL)},
 };
@@ -11630,7 +11630,7 @@ struct COMMAND_ARG INCREX_Args[] = {
 {MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("condition",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_OPTIONAL,2,NULL),.subargs=INCREX_condition_Subargs},
 {MAKE_ARG("expiration",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_OPTIONAL,4,NULL),.subargs=INCREX_expiration_Subargs},
-{MAKE_ARG("value",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_OPTIONAL,2,NULL),.subargs=INCREX_value_Subargs},
+{MAKE_ARG("increment",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_OPTIONAL,2,NULL),.subargs=INCREX_increment_Subargs},
 };
 
 /********** LCS ********************/

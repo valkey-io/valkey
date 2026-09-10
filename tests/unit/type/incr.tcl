@@ -287,6 +287,29 @@ start_server {tags {"incr"}} {
         assert_error "*ERR*" {r increx}
     }
 
+    test {INCREX against key holding a list, with already-expired EXAT} {
+        r del list_key
+        r rpush list_key a
+        assert_error {WRONGTYPE*} {r increx list_key exat 1}
+        r del list_key
+    } 
+
+    test {INCREX against non-numeric string value, with already-expired EXAT} {
+        r set str abc
+        assert_error {ERR*} {r increx str exat 1}
+        r del str
+    }
+
+    test {INCREX against nonexistent key with already-expired EXAT returns nil} {
+        r del non_existing
+        assert_equal [] [r increx non_existing exat 1]
+    }
+
+    test {INCREX BYINT with missing value is a syntax error} {
+        r del key
+        assert_error {ERR*} {r increx key byint}
+    }
+
     test {INCRBY INCRBYFLOAT DECRBY against unhappy path} {
         r del mykeyincr
         assert_error "*ERR wrong number of arguments*" {r incr mykeyincr v}

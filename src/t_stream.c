@@ -3998,7 +3998,7 @@ int streamValidateListpackIntegrity(unsigned char *lp, size_t size, uint64_t *va
     unsigned char *p, *next;
 
     /* Validate the listpack structure (header + all entries). */
-    if (!lpValidateIntegrity(lp, size, NULL, NULL)) return 0;
+    if (!lpValidateIntegrity(lp, size, NULL, NULL, 0)) return 0;
 
     next = p = lpValidateFirst(lp);
     if (!lpValidateNext(lp, &next, size)) return 0;

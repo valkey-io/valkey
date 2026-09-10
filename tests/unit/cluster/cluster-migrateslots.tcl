@@ -247,6 +247,31 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
         assert_equal {} [R 0 CLUSTER GETSLOTMIGRATIONS]
     }
 
+    test "CLUSTER MIGRATESLOTS AUTH credentials are redacted on synchronous failure" {
+        set old_threshold [lindex [R 0 CONFIG GET commandlog-execution-slower-than] 1]
+        R 0 CONFIG SET commandlog-execution-slower-than 0
+        R 0 COMMANDLOG RESET slow
+
+        # An invalid target is rejected before the parser reaches AUTH.
+        assert_error "*Invalid node name*" {
+            R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 0 0 NODE invalid AUTH aclusr authpwd
+        }
+
+        R 0 CONFIG SET commandlog-execution-slower-than $old_threshold
+        set slowlog_resp [R 0 COMMANDLOG GET -1 slow]
+        
+        # Flatten all logged command args into one searchable string
+        set log_text {}
+        foreach entry $slowlog_resp {
+            append log_text " " [join [lindex $entry 3] " "]
+        }
+
+        assert_no_match {*aclusr*} $log_text
+        assert_no_match {*authpwd*} $log_text
+        assert_match {*SLOTSRANGE 0 0 NODE invalid AUTH (redacted) (redacted)*} $log_text
+        assert_equal {} [R 0 CLUSTER GETSLOTMIGRATIONS]
+    }
+
     test "CLUSTER MIGRATESLOTS already migrating" {
         set_debug_prevent_pause 1
         assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id]
@@ -1954,11 +1979,12 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
         # The commandlog entry is written synchronously when CLUSTER MIGRATESLOTS returns
         # OK, before any async auth handshake with the target.  No requirepass on node 0
         # means the async auth attempt will fail, which is fine — we only need the entry.
+        set old_threshold [lindex [R 2 CONFIG GET commandlog-execution-slower-than] 1]
         R 2 CONFIG SET commandlog-execution-slower-than 0
         R 2 COMMANDLOG RESET slow
         R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id AUTH aclusr authpwd
         set jobname [get_job_name 2 16383]
-        R 2 CONFIG SET commandlog-execution-slower-than -1
+        R 2 CONFIG SET commandlog-execution-slower-than $old_threshold
         set slowlog_resp [R 2 COMMANDLOG GET -1 slow]
 
         # Flatten all logged command args into one searchable string

@@ -1176,6 +1176,16 @@ bool clusterSlotFailoverGranted(int slot) {
  * source will attempt to migrate the slot ranges to the specified target
  * node. */
 void clusterCommandMigrateSlots(client *c) {
+    /* Redact credentials before validation so errors cannot expose them
+     * in the command log. */
+    for (int i = 2; i < c->argc; i++) {
+        if (!strcasecmp(objectGetVal(c->argv[i]), "auth")) {
+            if (i + 1 < c->argc) redactClientCommandArgument(c, i + 1);
+            if (i + 2 < c->argc) redactClientCommandArgument(c, i + 2);
+            i += 2;
+        }
+    }
+
     if (validateSlotMigrationCanStartOrReply(c) == C_ERR) return;
 
     int curr_index = 2;
@@ -1258,9 +1268,7 @@ void clusterCommandMigrateSlots(client *c) {
                     goto cleanup;
                 }
                 auth_user = sdsdup(objectGetVal(c->argv[curr_index + 1]));
-                redactClientCommandArgument(c, curr_index + 1);
                 auth_pass = sdsdup(objectGetVal(c->argv[curr_index + 2]));
-                redactClientCommandArgument(c, curr_index + 2);
                 curr_index += 3;
             }
         }

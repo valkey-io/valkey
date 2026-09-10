@@ -1638,11 +1638,19 @@ start_server {tags {"hashexpire"}} {
             if {$cmd eq "RESTORE"} {
                 assert_equal 2 [get_keys r]
                 assert_equal 2 [get_keys_with_volatile_items r]
+                # RESTORE rebuilds the object; the listpack is byte-identical
+                # but with libc malloc the allocation's usable size (what
+                # MEMORY USAGE reports) can differ by an allocator chunk.
+                # Assert what matters: the encoding is preserved, and memory
+                # stays in the same ballpark.
+                assert_encoding listpack $newhash
+                assert_range $memory_after [expr {$mem_before - 16}] [expr {$mem_before + 16}]
             } else {
                 assert_equal 1 [get_keys r]
                 assert_equal 1 [get_keys_with_volatile_items r]
+                # RENAME does not touch the object: memory must be identical.
+                assert_equal $mem_before $memory_after
             }
-            assert_equal $mem_before $memory_after
         } {} {needs:debug}
     }
 
@@ -1727,6 +1735,24 @@ start_server {tags {"hashexpire"}} {
         # Re-enable active expiry
         r DEBUG SET-ACTIVE-EXPIRE 1
     } {OK} {needs:debug}
+
+    set original_max [lindex [r config get hash-max-listpack-entries] 1]
+    r config set hash-max-listpack-entries 0
+    test {HMGET batch lookup skips expired hash fields} {
+        r DEBUG SET-ACTIVE-EXPIRE 0
+
+        r del hmgetbatchhfetest
+        r hset hmgetbatchhfetest alive value expired stale
+        assert_encoding hashtable hmgetbatchhfetest
+        assert_equal {1} [r hpexpire hmgetbatchhfetest 1 fields 1 expired]
+        after 2
+
+        assert_equal {value {} {}} [r hmget hmgetbatchhfetest alive expired missing]
+        assert_equal {} [r hget hmgetbatchhfetest expired]
+
+        r DEBUG SET-ACTIVE-EXPIRE 1
+    } {OK} {needs:debug}
+    r config set hash-max-listpack-entries $original_max
 
     test {HGETALL skips expired fields} {
         r FLUSHALL
@@ -4831,7 +4857,7 @@ start_server {tags {"hash"}} {
        r config set import-mode yes
        assert_equal [r hsetex myhash exat 0 fields 2 f2 v2 f3 v3] 1
        assert_equal [r hlen myhash] 3
-       assert_equal [r OBJECT ENCODING myhash] "hashtable"
+       assert_equal [r OBJECT ENCODING myhash] "listpack"
        r config set import-mode no
        wait_for_condition 30 100 {
            [r hlen myhash] == 1
@@ -4981,6 +5007,70 @@ start_server {tags {"hashexpire"}} {
     } {OK} {needs:debug}
 }
 
+start_server {tags {"hash expire listpack"}} {
+    r config set hash-max-listpack-entries 128
+
+    test "Volatile-count header tracks listpack expiry transitions" {
+        r del myhash
+        r hset myhash f1 v1 f2 v2 f3 v3
+        assert_encoding listpack myhash
+        assert_equal 0 [get_keys_with_volatile_items r]
+
+        # 0 -> 1: first expiry creates the aggregate header
+        assert_equal {1} [r hexpire myhash 1000 FIELDS 1 f1]
+        assert_equal 1 [get_keys_with_volatile_items r]
+
+        # 1 -> 2 -> 1: add another, then persist one
+        assert_equal {1} [r hexpire myhash 1000 FIELDS 1 f2]
+        assert_equal {1} [r hpersist myhash FIELDS 1 f1]
+        assert_equal 1 [get_keys_with_volatile_items r]
+
+        # 1 -> 0: last volatile field persisted, header removed
+        assert_equal {1} [r hpersist myhash FIELDS 1 f2]
+        assert_equal 0 [get_keys_with_volatile_items r]
+        assert_equal 3 [r hlen myhash]
+    }
+
+    test "Volatile-count header follows HDEL of a volatile field" {
+        r del myhash
+        r hset myhash f1 v1 f2 v2
+        r hexpire myhash 1000 FIELDS 1 f1
+        assert_equal 1 [get_keys_with_volatile_items r]
+        r hdel myhash f1
+        assert_equal 0 [get_keys_with_volatile_items r]
+        assert_equal {v2} [r hget myhash f2]
+    }
+
+    test "Volatile-count header survives RDB reload and DUMP/RESTORE" {
+        r del myhash
+        r hset myhash f1 v1 f2 v2
+        r hsetex myhash EX 1000 FIELDS 1 t1 x1
+        assert_encoding listpack myhash
+        r debug reload
+        assert_encoding listpack myhash
+        assert_equal 1 [get_keys_with_volatile_items r]
+        assert_range [lindex [r httl myhash FIELDS 1 t1] 0] 1 1000
+
+        set d [r dump myhash]
+        r del myhash
+        r restore myhash 0 $d
+        assert_equal 1 [get_keys_with_volatile_items r]
+        assert_range [lindex [r httl myhash FIELDS 1 t1] 0] 1 1000
+    } {} {needs:debug}
+
+    test "Volatile-count header cleared when active expiry reaps last field" {
+        r del myhash
+        r hset myhash f1 v1
+        r hpexpire myhash 50 FIELDS 1 f1
+        assert_equal 1 [get_keys_with_volatile_items r]
+        wait_for_condition 50 100 {
+            [get_keys_with_volatile_items r] == 0
+        } else {
+            fail "volatile tracking not cleared after reap"
+        }
+    }
+}
+
 start_server {tags {"hashexpire"}} {
     # Regression: HPEXPIREAT with timestamps at/near the top of the int64 range
     # used to crash the server via the vset bucket-timestamp math. Two flows:
@@ -5033,4 +5123,57 @@ start_server {tags {"hashexpire"}} {
         assert_equal 127 [r HLEN myhash]
         r DEL myhash
     } {1}
+}
+
+start_server {tags {"hashexpire external:skip"}} {
+    # HGETEX changes field TTLs (and can delete a field via a past EXAT/PXAT),
+    # so its key spec requires both read and write permission on the key.
+    set r2 [valkey_client]
+
+    test {HGETEX under a read-only (%R~) ACL grant is denied} {
+        r DEL myhash
+        r HSET myhash f1 v1 f2 v2
+
+        r ACL SETUSER hgetex-ro on nopass %R~myhash* +@all
+        $r2 auth hgetex-ro password
+        assert_equal PONG [$r2 PING]
+
+        assert_equal "User hgetex-ro has no permissions to access the 'myhash' key" \
+            [r ACL DRYRUN hgetex-ro HGETEX myhash FIELDS 1 f1]
+
+        assert_error {*NOPERM*key*} {$r2 HGETEX myhash FIELDS 1 f1}
+        assert_error {*NOPERM*key*} {$r2 HGETEX myhash PERSIST FIELDS 1 f1}
+        assert_error {*NOPERM*key*} {$r2 HGETEX myhash EX 100 FIELDS 1 f1}
+        assert_error {*NOPERM*key*} {$r2 HGETEX myhash EXAT 1 FIELDS 1 f1}
+
+        assert_equal 2 [r HLEN myhash]
+        assert_equal v1 [r HGET myhash f1]
+        assert_equal -1 [r HTTL myhash FIELDS 1 f1]
+    }
+
+    test {HGETEX under a write-only (%W~) ACL grant is denied} {
+        r DEL myhash
+        r HSET myhash f1 v1
+
+        r ACL SETUSER hgetex-wo on nopass %W~myhash* +@all
+        $r2 auth hgetex-wo password
+        assert_equal PONG [$r2 PING]
+
+        assert_error {*NOPERM*key*} {$r2 HGETEX myhash EX 100 FIELDS 1 f1}
+    }
+
+    test {HGETEX with read+write (%RW~) ACL grant is permitted} {
+        r DEL myhash
+        r HSET myhash f1 v1 f2 v2
+
+        r ACL SETUSER hgetex-rw on nopass %RW~myhash* +@all
+        $r2 auth hgetex-rw password
+        assert_equal PONG [$r2 PING]
+
+        assert_equal v1 [$r2 HGETEX myhash FIELDS 1 f1]
+        assert_equal v1 [$r2 HGETEX myhash EX 1000 FIELDS 1 f1]
+        assert_morethan [r HTTL myhash FIELDS 1 f1] 0
+    }
+
+    $r2 close
 }

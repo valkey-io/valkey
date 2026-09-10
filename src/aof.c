@@ -27,12 +27,17 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include "entry.h"
+#include "expire.h"
+#include "listpack.h"
+#include "sds.h"
 #include "server.h"
 #include "ordered_index.h"
 #include "bio.h"
 #include "rio.h"
 #include "functions.h"
 #include "module.h"
+#include "util.h"
 
 #include <signal.h>
 #include <fcntl.h>
@@ -965,7 +970,7 @@ int startAppendOnly(void) {
     serverAssert(server.aof_state == AOF_OFF);
 
     server.aof_state = AOF_WAIT_REWRITE;
-    if (hasActiveChildProcess() && server.child_type != CHILD_TYPE_AOF) {
+    if (hasActiveSaveOrChild() && server.child_type != CHILD_TYPE_AOF) {
         server.aof_rewrite_scheduled = 1;
         serverLog(LL_NOTICE, "AOF was enabled but there is already another background operation. An AOF background was "
                              "scheduled to start when possible.");
@@ -1492,6 +1497,10 @@ struct client *createAOFClient(void) {
     struct client *c = createClient(NULL);
 
     c->id = CLIENT_ID_AOF; /* So modules can identify it's the AOF client. */
+
+    /* The AOF client is not subject to ACL checks because all commands present
+     * in the AOF file must be replayed. */
+    c->user = NULL;
 
     /*
      * The AOF client should never be blocked (unlike primary
@@ -2086,37 +2095,44 @@ static int rioWriteHashIteratorCursor(rio *r, hashTypeIterator *hi, int what) {
  * The function returns 0 on error, 1 on success. */
 int rewriteHashObject(rio *r, robj *key, robj *o) {
     hashTypeIterator hi;
-    long long count = 0, volatile_items = 0, non_volatile_items;
+    long long count = 0, non_volatile_items;
+    sds field, value;
+
     /* First serialize volatile items if exist */
     if (hashTypeHasVolatileFields(o)) {
         hashTypeInitVolatileIterator(o, &hi);
         while (hashTypeNext(&hi) != C_ERR) {
-            long long expiry = entryGetExpiry(hi.next);
-            sds field = entryGetField(hi.next);
-            size_t value_len;
-            char *value = entryGetValue(hi.next, &value_len);
-            if (rioWriteBulkCount(r, '*', 8) == 0) return 0;
-            if (rioWriteBulkString(r, "HSETEX", 6) == 0) return 0;
-            if (rioWriteBulkObject(r, key) == 0) return 0;
-            if (rioWriteBulkString(r, "PXAT", 4) == 0) return 0;
-            if (rioWriteBulkLongLong(r, expiry) == 0) return 0;
-            if (rioWriteBulkString(r, "FIELDS", 6) == 0) return 0;
-            if (rioWriteBulkLongLong(r, 1) == 0) return 0;
-            if (rioWriteBulkString(r, field, sdslen(field)) == 0) return 0;
-            if (rioWriteBulkString(r, value, value_len) == 0) return 0;
-            volatile_items++;
+            long long expiry = hashTypeCurrentExpiry(o, &hi);
+            field = hashTypeCurrentObjectNewSds(&hi, OBJ_HASH_FIELD);
+            value = hashTypeCurrentObjectNewSds(&hi, OBJ_HASH_VALUE);
+            if (expiry > commandTimeSnapshot()) {
+                if (rioWriteBulkCount(r, '*', 8) == 0) goto werr;
+                if (rioWriteBulkString(r, "HSETEX", 6) == 0) goto werr;
+                if (rioWriteBulkObject(r, key) == 0) goto werr;
+                if (rioWriteBulkString(r, "PXAT", 4) == 0) goto werr;
+                if (rioWriteBulkLongLong(r, expiry) == 0) goto werr;
+                if (rioWriteBulkString(r, "FIELDS", 6) == 0) goto werr;
+                if (rioWriteBulkLongLong(r, 1) == 0) goto werr;
+                if (rioWriteBulkString(r, field, sdslen(field)) == 0) goto werr;
+                if (rioWriteBulkString(r, value, sdslen(value)) == 0) goto werr;
+            }
+            sdsfree(field);
+            sdsfree(value);
         }
         hashTypeResetIterator(&hi);
     }
-    non_volatile_items = hashTypeLength(o) - volatile_items;
-    hashTypeInitIterator(o, &hi);
-    while (hashTypeNext(&hi) != C_ERR) {
-        if (volatile_items > 0 && entryHasExpiry(hi.next))
-            continue;
 
+    /* Write the persistent (no-TTL) fields as HMSET batches. The batch
+     * header needs the count of fields the persistent iterator will emit:
+     * total fields minus ALL volatile ones (expired-unreaped included,
+     * since the iterator skips those too). */
+    non_volatile_items = hashTypeLength(o) - hashTypeVolatileCount(o);
+
+    hashTypeInitPersistentIterator(o, &hi);
+    while (hashTypeNext(&hi) != C_ERR) {
+        /* If new vector write the HMSET command first */
         if (count == 0) {
             int cmd_items = (non_volatile_items > AOF_REWRITE_ITEMS_PER_CMD) ? AOF_REWRITE_ITEMS_PER_CMD : non_volatile_items;
-
             if (!rioWriteBulkCount(r, '*', 2 + cmd_items * 2) || !rioWriteBulkString(r, "HMSET", 5) ||
                 !rioWriteBulkObject(r, key)) {
                 hashTypeResetIterator(&hi);
@@ -2124,6 +2140,7 @@ int rewriteHashObject(rio *r, robj *key, robj *o) {
             }
         }
 
+        /* Iterate till we reach the batch size */
         if (!rioWriteHashIteratorCursor(r, &hi, OBJ_HASH_FIELD) || !rioWriteHashIteratorCursor(r, &hi, OBJ_HASH_VALUE)) {
             hashTypeResetIterator(&hi);
             return 0;
@@ -2131,9 +2148,14 @@ int rewriteHashObject(rio *r, robj *key, robj *o) {
         if (++count == AOF_REWRITE_ITEMS_PER_CMD) count = 0;
         non_volatile_items--;
     }
-
     hashTypeResetIterator(&hi);
     return 1;
+
+werr:
+    sdsfree(field);
+    sdsfree(value);
+    hashTypeResetIterator(&hi);
+    return 0;
 }
 
 /* Helper for rewriteStreamObject() that generates a bulk string into the
@@ -2594,7 +2616,7 @@ werr:
 int rewriteAppendOnlyFileBackground(void) {
     pid_t childpid;
 
-    if (hasActiveChildProcess()) return C_ERR;
+    if (hasActiveSaveOrChild()) return C_ERR;
 
     if (dirCreateIfMissing(server.aof_dirname) == -1) {
         serverLog(LL_WARNING, "Can't open or create append-only dir %s: %s", server.aof_dirname, strerror(errno));
@@ -2664,7 +2686,7 @@ int rewriteAppendOnlyFileBackground(void) {
 void bgrewriteaofCommand(client *c) {
     if (server.child_type == CHILD_TYPE_AOF) {
         addReplyError(c, "Background append only file rewriting already in progress");
-    } else if (hasActiveChildProcess() || server.in_exec) {
+    } else if (hasActiveSaveOrChild() || server.in_exec) {
         server.aof_rewrite_scheduled = 1;
         /* When manually triggering AOFRW we reset the count
          * so that it can be executed immediately. */

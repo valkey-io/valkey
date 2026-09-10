@@ -133,6 +133,22 @@ TEST_F(UtilTest, TestString2l) {
 #endif
 }
 
+TEST_F(UtilTest, TestString2ullBase16AsyncSignalSafe) {
+    char buf[32];
+    unsigned long long value;
+
+    valkey_strlcpy(buf, "0000010000000000", sizeof(buf));
+    ASSERT_EQ(string2ull_base16_async_signal_safe(buf, strlen(buf), &value), 1);
+    ASSERT_EQ(value, 1ULL << 40);
+
+    valkey_strlcpy(buf, "ffffffffffffffff", sizeof(buf));
+    ASSERT_EQ(string2ull_base16_async_signal_safe(buf, strlen(buf), &value), 1);
+    ASSERT_EQ(value, ULLONG_MAX);
+
+    valkey_strlcpy(buf, "10000000000000000", sizeof(buf));
+    ASSERT_EQ(string2ull_base16_async_signal_safe(buf, strlen(buf), &value), -1);
+}
+
 TEST_F(UtilTest, TestLl2string) {
     char buf[32];
     long long v;
@@ -296,10 +312,10 @@ TEST_F(UtilTest, TestReclaimFilePageCache) {
 #if defined(__linux__)
     struct statfs stats;
 
-    /* Check if /tmp is memory-backed (e.g., tmpfs) */
+    /* fadvise(FADV_DONTNEED) has no effect on memory-backed filesystems */
     if (statfs("/tmp", &stats) == 0) {
-        if (stats.f_type != TMPFS_MAGIC) { // Not tmpfs, use /tmp
-            GTEST_SKIP() << "Skipping test because /tmp is not tmpfs";
+        if (stats.f_type == TMPFS_MAGIC) {
+            GTEST_SKIP() << "Skipping test because /tmp is tmpfs";
         }
     }
 

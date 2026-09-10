@@ -314,6 +314,28 @@ start_server {tags {"protocol network"}} {
         assert_equal [r exec] 2
     }
 
+    test "Partial command after blocking command is completed on unblock" {
+        reconnect
+        set rd [valkey_deferring_client]
+        $rd client id
+        set cid [$rd read]
+        $rd write "*3\r\n\$5\r\nBLPOP\r\n\$6\r\nmylist\r\n\$1\r\n0\r\n*3\r\n\$3\r\nSET\r\n\$3\r\n"
+        $rd flush
+        wait_for_blocked_client
+        $rd write "key\r\n\$5\r\nvalue\r\n"
+        $rd flush
+        wait_for_condition 50 100 {
+            [regexp {qbuf=([1-9][0-9]*)} [r client list id $cid]]
+        } else {
+            fail "completion bytes never reached the query buffer"
+        }
+        r rpush mylist item
+        assert_equal {mylist item} [$rd read]
+        assert_equal "OK" [$rd read]
+        assert_equal "value" [r get key]
+        $rd close
+    }
+
 }
 
 start_server {tags {"protocol hello"}} {

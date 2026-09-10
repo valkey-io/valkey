@@ -3089,19 +3089,26 @@ int sendCurrentOffsetToReplica(client *replica) {
     return C_OK;
 }
 
-sds replicationSendAuth(connection *conn) {
+/* Send an AUTH command on conn with the given credentials. A NULL user sends
+ * the single argument form. The password is an sds so that binary-safe
+ * passwords are sent in full. */
+sds sendAuthCommand(connection *conn, char *user, sds password) {
     char *args[] = {"AUTH", NULL, NULL};
     size_t lens[] = {4, 0, 0};
     int argc = 1;
-    if (server.primary_user) {
-        args[argc] = server.primary_user;
-        lens[argc] = strlen(server.primary_user);
+    if (user) {
+        args[argc] = user;
+        lens[argc] = strlen(user);
         argc++;
     }
-    args[argc] = server.primary_auth;
-    lens[argc] = sdslen(server.primary_auth);
+    args[argc] = password;
+    lens[argc] = sdslen(password);
     argc++;
     return sendCommandArgv(conn, argc, args, lens);
+}
+
+sds replicationSendAuth(connection *conn) {
+    return sendAuthCommand(conn, server.primary_user, server.primary_auth);
 }
 
 robj *generateSelectCommand(int dictid) {

@@ -9021,7 +9021,7 @@ const char **clusterCommandExtendedHelp(void) {
         "LINKS",
         "    Return information about all network links between this node and its peers.",
         "    Output format is an array where each array element is a map containing attributes of a link",
-        "MIGRATESLOTS SLOTSRANGE start-slot end-slot [start-slot end-slot ...] NODE node-id [SLOTSRANGE start-slot end-slot [start-slot end-slot ...] NODE node-id ...]",
+        "MIGRATESLOTS SLOTSRANGE start-slot end-slot [start-slot end-slot ...] NODE node-id [AUTH username password] [SLOTSRANGE start-slot end-slot [start-slot end-slot ...] NODE node-id [AUTH username password] ...]",
         "    Migrate the specified slot ranges from this node to the specified node.",
         "CANCELSLOTMIGRATIONS ALL",
         "    Cancel all migrations.",

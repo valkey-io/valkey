@@ -63,7 +63,6 @@ size_t streamReplyWithRangeFromConsumerPEL(client *c,
                                            size_t count,
                                            streamConsumer *consumer);
 int streamParseStrictIDOrReply(client *c, robj *o, streamID *id, uint64_t missing_seq, int *seq_given);
-int streamParseStrictIDsOrReply(client *c, int argi, size_t id_count, streamID *ids, int *resps);
 int streamParseIDOrReply(client *c, robj *o, streamID *id, uint64_t missing_seq);
 
 /* -----------------------------------------------------------------------
@@ -1626,6 +1625,7 @@ void streamPropagateConsumerCreation(client *c, robj *key, robj *groupname, sds 
     decrRefCount(argv[4]);
 }
 
+
 /* Propagate the deletion of stream entries as
  *
  *  XDEL <key> <id1> <id2> ... <idn>
@@ -2013,16 +2013,6 @@ int streamParseStrictIDOrReply(client *c, robj *o, streamID *id, uint64_t missin
     return streamGenericParseIDOrReply(c, o, id, missing_seq, 1, seq_given);
 }
 
-/* Parse IDS <numids> into array of stream message ids, ensuring each is a valid
- * stream message ID. Returns C_OK, or replies to the client on first invalid
- * ID and returns C_ERR. */
-int streamParseStrictIDsOrReply(client *c, int argi, size_t id_count, streamID *ids, int *resps) {
-    for (size_t j = 0; j < id_count; j++) {
-        if (streamParseStrictIDOrReply(c, c->argv[argi + j], &ids[j], 0, NULL) != C_OK) return C_ERR;
-        if (resps != NULL) resps[j] = 1;
-    }
-    return C_OK;
-}
 
 /* Helper for parsing a stream ID that is a range query interval. When the
  * exclude argument is NULL, streamParseIDOrReply() is called and the interval
@@ -3747,8 +3737,9 @@ static void xdelGenericCommand(client *c, xdelVariant variant) {
     /* We need to sanity check the IDs passed to start. Even if not
      * a big issue, it is not great that the command is only partially
      * executed because at some point an invalid ID is parsed. */
-    if (streamParseStrictIDsOrReply(c, argi, id_count, ids, array_reply ? resps : NULL) != C_OK) {
-        goto cleanup;
+    for (size_t j = 0; j < id_count; j++) {
+        if (streamParseStrictIDOrReply(c, c->argv[argi + j], &ids[j], 0, NULL) != C_OK) goto cleanup;
+        if (array_reply) resps[j] = 1;
     }
 
     int acked = 0;

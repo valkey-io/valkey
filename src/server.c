@@ -4144,7 +4144,7 @@ void call(client *c, int flags) {
     }
 
     c->cmd->proc(c);
-    sealDefaultTTLMS(default_ttl_ms);
+    stopDefaultTTLMSRecording(default_ttl_ms);
 
     if (c->flag.argv_borrowed && server.enable_debug_assert) {
         robj **argv = c->original_argv ? c->original_argv : c->argv;

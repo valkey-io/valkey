@@ -1,4 +1,5 @@
-start_server {tags {expire}} {
+# Restore the original policy when sharing an external server with other tests.
+start_server {tags {expire} overrides {default-ttl-ms 0}} {
     test {default-ttl-ms is disabled by default} {
         assert_equal {default-ttl-ms 0} [r config get default-ttl-ms]
         r set default-ttl-ms:disabled value
@@ -128,45 +129,45 @@ start_server {tags {expire}} {
     }
 
     test {LPUSHX and RPUSHX do not create missing lists} {
-        assert_equal 0 [r lpushx default-ttl-ms:lpushx-missing value]
-        assert_equal 0 [r rpushx default-ttl-ms:rpushx-missing value]
-        assert_equal 0 [r exists default-ttl-ms:lpushx-missing default-ttl-ms:rpushx-missing]
+        assert_equal 0 [r lpushx default-ttl-ms:{t}:lpushx-missing value]
+        assert_equal 0 [r rpushx default-ttl-ms:{t}:rpushx-missing value]
+        assert_equal 0 [r exists default-ttl-ms:{t}:lpushx-missing default-ttl-ms:{t}:rpushx-missing]
     }
 
     test {LMOVE applies default only to a missing destination} {
-        r rpush default-ttl-ms:lmove-source a b
-        r pexpire default-ttl-ms:lmove-source 30000
-        set source_deadline [r pexpiretime default-ttl-ms:lmove-source]
+        r rpush default-ttl-ms:{t}:lmove-source a b
+        r pexpire default-ttl-ms:{t}:lmove-source 30000
+        set source_deadline [r pexpiretime default-ttl-ms:{t}:lmove-source]
 
-        assert_equal b [r lmove default-ttl-ms:lmove-source default-ttl-ms:lmove-destination RIGHT LEFT]
-        assert_equal $source_deadline [r pexpiretime default-ttl-ms:lmove-source]
-        set destination_ttl [r pttl default-ttl-ms:lmove-destination]
+        assert_equal b [r lmove default-ttl-ms:{t}:lmove-source default-ttl-ms:{t}:lmove-destination RIGHT LEFT]
+        assert_equal $source_deadline [r pexpiretime default-ttl-ms:{t}:lmove-source]
+        set destination_ttl [r pttl default-ttl-ms:{t}:lmove-destination]
         assert {$destination_ttl > 9000 && $destination_ttl <= 10000}
 
-        r rpush default-ttl-ms:lmove-source-existing a b
-        r pexpire default-ttl-ms:lmove-source-existing 30000
-        r rpush default-ttl-ms:lmove-destination-existing x
-        r pexpire default-ttl-ms:lmove-destination-existing 25000
-        set existing_source_deadline [r pexpiretime default-ttl-ms:lmove-source-existing]
-        set existing_destination_deadline [r pexpiretime default-ttl-ms:lmove-destination-existing]
+        r rpush default-ttl-ms:{t}:lmove-source-existing a b
+        r pexpire default-ttl-ms:{t}:lmove-source-existing 30000
+        r rpush default-ttl-ms:{t}:lmove-destination-existing x
+        r pexpire default-ttl-ms:{t}:lmove-destination-existing 25000
+        set existing_source_deadline [r pexpiretime default-ttl-ms:{t}:lmove-source-existing]
+        set existing_destination_deadline [r pexpiretime default-ttl-ms:{t}:lmove-destination-existing]
 
-        assert_equal b [r lmove default-ttl-ms:lmove-source-existing default-ttl-ms:lmove-destination-existing RIGHT LEFT]
-        assert_equal $existing_source_deadline [r pexpiretime default-ttl-ms:lmove-source-existing]
-        assert_equal $existing_destination_deadline [r pexpiretime default-ttl-ms:lmove-destination-existing]
+        assert_equal b [r lmove default-ttl-ms:{t}:lmove-source-existing default-ttl-ms:{t}:lmove-destination-existing RIGHT LEFT]
+        assert_equal $existing_source_deadline [r pexpiretime default-ttl-ms:{t}:lmove-source-existing]
+        assert_equal $existing_destination_deadline [r pexpiretime default-ttl-ms:{t}:lmove-destination-existing]
     }
 
     test {BLMOVE propagates normalized LMOVE before destination expiration} {
-        r rpush default-ttl-ms:blmove-source a b
+        r rpush default-ttl-ms:{t}:blmove-source a b
         r set default-ttl-ms:stream-sentinel-1 0 KEEPTTL
         set repl [attach_to_replication_stream]
 
-        assert_equal b [r blmove default-ttl-ms:blmove-source default-ttl-ms:blmove-destination RIGHT LEFT 0]
+        assert_equal b [r blmove default-ttl-ms:{t}:blmove-source default-ttl-ms:{t}:blmove-destination RIGHT LEFT 0]
         r incr default-ttl-ms:stream-sentinel-1
         assert_replication_stream $repl {
             {multi}
             {select *}
-            {lmove default-ttl-ms:blmove-source default-ttl-ms:blmove-destination RIGHT LEFT}
-            {pexpireat default-ttl-ms:blmove-destination *}
+            {lmove default-ttl-ms:{t}:blmove-source default-ttl-ms:{t}:blmove-destination RIGHT LEFT}
+            {pexpireat default-ttl-ms:{t}:blmove-destination *}
             {exec}
             {incr default-ttl-ms:stream-sentinel-1}
         }

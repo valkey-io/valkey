@@ -3885,7 +3885,7 @@ void dbAddWithFlags(serverDb *db, robj *key, robj **valref, int flags);
 #define DBADD_NO_DEFAULT_TTL_MS 1
 typedef struct defaultTTLMSContext defaultTTLMSContext;
 defaultTTLMSContext *beginDefaultTTLMS(client *c);
-void sealDefaultTTLMS(defaultTTLMSContext *ctx);
+void stopDefaultTTLMSRecording(defaultTTLMSContext *ctx);
 void endDefaultTTLMS(defaultTTLMSContext *ctx, int target);
 int dbAddRDBLoad(serverDb *db, sds key, robj **valref);
 void dbReplaceValue(serverDb *db, robj *key, robj **valref);
@@ -3894,7 +3894,7 @@ void dbReplaceValue(serverDb *db, robj *key, robj **valref);
 #define SETKEY_NO_SIGNAL 2
 #define SETKEY_ALREADY_EXIST 4
 #define SETKEY_DOESNT_EXIST 8
-#define SETKEY_ADD_OR_UPDATE 16 /* Key most likely doesn't exists */
+#define SETKEY_ADD_OR_UPDATE 16     /* Key most likely doesn't exists */
 #define SETKEY_NO_DEFAULT_TTL_MS 32 /* Don't assign the server default TTL to the key. */
 void setKey(client *c, serverDb *db, robj *key, robj **valref, int flags);
 robj *dbRandomKey(serverDb *db);

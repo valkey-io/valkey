@@ -16,14 +16,21 @@ proc client_throttled {r wid} {
 
 # Keep issuing writes until the writer client is observed being throttled.
 proc wait_throttled_client {r writer wid} {
+    # Deferred replies do not make socket writes nonblocking. Keep a stopped
+    # reader from trapping us in flush before we can observe throttling.
+    fconfigure [$writer channel] -blocking 0
     for {set k 0} {$k < 1000} {incr k} {
-        for {set j 0} {$j < 500} {incr j} {
-            $writer set nudge v
-        }
+        # Check before sending more data: a throttled writer may no longer be
+        # drained by the server, so another blocking flush can stall the test
+        # while the replica is paused (particularly with TLS).
         if {[client_throttled $r $wid] &&
             [getInfoProperty [{*}$r info debug] repl_throttle_current_clients] > 0} {
             return 1
         }
+        for {set j 0} {$j < 500} {incr j} {
+            $writer set nudge v
+        }
+        update
     }
     return 0
 }

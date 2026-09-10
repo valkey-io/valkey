@@ -64,9 +64,9 @@ typedef struct defaultTTLMSRecord {
     struct defaultTTLMSRecord *next;
     serverDb *db;
     robj *key;
-    sds index_key; /* Database ID plus key name, used for cancellation lookup. */
+    sds index_key;     /* Database ID plus key name, used for cancellation lookup. */
     mstime_t deadline; /* Absolute millisecond expiry, not a relative duration. */
-    bool active; /* False when this pending default has been superseded. */
+    bool active;       /* False when this pending default has been superseded. */
 } defaultTTLMSRecord;
 
 /* Per-call bookkeeping, stacked for nested command execution. The linked list
@@ -76,8 +76,8 @@ typedef struct defaultTTLMSRecord {
 struct defaultTTLMSContext {
     defaultTTLMSContext *previous;
     defaultTTLMSRecord *first, *last;
-    rax *index; /* Allocated lazily when the first default deadline is recorded. */
-    int nesting; /* Only creations at this execution depth belong to the frame. */
+    rax *index;    /* Allocated lazily when the first default deadline is recorded. */
+    int nesting;   /* Only creations at this execution depth belong to the frame. */
     bool eligible; /* Accepts native writes; cleared before result callbacks. */
 };
 
@@ -110,7 +110,7 @@ static sds defaultTTLMSIndexKey(serverDb *db, robj *key) {
 
 /* Stop accepting creations before command-result and expiry notifications.
  * Those callbacks have their own execution nesting and may invoke modules. */
-void sealDefaultTTLMS(defaultTTLMSContext *ctx) {
+void stopDefaultTTLMSRecording(defaultTTLMSContext *ctx) {
     if (ctx) ctx->eligible = false;
 }
 
@@ -149,8 +149,10 @@ static void registerDefaultTTLMS(serverDb *db, robj *key, mstime_t deadline) {
         serverAssert(old != NULL);
         ((defaultTTLMSRecord *)old)->active = false;
     }
-    if (ctx->last) ctx->last->next = record;
-    else ctx->first = record;
+    if (ctx->last)
+        ctx->last->next = record;
+    else
+        ctx->first = record;
     ctx->last = record;
 }
 
@@ -164,21 +166,22 @@ void endDefaultTTLMS(defaultTTLMSContext *ctx, int target) {
     serverAssert(default_ttl_ms_context == ctx);
     for (defaultTTLMSRecord *record = ctx->first; record;) {
         defaultTTLMSRecord *next = record->next;
-        int slot = getKVStoreIndexForKey(objectGetVal(record->key));
-        robj *val = dbFindWithDictIndex(record->db, objectGetVal(record->key), slot);
-        /* Detach before notifications, whose callbacks may change keys.
-         * Inactive records have already been removed or superseded. */
-        if (record->active)
+        /* Canceled records need only cleanup, not a database lookup. */
+        if (record->active) {
+            int slot = getKVStoreIndexForKey(objectGetVal(record->key));
+            robj *val = dbFindWithDictIndex(record->db, objectGetVal(record->key), slot);
+            /* Detach before notifications, whose callbacks may change keys. */
             raxRemove(ctx->index, (unsigned char *)record->index_key, sdslen(record->index_key), NULL);
-        if (record->active && val && objectGetExpire(val) == record->deadline) {
-            record->active = false;
-            if (target) {
-                robj *deadline = createStringObjectFromLongLong(record->deadline);
-                robj *argv[] = {shared.pexpireat, record->key, deadline};
-                alsoPropagate(record->db->id, argv, 3, target, server.cluster_enabled ? slot : -1);
-                decrRefCount(deadline);
+            if (val && objectGetExpire(val) == record->deadline) {
+                record->active = false;
+                if (target) {
+                    robj *deadline = createStringObjectFromLongLong(record->deadline);
+                    robj *argv[] = {shared.pexpireat, record->key, deadline};
+                    alsoPropagate(record->db->id, argv, 3, target, server.cluster_enabled ? slot : -1);
+                    decrRefCount(deadline);
+                }
+                notifyKeyspaceEvent(NOTIFY_GENERIC, "expire", record->key, record->db->id);
             }
-            notifyKeyspaceEvent(NOTIFY_GENERIC, "expire", record->key, record->db->id);
         }
         decrRefCount(record->key);
         sdsfree(record->index_key);

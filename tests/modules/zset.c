@@ -171,8 +171,9 @@ static void zset_walk_reply_current(ValkeyModuleCtx *ctx, ValkeyModuleKey *key) 
  *
  * Seeks the first (or, with a -last type, the last) element of the range,
  * then applies 'pattern' one character at a time ('n' = ZsetRangeNext,
- * 'p' = ZsetRangePrev). Replies with the current element after the seek and
- * after each step, or END for a step that did not move.
+ * 'p' = ZsetRangePrev, 'e' = ZsetRangeEndReached). Replies with the current
+ * element after the seek and after each step, END for a step that did not
+ * move, or the flag value for 'e'.
  */
 int zset_walk(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     if (argc != 6) return ValkeyModule_WrongArity(ctx);
@@ -200,6 +201,10 @@ int zset_walk(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     ValkeyModule_ReplyWithArray(ctx, len + 1);
     zset_walk_reply_current(ctx, key);
     for (size_t i = 0; i < len; i++) {
+        if (pattern[i] == 'e') {
+            ValkeyModule_ReplyWithLongLong(ctx, ValkeyModule_ZsetRangeEndReached(key));
+            continue;
+        }
         int moved = (pattern[i] == 'p') ? ValkeyModule_ZsetRangePrev(key) : ValkeyModule_ZsetRangeNext(key);
         if (moved)
             zset_walk_reply_current(ctx, key);

@@ -5,6 +5,7 @@
 # valkey-server source files
 set(VALKEY_SERVER_SRCS
     ${CMAKE_SOURCE_DIR}/src/threads_mngr.c
+    ${CMAKE_SOURCE_DIR}/src/forkless.c
     ${CMAKE_SOURCE_DIR}/src/adlist.c
     ${CMAKE_SOURCE_DIR}/src/vector.c
     ${CMAKE_SOURCE_DIR}/src/quicklist.c
@@ -38,6 +39,7 @@ set(VALKEY_SERVER_SRCS
     ${CMAKE_SOURCE_DIR}/src/t_hash.c
     ${CMAKE_SOURCE_DIR}/src/config.c
     ${CMAKE_SOURCE_DIR}/src/aof.c
+    ${CMAKE_SOURCE_DIR}/src/bgiteration.c
     ${CMAKE_SOURCE_DIR}/src/pubsub.c
     ${CMAKE_SOURCE_DIR}/src/multi.c
     ${CMAKE_SOURCE_DIR}/src/debug.c

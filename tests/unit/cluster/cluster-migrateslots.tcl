@@ -1487,6 +1487,7 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
             assert_error "*ERR CLUSTER SYNCSLOTS PAUSED should only be used by slot migration clients*" {R 0 CLUSTER SYNCSLOTS PAUSED}
             assert_error "*ERR CLUSTER SYNCSLOTS FAILOVER-GRANTED should only be used by slot migration clients*" {R 0 CLUSTER SYNCSLOTS FAILOVER-GRANTED}
             assert_error "*ERR CLUSTER SYNCSLOTS ACK should only be used by slot migration clients*" {R 0 CLUSTER SYNCSLOTS ACK}
+            assert_error "*ERR CLUSTER SYNCSLOTS FINISH should only be used by slot migration clients*" {R 0 CLUSTER SYNCSLOTS FINISH STATE failed NAME $fake_jobname}
             assert_error "*syntax error*" {R 0 CLUSTER SYNCSLOTS UNKNOWN}
 
             assert_causes_conn_drop 0 {
@@ -1960,15 +1961,17 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster network} overrides
     test "Migration not cancelled when snapshot takes more time than repl-timeout" {
         assert_does_not_resync {
             # The target must not kill the import link while the source's
-            # snapshot is quiet for longer than repl-timeout (the source
-            # cannot send ACKs while its child is snapshotting).
+            # snapshot takes longer than repl-timeout (the source cannot send
+            # ACKs while its child is snapshotting).
             R 2 CONFIG SET repl-timeout 2
 
             # Load keys before the snapshot to target a snapshot time > 2sec.
-            # 50 * 100ms = 5 sec. The delay must be on node 0: it is the
-            # source of this migration and runs the snapshot.
+            # 50 * 100ms = 5 sec. Values larger than PROTO_IOBUF_LEN are
+            # written directly instead of accumulating in rio's buffer, so
+            # the target continues receiving data during the slow snapshot.
+            # The delay must be on node 0: it is the source of this migration.
             R 0 CONFIG SET rdb-key-save-delay 100000
-            populate 50 "$0_slot_tag:1:" 1000 -0
+            populate 50 "$0_slot_tag:1:" 32768 -0
 
             set errcode [catch {
                 assert_match "OK" [R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 0 0 NODE $node2_id]

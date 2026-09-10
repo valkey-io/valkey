@@ -8276,7 +8276,7 @@ int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_
                    !(*flags & ARGS_BYINT) && !(*flags & ARGS_BYFLOAT) && next)
         {
             *flags |= ARGS_BYFLOAT;
-            *incrby_val = next;
+            if (incrby_val) *incrby_val = next;
             j++;
         } else {
             addReplyErrorObject(c, shared.syntaxerr);

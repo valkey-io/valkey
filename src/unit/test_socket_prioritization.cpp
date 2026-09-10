@@ -156,30 +156,30 @@ class SocketPrioritizationConnTest : public SocketPrioritizationTest, public ::t
 
 TEST_F(SocketPrioritizationTest, EventLoopDualInitialization) {
     ASSERT_NE(server.el, (aeEventLoop *)NULL);
-    ASSERT_NE(server.el->qos_apidata, (aeApiState *)NULL);
-    EXPECT_NE(server.el->qos_fd, -1);
-    EXPECT_EQ(server.el->qos_el_preempt_check_interval_us, 2000ULL);
+    ASSERT_NE(server.el->priority_apidata, (aeApiState *)NULL);
+    EXPECT_NE(server.el->priority_fd, -1);
+    EXPECT_EQ(server.el->priority_events_preempt_check_interval_us, 2000ULL);
     aeSetQoSPreemptCheckInterval(server.el, 5000ULL);
-    EXPECT_EQ(server.el->qos_el_preempt_check_interval_us, 5000ULL);
+    EXPECT_EQ(server.el->priority_events_preempt_check_interval_us, 5000ULL);
     aeSetQoSPreemptCheckInterval(server.el, 2000ULL);
 
     /* Newly created standalone loop must have preemption disabled (0) by default */
     aeEventLoop *standalone = aeCreateEventLoop(64);
     ASSERT_NE(standalone, (aeEventLoop *)NULL);
-    EXPECT_EQ(standalone->qos_apidata, (aeApiState *)NULL);
-    EXPECT_EQ(standalone->qos_fd, -1);
-    EXPECT_EQ(standalone->qos_el_preempt_check_interval_us, 0ULL);
+    EXPECT_EQ(standalone->priority_apidata, (aeApiState *)NULL);
+    EXPECT_EQ(standalone->priority_fd, -1);
+    EXPECT_EQ(standalone->priority_events_preempt_check_interval_us, 0ULL);
     aeDeleteEventLoop(standalone);
 }
 
 TEST_F(SocketPrioritizationTest, DynamicPreemptionIntervalThreshold) {
     /* Test getter and setter */
     aeSetQoSPreemptCheckInterval(server.el, 500ULL);
-    EXPECT_EQ(server.el->qos_el_preempt_check_interval_us, 500ULL);
+    EXPECT_EQ(server.el->priority_events_preempt_check_interval_us, 500ULL);
 
     /* Test disabling preemption (interval = 0) */
     aeSetQoSPreemptCheckInterval(server.el, 0ULL);
-    EXPECT_EQ(server.el->qos_el_preempt_check_interval_us, 0ULL);
+    EXPECT_EQ(server.el->priority_events_preempt_check_interval_us, 0ULL);
     aeSetQoSPreemptCheckInterval(server.el, 2000ULL);
 }
 
@@ -279,7 +279,7 @@ TEST_F(SocketPrioritizationTest, PreemptionOfNormalEventsByQoSLoop) {
     if (write(qos_pipe[1], &c, 1) < 0) {
     }
 
-    /* Ensure more than AE_QOS_DEFAULT_PREEMPT_CHECK_INTERVAL_US (2000 us) has elapsed for qos_el_last_poll */
+    /* Ensure more than AE_QOS_DEFAULT_PREEMPT_CHECK_INTERVAL_US (2000 us) has elapsed for priority_events_last_poll */
     advanceMockTime(1000000);
 
     g_execution_count = 0;
@@ -548,7 +548,7 @@ TEST_F(SocketPrioritizationTest, LevelTriggeredBatchProcessingAndStarvationPreve
 
 TEST_F(SocketPrioritizationTest, DualEventLoopResize) {
     ASSERT_NE(server.el, (aeEventLoop *)NULL);
-    ASSERT_NE(server.el->qos_apidata, (aeApiState *)NULL);
+    ASSERT_NE(server.el->priority_apidata, (aeApiState *)NULL);
     EXPECT_EQ(aeGetSetSize(server.el), 1024);
 
     int ret = aeResizeSetSize(server.el, 2048);
@@ -559,8 +559,8 @@ TEST_F(SocketPrioritizationTest, DualEventLoopResize) {
 TEST_F(SocketPrioritizationTest, FallbackMaskSanitization) {
     aeEventLoop *standalone_el = aeCreateEventLoop(64);
     ASSERT_NE(standalone_el, (aeEventLoop *)NULL);
-    EXPECT_EQ(standalone_el->qos_apidata, (aeApiState *)NULL);
-    EXPECT_EQ(standalone_el->qos_fd, -1);
+    EXPECT_EQ(standalone_el->priority_apidata, (aeApiState *)NULL);
+    EXPECT_EQ(standalone_el->priority_fd, -1);
 
     int fds[2];
     ASSERT_EQ(pipe(fds), 0);

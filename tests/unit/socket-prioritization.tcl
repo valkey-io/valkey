@@ -150,16 +150,16 @@ start_server {tags {"socket-prioritization external:skip"}} {
             }
         }
 
-        test {Dynamic configuration of qos-preemptive-poll-interval-us} {
-            assert_equal [lindex [r config get qos-preemptive-poll-interval-us] 1] 2000
-            r config set qos-preemptive-poll-interval-us 500
-            assert_equal [lindex [r config get qos-preemptive-poll-interval-us] 1] 500
-            r config set qos-preemptive-poll-interval-us 0
-            assert_equal [lindex [r config get qos-preemptive-poll-interval-us] 1] 0
-            assert_error "*argument must be between*" {r config set qos-preemptive-poll-interval-us -1}
-            assert_error "*argument couldn't be parsed into an integer*" {r config set qos-preemptive-poll-interval-us invalid}
-            r config set qos-preemptive-poll-interval-us 2000
-            assert_equal [lindex [r config get qos-preemptive-poll-interval-us] 1] 2000
+        test {Dynamic configuration of priority-preemptive-poll-interval-us} {
+            assert_equal [lindex [r config get priority-preemptive-poll-interval-us] 1] 2000
+            r config set priority-preemptive-poll-interval-us 500
+            assert_equal [lindex [r config get priority-preemptive-poll-interval-us] 1] 500
+            r config set priority-preemptive-poll-interval-us 0
+            assert_equal [lindex [r config get priority-preemptive-poll-interval-us] 1] 0
+            assert_error "*argument must be between*" {r config set priority-preemptive-poll-interval-us -1}
+            assert_error "*argument couldn't be parsed into an integer*" {r config set priority-preemptive-poll-interval-us invalid}
+            r config set priority-preemptive-poll-interval-us 2000
+            assert_equal [lindex [r config get priority-preemptive-poll-interval-us] 1] 2000
         }
 
         test {Socket Prioritization: INFO stats and debug QoS metrics} {

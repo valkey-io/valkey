@@ -48,9 +48,9 @@
                                           things to disk before sending replies, and want \
                                           to do that in a group fashion. */
 #define AE_HIGH_PRIORITY 8             /* Virtual routing mask flag: when set in aeCreateFileEvent(), \
-                                        * the event is registered on qos_apidata if available.        \
+                                        * the event is registered on priority_apidata if available.   \
                                         * Stripped before passing to the underlying OS multiplexer. */
-#define AE_QOS_PREEMPT_CHECK_MASK 0x03 /* Mask to check QoS preemption once every 4 iterations */
+#define AE_QOS_PREEMPT_CHECK_MASK 0x03 /* Mask to check high-priority preemption once every 4 iterations */
 
 #define AE_FILE_EVENTS (1 << 0)
 #define AE_TIME_EVENTS (1 << 1)
@@ -84,7 +84,7 @@ typedef void aeEventFinalizerProc(struct aeEventLoop *eventLoop, void *clientDat
 typedef void aeBeforeSleepProc(struct aeEventLoop *eventLoop);
 typedef void aeAfterSleepProc(struct aeEventLoop *eventLoop, int numevents);
 typedef int aeCustomPollProc(struct aeEventLoop *eventLoop);
-/* Callback invoked with elapsed microseconds after QoS events are processed. */
+/* Callback invoked with elapsed microseconds after high-priority events are processed. */
 typedef void aeQoSStatsProc(struct aeEventLoop *eventLoop, uint64_t duration_us);
 
 /* File event structure */
@@ -130,16 +130,16 @@ typedef struct aeEventLoop {
     pthread_mutex_t poll_mutex;
     int flags;
 
-    /* Quality of Service (QoS):
-     * Sockets registered with AE_HIGH_PRIORITY are tracked in qos_apidata.
-     * qos_fd is registered into apidata to wake the main loop when QoS traffic arrives.
-     * qos_fired holds fired events when draining QoS channels. */
-    aeApiState *qos_apidata;                   /* Dedicated QoS polling state */
-    int qos_fd;                                /* File descriptor of QoS polling backend (-1 if disabled) */
-    aeFiredEvent *qos_fired;                   /* Fired events buffer for QoS polling */
-    monotime qos_el_last_poll;                 /* Timestamp when QoS was last drained */
-    uint64_t qos_el_preempt_check_interval_us; /* Preemptive check interval in microseconds (0 = disabled) */
-    aeQoSStatsProc *qos_el_stats_callback;     /* Callback invoked with elapsed microseconds after draining QoS */
+    /* High-priority event processing:
+     * Sockets registered with AE_HIGH_PRIORITY are tracked in priority_apidata.
+     * priority_fd is registered into apidata to wake the main loop when high-priority traffic arrives.
+     * priority_fired holds fired events when draining high-priority channels. */
+    aeApiState *priority_apidata;                       /* Dedicated high-priority polling state */
+    int priority_fd;                                    /* File descriptor of high-priority polling backend (-1 if disabled) */
+    aeFiredEvent *priority_fired;                       /* Fired events buffer for high-priority polling */
+    monotime priority_events_last_poll;                 /* Timestamp when high-priority events were last drained */
+    uint64_t priority_events_preempt_check_interval_us; /* Preemptive check interval in microseconds (0 = disabled) */
+    aeQoSStatsProc *priority_events_stats_callback;     /* Callback invoked with elapsed microseconds after draining high-priority events */
 } aeEventLoop;
 
 /* Prototypes */
@@ -169,7 +169,7 @@ int aeGetSetSize(aeEventLoop *eventLoop);
 int aeResizeSetSize(aeEventLoop *eventLoop, int setsize);
 void aeSetDontWait(aeEventLoop *eventLoop, int noWait);
 
-/* QoS event loop prototypes */
+/* High-priority event loop prototypes */
 int aeActuateQoSEventLoopIfSupported(aeEventLoop *eventLoop, uint64_t qosPreemptPollIntervalUs, aeQoSStatsProc *qosStatsCallback);
 int aeProcessQoSEventsPreemptively(aeEventLoop *eventLoop);
 void aeSetQoSPreemptCheckInterval(aeEventLoop *eventLoop, uint64_t interval_us);

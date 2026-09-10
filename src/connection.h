@@ -436,8 +436,8 @@ static inline void connSetPriority(connection *conn, bool is_priority) {
 /* Return true if the connection has high QoS priority */
 static inline bool connIsPriority(const connection *conn) {
     return conn && conn->is_priority;
-} 
- 
+}
+
 /* Set the owner kind for the connection */
 static inline void connSetOwnerKind(connection *conn, ConnectionOwnerKind kind) {
     conn->owner_kind = kind;

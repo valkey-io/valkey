@@ -9,7 +9,7 @@
 typedef struct slotMigrationJob slotMigrationJob;
 
 bool isImportSlotMigrationJob(slotMigrationJob *job);
-void clusterHandleSlotMigrationClientClose(slotMigrationJob *job);
+void clusterHandleSlotMigrationClientClose(client *c);
 void clusterHandleSlotMigrationClientOOM(slotMigrationJob *job);
 void clusterFeedSlotExportJobs(int dbid, robj **argv, int argc, int slot);
 bool clusterIsSlotImporting(int slot);

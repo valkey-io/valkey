@@ -30,10 +30,13 @@ adapting existing replication and failover primitives:
 1. **Snapshot Transfer:** The source node transfers data to the target node. The
    source node forks a child process to iterate and serialize the slot's keys.
 
-   The source transfers data in "AOF" (Append Only File) format to the target
-   node. This format consists of a stream of commands. Consequently, the target
-   primary and target replicas replay these commands to restore the slot's
-   state.
+   By default, Valkey uses a **dual-channel** replication design for this transfer:
+   - A secondary connection (Snapshot Connection) is established from the source to the target, dedicated solely to transmitting the initial snapshot.
+   - The main connection (Control Connection) remains active for exchanging control messages (e.g. health check ACKs).
+
+   If either the source or the target node has dual-channel disabled (via the `cluster-slot-migration-dual-channel` configuration option), the system falls back to a **single-channel** design, where both control traffic and snapshot data share the same single connection.
+
+   In both modes, the source transfers data in "AOF" (Append Only File) format. The target primary and target replicas replay these commands to restore the slot's state.
 
 2. **Incremental Updates:** While transferring the initial snapshot, the source
    node serves business requests. The source node records any changes to the
@@ -53,39 +56,77 @@ adapting existing replication and failover primitives:
 
 ### 3.2 CLUSTER SYNCSLOTS
 
-The source, target, and target replica use the `CLUSTER SYNCSLOTS` command to
-coordinate the handover state:
+The source, target, and target replica use the `CLUSTER SYNCSLOTS` command to coordinate the handover state.
 
+By default (when dual-channel is negotiated), the flow separates control and snapshot traffic:
+
+```text
+     Source (Exporting)                              Target (Importing)             Target Replica
+           |                                                |                             |
+     ================= 1. Establishment & Negotiation =================
+           |                                                |                             |
+           |-- pipelined requests ------------------------->|                             |
+           |     1. SYNCSLOTS CAPA dual-channel             |                             |
+           |     2. SYNCSLOTS ESTABLISH dual-channel        |                             |
+           |                                                |--- SYNCSLOTS ESTABLISH ---->| (to replica)
+           |<-- pipelined replies --------------------------|                             |
+           |     1. +CAPA dual-channel                      |                             |
+           |     2. +OK (Establish success)                 |                             |
+           |                                                |                             |
+     ================= 2. Snapshot Link Setup =================
+           |                                                |                             |
+      (opens 2nd conn)                                      |                             |
+           |-------- SYNCSLOTS LINK-CHANNEL <name> -------->|                             |
+           |<-- +OK ----------------------------------------|                             |
+           |                                                |                             |
+     ================= 3. Snapshot Streaming =================
+      (forks child)                                         |                             |
+           |                                                |                             |
+           |-- writes snapshot ---> (on 2nd conn) --------->|                             |
+           |                                                |~~~~~~ forward snapshot ~~~~>| (to replica)
+           |------------ SYNCSLOTS SNAPSHOT-EOF ----------->|                             |
+           |                                                |                             |
+     ================= 4. Incremental & Pause ================
+           |<---------------- SYNCSLOTS REQUEST-PAUSE ------|                             |
+           |~~~~~~~~~~~~ incremental changes ~~~~~~~~~~~~~~>|                             |
+           |                                                |~~~~~~ forward changes ~~~~~>| (to replica)
+           |------------ SYNCSLOTS PAUSED ----------------->|                             |
+           |                                                |                             |
+           |<---------- SYNCSLOTS REQUEST-FAILOVER ---------|                             |
+           |                                                |                             |
+           |---------- SYNCSLOTS FAILOVER-GRANTED --------->|                             |
+           |                                                |                             |
+           |                                            (takeover)                        |
+           |                                                |------ SYNCSLOTS FINISH ---->| (to replica)
 ```
-     Source                                          Target                         Target Replica
-       |                                                |                                 |
-       |------------ SYNCSLOTS ESTABLISH -------------->|                                 |
-       |                                                |----- SYNCSLOTS ESTABLISH ------>|
-       |<-------------------- +OK ----------------------|                                 |
-       |                                                |                                 |
-       |---------------- SYNCSLOTS ACK ---------------->|                                 |
-       |                                                |                                 |
-       |~~~~~~~~~~~~~~ snapshot as AOF ~~~~~~~~~~~~~~~~>|                                 |
-       |                                                |~~~~~~ forward snapshot ~~~~~~~~>|
-       |----------- SYNCSLOTS SNAPSHOT-EOF ------------>|                                 |
-       |                                                |                                 |
-       |<----------- SYNCSLOTS REQUEST-PAUSE -----------|                                 |
-       |                                                |                                 |
-       |~~~~~~~~~~~~ incremental changes ~~~~~~~~~~~~~~>|                                 |
-       |                                                |~~~~~~ forward changes ~~~~~~~~~>|
-       |--------------- SYNCSLOTS PAUSED -------------->|                                 |
-       |                                                |                                 |
-       |<---------- SYNCSLOTS REQUEST-FAILOVER ---------|                                 |
-       |                                                |                                 |
-       |---------- SYNCSLOTS FAILOVER-GRANTED --------->|                                 |
-       |                                                |                                 |
-       |                                            (performs takeover &                  |
-       |                                             propagates topology)                 |
-       |                                                |                                 |
-       |                                                |------- SYNCSLOTS FINISH ------->|
- (finds out about topology                              |                                 |
-  change & marks migration done)                        |                                 |
-       |                                                |                                 |
+
+In single-channel fallback mode (if either node has dual-channel disabled), the flow uses a single connection for both control and data:
+
+```text
+     Source (Exporting)                              Target (Importing)             Target Replica
+           |                                                |                             |
+           |------------ SYNCSLOTS ESTABLISH -------------->|                             |
+           |                                                |--- SYNCSLOTS ESTABLISH ---->| (to replica)
+           |<-------------------- +OK ----------------------|                             |
+           |                                                |                             |
+           |---------------- SYNCSLOTS ACK ---------------->|                             |
+           |                                                |                             |
+           |~~~~~~~~~~~~~~ snapshot as AOF ~~~~~~~~~~~~~~~~>|                             |
+           |                                                |~~~~~~ forward snapshot ~~~~>| (to replica)
+           |----------- SYNCSLOTS SNAPSHOT-EOF ------------>|                             |
+           |                                                |                             |
+           |<----------- SYNCSLOTS REQUEST-PAUSE -----------|                             |
+           |                                                |                             |
+           |~~~~~~~~~~~~ incremental changes ~~~~~~~~~~~~~~>|                             |
+           |                                                |~~~~~~ forward changes ~~~~~>| (to replica)
+           |--------------- SYNCSLOTS PAUSED -------------->|                             |
+           |                                                |                             |
+           |<---------- SYNCSLOTS REQUEST-FAILOVER ---------|                             |
+           |                                                |                             |
+           |---------- SYNCSLOTS FAILOVER-GRANTED --------->|                             |
+           |                                                |                             |
+           |                                            (takeover)                        |
+           |                                                |------ SYNCSLOTS FINISH ---->| (to replica)
 ```
 
 Throughout the migration, both the source and target nodes exchange periodic

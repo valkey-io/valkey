@@ -717,12 +717,20 @@ test {Invalid role name in config on startup fails} {
     catch {exec $::VALKEY_SERVER_BIN --role "" +get} err
     assert_match {*Role names can't be empty*} $err
 
-    catch {exec $::VALKEY_SERVER_BIN --aclfile tests/assets/role-invalid-name.acl} err
+    set aclfile [tmpfile "role-invalid-name.acl"]
+    set fd [open $aclfile w]
+    puts $fd "role bad,name +get"
+    close $fd
+    catch {exec $::VALKEY_SERVER_BIN --aclfile $aclfile} err
     assert_match {*invalid role name*commas*} $err
 } {} {external:skip}
 
 # Test invalid role rule in config on startup
 test {Invalid role rule in config on startup fails} {
-    catch {exec $::VALKEY_SERVER_BIN tests/assets/role-invalid-rule.conf} err
+    set conffile [tmpfile "role-invalid-rule.conf"]
+    set fd [open $conffile w]
+    puts $fd "role badrole >password"
+    close $fd
+    catch {exec $::VALKEY_SERVER_BIN $conffile} err
     assert_match {*Error in role declaration*} $err
 } {} {external:skip}

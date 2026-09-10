@@ -58,4 +58,5 @@ cmake-build-debug/
 cmake-build-release/
 __pycache__
 src/unit/.flags
-docs/superpowers/*
+valkey-unit-tests
+src/.idea/*

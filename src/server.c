@@ -8116,10 +8116,18 @@ __attribute__((weak)) int main(int argc, char **argv) {
  * MSET specific command extended options - XX/NX
  * HGET specific command extended options - PERSIST
  * HSET specific command extended options - NX/XX/FXX/FNX
- * Common command extended options - EX/EXAT/PX/PXAT/KEEPTTL
+* GET specific command extended options - PERSIST
+* SET specific command extended options - XX/NX/GET/IFEQ
+* MSET specific command extended options - XX/NX
+* HGET specific command extended options - PERSIST
+* HSET specific command extended options - NX/XX/FXX/FNX
+* INCREX specific command extended options - INCRBY/INCRBYFLOAT
+* Common command extended options - EX/EXAT/PX/PXAT/KEEPTTL
  *
  * Function takes pointers to client, flags, unit, expire_idx, pointer to pointer of expire obj,
- * pointer to pointer of compare obj if needed to be determined and command_type which can be COMMAND_*.
+* Function takes pointers to client, flags, unit, expire_idx, pointer to pointer of expire obj,
+* pointer to pointer of compare obj, pointer to pointer of incrby obj, and command_type
+* which can be COMMAND_*.
  *
  * If there are any syntax violations C_ERR is returned else C_OK is returned.
  *
@@ -8254,7 +8262,7 @@ int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_
                    !(*flags & ARGS_BYINT) && !(*flags & ARGS_BYFLOAT) && next)
         {
             *flags |= ARGS_BYINT;
-            *incrby_val = next;
+            if (incrby_val) *incrby_val = next;
             j++;
         } else if ((opt[0] == 'b' || opt[0] == 'B') &&
                    (opt[1] == 'y' || opt[1] == 'Y') &&
@@ -8267,7 +8275,7 @@ int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_
                    !(*flags & ARGS_BYINT) && !(*flags & ARGS_BYFLOAT) && next)
         {
             *flags |= ARGS_BYFLOAT;
-            *incrby_val = next;
+            if (incrby_val) *incrby_val = next;
             j++;
         } else {
             addReplyErrorObject(c, shared.syntaxerr);

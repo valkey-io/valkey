@@ -28,6 +28,7 @@
  */
 
 #include "server.h"
+#include "hotkeys.h"
 #include "ordered_index.h"
 #include "cluster.h"
 #include "cluster_migrateslots.h"
@@ -38,7 +39,10 @@
 #include "module.h"
 #include "vector.h"
 #include "expire.h"
+#include "bgiteration.h"
+#include "forkless.h"
 #include "crc16_slottable.h"
+#include "bgiteration.h"
 
 /*-----------------------------------------------------------------------------
  * C-level DB API
@@ -122,6 +126,10 @@ robj *lookupKey(serverDb *db, robj *key, int flags) {
         if (!(flags & (LOOKUP_NOSTATS | LOOKUP_WRITE))) server.stat_keyspace_misses++;
         /* TODO: Use separate misses stats and notify event for WRITE */
     }
+
+    /* Charge this lookup to hot-key detection. All the policy (whether detection
+     * is on, which lookups count, and sampling) lives in hotkeys.c. */
+    hotkeysRecordLookup(key, db->id, flags);
 
     return val;
 }
@@ -369,6 +377,7 @@ static void dbSetValue(serverDb *db, robj *key, robj **valref, int overwrite, vo
         objectSetLRU(val, objectGetLRU(old));
         long long expire = objectGetExpire(old);
         new = objectSetKeyAndExpire(val, objectGetVal(key), expire);
+        bgIteration_updateDbEntryPtr(old, new);
         *oldref = new;
         /* Replace the old value at its location in the expire space. */
         if (expire >= 0) {
@@ -438,6 +447,7 @@ void setKey(client *c, serverDb *db, robj *key, robj **valref, int flags) {
     } else {
         dbSetValue(db, key, valref, 1, NULL);
     }
+    bgIteration_dbEntryModified(*valref);
     if (!(flags & SETKEY_KEEPTTL)) removeExpire(db, key);
     if (!(flags & SETKEY_NO_SIGNAL)) signalModifiedKey(c, db, key);
 }
@@ -483,6 +493,9 @@ int dbGenericDeleteWithDictIndex(serverDb *db, robj *key, int async, int flags, 
     hashtablePosition pos;
     void **ref = kvstoreHashtableTwoPhasePopFindRef(db->keys, dict_index, objectGetVal(key), &pos);
     if (ref != NULL) {
+        bgIteration_keyDelete(db->id, (sds)objectGetVal(key));
+        hotkeysRecordDelete(key, db->id, flags);
+
         robj *val = *ref;
         /* VM_StringDMA may call dbUnshareStringValue which may free val, so we
          * need to incr to retain val */
@@ -672,6 +685,9 @@ long long emptyData(int dbnum, int flags, void(callback)(hashtable *)) {
         return -1;
     }
 
+    /* bgIteration must be notified for flushall. */
+    if (dbnum == -1) bgIteration_flushall();
+
     /* Fire the flushdb modules event. */
     moduleFireServerEvent(VALKEYMODULE_EVENT_FLUSHDB, VALKEYMODULE_SUBEVENT_FLUSHDB_START, &fi);
 
@@ -690,6 +706,13 @@ long long emptyData(int dbnum, int flags, void(callback)(hashtable *)) {
 
     /* Empty the database structure. */
     removed = emptyDbStructure(server.db, dbnum, async, callback);
+
+    if (hotkeysEnabled()) {
+        if (dbnum == -1)
+            hotkeysPurgeAll();
+        else
+            hotkeysPurgeDb(dbnum);
+    }
 
     if (dbnum == -1) flushReplicaKeysWithExpireList(async);
 
@@ -762,6 +785,7 @@ long long dbTotalServerKeyCount(void) {
 void signalModifiedKey(client *c, serverDb *db, robj *key) {
     touchWatchedKey(db, key);
     trackingInvalidateKey(c, key, 1);
+    bgIteration_keyModified(db->id, objectGetVal(key));
 }
 
 void signalFlushedDb(int dbid, int async) {
@@ -797,9 +821,8 @@ void signalFlushedDb(int dbid, int async) {
  * async: flushes the database in an async manner.
  * no option: determine sync or async according to the value of lazyfree-lazy-user-flush.
  *
- * On success C_OK is returned and the flags are stored in *flags, otherwise
- * C_ERR is returned and the function sends an error to the client. */
-int getFlushCommandFlags(client *c, int *flags) {
+ * On success the C_OK is returned, otherwise C_ERR is returned. */
+int parseFlushCommandFlags(client *c, int *flags) {
     /* Parse the optional ASYNC option. */
     if (c->argc == 2 && !strcasecmp(objectGetVal(c->argv[1]), "sync")) {
         *flags = EMPTYDB_NO_FLAGS;
@@ -808,16 +831,23 @@ int getFlushCommandFlags(client *c, int *flags) {
     } else if (c->argc == 1) {
         *flags = server.lazyfree_lazy_user_flush ? EMPTYDB_ASYNC : EMPTYDB_NO_FLAGS;
     } else {
-        addReplyErrorObject(c, shared.syntaxerr);
         return C_ERR;
     }
     return C_OK;
 }
 
+/* Parses the flush command flags and returns an error to the client on failure */
+int parseFlushCommandFlagsOrReply(client *c, int *flags) {
+    int result = parseFlushCommandFlags(c, flags);
+    if (result == C_ERR) addReplyErrorObject(c, shared.syntaxerr);
+    return result;
+}
+
 /* Flushes the whole server data set. */
 void flushAllDataAndResetRDB(int flags) {
     server.dirty += emptyData(-1, flags, NULL);
-    if (server.child_type == CHILD_TYPE_RDB) killRDBChild();
+    if (isForkBgsaveInProgress()) killRDBChild();
+    if (isForklessSaveInProgress()) forklessSaveCancel();
     if (server.child_type == CHILD_TYPE_SLOT_MIGRATION) killSlotMigrationChild();
     if (server.saveparamslen > 0) {
         rdbSaveInfo rsi, *rsiptr;
@@ -839,7 +869,7 @@ void flushAllDataAndResetRDB(int flags) {
 void flushdbCommand(client *c) {
     int flags;
 
-    if (getFlushCommandFlags(c, &flags) == C_ERR) return;
+    if (parseFlushCommandFlagsOrReply(c, &flags) == C_ERR) return;
 
     /* flushdb should not flush the functions */
     server.dirty += emptyData(c->db->id, flags | EMPTYDB_NOFUNCTIONS, NULL);
@@ -863,7 +893,7 @@ void flushdbCommand(client *c) {
  * Flushes the whole server data set. */
 void flushallCommand(client *c) {
     int flags;
-    if (getFlushCommandFlags(c, &flags) == C_ERR) return;
+    if (parseFlushCommandFlagsOrReply(c, &flags) == C_ERR) return;
 
     /* flushall should not flush the functions */
     flushAllDataAndResetRDB(flags | EMPTYDB_NOFUNCTIONS);
@@ -1495,6 +1525,8 @@ void shutdownCommand(client *c) {
         return;
     }
 
+    /* Clear pending_command to avoid re-execution. */
+    c->flag.pending_command = 0;
     blockClientShutdown(c);
     if (prepareForShutdown(c, flags) == C_OK) exit(0);
     /* If we're here, then shutdown is ongoing (the client is still blocked) or
@@ -1979,10 +2011,16 @@ long long getExpire(serverDb *db, robj *key) {
     return getExpireWithDictIndex(db, key, dict_index);
 }
 
+/* Delete the specified expired key and propagate expire.
+ *
+ * This function does not incr the dirty counter since we don't want to
+ * propagate the read command on lazy expire. Caller needs to increment
+ * it themselves if necessary. */
 void deleteExpiredKeyAndPropagateWithDictIndex(serverDb *db, robj *keyobj, int dict_index) {
     mstime_t expire_latency;
     latencyStartMonitor(expire_latency);
-    dbGenericDeleteWithDictIndex(db, keyobj, server.lazyfree_lazy_expire, DB_FLAG_KEY_EXPIRED, dict_index);
+    int deleted = dbGenericDeleteWithDictIndex(db, keyobj, server.lazyfree_lazy_expire, DB_FLAG_KEY_EXPIRED, dict_index);
+    serverAssertWithInfo(NULL, keyobj, deleted);
     latencyEndMonitor(expire_latency);
     latencyAddSampleIfNeeded("expire-del", expire_latency);
     latencyTraceIfNeeded(db, expire_del, expire_latency);
@@ -2111,8 +2149,10 @@ size_t dbReclaimExpiredFields(robj *o, serverDb *db, mstime_t now, unsigned long
             dbDelete(db, keyobj);
             propagateDeletion(db, keyobj, server.lazyfree_lazy_expire, didx);
             notifyKeyspaceEvent(NOTIFY_GENERIC, "del", keyobj, db->id);
+            server.dirty++;
         } else {
             if (!hashTypeHasVolatileFields(o)) dbUntrackKeyWithVolatileItems(db, o);
+            server.dirty += (long long)expired;
         }
         signalModifiedKey(NULL, db, keyobj);
         exitExecutionUnit();
@@ -2293,7 +2333,7 @@ robj *dbFindExpires(serverDb *db, sds key) {
 }
 
 unsigned long long dbSize(serverDb *db) {
-    return kvstoreSize(db->keys);
+    return (db->keys) ? kvstoreSize(db->keys) : 0;
 }
 
 unsigned long long dbScan(serverDb *db, unsigned long long cursor, kvstoreScanFunction scan_cb, void *privdata) {
@@ -2712,16 +2752,21 @@ int genericGetKeys(int storeKeyOfs,
     keys = getKeysPrepareResult(result, numkeys);
     result->numkeys = numkeys;
 
-    /* Add all key positions for argv[firstKeyOfs...n] to keys[] */
-    for (i = 0; i < num; i++) {
-        keys[i].pos = firstKeyOfs + (i * keyStep);
-        keys[i].flags = 0;
+    int keyIdx = 0;
+    /* If there's a destination key, put this first */
+    if (storeKeyOfs) {
+        keys[keyIdx].pos = storeKeyOfs;
+        keys[keyIdx].flags = 0;
+        keyIdx++;
     }
 
-    if (storeKeyOfs) {
-        keys[num].pos = storeKeyOfs;
-        keys[num].flags = 0;
+    /* Add all key positions for argv[firstKeyOfs...n] to keys[] */
+    for (i = 0; i < num; i++) {
+        keys[keyIdx].pos = firstKeyOfs + (i * keyStep);
+        keys[keyIdx].flags = 0;
+        keyIdx++;
     }
+
     return result->numkeys;
 }
 

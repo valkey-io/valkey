@@ -27,7 +27,7 @@ unsigned char *lpSkip(unsigned char *p);
 /* Macros from listpack.c needed for testing */
 #define LP_HDR_SIZE 6u /* 32 bit total len + 16 bit number of elements. */
 #define LP_EOF 0xFF
-#define LP_HDR_NUMELE_UNKNOWN (uint32_t) UINT16_MAX
+#define LP_HDR_NUMELE_UNKNOWN (uint32_t)UINT16_MAX
 #define LP_HDR_NUMELE_UNKNOWN_UL (unsigned long)UINT16_MAX
 #define LP_ENCODING_7BIT_UINT_MASK 0x80
 #define LP_ENCODING_IS_7BIT_UINT(byte) (((byte) & LP_ENCODING_7BIT_UINT_MASK) == 0)
@@ -937,6 +937,32 @@ TEST_F(ListpackTest, listpackLpFind) {
                 (unsigned char *)("hello"), 5);
     verifyEntry(lpFind(lp, lpFirst(lp), (unsigned char *)("1024"), 4, 0),
                 (unsigned char *)("1024"), 4);
+    lpFree(lp);
+}
+
+TEST_F(ListpackTest, listpackLpFindInteger) {
+    unsigned char *lp = lpNew(0);
+    lp = lpAppendInteger(lp, 42);
+    lp = lpAppendInteger(lp, -100);
+    lp = lpAppend(lp, (unsigned char *)"hello", 5);
+    lp = lpAppendInteger(lp, 1024);
+
+    /* Should find existing integers */
+    ASSERT_NE(lpFindInteger(lp, lpFirst(lp), 42, 0), nullptr);
+    ASSERT_NE(lpFindInteger(lp, lpFirst(lp), -100, 0), nullptr);
+    ASSERT_NE(lpFindInteger(lp, lpFirst(lp), 1024, 0), nullptr);
+
+    /* Should not find non-existent integer */
+    ASSERT_EQ(lpFindInteger(lp, lpFirst(lp), 999, 0), nullptr);
+
+    /* String entry "hello" should not match any integer search */
+    ASSERT_EQ(lpFindInteger(lp, lpFirst(lp), 0, 0), nullptr);
+
+    /* String "42" and integer 42 should find the same listpack entry */
+    unsigned char *ptr_by_int = lpFindInteger(lp, lpFirst(lp), 42, 0);
+    unsigned char *ptr_by_str = lpFind(lp, lpFirst(lp), (unsigned char *)"42", 2, 0);
+    ASSERT_EQ(ptr_by_int, ptr_by_str);
+
     lpFree(lp);
 }
 

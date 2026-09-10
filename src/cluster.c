@@ -296,7 +296,7 @@ void restoreCommand(client *c) {
     }
 
     /* Create the key and set the TTL if any */
-    dbAdd(c->db, key, &obj);
+    dbAddWithFlags(c->db, key, &obj, DBADD_NO_DEFAULT_TTL_MS);
     if (ttl) {
         obj = setExpire(c, c->db, key, ttl);
         if (!absttl) {

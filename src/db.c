@@ -52,6 +52,140 @@ static int objectIsExpired(robj *val);
 static void dbSetValue(serverDb *db, robj *key, robj **valref, int overwrite, void **oldref);
 static robj *dbFindWithDictIndex(serverDb *db, sds key, int dict_index);
 
+/* Tracks a default deadline already attached to a newly created key, so its
+ * expiration can be propagated after the creating write. The context owns the
+ * retained key reference and index_key until finalization, even if a later
+ * deletion or explicit TTL change cancels the record. */
+typedef struct defaultTTLMSRecord {
+    struct defaultTTLMSRecord *next;
+    serverDb *db;
+    robj *key;
+    sds index_key; /* Database ID plus key name, used for cancellation lookup. */
+    mstime_t deadline; /* Absolute millisecond expiry, not a relative duration. */
+    bool active; /* False when this pending default has been superseded. */
+} defaultTTLMSRecord;
+
+/* Per-call bookkeeping, stacked for nested command execution. The linked list
+ * preserves creation order and owns all records; the index contains only live
+ * records for fast cancellation. Finalization queues surviving expirations
+ * after the command's write and releases the frame. */
+struct defaultTTLMSContext {
+    defaultTTLMSContext *previous;
+    defaultTTLMSRecord *first, *last;
+    rax *index; /* Allocated lazily when the first default deadline is recorded. */
+    int nesting; /* Only creations at this execution depth belong to the frame. */
+    bool eligible; /* Accepts native writes; cleared before result callbacks. */
+};
+
+static defaultTTLMSContext *default_ttl_ms_context;
+
+/* A separate frame for each native call keeps script/transaction expirations
+ * next to their creating operation in the propagation stream. Module-owned
+ * writes and callbacks remain outside this policy until their propagation
+ * ownership is supported. Returns NULL when the policy is off and no parent
+ * frame exists; otherwise even an ineligible call gets its own frame so it
+ * cannot accidentally register creations in its parent's context. */
+defaultTTLMSContext *beginDefaultTTLMS(client *c) {
+    if (!server.default_ttl_ms && !default_ttl_ms_context) return NULL;
+    defaultTTLMSContext *ctx = zcalloc(sizeof(*ctx));
+    ctx->previous = default_ttl_ms_context;
+    ctx->nesting = server.execution_nesting;
+    ctx->eligible = !server.loading && !mustObeyClient(c) &&
+                    (c->cmd->flags & CMD_WRITE) && !(c->cmd->flags & CMD_MODULE);
+    default_ttl_ms_context = ctx;
+    return ctx;
+}
+
+/* Build a binary lookup key that distinguishes equal names in different DBs.
+ * The caller owns the returned SDS. */
+static sds defaultTTLMSIndexKey(serverDb *db, robj *key) {
+    sds index_key = sdsnewlen(&db->id, sizeof(db->id));
+    sds name = objectGetVal(key);
+    return sdscatlen(index_key, name, sdslen(name));
+}
+
+/* Stop accepting creations before command-result and expiry notifications.
+ * Those callbacks have their own execution nesting and may invoke modules. */
+void sealDefaultTTLMS(defaultTTLMSContext *ctx) {
+    if (ctx) ctx->eligible = false;
+}
+
+/* Cancel pending propagation, not the key's actual expiration. Search parent
+ * frames too, since nested operations can delete or change a parent's key.
+ * Keep cancelled records in their owning lists for cleanup at finalization. */
+static void cancelDefaultTTLMS(serverDb *db, robj *key) {
+    if (!default_ttl_ms_context) return;
+    sds index_key = NULL;
+    for (defaultTTLMSContext *ctx = default_ttl_ms_context; ctx; ctx = ctx->previous) {
+        if (!ctx->index) continue;
+        if (!index_key) index_key = defaultTTLMSIndexKey(db, key);
+        void *record;
+        if (raxRemove(ctx->index, (unsigned char *)index_key, sdslen(index_key), &record))
+            ((defaultTTLMSRecord *)record)->active = false;
+    }
+    sdsfree(index_key);
+}
+
+/* Called after insertion has attached the deadline in an eligible frame.
+ * Retain the key until finalization and append in creation order. If the same
+ * name is registered again, only the latest record remains in the index;
+ * the superseded record is retained solely for cleanup. */
+static void registerDefaultTTLMS(serverDb *db, robj *key, mstime_t deadline) {
+    defaultTTLMSContext *ctx = default_ttl_ms_context;
+    defaultTTLMSRecord *record = zcalloc(sizeof(*record));
+    record->db = db;
+    record->key = key;
+    incrRefCount(key);
+    record->index_key = defaultTTLMSIndexKey(db, key);
+    record->deadline = deadline;
+    record->active = true;
+    if (!ctx->index) ctx->index = raxNew();
+    void *old = NULL;
+    if (!raxInsert(ctx->index, (unsigned char *)record->index_key, sdslen(record->index_key), record, &old)) {
+        serverAssert(old != NULL);
+        ((defaultTTLMSRecord *)old)->active = false;
+    }
+    if (ctx->last) ctx->last->next = record;
+    else ctx->first = record;
+    ctx->last = record;
+}
+
+/* Finalize the current frame after the caller has queued the data write.
+ * Propagate only active records whose key still has the recorded deadline,
+ * using the write's targets and absolute times so replay does not recompute
+ * TTLs. A zero target suppresses propagation, but not cleanup or notification.
+ * Free all records, then restore the parent execution frame. */
+void endDefaultTTLMS(defaultTTLMSContext *ctx, int target) {
+    if (!ctx) return;
+    serverAssert(default_ttl_ms_context == ctx);
+    for (defaultTTLMSRecord *record = ctx->first; record;) {
+        defaultTTLMSRecord *next = record->next;
+        int slot = getKVStoreIndexForKey(objectGetVal(record->key));
+        robj *val = dbFindWithDictIndex(record->db, objectGetVal(record->key), slot);
+        /* Detach before notifications, whose callbacks may change keys.
+         * Inactive records have already been removed or superseded. */
+        if (record->active)
+            raxRemove(ctx->index, (unsigned char *)record->index_key, sdslen(record->index_key), NULL);
+        if (record->active && val && objectGetExpire(val) == record->deadline) {
+            record->active = false;
+            if (target) {
+                robj *deadline = createStringObjectFromLongLong(record->deadline);
+                robj *argv[] = {shared.pexpireat, record->key, deadline};
+                alsoPropagate(record->db->id, argv, 3, target, server.cluster_enabled ? slot : -1);
+                decrRefCount(deadline);
+            }
+            notifyKeyspaceEvent(NOTIFY_GENERIC, "expire", record->key, record->db->id);
+        }
+        decrRefCount(record->key);
+        sdsfree(record->index_key);
+        zfree(record);
+        record = next;
+    }
+    if (ctx->index) raxFree(ctx->index);
+    default_ttl_ms_context = ctx->previous;
+    zfree(ctx);
+}
+
 
 /* Lookup a key for read or write operations, or return NULL if the key is not
  * found in the specified DB. This function implements the functionality of
@@ -205,14 +339,22 @@ void dbUpdateObjectWithVolatileItemsTracking(serverDb *db, robj *o) {
  *
  * If the update_if_existing argument is false, the program is aborted
  * if the key already exists, otherwise, it can fall back to dbOverwrite. */
-static void dbAddInternal(serverDb *db, robj *key, robj **valref, int update_if_existing) {
+typedef enum {
+    DBADD_REPLACED,
+    DBADD_CREATED,
+    DBADD_CREATED_WITH_DEFAULT_TTL_MS
+} dbAddResult;
+
+/* Reports whether the key was replaced or created with or without a default
+ * deadline. setKey uses this to avoid immediately clearing the new deadline. */
+static dbAddResult dbAddInternal(serverDb *db, robj *key, robj **valref, int update_if_existing, int flags) {
     int dict_index = getKVStoreIndexUsingCachedSlot(objectGetVal(key));
     void **oldref = NULL;
     if (update_if_existing) {
         oldref = kvstoreHashtableFindRef(db->keys, dict_index, objectGetVal(key));
         if (oldref != NULL) {
             dbSetValue(db, key, valref, 1, oldref);
-            return;
+            return DBADD_REPLACED;
         }
     } else {
         debugServerAssertWithInfo(NULL, key, kvstoreHashtableFindRef(db->keys, dict_index, objectGetVal(key)) == NULL);
@@ -220,19 +362,39 @@ static void dbAddInternal(serverDb *db, robj *key, robj **valref, int update_if_
 
     /* Not existing. Convert val to valkey object and insert. */
     robj *val = *valref;
-    val = objectSetKeyAndExpire(val, objectGetVal(key), -1);
+    mstime_t deadline = -1;
+    defaultTTLMSContext *ctx = default_ttl_ms_context;
+    if (!(flags & DBADD_NO_DEFAULT_TTL_MS) && !server.loading && server.default_ttl_ms && ctx && ctx->eligible &&
+        ctx->nesting == server.execution_nesting) {
+        serverAssert(server.default_ttl_ms <= DEFAULT_TTL_MS_MAX);
+        deadline = commandTimeSnapshot() + server.default_ttl_ms;
+    }
+    val = objectSetKeyAndExpire(val, objectGetVal(key), deadline);
     /* Track hash object if it has volatile fields (for active expiry).
      * For example, this is needed when a hash is moved to a new DB (e.g. MOVE). */
     dbTrackKeyWithVolatileItems(db, val);
     initObjectLRUOrLFU(val);
     kvstoreHashtableAdd(db->keys, dict_index, val);
+    if (deadline != -1) {
+        serverAssert(kvstoreHashtableAdd(db->expires, dict_index, val));
+        registerDefaultTTLMS(db, key, deadline);
+        if (server.primary_host && !server.repl_replica_ro) rememberReplicaKeyWithExpire(db, key);
+    }
     signalKeyAsReady(db, key, val->type);
     notifyKeyspaceEvent(NOTIFY_NEW, "new", key, db->id);
     *valref = val;
+    return deadline == -1 ? DBADD_CREATED : DBADD_CREATED_WITH_DEFAULT_TTL_MS;
 }
 
 void dbAdd(serverDb *db, robj *key, robj **valref) {
-    dbAddInternal(db, key, valref, 0);
+    dbAddWithFlags(db, key, valref, 0);
+}
+
+/* Insert a missing key with optional default-TTL bypass. The bypass preserves
+ * caller-controlled expiration semantics (for example RESTORE); it does not
+ * itself assign an explicit expiry. Ownership is the same as dbAddInternal. */
+void dbAddWithFlags(serverDb *db, robj *key, robj **valref, int flags) {
+    dbAddInternal(db, key, valref, 0, flags);
 }
 
 /* Returns which dict index should be used with kvstore for a given key, computed from the key itself. */
@@ -436,24 +598,17 @@ void setKey(client *c, serverDb *db, robj *key, robj **valref, int flags) {
     else if (!(flags & SETKEY_DOESNT_EXIST))
         keyfound = (lookupKeyWrite(db, key) != NULL);
 
+    dbAddResult result = DBADD_REPLACED;
+    int add_flags = (flags & (SETKEY_NO_DEFAULT_TTL_MS | SETKEY_KEEPTTL)) ? DBADD_NO_DEFAULT_TTL_MS : 0;
     if (!keyfound) {
-        dbAdd(db, key, valref);
+        result = dbAddInternal(db, key, valref, 0, add_flags);
     } else if (keyfound < 0) {
-        dbAddInternal(db, key, valref, 1);
+        result = dbAddInternal(db, key, valref, 1, add_flags);
     } else {
         dbSetValue(db, key, valref, 1, NULL);
     }
-    if (!(flags & SETKEY_KEEPTTL)) removeExpire(db, key);
+    if (result != DBADD_CREATED_WITH_DEFAULT_TTL_MS && !(flags & SETKEY_KEEPTTL)) removeExpire(db, key);
     if (!(flags & SETKEY_NO_SIGNAL)) signalModifiedKey(c, db, key);
-}
-
-/* Return the policy's absolute expiry, or -1 when this write must not use it. */
-mstime_t getDefaultTTLMSExpireTime(client *c) {
-    /* Replication, AOF replay, and slot migration apply authoritative history,
-     * so they must not gain this node's local default TTL. */
-    if (server.default_ttl_ms == 0 || c == NULL || mustObeyClient(c)) return -1;
-    serverAssert(server.default_ttl_ms <= DEFAULT_TTL_MS_MAX);
-    return commandTimeSnapshot() + server.default_ttl_ms;
 }
 
 /* Return a random key, in form of an Object.
@@ -494,6 +649,7 @@ robj *dbRandomKey(serverDb *db) {
 }
 
 int dbGenericDeleteWithDictIndex(serverDb *db, robj *key, int async, int flags, int dict_index) {
+    cancelDefaultTTLMS(db, key);
     hashtablePosition pos;
     void **ref = kvstoreHashtableTwoPhasePopFindRef(db->keys, dict_index, objectGetVal(key), &pos);
     if (ref != NULL) {
@@ -1554,7 +1710,7 @@ void renameGenericCommand(client *c, int nx) {
         dbDelete(c->db, c->argv[2]);
     }
     dbDelete(c->db, c->argv[1]);
-    dbAdd(c->db, c->argv[2], &o);
+    dbAddWithFlags(c->db, c->argv[2], &o, DBADD_NO_DEFAULT_TTL_MS);
     if (expire != -1) o = setExpire(c, c->db, c->argv[2], expire);
     signalModifiedKey(c, c->db, c->argv[1]);
     signalModifiedKey(c, c->db, c->argv[2]);
@@ -1593,7 +1749,7 @@ void moveCommand(client *c) {
             return;
         }
     }
-    set_key_flags |= SETKEY_NO_SIGNAL;
+    set_key_flags |= SETKEY_NO_SIGNAL | SETKEY_NO_DEFAULT_TTL_MS;
 
     /* Obtain source and target DB pointers */
     src = c->db;
@@ -1728,7 +1884,7 @@ void copyCommand(client *c) {
         dbDelete(dst, newkey);
     }
 
-    dbAdd(dst, newkey, &newobj);
+    dbAddWithFlags(dst, newkey, &newobj, DBADD_NO_DEFAULT_TTL_MS);
     if (expire != -1) newobj = setExpire(c, dst, newkey, expire);
 
     /* OK! key copied */
@@ -1926,6 +2082,7 @@ void swapdbCommand(client *c) {
  *----------------------------------------------------------------------------*/
 
 int removeExpire(serverDb *db, robj *key) {
+    cancelDefaultTTLMS(db, key);
     int dict_index = getKVStoreIndexUsingCachedSlot(objectGetVal(key));
     void *popped;
     if (kvstoreHashtablePop(db->expires, dict_index, objectGetVal(key), &popped)) {
@@ -1946,6 +2103,7 @@ int removeExpire(serverDb *db, robj *key) {
  * This functions may reallocate the value. The new allocation is returned and
  * the old object's reference counter is decremented and possibly freed. */
 robj *setExpire(client *c, serverDb *db, robj *key, long long when) {
+    cancelDefaultTTLMS(db, key);
     /* TODO: Add val as a parameter to this function, to avoid looking it up. */
     robj *val;
 

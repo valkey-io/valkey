@@ -47,6 +47,40 @@ start_server {tags {expire}} {
         assert_equal $before [r pexpiretime default-ttl-ms:explicit]
     }
 
+    test {default-ttl-ms applies to every newly created built-in key type} {
+        r set default-ttl-ms:string-created value
+        r hset default-ttl-ms:hash-created field value
+        r sadd default-ttl-ms:set-created member
+        r zadd default-ttl-ms:zset-created 1 member
+        r xadd default-ttl-ms:stream-created * field value
+        r pfadd default-ttl-ms:hll-created member
+
+        foreach key {
+            default-ttl-ms:string-created
+            default-ttl-ms:hash-created
+            default-ttl-ms:set-created
+            default-ttl-ms:zset-created
+            default-ttl-ms:stream-created
+            default-ttl-ms:hll-created
+        } {
+            set ttl [r pttl $key]
+            assert {$ttl > 9000 && $ttl <= 10000}
+        }
+    }
+
+    test {default-ttl-ms applies only on creation, not replacement or mutation} {
+        r config set default-ttl-ms 0
+        r set default-ttl-ms:existing-string old PX 30000
+        r hset default-ttl-ms:existing-hash old value
+        r config set default-ttl-ms 10000
+
+        r set default-ttl-ms:existing-string new
+        assert_equal -1 [r pttl default-ttl-ms:existing-string]
+
+        r hset default-ttl-ms:existing-hash new value
+        assert_equal -1 [r pttl default-ttl-ms:existing-hash]
+    }
+
     test {default-ttl-ms applies when LPUSH and RPUSH create lists} {
         assert_equal 2 [r lpush default-ttl-ms:lpush a b]
         set lpush_ttl [r pttl default-ttl-ms:lpush]
@@ -123,6 +157,7 @@ start_server {tags {expire}} {
 
     test {BLMOVE propagates normalized LMOVE before destination expiration} {
         r rpush default-ttl-ms:blmove-source a b
+        r set default-ttl-ms:stream-sentinel-1 0 KEEPTTL
         set repl [attach_to_replication_stream]
 
         assert_equal b [r blmove default-ttl-ms:blmove-source default-ttl-ms:blmove-destination RIGHT LEFT 0]
@@ -137,6 +172,139 @@ start_server {tags {expire}} {
         }
         close_replication_stream $repl
     } {} {needs:repl}
+
+    test {default-ttl-ms is visible inside scripts and explicit changes win} {
+        assert_equal {10000 -1 30000} [r eval {
+            redis.call('hset', KEYS[1], 'f', 'v')
+            local initial = redis.call('pttl', KEYS[1])
+            redis.call('persist', KEYS[1])
+            local persistent = redis.call('pttl', KEYS[1])
+            redis.call('pexpire', KEYS[1], 30000)
+            return {initial, persistent, redis.call('pttl', KEYS[1])}
+        } 1 default-ttl-ms:script]
+    }
+
+    test {default-ttl-ms handles duplicate assignments and recreated keys} {
+        r mset default-ttl-ms:duplicate first default-ttl-ms:duplicate second
+        assert_equal second [r get default-ttl-ms:duplicate]
+        assert_equal -1 [r pttl default-ttl-ms:duplicate]
+        assert_equal 10000 [r eval {
+            redis.call('sadd', KEYS[1], 'first')
+            redis.call('del', KEYS[1])
+            redis.call('sadd', KEYS[1], 'second')
+            return redis.call('pttl', KEYS[1])
+        } 1 default-ttl-ms:recreated]
+        r set default-ttl-ms:failed-condition old PX 30000
+        set deadline [r pexpiretime default-ttl-ms:failed-condition]
+        assert_equal old [r set default-ttl-ms:failed-condition new NX GET]
+        assert_equal $deadline [r pexpiretime default-ttl-ms:failed-condition]
+    }
+
+    test {default-ttl-ms preserves transfer and restore expiration state} {
+        r set default-ttl-ms:transfer value KEEPTTL
+        r copy default-ttl-ms:transfer default-ttl-ms:copied
+        r rename default-ttl-ms:copied default-ttl-ms:renamed
+        assert_equal -1 [r pttl default-ttl-ms:renamed]
+        set payload [r dump default-ttl-ms:transfer]
+        r restore default-ttl-ms:restored 0 $payload
+        assert_equal -1 [r pttl default-ttl-ms:restored]
+        r restore default-ttl-ms:restored-explicit 30000 $payload
+        assert_range [r pttl default-ttl-ms:restored-explicit] 29000 30000
+        r move default-ttl-ms:renamed 10
+        r select 10
+        assert_equal -1 [r pttl default-ttl-ms:renamed]
+        assert_equal OK [r select 9]
+    } {} {cluster:skip}
+
+    test {RDB reload preserves original deadlines and persistent keys} {
+        r set default-ttl-ms:rdb-persistent value KEEPTTL
+        r hset default-ttl-ms:rdb-expiring f v
+        set deadline [r pexpiretime default-ttl-ms:rdb-expiring]
+        r config set default-ttl-ms 60000
+        r debug reload
+        assert_equal -1 [r pttl default-ttl-ms:rdb-persistent]
+        assert_equal $deadline [r pexpiretime default-ttl-ms:rdb-expiring]
+    } {} {needs:debug external:skip}
+}
+
+start_server {tags {expire external:skip needs:debug} overrides {appendonly yes save {}}} {
+    test {AOF replay and rewrite preserve default-ttl-ms deadlines} {
+        r config set default-ttl-ms 0
+        r set default-ttl-ms:aof-persistent value
+        r config set default-ttl-ms 60000
+        r hset default-ttl-ms:aof-hash f v
+        r sadd default-ttl-ms:aof-set m
+        set hash_deadline [r pexpiretime default-ttl-ms:aof-hash]
+        set set_deadline [r pexpiretime default-ttl-ms:aof-set]
+        r config set default-ttl-ms 120000
+        r debug loadaof
+        assert_equal -1 [r pttl default-ttl-ms:aof-persistent]
+        assert_equal $hash_deadline [r pexpiretime default-ttl-ms:aof-hash]
+        assert_equal $set_deadline [r pexpiretime default-ttl-ms:aof-set]
+        foreach preamble {yes no} {
+            r config set aof-use-rdb-preamble $preamble
+            r bgrewriteaof
+            waitForBgrewriteaof r
+            r debug loadaof
+            assert_equal -1 [r pttl default-ttl-ms:aof-persistent]
+            assert_equal $hash_deadline [r pexpiretime default-ttl-ms:aof-hash]
+            assert_equal $set_deadline [r pexpiretime default-ttl-ms:aof-set]
+        }
+    }
+}
+
+# Catch default recomputation during full sync and lost/reordered expiration
+# propagation under repeated writes, overrides, and delete/recreate cycles.
+foreach diskless {no yes} {
+    start_server {tags {expire repl external:skip}} {
+        set replica [srv 0 client]
+        start_server {} {
+            set primary [srv 0 client]
+            test "default TTL bulk replication and full sync diskless=$diskless" {
+                $primary config set default-ttl-ms 600000
+                $primary config set repl-diskless-sync $diskless
+                $primary config set repl-diskless-sync-delay 0
+                $replica config set default-ttl-ms 1
+                for {set i 0} {$i < 200} {incr i} {
+                    $primary hset bulk:$i f original
+                    $primary set persistent:$i value KEEPTTL
+                }
+                $replica replicaof [srv 0 host] [srv 0 port]
+                wait_for_condition 100 100 {
+                    [status $replica master_link_status] eq {up}
+                } else {
+                    fail "Default TTL bulk replica failed to synchronize"
+                }
+                for {set i 0} {$i < 200} {incr i} {
+                    set deadline [$primary pexpiretime bulk:$i]
+                    assert_range [expr {$deadline - [clock milliseconds]}] 540000 600000
+                    assert_equal $deadline [$replica pexpiretime bulk:$i]
+                    assert_equal -1 [$replica pttl persistent:$i]
+                    $primary hset bulk:$i f updated
+                    assert_equal $deadline [$primary pexpiretime bulk:$i]
+                    $primary multi
+                    $primary del recreated:$i
+                    $primary rpush recreated:$i a b
+                    $primary pexpire recreated:$i 300000
+                    $primary exec
+                    $primary eval {
+                        redis.call('set', KEYS[1], 'value')
+                        redis.call('persist', KEYS[1])
+                    } 1 script:$i
+                }
+                wait_for_ofs_sync $primary $replica
+                for {set i 0} {$i < 200} {incr i} {
+                    foreach prefix {bulk recreated persistent script} {
+                        set key $prefix:$i
+                        assert_equal [$primary dump $key] [$replica dump $key]
+                        assert_equal [$primary pexpiretime $key] [$replica pexpiretime $key]
+                    }
+                    assert_equal -1 [$replica pttl script:$i]
+                    assert_range [$replica pttl recreated:$i] 240000 300000
+                }
+            }
+        }
+    }
 }
 
 start_server {tags {expire repl external:skip}} {
@@ -159,6 +327,21 @@ start_server {tags {expire repl external:skip}} {
             set primary_deadline [$primary pexpiretime default-ttl-ms:replicated-list]
             assert {$primary_deadline > 0}
             assert_equal $primary_deadline [$replica pexpiretime default-ttl-ms:replicated-list]
+            foreach command {
+                {set default-ttl-ms:repl-string v}
+                {hset default-ttl-ms:repl-hash f v}
+                {sadd default-ttl-ms:repl-set m}
+                {zadd default-ttl-ms:repl-zset 1 m}
+                {xadd default-ttl-ms:repl-stream * f v}
+                {incr default-ttl-ms:repl-counter}
+            } {
+                $primary {*}$command
+                wait_for_ofs_sync $replica $primary
+                set key [lindex $command 1]
+                set deadline [$primary pexpiretime $key]
+                assert {$deadline > 0}
+                assert_equal $deadline [$replica pexpiretime $key]
+            }
         }
     }
 }

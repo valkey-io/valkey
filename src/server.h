@@ -3811,6 +3811,12 @@ int objectSetLRUOrLFU(robj *val, long long lfu_freq, long long lru_idle_secs);
     (LOOKUP_NONOTIFY | LOOKUP_NOSTATS | LOOKUP_NOTOUCH | LOOKUP_NOEXPIRE | LOOKUP_NOHOTKEYS) /* Avoid any effects from fetching the key */
 
 void dbAdd(serverDb *db, robj *key, robj **valref);
+void dbAddWithFlags(serverDb *db, robj *key, robj **valref, int flags);
+#define DBADD_NO_DEFAULT_TTL_MS 1
+typedef struct defaultTTLMSContext defaultTTLMSContext;
+defaultTTLMSContext *beginDefaultTTLMS(client *c);
+void sealDefaultTTLMS(defaultTTLMSContext *ctx);
+void endDefaultTTLMS(defaultTTLMSContext *ctx, int target);
 int dbAddRDBLoad(serverDb *db, sds key, robj **valref);
 void dbReplaceValue(serverDb *db, robj *key, robj **valref);
 
@@ -3819,8 +3825,8 @@ void dbReplaceValue(serverDb *db, robj *key, robj **valref);
 #define SETKEY_ALREADY_EXIST 4
 #define SETKEY_DOESNT_EXIST 8
 #define SETKEY_ADD_OR_UPDATE 16 /* Key most likely doesn't exists */
+#define SETKEY_NO_DEFAULT_TTL_MS 32 /* Don't assign the server default TTL to the key. */
 void setKey(client *c, serverDb *db, robj *key, robj **valref, int flags);
-mstime_t getDefaultTTLMSExpireTime(client *c);
 robj *dbRandomKey(serverDb *db);
 int dbGenericDelete(serverDb *db, robj *key, int async, int flags);
 int dbSyncDelete(serverDb *db, robj *key);

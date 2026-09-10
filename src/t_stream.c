@@ -3699,37 +3699,41 @@ static void xdelGenericCommand(client *c, xdelVariant variant) {
     }
     stream *s = objectGetVal(o);
 
-    /* --- Allocate working arrays ----------------------------------------- */
+    /* --- Allocate working arrays ----------------------------------------- *
+     * Each variant only declares static buffers for the arrays it actually
+     * uses.  Unused pointers are NULL so accidental access crashes rather
+     * than silently touching an unrelated stack buffer.  For large id_count
+     * the heap path also skips allocations the variant does not need. */
     streamID static_ids[STREAMID_STATIC_VECTOR_LEN];
     streamID *ids = static_ids;
-
-    int static_resps[STREAMID_STATIC_VECTOR_LEN];
-    int *resps = static_resps;
-
-    unsigned char static_acked_flags[STREAMID_STATIC_VECTOR_LEN];
-    unsigned char *acked_flags = static_acked_flags;
-
-    unsigned char static_exists[STREAMID_STATIC_VECTOR_LEN];
-    unsigned char *exists = static_exists;
-
-    unsigned char static_cleared[STREAMID_STATIC_VECTOR_LEN];
-    unsigned char *cleared = static_cleared;
-
-    streamID static_ack_ids[STREAMID_STATIC_VECTOR_LEN];
-    streamID *ack_ids = static_ack_ids;
 
     streamID static_del_ids[STREAMID_STATIC_VECTOR_LEN];
     streamID *del_ids = static_del_ids;
     int del_count = 0;
 
+    int static_resps[STREAMID_STATIC_VECTOR_LEN];
+    int *resps = array_reply ? static_resps : NULL;
+
+    unsigned char static_acked_flags[STREAMID_STATIC_VECTOR_LEN];
+    unsigned char *acked_flags = has_group ? static_acked_flags : NULL;
+
+    unsigned char static_exists[STREAMID_STATIC_VECTOR_LEN];
+    unsigned char *exists = (mode == PELMODE_ACKED) ? static_exists : NULL;
+
+    unsigned char static_cleared[STREAMID_STATIC_VECTOR_LEN];
+    unsigned char *cleared = (mode == PELMODE_DELREF || mode == PELMODE_ACKED) ? static_cleared : NULL;
+
+    streamID static_ack_ids[STREAMID_STATIC_VECTOR_LEN];
+    streamID *ack_ids = (has_group || mode == PELMODE_DELREF || mode == PELMODE_ACKED) ? static_ack_ids : NULL;
+
     if (id_count > STREAMID_STATIC_VECTOR_LEN) {
         ids = zmalloc(sizeof(streamID) * id_count);
-        resps = zmalloc(sizeof(int) * id_count);
-        acked_flags = zmalloc(sizeof(unsigned char) * id_count);
-        exists = zmalloc(sizeof(unsigned char) * id_count);
-        cleared = zmalloc(sizeof(unsigned char) * id_count);
-        ack_ids = zmalloc(sizeof(streamID) * id_count);
         del_ids = zmalloc(sizeof(streamID) * id_count);
+        if (resps) resps = zmalloc(sizeof(int) * id_count);
+        if (acked_flags) acked_flags = zmalloc(sizeof(unsigned char) * id_count);
+        if (exists) exists = zmalloc(sizeof(unsigned char) * id_count);
+        if (cleared) cleared = zmalloc(sizeof(unsigned char) * id_count);
+        if (ack_ids) ack_ids = zmalloc(sizeof(streamID) * id_count);
     }
 
     /* We need to sanity check the IDs passed to start. Even if not
@@ -3743,7 +3747,7 @@ static void xdelGenericCommand(client *c, xdelVariant variant) {
     int acked = 0;
     int deleted = 0;
     bool first_entry = 0;
-    memset(acked_flags, 0, id_count);
+    if (acked_flags) memset(acked_flags, 0, id_count);
 
     /* --- KEEPREF fast path ----------------------------------------------- *
      * When the mode is KEEPREF: with a target group we gate deletion on the
@@ -3874,7 +3878,7 @@ static void xdelGenericCommand(client *c, xdelVariant variant) {
                 del_ids[del_count++] = *id;
                 if (streamCompareID(id, &s->first_id) == 0) first_entry = 1;
                 if (streamCompareID(id, &s->max_deleted_entry_id) > 0) s->max_deleted_entry_id = *id;
-            } else if (!acked_flags[j]) {
+            } else if (!acked_flags || !acked_flags[j]) {
                 /* Entry doesn't exist and was never pending in the target
                  * group — genuinely not found.  When acked_flags[j] is set
                  * the target-group PEL was successfully cleared in Phase 1,

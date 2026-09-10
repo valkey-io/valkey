@@ -112,6 +112,7 @@ static slotMigrationJob *createSlotExportJob(clusterNode *target_node,
                                              sds auth_user,
                                              sds auth_password);
 static bool isSlotExportPauseTimedOut(slotMigrationJob *job);
+static void freeSlotMigrationJobAuth(slotMigrationJob *job);
 static void resetSlotMigrationJob(slotMigrationJob *job);
 static void finishSlotMigrationJob(slotMigrationJob *job,
                                    slotMigrationJobState state,
@@ -1451,6 +1452,8 @@ void slotMigrationJobSendAuth(slotMigrationJob *job) {
     serverAssert(pass);
 
     sds err = replicationSendAuth(job->conn, user, user_len, pass, sdslen(pass));
+    /* AUTH is never retried, so the job no longer needs its credentials. */
+    freeSlotMigrationJobAuth(job);
     if (err) {
         sds status_msg = sdscatfmt(sdsempty(), "Failed to send AUTH command to target node: %s", err);
         finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_FAILED, status_msg);
@@ -2246,7 +2249,18 @@ void proceedWithSlotMigration(slotMigrationJob *job) {
     }
 }
 
-/* Reset the client and connection information associated with the job, leaving
+/* Release job-owned credentials without retaining the password in migration history. */
+static void freeSlotMigrationJobAuth(slotMigrationJob *job) {
+    sdsfree(job->auth_user);
+    job->auth_user = NULL;
+    if (job->auth_password) {
+        memset(job->auth_password, 0, sdslen(job->auth_password));
+        sdsfree(job->auth_password);
+        job->auth_password = NULL;
+    }
+}
+
+/* Reset the client, connection and authentication information associated with the job, leaving
  * the migration related metadata. */
 void resetSlotMigrationJob(slotMigrationJob *job) {
     /* Only one of client or conn should be set. */
@@ -2262,6 +2276,7 @@ void resetSlotMigrationJob(slotMigrationJob *job) {
 
     sdsfree(job->response_buf);
     job->response_buf = NULL;
+    freeSlotMigrationJobAuth(job);
 }
 
 void freeSlotMigrationJob(void *o) {
@@ -2272,11 +2287,6 @@ void freeSlotMigrationJob(void *o) {
     sdsfree(job->status_msg);
     sdsfree(job->response_buf);
     sdsfree(job->description);
-    sdsfree(job->auth_user);
-    if (job->auth_password) {
-        memset(job->auth_password, 0, sdslen(job->auth_password));
-        sdsfree(job->auth_password);
-    }
     zfree(o);
 }
 

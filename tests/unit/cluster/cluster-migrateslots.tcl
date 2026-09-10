@@ -2558,7 +2558,8 @@ start_cluster 3 0 {tags {logreqres:skip external:skip cluster network}} {
     test "Migration cannot connect to target" {
         # Shutdown to prevent connection success
         catch {R 2 shutdown nosave}
-        assert_match "OK" [R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 0 0 NODE $node2_id]
+        # Exercise credential cleanup when the connection fails before AUTH is sent.
+        assert_match "OK" [R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 0 0 NODE $node2_id AUTH default authpwd]
         set jobname [get_job_name 0 0]
 
         # Connecting will fail

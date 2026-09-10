@@ -28,6 +28,7 @@
  */
 
 #include "server.h"
+#include "listpack.h"
 #include "hotkeys.h"
 #include "ordered_index.h"
 #include "cluster.h"
@@ -821,9 +822,8 @@ void signalFlushedDb(int dbid, int async) {
  * async: flushes the database in an async manner.
  * no option: determine sync or async according to the value of lazyfree-lazy-user-flush.
  *
- * On success C_OK is returned and the flags are stored in *flags, otherwise
- * C_ERR is returned and the function sends an error to the client. */
-int getFlushCommandFlags(client *c, int *flags) {
+ * On success the C_OK is returned, otherwise C_ERR is returned. */
+int parseFlushCommandFlags(client *c, int *flags) {
     /* Parse the optional ASYNC option. */
     if (c->argc == 2 && !strcasecmp(objectGetVal(c->argv[1]), "sync")) {
         *flags = EMPTYDB_NO_FLAGS;
@@ -832,10 +832,16 @@ int getFlushCommandFlags(client *c, int *flags) {
     } else if (c->argc == 1) {
         *flags = server.lazyfree_lazy_user_flush ? EMPTYDB_ASYNC : EMPTYDB_NO_FLAGS;
     } else {
-        addReplyErrorObject(c, shared.syntaxerr);
         return C_ERR;
     }
     return C_OK;
+}
+
+/* Parses the flush command flags and returns an error to the client on failure */
+int parseFlushCommandFlagsOrReply(client *c, int *flags) {
+    int result = parseFlushCommandFlags(c, flags);
+    if (result == C_ERR) addReplyErrorObject(c, shared.syntaxerr);
+    return result;
 }
 
 /* Flushes the whole server data set. */
@@ -864,7 +870,7 @@ void flushAllDataAndResetRDB(int flags) {
 void flushdbCommand(client *c) {
     int flags;
 
-    if (getFlushCommandFlags(c, &flags) == C_ERR) return;
+    if (parseFlushCommandFlagsOrReply(c, &flags) == C_ERR) return;
 
     /* flushdb should not flush the functions */
     server.dirty += emptyData(c->db->id, flags | EMPTYDB_NOFUNCTIONS, NULL);
@@ -888,7 +894,7 @@ void flushdbCommand(client *c) {
  * Flushes the whole server data set. */
 void flushallCommand(client *c) {
     int flags;
-    if (getFlushCommandFlags(c, &flags) == C_ERR) return;
+    if (parseFlushCommandFlagsOrReply(c, &flags) == C_ERR) return;
 
     /* flushall should not flush the functions */
     flushAllDataAndResetRDB(flags | EMPTYDB_NOFUNCTIONS);
@@ -1369,7 +1375,8 @@ void scanGenericCommandWithOptions(client *c, robj *o, unsigned long long cursor
         setTypeReleaseIterator(si);
         cursor = 0;
     } else if ((objectGetType(o) == OBJ_HASH || o->type == OBJ_ZSET) && o->encoding == OBJ_ENCODING_LISTPACK) {
-        unsigned char *p = lpFirst(objectGetVal(o));
+        unsigned char *zl = objectGetVal(o);
+        unsigned char *p = lpFirst(zl);
         unsigned char *str;
         int64_t len;
         unsigned char intbuf[LP_INTBUF_SIZE];
@@ -1378,9 +1385,13 @@ void scanGenericCommandWithOptions(client *c, robj *o, unsigned long long cursor
             str = lpGet(p, &len, intbuf);
             /* point to the value */
             p = lpNext(objectGetVal(o), p);
+            unsigned char *vptr = p;
+            /* Skip fields not visible in the current context */
+            long long expiry = hashTypeListpackGetExpiry(zl, vptr);
+            int is_valid = hashTypeListpackFieldIsValid(expiry);
+            p = lpNext(zl, vptr);
+            if (!is_valid) continue;
             if (opts->use_pattern && !stringmatchlen(opts->pat, opts->patlen, (char *)str, len, 0)) {
-                /* jump to the next key/val pair */
-                p = lpNext(objectGetVal(o), p);
                 continue;
             }
             /* add key object */
@@ -1388,11 +1399,10 @@ void scanGenericCommandWithOptions(client *c, robj *o, unsigned long long cursor
             addScanDataItem(&result, (const char *)item, sdslen(item));
             /* add value object */
             if (!opts->only_keys) {
-                str = lpGet(p, &len, intbuf);
+                str = lpGet(vptr, &len, intbuf);
                 item = sdsnewlen(str, len);
                 addScanDataItem(&result, (const char *)item, sdslen(item));
             }
-            p = lpNext(objectGetVal(o), p);
         }
         cursor = 0;
     } else {

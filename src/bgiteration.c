@@ -1653,11 +1653,7 @@ static long long bgIteration_feedIterators_task(struct aeEventLoop *eventLoop,
     }
     monotime endTime = startTime + dutyTimeUs;
 
-    /* Unit tests drive feeding manually (eventLoop == NULL) on the same thread that later performs
-     * a blocking read.  A single pass must feed every iterator regardless of the wall-clock budget,
-     * otherwise a slow environment (valgrind, 32-bit emulation) can spend the whole budget on one
-     * iterator, starve a later one, and deadlock its blocking read.  Production feeds run from the
-     * timer (eventLoop != NULL) where the budget applies and the next cycle picks up the rest. */
+    // Test path (manual feed, no timer thread): ignore the budget so a slow env can't starve the blocking read.
     if (eventLoop == NULL) endTime = UINT64_MAX;
 
     // Run this part regardless of time limit...

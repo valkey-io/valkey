@@ -1113,6 +1113,10 @@ void hashReplyFromListpackEntry(client *c, listpackEntry *e) {
         addReplyBulkLongLong(c, e->lval);
 }
 
+/* Forward declaration; hashTypeCurrentToEntry is defined with the hash
+ * iterator helpers further below. */
+static inline void hashTypeCurrentToEntry(hashTypeIterator *hi, int withvalues, listpackEntry *f, listpackEntry *v);
+
 /* Return random element from a non empty hash.
  * 'field' and 'val' will be set to hold the element.
  * The memory in them is not to be freed or modified by the caller.
@@ -1120,62 +1124,64 @@ void hashReplyFromListpackEntry(client *c, listpackEntry *e) {
  * Return C_ERR in case no random element was found (when all existing elements are expired).
  * Return C_OK otherwise. */
 static int hashTypeRandomElement(robj *hashobj, unsigned long hashsize, listpackEntry *field, listpackEntry *val) {
-    int rc = C_OK;
+    if (hashsize == 0) return C_ERR;
+
+    bool has_volatile = hashTypeHasVolatileFields(hashobj);
+
     if (hashobj->encoding == OBJ_ENCODING_HASHTABLE) {
+        /* Fast path: O(1)-expected fair-random probe, rejecting expired
+         * ("ghost") entries. Also serves the non-volatile case, where the
+         * first probe is always live. */
         void *e = NULL;
         int maxtries = 100;
         hashTypeIgnoreTTL(hashobj, true);
-        while (!e) {
+        while (maxtries--) {
             hashtableFairRandomEntry(objectGetVal(hashobj), &e);
-            if (entryIsExpired(e) && --maxtries) {
-                e = NULL;
-                continue;
-            } else if (maxtries == 0) {
-                /* in case we will not be able to locate an entry which is not expired, we will just not return any
-                 * result. An alternative would have been that we end up returning an expired entry. */
-                rc = C_ERR;
-                break;
-            }
+            if (!entryIsExpired(e)) break; /* found a live entry */
+            e = NULL;
+        }
+        hashTypeIgnoreTTL(hashobj, false);
+        if (e != NULL) {
             sds sds_field = entryGetField(e);
             field->sval = (unsigned char *)sds_field;
             field->slen = sdslen(sds_field);
-            if (val) {
-                val->sval = (unsigned char *)entryGetValue(e, (size_t *)&val->slen);
-            }
+            if (val) val->sval = (unsigned char *)entryGetValue(e, (size_t *)&val->slen);
+            return C_OK;
         }
-        hashTypeIgnoreTTL(hashobj, false);
+        /* Probe defeated by dense ghosts: fall through to the reservoir. */
     } else if (hashobj->encoding == OBJ_ENCODING_LISTPACK) {
-        if (hashsize == 0) return C_ERR;
-
-        if (!hashTypeHasVolatileFields(hashobj)) {
+        if (!has_volatile) {
             /* No volatile fields: every pair is live, fetch directly. */
             lpRandomPair(objectGetVal(hashobj), hashsize, field, val);
             return C_OK;
         }
-
-        /* Volatile fields present: single-pass reservoir sampling (k=1)
-         * over the live pairs; the i-th live pair is kept with probability
-         * 1/i, giving a uniform pick without a counting pre-pass. */
-        hashTypeIterator hi;
-        unsigned char *fptr = NULL, *vptr = NULL;
-        unsigned long seen = 0;
-        hashTypeInitIterator(hashobj, &hi);
-        while (hashTypeNext(&hi) != C_ERR) {
-            seen++;
-            if (rand() % seen == 0) {
-                fptr = hi.fptr;
-                vptr = hi.vptr;
-            }
-        }
-        hashTypeResetIterator(&hi);
-        if (fptr == NULL) return C_ERR; /* all fields expired */
-
-        field->sval = lpGetValue(fptr, &field->slen, &field->lval);
-        if (val) val->sval = lpGetValue(vptr, &val->slen, &val->lval);
+        /* Volatile listpack: fall through to the reservoir. */
     } else {
         serverPanic("Unknown hash encoding");
     }
-    return rc;
+
+    /* Only a hash with volatile fields can reach here; every non-volatile
+     * hash is served by the fast paths above. */
+    serverAssert(has_volatile);
+
+    /* Reservoir (k=1): we failed to locate a random non-expired element, so
+     * pick one uniformly in a single read-only pass over the live fields. */
+    hashTypeIterator hi;
+    unsigned long seen = 0;
+    int found = 0;
+    listpackEntry cf, cv;
+    hashTypeInitIterator(hashobj, &hi);
+    while (hashTypeNext(&hi) != C_ERR) {
+        if (rand() % ++seen == 0) {
+            hashTypeCurrentToEntry(&hi, val != NULL, &cf, val ? &cv : NULL);
+            found = 1;
+        }
+    }
+    hashTypeResetIterator(&hi);
+    if (!found) return C_ERR; /* all fields expired */
+    *field = cf;
+    if (val) *val = cv;
+    return C_OK;
 }
 
 /*-----------------------------------------------------------------------------
@@ -2513,6 +2519,7 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
 
     if ((hash = lookupKeyReadOrReply(c, c->argv[1], shared.emptyarray)) == NULL || checkType(c, hash, OBJ_HASH)) return;
     size = hashTypeLength(hash);
+    bool has_volatile = hashTypeHasVolatileFields(hash);
 
     if (l >= 0) {
         count = (unsigned long)l;
@@ -2538,7 +2545,19 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
      * and the expiration policy is honored. Hashes without field TTLs (the
      * common case) fall through to the original CASE 1-4 samplers, which are
      * only valid when every field is live. */
-    if (hashTypeHasVolatileFields(hash)) {
+    if (has_volatile) {
+        if (count == 1) {
+            /* Single random field (HRANDFIELD key 1 and HRANDFIELD key -1):
+             * delegate to hashTypeRandomElement so all single-pick forms
+             * (including the no-count `HRANDFIELD key`) share identical
+             * behavior and its O(1)-expected fast path. Read-only. */
+            listpackEntry field, value;
+            if (hashTypeRandomElement(hash, size, &field, withvalues ? &value : NULL) == C_OK) {
+                hrandfieldReplyWithListpack(wpc, 1, &field, withvalues ? &value : NULL);
+                reply_size = 1;
+            }
+            goto set_deferred_response;
+        }
         if (!uniq) {
             /* With replacement: collect the live fields once, then draw. */
             listpackEntry *fields = zmalloc(sizeof(listpackEntry) * size);
@@ -2552,10 +2571,24 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
             }
             zfree(fields);
             if (values) zfree(values);
+        } else if (count >= size) {
+            /* CASE 2 (volatile): the request is at least the physical size,
+             * hence at least every live field -- return them all in a single
+             * pass, no sampling or buffering. hashTypeNext skips expired
+             * fields, so only live fields are emitted. */
+            hashTypeIterator hi;
+            hashTypeInitIterator(hash, &hi);
+            while (hashTypeNext(&hi) != C_ERR) {
+                if (withvalues && c->resp > 2) addWritePreparedReplyArrayLen(wpc, 2);
+                addHashIteratorCursorToReply(wpc, &hi, OBJ_HASH_FIELD);
+                if (withvalues) addHashIteratorCursorToReply(wpc, &hi, OBJ_HASH_VALUE);
+                reply_size++;
+                if (c->flag.close_asap) break;
+            }
+            hashTypeResetIterator(&hi);
         } else {
-            /* Distinct: reservoir sampling (Algorithm R) in one pass. Also
-             * covers count >= live, replying with every live field. */
-            if (count > size) count = size; /* live <= size: bound the reservoir */
+            /* Distinct sample (count < size): reservoir sampling (Algorithm R)
+             * in one pass. */
             listpackEntry *rf = zmalloc(sizeof(listpackEntry) * count);
             listpackEntry *rv = withvalues ? zmalloc(sizeof(listpackEntry) * count) : NULL;
             unsigned long seen = 0, filled = 0;
@@ -2579,6 +2612,10 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
         }
         goto set_deferred_response;
     }
+
+    /* Past this point every field is live: any hash with volatile fields was
+     * handled (and returned) by the generic path above. */
+    serverAssert(!has_volatile);
 
     /* CASE 1: The count was negative, so the extraction method is just:
      * "return N random elements" sampling the whole set every time.

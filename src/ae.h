@@ -65,6 +65,14 @@
 struct timeval; /* forward declaration */
 struct aeEventLoop;
 
+/* Opaque per-backend polling state (epoll/kqueue/evport/select).
+ *
+ * The concrete struct aeApiState is defined privately by each polling backend
+ * and its layout varies between them. ae.c only ever holds and passes a typed
+ * pointer to it, so the forward declaration here lets the event loop and the
+ * inner aeApi* interface use "aeApiState *" instead of an untyped "void *". */
+typedef struct aeApiState aeApiState;
+
 /* Types and data structures */
 typedef void aeFileProc(struct aeEventLoop *eventLoop, int fd, void *clientData, int mask);
 typedef long long aeTimeProc(struct aeEventLoop *eventLoop, long long id, void *clientData);
@@ -109,7 +117,7 @@ typedef struct aeEventLoop {
     aeFiredEvent *fired; /* Fired events */
     aeTimeEvent *timeEventHead;
     int stop;
-    void *apidata; /* This is used for polling API specific data */
+    aeApiState *apidata; /* Polling API specific state (owned by the backend) */
     aeBeforeSleepProc *beforesleep;
     aeAfterSleepProc *aftersleep;
     aeCustomPollProc *custompoll;

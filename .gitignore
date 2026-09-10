@@ -59,3 +59,4 @@ cmake-build-release/
 __pycache__
 src/unit/.flags
 valkey-unit-tests
+src/.idea/*

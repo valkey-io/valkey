@@ -1,1 +1,1 @@
-role read-only +get
+role bad,name +get

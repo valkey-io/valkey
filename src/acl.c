@@ -285,13 +285,24 @@ static int ACLStringHasSpaces(const char *s, size_t len) {
 }
 
 /* Return an error string if the role name is not valid, or NULL if it is fine.
- * Role names are restricted to alphanumeric characters so that they survive a
- * round trip through the ACL file or valkey.conf, and so that the comma
- * separated `role=` list of a user is unambiguous. */
+ *
+ * A role name is any run of printable ASCII characters, except for the four
+ * that the name could not be read back through:
+ *
+ *  ','                 separates the names in the `role=` list of a user.
+ *  '"', '\'' and '\\'  are special to sdssplitargs(), which parses the ACL
+ *                      file and valkey.conf, and the writers emit the name
+ *                      unquoted.
+ *
+ * Space and the other control characters are excluded by the printable range,
+ * since they end a token in the same parser. */
 static const char *ACLRoleNameError(const char *name, size_t len) {
     if (len == 0) return "Role names can't be empty";
     for (size_t i = 0; i < len; i++) {
-        if (!isalnum((unsigned char)name[i])) return "Role names can only contain alphanumeric characters";
+        unsigned char c = name[i];
+        if (c <= ' ' || c >= 0x7f) return "Role names can only contain printable ASCII characters";
+        if (c == ',') return "Role names can't contain commas";
+        if (c == '"' || c == '\'' || c == '\\') return "Role names can't contain quotes or backslashes";
     }
     return NULL;
 }
@@ -640,15 +651,17 @@ user *ACLGetRoleByName(const char *name, size_t namelen) {
 
 /* Replace the set of roles held by the user with the comma separated list of
  * role names in `spec`, which is the part of the `role=` rule following the
- * equal sign. An empty spec removes every role from the user.
+ * equal sign. The list has to name at least one role; use `resetroles` to
+ * leave the user with no role at all.
  *
  * Every name is resolved before the user is touched, so on error the user
  * keeps the roles it had. Returns C_OK, or C_ERR with errno set to ESRCH if a
  * role does not exist and EINVAL if the list is malformed. */
 static int ACLSetUserRoles(user *u, const char *spec, size_t speclen) {
-    /* A trailing comma leaves an empty last name, which the loop below cannot
-     * see. Leading and repeated commas are caught by the zero length check. */
-    if (speclen > 0 && spec[speclen - 1] == ',') {
+    /* An empty list, or a trailing comma leaving an empty last name, which the
+     * loop below cannot see. Leading and repeated commas are caught by the
+     * zero length check. */
+    if (speclen == 0 || spec[speclen - 1] == ',') {
         errno = EINVAL;
         return C_ERR;
     }
@@ -1651,8 +1664,12 @@ static int ACLSetSelector(aclSelector *selector, const char *op, size_t oplen) {
  *              some password (or setting it as "nopass" later).
  * reset        Performs the following actions: resetpass, resetkeys, resetchannels,
  *              allchannels (if acl-pubsub-default is set), alldbs (for backwards compatibility),
- *              off, sanitize-payload, clearselectors, -@all.
+ *              off, sanitize-payload, clearselectors, -@all, resetroles.
  *              The user returns to the same state it has immediately after its creation.
+ * role=<name>  Replace the set of roles held by the user with the named ones.
+ *              May be used with `,` for naming several roles (e.g "role=a,b").
+ *              At least one role has to be named.
+ * resetroles   Remove every role from the user.
  * (<options>)  Create a new selector with the options specified within the
  *              parentheses and attach it to the user. Each option should be
  *              space separated. The first character must be ( and the last
@@ -1712,7 +1729,7 @@ int ACLSetUser(user *u, const char *op, ssize_t oplen) {
             return C_ERR;
         }
         /* Roles cannot have roles */
-        if (oplen >= 5 && !strncasecmp(op, "role=", 5)) {
+        if (!strcasecmp(op, "resetroles") || (oplen >= 5 && !strncasecmp(op, "role=", 5))) {
             errno = EINVAL;
             return C_ERR;
         }
@@ -1800,7 +1817,8 @@ int ACLSetUser(user *u, const char *op, ssize_t oplen) {
         serverAssert(ACLSetUser(u, "off", -1) == C_OK);
         serverAssert(ACLSetUser(u, "clearselectors", -1) == C_OK);
         serverAssert(ACLSetUser(u, "-@all", -1) == C_OK);
-
+        serverAssert(ACLSetUser(u, "resetroles", -1) == C_OK);
+    } else if (!strcasecmp(op, "resetroles")) {
         ACLUserClearRoles(u);
         u->roles = dictCreate(&aclMembershipDictType);
     } else if (oplen >= 5 && !strncasecmp(op, "role=", 5)) {
@@ -1845,8 +1863,8 @@ const char *ACLSetStringError(void) {
         errmsg = "Duplicate role found. A role can only be defined once in "
                  "config files";
     else if (errno == EILSEQ)
-        errmsg = "Role names can't be empty and can only contain alphanumeric "
-                 "characters";
+        errmsg = "Role names can't be empty and can only contain printable "
+                 "ASCII characters, excluding commas, quotes and backslashes";
     else if (errno == ECHILD)
         errmsg = "Allowing first-arg of a subcommand is not supported";
     else if (errno == ERANGE)

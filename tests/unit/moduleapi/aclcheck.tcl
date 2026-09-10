@@ -350,7 +350,7 @@ start_server {tags {"modules acl"}} {
         assert_error "*DENIED CHANNEL*" {r aclcheck.publish.check.channel ch2 msg}
 
         # Restore the default user so the module can be unloaded.
-        r acl setuser default role= on nopass ~* &* +@all alldbs
+        r acl setuser default resetroles on nopass ~* &* +@all alldbs
         r acl DELROLE modperms
     }
 

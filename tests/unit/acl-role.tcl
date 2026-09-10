@@ -34,6 +34,10 @@ start_server {tags {"acl external:skip"}} {
         r ACL SETROLE otherrole +@read
         catch {r ACL SETROLE myrole role=otherrole} err
         assert_match {*Error*} $err
+
+        # resetroles is a user rule too, a role has no roles to reset.
+        catch {r ACL SETROLE myrole resetroles} err
+        assert_match {*Error*} $err
     }
 
     test {ACL SETROLE - unmatched parenthesis} {
@@ -51,12 +55,35 @@ start_server {tags {"acl external:skip"}} {
         assert_equal [llength $sels] 0
     }
 
-    test {ACL SETROLE - role names are restricted to alphanumeric characters} {
-        # A role name has to survive a config round trip and be unambiguous
-        # inside the comma separated `role=` list of a user.
-        foreach name {{bad name} q"x q'x {q\x} read-only read_only a,b role=x} {
+    test {ACL SETROLE - role names accept printable ASCII} {
+        foreach name {read-only read_only app.reader v2 role:admin a=b} {
+            r ACL SETROLE $name +get ~*
+            assert_not_equal -1 [lsearch -exact [r ACL ROLES] $name]
+        }
+        # The names round trip through a user's role= list unchanged.
+        r ACL SETUSER asciiuser on >p role=read-only,app.reader,a=b
+        set info [r ACL GETUSER asciiuser]
+        set idx [lsearch $info "roles"]
+        assert_equal {a=b app.reader read-only} [lsort [lindex $info [expr {$idx + 1}]]]
+        r ACL DELUSER asciiuser
+        r ACL DELROLE read-only read_only app.reader v2 role:admin a=b
+    }
+
+    test {ACL SETROLE - role names reject what the parsers cannot read back} {
+        # Space and the other control characters end a token, a comma separates
+        # the names in a `role=` list, and quotes and backslashes are special to
+        # sdssplitargs(), which reads the ACL file and valkey.conf back.
+        foreach {name reason} {
+            {bad name}  {*printable ASCII*}
+            "tab\there" {*printable ASCII*}
+            "caf\xc3\xa9" {*printable ASCII*}
+            a,b         {*can't contain commas*}
+            q"x         {*quotes or backslashes*}
+            q'x         {*quotes or backslashes*}
+            {q\x}       {*quotes or backslashes*}
+        } {
             catch {r ACL SETROLE $name +@all} err
-            assert_match {*Role names can only contain alphanumeric characters*} $err
+            assert_match $reason $err
             assert_equal -1 [lsearch -exact [r ACL ROLES] $name]
         }
     }
@@ -114,8 +141,8 @@ start_server {tags {"acl external:skip"}} {
         r ACL SETUSER alice on >pass123 role=myrole
     } {OK}
 
-    test {ACL SETUSER - an empty role= list removes every role} {
-        r ACL SETUSER alice role=
+    test {ACL SETUSER - resetroles removes every role} {
+        r ACL SETUSER alice resetroles
         set info [r ACL GETUSER alice]
         set idx [lsearch $info "roles"]
         set roles [lindex $info [expr {$idx + 1}]]
@@ -137,7 +164,7 @@ start_server {tags {"acl external:skip"}} {
 
         # repA no longer lists the user, so it can be deleted.
         assert_equal 1 [r ACL DELROLE repA]
-        r ACL SETUSER repuser role=
+        r ACL SETUSER repuser resetroles
         r ACL DELUSER repuser
         r ACL DELROLE repB
     }
@@ -169,9 +196,11 @@ start_server {tags {"acl external:skip"}} {
         r ACL DELROLE keptrole
     }
 
-    test {ACL SETUSER - malformed role= lists are rejected} {
+    test {ACL SETUSER - empty and malformed role= lists are rejected} {
         r ACL SETROLE listrole +get ~*
-        foreach spec {role=, role=,listrole role=listrole, role=listrole,,listrole} {
+        # role= has to name at least one role. resetroles is the way to leave a
+        # user with none.
+        foreach spec {role= role=, role=,listrole role=listrole, role=listrole,,listrole} {
             catch {r ACL SETUSER alice $spec} err
             assert_match {*Syntax error*} $err
         }
@@ -197,7 +226,7 @@ start_server {tags {"acl external:skip"}} {
     }
 
     test {ACL DELROLE - succeeds when no user holds the role} {
-        r ACL SETUSER bob role=
+        r ACL SETUSER bob resetroles
         r ACL DELROLE otherrole
     } {1}
 
@@ -238,7 +267,7 @@ start_server {tags {"acl external:skip"}} {
     }
 
     test {After removing from role, permissions are revoked} {
-        r ACL SETUSER alice role=
+        r ACL SETUSER alice resetroles
         set result [r ACL DRYRUN alice SET keys:test value]
         assert_match {*no permissions*} $result
     }
@@ -390,7 +419,7 @@ start_server {tags {"acl external:skip"}} {
         assert_match {subscribe events:live 1} [$rd read]
 
         # Remove user from the role
-        r ACL SETUSER subuser role=
+        r ACL SETUSER subuser resetroles
 
         # Client should be disconnected
         catch {$rd read} err
@@ -549,6 +578,23 @@ start_server [list overrides [list "dir" $server_path "aclfile" "role.acl"] tags
         lsort [r ACL ROLES]
     } {customer viewer}
 
+    test {ACL SAVE and reload preserves a punctuated role name} {
+        r ACL SETROLE app.read-only ~ro:* +get
+        r ACL SETUSER punctuser on >p role=app.read-only,customer
+        r ACL SAVE
+        r ACL LOAD
+
+        assert_equal {app.read-only customer viewer} [lsort [r ACL ROLES]]
+        set info [r ACL GETUSER punctuser]
+        set idx [lsearch $info "roles"]
+        assert_equal {app.read-only customer} [lsort [lindex $info [expr {$idx + 1}]]]
+        assert_equal [r ACL DRYRUN punctuser GET ro:key] {OK}
+
+        r ACL DELUSER punctuser
+        r ACL DELROLE app.read-only
+        r ACL SAVE
+    }
+
     test {Default user keeps its role membership across ACL LOAD} {
         for {set i 0} {$i < 3} {incr i} {
             r ACL LOAD
@@ -564,7 +610,7 @@ start_server [list overrides [list "dir" $server_path "aclfile" "role.acl"] tags
     }
 
     test {Role held by the default user cannot be deleted} {
-        r ACL SETUSER bob role=
+        r ACL SETUSER bob resetroles
         catch {r ACL DELROLE viewer} err
         assert_match {*is assigned to one or more users*} $err
 
@@ -638,23 +684,25 @@ start_server [list config_lines $conf_lines tags [list "external:skip"]] {
     }
 
     test {A user's role= survives CONFIG REWRITE and a restart} {
-        r ACL SETROLE rewritten ~rw:* +get
+        # Punctuated names are the interesting case: they have to come back
+        # from sdssplitargs() as one token and split on the comma the same way.
+        r ACL SETROLE app.read-only ~rw:* +get
         r ACL SETROLE second ~sc:* +set
-        r ACL SETUSER rewriteuser on >p role=rewritten,second
+        r ACL SETUSER rewriteuser on >p role=app.read-only,second
         r CONFIG REWRITE
         restart_server 0 true false
 
-        assert_equal {inlinerole rewritten second} [lsort [r ACL ROLES]]
+        assert_equal {app.read-only inlinerole second} [lsort [r ACL ROLES]]
         set info [r ACL GETUSER rewriteuser]
         set idx [lsearch $info "roles"]
-        assert_equal {rewritten second} [lsort [lindex $info [expr {$idx + 1}]]]
+        assert_equal {app.read-only second} [lsort [lindex $info [expr {$idx + 1}]]]
         assert_equal [r ACL DRYRUN rewriteuser GET rw:key] {OK}
         assert_equal [r ACL DRYRUN rewriteuser SET sc:key v] {OK}
 
         # The roles are still held, so they cannot be deleted yet.
-        assert_error {*is assigned to one or more users*} {r ACL DELROLE rewritten}
+        assert_error {*is assigned to one or more users*} {r ACL DELROLE app.read-only}
         r ACL DELUSER rewriteuser
-        r ACL DELROLE rewritten second
+        r ACL DELROLE app.read-only second
     }
 }
 
@@ -670,7 +718,7 @@ test {Invalid role name in config on startup fails} {
     assert_match {*Role names can't be empty*} $err
 
     catch {exec $::VALKEY_SERVER_BIN --aclfile tests/assets/role-invalid-name.acl} err
-    assert_match {*invalid role name*alphanumeric*} $err
+    assert_match {*invalid role name*commas*} $err
 } {} {external:skip}
 
 # Test invalid role rule in config on startup

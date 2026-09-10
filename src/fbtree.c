@@ -1013,15 +1013,15 @@ static deleteResult subtreeDeleteItem(fbtreeIndex *fbt, node *n, const_sds item)
 /* Helper to handle root cleanup after delete */
 static void fbtreePostDeleteCleanup(fbtreeIndex *fbt) {
     if (getSubtreeSize(fbt->root) == 0) {
-        zfree(fbt->root);
+        /* An emptied inner root still owns its spilled prefix buffer. */
+        freeEmptyNodeAlreadyUnlinked(fbt->root);
         fbt->root = NULL;
         fbt->leftmost_leaf = NULL;
         fbt->rightmost_leaf = NULL;
     } else if (!fbt->root->is_leaf && fbt->root->num_items == 1) {
-        innerNode *old_root = (innerNode *)fbt->root;
-        fbt->root = old_root->children[0];
-        innerNodeFreePrefix(old_root);
-        zfree(old_root);
+        node *old_root = fbt->root;
+        fbt->root = ((innerNode *)old_root)->children[0];
+        freeEmptyNodeAlreadyUnlinked(old_root);
     }
 }
 

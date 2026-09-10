@@ -1244,7 +1244,7 @@ void syncCommand(client *c) {
     }
 
     /* CASE 1: BGSAVE is in progress, with disk target. */
-    if (server.child_type == CHILD_TYPE_RDB && server.rdb_child_type == RDB_CHILD_TYPE_DISK) {
+    if (server.rdb_write_target == RDB_WRITE_TARGET_DISK) {
         /* Ok a background save is in progress. Let's check if it is a good
          * one for replication, i.e. if there is another replica that is
          * registering differences since the server forked to save. */
@@ -1279,7 +1279,7 @@ void syncCommand(client *c) {
         }
 
         /* CASE 2: BGSAVE is in progress, with socket target. */
-    } else if (server.child_type == CHILD_TYPE_RDB && server.rdb_child_type == RDB_CHILD_TYPE_SOCKET) {
+    } else if (server.rdb_write_target == RDB_WRITE_TARGET_SOCKET) {
         /* There is an RDB child process but it is writing directly to
          * children sockets. We need to wait for the next BGSAVE
          * in order to synchronize. */
@@ -1344,7 +1344,7 @@ void freeClientReplicationData(client *c) {
          * should not remove directly since that means RDB is important for users
          * to keep data safe and we may delay configured 'save' for full sync. */
         if (server.saveparamslen == 0 && c->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_END &&
-            server.child_type == CHILD_TYPE_RDB && server.rdb_child_type == RDB_CHILD_TYPE_DISK &&
+            server.child_type == CHILD_TYPE_RDB && server.rdb_write_target == RDB_WRITE_TARGET_DISK &&
             anyOtherReplicaWaitRdb(c) == 0) {
             serverLog(LL_NOTICE, "Background saving, persistence disabled, last replica dropped, killing fork child.");
             killRDBChild();
@@ -2056,7 +2056,7 @@ void updateReplicasWaitingBgsave(int bgsaveerr, int type) {
              * already an RDB -> Replicas socket transfer, used in the case of
              * diskless replication, our work is trivial, we can just put
              * the replica online. */
-            if (type == RDB_CHILD_TYPE_SOCKET) {
+            if (type == RDB_WRITE_TARGET_SOCKET) {
                 serverLog(LL_NOTICE,
                           "Streamed RDB transfer with replica %s succeeded (socket). Waiting for REPLCONF ACK from "
                           "replica to enable streaming",
@@ -5149,7 +5149,10 @@ void waitCommand(client *c) {
     }
 
     /* Otherwise, block the client and put it into our list of clients
-     * waiting for ack from replicas. */
+     * waiting for ack from replicas. WAIT handles its own reply in
+     * processClientsWaitingReplicas, so clear pending_command to avoid
+     * being mistaken for a command that needs re-execution. */
+    c->flag.pending_command = 0;
     blockClientForReplicaAck(c, timeout, offset, numreplicas, 0);
 
     /* Make sure that the server will send an ACK request to all the replicas
@@ -5191,7 +5194,10 @@ void waitaofCommand(client *c) {
     }
 
     /* Otherwise, block the client and put it into our list of clients
-     * waiting for ack from replicas. */
+     * waiting for ack from replicas. WAITAOF handles its own reply in
+     * processClientsWaitingReplicas, so clear pending_command to avoid
+     * being mistaken for a command that needs re-execution. */
+    c->flag.pending_command = 0;
     blockClientForReplicaAck(c, timeout, offset, numreplicas, numlocal);
 
     /* Make sure that the server will send an ACK request to all the replicas
@@ -5440,7 +5446,7 @@ void replicationCron(void) {
 
         int is_presync =
             (replica->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_START ||
-             (replica->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_END && server.rdb_child_type != RDB_CHILD_TYPE_SOCKET));
+             (replica->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_END && server.rdb_write_target != RDB_WRITE_TARGET_SOCKET));
 
         if (is_presync) {
             connWrite(replica->conn, "\n", 1);
@@ -5469,7 +5475,7 @@ void replicationCron(void) {
              * by the fork child so if a disk-based replica is stuck it doesn't prevent the fork child
              * from terminating. */
             if (replica->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_END &&
-                server.rdb_child_type == RDB_CHILD_TYPE_SOCKET) {
+                server.rdb_write_target == RDB_WRITE_TARGET_SOCKET) {
                 if (replica->repl_data->repl_last_partial_write != 0 &&
                     (server.unixtime - replica->repl_data->repl_last_partial_write) > server.repl_timeout) {
                     serverLog(LL_WARNING, "Disconnecting timedout replica (full sync): %s",
@@ -5548,7 +5554,7 @@ int shouldStartChildReplication(int *mincapa_out, int *req_out, int *rdbver_out)
      * In case of diskless replication, we make sure to wait the specified
      * number of seconds (according to configuration) so that other replicas
      * have the time to arrive before we start streaming. */
-    if (!hasActiveChildProcess()) {
+    if (!hasActiveSaveOrChild()) {
         time_t idle, max_idle = 0;
         int replicas_waiting = 0;
         int mincapa;

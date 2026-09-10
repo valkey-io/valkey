@@ -1755,6 +1755,28 @@ start_server {tags {"zset"}} {
         r zmscore zmscoretest x
     } {10}
 
+    set original_max [lindex [r config get zset-max-listpack-entries] 1]
+    r config set zset-max-listpack-entries 0
+    test {ZMSCORE uses hashtable batch lookup} {
+        r del zmscoretest
+        for {set i 1} {$i <= 128} {incr i} {
+            r zadd zmscoretest $i [format "m%02d" $i]
+        }
+
+        assert_encoding btree zmscoretest
+        assert_equal {1} [r zmscore zmscoretest m01]
+        assert_equal {1 {} 1 4} [r zmscore zmscoretest m01 missing m01 m04]
+
+        set members {missing}
+        set expected [list {}]
+        for {set i 1} {$i <= 19} {incr i} {
+            lappend members [format "m%02d" $i]
+            lappend expected $i
+        }
+        assert_equal $expected [r zmscore zmscoretest {*}$members]
+    }
+    r config set zset-max-listpack-entries $original_max
+
     test {ZMSCORE retrieve requires one or more members} {
         r del zmscoretest
         r zadd zmscoretest 10 x
@@ -3094,6 +3116,51 @@ start_server {tags {"zset"}} {
             assert_encoding btree myzset
 
             r config set zset-max-listpack-entries $original_max
+        }
+    }
+}
+
+start_server {config "minimal.conf" tags {"zset" "external:skip"} overrides {io-threads 4 io-threads-always-active yes zset-max-listpack-entries 0}} {
+    test "Zset nested prefetch - ZSCORE correctness with pipelined commands" {
+        for {set i 0} {$i < 200} {incr i} {
+            r zadd myzset $i "member:$i"
+        }
+        assert_encoding btree myzset
+
+        set rd [valkey_deferring_client]
+        for {set i 0} {$i < 50} {incr i} {
+            $rd zscore myzset "member:$i"
+        }
+        $rd flush
+        for {set i 0} {$i < 50} {incr i} {
+            assert_equal $i [$rd read]
+        }
+        $rd close
+    }
+
+    test "Zset nested prefetch - short members are looked up safely" {
+        # The zset hashtable stores packed [score][element] items, so a plain sds
+        # lookup key must be marked before the hash/compare callbacks read it.
+        # An unmarked key takes the packed path (sdslen - 8), which underflows for
+        # members shorter than the 8 byte score prefix.
+        foreach m {a bb ccc dddd eeeee ffffff ggggggg} {
+            r zadd shortzset [string length $m] $m
+        }
+        for {set i 0} {$i < 200} {incr i} { r zadd shortzset $i "member:$i" }
+        assert_encoding btree shortzset
+
+        set clients {}
+        for {set c 0} {$c < 8} {incr c} {
+            set rd [valkey_deferring_client]
+            lappend clients $rd
+            foreach m {a bb ccc dddd eeeee ffffff ggggggg} { $rd zscore shortzset $m }
+            $rd flush
+        }
+        foreach rd $clients {
+            foreach m {a bb ccc dddd eeeee ffffff ggggggg} {
+                assert_equal [string length $m] [$rd read]
+            }
+            $rd close
         }
     }
 }

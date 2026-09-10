@@ -7149,7 +7149,7 @@ commandHistory ACL_SETUSER_History[] = {
 {"6.2.0","Added Pub/Sub channel patterns."},
 {"7.0.0","Added selectors and key based permissions."},
 {"9.1.0","Added database permission rules."},
-{"9.2.0","Added role assignment and removal."},
+{"9.2.0","Added the `role=` rule for assigning roles to a user."},
 };
 #endif
 
@@ -7209,7 +7209,7 @@ struct COMMAND_ARG ACL_SETUSER_Args[] = {
 /* ACL command table */
 struct COMMAND_STRUCT ACL_Subcommands[] = {
 {MAKE_CMD("cat","Lists the ACL categories, or the commands inside a category.","O(1) since the categories and commands are a fixed set.","6.0.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,ACL_CAT_History,0,ACL_CAT_Tips,0,aclCommand,-2,CMD_NOSCRIPT|CMD_LOADING|CMD_STALE|CMD_SENTINEL,ACL_CATEGORY_SLOW,NULL,ACL_CAT_Keyspecs,0,NULL,1),.args=ACL_CAT_Args},
-{MAKE_CMD("delrole","Deletes one or more ACL roles. Fails if any role has members.","O(N). Where N is the number of roles to delete.","9.2.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,ACL_DELROLE_History,0,ACL_DELROLE_Tips,2,aclCommand,-3,CMD_ADMIN|CMD_NOSCRIPT|CMD_LOADING|CMD_STALE|CMD_SENTINEL,ACL_CATEGORY_ADMIN|ACL_CATEGORY_DANGEROUS|ACL_CATEGORY_SLOW,NULL,ACL_DELROLE_Keyspecs,0,NULL,1),.args=ACL_DELROLE_Args},
+{MAKE_CMD("delrole","Deletes one or more ACL roles. Fails if any role is assigned to a user.","O(N). Where N is the number of roles to delete.","9.2.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,ACL_DELROLE_History,0,ACL_DELROLE_Tips,2,aclCommand,-3,CMD_ADMIN|CMD_NOSCRIPT|CMD_LOADING|CMD_STALE|CMD_SENTINEL,ACL_CATEGORY_ADMIN|ACL_CATEGORY_DANGEROUS|ACL_CATEGORY_SLOW,NULL,ACL_DELROLE_Keyspecs,0,NULL,1),.args=ACL_DELROLE_Args},
 {MAKE_CMD("deluser","Deletes ACL users, and terminates their connections.","O(1) amortized time considering the typical user.","6.0.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,ACL_DELUSER_History,0,ACL_DELUSER_Tips,2,aclCommand,-3,CMD_ADMIN|CMD_NOSCRIPT|CMD_LOADING|CMD_STALE|CMD_SENTINEL,ACL_CATEGORY_ADMIN|ACL_CATEGORY_DANGEROUS|ACL_CATEGORY_SLOW,NULL,ACL_DELUSER_Keyspecs,0,NULL,1),.args=ACL_DELUSER_Args},
 {MAKE_CMD("dryrun","Simulates the execution of a command by a user, without executing the command.","O(1).","7.0.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,ACL_DRYRUN_History,0,ACL_DRYRUN_Tips,0,aclCommand,-4,CMD_ADMIN|CMD_NOSCRIPT|CMD_LOADING|CMD_STALE|CMD_SENTINEL,ACL_CATEGORY_ADMIN|ACL_CATEGORY_DANGEROUS|ACL_CATEGORY_SLOW,NULL,ACL_DRYRUN_Keyspecs,0,NULL,3),.args=ACL_DRYRUN_Args},
 {MAKE_CMD("genpass","Generates a pseudorandom, secure password that can be used to identify ACL users.","O(1)","6.0.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,ACL_GENPASS_History,0,ACL_GENPASS_Tips,0,aclCommand,-2,CMD_NOSCRIPT|CMD_LOADING|CMD_STALE|CMD_SENTINEL,ACL_CATEGORY_SLOW,NULL,ACL_GENPASS_Keyspecs,0,NULL,1),.args=ACL_GENPASS_Args},

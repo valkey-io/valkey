@@ -58,7 +58,7 @@
                                 }
                             }
                         },
-                        "members": {
+                        "users": {
                             "description": "List of usernames assigned to this role.",
                             "type": "array",
                             "items": {

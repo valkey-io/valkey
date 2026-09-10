@@ -287,7 +287,7 @@ start_server {tags {"modules acl"}} {
 start_server {tags {"modules acl"}} {
     test {test existing roles to have access to module commands loaded on runtime} {
         r acl SETROLE writerole -@all +@WRITE
-        r acl SETUSER j7 on >password -@all +@role:writerole
+        r acl SETUSER j7 on >password -@all role=writerole
         assert_equal [r module load $testmodule] OK
         assert_equal [r acl DRYRUN j7 aclcheck.module.command.aclcategories.write] OK
         assert_equal {OK} [r module unload aclcheck]
@@ -342,7 +342,7 @@ start_server {tags {"modules acl"}} {
 
     test {test module check acl for key and channel perm granted by a role} {
         r acl SETROLE modperms ~x resetchannels &ch1
-        r acl setuser default on nopass +@all resetkeys resetchannels +@role:modperms
+        r acl setuser default on nopass +@all resetkeys resetchannels role=modperms
 
         assert_equal [r aclcheck.set.check.key "~" x 5] OK
         assert_error "*DENIED KEY*" {r aclcheck.set.check.key "~" v 5}
@@ -350,7 +350,7 @@ start_server {tags {"modules acl"}} {
         assert_error "*DENIED CHANNEL*" {r aclcheck.publish.check.channel ch2 msg}
 
         # Restore the default user so the module can be unloaded.
-        r acl setuser default -@role:modperms on nopass ~* &* +@all alldbs
+        r acl setuser default role= on nopass ~* &* +@all alldbs
         r acl DELROLE modperms
     }
 
@@ -363,7 +363,7 @@ set modrole "modconfrole -@all +aclcheck.module.command.aclcategories.write"
 start_server [list tags {"modules acl"} overrides [list loadmodule $testmodule role $modrole]] {
     test {role in config can reference a module command} {
         assert_equal [r ACL ROLES] {modconfrole}
-        r acl SETUSER j10 on >password -@all +@role:modconfrole
+        r acl SETUSER j10 on >password -@all role=modconfrole
         assert_equal [r acl DRYRUN j10 aclcheck.module.command.aclcategories.write] OK
     }
 }

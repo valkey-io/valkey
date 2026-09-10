@@ -32,7 +32,7 @@ start_server {tags {"acl external:skip"}} {
 
     test {ACL SETROLE - rejects nested roles} {
         r ACL SETROLE otherrole +@read
-        catch {r ACL SETROLE myrole +@role:otherrole} err
+        catch {r ACL SETROLE myrole role=otherrole} err
         assert_match {*Error*} $err
     }
 
@@ -51,9 +51,14 @@ start_server {tags {"acl external:skip"}} {
         assert_equal [llength $sels] 0
     }
 
-    test {ACL SETROLE - role name validation - no spaces} {
-        catch {r ACL SETROLE "bad name" +@all} err
-        assert_match {*Role names can't contain spaces or null characters*} $err
+    test {ACL SETROLE - role names are restricted to alphanumeric characters} {
+        # A role name has to survive a config round trip and be unambiguous
+        # inside the comma separated `role=` list of a user.
+        foreach name {{bad name} q"x q'x {q\x} read-only read_only a,b role=x} {
+            catch {r ACL SETROLE $name +@all} err
+            assert_match {*Role names can only contain alphanumeric characters*} $err
+            assert_equal -1 [lsearch -exact [r ACL ROLES] $name]
+        }
     }
 
     test {ACL SETROLE - rejects an empty role name} {
@@ -65,30 +70,16 @@ start_server {tags {"acl external:skip"}} {
         assert_equal {} [lsearch -all -inline [r ACL ROLES] {}]
     }
 
-    test {ACL SETROLE - rejects quotes and backslashes in a role name} {
-        foreach name {q"x q'x {q\x}} {
-            catch {r ACL SETROLE $name +get ~*} err
-            assert_match {*Role names can't contain quotes or backslashes*} $err
-        }
-    }
-
-    test {ACL SETROLE - rejects role name that conflicts with category} {
-        catch {r ACL SETROLE read +@all} err
-        assert_match {*conflicts with a command or category*} $err
-
-        catch {r ACL SETROLE write +@all} err
-        assert_match {*conflicts with a command or category*} $err
-    }
-
-    test {ACL SETROLE - rejects role name that conflicts with command} {
-        catch {r ACL SETROLE get +@all} err
-        assert_match {*conflicts with a command or category*} $err
-
-        catch {r ACL SETROLE set +@all} err
-        assert_match {*conflicts with a command or category*} $err
-
-        catch {r ACL SETROLE acl +@all} err
-        assert_match {*conflicts with a command or category*} $err
+    test {ACL SETROLE - a role name may collide with a command or category} {
+        # `role=` keeps role names in their own namespace, so there is nothing
+        # to disambiguate against commands and categories.
+        r ACL SETROLE get ~g:* +get
+        r ACL SETROLE read ~r:* +get
+        r ACL SETUSER collide on >p role=get,read
+        assert_equal [r ACL DRYRUN collide GET g:key] {OK}
+        assert_equal [r ACL DRYRUN collide GET r:key] {OK}
+        r ACL DELUSER collide
+        r ACL DELROLE get read
     }
 
     # --- ACL GETROLE ---
@@ -103,14 +94,14 @@ start_server {tags {"acl external:skip"}} {
         r ACL GETROLE nonexistent
     } {}
 
-    test {ACL GETROLE - shows selectors and members} {
+    test {ACL GETROLE - shows selectors and users} {
         r ACL SETROLE inforole +get ~info:* (+set ~info:*)
-        r ACL SETUSER infouser on >infopass +@role:inforole
+        r ACL SETUSER infouser on >infopass role=inforole
         set info [r ACL GETROLE inforole]
-        # Check members list
-        set idx [lsearch $info "members"]
-        set members [lindex $info [expr {$idx + 1}]]
-        assert_equal $members {infouser}
+        # Check the list of users holding the role
+        set idx [lsearch $info "users"]
+        set users [lindex $info [expr {$idx + 1}]]
+        assert_equal $users {infouser}
         # Check selectors (should have one extra selector beyond root)
         set idx [lsearch $info "selectors"]
         set sels [lindex $info [expr {$idx + 1}]]
@@ -119,49 +110,78 @@ start_server {tags {"acl external:skip"}} {
 
     # --- ACL SETUSER ---
 
-    test {ACL SETUSER - add user to role} {
-        r ACL SETUSER alice on >pass123 +@role:myrole
+    test {ACL SETUSER - assign a role to a user} {
+        r ACL SETUSER alice on >pass123 role=myrole
     } {OK}
 
-    test {ACL SETUSER - remove user from role} {
-        r ACL SETUSER alice -@role:myrole
+    test {ACL SETUSER - an empty role= list removes every role} {
+        r ACL SETUSER alice role=
         set info [r ACL GETUSER alice]
         set idx [lsearch $info "roles"]
         set roles [lindex $info [expr {$idx + 1}]]
         assert_equal $roles {}
     }
 
+    test {ACL SETUSER - role= replaces the whole set rather than adding to it} {
+        r ACL SETROLE repA +get ~a:*
+        r ACL SETROLE repB +get ~b:*
+        r ACL SETUSER repuser on >p role=repA,repB
+        set info [r ACL GETUSER repuser]
+        set idx [lsearch $info "roles"]
+        assert_equal {repA repB} [lsort [lindex $info [expr {$idx + 1}]]]
+
+        r ACL SETUSER repuser role=repB
+        set info [r ACL GETUSER repuser]
+        set idx [lsearch $info "roles"]
+        assert_equal {repB} [lindex $info [expr {$idx + 1}]]
+
+        # repA no longer lists the user, so it can be deleted.
+        assert_equal 1 [r ACL DELROLE repA]
+        r ACL SETUSER repuser role=
+        r ACL DELUSER repuser
+        r ACL DELROLE repB
+    }
+
+    test {ACL SETUSER - the same role named twice is kept once} {
+        r ACL SETROLE dupe +get ~*
+        r ACL SETUSER dupeuser on >p role=dupe,dupe
+        set info [r ACL GETUSER dupeuser]
+        set idx [lsearch $info "roles"]
+        assert_equal {dupe} [lindex $info [expr {$idx + 1}]]
+        r ACL DELUSER dupeuser
+        r ACL DELROLE dupe
+    }
+
     test {ACL SETUSER - referencing non-existent role fails} {
-        catch {r ACL SETUSER dave on >pass +@role:nosuchrole} err
+        catch {r ACL SETUSER dave on >pass role=nosuchrole} err
         assert_match {*role does not exist*} $err
     }
 
-    test {ACL SETUSER - remove from non-existent role fails} {
-        catch {r ACL SETUSER alice -@role:nosuchrole} err
+    test {ACL SETUSER - a failing role= leaves the user's roles untouched} {
+        r ACL SETROLE keptrole +get ~kept:*
+        r ACL SETUSER keeper on >p role=keptrole
+        catch {r ACL SETUSER keeper role=keptrole,nosuchrole} err
         assert_match {*role does not exist*} $err
+        set info [r ACL GETUSER keeper]
+        set idx [lsearch $info "roles"]
+        assert_equal {keptrole} [lindex $info [expr {$idx + 1}]]
+        r ACL DELUSER keeper
+        r ACL DELROLE keptrole
     }
 
-    test {ACL SETUSER - empty role name fails} {
-        catch {r ACL SETUSER alice +@role:} err
-        assert_match {*Error*} $err
-
-        catch {r ACL SETUSER alice -@role:} err
-        assert_match {*Error*} $err
-    }
-
-    test {ACL SETUSER - removing a role the user does not hold fails} {
-        r ACL SETROLE unheldrole +get ~*
-        r ACL SETUSER notamember on >p
-        catch {r ACL SETUSER notamember -@role:unheldrole} err
-        assert_match {*not a member*} $err
-        r ACL DELUSER notamember
-        r ACL DELROLE unheldrole
+    test {ACL SETUSER - malformed role= lists are rejected} {
+        r ACL SETROLE listrole +get ~*
+        foreach spec {role=, role=,listrole role=listrole, role=listrole,,listrole} {
+            catch {r ACL SETUSER alice $spec} err
+            assert_match {*Syntax error*} $err
+        }
+        r ACL DELROLE listrole
     }
 
     # --- ACL GETUSER ---
 
     test {ACL GETUSER - shows role membership} {
-        r ACL SETUSER alice +@role:myrole
+        r ACL SETUSER alice role=myrole
         set info [r ACL GETUSER alice]
         set idx [lsearch $info "roles"]
         set roles [lindex $info [expr {$idx + 1}]]
@@ -170,14 +190,14 @@ start_server {tags {"acl external:skip"}} {
 
     # --- ACL DELROLE ---
 
-    test {ACL DELROLE - fails if role has members} {
-        r ACL SETUSER bob on >pass456 +@role:otherrole
+    test {ACL DELROLE - fails if the role is assigned to a user} {
+        r ACL SETUSER bob on >pass456 role=otherrole
         catch {r ACL DELROLE otherrole} err
-        assert_match {*has members*} $err
+        assert_match {*is assigned to one or more users*} $err
     }
 
-    test {ACL DELROLE - succeeds when no members} {
-        r ACL SETUSER bob -@role:otherrole
+    test {ACL DELROLE - succeeds when no user holds the role} {
+        r ACL SETUSER bob role=
         r ACL DELROLE otherrole
     } {1}
 
@@ -218,14 +238,14 @@ start_server {tags {"acl external:skip"}} {
     }
 
     test {After removing from role, permissions are revoked} {
-        r ACL SETUSER alice -@role:myrole
+        r ACL SETUSER alice role=
         set result [r ACL DRYRUN alice SET keys:test value]
         assert_match {*no permissions*} $result
     }
 
-    test {Role changes are immediately visible to members} {
+    test {Role changes are immediately visible to the users holding it} {
         r ACL SETROLE liverole +@all ~*
-        r ACL SETUSER carol on >carolpass +@role:liverole
+        r ACL SETUSER carol on >carolpass role=liverole
         # Carol can do anything now
         assert_equal [r ACL DRYRUN carol SET anykey value] {OK}
         # Update role to restrict keys
@@ -239,7 +259,7 @@ start_server {tags {"acl external:skip"}} {
     test {Multiple roles - each role is a separate selector with OR logic} {
         r ACL SETROLE roleA +get ~a:*
         r ACL SETROLE roleB +set ~b:*
-        r ACL SETUSER multi on >multipass +@role:roleA +@role:roleB
+        r ACL SETUSER multi on >multipass role=roleA,roleB
 
         # roleA allows GET on a:* keys
         assert_equal [r ACL DRYRUN multi GET a:key] {OK}
@@ -257,7 +277,7 @@ start_server {tags {"acl external:skip"}} {
     test {Role with multiple selectors} {
         # Create a role with two selectors: one for reads on r:*, one for writes on w:*
         r ACL SETROLE multiselector +get ~r:* (+set ~w:*)
-        r ACL SETUSER msuser on >mspass +@role:multiselector
+        r ACL SETUSER msuser on >mspass role=multiselector
 
         # First selector allows GET on r:*
         assert_equal [r ACL DRYRUN msuser GET r:key] {OK}
@@ -274,7 +294,7 @@ start_server {tags {"acl external:skip"}} {
 
     test {User own permissions add on top of role (OR logic)} {
         r ACL SETROLE onlyset +set ~data:*
-        r ACL SETUSER userplus on >pluspass +@role:onlyset +get ~data:*
+        r ACL SETUSER userplus on >pluspass role=onlyset +get ~data:*
 
         # Role allows SET on data:*, user's own selector allows GET on data:*
         assert_equal [r ACL DRYRUN userplus SET data:key value] {OK}
@@ -287,7 +307,7 @@ start_server {tags {"acl external:skip"}} {
 
     test {User cannot restrict role permissions} {
         r ACL SETROLE permissive +@all ~*
-        r ACL SETUSER restricted on >rpass +@role:permissive -@admin
+        r ACL SETUSER restricted on >rpass role=permissive -@admin
 
         # Even though user has no admin permissions, the role grants it
         assert_equal [r ACL DRYRUN restricted FLUSHALL] {OK}
@@ -295,7 +315,7 @@ start_server {tags {"acl external:skip"}} {
 
     test {Role with channel patterns} {
         r ACL SETROLE channelrole +subscribe &news:* ~*
-        r ACL SETUSER chanuser on >chanpass +@role:channelrole
+        r ACL SETUSER chanuser on >chanpass role=channelrole
         assert_equal [r ACL DRYRUN chanuser SUBSCRIBE news:sports] {OK}
         set result [r ACL DRYRUN chanuser SUBSCRIBE private:msg]
         assert_match {*no permissions*} $result
@@ -305,8 +325,8 @@ start_server {tags {"acl external:skip"}} {
         r RPUSH sortlist 1 2 3
         r ACL SETROLE allkeysrole ~* +@all
         r ACL SETROLE onekeyrole ~sortlist +@all
-        r ACL SETUSER sortok on >p +@role:allkeysrole
-        r ACL SETUSER sortlimited on >p +@role:onekeyrole
+        r ACL SETUSER sortok on >p role=allkeysrole
+        r ACL SETUSER sortlimited on >p role=onekeyrole
 
         r AUTH sortok p
         assert_equal {1 2 3} [r SORT sortlist BY weight_* GET #]
@@ -328,7 +348,7 @@ start_server {tags {"acl external:skip"}} {
 
     test {SETROLE restricting channels kills pubsub clients} {
         r ACL SETROLE pubrole +subscribe &news:* ~*
-        r ACL SETUSER pubuser on >pubpass +@role:pubrole
+        r ACL SETUSER pubuser on >pubpass role=pubrole
         set rd [valkey_deferring_client]
         $rd AUTH pubuser pubpass
         $rd read
@@ -346,7 +366,7 @@ start_server {tags {"acl external:skip"}} {
 
     test {SETROLE restricting channels kills shard pubsub clients} {
         r ACL SETROLE shardrole +ssubscribe &shard:* ~*
-        r ACL SETUSER sharduser on >shardpass +@role:shardrole
+        r ACL SETUSER sharduser on >shardpass role=shardrole
         set rd [valkey_deferring_client]
         $rd AUTH sharduser shardpass
         $rd read
@@ -362,7 +382,7 @@ start_server {tags {"acl external:skip"}} {
 
     test {SETUSER removing role kills pubsub clients using role channels} {
         r ACL SETROLE subrole +subscribe &events:* ~*
-        r ACL SETUSER subuser on >subpass +@role:subrole
+        r ACL SETUSER subuser on >subpass role=subrole
         set rd [valkey_deferring_client]
         $rd AUTH subuser subpass
         $rd read
@@ -370,7 +390,7 @@ start_server {tags {"acl external:skip"}} {
         assert_match {subscribe events:live 1} [$rd read]
 
         # Remove user from the role
-        r ACL SETUSER subuser -@role:subrole
+        r ACL SETUSER subuser role=
 
         # Client should be disconnected
         catch {$rd read} err
@@ -380,21 +400,21 @@ start_server {tags {"acl external:skip"}} {
 
     # --- User reset ---
 
-    test {ACL DELUSER removes the user from the role member list} {
+    test {ACL DELUSER removes the user from the role user list} {
         r ACL SETROLE delrole ~* +get
-        r ACL SETUSER deluser1 on >p +@role:delrole
-        r ACL SETUSER deluser2 on >p +@role:delrole
+        r ACL SETUSER deluser1 on >p role=delrole
+        r ACL SETUSER deluser2 on >p role=delrole
 
         set info [r ACL GETROLE delrole]
-        set idx [lsearch $info "members"]
+        set idx [lsearch $info "users"]
         assert_equal {deluser1 deluser2} [lsort [lindex $info [expr {$idx + 1}]]]
 
         r ACL DELUSER deluser1
         set info [r ACL GETROLE delrole]
-        set idx [lsearch $info "members"]
+        set idx [lsearch $info "users"]
         assert_equal {deluser2} [lindex $info [expr {$idx + 1}]]
 
-        # With the last member gone the role becomes deletable.
+        # With the last user gone the role becomes deletable.
         r ACL DELUSER deluser2
         assert_equal 1 [r ACL DELROLE delrole]
     }
@@ -437,7 +457,7 @@ start_server {tags {"acl external:skip"}} {
     test {ACL LOG records a denial for a user whose access comes from a role} {
         r ACL LOG RESET
         r ACL SETROLE logrole ~allowed:* +get
-        r ACL SETUSER loguser on >logpass +@role:logrole
+        r ACL SETUSER loguser on >logpass role=logrole
 
         set rd [valkey_client]
         $rd AUTH loguser logpass
@@ -459,19 +479,19 @@ start_server {tags {"acl external:skip"}} {
         r ACL SETROLE cache ~d:* +set
         assert_equal {Cache cache} [lsort [lsearch -all -inline [r ACL ROLES] {*ache}]]
 
-        r ACL SETUSER caseuser on >p +@role:Cache +@role:cache
+        r ACL SETUSER caseuser on >p role=Cache,cache
         set info [r ACL GETUSER caseuser]
         set idx [lsearch $info "roles"]
         assert_equal {Cache cache} [lsort [lindex $info [expr {$idx + 1}]]]
     }
 
-    test {User names are case-sensitive on the role member list} {
+    test {User names are case-sensitive on the role user list} {
         r ACL SETROLE rr ~* +get
-        r ACL SETUSER alice on >p +@role:rr
-        r ACL SETUSER ALICE on >p +@role:rr
+        r ACL SETUSER alice on >p role=rr
+        r ACL SETUSER ALICE on >p role=rr
 
         set info [r ACL GETROLE rr]
-        set idx [lsearch $info "members"]
+        set idx [lsearch $info "users"]
         assert_equal {ALICE alice} [lsort [lindex $info [expr {$idx + 1}]]]
     }
 
@@ -486,7 +506,7 @@ start_server {tags {"acl external:skip"}} {
                 }
             }
         }
-        # Now delete all roles (no members left)
+        # Now delete all roles (no users hold them any more)
         foreach role [r ACL ROLES] {
             catch {r ACL DELROLE $role}
         }
@@ -538,18 +558,18 @@ start_server [list overrides [list "dir" $server_path "aclfile" "role.acl"] tags
             assert_equal {viewer} [lindex $info [expr {$idx + 1}]]
 
             set info [r ACL GETROLE viewer]
-            set idx [lsearch $info "members"]
+            set idx [lsearch $info "users"]
             assert_equal {bob default} [lsort [lindex $info [expr {$idx + 1}]]]
         }
     }
 
     test {Role held by the default user cannot be deleted} {
-        r ACL SETUSER bob -@role:viewer
+        r ACL SETUSER bob role=
         catch {r ACL DELROLE viewer} err
-        assert_match {*has members*} $err
+        assert_match {*is assigned to one or more users*} $err
 
         # Reading the user back must not dereference a stale role entry.
-        assert_match {*+@role:viewer*} [r ACL LIST]
+        assert_match {*role=viewer*} [r ACL LIST]
         assert_equal {PONG} [r PING]
     }
 }
@@ -591,7 +611,7 @@ start_server [list overrides [list "dir" $server_path "aclfile" "role.acl"] tags
 }
 
 # Test loading roles from valkey.conf inline directives
-set conf_lines [list "role" "inlinerole ~* +@read" "user" "inlineuser on >ipass +@role:inlinerole"]
+set conf_lines [list "role" "inlinerole ~* +@read" "user" "inlineuser on >ipass role=inlinerole"]
 start_server [list config_lines $conf_lines tags [list "external:skip"]] {
 
     test {Roles loaded from valkey.conf inline directives} {
@@ -616,6 +636,26 @@ start_server [list config_lines $conf_lines tags [list "external:skip"]] {
         r CONFIG REWRITE
         assert_equal 0 [string match {*role runtimerole*} [exec cat [srv 0 config_file]]]
     }
+
+    test {A user's role= survives CONFIG REWRITE and a restart} {
+        r ACL SETROLE rewritten ~rw:* +get
+        r ACL SETROLE second ~sc:* +set
+        r ACL SETUSER rewriteuser on >p role=rewritten,second
+        r CONFIG REWRITE
+        restart_server 0 true false
+
+        assert_equal {inlinerole rewritten second} [lsort [r ACL ROLES]]
+        set info [r ACL GETUSER rewriteuser]
+        set idx [lsearch $info "roles"]
+        assert_equal {rewritten second} [lsort [lindex $info [expr {$idx + 1}]]]
+        assert_equal [r ACL DRYRUN rewriteuser GET rw:key] {OK}
+        assert_equal [r ACL DRYRUN rewriteuser SET sc:key v] {OK}
+
+        # The roles are still held, so they cannot be deleted yet.
+        assert_error {*is assigned to one or more users*} {r ACL DELROLE rewritten}
+        r ACL DELUSER rewriteuser
+        r ACL DELROLE rewritten second
+    }
 }
 
 # Test duplicate role in config on startup
@@ -630,22 +670,11 @@ test {Invalid role name in config on startup fails} {
     assert_match {*Role names can't be empty*} $err
 
     catch {exec $::VALKEY_SERVER_BIN --aclfile tests/assets/role-invalid-name.acl} err
-    assert_match {*invalid role name*quotes or backslashes*} $err
+    assert_match {*invalid role name*alphanumeric*} $err
 } {} {external:skip}
 
 # Test invalid role rule in config on startup
 test {Invalid role rule in config on startup fails} {
     catch {exec $::VALKEY_SERVER_BIN tests/assets/role-invalid-rule.conf} err
     assert_match {*Error in role declaration*} $err
-} {} {external:skip}
-
-# Test role name conflicting with category/command in config on startup
-test {Role name conflicting with category in config on startup fails} {
-    catch {exec $::VALKEY_SERVER_BIN tests/assets/role-category-conflict.conf} err
-    assert_match {*conflicts with a command or category*} $err
-} {} {external:skip}
-
-test {Role name conflicting with command in config on startup fails} {
-    catch {exec $::VALKEY_SERVER_BIN tests/assets/role-command-conflict.conf} err
-    assert_match {*conflicts with a command or category*} $err
 } {} {external:skip}

@@ -192,24 +192,24 @@ start_server [list overrides [list "dir" $server_path "aclfile" "user.acl"] tags
     test {module user keeps a working role across ACL LOAD} {
         r ACL SETROLE myrole +ping ~*
         r usercall.reset_user
-        r usercall.add_to_acl "on +@role:myrole ~* &*"
-        assert_match {*+@role:myrole*} [r usercall.get_acl]
+        r usercall.add_to_acl "on role=myrole ~* &*"
+        assert_match {*role=myrole*} [r usercall.get_acl]
 
         set info [r ACL GETROLE myrole]
-        set idx [lsearch $info "members"]
+        set idx [lsearch $info "users"]
         assert_equal {module_user} [lindex $info [expr {$idx + 1}]]
 
         r ACL SAVE
         r ACL LOAD
 
         # The membership survives, and both directions still agree.
-        assert_match {*+@role:myrole*} [r usercall.get_acl]
+        assert_match {*role=myrole*} [r usercall.get_acl]
         set info [r ACL GETROLE myrole]
-        set idx [lsearch $info "members"]
+        set idx [lsearch $info "users"]
         assert_equal {module_user} [lindex $info [expr {$idx + 1}]]
 
         # The role is still referenced, so it cannot be deleted.
-        assert_error {*has members*} {r ACL DELROLE myrole}
+        assert_error {*is assigned to one or more users*} {r ACL DELROLE myrole}
         assert_equal {PONG} [r PING]
     }
 

@@ -22,7 +22,7 @@
             ],
             [
                 "9.2.0",
-                "Added role assignment and removal."
+                "Added the `role=` rule for assigning roles to a user."
             ]
         ],
         "command_flags": [

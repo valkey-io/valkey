@@ -243,7 +243,7 @@ size_t moduleGetMemUsage(robj *key, robj *val, size_t sample_size, int dbid);
 robj *moduleTypeDupOrReply(client *c, robj *fromkey, robj *tokey, int todb, robj *value);
 int moduleDefragValue(robj *key, robj *obj, int dbid);
 int moduleLateDefrag(robj *key, robj *value, unsigned long *cursor, monotime endtime, int dbid);
-void moduleDefragGlobals(void);
+bool moduleDefragGlobals(monotime endtime);
 void *moduleGetHandleByName(char *modulename);
 int moduleIsModuleCommand(void *module_handle, struct serverCommand *cmd);
 void freeClientModuleData(client *c);

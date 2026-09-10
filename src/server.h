@@ -808,6 +808,7 @@ typedef struct ValkeyModuleType moduleType;
 #define OBJ_ENCODING_QUICKLIST 9  /* Encoded as linked list of listpacks */
 #define OBJ_ENCODING_STREAM 10    /* Encoded as a radix tree of listpacks */
 #define OBJ_ENCODING_LISTPACK 11  /* Encoded as a listpack */
+#define OBJ_ENCODING_LISTPACK2 12 /* Encoded as a listpack with metadata tag */
 
 #define OBJ_REFCOUNT_BITS 29
 #define OBJ_SHARED_REFCOUNT ((1 << OBJ_REFCOUNT_BITS) - 1) /* Global object never destroyed. */
@@ -1529,7 +1530,7 @@ struct sharedObjectsStruct {
         *execaborterr, *noautherr, *noreplicaserr, *busykeyerr, *oomerr, *plus, *messagebulk, *pmessagebulk,
         *subscribebulk, *unsubscribebulk, *psubscribebulk, *punsubscribebulk, *del, *unlink, *rpop, *lpop, *lpush, *zadd,
         *rpoplpush, *lmove, *blmove, *zpopmin, *zpopmax, *emptyscan, *multi, *exec, *left, *right, *hset, *hsetex, *hdel, *hpexpireat, *hpersist, *srem,
-        *xgroup, *xclaim, *script, *replconf, *eval, *cluster, *syncslots, *persist, *set, *pexpireat, *pexpire, *time, *pxat, *absttl,
+        *xgroup, *xclaim, *xdel, *xack, *script, *replconf, *eval, *cluster, *syncslots, *persist, *set, *pexpireat, *pexpire, *time, *pxat, *absttl,
         *retrycount, *force, *justid, *entriesread, *lastid, *ping, *setid, *keepttl, *load, *createconsumer, *getack,
         *special_asterisk, *special_equals, *default_username, *redacted, *ssubscribebulk, *sunsubscribebulk, *fields,
         *finish, *state, *success, *failed, *name, *message,
@@ -1973,6 +1974,10 @@ struct valkeyServer {
     double stat_module_progress;                        /* Module save progress. */
     size_t stat_clients_type_memory[CLIENT_TYPE_COUNT]; /* Mem usage by type */
     size_t stat_cluster_links_memory;                   /* Mem usage by cluster links */
+    long long stat_cluster_threaded_reads_processed;    /* Cluster reads completed by I/O threads */
+    long long stat_cluster_threaded_writes_processed;   /* Cluster writes completed by I/O threads */
+    long long stat_cluster_threaded_accepts_processed;  /* Cluster accepts completed by I/O threads */
+    long long stat_cluster_io_main_thread_fallbacks;    /* Cluster I/O ops handled on the main thread because dispatch failed */
     long long
         stat_unexpected_error_replies;                 /* Number of unexpected (aof-loading, replica to primary, etc.) error replies */
     long long stat_total_error_replies;                /* Total number of issued error replies ( command + rejected errors ) */
@@ -2867,6 +2872,13 @@ typedef struct {
     unsigned char *lpi; /* listpack iterator */
 } setTypeIterator;
 
+/* Enum for the available hashTypeIterator's */
+typedef enum {
+    HASH_ITER_ALL = 0,    /* Iterate all fields */
+    HASH_ITER_VOLATILE,   /* Iterate only fields which carry a ttl */
+    HASH_ITER_PERSISTENT, /* Iterate only fields which do not carry a ttl */
+} hashIteratorType;
+
 /* Structure to hold hash iteration abstraction. Note that iteration over
  * hashes involves both fields and values. Because it is possible that
  * not both are required, store pointers in the iterator to avoid
@@ -2874,7 +2886,7 @@ typedef struct {
 typedef struct {
     robj *subject;
     int encoding;
-    bool volatile_items_iter;
+    hashIteratorType iterator_type;
     unsigned char *fptr, *vptr;
 
     hashtableIterator iter;
@@ -3363,7 +3375,7 @@ void addRdbReplicaToPsyncWait(client *replica);
 void initClientReplicationData(client *c);
 void freeClientReplicationData(client *c);
 void replicaReceiveRDBFromPrimaryToDisk(connection *conn, int is_dual_channel);
-sds replicationSendAuth(connection *conn);
+sds replicationSendAuth(connection *conn, const char *user, size_t user_len, const char *pass, size_t pass_len);
 sds receiveSynchronousResponse(connection *conn);
 ConnectionType *connTypeOfReplication(void);
 robj *generateSelectCommand(int dictid);
@@ -3687,8 +3699,12 @@ robj *setTypeDup(robj *o);
 #define HASH_SET_COPY 0
 
 
-void hashTypeFreeVolatileSet(robj *o);          /* needed only for freeHashObject */
-void hashTypeTrackEntry(robj *o, entry *entry); /* needed only for rdbLoadObject */
+long long hashTypeVolatileCount(robj *o);                                    /* total volatile fields, incl. expired-unreaped */
+long long hashTypeListpackGetExpiry(unsigned char *zl, unsigned char *vptr); /* expiry of the pair whose value entry is vptr, or EXPIRY_NONE */
+bool hashTypeListpackFieldIsValid(long long expiry);                         /* listpack mirror of validateEntry: is a field with this expiry visible now */
+void hashTypeFreeVolatileSet(robj *o);                                       /* needed only for freeHashObject */
+void hashTypeTrackEntry(robj *o, entry *entry);                              /* needed only for rdbLoadObject */
+void hashTypeUpdateVolatileCount(robj *o, long delta);                       /* exported only for rdbLoadObject's HASH_2-to-listpack path */
 size_t hashTypeScanDefrag(robj *ob, size_t cursor, void *(*defragAlloc)(void *));
 size_t hashTypeDeleteExpiredFields(robj *o, mstime_t now, unsigned long max_fields, robj **out_fields);
 
@@ -3699,6 +3715,7 @@ bool hashTypeDelete(robj *o, sds key);
 unsigned long hashTypeLength(const robj *o);
 void hashTypeInitIterator(robj *subject, hashTypeIterator *hi);
 void hashTypeInitVolatileIterator(robj *subject, hashTypeIterator *hi);
+void hashTypeInitPersistentIterator(robj *subject, hashTypeIterator *hi);
 void hashTypeResetIterator(hashTypeIterator *hi);
 int hashTypeNext(hashTypeIterator *hi);
 void hashTypeCurrentFromListpack(hashTypeIterator *hi,
@@ -3708,6 +3725,7 @@ void hashTypeCurrentFromListpack(hashTypeIterator *hi,
                                  long long *vll);
 char *hashTypeCurrentFromHashTable(hashTypeIterator *hi, int what, size_t *len);
 sds hashTypeCurrentObjectNewSds(hashTypeIterator *hi, int what);
+long long hashTypeCurrentExpiry(robj *o, hashTypeIterator *hi);
 robj *hashTypeLookupWriteOrCreate(client *c, robj *key);
 robj *hashTypeGetValueObject(robj *o, sds field);
 int hashTypeSet(robj *o, sds field, sds value, mstime_t expiry, int flags, bool *expired_overwritten);
@@ -4349,6 +4367,8 @@ void xclaimCommand(client *c);
 void xautoclaimCommand(client *c);
 void xinfoCommand(client *c);
 void xdelCommand(client *c);
+void xackdelCommand(client *c);
+void xdelexCommand(client *c);
 void xtrimCommand(client *c);
 void lolwutCommand(client *c);
 void aclCommand(client *c);

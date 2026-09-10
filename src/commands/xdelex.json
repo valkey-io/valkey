@@ -1,7 +1,7 @@
 {
     "XDELEX": {
         "summary": "Delete stream message(s) with extended options",
-        "complexity": "O(1)",
+        "complexity": "O(1) for each single item to delete in the stream, regardless of the stream size",
         "group": "stream",
         "since": "9.2.0",
         "arity": -5,

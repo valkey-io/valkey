@@ -1971,6 +1971,10 @@ struct valkeyServer {
     double stat_module_progress;                        /* Module save progress. */
     size_t stat_clients_type_memory[CLIENT_TYPE_COUNT]; /* Mem usage by type */
     size_t stat_cluster_links_memory;                   /* Mem usage by cluster links */
+    long long stat_cluster_threaded_reads_processed;    /* Cluster reads completed by I/O threads */
+    long long stat_cluster_threaded_writes_processed;   /* Cluster writes completed by I/O threads */
+    long long stat_cluster_threaded_accepts_processed;  /* Cluster accepts completed by I/O threads */
+    long long stat_cluster_io_main_thread_fallbacks;    /* Cluster I/O ops handled on the main thread because dispatch failed */
     long long
         stat_unexpected_error_replies;                 /* Number of unexpected (aof-loading, replica to primary, etc.) error replies */
     long long stat_total_error_replies;                /* Total number of issued error replies ( command + rejected errors ) */
@@ -2779,6 +2783,9 @@ struct serverCommand {
      * Used for Cluster redirect (may be NULL) */
     serverGetKeysProc *getkeys_proc;
     int num_args; /* Length of args array. */
+    /* Nested prefetch: argv index of the field/member used for the inner hashtable
+     * lookup. 0 means disabled. Used by the prefetch system to find the lookup key. */
+    int member_arg_index;
     /* Array of subcommands (may be NULL) */
     struct serverCommand *subcommands;
     /* Array of arguments (may be NULL) */

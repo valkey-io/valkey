@@ -174,8 +174,8 @@ unsigned long orderedIndexCountLexRange(const OrderedIndex *oi, const_sds min, c
  * Use orderedIndexSeekToIndex/ScoreRange/LexRange to start elsewhere. */
 void orderedIndexInitIterator(OrderedIndexIterator *iter, const OrderedIndex *oi);
 
-/* Reset iterator to the initial unseeked state: next() will return the first
- * item and prev() will return the last item. Keeps the index association. */
+/* Detach the iterator from its index: next() and prev() return NULL until
+ * orderedIndexInitIterator() is called again. */
 void orderedIndexResetIterator(OrderedIndexIterator *iter);
 
 /* Advance iterator forward. Returns the next item, or NULL at end. */

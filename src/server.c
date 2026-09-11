@@ -2890,6 +2890,14 @@ void resetServerStats(void) {
     server.stat_expired_keys_with_vola_stale_perc = 0;
     server.stat_expired_time_cap_reached_count = 0;
     server.stat_expire_cycle_time_used = 0;
+    if (server.expire_lag_active_histogram) {
+        hdr_close(server.expire_lag_active_histogram);
+        server.expire_lag_active_histogram = NULL;
+    }
+    if (server.expire_lag_lazy_histogram) {
+        hdr_close(server.expire_lag_lazy_histogram);
+        server.expire_lag_lazy_histogram = NULL;
+    }
     server.stat_evictedkeys = 0;
     server.stat_evictedclients = 0;
     server.stat_evictedscripts = 0;
@@ -3924,6 +3932,30 @@ void updateCommandLatencyHistogram(struct hdr_histogram **latency_histogram, int
         hdr_init(LATENCY_HISTOGRAM_MIN_VALUE, LATENCY_HISTOGRAM_MAX_VALUE, LATENCY_HISTOGRAM_PRECISION,
                  latency_histogram);
     hdr_record_value(*latency_histogram, duration_hist);
+}
+
+/* Record how late a key was deleted relative to its own expiration deadline.
+ * A key stops being readable the instant its deadline passes, but it is only
+ * deleted, and its `expired` notification only published, once some client
+ * touches it or the active expire cycle happens to sample it. This histogram
+ * measures that gap so operators can see it instead of inferring it.
+ *
+ * Both callers pass the clock as of the moment they caught the key, not as of
+ * the moment the deletion returned, so that freeing a large value stays out of
+ * this histogram. That cost is already reported on its own as the expire-del
+ * latency event. */
+void updateExpireLagHistogram(struct hdr_histogram **lag_histogram, mstime_t expire_at, mstime_t caught_at) {
+    if (expire_at <= 0) return; /* Unknown deadline, nothing meaningful to record. */
+    /* Clamp while still in milliseconds. Converting first would depend on the
+     * two timestamps being close enough for the product to fit. */
+    mstime_t lag_ms = caught_at - expire_at;
+    if (lag_ms > EXPIRE_LAG_HISTOGRAM_MAX_VALUE / 1000000) lag_ms = EXPIRE_LAG_HISTOGRAM_MAX_VALUE / 1000000;
+    int64_t lag_ns = lag_ms > 0 ? (int64_t)lag_ms * 1000000 : 0;
+    if (lag_ns < EXPIRE_LAG_HISTOGRAM_MIN_VALUE) lag_ns = EXPIRE_LAG_HISTOGRAM_MIN_VALUE;
+    if (*lag_histogram == NULL)
+        hdr_init(EXPIRE_LAG_HISTOGRAM_MIN_VALUE, EXPIRE_LAG_HISTOGRAM_MAX_VALUE, EXPIRE_LAG_HISTOGRAM_PRECISION,
+                 lag_histogram);
+    hdr_record_value(*lag_histogram, lag_ns);
 }
 
 /* Handle the alsoPropagate() API to handle commands that want to propagate
@@ -6100,9 +6132,15 @@ void bytesToHuman(char *s, size_t size, unsigned long long n) {
     }
 }
 
-/* Fill percentile distribution of latencies. */
-sds fillPercentileDistributionLatencies(sds info, const char *histogram_name, struct hdr_histogram *histogram) {
-    info = sdscatfmt(info, "latency_percentiles_usec_%s:", histogram_name);
+/* Fill percentile distribution of latencies. The field prefix is a parameter
+ * because `latency_percentiles_usec_` is a command keyed namespace: everything
+ * under it is expected to be a command name. Anything that is not one needs a
+ * prefix of its own. */
+sds fillPercentileDistributionLatencies(sds info,
+                                        const char *prefix,
+                                        const char *histogram_name,
+                                        struct hdr_histogram *histogram) {
+    info = sdscatfmt(info, "%s_%s:", prefix, histogram_name);
     for (int j = 0; j < server.latency_tracking_info_percentiles_len; j++) {
         char fbuf[128];
         size_t len = snprintf(fbuf, sizeof(fbuf), "%f", server.latency_tracking_info_percentiles[j]);
@@ -6194,7 +6232,8 @@ sds genValkeyInfoStringLatencyStats(sds info, hashtable *commands) {
         char *tmpsafe;
         if (c->latency_histogram) {
             info = fillPercentileDistributionLatencies(
-                info, getSafeInfoString(c->fullname, sdslen(c->fullname), &tmpsafe), c->latency_histogram);
+                info, "latency_percentiles_usec", getSafeInfoString(c->fullname, sdslen(c->fullname), &tmpsafe),
+                c->latency_histogram);
             if (tmpsafe != NULL) zfree(tmpsafe);
         }
         if (c->subcommands_ht) {
@@ -7011,6 +7050,12 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
         info = sdscatprintf(info, "# Latencystats\r\n");
         if (server.latency_tracking_enabled) {
             info = genValkeyInfoStringLatencyStats(info, server.commands);
+            if (server.expire_lag_active_histogram)
+                info = fillPercentileDistributionLatencies(info, "expire_lag_percentiles_usec", "active",
+                                                           server.expire_lag_active_histogram);
+            if (server.expire_lag_lazy_histogram)
+                info = fillPercentileDistributionLatencies(info, "expire_lag_percentiles_usec", "lazy",
+                                                           server.expire_lag_lazy_histogram);
         }
     }
 

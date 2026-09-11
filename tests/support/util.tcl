@@ -47,6 +47,42 @@ proc write_binary_file {path data} {
     close $fd
 }
 
+# Create keys of all data types with predictable/consistent names for verification
+proc createComplexDatasetForVerification {r count {prefix ""}} {
+    for {set i 0} {$i < $count} {incr i} {
+        # String keys
+        {*}$r set ${prefix}before_$i "value_before_$i"
+        {*}$r set ${prefix}int_$i [expr {42 + $i}]
+        {*}$r set ${prefix}bits_$i "\x0f"
+        
+        # List keys
+        {*}$r lpush ${prefix}lst_$i "L2" "L1"
+        {*}$r rpush ${prefix}lst_$i "R1" "R2"
+        
+        # Set keys
+        {*}$r sadd ${prefix}set_$i "B1" "B2"
+        {*}$r sadd ${prefix}iset_$i 12 34
+        
+        # Sorted set keys
+        {*}$r zadd ${prefix}zset_$i 1 "Z1" 2 "Z2"
+        
+        # Hash keys
+        {*}$r hset ${prefix}hash_$i "H1" "a"
+        {*}$r hset ${prefix}hash_$i "H2" 1
+        
+        # HyperLogLog
+        {*}$r pfadd ${prefix}hll_$i "PF1"
+        
+        # Geo
+        {*}$r geoadd ${prefix}geo_$i -122.335167 47.608013 "seattle"
+        {*}$r geosearchstore ${prefix}geo_set_$i ${prefix}geo_$i FROMLONLAT -122.335167 47.608013 BYRADIUS 10 mi
+        
+        # Stream
+        {*}$r xadd ${prefix}stream_$i "*" "D1" "V1"
+        {*}$r xgroup create ${prefix}stream_$i ${prefix}group_$i 0 MKSTREAM
+    }
+}
+
 # Useful for some test
 proc zlistAlikeSort {a b} {
     if {[lindex $a 0] > [lindex $b 0]} {return 1}
@@ -738,8 +774,16 @@ proc process_is_paused pid {
 }
 
 # Wait until the process enters a paused state.
-proc wait_process_paused pid {
-    wait_for_condition 50 100 {
+#
+# Callers that arm a self-stopping debug point (DEBUG PAUSE-AFTER-FORK,
+# DEBUG PAUSE-BEFORE-PSYNC) also wait for the server to reach it, which under
+# valgrind can take longer than 5 seconds. Scale the budget for them, but only
+# under valgrind so normal runs keep failing fast.
+proc wait_process_paused {pid {retries auto}} {
+    if {$retries eq "auto"} {
+        if {$::valgrind} {set retries 1000} else {set retries 50}
+    }
+    wait_for_condition $retries 100 {
         [process_is_paused $pid]
     } else {
         puts [exec ps j $pid]
@@ -749,7 +793,8 @@ proc wait_process_paused pid {
 
 proc pause_process pid {
     exec kill -SIGSTOP $pid
-    wait_process_paused $pid
+    # We sent the signal, so the stop is near-immediate. Keep the short budget.
+    wait_process_paused $pid 50
 }
 
 proc resume_process pid {

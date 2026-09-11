@@ -2797,3 +2797,34 @@ start_server {tags {"scripting"}} {
        r config set maxmemory 0
     }
 }
+
+start_server {tags {"scripting"}} {
+    test {Script shutdown - server handles SIGTERM gracefully during busy script} {
+        set pid [s process_id]
+        # So that we don't wait for default 5 seconds
+        r config set lua-time-limit 10
+        
+        set rd [valkey_deferring_client]
+        
+        # Start the infinite loop script using deferring client
+        # We don't read the response since the script will be killed by SIGTERM
+        run_script_on_connection $rd {while true do end} 0
+        
+        wait_for_condition 50 100 {
+            [catch {r ping} e] == 1
+        } else {
+            fail "Can't wait for script to timeout"
+        }
+        
+        exec kill -TERM $pid
+        
+        # Wait for the server to shut down cleanly without crashing
+        wait_for_condition 100 100 {
+            [catch {exec ps -p $pid} e] == 1
+        } else {
+            fail "Server didn't shut down in time"
+        }
+        
+        $rd close
+    } {0} {external:skip}
+}

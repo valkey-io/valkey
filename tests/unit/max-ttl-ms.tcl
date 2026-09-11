@@ -230,9 +230,10 @@ start_server {tags {expire} overrides {max-ttl-ms 0}} {
 start_server {tags {expire external:skip needs:debug} overrides {appendonly yes save {}}} {
     test {max-ttl-ms AOF replay and rewrite preserve expiration state} {
         r set persistent value
-        r config set max-ttl-ms 60000
+        # Keep deadlines beyond the test timeout so slow coverage runs cannot expire them.
+        r config set max-ttl-ms 3600000
         r hset expiring f v
-        r set explicit value PX 50000
+        r set explicit value PX 3000000
         set deadline [r pexpiretime expiring]
         set explicit_deadline [r pexpiretime explicit]
         r config set max-ttl-ms 1

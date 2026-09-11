@@ -206,6 +206,7 @@ typedef struct _client {
     int slots_last_update;
     uint64_t paused : 1;
     uint64_t reuse : 1;
+    uint64_t request_started : 1; /* Request initialized, even if no bytes were written. */
 } *client;
 
 /* Threads. */
@@ -587,9 +588,11 @@ static void resetClient(client c) {
     aeEventLoop *el = CLIENT_GET_EVENTLOOP(c);
     aeDeleteFileEvent(el, c->context->fd, AE_WRITABLE);
     aeDeleteFileEvent(el, c->context->fd, AE_READABLE);
-    createFileEvent(el, c->context->fd, AE_WRITABLE, writeHandler, c);
     c->written = 0;
+    c->request_started = 0;
     c->pending = config.pipeline * c->seqlen;
+    /* RDMA registration can invoke writeHandler immediately. */
+    createFileEvent(el, c->context->fd, AE_WRITABLE, writeHandler, c);
 }
 
 /* Scan buffer for {tag} placeholders and store positions */
@@ -876,8 +879,8 @@ static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
     UNUSED(fd);
     UNUSED(mask);
 
-    // When benchmark with rps control, and client is not reuse, try to acquire a token.
-    if (config.rps > 0 && c->reuse == 0) {
+    /* Acquire a token only for a new request not already resumed by the timer. */
+    if (config.rps > 0 && c->reuse == 0 && !c->request_started) {
         /* Acquire a token from the token bucket. */
         long long delay = acquireTokenOrWait(config.pipeline);
 
@@ -906,8 +909,10 @@ static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
     }
     c->reuse = 0;
 
-    /* Initialize request when nothing was written. */
-    if (c->written == 0) {
+    /* Initialize each request only once. A would-block write can leave written
+     * at zero across callbacks, but must not consume another request or change
+     * the buffer (TLS retries also require the same write contents). */
+    if (!c->request_started) {
         /* Enforce upper bound to number of requests. */
         int requests_issued = atomic_fetch_add_explicit(&config.requests_issued,
                                                         config.pipeline * c->seqlen,
@@ -947,6 +952,7 @@ static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
         c->slots_last_update = atomic_load_explicit(&config.slots_last_update, memory_order_relaxed);
         c->start = ustime();
         c->latency = -1;
+        c->request_started = 1;
     }
     const ssize_t buflen = sdslen(c->obuf);
     const ssize_t writeLen = buflen - c->written;
@@ -1045,6 +1051,7 @@ static client createClient(char *cmd, int len, int seqlen, client from, int thre
     }
     c->paused = 0;
     c->reuse = 0;
+    c->request_started = 0;
     c->thread_id = thread_id;
     /* Suppress libvalkey cleanup of unused buffers for max speed. */
     c->context->reader->maxbuf = 0;

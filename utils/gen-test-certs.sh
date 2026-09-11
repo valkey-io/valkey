@@ -10,7 +10,7 @@
 #   tests/tls/ca-multi.crt                       CA bundle with multiple certs.
 #   tests/tls/ca-dir/                            CA directory with hashed links.
 #   tests/tls/valkey{,-pw}.{crt,key}             A certificate with no key usage/policy restrictions. With and without a passphrase.
-#   tests/tls/valkey-mldsa{,-pw}.{crt,key}       A PQC certificate with no key usage/policy restrictions. With and without a passphrase.
+#   tests/tls/valkey-ec{,-pw}.{crt,key}          An ECDSA certificate with no key usage/policy restrictions. With and without a passphrase.
 #   tests/tls/client.{crt,key}                   A certificate restricted for SSL client usage.
 #   tests/tls/client-{expired,notyet}.crt        Invalid certificates restricted for SSL client usage.
 #   tests/tls/server.{crt,key}                   A certificate restricted for SSL server usage.

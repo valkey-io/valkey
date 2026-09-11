@@ -59,7 +59,7 @@ typedef long long ustime_t;
 
 /* Version of the ValkeyModuleTypeMethods structure. Once the ValkeyModuleTypeMethods
  * structure is changed, this version number needs to be changed synchronistically. */
-#define VALKEYMODULE_TYPE_METHOD_VERSION 5
+#define VALKEYMODULE_TYPE_METHOD_VERSION 6
 
 /* API flags and constants */
 #define VALKEYMODULE_READ (1 << 0)
@@ -297,6 +297,10 @@ This flag should not be used directly by the module.
 /* Bit flags for aux_save_triggers and the aux_load and aux_save callbacks */
 #define VALKEYMODULE_AUX_BEFORE_RDB (1 << 0)
 #define VALKEYMODULE_AUX_AFTER_RDB (1 << 1)
+
+/* Bit flags for aux_save_aof_triggers and the aux_load_aof and aux_save_aof callbacks */
+#define VALKEYMODULE_AUX_BEFORE_AOF (1 << 0)
+#define VALKEYMODULE_AUX_AFTER_AOF (1 << 1)
 
 /* RM_Yield flags */
 #define VALKEYMODULE_YIELD_FLAG_NONE (1 << 0)
@@ -1558,6 +1562,9 @@ typedef struct ValkeyModuleTypeMethods {
     ValkeyModuleTypeUnlinkFunc2 unlink2;
     ValkeyModuleTypeCopyFunc2 copy2;
     ValkeyModuleTypeAuxSaveFunc aux_save2;
+    ValkeyModuleTypeAuxSaveFunc aux_save_aof;
+    ValkeyModuleTypeAuxLoadFunc aux_load_aof;
+    int aux_save_aof_triggers;
 } ValkeyModuleTypeMethods;
 
 #define VALKEYMODULE_GET_API(name) ValkeyModule_GetApi("ValkeyModule_" #name, ((void **)&ValkeyModule_##name))

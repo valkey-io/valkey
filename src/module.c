@@ -7548,6 +7548,11 @@ moduleType *VM_CreateDataType(ValkeyModuleCtx *ctx, const char *name, int encver
         struct {
             moduleTypeAuxSaveFunc aux_save2;
         } v5;
+        struct {
+            moduleTypeAuxSaveFunc aux_save_aof;
+            moduleTypeAuxLoadFunc aux_load_aof;
+            int aux_save_aof_triggers;
+        } v6;
     } *tms = (struct typemethods *)typemethods_ptr;
 
     moduleType *mt = zcalloc(sizeof(*mt));
@@ -7578,6 +7583,11 @@ moduleType *VM_CreateDataType(ValkeyModuleCtx *ctx, const char *name, int encver
     }
     if (tms->version >= 5) {
         mt->aux_save2 = tms->v5.aux_save2;
+    }
+    if (tms->version >= 6) {
+        mt->aux_save_aof = tms->v6.aux_save_aof;
+        mt->aux_load_aof = tms->v6.aux_load_aof;
+        mt->aux_save_aof_triggers = tms->v6.aux_save_aof_triggers;
     }
     memcpy(mt->name, name, sizeof(mt->name));
     listAddNodeTail(ctx->module->types, mt);
@@ -7998,6 +8008,79 @@ ssize_t rdbSaveModulesAux(rio *rdb, int when) {
     }
 
     return total_written;
+}
+
+/* Iterate over modules, and trigger aof aux saving for the module types
+ * that registered aux_save_aof callbacks. The data is serialized using the
+ * module IO format and written as MODULE AUXLOAD commands to the AOF. */
+int aofRewriteModulesAux(rio *aof, int when) {
+    dictIterator *di = dictGetIterator(modules);
+    dictEntry *de;
+
+    while ((de = dictNext(di)) != NULL) {
+        struct ValkeyModule *module = dictGetVal(de);
+        listIter li;
+        listNode *ln;
+
+        listRewind(module->types, &li);
+        while ((ln = listNext(&li))) {
+            moduleType *mt = ln->value;
+            if (!mt->aux_save_aof || !(mt->aux_save_aof_triggers & when)) continue;
+
+            /* Create a buffer rio for the module to serialize aux data into. */
+            rio bufrio;
+            rioInitWithBuffer(&bufrio, sdsempty());
+
+            ValkeyModuleIO io;
+            moduleInitIOContext(&io, mt, &bufrio, NULL, -1);
+
+            mt->aux_save_aof(&io, when);
+
+            if (io.ctx) {
+                moduleFreeContext(io.ctx);
+                zfree(io.ctx);
+            }
+
+            if (io.error) {
+                sdsfree(bufrio.io.buffer.ptr);
+                dictReleaseIterator(di);
+                return C_ERR;
+            }
+
+            /* If the module didn't write anything, skip this entry. */
+            if (sdslen(bufrio.io.buffer.ptr) == 0) {
+                sdsfree(bufrio.io.buffer.ptr);
+                continue;
+            }
+
+            /* Write EOF marker to the buffer. */
+            if (rdbSaveLen(&bufrio, RDB_MODULE_OPCODE_EOF) == -1) {
+                sdsfree(bufrio.io.buffer.ptr);
+                dictReleaseIterator(di);
+                return C_ERR;
+            }
+
+            /* Emit: MODULE AUXLOAD <type_name> <encver> <when> <data> */
+            if (rioWriteBulkCount(aof, '*', 6) == 0) goto werr_inner;
+            if (rioWriteBulkString(aof, "MODULE", 6) == 0) goto werr_inner;
+            if (rioWriteBulkString(aof, "AUXLOAD", 7) == 0) goto werr_inner;
+            if (rioWriteBulkString(aof, mt->name, strlen(mt->name)) == 0) goto werr_inner;
+            if (rioWriteBulkLongLong(aof, mt->id & 1023) == 0) goto werr_inner;
+            if (rioWriteBulkLongLong(aof, when) == 0) goto werr_inner;
+            if (rioWriteBulkString(aof, bufrio.io.buffer.ptr, sdslen(bufrio.io.buffer.ptr)) == 0) goto werr_inner;
+
+            sdsfree(bufrio.io.buffer.ptr);
+            continue;
+
+        werr_inner:
+            sdsfree(bufrio.io.buffer.ptr);
+            dictReleaseIterator(di);
+            return C_ERR;
+        }
+    }
+
+    dictReleaseIterator(di);
+    return C_OK;
 }
 
 /* --------------------------------------------------------------------------
@@ -14723,6 +14806,84 @@ void VM_ScriptingEngineDebuggerProcessCommands(int *client_disconnected,
  * MODULE LOADEX <path> [[CONFIG NAME VALUE] [CONFIG NAME VALUE]] [ARGS ...]
  * MODULE UNLOAD <name>
  */
+/* Handle MODULE AUXLOAD command: restore module auxiliary data from AOF.
+ * Command format: MODULE AUXLOAD <module-type-name> <encver> <when> <data>
+ * This is an internal command used by AOF rewrite/loading. */
+void moduleAuxLoadCommand(client *c) {
+    char *type_name = objectGetVal(c->argv[2]);
+    long long encver, when;
+
+    if (getLongLongFromObject(c->argv[3], &encver) != C_OK) {
+        serverLog(LL_WARNING,
+                  "The AOF file contains a MODULE AUXLOAD command with "
+                  "invalid encver argument.");
+        exit(1);
+    }
+    if (getLongLongFromObject(c->argv[4], &when) != C_OK) {
+        serverLog(LL_WARNING,
+                  "The AOF file contains a MODULE AUXLOAD command with "
+                  "invalid when argument.");
+        exit(1);
+    }
+
+    moduleType *mt = moduleTypeLookupModuleByName(type_name);
+    if (mt == NULL) {
+        serverLog(LL_WARNING,
+                  "The AOF file contains MODULE AUX data for module type '%s' "
+                  "which is not loaded. You need to load the module before "
+                  "loading the AOF file.",
+                  type_name);
+        exit(1);
+    }
+    if (!mt->aux_load_aof) {
+        serverLog(LL_WARNING,
+                  "The AOF file contains MODULE AUX data for module type '%s', "
+                  "but the module does not support AOF aux loading.",
+                  type_name);
+        exit(1);
+    }
+
+    sds data = objectGetVal(c->argv[5]);
+    size_t datalen = sdslen(data);
+
+    /* Create a buffer rio from the serialized data for reading. */
+    rio bufrio;
+    rioInitWithBuffer(&bufrio, sdsnewlen(data, datalen));
+
+    ValkeyModuleIO io;
+    moduleInitIOContext(&io, mt, &bufrio, NULL, -1);
+
+    int rc = mt->aux_load_aof(&io, (int)encver, (int)when);
+
+    if (io.ctx) {
+        moduleFreeContext(io.ctx);
+        zfree(io.ctx);
+    }
+
+    if (rc != VALKEYMODULE_OK || io.error) {
+        serverLog(LL_WARNING,
+                  "Failed to load MODULE AUX data for module type '%s' "
+                  "from the AOF file.",
+                  type_name);
+        sdsfree(bufrio.io.buffer.ptr);
+        exit(1);
+    }
+
+    /* Verify EOF marker. */
+    uint64_t eof = rdbLoadLen(&bufrio, NULL);
+    if (eof != RDB_MODULE_OPCODE_EOF) {
+        serverLog(LL_WARNING,
+                  "MODULE AUX data for module type '%s' in the AOF file "
+                  "is not terminated by the proper EOF marker.",
+                  type_name);
+        sdsfree(bufrio.io.buffer.ptr);
+        exit(1);
+    }
+
+    sdsfree(bufrio.io.buffer.ptr);
+    addReply(c, shared.ok);
+}
+
 void moduleCommand(client *c) {
     char *subcmd = objectGetVal(c->argv[1]);
 
@@ -14736,6 +14897,8 @@ void moduleCommand(client *c) {
             "    Load a module library from <path>, while passing it module configurations and optional arguments.",
             "UNLOAD <name>",
             "    Unload a module.",
+            "AUXLOAD <module-type-name> <encver> <when> <data>",
+            "    Load module auxiliary data (for internal AOF use).",
             NULL};
         addReplyHelp(c, help);
     } else if (!strcasecmp(subcmd, "load") && c->argc >= 3) {
@@ -14787,6 +14950,8 @@ void moduleCommand(client *c) {
         }
     } else if (!strcasecmp(subcmd, "list") && c->argc == 2) {
         addReplyLoadedModules(c);
+    } else if (!strcasecmp(subcmd, "auxload") && c->argc == 6) {
+        moduleAuxLoadCommand(c);
     } else {
         addReplySubcommandSyntaxError(c);
         return;

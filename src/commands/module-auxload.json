@@ -1,0 +1,41 @@
+{
+    "AUXLOAD": {
+        "summary": "Loads module auxiliary data. This is an internal command used by AOF.",
+        "complexity": "O(N) where N is the size of the auxiliary data.",
+        "group": "server",
+        "since": "9.1.0",
+        "arity": 6,
+        "container": "MODULE",
+        "function": "moduleCommand",
+        "command_flags": [
+            "ADMIN",
+            "NOSCRIPT"
+        ],
+        "reply_schema": {
+            "const": "OK"
+        },
+        "arguments": [
+            {
+                "name": "module-type-name",
+                "type": "string"
+            },
+            {
+                "name": "encver",
+                "type": "integer"
+            },
+            {
+                "name": "when",
+                "type": "integer"
+            },
+            {
+                "name": "data",
+                "type": "string"
+            }
+        ],
+        "acl_categories": [
+            "ADMIN",
+            "DANGEROUS",
+            "SLOW"
+        ]
+    }
+}

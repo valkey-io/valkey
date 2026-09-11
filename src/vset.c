@@ -724,6 +724,7 @@ void pvSort(pVector *pv, int (*compare)(const void *a, const void *b)) {
 #define VOLATILESET_BUCKET_INTERVAL_MIN (1LL << 4LL)  // 2^4 = 16 milliseconds
 
 #define VOLATILESET_VECTOR_BUCKET_MAX_SIZE 127
+#define VSET_EXPIRE_STACK_ENTRIES 128
 
 #define VSET_NONE_BUCKET_PTR ((void *)(uintptr_t) - 1)
 #define VSET_BUCKET_NONE -1      // matching the NULL case
@@ -1073,8 +1074,17 @@ static uint64_t hash_pointer(const void *ptr) {
     return (uint64_t)x;
 }
 
-hashtableType pointerHashtableType = {
+typedef struct {
+    size_t pop_scan_cursor[2];
+} pointerHashtableMetadata;
+
+static size_t pointerHashtableMetadataSize(void) {
+    return sizeof(pointerHashtableMetadata);
+}
+
+static hashtableType pointerHashtableType = {
     .hashFunction = hash_pointer,
+    .getMetadataSize = pointerHashtableMetadataSize,
 };
 
 static inline vsetBucket *findBucket(rax *expiry_buckets, long long expiry, unsigned char *key, size_t *key_len, long long *pbucket_ts, raxNode **node) {
@@ -1485,7 +1495,7 @@ static inline size_t vsetBucketRemoveExpired_SINGLE(vsetBucket **bucket, vsetGet
     if (max_count && getExpiry(entry) <= now) {
         freeVsetBucket(*bucket);
         *bucket = vsetBucketFromNone();
-        if (expiryFunc) expiryFunc(entry, ctx);
+        if (expiryFunc) expiryFunc(&entry, 1, ctx);
         return 1;
     }
     return 0;
@@ -1497,15 +1507,15 @@ static inline size_t vsetBucketRemoveExpired_VECTOR(vsetBucket **bucket, vsetGet
     uint32_t i = 0;
     for (; i < len; i++) {
         void *entry = pvGet(pv, i);
-        /* break as soon as the expiryFunc stops us OR we reached an entry which is not expired */
+        /* break as soon as we reach an entry which is not expired */
         if (getExpiry(entry) > now)
             break;
-        if (expiryFunc) expiryFunc(entry, ctx);
     }
     /* If no expiry occurred, no need to split. */
     if (i > 0) {
         pVector *new_pv = pvSplit(&pv, i);
         *bucket = (new_pv ? vsetBucketFromVector(new_pv) : vsetBucketFromNone());
+        if (expiryFunc) expiryFunc(pv->data, i, ctx);
         pvFree(pv);
     }
     return i;
@@ -1515,16 +1525,21 @@ static inline size_t vsetBucketRemoveExpired_HASHTABLE(vsetBucket **bucket, vset
     UNUSED(getExpiry);
     UNUSED(now);
     hashtable *ht = vsetBucketHashtable(*bucket);
-    hashtableIterator it;
-    void *entry;
+    void *stack_entries[VSET_EXPIRE_STACK_ENTRIES];
+    pointerHashtableMetadata *metadata = hashtableMetadata(ht);
     size_t count = 0;
-    hashtableInitIterator(&it, ht, HASHTABLE_ITER_SAFE);
-    while (count < max_count && hashtableNext(&it, &entry)) {
-        assert(hashtableDelete(ht, entry));
-        expiryFunc(entry, ctx);
-        count++;
+
+    /* hashtablePopAnyEntries replaces a safe iterator over this vset bucket.
+     * The old path paused rehashing on the first hashtableNext() call, so
+     * deletions under that iterator did not advance rehashing either. */
+    while (count < max_count && hashtableSize(ht) > 0) {
+        /* Limit each pop to the stack_entries output buffer size. */
+        size_t want = min(max_count - count, (size_t)VSET_EXPIRE_STACK_ENTRIES);
+        size_t got = hashtablePopAnyEntries(ht, stack_entries, want, metadata->pop_scan_cursor);
+        if (got == 0) break;
+        if (expiryFunc) expiryFunc(stack_entries, got, ctx);
+        count += got;
     }
-    hashtableCleanupIterator(&it);
 
     /* Collapse or downgrade the bucket based on how many entries remain.
      *

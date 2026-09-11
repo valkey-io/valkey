@@ -3894,7 +3894,7 @@ int modulePopulateClientInfoStructure(void *ci, client *client, int structver) {
     if (client->conn->type == connectionTypeTls()) ci1->flags |= VALKEYMODULE_CLIENTINFO_FLAG_SSL;
     if (client->flag.readonly) ci1->flags |= VALKEYMODULE_CLIENTINFO_FLAG_READONLY;
     if (client->flag.primary) ci1->flags |= VALKEYMODULE_CLIENTINFO_FLAG_PRIMARY;
-    if (client->flag.replica) ci1->flags |= VALKEYMODULE_CLIENTINFO_FLAG_REPLICA;
+    if (client->flag.replica_or_monitor) ci1->flags |= VALKEYMODULE_CLIENTINFO_FLAG_REPLICA;
     if (client->flag.monitor) ci1->flags |= VALKEYMODULE_CLIENTINFO_FLAG_MONITOR;
     if (client->flag.module) ci1->flags |= VALKEYMODULE_CLIENTINFO_FLAG_MODULE;
     if (client->flag.authenticated) ci1->flags |= VALKEYMODULE_CLIENTINFO_FLAG_AUTHENTICATED;

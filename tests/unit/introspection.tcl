@@ -522,6 +522,27 @@ start_server {tags {"introspection"}} {
         catch {$c1 close}
     }
 
+    # MONITOR clients share the internal replica_or_monitor flag with real replicas,
+    # but they report flags=O, so the S filter must not match them.
+    test {CLIENT LIST with FLAGS filter distinguishes replicas from MONITOR clients} {
+        set rd [valkey_deferring_client]
+        $rd client setname monitorclient
+        assert_equal {OK} [$rd read]
+        $rd monitor
+        assert_equal {OK} [$rd read]
+
+        assert_match "*name=monitorclient*" [r client list flags O]
+        assert_no_match "*name=monitorclient*" [r client list flags S]
+
+        # An actual replica connection is the other way around.
+        set repl [attach_to_replication_stream]
+        assert_match "*flags=S*" [r client list flags S]
+        assert_no_match "*flags=S*" [r client list flags O]
+        close_replication_stream $repl
+
+        $rd close
+    }
+
     # Test CLIENT LIST with NOT-TYPE filter
     test {CLIENT LIST with NOT-TYPE filter} {
         r client setname mytestclient

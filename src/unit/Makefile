@@ -199,6 +199,11 @@ ifeq ($(BUILD_TLS),yes)
 	LD_LIBS += $(TLS_LIBS)
 endif
 
+# Add systemd libraries if enabled
+ifeq ($(BUILD_WITH_SYSTEMD),yes)
+	LD_LIBS += $(LIBSYSTEMD_LIBS)
+endif
+
 # Compile C++ test files, recompile if generated_wrappers or compiler flags change
 %.o: %.cpp generated_wrappers.cpp .flags
 	$(CXX) -MD -MP -std=c++17 -faligned-new -Wno-write-strings -fpermissive $(GCC_FLAGS) $(OPT) $(DEBUG) $(TEST_CFLAGS) -Wall -Wno-deprecated-declarations -c \

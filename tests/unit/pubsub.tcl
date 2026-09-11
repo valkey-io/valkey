@@ -530,8 +530,8 @@ start_server {tags {"pubsub network"}} {
                 redis.call("publish","foo","bar")
                 redis.call("publish","foo","vaz")
                 redis.call("ping","def")
-                return "bla"} 0]
-        assert_equal $res {bla}
+                return "blah"} 0]
+        assert_equal $res {blah}
         assert_equal [r read] {message foo bar}
         assert_equal [r read] {message foo vaz}
     } {} {resp3}

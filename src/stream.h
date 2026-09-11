@@ -65,7 +65,7 @@ typedef struct streamCG {
                                has every message delivered to consumers (without
                                the NOACK option) that was yet not acknowledged
                                as processed. The key of the radix tree is the
-                               ID as a 64 bit big endian number, while the
+                               ID as a 64 bit big-endian number, while the
                                associated value is a streamNACK structure.*/
     rax *consumers;         /* A radix tree representing the consumers by name
                                and their associated representation in the form
@@ -82,7 +82,7 @@ typedef struct streamConsumer {
     rax *pel;             /* Consumer specific pending entries list: all
                              the pending messages delivered to this
                              consumer not yet acknowledged. Keys are
-                             big endian message IDs, while values are
+                             big-endian message IDs, while values are
                              the same streamNACK structure referenced
                              in the "pel" of the consumer group structure
                              itself, so the value is shared. */

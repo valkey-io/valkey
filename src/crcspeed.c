@@ -103,7 +103,7 @@ static inline uint64_t rev8(uint64_t a) {
 /* This function is called once to initialize the CRC table for use on a
    big-endian architecture. */
 void crcspeed64big_init(crcfn64 fn, uint64_t big_table[8][256]) {
-    /* Create the little endian table then reverse all the entries. */
+    /* Create the little-endian table then reverse all the entries. */
     crcspeed64little_init(fn, big_table);
     for (int k = 0; k < 8; k++) {
         for (int n = 0; n < 256; n++) {
@@ -113,7 +113,7 @@ void crcspeed64big_init(crcfn64 fn, uint64_t big_table[8][256]) {
 }
 
 void crcspeed16big_init(crcfn16 fn, uint16_t big_table[8][256]) {
-    /* Create the little endian table then reverse all the entries. */
+    /* Create the little-endian table then reverse all the entries. */
     crcspeed16little_init(fn, big_table);
     for (int k = 0; k < 8; k++) {
         for (int n = 0; n < 256; n++) {
@@ -340,7 +340,7 @@ uint64_t crcspeed64big(uint64_t big_table[8][256], uint64_t crc, void *buf,
     return rev8(crc);
 }
 
-/* WARNING: Completely untested on big endian architecture.  Possibly broken. */
+/* WARNING: Completely untested on big-endian architecture.  Possibly broken. */
 uint16_t crcspeed16big(uint16_t big_table[8][256], uint16_t crc_in, void *buf,
                        size_t len) {
     unsigned char *next = buf;

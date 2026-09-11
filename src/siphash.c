@@ -64,7 +64,7 @@ int siptlw(int c) {
 #define NO_SANITIZE(sanitizer)
 #endif
 
-/* Test of the CPU is Little Endian and supports not aligned accesses.
+/* Test of the CPU is Little-Endian and supports not aligned accesses.
  * Two interesting conditions to speedup the function that happen to be
  * in most of x86 servers. */
 #if defined(__X86_64__) || defined(__x86_64__) || defined (__i386__) \

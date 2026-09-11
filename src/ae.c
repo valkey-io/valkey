@@ -89,6 +89,7 @@ aeEventLoop *aeCreateEventLoop(int setsize) {
     if (eventLoop->events == NULL || eventLoop->fired == NULL) goto err;
     eventLoop->setsize = setsize;
     eventLoop->timeEventHead = NULL;
+    eventLoop->earliestTimer = NULL;
     eventLoop->timeEventNextId = 1;
     eventLoop->stop = 0;
     eventLoop->maxfd = -1;
@@ -285,6 +286,13 @@ long long aeCreateTimeEvent(aeEventLoop *eventLoop,
     te->refcount = 0;
     if (te->next) te->next->prev = te;
     eventLoop->timeEventHead = te;
+    /* Update the cached earliest timer if this one fires sooner. A NULL
+     * cache means "unknown", not "no timers", so leave it for the next
+     * lookup's rescan to fill in. */
+    if (eventLoop->earliestTimer && eventLoop->earliestTimer->id != AE_DELETED_EVENT_ID &&
+        te->when < eventLoop->earliestTimer->when) {
+        eventLoop->earliestTimer = te;
+    }
     return id;
 }
 
@@ -293,6 +301,9 @@ int aeDeleteTimeEvent(aeEventLoop *eventLoop, long long id) {
     while (te) {
         if (te->id == id) {
             te->id = AE_DELETED_EVENT_ID;
+            /* Invalidate cached earliest if we just deleted it */
+            if (eventLoop->earliestTimer == te)
+                eventLoop->earliestTimer = NULL;
             return AE_OK;
         }
         te = te->next;
@@ -303,13 +314,20 @@ int aeDeleteTimeEvent(aeEventLoop *eventLoop, long long id) {
 /* How many microseconds until the first timer should fire.
  * If there are no timers, -1 is returned.
  *
- * Note that's O(N) since time events are unsorted.
- * Possible optimizations (not needed so far, but...):
- * 1) Insert the event in order, so that the nearest is just the head.
- *    Much better but still insertion or deletion of timers is O(N).
- * 2) Use a skiplist to have this operation as O(1) and insertion as O(log(N)).
+ * Uses a cached earliest timer pointer for O(1) amortized lookup;
+ * falls back to O(N) rescan only when the cache is invalidated
+ * (after timer deletion or firing).
  */
 static int64_t usUntilEarliestTimer(aeEventLoop *eventLoop) {
+    /* Fast path: use cached earliest timer (O(1)) */
+    if (eventLoop->earliestTimer &&
+        eventLoop->earliestTimer->id != AE_DELETED_EVENT_ID) {
+        monotime now = getMonotonicUs();
+        return (now >= eventLoop->earliestTimer->when) ? 0
+                                                       : eventLoop->earliestTimer->when - now;
+    }
+
+    /* Slow path: rescan to find the earliest timer (O(N)) */
     aeTimeEvent *te = eventLoop->timeEventHead;
     if (te == NULL) return -1;
 
@@ -318,6 +336,8 @@ static int64_t usUntilEarliestTimer(aeEventLoop *eventLoop) {
         if ((!earliest || te->when < earliest->when) && te->id != AE_DELETED_EVENT_ID) earliest = te;
         te = te->next;
     }
+    /* Cache the result for next time */
+    eventLoop->earliestTimer = earliest;
 
     /* All events are pending deletion (zombies only): no valid timer. */
     if (earliest == NULL) return -1;
@@ -357,6 +377,8 @@ static int processTimeEvents(aeEventLoop *eventLoop) {
                 te->finalizerProc(eventLoop, te->clientData);
                 now = getMonotonicUs();
             }
+            if (eventLoop->earliestTimer == te)
+                eventLoop->earliestTimer = NULL;
             zfree(te);
             te = next;
             continue;
@@ -386,6 +408,10 @@ static int processTimeEvents(aeEventLoop *eventLoop) {
             } else {
                 te->id = AE_DELETED_EVENT_ID;
             }
+            /* Invalidate cached earliest timer since this one just fired
+             * and may have been re-scheduled or deleted. */
+            if (eventLoop->earliestTimer == te)
+                eventLoop->earliestTimer = NULL;
         }
         te = te->next;
     }

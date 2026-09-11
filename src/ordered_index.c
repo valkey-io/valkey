@@ -182,9 +182,13 @@ unsigned long orderedIndexDeleteRangeByLex(OrderedIndex *oi, const_sds min, cons
 
     sds min_packed, max_packed;
 
+    bool min_ex_eff = min_ex;
     if (min == shared.minstring) {
         min_packed = sdsnewlen(NULL, SCORE_SIZE);
         memcpy(min_packed, &score_prefix, SCORE_SIZE);
+        /* The bare score prefix equals the packed form of the empty-string
+         * element; the sentinel bound is always inclusive. */
+        min_ex_eff = false;
     } else {
         size_t min_len = sdslen(min);
         min_packed = sdsnewlen(NULL, SCORE_SIZE + min_len);
@@ -213,7 +217,7 @@ unsigned long orderedIndexDeleteRangeByLex(OrderedIndex *oi, const_sds min, cons
     }
 
     rangeDeleteArgs args = {on_delete, privdata};
-    unsigned long deleted = fbtreeDeleteRangeByValue(fbt, min_packed, max_packed, min_ex, max_ex_eff, rangeDeleteCallback, &args);
+    unsigned long deleted = fbtreeDeleteRangeByValue(fbt, min_packed, max_packed, min_ex_eff, max_ex_eff, rangeDeleteCallback, &args);
     sdsfree(min_packed);
     sdsfree(max_packed);
     return deleted;
@@ -283,10 +287,14 @@ unsigned long orderedIndexCountLexRange(const OrderedIndex *oi, const_sds min, c
      * sorts before every real element; the maxstring sentinel is bounded by
      * the next score bucket's prefix, exclusive. */
     sds min_packed, max_packed;
+    bool min_ex_eff = min_ex;
     bool max_ex_eff = max_ex;
     if (min == shared.minstring) {
         min_packed = sdsnewlen(NULL, SCORE_SIZE);
         memcpy(min_packed, &score_prefix, SCORE_SIZE);
+        /* The bare score prefix equals the packed form of the empty-string
+         * element; the sentinel bound is always inclusive. */
+        min_ex_eff = false;
     } else {
         min_packed = packLexBound(score_prefix, min);
     }
@@ -303,7 +311,7 @@ unsigned long orderedIndexCountLexRange(const OrderedIndex *oi, const_sds min, c
         max_packed = packLexBound(score_prefix, max);
     }
 
-    unsigned long count = fbtreeCountRangeByValue(fbt, min_packed, max_packed, min_ex, max_ex_eff);
+    unsigned long count = fbtreeCountRangeByValue(fbt, min_packed, max_packed, min_ex_eff, max_ex_eff);
 
     sdsfree(min_packed);
     sdsfree(max_packed);
@@ -479,6 +487,16 @@ void orderedIndexSeekToLexRange(OrderedIndexIterator *iter, const_sds min, const
 
     unsigned long len = fbtreeLength(fbt);
     int reverse = (offset < 0);
+
+    /* A crossed sentinel bound (min is the positively infinite string or max
+     * is the negatively infinite string) admits no elements; the sentinels
+     * are identity values whose bytes must never be packed as an element.
+     * Park the iterator where the first step in the iteration direction
+     * yields nothing. */
+    if (min == shared.maxstring || max == shared.minstring) {
+        fbtreeSeekToRank(fbt_iter, reverse ? 0 : len);
+        return;
+    }
 
     if (!reverse) {
         /* Forward: seek to min bound */

@@ -31,8 +31,8 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef __LATENCY_H
-#define __LATENCY_H
+#ifndef VALKEY_LATENCY_H
+#define VALKEY_LATENCY_H
 
 #include "trace/trace.h"
 

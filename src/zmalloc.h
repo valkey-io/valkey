@@ -28,8 +28,8 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef __ZMALLOC_H
-#define __ZMALLOC_H
+#ifndef VALKEY_ZMALLOC_H
+#define VALKEY_ZMALLOC_H
 
 #include <stddef.h>
 

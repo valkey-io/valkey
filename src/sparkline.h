@@ -27,8 +27,8 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef __SPARKLINE_H
-#define __SPARKLINE_H
+#ifndef VALKEY_SPARKLINE_H
+#define VALKEY_SPARKLINE_H
 
 /* A sequence is represented of many "samples" */
 struct sample {

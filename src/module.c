@@ -5430,18 +5430,29 @@ int VM_ZsetRangePrev(ValkeyModuleKey *key) {
  * For example, valkey-search uses this interface to avoid maintaining two copies of the
  * indexed vectors.
  *
- * The function receives the hash key, field name, buffer to share along with its size. */
+ * The function receives the hash key, field name, buffer to share along with its size.
+ *
+ * Returns VALKEYMODULE_OK on success. Returns VALKEYMODULE_ERR if the key or field
+ * is missing, the key is not a hash, or the update fails. */
 int VM_HashSetStringRef(ValkeyModuleKey *key, ValkeyModuleString *field, const char *buf, size_t len) {
     if (!key || !key->value || objectGetType(key->value) != OBJ_HASH || !field || !buf) return VALKEYMODULE_ERR;
-    return hashTypeUpdateAsStringRef(key->value, objectGetVal(field), buf, len);
+    if (hashTypeUpdateAsStringRef(key->value, objectGetVal(field), buf, len) != C_OK) return VALKEYMODULE_ERR;
+    return VALKEYMODULE_OK;
 }
 
 /* Checks if the value of a hash entry is a shared string reference (stringRef).
- * The function receives the hash key and field name to perform the check against. */
+ * The function receives the hash key and field name to perform the check against.
+ *
+ * Returns 1 if the field exists and holds a string reference. Returns 0 in every
+ * other case, including a missing or non-hash key, a missing field name and a
+ * field which doesn't exist or is already expired. Note that the return value is
+ * a plain boolean and not an OK/ERR status, since VALKEYMODULE_ERR can't be told
+ * apart from a positive answer. */
 int VM_HashHasStringRef(ValkeyModuleKey *key, ValkeyModuleString *field) {
-    if (!key || !key->value || objectGetType(key->value) != OBJ_HASH) return VALKEYMODULE_ERR;
+    if (!key || !key->value || objectGetType(key->value) != OBJ_HASH || !field) return 0;
     return hashTypeHasStringRef(key->value, objectGetVal(field));
 }
+
 /* Set the field of the specified hash field to the specified value.
  * If the key is an empty key open for writing, it is created with an empty
  * hash value, in order to set the specified field.

@@ -3498,12 +3498,19 @@ int populateCommandStructure(struct serverCommand *c) {
     if (c->flags & CMD_ONLY_SENTINEL && !server.sentinel_mode) return C_ERR;
 
     /* We start with an unallocated histogram and only allocate memory when a command
-     * has been issued for the first time */
-    c->latency_histogram = NULL;
+     * has been issued for the first time. An earlier call may have left one
+     * behind, see the comment in populateCommandTable(). */
+    if (c->latency_histogram) {
+        hdr_close(c->latency_histogram);
+        c->latency_histogram = NULL;
+    }
 
     /* Initialize command info cache */
     for (int i = 0; i < RESP_CACHE_INDEX_MAX; i++) {
-        c->info_cache[i] = NULL;
+        if (c->info_cache[i]) {
+            sdsfree(c->info_cache[i]);
+            c->info_cache[i] = NULL;
+        }
     }
 
     /* Handle the legacy range spec and the "movablekeys" flag (must be done after populating all key specs). */
@@ -3544,11 +3551,11 @@ extern struct serverCommand serverCommandTable[];
  * which is auto generated from the json files in the commands folder.
  *
  * The server calls this once at startup, but the unit tests call it once per
- * test suite. The command table is static, so the names and the subcommand
- * tables built by an earlier call are released here and in
- * populateCommandStructure() before they are built again. Per command runtime
- * state (latency histogram, info cache) is only reset to NULL, so a second call
- * is safe but drops what a running server collected. */
+ * test suite. The command table is static, so everything an earlier call left
+ * there is released before it is built again: the names here, and the subcommand
+ * table, the latency histogram and the info cache in
+ * populateCommandStructure(). A second call therefore gives the same result and
+ * drops what a running server collected. */
 void populateCommandTable(void) {
     int j;
     struct serverCommand *c;
@@ -3559,6 +3566,8 @@ void populateCommandTable(void) {
 
         int retval1, retval2;
 
+        /* rename-command gives current_name its own sds, see loadServerConfigFromString(). */
+        if (c->current_name != c->fullname) sdsfree(c->current_name);
         sdsfree(c->fullname);
         c->fullname = sdsnew(c->declared_name);
         c->current_name = c->fullname;

@@ -21,6 +21,15 @@ class CmdFlagsTest : public ::testing::Test {
         populateCommandTable();
     }
 
+    void TearDown() override {
+        /* The commands themselves live in the static command table, so only the
+         * tables are released. */
+        hashtableRelease(server.commands);
+        hashtableRelease(server.orig_commands);
+        server.commands = NULL;
+        server.orig_commands = NULL;
+    }
+
     /* Number of commands with at least one subcommand. */
     static int countCommandsWithSubcommands(void) {
         int count = 0;

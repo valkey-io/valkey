@@ -254,6 +254,14 @@ typedef enum valkeyRdmaOpcode {
 #define VALKEY_RDMA_DEFAULT_RX_LEN (1024 * 1024)
 #define VALKEY_RDMA_INVALID_OPCODE 0xffff
 
+/* Feature bits carried in valkeyRdmaCmd.feature.features (u64, network order). */
+#define VALKEY_RDMA_FEATURE_RX_GROW_WINDOW (1ULL << 0)
+/* Grow-request flag in the IMM data of RDMA_WRITE_WITH_IMM. The payload
+ * length uses bits [0..30]; bit 31 is the flag (max window 16M < 2^31). */
+#define VALKEY_RDMA_IMM_GROW_REQUEST 0x80000000u
+/* Offset of the u32 (network order) RX window capacity in feature.rsvd[20]. */
+#define VALKEY_RDMA_FEATURE_CAPACITY_OFF 0
+
 typedef struct RdmaContext {
     struct rdma_cm_id *cm_id;
     struct rdma_event_channel *cm_channel;
@@ -283,12 +291,45 @@ typedef struct RdmaContext {
      * VALKEY_RDMA_MAX_WQE ~ 2 * VALKEY_RDMA_MAX_WQE -1 for send buffer */
     valkeyRdmaCmd *cmd_buf;
     struct ibv_mr *cmd_mr;
+
+    uint64_t tx_bytes;
+    uint64_t tx_wait_for_rx_count;
+    uint64_t tx_wait_for_rx_ns;
+    uint64_t rx_window_reannounce_count;
+    int tx_waiting_for_rx;
+    int64_t tx_wait_start_ns;
+
+    /* RX window growth (v1): features negotiated with the server, the
+     * advertised RX capacity, and pressure-signal stats. */
+    uint64_t server_features;
+    uint32_t tx_window_max;
+    uint64_t tx_grow_request_count;
+    uint32_t tx_window_peak;
 } RdmaContext;
 
 /* Apparently CHERI uintptr_t can be 128 bits */
 vk_static_assert(sizeof(uintptr_t) <= sizeof(uint64_t));
 
 static int valkeyRdmaCM(valkeyContext *c, long timeout);
+
+static inline int64_t vk_nsec_now(void) {
+    return vk_usec_now() * 1000LL;
+}
+
+static void rdmaEndTxWaitForRx(RdmaContext *ctx) {
+    if (!ctx->tx_waiting_for_rx)
+        return;
+    ctx->tx_wait_for_rx_ns += (uint64_t)(vk_nsec_now() - ctx->tx_wait_start_ns);
+    ctx->tx_waiting_for_rx = 0;
+}
+
+static void rdmaBeginTxWaitForRx(RdmaContext *ctx) {
+    if (ctx->tx_waiting_for_rx)
+        return;
+    ctx->tx_wait_start_ns = vk_nsec_now();
+    ctx->tx_waiting_for_rx = 1;
+    ctx->tx_wait_for_rx_count++;
+}
 
 static int valkeyRdmaSetFdBlocking(valkeyContext *c, int fd, int blocking) {
     int flags;
@@ -453,7 +494,10 @@ destroy_iobuf:
 static int rdmaAdjustSendbuf(valkeyContext *c, RdmaContext *ctx, unsigned int length) {
     int access = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_WRITE;
 
-    if (length == ctx->send_length) {
+    if (length <= ctx->send_length) {
+        /* grow-only: an existing buffer covers the requested window; a
+         * realloc here could free memory referenced by in-flight work
+         * requests */
         return VALKEY_OK;
     }
 
@@ -542,13 +586,42 @@ static int connRdmaHandleRecv(valkeyContext *c, RdmaContext *ctx, struct rdma_cm
     }
 
     switch (ntohs(cmd->keepalive.opcode)) {
-    case RegisterXferMemory:
+    case GetServerFeature: {
+        uint64_t features = be64toh(cmd->feature.features);
+        const uint8_t *r = cmd->feature.rsvd + VALKEY_RDMA_FEATURE_CAPACITY_OFF;
+        uint32_t cap = ((uint32_t)r[0] << 24) | ((uint32_t)r[1] << 16) | ((uint32_t)r[2] << 8) | r[3];
+
+        if (features & VALKEY_RDMA_FEATURE_RX_GROW_WINDOW) {
+            ctx->server_features = features;
+            /* capacity must be sane and cover the current window */
+            if (cap >= ctx->tx_length) ctx->tx_window_max = cap;
+        }
+        break;
+    }
+
+    case RegisterXferMemory: {
+        unsigned int want;
+        /* Initial handoff has tx_length == 0; later announcements are RX re-registers. */
+        if (ctx->tx_length != 0)
+            ctx->rx_window_reannounce_count++;
+        rdmaEndTxWaitForRx(ctx);
         ctx->tx_addr = (char *)(uintptr_t)be64toh(cmd->memory.addr);
         ctx->tx_length = ntohl(cmd->memory.length);
         ctx->tx_key = ntohl(cmd->memory.key);
         ctx->tx_offset = 0;
-        rdmaAdjustSendbuf(c, ctx, ctx->tx_length);
+        if (ctx->tx_length > ctx->tx_window_peak) ctx->tx_window_peak = ctx->tx_length;
+
+        /* Pre-size the staging buffer to the negotiated capacity once. This is
+         * the safe point: the initial handoff has nothing posted yet, and later
+         * announcements arrive only after the old window fully drained, so no
+         * in-flight work request can reference the buffer being replaced. */
+        want = ctx->tx_length;
+        if ((ctx->server_features & VALKEY_RDMA_FEATURE_RX_GROW_WINDOW) && ctx->tx_window_max > want) {
+            want = ctx->tx_window_max;
+        }
+        if (rdmaAdjustSendbuf(c, ctx, want) != VALKEY_OK) return VALKEY_ERR;
         break;
+    }
 
     case Keepalive:
         break;
@@ -767,7 +840,8 @@ static ssize_t valkeyRdmaReadZCDone(valkeyContext *c) {
     return VALKEY_OK;
 }
 
-static size_t connRdmaSend(RdmaContext *ctx, struct rdma_cm_id *cm_id, const void *data, size_t data_len) {
+static size_t connRdmaSend(RdmaContext *ctx, struct rdma_cm_id *cm_id, const void *data, size_t data_len,
+                           int grow_request) {
     struct ibv_send_wr send_wr, *bad_wr;
     struct ibv_sge sge;
     uint32_t off = ctx->tx_offset;
@@ -786,7 +860,7 @@ static size_t connRdmaSend(RdmaContext *ctx, struct rdma_cm_id *cm_id, const voi
     send_wr.num_sge = 1;
     send_wr.opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
     send_wr.send_flags = (++ctx->send_ops % VALKEY_RDMA_MAX_WQE) ? 0 : IBV_SEND_SIGNALED;
-    send_wr.imm_data = htonl(data_len);
+    send_wr.imm_data = htonl((uint32_t)data_len | (grow_request ? VALKEY_RDMA_IMM_GROW_REQUEST : 0u));
     send_wr.wr.rdma.remote_addr = (uint64_t)(uintptr_t)remote_addr;
     send_wr.wr.rdma.rkey = ctx->tx_key;
     send_wr.next = NULL;
@@ -796,6 +870,7 @@ static size_t connRdmaSend(RdmaContext *ctx, struct rdma_cm_id *cm_id, const voi
     }
 
     ctx->tx_offset += data_len;
+    ctx->tx_bytes += data_len;
 
     return data_len;
 }
@@ -819,22 +894,42 @@ static ssize_t valkeyRdmaWrite(valkeyContext *c) {
     do {
         assert(ctx->tx_offset <= ctx->tx_length);
         if (ctx->tx_offset == ctx->tx_length) {
-            /* wait a new TX buffer */
+            /* wait a new TX buffer (server RX window exhausted) */
+            if (wrote >= data_len)
+                break;
+
+            rdmaBeginTxWaitForRx(ctx);
             elapsed = vk_msec_now() - start;
             if (elapsed >= timed) {
+                rdmaEndTxWaitForRx(ctx);
                 valkeySetError(c, VALKEY_ERR_IO, "RDMA: IO timeout");
                 return VALKEY_ERR;
             }
 
             if (valkeyRdmaWaitEvent(c, timed - elapsed) == VALKEY_ERR) {
+                rdmaEndTxWaitForRx(ctx);
                 return VALKEY_ERR;
             }
 
             continue;
         }
 
+        rdmaEndTxWaitForRx(ctx);
         towrite = valkeyMin(ctx->tx_length - ctx->tx_offset, data_len - wrote);
-        ret = connRdmaSend(ctx, cm_id, c->obuf + wrote, towrite);
+
+        /* Window pressure: this chunk fills the announced window exactly and
+         * more data is still pending, i.e. the next loop iteration would have
+         * to wait for a new window. Signal it on this WRITE's immediate data,
+         * but only when the server advertised the grow-window feature (an
+         * un-negotiated flag would trip an old server's length validation). */
+        int grow_req = 0;
+        if ((ctx->server_features & VALKEY_RDMA_FEATURE_RX_GROW_WINDOW) &&
+            (towrite == ctx->tx_length - ctx->tx_offset) && (wrote + towrite < data_len)) {
+            grow_req = 1;
+            ctx->tx_grow_request_count++;
+        }
+
+        ret = connRdmaSend(ctx, cm_id, c->obuf + wrote, towrite, grow_req);
         if (ret == (size_t)VALKEY_ERR) {
             return VALKEY_ERR;
         }
@@ -865,6 +960,8 @@ static void valkeyRdmaClose(valkeyContext *c) {
     if (!ctx) {
         return; /* connect failed? */
     }
+
+    rdmaEndTxWaitForRx(ctx);
 
     cm_id = ctx->cm_id;
     connRdmaHandleCq(c);
@@ -977,12 +1074,29 @@ error:
     return VALKEY_ERR;
 }
 
+static int connRdmaGetServerFeature(valkeyContext *c, struct rdma_cm_id *cm_id) {
+    valkeyRdmaCmd cmd = {0};
+
+    cmd.feature.opcode = htons(GetServerFeature);
+    cmd.feature.select = 0; /* all features */
+
+    return rdmaSendCommand(c, cm_id, &cmd);
+}
+
 static int valkeyRdmaEstablished(valkeyContext *c, struct rdma_cm_id *cm_id) {
+    int ret;
+
     /* it's time to tell upper layer we have already connected */
     c->flags |= VALKEY_CONNECTED;
     c->funcs = &valkeyContextRdmaFuncs;
 
-    return connRdmaRegisterRx(c, cm_id);
+    ret = connRdmaRegisterRx(c, cm_id);
+    if (ret != VALKEY_OK) return ret;
+
+    /* ask which optional features the server supports; a server without the
+     * grow-window feature (or an older one) answers features=0 and the
+     * connection simply stays in static-window mode */
+    return connRdmaGetServerFeature(c, cm_id);
 }
 
 static int valkeyRdmaCM(valkeyContext *c, long timeout) {
@@ -1280,6 +1394,54 @@ int valkeyInitiateRdma(void) {
 #endif
     valkeyContextRegisterFuncs(&valkeyContextRdmaFuncs, VALKEY_CONN_RDMA);
 
+    return VALKEY_OK;
+}
+
+int valkeyGetRdmaStats(valkeyContext *c, valkeyRdmaStats *stats) {
+    RdmaContext *ctx;
+
+    if (!c || !stats || c->connection_type != VALKEY_CONN_RDMA) {
+        return VALKEY_ERR;
+    }
+
+    ctx = c->privctx;
+    if (!ctx) {
+        return VALKEY_ERR;
+    }
+
+    stats->tx_bytes = ctx->tx_bytes;
+    stats->tx_wait_for_rx_count = ctx->tx_wait_for_rx_count;
+    stats->tx_wait_for_rx_ns = ctx->tx_wait_for_rx_ns;
+    stats->rx_window_reannounce_count = ctx->rx_window_reannounce_count;
+    stats->tx_grow_request_count = ctx->tx_grow_request_count;
+    stats->tx_window_peak = ctx->tx_window_peak;
+    if (ctx->tx_waiting_for_rx) {
+        stats->tx_wait_for_rx_ns += (uint64_t)(vk_nsec_now() - ctx->tx_wait_start_ns);
+    }
+    return VALKEY_OK;
+}
+
+int valkeyResetRdmaStats(valkeyContext *c) {
+    RdmaContext *ctx;
+
+    if (!c || c->connection_type != VALKEY_CONN_RDMA) {
+        return VALKEY_ERR;
+    }
+
+    ctx = c->privctx;
+    if (!ctx) {
+        return VALKEY_ERR;
+    }
+
+    ctx->tx_bytes = 0;
+    ctx->tx_wait_for_rx_count = 0;
+    ctx->tx_wait_for_rx_ns = 0;
+    ctx->rx_window_reannounce_count = 0;
+    ctx->tx_grow_request_count = 0;
+    /* tx_window_peak is a high-water mark, not a windowed counter: keep it */
+    if (ctx->tx_waiting_for_rx) {
+        ctx->tx_wait_start_ns = vk_nsec_now();
+    }
     return VALKEY_OK;
 }
 

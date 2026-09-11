@@ -3194,6 +3194,14 @@ static int applyRdmaBind(const char **err) {
     return 1;
 }
 
+static int isValidRdmaRxMaxSize(long long val, const char **err) {
+    if (val && val < server.rdma_ctx_config.rx_size) {
+        *err = "rdma-rx-max-size must be 0 or greater than or equal to rdma-rx-size";
+        return 0;
+    }
+    return 1;
+}
+
 static int updateRdmaPort(const char **err) {
     connListener *listener = listenerByType(CONN_TYPE_RDMA);
 
@@ -3538,6 +3546,7 @@ standardConfig static_configs[] = {
     createIntConfig("repl-diskless-sync-max-replicas", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, server.repl_diskless_sync_max_replicas, 0, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("rdma-port", NULL, MODIFIABLE_CONFIG, 0, 65535, server.rdma_ctx_config.port, 0, INTEGER_CONFIG, NULL, updateRdmaPort),
     createIntConfig("rdma-rx-size", NULL, IMMUTABLE_CONFIG, 64 * 1024, 16 * 1024 * 1024, server.rdma_ctx_config.rx_size, 1024 * 1024, INTEGER_CONFIG, NULL, NULL),
+    createIntConfig("rdma-rx-max-size", NULL, IMMUTABLE_CONFIG, 0, 16 * 1024 * 1024, server.rdma_ctx_config.rx_max_size, 0, INTEGER_CONFIG, isValidRdmaRxMaxSize, NULL),
     createIntConfig("rdma-completion-vector", NULL, IMMUTABLE_CONFIG, -1, 1024, server.rdma_ctx_config.completion_vector, -1, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("cluster-message-gossip-perc", NULL, MODIFIABLE_CONFIG | HIDDEN_CONFIG, 1, 100, server.cluster_message_gossip_perc, 10, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("hotkeys-sampling-percentage", NULL, MODIFIABLE_CONFIG, 1, 100, server.hotkeys_sampling_percentage, 1, INTEGER_CONFIG, NULL, hotkeysSamplingCallback),

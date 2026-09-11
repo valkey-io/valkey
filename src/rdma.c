@@ -82,6 +82,19 @@ typedef enum ValkeyRdmaOpcode {
 #define VALKEY_RDMA_INVALID_OPCODE 0xffff
 #define VALKEY_RDMA_KEEPALIVE_MS 3000
 
+/* Feature bits carried in ValkeyRdmaCmd.feature.features (u64, network order). */
+#define VALKEY_RDMA_FEATURE_RX_GROW_WINDOW (1ULL << 0)
+/* Grow-request flag in the IMM data of RDMA_WRITE_WITH_IMM. The payload
+ * length uses bits [0..30]; bit 31 is the flag (max window 16M < 2^31). */
+#define VALKEY_RDMA_IMM_GROW_REQUEST 0x80000000u
+/* Offset of the u32 (network order) RX window capacity in feature.rsvd[20]. */
+#define VALKEY_RDMA_FEATURE_CAPACITY_OFF 0
+
+/* RX window growth policy (v1): consecutive pressured windows required for
+ * one growth step, and window boundaries skipped after a growth. */
+#define RDMA_RX_GROW_THRESHOLD 2
+#define RDMA_RX_GROW_COOLDOWN_WINDOWS 4
+
 
 typedef struct rdma_connection {
     connection c;
@@ -125,6 +138,15 @@ typedef struct RdmaContext {
      * VALKEY_RDMA_MAX_WQE ~ 2 * VALKEY_RDMA_MAX_WQE -1 for send buffer */
     ValkeyRdmaCmd *cmd_buf;
     struct ibv_mr *cmd_mr;
+
+    uint64_t rx_window_reannounce_count; /* RX buffer exhausted, excluding initial handoff */
+
+    /* RX window growth (v1). rx_capacity is the MR extent registered once at
+     * connect; ctx->rx.length stays the logical window announced to the peer. */
+    uint32_t rx_capacity;
+    uint8_t rx_peer_grow_request; /* peer asked for a larger window (sticky per window) */
+    uint8_t rx_pressure_streak;   /* consecutive pressured windows */
+    uint8_t rx_grow_cooldown;     /* window boundaries to skip before next growth */
 } RdmaContext;
 
 typedef struct rdma_listener {
@@ -138,6 +160,14 @@ static list *pending_list;
 
 static rdma_listener *rdma_listeners;
 static serverRdmaContextConfig *rdma_config;
+
+/* RX windows re-announced after exhaustion (excludes connection setup). */
+static uint64_t rdma_total_rx_window_reannounce_count;
+static uint64_t rdma_total_rx_window_grow_request_count;
+static uint64_t rdma_total_rx_window_grow_count;
+static uint64_t rdma_total_rx_window_grow_suppressed_count;
+static uint64_t rdma_total_rx_window_peak_size;
+static uint64_t rdma_total_rx_mr_register_count;
 
 static size_t page_size;
 
@@ -256,7 +286,7 @@ static void rdmaDestroyIoBuf(RdmaContext *ctx) {
         ctx->rx.mr = NULL;
     }
 
-    rdmaMemoryFree(ctx->rx.addr, ctx->rx.length);
+    rdmaMemoryFree(ctx->rx.addr, ctx->rx_capacity);
     ctx->rx.addr = NULL;
 
     if (ctx->tx.mr) {
@@ -303,16 +333,20 @@ static int rdmaSetupIoBuf(RdmaContext *ctx, struct rdma_cm_id *cm_id) {
         cmd->keepalive.opcode = VALKEY_RDMA_INVALID_OPCODE;
     }
 
-    /* setup recv buf & MR */
+    /* setup recv buf & MR: register the full capacity once so the window can
+     * grow without re-registration; rx.length stays the logical window that
+     * gets announced to the peer. */
     access = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_WRITE;
-    length = rdma_config->rx_size;
+    ctx->rx_capacity = rdma_config->rx_max_size ? rdma_config->rx_max_size : rdma_config->rx_size;
+    length = ctx->rx_capacity;
     ctx->rx.addr = rdmaMemoryAlloc(length);
-    ctx->rx.length = length;
     ctx->rx.mr = ibv_reg_mr(ctx->pd, ctx->rx.addr, length, access);
     if (!ctx->rx.mr) {
         serverLog(LL_WARNING, "RDMA: reg mr for recv buffer failed: %s", strerror(errno));
         goto destroy_iobuf;
     }
+    ctx->rx.length = rdma_config->rx_size;
+    rdma_total_rx_mr_register_count++;
 
     return C_OK;
 
@@ -484,12 +518,63 @@ static int connRdmaRegisterRx(RdmaContext *ctx, struct rdma_cm_id *cm_id) {
     return rdmaSendCommand(ctx, cm_id, &cmd);
 }
 
+/* Called at the safe window-exhaustion boundary (rx.pos == rx.length, hence
+ * rx.offset == rx.length: every byte the peer posted has landed and been
+ * consumed). Consumes the peer's sticky grow-request flag and may double the
+ * announced window (same MR, same rkey) before the re-announce is posted. */
+static void connRdmaMaybeGrowRxWindow(RdmaContext *ctx) {
+    int pressured = ctx->rx_peer_grow_request;
+    ctx->rx_peer_grow_request = 0;
+
+    /* static mode (max unset or == rx-size): nothing was advertised, behave
+     * exactly as before */
+    if (ctx->rx_capacity <= (uint32_t)rdma_config->rx_size) return;
+
+    if (ctx->rx.length == ctx->rx_capacity) {
+        if (pressured) rdma_total_rx_window_grow_suppressed_count++;
+        ctx->rx_pressure_streak = 0;
+        return;
+    }
+
+    if (ctx->rx_grow_cooldown > 0) {
+        ctx->rx_grow_cooldown--;
+        return;
+    }
+
+    if (pressured) {
+        ctx->rx_pressure_streak++;
+    } else {
+        ctx->rx_pressure_streak = 0;
+    }
+
+    if (ctx->rx_pressure_streak >= RDMA_RX_GROW_THRESHOLD) {
+        uint32_t new_len = ctx->rx.length * 2;
+        if (new_len > ctx->rx_capacity) new_len = ctx->rx_capacity;
+        ctx->rx.length = new_len;
+        ctx->rx_pressure_streak = 0;
+        ctx->rx_grow_cooldown = RDMA_RX_GROW_COOLDOWN_WINDOWS;
+        rdma_total_rx_window_grow_count++;
+        if (new_len > rdma_total_rx_window_peak_size) rdma_total_rx_window_peak_size = new_len;
+    }
+}
+
 static int connRdmaGetFeature(RdmaContext *ctx, struct rdma_cm_id *cm_id, ValkeyRdmaCmd *cmd) {
     ValkeyRdmaCmd _cmd = {0};
+    uint64_t features = 0;
+
+    if (rdma_config->rx_max_size > rdma_config->rx_size) {
+        /* dynamic RX window: advertise the feature bit plus the capacity so
+         * the peer can size its staging buffer once */
+        features |= VALKEY_RDMA_FEATURE_RX_GROW_WINDOW;
+        _cmd.feature.rsvd[VALKEY_RDMA_FEATURE_CAPACITY_OFF + 0] = (rdma_config->rx_max_size >> 24) & 0xff;
+        _cmd.feature.rsvd[VALKEY_RDMA_FEATURE_CAPACITY_OFF + 1] = (rdma_config->rx_max_size >> 16) & 0xff;
+        _cmd.feature.rsvd[VALKEY_RDMA_FEATURE_CAPACITY_OFF + 2] = (rdma_config->rx_max_size >> 8) & 0xff;
+        _cmd.feature.rsvd[VALKEY_RDMA_FEATURE_CAPACITY_OFF + 3] = rdma_config->rx_max_size & 0xff;
+    }
 
     _cmd.feature.opcode = htons(GetServerFeature);
     _cmd.feature.select = cmd->feature.select;
-    _cmd.feature.features = htonu64(0); /* currently no feature support */
+    _cmd.feature.features = htonu64(features);
 
     return rdmaSendCommand(ctx, cm_id, &_cmd);
 }
@@ -575,10 +660,21 @@ static int connRdmaHandleSend(ValkeyRdmaCmd *cmd) {
     return C_OK;
 }
 
-static int connRdmaHandleRecvImm(RdmaContext *ctx, struct rdma_cm_id *cm_id, ValkeyRdmaCmd *cmd, uint32_t byte_len) {
-    assert(byte_len + ctx->rx.offset <= ctx->rx.length);
+static int connRdmaHandleRecvImm(RdmaContext *ctx, struct rdma_cm_id *cm_id, ValkeyRdmaCmd *cmd, uint32_t byte_len,
+                                 int grow_req) {
+    /* real validation, not just assert: a malformed imm (oversized length or
+     * the grow bit from an un-negotiated peer) must fail the connection */
+    if (byte_len > ctx->rx.length - ctx->rx.offset) {
+        serverLog(LL_WARNING, "RDMA: FATAL error, rx window overflow (len=%u off=%u)", byte_len, ctx->rx.offset);
+        return C_ERR;
+    }
 
     ctx->rx.offset += byte_len;
+
+    if (grow_req && ctx->rx_capacity > (uint32_t)rdma_config->rx_size) {
+        ctx->rx_peer_grow_request = 1;
+        rdma_total_rx_window_grow_request_count++;
+    }
 
     return rdmaPostRecv(ctx, cm_id, cmd);
 }
@@ -641,14 +737,18 @@ pollcq:
         }
         break;
 
-    case IBV_WC_RECV_RDMA_WITH_IMM:
+    case IBV_WC_RECV_RDMA_WITH_IMM: {
+        uint32_t imm = ntohl(wc.imm_data);
+        uint32_t byte_len = imm & ~VALKEY_RDMA_IMM_GROW_REQUEST;
+        int grow_req = !!(imm & VALKEY_RDMA_IMM_GROW_REQUEST);
         cmd = (ValkeyRdmaCmd *)(uintptr_t)wc.wr_id;
-        if (connRdmaHandleRecvImm(ctx, cm_id, cmd, ntohl(wc.imm_data)) == C_ERR) {
+        if (connRdmaHandleRecvImm(ctx, cm_id, cmd, byte_len, grow_req) == C_ERR) {
             rdma_conn->c.state = CONN_STATE_ERROR;
             return C_ERR;
         }
 
         break;
+    }
     case IBV_WC_RDMA_WRITE:
         if (connRdmaHandleWrite(ctx, wc.byte_len) == C_ERR) {
             return C_ERR;
@@ -747,8 +847,11 @@ static void connRdmaEventHandler(struct aeEventLoop *el, int fd, void *clientDat
         }
     }
 
-    /* recv buf is full, register a new RX buffer */
+    /* recv buf is full: maybe grow the RX window, then announce it again */
     if (ctx->rx.pos == ctx->rx.length) {
+        connRdmaMaybeGrowRxWindow(ctx);
+        ctx->rx_window_reannounce_count++;
+        rdma_total_rx_window_reannounce_count++;
         connRdmaRegisterRx(ctx, cm_id);
     }
 
@@ -1636,7 +1739,16 @@ int connRdmaListen(connListener *listener) {
     int bindaddr_count = listener->bindaddr_count;
     int port = listener->port;
     char *default_bindaddr[2] = {"*", "-::*"};
+    serverRdmaContextConfig *cfg = listener->priv;
     rdma_listener *rdma_listener;
+
+    /* secondary cross-check: is_valid during config load is order-dependent,
+     * so verify the final values here before any connection is created */
+    if (cfg->rx_max_size && cfg->rx_max_size < cfg->rx_size) {
+        serverLog(LL_WARNING, "RDMA: rdma-rx-max-size (%d) must be 0 or >= rdma-rx-size (%d)", cfg->rx_max_size,
+                  cfg->rx_size);
+        return C_ERR;
+    }
 
     assert(server.proto_max_bulk_len <= 512ll * 1024 * 1024);
 
@@ -1891,11 +2003,33 @@ ConnectionType *connectionTypeRdma(void) {
     return ct_rdma;
 }
 
+sds genRdmaInfoString(sds info) {
+    info = sdscatprintf(info,
+                        "# RDMA\r\n"
+                        "rx_window_reannounce_count:%llu\r\n"
+                        "rx_window_grow_request_count:%llu\r\n"
+                        "rx_window_grow_count:%llu\r\n"
+                        "rx_window_grow_suppressed_count:%llu\r\n"
+                        "rx_window_peak_size:%llu\r\n"
+                        "rx_mr_register_count:%llu\r\n",
+                        (unsigned long long)rdma_total_rx_window_reannounce_count,
+                        (unsigned long long)rdma_total_rx_window_grow_request_count,
+                        (unsigned long long)rdma_total_rx_window_grow_count,
+                        (unsigned long long)rdma_total_rx_window_grow_suppressed_count,
+                        (unsigned long long)rdma_total_rx_window_peak_size,
+                        (unsigned long long)rdma_total_rx_mr_register_count);
+    return info;
+}
+
 int RegisterConnectionTypeRdma(void) {
     return connTypeRegister(&CT_RDMA);
 }
 
 #else
+
+sds genRdmaInfoString(sds info) {
+    return info;
+}
 
 int RegisterConnectionTypeRdma(void) {
     serverLog(LL_VERBOSE, "Connection type %s not builtin", getConnectionTypeName(CONN_TYPE_RDMA));
@@ -1943,6 +2077,10 @@ int ValkeyModule_OnUnload(void *arg) {
 #endif /* BUILD_RDMA_MODULE */
 
 #else /* __linux__ */
+
+sds genRdmaInfoString(sds info) {
+    return info;
+}
 
 int RegisterConnectionTypeRdma(void) {
     serverLog(LL_VERBOSE, "Connection type %s is supported on Linux only", getConnectionTypeName(CONN_TYPE_RDMA));

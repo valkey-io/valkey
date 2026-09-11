@@ -590,8 +590,26 @@ tags {"benchmark network external:skip logreqres:skip"} {
 
         # tls specific tests
         if {$::tls} {
+            set tls_groups_supported 0
+            if {![catch {exec $::VALKEY_BENCHMARK_BIN --help} help]} {
+                set tls_groups_supported [string match "*--tls-groups*" $help]
+            }
+
             test {benchmark: specific tls-ciphers} {
                 set cmd [valkeybenchmark $master_host $master_port "-r 50 -t set -n 1000 --tls-ciphers \"DEFAULT:-AES128-SHA256\""]
+                common_bench_setup $cmd
+                assert_match  {*calls=1000,*} [cmdstat set]
+                # assert one of the non benchmarked commands is not present
+                assert_match  {} [cmdstat get]
+            }
+
+            test {benchmark: specific tls-groups} {
+                if {!$tls_groups_supported} {
+                    skip "TLS named groups are not supported by this build"
+                }
+                r flushall
+                r config resetstat
+                set cmd [valkeybenchmark $master_host $master_port "-r 50 -t set -n 1000 --tls-groups prime256v1"]
                 common_bench_setup $cmd
                 assert_match  {*calls=1000,*} [cmdstat set]
                 # assert one of the non benchmarked commands is not present

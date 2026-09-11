@@ -220,6 +220,25 @@ Use `valkey-cli` to connect to the Valkey server:
     --cacert ./tests/tls/ca.crt
 ```
 
+TLS named group preferences can be restricted with `--tls-groups` on the server
+and clients, using the OpenSSL `SSL_CTX_set1_groups_list()` syntax:
+
+Run the server in one shell:
+
+    ./src/valkey-server --tls-port 6379 --port 0 \
+        --tls-cert-file ./tests/tls/valkey.crt \
+        --tls-key-file ./tests/tls/valkey.key \
+        --tls-ca-cert-file ./tests/tls/ca.crt \
+        --tls-groups X25519:prime256v1
+
+Then run `valkey-cli` from another shell:
+
+    ./src/valkey-cli --tls \
+        --cert ./tests/tls/valkey.crt \
+        --key ./tests/tls/valkey.key \
+        --cacert ./tests/tls/ca.crt \
+        --tls-groups X25519:prime256v1
+
 Specifying `--tls-replication yes` makes a replica connect to the primary.
 
 Using `--tls-cluster yes` makes Valkey Cluster use TLS across nodes.

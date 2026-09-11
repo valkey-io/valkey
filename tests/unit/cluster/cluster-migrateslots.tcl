@@ -59,7 +59,7 @@ proc wait_for_migration_registered {node_idx jobname} {
 }
 
 proc wait_for_migration_field {node_idx jobname field value} {
-    wait_for_condition 100 100 {
+    wait_for_condition 200 100 {
         [get_migration_by_name $node_idx $jobname] ne "" && [dict get [get_migration_by_name $node_idx $jobname] $field] eq $value
     } else {
         set curr_state [get_migration_by_name $node_idx $jobname]

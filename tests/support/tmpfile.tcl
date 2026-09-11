@@ -4,7 +4,10 @@ file mkdir $::tmproot
 
 # returns a dirname unique to this process to write to
 proc tmpdir {basename} {
-    set dir [file join $::tmproot $basename.[pid].[incr ::tmpcounter]]
+    while 1 {
+        set dir [file join $::tmproot $basename.[pid].[incr ::tmpcounter]]
+        if {![file exists $dir]} break
+    }
     file mkdir $dir
     set _ $dir
 }

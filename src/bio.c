@@ -153,6 +153,15 @@ typedef union bio_job {
 } bio_job;
 
 void *bioProcessBackgroundJobs(void *arg);
+static void bioExecuteJob(bio_job *job);
+
+/* BIO_INLINE: run background jobs synchronously on the submitting thread.
+ * Used where threads are unavailable (the in-process wasm build). */
+#if defined(__EMSCRIPTEN__) && !defined(__EMSCRIPTEN_PTHREADS__)
+#define BIO_INLINE 1
+#else
+#define BIO_INLINE 0
+#endif
 
 /* Allocate a bio_job. Marked noinline so that it appears as a distinct frame in valgrind
  * stack traces, allowing a targeted Valgrind suppression for BIO job leaks */
@@ -169,6 +178,8 @@ void bioInit(void) {
     for (bio_worker_data *bwd = bio_workers; bwd != bio_worker_end; ++bwd) {
         bwd->bio_jobs = mutexQueueCreate();
     }
+
+    if (BIO_INLINE) return; /* jobs run on the submitting thread */
 
     /* Set the stack size as by default it may be small in some system */
     serverInitThreadAttribute(&attr);
@@ -188,9 +199,13 @@ void bioInit(void) {
 
 void bioSubmitJob(int type, bio_job *job) {
     job->header.type = type;
+    atomic_fetch_add(&bio_jobs_counter[type], 1);
+    if (BIO_INLINE) {
+        bioExecuteJob(job);
+        return;
+    }
     bio_worker_data *const bwd = &bio_workers[bio_job_to_worker[type]];
     mutexQueueAdd(bwd->bio_jobs, job);
-    atomic_fetch_add(&bio_jobs_counter[type], 1);
 }
 
 void bioCreateLazyFreeJob(lazy_free_fn free_fn, int arg_count, ...) {
@@ -278,8 +293,13 @@ void *bioProcessBackgroundJobs(void *arg) {
     bio_worker_num = bioWorkerNum(bwd);
 
     while (1) {
-        bio_job *job = mutexQueuePop(bwd->bio_jobs, true);
+        bioExecuteJob(mutexQueuePop(bwd->bio_jobs, true));
+    }
+}
 
+/* Run one job to completion on the calling thread and release it. */
+static void bioExecuteJob(bio_job *job) {
+    {
         /* Process the job accordingly to its type. */
         int job_type = job->header.type;
 

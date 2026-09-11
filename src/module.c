@@ -14061,6 +14061,29 @@ static int moduleLoadStaticSymbol(void **out, void **handle, const char *symbol_
         return C_ERR;
     }
 
+#ifdef __EMSCRIPTEN__
+    /* No dynamic linking in the wasm build, so there is no dlsym() over self.
+     * Statically linked modules are resolved from a compile-time table. */
+    extern void ValkeyModule_OnLoad_lua(void) __attribute__((weak));
+    extern void ValkeyModule_OnUnload_lua(void) __attribute__((weak));
+    static const struct {
+        const char *name;
+        void (*fn)(void);
+    } static_symbols[] = {
+        {"ValkeyModule_OnLoad_lua", ValkeyModule_OnLoad_lua},
+        {"ValkeyModule_OnUnload_lua", ValkeyModule_OnUnload_lua},
+    };
+    *handle = NULL;
+    for (size_t i = 0; i < sizeof(static_symbols) / sizeof(static_symbols[0]); i++) {
+        if (static_symbols[i].fn && !strcmp(static_symbols[i].name, symbol_full_name)) {
+            *out = (void *)static_symbols[i].fn;
+            return C_OK;
+        }
+    }
+    serverLog(LL_WARNING, "Failed to load static module: %s. Could not load method: %s.", module_name,
+              symbol_full_name);
+    return C_ERR;
+#else
     /* Open a handle to self */
     *handle = dlopen(NULL, RTLD_NOW);
     if (*handle == NULL) {
@@ -14083,6 +14106,7 @@ static int moduleLoadStaticSymbol(void **out, void **handle, const char *symbol_
         return C_ERR;
     }
     return C_OK;
+#endif
 }
 
 /* Load a statically linked module and initialize it. This is the static

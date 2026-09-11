@@ -3380,6 +3380,17 @@ void initListeners(void) {
         listener->priv = &server.rdma_ctx_config;
     }
 
+#ifdef __EMSCRIPTEN__
+    /* In-process build: connections are injected by the embedding host, but
+     * we still register a (never-firing) listener so the server has somewhere
+     * to "listen" and the accept plumbing stays uniform. */
+    ct = connectionByType(CONN_TYPE_MEM);
+    if (!ct) serverPanic("Failed finding connection listener of %s", getConnectionTypeName(CONN_TYPE_MEM));
+    listener = &server.listeners[CONN_TYPE_MEM];
+    listener->port = 1; /* non-zero so changeListener() does not treat it as disabled */
+    listener->ct = ct;
+#endif
+
     /* create all the configured listener, and add handler to start to accept */
     int listen_fds = 0;
     for (int j = 0; j < CONN_TYPE_MAX; j++) {

@@ -37,6 +37,9 @@
 
 #include <stdio.h>
 #include <sys/time.h>
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#endif
 #include <sys/types.h>
 #include <unistd.h>
 #include <stdlib.h>
@@ -688,6 +691,12 @@ int aeWait(int fd, int mask, long long milliseconds) {
 
 void aeMain(aeEventLoop *eventLoop) {
     eventLoop->stop = 0;
+#ifdef __EMSCRIPTEN__
+    /* The browser/Node event loop owns the thread. Leave main() without
+     * tearing the runtime down; the host drives aeProcessEvents() via the
+     * exported tick function (see connmem.c). */
+    emscripten_exit_with_live_runtime();
+#endif
     while (!eventLoop->stop) {
         aeProcessEvents(eventLoop, AE_ALL_EVENTS | AE_CALL_BEFORE_SLEEP | AE_CALL_AFTER_SLEEP);
     }

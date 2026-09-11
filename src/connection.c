@@ -56,6 +56,9 @@ int connTypeInitialize(void) {
     /* may fail if without BUILD_RDMA=yes */
     RegisterConnectionTypeRdma();
 
+    /* only present in the in-process (wasm) build */
+    RegisterConnectionTypeMem();
+
     return C_OK;
 }
 

@@ -86,6 +86,7 @@ typedef enum {
     CONN_TYPE_UNIX,
     CONN_TYPE_TLS,
     CONN_TYPE_RDMA,
+    CONN_TYPE_MEM, /* in-process, no socket: driven by an embedding host (try-valkey wasm) */
     CONN_TYPE_MAX,
 } ConnectionTypeId;
 
@@ -99,6 +100,8 @@ static inline const char *getConnectionTypeName(int type) {
         return "tls";
     case CONN_TYPE_RDMA:
         return "rdma";
+    case CONN_TYPE_MEM:
+        return "mem";
     default:
         return "invalid type";
     }
@@ -555,6 +558,7 @@ int RedisRegisterConnectionTypeSocket(void);
 int RedisRegisterConnectionTypeUnix(void);
 int RedisRegisterConnectionTypeTLS(void);
 int RegisterConnectionTypeRdma(void);
+int RegisterConnectionTypeMem(void);
 
 /* Return 1 if connection is using TLS protocol, 0 if otherwise. */
 static inline int connIsTLS(connection *conn) {

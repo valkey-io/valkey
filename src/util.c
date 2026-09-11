@@ -1317,6 +1317,14 @@ sds getAbsolutePath(char *filename) {
 long getTimeZone(void) {
 #if defined(__linux__) || defined(__sun)
     return timezone;
+#elif defined(__EMSCRIPTEN__)
+    /* gettimeofday()'s timezone argument is obsolete and Emscripten's libc
+     * leaves it untouched, so use the offset localtime reports instead.
+     * tm_gmtoff is seconds east of UTC; 'timezone' is seconds west. */
+    time_t now = time(NULL);
+    struct tm tm;
+    localtime_r(&now, &tm);
+    return -tm.tm_gmtoff;
 #else
     struct timezone tz;
 

@@ -71,6 +71,7 @@ void clusterReadHandler(connection *conn);
 void clusterSendPing(clusterLink *link, int type);
 void clusterSendFail(char *nodename);
 void clusterSendFailoverAuthIfNeeded(clusterNode *node, clusterMsg *request);
+void clusterProcessFailoverAuthAck(clusterNode *sender);
 void clusterProcessFailoverAuthNack(clusterNode *sender, clusterMsg *request);
 void clusterSendFailoverNack(clusterNode *node, uint8_t reason);
 static const char *clusterNackReasonString(uint8_t reason);
@@ -2157,6 +2158,8 @@ clusterNode *createClusterNode(char *nodename, int flags) {
     node->repl_offset = 0;
     node->is_node_healthy = 0;
     node->replica_priority = 0;
+    node->failover_auth_acked_epoch = 0;
+    node->failover_auth_nacked_epoch = 0;
     return node;
 }
 
@@ -4745,13 +4748,7 @@ int clusterProcessPacket(clusterLink *link) {
          * a non zero number of slots, and its currentEpoch is greater or
          * equal to epoch where this node started the election. */
         if (clusterNodeIsVotingPrimary(sender) && sender_claimed_current_epoch >= server.cluster->failover_auth_epoch) {
-            server.cluster->failover_auth_count++;
-            serverLog(LL_NOTICE, "Failover auth ACK from %.40s (%s) for epoch %llu (ACKs %d, quorum %d)",
-                      sender->name, humanNodename(sender), (unsigned long long)server.cluster->failover_auth_epoch,
-                      server.cluster->failover_auth_count, (server.cluster->size / 2) + 1);
-            /* Maybe we reached a quorum here, set a flag to make sure
-             * we check ASAP. */
-            clusterDoBeforeSleep(CLUSTER_TODO_HANDLE_FAILOVER);
+            clusterProcessFailoverAuthAck(sender);
         }
     } else if (type == CLUSTERMSG_TYPE_FAILOVER_AUTH_NACK) {
         if (!sender) return 1; /* We don't know that node. */
@@ -5911,34 +5908,90 @@ void clusterSendFailoverAuthIfNeeded(clusterNode *node, clusterMsg *request) {
               (unsigned long long)server.cluster->currentEpoch);
 }
 
+/* Election-local response state of a voter. An ACK or NACK is stamped with the
+ * epoch of the election it was cast in, so a stamp is valid for exactly one
+ * election and no per-election reset of every node is needed. Election epochs
+ * are never 0, so a stamp of 0 means "never responded". */
+static int voterAckedThisElection(clusterNode *voter) {
+    return voter->failover_auth_acked_epoch != 0 &&
+           voter->failover_auth_acked_epoch == server.cluster->failover_auth_epoch;
+}
+
+static int voterNackedThisElection(clusterNode *voter) {
+    return voter->failover_auth_nacked_epoch != 0 &&
+           voter->failover_auth_nacked_epoch == server.cluster->failover_auth_epoch;
+}
+
+/* Upper bound on the ACKs this election can end up with: the votes already
+ * received plus every voting primary that can still cast one. A voter that
+ * already ACKed keeps counting even if it is marked FAIL afterwards, since its
+ * vote was received. A voter that NACKed will not change its mind, and a FAIL
+ * voter that has not ACKed will never reply; each of those is excluded exactly
+ * once regardless of the order in which it NACKed and failed. */
+static int clusterFailoverMaxPossibleAcks(void) {
+    int max_possible_acks = 0;
+    dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
+    dictEntry *de;
+
+    while ((de = dictNext(di)) != NULL) {
+        clusterNode *voter = dictGetVal(de);
+
+        if (!clusterNodeIsVotingPrimary(voter)) continue;
+        if (voterAckedThisElection(voter)) {
+            max_possible_acks++;
+            continue;
+        }
+        if (nodeFailed(voter) || voterNackedThisElection(voter)) continue;
+        max_possible_acks++;
+    }
+    dictReleaseIterator(di);
+    return max_possible_acks;
+}
+
+/* Handle a FAILOVER_AUTH_ACK from a voter. */
+void clusterProcessFailoverAuthAck(clusterNode *sender) {
+    /* One vote per voter per election: a repeated ACK for the same election
+     * carries no new information. */
+    if (voterAckedThisElection(sender)) return;
+    sender->failover_auth_acked_epoch = server.cluster->failover_auth_epoch;
+
+    server.cluster->failover_auth_count++;
+    serverLog(LL_NOTICE, "Failover auth ACK from %.40s (%s) for epoch %llu (ACKs %d, quorum %d)", sender->name,
+              humanNodename(sender), (unsigned long long)server.cluster->failover_auth_epoch,
+              server.cluster->failover_auth_count, (server.cluster->size / 2) + 1);
+    /* Maybe we reached a quorum here, set a flag to make sure
+     * we check ASAP. */
+    clusterDoBeforeSleep(CLUSTER_TODO_HANDLE_FAILOVER);
+}
+
 /* Handle a FAILOVER_AUTH_NACK from a voter. */
 void clusterProcessFailoverAuthNack(clusterNode *sender, clusterMsg *request) {
-    /* Ignore NACKs from FAIL nodes to avoid double-counting: FAIL nodes are
-     * already accounted for in size_fail, and they will never ACK, so including
-     * their NACK would undercount achievable votes. */
-    if (nodeFailed(sender)) {
-        return;
-    }
+    /* A voter that is already FAIL is already excluded from the achievable
+     * votes; its NACK adds nothing. Likewise a repeated NACK from the same
+     * voter in the same election is a single rejection. */
+    if (nodeFailed(sender) || voterNackedThisElection(sender)) return;
+    sender->failover_auth_nacked_epoch = server.cluster->failover_auth_epoch;
 
     server.cluster->failover_auth_nack_count++;
 
-    /* A voter that NACKed us in this epoch will not change its mind, so the
-     * upper bound on the votes we can still collect is the voters that have
-     * not NACKed, minus FAIL voters that will never reply (they count towards
-     * size but neither ACK nor NACK). Fast-fail once that bound drops below
-     * the quorum we need to win.. */
+    /* Fast-fail once the votes we can still end up with drop below the quorum
+     * we need to win. The bound is derived from per-voter state rather than
+     * from size - size_fail - nack_count: a voter that NACKs and is later
+     * marked FAIL during the same election would otherwise be subtracted
+     * twice, resetting an election that is still winnable. */
     int needed_quorum = (server.cluster->size / 2) + 1;
-    int max_possible_acks = server.cluster->size - server.cluster->size_fail - server.cluster->failover_auth_nack_count;
+    int max_possible_acks = clusterFailoverMaxPossibleAcks();
     serverLog(LL_NOTICE, "Failover auth NACK [%s] from %.40s (%s) for epoch %llu (NACKs %d, quorum %d)",
               clusterNackReasonString(request->data.failover_nack.nack.reason), sender->name,
               humanNodename(sender), (unsigned long long)server.cluster->failover_auth_epoch,
               server.cluster->failover_auth_nack_count, needed_quorum);
     if (max_possible_acks < needed_quorum) {
         serverLog(LL_NOTICE,
-                  "Failover election for epoch %llu cannot reach quorum %d (NACKs %d, dead voters %d). "
-                  "Resetting the election since we cannot win an election without quorum.",
+                  "Failover election for epoch %llu cannot reach quorum %d (ACKs %d, NACKs %d, dead voters %d, "
+                  "max possible ACKs %d). Resetting the election since we cannot win an election without quorum.",
                   (unsigned long long)server.cluster->failover_auth_epoch, needed_quorum,
-                  server.cluster->failover_auth_nack_count, server.cluster->size_fail);
+                  server.cluster->failover_auth_count, server.cluster->failover_auth_nack_count,
+                  server.cluster->size_fail, max_possible_acks);
         server.cluster->failover_auth_time = 0;
         /* Maybe we could start a new election, set a flag here to make sure
          * we check as soon as possible, instead of waiting for a cron. */

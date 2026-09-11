@@ -492,6 +492,8 @@ struct _clusterNode {
     int is_node_healthy;                    /* Boolean indicating the cached node health.
                                                Update with updateAndCountChangedNodeHealth(). */
     unsigned int replica_priority;          /* Replica priority used for auto failover ranking. */
+    uint64_t failover_auth_acked_epoch;     /* Election epoch in which this voter's ACK was counted, 0 if never. */
+    uint64_t failover_auth_nacked_epoch;    /* Election epoch in which this voter's NACK was counted, 0 if never. */
 };
 
 /* Struct used for storing slot statistics. */
@@ -526,7 +528,7 @@ struct clusterState {
     /* The following fields are used to take the replica state on elections. */
     mstime_t failover_auth_time;      /* Time of previous or next election. */
     int failover_auth_count;          /* Number of votes received so far. */
-    int failover_auth_nack_count;     /* Number of rejected votes received so far. */
+    int failover_auth_nack_count;     /* Number of distinct voters that rejected this election so far. */
     int failover_auth_sent;           /* True if we already asked for votes. */
     int failover_auth_rank;           /* This replica rank for current auth request. */
     int failover_failed_primary_rank; /* The rank of this instance in the context of all failed primary list. */

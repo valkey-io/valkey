@@ -9465,6 +9465,16 @@ int VM_SubscribeToKeyspaceEvents(ValkeyModuleCtx *ctx, int types, ValkeyModuleNo
     return VALKEYMODULE_OK;
 }
 
+/* Whether any module post-execution-unit job is pending. Kept as a tiny
+ * accessor rather than exposing modulePostExecUnitJobs itself, so callers
+ * outside this file (postExecutionUnitOperations()) don't need to know it's
+ * backed by a list - if that representation ever changes, only this
+ * function needs to change with it. It's trivial enough that LTO can inline
+ * it at its (currently single) call site same as any other cross-TU call. */
+bool moduleHasPostExecUnitJobs(void) {
+    return listLength(modulePostExecUnitJobs) > 0;
+}
+
 void firePostExecutionUnitJobs(void) {
     /* Avoid propagation of commands.
      * In that way, postExecutionUnitOperations will prevent

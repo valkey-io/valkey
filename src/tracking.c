@@ -423,6 +423,14 @@ void trackingInvalidateKey(client *c, robj *keyobj, int bcast) {
     raxRemove(TrackingTable, (unsigned char *)key, keylen, NULL);
 }
 
+/* Whether any tracking (client-side-caching) key invalidation is pending
+ * flush. A tiny accessor over server.tracking_pending_keys rather than
+ * having callers reach into the list themselves, so this file stays the
+ * sole owner of how pending invalidations are tracked. */
+bool trackingHasPendingKeyInvalidations(void) {
+    return listLength(server.tracking_pending_keys) > 0;
+}
+
 void trackingHandlePendingKeyInvalidations(void) {
     if (!listLength(server.tracking_pending_keys)) return;
 

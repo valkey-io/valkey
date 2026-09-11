@@ -8440,8 +8440,10 @@ ValkeyModuleBlockedClient *moduleBlockClient(ValkeyModuleCtx *ctx,
     /* We need to handle the invalid operation of calling modules blocking
      * commands from Lua or MULTI. We actually create an already aborted
      * (client set to NULL) blocked client handle, and actually reply with
-     * an error. */
-    bc->client = (islua || ismulti) ? NULL : c;
+     * an error. The same applies to the other error paths below: they must
+     * reset bc->client to NULL, otherwise a later VM_UnblockClient() would
+     * call unblockClient() on a client that was never blocked. */
+    bc->client = c;
     bc->module = ctx->module;
     bc->reply_callback = reply_callback;
     bc->auth_reply_cb = auth_reply_callback;
@@ -8462,6 +8464,7 @@ ValkeyModuleBlockedClient *moduleBlockClient(ValkeyModuleCtx *ctx,
     if (timeout_ms) {
         mstime_t now = mstime();
         if (timeout_ms > LLONG_MAX - now) {
+            bc->client = NULL;
             c->bstate->module_blocked_handle = NULL;
             addReplyError(c, "timeout is out of range"); /* 'timeout_ms+now' would overflow */
             return bc;
@@ -8470,17 +8473,36 @@ ValkeyModuleBlockedClient *moduleBlockClient(ValkeyModuleCtx *ctx,
     }
 
     if (islua || ismulti) {
+        bc->client = NULL;
         c->bstate->module_blocked_handle = NULL;
         addReplyError(c, islua ? "Blocking module command called from Lua script"
                                : "Blocking module command called from transaction");
     } else if (ctx->flags & VALKEYMODULE_CTX_BLOCKED_REPLY) {
+        bc->client = NULL;
         c->bstate->module_blocked_handle = NULL;
         addReplyError(c, "Blocking module command called from a Reply callback context");
     } else if (!auth_reply_callback && clientHasModuleAuthInProgress(c)) {
+        bc->client = NULL;
         c->bstate->module_blocked_handle = NULL;
         addReplyError(c, "Clients undergoing module based authentication can only be blocked on auth");
     } else {
         if (keys) {
+            /* In cluster mode, reject blocking on keys from different slots. */
+            if (server.cluster_enabled) {
+                int slot = -1;
+                for (int i = 0; i < numkeys; i++) {
+                    sds key = objectGetVal(keys[i]);
+                    int keyslot = keyHashSlot(key, sdslen(key));
+                    if (slot == -1) {
+                        slot = keyslot;
+                    } else if (keyslot != slot) {
+                        bc->client = NULL;
+                        c->bstate->module_blocked_handle = NULL;
+                        addReplyError(c, "Blocking on keys that belong to different slots is not allowed in cluster mode");
+                        return bc;
+                    }
+                }
+            }
             blockForKeys(c, BLOCKED_MODULE, keys, numkeys, timeout, flags & VALKEYMODULE_BLOCK_UNBLOCK_DELETED);
         } else {
             c->bstate->timeout = timeout;

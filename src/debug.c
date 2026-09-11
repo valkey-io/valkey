@@ -2274,6 +2274,7 @@ int memtest_test_linux_anonymous_maps(void) {
         end_addr = strtoul(end, NULL, 16);
         size = end_addr - start_addr;
 
+        if (regions >= MEMTEST_MAX_REGIONS) break;
         start_vect[regions] = start_addr;
         size_vect[regions] = size;
         snprintf(logbuf, sizeof(logbuf), "*** Preparing to test memory region %lx (%lu bytes)\n",

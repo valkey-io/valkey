@@ -8,12 +8,6 @@
 
 #define UNUSED(x) (void)(x)
 
-/* Forward declarations of module API functions not publicly exposed */
-extern int VM_CallArgv(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc, int flags, const ValkeyModuleReplyHandlers *resp_handlers, void *reply_ctx);
-extern int VM_ReplyRaw(ValkeyModuleCtx *ctx, const char *proto, size_t proto_len);
-#define ValkeyModule_CallArgv VM_CallArgv
-#define ValkeyModule_ReplyRaw VM_ReplyRaw
-
 static int n_events = 0;
 
 static int KeySpace_NotificationModuleKeyMissExpired(ValkeyModuleCtx *ctx, int type, const char *event, ValkeyModuleString *key) {

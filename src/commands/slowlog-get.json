@@ -51,7 +51,7 @@
                     },
                     {
                         "type": "array",
-                        "description": "The arguments of the command, up to 32 arguments of 128 bytes each. When the command had more, the last element states how many arguments were left out.",
+                        "description": "Up to 32 arguments of the command. A long argument keeps its first 128 bytes followed by the number of bytes omitted, and a trimmed command's last element states how many arguments were omitted.",
                         "items": {
                             "type": "string"
                         }

@@ -771,6 +771,28 @@ start_server {tags {"zset"}} {
             assert_equal {} [r zrevrangebylex zset (hill (omega]
         }
 
+        test "ZRANGEBYSCORE/ZRANGEBYLEX with a negative or past-the-end LIMIT offset - $encoding" {
+            create_default_zset
+            assert_error "ERR value is out of range*" {r zrangebyscore zset -inf +inf LIMIT -1 10}
+            assert_error "ERR value is out of range*" {r zrevrangebyscore zset +inf -inf LIMIT -1 10}
+            assert_error "ERR value is out of range*" {r zrange zset -inf +inf BYSCORE LIMIT -2 10}
+            assert_error "ERR value is out of range*" {r zrange zset +inf -inf BYSCORE REV LIMIT -2 10}
+            assert_equal {g} [r zrangebyscore zset -inf +inf LIMIT 6 10]
+            assert_equal {} [r zrangebyscore zset -inf +inf LIMIT 7 10]
+            assert_equal {} [r zrevrangebyscore zset +inf -inf LIMIT 100 10]
+            create_default_lex_zset
+            assert_error "ERR value is out of range*" {r zrangebylex zset - + LIMIT -1 10}
+            assert_error "ERR value is out of range*" {r zrevrangebylex zset + - LIMIT -1 10}
+            assert_error "ERR value is out of range*" {r zrange zset - + BYLEX LIMIT -2 10}
+            assert_error "ERR value is out of range*" {r zrange zset + - BYLEX REV LIMIT -2 10}
+            assert_equal {omega} [r zrangebylex zset - + LIMIT 8 10]
+            assert_equal {} [r zrangebylex zset - + LIMIT 9 10]
+            assert_equal {} [r zrevrangebylex zset + - LIMIT 100 10]
+            assert_error "ERR value is out of range*" {r zrangestore dst{zset} zset - + BYLEX LIMIT -1 10}
+            assert_equal 0 [r zrangestore dst{zset} zset - + BYLEX LIMIT 100 10]
+            assert_equal 0 [r exists dst{zset}]
+        }
+
         test "ZLEXCOUNT advanced - $encoding" {
             create_default_lex_zset
 

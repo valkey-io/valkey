@@ -2616,11 +2616,11 @@ void genericZrangebyscoreCommand(zrange_result_handler *handler,
                                  long limit,
                                  int reverse) {
     unsigned long rangelen = 0;
-
     handler->beginResultEmission(handler, -1);
 
-    /* For invalid offset, return directly. */
-    if (offset > 0 && offset >= (long)zsetLength(zobj)) {
+    /* Nothing to emit past the end; a negative offset fails at parse time. */
+    serverAssert(offset >= 0);
+    if (offset >= (long)zsetLength(zobj)) {
         handler->finalizeResultEmission(handler, 0);
         return;
     }
@@ -2850,8 +2850,14 @@ void genericZrangebylexCommand(zrange_result_handler *handler,
                                long limit,
                                int reverse) {
     unsigned long rangelen = 0;
-
     handler->beginResultEmission(handler, -1);
+
+    /* Nothing to emit past the end; a negative offset fails at parse time. */
+    serverAssert(offset >= 0);
+    if (offset >= (long)zsetLength(zobj)) {
+        handler->finalizeResultEmission(handler, 0);
+        return;
+    }
 
     if (zobj->encoding == OBJ_ENCODING_LISTPACK) {
         unsigned char *zl = objectGetVal(zobj);
@@ -2995,7 +3001,7 @@ void zrangeGenericCommand(zrange_result_handler *handler,
         } else if (!store && !strcasecmp(objectGetVal(c->argv[j]), "xx")) {
             opt_keyexist = 1;
         } else if (!strcasecmp(objectGetVal(c->argv[j]), "limit") && leftargs >= 2) {
-            if ((getLongFromObjectOrReply(c, c->argv[j + 1], &opt_offset, NULL) != C_OK) ||
+            if ((getPositiveLongFromObjectOrReply(c, c->argv[j + 1], &opt_offset, NULL) != C_OK) ||
                 (getLongFromObjectOrReply(c, c->argv[j + 2], &opt_limit, NULL) != C_OK)) {
                 return;
             }

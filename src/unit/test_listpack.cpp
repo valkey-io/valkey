@@ -174,6 +174,51 @@ static int lpValidation(unsigned char *p, unsigned int head_count, void *userdat
     return ret;
 }
 
+static unsigned char *createListWithMetadata(void) {
+    unsigned char *lp = lpNew(0);
+
+    lp = lpAppend(lp, (unsigned char *)"field1", 6);
+    lp = lpAppend(lp, (unsigned char *)"value1", 6);
+
+    /* field 1 expiry */
+    unsigned char intenc[LP_MAX_INT_ENCODING_LEN];
+    uint64_t enclen;
+    lpEncodeIntegerGetType(1234567890, intenc, &enclen);
+    unsigned char *eofptr = lp + lpGetTotalBytes(lp) - 1;
+    lp = lpInsertMetadata(lp, intenc, enclen, eofptr, LP_BEFORE, NULL);
+
+    lp = lpAppend(lp, (unsigned char *)"field2", 6);
+    lp = lpAppend(lp, (unsigned char *)"value2", 6);
+
+    return lp;
+}
+
+static unsigned char *createListWithAllMetadata(void) {
+    unsigned char *lp = lpNew(0);
+
+    lp = lpAppend(lp, (unsigned char *)"field1", 6);
+    lp = lpAppend(lp, (unsigned char *)"value1", 6);
+
+    /* field 1 expiry */
+    unsigned char intenc[LP_MAX_INT_ENCODING_LEN];
+    uint64_t enclen;
+    lpEncodeIntegerGetType(1234567890, intenc, &enclen);
+    unsigned char *eofptr = lp + lpGetTotalBytes(lp) - 1;
+    lp = lpInsertMetadata(lp, intenc, enclen, eofptr, LP_BEFORE, NULL);
+
+    lp = lpAppend(lp, (unsigned char *)"field2", 6);
+    lp = lpAppend(lp, (unsigned char *)"value2", 6);
+
+    /* field 2 expiry */
+    unsigned char intenc2[LP_MAX_INT_ENCODING_LEN];
+    uint64_t enclen2;
+    lpEncodeIntegerGetType(1234567890, intenc2, &enclen2);
+    unsigned char *eofptr2 = lp + lpGetTotalBytes(lp) - 1;
+    lp = lpInsertMetadata(lp, intenc2, enclen2, eofptr2, LP_BEFORE, NULL);
+
+    return lp;
+}
+
 class ListpackTest : public ::testing::Test {
   protected:
     void SetUp() override {
@@ -482,7 +527,7 @@ TEST_F(ListpackTest, listpackBatchDelete) {
     lp = lpBatchDelete(lp, ps, 3);
     ASSERT_EQ(lpLength(lp), 1u);
     verifyEntry(lpFirst(lp), (unsigned char *)mixlist[2], strlen(mixlist[2]));
-    ASSERT_EQ(lpValidateIntegrity(lp, lpBytes(lp), nullptr, nullptr), 1);
+    ASSERT_EQ(lpValidateIntegrity(lp, lpBytes(lp), nullptr, nullptr, 0), 1);
     lpFree(lp);
 }
 
@@ -940,13 +985,156 @@ TEST_F(ListpackTest, listpackLpFind) {
     lpFree(lp);
 }
 
+TEST_F(ListpackTest, listpackLpFindWithMetadata) {
+    /* test lpFind with metadata fields */
+    unsigned char *lp;
+
+    lp = createListWithMetadata();
+
+    ASSERT_NE(lpFind(lp, lpFirst(lp), (unsigned char *)"field1", 6, 1), nullptr);
+    ASSERT_NE(lpFind(lp, lpFirst(lp), (unsigned char *)"field2", 6, 1), nullptr);
+    ASSERT_EQ(lpFind(lp, lpFirst(lp), (unsigned char *)"1234567890", 10, 0), nullptr);
+    lpFree(lp);
+}
+
+TEST_F(ListpackTest, listpackLpFindWithAllMetadata) {
+    /* test lpFind with all fields having metadata */
+    unsigned char *lp;
+
+    lp = createListWithAllMetadata();
+
+    ASSERT_NE(lpFind(lp, lpFirst(lp), (unsigned char *)"field1", 6, 1), nullptr);
+    ASSERT_NE(lpFind(lp, lpFirst(lp), (unsigned char *)"field2", 6, 1), nullptr);
+    ASSERT_EQ(lpFind(lp, lpFirst(lp), (unsigned char *)"1234567890", 10, 0), nullptr);
+    lpFree(lp);
+}
+
+TEST_F(ListpackTest, listpackMetadataInvisibleToIterators) {
+    /* Metadata entries are skipped by logical iteration and excluded from
+     * numele; they are reachable only through lpGetMetadata(). */
+    unsigned char *lp = createListWithAllMetadata();
+
+    /* 2 fields + 2 values; the 2 metadata entries are not counted */
+    ASSERT_EQ(lpLength(lp), 4u);
+
+    unsigned char *p = lpFirst(lp);
+    int seen = 0;
+    while (p) {
+        ASSERT_EQ(lpIsMetadata(p), 0);
+        seen++;
+        p = lpNext(lp, p);
+    }
+    ASSERT_EQ(seen, 4);
+
+    /* Values carry metadata, fields do not */
+    unsigned char *field1 = lpFirst(lp);
+    unsigned char *value1 = lpNext(lp, field1);
+    ASSERT_EQ(lpGetMetadata(lp, field1), nullptr);
+    unsigned char *meta = lpGetMetadata(lp, value1);
+    ASSERT_NE(meta, nullptr);
+    ASSERT_EQ(lpGetMetadataValue(meta), 1234567890);
+
+    /* Backward iteration skips metadata too */
+    unsigned char *last = lpLast(lp);
+    ASSERT_EQ(lpIsMetadata(last), 0);
+    seen = 0;
+    while (last) {
+        seen++;
+        last = lpPrev(lp, last);
+    }
+    ASSERT_EQ(seen, 4);
+    lpFree(lp);
+}
+
+TEST_F(ListpackTest, listpackMetadataDeletedWithElement) {
+    /* Deleting a pair also deletes the metadata trailing it */
+    unsigned char *lp = createListWithMetadata();
+    ASSERT_EQ(lpLength(lp), 4u);
+
+    unsigned char *field1 = lpFirst(lp);
+    lp = lpDeleteRangeWithEntry(lp, &field1, 2);
+    ASSERT_EQ(lpLength(lp), 2u);
+    ASSERT_NE(lpFind(lp, lpFirst(lp), (unsigned char *)"field2", 6, 1), nullptr);
+    ASSERT_EQ(lpFind(lp, lpFirst(lp), (unsigned char *)"field1", 6, 1), nullptr);
+    ASSERT_EQ(lpValidateIntegrity(lp, lpBytes(lp), nullptr, nullptr, 1), 1);
+    lpFree(lp);
+}
+
+TEST_F(ListpackTest, listpackValidateIntegrityMetadataGate) {
+    /* Metadata is only valid when the caller allows it */
+    unsigned char *lp = createListWithAllMetadata();
+    ASSERT_EQ(lpValidateIntegrity(lp, lpBytes(lp), nullptr, nullptr, 1), 1);
+    ASSERT_EQ(lpValidateIntegrity(lp, lpBytes(lp), nullptr, nullptr, 0), 0);
+    lpFree(lp);
+}
+
+TEST_F(ListpackTest, listpackLeadingMetadataHeader) {
+    /* A single tagged entry may lead the listpack as an aggregate header:
+     * reachable only via lpStart + lpIsMetadata, invisible to iterators and
+     * numele, and accepted by the validator when metadata is allowed. */
+    unsigned char *lp = createListWithMetadata(); /* f1,v1(+meta),f2,v2 */
+    ASSERT_EQ(lpIsMetadata(lpStart(lp)), 0);
+
+    /* Prepend the aggregate header carrying the count (1). */
+    unsigned char intenc[LP_MAX_INT_ENCODING_LEN];
+    uint64_t enclen;
+    lpEncodeIntegerGetType(1, intenc, &enclen);
+    lp = lpInsertMetadata(lp, intenc, enclen, lpFirst(lp), LP_BEFORE, NULL);
+
+    unsigned char *head = lpStart(lp);
+    ASSERT_EQ(lpIsMetadata(head), 1);
+    ASSERT_EQ(lpGetMetadataValue(head), 1);
+
+    /* Invisible to logical iteration and numele. */
+    ASSERT_EQ(lpLength(lp), 4u);
+    verifyEntry(lpFirst(lp), (unsigned char *)"field1", 6);
+    int seen = 0;
+    for (unsigned char *p = lpFirst(lp); p; p = lpNext(lp, p)) {
+        ASSERT_EQ(lpIsMetadata(p), 0);
+        seen++;
+    }
+    ASSERT_EQ(seen, 4);
+
+    /* Valid with metadata allowed, corrupt otherwise. */
+    ASSERT_EQ(lpValidateIntegrity(lp, lpBytes(lp), nullptr, nullptr, 1), 1);
+    ASSERT_EQ(lpValidateIntegrity(lp, lpBytes(lp), nullptr, nullptr, 0), 0);
+
+    /* In-place replace of the header value. */
+    lpEncodeIntegerGetType(2, intenc, &enclen);
+    lp = lpInsertMetadata(lp, intenc, enclen, lpStart(lp), LP_REPLACE, NULL);
+    ASSERT_EQ(lpGetMetadataValue(lpStart(lp)), 2);
+    ASSERT_EQ(lpLength(lp), 4u);
+
+    /* A second leading tagged entry is corruption. */
+    lpEncodeIntegerGetType(7, intenc, &enclen);
+    lp = lpInsertMetadata(lp, intenc, enclen, lpStart(lp), LP_AFTER, NULL);
+    ASSERT_EQ(lpValidateIntegrity(lp, lpBytes(lp), nullptr, nullptr, 1), 0);
+    lpFree(lp);
+}
+
+TEST_F(ListpackTest, listpackLeadingMetadataDeletion) {
+    /* Deleting the header restores a plain listpack. */
+    unsigned char *lp = createListWithMetadata();
+    unsigned char intenc[LP_MAX_INT_ENCODING_LEN];
+    uint64_t enclen;
+    lpEncodeIntegerGetType(1, intenc, &enclen);
+    lp = lpInsertMetadata(lp, intenc, enclen, lpFirst(lp), LP_BEFORE, NULL);
+    ASSERT_EQ(lpIsMetadata(lpStart(lp)), 1);
+
+    lp = lpRemoveMetadata(lp, lpStart(lp));
+    ASSERT_EQ(lpIsMetadata(lpStart(lp)), 0);
+    ASSERT_EQ(lpLength(lp), 4u);
+    ASSERT_EQ(lpValidateIntegrity(lp, lpBytes(lp), nullptr, nullptr, 1), 1);
+    lpFree(lp);
+}
+
 TEST_F(ListpackTest, listpackLpValidateIntegrity) {
     /* Test lpValidateIntegrity */
     unsigned char *lp;
 
     lp = createList();
     long count = 0;
-    ASSERT_EQ(lpValidateIntegrity(lp, lpBytes(lp), lpValidation, &count), 1);
+    ASSERT_EQ(lpValidateIntegrity(lp, lpBytes(lp), lpValidation, &count, 0), 1);
     lpFree(lp);
 }
 
@@ -1131,7 +1319,7 @@ TEST_F(ListpackBenchmark, DISABLED_listpackBenchmarkLpValidateIntegrity) {
     /* Benchmark lpValidateIntegrity */
     unsigned long long start = usec();
     for (int i = 0; i < 2000; i++) {
-        lpValidateIntegrity(lp, lpBytes(lp), nullptr, nullptr);
+        lpValidateIntegrity(lp, lpBytes(lp), nullptr, nullptr, 0);
     }
     printf("Done. usec=%lld\n", usec() - start);
 }

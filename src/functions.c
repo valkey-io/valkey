@@ -805,7 +805,7 @@ void functionRestoreCommand(client *c) {
     while (data_len - payload.io.buffer.pos > 10) {
         int type;
         if ((type = rdbLoadType(&payload)) == -1) {
-            err = sdsnew("can not read data type");
+            err = sdsnew("cannot read data type");
             goto load_error;
         }
         if (type == RDB_OPCODE_FUNCTION_PRE_GA) {

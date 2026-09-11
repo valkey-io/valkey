@@ -2307,7 +2307,7 @@ static void killMainThread(void) {
     int err;
     if (pthread_self() != server.main_thread_id && pthread_cancel(server.main_thread_id) == 0) {
         if ((err = pthread_join(server.main_thread_id, NULL)) != 0) {
-            serverLog(LL_WARNING, "main thread can not be joined: %s", strerror(err));
+            serverLog(LL_WARNING, "main thread cannot be joined: %s", strerror(err));
         } else {
             serverLog(LL_WARNING, "main thread terminated");
         }

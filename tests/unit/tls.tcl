@@ -494,6 +494,9 @@ start_server {tags {"tls"}} {
 
             # Not-yet-valid CA certificate directory
             test_tls_cert_rejection ca-dir $tlsdir/ca-notyet {*One or more loaded CA certificates are invalid*}
+
+            # Empty CA certificate directory
+            test_tls_cert_rejection ca-dir $tlsdir/ca-empty {*No CA certificates loaded from directory*}
         }
 
         proc test_tls_cert_rejection_runtime {r cert_type cert_path} {
@@ -540,6 +543,9 @@ start_server {tags {"tls"}} {
 
             # Not-yet-valid CA certificate directory
             test_tls_cert_rejection_runtime r ca-dir $tlsdir/ca-notyet
+
+            # Empty CA certificate directory
+            test_tls_cert_rejection_runtime r ca-dir $tlsdir/ca-empty
         }
     }
 }

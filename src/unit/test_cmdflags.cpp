@@ -20,6 +20,20 @@ class CmdFlagsTest : public ::testing::Test {
         server.orig_commands = hashtableCreate(&originalCommandSetType);
         populateCommandTable();
     }
+
+    /* Number of commands with at least one subcommand. */
+    static int countCommandsWithSubcommands(void) {
+        int count = 0;
+        hashtableIterator iter;
+        struct serverCommand *c;
+
+        hashtableInitIterator(&iter, server.commands, 0);
+        while (hashtableNext(&iter, (void **)&c)) {
+            if (c->subcommands_ht != NULL) count++;
+        }
+        hashtableCleanupIterator(&iter);
+        return count;
+    }
 };
 
 
@@ -53,4 +67,27 @@ TEST_F(CmdFlagsTest, TestWriteFirstkeyOnly) {
     hashtableCleanupIterator(&iter);
 
     EXPECT_EQ(count, expectedCount);
+}
+
+TEST_F(CmdFlagsTest, TestPopulateCommandTableTwice) {
+    /* populateCommandTable() keeps the names and the subcommand tables in the
+     * static command table, so a second call used to fail the assertion in
+     * commandAddSubcommand(). Test suites run in one process, so more than one
+     * suite may populate the table. */
+    int commands = (int)hashtableSize(server.commands);
+    int with_subcommands = countCommandsWithSubcommands();
+
+    EXPECT_GT(commands, 0);
+    EXPECT_GT(with_subcommands, 0);
+
+    hashtableRelease(server.commands);
+    hashtableRelease(server.orig_commands);
+    server.commands = hashtableCreate(&commandSetType);
+    server.orig_commands = hashtableCreate(&originalCommandSetType);
+
+    populateCommandTable();
+
+    EXPECT_EQ((int)hashtableSize(server.commands), commands);
+    EXPECT_EQ((int)hashtableSize(server.orig_commands), commands);
+    EXPECT_EQ(countCommandsWithSubcommands(), with_subcommands);
 }

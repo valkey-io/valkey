@@ -40,6 +40,7 @@
      ((USE_OPENSSL == 2 /* BUILD_MODULE */) && \
       (defined(BUILD_TLS_MODULE) && BUILD_TLS_MODULE == 2)))
 
+#include <openssl/x509_vfy.h>
 #include <openssl/conf.h>
 #include <openssl/ssl.h>
 #include <openssl/x509.h>
@@ -56,7 +57,6 @@
 #include <arpa/inet.h>
 #include <dirent.h>
 #include <ctype.h>
-#include <limits.h>
 #include <stdint.h>
 #include <stdio.h>
 
@@ -399,9 +399,20 @@ static int tlsUpdateCertInfoFromDir(const char *path, long long *expiry, sds *se
 }
 
 static void tlsRefreshServerCertInfo(void) {
+    /* Cycle through both certificates to get the correct info for each */
     if (!(server.tls_port || server.tls_replication || server.tls_cluster) || !valkey_tls_ctx ||
+        SSL_CTX_set_current_cert(valkey_tls_ctx, SSL_CERT_SET_FIRST) != 1 ||
         tlsUpdateCertInfoFromCtx(valkey_tls_ctx, &server.tls_server_cert_expire_time, &server.tls_server_cert_serial) == C_ERR) {
         tlsClearCertInfo(&server.tls_server_cert_expire_time, &server.tls_server_cert_serial);
+    }
+    if (SSL_CTX_set_current_cert(valkey_tls_ctx, SSL_CERT_SET_NEXT) != 1 ||
+        tlsUpdateCertInfoFromCtx(valkey_tls_ctx, &server.tls_server_alt_cert_expire_time, &server.tls_server_alt_cert_serial) == C_ERR) {
+        tlsClearCertInfo(&server.tls_server_alt_cert_expire_time, &server.tls_server_alt_cert_serial);
+    }
+    if (SSL_CTX_set_current_cert(valkey_tls_ctx, SSL_CERT_SET_FIRST) != 1) {
+        serverLog(LL_WARNING, "Certificate unset during refresh, clearing all server certificate info");
+        tlsClearCertInfo(&server.tls_server_cert_expire_time, &server.tls_server_cert_serial);
+        tlsClearCertInfo(&server.tls_server_alt_cert_expire_time, &server.tls_server_alt_cert_serial);
     }
 }
 
@@ -509,6 +520,7 @@ static bool loadCaCertDir(SSL_CTX *ctx, const char *ca_cert_dir) {
         return false;
     }
 
+    int loaded = 0;
     while ((entry = readdir(dir)) != NULL) {
         if (!strcmp(entry->d_name, ".") || !strcmp(entry->d_name, "..")) continue;
 
@@ -531,10 +543,17 @@ static bool loadCaCertDir(SSL_CTX *ctx, const char *ca_cert_dir) {
                 ERR_clear_error();
             }
             X509_free(cert);
+            loaded++;
         }
     }
 
     closedir(dir);
+
+    if (loaded == 0) {
+        serverLog(LL_WARNING, "No CA certificates loaded from directory: %s", ca_cert_dir);
+        return false;
+    }
+
     return true;
 }
 
@@ -564,9 +583,14 @@ static SSL_CTX *createSSLContext(serverTLSContextConfig *ctx_config, int protoco
     const char *cert_file = client ? ctx_config->client_cert_file : ctx_config->cert_file;
     const char *key_file = client ? ctx_config->client_key_file : ctx_config->key_file;
     const char *key_file_pass = client ? ctx_config->client_key_file_pass : ctx_config->key_file_pass;
+
+    const char *alt_cert_file = client ? NULL : ctx_config->alt_cert_file;
+    const char *alt_key_file = client ? NULL : ctx_config->alt_key_file;
+    const char *alt_key_file_pass = client ? NULL : ctx_config->alt_key_file_pass;
     char errbuf[256];
     SSL_CTX *ctx = NULL;
-
+    EVP_PKEY *primary_pkey = NULL;
+    EVP_PKEY *alt_pkey = NULL;
     ctx = SSL_CTX_new(SSLv23_method());
     if (!ctx) goto error;
 
@@ -606,10 +630,48 @@ static SSL_CTX *createSSLContext(serverTLSContextConfig *ctx_config, int protoco
         goto error;
     }
 
+    if (alt_cert_file) {
+        primary_pkey = X509_get_pubkey(SSL_CTX_get0_certificate(ctx));
+        if (!primary_pkey) {
+            serverLog(LL_WARNING, "Could not get public key from primary certificate");
+            goto error;
+        }
+
+        if (SSL_CTX_use_certificate_chain_file(ctx, alt_cert_file) <= 0) {
+            ERR_error_string_n(ERR_get_error(), errbuf, sizeof(errbuf));
+            serverLog(LL_WARNING, "Failed to load certificate: %s: %s", alt_cert_file, errbuf);
+            goto error;
+        }
+
+        if (!isCertValid(SSL_CTX_get0_certificate(ctx))) {
+            serverLog(LL_WARNING, "Alternate server TLS certificate is invalid. Aborting TLS configuration.");
+            goto error;
+        }
+
+        alt_pkey = X509_get_pubkey(SSL_CTX_get0_certificate(ctx));
+        if (!alt_pkey) {
+            serverLog(LL_WARNING, "Could not get public key from alternate certificate");
+            goto error;
+        }
+
+        if (EVP_PKEY_base_id(primary_pkey) == EVP_PKEY_base_id(alt_pkey)) {
+            serverLog(LL_WARNING, "Primary and alternate certificates must use different key algorithms");
+            goto error;
+        }
+    }
+
     if (SSL_CTX_use_PrivateKey_file(ctx, key_file, SSL_FILETYPE_PEM) <= 0) {
         ERR_error_string_n(ERR_get_error(), errbuf, sizeof(errbuf));
         serverLog(LL_WARNING, "Failed to load private key: %s: %s", key_file, errbuf);
         goto error;
+    }
+    if (alt_key_file) {
+        SSL_CTX_set_default_passwd_cb_userdata(ctx, (void *)alt_key_file_pass);
+        if (SSL_CTX_use_PrivateKey_file(ctx, alt_key_file, SSL_FILETYPE_PEM) <= 0) {
+            ERR_error_string_n(ERR_get_error(), errbuf, sizeof(errbuf));
+            serverLog(LL_WARNING, "Failed to load private key: %s: %s", alt_key_file, errbuf);
+            goto error;
+        }
     }
 
     if (ctx_config->ca_cert_file || ctx_config->ca_cert_dir) {
@@ -642,9 +704,13 @@ static SSL_CTX *createSSLContext(serverTLSContextConfig *ctx_config, int protoco
     }
 #endif
 
+    EVP_PKEY_free(primary_pkey);
+    EVP_PKEY_free(alt_pkey);
     return ctx;
 
 error:
+    EVP_PKEY_free(primary_pkey);
+    EVP_PKEY_free(alt_pkey);
     if (ctx) SSL_CTX_free(ctx);
     return NULL;
 }
@@ -666,6 +732,16 @@ static int tlsCreateContexts(serverTLSContextConfig *ctx_config, SSL_CTX **out_c
 
     if (!ctx_config->key_file) {
         serverLog(LL_WARNING, "No tls-key-file configured!");
+        goto error;
+    }
+
+    if (ctx_config->alt_cert_file && !ctx_config->alt_key_file) {
+        serverLog(LL_WARNING, "tls-alt-cert-file provided without a key");
+        goto error;
+    }
+
+    if (ctx_config->alt_key_file && !ctx_config->alt_cert_file) {
+        serverLog(LL_WARNING, "tls-alt-key-file provided without a certificate");
         goto error;
     }
 
@@ -781,6 +857,8 @@ error:
 typedef struct {
     unsigned char cert_fingerprint[EVP_MAX_MD_SIZE];
     unsigned int cert_fingerprint_len;
+    unsigned char alt_cert_fingerprint[EVP_MAX_MD_SIZE];
+    unsigned int alt_cert_fingerprint_len;
     unsigned char client_cert_fingerprint[EVP_MAX_MD_SIZE];
     unsigned int client_cert_fingerprint_len;
     unsigned char ca_cert_fingerprint[EVP_MAX_MD_SIZE];
@@ -838,6 +916,7 @@ static void captureMetadata(serverTLSContextConfig *ctx_config, tlsMaterialsMeta
 
     /* Certificate files: fingerprint-based detection */
     getCertFingerprint(ctx_config->cert_file, metadata->cert_fingerprint, &metadata->cert_fingerprint_len);
+    getCertFingerprint(ctx_config->alt_cert_file, metadata->alt_cert_fingerprint, &metadata->alt_cert_fingerprint_len);
     getCertFingerprint(ctx_config->client_cert_file, metadata->client_cert_fingerprint, &metadata->client_cert_fingerprint_len);
     getCertFingerprint(ctx_config->ca_cert_file, metadata->ca_cert_fingerprint, &metadata->ca_cert_fingerprint_len);
 
@@ -862,6 +941,11 @@ static int metadataChanged(const tlsMaterialsMetadata *old, const tlsMaterialsMe
     /* Check certificate fingerprints */
     if (old->cert_fingerprint_len != new->cert_fingerprint_len ||
         (new->cert_fingerprint_len > 0 && memcmp(old->cert_fingerprint, new->cert_fingerprint, new->cert_fingerprint_len) != 0)) {
+        return 1;
+    }
+
+    if (old->alt_cert_fingerprint_len != new->alt_cert_fingerprint_len ||
+        (new->alt_cert_fingerprint_len > 0 && memcmp(old->alt_cert_fingerprint, new->alt_cert_fingerprint, new->alt_cert_fingerprint_len) != 0)) {
         return 1;
     }
 
@@ -1290,8 +1374,13 @@ static void updateSSLState(connection *conn_) {
     updatePendingData(conn);
 }
 
-static int getCertSubjectFieldByName(X509 *cert, const char *field, char *out, size_t outlen) {
-    if (!cert || !field || !out || outlen == 0) return 0;
+/* Return the named field of cert's subject, or NULL if it is absent or empty.
+ * Caller frees.
+ *
+ * sds rather than a C string, so the caller sees what the CA signed even when
+ * the value contains a NUL. */
+static sds getCertSubjectFieldByName(X509 *cert, const char *field) {
+    if (!cert || !field) return NULL;
 
     int nid = -1;
 
@@ -1301,35 +1390,32 @@ static int getCertSubjectFieldByName(X509 *cert, const char *field, char *out, s
         nid = NID_organizationName;
     /* Add more mappings here as needed */
 
-    if (nid == -1) return 0;
+    if (nid == -1) return NULL;
 
 #if OPENSSL_VERSION_NUMBER >= 0x30000000L
     const X509_NAME *subject = X509_get_subject_name(cert);
 #else
     X509_NAME *subject = X509_get_subject_name(cert);
 #endif
-    if (!subject) return 0;
+    if (!subject) return NULL;
 
-    /* X509_NAME_get_text_by_NID is deprecated in OpenSSL 4.0 */
+    /* Not X509_NAME_get_text_by_NID(): it NUL terminates into a caller buffer,
+     * hiding an embedded NUL and truncating a long value. Also deprecated in
+     * OpenSSL 4.0. */
     int idx = X509_NAME_get_index_by_NID(subject, nid, -1);
-    if (idx < 0) return 0;
+    if (idx < 0) return NULL;
 
     const X509_NAME_ENTRY *entry = X509_NAME_get_entry(subject, idx);
-    if (!entry) return 0;
+    if (!entry) return NULL;
 
     const ASN1_STRING *data = X509_NAME_ENTRY_get_data(entry);
-    if (!data) return 0;
+    if (!data) return NULL;
 
     const unsigned char *str = ASN1_STRING_get0_data(data);
-    int len = ASN1_STRING_length(data);
-    if (!str || len <= 0) return 0;
+    int str_len = ASN1_STRING_length(data);
+    if (!str || str_len <= 0) return NULL;
 
-    /* Copy to output buffer, ensuring null termination */
-    size_t copy_len = (size_t)len < outlen - 1 ? (size_t)len : outlen - 1;
-    memcpy(out, str, copy_len);
-    out[copy_len] = '\0';
-
-    return 1;
+    return sdsnewlen(str, str_len);
 }
 
 /* Extract URI from Subject Alternative Name extension and return the first
@@ -1403,16 +1489,28 @@ user *tlsGetPeerUser(connection *conn_, sds *cert_username) {
         break;
 
     case TLS_CLIENT_FIELD_CN: {
-        char field_value[256];
-        if (getCertSubjectFieldByName(cert, "CN", field_value, sizeof(field_value))) {
-            if (cert_username) *cert_username = sdsnew(field_value);
-            result = ACLGetUserByName(field_value, strlen(field_value));
-            if (!result || !(result->flags & USER_FLAG_ENABLED)) {
-                serverLog(LL_VERBOSE, "TLS: No matching user found for certificate CN '%s'", field_value);
-                result = NULL;
-            }
-        } else {
+        sds cn = getCertSubjectFieldByName(cert, "CN");
+        if (!cn) {
             serverLog(LL_DEBUG, "TLS: Failed to extract CN in certificate subject");
+            break;
+        }
+
+        /* Compared over the whole CN, so "CN=admin\0attacker" does not match the
+         * user "admin". */
+        result = ACLGetUserByName(cn, sdslen(cn));
+        if (!result || !(result->flags & USER_FLAG_ENABLED)) {
+            sds repr = server.hide_user_data_from_log ? NULL : sdscatrepr(sdsempty(), cn, sdslen(cn));
+            serverLog(LL_VERBOSE, "TLS: No matching user found for certificate CN %s",
+                      repr ? repr : "*redacted*");
+            sdsfree(repr);
+            result = NULL;
+        }
+
+        /* Hand over the CN even when it does not match, so it reaches the ACL log. */
+        if (cert_username) {
+            *cert_username = cn;
+        } else {
+            sdsfree(cn);
         }
         break;
     }
@@ -2022,7 +2120,7 @@ static ConnectionType CT_TLS = {
 
     /* Miscellaneous */
     .connIntegrityChecked = connTLSIsIntegrityChecked,
-
+    .is_closing = connTcpSocketIsClosing,
 };
 
 int RedisRegisterConnectionTypeTLS(void) {
@@ -2059,6 +2157,7 @@ static void tlsClearCACertInfo(void) {
 
 static void tlsClearAllCertInfo(void) {
     tlsClearCertInfo(&server.tls_server_cert_expire_time, &server.tls_server_cert_serial);
+    tlsClearCertInfo(&server.tls_server_alt_cert_expire_time, &server.tls_server_alt_cert_serial);
     tlsClearCertInfo(&server.tls_client_cert_expire_time, &server.tls_client_cert_serial);
     tlsClearCACertInfo();
 }
@@ -2085,7 +2184,7 @@ int ValkeyModule_OnLoad(void *ctx, ValkeyModuleString **argv, int argc) {
         return VALKEYMODULE_ERR;
     }
 
-    ValkeyModule_SetModuleOptions(ctx, VALKEYMODULE_OPTIONS_HANDLE_REPL_ASYNC_LOAD | VALKEYMODULE_OPTIONS_HANDLE_ATOMIC_SLOT_MIGRATION);
+    ValkeyModule_SetModuleOptions(ctx, VALKEYMODULE_OPTIONS_HANDLE_REPL_ASYNC_LOAD | VALKEYMODULE_OPTIONS_HANDLE_ATOMIC_SLOT_MIGRATION | VALKEYMODULE_OPTIONS_HANDLE_FORKLESS);
 
     if (connTypeRegister(&CT_TLS) != C_OK) return VALKEYMODULE_ERR;
 

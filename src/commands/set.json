@@ -27,6 +27,10 @@
             [
                 "8.1.0",
                 "Added the `IFEQ` option."
+            ],
+            [
+                "9.2.0",
+                "Added the `IFNE` option."
             ]
         ],
         "command_flags": [
@@ -114,6 +118,13 @@
                         "token": "IFEQ",
                         "since": "8.1.0",
                         "summary": "Sets the key's value only if the current value matches the specified comparison value."
+                    },
+                    {
+                        "name": "comparison-not-equal",
+                        "type": "string",
+                        "token": "IFNE",
+                        "since": "9.2.0",
+                        "summary": "Sets the key's value only if the current value does not match the specified comparison value."
                     }
                 ]
             },

@@ -1625,6 +1625,47 @@ void streamPropagateConsumerCreation(client *c, robj *key, robj *groupname, sds 
     decrRefCount(argv[4]);
 }
 
+/* Propagate the deletion of stream entries as
+ *
+ *  XDEL <key> <id1> <id2> ... <idn>
+ *
+ * XDELEX & XACKDEL propagate their effects manually this way to ensure
+ * compatibility with any pre-9.2 replicas. */
+static void streamPropagateDelIDs(client *c, robj *key, streamID *ids, int count) {
+    if (count == 0) return;
+
+    robj **argv = zmalloc(sizeof(robj *) * (2 + count));
+    argv[0] = shared.xdel;
+    argv[1] = key;
+    for (int j = 0; j < count; j++) argv[2 + j] = createObjectFromStreamID(&ids[j]);
+
+    alsoPropagate(c->db->id, argv, 2 + count, PROPAGATE_AOF | PROPAGATE_REPL, c->slot);
+
+    for (int j = 0; j < count; j++) decrRefCount(argv[2 + j]);
+    zfree(argv);
+}
+
+/* Propagate acknowledgement of 'count' ids for 'groupname' as
+ *
+ *  XACK <key> <groupname> <id1> <id2> ... <idn>
+ *
+ * XDELEX & XACKDEL propagate their effects manually this way to ensure
+ * compatibility with any pre-9.2 replicas. */
+static void streamPropagateAckIDs(client *c, robj *key, robj *groupname, streamID *ids, int count) {
+    if (count == 0) return;
+
+    robj **argv = zmalloc(sizeof(robj *) * (3 + count));
+    argv[0] = shared.xack;
+    argv[1] = key;
+    argv[2] = groupname;
+    for (int j = 0; j < count; j++) argv[3 + j] = createObjectFromStreamID(&ids[j]);
+
+    alsoPropagate(c->db->id, argv, 3 + count, PROPAGATE_AOF | PROPAGATE_REPL, c->slot);
+
+    for (int j = 0; j < count; j++) decrRefCount(argv[3 + j]);
+    zfree(argv);
+}
+
 /* Send the stream items in the specified range to the client 'c'. The range
  * the client will receive is between start and end inclusive, if 'count' is
  * non zero, no more than 'count' elements are sent.
@@ -2527,6 +2568,21 @@ void streamFreeNACK(streamNACK *na) {
     zfree(na);
 }
 
+/* Delete a pending entry from the group PEL and from the PEL of the consumer
+ * owning it, freeing the NACK. Returns 1 if entry was pending and was deleted,
+ * 0 otherwise leaving both group & individual consumer PEL untouched. */
+static int streamDeletePELEntry(rax *pel, streamID *id) {
+    unsigned char buf[sizeof(streamID)];
+    streamEncodeID(buf, id);
+    void *result;
+    if (!raxFind(pel, buf, sizeof(buf), &result)) return 0;
+    streamNACK *nack = result;
+    raxRemove(pel, buf, sizeof(buf), NULL);
+    raxRemove(nack->consumer->pel, buf, sizeof(buf), NULL);
+    streamFreeNACK(nack);
+    return 1;
+}
+
 /* Free a consumer and associated data structures. Note that this function
  * will not reassign the pending messages associated with this consumer
  * nor will delete them from the stream, so when this function is called
@@ -2916,12 +2972,7 @@ void xackCommand(client *c) {
         /* Lookup the ID in the group PEL: it will have a reference to the
          * NACK structure that will have a reference to the consumer, so that
          * we are able to remove the entry from both PELs. */
-        void *result;
-        if (raxFind(group->pel, buf, sizeof(buf), &result)) {
-            streamNACK *nack = result;
-            raxRemove(group->pel, buf, sizeof(buf), NULL);
-            raxRemove(nack->consumer->pel, buf, sizeof(buf), NULL);
-            streamFreeNACK(nack);
+        if (streamDeletePELEntry(group->pel, &ids[j - 3])) {
             acknowledged++;
             server.dirty++;
         }
@@ -3576,48 +3627,294 @@ void xautoclaimCommand(client *c) {
     preventCommandPropagation(c);
 }
 
-/* XDEL <key> [<ID1> <ID2> ... <IDN>]
- *
- * Removes the specified entries from the stream. Returns the number
- * of items actually deleted, that may be different from the number
- * of IDs passed in case certain IDs do not exist. */
-void xdelCommand(client *c) {
-    robj *o;
+/* PEL handling modes shared by XDELEX & XACKDEL. */
+typedef enum {
+    PELMODE_KEEPREF = 0,
+    PELMODE_DELREF,
+    PELMODE_ACKED
+} streamPELMode;
 
-    if ((o = lookupKeyWriteOrReply(c, c->argv[1], shared.czero)) == NULL || checkType(c, o, OBJ_STREAM)) return;
+/* Command variant for xdelGenericCommand. */
+typedef enum {
+    XDEL_CMD,    /* XDEL <key> <ID1> ... <IDN> */
+    XDELEX_CMD,  /* XDELEX <key> [KEEPREF|DELREF|ACKED] IDS <n> <ID1> ... <IDN> */
+    XACKDEL_CMD, /* XACKDEL <key> <group> [KEEPREF|DELREF|ACKED] IDS <n> <ID1> ... <IDN> */
+} xdelVariant;
+
+/* XDEL <key> [<ID1> <ID2> ... <IDN>]
+ * XDELEX <key> [KEEPREF | DELREF | ACKED] IDS num [<ID1> <ID2> ... <IDN>]
+ * XACKDEL <key> <group> [KEEPREF | DELREF | ACKED] IDS num [<ID1> <ID2> ... <IDN>]
+ *
+ * Unified implementation of XDEL, XDELEX and XACKDEL.
+ *
+ * XDEL removes stream entries unconditionally.
+ * XDELEX is XDEL with PEL-awareness across all consumer groups.
+ * XACKDEL is XDELEX scoped to a target consumer group: it acknowledges
+ * entries in the target group first, then consults remaining groups. */
+static void xdelGenericCommand(client *c, xdelVariant variant) {
+    bool has_group = (variant == XACKDEL_CMD);
+    bool has_pelmode = (variant != XDEL_CMD);
+    bool array_reply = (variant != XDEL_CMD);
+
+    /* --- Argument parsing ------------------------------------------------ */
+    streamCG *group = NULL;
+    streamPELMode mode = PELMODE_KEEPREF;
+    robj *o = lookupKeyWrite(c->db, c->argv[1]);
+    int argi = 2;
+
+    if (o && checkType(c, o, OBJ_STREAM)) return; /* Type error. */
+
+    if (has_group) {
+        /* The group name is a positional argument: always consume it, even
+         * when the key is missing (the lookup simply yields a NULL group). */
+        if (o) {
+            group = streamLookupCG(objectGetVal(o), objectGetVal(c->argv[argi]));
+        }
+        argi++; /* past group */
+    }
+
+    size_t id_count;
+    if (!has_pelmode) {
+        /* XDEL has no IDS token, so the remaining args is the id count. */
+        id_count = c->argc - argi;
+    } else {
+        /* Parse optional PEL mode: [KEEPREF | DELREF | ACKED] */
+        if (strcasecmp(objectGetVal(c->argv[argi]), "KEEPREF") == 0) {
+            argi++;
+        } else if (strcasecmp(objectGetVal(c->argv[argi]), "DELREF") == 0) {
+            argi++;
+            mode = PELMODE_DELREF;
+        } else if (strcasecmp(objectGetVal(c->argv[argi]), "ACKED") == 0) {
+            argi++;
+            mode = PELMODE_ACKED;
+        }
+
+        /* Expect IDS token. */
+        if (strcasecmp(objectGetVal(c->argv[argi]), "IDS") != 0) {
+            addReplyErrorObject(c, shared.syntaxerr);
+            return;
+        }
+        argi++; /* past IDS */
+
+        /* Parse and validate numids: must be a positive integer. */
+        long long ll;
+        if (getLongLongFromObject(c->argv[argi], &ll) != C_OK || ll <= 0) {
+            addReplyError(c, "Number of IDs must be a positive integer");
+            return;
+        }
+        argi++; /* past numids */
+
+        /* Validate numids matches remaining arg count. */
+        if (ll != c->argc - argi) {
+            addReplyErrorObject(c, shared.syntaxerr);
+            return;
+        }
+        id_count = (size_t)ll;
+    }
+
+    /* --- Missing key / group early exit ---------------------------------- */
+    if (o == NULL || (has_group && group == NULL)) {
+        if (array_reply) {
+            addReplyArrayLen(c, id_count);
+            for (size_t i = 0; i < id_count; i++) addReplyLongLong(c, -1);
+        } else {
+            addReply(c, shared.czero);
+        }
+        return;
+    }
     stream *s = objectGetVal(o);
+
+    /* --- Allocate working arrays ----------------------------------------- *
+     * Each variant only declares static buffers for the arrays it actually
+     * uses.  Unused pointers are NULL so accidental access crashes rather
+     * than silently touching an unrelated stack buffer.  For large id_count
+     * the heap path also skips allocations the variant does not need. */
+    streamID static_ids[STREAMID_STATIC_VECTOR_LEN];
+    streamID *ids = static_ids;
+
+    streamID static_del_ids[STREAMID_STATIC_VECTOR_LEN];
+    streamID *del_ids = static_del_ids;
+    int del_count = 0;
+
+    int static_resps[STREAMID_STATIC_VECTOR_LEN];
+    int *resps = array_reply ? static_resps : NULL;
+
+    unsigned char static_acked_flags[STREAMID_STATIC_VECTOR_LEN];
+    unsigned char *acked_flags = has_group ? static_acked_flags : NULL;
+
+    unsigned char static_exists[STREAMID_STATIC_VECTOR_LEN];
+    unsigned char *exists = (mode == PELMODE_ACKED) ? static_exists : NULL;
+
+    unsigned char static_cleared[STREAMID_STATIC_VECTOR_LEN];
+    unsigned char *cleared = (mode == PELMODE_DELREF || mode == PELMODE_ACKED) ? static_cleared : NULL;
+
+    streamID static_ack_ids[STREAMID_STATIC_VECTOR_LEN];
+    streamID *ack_ids = (has_group || mode == PELMODE_DELREF || mode == PELMODE_ACKED) ? static_ack_ids : NULL;
+
+    if (id_count > STREAMID_STATIC_VECTOR_LEN) {
+        ids = zmalloc(sizeof(streamID) * id_count);
+        del_ids = zmalloc(sizeof(streamID) * id_count);
+        if (resps) resps = zmalloc(sizeof(int) * id_count);
+        if (acked_flags) acked_flags = zmalloc(sizeof(unsigned char) * id_count);
+        if (exists) exists = zmalloc(sizeof(unsigned char) * id_count);
+        if (cleared) cleared = zmalloc(sizeof(unsigned char) * id_count);
+        if (ack_ids) ack_ids = zmalloc(sizeof(streamID) * id_count);
+    }
 
     /* We need to sanity check the IDs passed to start. Even if not
      * a big issue, it is not great that the command is only partially
      * executed because at some point an invalid ID is parsed. */
-    streamID static_ids[STREAMID_STATIC_VECTOR_LEN];
-    streamID *ids = static_ids;
-    int id_count = c->argc - 2;
-    if (id_count > STREAMID_STATIC_VECTOR_LEN) ids = zmalloc(sizeof(streamID) * id_count);
-    for (int j = 2; j < c->argc; j++) {
-        if (streamParseStrictIDOrReply(c, c->argv[j], &ids[j - 2], 0, NULL) != C_OK) goto cleanup;
+    for (size_t j = 0; j < id_count; j++) {
+        if (streamParseStrictIDOrReply(c, c->argv[argi + j], &ids[j], 0, NULL) != C_OK) goto cleanup;
+        if (array_reply) resps[j] = 1;
     }
 
-    /* Actually apply the command. */
+    int acked = 0;
     int deleted = 0;
-    int first_entry = 0;
-    for (int j = 2; j < c->argc; j++) {
-        streamID *id = &ids[j - 2];
-        if (streamDeleteItem(s, id)) {
-            /* We want to know if the first entry in the stream was deleted
-             * so we can later set the new one. */
-            if (streamCompareID(id, &s->first_id) == 0) {
-                first_entry = 1;
+    bool first_entry = 0;
+    if (acked_flags) memset(acked_flags, 0, id_count);
+
+    /* --- KEEPREF fast path ----------------------------------------------- *
+     * When the mode is KEEPREF: with a target group we gate deletion on the
+     * entry being pending in that group's PEL; without a group we delete
+     * unconditionally (the original XDEL / XDELEX KEEPREF behaviour). */
+    if (mode == PELMODE_KEEPREF) {
+        for (size_t j = 0; j < id_count; j++) {
+            streamID *id = &ids[j];
+
+            if (group) {
+                /* XACKDEL KEEPREF: only delete if pending in target group. */
+                if (!streamDeletePELEntry(group->pel, id)) {
+                    if (array_reply) resps[j] = -1;
+                    continue;
+                }
+                acked++;
+                acked_flags[j] = 1;
             }
-            /* Update the stream's maximal tombstone if needed. */
-            if (streamCompareID(id, &s->max_deleted_entry_id) > 0) {
-                s->max_deleted_entry_id = *id;
+
+            if (streamDeleteItem(s, id)) {
+                deleted++;
+                del_ids[del_count++] = *id;
+                if (streamCompareID(id, &s->first_id) == 0) first_entry = 1;
+                if (streamCompareID(id, &s->max_deleted_entry_id) > 0) s->max_deleted_entry_id = *id;
+            } else if (array_reply) {
+                /* Entry does not exist in the stream. */
+                resps[j] = -1;
             }
-            deleted++;
-        };
+        }
+        goto sync;
     }
 
-    /* Update the stream's first ID. */
+    /* --- Phase 1 (XACKDEL only): target-group PEL scan ------------------- *
+     * If the entry isn't pending in the target group we mark it -1 and skip
+     * it in Phase 2. XDELEX has no target group so this phase is skipped. */
+    if (group) {
+        for (size_t j = 0; j < id_count; j++) {
+            if (streamDeletePELEntry(group->pel, &ids[j])) {
+                acked++;
+                acked_flags[j] = 1;
+                /* resps[j] stays 1: eligible for deletion. */
+            } else {
+                resps[j] = -1;
+            }
+        }
+    }
+
+    /* --- Phase 2: iterate consumer groups -------------------------------- *
+     * XDELEX iterates all groups uniformly; XACKDEL skips the target group
+     * (handled in Phase 1). The `if (cg == group) continue` naturally
+     * never fires when group is NULL (XDELEX). */
+    if ((mode == PELMODE_DELREF || mode == PELMODE_ACKED) && s->cgroups != NULL) {
+        memset(cleared, 0, id_count);
+
+        /* Determine stream message existence upfront for ACKED mode. */
+        if (mode == PELMODE_ACKED) {
+            for (size_t j = 0; j < id_count; j++) {
+                exists[j] = streamEntryExists(s, &ids[j]);
+            }
+        }
+
+        raxIterator ri_cgroups;
+        raxStart(&ri_cgroups, s->cgroups);
+        raxSeek(&ri_cgroups, "^", NULL, 0);
+        while (raxNext(&ri_cgroups)) {
+            streamCG *cg = ri_cgroups.data;
+            if (cg == group) continue; /* Target group handled in Phase 1. */
+
+            for (size_t j = 0; j < id_count; j++) {
+                if (resps[j] != 1) continue; /* Already finalized. */
+                if (mode == PELMODE_ACKED && resps[j] == 2) continue;
+
+                streamID *id = &ids[j];
+
+                if (mode == PELMODE_DELREF) {
+                    if (streamDeletePELEntry(cg->pel, id)) {
+                        acked++;
+                        cleared[j] = 1;
+                    }
+                } else {
+                    /* ACKED: check PEL before consulting cg->last_id. */
+                    unsigned char buf[sizeof(streamID)];
+                    streamEncodeID(buf, id);
+                    void *result;
+                    if (raxFind(cg->pel, buf, sizeof(buf), &result)) {
+                        resps[j] = 2;
+                    } else if (exists[j] &&
+                               streamCompareID(id, &cg->last_id) > 0) {
+                        resps[j] = 2;
+                    }
+                }
+            }
+
+            if (mode == PELMODE_DELREF) {
+                int ack_count = 0;
+                for (size_t j = 0; j < id_count; j++) {
+                    if (cleared[j]) {
+                        ack_ids[ack_count++] = ids[j];
+                        cleared[j] = 0;
+                    }
+                }
+                if (ack_count) {
+                    robj *groupname = createStringObject((char *)ri_cgroups.key, ri_cgroups.key_len);
+                    streamPropagateAckIDs(c, c->argv[1], groupname, ack_ids, ack_count);
+                    decrRefCount(groupname);
+                }
+            }
+        }
+        raxStop(&ri_cgroups);
+
+        /* ACKED without a target group: entries that don't exist and that no
+         * group references return "not found".  When a target group exists
+         * Phase 1 already marked non-pending entries as -1. */
+        if (mode == PELMODE_ACKED && !group) {
+            for (size_t j = 0; j < id_count; j++) {
+                if (resps[j] == 1 && !exists[j]) resps[j] = -1;
+            }
+        }
+    }
+
+    /* --- Deletion phase -------------------------------------------------- *
+     * Delete entries whose status is still 1 (eligible). */
+    for (size_t j = 0; j < id_count; j++) {
+        if (resps[j] == 1) {
+            streamID *id = &ids[j];
+            if (streamDeleteItem(s, id)) {
+                deleted++;
+                del_ids[del_count++] = *id;
+                if (streamCompareID(id, &s->first_id) == 0) first_entry = 1;
+                if (streamCompareID(id, &s->max_deleted_entry_id) > 0) s->max_deleted_entry_id = *id;
+            } else if (!acked_flags || !acked_flags[j]) {
+                /* Entry doesn't exist and was never pending in the target
+                 * group — genuinely not found.  When acked_flags[j] is set
+                 * the target-group PEL was successfully cleared in Phase 1,
+                 * so the entry being already gone is fine (status stays 1). */
+                resps[j] = -1;
+            }
+        }
+    }
+
+sync:
+    /* --- Stream bookkeeping & signalling --------------------------------- */
     if (deleted) {
         if (s->length == 0) {
             s->first_id.ms = 0;
@@ -3626,16 +3923,64 @@ void xdelCommand(client *c) {
             streamGetEdgeID(s, 1, 1, &s->first_id);
         }
     }
-
-    /* Propagate the write if needed. */
-    if (deleted) {
+    if (deleted || acked) {
         signalModifiedKey(c, c->db, c->argv[1]);
         notifyKeyspaceEvent(NOTIFY_STREAM, "xdel", c->argv[1], c->db->id);
         server.dirty += deleted;
     }
-    addReplyLongLong(c, deleted);
+    if (acked) {
+        server.dirty += acked;
+    }
+
+    /* --- Propagation ----------------------------------------------------- *
+     * XDELEX/XACKDEL are rewritten as XACK + XDEL primitives so that
+     * pre-9.2 replicas can apply them.  XDEL propagates as itself. */
+    if (has_pelmode) {
+        preventCommandPropagation(c);
+
+        /* Target-group acknowledgements (XACKDEL only). */
+        if (group) {
+            int ack_count = 0;
+            for (size_t j = 0; j < id_count; j++) {
+                if (acked_flags[j]) ack_ids[ack_count++] = ids[j];
+            }
+            streamPropagateAckIDs(c, c->argv[1], c->argv[2], ack_ids, ack_count);
+        }
+
+        streamPropagateDelIDs(c, c->argv[1], del_ids, del_count);
+    }
+
+    /* --- Reply ----------------------------------------------------------- */
+    if (array_reply) {
+        addReplyArrayLen(c, id_count);
+        for (size_t j = 0; j < id_count; j++) addReplyLongLong(c, resps[j]);
+    } else {
+        addReplyLongLong(c, deleted);
+    }
+
 cleanup:
     if (ids != static_ids) zfree(ids);
+    if (resps != static_resps) zfree(resps);
+    if (acked_flags != static_acked_flags) zfree(acked_flags);
+    if (exists != static_exists) zfree(exists);
+    if (cleared != static_cleared) zfree(cleared);
+    if (ack_ids != static_ack_ids) zfree(ack_ids);
+    if (del_ids != static_del_ids) zfree(del_ids);
+}
+
+/* XDEL <key> [<ID1> <ID2> ... <IDN>] */
+void xdelCommand(client *c) {
+    xdelGenericCommand(c, XDEL_CMD);
+}
+
+/* XDELEX <key> [KEEPREF | DELREF | ACKED] IDS num [<ID1> ... <IDN>] */
+void xdelexCommand(client *c) {
+    xdelGenericCommand(c, XDELEX_CMD);
+}
+
+/* XACKDEL <key> <group> [KEEPREF | DELREF | ACKED] IDS num [<ID1> ... <IDN>] */
+void xackdelCommand(client *c) {
+    xdelGenericCommand(c, XACKDEL_CMD);
 }
 
 /* General form: XTRIM <key> [... options ...]
@@ -4023,7 +4368,7 @@ int streamValidateListpackIntegrity(unsigned char *lp, size_t size, uint64_t *va
     unsigned char *p, *next;
 
     /* Validate the listpack structure (header + all entries). */
-    if (!lpValidateIntegrity(lp, size, NULL, NULL)) return 0;
+    if (!lpValidateIntegrity(lp, size, NULL, NULL, 0)) return 0;
 
     next = p = lpValidateFirst(lp);
     if (!lpValidateNext(lp, &next, size)) return 0;

@@ -3232,6 +3232,8 @@ void initServer(void) {
     commandlogInit();
     latencyMonitorInit();
     throttle_init();
+    /* Initialize latency flags from the default configurations. */
+    updateLatencyTrackingFlags(NULL);
     initSharedQueryBuf();
     bgIteration_init();
 
@@ -3498,6 +3500,7 @@ int populateCommandStructure(struct serverCommand *c) {
     /* We start with an unallocated histogram and only allocate memory when a command
      * has been issued for the first time */
     c->latency_histogram = NULL;
+    c->latency_e2e_histogram = NULL;
 
     /* Initialize command info cache */
     for (int i = 0; i < RESP_CACHE_INDEX_MAX; i++) {
@@ -3566,6 +3569,10 @@ void resetCommandTableStats(hashtable *commands) {
         if (c->latency_histogram) {
             hdr_close(c->latency_histogram);
             c->latency_histogram = NULL;
+        }
+        if (c->latency_e2e_histogram) {
+            hdr_close(c->latency_e2e_histogram);
+            c->latency_e2e_histogram = NULL;
         }
         if (c->subcommands_ht) resetCommandTableStats(c->subcommands_ht);
     }
@@ -3926,6 +3933,19 @@ void updateCommandLatencyHistogram(struct hdr_histogram **latency_histogram, int
     hdr_record_value(*latency_histogram, duration_hist);
 }
 
+/* Like updateCommandLatencyHistogram,
+ * but for the per-command service-time (end-to-end read->write)
+ * histogram: records the same duration `count` times in one call. */
+void updateCommandLatencyE2eHistogram(struct hdr_histogram **latency_e2e_histogram, int64_t duration_hist, long long count) {
+    if (count <= 0) return;
+    if (duration_hist < LATENCY_E2E_HISTOGRAM_MIN_VALUE) duration_hist = LATENCY_E2E_HISTOGRAM_MIN_VALUE;
+    if (duration_hist > LATENCY_E2E_HISTOGRAM_MAX_VALUE) duration_hist = LATENCY_E2E_HISTOGRAM_MAX_VALUE;
+    if (*latency_e2e_histogram == NULL)
+        hdr_init(LATENCY_E2E_HISTOGRAM_MIN_VALUE, LATENCY_E2E_HISTOGRAM_MAX_VALUE, LATENCY_E2E_HISTOGRAM_PRECISION,
+                 latency_e2e_histogram);
+    hdr_record_values(*latency_e2e_histogram, duration_hist, count);
+}
+
 /* Handle the alsoPropagate() API to handle commands that want to propagate
  * multiple separated commands. Note that alsoPropagate() is not affected
  * by CLIENT_PREVENT_PROP flag. */
@@ -4246,8 +4266,13 @@ void call(client *c, int flags) {
     if (update_command_stats && !c->flag.blocked) {
         real_cmd->calls++;
         real_cmd->microseconds += c->duration;
-        if (server.latency_tracking_enabled && !c->flag.blocked)
+        if (server.latency_tracking_enable_cmd) {
             updateCommandLatencyHistogram(&(real_cmd->latency_histogram), c->duration * 1000);
+        }
+        if (server.latency_tracking_enable_e2e && c->latency_e2e.cur_cmd_time != 0) {
+            /* Only record the EXEC command for MULTI/EXEC, & Skip commands with no responses. */
+            if (!c->flag.multi && !c->flag.reply_off && !c->flag.reply_skip) latencyE2eRecordCommand(c, real_cmd);
+        }
         clusterSlotStatsAddCpuDuration(c, c->duration);
     }
 
@@ -4484,6 +4509,7 @@ static void prepareCommandGeneric(robj **argv, int argc, int *read_flags, struct
 
 /* Prepare the client's current command. See prepareCommandGeneric(). */
 void prepareCommand(client *c) {
+    c->latency_e2e.cur_cmd_time = c->latency_e2e.cur_read_time;
     prepareCommandGeneric(c->argv, c->argc, &c->read_flags, &c->parsed_cmd, &c->slot);
 }
 
@@ -6101,8 +6127,8 @@ void bytesToHuman(char *s, size_t size, unsigned long long n) {
 }
 
 /* Fill percentile distribution of latencies. */
-sds fillPercentileDistributionLatencies(sds info, const char *histogram_name, struct hdr_histogram *histogram) {
-    info = sdscatfmt(info, "latency_percentiles_usec_%s:", histogram_name);
+sds fillPercentileDistributionLatencies(sds info, const char *metric, const char *histogram_name, struct hdr_histogram *histogram) {
+    info = sdscatfmt(info, "%s_percentiles_usec_%s:", metric, histogram_name);
     for (int j = 0; j < server.latency_tracking_info_percentiles_len; j++) {
         char fbuf[128];
         size_t len = snprintf(fbuf, sizeof(fbuf), "%f", server.latency_tracking_info_percentiles[j]);
@@ -6194,7 +6220,13 @@ sds genValkeyInfoStringLatencyStats(sds info, hashtable *commands) {
         char *tmpsafe;
         if (c->latency_histogram) {
             info = fillPercentileDistributionLatencies(
-                info, getSafeInfoString(c->fullname, sdslen(c->fullname), &tmpsafe), c->latency_histogram);
+                info, "latency", getSafeInfoString(c->fullname, sdslen(c->fullname), &tmpsafe), c->latency_histogram);
+            if (tmpsafe != NULL) zfree(tmpsafe);
+        }
+        if (c->latency_e2e_histogram) {
+            info = fillPercentileDistributionLatencies(
+                info, "e2e", getSafeInfoString(c->fullname, sdslen(c->fullname), &tmpsafe),
+                c->latency_e2e_histogram);
             if (tmpsafe != NULL) zfree(tmpsafe);
         }
         if (c->subcommands_ht) {

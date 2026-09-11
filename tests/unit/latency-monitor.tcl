@@ -71,6 +71,210 @@ start_server {tags {"latency-monitor needs:latency"}} {
         assert {[string length [r latency histogram blabla set get]] > 0}
     }
 
+    # Largest latency bucket (usec) recorded for a LATENCY HISTOGRAM command entry.
+    proc max_histogram_usec {cmd_entry} {
+        set maxk 0
+        foreach {k v} [dict get $cmd_entry histogram_usec] {
+            if {$k > $maxk} {set maxk $k}
+        }
+        return $maxk
+    }
+
+    test {LATENCY HISTOGRAM E2E is disabled by default} {
+        # Default feature set is "cmd" only (processing time); e2e is off.
+        assert_equal {cmd} [lindex [r config get latency-tracking-features] 1]
+        r config resetstat
+        r set stk v
+        r get stk
+        # Processing histogram still records; the e2e one stays empty.
+        assert {[llength [r latency histogram]] > 0}
+        assert {[llength [r latency histogram e2e]] == 0}
+    }
+
+    test {LATENCY HISTOGRAM default reporting - processing time} {
+        r config resetstat
+        r set stk v
+        r get stk
+        set cmd [dict create {*}[r latency histogram cmd]]
+        set only [dict create {*}[r latency histogram cmd set]]
+        assert_equal [dict keys $only] {set}
+    }
+
+    test {LATENCY HISTOGRAM E2E recording} {
+        r config set latency-tracking-features "cmd e2e"
+        r config resetstat
+        set rd [valkey_deferring_client]
+        $rd set stk v
+        $rd get stk
+        $rd get stk
+        $rd flush
+        # Drain the replies so the writes complete (and samples seal) before close.
+        assert_equal {OK} [$rd read]
+        assert_equal {v} [$rd read]
+        assert_equal {v} [$rd read]
+        $rd close
+        set histo [dict create {*}[r latency histogram e2e]]
+        assert_match {calls 1 histogram_usec *} [dict get $histo set]
+        assert_match {calls 2 histogram_usec *} [dict get $histo get]
+        r config set latency-tracking-features cmd
+    }
+
+    test {LATENCY HISTOGRAM E2E measures end-to-end time including queue and block wait} {
+        r config set latency-tracking-features "cmd e2e"
+        r config resetstat
+        r del stlist
+        # One batch: a fast SET, a command that blocks ~3s, then a GET that is queued behind the blocking command
+        set rd [valkey_deferring_client]
+        $rd set stk v
+        $rd blpop stlist 3
+        $rd get stk
+        $rd flush
+        # Wait for all replies
+        assert_equal {OK} [$rd read]
+        assert_equal {} [$rd read]
+        assert_equal {v} [$rd read]
+        $rd close
+
+        set histo [dict create {*}[r latency histogram e2e]]
+        assert_match {calls 1 histogram_usec *} [dict get $histo set]
+        assert_match {calls 1 histogram_usec *} [dict get $histo blpop]
+        assert_match {calls 1 histogram_usec *} [dict get $histo get]
+
+        # SET is fast (< 0.5s); BLPOP and GET span the ~3s wait (>= 2.5s).
+        # Timing-sensitive: skip under environments that can't measure latency reliably.
+        if {!$::no_latency} {
+            assert {[max_histogram_usec [dict get $histo set]] < 500000}
+            assert {[max_histogram_usec [dict get $histo blpop]] >= 2500000}
+            assert {[max_histogram_usec [dict get $histo get]] >= 2500000}
+        }
+        r config set latency-tracking-features cmd
+    }
+
+    test {LATENCY HISTOGRAM E2E I/O threads} {
+        try {
+            r config set io-threads 2
+            r config set io-threads-always-active yes
+            r config set latency-tracking-features "cmd e2e"
+            r config resetstat
+            # Batch several commands so replies are drained on the I/O-thread write path.
+            set rd [valkey_deferring_client]
+            $rd set itk v
+            $rd get itk
+            $rd get itk
+            $rd flush
+            assert_equal {OK} [$rd read]
+            assert_equal {v} [$rd read]
+            assert_equal {v} [$rd read]
+            $rd close
+            set histo [dict create {*}[r latency histogram e2e]]
+            assert_match {calls 1 histogram_usec *} [dict get $histo set]
+            assert_match {calls 2 histogram_usec *} [dict get $histo get]
+        } finally {
+            # Always restore the I/O-thread config so a failure here doesn't leak into later tests.
+            r config set latency-tracking-features cmd
+            r config set io-threads-always-active no
+            r config set io-threads 1
+        }
+    }
+
+    test {LATENCY HISTOGRAM E2E MULTI/EXEC} {
+        r config set latency-tracking-features "cmd e2e"
+        r config resetstat
+        set rd [valkey_deferring_client]
+        $rd multi
+        $rd set mtk v
+        $rd get mtk
+        $rd incr mtn
+        $rd exec
+        $rd flush
+        assert_equal {OK} [$rd read]
+        assert_equal {QUEUED} [$rd read]
+        assert_equal {QUEUED} [$rd read]
+        assert_equal {QUEUED} [$rd read]
+        assert_equal {OK v 1} [$rd read]
+        $rd close
+        set histo [dict create {*}[r latency histogram e2e]]
+        # Only EXEC is recorded.
+        assert_match {calls 1 histogram_usec *} [dict get $histo exec]
+        assert {![dict exists $histo set]}
+        assert {![dict exists $histo get]}
+        assert {![dict exists $histo incr]}
+        assert {![dict exists $histo multi]}
+        r config set latency-tracking-features cmd
+    }
+
+    test {LATENCY HISTOGRAM E2E skips CLIENT REPLY OFF and SKIP} {
+        r config set latency-tracking-features "cmd e2e"
+        r config resetstat
+        set rd [valkey_deferring_client]
+        # skip reply on the SET command
+        $rd client reply skip
+        $rd set skipk v
+        $rd get skipk
+        $rd flush
+        assert_equal {v} [$rd read]
+        # disable reply on client
+        $rd client reply off
+        $rd set offk v
+        $rd incr offn
+        $rd client reply on
+        $rd flush
+        assert_equal {OK} [$rd read]
+        $rd close
+        # Only the GET is recorded, SET/INCR are not.
+        set histo [dict create {*}[r latency histogram e2e]]
+        assert_match {calls 1 histogram_usec *} [dict get $histo get]
+        assert {![dict exists $histo set]}
+        assert {![dict exists $histo incr]}
+        r config set latency-tracking-features cmd
+    }
+
+    test {LATENCY HISTOGRAM E2E on large multi-block reply} {
+        r config set latency-tracking-features "cmd e2e"
+        # A value large enough to spill the reply into several output blocks.
+        set big [string repeat A 200000]
+        r set bigk $big
+        r config resetstat
+        set rd [valkey_deferring_client]
+        $rd get bigk
+        $rd flush
+        assert_equal $big [$rd read]
+        $rd close
+        set histo [dict create {*}[r latency histogram e2e]]
+        assert_match {calls 1 histogram_usec *} [dict get $histo get]
+        r config set latency-tracking-features cmd
+    }
+
+    test {LATENCY HISTOGRAM E2E records nothing for replicated writes on a replica} {
+        start_server {} {
+            set replica [srv 0 client]
+            set primary [srv -1 client]
+            set primary_host [srv -1 host]
+            set primary_port [srv -1 port]
+
+            $replica config set latency-tracking-features "cmd e2e"
+            $replica replicaof $primary_host $primary_port
+            wait_for_sync $replica
+            $replica config resetstat
+
+            $primary set rpk v
+            $primary set rpk v2
+            $primary incr rpn
+            wait_for_condition 50 100 {
+                [$replica get rpk] eq {v2}
+            } else {
+                fail "replica did not apply replicated writes"
+            }
+
+            set histo [dict create {*}[$replica latency histogram e2e]]
+            assert {![dict exists $histo set]}
+            assert {![dict exists $histo incr]}
+
+            $replica replicaof no one
+            $replica config set latency-tracking-features cmd
+        }
+    } {} {external:skip}
+
 tags {"needs:debug"} {
     set old_threshold_value [lindex [r config get latency-monitor-threshold] 1]
 

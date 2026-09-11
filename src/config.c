@@ -113,6 +113,11 @@ configEnum shutdown_on_sig_enum[] = {
     {"failover", SHUTDOWN_FAILOVER},
     {NULL, 0}};
 
+configEnum latency_tracking_features_enum[] = {
+    {"cmd", LATENCY_TRACK_CMD}, /* per-command processing-time histogram */
+    {"e2e", LATENCY_TRACK_E2E}, /* per-command end-to-end time histogram */
+    {NULL, 0}};
+
 configEnum repl_diskless_load_enum[] = {
     {"disabled", REPL_DISKLESS_LOAD_DISABLED},
     {"on-empty-db", REPL_DISKLESS_LOAD_WHEN_DB_EMPTY},
@@ -2628,6 +2633,14 @@ static int isValidProcTitleTemplate(char *val, const char **err) {
     return 1;
 }
 
+/* precompute the effective latency-tracking flags. */
+int updateLatencyTrackingFlags(const char **err) {
+    UNUSED(err);
+    server.latency_tracking_enable_cmd = server.latency_tracking_enabled && (server.latency_tracking_features & LATENCY_TRACK_CMD);
+    server.latency_tracking_enable_e2e = server.latency_tracking_enabled && (server.latency_tracking_features & LATENCY_TRACK_E2E);
+    return 1;
+}
+
 static int updateLocaleCollate(const char **err) {
     const char *s = setlocale(LC_COLLATE, server.locale_collate);
     if (s == NULL) {
@@ -3419,7 +3432,7 @@ standardConfig static_configs[] = {
     createBoolConfig("disable-thp", NULL, IMMUTABLE_CONFIG, server.disable_thp, 1, NULL, NULL),
     createBoolConfig("cluster-allow-replica-migration", NULL, MODIFIABLE_CONFIG, server.cluster_allow_replica_migration, 1, NULL, NULL),
     createBoolConfig("replica-announced", NULL, MODIFIABLE_CONFIG, server.replica_announced, 1, NULL, NULL),
-    createBoolConfig("latency-tracking", NULL, MODIFIABLE_CONFIG, server.latency_tracking_enabled, 1, NULL, NULL),
+    createBoolConfig("latency-tracking", NULL, MODIFIABLE_CONFIG, server.latency_tracking_enabled, 1, NULL, updateLatencyTrackingFlags),
     createBoolConfig("aof-disable-auto-gc", NULL, MODIFIABLE_CONFIG | HIDDEN_CONFIG, server.aof_disable_auto_gc, 0, NULL, updateAofAutoGCEnabled),
     createBoolConfig("replica-ignore-disk-write-errors", NULL, MODIFIABLE_CONFIG, server.repl_ignore_disk_write_error, 0, NULL, NULL),
     createBoolConfig("extended-redis-compatibility", NULL, MODIFIABLE_CONFIG, server.extended_redis_compat, 0, NULL, updateExtendedRedisCompat),
@@ -3484,6 +3497,7 @@ standardConfig static_configs[] = {
     createEnumConfig("propagation-error-behavior", NULL, MODIFIABLE_CONFIG, propagation_error_behavior_enum, server.propagation_error_behavior, PROPAGATION_ERR_BEHAVIOR_IGNORE, NULL, NULL),
     createEnumConfig("shutdown-on-sigint", NULL, MODIFIABLE_CONFIG | MULTI_ARG_CONFIG, shutdown_on_sig_enum, server.shutdown_on_sigint, 0, isValidShutdownOnSigFlags, NULL),
     createEnumConfig("shutdown-on-sigterm", NULL, MODIFIABLE_CONFIG | MULTI_ARG_CONFIG, shutdown_on_sig_enum, server.shutdown_on_sigterm, 0, isValidShutdownOnSigFlags, NULL),
+    createEnumConfig("latency-tracking-features", NULL, MODIFIABLE_CONFIG | MULTI_ARG_CONFIG, latency_tracking_features_enum, server.latency_tracking_features, LATENCY_TRACK_CMD, NULL, updateLatencyTrackingFlags),
     createEnumConfig("log-format", NULL, MODIFIABLE_CONFIG, log_format_enum, server.log_format, LOG_FORMAT_LEGACY, NULL, NULL),
     createEnumConfig("log-timestamp-format", NULL, MODIFIABLE_CONFIG, log_timestamp_format_enum, server.log_timestamp_format, LOG_TIMESTAMP_LEGACY, NULL, NULL),
     createEnumConfig("rdb-version-check", NULL, MODIFIABLE_CONFIG, rdb_version_check_enum, server.rdb_version_check, RDB_VERSION_CHECK_STRICT, NULL, NULL),

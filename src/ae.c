@@ -464,6 +464,8 @@ int aeProcessEvents(aeEventLoop *eventLoop, int flags) {
             numevents = 0;
         }
 
+        if (!(flags & AE_DONT_WAIT)) eventLoop->wakeup_time = getMonotonicUs();
+
         /* After sleep callback. */
         if (eventLoop->aftersleep != NULL && flags & AE_CALL_AFTER_SLEEP) eventLoop->aftersleep(eventLoop, numevents);
 

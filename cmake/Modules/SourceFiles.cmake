@@ -116,6 +116,7 @@ set(VALKEY_SERVER_SRCS
     ${CMAKE_SOURCE_DIR}/src/trace/trace_cluster.c
     ${CMAKE_SOURCE_DIR}/src/trace/trace_server.c
     ${CMAKE_SOURCE_DIR}/src/commands.c
+    ${CMAKE_SOURCE_DIR}/src/latency_e2e.c
     ${CMAKE_SOURCE_DIR}/src/strl.c
     ${CMAKE_SOURCE_DIR}/src/connection.c
     ${CMAKE_SOURCE_DIR}/src/unix.c

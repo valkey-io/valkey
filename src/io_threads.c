@@ -588,6 +588,7 @@ int trySendReadToIOThreads(client *c) {
     c->read_flags |= isReplicatedClient(c) ? READ_FLAGS_REPLICATED : 0;
 
     c->io_read_state = CLIENT_PENDING_IO;
+    c->io_event_loop_wakeup_time = server.el->wakeup_time;
     connSetPostponeUpdateState(c->conn, clientConnPostponeMaskFromIOState(c));
 
     if (unlikely(spmcEnqueue(&io_shared_inbox, tagJob(c, JOB_REQ_READ_CLIENT)) == false)) {
@@ -635,6 +636,7 @@ int trySendWriteToIOThreads(client *c) {
          * position to io_last_bufpos. The I/O thread will write only up to
          * io_last_bufpos, regardless of the c->bufpos value. This is to prevent I/O
          * threads from reading data that might be invalid in their local CPU cache. */
+        c->io_reply_len = listLength(c->reply);
         c->io_last_reply_block = listLast(c->reply);
         if (c->io_last_reply_block) {
             block = (clientReplyBlock *)listNodeValue(c->io_last_reply_block);
@@ -657,6 +659,7 @@ int trySendWriteToIOThreads(client *c) {
         c->write_flags = 0;
         c->io_last_reply_block = NULL;
         c->io_last_bufpos = 0;
+        c->io_reply_len = 0;
         return C_ERR;
     }
     /* Force new header after successful enqueue so the main thread doesn't

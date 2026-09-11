@@ -143,8 +143,13 @@ void updateStatsOnUnblock(client *c, long blocked_us, long reply_us, int failed_
         else
             debugServerAssertWithInfo(c, NULL, 0);
     }
-    if (server.latency_tracking_enabled)
+    if (server.latency_tracking_enable_cmd) {
         updateCommandLatencyHistogram(&(c->lastcmd->latency_histogram), c->duration * 1000);
+    }
+    if (server.latency_tracking_enable_e2e && c->latency_e2e.cur_cmd_time != 0) {
+        /* Only record the EXEC command for MULTI/EXEC, & Skip commands with no responses. */
+        if (!c->flag.multi && !c->flag.reply_off && !c->flag.reply_skip) latencyE2eRecordCommand(c, c->lastcmd);
+    }
     /* Log the command into the commandlog if needed. */
     commandlogPushCurrentCommand(c, c->lastcmd);
     c->duration = 0;

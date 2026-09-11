@@ -2301,6 +2301,8 @@ void createSharedObjects(void) {
     shared.srem = createSharedString("SREM");
     shared.xgroup = createSharedString("XGROUP");
     shared.xclaim = createSharedString("XCLAIM");
+    shared.xdel = createSharedString("XDEL");
+    shared.xack = createSharedString("XACK");
     shared.script = createSharedString("SCRIPT");
     shared.replconf = createSharedString("REPLCONF");
     shared.pexpireat = createSharedString("PEXPIREAT");
@@ -2447,9 +2449,11 @@ void initServerConfig(void) {
     server.latency_tracking_info_percentiles[2] = 99.9; /* p999 */
 
     server.tls_server_cert_expire_time = 0;
+    server.tls_server_alt_cert_expire_time = 0;
     server.tls_client_cert_expire_time = 0;
     server.tls_ca_cert_expire_time = 0;
     server.tls_server_cert_serial = NULL;
+    server.tls_server_alt_cert_serial = NULL;
     server.tls_client_cert_serial = NULL;
     server.tls_ca_cert_serial = NULL;
 
@@ -2937,6 +2941,10 @@ void resetServerStats(void) {
     server.stat_dump_payload_sanitizations = 0;
     server.aof_delayed_fsync = 0;
     server.stat_reply_buffer_shrinks = 0;
+    server.stat_cluster_threaded_reads_processed = 0;
+    server.stat_cluster_threaded_writes_processed = 0;
+    server.stat_cluster_threaded_accepts_processed = 0;
+    server.stat_cluster_io_main_thread_fallbacks = 0;
     server.stat_reply_buffer_expands = 0;
     memset(server.duration_stats, 0, sizeof(durationStats) * EL_DURATION_TYPE_NUM);
     server.el_cmd_cnt_max = 0;
@@ -3161,6 +3169,10 @@ void initServer(void) {
     server.stat_module_progress = 0;
     for (int j = 0; j < CLIENT_TYPE_COUNT; j++) server.stat_clients_type_memory[j] = 0;
     server.stat_cluster_links_memory = 0;
+    server.stat_cluster_threaded_reads_processed = 0;
+    server.stat_cluster_threaded_writes_processed = 0;
+    server.stat_cluster_threaded_accepts_processed = 0;
+    server.stat_cluster_io_main_thread_fallbacks = 0;
     server.cron_malloc_stats.zmalloc_used = 0;
     server.cron_malloc_stats.process_rss = 0;
     server.cron_malloc_stats.allocator_allocated = 0;
@@ -6431,6 +6443,11 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
             tls_server_seconds_remaining = server.tls_server_cert_expire_time - (long long)server.unixtime;
             if (tls_server_seconds_remaining < 0) tls_server_seconds_remaining = 0;
         }
+        long long tls_server_alt_seconds_remaining = 0;
+        if (server.tls_server_alt_cert_expire_time > 0) {
+            tls_server_alt_seconds_remaining = server.tls_server_alt_cert_expire_time - (long long)server.unixtime;
+            if (tls_server_alt_seconds_remaining < 0) tls_server_alt_seconds_remaining = 0;
+        }
         long long tls_client_seconds_remaining = 0;
         if (server.tls_client_cert_expire_time > 0) {
             tls_client_seconds_remaining = server.tls_client_cert_expire_time - (long long)server.unixtime;
@@ -6446,6 +6463,8 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
             "# TLS\r\n" FMTARGS(
                 "tls_server_cert_serial:%s\r\n", server.tls_server_cert_serial ? server.tls_server_cert_serial : "none",
                 "tls_server_cert_expires_in_seconds:%lld\r\n", tls_server_seconds_remaining,
+                "tls_server_alt_cert_serial:%s\r\n", server.tls_server_alt_cert_serial ? server.tls_server_alt_cert_serial : "none",
+                "tls_server_alt_cert_expires_in_seconds:%lld\r\n", tls_server_alt_seconds_remaining,
                 "tls_client_cert_serial:%s\r\n", server.tls_client_cert_serial ? server.tls_client_cert_serial : "none",
                 "tls_client_cert_expires_in_seconds:%lld\r\n", tls_client_seconds_remaining,
                 "tls_ca_cert_serial:%s\r\n", server.tls_ca_cert_serial ? server.tls_ca_cert_serial : "none",

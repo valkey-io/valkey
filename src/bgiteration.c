@@ -1653,6 +1653,9 @@ static long long bgIteration_feedIterators_task(struct aeEventLoop *eventLoop,
     }
     monotime endTime = startTime + dutyTimeUs;
 
+    // Test path (manual feed, no timer thread): ignore the budget so a slow env can't starve the blocking read.
+    if (eventLoop == NULL) endTime = UINT64_MAX;
+
     // Run this part regardless of time limit...
     receiveItemsBackFromIterators(false);
 
@@ -2331,7 +2334,7 @@ bool bgIteration_blockClientIfRequired(client *c) {
     if (c->cmd->proc == flushdbCommand || c->cmd->proc == flushallCommand) {
         // Handle flush commands prior to execution
         int flags;
-        if (getFlushCommandFlags(c, &flags) == C_OK) {
+        if (parseFlushCommandFlags(c, &flags) == C_OK) {
             // The command parsed ok - we WILL flush
             handleFlushdb((c->cmd->proc == flushdbCommand) ? c->db->id : -1);
         }

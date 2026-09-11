@@ -656,14 +656,14 @@ void debugCommand(client *c) {
         serverLog(LL_NOTICE, "Setting drop-cluster-packet-filter to %ld", packet_type);
         addReply(c, shared.ok);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "close-cluster-link-on-packet-drop") && c->argc == 3) {
-        server.debug_cluster_close_link_on_packet_drop = atoi(objectGetVal(c->argv[2]));
-        serverLog(LL_NOTICE, "Setting close-cluster-link-on-packet-drop to %d", atoi(objectGetVal(c->argv[2])));
+        server.debug_cluster_close_link_on_packet_drop = (atoi(objectGetVal(c->argv[2])) != 0);
+        serverLog(LL_NOTICE, "Setting close-cluster-link-on-packet-drop to %d", (atoi(objectGetVal(c->argv[2])) != 0));
         addReply(c, shared.ok);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "disable-cluster-random-ping") && c->argc == 3) {
-        server.debug_cluster_disable_random_ping = atoi(objectGetVal(c->argv[2]));
+        server.debug_cluster_disable_random_ping = (atoi(objectGetVal(c->argv[2])) != 0);
         addReply(c, shared.ok);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "disable-cluster-reconnection") && c->argc == 3) {
-        server.debug_cluster_disable_reconnection = atoi(objectGetVal(c->argv[2]));
+        server.debug_cluster_disable_reconnection = (atoi(objectGetVal(c->argv[2])) != 0);
         addReply(c, shared.ok);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "cluster-failover-delay") && c->argc == 3) {
         int delay_ms;
@@ -685,9 +685,9 @@ void debugCommand(client *c) {
         addReply(c, shared.ok);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "slotmigration")) {
         if (!strcasecmp(objectGetVal(c->argv[2]), "prevent-pause")) {
-            server.debug_slot_migration_prevent_pause = atoi(objectGetVal(c->argv[3]));
+            server.debug_slot_migration_prevent_pause = (atoi(objectGetVal(c->argv[3])) != 0);
         } else if (!strcasecmp(objectGetVal(c->argv[2]), "prevent-failover")) {
-            server.debug_slot_migration_prevent_failover = atoi(objectGetVal(c->argv[3]));
+            server.debug_slot_migration_prevent_failover = (atoi(objectGetVal(c->argv[3])) != 0);
         } else {
             addReplySubcommandSyntaxError(c);
             return;

@@ -81,6 +81,7 @@ bool vsetAddEntry(vset *set, vsetGetExpiryFunc getExpiry, void *entry);
 bool vsetRemoveEntry(vset *set, vsetGetExpiryFunc getExpiry, void *entry);
 bool vsetUpdateEntry(vset *set, vsetGetExpiryFunc getExpiry, void *old_entry, void *new_entry, long long old_expiry, long long new_expiry);
 bool vsetIsEmpty(vset *set);
+size_t vsetSize(vset *set);
 void vsetInitIterator(vset *set, vsetIterator *it);
 bool vsetNext(vsetIterator *it, void **entryptr);
 void vsetResetIterator(vsetIterator *it);

@@ -976,9 +976,7 @@ static doneStatus defragLuaScripts(monotime endtime, void *target, void *privdat
 static doneStatus defragModuleGlobals(monotime endtime, void *target, void *privdata) {
     UNUSED(target);
     UNUSED(privdata);
-    if (endtime == 0) return DEFRAG_NOT_DONE; // required initialization
-    moduleDefragGlobals();
-    return DEFRAG_DONE;
+    return moduleDefragGlobals(endtime) ? DEFRAG_NOT_DONE : DEFRAG_DONE;
 }
 
 

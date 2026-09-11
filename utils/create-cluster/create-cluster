@@ -120,6 +120,8 @@ then
     rm -rf dump-*.rdb
     echo "Cleaning nodes-*.conf"
     rm -rf nodes-*.conf
+    echo "Cleaning nodes-*.conf.lock"
+    rm -rf nodes-*.conf.lock
     exit 0
 fi
 

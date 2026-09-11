@@ -34,6 +34,7 @@
 
 /* Stable wire codec identifier. */
 #define VCS_CODEC_LZ4 0x01
+#define VCS_CODEC_ZSTD 0x02
 
 /* Identifies an RDB payload in the envelope. */
 #define VCS_STREAM_RDB 0x01

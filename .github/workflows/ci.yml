@@ -36,8 +36,8 @@ jobs:
         # Fail build if there are warnings
         # build with TLS just for compilation coverage
         run: |
-          sudo apt-get install pkg-config libgtest-dev libgmock-dev
-          make -j4 all-with-unit-tests SERVER_CFLAGS='-Werror' BUILD_TLS=yes USE_LIBBACKTRACE=yes
+          sudo apt-get install pkg-config libzstd-dev libgtest-dev libgmock-dev
+          make -j4 all-with-unit-tests SERVER_CFLAGS='-Werror' BUILD_TLS=yes BUILD_ZSTD=yes USE_LIBBACKTRACE=yes
       - name: test
         run: |
           sudo apt-get install tcl8.6 tclx
@@ -105,10 +105,10 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: cmake and make
         run: |
-          sudo apt-get install -y cmake libssl-dev
+          sudo apt-get install -y cmake pkg-config libzstd-dev libssl-dev
           mkdir -p build-release
           cd build-release
-          cmake -DCMAKE_BUILD_TYPE=Release .. -DBUILD_TLS=yes -DBUILD_UNIT_GTESTS=yes
+          cmake -DCMAKE_BUILD_TYPE=Release .. -DBUILD_TLS=yes -DBUILD_ZSTD=yes -DBUILD_UNIT_GTESTS=yes
           make -j$(nproc)
       - name: test
         run: |
@@ -133,8 +133,8 @@ jobs:
       - name: make
         # build with TLS module just for compilation coverage
         run: |
-          sudo apt-get install pkg-config libgtest-dev libgmock-dev
-          make -j4 all-with-unit-tests SANITIZER=address SERVER_CFLAGS='-Werror' BUILD_TLS=module USE_LIBBACKTRACE=yes
+          sudo apt-get install pkg-config libzstd-dev libgtest-dev libgmock-dev
+          make -j4 all-with-unit-tests SANITIZER=address SERVER_CFLAGS='-Werror' BUILD_TLS=module BUILD_ZSTD=yes USE_LIBBACKTRACE=yes
       - name: testprep
         run: sudo apt-get install tcl8.6 tclx -y
       - name: test
@@ -210,12 +210,16 @@ jobs:
           path: libbacktrace
       - name: Build libbacktrace
         run: |
-          apt-get update && apt-get install -y build-essential
+          apt-get update && apt-get install -y build-essential tcl8.6 tclx procps
           cd libbacktrace && ./configure && make && make install
       - name: Checkout Valkey
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: make
-        run: make -j4 SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
+        run: make -j4 SERVER_CFLAGS='-Werror' BUILD_ZSTD=no USE_LIBBACKTRACE=yes
+      - name: test without zstd
+        run: |
+          ./runtest --verbose --single integration/rdb-compression --dump-logs
+          ./runtest --verbose --single integration/valkey-check-rdb --dump-logs
 
   build-macos-latest:
     runs-on: macos-latest
@@ -226,7 +230,7 @@ jobs:
       RANLIB: /opt/homebrew/opt/llvm/bin/llvm-ranlib
     steps:
       - name: Install build dependencies
-        run: brew install llvm googletest
+        run: brew install llvm googletest pkgconf zstd
       - name: Install libbacktrace
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -239,7 +243,7 @@ jobs:
       - name: make
         # Build with additional upcoming features
         run: |
-          make -j3 all-with-unit-tests SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes LIBBACKTRACE_PREFIX=/usr/local
+          make -j3 all-with-unit-tests SERVER_CFLAGS='-Werror' BUILD_ZSTD=yes USE_LIBBACKTRACE=yes LIBBACKTRACE_PREFIX=/usr/local
       - name: unit tests
         run: |
           make test-unit
@@ -255,8 +259,9 @@ jobs:
           path: libbacktrace
       - name: Build libbacktrace (32-bit)
         run: |
+          sudo dpkg --add-architecture i386
           sudo apt-get update
-          sudo apt-get install libc6-dev-i386 libstdc++-11-dev-i386-cross gcc-multilib g++-multilib
+          sudo apt-get install pkg-config libzstd-dev:i386 libc6-dev-i386 libstdc++-11-dev-i386-cross gcc-multilib g++-multilib
           cd libbacktrace && ./configure CFLAGS="-m32" --prefix=/usr/local/libbacktrace32 && make && sudo make install
       - name: Checkout Valkey
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -281,13 +286,17 @@ jobs:
         # also requires multilib support for g++ compiler i.e. "-multilib"
         # suffixed version of g++. g++-multilib generally includes libstdc++.
         # *cross version as well, but it is also added explicitly just in case.
+        env:
+          PKG_CONFIG_PATH: /usr/lib/i386-linux-gnu/pkgconfig
         run: |
-          make -j4 SERVER_CFLAGS='-Werror' 32bit USE_LIBBACKTRACE=yes LIBBACKTRACE_PREFIX=/usr/local/libbacktrace32 \
+          make -j4 SERVER_CFLAGS='-Werror' 32bit BUILD_ZSTD=yes USE_LIBBACKTRACE=yes LIBBACKTRACE_PREFIX=/usr/local/libbacktrace32 \
             GTEST_CFLAGS="-I/usr/src/googletest/googletest/include -I/usr/src/googletest/googlemock/include" \
             GTEST_LIBS="/usr/lib32/libgtest.a /usr/lib32/libgmock.a"
       - name: unit tests
+        env:
+          PKG_CONFIG_PATH: /usr/lib/i386-linux-gnu/pkgconfig
         run: |
-          make test-unit \
+          make test-unit BUILD_ZSTD=yes \
             GTEST_CFLAGS="-I/usr/src/googletest/googletest/include -I/usr/src/googletest/googlemock/include" \
             GTEST_LIBS="/usr/lib32/libgtest.a /usr/lib32/libgmock.a"
 
@@ -304,7 +313,9 @@ jobs:
       - name: Checkout Valkey
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: make
-        run: make -j4 SERVER_CFLAGS='-Werror' MALLOC=libc USE_LIBBACKTRACE=yes
+        run: |
+          sudo apt-get install pkg-config libzstd-dev
+          make -j4 SERVER_CFLAGS='-Werror' MALLOC=libc BUILD_ZSTD=yes USE_LIBBACKTRACE=yes
 
   build-almalinux8-jemalloc:
     runs-on: ubuntu-latest
@@ -323,7 +334,7 @@ jobs:
       - name: Checkout Valkey
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: make
-        run: make -j4 SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
+        run: make -j4 SERVER_CFLAGS='-Werror' BUILD_ZSTD=no USE_LIBBACKTRACE=yes
 
   format-yaml:
     runs-on: ubuntu-latest

@@ -620,7 +620,8 @@ typedef enum {
     RDB_COMPRESSION_NO = 0, /* Disable RDB compression. */
     RDB_COMPRESSION_YES,    /* Use the default compression algorithm. */
     RDB_COMPRESSION_LZF,    /* Pin legacy per-string LZF compression. */
-    RDB_COMPRESSION_LZ4     /* Pin whole-stream LZ4 compression. */
+    RDB_COMPRESSION_LZ4,    /* Pin whole-stream LZ4 compression. */
+    RDB_COMPRESSION_ZSTD    /* Pin whole-stream Zstandard compression. */
 } rdb_compression_mode;
 
 /* Structure representing a non-owning view of a buffer.

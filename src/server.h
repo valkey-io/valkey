@@ -152,6 +152,8 @@ struct ValkeyModule;
 #define CONFIG_DEFAULT_HZ 10 /* Time interrupt calls/sec. */
 #define CONFIG_MIN_HZ 1
 #define CONFIG_MAX_HZ 500
+/* Leave headroom for adding the epoch time so it cannot exceed I64 MAX and cause overflow risk. */
+#define DEFAULT_TTL_MS_MAX (LLONG_MAX / 2)
 #define CRON_DBS_PER_CALL 16
 #define CRON_DICTS_PER_DB 16
 #define NET_MAX_WRITES_PER_EVENT (1024 * 64)
@@ -2030,6 +2032,7 @@ struct valkeyServer {
     int tcpkeepalive;            /* Set SO_KEEPALIVE if non-zero. */
     int active_expire_enabled;   /* Can be disabled for testing purposes. */
     int active_expire_effort;    /* From 1 (default) to 10, active effort. */
+    mstime_t default_ttl_ms;     /* Default TTL for eligible top-level key writes, in milliseconds. */
     int lazy_expire_disabled;    /* If > 0, don't trigger lazy expire */
     int active_defrag_enabled;
     int skip_checksum_validation;                /* Disable checksum validation for RDB and RESTORE payload. */
@@ -3891,6 +3894,12 @@ int objectSetLRUOrLFU(robj *val, long long lfu_freq, long long lru_idle_secs);
     (LOOKUP_NONOTIFY | LOOKUP_NOSTATS | LOOKUP_NOTOUCH | LOOKUP_NOEXPIRE | LOOKUP_NOHOTKEYS) /* Avoid any effects from fetching the key */
 
 void dbAdd(serverDb *db, robj *key, robj **valref);
+void dbAddWithFlags(serverDb *db, robj *key, robj **valref, int flags);
+#define DBADD_NO_DEFAULT_TTL_MS 1
+typedef struct defaultTTLMSContext defaultTTLMSContext;
+defaultTTLMSContext *beginDefaultTTLMS(client *c);
+void stopDefaultTTLMSRecording(defaultTTLMSContext *ctx);
+void endDefaultTTLMS(defaultTTLMSContext *ctx, int target);
 int dbAddRDBLoad(serverDb *db, sds key, robj **valref);
 void dbReplaceValue(serverDb *db, robj *key, robj **valref);
 
@@ -3898,7 +3907,8 @@ void dbReplaceValue(serverDb *db, robj *key, robj **valref);
 #define SETKEY_NO_SIGNAL 2
 #define SETKEY_ALREADY_EXIST 4
 #define SETKEY_DOESNT_EXIST 8
-#define SETKEY_ADD_OR_UPDATE 16 /* Key most likely doesn't exists */
+#define SETKEY_ADD_OR_UPDATE 16     /* Key most likely doesn't exists */
+#define SETKEY_NO_DEFAULT_TTL_MS 32 /* Don't assign the server default TTL to the key. */
 void setKey(client *c, serverDb *db, robj *key, robj **valref, int flags);
 robj *dbRandomKey(serverDb *db);
 int dbGenericDelete(serverDb *db, robj *key, int async, int flags);

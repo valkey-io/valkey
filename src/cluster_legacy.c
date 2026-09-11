@@ -3979,6 +3979,13 @@ int clusterIsValidPacket(clusterLink *link) {
             return 0;
         }
 
+        if (!(msg->mflags[0] & CLUSTERMSG_FLAG0_EXT_DATA) && extensions != 0) {
+            serverLog(LL_WARNING,
+                      "Received invalid %s packet with %d extensions but no extension data flag",
+                      clusterGetMessageTypeString(type), extensions);
+            return 0;
+        }
+
         /* If there is extension data, which doesn't have a fixed length,
          * loop through them and validate the length of it now. */
         if (msg->mflags[0] & CLUSTERMSG_FLAG0_EXT_DATA) {
@@ -4006,6 +4013,21 @@ int clusterIsValidPacket(clusterLink *link) {
                               "Received invalid %s packet with extension data that exceeds "
                               "total packet length (%lld)",
                               clusterGetMessageTypeString(type), (unsigned long long)totlen);
+                    return 0;
+                }
+                uint16_t ext_type = ntohs(ext->type);
+                bool is_string_ext = ext_type == CLUSTERMSG_EXT_TYPE_HOSTNAME ||
+                                     ext_type == CLUSTERMSG_EXT_TYPE_HUMAN_NODENAME ||
+                                     ext_type == CLUSTERMSG_EXT_TYPE_CLIENT_IPV4 ||
+                                     ext_type == CLUSTERMSG_EXT_TYPE_CLIENT_IPV6 ||
+                                     ext_type == CLUSTERMSG_EXT_TYPE_AVAILABILITY_ZONE;
+                /* String extensions are consumed as C strings. Make sure those reads
+                 * cannot continue past the declared extension. */
+                if (is_string_ext &&
+                    (extlen <= sizeof(clusterMsgPingExt) ||
+                     memchr((char *)ext + sizeof(clusterMsgPingExt), '\0', extlen - sizeof(clusterMsgPingExt)) == NULL)) {
+                    serverLog(LL_WARNING, "Received invalid %s packet with unterminated string extension type %d",
+                              clusterGetMessageTypeString(type), (int)ext_type);
                     return 0;
                 }
                 explen += extlen;

@@ -38,12 +38,14 @@
 /* This structure defines an entry inside the command log list */
 typedef struct commandlogEntry {
     robj **argv;
-    int argc;
+    int argc;        /* Number of arguments retained, up to COMMANDLOG_ENTRY_MAX_ARGC. */
+    int cmd_argc;    /* Number of arguments the command was called with. */
     long long id;    /* Unique entry identifier. */
     long long value; /* The meaning is determined by the type of command log. */
     time_t time;     /* Unix time at which the query was executed. */
     sds cname;       /* Client name. */
     sds peerid;      /* Client network address. */
+    sds username;    /* ACL user name the client was authenticated as. */
 } commandlogEntry;
 
 /* Exported API */

@@ -7592,7 +7592,7 @@ int VM_ModuleTypeSetValue(ValkeyModuleKey *key, moduleType *mt, void *value) {
     if (!(key->mode & VALKEYMODULE_WRITE) || key->iter) return VALKEYMODULE_ERR;
     VM_DeleteKey(key);
     robj *o = createModuleObject(mt, value);
-    setKey(key->ctx->client, key->db, key->key, &o, SETKEY_NO_SIGNAL | SETKEY_DOESNT_EXIST);
+    setKey(key->ctx->client, key->db, key->key, &o, SETKEY_NO_SIGNAL);
     key->value = o;
     return VALKEYMODULE_OK;
 }

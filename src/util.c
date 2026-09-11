@@ -1597,27 +1597,53 @@ int snprintf_async_signal_safe(char *to, size_t n, const char *fmt, ...) {
     return result;
 }
 
+/* UNIX time in microseconds as of the last gettimeofday() call, and the
+ * monotonic clock reading taken at that same moment. Together they let
+ * ustime() and ustimeFromMonotonic() derive the current UNIX time from a
+ * monotonic sample without a syscall.
+ *
+ * Thread-local: ustime() is reachable from module threads through
+ * VM_Microseconds() / VM_Milliseconds() as well as from the main thread, and
+ * the two fields are only meaningful as a pair written by the same
+ * re-calibration. Per-thread copies keep each pair self-consistent without
+ * any synchronization on the main-thread hot path; each thread re-calibrates
+ * on its own first use and then at most once per millisecond. */
+static _Thread_local long long ust_at_last_timeofday = 0;
+static _Thread_local monotime mono_at_last_timeofday = 0;
+
+/* Slow path: query the time of day and refresh the cached UNIX time. */
+static long long ustimeFromTimeofday(void) {
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    ust_at_last_timeofday = ((long long)tv.tv_sec) * 1000000;
+    ust_at_last_timeofday += tv.tv_usec;
+    return ust_at_last_timeofday;
+}
+
+/* Return the UNIX time in microseconds corresponding to 'mono_now', a
+ * monotonic clock sample the caller has already taken. Only meaningful when
+ * the monotonic clock is a hardware clock (MONOTONIC_CLOCK_HW), which is the
+ * only case in which the monotonic and time-of-day clocks are calibrated
+ * against each other here. Re-calibrates against gettimeofday() at most once
+ * per millisecond, so the derived value is identical to what ustime() would
+ * have returned had it sampled the monotonic clock at the same instant. */
+long long ustimeFromMonotonic(monotime mono_now) {
+    monotime mono_since_gettimeofday = mono_now - mono_at_last_timeofday;
+    if (mono_since_gettimeofday < 1000) return ust_at_last_timeofday + mono_since_gettimeofday;
+
+    /* Use time of day. */
+    mono_at_last_timeofday = mono_now;
+    return ustimeFromTimeofday();
+}
+
 /* Return the UNIX time in microseconds */
 long long ustime(void) {
-    static long long ust = 0;
-    static monotime mono_at_last_timeofday = 0;
-
     /* Fast path. Only call gettimeofday() periodically and add monotonic delta.
      * This avoids a syscall if we have a no-syscall monotonic clock. */
     if (getMonotonicUs != NULL && monotonicGetType() == MONOTONIC_CLOCK_HW) {
-        monotime mono_now = getMonotonicUs();
-        monotime mono_since_gettimeofday = mono_now - mono_at_last_timeofday;
-        if (mono_since_gettimeofday < 1000) return ust + mono_since_gettimeofday;
-
-        /* Use time of day. */
-        mono_at_last_timeofday = mono_now;
+        return ustimeFromMonotonic(getMonotonicUs());
     }
-
-    struct timeval tv;
-    gettimeofday(&tv, NULL);
-    ust = ((long long)tv.tv_sec) * 1000000;
-    ust += tv.tv_usec;
-    return ust;
+    return ustimeFromTimeofday();
 }
 
 /* Return the UNIX time in milliseconds */

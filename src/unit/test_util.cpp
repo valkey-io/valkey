@@ -195,7 +195,7 @@ TEST_F(UtilTest, TestLd2string) {
     long double v;
     int sz;
 
-    v = 0.0 / 0.0;
+    v = 0.0L / 0.0L;
     sz = ld2string(buf, sizeof(buf), v, LD_STR_AUTO);
     ASSERT_EQ(sz, 3);
     ASSERT_TRUE(!strcmp(buf, "nan"));

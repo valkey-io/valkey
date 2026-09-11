@@ -8116,13 +8116,8 @@ __attribute__((weak)) int main(int argc, char **argv) {
  * MSET specific command extended options - XX/NX
  * HGET specific command extended options - PERSIST
  * HSET specific command extended options - NX/XX/FXX/FNX
-* GET specific command extended options - PERSIST
-* SET specific command extended options - XX/NX/GET/IFEQ
-* MSET specific command extended options - XX/NX
-* HGET specific command extended options - PERSIST
-* HSET specific command extended options - NX/XX/FXX/FNX
-* INCREX specific command extended options - INCRBY/INCRBYFLOAT
-* Common command extended options - EX/EXAT/PX/PXAT/KEEPTTL
+ * INCREX specific command extended options - BYINT/BYFLOAT
+ * Common command extended options - EX/EXAT/PX/PXAT/KEEPTTL
  *
  * Function takes pointers to client, flags, unit, expire_idx, pointer to pointer of expire obj,
 * Function takes pointers to client, flags, unit, expire_idx, pointer to pointer of expire obj,

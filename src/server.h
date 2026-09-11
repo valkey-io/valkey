@@ -151,6 +151,8 @@ struct ValkeyModule;
 #define CONFIG_DEFAULT_HZ 10 /* Time interrupt calls/sec. */
 #define CONFIG_MIN_HZ 1
 #define CONFIG_MAX_HZ 500
+/* Leave headroom for adding the epoch time so it cannot exceed I64 MAX and cause overflow risk. */
+#define MAX_TTL_MS_MAX (LLONG_MAX / 2)
 #define CRON_DBS_PER_CALL 16
 #define CRON_DICTS_PER_DB 16
 #define NET_MAX_WRITES_PER_EVENT (1024 * 64)
@@ -2023,6 +2025,7 @@ struct valkeyServer {
     int tcpkeepalive;            /* Set SO_KEEPALIVE if non-zero. */
     int active_expire_enabled;   /* Can be disabled for testing purposes. */
     int active_expire_effort;    /* From 1 (default) to 10, active effort. */
+    mstime_t max_ttl_ms;         /* Default and maximum TTL for native key writes, in milliseconds. */
     int lazy_expire_disabled;    /* If > 0, don't trigger lazy expire */
     int active_defrag_enabled;
     int skip_checksum_validation;                /* Disable checksum validation for RDB and RESTORE payload. */
@@ -3878,6 +3881,14 @@ int objectSetLRUOrLFU(robj *val, long long lfu_freq, long long lru_idle_secs);
     (LOOKUP_NONOTIFY | LOOKUP_NOSTATS | LOOKUP_NOTOUCH | LOOKUP_NOEXPIRE | LOOKUP_NOHOTKEYS) /* Avoid any effects from fetching the key */
 
 void dbAdd(serverDb *db, robj *key, robj **valref);
+/* Validate an absolute key deadline before mutation; -1 requests persistence. */
+int checkMaxTTLMSOrReply(client *c, mstime_t deadline);
+/* Per-call automatic TTL tracking: stop recording before callbacks, then end
+ * after queuing the creating command, using that command's propagation targets. */
+typedef struct maxTTLMSContext maxTTLMSContext;
+maxTTLMSContext *beginMaxTTLMS(client *c);
+void stopMaxTTLMSRecording(maxTTLMSContext *ctx);
+void endMaxTTLMS(maxTTLMSContext *ctx, int target);
 int dbAddRDBLoad(serverDb *db, sds key, robj **valref);
 void dbReplaceValue(serverDb *db, robj *key, robj **valref);
 

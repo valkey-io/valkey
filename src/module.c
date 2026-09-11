@@ -70,6 +70,8 @@
 #include "io_threads.h"
 #include "scripting_engine.h"
 #include "cluster_migrateslots.h"
+#include "bgiteration.h"
+#include "forkless.h"
 #include <dlfcn.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
@@ -2115,6 +2117,8 @@ int VM_SetCommandInfo(ValkeyModuleCommand *command, const ValkeyModuleCommandInf
         /* Update the legacy (first,last,step) spec and "movablekeys" flag used by the COMMAND command,
          * by trying to "glue" consecutive range key specs. */
         populateCommandLegacyRangeSpec(cmd);
+
+        detectWriteFirstkeyOnlyCommand(cmd);
     }
 
     if (info->args) {
@@ -2438,7 +2442,7 @@ void VM_SetModuleAttribs(ValkeyModuleCtx *ctx, const char *name, int ver, int ap
     module->apiver = apiver;
     module->types = listCreate();
     module->usedby = listCreate();
-    module->using = listCreate();
+    module->uses = listCreate();
     module->filters = listCreate();
     module->module_configs = listCreate();
     listSetMatchMethod(module->module_configs, moduleListConfigMatch);
@@ -2563,7 +2567,7 @@ void VM_Yield(ValkeyModuleCtx *ctx, int flags, const char *busy_reply) {
             if (flags & VALKEYMODULE_YIELD_FLAG_CLIENTS) server.busy_module_yield_flags |= BUSY_MODULE_YIELD_CLIENTS;
 
             /* Let the server process events */
-            if (!pthread_equal(server.main_thread_id, pthread_self())) {
+            if (!onServerMainThread()) {
                 /* If we are not in the main thread, we defer event loop processing to the main thread
                  * after the main thread enters acquiring GIL state in order to protect the event
                  * loop (ae.c) and avoid potential race conditions. */
@@ -4297,6 +4301,14 @@ static void moduleInitKeyTypeSpecific(ValkeyModuleKey *key) {
  * call ValkeyModule_CloseKey() and ValkeyModule_KeyType() on a NULL
  * value.
  *
+ * Valkey 9.2+: When opening a key with VALKEYMODULE_WRITE, NULL will be returned
+ * if the key is currently write-locked (i.e. if forkless operations are operating
+ * on the key).  This change is non-breaking as:
+ * * Modules have to opt-in using VALKEYMODULE_OPTIONS_HANDLE_FORKLESS_SAVE
+ * * Module write commands are blocked (before execution), if a declared key is write-locked
+ * The risk is only for a module that performs VM_OpenKey() on a key which was NOT
+ * declared in the current command OR arbitrarily opens keys during a timer event.
+ *
  * Extra flags that can be pass to the API under the mode argument:
  * * VALKEYMODULE_OPEN_KEY_NOTOUCH - Avoid touching the LRU/LFU of the key when opened.
  * * VALKEYMODULE_OPEN_KEY_NONOTIFY - Don't trigger keyspace event on key misses.
@@ -4315,6 +4327,7 @@ ValkeyModuleKey *VM_OpenKey(ValkeyModuleCtx *ctx, robj *keyname, int mode) {
 
     if (mode & VALKEYMODULE_WRITE) {
         value = lookupKeyWriteWithFlags(ctx->client->db, keyname, flags);
+        if (value && bgIteration_isEntryInuse(value)) return NULL;
     } else {
         value = lookupKeyReadWithFlags(ctx->client->db, keyname, flags);
         if (value == NULL) {
@@ -6949,6 +6962,9 @@ static void moduleCallCommandHelper(ValkeyModuleCtx *ctx, client *c, robj **argv
         if (!(flags & VALKEYMODULE_CALL_ARGV_NO_AOF)) call_flags |= CMD_CALL_PROPAGATE_AOF;
         if (!(flags & VALKEYMODULE_CALL_ARGV_NO_REPLICAS)) call_flags |= CMD_CALL_PROPAGATE_REPL;
     }
+    /* Mirror processInputBuffer: set pending_command so that if the command
+     * blocks on keys, unblockClientOnKey will reprocess it on unblock. */
+    c->flag.pending_command = 1;
     call(c, call_flags);
 
     /* Propagate database changes from the temporary client back to the context client
@@ -6970,6 +6986,15 @@ static void moduleCallCommandHelper(ValkeyModuleCtx *ctx, client *c, robj **argv
     server.replication_allowed = prev_replication_allowed;
 
     if (c->flag.blocked) {
+        if (c->flag.deny_blocking) {
+            /* The module did not pass ALLOW_BLOCK — it does not expect the
+             * command to block. Unblock the client and return an error. */
+            c->flag.pending_command = 0;
+            unblockClient(c, 0);
+            addReplyError(c, "-INUSE Key is being processed");
+            goto cleanup;
+        }
+
         /* Blocking commands are not allowed when calling commands in scripting engines. */
         serverAssert(!is_running_script);
         serverAssert(flags & VALKEYMODULE_CALL_ARGV_ALLOW_BLOCK);
@@ -7671,6 +7696,26 @@ int moduleVerifyAllAllowAtomicSlotMigrationOrReply(client *c) {
         }
     }
     return C_OK;
+}
+
+/* Returns 0 if any loaded module did not declare
+ * VALKEYMODULE_OPTIONS_HANDLE_FORKLESS, in which case forkless operations
+ * should be blocked. Every module must opt in: a module that accesses a key for
+ * write during a forkless operation must acknowledge the possible behavior
+ * change, and a module that registers a data type must also confirm its RDB save
+ * callback is thread-safe. */
+int moduleAllModulesHandleForkless(void) {
+    listIter li;
+    listNode *ln;
+
+    listRewind(modules, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        struct ValkeyModule *module = listNodeValue(ln);
+        if (!(module->options & VALKEYMODULE_OPTIONS_HANDLE_FORKLESS)) {
+            return 0;
+        }
+    }
+    return 1;
 }
 
 /* Returns true if any previous IO API failed.
@@ -8441,6 +8486,10 @@ ValkeyModuleBlockedClient *moduleBlockClient(ValkeyModuleCtx *ctx,
             c->bstate->timeout = timeout;
             blockClient(c, BLOCKED_MODULE);
         }
+        /* Module handles its own reply on unblock, so clear pending_command
+         * to prevent re-execution. Auth clients are the exception — they
+         * need re-execution after auth completes. */
+        if (!auth_reply_callback) c->flag.pending_command = 0;
         /* Defer response until after being unblocked for a context originated from
          * keyspace notification events */
         if (is_keyspace_notification) {
@@ -11437,7 +11486,7 @@ void *VM_GetSharedAPI(ValkeyModuleCtx *ctx, const char *apiname) {
     ValkeyModuleSharedAPI *sapi = dictGetVal(de);
     if (listSearchKey(sapi->module->usedby, ctx->module) == NULL) {
         listAddNodeTail(sapi->module->usedby, ctx->module);
-        listAddNodeTail(ctx->module->using, sapi->module);
+        listAddNodeTail(ctx->module->uses, sapi->module);
     }
     return sapi->func;
 }
@@ -11474,7 +11523,7 @@ int moduleUnregisterUsedAPI(ValkeyModule *module) {
     listNode *ln;
     int count = 0;
 
-    listRewind(module->using, &li);
+    listRewind(module->uses, &li);
     while ((ln = listNext(&li))) {
         ValkeyModule *used = ln->value;
         listNode *ln = listSearchKey(used->usedby, module);
@@ -13227,7 +13276,7 @@ void moduleFreeModuleStructure(struct ValkeyModule *module) {
     listRelease(module->types);
     listRelease(module->filters);
     listRelease(module->usedby);
-    listRelease(module->using);
+    listRelease(module->uses);
     listRelease(module->module_configs);
     sdsfree(module->name);
     moduleLoadQueueEntryFree(module->loadmod);
@@ -13476,9 +13525,9 @@ static int moduleInitPostOnLoadResolved(ModuleLoadFunc onload,
         ACLRecomputeCommandBitsFromCommandRulesAllUsers();
     }
     if (is_static) {
-        serverLog(LL_NOTICE, "Static Module '%s' successfully loaded", ctx.module->name);
+        serverLog(LL_NOTICE, "Static Module '%s' successfully loaded (version %d)", ctx.module->name, ctx.module->ver);
     } else {
-        serverLog(LL_NOTICE, "Module '%s' loaded from %s", ctx.module->name, display_name);
+        serverLog(LL_NOTICE, "Module '%s' loaded from %s (version %d)", ctx.module->name, display_name, ctx.module->ver);
     }
     ctx.module->onload = 0;
 
@@ -13514,6 +13563,12 @@ static int moduleInitPostOnLoadResolved(ModuleLoadFunc onload,
 int moduleLoad(const char *path, void **module_argv, int module_argc, int is_loadex, const char **errmsg) {
     ModuleLoadFunc onload;
     void *handle;
+
+    if (isForklessSaveInProgress()) {
+        serverLog(LL_WARNING, "Module %s failed to load: cannot load during forkless save.", path);
+        if (errmsg) *errmsg = "cannot load module during forkless save";
+        return C_ERR;
+    }
 
     if (server.async_loading) {
         serverLog(LL_WARNING, "Module %s failed to load: cannot load during async replication.", path);
@@ -13872,7 +13927,7 @@ sds genModulesInfoString(sds info) {
         struct ValkeyModule *module = listNodeValue(ln);
 
         sds usedby = genModulesInfoStringRenderModulesList(module->usedby);
-        sds using = genModulesInfoStringRenderModulesList(module->using);
+        sds using = genModulesInfoStringRenderModulesList(module->uses);
         sds options = genModulesInfoStringRenderModuleOptions(module);
         info = sdscatfmt(info,
                          "module:name=%S,ver=%i,api=%i,filters=%i,"
@@ -14467,7 +14522,8 @@ int VM_RdbLoad(ValkeyModuleCtx *ctx, ValkeyModuleRdbStream *stream, int flags) {
 
     /* Kill existing RDB fork as it is saving outdated data. Also killing it
      * will prevent COW memory issue. */
-    if (server.child_type == CHILD_TYPE_RDB) killRDBChild();
+    if (isForkBgsaveInProgress()) killRDBChild();
+    if (isForklessSaveInProgress()) forklessSaveCancel();
 
     /* Kill existing slot migration fork as it is saving outdated data. Also killing it
      * will prevent COW memory issue. */
@@ -14607,7 +14663,8 @@ ValkeyModuleScriptingEngineExecutionState VM_GetFunctionExecutionState(
  * These messages are buffered in memory, and are only sent to the client when
  * `ValkeyModule_VM_ScriptingEngineDebuggerFlushLogs` is called.
  *
- * - `msg`: the message to send.
+ * - `msg`: the message to send. Ownership of `msg` is transferred to the
+ *   debugger log. The caller must not free it or access it after this call.
  *
  * - `truncate`: if set to 1, the message will be truncated to the maximum length
  *   configured in the debugger settings.
@@ -14986,13 +15043,19 @@ struct ValkeyModuleDefragCtx {
 
 /* Register a defrag callback for global data, i.e. anything that the module
  * may allocate that is not tied to a specific data type.
+ *
+ * The callback is invoked with a time limit: it should call VM_DefragShouldStop() periodically, and
+ * save its position with VM_DefragCursorSet() so a later invocation can resume (using VM_DefragCursorGet).
+ *
+ * If a non-zero cursor is set (VM_DefragCursorSet) the function will be invoked repeatedly until a zero
+ * cursor is returned.
  */
 int VM_RegisterDefragFunc(ValkeyModuleCtx *ctx, ValkeyModuleDefragFunc cb) {
     ctx->module->defrag_cb = cb;
     return VALKEYMODULE_OK;
 }
 
-/* When the data type defrag callback iterates complex structures, this
+/* When a defrag callback iterates complex structures, this
  * function should be called periodically. A zero (false) return
  * indicates the callback may continue its work. A non-zero value (true)
  * indicates it should stop.
@@ -15000,8 +15063,9 @@ int VM_RegisterDefragFunc(ValkeyModuleCtx *ctx, ValkeyModuleDefragFunc cb) {
  * When stopped, the callback may use VM_DefragCursorSet() to store its
  * position so it can later use VM_DefragCursorGet() to resume defragging.
  *
- * When stopped and more work is left to be done, the callback should
- * return 1. Otherwise, it should return 0.
+ * When stopped and more work is left to be done, the data type callback
+ * should return 1. Otherwise, it should return 0. The global callback has no
+ * return value and reports this through its cursor instead.
  *
  * NOTE: Modules should consider the frequency in which this function is called,
  * so it generally makes sense to do small batches of work in between calls.
@@ -15012,18 +15076,18 @@ int VM_DefragShouldStop(ValkeyModuleDefragCtx *ctx) {
 
 /* Store an arbitrary cursor value for future re-use.
  *
- * This should only be called if VM_DefragShouldStop() has returned a non-zero
- * value and the defrag callback is about to exit without fully iterating its
- * data type.
+ * For a data type callback, this should only be called if VM_DefragShouldStop()
+ * has returned a non-zero value and the defrag callback is about to exit without
+ * fully iterating its data type.
  *
  * This behavior is reserved to cases where late defrag is performed. Late
  * defrag is selected for keys that implement the `free_effort` callback and
  * return a `free_effort` value that is larger than the defrag
  * 'active-defrag-max-scan-fields' configuration directive.
  *
- * Smaller keys, keys that do not implement `free_effort` or the global
- * defrag callback are not called in late-defrag mode. In those cases, a
- * call to this function will return VALKEYMODULE_ERR.
+ * Smaller keys and keys that do not implement `free_effort` are not called in
+ * late-defrag mode. In those cases, a call to this function will return
+ * VALKEYMODULE_ERR.
  *
  * The cursor may be used by the module to represent some progress into the
  * module's data type. Modules may also store additional cursor-related
@@ -15031,6 +15095,15 @@ int VM_DefragShouldStop(ValkeyModuleDefragCtx *ctx) {
  * traversal of a new key begins. This is possible because the API makes
  * a guarantee that concurrent defragmentation of multiple keys will
  * not be performed.
+ *
+ * A global callback (registered with VM_RegisterDefragFunc) always has a cursor
+ * available, and the cursor is also how it reports completion: 0, the value a
+ * fresh pass starts from, means done, and non-zero means it will be invoked
+ * again. The server discards the cursor once the callback completes or the pass
+ * is interrupted, so a cursor saved before an interruption is never handed
+ * back. A flush or a database swap does not end defragmentation, so a
+ * module must still be able to restart when its cursor may be invalid,
+ * usually just returning a 0 cursor, indicating done.
  */
 int VM_DefragCursorSet(ValkeyModuleDefragCtx *ctx, unsigned long cursor) {
     if (!ctx->cursor) return VALKEYMODULE_ERR;
@@ -15041,7 +15114,7 @@ int VM_DefragCursorSet(ValkeyModuleDefragCtx *ctx, unsigned long cursor) {
 
 /* Fetch a cursor value that has been previously stored using VM_DefragCursorSet().
  *
- * If not called for a late defrag operation, VALKEYMODULE_ERR will be returned and
+ * If no cursor is available, VALKEYMODULE_ERR will be returned and
  * the cursor should be ignored. See VM_DefragCursorSet() for more details on
  * defrag cursors.
  */
@@ -15145,20 +15218,49 @@ int moduleDefragValue(robj *key, robj *value, int dbid) {
     return 1;
 }
 
-/* Call registered module API defrag functions */
-void moduleDefragGlobals(void) {
-    if (listLength(modules) == 0) return;
+/* Global defrag walks the modules one at a time.  These two values are the whole resume state: the
+ * module currently being defragged (by position, since a module can be unloaded between invocations)
+ * and the cursor that module last stored.  Both are reset at the start of every cycle. */
+static long defrag_module_position = 0;
+static unsigned long defrag_module_cursor = 0;
 
-    listIter li;
-    listNode *ln;
+/* Begin a fresh pass from the first module.  Called internally when the stage starts (endtime==0);
+ * a cycle that was aborted mid-pass leaves stale values here, which this discards. */
+static void moduleDefragGlobalsStart(void) {
+    defrag_module_position = 0;
+    defrag_module_cursor = 0;
+}
 
-    listRewind(modules, &li);
-    while ((ln = listNext(&li)) != NULL) {
-        struct ValkeyModule *module = listNodeValue(ln);
-        if (!module->defrag_cb) continue;
-        ValkeyModuleDefragCtx defrag_ctx = {0, NULL, NULL, -1};
-        module->defrag_cb(&defrag_ctx);
+/* Defrag module global data, forwarding 'endtime' so a callback can bound its own latency via
+ * VM_DefragShouldStop().  Each module is defragged to completion (its cursor back to 0) before we
+ * move to the next; walking off the end of the module list means every module is done.
+ *
+ * Returns true while work remains, false once the pass is complete. */
+bool moduleDefragGlobals(monotime endtime) {
+    if (endtime == 0) {
+        moduleDefragGlobalsStart();
+        return true;
     }
+
+    /* Resolve the resume position to a node once; walking with listIndex per step would be quadratic
+     * in the number of loaded modules.  The list can't change during a single call (defrag is
+     * single-threaded), so the node stays valid until we return. */
+    listNode *ln = listIndex(modules, defrag_module_position);
+    while (ln != NULL) {
+        if (getMonotonicUs() >= endtime) return true;
+
+        struct ValkeyModule *module = listNodeValue(ln);
+        if (module->defrag_cb) {
+            ValkeyModuleDefragCtx defrag_ctx = {endtime, &defrag_module_cursor, NULL, -1};
+            module->defrag_cb(&defrag_ctx);
+            if (defrag_module_cursor != 0) continue; /* more work on this module */
+        }
+        /* This module is done (or has no callback): advance and start the next one at cursor 0. */
+        defrag_module_position++;
+        defrag_module_cursor = 0;
+        ln = ln->next;
+    }
+    return false;
 }
 
 /* Returns the name of the key currently being processed.

@@ -39,6 +39,7 @@
 #include "cluster.h"
 #include "cluster_migrateslots.h"
 #include "util.h"
+#include "bgiteration.h"
 
 /*-----------------------------------------------------------------------------
  * Incremental collection of expired keys.
@@ -168,13 +169,18 @@ void fieldExpireScanCallback(void *privdata, void *volaKey, int didx) {
     robj *o = volaKey;
     serverAssert(o);
     serverAssert(hashTypeHasVolatileFields(o));
+
+    data->has_more_expired_entries = false;
+    data->sampled++;
+
+    if (bgIteration_isEntryInuse(o)) return;
+
     mstime_t now = server.mstime;
     size_t expired_fields = dbReclaimExpiredFields(o, data->db, now, data->max_entries, didx);
     if (expired_fields) {
         data->has_more_expired_entries = (expired_fields == data->max_entries);
         data->expired++;
     }
-    data->sampled++;
 }
 
 static int expireShouldSkipTableForSamplingCb(hashtable *ht) {

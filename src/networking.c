@@ -1550,8 +1550,28 @@ void addReplyBulkCBuffer(client *c, const void *p, size_t len) {
     _addReplyToBufferOrList(c, "\r\n", 2);
 }
 
+/* Max payload size for coalescing a bulk string reply ($<len>\r\n<data>\r\n)
+ * into a single buffer append. Chosen to keep the stack buffer small while
+ * covering the common case of short elements in aggregate replies. */
+#define BULK_COALESCE_MAX_SIZE 512
+
 void addWritePreparedReplyBulkCBuffer(writePreparedClient *wpc, const void *p, size_t len) {
     client *c = (client *)wpc;
+    if (len <= BULK_COALESCE_MAX_SIZE) {
+        /* Assemble the full bulk reply on the stack so the per-element
+         * bookkeeping in _addReplyToBufferOrList is paid once instead of
+         * three times. */
+        char buf[BULK_COALESCE_MAX_SIZE + LONG_STR_SIZE + 5];
+        buf[0] = '$';
+        size_t hdr = 1 + ll2string(buf + 1, LONG_STR_SIZE + 1, len);
+        buf[hdr] = '\r';
+        buf[hdr + 1] = '\n';
+        memcpy(buf + hdr + 2, p, len);
+        buf[hdr + 2 + len] = '\r';
+        buf[hdr + 3 + len] = '\n';
+        _addReplyToBufferOrList(c, buf, hdr + len + 4);
+        return;
+    }
     _addReplyLongLongWithPrefix(c, len, '$');
     _addReplyToBufferOrList(c, p, len);
     _addReplyToBufferOrList(c, "\r\n", 2);

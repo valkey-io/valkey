@@ -231,6 +231,9 @@ struct ValkeyModuleKey {
             OrderedIndexIterator oi; /* OrderedIndex iterator for skiplist encoding. */
             int er;                  /* Zset iterator end reached flag
                                          (true if end was reached). */
+            int fwd;                 /* The ordered index cursor sits between
+                                         items: 1 when it is just after
+                                         'current', 0 when just before it. */
         } zset;
         struct {
             /* Stream, use only if value->type == OBJ_STREAM */
@@ -5127,10 +5130,27 @@ void VM_ZsetRangeStop(ValkeyModuleKey *key) {
     zsetKeyReset(key);
 }
 
-/* Return the "End of range" flag value to signal the end of the iteration. */
+/* Return the "End of range" flag value to signal the end of the iteration:
+ * set when the range is empty or the most recent step found no element in its
+ * direction, cleared again by a step that moves. */
 int VM_ZsetRangeEndReached(ValkeyModuleKey *key) {
     if (!key->value || objectGetType(key->value) != OBJ_ZSET) return 1;
     return key->u.zset.er;
+}
+
+/* Whether 'item' is inside the active range on the far side of the iteration:
+ * the max bound going forward, the min bound backward. */
+static int zsetRangeItemInRange(ValkeyModuleKey *key, const OrderedIndexItem *item, int forward) {
+    if (key->u.zset.type == VALKEYMODULE_ZSET_RANGE_SCORE) {
+        double score = orderedIndexItemGetScore(item);
+        return forward ? zsetScoreLteMax(score, &key->u.zset.rs) : zsetScoreGteMin(score, &key->u.zset.rs);
+    } else if (key->u.zset.type == VALKEYMODULE_ZSET_RANGE_LEX) {
+        const char *ele;
+        size_t ele_len;
+        orderedIndexItemGetElement(item, &ele, &ele_len);
+        return forward ? zsetLexLteMax(ele, ele_len, &key->u.zset.lrs) : zsetLexGteMin(ele, ele_len, &key->u.zset.lrs);
+    }
+    return 1;
 }
 
 /* Helper function for VM_ZsetFirstInScoreRange() and VM_ZsetLastInScoreRange().
@@ -5161,6 +5181,7 @@ int zsetInitScoreRange(ValkeyModuleKey *key, double min, double max, int minex, 
         orderedIndexInitIterator(&key->u.zset.oi, zs->oi);
         orderedIndexSeekToScoreRange(&key->u.zset.oi, zrs->min, zrs->max, zrs->minex, zrs->maxex, first ? 0 : -1);
         key->u.zset.current = first ? orderedIndexNext(&key->u.zset.oi) : orderedIndexPrev(&key->u.zset.oi);
+        key->u.zset.fwd = first;
     } else {
         serverPanic("Unsupported zset encoding");
     }
@@ -5225,6 +5246,10 @@ int zsetInitLexRange(ValkeyModuleKey *key, ValkeyModuleString *min, ValkeyModule
         orderedIndexInitIterator(&key->u.zset.oi, zs->oi);
         orderedIndexSeekToLexRange(&key->u.zset.oi, zlrs->min, zlrs->max, zlrs->minex, zlrs->maxex, first ? 0 : -1);
         key->u.zset.current = first ? orderedIndexNext(&key->u.zset.oi) : orderedIndexPrev(&key->u.zset.oi);
+        key->u.zset.fwd = first;
+        /* The seek honours the near bound only: an empty or inverted range
+         * lands on an element outside the far bound. */
+        if (key->u.zset.current && !zsetRangeItemInRange(key, key->u.zset.current, first)) key->u.zset.current = NULL;
     } else {
         serverPanic("Unsupported zset encoding");
     }
@@ -5322,30 +5347,29 @@ int VM_ZsetRangeNext(ValkeyModuleKey *key) {
                 }
             }
             key->u.zset.current = next;
+            key->u.zset.er = 0;
             return 1;
         }
     } else if (objectGetEncoding(key->value) == OBJ_ENCODING_BTREE) {
-        OrderedIndexItem *next = orderedIndexNext(&key->u.zset.oi);
+        OrderedIndexIterator *oi = &key->u.zset.oi;
+        /* After a backward step the cursor is before 'current': step over it
+         * first, otherwise 'current' would be returned again. */
+        if (!key->u.zset.fwd) {
+            orderedIndexNext(oi);
+            key->u.zset.fwd = 1;
+        }
+        OrderedIndexItem *next = orderedIndexNext(oi);
+        if (next != NULL && !zsetRangeItemInRange(key, next, 1)) {
+            orderedIndexPrev(oi); /* Keep the cursor next to 'current'. */
+            next = NULL;
+        }
         if (next == NULL) {
             key->u.zset.er = 1;
             return 0;
-        } else {
-            /* Are we still within the range? */
-            if (key->u.zset.type == VALKEYMODULE_ZSET_RANGE_SCORE && !zsetScoreLteMax(orderedIndexItemGetScore(next), &key->u.zset.rs)) {
-                key->u.zset.er = 1;
-                return 0;
-            } else if (key->u.zset.type == VALKEYMODULE_ZSET_RANGE_LEX) {
-                const char *ele;
-                size_t ele_len;
-                orderedIndexItemGetElement(next, &ele, &ele_len);
-                if (!zsetLexLteMax(ele, ele_len, &key->u.zset.lrs)) {
-                    key->u.zset.er = 1;
-                    return 0;
-                }
-            }
-            key->u.zset.current = next;
-            return 1;
         }
+        key->u.zset.current = next;
+        key->u.zset.er = 0;
+        return 1;
     } else {
         serverPanic("Unsupported zset encoding");
     }
@@ -5387,30 +5411,29 @@ int VM_ZsetRangePrev(ValkeyModuleKey *key) {
                 }
             }
             key->u.zset.current = prev;
+            key->u.zset.er = 0;
             return 1;
         }
     } else if (objectGetEncoding(key->value) == OBJ_ENCODING_BTREE) {
-        OrderedIndexItem *prev = orderedIndexPrev(&key->u.zset.oi);
+        OrderedIndexIterator *oi = &key->u.zset.oi;
+        /* After a forward step the cursor is after 'current': step back over
+         * it first, otherwise 'current' would be returned again. */
+        if (key->u.zset.fwd) {
+            orderedIndexPrev(oi);
+            key->u.zset.fwd = 0;
+        }
+        OrderedIndexItem *prev = orderedIndexPrev(oi);
+        if (prev != NULL && !zsetRangeItemInRange(key, prev, 0)) {
+            orderedIndexNext(oi); /* Keep the cursor next to 'current'. */
+            prev = NULL;
+        }
         if (prev == NULL) {
             key->u.zset.er = 1;
             return 0;
-        } else {
-            /* Are we still within the range? */
-            if (key->u.zset.type == VALKEYMODULE_ZSET_RANGE_SCORE && !zsetScoreGteMin(orderedIndexItemGetScore(prev), &key->u.zset.rs)) {
-                key->u.zset.er = 1;
-                return 0;
-            } else if (key->u.zset.type == VALKEYMODULE_ZSET_RANGE_LEX) {
-                const char *ele;
-                size_t ele_len;
-                orderedIndexItemGetElement(prev, &ele, &ele_len);
-                if (!zsetLexGteMin(ele, ele_len, &key->u.zset.lrs)) {
-                    key->u.zset.er = 1;
-                    return 0;
-                }
-            }
-            key->u.zset.current = prev;
-            return 1;
         }
+        key->u.zset.current = prev;
+        key->u.zset.er = 0;
+        return 1;
     } else {
         serverPanic("Unsupported zset encoding");
     }

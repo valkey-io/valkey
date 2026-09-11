@@ -244,6 +244,11 @@ static int getExpireMillisecondsOrReply(client *c, robj *expire, int flags, int 
     if (unit == UNIT_SECONDS) *milliseconds *= 1000;
 
     if ((flags & ARGS_PX) || (flags & ARGS_EX)) {
+        /* Check before adding the epoch: signed overflow is undefined behavior. */
+        if (*milliseconds > LLONG_MAX - commandTimeSnapshot()) {
+            addReplyErrorExpireTime(c);
+            return C_ERR;
+        }
         *milliseconds += commandTimeSnapshot();
     }
 
@@ -253,7 +258,8 @@ static int getExpireMillisecondsOrReply(client *c, robj *expire, int flags, int 
         return C_ERR;
     }
 
-    return C_OK;
+    /* Shared by SET variants, MSETEX and GETEX; reject before any key changes. */
+    return checkMaxTTLMSOrReply(c, *milliseconds);
 }
 
 /* SET key value [NX | XX | IFEQ comparison-value] [GET]
@@ -364,6 +370,8 @@ void getexCommand(client *c) {
     }
 
     robj *o;
+    /* Validate persistence before GETEX queues its value reply or clears TTL. */
+    if ((flags & ARGS_PERSIST) && checkMaxTTLMSOrReply(c, -1) != C_OK) return;
 
     if ((o = lookupKeyReadOrReply(c, c->argv[1], shared.null[c->resp])) == NULL)
         return;

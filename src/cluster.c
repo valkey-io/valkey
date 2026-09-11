@@ -249,6 +249,17 @@ void restoreCommand(client *c) {
         return;
     }
 
+    /* Validate before REPLACE can delete the old key. Guard relative-to-absolute
+     * conversion against overflow; ABSTTL is already an absolute deadline.
+     * A zero TTL requests the automatic default assigned during dbAdd. */
+    if (ttl && !absttl) {
+        if (ttl > LLONG_MAX - commandTimeSnapshot()) {
+            addReplyErrorExpireTime(c);
+            return;
+        }
+    }
+    if (ttl && checkMaxTTLMSOrReply(c, absttl ? ttl : ttl + commandTimeSnapshot()) != C_OK) return;
+
     /* Verify RDB version and data checksum. */
     if (verifyDumpPayload(objectGetVal(c->argv[3]), sdslen(objectGetVal(c->argv[3])), &rdbver) == C_ERR) {
         addReplyError(c, "DUMP payload version or checksum are wrong");

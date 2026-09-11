@@ -4114,6 +4114,10 @@ void call(client *c, int flags) {
 
     const ustime_t call_timer = ustime();
     enterExecutionUnit(1, call_timer);
+    /* Nested calls need separate TTL records and a boundary for their queued
+     * writes, so automatic expirations follow the commands that create keys. */
+    maxTTLMSContext *max_ttl_ms = beginMaxTTLMS(c);
+    int max_ttl_ms_op_start = server.also_propagate.numops;
 
     /* setting the CLIENT_EXECUTING_COMMAND flag so we will avoid
      * sending client side caching message in the middle of a command reply.
@@ -4144,6 +4148,8 @@ void call(client *c, int flags) {
     }
 
     c->cmd->proc(c);
+    /* Result callbacks must not register new keys in this command's TTL frame. */
+    stopMaxTTLMSRecording(max_ttl_ms);
 
     if (c->flag.argv_borrowed && server.enable_debug_assert) {
         robj **argv = c->original_argv ? c->original_argv : c->argv;
@@ -4285,6 +4291,15 @@ void call(client *c, int flags) {
         /* Call alsoPropagate() only if at least one of AOF / replication
          * propagation is needed. */
         if (propagate_flags != PROPAGATE_NONE) alsoPropagate(c->db->id, c->argv, c->argc, propagate_flags, c->slot);
+    }
+
+    if (max_ttl_ms) {
+        /* Canonical writes are now queued, including commands that rewrite
+         * themselves. Append creation deadlines before afterCommand flushes. */
+        int max_ttl_ms_target = PROPAGATE_NONE;
+        for (int i = max_ttl_ms_op_start; i < server.also_propagate.numops; i++)
+            max_ttl_ms_target |= server.also_propagate.ops[i].target;
+        endMaxTTLMS(max_ttl_ms, max_ttl_ms_target);
     }
 
     /* Restore the old replication flags, since call() can be executed

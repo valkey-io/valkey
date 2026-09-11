@@ -795,6 +795,9 @@ void expireGenericCommand(client *c, mstime_t basetime, int unit) {
         return;
     }
     when += basetime;
+    /* Check the normalized deadline before mutation. Negative TTLs still mean
+     * immediate deletion, rather than an attempt to make the key persistent. */
+    if (checkMaxTTLMSOrReply(c, when < 0 ? 0 : when) != C_OK) return;
     /* A negative expiration time should cause a key to expire and be deleted immediately.
      * However, in some cases (such as import-mode), we might need to pause expiration,
      * and we don't want keys with negative expiration times (could cause a crash during active expiration).
@@ -948,6 +951,8 @@ void pexpiretimeCommand(client *c) {
 
 /* PERSIST key */
 void persistCommand(client *c) {
+    /* Removing expiry would bypass the configured maximum lifetime. */
+    if (checkMaxTTLMSOrReply(c, -1) != C_OK) return;
     if (lookupKeyWrite(c->db, c->argv[1])) {
         if (removeExpire(c->db, c->argv[1])) {
             signalModifiedKey(c, c->db, c->argv[1]);

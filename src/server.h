@@ -1952,6 +1952,8 @@ struct valkeyServer {
     double stat_fork_rate;                         /* Fork rate in GB/sec. */
     long long stat_total_forks;                    /* Total count of fork. */
     long long stat_rejected_conn;                  /* Clients rejected because of maxclients */
+    long long stat_rejected_priority_conn;         /* Prioritized clients rejected because of maxclients */
+    long long stat_num_active_priority_clients;    /* Number of active prioritized clients */
     long long stat_sync_full;                      /* Number of full resyncs with replicas. */
     long long stat_sync_partial_ok;                /* Number of accepted PSYNC requests. */
     long long stat_sync_partial_err;               /* Number of unaccepted PSYNC requests. */
@@ -2272,6 +2274,10 @@ struct valkeyServer {
     int get_ack_from_replicas;  /* If true we send REPLCONF GETACK. */
     /* Limits */
     unsigned int maxclients;                    /* Max number of simultaneous clients */
+    unsigned int maxclients_reserved;           /* Client connection slots reserved for priority subnets */
+    char *priority_subnets;                     /* Raw priority-subnets string config */
+    anetSubnet *priority_subnets_array;         /* Compiled priority subnets array */
+    int priority_subnets_count;                 /* Count of compiled priority subnets */
     unsigned long long maxmemory;               /* Max number of memory bytes to use */
     ssize_t maxmemory_clients;                  /* Memory limit for total client buffers */
     int maxmemory_policy;                       /* Policy for key eviction */
@@ -3034,6 +3040,8 @@ void setDeferredAttributeLen(client *c, void *node, long length);
 void setDeferredPushLen(client *c, void *node, long length);
 int processInputBuffer(client *c);
 void acceptCommonHandler(connection *conn, struct ClientFlags flags, char *ip);
+int validatePrioritySubnets(const char *subnets_str, const char **err);
+int updatePrioritySubnets(const char *subnets_str);
 void readQueryFromClient(connection *conn);
 int prepareClientToWrite(client *c);
 writePreparedClient *prepareClientForFutureWrites(client *c);

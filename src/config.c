@@ -2579,6 +2579,15 @@ static int isValidAnnouncedIp(char *val, const char **err) {
     return 1;
 }
 
+static int isValidPrioritySubnets(char *val, const char **err) {
+    return validatePrioritySubnets(val, err) == C_OK;
+}
+
+static int updatePrioritySubnetsConfig(const char **err) {
+    UNUSED(err);
+    return updatePrioritySubnets(server.priority_subnets) == C_OK;
+}
+
 static int isValidAnnouncedHostname(char *val, const char **err) {
     if (strlen(val) >= NET_HOST_STR_LEN) {
         *err = "Hostnames must be less than " STRINGIFY(NET_HOST_STR_LEN) " characters";
@@ -3455,6 +3464,8 @@ standardConfig static_configs[] = {
     createStringConfig("proc-title-template", NULL, MODIFIABLE_CONFIG, ALLOW_EMPTY_STRING, server.proc_title_template, CONFIG_DEFAULT_PROC_TITLE_TEMPLATE, isValidProcTitleTemplate, updateProcTitleTemplate),
     createStringConfig("bind-source-addr", NULL, MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, server.bind_source_addr, NULL, NULL, NULL),
     createStringConfig("logfile", NULL, IMMUTABLE_CONFIG, ALLOW_EMPTY_STRING, server.logfile, "", NULL, NULL),
+    createStringConfig("priority-subnets", NULL, MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, server.priority_subnets, NULL, isValidPrioritySubnets, updatePrioritySubnetsConfig),
+
 #ifdef LOG_REQ_RES
     createStringConfig("req-res-logfile", NULL, IMMUTABLE_CONFIG | HIDDEN_CONFIG, EMPTY_STRING_IS_NULL, server.req_res_logfile, NULL, NULL, NULL),
 #endif
@@ -3546,6 +3557,7 @@ standardConfig static_configs[] = {
 
     /* Unsigned int configs */
     createUIntConfig("maxclients", NULL, MODIFIABLE_CONFIG, 1, UINT_MAX, server.maxclients, 10000, INTEGER_CONFIG, NULL, updateMaxclients),
+    createUIntConfig("maxclients-reserved", NULL, MODIFIABLE_CONFIG, 0, UINT_MAX, server.maxclients_reserved, 0, INTEGER_CONFIG, NULL, NULL),
     createUIntConfig("unixsocketperm", NULL, IMMUTABLE_CONFIG, 0, 0777, server.unix_ctx_config.perm, 0, OCTAL_CONFIG, NULL, NULL),
     createUIntConfig("socket-mark-id", NULL, IMMUTABLE_CONFIG, 0, UINT_MAX, server.socket_mark_id, 0, INTEGER_CONFIG, NULL, NULL),
     createUIntConfig("max-new-connections-per-cycle", NULL, MODIFIABLE_CONFIG, 1, 1000, server.max_new_conns_per_cycle, 10, INTEGER_CONFIG, NULL, NULL),

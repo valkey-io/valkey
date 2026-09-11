@@ -236,6 +236,12 @@ void linkClient(client *c) {
     c->client_list_node = listLast(server.clients);
     uint64_t id = htonu64(c->id);
     raxInsert(server.clients_index, (unsigned char *)&id, sizeof(id), c, NULL);
+
+    /* Increment active client counters. These counters are paired with decrements
+     * in unlinkClient() and track connected clients in the global active clients list. */
+    if (connIsPriority(c->conn)) {
+        server.stat_num_active_priority_clients++;
+    }
 }
 
 /* Initialize client authentication state. */
@@ -1885,9 +1891,171 @@ void clientAcceptHandler(connection *conn) {
     moduleFireServerEvent(VALKEYMODULE_EVENT_CLIENT_CHANGE, VALKEYMODULE_SUBEVENT_CLIENT_CHANGE_CONNECTED, c);
 }
 
+/* ====================================================================
+ * Priority Subnets and Admission Control
+ * ==================================================================== */
+
+/* parseSubnetList parses a string containing a list of subnets separated by spaces, tabs, or commas.
+ * On success, it allocates an array of anetSubnet, populates it, and sets *subnets and *count.
+ * Returns C_OK on success, and C_ERR on any parsing error.
+ * Caller is responsible for freeing *subnets using zfree() if it is non-NULL. */
+static int parseSubnetList(const char *raw_sources, anetSubnet **subnets, int *count) {
+    if (!subnets || !count) return C_ERR;
+    *subnets = NULL;
+    *count = 0;
+
+    if (!raw_sources || raw_sources[0] == '\0') {
+        return C_OK;
+    }
+
+    /* First pass: count non-empty tokens */
+    char *sources_to_count = zstrdup(raw_sources);
+    char *token;
+    char *saveptr;
+    int sources_count = 0;
+
+    token = strtok_r(sources_to_count, " \t,", &saveptr);
+    while (token != NULL) {
+        if (strlen(token) > 0) {
+            sources_count++;
+        }
+        token = strtok_r(NULL, " \t,", &saveptr);
+    }
+    zfree(sources_to_count);
+
+    if (sources_count == 0) {
+        return C_OK;
+    }
+
+    anetSubnet *new_subnets = zmalloc(sizeof(anetSubnet) * sources_count);
+    char *sources_to_parse = zstrdup(raw_sources);
+
+    int source_index = 0;
+    int success = 1;
+    token = strtok_r(sources_to_parse, " \t,", &saveptr);
+    while (token != NULL) {
+        if (strlen(token) > 0) {
+            if (anetParseSubnet(NULL, token, &new_subnets[source_index++]) != ANET_OK) {
+                success = 0;
+                break;
+            }
+        }
+        token = strtok_r(NULL, " \t,", &saveptr);
+    }
+    zfree(sources_to_parse);
+
+    if (!success) {
+        zfree(new_subnets);
+        return C_ERR;
+    }
+
+    *subnets = new_subnets;
+    *count = sources_count;
+    return C_OK;
+}
+
+/* Re-evaluate connection priority for all currently connected clients when
+ * priority-subnets is updated dynamically at runtime via CONFIG SET.
+ *
+ * 1. Immediate dynamic reclassification: Existing clients connecting before a
+ *    subnet update that match the new configuration are immediately promoted
+ *    to priority status without requiring a reconnect. Similarly, clients that
+ *    no longer match are demoted to normal priority.
+ * 2. Strict counter reconciliation: Accurately recomputes
+ *    server.stat_num_active_priority_clients to reflect the exact
+ *    ground truth of active priority connections, preventing telemetry drift
+ *    or underflow/overflow desync across dynamic config changes.
+ * 3. Safe transport handling: Fake clients (c->conn == NULL) and non-IP
+ *    connections (such as UNIX domain sockets or unresolved peers) are safely
+ *    classified as normal (non-priority) connections. */
+static void reclassifyClientsPriority(void) {
+    if (!server.clients) return;
+
+    long long count = 0;
+    listIter li;
+    listNode *ln;
+    listRewind(server.clients, &li);
+
+    while ((ln = listNext(&li)) != NULL) {
+        client *c = listNodeValue(ln);
+        if (!c->conn) continue;
+
+        char ip[CONN_ADDR_STR_LEN];
+        int port = 0;
+        if (connAddrPeerName(c->conn, ip, sizeof(ip), &port) != C_OK) {
+            connSetPriority(c->conn, false);
+            continue;
+        }
+
+        bool is_prio = (server.priority_subnets_count > 0 &&
+                        anetMatchIpSubnet(ip, server.priority_subnets_array, server.priority_subnets_count));
+        connSetPriority(c->conn, is_prio);
+        if (is_prio) count++;
+    }
+
+    server.stat_num_active_priority_clients = count;
+}
+
+/* Validate priority-subnets configuration string.
+ * Returns C_OK if valid, C_ERR otherwise and sets *err if provided. */
+int validatePrioritySubnets(const char *subnets_str, const char **err) {
+    anetSubnet *subnets = NULL;
+    int count = 0;
+    if (parseSubnetList(subnets_str, &subnets, &count) != C_OK) {
+        if (err) *err = "Invalid IP address or CIDR subnet in priority-subnets";
+        return C_ERR;
+    }
+    if (subnets) zfree(subnets);
+    return C_OK;
+}
+
+/* Update compiled priority-subnets from configuration string and reclassify clients.
+ * Returns C_OK on success, C_ERR on parsing failure. */
+int updatePrioritySubnets(const char *subnets_str) {
+    anetSubnet *new_subnets = NULL;
+    int new_count = 0;
+    if (parseSubnetList(subnets_str, &new_subnets, &new_count) != C_OK) {
+        return C_ERR;
+    }
+    zfree(server.priority_subnets_array);
+    server.priority_subnets_array = new_subnets;
+    server.priority_subnets_count = new_count;
+    reclassifyClientsPriority();
+    return C_OK;
+}
+
+/* Admission Control:
+ * 1. Total clients can never exceed maxclients.
+ * 2. Normal clients are capped at max(0, maxclients - maxclients-reserved).
+ * 3. Priority clients originating from priority-subnets can take up to maxclients.
+ * 4. maxclients-reserved connection slots are guaranteed for priority clients.
+ */
+static bool hasMaxClientsLimitReached(bool is_prioritized) {
+    long long total_clients = (long long)listLength(server.clients) +
+                              (long long)getClusterConnectionsCount();
+    if (total_clients >= (long long)server.maxclients) {
+        return true;
+    }
+
+    if (is_prioritized) {
+        return false;
+    }
+
+    if (server.maxclients_reserved > 0 && server.priority_subnets_count > 0) {
+        long long normal_limit = 0;
+        if (server.maxclients > server.maxclients_reserved) {
+            normal_limit = (long long)server.maxclients - (long long)server.maxclients_reserved;
+        }
+        long long prioritized_clients = server.stat_num_active_priority_clients;
+        long long normal_clients = (total_clients > prioritized_clients) ? (total_clients - prioritized_clients) : 0;
+        return normal_clients >= normal_limit;
+    }
+
+    return false;
+}
+
 void acceptCommonHandler(connection *conn, struct ClientFlags flags, char *ip) {
     client *c;
-    UNUSED(ip);
 
     char addr[CONN_ADDR_STR_LEN] = {0};
     char laddr[CONN_ADDR_STR_LEN] = {0};
@@ -1906,7 +2074,9 @@ void acceptCommonHandler(connection *conn, struct ClientFlags flags, char *ip) {
      * Admission control will happen before a client is created and connAccept()
      * called, because we don't want to even start transport-level negotiation
      * if rejected. */
-    if (listLength(server.clients) + getClusterConnectionsCount() >= server.maxclients) {
+    bool is_prioritized = (server.priority_subnets_count > 0 && ip != NULL &&
+                           anetMatchIpSubnet(ip, server.priority_subnets_array, server.priority_subnets_count));
+    if (hasMaxClientsLimitReached(is_prioritized)) {
         char *err;
         if (server.cluster_enabled)
             err = "-ERR max number of clients + cluster "
@@ -1921,10 +2091,15 @@ void acceptCommonHandler(connection *conn, struct ClientFlags flags, char *ip) {
             /* Nothing to do, Just to avoid the warning... */
         }
         server.stat_rejected_conn++;
+        if (is_prioritized) {
+            server.stat_rejected_priority_conn++;
+        }
         connClose(conn);
         return;
     }
 
+    /* Set the priority of the connection */
+    connSetPriority(conn, is_prioritized);
     /* Create connection and client */
     if ((c = createClient(conn)) == NULL) {
         serverLog(LL_WARNING, "Error registering fd event for the new client connection: %s (addr=%s laddr=%s)",
@@ -2028,6 +2203,15 @@ void unlinkClient(client *c) {
             raxRemove(server.clients_index, (unsigned char *)&id, sizeof(id), NULL);
             listDelNode(server.clients, c->client_list_node);
             c->client_list_node = NULL;
+
+            /* Decrement active client counters. Fake clients (where c->conn is NULL)
+             * and unlinked clients (c->client_list_node is NULL) do not increment these
+             * counters on creation, so we only decrement here for linked, active connections. */
+            if (connIsPriority(c->conn)) {
+                if (server.stat_num_active_priority_clients > 0) {
+                    server.stat_num_active_priority_clients--;
+                }
+            }
         }
         removeClientFromPendingCommandsBatch(c);
 

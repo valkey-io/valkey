@@ -916,7 +916,7 @@ void afterErrorReply(client *c, const char *s, size_t len, int flags) {
             err_prefix = ERRORSTATS_OVERFLOW_ERR;
             prefix_len = strlen(ERRORSTATS_OVERFLOW_ERR);
         }
-        incrementErrorCount(err_prefix, prefix_len);
+        incrementErrorCount(err_prefix, prefix_len, c);
     } else {
         /* stat_total_error_replies will not be updated, which means that
          * the cmd stats will not be updated as well, we still want this command

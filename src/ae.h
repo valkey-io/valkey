@@ -39,14 +39,18 @@
 #define AE_OK 0
 #define AE_ERR -1
 
-#define AE_NONE 0     /* No events registered. */
-#define AE_READABLE 1 /* Fire when descriptor is readable. */
-#define AE_WRITABLE 2 /* Fire when descriptor is writable. */
-#define AE_BARRIER 4  /* With WRITABLE, never fire the event if the      \
-                         READABLE event already fired in the same event  \
-                         loop iteration. Useful when you want to persist \
-                         things to disk before sending replies, and want \
-                         to do that in a group fashion. */
+#define AE_NONE 0                      /* No events registered. */
+#define AE_READABLE 1                  /* Fire when descriptor is readable. */
+#define AE_WRITABLE 2                  /* Fire when descriptor is writable. */
+#define AE_BARRIER 4                   /* With WRITABLE, never fire the event if the      \
+                                          READABLE event already fired in the same event  \
+                                          loop iteration. Useful when you want to persist \
+                                          things to disk before sending replies, and want \
+                                          to do that in a group fashion. */
+#define AE_HIGH_PRIORITY 8             /* Virtual routing mask flag: when set in aeCreateFileEvent(), \
+                                        * the event is registered on priority_apidata if available.   \
+                                        * Stripped before passing to the underlying OS multiplexer. */
+#define AE_QOS_PREEMPT_CHECK_MASK 0x03 /* Mask to check high-priority preemption once every 4 iterations */
 
 #define AE_FILE_EVENTS (1 << 0)
 #define AE_TIME_EVENTS (1 << 1)
@@ -80,6 +84,8 @@ typedef void aeEventFinalizerProc(struct aeEventLoop *eventLoop, void *clientDat
 typedef void aeBeforeSleepProc(struct aeEventLoop *eventLoop);
 typedef void aeAfterSleepProc(struct aeEventLoop *eventLoop, int numevents);
 typedef int aeCustomPollProc(struct aeEventLoop *eventLoop);
+/* Callback invoked with elapsed microseconds after high-priority events are processed. */
+typedef void aeQoSStatsProc(struct aeEventLoop *eventLoop, uint64_t duration_us);
 
 /* File event structure */
 typedef struct aeFileEvent {
@@ -123,6 +129,17 @@ typedef struct aeEventLoop {
     aeCustomPollProc *custompoll;
     pthread_mutex_t poll_mutex;
     int flags;
+
+    /* High-priority event processing:
+     * Sockets registered with AE_HIGH_PRIORITY are tracked in priority_apidata.
+     * priority_fd is registered into apidata to wake the main loop when high-priority traffic arrives.
+     * priority_fired holds fired events when draining high-priority channels. */
+    aeApiState *priority_apidata;                       /* Dedicated high-priority polling state */
+    int priority_fd;                                    /* File descriptor of high-priority polling backend (-1 if disabled) */
+    aeFiredEvent *priority_fired;                       /* Fired events buffer for high-priority polling */
+    monotime priority_events_last_poll;                 /* Timestamp when high-priority events were last drained */
+    uint64_t priority_events_preempt_check_interval_us; /* Preemptive check interval in microseconds (0 = disabled) */
+    aeQoSStatsProc *priority_events_stats_callback;     /* Callback invoked with elapsed microseconds after draining high-priority events */
 } aeEventLoop;
 
 /* Prototypes */
@@ -151,5 +168,10 @@ int aePoll(aeEventLoop *eventLoop, struct timeval *tvp);
 int aeGetSetSize(aeEventLoop *eventLoop);
 int aeResizeSetSize(aeEventLoop *eventLoop, int setsize);
 void aeSetDontWait(aeEventLoop *eventLoop, int noWait);
+
+/* High-priority event loop prototypes */
+int aeActuateQoSEventLoopIfSupported(aeEventLoop *eventLoop, uint64_t qosPreemptPollIntervalUs, aeQoSStatsProc *qosStatsCallback);
+int aeProcessQoSEventsPreemptively(aeEventLoop *eventLoop);
+void aeSetQoSPreemptCheckInterval(aeEventLoop *eventLoop, uint64_t interval_us);
 
 #endif

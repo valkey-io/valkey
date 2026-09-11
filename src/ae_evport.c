@@ -289,3 +289,8 @@ static int aeApiPoll(aeApiState *state, aeFiredEvent *fired, aeFileEvent *events
 static char *aeApiName(void) {
     return "evport";
 }
+
+static int aeApiGetPollFd(aeApiState *state) {
+    UNUSED(state);
+    return -1;
+}

@@ -365,8 +365,10 @@ migrateCachedSocket *migrateGetSocket(client *c, robj *host, robj *port, long ti
         dictDelete(server.migrate_cached_sockets, dictGetKey(de));
     }
 
-    /* Create the connection */
+    /* Create the connection and tag as high-priority so key/slot migration
+     * packets are not delayed by normal tenant commands. */
     conn = connCreate(connTypeOfCluster());
+    connSetPriority(conn, true);
     if (connBlockingConnect(conn, objectGetVal(host), atoi(objectGetVal(port)), timeout) != C_OK) {
         addReplyError(c, "-IOERR error or timeout connecting to the client");
         connClose(conn);

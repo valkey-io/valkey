@@ -19,3 +19,7 @@ void clusterSlotStatsAddNetworkBytesOutForUserClient(client *c);
 void clusterSlotStatsIncrNetworkBytesOutForReplication(long long len);
 void clusterSlotStatsDecrNetworkBytesOutForReplication(long long len);
 void clusterSlotStatsAddNetworkBytesOutForShardedPubSubInternalPropagation(client *c, int slot);
+
+/* keyspace hits/misses metric. */
+void clusterSlotStatsAddKeyspaceHits(int slot);
+void clusterSlotStatsAddKeyspaceMisses(int slot);

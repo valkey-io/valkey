@@ -119,11 +119,11 @@ struct _rio {
         } file;
         /* Connection object (used to read from socket) */
         struct {
-            connection *conn;   /* Connection */
-            off_t pos;          /* pos in buf that was returned */
-            sds buf;            /* buffered data */
-            size_t read_limit;  /* don't allow to buffer/read more than that */
-            size_t read_so_far; /* amount of data read from the rio (not buffered) */
+            connection *conn;     /* Connection */
+            off_t pos;            /* pos in buf that was returned */
+            sds buf;              /* buffered data */
+            uint64_t read_limit;  /* don't allow to buffer/read more than that */
+            uint64_t read_so_far; /* amount of data read from the rio (not buffered) */
         } conn;
         /* FD target (used to write to pipe). */
         struct {
@@ -254,7 +254,7 @@ static inline void rioClearErrors(rio *r) {
 
 void rioInitWithFile(rio *r, FILE *fp);
 void rioInitWithBuffer(rio *r, sds s);
-void rioInitWithConn(rio *r, connection *conn, size_t read_limit);
+void rioInitWithConn(rio *r, connection *conn, uint64_t read_limit);
 void rioInitWithFd(rio *r, int fd);
 void rioAttachStreamWriter(rio *r, struct streamWriter *writer);
 void rioDetachStreamWriter(rio *r);

@@ -509,6 +509,98 @@ void rpushxCommand(client *c) {
     pushGenericCommand(c, LIST_TAIL, 1);
 }
 
+/* Implements the generic list bounded-push operation for LPUSHBOUND/RPUSHBOUND.
+ *
+ * Pushes <element>... to the head (LPUSHBOUND) or tail (RPUSHBOUND) while
+ * enforcing a maximum list length <maxlen>. The overflow policy is either
+ * EVICT, dropping the oldest elements from the other end so the list keeps the
+ * newest <maxlen> elements, or REJECT, leaving the list untouched when the
+ * push would exceed the bound. Replies with the new list length, or in REJECT
+ * mode with the negative capacity shortage when the push is rejected. */
+void pushBoundGenericCommand(client *c, int where) {
+    robj *o;
+    long maxlen, llen;
+    long keep = 0; /* number of elements that will actually be pushed */
+    long trim = 0; /* number of oldest elements to drop (EVICT) */
+    int evict = 0;
+
+    if (c->argc < 5) {
+        addReplyErrorArity(c);
+        return;
+    }
+
+    /* The maxlen must be a positive integer */
+    if (getRangeLongFromObjectOrReply(c, c->argv[2], 1, LONG_MAX, &maxlen,
+                                      "maxlen must be a positive integer") != C_OK)
+        return;
+
+    /* The overflow policy is either EVICT or REJECT. */
+    if (!strcasecmp(objectGetVal(c->argv[3]), "evict")) {
+        evict = 1;
+    } else if (strcasecmp(objectGetVal(c->argv[3]), "reject")) {
+        addReplyErrorObject(c, shared.syntaxerr);
+        return;
+    }
+
+    o = lookupKeyWrite(c->db, c->argv[1]);
+    if (checkType(c, o, OBJ_LIST)) return;
+
+    int num = c->argc - 4;
+    llen = (o == NULL) ? 0 : (long)listTypeLength(o);
+
+    if (evict) {
+        /* EVICT: keep the newest maxlen elements, pushing only the newest maxlen
+         * of an oversized batch. Trim the oldest first so the list never exceeds
+         * maxlen while pushing (it may become empty, but the key is kept). */
+        keep = (num > maxlen) ? maxlen : num;
+        trim = (llen + keep > maxlen) ? (llen + keep - maxlen) : 0;
+        if (trim > 0) {
+            int evict_where = (where == LIST_HEAD) ? LIST_TAIL : LIST_HEAD;
+            long start = (evict_where == LIST_HEAD) ? 0 : ((long)listTypeLength(o) - trim);
+            listTypeDelRange(o, start, trim);
+            char *event = (evict_where == LIST_HEAD) ? "lpop" : "rpop";
+            notifyKeyspaceEvent(NOTIFY_LIST, event, c->argv[1], c->db->id);
+            server.dirty += trim;
+            if (listTypeLength(o) > 0) listTypeTryConversion(o, LIST_CONV_SHRINKING, NULL, NULL);
+        }
+    } else {
+        /* REJECT: refuse the whole push when it would exceed the bound. */
+        if (llen + num > maxlen) {
+            addReplyLongLong(c, maxlen - (llen + num));
+            return;
+        }
+        keep = num;
+    }
+
+    if (o == NULL) {
+        o = createListListpackObject();
+        dbAdd(c->db, c->argv[1], &o);
+    }
+
+    int first = c->argc - keep;
+    listTypeTryConversionAppend(o, c->argv, first, c->argc - 1, NULL, NULL);
+    for (int j = first; j < c->argc; j++) {
+        listTypePush(o, c->argv[j], where);
+        server.dirty++;
+    }
+
+    signalModifiedKey(c, c->db, c->argv[1]);
+    char *event = (where == LIST_HEAD) ? "lpush" : "rpush";
+    notifyKeyspaceEvent(NOTIFY_LIST, event, c->argv[1], c->db->id);
+
+    addReplyLongLong(c, listTypeLength(o));
+}
+
+/* LPUSHBOUND <key> <maxlen> (EVICT|REJECT) <element> [<element> ...] */
+void lpushboundCommand(client *c) {
+    pushBoundGenericCommand(c, LIST_HEAD);
+}
+
+/* RPUSHBOUND <key> <maxlen> (EVICT|REJECT) <element> [<element> ...] */
+void rpushboundCommand(client *c) {
+    pushBoundGenericCommand(c, LIST_TAIL);
+}
+
 /* LINSERT <key> (BEFORE|AFTER) <pivot> <element> */
 void linsertCommand(client *c) {
     int where;

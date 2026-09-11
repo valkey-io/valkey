@@ -11628,8 +11628,8 @@ struct COMMAND_ARG INCREX_expiration_Subargs[] = {
 
 /* INCREX increment argument table */
 struct COMMAND_ARG INCREX_increment_Subargs[] = {
-{MAKE_ARG("byint",ARG_TYPE_INTEGER,-1,"BYINT",NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("byfloat",ARG_TYPE_DOUBLE,-1,"BYFLOAT",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("integer",ARG_TYPE_INTEGER,-1,"BYINT",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("float",ARG_TYPE_DOUBLE,-1,"BYFLOAT",NULL,NULL,CMD_ARG_NONE,0,NULL)},
 };
 
 /* INCREX argument table */

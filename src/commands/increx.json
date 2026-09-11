@@ -108,12 +108,18 @@
         "reply_schema": {
             "oneOf": [
                 {
-                    "description": "The value of key after the increment",
-                    "type": "integer"
+                    "type": "array",
+                    "description": "The value of key after the integer increment and the increment value",
+                    "items": {
+                        "type": "integer"
+                    }
                 },
-                {
-                    "description": "The value of key after the increment",
-                    "type": "number"
+               {
+                    "type": "array",
+                    "description": "The value of key after the float increment and the increment value",
+                    "items": {
+                        "type": "number"
+                    }
                 },
                 {
                     "description": "If the key was not set due to the NX|XX option or when the expiration is in the past, a null value is returned.",

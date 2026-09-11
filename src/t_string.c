@@ -822,8 +822,6 @@ void increxCommand(client *c) {
         return;
     }
 
-    o = lookupKeyWrite(c->db, c->argv[1]);
-
     if (flags & ARGS_BYINT) {
         if (getLongLongFromObjectOrReply(c, incr_obj, &incr_ll, NULL) != C_OK) {
             return;
@@ -834,15 +832,8 @@ void increxCommand(client *c) {
         }
         use_float = 1;
     }
-
-    if ((flags & ARGS_SET_NX) && o != NULL) {
-        addReplyNull(c);
-        return;
-    }
-    if ((flags & ARGS_SET_XX) && o == NULL) {
-        addReplyNull(c);
-        return;
-    }
+    
+    o = lookupKeyWrite(c->db, c->argv[1]);
 
     if (o) {
         if (checkType(c, o, OBJ_STRING)) return;
@@ -853,11 +844,11 @@ void increxCommand(client *c) {
         }
     }
 
-    /* If the `milliseconds` have expired, then we don't need to set it into the
-     * database, and then wait for the active expire to delete it, it is wasteful.
-     * If the key already exists, delete it. */
-    if (expire && checkAlreadyExpired(milliseconds)) {
-        if (o) deleteExpiredKeyFromOverwriteAndPropagate(c, c->argv[1]);
+    if ((flags & ARGS_SET_NX) && o != NULL) {
+        addReplyNull(c);
+        return;
+    }
+    if ((flags & ARGS_SET_XX) && o == NULL) {
         addReplyNull(c);
         return;
     }
@@ -876,6 +867,22 @@ void increxCommand(client *c) {
             return;
         }
         value_ll += incr_ll;
+    }
+
+    /* If the `milliseconds` have expired, then we don't need to set it into the
+     * database, and then wait for the active expire to delete it, it is wasteful.
+     * If the key already exists, delete it. */
+    if (expire && checkAlreadyExpired(milliseconds)) {
+        if (o) deleteExpiredKeyFromOverwriteAndPropagate(c, c->argv[1]);
+        addReplyArrayLen(c, 2);
+        if (use_float) {
+            addReplyHumanLongDouble(c, value_ld);
+            addReplyHumanLongDouble(c, incr_ld);
+        } else {
+            addReplyLongLong(c, value_ll);
+            addReplyLongLong(c, incr_ll);
+        }
+        return;
     }
 
     if (!use_float && o && o->refcount == 1 && objectGetEncoding(o) == OBJ_ENCODING_INT &&
@@ -911,10 +918,13 @@ void increxCommand(client *c) {
         rewriteClientCommandVector(c, 4, shared.set, c->argv[1], new, shared.keepttl);
     }
 
+    addReplyArrayLen(c, 2);
     if (use_float) {
         addReplyHumanLongDouble(c, value_ld);
+        addReplyHumanLongDouble(c, incr_ld);
     } else {
         addReplyLongLong(c, value_ll);
+        addReplyLongLong(c, incr_ll);
     }
 }
 

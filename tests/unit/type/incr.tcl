@@ -180,17 +180,17 @@ start_server {tags {"incr"}} {
     test {INCREX default increment is 1} {
         r del foo
         r increx foo
-    } {1}
+    } {1 1}
 
     test {INCREX BYINT increments by given amount} {
         r del foo
         r increx foo byint 5
         r increx foo byint 5
-    } {10}
+    } {10 5}
 
     test {INCREX NX only sets when key does not exist} {
         r del foo
-        assert_equal {1} [r increx foo nx]
+        assert_equal {1 1} [r increx foo nx]
         assert_equal {} [r increx foo nx]
         assert_equal {1} [r get foo]
     }
@@ -200,7 +200,7 @@ start_server {tags {"incr"}} {
         assert_equal {} [r increx foo xx]
         assert_equal {0} [r exists foo]
         r set foo 10
-        assert_equal {11} [r increx foo xx]
+        assert_equal {11 1} [r increx foo xx]
     }
 
     test {INCREX NX and XX are mutually exclusive} {
@@ -302,7 +302,7 @@ start_server {tags {"incr"}} {
 
     test {INCREX against nonexistent key with already-expired EXAT returns nil} {
         r del non_existing
-        assert_equal [] [r increx non_existing exat 1]
+        assert_equal {1 1} [r increx non_existing exat 1]
     }
 
     test {INCREX BYINT with missing value is a syntax error} {

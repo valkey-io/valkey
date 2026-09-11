@@ -411,7 +411,7 @@ start_server {tags {"repl external:skip"}} {
         }
 
         test {INCREX NX no-op does not propagate} {
-            r -1 set foo bar
+            r -1 set foo 1
             set repl [attach_to_replication_stream]
             r -1 increx foo nx byint 1
             r -1 set marker 1

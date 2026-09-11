@@ -3340,7 +3340,10 @@ void aclCommand(client *c) {
         }
 
         long chars = (bits + 3) / 4; /* Round to number of characters to emit. */
-        getRandomHexChars(pass, chars);
+        if (!getSecureRandomHexChars(pass, chars)) {
+            addReplyError(c, "The crypto provider could not supply random bytes");
+            return;
+        }
         addReplyBulkCBuffer(c, pass, chars);
     } else if (!strcasecmp(sub, "log") && (c->argc == 2 || c->argc == 3)) {
         long count = 10; /* Number of entries to emit by default. */

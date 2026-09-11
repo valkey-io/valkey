@@ -214,6 +214,27 @@ start_cluster 1 0 {tags {external:skip cluster tls:skip}} {
 }
 
 start_cluster 1 0 {tags {external:skip cluster tls:skip}} {
+    test "Reject extension count without extension data flag" {
+        set base_port [srv 0 port]
+        set cluster_port [expr {$base_port + 10000}]
+        set sender_node_id [R 0 cluster myid]
+
+        set packet [create_cluster_meet_packet \
+            $sender_node_id $base_port $cluster_port 0 1 0]
+
+        set loglines [count_log_lines 0]
+        set sock [socket 127.0.0.1 $cluster_port]
+        fconfigure $sock -translation binary -buffering none -blocking 1
+        puts -nonewline $sock $packet
+        flush $sock
+        close $sock
+
+        wait_for_log_messages 0 \
+            [list "*Received invalid meet packet with 1 extensions but no extension data flag*"] \
+            $loglines 1000 10
+        assert_equal "PONG" [R 0 ping]
+    }
+
     test "Reject cluster bus extensions shorter than their type requires" {
         set base_port [srv 0 port]
         set cluster_port [expr {$base_port + 10000}]

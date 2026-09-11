@@ -3998,6 +3998,13 @@ int clusterIsValidPacket(clusterLink *link) {
             return 0;
         }
 
+        if (!(msg->mflags[0] & CLUSTERMSG_FLAG0_EXT_DATA) && extensions != 0) {
+            serverLog(LL_WARNING,
+                      "Received invalid %s packet with %d extensions but no extension data flag",
+                      clusterGetMessageTypeString(type), extensions);
+            return 0;
+        }
+
         /* If there is extension data, which doesn't have a fixed length,
          * loop through them and validate the length of it now. */
         if (msg->mflags[0] & CLUSTERMSG_FLAG0_EXT_DATA) {

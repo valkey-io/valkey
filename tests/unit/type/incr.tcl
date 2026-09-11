@@ -170,7 +170,7 @@ start_server {tags {"incr"}} {
         r get foo
     } {0}
 
-    test {No negative zero} {
+    test {INCREX no negative zero} {
         r del foo
         r increx foo byfloat [expr double(1)/41]
         r increx foo byfloat [expr double(-1)/41]

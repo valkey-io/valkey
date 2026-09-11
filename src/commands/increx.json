@@ -98,7 +98,7 @@
                         "token": "BYINT"
                     },
                     {
-                        "name": "byfloat",
+                        "name": "float",
                         "type": "double",
                         "token": "BYFLOAT"
                     }

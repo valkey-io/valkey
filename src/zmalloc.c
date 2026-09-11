@@ -37,6 +37,7 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <unistd.h>
+#include <errno.h>
 
 #ifdef __linux__
 #include <sys/mman.h>
@@ -82,12 +83,14 @@ void zlibc_free(void *ptr) {
 #define malloc(size) tc_malloc(size)
 #define calloc(count, size) tc_calloc(count, size)
 #define realloc(ptr, size) tc_realloc(ptr, size)
+#define posix_memalign(ptr,alignment,size) tc_posix_memalign(ptr,alignment,size)
 #define free(ptr) tc_free(ptr)
 /* Explicitly override malloc/free etc when using jemalloc. */
 #elif defined(USE_JEMALLOC)
 #define malloc(size) je_malloc(size)
 #define calloc(count, size) je_calloc(count, size)
 #define realloc(ptr, size) je_realloc(ptr, size)
+#define posix_memalign(ptr,alignment,size) je_posix_memalign(ptr,alignment,size)
 #define free(ptr) je_free(ptr)
 #endif
 
@@ -430,6 +433,79 @@ void *zrealloc_usable(void *ptr, size_t size, size_t *usable) {
     size_t usable_size = 0;
     ptr = ztryrealloc_usable(ptr, size, &usable_size);
     if (!ptr && size != 0) zmalloc_oom_handler(size);
+#ifdef HAVE_MALLOC_SIZE
+    ptr = extend_to_usable(ptr, usable_size);
+#endif
+    if (usable) *usable = usable_size;
+    return ptr;
+}
+
+static inline void *ztrymemalign_usable_internal(size_t alignment, size_t size, size_t *usable, int *ret) {
+    /* Possible overflow, return NULL, so that the caller can panic or handle a failed allocation. */
+    if (size >= SIZE_MAX/2) return NULL;
+    void *ptr = NULL;
+
+    int memalign_ret = posix_memalign(&ptr, alignment, MALLOC_MIN_SIZE(size)+PREFIX_SIZE);
+    if (ret) *ret = memalign_ret;
+    if (memalign_ret != 0) return NULL;
+
+#ifdef HAVE_MALLOC_SIZE
+    size = zmalloc_size(ptr);
+    update_zmalloc_stat_alloc(size);
+    if (usable) *usable = size;
+    return ptr;
+#else
+    *((size_t*)ptr) = size;
+    update_zmalloc_stat_alloc(size+PREFIX_SIZE);
+    if (usable) *usable = size;
+    return (char*)ptr+PREFIX_SIZE;
+#endif
+}
+
+static void zmemalign_default_inval(size_t alignment, size_t size) {
+    fprintf(stderr, "zmemalign: Invalid params trying to zmemalign %zu,%zu bytes\n",
+        alignment, size);
+    fflush(stderr);
+    abort();
+}
+
+static void (*zmemalign_inval_handler)(size_t, size_t) = zmemalign_default_inval;
+
+void *zmemalign(size_t alignment, size_t size) {
+    int ret = 0;
+    void *ptr = ztrymemalign_usable_internal(alignment, size, NULL, &ret);
+    if (!ptr) {
+        if (ret == ENOMEM) zmalloc_oom_handler(size);
+        else if (ret == EINVAL) zmemalign_inval_handler(alignment, size);
+    }
+    return ptr;
+
+}
+
+void *ztrymemalign(size_t alignment, size_t size) {
+    void *ptr = ztrymemalign_usable_internal(alignment, size, NULL, NULL);
+    return ptr;
+}
+
+void *zmemalign_usable(size_t alignment, size_t size, size_t *usable) {
+    int ret = 0;
+    size_t usable_size = 0;
+    void *ptr = ztrymemalign_usable_internal(alignment, size, &usable_size, &ret);
+    if (!ptr) {
+        if (ret == ENOMEM) zmalloc_oom_handler(size);
+        else if (ret == EINVAL) zmemalign_default_inval(alignment, size);
+        /* never touch */
+    }
+#ifdef HAVE_MALLOC_SIZE
+    ptr = extend_to_usable(ptr, usable_size);
+#endif
+    if (usable) *usable = usable_size;
+    return ptr;
+}
+
+void *ztrymemalign_usable(size_t alignment, size_t size, size_t *usable) {
+    size_t usable_size = 0;
+    void *ptr = ztrymemalign_usable_internal(alignment, size, &usable_size, NULL);
 #ifdef HAVE_MALLOC_SIZE
     ptr = extend_to_usable(ptr, usable_size);
 #endif

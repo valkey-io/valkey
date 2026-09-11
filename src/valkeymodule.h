@@ -1579,6 +1579,8 @@ VALKEYMODULE_API void *(*ValkeyModule_TryRealloc)(void *ptr, size_t bytes)VALKEY
 VALKEYMODULE_API void (*ValkeyModule_Free)(void *ptr) VALKEYMODULE_ATTR;
 VALKEYMODULE_API void *(*ValkeyModule_Calloc)(size_t nmemb, size_t size)VALKEYMODULE_ATTR;
 VALKEYMODULE_API void *(*ValkeyModule_TryCalloc)(size_t nmemb, size_t size)VALKEYMODULE_ATTR;
+VALKEYMODULE_API void *(*ValkeyModule_Memalign)(size_t alignment, size_t bytes)VALKEYMODULE_ATTR;
+VALKEYMODULE_API void *(*ValkeyModule_TryMemalign)(size_t alignment, size_t bytes)VALKEYMODULE_ATTR;
 VALKEYMODULE_API char *(*ValkeyModule_Strdup)(const char *str)VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_GetApi)(const char *, void *) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_CreateCommand)(ValkeyModuleCtx *ctx,
@@ -2349,6 +2351,8 @@ static int ValkeyModule_Init(ValkeyModuleCtx *ctx, const char *name, int ver, in
     VALKEYMODULE_GET_API(Free);
     VALKEYMODULE_GET_API(Realloc);
     VALKEYMODULE_GET_API(TryRealloc);
+    VALKEYMODULE_GET_API(Memalign);
+    VALKEYMODULE_GET_API(TryMemalign);
     VALKEYMODULE_GET_API(Strdup);
     VALKEYMODULE_GET_API(CreateCommand);
     VALKEYMODULE_GET_API(GetCommand);

@@ -1268,7 +1268,7 @@ struct rewriteConfigState *rewriteConfigReadOldFile(char *path) {
          * Append the line and populate the option -> line numbers map. */
         rewriteConfigAppendLine(state, line);
 
-        /* If this is a alias config, replace it with the original name. */
+        /* If this is an alias config, replace it with the original name. */
         standardConfig *s_conf = lookupConfig(argv[0]);
         if (s_conf && s_conf->flags & ALIAS_CONFIG) {
             sdsfree(argv[0]);

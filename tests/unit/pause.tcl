@@ -301,7 +301,7 @@ start_server {tags {"pause network"}} {
         assert_match $evicted_keys [s 0 evicted_keys]
 
         # The previous config set triggers a time event, but due to the pause,
-        # no eviction has been made. After the unpause, a eviction will happen.
+        # no eviction has been made. After the unpause, an eviction will happen.
         r client unpause
         wait_for_condition 1000 10 {
             [expr $evicted_keys + 1] eq [s 0 evicted_keys]

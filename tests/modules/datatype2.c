@@ -411,7 +411,7 @@ int MemUsage_RedisCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int a
 
     long long dbid;
     if ((ValkeyModule_StringToLongLong(argv[1], (long long *)&dbid) != VALKEYMODULE_OK)) {
-        return ValkeyModule_ReplyWithError(ctx, "ERR invalid value: must be a integer");
+        return ValkeyModule_ReplyWithError(ctx, "ERR invalid value: must be an integer");
     }
 
     if (dbid < 0 || dbid >= MAX_DB) {

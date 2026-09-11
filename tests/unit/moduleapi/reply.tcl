@@ -12,7 +12,7 @@ start_server {tags {"modules"}} {
         }
         r hello $proto
 
-        test "RESP$proto: RM_ReplyWithString: an string reply" {
+        test "RESP$proto: RM_ReplyWithString: a string reply" {
             # RedisString
             set string [r rw.string "Redis"]
             assert_equal "Redis" $string
@@ -21,7 +21,7 @@ start_server {tags {"modules"}} {
             assert_equal "A simple string" $string
         }
 
-        test "RESP$proto: RM_ReplyWithBigNumber: an string reply" {
+        test "RESP$proto: RM_ReplyWithBigNumber: a string reply" {
             assert_equal "123456778901234567890" [r rw.bignumber "123456778901234567890"]
         }
 
@@ -82,7 +82,7 @@ start_server {tags {"modules"}} {
             assert_equal {0 1 2 3 4} [r rw.array 5]
         }
 
-        test "RESP$proto: RM_ReplyWithMap: an map reply" {
+        test "RESP$proto: RM_ReplyWithMap: a map reply" {
             set res [r rw.map 3]
             if {$proto == 2} {
                 assert_equal {0 0 1 1.5 2 3} $res
@@ -91,11 +91,11 @@ start_server {tags {"modules"}} {
             }
         }
 
-        test "RESP$proto: RM_ReplyWithSet: an set reply" {
+        test "RESP$proto: RM_ReplyWithSet: a set reply" {
             assert_equal {0 1 2} [r rw.set 3]
         }
 
-        test "RESP$proto: RM_ReplyWithAttribute: an set reply" {
+        test "RESP$proto: RM_ReplyWithAttribute: a set reply" {
             if {$proto == 2} {
                 catch {[r rw.attribute 3]} e
                 assert_match "Attributes aren't supported by RESP 2" $e

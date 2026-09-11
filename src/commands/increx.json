@@ -93,7 +93,7 @@
                 "optional": true,
                 "arguments": [
                     {
-                        "name": "byint",
+                        "name": "integer",
                         "type": "integer",
                         "token": "BYINT"
                     },

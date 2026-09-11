@@ -27,8 +27,8 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef __SYSCHECK_H
-#define __SYSCHECK_H
+#ifndef SYSCHECK_H
+#define SYSCHECK_H
 
 #include "sds.h"
 #include "config.h"

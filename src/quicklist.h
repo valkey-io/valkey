@@ -30,8 +30,8 @@
 
 #include <stdint.h> // for UINTPTR_MAX
 
-#ifndef __QUICKLIST_H__
-#define __QUICKLIST_H__
+#ifndef QUICKLIST_H
+#define QUICKLIST_H
 
 /* Node, quicklist, and Iterator are the only data structures used currently. */
 
@@ -202,4 +202,4 @@ int quicklistSetPackedThreshold(size_t sz);
 #define AL_START_HEAD 0
 #define AL_START_TAIL 1
 
-#endif /* __QUICKLIST_H__ */
+#endif /* QUICKLIST_H */

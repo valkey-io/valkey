@@ -53,8 +53,8 @@
    email: m-mat @ math.sci.hiroshima-u.ac.jp (remove spaces)
 */
 
-#ifndef __MT19937_64_H
-#define __MT19937_64_H
+#ifndef MT19937_64_H
+#define MT19937_64_H
 
 /* initializes mt[NN] with a seed */
 void init_genrand64(unsigned long long seed);

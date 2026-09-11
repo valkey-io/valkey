@@ -1,5 +1,5 @@
-#ifndef __CLUSTER_MIGRATESLOTS_H
-#define __CLUSTER_MIGRATESLOTS_H
+#ifndef CLUSTER_MIGRATESLOTS_H
+#define CLUSTER_MIGRATESLOTS_H
 
 #include "server.h"
 #include "cluster.h"
@@ -40,4 +40,4 @@ void clusterCleanSlotImportsAfterLoad(void);
 int clusterRDBSaveSlotImports(rio *rdb, int rdbver);
 int clusterRDBLoadSlotImport(rio *rdb);
 
-#endif /* __CLUSTER_MIGRATESLOTS_H */
+#endif /* CLUSTER_MIGRATESLOTS_H */

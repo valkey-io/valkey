@@ -1,5 +1,5 @@
-#ifndef _MODULE_H_
-#define _MODULE_H_
+#ifndef MODULE_H
+#define MODULE_H
 
 /* This header file exposes a set of functions defined in module.c that are
  * not part of the module API, but are used by the core to interact with modules
@@ -250,4 +250,4 @@ void freeClientModuleData(client *c);
 int checkModuleAuthentication(client *c, robj *username, robj *password, robj **err);
 void moduleFireAuthenticationEvent(uint64_t client_id, const char *username, const char *module_name, int is_granted);
 
-#endif /* _MODULE_H_ */
+#endif /* MODULE_H */

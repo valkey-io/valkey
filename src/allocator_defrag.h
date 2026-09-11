@@ -1,5 +1,5 @@
-#ifndef __ALLOCATOR_DEFRAG_H
-#define __ALLOCATOR_DEFRAG_H
+#ifndef ALLOCATOR_DEFRAG_H
+#define ALLOCATOR_DEFRAG_H
 
 #if defined(USE_JEMALLOC)
 #include <jemalloc/jemalloc.h>
@@ -21,4 +21,4 @@ unsigned long allocatorDefragGetFragSmallbins(void);
 int allocatorShouldDefrag(void *ptr);
 float getAllocatorFragmentation(size_t *out_frag_bytes);
 
-#endif /* __ALLOCATOR_DEFRAG_H */
+#endif /* ALLOCATOR_DEFRAG_H */

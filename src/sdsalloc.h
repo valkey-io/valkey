@@ -35,8 +35,8 @@
  * the include of your alternate allocator if needed (not needed in order
  * to use the default libc allocator). */
 
-#ifndef __SDS_ALLOC_H__
-#define __SDS_ALLOC_H__
+#ifndef SDS_ALLOC_H
+#define SDS_ALLOC_H
 
 #include "zmalloc.h"
 #define s_malloc zmalloc

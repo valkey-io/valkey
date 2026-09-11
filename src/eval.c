@@ -102,7 +102,7 @@ struct evalCtx {
 void evalInit(void) {
     /* Initialize a dictionary we use to map SHAs to scripts.
      *
-     * Initialize a list we use for script evictions.
+     * Initialize a list we use for script LRU evictions.
      * Note that we duplicate the sha when adding to the lru list due to defrag,
      * and we need to free them respectively. */
     evalCtx.scripts = dictCreate(&shaScriptObjectDictType);
@@ -336,33 +336,43 @@ uint64_t evalGetCommandFlags(client *c, uint64_t cmd_flags) {
  *
  * This will delete the script from the scripting engine and delete the script
  * from server. */
-static void evalDeleteScript(client *c, sds sha) {
+static void evalDeleteScript(sds sha) {
     /* Delete the script from server. */
     dictEntry *de = dictUnlink(evalCtx.scripts, sha);
-    serverAssertWithInfo(c, NULL, de);
+    serverAssert(de);
     evalScript *es = dictGetVal(de);
     evalCtx.scripts_mem -= sdsAllocSize(sha) + getStringObjectSdsUsedMemory(es->body);
     dictFreeUnlinkedEntry(evalCtx.scripts, de);
 }
 
-/* Users who abuse EVAL will generate a new lua script on each call, which can
+/* Add a script to the LRU eviction list, evicting oldest scripts if necessary.
+ *
+ * Users who abuse EVAL will generate a new lua script on each call, which can
  * consume large amounts of memory over time. Since EVAL is mostly the one that
  * abuses the lua cache, and these won't have pipeline issues (scripts won't
- * disappear when EVALSHA needs it and cause failure), we implement script eviction
+ * disappear when EVALSHA needs it and cause failure), we implement script LRU eviction
  * only for these (not for one loaded with SCRIPT LOAD). Considering that we don't
  * have many scripts, then unlike keys, we don't need to worry about the memory
  * usage of keeping a true sorted LRU linked list.
  *
- * Returns the corresponding node added, which is used to save it in scriptHolder
+ * This function enforces a maximum count limit (LRU_LIST_LENGTH = 500) on cached
+ * scripts loaded via EVAL. When the limit is reached, the oldest (least recently
+ * used) scripts are evicted to make room for new ones.
+ *
+ * Note: Scripts loaded via SCRIPT LOAD are not added to this LRU list and are
+ * exempt from count-based eviction. However, they are still subject to memory-based
+ * eviction via performScriptsEvictions() when maxmemory-scripts is configured.
+ *
+ * Returns the corresponding node added, which is used to save it in evalScript
  * and use it for quick removal and re-insertion into an LRU list each time the
  * script is used. */
 #define LRU_LIST_LENGTH 500
-static listNode *scriptsLRUAdd(client *c, sds sha) {
+static listNode *scriptsLRUAdd(sds sha) {
     /* Evict oldest. */
     while (listLength(evalCtx.scripts_lru_list) >= LRU_LIST_LENGTH) {
         listNode *ln = listFirst(evalCtx.scripts_lru_list);
         sds oldest = listNodeValue(ln);
-        evalDeleteScript(c, oldest);
+        evalDeleteScript(oldest);
         scriptsLRUDeleteNode(ln);
         server.stat_evictedscripts++;
     }
@@ -372,6 +382,119 @@ static listNode *scriptsLRUAdd(client *c, sds sha) {
     listAddNodeTail(evalCtx.scripts_lru_list, lru_sha);
     evalCtx.scripts_mem += sdsAllocSize(lru_sha);
     return listLast(evalCtx.scripts_lru_list);
+}
+
+/* Returns the actual scripts eviction limit based on current configuration or
+ * 0 if no limit. */
+size_t getScriptsMemoryLimit(void) {
+    size_t maxmemory_scripts_actual = SIZE_MAX;
+
+    if (server.maxmemory_scripts < 0 && server.maxmemory > 0) {
+        /* Handle percentage of maxmemory (negative value represents percentage). */
+        unsigned long long maxmemory_scripts_bytes =
+            (unsigned long long)((double)server.maxmemory * -(double)server.maxmemory_scripts / 100);
+        if (maxmemory_scripts_bytes <= SIZE_MAX) maxmemory_scripts_actual = maxmemory_scripts_bytes;
+    } else if (server.maxmemory_scripts > 0) {
+        /* Absolute value specified. */
+        maxmemory_scripts_actual = server.maxmemory_scripts;
+    } else {
+        /* maxmemory-scripts is 0, no memory limit enforced. */
+        return 0;
+    }
+
+    /* Don't allow a too small maxmemory-scripts to avoid cases where we can't
+     * cache any scripts at all due to bad configuration. Minimum is 128KB. */
+    if (maxmemory_scripts_actual < 1024 * 128) maxmemory_scripts_actual = 1024 * 128;
+
+    return maxmemory_scripts_actual;
+}
+
+static int isScriptsEvictionProcRunning = 0;
+
+/* Script eviction return codes. */
+#define SCRIPTS_EVICT_OK 0      /* Memory is OK or eviction completed successfully. */
+#define SCRIPTS_EVICT_RUNNING 1 /* Memory still over limit, time limit reached, need async continuation. */
+
+/* Perform memory-based scripts evictions when maxmemory-scripts limit is exceeded.
+ *
+ * This function is the core of the memory-based script eviction mechanism.
+ * Unlike the count-based LRU eviction in scriptsLRUAdd() which only affects
+ * EVAL scripts, this function can evict cached scripts (both EVAL and SCRIPT LOAD).
+ *
+ * Eviction strategy:
+ * - Scripts are selected randomly for eviction for efficiency.
+ * - To avoid blocking the server, eviction is time-limited. If time limit is reached
+ *   but memory is still over the limit, a time proc is scheduled to continue eviction
+ *   in the background.
+ *
+ * Returns:
+ * - SCRIPTS_EVICT_OK: Memory is within limits or no limit configured.
+ * - SCRIPTS_EVICT_RUNNING: Eviction still needed, async proc scheduled. */
+static int performScriptsEvictions(void) {
+    /* Nothing to evict if no scripts cached. */
+    if (dictSize(evalCtx.scripts) == 0) return SCRIPTS_EVICT_OK;
+
+    /* Check if memory-based eviction is enabled. */
+    size_t script_eviction_limit = getScriptsMemoryLimit();
+    if (script_eviction_limit == 0) return SCRIPTS_EVICT_OK;
+
+    int scripts_evicted = 0;
+    unsigned long scripts_eviction_time_limit_us = 500; /* 500 microseconds max per call */
+    monotime scripts_eviction_timer;
+    elapsedStart(&scripts_eviction_timer);
+
+    /* Evict scripts until memory usage is under the limit. */
+    while (evalScriptsMemory() > script_eviction_limit) {
+        /* Randomly select a script to evict (not strictly LRU for performance). */
+        dictEntry *de = dictGetRandomKey(evalCtx.scripts);
+        if (de == NULL) return SCRIPTS_EVICT_OK;
+
+        sds sha = dictGetKey(de);
+        evalScript *es = dictGetVal(de);
+        if (es->node) {
+            listDelNode(evalCtx.scripts_lru_list, es->node);
+            es->node = NULL;
+        }
+        evalDeleteScript(sha);
+        server.stat_evictedscripts++;
+        scripts_evicted++;
+
+        if (scripts_evicted % 16 == 0) {
+            /* After some time, exit the loop early. We don't want to spend too much
+             * time here and block the server. */
+            if (elapsedUs(scripts_eviction_timer) > scripts_eviction_time_limit_us) {
+                if (evalScriptsMemory() > script_eviction_limit) {
+                    /* Still need to evict scripts, start the eviction timer proc. */
+                    startScriptsEvictionTimeProc();
+                    return SCRIPTS_EVICT_RUNNING;
+                } else {
+                    return SCRIPTS_EVICT_OK;
+                }
+            }
+        }
+    }
+
+    return SCRIPTS_EVICT_OK;
+}
+
+/* Time event proc for script eviction. */
+static long long scriptsEvictionTimeProc(struct aeEventLoop *eventLoop, long long id, void *clientData) {
+    UNUSED(eventLoop);
+    UNUSED(id);
+    UNUSED(clientData);
+
+    if (performScriptsEvictions() == SCRIPTS_EVICT_RUNNING) return 0; /* Keep evicting */
+
+    isScriptsEvictionProcRunning = 0;
+    return AE_NOMORE;
+}
+
+/* Start the scripts eviction time proc if not already running. */
+void startScriptsEvictionTimeProc(void) {
+    if (!isScriptsEvictionProcRunning) {
+        isScriptsEvictionProcRunning = 1;
+        aeCreateTimeEvent(server.el, 0, scriptsEvictionTimeProc, NULL, NULL);
+    }
 }
 
 static int evalRegisterNewScript(client *c, robj *body, char **sha) {
@@ -467,10 +590,14 @@ static int evalRegisterNewScript(client *c, robj *body, char **sha) {
     es->flags = script_flags;
     sds _sha = sdsnew(*sha);
     if (!is_script_load) {
-        /* Script eviction only applies to EVAL, not SCRIPT LOAD. */
-        es->node = scriptsLRUAdd(c, _sha);
+        /* Script LRU eviction only applies to EVAL, not SCRIPT LOAD. */
+        es->node = scriptsLRUAdd(_sha);
     }
     es->body = body;
+
+    /* Try evict scripts before actually adding the script. */
+    performScriptsEvictions();
+
     int retval = dictAdd(evalCtx.scripts, _sha, es);
     serverAssert(retval == DICT_OK);
     evalCtx.scripts_mem += sdsAllocSize(_sha) + getStringObjectSdsUsedMemory(body);

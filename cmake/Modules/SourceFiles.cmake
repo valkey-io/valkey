@@ -72,6 +72,7 @@ set(VALKEY_SERVER_SRCS
     ${CMAKE_SOURCE_DIR}/src/sparkline.c
     ${CMAKE_SOURCE_DIR}/src/valkey-check-rdb.c
     ${CMAKE_SOURCE_DIR}/src/valkey-check-aof.c
+    ${CMAKE_SOURCE_DIR}/src/valkey-check-acl.c
     ${CMAKE_SOURCE_DIR}/src/valkey_strtod.c
     ${CMAKE_SOURCE_DIR}/src/geo.c
     ${CMAKE_SOURCE_DIR}/src/lazyfree.c

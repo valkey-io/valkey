@@ -16,7 +16,7 @@ on:
     inputs:
       skipjobs:
         description: "jobs to skip (delete the ones you wanna keep, do not leave empty)"
-        default: "valgrind,sanitizer,tls,freebsd,macos,alpine,32bit,iothreads,ubuntu,rpm-distros,malloc,specific,fortify,reply-schema,arm,s390x,lttng"
+        default: "valgrind,sanitizer,tls,freebsd,macos,alpine,32bit,iothreads,ubuntu,rpm-distros,malloc,specific,fortify,reply-schema,arm,s390x,lttng,solo"
       skiptests:
         description: "tests to skip (delete the ones you wanna keep, do not leave empty)"
         default: "valkey,modules,sentinel,cluster,unittest,large-memory"
@@ -126,7 +126,7 @@ jobs:
         run: sudo apt-get install tcl8.6 tclx
       - name: test
         if: true && !contains(github.event.inputs.skiptests, 'valkey')
-        run: ./runtest ${{ github.event_name != 'pull_request' && '--accurate' || '' }} --failures-output test-failures/valkey.json --verbose --dump-logs ${{github.event.inputs.test_args}}
+        run: ./runtest ${{ github.event_name != 'pull_request' && '--accurate' || '' }} --failures-output test-failures/valkey.json --verbose --dump-logs --skip-solo ${{github.event.inputs.test_args}}
       - name: module api test
         if: true && !contains(github.event.inputs.skiptests, 'modules')
         run: CFLAGS='-Werror' ./runtest-moduleapi --failures-output test-failures/moduleapi.json --verbose --dump-logs ${{github.event.inputs.test_args}}
@@ -167,6 +167,61 @@ jobs:
         run: |
           sudo apt-get install tcl8.6 tclx
           ./runtest --verbose --tags compatible-redis --dump-logs --other-server-path tests/tmp/redis-7.0.15/src/redis-server
+      - name: Upload test failures
+        if: always()
+        uses: ./.github/actions/upload-test-failures
+        with:
+          job-name: ${{ github.job }}
+  test-solo:
+    # Runs the run_solo tests (defrag, fuzzer, and cluster resharding/failover2/
+    # replica-migration-slow) once, on jemalloc arm. These tests execute alone
+    # after the parallel phase drains; the rest of the matrix passes --skip-solo
+    # so they are not duplicated across every platform/config. The cluster solo
+    # tests also run once under --tls to cover the TLS-specific code paths
+    # (e.g. resharding dual-listener + MOVED-over-plaintext).
+    # Sanitizer, valgrind, and force-defrag jobs still run solo tests where the
+    # memory/UB checker or forced defrag adds coverage this job does not.
+    runs-on: ubuntu-24.04-arm
+    if: |
+      (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
+        (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
+        (github.event_name == 'pull_request' &&
+          (github.event.pull_request.base.ref != 'unstable' ||
+            contains(github.event.pull_request.labels.*.name, 'run-extra-tests')) &&
+          (github.event.action != 'labeled' ||
+            (github.event.pull_request.base.ref == 'unstable' && github.event.label.name == 'run-extra-tests'))
+        )) &&
+      !contains(github.event.inputs.skipjobs, 'solo')
+    timeout-minutes: 1440
+    steps:
+      - name: prep
+        if: github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call'
+        run: |
+          echo "GITHUB_REPOSITORY=${{inputs.use_repo || github.event.inputs.use_repo}}" >> $GITHUB_ENV
+          echo "GITHUB_HEAD_REF=${{inputs.use_git_ref || github.event.inputs.use_git_ref}}" >> $GITHUB_ENV
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
+          ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
+      - name: Install libbacktrace
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ianlancetaylor/libbacktrace
+          ref: b9e40069c0b47a722286b94eb5231f7f05c08713
+          path: libbacktrace
+      - run: cd libbacktrace && ./configure && make && sudo make install
+      - name: make
+        run: make BUILD_TLS=yes SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
+      - name: testprep
+        run: |
+          sudo apt-get install tcl8.6 tclx tcl-tls
+          ./utils/gen-test-certs.sh
+      - name: solo tests
+        if: true && !contains(github.event.inputs.skiptests, 'valkey')
+        run: ./runtest ${{ github.event_name != 'pull_request' && '--accurate' || '' }} --failures-output test-failures/valkey.json --verbose --dump-logs --single unit/memefficiency --single unit/fuzzer --single unit/cluster/resharding --single unit/cluster/failover2 --single unit/cluster/replica-migration-slow ${{github.event.inputs.test_args}}
+      - name: solo cluster tests - TLS
+        if: true && !contains(github.event.inputs.skiptests, 'valkey')
+        run: ./runtest ${{ github.event_name != 'pull_request' && '--accurate' || '' }} --failures-output test-failures/valkey-tls.json --verbose --dump-logs --tls --single unit/cluster/resharding --single unit/cluster/failover2 --single unit/cluster/replica-migration-slow ${{github.event.inputs.test_args}}
       - name: Upload test failures
         if: always()
         uses: ./.github/actions/upload-test-failures
@@ -214,7 +269,7 @@ jobs:
         run: sudo apt-get install tcl8.6 tclx
       - name: test
         if: true && !contains(github.event.inputs.skiptests, 'valkey')
-        run: ./runtest ${{ github.event_name != 'pull_request' && '--accurate' || '' }} --failures-output test-failures/valkey.json --verbose --dump-logs ${{github.event.inputs.test_args}}
+        run: ./runtest ${{ github.event_name != 'pull_request' && '--accurate' || '' }} --failures-output test-failures/valkey.json --verbose --dump-logs --skip-solo ${{github.event.inputs.test_args}}
       - name: module api test
         if: true && !contains(github.event.inputs.skiptests, 'modules')
         run: CFLAGS='-Werror' ./runtest-moduleapi --failures-output test-failures/moduleapi.json --verbose --dump-logs ${{github.event.inputs.test_args}}
@@ -322,7 +377,7 @@ jobs:
         run: apt-get install -y tcl8.6 tclx procps
       - name: test
         if: true && !contains(github.event.inputs.skiptests, 'valkey')
-        run: ./runtest ${{ github.event_name != 'pull_request' && '--accurate' || '' }} --failures-output test-failures/valkey.json --verbose --dump-logs ${{github.event.inputs.test_args}}
+        run: ./runtest ${{ github.event_name != 'pull_request' && '--accurate' || '' }} --failures-output test-failures/valkey.json --verbose --dump-logs --skip-solo ${{github.event.inputs.test_args}}
       - name: module api test
         if: true && !contains(github.event.inputs.skiptests, 'modules')
         run: CFLAGS='-Werror' ./runtest-moduleapi --failures-output test-failures/moduleapi.json --verbose --dump-logs ${{github.event.inputs.test_args}}
@@ -382,7 +437,7 @@ jobs:
         run: sudo apt-get install tcl8.6 tclx
       - name: test
         if: true && !contains(github.event.inputs.skiptests, 'valkey')
-        run: ./runtest ${{ github.event_name != 'pull_request' && '--accurate' || '' }} --failures-output test-failures/valkey.json --verbose --dump-logs ${{github.event.inputs.test_args}}
+        run: ./runtest ${{ github.event_name != 'pull_request' && '--accurate' || '' }} --failures-output test-failures/valkey.json --verbose --dump-logs --skip-solo ${{github.event.inputs.test_args}}
       - name: module api test
         if: true && !contains(github.event.inputs.skiptests, 'modules')
         run: CFLAGS='-Werror' ./runtest-moduleapi --failures-output test-failures/moduleapi.json --verbose --dump-logs ${{github.event.inputs.test_args}}
@@ -434,7 +489,7 @@ jobs:
         run: sudo apt-get install tcl8.6 tclx
       - name: test
         if: true && !contains(github.event.inputs.skiptests, 'valkey')
-        run: ./runtest ${{ github.event_name != 'pull_request' && '--accurate' || '' }} --failures-output test-failures/valkey.json --verbose --dump-logs ${{github.event.inputs.test_args}}
+        run: ./runtest ${{ github.event_name != 'pull_request' && '--accurate' || '' }} --failures-output test-failures/valkey.json --verbose --dump-logs --skip-solo ${{github.event.inputs.test_args}}
       - name: module api test
         if: true && !contains(github.event.inputs.skiptests, 'modules')
         run: CFLAGS='-Werror' ./runtest-moduleapi --failures-output test-failures/moduleapi.json --verbose --dump-logs ${{github.event.inputs.test_args}}
@@ -507,7 +562,7 @@ jobs:
         run: sudo apt-get install tcl8.6 tclx
       - name: test
         if: true && !contains(github.event.inputs.skiptests, 'valkey')
-        run: ./runtest ${{ github.event_name != 'pull_request' && '--accurate' || '' }} --failures-output test-failures/valkey.json --verbose --dump-logs ${{github.event.inputs.test_args}}
+        run: ./runtest ${{ github.event_name != 'pull_request' && '--accurate' || '' }} --failures-output test-failures/valkey.json --verbose --dump-logs --skip-solo ${{github.event.inputs.test_args}}
       - name: module api test
         if: true && !contains(github.event.inputs.skiptests, 'modules')
         run: |
@@ -574,7 +629,7 @@ jobs:
       - name: test
         if: true && !contains(github.event.inputs.skiptests, 'valkey')
         run: |
-          ./runtest ${{ github.event_name != 'pull_request' && '--accurate' || '' }} --failures-output test-failures/valkey.json --verbose --dump-logs --tls ${{github.event.inputs.test_args}}
+          ./runtest ${{ github.event_name != 'pull_request' && '--accurate' || '' }} --failures-output test-failures/valkey.json --verbose --dump-logs --skip-solo --tls ${{github.event.inputs.test_args}}
       - name: module api test
         if: true && !contains(github.event.inputs.skiptests, 'modules')
         run: |
@@ -631,7 +686,7 @@ jobs:
       - name: test
         if: true && !contains(github.event.inputs.skiptests, 'valkey')
         run: |
-          ./runtest ${{ github.event_name != 'pull_request' && '--accurate' || '' }} --failures-output test-failures/valkey.json --verbose --dump-logs ${{github.event.inputs.test_args}}
+          ./runtest ${{ github.event_name != 'pull_request' && '--accurate' || '' }} --failures-output test-failures/valkey.json --verbose --dump-logs --skip-solo ${{github.event.inputs.test_args}}
       - name: module api test
         if: true && !contains(github.event.inputs.skiptests, 'modules')
         run: |
@@ -1474,7 +1529,7 @@ jobs:
         run: sudo apt-get install tcl8.6 tclx
       - name: test
         if: true && !contains(github.event.inputs.skiptests, 'valkey')
-        run: ./runtest ${{ github.event_name != 'pull_request' && '--accurate' || '' }} --failures-output test-failures/valkey.json --verbose --dump-logs ${{github.event.inputs.test_args}}
+        run: ./runtest ${{ github.event_name != 'pull_request' && '--accurate' || '' }} --failures-output test-failures/valkey.json --verbose --dump-logs --skip-solo ${{github.event.inputs.test_args}}
       - name: module api test
         if: true && !contains(github.event.inputs.skiptests, 'modules')
         run: CFLAGS='-Werror' ./runtest-moduleapi --failures-output test-failures/moduleapi.json --verbose --dump-logs ${{github.event.inputs.test_args}}
@@ -1551,7 +1606,7 @@ jobs:
         run: dnf -y install tcl tcltls
       - name: test
         if: true && !contains(github.event.inputs.skiptests, 'valkey')
-        run: ./runtest ${{ github.event_name != 'pull_request' && '--accurate' || '' }} --failures-output test-failures/valkey.json --verbose --dump-logs ${{github.event.inputs.test_args}}
+        run: ./runtest ${{ github.event_name != 'pull_request' && '--accurate' || '' }} --failures-output test-failures/valkey.json --verbose --dump-logs --skip-solo ${{github.event.inputs.test_args}}
       - name: module api test
         if: true && !contains(github.event.inputs.skiptests, 'modules')
         run: CFLAGS='-Werror' ./runtest-moduleapi --failures-output test-failures/moduleapi.json --verbose --dump-logs ${{github.event.inputs.test_args}}
@@ -1631,7 +1686,7 @@ jobs:
       - name: test
         if: true && !contains(github.event.inputs.skiptests, 'valkey')
         run: |
-          ./runtest ${{ github.event_name != 'pull_request' && '--accurate' || '' }} --failures-output test-failures/valkey.json --verbose --dump-logs --tls-module ${{github.event.inputs.test_args}}
+          ./runtest ${{ github.event_name != 'pull_request' && '--accurate' || '' }} --failures-output test-failures/valkey.json --verbose --dump-logs --skip-solo --tls-module ${{github.event.inputs.test_args}}
       - name: module api test
         if: true && !contains(github.event.inputs.skiptests, 'modules')
         run: |
@@ -1708,7 +1763,7 @@ jobs:
       - name: test
         if: true && !contains(github.event.inputs.skiptests, 'valkey')
         run: |
-          ./runtest --accurate --failures-output test-failures/valkey.json --verbose --dump-logs ${{github.event.inputs.test_args}}
+          ./runtest --accurate --failures-output test-failures/valkey.json --verbose --dump-logs --skip-solo ${{github.event.inputs.test_args}}
       - name: module api test
         if: true && !contains(github.event.inputs.skiptests, 'modules')
         run: |
@@ -1974,7 +2029,7 @@ jobs:
         run: apk add tcl procps tclx
       - name: test
         if: true && !contains(github.event.inputs.skiptests, 'valkey')
-        run: ./runtest ${{ github.event_name != 'pull_request' && '--accurate' || '' }} --failures-output test-failures/valkey.json --verbose --dump-logs ${{github.event.inputs.test_args}}
+        run: ./runtest ${{ github.event_name != 'pull_request' && '--accurate' || '' }} --failures-output test-failures/valkey.json --verbose --dump-logs --skip-solo ${{github.event.inputs.test_args}}
       - name: module api test
         if: true && !contains(github.event.inputs.skiptests, 'modules')
         run: CFLAGS='-Werror' ./runtest-moduleapi --failures-output test-failures/moduleapi.json --verbose --dump-logs ${{github.event.inputs.test_args}}
@@ -2029,7 +2084,7 @@ jobs:
         run: apk add tcl procps tclx
       - name: test
         if: true && !contains(github.event.inputs.skiptests, 'valkey')
-        run: ./runtest ${{ github.event_name != 'pull_request' && '--accurate' || '' }} --failures-output test-failures/valkey.json --verbose --dump-logs ${{github.event.inputs.test_args}}
+        run: ./runtest ${{ github.event_name != 'pull_request' && '--accurate' || '' }} --failures-output test-failures/valkey.json --verbose --dump-logs --skip-solo ${{github.event.inputs.test_args}}
       - name: module api test
         if: true && !contains(github.event.inputs.skiptests, 'modules')
         run: CFLAGS='-Werror' ./runtest-moduleapi --failures-output test-failures/moduleapi.json --verbose --dump-logs ${{github.event.inputs.test_args}}
@@ -2100,7 +2155,7 @@ jobs:
 
               case "${SKIPTESTS:-}" in
                 *valkey*) ;;
-                *) ./runtest ${RUN_ACCURATE:-} --failures-output test-failures/valkey.json --verbose --dump-logs ${TEST_ARGS:-} ;;
+                *) ./runtest ${RUN_ACCURATE:-} --failures-output test-failures/valkey.json --verbose --dump-logs --skip-solo ${TEST_ARGS:-} ;;
               esac
 
               case "${SKIPTESTS:-}" in
@@ -2190,6 +2245,7 @@ jobs:
       actions: write
     needs:
       - test-ubuntu-jemalloc
+      - test-solo
       - test-ubuntu-arm
       - test-ubuntu-jemalloc-fortify
       - test-ubuntu-libc-malloc
@@ -2373,6 +2429,7 @@ jobs:
     if: always() && github.event_name == 'schedule' && github.repository == 'valkey-io/valkey'
     needs:
       - test-ubuntu-jemalloc
+      - test-solo
       - test-ubuntu-arm
       - test-s390x
       - test-ubuntu-jemalloc-fortify

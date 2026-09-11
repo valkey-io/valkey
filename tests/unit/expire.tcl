@@ -67,7 +67,7 @@ start_server {tags {"expire"}} {
         list [r ttl x] [r persist x] [r ttl x] [r get x]
     } {50 1 -1 foo}
 
-    test {PERSIST returns 0 against non existing or non volatile keys} {
+    test {PERSIST returns 0 against nonexistent or non volatile keys} {
         r set x foo
         list [r persist foo] [r persist nokeyatall]
     } {0 0}
@@ -610,7 +610,7 @@ start_server {tags {"expire"}} {
             }
         }
 
-        test {expired key which is created in writeable replicas should be deleted by active expiry} {
+        test {expired key which is created in writable replicas should be deleted by active expiry} {
             $primary flushall
             $replica config set replica-read-only no
             foreach {yes_or_no} {yes no} {
@@ -791,7 +791,7 @@ start_server {tags {"expire"}} {
         assert_equal [r TTL foo] -2
     } {}
 
-    test {EXPIRE with negative expiry on a non-valitale key} {
+    test {EXPIRE with negative expiry on a non-volatile key} {
         r SET foo bar
         assert_equal [r EXPIRE foo -10 LT] 1
         assert_equal [r TTL foo] -2
@@ -976,6 +976,49 @@ start_server {tags {"expire"}} {
             fail "key wasn't expired"
         }
     }
+
+    test {RESET clears the import-source flag} {
+        r config set import-mode yes
+        assert_equal [r client import-source on] {OK}
+        assert_match {*flags=I*} [r client list id [r client id]]
+
+        # RESET must make the connection resemble a fresh client, which
+        # includes dropping the import-source privilege.
+        r reset
+        assert_match {*flags=N*} [r client list id [r client id]]
+
+        r config set import-mode no
+    } {OK} {needs:reset}
+
+    test {RESET drops import-source expiration semantics} {
+        r flushall
+        r config set import-mode yes
+
+        r set foo1 1 PX 1
+        after 10
+
+        # While import-source is on, the expired key is visible.
+        assert_equal [r client import-source on] {OK}
+        assert_match {*flags=I*} [r client list id [r client id]]
+        assert_equal [r ttl foo1] {0}
+        assert_equal [r get foo1] {1}
+
+        # After RESET the connection must lose import-source semantics, so the
+        # logically-expired key looks missing again, exactly like a fresh client.
+        r reset
+        assert_match {*flags=N*} [r client list id [r client id]]
+        assert_equal [r get foo1] {}
+        assert_equal [r ttl foo1] {-2}
+
+        r config set import-mode no
+
+        # Verify all keys have expired (cleanup, mirrors the import-source tests).
+        wait_for_condition 40 100 {
+            [r dbsize] eq 0
+        } else {
+            fail "Keys did not actively expire."
+        }
+    } {} {needs:reset}
 
     test {replicaKeysWithExpire memory leak verification and cleanup} {
         # This test verifies the memory leak issue and cleanup mechanism for replicaKeysWithExpire

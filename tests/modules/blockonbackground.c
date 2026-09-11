@@ -146,7 +146,7 @@ int HelloBlock_RedisCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int
      * callback, so this is just to show you the API. */
     ValkeyModule_SetDisconnectCallback(bc,HelloBlock_Disconnected);
 
-    /* Now that we setup a blocking client, we need to pass the control
+    /* Now that we have set up a blocking client, we need to pass the control
      * to the thread. However we need to pass arguments to the thread:
      * the delay and a reference to the blocked client handle. */
     void **targ = ValkeyModule_Alloc(sizeof(void*)*3);
@@ -188,7 +188,7 @@ int HelloBlockNoTracking_RedisCommand(ValkeyModuleCtx *ctx, ValkeyModuleString *
      * callback, so this is just to show you the API. */
     ValkeyModule_SetDisconnectCallback(bc,HelloBlock_Disconnected);
 
-    /* Now that we setup a blocking client, we need to pass the control
+    /* Now that we have set up a blocking client, we need to pass the control
      * to the thread. However we need to pass arguments to the thread:
      * the delay and a reference to the blocked client handle. */
     void **targ = ValkeyModule_Alloc(sizeof(void*)*3);
@@ -220,7 +220,7 @@ int HelloDoubleBlock_RedisCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **arg
     ValkeyModuleBlockedClient *bc = ValkeyModule_BlockClient(ctx,HelloBlock_Reply,HelloBlock_Timeout,HelloBlock_FreeData,0);
     blockClientPrivdataInit(bc);
 
-    /* Now that we setup a blocking client, we need to pass the control
+    /* Now that we have set up a blocking client, we need to pass the control
      * to the thread. However we need to pass arguments to the thread:
      * the delay and a reference to the blocked client handle. */
     void **targ = ValkeyModule_Alloc(sizeof(void*)*2);

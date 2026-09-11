@@ -166,7 +166,7 @@ start_server {tags {"tracking network logreqres:skip"}} {
     test {Tracking gets notification of lazy expired keys} {
         r CLIENT TRACKING off
         r CLIENT TRACKING on BCAST REDIRECT $redir_id NOLOOP
-        # Use multi-exec to expose a race where the key gets an two invalidations
+        # Use multi-exec to expose a race where the key gets two invalidations
         # in the same event loop, once by the client so filtered by NOLOOP, and
         # the second one by the lazy expire
         r MULTI
@@ -265,7 +265,7 @@ start_server {tags {"tracking network logreqres:skip"}} {
         assert_equal "PONG" [r ping]
     }
 
-    test {RESP3 Client gets tracking-redir-broken push message after cached key changed when rediretion client is terminated} {
+    test {RESP3 Client gets tracking-redir-broken push message after cached key changed when redirection client is terminated} {
         # make sure r is working resp 3
         r HELLO 3
         r CLIENT TRACKING on REDIRECT $redir_id

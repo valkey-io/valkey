@@ -6,8 +6,11 @@
 
 #include "cluster_migrateslots.h"
 #include "bio.h"
+#include "io_threads.h"
 #include "module.h"
 #include "functions.h"
+#include "sds.h"
+#include "server.h"
 
 #include <sys/wait.h>
 #include <fcntl.h>
@@ -88,6 +91,8 @@ typedef struct slotMigrationJob {
     /* State needed during client establishment */
     connection *conn; /* Connection to slot import source node. */
     sds response_buf;
+    sds auth_user;     /* User used for AUTH of the export job. */
+    sds auth_password; /* Password used for AUTH of the export job */
 } slotMigrationJob;
 
 static bool isSlotMigrationJobFinished(slotMigrationJob *job);
@@ -103,8 +108,11 @@ static void updateSlotMigrationJobState(slotMigrationJob *job,
 static void sendSyncSlotsMessage(slotMigrationJob *job, const char *subcommand);
 static void proceedWithSlotMigration(slotMigrationJob *job);
 static slotMigrationJob *createSlotExportJob(clusterNode *target_node,
-                                             list *slot_ranges);
+                                             list *slot_ranges,
+                                             sds auth_user,
+                                             sds auth_password);
 static bool isSlotExportPauseTimedOut(slotMigrationJob *job);
+static void freeSlotMigrationJobAuth(slotMigrationJob *job);
 static void resetSlotMigrationJob(slotMigrationJob *job);
 static void finishSlotMigrationJob(slotMigrationJob *job,
                                    slotMigrationJobState state,
@@ -390,16 +398,25 @@ int clusterRDBSaveSlotImports(rio *rdb, int rdbver) {
 
 /* Load a single slot import from the RDB. */
 int clusterRDBLoadSlotImport(rio *rdb) {
-    robj *job_name;
+    robj *job_name = NULL;
     list *slot_ranges = createSlotRangeList();
     uint64_t num_slot_ranges;
     if ((job_name = rdbLoadStringObject(rdb)) == NULL) goto err;
+    if (sdslen(objectGetVal(job_name)) != CLUSTER_NAMELEN) {
+        serverLog(LL_WARNING, "Invalid slot import job name length in RDB");
+        goto err;
+    }
     if ((num_slot_ranges = rdbLoadLen(rdb, NULL)) == RDB_LENERR) goto err;
     for (uint64_t i = 0; i < num_slot_ranges; i++) {
         uint64_t start_slot;
         uint64_t end_slot;
         if ((start_slot = rdbLoadLen(rdb, NULL)) == RDB_LENERR) goto err;
         if ((end_slot = rdbLoadLen(rdb, NULL)) == RDB_LENERR) goto err;
+        if (start_slot >= CLUSTER_SLOTS || end_slot >= CLUSTER_SLOTS || start_slot > end_slot) {
+            serverLog(LL_WARNING, "Invalid slot import range in RDB: start=%llu end=%llu",
+                      (unsigned long long)start_slot, (unsigned long long)end_slot);
+            goto err;
+        }
 
         slotRange *slot_range = zmalloc(sizeof(slotRange));
         slot_range->start_slot = start_slot;
@@ -721,6 +738,15 @@ void clusterCommandSyncSlotsFailoverGranted(client *c) {
 /* Sent by a target primary to a replica in its shard to inform that an ongoing
  * slot import is now finished. */
 void clusterCommandSyncSlotsFinish(client *c) {
+    /* FINISH is sent within the slot migration replication stream, so it must
+     * originate from a slot migration client (primary/AOF). Reject any other
+     * client to prevent driving the import state machine to a terminal state. */
+    if (!mustObeyClient(c)) {
+        addReplyError(c, "CLUSTER SYNCSLOTS FINISH should only be used "
+                         "by slot migration clients");
+        return;
+    }
+
     char *name = NULL;
     char *state = NULL;
     char *message = NULL;
@@ -1151,12 +1177,24 @@ bool clusterSlotFailoverGranted(int slot) {
  * source will attempt to migrate the slot ranges to the specified target
  * node. */
 void clusterCommandMigrateSlots(client *c) {
+    /* Redact credentials before validation so errors cannot expose them
+     * in the command log. */
+    for (int i = 2; i < c->argc; i++) {
+        if (!strcasecmp(objectGetVal(c->argv[i]), "auth")) {
+            if (i + 1 < c->argc) redactClientCommandArgument(c, i + 1);
+            if (i + 2 < c->argc) redactClientCommandArgument(c, i + 2);
+            i += 2;
+        }
+    }
+
     if (validateSlotMigrationCanStartOrReply(c) == C_ERR) return;
 
     int curr_index = 2;
     list *new_slot_migrations = listCreate();
     listSetFreeMethod(new_slot_migrations, freeSlotMigrationJob);
     list *slot_ranges = NULL;
+    sds auth_user = NULL;
+    sds auth_pass = NULL;
 
     while (curr_index < c->argc) {
         if (strcasecmp(objectGetVal(c->argv[curr_index]), "slotsrange")) {
@@ -1223,9 +1261,24 @@ void clusterCommandMigrateSlots(client *c) {
         }
         curr_index++;
 
-        slotMigrationJob *job = createSlotExportJob(target_node, slot_ranges);
+        if (curr_index < c->argc) {
+            sds token = objectGetVal(c->argv[curr_index]);
+            if (!strcasecmp(token, "auth")) {
+                if (curr_index + 2 >= c->argc) {
+                    addReplyErrorObject(c, shared.syntaxerr);
+                    goto cleanup;
+                }
+                auth_user = sdsdup(objectGetVal(c->argv[curr_index + 1]));
+                auth_pass = sdsdup(objectGetVal(c->argv[curr_index + 2]));
+                curr_index += 3;
+            }
+        }
+
+        slotMigrationJob *job = createSlotExportJob(target_node, slot_ranges, auth_user, auth_pass);
         listAddNodeHead(new_slot_migrations, job);
         slot_ranges = NULL;
+        auth_user = NULL;
+        auth_pass = NULL;
     }
 
     /* If we reach here, we have successfully parsed all arguments */
@@ -1253,6 +1306,11 @@ void clusterCommandMigrateSlots(client *c) {
 cleanup:
     if (slot_ranges) listRelease(slot_ranges);
     listRelease(new_slot_migrations);
+    sdsfree(auth_user);
+    if (auth_pass) {
+        memset(auth_pass, 0, sdslen(auth_pass));
+        sdsfree(auth_pass);
+    }
 }
 
 slotMigrationJob *clusterLookupMigrationJob(sds name) {
@@ -1378,9 +1436,24 @@ void slotMigrationJobReadAuthResponse(connection *conn) {
  * job's connection. */
 void slotMigrationJobSendAuth(slotMigrationJob *job) {
     serverAssert(job->type == SLOT_MIGRATION_EXPORT);
-    serverAssert(server.primary_auth);
+    serverAssert((job->auth_user == NULL) == (job->auth_password == NULL));
+    const char *user = NULL;
+    size_t user_len = 0;
+    sds pass;
+    if (job->auth_user) {
+        user = job->auth_user;
+        user_len = sdslen(job->auth_user);
+        pass = job->auth_password;
+    } else {
+        user = server.primary_user;
+        user_len = user ? strlen(server.primary_user) : 0;
+        pass = server.primary_auth;
+    }
+    serverAssert(pass);
 
-    sds err = replicationSendAuth(job->conn);
+    sds err = replicationSendAuth(job->conn, user, user_len, pass, sdslen(pass));
+    /* AUTH is never retried, so the job no longer needs its credentials. */
+    freeSlotMigrationJobAuth(job);
     if (err) {
         sds status_msg = sdscatfmt(sdsempty(), "Failed to send AUTH command to target node: %s", err);
         finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_FAILED, status_msg);
@@ -1586,6 +1659,15 @@ int childSnapshotForSyncSlot(rio *aof, slotMigrationJob *job) {
 void killSlotMigrationChild(void) {
     /* No slot migration child? return. */
     if (server.child_type != CHILD_TYPE_SLOT_MIGRATION) return;
+
+    /* If we already closed the exit pipe, the child is already exiting.
+     * Sending SIGUSR1 now might cause a race condition/deadlock in the child,
+     * especially when compiled with coverage. */
+    if (server.slot_migration_child_exit_pipe == -1) {
+        serverLog(LL_NOTICE, "Slot migration child %ld is already exiting, not killing.", (long)server.child_pid);
+        return;
+    }
+
     serverLog(LL_NOTICE, "Killing running slot migration child: %ld", (long)server.child_pid);
 
     /* Because we are not using here waitpid (like we have in killAppendOnlyChild
@@ -1868,7 +1950,9 @@ size_t clusterGetTotalSlotExportBufferMemory(void) {
 
 /* Create a slot export job with the given target and slot ranges. */
 slotMigrationJob *createSlotExportJob(clusterNode *target_node,
-                                      list *slot_ranges) {
+                                      list *slot_ranges,
+                                      sds auth_user,
+                                      sds auth_password) {
     slotMigrationJob *job = zcalloc(sizeof(slotMigrationJob));
 
     job->ctime = server.unixtime;
@@ -1882,6 +1966,8 @@ slotMigrationJob *createSlotExportJob(clusterNode *target_node,
     memcpy(job->target_node_name, target_node->name, CLUSTER_NAMELEN);
     memcpy(job->source_node_name, server.cluster->myself->name, CLUSTER_NAMELEN);
     job->description = generateSlotMigrationJobDescription(job, target_node);
+    job->auth_user = auth_user;
+    job->auth_password = auth_password;
     return job;
 }
 
@@ -1890,6 +1976,14 @@ slotMigrationJob *createSlotExportJob(clusterNode *target_node,
  * success. If there is an error, fail the migration with the error message. */
 void slotMigrationJobReadEstablishResponse(connection *conn) {
     client *c = (client *)connGetPrivateData(conn);
+
+    /* Don't read while an IO thread may be concurrently writing on this
+     * connection (e.g. flushing the ESTABLISH command). Concurrent read and
+     * write on the same connection is not safe with TLS. Events are
+     * level-triggered, so this handler will fire again once the write is
+     * done. Matches the guard in readQueryFromClient(). */
+    if (clientHasPendingIO(c)) return;
+
     slotMigrationJob *job = c->slot_migration_job;
     if (c->flag.close_asap || !isSlotMigrationJobInProgress(job)) {
         return;
@@ -2019,7 +2113,7 @@ void proceedWithSlotMigration(slotMigrationJob *job) {
             if (!completed) return;
             serverLog(LL_NOTICE, "Slot migration %s connection established.",
                       job->description);
-            if (server.primary_auth) {
+            if (job->auth_password || server.primary_auth) {
                 updateSlotMigrationJobState(job, SLOT_EXPORT_SEND_AUTH);
             } else {
                 updateSlotMigrationJobState(job, SLOT_EXPORT_SEND_ESTABLISH);
@@ -2054,7 +2148,9 @@ void proceedWithSlotMigration(slotMigrationJob *job) {
              * resulting in premature flush of the output buffer and data
              * consistency issues. To prevent this, we defer snapshot until
              * there are no pending writes. */
-            if (hasActiveChildProcess() || job->client->flag.pending_write) {
+            if (hasActiveChildProcess() || job->client->flag.pending_write ||
+                job->client->io_write_state != CLIENT_IDLE ||
+                job->client->io_read_state != CLIENT_IDLE) {
                 run_with_period(5000) {
                     serverLog(LL_NOTICE,
                               "Slot migration %s waiting before snapshotting "
@@ -2062,7 +2158,9 @@ void proceedWithSlotMigration(slotMigrationJob *job) {
                               job->description,
                               hasActiveChildProcess()
                                   ? "active child process"
-                                  : "pending writes in output buffer");
+                                  : (job->client->flag.pending_write
+                                         ? "pending writes in output buffer"
+                                         : "pending IO operations"));
                 }
                 return;
             }
@@ -2151,7 +2249,18 @@ void proceedWithSlotMigration(slotMigrationJob *job) {
     }
 }
 
-/* Reset the client and connection information associated with the job, leaving
+/* Release job-owned credentials without retaining the password in migration history. */
+static void freeSlotMigrationJobAuth(slotMigrationJob *job) {
+    sdsfree(job->auth_user);
+    job->auth_user = NULL;
+    if (job->auth_password) {
+        memset(job->auth_password, 0, sdslen(job->auth_password));
+        sdsfree(job->auth_password);
+        job->auth_password = NULL;
+    }
+}
+
+/* Reset the client, connection and authentication information associated with the job, leaving
  * the migration related metadata. */
 void resetSlotMigrationJob(slotMigrationJob *job) {
     /* Only one of client or conn should be set. */
@@ -2167,6 +2276,7 @@ void resetSlotMigrationJob(slotMigrationJob *job) {
 
     sdsfree(job->response_buf);
     job->response_buf = NULL;
+    freeSlotMigrationJobAuth(job);
 }
 
 void freeSlotMigrationJob(void *o) {

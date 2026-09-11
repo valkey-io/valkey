@@ -233,7 +233,7 @@ start_server {tags {"introspection"}} {
         assert_not_equal [lsearch $commands "client|list"] -1
     }
 
-    test "COMMAND LIST FILTERBY ACLCAT against non existing category" {
+    test "COMMAND LIST FILTERBY ACLCAT against nonexistent category" {
         assert_equal {} [r command list filterby aclcat non_existing_category]
     }
 
@@ -271,7 +271,7 @@ start_server {tags {"introspection"}} {
         assert_equal {} [r command list filterby pattern non_exists*]
     }
 
-    test "COMMAND LIST FILTERBY MODULE against non existing module" {
+    test "COMMAND LIST FILTERBY MODULE against nonexistent module" {
         # This should be empty, the real one is in subcommands.tcl
         assert_equal {} [r command list filterby module non_existing_module]
     }

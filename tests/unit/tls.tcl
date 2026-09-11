@@ -2,6 +2,18 @@ start_server {tags {"tls"}} {
     if {$::tls} {
         package require tls
 
+        proc check_client_stuck {control_client client_port {min_omem 1}} {
+            set clients [$control_client CLIENT LIST]
+            foreach client [split $clients "\n"] {
+                if {[regexp "addr=127.0.0.1:$client_port" $client]} {
+                    if {[regexp {omem=([0-9]+)} $client -> omem]} {
+                        return [expr {$omem >= $min_omem}]
+                    }
+                }
+            }
+            return 0
+        }
+
         test {TLS: Not accepting non-TLS connections on a TLS port} {
             set s [valkey [srv 0 host] [srv 0 port]]
             catch {$s PING} e
@@ -10,28 +22,28 @@ start_server {tags {"tls"}} {
 
         test {TLS: Verify tls-auth-clients behaves as expected} {
             set s [valkey [srv 0 host] [srv 0 port]]
-            ::tls::import [$s channel]
+            ::tls::import [$s channel] -cafile $::tlsdir/ca.crt
             catch {$s PING} e
             assert_match {*error*} $e
 
             r CONFIG SET tls-auth-clients no
 
             set s [valkey [srv 0 host] [srv 0 port]]
-            ::tls::import [$s channel]
+            ::tls::import [$s channel] -cafile $::tlsdir/ca.crt
             catch {$s PING} e
             assert_match {PONG} $e
 
             r CONFIG SET tls-auth-clients optional
 
             set s [valkey [srv 0 host] [srv 0 port]]
-            ::tls::import [$s channel]
+            ::tls::import [$s channel] -cafile $::tlsdir/ca.crt
             catch {$s PING} e
             assert_match {PONG} $e
 
             r CONFIG SET tls-auth-clients yes
 
             set s [valkey [srv 0 host] [srv 0 port]]
-            ::tls::import [$s channel]
+            ::tls::import [$s channel] -cafile $::tlsdir/ca.crt
             catch {$s PING} e
             assert_match {*error*} $e
         }
@@ -115,6 +127,129 @@ start_server {tags {"tls"}} {
             }
         }
 
+        test {TLS: basic dual certificates support} {
+            # backup current certificates
+            set orig_server_crt [lindex [r config get tls-cert-file] 1]
+            set orig_server_key [lindex [r config get tls-key-file] 1]
+            set orig_server_alt_crt [lindex [r config get tls-alt-cert-file] 1]
+            set orig_server_alt_key [lindex [r config get tls-alt-key-file] 1]
+            set ca_file [lindex [r config get tls-ca-cert-file] 1]
+
+            set valkey_crt [format "%s/tests/tls/valkey.crt" [pwd]]
+            set valkey_key [format "%s/tests/tls/valkey.key" [pwd]]
+            set valkey_ec_crt [format "%s/tests/tls/valkey-ec.crt" [pwd]]
+            set valkey_ec_key [format "%s/tests/tls/valkey-ec.key" [pwd]]
+            try {
+                r CONFIG SET tls-cert-file $valkey_ec_crt tls-key-file $valkey_ec_key tls-alt-cert-file $valkey_crt tls-alt-key-file $valkey_key
+                set s [valkey_client]
+                assert_equal "PONG" [$s PING]
+                $s close
+                # also test connecting with openssl without ec ciphers support
+                set port [lindex [r config get tls-port] 1]
+                catch {exec openssl s_client -connect localhost:$port -CAfile $valkey_crt -sigalgs "rsa_pss_pss_sha256:rsa_pss_rsae_sha256" < /dev/null} out
+                assert_match {*Peer signature type: [rR][sS][aA][-_][pP][sS][sS]*} $out
+            } finally {
+                #cleanup
+                r CONFIG SET tls-cert-file $orig_server_crt tls-key-file $orig_server_key tls-alt-cert-file $orig_server_alt_crt tls-alt-key-file $orig_server_alt_key
+            }
+        }
+
+        test {TLS: alt cert and key files must be provided together} {
+            # backup current certificates
+            set orig_server_crt [lindex [r config get tls-cert-file] 1]
+            set orig_server_key [lindex [r config get tls-key-file] 1]
+            set orig_server_alt_crt [lindex [r config get tls-alt-cert-file] 1]
+            set orig_server_alt_key [lindex [r config get tls-alt-key-file] 1]
+
+            try {
+                r CONFIG SET tls-cert-file $orig_server_crt tls-key-file $orig_server_key tls-alt-cert-file "" tls-alt-key-file ""
+
+                catch {r CONFIG SET tls-alt-cert-file $orig_server_crt} e
+                assert_match {*related to argument 'tls-alt-cert-file'*} $e
+                catch {r CONFIG SET tls-alt-key-file $orig_server_key} e
+                assert_match {*related to argument 'tls-alt-key-file'*} $e
+            } finally {
+                #cleanup
+                r CONFIG SET tls-cert-file $orig_server_crt tls-key-file $orig_server_key tls-alt-cert-file $orig_server_alt_crt tls-alt-key-file $orig_server_alt_key
+            }
+        }
+
+        test {TLS: the same certificate twice not allowed} {
+            # backup current certificates
+            set orig_server_crt [lindex [r config get tls-cert-file] 1]
+            set orig_server_key [lindex [r config get tls-key-file] 1]
+            set orig_server_alt_crt [lindex [r config get tls-alt-cert-file] 1]
+            set orig_server_alt_key [lindex [r config get tls-alt-key-file] 1]
+
+            try {
+                catch {r CONFIG SET tls-alt-cert-file $orig_server_crt tls-alt-key-file $orig_server_key} e
+                assert_match {*Unable to update TLS configuration*} $e
+            } finally {
+                #cleanup
+                r CONFIG SET tls-cert-file $orig_server_crt tls-key-file $orig_server_key tls-alt-cert-file $orig_server_alt_crt tls-alt-key-file $orig_server_alt_key
+            }
+        }
+
+        test {TLS: Two certificates of the same type not allowed} {
+            # backup current certificates
+            set orig_server_crt [lindex [r config get tls-cert-file] 1]
+            set orig_server_key [lindex [r config get tls-key-file] 1]
+            set orig_server_alt_crt [lindex [r config get tls-alt-cert-file] 1]
+            set orig_server_alt_key [lindex [r config get tls-alt-key-file] 1]
+
+            set valkey_crt [format "%s/tests/tls/valkey.crt" [pwd]]
+            set valkey_key [format "%s/tests/tls/valkey.key" [pwd]]
+            set valkey_ec_crt [format "%s/tests/tls/valkey-ec.crt" [pwd]]
+            set valkey_ec_key [format "%s/tests/tls/valkey-ec.key" [pwd]]
+            set valkey_pw_crt [format "%s/tests/tls/valkey-pw.crt" [pwd]]
+            set valkey_pw_key [format "%s/tests/tls/valkey-pw.key" [pwd]]
+            set valkey_ec_pw_crt [format "%s/tests/tls/valkey-ec-pw.crt" [pwd]]
+            set valkey_ec_pw_key [format "%s/tests/tls/valkey-ec-pw.key" [pwd]]
+
+            try {
+                r CONFIG SET tls-cert-file $valkey_ec_crt tls-key-file $valkey_ec_key tls-alt-cert-file $valkey_crt tls-alt-key-file $valkey_key
+                set s [valkey_client]
+                assert_equal "PONG" [$s PING]
+                $s close
+                catch {r CONFIG SET tls-alt-cert-file $valkey_ec_pw_crt tls-alt-key-file $valkey_ec_pw_key tls-key-file-pass 1234} e
+                assert_match {*Unable to update TLS configuration*} $e
+                catch {r CONFIG SET tls-cert-file $valkey_pw_crt tls-key-file $valkey_pw_key tls-key-file-pass 1234} e
+                assert_match {*Unable to update TLS configuration*} $e
+            } finally {
+                #cleanup
+                r CONFIG SET tls-cert-file $orig_server_crt tls-key-file $orig_server_key tls-alt-cert-file $orig_server_alt_crt tls-alt-key-file $orig_server_alt_key tls-key-file-pass ""
+            }
+        }
+
+        test {TLS: Dual certificates with passphrases} {
+            # backup current certificates
+            set orig_server_crt [lindex [r config get tls-cert-file] 1]
+            set orig_server_key [lindex [r config get tls-key-file] 1]
+            set orig_server_alt_crt [lindex [r config get tls-alt-cert-file] 1]
+            set orig_server_alt_key [lindex [r config get tls-alt-key-file] 1]
+
+            set valkey_crt [format "%s/tests/tls/valkey.crt" [pwd]]
+            set valkey_key [format "%s/tests/tls/valkey.key" [pwd]]
+            set valkey_ec_crt [format "%s/tests/tls/valkey-ec.crt" [pwd]]
+            set valkey_ec_key [format "%s/tests/tls/valkey-ec.key" [pwd]]
+            set valkey_pw_crt [format "%s/tests/tls/valkey-pw.crt" [pwd]]
+            set valkey_pw_key [format "%s/tests/tls/valkey-pw.key" [pwd]]
+            set valkey_ec_pw_crt [format "%s/tests/tls/valkey-ec-pw.crt" [pwd]]
+            set valkey_ec_pw_key [format "%s/tests/tls/valkey-ec-pw.key" [pwd]]
+
+            try {
+                r CONFIG SET tls-cert-file $valkey_ec_pw_crt tls-key-file $valkey_ec_pw_key tls-alt-cert-file $valkey_crt tls-alt-key-file $valkey_key tls-key-file-pass asdf tls-alt-key-file-pass 1234
+                set s [valkey_client]
+                assert_equal "PONG" [$s PING]
+                $s close
+                r CONFIG SET tls-cert-file $valkey_ec_pw_crt tls-key-file $valkey_ec_pw_key tls-alt-cert-file $valkey_pw_crt tls-alt-key-file $valkey_pw_key
+                r CONFIG SET tls-cert-file $valkey_ec_crt tls-key-file $valkey_ec_key tls-alt-cert-file $valkey_pw_crt tls-alt-key-file $valkey_pw_key
+            } finally {
+                #cleanup
+                r CONFIG SET tls-cert-file $orig_server_crt tls-key-file $orig_server_key tls-alt-cert-file $orig_server_alt_crt tls-alt-key-file $orig_server_alt_key tls-key-file-pass "" tls-alt-key-file-pass ""
+            }
+        }
+
         test {TLS: switch between tcp and tls ports} {
             set srv_port [srv 0 port]
 
@@ -172,6 +307,25 @@ start_server {tags {"tls"}} {
             assert_equal "Client-only" [$s ACL WHOAMI]
 
             $s close
+        }
+
+        test {TLS: Certificate CN with an embedded NUL does not authenticate as the truncated user} {
+            r ACL SETUSER {Client-only} on allcommands allkeys
+            r CONFIG SET tls-auth-clients-user CN
+            r CONFIG RESETSTAT
+
+            # The CN is "Client-only\0attacker". Read as a C string it is "Client-only".
+            set s [valkey [srv 0 host] [srv 0 port]]
+            ::tls::import [$s channel] -cafile $::tlsdir/ca.crt \
+                -certfile $::tlsdir/client-nul-cn.crt -keyfile $::tlsdir/client-nul-cn.key
+            assert_equal "default" [$s ACL WHOAMI]
+            $s close
+
+            # The rejected identity reaches the ACL log.
+            assert_equal 1 [s acl_access_denied_tls_cert]
+
+            r ACL DELUSER {Client-only}
+            r CONFIG SET tls-auth-clients-user off
         }
 
         test {TLS: Auto-authenticate using tls-auth-clients-user (URI)} {
@@ -246,17 +400,26 @@ start_server {tags {"tls"}} {
             # Get current certificate files
             set orig_server_crt [lindex [r config get tls-cert-file] 1]
             set orig_server_key [lindex [r config get tls-key-file] 1]
+            set orig_server_alt_crt [lindex [r config get tls-alt-cert-file] 1]
+            set orig_server_alt_key [lindex [r config get tls-alt-key-file] 1]
+            set valkey_alt_crt [format "%s/tests/tls/valkey-ec.crt" [pwd]]
+            set valkey_alt_key [format "%s/tests/tls/valkey-ec.key" [pwd]]
+            set orig_server_key_pass [lindex [r config get tls-alt-key-file-pass] 1]
 
             # Create temporary certificate files (copies of current ones)
             set temp_crt "$orig_server_crt.temp"
             set temp_key "$orig_server_key.temp"
             file copy -force $orig_server_crt $temp_crt
             file copy -force $orig_server_key $temp_key
+            set temp_alt_crt "$valkey_alt_crt.temp"
+            set temp_alt_key "$valkey_alt_key.temp"
+            file copy -force $valkey_alt_crt $temp_alt_crt
+            file copy -force $valkey_alt_key $temp_alt_key
 
             # Ensure cleanup happens even if test fails
             try {
                 # Update server to use temporary certificate files
-                r CONFIG SET tls-cert-file $temp_crt tls-key-file $temp_key
+                r CONFIG SET tls-cert-file $temp_crt tls-key-file $temp_key tls-alt-cert-file $temp_alt_crt tls-alt-key-file $temp_alt_key tls-alt-key-file-pass "asdf"
 
                 # Enable auto-reload with 1 second interval for faster testing
                 r CONFIG SET tls-auto-reload-interval 1
@@ -269,7 +432,11 @@ start_server {tags {"tls"}} {
                 if {![regexp {tls_server_cert_serial:([^\r\n]+)} $info1 -> serial1]} {
                     fail "INFO tls missing tls_server_cert_serial"
                 }
+                if {![regexp {tls_server_alt_cert_serial:([^\r\n]+)} $info1 -> alt_serial1]} {
+                    fail "INFO tls missing tls_server_alt_cert_serial"
+                }
                 assert {$serial1 ne "none"}
+                assert {$alt_serial1 ne "none"}
 
                 # Wait for at least one auto-reload cycle to complete
                 after 1100
@@ -295,6 +462,29 @@ start_server {tags {"tls"}} {
                 assert {$serial2 ne "none"}
                 assert {$serial1 ne $serial2}
 
+                set valkey_alt_crt [format "%s/tests/tls/valkey-ec-pw.crt" [pwd]]
+                set valkey_alt_key [format "%s/tests/tls/valkey-ec-pw.key" [pwd]]
+                file copy -force $valkey_alt_crt $temp_alt_crt
+                file copy -force $valkey_alt_key $temp_alt_key
+
+                # Wait for another auto-reload cycle to complete
+                after 2100
+
+                # Wait for reload to actually complete by checking server logs
+                # Use generous timeout for slow/busy CI systems
+                wait_for_log_messages 0 {"*TLS materials reloaded successfully*"} 0 150 100
+
+                # Verify connection still works after reload
+                set s [valkey_client]
+                assert_equal "PONG" [$s PING]
+                $s close
+                set info3 [r info tls]
+                if {![regexp {tls_server_alt_cert_serial:([^\r\n]+)} $info3 -> alt_serial2]} {
+                    fail "INFO tls missing tls_server_alt_cert_serial"
+                }
+                assert {$alt_serial2 ne "none"}
+                assert {$alt_serial1 ne $alt_serial2}
+
                 # Wait again to ensure filesystem timestamp will be different
                 # for the second modification and next reload cycle can detect it
                 after 1100
@@ -302,6 +492,8 @@ start_server {tags {"tls"}} {
                 # Restore original certificate content to temporary files
                 file copy -force $orig_server_crt $temp_crt
                 file copy -force $orig_server_key $temp_key
+                file copy -force $valkey_alt_crt $temp_alt_crt
+                file copy -force $valkey_alt_key $temp_alt_key
 
                 # Wait for second reload to complete
                 # Use generous timeout for slow/busy CI systems
@@ -313,13 +505,13 @@ start_server {tags {"tls"}} {
                 $s close
             } finally {
                 # Restore original configuration
-                r CONFIG SET tls-cert-file $orig_server_crt tls-key-file $orig_server_key
+                r CONFIG SET tls-cert-file $orig_server_crt tls-key-file $orig_server_key tls-alt-cert-file $orig_server_alt_crt tls-alt-key-file $orig_server_alt_key tls-alt-key-file-pass $orig_server_key_pass
 
                 # Disable auto-reload
                 r CONFIG SET tls-auto-reload-interval 0
 
                 # Clean up temporary files
-                file delete -force $temp_crt $temp_key
+                file delete -force $temp_crt $temp_key $temp_alt_crt $temp_alt_key
             }
         }
 
@@ -463,6 +655,9 @@ start_server {tags {"tls"}} {
 
             # Not-yet-valid CA certificate directory
             test_tls_cert_rejection ca-dir $tlsdir/ca-notyet {*One or more loaded CA certificates are invalid*}
+
+            # Empty CA certificate directory
+            test_tls_cert_rejection ca-dir $tlsdir/ca-empty {*No CA certificates loaded from directory*}
         }
 
         proc test_tls_cert_rejection_runtime {r cert_type cert_path} {
@@ -509,6 +704,9 @@ start_server {tags {"tls"}} {
 
             # Not-yet-valid CA certificate directory
             test_tls_cert_rejection_runtime r ca-dir $tlsdir/ca-notyet
+
+            # Empty CA certificate directory
+            test_tls_cert_rejection_runtime r ca-dir $tlsdir/ca-empty
         }
     }
 }
@@ -801,6 +999,107 @@ start_server {tags {"tls"}} {
 
             $tls_client close
             $plain_client close
+        }
+
+        test {TLS: connTLSWritev stack overflow crash reproduction} {
+            # Regression test for a bug where a previously failed OpenSSL write for a
+            # small server response would trigger a stack overflow if immediately
+            # followed by any large server response.
+            # Prepare data on server
+            # We use a control client (TCP) to avoid TLS write errors on control connection
+            set plain_port [srv 0 pport]
+            set control_client [valkey [srv 0 host] $plain_port]
+            
+            $control_client SELECT 0
+            $control_client SET large_key [string repeat "A" 10485760] ;# 10MB
+            $control_client SET small_key [string repeat "B" 10240]    ;# 10KB
+            
+            # Connect raw TLS client
+            set fd [::tls::socket [srv 0 host] [srv 0 port]]
+            fconfigure $fd -translation binary -blocking 1
+            
+            # 1. Enable forced TLS write errors globally
+            assert_equal OK [$control_client DEBUG FORCE-TLS-WRITE-ERROR 1]
+            
+            # 2. Send Batch 1 on TLS client: 2x GET small_key
+            # They will be combined by server and fail to write, setting last_failed to ~20KB
+            set payload1 ""
+            append payload1 "*2\r\n\$3\r\nGET\r\n\$9\r\nsmall_key\r\n"
+            append payload1 "*2\r\n\$3\r\nGET\r\n\$9\r\nsmall_key\r\n"
+            puts -nonewline $fd $payload1
+            flush $fd
+            
+            # Get local port of raw client
+            set client_port [lindex [fconfigure $fd -sockname] 2]
+            
+            # Wait until the server has accumulated the replies for Batch 1
+            # and is stuck (omem > 0).
+            wait_for_condition 50 100 {
+                [check_client_stuck $control_client $client_port]
+            } else {
+                fail "Timeout waiting for client replies to stack up"
+            }
+            
+            # 3. Send Batch 2 on TLS client: GET large_key
+            # This is appended to the reply list
+            set payload2 ""
+            append payload2 "*2\r\n\$3\r\nGET\r\n\$9\r\nlarge_key\r\n"
+            puts -nonewline $fd $payload2
+            flush $fd
+            
+            # Wait until the server has processed Batch 2 and queued the large reply.
+            # Total expected omem is at least 10MB.
+            wait_for_condition 50 100 {
+                [check_client_stuck $control_client $client_port 10000000]
+            } else {
+                fail "Timeout waiting for large key reply to be queued"
+            }
+            
+            # 4. Disable forced TLS write errors globally
+            # This will trigger the server to resume writing to the TLS client.
+            # It will call connTLSWritev with iov[0].iov_len (10KB) < last_failed (20KB),
+            # and iov_bytes_len > 64KB (due to large_key), triggering the fallback path.
+            assert_equal OK [$control_client DEBUG FORCE-TLS-WRITE-ERROR 0]
+            
+            # 5. Read replies from TLS client.
+            # If the server crashed, this will fail with I/O error.
+            # We expect:
+            # - Reply 1: 10KB of 'B's (plus protocol helper)
+            # - Reply 2: 10KB of 'B's (plus protocol helper)
+            # - Reply 3: 10MB of 'A's (plus protocol helper)
+            # Total expected bytes:
+            # small_key reply: "$10240\r\n" (8 bytes) + 10240 bytes + "\r\n" (2 bytes) = 10250 bytes
+            # large_key reply: "$10485760\r\n" (11 bytes) + 10485760 bytes + "\r\n" (2 bytes) = 10485773 bytes
+            # Total = 10250 + 10250 + 10485773 = 10506273 bytes
+            # Let's just read the expected number of bytes.
+            
+            set expected_bytes [expr {10250 + 10250 + 10485773}]
+            set got 0
+            set data ""
+            while {$got < $expected_bytes} {
+                set chunk [read $fd [expr {$expected_bytes - $got}]]
+                if {[string length $chunk] == 0} {
+                    if {[eof $fd]} {
+                        error "EOF reached before reading all bytes"
+                    }
+                    # Keep trying if not EOF
+                    after 10
+                    continue
+                }
+                incr got [string length $chunk]
+                # We only keep the last 100 bytes to check integrity without using too much memory
+                append data $chunk
+                if {[string length $data] > 100} {
+                    set data [string range $data end-99 end]
+                }
+            }
+            
+            # Assert we got everything and the tail is correct (ends with 'A's + \r\n)
+            assert_equal $expected_bytes $got
+            assert_match "*[string repeat "A" 80]\r\n" $data
+            
+            close $fd
+            $control_client close
         }
     }
 }

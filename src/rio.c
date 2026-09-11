@@ -56,6 +56,7 @@
 #include "config.h"
 #include "server.h"
 #include "connhelpers.h"
+#include "compression_stream.h"
 
 /* ------------------------- Buffer I/O implementation ----------------------- */
 
@@ -87,16 +88,17 @@ static int rioBufferFlush(rio *r) {
 }
 
 static const rio rioBufferIO = {
-    rioBufferRead,
-    rioBufferWrite,
-    rioBufferTell,
-    rioBufferFlush,
-    NULL,       /* update_checksum */
-    0,          /* current checksum */
-    0,          /* flags */
-    0,          /* bytes read or written */
-    0,          /* read/write chunk size */
-    {{NULL, 0}} /* union for io-specific vars */
+    .read = rioBufferRead,
+    .write = rioBufferWrite,
+    .tell = rioBufferTell,
+    .flush = rioBufferFlush,
+    .read_some = NULL,
+    .update_cksum = NULL,
+    .cksum = 0,
+    .flags = 0,
+    .processed_bytes = 0,
+    .max_processing_chunk = 0,
+    .io = {{NULL, 0}},
 };
 
 void rioInitWithBuffer(rio *r, sds s) {
@@ -127,7 +129,7 @@ static size_t rioFileWrite(rio *r, const void *buf, size_t len) {
         if (r->io.file.buffered >= r->io.file.autosync) {
             fflush(r->io.file.fp);
 
-            size_t processed = r->processed_bytes + nwritten;
+            size_t processed = r->stream_processed_bytes + nwritten;
             serverAssert(processed % r->io.file.autosync == 0);
             serverAssert(r->io.file.buffered == r->io.file.autosync);
 
@@ -167,7 +169,14 @@ static size_t rioFileWrite(rio *r, const void *buf, size_t len) {
 
 /* Returns 1 or 0 for success/failure. */
 static size_t rioFileRead(rio *r, void *buf, size_t len) {
-    return fread(buf, len, 1, r->io.file.fp);
+    return fread(buf, 1, len, r->io.file.fp) == len;
+}
+
+/* Partial-read variant: returns bytes read (may be less than len), 0 on EOF, -1 on error. */
+static ssize_t rioFileReadSome(rio *r, void *buf, size_t len) {
+    size_t got = fread(buf, 1, len, r->io.file.fp);
+    if (got == 0 && ferror(r->io.file.fp)) return -1;
+    return (ssize_t)got;
 }
 
 /* Returns read/write position in file. */
@@ -182,16 +191,17 @@ static int rioFileFlush(rio *r) {
 }
 
 static const rio rioFileIO = {
-    rioFileRead,
-    rioFileWrite,
-    rioFileTell,
-    rioFileFlush,
-    NULL,       /* update_checksum */
-    0,          /* current checksum */
-    0,          /* flags */
-    0,          /* bytes read or written */
-    0,          /* read/write chunk size */
-    {{NULL, 0}} /* union for io-specific vars */
+    .read = rioFileRead,
+    .write = rioFileWrite,
+    .tell = rioFileTell,
+    .flush = rioFileFlush,
+    .read_some = rioFileReadSome,
+    .update_cksum = NULL,
+    .cksum = 0,
+    .flags = 0,
+    .processed_bytes = 0,
+    .max_processing_chunk = 0,
+    .io = {{NULL, 0}},
 };
 
 void rioInitWithFile(rio *r, FILE *fp) {
@@ -215,50 +225,87 @@ static size_t rioConnWrite(rio *r, const void *buf, size_t len) {
     return 0; /* Error, this target does not yet support writing. */
 }
 
-/* Returns 1 or 0 for success/failure. */
-static size_t rioConnRead(rio *r, void *buf, size_t len) {
+/* Fill the connection read buffer until at least min_available bytes are available.
+ * Returns 1 on success, 0 on EOF, -1 on error. */
+static int rioConnEnsureBuffered(rio *r, size_t min_available) {
     size_t avail = sdslen(r->io.conn.buf) - r->io.conn.pos;
 
     /* If the buffer is too small for the entire request: realloc. */
-    if (sdslen(r->io.conn.buf) + sdsavail(r->io.conn.buf) < len)
-        r->io.conn.buf = sdsMakeRoomFor(r->io.conn.buf, len - sdslen(r->io.conn.buf));
+    if (sdslen(r->io.conn.buf) + sdsavail(r->io.conn.buf) < min_available)
+        r->io.conn.buf = sdsMakeRoomFor(r->io.conn.buf, min_available - sdslen(r->io.conn.buf));
 
     /* If the remaining unused buffer is not large enough: memmove so that we
      * can read the rest. */
-    if (len > avail && sdsavail(r->io.conn.buf) < len - avail) {
+    if (min_available > avail && sdsavail(r->io.conn.buf) < min_available - avail) {
         sdsrange(r->io.conn.buf, r->io.conn.pos, -1);
         r->io.conn.pos = 0;
     }
 
-    /* Make sure the caller didn't request to read past the limit.
-     * If they didn't we'll buffer till the limit, if they did, we'll
-     * return an error. */
-    if (r->io.conn.read_limit != 0 && r->io.conn.read_limit < r->io.conn.read_so_far + len) {
-        errno = EOVERFLOW;
-        return 0;
-    }
-
-    /* If we don't already have all the data in the sds, read more */
-    while (len > sdslen(r->io.conn.buf) - r->io.conn.pos) {
-        size_t buffered = sdslen(r->io.conn.buf) - r->io.conn.pos;
-        size_t needs = len - buffered;
+    while (avail < min_available) {
+        size_t needs = min_available - avail;
         /* Read either what's missing, or PROTO_IOBUF_LEN, the bigger of
          * the two. */
         size_t toread = needs < PROTO_IOBUF_LEN ? PROTO_IOBUF_LEN : needs;
         if (toread > sdsavail(r->io.conn.buf)) toread = sdsavail(r->io.conn.buf);
-        if (r->io.conn.read_limit != 0 && r->io.conn.read_so_far + buffered + toread > r->io.conn.read_limit) {
-            toread = r->io.conn.read_limit - r->io.conn.read_so_far - buffered;
+        if (r->io.conn.read_limit != 0) {
+            size_t remaining =
+                r->io.conn.read_so_far >= r->io.conn.read_limit ? 0 : r->io.conn.read_limit - r->io.conn.read_so_far;
+            if (avail >= remaining) {
+                toread = 0;
+            } else if (toread > remaining - avail) {
+                toread = remaining - avail;
+            }
         }
+        if (toread == 0) return 0;
+
         int retval = connRead(r->io.conn.conn, (char *)r->io.conn.buf + sdslen(r->io.conn.buf), toread);
         if (retval == 0) {
             return 0;
         } else if (retval < 0) {
             if (connLastErrorRetryable(r->io.conn.conn)) continue;
             if (errno == EWOULDBLOCK) errno = ETIMEDOUT;
-            return 0;
+            return -1;
         }
         sdsIncrLen(r->io.conn.buf, retval);
+        avail = sdslen(r->io.conn.buf) - r->io.conn.pos;
     }
+
+    return 1;
+}
+
+/* Partial-read variant: returns bytes read, 0 on EOF, -1 on error. */
+static ssize_t rioConnReadSome(rio *r, void *buf, size_t len) {
+    size_t avail = sdslen(r->io.conn.buf) - r->io.conn.pos;
+
+    if (r->io.conn.read_limit != 0 && r->io.conn.read_so_far >= r->io.conn.read_limit) {
+        return 0;
+    }
+    if (avail == 0) {
+        int fill_rc = rioConnEnsureBuffered(r, 1);
+        if (fill_rc <= 0) return fill_rc;
+        avail = sdslen(r->io.conn.buf) - r->io.conn.pos;
+    }
+    if (r->io.conn.read_limit != 0) {
+        size_t remaining = r->io.conn.read_limit - r->io.conn.read_so_far;
+        if (len > remaining) len = remaining;
+    }
+
+    size_t got = avail < len ? avail : len;
+    memcpy(buf, (char *)r->io.conn.buf + r->io.conn.pos, got);
+    r->io.conn.read_so_far += got;
+    r->io.conn.pos += got;
+    return (ssize_t)got;
+}
+
+/* Returns 1 or 0 for success/failure. */
+static size_t rioConnRead(rio *r, void *buf, size_t len) {
+    if (r->io.conn.read_limit != 0 &&
+        (r->io.conn.read_so_far > r->io.conn.read_limit ||
+         len > r->io.conn.read_limit - r->io.conn.read_so_far)) {
+        errno = EOVERFLOW;
+        return 0;
+    }
+    if (rioConnEnsureBuffered(r, len) != 1) return 0;
 
     memcpy(buf, (char *)r->io.conn.buf + r->io.conn.pos, len);
     r->io.conn.read_so_far += len;
@@ -280,16 +327,17 @@ static int rioConnFlush(rio *r) {
 }
 
 static const rio rioConnIO = {
-    rioConnRead,
-    rioConnWrite,
-    rioConnTell,
-    rioConnFlush,
-    NULL,       /* update_checksum */
-    0,          /* current checksum */
-    0,          /* flags */
-    0,          /* bytes read or written */
-    0,          /* read/write chunk size */
-    {{NULL, 0}} /* union for io-specific vars */
+    .read = rioConnRead,
+    .write = rioConnWrite,
+    .tell = rioConnTell,
+    .flush = rioConnFlush,
+    .read_some = rioConnReadSome,
+    .update_cksum = NULL,
+    .cksum = 0,
+    .flags = 0,
+    .processed_bytes = 0,
+    .max_processing_chunk = 0,
+    .io = {{NULL, 0}},
 };
 
 /* Create an RIO that implements a buffered read from an fd
@@ -335,10 +383,10 @@ static size_t rioFdWrite(rio *r, const void *buf, size_t len) {
 
     /* For small writes, we rather keep the data in user-space buffer, and flush
      * it only when it grows. however for larger writes, we prefer to flush
-     * any pre-existing buffer, and write the new one directly without reallocs
+     * any preexisting buffer, and write the new one directly without reallocs
      * and memory copying. */
     if (len > PROTO_IOBUF_LEN) {
-        /* First, flush any pre-existing buffered data. */
+        /* First, flush any preexisting buffered data. */
         if (sdslen(r->io.fd.buf)) {
             if (rioFdWrite(r, NULL, 0) == 0) return 0;
         }
@@ -396,16 +444,17 @@ static int rioFdFlush(rio *r) {
 }
 
 static const rio rioFdIO = {
-    rioFdRead,
-    rioFdWrite,
-    rioFdTell,
-    rioFdFlush,
-    NULL,       /* update_checksum */
-    0,          /* current checksum */
-    0,          /* flags */
-    0,          /* bytes read or written */
-    0,          /* read/write chunk size */
-    {{NULL, 0}} /* union for io-specific vars */
+    .read = rioFdRead,
+    .write = rioFdWrite,
+    .tell = rioFdTell,
+    .flush = rioFdFlush,
+    .read_some = NULL,
+    .update_cksum = NULL,
+    .cksum = 0,
+    .flags = 0,
+    .processed_bytes = 0,
+    .max_processing_chunk = 0,
+    .io = {{NULL, 0}},
 };
 
 void rioInitWithFd(rio *r, int fd) {
@@ -429,6 +478,81 @@ void rioGenericUpdateChecksum(rio *r, const void *buf, size_t len) {
     r->cksum = crc64(r->cksum, buf, len);
 }
 
+void rioAttachStreamWriter(rio *r, streamWriter *writer) {
+    serverAssert(writer != NULL);
+    serverAssert(r->stream_writer == NULL);
+    serverAssert(r->stream_reader == NULL);
+    r->stream_writer = writer;
+}
+
+void rioDetachStreamWriter(rio *r) {
+    r->stream_writer = NULL;
+}
+
+void rioAttachStreamReader(rio *r, streamReader *reader) {
+    serverAssert(reader != NULL);
+    serverAssert(r->stream_reader == NULL);
+    serverAssert(r->stream_writer == NULL);
+    r->stream_reader = reader;
+}
+
+void rioDetachStreamReader(rio *r) {
+    r->stream_reader = NULL;
+}
+
+size_t rioWriteStream(rio *r, const void *buf, size_t len) {
+    serverAssert(r->stream_writer != NULL);
+    if (streamWriterWrite(r->stream_writer, buf, len) == C_OK) return 1;
+    r->flags |= RIO_FLAG_WRITE_ERROR;
+    return 0;
+}
+
+size_t rioReadStream(rio *r, void *buf, size_t len) {
+    serverAssert(r->stream_reader != NULL);
+
+    uint8_t *dst = (uint8_t *)buf;
+    size_t remaining = len;
+    while (remaining > 0) {
+        ssize_t nread = streamReaderRead(r->stream_reader, dst, remaining);
+        if (nread <= 0) {
+            r->flags |= RIO_FLAG_READ_ERROR;
+            return 0;
+        }
+        remaining -= (size_t)nread;
+        dst += nread;
+    }
+    return 1;
+}
+
+/* rioRead() is for callers that know an exact logical field size. A stream
+ * reader instead treats its input buffer size as a capacity, so its callback
+ * uses this upper-bound raw read. Read up to `len` bytes from the concrete
+ * backend without stream dispatch or logical checksum/accounting. Returns:
+ * - >0 bytes read
+ * -  0 on EOF
+ * - -1 on error (sticky read error is latched on the rio) */
+ssize_t rioReadRawPartial(rio *r, void *buf, size_t len) {
+    if (r->flags & (RIO_FLAG_READ_ERROR | RIO_FLAG_CLOSE_ASAP)) return -1;
+    if (len == 0) return 0;
+    if (!r->read_some) {
+        r->flags |= RIO_FLAG_READ_ERROR;
+        return -1;
+    }
+
+    size_t bytes_to_read =
+        (r->max_processing_chunk && r->max_processing_chunk < len) ? r->max_processing_chunk : len;
+    ssize_t got = r->read_some(r, buf, bytes_to_read);
+
+    if (got < 0) {
+        r->flags |= RIO_FLAG_READ_ERROR;
+        return -1;
+    }
+    if (got > 0) {
+        r->stream_processed_bytes += (size_t)got;
+    }
+    return got;
+}
+
 /* Set the file-based rio object to auto-fsync every 'bytes' file written.
  * By default this is set to zero that means no automatic file sync is
  * performed.
@@ -449,20 +573,6 @@ void rioSetAutoSync(rio *r, off_t bytes) {
  * This feature can reduce the cache footprint backed by the file. */
 void rioSetReclaimCache(rio *r, int enabled) {
     r->io.file.reclaim_cache = enabled;
-}
-
-/* Check the type of rio. */
-uint8_t rioCheckType(rio *r) {
-    if (r->read == rioFileRead) {
-        return RIO_TYPE_FILE;
-    } else if (r->read == rioBufferRead) {
-        return RIO_TYPE_BUFFER;
-    } else if (r->read == rioConnRead) {
-        return RIO_TYPE_CONN;
-    } else {
-        /* r->read == rioFdRead */
-        return RIO_TYPE_FD;
-    }
 }
 
 /* --------------------------- Higher level interface --------------------------
@@ -537,7 +647,7 @@ static size_t rioConnsetWrite(rio *r, const void *buf, size_t len) {
         len = sdslen(r->io.connset.buf);
     }
 
-    /* Write in little chunchs so that when there are big writes we
+    /* Write in little chunks so that when there are big writes we
      * parallelize while the kernel is sending data in background to
      * the TCP socket. */
     while (len) {
@@ -563,6 +673,9 @@ static size_t rioConnsetWrite(rio *r, const void *buf, size_t len) {
                     if (retval == -1 && errno == EWOULDBLOCK) errno = ETIMEDOUT;
                     break;
                 }
+                /* Count bytes actually written to this connection, including a
+                 * partial write before an error. */
+                r->io.connset.net_output_bytes += retval;
                 nwritten += retval;
             }
 
@@ -604,16 +717,17 @@ static int rioConnsetFlush(rio *r) {
 }
 
 static const rio rioConnsetIO = {
-    rioConnsetRead,
-    rioConnsetWrite,
-    rioConnsetTell,
-    rioConnsetFlush,
-    NULL,       /* update_checksum */
-    0,          /* current checksum */
-    0,          /* flags */
-    0,          /* bytes read or written */
-    0,          /* read/write chunk size */
-    {{NULL, 0}} /* union for io-specific vars */
+    .read = rioConnsetRead,
+    .write = rioConnsetWrite,
+    .tell = rioConnsetTell,
+    .flush = rioConnsetFlush,
+    .read_some = NULL,
+    .update_cksum = NULL,
+    .cksum = 0,
+    .flags = 0,
+    .processed_bytes = 0,
+    .max_processing_chunk = 0,
+    .io = {{NULL, 0}},
 };
 
 void rioInitWithConnset(rio *r, connection **conns, int numconns) {
@@ -627,6 +741,7 @@ void rioInitWithConnset(rio *r, connection **conns, int numconns) {
     r->io.connset.numconns = numconns;
     r->io.connset.pos = 0;
     r->io.connset.buf = sdsempty();
+    r->io.connset.net_output_bytes = 0;
 }
 
 /* release the rio stream. */
@@ -634,4 +749,18 @@ void rioFreeConnset(rio *r) {
     zfree(r->io.connset.conns);
     zfree(r->io.connset.state);
     sdsfree(r->io.connset.buf);
+}
+
+/* Check the type of rio. */
+uint8_t rioCheckType(rio *r) {
+    if (r->read == rioFileRead) {
+        return RIO_TYPE_FILE;
+    } else if (r->read == rioBufferRead) {
+        return RIO_TYPE_BUFFER;
+    } else if (r->read == rioConnRead) {
+        return RIO_TYPE_CONN;
+    } else {
+        /* r->read == rioFdRead */
+        return RIO_TYPE_FD;
+    }
 }

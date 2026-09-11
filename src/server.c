@@ -32,6 +32,8 @@
  * SPDX-License-Identifier: BSD-3-Clause
  */
 #include "server.h"
+#include "hotkeys.h"
+#include "ordered_index.h"
 #include "connection.h"
 #include "monotonic.h"
 #include "cluster.h"
@@ -51,9 +53,13 @@
 #include "sds.h"
 #include "module.h"
 #include "scripting_engine.h"
+#include "throttle.h"
+#include "throttle_repl.h"
 #include "util.h"
+#include "forkless.h"
 
 #include "eval.h"
+#include "bgiteration.h"
 
 #include "trace/trace_commands.h"
 
@@ -385,7 +391,7 @@ int dictSdsKeyCompare(const void *key1, const void *key2) {
     return memcmp(key1, key2, l1) == 0;
 }
 
-/* A case insensitive version used for the command lookup table and other
+/* A case-insensitive version used for the command lookup table and other
  * places where case insensitive non binary-safe comparison is needed. */
 int dictSdsKeyCaseCompare(const void *key1, const void *key2) {
     return strcasecmp(key1, key2) == 0;
@@ -466,7 +472,7 @@ int dictCStrKeyCompare(const void *key1, const void *key2) {
     return strcmp(key1, key2) == 0;
 }
 
-/* Dict case insensitive compare function for null terminated string */
+/* Dict case-insensitive compare function for null terminated string */
 int dictCStrKeyCaseCompare(const void *key1, const void *key2) {
     return strcasecmp(key1, key2) == 0;
 }
@@ -625,16 +631,50 @@ hashtableType setHashtableType = {
     .keyCompare = dictSdsKeyCompare,
     .entryDestructor = dictSdsDestructor};
 
-const void *zsetHashtableGetKey(const void *element) {
-    const zskiplistNode *node = element;
-    return zslGetNodeElement(node);
+/* Zset hashtable callbacks for fbtree backend.
+ * Stored entries are packed [8B score][element]. Lookup keys are plain sds
+ * marked via zsetMarkLookupKey. The callbacks extract the element portion
+ * based on whether the key is marked (plain sds) or unmarked (packed item). */
+
+#define FBTREE_SCORE_SIZE 8
+
+static const char *zsetExtractElement(const void *key, size_t *len) {
+    const_sds s = (const_sds)key;
+    if (zsetIsLookupKey(s)) {
+        /* Plain sds lookup key — use as-is.
+         * For SDS_TYPE_5 keys that were marked, sdslen is broken (type bits
+         * were overwritten), so read length directly from the flags byte. */
+        unsigned char flags = s[-1];
+        if ((flags & SDS_TYPE_MASK) == ZSET_LOOKUP_TYPE5_MARKER) {
+            *len = flags >> SDS_TYPE_BITS;
+        } else {
+            *len = sdslen(s);
+        }
+        return (const char *)s;
+    }
+    /* Packed fbtree item — skip 8-byte score prefix */
+    *len = sdslen(s) - FBTREE_SCORE_SIZE;
+    return (const char *)s + FBTREE_SCORE_SIZE;
 }
 
-/* Sorted sets hash (note: a skiplist is used in addition to the hash table) */
+static uint64_t zsetHashFunction(const void *key) {
+    size_t len;
+    const char *ptr = zsetExtractElement(key, &len);
+    return genHashFunctionConfigurableSeed(ptr, len);
+}
+
+static int zsetKeyCompare(const void *a, const void *b) {
+    size_t alen, blen;
+    const char *aptr = zsetExtractElement(a, &alen);
+    const char *bptr = zsetExtractElement(b, &blen);
+    if (alen != blen) return 0;
+    return memcmp(aptr, bptr, alen) == 0;
+}
+
+/* Sorted sets hash (an ordered index is used in addition to the hash table) */
 hashtableType zsetHashtableType = {
-    .hashFunction = sdsHashConfigurableSeed,
-    .entryGetKey = zsetHashtableGetKey,
-    .keyCompare = dictSdsKeyCompare,
+    .hashFunction = zsetHashFunction,
+    .keyCompare = zsetKeyCompare,
 };
 
 uint64_t hashtableSdsHash(const void *key) {
@@ -790,15 +830,6 @@ hashtableType kvstoreChannelHashtableType = {
     .getMetadataSize = kvstoreHashtableMetadataSize,
 };
 
-/* Modules system dictionary type. Keys are module name,
- * values are pointer to ValkeyModule struct. */
-dictType modulesDictType = {
-    .entryGetKey = dictEntryGetKey,
-    .hashFunction = dictSdsCaseHash,
-    .keyCompare = dictSdsKeyCaseCompare,
-    .entryDestructor = dictEntryDestructorSdsKey,
-};
-
 /* Migrate cache dict type. */
 dictType migrateCacheDictType = {
     .entryGetKey = dictEntryGetKey,
@@ -807,7 +838,7 @@ dictType migrateCacheDictType = {
     .entryDestructor = dictEntryDestructorSdsKey,
 };
 
-/* Dict for for case-insensitive search using null terminated C strings.
+/* Dict for case-insensitive search using null terminated C strings.
  * The keys stored in dict are sds though. */
 dictType stringSetDictType = {
     .entryGetKey = dictEntryGetKey,
@@ -816,7 +847,7 @@ dictType stringSetDictType = {
     .entryDestructor = dictEntryDestructorSdsKey,
 };
 
-/* Dict for for case-insensitive search using null terminated C strings.
+/* Dict for case-insensitive search using null terminated C strings.
  * The key and value do not have a destructor. */
 dictType externalStringType = {
     .entryGetKey = dictEntryGetKey,
@@ -876,6 +907,12 @@ const char *strChildType(int type) {
  * AOF rewriting, or some side process spawned by a loaded module. */
 int hasActiveChildProcess(void) {
     return server.child_pid != -1;
+}
+
+/* Returns true if a background save (fork or forkless) or child process is
+ * active. */
+int hasActiveSaveOrChild(void) {
+    return hasActiveChildProcess() || isSaveInProgress();
 }
 
 void resetChildState(void) {
@@ -1188,6 +1225,27 @@ void getExpensiveClientsInfo(size_t *in_usage, size_t *out_usage) {
     *out_usage = o;
 }
 
+/* Detect and free zombie connections whose read handler was removed (e.g.
+ * BLOCKED_INUSE). Without a read handler the event loop won't notice the
+ * remote side closing, so these fds would leak until the fd limit is hit. */
+static bool clientsCronTcpIsClosing(client *c) {
+    if (!c->conn) return false;
+
+    /* If the fd is still watched by the event loop, it detects the close and frees the client itself. */
+    if (connHasReadHandler(c->conn) || connHasWriteHandler(c->conn)) return false;
+
+    if (!connIsClosing(c->conn)) return false;
+
+    if (server.verbosity <= LL_VERBOSE) {
+        sds client_info = catClientInfoString(sdsempty(), c, server.hide_user_data_from_log);
+        serverLog(LL_VERBOSE, "Client closed connection while blocked %s", client_info);
+        sdsfree(client_info);
+    }
+
+    freeClientAsync(c);
+    return true;
+}
+
 /* This function is called by clientsTimeProc() and is used in order to perform
  * operations on clients that are important to perform constantly. For instance
  * we use this function in order to disconnect clients after a timeout, including
@@ -1239,9 +1297,11 @@ static void clientsCron(int clients_this_cycle) {
          * The protocol is that they return non-zero if the client was
          * terminated. */
         if (clientsCronHandleTimeout(c, now)) continue;
+        if (clientsCronTcpIsClosing(c)) continue;
         if (clientsCronResizeQueryBuffer(c)) continue;
         if (clientsCronResizeOutputBuffer(c, now)) continue;
         if (clientsCronTrackExpensiveClients(c, curr_peak_mem_usage_slot)) continue;
+        if (clientsCronTcpIsClosing(c)) continue;
 
         /* Iterating all the clients in getMemoryOverheadData() is too slow and
          * in turn would make the INFO command too slow. So we perform this
@@ -1326,7 +1386,7 @@ void databasesCron(void) {
     monitorActiveDefrag();
 
     /* Perform hash tables rehashing if needed, but only if there are no
-     * other processes saving the DB on disk. Otherwise rehashing is bad
+     * other processes saving the DB on disk. Otherwise, rehashing is bad
      * as will cause a lot of copy-on-write of memory pages. */
     if (!hasActiveChildProcess()) {
         /* We use global counters so if we stop the computation at a given
@@ -1367,6 +1427,10 @@ void databasesCron(void) {
             }
         }
     }
+
+    /* Close any elapsed hot-key detection window, so a completed window is
+     * frozen on schedule even when there is no traffic. */
+    hotkeysCron();
 }
 
 static inline void updateCachedTimeWithUs(int update_daylight_info, const ustime_t ustime) {
@@ -1627,8 +1691,10 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
     databasesCron();
 
     /* Start a scheduled AOF rewrite if this was requested by the user while
-     * a BGSAVE was in progress. */
-    if (!hasActiveChildProcess() && server.aof_rewrite_scheduled && !aofRewriteLimited()) {
+     * a BGSAVE was in progress. We don't start the rewrite if there is an
+     * active child process (to avoid multiple concurrent fork children) or if
+     * a forkless save is in progress (to avoid potential copy-on-write). */
+    if (!hasActiveSaveOrChild() && server.aof_rewrite_scheduled && !aofRewriteLimited()) {
         rewriteAppendOnlyFileBackground();
     }
 
@@ -1636,7 +1702,7 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
     if (hasActiveChildProcess() || scriptingEngineDebuggerPendingChildren()) {
         run_with_period(1000) receiveChildInfo();
         checkChildrenDone();
-    } else {
+    } else if (!isSaveInProgress()) {
         /* If there is not a background saving/rewrite in progress check if
          * we have to save/rewrite now. */
         for (j = 0; j < server.saveparamslen; j++) {
@@ -1650,15 +1716,14 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
                 (server.unixtime - server.lastbgsave_try > CONFIG_BGSAVE_RETRY_DELAY ||
                  server.lastbgsave_status == C_OK)) {
                 serverLog(LL_NOTICE, "%d changes in %d seconds. Saving...", sp->changes, (int)sp->seconds);
-                rdbSaveInfo rsi, *rsiptr;
-                rsiptr = rdbPopulateSaveInfo(&rsi);
-                rdbSaveBackground(REPLICA_REQ_NONE, server.rdb_filename, rsiptr, RDBFLAGS_NONE);
+                rdbStartBgsave(resolveBgsaveType());
                 break;
             }
         }
 
-        /* Trigger an AOF rewrite if needed. */
-        if (server.aof_state == AOF_ON && !hasActiveChildProcess() && server.aof_rewrite_perc &&
+        /* Trigger an AOF rewrite if needed. Avoid starting while another child process
+         * is active. Also avoid when forkless save is in progress to prevent potential copy-on-write. */
+        if (server.aof_state == AOF_ON && !hasActiveSaveOrChild() && server.aof_rewrite_perc &&
             server.aof_current_size > server.aof_rewrite_min_size) {
             long long base = server.aof_rewrite_base_size ? server.aof_rewrite_base_size : 1;
             long long growth = (server.aof_current_size * 100 / base) - 100;
@@ -1703,6 +1768,8 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
         run_with_period(1000) replicationCron();
     }
 
+    run_with_period(100) throttleRepl_adjustThrottling();
+
     /* Run the Cluster cron. */
     if (server.cluster_enabled) {
         run_with_period(CLUSTER_CRON_PERIOD_MS) clusterCron();
@@ -1729,12 +1796,9 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
      * Note: this code must be after the replicationCron() call above so
      * make sure when refactoring this file to keep this order. This is useful
      * because we want to give priority to RDB savings for replication. */
-    if (!hasActiveChildProcess() && server.rdb_bgsave_scheduled &&
+    if (!hasActiveSaveOrChild() && server.rdb_bgsave_scheduled &&
         (server.unixtime - server.lastbgsave_try > CONFIG_BGSAVE_RETRY_DELAY || server.lastbgsave_status == C_OK)) {
-        rdbSaveInfo rsi, *rsiptr;
-        rsiptr = rdbPopulateSaveInfo(&rsi);
-        if (rdbSaveBackground(REPLICA_REQ_NONE, server.rdb_filename, rsiptr, RDBFLAGS_NONE) == C_OK)
-            server.rdb_bgsave_scheduled = 0;
+        if (rdbStartBgsave(server.rdb_bgsave_scheduled) == C_OK) server.rdb_bgsave_scheduled = RDB_BGSAVE_TYPE_NONE;
     }
 
     /* TLS auto-reload if enabled (only when TLS is built-in). */
@@ -1899,6 +1963,8 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
      * later in this function, must be done before blockedBeforeSleep. */
     if (server.cluster_enabled) clusterBeforeSleep();
 
+    /* Release keys from bgIteration before processing unblocked clients. */
+    bgIteration_beforeSleep();
     /* Handle blocked clients.
      * must be done before flushAppendOnlyFile, in case of appendfsync=always,
      * since the unblocked clients may write data. */
@@ -2044,7 +2110,10 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     /* Before we are going to sleep, let the threads access the dataset by
      * releasing the GIL. The server main thread will not touch anything at this
      * time. */
-    if (moduleCount()) moduleReleaseGIL();
+    if (moduleCount()) {
+        atomic_store_explicit(&server.module_gil_acquired, 0, memory_order_relaxed);
+        moduleReleaseGIL();
+    }
     /********************* WARNING ********************
      * Do NOT add anything below moduleReleaseGIL !!! *
      ***************************** ********************/
@@ -2066,6 +2135,7 @@ void afterSleep(struct aeEventLoop *eventLoop, int numevents) {
             atomic_store_explicit(&server.module_gil_acquiring, 1, memory_order_relaxed);
             moduleAcquireGIL();
             atomic_store_explicit(&server.module_gil_acquiring, 0, memory_order_relaxed);
+            atomic_store_explicit(&server.module_gil_acquired, 1, memory_order_relaxed);
             moduleFireServerEvent(VALKEYMODULE_EVENT_EVENTLOOP, VALKEYMODULE_SUBEVENT_EVENTLOOP_AFTER_SLEEP, NULL);
             latencyEndMonitor(latency);
             latencyAddSampleIfNeeded("module-acquire-GIL", latency);
@@ -2231,6 +2301,8 @@ void createSharedObjects(void) {
     shared.srem = createSharedString("SREM");
     shared.xgroup = createSharedString("XGROUP");
     shared.xclaim = createSharedString("XCLAIM");
+    shared.xdel = createSharedString("XDEL");
+    shared.xack = createSharedString("XACK");
     shared.script = createSharedString("SCRIPT");
     shared.replconf = createSharedString("REPLCONF");
     shared.pexpireat = createSharedString("PEXPIREAT");
@@ -2328,6 +2400,7 @@ void initServerConfig(void) {
     for (j = 0; j < CONFIG_DEFAULT_BINDADDR_COUNT; j++) server.bindaddr[j] = zstrdup(default_bindaddr[j]);
     memset(server.listeners, 0x00, sizeof(server.listeners));
     server.active_expire_enabled = 1;
+    server.forkless_infrastructure_enabled = 0;
     server.lazy_expire_disabled = 0;
     server.skip_checksum_validation = 0;
     server.loading = 0;
@@ -2358,11 +2431,14 @@ void initServerConfig(void) {
     server.shutdown_flags = 0;
     server.shutdown_mstime = 0;
     server.cluster_module_flags = CLUSTER_MODULE_FLAG_NONE;
+    atomic_store_explicit(&server.cluster_config_save_status, C_OK, memory_order_relaxed);
+    atomic_store_explicit(&server.cluster_config_last_save_time, time(NULL), memory_order_relaxed);
     server.migrate_cached_sockets = dictCreate(&migrateCacheDictType);
     server.next_client_id = 1; /* Client IDs, start from 1 .*/
     server.page_size = sysconf(_SC_PAGESIZE);
     server.extended_redis_compat = 0;
     server.pause_cron = 0;
+    server.debug_force_tls_write_error = 0;
     server.dict_resizing = 1;
     server.import_mode = 0;
 
@@ -2373,9 +2449,11 @@ void initServerConfig(void) {
     server.latency_tracking_info_percentiles[2] = 99.9; /* p999 */
 
     server.tls_server_cert_expire_time = 0;
+    server.tls_server_alt_cert_expire_time = 0;
     server.tls_client_cert_expire_time = 0;
     server.tls_ca_cert_expire_time = 0;
     server.tls_server_cert_serial = NULL;
+    server.tls_server_alt_cert_serial = NULL;
     server.tls_client_cert_serial = NULL;
     server.tls_ca_cert_serial = NULL;
 
@@ -2403,6 +2481,8 @@ void initServerConfig(void) {
     server.rdb_client_id = -1;
     server.loading_process_events_interval_ms = LOADING_PROCESS_EVENTS_INTERVAL_DEFAULT;
     server.loading_rio = NULL;
+    server.repl_full_sync_start_time = 0;
+    server.repl_full_sync_complete_duration_ms = -1;
 
     /* Replication partial resync backlog */
     server.repl_backlog = NULL;
@@ -2861,11 +2941,23 @@ void resetServerStats(void) {
     server.stat_dump_payload_sanitizations = 0;
     server.aof_delayed_fsync = 0;
     server.stat_reply_buffer_shrinks = 0;
+    server.stat_cluster_threaded_reads_processed = 0;
+    server.stat_cluster_threaded_writes_processed = 0;
+    server.stat_cluster_threaded_accepts_processed = 0;
+    server.stat_cluster_io_main_thread_fallbacks = 0;
     server.stat_reply_buffer_expands = 0;
     memset(server.duration_stats, 0, sizeof(durationStats) * EL_DURATION_TYPE_NUM);
     server.el_cmd_cnt_max = 0;
     server.stat_active_time = 0;
     server.el_iteration_active = false;
+    server.stat_total_prefetch_batches = 0;
+    server.stat_total_prefetch_entries = 0;
+    server.acl_info.invalid_cmd_accesses = 0;
+    server.acl_info.invalid_key_accesses = 0;
+    server.acl_info.user_auth_failures = 0;
+    server.acl_info.invalid_channel_accesses = 0;
+    server.acl_info.acl_access_denied_tls_cert = 0;
+    server.acl_info.invalid_db_accesses = 0;
     lazyfreeResetStats();
 }
 
@@ -2975,11 +3067,14 @@ void initServer(void) {
     server.cluster_drop_packet_filter = -1;
     server.debug_cluster_disable_random_ping = 0;
     server.debug_cluster_disable_reconnection = 0;
+    server.debug_cluster_failover_delay = -1;
+    server.debug_cluster_failover_epoch = -1;
     server.reply_buffer_peak_reset_time = REPLY_BUFFER_DEFAULT_PEAK_RESET_TIME;
     server.reply_buffer_resizing_enabled = 1;
     server.client_mem_usage_buckets = NULL;
     server.debug_client_enforce_reply_list = 0;
     server.debug_force_free_primary_async = 0;
+    server.debug_pause_before_psync = 0;
     resetReplicationBuffer();
 
     /* Make sure the locale is set on startup based on the config file. */
@@ -3009,6 +3104,16 @@ void initServer(void) {
 
     server.dbnum = server.cluster_enabled ? server.config_databases_cluster : server.config_databases;
     server.db = zcalloc(sizeof(serverDb *) * server.dbnum);
+
+    /* Set object metadata size before creating any database key objects */
+    if (server.forkless_infrastructure_enabled) {
+        /* NOTE: At this time, there is only one reason for dbEntry metadata: bgIteration.  However,
+         * if/when new metadata options are added, we will need to compute the size of a variable
+         * size metadata, and provide appropriate accessors to access the specific portion of the
+         * metadata (each of which may/may not exist, based on immutable startup parameters).  */
+        objectSetMetadataSize(BGITERATION_ENTRY_METADATA_SIZE);
+    }
+
     createDatabaseIfNeeded(0); /* The default database should always exist */
 
     evictionPoolAlloc(); /* Initialize the LRU keys pool. */
@@ -3023,18 +3128,19 @@ void initServer(void) {
     server.watching_clients = 0;
     server.cronloops = 0;
     server.in_exec = 0;
+    server.in_call = 0;
     server.busy_module_yield_flags = BUSY_MODULE_YIELD_NONE;
     server.busy_module_yield_reply = NULL;
     server.client_pause_in_transaction = 0;
     server.child_pid = -1;
     server.child_type = CHILD_TYPE_NONE;
-    server.rdb_child_type = RDB_CHILD_TYPE_NONE;
+    server.rdb_write_target = RDB_WRITE_TARGET_NONE;
     server.rdb_pipe_conns = NULL;
     server.rdb_pipe_numconns = 0;
     server.rdb_pipe_numconns_writing = 0;
     server.rdb_pipe_buff = NULL;
     server.rdb_pipe_bufflen = 0;
-    server.rdb_bgsave_scheduled = 0;
+    server.rdb_bgsave_scheduled = RDB_BGSAVE_TYPE_NONE;
     server.child_info_pipe[0] = -1;
     server.child_info_pipe[1] = -1;
     server.child_info_nread = 0;
@@ -3063,24 +3169,22 @@ void initServer(void) {
     server.stat_module_progress = 0;
     for (int j = 0; j < CLIENT_TYPE_COUNT; j++) server.stat_clients_type_memory[j] = 0;
     server.stat_cluster_links_memory = 0;
+    server.stat_cluster_threaded_reads_processed = 0;
+    server.stat_cluster_threaded_writes_processed = 0;
+    server.stat_cluster_threaded_accepts_processed = 0;
+    server.stat_cluster_io_main_thread_fallbacks = 0;
     server.cron_malloc_stats.zmalloc_used = 0;
     server.cron_malloc_stats.process_rss = 0;
     server.cron_malloc_stats.allocator_allocated = 0;
     server.cron_malloc_stats.allocator_active = 0;
     server.cron_malloc_stats.allocator_resident = 0;
     server.lastbgsave_status = C_OK;
+    server.lastbgsave_type = RDB_BGSAVE_TYPE_NONE;
+    server.cur_bgsave_type = RDB_BGSAVE_TYPE_NONE;
     server.aof_last_write_status = C_OK;
     server.aof_last_write_errno = 0;
     server.repl_good_replicas_count = 0;
     server.last_sig_received = 0;
-
-    /* Initiate acl info struct */
-    server.acl_info.invalid_cmd_accesses = 0;
-    server.acl_info.invalid_key_accesses = 0;
-    server.acl_info.user_auth_failures = 0;
-    server.acl_info.invalid_channel_accesses = 0;
-    server.acl_info.acl_access_denied_tls_cert = 0;
-    server.acl_info.invalid_db_accesses = 0;
 
     /* Create the timer callback, this is our way to process many background
      * operations incrementally, like eviction of unaccessed expired keys, etc. */
@@ -3127,7 +3231,9 @@ void initServer(void) {
 
     commandlogInit();
     latencyMonitorInit();
+    throttle_init();
     initSharedQueryBuf();
+    bgIteration_init();
 
     /* Initialize ACL default password if it exists */
     ACLUpdateDefaultUserPassword(server.requirepass);
@@ -3143,6 +3249,9 @@ void initServer(void) {
     applyWatchdogPeriod();
 
     if (server.maxmemory_clients != 0) initServerClientMemUsageBuckets();
+
+    /* Initialization hotkey */
+    hotkeysInit();
 }
 
 void initListeners(void) {
@@ -3354,9 +3463,30 @@ void commandAddSubcommand(struct serverCommand *parent, struct serverCommand *su
     serverAssert(hashtableAdd(parent->subcommands_ht, subcommand));
 }
 
+/* Automatically set CMD_WRITE_FIRSTKEY_ONLY for write commands where the first
+ * key is written, and other keys are read only. */
+void detectWriteFirstkeyOnlyCommand(struct serverCommand *c) {
+    c->flags &= ~CMD_WRITE_FIRSTKEY_ONLY; // Override if set elsewhere
+    if (!(c->flags & CMD_WRITE)) return;
+    if (c->key_specs_num < 2) return;
+    if (!(c->key_specs[0].flags & (CMD_KEY_OW | CMD_KEY_RW))) return;
+    if (c->key_specs[0].find_keys_type != KSPEC_FK_RANGE) return;
+    if (c->key_specs[0].fk.range.lastkey != 0) return;
+
+    bool write_first_key_only = true;
+    for (int i = 1; i < c->key_specs_num; i++) {
+        if (!(c->key_specs[i].flags & CMD_KEY_RO) || (c->key_specs[i].flags & (CMD_KEY_RW | CMD_KEY_OW | CMD_KEY_RM))) {
+            write_first_key_only = false;
+            break;
+        }
+    }
+
+    if (write_first_key_only) c->flags |= CMD_WRITE_FIRSTKEY_ONLY;
+}
+
 /* Recursively populate the command structure.
  *
- * On success, the function return C_OK. Otherwise C_ERR is returned and we won't
+ * On success, the function return C_OK. Otherwise, C_ERR is returned and we won't
  * add this command in the commands dict. */
 int populateCommandStructure(struct serverCommand *c) {
     /* If the command marks with CMD_SENTINEL, it exists in sentinel. */
@@ -3376,6 +3506,8 @@ int populateCommandStructure(struct serverCommand *c) {
 
     /* Handle the legacy range spec and the "movablekeys" flag (must be done after populating all key specs). */
     populateCommandLegacyRangeSpec(c);
+
+    detectWriteFirstkeyOnlyCommand(c);
 
     /* Assign the ID used for ACL. */
     c->id = ACLGetCommandID(c->fullname);
@@ -3666,6 +3798,58 @@ static void propagateNow(int dbid, robj **argv, int argc, int target, int slot) 
     if (propagate_to_slot_migration) clusterFeedSlotExportJobs(dbid, argv, argc, slot);
 }
 
+/* BgIteration requires that replication is sent after each command, however the
+ * alsoPropagate mechanism queues replication until the end of the transaction
+ * (when propagatePendingCommands is invoked).  Also, the propagation mechanism
+ * strips out multi/exec, adding them back during propagatePendingCommands (if
+ * necessary).  This function ensures that replication, including multi/exec are
+ * sequenced with the commands for bgIteration.
+ *
+ * Called from alsoPropagate with regular params.
+ * Called from propagatePendingCommands with dbid = -1 (to close multi/exec). */
+static void propagateToBgIteration(int dbid, int argc, robj **argv, int target) {
+    /* STATIC indicates that we have sent the MULTI, and need to match it with
+     *  an EXEC during propagatePendingCommands. */
+    static bool sentMultiToBgIterator = false;
+    /* STATIC indicates that last DBID that was sent, so that we can use the
+     *  same DBID when sending a generated EXEC. */
+    static int lastDbidSentToBgIterator;
+
+    if (dbid >= 0) {
+        // Called from alsoPropagate() to replicate a command
+        if (target & PROPAGATE_REPL && bgIteration_iterationActive()) {
+            if (!sentMultiToBgIterator && (scriptIsRunning() || server.in_exec)) {
+                /* For a script or multi/exec, we should be sending the MULTI at
+                 * the beginning of the execution unit.  There shouldn't be any
+                 * commands in the propagation queue yet. */
+                serverAssert(server.also_propagate.numops == 0);
+                /* If this is the first propagated command of a script or multi,
+                 * make it a transaction.  It may turn out that there is only 1
+                 * command in the MULTI block, but we can't know that now.
+                 * Unlike regular replication, we can't defer all of the
+                 * replication until we know for sure.  We must call bgIteration
+                 * after each command. */
+                static struct serverCommand *cmd_multi = NULL; // STATIC
+                if (cmd_multi == NULL) cmd_multi = lookupCommandOrOriginal(&shared.multi, 1);
+                bgIteration_handleCommandReplication(dbid, cmd_multi, 1, &shared.multi);
+                sentMultiToBgIterator = true;
+            }
+            struct serverCommand *cmd = lookupCommandOrOriginal(argv, argc);
+            bgIteration_handleCommandReplication(dbid, cmd, argc, argv);
+            lastDbidSentToBgIterator = dbid;
+        }
+    } else {
+        // Called from propagatePendingCommands() to finalize a transaction
+        if (sentMultiToBgIterator) {
+            // If a MULTI was sent to bgIterator via alsoPropagate(), then send the matching EXEC.
+            static struct serverCommand *cmd_exec = NULL; // STATIC
+            if (cmd_exec == NULL) cmd_exec = lookupCommandOrOriginal(&shared.exec, 1);
+            bgIteration_handleCommandReplication(lastDbidSentToBgIterator, cmd_exec, 1, &shared.exec);
+            sentMultiToBgIterator = false;
+        }
+    }
+}
+
 /* Used inside commands to schedule the propagation of additional commands
  * after the current command is propagated to AOF / Replication.
  *
@@ -3678,6 +3862,8 @@ static void propagateNow(int dbid, robj **argv, int argc, int target, int slot) 
  * stack allocated).  The function automatically increments ref count of
  * passed objects, so the caller does not need to. */
 void alsoPropagate(int dbid, robj **argv, int argc, int target, int slot) {
+    propagateToBgIteration(dbid, argc, argv, target);
+
     robj **argvcopy;
     int j;
 
@@ -3744,6 +3930,12 @@ void updateCommandLatencyHistogram(struct hdr_histogram **latency_histogram, int
  * multiple separated commands. Note that alsoPropagate() is not affected
  * by CLIENT_PREVENT_PROP flag. */
 static void propagatePendingCommands(void) {
+    /* This is done before the check on server.also_propagate.numops.  Numops
+     * might be zero if there is no replica but we might be running bgIteration
+     * for something other than replication.  If we sent the multi (to
+     * bgIteration), we need to send the matching exec. */
+    propagateToBgIteration(-1, 0, NULL, 0);
+
     if (server.also_propagate.numops == 0) return;
 
     int j;
@@ -3873,6 +4065,10 @@ int incrCommandStatsOnError(struct serverCommand *cmd, int flags) {
  *
  */
 void call(client *c, int flags) {
+    if (bgIteration_blockClientIfRequired(c)) return;
+
+    server.in_call++;
+
     long long dirty;
     struct ClientFlags client_old_flags = c->flag;
 
@@ -3895,6 +4091,14 @@ void call(client *c, int flags) {
     c->flag.force_aof = 0;
     c->flag.force_repl = 0;
     c->flag.prevent_prop = 0;
+
+    /* The redaction bitmap describes the argv of the command about to execute and
+     * is set on demand by the command itself. Clearing it here covers every case
+     * where one client executes several commands without an intervening
+     * resetClient(): the queued commands of a MULTI, RM_Call sequences issued on a
+     * reused module temp client, and the server.call() chain of a script. Stale
+     * bits would otherwise redact the wrong argument of a later command. */
+    c->redact_arg_bitmap = 0;
 
     /* The server core is in charge of propagation when the first entry point
      * of call() is processCommand().
@@ -4131,6 +4335,7 @@ void call(client *c, int flags) {
     }
 
     server.executing_client = prev_client;
+    server.in_call--;
 }
 
 /* Used when a command that is ready for execution needs to be rejected, due to
@@ -4313,6 +4518,8 @@ void unprepareCommand(client *c) {
  * other operations can be performed by the caller. Otherwise
  * if C_ERR is returned the client was destroyed (i.e. after QUIT). */
 int processCommand(client *c) {
+    serverAssert(!c->flag.blocked && !c->flag.unblocked);
+
     if (!scriptIsTimedout()) {
         /* Both EXEC and scripts call call() directly so there should be
          * no way in_exec or scriptIsRunning() is 1.
@@ -4698,6 +4905,8 @@ int processCommand(client *c) {
         return C_OK;
     }
 
+    if (throttle_throttleClientIfNeeded(c)) return C_OK;
+
     /* Exec the command */
     if (c->flag.multi && c->cmd->proc != execCommand && c->cmd->proc != discardCommand &&
         c->cmd->proc != quitCommand &&
@@ -4911,7 +5120,7 @@ int finishShutdown(void) {
     /* Kill the saving child if there is a background saving in progress.
        We want to avoid race conditions, for instance our saving child may
        overwrite the synchronous saving did by SHUTDOWN. */
-    if (server.child_type == CHILD_TYPE_RDB) {
+    if (isForkBgsaveInProgress()) {
         serverLog(LL_WARNING, "There is a child saving an .rdb. Killing it!");
         killRDBChild();
         /* Note that, in killRDBChild normally has backgroundSaveDoneHandler
@@ -4921,6 +5130,10 @@ int finishShutdown(void) {
          * The temp rdb file fd may won't be closed when the server exits quickly,
          * but OS will close this fd when process exits. */
         rdbRemoveTempFile(server.child_pid, 0);
+    }
+    if (isForklessSaveInProgress()) {
+        serverLog(LL_WARNING, "There is a thread saving an .rdb. Cancelling it!");
+        forklessSaveCancel();
     }
 
     /* Kill module child if there is one. */
@@ -4971,7 +5184,7 @@ int finishShutdown(void) {
         rsiptr = rdbPopulateSaveInfo(&rsi);
         /* Keep the page cache since it's likely to restart soon */
         if (rdbSave(REPLICA_REQ_NONE, server.rdb_filename, rsiptr, RDBFLAGS_KEEP_CACHE) != C_OK) {
-            /* Ooops.. error saving! The best we can do is to continue
+            /* Oops.. error saving! The best we can do is to continue
              * operating. Note that if there was a background saving process,
              * in the next cron() the server will be notified that the background
              * saving aborted, handling special stuff like replicas pending for
@@ -6230,6 +6443,11 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
             tls_server_seconds_remaining = server.tls_server_cert_expire_time - (long long)server.unixtime;
             if (tls_server_seconds_remaining < 0) tls_server_seconds_remaining = 0;
         }
+        long long tls_server_alt_seconds_remaining = 0;
+        if (server.tls_server_alt_cert_expire_time > 0) {
+            tls_server_alt_seconds_remaining = server.tls_server_alt_cert_expire_time - (long long)server.unixtime;
+            if (tls_server_alt_seconds_remaining < 0) tls_server_alt_seconds_remaining = 0;
+        }
         long long tls_client_seconds_remaining = 0;
         if (server.tls_client_cert_expire_time > 0) {
             tls_client_seconds_remaining = server.tls_client_cert_expire_time - (long long)server.unixtime;
@@ -6245,6 +6463,8 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
             "# TLS\r\n" FMTARGS(
                 "tls_server_cert_serial:%s\r\n", server.tls_server_cert_serial ? server.tls_server_cert_serial : "none",
                 "tls_server_cert_expires_in_seconds:%lld\r\n", tls_server_seconds_remaining,
+                "tls_server_alt_cert_serial:%s\r\n", server.tls_server_alt_cert_serial ? server.tls_server_alt_cert_serial : "none",
+                "tls_server_alt_cert_expires_in_seconds:%lld\r\n", tls_server_alt_seconds_remaining,
                 "tls_client_cert_serial:%s\r\n", server.tls_client_cert_serial ? server.tls_client_cert_serial : "none",
                 "tls_client_cert_expires_in_seconds:%lld\r\n", tls_client_seconds_remaining,
                 "tls_ca_cert_serial:%s\r\n", server.tls_ca_cert_serial ? server.tls_ca_cert_serial : "none",
@@ -6396,13 +6616,29 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
     /* Persistence */
     if (all_sections || (dictFind(section_dict, "persistence") != NULL)) {
         if (sections++) info = sdscat(info, "\r\n");
-        double fork_perc = 0;
+        double save_perc = 0;
         if (server.stat_module_progress) {
-            fork_perc = server.stat_module_progress * 100;
+            save_perc = server.stat_module_progress * 100;
         } else if (server.stat_current_save_keys_total) {
-            fork_perc = ((double)server.stat_current_save_keys_processed / server.stat_current_save_keys_total) * 100;
+            save_perc = ((double)server.stat_current_save_keys_processed / server.stat_current_save_keys_total) * 100;
         }
         int aof_bio_fsync_status = atomic_load_explicit(&server.aof_bio_fsync_status, memory_order_relaxed);
+
+        /* Determine current bgsave type */
+        const char *current_bgsave_type;
+        switch (server.cur_bgsave_type) {
+        case RDB_BGSAVE_TYPE_FORK: current_bgsave_type = "fork"; break;
+        case RDB_BGSAVE_TYPE_FORKLESS: current_bgsave_type = "forkless"; break;
+        default: current_bgsave_type = "none"; break;
+        }
+
+        /* Determine last bgsave type */
+        const char *last_bgsave_type;
+        switch (server.lastbgsave_type) {
+        case RDB_BGSAVE_TYPE_FORK: last_bgsave_type = "fork"; break;
+        case RDB_BGSAVE_TYPE_FORKLESS: last_bgsave_type = "forkless"; break;
+        default: last_bgsave_type = "none"; break;
+        }
 
         info = sdscatprintf(
             info,
@@ -6412,15 +6648,17 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "current_cow_peak:%zu\r\n", server.stat_current_cow_peak,
                 "current_cow_size:%zu\r\n", server.stat_current_cow_bytes,
                 "current_cow_size_age:%lu\r\n", (server.stat_current_cow_updated ? (unsigned long)elapsedMs(server.stat_current_cow_updated) / 1000 : 0),
-                "current_fork_perc:%.2f\r\n", fork_perc,
+                "current_fork_perc:%.2f\r\n", save_perc,
                 "current_save_keys_processed:%zu\r\n", server.stat_current_save_keys_processed,
                 "current_save_keys_total:%zu\r\n", server.stat_current_save_keys_total,
                 "rdb_changes_since_last_save:%lld\r\n", server.dirty,
-                "rdb_bgsave_in_progress:%d\r\n", server.child_type == CHILD_TYPE_RDB,
+                "rdb_bgsave_in_progress:%d\r\n", isSaveInProgress(),
+                "rdb_current_bgsave_type:%s\r\n", current_bgsave_type,
+                "rdb_last_bgsave_type:%s\r\n", last_bgsave_type,
                 "rdb_last_save_time:%jd\r\n", (intmax_t)server.lastsave,
                 "rdb_last_bgsave_status:%s\r\n", (server.lastbgsave_status == C_OK) ? "ok" : "err",
                 "rdb_last_bgsave_time_sec:%jd\r\n", (intmax_t)server.rdb_save_time_last,
-                "rdb_current_bgsave_time_sec:%jd\r\n", (intmax_t)((server.child_type != CHILD_TYPE_RDB) ? -1 : time(NULL) - server.rdb_save_time_start),
+                "rdb_current_bgsave_time_sec:%jd\r\n", (intmax_t)(isSaveInProgress() ? time(NULL) - server.rdb_save_time_start : -1),
                 "rdb_saves:%lld\r\n", server.stat_rdb_saves,
                 "rdb_last_cow_size:%zu\r\n", server.stat_rdb_cow_bytes,
                 "rdb_last_load_keys_expired:%lld\r\n", server.rdb_last_load_keys_expired,
@@ -6485,6 +6723,9 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                     "loading_loaded_perc:%.2f\r\n", perc,
                     "loading_eta_seconds:%jd\r\n", (intmax_t)eta));
         }
+
+        /* Forkless / bgiteration metrics */
+        info = forkless_catInfo(info);
     }
 
     /* Stats */
@@ -6594,6 +6835,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                     "master_port:%d\r\n", server.primary_port,
                     "master_link_status:%s\r\n", (server.repl_state == REPL_STATE_CONNECTED) ? "up" : "down",
                     "master_last_io_seconds_ago:%d\r\n", server.primary ? ((int)(server.unixtime - server.primary->last_interaction)) : -1,
+                    "last_successful_sync_duration_ms:%lld\r\n", server.repl_full_sync_complete_duration_ms,
                     "master_sync_in_progress:%d\r\n", server.repl_state == REPL_STATE_TRANSFER,
                     "slave_read_repl_offset:%lld\r\n", replica_read_repl_offset,
                     "slave_repl_offset:%lld\r\n", replica_repl_offset,
@@ -6814,6 +7056,21 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
         }
     }
 
+    /* Hotkeys */
+    if (all_sections || (dictFind(section_dict, "hotkeys") != NULL)) {
+        if (sections++) info = sdscat(info, "\r\n");
+        info = sdscatprintf(info, "# Hotkeys\r\n");
+        info = genHotkeysInfoString(info);
+    }
+
+    /* Throttling */
+    if (all_sections || (dictFind(section_dict, "throttling") != NULL)) {
+        if (sections++) info = sdscat(info, "\r\n");
+        info = sdscat(info, "# Throttling\r\n");
+        info = throttle_sdscatInfoMetrics(info);
+        info = throttleRepl_sdscatInfoMetrics(info);
+    }
+
     /* Get info from modules.
      * Returned when the user asked for "everything", "modules", or a specific module section.
      * We're not aware of the module section names here, and we rather avoid the search when we can.
@@ -6839,6 +7096,9 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "eventloop_cmd_per_cycle_max:%lld\r\n", server.el_cmd_cnt_max,
                 "io_threaded_reads_pending:%lld\r\n", server.stat_io_reads_pending,
                 "io_threaded_writes_pending:%lld\r\n", server.stat_io_writes_pending));
+
+        info = forkless_catDebugInfo(info);
+        info = throttleRepl_sdscatInfoDebugMetrics(info);
     }
 
     return info;
@@ -7136,7 +7396,7 @@ void closeChildUnusedResourceAfterFork(void) {
 /* purpose is one of CHILD_TYPE_ types */
 int serverFork(int purpose) {
     if (isMutuallyExclusiveChildType(purpose)) {
-        if (hasActiveChildProcess()) {
+        if (hasActiveSaveOrChild()) {
             errno = EALREADY;
             return -1;
         }
@@ -7509,6 +7769,17 @@ int iAmPrimary(void) {
             (server.cluster_enabled && clusterNodeIsPrimary(getMyClusterNode())));
 }
 
+/* Initialize thread attribute with a guarded stack size.
+ * Doubling the stack size until it is at least VALKEY_THREAD_STACK_SIZE. */
+void serverInitThreadAttribute(pthread_attr_t *attr) {
+    size_t stacksize;
+    pthread_attr_init(attr);
+    pthread_attr_getstacksize(attr, &stacksize);
+    if (!stacksize) stacksize = 1;
+    while (stacksize < VALKEY_THREAD_STACK_SIZE) stacksize *= 2;
+    pthread_attr_setstacksize(attr, stacksize);
+}
+
 /* Main is marked as weak so that unit tests can use their own main function. */
 __attribute__((weak)) int main(int argc, char **argv) {
     struct timeval tv;
@@ -7778,8 +8049,10 @@ __attribute__((weak)) int main(int argc, char **argv) {
     }
 
 #if defined(LUA_ENABLED) && STATIC_LUA
-    /* Initialize the LUA scripting engine on-startup only when LUA is built statically */
-    if (scriptingEngineManagerFind("lua") == NULL) {
+    /* Initialize the LUA scripting engine on-startup only when LUA is built statically.
+     * Sentinel does not support SCRIPTING commands nor the MODULE commands, so the Lua
+     * engine is not needed here. */
+    if (!server.sentinel_mode && scriptingEngineManagerFind("lua") == NULL) {
         if (moduleLoadStatic("lua", NULL, 0, 0) != C_OK) {
             serverPanic("Lua engine initialization failed, check the server logs.");
         }
@@ -7877,13 +8150,13 @@ int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_
         /* clang-format off */
         if ((opt[0] == 'n' || opt[0] == 'N') &&
             (opt[1] == 'x' || opt[1] == 'X') && opt[2] == '\0' &&
-            !(*flags & ARGS_SET_XX || *flags & ARGS_SET_IFEQ) &&
+            !(*flags & (ARGS_SET_CONDITIONAL & ~ARGS_SET_NX)) && /* Repeated NX allowed */
             (command_type == COMMAND_SET || command_type == COMMAND_HSET || command_type == COMMAND_MSET))
         {
             *flags |= ARGS_SET_NX;
         } else if ((opt[0] == 'x' || opt[0] == 'X') &&
                    (opt[1] == 'x' || opt[1] == 'X') && opt[2] == '\0' &&
-                   !(*flags & ARGS_SET_NX || *flags & ARGS_SET_IFEQ) &&
+                   !(*flags & (ARGS_SET_CONDITIONAL & ~ARGS_SET_XX)) && /* Repeated XX allowed */
                    (command_type == COMMAND_SET || command_type == COMMAND_HSET || command_type == COMMAND_MSET))
         {
             *flags |= ARGS_SET_XX;
@@ -7904,9 +8177,19 @@ int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_
                    (opt[2] == 'e' || opt[2] == 'E') &&
                    (opt[3] == 'q' || opt[3] == 'Q') && opt[4] == '\0' &&
                    next &&
-                   !(*flags & ARGS_SET_NX || *flags & ARGS_SET_XX || *flags & ARGS_SET_IFEQ) && (command_type == COMMAND_SET))
+                   !(*flags & ARGS_SET_CONDITIONAL) && (command_type == COMMAND_SET))
         {
             *flags |= ARGS_SET_IFEQ;
+            *compare_val = next;
+            j++;
+        } else if ((opt[0] == 'i' || opt[0] == 'I') &&
+                   (opt[1] == 'f' || opt[1] == 'F') &&
+                   (opt[2] == 'n' || opt[2] == 'N') &&
+                   (opt[3] == 'e' || opt[3] == 'E') && opt[4] == '\0' &&
+                   next &&
+                   !(*flags & ARGS_SET_CONDITIONAL) && (command_type == COMMAND_SET))
+        {
+            *flags |= ARGS_SET_IFNE;
             *compare_val = next;
             j++;
         } else if ((opt[0] == 'g' || opt[0] == 'G') &&

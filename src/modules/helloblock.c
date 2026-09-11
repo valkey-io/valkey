@@ -114,7 +114,7 @@ int HelloBlock_ValkeyCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, in
      * callback, so this is just to show you the API. */
     ValkeyModule_SetDisconnectCallback(bc, HelloBlock_Disconnected);
 
-    /* Now that we setup a blocking client, we need to pass the control
+    /* Now that we have set up a blocking client, we need to pass the control
      * to the thread. However we need to pass arguments to the thread:
      * the delay and a reference to the blocked client handle. */
     void **targ = ValkeyModule_Alloc(sizeof(void *) * 2);
@@ -184,7 +184,7 @@ int HelloKeys_ValkeyCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int
      * because we'll use the thread safe context to accumulate a reply. */
     ValkeyModuleBlockedClient *bc = ValkeyModule_BlockClient(ctx, NULL, NULL, NULL, 0);
 
-    /* Now that we setup a blocking client, we need to pass the control
+    /* Now that we have set up a blocking client, we need to pass the control
      * to the thread. However we need to pass arguments to the thread:
      * the reference to the blocked client handle. */
     if (pthread_create(&tid, NULL, HelloKeys_ThreadMain, bc) != 0) {

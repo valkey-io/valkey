@@ -316,6 +316,6 @@ start_server {tags {"modules acl"}} {
 
 start_server {tags {"modules acl"}} {
     test {test module load fails if exceeds the maximum number of adding acl categories} {
-        assert_error {ERR Error loading the extension. Please check the server logs.} {r module load $testmodule 1}
+        assert_error {ERR Error loading module: module initialization failed} {r module load $testmodule 1}
     }
 }

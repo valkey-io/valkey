@@ -810,7 +810,7 @@ int anetPipe(int fds[2], int read_flags, int write_flags) {
      * There is no harm to set O_CLOEXEC to prevent fd leaks. */
     pipe_flags = O_CLOEXEC | (read_flags & write_flags);
     if (pipe2(fds, pipe_flags)) {
-        /* Fail on real failures, and fallback to simple pipe if pipe2 is unsupported. */
+        /* Fail on real failures, and fall back to simple pipe if pipe2 is unsupported. */
         if (errno != ENOSYS && errno != EINVAL) return -1;
         pipe_flags = 0;
     } else {

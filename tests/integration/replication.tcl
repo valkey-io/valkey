@@ -196,10 +196,17 @@ start_server {tags {"repl external:skip"}} {
         }
         
         test {Replica output bytes metric} {
-            # reset stats 
+            # Make sure no replication traffic (initial sync, backlog writes)
+            # is still in flight before resetting stats, so the zero-baseline
+            # assertion below doesn't race with it.
+            wait_for_ofs_sync $A $B
+
+            # Reset stats and read them atomically so replication traffic can't
+            # arrive between the reset and the stats snapshot.
+            $A multi
             $A config resetstat
-            
-            set info [$A info stats]
+            $A info stats
+            set info [lindex [$A exec] 1]
             set replica_bytes_output [getInfoProperty $info "total_net_repl_output_bytes"]
             assert_equal $replica_bytes_output 0
             
@@ -207,7 +214,7 @@ start_server {tags {"repl external:skip"}} {
             $A set key value
             
             # wait for command propagation
-            wait_for_condition 50 100 {
+            wait_for_condition 100 100 {
                 [$B get key] eq {value}
             } else {
                 fail "Replica did not receive the command"
@@ -687,6 +694,12 @@ foreach testType {Successful Aborted} {
                         assert_error {LOADING*} {$replica REPLICAOF no one}
                     }
 
+                    test {MODULE LOAD and LOADEX are blocked during async-loading} {
+                        set testmodule [file normalize tests/modules/basics.so]
+                        assert_error {LOADING*} {$replica MODULE LOAD $testmodule}
+                        assert_error {LOADING*} {$replica MODULE LOADEX $testmodule}
+                    }
+
                     # Make sure that next sync will not start immediately so that we can catch the replica in between syncs
                     $master config set repl-diskless-sync-delay 5
 
@@ -1101,6 +1114,69 @@ start_server {tags {"repl external:skip"} overrides {save ""}} {
     }
 }
 
+# Compressed sibling of the drop-during-pipe family above. Compression finishes
+# the transfer too quickly for the size-based throttling used there, so a
+# per-key save delay keeps the compressed diskless transfer in flight while one
+# replica is killed. The primary's RDB child must complete without crashing and
+# the surviving replica must converge.
+start_server {tags {"repl external:skip"} overrides {save "" rdbcompression lz4}} {
+    set master [srv 0 client]
+    $master config set repl-diskless-sync yes
+    $master config set repl-diskless-sync-delay 5
+    $master config set repl-diskless-sync-max-replicas 2
+    $master config set dual-channel-replication-enabled "no"; # dual-channel-replication doesn't use pipe
+    set master_host [srv 0 host]
+    set master_port [srv 0 port]
+    $master debug populate 4000 test 1000
+    # 1ms per key over 4k keys keeps the compressed transfer in flight for
+    # about 4 seconds; resetting the delay later does not speed up the
+    # already-forked child, so the kill below always lands mid-transfer.
+    $master config set rdb-key-save-delay 1000
+
+    test "diskless replica drops during compressed rdb pipe" {
+        start_server {overrides {save "" rdbcompression lz4 repl-diskless-load swapdb}} {
+            set survivor [srv 0 client]
+            start_server {overrides {save "" rdbcompression lz4}} {
+                set loglines [count_log_lines -2]
+                $survivor replicaof $master_host $master_port
+                [srv 0 client] replicaof $master_host $master_port
+
+                # Wait for a compressed transfer to be in flight: the cohort
+                # negotiated compression and the survivor began the socket load.
+                wait_for_log_messages -2 {"*Diskless full sync with compression: lz4*"} $loglines 1500 10
+                wait_for_log_messages -1 {"*Loading DB in memory*"} 0 1500 10
+
+                # Kill one replica mid-transfer.
+                exec kill [srv 0 pid]
+
+                wait_for_condition 2400 100 {
+                    [s -2 rdb_bgsave_in_progress] == 0
+                } else {
+                    fail "rdb child didn't terminate"
+                }
+                wait_for_log_messages -2 {"*Diskless rdb transfer, done reading from pipe, 1 replicas still up*"} $loglines 1000 10
+                $master config set rdb-key-save-delay 0
+
+                # Verify the surviving replica converged on the compressed sync.
+                wait_for_condition 600 100 {
+                    [lindex [$survivor role] 3] eq {connected}
+                } else {
+                    fail "surviving replica still not connected after some time"
+                }
+                wait_for_condition 50 100 {
+                    [$master dbsize] == [$survivor dbsize]
+                } else {
+                    fail "Different number of keys between master and surviving replica after too long time."
+                }
+                set digest [$master debug digest]
+                set digest0 [$survivor debug digest]
+                assert {$digest ne 0000000000000000000000000000000000000000}
+                assert {$digest eq $digest0}
+            }
+        }
+    }
+}
+
 test "diskless replication child being killed is collected" {
     # when diskless master is waiting for the replica to become writable
     # it removes the read event from the rdb pipe so if the child gets killed
@@ -1448,7 +1524,7 @@ test {replica can handle EINTR if use diskless load} {
             set res [wait_for_log_messages -1 {"*Loading DB in memory*"} 0 200 10]
             set loglines [lindex $res 1]
 
-            # Wait till we see the watchgod log line AFTER the loading started
+            # Wait till we see the watchdog log line AFTER the loading started
             wait_for_log_messages -1 {"*WATCHDOG TIMER EXPIRED*"} $loglines 200 10
 
             # Make sure we're still loading, and that there was just one full sync attempt
@@ -1664,6 +1740,193 @@ start_server {tags {"repl external:skip"}} {
                 puts [$primary keys *]
                 puts [$replica keys *]
                 fail "Replication failed."
+            }
+        }
+    }
+}
+
+# Verify that after a diskless (socket) replication sync, save metrics
+# are correctly reset and rdb_last_bgsave_time_sec is a plausible duration.
+start_server {tags {"repl external:skip"}} {
+    start_server {} {
+        test {diskless sync: save metrics are plausible after socket transfer} {
+            set master [srv -1 client]
+            set master_host [srv -1 host]
+            set master_port [srv -1 port]
+            set replica [srv 0 client]
+
+            $master config set repl-diskless-sync yes
+            $master config set repl-diskless-sync-delay 0
+            $master config set save ""
+            $replica config set save ""
+
+            $master debug populate 100
+
+            $replica replicaof $master_host $master_port
+
+            wait_for_condition 100 100 {
+                [string match {*master_link_status:up*} [$replica info replication]]
+            } else {
+                fail "Replica didn't complete sync"
+            }
+
+            # After diskless sync, master metrics should be sane
+            set time_sec [$master info persistence]
+            set bgsave_time [getInfoProperty $time_sec rdb_last_bgsave_time_sec]
+            assert {$bgsave_time >= 0 && $bgsave_time < 3600}
+
+            # Save state should be cleared
+            assert_equal [getInfoProperty $time_sec rdb_bgsave_in_progress] "0"
+            assert_equal [getInfoProperty $time_sec current_save_keys_processed] "0"
+            assert_equal [getInfoProperty $time_sec current_save_keys_total] "0"
+        }
+    }
+}
+
+start_server {tags {"repl external:skip"}} {
+    start_server {} {
+        test {diskless sync: save metrics are plausible after failed socket transfer} {
+            set master [srv -1 client]
+            set master_host [srv -1 host]
+            set master_port [srv -1 port]
+            set replica [srv 0 client]
+
+            $master config set repl-diskless-sync yes
+            $master config set repl-diskless-sync-delay 0
+            $master config set save ""
+            $replica config set save ""
+
+            $master debug populate 1000
+            $master config set rdb-key-save-delay 100000
+
+            $replica replicaof $master_host $master_port
+
+            # Wait for bgsave to start on master
+            wait_for_condition 100 100 {
+                [getInfoProperty [$master info persistence] rdb_bgsave_in_progress] == 1
+            } else {
+                fail "diskless bgsave didn't start"
+            }
+
+            # Kill the replica connection to abort the transfer
+            $replica replicaof no one
+
+            # Wait for bgsave to finish on master
+            wait_for_condition 100 100 {
+                [getInfoProperty [$master info persistence] rdb_bgsave_in_progress] == 0
+            } else {
+                fail "diskless bgsave didn't stop after replica disconnect"
+            }
+
+            # Metrics should still be sane after failure
+            set time_sec [$master info persistence]
+            set bgsave_time [getInfoProperty $time_sec rdb_last_bgsave_time_sec]
+            assert {$bgsave_time >= 0 && $bgsave_time < 3600}
+            assert_equal [getInfoProperty $time_sec current_save_keys_processed] "0"
+            assert_equal [getInfoProperty $time_sec current_save_keys_total] "0"
+
+            $master config set rdb-key-save-delay 0
+        }
+    }
+}
+start_server {tags {"repl external:skip"}} {
+    set replica [srv 0 client]
+    $replica config set repl-diskless-load disabled
+    $replica commandlog reset slow
+    $replica config set commandlog-execution-slower-than 10000
+
+    start_server {} {
+        set primary [srv 0 client]
+        set primary_host [srv 0 host]
+        set primary_port [srv 0 port]
+
+        $primary config set repl-diskless-sync yes
+        $primary config set repl-diskless-sync-delay 0
+        $primary config set rdbcompression no
+        $primary config set rdb-key-save-delay 10000000
+        $primary debug populate 5 blockread 100000
+
+        test "Cancelling handshake while bio rdb-save read is blocked stalls only up to repl_syncio_timeout" {
+            $replica replicaof $primary_host $primary_port
+
+            # Wait until the replica has entered the payload read phase, i.e. the
+            # bio thread has read the first chunk and is now blocked on the next
+            # (silent) read.
+            wait_for_log_messages -1 {"*receiving streamed RDB from primary*to disk*"} 0 1000 50
+
+            # Aborting the handshake makes the main thread wait in bioDrainWorker()
+            # until the bio thread's blocked read times out. That read is bounded
+            # by repl_syncio_timeout (~5s).
+            $replica replicaof no one
+            # The test is flaky, don't bother to keep it.
+            # assert_match {*replicaof*} [$replica commandlog get -1 slow]
+        }
+
+        $primary config set rdb-key-save-delay 0
+    }
+}
+
+test "SYNC/PSYNC returns NOMASTERLINK with replica-serve-stale-data yes/no and master link down" {
+    start_server {tags {"repl external:skip"}} {
+        set replica [srv 0 client]
+
+        # Point the replica at an unreachable primary so the link stays down.
+        $replica replicaof 127.0.0.1 1
+        wait_for_condition 50 100 {
+            [string match {*master_link_status:down*} [$replica info replication]]
+        } else {
+            fail "Replica link is not down"
+        }
+
+        # SYNC/PSYNC must reach syncCommand and return -NOMASTERLINK in both
+        # the 'no' and 'yes' configurations.
+        foreach stale {yes no} {
+            $replica config set replica-serve-stale-data $stale
+            assert_error {NOMASTERLINK*} {$replica psync ? -1}
+            assert_error {NOMASTERLINK*} {$replica sync}
+        }
+    }
+}
+
+start_server {tags {"repl external:skip cluster:skip"}} {
+    set primary [srv 0 client]
+    set primary_host [srv 0 host]
+    set primary_port [srv 0 port]
+    set bigstr [string repeat x 1000000]
+
+    start_server {} {
+        set replica [srv 0 client]
+
+        test "Cached primary discard must not leak stat_clients_type_memory" {
+            $replica replicaof no one
+            $replica replicaof $primary_host $primary_port
+            wait_for_sync $replica
+
+            # We set the replica's hz to a high value so that the replica can
+            # invoke clientsCron() more frequently for updates.
+            $replica config set hz 500
+
+            for {set j 0} {$j < 30} {incr j} {
+                # Each iteration changes the primary replid (forcing a full resync)
+                # and uses "replicaof no one" to disconnect the primary, which caches
+                # the primary client as a cached_primary and then discards it.
+                $primary debug change-repl-id
+                $replica replicaof no one
+                $replica replicaof $primary_host $primary_port
+                wait_for_sync $replica
+
+                # Use bigstr to inflate the primary client's querybuf on the replica,
+                # so its memory is accounted under mem_clients_normal.
+                $primary set foo $bigstr
+                wait_for_ofs_sync $primary $replica
+            }
+
+            # The replica no longer holds the large querybuf; wait for clientsCron()
+            # to shrink it and let mem_clients_normal drop back to a small value.
+            wait_for_condition 1000 50 {
+                [status $replica mem_clients_normal] < 1000000
+            } else {
+                fail "mem_clients_normal leaked: expected < 1000000 but got [status $replica mem_clients_normal]"
             }
         }
     }

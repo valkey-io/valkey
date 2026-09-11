@@ -130,7 +130,7 @@ start_server {tags {"keyspace"}} {
         append res [r get mykey2{t}]
     } {foobar}
 
-    test {RENAME against non existing source key} {
+    test {RENAME against nonexistent source key} {
         catch {r rename nokey{t} foobar{t}} err
         format $err
     } {ERR*}
@@ -145,7 +145,7 @@ start_server {tags {"keyspace"}} {
         r renamenx mykey mykey
     } {0}
 
-    test {RENAME where source and dest key are the same (non existing)} {
+    test {RENAME where source and dest key are the same (nonexistent)} {
         r del mykey
         catch {r rename mykey mykey} err
         format $err
@@ -318,7 +318,7 @@ foreach {type large} [array get largevalue] {
         for {set j 0} {$j < 130} {incr j} {
             r zadd zset2{t} [randomInt 50] ele-[randomInt 10]
         }
-        assert_encoding skiplist zset2{t}
+        assert_encoding btree zset2{t}
         r copy zset2{t} newzset2{t}
         set digest [debug_digest_value zset2{t}]
         assert_equal $digest [debug_digest_value newzset2{t}]

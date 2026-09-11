@@ -78,7 +78,7 @@ following keys. To be safe, assume all of them are optional.
   * `"TOUCHES_ARBITRARY_KEYS"`
   * `"WRITE"`
 * `"acl_categories"`: A list of ACL categories in uppercase. Note that the
-  effective ACL categies include "implicit ACL categories" explained below.
+  effective ACL categories include "implicit ACL categories" explained below.
   * `"ADMIN"`
   * `"BITMAP"`
   * `"CONNECTION"`
@@ -183,7 +183,7 @@ Each element in this array is an object with the following keys:
     command line. The first key is the argument after the keyword.
   * `{"unknown": null}`: Finding the keys of this command is too complicated to
     explain.
-* `"find_keys"`: How to find the remainnig keys of this key spec. It's an object
+* `"find_keys"`: How to find the remaining keys of this key spec. It's an object
   on one of these forms:
   * `{"range": {"lastkey": LAST, "step": STEP, "limit": LIMIT}}`: A range of keys.
     * LAST: If LAST is positive, it's the index of the last key relative to the
@@ -209,7 +209,7 @@ doesn't have an `"arguments"` key.
 Appendix
 --------
 
-How to list all the `group`, `command_flags` and `acl_categries`, etc. used in all these files:
+How to list all the `group`, `command_flags` and `acl_categories`, etc. used in all these files:
 
     cat *.json | jq '.[].group'             | grep -F '"' | sed 's/^ *//;s/, *$//;s/^/  * `/;s/$/`/' | sort | uniq
     cat *.json | jq '.[].command_flags'     | grep -F '"' | sed 's/^ *//;s/, *$//;s/^/  * `/;s/$/`/' | sort | uniq

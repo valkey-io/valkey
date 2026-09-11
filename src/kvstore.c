@@ -149,7 +149,7 @@ static unsigned long long kvstoreCursorToHashtableCursor(kvstore *kvs, unsigned 
 }
 
 int kvstoreIsImporting(kvstore *kvs, int didx) {
-    assert(didx < kvs->num_hashtables);
+    assert(didx >= 0 && didx < kvs->num_hashtables);
     return hashtableFind(kvs->importing, (void *)(intptr_t)didx, NULL);
 }
 
@@ -441,13 +441,15 @@ unsigned long long kvstoreScan(kvstore *kvs,
     kvstoreScanCallbackData cb_data = {.scan_cb = scan_cb, .privdata = privdata, .didx = didx};
 
     int skip = !ht || (skip_cb && skip_cb(ht)) || kvstoreIsImporting(kvs, didx);
-    if (!skip) {
+    if (skip) {
+        ht_cursor = 0;
+    } else {
         ht_cursor = hashtableScan(ht, ht_cursor, hashtableScanToKvstoreScanCallback, &cb_data);
         /* In hashtableScan, scan_cb may delete entries (e.g., in active expire case). */
         freeHashtableIfNeeded(kvs, didx);
     }
     /* scanning done for the current hash table or if the scanning wasn't possible, move to the next hashtable index. */
-    if (ht_cursor == 0 || skip) {
+    if (ht_cursor == 0) {
         if (first_idx >= 0 && didx >= last_idx) {
             /* Range exhausted; no need to look up the next hashtable. */
             return 0;
@@ -944,7 +946,7 @@ bool kvstoreHashtableDelete(kvstore *kvs, int didx, const void *key) {
  * are not included in hashtable metrics and are excluded from scanning and
  * random key lookup. */
 void kvstoreSetIsImporting(kvstore *kvs, int didx, int is_importing) {
-    assert(didx < kvs->num_hashtables);
+    assert(didx >= 0 && didx < kvs->num_hashtables);
 
     hashtable *ht = kvstoreGetHashtable(kvs, didx);
 

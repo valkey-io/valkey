@@ -30,6 +30,7 @@
 
 #include "hashtable.h"
 #include "server.h"
+#include "ordered_index.h"
 #include "serverassert.h"
 #include "functions.h"
 #include "intset.h" /* Compact integer set structure */
@@ -38,6 +39,7 @@
 #include "zmalloc.h"
 #include "sds.h"
 #include "module.h"
+#include "bgiteration.h"
 #include <math.h>
 #include <ctype.h>
 
@@ -79,6 +81,98 @@ void objectSetLRU(robj *o, unsigned int lru) {
     o->lru = lru;
 }
 
+/* Get beginning of embedded data, which may contain expire, metadata, key, and/or value.
+ * Embedded data flags must be accurate when called. */
+static unsigned char *objectEmbeddedData(const robj *o) {
+    unsigned char *data = (void *)(o + 1);
+    if (o->hasembval) data -= sizeof(void *);
+    return data;
+}
+
+/* ===================== Object Metadata Management ========================= */
+
+/* Static variable to store metadata size. Set once at server initialization. */
+static size_t object_metadata_size = 0;
+
+/* Set the metadata size.
+ * Size should not be changed once set. */
+void objectSetMetadataSize(size_t size) {
+    /* Metadata size already set - only allow setting to the same value */
+    if (object_metadata_size == size) return;
+
+    /* When current size is 0 and the incoming size is not - setting for the first time */
+    serverAssert(object_metadata_size == 0);
+
+    /* Check that all databases are empty */
+    if (server.db != NULL) {
+        for (int j = 0; j < server.dbnum; j++) {
+            if (server.db[j] != NULL) {
+                serverAssert(kvstoreSize(server.db[j]->keys) == 0);
+            }
+        }
+    }
+
+    object_metadata_size = size;
+}
+
+/* Calculate the size of metadata for an object.
+ * Returns the configured metadata size if the object has an embedded key, 0 otherwise. */
+size_t objectGetMetadataSize(const robj *o) {
+    if (o->hasembkey) return object_metadata_size;
+    return 0;
+}
+
+/* Get a void pointer to the metadata for an object.
+ * Returns NULL if the object doesn't have metadata.
+ * The caller must cast this to the appropriate metadata structure type.
+ *
+ * Memory layout visualization for objects:
+ *
+ * ┌─────────────────────────────────────────────────────────────────┐
+ * │ robj (struct serverObject)                                      │
+ * │  - type, encoding, lru, hasexpire, hasembkey, hasembval...      │
+ * ├─────────────────────────────────────────────────────────────────┤
+ * │ expire field (optional, if hasexpire == 1)                      │
+ * │  - long long (8 bytes)                                          │
+ * ├─────────────────────────────────────────────────────────────────┤
+ * │ metadata (optional, if hasembkey == 1 && metadata_size > 0)     │
+ * │  - (object_metadata_size)                                       │ ← objectGetMetadata returns pointer here
+ * ├─────────────────────────────────────────────────────────────────┤
+ * │ embedded key (if hasembkey == 1)                                │
+ * ├─────────────────────────────────────────────────────────────────┤
+ * │ embedded value (if hasembval == 1)                              │
+ * └─────────────────────────────────────────────────────────────────┘
+ */
+void *objectGetMetadata(const robj *o) {
+    if (object_metadata_size == 0 || !o->hasembkey) return NULL;
+
+    /* The memory after the struct where we embedded metadata. */
+    unsigned char *data = objectEmbeddedData(o);
+
+    /* If expire field exists, metadata is after it */
+    if (o->hasexpire) {
+        data += sizeof(long long);
+    }
+
+    return (void *)data;
+}
+
+/* Copy the opaque metadata region from one object to another. Used when an
+ * object is reallocated (e.g. objectSetKeyAndExpire) so that metadata attached
+ * by subsystems such as background iteration (forkless save) survives the move.
+ *
+ * The copy happens only when both objects actually carry metadata (both have an
+ * embedded key and the configured metadata size is non-zero). If the source has
+ * no metadata there is nothing to preserve, and the destination keeps its
+ * zero-initialized metadata. */
+void objectCopyMetadata(robj *dst, const robj *src) {
+    if (object_metadata_size == 0) return;
+    void *src_md = objectGetMetadata(src);
+    void *dst_md = objectGetMetadata(dst);
+    if (src_md == NULL || dst_md == NULL) return;
+    memcpy(dst_md, src_md, object_metadata_size);
+}
+
 /* ===================== Creation and parsing of objects ==================== */
 
 /* Creates an object, optionally with embedded key and expire fields. The key
@@ -92,10 +186,12 @@ static robj *createUnembeddedObjectWithKeyAndExpire(int type, void *val, const_s
     size_t key_sds_len = has_embkey ? sdslen(key) : 0;
     char key_sds_type = has_embkey ? sdsReqType(key_sds_len) : 0;
     size_t key_sds_size = has_embkey ? sdsReqSize(key_sds_len, key_sds_type) : 0;
+    size_t metadata_size = has_embkey ? object_metadata_size : 0;
     size_t min_size = sizeof(robj);
     if (has_expire) {
         min_size += sizeof(long long);
     }
+    min_size += metadata_size;
     if (has_embkey) {
         /* Size of embedded key, incl. 1 byte for prefixed sds hdr size. */
         min_size += 1 + key_sds_size;
@@ -126,6 +222,12 @@ static robj *createUnembeddedObjectWithKeyAndExpire(int type, void *val, const_s
     if (o->hasexpire) {
         *(long long *)data = expire;
         data += sizeof(long long);
+    }
+
+    /* Initialize metadata to zero */
+    if (metadata_size > 0) {
+        memset(data, 0, metadata_size);
+        data += metadata_size;
     }
 
     /* Copy embedded key. */
@@ -170,12 +272,6 @@ robj *createRawStringObject(const char *ptr, size_t len) {
     return createObject(OBJ_STRING, sdsnewlen(ptr, len));
 }
 
-/* Get beginning of embedded data, which may contain expire, key, and/or value. Embedded data flags must be accurate when called. */
-static unsigned char *objectEmbeddedData(const robj *o) {
-    unsigned char *data = (void *)(o + 1);
-    if (o->hasembval) data -= sizeof(void *);
-    return data;
-}
 
 /* Creates a new embedded string object and copies the content of key, val_ptr
  * and expire to the new object. LRU is set to 0. */
@@ -189,6 +285,7 @@ static robj *createEmbeddedStringObjectWithKeyAndExpire(const char *val_ptr,
     char key_sds_type = has_embkey ? sdsReqType(key_sds_len) : 0;
     size_t key_sds_size = has_embkey ? sdsReqSize(key_sds_len, key_sds_type) : 0;
     size_t val_sds_size = sdsReqSize(val_len, SDS_TYPE_8);
+    size_t metadata_size = has_embkey ? object_metadata_size : 0;
     if (val_sds_size < sizeof(void *)) {
         val_sds_size = sizeof(void *); /* Ensure it's possible to "unembed" value later */
     }
@@ -198,6 +295,7 @@ static robj *createEmbeddedStringObjectWithKeyAndExpire(const char *val_ptr,
     if (expire != EXPIRY_NONE) {
         min_size += sizeof(long long);
     }
+    min_size += metadata_size;
     if (has_embkey) {
         /* Size of embedded key, incl. 1 byte for prefixed sds hdr size. */
         min_size += 1 + key_sds_size;
@@ -229,6 +327,12 @@ static robj *createEmbeddedStringObjectWithKeyAndExpire(const char *val_ptr,
     if (o->hasexpire) {
         *(long long *)data = expire;
         data += sizeof(long long);
+    }
+
+    /* Initialize metadata to zero */
+    if (metadata_size > 0) {
+        memset(data, 0, metadata_size);
+        data += metadata_size;
     }
 
     /* Copy embedded key. */
@@ -264,6 +368,7 @@ static bool shouldEmbedStringObject(size_t val_len, const_sds key, long long exp
     if (key) {
         size_t key_len = sdslen(key);
         size += sdsReqSize(key_len, sdsReqType(key_len)) + 1; /* 1 byte for prefixed sds hdr size */
+        size += object_metadata_size;
     }
     size += (expire != EXPIRY_NONE) * sizeof(long long);
     size += sdsReqSize(val_len, SDS_TYPE_8);
@@ -283,7 +388,7 @@ robj *createStringObjectFromSds(const_sds s) {
     return createStringObject(s, sdslen(s));
 }
 
-static robj *createStringObjectWithKeyAndExpire(const char *ptr, size_t len, const_sds key, long long expire) {
+robj *createStringObjectWithKeyAndExpire(const char *ptr, size_t len, const_sds key, long long expire) {
     if (shouldEmbedStringObject(len, key, expire)) {
         return createEmbeddedStringObjectWithKeyAndExpire(ptr, len, key, expire);
     } else {
@@ -299,6 +404,8 @@ void *objectGetVal(const robj *o) {
             data += sizeof(long long);
         }
         if (o->hasembkey) {
+            /* Skip metadata */
+            data += objectGetMetadataSize(o);
             /* Skip embedded key */
             uint8_t hdr_size = *(uint8_t *)data;
             data += 1 + hdr_size;                /* +1 for header size byte */
@@ -318,6 +425,9 @@ sds objectGetKey(const robj *o) {
         data += sizeof(long long);
     }
     if (o->hasembkey) {
+        /* Skip metadata */
+        data += objectGetMetadataSize(o);
+        /* Skip header size byte */
         uint8_t hdr_size = *(uint8_t *)data;
         data += 1 + hdr_size;
         return (sds)data;
@@ -387,6 +497,8 @@ robj *objectSetKeyAndExpire(robj *o, const_sds key, long long expire) {
     if (objectGetType(o) == OBJ_STRING && objectGetEncoding(o) == OBJ_ENCODING_EMBSTR) {
         robj *new = createStringObjectWithKeyAndExpire(objectGetVal(o), sdslen(objectGetVal(o)), key, expire);
         objectSetLRU(new, objectGetLRU(o));
+        objectCopyMetadata(new, o);
+        bgIteration_updateDbEntryPtr(o, new);
         decrRefCount(o);
         return new;
     }
@@ -412,6 +524,8 @@ robj *objectSetKeyAndExpire(robj *o, const_sds key, long long expire) {
     robj *new = createUnembeddedObjectWithKeyAndExpire(objectGetType(o), ptr, key, expire);
     objectSetEncoding(new, objectGetEncoding(o));
     objectSetLRU(new, objectGetLRU(o));
+    objectCopyMetadata(new, o);
+    bgIteration_updateDbEntryPtr(o, new);
     decrRefCount(o);
     return new;
 }
@@ -474,7 +588,7 @@ robj *createStringObjectFromLongLongWithSds(long long value) {
 
 /* Create a string object from a long double. If humanfriendly is non-zero
  * it does not use exponential format and trims trailing zeroes at the end,
- * however this results in loss of precision. Otherwise exp format is used
+ * however this results in loss of precision. Otherwise, exp format is used
  * and the output of snprintf() is not modified.
  *
  * The 'humanfriendly' option is used for INCRBYFLOAT and HINCRBYFLOAT. */
@@ -556,9 +670,9 @@ robj *createZsetObject(void) {
     robj *o;
 
     zs->ht = hashtableCreate(&zsetHashtableType);
-    zs->zsl = zslCreate();
+    zs->oi = orderedIndexCreate();
     o = createObject(OBJ_ZSET, zs);
-    objectSetEncoding(o, OBJ_ENCODING_SKIPLIST);
+    objectSetEncoding(o, OBJ_ENCODING_BTREE);
     return o;
 }
 
@@ -611,10 +725,10 @@ void freeSetObject(robj *o) {
 void freeZsetObject(robj *o) {
     zset *zs;
     switch (objectGetEncoding(o)) {
-    case OBJ_ENCODING_SKIPLIST:
+    case OBJ_ENCODING_BTREE:
         zs = objectGetVal(o);
         hashtableRelease(zs->ht);
-        zslFree(zs->zsl);
+        orderedIndexFree(zs->oi);
         zfree(zs);
         break;
     case OBJ_ENCODING_LISTPACK: zfree(objectGetVal(o)); break;
@@ -748,19 +862,14 @@ void dismissSetObject(robj *o, size_t size_hint) {
 
 /* See dismissObject() */
 void dismissZsetObject(robj *o, size_t size_hint) {
-    if (objectGetEncoding(o) == OBJ_ENCODING_SKIPLIST) {
+    if (objectGetEncoding(o) == OBJ_ENCODING_BTREE) {
         zset *zs = objectGetVal(o);
-        zskiplist *zsl = zs->zsl;
-        serverAssert(zslGetLength(zsl) != 0);
+        unsigned long len = orderedIndexLength(zs->oi);
+        serverAssert(len != 0);
         /* We iterate all nodes only when average member size is bigger than a
          * page size, and there's a high chance we'll actually dismiss something. */
-        if (size_hint / zslGetLength(zsl) >= server.page_size) {
-            zskiplistNode *zn = zslGetTail(zsl);
-            while (zn != NULL) {
-                zskiplistNode *next = zn->backward;
-                dismissMemory(zn, 0);
-                zn = next;
-            }
+        if (size_hint / len >= server.page_size) {
+            orderedIndexDismissMemory(zs->oi);
         }
 
         dismissHashtable(zs->ht);
@@ -1207,7 +1316,7 @@ char *strEncoding(int encoding) {
     case OBJ_ENCODING_QUICKLIST: return "quicklist";
     case OBJ_ENCODING_LISTPACK: return "listpack";
     case OBJ_ENCODING_INTSET: return "intset";
-    case OBJ_ENCODING_SKIPLIST: return "skiplist";
+    case OBJ_ENCODING_BTREE: return "btree";
     case OBJ_ENCODING_EMBSTR: return "embstr";
     case OBJ_ENCODING_STREAM: return "stream";
     default: return "unknown";
@@ -1272,18 +1381,21 @@ size_t objectComputeSize(robj *key, robj *o, size_t sample_size, int dbid) {
     } else if (objectGetType(o) == OBJ_ZSET) {
         if (objectGetEncoding(o) == OBJ_ENCODING_LISTPACK) {
             asize += zmalloc_size(objectGetVal(o));
-        } else if (objectGetEncoding(o) == OBJ_ENCODING_SKIPLIST) {
-            hashtable *ht = ((zset *)objectGetVal(o))->ht;
-            zskiplist *zsl = ((zset *)objectGetVal(o))->zsl;
-            zskiplistNode *zheader = zslGetHeader(zsl);
-            zskiplistNode *znode = zheader->level[0].forward;
-            asize += sizeof(zset) + zslGetAllocSize() + hashtableMemUsage(ht);
-            while (znode != NULL && samples < sample_size) {
-                elesize += zmalloc_size(znode);
+        } else if (objectGetEncoding(o) == OBJ_ENCODING_BTREE) {
+            zset *zs = objectGetVal(o);
+            hashtableIterator iter;
+            hashtableInitIterator(&iter, zs->ht, 0);
+            void *next;
+
+            asize += sizeof(zset) + orderedIndexEstimateStructureMemory(zs->oi) + hashtableMemUsage(zs->ht);
+            /* The hashtable entries are the packed items shared with the
+             * ordered index, so sampling them covers the member payloads. */
+            while (hashtableNext(&iter, &next) && samples < sample_size) {
+                elesize += sdsAllocSize((sds)next);
                 samples++;
-                znode = znode->level[0].forward;
             }
-            if (samples) asize += (double)elesize / samples * hashtableSize(ht);
+            hashtableCleanupIterator(&iter);
+            if (samples) asize += (double)elesize / samples * hashtableSize(zs->ht);
         } else {
             serverPanic("Unknown sorted set encoding");
         }
@@ -1717,7 +1829,7 @@ int objectSetLRUOrLFU(robj *val, long long lfu_freq, long long lru_idle_secs) {
 /* This is a helper function for the OBJECT command. We need to lookup keys
  * without any modification of LRU or other parameters. */
 robj *objectCommandLookup(client *c, robj *key) {
-    return lookupKeyReadWithFlags(c->db, key, LOOKUP_NOTOUCH | LOOKUP_NONOTIFY);
+    return lookupKeyReadWithFlags(c->db, key, LOOKUP_NOTOUCH | LOOKUP_NONOTIFY | LOOKUP_NOHOTKEYS);
 }
 
 robj *objectCommandLookupOrReply(client *c, robj *key, robj *reply) {

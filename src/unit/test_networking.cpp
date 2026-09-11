@@ -6,6 +6,8 @@
 
 #include "generated_wrappers.hpp"
 
+#include "fake_connection.hpp"
+
 #include <climits>
 #include <cstdio>
 #include <cstring>
@@ -77,74 +79,16 @@ void testOnlyAddBulkStringToReplyIOV(char *buf, size_t buf_len, replyIOV *reply,
 void testOnlyAddEncodedBufferToReplyIOV(char *buf, size_t bufpos, replyIOV *reply, bufWriteMetadata *metadata);
 void testOnlyAddBufferToReplyIOV(int encoded, char *buf, size_t bufpos, replyIOV *reply, bufWriteMetadata *metadata);
 void testOnlySaveLastWrittenBuf(client *c, bufWriteMetadata *metadata, int bufcnt, size_t totlen, size_t totwritten);
+void testOnlyTrimReplyUnusedTailSpace(client *c);
+/* Non-static engine function exercised directly by the deferred-reply tests. */
+void setDeferredReply(client *c, void *node, const char *s, size_t length);
 }
 
-/* Fake structures and functions */
-typedef struct fakeConnection {
-    connection conn;
-    int error;
-    char *buffer;
-    size_t buf_size;
-    size_t written;
-} fakeConnection;
-
-/* Fake connWrite function */
-static int fake_connWrite(connection *conn, const void *data, size_t size) {
-    fakeConnection *fake_conn = (fakeConnection *)conn;
-    if (fake_conn->error) return -1;
-
-    size_t to_write = size;
-    if (fake_conn->written + to_write > fake_conn->buf_size) {
-        to_write = fake_conn->buf_size - fake_conn->written;
-    }
-
-    memcpy(fake_conn->buffer + fake_conn->written, data, to_write);
-    fake_conn->written += to_write;
-    return (int)to_write;
-}
-
-/* Fake connWritev function */
-static int fake_connWritev(connection *conn, const struct iovec *iov, int iovcnt) {
-    fakeConnection *fake_conn = (fakeConnection *)conn;
-    if (fake_conn->error) return -1;
-
-    size_t total = 0;
-    for (int i = 0; i < iovcnt; i++) {
-        size_t to_write = iov[i].iov_len;
-        if (fake_conn->written + to_write > fake_conn->buf_size) {
-            to_write = fake_conn->buf_size - fake_conn->written;
-        }
-        if (to_write == 0) break;
-
-        memcpy(fake_conn->buffer + fake_conn->written, iov[i].iov_base, to_write);
-        fake_conn->written += to_write;
-        total += to_write;
-    }
-    return (int)total;
-}
-
-/* Fake connection type - initialized in SetUpTestSuite */
-static ConnectionType CT_Fake;
-
-static fakeConnection *connCreateFake(void) {
-    fakeConnection *conn = (fakeConnection *)(zcalloc(sizeof(fakeConnection)));
-    conn->conn.type = &CT_Fake;
-    conn->conn.fd = -1;
-    conn->conn.iovcnt = IOV_MAX;
-    return conn;
-}
-
-/* Test fixture for networking tests - minimal fixture with no setup/teardown */
+/* Test fixture for networking tests - minimal fixture with no setup/teardown.
+ * The fake connection itself lives in fake_connection.hpp, shared with the
+ * other unit tests that need one. */
 class NetworkingTest : public ::testing::Test {
   protected:
-    static void SetUpTestSuite() {
-        /* Initialize CT_Fake explicitly by field name to avoid dependency
-         * on field order (designated initializers require C++20). */
-        memset(&CT_Fake, 0, sizeof(CT_Fake));
-        CT_Fake.write = fake_connWrite;
-        CT_Fake.writev = fake_connWritev;
-    }
-
     void SetUp() override {
         /* Initialize server fields that are accessed by networking functions */
         server.commandlog[COMMANDLOG_TYPE_LARGE_REPLY].threshold = -1; /* Disable tracking */
@@ -164,9 +108,7 @@ TEST_F(NetworkingTest, TestWriteToReplica) {
     c->reply = listCreate();
     /* Test 1: Single block write */
     {
-        fakeConnection *fake_conn = connCreateFake();
-        fake_conn->buffer = (char *)zmalloc(1024);
-        fake_conn->buf_size = 1024;
+        fakeConnection *fake_conn = connCreateFake(1024);
         c->conn = (connection *)fake_conn;
 
         /* Create replication buffer block */
@@ -190,19 +132,14 @@ TEST_F(NetworkingTest, TestWriteToReplica) {
         ASSERT_EQ((c->write_flags & WRITE_FLAGS_WRITE_ERROR), 0);
 
         /* Cleanup */
-        zfree(fake_conn->buffer);
-        zfree(fake_conn);
+        connFreeFake(fake_conn);
         zfree(block);
         listEmpty(server.repl_buffer_blocks);
     }
 
     /* Test 2: Multiple blocks write */
     {
-        fakeConnection *fake_conn = connCreateFake();
-        fake_conn->error = 0;
-        fake_conn->written = 0;
-        fake_conn->buffer = (char *)zmalloc(1024);
-        fake_conn->buf_size = 1024;
+        fakeConnection *fake_conn = connCreateFake(1024);
         c->conn = (connection *)fake_conn;
 
         /* Create multiple replication buffer blocks */
@@ -233,8 +170,7 @@ TEST_F(NetworkingTest, TestWriteToReplica) {
         ASSERT_EQ((c->write_flags & WRITE_FLAGS_WRITE_ERROR), 0);
 
         /* Cleanup */
-        zfree(fake_conn->buffer);
-        zfree(fake_conn);
+        connFreeFake(fake_conn);
         zfree(block1);
         zfree(block2);
         listEmpty(server.repl_buffer_blocks);
@@ -242,11 +178,8 @@ TEST_F(NetworkingTest, TestWriteToReplica) {
 
     /* Test 3: Write error */
     {
-        fakeConnection *fake_conn = connCreateFake();
+        fakeConnection *fake_conn = connCreateFake(1024);
         fake_conn->error = 1; /* Simulate write error */
-        fake_conn->buffer = (char *)zmalloc(1024);
-        fake_conn->buf_size = 1024;
-        fake_conn->written = 0;
         c->conn = (connection *)fake_conn;
 
         /* Create replication buffer block */
@@ -269,8 +202,7 @@ TEST_F(NetworkingTest, TestWriteToReplica) {
 
         /* Cleanup */
         listEmpty(server.repl_buffer_blocks);
-        zfree(fake_conn->buffer);
-        zfree(fake_conn);
+        connFreeFake(fake_conn);
         zfree(block);
         c->repl_data->ref_repl_buf_node = nullptr;
     }
@@ -767,4 +699,252 @@ TEST_F(NetworkingTest, TestAddBufferToReplyIOV) {
 
     releaseReplyReferences(c);
     freeReplyOffloadClient(c);
+}
+
+/* Helper: allocate a plain reply block with the given used/size and fill its
+ * used bytes with `fill`. Caller adds it to a reply list owned by a client
+ * created via createTestClient (freed by freeReplyOffloadClient). */
+static clientReplyBlock *makePlainReplyBlock(size_t size, size_t used, char fill) {
+    clientReplyBlock *blk = (clientReplyBlock *)zmalloc(sizeof(clientReplyBlock) + size);
+    blk->size = size;
+    blk->used = used;
+    blk->flag.buf_encoded = 0;
+    blk->last_header = NULL;
+    memset(blk->buf, fill, used);
+    return blk;
+}
+
+/* trimReplyUnusedTailSpace must not realloc the tail when the write bookmark
+ * (io_last_written.buf) points at it, since freeing/moving it desyncs the
+ * bookmark. The guard is pointer-based, so it fires regardless of io_write_state
+ * (COMPLETED_IO or IDLE), and it allows the trim when the bookmark points
+ * elsewhere. See https://github.com/valkey-io/valkey/pull/4060 */
+TEST_F(NetworkingTest, TestTrimReplyGuardsIoLastWritten) {
+    size_t alloc_size = PROTO_REPLY_CHUNK_BYTES * 2; /* waste > size/4, used small */
+
+    /* --- Case 1: tail IS the bookmarked block, CLIENT_COMPLETED_IO -> refuse --- */
+    {
+        client *c = createTestClient();
+        clientReplyBlock *blk = makePlainReplyBlock(alloc_size, 32, 'X');
+        listAddNodeTail(c->reply, blk);
+        c->reply_bytes = alloc_size;
+        c->io_last_written.buf = blk->buf; /* bookmark on the tail */
+        c->io_last_written.bufpos = blk->used;
+        c->io_last_written.data_len = blk->used;
+        c->io_write_state = CLIENT_COMPLETED_IO;
+
+        testOnlyTrimReplyUnusedTailSpace(c);
+
+        clientReplyBlock *after = (clientReplyBlock *)listNodeValue(listLast(c->reply));
+        ASSERT_EQ(after->size, alloc_size);            /* not reallocated */
+        ASSERT_EQ(c->io_last_written.buf, after->buf); /* bookmark still valid */
+        freeReplyOffloadClient(c);
+    }
+
+    /* --- Case 2: tail IS the bookmarked block, CLIENT_IDLE -> still refuse ---
+     * A partial main-thread write leaves the bookmark live (bufpos = 0 sentinel)
+     * while the state is IDLE; the pointer guard must still protect the block. */
+    {
+        client *c = createTestClient();
+        clientReplyBlock *blk = makePlainReplyBlock(alloc_size, 32, 'X');
+        listAddNodeTail(c->reply, blk);
+        c->reply_bytes = alloc_size;
+        c->io_last_written.buf = blk->buf; /* bookmark on the tail */
+        c->io_last_written.bufpos = 0;     /* partial-write sentinel */
+        c->io_last_written.data_len = 16;
+        c->io_write_state = CLIENT_IDLE;
+
+        testOnlyTrimReplyUnusedTailSpace(c);
+
+        clientReplyBlock *after = (clientReplyBlock *)listNodeValue(listLast(c->reply));
+        ASSERT_EQ(after->size, alloc_size); /* not reallocated */
+        freeReplyOffloadClient(c);
+    }
+
+    /* --- Case 3: bookmark points at a DIFFERENT block, CLIENT_COMPLETED_IO ->
+     * proceed. The tail is not the bookmarked block, so trimming it is safe even
+     * though an IO write just completed. --- */
+    {
+        client *c = createTestClient();
+        clientReplyBlock *head = makePlainReplyBlock(64, 20, 'H'); /* bookmarked */
+        clientReplyBlock *tail = makePlainReplyBlock(alloc_size, 32, 'T');
+        listAddNodeTail(c->reply, head);
+        listAddNodeTail(c->reply, tail);
+        c->reply_bytes = head->size + tail->size;
+        c->io_last_written.buf = head->buf; /* bookmark on the head, not the tail */
+        c->io_last_written.bufpos = head->used;
+        c->io_last_written.data_len = head->used;
+        c->io_write_state = CLIENT_COMPLETED_IO;
+
+        testOnlyTrimReplyUnusedTailSpace(c);
+
+        clientReplyBlock *after = (clientReplyBlock *)listNodeValue(listLast(c->reply));
+        ASSERT_LT(after->size, alloc_size); /* tail was trimmed */
+        ASSERT_EQ(after->used, 32u);
+        for (size_t i = 0; i < 32; i++) ASSERT_EQ(after->buf[i], 'T'); /* content preserved */
+        freeReplyOffloadClient(c);
+    }
+
+    /* --- Case 4: no bookmark, CLIENT_IDLE -> proceed --- */
+    {
+        client *c = createTestClient();
+        clientReplyBlock *blk = makePlainReplyBlock(alloc_size, 32, 'X');
+        listAddNodeTail(c->reply, blk);
+        c->reply_bytes = alloc_size;
+        c->io_write_state = CLIENT_IDLE;
+        resetLastWrittenBuf(c);
+
+        testOnlyTrimReplyUnusedTailSpace(c);
+
+        clientReplyBlock *after = (clientReplyBlock *)listNodeValue(listLast(c->reply));
+        ASSERT_LT(after->size, alloc_size); /* trimmed */
+        ASSERT_EQ(after->used, 32u);
+        freeReplyOffloadClient(c);
+    }
+}
+
+/* Even when the tail is not the bookmarked block, the trim must be refused while
+ * CLIENT_PENDING_IO, because an IO thread is concurrently walking the reply list
+ * and reallocating any block would race with it. */
+TEST_F(NetworkingTest, TestTrimReplyRefusedWhilePendingIO) {
+    client *c = createTestClient();
+    size_t alloc_size = PROTO_REPLY_CHUNK_BYTES * 2;
+    clientReplyBlock *blk = makePlainReplyBlock(alloc_size, 32, 'X');
+    listAddNodeTail(c->reply, blk);
+    c->reply_bytes = alloc_size;
+
+    resetLastWrittenBuf(c);                /* no bookmark on the tail */
+    c->io_write_state = CLIENT_PENDING_IO; /* IO thread actively writing */
+
+    testOnlyTrimReplyUnusedTailSpace(c);
+
+    clientReplyBlock *after = (clientReplyBlock *)listNodeValue(listLast(c->reply));
+    ASSERT_EQ(after->size, alloc_size); /* not reallocated */
+    freeReplyOffloadClient(c);
+}
+
+/* setDeferredReply's prev-merge (appending the length header into the node
+ * *before* the placeholder) must be skipped when io_last_written points at that
+ * prev node, and proceed when it points elsewhere. Guard is pointer-based. */
+TEST_F(NetworkingTest, TestSetDeferredReplyPrevMergeGuardsIoLastWritten) {
+    const char *hdr = "*2\r\n";
+    const size_t hdr_len = 4;
+
+    /* --- Case 1: prev IS the bookmarked block -> merge must be skipped --- */
+    {
+        client *c = createTestClient();
+        /* prev block is bookmarked and has room to append the header. */
+        clientReplyBlock *prev = makePlainReplyBlock(64, 10, 'P');
+        listAddNodeTail(c->reply, prev);
+        listAddNodeTail(c->reply, NULL); /* placeholder is the tail (no next) */
+        c->reply_bytes = prev->size;
+        listNode *placeholder = listLast(c->reply);
+
+        c->io_last_written.buf = prev->buf; /* bookmark on prev */
+        c->io_last_written.bufpos = prev->used;
+        c->io_last_written.data_len = prev->used;
+        c->io_write_state = CLIENT_COMPLETED_IO;
+
+        setDeferredReply(c, placeholder, hdr, hdr_len);
+
+        /* prev must be untouched: merge was refused, header went to a new node
+         * filling the placeholder instead. */
+        clientReplyBlock *prev_after = (clientReplyBlock *)listNodeValue(listFirst(c->reply));
+        ASSERT_EQ(prev_after, prev);
+        ASSERT_EQ(prev_after->used, 10u);
+        ASSERT_EQ(listLength(c->reply), 2u); /* placeholder filled, not deleted */
+        clientReplyBlock *filled = (clientReplyBlock *)listNodeValue(listLast(c->reply));
+        ASSERT_EQ(filled->used, hdr_len);
+        ASSERT_EQ(memcmp(filled->buf, hdr, hdr_len), 0);
+
+        freeReplyOffloadClient(c);
+    }
+
+    /* --- Case 2: bookmark points elsewhere (none) -> prev-merge proceeds --- */
+    {
+        client *c = createTestClient();
+        clientReplyBlock *prev = makePlainReplyBlock(64, 10, 'P');
+        listAddNodeTail(c->reply, prev);
+        listAddNodeTail(c->reply, NULL);
+        c->reply_bytes = prev->size;
+        listNode *placeholder = listLast(c->reply);
+
+        c->io_write_state = CLIENT_COMPLETED_IO; /* non-PENDING; bookmark not on prev */
+        resetLastWrittenBuf(c);
+
+        setDeferredReply(c, placeholder, hdr, hdr_len);
+
+        /* Header appended into prev; placeholder removed. */
+        clientReplyBlock *prev_after = (clientReplyBlock *)listNodeValue(listFirst(c->reply));
+        ASSERT_EQ(prev_after, prev);
+        ASSERT_EQ(prev_after->used, 10u + hdr_len);
+        ASSERT_EQ(memcmp(prev_after->buf + 10, hdr, hdr_len), 0);
+        ASSERT_EQ(listLength(c->reply), 1u);
+
+        freeReplyOffloadClient(c);
+    }
+}
+
+/* setDeferredReply's next-merge (memmove-ing the node *after* the placeholder to
+ * prepend the length header) must be skipped when io_last_written points at that
+ * next node, and proceed when it points elsewhere. Guard is pointer-based. */
+TEST_F(NetworkingTest, TestSetDeferredReplyNextMergeGuardsIoLastWritten) {
+    const char *hdr = "*2\r\n";
+    const size_t hdr_len = 4;
+
+    /* --- Case 1: next IS the bookmarked block -> next-merge must be skipped --- */
+    {
+        client *c = createTestClient();
+        listAddNodeTail(c->reply, NULL); /* placeholder is the head (no prev) */
+        listNode *placeholder = listFirst(c->reply);
+        clientReplyBlock *next = makePlainReplyBlock(64, 10, 'Y');
+        listAddNodeTail(c->reply, next);
+        c->reply_bytes = next->size;
+
+        c->io_last_written.buf = next->buf; /* bookmark on next */
+        c->io_last_written.bufpos = next->used;
+        c->io_last_written.data_len = next->used;
+        c->io_write_state = CLIENT_COMPLETED_IO;
+
+        setDeferredReply(c, placeholder, hdr, hdr_len);
+
+        /* next must be untouched (no memmove): header went to a new node filling
+         * the placeholder. */
+        clientReplyBlock *next_after = (clientReplyBlock *)listNodeValue(listLast(c->reply));
+        ASSERT_EQ(next_after, next);
+        ASSERT_EQ(next_after->used, 10u);
+        for (size_t i = 0; i < 10; i++) ASSERT_EQ(next_after->buf[i], 'Y');
+        ASSERT_EQ(listLength(c->reply), 2u); /* placeholder filled, not deleted */
+        clientReplyBlock *filled = (clientReplyBlock *)listNodeValue(listFirst(c->reply));
+        ASSERT_EQ(filled->used, hdr_len);
+        ASSERT_EQ(memcmp(filled->buf, hdr, hdr_len), 0);
+
+        freeReplyOffloadClient(c);
+    }
+
+    /* --- Case 2: bookmark points elsewhere (none) -> next-merge proceeds --- */
+    {
+        client *c = createTestClient();
+        listAddNodeTail(c->reply, NULL);
+        listNode *placeholder = listFirst(c->reply);
+        clientReplyBlock *next = makePlainReplyBlock(64, 10, 'Y');
+        listAddNodeTail(c->reply, next);
+        c->reply_bytes = next->size;
+
+        c->io_write_state = CLIENT_COMPLETED_IO; /* non-PENDING; bookmark not on next */
+        resetLastWrittenBuf(c);
+
+        setDeferredReply(c, placeholder, hdr, hdr_len);
+
+        /* Header prepended into next (existing content shifted right); placeholder
+         * removed. */
+        clientReplyBlock *next_after = (clientReplyBlock *)listNodeValue(listFirst(c->reply));
+        ASSERT_EQ(next_after, next);
+        ASSERT_EQ(next_after->used, 10u + hdr_len);
+        ASSERT_EQ(memcmp(next_after->buf, hdr, hdr_len), 0);
+        for (size_t i = 0; i < 10; i++) ASSERT_EQ(next_after->buf[hdr_len + i], 'Y');
+        ASSERT_EQ(listLength(c->reply), 1u);
+
+        freeReplyOffloadClient(c);
+    }
 }

@@ -296,7 +296,46 @@ foreach call_type {nested normal} {
         # when the client is unlock, we will get the OK reply from timer.
         assert_match "OK" [r unblock_by_timer 100 100]
     }
-    
+
+    test {REPLY_AGAIN re-blocks and eventually replies} {
+        # reblock.test: blocks, reply callback returns REPLY_AGAIN twice,
+        # then replies with the call count (3) on the third unblock.
+        set result [r reblock.test]
+        assert_equal 3 $result
+    }
+
+    test {REPLY_AGAIN with timeout fires timeout callback} {
+        # reblock.timeout: reply callback always returns REPLY_AGAIN,
+        # timeout is 500ms, should get timeout response.
+        set result [r reblock.timeout]
+        assert_match "*Timed out*" $result
+    }
+
+    test {REPLY_AGAIN disconnect fires disconnect callback} {
+        set rd [valkey_deferring_client]
+        $rd client id
+        set client_id [$rd read]
+        $rd reblock.disconnect
+        assert_equal 1 [r client kill id $client_id]
+        wait_for_condition 50 20 {
+            [r reblock.get_disconnect_called] eq 1
+        } else {
+            fail "Failed waiting for disconnect callback"
+        }
+        $rd close
+    }
+
+    test {REPLY_AGAIN CLIENT UNBLOCK triggers timeout callback} {
+        set rd [valkey_deferring_client]
+        $rd client id
+        set client_id [$rd read]
+        $rd reblock.timeout
+        assert_equal 1 [r client unblock $client_id timeout]
+        set result [$rd read]
+        assert_match "*Timed out*" $result
+        $rd close
+    }
+
     test "Unload the module - blockedclient" {
         assert_equal {OK} [r module unload blockedclient]
     }

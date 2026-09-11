@@ -8988,6 +8988,7 @@ int VM_UnblockClient(ValkeyModuleBlockedClient *bc, void *privdata) {
         errno = EINVAL;
         return VALKEYMODULE_ERR;
     }
+    if (bc->unblocked) return VALKEYMODULE_OK;
     if (bc->blocked_on_keys) {
         /* In theory the user should always pass the timeout handler as an
          * argument, but better to be safe than sorry. */
@@ -8995,7 +8996,6 @@ int VM_UnblockClient(ValkeyModuleBlockedClient *bc, void *privdata) {
             errno = ENOTSUP;
             return VALKEYMODULE_ERR;
         }
-        if (bc->unblocked) return VALKEYMODULE_OK;
         if (bc->client) moduleBlockedClientTimedOut(bc->client, 1);
     }
     moduleUnblockClientByHandle(bc, privdata);
@@ -9061,6 +9061,7 @@ void moduleHandleBlockedClients(void) {
          * the key was signaled as ready. */
         long long prev_error_replies = server.stat_total_error_replies;
         uint64_t reply_us = 0;
+        int reply_ret = VALKEYMODULE_OK;
         if (c && !bc->blocked_on_keys && bc->reply_callback) {
             ValkeyModuleCtx ctx;
             moduleCreateContext(&ctx, bc->module, VALKEYMODULE_CTX_BLOCKED_REPLY);
@@ -9070,9 +9071,25 @@ void moduleHandleBlockedClients(void) {
             ctx.blocked_client = bc;
             monotime replyTimer;
             elapsedStart(&replyTimer);
-            bc->reply_callback(&ctx, (void **)c->argv, c->argc);
+            reply_ret = bc->reply_callback(&ctx, (void **)c->argv, c->argc);
             reply_us = elapsedUs(replyTimer);
             moduleFreeContext(&ctx);
+        }
+
+        /* If reply callback returned VALKEYMODULE_REPLY_AGAIN, keep the client
+         * blocked. The module must not have written any reply before returning
+         * this value. The module will call UnblockClient again later.
+         * The module must handle timeout/disconnect by calling UnblockClient
+         * from those callbacks (standard blocked client contract). */
+        if (reply_ret == VALKEYMODULE_REPLY_AGAIN) {
+            moduleReleaseTempClient(bc->reply_client);
+            moduleReleaseTempClient(bc->thread_safe_ctx_client);
+            bc->reply_client = moduleAllocTempClient();
+            bc->thread_safe_ctx_client = moduleAllocTempClient();
+            if (c) bc->reply_client->resp = c->resp;
+            bc->unblocked = 0;
+            pthread_mutex_lock(&moduleUnblockedClientsMutex);
+            continue;
         }
         /* Hold onto the blocked client if module auth is in progress. The reply callback is invoked
          * when the client is reprocessed. */

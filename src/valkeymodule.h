@@ -50,6 +50,9 @@ typedef long long ustime_t;
 #define VALKEYMODULE_OK 0
 #define VALKEYMODULE_ERR 1
 
+/* Return from reply callback to keep client blocked (re-block). */
+#define VALKEYMODULE_REPLY_AGAIN 2
+
 /* Module Based Authentication status return values. */
 #define VALKEYMODULE_AUTH_HANDLED 0
 #define VALKEYMODULE_AUTH_NOT_HANDLED 1

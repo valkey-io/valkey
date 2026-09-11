@@ -87,4 +87,48 @@ start_server {tags {"repl needs:other-server external:skip"}} {
             assert_equal value1 [$old_replica hget hfe field1]
         }
     }
+
+    test "XACKDEL replicates as equivalent pre-9.2 commands XACK/XDEL for backwards compatibility" {
+        if {[version_greater_or_equal $old_replica_version 9.2.0]} {
+            skip "Replica $old_replica_version must be before 9.2.0 for this test"
+        }
+
+        r FLUSHALL
+        r XADD mystream 1-0 hello world
+        r XGROUP CREATE mystream grp1 0
+        r XGROUP CREATE mystream grp2 0
+        r XREADGROUP GROUP grp1 alice COUNT 1 STREAMS mystream >
+        r XREADGROUP GROUP grp2 bob COUNT 1 STREAMS mystream >
+        r XACKDEL mystream grp1 DELREF IDS 1 1-0
+        start_server {start-other-server 1 config "minimal.conf"} {
+            set old_replica [srv 0 client]
+            $old_replica replicaof $primary_host $primary_port
+            wait_for_sync $old_replica 500 100
+            assert_equal [llength [$old_replica XRANGE mystream - +]] 0
+            assert_equal [llength [$old_replica XPENDING mystream grp1 - + 10]] 0
+            assert_equal [llength [$old_replica XPENDING mystream grp2 - + 10]] 0
+        }
+    }
+
+    test "XDELEX replicates as equivalent pre-9.2 commands XACK/XDEL for backwards compatibility" {
+        if {[version_greater_or_equal $old_replica_version 9.2.0]} {
+            skip "Replica $old_replica_version must be before 9.2.0 for this test"
+        }
+
+        r FLUSHALL
+        r XADD mystream 1-0 hello world
+        r XGROUP CREATE mystream grp1 0
+        r XGROUP CREATE mystream grp2 0
+        r XREADGROUP GROUP grp1 alice COUNT 1 STREAMS mystream >
+        r XREADGROUP GROUP grp2 bob COUNT 1 STREAMS mystream >
+        r XDELEX mystream DELREF IDS 1 1-0
+        start_server {start-other-server 1 config "minimal.conf"} {
+            set old_replica [srv 0 client]
+            $old_replica replicaof $primary_host $primary_port
+            wait_for_sync $old_replica 500 100
+            assert_equal [llength [$old_replica XRANGE mystream - +]] 0
+            assert_equal [llength [$old_replica XPENDING mystream grp1 - + 10]] 0
+            assert_equal [llength [$old_replica XPENDING mystream grp2 - + 10]] 0
+        }
+    }
 }

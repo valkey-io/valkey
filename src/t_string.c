@@ -832,7 +832,7 @@ void increxCommand(client *c) {
         }
         use_float = 1;
     }
-    
+
     o = lookupKeyWrite(c->db, c->argv[1]);
 
     if (o) {

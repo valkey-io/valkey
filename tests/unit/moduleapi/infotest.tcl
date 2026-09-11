@@ -123,6 +123,18 @@ start_server {tags {"modules"}} {
         field $info infotest_dos
     } {2}
 
+    test {module external memory is reported only in info debug} {
+        assert_equal 321 [r info.setexternal 321]
+
+        set debug_info [r info debug]
+        set memory_info [r info memory]
+
+        assert_equal 321 [getInfoProperty $debug_info used_memory_module_external]
+        assert { ![string match "*used_memory_module_external*" $memory_info] }
+
+        assert_equal 0 [r info.setexternal 0]
+    }
+
     test "Unload the module - infotest" {
         assert_equal {OK} [r module unload infotest]
     }

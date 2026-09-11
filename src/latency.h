@@ -45,7 +45,8 @@
 /* Representation of a latency sample: the sampling time and the latency
  * observed in milliseconds. */
 struct latencySample {
-    int32_t time;     /* We don't use time_t to force 4 bytes usage everywhere. */
+    uint32_t time;    /* We don't use time_t to force 4 bytes usage everywhere.
+                         Unsigned, so the four bytes last until 2106. */
     uint32_t latency; /* Latency in milliseconds. */
 };
 

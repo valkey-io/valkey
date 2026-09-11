@@ -45,6 +45,10 @@
 #include <string.h>
 #include "entry.h"
 
+#define HASH_FIND_BATCH_SIZE 16
+static_assert(HASH_FIND_BATCH_SIZE <= HASHTABLE_FIND_BATCH_MAX_SIZE,
+              "Hash batch size exceeds hashtable batch lookup limit");
+
 /* enumeration of all the possible return values of commands manipulating fields expiration. */
 typedef enum {
     /* SDS aux flag. If set, it indicates that the entry has TTL metadata set. */
@@ -1366,10 +1370,6 @@ static void addHashFieldToReply(client *c, robj *o, sds field) {
     }
 }
 
-#define HMGET_FIND_BATCH_SIZE 16
-static_assert(HMGET_FIND_BATCH_SIZE <= HASHTABLE_FIND_BATCH_MAX_SIZE,
-              "HMGET batch size exceeds hashtable batch lookup limit");
-
 static void addHashEntryToReply(client *c, const entry *hash_entry) {
     if (hash_entry == NULL) {
         addReplyNull(c);
@@ -1383,10 +1383,10 @@ static void addHashEntryToReply(client *c, const entry *hash_entry) {
 }
 
 static void hmgetReplyWithHashtable(client *c, hashtable *ht, robj **fields, size_t count) {
-    const void *keys[HMGET_FIND_BATCH_SIZE];
-    void *found_entries[HMGET_FIND_BATCH_SIZE];
+    const void *keys[HASH_FIND_BATCH_SIZE];
+    void *found_entries[HASH_FIND_BATCH_SIZE];
     while (count) {
-        size_t batch = count > HMGET_FIND_BATCH_SIZE ? HMGET_FIND_BATCH_SIZE : count;
+        size_t batch = count > HASH_FIND_BATCH_SIZE ? HASH_FIND_BATCH_SIZE : count;
 
         for (size_t i = 0; i < batch; i++) {
             keys[i] = objectGetVal(fields[i]);
@@ -2386,6 +2386,41 @@ void hpersistCommand(client *c) {
     commitDeferredReplyBuffer(c, 1);
 }
 
+static void addHashExpiryToReply(client *c, mstime_t expiry, mstime_t basetime, int unit) {
+    if (expiry == EXPIRY_NONE) {
+        addReplyLongLong(c, -1);
+    } else {
+        mstime_t ttl = expiry - basetime;
+        if (ttl < 0) ttl = 0;
+        addReplyLongLong(c, unit == UNIT_MILLISECONDS ? ttl : ((ttl + 500) / 1000));
+    }
+}
+
+static void httlReplyWithHashtable(client *c, hashtable *ht, robj **fields, size_t count, mstime_t basetime, int unit) {
+    const void *keys[HASH_FIND_BATCH_SIZE];
+    void *found_entries[HASH_FIND_BATCH_SIZE];
+    while (count) {
+        size_t batch = count > HASH_FIND_BATCH_SIZE ? HASH_FIND_BATCH_SIZE : count;
+
+        for (size_t i = 0; i < batch; i++) {
+            keys[i] = objectGetVal(fields[i]);
+        }
+
+        uint32_t found = hashtableFindBatch(ht, (int)batch, keys, found_entries);
+
+        for (size_t i = 0; i < batch; i++) {
+            if ((found >> i) & 1) {
+                addHashExpiryToReply(c, entryGetExpiry(found_entries[i]), basetime, unit);
+            } else {
+                addReplyLongLong(c, -2);
+            }
+        }
+
+        fields += batch;
+        count -= batch;
+    }
+}
+
 /* High-Level Algorithm of HTTL / HPTTL / HEXPIRETIME / HPEXPIRETIME Commands:
  *
  * - These commands return the remaining time to live (TTL) or absolute expiry time
@@ -2438,15 +2473,16 @@ void httlGenericCommand(client *c, mstime_t basetime, int unit) {
     /* From this point we would return array reply */
     addReplyArrayLen(c, num_fields);
 
+    if (hash && hash->encoding == OBJ_ENCODING_HASHTABLE && num_fields > 1) {
+        httlReplyWithHashtable(c, objectGetVal(hash), c->argv + fields_index, num_fields, basetime, unit);
+        return;
+    }
+
     for (int i = 0; i < num_fields; i++) {
         if (!hash || hashTypeGetExpiry(hash, objectGetVal(c->argv[fields_index + i]), &result) == C_ERR) {
             addReplyLongLong(c, -2);
-        } else if (result == EXPIRY_NONE) {
-            addReplyLongLong(c, -1);
         } else {
-            result = result - basetime;
-            if (result < 0) result = 0;
-            addReplyLongLong(c, unit == UNIT_MILLISECONDS ? result : ((result + 500) / 1000));
+            addHashExpiryToReply(c, result, basetime, unit);
         }
     }
 }

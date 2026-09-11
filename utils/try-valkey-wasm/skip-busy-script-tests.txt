@@ -1,0 +1,5 @@
+/[Kk][Ii][Ll][Ll]
+/[Bb][Uu][Ss][Yy]
+/[Tt]imedout
+/infinite
+/[Ll]ong[ -]running

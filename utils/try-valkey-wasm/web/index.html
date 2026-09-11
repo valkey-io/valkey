@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Try Valkey (WebAssembly)</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css">
+<style>
+  html, body { height: 100%; margin: 0; background: #0b0e14; color: #e6e6e6; font-family: system-ui, sans-serif; }
+  header { padding: 10px 16px; border-bottom: 1px solid #1f2633; display: flex; gap: 12px; align-items: baseline; }
+  header h1 { font-size: 16px; margin: 0; font-weight: 600; }
+  header span { font-size: 12px; opacity: .7; }
+  #term { position: absolute; top: 44px; bottom: 0; left: 0; right: 0; padding: 8px; }
+  #err { color: #f87171; padding: 16px; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Try Valkey</h1>
+  <span>a real <code>valkey-server</code>, compiled to WebAssembly, running in this tab</span>
+</header>
+<div id="term"></div>
+<script type="module">
+  import { Terminal } from 'https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/+esm';
+  import { FitAddon } from 'https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/+esm';
+  import createValkey from './valkey-server.mjs';
+  import { mountTryValkey } from './cli-web.mjs';
+  try {
+    const { tv } = await mountTryValkey({ container: document.getElementById('term'), createModule: createValkey, Terminal, FitAddon });
+    window.tryvalkey = tv; // for poking at it from the console
+  } catch (e) {
+    const d = document.createElement('div'); d.id = 'err'; d.textContent = 'Failed to start: ' + (e.stack || e);
+    document.body.appendChild(d);
+  }
+</script>
+</body>
+</html>

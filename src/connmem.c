@@ -24,7 +24,7 @@
 #include <emscripten.h>
 #include <unistd.h>
 
-#define MEMCONN_MAX 64
+#define MEMCONN_MAX 1024
 
 typedef struct memConnection {
     connection c;
@@ -351,6 +351,37 @@ EMSCRIPTEN_KEEPALIVE void tv_close(int id) {
     if (!mc) return;
     mc->host_closed = 1;
     if (mc->c.read_handler) callHandler(&mc->c, mc->c.read_handler);
+}
+
+/* Split a command line exactly as valkey-cli does (sdssplitargs: quotes,
+ * escapes, hex) and return it RESP-encoded in a buffer the host must release
+ * with tv_free(); *len_out receives its length (arguments may contain NUL).
+ * Returns NULL for unbalanced quotes, and a zero-length buffer for a blank
+ * line. */
+EMSCRIPTEN_KEEPALIVE char *tv_encode_command(const char *line, int *len_out) {
+    int argc = 0;
+    sds *argv = sdssplitargs(line, &argc);
+    if (!argv) return NULL;
+    sds out = sdsempty();
+    if (argc > 0) {
+        out = sdscatfmt(out, "*%i\r\n", argc);
+        for (int i = 0; i < argc; i++) {
+            out = sdscatfmt(out, "$%u\r\n", (unsigned long)sdslen(argv[i]));
+            out = sdscatsds(out, argv[i]);
+            out = sdscatlen(out, "\r\n", 2);
+        }
+    }
+    sdsfreesplitres(argv, argc);
+    *len_out = (int)sdslen(out);
+    char *ret = zmalloc(sdslen(out) + 1);
+    memcpy(ret, out, sdslen(out) + 1);
+    sdsfree(out);
+    return ret;
+}
+
+/* Release a buffer returned by tv_encode_command(). */
+EMSCRIPTEN_KEEPALIVE void tv_free(void *p) {
+    zfree(p);
 }
 
 #else /* !__EMSCRIPTEN__ */

@@ -17,8 +17,15 @@ JOBS="${JOBS:-$(nproc)}"
 case "$MODE" in
   lowered) ARCH_FLAGS="-sMEMORY64=2" ;;
   native)  ARCH_FLAGS="-sMEMORY64=1" ;;
+  wasm32)  ARCH_FLAGS="-sMEMORY64=0" ;; # diagnostic only: a 32-bit build
   *) echo "unknown WASM_MODE=$MODE" >&2; exit 2 ;;
 esac
+
+# OPEN ITEM: -sSTACK_OVERFLOW_CHECK (any level, also implied by -sASSERTIONS)
+# makes the server crash at boot in genValkeyInfoString -> sdscatfmt -> strlen,
+# in the lowered build AND in a plain wasm32 build. Root cause not yet found;
+# release builds are unaffected. Until then, no stack checks by default.
+EXTRA_LDFLAGS="${EXTRA_LDFLAGS:-}"
 
 if [[ "${1:-}" == "clean" ]]; then
   (cd "$ROOT" && emmake make distclean >/dev/null 2>&1 || true)
@@ -29,9 +36,13 @@ CFLAGS_COMMON="$ARCH_FLAGS -Wno-gnu-zero-variadic-macro-arguments -Wno-unused-co
 
 # Link flags: keep the runtime alive after main() returns, export the driver
 # API, allow the heap to grow, and export the module as an ES6 factory.
+# STACK_SIZE: Emscripten defaults to 64 KB; the codebase assumes the Linux
+# main-thread default (8 MB) -- e.g. lzf_compress keeps a 64K-slot hash
+# table on the stack, which silently overflowed into the heap at 64 KB.
 LDFLAGS_COMMON="$ARCH_FLAGS \
   -sALLOW_MEMORY_GROWTH=1 \
   -sINITIAL_MEMORY=64MB \
+  -sSTACK_SIZE=8MB \
   -sEXIT_RUNTIME=0 \
   -sMODULARIZE=1 -sEXPORT_ES6=1 -sEXPORT_NAME=createValkey \
   -sENVIRONMENT=web,worker,node \
@@ -45,9 +56,9 @@ export CC=emcc CXX=em++ AR=emar RANLIB=emranlib LD=emcc
 cd "$ROOT"
 emmake make -j"$JOBS" -C src valkey-server.mjs DEBUG="${DEBUG-}" \
   MALLOC=libc BUILD_TLS=no BUILD_RDMA=no USE_SYSTEMD=no \
-  OPTIMIZATION="${OPTIMIZATION:--O2}" \
+  OPT="${OPT:--O2}" \
   CFLAGS="$CFLAGS_COMMON ${CFLAGS:-}" CXXFLAGS="$CFLAGS_COMMON ${CXXFLAGS:-}" \
-  LDFLAGS="$LDFLAGS_COMMON ${LDFLAGS:-}" \
+  LDFLAGS="$LDFLAGS_COMMON $EXTRA_LDFLAGS ${LDFLAGS:-}" \
   FINAL_LIBS="-lm" \
   PROG_SUFFIX=".mjs" \
   V="${V:-}"

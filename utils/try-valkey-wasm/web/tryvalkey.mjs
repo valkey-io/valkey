@@ -1,0 +1,107 @@
+// tryvalkey.mjs -- glue between the wasm server (tv_* exports) and cli-core.
+// Works in browsers and Node; the only environment-specific thing is how the
+// module factory is imported by the caller.
+import { parseRESP, formatReplyTTY, CliSession } from './cli-core.mjs';
+
+const DEFAULT_ARGS = [
+  '--port', '0', '--save', '', '--appendonly', 'no', '--maxclients', '64',
+  '--maxmemory', '64mb', '--maxmemory-policy', 'allkeys-lru', '--loglevel', 'warning',
+  // fork()-based and process-level commands make no sense in a browser tab;
+  // deny them via ACL so the visitor gets an explicit NOPERM instead of a
+  // confusing fork failure.
+  '--user', 'default', 'on', 'nopass', '~*', '&*', '+@all', '-bgsave', '-bgrewriteaof', '-shutdown', '-replicaof', '-debug', '-module',
+];
+
+export async function startTryValkey(createModule, { args = DEFAULT_ARGS, log = () => {}, hostLabel } = {}) {
+  const Module = await createModule({ print: log, printErr: log, noInitialRun: true });
+  try { Module.callMain(args); } catch (e) { if (e !== 'unwind' && e?.name !== 'ExitStatus') throw e; }
+
+  const CAP = 1 << 20;
+  const buf = Module._malloc(CAP);
+  const bufP = BigInt(buf);
+  const lenOut = Module._malloc(4);
+  const lenP = BigInt(lenOut);
+  const heap = () => Module.HEAPU8; // re-read: memory growth replaces the view
+
+  const id = Module._tv_connect();
+  if (id < 0) throw new Error('tv_connect failed');
+  const session = new CliSession(hostLabel);
+
+  let inbox = new Uint8Array(0);
+  const pendingReplies = []; // {argv, resolve}
+
+  function pullOutput() {
+    for (;;) {
+      const n = Module._tv_read(id, bufP, CAP);
+      if (n <= 0) break;
+      const chunk = heap().slice(Number(buf), Number(buf) + n);
+      const merged = new Uint8Array(inbox.length + chunk.length);
+      merged.set(inbox); merged.set(chunk, inbox.length);
+      inbox = merged;
+      if (n < CAP) break;
+    }
+  }
+
+  /* Drain complete replies. Command replies resolve their promise; anything
+   * else (pub/sub pushes, RESP3 push frames) is returned as unsolicited text. */
+  function drain() {
+    const unsolicited = [];
+    for (;;) {
+      let parsed;
+      try { parsed = parseRESP(inbox); } catch (e) { unsolicited.push(`(error) ${e.message}\n`); inbox = new Uint8Array(0); break; }
+      if (!parsed) break;
+      const [reply, next] = parsed;
+      inbox = inbox.slice(next);
+      const isPush = reply.type === 'push' || (session.pubsubMode && pendingReplies.length === 0);
+      if (isPush) {
+        session.observe([], reply);
+        unsolicited.push(formatReplyTTY(reply));
+      } else if (pendingReplies.length) {
+        const { argv, resolve } = pendingReplies.shift();
+        session.observe(argv, reply);
+        resolve(formatReplyTTY(reply));
+      } else {
+        unsolicited.push(formatReplyTTY(reply));
+      }
+    }
+    return unsolicited;
+  }
+
+  /* One event-loop turn: run timers, flush replies, collect output. */
+  function tick() {
+    Module._tv_tick();
+    pullOutput();
+    return drain();
+  }
+
+  /* Encode a command line with the server's own sdssplitargs(). Returns
+   * { argv, bytes } or { error } for unbalanced quotes, or null for blank. */
+  function encode(line) {
+    const cstr = Module.stringToNewUTF8(line);
+    const p = Module._tv_encode_command(BigInt(cstr), lenP);
+    Module._free(cstr);
+    if (Number(p) === 0) return { error: 'Invalid argument(s)\n' };
+    const len = Module.getValue(Number(lenOut), 'i32');
+    const bytes = heap().slice(Number(p), Number(p) + len);
+    Module._tv_free(p);
+    if (bytes.length === 0) return null;
+    const [cmd] = parseRESP(bytes);
+    return { argv: cmd.elements.map((e) => e.str), bytes };
+  }
+
+  /* Send one command line; resolves with the formatted reply text. */
+  function exec(line) {
+    const enc = encode(line);
+    if (enc === null) return Promise.resolve('');
+    if (enc.error) return Promise.resolve(enc.error);
+    return new Promise((resolve) => {
+      pendingReplies.push({ argv: enc.argv, resolve });
+      heap().set(enc.bytes, Number(buf));
+      Module._tv_write(id, bufP, enc.bytes.length);
+      const out = tick();
+      if (out.length) exec.onUnsolicited?.(out);
+    });
+  }
+
+  return { Module, session, exec, tick, encode, connId: id };
+}

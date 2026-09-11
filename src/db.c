@@ -2888,6 +2888,10 @@ int sortGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult 
                 found_store = 1;
                 keys[num].pos = i + 1; /* <store-key> */
                 keys[num].flags = CMD_KEY_OW | CMD_KEY_UPDATE;
+                /* Skip the destination. It is a key name, so it must never be
+                 * examined as an option: a key that spells one would hide the
+                 * later STORE clause that SORT actually writes to. */
+                i++;
                 break;
             }
         }

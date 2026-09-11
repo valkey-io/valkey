@@ -330,9 +330,14 @@ ifeq ($(MALLOC),tcmalloc_minimal)
 endif
 
 ifeq ($(MALLOC),jemalloc)
+ifeq ($(USE_SYSTEM_JEMALLOC),yes)
+	FINAL_CFLAGS+= -DUSE_JEMALLOC -DUSE_SYSTEM_JEMALLOC -DJEMALLOC_NO_DEMANGLE
+	FINAL_LIBS := -ljemalloc $(FINAL_LIBS)
+else
 	DEPENDENCY_TARGETS+= jemalloc
 	FINAL_CFLAGS+= -DUSE_JEMALLOC -I../deps/jemalloc/include
 	FINAL_LIBS := ../deps/jemalloc/lib/libjemalloc.a $(FINAL_LIBS)
+endif
 endif
 
 ifeq ($(USE_LTTNG),yes)

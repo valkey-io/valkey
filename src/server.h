@@ -1711,7 +1711,7 @@ typedef struct serverTLSContextConfig {
     char *client_cert_file;     /* Certificate to use as a client; if none, use cert_file */
     char *client_key_file;      /* Private key filename for client_cert_file */
     char *client_key_file_pass; /* Optional password for client_key_file */
-    char *alt_cert_file;        /* Secondary server side cert file name */
+    char *alt_cert_file;        /* Alternate server side cert file name */
     char *alt_key_file;         /* Private key filename for alt_cert_file */
     char *alt_key_file_pass;    /* Optional password for alt_key_file */
     int client_auth_user;       /* Field to be used for automatic TLS authentication based on client TLS certificate */

@@ -215,6 +215,8 @@ start_server {tags {"tls"}} {
                 assert_match {*Unable to update TLS configuration*} $e
                 catch {r CONFIG SET tls-cert-file $valkey_pw_crt tls-key-file $valkey_pw_key tls-key-file-pass 1234} e
                 assert_match {*Unable to update TLS configuration*} $e
+                set logs [exec tail -n 100 < [srv 0 stdout]]
+                assert_match {*Primary and alternate certificates must use different key algorithms*Primary and alternate certificates must use different key algorithms*} $logs
             } finally {
                 #cleanup
                 r CONFIG SET tls-cert-file $orig_server_crt tls-key-file $orig_server_key tls-alt-cert-file $orig_server_alt_crt tls-alt-key-file $orig_server_alt_key tls-key-file-pass ""
@@ -462,10 +464,10 @@ start_server {tags {"tls"}} {
                 assert {$serial2 ne "none"}
                 assert {$serial1 ne $serial2}
 
-                set valkey_alt_crt [format "%s/tests/tls/valkey-ec-pw.crt" [pwd]]
-                set valkey_alt_key [format "%s/tests/tls/valkey-ec-pw.key" [pwd]]
-                file copy -force $valkey_alt_crt $temp_alt_crt
-                file copy -force $valkey_alt_key $temp_alt_key
+                set valkey_alt_pw_crt [format "%s/tests/tls/valkey-ec-pw.crt" [pwd]]
+                set valkey_alt_pw_key [format "%s/tests/tls/valkey-ec-pw.key" [pwd]]
+                file copy -force $valkey_alt_pw_crt $temp_alt_crt
+                file copy -force $valkey_alt_pw_key $temp_alt_key
 
                 # Wait for another auto-reload cycle to complete
                 after 2100

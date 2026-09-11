@@ -204,6 +204,34 @@ TEST_F(VsetTest, TestVsetAddAndIterate) {
     mockFreeEntry(e2);
 }
 
+TEST_F(VsetTest, TestVsetGetSize) {
+    vset set;
+    vsetInit(&set);
+
+    ASSERT_EQ(vsetSize(&set), (size_t)0);
+
+    const long long expiry_time = 1000LL;
+    const size_t total_entries = 250;
+
+    mock_entry **entries = (mock_entry **)zmalloc(sizeof(mock_entry *) * total_entries);
+    ASSERT_NE(entries, nullptr);
+
+    for (size_t i = 0; i < total_entries; i++) {
+        char key_buf[32];
+        snprintf(key_buf, sizeof(key_buf), "entry_%zu", i);
+        entries[i] = mockCreateEntry(key_buf, expiry_time);
+        ASSERT_TRUE(vsetAddEntry(&set, mockGetExpiry, entries[i]));
+    }
+
+    ASSERT_FALSE(vsetIsEmpty(&set));
+
+    ASSERT_EQ(vsetSize(&set), total_entries);
+
+    vsetRelease(&set);
+    for (size_t i = 0; i < total_entries; i++) mockFreeEntry(entries[i]);
+    zfree(entries);
+}
+
 /* Exercises vsetEstimatedEarliestExpiry() across every reachable bucket
  * encoding: NONE, SINGLE, VECTOR, and RAX (both a single time-bucket and
  * multiple time-buckets).

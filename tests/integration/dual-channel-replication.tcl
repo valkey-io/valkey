@@ -827,19 +827,27 @@ start_server {tags {"dual-channel-replication external:skip"}} {
             resume_process $replica_pid
             set res [wait_for_log_messages -1 {"*Unable to partial resync with replica * for lack of backlog*"} $loglines 200 100]
             set loglines [lindex $res 1]
+
+            # Waiting for the primary to enter the paused state, that is, make sure that bgsave is triggered.
+            wait_process_paused [srv -1 pid]
+            wait_for_log_messages 0 {"*Done loading RDB*"} $replica_loglines 5000 10
+            $replica replicaof no one
+            # Resume the primary and make sure the sync is dropped.
+            resume_process [srv -1 pid]
+            $primary debug pause-after-fork 0
+            wait_for_condition 500 1000 {
+                [s -1 rdb_bgsave_in_progress] eq 0
+            } else {
+                fail "Primary should abort sync"
+            }
         }
-        # Waiting for the primary to enter the paused state, that is, make sure that bgsave is triggered.
-        wait_process_paused [srv -1 pid]
-        wait_for_log_messages 0 {"*Done loading RDB*"} $replica_loglines 5000 10
-        $replica replicaof no one
-        # Resume the primary and make sure the sync is dropped.
+        # On failure the test skips its own resume_process, leaving the primary armed with
+        # pause-after-fork. It then stops itself when the fork lands and blocks the commands below,
+        # which have no read timeout. Resume, disarm, resume again in case the fork landed in
+        # between. No-ops when the test passed.
         resume_process [srv -1 pid]
         $primary debug pause-after-fork 0
-        wait_for_condition 500 1000 {
-            [s -1 rdb_bgsave_in_progress] eq 0
-        } else {
-            fail "Primary should abort sync"
-        }
+        resume_process [srv -1 pid]
         stop_write_load $load_handle0
         stop_write_load $load_handle1
         stop_write_load $load_handle2
@@ -1623,14 +1631,15 @@ start_server {tags {"dual-channel-replication external:skip"}} {
         $primary config set repl-diskless-sync-delay 0
         $replica config set dual-channel-replication-enabled yes
 
-        # A hash with field-level TTLs (HEXPIRE) is hashtable-encoded with
-        # volatile fields, which can only be serialized in RDB version >= 80.
+        # A small hash with field-level TTLs (HEXPIRE) keeps the listpack
+        # encoding with tagged expiry metadata, which can only be serialized
+        # in RDB version >= 81 (or as HASH_2 triplets for RDB 80 targets).
         # The primary must learn the replica's version over the RDB connection
         # to pick a new enough RDB version; otherwise it falls back to RDB 11
         # and the full sync fails with "Can't store key ... in RDB version 11".
         $primary hset myhash field1 value1 field2 value2 field3 value3
         $primary hexpire myhash 3600 FIELDS 3 field1 field2 field3
-        assert_encoding hashtable myhash
+        assert_encoding listpack myhash
 
         test "Dual channel full sync succeeds with hash field expiration data" {
             set sync_full [s 0 sync_full]

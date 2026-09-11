@@ -38,6 +38,24 @@ tags {"benchmark network external:skip logreqres:skip"} {
             default_set_get_checks
         }
 
+        test {benchmark: single request completes across write retries} {
+            # TLS negotiation can make the first write return zero. Retrying
+            # must not count the same request again and exhaust the -n limit.
+            foreach opts {{} {--rps 10}} {
+                set cmd [valkeybenchmark $master_host $master_port "-c 1 -n 1 $opts INCR counter"]
+                common_bench_setup $cmd
+                assert_equal 1 [r get counter]
+                assert_match {*calls=1,*} [cmdstat incr]
+            }
+        }
+
+        test {benchmark: rate-limited clients resume pending requests} {
+            set cmd [valkeybenchmark $master_host $master_port "-c 5 -n 10 --rps 10 INCR counter"]
+            common_bench_setup $cmd
+            assert_equal 10 [r get counter]
+            assert_match {*calls=10,*} [cmdstat incr]
+        }
+
         test {benchmark: connecting using URI set,get} {
             set cmd [valkeybenchmarkuri $master_host $master_port "-c 5 -n 10 -t set,get"]
             common_bench_setup $cmd

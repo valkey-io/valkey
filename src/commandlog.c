@@ -34,6 +34,7 @@ static commandlogEntry *commandlogCreateEntry(client *c, robj **argv, int argc, 
 
     if (ceargc > COMMANDLOG_ENTRY_MAX_ARGC) ceargc = COMMANDLOG_ENTRY_MAX_ARGC;
     ce->argc = ceargc;
+    ce->cmd_argc = argc;
     ce->argv = zmalloc(sizeof(robj *) * ceargc);
     for (j = 0; j < ceargc; j++) {
         /* Logging too many arguments is a useless memory waste, so we stop
@@ -141,7 +142,7 @@ static void commandlogGetReply(client *c, int type, long count) {
 
         ln = listNext(&li);
         ce = ln->value;
-        addReplyArrayLen(c, 7);
+        addReplyArrayLen(c, 8);
         addReplyLongLong(c, ce->id);
         addReplyLongLong(c, ce->time);
         addReplyLongLong(c, ce->value);
@@ -149,6 +150,7 @@ static void commandlogGetReply(client *c, int type, long count) {
         for (j = 0; j < ce->argc; j++) addReplyBulk(c, ce->argv[j]);
         addReplyBulkCBuffer(c, ce->peerid, sdslen(ce->peerid));
         addReplyBulkCBuffer(c, ce->cname, sdslen(ce->cname));
+        addReplyLongLong(c, ce->cmd_argc);
         addReplyBulkCBuffer(c, ce->username, sdslen(ce->username));
     }
 }
@@ -182,7 +184,7 @@ void slowlogCommand(client *c) {
             "    Return top <count> entries from the slowlog (default: 10, -1 mean all).",
             "    Entries are made of:",
             "    id, timestamp, time in microseconds, arguments array, client IP and port,",
-            "    client name, user name",
+            "    client name, number of arguments the command was called with, user name",
             "LEN",
             "    Return the length of the slowlog.",
             "RESET",
@@ -239,7 +241,7 @@ void commandlogCommand(client *c) {
             "        or size in bytes for type of large-request,",
             "        or size in bytes for type of large-reply",
             "    arguments array, client IP and port,",
-            "    client name, user name",
+            "    client name, number of arguments the command was called with, user name",
             "LEN <type>",
             "    Return the length of the specified type of commandlog.",
             "RESET <type>",

@@ -171,10 +171,10 @@ return 1"]
             assert_equal "usercall.$cmd C get x" [lindex [lindex $entries 1] 3]
             assert_equal {get x} [lindex [lindex $entries 2] 3]
 
-            assert_equal {module_user} [lindex [lindex $entries 2] 6]
+            assert_equal {module_user} [lindex [lindex $entries 2] 7]
             # The script and the module command itself ran as the connection's user.
-            assert_equal {default} [lindex [lindex $entries 0] 6]
-            assert_equal {default} [lindex [lindex $entries 1] 6]
+            assert_equal {default} [lindex [lindex $entries 0] 7]
+            assert_equal {default} [lindex [lindex $entries 1] 7]
         }
     }
 

@@ -7394,7 +7394,7 @@ const char *COMMAND_Tips[] = {
 #ifndef SKIP_CMD_HISTORY_TABLE
 /* COMMANDLOG GET history */
 commandHistory COMMANDLOG_GET_History[] = {
-{"9.2.0","Added the user name to the reply."},
+{"9.2.0","Added the number of arguments of the command and the user name to the reply."},
 };
 #endif
 
@@ -8640,7 +8640,7 @@ struct COMMAND_ARG SLAVEOF_Args[] = {
 /* SLOWLOG GET history */
 commandHistory SLOWLOG_GET_History[] = {
 {"4.0.0","Added client IP address, port and name to the reply."},
-{"9.2.0","Added the user name to the reply."},
+{"9.2.0","Added the number of arguments of the command and the user name to the reply."},
 };
 #endif
 

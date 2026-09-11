@@ -3843,6 +3843,9 @@ static int parseMultibulk(client *c,
             } else if (ll > 16384 && auth_required) {
                 return READ_FLAGS_ERROR_UNAUTHENTICATED_BULK_LEN;
             }
+            if (ll > LONG_MAX - 2) {
+                return READ_FLAGS_ERROR_MBULK_INVALID_BULK_LEN;
+            }
 
             c->qb_pos = newline - c->querybuf + 2;
             if (!(is_replicated) && ll >= PROTO_MBULK_BIG_ARG) {

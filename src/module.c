@@ -4202,7 +4202,7 @@ int VM_GetContextFlags(ValkeyModuleCtx *ctx) {
 
     /* OOM flag. */
     float level;
-    int retval = getMaxmemoryState(NULL, NULL, NULL, &level);
+    int retval = getMaxmemoryState(NULL, NULL, NULL, &level, server.maxmemory);
     if (retval == C_ERR) flags |= VALKEYMODULE_CTX_FLAGS_OOM;
     if (level > 0.75) flags |= VALKEYMODULE_CTX_FLAGS_OOM_WARNING;
 
@@ -6770,7 +6770,7 @@ static void moduleCallCommandHelper(ValkeyModuleCtx *ctx, client *c, robj **argv
                 /* On background thread we can not count on server.pre_command_oom_state.
                  * Because it is only set on the main thread, in such case we will check
                  * the actual memory usage. */
-                oom_state = (getMaxmemoryState(NULL, NULL, NULL, NULL) == C_ERR);
+                oom_state = (getMaxmemoryState(NULL, NULL, NULL, NULL, server.maxmemory) == C_ERR);
             } else {
                 oom_state = server.pre_command_oom_state;
             }
@@ -11964,7 +11964,7 @@ size_t VM_MallocSizeDict(ValkeyModuleDict *dict) {
  */
 float VM_GetUsedMemoryRatio(void) {
     float level;
-    getMaxmemoryState(NULL, NULL, NULL, &level);
+    getMaxmemoryState(NULL, NULL, NULL, &level, server.maxmemory);
     return level;
 }
 

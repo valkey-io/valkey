@@ -2276,6 +2276,8 @@ struct valkeyServer {
     /* Limits */
     unsigned int maxclients;                    /* Max number of simultaneous clients */
     unsigned long long maxmemory;               /* Max number of memory bytes to use */
+    unsigned long long maxmemory_reserved;      /* Memory reserved below `maxmemory` (in bytes) before key eviction is triggered */
+    unsigned long long key_eviction_memory;     /* Available memory threshold (in bytes) that initiates key eviction */
     ssize_t maxmemory_clients;                  /* Memory limit for total client buffers */
     int maxmemory_policy;                       /* Policy for key eviction */
     int maxmemory_samples;                      /* Precision of random sampling */
@@ -2970,6 +2972,8 @@ int validateProcTitleTemplate(const char *templ);
 int serverCommunicateSystemd(const char *sd_notify_msg);
 void serverSetCpuAffinity(const char *cpulist);
 void dictVanillaFree(void *val);
+int isMaxmemoryReservedLessThanMaxmemory(const char **err);
+void calculateKeyEvictionMemory(void);
 
 /* ERROR STATS constants */
 
@@ -3575,7 +3579,7 @@ int zzlLexValueGteMin(unsigned char *p, zlexrangespec *spec);
 int zzlLexValueLteMax(unsigned char *p, zlexrangespec *spec);
 
 /* Core functions */
-int getMaxmemoryState(size_t *total, size_t *logical, size_t *tofree, float *level);
+int getMaxmemoryState(size_t *total, size_t *logical, size_t *tofree, float *level, unsigned long long maxmemory);
 size_t freeMemoryGetNotCountedMemory(void);
 int overMaxmemoryAfterAlloc(size_t moremem);
 uint64_t getCommandFlags(client *c);

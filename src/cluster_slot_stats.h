@@ -19,3 +19,7 @@ void clusterSlotStatsAddNetworkBytesOutForUserClient(client *c);
 void clusterSlotStatsIncrNetworkBytesOutForReplication(long long len);
 void clusterSlotStatsDecrNetworkBytesOutForReplication(long long len);
 void clusterSlotStatsAddNetworkBytesOutForShardedPubSubInternalPropagation(client *c, int slot);
+
+/* repl-stream-bytes metric. */
+void clusterSlotStatsIncrReplStreamBytes(long long len);
+void clusterSlotStatsDecrReplStreamBytes(long long len);

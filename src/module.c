@@ -609,6 +609,31 @@ char *VM_Strdup(const char *str) {
     return zstrdup(str);
 }
 
+/* Use like aligned_alloc(). Memory allocated with this function is reported in
+ * INFO memory, used for keys eviction according to maxmemory settings
+ * and in general is taken into account as memory allocated by the server.
+ * You should avoid using aligned_alloc() directly.
+ *
+ * 'alignment' must be a non-zero power of two, and the returned pointer is a
+ * multiple of it. Unlike the C11 aligned_alloc(), 'bytes' is not required to be
+ * a multiple of 'alignment', which matches how the common libc implementations
+ * behave.
+ *
+ * The returned pointer must be released with ValkeyModule_Free().
+ *
+ * This function returns NULL if 'alignment' is not a valid alignment, and
+ * panics if unable to allocate enough memory. */
+void *VM_AlignedAlloc(size_t alignment, size_t bytes) {
+    /* See the comment in 'VM_Alloc()' for why the '_usable' variant is used. */
+    return zaligned_alloc_usable(alignment, bytes, NULL);
+}
+
+/* Similar to VM_AlignedAlloc, but returns NULL in case of allocation failure,
+ * instead of panicking. An invalid alignment is still reported as NULL. */
+void *VM_TryAlignedAlloc(size_t alignment, size_t bytes) {
+    return ztryaligned_alloc_usable(alignment, bytes, NULL);
+}
+
 /* --------------------------------------------------------------------------
  * Pool allocator
  * -------------------------------------------------------------------------- */
@@ -15327,6 +15352,8 @@ void moduleRegisterCoreAPI(void) {
     REGISTER_API(TryRealloc);
     REGISTER_API(Free);
     REGISTER_API(Strdup);
+    REGISTER_API(AlignedAlloc);
+    REGISTER_API(TryAlignedAlloc);
     REGISTER_API(CreateCommand);
     REGISTER_API(GetCommand);
     REGISTER_API(CreateSubcommand);

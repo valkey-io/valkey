@@ -591,6 +591,22 @@ start_server {overrides {save {900 1}} tags {"modules"}} {
         assert_equal {OK} [r test.malloc_api 0]
     }
 
+    test "aligned alloc API" {
+        assert_equal {OK} [r test.aligned_alloc]
+    }
+
+    test "aligned alloc is reported in used_memory" {
+        set before [s used_memory]
+        assert_equal {OK} [r test.aligned_alloc_hold 4096 10485760]
+        set held [s used_memory]
+        assert_equal {OK} [r test.aligned_alloc_release]
+        set after [s used_memory]
+
+        # The 10mb block is far above the background allocation noise.
+        assert {$held - $before > 8388608}
+        assert {$held - $after > 8388608}
+    }
+
     test "Cluster keyslot" {
         assert_equal 12182 [r test.keyslot foo]
     }

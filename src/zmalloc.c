@@ -33,6 +33,7 @@
 #include "solarisfixes.h"
 #include "serverassert.h"
 
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -253,6 +254,126 @@ void *zmalloc_cache_aligned(size_t size) {
     update_zmalloc_stat_alloc(zmalloc_size(ptr));
     return ptr;
 #endif
+}
+
+/* Return non-zero if 'alignment' is a valid alignment, that is a non-zero power
+ * of two. */
+static inline int zmallocIsValidAlignment(size_t alignment) {
+    return alignment != 0 && (alignment & (alignment - 1)) == 0;
+}
+
+/* Try allocating 'alignment'-aligned memory, and return NULL if failed.
+ * 'alignment' must be a valid alignment, the caller is expected to have checked
+ * it with zmallocIsValidAlignment(). '*usable' is set to the usable size if non
+ * NULL. */
+static inline void *ztryaligned_alloc_usable_internal(size_t alignment, size_t size, size_t *usable) {
+    size_t alloc_size = MALLOC_MIN_SIZE(size);
+
+    /* Possible overflow, return NULL, so that the caller can panic or handle a failed allocation. */
+    if (alloc_size >= SIZE_MAX / 2) return NULL;
+
+#ifdef HAVE_MALLOC_SIZE
+    void *ptr = NULL;
+
+    /* posix_memalign() only accepts an alignment that is also a multiple of
+     * sizeof(void *). Raising a smaller power of two to it still satisfies the
+     * alignment that was asked for. */
+    if (alignment < sizeof(void *)) alignment = sizeof(void *);
+
+#ifdef USE_JEMALLOC
+    int ret = je_posix_memalign(&ptr, alignment, alloc_size);
+#else
+    int ret = posix_memalign(&ptr, alignment, alloc_size);
+#endif
+    if (ret != 0 || !ptr) return NULL;
+
+    alloc_size = zmalloc_size(ptr);
+    update_zmalloc_stat_alloc(alloc_size);
+    if (usable) *usable = alloc_size;
+    return ptr;
+#else
+    /* Without a usable size reported by the allocator we keep a size header
+     * right below the returned pointer, and that header can't be made room for
+     * by simply offsetting the malloc() result without losing the alignment.
+     * Over-allocate instead, pick an aligned address leaving room for both the
+     * header and a slot holding the original malloc() pointer, and mark the
+     * stored size with ZMALLOC_CACHE_ALIGNED_FLAG so that zfree() knows to
+     * recover the allocation from that slot. */
+    if (alloc_size & ZMALLOC_CACHE_ALIGNED_FLAG) return NULL;
+
+    size_t extra = alignment - 1;
+    if (extra > SIZE_MAX - PREFIX_SIZE - sizeof(void *)) return NULL;
+    extra += PREFIX_SIZE + sizeof(void *);
+    if (alloc_size > SIZE_MAX - extra) return NULL;
+
+    unsigned char *raw = malloc(alloc_size + extra);
+    if (!raw) return NULL;
+
+    uintptr_t aligned = ((uintptr_t)(raw + sizeof(void *) + PREFIX_SIZE + alignment - 1)) & ~((uintptr_t)alignment - 1);
+    void *ptr = (void *)aligned;
+
+    *((void **)((unsigned char *)ptr - PREFIX_SIZE - sizeof(void *))) = raw;
+    *((size_t *)((unsigned char *)ptr - PREFIX_SIZE)) = alloc_size | ZMALLOC_CACHE_ALIGNED_FLAG;
+
+    update_zmalloc_stat_alloc(alloc_size + PREFIX_SIZE);
+    if (usable) *usable = alloc_size;
+    return ptr;
+#endif
+}
+
+/* Allocate 'alignment'-aligned memory or panic. Behaves like aligned_alloc(),
+ * except that 'size' isn't required to be a multiple of 'alignment'. The
+ * returned pointer can be freed with zfree().
+ *
+ * Returns NULL with errno set to EINVAL if 'alignment' is not a non-zero power
+ * of two. An invalid alignment is a caller error rather than an out of memory
+ * condition, so it doesn't reach the OOM handler.
+ *
+ * '*usable' is set to the usable size if non NULL. */
+void *zaligned_alloc_usable(size_t alignment, size_t size, size_t *usable) {
+    if (!zmallocIsValidAlignment(alignment)) {
+        errno = EINVAL;
+        return NULL;
+    }
+
+    size_t usable_size = 0;
+    void *ptr = ztryaligned_alloc_usable_internal(alignment, size, &usable_size);
+    if (!ptr) zmalloc_oom_handler(size);
+#ifdef HAVE_MALLOC_SIZE
+    ptr = extend_to_usable(ptr, usable_size);
+#endif
+    if (usable) *usable = usable_size;
+    return ptr;
+}
+
+/* Like zaligned_alloc_usable(), but without reporting the usable size. */
+void *zaligned_alloc(size_t alignment, size_t size) {
+    return zaligned_alloc_usable(alignment, size, NULL);
+}
+
+/* Similar to zaligned_alloc_usable(), but returns NULL in case of allocation
+ * failure, instead of panicking. An invalid alignment is still reported as NULL
+ * with errno set to EINVAL.
+ *
+ * '*usable' is set to the usable size if non NULL. */
+void *ztryaligned_alloc_usable(size_t alignment, size_t size, size_t *usable) {
+    if (!zmallocIsValidAlignment(alignment)) {
+        errno = EINVAL;
+        return NULL;
+    }
+
+    size_t usable_size = 0;
+    void *ptr = ztryaligned_alloc_usable_internal(alignment, size, &usable_size);
+#ifdef HAVE_MALLOC_SIZE
+    ptr = extend_to_usable(ptr, usable_size);
+#endif
+    if (usable) *usable = usable_size;
+    return ptr;
+}
+
+/* Like ztryaligned_alloc_usable(), but without reporting the usable size. */
+void *ztryaligned_alloc(size_t alignment, size_t size) {
+    return ztryaligned_alloc_usable(alignment, size, NULL);
 }
 
 /* Try allocating memory, and return NULL if failed. */

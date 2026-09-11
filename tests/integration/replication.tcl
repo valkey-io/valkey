@@ -681,8 +681,7 @@ foreach testType {Successful Aborted} {
                         set rd_replica [valkey_deferring_client -1]
                         $replica config set lua-time-limit 10
                         $rd_replica eval {while true do end} 0
-                        after 200
-                        assert_error {BUSY*} {$replica ping}
+                        wait_for_script_busy -1
                         $replica script kill
                         after 200 ; # Give some time to Lua to call the hook again...
                         assert_equal [$replica ping] "PONG"

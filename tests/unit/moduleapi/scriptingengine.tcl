@@ -365,9 +365,7 @@ start_server {tags {"modules"}} {
         r config set busy-reply-threshold 10
         r function load REPLACE "#!hello name=mylib\nFUNCTION wait\nARGS 0\nSLEEP\nARGS 0\nRETURN"
         $rd fcall wait 0 100
-        after 1000
-        catch {r ping} e
-        assert_match {BUSY*} $e
+        wait_for_script_busy 0 10
         assert_match {running_script {name wait command {fcall wait 0 100} duration_ms *} engines {*}} [r FUNCTION STATS]
         r function kill
         after 1000 ;

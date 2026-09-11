@@ -12,6 +12,31 @@ on:
         required: false
         type: string
         default: "SET,GET"
+      arbitrary_command:
+        description: "Command to benchmark, e.g. 'GETRANGE key:__rand_int__ 0 100'. Takes precedence over commands. Supports __rand_int__ and __data__."
+        required: false
+        type: string
+        default: ""
+      populate_command:
+        description: "Seeds the keyspace before an arbitrary read, e.g. 'SET key:__rand_int__ __data__'. Requires arbitrary_command and the SAME key pattern, or the reads will miss."
+        required: false
+        type: string
+        default: ""
+      write_command:
+        description: "Write side of a concurrent mixed load, e.g. 'SET key:__rand_int__ __data__' or 'SET'. Requires read_command. Not for use with arbitrary_command or populate_command."
+        required: false
+        type: string
+        default: ""
+      read_command:
+        description: "Read side of a concurrent mixed load, e.g. 'GET key:__rand_int__' or 'GET'. Requires write_command and the SAME key pattern, or the reads will miss."
+        required: false
+        type: string
+        default: ""
+      write_ratio:
+        description: "Percentage of clients driving write_command; the rest drive read_command. Range: 1-99, default 50."
+        required: false
+        type: string
+        default: ""
       data_size:
         description: "Comma separated data sizes in bytes (e.g. 16,96). Range: 1-1048576"
         required: false
@@ -19,6 +44,11 @@ on:
         default: ""
       io_threads:
         description: "Comma separated io-threads values (e.g. 1,9). Range: 1-20"
+        required: false
+        type: string
+        default: ""
+      benchmark_threads:
+        description: "Client thread count for valkey-benchmark ('--threads'). Range: 1-96."
         required: false
         type: string
         default: ""
@@ -160,88 +190,49 @@ jobs:
         working-directory: valkey-perf-benchmark
         env:
           INPUT_COMMANDS: ${{ github.event.inputs.commands }}
+          INPUT_ARBITRARY_COMMAND: ${{ github.event.inputs.arbitrary_command }}
+          INPUT_POPULATE_COMMAND: ${{ github.event.inputs.populate_command }}
+          INPUT_WRITE_COMMAND: ${{ github.event.inputs.write_command }}
+          INPUT_READ_COMMAND: ${{ github.event.inputs.read_command }}
+          INPUT_WRITE_RATIO: ${{ github.event.inputs.write_ratio }}
           INPUT_DATA_SIZE: ${{ github.event.inputs.data_size }}
           INPUT_IO_THREADS: ${{ github.event.inputs.io_threads }}
+          INPUT_BENCHMARK_THREADS: ${{ github.event.inputs.benchmark_threads }}
           INPUT_PIPELINES: ${{ github.event.inputs.pipelines }}
           INPUT_CLUSTER_MODE: ${{ github.event.inputs.cluster_mode }}
         run: |
-          CONFIG_FILE="configs/benchmark-config-arm.json"
+          # utils/modify_config.py owns the config schema and validates inputs.
+          ARGS=(--config configs/benchmark-config-arm.json)
 
-          # Read user inputs from environment (safer than direct interpolation
-          # of ${{ github.event.inputs.* }} which can break quoting).
-          # Empty means use default from config.
-          COMMANDS="$INPUT_COMMANDS"
-          DATA_SIZE="$INPUT_DATA_SIZE"
-          IO_THREADS="$INPUT_IO_THREADS"
-          PIPELINES="$INPUT_PIPELINES"
-          CLUSTER_MODE="$INPUT_CLUSTER_MODE"
-
-          # Validate input bounds
-          if [[ -n "$DATA_SIZE" ]]; then
-            for val in $(echo "$DATA_SIZE" | tr ',' ' '); do
-              val=$(echo "$val" | xargs)
-              if ! [[ "$val" =~ ^[0-9]+$ ]] || [ "$val" -lt 1 ] || [ "$val" -gt 1048576 ]; then
-                echo "Error: data_size values must be between 1 and 1048576 (1MB). Got: $val"
-                exit 1
-              fi
-            done
+          # commands has a default, and the script rejects it alongside a
+          # generated mode, so only pass it when no generated mode is selected.
+          if [[ -n "$INPUT_COMMANDS" && -z "$INPUT_ARBITRARY_COMMAND" \
+                && -z "$INPUT_WRITE_COMMAND" && -z "$INPUT_READ_COMMAND" ]]; then
+            ARGS+=(--commands "$INPUT_COMMANDS")
           fi
 
-          if [[ -n "$IO_THREADS" ]]; then
-            for val in $(echo "$IO_THREADS" | tr ',' ' '); do
-              val=$(echo "$val" | xargs)
-              if ! [[ "$val" =~ ^[0-9]+$ ]] || [ "$val" -lt 1 ] || [ "$val" -gt 20 ]; then
-                echo "Error: io_threads values must be between 1 and 20 (max CPUs on NUMA node). Got: $val"
-                exit 1
-              fi
-            done
+          [[ -n "$INPUT_ARBITRARY_COMMAND" ]] && ARGS+=(--arbitrary-command "$INPUT_ARBITRARY_COMMAND")
+          [[ -n "$INPUT_POPULATE_COMMAND" ]]  && ARGS+=(--populate-command "$INPUT_POPULATE_COMMAND")
+          [[ -n "$INPUT_WRITE_COMMAND" ]]     && ARGS+=(--write-command "$INPUT_WRITE_COMMAND")
+          [[ -n "$INPUT_READ_COMMAND" ]]      && ARGS+=(--read-command "$INPUT_READ_COMMAND")
+          [[ -n "$INPUT_WRITE_RATIO" ]]       && ARGS+=(--write-ratio "$INPUT_WRITE_RATIO")
+          [[ -n "$INPUT_DATA_SIZE" ]]         && ARGS+=(--data-size "$INPUT_DATA_SIZE")
+          [[ -n "$INPUT_IO_THREADS" ]]        && ARGS+=(--io-threads "$INPUT_IO_THREADS")
+          [[ -n "$INPUT_BENCHMARK_THREADS" ]] && ARGS+=(--benchmark-threads "$INPUT_BENCHMARK_THREADS")
+          [[ -n "$INPUT_PIPELINES" ]]         && ARGS+=(--pipelines "$INPUT_PIPELINES")
+
+          # Always explicit, so an unchecked box turns cluster mode off rather
+          # than inheriting the base config's value.
+          if [[ "$INPUT_CLUSTER_MODE" == "true" ]]; then
+            ARGS+=(--cluster-mode)
+          else
+            ARGS+=(--no-cluster-mode)
           fi
 
-          if [[ -n "$PIPELINES" ]]; then
-            for val in $(echo "$PIPELINES" | tr ',' ' '); do
-              val=$(echo "$val" | xargs)
-              if ! [[ "$val" =~ ^[0-9]+$ ]] || [ "$val" -lt 1 ] || [ "$val" -gt 1000 ]; then
-                echo "Error: pipelines values must be between 1 and 1000. Got: $val"
-                exit 1
-              fi
-            done
-          fi
+          # Bounds that describe this runner rather than the framework.
+          ARGS+=(--server-cpu-ceiling 19 --max-io-threads 20 --max-benchmark-threads 96)
 
-          # Build commands JSON array from comma-separated input
-          COMMANDS_JSON=$(echo "$COMMANDS" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | tr '[:lower:]' '[:upper:]' | jq -R . | jq -s .)
-
-          # Override config with user-provided parameters using jq
-          OVERRIDES=".[0].commands = $COMMANDS_JSON"
-
-          if [[ "$CLUSTER_MODE" == "true" ]]; then
-            OVERRIDES="$OVERRIDES | .[0].cluster_mode = true"
-          fi
-
-          if [[ -n "$DATA_SIZE" ]]; then
-            DATA_SIZE_JSON=$(echo "$DATA_SIZE" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | jq -R 'tonumber' | jq -s .)
-            OVERRIDES="$OVERRIDES | .[0].data_sizes = $DATA_SIZE_JSON"
-          fi
-
-          if [[ -n "$IO_THREADS" ]]; then
-            IO_THREADS_JSON=$(echo "$IO_THREADS" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | jq -R 'tonumber' | jq -s .)
-            MAX_IO_THREADS=$(echo "$IO_THREADS_JSON" | jq 'max')
-            SERVER_CPU_END=$((MAX_IO_THREADS - 1))
-            if [ "$SERVER_CPU_END" -gt 19 ]; then
-              SERVER_CPU_END=19
-            fi
-            OVERRIDES="$OVERRIDES | .[0].\"io-threads\" = $IO_THREADS_JSON | .[0].server_cpu_range = \"0-${SERVER_CPU_END}\""
-          fi
-
-          if [[ -n "$PIPELINES" ]]; then
-            PIPELINES_JSON=$(echo "$PIPELINES" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | jq -R 'tonumber' | jq -s .)
-            OVERRIDES="$OVERRIDES | .[0].pipelines = $PIPELINES_JSON"
-          fi
-
-          jq "$OVERRIDES" "$CONFIG_FILE" > config-override.json
-          mv config-override.json "$CONFIG_FILE"
-
-          echo "Final benchmark config:"
-          cat "$CONFIG_FILE"
+          python utils/modify_config.py "${ARGS[@]}" --print
 
       - name: Run benchmarks
         working-directory: valkey-perf-benchmark
@@ -284,8 +275,14 @@ jobs:
         env:
           INPUT_PR_NUMBER: ${{ github.event.inputs.pr_number }}
           INPUT_COMMANDS: ${{ github.event.inputs.commands }}
+          INPUT_ARBITRARY_COMMAND: ${{ github.event.inputs.arbitrary_command }}
+          INPUT_POPULATE_COMMAND: ${{ github.event.inputs.populate_command }}
+          INPUT_WRITE_COMMAND: ${{ github.event.inputs.write_command }}
+          INPUT_READ_COMMAND: ${{ github.event.inputs.read_command }}
+          INPUT_WRITE_RATIO: ${{ github.event.inputs.write_ratio }}
           INPUT_DATA_SIZE: ${{ github.event.inputs.data_size }}
           INPUT_IO_THREADS: ${{ github.event.inputs.io_threads }}
+          INPUT_BENCHMARK_THREADS: ${{ github.event.inputs.benchmark_threads }}
           INPUT_PIPELINES: ${{ github.event.inputs.pipelines }}
           INPUT_CLUSTER_MODE: ${{ github.event.inputs.cluster_mode }}
         uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
@@ -302,11 +299,25 @@ jobs:
             // interpolation of ${{ github.event.inputs.* }} into JS strings).
             const prNumber = Number(process.env.INPUT_PR_NUMBER);
             const commands = process.env.INPUT_COMMANDS;
+            const arbitraryCommand = process.env.INPUT_ARBITRARY_COMMAND;
             const cluster = process.env.INPUT_CLUSTER_MODE === 'true' ? ' (Cluster Mode)' : '';
             const runUrl = `https://github.com/${owner}/${repo}/actions/runs/${{ github.run_id }}`;
 
             let header = `**On-Demand Benchmark${cluster} ran on commit:** ${link}\n`;
-            header += `**Commands:** \`${commands}\`\n`;
+            const writeCommand = process.env.INPUT_WRITE_COMMAND;
+            const readCommand = process.env.INPUT_READ_COMMAND;
+            if (writeCommand && readCommand) {
+              const writeRatio = Number(process.env.INPUT_WRITE_RATIO) || 50;
+              header += `**Mixed load:** \`${writeCommand}\` (write, ${writeRatio}% of clients) + \`${readCommand}\` (read, ${100 - writeRatio}%)\n`;
+            } else if (arbitraryCommand) {
+              header += `**Arbitrary command:** \`${arbitraryCommand}\`\n`;
+              const populateCommand = process.env.INPUT_POPULATE_COMMAND;
+              if (populateCommand) {
+                header += `**Populate command:** \`${populateCommand}\`\n`;
+              }
+            } else {
+              header += `**Commands:** \`${commands}\`\n`;
+            }
 
             // Show overridden configs
             const overrides = [];
@@ -315,6 +326,8 @@ jobs:
             const pipelines = process.env.INPUT_PIPELINES;
             if (dataSize) overrides.push(`**Data Size:** \`${dataSize}\``);
             if (ioThreads) overrides.push(`**IO Threads:** \`${ioThreads}\``);
+            const benchmarkThreads = process.env.INPUT_BENCHMARK_THREADS;
+            if (benchmarkThreads) overrides.push(`**Benchmark Threads:** \`${benchmarkThreads}\``);
             if (pipelines) overrides.push(`**Pipelines:** \`${pipelines}\``);
             if (overrides.length > 0) {
               header += overrides.join(' | ') + '\n';

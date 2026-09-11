@@ -5133,6 +5133,15 @@ int VM_ZsetRangeEndReached(ValkeyModuleKey *key) {
     return key->u.zset.er;
 }
 
+/* Whether 'item' is inside the active lex range on the far side of the
+ * iteration: the max bound going forward, the min bound backward. */
+static int zsetLexItemInRange(ValkeyModuleKey *key, const OrderedIndexItem *item, int forward) {
+    const char *ele;
+    size_t ele_len;
+    orderedIndexItemGetElement(item, &ele, &ele_len);
+    return forward ? zsetLexLteMax(ele, ele_len, &key->u.zset.lrs) : zsetLexGteMin(ele, ele_len, &key->u.zset.lrs);
+}
+
 /* Helper function for VM_ZsetFirstInScoreRange() and VM_ZsetLastInScoreRange().
  * Set up the sorted set iteration according to the specified score range
  * (see the functions calling it for more info). If 'first' is true the
@@ -5225,6 +5234,9 @@ int zsetInitLexRange(ValkeyModuleKey *key, ValkeyModuleString *min, ValkeyModule
         orderedIndexInitIterator(&key->u.zset.oi, zs->oi);
         orderedIndexSeekToLexRange(&key->u.zset.oi, zlrs->min, zlrs->max, zlrs->minex, zlrs->maxex, first ? 0 : -1);
         key->u.zset.current = first ? orderedIndexNext(&key->u.zset.oi) : orderedIndexPrev(&key->u.zset.oi);
+        /* The seek honours the near bound only: an empty or inverted range
+         * lands on an element outside the far bound. */
+        if (key->u.zset.current && !zsetLexItemInRange(key, key->u.zset.current, first)) key->u.zset.current = NULL;
     } else {
         serverPanic("Unsupported zset encoding");
     }

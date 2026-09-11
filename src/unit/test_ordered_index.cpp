@@ -1043,6 +1043,29 @@ TEST_F(OrderedIndexTest, ReverseIteration) {
     orderedIndexResetIterator(&iter);
 }
 
+TEST_F(OrderedIndexTest, NanScoreBoundMatchesNothing) {
+    populateSequential(10);
+    double nan = std::nan("");
+
+    ASSERT_EQ(orderedIndexCountScoreRange(oi, 0.0, nan, 0, 0), 0UL);
+    ASSERT_EQ(orderedIndexCountScoreRange(oi, nan, 9.0, 0, 0), 0UL);
+    ASSERT_EQ(orderedIndexDeleteRangeByScore(oi, 0.0, nan, 0, 0, NULL, NULL), 0UL);
+    ASSERT_EQ(orderedIndexDeleteRangeByScore(oi, nan, 9.0, 0, 0, NULL, NULL), 0UL);
+    ASSERT_EQ(orderedIndexLength(oi), 10UL);
+
+    OrderedIndexIterator iter;
+    orderedIndexInitIterator(&iter, oi);
+    orderedIndexSeekToScoreRange(&iter, 0.0, nan, 0, 0, 0);
+    ASSERT_EQ(orderedIndexNext(&iter), nullptr);
+    orderedIndexInitIterator(&iter, oi);
+    orderedIndexSeekToScoreRange(&iter, nan, 9.0, 0, 0, 0);
+    ASSERT_EQ(orderedIndexNext(&iter), nullptr);
+    orderedIndexInitIterator(&iter, oi);
+    orderedIndexSeekToScoreRange(&iter, 0.0, nan, 0, 0, -1);
+    ASSERT_EQ(orderedIndexPrev(&iter), nullptr);
+    verifyOI();
+}
+
 TEST_F(OrderedIndexTest, SeekToScoreRange) {
     for (int i = 0; i < 5; i++) {
         char buf[32];

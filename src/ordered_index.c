@@ -15,6 +15,7 @@
 #include "ordered_index.h"
 #include "fbtree.h"
 #include "endianconv.h"
+#include <math.h>
 
 static_assert(sizeof(OrderedIndexIterator) >= sizeof(fbtreeIterator),
               "OrderedIndexIterator must be large enough to hold fbtreeIterator");
@@ -158,7 +159,14 @@ static void rangeDeleteCallback(sds item, void *ctx) {
     }
 }
 
+/* A NaN bound compares false against every score, so such a range is empty;
+ * scoreToSortable would otherwise map it beyond one of the infinities. */
+static inline bool scoreRangeIsEmpty(double min, double max, bool min_ex, bool max_ex) {
+    return isnan(min) || isnan(max) || min > max || (min == max && (min_ex || max_ex));
+}
+
 unsigned long orderedIndexDeleteRangeByScore(OrderedIndex *oi, double min, double max, bool min_ex, bool max_ex, OrderedIndexOnDelete on_delete, void *privdata) {
+    if (scoreRangeIsEmpty(min, max, min_ex, max_ex)) return 0;
     uint64_t min_sortable = scoreToSortable(min);
     uint64_t max_sortable = scoreToSortable(max);
     rangeDeleteArgs args = {on_delete, privdata};
@@ -255,6 +263,7 @@ double orderedIndexItemGetScore(const OrderedIndexItem *item) {
 
 unsigned long orderedIndexCountScoreRange(const OrderedIndex *oi, double min, double max, bool min_ex, bool max_ex) {
     fbtreeIndex *fbt = (fbtreeIndex *)oi;
+    if (scoreRangeIsEmpty(min, max, min_ex, max_ex)) return 0;
 
     /* Convert the double bounds to the big-endian sortable score prefix used as
      * the tree key, then count in one shared descent. Boundary inclusivity is
@@ -414,7 +423,7 @@ void orderedIndexSeekToScoreRange(OrderedIndexIterator *iter, double min, double
     fbtreeIndex *fbt = fbtreeIteratorGetIndex(fbt_iter);
     if (!fbt) return;
 
-    if (min > max || (min == max && (min_ex || max_ex))) {
+    if (scoreRangeIsEmpty(min, max, min_ex, max_ex)) {
         fbtreeResetIterator(fbt_iter);
         return;
     }

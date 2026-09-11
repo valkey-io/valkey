@@ -1654,7 +1654,7 @@ void clusterCommandFlushslot(client *c) {
             return;
         }
     }
-    delKeysInSlot(slot, lazy, false, true);
+    delKeysInSlot(slot, lazy, false, true, false);
     addReply(c, shared.ok);
 }
 

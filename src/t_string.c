@@ -290,16 +290,45 @@ void psetexCommand(client *c) {
     setGenericCommand(c, ARGS_PX | ARGS_ARGV3, c->argv[1], c->argv[3], c->argv[2], UNIT_MILLISECONDS, NULL, NULL, NULL);
 }
 
-/* DELIFEQ key value */
-void delifeqCommand(client *c) {
-    robj *o;
-    if ((o = lookupKeyWriteOrReply(c, c->argv[1], shared.czero)) == NULL || checkType(c, o, OBJ_STRING)) return;
+/* Function handling DELEX key [IFEQ | IFNE] value */
+void delexCommand(client *c) {
+    int flags = ARGS_NO_FLAGS;
+    int unit = UNIT_SECONDS;
+    robj *expire = NULL;
+    robj *compare_val = NULL;
 
-    if (compareStringObjects(o, c->argv[2]) != 0) {
-        addReply(c, shared.czero);
+    if (parseExtendedCommandArgumentsOrReply(
+            c, COMMAND_DELEX, 2, c->argc,
+            &flags, &unit, NULL, &expire, &compare_val) != C_OK) {
         return;
     }
 
+    delexGenericCommand(c, flags, compare_val);
+}
+
+/* DELIFEQ key value */
+void delifeqCommand(client *c) {
+    delexGenericCommand(c, ARGS_DELEX_IFEQ, c->argv[2]);
+}
+
+/* Implements DELEX and its conditional variants. */
+void delexGenericCommand(client *c, int flag, robj *compare_value) {
+    // need to handle reply
+
+    robj *o;
+    if ((o = lookupKeyWriteOrReply(c, c->argv[1], shared.czero)) == NULL || checkType(c, o, OBJ_STRING)) return;
+
+    if (flag & ARGS_DELEX_IFEQ) {
+        if (compareStringObjects(o, compare_value) != 0) {
+            addReply(c, shared.czero);
+            return;
+        }
+    } else if (flag & ARGS_DELEX_IFNE) {
+        if (compareStringObjects(o, compare_value) == 0) {
+            addReply(c, shared.czero);
+            return;
+        }
+    }
     serverAssert(dbSyncDelete(c->db, c->argv[1]));
 
     /* Propagate as DEL command */

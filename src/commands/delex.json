@@ -1,0 +1,77 @@
+{
+    "DELEX": {
+        "summary": "Delete a key conditionally based on its value.",
+        "complexity": "O(1)",
+        "group": "string",
+        "since": "9.1.2",
+        "arity": 4,
+        "function": "delexCommand",
+        "command_flags": ["FAST", "WRITE"],
+        "acl_categories": ["FAST", "STRING", "WRITE"],
+
+        "key_specs": [
+            {
+                "flags": ["RM", "DELETE"],
+                "begin_search": {
+                    "index": {
+                        "pos": 1
+                    }
+                },
+                "find_keys": {
+                    "range": {
+                        "lastkey": 0,
+                        "step": 1,
+                        "limit": 0
+                    }
+                }
+            }
+        ],
+
+        "reply_schema": {
+            "oneOf": [
+                {
+                    "description": "The key was not deleted.",
+                    "const": 0
+                },
+                {
+                    "description": "The key was deleted.",
+                    "const": 1
+                }
+            ]
+        },
+
+        "arguments": [
+            {
+                "name": "key",
+                "type": "key",
+                "key_spec_index": 0
+            },
+            {
+                "name": "condition",
+                "type": "block",
+                "arguments": [
+                    {
+                        "name": "predicate",
+                        "type": "oneof",
+                        "arguments": [
+                            {
+                                "name": "IFEQ",
+                                "type": "pure-token",
+                                "token": "IFEQ"
+                            },
+                            {
+                                "name": "IFNE",
+                                "type": "pure-token",
+                                "token": "IFNE"
+                            }
+                        ]
+                    },
+                    {
+                        "name": "value",
+                        "type": "string"
+                    }
+                ]
+            }
+        ]
+    }
+}

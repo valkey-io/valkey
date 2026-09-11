@@ -725,7 +725,7 @@ void pvSort(pVector *pv, int (*compare)(const void *a, const void *b)) {
 
 #define VOLATILESET_VECTOR_BUCKET_MAX_SIZE 127
 
-#define VSET_NONE_BUCKET_PTR ((void *)(uintptr_t) - 1)
+#define VSET_NONE_BUCKET_PTR ((void *)(uintptr_t)-1)
 #define VSET_BUCKET_NONE -1      // matching the NULL case
 #define VSET_BUCKET_SINGLE 0x1UL // xx1 (assuming sds)
 #define VSET_BUCKET_VECTOR 0x2UL // 010

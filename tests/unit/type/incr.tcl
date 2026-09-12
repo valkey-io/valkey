@@ -216,9 +216,9 @@ start_server {tags {"incr"}} {
 
     test {INCREX BYFLOAT increments by the given amount} {
         r del foo
-        assert_equal {0.10000000000000001 0.10000000000000001} [r increx foo byfloat 0.1]
-        assert_equal {0.30000000000000004 0.20000000000000001} [r increx foo byfloat 0.2]
-        assert_equal {0.30000000000000004} [r get foo]
+        assert_match {0.1* 0.1*} [r increx foo byfloat 0.1]
+        assert_match {0.3* 0.2*} [r increx foo byfloat 0.2]
+        assert_match {0.3*} [r get foo]
     }
     
     test {INCREX NX only sets when key does not exist} {

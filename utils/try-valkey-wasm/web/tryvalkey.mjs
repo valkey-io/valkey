@@ -14,8 +14,20 @@ const DEFAULT_ARGS = [
 
 export async function startTryValkey(createModule, { args = DEFAULT_ARGS, log = () => {}, hostLabel } = {}) {
   const Module = await createModule({ print: log, printErr: log, noInitialRun: true });
-  try { Module.callMain(args); } catch (e) { if (e !== 'unwind' && e?.name !== 'ExitStatus') throw e; }
+  runMain(Module, args);
+  return attachTryValkey(Module, { hostLabel });
+}
 
+/* Run the server's main() with the given argv. It "returns" through
+ * emscripten_exit_with_live_runtime inside aeMain, which surfaces as 'unwind'. */
+export function runMain(Module, args = DEFAULT_ARGS) {
+  try { Module.callMain(args); } catch (e) { if (e !== 'unwind' && e?.name !== 'ExitStatus') throw e; }
+}
+
+export { DEFAULT_ARGS };
+
+/* Attach the CLI engine to a module whose main() has already run. */
+export function attachTryValkey(Module, { hostLabel } = {}) {
   const CAP = 1 << 20;
   const buf = Module._malloc(CAP);
   const bufP = BigInt(buf);

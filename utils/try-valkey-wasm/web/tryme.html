@@ -1,0 +1,1351 @@
+<!DOCTYPE html>
+<!-- try-valkey: the Valkey sign-on -> a REAL valkey-server (compiled to WebAssembly) running in this tab.
+     v3: the mock loader and mock CLI of the v2 prototype are replaced by the actual module. The download that
+     drives the tape loader is valkey-server.wasm; the boot readout's milestones are real events (FETCH = bytes
+     landed, COMPILE = WebAssembly instantiated, SERVER = "Server initialized" in the server log, VALKEY READY =
+     "Ready to accept connections"); the terminal is a real client on an in-process connection, with
+     valkey-cli's own line splitting (sdssplitargs, in the module) and a port of its TTY formatter.
+     ?mock=1 keeps the v2 stand-ins (also the automatic fallback if the .wasm cannot be fetched).
+     ?dl=SECONDS / ?boot=SECONDS now mean MINIMUM durations (the fetch is paced, the boot delayed) so the vamps
+     can be demonstrated on a fast connection; 0/0 = as fast as the machine allows.
+
+     Original brief (v2) follows.
+     BRIEF: Valkey sign-on -> TRY-VALKEY handoff prototype (v2, three-phase). Derived from valkey-signon.html.
+     PRINCIPLE: vamp on the parts whose length is unknown, play fixed material on the parts that are known.
+
+     PHASE 1  LOAD (download, open-ended). The tape loader: black frame, `> LOADING EMULATOR ... 42%` from the
+              first frame, and horizontal stripes racing around the frame's border the way a ZX Spectrum's did
+              while a tape loaded -- their scroll is driven by bytes received, so a stall visibly freezes them
+              (and the line says "(stalled)"). Audio: vamp A, one bar at a time, thickening a layer per download
+              quartile. Download complete = the cue; the sign-on starts on the next bar boundary.
+     PHASE 2  SIGN-ON (boot begins). The fixed PRE clock: power-on flare, then a boot readout of REAL milestones
+              (KERNEL / ROOTFS / NETWORK / VALKEY). Each label types on its beat; its status word pops when the
+              matching serial marker arrives (MARKERS[]), or on the beat if it already has. Wireframe draw,
+              connections land, tension.
+     PHASE 3  HOLD (until the server is ready, elastic). The dominant pedal: ports breathe once per bar, no
+              streams yet, the kernel tail scrolls dim under the readout. Audio: vamp B on B7 -- the harmony
+              before the unlock was already dominant, so it loops until the cue. Cue = `Ready to accept
+              connections`. The unlock is quantized to the next bar (iMUSE-style), decided LOOKAHEAD early so
+              audio can be booked; minimum hold keeps the fast path identical to the fixed sign-on (unlock 3.18).
+     UNLOCK   The POST clock (elements with class .post, delays re-based to the unlock): flood, wordmark, tagline,
+              stragglers, flicker; handoff at +3.12 to the static header + mock terminal (as v1).
+
+     MOCK LOADER: ?dl=SECONDS download (jitter + stalls), ?boot=SECONDS boot (canned Linux lines, kernel-like
+     clumping, carrying the four MARKERS). Presets: FAST 1/1, TYPICAL 4/3, SLOW 20/6. Real integration swaps this
+     for v86: progress from its loader, lines from serial0, the same MARKERS as the contract with the image.
+     SKIP INTRO / Esc: jump to the hold (never unlocks before the server is ready), then straight to the terminal.
+     Sound is OPT-IN (default off). Audio beds run long (T.end=90) and fade at the handoff.
+
+     MOCK CLI: PING ECHO SET(EX/PX/NX/XX) GET DEL EXISTS INCR INCRBY DECR KEYS TTL PTTL EXPIRE TYPE DBSIZE
+     FLUSHALL HSET HGET HGETALL HLEN LPUSH RPUSH LRANGE LLEN SADD SMEMBERS SCARD INFO CLEAR HELP, valkey-cli
+     formatting, history. A stand-in for judging the flow (and a plausible fallback), not a Valkey.
+
+     Everything below this block is the original sign-on brief; its fixed timings now describe the PRE clock,
+     with post-unlock times expressed as offsets from the unlock in T.P. -->
+<!-- BRIEF: Valkey 80s "sign-on" animation, v2. A ~6.5s boot sequence in the tradition of a CRT
+     terminal powering on: cool blue vector graphics (Tron / Battlezone / a Commodore booting),
+     deliberately NOT the Conductress vaporwave poster. One hue only: Valkey blue #6983ff.
+
+     CONCEPT: the unlock. The Valkey mark is a keyhole inside a hexagon, so the machine powers on,
+     draws its own emblem as wireframe, turns the key, and unlocks into solid colour. It ends on the
+     tagline with a cursor that blinks forever. (v1 had a READY. prompt after the tagline; cut in v2
+     -- it didn't land.)
+
+     TIMELINE (seconds)
+       0.00  CRT power-on: a white line flares across the centre and expands into the picture
+       0.50  boot lines scroll like a BIOS POST, one per beat (0.5 / 0.8 / 1.1 / 1.4), dot leaders,
+             status word snaps on 0.24s after each label
+       1.75  wireframe draw: the official mark path traced as a glowing vector stroke (0.9s), then
+             the keyhole circle last (2.65-2.80)
+       2.85  key turn: the whole wireframe rotates 16deg with a click, holds, snaps back at 3.18.
+             The boot log vanishes as the key starts to turn.
+       3.18  UNLOCK: solid blue floods outward from the keyhole, white flare, shock ring, glow.
+       3.70  VALKEY revealed by a vertical scan beam sweeping left to right (0.6s)
+       4.50  OPEN SOURCE, FOREVER types in with a block cursor (20 chars, 0.8s); cursor blinks on
+       5.90  one scanline flicker. Hold. REPLAY.
+
+     HARMONY (v2): everything before the unlock sits on the DOMINANT so the E major hit at 3.18 is a
+     resolution, not a repeat. Boot status notes climb F# A C# D# (5, b7, 9, 3 of B9, ending on the
+     leading tone); the wireframe arpeggio outlines B13; the keyhole bell is D#; TURBINE's stacked
+     swells are a B7 voicing held to ignition; LAUNCH's sequencer arpeggiates B7 and its string swell
+     is the D#/A tritone; SID's key turn is a ii-V bass walk (F#2, B2) into E.
+
+     MODES (v3): KEY TURN (above) or CONNECT. In CONNECT the key turn is replaced by clients:
+       2.40       all 28 horizontal lines leave both edges TOGETHER and land within ~0.16s (per-line
+                  0.20-0.36s ease-out), stopping at a padding hexagon with the mark's own proportions.
+                  Nobody draws that hexagon; the line endpoints trace it. Each landing twinkles.
+       3.18       the flood fills the mark and every connected line erupts with a stream of glowing
+                  dots flowing OUTWARD (the server serving). Emission ramps 5 -> 30 dots/s over 1.4s;
+                  dots leave slow and accelerate (v0 55px/s, 950px/s^2), stretching into dashes as
+                  they speed up (motion blur) and fading at the frame edge. Five straggler flourishes
+                  during the hold are re-twinkles on EXISTING ports (no new connections), timed as a
+                  musical phrase (G# B C# D# . E). Streams run forever. Inward motion is ONLY the
+                  connection landing. Defaults: CONNECT + LAUNCH.
+       Rendering: a transparent <canvas> over the SVG, mix-blend-mode:screen, one pre-rendered glow
+       sprite stamped additively (no shadowBlur). Every dot is closed-form in time (no simulation
+       state), so ?t= seek is exact and REPLAY is identical. Tuning knobs: HEX, ARRIVE, RAMP, V0, ACC.
+       Audio: the skeleton's key event becomes one dominant-tone ping per connection, plus a quiet
+       data-hiss bed after the unlock.
+
+     AUDIO: synthesised live in WebAudio, four scores + silent, all in E major, all locked to the
+     timeline above. Any score can be run through the VHS TAPE chain (lowpass, high-shelf dip, soft
+     saturation, wow+flutter via a modulated delay line, pink hiss bed).
+       FM SYNTH   DX7 / Sega-startup world: bell per boot line over a low B pad, six-note ascending
+                  arpeggio on the wireframe draw, ratchet + thunk on the key, FM-brass chord on unlock.
+       SID CHIP   Commodore 64: PWM pulse leads, 50Hz chord arpeggios, ring-mod bell, noise drum.
+       TURBINE    Vangelis. A TUNED jet-engine drone (saws + resonant noise) glides up from E2 to
+                  B3 over the spool; an amplitude flutter starts as an 7Hz blade-pass chop and
+                  accelerates into a 60Hz whine. CS-80 brass swells stack one per boot line.
+                  Unlock = sub hit + huge brass chord + shimmer; engine drops to idle under the hold.
+       LAUNCH     Rocket countdown. A 16th-note sequencer accelerates over the spool riding a
+                  Shepard glissando (six octave-spaced voices, each sweeping one octave, windowed so
+                  the rise never arrives); brown-noise rumble grows; boot lines are the count.
+                  Ignition = white-noise blast swept down + bass drop + a rising-fifth brass motif.
+     Browsers refuse audio without a gesture, so the sequence starts on a click: PRESS START.
+
+     DEBUG: ?t=2.5 pauses every animation at t=2.5s (Web Animations API) for frame capture; add
+            &mode=connect to render the canvas streams at that instant too.
+            ?run=turbine[&tape=1] starts the sequence + schedules that score without a gesture
+            (audio stays suspended, but any scheduling exception surfaces in the console).
+     Valkey and the Valkey logo are trademarks of LF Projects, LLC. Mark path from valkey.io. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>VALKEY — sign-on</title>
+<style>
+  :root { --bg:#070a1a; --blue:#6983ff; --ice:#9fb0ff; --white:#eaf0ff; --dim:#3a4a8a; }
+  html,body{margin:0;height:100%;background:#000;overflow:hidden}
+  #stage{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;background:#000}
+  #frame{position:relative;width:min(100vw,180vh);flex:none;transition:width 1.4s cubic-bezier(.4,0,.2,1)}
+  .hand #stage{justify-content:flex-start}
+  .hand #frame{width:min(52vw,80vh)}
+  svg#art{width:100%;height:auto;display:block}
+  /* CONNECT mode: the client streams live on a canvas over the SVG, screen-blended so the additive glow reads as light */
+  #streams{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;mix-blend-mode:screen}
+  .hand #tcur{animation-name:none !important;opacity:0 !important}
+
+  /* vamp corner: LOAD phase shows the download line at the top; the boot HOLD shows the kernel tail under the milestone readout */
+  #vamp{position:absolute;left:7.1%;top:7%;width:70%;font-size:min(1.45vw,2.6vh);line-height:1.55;letter-spacing:.06em;color:#6983ff;opacity:0;transition:opacity .4s;white-space:pre;text-shadow:0 0 6px rgba(105,131,255,.55);pointer-events:none}
+  #vamp.hold{top:29%} #vamp.on{opacity:1} #vamp .dim{opacity:.55} #vamp b{color:#eaf0ff;font-weight:normal}
+
+  /* the terminal */
+  #term{display:none;flex:1;width:min(52vw,80vh);min-height:0;box-sizing:border-box;padding:1.2vh 0 2vh;color:#9fb0ff;font-size:min(1.15vw,2.1vh);line-height:1.45;opacity:0;transition:opacity .8s;position:relative;overflow:hidden}
+  .hand #term{display:flex;flex-direction:column} .hand.termon #term{opacity:1}
+  #tout{flex:0 1 auto;min-height:0;overflow-y:auto;white-space:pre-wrap;word-break:break-all;scrollbar-width:thin;scrollbar-color:#1a2244 transparent}
+  #tout::-webkit-scrollbar{width:6px} #tout::-webkit-scrollbar-thumb{background:#1a2244}
+  #tline{white-space:pre-wrap;word-break:break-all}
+  .p{color:#6983ff} .o{color:#eaf0ff} .e{color:#ff6b8a} .d{color:#3a4a8a}
+  #tcur2{display:inline-block;width:.6em;height:1.1em;background:#9fb0ff;vertical-align:-.15em;animation-name:blink;animation-duration:1.06s;animation-timing-function:steps(1,end);animation-iteration-count:infinite}
+  #tin{position:absolute;opacity:0;left:0;top:0;width:1px;height:1px;border:0;padding:0}
+  #termscan{position:absolute;inset:0;pointer-events:none;background:repeating-linear-gradient(0deg,rgba(0,0,0,.16) 0 1px,transparent 1px 3px)}
+  #termbar{position:fixed;right:18px;bottom:14px;font-size:11px;letter-spacing:.25em;color:#3a4a8a;display:none;gap:14px}
+  .hand #termbar{display:flex} #termbar button{background:none;border:1px solid #1a2244;color:#3a4a8a;font:inherit;letter-spacing:inherit;padding:6px 12px;cursor:pointer}
+  #skip{position:fixed;left:18px;bottom:14px;font-size:11px;letter-spacing:.25em;color:#3a4a8a;background:none;border:1px solid #1a2244;padding:6px 12px;cursor:pointer;opacity:0;transition:opacity .4s}
+  .started #skip{opacity:1;transition-delay:.6s} .hand #skip{display:none}
+  .mono{font-family:'SF Mono',Menlo,Consolas,'DejaVu Sans Mono',monospace}
+
+  /* everything parks in its "before" state; .play starts the PRE-UNLOCK clocks. Elements with .post belong to the
+     POST-UNLOCK clock: their delays are re-based to the unlock instant and .unlock starts them, so the tension hold
+     between the two clocks can be any length (it vamps until the emulated server is actually ready).
+     NOTE: never use the `animation:` shorthand below -- it resets fill-mode/play-state and overrides these classes.
+     Longhands only. */
+  .anim{animation-play-state:paused;animation-fill-mode:both}
+  .play .anim{animation-play-state:running}
+  .play .anim.post{animation-play-state:paused}
+  .unlock .anim.post{animation-play-state:running}
+
+  /* 0.00 power on */
+  #bg   {animation-name:fadein;animation-duration:.5s;animation-timing-function:ease-out;animation-delay:.12s}
+  #tube {transform-origin:450px 250px;animation-name:tube;animation-duration:.6s;animation-timing-function:cubic-bezier(.2,.8,.3,1);animation-delay:0s}
+
+  /* 0.50 boot milestones: label types on its beat; the status word is set by JS when the REAL boot marker arrives
+     (or on the beat if it already has). The readout stays up through the hold and vanishes at the unlock. */
+  #boot{animation-name:fadeout;animation-duration:.25s;animation-timing-function:ease-out;animation-delay:0s}
+  .bl{animation-name:typein;animation-duration:.2s;animation-timing-function:steps(24,end)}
+  .st{fill-opacity:0} .st.on{fill-opacity:1}
+  .bl:nth-of-type(1){animation-delay:.50s} .bl:nth-of-type(2){animation-delay:.80s}
+  .bl:nth-of-type(3){animation-delay:1.10s} .bl:nth-of-type(4){animation-delay:1.40s}
+
+  /* 1.75 wireframe draw (stroke length set from JS into --L), fades out once the fill lands */
+  #wmain{stroke-dasharray:var(--L);stroke-dashoffset:var(--L);animation-name:draw;animation-duration:.9s;animation-timing-function:cubic-bezier(.35,.2,.45,1);animation-delay:1.75s}
+  #wcirc{stroke-dasharray:var(--L);stroke-dashoffset:var(--L);animation-name:draw;animation-duration:.15s;animation-timing-function:ease-out;animation-delay:2.65s}
+  #wire {animation-name:fadeout;animation-duration:.45s;animation-timing-function:ease-out;animation-delay:0s}
+
+  /* 2.85 key turn (KEY TURN mode): rotate and HOLD on the pre clock; snap back on the post clock */
+  #key  {transform-origin:450px 225px;animation-name:keyhold;animation-duration:.125s;animation-timing-function:linear;animation-delay:2.85s}
+  .unlock #key{animation-name:keysnap;animation-duration:.1s;animation-delay:0s}
+  .connect #key,.connect.unlock #key{animation-name:none}
+
+  /* UNLOCK (post clock, t=0 is the unlock instant) */
+  #flood{animation-name:flood;animation-duration:.42s;animation-timing-function:cubic-bezier(.2,.8,.2,1);animation-delay:0s}
+  #flare {transform-origin:450px 225px;animation-name:flare;animation-duration:.9s;animation-timing-function:ease-out;animation-delay:0s}
+  #shock {transform-origin:450px 225px;animation-name:shock;animation-duration:.9s;animation-timing-function:cubic-bezier(.1,.8,.2,1);animation-delay:0s}
+  #glow  {transform-origin:450px 225px;animation-name:glowup;animation-duration:.9s;animation-timing-function:cubic-bezier(.2,.9,.2,1);animation-delay:0s}
+
+  /* +0.52 wordmark scan-beam reveal */
+  #word {animation-name:typein;animation-duration:.6s;animation-timing-function:linear;animation-delay:.52s}
+  #beam {animation-name:beam;animation-duration:.6s;animation-timing-function:linear;animation-delay:.52s}
+
+  /* +1.32 tagline types; its cursor then blinks forever. +2.72 scanline flicker */
+  #tag  {animation-name:typein;animation-duration:.8s;animation-timing-function:steps(20,end);animation-delay:1.32s}
+  #tcur {animation-fill-mode:none !important;animation-name:blink;animation-duration:1.06s;animation-timing-function:steps(1,end);animation-delay:1.32s;animation-iteration-count:infinite}
+  #scan {animation-name:flicker;animation-duration:.35s;animation-timing-function:steps(2,end);animation-delay:2.72s}
+  #vignette{animation-name:fadein;animation-duration:1.2s;animation-timing-function:ease-out;animation-delay:0s}
+
+  @keyframes fadein{from{opacity:0}to{opacity:1}}
+  @keyframes fadeout{from{opacity:1}to{opacity:0}}
+  @keyframes tube{0%{transform:scale(0,.004);opacity:1}
+                  30%{transform:scale(1,.004);opacity:1}
+                  70%{transform:scale(1,1);opacity:.85}
+                  100%{transform:scale(1,1);opacity:0}}
+  @keyframes typein{from{clip-path:inset(0 100% 0 0)}to{clip-path:inset(0 0 0 0)}}
+  @keyframes draw{to{stroke-dashoffset:0}}
+  @keyframes keyhold{from{transform:rotate(0deg)}to{transform:rotate(16deg)}}
+  @keyframes keysnap{0%{transform:rotate(16deg)}60%{transform:rotate(-2.5deg)}100%{transform:rotate(0deg)}}
+  @keyframes flood{from{clip-path:circle(0px at 28.45px 32.45px)}to{clip-path:circle(40px at 28.45px 32.45px)}}
+  @keyframes flare{0%{opacity:0;transform:scale(1.3)}15%{opacity:1;transform:scale(1.04)}100%{opacity:0;transform:scale(1)}}
+  @keyframes shock{0%{opacity:0;transform:scale(.3)}3%{opacity:.7}100%{opacity:0;transform:scale(3.2)}}
+  @keyframes glowup{from{opacity:0;transform:scale(.3)}to{opacity:.13;transform:scale(1)}}
+  @keyframes beam{0%{transform:translateX(0);opacity:0}2%{opacity:1}92%{opacity:1}100%{transform:translateX(var(--bw));opacity:0}}
+  @keyframes blink{0%,100%{opacity:1}50%{opacity:0}}
+  @keyframes flicker{0%{opacity:.16}50%{opacity:.5}100%{opacity:.2}}
+
+  /* ---------- chrome ---------- */
+  #ui{position:fixed;inset:0;display:grid;place-items:center;background:rgba(0,0,0,.74);color:var(--white);
+      letter-spacing:.18em;text-align:center;transition:opacity .3s}
+  #ui.hidden{opacity:0;pointer-events:none}
+  #ui button{background:none;border:2px solid var(--blue);color:var(--blue);font:inherit;letter-spacing:.3em;padding:14px 34px;cursor:pointer;margin:10px}
+  #ui button:hover{background:var(--blue);color:var(--bg)}
+  #ui .row{display:flex;gap:8px;justify-content:center;margin-top:18px;flex-wrap:wrap;max-width:640px}
+  #ui .row label{font-size:12px;opacity:.85;cursor:pointer;border:1px solid var(--dim);padding:8px 14px}
+  #ui .row input{display:none}
+  #ui .row input:checked+span{color:var(--ice)}
+  #ui .row label:has(input:checked){border-color:var(--blue)}
+  #replay{position:fixed;right:18px;bottom:14px;font-size:11px;letter-spacing:.25em;
+      color:var(--dim);background:none;border:1px solid #1a2244;padding:6px 12px;cursor:pointer;opacity:0;transition:opacity .4s}
+  .play #replay{opacity:1;transition-delay:6.5s} .hand #replay{display:none}
+</style>
+</head>
+<body>
+<div id="stage">
+<div id="frame">
+<svg id="art" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 500" role="img" aria-label="Valkey sign-on animation">
+  <defs>
+    <radialGradient id="bgg" cx="50%" cy="45%" r="70%">
+      <stop offset="0%" stop-color="#0d1434"/><stop offset="55%" stop-color="#070a1a"/><stop offset="100%" stop-color="#03040b"/>
+    </radialGradient>
+    <linearGradient id="beamg" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#6983ff" stop-opacity="0"/><stop offset="45%" stop-color="#ffffff"/><stop offset="100%" stop-color="#6983ff" stop-opacity="0"/>
+    </linearGradient>
+    <pattern id="scanp" width="4" height="4" patternUnits="userSpaceOnUse"><rect width="4" height="1.6" fill="#000"/></pattern>
+    <!-- phosphor: soft blue halo on text -->
+    <filter id="phos" x="-10%" y="-60%" width="120%" height="220%">
+      <feGaussianBlur stdDeviation="2.2" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="hotglow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="3" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="bloom" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="8" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="flareblur" x="-80%" y="-80%" width="260%" height="260%">
+      <feGaussianBlur stdDeviation="10" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <rect width="900" height="500" fill="#000"/>
+  <g id="bg" class="anim"><rect width="900" height="500" fill="url(#bgg)"/></g>
+  <circle id="glow" class="anim post" cx="450" cy="225" r="200" fill="#6983ff"/>
+
+  <!-- boot milestone readout, top-left, terminal style. Status words are set when the real boot marker arrives. -->
+  <g id="boot" class="anim post mono" filter="url(#phos)" font-size="13" letter-spacing="1" fill="#6983ff">
+    <text class="bl anim" x="64" y="48">&gt; FETCH ............. <tspan class="st" fill="#eaf0ff">OK</tspan></text>
+    <text class="bl anim" x="64" y="70">&gt; COMPILE ........... <tspan class="st" fill="#eaf0ff">OK</tspan></text>
+    <text class="bl anim" x="64" y="92">&gt; SERVER ............ <tspan class="st" fill="#eaf0ff">UP</tspan></text>
+    <text class="bl anim" x="64" y="114">&gt; VALKEY ............ <tspan class="st" fill="#eaf0ff">READY</tspan></text>
+  </g>
+
+  <!-- the mark. #key rotates the whole thing for the key turn; inner transform places the official path -->
+  <g id="key" class="anim">
+    <g transform="translate(450 225) scale(3.4026) translate(-28.45 -32.45)">
+      <!-- solid mark, revealed by a clip-path circle growing from the keyhole (in mark units) -->
+      <g id="flood" class="anim post" style="clip-path:circle(0px at 28.45px 32.45px)">
+        <path id="solid" fill="#6983ff" fill-rule="evenodd" filter="url(#bloom)"
+          d="M15.2,50l-9.4-5.9v-25L28.8,6l22.3,13.1v26.3l-22.7,12.8-7.9-4.9v-12l-4.3-2.7v-13.6l12.4-7.1,12.1,7.1v14.2l-9.6,5.4v-5.7c2.9-1.1,4.9-3.9,4.9-7.3s-3.4-7.8-7.6-7.8-7.6,3.5-7.6,7.8,2.1,6.2,4.9,7.3v10.9l2.7,1.7,16.8-9.5v-19.7l-16.6-9.8-17.1,9.8v18.5l3.6,2.3v6.8ZM28.5,28.1c1.9,0,3.4,1.6,3.4,3.6s-1.5,3.6-3.4,3.6-3.4-1.6-3.4-3.6,1.5-3.6,3.4-3.6Z"/>
+      </g>
+      <!-- wireframe: the same geometry traced as a vector stroke -->
+      <g id="wire" class="anim post" fill="none" stroke="#b9c6ff" stroke-width=".55" stroke-linejoin="round" filter="url(#hotglow)">
+        <path id="wmain" class="anim" d="M15.2,50l-9.4-5.9v-25L28.8,6l22.3,13.1v26.3l-22.7,12.8-7.9-4.9v-12l-4.3-2.7v-13.6l12.4-7.1,12.1,7.1v14.2l-9.6,5.4v-5.7c2.9-1.1,4.9-3.9,4.9-7.3s-3.4-7.8-7.6-7.8-7.6,3.5-7.6,7.8,2.1,6.2,4.9,7.3v10.9l2.7,1.7,16.8-9.5v-19.7l-16.6-9.8-17.1,9.8v18.5l3.6,2.3v6.8Z"/>
+        <path id="wcirc" class="anim" d="M28.5,28.1c1.9,0,3.4,1.6,3.4,3.6s-1.5,3.6-3.4,3.6-3.4-1.6-3.4-3.6,1.5-3.6,3.4-3.6Z"/>
+      </g>
+    </g>
+  </g>
+  <!-- white version of the mark that flares over the unlock and fades -->
+  <g id="flare" class="anim post" filter="url(#flareblur)" opacity="0">
+    <g transform="translate(450 225) scale(3.4026) translate(-28.45 -32.45)">
+      <path fill="#ffffff" fill-rule="evenodd"
+        d="M15.2,50l-9.4-5.9v-25L28.8,6l22.3,13.1v26.3l-22.7,12.8-7.9-4.9v-12l-4.3-2.7v-13.6l12.4-7.1,12.1,7.1v14.2l-9.6,5.4v-5.7c2.9-1.1,4.9-3.9,4.9-7.3s-3.4-7.8-7.6-7.8-7.6,3.5-7.6,7.8,2.1,6.2,4.9,7.3v10.9l2.7,1.7,16.8-9.5v-19.7l-16.6-9.8-17.1,9.8v18.5l3.6,2.3v6.8ZM28.5,28.1c1.9,0,3.4,1.6,3.4,3.6s-1.5,3.6-3.4,3.6-3.4-1.6-3.4-3.6,1.5-3.6,3.4-3.6Z"/>
+    </g>
+  </g>
+  <!-- shock ring from the unlock -->
+  <circle id="shock" class="anim post" cx="450" cy="225" r="80" fill="none" stroke="#dfe6ff" stroke-width="2" opacity="0"/>
+
+  <!-- wordmark: three copies (blue ghosts either side, white face), revealed by a clip that tracks the beam -->
+  <g id="wordwrap" filter="url(#phos)" font-family="'Helvetica Neue',Helvetica,Arial,sans-serif" font-weight="800" font-size="72" letter-spacing="6" text-anchor="middle">
+    <g id="word" class="anim post">
+      <text x="447" y="372" fill="#6983ff" opacity=".85">VALKEY</text>
+      <text x="453" y="372" fill="#6983ff" opacity=".85">VALKEY</text>
+      <text x="450" y="372" fill="#f4f7ff">VALKEY</text>
+    </g>
+    <rect id="beam" class="anim post" style="--bw:318px" x="290" y="308" width="8" height="78" fill="url(#beamg)" filter="url(#hotglow)" opacity="0"/>
+  </g>
+
+  <!-- tagline -->
+  <g id="tagline" class="mono" filter="url(#phos)">
+    <text id="tag" class="anim post" x="450" y="410" text-anchor="middle" font-size="15" letter-spacing="7" fill="#9fb0ff">OPEN SOURCE, FOREVER</text>
+    <rect id="tcur" class="anim post" x="616" y="397" width="10" height="16" fill="#9fb0ff" opacity="0"/>
+  </g>
+
+  <!-- CRT power-on flare: a white line that expands into the tube -->
+  <rect id="tube" class="anim" x="0" y="0" width="900" height="500" fill="#ffffff"/>
+
+  <rect id="scan" class="anim post" width="900" height="500" fill="url(#scanp)" opacity="0.16"/>
+  <rect id="vignette" class="anim" width="900" height="500" fill="none" stroke="#000" stroke-width="44" opacity="0.55"/>
+</svg>
+<canvas id="streams" aria-hidden="true"></canvas>
+<div id="vamp" class="mono" aria-live="polite"></div>
+</div>
+<div id="term" class="mono" role="region" aria-label="Valkey CLI">
+  <div id="tout"></div>
+  <div id="tline"><span class="p" id="tprompt">try-valkey&gt; </span><span id="tbuf"></span><span id="tcur2"></span></div>
+  <input id="tin" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="command input">
+  <div id="termscan"></div>
+</div>
+</div>
+<div id="termbar" class="mono"><button id="replay2">REPLAY INTRO</button></div>
+<button id="skip" class="mono">SKIP  [ESC]</button>
+
+<div id="ui" class="mono">
+  <div>
+    <div style="font-size:11px;opacity:.7;margin-bottom:14px">VALKEY · SIGN-ON → TRY-VALKEY <span id="engine-tag">(wasm)</span></div>
+    <button id="start">PRESS START</button>
+    <button id="skipstart" style="border-color:#3a4a8a;color:#9fb0ff">SKIP INTRO</button>
+    <div class="row" style="align-items:center">
+      <span style="font-size:11px;opacity:.6">PACING (min)</span>
+      <label><input type="radio" name="preset" value="0,0"><span>REAL 0s/0s</span></label>
+      <label><input type="radio" name="preset" value="4,3" checked><span>TYPICAL 4s/3s</span></label>
+      <label><input type="radio" name="preset" value="20,6"><span>SLOW 20s/6s</span></label>
+      <label style="border-color:transparent"><span style="font-size:11px;opacity:.7">DL <input type="number" id="dl" min="0" step="0.5" style="width:3.6em;background:#0b1024;color:#9fb0ff;border:1px solid #3a4a8a;font:inherit"> s · BOOT <input type="number" id="boot" min="0" step="0.5" style="width:3.6em;background:#0b1024;color:#9fb0ff;border:1px solid #3a4a8a;font:inherit"> s</span></label>
+    </div>
+    <div class="row">
+      <label><input type="checkbox" id="sound"><span>SOUND (opt-in)</span></label>
+      <label><input type="checkbox" id="tape"><span>VHS TAPE</span></label>
+    </div>
+    <div class="row">
+      <label><input type="radio" name="mode" value="keyturn"><span>KEY TURN</span></label>
+      <label><input type="radio" name="mode" value="connect" checked><span>CONNECT</span></label>
+    </div>
+    <div class="row">
+      <label><input type="radio" name="score" value="fm"><span>FM SYNTH</span></label>
+      <label><input type="radio" name="score" value="sid"><span>SID CHIP</span></label>
+      <label><input type="radio" name="score" value="turbine"><span>TURBINE</span></label>
+      <label><input type="radio" name="score" value="launch" checked><span>LAUNCH</span></label>
+      <label><input type="radio" name="score" value="mute"><span>SILENT</span></label>
+    </div>
+  </div>
+</div>
+<button id="replay" class="mono">REPLAY</button>
+
+<script>
+/* ============================ TIMELINE (must match the CSS above) ============================ */
+const T = {
+  boot: [0.50, 0.80, 1.10, 1.40], status: 0.24,
+  draw: 1.75, drawDur: 0.9, circ: 2.65,
+  turn: 2.85, click: 2.97,                      // the tension hold begins at click and lasts until the server is ready (min 0.21s)
+  holdMin: 3.18,                                // earliest unlock on the pre clock (= the fixed sign-on's unlock beat)
+  // post clock: offsets from the unlock instant
+  P: {scan: 0.52, scanDur: 0.6, tag: 1.32, tagDur: 0.8, tagN: 20, stragglers: [0.57, 0.87, 1.17, 1.47, 2.07], flicker: 2.72, hand: 3.12},
+  end: 90,                                      // beds (engine idle, rumble, hiss) run long so any vamp can be any length; faded at handoff
+};
+const UNLOCK = {at: Infinity};                // stage time (pre clock) of the unlock; Infinity while holding
+const BAR = 0.5;                              // vamp bar length; every phase transition is quantized to a bar boundary (iMUSE-style)
+// stroke length for the wireframe draw, read from the geometry itself
+for (const id of ['wmain', 'wcirc']) { const p = document.getElementById(id); p.style.setProperty('--L', p.getTotalLength().toFixed(2)); }
+
+/* ============================ CONNECT MODE: the client streams ============================ */
+// Everything here is a pure function of time. Connections have seeded arrival times; each dot's
+// position, speed, stretch and fade are closed-form in its age. So ?t= seek is exact, REPLAY is
+// identical, and there is no simulation state to drift.
+function mulberry(seed) { return () => { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+function hash(i) { i = (i ^ 61) ^ (i >>> 16); i = i + (i << 3); i ^= i >>> 4; i = Math.imul(i, 0x27d4eb2d); i ^= i >>> 15; return (i >>> 0) / 4294967296; }
+
+// The padding hexagon the lines stop at: same proportions as the mark's outer hexagon (pointy-top, so
+// its left and right sides are vertical). Nobody draws it; the line endpoints trace it.
+const HEX = {apex: 108, hw: 92.4, vh: 53.7};
+const hexHalfWidth = dy => (dy = Math.abs(dy)) <= HEX.vh ? HEX.hw : HEX.hw * (HEX.apex - dy) / (HEX.apex - HEX.vh);
+
+const LAUNCH_AT = 2.40;                     // every line leaves its edge at this instant...
+const ARRIVE = [.20, .36];                  // ...and takes this long to land, so the landings ripple across ~0.16s
+const RAMP = {r0: 5, r1: 30, R: 1.4};       // emission rate ramps 5 -> 30 dots/s over the first 1.4s of a stream
+const V0 = 55, ACC = 950;                   // px/s and px/s^2 in viewBox units: dots leave slow and get flung
+// straggler flourishes during the hold after the wordmark: re-twinkles on EXISTING ports, timed as a phrase on the POST clock
+const STRAGGLER_LINES = [9, 22, 2, 18, 13];
+
+const NET = (() => {
+  const rnd = mulberry(4242), lines = [];
+  for (const side of [-1, 1]) for (let k = 0; k < 14; k++) {
+    const dy = (k - 6.5) * 12.5;                                   // 14 rows per side, +-81px around the mark's centre
+    const stopX = 450 + side * hexHalfWidth(dy), edgeX = side < 0 ? 0 : 900;
+    const arrive = ARRIVE[0] + rnd() * (ARRIVE[1] - ARRIVE[0]);
+    lines.push({side, y: 225 + dy, stopX, edgeX, D: Math.abs(edgeX - stopX), arrive, connectAt: LAUNCH_AT + arrive, alpha: .16 + rnd() * .2});
+  }
+  return {lines};
+})();
+const streamAt = l => Math.max(UNLOCK.at, l.connectAt + .12);      // streams erupt at the unlock, whenever that turns out to be
+
+// emitted-count function and its inverse
+const C_R = RAMP.r0 * RAMP.R + (RAMP.r1 - RAMP.r0) * RAMP.R / 2;
+function emitted(tau) { return tau < RAMP.R ? RAMP.r0 * tau + (RAMP.r1 - RAMP.r0) * tau * tau / (2 * RAMP.R) : C_R + RAMP.r1 * (tau - RAMP.R); }
+function emitTime(n) { if (n < C_R) { const a = (RAMP.r1 - RAMP.r0) / RAMP.R; return (-RAMP.r0 + Math.sqrt(RAMP.r0 * RAMP.r0 + 2 * a * n)) / a; } return RAMP.R + (n - C_R) / RAMP.r1; }
+const AMAX = (-V0 + Math.sqrt(V0 * V0 + 2 * ACC * 460)) / ACC;      // oldest age any dot can have before it has left the frame
+const smooth = (a, b, x) => { x = Math.min(1, Math.max(0, (x - a) / (b - a))); return x * x * (3 - 2 * x); };
+const easeOut = u => 1 - Math.pow(1 - u, 3);
+
+const cv = document.getElementById('streams'), cx2 = cv.getContext('2d');
+// one pre-rendered glow sprite, stamped additively. Stretching its destination rect is the motion blur.
+const SPR = (() => { const c = document.createElement('canvas'); c.width = c.height = 64; const g = c.getContext('2d');
+  const r = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+  r.addColorStop(0, 'rgba(255,255,255,1)'); r.addColorStop(.22, 'rgba(205,215,255,.9)'); r.addColorStop(.55, 'rgba(105,131,255,.38)'); r.addColorStop(1, 'rgba(105,131,255,0)');
+  g.fillStyle = r; g.fillRect(0, 0, 64, 64); return c; })();
+let cvW = 0, cvH = 0;
+function sizeCanvas() {
+  const r = cv.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
+  const w = Math.round(r.width * dpr), h = Math.round(r.height * dpr);
+  if (w !== cvW || h !== cvH) { cv.width = cvW = w; cv.height = cvH = h; }
+  cx2.setTransform(w / 900, 0, 0, h / 500, 0, 0);
+}
+function stamp(x, y, w, h, alpha) { cx2.globalAlpha = alpha; cx2.drawImage(SPR, x - w / 2, y - h / 2, w, h); }
+
+function twinkle(l, tw) {                                                                    // tw in [0,1): a bright flash and a thin cross at the port
+  const k = 1 - tw; stamp(l.stopX, l.y, 8 + 30 * k, 8 + 30 * k, k);
+  cx2.globalAlpha = k * .9; cx2.strokeStyle = '#fff'; cx2.lineWidth = .7; const r = 4 + 16 * k;
+  cx2.beginPath(); cx2.moveTo(l.stopX - r, l.y); cx2.lineTo(l.stopX + r, l.y); cx2.moveTo(l.stopX, l.y - r); cx2.lineTo(l.stopX, l.y + r); cx2.stroke();
+}
+
+const HAND = {at: Infinity};                 // stage time of the handoff; renderNet fades against it
+function renderNet(t) {
+  sizeCanvas();
+  const fade = Math.min(1, Math.max(0, (t - HAND.at) / 1.5));   // 0 = live, 1 = static parallel lines
+  cx2.globalCompositeOperation = 'source-over'; cx2.globalAlpha = 1; cx2.clearRect(0, 0, 900, 500);
+  if (MODE !== 'connect') return;
+  // 1. the connections: every line leaves its edge at LAUNCH_AT and stops at the padding hexagon
+  cx2.lineWidth = .9; cx2.lineCap = 'round';
+  for (const l of NET.lines) {
+    const u = (t - LAUNCH_AT) / l.arrive; if (u <= 0) continue;
+    const tip = l.edgeX + (l.stopX - l.edgeX) * easeOut(Math.min(1, u));
+    cx2.strokeStyle = `rgba(105,131,255,${l.alpha * (1 - .45 * fade)})`; cx2.beginPath(); cx2.moveTo(l.edgeX, l.y); cx2.lineTo(tip, l.y); cx2.stroke();
+  }
+  // 2. light: ports, connect twinkles, straggler re-twinkles, and the streams -- all additive
+  cx2.globalCompositeOperation = 'lighter';
+  const holding = t >= T.click && t < UNLOCK.at;                                             // the tension vamp: connected, server not yet accepting
+  const pulse = holding ? .5 + .5 * Math.sin((t - T.click) * Math.PI / BAR) : 0;             // ports breathe once per bar while holding
+  NET.lines.forEach((l, li) => {
+    if (t < l.connectAt) return;
+    if (fade < 1) stamp(l.stopX, l.y, 7 + 6 * pulse, 7 + 6 * pulse, (.45 + .35 * pulse) * (1 - fade));   // the port, lit while connected
+    const tw = (t - l.connectAt) / .4; if (tw < 1) twinkle(l, tw);
+    const s0 = streamAt(l), tau = t - s0; if (tau <= 0) return;
+    const nMax = Math.floor(emitted(Math.min(tau, HAND.at - s0))), nMin = Math.ceil(emitted(Math.max(0, tau - AMAX)));
+    for (let n = nMin; n <= nMax; n++) {
+      const a = tau - emitTime(n); if (a < 0) continue;
+      const h0 = hash(li * 7919 + n * 4), h1 = hash(li * 7919 + n * 4 + 1), h2 = hash(li * 7919 + n * 4 + 2);
+      const sf = .85 + .3 * h0, v0 = V0 * sf, acc = ACC * sf;
+      const d = v0 * a + .5 * acc * a * a; if (d >= l.D) continue;
+      const v = v0 + acc * a, len = Math.min(46, 3.5 + v * .042), size = 4.5 + 2.5 * h1;
+      const alpha = (1 - smooth(.72, 1, d / l.D)) * (.6 + .4 * h2);
+      const lead = l.stopX + l.side * d, y = l.y + (hash(li * 7919 + n * 4 + 3) - .5) * 1.6;
+      stamp(lead - l.side * len / 2, y, len, size, alpha);                                    // trail extends back toward the hex
+    }
+  });
+  T.P.stragglers.forEach((off, i) => { const st = UNLOCK.at + off, tw = (t - st) / .5; if (tw >= 0 && tw < 1 && st < HAND.at) twinkle(NET.lines[STRAGGLER_LINES[i]], tw); });
+  cx2.globalAlpha = 1; cx2.globalCompositeOperation = 'source-over';
+}
+
+// LOAD phase: the tape loader. Horizontal stripes race around the frame's border the way a ZX Spectrum's did while a
+// tape loaded -- those stripes WERE the data, so here their scroll is driven by bytes received: a stall freezes them.
+function renderLoader(bytes, wallT) {
+  sizeCanvas();
+  cx2.globalCompositeOperation = 'source-over'; cx2.globalAlpha = 1; cx2.clearRect(0, 0, 900, 500);
+  const band = 26, side = 34, off = bytes / 1400 + wallT * 6;     // mostly data-driven; a slow idle drift keeps it from looking frozen-dead
+  const colour = i => { const h = hash(i); return h < .5 ? `rgba(105,131,255,${.28 + .3 * h})` : (h < .8 ? 'rgba(26,34,68,.9)' : 'rgba(159,176,255,.5)'); };
+  let y = -((off % 40) + 40), i = Math.floor(off / 40) * 3;
+  while (y < 500) {
+    const hgt = 2 + Math.floor(hash(i * 13 + 7) * 6);
+    cx2.fillStyle = colour(i);
+    if (y + hgt > 0 && y < band) cx2.fillRect(0, Math.max(0, y), 900, Math.min(band, y + hgt) - Math.max(0, y));
+    else if (y + hgt > 500 - band) cx2.fillRect(0, Math.max(500 - band, y), 900, Math.min(500, y + hgt) - Math.max(500 - band, y));
+    else { cx2.fillRect(0, y, side, hgt); cx2.fillRect(900 - side, y, side, hgt); }
+    y += hgt; i++;
+  }
+}
+let netRunning = false, netStart = 0, netLastT = 0;
+function netTick() {
+  if (!netRunning) return;
+  netLastT = (performance.now() - netStart) / 1000; renderNet(netLastT);
+  if (netLastT > HAND.at + 1.5 + AMAX) { netRunning = false; return; }                     // static image: dots drained, lines settled -> stop the loop
+  requestAnimationFrame(netTick);
+}
+function netStop() { netRunning = false; sizeCanvas(); cx2.clearRect(0, 0, 900, 500); }
+window.addEventListener('resize', () => { sizeCanvas(); if (!netRunning && netLastT && MODE === 'connect') renderNet(netLastT); });
+
+/* ============================ AUDIO CORE ============================ */
+const N = n => 440 * Math.pow(2, (n - 69) / 12);          // MIDI note -> Hz.  E major: E=40/52/64/76, G#=56/68/80, B=47/59/71/83
+let ctx, master;
+
+function impulse(seconds, decay) {
+  const len = Math.ceil(ctx.sampleRate * seconds), buf = ctx.createBuffer(2, len, ctx.sampleRate);
+  for (let c = 0; c < 2; c++) { const d = buf.getChannelData(c);
+    for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, decay); }
+  return buf;
+}
+
+function buildMaster(score, tape) {
+  ctx = new (window.AudioContext || window.webkitAudioContext)();
+  master = ctx.createGain(); master.gain.value = 0.55;
+  let node = master;
+  if (score === 'turbine' || score === 'launch') {
+    // reverb send + limiter for the cinematic pair
+    const comp = ctx.createDynamicsCompressor(); comp.threshold.value = -14; comp.knee.value = 18; comp.ratio.value = 4; comp.attack.value = .005; comp.release.value = .25;
+    const cv = ctx.createConvolver(); cv.buffer = impulse(score === 'turbine' ? 3.2 : 2.4, 3.0);
+    const wet = ctx.createGain(); wet.gain.value = score === 'turbine' ? .38 : .30;
+    master.connect(comp); master.connect(cv); cv.connect(wet); wet.connect(comp); node = comp;
+  }
+  if (tape) {
+    // VHS: lowpass, high-shelf dip, soft saturation, then wow+flutter as a modulated delay line
+    const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 3400; lp.Q.value = 0.7;
+    const hs = ctx.createBiquadFilter(); hs.type = 'highshelf'; hs.frequency.value = 1800; hs.gain.value = -5;
+    const sat = ctx.createWaveShaper(); const curve = new Float32Array(1024);
+    for (let i = 0; i < 1024; i++) { const x = i / 512 - 1; curve[i] = Math.tanh(1.8 * x) / Math.tanh(1.8); }
+    sat.curve = curve;
+    const d = ctx.createDelay(.1); d.delayTime.value = .02;
+    const now = ctx.currentTime;
+    [[0.45, .0016], [6.5, .00018]].forEach(([hz, depth]) => { const o = ctx.createOscillator(); o.frequency.value = hz; const g = ctx.createGain(); g.gain.value = depth; o.connect(g); g.connect(d.delayTime); o.start(now); o.stop(now + T.end + 1); });
+    node.connect(lp); lp.connect(hs); hs.connect(sat); sat.connect(d); node = d;
+  }
+  node.connect(ctx.destination);
+}
+
+// noise: color 'white' | 'pink' (Kellet) | 'brown'; returns its nodes so callers can automate the filters
+function noise(t0, dur, {gain = .1, lp = 4000, hp = 200, attack = .01, release = .1, color = 'white', dest = null} = {}) {
+  const len = Math.ceil(ctx.sampleRate * dur), buf = ctx.createBuffer(1, len, ctx.sampleRate), d = buf.getChannelData(0);
+  let b0 = 0, b1 = 0, b2 = 0, br = 0;
+  for (let i = 0; i < len; i++) {
+    const w = Math.random() * 2 - 1;
+    if (color === 'pink') { b0 = .99765 * b0 + w * .0990460; b1 = .96300 * b1 + w * .2965164; b2 = .57000 * b2 + w * 1.0526913; d[i] = (b0 + b1 + b2 + w * .1848) * .18; }
+    else if (color === 'brown') { br = (br + .02 * w) / 1.02; d[i] = br * 3.5; }
+    else d[i] = w;
+  }
+  const src = ctx.createBufferSource(); src.buffer = buf;
+  const f1 = ctx.createBiquadFilter(); f1.type = 'lowpass'; f1.frequency.value = lp;
+  const f2 = ctx.createBiquadFilter(); f2.type = 'highpass'; f2.frequency.value = hp;
+  const g = ctx.createGain(); g.gain.setValueAtTime(0, t0); g.gain.linearRampToValueAtTime(gain, t0 + attack);
+  g.gain.setValueAtTime(gain, t0 + Math.max(attack, dur - release)); g.gain.linearRampToValueAtTime(0, t0 + dur);
+  src.connect(f1); f1.connect(f2); f2.connect(g); g.connect(dest || master); src.start(t0); src.stop(t0 + dur);
+  return {src, f1, f2, g};
+}
+
+/* ============================ INSTRUMENTS ============================ */
+// analog brass: saw + detuned saw + triangle sub, lowpass with envelope
+function brass(t0, midi, dur, vel = .5) {
+  const out = ctx.createGain(); out.gain.setValueAtTime(0, t0);
+  out.gain.linearRampToValueAtTime(vel, t0 + .04); out.gain.setValueAtTime(vel, t0 + Math.max(.05, dur - .12));
+  out.gain.exponentialRampToValueAtTime(.001, t0 + dur);
+  const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.Q.value = 1.2;
+  f.frequency.setValueAtTime(500, t0); f.frequency.linearRampToValueAtTime(2600, t0 + .09); f.frequency.exponentialRampToValueAtTime(1200, t0 + dur);
+  [['sawtooth', 0, .5], ['sawtooth', 9, .4], ['triangle', -1200, .55]].forEach(([type, det, g]) => {
+    const o = ctx.createOscillator(); o.type = type; o.frequency.value = N(midi); o.detune.value = det;
+    const og = ctx.createGain(); og.gain.value = g; o.connect(og); og.connect(f); o.start(t0); o.stop(t0 + dur + .05);
+  });
+  f.connect(out); out.connect(master);
+}
+
+// CS-80 swell: three detuned saws, slow attack, opening lowpass, vibrato that grows in
+function swell(t0, midi, dur, vel = .14, attack = .4) {
+  const out = ctx.createGain(); out.gain.setValueAtTime(0, t0); out.gain.linearRampToValueAtTime(vel, t0 + attack);
+  out.gain.setValueAtTime(vel, t0 + Math.max(attack, dur - .4)); out.gain.linearRampToValueAtTime(0, t0 + dur);
+  const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.Q.value = 1.4;
+  f.frequency.setValueAtTime(260, t0); f.frequency.exponentialRampToValueAtTime(2400, t0 + attack * 1.3); f.frequency.exponentialRampToValueAtTime(1100, t0 + dur);
+  const vib = ctx.createOscillator(); vib.frequency.value = 5.5; const vg = ctx.createGain(); vg.gain.setValueAtTime(0, t0); vg.gain.linearRampToValueAtTime(9, t0 + attack * 2); vib.connect(vg);
+  [-8, 0, 8].forEach(det => { const o = ctx.createOscillator(); o.type = 'sawtooth'; o.frequency.value = N(midi); o.detune.value = det; vg.connect(o.detune);
+    const og = ctx.createGain(); og.gain.value = .33; o.connect(og); og.connect(f); o.start(t0); o.stop(t0 + dur + .05); });
+  vib.start(t0); vib.stop(t0 + dur + .05); f.connect(out); out.connect(master);
+}
+
+// strings: three detuned saws, slow attack, optional swell-to-end
+function strings(t0, midi, dur, vel = .18, {attack = .35, swell: sw = false} = {}) {
+  const out = ctx.createGain();
+  if (sw) { out.gain.setValueAtTime(.001, t0); out.gain.exponentialRampToValueAtTime(vel, t0 + dur * .85); out.gain.linearRampToValueAtTime(0, t0 + dur); }
+  else { out.gain.setValueAtTime(0, t0); out.gain.linearRampToValueAtTime(vel, t0 + attack); out.gain.setValueAtTime(vel, t0 + Math.max(attack, dur - .35)); out.gain.linearRampToValueAtTime(0, t0 + dur); }
+  const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 4200; f.Q.value = .5;
+  [-7, 0, 8].forEach(det => { const o = ctx.createOscillator(); o.type = 'sawtooth'; o.frequency.value = N(midi); o.detune.value = det;
+    const og = ctx.createGain(); og.gain.value = .33; o.connect(og); og.connect(f); o.start(t0); o.stop(t0 + dur + .05); });
+  f.connect(out); out.connect(master);
+}
+
+// DX7-style FM brass: sine carrier, ratio-1 modulator with an index envelope; two detuned layers
+function fmBrass(t0, midi, dur, vel = .3, {ratio = 1, index = 3.2} = {}) {
+  const f = N(midi); const out = ctx.createGain(); out.gain.setValueAtTime(0, t0);
+  out.gain.linearRampToValueAtTime(vel, t0 + .035); out.gain.setValueAtTime(vel, t0 + Math.max(.04, dur - .3)); out.gain.exponentialRampToValueAtTime(.001, t0 + dur);
+  [0, 7].forEach(det => {
+    const c = ctx.createOscillator(); c.type = 'sine'; c.frequency.value = f; c.detune.value = det;
+    const m = ctx.createOscillator(); m.type = 'sine'; m.frequency.value = f * ratio; m.detune.value = det;
+    const mg = ctx.createGain(); mg.gain.setValueAtTime(f * index * .2, t0); mg.gain.linearRampToValueAtTime(f * index, t0 + .06); mg.gain.exponentialRampToValueAtTime(f * index * .35, t0 + dur);
+    m.connect(mg); mg.connect(c.frequency);
+    const cg = ctx.createGain(); cg.gain.value = .5; c.connect(cg); cg.connect(out); c.start(t0); m.start(t0); c.stop(t0 + dur + .03); m.stop(t0 + dur + .03);
+  });
+  out.connect(master);
+}
+
+// FM glass bell: sine carrier, 3.5x modulator with decaying index
+function bell(t0, midi, vel = .2, dur = 1.4, ratio = 3.5) {
+  const c = ctx.createOscillator(); c.type = 'sine'; c.frequency.value = N(midi);
+  const m = ctx.createOscillator(); m.type = 'sine'; m.frequency.value = N(midi) * ratio;
+  const mg = ctx.createGain(); mg.gain.setValueAtTime(N(midi) * 2.2, t0); mg.gain.exponentialRampToValueAtTime(1, t0 + dur * .7);
+  m.connect(mg); mg.connect(c.frequency);
+  const g = ctx.createGain(); g.gain.setValueAtTime(0, t0); g.gain.linearRampToValueAtTime(vel, t0 + .004); g.gain.exponentialRampToValueAtTime(.001, t0 + dur);
+  c.connect(g); g.connect(master); c.start(t0); m.start(t0); c.stop(t0 + dur + .02); m.stop(t0 + dur + .02);
+}
+
+// SID ring-mod bell: sine carrier amplitude-modulated by a non-harmonic sine
+function ringBell(t0, midi, vel = .2, dur = 1.2, ratio = 1.41) {
+  const c = ctx.createOscillator(); c.type = 'sine'; c.frequency.value = N(midi);
+  const m = ctx.createOscillator(); m.type = 'sine'; m.frequency.value = N(midi) * ratio;
+  const ring = ctx.createGain(); ring.gain.value = 0; m.connect(ring.gain); c.connect(ring);
+  const g = ctx.createGain(); g.gain.setValueAtTime(vel, t0); g.gain.exponentialRampToValueAtTime(.001, t0 + dur);
+  ring.connect(g); g.connect(master); c.start(t0); m.start(t0); c.stop(t0 + dur + .02); m.stop(t0 + dur + .02);
+}
+
+// pad: sine + triangle chorus, slow attack
+function pad(t0, midi, dur, vel = .12, {attack = .9, release = 1.6} = {}) {
+  const out = ctx.createGain(); out.gain.setValueAtTime(0, t0); out.gain.linearRampToValueAtTime(vel, t0 + attack);
+  out.gain.setValueAtTime(vel, t0 + Math.max(attack, dur - release)); out.gain.linearRampToValueAtTime(0, t0 + dur);
+  const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.Q.value = .8; f.frequency.value = 1800;
+  [['sine', -6], ['triangle', 0], ['sine', 7]].forEach(([type, det]) => { const o = ctx.createOscillator(); o.type = type; o.frequency.value = N(midi); o.detune.value = det;
+    const og = ctx.createGain(); og.gain.value = .4; o.connect(og); og.connect(f); o.start(t0); o.stop(t0 + dur + .05); });
+  f.connect(out); out.connect(master);
+}
+
+// pluck: triangle with fast decay
+function pluck(t0, midi, vel = .25, dur = .9) {
+  const o = ctx.createOscillator(); o.type = 'triangle'; o.frequency.value = N(midi);
+  const g = ctx.createGain(); g.gain.setValueAtTime(vel, t0); g.gain.exponentialRampToValueAtTime(.001, t0 + dur);
+  o.connect(g); g.connect(master); o.start(t0); o.stop(t0 + dur + .02);
+}
+
+// chip: fixed-duty pulse, instant envelope, optional chord cycling at `rate` Hz (30 = NES, 50 = SID)
+function pulseWave(duty) { const real = new Float32Array(32), imag = new Float32Array(32); for (let k = 1; k < 32; k++) imag[k] = (2 / (k * Math.PI)) * Math.sin(k * Math.PI * duty); return ctx.createPeriodicWave(real, imag); }
+function chip(t0, midis, dur, vel = .22, duty = .5, rate = 50) {
+  const notes = Array.isArray(midis) ? midis : [midis];
+  const o = ctx.createOscillator(); o.setPeriodicWave(pulseWave(duty));
+  const g = ctx.createGain(); g.gain.setValueAtTime(vel, t0); g.gain.setValueAtTime(vel * .7, t0 + dur * .6); g.gain.setValueAtTime(0, t0 + dur);
+  const step = 1 / rate;
+  for (let t = 0, i = 0; t < dur; t += step, i++) o.frequency.setValueAtTime(N(notes[i % notes.length]), t0 + t);
+  o.connect(g); g.connect(master); o.start(t0); o.stop(t0 + dur + .01);
+}
+function chipNoise(t0, dur, vel = .3) { return noise(t0, dur, {gain: vel, lp: 9000, hp: 800, attack: .002, release: dur * .8}); }
+
+// SID lead: pulse-width modulation by crossfading a 50% and a 12% pulse under an LFO
+function sid(t0, midi, dur, vel = .2, pwm = 3) {
+  const a = ctx.createOscillator(); a.setPeriodicWave(pulseWave(.5)); a.frequency.value = N(midi);
+  const b = ctx.createOscillator(); b.setPeriodicWave(pulseWave(.12)); b.frequency.value = N(midi);
+  const ga = ctx.createGain(), gb = ctx.createGain(); ga.gain.value = .5; gb.gain.value = .5;
+  const l = ctx.createOscillator(); l.frequency.value = pwm; const lg = ctx.createGain(); lg.gain.value = .5; const inv = ctx.createGain(); inv.gain.value = -1;
+  l.connect(lg); lg.connect(ga.gain); lg.connect(inv); inv.connect(gb.gain);
+  const env = ctx.createGain(); env.gain.setValueAtTime(0, t0); env.gain.linearRampToValueAtTime(vel, t0 + .01); env.gain.setValueAtTime(vel, t0 + Math.max(.02, dur - .06)); env.gain.linearRampToValueAtTime(0, t0 + dur);
+  a.connect(ga); b.connect(gb); ga.connect(env); gb.connect(env); env.connect(master);
+  [a, b, l].forEach(o => { o.start(t0); o.stop(t0 + dur + .02); });
+}
+
+// percussive helpers
+function click(t0, vel = .12, lp = 5000, hp = 1500) { noise(t0, .012, {gain: vel, lp, hp, attack: .001, release: .008}); }
+function thunk(t0, vel = .5, f1 = 110, f2 = 45) {
+  const o = ctx.createOscillator(); o.type = 'sine'; o.frequency.setValueAtTime(f1, t0); o.frequency.exponentialRampToValueAtTime(f2, t0 + .12);
+  const g = ctx.createGain(); g.gain.setValueAtTime(vel, t0); g.gain.exponentialRampToValueAtTime(.001, t0 + .35);
+  o.connect(g); g.connect(master); o.start(t0); o.stop(t0 + .4);
+  noise(t0, .06, {gain: vel * .5, lp: 700, hp: 60, attack: .001, release: .05});
+}
+function sub(t0, f1, f2, dur, vel = .6) {
+  const o = ctx.createOscillator(); o.type = 'sine'; o.frequency.setValueAtTime(f1, t0); o.frequency.exponentialRampToValueAtTime(f2, t0 + dur * .6);
+  const g = ctx.createGain(); g.gain.setValueAtTime(0, t0); g.gain.linearRampToValueAtTime(vel, t0 + .015); g.gain.exponentialRampToValueAtTime(.001, t0 + dur);
+  o.connect(g); g.connect(master); o.start(t0); o.stop(t0 + dur + .05);
+}
+function timpani(t0, midi = 40, vel = .7) {
+  const o = ctx.createOscillator(); o.type = 'sine'; o.frequency.setValueAtTime(N(midi) * 1.6, t0); o.frequency.exponentialRampToValueAtTime(N(midi), t0 + .06);
+  const g = ctx.createGain(); g.gain.setValueAtTime(vel, t0); g.gain.exponentialRampToValueAtTime(.001, t0 + 1.1);
+  o.connect(g); g.connect(master); o.start(t0); o.stop(t0 + 1.2);
+  noise(t0, .09, {gain: vel * .35, lp: 900, hp: 80, attack: .002, release: .07});
+}
+// the ratchet of the key turning (2.85-2.97), then the thunk as it seats
+function keyTurn(t0, vel = .14) { for (let i = 0; i < 5; i++) click(t0 + T.turn + i * .024, vel * (1 + i * .1), 6000, 2000); thunk(t0 + T.click, .45); }
+// the scan beam: a rising, hissing sweep (post clock)
+function beamSweep(tU, vel = .07) { const n = noise(tU + T.P.scan, T.P.scanDur, {gain: vel, lp: 12000, hp: 300, attack: .05, release: .12}); n.f2.frequency.setValueAtTime(300, tU + T.P.scan); n.f2.frequency.exponentialRampToValueAtTime(7000, tU + T.P.scan + T.P.scanDur); }
+
+/* ---------- sustained voices: attack now, release when told (the hold is of unknown length) ---------- */
+function sustain(out, vel, stops, rel = .3) {
+  return {release: t => { out.gain.cancelScheduledValues(t); out.gain.setValueAtTime(vel, t); out.gain.linearRampToValueAtTime(0, t + rel); stops.forEach(o => o.stop(t + rel + .05)); }};
+}
+function swellHold(t0, midi, vel = .12, attack = .5) {
+  const out = ctx.createGain(); out.gain.setValueAtTime(0, t0); out.gain.linearRampToValueAtTime(vel, t0 + attack);
+  const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.Q.value = 1.4; f.frequency.setValueAtTime(260, t0); f.frequency.exponentialRampToValueAtTime(1800, t0 + attack * 1.3);
+  const vib = ctx.createOscillator(); vib.frequency.value = 5.5; const vg = ctx.createGain(); vg.gain.setValueAtTime(0, t0); vg.gain.linearRampToValueAtTime(9, t0 + attack * 2); vib.connect(vg);
+  const oscs = [-8, 0, 8].map(det => { const o = ctx.createOscillator(); o.type = 'sawtooth'; o.frequency.value = N(midi); o.detune.value = det; vg.connect(o.detune); const og = ctx.createGain(); og.gain.value = .33; o.connect(og); og.connect(f); o.start(t0); return o; });
+  vib.start(t0); f.connect(out); out.connect(master); return sustain(out, vel, [...oscs, vib], .35);
+}
+function padHold(t0, midi, vel = .09, attack = .6) {
+  const out = ctx.createGain(); out.gain.setValueAtTime(0, t0); out.gain.linearRampToValueAtTime(vel, t0 + attack);
+  const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.Q.value = .8; f.frequency.value = 1800;
+  const oscs = [['sine', -6], ['triangle', 0], ['sine', 7]].map(([type, det]) => { const o = ctx.createOscillator(); o.type = type; o.frequency.value = N(midi); o.detune.value = det; const og = ctx.createGain(); og.gain.value = .4; o.connect(og); og.connect(f); o.start(t0); return o; });
+  f.connect(out); out.connect(master); return sustain(out, vel, oscs, .25);
+}
+function sidHold(t0, midi, vel = .2, pwm = 6) {
+  const a = ctx.createOscillator(); a.setPeriodicWave(pulseWave(.5)); a.frequency.value = N(midi);
+  const b = ctx.createOscillator(); b.setPeriodicWave(pulseWave(.12)); b.frequency.value = N(midi);
+  const ga = ctx.createGain(), gb = ctx.createGain(); ga.gain.value = .5; gb.gain.value = .5;
+  const l = ctx.createOscillator(); l.frequency.value = pwm; const lg = ctx.createGain(); lg.gain.value = .5; const inv = ctx.createGain(); inv.gain.value = -1;
+  l.connect(lg); lg.connect(ga.gain); lg.connect(inv); inv.connect(gb.gain);
+  const env = ctx.createGain(); env.gain.setValueAtTime(0, t0); env.gain.linearRampToValueAtTime(vel, t0 + .01);
+  a.connect(ga); b.connect(gb); ga.connect(env); gb.connect(env); env.connect(master); [a, b, l].forEach(o => o.start(t0));
+  return sustain(env, vel, [a, b, l], .06);
+}
+
+/* ---------- the engines ---------- */
+// TURBINE: tuned drone E2 -> B3 over the spool, blade-pass flutter 7Hz chop -> 60Hz whine, resonant air.
+// Holds at the peak whine until release(tc) drops it to idle.
+function turbine(t0, {start = .15, peak = T.click, end = T.end} = {}) {
+  const out = ctx.createGain(); out.gain.setValueAtTime(0, t0 + start); out.gain.linearRampToValueAtTime(.30, t0 + peak);
+  const flut = ctx.createGain(); flut.gain.value = .55;
+  const lfo = ctx.createOscillator(); lfo.type = 'sine';
+  lfo.frequency.setValueAtTime(7, t0 + start); lfo.frequency.exponentialRampToValueAtTime(60, t0 + peak);
+  const depth = ctx.createGain(); depth.gain.setValueAtTime(.45, t0 + start); depth.gain.linearRampToValueAtTime(.15, t0 + peak);
+  lfo.connect(depth); depth.connect(flut.gain); lfo.start(t0 + start); lfo.stop(t0 + end);
+  const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.Q.value = 2.2;
+  f.frequency.setValueAtTime(320, t0 + start); f.frequency.exponentialRampToValueAtTime(2800, t0 + peak);
+  const pitches = [];
+  const glide = (p, mult) => { p.setValueAtTime(N(40) * mult, t0 + start); p.exponentialRampToValueAtTime(N(59) * mult, t0 + peak); pitches.push([p, mult]); };
+  [['sawtooth', 1, 0, .35], ['sawtooth', 1, 7, .3], ['sine', .5, 0, .55]].forEach(([type, mult, det, g]) => {
+    const o = ctx.createOscillator(); o.type = type; o.detune.value = det; glide(o.frequency, mult);
+    const og = ctx.createGain(); og.gain.value = g; o.connect(og); og.connect(f); o.start(t0 + start); o.stop(t0 + end);
+  });
+  const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.Q.value = 6; glide(bp.frequency, 6);
+  noise(t0 + start, end - start, {gain: .9, lp: 14000, hp: 120, attack: 1.2, release: 1.5, dest: bp});
+  f.connect(flut); bp.connect(flut); flut.connect(out); out.connect(master);
+  return {release: tc => {                                                                   // ignition: cut, then settle to idle under the hold
+    out.gain.setValueAtTime(.30, tc); out.gain.linearRampToValueAtTime(.05, tc + .2); out.gain.linearRampToValueAtTime(.10, tc + .52);
+    lfo.frequency.setValueAtTime(60, tc); lfo.frequency.exponentialRampToValueAtTime(22, tc + .52);
+    f.frequency.setValueAtTime(2800, tc); f.frequency.exponentialRampToValueAtTime(700, tc + .52);
+    pitches.forEach(([p, mult]) => { p.setValueAtTime(N(59) * mult, tc); p.exponentialRampToValueAtTime(N(40) * mult, tc + .52); });
+  }};
+}
+// idle engine for the LOAD vamp: the drone at rest, flutter chopping, filter opening a notch per download checkpoint
+function idleEngine(t0) {
+  const out = ctx.createGain(); out.gain.setValueAtTime(0, t0); out.gain.linearRampToValueAtTime(.10, t0 + 1.2);
+  const flut = ctx.createGain(); flut.gain.value = .55; const lfo = ctx.createOscillator(); lfo.frequency.value = 6.5;
+  const depth = ctx.createGain(); depth.gain.value = .45; lfo.connect(depth); depth.connect(flut.gain); lfo.start(t0);
+  const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.Q.value = 2.2; f.frequency.value = 300;
+  const oscs = [['sawtooth', 1, 0, .35], ['sawtooth', 1, 7, .3], ['sine', .5, 0, .55]].map(([type, mult, det, g]) => { const o = ctx.createOscillator(); o.type = type; o.frequency.value = N(40) * mult; o.detune.value = det; const og = ctx.createGain(); og.gain.value = g; o.connect(og); og.connect(f); o.start(t0); return o; });
+  f.connect(flut); flut.connect(out); out.connect(master);
+  return {layer: (n, t) => { f.frequency.linearRampToValueAtTime([300, 460, 680, 1000][n], t + .8); out.gain.linearRampToValueAtTime(.10 + .025 * n, t + .8); },
+          release: t => { out.gain.setValueAtTime(out.gain.value, t); out.gain.linearRampToValueAtTime(0, t + .35); [...oscs, lfo].forEach(o => o.stop(t + .5)); }};
+}
+
+// LAUNCH: Shepard glissando -- six octave-spaced triangle voices, each sweeping one octave, gain windowed so the rise never arrives
+function shepard(t0, start, end, vel = .06) {
+  const V = 6, base = N(28), w = x => .5 - .5 * Math.cos(2 * Math.PI * x / V);
+  for (let i = 0; i < V; i++) {
+    const o = ctx.createOscillator(); o.type = 'triangle'; o.frequency.setValueAtTime(base * Math.pow(2, i), t0 + start); o.frequency.exponentialRampToValueAtTime(base * Math.pow(2, i + 1), t0 + end);
+    const g = ctx.createGain(); g.gain.setValueAtTime(vel * w(i) + .0001, t0 + start); g.gain.linearRampToValueAtTime(vel * w(i + 1) + .0001, t0 + end); g.gain.linearRampToValueAtTime(0, t0 + end + .06);
+    o.connect(g); g.connect(master); o.start(t0 + start); o.stop(t0 + end + .1);
+  }
+}
+// accelerating sequencer: 16ths that tighten from 160ms to 45ms, arpeggiating B7 and climbing an octave with the Shepard
+function sequencer(t0, start, end, voice) {
+  let t = start, dt = .16, i = 0;
+  while (t < end) { const p = (t - start) / (end - start); voice(t0 + t, 47 + [0, 7, 4, 10][i % 4] + Math.round(p * 12), .04 + .02 * p, i); t += dt; dt = Math.max(.045, dt * .93); i++; }
+}
+// a rumble bed whose level is set by hand: the LAUNCH engine
+function rumble(t0) { const r = noise(t0, T.end, {gain: 1, lp: 400, hp: 30, attack: .01, release: 1.6, color: 'brown'}); r.g.gain.cancelScheduledValues(t0); r.g.gain.setValueAtTime(0, t0); return r.g.gain; }
+// the ignition blast: white noise swept from open to closed, plus the bass drop
+function blast(t0, vel = .5) {
+  const n = noise(t0, 1.3, {gain: vel, lp: 9000, hp: 60, attack: .01, release: .9});
+  n.f1.frequency.setValueAtTime(9000, t0); n.f1.frequency.exponentialRampToValueAtTime(150, t0 + 1.1);
+  sub(t0, 130, 34, 1.0, .7);
+}
+
+/* ============================ SCORES ============================ */
+// Each score is five hooks on two clocks plus two vamps:
+//   vampLoad(bar, i, layer)  one BAR of the tape-loader vamp; layer 0-3 = download quartile reached
+//   pre(t0)                  the fixed sign-on up to the tension hold (power, draw, connections; engines spool)
+//   status(t, i)             a live ping when boot milestone i is confirmed
+//   vampHold(bar, i)         one BAR of the dominant pedal: connected, waiting for the server
+//   post(tU)                 the unlock and everything after, as offsets from tU; also releases held voices
+// HARMONY: everything before the unlock lives on the DOMINANT (B7 and its extensions) so the E major hit
+// lands as a resolution. The hold vamp IS the dominant pedal, so it can last as long as the boot does.
+const DRAW6 = [59, 63, 66, 69, 73, 75];      // B D# F# A C# D# -- B13, one per sixth of the wireframe draw
+const STATUS4 = [78, 81, 85, 87];             // F#5 A5 C#6 D#6 -- 5, b7, 9, 3 of B9; D# leads to the E above
+const STATUS_CH = [[78, 75, 69], [81, 78, 75], [85, 81, 78], [87, 81, 78]];   // SID chord cycles under each status note
+const CIRC = 87;                              // D#6: the leading tone, held hanging until the unlock
+const CONNECT_NOTES = [78, 81, 85, 87, 90, 93];   // B9 upper structure climbing: the strum of connect pings stays on the dominant
+const STRAGGLER_NOTES = [80, 83, 85, 87, 88];     // G# B C# D# . E -- the flourishes are a phrase that walks up to the tonic
+let MODE = 'connect';
+const HOLD_ARP = [71, 75, 78, 81, 83, 81, 78, 75];   // B7 arpeggio for the pedal, top octave, up and back
+
+// shared pre/post skeletons; each score supplies the voices
+function preSkeleton(t0, s) {
+  s.power(t0);
+  T.boot.forEach((b, i) => s.boot(t0 + b, i));
+  DRAW6.forEach((m, i) => s.draw(t0 + T.draw + i * (T.drawDur / 6), m, i));
+  s.circ(t0 + T.circ);
+  if (MODE === 'connect') [...NET.lines].sort((a, b) => a.connectAt - b.connectAt).forEach((l, i) => s.connect(t0 + l.connectAt, CONNECT_NOTES[i % CONNECT_NOTES.length] + (i % 5 === 0 ? 12 : 0), i, false));
+  else s.key(t0);
+}
+function postSkeleton(tU, s) {
+  s.unlock(tU);
+  s.beam(tU);
+  for (let i = 0; i < T.P.tagN; i++) s.tag(tU + T.P.tag + i * (T.P.tagDur / T.P.tagN), i);
+  if (MODE === 'connect') {
+    T.P.stragglers.forEach((off, i) => s.connect(tU + off, STRAGGLER_NOTES[i], i, true, i === T.P.stragglers.length - 1));
+    noise(tU, T.end - 4, {gain: .028, lp: 9000, hp: 2500, attack: .4, release: 1.2, color: 'pink'});           // data hiss under the streams
+  }
+  s.flicker(tU + T.P.flicker);
+}
+
+function scoreFM() {
+  let hum = null, bootPad = null;
+  const s = {
+    power: t => { sub(t, 40, 220, .5, .2); noise(t, .5, {gain: .06, lp: 6000, hp: 400, attack: .02, release: .4, color: 'pink'}); },
+    boot: t => { for (let i = 0; i < 8; i++) click(t + i * .024, .05, 4000, 1800); },
+    draw: (t, m, i) => bell(t, m, .15 + i * .01, .9, 2.0),
+    circ: t => bell(t, CIRC, .16, 1.2, 3.5),
+    key: t => keyTurn(t, .12),
+    connect: (t, m, i, late, last) => { bell(t, m, late ? .11 : .04, late ? 1.4 : .8, 3.5); if (last) bell(t, 64, .09, 2.0, 2.0); },
+    unlock: t => { sub(t, 90, 38, .6, .5); [40, 52, 59, 64, 68, 71, 76].forEach((m, i) => fmBrass(t, m, 2.6, i < 2 ? .22 : .13)); bell(t, 88, .2, 2.6, 3.5); bell(t + .03, 95, .12, 2.4, 2.0); pad(t + .2, 40, T.end - 6, .10, {attack: 1.2, release: 1.4}); },
+    beam: t => beamSweep(t, .06),
+    tag: t => bell(t, 103, .035, .25, 5),
+    flicker: t => noise(t, .1, {gain: .06, lp: 2500, hp: 600, attack: .002, release: .08, color: 'pink'}),
+  };
+  return {
+    vampLoad: (bar, i, layer) => {
+      if (!hum) hum = padHold(bar, 35, .15, 1.0);
+      if (i % 4 === 0) bell(bar, 59, .13, 1.6, 2.0);
+      if (layer >= 1) bell(bar, i % 2 ? 66 : 59, .11, .9, 2.0);
+      if (layer >= 2) bell(bar + BAR / 2, 71, .10, .7, 3.5);
+      if (layer >= 3 && i % 2) bell(bar + BAR / 4, 87, .09, 1.0, 3.5);
+    },
+    pre: t0 => { if (hum) hum.release(t0); bootPad = padHold(t0 + .45, 35, .09, .6); preSkeleton(t0, s); },
+    status: (t, i) => bell(t, STATUS4[i], .13, .7, 3.5),
+    vampHold: (bar, i) => { fmBrass(bar, 47, .18, .20, {index: 2.2}); if (i % 2) bell(bar, CIRC, .17, .8, 3.5); if (i % 4 === 2) bell(bar + BAR / 2, 81, .10, .6, 2.0); },
+    post: tU => { if (bootPad) bootPad.release(tU); postSkeleton(tU, s); },
+  };
+}
+
+function scoreSID() {
+  let pedal = null;
+  const s = {
+    power: t => { for (let i = 0; i < 12; i++) chip(t + i * .035, 36 + i * 3, .035, .1, .5); chipNoise(t + .1, .3, .12); },
+    boot: t => { for (let i = 0; i < 6; i++) chip(t + i * .03, 96, .012, .05, .125); },
+    draw: (t, m) => sid(t, m, .16, .18, 8),
+    circ: t => ringBell(t, CIRC, .18, 1.0, 1.41),
+    // key turn: ratchet clicks, then a ii-V bass walk (F#2 on the turn, B2 as the key seats, held until the unlock resolves it to E)
+    key: t => { for (let i = 0; i < 5; i++) chipNoise(t + T.turn + i * .024, .012, .12); sid(t + T.turn, 42, T.click - T.turn, .2, 6); pedal = sidHold(t + T.click, 47, .22, 6); chipNoise(t + T.click, .05, .15); },
+    connect: (t, m, i, late, last) => { chip(t, m, late ? .12 : .05, late ? .14 : .06, .125); if (!late && i === 0) pedal = sidHold(t, 47, .18, 6); if (last) chip(t, [64, 68, 71], .6, .12, .5, 50); },
+    unlock: t => { chipNoise(t, .35, .3); sid(t, 40, 2.4, .22, 4); chip(t, [64, 68, 71, 76], 2.4, .2, .5, 50); ringBell(t, 88, .2, 2.0); sid(t + .6, 52, 1.8, .10, 2); },
+    beam: t => { const n = chipNoise(t + T.P.scan, T.P.scanDur, .08); n.f2.frequency.setValueAtTime(400, t + T.P.scan); n.f2.frequency.exponentialRampToValueAtTime(8000, t + T.P.scan + T.P.scanDur); },
+    tag: t => chip(t, 100, .015, .06, .125),
+    flicker: t => chipNoise(t, .06, .15),
+  };
+  return {
+    vampLoad: (bar, i, layer) => {
+      chip(bar, 35, .10, .22, .5);
+      if (layer >= 1) [47, 54, 51, 57].forEach((m, k) => chip(bar + k * BAR / 4, m, .06, .14, .25));
+      if (layer >= 2) [59, 66, 63, 69].forEach((m, k) => chip(bar + k * BAR / 4 + BAR / 8, m, .04, .10, .125));
+      if (layer >= 3 && i % 2) ringBell(bar, 75, .16, .8, 1.41);
+    },
+    pre: t0 => preSkeleton(t0, s),
+    status: (t, i) => chip(t, STATUS_CH[i], .14, .16, .5, 50),
+    vampHold: (bar, i) => { chip(bar, HOLD_ARP, BAR, .14, .5, 16); if (i % 2) ringBell(bar, CIRC, .18, .7, 1.41); },
+    post: tU => { if (pedal) pedal.release(tU); postSkeleton(tU, s); },
+  };
+}
+
+function scoreTurbine() {
+  let idle = null, eng = null; const held = [];
+  const CHORD = [35, 47, 51, 57];              // B1 B2 D#3 A3 -- B7, one swell per boot milestone, held until ignition resolves it to E
+  const s = {
+    power: t => noise(t, .6, {gain: .08, lp: 1200, hp: 60, attack: .05, release: .5, color: 'brown'}),
+    boot: () => {},
+    draw: (t, m, i) => swell(t, m, .55, .07 + i * .01, .12),
+    circ: t => bell(t, CIRC, .12, 1.4, 2.0),
+    key: t => keyTurn(t, .16),
+    connect: (t, m, i, late, last) => { bell(t, m, late ? .10 : .035, late ? 1.8 : 1.2, 2.0); if (last) swell(t, 64, 1.8, .07, .08); },
+    unlock: t => {
+      noise(t - .28, .3, {gain: .1, lp: 11000, hp: 2500, attack: .25, release: .05});           // cymbal swell into the hit
+      sub(t, 70, 30, .9, .8); timpani(t, 40, .7);
+      [40, 52, 59, 64, 68, 71, 76, 83].forEach((m, i) => brass(t, m, 2.8, i < 2 ? .26 : .15));
+      [64, 71, 76].forEach(m => strings(t + .05, m + 12, 3.0, .07, {attack: .3}));
+      bell(t, 88, .18, 3.0, 2.0); bell(t + .4, 95, .1, 2.8, 3.5);
+    },
+    beam: t => beamSweep(t, .08),
+    tag: t => bell(t, 100, .03, .3, 5),
+    flicker: () => {},
+  };
+  return {
+    vampLoad: (bar, i, layer) => { if (!idle) idle = idleEngine(bar); idle.layer(layer, bar); if (layer >= 2 && i % 4 === 0) bell(bar, 59 + (layer >= 3 ? 12 : 0), .05, 1.8, 2.0); },
+    pre: t0 => { if (idle) idle.release(t0); eng = turbine(t0); preSkeleton(t0, s); },
+    status: (t, i) => held.push(swellHold(t - .1, CHORD[i], .12, .5)),
+    vampHold: (bar, i) => { if (i % 2) bell(bar, CIRC, .07, 1.2, 2.0); if (i % 4 === 0) swell(bar, 69, BAR * 2, .05, .3); },
+    post: tU => { eng.release(tU - .02); held.forEach(h => h.release(tU)); postSkeleton(tU, s); },
+  };
+}
+
+function scoreLaunch() {
+  let loadRumble = null, rumbleGain = null;
+  const tick = (t, m, d, i) => chip(t, m, d, i % 4 === 0 ? .12 : .08, .25);
+  const s = {
+    power: t => sub(t, 30, 60, .8, .3),
+    boot: (t, i) => { const o = ctx.createOscillator(); o.type = 'sine'; o.frequency.value = 880; const g = ctx.createGain(); g.gain.setValueAtTime(.12, t); g.gain.setValueAtTime(.12, t + .1); g.gain.linearRampToValueAtTime(0, t + .13); o.connect(g); g.connect(master); o.start(t); o.stop(t + .15); timpani(t, 40 - i, .3); },
+    draw: () => {}, circ: () => {},
+    key: t => keyTurn(t, .16),
+    connect: (t, m, i, late, last) => { bell(t, m, late ? .10 : .035, late ? 1.4 : .7, 3.5); if (late) pluck(t, m - 12, .05, .3); if (last) { bell(t, 64, .08, 2.2, 2.0); pluck(t, 52, .07, .8); } },
+    unlock: t => {
+      blast(t, .5); timpani(t, 40, .8);
+      brass(t, 64, .26, .4); brass(t + .26, 71, .26, .42);                                     // the motif: a rising fifth, then the octave lands with the beam
+      [40, 52, 59, 64, 68, 71, 76].forEach((m, i) => brass(t + .52, m, 2.6, i < 2 ? .26 : .14));
+      [76, 83, 88].forEach(m => strings(t + .52, m, 2.8, .07, {attack: .08}));
+      bell(t + .52, 88, .16, 2.6, 2.0);
+    },
+    beam: t => beamSweep(t, .05),
+    tag: t => pluck(t, 100, .06, .2),
+    flicker: () => {},
+  };
+  return {
+    vampLoad: (bar, i, layer) => {
+      if (!loadRumble) { loadRumble = rumble(bar); loadRumble.linearRampToValueAtTime(.10, bar + 1.5); }
+      loadRumble.linearRampToValueAtTime(.10 + .05 * layer, bar + BAR);
+      if (i % 8 === 0) shepard(bar, 0, BAR * 8, .03 + .012 * layer);                          // one endless-rise cycle every 4s, seamless
+      if (layer >= 1) [0, .5].forEach(k => chip(bar + k * BAR, 47 + (k ? 7 : 0), .05, .07, .25));
+      if (layer >= 2) [.25, .75].forEach(k => chip(bar + k * BAR, 59 + (k > .5 ? 10 : 4), .045, .06, .25));
+      if (layer >= 3 && i % 2) bell(bar, 78, .05, .8, 3.5);
+    },
+    pre: t0 => {
+      if (loadRumble) { loadRumble.cancelScheduledValues(t0); loadRumble.setValueAtTime(loadRumble.value, t0); loadRumble.linearRampToValueAtTime(0, t0 + .4); }
+      rumbleGain = rumble(t0); rumbleGain.linearRampToValueAtTime(.32, t0 + T.click);         // grows across the spool, then HOLDS at .32
+      shepard(t0, .3, T.click, .055);
+      sequencer(t0, .5, T.click, tick);
+      strings(t0 + 1.75, 75, T.click - 1.75, .08, {swell: true}); strings(t0 + 1.75, 81, T.click - 1.75, .06, {swell: true});   // D# + A: the tritone of B7
+      preSkeleton(t0, s);
+    },
+    status: (t, i) => bell(t, STATUS4[i], .1, .6, 3.5),
+    vampHold: (bar, i) => {
+      for (let k = 0; k < 11; k++) chip(bar + k * .045, HOLD_ARP[k % 8] - 12 + (k % 8 > 3 ? 0 : 0), .04, k % 4 === 0 ? .10 : .07, .25);   // full-rate sequencer, not climbing
+      strings(bar, 75, BAR + .2, .06, {attack: .2}); strings(bar, 81, BAR + .2, .045, {attack: .2});
+      if (i % 2) bell(bar, CIRC, .08, .7, 3.5);
+    },
+    post: tU => {
+      rumbleGain.setValueAtTime(.32, tU); rumbleGain.linearRampToValueAtTime(.55, tU + .1); rumbleGain.exponentialRampToValueAtTime(.09, tU + 1.4);
+      postSkeleton(tU, s);
+    },
+  };
+}
+
+const SCORES = {fm: scoreFM, sid: scoreSID, turbine: scoreTurbine, launch: scoreLaunch};
+
+/* ============================ CONTROL ============================ */
+/* ============================ MOCK LOADER ============================ */
+// Stands in for v86: a download with network-like jitter and stalls, then a boot that streams canned
+// Linux lines with kernel-like clumping. Real integration: progress from v86's loader, lines from
+// serial0, readiness = the CLI prompt appearing on the emulated screen.
+const BOOT_LINES = [
+  'Linux version 6.6.32 (buildroot@valkey) (gcc 13.3.0) #1 SMP',
+  'Command line: console=ttyS0 root=/dev/sda rw quiet',
+  'x86/fpu: Supporting XSAVE feature 0x001: x87 floating point registers',
+  'BIOS-provided physical RAM map:', 'BIOS-e820: [mem 0x0000000000000000-0x000000000009fbff] usable',
+  'BIOS-e820: [mem 0x0000000000100000-0x0000000007ffffff] usable',
+  'Zone ranges:  DMA [mem 0x0000000000001000-0x0000000000ffffff]', 'ACPI: Early table checksum verification disabled',
+  'Memory: 118024K/131068K available (8192K kernel code, 1024K rwdata, 2048K rodata)',
+  'rcu: Hierarchical RCU implementation.', 'NR_IRQS: 2304, nr_irqs: 256, preallocated irqs: 16',
+  'clocksource: refined-jiffies: mask: 0xffffffff max_cycles: 0xffffffff', 'Console: colour VGA+ 80x25',
+  'printk: console [ttyS0] enabled', 'Calibrating delay loop... 1993.42 BogoMIPS (lpj=3986848)',
+  'pid_max: default: 32768 minimum: 301', 'Mount-cache hash table entries: 512 (order: 0, 4096 bytes)',
+  'CPU: Intel Pentium 4 (family: 0xf, model: 0x3, stepping: 0x2)', 'Performance Events: no PMU driver, software events only.',
+  'devtmpfs: initialized', 'clocksource: jiffies: mask: 0xffffffff max_cycles: 0xffffffff',
+  'NET: Registered PF_NETLINK/PF_ROUTE protocol family', 'PCI: Using configuration type 1 for base access',
+  'ACPI: Interpreter disabled.', 'SCSI subsystem initialized', 'pps_core: LinuxPPS API ver. 1 registered',
+  'NET: Registered PF_INET protocol family', 'IP idents hash table entries: 4096 (order: 3, 32768 bytes, linear)',
+  'tcp_listen_portaddr_hash hash table entries: 256', 'TCP: Hash tables configured (established 1024 bind 1024)',
+  'UDP hash table entries: 256 (order: 1, 8192 bytes, linear)', 'workingset: timestamp_bits=30 max_order=15 bucket_order=0',
+  'Serial: 8250/16550 driver, 4 ports, IRQ sharing enabled', '00:05: ttyS0 at I/O 0x3f8 (irq = 4, base_baud = 115200) is a 16550A',
+  'ata_piix 0000:00:01.1: version 2.13', 'scsi 0:0:0:0: Direct-Access     ATA      QEMU HARDDISK    2.5+ PQ: 0 ANSI: 5',
+  'sd 0:0:0:0: [sda] 102400 512-byte logical blocks: (52.4 MB/50.0 MiB)', 'sd 0:0:0:0: [sda] Attached SCSI disk',
+  'ne2k-pci.c:v1.03 9/22/2003 D. Becker/P. Gortmaker', 'eth0: RealTek RTL-8029 found at 0x1000, IRQ 10',
+  'EXT4-fs (sda): mounted filesystem with ordered data mode.', 'VFS: Mounted root (ext4 filesystem) on device 8:0.',
+  'devtmpfs: mounted', 'Freeing unused kernel image (initmem) memory: 512K', 'Run /sbin/init as init process',
+  'Starting syslogd: OK', 'Starting klogd: OK', 'Running sysctl: OK', 'Starting network: OK',
+  'Starting valkey-server: OK',
+  '1:M 10 Sep 2026 20:00:01.000 * oO0OoO0OoO0Oo Valkey is starting oO0OoO0OoO0Oo',
+  '1:M 10 Sep 2026 20:00:01.000 * Valkey version=9.0.0, bits=32, pid=1, just started',
+  '1:M 10 Sep 2026 20:00:01.002 * Server initialized',
+  '1:M 10 Sep 2026 20:00:01.003 * Ready to accept connections tcp',
+];
+// Boot milestones, confirmed from the serial stream. These marker strings are the contract with the real image.
+const MARKERS = ['Calibrating delay loop', 'VFS: Mounted root', 'Starting network: OK', 'Ready to accept connections'];
+const loader = {phase: 'idle', progress: 0, bytes: 0, total: 50 * 1024 * 1024, lines: [], ready: false, marks: [false, false, false, false], lastBytesAt: 0};
+function startLoader(dlSecs, bootSecs) {
+  const rnd = mulberry(7); loader.phase = 'download'; loader.progress = 0; loader.bytes = 0; loader.lines = []; loader.ready = false; loader.marks = [false, false, false, false]; loader.lastBytesAt = performance.now();
+  const rate = loader.total / Math.max(.05, dlSecs); let stallUntil = 0, last = performance.now();
+  const startBoot = () => {
+    // boot lines land in clumps: the kernel is bursty, then quiet while it probes hardware
+    const N = BOOT_LINES.length, times = []; let t = 0;
+    for (let i = 0; i < N; i++) { t += (i % 7 === 6 ? .18 : .015 + rnd() * .03); times.push(t); }
+    const scale = Math.max(.05, bootSecs) / t;
+    times.forEach((tt, i) => setTimeout(() => {
+      const line = BOOT_LINES[i]; loader.lines.push(line);
+      MARKERS.forEach((m, k) => { if (line.includes(m)) loader.marks[k] = true; });
+      if (loader.marks[3]) { loader.phase = 'ready'; loader.ready = true; }
+    }, tt * scale * 1000));
+  };
+  const dlTick = () => {
+    const nowMs = performance.now(), dt = (nowMs - last) / 1000; last = nowMs;
+    if (nowMs > stallUntil) {
+      if (dlSecs > 2 && rnd() < .2 * dt) stallUntil = nowMs + 200 + rnd() * 600;              // the occasional network stall
+      loader.bytes = Math.min(loader.total, loader.bytes + rate * dt * (.55 + .9 * rnd())); loader.lastBytesAt = nowMs;
+    }
+    loader.progress = loader.bytes / loader.total;
+    if (loader.bytes >= loader.total) { loader.phase = 'boot'; startBoot(); return; }
+    setTimeout(dlTick, 60);
+  };
+  if (dlSecs <= 0) { loader.bytes = loader.total; loader.progress = 1; loader.phase = 'boot'; startBoot(); } else dlTick();
+}
+
+/* ============================ VAMP CORNER ============================ */
+const vamp = document.getElementById('vamp');
+const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;');
+function vampText() {
+  if (!vamp.classList.contains('hold')) {                       // LOAD corner: the loader line, through 100% until the sign-on takes over
+    const n = Math.round(loader.progress * 22), mb = (loader.bytes / 1048576).toFixed(1), done = loader.phase !== 'download';
+    const stalled = !done && performance.now() - loader.lastBytesAt > 350;
+    return `> LOADING ${REAL ? 'VALKEY-SERVER.WASM' : 'EMULATOR'} ... <b>${String(Math.floor(loader.progress * 100)).padStart(3)}%</b>  ${'#'.repeat(n)}${'.'.repeat(22 - n)}  ${mb} / ${(loader.total / 1048576).toFixed(1)} MB${stalled ? '  <span class="dim">(stalled)</span>' : done ? '  <span class="dim">(booting)</span>' : ''}`;
+  }
+  const tail = loader.lines.slice(-3).map(l => `<span class="dim">${esc(l.length > 58 ? l.slice(0, 57) + '…' : l)}</span>`).join('\n');
+  return `<span class="dim">> BOOT ..............${loader.ready ? '. <b>READY</b>' : '.. <b>...</b>'}</span>\n${tail}`;
+}
+let vampTimer = null;
+function vampShow(on) {
+  vamp.classList.toggle('on', on);
+  if (on && !vampTimer) vampTimer = setInterval(() => { vamp.innerHTML = vampText(); }, 90);
+  if (!on && vampTimer) { clearInterval(vampTimer); vampTimer = null; }
+}
+
+/* ============================ REAL LOADER (wasm) ============================ */
+// The same `loader` contract the machine polls, fed by real events:
+//   download  = fetch of valkey-server.wasm, streamed so bytes/progress/stalls are genuine
+//   boot      = WebAssembly instantiation, then the server's own log lines (print callback)
+//   marks[]   = FETCH complete / COMPILE done / "Server initialized" / "Ready to accept connections"
+const REAL = new URLSearchParams(location.search).get('mock') === null;
+const REAL_MARKERS = [null, null, 'Server initialized', 'Ready to accept connections'];
+let wasmModule = null, tv = null, engineMod = null;
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+async function startRealLoader(minDl, minBoot) {
+  loader.phase = 'download'; loader.progress = 0; loader.bytes = 0; loader.lines = []; loader.ready = false; loader.marks = [false, false, false, false]; loader.lastBytesAt = performance.now();
+  const t0 = performance.now();
+  let bytes;
+  try {
+    const res = await fetch('valkey-server.wasm');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    loader.total = Number(res.headers.get('content-length')) || 2.3 * 1048576;
+    const reader = res.body.getReader(), chunks = [];
+    for (;;) {
+      const {done, value} = await reader.read();
+      if (done) break;
+      chunks.push(value); loader.bytes += value.length; loader.lastBytesAt = performance.now();
+      loader.progress = Math.min(1, loader.bytes / loader.total);
+      // pacing: hold the reader so the download takes at least minDl seconds (demo of the vamp on a fast link);
+      // slice the wait so the stall detector (350 ms without bytes) is left for real stalls
+      const shouldBeAt = t0 + minDl * 1000 * loader.progress;
+      while (performance.now() < shouldBeAt) { await sleep(Math.min(120, shouldBeAt - performance.now())); loader.lastBytesAt = performance.now(); }
+    }
+    bytes = new Uint8Array(loader.bytes); let off = 0; for (const c of chunks) { bytes.set(c, off); off += c.length; }
+    loader.total = loader.bytes; loader.progress = 1;
+  } catch (e) {
+    console.warn('try-valkey: wasm fetch failed, falling back to the mock', e);
+    document.getElementById('engine-tag').textContent = '(mock: wasm unavailable)';
+    return startLoader(Math.max(1, minDl), Math.max(1, minBoot));
+  }
+  loader.marks[0] = true; loader.lines.push(`wasm: fetched ${bytes.length.toLocaleString()} bytes in ${Math.round(performance.now() - t0)} ms`);
+  loader.phase = 'boot';
+  const tb = performance.now();
+  const [{default: createValkey}, engine] = await Promise.all([import('./valkey-server.mjs'), import('./tryvalkey.mjs')]);
+  engineMod = engine;
+  const onLine = l => {
+    if (/^\d+:M /.test(l)) loader.lines.push(l);                             // log lines only; the ASCII banner is not for the corner
+    REAL_MARKERS.forEach((m, k) => { if (m && l.includes(m)) loader.marks[k] = true; });
+    if (loader.marks[3] && !loader.ready) { loader.phase = 'ready'; loader.ready = true; }
+  };
+  wasmModule = await createValkey({wasmBinary: bytes.buffer, print: onLine, printErr: onLine, noInitialRun: true});
+  loader.marks[1] = true; loader.lines.push(`wasm: instantiated in ${Math.round(performance.now() - tb)} ms`);
+  const bootAt = tb + minBoot * 1000; if (performance.now() < bootAt) await sleep(bootAt - performance.now());
+  engine.runMain(wasmModule, [...engine.DEFAULT_ARGS, '--loglevel', 'notice']);   // log lines stream into onLine synchronously here
+  tv = engine.attachTryValkey(wasmModule, {hostLabel: 'try-valkey'});
+}
+
+/* ============================ MOCK CLI ============================ */
+// A stand-in for judging the handoff (and a plausible fallback if the emulator fails to load). Not a Valkey.
+const DB = new Map();                                     // key -> {type, v, exp}
+const nowMs = () => Date.now();
+function live(k) { const e = DB.get(k); if (!e) return null; if (e.exp && e.exp <= nowMs()) { DB.delete(k); return null; } return e; }
+function glob(pat, s) { const re = new RegExp('^' + pat.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.') + '$'); return re.test(s); }
+const R = {ok: {t: 'status', v: 'OK'}, nil: {t: 'nil'}, int: v => ({t: 'int', v}), bulk: v => ({t: 'bulk', v}), arr: v => ({t: 'arr', v}), err: v => ({t: 'err', v}), status: v => ({t: 'status', v})};
+function needType(k, type) { const e = live(k); if (e && e.type !== type) throw R.err('WRONGTYPE Operation against a key holding the wrong kind of value'); return e; }
+function argc(a, n, name) { if (a.length < n) throw R.err(`ERR wrong number of arguments for '${name}' command`); }
+function coll(k, type, mk) { let e = needType(k, type); if (!e) { e = {type, v: mk(), exp: 0}; DB.set(k, e); } return e; }
+let bootWall = performance.now();
+const CMDS = {
+  PING: a => a.length ? R.bulk(a[0]) : R.status('PONG'),
+  ECHO: a => { argc(a, 1, 'echo'); return R.bulk(a[0]); },
+  SET: a => { argc(a, 2, 'set'); const [k, v, ...o] = a; let exp = 0, nx = false, xx = false;
+    for (let i = 0; i < o.length; i++) { const f = o[i].toUpperCase(); if (f === 'EX') exp = nowMs() + parseInt(o[++i]) * 1000; else if (f === 'PX') exp = nowMs() + parseInt(o[++i]); else if (f === 'NX') nx = true; else if (f === 'XX') xx = true; else throw R.err('ERR syntax error'); }
+    const e = live(k); if ((nx && e) || (xx && !e)) return R.nil; DB.set(k, {type: 'string', v, exp}); return R.ok; },
+  GET: a => { argc(a, 1, 'get'); const e = needType(a[0], 'string'); return e ? R.bulk(e.v) : R.nil; },
+  DEL: a => { argc(a, 1, 'del'); let n = 0; a.forEach(k => { if (live(k)) { DB.delete(k); n++; } }); return R.int(n); },
+  EXISTS: a => { argc(a, 1, 'exists'); return R.int(a.filter(k => live(k)).length); },
+  INCR: a => { argc(a, 1, 'incr'); return CMDS.INCRBY([a[0], '1']); },
+  DECR: a => { argc(a, 1, 'decr'); return CMDS.INCRBY([a[0], '-1']); },
+  INCRBY: a => { argc(a, 2, 'incrby'); const e = needType(a[0], 'string'); const cur = e ? e.v : '0';
+    if (!/^-?\d+$/.test(cur) || !/^-?\d+$/.test(a[1])) throw R.err('ERR value is not an integer or out of range');
+    const v = BigInt(cur) + BigInt(a[1]); DB.set(a[0], {type: 'string', v: v.toString(), exp: e ? e.exp : 0}); return R.int(Number(v)); },
+  KEYS: a => { argc(a, 1, 'keys'); return R.arr([...DB.keys()].filter(k => live(k) && glob(a[0], k)).sort().map(R.bulk)); },
+  TTL: a => { argc(a, 1, 'ttl'); const e = live(a[0]); return R.int(!e ? -2 : !e.exp ? -1 : Math.max(0, Math.round((e.exp - nowMs()) / 1000))); },
+  PTTL: a => { argc(a, 1, 'pttl'); const e = live(a[0]); return R.int(!e ? -2 : !e.exp ? -1 : Math.max(0, e.exp - nowMs())); },
+  EXPIRE: a => { argc(a, 2, 'expire'); const e = live(a[0]); if (!e) return R.int(0); e.exp = nowMs() + parseInt(a[1]) * 1000; return R.int(1); },
+  TYPE: a => { argc(a, 1, 'type'); const e = live(a[0]); return R.status(e ? e.type : 'none'); },
+  DBSIZE: () => R.int([...DB.keys()].filter(live).length),
+  FLUSHALL: () => { DB.clear(); return R.ok; },
+  HSET: a => { argc(a, 3, 'hset'); const e = coll(a[0], 'hash', () => new Map()); let n = 0; for (let i = 1; i + 1 < a.length; i += 2) { if (!e.v.has(a[i])) n++; e.v.set(a[i], a[i + 1]); } return R.int(n); },
+  HGET: a => { argc(a, 2, 'hget'); const e = needType(a[0], 'hash'); return e && e.v.has(a[1]) ? R.bulk(e.v.get(a[1])) : R.nil; },
+  HGETALL: a => { argc(a, 1, 'hgetall'); const e = needType(a[0], 'hash'); return R.arr(e ? [...e.v.entries()].flat().map(R.bulk) : []); },
+  HLEN: a => { argc(a, 1, 'hlen'); const e = needType(a[0], 'hash'); return R.int(e ? e.v.size : 0); },
+  LPUSH: a => { argc(a, 2, 'lpush'); const e = coll(a[0], 'list', () => []); a.slice(1).forEach(v => e.v.unshift(v)); return R.int(e.v.length); },
+  RPUSH: a => { argc(a, 2, 'rpush'); const e = coll(a[0], 'list', () => []); a.slice(1).forEach(v => e.v.push(v)); return R.int(e.v.length); },
+  LRANGE: a => { argc(a, 3, 'lrange'); const e = needType(a[0], 'list'); if (!e) return R.arr([]); const L = e.v.length; let s = parseInt(a[1]), t = parseInt(a[2]);
+    if (s < 0) s += L; if (t < 0) t += L; s = Math.max(0, s); t = Math.min(L - 1, t); return R.arr(s > t ? [] : e.v.slice(s, t + 1).map(R.bulk)); },
+  LLEN: a => { argc(a, 1, 'llen'); const e = needType(a[0], 'list'); return R.int(e ? e.v.length : 0); },
+  SADD: a => { argc(a, 2, 'sadd'); const e = coll(a[0], 'set', () => new Set()); let n = 0; a.slice(1).forEach(v => { if (!e.v.has(v)) { e.v.add(v); n++; } }); return R.int(n); },
+  SMEMBERS: a => { argc(a, 1, 'smembers'); const e = needType(a[0], 'set'); return R.arr(e ? [...e.v].sort().map(R.bulk) : []); },
+  SCARD: a => { argc(a, 1, 'scard'); const e = needType(a[0], 'set'); return R.int(e ? e.v.size : 0); },
+  INFO: () => R.bulk(`# Server\r\nvalkey_version:9.0.0 (mock)\r\nvalkey_mode:standalone\r\nuptime_in_seconds:${Math.floor((performance.now() - bootWall) / 1000)}\r\n\r\n# Keyspace\r\ndb0:keys=${[...DB.keys()].filter(live).length},expires=0\r\n`),
+  HELP: () => R.arr(['This is a MOCK valkey-cli standing in for try-valkey while the handoff is prototyped.', 'Commands: ' + Object.keys(CMDS).filter(c => c !== 'HELP').join(' ') + ' CLEAR', 'Real try-valkey runs the actual server in a v86 emulator.'].map(R.status)),
+};
+function tokenize(s) { const out = []; const re = /"((?:[^"\\]|\\.)*)"|'([^']*)'|(\S+)/g; let m; while ((m = re.exec(s))) out.push(m[1] !== undefined ? m[1].replace(/\\(.)/g, '$1') : m[2] !== undefined ? m[2] : m[3]); return out; }
+function fmt(r, indent = '') {
+  switch (r.t) {
+    case 'status': return `<span class="o">${esc(r.v)}</span>`;
+    case 'err': return `<span class="e">(error) ${esc(r.v)}</span>`;
+    case 'nil': return '<span class="d">(nil)</span>';
+    case 'int': return `<span class="o">(integer) ${r.v}</span>`;
+    case 'bulk': return r.v.includes('\r\n') ? `<span class="o">${esc(r.v.replace(/\r\n/g, '\n'))}</span>` : `<span class="o">"${esc(r.v)}"</span>`;
+    case 'arr': { if (!r.v.length) return '<span class="d">(empty array)</span>';
+      const w = String(r.v.length).length; return r.v.map((x, i) => `${i ? indent : ''}${String(i + 1).padStart(w)}) ${fmt(x, indent + ' '.repeat(w + 2))}`).join('\n'); }
+  }
+}
+const tout = document.getElementById('tout'), tbuf = document.getElementById('tbuf'), tin = document.getElementById('tin'), term = document.getElementById('term');
+const hist = []; let hi = 0;
+function tprint(html) { const d = document.createElement('div'); d.innerHTML = html; tout.appendChild(d); tout.scrollTop = tout.scrollHeight; }
+const tprompt = document.getElementById('tprompt');
+function promptText() { return tv ? tv.session.prompt() : '127.0.0.1:6379> '; }
+function printReply(text) {                                                  // valkey-cli TTY text -> coloured lines
+  for (const l of text.replace(/\n$/, '').split('\n')) {
+    const cls = l.startsWith('(error)') ? 'e' : (l.startsWith('(nil)') || l.startsWith('(empty')) ? 'd' : 'o';
+    tprint(`<span class="${cls}">${esc(l)}</span>`);
+  }
+}
+let termBusy = false;
+async function run(line) {
+  tprint(`<span class="p">${esc(promptText())}</span>${esc(line)}`);
+  if (tv) {                                                                  // the real server
+    const c = line.trim().toLowerCase();
+    if (!c) return;
+    if (c === 'clear') { tout.innerHTML = ''; return; }
+    if (c === 'quit' || c === 'exit') { tprint('<span class="d">(this is a browser tab -- just close it)</span>'); return; }
+    if (c === 'help' || c === '?') { tprint('<span class="d">A real valkey-server is running in this tab. Try: SET k v · GET k · INCR n · HSET h f v · HGETALL h · LPUSH l a b · LRANGE l 0 -1 · ZADD z 1 a · HELLO 3 · COMMAND DOCS GET</span>'); return; }
+    termBusy = true;
+    try { printReply(await tv.exec(line)); } finally { termBusy = false; tprompt.textContent = promptText(); }
+    return;
+  }
+  const a = tokenize(line); if (!a.length) return;
+  const name = a[0].toUpperCase();
+  if (name === 'CLEAR') { tout.innerHTML = ''; return; }
+  if (name === 'QUIT' || name === 'EXIT') { tprint('<span class="d">(this is a mock; there is nothing to quit)</span>'); return; }
+  try { const f = CMDS[name]; if (!f) throw R.err(`ERR unknown command '${a[0]}', with args beginning with: ${a.slice(1).map(x => `'${x}'`).join(' ')}`); tprint(fmt(f(a.slice(1)))); }
+  catch (e) { tprint(e && e.t ? fmt(e) : `<span class="e">(error) ERR ${esc(e.message || e)}</span>`); }
+}
+tin.addEventListener('input', () => { tbuf.textContent = tin.value; });
+tin.addEventListener('keydown', e => {
+  if (e.key === 'Enter') { if (termBusy) return; const v = tin.value; tin.value = ''; tbuf.textContent = ''; if (v.trim()) { hist.push(v); hi = hist.length; } run(v); }
+  else if (e.key === 'ArrowUp') { if (hi > 0) { hi--; tin.value = tbuf.textContent = hist[hi]; } e.preventDefault(); }
+  else if (e.key === 'ArrowDown') { hi = Math.min(hist.length, hi + 1); tin.value = tbuf.textContent = hist[hi] || ''; e.preventDefault(); }
+  else if (e.key === 'l' && e.ctrlKey) { tout.innerHTML = ''; e.preventDefault(); }
+  else if (e.key === 'c' && e.ctrlKey) { tin.value = tbuf.textContent = ''; }
+});
+term.addEventListener('mousedown', e => { if (e.target !== tin) { e.preventDefault(); tin.focus(); } });
+
+/* ============================ CONTROL: the three-phase machine ============================ */
+// LOAD (download, open-ended)  -> tape-loader screen + vamp A, layers per download quartile
+// SIGN-ON (boot begins)        -> the fixed pre clock: power-on, milestone readout (real markers), wireframe, connections
+// HOLD (until server ready)    -> the dominant pedal: vamp B, ports breathing, kernel tail in the corner
+// UNLOCK                       -> the post clock: flood, wordmark, tagline, stragglers; handoff at +3.12
+// Every transition is quantized to a BAR boundary (0.5s), decided LOOKAHEAD seconds ahead so audio can be booked.
+const stage = document.getElementById('stage'), ui = document.getElementById('ui');
+const LOOKAHEAD = .3;
+const LOAD_MIN = 2.5;                                        // the tape loader is on screen at least this long, however fast the download
+const nowS = () => performance.now() / 1000;
+let phase = 'idle', score = null, sound = false, handed = false, skipReq = false;
+let loadStart = 0, signonStart = 0, audioAt = null;          // audioAt(wallSeconds) -> AudioContext time
+let loadBar = 0, loadStopAt = null, holdBar = 0, holdDecided = -1, popped = [false, false, false, false];
+const stageT = () => nowS() - signonStart;
+const preAnims = () => document.getAnimations().filter(a => !a.effect.target.classList.contains('post'));
+const postAnims = () => document.getAnimations().filter(a => a.effect.target.classList.contains('post'));
+const at = (wall, fn) => setTimeout(fn, Math.max(0, (wall - nowS()) * 1000));
+
+function loaderTick() { renderLoader(loader.bytes, nowS() - loadStart); if (phase === 'load') requestAnimationFrame(loaderTick); }
+
+function startAll() {
+  sound = document.getElementById('sound').checked;
+  const name = document.querySelector('input[name=score]:checked').value;
+  MODE = document.querySelector('input[name=mode]:checked').value;
+  stage.classList.toggle('connect', MODE === 'connect');
+  if (sound && name !== 'mute') {
+    buildMaster(name, document.getElementById('tape').checked);
+    audioAt = w => Math.max(ctx.currentTime + .005, ctx.currentTime + (w - nowS()));
+    if (document.getElementById('tape').checked) noise(ctx.currentTime + .05, T.end, {gain: .045, lp: 2400, hp: 120, attack: .4, release: 1.2, color: 'pink'});
+    score = SCORES[name]();
+  } else { sound = false; score = null; }
+  if (REAL) startRealLoader(...loaderParams()); else startLoader(...loaderParams());
+  phase = 'load'; loadStart = nowS() + .12; vamp.classList.remove('hold'); vampShow(true); document.body.classList.add('started');
+  requestAnimationFrame(loaderTick);
+  machine();
+}
+
+function machine() {
+  if (phase === 'done') return;
+  const now = nowS();
+  if (phase === 'load') {
+    // book vamp-A bars up to the lookahead horizon (and never past a decided transition)
+    const layer = Math.min(3, Math.floor(loader.progress * 4));
+    for (let b = loadStart + loadBar * BAR; b < now + LOOKAHEAD && (loadStopAt === null || b < loadStopAt); b = loadStart + (++loadBar) * BAR)
+      if (score) score.vampLoad(audioAt(b), loadBar, layer);
+    // download complete -> the sign-on starts on the next bar boundary the audio hasn't been booked past, and never before LOAD_MIN
+    if (loadStopAt === null && loader.phase !== 'download') {
+      const earliest = Math.max(now + LOOKAHEAD, loadStart + LOAD_MIN);
+      loadStopAt = loadStart + Math.max(loadBar, Math.ceil((earliest - loadStart) / BAR)) * BAR;
+      if (score) score.pre(audioAt(loadStopAt));
+      at(loadStopAt, beginSignon);
+    }
+  } else if (phase === 'signon') {
+    const t = stageT();
+    // milestone pops: on the beat if the real marker has arrived, else the moment it does
+    for (let i = 0; i < 4; i++) if (!popped[i] && t >= T.boot[i] + T.status && loader.marks[i]) {
+      popped[i] = true; document.querySelectorAll('#boot .st')[i].classList.add('on'); if (score) score.status(ctx.currentTime + .02, i);
+    }
+    // the hold: bars at holdMin + k*BAR; each is either the unlock or one more bar of the pedal, decided LOOKAHEAD early
+    if (t >= T.click && !loader.ready) { vamp.classList.add('hold'); vampShow(true); }
+    for (let b = signonStart + T.holdMin + holdBar * BAR; b < now + LOOKAHEAD; b = signonStart + T.holdMin + (++holdBar) * BAR) {
+      if (loader.ready) { unlockAt(b); break; }
+      if (score) score.vampHold(audioAt(b), holdBar);
+    }
+  }
+  setTimeout(machine, 50);
+}
+
+function beginSignon() {
+  phase = 'signon'; signonStart = nowS(); netStart = signonStart * 1000;
+  vampShow(false); vamp.classList.remove('hold'); sizeCanvas(); cx2.clearRect(0, 0, 900, 500);
+  stage.classList.add('play');
+  netRunning = true; requestAnimationFrame(netTick);
+  if (skipReq) jumpPre(T.click);
+}
+function unlockAt(wall) {
+  phase = 'post'; UNLOCK.at = wall - signonStart;
+  if (score) score.post(audioAt(wall));
+  at(wall, () => { stage.classList.add('unlock'); vampShow(false); if (skipReq) { jumpPost(T.P.hand); handoff(); } });
+  if (!skipReq) at(wall + T.P.hand, handoff);
+}
+function jumpPre(to) { const j = to - stageT(); if (j <= 0) return; signonStart -= j; netStart = signonStart * 1000; preAnims().forEach(a => { if (a.currentTime !== null) a.currentTime += j * 1000; }); }
+function jumpPost(to) { const j = to - (stageT() - UNLOCK.at); if (j <= 0) return; signonStart -= j; netStart = signonStart * 1000; UNLOCK.at += 0; postAnims().forEach(a => { if (a.currentTime !== null) a.currentTime += j * 1000; }); preAnims().forEach(a => { if (a.currentTime !== null) a.currentTime += j * 1000; }); }
+
+function stopAudio(fadeSecs) {
+  if (!ctx) return; const c = ctx, m = master;
+  try { m.gain.setValueAtTime(m.gain.value, c.currentTime); m.gain.linearRampToValueAtTime(0, c.currentTime + fadeSecs); } catch (e) {}
+  setTimeout(() => { if (ctx === c) { c.close(); ctx = null; } }, fadeSecs * 1000 + 100);
+}
+function handoff() {
+  if (handed) return; handed = true; phase = 'done'; HAND.at = stageT(); vampShow(false); netLastT = HAND.at;
+  document.body.classList.add('hand'); stopAudio(1.8);
+  // the picture shrinks (CSS transition on #frame width); the terminal fades in as it lands
+  setTimeout(() => {
+    document.body.classList.add('termon'); bootWall = performance.now();
+    if (tv) {
+      for (const l of loader.lines.filter(l => /Server initialized|Ready to accept connections/.test(l))) tprint(`<span class="d">${esc(l.replace(/^\d+:M \d+ \w+ \d+ [\d:.]+ /, '1:M '))}</span>`);
+      tprompt.textContent = promptText();
+      const pushes = outs => { if (outs.length) { outs.forEach(printReply); } };
+      tv.exec.onUnsolicited = pushes;
+      setInterval(() => pushes(tv.tick()), 50);                              // serverCron, expiry, blocking timeouts, pub/sub
+    } else { tprint('<span class="d">1:M * Server initialized</span>'); tprint('<span class="d">1:M * Ready to accept connections tcp</span>'); }
+    tprint('&nbsp;'); tin.focus();
+  }, 900);
+}
+function skipIntro() {                                   // skip = get to the terminal as soon as the server allows
+  if (handed) return; skipReq = true; stopAudio(.5);
+  if (phase === 'signon') jumpPre(T.click);
+  else if (phase === 'post' && stageT() >= UNLOCK.at) { jumpPost(T.P.hand); handoff(); }
+}
+
+const q = new URLSearchParams(location.search);
+const dlIn = document.getElementById('dl'), bootIn = document.getElementById('boot');
+function loaderParams() { return [parseFloat(q.get('dl') ?? dlIn.value), parseFloat(q.get('boot') ?? bootIn.value)]; }
+document.getElementById('start').onclick = () => { ui.classList.add('hidden'); startAll(); };
+document.getElementById('skipstart').onclick = () => { ui.classList.add('hidden'); startAll(); skipReq = true; };
+document.getElementById('skip').onclick = skipIntro;
+document.addEventListener('keydown', e => { if (e.key === 'Escape') skipIntro(); });
+document.getElementById('replay').onclick = () => location.reload();
+document.getElementById('replay2').onclick = () => location.reload();
+// presets <-> number inputs
+document.querySelectorAll('input[name=preset]').forEach(r => r.addEventListener('change', () => { const [d, b] = r.value.split(','); dlIn.value = d; bootIn.value = b; }));
+{ const [d, b] = document.querySelector('input[name=preset]:checked').value.split(','); dlIn.value = q.get('dl') ?? d; bootIn.value = q.get('boot') ?? b; }
+
+// DEBUG: ?run=1[&dl=&boot=&mode=&sound=fm|sid|turbine|launch] starts everything without a gesture (audio stays suspended;
+//        scheduling exceptions surface in the console). ?t=SECONDS freezes the sign-on at that stage time, with
+//        &unlock_at= (default 3.18) for the post clock, &load=PCT for the tape-loader screen, &vamp=boot for the hold corner,
+//        &hand=1 for the post-handoff static state.
+if (q.get('run')) {
+  ui.classList.add('hidden');
+  if (q.get('sound')) { document.getElementById('sound').checked = true; document.querySelector(`input[name=score][value=${q.get('sound')}]`).checked = true; }
+  if (q.get('mode')) document.querySelector(`input[name=mode][value=${q.get('mode')}]`).checked = true;
+  try { startAll(); console.log('started', MODE, sound ? document.querySelector('input[name=score]:checked').value : 'silent'); } catch (e) { console.error('START ERROR', e); }
+}
+if (q.get('t') !== null) {
+  const seek = parseFloat(q.get('t')), uAt = parseFloat(q.get('unlock_at') || T.holdMin);
+  MODE = q.get('mode') || MODE; netStop(); ui.classList.add('hidden'); stage.classList.toggle('connect', MODE === 'connect');
+  if (q.get('load') !== null) { loader.phase = 'download'; loader.progress = parseFloat(q.get('load')); loader.bytes = loader.progress * loader.total; loader.lastBytesAt = performance.now(); vamp.innerHTML = vampText(); vamp.classList.add('on'); renderLoader(loader.bytes, seek); }
+  else {
+    stage.classList.add('play'); UNLOCK.at = uAt;
+    if (q.get('vamp') === 'boot') { loader.phase = 'boot'; loader.lines = BOOT_LINES.slice(0, 12); vamp.innerHTML = vampText(); vamp.classList.add('on', 'hold'); }
+    document.querySelectorAll('#boot .st').forEach((el, i) => { if (seek >= T.boot[i] + T.status && (q.get('vamp') !== 'boot' || i < 2)) el.classList.add('on'); });
+    if (q.get('hand') === '1') { HAND.at = uAt + T.P.hand; document.body.classList.add('hand', 'termon'); tprint('<span class="d">1:M * Server initialized</span>'); tprint('<span class="d">1:M * Ready to accept connections tcp</span>'); tprint('&nbsp;'); }
+    requestAnimationFrame(() => {
+      preAnims().forEach(a => { a.pause(); a.currentTime = seek * 1000; });
+      if (seek >= uAt) { stage.classList.add('unlock'); requestAnimationFrame(() => postAnims().forEach(a => { a.pause(); a.currentTime = (seek - uAt) * 1000; })); }
+      netLastT = seek; renderNet(seek);
+    });
+  }
+}
+</script>
+</body>
+</html>

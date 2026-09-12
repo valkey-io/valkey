@@ -128,6 +128,14 @@ back to what was typed), and the grey inline hint shows the argument syntax stil
 to be typed, with already-typed tokens and option groups removed, exactly as
 valkey-cli does (`hints-check.mjs` prints a table of cases).
 
+## Hosting
+
+Live at [valkey-rainfall.github.io/valkey/tryme.html](https://valkey-rainfall.github.io/valkey/tryme.html)
+(plain terminal: `index.html`) from the fork's orphan `gh-pages` branch, which holds only the deployable bundle.
+`publish-pages.sh` rebuilds that branch from `web/` plus the current `src/valkey-server.{mjs,wasm}` and pushes it.
+GitHub Pages serves `.wasm` as `application/wasm` and `.mjs` as `text/javascript`; no special headers are needed
+because the build uses no threads (no SharedArrayBuffer, no COOP/COEP).
+
 ## Open items before this is a product
 
 1. ~~JS `valkey-cli` shim~~ done (`web/`), verified against real `valkey-cli`.

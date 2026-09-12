@@ -854,7 +854,6 @@ void increxCommand(client *c) {
     }
 
     if (use_float) {
-
         if (isinf(oldvalue_ld)) {
             addReplyError(c, "value cannot be Infinity");
             return;
@@ -862,12 +861,12 @@ void increxCommand(client *c) {
 
         value_ld = oldvalue_ld + incr_ld;
 
-        if isinf(value_ld) {
+        if isinf (value_ld) {
             addReplyError(c, "BYFLOAT increment cannot be Infinity");
             return;
         }
 
-        if isnan(value_ld) {
+        if isnan (value_ld) {
             addReplyError(c, "Increment is not a valid float");
             return;
         }

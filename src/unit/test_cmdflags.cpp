@@ -131,6 +131,8 @@ TEST_F(CmdFlagsTest, TestPopulateCommandTableResetsStats) {
     c->microseconds = 11;
     c->failed_calls = 3;
     c->rejected_calls = 5;
+    updateCommandLatencyHistogram(&c->latency_histogram, 100);
+    ASSERT_TRUE(c->latency_histogram != NULL);
 
     repopulateCommandTable();
 
@@ -140,4 +142,5 @@ TEST_F(CmdFlagsTest, TestPopulateCommandTableResetsStats) {
     EXPECT_EQ(c->microseconds, 0);
     EXPECT_EQ(c->failed_calls, 0);
     EXPECT_EQ(c->rejected_calls, 0);
+    EXPECT_TRUE(c->latency_histogram == NULL);
 }

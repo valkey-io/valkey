@@ -84,7 +84,9 @@ jobs:
         working-directory: native
         run: |
           sudo apt-get update -q && sudo apt-get install -y -q pkg-config libgtest-dev libgmock-dev   # the Makefile insists on gtest even for the server target
-          make -j"$(nproc)" BUILD_TLS=no valkey-server valkey-cli
+          # MALLOC=libc: the allocator is irrelevant to reply bytes, and it sidesteps the jemalloc-vs-objects
+          # race the Makefile has on fresh clones under -j.
+          make -j"$(nproc)" BUILD_TLS=no MALLOC=libc valkey-server valkey-cli
 
       - name: Differential -- replies byte-for-byte vs native (607 commands)
         run: node utils/try-valkey-wasm/diff-harness.mjs "$GITHUB_WORKSPACE/native/src/valkey-server"

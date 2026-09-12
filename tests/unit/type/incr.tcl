@@ -170,6 +170,240 @@ start_server {tags {"incr"}} {
         r get foo
     } {0}
 
+    test {INCREX keyspace notifications} {
+        set db [expr {$::singledb ? 0 : 9}]
+        r config set notify-keyspace-events KEA
+        set rd [valkey_deferring_client]
+        assert_equal {1} [psubscribe $rd *]
+        r del foo
+        assert_equal "pmessage * __keyspace@${db}__:foo del" [$rd read]
+        assert_equal "pmessage * __keyevent@${db}__:del foo" [$rd read]
+        # Integer mode -> incrby
+        r increx foo byint 5
+        assert_equal "pmessage * __keyspace@${db}__:foo incrby" [$rd read]
+        assert_equal "pmessage * __keyevent@${db}__:incrby foo" [$rd read]
+        # Float mode -> incrbyfloat
+        r increx foo byfloat 1
+        assert_equal "pmessage * __keyspace@${db}__:foo incrbyfloat" [$rd read]
+        assert_equal "pmessage * __keyevent@${db}__:incrbyfloat foo" [$rd read]
+        # An expiry emits a second, separate event.
+        r increx foo byint 1 ex 100
+        assert_equal "pmessage * __keyspace@${db}__:foo incrby" [$rd read]
+        assert_equal "pmessage * __keyevent@${db}__:incrby foo" [$rd read]
+        assert_equal "pmessage * __keyspace@${db}__:foo expire" [$rd read]
+        assert_equal "pmessage * __keyevent@${db}__:expire foo" [$rd read]
+        $rd close
+        r config set notify-keyspace-events ""
+    }
+
+    test {INCREX no negative zero} {
+        r del foo
+        r increx foo byfloat [expr double(1)/41]
+        r increx foo byfloat [expr double(-1)/41]
+        r get foo
+    } {0}
+
+    test {INCREX default increment is 1} {
+        r del foo
+        r increx foo
+    } {1 1}
+
+    test {INCREX BYINT increments by given amount} {
+        r del foo
+        r increx foo byint 5
+        r increx foo byint 5
+    } {10 5}
+
+    test {INCREX BYFLOAT increments by the given amount} {
+        r del foo
+        assert_match {0.1* 0.1*} [r increx foo byfloat 0.1]
+        assert_match {0.3* 0.2*} [r increx foo byfloat 0.2]
+        assert_match {0.3*} [r get foo]
+    }
+    
+    test {INCREX NX only sets when key does not exist} {
+        r del foo
+        assert_equal {1 1} [r increx foo nx]
+        assert_equal {} [r increx foo nx]
+        assert_equal {1} [r get foo]
+    }
+
+    test {INCREX XX only sets when key already exists} {
+        r del foo
+        assert_equal {} [r increx foo xx]
+        assert_equal {0} [r exists foo]
+        r set foo 10
+        assert_equal {11 1} [r increx foo xx]
+    }
+
+    test {INCREX NX and XX are mutually exclusive} {
+        r del foo
+        catch {r increx foo nx xx} err
+        format $err
+    } {ERR*}
+
+    test {INCREX with EX sets a TTL} {
+        r del foo
+        r increx foo ex 100
+        assert_range [r ttl foo] 1 100
+    }
+
+    test {INCREX with PX sets a TTL in milliseconds} {
+        r del foo
+        r increx foo px 100000
+        assert_range [r pttl foo] 1 100000
+    }
+
+    test {INCREX with EXAT in the past deletes/skips the key} {
+        r set foo 5
+        r increx foo exat 1
+        assert_equal {0} [r exists foo]
+    }
+
+    test {INCREX combines EX and BYINT correctly} {
+        r del foo
+        r increx foo ex 100 byint 7
+        assert_equal {7} [r get foo]
+        assert_range [r ttl foo] 1 100
+    }
+
+    test {INCREX combines EX and BYFLOAT correctly} {
+        r del foo
+        r increx foo ex 100 byfloat 2.5
+        assert_equal {2.5} [r get foo]
+        assert_range [r ttl foo] 1 100
+    }
+
+    test {INCREX combines NX, EX, and BYINT correctly} {
+        r del foo
+        r increx foo nx ex 100 byint 3
+        assert_equal {3} [r get foo]
+        assert_range [r ttl foo] 1 100
+        # second call should no-op since key now exists
+        assert_equal {} [r increx foo nx ex 100 byint 3]
+    }
+
+    test {INCREX BYINT and BYFLOAT are mutually exclusive} {
+        r del foo
+        catch {r increx foo byint 1 byfloat 1.0} err
+        format $err
+    } {ERR*}
+
+    test {INCREX overflow protection} {
+        r set foo 9223372036854775807
+        assert_equal [r increx foo byint 1] {9223372036854775807 0}
+    }
+
+    test {INCREX BYFLOAT does not allow Infinity} {
+        r set foo 0
+        catch {r increx foo byfloat +inf} err
+        format $err
+    } {ERR *BYFLOAT increment cannot be Infinity*} {valgrind:skip}
+
+    test {INCREX BYFLOAT does not allow nan} {
+        r set foo 0
+        catch {r increx foo byfloat nan} err
+        format $err
+    } {ERR *value is not a valid float*} {valgrind:skip}
+
+    test {INCREX BYFLOAT does not allow exponentials} {
+        r set foo 0
+        catch {r increx foo byfloat 1e99999} err
+        format $err
+    } {ERR *value is not a valid float*} {valgrind:skip}
+
+    test {INCREX BYFLOAT does not allow inf values} {
+        r set foo inf
+        catch {r increx foo byfloat 1} err
+        format $err
+    } {ERR *value cannot be Infinity*} {valgrind:skip}
+
+    test {INCREX BYINT does not allow inf values} {
+        r set foo inf
+        catch {r increx foo byint 1} err
+        format $err
+    } {ERR *value is not an integer or out of range*} {valgrind:skip}
+
+    test {INCREX against key holding a list} {
+        r del mylist
+        r rpush mylist 1
+        catch {r increx mylist} err
+        r del mylist
+        format $err
+    } {WRONGTYPE*}
+
+    test {INCREX preserves existing TTL when expire option omitted} {
+        r del foo
+        r set foo 1 ex 100
+        r increx foo byint 1
+        assert_range [r ttl foo] 1 100
+    }
+
+    test {INCREX wrong number of arguments} {
+        assert_error "*ERR*" {r increx}
+    }
+
+    test {INCREX against key holding a list, with already-expired EXAT} {
+        r del list_key
+        r rpush list_key a
+        assert_error {WRONGTYPE*} {r increx list_key exat 1}
+        r del list_key
+    } 
+
+    test {INCREX against non-numeric string value, with already-expired EXAT} {
+        r set str abc
+        assert_error {ERR*} {r increx str exat 1}
+        r del str
+    }
+
+    test {INCREX against nonexistent key with already-expired EXAT returns nil} {
+        r del non_existing
+        assert_equal {1 1} [r increx non_existing exat 1]
+    }
+
+    test {INCREX BYINT with missing value is a syntax error} {
+        r del key
+        assert_error {ERR*} {r increx key byint}
+    }
+
+    test {INCREX reply types on the wire - RESP3} {
+        r hello 3
+        r readraw 1
+        r del foo
+        assert_equal {*2} [r increx foo byint 5]
+        assert_equal {:5} [r read]
+        assert_equal {:5} [r read]
+        # Default increment is integer mode.
+        assert_equal {*2} [r increx foo]
+        assert_equal {:6} [r read]
+        assert_equal {:1} [r read]
+        # Both elements are RESP3 doubles in float mode, not bulk strings.
+        r del foo
+        assert_equal {*2}   [r increx foo byfloat 2.5]
+        assert_equal {,2.5} [r read]
+        assert_equal {,2.5} [r read]
+        r readraw 0
+        r hello 2
+    }
+    
+    test {INCREX reply types on the wire - RESP2} {
+        if {!$::force_resp3} {
+            r readraw 1
+            r del foo
+            assert_equal {*2} [r increx foo byint 5]
+            assert_equal {:5} [r read]
+            assert_equal {:5} [r read]
+            # BYFLOAT degrades to bulk strings under RESP2.
+            r del foo
+            assert_equal {*2}  [r increx foo byfloat 2.5]
+            assert_equal {$3}  [r read]
+            assert_equal {2.5} [r read]
+            assert_equal {$3}  [r read]
+            assert_equal {2.5} [r read]
+            r readraw 0
+        }
+    }
+
     test {INCRBY INCRBYFLOAT DECRBY against unhappy path} {
         r del mykeyincr
         assert_error "*ERR wrong number of arguments*" {r incr mykeyincr v}
@@ -181,7 +415,7 @@ start_server {tags {"incr"}} {
         assert_error "*value is not a valid float*" {r incrbyfloat mykeyincr v}
     }
 
-    foreach cmd {"incr" "decr" "incrby" "decrby"} {
+    foreach cmd {"incr" "decr" "incrby" "decrby" "increx"} {
         test "$cmd operation should update encoding from raw to int" {
             set res {}
             set expected {1 12}

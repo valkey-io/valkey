@@ -8125,10 +8125,12 @@ __attribute__((weak)) int main(int argc, char **argv) {
  * MSET specific command extended options - XX/NX
  * HGET specific command extended options - PERSIST
  * HSET specific command extended options - NX/XX/FXX/FNX
+ * INCREX specific command extended options - BYINT/BYFLOAT
  * Common command extended options - EX/EXAT/PX/PXAT/KEEPTTL
  *
  * Function takes pointers to client, flags, unit, expire_idx, pointer to pointer of expire obj,
- * pointer to pointer of compare obj if needed to be determined and command_type which can be COMMAND_*.
+ * pointer to pointer of compare obj, pointer to pointer of incrby obj, and command_type
+ * which can be COMMAND_*.
  *
  * If there are any syntax violations C_ERR is returned else C_OK is returned.
  *
@@ -8138,7 +8140,7 @@ __attribute__((weak)) int main(int argc, char **argv) {
  * start_idx provides a way to start scanning from a specific index.
  * max_args provides a way to limit the scan to a specific range of arguments.
  */
-int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_idx, int max_args, int *flags, int *unit, int *expire_idx, robj **expire, robj **compare_val) {
+int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_idx, int max_args, int *flags, int *unit, int *expire_idx, robj **expire, robj **compare_val, robj **incrby_val) {
     int j = start_idx;
     if (expire_idx) *expire_idx = -1;
     for (; j < max_args; j++) {
@@ -8149,13 +8151,13 @@ int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_
         if ((opt[0] == 'n' || opt[0] == 'N') &&
             (opt[1] == 'x' || opt[1] == 'X') && opt[2] == '\0' &&
             !(*flags & (ARGS_SET_CONDITIONAL & ~ARGS_SET_NX)) && /* Repeated NX allowed */
-            (command_type == COMMAND_SET || command_type == COMMAND_HSET || command_type == COMMAND_MSET))
+            (command_type == COMMAND_SET || command_type == COMMAND_HSET || command_type == COMMAND_MSET || command_type == COMMAND_INCREX))
         {
             *flags |= ARGS_SET_NX;
         } else if ((opt[0] == 'x' || opt[0] == 'X') &&
                    (opt[1] == 'x' || opt[1] == 'X') && opt[2] == '\0' &&
                    !(*flags & (ARGS_SET_CONDITIONAL & ~ARGS_SET_XX)) && /* Repeated XX allowed */
-                   (command_type == COMMAND_SET || command_type == COMMAND_HSET || command_type == COMMAND_MSET))
+                   (command_type == COMMAND_SET || command_type == COMMAND_HSET || command_type == COMMAND_MSET || command_type == COMMAND_INCREX))
         {
             *flags |= ARGS_SET_XX;
         } else if ((opt[0] == 'f' || opt[0] == 'F') &&
@@ -8253,6 +8255,30 @@ int parseExtendedCommandArgumentsOrReply(client *c, int command_type, int start_
             *unit = UNIT_MILLISECONDS;
             *expire = next;
             if (expire_idx) *expire_idx = j;
+            j++;
+        } else if ((opt[0] == 'b' || opt[0] == 'B') &&
+                   (opt[1] == 'y' || opt[1] == 'Y') &&
+                   (opt[2] == 'i' || opt[2] == 'I') &&
+                   (opt[3] == 'n' || opt[3] == 'N') &&
+                   (opt[4] == 't' || opt[4] == 'T') && opt[5] == '\0' &&
+                   command_type == COMMAND_INCREX &&
+                   !(*flags & ARGS_BYINT) && !(*flags & ARGS_BYFLOAT) && next)
+        {
+            *flags |= ARGS_BYINT;
+            if (incrby_val) *incrby_val = next;
+            j++;
+        } else if ((opt[0] == 'b' || opt[0] == 'B') &&
+                   (opt[1] == 'y' || opt[1] == 'Y') &&
+                   (opt[2] == 'f' || opt[2] == 'F') &&
+                   (opt[3] == 'l' || opt[3] == 'L') &&
+                   (opt[4] == 'o' || opt[4] == 'O') &&
+                   (opt[5] == 'a' || opt[5] == 'A') &&
+                   (opt[6] == 't' || opt[6] == 'T') && opt[7] == '\0' &&
+                   command_type == COMMAND_INCREX &&
+                   !(*flags & ARGS_BYINT) && !(*flags & ARGS_BYFLOAT) && next)
+        {
+            *flags |= ARGS_BYFLOAT;
+            if (incrby_val) *incrby_val = next;
             j++;
         } else {
             addReplyErrorObject(c, shared.syntaxerr);

@@ -854,16 +854,30 @@ void increxCommand(client *c) {
     }
 
     if (use_float) {
+
+        if (isinf(oldvalue_ld)) {
+            addReplyError(c, "value cannot be Infinity");
+            return;
+        }
+
         value_ld = oldvalue_ld + incr_ld;
-        if (isnan(value_ld) || isinf(value_ld)) {
-            addReplyError(c, "increment would produce NaN or Infinity");
+
+        if isinf(value_ld) {
+            addReplyError(c, "BYFLOAT increment cannot be Infinity");
+            return;
+        }
+
+        if isnan(value_ld) {
+            addReplyError(c, "Increment is not a valid float");
             return;
         }
     } else {
         value_ll = oldvalue_ll;
         if ((incr_ll < 0 && value_ll < 0 && incr_ll < (LLONG_MIN - value_ll)) ||
             (incr_ll > 0 && value_ll > 0 && incr_ll > (LLONG_MAX - value_ll))) {
-            addReplyError(c, "increment or decrement would overflow");
+            addReplyArrayLen(c, 2);
+            addReplyLongLong(c, value_ll);
+            addReplyLongLong(c, 0);
             return;
         }
         value_ll += incr_ll;

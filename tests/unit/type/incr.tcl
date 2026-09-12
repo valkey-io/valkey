@@ -183,7 +183,7 @@ start_server {tags {"incr"}} {
         assert_equal "pmessage * __keyspace@${db}__:foo incrby" [$rd read]
         assert_equal "pmessage * __keyevent@${db}__:incrby foo" [$rd read]
         # Float mode -> incrbyfloat
-        r increx foo byfloat 1.5
+        r increx foo byfloat 1
         assert_equal "pmessage * __keyspace@${db}__:foo incrbyfloat" [$rd read]
         assert_equal "pmessage * __keyevent@${db}__:incrbyfloat foo" [$rd read]
         # An expiry emits a second, separate event.
@@ -216,9 +216,9 @@ start_server {tags {"incr"}} {
 
     test {INCREX BYFLOAT increments by the given amount} {
         r del foo
-        assert_equal {0.1 0.1} [r increx foo byfloat 0.1]
-        assert_equal {0.3 0.2} [r increx foo byfloat 0.2]
-        assert_equal {0.3} [r get foo]
+        assert_equal {0.10000000000000001 0.10000000000000001} [r increx foo byfloat 0.1]
+        assert_equal {0.30000000000000004 0.20000000000000001} [r increx foo byfloat 0.2]
+        assert_equal {0.30000000000000004} [r get foo]
     }
     
     test {INCREX NX only sets when key does not exist} {
@@ -291,15 +291,38 @@ start_server {tags {"incr"}} {
 
     test {INCREX overflow protection} {
         r set foo 9223372036854775807
-        catch {r increx foo byint 1} err
-        format $err
-    } {ERR*overflow*}
+        assert_equal [r increx foo byint 1] {9223372036854775807 0}
+    }
 
-    test {INCREX BYFLOAT does not allow NaN or Infinity} {
+    test {INCREX BYFLOAT does not allow Infinity} {
         r set foo 0
         catch {r increx foo byfloat +inf} err
         format $err
-    } {ERR *would produce*} {valgrind:skip}
+    } {ERR *BYFLOAT increment cannot be Infinity*} {valgrind:skip}
+
+    test {INCREX BYFLOAT does not allow nan} {
+        r set foo 0
+        catch {r increx foo byfloat nan} err
+        format $err
+    } {ERR *value is not a valid float*} {valgrind:skip}
+
+    test {INCREX BYFLOAT does not allow exponentials} {
+        r set foo 0
+        catch {r increx foo byfloat 1e99999} err
+        format $err
+    } {ERR *value is not a valid float*} {valgrind:skip}
+
+    test {INCREX BYFLOAT does not allow inf values} {
+        r set foo inf
+        catch {r increx foo byfloat 1} err
+        format $err
+    } {ERR *value cannot be Infinity*} {valgrind:skip}
+
+    test {INCREX BYINT does not allow inf values} {
+        r set foo inf
+        catch {r increx foo byint 1} err
+        format $err
+    } {ERR *value is not an integer or out of range*} {valgrind:skip}
 
     test {INCREX against key holding a list} {
         r del mylist

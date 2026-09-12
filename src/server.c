@@ -195,7 +195,10 @@ void serverLogRaw(int level, const char *msg) {
     FILE *fp;
     char buf[64];
     int rawmode = (level & LL_RAW);
-    int log_to_stdout = server.logfile[0] == '\0';
+    /* server.logfile is NULL until the config is loaded, for example when an
+     * assertion fires in a unit test. Log to stdout in that case, so that the
+     * message is printed instead of crashing here. */
+    int log_to_stdout = server.logfile == NULL || server.logfile[0] == '\0';
 
     level &= 0xff; /* clear flags */
     if (level < server.verbosity) return;
@@ -290,7 +293,8 @@ void _serverLog(int level, const char *fmt, ...) {
    See serverLogFromHandler. */
 void serverLogRawFromHandler(int level, const char *msg) {
     int fd;
-    int log_to_stdout = server.logfile[0] == '\0';
+    /* See the note about a NULL server.logfile in serverLogRaw(). */
+    int log_to_stdout = server.logfile == NULL || server.logfile[0] == '\0';
     char buf[64];
 
     if ((level & 0xff) < server.verbosity || (log_to_stdout && server.daemonize)) return;
@@ -3495,13 +3499,13 @@ int populateCommandStructure(struct serverCommand *c) {
     /* If the command marks with CMD_ONLY_SENTINEL, it only exists in sentinel. */
     if (c->flags & CMD_ONLY_SENTINEL && !server.sentinel_mode) return C_ERR;
 
-    /* We start with an unallocated histogram and only allocate memory when a command
-     * has been issued for the first time */
-    c->latency_histogram = NULL;
-
-    /* Initialize command info cache */
+    /* Initialize command info cache. An earlier call may have left an owned sds
+     * in a slot, see the comment in populateCommandTable(). */
     for (int i = 0; i < RESP_CACHE_INDEX_MAX; i++) {
-        c->info_cache[i] = NULL;
+        if (c->info_cache[i]) {
+            sdsfree(c->info_cache[i]);
+            c->info_cache[i] = NULL;
+        }
     }
 
     /* Handle the legacy range spec and the "movablekeys" flag (must be done after populating all key specs). */
@@ -3514,9 +3518,18 @@ int populateCommandStructure(struct serverCommand *c) {
 
     /* Handle subcommands */
     if (c->subcommands) {
+        /* Drop the table built by an earlier call. The entries point into the
+         * static command table and are not owned by the hash table, so only the
+         * table itself is released. */
+        if (c->subcommands_ht) {
+            hashtableRelease(c->subcommands_ht);
+            c->subcommands_ht = NULL;
+        }
+
         for (int j = 0; c->subcommands[j].declared_name; j++) {
             struct serverCommand *sub = c->subcommands + j;
 
+            sdsfree(sub->fullname);
             sub->fullname = catSubCommandFullname(c->declared_name, sub->declared_name);
             if (populateCommandStructure(sub) == C_ERR) continue;
 
@@ -3530,7 +3543,14 @@ int populateCommandStructure(struct serverCommand *c) {
 extern struct serverCommand serverCommandTable[];
 
 /* Populates the Command Table dict from the static table in commands.c
- * which is auto generated from the json files in the commands folder. */
+ * which is auto generated from the json files in the commands folder.
+ *
+ * The server calls this once at startup, but the unit tests call it once per
+ * test suite. The command table is static, so everything an earlier call left
+ * there is dropped before it is built again: the names here, the subcommand
+ * table and the info cache in populateCommandStructure(), and the per command
+ * statistics with resetCommandTableStats() at the end. A second call therefore
+ * gives the same result and drops what a running server collected. */
 void populateCommandTable(void) {
     int j;
     struct serverCommand *c;
@@ -3541,6 +3561,9 @@ void populateCommandTable(void) {
 
         int retval1, retval2;
 
+        /* rename-command gives current_name its own sds, see loadServerConfigFromString(). */
+        if (c->current_name != c->fullname) sdsfree(c->current_name);
+        sdsfree(c->fullname);
         c->fullname = sdsnew(c->declared_name);
         c->current_name = c->fullname;
         if (populateCommandStructure(c) == C_ERR) continue;
@@ -3551,6 +3574,11 @@ void populateCommandTable(void) {
         retval2 = hashtableAdd(server.orig_commands, c);
         serverAssert(retval1 && retval2);
     }
+
+    /* Clears the call counters and releases the latency histograms that an
+     * earlier call left in the static table. Everything is already zero when
+     * the server calls this at startup. */
+    resetCommandTableStats(server.commands);
 }
 
 void resetCommandTableStats(hashtable *commands) {

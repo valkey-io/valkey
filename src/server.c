@@ -3497,15 +3497,8 @@ int populateCommandStructure(struct serverCommand *c) {
     /* If the command marks with CMD_ONLY_SENTINEL, it only exists in sentinel. */
     if (c->flags & CMD_ONLY_SENTINEL && !server.sentinel_mode) return C_ERR;
 
-    /* We start with an unallocated histogram and only allocate memory when a command
-     * has been issued for the first time. An earlier call may have left one
-     * behind, see the comment in populateCommandTable(). */
-    if (c->latency_histogram) {
-        hdr_close(c->latency_histogram);
-        c->latency_histogram = NULL;
-    }
-
-    /* Initialize command info cache */
+    /* Initialize command info cache. An earlier call may have left an owned sds
+     * in a slot, see the comment in populateCommandTable(). */
     for (int i = 0; i < RESP_CACHE_INDEX_MAX; i++) {
         if (c->info_cache[i]) {
             sdsfree(c->info_cache[i]);
@@ -3552,10 +3545,10 @@ extern struct serverCommand serverCommandTable[];
  *
  * The server calls this once at startup, but the unit tests call it once per
  * test suite. The command table is static, so everything an earlier call left
- * there is released before it is built again: the names here, and the subcommand
- * table, the latency histogram and the info cache in
- * populateCommandStructure(). A second call therefore gives the same result and
- * drops what a running server collected. */
+ * there is dropped before it is built again: the names here, the subcommand
+ * table and the info cache in populateCommandStructure(), and the per command
+ * statistics with resetCommandTableStats() at the end. A second call therefore
+ * gives the same result and drops what a running server collected. */
 void populateCommandTable(void) {
     int j;
     struct serverCommand *c;
@@ -3579,6 +3572,11 @@ void populateCommandTable(void) {
         retval2 = hashtableAdd(server.orig_commands, c);
         serverAssert(retval1 && retval2);
     }
+
+    /* Clears the call counters and releases the latency histograms that an
+     * earlier call left in the static table. Everything is already zero when
+     * the server calls this at startup. */
+    resetCommandTableStats(server.commands);
 }
 
 void resetCommandTableStats(hashtable *commands) {

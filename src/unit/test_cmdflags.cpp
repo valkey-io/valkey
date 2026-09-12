@@ -43,6 +43,31 @@ class CmdFlagsTest : public ::testing::Test {
         hashtableCleanupIterator(&iter);
         return count;
     }
+
+    static struct serverCommand *findCommand(const char *declared_name) {
+        hashtableIterator iter;
+        struct serverCommand *c;
+        struct serverCommand *found = NULL;
+
+        hashtableInitIterator(&iter, server.commands, 0);
+        while (hashtableNext(&iter, (void **)&c)) {
+            if (strcmp(c->declared_name, declared_name) == 0) {
+                found = c;
+                break;
+            }
+        }
+        hashtableCleanupIterator(&iter);
+        return found;
+    }
+
+    /* Replaces the command tables, as SetUp() does for every test. */
+    static void repopulateCommandTable(void) {
+        hashtableRelease(server.commands);
+        hashtableRelease(server.orig_commands);
+        server.commands = hashtableCreate(&commandSetType);
+        server.orig_commands = hashtableCreate(&originalCommandSetType);
+        populateCommandTable();
+    }
 };
 
 
@@ -89,14 +114,30 @@ TEST_F(CmdFlagsTest, TestPopulateCommandTableTwice) {
     EXPECT_GT(commands, 0);
     EXPECT_GT(with_subcommands, 0);
 
-    hashtableRelease(server.commands);
-    hashtableRelease(server.orig_commands);
-    server.commands = hashtableCreate(&commandSetType);
-    server.orig_commands = hashtableCreate(&originalCommandSetType);
-
-    populateCommandTable();
+    repopulateCommandTable();
 
     EXPECT_EQ((int)hashtableSize(server.commands), commands);
     EXPECT_EQ((int)hashtableSize(server.orig_commands), commands);
     EXPECT_EQ(countCommandsWithSubcommands(), with_subcommands);
+}
+
+TEST_F(CmdFlagsTest, TestPopulateCommandTableResetsStats) {
+    /* The statistics also live in the static command table, so a suite must not
+     * see what an earlier suite counted. */
+    struct serverCommand *c = findCommand("get");
+    ASSERT_TRUE(c != NULL);
+
+    c->calls = 7;
+    c->microseconds = 11;
+    c->failed_calls = 3;
+    c->rejected_calls = 5;
+
+    repopulateCommandTable();
+
+    c = findCommand("get");
+    ASSERT_TRUE(c != NULL);
+    EXPECT_EQ(c->calls, 0);
+    EXPECT_EQ(c->microseconds, 0);
+    EXPECT_EQ(c->failed_calls, 0);
+    EXPECT_EQ(c->rejected_calls, 0);
 }

@@ -19,6 +19,8 @@ reasons Valkey keeps a 32-bit build.
 | Pointer model | `sizeof(long)==8`, `__LP64__`, `INFO` reports `os:Emscripten 6.0.9 wasm64`, `arch_bits:64` |
 | Engine compatibility | lowered mode (`-sMEMORY64=2`): runs on every wasm32 engine incl. Safari. Native wasm64 (`WASM_MODE=native`) also links; needs Chrome 133+/Firefox 134+/Node 24+ |
 | Differential test | 607 commands (strings, hashes, lists, sets, zsets, MULTI/WATCH, EVAL/FCALL, RESP2+RESP3, error texts, 400 seeded random ops): 605 identical |
+| **Stock Tcl unit suite** | **2508 passed, 0 failed** (59 units, external mode over `tcp-bridge.mjs`, ~4 min of test time). 94 skipped: busy-script KILL tests, replication-stream tests (SYNC needs fork), IPv6 bind, CLIENT LIST ip filter; plus the harness's own external-mode/needs:debug/slow/large-memory exclusions |
+| CLI layer vs real `valkey-cli --no-raw` | 97 command lines incl. quoting/escapes/binary/RESP3/MULTI: 96 identical (the one difference is the try page's `maxmemory-policy`) |
 
 ## How it works
 
@@ -73,13 +75,59 @@ Native build and `unit/lazyfree` + `unit/type/incr` pass with the patches.
 * `diff-harness.mjs <native valkey-server>` -- the byte-for-byte comparison
 * `boot-probe.mjs`, `time-probe.c` -- diagnostics used during the spike
 
+## Bugs the wasm build found in Valkey itself
+
+Strict wasm type checking and a small default stack turned three latent issues
+into hard failures. All three are upstream-worthy on their own:
+
+1. **`valkeymodule.h` return-type mismatches**: `FreeModuleUser`,
+   `ACLAddLogEntry`, `ACLAddLogEntryByUserName` are declared `void` but
+   implemented (and documented) as returning `int`. x86-64 ignores it; wasm
+   traps at the indirect call as soon as a Lua script uses
+   `redis.acl_check_cmd`. `api-sig-check.py` compares every declaration
+   against `module.c` (the other reported differences are typedef aliases).
+2. **`getTimeZone()`** on non-Linux reads `gettimeofday`'s obsolete timezone
+   argument, which modern libcs leave untouched (garbage log timestamps).
+3. **Deep recursion in `luaReplyToServerReply`**: a recursive Lua table
+   recurses ~8000 levels before `lua_checkstack` fails. Fine with an 8 MB
+   native stack; on any engine with a smaller call-stack limit it is an
+   uncatchable overflow. The wasm build caps it at 256 levels with the same
+   `reached lua stack limit` error.
+
+Toolchain gotchas: Emscripten's default 64 KB stack (lzf's 64K-slot table
+lives on the stack -> `-sSTACK_SIZE=8MB`); `long double` printed at double
+precision unless `-sPRINTF_LONG_DOUBLE=1` (HINCRBYFLOAT 1.23 ->
+1.22999999999999998); `getaddrinfo` glue has a BigInt bug in the lowered mode
+(sidestepped: TCP listen is disabled in this build anyway).
+
+## Known limitation
+
+The server is single-threaded on the page's main thread, so a busy Lua
+script (`while true do end`) cannot be interrupted by `SCRIPT KILL` from a
+second connection -- there is no second thread to deliver it. Native Valkey
+handles this via `processEventsWhileBlocked`, which needs readable fds. A
+Web Worker + `Atomics.wait`-based wake would fix it (needs COOP/COEP).
+
+## Running the suite yourself
+
+```
+node utils/try-valkey-wasm/tcp-bridge.mjs --port 7379 &
+./runtest --host 127.0.0.1 --port 7379 --singledb --clients 1 \
+  --tags "-needs:repl -needs:save -needs:debug -needs:reset -needs:other-server -needs:latency -slow -large-memory" \
+  --skipfile utils/try-valkey-wasm/skip-busy-script-tests.txt --single unit/type/string ...
+```
+
+Demo page: `cp web/* out/web/ && cp ../../src/valkey-server.{mjs,wasm} out/web/ &&
+python3 -m http.server 8765 --bind 127.0.0.1 --directory out/web`.
+
 ## Open items before this is a product
 
-1. **JS `valkey-cli` shim**: line→argv (compile `sdssplitargs` into the module
-   and export it), RESP→TTY formatter mirroring `cliFormatReplyTTY`, xterm.js.
-2. Browser smoke (Chrome/Firefox/Safari) of the lowered build; decide whether to
-   also ship native wasm64 behind feature detection.
+1. ~~JS `valkey-cli` shim~~ done (`web/`), verified against real `valkey-cli`.
+2. Safari smoke of the lowered build (verified in Chromium only so far); decide
+   whether to also ship native wasm64 behind feature detection.
 3. `FD_SETSIZE` guard: fail loudly if `maxclients` is too large for select.
-4. Per-release CI: `emmake make` on tag → publish `.wasm/.mjs` to the site repo.
-5. Upstream conversation: which of these hooks land in-tree (the `getTimeZone`
-   fix and `bioExecuteJob` refactor stand on their own) vs. stay in an overlay.
+4. Per-release CI: `emmake make` on tag -> publish `.wasm/.mjs` to the site repo.
+5. Upstream: the three findings above plus `bioExecuteJob` refactor stand on
+   their own; decide which wasm hooks land in-tree vs. stay in an overlay.
+6. `-sSTACK_OVERFLOW_CHECK` builds crash at boot in `genValkeyInfoString`
+   (also plain wasm32) -- unresolved, debug-tooling only.

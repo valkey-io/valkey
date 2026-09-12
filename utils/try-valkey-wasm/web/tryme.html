@@ -111,6 +111,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>VALKEY — sign-on</title>
 <style>
   :root { --bg:#070a1a; --blue:#6983ff; --ice:#9fb0ff; --white:#eaf0ff; --dim:#3a4a8a; }
@@ -118,7 +119,8 @@
   #stage{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;background:#000}
   #frame{position:relative;width:min(100vw,180vh);flex:none;transition:width 1.4s cubic-bezier(.4,0,.2,1)}
   .hand #stage{justify-content:flex-start}
-  .hand #frame{width:var(--colw, min(52vw,80vh))}
+  .hand #frame{width:min(var(--colw, 52vw), 80vh)}   /* never taller than ~44vh (900:500), so the terminal keeps its room */
+  @media (max-width: 1150px){ .hand #termbar{top:14px;bottom:auto} }   /* thin margins: the replay button moves off the column, to the top-right */
   #bgcover{transition:opacity 1.4s cubic-bezier(.4,0,.2,1)} .hand #bgcover{opacity:1}   /* the picture's navy gradient goes to the page's black as it shrinks */
   svg#art{width:100%;height:auto;display:block}
   /* CONNECT mode: the client streams live on a canvas over the SVG, screen-blended so the additive glow reads as light */
@@ -130,14 +132,18 @@
   #vamp.hold{top:29%} #vamp.on{opacity:1} #vamp .dim{opacity:.55} #vamp b{color:#eaf0ff;font-weight:normal}
 
   /* the terminal */
-  #term{display:none;flex:1;width:var(--colw, min(52vw,80vh));min-height:0;box-sizing:border-box;padding:1.2vh 0 2vh;color:#9fb0ff;font-size:min(1.15vw,2.1vh);line-height:1.45;opacity:0;transition:opacity .8s;position:relative;overflow:hidden}
+  #term{display:none;flex:1;width:var(--colw, min(52vw,80vh));min-height:0;box-sizing:border-box;padding:1.2vh 0 2vh;color:#9fb0ff;font-size:var(--tfs);line-height:1.45;opacity:0;transition:opacity .8s;position:relative;overflow:hidden}
+  /* Type does not scale with window width. The column is up to 80 characters; narrowing the window eats the
+     margins first (--gutter each side), then the column drops below 80 columns (lines wrap, as a terminal
+     would) -- the glyphs never shrink. Height still sets the size so the picture + terminal fit vertically. */
+  :root{--tfs:clamp(13px, 2.1vh, 22px); --gutter:16px}
   .hand #term{display:flex;flex-direction:column} .hand.termon #term{opacity:1}
   #tout{flex:0 1 auto;min-height:0;overflow-y:auto;white-space:pre-wrap;word-break:break-all;scrollbar-width:thin;scrollbar-color:#1a2244 transparent}
   #tout::-webkit-scrollbar{width:6px} #tout::-webkit-scrollbar-thumb{background:#1a2244}
   #tline{white-space:pre-wrap;word-break:break-all}
   .p{color:#6983ff} .o{color:#eaf0ff} .e{color:#ff6b8a} .d{color:#3a4a8a}
   #tcur2{display:inline-block;width:.6em;height:1.1em;background:#9fb0ff;vertical-align:-.15em;animation-name:blink;animation-duration:1.06s;animation-timing-function:steps(1,end);animation-iteration-count:infinite}
-  #tin{position:absolute;opacity:0;left:0;top:0;width:1px;height:1px;border:0;padding:0}
+  #tin{position:absolute;opacity:0;left:0;top:0;width:1px;height:1px;border:0;padding:0;font-size:16px}  /* >=16px: iOS does not zoom the page on focus */
   #termscan{position:absolute;inset:0;pointer-events:none;background:repeating-linear-gradient(0deg,rgba(0,0,0,.16) 0 1px,transparent 1px 3px)}
   #termbar{position:fixed;right:18px;bottom:14px;font-size:11px;letter-spacing:.25em;color:#3a4a8a;display:none;gap:14px}
   .hand #termbar{display:flex} #termbar button{background:none;border:1px solid #1a2244;color:#3a4a8a;font:inherit;letter-spacing:inherit;padding:6px 12px;cursor:pointer}
@@ -1171,7 +1177,7 @@ function tprint(html) { const d = document.createElement('div'); d.innerHTML = h
 const tprompt = document.getElementById('tprompt');
 function promptText() { return tv ? tv.session.prompt() : '127.0.0.1:6379> '; }
 function printReply(text) {                                                  // valkey-cli TTY text -> coloured lines
-  for (const l of text.replace(/\n$/, '').split('\n')) {
+  for (const l of text.replace(/\r/g, '').replace(/\n$/, '').split('\n')) {
     const cls = l.startsWith('(error)') ? 'e' : (l.startsWith('(nil)') || l.startsWith('(empty')) ? 'd' : 'o';
     tprint(`<span class="${cls}">${esc(l)}</span>`);
   }
@@ -1206,11 +1212,16 @@ async function initHints() {
   if (docs && docs.elements) helpEntries = hintsMod.buildHelpEntries(docs);
 }
 function setLine(v) { tin.value = v; tbuf.textContent = v; refreshHint(); }
-const COLS = 80;                                                            // the text column is exactly 80 characters wide
-function fitColumn() {                                                      // measure 80 glyphs in #term's own font; #frame shares the width
-  const probe = document.createElement('span'); probe.textContent = '0'.repeat(COLS); probe.style.cssText = 'position:absolute;visibility:hidden;white-space:pre';
-  term.appendChild(probe); const w = probe.getBoundingClientRect().width; probe.remove();
-  if (w > 0) document.documentElement.style.setProperty('--colw', w + 'px');
+let COLS = 80;                                                              // up to 80 characters; fewer when the window is narrower than that
+function fitColumn() {                                                      // glyph width from #term's own font; #frame shares the column width
+  const probe = document.createElement('span'); probe.textContent = '0'.repeat(100); probe.style.cssText = 'position:absolute;visibility:hidden;white-space:pre';
+  term.appendChild(probe); const ch = probe.getBoundingClientRect().width / 100; probe.remove();
+  if (!(ch > 0)) return;
+  const gutter = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--gutter')) || 16;
+  COLS = Math.max(20, Math.min(80, Math.floor((window.innerWidth - 2 * gutter) / ch)));
+  document.documentElement.style.setProperty('--colw', (COLS * ch) + 'px');
+  refreshHint();
+  requestAnimationFrame(() => { tout.scrollTop = tout.scrollHeight; });   // a resize must not leave the last lines scrolled out of view
 }
 window.addEventListener('resize', fitColumn);
 function refreshHint() {
@@ -1235,6 +1246,7 @@ tin.addEventListener('keydown', e => {
   else if (e.key === 'c' && e.ctrlKey) { setLine(''); }
 });
 term.addEventListener('mousedown', e => { if (e.target !== tin) { e.preventDefault(); tin.focus(); } });
+term.addEventListener('touchend', () => { tin.focus(); }, {passive: true});     // phones: tap the terminal to bring up the keyboard
 
 /* ============================ CONTROL: the three-phase machine ============================ */
 // LOAD (download, open-ended)  -> tape-loader screen + vamp A, layers per download quartile

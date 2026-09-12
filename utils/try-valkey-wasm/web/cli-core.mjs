@@ -150,6 +150,44 @@ export function formatReplyTTY(r, prefix = '') {
 
 // ------------------------------------------------------------ CLI session --
 
+/* valkey-cli prints a fixed set of commands "raw" (cliFormatReplyRaw) even in
+ * TTY mode, because their replies are human-readable text already: INFO,
+ * LOLWUT, CLIENT LIST/INFO, MEMORY DOCTOR/MALLOC-STATS, CLUSTER NODES/INFO,
+ * LATENCY GRAPH/DOCTOR, a few DEBUG subcommands. Port of the test in
+ * cliSendCommand(). */
+export function isRawOutputCommand(argv) {
+  const c = (argv[0] || '').toLowerCase(), s = (argv[1] || '').toLowerCase(), n = argv.length;
+  return c === 'info' || c === 'lolwut' ||
+    (n >= 2 && c === 'debug' && (s === 'htstats' || s === 'htstats-key' || s === 'client-eviction')) ||
+    (n >= 2 && c === 'memory' && (s === 'malloc-stats' || s === 'doctor')) ||
+    (n === 2 && c === 'cluster' && (s === 'nodes' || s === 'info')) ||
+    (n >= 2 && c === 'client' && (s === 'list' || s === 'info')) ||
+    (n === 3 && c === 'latency' && s === 'graph') ||
+    (n === 2 && c === 'latency' && s === 'doctor') ||
+    (n >= 2 && c === 'proxy' && s === 'info');
+}
+
+/* Port of cliFormatReplyRaw() plus the "\n" cliFormatReply appends in verbatim mode. */
+export function formatReplyRaw(r, top = true) {
+  let out;
+  switch (r.type) {
+    case 'nil': out = ''; break;
+    case 'error': out = r.str + '\n'; break;
+    case 'status': case 'string': case 'verb': out = r.str; break;
+    case 'bool': out = r.int ? '(true)' : '(false)'; break;
+    case 'integer': out = String(r.int); break;
+    case 'double': case 'bignum': out = r.str; break;
+    case 'array': case 'set': case 'push': out = r.elements.map((e) => formatReplyRaw(e, false)).join('\n'); break;
+    case 'map': { // key\nvalue pairs, as cliFormatReplyRaw does for maps
+      const parts = [];
+      for (let i = 0; i < r.elements.length; i += 2) parts.push(formatReplyRaw(r.elements[i], false), formatReplyRaw(r.elements[i + 1], false));
+      out = parts.join('\n'); break;
+    }
+    default: throw new Error(`Unknown reply type: ${r.type}`);
+  }
+  return top ? out + '\n' : out;
+}
+
 export function isPubsubPush(r, resp3) {
   if (!r || r.type !== (resp3 ? 'push' : 'array') || r.elements.length < 3) return false;
   const first = r.elements[0];

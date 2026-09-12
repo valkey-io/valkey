@@ -1,7 +1,7 @@
 // tryvalkey.mjs -- glue between the wasm server (tv_* exports) and cli-core.
 // Works in browsers and Node; the only environment-specific thing is how the
 // module factory is imported by the caller.
-import { parseRESP, formatReplyTTY, CliSession } from './cli-core.mjs';
+import { parseRESP, formatReplyTTY, formatReplyRaw, isRawOutputCommand, CliSession } from './cli-core.mjs';
 
 const DEFAULT_ARGS = [
   '--port', '0', '--save', '', '--appendonly', 'no', '--maxclients', '64',
@@ -73,7 +73,7 @@ export function attachTryValkey(Module, { hostLabel } = {}) {
       } else if (pendingReplies.length) {
         const { argv, resolve, raw } = pendingReplies.shift();
         session.observe(argv, reply);
-        resolve(raw ? reply : formatReplyTTY(reply));
+        resolve(raw ? reply : (isRawOutputCommand(argv) && reply.type !== 'error' ? formatReplyRaw(reply) : formatReplyTTY(reply)));
       } else {
         unsolicited.push(formatReplyTTY(reply));
       }

@@ -36,13 +36,15 @@ const conns = new Map(); // id -> socket
 function tick() {
   Module._tv_tick();
   for (const [id, sock] of conns) {
-    const pending = Module._tv_pending(id);
-    if (pending < 0) { conns.delete(id); sock.destroy(); continue; } // server closed it
     while (Module._tv_pending(id) > 0) {
       const n = Module._tv_read(id, bufP, CAP);
       if (n <= 0) break;
       sock.write(Buffer.from(Module.HEAPU8.buffer, Number(buf), n)); // copies
     }
+    // A server-closed connection reports -1 once drained. Detach it NOW: the
+    // id is free for reuse by the next tv_connect, which may happen before
+    // the next tick, and we must not destroy that newcomer's socket.
+    if (Module._tv_pending(id) < 0) { conns.delete(id); sock.end(); }
   }
 }
 
@@ -52,7 +54,7 @@ const server = net.createServer((sock) => {
   if (id < 0) { sock.destroy(); return; }
   conns.set(id, sock);
   sock.on('data', (d) => {
-    if (!conns.has(id)) return;
+    if (conns.get(id) !== sock) return;
     for (let off = 0; off < d.length; off += CAP) {
       const chunk = d.subarray(off, Math.min(off + CAP, d.length));
       Module.HEAPU8.set(chunk, Number(buf));
@@ -60,7 +62,9 @@ const server = net.createServer((sock) => {
     }
     tick();
   });
-  const bye = () => { if (conns.delete(id)) { Module._tv_close(id); tick(); } };
+  // Only act if this socket still owns the id: after a server-side close the
+  // id may already have been handed to a newer connection (fd-reuse race).
+  const bye = () => { if (conns.get(id) === sock) { conns.delete(id); Module._tv_close(id); tick(); } };
   sock.on('close', bye);
   sock.on('error', bye);
 });

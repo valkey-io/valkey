@@ -354,6 +354,27 @@ char *copy_string_from_lua_stack(lua_State *lua) {
 static void luaReplyToServerReply(ValkeyModuleCtx *ctx, int resp_version, lua_State *lua) {
     int t = lua_type(lua, -1);
 
+#ifdef __EMSCRIPTEN__
+    /* The engine's call stack limit is reached long before Lua's
+     * LUAI_MAXCSTACK (8000 slots) lets lua_checkstack() fail, and a wasm
+     * stack overflow is an uncatchable trap. Bound the recursion instead. */
+    static int depth = 0;
+    enum { LUA_REPLY_MAX_DEPTH = 256 };
+    if (depth >= LUA_REPLY_MAX_DEPTH) {
+        ValkeyModule_ReplyWithError(ctx, "ERR reached lua stack limit");
+        lua_pop(lua, 1);
+        return;
+    }
+    depth++;
+#define LUA_REPLY_RETURN() \
+    do {                   \
+        depth--;           \
+        return;            \
+    } while (0)
+#else
+#define LUA_REPLY_RETURN() return
+#endif
+
     if (!lua_checkstack(lua, 4)) {
         /* Increase the Lua stack if needed to make sure there is enough room
          * to push 4 elements to the stack. On failure, return error.
@@ -361,7 +382,7 @@ static void luaReplyToServerReply(ValkeyModuleCtx *ctx, int resp_version, lua_St
          * require push 4 elements to the Lua stack.*/
         ValkeyModule_ReplyWithError(ctx, "ERR reached lua stack limit");
         lua_pop(lua, 1); /* pop the element from the stack */
-        return;
+        LUA_REPLY_RETURN();
     }
 
     switch (t) {
@@ -400,7 +421,7 @@ static void luaReplyToServerReply(ValkeyModuleCtx *ctx, int resp_version, lua_St
             ValkeyModule_ReplyWithCustomErrorFormat(ctx, !err_info.ignore_err_stats_update, "%s", err_info.msg);
             luaErrorInformationDiscard(&err_info);
             lua_pop(lua, 1); /* pop the result table */
-            return;
+            LUA_REPLY_RETURN();
         }
         lua_pop(lua, 1); /* Discard field name pushed before. */
 
@@ -414,7 +435,7 @@ static void luaReplyToServerReply(ValkeyModuleCtx *ctx, int resp_version, lua_St
             ValkeyModule_ReplyWithSimpleString(ctx, ok);
             ValkeyModule_Free(ok);
             lua_pop(lua, 2);
-            return;
+            LUA_REPLY_RETURN();
         }
         lua_pop(lua, 1); /* Discard field name pushed before. */
 
@@ -425,7 +446,7 @@ static void luaReplyToServerReply(ValkeyModuleCtx *ctx, int resp_version, lua_St
         if (t == LUA_TNUMBER) {
             ValkeyModule_ReplyWithDouble(ctx, lua_tonumber(lua, -1));
             lua_pop(lua, 2);
-            return;
+            LUA_REPLY_RETURN();
         }
         lua_pop(lua, 1); /* Discard field name pushed before. */
 
@@ -439,7 +460,7 @@ static void luaReplyToServerReply(ValkeyModuleCtx *ctx, int resp_version, lua_St
             ValkeyModule_ReplyWithBigNumber(ctx, big_num, strlen(big_num));
             ValkeyModule_Free(big_num);
             lua_pop(lua, 2);
-            return;
+            LUA_REPLY_RETURN();
         }
         lua_pop(lua, 1); /* Discard field name pushed before. */
 
@@ -461,7 +482,7 @@ static void luaReplyToServerReply(ValkeyModuleCtx *ctx, int resp_version, lua_St
                     char *str = (char *)lua_tolstring(lua, -1, &len);
                     ValkeyModule_ReplyWithVerbatimStringType(ctx, str, len, format);
                     lua_pop(lua, 4);
-                    return;
+                    LUA_REPLY_RETURN();
                 }
                 lua_pop(lua, 1);
             }
@@ -488,7 +509,7 @@ static void luaReplyToServerReply(ValkeyModuleCtx *ctx, int resp_version, lua_St
             }
             ValkeyModule_ReplySetMapLength(ctx, maplen);
             lua_pop(lua, 2);
-            return;
+            LUA_REPLY_RETURN();
         }
         lua_pop(lua, 1); /* Discard field name pushed before. */
 
@@ -511,7 +532,7 @@ static void luaReplyToServerReply(ValkeyModuleCtx *ctx, int resp_version, lua_St
             }
             ValkeyModule_ReplySetSetLength(ctx, setlen);
             lua_pop(lua, 2);
-            return;
+            LUA_REPLY_RETURN();
         }
         lua_pop(lua, 1); /* Discard field name pushed before. */
 
@@ -535,6 +556,8 @@ static void luaReplyToServerReply(ValkeyModuleCtx *ctx, int resp_version, lua_St
     default: ValkeyModule_ReplyWithNull(ctx);
     }
     lua_pop(lua, 1);
+    LUA_REPLY_RETURN();
+#undef LUA_REPLY_RETURN
 }
 
 /* ---------------------------------------------------------------------------

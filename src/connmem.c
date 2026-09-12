@@ -31,7 +31,8 @@ typedef struct memConnection {
     int id;     /* index into memConns[], handed to the host */
     sds inbox;  /* bytes written by the host, not yet read by the server */
     sds outbox; /* bytes written by the server, not yet read by the host */
-    int host_closed; /* host called tv_close(): next read returns EOF */
+    int host_closed;   /* host called tv_close(): next read returns EOF */
+    int server_closed; /* server closed it; struct lingers until the host drains the outbox */
 } memConnection;
 
 static ConnectionType CT_Mem;
@@ -89,10 +90,15 @@ static void connMemShutdown(connection *conn) {
     memConnFromConn(conn)->host_closed = 1;
 }
 
+static void memConnFree(memConnection *mc) {
+    if (mc->id >= 0 && memConns[mc->id] == mc) memConns[mc->id] = NULL;
+    sdsfree(mc->inbox);
+    sdsfree(mc->outbox);
+    zfree(mc);
+}
+
 static void connMemClose(connection *conn) {
     memConnection *mc = memConnFromConn(conn);
-    if (mc->id >= 0 && memConns[mc->id] == mc) memConns[mc->id] = NULL;
-    mc->id = -1;
 
     /* If called from within a handler, schedule the close but keep the
      * connection until the handler returns (same contract as socket.c). */
@@ -100,9 +106,13 @@ static void connMemClose(connection *conn) {
         conn->flags |= CONN_FLAG_CLOSE_SCHEDULED;
         return;
     }
-    sdsfree(mc->inbox);
-    sdsfree(mc->outbox);
-    zfree(mc);
+    conn->state = CONN_STATE_CLOSED;
+    mc->server_closed = 1;
+    /* Like a TCP FIN after the final write: bytes the server queued right
+     * before closing (e.g. "-ERR Protocol error") must still reach the host.
+     * Keep the struct around until tv_read()/tv_pending() drain it. */
+    if (sdslen(mc->outbox) > 0 && mc->id >= 0) return;
+    memConnFree(mc);
 }
 
 static int connMemAccept(connection *conn, ConnectionCallbackFunc accept_handler) {
@@ -306,7 +316,7 @@ EMSCRIPTEN_KEEPALIVE int tv_write(int id, const uint8_t *buf, int len) {
     /* Emulate level-triggered readiness: keep calling the handler while it
      * makes progress. A handler that declines to read (blocked client,
      * paused client) leaves the bytes queued for a later tick. */
-    while (memConns[id] == mc && mc->c.read_handler && sdslen(mc->inbox) > 0) {
+    while (memConns[id] == mc && mc->c.state == CONN_STATE_CONNECTED && mc->c.read_handler && sdslen(mc->inbox) > 0) {
         size_t before = sdslen(mc->inbox);
         if (!callHandler(&mc->c, mc->c.read_handler)) break; /* closed */
         if (memConns[id] != mc || sdslen(mc->inbox) >= before) break;
@@ -331,7 +341,12 @@ EMSCRIPTEN_KEEPALIVE void tv_tick(void) {
 /* Bytes waiting in connection 'id's outbox (-1 if the connection is gone). */
 EMSCRIPTEN_KEEPALIVE int tv_pending(int id) {
     memConnection *mc = memConnById(id);
-    return mc ? (int)sdslen(mc->outbox) : -1;
+    if (!mc) return -1;
+    if (mc->server_closed && sdslen(mc->outbox) == 0) {
+        memConnFree(mc);
+        return -1;
+    }
+    return (int)sdslen(mc->outbox);
 }
 
 /* Copy up to 'cap' outbox bytes into buf. Returns the count, -1 if gone. */
@@ -342,6 +357,7 @@ EMSCRIPTEN_KEEPALIVE int tv_read(int id, uint8_t *buf, int cap) {
     if ((int)n > cap) n = cap;
     memcpy(buf, mc->outbox, n);
     sdsrange(mc->outbox, n, -1);
+    if (mc->server_closed && sdslen(mc->outbox) == 0) memConnFree(mc);
     return (int)n;
 }
 
@@ -349,6 +365,10 @@ EMSCRIPTEN_KEEPALIVE int tv_read(int id, uint8_t *buf, int cap) {
 EMSCRIPTEN_KEEPALIVE void tv_close(int id) {
     memConnection *mc = memConnById(id);
     if (!mc) return;
+    if (mc->server_closed) {
+        memConnFree(mc);
+        return;
+    }
     mc->host_closed = 1;
     if (mc->c.read_handler) callHandler(&mc->c, mc->c.read_handler);
 }

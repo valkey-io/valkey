@@ -367,7 +367,16 @@ static int connSocketIsLocal(connection *conn) {
 }
 
 static int connSocketListen(connListener *listener) {
+#ifdef __EMSCRIPTEN__
+    /* No TCP listening in the in-process build: CONFIG SET port/bind should
+     * fail cleanly ("Unable to listen on this port") instead of reaching the
+     * host's socket emulation. */
+    UNUSED(listener);
+    errno = EOPNOTSUPP;
+    return C_ERR;
+#else
     return listenToPort(listener);
+#endif
 }
 
 static void connSocketCloseListener(connListener *listener) {

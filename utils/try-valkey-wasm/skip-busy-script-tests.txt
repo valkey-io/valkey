@@ -3,3 +3,10 @@
 /[Tt]imedout
 /infinite
 /[Ll]ong[ -]running
+/[Rr]eplicat
+/[Pp]ropagat
+/repl_stream
+/IPv6
+/IP filter
+/NOT-IP filter
+/script timeout

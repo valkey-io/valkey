@@ -38,8 +38,32 @@ FetchContent_Declare(
 
 FetchContent_MakeAvailable(googletest)
 
-# Build Valkey sources as a static library for the test (C code compiled with C compiler)
-add_library(valkeylib-gtest STATIC ${VALKEY_SERVER_SRCS})
+if (APPLE)
+    # The macOS linker has no '--wrap' option, so the symbols are renamed in the
+    # object files instead (see the symbol wrapping section at the end of this
+    # file). This needs the LLVM tools, which Homebrew does not add to PATH. The
+    # standard Homebrew prefixes for both Apple Silicon (/opt/homebrew) and Intel
+    # (/usr/local) are passed as PATHS, so they are searched last and a tool that
+    # the developer put on PATH wins.
+    set(LLVM_TOOLS_PATHS /opt/homebrew/opt/llvm/bin /usr/local/opt/llvm/bin)
+    find_program(LLVM_NM NAMES llvm-nm PATHS ${LLVM_TOOLS_PATHS})
+    find_program(LLVM_OBJCOPY NAMES llvm-objcopy PATHS ${LLVM_TOOLS_PATHS})
+    find_program(LLVM_LLC NAMES llc PATHS ${LLVM_TOOLS_PATHS})
+    if (NOT LLVM_NM OR NOT LLVM_OBJCOPY)
+        message(FATAL_ERROR "llvm-nm and llvm-objcopy are required to build the unit tests. "
+                            "Install them via: brew install llvm")
+    endif ()
+
+    # The static libraries holding the objects with the renamed symbols
+    set(WRAPPED_DIR "${CMAKE_CURRENT_BINARY_DIR}/wrapped")
+    set(WRAPPED_VALKEY_LIB "${WRAPPED_DIR}/libwrapped-valkeylib.a")
+    set(WRAPPED_TESTS_LIB "${WRAPPED_DIR}/libwrapped-tests.a")
+    # An object library, because the objects are post processed before linking
+    add_library(valkeylib-gtest OBJECT ${VALKEY_SERVER_SRCS})
+else ()
+    add_library(valkeylib-gtest STATIC ${VALKEY_SERVER_SRCS})
+endif ()
+
 add_dependencies(valkeylib-gtest release_header)
 target_compile_options(valkeylib-gtest PRIVATE -Og -g -fno-lto)
 target_compile_definitions(valkeylib-gtest PRIVATE "${COMPILE_DEFINITIONS}")
@@ -63,9 +87,28 @@ add_custom_target(generate_wrappers DEPENDS ${GENERATED_WRAPPERS_DIR}/generated_
 # Collect C++ test source files (excluding generated ones for now)
 file(GLOB GTEST_SRCS "${CMAKE_CURRENT_LIST_DIR}/*.cpp")
 list(REMOVE_ITEM GTEST_SRCS "${GENERATED_WRAPPERS_DIR}/generated_wrappers.cpp")
+# A Makefile build writes its own copy of generated_wrappers.cpp into the source
+# directory. Compiling that copy as well would define the '__wrap_' functions twice.
+list(REMOVE_ITEM GTEST_SRCS "${CMAKE_CURRENT_LIST_DIR}/generated_wrappers.cpp")
+
+# The same Makefile build also writes generated_wrappers.hpp there. The test files
+# use '#include "generated_wrappers.hpp"', which is looked up in the directory of
+# the including file first, so that copy shadows the generated header and no
+# include path can override it. Stop with a clear message instead of compiling
+# the test files against an out of date header.
+if (EXISTS "${CMAKE_CURRENT_LIST_DIR}/generated_wrappers.hpp")
+    message(FATAL_ERROR "${CMAKE_CURRENT_LIST_DIR}/generated_wrappers.hpp is left over from a Makefile "
+                        "build and would shadow the generated header. Remove it with: make -C src/unit clean")
+endif ()
 
 # Create GoogleTest executable (C++ code compiled with C++ compiler)
-add_executable(valkey-unit-gtests ${GTEST_SRCS} ${GENERATED_WRAPPERS_DIR}/generated_wrappers.cpp)
+if (APPLE)
+    # The test sources are built separately, so that their objects can be post
+    # processed (see the symbol wrapping section at the end of this file)
+    add_executable(valkey-unit-gtests ${GENERATED_WRAPPERS_DIR}/generated_wrappers.cpp)
+else ()
+    add_executable(valkey-unit-gtests ${GTEST_SRCS} ${GENERATED_WRAPPERS_DIR}/generated_wrappers.cpp)
+endif ()
 
 # Make sure generated files are created before building
 add_dependencies(valkey-unit-gtests generate_wrappers)
@@ -137,23 +180,142 @@ if (IS_FREEBSD)
 endif ()
 
 # Link with GoogleTest using target names
-target_link_libraries(
-    valkey-unit-gtests
-    PRIVATE
-    valkeylib-gtest
-    fpconv
-    lz4
-    lualib
-    hdr_histogram
-    valkey::valkey
-    GTest::gtest_main
-    GTest::gmock
-    pthread
-    ${VALKEY_SERVER_LDFLAGS})
+if (APPLE)
+    # The wrapped copy of the server objects is linked instead of the
+    # valkeylib-gtest target itself
+    target_link_libraries(
+        valkey-unit-gtests
+        PRIVATE
+        "${WRAPPED_VALKEY_LIB}"
+        fpconv
+        lz4
+        lualib
+        hdr_histogram
+        valkey::valkey
+        GTest::gtest_main
+        GTest::gmock
+        pthread
+        ${VALKEY_SERVER_LDFLAGS})
+else ()
+    target_link_libraries(
+        valkey-unit-gtests
+        PRIVATE
+        valkeylib-gtest
+        fpconv
+        lz4
+        lualib
+        hdr_histogram
+        valkey::valkey
+        GTest::gtest_main
+        GTest::gmock
+        pthread
+        ${VALKEY_SERVER_LDFLAGS})
+endif ()
 
 if (USE_TLS)
     # Add required libraries needed for TLS
     target_link_libraries(valkey-unit-gtests PRIVATE OpenSSL::SSL valkey::valkey_tls)
+endif ()
+
+if (APPLE)
+    # Symbol wrapping for macOS.
+    #
+    # The macOS linker has no '--wrap' option, so wrap-objects.py renames the
+    # symbols in the object files instead: '___real_<name>' in the object that
+    # defines the function, '___wrap_<name>' in every object that calls it.
+    # This is what the Makefile build does as well.
+    #
+    # generated_wrappers.cpp is left out, because it defines the '__wrap_'
+    # functions and calls the '__real_' ones.
+    add_library(valkey-unit-gtests-objs OBJECT ${GTEST_SRCS})
+    add_dependencies(valkey-unit-gtests-objs generate_wrappers)
+
+    set_target_properties(valkey-unit-gtests-objs PROPERTIES
+        CXX_STANDARD 17
+        CXX_STANDARD_REQUIRED ON
+    )
+    target_compile_definitions(valkey-unit-gtests-objs PRIVATE "${COMPILE_DEFINITIONS}")
+    target_compile_options(valkey-unit-gtests-objs PRIVATE
+        -Og
+        -g
+        -Wno-deprecated-declarations
+        -Wno-write-strings
+    )
+    target_include_directories(valkey-unit-gtests-objs PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+        ${CMAKE_SOURCE_DIR}/deps
+        ${CMAKE_CURRENT_LIST_DIR}
+        ${GENERATED_WRAPPERS_DIR}
+    )
+    # Nothing is linked here, but the test sources need the same headers
+    # (GoogleTest, OpenSSL, ...) as the executable
+    target_link_libraries(valkey-unit-gtests-objs PRIVATE
+        fpconv
+        lz4
+        lualib
+        hdr_histogram
+        valkey::valkey
+        GTest::gtest_main
+        GTest::gmock)
+    if (USE_TLS)
+        target_link_libraries(valkey-unit-gtests-objs PRIVATE OpenSSL::SSL valkey::valkey_tls)
+    endif ()
+    if (USE_JEMALLOC)
+        target_link_libraries(valkey-unit-gtests-objs PRIVATE jemalloc)
+    endif ()
+
+    # The wrapped objects are collected into two static libraries:
+    #   * the server objects, linked as a normal library
+    #   * the test objects, force loaded so that all gtest cases are registered
+    set(WRAP_OBJECTS_SCRIPT "${CMAKE_CURRENT_LIST_DIR}/wrap-objects.py")
+    set(WRAP_OBJECTS_ARGS
+        --nm "${LLVM_NM}"
+        --objcopy "${LLVM_OBJCOPY}"
+        --ar "${CMAKE_AR}"
+        --wrappers "${CMAKE_CURRENT_LIST_DIR}/wrappers.h")
+    if (LLVM_LLC)
+        list(APPEND WRAP_OBJECTS_ARGS --llc "${LLVM_LLC}")
+    endif ()
+    set(WRAP_OBJECTS_DEPS
+        "${WRAP_OBJECTS_SCRIPT}"
+        "${CMAKE_CURRENT_LIST_DIR}/wrapper_util.py"
+        "${CMAKE_CURRENT_LIST_DIR}/wrappers.h")
+
+    add_custom_command(
+        OUTPUT "${WRAPPED_VALKEY_LIB}"
+        COMMAND python3 "${WRAP_OBJECTS_SCRIPT}" ${WRAP_OBJECTS_ARGS}
+                --output-dir "${WRAPPED_DIR}/valkeylib"
+                --archive "${WRAPPED_VALKEY_LIB}"
+                $<TARGET_OBJECTS:valkeylib-gtest>
+        DEPENDS valkeylib-gtest $<TARGET_OBJECTS:valkeylib-gtest> ${WRAP_OBJECTS_DEPS}
+        COMMAND_EXPAND_LISTS
+        COMMENT "Wrapping symbols in the Valkey server objects"
+    )
+
+    add_custom_command(
+        OUTPUT "${WRAPPED_TESTS_LIB}"
+        COMMAND python3 "${WRAP_OBJECTS_SCRIPT}" ${WRAP_OBJECTS_ARGS}
+                --output-dir "${WRAPPED_DIR}/tests"
+                --archive "${WRAPPED_TESTS_LIB}"
+                $<TARGET_OBJECTS:valkey-unit-gtests-objs>
+        DEPENDS valkey-unit-gtests-objs $<TARGET_OBJECTS:valkey-unit-gtests-objs> ${WRAP_OBJECTS_DEPS}
+        COMMAND_EXPAND_LISTS
+        COMMENT "Wrapping symbols in the unit test objects"
+    )
+
+    add_custom_target(wrap_objects DEPENDS "${WRAPPED_VALKEY_LIB}" "${WRAPPED_TESTS_LIB}")
+    add_dependencies(valkey-unit-gtests wrap_objects)
+    target_link_options(valkey-unit-gtests PRIVATE "-Wl,-force_load,${WRAPPED_TESTS_LIB}")
+
+    # The test archive is passed as a linker flag, so both archives are listed
+    # explicitly to relink the test binary when they change
+    set_property(TARGET valkey-unit-gtests APPEND PROPERTY LINK_DEPENDS
+                 "${WRAPPED_VALKEY_LIB};${WRAPPED_TESTS_LIB}")
+
+    # 'make clean' does not know about the wrapped object files. The property
+    # needs CMake 3.15 or newer, older versions just ignore it and leave the
+    # files behind.
+    set_property(DIRECTORY APPEND PROPERTY ADDITIONAL_CLEAN_FILES "${WRAPPED_DIR}")
 endif ()
 
 # Enable testing and discover tests

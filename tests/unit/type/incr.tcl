@@ -188,6 +188,13 @@ start_server {tags {"incr"}} {
         r increx foo byint 5
     } {10 5}
 
+    test {INCREX BYFLOAT increments by the given amount} {
+        r del foo
+        assert_equal {0.1 0.1} [r increx foo byfloat 0.1]
+        assert_equal {0.3 0.2} [r increx foo byfloat 0.2]
+        assert_equal {0.3} [r get foo]
+    }
+    
     test {INCREX NX only sets when key does not exist} {
         r del foo
         assert_equal {1 1} [r increx foo nx]

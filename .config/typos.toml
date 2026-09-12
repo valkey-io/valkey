@@ -45,6 +45,11 @@ extend-ignore-re = [
     "DUMPed",
 ]
 
+[type.sh]
+extend-ignore-re = [
+    "passin", # gen-test-certs.sh
+]
+
 [type.c.extend-identifiers]
 advices = "advices"
 clen = "clen"

@@ -32,6 +32,7 @@
 
 #include "fmacros.h"
 #include "config.h"
+#include "compression.h"
 #include "solarisfixes.h"
 #include "rio.h"
 #include "commands.h"
@@ -465,9 +466,11 @@ typedef enum {
 #define REPLICA_CAPA_PSYNC2 (1 << 1)            /* Supports PSYNC2 protocol. */
 #define REPLICA_CAPA_DUAL_CHANNEL (1 << 2)      /* Supports dual channel replication sync */
 #define REPLICA_CAPA_SKIP_RDB_CHECKSUM (1 << 3) /* Supports skipping RDB checksum for sync requests. */
+#define REPLICA_CAPA_LZ4 (1 << 4)               /* Can decode LZ4 streaming-compressed payloads. */
 
 /* Replica capability strings */
 #define REPLICA_CAPA_SKIP_RDB_CHECKSUM_STR "skip-rdb-checksum" /* Supports skipping RDB checksum for sync requests. */
+#define REPLICA_CAPA_LZ4_STR "lz4"                             /* Can decode LZ4 streaming-compressed payloads. */
 
 /* Replica requirements */
 #define REPLICA_REQ_NONE 0
@@ -1670,9 +1673,10 @@ typedef struct rdbSaveInfo {
     int repl_id_is_set;                   /* True if repl_id field is set. */
     char repl_id[CONFIG_RUN_ID_SIZE + 1]; /* Replication ID. */
     long long repl_offset;                /* Replication offset. */
+    bool loaded_compressed;               /* True if rdbLoad() read a streaming-compressed file. */
 } rdbSaveInfo;
 
-#define RDB_SAVE_INFO_INIT {-1, 0, "0000000000000000000000000000000000000000", -1}
+#define RDB_SAVE_INFO_INIT {-1, 0, "0000000000000000000000000000000000000000", -1, false}
 
 struct malloc_stats {
     size_t zmalloc_used;
@@ -1707,6 +1711,9 @@ typedef struct serverTLSContextConfig {
     char *client_cert_file;     /* Certificate to use as a client; if none, use cert_file */
     char *client_key_file;      /* Private key filename for client_cert_file */
     char *client_key_file_pass; /* Optional password for client_key_file */
+    char *alt_cert_file;        /* Secondary server side cert file name */
+    char *alt_key_file;         /* Private key filename for alt_cert_file */
+    char *alt_key_file_pass;    /* Optional password for alt_key_file */
     int client_auth_user;       /* Field to be used for automatic TLS authentication based on client TLS certificate */
     char *dh_params_file;
     char *ca_cert_file;
@@ -2118,6 +2125,7 @@ struct valkeyServer {
     rdbWriteTarget rdb_write_target;      /* Type of save by active child. */
     rdbBgsaveType cur_bgsave_type;        /* Current bgsave type. */
     rdbBgsaveType lastbgsave_type;        /* Last completed bgsave type. */
+    compressionAlgo rdb_child_sync_algo;  /* Streaming compression used by the active replication disk child. */
     int lastbgsave_status;                /* C_OK or C_ERR */
     int stop_writes_on_bgsave_err;        /* Don't allow writes if can't BGSAVE */
     int rdb_pipe_read;                    /* RDB pipe used to transfer the rdb data */
@@ -2427,9 +2435,11 @@ struct valkeyServer {
     int tls_auth_clients;
     serverTLSContextConfig tls_ctx_config;
     long long tls_server_cert_expire_time;
+    long long tls_server_alt_cert_expire_time;
     long long tls_client_cert_expire_time;
     long long tls_ca_cert_expire_time;
     sds tls_server_cert_serial;
+    sds tls_server_alt_cert_serial;
     sds tls_client_cert_serial;
     sds tls_ca_cert_serial;
     serverUnixContextConfig unix_ctx_config;
@@ -3363,6 +3373,9 @@ const char *getFailoverStateString(void);
 sds getReplicaPortString(void);
 int sendCurrentOffsetToReplica(client *replica);
 int replicaRdbVersion(client *replica);
+/* Full-sync compression policy: select the codec and gate replica eligibility on capability. */
+compressionAlgo replSelectFullSyncCompression(int replica_capa);
+bool replicaCanUseFullSyncFormat(int replica_capa, compressionAlgo compression_algo);
 void addRdbReplicaToPsyncWait(client *replica);
 void initClientReplicationData(client *c);
 void freeClientReplicationData(client *c);

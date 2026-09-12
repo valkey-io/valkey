@@ -12,7 +12,7 @@
  * register function is a no-op so connTypeInitialize() stays uniform.
  *
  * Copyright (c) Valkey Contributors
- * SPDX-License-Identifier: BSD 3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause
  */
 
 #include "server.h"
@@ -28,9 +28,9 @@
 
 typedef struct memConnection {
     connection c;
-    int id;     /* index into memConns[], handed to the host */
-    sds inbox;  /* bytes written by the host, not yet read by the server */
-    sds outbox; /* bytes written by the server, not yet read by the host */
+    int id;            /* index into memConns[], handed to the host */
+    sds inbox;         /* bytes written by the host, not yet read by the server */
+    sds outbox;        /* bytes written by the server, not yet read by the host */
     int host_closed;   /* host called tv_close(): next read returns EOF */
     int server_closed; /* server closed it; struct lingers until the host drains the outbox */
 } memConnection;

@@ -335,13 +335,18 @@
 
 <div id="ui" class="mono">
   <div>
-    <div style="font-size:11px;opacity:.7;margin-bottom:14px">VALKEY · SIGN-ON → TRY-VALKEY <span id="engine-tag">(wasm)</span></div>
-    <button id="start">PRESS START</button>
-    <button id="skipstart" style="border-color:#3a4a8a;color:#9fb0ff">SKIP INTRO</button>
+    <div style="font-size:11px;opacity:.7;margin-bottom:14px">VALKEY · TRY IT <span id="engine-tag">(wasm)</span></div>
+    <button id="start">START</button>
+    <button id="startsound" style="border-color:#3a4a8a;color:#9fb0ff">START WITH SOUND</button>
+    <div style="font-size:11px;opacity:.45;margin-top:18px">more options: open the console and type <b>tryvalkey.help()</b></div>
+    <!-- The option controls stay in the DOM (the machine reads them) but are hidden. Defaults: silent, real
+         timing, FM synth, no tape, CONNECT. They are set from URL params (?sound= ?mode= ?tape=1 ?dl= ?boot=) or
+         the console API (tryvalkey.options({...})), see the bottom of the script. -->
+    <div id="uiopts" style="display:none">
     <div class="row" style="align-items:center">
       <span style="font-size:11px;opacity:.6">PACING (min)</span>
-      <label><input type="radio" name="preset" value="0,0"><span>REAL 0s/0s</span></label>
-      <label><input type="radio" name="preset" value="4,3" checked><span>TYPICAL 4s/3s</span></label>
+      <label><input type="radio" name="preset" value="0,0" checked><span>REAL 0s/0s</span></label>
+      <label><input type="radio" name="preset" value="4,3"><span>TYPICAL 4s/3s</span></label>
       <label><input type="radio" name="preset" value="20,6"><span>SLOW 20s/6s</span></label>
       <label style="border-color:transparent"><span style="font-size:11px;opacity:.7">DL <input type="number" id="dl" min="0" step="0.5" style="width:3.6em;background:#0b1024;color:#9fb0ff;border:1px solid #3a4a8a;font:inherit"> s · BOOT <input type="number" id="boot" min="0" step="0.5" style="width:3.6em;background:#0b1024;color:#9fb0ff;border:1px solid #3a4a8a;font:inherit"> s</span></label>
     </div>
@@ -354,12 +359,13 @@
       <label><input type="radio" name="mode" value="connect" checked><span>CONNECT</span></label>
     </div>
     <div class="row">
-      <label><input type="radio" name="score" value="fm"><span>FM SYNTH</span></label>
+      <label><input type="radio" name="score" value="fm" checked><span>FM SYNTH</span></label>
       <label><input type="radio" name="score" value="sid"><span>SID CHIP</span></label>
       <label><input type="radio" name="score" value="turbine"><span>TURBINE</span></label>
-      <label><input type="radio" name="score" value="launch" checked><span>LAUNCH</span></label>
+      <label><input type="radio" name="score" value="launch"><span>LAUNCH</span></label>
       <label><input type="radio" name="score" value="mute"><span>SILENT</span></label>
     </div>
+    </div><!-- /uiopts -->
   </div>
 </div>
 <button id="replay" class="mono">REPLAY</button>
@@ -1363,8 +1369,8 @@ function skipIntro() {                                   // skip = get to the te
 const q = new URLSearchParams(location.search);
 const dlIn = document.getElementById('dl'), bootIn = document.getElementById('boot');
 function loaderParams() { return [parseFloat(q.get('dl') ?? dlIn.value), parseFloat(q.get('boot') ?? bootIn.value)]; }
-document.getElementById('start').onclick = () => { ui.classList.add('hidden'); startAll(); };
-document.getElementById('skipstart').onclick = () => { ui.classList.add('hidden'); startAll(); skipReq = true; };
+document.getElementById('start').onclick = () => { ui.classList.add('hidden'); document.getElementById('sound').checked = false; startAll(); };
+document.getElementById('startsound').onclick = () => { ui.classList.add('hidden'); document.getElementById('sound').checked = true; startAll(); };
 document.getElementById('skip').onclick = skipIntro;
 document.addEventListener('keydown', e => { if (e.key === 'Escape') skipIntro(); });
 document.getElementById('replay').onclick = () => location.reload();
@@ -1373,14 +1379,42 @@ document.getElementById('replay2').onclick = () => location.reload();
 document.querySelectorAll('input[name=preset]').forEach(r => r.addEventListener('change', () => { const [d, b] = r.value.split(','); dlIn.value = d; bootIn.value = b; }));
 { const [d, b] = document.querySelector('input[name=preset]:checked').value.split(','); dlIn.value = q.get('dl') ?? d; bootIn.value = q.get('boot') ?? b; }
 
-// DEBUG: ?run=1[&dl=&boot=&mode=&sound=fm|sid|turbine|launch] starts everything without a gesture (audio stays suspended;
-//        scheduling exceptions surface in the console). ?t=SECONDS freezes the sign-on at that stage time, with
-//        &unlock_at= (default 3.18) for the post clock, &load=PCT for the tape-loader screen, &vamp=boot for the hold corner,
-//        &hand=1 for the post-handoff static state.
+/* ---- options: URL params drive the hidden controls; the console API writes URL params and reloads ---- */
+const OPTS = {
+  sound: {desc: 'score: fm | sid | turbine | launch | mute', values: ['fm', 'sid', 'turbine', 'launch', 'mute']},
+  mode:  {desc: 'animation: connect | keyturn', values: ['connect', 'keyturn']},
+  tape:  {desc: 'VHS tape hiss + wow: 1 | 0'},
+  dl:    {desc: 'minimum download seconds (paces the tape loader; 0 = real)'},
+  boot:  {desc: 'minimum boot seconds (holds before the server starts; 0 = real)'},
+  mock:  {desc: '1 = the v2 mock loader + mock CLI instead of the real server'},
+  run:   {desc: '1 = start without pressing a button (audio stays suspended)'},
+};
+if (q.get('sound') && OPTS.sound.values.includes(q.get('sound'))) document.querySelector(`input[name=score][value=${q.get('sound')}]`).checked = true;
+if (q.get('mode') && OPTS.mode.values.includes(q.get('mode'))) document.querySelector(`input[name=mode][value=${q.get('mode')}]`).checked = true;
+if (q.get('tape') === '1') document.getElementById('tape').checked = true;
+window.tryvalkey = {
+  help() {
+    const lines = ['try-valkey options (set with tryvalkey.options({...}) or as URL params):'];
+    for (const [k, o] of Object.entries(OPTS)) lines.push(`  ${k.padEnd(6)} ${o.desc}${q.get(k) !== null ? `   [now: ${q.get(k)}]` : ''}`);
+    lines.push('  e.g. tryvalkey.options({sound: "sid", dl: 4, boot: 3})   tryvalkey.reset()');
+    console.log(lines.join('\n'));
+  },
+  options(o = {}) {                                    // persist in the URL and reload, so the intro replays with them
+    const u = new URL(location.href);
+    for (const [k, v] of Object.entries(o)) { if (!(k in OPTS)) { console.warn(`unknown option ${k}`); continue; } if (v === null || v === undefined || v === false) u.searchParams.delete(k); else u.searchParams.set(k, v === true ? '1' : String(v)); }
+    location.href = u.toString();
+  },
+  reset() { location.href = location.pathname; },
+  get server() { return tv; },                         // the CLI engine: tryvalkey.server.exec('PING').then(console.log)
+};
+console.info('%ctry-valkey%c  a real valkey-server compiled to WebAssembly is running in this tab.  Type tryvalkey.help() for options.', 'color:#6983ff;font-weight:bold', '');
+
+// DEBUG: ?run=1 starts everything without a gesture (audio stays suspended; scheduling exceptions surface in the
+//        console). ?t=SECONDS freezes the sign-on at that stage time, with &unlock_at= (default 3.18) for the post
+//        clock, &load=PCT for the tape-loader screen, &vamp=boot for the hold corner, &hand=1 for the post-handoff state.
 if (q.get('run')) {
   ui.classList.add('hidden');
-  if (q.get('sound')) { document.getElementById('sound').checked = true; document.querySelector(`input[name=score][value=${q.get('sound')}]`).checked = true; }
-  if (q.get('mode')) document.querySelector(`input[name=mode][value=${q.get('mode')}]`).checked = true;
+  if (q.get('sound') && q.get('sound') !== 'mute') document.getElementById('sound').checked = true;
   try { startAll(); console.log('started', MODE, sound ? document.querySelector('input[name=score]:checked').value : 'silent'); } catch (e) { console.error('START ERROR', e); }
 }
 if (q.get('t') !== null) {

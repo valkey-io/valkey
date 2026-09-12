@@ -201,16 +201,20 @@ function buildCorpus() {
 const corpus = buildCorpus();
 const w = await startWasm();
 const n = await startNative();
-let ok = 0, bad = 0;
+// Replies that legitimately differ between the two transports/processes:
+// CLIENT INFO carries the address (mem:0 vs 127.0.0.1:port); LOLWUT is randomized.
+const EXPECTED_DIFF = new Set(['CLIENT INFO', 'LOLWUT VERSION 5 3 3']);
+let ok = 0, bad = 0, expected = 0;
 const show = (b) => JSON.stringify(b.toString('latin1'));
 for (const args of corpus) {
   const [a, b] = await Promise.all([w.call(args), n.call(args)]);
   if (Buffer.compare(a, b) === 0) ok++;
+  else if (EXPECTED_DIFF.has(args.join(' ').toUpperCase())) expected++;
   else {
     bad++;
     console.log(`MISMATCH: ${args.map((x) => JSON.stringify(x)).join(' ')}\n  wasm:   ${show(a)}\n  native: ${show(b)}`);
   }
 }
 n.close();
-console.log(`\n${ok} identical, ${bad} mismatched, ${corpus.length} total`);
+console.log(`\n${ok} identical, ${expected} expected differences (CLIENT INFO address, LOLWUT), ${bad} unexpected mismatches, ${corpus.length} total`);
 process.exit(bad ? 1 : 0);

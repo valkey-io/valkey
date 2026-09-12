@@ -37,8 +37,8 @@ const LINES = [
   'quit',
 ];
 
-// lines whose output legitimately differs between native and wasm
-const SKIP_LINES = new Set(['client list', 'lolwut version 5 3 3', 'info keyspace']);
+// lines whose output legitimately differs between native and wasm (address, randomness, the try page's own config)
+const SKIP_LINES = new Set(['client list', 'lolwut version 5 3 3', 'info keyspace', 'config get maxmemory-policy']);
 
 async function runNative() {
   const port = 20000 + Math.floor(Math.random() * 20000);

@@ -359,7 +359,9 @@ static void luaReplyToServerReply(ValkeyModuleCtx *ctx, int resp_version, lua_St
      * LUAI_MAXCSTACK (8000 slots) lets lua_checkstack() fail, and a wasm
      * stack overflow is an uncatchable trap. Bound the recursion instead. */
     static int depth = 0;
-    enum { LUA_REPLY_MAX_DEPTH = 256 };
+    enum {
+        LUA_REPLY_MAX_DEPTH = 256
+    };
     if (depth >= LUA_REPLY_MAX_DEPTH) {
         ValkeyModule_ReplyWithError(ctx, "ERR reached lua stack limit");
         lua_pop(lua, 1);

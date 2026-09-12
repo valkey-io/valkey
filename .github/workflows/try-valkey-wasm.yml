@@ -1,0 +1,130 @@
+# try-valkey: build valkey-server as a 64-bit WebAssembly module, prove it against a native build
+# at the same commit, and publish the browser bundle.
+#
+# Runs on pushes to the try-valkey branch (only when relevant files change) and on demand.
+#   - build:   emsdk (pinned) -> utils/try-valkey-wasm/build.sh -> bundle artifact
+#   - verify:  native build at the same SHA, then diff-harness (607 commands, byte-for-byte)
+#              and cli-diff (the JS CLI layer vs real valkey-cli --no-raw)
+#   - pages:   workflow_dispatch with publish=true -> deploy the bundle to GitHub Pages
+#   - release: a try-valkey-v* tag -> GitHub Release with the bundle tarball attached
+#
+# The whole port is documented in utils/try-valkey-wasm/README.md and docs/one-pager.md.
+name: try-valkey (wasm)
+
+on:
+  push:
+    branches: ['exp/try-valkey-wasm']
+    tags: ['try-valkey-v*']
+    paths:
+      - 'src/**'
+      - 'deps/**'
+      - 'utils/try-valkey-wasm/**'
+      - '.github/workflows/try-valkey-wasm.yml'
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: 'Deploy the bundle to GitHub Pages'
+        type: boolean
+        default: false
+
+env:
+  EMSDK_VERSION: 6.0.9
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build wasm + verify against native
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: ${{ env.EMSDK_VERSION }}
+          actions-cache-folder: emsdk-cache
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Build valkey-server.wasm (LP64, lowered to wasm32; release)
+        run: |
+          emcc --version | head -1
+          DEBUG="" utils/try-valkey-wasm/build.sh
+          ls -la src/valkey-server.wasm src/valkey-server.mjs
+          echo "wasm bytes: $(stat -c %s src/valkey-server.wasm)"
+
+      - name: Boot smoke (Node)
+        run: TV_QUIET=1 node utils/try-valkey-wasm/roundtrip.mjs | tail -5
+
+      - name: Stage the bundle
+        run: |
+          mkdir -p bundle/try-valkey
+          cp utils/try-valkey-wasm/web/*.html utils/try-valkey-wasm/web/*.mjs src/valkey-server.mjs src/valkey-server.wasm bundle/try-valkey/
+          touch bundle/try-valkey/.nojekyll
+          printf 'try-valkey bundle built from %s\n' "$GITHUB_SHA" > bundle/try-valkey/BUILD.txt
+          tar -czf try-valkey-wasm.tar.gz -C bundle try-valkey
+          sha256sum try-valkey-wasm.tar.gz
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: try-valkey-wasm
+          path: try-valkey-wasm.tar.gz
+          retention-days: 30
+
+      # The wasm tree has emcc objects in it; the native build gets its own checkout.
+      - uses: actions/checkout@v4
+        with:
+          path: native
+
+      - name: Build native valkey-server at the same SHA
+        working-directory: native
+        run: make -j"$(nproc)" BUILD_TLS=no valkey-server valkey-cli
+
+      - name: Differential -- replies byte-for-byte vs native (607 commands)
+        run: node utils/try-valkey-wasm/diff-harness.mjs "$GITHUB_WORKSPACE/native/src/valkey-server"
+
+      - name: Differential -- JS CLI layer vs real valkey-cli --no-raw
+        run: node utils/try-valkey-wasm/cli-diff.mjs "$GITHUB_WORKSPACE/native/src"
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: bundle/try-valkey
+
+  pages:
+    name: Publish to GitHub Pages
+    if: github.event_name == 'workflow_dispatch' && inputs.publish
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/configure-pages@v5   # switches the site source to GitHub Actions on first use
+      - id: deploy
+        uses: actions/deploy-pages@v4
+
+  release:
+    name: GitHub Release
+    if: startsWith(github.ref, 'refs/tags/try-valkey-v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: try-valkey-wasm
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: try-valkey-wasm.tar.gz
+          body: |
+            try-valkey: a real `valkey-server` compiled to 64-bit WebAssembly, with the browser terminal.
+            Unpack and serve the `try-valkey/` directory over HTTP; open `tryme.html` or `index.html`.
+            How it was built: `utils/try-valkey-wasm/README.md` on the source branch.

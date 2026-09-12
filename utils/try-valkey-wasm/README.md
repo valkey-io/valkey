@@ -128,6 +128,23 @@ back to what was typed), and the grey inline hint shows the argument syntax stil
 to be typed, with already-typed tokens and option groups removed, exactly as
 valkey-cli does (`hints-check.mjs` prints a table of cases).
 
+## CI (`.github/workflows/try-valkey-wasm.yml`)
+
+On every push to the branch that touches `src/`, `deps/` or `utils/try-valkey-wasm/`: install emsdk (pinned
+6.0.9), run `build.sh`, boot-smoke under Node, build **native at the same SHA**, then run `diff-harness.mjs`
+(607 commands byte-for-byte; only CLIENT INFO's address and LOLWUT may differ) and `cli-diff.mjs` (the JS CLI
+layer against real `valkey-cli --no-raw`). The bundle is uploaded as a workflow artifact (30 days).
+`workflow_dispatch` with `publish=true` deploys it to GitHub Pages; a `try-valkey-v*` tag attaches the tarball
+to a GitHub Release. This is the reproducible record of the port for anyone who wants to redo it.
+
+## Page options
+
+The start panel has two buttons (silent / with sound). Everything else is behind URL params or the browser
+console: `tryvalkey.help()` lists them, `tryvalkey.options({sound: 'sid', dl: 4, boot: 3})` sets them and
+replays, `tryvalkey.reset()` clears. Options: `sound` (fm | sid | turbine | launch | mute), `mode` (connect |
+keyturn), `tape=1`, `dl`/`boot` (minimum seconds, to demo the vamps), `mock=1`, `run=1`. Defaults: silent,
+real timing, FM synth, no tape, CONNECT. `tryvalkey.server` is the CLI engine (`.exec('PING')`).
+
 ## Hosting
 
 Live at [valkey-rainfall.github.io/valkey/tryme.html](https://valkey-rainfall.github.io/valkey/tryme.html)

@@ -20,6 +20,8 @@ nd = "nd"
 Ba = "Ba"
 Addd = "Addd"
 forkless = "forkless"
+Shepard = "Shepard" # Shepard tone, the auditory illusion (try-valkey sign-on score)
+ths = "ths" # "16ths": sixteenth notes (try-valkey sign-on score)
 
 [default.extend-identifiers]
 dbe = "dbe"

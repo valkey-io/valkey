@@ -1119,7 +1119,7 @@ start_server {tags {"repl external:skip"} overrides {save ""}} {
 # per-key save delay keeps the compressed diskless transfer in flight while one
 # replica is killed. The primary's RDB child must complete without crashing and
 # the surviving replica must converge.
-start_server {tags {"repl external:skip"} overrides {save "" rdbcompression lz4}} {
+start_server {tags {"repl external:skip"} overrides {save "" rdbcompression lz4 repl-compression lz4}} {
     set master [srv 0 client]
     $master config set repl-diskless-sync yes
     $master config set repl-diskless-sync-delay 5
@@ -1134,9 +1134,9 @@ start_server {tags {"repl external:skip"} overrides {save "" rdbcompression lz4}
     $master config set rdb-key-save-delay 1000
 
     test "diskless replica drops during compressed rdb pipe" {
-        start_server {overrides {save "" rdbcompression lz4 repl-diskless-load swapdb}} {
+        start_server {overrides {save "" rdbcompression lz4 repl-compression lz4 repl-diskless-load swapdb}} {
             set survivor [srv 0 client]
-            start_server {overrides {save "" rdbcompression lz4}} {
+            start_server {overrides {save "" rdbcompression lz4 repl-compression lz4}} {
                 set loglines [count_log_lines -2]
                 $survivor replicaof $master_host $master_port
                 [srv 0 client] replicaof $master_host $master_port

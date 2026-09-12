@@ -43,15 +43,17 @@ export function attachTryValkey(Module, { hostLabel } = {}) {
   const pendingReplies = []; // {argv, resolve}
 
   function pullOutput() {
+    let got = 0;
     for (;;) {
       const n = Module._tv_read(id, bufP, CAP);
       if (n <= 0) break;
       const chunk = heap().slice(Number(buf), Number(buf) + n);
       const merged = new Uint8Array(inbox.length + chunk.length);
       merged.set(inbox); merged.set(chunk, inbox.length);
-      inbox = merged;
+      inbox = merged; got += n;
       if (n < CAP) break;
     }
+    return got;
   }
 
   /* Drain complete replies. Command replies resolve their promise; anything
@@ -69,9 +71,9 @@ export function attachTryValkey(Module, { hostLabel } = {}) {
         session.observe([], reply);
         unsolicited.push(formatReplyTTY(reply));
       } else if (pendingReplies.length) {
-        const { argv, resolve } = pendingReplies.shift();
+        const { argv, resolve, raw } = pendingReplies.shift();
         session.observe(argv, reply);
-        resolve(formatReplyTTY(reply));
+        resolve(raw ? reply : formatReplyTTY(reply));
       } else {
         unsolicited.push(formatReplyTTY(reply));
       }
@@ -79,10 +81,15 @@ export function attachTryValkey(Module, { hostLabel } = {}) {
     return unsolicited;
   }
 
-  /* One event-loop turn: run timers, flush replies, collect output. */
+  /* One event-loop turn: run timers, flush replies, collect output. The
+   * server writes at most ~64 KB to a client per pass (NET_MAX_WRITES_PER_EVENT),
+   * so while a reply we are waiting for is still streaming out, keep turning. */
   function tick() {
-    Module._tv_tick();
-    pullOutput();
+    for (let i = 0; i < 1024; i++) {
+      Module._tv_tick();
+      const got = pullOutput();
+      if (!pendingReplies.length || got === 0) break;
+    }
     return drain();
   }
 
@@ -102,12 +109,15 @@ export function attachTryValkey(Module, { hostLabel } = {}) {
   }
 
   /* Send one command line; resolves with the formatted reply text. */
-  function exec(line) {
+  function exec(line) { return send(line, false); }
+  /* Same, but resolves with the parsed reply tree (see cli-core parseRESP). */
+  function execRaw(line) { return send(line, true); }
+  function send(line, raw) {
     const enc = encode(line);
-    if (enc === null) return Promise.resolve('');
-    if (enc.error) return Promise.resolve(enc.error);
+    if (enc === null) return Promise.resolve(raw ? null : '');
+    if (enc.error) return Promise.resolve(raw ? { type: 'error', str: enc.error.trim() } : enc.error);
     return new Promise((resolve) => {
-      pendingReplies.push({ argv: enc.argv, resolve });
+      pendingReplies.push({ argv: enc.argv, resolve, raw });
       heap().set(enc.bytes, Number(buf));
       Module._tv_write(id, bufP, enc.bytes.length);
       const out = tick();
@@ -115,5 +125,8 @@ export function attachTryValkey(Module, { hostLabel } = {}) {
     });
   }
 
-  return { Module, session, exec, tick, encode, connId: id };
+  /* argv for a (possibly partial) line via the server's own splitter; null if unbalanced quotes. */
+  function splitArgs(line) { const enc = encode(line); return enc === null ? [] : enc.error ? null : enc.argv; }
+
+  return { Module, session, exec, execRaw, tick, encode, splitArgs, connId: id };
 }

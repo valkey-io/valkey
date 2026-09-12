@@ -1186,13 +1186,32 @@ async function run(line) {
   try { const f = CMDS[name]; if (!f) throw R.err(`ERR unknown command '${a[0]}', with args beginning with: ${a.slice(1).map(x => `'${x}'`).join(' ')}`); tprint(fmt(f(a.slice(1)))); }
   catch (e) { tprint(e && e.t ? fmt(e) : `<span class="e">(error) ERR ${esc(e.message || e)}</span>`); }
 }
-tin.addEventListener('input', () => { tbuf.textContent = tin.value; });
+// valkey-cli's hints and Tab completion (cli-hints.mjs), fed by the real server's COMMAND DOCS after the handoff.
+let helpEntries = [], hintsMod = null, tabState = null;
+const thint = document.createElement('span'); thint.id = 'thint'; thint.className = 'd'; document.getElementById('tline').appendChild(thint);
+async function initHints() {
+  if (!tv) return;
+  hintsMod = await import('./cli-hints.mjs');
+  const docs = await tv.execRaw('command docs');
+  if (docs && docs.elements) helpEntries = hintsMod.buildHelpEntries(docs);
+}
+function setLine(v) { tin.value = v; tbuf.textContent = v; refreshHint(); }
+function refreshHint() { thint.textContent = helpEntries.length && !termBusy ? hintsMod.hintFor(helpEntries, tin.value, l => tv.splitArgs(l)) : ''; }
+function tabComplete() {
+  if (!helpEntries.length) return;
+  if (!tabState) { const list = hintsMod.completionsFor(helpEntries, tin.value); if (!list.length) return; tabState = {original: tin.value, list, idx: 0}; }
+  else tabState.idx = (tabState.idx + 1) % (tabState.list.length + 1);              // ... then back to what was typed, like linenoise
+  setLine(tabState.idx < tabState.list.length ? tabState.list[tabState.idx] : tabState.original);
+}
+tin.addEventListener('input', () => { tabState = null; setLine(tin.value); });
 tin.addEventListener('keydown', e => {
-  if (e.key === 'Enter') { if (termBusy) return; const v = tin.value; tin.value = ''; tbuf.textContent = ''; if (v.trim()) { hist.push(v); hi = hist.length; } run(v); }
-  else if (e.key === 'ArrowUp') { if (hi > 0) { hi--; tin.value = tbuf.textContent = hist[hi]; } e.preventDefault(); }
-  else if (e.key === 'ArrowDown') { hi = Math.min(hist.length, hi + 1); tin.value = tbuf.textContent = hist[hi] || ''; e.preventDefault(); }
+  if (e.key === 'Tab') { e.preventDefault(); tabComplete(); return; }
+  tabState = null;
+  if (e.key === 'Enter') { if (termBusy) return; const v = tin.value; setLine(''); thint.textContent = ''; if (v.trim()) { hist.push(v); hi = hist.length; } run(v); }
+  else if (e.key === 'ArrowUp') { if (hi > 0) { hi--; setLine(hist[hi]); } e.preventDefault(); }
+  else if (e.key === 'ArrowDown') { hi = Math.min(hist.length, hi + 1); setLine(hist[hi] || ''); e.preventDefault(); }
   else if (e.key === 'l' && e.ctrlKey) { tout.innerHTML = ''; e.preventDefault(); }
-  else if (e.key === 'c' && e.ctrlKey) { tin.value = tbuf.textContent = ''; }
+  else if (e.key === 'c' && e.ctrlKey) { setLine(''); }
 });
 term.addEventListener('mousedown', e => { if (e.target !== tin) { e.preventDefault(); tin.focus(); } });
 
@@ -1294,6 +1313,7 @@ function handoff() {
     if (tv) {
       for (const l of loader.lines.filter(l => /Server initialized|Ready to accept connections/.test(l))) tprint(`<span class="d">${esc(l.replace(/^\d+:M \d+ \w+ \d+ [\d:.]+ /, '1:M '))}</span>`);
       tprompt.textContent = promptText();
+      initHints();
       const pushes = outs => { if (outs.length) { outs.forEach(printReply); } };
       tv.exec.onUnsolicited = pushes;
       setInterval(() => pushes(tv.tick()), 50);                              // serverCron, expiry, blocking timeouts, pub/sub

@@ -120,11 +120,20 @@ node utils/try-valkey-wasm/tcp-bridge.mjs --port 7379 &
 Demo page: `cp web/* out/web/ && cp ../../src/valkey-server.{mjs,wasm} out/web/ &&
 python3 -m http.server 8765 --bind 127.0.0.1 --directory out/web`.
 
+## CLI features
+
+`web/cli-hints.mjs` is a port of valkey-cli's linenoise callbacks, fed by the real
+server's `COMMAND DOCS`: Tab cycles through matching commands/subcommands (then
+back to what was typed), and the grey inline hint shows the argument syntax still
+to be typed, with already-typed tokens and option groups removed, exactly as
+valkey-cli does (`hints-check.mjs` prints a table of cases).
+
 ## Open items before this is a product
 
 1. ~~JS `valkey-cli` shim~~ done (`web/`), verified against real `valkey-cli`.
-2. Safari smoke of the lowered build (verified in Chromium only so far); decide
-   whether to also ship native wasm64 behind feature detection.
+2. ~~Safari smoke~~ done: the lowered build runs in Safari (Rain, Sep 12 2026; the
+   sign-on graphics are a bit off there, the server and terminal are fine).
+   Decide whether to also ship native wasm64 behind feature detection.
 3. `FD_SETSIZE` guard: fail loudly if `maxclients` is too large for select.
 4. Per-release CI: `emmake make` on tag -> publish `.wasm/.mjs` to the site repo.
 5. Upstream: the three findings above plus `bioExecuteJob` refactor stand on

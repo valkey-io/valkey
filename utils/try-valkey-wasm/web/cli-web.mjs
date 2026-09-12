@@ -3,6 +3,7 @@
 // splitting happens in the wasm module (sdssplitargs) and reply formatting in
 // cli-core.mjs, so what you see is what valkey-cli would print.
 import { startTryValkey } from './tryvalkey.mjs';
+import { buildHelpEntries, hintFor, completionsFor } from './cli-hints.mjs';
 
 const HOST_LABEL = 'try-valkey';
 const TICK_MS = 50; // drives serverCron/expiry/blocking timeouts + pub/sub pushes
@@ -33,17 +34,45 @@ export async function mountTryValkey({ container, createModule, Terminal, FitAdd
   let line = '', cursor = 0, history = [], histIdx = -1, savedLine = '', busy = false;
   const promptStr = () => tv.session.prompt();
 
+  // valkey-cli's linenoise hints/completion, fed by the real server's COMMAND DOCS
+  let helpEntries = [];
+  tv.execRaw('command docs').then((docs) => { if (docs && docs.elements) helpEntries = buildHelpEntries(docs); }).catch(() => {});
+  const currentHint = () => {
+    if (!helpEntries.length || cursor !== line.length) return '';
+    const hint = hintFor(helpEntries, line, tv.splitArgs);
+    // linenoise clips the hint so the row never wraps (a wrapped row cannot be redrawn with \r + clear-line)
+    const room = term.cols - promptStr().length - line.length - 1;
+    return room > 0 ? hint.slice(0, room) : '';
+  };
+  let tabState = null; // {original, list, idx} while cycling through completions
+
   function redraw() {
-    // \r, clear line, prompt + line, then move cursor back
-    term.write('\r\x1b[2K' + promptStr() + line);
-    const back = line.length - cursor;
+    // \r, clear line, prompt + line, grey hint, then move cursor back over hint+tail
+    const hint = currentHint();
+    term.write('\r\x1b[2K' + promptStr() + line + (hint ? `\x1b[90m${hint}\x1b[0m` : ''));
+    const back = line.length - cursor + hint.length;
     if (back > 0) term.write(`\x1b[${back}D`);
   }
   function showPrompt() { term.write('\r\n' + promptStr()); }
 
+  function tab() {
+    if (!helpEntries.length) return;
+    if (!tabState) {
+      const list = completionsFor(helpEntries, line);
+      if (!list.length) return;
+      tabState = { original: line, list, idx: 0 };
+    } else {
+      tabState.idx = (tabState.idx + 1) % (tabState.list.length + 1); // ... then back to what was typed, like linenoise
+    }
+    line = tabState.idx < tabState.list.length ? tabState.list[tabState.idx] : tabState.original;
+    cursor = line.length;
+    redraw();
+  }
+
   async function submit() {
     const l = line;
-    term.write('\r\n');
+    tabState = null;
+    term.write('\r\x1b[2K' + promptStr() + l + '\r\n'); // re-echo without the hint
     line = ''; cursor = 0; histIdx = -1;
     if (l.trim()) {
       if (history[history.length - 1] !== l) history.push(l);
@@ -67,6 +96,8 @@ export async function mountTryValkey({ container, createModule, Terminal, FitAdd
     if (busy) return;
     for (let i = 0; i < data.length; i++) {
       const ch = data[i];
+      if (ch === '\t') { tab(); continue; }
+      tabState = null; // any other key accepts the current text and ends the cycle
       if (ch === '\r' || ch === '\n') { if (ch === '\n' && data[i - 1] === '\r') continue; submit(); if (busy) return; continue; }
       if (ch === '\x7f' || ch === '\b') { if (cursor > 0) { line = line.slice(0, cursor - 1) + line.slice(cursor); cursor--; redraw(); } continue; }
       if (ch === '\x03') { term.write('^C'); line = ''; cursor = 0; showPrompt(); continue; }        // Ctrl-C

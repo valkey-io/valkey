@@ -7551,7 +7551,7 @@ sds clusterGenNodeDescription(client *c, clusterNode *node, int tls_primary) {
 
     /* Latency from the POV of this node, config epoch, link status */
     ci = sdscatfmt(ci, " %I %I %U %s", (long long)node->ping_sent, (long long)node->pong_received, nodeEpoch(node),
-                   (node->link || node->flags & CLUSTER_NODE_MYSELF) ? "connected" : "disconnected");
+                   (node->link || node->flags & CLUSTER_NODE_MYSELF) && !nodeFailed(node) ? "connected" : "disconnected");
 
     /* Slots served by this instance. If we already have slots info,
      * append it directly, otherwise, generate slots only if it has. */

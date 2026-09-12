@@ -118,7 +118,8 @@
   #stage{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;background:#000}
   #frame{position:relative;width:min(100vw,180vh);flex:none;transition:width 1.4s cubic-bezier(.4,0,.2,1)}
   .hand #stage{justify-content:flex-start}
-  .hand #frame{width:min(52vw,80vh)}
+  .hand #frame{width:var(--colw, min(52vw,80vh))}
+  #bgcover{transition:opacity 1.4s cubic-bezier(.4,0,.2,1)} .hand #bgcover{opacity:1}   /* the picture's navy gradient goes to the page's black as it shrinks */
   svg#art{width:100%;height:auto;display:block}
   /* CONNECT mode: the client streams live on a canvas over the SVG, screen-blended so the additive glow reads as light */
   #streams{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;mix-blend-mode:screen}
@@ -129,7 +130,7 @@
   #vamp.hold{top:29%} #vamp.on{opacity:1} #vamp .dim{opacity:.55} #vamp b{color:#eaf0ff;font-weight:normal}
 
   /* the terminal */
-  #term{display:none;flex:1;width:min(52vw,80vh);min-height:0;box-sizing:border-box;padding:1.2vh 0 2vh;color:#9fb0ff;font-size:min(1.15vw,2.1vh);line-height:1.45;opacity:0;transition:opacity .8s;position:relative;overflow:hidden}
+  #term{display:none;flex:1;width:var(--colw, min(52vw,80vh));min-height:0;box-sizing:border-box;padding:1.2vh 0 2vh;color:#9fb0ff;font-size:min(1.15vw,2.1vh);line-height:1.45;opacity:0;transition:opacity .8s;position:relative;overflow:hidden}
   .hand #term{display:flex;flex-direction:column} .hand.termon #term{opacity:1}
   #tout{flex:0 1 auto;min-height:0;overflow-y:auto;white-space:pre-wrap;word-break:break-all;scrollbar-width:thin;scrollbar-color:#1a2244 transparent}
   #tout::-webkit-scrollbar{width:6px} #tout::-webkit-scrollbar-thumb{background:#1a2244}
@@ -255,6 +256,7 @@
 
   <rect width="900" height="500" fill="#000"/>
   <g id="bg" class="anim"><rect width="900" height="500" fill="url(#bgg)"/></g>
+  <rect id="bgcover" width="900" height="500" fill="#000" opacity="0"/>
   <circle id="glow" class="anim post" cx="450" cy="225" r="200" fill="#6983ff"/>
 
   <!-- boot milestone readout, top-left, terminal style. Status words are set when the real boot marker arrives. -->
@@ -1079,18 +1081,26 @@ async function startRealLoader(minDl, minBoot) {
     document.getElementById('engine-tag').textContent = '(mock: wasm unavailable)';
     return startLoader(Math.max(1, minDl), Math.max(1, minBoot));
   }
-  loader.marks[0] = true; loader.lines.push(`wasm: fetched ${bytes.length.toLocaleString()} bytes in ${Math.round(performance.now() - t0)} ms`);
+  // Milestones are spaced at least one boot beat apart. The server logs "Server initialized" and "Ready to
+  // accept connections" in the same synchronous call, and fetch->instantiate can be 20 ms apart on a fast
+  // link; without spacing, two status pops (and their two notes) would land on the same tick.
+  const MARK_GAP_MS = (T.boot[1] - T.boot[0]) * 1000;
+  let lastMarkAt = 0;
+  const markAt = k => {
+    const now = performance.now(), at = Math.max(now, lastMarkAt + MARK_GAP_MS); lastMarkAt = at;
+    setTimeout(() => { loader.marks[k] = true; if (k === 3) { loader.phase = 'ready'; loader.ready = true; } }, at - now);
+  };
+  markAt(0); loader.lines.push(`wasm: fetched ${bytes.length.toLocaleString()} bytes in ${Math.round(performance.now() - t0)} ms`);
   loader.phase = 'boot';
   const tb = performance.now();
   const [{default: createValkey}, engine] = await Promise.all([import('./valkey-server.mjs'), import('./tryvalkey.mjs')]);
   engineMod = engine;
   const onLine = l => {
     if (/^\d+:M /.test(l)) loader.lines.push(l);                             // log lines only; the ASCII banner is not for the corner
-    REAL_MARKERS.forEach((m, k) => { if (m && l.includes(m)) loader.marks[k] = true; });
-    if (loader.marks[3] && !loader.ready) { loader.phase = 'ready'; loader.ready = true; }
+    REAL_MARKERS.forEach((m, k) => { if (m && l.includes(m)) markAt(k); });
   };
   wasmModule = await createValkey({wasmBinary: bytes.buffer, print: onLine, printErr: onLine, noInitialRun: true});
-  loader.marks[1] = true; loader.lines.push(`wasm: instantiated in ${Math.round(performance.now() - tb)} ms`);
+  markAt(1); loader.lines.push(`wasm: instantiated in ${Math.round(performance.now() - tb)} ms`);
   const bootAt = tb + minBoot * 1000; if (performance.now() < bootAt) await sleep(bootAt - performance.now());
   engine.runMain(wasmModule, [...engine.DEFAULT_ARGS, '--loglevel', 'notice']);   // log lines stream into onLine synchronously here
   tv = engine.attachTryValkey(wasmModule, {hostLabel: 'try-valkey'});
@@ -1196,7 +1206,18 @@ async function initHints() {
   if (docs && docs.elements) helpEntries = hintsMod.buildHelpEntries(docs);
 }
 function setLine(v) { tin.value = v; tbuf.textContent = v; refreshHint(); }
-function refreshHint() { thint.textContent = helpEntries.length && !termBusy ? hintsMod.hintFor(helpEntries, tin.value, l => tv.splitArgs(l)) : ''; }
+const COLS = 80;                                                            // the text column is exactly 80 characters wide
+function fitColumn() {                                                      // measure 80 glyphs in #term's own font; #frame shares the width
+  const probe = document.createElement('span'); probe.textContent = '0'.repeat(COLS); probe.style.cssText = 'position:absolute;visibility:hidden;white-space:pre';
+  term.appendChild(probe); const w = probe.getBoundingClientRect().width; probe.remove();
+  if (w > 0) document.documentElement.style.setProperty('--colw', w + 'px');
+}
+window.addEventListener('resize', fitColumn);
+function refreshHint() {
+  if (!helpEntries.length || termBusy) { thint.textContent = ''; return; }
+  const room = COLS - promptText().length - tin.value.length - 1;             // clip so the row never wraps (as linenoise does)
+  thint.textContent = room > 0 ? hintsMod.hintFor(helpEntries, tin.value, l => tv.splitArgs(l)).slice(0, room) : '';
+}
 function tabComplete() {
   if (!helpEntries.length) return;
   if (!tabState) { const list = hintsMod.completionsFor(helpEntries, tin.value); if (!list.length) return; tabState = {original: tin.value, list, idx: 0}; }
@@ -1306,7 +1327,7 @@ function stopAudio(fadeSecs) {
 }
 function handoff() {
   if (handed) return; handed = true; phase = 'done'; HAND.at = stageT(); vampShow(false); netLastT = HAND.at;
-  document.body.classList.add('hand'); stopAudio(1.8);
+  document.body.classList.add('hand'); fitColumn(); stopAudio(1.8);
   // the picture shrinks (CSS transition on #frame width); the terminal fades in as it lands
   setTimeout(() => {
     document.body.classList.add('termon'); bootWall = performance.now();
@@ -1358,7 +1379,7 @@ if (q.get('t') !== null) {
     stage.classList.add('play'); UNLOCK.at = uAt;
     if (q.get('vamp') === 'boot') { loader.phase = 'boot'; loader.lines = BOOT_LINES.slice(0, 12); vamp.innerHTML = vampText(); vamp.classList.add('on', 'hold'); }
     document.querySelectorAll('#boot .st').forEach((el, i) => { if (seek >= T.boot[i] + T.status && (q.get('vamp') !== 'boot' || i < 2)) el.classList.add('on'); });
-    if (q.get('hand') === '1') { HAND.at = uAt + T.P.hand; document.body.classList.add('hand', 'termon'); tprint('<span class="d">1:M * Server initialized</span>'); tprint('<span class="d">1:M * Ready to accept connections tcp</span>'); tprint('&nbsp;'); }
+    if (q.get('hand') === '1') { HAND.at = uAt + T.P.hand; document.body.classList.add('hand', 'termon'); fitColumn(); tprint('<span class="d">1:M * Server initialized</span>'); tprint('<span class="d">1:M * Ready to accept connections tcp</span>'); tprint('&nbsp;'); }
     requestAnimationFrame(() => {
       preAnims().forEach(a => { a.pause(); a.currentTime = seek * 1000; });
       if (seek >= uAt) { stage.classList.add('unlock'); requestAnimationFrame(() => postAnims().forEach(a => { a.pause(); a.currentTime = (seek - uAt) * 1000; })); }

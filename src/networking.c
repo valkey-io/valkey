@@ -2179,8 +2179,6 @@ int freeClient(client *c) {
         return 0;
     }
 
-    replicaDestroyCompression(c);
-
     /* For connected clients, call the disconnection event of modules hooks. */
     if (c->conn) {
         moduleFireServerEvent(VALKEYMODULE_EVENT_CLIENT_CHANGE, VALKEYMODULE_SUBEVENT_CLIENT_CHANGE_DISCONNECTED, c);

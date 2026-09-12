@@ -191,22 +191,7 @@ static int replicaEnableCompressionIfNegotiated(client *replica) {
     return C_OK;
 }
 
-/* Release the primary-side compressor for a replica link. */
-void replicaDestroyCompression(client *replica) {
-    if (!replica->repl_data) return;
-
-    if (replica->repl_data->repl_compression) {
-        serverAssert(!clientHasPendingIO(replica));
-
-        replicaCompressionState *compression = replica->repl_data->repl_compression;
-        streamCompressorFree(&compression->compressor);
-        sdsfree(compression->out_buf);
-        zfree(compression);
-        replica->repl_data->repl_compression = NULL;
-    }
-}
-
-static void replDestroyStreamReader(void) {
+static void replFreeStreamReader(void) {
     if (server.repl_stream_reader) {
         streamPushReaderFree(server.repl_stream_reader);
         zfree(server.repl_stream_reader);
@@ -221,7 +206,7 @@ static void replDestroyStreamReader(void) {
  * is unambiguous: a plaintext replication stream is RESP, whose first byte is
  * never 'V'. */
 static void replResetStreamReader(void) {
-    replDestroyStreamReader();
+    replFreeStreamReader();
     server.repl_stream_reader = zmalloc(sizeof(*server.repl_stream_reader));
     streamPushReaderInit(server.repl_stream_reader, VCS_STREAM_REPL);
 }
@@ -262,7 +247,7 @@ ssize_t replDecodeToQueryBuf(client *primary, const void *wire_buf, size_t wire_
     primary->repl_data->read_reploff += (long long)produced;
 
     /* Plaintext stream confirmed: the reader is pure overhead from here on. */
-    if (reader->state == STREAM_PUSH_READER_PASSTHROUGH) replDestroyStreamReader();
+    if (reader->state == STREAM_PUSH_READER_PASSTHROUGH) replFreeStreamReader();
     return (ssize_t)produced;
 }
 
@@ -1558,6 +1543,13 @@ void initClientReplicationData(client *c) {
 
 void freeClientReplicationData(client *c) {
     if (!c->repl_data) return;
+    if (c->repl_data->repl_compression) {
+        serverAssert(!clientHasPendingIO(c));
+        replicaCompressionState *compression = c->repl_data->repl_compression;
+        streamCompressorFree(&compression->compressor);
+        sdsfree(compression->out_buf);
+        zfree(compression);
+    }
     freeReplicaReferencedReplBuffer(c);
     /* Primary/replica cleanup Case 1:
      * we lost the connection with a replica. */
@@ -4979,7 +4971,7 @@ void replicationUnsetPrimary(void) {
      * the replicas will be able to partially resync with us, so it will be
      * a very fast reconnection. */
     disconnectReplicas();
-    replDestroyStreamReader();
+    replFreeStreamReader();
     server.repl_state = REPL_STATE_NONE;
 
     /* We need to make sure the new primary will start the replication stream
@@ -5045,7 +5037,7 @@ void replicationHandlePrimaryDisconnection(void) {
     /* Tear down the replication stream reader so a later (possibly
      * uncompressed) primary stream isn't fed into stale frame state.
      * Idempotent when no reader exists. */
-    replDestroyStreamReader();
+    replFreeStreamReader();
 
     /* We lost connection with our primary, don't disconnect replicas yet,
      * maybe we'll be able to PSYNC with our primary later. We'll disconnect

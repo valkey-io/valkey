@@ -159,6 +159,8 @@ void streamReaderFree(streamReader *reader);
  * stream kind activates the codec; anything else switches to passthrough and
  * bytes are forwarded verbatim. Output is appended to a caller-provided sds. */
 
+/* OK and ERR intentionally match C_OK and C_ERR. The additional results
+ * distinguish a closed live frame from resumable output backpressure. */
 typedef enum {
     STREAM_PUSH_READER_OK = 0,          /* Input consumed; output (possibly 0 bytes) appended. */
     STREAM_PUSH_READER_ERR = -1,        /* Envelope or codec error. */

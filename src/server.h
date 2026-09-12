@@ -3411,7 +3411,6 @@ bool replicaCanUseFullSyncFormat(int replica_capa, compressionAlgo compression_a
 void addRdbReplicaToPsyncWait(client *replica);
 void initClientReplicationData(client *c);
 void freeClientReplicationData(client *c);
-void replicaDestroyCompression(client *replica);
 ssize_t replDecodeToQueryBuf(client *primary, const void *wire_buf, size_t wire_len, size_t output_budget);
 bool replStreamHasPendingDecode(void);
 void replicaReceiveRDBFromPrimaryToDisk(connection *conn, int is_dual_channel);

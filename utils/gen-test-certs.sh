@@ -6,9 +6,11 @@
 #   tests/tls/ca-{expired,notyet}.crt            Self signed invalid CA certificates.
 #   tests/tls/ca-expired/                        Directory containing expired CA certificate.
 #   tests/tls/ca-notyet/                         Directory containing not-yet-valid CA certificate.
+#   tests/tls/ca-empty/                          Empty directory for testing empty dir rejection.
 #   tests/tls/ca-multi.crt                       CA bundle with multiple certs.
 #   tests/tls/ca-dir/                            CA directory with hashed links.
-#   tests/tls/valkey.{crt,key}                   A certificate with no key usage/policy restrictions.
+#   tests/tls/valkey{,-pw}.{crt,key}             A certificate with no key usage/policy restrictions. With and without a passphrase.
+#   tests/tls/valkey-mldsa{,-pw}.{crt,key}       A PQC certificate with no key usage/policy restrictions. With and without a passphrase.
 #   tests/tls/client.{crt,key}                   A certificate restricted for SSL client usage.
 #   tests/tls/client-{expired,notyet}.crt        Invalid certificates restricted for SSL client usage.
 #   tests/tls/server.{crt,key}                   A certificate restricted for SSL server usage.
@@ -19,7 +21,8 @@
 generate_cert() {
     local name=$1
     local cn="$2"
-    local opts="$3"
+    local reqopts="$3"
+    local opts="$4"
 
     local keyfile=tests/tls/${name}.key
     local certfile=tests/tls/${name}.crt
@@ -28,7 +31,8 @@ generate_cert() {
     openssl req \
         -new -sha256 \
         -subj "/O=Valkey Test/CN=$cn" \
-        -key $keyfile | \
+        -key "$keyfile" \
+        $reqopts | \
         openssl x509 \
             -req -sha256 \
             -CA tests/tls/ca.crt \
@@ -37,7 +41,7 @@ generate_cert() {
             -CAcreateserial \
             -days 365 \
             $opts \
-            -out $certfile
+            -out "$certfile"
 }
 
 mkdir -p tests/tls
@@ -64,9 +68,17 @@ subjectAltName = URI:urn:valkey:user:first, URI:urn:valkey:user:second
 subjectAltName = IP:127.0.0.1, IP:::1, DNS:localhost
 _END_
 
-generate_cert server "Server-only" "-extfile tests/tls/openssl.cnf -extensions server_cert"
-generate_cert client "Client-only" "-extfile tests/tls/openssl.cnf -extensions client_cert"
-generate_cert valkey "Generic-cert" "-extfile tests/tls/openssl.cnf -extensions generic_cert"
+generate_cert server "Server-only" "" "-extfile tests/tls/openssl.cnf -extensions server_cert"
+generate_cert client "Client-only" "" "-extfile tests/tls/openssl.cnf -extensions client_cert"
+generate_cert valkey "Generic-cert" "" "-extfile tests/tls/openssl.cnf -extensions generic_cert"
+
+openssl genrsa -passout pass:1234 -aes256 -out tests/tls/valkey-pw.key 2048
+openssl ecparam -name prime256v1 -genkey -noout -out tests/tls/valkey-ec.key
+openssl ecparam -name prime256v1 -genkey | openssl ec -passout pass:asdf -aes256 -out tests/tls/valkey-ec-pw.key
+
+generate_cert valkey-pw "Generic-cert-passworded" "-passin pass:1234" "-extfile tests/tls/openssl.cnf -extensions generic_cert"
+generate_cert valkey-ec "EC-cert" "" "-extfile tests/tls/openssl.cnf -extensions generic_cert"
+generate_cert valkey-ec-pw "EC-cert-passworded" "-passin pass:asdf" "-extfile tests/tls/openssl.cnf -extensions generic_cert"
 
 # A client certificate with the CN "Client-only\0attacker", which anything
 # reading the CN as a C string sees as "Client-only".
@@ -74,7 +86,7 @@ generate_cert valkey "Generic-cert" "-extfile tests/tls/openssl.cnf -extensions 
 # The openssl CLI will not put a NUL in a name, so issue with a placeholder
 # byte, overwrite it with a NUL, and re-sign tbsCertificate. The signature is
 # the same length, so the DER layout is unchanged.
-generate_cert client-nul-cn "Client-only@attacker" "-extfile tests/tls/openssl.cnf -extensions client_cert"
+generate_cert client-nul-cn "Client-only@attacker" "" "-extfile tests/tls/openssl.cnf -extensions client_cert"
 python3 - tests/tls/client-nul-cn.crt tests/tls/ca.key 'Client-only@' <<'_PYEND_'
 import base64, re, subprocess, sys
 
@@ -262,6 +274,7 @@ openssl ca -batch -config "$CA_CONFIG" \
 # Create CA certificate directories for testing tls-ca-cert-dir with invalid certs
 mkdir -p tests/tls/ca-expired
 mkdir -p tests/tls/ca-notyet
+mkdir -p tests/tls/ca-empty
 
 cp tests/tls/ca-expired.crt tests/tls/ca-expired/
 cp tests/tls/ca-notyet.crt tests/tls/ca-notyet/
@@ -269,6 +282,7 @@ cp tests/tls/ca-notyet.crt tests/tls/ca-notyet/
 echo "Created CA certificate test directories:"
 echo "  tests/tls/ca-expired/ (contains expired CA cert)"
 echo "  tests/tls/ca-notyet/ (contains not-yet-valid CA cert)"
+echo "  tests/tls/ca-empty/  (empty, for testing empty dir rejection)"
 
 # Clean up temporary files
 rm -f tests/tls/*-expired.csr tests/tls/*-notyet.csr tests/tls/ca-expired.csr tests/tls/ca-notyet.csr

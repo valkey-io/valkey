@@ -138,6 +138,7 @@ struct _rio {
             int numconns;
             off_t pos;
             sds buf;
+            size_t net_output_bytes; /* Total bytes written across all connections. */
         } connset;
     } io;
 };

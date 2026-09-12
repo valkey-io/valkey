@@ -310,6 +310,44 @@ start_server {tags {"incr"}} {
         assert_error {ERR*} {r increx key byint}
     }
 
+    test {INCREX reply types on the wire - RESP3} {
+        r hello 3
+        r readraw 1
+        r del foo
+        assert_equal {*2} [r increx foo byint 5]
+        assert_equal {:5} [r read]
+        assert_equal {:5} [r read]
+        # Default increment is integer mode.
+        assert_equal {*2} [r increx foo]
+        assert_equal {:6} [r read]
+        assert_equal {:1} [r read]
+        # Both elements are RESP3 doubles in float mode, not bulk strings.
+        r del foo
+        assert_equal {*2}   [r increx foo byfloat 2.5]
+        assert_equal {,2.5} [r read]
+        assert_equal {,2.5} [r read]
+        r readraw 0
+        r hello 2
+    }
+    
+    test {INCREX reply types on the wire - RESP2} {
+        if {!$::force_resp3} {
+            r readraw 1
+            r del foo
+            assert_equal {*2} [r increx foo byint 5]
+            assert_equal {:5} [r read]
+            assert_equal {:5} [r read]
+            # BYFLOAT degrades to bulk strings under RESP2.
+            r del foo
+            assert_equal {*2}  [r increx foo byfloat 2.5]
+            assert_equal {$3}  [r read]
+            assert_equal {2.5} [r read]
+            assert_equal {$3}  [r read]
+            assert_equal {2.5} [r read]
+            r readraw 0
+        }
+    }
+
     test {INCRBY INCRBYFLOAT DECRBY against unhappy path} {
         r del mykeyincr
         assert_error "*ERR wrong number of arguments*" {r incr mykeyincr v}

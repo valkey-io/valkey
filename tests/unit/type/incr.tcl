@@ -170,6 +170,32 @@ start_server {tags {"incr"}} {
         r get foo
     } {0}
 
+    test {INCREX keyspace notifications} {
+        set db [expr {$::singledb ? 0 : 9}]
+        r config set notify-keyspace-events KEA
+        set rd [valkey_deferring_client]
+        assert_equal {1} [psubscribe $rd *]
+        r del foo
+        assert_equal "pmessage * __keyspace@${db}__:foo del" [$rd read]
+        assert_equal "pmessage * __keyevent@${db}__:del foo" [$rd read]
+        # Integer mode -> incrby
+        r increx foo byint 5
+        assert_equal "pmessage * __keyspace@${db}__:foo incrby" [$rd read]
+        assert_equal "pmessage * __keyevent@${db}__:incrby foo" [$rd read]
+        # Float mode -> incrbyfloat
+        r increx foo byfloat 1.5
+        assert_equal "pmessage * __keyspace@${db}__:foo incrbyfloat" [$rd read]
+        assert_equal "pmessage * __keyevent@${db}__:incrbyfloat foo" [$rd read]
+        # An expiry emits a second, separate event.
+        r increx foo byint 1 ex 100
+        assert_equal "pmessage * __keyspace@${db}__:foo incrby" [$rd read]
+        assert_equal "pmessage * __keyevent@${db}__:incrby foo" [$rd read]
+        assert_equal "pmessage * __keyspace@${db}__:foo expire" [$rd read]
+        assert_equal "pmessage * __keyevent@${db}__:expire foo" [$rd read]
+        $rd close
+        r config set notify-keyspace-events ""
+    }
+
     test {INCREX no negative zero} {
         r del foo
         r increx foo byfloat [expr double(1)/41]

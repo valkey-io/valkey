@@ -106,24 +106,29 @@
             }
         ],
         "reply_schema": {
-            "oneOf": [
-                {
-                    "type": "array",
-                    "description": "The value of key after the integer increment and the increment value",
-                    "items": {
-                        "type": "integer"
-                    }
+            "type": "array", "minItems": 2, "maxItems": 2,
+            "items": [
+                { 
+                    "description": "Value after the increment",
+                    "oneOf": [
+                        {
+                            "type":"integer"
+                        }, 
+                        {
+                            "type":"number"
+                        }
+                    ]
                 },
-               {
-                    "type": "array",
-                    "description": "The value of key after the float increment and the increment value",
-                    "items": {
-                        "type": "number"
-                    }
-                },
-                {
-                    "description": "If the key was not set due to the NX|XX option or when the expiration is in the past, a null value is returned.",
-                    "type": "null"
+                { 
+                    "description": "Increment actually applied; 0 if skipped.",
+                    "oneOf": [
+                        {  
+                            "type":"integer"
+                        }, 
+                        {
+                            "type":"number"
+                        }
+                    ] 
                 }
             ]
         }

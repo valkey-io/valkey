@@ -224,16 +224,31 @@ start_server {tags {"incr"}} {
     test {INCREX NX only sets when key does not exist} {
         r del foo
         assert_equal {1 1} [r increx foo nx]
-        assert_equal {} [r increx foo nx]
+        assert_equal {1 0} [r increx foo nx]
         assert_equal {1} [r get foo]
+    }
+
+    test {INCREX BYFLOAT NX only sets when key does not exist } {
+        r del foo
+        assert_match {*0.1* *0.1*} [r increx foo nx byfloat 0.1]
+        assert_match {*0.1* 0} [r increx foo nx byfloat 0.1]
+        assert_match {*0.1*} [r get foo]
     }
 
     test {INCREX XX only sets when key already exists} {
         r del foo
-        assert_equal {} [r increx foo xx]
+        assert_equal {0 0} [r increx foo xx]
         assert_equal {0} [r exists foo]
         r set foo 10
         assert_equal {11 1} [r increx foo xx]
+    }
+
+    test {INCREX BYFLOAT XX only sets when key already exist } {
+        r del foo
+        assert_match {0 0} [r increx foo xx byfloat 0.1]
+        r set foo 0.1
+        assert_match {*0.2* *0.1*} [r increx foo xx byfloat 0.1]
+        assert_match {*0.2*} [r get foo]
     }
 
     test {INCREX NX and XX are mutually exclusive} {
@@ -280,7 +295,7 @@ start_server {tags {"incr"}} {
         assert_equal {3} [r get foo]
         assert_range [r ttl foo] 1 100
         # second call should no-op since key now exists
-        assert_equal {} [r increx foo nx ex 100 byint 3]
+        assert_equal {3 0} [r increx foo nx ex 100 byint 3]
     }
 
     test {INCREX BYINT and BYFLOAT are mutually exclusive} {

@@ -845,11 +845,27 @@ void increxCommand(client *c) {
     }
 
     if ((flags & ARGS_SET_NX) && o != NULL) {
-        addReplyNull(c);
+        if (use_float) {
+            addReplyArrayLen(c, 2);
+            addReplyHumanLongDouble(c, oldvalue_ld);
+            addReplyHumanLongDouble(c, 0);
+        } else {
+            addReplyArrayLen(c, 2);
+            addReplyLongLong(c, oldvalue_ll);
+            addReplyLongLong(c, 0);
+        }
         return;
     }
     if ((flags & ARGS_SET_XX) && o == NULL) {
-        addReplyNull(c);
+        if (use_float) {
+            addReplyArrayLen(c, 2);
+            addReplyHumanLongDouble(c, oldvalue_ld);
+            addReplyHumanLongDouble(c, 0);
+        } else {
+            addReplyArrayLen(c, 2);
+            addReplyLongLong(c, oldvalue_ll);
+            addReplyLongLong(c, 0);
+        }
         return;
     }
 

@@ -69,7 +69,7 @@ start_server {tags {"multi"}} {
         # The condition key was lazy-deleted; only destination{t} remains.
         assert_equal 1 [r dbsize]
         r debug set-active-expire 1
-    } {} {needs:debug}
+    } {OK} {needs:debug}
 
     test {EXEC string comparisons return WRONGTYPE for non-string keys} {
         r del condition{t} destination{t}

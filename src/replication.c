@@ -2411,6 +2411,13 @@ int tryReadBulkPayloadMetadata(connection *conn, char *buf, char *eofmark, char 
         /* Size-based transfer: parse the size */
         *usemark = false;
         *repl_transfer_size = strtol(buf + 1, NULL, 10);
+        if (*repl_transfer_size < 0) {
+            serverLog(LL_WARNING,
+                      "Bad protocol from PRIMARY, invalid RDB transfer size "
+                      "(we received '%s')",
+                      buf);
+            return C_ERR;
+        }
     }
 
     return C_OK;

@@ -141,6 +141,44 @@ start_cluster 1 1 {tags {external:skip cluster}} {
     }
 }
 
+start_cluster 2 0 {tags {external:skip cluster}} {
+    test {EXEC with conditions without MULTI returns EXEC without MULTI, not MOVED or CROSSSLOT} {
+        set remote_key key_for_other_node
+        while {![catch {R 0 get $remote_key} err] || ![string match {MOVED *} $err]} {
+            append remote_key x
+        }
+
+        set slotA "{slotA}key"
+        set slotB "{slotB}key"
+        assert {[R 0 cluster keyslot $slotA] != [R 0 cluster keyslot $slotB]}
+        assert_error {*EXEC without MULTI*} {R 0 exec ifeq $remote_key val}
+        assert_error {*EXEC without MULTI*} {R 0 exec ifeq $slotA val1 ifeq $slotB val2}
+    }
+
+    test {Queue-time MOVED followed by EXEC with remote condition returns EXECABORT} {
+        set other_key key_for_other_node
+        while {![catch {R 0 get $other_key} err] || ![string match {MOVED *} $err]} {
+            append other_key x
+        }
+
+        R 0 multi
+        assert_error {MOVED *} {R 0 set $other_key val}
+        assert_error {EXECABORT*previous errors*} {R 0 exec ifeq $other_key val}
+    }
+
+    test {Keyless queued commands with remote condition key on EXEC returns MOVED} {
+        set other_key key_for_other_node
+        while {![catch {R 0 get $other_key} err] || ![string match {MOVED *} $err]} {
+            append other_key x
+        }
+
+        R 0 multi
+        assert_equal {QUEUED} [R 0 dbsize]
+        assert_error {MOVED *} {R 0 exec ifeq $other_key val}
+        assert_equal {PONG} [R 0 ping]
+    }
+}
+
 # Get the path to the cluster config file.
 proc get_nodes_conf_path {srv_idx} {
     set dir [lindex [R $srv_idx config get dir] 1]

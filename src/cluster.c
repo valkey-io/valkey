@@ -1068,7 +1068,9 @@ clusterNode *getNodeByQuery(client *c, int *error_code) {
      * distributed system. */
 
     /* Determine transaction slot and return early on cross-slot. */
-    if (c->cmd->proc == execCommand && c->flag.multi) {
+    if (c->cmd->proc == execCommand) {
+        if (!c->flag.multi || c->flag.dirty_exec) return myself;
+
         int slot = c->slot;
         if (c->read_flags & READ_FLAGS_CROSSSLOT) {
             if (error_code) *error_code = CLUSTER_REDIR_CROSS_SLOT;
@@ -1134,9 +1136,6 @@ clusterNode *getNodeByQuery(client *c, int *error_code) {
     /* We handle all the cases as if they were EXEC commands, so we have
      * a common code path for everything */
     if (c->cmd->proc == execCommand) {
-        /* If CLIENT_MULTI flag is not set EXEC is just going to return an
-         * error. */
-        if (!c->flag.multi) return myself;
         ms = c->mstate;
     } else {
         /* In order to have a single codepath create a fake Multi State

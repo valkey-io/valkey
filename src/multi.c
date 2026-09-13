@@ -188,8 +188,11 @@ void execCommandAbort(client *c, sds error) {
 
     /* Send EXEC to clients waiting data from MONITOR. We did send a MULTI
      * already, and didn't send any of the queued commands, now we'll just send
-     * EXEC so it is clear that the transaction is over. */
-    replicationFeedMonitors(c, server.monitors, c->db->id, c->argv, c->argc);
+     * EXEC so it is clear that the transaction is over. If called from call(),
+     * it will feed monitors when it returns. */
+    if (!c->flag.executing_command) {
+        replicationFeedMonitors(c, server.monitors, c->db->id, c->argv, c->argc);
+    }
 }
 
 typedef enum {
@@ -277,7 +280,7 @@ static int checkExecConditions(client *c) {
         if (condition == EXEC_CONDITION_IFEQ || condition == EXEC_CONDITION_IFNE) {
             value = c->argv[condition_index + 2];
         }
-        o = lookupKeyReadWithFlags(c->db, key, LOOKUP_NOEFFECTS);
+        o = lookupKeyReadWithFlags(c->db, key, LOOKUP_NONOTIFY | LOOKUP_NOSTATS | LOOKUP_NOTOUCH);
 
         switch (condition) {
         case EXEC_CONDITION_IFEQ:

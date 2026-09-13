@@ -154,6 +154,87 @@ start_server {tags {"tls"}} {
             }
         }
 
+        test {TLS: INFO reports each certificate against the config that loaded it} {
+            set rsa_crt [format "%s/tests/tls/valkey.crt" [pwd]]
+            set rsa_key [format "%s/tests/tls/valkey.key" [pwd]]
+            set ec_crt [format "%s/tests/tls/valkey-ec.crt" [pwd]]
+            set ec_key [format "%s/tests/tls/valkey-ec.key" [pwd]]
+
+            # With one certificate there is nothing to attribute, so this pins which
+            # serial belongs to which file.
+            start_server [list overrides [list tls-cert-file $ec_crt tls-key-file $ec_key]] {
+                set info [r info tls]
+                set ec_serial [getInfoProperty $info tls_server_cert_serial]
+                assert {$ec_serial ni {"" "none"}}
+                assert_equal "none" [getInfoProperty $info tls_server_alt_cert_serial]
+            }
+
+            # OpenSSL orders its certificate slots by key algorithm, not by the order
+            # the certificates were configured, so the EC certificate has to follow the
+            # config it was given to rather than staying on one side.
+            start_server [list overrides [list tls-cert-file $ec_crt tls-key-file $ec_key \
+                                              tls-alt-cert-file $rsa_crt tls-alt-key-file $rsa_key]] {
+                set info [r info tls]
+                assert_equal $ec_serial [getInfoProperty $info tls_server_cert_serial]
+                set rsa_serial [getInfoProperty $info tls_server_alt_cert_serial]
+                assert {$rsa_serial ne $ec_serial}
+            }
+
+            start_server [list overrides [list tls-cert-file $rsa_crt tls-key-file $rsa_key \
+                                              tls-alt-cert-file $ec_crt tls-alt-key-file $ec_key]] {
+                set info [r info tls]
+                assert_equal $rsa_serial [getInfoProperty $info tls_server_cert_serial]
+                assert_equal $ec_serial [getInfoProperty $info tls_server_alt_cert_serial]
+            }
+        }
+
+        test {TLS: INFO follows the config across a background reload} {
+            if {$::tls_module} {
+                # The auto-reload cron is only installed when TLS is built in
+                skip "Not supported with TLS built as a module"
+            }
+
+            set rsa_crt [format "%s/tests/tls/valkey.crt" [pwd]]
+            set rsa_key [format "%s/tests/tls/valkey.key" [pwd]]
+            set ec_crt [format "%s/tests/tls/valkey-ec.crt" [pwd]]
+            set ec_key [format "%s/tests/tls/valkey-ec.key" [pwd]]
+            set tmp_crt [format "%s/tests/tls/reload-primary.crt" [pwd]]
+            set tmp_key [format "%s/tests/tls/reload-primary.key" [pwd]]
+            set tmp_alt_crt [format "%s/tests/tls/reload-alt.crt" [pwd]]
+            set tmp_alt_key [format "%s/tests/tls/reload-alt.key" [pwd]]
+            file copy -force $ec_crt $tmp_crt
+            file copy -force $ec_key $tmp_key
+            file copy -force $rsa_crt $tmp_alt_crt
+            file copy -force $rsa_key $tmp_alt_key
+
+            try {
+                start_server [list overrides [list tls-cert-file $tmp_crt tls-key-file $tmp_key \
+                                                  tls-alt-cert-file $tmp_alt_crt tls-alt-key-file $tmp_alt_key \
+                                                  tls-auto-reload-interval 1]] {
+                    set info [r info tls]
+                    set before_primary [getInfoProperty $info tls_server_cert_serial]
+                    set before_alt [getInfoProperty $info tls_server_alt_cert_serial]
+                    assert {$before_primary ni {"" "none"}}
+                    assert {$before_primary ne $before_alt}
+
+                    # The reload builds its context off the main thread, so it has to
+                    # carry its own mapping. Trade the two files, and the two reported
+                    # serials have to trade with them.
+                    file copy -force $rsa_crt $tmp_crt
+                    file copy -force $rsa_key $tmp_key
+                    file copy -force $ec_crt $tmp_alt_crt
+                    file copy -force $ec_key $tmp_alt_key
+                    wait_for_log_messages 0 {"*TLS materials reloaded successfully*"} 0 150 100
+
+                    set info [r info tls]
+                    assert_equal $before_alt [getInfoProperty $info tls_server_cert_serial]
+                    assert_equal $before_primary [getInfoProperty $info tls_server_alt_cert_serial]
+                }
+            } finally {
+                file delete -force $tmp_crt $tmp_key $tmp_alt_crt $tmp_alt_key
+            }
+        }
+
         test {TLS: alt cert and key files must be provided together} {
             # backup current certificates
             set orig_server_crt [lindex [r config get tls-cert-file] 1]

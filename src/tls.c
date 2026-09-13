@@ -186,10 +186,25 @@ static void tlsInit(void) {
     pending_list = listCreate();
 }
 
+/* Serial and expiry of the two server certificates, captured while the context is built
+ * because a finished context cannot tell you which slot came from tls-cert-file: OpenSSL
+ * orders slots by key algorithm and records nothing about configuration order. The key
+ * algorithm cannot stand in for the slot either, since EVP_PKEY_base_id() is NID_undef
+ * for a provider-only algorithm such as ML-DSA. */
+typedef struct {
+    long long cert_expiry;
+    sds cert_serial;
+    long long alt_cert_expiry;
+    sds alt_cert_serial;
+} tlsServerCertInfo;
+
+static tlsServerCertInfo active_cert_info = {0};
+
 static void tlsClearCertInfo(long long *expiry, sds *serial);
 static void tlsClearCACertInfo(void);
 static void tlsClearAllCertInfo(void);
 static void tlsRefreshAllCertInfo(void);
+static void tlsClearServerCertInfo(tlsServerCertInfo *info);
 
 static void tlsCleanup(void) {
     if (valkey_tls_ctx) {
@@ -201,6 +216,7 @@ static void tlsCleanup(void) {
         valkey_tls_client_ctx = NULL;
     }
     tlsClearAllCertInfo();
+    tlsClearServerCertInfo(&active_cert_info);
 
 #if OPENSSL_VERSION_NUMBER >= 0x10100000L && !defined(LIBRESSL_VERSION_NUMBER)
     // unavailable on LibreSSL
@@ -397,20 +413,6 @@ static int tlsUpdateCertInfoFromDir(const char *path, long long *expiry, sds *se
     closedir(dir);
     return tlsStoreCertInfo(earliest_expiry, earliest_serial, cert_count, expiry, serial, count);
 }
-
-/* Serial and expiry of the two server certificates, captured while the context is built
- * because a finished context cannot tell you which slot came from tls-cert-file: OpenSSL
- * orders slots by key algorithm and records nothing about configuration order. The key
- * algorithm cannot stand in for the slot either, since EVP_PKEY_base_id() is NID_undef
- * for a provider-only algorithm such as ML-DSA. */
-typedef struct {
-    long long cert_expiry;
-    sds cert_serial;
-    long long alt_cert_expiry;
-    sds alt_cert_serial;
-} tlsServerCertInfo;
-
-static tlsServerCertInfo active_cert_info = {0};
 
 static void tlsClearServerCertInfo(tlsServerCertInfo *info) {
     tlsClearCertSerial(&info->cert_serial);

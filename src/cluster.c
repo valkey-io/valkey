@@ -1068,8 +1068,14 @@ clusterNode *getNodeByQuery(client *c, int *error_code) {
      * distributed system. */
 
     /* Determine transaction slot and return early on cross-slot. */
-    if (c->cmd->proc == execCommand && c->flag.multi) {
-        int slot = -1;
+    if (c->cmd->proc == execCommand) {
+        if (!c->flag.multi || c->flag.dirty_exec) return myself;
+
+        int slot = c->slot;
+        if (c->read_flags & READ_FLAGS_CROSSSLOT) {
+            if (error_code) *error_code = CLUSTER_REDIR_CROSS_SLOT;
+            return NULL;
+        }
         for (i = 0; i < c->mstate->count; i++) {
             if (slot == -1) {
                 slot = c->mstate->commands[i].slot;
@@ -1130,9 +1136,6 @@ clusterNode *getNodeByQuery(client *c, int *error_code) {
     /* We handle all the cases as if they were EXEC commands, so we have
      * a common code path for everything */
     if (c->cmd->proc == execCommand) {
-        /* If CLIENT_MULTI flag is not set EXEC is just going to return an
-         * error. */
-        if (!c->flag.multi) return myself;
         ms = c->mstate;
     } else {
         /* In order to have a single codepath create a fake Multi State
@@ -1150,15 +1153,21 @@ clusterNode *getNodeByQuery(client *c, int *error_code) {
     serverDb *currentDb = origDb;
 
     /* Check for multiple keys, existing keys, missing keys. */
-    for (i = 0; i < ms->count; i++) {
+    for (i = c->cmd->proc == execCommand ? -1 : 0; i < ms->count; i++) {
         struct serverCommand *mcmd;
         robj **margv;
         int margc, numkeys, j;
         keyReference *keyindex;
 
-        mcmd = ms->commands[i].cmd;
-        margc = ms->commands[i].argc;
-        margv = ms->commands[i].argv;
+        if (i == -1) {
+            mcmd = c->cmd;
+            margc = c->argc;
+            margv = c->argv;
+        } else {
+            mcmd = ms->commands[i].cmd;
+            margc = ms->commands[i].argc;
+            margv = ms->commands[i].argv;
+        }
 
         getKeysResult result;
         initGetKeysResult(&result);

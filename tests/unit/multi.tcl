@@ -21,6 +21,115 @@ start_server {tags {"multi"}} {
         list $v1 $v2 $v3
     } {QUEUED QUEUED {{a b c} PONG}}
 
+    test {EXEC conditions} {
+        r del condition{t} destination{t}
+        r set condition{t} value
+
+        r multi
+        r set destination{t} committed
+        set committed [r exec ifeq condition{t} value ifne condition{t} other xx condition{t} nx missing{t}]
+
+        r multi
+        r set destination{t} not-committed
+        set ifeq_failed [r exec ifeq condition{t} other]
+
+        r multi
+        r set destination{t} not-committed
+        set ifne_failed [r exec ifne condition{t} value]
+
+        r multi
+        r set destination{t} not-committed
+        set nx_failed [r exec nx condition{t}]
+
+        r multi
+        r set destination{t} not-committed
+        set xx_failed [r exec xx missing{t}]
+
+        list $committed $ifeq_failed $ifne_failed $nx_failed $xx_failed [r get destination{t}]
+    } {OK {} {} {} {} committed}
+
+    test {EXEC IFNE matches a missing key} {
+        r del condition{t} destination{t}
+        r multi
+        r set destination{t} committed
+        list [r exec ifne condition{t} value] [r get destination{t}]
+    } {OK committed}
+
+    test {EXEC NX lazy-deletes expired condition key on primary} {
+        r flushdb
+        r debug set-active-expire 0
+        r psetex expired_cond{t} 10 old_val
+        after 50
+        # The expired condition key remains in the dictionary while active expiration is off.
+        assert_equal 1 [r dbsize]
+        r multi
+        r set destination{t} committed
+        assert_equal {OK} [r exec nx expired_cond{t}]
+        assert_equal {committed} [r get destination{t}]
+        # The condition key was lazy-deleted; only destination{t} remains.
+        assert_equal 1 [r dbsize]
+        r debug set-active-expire 1
+    } {OK} {needs:debug}
+
+    test {EXEC string comparisons return WRONGTYPE for non-string keys} {
+        r del condition{t} destination{t}
+        r lpush condition{t} value
+        r multi
+        r set destination{t} not-committed
+        assert_error {WRONGTYPE*} {r exec ifeq condition{t} value}
+        r multi
+        r set destination{t} not-committed
+        assert_error {WRONGTYPE*} {r exec ifne condition{t} value}
+        assert_equal {} [r get destination{t}]
+    }
+
+    test {EXEC condition syntax errors abort the transaction} {
+        r del condition{t} destination{t}
+        r set condition{t} value
+        r multi
+        r set destination{t} committed
+        assert_error {EXECABORT*invalid check condition syntax*} {r exec ifeq condition{t}}
+        list [r ping] [r get destination{t}]
+    } {PONG {}}
+
+    test {EXEC condition syntax error logs to MONITOR only once} {
+        set rd [valkey_deferring_client]
+        $rd monitor
+        assert_match {*OK*} [$rd read]
+        r multi
+        r set destination{t} committed
+        assert_error {EXECABORT*invalid check condition syntax*} {r exec ifeq condition{t}}
+        r ping
+        set m1 [$rd read]
+        set m2 [$rd read]
+        set m3 [$rd read]
+        $rd close
+        assert_match {*"multi"*} $m1
+        assert_match {*"exec" "ifeq"*} $m2
+        assert_match {*"ping"*} $m3
+    }
+
+    test {EXEC skips conditions when WATCH already aborted the transaction} {
+        r del watched{t} condition{t} destination{t}
+        r set watched{t} value
+        r lpush condition{t} value
+        r watch watched{t}
+        r set watched{t} changed
+        r multi
+        r set destination{t} should-not-execute
+        list [r exec ifeq condition{t} value] [r get destination{t}]
+    } {{} {}}
+
+    test {EXEC skips conditions when queueing already aborted the transaction} {
+        r del condition{t} destination{t}
+        r lpush condition{t} value
+        r multi
+        catch {r non-existing-command}
+        r set destination{t} should-not-execute
+        assert_error {EXECABORT*} {r exec ifeq condition{t} value}
+        assert_equal {} [r get destination{t}]
+    }
+
     test {DISCARD} {
         r del mylist
         r rpush mylist a

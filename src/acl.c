@@ -2151,7 +2151,7 @@ int ACLCheckAllUserCommandPerm(user *u, struct serverCommand *cmd, robj **argv, 
 
 /* High level API for checking if a client can execute the queued up command */
 int ACLCheckAllPerm(client *c, int *idxptr) {
-    int dbid = (c->flag.multi) ? c->mstate->transaction_db_id : c->db->id;
+    int dbid = (c->flag.multi && c->cmd->proc != execCommand) ? c->mstate->transaction_db_id : c->db->id;
     return ACLCheckAllUserCommandPerm(c->user, c->cmd, c->argv, c->argc, dbid, idxptr);
 }
 

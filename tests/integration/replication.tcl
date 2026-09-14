@@ -1114,6 +1114,69 @@ start_server {tags {"repl external:skip"} overrides {save ""}} {
     }
 }
 
+# Compressed sibling of the drop-during-pipe family above. Compression finishes
+# the transfer too quickly for the size-based throttling used there, so a
+# per-key save delay keeps the compressed diskless transfer in flight while one
+# replica is killed. The primary's RDB child must complete without crashing and
+# the surviving replica must converge.
+start_server {tags {"repl external:skip"} overrides {save "" rdbcompression lz4}} {
+    set master [srv 0 client]
+    $master config set repl-diskless-sync yes
+    $master config set repl-diskless-sync-delay 5
+    $master config set repl-diskless-sync-max-replicas 2
+    $master config set dual-channel-replication-enabled "no"; # dual-channel-replication doesn't use pipe
+    set master_host [srv 0 host]
+    set master_port [srv 0 port]
+    $master debug populate 4000 test 1000
+    # 1ms per key over 4k keys keeps the compressed transfer in flight for
+    # about 4 seconds; resetting the delay later does not speed up the
+    # already-forked child, so the kill below always lands mid-transfer.
+    $master config set rdb-key-save-delay 1000
+
+    test "diskless replica drops during compressed rdb pipe" {
+        start_server {overrides {save "" rdbcompression lz4 repl-diskless-load swapdb}} {
+            set survivor [srv 0 client]
+            start_server {overrides {save "" rdbcompression lz4}} {
+                set loglines [count_log_lines -2]
+                $survivor replicaof $master_host $master_port
+                [srv 0 client] replicaof $master_host $master_port
+
+                # Wait for a compressed transfer to be in flight: the cohort
+                # negotiated compression and the survivor began the socket load.
+                wait_for_log_messages -2 {"*Diskless full sync with compression: lz4*"} $loglines 1500 10
+                wait_for_log_messages -1 {"*Loading DB in memory*"} 0 1500 10
+
+                # Kill one replica mid-transfer.
+                exec kill [srv 0 pid]
+
+                wait_for_condition 2400 100 {
+                    [s -2 rdb_bgsave_in_progress] == 0
+                } else {
+                    fail "rdb child didn't terminate"
+                }
+                wait_for_log_messages -2 {"*Diskless rdb transfer, done reading from pipe, 1 replicas still up*"} $loglines 1000 10
+                $master config set rdb-key-save-delay 0
+
+                # Verify the surviving replica converged on the compressed sync.
+                wait_for_condition 600 100 {
+                    [lindex [$survivor role] 3] eq {connected}
+                } else {
+                    fail "surviving replica still not connected after some time"
+                }
+                wait_for_condition 50 100 {
+                    [$master dbsize] == [$survivor dbsize]
+                } else {
+                    fail "Different number of keys between master and surviving replica after too long time."
+                }
+                set digest [$master debug digest]
+                set digest0 [$survivor debug digest]
+                assert {$digest ne 0000000000000000000000000000000000000000}
+                assert {$digest eq $digest0}
+            }
+        }
+    }
+}
+
 test "diskless replication child being killed is collected" {
     # when diskless master is waiting for the replica to become writable
     # it removes the read event from the rdb pipe so if the child gets killed

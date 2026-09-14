@@ -14,9 +14,9 @@ keeping 32-bit alive: it boots an Alpine image in v86, a 32-bit-only x86 emulato
 also frozen on 7.2.6 because producing a 32-bit image per release was never automated.
 
 The end state: try-valkey runs the current release as a **64-bit** WebAssembly build produced by CI, and the
-32-bit removal proceeds as its own PR with no user-facing casualty. (Distro packagers who build 32-bit targets --
-Alpine's x86 build is where the 7.2.6 came from -- are a separate conversation; this proposal only removes
-try-valkey as an argument for keeping 32-bit.)
+32-bit removal proceeds as its own PR with no user-facing casualty. (Other 32-bit consumers -- distro
+packagers and the Docker `arm/v7` image -- are inventoried below; this proposal removes try-valkey as an
+argument for keeping 32-bit, and the removal PR handles the rest with notice.)
 
 ## PoC approach
 
@@ -120,10 +120,33 @@ animation is offered as a separate contribution and is not part of this proposal
    to Pages. Switch valkey.io/try-valkey to it.
 4. **Deprecate and remove 32-bit**: separate PR, once 3 is live. Announce for packagers.
 
+## Who else builds 32-bit Valkey (checked September 2026)
+
+The project itself publishes no 32-bit binaries ([valkey.io/download](https://valkey.io/download/) is
+x86_64 and arm64) -- **except the official Docker image**, which is published for `linux/arm/v7` because
+`valkey-container` inherits its base images' architectures. That is the one 32-bit artifact the project
+controls and the one with users rather than packagers behind it (32-bit Raspberry Pi OS, embedded ARM).
+
+| Distro | 32-bit arches with a current valkey | |
+|---|---|---|
+| Debian sid | `i386`, `armhf` official; `x32`, `m68k`, `sh4`, `hppa` unofficial ports | 9.1.2, same as amd64 |
+| Ubuntu (devel) | `armhf` | 9.1.2 FULLYBUILT; no i386 (allowlist since 19.10) |
+| Alpine edge | `x86`, `armv7`, `armhf` | 9.0.4; source of try-valkey's 7.2.6 image |
+| Void Linux | `i686`, `armv6l`, `armv7l` | no `archs` restriction in the template |
+| Yocto / OpenEmbedded meta-oe | any MACHINE, 32-bit ARM common | recipe at 9.1.1 |
+| Raspberry Pi OS 32-bit | `armhf` | via Debian |
+| Fedora / RHEL / EPEL | none | `ExcludeArch: %{ix86}`; armv7 dropped in F37 |
+| Arch, Homebrew | none | 64-bit only by policy |
+
+These distros build 32-bit because they build everything for their arches, not because anyone asked; a
+dropped arch is routine for them given notice. So the removal PR should come with: a deprecation note one
+minor release ahead, an explicit `#error` with a clear message on 32-bit builds instead of a silent
+miscompile, a heads-up to the Debian/Alpine/Void maintainers, and a decision on the Docker `arm/v7` tag
+(discontinue with an announcement, or keep 32-bit for it -- pull counts per architecture would inform this).
+
 ## Open questions for maintainers
 
 - In tree (B) vs overlay: which do you want to own?
 - Should the `getTimeZone()` fix replace the whole non-Linux branch (affects macOS/BSD logging)?
 - Is a recursion cap in `luaReplyToServerReply` acceptable on native too, or Emscripten-only?
-- Does anyone rely on 32-bit builds beyond try-valkey? (Alpine packages Valkey for 32-bit x86; whether other
-  distros build 32-bit ARM needs checking before the removal PR.)
+- Docker `arm/v7`: discontinue with the 32-bit removal, or is that the reason to keep 32-bit?

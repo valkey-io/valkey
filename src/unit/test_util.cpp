@@ -367,49 +367,68 @@ TEST_F(UtilTest, TestWritePointerWithPadding) {
     }
 }
 
-/* getTimeZoneFromLocaltime() must return the standard-time offset west of UTC in
- * seconds, independent of whether the instant is in daylight saving time. The
- * expected values below are the zones' standard offsets; the instants are
- * 2026-01-15 03:00Z, 2026-07-15 03:00Z (opposite DST states in each hemisphere),
- * 2026-12-31 23:30Z and 2026-01-01 00:30Z (local and UTC dates straddle a year). */
-TEST_F(UtilTest, TestGetTimeZoneFromLocaltime) {
-    struct {
+extern "C" void nolocks_localtime(struct tm *tmp, time_t t, long utc_offset);
+
+/* utcOffsetFromLocaltime() must return the actual offset of local time east of
+ * UTC, with whatever daylight-saving shape tzdata applies. The zones below cover
+ * the cases a "standard offset + 3600 * tm_isdst" model gets wrong: Europe/Dublin
+ * (tzdata models winter as negative DST: tm_isdst=1 with offset 0) and Lord Howe
+ * Island (30-minute DST), alongside ordinary zones in both hemispheres,
+ * half-hour and 45-minute offsets, and the extremes.
+ *
+ * Instants: 2026-01-15 03:00Z, 2026-07-15 03:00Z (opposite DST states per
+ * hemisphere), 2026-12-31 23:30Z and 2026-01-01 00:30Z (local and UTC dates
+ * straddle a year boundary). */
+TEST_F(UtilTest, TestUtcOffsetFromLocaltime) {
+    const time_t jan15 = 1768446000, jul15 = 1784084400, dec31 = 1798759800, jan1 = 1767227400;
+    struct Case {
         const char *tz;
-        long expected_west; /* seconds west of UTC, standard time */
-    } cases[] = {
-        {"UTC", 0},
-        {"America/Los_Angeles", 8 * 3600},
-        {"America/New_York", 5 * 3600},
-        {"America/St_Johns", 3 * 3600 + 1800}, /* -03:30 */
-        {"Europe/Stockholm", -1 * 3600},
-        {"Asia/Kolkata", -(5 * 3600 + 1800)},       /* +05:30, no DST */
-        {"Asia/Kathmandu", -(5 * 3600 + 2700)},     /* +05:45 */
-        {"Australia/Adelaide", -(9 * 3600 + 1800)}, /* +09:30, southern DST */
-        {"Pacific/Auckland", -12 * 3600},           /* southern DST */
-        {"Pacific/Chatham", -(12 * 3600 + 2700)},   /* +12:45 */
-        {"Pacific/Kiritimati", -14 * 3600},         /* furthest east */
-        {"Etc/GMT+12", 12 * 3600},                  /* furthest west */
+        long jul_east; /* offset at 2026-07-15 */
+        long jan_east; /* offset at 2026-01-15, 2026-12-31 and 2026-01-01 (same season, both hemispheres) */
     };
-    const time_t instants[] = {1768446000, 1784084400, 1798759800, 1767227400};
+    const Case cases[] = {
+        {"UTC", 0, 0},
+        {"America/Los_Angeles", -7 * 3600, -8 * 3600},
+        {"America/New_York", -4 * 3600, -5 * 3600},
+        {"America/St_Johns", -(2 * 3600 + 1800), -(3 * 3600 + 1800)},
+        {"Europe/Stockholm", 2 * 3600, 1 * 3600},
+        {"Europe/Dublin", 1 * 3600, 0},           /* negative DST in tzdata: winter is the "DST" period at +00:00 */
+        {"Asia/Kolkata", 5 * 3600 + 1800, 5 * 3600 + 1800},
+        {"Asia/Kathmandu", 5 * 3600 + 2700, 5 * 3600 + 2700},
+        {"Australia/Adelaide", 9 * 3600 + 1800, 10 * 3600 + 1800}, /* southern: DST in January */
+        {"Australia/Lord_Howe", 10 * 3600 + 1800, 11 * 3600},      /* 30-minute DST, in January */
+        {"Pacific/Auckland", 12 * 3600, 13 * 3600},
+        {"Pacific/Chatham", 12 * 3600 + 2700, 13 * 3600 + 2700},
+        {"Pacific/Kiritimati", 14 * 3600, 14 * 3600},
+        {"Etc/GMT+12", -12 * 3600, -12 * 3600},
+    };
 
     const char *saved_tz = getenv("TZ");
     std::string saved = saved_tz ? saved_tz : "";
 
-    for (const auto &c : cases) {
+    for (const Case &c : cases) {
         setenv("TZ", c.tz, 1);
         tzset();
         /* Skip zones this system's tz database does not know: localtime would silently fall back to UTC,
-         * and none of the non-UTC zones above has a zero offset at 03:00Z on 2026-01-15. */
+         * and none of the non-UTC zones above is at +00:00 on 2026-07-15. */
         struct tm probe;
-        time_t t0 = instants[0];
-        localtime_r(&t0, &probe);
+        localtime_r(&jul15, &probe);
         if (strcmp(c.tz, "UTC") != 0 && probe.tm_hour == 3 && probe.tm_min == 0) continue;
-        for (time_t t : instants) {
-            EXPECT_EQ(getTimeZoneFromLocaltime(t), c.expected_west) << "zone " << c.tz << " at " << t;
-#if defined(__linux__) || defined(__sun)
-            /* Where the 'timezone' global exists it is what getTimeZone() returns; the two must agree. */
-            EXPECT_EQ(getTimeZoneFromLocaltime(t), timezone) << "zone " << c.tz << " at " << t;
-#endif
+
+        EXPECT_EQ(utcOffsetFromLocaltime(jan15), c.jan_east) << c.tz << " at 2026-01-15";
+        EXPECT_EQ(utcOffsetFromLocaltime(jul15), c.jul_east) << c.tz << " at 2026-07-15";
+        EXPECT_EQ(utcOffsetFromLocaltime(dec31), c.jan_east) << c.tz << " at 2026-12-31T23:30Z";
+        EXPECT_EQ(utcOffsetFromLocaltime(jan1), c.jan_east) << c.tz << " at 2026-01-01T00:30Z";
+
+        /* The lock-free converter fed with that offset must reproduce libc's wall clock. */
+        for (time_t t : {jan15, jul15, dec31, jan1}) {
+            struct tm expected, got;
+            localtime_r(&t, &expected);
+            nolocks_localtime(&got, t, utcOffsetFromLocaltime(t));
+            EXPECT_EQ(got.tm_year, expected.tm_year) << c.tz << " at " << t;
+            EXPECT_EQ(got.tm_yday, expected.tm_yday) << c.tz << " at " << t;
+            EXPECT_EQ(got.tm_hour, expected.tm_hour) << c.tz << " at " << t;
+            EXPECT_EQ(got.tm_min, expected.tm_min) << c.tz << " at " << t;
         }
     }
 

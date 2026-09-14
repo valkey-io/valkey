@@ -1249,15 +1249,17 @@ sds getAbsolutePath(char *filename) {
     return abspath;
 }
 
-/* Offset of standard (non-DST) local time west of UTC in seconds at instant
- * 'now', derived from the C library's own conversion: the difference between
- * the local and UTC broken-down times of the same instant. Same sign convention
- * as the 'timezone' global (positive west of Greenwich), and like 'timezone'
- * it excludes daylight saving, which callers track separately.
+/* Offset of local time east of UTC in seconds at instant 'now', derived from
+ * the C library's own conversion: the difference between the local and UTC
+ * broken-down times of the same instant. This is the actual offset in effect,
+ * so daylight saving is included whatever form it takes: one hour, half an
+ * hour (Lord Howe Island) or "negative DST" (Europe/Dublin, where tzdata
+ * models winter as the DST period). Callers cache it and refresh it
+ * periodically instead of inferring it from tm_isdst.
  *
- * Only uses functions in POSIX (no tm_gmtoff, no timegm). Exposed for unit
- * testing; the server uses getTimeZone(). */
-long getTimeZoneFromLocaltime(time_t now) {
+ * Only uses functions in POSIX (no tm_gmtoff, no timegm); works with the
+ * 'timezone' global absent (BSD, macOS) or meaningless (Emscripten). */
+long utcOffsetFromLocaltime(time_t now) {
     struct tm local, utc;
     localtime_r(&now, &local);
     gmtime_r(&now, &utc);
@@ -1269,28 +1271,7 @@ long getTimeZoneFromLocaltime(time_t now) {
     if (day_diff > 1) day_diff = -1;
     if (day_diff < -1) day_diff = 1;
     east += day_diff * 86400L;
-
-    if (local.tm_isdst > 0) east -= 3600L; /* report standard time; DST is applied by the caller */
-    return -east;
-}
-
-/*
- * Gets the proper timezone in a more portable fashion
- * i.e timezone variables are linux specific.
- *
- * Returns the offset of standard (non-DST) local time west of UTC in seconds,
- * with the same sign convention as the 'timezone' global: positive west of
- * Greenwich. Daylight saving is tracked separately (server.daylight_active).
- */
-long getTimeZone(void) {
-#if defined(__linux__) || defined(__sun)
-    return timezone;
-#else
-    /* The timezone argument of gettimeofday() is obsolete: POSIX specifies it
-     * as unused, glibc and musl return zero, and BSD kernels return whatever
-     * was last set with settimeofday(), usually zero. */
-    return getTimeZoneFromLocaltime(time(NULL));
-#endif
+    return east;
 }
 
 /* Return true if the specified path is just a file basename without any

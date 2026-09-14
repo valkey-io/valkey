@@ -1252,16 +1252,36 @@ sds getAbsolutePath(char *filename) {
 /*
  * Gets the proper timezone in a more portable fashion
  * i.e timezone variables are linux specific.
+ *
+ * Returns the offset of standard (non-DST) local time west of UTC in seconds,
+ * with the same sign convention as the 'timezone' global: positive west of
+ * Greenwich. Daylight saving is tracked separately (server.daylight_active),
+ * so it is removed here even when the current time is in DST.
  */
 long getTimeZone(void) {
 #if defined(__linux__) || defined(__sun)
     return timezone;
 #else
-    struct timezone tz;
+    /* The timezone argument of gettimeofday() is obsolete: POSIX specifies it
+     * as unused, glibc and musl return zero, and BSD kernels return whatever
+     * was last set with settimeofday(), usually zero. Derive the offset from
+     * the C library's own conversion instead: the difference between the
+     * local and UTC broken-down times of the same instant. */
+    time_t now = time(NULL);
+    struct tm local, utc;
+    localtime_r(&now, &local);
+    gmtime_r(&now, &utc);
 
-    gettimeofday(NULL, &tz);
+    long east = (local.tm_hour - utc.tm_hour) * 3600L + (local.tm_min - utc.tm_min) * 60L + (local.tm_sec - utc.tm_sec);
+    /* The two dates may straddle midnight (and a year boundary); a difference in
+     * day-of-year of more than one day can only be the year wrap. */
+    int day_diff = local.tm_yday - utc.tm_yday;
+    if (day_diff > 1) day_diff = -1;
+    if (day_diff < -1) day_diff = 1;
+    east += day_diff * 86400L;
 
-    return tz.tz_minuteswest * 60L;
+    if (local.tm_isdst > 0) east -= 3600L; /* report standard time; DST is applied by the caller */
+    return -east;
 #endif
 }
 

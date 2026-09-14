@@ -228,7 +228,7 @@ start_server {tags {"incr"}} {
         assert_equal {1} [r get foo]
     }
 
-    test {INCREX BYFLOAT NX only sets when key does not exist } {
+    test {INCREX BYFLOAT NX only sets when key does not exist} {
         r del foo
         assert_match {*0.1* *0.1*} [r increx foo nx byfloat 0.1]
         assert_match {*0.1* 0} [r increx foo nx byfloat 0.1]
@@ -243,7 +243,7 @@ start_server {tags {"incr"}} {
         assert_equal {11 1} [r increx foo xx]
     }
 
-    test {INCREX BYFLOAT XX only sets when key already exist } {
+    test {INCREX BYFLOAT XX only sets when key already exist} {
         r del foo
         assert_match {{} 0} [r increx foo xx byfloat 0.1]
         r set foo 0.1
@@ -394,9 +394,10 @@ start_server {tags {"incr"}} {
         r del str
     }
 
-    test {INCREX against nonexistent key with already-expired EXAT returns nil} {
+    test {INCREX against nonexistent key with already-expired EXAT does not store key} {
         r del non_existing
         assert_equal {1 1} [r increx non_existing exat 1]
+        assert_equal 0 [r exists non_existing]
     }
 
     test {INCREX BYINT with missing value is a syntax error} {

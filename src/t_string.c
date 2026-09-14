@@ -857,6 +857,7 @@ void increxCommand(client *c) {
         return;
     }
     if ((flags & ARGS_SET_XX) && o == NULL) {
+        addReplyArrayLen(c, 2);
         addReplyNull(c);
         if (use_float) {
             addReplyHumanLongDouble(c, 0);

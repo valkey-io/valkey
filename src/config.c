@@ -2804,8 +2804,6 @@ int updateRequirePass(const char **err) {
      * additionally is to remember the cleartext password in this
      * case, for backward compatibility. */
     ACLUpdateDefaultUserPassword(server.requirepass);
-    /* The cluster bus checksum seed is derived from requirepass. */
-    clusterUpdateCrcSeed();
     return 1;
 }
 

@@ -162,24 +162,6 @@ static inline clusterMsgLight *toClusterMsgLight(void *buf) {
     return (clusterMsgLight *)buf;
 }
 
-/* Cached CRC64 of the configured requirepass, used as the seed for the
- * cluster bus message checksums.
- *
- * Using the password as the seed ensures that only cluster nodes sharing
- * the same requirepass can pass CRC verification on the cluster bus, which
- * prevents messages from a foreign cluster (with a different password) from
- * being accepted. */
-static uint64_t cluster_crc_seed = 0;
-void clusterUpdateCrcSeed(void) {
-    if (!server.cluster_enabled) return;
-
-    if (server.requirepass == NULL || sdslen(server.requirepass) == 0) {
-        cluster_crc_seed = 0;
-        return;
-    }
-    cluster_crc_seed = crc64(0, (const unsigned char *)server.requirepass, sdslen(server.requirepass));
-}
-
 /* Compute and set the CRC64 field in a cluster message.
  *
  * The CRC covers the entire message from the first byte to totlen, with
@@ -189,7 +171,7 @@ static void clusterMsgSetCRC(clusterMsg *hdr, uint32_t totlen) {
     /* Zero the CRC field before computation so it does not contribute
      * to the checksum. */
     hdr->crc = htonu64(0);
-    uint64_t computed = crc64(cluster_crc_seed, (const unsigned char *)hdr, totlen);
+    uint64_t computed = crc64(0, (const unsigned char *)hdr, totlen);
     hdr->crc = htonu64(computed);
 }
 
@@ -215,7 +197,7 @@ static int clusterMsgVerifyCRC(clusterMsg *hdr, uint32_t totlen) {
      * the result, matching the sender's computation logic. */
     uint64_t saved_crc = hdr->crc;
     hdr->crc = htonu64(0);
-    uint64_t computed = crc64(cluster_crc_seed, (const unsigned char *)hdr, totlen);
+    uint64_t computed = crc64(0, (const unsigned char *)hdr, totlen);
     hdr->crc = saved_crc;
 
     /* CRC mismatch, return. */
@@ -1701,7 +1683,6 @@ void clusterInit(void) {
     clusterUpdateMyselfHumanNodename();
     clusterUpdateMyselfAvailabilityZone();
     clusterUpdateMyselfReplicaPriority();
-    clusterUpdateCrcSeed();
     resetClusterStats();
 }
 

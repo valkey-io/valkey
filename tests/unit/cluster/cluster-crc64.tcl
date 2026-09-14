@@ -92,24 +92,3 @@ start_cluster 1 0 {tags {external:skip cluster tls:skip}} {
         assert_equal $known [CI 0 cluster_known_nodes]
     }
 }
-
-start_cluster 2 0 {tags {external:skip cluster tls:skip}} {
-    test "requirepass must be consistent across the cluster" {
-        set node0_line [count_log_lines 0]
-        set node1_line [count_log_lines -1]
-
-        # The checksum is seeded with requirepass, so a node whose password
-        # differs from its peers cannot exchange cluster bus messages with them.
-        # Both directions break: each node rejects what the other sends.
-        R 0 config set requirepass secret
-
-        wait_for_log_messages 0 {"*CRC mismatch*"} $node0_line 1000 10
-        wait_for_log_messages -1 {"*CRC mismatch*"} $node1_line 1000 10
-
-        # Once the password matches again the bus recovers on its own, which also
-        # shows the cached seed is refreshed on every CONFIG SET requirepass.
-        R 1 config set requirepass secret
-        wait_for_cluster_state ok
-        wait_for_cluster_propagation
-    }
-}

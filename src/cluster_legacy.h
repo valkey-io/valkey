@@ -291,10 +291,10 @@ typedef struct {
     char replicaof[CLUSTER_NAMELEN];
     char myip[NET_IP_STR_LEN]; /* Sender IP, if not all zeroed. */
     uint16_t extensions;       /* Number of extensions sent along with this packet. */
-    uint32_t crc;              /* CRC32 checksum of the entire message. A non-zero value
-                                * indicates the sender has CRC enabled; zero means CRC is
-                                * not active (backward compatible). */
-    char notused1[26];         /* 26 bytes reserved for future usage. */
+    uint64_t crc;              /* CRC64 checksum of the entire message. A non-zero value
+                                * indicates the sender has computed the checksum; zero
+                                * means no checksum is present (backward compatible). */
+    char notused1[22];         /* 22 bytes reserved for future usage. */
     uint16_t pport;            /* Secondary port number: if primary port is TCP port, this is
                                   TLS port, and if primary port is TLS port, this is TCP port.*/
     uint16_t cport;            /* Sender TCP cluster bus port */
@@ -328,7 +328,7 @@ static_assert(offsetof(clusterMsg, replicaof) == 2128, "unexpected field offset"
 static_assert(offsetof(clusterMsg, myip) == 2168, "unexpected field offset");
 static_assert(offsetof(clusterMsg, extensions) == 2214, "unexpected field offset");
 static_assert(offsetof(clusterMsg, crc) == 2216, "unexpected field offset");
-static_assert(offsetof(clusterMsg, notused1) == 2220, "unexpected field offset");
+static_assert(offsetof(clusterMsg, notused1) == 2224, "unexpected field offset");
 static_assert(offsetof(clusterMsg, pport) == 2246, "unexpected field offset");
 static_assert(offsetof(clusterMsg, cport) == 2248, "unexpected field offset");
 static_assert(offsetof(clusterMsg, flags) == 2250, "unexpected field offset");
@@ -490,7 +490,6 @@ struct clusterState {
                                                                     excluding nodes without address. */
     unsigned long long stat_cluster_links_buffer_limit_exceeded; /* Total number of cluster links freed due to exceeding
                                                                     buffer limit */
-    unsigned long long stat_cluster_messages_crc_mismatch;       /* Number of cluster messages dropped due to CRC mismatch. */
 
     /* Bit map for slots that are no longer claimed by the owner in cluster PING
      * messages. During slot migration, the owner will stop claiming the slot after

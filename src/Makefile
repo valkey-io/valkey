@@ -492,7 +492,6 @@ ENGINE_SERVER_OBJ = \
     connection.o \
     crc16.o \
     crc16_slottable.o \
-    crc32.o \
     crc64.o \
     crccombine.o \
     crcspeed.o \

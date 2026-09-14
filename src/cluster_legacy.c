@@ -44,6 +44,7 @@
 #include "endianconv.h"
 #include "connection.h"
 #include "module.h"
+#include "crc64.h"
 
 #include <stdlib.h>
 #include <sys/types.h>
@@ -152,64 +153,60 @@ static inline clusterMsgLight *toClusterMsgLight(void *buf) {
     return (clusterMsgLight *)buf;
 }
 
-/* Compute the CRC seed from the configured requirepass.
+/* Cached CRC64 of the configured requirepass, used as the seed for the
+ * cluster bus message checksums.
  *
  * Using the password as the seed ensures that only cluster nodes sharing
  * the same requirepass can pass CRC verification on the cluster bus, which
  * prevents messages from a foreign cluster (with a different password) from
  * being accepted. */
-static uint32_t clusterCrcSeed(void) {
-    if (server.requirepass == NULL || sdslen(server.requirepass) == 0) return 0;
+static uint64_t cluster_crc_seed = 0;
+void clusterUpdateCrcSeed(void) {
+    if (!server.cluster_enabled) return;
 
-    return crc32(0, (const unsigned char *)server.requirepass, sdslen(server.requirepass));
+    if (server.requirepass == NULL || sdslen(server.requirepass) == 0) {
+        cluster_crc_seed = 0;
+        return;
+    }
+    cluster_crc_seed = crc64(0, (const unsigned char *)server.requirepass, sdslen(server.requirepass));
 }
 
-/* Compute and set the CRC32 field in a cluster message.
+/* Compute and set the CRC64 field in a cluster message.
  *
  * The CRC covers the entire message from the first byte to totlen, with
  * the crc field itself temporarily zeroed during computation so it does
  * not affect the result. */
 static void clusterMsgSetCRC(clusterMsg *hdr, uint32_t totlen) {
-    if (!server.cluster_crc_enabled) return;
-
     /* Zero the CRC field before computation so it does not contribute
      * to the checksum. */
-    hdr->crc = htonl(0);
-    uint32_t computed = crc32(clusterCrcSeed(), (const unsigned char *)hdr, totlen);
-    hdr->crc = htonl(computed);
+    hdr->crc = htonu64(0);
+    uint64_t computed = crc64(cluster_crc_seed, (const unsigned char *)hdr, totlen);
+    hdr->crc = htonu64(computed);
 }
 
-/* Verify the CRC32 checksum of a received cluster message.
+/* Verify the CRC64 checksum of a received cluster message.
  *
  * Returns 1 if the CRC is valid or verification is not applicable, 0 if a
  * CRC mismatch is detected (the caller should drop the packet).
  *
- * Verification is skipped in the following cases, all of which are safe:
- *
- *   1. cluster-crc-enabled is off locally — this node does not participate
- *      in CRC verification at all.
- *
- *   2. The CRC field in the message is zero — the sender is an older version
- *      or has CRC disabled, so no CRC was computed. This is the key
- *      backward-compatibility path. Since zcalloc() initializes the entire
- *      message block to zero, the crc field is naturally zero when CRC is
- *      not active.
+ * Verification is skipped when the CRC field in the message is zero: the
+ * sender is an older version that does not compute a checksum, so there is
+ * nothing to verify. This is the key backward-compatibility path. Since
+ * zcalloc() initializes the entire message block to zero, the crc field is
+ * naturally zero when no checksum is computed.
  *
  * Note: The CRC field itself serves as the capability indicator. */
 static int clusterMsgVerifyCRC(clusterMsg *hdr, uint32_t totlen) {
-    /* Case 1: CRC verification is disabled locally. */
-    if (!server.cluster_crc_enabled) return 1;
-
-    /* Case 2: CRC field is zero — sender did not compute CRC. */
-    uint32_t received_crc = ntohl(hdr->crc);
+    /* CRC field is zero, the sender did not compute a checksum. */
+    uint64_t received_crc = ntohu64(hdr->crc);
     if (received_crc == 0) return 1;
 
     /* Save the received CRC, zero the crc field, recompute, then restore.
      * The crc field must be zero during computation so it does not affect
      * the result, matching the sender's computation logic. */
-    uint32_t saved_crc = hdr->crc;
-    hdr->crc = htonl(0);
-    uint32_t computed = crc32(clusterCrcSeed(), (const unsigned char *)hdr, totlen);
+    uint64_t saved_crc = hdr->crc;
+    hdr->crc = htonu64(0);
+    uint64_t computed = crc64(cluster_crc_seed, (const unsigned char *)hdr, totlen);
     hdr->crc = saved_crc;
 
     /* CRC mismatch, return. */
@@ -1618,6 +1615,7 @@ void clusterInit(void) {
     clusterUpdateMyselfHostname();
     clusterUpdateMyselfHumanNodename();
     clusterUpdateMyselfAvailabilityZone();
+    clusterUpdateCrcSeed();
     resetClusterStats();
 }
 
@@ -3934,30 +3932,6 @@ int clusterIsValidPacket(clusterLink *link) {
         return 0;
     }
 
-    /* CRC32 integrity check for non-light cluster bus messages. Light messages
-     * use a compact header without a CRC field and are skipped. A CRC mismatch
-     * means the packet is corrupted (e.g. a network bit-flip) and must be
-     * treated as invalid so the packet is dropped to protect cluster state. */
-    if (!is_light && server.cluster_crc_enabled) {
-        clusterMsg *msg = toClusterMsg(link->rcvbuf);
-        if (!clusterMsgVerifyCRC(msg, totlen)) {
-            if (server.mstime - crc_mismatch_last_log >= CLUSTER_CRC_MISMATCH_LOG_INTERVAL) {
-                crc_mismatch_last_log = server.mstime;
-                char ip[NET_IP_STR_LEN];
-                int port = 0;
-                if (connAddrPeerName(link->conn, ip, sizeof(ip), &port) == C_OK) {
-                    serverLog(LL_WARNING, "CRC mismatch on packet of type %s from node %.40s (%s:%d).",
-                              clusterGetMessageTypeString(type), msg->sender, ip, port);
-                } else {
-                    serverLog(LL_WARNING, "CRC mismatch on packet of type %s from node %.40s.",
-                              clusterGetMessageTypeString(type), msg->sender);
-                }
-            }
-            server.cluster->stat_cluster_messages_crc_mismatch++;
-            return 0;
-        }
-    }
-
     return 1;
 }
 
@@ -3995,6 +3969,8 @@ int clusterProcessPacket(clusterLink *link) {
     }
 
     clusterMsgHeader *hdr = (clusterMsgHeader *)link->rcvbuf;
+    clusterMsg *msg = toClusterMsg(link->rcvbuf);
+    uint32_t totlen = ntohl(hdr->totlen);
     mstime_t now = mstime();
     int is_light = IS_LIGHT_MESSAGE(ntohs(hdr->type));
     uint16_t type = ntohs(hdr->type) & ~CLUSTERMSG_MODIFIER_MASK;
@@ -4016,7 +3992,26 @@ int clusterProcessPacket(clusterLink *link) {
         return 1;
     }
 
-    clusterMsg *msg = toClusterMsg(link->rcvbuf);
+    /* CRC64 integrity check for non-light cluster bus messages. Light messages
+     * use a compact header without a CRC field and are skipped. A CRC mismatch
+     * means the packet is corrupted (e.g. a network bit-flip) and must be
+     * treated as invalid so the packet is dropped to protect cluster state. */
+    if (totlen >= CLUSTERMSG_MIN_LEN && !clusterMsgVerifyCRC(msg, totlen)) {
+        if (server.mstime - crc_mismatch_last_log >= CLUSTER_CRC_MISMATCH_LOG_INTERVAL) {
+            crc_mismatch_last_log = server.mstime;
+            char ip[NET_IP_STR_LEN];
+            int port = 0;
+            if (connAddrPeerName(link->conn, ip, sizeof(ip), &port) == C_OK) {
+                serverLog(LL_WARNING, "CRC mismatch on packet of type %s from node %.40s (%s:%d).",
+                          clusterGetMessageTypeString(type), msg->sender, ip, port);
+            } else {
+                serverLog(LL_WARNING, "CRC mismatch on packet of type %s from node %.40s.",
+                          clusterGetMessageTypeString(type), msg->sender);
+            }
+        }
+        return 0;
+    }
+
     uint16_t flags = ntohs(msg->flags);
     uint64_t sender_claimed_current_epoch = 0, sender_claimed_config_epoch = 0;
     clusterNode *sender = getNodeFromLinkAndMsg(link, msg);
@@ -4850,47 +4845,17 @@ void clusterReadHandler(connection *conn) {
     }
 }
 
-/* Compute the CRC32 and apply debug bit-flip corruption before a message is sent. */
+/* Compute the CRC64 of a message before it is sent. */
 static void clusterMsgFinalizeCRC(clusterMsgSendBlock *msgblock) {
-    serverAssert(server.cluster_crc_enabled);
     clusterMsg *hdr = getMessageFromSendBlock(msgblock);
-    uint16_t msg_type = ntohs(hdr->type);
-    int is_light = IS_LIGHT_MESSAGE(msg_type);
-    uint32_t totlen = ntohl(hdr->totlen);
 
-    /* CRC and debug corruption only apply to full-header messages with CRC
-     * enabled; light messages carry no crc field. */
-    if (is_light) return;
+    /* CRC only apply to full-header messages, light messages carry no crc field. */
+    if (IS_LIGHT_MESSAGE(ntohs(hdr->type))) return;
 
     /* The crc == 0 guard avoids re-computation when the block is reused for
      * multiple recipients (shared via refcount in clusterBroadcastMessage). */
     if (hdr->crc == 0) {
-        clusterMsgSetCRC(hdr, totlen);
-    }
-
-    /* DEBUG cluster-crc-flip-bit: flip one bit in the next outgoing message to
-     * exercise the receiver-side CRC check. Runs after CRC so the corrupted
-     * packet is actually detected downstream. */
-    if (server.debug_cluster_crc_flip_bit >= 0) {
-        int byte_off = server.debug_cluster_crc_flip_bit;
-        if (byte_off < (int)totlen) {
-            unsigned char *buf = (unsigned char *)hdr;
-            buf[byte_off] ^= 0x01; /* Flip the lowest bit. */
-            serverLog(LL_WARNING, "DEBUG: flipped bit at byte offset %d in outgoing cluster message (type %s)",
-                      byte_off, clusterGetMessageTypeString(msg_type & ~CLUSTERMSG_MODIFIER_MASK));
-        }
-        server.debug_cluster_crc_flip_bit = -1; /* One-shot: disable after use. */
-    }
-
-    /* DEBUG cluster-crc-flip-time: randomly flip a bit in every outgoing message
-     * while the debug flip timer is active, to simulate sustained corruption. */
-    if (server.debug_cluster_crc_flip_until > 0 && server.mstime < server.debug_cluster_crc_flip_until) {
-        unsigned char *buf = (unsigned char *)hdr;
-        int byte_off = rand() % totlen;
-        int bit = rand() & 0x07;
-        buf[byte_off] ^= (1 << bit);
-        serverLog(LL_WARNING, "DEBUG: flipped random bit %d at byte offset %d in outgoing cluster message (type %s)",
-                  bit, byte_off, clusterGetMessageTypeString(msg_type & ~CLUSTERMSG_MODIFIER_MASK));
+        clusterMsgSetCRC(hdr, ntohl(hdr->totlen));
     }
 }
 
@@ -4904,8 +4869,8 @@ void clusterSendMessage(clusterLink *link, clusterMsgSendBlock *msgblock) {
         return;
     }
 
-    /* Try and finalize the cluster CRC before sending. */
-    if (server.cluster_crc_enabled) clusterMsgFinalizeCRC(msgblock);
+    /* Finalize the cluster CRC before sending. */
+    clusterMsgFinalizeCRC(msgblock);
 
     if (listLength(link->send_msg_queue) == 0 && getMessageFromSendBlock(msgblock)->totlen != 0)
         connSetWriteHandlerWithBarrier(link->conn, clusterWriteHandler, 1);
@@ -4989,7 +4954,7 @@ static void clusterBuildMessageHdr(clusterMsg *hdr, int type, size_t msglen) {
     memcpy(hdr->myslots, primary->slots, sizeof(hdr->myslots));
     memset(hdr->replicaof, 0, CLUSTER_NAMELEN);
     if (myself->replicaof != NULL) memcpy(hdr->replicaof, myself->replicaof->name, CLUSTER_NAMELEN);
-    hdr->crc = htonl(0);
+    hdr->crc = htonu64(0);
     if (server.tls_cluster) {
         hdr->port = htons(announced_tls_port);
         hdr->pport = htons(announced_tcp_port);
@@ -7632,15 +7597,13 @@ sds genClusterInfoString(sds info) {
                      "cluster_stats_pubsub_bytes_sent:%U\r\n"
                      "cluster_stats_pubsub_bytes_received:%U\r\n"
                      "cluster_stats_module_bytes_sent:%U\r\n"
-                     "cluster_stats_module_bytes_received:%U\r\n"
-                     "cluster_stats_messages_crc_mismatch:%U\r\n",
+                     "cluster_stats_module_bytes_received:%U\r\n",
                      (unsigned long long)server.cluster->stats_bus_bytes_sent,
                      (unsigned long long)server.cluster->stats_bus_bytes_received,
                      (unsigned long long)server.cluster->stats_bus_pubsub_bytes_sent,
                      (unsigned long long)server.cluster->stats_bus_pubsub_bytes_received,
                      (unsigned long long)server.cluster->stats_bus_module_bytes_sent,
-                     (unsigned long long)server.cluster->stats_bus_module_bytes_received,
-                     (unsigned long long)server.cluster->stat_cluster_messages_crc_mismatch);
+                     (unsigned long long)server.cluster->stats_bus_module_bytes_received);
 
     info = sdscatfmt(info, "total_cluster_links_buffer_limit_exceeded:%U\r\n",
                      (unsigned long long)server.cluster->stat_cluster_links_buffer_limit_exceeded);

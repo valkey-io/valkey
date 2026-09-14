@@ -164,6 +164,62 @@ tags {"repl external:skip"} {
         }
     }
 
+    # A streaming-compressed disk-based sync RDB (rdbcompression lz4 on
+    # both ends) cannot be reused as an AOF base, so the replica falls back to
+    # BGREWRITEAOF. Inverse of the plaintext RDB-reuse tests above.
+    test "Disk-based full sync with rdbcompression lz4 falls back to BGREWRITEAOF for AOF base" {
+        start_server {overrides {repl-diskless-sync no rdbcompression lz4 save ""}} {
+            set primary [srv 0 client]
+            set primary_host [srv 0 host]
+            set primary_port [srv 0 port]
+
+            for {set i 0} {$i < 40} {incr i} {
+                $primary set "rcomp-key:$i" "value:$i"
+            }
+
+            start_server {overrides {appendonly yes aof-use-rdb-preamble yes repl-diskless-sync no rdbcompression lz4 save ""}} {
+                set replica [srv 0 client]
+                set replica_log [srv 0 stdout]
+
+                $replica replicaof $primary_host $primary_port
+                wait_for_sync $replica
+
+                # Replica detects the compressed sync RDB and falls back to BGREWRITEAOF.
+                wait_for_condition 50 100 {
+                    [log_file_matches $replica_log "*falling back to BGREWRITEAOF instead of reusing it as an AOF base*"]
+                } else {
+                    fail "Expected streaming-compression AOF fallback log not found"
+                }
+
+                # And it must NOT have reused the sync RDB as the AOF base.
+                assert {![log_file_matches $replica_log "*Reused RDB file from primary sync as AOF base file*"]}
+
+                # AOF comes up via BGREWRITEAOF; a base file must exist.
+                waitForBgrewriteaof $replica
+                set manifest_path [get_aof_manifest_path $replica]
+                set base_name [get_cur_base_aof_name $manifest_path]
+                assert {$base_name ne ""}
+
+                # Data correct at runtime (loaded from the compressed socket stream).
+                assert_equal 40 [$replica dbsize]
+                for {set i 0} {$i < 40} {incr i} {
+                    assert_equal "value:$i" [$replica get "rcomp-key:$i"]
+                }
+
+                # After restart: AOF loads from the rewritten base, not the compressed RDB.
+                $replica replicaof no one
+                restart_server 0 true false
+                set replica [srv 0 client]
+                wait_done_loading $replica
+
+                assert_equal 40 [$replica dbsize]
+                for {set i 0} {$i < 40} {incr i} {
+                    assert_equal "value:$i" [$replica get "rcomp-key:$i"]
+                }
+            }
+        }
+    }
+
     # Test 4: aof-use-rdb-preamble no should fall back to bgrewriteaof
     test "Disk-based sync with aof-use-rdb-preamble no uses bgrewriteaof" {
         start_server {overrides {appendonly yes aof-use-rdb-preamble no repl-diskless-sync no save ""}} {

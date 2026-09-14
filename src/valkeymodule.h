@@ -342,10 +342,18 @@ typedef uint64_t ValkeyModuleTimerID;
  * slot migration must be used. */
 #define VALKEYMODULE_OPTIONS_HANDLE_ATOMIC_SLOT_MIGRATION (1 << 5)
 
+/* Declare that the module handles forkless operations. Opting in has a
+ * tradeoff: while a forkless operation is running, opening a key for write can
+ * return NULL if the key is currently in use, and the module must handle that
+ * NULL return. A module that registers a data type also declares that its RDB
+ * save callbacks are safe to run on a background thread. When any loaded module
+ * does not set this, forkless operations are blocked. */
+#define VALKEYMODULE_OPTIONS_HANDLE_FORKLESS (1 << 6)
+
 /* Next option flag, must be updated when adding new module flags above!
  * This flag should not be used directly by the module.
  * Use ValkeyModule_GetModuleOptionsAll instead. */
-#define _VALKEYMODULE_OPTIONS_FLAGS_NEXT (1 << 6)
+#define _VALKEYMODULE_OPTIONS_FLAGS_NEXT (1 << 7)
 
 /* Definitions for ValkeyModule_SetCommandInfo. */
 
@@ -1165,6 +1173,15 @@ typedef enum ValkeyModuleScriptingEngineDebuggerEnableRet {
     VMSE_DEBUG_ENABLE_FAIL,   /* The scripting engine failed to enable the debugging mode. */
 } ValkeyModuleScriptingEngineDebuggerEnableRet;
 
+/* Execute a debugger command.
+ *
+ * - `argv`: the command arguments.
+ *
+ * - `argc`: the number of command arguments.
+ *
+ * - `context`: the `context` field of the command descriptor, or the scripting
+ *   engine runtime context if that field is NULL.
+ */
 typedef int (*ValkeyModuleScriptingEngineDebuggerCommandHandlerFunc)(
     ValkeyModuleString **argv,
     size_t argc,
@@ -1192,7 +1209,7 @@ typedef struct ValkeyModuleScriptingEngineDebuggerCommand {
     const char *desc;                                              /* The description of the command that is shown in the help message. */
     int invisible;                                                 /* Whether this command should be hidden in the help message. */
     ValkeyModuleScriptingEngineDebuggerCommandHandlerFunc handler; /* The function pointer that implements this command. */
-    void *context;                                                 /* The pointer to a context structure that is passed when invoking the command handler. */
+    void *context;                                                 /* The pointer to a context structure that is passed when invoking the command handler. When NULL, the engine context is passed instead. */
 } ValkeyModuleScriptingEngineDebuggerCommandV1;
 
 #define ValkeyModuleScriptingEngineDebuggerCommand ValkeyModuleScriptingEngineDebuggerCommandV1

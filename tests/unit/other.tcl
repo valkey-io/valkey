@@ -240,17 +240,6 @@ start_server {tags {"other"}} {
         }
     }
 
-    test {BGSAVE} {
-        # Use FLUSHALL instead of FLUSHDB, FLUSHALL do a foreground save
-        # and reset the dirty counter to 0, so we won't trigger an unexpected bgsave.
-        r flushall
-        r save
-        r set x 10
-        r bgsave
-        waitForBgsave r
-        r debug reload
-        r get x
-    } {10} {needs:debug needs:save}
 
     test {SELECT an out of range DB} {
         catch {r select 1000000} err
@@ -311,21 +300,6 @@ start_server {tags {"other"}} {
         } {1} {needs:debug}
     }
 
-    test {EXPIRES after a reload (snapshot + append only file rewrite)} {
-        r flushdb
-        r set x 10
-        r expire x 1000
-        r save
-        r debug reload
-        set ttl [r ttl x]
-        set e1 [expr {$ttl > 900 && $ttl <= 1000}]
-        r bgrewriteaof
-        waitForBgrewriteaof r
-        r debug loadaof
-        set ttl [r ttl x]
-        set e2 [expr {$ttl > 900 && $ttl <= 1000}]
-        list $e1 $e2
-    } {1 1} {needs:debug needs:save}
 
     test {EXPIRES after AOF reload (without rewrite)} {
         r flushdb
@@ -778,3 +752,40 @@ if {$::verbose} {
 }
 close $tempFileId
 file delete $tempFileName
+
+start_server {overrides {forkless-infrastructure-enabled yes} tags {"other" "external:skip"}} {
+    foreach bgsave_type {"fork" "forkless"} {
+        test "BGSAVE $bgsave_type" {
+            r flushall
+            r save
+            r set x 10
+            r config set bgsave-default-method $bgsave_type
+            r bgsave
+            waitForBgsave r
+
+            set expected_type [expr {$bgsave_type eq "forkless" ? "forkless" : "fork"}]
+            assert_equal [s rdb_last_bgsave_type] $expected_type
+
+            r debug reload
+            r get x
+        } {10} {needs:debug needs:save}
+
+        test "EXPIRES after a reload ($bgsave_type snapshot + append only file rewrite)" {
+            r flushdb
+            r set x 10
+            r expire x 1000
+            r config set bgsave-default-method $bgsave_type
+            r bgsave
+            waitForBgsave r
+            r debug reload
+            set ttl [r ttl x]
+            set e1 [expr {$ttl > 900 && $ttl <= 1000}]
+            r bgrewriteaof
+            waitForBgrewriteaof r
+            r debug loadaof
+            set ttl [r ttl x]
+            set e2 [expr {$ttl > 900 && $ttl <= 1000}]
+            list $e1 $e2
+        } {1 1} {needs:debug needs:save}
+    }
+}

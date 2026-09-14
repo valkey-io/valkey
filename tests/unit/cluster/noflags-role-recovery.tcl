@@ -1,22 +1,3 @@
-proc cluster_nodes_conf_path {id} {
-    set dir [lindex [R $id config get dir] 1]
-    set conf [lindex [R $id config get cluster-config-file] 1]
-    return [file join $dir $conf]
-}
-
-proc read_file {path} {
-    set fd [open $path r]
-    set data [read $fd]
-    close $fd
-    return $data
-}
-
-proc write_file {path content} {
-    set fd [open $path w]
-    puts $fd $content
-    close $fd
-}
-
 test "Recover primary role from noflags created via replica ref after nodes.conf edit" {
     start_cluster 3 3 {tags {external:skip cluster}} {
         # R0 is a primary.

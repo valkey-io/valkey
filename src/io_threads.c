@@ -5,6 +5,9 @@
  */
 
 #include "io_threads.h"
+#include "cluster.h"
+#include "cluster_legacy.h"
+#include "connhelpers.h"
 #include "cluster_migrateslots.h"
 #include "connection.h"
 #include "queues.h"
@@ -30,6 +33,7 @@ static mpscQueue io_shared_outbox = {0};
 static spscQueue io_private_inbox[IO_THREADS_MAX_NUM] = {0};
 static size_t io_jobs_submitted;
 static _Atomic(size_t) io_jobs_finished;
+static size_t cluster_io_pending_responses;
 static int io_threads_initialized = 0;
 _Atomic long long used_active_time_io_thread[IO_THREADS_MAX_NUM] = {0};
 
@@ -75,8 +79,8 @@ static size_t getPendingIOThreadsJobs(void) {
 }
 
 /* Read/write jobs awaiting response from IO threads. */
-static int getPendingIOResponsesCount(void) {
-    return server.stat_io_writes_pending + server.stat_io_reads_pending;
+static size_t getPendingIOResponsesCount(void) {
+    return server.stat_io_writes_pending + server.stat_io_reads_pending + cluster_io_pending_responses;
 }
 
 /* Drains the I/O threads queue by waiting for all jobs to be processed.
@@ -317,10 +321,10 @@ static void *IOThreadMain(void *myid) {
                 untagJob(batch_jobs[i], &data, &type);
 
                 switch (type) {
-                case JOB_REQ_FREE_ARGV:
+                case JOB_SPSC_FREE_ARGV:
                     ioThreadFreeArgv((robj **)data);
                     break;
-                case JOB_REQ_POLL:
+                case JOB_SPSC_POLL:
                     ioThreadPoll((aeEventLoop *)data);
                     break;
                 default:
@@ -353,6 +357,15 @@ static void *IOThreadMain(void *myid) {
                 break;
             case JOB_REQ_POLL:
                 ioThreadPoll((aeEventLoop *)data);
+                break;
+            case JOB_REQ_CLUSTER_READ:
+                clusterReadJob((clusterLink *)data);
+                break;
+            case JOB_REQ_CLUSTER_WRITE:
+                clusterWriteJob((clusterLink *)data);
+                break;
+            case JOB_REQ_CLUSTER_ACCEPT:
+                clusterAcceptJob((connection *)data);
                 break;
             default:
                 serverPanic("Invalid SPMC job type: %d", type);
@@ -496,6 +509,7 @@ void initIOThreads(int prev_threads_num) {
         mpscInit(&io_shared_outbox, IO_MPSC_QUEUE_SIZE);
         io_jobs_submitted = 0;
         atomic_init(&io_jobs_finished, 0);
+        cluster_io_pending_responses = 0;
         prefetchCommandsBatchInit();
         io_threads_initialized = 1;
     }
@@ -504,6 +518,48 @@ void initIOThreads(int prev_threads_num) {
     for (int i = prev_threads_num; i < server.io_threads_num; i++) {
         createIOThread(i);
     }
+}
+
+void testOnlyInitIOThreadQueues(void) {
+    if (io_shared_inbox.buffer) spmcFree(&io_shared_inbox);
+    if (io_shared_outbox.buffer) mpscFree(&io_shared_outbox);
+    if (pending_io_responses) {
+        listRelease(pending_io_responses);
+        pending_io_responses = NULL;
+    }
+    spmcInit(&io_shared_inbox, IO_SPMC_QUEUE_SIZE);
+    mpscInit(&io_shared_outbox, IO_MPSC_QUEUE_SIZE);
+    io_jobs_submitted = 0;
+    atomic_store_explicit(&io_jobs_finished, 0, memory_order_relaxed);
+    cluster_io_pending_responses = 0;
+    io_thread_ticket = (mpscTicket){0};
+}
+
+void testOnlyFreeIOThreadQueues(void) {
+    if (pending_io_responses) {
+        listRelease(pending_io_responses);
+        pending_io_responses = NULL;
+    }
+    spmcFree(&io_shared_inbox);
+    mpscFree(&io_shared_outbox);
+    io_jobs_submitted = 0;
+    atomic_store_explicit(&io_jobs_finished, 0, memory_order_relaxed);
+    cluster_io_pending_responses = 0;
+    io_thread_ticket = (mpscTicket){0};
+}
+
+/* Fill the shared inbox so the next dispatch has to take its enqueue-failure
+ * path. The queue is file-static, so tests cannot do this themselves. */
+void testOnlyFillIOThreadInbox(void) {
+    while (spmcEnqueue(&io_shared_inbox, (void *)-1)) {
+        /* Keep going until the queue rejects the push. */
+    }
+}
+
+/* Expose the cluster pending-response count so tests can assert that a failed
+ * or completed dispatch leaves no response outstanding. */
+size_t testOnlyGetClusterIOPendingResponses(void) {
+    return cluster_io_pending_responses;
 }
 
 int trySendReadToIOThreads(client *c) {
@@ -523,6 +579,9 @@ int trySendReadToIOThreads(client *c) {
     /* For simplicity let the main-thread handle the blocked clients */
     if (c->flag.blocked || c->flag.unblocked) return C_ERR;
     if (c->flag.close_asap) return C_ERR;
+    /* Avoid offloading reads to IO thread for the slot migration export job while snapshotting.
+     * During this phase, the main thread writes snapshot data directly via connWrite(). */
+    if (c->slot_migration_job && !clusterSlotMigrationShouldInstallWriteHandler(c)) return C_ERR;
 
     c->read_flags = canParseCommand(c) ? 0 : READ_FLAGS_DONT_PARSE;
     c->read_flags |= authRequired(c) ? READ_FLAGS_AUTH_REQUIRED : 0;
@@ -619,6 +678,171 @@ int trySendWriteToIOThreads(client *c) {
     return C_OK;
 }
 
+/* Try to offload a cluster link read to an I/O thread.
+ * Enqueues a tagged job onto io_shared_inbox (SPMC queue).
+ * Returns C_OK if offloaded or if a job is already pending (to prevent
+ *   the caller from falling back to synchronous I/O on a connection
+ *   with an in-flight worker job).
+ * Returns C_ERR if fallback is needed (pool inactive or spmcEnqueue fails). */
+int trySendClusterReadToIOThreads(struct clusterLink *link) {
+    /* If any I/O job is already in flight for this link, return C_OK
+     * so the caller does NOT fall back to synchronous I/O. */
+    if (link->io_read_state != CLUSTER_LINK_IO_IDLE) return C_OK;
+    if (link->io_write_state != CLUSTER_LINK_IO_IDLE) {
+        link->io_read_deferred = 1;
+        return C_OK;
+    }
+    link->io_read_deferred = 0;
+
+    /* Invariant: io_refs must be 0 when both states are IDLE. */
+    serverAssert(link->io_refs == 0);
+
+    /* clusterReadHandler() drains any queued complete packets before
+     * attempting a new dispatch. */
+    serverAssert(link->io_complete_bytes == 0);
+    serverAssert(link->io_complete_packets == 0);
+
+    /* The connection is not established yet. See the equivalent guard in
+     * trySendClusterWriteToIOThreads() for why we return C_OK here. */
+    if (connGetState(link->conn) != CONN_STATE_CONNECTED) return C_OK;
+
+    /* No I/O thread pool available — synchronous fallback. */
+    if (server.active_io_threads_num <= 1) {
+        server.stat_cluster_io_main_thread_fallbacks++;
+        return C_ERR;
+    }
+
+    /* Postpone connection state updates while the I/O thread operates. */
+    connSetPostponeUpdateState(link->conn, 1);
+
+    /* Transition link to pending-read state. */
+    link->io_read_state = CLUSTER_LINK_IO_PENDING;
+    link->io_refs++;
+    link->rcvbuf_alloc_at_dispatch = link->rcvbuf_alloc;
+
+    /* Enqueue the read job. */
+    if (unlikely(spmcEnqueue(&io_shared_inbox, tagJob(link, JOB_REQ_CLUSTER_READ)) == false)) {
+        /* Rollback on enqueue failure. */
+        link->io_read_state = CLUSTER_LINK_IO_IDLE;
+        link->io_refs--;
+        connSetPostponeUpdateState(link->conn, 0);
+        server.stat_cluster_io_main_thread_fallbacks++;
+        return C_ERR;
+    }
+
+    io_jobs_submitted++;
+    cluster_io_pending_responses++;
+    return C_OK;
+}
+
+/* Try to offload a cluster link write to an I/O thread.
+ * Enqueues a tagged job onto io_shared_inbox after snapshotting the current
+ * head offset and the last queue node visible to the worker. New messages
+ * appended by clusterSendMessage during the write stay queued on the main
+ * thread and are picked up by a later dispatch.
+ * Returns C_OK if offloaded or if a job is already pending (to prevent
+ *   the caller from falling back to synchronous I/O on a connection
+ *   with an in-flight worker job).
+ * Returns C_ERR if fallback is needed (pool inactive or spmcEnqueue fails). */
+int trySendClusterWriteToIOThreads(struct clusterLink *link) {
+    listNode *last_send_block;
+
+    /* If any I/O job is already in flight for this link, return C_OK
+     * so the caller does NOT fall back to synchronous I/O. */
+    if (link->io_write_state != CLUSTER_LINK_IO_IDLE) return C_OK;
+    if (link->io_read_state != CLUSTER_LINK_IO_IDLE) return C_OK;
+
+    /* Invariant: io_refs must be 0 when both states are IDLE. */
+    serverAssert(link->io_refs == 0);
+
+    /* Nothing to write. */
+    if (listLength(link->send_msg_queue) == 0) return C_OK;
+
+    /* The connection is still being established (TCP connect or TLS handshake
+     * in progress). Don't dispatch: connWrite() fails with a non-EAGAIN error
+     * on a connection that isn't connected yet, the worker reports
+     * CLUSTER_IO_WRITE_ERROR and the completion handler turns that into a link
+     * teardown, so a slow handshake would kill the link. Nothing is stranded:
+     * the caller installed the write handler and the connection layer drives it
+     * once the handshake completes. Return C_OK so the caller neither retries
+     * synchronously (which fails the same way, see clusterWriteHandler) nor
+     * records a main-thread fallback. */
+    if (connGetState(link->conn) != CONN_STATE_CONNECTED) return C_OK;
+
+    /* No I/O thread pool available — synchronous fallback. */
+    if (server.active_io_threads_num <= 1) {
+        server.stat_cluster_io_main_thread_fallbacks++;
+        return C_ERR;
+    }
+
+    /* Yield one dispatch to a read skipped earlier: WRITE_BARRIER fires writable
+     * first, so a never-empty send queue would re-claim the link and never read. */
+    if (link->io_read_deferred) {
+        link->io_read_deferred = 0;
+        return C_OK;
+    }
+
+    last_send_block = listLast(link->send_msg_queue);
+    serverAssert(last_send_block != NULL);
+
+    /* Postpone connection state updates while the I/O thread operates. */
+    connSetPostponeUpdateState(link->conn, 1);
+
+    /* Snapshot the canonical queue for one write job. */
+    link->io_last_send_block = last_send_block;
+    link->io_head_offset = link->head_msg_send_offset;
+    link->io_nodes_sent = 0;
+
+    /* Transition link to pending-write state. */
+    link->io_write_state = CLUSTER_LINK_IO_PENDING;
+    link->io_refs++;
+
+    /* Enqueue the write job. */
+    if (unlikely(spmcEnqueue(&io_shared_inbox, tagJob(link, JOB_REQ_CLUSTER_WRITE)) == false)) {
+        link->io_write_state = CLUSTER_LINK_IO_IDLE;
+        link->io_refs--;
+        link->io_last_send_block = NULL;
+        link->io_head_offset = 0;
+        link->io_nodes_sent = 0;
+        connSetPostponeUpdateState(link->conn, 0);
+        server.stat_cluster_io_main_thread_fallbacks++;
+        return C_ERR;
+    }
+
+    io_jobs_submitted++;
+    cluster_io_pending_responses++;
+    return C_OK;
+}
+
+/* Try to offload a cluster TLS accept to an I/O thread.
+ * Called from clusterAcceptHandler BEFORE any clusterLink exists.
+ * Returns C_OK if offloaded, C_ERR if fallback is needed. */
+int trySendClusterAcceptToIOThreads(connection *conn) {
+    if (!(conn->flags & CONN_FLAG_ALLOW_ACCEPT_OFFLOAD)) return C_ERR;
+    /* A cluster accept job is already in flight for this connection. */
+    if (conn->flags & CONN_FLAG_ACCEPT_OFFLOAD_PENDING) return C_OK;
+    if (server.active_io_threads_num <= 1) {
+        server.stat_cluster_io_main_thread_fallbacks++;
+        return C_ERR;
+    }
+
+    conn->flags |= CONN_FLAG_ACCEPT_OFFLOAD_PENDING;
+    connSetPostponeUpdateState(conn, 1);
+    connIncrRefs(conn);
+
+    if (unlikely(spmcEnqueue(&io_shared_inbox, tagJob(conn, JOB_REQ_CLUSTER_ACCEPT)) == false)) {
+        connDecrRefs(conn);
+        connSetPostponeUpdateState(conn, 0);
+        conn->flags &= ~CONN_FLAG_ACCEPT_OFFLOAD_PENDING;
+        server.stat_cluster_io_main_thread_fallbacks++;
+        return C_ERR;
+    }
+
+    io_jobs_submitted++;
+    cluster_io_pending_responses++;
+    return C_OK;
+}
+
 /* Internal function to free the client's argv in an IO thread. */
 void ioThreadFreeArgv(robj **argv) {
     int last_arg = 0;
@@ -684,7 +908,7 @@ int tryOffloadFreeArgvToIOThreads(client *c, int argc, robj **argv) {
      * this is the last argument to free. With this approach, we don't need to
      * send the argc to the IO thread and we can send just the argv ptr. */
     argv[last_arg_to_free]->refcount = 0;
-    void *job = tagJob(argv, JOB_REQ_FREE_ARGV);
+    void *job = tagJob(argv, JOB_SPSC_FREE_ARGV);
     /* We pass false to enqueue the job without committing the queue index immediately.
      * This allows us to batch multiple free jobs together and
      * commit them in a single operation later in the event loop. This reduces the overhead
@@ -751,14 +975,12 @@ void trySendPollJobToIOThreads(void) {
         return;
     }
 
-    void *job = tagJob(server.el, JOB_REQ_POLL);
-
     server.io_poll_state = AE_IO_STATE_POLL;
     aeSetPollProtect(server.el, 1);
 
     /* Use SPMC to minimize polling overhead. At high thread counts, use private SPSC queues for lower latency. */
     if (server.active_io_threads_num <= 9) {
-        if (unlikely(spmcEnqueue(&io_shared_inbox, job) == false)) {
+        if (unlikely(spmcEnqueue(&io_shared_inbox, tagJob(server.el, JOB_REQ_POLL)) == false)) {
             server.io_poll_state = AE_IO_STATE_NONE;
             aeSetPollProtect(server.el, 0);
             return;
@@ -770,7 +992,7 @@ void trySendPollJobToIOThreads(void) {
             aeSetPollProtect(server.el, 0);
             return;
         }
-        spscEnqueue(&io_private_inbox[cur_epoll_thread], job, true);
+        spscEnqueue(&io_private_inbox[cur_epoll_thread], tagJob(server.el, JOB_SPSC_POLL), true);
     }
 
     aeSetCustomPollProc(server.el, getIOThreadPollResults);
@@ -818,7 +1040,14 @@ int trySendAcceptToIOThreads(connection *conn) {
         return C_ERR;
     }
 
+    /* Cluster TLS accepts have no client private-data yet. Route them to the
+     * dedicated cluster accept offload path. */
+    if (connGetOwnerKind(conn) == CONN_OWNER_CLUSTER_LINK) {
+        return trySendClusterAcceptToIOThreads(conn);
+    }
+
     client *c = connGetPrivateData(conn);
+    serverAssert(c != NULL);
     if (c->io_read_state != CLIENT_IDLE) {
         return C_OK;
     }
@@ -870,7 +1099,8 @@ static void handleReadJobs(client **read_jobs, int read_count) {
             client *c = lookupClientByID(read_client_ids[i]);
             if (!c || !c->conn) continue;
 
-            if (processPendingCommandAndInputBuffer(c) == C_OK) beforeNextClient(c);
+            if (processPendingCommandAndInputBuffer(c) == C_ERR) continue;
+            beforeNextClient(c);
 
             c = lookupClientByID(read_client_ids[i]);
             if (!c || !c->conn) continue;
@@ -924,13 +1154,29 @@ int processIOThreadsResponses(void) {
                 void *data;
                 int job_type;
                 untagJob(jobs[i], &data, &job_type);
-                client *c = (client *)data;
                 if (job_type == JOB_RES_READ_CLIENT) {
+                    client *c = (client *)data;
                     serverAssert(c->io_read_state == CLIENT_COMPLETED_IO);
                     read_jobs[read_count++] = c;
                 } else if (job_type == JOB_RES_WRITE_CLIENT) {
+                    client *c = (client *)data;
                     serverAssert(c->io_write_state == CLIENT_COMPLETED_IO);
                     write_jobs[write_count++] = c;
+                } else if (job_type == JOB_RES_CLUSTER_READ) {
+                    serverAssert(cluster_io_pending_responses > 0);
+                    cluster_io_pending_responses--;
+                    server.stat_cluster_threaded_reads_processed++;
+                    clusterHandleReadCompletion((struct clusterLink *)data);
+                } else if (job_type == JOB_RES_CLUSTER_WRITE) {
+                    serverAssert(cluster_io_pending_responses > 0);
+                    cluster_io_pending_responses--;
+                    server.stat_cluster_threaded_writes_processed++;
+                    clusterHandleWriteCompletion((struct clusterLink *)data);
+                } else if (job_type == JOB_RES_CLUSTER_ACCEPT) {
+                    serverAssert(cluster_io_pending_responses > 0);
+                    cluster_io_pending_responses--;
+                    server.stat_cluster_threaded_accepts_processed++;
+                    clusterHandleAcceptCompletion((connection *)data);
                 } else {
                     serverPanic("Unknown job type %d", job_type);
                 }

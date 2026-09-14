@@ -402,6 +402,28 @@ start_server {tags {"hash"}} {
         set _ $err
     } {}
 
+    set original_max [lindex [r config get hash-max-listpack-entries] 1]
+    r config set hash-max-listpack-entries 0
+    test {HMGET uses hashtable batch lookup} {
+        r del hmgetbatchtest
+        for {set i 1} {$i <= 128} {incr i} {
+            r hset hmgetbatchtest [format "f%02d" $i] [format "v%02d" $i]
+        }
+
+        assert_encoding hashtable hmgetbatchtest
+        assert_equal {v01} [r hmget hmgetbatchtest f01]
+        assert_equal {v01 {} v01 v04} [r hmget hmgetbatchtest f01 missing f01 f04]
+
+        set fields {missing}
+        set expected [list {}]
+        for {set i 1} {$i <= 19} {incr i} {
+            lappend fields [format "f%02d" $i]
+            lappend expected [format "v%02d" $i]
+        }
+        assert_equal $expected [r hmget hmgetbatchtest {*}$fields]
+    }
+    r config set hash-max-listpack-entries $original_max
+
     test {HKEYS - small hash} {
         lsort [r hkeys smallhash]
     } [lsort [array names smallhash *]]
@@ -938,4 +960,95 @@ start_server {tags {"hash"}} {
         assert_error "*value is NaN or Infinity*" {r hincrbyfloat hfoo field +inf}
         assert_equal 0 [r exists hfoo]
     } {} {valgrind:skip}
+}
+
+start_server {config "minimal.conf" tags {"hash" "external:skip"} overrides {io-threads 4 io-threads-always-active yes hash-max-listpack-entries 0}} {
+    test "Hash nested prefetch - HGET correctness with pipelined commands" {
+        for {set i 0} {$i < 200} {incr i} {
+            r hset myhash "field:$i" "value:$i"
+        }
+        assert_encoding hashtable myhash
+
+        set rd [valkey_deferring_client]
+        for {set i 0} {$i < 50} {incr i} {
+            $rd hget myhash "field:$i"
+        }
+        $rd flush
+        for {set i 0} {$i < 50} {incr i} {
+            assert_equal "value:$i" [$rd read]
+        }
+        $rd close
+    }
+
+    test "Hash nested prefetch - HMGET multi-field correctness" {
+        set rd [valkey_deferring_client]
+        $rd hmget myhash field:0 field:1 field:2 field:3 field:4
+        $rd flush
+        set result [$rd read]
+        assert_equal [list value:0 value:1 value:2 value:3 value:4] $result
+        $rd close
+    }
+
+    test "Hash nested prefetch - HDEL correctness with pipelined commands" {
+        set rd [valkey_deferring_client]
+        $rd hget myhash field:10
+        $rd hdel myhash field:199
+        $rd hget myhash field:199
+        $rd flush
+        assert_equal "value:10" [$rd read]
+        assert_equal 1 [$rd read]
+        assert_equal {} [$rd read]
+        $rd close
+    }
+
+    test "Hash nested prefetch - correctness with a forced multi-key batch" {
+        set server_pid [s process_id]
+
+        # Suspend the server while the commands are sent so they are all read
+        # together, which is the case where the prefetch batch holds several keys
+        # and the nested walk is interleaved across them.
+        set clients {}
+        for {set c 0} {$c < 16} {incr c} {
+            lappend clients [valkey_deferring_client]
+        }
+        pause_process $server_pid
+        set idx 0
+        foreach rd $clients {
+            $rd hget myhash "field:$idx"
+            $rd flush
+            incr idx
+        }
+        resume_process $server_pid
+
+        set idx 0
+        foreach rd $clients {
+            assert_equal "value:$idx" [$rd read]
+            incr idx
+        }
+        foreach rd $clients { $rd close }
+    }
+
+    test "Hash nested prefetch - large non-embedded values exercise value phase" {
+        set big [string repeat "x" 512]
+        for {set i 0} {$i < 200} {incr i} {
+            r hset bighash "field:$i" "$big:$i"
+        }
+        assert_encoding hashtable bighash
+
+        set clients {}
+        for {set c 0} {$c < 8} {incr c} {
+            set rd [valkey_deferring_client]
+            lappend clients $rd
+            for {set i 0} {$i < 100} {incr i} {
+                $rd hget bighash "field:[expr {$i % 200}]"
+            }
+            $rd flush
+        }
+        foreach rd $clients {
+            for {set i 0} {$i < 100} {incr i} {
+                assert_equal "$big:$i" [$rd read]
+            }
+            $rd close
+        }
+    }
 }

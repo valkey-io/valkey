@@ -1223,7 +1223,7 @@ clusterNode *getNodeByQuery(client *c, int *error_code) {
              * slot migration, the channel will be served from the source
              * node until the migration completes with CLUSTER SETSLOT <slot>
              * NODE <node-id>. */
-            int flags = LOOKUP_NOTOUCH | LOOKUP_NOSTATS | LOOKUP_NONOTIFY | LOOKUP_NOEXPIRE;
+            int flags = LOOKUP_NOEFFECTS; /* not client key access */
             if (!pubsubshard_included &&
                 (!c->flag.multi || (c->flag.multi && c->cmd->proc == execCommand))) {
                 /* Multi/Exec validation happens on exec */
@@ -1636,6 +1636,8 @@ void resetClusterStats(void) {
     server.cluster->stats_bus_module_bytes_sent = 0;
     server.cluster->stats_bus_module_bytes_received = 0;
     server.cluster->stat_cluster_links_buffer_limit_exceeded = 0;
+    server.cluster->stat_cluster_links_established_inbound = 0;
+    server.cluster->stat_cluster_links_established_outbound = 0;
 }
 
 void clusterCommandFlushslot(client *c) {

@@ -12291,7 +12291,7 @@ static void moduleScanKeyRawBorrowedHashtableCallback(void *privdata, void *entr
 }
 
 /* Like ValkeyModule_ScanKey, but each element is delivered to the callback as
- * borrowed (const char *, size_t) byte ranges instead of allocating a
+ * borrowed `(const char *, size_t)` byte ranges instead of allocating a
  * ValkeyModuleString per element. This avoids a per-element allocation on the
  * hot reply path. Works on the same key types as ValkeyModule_ScanKey: hash,
  * set and sorted set.
@@ -12304,9 +12304,9 @@ static void moduleScanKeyRawBorrowedHashtableCallback(void *privdata, void *entr
  *   - SET:  field = member,       value = NULL, value_len = 0 (sets have no value).
  *   - ZSET: field = member,       value = score as a decimal string.
  *
- * The score string uses the same form as ZRANGE ... WITHSCORES: e.g. the score
+ * The score string uses the same form as `ZRANGE ... WITHSCORES`: e.g. the score
  * 1.5 is delivered as "1.5" and 2.0 as "2". (ValkeyModule_ScanKey instead
- * delivers a %.17Lg-style rendering for sorted-set scores.)
+ * delivers a `%.17Lg`-style rendering for sorted-set scores.)
  *
  * POINTER LIFETIME: the field and value pointers are only guaranteed to be valid
  * for the duration of the callback invocation. A typical use is to reply to the
@@ -12314,8 +12314,14 @@ static void moduleScanKeyRawBorrowedHashtableCallback(void *privdata, void *entr
  * To keep a field or value beyond the callback, copy it (for example into a
  * ValkeyModuleString with ValkeyModule_CreateString).
  *
- * The usage pattern, return value, errno semantics and iteration-safety notes
- * are identical to ValkeyModule_ScanKey. */
+ * The function returns 1 if there are more elements to scan and 0 otherwise. On
+ * a return value of 0, errno is set to distinguish the cases:
+ *   - 0       - the scan completed successfully.
+ *   - EINVAL  - the key is NULL or not a hash, set or sorted set.
+ *   - ENOENT  - the cursor is already exhausted (a previous call returned 0).
+ *
+ * The usage pattern and iteration-safety notes are identical to
+ * ValkeyModule_ScanKey. */
 int VM_ScanKeyRawBorrowed(ValkeyModuleKey *key, ValkeyModuleScanCursor *cursor, ValkeyModuleScanKeyRawBorrowedCB fn, void *privdata) {
     if (key == NULL || key->value == NULL) {
         errno = EINVAL;

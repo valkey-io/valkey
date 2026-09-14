@@ -15356,6 +15356,43 @@ int VM_ACLCheckKeyPrefixPermissions(ValkeyModuleUser *user, const char *key, siz
     return VALKEYMODULE_OK;
 }
 
+/* --------------------------------------------------------------------------
+ * Data tiering: storage engine registration
+ *
+ * A module registers a storage engine by passing a pointer to a fully
+ * populated storageEngine (the same struct the built-in engines use, defined in
+ * storage/storage.h). The engine reuses that one interface. The module owns the
+ * storageEngine and must keep it valid for as long as the server runs, since the
+ * engine calls its function pointers directly.
+ * -------------------------------------------------------------------------- */
+#ifdef USE_EXT_STORAGE
+#include "storage/storage.h"
+
+int VM_RegisterStorageEngine(ValkeyModuleCtx *ctx, void *storage_engine) {
+    UNUSED(ctx);
+    if (storage_engine == NULL) {
+        errno = EINVAL;
+        return VALKEYMODULE_ERR;
+    }
+    /* storageRegisterEngine validates the struct and rejects a second engine or
+     * an incomplete interface. */
+    storageStatus rc = storageRegisterEngine((const storageEngine *)storage_engine);
+    if (rc != STORAGE_OK) {
+        errno = EINVAL;
+        return VALKEYMODULE_ERR;
+    }
+    serverLog(LL_NOTICE, "Module registered storage engine: %s", ((const storageEngine *)storage_engine)->name);
+    return VALKEYMODULE_OK;
+}
+#else  /* !USE_EXT_STORAGE */
+int VM_RegisterStorageEngine(ValkeyModuleCtx *ctx, void *storage_engine) {
+    UNUSED(ctx);
+    UNUSED(storage_engine);
+    errno = ENOSYS;
+    return VALKEYMODULE_ERR;
+}
+#endif /* USE_EXT_STORAGE */
+
 /* Register all the APIs we export. Keep this function at the end of the
  * file so that's easy to seek it to add new entries. */
 void moduleRegisterCoreAPI(void) {
@@ -15738,4 +15775,5 @@ void moduleRegisterCoreAPI(void) {
     REGISTER_API(ScriptingEngineDebuggerFlushLogs);
     REGISTER_API(ScriptingEngineDebuggerProcessCommands);
     REGISTER_API(ACLCheckKeyPrefixPermissions);
+    REGISTER_API(RegisterStorageEngine);
 }

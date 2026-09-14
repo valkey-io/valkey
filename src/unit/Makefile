@@ -88,6 +88,13 @@ ifdef FORCE_RUN_SKIPPED_TESTS
 	TEST_CFLAGS+=-DFORCE_RUN_SKIPPED_TESTS
 endif
 
+# BUILD_EXT_STORAGE arrives from ../.make-settings. The tiering objects are only
+# in the server library when it is set, so the tests that use them have to
+# compile out in lockstep.
+ifeq ($(BUILD_EXT_STORAGE),yes)
+	TEST_CFLAGS+=-DUSE_EXT_STORAGE=1
+endif
+
 # Track compilation flags to force rebuild when they change
 .flags: FORCE
 	@echo '$(TEST_CFLAGS)' | cmp -s - $@ || echo '$(TEST_CFLAGS)' > $@

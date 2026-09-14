@@ -218,6 +218,22 @@ else ()
     set(USE_RDMA 0)
 endif ()
 
+# Data tiering. Accepts ON/OFF only -- see the note in src/Makefile for why
+# there is no "module" setting here.
+if (BUILD_EXT_STORAGE)
+    valkey_parse_build_option(${BUILD_EXT_STORAGE} USE_EXT_STORAGE)
+    if (USE_EXT_STORAGE EQUAL 1)
+        message(STATUS "Data tiering is enabled")
+        add_valkey_server_compiler_options("-DUSE_EXT_STORAGE=1")
+    else ()
+        message(WARNING "BUILD_EXT_STORAGE can be one of: [ON | OFF | 1 | 0], but '${BUILD_EXT_STORAGE}' was provided")
+        set(USE_EXT_STORAGE 0)
+    endif ()
+else ()
+    message(STATUS "Data tiering is disabled")
+    set(USE_EXT_STORAGE 0)
+endif ()
+
 set(BUILDING_ARM64 0)
 set(BUILDING_ARM32 0)
 

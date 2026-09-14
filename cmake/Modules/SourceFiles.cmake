@@ -136,6 +136,15 @@ set(VALKEY_SERVER_SRCS
     ${CMAKE_SOURCE_DIR}/src/throttle_repl.c
     ${CMAKE_SOURCE_DIR}/src/throttle.c)
 
+# Data tiering sources are only compiled when the feature is enabled. Guarded
+# on the parsed USE_EXT_STORAGE rather than the raw BUILD_EXT_STORAGE so that an
+# unrecognised value does not silently pull them in.
+if (USE_EXT_STORAGE EQUAL 1)
+    list(APPEND VALKEY_SERVER_SRCS
+         ${CMAKE_SOURCE_DIR}/src/ext_storage.c
+         ${CMAKE_SOURCE_DIR}/src/storage/storage_mock.c)
+endif ()
+
 
 # valkey-cli
 set(VALKEY_CLI_SRCS

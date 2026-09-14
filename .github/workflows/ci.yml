@@ -198,6 +198,30 @@ jobs:
       - name: test-tls-builtin
         run: ./runtest --verbose --single unit/tls --dump-logs --tls
 
+  test-ext-storage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: install-test-dependencies
+        run: sudo apt-get install -y tcl8.6 tclx libgtest-dev libgmock-dev
+      - name: make-ext-storage
+        run: make -j4 all-with-unit-tests SERVER_CFLAGS='-Werror' BUILD_EXT_STORAGE=yes
+      - name: test-unit-ext-storage
+        run: make test-unit
+      # The feature is off by default even in a build that has it, so the suite
+      # here is checking that carrying the code changes nothing, not that tiering
+      # works. What proves tiering works are the unit tests above.
+      - name: test-ext-storage-build
+        run: ./runtest --verbose --dump-logs
+      # And the other direction: the tree still builds, and still passes, with
+      # every line of it compiled out.
+      - name: make-without-ext-storage
+        run: |
+          make distclean
+          make -j4 all-with-unit-tests SERVER_CFLAGS='-Werror' BUILD_EXT_STORAGE=no
+      - name: test-unit-without-ext-storage
+        run: make test-unit
+
   build-debian-old:
     runs-on: ubuntu-latest
     container: debian:bookworm

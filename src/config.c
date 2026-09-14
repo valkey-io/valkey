@@ -3626,6 +3626,12 @@ standardConfig static_configs[] = {
     createOffTConfig("auto-aof-rewrite-min-size", NULL, MODIFIABLE_CONFIG, 0, LLONG_MAX, server.aof_rewrite_min_size, 64 * 1024 * 1024, MEMORY_CONFIG, NULL, NULL),
     createOffTConfig("loading-process-events-interval-bytes", NULL, MODIFIABLE_CONFIG | HIDDEN_CONFIG, 1024, INT_MAX, server.loading_process_events_interval_bytes, 1024 * 1024 * 2, INTEGER_CONFIG, NULL, NULL),
 
+    /* Data tiering configs. */
+    createBoolConfig("ext-storage-enabled", NULL, IMMUTABLE_CONFIG, server.ext_storage_enabled, 0, NULL, NULL),
+    createStringConfig("ext-storage-engine", NULL, IMMUTABLE_CONFIG, ALLOW_EMPTY_STRING, server.ext_storage_engine, "", NULL, NULL),
+    createStringConfig("ext-storage-path", NULL, IMMUTABLE_CONFIG, ALLOW_EMPTY_STRING, server.ext_storage_path, "", NULL, NULL),
+    createULongLongConfig("ext-storage-capacity", NULL, IMMUTABLE_CONFIG, 1, ULLONG_MAX, server.ext_storage_capacity, 1024ULL * 1024 * 1024, MEMORY_CONFIG, NULL, NULL),
+
     /* Tls configs */
     createIntConfig("tls-port", NULL, MODIFIABLE_CONFIG, 0, 65535, server.tls_port, 0, INTEGER_CONFIG, NULL, applyTLSPort), /* TCP port. */
     createIntConfig("tls-session-cache-size", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, server.tls_ctx_config.session_cache_size, 20 * 1024, INTEGER_CONFIG, NULL, applyTlsCfg),

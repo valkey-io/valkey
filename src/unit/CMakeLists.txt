@@ -28,6 +28,14 @@ elseif (USE_TCMALLOC OR USE_TCMALLOC_MINIMAL)
     list(APPEND COMPILE_DEFINITIONS "USE_TCMALLOC")
 endif ()
 
+# Propagate the external-storage gate so the C++ gtest targets compile the
+# ext_storage tests. add_valkey_server_compiler_options() only reaches
+# CMAKE_C_FLAGS, so without this the C++ target sees test_ext_storage.cpp as
+# an empty translation unit.
+if (USE_EXT_STORAGE EQUAL 1)
+    list(APPEND COMPILE_DEFINITIONS "USE_EXT_STORAGE=1")
+endif ()
+
 # Fetch GoogleTest using FetchContent (modern approach)
 include(FetchContent)
 FetchContent_Declare(

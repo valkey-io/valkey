@@ -2338,6 +2338,14 @@ VALKEYMODULE_API int (*ValkeyModule_ACLCheckKeyPrefixPermissions)(ValkeyModuleUs
                                                                   size_t len,
                                                                   unsigned int flags) VALKEYMODULE_ATTR;
 
+/* Data tiering: a module registers a storage engine for spilled values by
+ * passing a pointer to a fully populated storageEngine (defined in
+ * src/storage/storage.h). The pointer is opaque here so the module ABI does
+ * not restate the interface. The module owns the struct and must keep it valid
+ * for the life of the server. */
+VALKEYMODULE_API int (*ValkeyModule_RegisterStorageEngine)(ValkeyModuleCtx *ctx,
+                                                           void *storage_engine) VALKEYMODULE_ATTR;
+
 #define ValkeyModule_IsAOFClient(id) ((id) == UINT64_MAX)
 /* This is included inline inside each Valkey module. */
 static int ValkeyModule_Init(ValkeyModuleCtx *ctx, const char *name, int ver, int apiver) VALKEYMODULE_ATTR_UNUSED;
@@ -2722,6 +2730,7 @@ static int ValkeyModule_Init(ValkeyModuleCtx *ctx, const char *name, int ver, in
     VALKEYMODULE_GET_API(ScriptingEngineDebuggerFlushLogs);
     VALKEYMODULE_GET_API(ScriptingEngineDebuggerProcessCommands);
     VALKEYMODULE_GET_API(ACLCheckKeyPrefixPermissions);
+    VALKEYMODULE_GET_API(RegisterStorageEngine);
 
     if (ValkeyModule_IsModuleNameBusy && ValkeyModule_IsModuleNameBusy(name)) return VALKEYMODULE_ERR;
     ValkeyModule_SetModuleAttribs(ctx, name, ver, apiver);

@@ -2418,6 +2418,13 @@ struct valkeyServer {
     int script_disable_deny_script; /* Allow running commands marked "noscript" inside a script. */
     int lua_enable_insecure_api;    /* Config to enable insecure api */
     int lua_insecure_api_current;   /* Current value of if insecure apis are enabled, used to determine if flush is needed. */
+    /* Data tiering. Always present so the configs parse in every build. A
+     * server built without BUILD_EXT_STORAGE refuses to start when
+     * ext_storage_enabled is set rather than ignoring it. */
+    int ext_storage_enabled;                 /* Move cold values to a storage engine. */
+    char *ext_storage_engine;                /* Name of the storage engine to use. */
+    char *ext_storage_path;                  /* Path the engine stores data under. */
+    unsigned long long ext_storage_capacity; /* Max bytes the engine may use. */
     /* Lazy free */
     int lazyfree_lazy_eviction;
     int lazyfree_lazy_expire;
@@ -4305,6 +4312,7 @@ void migrateCommand(client *c);
 void askingCommand(client *c);
 void readonlyCommand(client *c);
 void readwriteCommand(client *c);
+void createDumpPayload(rio *payload, robj *o, robj *key, int dbid);
 int verifyDumpPayload(unsigned char *p, size_t len, uint16_t *rdbver_ptr);
 void dumpCommand(client *c);
 void objectCommand(client *c);

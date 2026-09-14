@@ -359,6 +359,16 @@ endif
 BUILD_NO:=0
 BUILD_YES:=1
 BUILD_MODULE:=2
+
+# Data tiering. Unlike TLS and RDMA there is no "module" setting: the feature is
+# not a pluggable transport, it is threaded through the command, eviction and
+# persistence paths, so it is either compiled in or it is not. What a module can
+# supply is a storage backend, which is a runtime registration and needs no
+# build setting of its own.
+ifeq ($(BUILD_EXT_STORAGE),yes)
+	FINAL_CFLAGS+=-DUSE_EXT_STORAGE=$(BUILD_YES)
+endif
+
 ifeq ($(BUILD_TLS),yes)
 	FINAL_CFLAGS+=-DUSE_OPENSSL=$(BUILD_YES) $(OPENSSL_CFLAGS) -DBUILD_TLS_MODULE=$(BUILD_NO)
 	FINAL_LDFLAGS+=$(OPENSSL_LDFLAGS)
@@ -596,6 +606,13 @@ ENGINE_SERVER_OBJ = \
     throttle_repl.o \
     throttle.o
 ENGINE_SERVER_OBJ+=$(ENGINE_TRACE_OBJ)
+
+ENGINE_EXT_STORAGE_OBJ = \
+    ext_storage.o \
+    storage/storage_mock.o
+ifeq ($(BUILD_EXT_STORAGE),yes)
+ENGINE_SERVER_OBJ+=$(ENGINE_EXT_STORAGE_OBJ)
+endif
 ENGINE_CLI_NAME=$(ENGINE_NAME)-cli$(PROG_SUFFIX)
 ENGINE_CLI_OBJ = \
     adlist.o \
@@ -704,6 +721,7 @@ persist-settings: distclean
 	echo PREV_FINAL_CFLAGS=$(FINAL_CFLAGS) >> .make-settings
 	echo PREV_FINAL_LDFLAGS=$(FINAL_LDFLAGS) >> .make-settings
 	echo ENGINE_SERVER_OBJ=$(ENGINE_SERVER_OBJ) >> .make-settings
+	echo BUILD_EXT_STORAGE=$(BUILD_EXT_STORAGE) >> .make-settings
 	-(cd ../deps && $(MAKE) $(DEPENDENCY_TARGETS))
 
 .PHONY: persist-settings
@@ -774,6 +792,9 @@ DEP = $(ENGINE_SERVER_OBJ:%.o=%.d) $(ENGINE_CLI_OBJ:%.o=%.d) $(ENGINE_BENCHMARK_
 trace/%.o: trace/%.c .make-prerequisites
 	$(SERVER_CC) -Itrace -MMD -o $@ -c $<
 
+storage/%.o: storage/%.c .make-prerequisites
+	$(SERVER_CC) -Istorage -MMD -o $@ -c $<
+
 # The following files are checked in and don't normally need to be rebuilt. They
 # are built only if python is available and their prereqs are modified.
 ifneq (,$(PYTHON))
@@ -789,7 +810,7 @@ endif
 commands.c: $(COMMANDS_DEF_FILENAME).def
 
 clean:
-	rm -rf $(SERVER_NAME) $(ENGINE_SENTINEL_NAME) $(ENGINE_CLI_NAME) $(ENGINE_BENCHMARK_NAME) $(ENGINE_CHECK_RDB_NAME) $(ENGINE_CHECK_AOF_NAME) $(ENGINE_UNIT_GTESTS) $(ENGINE_LIB_NAME) trace/*.o trace/*.d *.o *.gcda *.gcno *.gcov valkey.info lcov-html Makefile.dep *.so
+	rm -rf $(SERVER_NAME) $(ENGINE_SENTINEL_NAME) $(ENGINE_CLI_NAME) $(ENGINE_BENCHMARK_NAME) $(ENGINE_CHECK_RDB_NAME) $(ENGINE_CHECK_AOF_NAME) $(ENGINE_UNIT_GTESTS) $(ENGINE_LIB_NAME) trace/*.o trace/*.d storage/*.o storage/*.d *.o *.gcda *.gcno *.gcov valkey.info lcov-html Makefile.dep *.so
 	rm -f $(DEP)
 	-(cd modules/lua && $(MAKE) clean)
 

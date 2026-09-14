@@ -127,6 +127,7 @@ test "The old primary eventually gets reconfigured as a slave" {
 }
 
 test "ODOWN is not possible without N (quorum) Sentinels reports" {
+    set sentinels [llength $::sentinel_instances]
     foreach_sentinel_id id {
         S $id SENTINEL SET mymaster quorum [expr $sentinels+1]
     }
@@ -135,13 +136,14 @@ test "ODOWN is not possible without N (quorum) Sentinels reports" {
     assert {[lindex $addr 1] == $old_port}
     kill_instance valkey $master_id
 
-    # Make sure failover did not happened.
+    # Make sure failover did not happen.
     set addr [S 0 SENTINEL GET-PRIMARY-ADDR-BY-NAME mymaster]
     assert {[lindex $addr 1] == $old_port}
     restart_instance valkey $master_id
 }
 
 test "Failover is not possible without majority agreement" {
+    set quorum [expr {$sentinels/2 + 1}]
     foreach_sentinel_id id {
         S $id SENTINEL SET mymaster quorum $quorum
     }
@@ -154,7 +156,7 @@ test "Failover is not possible without majority agreement" {
     # Kill the current master
     kill_instance valkey $master_id
 
-    # Make sure failover did not happened.
+    # Make sure failover did not happen.
     set addr [S $quorum SENTINEL GET-PRIMARY-ADDR-BY-NAME mymaster]
     assert {[lindex $addr 1] == $old_port}
     restart_instance valkey $master_id
@@ -202,7 +204,7 @@ test "New primary [join $addr {:}] role matches" {
     assert {[RI $master_id role] eq {master}}
 }
 
-test "SENTINEL RESET can resets the primary" {
+test "SENTINEL RESET can reset the primary" {
     # After SENTINEL RESET, sometimes the sentinel can sense the primary again,
     # causing the test to fail. Here we give it a few more chances.
     for {set j 0} {$j < 10} {incr j} {

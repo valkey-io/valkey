@@ -1468,7 +1468,7 @@ void quicklistRotate(quicklist *quicklist) {
 
     /* If quicklist has only one node, the head listpack is also the
      * tail listpack and PushHead() could have reallocated our single listpack,
-     * which would make our pre-existing 'p' unusable. */
+     * which would make our preexisting 'p' unusable. */
     if (quicklist->len == 1) {
         p = lpSeek(quicklist->tail->entry, -1);
     }

@@ -19,12 +19,20 @@ jobs:
           fetch-depth: 0
 
       - name: Run Provenance Check
-        uses: valkey-io/verify-provenance@05ee217ecf96b948ce996dbc965f285cbe73752a
+        uses: valkey-io/verify-provenance@76588a161686a5bcab40ef11e8d1dff3a18aa8ef
         with:
           source_repo: "redis/redis"
           target_repo: "${{ github.repository }}"
-          branding_pairs: "Redis:Valkey"
-          prefix_pairs: "RM_:VM_,REDISMODULE_:VALKEYMODULE_"
+          normalization_pairs: "Redis:Valkey,master:primary,slave:replica,RM_:VM_,REDISMODULE_:VALKEYMODULE_"
           exclude_dirs: "deps/"
           github_token: "${{ secrets.GITHUB_TOKEN }}"
           db_branch: "verify-provenance-db"
+
+      - name: Show Provenance Check Log
+        if: always()
+        run: |
+          if [ -f .provenance-output.log ]; then
+            cat .provenance-output.log
+          else
+            echo "No provenance output log found."
+          fi

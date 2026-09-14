@@ -312,6 +312,108 @@ start_cluster 3 0 [list config_lines $modules] {
             fail "Timer did not execute CLUSTER SLOTS or server crashed"
         }
     }
+
+    test "VM_RegisterClusterMessageReceiver - unregister head and re-register does not crash" {
+        # Register the receivers on node1
+        assert_equal OK [$node1 test.register_receiver]
+
+        # Unregister it (the head of the list)
+        assert_equal OK [$node1 test.unregister_receiver]
+
+        # Re-register - on the buggy code this traverses freed memory and crashes
+        assert_equal OK [$node1 test.register_receiver]
+
+        # Send from node2 so node1 receives it via the re-registered receiver
+        R 0 CONFIG RESETSTAT
+        assert_equal OK [$node2 test.send_msg_uaf]
+
+        wait_for_condition 50 100 {
+            [CI 0 cluster_stats_messages_module_received] >= 2
+        } else {
+            fail "node1 didn't receive cluster module message after re-registration"
+        }
+        verify_log_message 0 "*DING (type 3) RECEIVED*TestUAF*" 0
+        verify_log_message 0 "*DING (type 255) RECEIVED*TestMAX*" 0
+    }
+
+    test "VM_RegisterClusterMessageReceiver - dangling callback after MODULE UNLOAD" {
+        set loglines [count_log_lines 0]
+
+        # Register the receivers on node1
+        assert_equal OK [$node1 test.register_receiver]
+
+        # Unload the module on node1
+        assert_equal OK [$node1 MODULE UNLOAD cluster]
+
+        # Another node sends a packet; node1 receives it and, on the buggy code,
+        # would invoke the dangling callback and crash. After the fix the entry
+        # is gone, so the packet is simply ignored.
+        R 0 CONFIG RESETSTAT
+        assert_equal OK [$node2 test.send_msg_uaf]
+
+        # Verify node1 is still alive (the receiving node must not have crashed).
+        wait_for_condition 50 100 {
+            [CI 0 cluster_stats_messages_module_received] >= 2
+        } else {
+            fail "node1 didn't receive cluster module message"
+        }
+        verify_no_log_message 0 "*DING (type 3) RECEIVED*TestUAF*" $loglines
+        verify_no_log_message 0 "*DING (type 255) RECEIVED*TestMAX*" $loglines
+        assert_equal PONG [$node1 PING]
+    }
+}
+
+start_cluster 2 0 {overrides {cluster-node-timeout 1000}} {
+    test "MODULE LOAD is blocked during atomic slot migration" {
+        set testmodule [file normalize tests/modules/basics.so]
+        set node0_id [R 0 CLUSTER MYID]
+        set node1_id [R 1 CLUSTER MYID]
+
+        # Verify module can be loaded normally before migration
+        assert_equal {OK} [R 0 MODULE LOAD $testmodule]
+        assert_equal {OK} [R 0 MODULE UNLOAD test]
+
+        # Prevent migration from completing so we can test during migration
+        R 0 DEBUG SLOTMIGRATION PREVENT-PAUSE 1
+        R 1 DEBUG SLOTMIGRATION PREVENT-PAUSE 1
+
+        # Start atomic slot migration from node 0 to node 1
+        assert_match "OK" [R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 100 100 NODE $node1_id]
+
+        # Wait for migration to be in progress
+        wait_for_condition 100 100 {
+            [llength [R 0 CLUSTER GETSLOTMIGRATIONS]] > 0
+        } else {
+            fail "Migration did not start"
+        }
+
+        # Attempt to load module during migration should fail on exporting node
+        catch {R 0 MODULE LOAD $testmodule} err
+        assert_match "*Error loading module: cannot load module during slot migration*" $err
+
+        # Attempt to load module during migration should fail on importing node
+        catch {R 1 MODULE LOAD $testmodule} err
+        assert_match "*Error loading module: cannot load module during slot migration*" $err
+
+        # Cancel migration
+        R 0 CLUSTER CANCELSLOTMIGRATIONS
+
+        # Wait for migration to be cancelled
+        wait_for_condition 100 100 {
+            [llength [R 1 CLUSTER GETSLOTMIGRATIONS]] == 0 ||
+            [dict get [lindex [R 1 CLUSTER GETSLOTMIGRATIONS] 0] state] eq "failed"
+        } else {
+            fail "Migration did not cancel"
+        }
+
+        # Re-enable pausing
+        R 0 DEBUG SLOTMIGRATION PREVENT-PAUSE 0
+        R 1 DEBUG SLOTMIGRATION PREVENT-PAUSE 0
+
+        # Verify module can be loaded after migration completes
+        assert_equal {OK} [R 0 MODULE LOAD $testmodule]
+        assert_equal {OK} [R 0 MODULE UNLOAD test]
+    }
 }
 
 } ;# end tag

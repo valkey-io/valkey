@@ -21,7 +21,10 @@ on:
         description: "tests to skip (delete the ones you wanna keep, do not leave empty)"
         default: "valkey,modules,sentinel,cluster,unittest,large-memory"
       test_args:
-        description: "extra test arguments"
+        description: "extra test arguments; use valgrind_test instead of --single for targeted valgrind runs"
+        default: ""
+      valgrind_test:
+        description: "single test file or directory to run in valgrind jobs instead of the full shards"
         default: ""
       cluster_test_args:
         description: "extra cluster / sentinel test arguments"
@@ -45,7 +48,12 @@ on:
         type: string
         default: ""
       test_args:
-        description: "extra test arguments"
+        description: "extra test arguments; use valgrind_test instead of --single for targeted valgrind runs"
+        required: false
+        type: string
+        default: ""
+      valgrind_test:
+        description: "single test file or directory to run in valgrind jobs instead of the full shards"
         required: false
         type: string
         default: ""
@@ -259,7 +267,14 @@ jobs:
             apt-get update
             apt-get install -y build-essential pkg-config libgtest-dev libgmock-dev python3
             make all-with-unit-tests SERVER_CFLAGS='-Werror'
-            ./src/unit/valkey-unit-gtests
+            if [ -f ./src/unit/valkey-unit-gtests ]; then
+              make test-unit
+            elif [ -f ./src/valkey-unit-tests ]; then
+              ./src/valkey-unit-tests
+            else
+              echo "No unit-test binary was produced"
+              exit 1
+            fi
   test-ubuntu-jemalloc-fortify:
     runs-on: ubuntu-latest
     if: |
@@ -815,6 +830,7 @@ jobs:
           echo "$CACHE"
           if [ "$(( $CACHE-$CACHE0 ))" -gt "8000000" ]; then exit 1; fi
   test-valgrind-test:
+    name: test-valgrind-test (${{ matrix.shard }})
     runs-on: ubuntu-latest
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
@@ -822,6 +838,10 @@ jobs:
         (github.event_name == 'pull_request' && github.event.pull_request.base.ref != 'unstable' && github.event.action != 'labeled')) &&
       !contains(github.event.inputs.skipjobs, 'valgrind') && !contains(github.event.inputs.skiptests, 'valkey')
     timeout-minutes: 1440
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(inputs.valgrind_test && '["targeted"]' || '["unit", "cluster", "integration-type"]') }}
     steps:
       - name: prep
         if: github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call'
@@ -851,12 +871,22 @@ jobs:
           sudo apt-get install tcl8.6 tclx valgrind -y
       - name: test
         if: true && !contains(github.event.inputs.skiptests, 'valkey')
-        run: ./runtest --valgrind --no-latency --failures-output test-failures/valkey.json --verbose --clients 1 --timeout 2400 --dump-logs ${{github.event.inputs.test_args}}
+        env:
+          VALGRIND_TEST: ${{ inputs.valgrind_test }}
+        run: |
+          shard_args=()
+          case "${{ matrix.shard }}" in
+            unit) shard_args=(--single tests/unit) ;;
+            cluster) shard_args=(--single tests/unit/cluster) ;;
+            integration-type) shard_args=(--single tests/integration --single tests/unit/type) ;;
+            targeted) shard_args=(--single "$VALGRIND_TEST") ;;
+          esac
+          ./runtest --valgrind --no-latency --failures-output test-failures/valkey.json --verbose --clients 1 --timeout 2400 --dump-logs "${shard_args[@]}" ${{github.event.inputs.test_args}}
       - name: Upload test failures
         if: always()
         uses: ./.github/actions/upload-test-failures
         with:
-          job-name: ${{ github.job }}
+          job-name: ${{ github.job }}-${{ matrix.shard }}
   test-valgrind-misc:
     runs-on: ubuntu-latest
     if: |
@@ -913,6 +943,7 @@ jobs:
         with:
           job-name: ${{ github.job }}
   test-valgrind-no-malloc-usable-size-test:
+    name: test-valgrind-no-malloc-usable-size-test (${{ matrix.shard }})
     runs-on: ubuntu-latest
     if: |
       (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
@@ -920,6 +951,10 @@ jobs:
         (github.event_name == 'pull_request' && github.event.pull_request.base.ref != 'unstable' && github.event.action != 'labeled')) &&
       !contains(github.event.inputs.skipjobs, 'valgrind') && !contains(github.event.inputs.skiptests, 'valkey')
     timeout-minutes: 1440
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(inputs.valgrind_test && '["targeted"]' || '["unit", "cluster", "integration-type"]') }}
     steps:
       - name: prep
         if: github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call'
@@ -949,12 +984,22 @@ jobs:
           sudo apt-get install tcl8.6 tclx valgrind -y
       - name: test
         if: true && !contains(github.event.inputs.skiptests, 'valkey')
-        run: ./runtest --valgrind --no-latency --failures-output test-failures/valkey.json --verbose --clients 1 --timeout 2400 --dump-logs ${{github.event.inputs.test_args}}
+        env:
+          VALGRIND_TEST: ${{ inputs.valgrind_test }}
+        run: |
+          shard_args=()
+          case "${{ matrix.shard }}" in
+            unit) shard_args=(--single tests/unit) ;;
+            cluster) shard_args=(--single tests/unit/cluster) ;;
+            integration-type) shard_args=(--single tests/integration --single tests/unit/type) ;;
+            targeted) shard_args=(--single "$VALGRIND_TEST") ;;
+          esac
+          ./runtest --valgrind --no-latency --failures-output test-failures/valkey.json --verbose --clients 1 --timeout 2400 --dump-logs "${shard_args[@]}" ${{github.event.inputs.test_args}}
       - name: Upload test failures
         if: always()
         uses: ./.github/actions/upload-test-failures
         with:
-          job-name: ${{ github.job }}
+          job-name: ${{ github.job }}-${{ matrix.shard }}
   test-valgrind-no-malloc-usable-size-misc:
     runs-on: ubuntu-latest
     if: |
@@ -1996,6 +2041,87 @@ jobs:
         uses: ./.github/actions/upload-test-failures
         with:
           job-name: ${{ github.job }}
+  test-alpine-32bit:
+    runs-on: ubuntu-latest
+    if: |
+      (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
+        (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
+        (github.event_name == 'pull_request' &&
+          (github.event.pull_request.base.ref != 'unstable' ||
+            contains(github.event.pull_request.labels.*.name, 'run-extra-tests')) &&
+          (github.event.action != 'labeled' ||
+            (github.event.pull_request.base.ref == 'unstable' && github.event.label.name == 'run-extra-tests'))
+        )) &&
+      !contains(github.event.inputs.skipjobs, 'alpine') &&
+      !contains(github.event.inputs.skipjobs, '32bit')
+    steps:
+      - name: prep
+        if: github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call'
+        run: |
+          echo "GITHUB_REPOSITORY=${{inputs.use_repo || github.event.inputs.use_repo}}" >> $GITHUB_ENV
+          echo "GITHUB_HEAD_REF=${{inputs.use_git_ref || github.event.inputs.use_git_ref}}" >> $GITHUB_ENV
+          echo "skipjobs: ${{github.event.inputs.skipjobs}}"
+          echo "skiptests: ${{github.event.inputs.skiptests}}"
+          echo "test_args: ${{github.event.inputs.test_args}}"
+          echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ${{ inputs.use_repo || github.event.inputs.use_repo || github.repository }}
+          ref: ${{ inputs.use_git_ref || github.event.inputs.use_git_ref || github.ref }}
+      - name: Run 32-bit Alpine tests
+        env:
+          RUN_ACCURATE: ${{ github.event_name != 'pull_request' && '--accurate' || '' }}
+          SKIPTESTS: ${{ github.event.inputs.skiptests }}
+          TEST_ARGS: ${{ github.event.inputs.test_args }}
+          CLUSTER_TEST_ARGS: ${{ github.event.inputs.cluster_test_args }}
+        run: |
+          docker run --rm \
+            --platform linux/386 \
+            -v "$PWD:/src" \
+            -w /src \
+            -e RUN_ACCURATE \
+            -e SKIPTESTS \
+            -e TEST_ARGS \
+            -e CLUSTER_TEST_ARGS \
+            i386/alpine:latest \
+            sh -euxc '
+              apk add --no-cache bash build-base git gtest-dev linux-headers procps python3 tcl tclx
+
+              rm -rf libbacktrace
+              git clone https://github.com/ianlancetaylor/libbacktrace.git libbacktrace
+              cd libbacktrace
+              git checkout b9e40069c0b47a722286b94eb5231f7f05c08713
+              ./configure
+              make -j$(nproc)
+              make install
+              cd /src
+
+              make SERVER_CFLAGS="-Werror" USE_LIBBACKTRACE=yes 32bit
+
+              case "${SKIPTESTS:-}" in
+                *valkey*) ;;
+                *) ./runtest ${RUN_ACCURATE:-} --failures-output test-failures/valkey.json --verbose --dump-logs ${TEST_ARGS:-} ;;
+              esac
+
+              case "${SKIPTESTS:-}" in
+                *modules*) ;;
+                *)
+                  make -C tests/modules 32bit
+                  CFLAGS="-Werror" ./runtest-moduleapi --failures-output test-failures/moduleapi.json --verbose --dump-logs ${TEST_ARGS:-}
+                  ;;
+              esac
+
+              case "${SKIPTESTS:-}" in
+                *sentinel*) ;;
+                *) ./runtest-sentinel --failures-output test-failures/sentinel.json ${CLUSTER_TEST_ARGS:-} ;;
+              esac
+            '
+      - name: Upload test failures
+        if: always()
+        uses: ./.github/actions/upload-test-failures
+        with:
+          job-name: ${{ github.job }}
+
   reply-schemas-validator:
     runs-on: ubuntu-latest
     timeout-minutes: 1440
@@ -2092,6 +2218,7 @@ jobs:
       - test-freebsd
       - test-alpine-jemalloc
       - test-alpine-libc-malloc
+      - test-alpine-32bit
       - reply-schemas-validator
     steps:
       - name: Download all failures
@@ -2102,11 +2229,35 @@ jobs:
           merge-multiple: false
 
       - name: Merge into single file
+        id: merge
         run: |
           python3 << 'EOF'
           import json, glob, os
 
           merged = {}
+          damaged = []
+
+          # Every field the Tcl writers emit for a failure. A file can parse as
+          # JSON yet still be damaged: a run killed mid-write can leave a null or
+          # a half-built object in the list. Those publish as real failures the
+          # detector then reads as empty, so the entry shape is checked too, not
+          # just the list around it.
+          REQUIRED_FAILURE_FIELDS = ("test_name", "test_file", "status", "error")
+
+          def invalid_entry_reason(entry, index):
+              """Why *entry* is not a usable failure object, or None if it is."""
+              if not isinstance(entry, dict):
+                  return f"entry {index} is {type(entry).__name__}, expected an object"
+              missing = [f for f in REQUIRED_FAILURE_FIELDS if f not in entry]
+              if missing:
+                  return f"entry {index} is missing {', '.join(missing)}"
+              nonstring = [
+                  f for f in REQUIRED_FAILURE_FIELDS
+                  if not isinstance(entry[f], str)
+              ]
+              if nonstring:
+                  return f"entry {index} has non-string {', '.join(nonstring)}"
+              return None
 
           for job_dir in sorted(glob.glob("individual-failures/test-failures-*")):
               job_name = os.path.basename(job_dir).replace("test-failures-", "")
@@ -2114,8 +2265,34 @@ jobs:
 
               for suite_file in glob.glob(os.path.join(job_dir, "*.json")):
                   suite_name = os.path.splitext(os.path.basename(suite_file))[0]
-                  with open(suite_file) as f:
-                      data = json.load(f)
+                  # Read each suite independently. A damaged file (a job killed
+                  # mid-write, a truncated upload) must not abort the merge: the
+                  # artifact carries every other job's failures too.
+                  try:
+                      with open(suite_file, encoding="utf-8") as f:
+                          data = json.load(f)
+                  except (OSError, ValueError) as exc:
+                      damaged.append(f"{job_name}/{suite_name}: {exc}")
+                      print(f"{job_name}/{suite_name}: unreadable, skipped ({exc})")
+                      continue
+                  # A suite file is a list of failures. Anything else parses but
+                  # has no length, so treat it as damaged rather than letting it
+                  # raise past this loop and lose the whole artifact.
+                  if not isinstance(data, list):
+                      reason = f"expected a JSON list, got {type(data).__name__}"
+                      damaged.append(f"{job_name}/{suite_name}: {reason}")
+                      print(f"{job_name}/{suite_name}: unreadable, skipped ({reason})")
+                      continue
+                  entry_reasons = [
+                      r for r in (
+                          invalid_entry_reason(e, i) for i, e in enumerate(data)
+                      ) if r
+                  ]
+                  if entry_reasons:
+                      reason = "; ".join(entry_reasons)
+                      damaged.append(f"{job_name}/{suite_name}: {reason}")
+                      print(f"{job_name}/{suite_name}: unreadable, skipped ({reason})")
+                      continue
                   merged[job_name][suite_name] = data
                   count = len(data)
                   if count:
@@ -2125,6 +2302,23 @@ jobs:
 
           with open("all-test-failures.json", "w") as f:
               json.dump(merged, f, indent=2)
+
+          if damaged:
+              # Record the loss for the step that fails this job after the
+              # upload. The artifact is still worth publishing because it holds
+              # every readable job's failures, but it is incomplete, so the job
+              # must not report success.
+              print(f"::error::{len(damaged)} suite file(s) could not be read "
+                    f"and are missing from the artifact: {'; '.join(damaged)}")
+              with open("consolidation-damage.txt", "w") as f:
+                  f.write("\n".join(damaged))
+
+          # Signal damage to later steps so the per-job artifacts that fed the
+          # merge are kept for inspection rather than deleted.
+          step_output = os.environ.get("GITHUB_OUTPUT")
+          if step_output:
+              with open(step_output, "a") as f:
+                  f.write(f"damaged={'true' if damaged else 'false'}\n")
           EOF
 
       - name: Upload consolidated failures
@@ -2134,7 +2328,11 @@ jobs:
           path: all-test-failures.json
           retention-days: 30
 
+      # Skip the cleanup when a suite file was damaged, so the per-job
+      # artifacts survive for inspection. The parse-error string alone is not
+      # enough to reconstruct a file killed mid-write or truncated on upload.
       - name: Delete individual artifacts
+        if: steps.merge.outputs.damaged != 'true'
         uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
         with:
           script: |
@@ -2159,6 +2357,17 @@ jobs:
               }
             }
             console.log('Done. Individual artifacts deleted.');
+
+      # Last step, so the consolidated artifact is published and any healthy
+      # per-job artifacts are cleaned up first. An artifact missing some suites
+      # must not leave this job green.
+      - name: Fail if any suite file was unreadable
+        run: |
+          if [ -f consolidation-damage.txt ]; then
+            echo "Suite files missing from the artifact:"
+            cat consolidation-damage.txt
+            exit 1
+          fi
   notify-about-job-results:
     runs-on: ubuntu-latest
     if: always() && github.event_name == 'schedule' && github.repository == 'valkey-io/valkey'
@@ -2195,7 +2404,9 @@ jobs:
       - test-freebsd
       - test-alpine-jemalloc
       - test-alpine-libc-malloc
+      - test-alpine-32bit
       - reply-schemas-validator
+      - consolidate-test-failures
     steps:
       - name: Collect job status
         run: |

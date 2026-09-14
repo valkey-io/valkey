@@ -58,7 +58,7 @@ jobs:
       fail-fast: false
       matrix:
         release-branch: ${{ fromJson(needs.determine-release-branches.outputs.branches) }}
-      max-parallel: 1
+      max-parallel: 2
     uses: ./.github/workflows/daily.yml
     with:
       use_repo: valkey-io/valkey

@@ -75,166 +75,158 @@ proc corrupt_payload {payload} {
 
 # fuzzy tester for corrupt RESTORE payloads
 # valgrind will make sure there were no leaks in the rdb loader error handling code
-foreach sanitize_dump {no yes} {
-    if {$::accurate} {
-        set min_duration 60 ;# run at least 1 minute
-        set min_cycles 100 ;# run at least 100 cycles
-    } else {
-        set min_duration 10 ; # run at least 10 seconds
-        set min_cycles 10 ; # run at least 10 cycles
-    }
+if {$::accurate} {
+    set min_duration 60 ;# run at least 1 minute
+    set min_cycles 100 ;# run at least 100 cycles
+} else {
+    set min_duration 10 ; # run at least 10 seconds
+    set min_cycles 10 ; # run at least 10 cycles
+}
 
-    # Don't execute this on FreeBSD due to a yet-undiscovered memory issue
-    # which causes tclsh to bloat.
-    if {[exec uname] == "FreeBSD"} {
-        set min_cycles 1
-        set min_duration 1
-    }
+# Skip entirely on FreeBSD due to a yet-undiscovered memory issue
+# which causes tclsh to bloat.
+if {[exec uname] ne "FreeBSD"} {
 
-    test "Fuzzer corrupt restore payloads - sanitize_dump: $sanitize_dump" {
-        if {$min_duration * 2 > $::timeout} {
-            fail "insufficient timeout"
-        }
-        # start a server, fill with data and save an RDB file once (avoid re-save)
-        start_server [list overrides [list "save" "" use-exit-on-panic yes crash-memcheck-enabled no loglevel verbose] ] {
-            set stdout [srv 0 stdout]
-            r config set sanitize-dump-payload $sanitize_dump
-            r debug set-skip-checksum-validation 1
-            set start_time [clock seconds]
-            generate_types
-            set dbsize [r dbsize]
-            r save
-            set cycle 0
-            set stat_terminated_in_restore 0
-            set stat_terminated_in_traffic 0
-            set stat_terminated_by_signal 0
-            set stat_successful_restore 0
-            set stat_rejected_restore 0
-            set stat_traffic_commands_sent 0
-            # repeatedly DUMP a random key, corrupt it and try RESTORE into a new key
-            while true {
-                set k [r randomkey]
-                set dump [r dump $k]
-                set dump [corrupt_payload $dump]
-                set printable_dump [string2printable $dump]
-                set restore_failed false
-                set report_and_restart false
-                set sent {}
-                # RESTORE can fail, but hopefully not terminate
-                if { [catch { r restore "_$k" 0 $dump REPLACE } err] } {
-                    set restore_failed true
-                    # skip if return failed with an error response.
-                    if {[string match "ERR*" $err]} {
-                        incr stat_rejected_restore
-                    } else {
-                        set report_and_restart true
-                        incr stat_terminated_in_restore
-                        write_log_line 0 "corrupt payload: $printable_dump"
-                        if {$sanitize_dump == yes} {
-                            puts "Server crashed in RESTORE with payload: $printable_dump"
-                        }
-                    }
+test "Fuzzer corrupt restore payloads" {
+    if {$min_duration * 2 > $::timeout} {
+        fail "insufficient timeout"
+    }
+    # start a server, fill with data and save an RDB file once (avoid re-save)
+    start_server [list overrides [list "save" "" use-exit-on-panic yes crash-memcheck-enabled no loglevel verbose] ] {
+        set stdout [srv 0 stdout]
+        r debug set-skip-checksum-validation 1
+        set start_time [clock seconds]
+        generate_types
+        set dbsize [r dbsize]
+        r save
+        set cycle 0
+        set stat_terminated_in_restore 0
+        set stat_terminated_in_traffic 0
+        set stat_terminated_by_signal 0
+        set stat_successful_restore 0
+        set stat_rejected_restore 0
+        set stat_traffic_commands_sent 0
+        set stat_sanitizer_findings 0
+        # repeatedly DUMP a random key, corrupt it and try RESTORE into a new key
+        while true {
+            set k [r randomkey]
+            set dump [r dump $k]
+            set dump [corrupt_payload $dump]
+            set printable_dump [string2printable $dump]
+            set restore_failed false
+            set report_and_restart false
+            set sent {}
+            # RESTORE can fail, but hopefully not terminate
+            if { [catch { r restore "_$k" 0 $dump REPLACE } err] } {
+                set restore_failed true
+                # skip if return failed with an error response.
+                if {[string match "ERR*" $err]} {
+                    incr stat_rejected_restore
                 } else {
-                    r ping ;# an attempt to check if the server didn't terminate (this will throw an error that will terminate the tests)
-                }
-
-                set print_commands false
-                if {!$restore_failed} {
-                    # if RESTORE didn't fail or terminate, run some random traffic on the new key
-                    incr stat_successful_restore
-                    if { [ catch {
-                        set sent [generate_fuzzy_traffic_on_key "_$k" 1] ;# traffic for 1 second
-                        incr stat_traffic_commands_sent [llength $sent]
-                        r del "_$k" ;# in case the server terminated, here's where we'll detect it.
-                        if {$dbsize != [r dbsize]} {
-                            puts "unexpected keys"
-                            puts "keys: [r keys *]"
-                            puts "commands leading to it:"
-                            foreach cmd $sent {
-                                foreach arg $cmd {
-                                    puts -nonewline "[string2printable $arg] "
-                                }
-                                puts ""
-                            }
-                            exit 1
-                        }
-                    } err ] } {
-                        set err [format "%s" $err] ;# convert to string for pattern matching
-                        if {[string match "*SIGTERM*" $err]} {
-                            puts "payload that caused test to hang: $printable_dump"
-                            if {$::dump_logs} {
-                                set srv [get_srv 0]
-                                dump_server_log $srv
-                            }
-                            exit 1
-                        }
-                        # if the server terminated update stats and restart it
-                        set report_and_restart true
-                        incr stat_terminated_in_traffic
-                        set by_signal [count_log_message 0 "crashed by signal"]
-                        incr stat_terminated_by_signal $by_signal
-
-                        if {$by_signal != 0 || $sanitize_dump == yes} {
-                            if {$::dump_logs} {
-                                set srv [get_srv 0]
-                                dump_server_log $srv
-                            }
-
-                            puts "Server crashed (by signal: $by_signal), with payload: $printable_dump"
-                            set print_commands true
-                        }
-                    }
-                }
-
-                # check valgrind report for invalid reads after each RESTORE
-                # payload so that we have a report that is easier to reproduce
-                set valgrind_errors [find_valgrind_errors [srv 0 stderr] false]
-                set asan_errors [sanitizer_errors_from_file [srv 0 stderr]]
-                if {$valgrind_errors != "" || $asan_errors != ""} {
-                    puts "valgrind or asan found an issue for payload: $printable_dump"
                     set report_and_restart true
-                    set print_commands true
+                    incr stat_terminated_in_restore
+                    write_log_line 0 "corrupt payload: $printable_dump"
+                    puts "Server crashed in RESTORE with payload: $printable_dump"
                 }
+            } else {
+                r ping ;# an attempt to check if the server didn't terminate (this will throw an error that will terminate the tests)
+            }
 
-                if {$report_and_restart} {
-                    if {$print_commands} {
-                        puts "violating commands:"
+            set print_commands false
+            if {!$restore_failed} {
+                # if RESTORE didn't fail or terminate, run some random traffic on the new key
+                incr stat_successful_restore
+                if { [ catch {
+                    set sent [generate_fuzzy_traffic_on_key "_$k" 1] ;# traffic for 1 second
+                    incr stat_traffic_commands_sent [llength $sent]
+                    r del "_$k" ;# in case the server terminated, here's where we'll detect it.
+                    if {$dbsize != [r dbsize]} {
+                        puts "unexpected keys"
+                        puts "keys: [r keys *]"
+                        puts "commands leading to it:"
                         foreach cmd $sent {
                             foreach arg $cmd {
                                 puts -nonewline "[string2printable $arg] "
                             }
                             puts ""
                         }
+                        exit 1
+                    }
+                } err ] } {
+                    set err [format "%s" $err] ;# convert to string for pattern matching
+                    if {[string match "*SIGTERM*" $err]} {
+                        puts "payload that caused test to hang: $printable_dump"
+                        if {$::dump_logs} {
+                            set srv [get_srv 0]
+                            dump_server_log $srv
+                        }
+                        exit 1
+                    }
+                    # if the server terminated update stats and restart it
+                    set report_and_restart true
+                    incr stat_terminated_in_traffic
+                    set by_signal [count_log_message 0 "crashed by signal"]
+                    incr stat_terminated_by_signal $by_signal
+
+                    if {$::dump_logs} {
+                        set srv [get_srv 0]
+                        dump_server_log $srv
                     }
 
-                    # restart the server and re-apply debug configuration
-                    write_log_line 0 "corrupt payload: $printable_dump"
-                    restart_server 0 true true
-                    r config set sanitize-dump-payload $sanitize_dump
-                    r debug set-skip-checksum-validation 1
+                    puts "Server crashed (by signal: $by_signal), with payload: $printable_dump"
+                    set print_commands true
+                }
+            }
+
+            # check valgrind report for invalid reads after each RESTORE
+            # payload so that we have a report that is easier to reproduce
+            set valgrind_errors [find_valgrind_errors [srv 0 stderr] false]
+            set asan_errors [sanitizer_errors_from_file [srv 0 stderr]]
+            if {$valgrind_errors != "" || $asan_errors != ""} {
+                puts "valgrind or asan found an issue for payload: $printable_dump"
+                incr stat_sanitizer_findings
+                set report_and_restart true
+                set print_commands true
+            }
+
+            if {$report_and_restart} {
+                if {$print_commands} {
+                    puts "violating commands:"
+                    foreach cmd $sent {
+                        foreach arg $cmd {
+                            puts -nonewline "[string2printable $arg] "
+                        }
+                        puts ""
+                    }
                 }
 
-                incr cycle
-                if { ([clock seconds]-$start_time) >= $min_duration && $cycle >= $min_cycles} {
-                    break
-                }
+                # restart the server and re-apply debug configuration
+                write_log_line 0 "corrupt payload: $printable_dump"
+                restart_server 0 true true
+                r debug set-skip-checksum-validation 1
             }
-            if {$::verbose} {
-                puts "Done $cycle cycles in [expr {[clock seconds]-$start_time}] seconds."
-                puts "RESTORE: successful: $stat_successful_restore, rejected: $stat_rejected_restore"
-                puts "Total commands sent in traffic: $stat_traffic_commands_sent, crashes during traffic: $stat_terminated_in_traffic ($stat_terminated_by_signal by signal)."
+
+            incr cycle
+            if { ([clock seconds]-$start_time) >= $min_duration && $cycle >= $min_cycles} {
+                break
             }
         }
-        # if we run sanitization we never expect the server to crash at runtime
-        if {$sanitize_dump == yes} {
-            assert_equal $stat_terminated_in_restore 0
-            assert_equal $stat_terminated_in_traffic 0
+        if {$::verbose} {
+            puts "Done $cycle cycles in [expr {[clock seconds]-$start_time}] seconds."
+            puts "RESTORE: successful: $stat_successful_restore, rejected: $stat_rejected_restore"
+            puts "Total commands sent in traffic: $stat_traffic_commands_sent, crashes during traffic: $stat_terminated_in_traffic ($stat_terminated_by_signal by signal)."
         }
-        # make sure all terminations where due to assertion and not a SIGSEGV
-        assert_equal $stat_terminated_by_signal 0
     }
+    # with deep integrity validation unconditional we never expect the server to crash at runtime
+    assert_equal $stat_terminated_in_restore 0
+    assert_equal $stat_terminated_in_traffic 0
+    # make sure all terminations where due to assertion and not a SIGSEGV
+    assert_equal $stat_terminated_by_signal 0
+    # fail the test if valgrind/asan reported any findings during the run
+    assert_equal $stat_sanitizer_findings 0
 }
 
+} ;# uname FreeBSD
 
 
 } ;# tags

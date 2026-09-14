@@ -11,7 +11,7 @@
 
 void mpscInit(mpscQueue *q, size_t queue_size) {
     /* Queue size must be a power of 2 (the masking logic relies on it) */
-    assert((queue_size & (queue_size - 1)) == 0);
+    assert(queue_size > 0 && (queue_size & (queue_size - 1)) == 0);
     q->buffer = (_Atomic(void *) *)zmalloc(sizeof(_Atomic(void *)) * queue_size);
     q->queue_size = queue_size;
     atomic_init(&q->head, 0);
@@ -108,7 +108,7 @@ size_t mpscDequeueBatch(mpscQueue *q, void **jobs_out, size_t max_jobs) {
 
 inline void spmcInit(spmcQueue *q, size_t queue_size) {
     /* Queue size must be a power of 2 (the masking logic relies on it) */
-    assert((queue_size & (queue_size - 1)) == 0);
+    assert(queue_size > 0 && (queue_size & (queue_size - 1)) == 0);
     q->buffer = (spmcCell *)zmalloc_cache_aligned(sizeof(spmcCell) * queue_size);
     q->queue_size = queue_size;
     atomic_init(&q->head, 0);
@@ -207,7 +207,7 @@ void *spmcDequeue(spmcQueue *q) {
 
 void spscInit(spscQueue *q, size_t queue_size) {
     /* Queue size must be a power of 2 (the masking logic relies on it) */
-    assert((queue_size & (queue_size - 1)) == 0);
+    assert(queue_size > 0 && (queue_size & (queue_size - 1)) == 0);
     q->buffer = (void **)zmalloc(sizeof(void *) * queue_size);
     q->queue_size = queue_size;
     atomic_init(&q->head, 0);

@@ -76,10 +76,18 @@
 #define HAVE_SYSCTL_KERN_SOMAXCONN 1
 #endif
 
-/* Test for backtrace() */
+/* Test for backtrace() via execinfo.h */
 #if defined(__APPLE__) || (defined(__linux__) && defined(__GLIBC__)) || defined(__FreeBSD__) ||    \
     ((defined(__OpenBSD__) || defined(__NetBSD__) || defined(__sun)) && defined(USE_BACKTRACE)) || \
     defined(__DragonFly__) || (defined(__UCLIBC__) && defined(__UCLIBC_HAS_BACKTRACE__))
+#define HAVE_BACKTRACE 1
+#define HAVE_EXECINFO 1
+#endif
+
+/* When libbacktrace is available (e.g. on musl/Alpine), enable backtrace
+ * support even without execinfo.h. libbacktrace provides its own frame
+ * collection via backtrace_simple(). */
+#if defined(USE_LIBBACKTRACE) && !defined(HAVE_BACKTRACE)
 #define HAVE_BACKTRACE 1
 #endif
 

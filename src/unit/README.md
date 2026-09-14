@@ -1,5 +1,8 @@
 ## Valkey GoogleTest Unit Test Framework
 
+Although GTest is a C++ framework, unit tests should avoid C++ features and
+remain easily readable to C developers without requiring C++ knowledge.
+
 To use this framework to write unit tests, we have modified Valkey to build as
 a library that can link against other test executables. This framework uses the
 GNU linker (ld), which implements 'wrap' functionality to rename function calls
@@ -106,3 +109,91 @@ Example usage:
 ```bash
 make test-unit accurate=1 large_memory=1 seed=12345
 ```
+
+## Writing C-readable tests
+
+Valkey is a C project. Unit tests use GoogleTest (C++) as a test runner, but the
+test code itself should be written in a minimal C++ style that any C developer
+can read and modify without C++ knowledge.
+
+### Guidelines
+
+1. **No STL containers.** Use fixed-size C arrays, `sds`, or project-specific
+   structures instead of `std::vector`, `std::string`, `std::set`, etc.
+2. **No STL algorithms.** Use `qsort`, hand-written loops, or project utilities
+   instead of `std::sort`, `std::find`, `std::min`/`std::max`.
+3. **No C++ memory management.** No `new`/`delete`, smart pointers, or RAII
+   wrappers. Use `zmalloc`/`zfree` or stack allocation.
+4. **No classes or inheritance** (except GTest's `TEST`/`TEST_F`/`TEST_P`
+   macros which require them implicitly).
+5. **No templates, lambdas, or `auto`.** Declare types explicitly.
+6. **No C++ casts.** Use C-style casts where necessary.
+7. **No `std::string`** except where GTest infrastructure requires it (e.g.
+   custom test name generators for `INSTANTIATE_TEST_SUITE_P`).
+
+### Examples
+
+**Bad** — requires C++ knowledge to read:
+
+```cpp
+TEST_F(ZsetTest, RangeQuery) {
+    std::vector<std::string> results;
+    auto iter = orderedIndexInitIterator(oi, 0, 1);
+    while (auto item = orderedIndexIteratorNext(&iter)) {
+        results.push_back(std::string(orderedIndexGetElementRaw(item)));
+    }
+    std::sort(results.begin(), results.end());
+    ASSERT_EQ(results.size(), 3u);
+}
+```
+
+**Good** — C developer can read this immediately:
+
+```cpp
+TEST_F(ZsetTest, RangeQuery) {
+    sds results[3];
+    int count = 0;
+    OrderedIndexIterator iter;
+    orderedIndexInitIterator(&iter, oi, 0, 1);
+    OrderedIndexItem *item;
+    while ((item = orderedIndexIteratorNext(&iter)) != NULL) {
+        const char *ele;
+        size_t len;
+        orderedIndexGetElementRaw(item, &ele, &len);
+        results[count++] = sdsnewlen(ele, len);
+    }
+    EXPECT_EQ(count, 3);
+    /* sort and verify */
+    qsort(results, count, sizeof(sds), sdscmpptr);
+    EXPECT_STREQ(results[0], "alpha");
+    /* EXPECT (not ASSERT) so cleanup below still runs on failure */
+    for (int i = 0; i < count; i++) sdsfree(results[i]);
+}
+```
+
+**Bad** — C++ set for deduplication:
+
+```cpp
+std::set<std::string> seen;
+for (int i = 0; i < n; i++) {
+    seen.insert(entries[i]);
+}
+ASSERT_EQ(seen.size(), expected_unique);
+```
+
+**Good** — simple sorted array + manual dedup:
+
+```cpp
+qsort(entries, n, sizeof(sds), sdscmpptr);
+int unique = 1;
+for (int i = 1; i < n; i++) {
+    if (sdscmp(entries[i], entries[i-1]) != 0) unique++;
+}
+ASSERT_EQ(unique, expected_unique);
+```
+
+### Rationale
+
+Every contributor should be able to read and modify tests without learning C++.
+GTest provides the assertion macros and test registration — everything else
+should look like C with `.cpp` file extension.

@@ -150,8 +150,6 @@ struct ACLUserFlag {
     {"on", USER_FLAG_ENABLED},
     {"off", USER_FLAG_DISABLED},
     {"nopass", USER_FLAG_NOPASS},
-    {"skip-sanitize-payload", USER_FLAG_SANITIZE_PAYLOAD_SKIP},
-    {"sanitize-payload", USER_FLAG_SANITIZE_PAYLOAD},
     {NULL, 0} /* Terminator. */
 };
 
@@ -214,23 +212,30 @@ static int time_independent_strcmp(char *a, char *b, int len) {
     return diff; /* If zero strings are the same. */
 }
 
+/* Given a binary digest of 'len' bytes, returns its lowercase hexadecimal
+ * representation as a new SDS string. */
+static sds ACLHexDigest(const unsigned char *digest, size_t len) {
+    const char *cset = "0123456789abcdef";
+    sds hex = sdsnewlen(SDS_NOINIT, len * 2);
+
+    for (size_t j = 0; j < len; j++) {
+        hex[j * 2] = cset[((digest[j] & 0xF0) >> 4)];
+        hex[j * 2 + 1] = cset[(digest[j] & 0xF)];
+    }
+    return hex;
+}
+
 /* Given an SDS string, returns the SHA256 hex representation as a
  * new SDS string. */
 static sds ACLHashPassword(unsigned char *cleartext, size_t len) {
     SHA256_CTX ctx;
     unsigned char hash[SHA256_BLOCK_SIZE];
-    char hex[HASH_PASSWORD_LEN];
-    char *cset = "0123456789abcdef";
 
     sha256_init(&ctx);
     sha256_update(&ctx, (unsigned char *)cleartext, len);
     sha256_final(&ctx, hash);
 
-    for (int j = 0; j < SHA256_BLOCK_SIZE; j++) {
-        hex[j * 2] = cset[((hash[j] & 0xF0) >> 4)];
-        hex[j * 2 + 1] = cset[(hash[j] & 0xF)];
-    }
-    return sdsnewlen(hex, HASH_PASSWORD_LEN);
+    return ACLHexDigest(hash, SHA256_BLOCK_SIZE);
 }
 
 /* Given a hash and the hash length, returns C_OK if it is a valid password
@@ -436,7 +441,6 @@ static user *ACLCreateUser(const char *name, size_t namelen) {
     user *u = zmalloc(sizeof(*u));
     u->name = sdsnewlen(name, namelen);
     u->flags = USER_FLAG_DISABLED;
-    u->flags |= USER_FLAG_SANITIZE_PAYLOAD;
     u->passwords = listCreate();
     u->acl_string = NULL;
     listSetMatchMethod(u->passwords, ACLListMatchSds);
@@ -662,7 +666,7 @@ static void ACLChangeSelectorPerm(aclSelector *selector, struct serverCommand *c
 /* This is like ACLSetSelectorCommandBit(), but instead of setting the specified
  * ID, it will check all the commands in the category specified as argument,
  * and will set all the bits corresponding to such commands to the specified
- * value. Since the category passed by the user may be non existing, the
+ * value. Since the category passed by the user may be nonexistent, the
  * function returns C_ERR if the category was not found, or C_OK if it was
  * found and the operation was performed. */
 static void ACLSetSelectorCommandBitsForCategory(hashtable *commands, aclSelector *selector, uint64_t cflag, int value) {
@@ -869,7 +873,7 @@ static sds ACLDescribeSelector(aclSelector *selector) {
 
     /* Database permissions. */
     if (selector->flags & SELECTOR_FLAG_ALLDBS) {
-        res = sdscatlen(res, "alldbs ", 7);
+        /* alldbs is default, avoid emitting it in ACL strings for compatibility. */
     } else if (intsetLen(selector->dbs) == 0) {
         res = sdscatlen(res, "resetdbs ", 9);
     } else {
@@ -944,6 +948,41 @@ robj *ACLDescribeUser(user *u) {
     incrRefCount(u->acl_string);
 
     return u->acl_string;
+}
+
+/* Return a fingerprint of the ACL rules currently in effect, as a new SDS
+ * string holding the hex representation of the digest.
+ *
+ * The digest is the XOR-combined SHA256("username rules") for all users. The
+ * username is part of what is hashed because XOR cancels out two equal values,
+ * which would otherwise drop a pair of users having the same rules. */
+static sds ACLDigest(void) {
+    unsigned char digest[SHA256_BLOCK_SIZE] = {0};
+    raxIterator ri;
+
+    raxStart(&ri, Users);
+    raxSeek(&ri, "^", NULL, 0);
+    while (raxNext(&ri)) {
+        user *u = ri.data;
+        robj *rules = ACLDescribeUser(u);
+        sds rulestr = objectGetVal(rules);
+        unsigned char userdigest[SHA256_BLOCK_SIZE];
+        SHA256_CTX ctx;
+
+        /* Usernames can't contain spaces, so the separator makes the pair of
+         * name and rules unambiguous. */
+        sha256_init(&ctx);
+        sha256_update(&ctx, (unsigned char *)u->name, sdslen(u->name));
+        sha256_update(&ctx, (unsigned char *)" ", 1);
+        sha256_update(&ctx, (unsigned char *)rulestr, sdslen(rulestr));
+        sha256_final(&ctx, userdigest);
+        decrRefCount(rules);
+
+        for (int j = 0; j < SHA256_BLOCK_SIZE; j++) digest[j] ^= userdigest[j];
+    }
+    raxStop(&ri);
+
+    return ACLHexDigest(digest, SHA256_BLOCK_SIZE);
 }
 
 /* Get a command from the original command table, that is not affected
@@ -1136,8 +1175,8 @@ static aclSelector *aclCreateSelectorFromOpSet(const char *opset, size_t opsetle
  *              It is possible to specify multiple patterns.
  * allchannels              Alias for &*
  * resetchannels            Flush the list of allowed channel patterns.
- * db=<dbid>    Add database ID(s) to the set of allowed database IDs. May be used
- *              with `,` for adding multiple IDs (e.g "db=1,2,3").
+ * db=<dbid>    Sets the specified database id(s) as the databases the selector is allowed to access.
+ *              May be used with `,` for adding multiple IDs (e.g "db=1,2,3").
  * alldbs       Allow access to all databases.
  * resetdbs     Flush the set of allowed database IDs.
  */
@@ -1334,8 +1373,6 @@ static int ACLSetSelector(aclSelector *selector, const char *op, size_t oplen) {
  * off          Disable the user: it's no longer possible to authenticate
  *              with this user, however the already authenticated connections
  *              will still work.
- * skip-sanitize-payload    RESTORE dump-payload sanitization is skipped.
- * sanitize-payload         RESTORE dump-payload is sanitized (default).
  * ><password>  Add this password to the list of valid password for the user.
  *              For example >mypass will add "mypass" to the list.
  *              This directive clears the "nopass" flag (see later).
@@ -1359,7 +1396,8 @@ static int ACLSetSelector(aclSelector *selector, const char *op, size_t oplen) {
  *              passwords and there is no way to authenticate without adding
  *              some password (or setting it as "nopass" later).
  * reset        Performs the following actions: resetpass, resetkeys, resetchannels,
- *              allchannels (if acl-pubsub-default is set), off, clearselectors, -@all.
+ *              allchannels (if acl-pubsub-default is set), alldbs (for backwards compatibility),
+ *              off, sanitize-payload, clearselectors, -@all.
  *              The user returns to the same state it has immediately after its creation.
  * (<options>)  Create a new selector with the options specified within the
  *              parentheses and attach it to the user. Each option should be
@@ -1376,11 +1414,11 @@ static int ACLSetSelector(aclSelector *selector, const char *op, size_t oplen) {
  * The 'op' string must be null terminated. The 'oplen' argument should
  * specify the length of the 'op' string in case the caller requires to pass
  * binary data (for instance the >password form may use a binary password).
- * Otherwise the field can be set to -1 and the function will use strlen()
+ * Otherwise, the field can be set to -1 and the function will use strlen()
  * to determine the length.
  *
  * The function returns C_OK if the action to perform was understood because
- * the 'op' string made sense. Otherwise C_ERR is returned if the operation
+ * the 'op' string made sense. Otherwise, C_ERR is returned if the operation
  * is unknown or has some syntax error.
  *
  * When an error is returned, errno is set to the following values:
@@ -1396,6 +1434,7 @@ static int ACLSetSelector(aclSelector *selector, const char *op, size_t oplen) {
  * ENODEV: The password you are trying to remove from the user does not exist.
  * EBADMSG: The hash you are trying to add is not a valid hash.
  * ECHILD: Attempt to allow a specific first argument of a subcommand
+ * ERANGE: A database ID provided with the db= rule is out of the supported range.
  */
 int ACLSetUser(user *u, const char *op, ssize_t oplen) {
     /* as we are changing the ACL, the old generated string is now invalid */
@@ -1412,12 +1451,9 @@ int ACLSetUser(user *u, const char *op, ssize_t oplen) {
     } else if (!strcasecmp(op, "off")) {
         u->flags |= USER_FLAG_DISABLED;
         u->flags &= ~USER_FLAG_ENABLED;
-    } else if (!strcasecmp(op, "skip-sanitize-payload")) {
-        u->flags |= USER_FLAG_SANITIZE_PAYLOAD_SKIP;
-        u->flags &= ~USER_FLAG_SANITIZE_PAYLOAD;
-    } else if (!strcasecmp(op, "sanitize-payload")) {
-        u->flags &= ~USER_FLAG_SANITIZE_PAYLOAD_SKIP;
-        u->flags |= USER_FLAG_SANITIZE_PAYLOAD;
+    } else if (!strcasecmp(op, "skip-sanitize-payload") || !strcasecmp(op, "sanitize-payload")) {
+        /* These flags are deprecated and have no effect. Accept them silently
+         * for backwards compatibility with old ACL files. */
     } else if (!strcasecmp(op, "nopass")) {
         u->flags |= USER_FLAG_NOPASS;
         listEmpty(u->passwords);
@@ -1489,7 +1525,6 @@ int ACLSetUser(user *u, const char *op, ssize_t oplen) {
         /* Reset to `alldbs` for backwards compatibility */
         serverAssert(ACLSetUser(u, "alldbs", -1) == C_OK);
         serverAssert(ACLSetUser(u, "off", -1) == C_OK);
-        serverAssert(ACLSetUser(u, "sanitize-payload", -1) == C_OK);
         serverAssert(ACLSetUser(u, "clearselectors", -1) == C_OK);
         serverAssert(ACLSetUser(u, "-@all", -1) == C_OK);
     } else {
@@ -1726,6 +1761,10 @@ static int ACLSelectorCheckKey(aclSelector *selector, const char *key, int keyle
     /* The selector can access any key */
     if (selector->flags & SELECTOR_FLAG_ALLKEYS) return ACL_OK;
 
+    /* NOT_KEY entries are routing-only tokens, not real user keys.
+     * Bypass key-pattern ACL checks, consistent with how keyspecs skip them. */
+    if (keyspec_flags & CMD_KEY_NOT_KEY) return ACL_OK;
+
     listIter li;
     listNode *ln;
     listRewind(selector->patterns, &li);
@@ -1863,27 +1902,31 @@ static int ACLSelectorCheckCmd(aclSelector *selector,
     /* Check database level permissions based on cmd->get_dbid_args implementation. */
     if (cmd->get_dbid_args) {
         int count = 0;
-        int *dbids = cmd->get_dbid_args(argv, argc, &count);
-        if (dbids) {
+        int *positions = cmd->get_dbid_args(argv, argc, &count);
+        if (positions) {
             for (int i = 0; i < count; i++) {
-                if (!ACLSelectorCanAccessDb(selector, dbids[i])) {
-                    if (keyidxptr) {
-                        if (cmd->proc == selectCommand)
-                            *keyidxptr = 1;
-                        else if (cmd->proc == moveCommand)
-                            *keyidxptr = 2;
-                        else if (cmd->proc == swapdbCommand)
-                            *keyidxptr = (i == 0) ? 1 : 2;
-                        else if (cmd->proc == migrateCommand)
-                            *keyidxptr = 4;
-                        else
-                            *keyidxptr = 0;
-                    }
-                    zfree(dbids);
+                long long argdbid;
+                /* The helper has already validated argv[positions[i]] as a
+                 * valid in-range dbid, so this should never fail. */
+                serverAssert(getLongLongFromObject(argv[positions[i]], &argdbid) == C_OK);
+                if (!ACLSelectorCanAccessDb(selector, (int)argdbid)) {
+                    if (keyidxptr) *keyidxptr = positions[i];
+                    zfree(positions);
                     return ACL_DENIED_DB;
                 }
             }
-            zfree(dbids);
+            zfree(positions);
+        }
+        /* Commands such as MOVE and COPY also read from / operate on the keys
+         * in the current database, not just the destination database named in
+         * their arguments. The current database must therefore be authorized
+         * as well, otherwise a user without access to the current DB could use
+         * MOVE/COPY to exfiltrate its keys into a database it can access.
+         * This only applies to commands that carry real keys: SELECT and SWAPDB
+         * also declare dbid args but do not touch the current DB's keys. */
+        if (doesCommandHaveKeys(cmd) && !ACLSelectorCanAccessDb(selector, dbid)) {
+            if (keyidxptr) *keyidxptr = 0;
+            return ACL_DENIED_DB;
         }
     } else if ((cmd->flags & CMD_ALL_DBS) && !(selector->flags & SELECTOR_FLAG_ALLDBS)) {
         for (int i = 0; i < server.dbnum; i++) {
@@ -2113,7 +2156,7 @@ int ACLCheckAllPerm(client *c, int *idxptr) {
 }
 
 /* If 'new' can access all channels 'original' could then return NULL;
-   Otherwise return a list of channels that the new user can access */
+   Otherwise, return a list of channels that the new user can access */
 static list *getUpcomingChannelList(user *new, user *original) {
     listIter li, lpi;
     listNode *ln, *lpn;
@@ -2501,7 +2544,7 @@ static int ACLLoadConfiguredUsers(void) {
  * and the rules will remain exactly as they were.
  *
  * At the end of the process, if no errors were found in the whole file then
- * NULL is returned. Otherwise an SDS string describing in a single line
+ * NULL is returned. Otherwise, an SDS string describing in a single line
  * a description of all the issues found is returned. */
 static sds ACLLoadFromFile(const char *filename) {
     FILE *fp;
@@ -2670,6 +2713,7 @@ static sds ACLLoadFromFile(const char *filename) {
             /* When the new channel list is NULL, it means the new user's channel list is a superset of the old user's
              * list. */
             if (!new_user || (channels && ACLShouldKillPubsubClient(c, channels))) {
+                clientSetUser(c, DefaultUser, 0);
                 freeClientOrCloseLater(c, 0);
                 continue;
             }
@@ -3103,6 +3147,7 @@ static int aclAddReplySelectorDescription(client *c, aclSelector *s) {
  * ACL SAVE
  * ACL LIST
  * ACL USERS
+ * ACL DIGEST
  * ACL CAT [<category>]
  * ACL SETUSER <username> ... acl rules ...
  * ACL DELUSER <username> [...]
@@ -3234,6 +3279,8 @@ void aclCommand(client *c) {
             }
         }
         raxStop(&ri);
+    } else if (!strcasecmp(sub, "digest") && c->argc == 2) {
+        addReplyBulkSds(c, ACLDigest());
     } else if (!strcasecmp(sub, "whoami") && c->argc == 2) {
         if (c->user != NULL) {
             addReplyBulkCBuffer(c, c->user->name, sdslen(c->user->name));
@@ -3404,6 +3451,8 @@ void aclCommand(client *c) {
             "    when no category is specified.",
             "DELUSER <username> [<username> ...]",
             "    Delete a list of users.",
+            "DIGEST",
+            "    Return a fingerprint of the rules currently in effect.",
             "DRYRUN <username> <command> [<arg> ...]",
             "    Returns whether the user can execute the given command without executing the command.",
             "GETUSER <username>",

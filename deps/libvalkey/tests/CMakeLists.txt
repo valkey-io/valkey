@@ -97,6 +97,13 @@ target_include_directories(ut_slotmap_update PRIVATE "${PROJECT_SOURCE_DIR}/src"
 target_link_libraries(ut_slotmap_update valkey_unittest)
 add_test(NAME ut_slotmap_update COMMAND "$<TARGET_FILE:ut_slotmap_update>")
 
+if(NOT WIN32 AND NOT CYGWIN)
+  add_executable(ut_connect_fallback ut_connect_fallback.c)
+  target_compile_options(ut_connect_fallback PRIVATE -Wno-pedantic)
+  target_link_libraries(ut_connect_fallback valkey_unittest dl)
+  add_test(NAME ut_connect_fallback COMMAND "$<TARGET_FILE:ut_connect_fallback>")
+endif()
+
 # Cluster tests
 add_executable(ct_commands ct_commands.c test_utils.c)
 target_link_libraries(ct_commands valkey ${TLS_LIBRARY})
@@ -279,6 +286,13 @@ endif()
 
 if(GLIB_LIBRARY_FOUND)
   add_executable(ct_async_glib ct_async_glib.c)
+  # From clang-22 and https://github.com/llvm/llvm-project/pull/162662 the
+  # use of `__COUNTER__` in glib-2.0 causes warnings, e.g. in glib/gmacros.h:1243.
+  # Disabling the c2y-extensions warning until corrected in GLib.
+  if(CMAKE_C_COMPILER_ID MATCHES "Clang" AND
+     CMAKE_C_COMPILER_VERSION VERSION_GREATER_EQUAL 22)
+    target_compile_options(ct_async_glib PRIVATE -Wno-c2y-extensions)
+  endif()
   target_link_libraries(ct_async_glib valkey ${TLS_LIBRARY} PkgConfig::GLIB_LIBRARY)
   add_test(NAME ct_async_glib COMMAND "$<TARGET_FILE:ct_async_glib>")
 else()

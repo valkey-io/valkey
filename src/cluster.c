@@ -78,7 +78,7 @@ unsigned int keyHashSlot(const char *key, int keylen) {
 
 /* If it can be inferred that the given glob-style pattern, as implemented in
  * stringmatchlen() in util.c, only can match keys belonging to a single slot,
- * that slot is returned. Otherwise -1 is returned. */
+ * that slot is returned. Otherwise, -1 is returned. */
 int patternHashSlot(char *pattern, int length) {
     int s = -1; /* index of the first '{' */
 
@@ -333,7 +333,7 @@ typedef struct migrateCachedSocket {
  *
  * This function is responsible of sending errors to the client if a
  * connection can't be established. In this case -1 is returned.
- * Otherwise on success the socket is returned, and the caller should not
+ * Otherwise, on success the socket is returned, and the caller should not
  * attempt to free it after usage.
  *
  * If the caller detects an error while using the socket, migrateCloseSocket()
@@ -365,8 +365,10 @@ migrateCachedSocket *migrateGetSocket(client *c, robj *host, robj *port, long ti
         dictDelete(server.migrate_cached_sockets, dictGetKey(de));
     }
 
-    /* Create the connection */
+    /* Create the connection and tag as high-priority so key/slot migration
+     * packets are not delayed by normal tenant commands. */
     conn = connCreate(connTypeOfCluster());
+    connSetPriority(conn, true);
     if (connBlockingConnect(conn, objectGetVal(host), atoi(objectGetVal(port)), timeout) != C_OK) {
         addReplyError(c, "-IOERR error or timeout connecting to the client");
         connClose(conn);
@@ -773,16 +775,15 @@ int verifyClusterNodeId(const char *name, int length) {
     return C_OK;
 }
 
-int isValidAuxChar(int c) {
-    /* Return true if the character is alphanumeric */
-    if (isalnum(c)) {
-        return 1;
-    }
+static int isValidAuxChar(unsigned char c) {
+    /* Reject everything up through ',' (0x2C) inclusive: control characters
+     * (0x00-0x1F), space !"#$%&'()*+, (0x20-0x2C), and DEL (0x7F). */
+    if (c <= ',' || c == 0x7F) return 0;
 
-    /* List of invalid characters */
-    static const char *invalid_charset = "!#$%&()*+;<>?@[]^{|}~";
+    /* Reject additional characters above 0x2C (comma) that are format-significant in
+     * nodes.conf or otherwise unsafe. */
+    static const char *invalid_charset = ";<=>?@[]^{|}~\\";
 
-    /* Return true if the character is NOT in the invalid charset */
     return strchr(invalid_charset, c) == NULL;
 }
 
@@ -1123,7 +1124,7 @@ clusterNode *getNodeByQuery(client *c, int *error_code) {
      *
      *   1. Go over all the keys to count existing keys and missing keys that we
      *      need for TRYAGAIN and ASK redirects.
-     *   2. Check for some commands that are forbiddedn during slot migration.
+     *   2. Check for some commands that are forbidden during slot migration.
      *
      * Skip this if we're not importing or migrating this slot. */
     if (!migrating_slot && !importing_slot) goto after_checking_each_key;
@@ -1200,14 +1201,21 @@ clusterNode *getNodeByQuery(client *c, int *error_code) {
 
             /* Block the COPY command if it's cross-DB to keep the code simple.
              * Allowing cross-DB COPY is possible, but it would require looking up the second key in the target DB.
-             * The command should only be allowed if the key exists. We may revisit this decision in the future. */
-            if (mcmd->proc == copyCommand &&
-                margc >= 4 && !strcasecmp(objectGetVal(margv[3]), "db")) {
-                long long value;
-                if (getLongLongFromObject(margv[4], &value) != C_OK || value != currentDb->id) {
-                    if (error_code) *error_code = CLUSTER_REDIR_UNSTABLE;
-                    getKeysFreeResult(&result);
-                    return NULL;
+             * The command should only be allowed if the key exists. We may revisit this decision in the future.
+             *
+             * The DB and REPLACE tokens are optional and order-independent, and DB may appear more than once, so
+             * scan every DB clause the way copyCommand does. A DB token without a value is left to copyCommand to
+             * reject as a syntax error. */
+            if (mcmd->proc == copyCommand) {
+                for (int k = 3; k + 1 < margc; k++) {
+                    if (strcasecmp(objectGetVal(margv[k]), "db")) continue;
+                    long long value;
+                    if (getLongLongFromObject(margv[k + 1], &value) != C_OK || value != currentDb->id) {
+                        if (error_code) *error_code = CLUSTER_REDIR_UNSTABLE;
+                        getKeysFreeResult(&result);
+                        return NULL;
+                    }
+                    k++; /* Consume the dbid. */
                 }
             }
 
@@ -1217,7 +1225,7 @@ clusterNode *getNodeByQuery(client *c, int *error_code) {
              * slot migration, the channel will be served from the source
              * node until the migration completes with CLUSTER SETSLOT <slot>
              * NODE <node-id>. */
-            int flags = LOOKUP_NOTOUCH | LOOKUP_NOSTATS | LOOKUP_NONOTIFY | LOOKUP_NOEXPIRE;
+            int flags = LOOKUP_NOEFFECTS; /* not client key access */
             if (!pubsubshard_included &&
                 (!c->flag.multi || (c->flag.multi && c->cmd->proc == execCommand))) {
                 /* Multi/Exec validation happens on exec */
@@ -1347,7 +1355,7 @@ void clusterRedirectClient(client *c, clusterNode *n, int hashslot, int error_co
  *
  * If the client is found to be blocked into a hash slot this node no
  * longer handles, the client is sent a redirection error, and the function
- * returns 1. Otherwise 0 is returned and no operation is performed. */
+ * returns 1. Otherwise, 0 is returned and no operation is performed. */
 int clusterRedirectBlockedClientIfNeeded(client *c) {
     clusterNode *myself = getMyClusterNode();
     if (c->flag.blocked && (c->bstate->btype == BLOCKED_LIST || c->bstate->btype == BLOCKED_ZSET ||
@@ -1630,6 +1638,8 @@ void resetClusterStats(void) {
     server.cluster->stats_bus_module_bytes_sent = 0;
     server.cluster->stats_bus_module_bytes_received = 0;
     server.cluster->stat_cluster_links_buffer_limit_exceeded = 0;
+    server.cluster->stat_cluster_links_established_inbound = 0;
+    server.cluster->stat_cluster_links_established_outbound = 0;
 }
 
 void clusterCommandFlushslot(client *c) {

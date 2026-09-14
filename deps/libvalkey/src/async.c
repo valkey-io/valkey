@@ -44,6 +44,7 @@
 
 #include "async.h"
 #include "async_private.h"
+#include "dict.h"
 #include "net.h"
 #include "valkey_private.h"
 #include "vkutil.h"
@@ -520,9 +521,9 @@ static int valkeyGetSubscribeCallback(valkeyAsyncContext *ac, valkeyReply *reply
                 c->flags &= ~VALKEY_SUBSCRIBED;
 
                 /* Move ongoing regular command callbacks. */
-                valkeyCallback cb;
-                while (valkeyShiftCallback(&ac->sub.replies, &cb) == VALKEY_OK) {
-                    valkeyPushCallback(&ac->replies, &cb);
+                valkeyCallback reply_cb;
+                while (valkeyShiftCallback(&ac->sub.replies, &reply_cb) == VALKEY_OK) {
+                    valkeyPushCallback(&ac->replies, &reply_cb);
                 }
             }
         }
@@ -941,9 +942,9 @@ void valkeySsubscribeCallback(struct valkeyAsyncContext *ac, void *reply, void *
             }
         }
 
-        valkeyCallback cb = {0};
-        valkeyGetSubscribeCallback(ac, reply, &cb);
-        valkeyRunCallback(ac, &cb, reply);
+        valkeyCallback sub_cb = {0};
+        valkeyGetSubscribeCallback(ac, reply, &sub_cb);
+        valkeyRunCallback(ac, &sub_cb, reply);
         vk_free(data->command);
         vk_free(privdata);
         return;

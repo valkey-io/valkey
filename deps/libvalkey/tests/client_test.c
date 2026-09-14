@@ -872,6 +872,16 @@ static void test_reply_reader(void) {
     freeReplyObject(reply);
     valkeyReaderFree(reader);
 
+    /* RESP3 MAP/ATTR types double the element count being key-value pairs */
+    test("A RESP3 MAP/ATTR can't overflow: ");
+    reader = valkeyReaderCreate();
+    reader->maxelements = 0; /* Don't rely on default limit */
+    valkeyReaderFeed(reader, "%4611686018427387904\r\n", 22);
+    ret = valkeyReaderGetReply(reader, &reply);
+    test_cond(ret == VALKEY_ERR &&
+              strcasecmp(reader->errstr, "Multi-bulk length out of range") == 0);
+    valkeyReaderFree(reader);
+
     test("Can parse RESP3 attribute: ");
     reader = valkeyReaderCreate();
     valkeyReaderFeed(reader, "|2\r\n+foo\r\n:123\r\n+bar\r\n#t\r\n", 26);

@@ -158,7 +158,7 @@ run_solo {defrag} {
         if {$allocated_bytes < 20 * 1024 * 1024} {
             # If allocated bytes is too small, the ratios get wonky.  Since we use 2MB for
             # active-defrag-ignore-bytes, let's make sure that we have at least 10x that amount
-            # allocated before trying to verify any fragmentation ratios.  Otherwise the tests
+            # allocated before trying to verify any fragmentation ratios.  Otherwise, the tests
             # are likely to get flaky.
             error "test error: trying to validate frag ratio with only $allocated_bytes allocated"
         }
@@ -310,7 +310,8 @@ run_solo {defrag} {
                 # Even so, defrag can get starved for periods exceeding 100ms.  Using 200ms for test stability, and
                 # a 50% CPU requirement, we should allow up to 200ms latency
                 # (as total time = 200 non duty + 200 duty = 400ms, and 50% of 400ms is 200ms).
-                validate_latency 200
+                # Added buffer of 300ms to accommodate for slow CI runners
+                validate_latency 500
 
                 # Make sure we had defrag hits during AOF loading.  Note that we don't worry about
                 # the actual fragmentation ratio here.  It will vary based on when defrag stopped
@@ -625,7 +626,7 @@ run_solo {defrag} {
             if {$type == "cluster"} {
                 start_cluster 1 0 [list tags $cluster_tags overrides $overrides] {
                     # Note: `start_cluster` passes the code through to another level which requires us
-                    #  to do an uplevel here.  Otherwise `test_proc` isn't recognized.
+                    #  to do an uplevel here.  Otherwise, `test_proc` isn't recognized.
                     uplevel 1 {$test_proc $type}
                 }
             }

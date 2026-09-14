@@ -172,7 +172,7 @@ start_server {tags {"string"}} {
 
     test "GETEX syntax errors" {
         set ex {}
-        catch {r getex foo non-existent-option} ex
+        catch {r getex foo nonexistent-option} ex
         set ex
     } {*syntax*}
 
@@ -229,7 +229,7 @@ start_server {tags {"string"}} {
         r mget foo{t} bar{t}
     } {BAR FOO}
 
-    test {MGET against non existing key} {
+    test {MGET against nonexistent key} {
         r mget foo{t} baazz{t} bar{t}
     } {BAR {} FOO}
 
@@ -988,6 +988,32 @@ if {[string match {*jemalloc*} [s mem_allocator]]} {
     test "SET with IFEQ conditional - with nx" {
         r del foo
         assert_error {ERR syntax error} {r set foo "new_value" ifeq "initial_value" nx}
+    }
+
+    test {SET with IFNE conditional} {
+        r del foo
+        r set foo "initial_value"
+        assert_equal {OK} [r set foo "new_value" ifne "wrong_value"]
+        assert_equal "new_value" [r get foo]
+        assert_equal {} [r set foo "should_not_set" ifne "new_value"]
+        assert_equal "new_value" [r get foo]
+    }
+
+    test {SET with IFNE conditional - with get} {
+        r del foo
+        assert_equal {} [r set foo "new_value" ifne "initial_value" get]
+        assert_equal "new_value" [r get foo]
+        r set foo "initial_value"
+        assert_equal "initial_value" [r set foo "new_value" ifne "wrong_value" get]
+        assert_equal "new_value" [r get foo]
+        assert_equal {new_value} [r set foo "should_not_set" ifne "new_value" get]
+    }
+
+    test "SET with IFNE conditional - non string current value with get" {
+        r del foo
+        r sadd foo "some_set_value"
+        assert_error {WRONGTYPE Operation against a key holding the wrong kind of value} \
+            {r set foo "new_value" ifne "initial_value" get}
     }
 
     test {Extended SET EX option} {

@@ -98,7 +98,7 @@ void setGenericCommand(client *c,
     robj *existing_value = lookupKeyWrite(c->db, key);
     found = existing_value != NULL;
 
-    /* Handle the IFEQ conditional check */
+    /* Handle the IFEQ or IFNE conditional check */
     if (flags & ARGS_SET_IFEQ && found) {
         if (!(flags & ARGS_SET_GET) && checkType(c, existing_value, OBJ_STRING)) {
             goto cleanup;
@@ -115,6 +115,17 @@ void setGenericCommand(client *c,
             addReply(c, abort_reply ? abort_reply : shared.null[c->resp]);
         }
         goto cleanup;
+    } else if (flags & ARGS_SET_IFNE && found) {
+        if (!(flags & ARGS_SET_GET) && checkType(c, existing_value, OBJ_STRING)) {
+            goto cleanup;
+        }
+
+        if (compareStringObjects(existing_value, comparison) == 0) {
+            if (!(flags & ARGS_SET_GET)) {
+                addReply(c, abort_reply ? abort_reply : shared.null[c->resp]);
+            }
+            goto cleanup;
+        }
     }
 
     if ((flags & ARGS_SET_NX && found) || (flags & ARGS_SET_XX && !found)) {
@@ -499,7 +510,7 @@ void getrangeCommand(client *c) {
     if ((o = lookupKeyReadOrReply(c, c->argv[1], shared.emptybulk)) == NULL ||
         checkType(c, o, OBJ_STRING)) return;
 
-    if (o->encoding == OBJ_ENCODING_INT) {
+    if (objectGetEncoding(o) == OBJ_ENCODING_INT) {
         str = llbuf;
         strlen = ll2string(llbuf, sizeof(llbuf), (long)objectGetVal(o));
     } else {
@@ -710,7 +721,7 @@ void incrDecrCommand(client *c, long long incr) {
     }
     value += incr;
 
-    if (o && o->refcount == 1 && o->encoding == OBJ_ENCODING_INT &&
+    if (o && o->refcount == 1 && objectGetEncoding(o) == OBJ_ENCODING_INT &&
         value >= LONG_MIN && value <= LONG_MAX) {
         new = o;
         objectSetVal(o, (void *)((long)value));
@@ -901,7 +912,7 @@ void lcsCommand(client *c) {
     uint32_t alen = sdslen(a);
     uint32_t blen = sdslen(b);
 
-/* Setup an uint32_t array to store at LCS[i,j] the length of the
+/* Set up an uint32_t array to store at LCS[i,j] the length of the
  * LCS A0..i-1, B0..j-1. Note that we have a linear array here, so
  * we index it as LCS[j+(blen+1)*i] */
 #define LCS(A, B) lcs[(B) + ((A) * (blen + 1))]
@@ -999,7 +1010,7 @@ void lcsCommand(client *c) {
             i--;
             j--;
         } else {
-            /* Otherwise reduce i and j depending on the largest
+            /* Otherwise, reduce i and j depending on the largest
              * LCS between, to understand what direction we need to go. */
             uint32_t lcs1 = LCS(i - 1, j);
             uint32_t lcs2 = LCS(i, j - 1);

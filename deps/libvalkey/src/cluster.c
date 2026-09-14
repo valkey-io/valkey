@@ -38,6 +38,7 @@
 #include "adlist.h"
 #include "alloc.h"
 #include "command.h"
+#include "dict.h"
 #include "vkutil.h"
 #include "dict.h"
 
@@ -212,13 +213,13 @@ static replyErrorType getReplyErrorType(valkeyReply *reply) {
 
     if (reply->type != VALKEY_REPLY_ERROR)
         return CLUSTER_NO_ERROR;
-    if (memcmp(reply->str, "MOVED", 5) == 0)
+    if (reply->len >= 5 && memcmp(reply->str, "MOVED", 5) == 0)
         return CLUSTER_ERR_MOVED;
-    if (memcmp(reply->str, "ASK", 3) == 0)
+    if (reply->len >= 3 && memcmp(reply->str, "ASK", 3) == 0)
         return CLUSTER_ERR_ASK;
-    if (memcmp(reply->str, "TRYAGAIN", 8) == 0)
+    if (reply->len >= 8 && memcmp(reply->str, "TRYAGAIN", 8) == 0)
         return CLUSTER_ERR_TRYAGAIN;
-    if (memcmp(reply->str, "CLUSTERDOWN", 11) == 0)
+    if (reply->len >= 11 && memcmp(reply->str, "CLUSTERDOWN", 11) == 0)
         return CLUSTER_ERR_CLUSTERDOWN;
     return CLUSTER_ERR_OTHER;
 }

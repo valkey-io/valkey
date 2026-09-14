@@ -115,11 +115,17 @@ void queueMultiCommand(client *c, uint64_t cmd_flags) {
     mc->slot = c->slot;
 
     if (mc->cmd->get_dbid_args && mc->cmd->proc == selectCommand) {
-        int count;
-        int *dbids = mc->cmd->get_dbid_args(mc->argv, mc->argc, &count);
-        if (dbids && count > 0) {
-            c->mstate->transaction_db_id = dbids[0];
-            zfree(dbids);
+        int count = 0;
+        int *positions = mc->cmd->get_dbid_args(mc->argv, mc->argc, &count);
+        if (positions) {
+            if (count > 0) {
+                long long dbid;
+                /* The helper has already validated argv[positions[i]] as a
+                 * valid in-range dbid, so this should never fail. */
+                serverAssert(getLongLongFromObject(mc->argv[positions[0]], &dbid) == C_OK);
+                c->mstate->transaction_db_id = (int)dbid;
+            }
+            zfree(positions);
         }
     }
 
@@ -375,11 +381,14 @@ void watchForKey(client *c, robj *key) {
     }
 
     /* This key is not already watched in this DB. Let's add it */
-    clients = dictFetchValue(c->db->watched_keys, key);
-    if (!clients) {
+    dictEntry *de = dictFind(c->db->watched_keys, key);
+    if (de == NULL) {
         clients = listCreate();
         dictAdd(c->db->watched_keys, key, clients);
         incrRefCount(key);
+    } else {
+        key = dictGetKey(de);
+        clients = dictGetVal(de);
     }
 
     /* Add the new key to the list of keys watched by this client */
@@ -391,6 +400,7 @@ void watchForKey(client *c, robj *key) {
     incrRefCount(key);
     listAddNodeTail(&c->mstate->watched_keys, wk);
     watchedKeyLinkToClients(clients, wk);
+    c->mstate->watched_keys_mem += getStringObjectMemory(key);
 
     /* Add the new key to the per-db hashtable for O(1) lookup. */
     hashtableAdd(c->mstate->watched_keys_by_db[c->db->id], wk);
@@ -417,6 +427,7 @@ void unwatchAllKeys(client *c) {
         if (listLength(clients) == 0) dictDelete(wk->db->watched_keys, wk->key);
         /* Remove this watched key from the client->watched list */
         listDelNode(&c->mstate->watched_keys, ln);
+        c->mstate->watched_keys_mem -= getStringObjectMemory(wk->key);
         decrRefCount(wk->key);
         zfree(wk);
     }
@@ -566,9 +577,12 @@ void unwatchCommand(client *c) {
 size_t multiStateMemOverhead(client *c) {
     if (!c->mstate) return 0;
     size_t mem = c->mstate->argv_len_sums;
-    /* Add watched keys overhead, Note: this doesn't take into account the watched keys themselves, because they aren't
-     * managed per-client. */
+    /* Add watched keys overhead. We take into account the watched keys themselves.
+     * A watched key robj is shared (via refcount) by all clients watching the
+     * same key, but we attribute it to each watching client so it stays visible
+     * to CLIENT INFO and maxmemory-clients. */
     mem += listLength(&c->mstate->watched_keys) * (sizeof(listNode) + sizeof(watchedKey));
+    mem += c->mstate->watched_keys_mem;
     /* Add per-db watched keys hashtable overhead. */
     if (c->mstate->watched_keys_by_db) {
         mem += sizeof(hashtable *) * server.dbnum;

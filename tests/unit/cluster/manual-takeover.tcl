@@ -27,10 +27,6 @@ test "Killing majority of master nodes" {
     pause_process $paused_pid2
 }
 
-foreach id $replica_ids {
-    R $id config set cluster-replica-no-failover no
-}
-
 test "Cluster should eventually be down" {
     for {set j 0} {$j < [llength $::servers]} {incr j} {
         if {[process_is_paused [srv -$j pid]]} continue

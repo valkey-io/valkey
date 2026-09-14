@@ -78,6 +78,9 @@
 
 #define PLACEHOLDER_COUNT 10
 static const size_t PLACEHOLDER_LEN = 12; // length of BENCHMARK_PLACEHOLDERS strings
+/* Cap on -r. Keys are written into PLACEHOLDER_LEN-wide fixed slots, so
+ * bumping this requires widening the placeholder handling too. */
+#define MAX_KEYSPACELEN 999999999999LL
 static const char *PLACEHOLDERS[PLACEHOLDER_COUNT] = {
     "__rand_int__", "__rand_1st__", "__rand_2nd__", "__rand_3rd__", "__rand_4th__",
     "__rand_5th__", "__rand_6th__", "__rand_7th__", "__rand_8th__", "__rand_9th__"};
@@ -118,7 +121,7 @@ static struct config {
     int keysize;
     int datasize;
     int replace_placeholders;
-    int keyspacelen;
+    long long keyspacelen;
     int sequential_replacement;
     int keepalive;
     int pipeline;
@@ -212,6 +215,13 @@ typedef struct benchmarkThread {
     pthread_t thread;
     aeEventLoop *el;
     list *paused_clients;
+    /* Per-thread latency histograms: recording into one shared histogram
+     * with hdr_record_value_atomic makes every command from every thread
+     * contend on the same counter cache lines. Each thread records into
+     * its own histograms lock-free; thread 0 folds them for live display
+     * and the main thread folds them after join for the final report. */
+    struct hdr_histogram *latency_histogram;
+    struct hdr_histogram *current_sec_latency_histogram;
 } benchmarkThread;
 
 /* Cluster. */
@@ -261,7 +271,7 @@ static void freeServerConfig(serverConfig *cfg);
 static int fetchClusterSlotsConfiguration(client c);
 static void updateClusterSlotsConfiguration(void);
 static long long showThroughput(struct aeEventLoop *eventLoop, long long id, void *clientData);
-int runFuzzerClients(const char *host, int port, int max_commands, int parallel_clients, int cluster_mode, int num_keys, cliSSLconfig *ssl_config, const char *log_level, int fuzz_flags);
+int runFuzzerClients(const char *host, int port, int max_commands, int parallel_clients, int cluster_mode, long long num_keys, cliSSLconfig *ssl_config, const char *log_level, int fuzz_flags);
 static int parseCommandTemplate(int argc, char **argv);
 
 /* Dict callbacks */
@@ -479,6 +489,48 @@ void initPlaceholders(const char *cmd, size_t cmd_len) {
     return;
 }
 
+/* Batched per-thread accounting for config.requests_finished. A relaxed
+ * fetch_add per completed command from every thread turns the counter's
+ * cache line into a process-wide contention point at high rates (the same
+ * failure mode as the shared latency histogram). Each thread accumulates
+ * locally and publishes one fetch_add per REQUESTS_FINISHED_FLUSH_BATCH
+ * completions, so the line is written at ~rps/batch instead of ~rps; the
+ * per-command read below then almost always hits a Shared cached copy.
+ *
+ * The residue is flushed from each thread's showThroughput timer (so
+ * count-mode termination, detected from the global value, cannot stall on
+ * unpublished counts) and after aeMain() returns (so the final report is
+ * exact). Consequences of the batching: termination detection and the
+ * "stop recording latency at the end" gate can lag by up to
+ * batch * num_threads commands, and a warmup-boundary reset can carry over
+ * a residue of the same magnitude -- both are the same benign-race class
+ * as the surrounding relaxed counter resets. The warmup carry-over is an
+ * intentional, documented trade-off: with --threads and --warmup, completion
+ * accounting around the warmup boundary is exact only to within
+ * batch * num_threads (an exact boundary would reintroduce cross-thread
+ * coordination on the completion path -- the contention this design
+ * removes). Runs whose -n is small enough for this to matter are far below
+ * any meaningful measurement size; the limitation is stated in the --warmup
+ * help text. Single-threaded mode keeps the exact per-command path. */
+#define REQUESTS_FINISHED_FLUSH_BATCH 256
+static _Thread_local int pending_requests_finished = 0;
+
+static void flushRequestsFinished(void) {
+    if (pending_requests_finished > 0) {
+        atomic_fetch_add_explicit(&config.requests_finished, pending_requests_finished, memory_order_relaxed);
+        pending_requests_finished = 0;
+    }
+}
+
+static int addRequestFinished(void) {
+    if (config.num_threads == 0) {
+        return atomic_fetch_add_explicit(&config.requests_finished, 1, memory_order_relaxed);
+    }
+    pending_requests_finished++;
+    if (pending_requests_finished >= REQUESTS_FINISHED_FLUSH_BATCH) flushRequestsFinished();
+    return atomic_load_explicit(&config.requests_finished, memory_order_relaxed) + pending_requests_finished;
+}
+
 static void replacePlaceholder(const size_t *indices, const size_t count, char *cmd, _Atomic uint64_t *key_counter) {
     if (count == 0) return;
 
@@ -487,7 +539,7 @@ static void replacePlaceholder(const size_t *indices, const size_t count, char *
         if (config.sequential_replacement) {
             key = atomic_fetch_add_explicit(key_counter, 1, memory_order_relaxed);
         } else {
-            key = random();
+            key = rand62();
         }
         key %= config.keyspacelen;
     }
@@ -786,7 +838,7 @@ static void readHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
                     }
                     continue;
                 }
-                int requests_finished = atomic_fetch_add_explicit(&config.requests_finished, 1, memory_order_relaxed);
+                int requests_finished = addRequestFinished();
                 if (!isBenchmarkFinished(requests_finished)) {
                     if (config.num_threads == 0) {
                         hdr_record_value(config.latency_histogram, // Histogram to record to
@@ -798,14 +850,15 @@ static void readHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
                                              ? (long)c->latency
                                              : CONFIG_LATENCY_HISTOGRAM_INSTANT_MAX_VALUE); // Value to record
                     } else {
-                        hdr_record_value_atomic(config.latency_histogram, // Histogram to record to
-                                                (long)c->latency <= CONFIG_LATENCY_HISTOGRAM_MAX_VALUE
-                                                    ? (long)c->latency
-                                                    : CONFIG_LATENCY_HISTOGRAM_MAX_VALUE); // Value to record
-                        hdr_record_value_atomic(config.current_sec_latency_histogram,      // Histogram to record to
-                                                (long)c->latency <= CONFIG_LATENCY_HISTOGRAM_INSTANT_MAX_VALUE
-                                                    ? (long)c->latency
-                                                    : CONFIG_LATENCY_HISTOGRAM_INSTANT_MAX_VALUE); // Value to record
+                        benchmarkThread *thread = config.threads[c->thread_id];
+                        hdr_record_value(thread->latency_histogram, // Histogram to record to
+                                         (long)c->latency <= CONFIG_LATENCY_HISTOGRAM_MAX_VALUE
+                                             ? (long)c->latency
+                                             : CONFIG_LATENCY_HISTOGRAM_MAX_VALUE); // Value to record
+                        hdr_record_value(thread->current_sec_latency_histogram,     // Histogram to record to
+                                         (long)c->latency <= CONFIG_LATENCY_HISTOGRAM_INSTANT_MAX_VALUE
+                                             ? (long)c->latency
+                                             : CONFIG_LATENCY_HISTOGRAM_INSTANT_MAX_VALUE); // Value to record
                     }
                 }
                 c->pending--;
@@ -1292,6 +1345,13 @@ static void startBenchmarkThreads(void) {
         }
     }
     for (i = 0; i < config.num_threads; i++) pthread_join(config.threads[i]->thread, NULL);
+    /* All threads have stopped: fold the per-thread latency histograms into
+     * the global histogram for exact final reporting. Reset it first --
+     * showThroughput may have populated it with approximate live merges. */
+    hdr_reset(config.latency_histogram);
+    for (i = 0; i < config.num_threads; i++) {
+        hdr_add(config.latency_histogram, config.threads[i]->latency_histogram);
+    }
 }
 
 /* Benchmark a sequence of commands. The cmd is RESP encoded of length len and
@@ -1361,12 +1421,22 @@ static benchmarkThread *createBenchmarkThread(int index) {
     thread->index = index;
     thread->el = aeCreateEventLoop(1024 * 10);
     thread->paused_clients = listCreate();
+    hdr_init(CONFIG_LATENCY_HISTOGRAM_MIN_VALUE,         // Minimum value
+             CONFIG_LATENCY_HISTOGRAM_MAX_VALUE,         // Maximum value
+             config.precision,                           // Number of significant figures
+             &thread->latency_histogram);                // Pointer to initialise
+    hdr_init(CONFIG_LATENCY_HISTOGRAM_MIN_VALUE,         // Minimum value
+             CONFIG_LATENCY_HISTOGRAM_INSTANT_MAX_VALUE, // Maximum value
+             config.precision,                           // Number of significant figures
+             &thread->current_sec_latency_histogram);    // Pointer to initialise
     aeCreateTimeEvent(thread->el, 1, showThroughput, (void *)thread, NULL);
     return thread;
 }
 
 static void freeBenchmarkThread(benchmarkThread *thread) {
     if (thread->el) aeDeleteEventLoop(thread->el);
+    if (thread->latency_histogram) hdr_close(thread->latency_histogram);
+    if (thread->current_sec_latency_histogram) hdr_close(thread->current_sec_latency_histogram);
     listRelease(thread->paused_clients);
     zfree(thread);
 }
@@ -1384,6 +1454,9 @@ static void freeBenchmarkThreads(void) {
 static void *execBenchmarkThread(void *ptr) {
     benchmarkThread *thread = (benchmarkThread *)ptr;
     aeMain(thread->el);
+    /* Publish any batched completion residue: the final report reads
+     * config.requests_finished after all threads are joined. */
+    flushRequestsFinished();
     return NULL;
 }
 
@@ -1793,14 +1866,20 @@ int parseOptions(int argc, char **argv) {
             if (config.pipeline <= 0) config.pipeline = 1;
         } else if (!strcmp(argv[i], "-r")) {
             if (lastarg) goto invalid;
-            const char *next = argv[++i], *p = next;
-            if (*p == '-') {
-                p++;
-                if (*p < '0' || *p > '9') goto invalid;
+            const char *next = argv[++i];
+            char *endptr;
+            errno = 0;
+            long long val = strtoll(next, &endptr, 10);
+            if (endptr == next || *endptr != '\0') {
+                fprintf(stderr, "Invalid value for -r: '%s' is not a valid number\n", next);
+                exit(1);
+            }
+            if (errno == ERANGE || val < 0 || val > MAX_KEYSPACELEN) {
+                fprintf(stderr, "Invalid value for -r: keyspacelen must be between 0 and %lld\n", MAX_KEYSPACELEN);
+                exit(1);
             }
             config.replace_placeholders = 1;
-            config.keyspacelen = atoi(next);
-            if (config.keyspacelen < 0) config.keyspacelen = 0;
+            config.keyspacelen = val;
         } else if (!strcmp(argv[i], "--sequential")) {
             config.sequential_replacement = 1;
         } else if (!strcmp(argv[i], "-q")) {
@@ -2030,7 +2109,10 @@ usage:
         "                    Run benchmark for specified number of seconds\n"
         "                    (mutually exclusive with -n)\n"
         " --warmup <seconds> Run benchmark for specified warmup period before\n"
-        "                    recording data\n"
+        "                    recording data. With --threads, completed-request\n"
+        "                    accounting is batched per thread, so a small number\n"
+        "                    of pre-warmup completions may carry into the counted\n"
+        "                    total at the warmup boundary.\n"
         " -d <size>          Data size of SET/GET value in bytes (default 3)\n"
         " --dbnum <db>       SELECT the specified db number (default 0)\n"
         " -3                 Start session in RESP3 protocol mode.\n"
@@ -2086,6 +2168,9 @@ usage:
         " --rps <requests>   Limit the total number of requests per second.\n"
         "                    Default 0 (no limit)\n"
         " --seed <num>       Set the seed for random number generator.\n"
+        "                    With --threads, per-thread streams are seeded\n"
+        "                    deterministically but their order of first use\n"
+        "                    depends on thread scheduling.\n"
         "                    Default seed is based on time.\n"
         " --num-functions <num>\n"
         "                    Sets the number of functions present in the Lua lib that is\n"
@@ -2133,6 +2218,9 @@ long long showThroughput(struct aeEventLoop *eventLoop, long long id, void *clie
     UNUSED(eventLoop);
     UNUSED(id);
     benchmarkThread *thread = (benchmarkThread *)clientData;
+    /* Publish this thread's batched completion count so global termination
+     * detection and the displayed totals stay fresh (see addRequestFinished). */
+    flushRequestsFinished();
     int requests_finished = atomic_load_explicit(&config.requests_finished, memory_order_relaxed);
     int previous_requests_finished = atomic_load_explicit(&config.previous_requests_finished, memory_order_relaxed);
     long long current_tick = mstime();
@@ -2153,6 +2241,13 @@ long long showThroughput(struct aeEventLoop *eventLoop, long long id, void *clie
             atomic_store_explicit(&config.requests_issued, 0, memory_order_relaxed);
             atomic_store_explicit(&config.previous_requests_finished, 0, memory_order_relaxed);
             hdr_reset(config.latency_histogram);
+            /* Per-thread histograms carry the recorded values now; clear them
+             * too. Concurrent recording may leak a warmup sample into the
+             * results -- same benign-race class as the counter resets above. */
+            for (int t = 0; t < config.num_threads; t++) {
+                hdr_reset(config.threads[t]->latency_histogram);
+                hdr_reset(config.threads[t]->current_sec_latency_histogram);
+            }
         }
     } else if (isBenchmarkFinished(requests_finished)) {
         aeStop(eventLoop);
@@ -2172,6 +2267,18 @@ long long showThroughput(struct aeEventLoop *eventLoop, long long id, void *clie
         printf("clients: %d\r", config.liveclients);
         fflush(stdout);
         return SHOW_THROUGHPUT_INTERVAL;
+    }
+    if (config.num_threads) {
+        /* Use thread-0's own histograms for the live display line. This is
+         * race-free (showThroughput runs on thread-0's event loop, same thread
+         * that records into these histograms) and representative under uniform
+         * workloads. The final report folds all threads exactly after join. */
+        benchmarkThread *t0 = config.threads[0];
+        hdr_reset(config.latency_histogram);
+        hdr_add(config.latency_histogram, t0->latency_histogram);
+        hdr_reset(config.current_sec_latency_histogram);
+        hdr_add(config.current_sec_latency_histogram, t0->current_sec_latency_histogram);
+        hdr_reset(t0->current_sec_latency_histogram);
     }
     const float dt = (float)(current_tick - config.start) / 1000.0;
     const float rps = (float)requests_finished / dt;
@@ -2258,9 +2365,13 @@ int test_is_selected(const char *name) {
 int main(int argc, char **argv) {
     int i;
     char *data, *cmd, *tag;
-    int len;
+    int len = 0;
 
     client c;
+    sds title = NULL, cmd_seq = NULL;
+    sds *sds_args = NULL;
+    size_t *argvlen = NULL;
+    int seq_len = 0; /* Total number of commands in the sequence. */
 
     srandom(time(NULL) ^ getpid());
     init_genrand64(ustime() ^ getpid());
@@ -2378,6 +2489,94 @@ int main(int argc, char **argv) {
         exit(1);
     }
 
+    /* Parse and validate the command sequence given in the remaining arguments
+     * before connecting, so a malformed invocation is reported up front without
+     * needing a reachable server. */
+    if (argc && !config.fuzz_mode && !config.idlemode) {
+        title = sdsnew(argv[0]);
+        for (i = 1; i < argc; i++) {
+            title = sdscatlen(title, " ", 1);
+            title = sdscatlen(title, (char *)argv[i], strlen(argv[i]));
+        }
+        sds_args = getSdsArrayFromArgv(argc, argv, 0);
+        if (!sds_args) {
+            fprintf(stderr, "Invalid quoted string\n");
+            return 1;
+        }
+        if (config.stdinarg) {
+            sds_args = sds_realloc(sds_args, (argc + 1) * sizeof(sds));
+            sds_args[argc] = readArgFromStdin();
+            argc++;
+        }
+        /* Set up argument length */
+        argvlen = zmalloc(argc * sizeof(size_t));
+        for (i = 0; i < argc; i++) argvlen[i] = sdslen(sds_args[i]);
+        /* RESP-encode the command(s) given on the syntax
+         *
+         *     [N] command args [ ";" [N] command args [...] ]
+         */
+        int start = 0;             /* Argument index where the current command starts. */
+        int repeat = 1;            /* Number of times to repeat the current command. */
+        int has_repeat = 0;        /* Current segment is prefixed by a repeat count. */
+        int malformed_segment = 0; /* A segment was left with no command to run. */
+        cmd_seq = sdsempty();
+        for (i = 0; i <= argc; i++) {
+            if (i < argc && i == start && sds_args[i][0] >= '1' && sds_args[i][0] <= '9') {
+                /* Command prefixed by number means repeat command N times. */
+                repeat = atoi(sds_args[i]);
+                has_repeat = 1;
+                start++;
+            } else if (i == argc || strcmp(";", sds_args[i]) == 0) {
+                cmd = NULL;
+                if (i == start) {
+                    /* Empty segment. Only a trailing separator (i == argc) is
+                     * harmless; otherwise the caller lost a command or a count. */
+                    if (has_repeat || i < argc) malformed_segment = 1;
+                    start = i + 1;
+                    repeat = 1;
+                    has_repeat = 0;
+                    continue;
+                }
+
+                addRespCommandToSequence(sds_args, argvlen, start, i, repeat, &cmd_seq, &seq_len);
+                start = i + 1;
+                repeat = 1;
+                has_repeat = 0;
+            } else if (strstr(sds_args[i], "__data__")) {
+                if (config.current_dataset) {
+                    fprintf(stderr, "Error: __data__ placeholders cannot be used with --dataset option\n");
+                    exit(1);
+                }
+                /* Replace data placeholders with data of length given by -d. */
+                int num_parts;
+                sds *parts = sdssplitlen(sds_args[i], sdslen(sds_args[i]),
+                                         "__data__", strlen("__data__"),
+                                         &num_parts);
+                sds newarg = parts[0];
+                parts[0] = NULL; /* prevent it from being freed below */
+                for (int j = 1; j < num_parts; j++) {
+                    char data[config.datasize];
+                    genBenchmarkRandomData(data, config.datasize);
+                    newarg = sdscatlen(newarg, data, config.datasize);
+                    newarg = sdscatlen(newarg, parts[j], sdslen(parts[j]));
+                }
+                sdsfreesplitres(parts, num_parts);
+                sdsfree(sds_args[i]);
+                sds_args[i] = newarg;
+                argvlen[i] = sdslen(sds_args[i]);
+            }
+            /* NOTE: Field placeholder processing is handled above in the command-level loop to ensure row consistency */
+        }
+        if (seq_len <= 0 || malformed_segment) {
+            fprintf(stderr, "Invalid command sequence: a command is missing.\n"
+                            "Use -n <requests> to set the total number of requests.\n");
+            return 1;
+        }
+        len = sdslen(cmd_seq);
+        /* adjust the datasize to the parsed command */
+        config.datasize = len;
+    }
+
     if (config.cluster_mode && !config.fuzz_mode) {
         // We only include the slot placeholder {tag} if cluster mode is enabled
         tag = ":{tag}";
@@ -2484,74 +2683,8 @@ int main(int argc, char **argv) {
             config.fuzz_flags);
     }
 
-    /* Run benchmark with command in the remainder of the arguments. */
-    if (argc) {
-        sds title = sdsnew(argv[0]);
-        for (i = 1; i < argc; i++) {
-            title = sdscatlen(title, " ", 1);
-            title = sdscatlen(title, (char *)argv[i], strlen(argv[i]));
-        }
-        sds *sds_args = getSdsArrayFromArgv(argc, argv, 0);
-        if (!sds_args) {
-            fprintf(stderr, "Invalid quoted string\n");
-            return 1;
-        }
-        if (config.stdinarg) {
-            sds_args = sds_realloc(sds_args, (argc + 1) * sizeof(sds));
-            sds_args[argc] = readArgFromStdin();
-            argc++;
-        }
-        /* Setup argument length */
-        size_t *argvlen = zmalloc(argc * sizeof(size_t));
-        for (i = 0; i < argc; i++) argvlen[i] = sdslen(sds_args[i]);
-        /* RESP-encode the command(s) given on the syntax
-         *
-         *     [N] command args [ ";" [N] command args [...] ]
-         */
-        int start = 0;   /* Argument index where the current command starts. */
-        int repeat = 1;  /* Number of times to repeat the current command. */
-        int seq_len = 0; /* Total number of commands in the sequence. */
-        sds cmd_seq = sdsempty();
-        for (i = 0; i <= argc; i++) {
-            if (i == start && sds_args[i][0] >= '1' && sds_args[i][0] <= '9') {
-                /* Command prefixed by number means repeat command N times. */
-                repeat = atoi(sds_args[i]);
-                start++;
-            } else if (i == argc || strcmp(";", sds_args[i]) == 0) {
-                cmd = NULL;
-                if (i == start) continue;
-
-                addRespCommandToSequence(sds_args, argvlen, start, i, repeat, &cmd_seq, &seq_len);
-                start = i + 1;
-                repeat = 1;
-            } else if (strstr(sds_args[i], "__data__")) {
-                if (config.current_dataset) {
-                    fprintf(stderr, "Error: __data__ placeholders cannot be used with --dataset option\n");
-                    exit(1);
-                }
-                /* Replace data placeholders with data of length given by -d. */
-                int num_parts;
-                sds *parts = sdssplitlen(sds_args[i], sdslen(sds_args[i]),
-                                         "__data__", strlen("__data__"),
-                                         &num_parts);
-                sds newarg = parts[0];
-                parts[0] = NULL; /* prevent it from being freed below */
-                for (int j = 1; j < num_parts; j++) {
-                    char data[config.datasize];
-                    genBenchmarkRandomData(data, config.datasize);
-                    newarg = sdscatlen(newarg, data, config.datasize);
-                    newarg = sdscatlen(newarg, parts[j], sdslen(parts[j]));
-                }
-                sdsfreesplitres(parts, num_parts);
-                sdsfree(sds_args[i]);
-                sds_args[i] = newarg;
-                argvlen[i] = sdslen(sds_args[i]);
-            }
-            /* NOTE: Field placeholder processing is handled above in the command-level loop to ensure row consistency */
-        }
-        len = sdslen(cmd_seq);
-        /* adjust the datasize to the parsed command */
-        config.datasize = len;
+    /* Run benchmark with the command sequence already parsed above. */
+    if (argc && cmd_seq) {
         do {
             benchmarkSequence(title, cmd_seq, len, seq_len);
         } while (config.loop);

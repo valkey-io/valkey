@@ -28,8 +28,8 @@ start_server {tags {"modules usercall network"}} {
 
             assert_equal [r usercall.reset_user] OK
             assert_equal [r usercall.add_to_acl "~* &* +@all -set"] OK
-            # off and sanitize-payload because module user / default value
-            assert_equal [r usercall.get_acl] "off sanitize-payload ~* &* alldbs +@all -set"
+            # off because module user / default value
+            assert_equal [r usercall.get_acl] "off ~* &* +@all -set"
 
             # doesn't fail for regular commands as just testing acl here
             assert_equal [r usercall.$cmd {} set x 10] OK
@@ -47,8 +47,8 @@ start_server {tags {"modules usercall network"}} {
             r ACL LOG RESET
             assert_equal [r usercall.reset_user] OK
             assert_equal [r usercall.add_to_acl "~* &* +@all -set"] OK
-            # off and sanitize-payload because module user / default value
-            assert_equal [r usercall.get_acl] "off sanitize-payload ~* &* alldbs +@all -set"
+            # off because module user / default value
+            assert_equal [r usercall.get_acl] "off ~* &* +@all -set"
 
             # fails here as testing acl in rm call
             assert_error {*NOPERM User module_user has no permissions*} {r usercall.$cmd C set x 10}
@@ -110,8 +110,8 @@ start_server {tags {"modules usercall network"}} {
 
             assert_equal [r usercall.reset_user] OK
             assert_equal [r usercall.add_to_acl "~* &* +@all -set"] OK
-            # off and sanitize-payload because module user / default value
-            assert_equal [r usercall.get_acl] "off sanitize-payload ~* &* alldbs +@all -set"
+            # off because module user / default value
+            assert_equal [r usercall.get_acl] "off ~* &* +@all -set"
 
             # passes as not checking ACL
             assert_equal [r usercall.$cmd {} evalsha $sha_set 0] 1

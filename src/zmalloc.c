@@ -114,6 +114,9 @@ static _Atomic size_t *used_memory_thread = &used_memory_thread_padded[PADDING_E
 static atomic_int total_active_threads = 0;
 /* This is a simple protection. It's used only if some modules create a lot of threads. */
 static atomic_size_t used_memory_for_additional_threads = 0;
+/* Memory tracked by modules outside the allocator. Writers are serialized by moduleGIL,
+ * but readers may sample it without the GIL. */
+static atomic_size_t used_memory_external = 0;
 
 /* Register the thread index in start_routine. */
 static inline void zmalloc_register_thread_index(void) {
@@ -526,7 +529,34 @@ size_t zmalloc_used_memory(void) {
     for (int i = 0; i < threads_num; i++) {
         um += used_memory_thread[i];
     }
+    um += atomic_load_explicit(&used_memory_external, memory_order_relaxed);
     return um;
+}
+
+size_t zmalloc_used_external_memory(void) {
+    return atomic_load_explicit(&used_memory_external, memory_order_relaxed);
+}
+
+int zmalloc_increase_used_memory_external(size_t size) {
+    size_t current = atomic_load_explicit(&used_memory_external, memory_order_relaxed);
+    while (1) {
+        size_t next;
+        if (SIZE_MAX - current < size) return -1;
+        next = current + size;
+        if (atomic_compare_exchange_weak_explicit(&used_memory_external, &current, next, memory_order_relaxed, memory_order_relaxed))
+            return 0;
+    }
+}
+
+int zmalloc_decrease_used_memory_external(size_t size) {
+    size_t current = atomic_load_explicit(&used_memory_external, memory_order_relaxed);
+    while (1) {
+        size_t next;
+        if (current < size) return -1;
+        next = current - size;
+        if (atomic_compare_exchange_weak_explicit(&used_memory_external, &current, next, memory_order_relaxed, memory_order_relaxed))
+            return 0;
+    }
 }
 
 void zmalloc_set_oom_handler(void (*oom_handler)(size_t)) {
@@ -576,7 +606,7 @@ void zmadvise_dontneed(void *ptr, size_t size_hint) {
  * This is useful when we want to release a portion of a larger allocation that
  * is no longer needed. */
 void zmadvise_dontneed_range(void *ptr, size_t size) {
-#if defined(__linux__)
+#if defined(USE_JEMALLOC) && defined(__linux__)
     if (ptr == NULL || size == 0) return;
     madvise(ptr, size, MADV_DONTNEED);
 #else
@@ -816,18 +846,6 @@ void set_jemalloc_bg_thread(int enable) {
     je_mallctl("background_thread", NULL, 0, &val, 1);
 }
 
-int jemalloc_purge(void) {
-    /* return all unused (reserved) pages to the OS */
-    char tmp[32];
-    unsigned narenas = 0;
-    size_t sz = sizeof(unsigned);
-    if (!je_mallctl("arenas.narenas", &narenas, &sz, NULL, 0)) {
-        snprintf(tmp, sizeof(tmp), "arena.%d.purge", narenas);
-        if (!je_mallctl(tmp, NULL, 0, NULL, 0)) return 0;
-    }
-    return -1;
-}
-
 #else
 
 int zmalloc_get_allocator_info(size_t *allocated, size_t *active, size_t *resident, size_t *retained, size_t *muzzy) {
@@ -841,13 +859,29 @@ void set_jemalloc_bg_thread(int enable) {
     ((void)(enable));
 }
 
-int jemalloc_purge(void) {
-    return 0;
-}
-
 #endif
 
-/* This function provides us access to the libc malloc_trim(). */
+int zmalloc_purge(void) {
+    int ret = 0;
+#if defined(USE_JEMALLOC)
+    /* Return all unused (reserved) jemalloc pages to the OS. */
+    char tmp[32];
+    unsigned narenas = 0;
+    size_t sz = sizeof(unsigned);
+    ret = -1;
+    if (!je_mallctl("arenas.narenas", &narenas, &sz, NULL, 0)) {
+        snprintf(tmp, sizeof(tmp), "arena.%d.purge", narenas);
+        if (!je_mallctl(tmp, NULL, 0, NULL, 0)) ret = 0;
+    }
+#endif
+    zlibc_trim();
+    return ret;
+}
+
+/* Release free pages of the libc main arena back to the OS via malloc_trim(3).
+ * Even with jemalloc, libc-internal allocations (getaddrinfo(3), NSS, pthread,
+ * stdio, or modules calling malloc() directly) live in the [heap] segment and
+ * are otherwise rarely returned to the OS. */
 void zlibc_trim(void) {
 #if defined(__GLIBC__) && !defined(USE_LIBC)
     malloc_trim(0);

@@ -133,9 +133,14 @@ valkey-cli does (`hints-check.mjs` prints a table of cases).
 On every push to the branch that touches `src/`, `deps/` or `utils/try-valkey-wasm/`: install emsdk (pinned
 6.0.9), run `build.sh`, boot-smoke under Node, build **native at the same SHA**, then run `diff-harness.mjs`
 (607 commands byte-for-byte; only CLIENT INFO's address and LOLWUT may differ) and `cli-diff.mjs` (the JS CLI
-layer against real `valkey-cli --no-raw`). The bundle is uploaded as a workflow artifact (30 days).
+layer against real `valkey-cli --no-raw`). A second job runs **the stock `tests/unit` Tcl suite against the
+wasm server** (`run-tcl-wasm.sh`: external mode over `tcp-bridge.mjs`, 59 units, ~2500 tests; skips listed in
+the script). The bundle is uploaded as a workflow artifact (30 days).
 `workflow_dispatch` with `publish=true` deploys it to GitHub Pages; a `try-valkey-v*` tag attaches the tarball
-to a GitHub Release. This is the reproducible record of the port for anyone who wants to redo it.
+to a GitHub Release. Both wait for the Tcl job. The *native* C unit tests and Tcl suite are not duplicated
+here: upstream's own `ci.yml` runs them on every push to the fork, patches included. C unit tests are not run
+under wasm (they are a gtest C++ binary; the Tcl suite covers the same code through the real command path).
+This is the reproducible record of the port for anyone who wants to redo it.
 
 ## Page options
 

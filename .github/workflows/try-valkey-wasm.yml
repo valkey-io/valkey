@@ -5,6 +5,7 @@
 #   - build:   emsdk (pinned) -> utils/try-valkey-wasm/build.sh -> bundle artifact
 #   - verify:  native build at the same SHA, then diff-harness (607 commands, byte-for-byte)
 #              and cli-diff (the JS CLI layer vs real valkey-cli --no-raw)
+#   - tcl:     the stock tests/unit suite against the wasm server (external mode over tcp-bridge.mjs)
 #   - pages:   workflow_dispatch with publish=true -> deploy the bundle to GitHub Pages
 #   - release: a try-valkey-v* tag -> GitHub Release with the bundle tarball attached
 #
@@ -98,10 +99,35 @@ jobs:
         with:
           path: bundle/try-valkey
 
+  tcl:
+    name: Tcl unit suite against the wasm server
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@v4
+        with:
+          name: try-valkey-wasm
+      - name: Unpack the wasm server where the harness expects it
+        run: |
+          tar -xzf try-valkey-wasm.tar.gz
+          cp try-valkey/valkey-server.mjs try-valkey/valkey-server.wasm src/
+      - name: Install tcl
+        run: sudo apt-get update -q && sudo apt-get install -y -q tcl8.6 tclx
+      - name: Run tests/unit against the wasm server (external mode over the TCP bridge)
+        run: utils/try-valkey-wasm/run-tcl-wasm.sh
+      - name: Bridge log (on failure)
+        if: failure()
+        run: tail -60 utils/try-valkey-wasm/out/bridge-ci.log || true
+
   pages:
     name: Publish to GitHub Pages
     if: github.event_name == 'workflow_dispatch' && inputs.publish
-    needs: build
+    needs: [build, tcl]
     runs-on: ubuntu-latest
     permissions:
       pages: write
@@ -117,7 +143,7 @@ jobs:
   release:
     name: GitHub Release
     if: startsWith(github.ref, 'refs/tags/try-valkey-v')
-    needs: build
+    needs: [build, tcl]
     runs-on: ubuntu-latest
     permissions:
       contents: write

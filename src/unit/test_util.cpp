@@ -380,15 +380,15 @@ TEST_F(UtilTest, TestGetTimeZoneFromLocaltime) {
         {"UTC", 0},
         {"America/Los_Angeles", 8 * 3600},
         {"America/New_York", 5 * 3600},
-        {"America/St_Johns", 3 * 3600 + 1800},   /* -03:30 */
+        {"America/St_Johns", 3 * 3600 + 1800}, /* -03:30 */
         {"Europe/Stockholm", -1 * 3600},
-        {"Asia/Kolkata", -(5 * 3600 + 1800)},    /* +05:30, no DST */
-        {"Asia/Kathmandu", -(5 * 3600 + 2700)},  /* +05:45 */
+        {"Asia/Kolkata", -(5 * 3600 + 1800)},       /* +05:30, no DST */
+        {"Asia/Kathmandu", -(5 * 3600 + 2700)},     /* +05:45 */
         {"Australia/Adelaide", -(9 * 3600 + 1800)}, /* +09:30, southern DST */
-        {"Pacific/Auckland", -12 * 3600},        /* southern DST */
-        {"Pacific/Chatham", -(12 * 3600 + 2700)}, /* +12:45 */
-        {"Pacific/Kiritimati", -14 * 3600},      /* furthest east */
-        {"Etc/GMT+12", 12 * 3600},               /* furthest west */
+        {"Pacific/Auckland", -12 * 3600},           /* southern DST */
+        {"Pacific/Chatham", -(12 * 3600 + 2700)},   /* +12:45 */
+        {"Pacific/Kiritimati", -14 * 3600},         /* furthest east */
+        {"Etc/GMT+12", 12 * 3600},                  /* furthest west */
     };
     const time_t instants[] = {1768446000, 1784084400, 1798759800, 1767227400};
 

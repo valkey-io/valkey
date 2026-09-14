@@ -867,20 +867,23 @@ void increxCommand(client *c) {
     }
 
     if (use_float) {
+        if (isinf(incr_ld)) {
+            addReplyError(c, "BYFLOAT increment cannot be Infinity");
+            return;
+        }
         if (isinf(oldvalue_ld)) {
             addReplyError(c, "value cannot be Infinity");
             return;
         }
-
         value_ld = oldvalue_ld + incr_ld;
-
-        if (isinf(value_ld)) {
-            addReplyError(c, "BYFLOAT increment cannot be Infinity");
-            return;
-        }
-
         if (isnan(value_ld)) {
             addReplyError(c, "Increment is not a valid float");
+            return;
+        }
+        if (isinf(value_ld)) {
+            addReplyArrayLen(c, 2);
+            addReplyHumanLongDouble(c, oldvalue_ld);
+            addReplyHumanLongDouble(c, 0);
             return;
         }
     } else {

@@ -339,6 +339,29 @@ start_server {tags {"incr"}} {
         format $err
     } {ERR *value is not an integer or out of range*} {valgrind:skip}
 
+    test {INCREX BYFLOAT positive arithmetic overflow returns [curr_val, 0]} {
+        r del foo
+        r set foo 1e308
+        # 1e308 + 1e308 overflows to infinity: should not error, returns current value and 0 delta
+        set res [r increx foo byfloat 1e308]
+        assert_match {*1e*308* 0*} $res
+        assert_match {*1e*308*} [r get foo]
+    }
+    test {INCREX BYFLOAT negative arithmetic overflow returns [curr_val, 0]} {
+        r del foo
+        r set foo -1e308
+        # -1e308 + -1e308 underflows/overflows to -infinity
+        set res [r increx foo byfloat -1e308]
+        assert_match {*-1e*308* 0*} $res
+        assert_match {*-1e*308*} [r get foo]
+    }
+    test {INCREX BYFLOAT overflow preserves existing TTL} {
+        r del foo
+        r set foo 1e308 ex 100
+        r increx foo byfloat 1e308
+        assert_range [r ttl foo] 1 100
+    }
+
     test {INCREX against key holding a list} {
         r del mylist
         r rpush mylist 1

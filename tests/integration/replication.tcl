@@ -432,6 +432,19 @@ start_server {tags {"repl external:skip"}} {
             close_replication_stream $repl
         }
 
+        test {INCREX BYFLOAT arithmetic overflow does not propagate} {
+            r -1 del foo
+            r -1 set foo 1e308
+            set repl [attach_to_replication_stream]
+            # Overflows to infinity; no change to DB, should not propagate
+            r -1 increx foo byfloat 1e308
+            r -1 set marker 1
+            assert_replication_stream $repl {
+                {set marker 1}
+            }
+            close_replication_stream $repl
+        }
+
         test {ROLE in master reports master with a slave} {
             set res [r -1 role]
             lassign $res role offset slaves

@@ -4425,6 +4425,7 @@ static bool readToQueryBuf(client *c) {
 #define REPL_MAX_READS_PER_IO_EVENT 25
 void readQueryFromClient(connection *conn) {
     client *c = connGetPrivateData(conn);
+    bool was_primary = (c == server.primary);
     /* Check if we can send the client to be handled by the IO-thread */
     if (postponeClientRead(c)) return;
 
@@ -4444,6 +4445,8 @@ void readQueryFromClient(connection *conn) {
                   full_read);
         beforeNextClient(c);
     } while (repeat);
+
+    if (was_primary) replicationMaybeSwitchToPrimaryAfterSiblingSync();
 }
 
 /* An "Address String" is a colon separated ip:port pair.
@@ -6658,7 +6661,11 @@ int processClientIOReadsDone(client *c) {
     int ret = addCommandToBatchAndProcessIfFull(c);
     /* If the command was not added to the commands batch, process it immediately */
     if (ret == C_ERR) {
-        if (processPendingCommandAndInputBuffer(c) == C_OK) beforeNextClient(c);
+        bool was_primary = c == server.primary;
+        if (processPendingCommandAndInputBuffer(c) == C_OK) {
+            beforeNextClient(c);
+            if (was_primary) replicationMaybeSwitchToPrimaryAfterSiblingSync();
+        }
     }
     return needs_post_read_update;
 }

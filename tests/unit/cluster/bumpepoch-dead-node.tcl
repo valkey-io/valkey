@@ -1,22 +1,3 @@
-proc cluster_nodes_conf_path {id} {
-    set dir [lindex [R $id config get dir] 1]
-    set conf [lindex [R $id config get cluster-config-file] 1]
-    return [file join $dir $conf]
-}
-
-proc read_file {path} {
-    set fd [open $path r]
-    set data [read $fd]
-    close $fd
-    return $data
-}
-
-proc write_file {path content} {
-    set fd [open $path w]
-    puts $fd $content
-    close $fd
-}
-
 test "CLUSTER BUMPEPOCH is not stuck on a tie with a dead node" {
     start_cluster 1 0 {tags {external:skip cluster}} {
         set R0_nodeid [R 0 CLUSTER MYID]

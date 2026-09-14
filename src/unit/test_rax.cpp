@@ -358,7 +358,7 @@ int fuzzTestCluster(size_t count, double addprob, double remprob) {
         /* Generate a random key by altering our template key. */
 
         /* With a given probability, let's use a common prefix so that there
-         * is a subset of keys that have an higher percentage of probability
+         * is a subset of keys that have a higher percentage of probability
          * of being hit again and again. */
         size_t commonprefix = genrand64_int64() & 0xf;
         if (commonprefix == 0) memcpy(key + 10, "2e68e5", 6);

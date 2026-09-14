@@ -2382,7 +2382,7 @@ static int cliSendCommand(int argc, char **argv, long repeat) {
                           !strcasecmp(command, "sunsubscribe"));
     if (!strcasecmp(command, "sync") || !strcasecmp(command, "psync")) config.replica_mode = 1;
 
-    /* When the user manually calls SCRIPT DEBUG, setup the activation of
+    /* When the user manually calls SCRIPT DEBUG, set up the activation of
      * debugging mode on the next eval if needed. */
     if (argc == 3 && !strcasecmp(argv[0], "script") && !strcasecmp(argv[1], "debug")) {
         if (!strcasecmp(argv[2], "yes") || !strcasecmp(argv[2], "sync")) {
@@ -2398,7 +2398,7 @@ static int cliSendCommand(int argc, char **argv, long repeat) {
         config.output = OUTPUT_RAW;
     }
 
-    /* Setup argument length */
+    /* Set up argument length */
     argvlen = zmalloc(argc * sizeof(size_t));
     for (j = 0; j < argc; j++) argvlen[j] = sdslen(argv[j]);
 
@@ -3056,7 +3056,7 @@ static void usage(int err) {
     fprintf(target,
             "  --latency          Enter a special mode continuously sampling latency.\n"
             "                     If you use this mode in an interactive session it runs\n"
-            "                     forever displaying real-time stats. Otherwise if --raw or\n"
+            "                     forever displaying real-time stats. Otherwise, if --raw or\n"
             "                     --csv is specified, or if you redirect the output to a non\n"
             "                     TTY, it samples the latency for 1 second (you can use\n"
             "                     -i to change the interval), then produces a single output\n"
@@ -3775,7 +3775,7 @@ clusterManagerCommandDef clusterManagerCommands[] = {
     {"add-node", clusterManagerCommandAddNode, 2, "new_host:new_port existing_host:existing_port",
      "replica,primaries-id <arg>"},
     {"del-node", clusterManagerCommandDeleteNode, 2, "host:port node_id", NULL},
-    {"call", clusterManagerCommandCall, -2, "host:port command arg arg .. arg", "only-primaries,only-replicas"},
+    {"call", clusterManagerCommandCall, -2, "host:port command arg arg ... arg", "only-primaries,only-replicas"},
     {"set-timeout", clusterManagerCommandSetTimeout, 2, "host:port milliseconds", NULL},
     {"import", clusterManagerCommandImport, 1, "host:port",
      "from <arg>,from-user <arg>,from-pass <arg>,from-askpass,copy,replace"},
@@ -8143,7 +8143,7 @@ static int clusterManagerCommandSetTimeout(int argc, char **argv) {
             err = "";
         else
             need_free = 1;
-        clusterManagerLogErr("ERR setting node-timeout for %s:%d: %s\n", n->ip, n->port, err);
+        clusterManagerLogErr("ERR setting cluster-node-timeout for %s:%d: %s\n", n->ip, n->port, err);
         if (need_free) zfree(err);
         err_count++;
     }

@@ -1,0 +1,12 @@
+{
+    "HOTKEYS": {
+        "summary": "A container for hot key commands",
+        "complexity": "Depends on subcommand.",
+        "group": "server",
+        "since": "9.2.0",
+        "arity": -2,
+        "acl_categories": [
+            "SLOW"
+        ]
+    }
+}

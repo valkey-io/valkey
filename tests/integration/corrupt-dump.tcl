@@ -740,6 +740,19 @@ test {corrupt payload: zset listpack with NAN score} {
     }
 }
 
+test {corrupt payload: stream length inconsistent with valid entries} {
+    # A stream whose listpack entries are all tombstones, but whose loaded
+    # length claims a positive value, must be rejected on load. Otherwise the
+    # mismatch makes streamLastValidID() panic ("length is N, but no max id")
+    # when a command such as XSETID looks up the last valid ID.
+    start_server [list overrides [list loglevel verbose use-exit-on-panic yes crash-memcheck-enabled no] ] {
+        r debug set-skip-checksum-validation 1
+        catch {r restore _tomb_stream 0 "\x15\x01\x10\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x01\x28\x28\x00\x00\x00\x0F\x00\x00\x01\x02\x01\x01\x01\x81\x66\x02\x00\x01\x03\x01\x00\x01\x00\x01\x81\x76\x02\x04\x01\x03\x01\x01\x01\x01\x01\x81\x76\x02\x04\x01\xFF\x01\x02\x02\x01\x01\x00\x00\x02\x00\x50\x00\x3F\xD1\x7E\xA1\xC7\x54\x12\x57"} err
+        assert_match "*Bad data format*" $err
+        assert_equal [r ping] "PONG"
+    }
+}
+
 test {corrupt payload: zset ziplist with NAN score} {
     # Same as the listpack case but for the legacy ziplist format, which is
     # converted to a listpack on load. A NAN score must be rejected so it can
@@ -749,6 +762,66 @@ test {corrupt payload: zset ziplist with NAN score} {
         catch {r restore _nan_zset_zl 0 "\x0C\x1D\x1D\x00\x00\x00\x17\x00\x00\x00\x04\x00\x00\x02\x6D\x31\x04\x03\x6E\x61\x6E\x05\x02\x6D\x32\x04\x03\x32\x2E\x35\xFF\x0B\x00\x00\x00\x00\x00\x00\x00\x00\x00"} err
         assert_match "*Bad data format*" $err
         verify_log_message 0 "*NAN score*" 0
+        assert_equal [r ping] "PONG"
+    }
+}
+
+test {corrupt payload: stream listpack with negative field count} {
+    # A stream master entry that declares a negative number of fields must be
+    # rejected on load. The field count drives listpack traversal in
+    # streamIteratorGetID(), so a negative value walks past the listpack and
+    # asserts when a command such as XRANGE reads the stream.
+    start_server [list overrides [list loglevel verbose use-exit-on-panic yes crash-memcheck-enabled no] ] {
+        r debug set-skip-checksum-validation 1
+        catch {r restore _neg_fields 0 "\x15\x01\x10\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x01\x18\x18\x00\x00\x00\x08\x00\x01\x01\x00\x01\xDF\xFD\x02\x00\x01\x02\x01\x00\x01\x00\x01\x00\x01\xFF\x01\x01\x01\x01\x01\x00\x00\x01\x00\x0B\x00\x00\x00\x00\x00\x00\x00\x00\x00"} err
+        assert_match "*Bad data format*" $err
+        assert_equal [r ping] "PONG"
+    }
+}
+
+test {corrupt payload: stream listpack with negative deleted count} {
+    # A master entry that declares a negative number of deleted entries must be
+    # rejected on load. The deleted count is added to the entry count to bound
+    # the entry validation loop, so a negative value lets a listpack claim more
+    # live entries (3 here) than it actually contains (1) while still walking
+    # cleanly to the end of the listpack. Without the sign check the payload is
+    # accepted, leaving the master entry count inconsistent with the entries.
+    start_server [list overrides [list loglevel verbose use-exit-on-panic yes crash-memcheck-enabled no] ] {
+        r debug set-skip-checksum-validation 1
+        catch {r restore _neg_deleted 0 "\x15\x01\x10\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x01\x18\x18\x00\x00\x00\x08\x00\x03\x01\xDF\xFE\x02\x00\x01\x00\x01\x02\x01\x00\x01\x00\x01\x03\x01\xFF\x03\x01\x01\x01\x01\x00\x00\x03\x00\x0B\x00\x00\x00\x00\x00\x00\x00\x00\x00"} err
+        assert_match "*Bad data format*" $err
+        assert_equal [r ping] "PONG"
+    }
+}
+
+test {corrupt payload: stream listpack live and deleted counts do not match the records} {
+    # A master entry may declare a live/deleted split that disagrees with the
+    # records that follow. Only the sum is validated by the entry loop, and the
+    # stream length here matches the declared live count, so the payload passes
+    # both checks while understating the live records. XDEL then reads the
+    # declared live count of 1, treats the node as holding its last live record
+    # and frees the whole node, destroying the record the header did not account
+    # for. XLEN disagrees with XRANGE until that happens.
+    #
+    # Built from a valid two-live-record control by changing the master entry
+    # count from 2 to 1, its deleted count from 0 to 1 and the stream length
+    # from 2 to 1, then recomputing the DUMP CRC64. All three encode in the
+    # same byte width, so no other byte moves.
+    start_server [list overrides [list loglevel verbose use-exit-on-panic yes crash-memcheck-enabled no] ] {
+        catch {r restore _split_mismatch 0 "\x15\x01\x10\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x2D\x2D\x00\x00\x00\x11\x00\x01\x01\x01\x01\x01\x01\x81\x66\x02\x00\x01\x02\x01\x00\x01\x00\x01\x81\x76\x02\x04\x01\x00\x01\x01\x01\x00\x01\x01\x01\x81\x67\x02\x81\x77\x02\x06\x01\xFF\x01\x02\x00\x01\x00\x00\x00\x02\x00\x50\x00\x90\x7A\xE8\x68\xB6\x55\xB2\x22"} err
+        assert_match "*Bad data format*" $err
+        assert_equal 0 [r exists _split_mismatch]
+        verify_log_message 0 "*Stream listpack integrity check failed*" 0
+
+        # The control differs only in those three bytes, so it must still load
+        # and delete one record without disturbing the other.
+        set stream_valid "\x15\x01\x10\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x2D\x2D\x00\x00\x00\x11\x00\x02\x01\x00\x01\x01\x01\x81\x66\x02\x00\x01\x02\x01\x00\x01\x00\x01\x81\x76\x02\x04\x01\x00\x01\x01\x01\x00\x01\x01\x01\x81\x67\x02\x81\x77\x02\x06\x01\xFF\x02\x02\x00\x01\x00\x00\x00\x02\x00\x50\x00\xA1\xDF\xE0\xE1\x48\xC5\xF8\x85"
+        assert_equal OK [r restore _control 0 $stream_valid]
+        assert_equal 2 [r xlen _control]
+        assert_equal {{1-0 {f v}} {2-0 {g w}}} [r xrange _control - +]
+        assert_equal 1 [r xdel _control 1-0]
+        assert_equal 1 [r xlen _control]
+        assert_equal {{2-0 {g w}}} [r xrange _control - +]
         assert_equal [r ping] "PONG"
     }
 }

@@ -22,6 +22,72 @@ proc randstring {min max {type binary}} {
     return $output
 }
 
+# Read and write files without applying Tcl text translations. These helpers
+# are shared by persistence tests that inspect or mutate serialized data.
+proc read_binary_file_prefix {path count} {
+    set fd [open $path r]
+    fconfigure $fd -translation binary
+    set prefix [read $fd $count]
+    close $fd
+    return $prefix
+}
+
+proc read_binary_file {path} {
+    set fd [open $path r]
+    fconfigure $fd -translation binary
+    set data [read $fd]
+    close $fd
+    return $data
+}
+
+proc write_binary_file {path data} {
+    set fd [open $path w]
+    fconfigure $fd -translation binary
+    puts -nonewline $fd $data
+    close $fd
+}
+
+# Create keys of all data types with predictable/consistent names for verification
+proc createComplexDatasetForVerification {r count {prefix ""}} {
+    for {set i 0} {$i < $count} {incr i} {
+        # String keys
+        {*}$r set ${prefix}before_$i "value_before_$i"
+        {*}$r set ${prefix}int_$i [expr {42 + $i}]
+        {*}$r set ${prefix}bits_$i "\x0f"
+        
+        # List keys
+        {*}$r lpush ${prefix}lst_$i "L2" "L1"
+        {*}$r rpush ${prefix}lst_$i "R1" "R2"
+        
+        # Set keys
+        {*}$r sadd ${prefix}set_$i "B1" "B2"
+        {*}$r sadd ${prefix}iset_$i 12 34
+        
+        # Sorted set keys
+        {*}$r zadd ${prefix}zset_$i 1 "Z1" 2 "Z2"
+        
+        # Hash keys
+        {*}$r hset ${prefix}hash_$i "H1" "a"
+        {*}$r hset ${prefix}hash_$i "H2" 1
+        
+        # HyperLogLog
+        {*}$r pfadd ${prefix}hll_$i "PF1"
+        
+        # Geo
+        {*}$r geoadd ${prefix}geo_$i -122.335167 47.608013 "seattle"
+        {*}$r geosearchstore ${prefix}geo_set_$i ${prefix}geo_$i FROMLONLAT -122.335167 47.608013 BYRADIUS 10 mi
+        
+        # Stream
+        {*}$r xadd ${prefix}stream_$i "*" "D1" "V1"
+        {*}$r xgroup create ${prefix}stream_$i ${prefix}group_$i 0 MKSTREAM
+    }
+}
+
+# Path of the RDB file a server saves to (dir + dbfilename).
+proc server_rdb_path {client} {
+    return [file join [lindex [$client config get dir] 1] [lindex [$client config get dbfilename] 1]]
+}
+
 # Useful for some test
 proc zlistAlikeSort {a b} {
     if {[lindex $a 0] > [lindex $b 0]} {return 1}
@@ -712,14 +778,28 @@ proc process_is_paused pid {
     return [string match {*T*} [lindex [exec ps j $pid] 16]]
 }
 
-proc pause_process pid {
-    exec kill -SIGSTOP $pid
-    wait_for_condition 50 100 {
-        [string match {*T*} [lindex [exec ps j $pid] 16]]
+# Wait until the process enters a paused state.
+#
+# Callers that arm a self-stopping debug point (DEBUG PAUSE-AFTER-FORK,
+# DEBUG PAUSE-BEFORE-PSYNC) also wait for the server to reach it, which under
+# valgrind can take longer than 5 seconds. Scale the budget for them, but only
+# under valgrind so normal runs keep failing fast.
+proc wait_process_paused {pid {retries auto}} {
+    if {$retries eq "auto"} {
+        if {$::valgrind} {set retries 1000} else {set retries 50}
+    }
+    wait_for_condition $retries 100 {
+        [process_is_paused $pid]
     } else {
         puts [exec ps j $pid]
         fail "process didn't stop"
     }
+}
+
+proc pause_process pid {
+    exec kill -SIGSTOP $pid
+    # We sent the signal, so the stop is near-immediate. Keep the short budget.
+    wait_process_paused $pid 50
 }
 
 proc resume_process pid {
@@ -1319,4 +1399,73 @@ proc memcmp {string1 string2} {
         }
     }
     return [expr {$len1 - $len2}]
+}
+
+# Execute body with a temporary config override, restoring the original
+# value even if the body fails.
+proc with_config {config value body} {
+    set old [lindex [r config get $config] 1]
+    r config set $config $value
+    catch {uplevel 1 $body} result opts
+    r config set $config $old
+    dict incr opts -level
+    return -options $opts $result
+}
+
+# Execute body and always run cleanup, preserving the body's completion status.
+proc with_cleanup {body cleanup} {
+    catch {uplevel 1 $body} result opts
+    uplevel 1 $cleanup
+    dict incr opts -level
+    return -options $opts $result
+}
+
+# Escape a string for use as a JSON string value.
+#
+# Beyond the characters with a short escape, every C0 control character has to
+# be escaped: JSON forbids them raw, and one raw byte makes the whole file
+# unparsable, taking every failure in the run with it. Failure messages carry
+# server output and memory-tool reports, which do contain control bytes, and an
+# incomplete ANSI sequence survives colour stripping.
+proc json_escape_string {s} {
+    set s [string map {
+        "\\" "\\\\" "\"" "\\\"" "\n" "\\n" "\r" "\\r"
+        "\t" "\\t" "\b" "\\b" "\f" "\\f"
+    } $s]
+    set out ""
+    foreach ch [split $s ""] {
+        scan $ch %c code
+        if {$code < 0x20} {
+            append out [format {\u%04x} $code]
+        } else {
+            append out $ch
+        }
+    }
+    return $out
+}
+
+proc read_file {path} {
+    set fd [open $path r]
+    set data [read $fd]
+    close $fd
+    return $data
+}
+
+proc write_file {path content} {
+    set fd [open $path w]
+    puts $fd $content
+    close $fd
+}
+
+proc file_has_pattern {path pattern} {
+    if {![file exists $path]} {
+        return 0
+    }
+    return [regexp $pattern [read_file $path]]
+}
+
+proc cluster_nodes_conf_path {id} {
+    set dir [lindex [R $id config get dir] 1]
+    set conf [lindex [R $id config get cluster-config-file] 1]
+    return [file join $dir $conf]
 }

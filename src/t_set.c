@@ -43,7 +43,7 @@
 void sunionDiffGenericCommand(client *c, robj **setkeys, int setnum, robj *dstkey, int op);
 
 /* Factory method to return a set that *can* hold "value". When the object has
- * an integer-encodable value, an intset will be returned. Otherwise a listpack
+ * an integer-encodable value, an intset will be returned. Otherwise, a listpack
  * or a regular hash table.
  *
  * The size hint indicates approximately how many items will be added which is
@@ -407,7 +407,7 @@ sds setTypeNextObject(setTypeIterator *si) {
 
 /* Return random element from a non empty set.
  * The returned element can be an int64_t value if the set is encoded
- * as an "intset" blob of integers, or an string.
+ * as an "intset" blob of integers, or a string.
  *
  * The caller provides three pointers to be populated with the right
  * object. The return value of the function is the object->encoding
@@ -700,33 +700,69 @@ void smoveCommand(client *c) {
     addReply(c, shared.cone);
 }
 
+#define SMISMEMBER_FIND_BATCH_SIZE 16
+static_assert(SMISMEMBER_FIND_BATCH_SIZE <= HASHTABLE_FIND_BATCH_MAX_SIZE,
+              "SMISMEMBER batch size exceeds hashtable batch lookup limit");
+
+static void sismemberReply(client *c, robj *set, robj *member) {
+    addReply(c, setTypeIsMember(set, objectGetVal(member)) ? shared.cone : shared.czero);
+}
+
+static void smismemberReplyWithHashtable(client *c, hashtable *ht, robj **members, size_t count) {
+    const void *keys[SMISMEMBER_FIND_BATCH_SIZE];
+    void *found_entries[SMISMEMBER_FIND_BATCH_SIZE];
+    while (count) {
+        size_t batch = count > SMISMEMBER_FIND_BATCH_SIZE ? SMISMEMBER_FIND_BATCH_SIZE : count;
+
+        for (size_t i = 0; i < batch; i++) {
+            keys[i] = objectGetVal(members[i]);
+        }
+
+        uint32_t result = hashtableFindBatch(ht, (int)batch, keys, found_entries);
+
+        for (size_t i = 0; i < batch; i++) {
+            addReply(c, (result >> i) & 1 ? shared.cone : shared.czero);
+        }
+
+        members += batch;
+        count -= batch;
+    }
+}
+
 void sismemberCommand(client *c) {
     robj *set;
 
     if ((set = lookupKeyReadOrReply(c, c->argv[1], shared.czero)) == NULL || checkType(c, set, OBJ_SET)) return;
 
-    if (setTypeIsMember(set, objectGetVal(c->argv[2])))
-        addReply(c, shared.cone);
-    else
-        addReply(c, shared.czero);
+    sismemberReply(c, set, c->argv[2]);
 }
 
 void smismemberCommand(client *c) {
     robj *set;
-    int j;
 
     /* Don't abort when the key cannot be found. Non-existing keys are empty
      * sets, where SMISMEMBER should respond with a series of zeros. */
     set = lookupKeyRead(c->db, c->argv[1]);
-    if (set && checkType(c, set, OBJ_SET)) return;
-
-    addReplyArrayLen(c, c->argc - 2);
-
-    for (j = 2; j < c->argc; j++) {
-        if (set && setTypeIsMember(set, objectGetVal(c->argv[j])))
-            addReply(c, shared.cone);
-        else
+    if (set == NULL) {
+        addReplyArrayLen(c, c->argc - 2);
+        for (int j = 2; j < c->argc; j++) {
             addReply(c, shared.czero);
+        }
+        return;
+    }
+    if (checkType(c, set, OBJ_SET)) return;
+
+    size_t count = c->argc - 2;
+    addReplyArrayLen(c, count);
+
+    /* Prefer hashtable batch lookup to improve performance. */
+    if (set->encoding == OBJ_ENCODING_HASHTABLE && count > 1) {
+        smismemberReplyWithHashtable(c, objectGetVal(set), c->argv + 2, count);
+        return;
+    }
+
+    for (size_t i = 0; i < count; i++) {
+        sismemberReply(c, set, c->argv[i + 2]);
     }
 }
 
@@ -1476,7 +1512,7 @@ void sunionDiffGenericCommand(client *c, robj **setkeys, int setnum, robj *dstke
          * 'dstset_encoding' is used to determine which kind of encoding to use when initialize 'dstset'.
          *
          * If all sets are all OBJ_ENCODING_INTSET encoding or 'dstkey' is not null, keep 'dstset'
-         * OBJ_ENCODING_INTSET encoding when initialize. Otherwise it is not efficient to create the 'dstset'
+         * OBJ_ENCODING_INTSET encoding when initialize. Otherwise, it is not efficient to create the 'dstset'
          * from intset and then convert to listpack or hashtable.
          *
          * If one of the set is OBJ_ENCODING_LISTPACK, let's set 'dstset' to hashtable default encoding,
@@ -1537,7 +1573,7 @@ void sunionDiffGenericCommand(client *c, robj **setkeys, int setnum, robj *dstke
         /* Union is trivial, just add every element of every set to the
          * temporary set. */
         for (j = 0; j < setnum; j++) {
-            if (!sets[j]) continue; /* non existing keys are like empty sets */
+            if (!sets[j]) continue; /* nonexistent keys are like empty sets */
 
             si = setTypeInitIterator(sets[j]);
             while ((encoding = setTypeNext(si, &str, &len, &llval)) != -1) {
@@ -1578,7 +1614,7 @@ void sunionDiffGenericCommand(client *c, robj **setkeys, int setnum, robj *dstke
          * This is O(N) where N is the sum of all the elements in every
          * set. */
         for (j = 0; j < setnum; j++) {
-            if (!sets[j]) continue; /* non existing keys are like empty sets */
+            if (!sets[j]) continue; /* nonexistent keys are like empty sets */
 
             si = setTypeInitIterator(sets[j]);
             while ((encoding = setTypeNext(si, &str, &len, &llval)) != -1) {

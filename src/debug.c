@@ -28,6 +28,7 @@
  */
 
 #include "server.h"
+#include "ordered_index.h"
 #include "util.h"
 #include "sha1.h" /* SHA1 is used for DEBUG DIGEST */
 #include "crc64.h"
@@ -39,6 +40,8 @@
 #include "io_threads.h"
 #include "sds.h"
 #include "module.h"
+
+#include "tls.h"
 
 #include <arpa/inet.h>
 #include <signal.h>
@@ -211,19 +214,21 @@ void xorObjectDigest(serverDb *db, robj *keyobj, unsigned char *digest, robj *o)
                 xorDigest(digest, eledigest, 20);
                 zzlNext(zl, &eptr, &sptr);
             }
-        } else if (objectGetEncoding(o) == OBJ_ENCODING_SKIPLIST) {
+        } else if (objectGetEncoding(o) == OBJ_ENCODING_BTREE) {
             zset *zs = objectGetVal(o);
             hashtableIterator iter;
             hashtableInitIterator(&iter, zs->ht, 0);
 
             void *next;
             while (hashtableNext(&iter, &next)) {
-                zskiplistNode *node = next;
-                const int len = fpconv_dtoa(node->score, buf);
+                OrderedIndexItem *node = next;
+                const char *ele;
+                size_t ele_len;
+                orderedIndexItemGetElement(node, &ele, &ele_len);
+                const int len = fpconv_dtoa(orderedIndexItemGetScore(node), buf);
                 buf[len] = '\0';
                 memset(eledigest, 0, 20);
-                sds ele = zslGetNodeElement(node);
-                mixDigest(eledigest, ele, sdslen(ele));
+                mixDigest(eledigest, ele, ele_len);
                 mixDigest(eledigest, buf, strlen(buf));
                 xorDigest(digest, eledigest, 20);
             }
@@ -450,6 +455,14 @@ void debugCommand(client *c) {
             "    Disable sending cluster ping to a random node every second.",
             "DISABLE-CLUSTER-RECONNECTION <0|1>",
             "    Disable cluster reconnection of cluster nodes.",
+            "CLUSTER-FAILOVER-DELAY <delay-ms>",
+            "    Override the failover delay. -1 is the default value, meaning don't",
+            "    override, values >= 0 will be used for the failover delay.",
+            "CLUSTER-FAILOVER-EPOCH <epoch>",
+            "    Force the next failover election started by this replica to run in",
+            "    the given epoch instead of currentEpoch+1. -1 (default) disables the",
+            "    override. It is consumed once: subsequent retries use currentEpoch+1",
+            "    again. Useful to make several replicas contend in the same epoch.",
             "OOM",
             "    Crash the server simulating an out-of-memory error.",
             "PANIC",
@@ -518,6 +531,8 @@ void debugCommand(client *c) {
             "    Enable or disable the reply buffer resize cron job",
             "PAUSE-AFTER-FORK <0|1>",
             "    Stop the server's main process after fork.",
+            "PAUSE-BEFORE-PSYNC <0|1>",
+            "    Stop the server's main process before sending PSYNC.",
             "DELAY-RDB-CLIENT-FREE-SECONDS <seconds>",
             "    Grace period in seconds for replica main channel to establish psync.",
             "DICT-RESIZING <0|1>",
@@ -535,6 +550,10 @@ void debugCommand(client *c) {
             "    Force freeClient on primary to use async path.",
             "PROTECT-CLIENT <id>",
             "    Protect a client from being freed, forcing deferred close.",
+            "FORCE-TLS-WRITE-ERROR <0|1>",
+            "    Force TLS write error for testing.",
+            "BIO-DRAIN <type>",
+            "    Wait for the specified bio job queue to become empty.",
             NULL};
         addExtendedReplyHelp(c, help, clusterDebugCommandExtendedHelp());
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "segfault")) {
@@ -634,21 +653,41 @@ void debugCommand(client *c) {
         long packet_type;
         if (getLongFromObjectOrReply(c, c->argv[2], &packet_type, NULL) != C_OK) return;
         server.cluster_drop_packet_filter = packet_type;
+        serverLog(LL_NOTICE, "Setting drop-cluster-packet-filter to %ld", packet_type);
         addReply(c, shared.ok);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "close-cluster-link-on-packet-drop") && c->argc == 3) {
-        server.debug_cluster_close_link_on_packet_drop = atoi(objectGetVal(c->argv[2]));
+        server.debug_cluster_close_link_on_packet_drop = (atoi(objectGetVal(c->argv[2])) != 0);
+        serverLog(LL_NOTICE, "Setting close-cluster-link-on-packet-drop to %d", (atoi(objectGetVal(c->argv[2])) != 0));
         addReply(c, shared.ok);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "disable-cluster-random-ping") && c->argc == 3) {
-        server.debug_cluster_disable_random_ping = atoi(objectGetVal(c->argv[2]));
+        server.debug_cluster_disable_random_ping = (atoi(objectGetVal(c->argv[2])) != 0);
         addReply(c, shared.ok);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "disable-cluster-reconnection") && c->argc == 3) {
-        server.debug_cluster_disable_reconnection = atoi(objectGetVal(c->argv[2]));
+        server.debug_cluster_disable_reconnection = (atoi(objectGetVal(c->argv[2])) != 0);
+        addReply(c, shared.ok);
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "cluster-failover-delay") && c->argc == 3) {
+        int delay_ms;
+        if (getIntFromObjectOrReply(c, c->argv[2], &delay_ms, NULL) != C_OK) return;
+        if (delay_ms < -1) {
+            addReplyError(c, "delay-ms must be -1 (default) or a non-negative value in ms");
+            return;
+        }
+        server.debug_cluster_failover_delay = delay_ms;
+        addReply(c, shared.ok);
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "cluster-failover-epoch") && c->argc == 3) {
+        long long epoch;
+        if (getLongLongFromObjectOrReply(c, c->argv[2], &epoch, NULL) != C_OK) return;
+        if (epoch < -1) {
+            addReplyError(c, "epoch must be -1 (default) or a non-negative value");
+            return;
+        }
+        server.debug_cluster_failover_epoch = epoch;
         addReply(c, shared.ok);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "slotmigration")) {
         if (!strcasecmp(objectGetVal(c->argv[2]), "prevent-pause")) {
-            server.debug_slot_migration_prevent_pause = atoi(objectGetVal(c->argv[3]));
+            server.debug_slot_migration_prevent_pause = (atoi(objectGetVal(c->argv[3])) != 0);
         } else if (!strcasecmp(objectGetVal(c->argv[2]), "prevent-failover")) {
-            server.debug_slot_migration_prevent_failover = atoi(objectGetVal(c->argv[3]));
+            server.debug_slot_migration_prevent_failover = (atoi(objectGetVal(c->argv[3])) != 0);
         } else {
             addReplySubcommandSyntaxError(c);
             return;
@@ -811,7 +850,7 @@ void debugCommand(client *c) {
         addReplyStatus(c, d);
         sdsfree(d);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "digest-value") && c->argc >= 2) {
-        /* DEBUG DIGEST-VALUE key key key ... key. */
+        /* DEBUG DIGEST-VALUE key key ... key. */
         addReplyArrayLen(c, c->argc - 2);
         for (int j = 2; j < c->argc; j++) {
             unsigned char digest[20];
@@ -979,7 +1018,7 @@ void debugCommand(client *c) {
         /* Get the hashtable reference from the object, if possible. */
         hashtable *ht = NULL;
         switch (objectGetEncoding(o)) {
-        case OBJ_ENCODING_SKIPLIST: {
+        case OBJ_ENCODING_BTREE: {
             zset *zs = objectGetVal(o);
             ht = zs->ht;
         } break;
@@ -1063,6 +1102,9 @@ void debugCommand(client *c) {
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "pause-after-fork") && c->argc == 3) {
         server.debug_pause_after_fork = atoi(objectGetVal(c->argv[2]));
         addReply(c, shared.ok);
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "pause-before-psync") && c->argc == 3) {
+        server.debug_pause_before_psync = atoi(objectGetVal(c->argv[2]));
+        addReply(c, shared.ok);
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "delay-rdb-client-free-seconds") && c->argc == 3) {
         server.wait_before_rdb_client_free = atoi(objectGetVal(c->argv[2]));
         addReply(c, shared.ok);
@@ -1094,6 +1136,30 @@ void debugCommand(client *c) {
         } else {
             addReplyError(c, "No such client");
         }
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "force-tls-write-error") && c->argc == 3) {
+#ifdef USE_OPENSSL
+        long val;
+        if (getLongFromObjectOrReply(c, c->argv[2], &val, NULL) != C_OK) return;
+        if (val < 0 || val > 1) {
+            addReplyError(c, "Value must be 0 or 1");
+            return;
+        }
+        server.debug_force_tls_write_error = val;
+        addReply(c, shared.ok);
+#else
+        addReplyError(c, "TLS is not enabled");
+#endif
+    } else if (!strcasecmp(objectGetVal(c->argv[1]), "bio-drain") && c->argc == 3) {
+        int type;
+        const char *name = objectGetVal(c->argv[2]);
+        if (!strcasecmp(name, "BIO_CLUSTER_SAVE")) {
+            type = BIO_CLUSTER_SAVE;
+        } else {
+            addReplySubcommandSyntaxError(c);
+            return;
+        }
+        bioDrainWorker(type);
+        addReply(c, shared.ok);
     } else if (!handleDebugClusterCommand(c)) {
         addReplySubcommandSyntaxError(c);
         return;
@@ -1189,8 +1255,11 @@ void serverLogObjectDebugInfo(const robj *o) {
         serverLog(LL_WARNING, "Hash size: %d", (int)hashTypeLength(o));
     } else if (objectGetType(o) == OBJ_ZSET) {
         serverLog(LL_WARNING, "Sorted set size: %d", (int)zsetLength(o));
-        if (objectGetEncoding(o) == OBJ_ENCODING_SKIPLIST)
-            serverLog(LL_WARNING, "Skiplist level: %d", (int)((const zset *)o->ptr)->zsl->level);
+        if (objectGetEncoding(o) == OBJ_ENCODING_BTREE) {
+            /* Not declared in ordered_index.h — debug-only introspection. */
+            extern int orderedIndexGetHeight(const OrderedIndex *oi);
+            serverLog(LL_WARNING, "Index height: %d", orderedIndexGetHeight(((const zset *)o->ptr)->oi));
+        }
     } else if (objectGetType(o) == OBJ_STREAM) {
         serverLog(LL_WARNING, "Stream size: %d", (int)streamLength(o));
     }
@@ -2624,9 +2693,10 @@ static int is_thread_ready_to_signal(const char *proc_pid_task_path, const char 
         /* iterate the file until we reach SigBlk or SigIgn field line */
         if (!strncmp(buff, "SigBlk:\t", field_name_len) || !strncmp(buff, "SigIgn:\t", field_name_len)) {
             line = buff + field_name_len;
-            unsigned long sig_mask;
-            if (-1 == string2ul_base16_async_signal_safe(line, sizeof(buff), &sig_mask)) {
-                serverLogRawFromHandler(LL_WARNING, "Can't convert signal mask to an unsigned long due to an overflow");
+            unsigned long long sig_mask;
+            if (-1 == string2ull_base16_async_signal_safe(line, sizeof(buff), &sig_mask)) {
+                serverLogRawFromHandler(LL_WARNING,
+                                        "Can't convert signal mask to an unsigned long long due to an overflow");
                 ret = 0;
                 break;
             }
@@ -2634,7 +2704,7 @@ static int is_thread_ready_to_signal(const char *proc_pid_task_path, const char 
             /* The bit position in a signal mask aligns with the signal number. Since signal numbers start from 1
             we need to adjust the signal number by subtracting 1 to align it correctly with the zero-based indexing used
           */
-            if (sig_mask & (1L << (sig_num - 1))) { /* if the signal is blocked/ignored return 0 */
+            if (sig_mask & (1ULL << (sig_num - 1))) { /* if the signal is blocked/ignored return 0 */
                 ret = 0;
                 break;
             }

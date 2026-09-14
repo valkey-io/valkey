@@ -86,8 +86,11 @@ target_compile_options(valkey-unit-gtests PRIVATE -Og -g)
 target_compile_options(valkey-unit-gtests PRIVATE
     -Wno-deprecated-declarations
     -Wno-write-strings
-    -fno-var-tracking-assignments
 )
+# -fno-var-tracking-assignments is only supported by GCC
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    target_compile_options(valkey-unit-gtests PRIVATE -fno-var-tracking-assignments)
+endif()
 
 # Include directories for C++ compilation
 target_include_directories(valkey-unit-gtests PRIVATE
@@ -139,6 +142,7 @@ target_link_libraries(
     PRIVATE
     valkeylib-gtest
     fpconv
+    lz4
     lualib
     hdr_histogram
     valkey::valkey
@@ -164,7 +168,7 @@ add_custom_target(test-unit
         [ -n \"$large_memory\" ] && TEST_ARGS=\"$TEST_ARGS --large-memory\"; \
         [ -n \"$valgrind\" ] && TEST_ARGS=\"$TEST_ARGS --valgrind\"; \
         [ -n \"$seed\" ] && TEST_ARGS=\"$TEST_ARGS --seed $seed\"; \
-        python3 ${CMAKE_SOURCE_DIR}/deps/gtest-parallel/gtest_parallel.py $<TARGET_FILE:valkey-unit-gtests> --gtest_filter=\"$UNIT_TEST_PATTERN\"* -- $TEST_ARGS"
+        python3 ${CMAKE_SOURCE_DIR}/deps/gtest-parallel/gtest_parallel.py $<TARGET_FILE:valkey-unit-gtests> --timeout_per_test 300 --gtest_filter=\"$UNIT_TEST_PATTERN\"* -- $TEST_ARGS"
     DEPENDS valkey-unit-gtests
     WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
     COMMENT "Running tests with gtest-parallel"

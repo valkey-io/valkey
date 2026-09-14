@@ -212,23 +212,30 @@ static int time_independent_strcmp(char *a, char *b, int len) {
     return diff; /* If zero strings are the same. */
 }
 
+/* Given a binary digest of 'len' bytes, returns its lowercase hexadecimal
+ * representation as a new SDS string. */
+static sds ACLHexDigest(const unsigned char *digest, size_t len) {
+    const char *cset = "0123456789abcdef";
+    sds hex = sdsnewlen(SDS_NOINIT, len * 2);
+
+    for (size_t j = 0; j < len; j++) {
+        hex[j * 2] = cset[((digest[j] & 0xF0) >> 4)];
+        hex[j * 2 + 1] = cset[(digest[j] & 0xF)];
+    }
+    return hex;
+}
+
 /* Given an SDS string, returns the SHA256 hex representation as a
  * new SDS string. */
 static sds ACLHashPassword(unsigned char *cleartext, size_t len) {
     SHA256_CTX ctx;
     unsigned char hash[SHA256_BLOCK_SIZE];
-    char hex[HASH_PASSWORD_LEN];
-    char *cset = "0123456789abcdef";
 
     sha256_init(&ctx);
     sha256_update(&ctx, (unsigned char *)cleartext, len);
     sha256_final(&ctx, hash);
 
-    for (int j = 0; j < SHA256_BLOCK_SIZE; j++) {
-        hex[j * 2] = cset[((hash[j] & 0xF0) >> 4)];
-        hex[j * 2 + 1] = cset[(hash[j] & 0xF)];
-    }
-    return sdsnewlen(hex, HASH_PASSWORD_LEN);
+    return ACLHexDigest(hash, SHA256_BLOCK_SIZE);
 }
 
 /* Given a hash and the hash length, returns C_OK if it is a valid password
@@ -659,7 +666,7 @@ static void ACLChangeSelectorPerm(aclSelector *selector, struct serverCommand *c
 /* This is like ACLSetSelectorCommandBit(), but instead of setting the specified
  * ID, it will check all the commands in the category specified as argument,
  * and will set all the bits corresponding to such commands to the specified
- * value. Since the category passed by the user may be non existing, the
+ * value. Since the category passed by the user may be nonexistent, the
  * function returns C_ERR if the category was not found, or C_OK if it was
  * found and the operation was performed. */
 static void ACLSetSelectorCommandBitsForCategory(hashtable *commands, aclSelector *selector, uint64_t cflag, int value) {
@@ -941,6 +948,41 @@ robj *ACLDescribeUser(user *u) {
     incrRefCount(u->acl_string);
 
     return u->acl_string;
+}
+
+/* Return a fingerprint of the ACL rules currently in effect, as a new SDS
+ * string holding the hex representation of the digest.
+ *
+ * The digest is the XOR-combined SHA256("username rules") for all users. The
+ * username is part of what is hashed because XOR cancels out two equal values,
+ * which would otherwise drop a pair of users having the same rules. */
+static sds ACLDigest(void) {
+    unsigned char digest[SHA256_BLOCK_SIZE] = {0};
+    raxIterator ri;
+
+    raxStart(&ri, Users);
+    raxSeek(&ri, "^", NULL, 0);
+    while (raxNext(&ri)) {
+        user *u = ri.data;
+        robj *rules = ACLDescribeUser(u);
+        sds rulestr = objectGetVal(rules);
+        unsigned char userdigest[SHA256_BLOCK_SIZE];
+        SHA256_CTX ctx;
+
+        /* Usernames can't contain spaces, so the separator makes the pair of
+         * name and rules unambiguous. */
+        sha256_init(&ctx);
+        sha256_update(&ctx, (unsigned char *)u->name, sdslen(u->name));
+        sha256_update(&ctx, (unsigned char *)" ", 1);
+        sha256_update(&ctx, (unsigned char *)rulestr, sdslen(rulestr));
+        sha256_final(&ctx, userdigest);
+        decrRefCount(rules);
+
+        for (int j = 0; j < SHA256_BLOCK_SIZE; j++) digest[j] ^= userdigest[j];
+    }
+    raxStop(&ri);
+
+    return ACLHexDigest(digest, SHA256_BLOCK_SIZE);
 }
 
 /* Get a command from the original command table, that is not affected
@@ -1372,11 +1414,11 @@ static int ACLSetSelector(aclSelector *selector, const char *op, size_t oplen) {
  * The 'op' string must be null terminated. The 'oplen' argument should
  * specify the length of the 'op' string in case the caller requires to pass
  * binary data (for instance the >password form may use a binary password).
- * Otherwise the field can be set to -1 and the function will use strlen()
+ * Otherwise, the field can be set to -1 and the function will use strlen()
  * to determine the length.
  *
  * The function returns C_OK if the action to perform was understood because
- * the 'op' string made sense. Otherwise C_ERR is returned if the operation
+ * the 'op' string made sense. Otherwise, C_ERR is returned if the operation
  * is unknown or has some syntax error.
  *
  * When an error is returned, errno is set to the following values:
@@ -1863,17 +1905,28 @@ static int ACLSelectorCheckCmd(aclSelector *selector,
         int *positions = cmd->get_dbid_args(argv, argc, &count);
         if (positions) {
             for (int i = 0; i < count; i++) {
-                long long dbid;
+                long long argdbid;
                 /* The helper has already validated argv[positions[i]] as a
                  * valid in-range dbid, so this should never fail. */
-                serverAssert(getLongLongFromObject(argv[positions[i]], &dbid) == C_OK);
-                if (!ACLSelectorCanAccessDb(selector, (int)dbid)) {
+                serverAssert(getLongLongFromObject(argv[positions[i]], &argdbid) == C_OK);
+                if (!ACLSelectorCanAccessDb(selector, (int)argdbid)) {
                     if (keyidxptr) *keyidxptr = positions[i];
                     zfree(positions);
                     return ACL_DENIED_DB;
                 }
             }
             zfree(positions);
+        }
+        /* Commands such as MOVE and COPY also read from / operate on the keys
+         * in the current database, not just the destination database named in
+         * their arguments. The current database must therefore be authorized
+         * as well, otherwise a user without access to the current DB could use
+         * MOVE/COPY to exfiltrate its keys into a database it can access.
+         * This only applies to commands that carry real keys: SELECT and SWAPDB
+         * also declare dbid args but do not touch the current DB's keys. */
+        if (doesCommandHaveKeys(cmd) && !ACLSelectorCanAccessDb(selector, dbid)) {
+            if (keyidxptr) *keyidxptr = 0;
+            return ACL_DENIED_DB;
         }
     } else if ((cmd->flags & CMD_ALL_DBS) && !(selector->flags & SELECTOR_FLAG_ALLDBS)) {
         for (int i = 0; i < server.dbnum; i++) {
@@ -2103,7 +2156,7 @@ int ACLCheckAllPerm(client *c, int *idxptr) {
 }
 
 /* If 'new' can access all channels 'original' could then return NULL;
-   Otherwise return a list of channels that the new user can access */
+   Otherwise, return a list of channels that the new user can access */
 static list *getUpcomingChannelList(user *new, user *original) {
     listIter li, lpi;
     listNode *ln, *lpn;
@@ -2491,7 +2544,7 @@ static int ACLLoadConfiguredUsers(void) {
  * and the rules will remain exactly as they were.
  *
  * At the end of the process, if no errors were found in the whole file then
- * NULL is returned. Otherwise an SDS string describing in a single line
+ * NULL is returned. Otherwise, an SDS string describing in a single line
  * a description of all the issues found is returned. */
 static sds ACLLoadFromFile(const char *filename) {
     FILE *fp;
@@ -3094,6 +3147,7 @@ static int aclAddReplySelectorDescription(client *c, aclSelector *s) {
  * ACL SAVE
  * ACL LIST
  * ACL USERS
+ * ACL DIGEST
  * ACL CAT [<category>]
  * ACL SETUSER <username> ... acl rules ...
  * ACL DELUSER <username> [...]
@@ -3225,6 +3279,8 @@ void aclCommand(client *c) {
             }
         }
         raxStop(&ri);
+    } else if (!strcasecmp(sub, "digest") && c->argc == 2) {
+        addReplyBulkSds(c, ACLDigest());
     } else if (!strcasecmp(sub, "whoami") && c->argc == 2) {
         if (c->user != NULL) {
             addReplyBulkCBuffer(c, c->user->name, sdslen(c->user->name));
@@ -3395,6 +3451,8 @@ void aclCommand(client *c) {
             "    when no category is specified.",
             "DELUSER <username> [<username> ...]",
             "    Delete a list of users.",
+            "DIGEST",
+            "    Return a fingerprint of the rules currently in effect.",
             "DRYRUN <username> <command> [<arg> ...]",
             "    Returns whether the user can execute the given command without executing the command.",
             "GETUSER <username>",

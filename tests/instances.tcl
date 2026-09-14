@@ -173,7 +173,7 @@ proc spawn_instance {type base_port count {conf {}} {base_conf_file ""}} {
         if {[server_is_up $::host $port 100] == 0} {
             set logfile [file join $dirname log.txt]
             puts [exec tail $logfile]
-            abort_sentinel_test "Problems starting $type #$instance_id: ping timeout, maybe server start failed, check $logfile"
+            abort_sentinel_test "Problem starting $type #$instance_id: ping timeout, maybe server start failed, check $logfile"
         }
 
         # Push the instance into the right list
@@ -578,9 +578,9 @@ proc write_test_failures {} {
         set test_file [lindex $entry 1]
         set error_msg [lindex $entry 2]
 
-        set test_name [string map {"\\" "\\\\" "\"" "\\\"" "\n" "\\n" "\r" "\\r" "\t" "\\t" "\b" "\\b" "\f" "\\f"} $test_name]
-        set test_file [string map {"\\" "\\\\" "\"" "\\\"" "\n" "\\n" "\r" "\\r" "\t" "\\t" "\b" "\\b" "\f" "\\f"} $test_file]
-        set error_msg [string map {"\\" "\\\\" "\"" "\\\"" "\n" "\\n" "\r" "\\r" "\t" "\\t" "\b" "\\b" "\f" "\\f"} $error_msg]
+        set test_name [json_escape_string $test_name]
+        set test_file [json_escape_string $test_file]
+        set error_msg [json_escape_string $error_msg]
 
         lappend failures "\{\"test_name\":\"$test_name\",\"test_file\":\"$test_file\",\"status\":\"err\",\"error\":\"$error_msg\"\}"
     }
@@ -590,6 +590,8 @@ proc write_test_failures {} {
         file mkdir $outdir
     }
     set fp [open $::failures_output_file w]
+    # JSON is UTF-8, so do not leave the channel on the system encoding.
+    fconfigure $fp -encoding utf-8
     puts $fp "\[[join $failures ","]\]"
     close $fp
 }
@@ -612,7 +614,7 @@ proc end_tests {} {
 # The "S" command is used to interact with the N-th Sentinel.
 # The general form is:
 #
-# S <sentinel-id> command arg arg arg ...
+# S <sentinel-id> command arg [arg ...]
 #
 # Example to ping the Sentinel 0 (first instance): S 0 PING
 proc S {n args} {

@@ -2137,7 +2137,7 @@ unsigned long fbtreeDeleteRangeByRank(fbtreeIndex *fbt,
  * exclusive score bound can be rewritten as an inclusive bound on the next
  * prefix. This is pure byte-string reasoning; it does not assume anything
  * about how scores are normalized. */
-static bool scorePrefixNext(const char *in, char *out) {
+static bool scorePrefixNext(const char in[static SCORE_SIZE], char out[static SCORE_SIZE]) {
     memcpy(out, in, SCORE_SIZE);
     for (int i = SCORE_SIZE - 1; i >= 0; i--) {
         unsigned char c = (unsigned char)out[i];

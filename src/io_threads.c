@@ -5,6 +5,7 @@
  */
 
 #include "io_threads.h"
+#include "ae.h"
 #include "cluster.h"
 #include "cluster_legacy.h"
 #include "connhelpers.h"
@@ -18,17 +19,32 @@
 #define IO_SPMC_QUEUE_SIZE 4096
 #define IO_SPSC_QUEUE_SIZE 4096
 
+/* QoS Swim Lanes for I/O threads
+ * High priority queues: reserved for critical internal communication such as
+ * cluster bus messages, slot migration, and replication streams
+ * Normal priority queues: used for normal client connections
+ */
+typedef enum {
+    /* Normal priority jobs - used for normal client connections */
+    JOB_PRIORITY_NORMAL = 0,
+    /* High priority jobs - used for critical internal communication such as
+     * cluster bus messages, slot migration, and replication streams */
+    JOB_PRIORITY_HIGH,
+    /* Number of priority levels */
+    JOB_PRIORITY_COUNT
+} jobPriority;
+
 static _Thread_local int thread_id = 0;
-static _Thread_local mpscTicket io_thread_ticket = {0};
+static _Thread_local mpscTicket io_thread_ticket[JOB_PRIORITY_COUNT] = {0};
 /* Backlog of responses when io_shared_outbox is full. Should be rare. */
-static _Thread_local list *pending_io_responses = NULL;
+static _Thread_local list *pending_io_responses[JOB_PRIORITY_COUNT] = {NULL, NULL};
 static pthread_t io_threads[IO_THREADS_MAX_NUM] = {0};
 static pthread_mutex_t io_threads_mutex[IO_THREADS_MAX_NUM];
 static int cur_epoll_thread = 0;
 // Main -> IO: Shared Queue (Single Producer Multi Consumer) where all IO threads pull jobs from
-static spmcQueue io_shared_inbox = {0};
+static spmcQueue io_shared_inbox[JOB_PRIORITY_COUNT] = {0};
 // IO -> Main: Response Channel (Multi Producer Single Consumer) used by IO threads to send results back to main-thread
-static mpscQueue io_shared_outbox = {0};
+static mpscQueue io_shared_outbox[JOB_PRIORITY_COUNT] = {0};
 // Main -> IO (Thread-Specific) for tasks that must run on specific IO thread where IO threads check their private inbox before the shared queue
 static spscQueue io_private_inbox[IO_THREADS_MAX_NUM] = {0};
 static size_t io_jobs_submitted;
@@ -42,6 +58,10 @@ _Atomic long long used_active_time_io_thread[IO_THREADS_MAX_NUM] = {0};
  * Requires data pointers to be 8-byte aligned (standard for zmalloc/ptrs). */
 #define JOB_TAG_MASK 0x7
 #define JOB_PTR_MASK (~(uintptr_t)JOB_TAG_MASK)
+
+static inline jobPriority getJobPriority(const client *c) {
+    return (c && connIsPriority(c->conn)) ? JOB_PRIORITY_HIGH : JOB_PRIORITY_NORMAL;
+}
 
 static inline void *tagJob(void *ptr, int type) {
     return (void *)((uintptr_t)ptr | type);
@@ -193,8 +213,8 @@ void IOThreadsAfterSleep(int numevents) {
     if (now - last_sample_time < IO_SAMPLE_RATE_MS) return;
     last_sample_time = now;
 
-    size_t q_size = spmcSize(&io_shared_inbox);
-    spmc_size_sum += q_size;
+    spmc_size_sum += spmcSize(&io_shared_inbox[JOB_PRIORITY_NORMAL]);
+    spmc_size_sum += spmcSize(&io_shared_inbox[JOB_PRIORITY_HIGH]);
     sample_count++;
 
     trackInstantaneousMetric(STATS_METRIC_IO_WAIT, spmc_size_sum, sample_count, 1);
@@ -229,7 +249,7 @@ void IOThreadsAfterSleep(int numevents) {
         /* Don't suspend if work remains in the specific thread's queue... */
         if (!spscIsEmpty(&io_private_inbox[tid])) return;
         /* ...or if we are dropping to 1 thread but the global queue still has work */
-        if (target == 1 && !spmcIsEmpty(&io_shared_inbox)) return;
+        if (target == 1 && (!spmcIsEmpty(&io_shared_inbox[JOB_PRIORITY_NORMAL]) || !spmcIsEmpty(&io_shared_inbox[JOB_PRIORITY_HIGH]))) return;
 
         pthread_mutex_lock(&io_threads_mutex[tid]);
         server.active_io_threads_num--;
@@ -246,11 +266,11 @@ void ioThreadPoll(aeEventLoop *el) {
     atomic_store_explicit(&server.io_poll_state, AE_IO_STATE_DONE, memory_order_release);
 }
 
-static void flushPendingIOResponses(int blocking) {
-    if (!pending_io_responses) return;
+static void flushPendingIOResponsesList(list **pending_list, mpscQueue *outbox, mpscTicket *ticket, int blocking) {
+    if (*pending_list == NULL) return;
     listIter li;
     listNode *ln;
-    listRewind(pending_io_responses, &li);
+    listRewind(*pending_list, &li);
 
     while ((ln = listNext(&li))) {
         void *job = listNodeValue(ln);
@@ -258,21 +278,26 @@ static void flushPendingIOResponses(int blocking) {
 
         /* Try to enqueue. If blocking is set, retry until success. */
         do {
-            pushed = mpscEnqueue(&io_shared_outbox, job, &io_thread_ticket);
+            pushed = mpscEnqueue(outbox, job, ticket);
             if (pushed || !blocking || server.crashed) break; /* On server crash we kill the IO threads, no point in sending back jobs to the main-thread. */
             atomic_thread_fence(memory_order_acquire);
         } while (true);
 
         if (pushed) {
-            listDelNode(pending_io_responses, ln);
+            listDelNode(*pending_list, ln);
         } else {
             return;
         }
     }
 
     /* List is fully drained */
-    listRelease(pending_io_responses);
-    pending_io_responses = NULL;
+    listRelease(*pending_list);
+    *pending_list = NULL;
+}
+
+static void flushPendingIOResponses(int blocking) {
+    flushPendingIOResponsesList(&pending_io_responses[JOB_PRIORITY_HIGH], &io_shared_outbox[JOB_PRIORITY_HIGH], &io_thread_ticket[JOB_PRIORITY_HIGH], blocking);
+    flushPendingIOResponsesList(&pending_io_responses[JOB_PRIORITY_NORMAL], &io_shared_outbox[JOB_PRIORITY_NORMAL], &io_thread_ticket[JOB_PRIORITY_NORMAL], blocking);
 }
 
 /* Define a cleanup function that will clean all thread resources */
@@ -284,6 +309,41 @@ void cleanupThreadResources(void *dummy) {
 
     /* Free the shared query buffer */
     freeSharedQueryBuf();
+}
+
+static inline void processTaggedSPMCJob(void *tagged_job) {
+    void *data;
+    int type;
+    untagJob(tagged_job, &data, &type);
+
+    switch (type) {
+    case JOB_REQ_READ_CLIENT:
+        ioThreadReadQueryFromClient((client *)data);
+        break;
+    case JOB_REQ_WRITE_CLIENT:
+        ioThreadWriteToClient((client *)data);
+        break;
+    case JOB_REQ_FREE_OBJ:
+        decrRefCount(data);
+        break;
+    case JOB_REQ_ACCEPT:
+        ioThreadAccept((client *)data);
+        break;
+    case JOB_REQ_POLL:
+        ioThreadPoll((aeEventLoop *)data);
+        break;
+    case JOB_REQ_CLUSTER_READ:
+        clusterReadJob((clusterLink *)data);
+        break;
+    case JOB_REQ_CLUSTER_WRITE:
+        clusterWriteJob((clusterLink *)data);
+        break;
+    case JOB_REQ_CLUSTER_ACCEPT:
+        clusterAcceptJob((connection *)data);
+        break;
+    default:
+        serverPanic("Invalid SPMC job type: %d", type);
+    }
 }
 
 static void *IOThreadMain(void *myid) {
@@ -336,40 +396,14 @@ static void *IOThreadMain(void *myid) {
 
         /* PRIORITY 2: Shared Global Queue (SPMC)
          * Only checked after SPSC is drained. */
-        void *tagged_job = spmcDequeue(&io_shared_inbox);
-        if (tagged_job) {
-            void *data;
-            int type;
-            untagJob(tagged_job, &data, &type);
+        void *tagged_job;
+        if ((tagged_job = spmcDequeue(&io_shared_inbox[JOB_PRIORITY_HIGH])) != NULL) {
+            processTaggedSPMCJob(tagged_job);
+            processed++;
+        }
 
-            switch (type) {
-            case JOB_REQ_READ_CLIENT:
-                ioThreadReadQueryFromClient((client *)data);
-                break;
-            case JOB_REQ_WRITE_CLIENT:
-                ioThreadWriteToClient((client *)data);
-                break;
-            case JOB_REQ_FREE_OBJ:
-                decrRefCount(data);
-                break;
-            case JOB_REQ_ACCEPT:
-                ioThreadAccept((client *)data);
-                break;
-            case JOB_REQ_POLL:
-                ioThreadPoll((aeEventLoop *)data);
-                break;
-            case JOB_REQ_CLUSTER_READ:
-                clusterReadJob((clusterLink *)data);
-                break;
-            case JOB_REQ_CLUSTER_WRITE:
-                clusterWriteJob((clusterLink *)data);
-                break;
-            case JOB_REQ_CLUSTER_ACCEPT:
-                clusterAcceptJob((connection *)data);
-                break;
-            default:
-                serverPanic("Invalid SPMC job type: %d", type);
-            }
+        if ((tagged_job = spmcDequeue(&io_shared_inbox[JOB_PRIORITY_NORMAL])) != NULL) {
+            processTaggedSPMCJob(tagged_job);
             processed++;
         }
 
@@ -379,7 +413,11 @@ static void *IOThreadMain(void *myid) {
 
         /* If both queues were empty (no processing done), wait for signal. */
         if (processed == 0) {
-            if (unlikely(pending_io_responses)) {
+            int has_pending = 0;
+            for (int p = 0; p < JOB_PRIORITY_COUNT; p++) {
+                if (pending_io_responses[p]) has_pending = 1;
+            }
+            if (unlikely(has_pending)) {
                 flushPendingIOResponses(0);
             } else {
                 /* If it is locked. We should block until main thread unlocks it. */
@@ -466,7 +504,12 @@ int updateIOThreads(const char **err) {
      * in that state, we will deadlock (Main thread waits for worker, Worker waits for queue space). */
     size_t pending = getPendingIOResponsesCount();
 
-    if (pending > io_shared_outbox.queue_size) {
+    /* Since pending is the sum of all in-flight read/write jobs, in the worst-case scenario where
+     * 100% of the traffic happens to be on one priority lane, that outbox will receive at most pending
+     * responses. If pending fits within each queue's capacity, neither queue can ever overflow or cause
+     * workers to block while draining*/
+    if (pending > io_shared_outbox[JOB_PRIORITY_NORMAL].queue_size ||
+        pending > io_shared_outbox[JOB_PRIORITY_HIGH].queue_size) {
         if (err) *err = "Can't update IO threads under load, try again later";
         return 0;
     }
@@ -505,8 +548,10 @@ void initIOThreads(int prev_threads_num) {
         server.active_io_threads_num = 1; /* We start with threads not active. */
         server.io_poll_state = AE_IO_STATE_NONE;
         server.io_ae_fired_events = 0;
-        spmcInit(&io_shared_inbox, IO_SPMC_QUEUE_SIZE);
-        mpscInit(&io_shared_outbox, IO_MPSC_QUEUE_SIZE);
+        for (int p = 0; p < JOB_PRIORITY_COUNT; p++) {
+            spmcInit(&io_shared_inbox[p], IO_SPMC_QUEUE_SIZE);
+            mpscInit(&io_shared_outbox[p], IO_MPSC_QUEUE_SIZE);
+        }
         io_jobs_submitted = 0;
         atomic_init(&io_jobs_finished, 0);
         cluster_io_pending_responses = 0;
@@ -521,38 +566,44 @@ void initIOThreads(int prev_threads_num) {
 }
 
 void testOnlyInitIOThreadQueues(void) {
-    if (io_shared_inbox.buffer) spmcFree(&io_shared_inbox);
-    if (io_shared_outbox.buffer) mpscFree(&io_shared_outbox);
-    if (pending_io_responses) {
-        listRelease(pending_io_responses);
-        pending_io_responses = NULL;
+    for (int p = 0; p < JOB_PRIORITY_COUNT; p++) {
+        if (io_shared_inbox[p].buffer) spmcFree(&io_shared_inbox[p]);
+        if (io_shared_outbox[p].buffer) mpscFree(&io_shared_outbox[p]);
+        if (pending_io_responses[p]) {
+            listRelease(pending_io_responses[p]);
+            pending_io_responses[p] = NULL;
+        }
+        spmcInit(&io_shared_inbox[p], IO_SPMC_QUEUE_SIZE);
+        mpscInit(&io_shared_outbox[p], IO_MPSC_QUEUE_SIZE);
+        io_thread_ticket[p] = (mpscTicket){0};
     }
-    spmcInit(&io_shared_inbox, IO_SPMC_QUEUE_SIZE);
-    mpscInit(&io_shared_outbox, IO_MPSC_QUEUE_SIZE);
     io_jobs_submitted = 0;
     atomic_store_explicit(&io_jobs_finished, 0, memory_order_relaxed);
     cluster_io_pending_responses = 0;
-    io_thread_ticket = (mpscTicket){0};
 }
 
 void testOnlyFreeIOThreadQueues(void) {
-    if (pending_io_responses) {
-        listRelease(pending_io_responses);
-        pending_io_responses = NULL;
+    for (int p = 0; p < JOB_PRIORITY_COUNT; p++) {
+        if (pending_io_responses[p]) {
+            listRelease(pending_io_responses[p]);
+            pending_io_responses[p] = NULL;
+        }
+        spmcFree(&io_shared_inbox[p]);
+        mpscFree(&io_shared_outbox[p]);
+        io_thread_ticket[p] = (mpscTicket){0};
     }
-    spmcFree(&io_shared_inbox);
-    mpscFree(&io_shared_outbox);
     io_jobs_submitted = 0;
     atomic_store_explicit(&io_jobs_finished, 0, memory_order_relaxed);
     cluster_io_pending_responses = 0;
-    io_thread_ticket = (mpscTicket){0};
 }
 
 /* Fill the shared inbox so the next dispatch has to take its enqueue-failure
  * path. The queue is file-static, so tests cannot do this themselves. */
 void testOnlyFillIOThreadInbox(void) {
-    while (spmcEnqueue(&io_shared_inbox, (void *)-1)) {
-        /* Keep going until the queue rejects the push. */
+    for (int p = 0; p < JOB_PRIORITY_COUNT; p++) {
+        while (spmcEnqueue(&io_shared_inbox[p], (void *)-1)) {
+            /* Keep going until the queue rejects the push. */
+        }
     }
 }
 
@@ -590,7 +641,8 @@ int trySendReadToIOThreads(client *c) {
     c->io_read_state = CLIENT_PENDING_IO;
     connSetPostponeUpdateState(c->conn, clientConnPostponeMaskFromIOState(c));
 
-    if (unlikely(spmcEnqueue(&io_shared_inbox, tagJob(c, JOB_REQ_READ_CLIENT)) == false)) {
+    jobPriority qidx = getJobPriority(c);
+    if (unlikely(spmcEnqueue(&io_shared_inbox[qidx], tagJob(c, JOB_REQ_READ_CLIENT)) == false)) {
         c->read_flags = 0;
         c->io_read_state = CLIENT_IDLE;
         connSetPostponeUpdateState(c->conn, 0);
@@ -651,7 +703,9 @@ int trySendWriteToIOThreads(client *c) {
     c->io_write_state = CLIENT_PENDING_IO;
     connSetPostponeUpdateState(c->conn, clientConnPostponeMaskFromIOState(c));
     void *job = tagJob(c, JOB_REQ_WRITE_CLIENT);
-    if (unlikely(spmcEnqueue(&io_shared_inbox, job) == false)) {
+
+    jobPriority qidx = getJobPriority(c);
+    if (unlikely(spmcEnqueue(&io_shared_inbox[qidx], job) == false)) {
         c->io_write_state = CLIENT_IDLE;
         connSetPostponeUpdateState(c->conn, 0);
         c->write_flags = 0;
@@ -721,7 +775,7 @@ int trySendClusterReadToIOThreads(struct clusterLink *link) {
     link->rcvbuf_alloc_at_dispatch = link->rcvbuf_alloc;
 
     /* Enqueue the read job. */
-    if (unlikely(spmcEnqueue(&io_shared_inbox, tagJob(link, JOB_REQ_CLUSTER_READ)) == false)) {
+    if (unlikely(spmcEnqueue(&io_shared_inbox[JOB_PRIORITY_HIGH], tagJob(link, JOB_REQ_CLUSTER_READ)) == false)) {
         /* Rollback on enqueue failure. */
         link->io_read_state = CLUSTER_LINK_IO_IDLE;
         link->io_refs--;
@@ -798,7 +852,7 @@ int trySendClusterWriteToIOThreads(struct clusterLink *link) {
     link->io_refs++;
 
     /* Enqueue the write job. */
-    if (unlikely(spmcEnqueue(&io_shared_inbox, tagJob(link, JOB_REQ_CLUSTER_WRITE)) == false)) {
+    if (unlikely(spmcEnqueue(&io_shared_inbox[JOB_PRIORITY_HIGH], tagJob(link, JOB_REQ_CLUSTER_WRITE)) == false)) {
         link->io_write_state = CLUSTER_LINK_IO_IDLE;
         link->io_refs--;
         link->io_last_send_block = NULL;
@@ -830,7 +884,7 @@ int trySendClusterAcceptToIOThreads(connection *conn) {
     connSetPostponeUpdateState(conn, 1);
     connIncrRefs(conn);
 
-    if (unlikely(spmcEnqueue(&io_shared_inbox, tagJob(conn, JOB_REQ_CLUSTER_ACCEPT)) == false)) {
+    if (unlikely(spmcEnqueue(&io_shared_inbox[JOB_PRIORITY_HIGH], tagJob(conn, JOB_REQ_CLUSTER_ACCEPT)) == false)) {
         connDecrRefs(conn);
         connSetPostponeUpdateState(conn, 0);
         conn->flags &= ~CONN_FLAG_ACCEPT_OFFLOAD_PENDING;
@@ -933,7 +987,7 @@ int tryOffloadFreeObjToIOThreads(robj *obj) {
     if (obj->encoding != OBJ_ENCODING_RAW || obj->type != OBJ_STRING) return C_ERR;
 
     void *job = tagJob(obj, JOB_REQ_FREE_OBJ);
-    if (unlikely(spmcEnqueue(&io_shared_inbox, job) == false)) return C_ERR;
+    if (unlikely(spmcEnqueue(&io_shared_inbox[JOB_PRIORITY_NORMAL], job) == false)) return C_ERR;
     io_jobs_submitted++;
     server.stat_io_freed_objects++;
     return C_OK;
@@ -980,7 +1034,7 @@ void trySendPollJobToIOThreads(void) {
 
     /* Use SPMC to minimize polling overhead. At high thread counts, use private SPSC queues for lower latency. */
     if (server.active_io_threads_num <= 9) {
-        if (unlikely(spmcEnqueue(&io_shared_inbox, tagJob(server.el, JOB_REQ_POLL)) == false)) {
+        if (unlikely(spmcEnqueue(&io_shared_inbox[JOB_PRIORITY_NORMAL], tagJob(server.el, JOB_REQ_POLL)) == false)) {
             server.io_poll_state = AE_IO_STATE_NONE;
             aeSetPollProtect(server.el, 0);
             return;
@@ -1000,16 +1054,22 @@ void trySendPollJobToIOThreads(void) {
 }
 
 void sendToMainThread(void *data, int type) {
-    if (unlikely(pending_io_responses)) {
-        flushPendingIOResponses(0);
+    jobPriority qidx = JOB_PRIORITY_NORMAL;
+    if (type == JOB_RES_READ_CLIENT || type == JOB_RES_WRITE_CLIENT) {
+        client *c = (client *)data;
+        qidx = getJobPriority(c);
+    } else if (type == JOB_RES_CLUSTER_READ || type == JOB_RES_CLUSTER_WRITE || type == JOB_RES_CLUSTER_ACCEPT) {
+        qidx = JOB_PRIORITY_HIGH;
+    }
+    if (unlikely(pending_io_responses[qidx])) {
+        flushPendingIOResponsesList(&pending_io_responses[qidx], &io_shared_outbox[qidx], &io_thread_ticket[qidx], 0);
     }
     void *job = tagJob(data, type);
-    if (unlikely(pending_io_responses || !mpscEnqueue(&io_shared_outbox, job, &io_thread_ticket))) {
-        /* Failed to push new job: initialize list if needed and save job */
-        if (pending_io_responses == NULL) {
-            pending_io_responses = listCreate();
+    if (unlikely(pending_io_responses[qidx] || !mpscEnqueue(&io_shared_outbox[qidx], job, &io_thread_ticket[qidx]))) {
+        if (pending_io_responses[qidx] == NULL) {
+            pending_io_responses[qidx] = listCreate();
         }
-        listAddNodeTail(pending_io_responses, job);
+        listAddNodeTail(pending_io_responses[qidx], job);
     }
 }
 
@@ -1061,7 +1121,7 @@ int trySendAcceptToIOThreads(connection *conn) {
     connSetPostponeUpdateState(c->conn, clientConnPostponeMaskFromIOState(c));
 
     void *job = tagJob(c, JOB_REQ_ACCEPT);
-    if (unlikely(spmcEnqueue(&io_shared_inbox, job) == false)) {
+    if (unlikely(spmcEnqueue(&io_shared_inbox[JOB_PRIORITY_NORMAL], job) == false)) {
         c->io_read_state = CLIENT_IDLE;
         c->flag.pending_read = 0;
         connSetPostponeUpdateState(c->conn, 0);
@@ -1122,71 +1182,83 @@ static void handleWriteJobs(client **write_jobs, int write_count) {
     }
 }
 
-int processIOThreadsResponses(void) {
-    /* We don't check for threads number  since some threads may return jobs then deactivate/shut-down */
-
-    /* Quick check if any pending operations exist */
-    if (getPendingIOResponsesCount() == 0) return 0;
-
-    int total_processed = 0;
+static int processOutboxBatch(mpscQueue *outbox) {
     void *jobs[JOB_BATCH_SIZE];
     client *read_jobs[JOB_BATCH_SIZE];
     client *write_jobs[JOB_BATCH_SIZE];
+    int received_responses = 0;
+    int read_count = 0;
+    int write_count = 0;
 
-    /* Loop until we consume all pending jobs */
-    while (1) {
-        int received_responses = 0;
-        int dequeued_count = 0;
-        int read_count = 0;
-        int write_count = 0;
+    /* Try to dequeue JOB_BATCH_SIZE */
+    while (received_responses < JOB_BATCH_SIZE) {
+        int dequeued_count = mpscDequeueBatch(outbox, jobs, JOB_BATCH_SIZE - received_responses);
 
-        /* Try to dequeue JOB_BATCH_SIZE */
-        while (received_responses < JOB_BATCH_SIZE) {
-            dequeued_count = mpscDequeueBatch(&io_shared_outbox, jobs, JOB_BATCH_SIZE - received_responses);
+        /* Stop if we can't get more jobs from the queue. */
+        if (dequeued_count == 0) break;
 
-            /* Stop if we can't get more jobs from the queue. */
-            if (dequeued_count == 0) break;
+        received_responses += dequeued_count;
 
-            received_responses += dequeued_count;
-            total_processed += dequeued_count;
-
-            for (int i = 0; i < dequeued_count; i++) {
-                void *data;
-                int job_type;
-                untagJob(jobs[i], &data, &job_type);
-                if (job_type == JOB_RES_READ_CLIENT) {
-                    client *c = (client *)data;
-                    serverAssert(c->io_read_state == CLIENT_COMPLETED_IO);
-                    read_jobs[read_count++] = c;
-                } else if (job_type == JOB_RES_WRITE_CLIENT) {
-                    client *c = (client *)data;
-                    serverAssert(c->io_write_state == CLIENT_COMPLETED_IO);
-                    write_jobs[write_count++] = c;
-                } else if (job_type == JOB_RES_CLUSTER_READ) {
-                    serverAssert(cluster_io_pending_responses > 0);
-                    cluster_io_pending_responses--;
-                    server.stat_cluster_threaded_reads_processed++;
-                    clusterHandleReadCompletion((struct clusterLink *)data);
-                } else if (job_type == JOB_RES_CLUSTER_WRITE) {
-                    serverAssert(cluster_io_pending_responses > 0);
-                    cluster_io_pending_responses--;
-                    server.stat_cluster_threaded_writes_processed++;
-                    clusterHandleWriteCompletion((struct clusterLink *)data);
-                } else if (job_type == JOB_RES_CLUSTER_ACCEPT) {
-                    serverAssert(cluster_io_pending_responses > 0);
-                    cluster_io_pending_responses--;
-                    server.stat_cluster_threaded_accepts_processed++;
-                    clusterHandleAcceptCompletion((connection *)data);
-                } else {
-                    serverPanic("Unknown job type %d", job_type);
-                }
+        for (int i = 0; i < dequeued_count; i++) {
+            void *data;
+            int job_type;
+            untagJob(jobs[i], &data, &job_type);
+            if (job_type == JOB_RES_READ_CLIENT) {
+                client *c = (client *)data;
+                serverAssert(c->io_read_state == CLIENT_COMPLETED_IO);
+                read_jobs[read_count++] = c;
+            } else if (job_type == JOB_RES_WRITE_CLIENT) {
+                client *c = (client *)data;
+                serverAssert(c->io_write_state == CLIENT_COMPLETED_IO);
+                write_jobs[write_count++] = c;
+            } else if (job_type == JOB_RES_CLUSTER_READ) {
+                serverAssert(cluster_io_pending_responses > 0);
+                cluster_io_pending_responses--;
+                server.stat_cluster_threaded_reads_processed++;
+                clusterHandleReadCompletion((struct clusterLink *)data);
+            } else if (job_type == JOB_RES_CLUSTER_WRITE) {
+                serverAssert(cluster_io_pending_responses > 0);
+                cluster_io_pending_responses--;
+                server.stat_cluster_threaded_writes_processed++;
+                clusterHandleWriteCompletion((struct clusterLink *)data);
+            } else if (job_type == JOB_RES_CLUSTER_ACCEPT) {
+                serverAssert(cluster_io_pending_responses > 0);
+                cluster_io_pending_responses--;
+                server.stat_cluster_threaded_accepts_processed++;
+                clusterHandleAcceptCompletion((connection *)data);
+            } else {
+                serverPanic("Unknown job type %d", job_type);
             }
         }
+    }
 
-        if (read_count) handleReadJobs(read_jobs, read_count);
-        if (write_count) handleWriteJobs(write_jobs, write_count);
+    if (read_count) handleReadJobs(read_jobs, read_count);
+    if (write_count) handleWriteJobs(write_jobs, write_count);
+    return received_responses;
+}
 
-        /* If the queue was empty at the last try - don't try again */
-        if (dequeued_count == 0) return total_processed;
+/* Process completed IO jobs from worker threads back onto the main thread.
+ * Drains the high-priority outbox first to guarantee control-plane responsiveness,
+ * and performs periodic preemptive polling of QoS events while consuming normal jobs. */
+int processIOThreadsResponses(void) {
+    /* We don't check for threads number since some threads may return jobs then deactivate/shut-down */
+
+    /* Quick check if any pending operations exist across any priority level */
+    if (getPendingIOResponsesCount() == 0) return 0;
+
+    int total_processed = 0;
+    /* Loop until we consume all pending jobs */
+    while (1) {
+        /* 1. Strict Priority: First, drain high-priority events (cluster bus, replication, and slot migration jobs) */
+        int processed = processOutboxBatch(&io_shared_outbox[JOB_PRIORITY_HIGH]);
+        if (processed == 0) {
+            /* 2. Preemptive Poll: When high-priority outbox is empty, check if any new
+             * high-priority events arrived on QoS channels before processing normal traffic. */
+            aeProcessQoSEventsPreemptively(server.el);
+        }
+        /* 3. Drain normal client events */
+        processed += processOutboxBatch(&io_shared_outbox[JOB_PRIORITY_NORMAL]);
+        total_processed += processed;
+        if (processed == 0) return total_processed;
     }
 }

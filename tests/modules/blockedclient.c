@@ -1130,6 +1130,48 @@ int reblock_disconnect_cmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int 
     return VALKEYMODULE_OK;
 }
 
+/* --- Thread-safe-context reuse across REPLY_AGAIN ---
+ *
+ * Obtain a thread-safe context tied to the blocked client, return REPLY_AGAIN,
+ * then keep using that same context after the re-block. Verifies the context
+ * (and its client) stays valid across re-blocks. */
+static ValkeyModuleBlockedClient *reblock_ctxreuse_bc = NULL;
+static ValkeyModuleCtx *reblock_ctxreuse_saved_ctx = NULL;
+static int reblock_ctxreuse_count = 0;
+
+int reblock_ctxreuse_reply(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    UNUSED(argv);
+    UNUSED(argc);
+    reblock_ctxreuse_count++;
+    /* Use the saved context's client each round (GetSelectedDb reads
+     * ctx->client); a recycled client would be a use-after-free here. */
+    ValkeyModule_GetSelectedDb(reblock_ctxreuse_saved_ctx);
+    if (reblock_ctxreuse_count < 3) return VALKEYMODULE_REPLY_AGAIN;
+    ValkeyModule_ReplyWithLongLong(ctx, reblock_ctxreuse_count);
+    ValkeyModule_FreeThreadSafeContext(reblock_ctxreuse_saved_ctx);
+    reblock_ctxreuse_saved_ctx = NULL;
+    return VALKEYMODULE_OK;
+}
+
+void reblock_ctxreuse_timer_cb(ValkeyModuleCtx *ctx, void *data) {
+    UNUSED(data);
+    ValkeyModule_UnblockClient(reblock_ctxreuse_bc, NULL);
+    if (reblock_ctxreuse_count < 2) ValkeyModule_CreateTimer(ctx, 10, reblock_ctxreuse_timer_cb, NULL);
+}
+
+/* Command: reblock.ctx_reuse — grabs a thread-safe ctx, re-blocks twice while
+ * reusing that same ctx, replies on the third unblock. */
+int reblock_ctxreuse_cmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    UNUSED(argv);
+    UNUSED(argc);
+    reblock_ctxreuse_count = 0;
+    reblock_ctxreuse_bc = ValkeyModule_BlockClient(ctx, reblock_ctxreuse_reply, NULL, reblock_free, 5000);
+    reblock_ctxreuse_saved_ctx = ValkeyModule_GetThreadSafeContext(reblock_ctxreuse_bc);
+    ValkeyModule_CreateTimer(ctx, 10, reblock_ctxreuse_timer_cb, NULL);
+    return VALKEYMODULE_OK;
+}
+
+
 /* Command: reblock.get_disconnect_called — returns disconnect callback count */
 int reblock_get_disconnect_called(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     UNUSED(argv);
@@ -1242,6 +1284,9 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
         return VALKEYMODULE_ERR;
 
     if (ValkeyModule_CreateCommand(ctx, "reblock.get_disconnect_called", reblock_get_disconnect_called, "", 0, 0, 0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+
+    if (ValkeyModule_CreateCommand(ctx, "reblock.ctx_reuse", reblock_ctxreuse_cmd, "", 0, 0, 0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
     return VALKEYMODULE_OK;

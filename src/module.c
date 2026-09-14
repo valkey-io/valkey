@@ -8662,6 +8662,11 @@ int moduleTryServeClientBlockedOnKey(client *c, robj *key) {
  *
  *     reply_callback:   called after a successful ValkeyModule_UnblockClient()
  *                       call in order to reply to the client and unblock it.
+ *                       Returning VALKEYMODULE_REPLY_AGAIN keeps the client
+ *                       blocked for another round instead of replying; in that
+ *                       case the callback must not have written any reply, and
+ *                       a thread safe context obtained from
+ *                       VM_GetThreadSafeContext() stays valid across re-blocks.
  *
  *     timeout_callback: called when the timeout is reached or if `CLIENT UNBLOCK`
  *                       is invoked, in order to send an error to the client.
@@ -9001,11 +9006,10 @@ void moduleHandleBlockedClients(void) {
          * The module must handle timeout/disconnect by calling UnblockClient
          * from those callbacks (standard blocked client contract). */
         if (reply_ret == VALKEYMODULE_REPLY_AGAIN) {
-            moduleReleaseTempClient(bc->reply_client);
-            moduleReleaseTempClient(bc->thread_safe_ctx_client);
-            bc->reply_client = moduleAllocTempClient();
-            bc->thread_safe_ctx_client = moduleAllocTempClient();
-            if (c) bc->reply_client->resp = c->resp;
+            /* Keep the client blocked for another round. Do not recycle the
+             * temporary clients: a module may still hold a thread safe context
+             * (from VM_GetThreadSafeContext) whose client points at
+             * bc->thread_safe_ctx_client, and it stays valid across re-blocks. */
             bc->unblocked = 0;
             pthread_mutex_lock(&moduleUnblockedClientsMutex);
             continue;

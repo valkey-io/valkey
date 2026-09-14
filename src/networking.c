@@ -2097,9 +2097,6 @@ void acceptCommonHandler(connection *conn, struct ClientFlags flags, char *ip) {
         connClose(conn);
         return;
     }
-    /* Default priority is normal */
-    connSetPriority(conn, false);
-
     /* Set the priority of the connection */
     connSetPriority(conn, is_prioritized);
     /* Create connection and client */
@@ -4697,7 +4694,7 @@ int isClientConnIpV6(client *c) {
  * readable format, into the sds string 's'. */
 sds catClientInfoString(sds s, client *client, int hide_user_data) {
     if (!server.crashed) waitForClientIO(client);
-    char flags[18], events[3], capa[9], conninfo[CONN_INFO_LEN], *p;
+    char flags[32], events[3], capa[9], conninfo[CONN_INFO_LEN], *p;
 
     p = flags;
     if (client->flag.replica) {
@@ -4726,6 +4723,7 @@ sds catClientInfoString(sds s, client *client, int hide_user_data) {
     if (client->flag.import_source) *p++ = 'I';
     if (client->slot_migration_job && isImportSlotMigrationJob(client->slot_migration_job)) *p++ = 'i';
     if (client->slot_migration_job && !isImportSlotMigrationJob(client->slot_migration_job)) *p++ = 'E';
+    if (connIsPriority(client->conn)) *p++ = 'H';
     if (p == flags) *p++ = 'N';
     *p++ = '\0';
 
@@ -5253,6 +5251,7 @@ static int validateClientFlagFilter(sds flag_filter) {
         case 'I':
         case 'i':
         case 'E':
+        case 'H':
         case 'N':
             /* Valid flag, do nothing. */
             break;
@@ -5427,7 +5426,8 @@ static int clientMatchesFlagFilter(client *c, sds flag_filter) {
                 c->flag.unblocked || c->flag.close_asap ||
                 c->flag.unix_socket || c->flag.readonly ||
                 c->flag.no_evict || c->flag.no_touch || c->flag.throttled ||
-                c->flag.import_source || c->slot_migration_job) {
+                c->flag.import_source || c->slot_migration_job ||
+                connIsPriority(c->conn)) {
                 return 0;
             }
             break;

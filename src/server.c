@@ -2683,7 +2683,8 @@ void adjustOpenFilesLimit(void) {
 
     if (getrlimit(RLIMIT_NOFILE, &limit) == -1) {
         serverLog(LL_WARNING,
-                  "Unable to obtain the current NOFILE limit (%s), assuming 1024 setting for max clients.",
+                  "Unable to obtain the current NOFILE limit (%s), assuming 1024 and setting the max clients "
+                  "configuration accordingly.",
                   strerror(errno));
         server.maxclients = 1024 - CONFIG_MIN_RESERVED_FDS;
     } else {

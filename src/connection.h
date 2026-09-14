@@ -36,7 +36,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <stdbool.h>
 #include <sys/uio.h>
 
 #include "ae.h"
@@ -429,16 +428,6 @@ static inline void connSetPrivateData(connection *conn, void *data) {
 /* Get the associated private data pointer */
 static inline void *connGetPrivateData(connection *conn) {
     return conn->private_data;
-}
-
-/* Set whether this connection is prioritized for QoS */
-static inline void connSetPriority(connection *conn, bool is_priority) {
-    conn->is_priority = is_priority;
-}
-
-/* Return true if the connection has high QoS priority */
-static inline bool connIsPriority(const connection *conn) {
-    return conn && conn->is_priority;
 }
 
 /* Set the owner kind for the connection */

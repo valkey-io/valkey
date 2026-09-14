@@ -433,11 +433,13 @@ start_server {tags {"repl external:skip"}} {
         }
 
         test {INCREX BYFLOAT arithmetic overflow does not propagate} {
+            set big [ldbl_overflow_operand -1]
             r -1 del foo
-            r -1 set foo 1e308
+            r -1 set foo $big
             set repl [attach_to_replication_stream]
             # Overflows to infinity; no change to DB, should not propagate
-            r -1 increx foo byfloat 1e308
+            r -1 increx foo byfloat $big
+            assert_equal $big [r -1 get foo]
             r -1 set marker 1
             assert_replication_stream $repl {
                 {set marker 1}

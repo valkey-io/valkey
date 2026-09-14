@@ -340,26 +340,44 @@ start_server {tags {"incr"}} {
     } {ERR *value is not an integer or out of range*} {valgrind:skip}
 
     test {INCREX BYFLOAT positive arithmetic overflow returns [curr_val, 0]} {
+        set big [ldbl_overflow_operand]
         r del foo
-        r set foo 1e308
-        # 1e308 + 1e308 overflows to infinity: should not error, returns current value and 0 delta
-        set res [r increx foo byfloat 1e308]
-        assert_match {*1e*308* 0*} $res
-        assert_match {*1e*308*} [r get foo]
+        r set foo $big
+        # big + big overflows to infinity: should not error, and should leave the
+        # value alone while reporting a zero delta.
+        set res [r increx foo byfloat $big]
+        assert_equal 0 [lindex $res 1]
+        assert_equal $big [r get foo]
     }
     test {INCREX BYFLOAT negative arithmetic overflow returns [curr_val, 0]} {
+        set big [ldbl_overflow_operand]
         r del foo
-        r set foo -1e308
-        # -1e308 + -1e308 underflows/overflows to -infinity
-        set res [r increx foo byfloat -1e308]
-        assert_match {*-1e*308* 0*} $res
-        assert_match {*-1e*308*} [r get foo]
+        r set foo -$big
+        # -big + -big overflows to -infinity
+        set res [r increx foo byfloat -$big]
+        assert_equal 0 [lindex $res 1]
+        assert_equal -$big [r get foo]
     }
     test {INCREX BYFLOAT overflow preserves existing TTL} {
+        set big [ldbl_overflow_operand]
         r del foo
-        r set foo 1e308 ex 100
-        r increx foo byfloat 1e308
+        r set foo $big ex 100
+        r increx foo byfloat $big
         assert_range [r ttl foo] 1 100
+        assert_equal $big [r get foo]
+    }
+    test {INCREX BYFLOAT overflow does not apply the command's expiration} {
+        set big [ldbl_overflow_operand]
+        # A rejected operation should not set a TTL on a key that has none...
+        r del foo
+        r set foo $big
+        r increx foo byfloat $big ex 60
+        assert_equal -1 [r ttl foo]
+        # ...nor overwrite one that already exists.
+        r del foo
+        r set foo $big ex 100
+        r increx foo byfloat $big ex 60
+        assert_range [r ttl foo] 61 100
     }
 
     test {INCREX against key holding a list} {

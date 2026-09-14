@@ -2163,6 +2163,21 @@ void afterSleep(struct aeEventLoop *eventLoop, int numevents) {
     IOThreadsAfterSleep(numevents);
 }
 
+/* Callback invoked by the event loop after draining priority events.
+ * Records priority eventloop duration and updates peak commands executed per priority cycle. */
+static void qosStatsCallback(struct aeEventLoop *el, uint64_t duration_us) {
+    UNUSED(el);
+    durationAddSample(EL_DURATION_TYPE_PRIORITY_EL, duration_us);
+    unsigned long long priority_cmds = server.duration_stats[EL_DURATION_TYPE_PRIORITY_CMD].cnt;
+    if (priority_cmds > (unsigned long long)server.priority_el_cmd_cnt_prev) {
+        long long el_cmd_cnt = priority_cmds - server.priority_el_cmd_cnt_prev;
+        if (el_cmd_cnt > server.priority_el_cmd_cnt_max) {
+            server.priority_el_cmd_cnt_max = el_cmd_cnt;
+        }
+        server.priority_el_cmd_cnt_prev = priority_cmds;
+    }
+}
+
 /* =========================== Server initialization ======================== */
 
 static inline robj *createSharedString(const char *string) {
@@ -2449,9 +2464,11 @@ void initServerConfig(void) {
     server.latency_tracking_info_percentiles[2] = 99.9; /* p999 */
 
     server.tls_server_cert_expire_time = 0;
+    server.tls_server_alt_cert_expire_time = 0;
     server.tls_client_cert_expire_time = 0;
     server.tls_ca_cert_expire_time = 0;
     server.tls_server_cert_serial = NULL;
+    server.tls_server_alt_cert_serial = NULL;
     server.tls_client_cert_serial = NULL;
     server.tls_ca_cert_serial = NULL;
 
@@ -2906,6 +2923,7 @@ void resetServerStats(void) {
     server.stat_fork_rate = 0;
     server.stat_total_forks = 0;
     server.stat_rejected_conn = 0;
+    server.stat_rejected_priority_conn = 0;
     server.stat_sync_full = 0;
     server.stat_sync_partial_ok = 0;
     server.stat_sync_partial_err = 0;
@@ -2946,6 +2964,8 @@ void resetServerStats(void) {
     server.stat_reply_buffer_expands = 0;
     memset(server.duration_stats, 0, sizeof(durationStats) * EL_DURATION_TYPE_NUM);
     server.el_cmd_cnt_max = 0;
+    server.priority_el_cmd_cnt_max = 0;
+    server.priority_el_cmd_cnt_prev = 0;
     server.stat_active_time = 0;
     server.el_iteration_active = false;
     server.stat_total_prefetch_batches = 0;
@@ -3099,7 +3119,12 @@ void initServer(void) {
         serverLog(LL_WARNING, "Failed creating the event loop. Error message: '%s'", strerror(errno));
         exit(1);
     }
-
+    /* Setup QoS event loop if multiplexer backend supports secondary polling.
+     * If secondary polling is unsupported (e.g. evport, select), gracefully fallback to standard event processing without QoS. */
+    if (aeActuateQoSEventLoopIfSupported(server.el, server.priority_preemptive_poll_interval_us, qosStatsCallback) == AE_ERR) {
+        serverLog(LL_NOTICE, "QoS event prioritization not supported on %s multiplexer, falling back to standard event processing",
+                  aeGetApiName());
+    }
     server.dbnum = server.cluster_enabled ? server.config_databases_cluster : server.config_databases;
     server.db = zcalloc(sizeof(serverDb *) * server.dbnum);
 
@@ -3250,6 +3275,11 @@ void initServer(void) {
 
     /* Initialization hotkey */
     hotkeysInit();
+
+    /* Initialize priority subnets if configured */
+    if (updatePrioritySubnets(server.priority_subnets) != C_OK) {
+        serverPanic("Failed parsing priority-subnets on startup, check the server logs.");
+    }
 }
 
 void initListeners(void) {
@@ -3972,6 +4002,21 @@ static void propagatePendingCommands(void) {
     serverOpArrayFree(&server.also_propagate);
 }
 
+/* Whether any of the module-jobs / propagation / module-yield post-execution-
+ * unit work is pending. Shared by postExecutionUnitOperations() and
+ * afterCommand() so the "is there anything to do?" condition for these three
+ * sub-systems has a single home instead of being duplicated at both call
+ * sites - static inline costs nothing here since both callers are in this
+ * same translation unit. moduleHasPostExecUnitJobs() is a tiny cross-TU
+ * accessor rather than reaching into module.c's list directly, so this file
+ * doesn't need to know how the module subsystem tracks its pending jobs.
+ *
+ * Must stay an OR of every condition below - never drop one as an
+ * optimization, since that would silently skip real pending work. */
+static inline int hasPostExecutionUnitPendingWork(void) {
+    return moduleHasPostExecUnitJobs() || server.also_propagate.numops || server.busy_module_yield_flags;
+}
+
 /* Performs operations that should be performed after an execution unit ends.
  * Execution unit is a code that should be done atomically.
  * Execution units can be nested and do not necessarily start with a server command.
@@ -3989,14 +4034,27 @@ static void propagatePendingCommands(void) {
 void postExecutionUnitOperations(void) {
     if (server.execution_nesting) return;
 
-    firePostExecutionUnitJobs();
+    /* Combined pending-work gate: in the overwhelming majority of calls
+     * (e.g. after a plain read-only command like GET) none of the three
+     * sub-systems below have anything queued. Fold all of their "is there
+     * anything to do?" checks into a single branch here so the common case
+     * pays for one memory read + one branch instead of three separate
+     * (partly cross-translation-unit, non-inlinable) function calls.
+     *
+     * Deliberately NOT hinted unlikely() here: unlike the afterCommand()
+     * gate below, this function is also called right after queuing a
+     * propagation (expire.c, evict.c, db.c) where the condition is
+     * typically true, so a fixed hint would be wrong for those call sites. */
+    if (hasPostExecutionUnitPendingWork()) {
+        firePostExecutionUnitJobs();
 
-    /* If we are at the top-most call() and not inside an active module
-     * context (e.g. within a module timer) we can propagate what we accumulated. */
-    propagatePendingCommands();
+        /* If we are at the top-most call() and not inside an active module
+         * context (e.g. within a module timer) we can propagate what we accumulated. */
+        propagatePendingCommands();
 
-    /* Module subsystem post-execution-unit logic */
-    modulePostExecutionUnitOperations();
+        /* Module subsystem post-execution-unit logic */
+        modulePostExecutionUnitOperations();
+    }
 }
 
 /* Increment the command failure counters (either rejected_calls or failed_calls).
@@ -4222,7 +4280,13 @@ void call(client *c, int flags) {
         } else {
             latencyTraceIfNeeded(server, command, duration);
         }
-        if (server.execution_nesting == 0) durationAddSample(EL_DURATION_TYPE_CMD, duration);
+        if (server.execution_nesting == 0) {
+            durationAddSample(EL_DURATION_TYPE_CMD, duration);
+            /* Attribute command execution latency for high-priority client connections. */
+            if (connIsPriority(c->conn)) {
+                durationAddSample(EL_DURATION_TYPE_PRIORITY_CMD, duration);
+            }
+        }
     }
 
     /* Log the command into the commandlog if needed.
@@ -4244,7 +4308,7 @@ void call(client *c, int flags) {
     if (update_command_stats && !c->flag.blocked) {
         real_cmd->calls++;
         real_cmd->microseconds += c->duration;
-        if (server.latency_tracking_enabled && !c->flag.blocked)
+        if (server.latency_tracking_enabled)
             updateCommandLatencyHistogram(&(real_cmd->latency_histogram), c->duration * 1000);
         clusterSlotStatsAddCpuDuration(c, c->duration);
     }
@@ -4386,18 +4450,37 @@ void rejectCommandFormat(client *c, int notify_modules, const char *fmt, ...) {
 /* This is called after a command in call, we can do some maintenance job in it. */
 void afterCommand(client *c) {
     UNUSED(c);
-    /* Should be done before trackingHandlePendingKeyInvalidations so that we
-     * reply to client before invalidating cache (makes more sense) */
-    postExecutionUnitOperations();
 
-    /* Flush pending tracking invalidations. */
-    trackingHandlePendingKeyInvalidations();
+    /* Combined pending-work gate for command-completion tail work.
+     * See postExecutionUnitOperations() for why each callee below still
+     * needs its own defensive check - this gate exists purely so the
+     * overwhelmingly common "nothing pending" case (e.g. after a plain
+     * GET, or after each sub-command of a MULTI/EXEC or script) short-
+     * circuits before paying for any of the calls below.
+     *
+     * Unlike the shared hasPostExecutionUnitPendingWork() conditions, the
+     * unlikely() hint here is safe: this is the single call site reached
+     * from a plain top-level command, where "nothing pending" genuinely
+     * dominates. clusterSlotStatsAddNetworkBytesOutForUserClient() is
+     * intentionally excluded from the gate: it is not deferred/queued
+     * work, it must run for every command whenever slot-stats accounting
+     * is enabled. */
+    if (server.execution_nesting == 0 &&
+        unlikely(hasPostExecutionUnitPendingWork() || trackingHasPendingKeyInvalidations() ||
+                 listLength(server.pending_push_messages))) {
+        /* Should be done before trackingHandlePendingKeyInvalidations so that we
+         * reply to client before invalidating cache (makes more sense) */
+        postExecutionUnitOperations();
+
+        /* Flush pending tracking invalidations. */
+        trackingHandlePendingKeyInvalidations();
+
+        /* Flush other pending push messages. Not interleaved with
+         * transaction response since we're already outside nesting here. */
+        listJoin(c->reply, server.pending_push_messages);
+    }
 
     clusterSlotStatsAddNetworkBytesOutForUserClient(c);
-
-    /* Flush other pending push messages. only when we are not in nested call.
-     * So the messages are not interleaved with transaction response. */
-    if (!server.execution_nesting) listJoin(c->reply, server.pending_push_messages);
 }
 
 /* Check if c->cmd exists, fills `err` with details in case it doesn't.
@@ -6441,6 +6524,11 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
             tls_server_seconds_remaining = server.tls_server_cert_expire_time - (long long)server.unixtime;
             if (tls_server_seconds_remaining < 0) tls_server_seconds_remaining = 0;
         }
+        long long tls_server_alt_seconds_remaining = 0;
+        if (server.tls_server_alt_cert_expire_time > 0) {
+            tls_server_alt_seconds_remaining = server.tls_server_alt_cert_expire_time - (long long)server.unixtime;
+            if (tls_server_alt_seconds_remaining < 0) tls_server_alt_seconds_remaining = 0;
+        }
         long long tls_client_seconds_remaining = 0;
         if (server.tls_client_cert_expire_time > 0) {
             tls_client_seconds_remaining = server.tls_client_cert_expire_time - (long long)server.unixtime;
@@ -6456,6 +6544,8 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
             "# TLS\r\n" FMTARGS(
                 "tls_server_cert_serial:%s\r\n", server.tls_server_cert_serial ? server.tls_server_cert_serial : "none",
                 "tls_server_cert_expires_in_seconds:%lld\r\n", tls_server_seconds_remaining,
+                "tls_server_alt_cert_serial:%s\r\n", server.tls_server_alt_cert_serial ? server.tls_server_alt_cert_serial : "none",
+                "tls_server_alt_cert_expires_in_seconds:%lld\r\n", tls_server_alt_seconds_remaining,
                 "tls_client_cert_serial:%s\r\n", server.tls_client_cert_serial ? server.tls_client_cert_serial : "none",
                 "tls_client_cert_expires_in_seconds:%lld\r\n", tls_client_seconds_remaining,
                 "tls_ca_cert_serial:%s\r\n", server.tls_ca_cert_serial ? server.tls_ca_cert_serial : "none",
@@ -6488,6 +6578,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
             info,
             "# Clients\r\n" FMTARGS(
                 "connected_clients:%lu\r\n", listLength(server.clients) - listLength(server.replicas),
+                "connected_priority_clients:%lld\r\n", server.stat_num_active_priority_clients,
                 "cluster_connections:%lu\r\n", getClusterConnectionsCount(),
                 "maxclients:%u\r\n", server.maxclients,
                 "client_recent_max_input_buffer:%zu\r\n", maxin,
@@ -6744,6 +6835,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "instantaneous_input_repl_kbps:%.2f\r\n", (float)getInstantaneousMetric(STATS_METRIC_NET_INPUT_REPLICATION) / 1024,
                 "instantaneous_output_repl_kbps:%.2f\r\n", (float)getInstantaneousMetric(STATS_METRIC_NET_OUTPUT_REPLICATION) / 1024,
                 "rejected_connections:%lld\r\n", server.stat_rejected_conn,
+                "rejected_priority_connections:%lld\r\n", server.stat_rejected_priority_conn,
                 "sync_full:%lld\r\n", server.stat_sync_full,
                 "sync_partial_ok:%lld\r\n", server.stat_sync_partial_ok,
                 "sync_partial_err:%lld\r\n", server.stat_sync_partial_err,
@@ -6796,7 +6888,10 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "eventloop_duration_sum:%llu\r\n", server.duration_stats[EL_DURATION_TYPE_EL].sum,
                 "eventloop_duration_cmd_sum:%llu\r\n", server.duration_stats[EL_DURATION_TYPE_CMD].sum,
                 "instantaneous_eventloop_cycles_per_sec:%llu\r\n", getInstantaneousMetric(STATS_METRIC_EL_CYCLE),
-                "instantaneous_eventloop_duration_usec:%llu\r\n", getInstantaneousMetric(STATS_METRIC_EL_DURATION)));
+                "instantaneous_eventloop_duration_usec:%llu\r\n", getInstantaneousMetric(STATS_METRIC_EL_DURATION),
+                "eventloop_priority_cycles:%llu\r\n", server.duration_stats[EL_DURATION_TYPE_PRIORITY_EL].cnt,
+                "eventloop_priority_duration_sum:%llu\r\n", server.duration_stats[EL_DURATION_TYPE_PRIORITY_EL].sum,
+                "eventloop_priority_duration_cmd_sum:%llu\r\n", server.duration_stats[EL_DURATION_TYPE_PRIORITY_CMD].sum));
         info = genValkeyInfoStringACLStats(info);
     }
 
@@ -7075,14 +7170,18 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
     }
 
     if (dictFind(section_dict, "debug") != NULL) {
+        size_t module_external_memory = zmalloc_used_external_memory();
         if (sections++) info = sdscat(info, "\r\n");
         info = sdscatprintf(
             info,
             "# Debug\r\n" FMTARGS(
+                "used_memory_module_external:%zu\r\n", module_external_memory,
                 "eventloop_duration_aof_sum:%llu\r\n", server.duration_stats[EL_DURATION_TYPE_AOF].sum,
                 "eventloop_duration_cron_sum:%llu\r\n", server.duration_stats[EL_DURATION_TYPE_CRON].sum,
                 "eventloop_duration_max:%llu\r\n", server.duration_stats[EL_DURATION_TYPE_EL].max,
                 "eventloop_cmd_per_cycle_max:%lld\r\n", server.el_cmd_cnt_max,
+                "eventloop_priority_duration_max:%llu\r\n", server.duration_stats[EL_DURATION_TYPE_PRIORITY_EL].max,
+                "eventloop_priority_cmd_per_cycle_max:%lld\r\n", server.priority_el_cmd_cnt_max,
                 "io_threaded_reads_pending:%lld\r\n", server.stat_io_reads_pending,
                 "io_threaded_writes_pending:%lld\r\n", server.stat_io_writes_pending));
 

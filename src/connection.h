@@ -184,12 +184,12 @@ struct connection {
     short int flags;
     short int refs;
     unsigned short int iovcnt;
+    bool is_priority; /* true if connection is prioritized for QoS */
     ConnectionOwnerKind owner_kind;
     void *private_data;
     ConnectionCallbackFunc conn_handler;
     ConnectionCallbackFunc write_handler;
     ConnectionCallbackFunc read_handler;
-    bool is_priority; /* true if connection is prioritized for QoS */
 };
 
 #define CONFIG_BINDADDR_MAX 16

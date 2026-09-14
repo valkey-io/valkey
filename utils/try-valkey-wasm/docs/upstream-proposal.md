@@ -50,8 +50,9 @@ so no SharedArrayBuffer and no COOP/COEP headers: the bundle is seven static fil
 
 All of this reruns in CI -- see the
 [workflow](https://github.com/valkey-rainfall/valkey/blob/exp/try-valkey-wasm/.github/workflows/try-valkey-wasm.yml)
-and a [passing run](https://github.com/valkey-rainfall/valkey/actions/runs/34677586681) (3 min on
-`ubuntu-latest`): pinned emsdk build, native build at the same SHA, both differentials as gates, bundle as
+and a [passing run](https://github.com/valkey-rainfall/valkey/actions/runs/34895971403) (about 7 min across two jobs on
+`ubuntu-latest`): pinned emsdk build, native build at the same SHA, both differentials as gates, the stock
+`tests/unit` Tcl suite against the wasm server (2508 passed), bundle as
 artifact, optional Pages deploy, release on tag.
 
 ## Pros and cons

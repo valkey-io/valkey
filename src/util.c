@@ -1249,25 +1249,15 @@ sds getAbsolutePath(char *filename) {
     return abspath;
 }
 
-/*
- * Gets the proper timezone in a more portable fashion
- * i.e timezone variables are linux specific.
+/* Offset of standard (non-DST) local time west of UTC in seconds at instant
+ * 'now', derived from the C library's own conversion: the difference between
+ * the local and UTC broken-down times of the same instant. Same sign convention
+ * as the 'timezone' global (positive west of Greenwich), and like 'timezone'
+ * it excludes daylight saving, which callers track separately.
  *
- * Returns the offset of standard (non-DST) local time west of UTC in seconds,
- * with the same sign convention as the 'timezone' global: positive west of
- * Greenwich. Daylight saving is tracked separately (server.daylight_active),
- * so it is removed here even when the current time is in DST.
- */
-long getTimeZone(void) {
-#if defined(__linux__) || defined(__sun)
-    return timezone;
-#else
-    /* The timezone argument of gettimeofday() is obsolete: POSIX specifies it
-     * as unused, glibc and musl return zero, and BSD kernels return whatever
-     * was last set with settimeofday(), usually zero. Derive the offset from
-     * the C library's own conversion instead: the difference between the
-     * local and UTC broken-down times of the same instant. */
-    time_t now = time(NULL);
+ * Only uses functions in POSIX (no tm_gmtoff, no timegm). Exposed for unit
+ * testing; the server uses getTimeZone(). */
+long getTimeZoneFromLocaltime(time_t now) {
     struct tm local, utc;
     localtime_r(&now, &local);
     gmtime_r(&now, &utc);
@@ -1282,6 +1272,24 @@ long getTimeZone(void) {
 
     if (local.tm_isdst > 0) east -= 3600L; /* report standard time; DST is applied by the caller */
     return -east;
+}
+
+/*
+ * Gets the proper timezone in a more portable fashion
+ * i.e timezone variables are linux specific.
+ *
+ * Returns the offset of standard (non-DST) local time west of UTC in seconds,
+ * with the same sign convention as the 'timezone' global: positive west of
+ * Greenwich. Daylight saving is tracked separately (server.daylight_active).
+ */
+long getTimeZone(void) {
+#if defined(__linux__) || defined(__sun)
+    return timezone;
+#else
+    /* The timezone argument of gettimeofday() is obsolete: POSIX specifies it
+     * as unused, glibc and musl return zero, and BSD kernels return whatever
+     * was last set with settimeofday(), usually zero. */
+    return getTimeZoneFromLocaltime(time(NULL));
 #endif
 }
 

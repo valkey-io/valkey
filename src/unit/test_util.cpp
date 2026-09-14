@@ -7,7 +7,10 @@
 #include "generated_wrappers.hpp"
 
 #include <climits>
+#include <cstdlib>
 #include <cstring>
+#include <ctime>
+#include <string>
 #include <sys/mman.h>
 #include <unistd.h>
 
@@ -362,4 +365,57 @@ TEST_F(UtilTest, TestWritePointerWithPadding) {
     for (size_t i = ptr_size; i < sizeof(buf); i++) {
         ASSERT_EQ(buf[i], 0u);
     }
+}
+
+/* getTimeZoneFromLocaltime() must return the standard-time offset west of UTC in
+ * seconds, independent of whether the instant is in daylight saving time. The
+ * expected values below are the zones' standard offsets; the instants are
+ * 2026-01-15 03:00Z, 2026-07-15 03:00Z (opposite DST states in each hemisphere),
+ * 2026-12-31 23:30Z and 2026-01-01 00:30Z (local and UTC dates straddle a year). */
+TEST_F(UtilTest, TestGetTimeZoneFromLocaltime) {
+    struct {
+        const char *tz;
+        long expected_west; /* seconds west of UTC, standard time */
+    } cases[] = {
+        {"UTC", 0},
+        {"America/Los_Angeles", 8 * 3600},
+        {"America/New_York", 5 * 3600},
+        {"America/St_Johns", 3 * 3600 + 1800},   /* -03:30 */
+        {"Europe/Stockholm", -1 * 3600},
+        {"Asia/Kolkata", -(5 * 3600 + 1800)},    /* +05:30, no DST */
+        {"Asia/Kathmandu", -(5 * 3600 + 2700)},  /* +05:45 */
+        {"Australia/Adelaide", -(9 * 3600 + 1800)}, /* +09:30, southern DST */
+        {"Pacific/Auckland", -12 * 3600},        /* southern DST */
+        {"Pacific/Chatham", -(12 * 3600 + 2700)}, /* +12:45 */
+        {"Pacific/Kiritimati", -14 * 3600},      /* furthest east */
+        {"Etc/GMT+12", 12 * 3600},               /* furthest west */
+    };
+    const time_t instants[] = {1768446000, 1784084400, 1798759800, 1767227400};
+
+    const char *saved_tz = getenv("TZ");
+    std::string saved = saved_tz ? saved_tz : "";
+
+    for (const auto &c : cases) {
+        setenv("TZ", c.tz, 1);
+        tzset();
+        /* Skip zones this system's tz database does not know: localtime would silently fall back to UTC,
+         * and none of the non-UTC zones above has a zero offset at 03:00Z on 2026-01-15. */
+        struct tm probe;
+        time_t t0 = instants[0];
+        localtime_r(&t0, &probe);
+        if (strcmp(c.tz, "UTC") != 0 && probe.tm_hour == 3 && probe.tm_min == 0) continue;
+        for (time_t t : instants) {
+            EXPECT_EQ(getTimeZoneFromLocaltime(t), c.expected_west) << "zone " << c.tz << " at " << t;
+#if defined(__linux__) || defined(__sun)
+            /* Where the 'timezone' global exists it is what getTimeZone() returns; the two must agree. */
+            EXPECT_EQ(getTimeZoneFromLocaltime(t), timezone) << "zone " << c.tz << " at " << t;
+#endif
+        }
+    }
+
+    if (saved_tz)
+        setenv("TZ", saved.c_str(), 1);
+    else
+        unsetenv("TZ");
+    tzset();
 }

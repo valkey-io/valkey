@@ -48,8 +48,11 @@ so no SharedArrayBuffer and no COOP/COEP headers: the bundle is seven static fil
 | Artifact | 2.1 MB `.wasm` (658 KB brotli), cold start 40–70 ms, `INFO` reports `arch_bits:64` |
 | Browsers | Chromium (automated), Safari (manual) |
 
-All of this reruns in CI (`.github/workflows/try-valkey-wasm.yml`): pinned emsdk build, native build at the
-same SHA, both differentials as gates, bundle as artifact, optional Pages deploy, release on tag.
+All of this reruns in CI -- see the
+[workflow](https://github.com/valkey-rainfall/valkey/blob/exp/try-valkey-wasm/.github/workflows/try-valkey-wasm.yml)
+and a [passing run](https://github.com/valkey-rainfall/valkey/actions/runs/34677586681) (3 min on
+`ubuntu-latest`): pinned emsdk build, native build at the same SHA, both differentials as gates, bundle as
+artifact, optional Pages deploy, release on tag.
 
 ## Pros and cons
 
@@ -114,8 +117,9 @@ animation is offered as a separate contribution and is not part of this proposal
 
 1. **PRs for A** (three small, independent PRs; each stands on its own merits and passes the existing CI).
 2. **Discussion: where B lives.** Proposal: in tree behind `BUILD_WASM=yes`, with a CI job that builds it and runs
-   the byte-for-byte differential against the native build of the same commit (the PoC workflow already does
-   this in ~3 minutes).
+   the byte-for-byte differential against the native build of the same commit (the
+   [PoC workflow](https://github.com/valkey-rainfall/valkey/blob/exp/try-valkey-wasm/.github/workflows/try-valkey-wasm.yml)
+   already does this in ~3 minutes).
 3. **try-valkey repo**: C plus a release workflow that builds the bundle on each Valkey release tag and publishes
    to Pages. Switch valkey.io/try-valkey to it.
 4. **Deprecate and remove 32-bit**: separate PR, once 3 is live. Announce for packagers.

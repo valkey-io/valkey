@@ -135,8 +135,8 @@ controls and the one with users rather than packagers behind it (32-bit Raspberr
 | Void Linux | `i686`, `armv6l`, `armv7l` | no `archs` restriction in the template |
 | Yocto / OpenEmbedded meta-oe | any MACHINE, 32-bit ARM common | recipe at 9.1.1 |
 | Raspberry Pi OS 32-bit | `armhf` | via Debian |
-| Fedora / RHEL / EPEL | none | `ExcludeArch: %{ix86}`; armv7 dropped in F37 |
-| Arch, Homebrew | none | 64-bit only by policy |
+
+(Fedora/RHEL/EPEL exclude 32-bit x86 in the spec and dropped armv7 in F37; Arch and Homebrew are 64-bit only.)
 
 These distros build 32-bit because they build everything for their arches, not because anyone asked; a
 dropped arch is routine for them given notice. So the removal PR should come with: a deprecation note one

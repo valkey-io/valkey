@@ -823,11 +823,11 @@ void increxCommand(client *c) {
     }
 
     if (flags & ARGS_BYINT) {
-        if (getLongLongFromObjectOrReply(c, incr_obj, &incr_ll, NULL) != C_OK) {
+        if (getLongLongFromObjectOrReply(c, incr_obj, &incr_ll, "Increment is not an integer or out of range") != C_OK) {
             return;
         }
     } else if (flags & ARGS_BYFLOAT) {
-        if (getLongDoubleFromObjectOrReply(c, incr_obj, &incr_ld, NULL) != C_OK) {
+        if (getLongDoubleFromObjectOrReply(c, incr_obj, &incr_ld, "Increment is not a valid float") != C_OK) {
             return;
         }
         use_float = 1;

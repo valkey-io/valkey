@@ -319,13 +319,13 @@ start_server {tags {"incr"}} {
         r set foo 0
         catch {r increx foo byfloat nan} err
         format $err
-    } {ERR *value is not a valid float*} {valgrind:skip}
+    } {ERR *Increment is not a valid float*} {valgrind:skip}
 
     test {INCREX BYFLOAT does not allow exponentials} {
         r set foo 0
         catch {r increx foo byfloat 1e99999} err
         format $err
-    } {ERR *value is not a valid float*} {valgrind:skip}
+    } {ERR *Increment is not a valid float*} {valgrind:skip}
 
     test {INCREX BYFLOAT does not allow inf values} {
         r set foo inf
@@ -338,6 +338,17 @@ start_server {tags {"incr"}} {
         catch {r increx foo byint 1} err
         format $err
     } {ERR *value is not an integer or out of range*} {valgrind:skip}
+
+    test {INCREX distinguishes a bad increment from a bad stored value} {
+        # The two have opposite causes - the caller's argument is wrong, or the
+        # data is - so they must not report the same thing.
+        r set foo 10
+        assert_error "ERR Increment is not an integer or out of range" {r increx foo byint abc}
+        assert_error "ERR Increment is not a valid float" {r increx foo byfloat abc}
+        r set foo abc
+        assert_error "ERR value is not an integer or out of range" {r increx foo byint 1}
+        assert_error "ERR value is not a valid float" {r increx foo byfloat 1}
+    }
 
     test {INCREX BYFLOAT positive arithmetic overflow returns [curr_val, 0]} {
         set big [ldbl_overflow_operand]

@@ -31,7 +31,8 @@ static bool isFormatChangingCommand(struct serverCommand *cmd) {
     return ((cmd->proc == pfcountCommand) ||
             (cmd->proc == lindexCommand) ||
             (cmd->proc == lrangeCommand) ||
-            (cmd->proc == lposCommand));
+            (cmd->proc == lposCommand) ||
+            (cmd->proc == sortroCommand));
 }
 
 /* The PFCOUNT command (which does NOT have the CMD_WRITE flag) modifies the underlying string and

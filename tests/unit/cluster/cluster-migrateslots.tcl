@@ -82,7 +82,10 @@ proc wait_for_migration {node_idx slot {maxtries 100}} {
         [is_slot_migrated $node_idx $slot]
     } else {
         set nodes [get_cluster_nodes $node_idx]
-        fail "Cluster node $target_id did not get slot $slot within [expr {$maxtries * 100}] ms (current $nodes)"
+        # Include the target's job states and errors, not just slot ownership.
+        # Other nodes may be deliberately paused by the test.
+        set migrations [R $node_idx CLUSTER GETSLOTMIGRATIONS]
+        fail "Cluster node $target_id did not get slot $slot within [expr {$maxtries * 100}] ms (current $nodes; migrations $migrations)"
     }
     wait_for_cluster_propagation
 }

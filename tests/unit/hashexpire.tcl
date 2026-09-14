@@ -1638,11 +1638,19 @@ start_server {tags {"hashexpire"}} {
             if {$cmd eq "RESTORE"} {
                 assert_equal 2 [get_keys r]
                 assert_equal 2 [get_keys_with_volatile_items r]
+                # RESTORE rebuilds the object; the listpack is byte-identical
+                # but with libc malloc the allocation's usable size (what
+                # MEMORY USAGE reports) can differ by an allocator chunk.
+                # Assert what matters: the encoding is preserved, and memory
+                # stays in the same ballpark.
+                assert_encoding listpack $newhash
+                assert_range $memory_after [expr {$mem_before - 16}] [expr {$mem_before + 16}]
             } else {
                 assert_equal 1 [get_keys r]
                 assert_equal 1 [get_keys_with_volatile_items r]
+                # RENAME does not touch the object: memory must be identical.
+                assert_equal $mem_before $memory_after
             }
-            assert_equal $mem_before $memory_after
         } {} {needs:debug}
     }
 
@@ -4849,7 +4857,7 @@ start_server {tags {"hash"}} {
        r config set import-mode yes
        assert_equal [r hsetex myhash exat 0 fields 2 f2 v2 f3 v3] 1
        assert_equal [r hlen myhash] 3
-       assert_equal [r OBJECT ENCODING myhash] "hashtable"
+       assert_equal [r OBJECT ENCODING myhash] "listpack"
        r config set import-mode no
        wait_for_condition 30 100 {
            [r hlen myhash] == 1
@@ -4997,6 +5005,107 @@ start_server {tags {"hashexpire"}} {
         # Re-enable active expiration
         r DEBUG SET-ACTIVE-EXPIRE 1
     } {OK} {needs:debug}
+}
+
+start_server {tags {"hash expire listpack"}} {
+    r config set hash-max-listpack-entries 128
+    set original_max_value [lindex [r config get hash-max-listpack-value] 1]
+
+    test "Volatile-count header tracks listpack expiry transitions" {
+        r del myhash
+        r hset myhash f1 v1 f2 v2 f3 v3
+        assert_encoding listpack myhash
+        assert_equal 0 [get_keys_with_volatile_items r]
+
+        # 0 -> 1: first expiry creates the aggregate header
+        assert_equal {1} [r hexpire myhash 1000 FIELDS 1 f1]
+        assert_equal 1 [get_keys_with_volatile_items r]
+
+        # 1 -> 2 -> 1: add another, then persist one
+        assert_equal {1} [r hexpire myhash 1000 FIELDS 1 f2]
+        assert_equal {1} [r hpersist myhash FIELDS 1 f1]
+        assert_equal 1 [get_keys_with_volatile_items r]
+
+        # 1 -> 0: last volatile field persisted, header removed
+        assert_equal {1} [r hpersist myhash FIELDS 1 f2]
+        assert_equal 0 [get_keys_with_volatile_items r]
+        assert_equal 3 [r hlen myhash]
+    }
+
+    test "Volatile-count header follows HDEL of a volatile field" {
+        r del myhash
+        r hset myhash f1 v1 f2 v2
+        r hexpire myhash 1000 FIELDS 1 f1
+        assert_equal 1 [get_keys_with_volatile_items r]
+        r hdel myhash f1
+        assert_equal 0 [get_keys_with_volatile_items r]
+        assert_equal {v2} [r hget myhash f2]
+    }
+
+    test "Volatile-count header survives RDB reload and DUMP/RESTORE" {
+        r del myhash
+        r hset myhash f1 v1 f2 v2
+        r hsetex myhash EX 1000 FIELDS 1 t1 x1
+        assert_encoding listpack myhash
+        r debug reload
+        assert_encoding listpack myhash
+        assert_equal 1 [get_keys_with_volatile_items r]
+        assert_range [lindex [r httl myhash FIELDS 1 t1] 0] 1 1000
+
+        set d [r dump myhash]
+        r del myhash
+        r restore myhash 0 $d
+        assert_equal 1 [get_keys_with_volatile_items r]
+        assert_range [lindex [r httl myhash FIELDS 1 t1] 0] 1 1000
+    } {} {needs:debug}
+
+    test "Volatile-count header cleared when active expiry reaps last field" {
+        r del myhash
+        r hset myhash f1 v1
+        r hpexpire myhash 50 FIELDS 1 f1
+        assert_equal 1 [get_keys_with_volatile_items r]
+        wait_for_condition 50 100 {
+            [get_keys_with_volatile_items r] == 0
+        } else {
+            fail "volatile tracking not cleared after reap"
+        }
+    }
+
+    # A HASH_2 payload that makes the loader convert to a hashtable only after
+    # a volatile field has landed in the listpack: 'a' and 'b' are one byte and
+    # stay under the lowered value threshold, field 'cc' does not. The loader
+    # installs the aggregate volatile-count header after its listpack loop, so
+    # at conversion time the listpack does not have one yet.
+    r config set hash-max-listpack-value $original_max_value
+    r del myhash
+    r hset myhash a b cc dd
+    r hexpire myhash 1000 FIELDS 1 a
+    assert_encoding listpack myhash
+    set mid_load_payload [r dump myhash]
+    r config set hash-max-listpack-value 1
+
+    test "RESTORE tracks field TTLs when the load converts mid-listpack" {
+        r del myhash
+        r restore myhash 0 $mid_load_payload
+        assert_encoding hashtable myhash
+
+        assert_equal 1 [get_keys_with_volatile_items r]
+        assert_range [lindex [r httl myhash FIELDS 1 a] 0] 1 1000
+        assert_equal 1 [r hdel myhash a]
+        assert_equal 0 [get_keys_with_volatile_items r]
+        assert_equal {dd} [r hget myhash cc]
+    }
+
+    test "Field TTLs survive a save after a mid-listpack conversion" {
+        # An untracked expiry also makes the save pick RDB_TYPE_HASH over
+        # RDB_TYPE_HASH_2, dropping the TTL instead of crashing.
+        r del myhash
+        r restore myhash 0 $mid_load_payload
+        r debug reload
+        assert_range [lindex [r httl myhash FIELDS 1 a] 0] 1 1000
+    } {} {needs:debug}
+
+    r config set hash-max-listpack-value $original_max_value
 }
 
 start_server {tags {"hashexpire"}} {

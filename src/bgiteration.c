@@ -1653,6 +1653,9 @@ static long long bgIteration_feedIterators_task(struct aeEventLoop *eventLoop,
     }
     monotime endTime = startTime + dutyTimeUs;
 
+    // Test path (manual feed, no timer thread): ignore the budget so a slow env can't starve the blocking read.
+    if (eventLoop == NULL) endTime = UINT64_MAX;
+
     // Run this part regardless of time limit...
     receiveItemsBackFromIterators(false);
 

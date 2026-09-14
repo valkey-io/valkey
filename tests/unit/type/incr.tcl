@@ -380,6 +380,48 @@ start_server {tags {"incr"}} {
         assert_range [r ttl foo] 61 100
     }
 
+    test {INCREX reports the increment that was actually applied} {
+        # A long double cannot represent every integer at these magnitudes, so
+        # the addition rounds and the delta that lands can differ from the one
+        # that was asked for. By how much depends on how wide a long double is,
+        # which varies by platform, so assert the invariant rather than any
+        # particular value: the reply describes what happened, which means
+        # `new == old + applied` has to hold everywhere.
+        foreach {seed incr} {
+            100000000000000000000 1
+            100000000000000000000 3
+            100000000000000000000 7
+            100000000000000000000 9
+            100000000000000000000 -1
+            1000000000000000000000000000000 1
+            1000000000000000000000000000000 7
+            1000000000000000000000000000000 100000000000
+        } {
+            r del foo
+            r set foo $seed
+            # SET stores the literal string, but INCREX round-trips the value
+            # through a long double, so a magnitude this large can be rewritten
+            # just by being read. Normalize first - and check on the way past
+            # that a zero increment reports a zero delta.
+            assert_equal 0 [lindex [r increx foo byfloat 0] 1]
+            set old [r get foo]
+            set res [r increx foo byfloat $incr]
+            set new [lindex $res 0]
+            set applied [lindex $res 1]
+            assert_equal $new [r get foo]
+            assert_equal $new [expr {$old + $applied}]
+        }
+    }
+
+    test {INCREX reports the requested increment when nothing is rounded} {
+        r del foo
+        r set foo 10
+        assert_equal {15 5} [r increx foo byint 5]
+        assert_equal {12.5 -2.5} [r increx foo byfloat -2.5]
+        r del foo
+        assert_equal {5 5} [r increx foo byint 5]
+    }
+
     test {INCREX against key holding a list} {
         r del mylist
         r rpush mylist 1

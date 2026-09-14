@@ -812,8 +812,8 @@ void increxCommand(client *c) {
         return;
     }
 
-    long long value_ll = 0, oldvalue_ll = 0;
-    long double value_ld = 0, oldvalue_ld = 0;
+    long long value_ll = 0, oldvalue_ll = 0, applied_ll = 0;
+    long double value_ld = 0, oldvalue_ld = 0, applied_ld = 0;
     long long milliseconds = 0;
     robj *o, *new;
 
@@ -890,6 +890,8 @@ void increxCommand(client *c) {
             addReplyHumanLongDouble(c, 0);
             return;
         }
+        /* Float accuracy may cause applied to differ from requested. */
+        applied_ld = value_ld - oldvalue_ld;
     } else {
         value_ll = oldvalue_ll;
         if ((incr_ll < 0 && value_ll < 0 && incr_ll < (LLONG_MIN - value_ll)) ||
@@ -900,6 +902,7 @@ void increxCommand(client *c) {
             return;
         }
         value_ll += incr_ll;
+        applied_ll = value_ll - oldvalue_ll;
     }
 
     /* If the `milliseconds` have expired, then we don't need to set it into the
@@ -910,10 +913,10 @@ void increxCommand(client *c) {
         addReplyArrayLen(c, 2);
         if (use_float) {
             addReplyHumanLongDouble(c, value_ld);
-            addReplyHumanLongDouble(c, incr_ld);
+            addReplyHumanLongDouble(c, applied_ld);
         } else {
             addReplyLongLong(c, value_ll);
-            addReplyLongLong(c, incr_ll);
+            addReplyLongLong(c, applied_ll);
         }
         return;
     }
@@ -954,10 +957,10 @@ void increxCommand(client *c) {
     addReplyArrayLen(c, 2);
     if (use_float) {
         addReplyHumanLongDouble(c, value_ld);
-        addReplyHumanLongDouble(c, incr_ld);
+        addReplyHumanLongDouble(c, applied_ld);
     } else {
         addReplyLongLong(c, value_ll);
-        addReplyLongLong(c, incr_ll);
+        addReplyLongLong(c, applied_ll);
     }
 }
 

@@ -284,15 +284,15 @@ static int checkExecConditions(client *c) {
 
         switch (condition) {
         case EXEC_CONDITION_IFEQ:
-            if (o && checkType(c, o, OBJ_STRING)) {
-                discardTransaction(c);
+            if (o && objectGetType(o) != OBJ_STRING) {
+                execCommandAbort(c, objectGetVal(shared.wrongtypeerr));
                 return -1;
             }
             matches = o && equalStringObjects(o, value);
             break;
         case EXEC_CONDITION_IFNE:
-            if (o && checkType(c, o, OBJ_STRING)) {
-                discardTransaction(c);
+            if (o && objectGetType(o) != OBJ_STRING) {
+                execCommandAbort(c, objectGetVal(shared.wrongtypeerr));
                 return -1;
             }
             matches = !o || !equalStringObjects(o, value);

@@ -76,10 +76,10 @@ start_server {tags {"multi"}} {
         r lpush condition{t} value
         r multi
         r set destination{t} not-committed
-        assert_error {WRONGTYPE*} {r exec ifeq condition{t} value}
+        assert_error {EXECABORT*WRONGTYPE*} {r exec ifeq condition{t} value}
         r multi
         r set destination{t} not-committed
-        assert_error {WRONGTYPE*} {r exec ifne condition{t} value}
+        assert_error {EXECABORT*WRONGTYPE*} {r exec ifne condition{t} value}
         assert_equal {} [r get destination{t}]
     }
 

@@ -4193,7 +4193,6 @@ int clusterProcessPacket(clusterLink *link) {
     }
 
     clusterMsgHeader *hdr = (clusterMsgHeader *)link->rcvbuf;
-    clusterMsg *msg = toClusterMsg(link->rcvbuf);
     uint32_t totlen = ntohl(hdr->totlen);
     mstime_t now = mstime();
     int is_light = IS_LIGHT_MESSAGE(ntohs(hdr->type));
@@ -4220,6 +4219,7 @@ int clusterProcessPacket(clusterLink *link) {
      * use a compact header without a CRC field and are skipped. A CRC mismatch
      * means the packet is corrupted (e.g. a network bit-flip) and must be
      * treated as invalid so the packet is dropped to protect cluster state. */
+    clusterMsg *msg = toClusterMsg(link->rcvbuf);
     if (totlen >= CLUSTERMSG_MIN_LEN && !clusterMsgVerifyCRC(msg, totlen)) {
         if (server.mstime - crc_mismatch_last_log >= CLUSTER_CRC_MISMATCH_LOG_INTERVAL) {
             crc_mismatch_last_log = server.mstime;

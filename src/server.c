@@ -2399,10 +2399,10 @@ void initServerConfig(void) {
     server.runid[CONFIG_RUN_ID_SIZE] = '\0';
     changeReplicationId();
     clearReplicationId2();
-    server.hz = CONFIG_DEFAULT_HZ;   /* Initialize it ASAP, even if it may get
-                                        updated later after loading the config.
-                                        This value may be used before the server
-                                        is initialized. */
+    server.hz = CONFIG_DEFAULT_HZ; /* Initialize it ASAP, even if it may get
+                                      updated later after loading the config.
+                                      This value may be used before the server
+                                      is initialized. */
     server.configfile = NULL;
     server.executable = NULL;
     server.arch_bits = (sizeof(long) == 8) ? 64 : 32;

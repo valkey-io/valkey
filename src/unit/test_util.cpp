@@ -392,7 +392,7 @@ TEST_F(UtilTest, TestUtcOffsetFromLocaltime) {
         {"America/New_York", -4 * 3600, -5 * 3600},
         {"America/St_Johns", -(2 * 3600 + 1800), -(3 * 3600 + 1800)},
         {"Europe/Stockholm", 2 * 3600, 1 * 3600},
-        {"Europe/Dublin", 1 * 3600, 0},           /* negative DST in tzdata: winter is the "DST" period at +00:00 */
+        {"Europe/Dublin", 1 * 3600, 0}, /* negative DST in tzdata: winter is the "DST" period at +00:00 */
         {"Asia/Kolkata", 5 * 3600 + 1800, 5 * 3600 + 1800},
         {"Asia/Kathmandu", 5 * 3600 + 2700, 5 * 3600 + 2700},
         {"Australia/Adelaide", 9 * 3600 + 1800, 10 * 3600 + 1800}, /* southern: DST in January */

@@ -555,6 +555,12 @@ void clusterCommandSyncSlotsEstablish(client *c) {
     char *source_node_name = NULL;
     list *slot_ranges = NULL;
 
+    if (c->slot_migration_job) {
+        addReplyError(c, "CLUSTER SYNCSLOTS ESTABLISH is not allowed on a "
+                         "client that is already a slot migration client");
+        return;
+    }
+
     if (!mustObeyClient(c) && validateSlotMigrationCanStartOrReply(c) == C_ERR) {
         return;
     }

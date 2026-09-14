@@ -237,7 +237,7 @@ start_server {tags {"incr"}} {
 
     test {INCREX XX only sets when key already exists} {
         r del foo
-        assert_equal {{} 0} [r increx foo xx]
+        assert_equal {0 0} [r increx foo xx]
         assert_equal {0} [r exists foo]
         r set foo 10
         assert_equal {11 1} [r increx foo xx]
@@ -245,7 +245,7 @@ start_server {tags {"incr"}} {
 
     test {INCREX BYFLOAT XX only sets when key already exist} {
         r del foo
-        assert_match {{} 0} [r increx foo xx byfloat 0.1]
+        assert_match {0 0} [r increx foo xx byfloat 0.1]
         r set foo 0.1
         assert_match {*0.2* *0.1*} [r increx foo xx byfloat 0.1]
         assert_match {*0.2*} [r get foo]
@@ -439,14 +439,14 @@ start_server {tags {"incr"}} {
         assert_equal {*2}   [r increx foo byfloat 2.5]
         assert_equal {,2.5} [r read]
         assert_equal {,2.5} [r read]
-        # XX on nonexistent key returns [null, 0]
+        # XX on nonexistent key returns [0, 0]
         r del foo
         assert_equal {*2} [r increx foo xx]
-        assert_equal {_}  [r read]
         assert_equal {:0} [r read]
-        # XX on nonexistent key with BYFLOAT returns [null, 0.0]
+        assert_equal {:0} [r read]
+        # XX on nonexistent key with BYFLOAT returns [0.0, 0.0]
         assert_equal {*2} [r increx foo xx byfloat 1.5]
-        assert_equal {_}  [r read]
+        assert_equal {,0} [r read]
         assert_equal {,0} [r read]
         r readraw 0
         r hello 2
@@ -466,14 +466,15 @@ start_server {tags {"incr"}} {
             assert_equal {2.5} [r read]
             assert_equal {$3}  [r read]
             assert_equal {2.5} [r read]
-            # XX on nonexistent key returns [null, 0]
+            # XX on nonexistent key returns [0, 0]
             r del foo
             assert_equal {*2}  [r increx foo xx]
-            assert_equal {$-1} [r read]
             assert_equal {:0}  [r read]
-            # XX on nonexistent key with BYFLOAT returns [null, "0"]
+            assert_equal {:0}  [r read]
+            # XX on nonexistent key with BYFLOAT returns ["0", "0"]
             assert_equal {*2}  [r increx foo xx byfloat 1.5]
-            assert_equal {$-1} [r read]
+            assert_equal {$1}  [r read]
+            assert_equal {0}   [r read]
             assert_equal {$1}  [r read]
             assert_equal {0}   [r read]
             r readraw 0

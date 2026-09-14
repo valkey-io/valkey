@@ -109,15 +109,8 @@
             "type": "array", "minItems": 2, "maxItems": 2,
             "items": [
                 { 
-                    "description": "Value after the increment, or null if key does not exist and XX is provided.",
-                    "oneOf": [
-                        {
-                            "type":"number"
-                        }, 
-                        {
-                            "type":"null"
-                        }
-                    ]
+                    "description": "Value after the increment; the current value if the increment was not applied.",
+                    "type": "number"
                 },
                 { 
                     "description": "Increment actually applied; 0 if skipped.",

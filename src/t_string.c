@@ -857,11 +857,14 @@ void increxCommand(client *c) {
         return;
     }
     if ((flags & ARGS_SET_XX) && o == NULL) {
+        /* A non-existent key is treated as zero by the INCR family, and a
+         * declined operation reports the current value with a zero delta. */
         addReplyArrayLen(c, 2);
-        addReplyNull(c);
         if (use_float) {
             addReplyHumanLongDouble(c, 0);
+            addReplyHumanLongDouble(c, 0);
         } else {
+            addReplyLongLong(c, 0);
             addReplyLongLong(c, 0);
         }
         return;

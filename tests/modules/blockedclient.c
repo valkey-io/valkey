@@ -12,14 +12,6 @@
 
 #define UNUSED(V) ((void) V)
 
-/* Forward declarations of module API functions not publicly exposed */
-extern int VM_CallArgv(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc, int flags, const ValkeyModuleReplyHandlers *resp_handlers, void *reply_ctx);
-extern int VM_CallArgvAbort(ValkeyModuleCallArgvBlockedHandle *handle);
-extern int VM_ReplyRaw(ValkeyModuleCtx *ctx, const char *proto, size_t proto_len);
-#define ValkeyModule_CallArgv VM_CallArgv
-#define ValkeyModule_CallArgvAbort VM_CallArgvAbort
-#define ValkeyModule_ReplyRaw VM_ReplyRaw
-
 /* used to test processing events during slow bg operation */
 static volatile int g_slow_bg_operation = 0;
 static volatile int g_is_in_slow_bg_operation = 0;

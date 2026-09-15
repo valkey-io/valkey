@@ -790,14 +790,18 @@ start_server {tags {"incr"}} {
     test {INCREX applied delta overflow errors} {
         r set k 9223372036854775807
         assert_error "*ERR applied increment would overflow*" {r increx k byint -5 ubound -9223372036854775808 saturate}
+        assert_equal 9223372036854775807 [r get k]
 
         set big [ldbl_overflow_operand]
         r set k -$big
         assert_error "*ERR applied increment would be Infinity*" {r increx k byfloat $big lbound $big saturate}
+        assert_equal -$big [r get k]
 
         r set k 10
         assert_error "*ERR applied increment would be Infinity*" {r increx k byfloat 1.0 lbound -inf ubound -inf saturate}
+        assert_equal 10 [r get k]
         assert_error "*ERR applied increment would be Infinity*" {r increx k byfloat 1.0 lbound inf ubound inf saturate}
+        assert_equal 10 [r get k]
     }
 
     test {INCREX PERSIST option} {
@@ -806,6 +810,11 @@ start_server {tags {"incr"}} {
         assert_equal {11 1} [r increx k persist]
         assert_equal -1 [r ttl k]
         assert_equal 11 [r get k]
+
+        r set k 10.5 ex 500
+        assert_equal {11.5 1} [r increx k byfloat 1.0 persist]
+        assert_equal -1 [r ttl k]
+        assert_equal 11.5 [r get k]
 
         # Key without TTL remains persisted
         r set k 10
@@ -823,9 +832,20 @@ start_server {tags {"incr"}} {
         assert_equal {9223372036854775807 0} [r increx k byint 1 persist]
         assert_range [r ttl k] 400 500
 
+        set big [ldbl_overflow_operand]
+        r set k $big ex 500
+        set res [r increx k byfloat $big persist]
+        assert_equal 0 [lindex $res 1]
+        assert_equal $big [r get k]
+        assert_range [r ttl k] 400 500
+
         # Bound declined preserves existing TTL
         r set k 10 ex 500
         assert_equal {10 0} [r increx k byint 5 ubound 5 persist]
+        assert_range [r ttl k] 400 500
+
+        r set k 10 ex 500
+        assert_equal {10 0} [r increx k byfloat 5.0 ubound 5.0 persist]
         assert_range [r ttl k] 400 500
 
         # PERSIST is mutually exclusive with expiration options and ENX

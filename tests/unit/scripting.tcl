@@ -2035,20 +2035,23 @@ start_server {tags {"scripting external:skip"}} {
             r set "script-load-key:$j" $value
         }
 
-        set used [s used_memory]
-        set limit [expr {$used + 1*1024}]
+        set used [expr {[s used_memory] - [s mem_not_counted_for_evict]}]
+        set limit [expr {$used + 10*1024}]
         r config set maxmemory $limit
 
         set padding [string repeat x 100000]
-        for {set j 1} {$j <= 500} {incr j} {
-            catch {r script load "--$padding\nreturn $j"}
+        for {set j 1} {$j <= 5000} {incr j} {
+            catch {r script load "--$padding\nreturn $j"} e
+            if {[string match "OOM *" $e]} {
+                break
+            }
         }
         r config set maxmemory 1
         assert_error {OOM command not allowed*} {r script load "--$padding\nreturn 0"}
         assert_morethan [s evicted_keys] 0
         assert_equal 0 [s evicted_scripts]
         assert_morethan [s number_of_cached_scripts] 0
-        assert_lessthan [s number_of_cached_scripts] 500
+        assert_lessthan [s number_of_cached_scripts] 5000
 
         r config set maxmemory 0
         r config set maxmemory-policy noeviction

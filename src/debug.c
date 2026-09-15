@@ -640,7 +640,7 @@ void debugCommand(client *c) {
         if (server.aof_manifest) aofManifestFree(server.aof_manifest);
         aofLoadManifestFromDisk();
         aofDelHistoryFiles();
-        int ret = loadAppendOnlyFiles(server.aof_manifest);
+        int ret = loadAppendOnlyFiles(server.aof_manifest, NULL);
         unprotectClient(c);
         if (ret != AOF_OK && ret != AOF_EMPTY) {
             addReplyError(c, "Error trying to load the AOF files, check server logs.");

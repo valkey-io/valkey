@@ -351,6 +351,9 @@ void execCommand(client *c) {
 
     struct ClientFlags old_flags = c->flag;
 
+    /* Defer EXEC replies so the EXEC-end notification can still BlockClient. */
+    initDeferredReplyBuffer(c);
+
     /* we do not want to allow blocking commands inside multi */
     c->flag.deny_blocking = 1;
 
@@ -423,6 +426,8 @@ void execCommand(client *c) {
     discardTransaction(c);
 
     server.in_exec = 0;
+    notifyModulesExecEnded(c);
+    commitDeferredReplyBuffer(c, 1);
 }
 
 /* ===================== WATCH (CAS alike for MULTI/EXEC) ===================

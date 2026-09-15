@@ -1574,7 +1574,7 @@ struct serverMemOverhead *getMemoryOverheadData(void) {
     mh->aof_buffer = mem;
     mem_total += mem;
 
-    mem = evalScriptsMemory();
+    mem = scriptsMemoryOverhead();
     mh->lua_caches = mem;
     mem_total += mem;
     mh->functions_caches = functionsMemoryOverhead();
@@ -1694,7 +1694,7 @@ sds getMemoryDoctorReport(void) {
         }
 
         /* Too many scripts are cached? */
-        if (dictSize(evalScriptsDict()) > 1000) {
+        if (dictSize(evalCtxScriptsDict()) > 1000) {
             many_scripts = 1;
             num_reports++;
         }

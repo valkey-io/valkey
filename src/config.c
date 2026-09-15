@@ -31,6 +31,7 @@
 #include "io_threads.h"
 #include "sds.h"
 #include "server.h"
+#include "hotkeys.h"
 #include "cluster.h"
 #include "connection.h"
 #include "bio.h"
@@ -38,6 +39,7 @@
 #include "cluster_migrateslots.h"
 #include "eval.h"
 #include "lrulfu.h"
+#include "throttle_repl.h"
 
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -181,6 +183,15 @@ configEnum rdb_compression_enum[] = {{"no", RDB_COMPRESSION_NO},
                                      {"lzf", RDB_COMPRESSION_LZF},
                                      {"lz4", RDB_COMPRESSION_LZ4},
                                      {NULL, 0}};
+
+configEnum bgsave_method_enum[] = {{"fork", RDB_BGSAVE_TYPE_FORK},
+                                   {"forkless", RDB_BGSAVE_TYPE_FORKLESS},
+                                   {NULL, 0}};
+
+configEnum cluster_replica_no_failover_enum[] = {{"no", CLUSTER_REPLICA_NO_FAILOVER_NO},
+                                                 {"yes", CLUSTER_REPLICA_NO_FAILOVER_YES},
+                                                 {"if-empty", CLUSTER_REPLICA_NO_FAILOVER_IF_EMPTY},
+                                                 {NULL, 0}};
 
 /* Output buffer limits presets. */
 clientBufferLimitsConfig clientBufferLimitsDefaults[CLIENT_TYPE_OBUF_COUNT] = {
@@ -643,6 +654,11 @@ void loadServerConfigFromString(sds config) {
     /* Sanity checks. */
     if (server.cluster_enabled && server.primary_host) {
         err = "replicaof directive not allowed in cluster mode";
+        goto loaderr;
+    }
+    if (server.bgsave_default_method == RDB_BGSAVE_TYPE_FORKLESS && !server.forkless_infrastructure_enabled) {
+        err = "'bgsave-default-method forkless' can only be selected when the server was started with "
+              "'forkless-infrastructure-enabled yes'";
         goto loaderr;
     }
 
@@ -2446,6 +2462,19 @@ static void numericConfigRewrite(standardConfig *config, const char *name, struc
     {.type = SPECIAL_CONFIG,                                                           \
      embedCommonConfig(name, alias, modifiable) embedConfigInterface(NULL, setfn, getfn, rewritefn, applyfn)}
 
+static int isValidBgsaveDefaultMethod(int val, const char **err) {
+    /* During startup config parsing the directives are applied one by one, so
+     * forkless-infrastructure-enabled may not have been read yet when this
+     * value is set. We will check it when loading the config string */
+    if (reading_config_file) return 1;
+    if (val == RDB_BGSAVE_TYPE_FORKLESS && !server.forkless_infrastructure_enabled) {
+        *err = "'forkless' can only be selected when the server was started with "
+               "'forkless-infrastructure-enabled yes'";
+        return 0;
+    }
+    return 1;
+}
+
 static int isValidActiveDefrag(int val, const char **err) {
 #ifndef HAVE_DEFRAG
     if (val) {
@@ -2555,6 +2584,15 @@ static int isValidAnnouncedIp(char *val, const char **err) {
     return 1;
 }
 
+static int isValidPrioritySubnets(char *val, const char **err) {
+    return validatePrioritySubnets(val, err) == C_OK;
+}
+
+static int updatePrioritySubnetsConfig(const char **err) {
+    UNUSED(err);
+    return updatePrioritySubnets(server.priority_subnets) == C_OK;
+}
+
 static int isValidAnnouncedHostname(char *val, const char **err) {
     if (strlen(val) >= NET_HOST_STR_LEN) {
         *err = "Hostnames must be less than " STRINGIFY(NET_HOST_STR_LEN) " characters";
@@ -2650,6 +2688,16 @@ static int updatePort(const char **err) {
 static int updateDefragConfiguration(const char **err) {
     UNUSED(err);
     server.active_defrag_configuration_changed = 1;
+    return 1;
+}
+
+/* Dynamic configuration apply callback for priority-preemptive-poll-interval-us.
+ * Updates the preemption threshold on the active event loop. */
+static int updatePriorityPreemptivePollInterval(const char **err) {
+    UNUSED(err);
+    if (server.el) {
+        aeSetQoSPreemptCheckInterval(server.el, server.priority_preemptive_poll_interval_us);
+    }
     return 1;
 }
 
@@ -3357,6 +3405,7 @@ standardConfig static_configs[] = {
     createBoolConfig("rdb-del-sync-files", NULL, MODIFIABLE_CONFIG, server.rdb_del_sync_files, 0, NULL, NULL),
     createBoolConfig("activerehashing", NULL, MODIFIABLE_CONFIG, server.activerehashing, 1, NULL, NULL),
     createBoolConfig("stop-writes-on-bgsave-error", NULL, MODIFIABLE_CONFIG, server.stop_writes_on_bgsave_err, 1, NULL, NULL),
+    createEnumConfig("bgsave-default-method", NULL, MODIFIABLE_CONFIG, bgsave_method_enum, server.bgsave_default_method, RDB_BGSAVE_TYPE_FORK, isValidBgsaveDefaultMethod, NULL),
     createBoolConfig("set-proc-title", NULL, IMMUTABLE_CONFIG, server.set_proc_title, 1, NULL, NULL), /* Should setproctitle be used? */
     createBoolConfig("lazyfree-lazy-eviction", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, server.lazyfree_lazy_eviction, 1, NULL, NULL),
     createBoolConfig("lazyfree-lazy-expire", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, server.lazyfree_lazy_expire, 1, NULL, NULL),
@@ -3367,6 +3416,7 @@ standardConfig static_configs[] = {
     createBoolConfig("repl-mptcp", NULL, IMMUTABLE_CONFIG, server.repl_mptcp, 0, isValidMptcp, NULL),
     createBoolConfig("repl-diskless-sync", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, server.repl_diskless_sync, 1, NULL, NULL),
     createBoolConfig("dual-channel-replication-enabled", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, server.dual_channel_replication, 0, NULL, NULL),
+    createBoolConfig("repl-throttling-enabled", NULL, MODIFIABLE_CONFIG, throttleRepl_config.repl_throttling_enabled, 0, NULL, NULL),
     createBoolConfig("aof-rewrite-incremental-fsync", NULL, MODIFIABLE_CONFIG, server.aof_rewrite_incremental_fsync, 1, NULL, NULL),
     createBoolConfig("no-appendfsync-on-rewrite", NULL, MODIFIABLE_CONFIG, server.aof_no_fsync_on_rewrite, 0, NULL, NULL),
     createBoolConfig("cluster-require-full-coverage", NULL, MODIFIABLE_CONFIG, server.cluster_require_full_coverage, 1, NULL, updateClusterState),
@@ -3374,13 +3424,13 @@ standardConfig static_configs[] = {
     createBoolConfig("aof-load-truncated", NULL, MODIFIABLE_CONFIG, server.aof_load_truncated, 1, NULL, NULL),
     createBoolConfig("aof-use-rdb-preamble", NULL, MODIFIABLE_CONFIG, server.aof_use_rdb_preamble, 1, NULL, NULL),
     createBoolConfig("aof-timestamp-enabled", NULL, MODIFIABLE_CONFIG, server.aof_timestamp_enabled, 0, NULL, NULL),
-    createBoolConfig("cluster-replica-no-failover", "cluster-slave-no-failover", MODIFIABLE_CONFIG, server.cluster_replica_no_failover, 0, NULL, updateClusterFlags), /* Failover by default. */
     createBoolConfig("replica-lazy-flush", "slave-lazy-flush", MODIFIABLE_CONFIG, server.repl_replica_lazy_flush, 1, NULL, NULL),
     createBoolConfig("replica-serve-stale-data", "slave-serve-stale-data", MODIFIABLE_CONFIG, server.repl_serve_stale_data, 1, NULL, NULL),
     createBoolConfig("replica-read-only", "slave-read-only", DEBUG_CONFIG | MODIFIABLE_CONFIG, server.repl_replica_ro, 1, NULL, NULL),
     createBoolConfig("replica-ignore-maxmemory", "slave-ignore-maxmemory", MODIFIABLE_CONFIG, server.repl_replica_ignore_maxmemory, 1, NULL, NULL),
     createBoolConfig("jemalloc-bg-thread", NULL, MODIFIABLE_CONFIG, server.jemalloc_bg_thread, 1, NULL, updateJemallocBgThread),
     createBoolConfig("activedefrag", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, server.active_defrag_enabled, CONFIG_ACTIVE_DEFRAG_DEFAULT, isValidActiveDefrag, NULL),
+    createBoolConfig("forkless-infrastructure-enabled", NULL, IMMUTABLE_CONFIG, server.forkless_infrastructure_enabled, 0, NULL, NULL),
     createBoolConfig("syslog-enabled", NULL, IMMUTABLE_CONFIG, server.syslog_enabled, 0, NULL, NULL),
     createBoolConfig("cluster-enabled", NULL, IMMUTABLE_CONFIG, server.cluster_enabled, 0, NULL, NULL),
     createBoolConfig("appendonly", NULL, MODIFIABLE_CONFIG | DENY_LOADING_CONFIG, server.aof_enabled, 0, NULL, updateAppendOnly),
@@ -3428,6 +3478,8 @@ standardConfig static_configs[] = {
     createStringConfig("proc-title-template", NULL, MODIFIABLE_CONFIG, ALLOW_EMPTY_STRING, server.proc_title_template, CONFIG_DEFAULT_PROC_TITLE_TEMPLATE, isValidProcTitleTemplate, updateProcTitleTemplate),
     createStringConfig("bind-source-addr", NULL, MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, server.bind_source_addr, NULL, NULL, NULL),
     createStringConfig("logfile", NULL, IMMUTABLE_CONFIG, ALLOW_EMPTY_STRING, server.logfile, "", NULL, NULL),
+    createStringConfig("priority-subnets", NULL, MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, server.priority_subnets, NULL, isValidPrioritySubnets, updatePrioritySubnetsConfig),
+
 #ifdef LOG_REQ_RES
     createStringConfig("req-res-logfile", NULL, IMMUTABLE_CONFIG | HIDDEN_CONFIG, EMPTY_STRING_IS_NULL, server.req_res_logfile, NULL, NULL, NULL),
 #endif
@@ -3461,6 +3513,7 @@ standardConfig static_configs[] = {
     createEnumConfig("log-timestamp-format", NULL, MODIFIABLE_CONFIG, log_timestamp_format_enum, server.log_timestamp_format, LOG_TIMESTAMP_LEGACY, NULL, NULL),
     createEnumConfig("rdb-version-check", NULL, MODIFIABLE_CONFIG, rdb_version_check_enum, server.rdb_version_check, RDB_VERSION_CHECK_STRICT, NULL, NULL),
     createEnumConfig("rdbcompression", NULL, MODIFIABLE_CONFIG, rdb_compression_enum, server.rdb_compression, RDB_COMPRESSION_YES, NULL, NULL),
+    createEnumConfig("cluster-replica-no-failover", "cluster-slave-no-failover", MODIFIABLE_CONFIG, cluster_replica_no_failover_enum, server.cluster_replica_no_failover, CLUSTER_REPLICA_NO_FAILOVER_NO, NULL, updateClusterFlags), /* Failover by default. */
 
     /* Integer configs */
     createIntConfig("databases", NULL, IMMUTABLE_CONFIG, 1, INT_MAX, server.config_databases, 16, INTEGER_CONFIG, NULL, NULL),
@@ -3481,6 +3534,7 @@ standardConfig static_configs[] = {
     createIntConfig("active-defrag-threshold-lower", NULL, MODIFIABLE_CONFIG, 0, 1000, server.active_defrag_threshold_lower, 10, INTEGER_CONFIG, NULL, NULL),                       /* Default: don't defrag when fragmentation is below 10% */
     createIntConfig("active-defrag-threshold-upper", NULL, MODIFIABLE_CONFIG, 0, 1000, server.active_defrag_threshold_upper, 100, INTEGER_CONFIG, NULL, updateDefragConfiguration), /* Default: maximum defrag force at 100% fragmentation */
     createIntConfig("active-defrag-cycle-us", NULL, MODIFIABLE_CONFIG, 0, 100000, server.active_defrag_cycle_us, 500, INTEGER_CONFIG, NULL, updateDefragConfiguration),
+    createIntConfig("priority-preemptive-poll-interval-us", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, server.priority_preemptive_poll_interval_us, 2000, INTEGER_CONFIG, NULL, updatePriorityPreemptivePollInterval),
     createIntConfig("lfu-log-factor", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, lfu_config_log_factor, 10, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("lfu-decay-time", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, lfu_config_decay_time, 1, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("replica-priority", "slave-priority", MODIFIABLE_CONFIG, 0, INT_MAX, server.replica_priority, 100, INTEGER_CONFIG, NULL, NULL),
@@ -3513,9 +3567,13 @@ standardConfig static_configs[] = {
     createIntConfig("rdma-rx-size", NULL, IMMUTABLE_CONFIG, 64 * 1024, 16 * 1024 * 1024, server.rdma_ctx_config.rx_size, 1024 * 1024, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("rdma-completion-vector", NULL, IMMUTABLE_CONFIG, -1, 1024, server.rdma_ctx_config.completion_vector, -1, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("cluster-message-gossip-perc", NULL, MODIFIABLE_CONFIG | HIDDEN_CONFIG, 1, 100, server.cluster_message_gossip_perc, 10, INTEGER_CONFIG, NULL, NULL),
+    createIntConfig("hotkeys-sampling-percentage", NULL, MODIFIABLE_CONFIG, 1, 100, server.hotkeys_sampling_percentage, 1, INTEGER_CONFIG, NULL, hotkeysSamplingCallback),
+    createIntConfig("hotkeys-top-k", NULL, MODIFIABLE_CONFIG, 0, 1000, server.hotkeys_top_k, 0, INTEGER_CONFIG, NULL, hotkeysTopKCallback),
+    createIntConfig("hotkeys-window-seconds", NULL, MODIFIABLE_CONFIG, 1, 300, server.hotkeys_window_seconds, 1, INTEGER_CONFIG, NULL, hotkeysWindowCallback),
 
     /* Unsigned int configs */
     createUIntConfig("maxclients", NULL, MODIFIABLE_CONFIG, 1, UINT_MAX, server.maxclients, 10000, INTEGER_CONFIG, NULL, updateMaxclients),
+    createUIntConfig("maxclients-reserved", NULL, MODIFIABLE_CONFIG, 0, UINT_MAX, server.maxclients_reserved, 0, INTEGER_CONFIG, NULL, NULL),
     createUIntConfig("unixsocketperm", NULL, IMMUTABLE_CONFIG, 0, 0777, server.unix_ctx_config.perm, 0, OCTAL_CONFIG, NULL, NULL),
     createUIntConfig("socket-mark-id", NULL, IMMUTABLE_CONFIG, 0, UINT_MAX, server.socket_mark_id, 0, INTEGER_CONFIG, NULL, NULL),
     createUIntConfig("max-new-connections-per-cycle", NULL, MODIFIABLE_CONFIG, 1, 1000, server.max_new_conns_per_cycle, 10, INTEGER_CONFIG, NULL, NULL),
@@ -3590,6 +3648,9 @@ standardConfig static_configs[] = {
     createStringConfig("tls-client-cert-file", NULL, VOLATILE_CONFIG | MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, server.tls_ctx_config.client_cert_file, NULL, NULL, applyTlsCfg),
     createStringConfig("tls-client-key-file", NULL, VOLATILE_CONFIG | MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, server.tls_ctx_config.client_key_file, NULL, NULL, applyTlsCfg),
     createStringConfig("tls-client-key-file-pass", NULL, MODIFIABLE_CONFIG | SENSITIVE_CONFIG, EMPTY_STRING_IS_NULL, server.tls_ctx_config.client_key_file_pass, NULL, NULL, applyTlsCfg),
+    createStringConfig("tls-alt-cert-file", NULL, VOLATILE_CONFIG | MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, server.tls_ctx_config.alt_cert_file, NULL, NULL, applyTlsCfg),
+    createStringConfig("tls-alt-key-file", NULL, VOLATILE_CONFIG | MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, server.tls_ctx_config.alt_key_file, NULL, NULL, applyTlsCfg),
+    createStringConfig("tls-alt-key-file-pass", NULL, MODIFIABLE_CONFIG | SENSITIVE_CONFIG, EMPTY_STRING_IS_NULL, server.tls_ctx_config.alt_key_file_pass, NULL, NULL, applyTlsCfg),
     createStringConfig("tls-dh-params-file", NULL, VOLATILE_CONFIG | MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, server.tls_ctx_config.dh_params_file, NULL, NULL, applyTlsCfg),
     createStringConfig("tls-ca-cert-file", NULL, VOLATILE_CONFIG | MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, server.tls_ctx_config.ca_cert_file, NULL, NULL, applyTlsCfg),
     createStringConfig("tls-ca-cert-dir", NULL, VOLATILE_CONFIG | MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, server.tls_ctx_config.ca_cert_dir, NULL, NULL, applyTlsCfg),

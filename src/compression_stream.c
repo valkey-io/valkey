@@ -171,6 +171,7 @@ int streamReaderInit(streamReader *reader, const streamReaderConfig *cfg, stream
     reader->buffer_size = cfg->buffer_size < STREAM_READER_BUFFER_SIZE_MIN
                               ? STREAM_READER_BUFFER_SIZE_MIN
                               : cfg->buffer_size;
+    reader->eof_mid_frame_is_truncation = cfg->eof_mid_frame_is_truncation;
     compressionAlgo algo = ALGO_NONE;
     while (true) {
         size_t need = reader->probe.header_len < VCS_MAGIC_SIZE
@@ -359,7 +360,11 @@ ssize_t streamReaderRead(streamReader *reader, void *buf, size_t len) {
             available = reader->decompressed_buf_len;
             if (available == 0 && fill_result == C_ERR) return total > 0 ? (ssize_t)total : -1;
             if (available == 0 && !reader->decompressor.frame_done) {
-                streamReaderSetError(reader, STREAM_READER_ERROR_CORRUPT);
+                /* A codec failure would already have latched an error above, so
+                 * this is a short read: recoverable only if more bytes can arrive. */
+                streamReaderSetError(reader, reader->eof_mid_frame_is_truncation
+                                                 ? STREAM_READER_ERROR_TRUNCATED
+                                                 : STREAM_READER_ERROR_CORRUPT);
                 return total > 0 ? (ssize_t)total : -1;
             }
             if (available == 0) break;

@@ -39,6 +39,14 @@
 #include <stdint.h>
 
 #define LP_INTBUF_SIZE 21 /* 20 digits of -2^63 + 1 null term = 21. */
+#define LP_MAX_INT_ENCODING_LEN 9
+/* Worst-case on-wire size of a tagged metadata entry: tag byte + widest
+ * integer encoding + 1-byte backlen. Callers sizing an addition that
+ * includes metadata (e.g. via lpSafeToAdd) must account for this. */
+#define LP_METADATA_MAX_ENTRY_BYTES (1 + LP_MAX_INT_ENCODING_LEN + 1)
+
+#define lpGetTotalBytes(p) \
+    (((uint32_t)(p)[0] << 0) | ((uint32_t)(p)[1] << 8) | ((uint32_t)(p)[2] << 16) | ((uint32_t)(p)[3] << 24))
 
 /* lpInsert() where argument possible values: */
 #define LP_BEFORE 0
@@ -61,13 +69,18 @@ unsigned char *lpShrinkToFit(unsigned char *lp);
 unsigned char *
 lpInsertString(unsigned char *lp, unsigned char *s, uint32_t slen, unsigned char *p, int where, unsigned char **newp);
 unsigned char *lpInsertInteger(unsigned char *lp, long long lval, unsigned char *p, int where, unsigned char **newp);
+void lpEncodeIntegerGetType(int64_t v, unsigned char *intenc, uint64_t *enclen);
 unsigned char *lpPrepend(unsigned char *lp, unsigned char *s, uint32_t slen);
 unsigned char *lpPrependInteger(unsigned char *lp, long long lval);
 unsigned char *lpAppend(unsigned char *lp, unsigned char *s, uint32_t slen);
 unsigned char *lpAppendInteger(unsigned char *lp, long long lval);
+long long lpGetMetadataValue(unsigned char *p);
+unsigned char *
+lpInsertMetadata(unsigned char *lp, unsigned char *eleint, uint32_t size, unsigned char *p, int where, unsigned char **newp);
 unsigned char *lpReplace(unsigned char *lp, unsigned char **p, unsigned char *s, uint32_t slen);
 unsigned char *lpReplaceInteger(unsigned char *lp, unsigned char **p, long long lval);
 unsigned char *lpDelete(unsigned char *lp, unsigned char *p, unsigned char **newp);
+unsigned char *lpRemoveMetadata(unsigned char *lp, unsigned char *metadata_ptr);
 unsigned char *lpDeleteRangeWithEntry(unsigned char *lp, unsigned char **p, unsigned long num);
 unsigned char *lpDeleteRange(unsigned char *lp, long index, unsigned long num);
 unsigned char *lpBatchDelete(unsigned char *lp, unsigned char **ps, unsigned long count);
@@ -85,7 +98,10 @@ size_t lpBytes(unsigned char *lp);
 size_t lpEstimateBytesRepeatedInteger(long long lval, unsigned long rep);
 unsigned char *lpSeek(unsigned char *lp, long index);
 typedef int (*listpackValidateEntryCB)(unsigned char *p, unsigned int head_count, void *userdata);
-int lpValidateIntegrity(unsigned char *lp, size_t size, listpackValidateEntryCB entry_cb, void *cb_userdata);
+int lpIsMetadata(unsigned char *p);
+unsigned char *lpGetMetadata(unsigned char *lp, unsigned char *p);
+unsigned char *lpStart(unsigned char *lp);
+int lpValidateIntegrity(unsigned char *lp, size_t size, listpackValidateEntryCB entry_cb, void *cb_userdata, int allow_metadata);
 unsigned char *lpValidateFirst(unsigned char *lp);
 int lpValidateNext(unsigned char *lp, unsigned char **pp, size_t lpbytes);
 unsigned int lpCompare(unsigned char *p, unsigned char *s, uint32_t slen);

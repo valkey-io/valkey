@@ -68,6 +68,7 @@
 
 #include "server.h"
 #include "connection.h"
+#include "cluster.h"
 #include "bio.h"
 #include "mutexqueue.h"
 #include "tls.h"
@@ -80,6 +81,7 @@ static unsigned int bio_job_to_worker[] = {
     [BIO_LAZY_FREE] = 2,
     [BIO_RDB_SAVE] = 3,
     [BIO_TLS_RELOAD] = 4, /* only used when BUILD_TLS=yes */
+    [BIO_CLUSTER_SAVE] = 5,
 };
 
 typedef struct {
@@ -94,6 +96,7 @@ static bio_worker_data bio_workers[] = {
     {"bio_lazy_free"},
     {"bio_rdb_save"},
     {"bio_tls_reload"}, /* only used when BUILD_TLS=yes */
+    {"bio_cluster_config_save"},
 };
 static const bio_worker_data *const bio_worker_end = bio_workers + (sizeof bio_workers / sizeof *bio_workers);
 
@@ -140,6 +143,12 @@ typedef union bio_job {
     struct {
         int type;
     } tls_reload_args;
+
+    struct {
+        int type;
+        sds content;   /* Cluster config file content. */
+        bool do_fsync; /* A flag to indicate that a fsync is required. */
+    } cluster_save_args;
 } bio_job;
 
 void *bioProcessBackgroundJobs(void *arg);
@@ -238,6 +247,14 @@ void bioCreateTlsReloadJob(void) {
     bioSubmitJob(BIO_TLS_RELOAD, job);
 }
 
+void bioCreateClusterConfigSaveJob(sds content, bool do_fsync) {
+    bio_job *job = allocBioJob(0);
+    job->cluster_save_args.content = content;
+    job->cluster_save_args.do_fsync = do_fsync;
+    bioSubmitJob(BIO_CLUSTER_SAVE, job);
+}
+
+#define CONFIG_SAVE_LOG_ERROR_RATE 30 /* Seconds between errors logging. */
 void *bioProcessBackgroundJobs(void *arg) {
     bio_worker_data *const bwd = arg;
     sigset_t sigset;
@@ -307,6 +324,21 @@ void *bioProcessBackgroundJobs(void *arg) {
 #else
             serverPanic("BIO_TLS_RELOAD job type requires built-in TLS (BUILD_TLS=yes).");
 #endif
+        } else if (job_type == BIO_CLUSTER_SAVE) {
+            static time_t last_save_error_log = 0;
+            if (clusterSaveConfigFromBio(job->cluster_save_args.content, job->cluster_save_args.do_fsync) == C_ERR) {
+                /* Limit logging rate to 1 line per CONFIG_SAVE_LOG_ERROR_RATE seconds. */
+                if ((server.unixtime - last_save_error_log) > CONFIG_SAVE_LOG_ERROR_RATE) {
+                    serverLog(LL_WARNING, "Failed to save the cluster config file in background. Cluster config "
+                                          "updated even though writing the cluster config file to disk failed.");
+                    last_save_error_log = server.unixtime;
+                }
+                atomic_store_explicit(&server.cluster_config_save_status, C_ERR, memory_order_relaxed);
+            } else {
+                atomic_store_explicit(&server.cluster_config_save_status, C_OK, memory_order_relaxed);
+                atomic_store_explicit(&server.cluster_config_last_save_time, time(NULL), memory_order_relaxed);
+                last_save_error_log = 0;
+            }
         } else {
             serverPanic("Wrong job type in bioProcessBackgroundJobs().");
         }

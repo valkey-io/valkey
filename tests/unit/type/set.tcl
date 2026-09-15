@@ -78,6 +78,28 @@ start_server {
         assert_match {*ERR*wrong*number*arg*} $e
     }
 
+    set original_max [lindex [r config get set-max-listpack-entries] 1]
+    r config set set-max-listpack-entries 0
+    test {SMISMEMBER uses hashtable batch lookup} {
+        r del smismembertest
+        for {set i 1} {$i <= 128} {incr i} {
+            r sadd smismembertest [format "m%02d" $i]
+        }
+
+        assert_encoding hashtable smismembertest
+        assert_equal {1} [r smismember smismembertest m01]
+        assert_equal {1 0 1 1} [r smismember smismembertest m01 missing m01 m04]
+
+        set members {missing}
+        set expected {0}
+        for {set i 1} {$i <= 19} {incr i} {
+            lappend members [format "m%02d" $i]
+            lappend expected 1
+        }
+        assert_equal $expected [r smismember smismembertest {*}$members]
+    }
+    r config set set-max-listpack-entries $original_max
+
     test {SADD against non set} {
         r lpush mylist foo
         assert_error WRONGTYPE* {r sadd mylist bar}
@@ -1211,3 +1233,24 @@ if {[lindex [r config get proto-max-bulk-len] 1] == 10000000000} {
 } ;# skip 32bit builds
 }
 } ;# run_solo
+
+start_server {config "minimal.conf" tags {"set" "external:skip"} overrides {io-threads 4 io-threads-always-active yes set-max-listpack-entries 0}} {
+    test "Set nested prefetch - SISMEMBER correctness with pipelined commands" {
+        for {set i 0} {$i < 200} {incr i} {
+            r sadd myset "member:$i"
+        }
+        assert_encoding hashtable myset
+
+        set rd [valkey_deferring_client]
+        for {set i 0} {$i < 50} {incr i} {
+            $rd sismember myset "member:$i"
+        }
+        $rd sismember myset "absent"
+        $rd flush
+        for {set i 0} {$i < 50} {incr i} {
+            assert_equal 1 [$rd read]
+        }
+        assert_equal 0 [$rd read]
+        $rd close
+    }
+}

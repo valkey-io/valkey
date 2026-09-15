@@ -344,7 +344,7 @@ typedef struct {
 } position;
 
 static_assert(sizeof(hashtablePosition) >= sizeof(position),
-              "Opaque iterator size");
+              "Opaque position size");
 
 /* State for incremental find. */
 typedef struct {
@@ -1406,13 +1406,13 @@ void hashtableResumeAutoShrink(hashtable *ht) {
  * spaces, "holes", in the bucket chains, which wastes memory. Additionally, we
  * pause auto shrink when rehashing is paused, meaning the hashtable will not
  * shrink the bucket count. */
-static void hashtablePauseRehashing(hashtable *ht) {
+void hashtablePauseRehashing(hashtable *ht) {
     ht->pause_rehash++;
     hashtablePauseAutoShrink(ht);
 }
 
 /* Resumes incremental rehashing, after pausing it. */
-static void hashtableResumeRehashing(hashtable *ht) {
+void hashtableResumeRehashing(hashtable *ht) {
     ht->pause_rehash--;
     assert(ht->pause_rehash >= 0);
     hashtableResumeAutoShrink(ht);
@@ -1910,7 +1910,7 @@ bool hashtableIncrementalFindStep(hashtableIncrementalFindState *state) {
             const void *elem_key = entryGetKey(ht, entry);
             if (compareKeys(ht, data->key, elem_key)) {
                 /* It's a match. */
-                data->state = HASHTABLE_FOUND;
+                data->state = validateElementIfNeeded(ht, entry) ? HASHTABLE_FOUND : HASHTABLE_NOT_FOUND;
                 return false;
             }
             /* No match. Look for next candidate entry in the bucket. */
@@ -1990,6 +1990,37 @@ bool hashtableIncrementalFindGetResult(hashtableIncrementalFindState *state, voi
     }
 }
 
+/* Provides batch lookup. Compared with serial single-key lookups, it can improve
+ * performance by parallelizing memory accesses. Each bit in the returned bitmap
+ * indicates whether the key at the same index was found. */
+uint32_t hashtableFindBatch(hashtable *ht, int numkeys, const void **keys, void **found_entries) {
+    assert(numkeys >= 0 && numkeys <= HASHTABLE_FIND_BATCH_MAX_SIZE);
+    if (numkeys == 0) return 0;
+
+    rehashStepOnReadIfNeeded(ht);
+
+    hashtableIncrementalFindState states[numkeys];
+    for (int i = 0; i < numkeys; i++) {
+        hashtableIncrementalFindInit(&states[i], ht, keys[i]);
+    }
+
+    size_t incomplete;
+    do {
+        incomplete = 0;
+        for (int i = 0; i < numkeys; i++) {
+            incomplete += hashtableIncrementalFindStep(&states[i]);
+        }
+    } while (incomplete != 0);
+
+    uint32_t result = 0;
+    for (int i = 0; i < numkeys; i++) {
+        if (hashtableIncrementalFindGetResult(&states[i], &found_entries[i])) {
+            result |= (uint32_t)1 << i;
+        }
+    }
+    return result;
+}
+
 /* --- Scan --- */
 
 /* Scan is a stateless iterator. It works with a cursor that is returned to the
@@ -2054,13 +2085,17 @@ size_t hashtableScan(hashtable *ht, size_t cursor, hashtableScanFunction fn, voi
  * A cursor of 0 means the scan has not started, so no keys have been passed. */
 bool hashtableScanHasPassedKey(hashtable *ht, const void *key, size_t cursor) {
     if (cursor == 0) return false;
-    size_t mask = expToMask(ht->bucket_exp[0]);
-    uint64_t hash = hashKey(ht, key);
-    size_t bucket_idx = hash & mask;
-    size_t cursor_idx = cursor & mask;
-    /* In reverse-bit-increment order, a bucket has been visited if its
-     * reversed index is less than the reversed cursor index. */
-    return rev(bucket_idx) < rev(cursor_idx);
+    if (hashtableSize(ht) == 0) return true;
+
+    /* The scan visits buckets in reverse-binary order based on the smallest
+     * table. During rehashing, a small-table bucket and its corresponding
+     * large-table buckets are processed together, so the small-table mask
+     * determines ordering in both cases. */
+    int exp = ht->bucket_exp[0];
+    if (hashtableIsRehashing(ht) && ht->bucket_exp[1] < exp) exp = ht->bucket_exp[1];
+    size_t mask = expToMask(exp);
+    size_t bucket_idx = hashKey(ht, key) & mask;
+    return rev(bucket_idx) < rev(cursor & mask);
 }
 
 /* Like hashtableScan, but additionally reallocates the memory used by the dict

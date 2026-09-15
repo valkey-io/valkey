@@ -304,3 +304,31 @@ tags "modules" {
         }
     }
 }
+
+start_server {tags {"modules"} overrides {forkless-infrastructure-enabled yes save "" enable-debug-command yes enable-module-command yes}} {
+    test {MODULE LOAD is blocked during forkless save} {
+        r debug populate 100
+
+        # Start slow forkless save
+        r config set rdb-key-save-delay 200000
+        r config set bgsave-default-method forkless
+        r bgsave
+
+        wait_for_condition 50 100 {
+            [s rdb_bgsave_in_progress] == 1
+        } else {
+            fail "forkless save didn't start"
+        }
+
+        # Try to load a module - should fail during forkless save
+        catch {r module load $testmodule} err
+        assert_match "*Error*" $err
+
+        r bgsave cancel
+        r config set rdb-key-save-delay 0
+        waitForBgsave r
+
+        # After forkless save completes, module load should succeed
+        assert_equal {OK} [r module load $testmodule]
+    }
+}

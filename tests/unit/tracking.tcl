@@ -670,7 +670,148 @@ start_server {tags {"tracking network logreqres:skip"}} {
         assert {$tracking_clients == 2}
     }
 
+    # ------------------------------------------------------------------------
+    # The background dead-client-ID sweeper must be a no-op while every
+    # registered client ID belongs to a connected client. These tests pin
+    # that down:
+    #  - IDs of connected clients are never removed, even while the sweeper
+    #    reclaims dead IDs registered on the same keys (canary pattern).
+    #  - Modifying/deleting a tracked key still invalidates every live
+    #    tracking client and decrements tracking_total_items accordingly.
+    #  - Redirection, NOLOOP, and BCAST delivery are unchanged.
+    # Run over varied RESP versions, client counts, and NOLOOP combinations.
+    # ------------------------------------------------------------------------
+    foreach resp {2 3} {
+        foreach noloop {0 1} {
+            foreach num_clients {1 8} {
+                test "Live tracking IDs are never reclaimed by the sweeper (resp $resp, noloop $noloop, $num_clients clients)" {
+                    clean_all
+                    set num_keys 15
+                    # Seed keys that are NOT modified during the observation window.
+                    for {set i 0} {$i < $num_keys} {incr i} {
+                        $rd_sg SET pkey:$i v
+                    }
+                    # Spawn live tracking clients that read every key and STAY
+                    # connected, so every registered ID references a live client.
+                    set tclients {}
+                    set opts "REDIRECT $redir_id"
+                    if {$noloop} {set opts "$opts NOLOOP"}
+                    for {set c 0} {$c < $num_clients} {incr c} {
+                        set tc [valkey_deferring_client]
+                        $tc HELLO $resp
+                        $tc read
+                        $tc CLIENT TRACKING on {*}$opts
+                        assert_equal OK [$tc read]
+                        for {set i 0} {$i < $num_keys} {incr i} {
+                            $tc GET pkey:$i
+                            $tc read
+                        }
+                        lappend tclients $tc
+                    }
+                    # A canary client tracks the same keys and disconnects,
+                    # leaving dead IDs alongside the live ones.
+                    set canary [valkey_deferring_client]
+                    $canary HELLO 3
+                    $canary read
+                    $canary CLIENT TRACKING on
+                    assert_equal OK [$canary read]
+                    for {set i 0} {$i < $num_keys} {incr i} {
+                        $canary GET pkey:$i
+                        $canary read
+                    }
+                    # Each (key,id) pair is distinct: live clients + canary.
+                    regexp "\r\ntracking_total_items:(.*?)\r\n" [r info] _ items_before
+                    assert_equal [expr {($num_clients + 1) * $num_keys}] $items_before
+                    $canary close
+                    # Wait for the disconnect to be processed, then force a
+                    # full synchronous sweep: reaching exactly the live count
+                    # proves the sweep covered these keys and reclaimed only
+                    # the dead canary IDs, never a live one.
+                    wait_for_condition 50 100 {
+                        [s tracking_clients] == $num_clients
+                    } else {
+                        fail "canary disconnect was not processed"
+                    }
+                    r debug sweep-tracking-table
+                    set live_items [expr {$num_clients * $num_keys}]
+                    assert_equal $live_items [s tracking_total_items]
+                    # Delivery preserved: modifying a tracked key (by another
+                    # client) still invalidates every live tracking client.
+                    $rd_sg SET pkey:0 v2
+                    for {set c 0} {$c < $num_clients} {incr c} {
+                        assert_equal {pkey:0} [lindex [$rd_redirection read] 2]
+                    }
+                    foreach tc $tclients {$tc close}
+                } {} {needs:debug}
+            }
+        }
+    }
+
+    # Modifying or deleting a tracked key sends invalidation to all live
+    # tracking clients, frees the key's inner rax, and decrements
+    # tracking_total_items by the number of registered IDs.
+    test {Modify/delete frees inner IDs and decrements tracking_total_items} {
+        clean_all
+        set num_clients 4
+        $rd_sg SET ka 1
+        $rd_sg SET kb 2
+        set tclients {}
+        for {set c 0} {$c < $num_clients} {incr c} {
+            set tc [valkey_deferring_client]
+            $tc CLIENT TRACKING on REDIRECT $redir_id
+            assert_equal OK [$tc read]
+            $tc GET ka
+            $tc read
+            $tc GET kb
+            $tc read
+            lappend tclients $tc
+        }
+        # Two keys, each tracked by num_clients distinct live IDs.
+        assert_equal 2 [s tracking_total_keys]
+        assert_equal [expr {2 * $num_clients}] [s tracking_total_items]
+        # Modify ka -> every live client invalidated; ka's inner rax freed and
+        # tracking_total_items drops by the number of IDs registered for ka.
+        $rd_sg SET ka v
+        for {set c 0} {$c < $num_clients} {incr c} {
+            assert_equal {ka} [lindex [$rd_redirection read] 2]
+        }
+        assert_equal 1 [s tracking_total_keys]
+        assert_equal $num_clients [s tracking_total_items]
+        # Delete kb -> every live client invalidated; table becomes empty.
+        $rd_sg DEL kb
+        for {set c 0} {$c < $num_clients} {incr c} {
+            assert_equal {kb} [lindex [$rd_redirection read] 2]
+        }
+        assert_equal 0 [s tracking_total_keys]
+        assert_equal 0 [s tracking_total_items]
+        foreach tc $tclients {$tc close}
+    }
+
+    # Broadcast-mode tracking uses the prefix table, not the per-key inner
+    # rax, so it never contributes to tracking_total_items and is outside the
+    # dead-ID sweeper's scope. Delivery must remain unchanged.
+    test {BCAST tracking does not populate inner table and delivery is unchanged} {
+        clean_all
+        set rd_bcast [valkey_deferring_client]
+        $rd_bcast CLIENT TRACKING on BCAST REDIRECT $redir_id PREFIX bp:
+        assert_equal OK [$rd_bcast read]
+        # BCAST does not populate the inner per-key tracking table.
+        $rd_sg MSET bp:1 1 bp:2 2
+        assert_equal 0 [s tracking_total_items]
+        assert_equal 0 [s tracking_total_keys]
+        # Delivery preserved: prefix-matching keys are broadcast to the client.
+        assert_equal {bp:1 bp:2} [lsort [lindex [$rd_redirection read] 2]]
+        $rd_bcast close
+        # Still no inner-table growth after the sweep runs, even once the
+        # BCAST client is gone: it never registered in the inner table.
+        r debug sweep-tracking-table
+        assert_equal 0 [s tracking_total_items]
+    } {} {needs:debug}
+
     test {CLIENT GETREDIR provides correct client id} {
+        # Establish our own precondition instead of relying on tracking state
+        # left over by a preceding test (prior tests may reset it via clean_all).
+        r CLIENT TRACKING on REDIRECT $redir_id
         set res [r CLIENT GETREDIR]
         assert_equal $redir_id $res
         r CLIENT TRACKING off

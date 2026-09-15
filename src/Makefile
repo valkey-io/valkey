@@ -693,6 +693,8 @@ persist-settings: distclean
 	echo BUILD_TLS=$(BUILD_TLS) >> .make-settings
 	echo BUILD_RDMA=$(BUILD_RDMA) >> .make-settings
 	echo USE_SYSTEMD=$(USE_SYSTEMD) >> .make-settings
+	echo BUILD_WITH_SYSTEMD=$(BUILD_WITH_SYSTEMD) >> .make-settings
+	echo LIBSYSTEMD_LIBS=$(LIBSYSTEMD_LIBS) >> .make-settings
 	echo BUILD_LUA=$(BUILD_LUA) >> .make-settings
 	echo USE_LIBBACKTRACE=$(USE_LIBBACKTRACE) >> .make-settings
 	echo LIBBACKTRACE_PREFIX=$(LIBBACKTRACE_PREFIX) >> .make-settings

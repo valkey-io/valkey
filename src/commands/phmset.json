@@ -1,13 +1,13 @@
 {
     "PHMSET": {
-        "summary": "Atomically sets fields across multiple radix-tree paths.",
+        "summary": "Atomically sets fields across multiple paths in a path hash.",
         "complexity": "O(sum(L) + M*U), where M is the total number of fields across all path groups.",
         "group": "path-hash",
         "since": "9.2.0",
         "arity": -7,
         "function": "phmsetCommand",
         "command_flags": ["WRITE", "DENYOOM", "FAST"],
-        "acl_categories": ["RADIX", "WRITE", "FAST"],
+        "acl_categories": ["PATH-HASH", "WRITE", "FAST"],
         "key_specs": [{
             "flags": ["RW", "UPDATE"],
             "begin_search": {"index": {"pos": 1}},

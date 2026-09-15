@@ -509,6 +509,9 @@ class Command(object):
         def _acl_categories_code():
             s = ""
             for cat in self.desc.get("acl_categories", []):
+                # The public Path Hash category retains its internal radix identifier.
+                if cat == "PATH-HASH":
+                    cat = "RADIX"
                 s += "ACL_CATEGORY_%s|" % cat
             return s[:-1] if s else 0
 

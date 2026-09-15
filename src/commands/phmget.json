@@ -1,13 +1,13 @@
 {
     "PHMGET": {
-        "summary": "Returns fields from multiple exact radix-tree paths.",
+        "summary": "Returns fields from multiple exact paths in a path hash.",
         "complexity": "O(sum(L) + M*U), where M is the total number of fields across all path groups.",
         "group": "path-hash",
         "since": "9.2.0",
         "arity": -6,
         "function": "phmgetCommand",
         "command_flags": ["READONLY", "FAST"],
-        "acl_categories": ["RADIX", "READ", "FAST"],
+        "acl_categories": ["PATH-HASH", "READ", "FAST"],
         "key_specs": [{"flags": ["RO", "ACCESS"], "begin_search": {"index": {"pos": 1}}, "find_keys": {"range": {"lastkey": 0, "step": 1, "limit": 0}}}],
         "reply_schema": {"description": "Flat array of values in requested path-group and field order, with null for missing fields.", "type": "array", "items": {"oneOf": [{"type": "string"}, {"type": "null"}]}},
         "arguments": [

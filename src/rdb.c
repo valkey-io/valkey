@@ -2605,12 +2605,12 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
             if (field_count == RDB_LENERR || field_count == 0) {
                 sdsfree(path);
                 decrRefCount(o);
-                if (field_count == 0) rdbReportCorruptRDB("Radix path with empty payload");
+                if (field_count == 0) rdbReportCorruptRDB("Path hash path with empty payload");
                 return NULL;
             }
             robj *payload = createHashObject();
             if (!raxTryInsert(radix->index, (unsigned char *)path, sdslen(path), payload, NULL)) {
-                rdbReportCorruptRDB("Duplicate radix path or out of memory");
+                rdbReportCorruptRDB("Duplicate path-hash path or out of memory");
                 sdsfree(path);
                 decrRefCount(payload);
                 decrRefCount(o);
@@ -2642,7 +2642,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error, int rd
                                           &expired_overwritten);
                 serverAssert(!expired_overwritten);
                 if (updated) {
-                    rdbReportCorruptRDB("Duplicate radix payload field");
+                    rdbReportCorruptRDB("Duplicate path-hash payload field");
                     decrRefCount(o);
                     return NULL;
                 }

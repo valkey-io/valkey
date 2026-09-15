@@ -1,13 +1,13 @@
 {
     "PHSET": {
-        "summary": "Atomically sets one or more fields at a radix-tree path.",
+        "summary": "Atomically sets one or more fields at a path in a path hash.",
         "complexity": "O(L + F*U), where L is the path length, F is the number of fields, and U is the payload field lookup cost.",
         "group": "path-hash",
         "since": "9.2.0",
         "arity": -7,
         "function": "phsetCommand",
         "command_flags": ["WRITE", "DENYOOM", "FAST"],
-        "acl_categories": ["RADIX", "WRITE", "FAST"],
+        "acl_categories": ["PATH-HASH", "WRITE", "FAST"],
         "key_specs": [{
             "flags": ["RW", "UPDATE"],
             "begin_search": {"index": {"pos": 1}},

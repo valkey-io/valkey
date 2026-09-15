@@ -4,7 +4,7 @@ start_server {tags {radix}} {
         set field [binary format H* 660069656c64]
         set value [binary format H* 7600616c7565ff]
         assert_equal OK [r phset tree $path fields 1 $field $value]
-        assert_equal radix [r type tree]
+        assert_equal path-hash [r type tree]
         assert_equal radix [r object encoding tree]
         assert_equal 1 [r phcard tree]
         assert_equal $value [r phget tree $path $field]
@@ -185,7 +185,7 @@ start_server {tags {radix}} {
         assert_equal child [r phget tree ab f]
         assert_equal 1 [r phdel tree ab]
         assert_equal 1 [r exists tree]
-        assert_equal radix [r type tree]
+        assert_equal path-hash [r type tree]
         assert_equal 0 [r phcard tree]
         assert_equal 0 [r phdel tree ab]
     }
@@ -199,7 +199,7 @@ start_server {tags {radix}} {
         assert_equal {a ac b ba} [lindex $result 1]
         assert_equal 4 [r phdelprefix tree {}]
         assert_equal 1 [r exists tree]
-        assert_equal radix [r type tree]
+        assert_equal path-hash [r type tree]
         assert_equal 0 [r phcard tree]
         assert_equal 0 [r phdelprefix tree anything]
     }
@@ -336,24 +336,43 @@ start_server {tags {radix}} {
         assert_error ERR*value*out*range* {r phscan tree 0 count 0}
     }
 
-    test {Prefix Hash commands are registered with the PH prefix} {
+    test {Path Hash commands are registered with the PH prefix} {
         set commands {phcard phdel phdelprefix phexists phget phgetall phlongest phmget phmset phprefixes phscan phset}
-        assert_equal $commands [lsort [r command list filterby aclcat radix]]
+        assert_equal $commands [lsort [r command list filterby aclcat path-hash]]
         foreach command $commands {
             assert_equal $command [lindex [lindex [r command info $command] 0] 0]
             assert_equal path-hash [dict get [dict get [r command docs $command] $command] group]
+            assert_match {*path hash*} [dict get [dict get [r command docs $command] $command] summary]
+            set categories [lindex [lindex [r command info $command] 0] 6]
+            assert {"@path-hash" in $categories}
+            assert {"@radix" ni $categories}
             set old_command "rax[string range $command 2 end]"
             assert_equal {{}} [r command info $old_command]
+        }
+    }
+
+    test {Path Hash ACL category grants and revokes access to PH commands} {
+        with_cleanup {
+            assert_equal OK [r acl setuser ph-user reset on nopass ~* +@path-hash]
+            assert_equal OK [r acl dryrun ph-user phset tree a fields 1 f v]
+            assert_equal OK [r acl dryrun ph-user phget tree a f]
+            assert_equal OK [r acl dryrun ph-user phscan tree 0]
+            assert_match {*no permissions*} [r acl dryrun ph-user set tree value]
+            assert_equal OK [r acl setuser ph-user -@path-hash]
+            assert_match {*no permissions*} [r acl dryrun ph-user phset tree a fields 1 f v]
+            assert_error {*Unknown category*} {r acl cat radix}
+        } {
+            r acl deluser ph-user
         }
     }
 
     test {Command metadata, ACL category, RESP3, and transactions expose the native type} {
         assert_equal path-hash [dict get [dict get [r command docs phset] phset] group]
         assert_equal 9.2.0 [dict get [dict get [r command docs phset] phset] since]
-        assert {[lsearch -exact [r command list filterby aclcat radix] phset] >= 0}
-        assert {[lsearch -exact [r acl cat radix] phprefixes] >= 0}
-        assert {[lsearch -exact [r acl cat radix] phmset] >= 0}
-        assert {[lsearch -exact [r acl cat radix] phexists] >= 0}
+        assert {[lsearch -exact [r command list filterby aclcat path-hash] phset] >= 0}
+        assert {[lsearch -exact [r acl cat path-hash] phprefixes] >= 0}
+        assert {[lsearch -exact [r acl cat path-hash] phmset] >= 0}
+        assert {[lsearch -exact [r acl cat path-hash] phexists] >= 0}
         assert {[lsearch -exact [r command list filterby aclcat slow] phdel] >= 0}
         assert {[lsearch -exact [r command list filterby aclcat fast] phdel] < 0}
         r del tree
@@ -361,8 +380,11 @@ start_server {tags {radix}} {
         r phset tree a fields 1 f one
         r phset tree ab fields 1 f two
         assert_equal {OK OK} [r exec]
-        set scan [r scan 0 type radix count 100]
+        assert_equal path-hash [r type tree]
+        set scan [r scan 0 type path-hash count 100]
         assert {[lsearch -exact [lindex $scan 1] tree] >= 0}
+        assert_equal $scan [r scan 0 type PATH-HASH count 100]
+        assert_error {*unknown type name*} {r scan 0 type radix}
         r hello 3
         assert_equal {1 2} [r phprefixes tree abc lengths]
         assert_equal two [r phget tree ab f]
@@ -500,22 +522,22 @@ start_server {tags {radix}} {
         r phset $empty_tree path fields 1 field value
         assert_equal 1 [r phdel $empty_tree path]
         assert_equal 1 [r exists $empty_tree]
-        assert_equal radix [r type $empty_tree]
+        assert_equal path-hash [r type $empty_tree]
         assert_equal 0 [r phcard $empty_tree]
 
         assert_equal 1 [r copy $empty_tree $empty_copy]
-        assert_equal radix [r type $empty_copy]
+        assert_equal path-hash [r type $empty_copy]
         assert_equal 0 [r phcard $empty_copy]
 
         set dumped [r dump $empty_tree]
         assert_equal OK [r restore $empty_restored 0 $dumped]
-        assert_equal radix [r type $empty_restored]
+        assert_equal path-hash [r type $empty_restored]
         assert_equal 0 [r phcard $empty_restored]
 
         r debug reload
         foreach key [list $empty_tree $empty_copy $empty_restored] {
             assert_equal 1 [r exists $key]
-            assert_equal radix [r type $key]
+            assert_equal path-hash [r type $key]
             assert_equal 0 [r phcard $key]
             assert_equal {0 {}} [r phscan $key 0]
         }
@@ -534,7 +556,7 @@ start_server {tags {radix}} {
         r phset tree $binary_path fields 1 field $binary_value
         r pexpire tree 60000
         r debug reload
-        assert_equal radix [r type tree]
+        assert_equal path-hash [r type tree]
         assert_equal root-value [r phget tree {} root]
         assert_equal $binary_value [r phget tree $binary_path field]
         assert_equal 2 [r phcard tree]
@@ -595,7 +617,7 @@ start_server {tags {radix}} {
         set filename [lindex [r config get dbfilename] 1]
         set output [exec $::VALKEY_CHECK_RDB_BIN [file join $dir $filename] --stats --format info]
         assert_match {*RDB looks OK*} $output
-        assert_match {*radix*} $output
+        assert_match {*path-hash*} $output
     } {} {external:skip}
 }
 
@@ -615,7 +637,7 @@ start_server {tags {radix needs:debug} overrides {appendonly yes aof-use-rdb-pre
         assert_equal {{} v2} [r phget tree abc f1 f2]
         assert_equal v3 [r phget tree abcd child]
         assert_equal 1 [r exists empty-tree]
-        assert_equal radix [r type empty-tree]
+        assert_equal path-hash [r type empty-tree]
         assert_equal 0 [r phcard empty-tree]
     }
 }
@@ -646,7 +668,7 @@ start_server {tags {radix external:skip}} {
             assert_equal one [$replica phget tree a f]
             assert_equal {} [$replica phget tree ab f]
             assert_equal 1 [$replica exists empty-tree]
-            assert_equal radix [$replica type empty-tree]
+            assert_equal path-hash [$replica type empty-tree]
             assert_equal 0 [$replica phcard empty-tree]
         }
     }

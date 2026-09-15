@@ -1,13 +1,13 @@
 {
     "PHLONGEST": {
-        "summary": "Returns the longest stored radix path that prefixes a query.",
+        "summary": "Returns the longest stored path in a path hash that prefixes a query.",
         "complexity": "O(L + O).",
         "group": "path-hash",
         "since": "9.2.0",
         "arity": -3,
         "function": "phlongestCommand",
         "command_flags": ["READONLY"],
-        "acl_categories": ["RADIX", "READ", "SLOW"],
+        "acl_categories": ["PATH-HASH", "READ", "SLOW"],
         "key_specs": [{"flags": ["RO", "ACCESS"], "begin_search": {"index": {"pos": 1}}, "find_keys": {"range": {"lastkey": 0, "step": 1, "limit": 0}}}],
         "reply_schema": {
             "oneOf": [

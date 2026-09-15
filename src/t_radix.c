@@ -276,7 +276,7 @@ void phsetCommand(client *c) {
         payload = radixCreatePayload(radix, c->argv[2]);
         if (payload == NULL) {
             if (created_tree) decrRefCount(o);
-            addReplyError(c, "failed to allocate radix path");
+            addReplyError(c, "failed to allocate path-hash path");
             return;
         }
     }
@@ -314,7 +314,7 @@ void phmsetCommand(client *c) {
             payload = radixCreatePayload(radix, c->argv[argpos]);
             if (payload == NULL) {
                 if (created_tree) decrRefCount(o);
-                addReplyError(c, "failed to allocate radix path");
+                addReplyError(c, "failed to allocate path-hash path");
                 return;
             }
         }
@@ -587,7 +587,7 @@ void phdelprefixCommand(client *c) {
         if (deleted) {
             rax *empty = raxNew();
             if (empty == NULL) {
-                addReplyError(c, "failed to allocate empty radix tree");
+                addReplyError(c, "failed to allocate empty path hash");
                 return;
             }
             raxFreeWithCallback(radix->index, freeRadixPayload);

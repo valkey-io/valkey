@@ -1,13 +1,13 @@
 {
     "PHGET": {
-        "summary": "Returns one or more fields from an exact radix-tree path.",
+        "summary": "Returns one or more fields from an exact path in a path hash.",
         "complexity": "O(L + F*U).",
         "group": "path-hash",
         "since": "9.2.0",
         "arity": -4,
         "function": "phgetCommand",
         "command_flags": ["READONLY", "FAST"],
-        "acl_categories": ["RADIX", "READ", "FAST"],
+        "acl_categories": ["PATH-HASH", "READ", "FAST"],
         "key_specs": [{"flags": ["RO", "ACCESS"], "begin_search": {"index": {"pos": 1}}, "find_keys": {"range": {"lastkey": 0, "step": 1, "limit": 0}}}],
         "reply_schema": {"oneOf": [
             {"type": "string"},

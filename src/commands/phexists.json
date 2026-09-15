@@ -1,13 +1,13 @@
 {
     "PHEXISTS": {
-        "summary": "Tests whether an exact logical path exists in a radix tree.",
+        "summary": "Tests whether an exact logical path exists in a path hash.",
         "complexity": "O(L), where L is the path length.",
         "group": "path-hash",
         "since": "9.2.0",
         "arity": 3,
         "function": "phexistsCommand",
         "command_flags": ["READONLY", "FAST"],
-        "acl_categories": ["RADIX", "READ", "FAST"],
+        "acl_categories": ["PATH-HASH", "READ", "FAST"],
         "key_specs": [{
             "flags": ["RO", "ACCESS"],
             "begin_search": {"index": {"pos": 1}},

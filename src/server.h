@@ -2776,7 +2776,7 @@ typedef int *commandDbIdArgs(robj **argv, int argc, int *count);
  * See valkey.conf for the exact meaning of each.
  *
  * @keyspace, @read, @write, @set, @sortedset, @list, @hash, @string, @bitmap,
- * @hyperloglog, @stream, @radix, @admin, @fast, @slow, @pubsub, @blocking, @dangerous,
+ * @hyperloglog, @stream, @path-hash, @admin, @fast, @slow, @pubsub, @blocking, @dangerous,
  * @connection, @transaction, @scripting, @geo.
  *
  * Note that:

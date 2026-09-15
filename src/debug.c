@@ -1265,7 +1265,7 @@ void serverLogObjectDebugInfo(const robj *o) {
     } else if (objectGetType(o) == OBJ_STREAM) {
         serverLog(LL_WARNING, "Stream size: %d", (int)streamLength(o));
     } else if (objectGetType(o) == OBJ_RADIX) {
-        serverLog(LL_WARNING, "Radix path count: %llu",
+        serverLog(LL_WARNING, "Path hash path count: %llu",
                   (unsigned long long)raxSize(((radixObject *)objectGetVal(o))->index));
     }
 #endif

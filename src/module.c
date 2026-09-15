@@ -13758,7 +13758,8 @@ static int moduleInitPostOnLoadResolved(ModuleLoadFunc onload,
     }
 
     if (post_load_err) {
-        moduleUnload(ctx.module->name, NULL);
+        const char *unload_err = NULL;
+        moduleUnload(ctx.module->name, &unload_err);
         moduleFreeContext(&ctx);
         return C_ERR;
     }

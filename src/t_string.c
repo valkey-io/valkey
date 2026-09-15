@@ -34,6 +34,7 @@
 
 #include "server.h"
 #include <math.h> /* isnan(), isinf() */
+#include <float.h>
 
 /* Forward declarations */
 int getGenericCommand(client *c);
@@ -265,7 +266,7 @@ void setCommand(client *c) {
     int unit = UNIT_SECONDS;
     int flags = ARGS_NO_FLAGS;
 
-    if (parseExtendedCommandArgumentsOrReply(c, COMMAND_SET, 3, c->argc, &flags, &unit, NULL, &expire, &comparison, NULL) != C_OK) {
+    if (parseExtendedCommandArgumentsOrReply(c, COMMAND_SET, 3, c->argc, &flags, &unit, NULL, &expire, &comparison, NULL, NULL, NULL) != C_OK) {
         return;
     }
 
@@ -353,7 +354,7 @@ void getexCommand(client *c) {
     int unit = UNIT_SECONDS;
     int flags = ARGS_NO_FLAGS;
 
-    if (parseExtendedCommandArgumentsOrReply(c, COMMAND_GET, 2, c->argc, &flags, &unit, NULL, &expire, NULL, NULL) != C_OK) {
+    if (parseExtendedCommandArgumentsOrReply(c, COMMAND_GET, 2, c->argc, &flags, &unit, NULL, &expire, NULL, NULL, NULL, NULL) != C_OK) {
         return;
     }
 
@@ -635,7 +636,7 @@ void msetexCommand(client *c) {
         return;
     }
     if (parseExtendedCommandArgumentsOrReply(c, COMMAND_MSET, (int)args_start_idx, c->argc,
-                                             &flags, &unit, &expire_idx, &expire, NULL, NULL) != C_OK) {
+                                             &flags, &unit, &expire_idx, &expire, NULL, NULL, NULL, NULL) != C_OK) {
         return;
     }
 
@@ -801,24 +802,16 @@ void incrbyfloatCommand(client *c) {
 
 void increxCommand(client *c) {
     robj *expire = NULL;
-    robj *incr_obj = NULL; /* value token for BYINT/BYFLOAT, if present */
+    robj *incr_obj = NULL;   /* value token for BYINT/BYFLOAT, if present */
+    robj *lbound_obj = NULL; /* value token for LBOUND, if present */
+    robj *ubound_obj = NULL; /* value token for UBOUND, if present */
     int unit = UNIT_SECONDS;
     int flags = ARGS_NO_FLAGS;
     long long incr_ll = 1;
     long double incr_ld = 1.0L;
     int use_float = 0;
 
-    if (parseExtendedCommandArgumentsOrReply(c, COMMAND_INCREX, 2, c->argc, &flags, &unit, NULL, &expire, NULL, &incr_obj) != C_OK) {
-        return;
-    }
-
-    long long value_ll = 0, oldvalue_ll = 0, applied_ll = 0;
-    long double value_ld = 0, oldvalue_ld = 0, applied_ld = 0;
-    long long milliseconds = 0;
-    robj *o, *new;
-
-    if (expire &&
-        getExpireMillisecondsOrReply(c, expire, flags, unit, &milliseconds) != C_OK) {
+    if (parseExtendedCommandArgumentsOrReply(c, COMMAND_INCREX, 2, c->argc, &flags, &unit, NULL, &expire, NULL, &incr_obj, &lbound_obj, &ubound_obj) != C_OK) {
         return;
     }
 
@@ -830,8 +823,62 @@ void increxCommand(client *c) {
         if (getLongDoubleFromObjectOrReply(c, incr_obj, &incr_ld, "Increment is not a valid float") != C_OK) {
             return;
         }
+        if (isinf(incr_ld)) {
+            addReplyError(c, "BYFLOAT increment cannot be Infinity");
+            return;
+        }
         use_float = 1;
     }
+
+    long long lbound_ll = LLONG_MIN, ubound_ll = LLONG_MAX;
+    long double lbound_ld = -LDBL_MAX, ubound_ld = LDBL_MAX;
+
+    if (use_float) {
+        if (flags & ARGS_LBOUND) {
+            if (getLongDoubleFromObjectOrReply(c, lbound_obj, &lbound_ld, "LBOUND is not a valid float") != C_OK) {
+                return;
+            }
+        }
+        if (flags & ARGS_UBOUND) {
+            if (getLongDoubleFromObjectOrReply(c, ubound_obj, &ubound_ld, "UBOUND is not a valid float") != C_OK) {
+                return;
+            }
+        }
+        if (lbound_ld > ubound_ld) {
+            addReplyError(c, "LBOUND can't be greater than UBOUND");
+            return;
+        }
+    } else {
+        if (flags & ARGS_LBOUND) {
+            if (getLongLongFromObjectOrReply(c, lbound_obj, &lbound_ll, "LBOUND is not an integer or out of range") != C_OK) {
+                return;
+            }
+        }
+        if (flags & ARGS_UBOUND) {
+            if (getLongLongFromObjectOrReply(c, ubound_obj, &ubound_ll, "UBOUND is not an integer or out of range") != C_OK) {
+                return;
+            }
+        }
+        if (lbound_ll > ubound_ll) {
+            addReplyError(c, "LBOUND can't be greater than UBOUND");
+            return;
+        }
+    }
+
+    if ((flags & ARGS_ENX) && !(flags & (ARGS_EX | ARGS_PX | ARGS_EXAT | ARGS_PXAT))) {
+        addReplyError(c, "ENX flag requires an expiration");
+        return;
+    }
+
+    long long milliseconds = 0;
+    if (expire &&
+        getExpireMillisecondsOrReply(c, expire, flags, unit, &milliseconds) != C_OK) {
+        return;
+    }
+
+    long long value_ll = 0, oldvalue_ll = 0, applied_ll = 0;
+    long double value_ld = 0, oldvalue_ld = 0, applied_ld = 0;
+    robj *o, *new;
 
     o = lookupKeyWrite(c->db, c->argv[1]);
 
@@ -839,6 +886,10 @@ void increxCommand(client *c) {
         if (checkType(c, o, OBJ_STRING)) return;
         if (use_float) {
             if (getLongDoubleFromObjectOrReply(c, o, &oldvalue_ld, NULL) != C_OK) return;
+            if (isinf(oldvalue_ld)) {
+                addReplyError(c, "value cannot be Infinity");
+                return;
+            }
         } else {
             if (getLongLongFromObjectOrReply(c, o, &oldvalue_ll, NULL) != C_OK) return;
         }
@@ -871,44 +922,94 @@ void increxCommand(client *c) {
     }
 
     if (use_float) {
-        if (isinf(incr_ld)) {
-            addReplyError(c, "BYFLOAT increment cannot be Infinity");
-            return;
+        long double computed_ld = oldvalue_ld + incr_ld;
+
+        int out_of_bounds = 0;
+        int upper_violation = 0;
+        if (isinf(computed_ld)) {
+            out_of_bounds = 1;
+            upper_violation = (computed_ld > 0);
+        } else if ((flags & ARGS_UBOUND) && computed_ld > ubound_ld) {
+            out_of_bounds = 1;
+            upper_violation = 1;
+        } else if ((flags & ARGS_LBOUND) && computed_ld < lbound_ld) {
+            out_of_bounds = 1;
+            upper_violation = 0;
         }
-        if (isinf(oldvalue_ld)) {
-            addReplyError(c, "value cannot be Infinity");
-            return;
+
+        if (out_of_bounds) {
+            if (flags & ARGS_SATURATE) {
+                value_ld = upper_violation ? ubound_ld : lbound_ld;
+                applied_ld = value_ld - oldvalue_ld;
+                if (isinf(value_ld) || isinf(applied_ld)) {
+                    addReplyError(c, "applied increment would be Infinity");
+                    return;
+                }
+            } else {
+                addReplyArrayLen(c, 2);
+                addReplyHumanLongDouble(c, oldvalue_ld);
+                addReplyHumanLongDouble(c, 0);
+                return;
+            }
+        } else {
+            value_ld = computed_ld;
+            applied_ld = value_ld - oldvalue_ld;
         }
-        value_ld = oldvalue_ld + incr_ld;
-        if (isnan(value_ld)) {
-            addReplyError(c, "Increment is not a valid float");
-            return;
-        }
-        if (isinf(value_ld)) {
-            addReplyArrayLen(c, 2);
-            addReplyHumanLongDouble(c, oldvalue_ld);
-            addReplyHumanLongDouble(c, 0);
-            return;
-        }
-        /* Float accuracy may cause applied to differ from requested. */
-        applied_ld = value_ld - oldvalue_ld;
     } else {
-        value_ll = oldvalue_ll;
-        if ((incr_ll < 0 && value_ll < 0 && incr_ll < (LLONG_MIN - value_ll)) ||
-            (incr_ll > 0 && value_ll > 0 && incr_ll > (LLONG_MAX - value_ll))) {
-            addReplyArrayLen(c, 2);
-            addReplyLongLong(c, value_ll);
-            addReplyLongLong(c, 0);
-            return;
+        int out_of_bounds = 0;
+        int upper_violation = 0;
+        long long computed_ll = 0;
+
+        if (incr_ll > 0 && oldvalue_ll > 0 && incr_ll > (LLONG_MAX - oldvalue_ll)) {
+            out_of_bounds = 1;
+            upper_violation = 1;
+        } else if (incr_ll < 0 && oldvalue_ll < 0 && incr_ll < (LLONG_MIN - oldvalue_ll)) {
+            out_of_bounds = 1;
+            upper_violation = 0;
+        } else {
+            computed_ll = oldvalue_ll + incr_ll;
+            if ((flags & ARGS_UBOUND) && computed_ll > ubound_ll) {
+                out_of_bounds = 1;
+                upper_violation = 1;
+            } else if ((flags & ARGS_LBOUND) && computed_ll < lbound_ll) {
+                out_of_bounds = 1;
+                upper_violation = 0;
+            }
         }
-        value_ll += incr_ll;
-        applied_ll = value_ll - oldvalue_ll;
+
+        if (out_of_bounds) {
+            if (flags & ARGS_SATURATE) {
+                value_ll = upper_violation ? ubound_ll : lbound_ll;
+                if ((oldvalue_ll < 0 && value_ll > LLONG_MAX + oldvalue_ll) ||
+                    (oldvalue_ll > 0 && value_ll < LLONG_MIN + oldvalue_ll)) {
+                    addReplyError(c, "applied increment would overflow");
+                    return;
+                }
+                applied_ll = value_ll - oldvalue_ll;
+            } else {
+                addReplyArrayLen(c, 2);
+                addReplyLongLong(c, oldvalue_ll);
+                addReplyLongLong(c, 0);
+                return;
+            }
+        } else {
+            value_ll = computed_ll;
+            applied_ll = value_ll - oldvalue_ll;
+        }
+    }
+
+    /* Check if expiration should be applied considering ENX */
+    int apply_expire = (expire != NULL);
+    if (apply_expire && (flags & ARGS_ENX)) {
+        if (o != NULL && getExpire(c->db, c->argv[1]) != -1) {
+            apply_expire = 0;
+        }
     }
 
     /* If the `milliseconds` have expired, then we don't need to set it into the
      * database, and then wait for the active expire to delete it, it is wasteful.
      * If the key already exists, delete it. */
-    if (expire && checkAlreadyExpired(milliseconds)) {
+    if (apply_expire && checkAlreadyExpired(milliseconds)) {
         if (o) deleteExpiredKeyFromOverwriteAndPropagate(c, c->argv[1]);
         addReplyArrayLen(c, 2);
         if (use_float) {
@@ -939,18 +1040,18 @@ void increxCommand(client *c) {
     notifyKeyspaceEvent(NOTIFY_STRING, use_float ? "incrbyfloat" : "incrby", c->argv[1], c->db->id);
     server.dirty++;
 
-    if (expire) {
+    if (apply_expire) {
         new = setExpire(c, c->db, c->argv[1], milliseconds);
         robj *milliseconds_obj = createStringObjectFromLongLong(milliseconds);
         rewriteClientCommandVector(c, 5, shared.set, c->argv[1], new, shared.pxat, milliseconds_obj);
         decrRefCount(milliseconds_obj);
         notifyKeyspaceEvent(NOTIFY_GENERIC, "expire", c->argv[1], c->db->id);
-    } else if (use_float) {
-        /* BYFLOAT with no expire still needs rewriting to SET for
-         * deterministic replication - reuse `new`, the exact object
-         * that was stored, rather than re-deriving the string from
-         * value_ld a second time (which risks formatting drift
-         * between what the master stored and what it propagates). */
+    } else if (flags & ARGS_PERSIST) {
+        if (removeExpire(c->db, c->argv[1])) {
+            notifyKeyspaceEvent(NOTIFY_GENERIC, "persist", c->argv[1], c->db->id);
+        }
+        rewriteClientCommandVector(c, 3, shared.set, c->argv[1], new);
+    } else {
         rewriteClientCommandVector(c, 4, shared.set, c->argv[1], new, shared.keepttl);
     }
 

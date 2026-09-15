@@ -534,6 +534,340 @@ start_server {tags {"incr"}} {
         }
     }
 
+    test {INCREX LBOUND and UBOUND in integer mode} {
+        r set k 10
+        assert_equal {15 5} [r increx k byint 5 ubound 20]
+        assert_equal 15 [r get k]
+
+        r set k 10
+        assert_equal {15 5} [r increx k byint 5 ubound 15]
+        assert_equal 15 [r get k]
+
+        # Exceeds UBOUND without SATURATE: declined
+        r set k 10
+        assert_equal {10 0} [r increx k byint 5 ubound 12]
+        assert_equal 10 [r get k]
+
+        r set k 10
+        assert_equal {10 0} [r increx k byint 5 ubound 10]
+        assert_equal 10 [r get k]
+
+        r set k 10
+        assert_equal {10 0} [r increx k byint 5 ubound 5]
+        assert_equal 10 [r get k]
+
+        # Bound constrains result, not direction
+        r set k 10
+        assert_equal {5 -5} [r increx k byint -5 ubound 5]
+        assert_equal 5 [r get k]
+
+        r set k 10
+        assert_equal {5 -5} [r increx k byint -5 lbound 0]
+        assert_equal 5 [r get k]
+
+        r set k 10
+        assert_equal {5 -5} [r increx k byint -5 lbound 5]
+        assert_equal 5 [r get k]
+
+        # Exceeds LBOUND without SATURATE: declined
+        r set k 10
+        assert_equal {10 0} [r increx k byint -5 lbound 8]
+        assert_equal 10 [r get k]
+
+        r set k 10
+        assert_equal {10 0} [r increx k byint 5 lbound 20]
+        assert_equal 10 [r get k]
+
+        # Both bounds specified
+        r set k 10
+        assert_equal {15 5} [r increx k byint 5 lbound 0 ubound 20]
+        assert_equal 15 [r get k]
+
+        # LBOUND == UBOUND
+        r set k 10
+        assert_equal {10 0} [r increx k byint 5 lbound 10 ubound 10]
+        assert_equal 10 [r get k]
+    }
+
+    test {INCREX SATURATE clamps to bound} {
+        r set k 10
+        assert_equal {12 2} [r increx k byint 5 ubound 12 saturate]
+        assert_equal 12 [r get k]
+
+        r set k 10
+        assert_equal {10 0} [r increx k byint 5 ubound 10 saturate]
+        assert_equal 10 [r get k]
+
+        # Clamps to bound even when moving opposite to requested increment!
+        r set k 10
+        assert_equal {5 -5} [r increx k byint 5 ubound 5 saturate]
+        assert_equal 5 [r get k]
+
+        r set k 10
+        assert_equal {8 -2} [r increx k byint -5 lbound 8 saturate]
+        assert_equal 8 [r get k]
+
+        r set k 10
+        assert_equal {20 10} [r increx k byint -5 lbound 20 saturate]
+        assert_equal 20 [r get k]
+
+        r set k 10
+        assert_equal {10 0} [r increx k byint 5 lbound 10 ubound 10 saturate]
+        assert_equal 10 [r get k]
+
+        # SATURATE with no bounds is plain increment
+        r set k 10
+        assert_equal {15 5} [r increx k byint 5 saturate]
+        assert_equal 15 [r get k]
+        assert_equal {16 1} [r increx k saturate]
+        assert_equal 16 [r get k]
+
+        # SATURATE on integer overflow/underflow clamps to type limits or bounds
+        r set k 9223372036854775807
+        assert_equal {9223372036854775807 0} [r increx k byint 1 saturate]
+        assert_equal {9223372036854775807 0} [r increx k byint 1 ubound 9223372036854775807 saturate]
+
+        r set k [expr {9223372036854775807 - 7}]
+        assert_equal {9223372036854775807 7} [r increx k byint 10 saturate]
+        assert_equal 9223372036854775807 [r get k]
+
+        r set k 10
+        assert_equal {100 90} [r increx k byint 9223372036854775807 ubound 100 saturate]
+        assert_equal 100 [r get k]
+
+        # Integer overflow with UBOUND but without SATURATE is declined
+        r set k 10
+        assert_equal {10 0} [r increx k byint 9223372036854775807 ubound 100]
+        assert_equal 10 [r get k]
+
+        r set k [expr {-9223372036854775808 + 7}]
+        assert_equal {-9223372036854775808 -7} [r increx k byint -10 saturate]
+        assert_equal -9223372036854775808 [r get k]
+
+        r set k -10
+        assert_equal {-100 -90} [r increx k byint -9223372036854775807 lbound -100 saturate]
+        assert_equal -100 [r get k]
+
+        r set k -10
+        assert_equal {-10 0} [r increx k byint -9223372036854775807 lbound -100]
+        assert_equal -10 [r get k]
+    }
+
+    test {INCREX LBOUND, UBOUND, SATURATE in float mode} {
+        r set k 10
+        assert_equal {12.5 2.5} [r increx k byfloat 2.5 lbound 5.0 ubound 15.0]
+        assert_equal 12.5 [r get k]
+
+        # Out of bounds without SATURATE: declined
+        r set k 10
+        assert_equal {10 0} [r increx k byfloat 5.5 ubound 12.5]
+        assert_equal 10 [r get k]
+
+        # SATURATE clamps in float mode
+        r set k 10
+        assert_equal {12.5 2.5} [r increx k byfloat 5.5 ubound 12.5 saturate]
+        assert_equal 12.5 [r get k]
+
+        r set k 10
+        assert_equal {8 -2} [r increx k byfloat -6.0 lbound 8.0 saturate]
+        assert_equal 8 [r get k]
+
+        # Float overflow with UBOUND and SATURATE
+        r set k 10
+        assert_equal {100 90} [r increx k byfloat 1e4932 ubound 100 saturate]
+        assert_equal 100 [r get k]
+
+        # Float overflow with UBOUND without SATURATE: declined
+        r set k 10
+        assert_equal {10 0} [r increx k byfloat 1e4932 ubound 100]
+        assert_equal 10 [r get k]
+
+        # Float underflow with LBOUND and SATURATE
+        r set k 10
+        assert_equal {-100 -110} [r increx k byfloat -1e4932 lbound -100 saturate]
+        assert_equal -100 [r get k]
+
+        # Float underflow with LBOUND without SATURATE: declined
+        r set k 10
+        assert_equal {10 0} [r increx k byfloat -1e4932 lbound -100]
+        assert_equal 10 [r get k]
+
+        # Float overflow with SATURATE and no bounds saturates to type limit
+        r set k 10
+        set res [r increx k byfloat 1e4932 saturate]
+        assert_equal [r get k] [lindex $res 0]
+    }
+
+    test {INCREX bounds on missing key: creation depends on SATURATE} {
+        r del k
+        assert_equal {1 1} [r increx k ubound 5]
+        assert_equal 1 [r exists k]
+        assert_equal 1 [r get k]
+
+        r del k
+        assert_equal {0 0} [r increx k ubound 0]
+        assert_equal 0 [r exists k]
+
+        r del k
+        assert_equal {0 0} [r increx k ubound 0 saturate]
+        assert_equal 1 [r exists k]
+        assert_equal 0 [r get k]
+
+        r del k
+        assert_equal {0 0} [r increx k lbound 5]
+        assert_equal 0 [r exists k]
+
+        r del k
+        assert_equal {5 5} [r increx k lbound 5 saturate]
+        assert_equal 1 [r exists k]
+        assert_equal 5 [r get k]
+    }
+
+    test {INCREX bounds with expiration} {
+        # Bound-declined does not apply TTL
+        r set k 10
+        assert_equal {10 0} [r increx k byint 5 ubound 5 ex 100]
+        assert_equal -1 [r ttl k]
+
+        r set k 10 ex 500
+        assert_equal {10 0} [r increx k byint 5 ubound 5 ex 100]
+        assert_range [r ttl k] 400 500
+
+        # Saturated success applies TTL
+        r set k 10
+        assert_equal {12 2} [r increx k byint 5 ubound 12 saturate ex 100]
+        assert_range [r ttl k] 1 100
+    }
+
+    test {INCREX bound validation errors} {
+        r set k 10
+        assert_error "*ERR LBOUND can't be greater than UBOUND*" {r increx k byint 5 lbound 20 ubound 0}
+        assert_error "*ERR LBOUND can't be greater than UBOUND*" {r increx k byint 5 lbound 20 ubound 0 saturate}
+        assert_error "*ERR LBOUND can't be greater than UBOUND*" {r increx k byfloat 1.0 lbound 20.0 ubound 0.0}
+
+        assert_error "*ERR UBOUND is not an integer or out of range*" {r increx k byint 5 ubound 12.5}
+        assert_error "*ERR UBOUND is not an integer or out of range*" {r increx k ubound abc}
+        assert_error "*ERR LBOUND is not an integer or out of range*" {r increx k lbound abc}
+
+        assert_error "*ERR UBOUND is not a valid float*" {r increx k byfloat 1.0 ubound abc}
+        assert_error "*ERR LBOUND is not a valid float*" {r increx k byfloat 1.0 lbound abc}
+
+        # Fractional bound is valid in float mode
+        assert_equal {11 1} [r increx k byfloat 1.0 lbound 0.5 ubound 15.5]
+
+        # Missing bound value is a syntax error
+        assert_error "*ERR syntax error*" {r increx k lbound}
+        assert_error "*ERR syntax error*" {r increx k ubound}
+
+        # Inf bounds validation
+        assert_error "*ERR LBOUND can't be greater than UBOUND*" {r increx k byfloat 1.0 ubound -inf}
+        assert_error "*ERR LBOUND can't be greater than UBOUND*" {r increx k byfloat 1.0 lbound inf}
+        assert_error "*ERR LBOUND can't be greater than UBOUND*" {r increx k byfloat 1.0 lbound +inf}
+        assert_error "*ERR LBOUND can't be greater than UBOUND*" {r increx k byfloat 1.0 lbound inf ubound -inf}
+        r set k 10
+        assert_equal {11 1} [r increx k byfloat 1.0 ubound inf]
+        r set k 10
+        assert_equal {11 1} [r increx k byfloat 1.0 ubound +inf]
+        r set k 10
+        assert_equal {11 1} [r increx k byfloat 1.0 lbound -inf]
+        r set k 10
+        assert_equal {10 0} [r increx k byfloat 1.0 lbound -inf ubound -inf]
+        r set k 10
+        assert_equal {10 0} [r increx k byfloat 1.0 lbound inf ubound inf]
+
+        # Integer mode rejects inf for bounds
+        assert_error "*ERR UBOUND is not an integer or out of range*" {r increx k ubound inf}
+        assert_error "*ERR LBOUND is not an integer or out of range*" {r increx k lbound inf}
+    }
+
+    test {INCREX applied delta overflow errors} {
+        r set k 9223372036854775807
+        assert_error "*ERR applied increment would overflow*" {r increx k byint -5 ubound -9223372036854775808 saturate}
+
+        r set k -1e4932
+        assert_error "*ERR applied increment would be Infinity*" {r increx k byfloat 1e4932 lbound 1e4932 saturate}
+
+        r set k 10
+        assert_error "*ERR applied increment would be Infinity*" {r increx k byfloat 1.0 lbound -inf ubound -inf saturate}
+        assert_error "*ERR applied increment would be Infinity*" {r increx k byfloat 1.0 lbound inf ubound inf saturate}
+    }
+
+    test {INCREX PERSIST option} {
+        # Removes TTL on existing key with TTL
+        r set k 10 ex 500
+        assert_equal {11 1} [r increx k persist]
+        assert_equal -1 [r ttl k]
+        assert_equal 11 [r get k]
+
+        # Key without TTL remains persisted
+        r set k 10
+        assert_equal {11 1} [r increx k persist]
+        assert_equal -1 [r ttl k]
+
+        # Absent key created with no TTL
+        r del k
+        assert_equal {1 1} [r increx k persist]
+        assert_equal -1 [r ttl k]
+        assert_equal 1 [r get k]
+
+        # Overflow declined preserves existing TTL
+        r set k 9223372036854775807 ex 500
+        assert_equal {9223372036854775807 0} [r increx k byint 1 persist]
+        assert_range [r ttl k] 400 500
+
+        # Bound declined preserves existing TTL
+        r set k 10 ex 500
+        assert_equal {10 0} [r increx k byint 5 ubound 5 persist]
+        assert_range [r ttl k] 400 500
+
+        # PERSIST is mutually exclusive with expiration options and ENX
+        assert_error "*ERR syntax error*" {r increx k ex 10 persist}
+        assert_error "*ERR syntax error*" {r increx k persist ex 10}
+        assert_error "*ERR syntax error*" {r increx k persist enx}
+        assert_error "*ERR syntax error*" {r increx k enx persist}
+    }
+
+    test {INCREX ENX option} {
+        r set k 10
+        assert_error "*ERR ENX flag requires an expiration*" {r increx k enx}
+
+        # Key without TTL: expiration is applied
+        r set k 10
+        assert_equal {11 1} [r increx k ex 100 enx]
+        assert_range [r ttl k] 1 100
+
+        # Key WITH TTL: increment applied, existing TTL preserved
+        r set k 10 ex 500
+        assert_equal {11 1} [r increx k ex 100 enx]
+        assert_range [r ttl k] 400 500
+
+        # Key WITH TTL: PX expiration preserved
+        r set k 10 ex 500
+        assert_equal {11 1} [r increx k px 100000 enx]
+        assert_range [r ttl k] 400 500
+
+        # Absent key: expiration is applied
+        r del k
+        assert_equal {1 1} [r increx k ex 100 enx]
+        assert_range [r ttl k] 1 100
+
+        # Past EXAT on key without TTL deletes key
+        r set k 10
+        assert_equal {11 1} [r increx k exat 100 enx]
+        assert_equal 0 [r exists k]
+
+        # Past EXAT on key WITH TTL keeps key and preserves TTL
+        r set k 10 ex 500
+        assert_equal {11 1} [r increx k exat 100 enx]
+        assert_equal 1 [r exists k]
+        assert_range [r ttl k] 400 500
+
+        # Overflow declined does not apply expiration
+        r set k 9223372036854775807
+        assert_equal {9223372036854775807 0} [r increx k byint 1 ex 100 enx]
+        assert_equal -1 [r ttl k]
+    }
+
     test {INCRBY INCRBYFLOAT DECRBY against unhappy path} {
         r del mykeyincr
         assert_error "*ERR wrong number of arguments*" {r incr mykeyincr v}

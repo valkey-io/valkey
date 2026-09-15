@@ -1529,6 +1529,11 @@ int vsnprintf_async_signal_safe(char *to, size_t size, const char *format, va_li
 
         format = check_longlong_async_signal_safe(format, &have_longlong);
 
+        /* A malformed trailing conversion (e.g. "%", "%l" or "%ll" at the end
+         * of the format) leaves us on the terminating NUL. Stop here, otherwise
+         * the loop's ++format would step past the end of the string. */
+        if (*format == '\0') break;
+
         switch (*format) {
         case 'd':
         case 'i':

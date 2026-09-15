@@ -1,0 +1,19 @@
+{
+    "PHGETALL": {
+        "summary": "Returns all field-value pairs at an exact path in a path hash.",
+        "complexity": "O(L + O).",
+        "group": "path-hash",
+        "since": "9.2.0",
+        "arity": 3,
+        "function": "phgetallCommand",
+        "command_flags": ["READONLY"],
+        "acl_categories": ["PATH-HASH", "READ", "SLOW"],
+        "command_tips": ["NONDETERMINISTIC_OUTPUT_ORDER"],
+        "key_specs": [{"flags": ["RO", "ACCESS"], "begin_search": {"index": {"pos": 1}}, "find_keys": {"range": {"lastkey": 0, "step": 1, "limit": 0}}}],
+        "reply_schema": {"description": "Field/value pairs stored at the path: a map in RESP3 or a flat array in RESP2. A missing key or path returns an empty map in RESP3 or an empty array in RESP2. Field order is unspecified.", "type": "object", "additionalProperties": {"type": "string"}},
+        "arguments": [
+            {"name": "key", "type": "key", "key_spec_index": 0},
+            {"name": "path", "type": "string"}
+        ]
+    }
+}

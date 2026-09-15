@@ -1,0 +1,47 @@
+{
+    "PHSCAN": {
+        "summary": "Incrementally traverses paths in a path hash in lexicographic order.",
+        "complexity": "O(L + C + O) per call.",
+        "group": "path-hash",
+        "since": "9.2.0",
+        "arity": -3,
+        "function": "phscanCommand",
+        "command_flags": ["READONLY"],
+        "acl_categories": ["PATH-HASH", "READ", "SLOW"],
+        "key_specs": [{"flags": ["RO", "ACCESS"], "begin_search": {"index": {"pos": 1}}, "find_keys": {"range": {"lastkey": 0, "step": 1, "limit": 0}}}],
+        "reply_schema": {
+            "description": "Opaque cursor and path-hash entries.",
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 2,
+            "items": [
+                {"description": "The next opaque cursor, or 0 when complete.", "type": "string"},
+                {
+                    "description": "Paths, optionally paired with their field-value payloads.",
+                    "type": "array",
+                    "items": {
+                        "oneOf": [
+                            {"type": "string"},
+                            {
+                                "type": "array",
+                                "minItems": 2,
+                                "maxItems": 2,
+                                "items": [
+                                    {"type": "string"},
+                                    {"description": "The field/value payload: a map in RESP3 or a flat array in RESP2. Field order is unspecified.", "type": "object", "additionalProperties": {"type": "string"}}
+                                ]
+                            }
+                        ]
+                    }
+                }
+            ]
+        },
+        "arguments": [
+            {"name": "key", "type": "key", "key_spec_index": 0},
+            {"name": "cursor", "type": "string"},
+            {"name": "prefix", "type": "string", "token": "PREFIX", "optional": true},
+            {"name": "count", "type": "integer", "token": "COUNT", "optional": true},
+            {"name": "withvalues", "type": "pure-token", "token": "WITHVALUES", "optional": true}
+        ]
+    }
+}

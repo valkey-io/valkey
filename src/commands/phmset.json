@@ -1,0 +1,31 @@
+{
+    "PHMSET": {
+        "summary": "Atomically sets fields across multiple paths in a path hash.",
+        "complexity": "O(sum(L) + M*U), where M is the total number of fields across all path groups.",
+        "group": "path-hash",
+        "since": "9.2.0",
+        "arity": -7,
+        "function": "phmsetCommand",
+        "command_flags": ["WRITE", "DENYOOM", "FAST"],
+        "acl_categories": ["PATH-HASH", "WRITE", "FAST"],
+        "key_specs": [{
+            "flags": ["RW", "UPDATE"],
+            "begin_search": {"index": {"pos": 1}},
+            "find_keys": {"range": {"lastkey": 0, "step": 1, "limit": 0}}
+        }],
+        "reply_schema": {"const": "OK"},
+        "arguments": [
+            {"name": "key", "type": "key", "key_spec_index": 0},
+            {"name": "data", "type": "block", "multiple": true, "arguments": [
+                {"name": "path", "type": "string"},
+                {"name": "fields", "type": "block", "token": "FIELDS", "arguments": [
+                    {"name": "numfields", "type": "integer", "minimum": 1},
+                    {"name": "data", "type": "block", "multiple": true, "arguments": [
+                        {"name": "field", "type": "string"},
+                        {"name": "value", "type": "string"}
+                    ]}
+                ]}
+            ]}
+        ]
+    }
+}

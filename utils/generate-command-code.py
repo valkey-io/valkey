@@ -38,6 +38,7 @@ GROUPS = {
     "geo": "COMMAND_GROUP_GEO",
     "stream": "COMMAND_GROUP_STREAM",
     "bitmap": "COMMAND_GROUP_BITMAP",
+    "path-hash": "COMMAND_GROUP_PATH_HASH",
 }
 
 
@@ -508,6 +509,9 @@ class Command(object):
         def _acl_categories_code():
             s = ""
             for cat in self.desc.get("acl_categories", []):
+                # The public Path Hash category retains its internal radix identifier.
+                if cat == "PATH-HASH":
+                    cat = "RADIX"
                 s += "ACL_CATEGORY_%s|" % cat
             return s[:-1] if s else 0
 
@@ -716,6 +720,7 @@ const char *COMMAND_GROUP_STR[] = {
     "geo",
     "stream",
     "bitmap",
+    "path-hash",
     "module"
 };
 

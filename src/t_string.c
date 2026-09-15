@@ -827,10 +827,6 @@ void increxCommand(client *c) {
             addReplyError(c, "BYFLOAT increment cannot be Infinity");
             return;
         }
-        if (isnan(incr_ld)) {
-            addReplyError(c, "Increment is not a valid float");
-            return;
-        }
         use_float = 1;
     }
 
@@ -842,17 +838,9 @@ void increxCommand(client *c) {
             if (getLongDoubleFromObjectOrReply(c, lbound_obj, &lbound_ld, "LBOUND is not a valid float") != C_OK) {
                 return;
             }
-            if (isnan(lbound_ld)) {
-                addReplyError(c, "LBOUND is not a valid float");
-                return;
-            }
         }
         if (flags & ARGS_UBOUND) {
             if (getLongDoubleFromObjectOrReply(c, ubound_obj, &ubound_ld, "UBOUND is not a valid float") != C_OK) {
-                return;
-            }
-            if (isnan(ubound_ld)) {
-                addReplyError(c, "UBOUND is not a valid float");
                 return;
             }
         }
@@ -935,10 +923,6 @@ void increxCommand(client *c) {
 
     if (use_float) {
         long double computed_ld = oldvalue_ld + incr_ld;
-        if (isnan(computed_ld)) {
-            addReplyError(c, "Increment is not a valid float");
-            return;
-        }
 
         int out_of_bounds = 0;
         int upper_violation = 0;

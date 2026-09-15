@@ -125,7 +125,8 @@ start_server {tags {radix}} {
     }
 
     test {PHPREFIXES validates COUNT and MAXLEN against the server long range} {
-        r del tree missing
+        r del tree
+        r del missing
         foreach path {{} a ab} {
             r phset tree $path fields 1 f v
         }
@@ -392,7 +393,8 @@ start_server {tags {radix}} {
     }
 
     test {RESP2 and RESP3 encode all PH payloads and field selections consistently} {
-        r del tree missing
+        r del tree
+        r del missing
         r phset tree a fields 1 f1 v1
         foreach protocol {2 3} {
             r hello $protocol

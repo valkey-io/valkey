@@ -106,6 +106,51 @@ start_server {tags {"acl external:skip"}} {
         assert_match "*NOPERM*key*" $err
     }
 
+    test {EXEC conditions require read permission} {
+        r ACL SETUSER exec-condition-write-only on nopass %W~write* +@all
+        r set writecondition value
+        r del writelist
+        $r2 auth exec-condition-write-only password
+
+        $r2 multi
+        $r2 lpush writelist value
+        catch {$r2 exec ifeq writecondition value} err
+        assert_match "*NOPERM*key*" $err
+
+        $r2 multi
+        $r2 lpush writelist value
+        catch {$r2 exec ifne writecondition other} err
+        assert_match "*NOPERM*key*" $err
+
+        $r2 multi
+        $r2 lpush writelist value
+        catch {$r2 exec nx writecondition} err
+        assert_match "*NOPERM*key*" $err
+
+        $r2 multi
+        $r2 lpush writelist value
+        catch {$r2 exec xx writecondition} err
+        assert_match "*NOPERM*key*" $err
+
+        $r2 multi
+        $r2 lpush writelist value
+        assert_error "EXECABORT*invalid check condition syntax*" {$r2 exec ifeq writecondition other invalid}
+        assert_equal 0 [r llen writelist]
+    }
+
+    test {EXEC condition keys check permissions on the active database} {
+        r ACL SETUSER exec-db-selector-user on nopass (db=1 +@all ~*) (db=0 +@all ~public*)
+        r select 0
+        r set secret secret-value
+        $r2 auth exec-db-selector-user password
+        $r2 select 0
+        $r2 multi
+        $r2 select 1
+        catch {$r2 exec ifeq secret guessed-value} err
+        assert_match "*NOPERM*key*" $err
+        r del secret
+    }
+
     test {Test separate read and write permissions} {
         r ACL SETUSER key-permission-RW on nopass %R~read* %W~write* +@all
         $r2 auth key-permission-RW password

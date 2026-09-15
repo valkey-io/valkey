@@ -32,9 +32,10 @@
 #define VALKEY_CONNECTION_H
 
 #include <errno.h>
+#include <stdbool.h>
 #include <stdio.h>
-#include <string.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/uio.h>
 
 #include "ae.h"
@@ -61,9 +62,20 @@ typedef enum {
     CONN_STATE_ERROR
 } ConnectionState;
 
-#define CONN_FLAG_CLOSE_SCHEDULED (1 << 0)      /* Closed scheduled by a handler */
-#define CONN_FLAG_WRITE_BARRIER (1 << 1)        /* Write barrier requested */
-#define CONN_FLAG_ALLOW_ACCEPT_OFFLOAD (1 << 2) /* Connection accept can be offloaded to IO threads. */
+/* Identifies the type of owner stored in conn->private_data.
+ * Used by connection-layer safety assertions to avoid unsafe casts. */
+typedef enum {
+    CONN_OWNER_CLIENT = 0,   /* private_data points to a client (default) */
+    CONN_OWNER_CLUSTER_LINK, /* private_data points to a clusterLink */
+} ConnectionOwnerKind;
+
+#define CONN_FLAG_CLOSE_SCHEDULED (1 << 0)        /* Closed scheduled by a handler */
+#define CONN_FLAG_WRITE_BARRIER (1 << 1)          /* Write barrier requested */
+#define CONN_FLAG_ALLOW_ACCEPT_OFFLOAD (1 << 2)   /* Connection accept can be offloaded to IO threads. */
+#define CONN_FLAG_ACCEPT_OFFLOAD_PENDING (1 << 3) /* Accept offload job is currently in flight. */
+#define CONN_FLAG_POSTPONE_UPDATE_STATE (1 << 4)  /* Connection update state is postponed by IO threads   \
+                                                   * to prevent main thread event loop races while worker \
+                                                   * threads access the socket buffers. */
 
 #define CONN_POSTPONE_READ (1 << 0)
 #define CONN_POSTPONE_WRITE (1 << 1)
@@ -160,7 +172,8 @@ typedef struct ConnectionType {
     struct user *(*get_peer_user)(connection *conn, sds *cert_username);
 
     /* Miscellaneous */
-    int (*connIntegrityChecked)(void); // return 1 if connection type has built-in integrity checks
+    int (*connIntegrityChecked)(void);   // return 1 if connection type has built-in integrity checks
+    int (*is_closing)(connection *conn); // return 1 if connection is closed
 } ConnectionType;
 
 struct connection {
@@ -171,6 +184,8 @@ struct connection {
     short int flags;
     short int refs;
     unsigned short int iovcnt;
+    bool is_priority; /* true if connection is prioritized for QoS */
+    ConnectionOwnerKind owner_kind;
     void *private_data;
     ConnectionCallbackFunc conn_handler;
     ConnectionCallbackFunc write_handler;
@@ -272,8 +287,7 @@ static inline int connWritev(connection *conn, const struct iovec *iov, int iovc
  * connGetState() to see if the connection state is still CONN_STATE_CONNECTED.
  */
 static inline int connRead(connection *conn, void *buf, size_t buf_len) {
-    int ret = conn->type->read(conn, buf, buf_len);
-    return ret;
+    return conn->type->read(conn, buf, buf_len);
 }
 
 /* Register a write handler, to be called when the connection is writable.
@@ -397,6 +411,15 @@ static inline int connHasReadHandler(connection *conn) {
     return conn->read_handler != NULL;
 }
 
+/* Check if the remote side has closed the connection. */
+static inline int connIsClosing(connection *conn) {
+    if (!conn->type->is_closing) return 0;
+    return conn->type->is_closing(conn);
+}
+
+/* Shared is_closing implementation for TCP socket-based connections. */
+int connTcpSocketIsClosing(connection *conn);
+
 /* Associate a private data pointer with the connection */
 static inline void connSetPrivateData(connection *conn, void *data) {
     conn->private_data = data;
@@ -405,6 +428,16 @@ static inline void connSetPrivateData(connection *conn, void *data) {
 /* Get the associated private data pointer */
 static inline void *connGetPrivateData(connection *conn) {
     return conn->private_data;
+}
+
+/* Set the owner kind for the connection */
+static inline void connSetOwnerKind(connection *conn, ConnectionOwnerKind kind) {
+    conn->owner_kind = kind;
+}
+
+/* Get the owner kind for the connection */
+static inline ConnectionOwnerKind connGetOwnerKind(connection *conn) {
+    return conn->owner_kind;
 }
 
 /* Return a text that describes the connection, suitable for inclusion
@@ -508,6 +541,16 @@ static inline aeFileProc *connAcceptHandler(ConnectionType *ct) {
 /* Get Listeners information, note that caller should free the non-empty string */
 sds getListensInfoString(sds info);
 
+/* Connection QoS / Priority. */
+int connSetPriority(connection *conn, bool is_priority);
+static inline bool connIsPriority(const connection *conn) {
+    return conn && conn->is_priority;
+}
+
+/* Get AE priority flag for a connection. */
+static inline int connGetAEPriorityFlag(const connection *conn) {
+    return (conn && conn->is_priority) ? AE_HIGH_PRIORITY : AE_NONE;
+}
 int RedisRegisterConnectionTypeSocket(void);
 int RedisRegisterConnectionTypeUnix(void);
 int RedisRegisterConnectionTypeTLS(void);
@@ -525,8 +568,14 @@ static inline void connUpdateState(connection *conn) {
 }
 
 static inline void connSetPostponeUpdateState(connection *conn, int postpone_mask) {
-    if (conn && conn->type && conn->type->postpone_update_state) {
-        conn->type->postpone_update_state(conn, postpone_mask);
+    if (conn) {
+        if (postpone_mask)
+            conn->flags |= CONN_FLAG_POSTPONE_UPDATE_STATE;
+        else
+            conn->flags &= ~CONN_FLAG_POSTPONE_UPDATE_STATE;
+        if (conn->type && conn->type->postpone_update_state) {
+            conn->type->postpone_update_state(conn, postpone_mask);
+        }
     }
 }
 

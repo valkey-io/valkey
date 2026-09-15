@@ -48,7 +48,6 @@ static const void *uncommittedKeyEntryGetKey(const void *entry);
 static void uncommittedKeyEntryDestructor(void *entry);
 static void handleDirtyDatabase(client *c, serverDb *db);
 static bool swapdbGetParams(robj **argv, int argc, int *id1_p, int *id2_p);
-static bool getDbIdFromRobj(robj *obj, int *db_id);
 
 /*================================= Hashtable Type =========================== */
 
@@ -203,11 +202,15 @@ void trackBackgroundModifiedKey(serverDb *db, robj *key) {
     }
 }
 
+bool hasBackgroundModifiedKeys(void) {
+    return background_modified_keys != NULL && listLength(background_modified_keys) != 0;
+}
+
 /* Apply the final replication offset to keys dirtied by background writes in
  * the execution unit that just completed, then clear the set. Called from
  * postExecutionUnitOperations() after propagation, so the offset is final. */
 void drainBackgroundModifiedKeys(long long offset) {
-    if (background_modified_keys == NULL || listLength(background_modified_keys) == 0) return;
+    if (!hasBackgroundModifiedKeys()) return;
 
     listIter li;
     listNode *ln;
@@ -287,33 +290,6 @@ static bool swapdbGetParams(robj **argv, int argc, int *id1_p, int *id2_p) {
 
     *id1_p = (int)dbid1;
     *id2_p = (int)dbid2;
-    return true;
-}
-
-static bool getDbIdFromRobj(robj *obj, int *db_id) {
-    if ((getIntFromObject(obj, db_id) != C_OK) || (*db_id < 0) || (*db_id >= server.dbnum)) {
-        return false;
-    }
-    return true;
-}
-
-bool getTargetDbIdForCopyCommand(int argc, robj **argv, int selected_dbid, int *target_dbid) {
-    const int copy_command_optional_arg_start_index = 3;
-
-    *target_dbid = selected_dbid;
-
-    for (int j = copy_command_optional_arg_start_index; j < argc; j++) {
-        if (!strcasecmp(objectGetVal(argv[j]), "replace")) {
-            continue;
-        } else if (!strcasecmp(objectGetVal(argv[j]), "db") && (argc > j + 1)) {
-            if (!getDbIdFromRobj(argv[j + 1], target_dbid)) {
-                return false;
-            }
-            j++;
-        } else {
-            return false;
-        }
-    }
     return true;
 }
 

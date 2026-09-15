@@ -24,6 +24,7 @@ typedef enum {
 #define COMMAND_HGET 2
 #define COMMAND_HSET 3
 #define COMMAND_MSET 4
+#define COMMAND_INCREX 5
 
 /* Command flags. Please check the definition of struct serverCommand in this file
  * for more information about the meaning of every flag. */
@@ -57,7 +58,8 @@ typedef enum {
 #define CMD_MODULE_GETCHANNELS (1ULL << 27) /* Use the modules getchannels interface. */
 #define CMD_TOUCHES_ARBITRARY_KEYS (1ULL << 28)
 #define CMD_ALL_DBS (1ULL << 29)
-#define CMD_KEYSPACE_GLOBAL (1ULL << 30) /* Command reads/scans the entire keyspace with no key argument, so its result depends on any uncommitted write. Set this so reply-blocking holds the reply on the global replication offset. */
+#define CMD_WRITE_FIRSTKEY_ONLY (1ULL << 30)
+#define CMD_KEYSPACE_GLOBAL (1ULL << 31) /* Command reads/scans the entire keyspace with no key argument, so its result depends on any uncommitted write. Set this so reply-blocking holds the reply on the global replication offset. */
 /* Command flags. Please don't forget to add command flag documentation in struct
  * serverCommand in server.h file. */
 

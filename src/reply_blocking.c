@@ -1,6 +1,7 @@
 #include "server.h"
 #include "zmalloc.h"
 #include "script.h"
+#include "bgiteration.h"
 #include <assert.h>
 #include <stdatomic.h>
 

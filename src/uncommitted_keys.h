@@ -29,6 +29,10 @@ void handleUncommittedKeyForClient(const struct client *c, struct serverObject *
  * callsite. drainBackgroundModifiedKeys() applies the real offset later. */
 void trackBackgroundModifiedKey(struct serverDb *db, struct serverObject *key);
 
+/* True when background-modified keys are waiting for drainBackgroundModifiedKeys().
+ * Used by the post-execution-unit pending-work gate so the drain is never skipped. */
+bool hasBackgroundModifiedKeys(void);
+
 /* Apply the final replication offset to keys dirtied by background writes in
  * the just-completed execution unit. Called from postExecutionUnitOperations(). */
 void drainBackgroundModifiedKeys(long long offset);
@@ -72,9 +76,5 @@ void uncommittedKeysCleanupPending(void);
 
 // Determine if there are uncommitted keys in the server.
 int hasUncommittedKeys(void);
-
-/*================================= Command parameter helpers ================ */
-
-bool getTargetDbIdForCopyCommand(int argc, struct serverObject **argv, int selected_dbid, int *target_dbid);
 
 #endif /* UNCOMMITTED_KEYS_H */

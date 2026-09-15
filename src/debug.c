@@ -1031,7 +1031,7 @@ void debugCommand(client *c) {
             addReplyVerbatim(c, buf, strlen(buf), "txt");
         } else {
             addReplyError(c, "The value stored at the specified key is not "
-                             "represented using an hash table");
+                             "represented using a hash table");
         }
     } else if (!strcasecmp(objectGetVal(c->argv[1]), "change-repl-id") && c->argc == 2) {
         serverLog(LL_NOTICE, "Changing replication IDs after receiving DEBUG change-repl-id");

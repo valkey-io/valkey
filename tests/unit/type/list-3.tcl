@@ -93,7 +93,7 @@ start_server {
         r ping
     }
 
-    test {LINSERT correctly recompress full quicklistNode after inserting a element before it} {
+    test {LINSERT correctly recompress full quicklistNode after inserting an element before it} {
         r del key
         config_set list-compress-depth 1
         r rpush key b
@@ -106,7 +106,7 @@ start_server {
         r ping
     }
 
-    test {LINSERT correctly recompress full quicklistNode after inserting a element after it} {
+    test {LINSERT correctly recompress full quicklistNode after inserting an element after it} {
         r del key
         config_set list-compress-depth 1
         r rpush key b

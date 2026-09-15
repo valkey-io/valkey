@@ -592,7 +592,7 @@ void subscribeCommand(client *c) {
     if (c->flag.deny_blocking && !c->flag.multi) {
         /**
          * A client that has CLIENT_DENY_BLOCKING flag on
-         * expect a reply per command and so can not execute subscribe.
+         * expect a reply per command and so cannot execute subscribe.
          *
          * Notice that we have a special treatment for multi because of
          * backward compatibility
@@ -626,7 +626,7 @@ void psubscribeCommand(client *c) {
     if (c->flag.deny_blocking && !c->flag.multi) {
         /**
          * A client that has CLIENT_DENY_BLOCKING flag on
-         * expect a reply per command and so can not execute subscribe.
+         * expect a reply per command and so cannot execute subscribe.
          *
          * Notice that we have a special treatment for multi because of
          * backward compatibility
@@ -767,7 +767,7 @@ void spublishCommand(client *c) {
 void ssubscribeCommand(client *c) {
     if (c->flag.deny_blocking) {
         /* A client that has CLIENT_DENY_BLOCKING flag on
-         * expect a reply per command and so can not execute subscribe. */
+         * expect a reply per command and so cannot execute subscribe. */
         addReplyError(c, "SSUBSCRIBE isn't allowed for a DENY BLOCKING client");
         return;
     }

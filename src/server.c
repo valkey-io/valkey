@@ -7930,7 +7930,7 @@ __attribute__((weak)) int main(int argc, char **argv) {
 #ifdef INIT_SETPROCTITLE_REPLACEMENT
     spt_init(argc, argv);
 #endif
-    tzset(); /* Populates 'timezone' global. */
+    tzset(); /* Apply TZ so localtime_r() sees the configured zone. */
     zmalloc_set_oom_handler(serverOutOfMemoryHandler);
 #if defined(HAVE_DEFRAG)
     int res = allocatorDefragInit();

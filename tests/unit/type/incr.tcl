@@ -673,28 +673,29 @@ start_server {tags {"incr"}} {
         assert_equal 8 [r get k]
 
         # Float overflow with UBOUND and SATURATE
+        set big [ldbl_overflow_operand]
         r set k 10
-        assert_equal {100 90} [r increx k byfloat 1e4932 ubound 100 saturate]
+        assert_equal {100 90} [r increx k byfloat $big ubound 100 saturate]
         assert_equal 100 [r get k]
 
         # Float overflow with UBOUND without SATURATE: declined
         r set k 10
-        assert_equal {10 0} [r increx k byfloat 1e4932 ubound 100]
+        assert_equal {10 0} [r increx k byfloat $big ubound 100]
         assert_equal 10 [r get k]
 
         # Float underflow with LBOUND and SATURATE
         r set k 10
-        assert_equal {-100 -110} [r increx k byfloat -1e4932 lbound -100 saturate]
+        assert_equal {-100 -110} [r increx k byfloat -$big lbound -100 saturate]
         assert_equal -100 [r get k]
 
         # Float underflow with LBOUND without SATURATE: declined
         r set k 10
-        assert_equal {10 0} [r increx k byfloat -1e4932 lbound -100]
+        assert_equal {10 0} [r increx k byfloat -$big lbound -100]
         assert_equal 10 [r get k]
 
         # Float overflow with SATURATE and no bounds saturates to type limit
-        r set k 10
-        set res [r increx k byfloat 1e4932 saturate]
+        r set k $big
+        set res [r increx k byfloat $big saturate]
         assert_equal [r get k] [lindex $res 0]
     }
 
@@ -784,8 +785,9 @@ start_server {tags {"incr"}} {
         r set k 9223372036854775807
         assert_error "*ERR applied increment would overflow*" {r increx k byint -5 ubound -9223372036854775808 saturate}
 
-        r set k -1e4932
-        assert_error "*ERR applied increment would be Infinity*" {r increx k byfloat 1e4932 lbound 1e4932 saturate}
+        set big [ldbl_overflow_operand]
+        r set k -$big
+        assert_error "*ERR applied increment would be Infinity*" {r increx k byfloat $big lbound $big saturate}
 
         r set k 10
         assert_error "*ERR applied increment would be Infinity*" {r increx k byfloat 1.0 lbound -inf ubound -inf saturate}

@@ -2304,6 +2304,7 @@ struct valkeyServer {
     int priority_subnets_count;                 /* Count of compiled priority subnets */
     unsigned long long maxmemory;               /* Max number of memory bytes to use */
     ssize_t maxmemory_clients;                  /* Memory limit for total client buffers */
+    ssize_t maxmemory_scripts;                  /* Memory limit for cached EVAL scripts */
     int maxmemory_policy;                       /* Policy for key eviction */
     int maxmemory_samples;                      /* Precision of random sampling */
     int maxmemory_eviction_tenacity;            /* Aggressiveness of eviction processing */
@@ -4031,8 +4032,10 @@ void freeEvalScriptsAsync(dict *scripts, list *scripts_lru_list, list *engine_ca
 void freeFunctionsAsync(functionsLibCtx *lib_ctx, list *engine_callbacks);
 void sha1hex(char *digest, char *script, size_t len);
 unsigned long evalMemory(void);
-dict *evalScriptsDict(void);
-unsigned long evalScriptsMemory(void);
+dict *evalCtxScriptsDict(void);
+unsigned long scriptsMemoryOverhead(void);
+unsigned long evalScriptsMemoryOverhead(void);
+void startScriptsEvictionTimeProc(void);
 uint64_t evalGetCommandFlags(client *c, uint64_t orig_flags);
 uint64_t fcallGetCommandFlags(client *c, uint64_t orig_flags);
 int isInsideYieldingLongCommand(void);

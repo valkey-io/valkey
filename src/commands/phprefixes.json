@@ -23,8 +23,8 @@
                         "items": [
                             {"oneOf": [{"type": "string"}, {"type": "integer"}]},
                             {"oneOf": [
-                                {"description": "The field/value payload when WITHVALUES is used. In RESP2 this is returned as a flat array.", "type": "object", "additionalProperties": {"type": "string"}},
-                                {"description": "The values aligned to the requested field order when FIELDS is used.", "type": "array", "items": {"oneOf": [{"type": "string"}, {"type": "null"}]}}
+                                {"description": "The field/value payload when WITHVALUES is used: a map in RESP3 or a flat array in RESP2. Field order is unspecified.", "type": "object", "additionalProperties": {"type": "string"}},
+                                {"description": "The values aligned to the requested field order when FIELDS is used: an array in both RESP2 and RESP3, with null for each missing field.", "type": "array", "items": {"oneOf": [{"type": "string"}, {"type": "null"}]}}
                             ]}
                         ]
                     }
@@ -42,8 +42,8 @@
                     {"name": "field", "type": "string", "multiple": true}
                 ]}
             ]},
-            {"name": "count", "type": "integer", "token": "COUNT", "optional": true},
-            {"name": "max-path-bytes", "type": "integer", "token": "MAXLEN", "optional": true}
+            {"name": "count", "summary": "Hard limit on the number of deepest matches, from 1 to LONG_MAX of the server build. Out-of-range values return an error.", "type": "integer", "token": "COUNT", "optional": true},
+            {"name": "max-path-bytes", "summary": "Maximum path length in bytes, from 0 to LONG_MAX of the server build, applied before COUNT. Out-of-range values return an error.", "type": "integer", "token": "MAXLEN", "optional": true}
         ]
     }
 }

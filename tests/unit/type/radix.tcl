@@ -124,6 +124,40 @@ start_server {tags {radix}} {
         assert_equal [list {}] [r phprefixes tree zzz]
     }
 
+    test {PHPREFIXES validates COUNT and MAXLEN against the server long range} {
+        r del tree missing
+        foreach path {{} a ab} {
+            r phset tree $path fields 1 f v
+        }
+        set long_max [expr {(1 << ([s arch_bits] - 1)) - 1}]
+        foreach option {count maxlen} {
+            assert_equal {0 1 2} [r phprefixes tree abc lengths $option $long_max]
+            foreach value [list -1 [expr {$long_max + 1}] 9223372036854775808] {
+                foreach key {tree missing} {
+                    assert_error ERR*range* {r phprefixes $key abc $option $value}
+                }
+            }
+            foreach value {1.5 invalid} {
+                assert_error ERR*integer* {r phprefixes tree abc $option $value}
+            }
+            # These values must not wrap to zero or a smaller limit on 32-bit builds.
+            foreach value {2147483648 4294967295 4294967296 4294967297} {
+                if {$value > $long_max} {
+                    assert_error ERR*range* {r phprefixes tree abc $option $value}
+                } else {
+                    assert_equal {0 1 2} [r phprefixes tree abc lengths $option $value]
+                }
+            }
+            assert_error ERR*syntax* {r phprefixes tree abc $option 1 $option 2}
+            assert_error ERR*syntax* {r phprefixes tree abc $option}
+        }
+        assert_error ERR*range* {r phprefixes tree abc count 0}
+        assert_equal {2} [r phprefixes tree abc lengths count 1]
+        assert_equal {0} [r phprefixes tree abc lengths maxlen 0]
+        assert_equal {0 1 2} [r phprefixes tree abc lengths]
+        assert_equal PONG [r ping]
+    }
+
     test {Prefix matching and subtree deletion are binary safe} {
         r del tree
         set p0 [binary format H* 00]
@@ -294,8 +328,8 @@ start_server {tags {radix}} {
         assert_error ERR*range* {r phlongest tree p fields 0}
         assert_error ERR*syntax* {r phprefixes tree p length}
         assert_error ERR*range* {r phprefixes tree p fields 0}
-        assert_error ERR*greater*zero* {r phprefixes tree p count 0}
-        assert_error ERR*non-negative* {r phprefixes tree p maxlen -1}
+        assert_error ERR*value*out*range* {r phprefixes tree p count 0}
+        assert_error ERR*value*out*range* {r phprefixes tree p maxlen -1}
         assert_error ERR*syntax* {r phprefixes tree p fields 2 only-one}
         assert_error ERR*invalid*cursor* {r phscan tree invalid}
         assert_error ERR*syntax* {r phscan tree 0 count 1 count 2}
@@ -335,31 +369,45 @@ start_server {tags {radix}} {
         r hello 2
     }
 
-    test {RESP3 replies payloads as maps and field selections as arrays} {
-        r del tree
+    test {RESP2 and RESP3 encode all PH payloads and field selections consistently} {
+        r del tree missing
         r phset tree a fields 1 f1 v1
-        r hello 3
-        r readraw 1
-        r deferred 1
-        r phgetall tree a
-        assert_equal [r read] {%1}
-        foreach _ {1 2 3 4} { r read }
-        r phgetall tree missing
-        assert_equal [r read] {%0}
-        r phlongest tree a withvalues
-        assert_equal [r read] {*2}
-        assert_equal [r read] {$1}
-        assert_equal [r read] {a}
-        assert_equal [r read] {%1}
-        foreach _ {1 2 3 4} { r read }
-        r phlongest tree a fields 1 f1
-        assert_equal [r read] {*2}
-        assert_equal [r read] {$1}
-        assert_equal [r read] {a}
-        assert_equal [r read] {*1}
-        foreach _ {1 2} { r read }
-        r readraw 0
-        r deferred 0
+        foreach protocol {2 3} {
+            r hello $protocol
+            set payload [list {*2} {$2} f1 {$2} v1]
+            set empty {*0}
+            set null {$-1}
+            if {$protocol == 3} {
+                lset payload 0 {%1}
+                set empty {%0}
+                set null {_}
+            }
+            set match [concat [list {*2} {$1} a] $payload]
+            set fields [list {*2} {$1} a {*2} {$2} v1 $null]
+            r readraw 1
+            r deferred 1
+            foreach {command expected} [list \
+                {phgetall tree a} $payload \
+                {phgetall tree missing} [list $empty] \
+                {phgetall missing a} [list $empty] \
+                {phlongest tree a withvalues} $match \
+                {phlongest tree a length withvalues} [concat [list {*2} {:1}] $payload] \
+                {phprefixes tree a withvalues} [concat [list {*1}] $match] \
+                {phprefixes tree a lengths withvalues} [concat [list {*1} {*2} {:1}] $payload] \
+                {phscan tree 0 withvalues} [concat [list {*2} {$1} 0 {*1}] $match] \
+                {phlongest tree a fields 2 f1 missing} $fields \
+                {phprefixes tree a fields 2 f1 missing} [concat [list {*1}] $fields] \
+                {phlongest tree z withvalues} [list $null] \
+                {phprefixes tree z withvalues} [list {*0}] \
+                {phscan missing 0 withvalues} [list {*2} {$1} 0 {*0}]] {
+                r {*}$command
+                foreach line $expected {
+                    assert_equal $line [r read]
+                }
+            }
+            r readraw 0
+            r deferred 0
+        }
         if {$::force_resp3} {
             r hello 3
         } else {

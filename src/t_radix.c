@@ -420,8 +420,8 @@ static int radixParseMatchOptions(client *c,
                                   radixValueMode *value_mode,
                                   robj ***fields,
                                   long *numfields,
-                                  long long *count,
-                                  long long *maxlen) {
+                                  long *count,
+                                  long *maxlen) {
     *reply_mode = RADIX_REPLY_PATH;
     *value_mode = RADIX_VALUES_NONE;
     *fields = NULL;
@@ -451,19 +451,13 @@ static int radixParseMatchOptions(client *c,
             i += 2 + field_count;
         } else if (allow_limits && !strcasecmp(arg, "count")) {
             if (*count != -1 || i + 1 >= c->argc) goto syntax;
-            if (getLongLongFromObjectOrReply(c, c->argv[i + 1], count, NULL) != C_OK) return C_ERR;
-            if (*count <= 0) {
-                addReplyError(c, "COUNT must be greater than zero");
+            if (getRangeLongFromObjectOrReply(c, c->argv[i + 1], 1, LONG_MAX, count, NULL) != C_OK)
                 return C_ERR;
-            }
             i += 2;
         } else if (allow_limits && !strcasecmp(arg, "maxlen")) {
             if (*maxlen != -1 || i + 1 >= c->argc) goto syntax;
-            if (getLongLongFromObjectOrReply(c, c->argv[i + 1], maxlen, NULL) != C_OK) return C_ERR;
-            if (*maxlen < 0) {
-                addReplyError(c, "MAXLEN must be non-negative");
+            if (getRangeLongFromObjectOrReply(c, c->argv[i + 1], 0, LONG_MAX, maxlen, NULL) != C_OK)
                 return C_ERR;
-            }
             i += 2;
         } else {
             goto syntax;
@@ -481,7 +475,7 @@ void phlongestCommand(client *c) {
     radixValueMode value_mode;
     robj **fields;
     long numfields;
-    long long count, maxlen;
+    long count, maxlen;
     if (radixParseMatchOptions(c, 3, 0, 0, &reply_mode, &value_mode, &fields, &numfields, &count, &maxlen) !=
         C_OK)
         return;
@@ -534,7 +528,7 @@ void phprefixesCommand(client *c) {
     radixValueMode value_mode;
     robj **fields;
     long numfields;
-    long long count, maxlen;
+    long count, maxlen;
     if (radixParseMatchOptions(c, 3, 1, 1, &reply_mode, &value_mode, &fields, &numfields, &count, &maxlen) !=
         C_OK)
         return;

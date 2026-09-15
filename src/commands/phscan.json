@@ -28,7 +28,7 @@
                                 "maxItems": 2,
                                 "items": [
                                     {"type": "string"},
-                                    {"description": "The field/value payload. In RESP2 this is returned as a flat array.", "type": "object", "additionalProperties": {"type": "string"}}
+                                    {"description": "The field/value payload: a map in RESP3 or a flat array in RESP2. Field order is unspecified.", "type": "object", "additionalProperties": {"type": "string"}}
                                 ]
                             }
                         ]

@@ -1925,6 +1925,90 @@ start_server {
         }
     }
 
+    start_server {tags {"external:skip"}} {
+        set master [srv -1 client]
+        set master_host [srv -1 host]
+        set master_port [srv -1 port]
+        set replica [srv 0 client]
+
+        $replica replicaof $master_host $master_port
+        wait_for_condition 50 100 {
+            [s 0 master_link_status] eq {up}
+        } else {
+            fail "Replication not started."
+        }
+
+        test {XNACK propagates individual XNACK commands with RETRYCOUNT + FORCE} {
+            $master DEL stream
+            $master XADD stream 1-0 f v
+            $master XADD stream 2-0 f v
+            $master XGROUP CREATE stream grp 0
+            $master XREADGROUP GROUP grp alice COUNT 2 STREAMS stream >
+            wait_for_ofs_sync $master $replica
+
+            set xnack_before [get_replica_calls $replica xnack]
+
+            # Create client where we can catch the XNACK on replica
+            set rd [valkey_deferring_client 0]
+            $rd MONITOR
+            assert_match {*OK*} [$rd read]
+
+            # Run the XNACK on master without RETRYCOUNT/FORCE
+            assert_equal 2 [$master XNACK stream grp FAIL IDS 3 1-0 2-0 3-0]
+            wait_for_ofs_sync $master $replica
+
+            # Read the replicated XNACK (skipping unrelated lines)
+            set line ""
+            for {set i 0} {$i < 20} {incr i} {
+                set line [$rd read]
+                if {[string match {*XNACK*} $line]} break
+            }
+            assert_match {*"XNACK"*"RETRYCOUNT" "1" "FORCE"*} $line
+            $rd close
+
+            assert_equal 2 [expr {[get_replica_calls $replica xnack] - $xnack_before}]
+
+            # Check replicated state
+            set pend [$replica XPENDING stream grp - + 1]
+            assert_equal 1 [lindex $pend 0 3]
+        }
+    }
+
+    start_server {tags {"stream needs:debug"} overrides {appendonly yes aof-use-rdb-preamble no appendfsync always}} {
+        test {XNACK propagated PEL state survives AOF reload} {
+            r DEL mystream
+            r XADD mystream 1-0 f v
+            r XADD mystream 2-0 f v
+            r XGROUP CREATE mystream mygroup 0
+            # Only 1-0 is delivered into the PEL; 2-0 exists but was never read
+            r XREADGROUP GROUP mygroup cnsmr COUNT 1 STREAMS mystream ">"
+
+            # Distinct delivery counts via RETRYCOUNT; FORCE creates 2-0's
+            # PEL entry. Each NACK is propagated to the AOF as an absolute
+            # XNACK ... RETRYCOUNT <n> FORCE command.
+            assert_equal 1 [r XNACK mystream mygroup FAIL IDS 1 1-0 RETRYCOUNT 7]
+            assert_equal 1 [r XNACK mystream mygroup FAIL IDS 1 2-0 RETRYCOUNT 42 FORCE]
+
+            set pend [r XPENDING mystream mygroup - + 10]
+            assert_equal 2 [llength $pend]
+            assert_equal 7 [lindex $pend 0 3]
+            assert_equal 42 [lindex $pend 1 3]
+
+            # Replaying the AOF re-executes the propagated XNACK commands,
+            # restoring the PEL entries, consumers and delivery counts
+            r debug loadaof
+
+            set pend [r XPENDING mystream mygroup - + 10]
+            assert_equal 2 [llength $pend]
+            assert_equal 1-0 [lindex $pend 0 0]
+            assert_equal cnsmr [lindex $pend 0 1]
+            assert_equal 7 [lindex $pend 0 3]
+            assert_equal 2-0 [lindex $pend 1 0]
+            assert_equal {} [lindex $pend 1 1] ;# recreated via FORCE: dummy consumer
+            assert_equal 42 [lindex $pend 1 3]
+        }
+    }
+
     start_server {tags {"stream needs:debug"} overrides {appendonly yes aof-use-rdb-preamble no}} {
         test {Empty stream with no lastid can be rewrite into AOF correctly} {
             r XGROUP CREATE mystream group-name $ MKSTREAM

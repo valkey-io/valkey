@@ -236,12 +236,6 @@ void linkClient(client *c) {
     c->client_list_node = listLast(server.clients);
     uint64_t id = htonu64(c->id);
     raxInsert(server.clients_index, (unsigned char *)&id, sizeof(id), c, NULL);
-
-    /* Increment active client counters. These counters are paired with decrements
-     * in unlinkClient() and track connected clients in the global active clients list. */
-    if (connIsPriority(c->conn)) {
-        server.stat_num_active_priority_clients++;
-    }
 }
 
 /* Initialize client authentication state. */
@@ -1980,17 +1974,35 @@ static void reclassifyClientsPriority(void) {
         client *c = listNodeValue(ln);
         if (!c->conn) continue;
 
+        int type = getClientType(c);
+        /* Outbound system connections do not participate in inbound priority admission. */
+        if (type == CLIENT_TYPE_PRIMARY || type == CLIENT_TYPE_SLOT_EXPORT) {
+            continue;
+        }
+
         char ip[CONN_ADDR_STR_LEN];
         int port = 0;
         if (connAddrPeerName(c->conn, ip, sizeof(ip), &port) != C_OK) {
-            connSetPriority(c->conn, false);
+            c->flag.priority_source = 0;
+            /* Demote only normal and pubsub clients; system connections retain transport priority. */
+            if (type == CLIENT_TYPE_NORMAL || type == CLIENT_TYPE_PUBSUB) {
+                connSetPriority(c->conn, false);
+            }
             continue;
         }
 
         bool is_prio = (server.priority_subnets_count > 0 &&
                         anetMatchIpSubnet(ip, server.priority_subnets_array, server.priority_subnets_count));
-        connSetPriority(c->conn, is_prio);
-        if (is_prio) count++;
+        c->flag.priority_source = is_prio;
+        if (is_prio) {
+            connSetPriority(c->conn, true);
+            count++;
+        } else {
+            /* Demote only normal and pubsub clients; system connections (e.g. replicas) retain transport priority. */
+            if (type == CLIENT_TYPE_NORMAL || type == CLIENT_TYPE_PUBSUB) {
+                connSetPriority(c->conn, false);
+            }
+        }
     }
 
     server.stat_num_active_priority_clients = count;
@@ -2107,6 +2119,14 @@ void acceptCommonHandler(connection *conn, struct ClientFlags flags, char *ip) {
         return;
     }
 
+    /* Record priority status for connections admitted via priority-subnets.
+     * This flag ensures exact 1:1 symmetry for stat_num_active_priority_clients
+     * during reclassification and on disconnection in unlinkClient(). */
+    if (is_prioritized) {
+        c->flag.priority_source = 1;
+        server.stat_num_active_priority_clients++;
+    }
+
     /* Last chance to keep flags */
     if (flags.unix_socket) c->flag.unix_socket = 1;
 
@@ -2203,10 +2223,8 @@ void unlinkClient(client *c) {
             listDelNode(server.clients, c->client_list_node);
             c->client_list_node = NULL;
 
-            /* Decrement active client counters. Fake clients (where c->conn is NULL)
-             * and unlinked clients (c->client_list_node is NULL) do not increment these
-             * counters on creation, so we only decrement here for linked, active connections. */
-            if (connIsPriority(c->conn)) {
+            /* Decrement active priority client counter if admitted via priority-subnets. */
+            if (c->flag.priority_source) {
                 if (server.stat_num_active_priority_clients > 0) {
                     server.stat_num_active_priority_clients--;
                 }

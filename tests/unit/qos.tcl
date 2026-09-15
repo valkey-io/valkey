@@ -755,5 +755,106 @@ start_server {tags {"qos external:skip"}} {
     }
 }
 
+start_server {tags {"qos external:skip cluster:skip needs:repl"}} {
+    test {CONFIG SET priority-subnets does not demote replication link (Issue #4674)} {
+        set primary [srv 0 client]
+        set primary_host [srv 0 host]
+        set primary_port [srv 0 port]
+
+        start_server {} {
+            set replica [srv 0 client]
+
+            $replica replicaof $primary_host $primary_port
+            wait_for_condition 50 100 {
+                [string match "*role:slave*master_link_status:up*" [$replica info replication]]
+            } else {
+                fail "Can't turn the instance into a replica"
+            }
+
+            # On primary server, verify that the replica client has flags=H
+            assert_match "*flags=*H*" [$primary client list flags H]
+
+            # Change priority-subnets on primary to a subnet that does NOT include the replica
+            $primary config set priority-subnets "192.0.2.0/24"
+
+            # Issue #4674: Re-verify that replica connection STILL has flags=H (not demoted)
+            assert_match "*flags=*H*" [$primary client list flags H]
+
+            # Verify connected_priority_clients on primary is 0 (replica is not a subnet priority client)
+            assert_match "*connected_priority_clients:0*" [$primary info clients]
+
+            # Verify connected_priority_clients on replica is 0 (primary link is not a subnet priority client)
+            assert_match "*connected_priority_clients:0*" [$replica info clients]
+
+            # Clear priority-subnets dynamically
+            $primary config set priority-subnets ""
+
+            # Re-verify flags=H is still preserved
+            assert_match "*flags=*H*" [$primary client list flags H]
+        }
+    }
+
+    test {Replication link included in priority-subnets preserves high priority and updates client stats} {
+        set primary [srv 0 client]
+        set primary_host [srv 0 host]
+        set primary_port [srv 0 port]
+
+        start_server {} {
+            set replica [srv 0 client]
+
+            $replica replicaof $primary_host $primary_port
+            wait_for_condition 50 100 {
+                [string match "*role:slave*master_link_status:up*" [$replica info replication]]
+            } else {
+                fail "Can't turn the instance into a replica"
+            }
+
+            # Find replica IP from primary's client list
+            set replica_ip ""
+            foreach line [split [$primary client list] "\n"] {
+                if {[string match "*flags=*S*" $line] || [string match "*cmd=psync*" $line] || [string match "*cmd=sync*" $line]} {
+                    if {[regexp {addr=([^ ]+)} $line -> my_addr]} {
+                        if {[string match "*\[*" $my_addr]} {
+                            regexp {\[([^\]]+)\]} $my_addr -> replica_ip
+                        } else {
+                            set replica_ip [lindex [split $my_addr ":"] 0]
+                        }
+                        break
+                    }
+                }
+            }
+            if {$replica_ip eq ""} {
+                set replica_ip "127.0.0.1"
+            }
+            set mask [expr {[string match "*:*" $replica_ip] ? 128 : 32}]
+            set replica_subnet "$replica_ip/$mask"
+
+            # Reconfigure priority-subnets on primary to INCLUDE the replica's subnet
+            $primary config set priority-subnets $replica_subnet
+
+            # Both the test client ($primary) and the replica connection originate from this subnet
+            assert_match "*flags=*H*" [$primary client list flags H]
+            assert_match "*connected_priority_clients:2*" [$primary info clients]
+
+            # Reconfigure priority-subnets to a subnet that does NOT include the replica
+            $primary config set priority-subnets "192.0.2.0/24"
+
+            # Replica still retains high priority flags, but priority client count is now 0
+            assert_match "*flags=*H*" [$primary client list flags H]
+            assert_match "*connected_priority_clients:0*" [$primary info clients]
+
+            # Reconfigure priority-subnets BACK to include replica's subnet
+            $primary config set priority-subnets $replica_subnet
+            assert_match "*flags=*H*" [$primary client list flags H]
+            assert_match "*connected_priority_clients:2*" [$primary info clients]
+
+            # Clear priority-subnets completely
+            $primary config set priority-subnets ""
+            assert_match "*flags=*H*" [$primary client list flags H]
+            assert_match "*connected_priority_clients:0*" [$primary info clients]
+        }
+    }
+}
+
 
 

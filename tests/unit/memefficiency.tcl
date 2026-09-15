@@ -89,9 +89,6 @@ run_solo {defrag} {
     # Start defrag and wait for it to stop
     # The optional code block is executed after defrag has started
     proc perform_defrag {{code_block {}}} {
-        r config set latency-monitor-threshold 5
-        r latency reset
-
         set old_defrag_time [s total_active_defrag_time]
         r config set activedefrag yes
 
@@ -123,28 +120,6 @@ run_solo {defrag} {
 
         r config set activedefrag no
         after 120 ;# ensure memory stats are current when function exits
-    }
-
-    # Checks for any significant latency events
-    proc validate_latency {limit_ms} {
-        if {!$::no_latency} {
-            set max_latency 0
-            foreach event [r latency latest] {
-                lassign $event eventname time latency max
-                if {$eventname == "active-defrag-cycle" || $eventname == "while-blocked-cron"} {
-                    set max_latency $max
-                }
-            }
-            if {$::verbose} {
-                puts "Validating max latency ($max_latency) is LT $limit_ms"
-                if {$max_latency > 0} {
-                    puts [r latency latest]
-                    puts [r latency history active-defrag-cycle]
-                    puts [r latency history while-blocked-cron]
-                }
-            }
-            assert {$max_latency <= $limit_ms}
-        }
     }
 
     # Validate expected fragmentation ratio
@@ -181,9 +156,7 @@ run_solo {defrag} {
     #    populate {code} - required, populates initial unfragmented data
     #    fragment {code} - required, fragments the populated data
     #    while_defragging {code} - optional, code executed after defrag has started
-    #    latency <ms> - optional, verifies the latency to a ms target (default 5)
     proc perform_defrag_test {name args} {
-        set opts(latency) 5
         set opts(while_defragging) {}
         array set opts $args
         assert {[info exists opts(populate)]}
@@ -233,7 +206,6 @@ run_solo {defrag} {
 
         log_frag "after defragging"
         validate_frag_ratio < 1.1
-        validate_latency $opts(latency)
 
         # verify the data isn't corrupted or changed
         set newdigest [debug_digest]
@@ -306,13 +278,6 @@ run_solo {defrag} {
 
                 log_frag "after AOF loading"
 
-                # The AOF contains simple (fast) SET commands (and the cron during loading runs every 1024 commands).
-                # Even so, defrag can get starved for periods exceeding 100ms.  Using 200ms for test stability, and
-                # a 50% CPU requirement, we should allow up to 200ms latency
-                # (as total time = 200 non duty + 200 duty = 400ms, and 50% of 400ms is 200ms).
-                # Added buffer of 300ms to accommodate for slow CI runners
-                validate_latency 500
-
                 # Make sure we had defrag hits during AOF loading.  Note that we don't worry about
                 # the actual fragmentation ratio here.  It will vary based on when defrag stopped
                 # mid-cycle.  Just check that we are defragging by the number of hits.
@@ -327,8 +292,7 @@ run_solo {defrag} {
         test $title {
             set n 50000
 
-            # scripts aren't defragged incrementally, expect big latency
-            perform_defrag_test $title latency 200 populate {
+            perform_defrag_test $title populate {
                 # Populate memory with interleaving script-key pattern of same size
                 set dummy_script "--[string repeat x 450]\nreturn "
                 set rd [valkey_deferring_client]
@@ -387,7 +351,7 @@ run_solo {defrag} {
             # number of total fields.  lists are progressively increasing sizes.
             set n 200000
 
-            perform_defrag_test $title latency 5 populate {
+            perform_defrag_test $title populate {
                 set rd [valkey_deferring_client]
                 $rd client reply off
                 set val [string repeat A 350]

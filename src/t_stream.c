@@ -3925,12 +3925,9 @@ sync:
     }
     if (deleted || acked) {
         signalModifiedKey(c, c->db, c->argv[1]);
-        notifyKeyspaceEvent(NOTIFY_STREAM, "xdel", c->argv[1], c->db->id);
-        server.dirty += deleted;
+        server.dirty += deleted + acked;
     }
-    if (acked) {
-        server.dirty += acked;
-    }
+    if (deleted) notifyKeyspaceEvent(NOTIFY_STREAM, "xdel", c->argv[1], c->db->id);
 
     /* --- Propagation ----------------------------------------------------- *
      * XDELEX/XACKDEL are rewritten as XACK + XDEL primitives so that

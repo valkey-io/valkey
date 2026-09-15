@@ -1067,6 +1067,43 @@ start_server {tags {"acl external:skip"}} {
         assert_error "*wrong number of arguments for 'acl|digest' command" {r ACL DIGEST extra}
     }
 
+    test {ACL DIGEST follows the rules of a role} {
+        # A user only names the roles it holds, so an edit to a role does not
+        # change any user line. The role has to be hashed on its own.
+        set before [r ACL DIGEST]
+        r ACL setrole digestrole ~role:a* +get
+        r ACL setuser digestmember on >digestpass role=digestrole
+        set created [r ACL DIGEST]
+        assert {$created ne $before}
+
+        r ACL setrole digestrole resetkeys ~role:b*
+        assert {[r ACL DIGEST] ne $created}
+        r ACL setrole digestrole resetkeys ~role:a*
+        assert_equal $created [r ACL DIGEST]
+
+        r ACL deluser digestmember
+        r ACL delrole digestrole
+        assert_equal $before [r ACL DIGEST]
+    }
+
+    test {ACL DIGEST does not cancel out a role and a user sharing a name} {
+        # Role names are only checked for valid characters, so a role and a
+        # user can carry the same name. Their lines must not cancel out.
+        set before [r ACL DIGEST]
+        r ACL setrole digesttwin ~twin:* +get
+        r ACL setuser digesttwin on >twinpass ~twin:* +get
+
+        set both [r ACL DIGEST]
+        assert {$both ne $before}
+        r ACL deluser digesttwin
+        set one [r ACL DIGEST]
+        assert {$one ne $both}
+        assert {$one ne $before}
+
+        r ACL delrole digesttwin
+        assert_equal $before [r ACL DIGEST]
+    }
+
     test {ACL DIGEST needs permission to run} {
         r ACL setuser digestnoperm on >digestpass ~* +acl|whoami
         r AUTH digestnoperm digestpass

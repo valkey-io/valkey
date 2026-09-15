@@ -4,6 +4,12 @@
  * SPDX-License-Identifier: BSD-3-Clause
  */
 
+/* fmacros.h must come before any system header so that feature-test macros
+ * (notably _FILE_OFFSET_BITS=64 for 32-bit builds) take effect. */
+extern "C" {
+#include "../fmacros.h"
+}
+
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 #include <cstdio>
@@ -13,6 +19,9 @@ extern "C" {
 #include "sha256.h"
 #include "util.h"
 }
+/* Pulls in server.h with the C-to-C++ compatibility shims (e.g. the
+ * 'protected' field name and _Atomic) so the global 'server' is visible. */
+#include "wrappers.h"
 
 
 bool accurate = false;
@@ -91,5 +100,11 @@ int main(int argc, char **argv) {
     if (result == 0) {
         printf("\033[32mAll UNIT TESTS PASSED!\033[0m\n");
     }
+    /* Zero the global server struct so that any allocation a test parked on
+     * it without freeing becomes unreachable, turning it into a direct leak
+     * that LeakSanitizer/Valgrind report at process exit. Without this,
+     * leaked allocations stay reachable through the global and leak
+     * detection silently passes. */
+    memset(&server, 0, sizeof(server));
     return result;
 }

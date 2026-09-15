@@ -36,6 +36,7 @@
  */
 
 #include "server.h"
+#include "script.h"
 #include "cluster.h"
 #include "cluster_migrateslots.h"
 #include "util.h"
@@ -496,8 +497,10 @@ ustime_t activeExpireCycle(int type) {
     static bool expireCycleStartWithFields = 0;
     ustime_t elapsed = 0;
 
-    /* Try to smoke-out bugs (server.also_propagate should be empty here) */
+    /* Try to smoke-out bugs (server.also_propagate should be empty here,
+     * and never called from within a script.) */
     serverAssert(server.also_propagate.numops == 0);
+    serverAssert(!scriptIsRunning());
 
     if (expireCycleStartWithFields) {
         elapsed += activeExpireCycleJob(FIELDS, type, timelimit_us - elapsed);

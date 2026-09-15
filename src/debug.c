@@ -1955,11 +1955,14 @@ static void symbolizeWithLibbacktrace(void **trace, int trace_size, int fd, int 
         }
     } else {
         /* Fork failed, fall back to backtrace_symbols_fd */
+        const char *fork_msg = "(libbacktrace: fork failed, using fallback symbolizer)\n";
+        if (write(fd, fork_msg, strlen(fork_msg)) == -1) { /* Avoid warning. */
+        }
 #ifdef HAVE_EXECINFO
         backtrace_symbols_fd(trace + uplevel, trace_size - uplevel, fd);
 #else
-        char *msg = "(fork failed, no fallback available)\n";
-        if (write(fd, msg, strlen(msg)) == -1) { /* Avoid warning. */
+        const char *no_fb_msg = "(no fallback symbolizer available)\n";
+        if (write(fd, no_fb_msg, strlen(no_fb_msg)) == -1) { /* Avoid warning. */
         }
 #endif
     }

@@ -1615,13 +1615,13 @@ start_server {tags {"introspection"}} {
         catch {exec $::VALKEY_SERVER_BIN --port --loglevel verbose} err
         assert_match {*'port "--loglevel" "verbose"'*wrong number of arguments*} $err
 
-        # Take `--bla` as the port option value.
-        catch {exec $::VALKEY_SERVER_BIN --port --bla --loglevel verbose} err
-        assert_match {*'port "--bla"'*argument couldn't be parsed into an integer*} $err
+        # Take `--blah` as the port option value.
+        catch {exec $::VALKEY_SERVER_BIN --port --blah --loglevel verbose} err
+        assert_match {*'port "--blah"'*argument couldn't be parsed into an integer*} $err
 
-        # Take `--bla` as the loglevel option value.
-        catch {exec $::VALKEY_SERVER_BIN --logfile --my--log--file --loglevel --bla} err
-        assert_match {*'loglevel "--bla"'*argument(s) must be one of the following*} $err
+        # Take `--blah` as the loglevel option value.
+        catch {exec $::VALKEY_SERVER_BIN --logfile --my--log--file --loglevel --blah} err
+        assert_match {*'loglevel "--blah"'*argument(s) must be one of the following*} $err
 
         # Using MULTI_ARG's own check, empty option value
         catch {exec $::VALKEY_SERVER_BIN --shutdown-on-sigint} err

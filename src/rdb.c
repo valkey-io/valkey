@@ -4268,7 +4268,7 @@ int rdbSaveToReplicasSockets(int req, int rdbver, rdbSaveInfo *rsi) {
     }
 
     compressionAlgo sync_compression_algo =
-        connsnum > 0 ? replSelectFullSyncCompression(common_capa) : ALGO_NONE;
+        connsnum > 0 ? replSelectFullSyncCompression(common_capa, true) : ALGO_NONE;
     if (sync_compression_algo != ALGO_NONE)
         serverLog(LL_NOTICE, "Diskless full sync with compression: %s", compressionAlgoName(sync_compression_algo));
 

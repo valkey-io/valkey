@@ -30,8 +30,8 @@
 
 #include <stdint.h> // for UINTPTR_MAX
 
-#ifndef __QUICKLIST_H__
-#define __QUICKLIST_H__
+#ifndef VALKEY_QUICKLIST_H
+#define VALKEY_QUICKLIST_H
 
 /* Node, quicklist, and Iterator are the only data structures used currently. */
 

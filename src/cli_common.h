@@ -1,5 +1,5 @@
-#ifndef __CLICOMMON_H
-#define __CLICOMMON_H
+#ifndef VALKEY_CLICOMMON_H
+#define VALKEY_CLICOMMON_H
 
 #include <valkey/valkey.h>
 #include "sds.h"

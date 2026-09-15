@@ -1,5 +1,5 @@
-#ifndef __GEO_H__
-#define __GEO_H__
+#ifndef VALKEY_GEO_H
+#define VALKEY_GEO_H
 
 #include "server.h"
 

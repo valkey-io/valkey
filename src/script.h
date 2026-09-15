@@ -27,8 +27,8 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef __SCRIPT_H_
-#define __SCRIPT_H_
+#ifndef VALKEY_SCRIPT_H
+#define VALKEY_SCRIPT_H
 
 #include "valkeymodule.h"
 

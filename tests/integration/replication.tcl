@@ -398,14 +398,33 @@ start_server {tags {"repl external:skip"}} {
             close_replication_stream $repl
         }
 
-        test {INCREX BYINT without expire propagates verbatim} {
-            # BYINT-only increments are deterministic, so unlike BYFLOAT they
-            # don't need rewriting to SET for replication safety.
+        test {INCREX BYINT without expire propagates as SET with KEEPTTL} {
             r -1 del foo
             set repl [attach_to_replication_stream]
             r -1 increx foo byint 5
             assert_replication_stream $repl {
-                {increx foo byint 5}
+                {set foo 5 KEEPTTL}
+            }
+            close_replication_stream $repl
+        }
+
+        test {INCREX with PERSIST propagates as SET} {
+            r -1 set foo 1 ex 100
+            set repl [attach_to_replication_stream]
+            r -1 increx foo byint 5 persist
+            assert_replication_stream $repl {
+                {set foo 6}
+            }
+            close_replication_stream $repl
+        }
+
+        test {INCREX declined bounds operation does not propagate} {
+            r -1 set foo 10
+            set repl [attach_to_replication_stream]
+            r -1 increx foo byint 5 ubound 10
+            r -1 set marker 1
+            assert_replication_stream $repl {
+                {set marker 1}
             }
             close_replication_stream $repl
         }

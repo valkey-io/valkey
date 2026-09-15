@@ -55,6 +55,20 @@
 #include "valkey_strtod.h"
 #include "monotonic.h"
 
+#if defined(USE_OPENSSL) && USE_OPENSSL == 1 /* BUILD_YES */
+#include <openssl/rand.h>
+/* Drawing secret material from a configured provider needs the OpenSSL 3
+ * provider APIs and config-driven provider selection. Older OpenSSL and
+ * LibreSSL have neither, so those builds keep the bundled generator.
+ *
+ * USE_OPENSSL == 1 means BUILD_TLS=yes. BUILD_TLS=module compiles the server
+ * with USE_OPENSSL == 2 but does not link libcrypto into it (src/Makefile),
+ * so a module build keeps the bundled generator as well. */
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L && !defined(LIBRESSL_VERSION_NUMBER)
+#define USE_OPENSSL_PROVIDER_CRYPTO 1
+#endif
+#endif
+
 #if HAVE_X86_SIMD
 #include <immintrin.h>
 #endif
@@ -1144,7 +1158,12 @@ void getRandomSeedCString(char *buff, size_t len) {
  * the uses a one way hash function in counter mode to generate a random
  * stream. However if /dev/urandom is not available, a weaker seed is used.
  *
- * This function is not thread safe, since the state is global. */
+ * This function is not thread safe, since the state is global.
+ *
+ * This is the non-secret entry point: run ids, replication ids, cluster node
+ * names and shard ids, the RDB EOF mark, migrate slot job names, the sentinel
+ * id, and ValkeyModule_GetRandomBytes(). Secret material uses
+ * getSecureRandomBytes() below. */
 void getRandomBytes(unsigned char *p, size_t len) {
     static uint64_t counter = 0; /* The counter we hash with the seed. */
 
@@ -1198,6 +1217,59 @@ void getRandomHexChars(char *p, size_t len) {
 
     getRandomBytes((unsigned char *)p, len);
     for (j = 0; j < len; j++) p[j] = charset[p[j] & 0x0F];
+}
+
+/* Get random bytes for secret material. Returns 1 on success, 0 on failure.
+ *
+ * When built with TLS against OpenSSL 3 this draws from the RAND provider via
+ * RAND_priv_bytes(), so the provider configured in openssl.cnf supplies the
+ * secret. RAND_priv_bytes() rather than RAND_bytes() because OpenSSL keeps a
+ * separate DRBG for private material; the two in-tree callers here, ACL
+ * GENPASS and the hash function seed, are both secret, so the private one is
+ * the correct source.
+ *
+ * A failure returns 0 and the caller must fail closed. There is deliberately
+ * no fallback to getRandomBytes() in a provider build: its seed degrades to
+ * clock and pid entropy when /dev/urandom cannot be read, which is not an
+ * acceptable substitute for a secret.
+ *
+ * Builds that cannot reach a provider (no TLS, OpenSSL below 3, LibreSSL, and
+ * BUILD_TLS=module, which does not link libcrypto into the server) use
+ * getRandomBytes() and always return 1. That is what these call sites used
+ * before provider support existed, so those builds are unchanged.
+ *
+ * RAND_priv_bytes() takes an int length, so draw in INT_MAX sized chunks. */
+int getSecureRandomBytes(unsigned char *p, size_t len) {
+#ifdef USE_OPENSSL_PROVIDER_CRYPTO
+    while (len) {
+        int chunk = len > (size_t)INT_MAX ? INT_MAX : (int)len;
+
+        if (RAND_priv_bytes(p, chunk) != 1) return 0;
+        p += chunk;
+        len -= (size_t)chunk;
+    }
+    return 1;
+#else
+    getRandomBytes(p, len);
+    return 1;
+#endif
+}
+
+/* Like getSecureRandomBytes() but the output is restricted to the hex charset
+ * [0-9a-f]. Returns 1 on success, 0 on failure. On failure the buffer contents
+ * are unspecified, so callers must not read it; ACL GENPASS returns an error
+ * without touching it.
+ *
+ * As with getRandomHexChars() each byte yields one hex character, so this is 4
+ * bits of entropy per byte written; callers size the buffer for the strength
+ * they want, which is what ACL GENPASS's (bits + 3) / 4 does. */
+int getSecureRandomHexChars(char *p, size_t len) {
+    char *charset = "0123456789abcdef";
+    size_t j;
+
+    if (!getSecureRandomBytes((unsigned char *)p, len)) return 0;
+    for (j = 0; j < len; j++) p[j] = charset[p[j] & 0x0F];
+    return 1;
 }
 
 /* Given the filename, return the absolute path as an SDS string, or NULL
